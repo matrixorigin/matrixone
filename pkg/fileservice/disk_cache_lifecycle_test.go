@@ -1176,24 +1176,61 @@ func TestDiskCacheCloseWinsAtFilePublicationBoundary(t *testing.T) {
 
 func TestDiskCachePublicationClaimWinsBeforeClose(t *testing.T) {
 	cache := newLifecycleTestDiskCache(t)
+	// This test owns the publication/Close linearization boundary. Keep the
+	// unrelated persistence syscall out of that ownership contract; the real
+	// file.Sync path is covered by the dedicated error and finalize tests.
+	cache.fileSync = func(*os.File) error { return nil }
 	diskPath := cache.pathForFile("claimed")
 	require.True(t, cache.tryReserveAsyncFileFinalize(diskPath))
+	var releaseReservationOnce sync.Once
+	releaseReservation := func() {
+		releaseReservationOnce.Do(func() {
+			cache.releaseAsyncFileFinalizeReservation(diskPath)
+		})
+	}
+	// Own the reservation immediately. The worker below takes this ownership
+	// over only after all setup succeeds, and the once keeps failure cleanup
+	// from racing with worker cleanup.
+	t.Cleanup(releaseReservation)
 	doneUpdate, ok := cache.tryStartUpdateWithCleanup(
 		diskPath,
 		func() error { return cache.removeUnindexedFile(diskPath) },
 	)
 	require.True(t, ok)
+	var doneUpdateOnce sync.Once
+	var doneUpdateErr error
+	finishUpdate := func() error {
+		doneUpdateOnce.Do(func() {
+			doneUpdateErr = doneUpdate()
+		})
+		return doneUpdateErr
+	}
+	// Register ownership cleanup in reservation -> update -> temp order.
+	// Cleanup runs in reverse registration order, so every failure path releases
+	// resources in temp -> update -> reservation order, matching the successful
+	// finalizer path.
+	t.Cleanup(func() { _ = finishUpdate() })
 	tempFile, err := os.CreateTemp(cache.path, "claimed-*"+cacheFileTempSuffix)
 	require.NoError(t, err)
+	var cleanupTempOnce sync.Once
+	var cleanupTempErr error
+	cleanupTemp := func() error {
+		cleanupTempOnce.Do(func() {
+			cleanupTempErr = cleanupDiskCacheTempFile(tempFile)
+		})
+		return cleanupTempErr
+	}
+	t.Cleanup(func() { _ = cleanupTemp() })
 	_, err = tempFile.WriteString("payload")
 	require.NoError(t, err)
 
 	claimReached := make(chan struct{})
 	releaseClaim := make(chan struct{})
 	unblock := sync.OnceFunc(func() { close(releaseClaim) })
-	t.Cleanup(unblock)
 	finalizeDone := make(chan error, 1)
+	workerDone := make(chan struct{})
 	go func() {
+		defer close(workerDone)
 		finalizeErr := cache.finalizeFile(
 			cache.async.ctx,
 			diskPath,
@@ -1205,17 +1242,51 @@ func TestDiskCachePublicationClaimWinsBeforeClose(t *testing.T) {
 				return claimed
 			},
 		)
-		cleanupErr := errors.Join(
-			cleanupDiskCacheTempFile(tempFile),
-			doneUpdate(),
-		)
-		cache.releaseAsyncFileFinalizeReservation(diskPath)
+		cleanupErr := errors.Join(cleanupTemp(), finishUpdate())
+		releaseReservation()
 		finalizeDone <- errors.Join(finalizeErr, cleanupErr)
 	}()
+	// Always release the barrier before waiting for the worker. If the test
+	// fails before the normal release, this cleanup still lets the worker finish
+	// before the fallback temp/update/reservation cleanups run.
+	t.Cleanup(func() {
+		unblock()
+		select {
+		case <-workerDone:
+		case <-time.After(diskCacheLifecycleTestTimeout):
+			t.Fatal("publication finalizer did not finish during test cleanup")
+		}
+	})
+	claimObserved := false
+	claimWaitTimedOut := false
 	select {
 	case <-claimReached:
+		claimObserved = true
+	case err := <-finalizeDone:
+		require.NoError(t, err, "publication finalizer exited before the claim barrier")
+		select {
+		case <-claimReached:
+			claimObserved = true
+		default:
+		}
 	case <-time.After(diskCacheLifecycleTestTimeout):
-		t.Fatal("async finalizer did not claim the publication generation")
+		claimWaitTimedOut = true
+		unblock()
+		select {
+		case err := <-finalizeDone:
+			require.NoError(t, err)
+			select {
+			case <-claimReached:
+				claimObserved = true
+			default:
+			}
+		case <-time.After(diskCacheLifecycleTestTimeout):
+			t.Fatal("async finalizer did not claim the publication generation")
+		}
+	}
+	require.True(t, claimObserved, "async finalizer did not claim the publication generation")
+	if claimWaitTimedOut {
+		t.Fatal("async finalizer did not claim the publication generation within the guard")
 	}
 
 	closeCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
