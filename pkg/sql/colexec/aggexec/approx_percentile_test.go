@@ -47,6 +47,42 @@ func TestPercentileNumericVals_Basic(t *testing.T) {
 	require.Equal(t, float64(10), percentileNumericVals(vals, 1.0))
 }
 
+func TestOrderedCompareUsesSQLFloatOrder(t *testing.T) {
+	float32NaN := float32(math.Float32frombits(0x7fc00001))
+	float64NaN := math.Float64frombits(0x7ff8000000000001)
+
+	require.Greater(t, orderedCompare(float32NaN, float32(1)), 0)
+	require.Greater(t, orderedCompare(float64NaN, float64(1)), 0)
+	require.Equal(t, 0, orderedCompare(float64NaN, float64NaN))
+	require.Equal(t, 0, orderedCompare(float32(0), float32(math.Copysign(0, -1))))
+	require.Equal(t, 0, orderedCompare(float64(0), math.Copysign(0, -1)))
+	require.Equal(t, []byte("0.25"), EncodeApproxPercentileConfig([]byte("0.25"), false))
+	require.Equal(t, []byte("DESC:0.25"), EncodeApproxPercentileConfig([]byte("0.25"), true))
+	require.Equal(t, -1, approxPercentileCompare(orderedCompare[int64], false)(0, 1))
+	require.Equal(t, -1, approxPercentileCompare(orderedCompare[float32], true)(1, 0))
+	require.Equal(t, -1, approxPercentileCompare(orderedCompare[int64], true)(1, 0))
+}
+
+func TestQuantileNaNStateHelpersCoverLevelsAndEmptyState(t *testing.T) {
+	empty := &quantileSketch[float64]{compare: orderedCompare[float64]}
+	require.False(t, quantileStateHasNaN(empty))
+	normalizeDecodedQuantileState(empty)
+
+	withNaNLevel := &quantileSketch[float64]{
+		levels:   [][]float64{{math.NaN()}},
+		levelCnt: 1,
+	}
+	require.True(t, quantileStateHasNaN(withNaNLevel))
+}
+
+func TestLegacyApproxPercentileCompareTreatsTwoFloat64NaNsAsEqual(t *testing.T) {
+	compare := legacyApproxPercentileCompare(orderedCompare[float64])
+	nan := math.NaN()
+	require.Equal(t, 0, compare(nan, nan))
+	require.Equal(t, -1, compare(nan, 1))
+	require.Equal(t, 1, compare(1, nan))
+}
+
 func TestPercentileNumericVals_EvenN(t *testing.T) {
 	vals := []float64{1.0, 2.0, 4.0, 5.0}
 
@@ -902,6 +938,266 @@ func TestApproxPercentileExec_SetExtraInformation_Invalid(t *testing.T) {
 	}
 
 	exec.Free()
+}
+
+func TestApproxPercentileExec_DescKeepsNaNsLast(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	exec, err := makeApproxPercentile(mp, AggIdOfApproxPercentile, false, types.T_float64.ToType())
+	require.NoError(t, err)
+	defer exec.Free()
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.SetExtraInformation(
+		EncodeApproxPercentileConfig([]byte("0"), true), 0))
+
+	vec := buildFixedVec(t, mp, types.T_float64.ToType(), []float64{-1, 0, 1, math.NaN()})
+	defer vec.Free(mp)
+	require.NoError(t, exec.BulkFill(0, []*vector.Vector{vec}))
+
+	ret, err := exec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, float64(1), vector.GetFixedAtNoTypeCheck[float64](ret[0], 0))
+	ret[0].Free(mp)
+
+	require.NoError(t, exec.SetExtraInformation(
+		EncodeApproxPercentileConfig([]byte("0.5"), true), 0))
+	ret, err = exec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, float64(-0.5), vector.GetFixedAtNoTypeCheck[float64](ret[0], 0))
+	ret[0].Free(mp)
+}
+
+func TestApproxPercentileExec_RejectsDirectionChangeAfterFill(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	exec, err := makeApproxPercentile(mp, AggIdOfApproxPercentile, false, types.T_int64.ToType())
+	require.NoError(t, err)
+	defer exec.Free()
+	require.NoError(t, exec.GroupGrow(1))
+	vec := buildFixedVec(t, mp, types.T_int64.ToType(), []int64{1})
+	defer vec.Free(mp)
+	require.NoError(t, exec.BulkFill(0, []*vector.Vector{vec}))
+	require.ErrorContains(t, exec.SetExtraInformation(
+		EncodeApproxPercentileConfig([]byte("0.5"), true), 0), "direction cannot change")
+}
+
+func TestApproxPercentileExec_RejectsDirectionChangeAfterEmptySketch(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	exec, err := makeApproxPercentile(mp, AggIdOfApproxPercentile, false, types.T_int64.ToType())
+	require.NoError(t, err)
+	defer exec.Free()
+	require.NoError(t, exec.GroupGrow(1))
+	vec := buildFixedVec(t, mp, types.T_int64.ToType(), []int64{0})
+	vec.SetNull(0)
+	defer vec.Free(mp)
+	require.NoError(t, exec.BulkFill(0, []*vector.Vector{vec}))
+	require.NotNil(t, exec.(*approxPercentileNumericExec[int64]).state[0].mobs[0])
+	require.ErrorContains(t, exec.SetExtraInformation(
+		EncodeApproxPercentileConfig([]byte("0.5"), true), 0), "direction cannot change")
+}
+
+func TestApproxPercentileExec_DescMergeAndIntermediateRoundTrip(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	descConfig := EncodeApproxPercentileConfig([]byte("0.5"), true)
+	left, err := makeApproxPercentile(mp, AggIdOfApproxPercentile, false, types.T_float64.ToType())
+	require.NoError(t, err)
+	right, err := makeApproxPercentile(mp, AggIdOfApproxPercentile, false, types.T_float64.ToType())
+	require.NoError(t, err)
+	defer left.Free()
+	defer right.Free()
+	for _, exec := range []AggFuncExec{left, right} {
+		require.NoError(t, exec.GroupGrow(1))
+		require.NoError(t, exec.SetExtraInformation(descConfig, 0))
+	}
+
+	leftVec := buildFixedVec(t, mp, types.T_float64.ToType(), []float64{-1, math.NaN()})
+	rightVec := buildFixedVec(t, mp, types.T_float64.ToType(), []float64{0, 1})
+	defer leftVec.Free(mp)
+	defer rightVec.Free(mp)
+	require.NoError(t, left.BulkFill(0, []*vector.Vector{leftVec}))
+	require.NoError(t, right.BulkFill(0, []*vector.Vector{rightVec}))
+	require.NoError(t, left.Merge(right, 0, 0))
+
+	ret, err := left.Flush()
+	require.NoError(t, err)
+	require.Equal(t, -0.5, vector.GetFixedAtNoTypeCheck[float64](ret[0], 0))
+	ret[0].Free(mp)
+
+	var intermediate bytes.Buffer
+	require.NoError(t, left.SaveIntermediateResult(1, [][]uint8{{1}}, &intermediate))
+	restored, err := makeApproxPercentile(mp, AggIdOfApproxPercentile, false, types.T_float64.ToType())
+	require.NoError(t, err)
+	defer restored.Free()
+	// The runtime config is installed before decoding so the state factory
+	// restores the sketch with the DESC comparator.
+	require.NoError(t, restored.SetExtraInformation(descConfig, 0))
+	require.NoError(t, restored.UnmarshalFromReader(bytes.NewReader(intermediate.Bytes()), mp))
+	ret, err = restored.Flush()
+	require.NoError(t, err)
+	require.Equal(t, -0.5, vector.GetFixedAtNoTypeCheck[float64](ret[0], 0))
+	ret[0].Free(mp)
+
+	destination, err := makeApproxPercentile(mp, AggIdOfApproxPercentile, false, types.T_float64.ToType())
+	require.NoError(t, err)
+	source, err := makeApproxPercentile(mp, AggIdOfApproxPercentile, false, types.T_float64.ToType())
+	require.NoError(t, err)
+	defer destination.Free()
+	defer source.Free()
+	for _, exec := range []AggFuncExec{destination, source} {
+		require.NoError(t, exec.GroupGrow(1))
+	}
+	require.NoError(t, destination.SetExtraInformation([]byte("0.5"), 0))
+	require.NoError(t, source.SetExtraInformation(EncodeApproxPercentileConfig([]byte("0.5"), true), 0))
+	destinationVec := buildFixedVec(t, mp, types.T_float64.ToType(), []float64{2})
+	sourceVec := buildFixedVec(t, mp, types.T_float64.ToType(), []float64{1})
+	defer destinationVec.Free(mp)
+	defer sourceVec.Free(mp)
+	require.NoError(t, destination.BulkFill(0, []*vector.Vector{destinationVec}))
+	require.NoError(t, source.BulkFill(0, []*vector.Vector{sourceVec}))
+	require.ErrorIs(t, destination.Merge(source, 0, 0), mpool.ErrAllocationAccountMismatch)
+	ret, err = destination.Flush()
+	require.NoError(t, err)
+	require.Equal(t, 2.0, vector.GetFixedAtNoTypeCheck[float64](ret[0], 0))
+	ret[0].Free(mp)
+}
+
+func TestApproxPercentileExec_DecodesLegacyNaNState(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	legacyCompare := func(left, right float64) int {
+		leftNaN, rightNaN := math.IsNaN(left), math.IsNaN(right)
+		if leftNaN || rightNaN {
+			switch {
+			case leftNaN && rightNaN:
+				return 0
+			case leftNaN:
+				return -1
+			default:
+				return 1
+			}
+		}
+		if left < right {
+			return -1
+		}
+		if left > right {
+			return 1
+		}
+		return 0
+	}
+
+	legacy := newQuantileSketch[float64](mp, legacyCompare, nil)
+	require.NoError(t, legacy.Add(1))
+	require.NoError(t, legacy.Add(math.NaN()))
+	encoded, err := legacy.MarshalBinary()
+	require.NoError(t, err)
+	legacy.Free()
+
+	current := newQuantileSketch[float64](mp, orderedCompare[float64], nil)
+	defer current.Free()
+	require.NoError(t, current.UnmarshalBinary(encoded))
+	require.Equal(t, 1.0, current.min)
+	require.True(t, math.IsNaN(current.max))
+	require.Equal(t, 1.0, current.levels[0][0])
+	require.True(t, math.IsNaN(current.levels[0][1]))
+	lo, hi, err := current.QuantileAtRanks(0, 1)
+	require.NoError(t, err)
+	require.Equal(t, 1.0, lo)
+	require.True(t, math.IsNaN(hi))
+}
+
+func TestApproxPercentileExec_LegacyNaNStateRoundTrip(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+	runLegacyNaNStateRoundTrip(t, mp, float32(math.NaN()))
+	runLegacyNaNStateRoundTrip(t, mp, math.NaN())
+}
+
+func runLegacyNaNStateRoundTrip[T interface{ float32 | float64 }](t *testing.T, mp *mpool.MPool, nan T) {
+	legacy := newQuantileSketch[T](
+		mp, legacyApproxPercentileCompare(orderedCompare[T]), nil)
+	for value := 1; value <= 400; value++ {
+		require.NoError(t, legacy.Add(T(value)))
+	}
+	require.NoError(t, legacy.Add(nan))
+	for value := 401; value <= 799; value++ {
+		require.NoError(t, legacy.Add(T(value)))
+	}
+	require.Greater(t, legacy.levelCnt, uint8(1), "the regression must include compacted levels")
+	for level := 0; level < int(legacy.levelCnt); level++ {
+		for _, value := range legacy.levels[level] {
+			require.False(t, quantileValueIsNaN(value),
+				"NaN must be retained only by serialized extrema in this case")
+		}
+	}
+	require.True(t, quantileValueIsNaN(legacy.min))
+	encoded, err := legacy.MarshalBinary()
+	require.NoError(t, err)
+	legacy.Free()
+
+	current := newQuantileSketch[T](mp, orderedCompare[T], nil)
+	defer current.Free()
+	require.NoError(t, current.UnmarshalBinary(encoded))
+	require.Equal(t, uint64(800), current.count)
+	require.Equal(t, T(1), current.min)
+	require.True(t, quantileValueIsNaN(current.max))
+	lo, _, err := current.QuantileAtRanks(0, 0)
+	require.NoError(t, err)
+	require.Equal(t, T(1), lo)
+	_, hi, err := current.QuantileAtRanks(current.count-1, current.count-1)
+	require.NoError(t, err)
+	require.True(t, quantileValueIsNaN(hi))
+
+	extra := newQuantileSketch[T](mp, orderedCompare[T], nil)
+	defer extra.Free()
+	require.NoError(t, extra.Add(T(800)))
+	require.NoError(t, extra.Add(nan))
+	require.NoError(t, current.Merge(extra))
+	require.Equal(t, uint64(802), current.count)
+	merged, err := current.MarshalBinary()
+	require.NoError(t, err)
+
+	restored := newQuantileSketch[T](mp, orderedCompare[T], nil)
+	defer restored.Free()
+	require.NoError(t, restored.UnmarshalBinary(merged))
+	require.Equal(t, uint64(802), restored.count)
+	require.Equal(t, T(1), restored.min)
+	require.True(t, quantileValueIsNaN(restored.max))
+}
+
+func TestApproxPercentileExec_UsesLegacyRemoteState(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	exec, err := makeApproxPercentile(mp, AggIdOfApproxPercentile, false, types.T_float32.ToType())
+	require.NoError(t, err)
+	defer exec.Free()
+	ConfigureApproxPercentileLegacyState(exec)
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.SetExtraInformation([]byte("0.5"), 0))
+	values := buildFixedVec(t, mp, types.T_float32.ToType(), []float32{1, float32(math.NaN())})
+	defer values.Free(mp)
+	require.NoError(t, exec.BulkFill(0, []*vector.Vector{values}))
+
+	impl := exec.(*approxPercentileNumericExec[float32])
+	sketch := impl.state[0].mobs[0].(*quantileSketch[float32])
+	require.True(t, math.IsNaN(float64(sketch.min)))
+	require.Equal(t, float32(1), sketch.max)
+
+	encoded, err := sketch.MarshalBinary()
+	require.NoError(t, err)
+	legacy := newQuantileSketch[float32](
+		mp, legacyApproxPercentileCompare(orderedCompare[float32]), nil)
+	defer legacy.Free()
+	require.NoError(t, legacy.UnmarshalBinary(encoded))
+	require.True(t, math.IsNaN(float64(legacy.min)))
+	require.Equal(t, float32(1), legacy.max)
 }
 
 func TestApproxPercentileExec_MultipleGroups(t *testing.T) {

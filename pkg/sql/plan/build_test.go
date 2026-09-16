@@ -1143,6 +1143,13 @@ func TestOnDuplicateUpdateVarcharFromTextUsesAssignmentCast(t *testing.T) {
 	logicPlan, err := runOneStmt(mock, t, "insert into text_cast_t(id, txt, vc) values (1, repeat('a', 260), '') on duplicate key update vc = txt")
 	assert.NoError(t, err)
 	assert.True(t, planHasTextToVarcharAssignCastWithWidth(logicPlan, 255))
+
+	// INSERT IGNORE keeps the same assignment conversion contract when an
+	// executable ODKU list is present; IGNORE must not route the statement to
+	// the insert-only row-skip path.
+	ignorePlan, err := runOneStmt(mock, t, "insert ignore into text_cast_t(id, txt, vc) values (1, repeat('a', 260), '') on duplicate key update vc = txt")
+	assert.NoError(t, err)
+	assert.True(t, planHasTextToVarcharCastWithNameAndWidth(ignorePlan, "cast_ignore", 255))
 }
 
 // test single table plan building

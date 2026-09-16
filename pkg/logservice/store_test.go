@@ -118,6 +118,67 @@ func TestCommandDeliveryLogStoresReadyFiltersExpiredStores(t *testing.T) {
 	require.False(t, store.commandDeliveryLogStoresReady(state))
 }
 
+func TestViewMetadataAdmissionLogStoresReadyWithProtocolChecksCurrentMembers(t *testing.T) {
+	store := &store{cfg: DefaultConfig()}
+	state := &pb.CheckerState{
+		Tick: 100,
+		LogState: pb.LogState{
+			Shards: map[uint64]pb.LogShardInfo{
+				hakeeper.DefaultHAKeeperShardID: {
+					Replicas:          map[uint64]string{1: "voting"},
+					NonVotingReplicas: map[uint64]string{2: "non-voting"},
+				},
+			},
+			Stores: map[string]pb.LogStoreInfo{
+				// These records are expired, but both UUIDs remain current
+				// HAKeeper members and therefore still receive Raft entries.
+				"voting": {
+					Tick:                                     1,
+					ViewMetadataAdmissionSupported:           true,
+					ViewMetadataAdmissionProtocolV3Supported: false,
+				},
+				"non-voting": {
+					Tick:                                     1,
+					ViewMetadataAdmissionSupported:           true,
+					ViewMetadataAdmissionProtocolV3Supported: false,
+				},
+				// A stale record that is no longer in the shard must not block
+				// activation, regardless of its heartbeat or capabilities.
+				"historical": {Tick: 1},
+			},
+		},
+	}
+	require.False(t, store.viewMetadataAdmissionLogStoresReadyWithProtocol(state, true))
+
+	voting := state.LogState.Stores["voting"]
+	voting.ViewMetadataAdmissionProtocolV3Supported = true
+	state.LogState.Stores["voting"] = voting
+	nonVoting := state.LogState.Stores["non-voting"]
+	nonVoting.ViewMetadataAdmissionProtocolV3Supported = true
+	state.LogState.Stores["non-voting"] = nonVoting
+	require.True(t, store.viewMetadataAdmissionLogStoresReadyWithProtocol(state, true))
+
+	// The same membership check also requires the legacy admission capability.
+	nonVoting.ViewMetadataAdmissionSupported = false
+	state.LogState.Stores["non-voting"] = nonVoting
+	require.False(t, store.viewMetadataAdmissionLogStoresReadyWithProtocol(state, false))
+
+	delete(state.LogState.Shards[hakeeper.DefaultHAKeeperShardID].Replicas, 1)
+	delete(state.LogState.Shards[hakeeper.DefaultHAKeeperShardID].NonVotingReplicas, 2)
+	state.LogState.Shards[hakeeper.DefaultHAKeeperShardID] = pb.LogShardInfo{
+		Replicas: map[uint64]string{1: "historical"},
+	}
+	require.False(t, store.viewMetadataAdmissionLogStoresReadyWithProtocol(state, true),
+		"a current member without a heartbeat must block activation")
+	delete(state.LogState.Shards[hakeeper.DefaultHAKeeperShardID].Replicas, 1)
+	state.LogState.Shards[hakeeper.DefaultHAKeeperShardID] = pb.LogShardInfo{
+		Replicas: map[uint64]string{1: "voting"},
+	}
+	delete(state.LogState.Stores, "historical")
+	require.True(t, store.viewMetadataAdmissionLogStoresReadyWithProtocol(state, true),
+		"a stale non-member record must not participate in the gate")
+}
+
 func TestRaftConfig(t *testing.T) {
 	cfg := getRaftConfig(1, 1)
 	assert.True(t, cfg.CheckQuorum)

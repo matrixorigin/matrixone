@@ -741,10 +741,10 @@ func TestValidateStableInitialSnapshotProtocol(t *testing.T) {
 
 func TestValidateLosslessNoFullStartProtocolBoundary(t *testing.T) {
 	err := validateLosslessNoFullStartProtocol(
-		context.Background(), defines.MORPCVersion75)
-	require.ErrorContains(t, err, "protocol version 76")
+		context.Background(), defines.MORPCVersion80)
+	require.ErrorContains(t, err, "protocol version 81")
 	require.NoError(t, validateLosslessNoFullStartProtocol(
-		context.Background(), defines.MORPCVersion76))
+		context.Background(), defines.MORPCVersion81))
 }
 
 func (ts *testTaskService) TruncateCompletedTasks(ctx context.Context) error {
@@ -4927,6 +4927,7 @@ func TestCdcTask_RestartClearsPermanentTableErrorAndRecovers(t *testing.T) {
 		activeRoutine:    cdc.NewCdcActiveRoutine(),
 		holdCh:           make(chan int, 1),
 		watermarkUpdater: u,
+		startTs:          types.BuildTS(200, 3),
 		noFull:           true,
 		additionalConfig: map[string]interface{}{
 			cdc.CDCTaskExtraOptions_MaxSqlLength:         float64(cdc.CDCDefaultTaskExtra_MaxSQLLen),
@@ -5676,6 +5677,7 @@ func TestCdcTask_addExecPipelineForTable(t *testing.T) {
 	cdcTask := &CDCTaskExecutor{
 		activeRoutine:    cdc.NewCdcActiveRoutine(), // Required for reader.Run()
 		watermarkUpdater: u,
+		startTs:          types.BuildTS(100, 1),
 		runningReaders:   &sync.Map{},
 		noFull:           true,
 		additionalConfig: map[string]interface{}{

@@ -20,7 +20,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -125,9 +124,6 @@ func TestCCPRTxnCache_Iterations(t *testing.T) {
 
 		// Rollback
 		cache.OnTxnRollback(iter.txnID)
-
-		// Wait for async GC to complete
-		time.Sleep(100 * time.Millisecond)
 
 		// Verify obj1 is NOT in fs (GC'd after rollback)
 		assert.False(t, objectExistsInFS(ctx, fs, "obj1"), "Iteration 1: obj1 should be GC'd after rollback")
@@ -282,9 +278,6 @@ func TestCCPRTxnCache_ConcurrentAllRollback(t *testing.T) {
 
 	wg.Wait()
 
-	// Wait for async GC to complete
-	time.Sleep(200 * time.Millisecond)
-
 	// Verify object does NOT exist in fs (all rolled back, GC'd)
 	assert.False(t, objectExistsInFS(ctx, fs, objectName), "Object should NOT exist in fs after all rollbacks")
 }
@@ -342,9 +335,6 @@ func TestCCPRTxnCache_ConcurrentOneCommitOthersRollback(t *testing.T) {
 	}
 
 	wg.Wait()
-
-	// Wait for async GC to complete
-	time.Sleep(200 * time.Millisecond)
 
 	// Verify object exists in fs (one txn committed, so file should persist)
 	assert.True(t, objectExistsInFS(ctx, fs, objectName), "Object should exist in fs (one commit keeps the file)")

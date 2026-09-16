@@ -2747,11 +2747,45 @@ func parseViewCreateSQLForRestore(ctx context.Context, tblInfo *tableInfo, lower
 }
 
 func executeViewCreateSQLForRestore(ctx context.Context, bh BackgroundExec, tblInfo *tableInfo) error {
+	if err := requirePersistedViewProtocolForRestore(ctx, bh, tblInfo); err != nil {
+		return err
+	}
 	parserSQLMode, err := viewParserSQLModeForRestore(tblInfo.viewDef)
 	if err != nil {
 		return err
 	}
 	return bh.ExecWithSQLMode(ctx, tblInfo.createSql, parserSQLMode)
+}
+
+// requirePersistedViewProtocolForRestore closes the restore path's local SQL
+// execution boundary. A restore BackgroundExec has no planner process, but it
+// does carry the CN service identity used to read the runtime protocol gate.
+// Missing markers remain backward compatible; malformed or future markers fail
+// closed before CREATE VIEW can be submitted.
+func requirePersistedViewProtocolForRestore(
+	ctx context.Context,
+	bh BackgroundExec,
+	tblInfo *tableInfo,
+) error {
+	if tblInfo == nil || tblInfo.viewDef == "" {
+		return nil
+	}
+	var data plan.ViewData
+	if err := json.Unmarshal([]byte(tblInfo.viewDef), &data); err != nil {
+		return err
+	}
+	if data.RequiredProtocolVersion == nil {
+		return nil
+	}
+	if *data.RequiredProtocolVersion < 0 {
+		return moerr.NewInvalidInput(ctx, "invalid persisted view protocol version")
+	}
+	service := ""
+	if bh != nil {
+		service = bh.Service()
+	}
+	return plan.RequirePersistedProtocolVersionForService(
+		ctx, service, *data.RequiredProtocolVersion)
 }
 
 func viewParserSQLModeForRestore(viewDef string) (string, error) {
