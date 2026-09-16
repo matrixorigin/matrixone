@@ -1,0 +1,230 @@
+set experimental_fulltext2_index = 1;
+drop database if exists ft2_null_columns;
+create database ft2_null_columns;
+use ft2_null_columns;
+create table cdc_seed (
+  id bigint primary key,
+  left_doc json,
+  right_doc json,
+  note varchar(32)
+);
+create fulltext2 index ftidx on cdc_seed(left_doc, right_doc) include(note) with parser json_value;
+insert into cdc_seed values
+ (1,'{"v":"seedleft"}','{"v":"seedright"}','both'),
+ (2,NULL,'{"v":"seedrightonly"}','right-only'),
+ (3,'{"v":"seedleftonly"}',NULL,'left-only'),
+ (4,NULL,NULL,'all-null'),
+ (5,'null','{"v":"seedliteral"}','literal-null'),
+ (6,'"null"',NULL,'string-null'),
+ (7,'{}','{"v":"seedemptyobject"}','empty-object'),
+ (8,'[]','{"v":"seedemptyarray"}','empty-array');
+create table cdc_mut (
+  id bigint primary key,
+  left_doc json,
+  right_doc json,
+  note varchar(32)
+);
+create fulltext2 index ftidx on cdc_mut(left_doc, right_doc) include(note) with parser json_value;
+insert into cdc_mut values
+ (10,'{"v":"oldleft"}',NULL,'old-left'),
+ (11,NULL,'{"v":"oldright"}','old-right'),
+ (12,'{"v":"deleteold"}','{"v":"keepold"}','delete-old'),
+ (13,'{"v":"reinsertold"}',NULL,'reinsert-old'),
+ (14,NULL,NULL,'zero-old');
+set @seed_ft2 = (
+    select index_table_name from mo_catalog.mo_indexes
+    where name = 'ftidx' and algo_table_type = 'ftv2_index'
+      and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'cdc_seed')
+    limit 1
+);
+set @mut_ft2 = (
+    select index_table_name from mo_catalog.mo_indexes
+    where name = 'ftidx' and algo_table_type = 'ftv2_index'
+      and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'cdc_mut')
+    limit 1
+);
+set @wait_initial_sql = concat(
+    'select ',
+    '(select coalesce(max(chunk_id), -1) >= 0 from `', database(), '`.`', @seed_ft2,
+    '` where index_id = ''cdc_tail'' and tag = 1) as seed_ready, ',
+    '(select coalesce(max(chunk_id), -1) >= 0 from `', database(), '`.`', @mut_ft2,
+    '` where index_id = ''cdc_tail'' and tag = 1) as mut_ready'
+);
+prepare wait_initial from @wait_initial_sql;
+execute wait_initial;
+➤ seed_ready[-7,1,0]  ¦  mut_ready[-7,1,0]  𝄀
+1  ¦  1
+deallocate prepare wait_initial;
+select id from cdc_seed where match(left_doc, right_doc) against('+seedleft +seedright' in boolean mode) order by id;
+id
+1
+select id, note from cdc_seed where match(left_doc, right_doc) against('seedrightonly' in boolean mode) order by id;
+id    note
+2     right-only
+select id, note from cdc_seed where match(left_doc, right_doc) against('seedleftonly' in boolean mode) order by id;
+id    note
+3     left-only
+select id, note from cdc_seed where match(left_doc, right_doc) against('seedliteral' in boolean mode) order by id;
+id    note
+5     literal-null
+select id, note from cdc_seed where match(left_doc, right_doc) against('null' in boolean mode) order by id;
+id    note
+6     string-null
+select id, note from cdc_seed where match(left_doc, right_doc) against('seedemptyobject' in boolean mode) order by id;
+id    note
+7     empty-object
+select id, note from cdc_seed where match(left_doc, right_doc) against('seedemptyarray' in boolean mode) order by id;
+id    note
+8     empty-array
+set @capture_mut_tail_sql = concat(
+    'select coalesce(max(chunk_id), -1) into @mut_tail_before from `', database(), '`.`', @mut_ft2,
+    '` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare capture_mut_tail from @capture_mut_tail_sql;
+execute capture_mut_tail;
+deallocate prepare capture_mut_tail;
+update cdc_mut set left_doc = NULL, right_doc = NULL, note = 'zero-new' where id = 10;
+set @wait_mut_sql = concat(
+    'select coalesce(max(chunk_id), -1) > ', @mut_tail_before,
+    ' as mut_all_null_ready from `', database(), '`.`', @mut_ft2,
+    '` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare wait_mut from @wait_mut_sql;
+execute wait_mut;
+➤ mut_all_null_ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_mut;
+set @capture_mut_tail_sql = concat(
+    'select coalesce(max(chunk_id), -1) into @mut_tail_before from `', database(), '`.`', @mut_ft2,
+    '` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare capture_mut_tail from @capture_mut_tail_sql;
+execute capture_mut_tail;
+deallocate prepare capture_mut_tail;
+update cdc_mut set right_doc = '{"v":"newright"}', note = 'right-new' where id = 11;
+set @wait_mut_sql = concat(
+    'select coalesce(max(chunk_id), -1) > ', @mut_tail_before,
+    ' as mut_value_ready from `', database(), '`.`', @mut_ft2,
+    '` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare wait_mut from @wait_mut_sql;
+execute wait_mut;
+➤ mut_value_ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_mut;
+set @capture_mut_tail_sql = concat(
+    'select coalesce(max(chunk_id), -1) into @mut_tail_before from `', database(), '`.`', @mut_ft2,
+    '` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare capture_mut_tail from @capture_mut_tail_sql;
+execute capture_mut_tail;
+deallocate prepare capture_mut_tail;
+delete from cdc_mut where id = 12;
+set @wait_mut_sql = concat(
+    'select coalesce(max(chunk_id), -1) > ', @mut_tail_before,
+    ' as mut_delete_ready from `', database(), '`.`', @mut_ft2,
+    '` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare wait_mut from @wait_mut_sql;
+execute wait_mut;
+➤ mut_delete_ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_mut;
+set @capture_mut_tail_sql = concat(
+    'select coalesce(max(chunk_id), -1) into @mut_tail_before from `', database(), '`.`', @mut_ft2,
+    '` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare capture_mut_tail from @capture_mut_tail_sql;
+execute capture_mut_tail;
+deallocate prepare capture_mut_tail;
+insert into cdc_mut values (12,'{"v":"reinsert"}',NULL,'reinsert-new');
+set @wait_mut_sql = concat(
+    'select coalesce(max(chunk_id), -1) > ', @mut_tail_before,
+    ' as mut_reinsert_ready from `', database(), '`.`', @mut_ft2,
+    '` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare wait_mut from @wait_mut_sql;
+execute wait_mut;
+➤ mut_reinsert_ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_mut;
+set @capture_mut_tail_sql = concat(
+    'select coalesce(max(chunk_id), -1) into @mut_tail_before from `', database(), '`.`', @mut_ft2,
+    '` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare capture_mut_tail from @capture_mut_tail_sql;
+execute capture_mut_tail;
+deallocate prepare capture_mut_tail;
+update cdc_mut set left_doc = NULL, right_doc = NULL, note = 'lww-zero' where id = 13;
+set @wait_mut_sql = concat(
+    'select coalesce(max(chunk_id), -1) > ', @mut_tail_before,
+    ' as mut_lww_zero_ready from `', database(), '`.`', @mut_ft2,
+    '` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare wait_mut from @wait_mut_sql;
+execute wait_mut;
+➤ mut_lww_zero_ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_mut;
+set @capture_mut_tail_sql = concat(
+    'select coalesce(max(chunk_id), -1) into @mut_tail_before from `', database(), '`.`', @mut_ft2,
+    '` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare capture_mut_tail from @capture_mut_tail_sql;
+execute capture_mut_tail;
+deallocate prepare capture_mut_tail;
+update cdc_mut set right_doc = '{"v":"lww-final"}', note = 'lww-final' where id = 13;
+set @wait_mut_sql = concat(
+    'select coalesce(max(chunk_id), -1) > ', @mut_tail_before,
+    ' as mut_lww_final_ready from `', database(), '`.`', @mut_ft2,
+    '` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare wait_mut from @wait_mut_sql;
+execute wait_mut;
+➤ mut_lww_final_ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_mut;
+select id from cdc_mut where match(left_doc, right_doc) against('oldleft' in boolean mode) order by id;
+id
+select id from cdc_mut where match(left_doc, right_doc) against('oldright' in boolean mode) order by id;
+id
+select id, note from cdc_mut where match(left_doc, right_doc) against('newright' in boolean mode) order by id;
+id    note
+11    right-new
+select id from cdc_mut where match(left_doc, right_doc) against('deleteold' in boolean mode) order by id;
+id
+select id from cdc_mut where match(left_doc, right_doc) against('keepold' in boolean mode) order by id;
+id
+select id, note from cdc_mut where match(left_doc, right_doc) against('reinsert' in boolean mode) order by id;
+id    note
+12    reinsert-new
+select id from cdc_mut where match(left_doc, right_doc) against('reinsertold' in boolean mode) order by id;
+id
+select id, note from cdc_mut where match(left_doc, right_doc) against('lww-final' in boolean mode) order by id;
+id    note
+13    lww-final
+alter table cdc_mut alter reindex ftidx fulltext2 merge force_sync;
+select id, note from cdc_mut where match(left_doc, right_doc) against('newright' in boolean mode) order by id;
+id    note
+11    right-new
+select id, note from cdc_mut where match(left_doc, right_doc) against('reinsert' in boolean mode) order by id;
+id    note
+12    reinsert-new
+select id, note from cdc_mut where match(left_doc, right_doc) against('lww-final' in boolean mode) order by id;
+id    note
+13    lww-final
+select id from cdc_mut where match(left_doc, right_doc) against('oldleft' in boolean mode) order by id;
+id
+alter table cdc_mut alter reindex ftidx fulltext2 force_sync;
+select id, note from cdc_mut where match(left_doc, right_doc) against('newright' in boolean mode) order by id;
+id    note
+11    right-new
+select id, note from cdc_mut where match(left_doc, right_doc) against('reinsert' in boolean mode) order by id;
+id    note
+12    reinsert-new
+select id, note from cdc_mut where match(left_doc, right_doc) against('lww-final' in boolean mode) order by id;
+id    note
+13    lww-final
+select id from cdc_mut where match(left_doc, right_doc) against('oldleft' in boolean mode) order by id;
+id
+drop database ft2_null_columns;

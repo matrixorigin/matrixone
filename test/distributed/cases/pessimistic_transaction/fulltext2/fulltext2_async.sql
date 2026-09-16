@@ -104,6 +104,9 @@ deallocate prepare wait_src_mutation;
 select id from src where match(body, title) against('red') order by id;
 -- doc 0's new text
 select id from src where match(body, title) against('green') order by id;
+-- NULL siblings from the initial CDC batch keep their non-NULL content searchable.
+select id from src where match(body, title) against('INCLUDED') order by id;
+select id from src where match(body, title) against('BODY') order by id;
 
 -- rename keeps the index + CDC
 alter table src rename to src1;

@@ -85,6 +85,13 @@ id
 select id from src where match(body, title) against('green') order by id;
 id
 0
+select id from src where match(body, title) against('INCLUDED') order by id;
+id
+8
+9
+select id from src where match(body, title) against('BODY') order by id;
+id
+9
 alter table src rename to src1;
 select id from src1 where match(body, title) against('green') order by id;
 id

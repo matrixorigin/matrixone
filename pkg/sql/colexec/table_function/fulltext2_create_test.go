@@ -19,6 +19,7 @@ import (
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
@@ -55,6 +56,30 @@ func ft2CreateArgVecs(t *testing.T, mp *mpool.MPool, cfg string, pk int64, texts
 	for _, s := range texts {
 		tv := vector.NewVec(types.T_varchar.ToType())
 		require.NoError(t, vector.AppendBytes(tv, []byte(s), false, mp))
+		vecs = append(vecs, tv)
+		args = append(args, makeStrConstExpr("col"))
+	}
+	tf := newFT2TF([]string{"status"}, ft2StatusRets())
+	tf.Args = args
+	tf.ctr.argVecs = vecs
+	return tf, vecs
+}
+
+func ft2CreateNullableArgVecs(t *testing.T, mp *mpool.MPool, cfg string, pk int64, values ...any) (*TableFunction, []*vector.Vector) {
+	t.Helper()
+	pkVec := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed[int64](pkVec, pk, false, mp))
+	vecs := []*vector.Vector{ft2ConstStr(t, mp, cfg), pkVec}
+	args := []*plan.Expr{makeStrConstExpr(cfg), makeStrConstExpr("pk")}
+	for _, value := range values {
+		tv := vector.NewVec(types.T_varchar.ToType())
+		if value == nil {
+			require.NoError(t, vector.AppendBytes(tv, nil, true, mp))
+		} else {
+			s, ok := value.(string)
+			require.True(t, ok)
+			require.NoError(t, vector.AppendBytes(tv, []byte(s), false, mp))
+		}
 		vecs = append(vecs, tv)
 		args = append(args, makeStrConstExpr("col"))
 	}
@@ -187,22 +212,160 @@ func TestFulltext2CreateRowTerms(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, terms)
 
-	// a NULL column short-circuits to no tokens.
+	// a row with a NULL sibling still contributes the non-NULL column's terms.
 	{
 		st := &fulltext2CreateState{tblcfg: fulltext2.TableConfig{Parser: fulltext2.ParserNgram}}
-		tf, vecs := ft2CreateArgVecs(t, mp, "{}", 1, "ignored")
-		nullCol := vector.NewVec(types.T_varchar.ToType())
-		require.NoError(t, vector.AppendBytes(nullCol, nil, true, mp))
-		vecs[2] = nullCol
-		tf.ctr.argVecs = vecs
+		tf, _ := ft2CreateNullableArgVecs(t, mp, "{}", 1, nil, "world")
 		terms, err = st.rowTerms(tf, proc, 0)
 		require.NoError(t, err)
-		require.Empty(t, terms)
+		require.Equal(t, []fulltext2.WordPos{{Word: "world", Pos: 0}}, terms)
 	}
 
 	// invalid json → error surfaced.
 	_, err = run(fulltext2.ParserJSON, "{not json")
 	require.Error(t, err)
+}
+
+func TestFulltext2CreateRowTermsNullColumnMatrix(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+
+	assertWords := func(parser string, values []any, want []fulltext2.WordPos) {
+		t.Helper()
+		st := &fulltext2CreateState{tblcfg: fulltext2.TableConfig{Parser: parser}}
+		tf, _ := ft2CreateNullableArgVecs(t, mp, "{}", 1, values...)
+		got, err := st.rowTerms(tf, proc, 0)
+		require.NoError(t, err)
+		require.Equal(t, want, got)
+	}
+
+	assertWords(fulltext2.ParserNgram, []any{nil, "right"}, []fulltext2.WordPos{{Word: "right", Pos: 0}})
+	assertWords(fulltext2.ParserNgram, []any{"left", nil}, []fulltext2.WordPos{{Word: "left", Pos: 0}})
+	assertWords(fulltext2.ParserNgram, []any{"left", nil, "right"}, []fulltext2.WordPos{
+		{Word: "left", Pos: 0}, {Word: "right", Pos: 5},
+	})
+	assertWords(fulltext2.ParserNgram, []any{nil, nil}, nil)
+	assertWords(fulltext2.ParserNgram, []any{"", "right"}, []fulltext2.WordPos{{Word: "right", Pos: 0}})
+	assertWords(fulltext2.ParserNgram, []any{"left", "", "right"}, []fulltext2.WordPos{
+		{Word: "left", Pos: 0}, {Word: "right", Pos: 6},
+	})
+	assertWords(fulltext2.ParserDefault, []any{nil, "right"}, []fulltext2.WordPos{{Word: "right", Pos: 0}})
+
+	assertWords(fulltext2.ParserJSONValue, []any{nil, `{"k":"right"}`}, []fulltext2.WordPos{{Word: "right", Pos: 0}})
+	assertWords(fulltext2.ParserJSONValue, []any{`{"k":"left"}`, nil}, []fulltext2.WordPos{{Word: "left", Pos: 0}})
+	assertWords(fulltext2.ParserJSONValue, []any{`{"k":"left"}`, `{"k":"right"}`}, []fulltext2.WordPos{
+		{Word: "left", Pos: 0}, {Word: "right", Pos: 5},
+	})
+	assertWords(fulltext2.ParserJSONValue, []any{`null`, `{"k":"sibling"}`}, []fulltext2.WordPos{{Word: "sibling", Pos: 0}})
+	assertWords(fulltext2.ParserJSONValue, []any{`"null"`, nil}, []fulltext2.WordPos{{Word: "null", Pos: 0}})
+
+	// JSON without tuple keys still flattens each non-NULL column independently.
+	st := &fulltext2CreateState{tblcfg: fulltext2.TableConfig{Parser: fulltext2.ParserJSON, JSONNoKeys: true}}
+	tf, _ := ft2CreateNullableArgVecs(t, mp, "{}", 1, nil, `{"k":"right"}`)
+	got, err := st.rowTerms(tf, proc, 0)
+	require.NoError(t, err)
+	require.Equal(t, []fulltext2.WordPos{{Word: "right", Pos: 0}}, got)
+
+	// An empty non-NULL TEXT value is still invalid JSON; a NULL sibling must not
+	// hide that parser error.
+	st = &fulltext2CreateState{tblcfg: fulltext2.TableConfig{Parser: fulltext2.ParserJSON}}
+	tf, _ = ft2CreateNullableArgVecs(t, mp, "{}", 1, "", `{"k":"right"}`)
+	_, err = st.rowTerms(tf, proc, 0)
+	require.Error(t, err)
+
+	// INCLUDE arguments remain outside the content range, including a NULL INCLUDE.
+	st = &fulltext2CreateState{tblcfg: fulltext2.TableConfig{
+		Parser: fulltext2.ParserNgram, IncludeTypes: []int32{int32(types.T_varchar)},
+	}}
+	tf, _ = ft2CreateNullableArgVecs(t, mp, "{}", 1, nil, "body", "covering")
+	got, err = st.rowTerms(tf, proc, 0)
+	require.NoError(t, err)
+	require.Equal(t, []fulltext2.WordPos{{Word: "body", Pos: 0}}, got)
+
+	// A NULL datalink is skipped before the resolver is reached; its sibling remains searchable.
+	tf, _ = ft2CreateNullableArgVecs(t, mp, "{}", 1, nil, "body")
+	tf.Args[2].Typ.Id = int32(types.T_datalink)
+	st.tblcfg.IncludeTypes = nil
+	got, err = st.rowTerms(tf, proc, 0)
+	require.NoError(t, err)
+	require.Equal(t, []fulltext2.WordPos{{Word: "body", Pos: 0}}, got)
+}
+
+func TestFulltext2CreateRowTermsJSONTupleSkipsNull(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	st := &fulltext2CreateState{tblcfg: fulltext2.TableConfig{Parser: fulltext2.ParserJSON}}
+	tf, _ := ft2CreateNullableArgVecs(t, mp, "{}", 1, `{"a":"left"}`, nil, `{"b":"right"}`)
+
+	got, err := st.rowTerms(tf, proc, 0)
+	require.NoError(t, err)
+	require.Len(t, got, 2)
+	left, err := fulltext2.JSONTupleColumnTerms([]byte(`{"a":"left"}`), false, fulltext2.DefaultJSONTermOptions())
+	require.NoError(t, err)
+	right, err := fulltext2.JSONTupleColumnTerms([]byte(`{"b":"right"}`), false, fulltext2.DefaultJSONTermOptions())
+	require.NoError(t, err)
+	require.Equal(t, []string{left[0], right[0]}, []string{got[0].Word, got[1].Word})
+	require.Equal(t, []int32{0, 1}, []int32{got[0].Pos, got[1].Pos})
+}
+
+func TestFulltext2CreateRowTermsBinaryJSONNullSibling(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	st := &fulltext2CreateState{tblcfg: fulltext2.TableConfig{Parser: fulltext2.ParserJSONValue}}
+
+	pk := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed[int64](pk, 1, false, mp))
+	left := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(left, nil, true, mp))
+	bj, err := bytejson.ParseFromString(`{"k":"right"}`)
+	require.NoError(t, err)
+	raw, err := bj.Marshal()
+	require.NoError(t, err)
+	right := vector.NewVec(types.T_json.ToType())
+	require.NoError(t, vector.AppendBytes(right, raw, false, mp))
+	tf := newFT2TF([]string{"status"}, ft2StatusRets())
+	tf.Args = []*plan.Expr{
+		makeStrConstExpr("{}"), makeStrConstExpr("pk"), makeStrConstExpr("left"), makeStrConstExpr("right"),
+	}
+	tf.ctr.argVecs = []*vector.Vector{ft2ConstStr(t, mp, "{}"), pk, left, right}
+
+	got, err := st.rowTerms(tf, proc, 0)
+	require.NoError(t, err)
+	require.Equal(t, []fulltext2.WordPos{{Word: "right", Pos: 0}}, got)
+}
+
+func TestFulltext2CreateRowTermsNullBitmapAndMalformedSibling(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	st := &fulltext2CreateState{tblcfg: fulltext2.TableConfig{Parser: fulltext2.ParserNgram}}
+
+	cfg := ft2ConstStr(t, mp, "{}")
+	pk := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed[int64](pk, 1, false, mp))
+	require.NoError(t, vector.AppendFixed[int64](pk, 2, false, mp))
+	left := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(left, []byte("alpha"), false, mp))
+	require.NoError(t, vector.AppendBytes(left, nil, true, mp))
+	right := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(right, nil, true, mp))
+	require.NoError(t, vector.AppendBytes(right, []byte("beta"), false, mp))
+	tf := newFT2TF([]string{"status"}, ft2StatusRets())
+	tf.Args = []*plan.Expr{makeStrConstExpr("{}"), makeStrConstExpr("pk"), makeStrConstExpr("left"), makeStrConstExpr("right")}
+	tf.ctr.argVecs = []*vector.Vector{cfg, pk, left, right}
+	got, err := st.rowTerms(tf, proc, 0)
+	require.NoError(t, err)
+	require.Equal(t, []fulltext2.WordPos{{Word: "alpha", Pos: 0}}, got)
+	got, err = st.rowTerms(tf, proc, 1)
+	require.NoError(t, err)
+	require.Equal(t, []fulltext2.WordPos{{Word: "beta", Pos: 0}}, got)
+
+	jsonSt := &fulltext2CreateState{tblcfg: fulltext2.TableConfig{Parser: fulltext2.ParserJSONValue}}
+	for _, values := range [][]any{{nil, "{bad"}, {"{bad", nil}} {
+		tf, _ := ft2CreateNullableArgVecs(t, mp, "{}", 1, values...)
+		got, err := jsonSt.rowTerms(tf, proc, 0)
+		require.Error(t, err)
+		require.Nil(t, got)
+	}
 }
 
 func TestFulltext2CreateEndNotInited(t *testing.T) {

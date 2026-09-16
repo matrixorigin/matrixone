@@ -40,10 +40,23 @@ drop table if exists js2;
 create table js2(id bigint primary key, j1 json, j2 json);
 insert into js2 values
  (0,'{"x":"red"}','{"y":"winter"}'),
- (1,'{"x":"blue"}','{"y":"summer"}');
+ (1,'{"x":"blue"}','{"y":"summer"}'),
+ (2,NULL,'{"y":"onlyrighttoken"}'),
+ (3,'{"x":"onlylefttoken"}',NULL),
+ (4,NULL,NULL),
+ (5,'null','{"y":"literalnullsibling"}'),
+ (6,'"null"',NULL),
+ (7,'{}','{"y":"emptyobject-sibling"}'),
+ (8,'[]','{"y":"emptyarray-sibling"}');
 create fulltext2 index ft on js2(j1, j2) with parser json_value;
 select id from js2 where match(j1, j2) against('+red +winter' in boolean mode) order by id;
 select id from js2 where match(j1, j2) against('summer' in boolean mode) order by id;
+select id from js2 where match(j1, j2) against('onlyrighttoken' in boolean mode) order by id;
+select id from js2 where match(j1, j2) against('onlylefttoken' in boolean mode) order by id;
+select id from js2 where match(j1, j2) against('literalnullsibling' in boolean mode) order by id;
+select id from js2 where match(j1, j2) against('null' in boolean mode) order by id;
+select id from js2 where match(j1, j2) against('emptyobject-sibling' in boolean mode) order by id;
+select id from js2 where match(j1, j2) against('emptyarray-sibling' in boolean mode) order by id;
 
 -- ============ text/varchar column holding json ============
 drop table if exists jt;
