@@ -220,6 +220,21 @@ func RequiresMORPCVersion85ExpressionResultContracts(owner any) (bool, error) {
 	return RequiresMORPCVersion86ExpressionResultContracts(owner)
 }
 
+// RequiresMORPCVersion84DecimalLiteralSemantics reports whether an owner
+// contains a plain decimal literal whose exact normalized binding must not be
+// replayed by a pre-v84 binder.
+func RequiresMORPCVersion84DecimalLiteralSemantics(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.DecimalLiteralSemantics, err
+}
+
+// RequiresMORPCVersion82DecimalLiteralSemantics is retained as a source-level
+// compatibility alias for callers introduced with the original decimal marker.
+// The cumulative protocol fence is MORPC v84 after the v83 mainline contract.
+func RequiresMORPCVersion82DecimalLiteralSemantics(owner any) (bool, error) {
+	return RequiresMORPCVersion84DecimalLiteralSemantics(owner)
+}
+
 const (
 	equalFunctionID                  int32 = 0
 	notEqualFunctionID               int32 = 1
@@ -278,6 +293,10 @@ const (
 // vectors to signed INT/ BIGINT or BIGINT UNSIGNED.
 // BoundedConditionalStringDomains requires MORPC v83 because the bounded
 // BINARY/VARBINARY COALESCE overload identities are new to the registry.
+// DecimalLiteralSemantics requires MORPC v84 because plain DECIMAL256
+// literals are normalized and kept exact by the new planner, while older
+// binders can round or reject the same persisted SQL at the Decimal128
+// boundary.
 // TOBase64ResultContracts and IPFunctionResultContracts require MORPC v86:
 // the former changes a VARCHAR result bound and adds binary overloads, while
 // the latter changes IP predicate results to INT32 and adds domain-aware
@@ -305,7 +324,8 @@ type RemoteExpressionFeatures struct {
 	TOBase64ResultContracts           bool
 	IPFunctionResultContracts         bool
 	ExpressionResultMetadataContracts bool
-	SpatialDistanceSemantics bool
+	DecimalLiteralSemantics           bool
+	SpatialDistanceSemantics          bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
@@ -324,6 +344,7 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.TOBase64ResultContracts ||
 		features.IPFunctionResultContracts ||
 		features.ExpressionResultMetadataContracts ||
+		features.DecimalLiteralSemantics ||
 		features.SpatialDistanceSemantics
 }
 
@@ -343,16 +364,16 @@ func isBoundedConditionalStringDomain(fn *Function) bool {
 // therefore based on function identity, not on the operand types selected by a
 // particular planner invocation.
 const (
-	remoteIPInet6AtonFunctionID    int32 = 392
-	remoteIPInet6NtoaFunctionID    int32 = 393
-	remoteIPInetAtonFunctionID     int32 = 394
-	remoteIPInetNtoaFunctionID     int32 = 395
-	remoteIPIsIPv4FunctionID       int32 = 396
-	remoteIPIsIPv6FunctionID       int32 = 397
-	remoteIPIsIPv4CompatFunctionID int32 = 398
-	remoteIPIsIPv4MappedFunctionID int32 = 399
-	remoteTOBase64FunctionID       int32 = 213
-	remoteINETNTOAFunctionID       int32 = 395
+	remoteIPInet6AtonFunctionID       int32 = 392
+	remoteIPInet6NtoaFunctionID       int32 = 393
+	remoteIPInetAtonFunctionID        int32 = 394
+	remoteIPInetNtoaFunctionID        int32 = 395
+	remoteIPIsIPv4FunctionID          int32 = 396
+	remoteIPIsIPv6FunctionID          int32 = 397
+	remoteIPIsIPv4CompatFunctionID    int32 = 398
+	remoteIPIsIPv4MappedFunctionID    int32 = 399
+	remoteTOBase64FunctionID          int32 = 213
+	remoteINETNTOAFunctionID          int32 = 395
 	remoteSpatialDistanceFunctionID   int32 = 421
 	remoteFrechetDistanceFunctionID   int32 = 506
 	remoteHausdorffDistanceFunctionID int32 = 507
@@ -722,6 +743,14 @@ func isExpressionResultMetadataContract(expr *Expr) bool {
 func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatures, err error) {
 	err = walkExpressionsInOwner(owner, func(expr *Expr) error {
 		return VisitExprTree(expr, func(current *Expr) error {
+			if !features.DecimalLiteralSemantics {
+				if literal := current.GetLit(); literal != nil {
+					features.DecimalLiteralSemantics = literal.DecimalLiteralRequiresV82
+				}
+				if literalVec := current.GetVec(); literalVec != nil {
+					features.DecimalLiteralSemantics = literalVec.DecimalLiteralRequiresV82
+				}
+			}
 			fn := current.GetF()
 			if fn != nil && fn.Func != nil {
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)

@@ -907,3 +907,34 @@ func TestRequiredRemoteExpressionFeaturesSpatialDistance(t *testing.T) {
 	require.True(t, features.SpatialDistanceSemantics,
 		"a nested/new unit overload must fence the whole owner")
 }
+
+func TestRequiredRemoteExpressionFeaturesDecimalLiteralSemantics(t *testing.T) {
+	makeLiteral := func(required bool) *Expr {
+		return &Expr{
+			Typ: Type{Id: 33, Width: 40, Scale: 1},
+			Expr: &Expr_Lit{Lit: &Literal{
+				Value:                     &Literal_Sval{Sval: "12345678901234567890123456789012345678.1"},
+				DecimalLiteralRequiresV82: required,
+			}},
+		}
+	}
+
+	original := makeLiteral(true)
+	wire, err := original.Marshal()
+	require.NoError(t, err)
+	decoded := &Expr{}
+	require.NoError(t, decoded.Unmarshal(wire))
+	require.True(t, decoded.GetLit().GetDecimalLiteralRequiresV82())
+
+	features, err := RequiredRemoteExpressionFeatures(decoded)
+	require.NoError(t, err)
+	require.True(t, features.DecimalLiteralSemantics)
+	required, err := RequiresMORPCVersion82DecimalLiteralSemantics(makeLiteral(true))
+	require.NoError(t, err)
+	require.True(t, required)
+	require.True(t, features.Any())
+
+	features, err = RequiredRemoteExpressionFeatures(makeLiteral(false))
+	require.NoError(t, err)
+	require.False(t, features.DecimalLiteralSemantics)
+}

@@ -98,6 +98,11 @@ message Literal {
   // Executable value ownership encoded as container/types.StringSource + 1.
   // Zero means an ordinary source literal for compatibility with old plans.
   uint32 string_source = 29;
+  // The planner normalized a plain decimal literal spelling before selecting
+  // its exact DECIMAL carrier. Older CNs would reparse the original SQL and
+  // could round or reject the value differently, so persisted owners carrying
+  // this bit require the Decimal256 literal protocol fence.
+  bool decimal_literal_requires_v82 = 30;
 }
 
 // Bounded param for prepared statement.  User fill on execution.
@@ -322,6 +327,10 @@ message LiteralVec {
   // Uniform runtime value owner. Values follow container/types.StringSource;
   // zero is Expression so legacy and runtime-produced payloads stay ordinary.
   uint32 string_source = 4;
+  // True when at least one element came from a plain decimal literal whose
+  // exact normalized binding requires MORPC v82. The aggregate bit preserves
+  // the compatibility fence without disabling the compact vector encoding.
+  bool decimal_literal_requires_v82 = 5;
 }
 
 enum CompressType {
