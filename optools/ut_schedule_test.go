@@ -19,22 +19,24 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 )
 
-// Source the real runner in a private repository layout. Its startup clears
-// diagnostics, so sourcing it in the actual checkout would corrupt another UT.
-func scheduleHarness(t *testing.T, script string, variables ...string) ([]byte, error) {
-	return scheduleHarnessWithMock(t, script, `#!/bin/bash
+func scheduleHarnessMock() string {
+	return `#!/bin/bash
 if [[ "$1" == version ]]; then exit 0; fi
 if [[ -n "${EXPECTED_HEAVY_PARALLEL:-}" ]]; then
  case " $* " in
   *" -p ${EXPECTED_HEAVY_PARALLEL} "*) ;;
   *) printf 'unexpected heavy parallelism: %s\n' "$*" >&2; exit 94 ;;
  esac
+fi
+if [[ "${EXPECT_ENGINE_BEFORE_HEAVY:-}" == 1 && "$1" == test && "$*" == *" -json "* && "$*" == *" -race "* ]]; then
+ [[ -e "$CASE_DIR/engine-joined" ]] || { printf 'heavy started before engine join\n' >&2; exit 95; }
 fi
 # The real env/go command must preserve both events around the report merge.
 printf 'heavy-start\n'
@@ -45,7 +47,17 @@ fi
 printf 'heavy-end\n'
 touch "$CASE_DIR/heavy-finished"
 exit "$HEAVY_STATUS"
-`, variables...)
+`
+}
+
+// Source the real runner in a private repository layout. Its startup clears
+// diagnostics, so sourcing it in the actual checkout would corrupt another UT.
+func scheduleHarness(t *testing.T, script string, variables ...string) ([]byte, error) {
+	return scheduleHarnessWithMock(t, script, scheduleHarnessMock(), variables...)
+}
+
+func scheduleHarnessWithDefaultMockTransform(t *testing.T, script string, transform func(string) string, variables ...string) ([]byte, error) {
+	return scheduleHarnessWithMockTransform(t, script, scheduleHarnessMock(), transform, variables...)
 }
 
 func scheduleHarnessWithMock(t *testing.T, script, mock string, variables ...string) ([]byte, error) {
@@ -211,21 +223,35 @@ printf 'scope=%s limit=%s complete=%s events_hierarchical=%s boundaries=%s\n' "$
 	}
 }
 
-func TestHeavyPlanReusesReleasedEngineCapacity(t *testing.T) {
-	for _, tc := range []struct{ name, budget, overlap, engine, heavy, plan, expected string }{
-		{"default-safe", "", "1", "0", "0", "0", "0"},
-		{"explicit-three", "3", "", "0", "0", "0", "0"},
-		{"overlap", "3", "1", "0", "0", "0", "0"},
-		{"engine-failure", "3", "1", "7", "0", "0", "1"},
-		{"heavy-failure", "3", "1", "0", "8", "0", "1"},
-		{"plan-failure", "3", "1", "0", "0", "9", "1"},
-		{"sequential-baseline", "3", "0", "0", "0", "0", "0"},
-		{"one-slot", "1", "1", "0", "0", "0", "0"},
-		{"two-slots", "2", "1", "0", "0", "0", "0"},
+func TestHeavyPlanSchedulesEngineBeforeResourceWave(t *testing.T) {
+	for _, tc := range []struct{ name, budget, overlap, planParallel, engine, heavy, plan, expected string }{
+		{"default-safe", "", "1", "1", "0", "0", "0", "0"},
+		{"explicit-three", "3", "", "1", "0", "0", "0", "0"},
+		{"overlap", "3", "1", "1", "0", "0", "0", "0"},
+		{"plan-two-slots", "3", "1", "2", "0", "0", "0", "0"},
+		{"engine-failure", "3", "1", "1", "7", "0", "0", "1"},
+		{"heavy-failure", "3", "1", "1", "0", "8", "0", "1"},
+		{"plan-failure", "3", "1", "1", "0", "0", "9", "1"},
+		{"sequential-baseline", "3", "0", "1", "0", "0", "0", "0"},
+		{"one-slot", "1", "1", "1", "0", "0", "0", "0"},
+		{"two-slots", "2", "1", "1", "0", "0", "0", "0"},
+		{"one-budget-two-plan-slots", "1", "1", "2", "0", "0", "0", "0"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			expectedOverlap := "0"
-			if tc.budget == "3" && tc.overlap != "0" {
+			effectiveBudget := tc.budget
+			if effectiveBudget == "" {
+				effectiveBudget = "3"
+			}
+			budget, err := strconv.Atoi(effectiveBudget)
+			if err != nil {
+				t.Fatalf("invalid test budget %q: %v", effectiveBudget, err)
+			}
+			planParallel, err := strconv.Atoi(tc.planParallel)
+			if err != nil {
+				t.Fatalf("invalid test plan parallelism %q: %v", tc.planParallel, err)
+			}
+			if tc.overlap != "0" && budget > planParallel {
 				expectedOverlap = "1"
 			}
 			script := `source ./run_ut.sh UT
@@ -253,19 +279,17 @@ function go() {
   for package in "$@"; do echo "github.com/matrixorigin/matrixone/${package#./}"; done
  fi
 }
-function run_engine_race_shards() {
- mkdir "$CASE_DIR/engine-once" || return 90
- while [[ ! -e "$CASE_DIR/heavy-started" ]]; do sleep 0.01; done
- if [[ "$EXPECT_SERIAL" == 1 ]]; then
-  [[ -e "$CASE_DIR/heavy-finished" ]] || return 92
- fi
- printf 'engine\n' > "$ENGINE_RACE_REPORT"
- touch "$CASE_DIR/engine-finished"
+	function run_engine_race_shards() {
+	 mkdir "$CASE_DIR/engine-once" || return 90
+	 [[ "${2:-}" == "${EXPECTED_ENGINE_SHARDS}" ]] || return 96
+	 printf 'engine\n' > "$ENGINE_RACE_REPORT"
+	 touch "$CASE_DIR/engine-finished"
  return "$ENGINE_STATUS"
 }
-function run_plan_race_shards() {
- mkdir "$CASE_DIR/plan-once" || return 91
- [[ -e "$CASE_DIR/engine-finished" ]] || return 92
+	function run_plan_race_shards() {
+	 mkdir "$CASE_DIR/plan-once" || return 91
+	 [[ "${PLAN_RACE_PARALLEL}" == "${EXPECTED_PLAN_PARALLEL}" ]] || return 98
+	 [[ -e "$CASE_DIR/engine-finished" ]] || return 92
  printf 'plan\n' > "$PLAN_RACE_REPORT"
  touch "$CASE_DIR/plan-started"
  return "$PLAN_STATUS"
@@ -276,22 +300,89 @@ run_tests
 [[ -z "$CURRENT_UT_PID$ENGINE_RACE_JOB_PID$PLAN_RACE_JOB_PID" ]] || exit 95
 [[ -e "$CASE_DIR/final-memory" ]] || exit 96
 printf '\nREPORT\n'
-cat "$UT_REPORT"
+	cat "$UT_REPORT"
 `
-			expectSerial := "0"
-			expectedHeavyParallel := ""
-			if tc.name == "default-safe" {
-				expectSerial = "1"
-				expectedHeavyParallel = "2"
+			transform := func(text string) string {
+				const anchor = "            wait \"${ENGINE_RACE_JOB_PID}\"\n            engine_status=$?\n"
+				if got := strings.Count(text, anchor); got != 1 {
+					t.Fatalf("engine join anchor count = %d, want 1", got)
+				}
+				return strings.Replace(text, anchor, anchor+"            ut_test_after_engine_wait\n", 1)
 			}
-			out, err := scheduleHarness(t, script, "HEAVY_RACE_PARALLEL="+tc.budget, "UT_OVERLAP_PLAN="+tc.overlap, "ENGINE_STATUS="+tc.engine, "HEAVY_STATUS="+tc.heavy, "PLAN_STATUS="+tc.plan, "EXPECTED_STATUS="+tc.expected, "EXPECT_OVERLAP="+expectedOverlap, "EXPECT_SERIAL="+expectSerial, "EXPECTED_HEAVY_PARALLEL="+expectedHeavyParallel)
+			script = "function ut_test_after_engine_wait() {\n touch \"$CASE_DIR/engine-joined\"\n [[ ! -e \"$CASE_DIR/heavy-started\" ]] || exit 97\n}\n" + script
+			expectedHeavyParallel := effectiveBudget
+			if expectedOverlap == "1" {
+				expectedHeavyParallel = strconv.Itoa(budget - planParallel)
+			}
+			if expectedHeavyParallel == "" {
+				expectedHeavyParallel = "3"
+			}
+			expectedEngineShards := "2"
+			if effectiveBudget == "1" {
+				expectedEngineShards = "1"
+			}
+			out, err := scheduleHarnessWithDefaultMockTransform(t, script, transform, "HEAVY_RACE_PARALLEL="+tc.budget, "UT_OVERLAP_PLAN="+tc.overlap, "PLAN_RACE_PARALLEL="+tc.planParallel, "ENGINE_STATUS="+tc.engine, "HEAVY_STATUS="+tc.heavy, "PLAN_STATUS="+tc.plan, "EXPECTED_STATUS="+tc.expected, "EXPECT_OVERLAP="+expectedOverlap, "EXPECT_ENGINE_BEFORE_HEAVY=1", "EXPECTED_ENGINE_SHARDS="+expectedEngineShards, "EXPECTED_PLAN_PARALLEL="+tc.planParallel, "EXPECTED_HEAVY_PARALLEL="+expectedHeavyParallel)
 			if err != nil {
 				t.Fatalf("schedule: %v\n%s", err, out)
 			}
-			if !strings.HasSuffix(string(out), "REPORT\nheavy-start\nheavy-end\nengine\nplan\n") {
+			if !strings.HasSuffix(string(out), "REPORT\nengine\nheavy-start\nheavy-end\nplan\n") {
 				t.Fatalf("lost or duplicated report events:\n%s", out)
 			}
 		})
+	}
+}
+
+func TestEngineLaunchRegistrationSurvivesCancellation(t *testing.T) {
+	script := `source ./run_ut.sh UT
+function logger() { :; }
+UT_HELPER_TERM_GRACE_TICKS=4
+trap handle_ut_termination TERM
+UT_REPORT="$CASE_DIR/ut-report.json"
+ENGINE_RACE_REPORT="$CASE_DIR/engine-report"
+ENGINE_RACE_REPORT_READY="$ENGINE_RACE_REPORT.ready"
+mkfifo "$CASE_DIR/engine-ready" "$CASE_DIR/engine-hold"
+exec 8<>"$CASE_DIR/engine-hold"
+exec 9<>"$CASE_DIR/engine-ready"
+function run_engine_race_shards() {
+	trap 'if grep -q "^engine$" "$UT_REPORT"; then touch "$CASE_DIR/report-consumed-early"; fi; touch "$CASE_DIR/engine-stopped"; exit 143' TERM
+	printf 'engine\n' > "$ENGINE_RACE_REPORT"
+	touch "$CASE_DIR/engine-started"
+	printf 'ready\n' >&9
+	read -r _ <&8
+}
+cleanup() {
+	status=$?
+	exec 8>&- 9>&-
+	[[ -e "$CASE_DIR/engine-started" && -e "$CASE_DIR/engine-stopped" ]] || status=90
+	[[ ! -e "$CASE_DIR/report-consumed-early" ]] || status=91
+	[[ -f "$UT_REPORT" ]] || status=92
+	if [[ -f "$UT_REPORT" ]] && [[ "$(grep -c '^engine$' "$UT_REPORT")" != 1 ]]; then status=92; fi
+	[[ -z "$ENGINE_RACE_JOB_PID" ]] || status=93
+	if [[ -s "$CASE_DIR/engine-pid" ]] && kill -0 "$(<"$CASE_DIR/engine-pid")" 2>/dev/null; then status=94; fi
+	printf 'ENGINE_CANCEL status=%s\n' "$status"
+	exit "$status"
+}
+trap cleanup EXIT
+start_engine_race example/engine 2
+`
+	transform := func(text string) string {
+		const anchor = "    run_engine_race_shards \"$1\" \"$2\" &\n    ENGINE_RACE_JOB_PID=$!\n"
+		if got := strings.Count(text, anchor); got != 1 {
+			t.Fatalf("engine launch anchor count = %d, want 1", got)
+		}
+		return strings.Replace(text, anchor, "    run_engine_race_shards \"$1\" \"$2\" &\n    ut_test_after_engine_spawn \"$!\"\n    ENGINE_RACE_JOB_PID=$!\n", 1)
+	}
+	script = "function ut_test_after_engine_spawn() {\n printf '%s\\n' \"$1\" > \"$CASE_DIR/engine-pid\"\n IFS= read -r -t 10 _ <&9 || exit 94\n kill -TERM \"$$\"\n}\n" + script
+	out, err := scheduleHarnessWithMockTransform(t, script, `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+exit 0
+`, transform)
+	exit, ok := err.(*exec.ExitError)
+	if !ok || exit.ExitCode() != 143 {
+		t.Fatalf("expected TERM exit 143: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "ENGINE_CANCEL status=143") {
+		t.Fatalf("engine cancellation ownership was not preserved: %s", out)
 	}
 }
 
