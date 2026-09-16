@@ -145,7 +145,7 @@ func (builder *QueryBuilder) makeUpdateChangedRowsPredicate(
 			// Inline the OLD projection expression. Multi-target UPDATE can
 			// extend/remap the projection before this predicate is consumed, so
 			// the pre-remap slot is not a stable column reference.
-			oldExpr = DeepCopyExpr(selectNode.ProjectList[oldPos])
+			oldExpr = replaceColRefs(DeepCopyExpr(selectNode.ProjectList[oldPos]), selectNodeTag, selectNode.ProjectList)
 			oldExpr.Typ = oldTyp
 		} else {
 			continue
@@ -153,7 +153,7 @@ func (builder *QueryBuilder) makeUpdateChangedRowsPredicate(
 		// Inline the computed assignment instead of referring to the mutable
 		// projection slot. Optimizer projection trimming may remove that slot,
 		// while the assignment's underlying scan references remain available.
-		newExpr := DeepCopyExpr(selectNode.ProjectList[newPos])
+		newExpr := replaceColRefs(DeepCopyExpr(selectNode.ProjectList[newPos]), selectNodeTag, selectNode.ProjectList)
 		newExpr.Typ = oldTyp
 		var err error
 		if oldExpr.Typ.Id == int32(types.T_char) {
@@ -541,7 +541,9 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			}
 			newColName2Idx[alias+"."+colName] = oldPos
 			oldColName2Idx[alias+"."+colName] = int32(len(selectList))
-			selectList = append(selectList, selectList[oldPos])
+			selectList = append(selectList, tree.SelectExpr{
+				Expr: tree.NewUnresolvedName(tree.NewCStr(alias, bindCtx.lower), tree.NewCStr(colName, 1)),
+			})
 			selectList[oldPos] = tree.SelectExpr{Expr: updateExpr}
 		}
 	}
