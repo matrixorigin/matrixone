@@ -19,8 +19,36 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"github.com/stretchr/testify/require"
 )
+
+func TestFormatDuplicateEntryMatchesErrorMessageWithoutReporting(t *testing.T) {
+	previousReporter := errutil.GetReportErrorFunc()
+	reports := 0
+	errutil.SetErrorReporter(func(context.Context, error, int) {
+		reports++
+	})
+	t.Cleanup(func() {
+		errutil.SetErrorReporter(previousReporter)
+	})
+
+	for _, tc := range []struct {
+		entry string
+		key   string
+	}{
+		{entry: "1", key: "PRIMARY"},
+		{entry: "", key: "unique_%"},
+		{entry: "重复%值", key: "idx_name"},
+	} {
+		want := NewDuplicateEntry(NoReportContext(), tc.entry, tc.key).Error()
+		require.Equal(t, want, FormatDuplicateEntry(tc.entry, tc.key))
+	}
+	require.Zero(t, reports)
+
+	_ = NewDuplicateEntry(context.Background(), "1", "PRIMARY")
+	require.Equal(t, 1, reports)
+}
 
 func pf1() {
 	panic("foo")
