@@ -107,6 +107,9 @@ insert into t1 values(0.001),(34.5);
 insert into t1 values("99990000.999");
 select t + 1 from t1;
 select t - 1 from t1;
+-- @metacmp(true)
 select t * 10 from t1;
+-- @metacmp(true)
 select t / 10 from t1;
+-- @metacmp(true)
 select t % 5 from t1;

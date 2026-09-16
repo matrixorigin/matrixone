@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
+	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -1521,8 +1522,8 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		extra := newRel.GetExtraInfo()
 		id := newRel.GetTableID(c.proc.Ctx)
 
-		// cctx for the idxcron re-registration arm below — lazy-init,
-		// reused across loop iterations.
+		// Shared plugin CompileContext for the ISCP (AlterCopyInitSQL) and idxcron
+		// re-registration arms below — lazy-init, reused across loop iterations.
 		var idxcronCctx *pluginCompileCtx
 		for _, indexDef := range newTableDef.Indexes {
 
@@ -1550,11 +1551,26 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 						}
 
 						if valid {
-							// index table may not be fully sync'd with source table via ISCP during alter table
-							// clone index table (with ISCP) may not be a complete clone
-							// so register ISCP job with startFromNow = false
+							// The replacement table's hidden index tables may be empty: cloneUnaffectedIndexes
+							// SKIPS the clone for a SkipWholeIndex async index and the CDC is registered from
+							// ts=0. Ask the plugin how to seed it (#28837): almost every algo returns (false, "")
+							// because its consumer rebuilds the whole index from the ts=0 replay (hnsw/cagra/
+							// ivfpq via RunHnsw/RunCuvs, ivfflat entries, classic row-based fulltext). fulltext2
+							// is the exception: RunFulltext2 only appends a cdc_tail and its base is built ONLY by
+							// buildFromSource, so it returns a REINDEX FORCE_SYNC InitSQL, run post-commit by the
+							// CDC's first iteration. Mirrors RestoreTable's plugin-InitSQL dispatch.
+							startFromNow, initSQL := false, ""
+							if p, ok := indexplugin.Get(indexDef.IndexAlgo); ok {
+								if idxcronCctx == nil {
+									idxcronCctx = newPluginCompileCtx(s, c, id, extra, dbSource, qry.Database, newTableDef, nil)
+								}
+								startFromNow, initSQL, err = alterCopyCdcSeed(p.Compile(), idxcronCctx, indexDef.IndexName, newTableDef.Indexes)
+								if err != nil {
+									return err
+								}
+							}
 							sinker_type := getSinkerTypeFromAlgo(indexDef.IndexAlgo)
-							err = CreateIndexCdcTask(c, dbName, newTableDef.Name, newTableDef.TblId, indexDef.IndexName, sinker_type, false, "", newTableDef)
+							err = CreateIndexCdcTask(c, dbName, newTableDef.Name, newTableDef.TblId, indexDef.IndexName, sinker_type, startFromNow, initSQL, newTableDef)
 							if err != nil {
 								return err
 							}
@@ -1566,8 +1582,8 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 					{
 						// idxcron — register the algorithm's scheduled
 						// maintenance task via the plugin. Plugins
-						// without IdxcronAction (HNSW / CAGRA / IVF-PQ
-						// today) are skipped.
+						// without IdxcronAction (HNSW and classic
+						// fulltext today) are skipped.
 						if p, ok := indexplugin.Get(indexDef.IndexAlgo); ok {
 							d := p.Catalog().SyncDescriptor()
 							if d.IdxcronAction != "" {
@@ -1678,6 +1694,28 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		return err
 	}
 	return nil
+}
+
+// alterCopyCdcSeed asks the plugin how to seed the CDC job of a copy-alter replacement
+// index whose hidden tables were skipped by cloneUnaffectedIndexes: it collects the
+// index's hidden-table defs, calls AlterCopyInitSQL, and applies the no-rebuild guard.
+// An empty InitSQL means the consumer rebuilds from the ts=0 replay, so the tail MUST NOT
+// arm from now (which would drop every pre-existing row). Mirrors RestoreInitSQL (ddl.go).
+func alterCopyCdcSeed(hooks compileplugin.Hooks, cctx compileplugin.CompileContext, indexName string, indexes []*plan.IndexDef) (startFromNow bool, initSQL string, err error) {
+	idxDefs := make(map[string]*plan.IndexDef)
+	for _, d := range indexes {
+		if d.IndexName == indexName {
+			idxDefs[d.IndexAlgoTableType] = d
+		}
+	}
+	startFromNow, initSQL, err = hooks.AlterCopyInitSQL(cctx, idxDefs)
+	if err != nil {
+		return false, "", err
+	}
+	if initSQL == "" {
+		startFromNow = false
+	}
+	return startFromNow, initSQL, nil
 }
 
 func hasAlterAutoIncrementReset(actions []*plan.AlterTable_Action) bool {

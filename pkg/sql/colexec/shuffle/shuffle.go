@@ -400,9 +400,7 @@ func (shuffle *Shuffle) failLocalProducer(proc *process.Process, err error) {
 }
 
 func (shuffle *Shuffle) stopWritingOnce() {
-	// Only Prepare transfers one holder slot to this operator. Recursive/parallel
-	// cleanup may reset an admitted tree that never reached Prepare; counting it
-	// as a stopper can retire the shared pool before its real holders finish.
+	// Only a successfully admitted holder may publish pool completion.
 	if !shuffle.ctr.held || shuffle.ctr.writingStopped || shuffle.ctr.shufflePool == nil {
 		return
 	}

@@ -70,29 +70,45 @@ func TestShufflePreparePreservesEarlierAbortCause(t *testing.T) {
 	}
 }
 
-func TestShuffleResetDoesNotStopUnheldDrainAllWriter(t *testing.T) {
+func TestShuffleFailedAdmissionCleanup(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
-	pool := NewShufflePool(2, 2, true)
-	prepared, unprepared := NewArgument(), NewArgument()
-	defer prepared.Release()
-	defer unprepared.Release()
-	for _, arg := range []*Shuffle{prepared, unprepared} {
-		arg.DrainAllBuckets = true
-		arg.BucketNum = 2
-		arg.SetShufflePool(pool)
-	}
+	proc.BuildPipelineContext(context.Background())
 
-	require.NoError(t, prepared.Prepare(proc))
-	require.True(t, prepared.ctr.held)
-	require.False(t, unprepared.ctr.held)
-	unprepared.Reset(proc, false, nil)
-	prepared.Reset(proc, false, nil)
+	cause := errors.New("upstream execution failed")
+	pool := NewShufflePool(1, 1, true)
+	pool.abortWithError(proc.Mp(), cause)
 
-	pool.holderLock.Lock()
-	defer pool.holderLock.Unlock()
-	require.Equal(t, int32(1), pool.holders)
-	require.Equal(t, int32(1), pool.stoppers, "only the operator that acquired a holder may stop writing")
+	arg := NewArgument()
+	defer arg.Release()
+	arg.BucketNum = 1
+	arg.DrainAllBuckets = true
+	arg.SetShufflePool(pool)
+
+	err := vm.Prepare(arg, proc)
+	require.ErrorIs(t, err, cause)
+	require.False(t, arg.ctr.held)
+	require.Zero(t, pool.holders)
+	require.Zero(t, pool.stoppers)
+	require.Zero(t, pool.finished)
+
+	// A failed admission still has to pass through the normal operator-tree
+	// cleanup. It owns no pool holder, so cleanup must not publish a
+	// stop-writing completion for it.
+	require.NotPanics(t, func() {
+		pipeline.NewMerge(arg).Cleanup(proc, false, true, nil)
+	})
+	require.Zero(t, pool.holders)
+	require.Zero(t, pool.stoppers)
+	require.Zero(t, pool.finished)
+	require.ErrorIs(t, pool.abortErr, cause)
+	require.Nil(t, arg.GetShufflePool())
+	require.False(t, arg.ctr.held)
+
+	// Cleanup is allowed to be retried after a partially prepared operator.
+	require.NotPanics(t, func() {
+		pipeline.NewMerge(arg).Cleanup(proc, false, true, nil)
+	})
 }
 
 // add unit tests for cases

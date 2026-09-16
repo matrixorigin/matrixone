@@ -36,14 +36,14 @@ import (
 // Shutdown may finish the admitted transaction or cancel it; either result must
 // be atomic and bounded.
 func TestArrowLoadRolloutRollbackDrain(t *testing.T) {
+	path := fixtureIDName(t, t.TempDir(), "rollout.arrow", containerFile,
+		[][]idNameRow{{{id: 1, name: "one"}, {id: 2, name: "two"}}})
 	c := startArrowLoadCluster(t, 1, true, false, false)
 	// Both checks use the same policy; run the gate check before shutdown.
 	t.Run("S3GateDisabled", func(t *testing.T) { testArrowLoadGateS3Disabled(t, c) })
 	db := openArrowLoadDB(t, c, 0)
 	mustExec(t, db, "create database if not exists arrow_rollout")
 	mustExec(t, db, "use arrow_rollout")
-	path := fixtureIDName(t, t.TempDir(), "rollout.arrow", containerFile,
-		[][]idNameRow{{{id: 1, name: "one"}, {id: 2, name: "two"}}})
 	const ddl = "id BIGINT NOT NULL, name VARCHAR(50)"
 	const expectedRows int64 = 2
 	mustExec(t, db, fmt.Sprintf("create table rollout_drain(%s)", ddl))
