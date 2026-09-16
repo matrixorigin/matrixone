@@ -194,6 +194,17 @@ func checkChangeTypeCompatible(
 	origin *plan.Type,
 	to *plan.Type,
 ) error {
+	// A vector column (VECF32/VECF64/VECBF16/VECF16/VECINT8/VECUINT8) stores fixed-dimension
+	// arrays, and ALTER ... MODIFY/CHANGE copies rows through an array cast that preserves the
+	// element count -- it never reshapes a vector. Changing the declared dimension (Width) --
+	// whether the element type stays the same or also changes -- would leave existing rows at the
+	// old dimension: a mixed-dimension column that breaks distance queries and HNSW/IVFFLAT index
+	// construction (#28917). Reject any vector dimension change here, at validation, BEFORE the
+	// copy runs, rather than relying on the per-row cast guard to fail mid-copy.
+	if types.T(origin.Id).IsArrayRelate() && types.T(to.Id).IsArrayRelate() && origin.Width != to.Width {
+		return moerr.NewNotSupportedf(ctx,
+			"change vector dimension from %d to %d", origin.Width, to.Width)
+	}
 	// Deal with the same type.
 	if origin.Id == to.Id {
 		if isGeometryPlanType(origin) && !geometrySubtypeCompatible(geometrySubtypeName(to), geometrySubtypeName(origin)) {

@@ -230,7 +230,7 @@ Select * from auto_increment12;
 col1
 10
 11
-Insert into auto_increment12 values(16.898291);
+Insert into auto_increment12 values(16.000001);
 insert into auto_increment12 values(124312.4321424324);
 insert into auto_increment12 values();
 select last_insert_id();
@@ -566,7 +566,7 @@ Select * from auto_increment12;
 col1
 10
 11
-Insert into auto_increment12 values(16.898291);
+Insert into auto_increment12 values(16.000001);
 insert into auto_increment12 values();
 select last_insert_id();
 last_insert_id()

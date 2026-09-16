@@ -68,6 +68,38 @@ func TestNewPipelineClient(t *testing.T) {
 	require.NoError(t, client.Close())
 }
 
+func TestPipelineConfigConnectAttemptTimeout(t *testing.T) {
+	tests := []struct {
+		name     string
+		cfg      PipelineConfig
+		expected time.Duration
+	}{
+		{
+			name:     "default",
+			expected: time.Second,
+		},
+		{
+			name:     "bounded by total timeout",
+			cfg:      PipelineConfig{TimeOutForEachConnect: 37 * time.Millisecond},
+			expected: 37 * time.Millisecond,
+		},
+		{
+			name: "explicit",
+			cfg: PipelineConfig{
+				TimeOutForEachConnect: 5 * time.Second,
+				ConnectAttemptTimeout: 2 * time.Second,
+			},
+			expected: 2 * time.Second,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			test.cfg.fill()
+			require.Equal(t, test.expected, test.cfg.ConnectAttemptTimeout)
+		})
+	}
+}
+
 type retryablePipelineBackendFactory struct {
 	calls atomic.Int32
 }
