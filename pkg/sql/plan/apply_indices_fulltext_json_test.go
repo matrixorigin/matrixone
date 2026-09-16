@@ -847,6 +847,6 @@ func TestSelfCompletingJSONProbeGate(t *testing.T) {
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion73)
 	require.False(t, b.selfCompletingJSONProbeSupported(), "declined below the gate")
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion81)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, fulltext2.MORPCVersionProbeTail)
 	require.True(t, b.selfCompletingJSONProbeSupported(), "supported at the gate")
 }

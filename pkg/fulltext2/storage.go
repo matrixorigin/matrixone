@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
@@ -39,6 +40,12 @@ import (
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
+
+// MORPCVersionProbeTail is the MORPC protocol version that introduced the probe_tail TableConfig
+// contract (the self-completing fulltext2 json index probe). It is named here, next to the
+// contract it gates, so a future MORPC renumber collision changes only this one line rather than
+// every plan-time gate, sender fence, and test that references it.
+const MORPCVersionProbeTail = defines.MORPCVersion82
 
 // TableConfig locates a fulltext2 index's persistent segment store + metadata
 // table; it is the JSON const arg passed to the fulltext2_create / fulltext2_search

@@ -17,13 +17,15 @@ package compile
 import (
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
-	"github.com/stretchr/testify/require"
 )
 
 func ft2CfgExpr(sval string) *plan.Expr {
@@ -59,8 +61,8 @@ func TestFulltext2ProbeTailRejectsOnRollback(t *testing.T) {
 	require.ErrorContains(t, err, "newer MORPC protocol version")
 
 	// At the gate it serializes.
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion81)
-	client.version = defines.MORPCVersion81
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, fulltext2.MORPCVersionProbeTail)
+	client.version = fulltext2.MORPCVersionProbeTail
 	data, err := encodeRemoteScope(scope, c.proc)
 	require.NoError(t, err)
 	require.NotEmpty(t, data)

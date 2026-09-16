@@ -18,7 +18,7 @@ import (
 	"encoding/json"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -76,7 +76,7 @@ func pipelineHasFulltext2ProbeTail(p *pipeline.Pipeline) bool {
 
 // validateFulltext2ProbeTailDestination fails closed when a scope carrying a self-completing
 // fulltext2 json probe is about to be serialized to a CN that does not understand the probe_tail
-// TableConfig contract (MORPCVersion81).
+// TableConfig contract.
 //
 // addJSONFulltextProbes declines the probe at plan time on a mixed-version fleet, but that sample
 // is taken while planning. MOProtocolVersion is explicitly lowered before a rollback, so it can drop
@@ -91,7 +91,7 @@ func validateFulltext2ProbeTailDestination(proc *process.Process, p *pipeline.Pi
 		return nil
 	}
 	if p != nil && p.Node != nil {
-		supported, err := remoteWorkersSupportProtocol(proc, engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion81)
+		supported, err := remoteWorkersSupportProtocol(proc, engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, fulltext2.MORPCVersionProbeTail)
 		if err != nil {
 			return err
 		}

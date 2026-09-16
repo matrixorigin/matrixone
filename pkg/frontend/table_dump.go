@@ -1501,7 +1501,7 @@ func applyTableDumpAutoIncrementRestore(
 	resetInstalled = true
 	for _, restore := range restores {
 		if err = proc.GetIncrService().SetOffset(
-			ctx,
+			incrservice.WithAutoIDCachePolicy(ctx, def.TblId, def.AutoIdCache),
 			tableID,
 			restore.column.ColIndex,
 			restore.column.ColName,

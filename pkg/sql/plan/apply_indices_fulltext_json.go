@@ -320,7 +320,7 @@ func (builder *QueryBuilder) selfCompletingJSONProbeSupported() bool {
 	}
 	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	return ok && valid && version >= defines.MORPCVersion81
+	return ok && valid && version >= fulltext2.MORPCVersionProbeTail
 }
 
 // addJSONFulltextProbes appends an index-probe conjunct to scanNode's filter
@@ -372,7 +372,7 @@ func (builder *QueryBuilder) addJSONFulltextProbes(scanNode *plan.Node) {
 		// contract decodes the config into an older TableConfig, silently drops those fields, and runs
 		// only a stale bulk probe -- which then loses rows the tail would have supplied at the mandatory
 		// join. MOProtocolVersion is the service-local rollout gate (raised only once every CN
-		// understands the contract), so decline the probe until MORPCVersion81 and let the query run as
+		// understands the contract), so decline the probe until the probe_tail contract version and let the query run as
 		// a plain Table Scan on the retained json_extract predicate (correct, just unaccelerated).
 		if !builder.selfCompletingJSONProbeSupported() {
 			return
