@@ -873,6 +873,48 @@ func TestValidateRestoredPythonCatalogHeadsBindsIdentityToActiveRevision(t *test
 	)
 }
 
+func TestValidateRestoredLegacyPythonHeadIsPreservedButInert(t *testing.T) {
+	query := `select cast(f.function_id as char), cast(f.active_revision as char), cast(f.namespace_version as char),
+		cast(coalesce(r.revision, 0) as char), cast(coalesce(r.namespace_version, 0) as char),
+		f.canonical_input_descriptor, f.return_descriptor,
+		cast(f.signature_key_schema_version as char), f.signature_fingerprint,
+		coalesce(r.arg_types, ''), coalesce(r.rettype, ''), coalesce(r.body, ''),
+		lower(f.language), coalesce(r.definition_fingerprint, ''),
+		coalesce(r.security_type, ''), coalesce(f.security_type, '')
+		from mo_catalog.mo_user_defined_function f
+		left join mo_catalog.mo_function_revisions r
+			on r.function_id = f.function_id and r.revision = f.active_revision
+			and r.namespace_version = f.namespace_version
+		where lower(f.language) in ("python", "sql")
+		order by f.function_id;`
+	legacy := func(active, namespace string) *MysqlResultSet {
+		result := &MysqlResultSet{}
+		for index := 0; index < 16; index++ {
+			column := &MysqlColumn{}
+			column.SetName(fmt.Sprintf("column_%d", index))
+			column.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
+			result.AddColumn(column)
+		}
+		result.AddRow([]interface{}{
+			"46", active, namespace, "0", "0", "", "", "0", "", "", "", "",
+			string(tree.PYTHON), "", "INVOKER", "INVOKER",
+		})
+		return result
+	}
+
+	b := &backgroundExecTest{}
+	b.init()
+	b.sql2result[query] = legacy("0", "0")
+	require.NoError(t, validateRestoredFunctionCatalogHeads(context.Background(), b, context.Background()))
+
+	b.init()
+	b.sql2result[query] = legacy("1", "0")
+	require.ErrorContains(t,
+		validateRestoredFunctionCatalogHeads(context.Background(), b, context.Background()),
+		"invalid namespace version",
+	)
+}
+
 func TestValidateRestoredSharedCatalogHeadsChecksSQLRevision(t *testing.T) {
 	args := `[ {"name":"value","type":"bigint"} ]`
 	argTypes, err := userDefinedFunctionArgumentTypesFromJSON(args)
