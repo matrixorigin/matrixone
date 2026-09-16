@@ -6987,7 +6987,7 @@ func (c *Compile) checkPitrGranularity(
 			// the foreign-key rule to real names. In particular, do not match a
 			// regexp against the synthetic "db.*" tuple.
 			res, err := c.runSqlWithResultAndOptions(
-				cdc.CollectCDCSourceCandidateSQL(accountId, pt.Source.Database, pt.Source.Table),
+				cdc.CollectCDCSourceCandidateSQL(accountId, pt.Source.Database, pt.Source.Table, pts.SourceCaseMode),
 				int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog())
 			if err != nil {
 				return err
@@ -7032,7 +7032,7 @@ func (c *Compile) checkPitrGranularity(
 			continue
 		}
 		res, err := c.runSqlWithResultAndOptions(
-			cdc.CollectCDCSourceCandidateSQL(accountId, pt.Source.Database, pt.Source.Table),
+			cdc.CollectCDCSourceCandidateSQL(accountId, pt.Source.Database, pt.Source.Table, pts.SourceCaseMode),
 			int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog())
 		if err != nil {
 			return err

@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"runtime/debug"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -728,7 +729,10 @@ func (s *TableDetector) scanTable() error {
 			dbNames = "*"
 			break
 		}
-		dbNamesSlice = append(dbNamesSlice, dbName)
+		// The detector serves tasks with different persisted case modes. Scan a
+		// case-insensitive candidate superset; each task applies its own mode in
+		// matchAnyPattern before it can create a pipeline.
+		dbNamesSlice = append(dbNamesSlice, strings.ToLower(dbName))
 	}
 	if dbNames != "*" {
 		dbNames = AddSingleQuotesJoin(dbNamesSlice)
@@ -739,7 +743,7 @@ func (s *TableDetector) scanTable() error {
 			tableNames = "*"
 			break
 		}
-		tableNamesSlice = append(tableNamesSlice, tableName)
+		tableNamesSlice = append(tableNamesSlice, strings.ToLower(tableName))
 	}
 	if tableNames != "*" {
 		tableNames = AddSingleQuotesJoin(tableNamesSlice)
@@ -748,7 +752,7 @@ func (s *TableDetector) scanTable() error {
 
 	result, err := s.exec.Exec(
 		ctx,
-		CDCSQLBuilder.CollectTableInfoSQL(accountIds, dbNames, tableNames),
+		CDCSQLBuilder.CollectTableInfoSQLCaseInsensitive(accountIds, dbNames, tableNames),
 		executor.Options{}.WithStatementOption(executor.StatementOption{}.WithDisableLog()),
 	)
 	if err != nil {

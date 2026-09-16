@@ -1008,6 +1008,20 @@ func Test_CollectTableInfoSQL(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, sql, "tbl.reldatabase IN ('source''db')")
 	assert.Contains(t, sql, `tbl.relname IN ('orders\\archive')`)
+
+	// Mode 2 keeps the user spelling in persisted task metadata, but catalog
+	// selection must compare it case-insensitively before runtime matching.
+	sql = CollectCDCSourceCandidateSQL(1, "mixedDB", "Orders", 2)
+	_, err = parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	assert.Contains(t, sql, "lower(tbl.reldatabase) IN ('mixeddb')")
+	assert.Contains(t, sql, "lower(tbl.relname) IN ('orders')")
+
+	sql = builder.CollectTableInfoSQLCaseInsensitive("1", "'mixeddb'", "'orders'")
+	_, err = parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	assert.Contains(t, sql, "lower(tbl.reldatabase) IN ('mixeddb')")
+	assert.Contains(t, sql, "lower(tbl.relname) IN ('orders')")
 }
 
 func TestScanAndProcess(t *testing.T) {

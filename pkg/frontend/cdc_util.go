@@ -177,12 +177,12 @@ func (pc *PitrConfig) IsValid(minLength int64) bool {
 	return !(pc.Unit == "h" && pc.Length < minLength)
 }
 
-func checkCDCSourcePrimaryKey(ctx context.Context, bh BackgroundExec, dbName, tableName string) error {
+func checkCDCSourcePrimaryKey(ctx context.Context, bh BackgroundExec, dbName, tableName string, sourceCaseMode ...int64) error {
 	accountID, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return err
 	}
-	if err := bh.Exec(ctx, cdc.CollectCDCSourceCandidateSQL(accountID, dbName, tableName)); err != nil {
+	if err := bh.Exec(ctx, cdc.CollectCDCSourceCandidateSQL(accountID, dbName, tableName, sourceCaseMode...)); err != nil {
 		return err
 	}
 	results, err := getResultSet(ctx, bh)
@@ -269,7 +269,7 @@ var CDCCheckPitrGranularityWithExclude = func(
 				if err != nil {
 					return err
 				}
-				candidateSQL := cdc.CollectCDCSourceCandidateSQL(accountID, pt.Source.Database, pt.Source.Table)
+				candidateSQL := cdc.CollectCDCSourceCandidateSQL(accountID, pt.Source.Database, pt.Source.Table, pts.SourceCaseMode)
 				if err := bh.Exec(ctx, candidateSQL); err != nil {
 					return err
 				}
@@ -340,7 +340,7 @@ var CDCCheckPitrGranularityWithExclude = func(
 					continue
 				}
 			}
-			if err := checkCDCSourcePrimaryKey(ctx, bh, pt.Source.Database, pt.Source.Table); err != nil {
+			if err := checkCDCSourcePrimaryKey(ctx, bh, pt.Source.Database, pt.Source.Table, pts.SourceCaseMode); err != nil {
 				return err
 			}
 		}

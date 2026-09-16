@@ -1281,6 +1281,18 @@ func (b cdcSQLBuilder) ISCPLogSelectByTableSQL(
 // Table Info SQL
 // ------------------------------------------------------------------------------------------------
 func (b cdcSQLBuilder) CollectTableInfoSQL(accountIDs string, dbNames string, tableNames string) string {
+	return b.collectTableInfoSQL(accountIDs, dbNames, tableNames, false)
+}
+
+// CollectTableInfoSQLCaseInsensitive returns the same scanner candidate set,
+// but compares requested database/table names case-insensitively. The shared
+// detector uses this superset because it serves tasks with different persisted
+// lower_case_table_names modes; task-local matching remains authoritative.
+func (b cdcSQLBuilder) CollectTableInfoSQLCaseInsensitive(accountIDs string, dbNames string, tableNames string) string {
+	return b.collectTableInfoSQL(accountIDs, dbNames, tableNames, true)
+}
+
+func (b cdcSQLBuilder) collectTableInfoSQL(accountIDs string, dbNames string, tableNames string, caseInsensitive bool) string {
 	return fmt.Sprintf(
 		CDCSQLTemplates[CDCCollectTableInfoSqlTemplate_Idx].SQL,
 		accountIDs,
@@ -1288,11 +1300,17 @@ func (b cdcSQLBuilder) CollectTableInfoSQL(accountIDs string, dbNames string, ta
 			if dbNames == "*" {
 				return ""
 			}
+			if caseInsensitive {
+				return " AND lower(tbl.reldatabase) IN (" + dbNames + ") "
+			}
 			return " AND tbl.reldatabase IN (" + dbNames + ") "
 		}(),
 		func() string {
 			if tableNames == "*" {
 				return ""
+			}
+			if caseInsensitive {
+				return " AND lower(tbl.relname) IN (" + tableNames + ") "
 			}
 			return " AND tbl.relname IN (" + tableNames + ") "
 		}(),
@@ -1304,17 +1322,24 @@ func (b cdcSQLBuilder) CollectTableInfoSQL(accountIDs string, dbNames string, ta
 // CollectCDCSourceCandidateSQL returns the runtime scanner candidate set with
 // an explicit user-primary-key status. Do not filter no-PK tables here: CREATE
 // CDC must reject them and an active task must observe a later PK loss.
-func CollectCDCSourceCandidateSQL(accountID uint32, dbName, tableName string) string {
+func CollectCDCSourceCandidateSQL(accountID uint32, dbName, tableName string, sourceCaseMode ...int64) string {
+	caseInsensitive := len(sourceCaseMode) > 0 && sourceCaseMode[0] == 2
 	dbNames := "*"
 	if dbName != CDCPitrGranularity_All {
+		if caseInsensitive {
+			dbName = strings.ToLower(dbName)
+		}
 		dbNames = AddSingleQuotesJoin([]string{dbName})
 	}
 	tableNames := "*"
 	if tableName != CDCPitrGranularity_All {
+		if caseInsensitive {
+			tableName = strings.ToLower(tableName)
+		}
 		tableNames = AddSingleQuotesJoin([]string{tableName})
 	}
-	return CDCSQLBuilder.CollectTableInfoSQL(
-		strconv.FormatUint(uint64(accountID), 10), dbNames, tableNames)
+	return CDCSQLBuilder.collectTableInfoSQL(
+		strconv.FormatUint(uint64(accountID), 10), dbNames, tableNames, caseInsensitive)
 }
 
 func (b cdcSQLBuilder) GetTableIDSQL(
