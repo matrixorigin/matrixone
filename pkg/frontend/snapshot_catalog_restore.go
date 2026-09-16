@@ -334,9 +334,12 @@ func validateRestoredFunctionCatalogHeads(
 			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: restored routine function %d has an invalid namespace version: %v", functionID, err)
 		}
 		language := strings.ToLower(row[12])
-		if language == udf.LanguageSQL && activeRevision == 0 && namespaceVersion == 0 {
+		if (language == udf.LanguageSQL || language == udf.LanguagePython) && activeRevision == 0 && namespaceVersion == 0 {
 			// Legacy SQL rows predate the shared revision table and retain their
-			// old execution path. A current SQL head is validated below.
+			// old execution path. Legacy Python demo rows are preserved as inert
+			// catalog data as well: the current Python resolver has no execution
+			// path for them and rejects them before user code, while DROP/CREATE
+			// can replace the row explicitly. A current head is validated below.
 			continue
 		}
 		if activeRevision == 0 {
