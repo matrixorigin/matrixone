@@ -1091,6 +1091,7 @@ type baseBinder struct {
 	numericParamType                 *Type
 	numericSubqueryTarget            *Type
 	numericFunctionTarget            bool
+	integerAssignmentBaseCtx         context.Context
 	mysqlSpecialTargetType           *Type
 	allowCanonicalNameConstValueCast bool
 	bindRawMySQLSpecialType          bool
@@ -1164,7 +1165,6 @@ type HavingBinder struct {
 	bindingProjectedAlias bool
 	rollupHaving          bool
 	bindingHaving         bool
-	exactAggregateInputs  bool
 }
 
 type ProjectionBinder struct {

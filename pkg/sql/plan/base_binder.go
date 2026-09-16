@@ -3618,6 +3618,18 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				name, astArgs, depth, b.numericAstColumnResolver(), b.numericParamType,
 			)
 		}
+		resultDependencies := make(map[int]struct{})
+		if b.integerAssignmentBaseCtx != nil {
+			includeRelational := function.GetFunctionIsAggregateByName(name) ||
+				function.GetFunctionIsWinFunByName(name)
+			if indexes, ok := function.NumericFunctionResultArgs(
+				strings.ToLower(name), len(astArgs), includeRelational,
+			); ok {
+				for _, index := range indexes {
+					resultDependencies[index] = struct{}{}
+				}
+			}
+		}
 		for idx, arg := range astArgs {
 			paramType := b.numericParamType
 			subqueryTarget := b.numericSubqueryTarget
@@ -3642,7 +3654,22 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				b.numericParamType = nil
 				b.numericSubqueryTarget = nil
 			}
+			var restoreControlDomain func()
+			assignmentBaseCtx := b.integerAssignmentBaseCtx
+			assignmentCtx := b.sysCtx
+			if assignmentBaseCtx != nil {
+				if _, valueDependency := resultDependencies[idx]; !valueDependency {
+					restoreControlDomain = b.builder.suspendIntegerAssignmentDomain()
+					b.sysCtx = assignmentBaseCtx
+					b.integerAssignmentBaseCtx = nil
+				}
+			}
 			expr, err := b.impl.BindExpr(arg, depth, false)
+			if restoreControlDomain != nil {
+				restoreControlDomain()
+				b.sysCtx = assignmentCtx
+				b.integerAssignmentBaseCtx = assignmentBaseCtx
+			}
 			b.numericParamType = paramType
 			b.numericSubqueryTarget = subqueryTarget
 			if err != nil {

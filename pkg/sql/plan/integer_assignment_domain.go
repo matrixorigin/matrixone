@@ -14,11 +14,7 @@
 
 package plan
 
-import (
-	"context"
-
-	"github.com/matrixorigin/matrixone/pkg/container/types"
-)
+import "context"
 
 // integerAssignmentDomainKey is planning-only. It is not stored in a session,
 // cached plan or protobuf: ordinary SELECT and CTAS keep their existing numeric
@@ -50,16 +46,4 @@ func (builder *QueryBuilder) suspendIntegerAssignmentDomain() func() {
 	previous := builder.integerAssignmentDomain
 	builder.integerAssignmentDomain = false
 	return func() { builder.integerAssignmentDomain = previous }
-}
-
-func allNumericProjectionTargetsInteger(targets []Type) bool {
-	if len(targets) == 0 {
-		return false
-	}
-	for _, target := range targets {
-		if target.Id == 0 || !types.T(target.Id).IsInteger() {
-			return false
-		}
-	}
-	return true
 }

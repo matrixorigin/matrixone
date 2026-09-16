@@ -344,16 +344,6 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 		return nil, err
 	}
 
-	if b.exactAggregateInputs {
-		previousCtx := b.sysCtx
-		b.sysCtx = withIntegerAssignmentDomain(previousCtx)
-		restoreIntegerDomain := b.builder.enterIntegerAssignmentDomain(true)
-		defer func() {
-			restoreIntegerDomain()
-			b.sysCtx = previousCtx
-		}()
-	}
-
 	b.insideAgg = true
 	var expr *plan.Expr
 	var err error

@@ -44,6 +44,18 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 		}
 		return b.BindExpr(aliasExpr.Expr, depth, isRoot)
 	}
+	if b.numericTargetType != nil && b.builder != nil &&
+		types.T(b.numericTargetType.Id).IsInteger() && b.integerAssignmentBaseCtx == nil {
+		restoreDomain := b.builder.enterIntegerAssignmentDomain(true)
+		previousCtx := b.sysCtx
+		b.integerAssignmentBaseCtx = previousCtx
+		b.sysCtx = b.builder.GetContext()
+		defer func() {
+			b.sysCtx = previousCtx
+			b.integerAssignmentBaseCtx = nil
+			restoreDomain()
+		}()
+	}
 	astStr := windowExprAstKey(astExpr)
 
 	if colPos, ok := b.ctx.timeByAst[astStr]; ok {
@@ -79,6 +91,9 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 
 	if colPos, ok := b.ctx.aggregateByAst[astStr]; ok &&
 		(!isGroupConcatAggregateExpr(astExpr) || b.allowGroupConcatReuse) {
+		if fn, exactOutput := astExpr.(*tree.FuncExpr); exactOutput && b.integerAssignmentBaseCtx != nil {
+			return b.BindAggFunc(fn.Func.FunctionReference.(*tree.UnresolvedName).ColName(), fn, depth, isRoot)
+		}
 		return &plan.Expr{
 			Typ: b.ctx.aggregates[colPos].Typ,
 			Expr: &plan.Expr_Col{
@@ -123,12 +138,15 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 		target := b.numericTargetType
 		b.numericTargetType = nil
 		defer func() { b.numericTargetType = target }()
-		if b.builder != nil && types.T(target.Id).IsInteger() {
+		if b.builder != nil && types.T(target.Id).IsInteger() && b.integerAssignmentBaseCtx == nil {
 			restoreDomain := b.builder.enterIntegerAssignmentDomain(true)
 			previousCtx := b.sysCtx
+			previousBaseCtx := b.integerAssignmentBaseCtx
+			b.integerAssignmentBaseCtx = previousCtx
 			b.sysCtx = b.builder.GetContext()
 			defer func() {
 				b.sysCtx = previousCtx
+				b.integerAssignmentBaseCtx = previousBaseCtx
 				restoreDomain()
 			}()
 		}
@@ -178,11 +196,37 @@ func (b *ProjectionBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32,
 }
 
 func (b *ProjectionBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
+	previousCtx := b.havingBinder.sysCtx
+	previousBaseCtx := b.havingBinder.integerAssignmentBaseCtx
+	if b.integerAssignmentBaseCtx != nil {
+		b.havingBinder.sysCtx = b.sysCtx
+		b.havingBinder.integerAssignmentBaseCtx = b.integerAssignmentBaseCtx
+	}
+	defer func() {
+		b.havingBinder.sysCtx = previousCtx
+		b.havingBinder.integerAssignmentBaseCtx = previousBaseCtx
+	}()
 	return b.havingBinder.BindAggFunc(funcName, astExpr, depth, isRoot)
 }
 
 func (b *ProjectionBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
 	return bindWindowFuncExpr(b, b.ctx, funcName, astExpr, depth, isRoot)
+}
+
+func (b *ProjectionBinder) suspendWindowControlDomain() func() {
+	if b.integerAssignmentBaseCtx == nil {
+		return func() {}
+	}
+	restoreDomain := b.builder.suspendIntegerAssignmentDomain()
+	assignmentCtx := b.sysCtx
+	assignmentBaseCtx := b.integerAssignmentBaseCtx
+	b.sysCtx = assignmentBaseCtx
+	b.integerAssignmentBaseCtx = nil
+	return func() {
+		b.sysCtx = assignmentCtx
+		b.integerAssignmentBaseCtx = assignmentBaseCtx
+		restoreDomain()
+	}
 }
 
 func isNRange(f *tree.FrameClause) bool {

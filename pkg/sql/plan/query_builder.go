@@ -8206,13 +8206,6 @@ func (builder *QueryBuilder) bindSelectClause(
 	if selectList, err = appendSelectList(builder, ctx, selectList, clause.Exprs...); err != nil {
 		return
 	}
-	// WHERE and lock predicates above retain ordinary SELECT semantics. Enter
-	// the exact domain only for alias, aggregate, window, and grouping producer
-	// discovery needed by integer-bound outputs.
-	integerResultDomain := allNumericProjectionTargetsInteger(ctx.numericProjectionTypes)
-	restoreResultDomain := builder.enterIntegerAssignmentDomain(integerResultDomain)
-	defer restoreResultDomain()
-
 	if len(selectList) == 0 {
 		err = moerr.NewParseError(builder.GetContext(), "No tables used")
 		return
@@ -8315,15 +8308,9 @@ func (builder *QueryBuilder) bindSelectClause(
 	// bind HAVING clause
 	ctx.fullGroupByInputNode = nodeID
 	ctx.fullGroupByInputReady = true
-	// Keep an exact binder for aggregate/window producer discovery, but bind the
-	// HAVING predicate itself in the ordinary query domain.
 	havingBinder = NewHavingBinder(builder, ctx)
 	if clause.Having != nil {
-		restoreIntegerDomain := builder.suspendIntegerAssignmentDomain()
-		predicateBinder := NewHavingBinder(builder, ctx)
-		predicateBinder.exactAggregateInputs = integerResultDomain
-		boundHavingList, err = builder.bindHaving(ctx, clause.Having, predicateBinder)
-		restoreIntegerDomain()
+		boundHavingList, err = builder.bindHaving(ctx, clause.Having, havingBinder)
 		if err != nil {
 			return
 		}

@@ -847,6 +847,10 @@ func mergeWindowValidationDependencies(builder, validationBuilder *QueryBuilder)
 	return nil
 }
 
+type windowControlDomainBinder interface {
+	suspendWindowControlDomain() func()
+}
+
 func bindWindowSpec(
 	b windowFuncExprBinder,
 	ctx *BindContext,
@@ -856,6 +860,10 @@ func bindWindowSpec(
 	isRoot bool,
 	consumerSpecific bool,
 ) (*plan.WindowSpec, error) {
+	if domainBinder, ok := b.(windowControlDomainBinder); ok {
+		restoreDomain := domainBinder.suspendWindowControlDomain()
+		defer restoreDomain()
+	}
 	w := &plan.WindowSpec{}
 
 	if consumerSpecific && function.GetFunctionIgnoresWindowFrameByName(funcName) && !ws.HasFrame {

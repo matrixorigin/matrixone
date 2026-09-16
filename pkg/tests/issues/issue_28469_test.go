@@ -201,6 +201,21 @@ func TestIssue28469BinaryPreparedIntegerAssignment(t *testing.T) {
 			require.Equal(t, []int{2, 3, 3, 4}, got)
 		})
 
+		t.Run("integer_target_only_changes_value_dependencies", func(t *testing.T) {
+			mustExec(t, ctx, conn, "create table control_domain_src(x bigint)")
+			mustExec(t, ctx, conn, "insert into control_domain_src values (1000000000000000000)")
+			mustExec(t, ctx, conn, "create table control_domain_dst(i int)")
+			const largeExpr = "(x/1)*x*x"
+			mustExec(t, ctx, conn, "insert into control_domain_dst select 1 from control_domain_src having sum("+largeExpr+")>0")
+			mustExec(t, ctx, conn, "insert into control_domain_dst select 1 from control_domain_src group by "+largeExpr)
+			mustExec(t, ctx, conn, "insert into control_domain_dst select row_number() over(order by "+largeExpr+") from control_domain_src")
+			mustExec(t, ctx, conn, "insert into control_domain_dst select case when "+largeExpr+">0 then 1 else 0 end from control_domain_src")
+			var count, sum int
+			require.NoError(t, conn.QueryRowContext(ctx, "select count(*), sum(i) from control_domain_dst").Scan(&count, &sum))
+			require.Equal(t, 4, count)
+			require.Equal(t, 4, sum)
+		})
+
 		t.Run("prepared_strict_division_by_zero", func(t *testing.T) {
 			mustExec(t, ctx, conn, "set sql_mode='STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO'")
 			defer func() { _, _ = conn.ExecContext(ctx, "set sql_mode='STRICT_TRANS_TABLES'") }()

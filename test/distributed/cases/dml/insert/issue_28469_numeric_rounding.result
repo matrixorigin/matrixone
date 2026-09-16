@@ -361,6 +361,20 @@ SELECT * FROM predicate_domain_dst ORDER BY i;
 4
 DROP TABLE predicate_aggregate_src;
 DROP TABLE predicate_domain_dst;
+CREATE TABLE control_domain_src(x BIGINT);
+INSERT INTO control_domain_src VALUES (1000000000000000000);
+CREATE TABLE control_domain_dst(i INT);
+INSERT INTO control_domain_dst SELECT 1 FROM control_domain_src
+HAVING SUM((x/1)*x*x)>0;
+INSERT INTO control_domain_dst SELECT 1 FROM control_domain_src
+GROUP BY (x/1)*x*x;
+INSERT INTO control_domain_dst SELECT ROW_NUMBER() OVER(ORDER BY (x/1)*x*x) FROM control_domain_src;
+INSERT INTO control_domain_dst SELECT CASE WHEN (x/1)*x*x>0 THEN 1 ELSE 0 END FROM control_domain_src;
+SELECT COUNT(*), SUM(i) FROM control_domain_dst;
+➤ count(*)[-5,64,0]  ¦  sum(i)[13,128,0]  𝄀
+4  ¦  4
+DROP TABLE control_domain_dst;
+DROP TABLE control_domain_src;
 SELECT 5/2 AS q;
 ➤ q[8,53,31]  𝄀
 2.5

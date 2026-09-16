@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -233,6 +234,21 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 			}
 		}
 	}
+	if isRoot && !reusesProjection {
+		groupKey := windowExprAstKey(astExpr)
+		for pos := range b.selectList {
+			if windowExprAstKey(b.selectList[pos].Expr) != groupKey ||
+				pos >= len(b.ctx.numericProjectionTypes) {
+				continue
+			}
+			target := b.ctx.numericProjectionTypes[pos]
+			if target.Id != 0 {
+				numericTarget = &target
+				reusesProjection = true
+				break
+			}
+		}
+	}
 	// An alias has already selected and substituted its projection expression.
 	// Do not interpret a numeric literal inside that expression as an ordinal a
 	// second time.
@@ -268,7 +284,19 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 	var expr *plan.Expr
 	var err error
 	if numericTarget != nil {
-		expr, err = b.bindNumericExprWithContext(astExpr, depth, numericTarget)
+		if types.T(numericTarget.Id).IsInteger() {
+			restoreDomain := b.builder.enterIntegerAssignmentDomain(true)
+			previousCtx := b.sysCtx
+			previousBaseCtx := b.integerAssignmentBaseCtx
+			b.integerAssignmentBaseCtx = previousCtx
+			b.sysCtx = b.builder.GetContext()
+			expr, err = b.bindNumericExprWithContext(astExpr, depth, numericTarget)
+			b.sysCtx = previousCtx
+			b.integerAssignmentBaseCtx = previousBaseCtx
+			restoreDomain()
+		} else {
+			expr, err = b.bindNumericExprWithContext(astExpr, depth, numericTarget)
+		}
 	} else {
 		expr, err = b.baseBindExpr(astExpr, depth, isRoot)
 	}
