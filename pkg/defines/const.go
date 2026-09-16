@@ -109,8 +109,10 @@ const (
 	MORPCVersion71     int64 = 71 // checked integer arithmetic overloads
 	MORPCVersion72     int64 = 72 // corrected IP function semantics and overload identities
 	MORPCVersion73     int64 = 73 // widened DECIMAL SUM partial state
-	MORPCVersion74     int64 = 74 // self-completing fulltext2 json index probe (probe_tail contract)
-	MORPCLatestVersion       = MORPCVersion74
+	MORPCVersion74     int64 = 74 // corrected numeric HEX overload identities
+	MORPCVersion75     int64 = 75 // persistent data-branch database identity
+	MORPCVersion76     int64 = 76 // self-completing fulltext2 json index probe (probe_tail contract)
+	MORPCLatestVersion       = MORPCVersion76
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

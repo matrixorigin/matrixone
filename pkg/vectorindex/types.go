@@ -379,6 +379,11 @@ type RuntimeConfig struct {
 	// evict+reload can publish a NEWER generation before that later read, binding the follow-up
 	// above what was searched and silently dropping the rows in the gap between.
 	SearchedBuildTS *int64
+
+	// EmptyGeneration, when non-nil, receives the searched index's empty-generation flag
+	// captured under the cache entry's read lock during Search/SearchInto. The cache reads
+	// it back to decide eviction without touching the underlying algo unsynchronized.
+	EmptyGeneration *bool
 }
 
 type IvfIncludeResult struct {

@@ -910,7 +910,7 @@ func TestGetCheckerStateFromLeader(t *testing.T) {
 					assert.NotEqual(t, (*pb.CheckerState)(nil), state)
 					return
 				}
-				time.Sleep(time.Second)
+				time.Sleep(20 * time.Millisecond)
 			}
 		}
 	}
