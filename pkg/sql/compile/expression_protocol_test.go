@@ -112,33 +112,33 @@ func TestExpressionProtocolResolvesLegacyAddressOnlyScopes(t *testing.T) {
 func TestAllCNsSupportProtocolProbesEveryCN(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	client.version = defines.MORPCVersion76
+	client.version = defines.MORPCVersion81
 
-	supported, err := AllCNsSupportProtocol(c.proc, defines.MORPCVersion76)
+	supported, err := AllCNsSupportProtocol(c.proc, defines.MORPCVersion81)
 	require.NoError(t, err)
 	require.True(t, supported)
 	require.Equal(t, 1, client.calls)
 
-	client.version = defines.MORPCVersion75
-	supported, err = AllCNsSupportProtocol(c.proc, defines.MORPCVersion76)
+	client.version = defines.MORPCVersion80
+	supported, err = AllCNsSupportProtocol(c.proc, defines.MORPCVersion81)
 	require.NoError(t, err)
 	require.False(t, supported)
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion75)
-	supported, err = AllCNsSupportProtocol(c.proc, defines.MORPCVersion76)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion80)
+	supported, err = AllCNsSupportProtocol(c.proc, defines.MORPCVersion81)
 	require.NoError(t, err)
 	require.False(t, supported)
 }
 
 func TestAllCNsSupportProtocolWithContextIgnoresCanceledProcessContext(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
-	client.version = defines.MORPCVersion76
+	client.version = defines.MORPCVersion81
 	procCtx, cancel := context.WithCancel(c.proc.Ctx)
 	c.proc.Ctx = procCtx
 	cancel()
 
 	supported, err := AllCNsSupportProtocolWithContext(
-		context.Background(), c.proc, defines.MORPCVersion76)
+		context.Background(), c.proc, defines.MORPCVersion81)
 	require.NoError(t, err)
 	require.True(t, supported)
 	require.Equal(t, 1, client.calls)

@@ -395,13 +395,13 @@ func genViewTableDef(
 		// Definition must be generated from the same star-expanded SELECT that is
 		// persisted in Stmt. Formatting the original AST would let metadata replay
 		// a later schema's columns even though the View itself remains frozen.
-		Definition:          tree.StringWithOpts(definitionStmt, dialect.MYSQL, tree.WithQuoteString(true), tree.WithQuoteIdentifier(), tree.WithModeIndependentStringLiterals()),
-		CheckOption:         strings.ToUpper(checkOption),
-		DefaultDatabase:     ctx.DefaultDatabase(),
-		SQLMode:             parserSQLModeFromContext(ctx),
-		SecurityType:        getViewSecurityTypeFromContext(ctx),
-		LowerCaseTableNames: &lowerCaseTableNames,
-		Dependencies:        dependencyCapture.dependencies(),
+		Definition:              tree.StringWithOpts(definitionStmt, dialect.MYSQL, tree.WithQuoteString(true), tree.WithQuoteIdentifier(), tree.WithModeIndependentStringLiterals()),
+		CheckOption:             strings.ToUpper(checkOption),
+		DefaultDatabase:         ctx.DefaultDatabase(),
+		SQLMode:                 parserSQLModeFromContext(ctx),
+		SecurityType:            getViewSecurityTypeFromContext(ctx),
+		LowerCaseTableNames:     &lowerCaseTableNames,
+		Dependencies:            dependencyCapture.dependencies(),
 		RequiredProtocolVersion: persistedRequiredProtocol,
 	})
 	if err != nil {
