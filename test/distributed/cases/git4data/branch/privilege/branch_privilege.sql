@@ -17,6 +17,7 @@ create snapshot sp_to_account for database br_sys_src;
 data branch create database br_to_acc from br_sys_src{snapshot="sp_to_account"} to account `acc-branch`;
 set @quoted_acc_id = (select account_id from mo_catalog.mo_account where account_name = 'acc-branch');
 select count(*) from mo_catalog.mo_database where account_id = @quoted_acc_id and datname = 'br_to_acc';
+select dat_type from mo_catalog.mo_database where account_id = @quoted_acc_id and datname = 'br_to_acc';
 select count(*) from mo_catalog.mo_tables where account_id = @quoted_acc_id and reldatabase = 'br_to_acc' and relname = 't';
 drop snapshot sp_to_account;
 drop database br_sys_src;

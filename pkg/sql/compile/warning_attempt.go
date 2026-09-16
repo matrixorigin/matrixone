@@ -57,7 +57,7 @@ func (c *Compile) strictWriteGroupConcatPromotionEnabled() (bool, error) {
 	}
 	switch stmt := c.stmt.(type) {
 	case *tree.Insert:
-		if len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil {
+		if stmt.IsIgnore() {
 			return false, nil
 		}
 	case *tree.Update:

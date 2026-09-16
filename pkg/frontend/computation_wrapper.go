@@ -37,8 +37,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
@@ -419,7 +421,7 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 		}
 		if preparedExprRetry != nil {
 			runtimePlan, _, specializationErr := plan2.FillValuesOfParamsInPlanWithSpecialization(
-				execCtx.reqCtx, cwft.plan, preparedExprRetry.paramVals)
+				function.WithNoUnsignedSubtraction(execCtx.reqCtx, mysql.HasSQLMode(sessionSQLMode(cwft.ses), "NO_UNSIGNED_SUBTRACTION")), cwft.plan, preparedExprRetry.paramVals)
 			if specializationErr != nil {
 				return nil, specializationErr
 			}
@@ -852,6 +854,14 @@ func rebuildPreparePlan(
 	err = execCtx.withRootSQL(prepareStmt.Sql, func() (err error) {
 		compilerCtx := executionSes.GetTxnCompileCtx()
 		currentDatabase := compilerCtx.GetDatabase()
+		currentContext := compilerCtx.GetContext()
+		warningContext := currentContext
+		if warningContext == nil {
+			warningContext = execCtx.reqCtx
+		}
+		compilerCtx.SetContext(plan2.WithJSONMergeWarningOrigin(
+			warningContext, plan2.JSONMergeWarningInternalReprepare))
+		defer compilerCtx.SetContext(currentContext)
 		compilerCtx.SetDatabase(prepareStmt.defaultDatabase)
 		defer compilerCtx.SetDatabase(currentDatabase)
 		newPlan, err = buildFn(execCtx.reqCtx, executionSes, compilerCtx, originPrepareStmt)
@@ -931,9 +941,10 @@ func binaryProtocolPrepareParamKind(
 }
 
 // binaryProtocolPrepareParamConcreteType retains the protocol's SQL domain
-// for direct JSON-comparison parameters. The text vector is only a transport
+// for direct JSON-comparison parameters and domains whose distinction must
+// survive the text transport. The text vector is only a transport
 // representation; using it as the semantic type would turn TINYINT 0/1 into
-// Boolean guesses and would erase JSON and temporal domains.
+// Boolean guesses and would erase JSON, temporal, or ENUM domains.
 func binaryProtocolPrepareParamConcreteType(
 	mysqlType defines.MysqlType,
 	isUnsigned bool,
@@ -985,6 +996,8 @@ func binaryProtocolPrepareParamConcreteType(
 		return types.T_enum, true
 	case defines.MYSQL_TYPE_GEOMETRY:
 		return types.T_geometry, true
+	case defines.MYSQL_TYPE_UUID:
+		return types.T_uuid, true
 	default:
 		return types.T_any, false
 	}
@@ -1137,6 +1150,16 @@ func (prepareStmt *PrepareStmt) refreshFixedIntegerParamPositions(preparePlan *p
 		prepareStmt.hasLagLeadParams = preparedFixedIntegerParamPositions(preparePlan)
 }
 
+func (prepareStmt *PrepareStmt) refreshGeometrySRIDParamPositions(preparePlan *plan2.Plan) {
+	if prepareStmt.geometrySRIDPositionsPlan == preparePlan {
+		return
+	}
+	prepareStmt.geometrySRIDParamPositions,
+		prepareStmt.geometrySRIDSourceParamPositions =
+		plan2.PreparedPlanGeometrySRIDCacheParamPositions(preparePlan)
+	prepareStmt.geometrySRIDPositionsPlan = preparePlan
+}
+
 func preparedPositionHasStaticExactNumericPeer(preparePlan *plan2.Plan, position int) bool {
 	found := false
 	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
@@ -1268,6 +1291,11 @@ func binaryProtocolPrepareParamDomains(
 		// that only available domain distinction through specialization and the
 		// Process binary-string sidecar.
 		return types.T_blob.ToType(), types.Type{}, "", false, true
+	case defines.MYSQL_TYPE_ENUM:
+		// ENUM values are length-encoded strings on the wire, but ENUM is a
+		// distinct SQL domain. Preserve it so consumers that reject implicit
+		// stringification (for example JSON_STORAGE) can fail closed.
+		return types.T_enum.ToType(), types.Type{}, "", false, true
 	default:
 		return types.T_text.ToType(), types.Type{}, "", false, true
 	}
@@ -1322,6 +1350,8 @@ func initExecuteStmtParamWithResolverInSession(
 	currentNativeMode := owner.sqlModeHasMatrixOneNative()
 	currentOnlyFullGroupBy := owner.sqlModeHasOnlyFullGroupBy()
 	currentBoolSumAvg := owner.sqlModeHasEnableBoolSumAvg()
+	currentNoUnsignedSubtraction := owner.sqlModeHasNoUnsignedSubtraction()
+	reqCtx = function.WithNoUnsignedSubtraction(reqCtx, currentNoUnsignedSubtraction)
 
 	// TODO check if schema change, obj.Obj is zero all the time in 0.6
 	eng := cwft.proc.Base.SessionInfo.StorageEngine
@@ -1369,7 +1399,8 @@ func initExecuteStmtParamWithResolverInSession(
 	// subscription set. Rebuild both classes on every EXECUTE.
 	modeMismatch := prepareStmt.NativeMode != currentNativeMode ||
 		prepareStmt.sqlModeFlagsSet && (prepareStmt.OnlyFullGroupBy != currentOnlyFullGroupBy ||
-			prepareStmt.BoolSumAvg != currentBoolSumAvg)
+			prepareStmt.BoolSumAvg != currentBoolSumAvg ||
+			prepareStmt.NoUnsignedSubtraction != currentNoUnsignedSubtraction)
 	protocolVersion := currentProtocolVersion(cwft.proc)
 	protocolMismatch := prepareStmt.protocolVersion != 0 &&
 		prepareStmt.protocolVersion != protocolVersion
@@ -1454,6 +1485,7 @@ func initExecuteStmtParamWithResolverInSession(
 		prepareStmt.NativeMode = currentNativeMode
 		prepareStmt.OnlyFullGroupBy = currentOnlyFullGroupBy
 		prepareStmt.BoolSumAvg = currentBoolSumAvg
+		prepareStmt.NoUnsignedSubtraction = currentNoUnsignedSubtraction
 		prepareStmt.sqlModeFlagsSet = true
 		prepareStmt.Ts = prepareTs
 		prepareStmt.tempTableVersion = currentTempTableVersion
@@ -1464,6 +1496,7 @@ func initExecuteStmtParamWithResolverInSession(
 		prepareStmt.protocolVersion = protocolVersion
 		prepareStmt.needsRebuild = false
 	}
+	prepareStmt.refreshGeometrySRIDParamPositions(executionPlan)
 	if !needRebuild && hasPreparedGroupConcat && groupConcatMaxLenFloor > previousGroupConcatMaxLenFloor {
 		// Keep the cached COM_STMT_PREPARE metadata in sync with the monotonic
 		// execution floor. The current execution gets the same bytes immediately;
@@ -1626,6 +1659,19 @@ func initExecuteStmtParamWithResolverInSession(
 			isUnsigned := prepareStmt.ParamTypes[i*2+1]&0x80 != 0
 			kind := binaryProtocolPrepareParamKind(
 				mysqlType, isUnsigned, prepareStmt.params.GetRawBytesAt(i))
+			// Several non-string protocol domains have PrepareParamKind=None
+			// because their wire payload is length-encoded text. Keep their
+			// concrete SQL domain in metadata even when the parameter is consumed
+			// by JSON_STORAGE, whose position is not a JSON-comparison adapter
+			// position. Numeric and Boolean domains continue to use their existing
+			// kind metadata and therefore do not need a second type section.
+			if kind == vector.PrepareParamNone {
+				concreteType, supported := binaryProtocolPrepareParamConcreteType(mysqlType, isUnsigned)
+				if supported && concreteType != types.T_any && !concreteType.IsMySQLString() {
+					prepareStmt.paramConcreteTypes[i] = concreteType
+					hasConcreteType = true
+				}
+			}
 			if _, relevant := slices.BinarySearch(
 				prepareStmt.jsonComparisonParamPositions, int32(i)); relevant {
 				_, memberOfParam := slices.BinarySearch(
@@ -1812,6 +1858,11 @@ func initExecuteStmtParamWithResolverInSession(
 	if cacheableRuntimeQuery {
 		if runtimeCategoryCandidate {
 			runtimeCacheKey = preparedRuntimeSemanticKey(cwft.paramVals)
+			if geometryKey := plan2.PreparedPlanGeometrySRIDSemanticKeyForPositions(
+				cwft.paramVals, prepareStmt.geometrySRIDParamPositions,
+				prepareStmt.geometrySRIDSourceParamPositions); geometryKey != "" {
+				runtimeCacheKey += geometryKey
+			}
 		} else {
 			runtimeCacheKey = preparedDirectResultSemanticKey(cwft.paramVals, runtimeDirectResultPositions)
 		}
@@ -3206,6 +3257,9 @@ func buildPlanForCompileRetry(
 	forcePrepare bool,
 	preparedRetry *preparedExecutionRetry,
 ) (*plan2.Plan, error) {
+	if ses != nil {
+		ctx = function.WithNoUnsignedSubtraction(ctx, mysql.HasSQLMode(sessionSQLMode(ses), "NO_UNSIGNED_SUBTRACTION"))
+	}
 	// No permission verification is required when retry execute buildPlan.
 	retryPlan, err := buildPlanWithPrepareMode(
 		ctx, ses, compilerContext, stmt, forcePrepare)

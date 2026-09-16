@@ -42,6 +42,10 @@ exit "$HEAVY_STATUS"
 }
 
 func scheduleHarnessWithMock(t *testing.T, script, mock string, variables ...string) ([]byte, error) {
+	return scheduleHarnessWithMockTransform(t, script, mock, nil, variables...)
+}
+
+func scheduleHarnessWithMockTransform(t *testing.T, script, mock string, transform func(string) string, variables ...string) ([]byte, error) {
 	t.Helper()
 	root := t.TempDir()
 	dir := filepath.Join(root, "optools")
@@ -59,7 +63,11 @@ func scheduleHarnessWithMock(t *testing.T, script, mock string, variables ...str
 			if index < 0 {
 				t.Fatal("missing runner dispatch")
 			}
-			data = []byte(text[:index])
+			text = text[:index]
+			if transform != nil {
+				text = transform(text)
+			}
+			data = []byte(text)
 		}
 		if err := os.WriteFile(filepath.Join(dir, name), data, 0755); err != nil {
 			t.Fatal(err)
@@ -83,6 +91,119 @@ func scheduleHarnessWithMock(t *testing.T, script, mock string, variables ...str
 	return out, err
 }
 
+func TestResolveCgroupMemoryBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name, limitFile, rootLimit, parentLimit, leafLimit, wantScope, wantLimit, wantComplete string
+	}{
+		{"tight-parent", "memory.max", "max", "17179869184", "max", "parent", "17179869184", "1"},
+		{"tight-leaf", "memory.max", "max", "17179869184", "4294967296", "leaf", "4294967296", "1"},
+		{"equal-prefers-parent", "memory.max", "max", "8589934592", "8589934592", "parent", "8589934592", "1"},
+		{"parent-pressure-within-looser-limit", "memory.max", "max", "17179869184", "8589934592", "leaf", "8589934592", "1"},
+		{"no-visible-finite-limit", "memory.max", "max", "max", "max", "leaf", "unknown", "1"},
+		{"missing-visible-ancestor", "memory.max", "max", "", "8589934592", "leaf", "unknown", "0"},
+		{"local-events-option", "memory.max", "max", "max", "8589934592", "leaf", "unknown", "0"},
+		{"v1-unlimited-sentinel", "memory.limit_in_bytes", "9223372036854771712", "8589934592", "9223372036854771712", "parent", "8589934592", "1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := filepath.Join(t.TempDir(), "cgroup")
+			parent := filepath.Join(root, "parent")
+			leaf := filepath.Join(parent, "leaf")
+			for _, dir := range []string{root, parent, leaf} {
+				if err := os.MkdirAll(dir, 0755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			mountInfoPath := filepath.Join(root, "mountinfo")
+			if tc.limitFile == "memory.max" {
+				mountOptions := "rw"
+				if tc.name == "local-events-option" {
+					mountOptions += ",memory_localevents"
+				}
+				mountInfo := "36 25 0:32 / " + root + " rw - cgroup2 cgroup " + mountOptions + "\n"
+				if err := os.WriteFile(mountInfoPath, []byte(mountInfo), 0644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for dir, limit := range map[string]string{
+				root:   tc.rootLimit,
+				parent: tc.parentLimit,
+				leaf:   tc.leafLimit,
+			} {
+				if limit == "" {
+					continue
+				}
+				if err := os.WriteFile(filepath.Join(dir, tc.limitFile), []byte(limit+"\n"), 0644); err != nil {
+					t.Fatal(err)
+				}
+				if tc.limitFile == "memory.max" && limit != "max" {
+					peak := "2048"
+					if tc.name == "parent-pressure-within-looser-limit" {
+						if dir == parent {
+							peak = "17000000000"
+						} else if dir == leaf {
+							peak = "6442450944"
+						}
+					}
+					for name, value := range map[string]string{
+						"memory.current": "1024",
+						"memory.peak":    peak,
+						"memory.events":  "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\n",
+					} {
+						if err := os.WriteFile(filepath.Join(dir, name), []byte(value), 0644); err != nil {
+							t.Fatal(err)
+						}
+					}
+				} else if tc.limitFile == "memory.limit_in_bytes" && limit == "8589934592" {
+					for name, value := range map[string]string{
+						"memory.usage_in_bytes":     "1024",
+						"memory.max_usage_in_bytes": "2048",
+						"memory.failcnt":            "0",
+					} {
+						if err := os.WriteFile(filepath.Join(dir, name), []byte(value), 0644); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+			}
+
+			script := `source ./run_ut.sh UT
+resolve_cgroup_memory_boundary "$CGROUP_TEST_LEAF" "$CGROUP_TEST_ROOT" "$CGROUP_LIMIT_FILE" "$CGROUP_TEST_MOUNTINFO"
+printf 'scope=%s limit=%s complete=%s events_hierarchical=%s boundaries=%s\n' "$CGROUP_MEMORY_PATH" "$CGROUP_MEMORY_LIMIT" "$CGROUP_MEMORY_HIERARCHY_COMPLETE" "$CGROUP_MEMORY_EVENTS_HIERARCHICAL" "$CGROUP_MEMORY_HIERARCHY"
+`
+			out, err := scheduleHarness(t, script,
+				"CGROUP_TEST_ROOT="+root,
+				"CGROUP_TEST_LEAF="+leaf,
+				"CGROUP_LIMIT_FILE="+tc.limitFile,
+				"CGROUP_TEST_MOUNTINFO="+mountInfoPath,
+			)
+			if err != nil {
+				t.Fatalf("resolve cgroup memory boundary: %v\n%s", err, out)
+			}
+			wantPath := parent
+			if tc.wantScope == "leaf" {
+				wantPath = leaf
+			}
+			wantEvents := "1"
+			if tc.limitFile == "memory.limit_in_bytes" {
+				wantEvents = "not_applicable"
+			} else if tc.name == "local-events-option" {
+				wantEvents = "0"
+			}
+			wantPrefix := "scope=" + wantPath + " limit=" + tc.wantLimit + " complete=" + tc.wantComplete + " events_hierarchical=" + wantEvents + " boundaries="
+			if !strings.HasPrefix(string(out), wantPrefix) {
+				t.Fatalf("unexpected boundary:\n got: %q\nwant prefix: %q", out, wantPrefix)
+			}
+			if tc.name == "parent-pressure-within-looser-limit" {
+				parentBoundary := parent + "|17179869184|1024|17000000000|oom=0,oom_kill=0"
+				leafBoundary := leaf + "|8589934592|1024|6442450944|oom=0,oom_kill=0"
+				if !strings.Contains(string(out), parentBoundary) || !strings.Contains(string(out), leafBoundary) {
+					t.Fatalf("did not retain metrics for both constraining ancestors:\n%s", out)
+				}
+			}
+		})
+	}
+}
+
 func TestHeavyPlanReusesReleasedEngineCapacity(t *testing.T) {
 	for _, tc := range []struct{ name, budget, overlap, engine, heavy, plan, expected string }{
 		{"default", "3", "", "0", "0", "0", "0"},
@@ -102,7 +223,13 @@ func TestHeavyPlanReusesReleasedEngineCapacity(t *testing.T) {
 			script := `source ./run_ut.sh UT
 trap handle_ut_termination TERM
 function logger() { :; }
-function report_cgroup_memory_usage() { :; }
+function report_cgroup_memory_usage() {
+ if [[ "$1" == "Final race UT" ]]; then
+  [[ -z "$CURRENT_UT_PID$LIGHT_RACE_JOB_PID$ENGINE_RACE_JOB_PID$PLAN_RACE_JOB_PID$CLUSTER_PREBUILD_JOB_PID" ]] || exit 97
+  [[ -z "$ENGINE_RACE_REPORT$PLAN_RACE_REPORT" ]] || exit 98
+  touch "$CASE_DIR/final-memory"
+ fi
+}
 function make() { :; }
 function egrep() { echo fake.pb.go; }
 # Skip the unrelated native smoke, while retaining the real race scheduler.
@@ -136,6 +263,7 @@ run_tests
 [[ "$UT_TEST_STATUS" == "$EXPECTED_STATUS" ]] || exit 93
 [[ -d "$CASE_DIR/engine-once" && -d "$CASE_DIR/plan-once" ]] || exit 94
 [[ -z "$CURRENT_UT_PID$ENGINE_RACE_JOB_PID$PLAN_RACE_JOB_PID" ]] || exit 95
+[[ -e "$CASE_DIR/final-memory" ]] || exit 96
 printf '\nREPORT\n'
 cat "$UT_REPORT"
 `
@@ -217,13 +345,23 @@ exit 0
 
 func TestUTHeartbeatStopsCleanly(t *testing.T) {
 	script := `source ./run_ut.sh UT
-function logger() { printf "%s\n" "$2" >> "$CASE_DIR/ut.log"; }
+mkfifo "$CASE_DIR/heartbeat-ready"
+exec 9<> "$CASE_DIR/heartbeat-ready"
+trap 'stop_ut_heartbeat; exec 9>&-' EXIT
+function logger() {
+    printf "%s\n" "$2" >> "$CASE_DIR/ut.log"
+    if [[ "$2" == *active_cases=2* && "$2" == *TestPrivate* && "$2" == *TestShard* ]]; then
+        printf 'ready\n' >&9
+    fi
+}
 UT_HEARTBEAT_INTERVAL=60
 start_ut_heartbeat
-before=$(date +%s)
+heartbeat_pid="$UT_HEARTBEAT_PID"
 stop_ut_heartbeat
-after=$(date +%s)
-[[ $((after - before)) -lt 3 ]] || exit 90
+# The enclosing harness deadline is shorter than this 60-second interval.
+# Completion proves cancellation without making host scheduling speed an oracle.
+[[ -z "$UT_HEARTBEAT_PID" ]] || exit 90
+! kill -0 "$heartbeat_pid" 2>/dev/null || exit 90
 
 UT_HEARTBEAT_INTERVAL=1
 start_ut_heartbeat
@@ -234,8 +372,9 @@ EOF
 cat > "$G_WKSP/${G_TS}-engine-race-report.out.1" <<'EOF'
 {"Time":"2026-09-10T01:00:01Z","Action":"run","Package":"example/engine","Test":"TestShard"}
 EOF
-sleep 2
+read -r -t 10 heartbeat_ready <&9 || exit 92
 stop_ut_heartbeat
+exec 9>&-
 [[ -z "$UT_HEARTBEAT_PID" ]] || exit 91
 grep -q 'event=heartbeat' "$UT_CHECKPOINT"
 grep -q 'active_cases=2' "$CASE_DIR/ut.log"
@@ -249,6 +388,262 @@ exit 0
 	out, err := scheduleHarnessWithMock(t, script, mock)
 	if err != nil {
 		t.Fatalf("heartbeat lifecycle: %v\n%s", err, out)
+	}
+}
+
+func TestUTHeartbeatStopDuringSleepRegistration(t *testing.T) {
+	script := `source ./run_ut.sh UT
+mkfifo "$CASE_DIR/heartbeat-child"
+mkfifo "$CASE_DIR/heartbeat-release"
+mkfifo "$CASE_DIR/timer-input"
+mkfifo "$CASE_DIR/heartbeat-stop"
+exec 7<> "$CASE_DIR/heartbeat-child"
+exec 8<> "$CASE_DIR/heartbeat-release"
+exec 9<> "$CASE_DIR/timer-input"
+exec 6<> "$CASE_DIR/heartbeat-stop"
+timer_pid=""
+heartbeat_pid=""
+heartbeat_int_count=0
+cleanup() {
+    if [[ -z "$timer_pid" && -f "$CASE_DIR/heartbeat-child.pid" ]]; then
+        timer_pid=$(cat "$CASE_DIR/heartbeat-child.pid")
+    fi
+    # Unblock the injected launch-window hook before terminating its owner.
+    printf 'cleanup\n' >&8 2>/dev/null || true
+    if [[ -n "$timer_pid" ]]; then
+        kill -KILL "$timer_pid" 2>/dev/null || true
+    fi
+    if [[ -n "$heartbeat_pid" ]]; then
+        kill -KILL "$heartbeat_pid" 2>/dev/null || true
+        wait "$heartbeat_pid" 2>/dev/null || true
+    fi
+    rm -f "$CASE_DIR/heartbeat-child.pid"
+    timer_pid=""
+    heartbeat_pid=""
+    exec 6>&-
+    exec 7>&-
+    exec 8>&-
+    exec 9>&-
+}
+trap cleanup EXIT
+
+heartbeat_int_handler() {
+    heartbeat_int_count=$((heartbeat_int_count + 1))
+    stop_ut_heartbeat
+}
+
+# The long timer is deliberately TERM-ignoring and has no cleanup contract.
+# The production stop path must use exact-PID KILL and then reap it. The short
+# polling sleeps used by stop_ut_heartbeat remain the system sleep command.
+sleep() {
+    if [[ "${1:-}" == 60 ]]; then
+        trap '' TERM INT
+        while :; do
+            IFS= read -r _ <&9 || true
+        done
+    fi
+    command sleep "$@"
+}
+
+# scheduleHarnessWithMockTransform injects this function call between the
+# timer spawn and production PID registration. It publishes the child PID,
+# then waits for the parent to deliver the stop request and release the launch
+# window. Bash 3.2 ignores INT for asynchronous helpers, so the INT case below
+# delivers INT to this foreground caller and lets the real stop function send
+# TERM to the helper.
+ut_test_before_heartbeat_sleep_registration() {
+    printf '%s\n' "$1" > "$CASE_DIR/heartbeat-child.pid"
+    printf '%s\n' "$1" >&7
+    while ! read -r _ <&8; do
+        :
+    done
+}
+ut_test_heartbeat_stop_requested() {
+    printf '%s\n' "$heartbeat_stop_requested" >&6
+    printf 'release\n' >&8
+}
+
+UT_HEARTBEAT_INTERVAL=60
+start_ut_heartbeat
+heartbeat_pid="$UT_HEARTBEAT_PID"
+read -r -t 10 timer_pid <&7 || exit 90
+[[ "$timer_pid" =~ ^[0-9]+$ ]] || exit 91
+if [[ "$HEARTBEAT_STOP_SIGNAL" == INT ]]; then
+    trap heartbeat_int_handler INT
+    kill -INT "$$" || exit 92
+else
+    kill "-${HEARTBEAT_STOP_SIGNAL}" "$heartbeat_pid" || exit 92
+fi
+read -r -t 10 stop_state <&6 || exit 93
+[[ "$stop_state" == 1 ]] || exit 94
+if [[ "$HEARTBEAT_STOP_SIGNAL" == INT && "$heartbeat_int_count" != 1 ]]; then
+    exit 95
+fi
+heartbeat_status=0
+wait "$heartbeat_pid" || heartbeat_status=$?
+[[ "$heartbeat_status" == 0 ]] || exit 96
+if kill -0 "$heartbeat_pid" 2>/dev/null; then
+    exit 97
+fi
+if kill -0 "$timer_pid" 2>/dev/null; then
+    exit 98
+fi
+rm -f "$CASE_DIR/heartbeat-child.pid"
+timer_pid=""
+UT_HEARTBEAT_PID=""
+heartbeat_pid=""
+[[ -z "$UT_HEARTBEAT_PID" ]] || exit 99
+`
+	mock := `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+exit 0
+	`
+	transform := func(text string) string {
+		const anchor = "            heartbeat_sleep_pid=$!\n"
+		if got := strings.Count(text, anchor); got != 1 {
+			t.Fatalf("heartbeat registration anchor count = %d, want 1", got)
+		}
+		text = strings.Replace(text, anchor,
+			"            ut_test_before_heartbeat_sleep_registration \"$!\"\n"+anchor, 1)
+		const stopAnchor = "            heartbeat_stop_requested=1\n"
+		if got := strings.Count(text, stopAnchor); got != 1 {
+			t.Fatalf("heartbeat stop anchor count = %d, want 1", got)
+		}
+		return strings.Replace(text, stopAnchor,
+			stopAnchor+"            ut_test_heartbeat_stop_requested\n", 1)
+	}
+	for _, signal := range []string{"TERM", "INT"} {
+		t.Run(strings.ToLower(signal), func(t *testing.T) {
+			out, err := scheduleHarnessWithMockTransform(t, script, mock, transform,
+				"HEARTBEAT_STOP_SIGNAL="+signal)
+			if err != nil {
+				t.Fatalf("heartbeat registration lifecycle: %v\n%s", err, out)
+			}
+		})
+	}
+}
+
+func TestUTHeartbeatStopDuringHelperRegistration(t *testing.T) {
+	script := `source ./run_ut.sh UT
+mkfifo "$CASE_DIR/heartbeat-ready"
+exec 7<> "$CASE_DIR/heartbeat-ready"
+helper_pid=""
+timer_pid=""
+restart_pid=""
+caller_term_count=0
+caller_seen_pid=""
+publication_count=0
+cleanup() {
+    if [[ -z "$timer_pid" && -f "$CASE_DIR/heartbeat-timer.pid" ]]; then
+        timer_pid=$(cat "$CASE_DIR/heartbeat-timer.pid")
+    fi
+    if [[ -z "$helper_pid" && -f "$CASE_DIR/heartbeat-helper.pid" ]]; then
+        helper_pid=$(cat "$CASE_DIR/heartbeat-helper.pid")
+    fi
+    if [[ -n "$timer_pid" ]]; then
+        kill -KILL "$timer_pid" 2>/dev/null || true
+    fi
+    if [[ -n "$helper_pid" ]]; then
+        kill -KILL "$helper_pid" 2>/dev/null || true
+        wait "$helper_pid" 2>/dev/null || true
+    fi
+    if [[ -n "$restart_pid" ]]; then
+        kill -KILL "$restart_pid" 2>/dev/null || true
+        wait "$restart_pid" 2>/dev/null || true
+    fi
+    timer_pid=""
+    helper_pid=""
+    restart_pid=""
+    exec 7>&-
+}
+trap cleanup EXIT
+
+function logger() { :; }
+caller_term() {
+    caller_term_count=$((caller_term_count + 1))
+    caller_seen_pid="$UT_HEARTBEAT_PID"
+    stop_ut_heartbeat
+}
+trap caller_term TERM
+
+# The transformed helper reports its registered timer before the parent
+# launch hook sends TERM. This keeps the outer publication race deterministic
+# while also proving the published helper owns and reaps its timer.
+ut_test_heartbeat_ready() {
+    printf '%s\n' "$heartbeat_sleep_pid" > "$CASE_DIR/heartbeat-timer.pid"
+    printf '%s\n' "$heartbeat_sleep_pid" >&7
+}
+ut_test_before_heartbeat_registration() {
+    publication_count=$((publication_count + 1))
+    helper_pid="$1"
+    printf '%s\n' "$1" > "$CASE_DIR/heartbeat-helper.pid"
+    read -r -t 10 timer_pid <&7 || exit 90
+    [[ "$timer_pid" =~ ^[0-9]+$ ]] || exit 91
+    if [[ "$publication_count" == 1 ]]; then
+        kill -TERM "$$"
+    fi
+}
+
+UT_HEARTBEAT_INTERVAL=60
+start_ut_heartbeat
+[[ "$caller_term_count" == 1 ]] || exit 92
+[[ "$caller_seen_pid" == "$helper_pid" && -n "$caller_seen_pid" ]] || exit 93
+[[ -z "$UT_HEARTBEAT_PID" ]] || exit 94
+if kill -0 "$helper_pid" 2>/dev/null; then
+    exit 95
+fi
+rm -f "$CASE_DIR/heartbeat-helper.pid"
+helper_pid=""
+if kill -0 "$timer_pid" 2>/dev/null; then
+    exit 96
+fi
+rm -f "$CASE_DIR/heartbeat-timer.pid"
+timer_pid=""
+[[ "$(trap -p TERM)" == *caller_term* ]] || exit 97
+
+# The publication fence must not poison a later generation after cancellation.
+start_ut_heartbeat
+restart_pid="$UT_HEARTBEAT_PID"
+[[ -n "$restart_pid" ]] || exit 98
+[[ "$helper_pid" == "$restart_pid" ]] || exit 99
+# Transfer the second-generation owner token to restart_pid before any
+# operation can fail, so EXIT cleanup never owns the same PID twice.
+rm -f "$CASE_DIR/heartbeat-helper.pid"
+helper_pid=""
+stop_ut_heartbeat
+[[ -z "$UT_HEARTBEAT_PID" ]] || exit 100
+if kill -0 "$restart_pid" 2>/dev/null; then
+    exit 101
+fi
+rm -f "$CASE_DIR/heartbeat-helper.pid"
+restart_pid=""
+if kill -0 "$timer_pid" 2>/dev/null; then
+    exit 102
+fi
+rm -f "$CASE_DIR/heartbeat-timer.pid"
+timer_pid=""
+`
+	mock := `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+exit 0
+	`
+	transform := func(text string) string {
+		const readyAnchor = "            heartbeat_sleep_pid=$!\n"
+		if got := strings.Count(text, readyAnchor); got != 1 {
+			t.Fatalf("heartbeat timer registration anchor count = %d, want 1", got)
+		}
+		text = strings.Replace(text, readyAnchor,
+			readyAnchor+"            ut_test_heartbeat_ready\n", 1)
+		const publicationAnchor = "    UT_HEARTBEAT_PID=$!\n"
+		if got := strings.Count(text, publicationAnchor); got != 1 {
+			t.Fatalf("heartbeat publication anchor count = %d, want 1", got)
+		}
+		return strings.Replace(text, publicationAnchor,
+			"    ut_test_before_heartbeat_registration \"$!\"\n"+publicationAnchor, 1)
+	}
+	out, err := scheduleHarnessWithMockTransform(t, script, mock, transform)
+	if err != nil {
+		t.Fatalf("heartbeat helper registration lifecycle: %v\n%s", err, out)
 	}
 }
 
@@ -374,20 +769,22 @@ exit 0
 	for _, tc := range []struct {
 		name, parallel, overlap, expectOverlap, expected string
 	}{
+		{name: "default-off", parallel: "6", overlap: "__default__", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end"},
 		{name: "overlap", parallel: "6", overlap: "1", expectOverlap: "1", expected: "hnsw\nserial\nserial-end\nlight\nlight-end"},
 		{name: "sequential-explicit-off", parallel: "6", overlap: "0", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end"},
 		{name: "sequential-single-slot", parallel: "1", overlap: "0", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end"},
 		{name: "single-slot-guard", parallel: "1", overlap: "1", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			script := `source ./run_ut.sh UT
+			script := `if [[ "$UT_OVERLAP_VALUE" == "__default__" ]]; then unset UT_OVERLAP_LIGHT; fi
+source ./run_ut.sh UT
 function logger() { :; }
 function make() { :; }
 function egrep() { echo fake.pb.go; }
 	MO_CL_CUDA=1
 	UT_SHARD=all
 UT_PARALLEL=${UT_PARALLEL_VALUE}
-UT_OVERLAP_LIGHT=${UT_OVERLAP_VALUE}
+if [[ "$UT_OVERLAP_VALUE" != "__default__" ]]; then UT_OVERLAP_LIGHT=${UT_OVERLAP_VALUE}; fi
 UT_OVERLAP_LIGHT_PARALLEL=2
 UT_OVERLAP_PLAN=0
 UT_PREBUILD_EMBEDDED=0

@@ -115,7 +115,9 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 	}
 
 	ctx = context.WithValue(ctx, defines.SqlKey{}, createDatabase.GetSql())
-	datType := ""
+	// Internal database creators can attach a categorical type to the CREATE
+	// itself so the catalog row is atomic with the database definition.
+	datType, _ := ctx.Value(defines.DatTypKey{}).(string)
 	// handle sub
 	if subOption := createDatabase.SubscriptionOption; subOption != nil {
 		datType = catalog.SystemDBTypeSubscription
@@ -694,6 +696,10 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 		if qry.CopyTableDef != nil {
 			qry.CopyTableDef.Name = tblName
 		}
+	}
+	targetTableDef := persistedIPFunctionAlterTarget(qry)
+	if err := plan2.RequirePersistedIPFunctionProtocol(c.proc.Ctx, c.proc, targetTableDef); err != nil {
+		return err
 	}
 
 	dbSource, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
@@ -1484,6 +1490,21 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 	return nil
 }
 
+// persistedIPFunctionAlterTarget returns the definition that ALTER will
+// publish. An in-place replacement can carry CopyTableDef too; when it does,
+// that replacement is the admission target. Otherwise the current TableDef is
+// the target. Checking only this target avoids rejecting an ALTER that removes
+// a changed expression from the old source definition.
+func persistedIPFunctionAlterTarget(qry *plan.AlterTable) *plan.TableDef {
+	if qry == nil {
+		return nil
+	}
+	if qry.GetCopyTableDef() != nil {
+		return qry.GetCopyTableDef()
+	}
+	return qry.GetTableDef()
+}
+
 func (s *Scope) CreateTable(c *Compile) error {
 	return s.createTable(c, nil)
 }
@@ -1499,6 +1520,14 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetCreateTable()
+	if err := plan2.RequirePersistedIPFunctionProtocol(c.proc.Ctx, c.proc, qry.GetTableDef()); err != nil {
+		return err
+	}
+	for _, indexTableDef := range qry.GetIndexTables() {
+		if err := plan2.RequirePersistedIPFunctionProtocol(c.proc.Ctx, c.proc, indexTableDef); err != nil {
+			return err
+		}
+	}
 	dbName := c.db
 	if qry.GetDatabase() != "" {
 		dbName = qry.GetDatabase()

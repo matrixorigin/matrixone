@@ -218,6 +218,11 @@ func (rule *GetParamRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			exprImpl.List.List[i], _ = rule.ApplyExpr(exprImpl.List.List[i])
 		}
 		return e, nil
+	case *plan.Expr_Sub:
+		if exprImpl.Sub != nil {
+			exprImpl.Sub.Child, _ = rule.ApplyExpr(exprImpl.Sub.Child)
+		}
+		return e, nil
 	default:
 		return e, nil
 	}
@@ -311,6 +316,11 @@ func (rule *ResetParamOrderRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			exprImpl.List.List[i], _ = rule.ApplyExpr(exprImpl.List.List[i])
 		}
 		return e, nil
+	case *plan.Expr_Sub:
+		if exprImpl.Sub != nil {
+			exprImpl.Sub.Child, _ = rule.ApplyExpr(exprImpl.Sub.Child)
+		}
+		return e, nil
 	default:
 		return e, nil
 	}
@@ -339,23 +349,13 @@ func (rule *subqueryRootRule) ApplyNode(_ *Node) error {
 }
 
 func (rule *subqueryRootRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
-	switch exprImpl := e.Expr.(type) {
-	case *plan.Expr_F:
-		for i := range exprImpl.F.Args {
-			exprImpl.F.Args[i], _ = rule.ApplyExpr(exprImpl.F.Args[i])
+	err := plan.VisitExprTree(e, func(expr *plan.Expr) error {
+		if sub := expr.GetSub(); sub != nil {
+			rule.pending = append(rule.pending, sub.NodeId)
 		}
-	case *plan.Expr_List:
-		for i := range exprImpl.List.List {
-			exprImpl.List.List[i], _ = rule.ApplyExpr(exprImpl.List.List[i])
-		}
-	case *plan.Expr_W:
-		if err := applyRuleToWindowSpec(rule, exprImpl.W); err != nil {
-			return nil, err
-		}
-	case *plan.Expr_Sub:
-		rule.pending = append(rule.pending, exprImpl.Sub.NodeId)
-	}
-	return e, nil
+		return nil
+	})
+	return e, err
 }
 
 // ---------------------------
@@ -419,6 +419,14 @@ func (rule *decrementParamOrdinalRule) ApplyExpr(e *plan.Expr) (*plan.Expr, erro
 			return nil, moerr.NewInternalErrorNoCtx("prepared parameter ordinal is not one-based")
 		}
 		exprImpl.P.Pos--
+	case *plan.Expr_Sub:
+		if exprImpl.Sub != nil && exprImpl.Sub.Child != nil {
+			var err error
+			exprImpl.Sub.Child, err = rule.ApplyExpr(exprImpl.Sub.Child)
+			if err != nil {
+				return nil, err
+			}
+		}
 	}
 	return e, nil
 }
@@ -896,6 +904,42 @@ func (rule *ResetParamRefRule) runtimeParamValue(pos int) (any, vector.PreparePa
 	return nil, kind, false
 }
 
+func (rule *ResetParamRefRule) preparedGeometrySRIDParamExpr(pos int, sourceIsNull bool) (*Expr, bool, error) {
+	value, _, ok := rule.runtimeParamValue(pos)
+	if !ok {
+		return nil, false, nil
+	}
+	if sourceIsNull {
+		// Geometry evaluators short-circuit a NULL source before validating a
+		// scalar SRID. Materialize a typed NULL here as well, otherwise the
+		// binder would reject an otherwise NULL result for an invalid SRID.
+		typ := types.T_int64.ToType()
+		return &Expr{
+			Typ:  makePlan2Type(&typ),
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
+		}, true, nil
+	}
+	if pos >= 0 && pos < len(rule.paramValues) {
+		if param, isParam := rule.paramValues[pos].(ParamValue); isParam &&
+			value == nil && param.MaterializedValue != "" {
+			value = param.MaterializedValue
+		}
+	}
+	srid, isNull, err := geometrySRIDRuntimeValue(value)
+	if err != nil {
+		return nil, false, err
+	}
+	typ := types.T_int64.ToType()
+	literal := &plan.Literal{Isnull: isNull}
+	if !isNull {
+		literal.Value = &plan.Literal_I64Val{I64Val: int64(srid)}
+	}
+	return &Expr{
+		Typ:  makePlan2Type(&typ),
+		Expr: &plan.Expr_Lit{Lit: literal},
+	}, true, nil
+}
+
 func (rule *ResetParamRefRule) preparedBitCountUsesNumericRuntime(expr *plan.Expr) bool {
 	for pos := range preparedNumericValueParamPositions(expr) {
 		if pos >= 0 && int(pos) < len(rule.paramValues) {
@@ -1264,6 +1308,10 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExpr(
 		if !changed {
 			return expr, false, nil
 		}
+		if isExplicitPreparedCast(expr) {
+			bound, err := rebindExplicitPreparedCast(rule.ctx, expr, copy.GetF().Args)
+			return bound, true, err
+		}
 		// Recover only peers whose source explicitly proves that FLOAT was a
 		// prepare-time envelope. Source-less scientific literals and explicit
 		// FLOAT casts are semantic FLOAT boundaries and must remain unchanged.
@@ -1276,6 +1324,7 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExpr(
 		if name == "cast" && isImplicitPreparedParamCast(expr) {
 			return copy.GetF().Args[0], true, nil
 		}
+		restorePreparedIntegerArithmeticOperands(name, copy.GetF().Args)
 		bound, err := BindFuncExprImplByPlanExpr(rule.ctx, name, copy.GetF().Args)
 		if err != nil {
 			return nil, false, err
@@ -1301,6 +1350,25 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExpr(
 		}
 	}
 	return expr, false, nil
+}
+
+// A user CAST fixes the target domain and conversion semantics. Revalidate its
+// current source type, but do not resolve it as a new implicit CAST or elide a
+// now-redundant boundary before the enclosing arithmetic is rebound.
+func rebindExplicitPreparedCast(ctx context.Context, original *Expr, args []*Expr) (*Expr, error) {
+	if len(args) != 2 || args[0] == nil || args[1] == nil {
+		return nil, moerr.NewInternalError(ctx, "invalid prepared CAST arguments")
+	}
+	_, overload := planfunction.DecodeOverloadID(original.GetF().Func.Obj)
+	_, err := planfunction.GetFunctionByNameWithOverload(ctx, "cast", []types.Type{
+		makeTypeByPlan2Expr(args[0]), makeTypeByPlan2Expr(args[1]),
+	}, overload)
+	if err != nil {
+		return nil, err
+	}
+	bound := DeepCopyExpr(original)
+	bound.GetF().Args = args
+	return bound, nil
 }
 
 func provisionalExactNumericSource(expr *plan.Expr) (*Expr, bool) {
@@ -1331,6 +1399,31 @@ func provisionalExactNumericSource(expr *plan.Expr) (*Expr, bool) {
 		}
 	}
 	return nil, false
+}
+
+// Integer widening casts inserted for the PREPARE-time overload are not source
+// domains. Re-resolve arithmetic from those sources when a parameter changes;
+// otherwise a BIT peer widened to UINT64 acquires checked unsigned semantics
+// that the equivalent directly bound BIT expression does not have.
+func restorePreparedIntegerArithmeticOperands(name string, args []*Expr) {
+	if name != "+" && name != "-" && name != "*" {
+		return
+	}
+	for i, arg := range args {
+		for arg != nil && types.T(arg.Typ.Id).IsInteger() {
+			fn := arg.GetF()
+			if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || fn.SyntaxExplicitCast || len(fn.Args) == 0 || fn.Args[0] == nil {
+				break
+			}
+			_, overload := planfunction.DecodeOverloadID(fn.Func.Obj)
+			source := types.T(fn.Args[0].Typ.Id)
+			if overload != 0 || (!source.IsInteger() && source != types.T_bit) {
+				break
+			}
+			arg = fn.Args[0]
+			args[i] = arg
+		}
+	}
 }
 
 func (rule *ResetParamRefRule) rebindPreparedIntegerExpr(expr *plan.Expr) (*Expr, bool, error) {
@@ -1537,6 +1630,15 @@ func (rule *ResetParamRefRule) applyExprPreservingRoot(e *plan.Expr) (*plan.Expr
 		if exprImpl.F == nil {
 			return e, nil
 		}
+		if isPreparedGeometrySRIDFunction(exprImpl.F.Func.GetObjName()) &&
+			len(exprImpl.F.Args) >= 2 {
+			if _, ok := preparedParamPosition(exprImpl.F.Args[len(exprImpl.F.Args)-1]); ok {
+				// A geometry SRID setter/constructor owns value-dependent
+				// result metadata. It cannot remain a preserved write root or
+				// the destination cast would see the prepare-time undefined SRID.
+				return rule.applyExpr(e)
+			}
+		}
 		if rule.validateFunctionArgs != nil {
 			if err := rule.validateFunctionArgs(exprImpl.F.Func.GetObjName(), exprImpl.F.Args); err != nil {
 				return nil, err
@@ -1548,6 +1650,11 @@ func (rule *ResetParamRefRule) applyExprPreservingRoot(e *plan.Expr) (*plan.Expr
 				return nil, err
 			}
 			exprImpl.F.Args[i] = rewritten
+		}
+		if strings.EqualFold(exprImpl.F.Func.GetObjName(), moGeometryCastToSubtypeFun) {
+			if err := validateGeometryAssignmentSRID(rule.ctx, e, e.Typ); err != nil {
+				return nil, err
+			}
 		}
 		return e, nil
 	case *plan.Expr_W:
@@ -1839,6 +1946,19 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		regexpDomainsDeferred := preparedRegexpStringDomainCheckModes(functionName, originalArgs) != nil
 		needResetFunction := regexpDomainsDeferred
 		compareArgTypes := regexpDomainsDeferred
+		geometrySRIDParamPos := -1
+		if isPreparedGeometrySRIDFunction(functionName) && len(originalArgs) >= 2 {
+			positions := preparedGeometrySRIDParamPositionsInExpr(originalArgs[len(originalArgs)-1])
+			if len(positions) == 1 {
+				position := int(positions[0])
+				geometrySRIDParamPos = position
+				// The SRID is part of the result type metadata, so the function
+				// must be rebound even when the parameter's scalar type stays
+				// int64 across executions.
+				needResetFunction = true
+				compareArgTypes = true
+			}
+		}
 		numericPrefixDependent := false
 		sqlExecuteNumericSourceDependent := false
 		sqlExecuteNumericNestedDependent := false
@@ -1991,6 +2111,15 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					// for an invalid numeric string without raising a cast error.
 					source = DeepCopyExpr(rule.params[paramPos])
 				}
+				if functionName == "hex" && rule.sqlExecuteStringBackedParams[paramPos] {
+					// The shared numeric-source builder wraps a numeric-prefix SQL
+					// string in an explicit FLOAT64 cast. HEX instead owns a string
+					// operand as bytes, so restore the typed source below that wrapper.
+					if cast := source.GetF(); cast != nil && cast.GetFunc().GetObjName() == "cast" &&
+						len(cast.GetArgs()) > 0 {
+						source = cast.GetArgs()[0]
+					}
+				}
 				rewrittenArg = DeepCopyExpr(source)
 			} else {
 				var applyErr error
@@ -2014,6 +2143,23 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				err = applyErr
 				if err != nil {
 					return nil, err
+				}
+			}
+			if geometrySRIDParamPos >= 0 && i == len(exprImpl.F.Args)-1 &&
+				hasParamPos && paramPos == geometrySRIDParamPos {
+				sourceIsNull := len(boundArgs) > 0 && geometrySRIDSourceIsStaticNull(boundArgs[0])
+				geometryArg, known, geometryErr := rule.preparedGeometrySRIDParamExpr(paramPos, sourceIsNull)
+				if geometryErr != nil {
+					return nil, geometryErr
+				}
+				if known {
+					// Do not retain the provisional cast around the marker. The
+					// normalized int64 literal makes the geometry binder apply the
+					// current SRID to Width, including NULL -> undefined metadata.
+					rewrittenArg = geometryArg
+					needResetFunction = true
+					compareArgTypes = true
+					rule.specialized = true
 				}
 			}
 			exprImpl.F.Args[i] = rewrittenArg
@@ -2292,18 +2438,25 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 
 		// reset function
 		if needResetFunction {
+			restorePreparedIntegerArithmeticOperands(functionName, boundArgs)
 			stringDomainModes, resolveErr := rule.resolvePreparedRegexpStringDomainCheckModes(
 				functionName, boundArgs, originalArgs)
 			if resolveErr != nil {
 				return nil, resolveErr
 			}
-			rewritten, err := bindPreparedFuncExprImplByPlanExpr(
-				rule.ctx,
-				originalTemporalExpr,
-				exprImpl.F.Func.GetObjName(),
-				boundArgs,
-				stringDomainModes,
-			)
+			var rewritten *Expr
+			if isExplicitPreparedCast(e) {
+				rewritten, err = rebindExplicitPreparedCast(rule.ctx, e, boundArgs)
+				rule.specialized = true
+			} else {
+				rewritten, err = bindPreparedFuncExprImplByPlanExpr(
+					rule.ctx,
+					originalTemporalExpr,
+					exprImpl.F.Func.GetObjName(),
+					boundArgs,
+					stringDomainModes,
+				)
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -3435,6 +3588,13 @@ func preparedFunctionArgUsesSQLExecuteNumericSource(
 	argIndex int,
 	argCount int,
 ) bool {
+	// HEX owns the runtime domain of its sole argument: numeric source values
+	// use numeric conversion, while non-numeric strings retain byte encoding.
+	// The SQL EXECUTE source is materialized below without crossing an explicit
+	// user CAST boundary.
+	if name == "hex" {
+		return argIndex == 0 && argCount == 1
+	}
 	// A prepared TEXT marker can make result-selecting functions bind to a
 	// non-numeric envelope even though the execute-time SQL source is numeric.
 	// Decide from the argument's value role before consulting that provisional

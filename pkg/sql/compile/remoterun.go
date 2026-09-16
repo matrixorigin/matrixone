@@ -102,6 +102,9 @@ func encodeScope(s *Scope) ([]byte, error) {
 	if err = validateOctStringProtocol(s.Proc, p); err != nil {
 		return nil, err
 	}
+	if err = validateHexMySQLNumericProtocol(s.Proc, p); err != nil {
+		return nil, err
+	}
 	if err = validateRemoteIgnoreCheckPipelineProtocol(s.Proc, p); err != nil {
 		return nil, err
 	}
@@ -118,6 +121,25 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	}
 	if err = validateRemoteExpressionPipelineProtocol(proc, p); err != nil {
 		return nil, err
+	}
+	features, err := plan.RequiredRemoteExpressionFeatures(p)
+	if err != nil {
+		return nil, err
+	}
+	if features.IntegerArithmeticDomains {
+		if err = validateIntegerDomainDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
+	if features.RowDependentConvBases {
+		if err = validateConvBasesDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
+	if features.IPFunctionSemantics {
+		if err = validateIPFunctionDestination(proc, p); err != nil {
+			return nil, err
+		}
 	}
 	if err = validateStrictWriteDestination(proc, p); err != nil {
 		return nil, err
@@ -138,6 +160,9 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 		return nil, err
 	}
 	if err = validateOctStringProtocol(proc, p); err != nil {
+		return nil, err
+	}
+	if err = validateHexMySQLNumericProtocol(proc, p); err != nil {
 		return nil, err
 	}
 	if err = validateRemoteIgnoreCheckPipelineProtocol(proc, p); err != nil {
@@ -253,6 +278,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 			return nil, err
 		}
 		if err = validateOctStringProtocol(proc, p); err != nil {
+			return nil, err
+		}
+		if err = validateHexMySQLNumericProtocol(proc, p); err != nil {
 			return nil, err
 		}
 		if err = validateRemoteGroupingSetPipelineProtocol(proc, p); err != nil {
@@ -2098,10 +2126,22 @@ func validateRemoteExpressionPipelineProtocol(
 			"typed BIN/CONV execution requires MORPC protocol version 64",
 		)
 	}
+	if features.IntegerArithmeticDomains && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion71) {
+		return moerr.NewNotSupportedNoCtx("checked integer arithmetic requires MORPC protocol version 71")
+	}
+	if features.RowDependentConvBases && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion70) {
+		return moerr.NewNotSupportedNoCtx("row-dependent CONV bases require MORPC protocol version 70")
+	}
 	if features.ASCIIInt32Result &&
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion65) {
 		return moerr.NewNotSupportedNoCtx(
 			"signed INT ASCII results require MORPC protocol version 65",
+		)
+	}
+	if features.IPFunctionSemantics &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion72) {
+		return moerr.NewNotSupportedNoCtx(
+			"corrected IP function semantics require MORPC protocol version 72",
 		)
 	}
 	return nil

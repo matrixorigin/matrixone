@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -131,6 +132,11 @@ func (h *ParquetHandler) getDataByRow(bat *batch.Batch, param *ExternalParam, pr
 			RowModeTime: time.Since(rowModeStart).Nanoseconds(),
 		})
 	}()
+	if h.batchCnt <= 0 {
+		bat.SetRowCount(0)
+		return nil
+	}
+	batchLimit := int(h.batchCnt)
 
 	if h.offset > 0 {
 		if err := h.rowReader.SeekToRow(h.offset); err != nil {
@@ -141,21 +147,26 @@ func (h *ParquetHandler) getDataByRow(bat *batch.Batch, param *ExternalParam, pr
 	// Bound decoder lookahead before the actual materialized batch size can be
 	// checked. Any unread rows are revisited from h.offset on the next call.
 	const maxReadRows = 1024
-	rowBuf := make([]parquet.Row, min(int(h.batchCnt), maxReadRows))
+	rowBuf := make([]parquet.Row, min(batchLimit, maxReadRows))
 	rowsRead := 0
 	eof := false
 	batchBoundary := false
-	for rowsRead < int(h.batchCnt) && !h.parquetBatchAtByteBudget(bat, rowsRead, param) {
-		toRead := nextParquetBatchRows(rowsRead, min(len(rowBuf), int(h.batchCnt)-rowsRead), h.estimatedBatchSize(bat, rowsRead, param), param.maxBatchSize)
+	checkpoints := make([]vector.AppendCheckpoint, len(bat.Vecs))
+	for rowsRead < batchLimit && !h.parquetBatchAtByteBudget(bat, rowsRead, param) {
+		toRead := nextParquetBatchRows(rowsRead, min(len(rowBuf), batchLimit-rowsRead), h.estimatedBatchSize(bat, rowsRead, param), param.maxBatchSize)
 		n, err := h.rowReader.ReadRows(rowBuf[:toRead])
 		if err != nil && !errors.Is(err, io.EOF) {
 			return moerr.ConvertGoError(param.Ctx, err)
+		}
+		if n < 0 || n > len(rowBuf) {
+			return moerr.NewInvalidInputf(param.Ctx,
+				"malformed parquet row reader: returned %d rows for buffer of %d",
+				n, len(rowBuf))
 		}
 		if errors.Is(err, io.EOF) {
 			eof = true
 		}
 		for _, row := range rowBuf[:n] {
-			checkpoints := make([]vector.AppendCheckpoint, len(bat.Vecs))
 			for colIdx, vec := range bat.Vecs {
 				if vec != nil {
 					checkpoints[colIdx] = vec.MakeAppendCheckpoint()
@@ -182,6 +193,12 @@ func (h *ParquetHandler) getDataByRow(bat *batch.Batch, param *ExternalParam, pr
 		}
 		if n == 0 || eof || batchBoundary || h.parquetBatchAtByteBudget(bat, rowsRead, param) {
 			break
+		}
+	}
+	if eof && !batchBoundary {
+		if err := validateParquetRowModeEOF(param.Ctx, h.offset+int64(rowsRead), h.rowGroupRows); err != nil {
+			h.cleanup()
+			return err
 		}
 	}
 
@@ -246,11 +263,35 @@ func (h *ParquetHandler) processLeafValue(
 		}
 	}
 
-	if !found || value.IsNull() {
+	if !found {
+		return appendNull(vec, def, proc)
+	}
+	isNull, err := validateParquetLeafValue(proc.Ctx, col, value)
+	if err != nil {
+		return err
+	}
+	if isNull {
 		return appendNull(vec, def, proc)
 	}
 
 	return appendLeafValue(value, col, vec, def, proc)
+}
+
+func validateParquetLeafValue(ctx context.Context, col *parquet.Column, value parquet.Value) (bool, error) {
+	maxDefinitionLevel := col.MaxDefinitionLevel()
+	definitionLevel := value.DefinitionLevel()
+	if definitionLevel > maxDefinitionLevel {
+		return false, moerr.NewInvalidInputf(ctx,
+			"malformed parquet leaf value: definition level %d exceeds maximum %d",
+			definitionLevel, maxDefinitionLevel)
+	}
+	expectedNull := definitionLevel < maxDefinitionLevel
+	if expectedNull != value.IsNull() {
+		return false, moerr.NewInvalidInputf(ctx,
+			"malformed parquet leaf value: NULL status disagrees with definition level %d",
+			definitionLevel)
+	}
+	return expectedNull, nil
 }
 
 // appendNull appends a NULL value to vector
@@ -274,42 +315,109 @@ func appendLeafValue(
 
 	switch targetType {
 	case types.T_bool:
-		return vector.AppendFixed(vec, v.Boolean(), false, proc.Mp())
+		value, err := parquetValueToBool(proc.Ctx, st, v)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, value, false, proc.Mp())
 	case types.T_int8:
-		return vector.AppendFixed(vec, int8(v.Int32()), false, proc.Mp())
+		value, err := parquetRowValueToInt64(proc.Ctx, st, v)
+		if err != nil {
+			return err
+		}
+		if value < math.MinInt8 || value > math.MaxInt8 {
+			return moerr.NewInvalidInputf(proc.Ctx, "parquet value %d overflows TINYINT", value)
+		}
+		return vector.AppendFixed(vec, int8(value), false, proc.Mp())
 	case types.T_int16:
-		return vector.AppendFixed(vec, int16(v.Int32()), false, proc.Mp())
+		value, err := parquetRowValueToInt64(proc.Ctx, st, v)
+		if err != nil {
+			return err
+		}
+		if value < math.MinInt16 || value > math.MaxInt16 {
+			return moerr.NewInvalidInputf(proc.Ctx, "parquet value %d overflows SMALLINT", value)
+		}
+		return vector.AppendFixed(vec, int16(value), false, proc.Mp())
 	case types.T_int32:
-		return vector.AppendFixed(vec, v.Int32(), false, proc.Mp())
+		value, err := parquetRowValueToInt64(proc.Ctx, st, v)
+		if err != nil {
+			return err
+		}
+		if value < math.MinInt32 || value > math.MaxInt32 {
+			return moerr.NewInvalidInputf(proc.Ctx, "parquet value %d overflows INT", value)
+		}
+		return vector.AppendFixed(vec, int32(value), false, proc.Mp())
 	case types.T_int64:
-		if st.Kind() == parquet.Int32 {
-			return vector.AppendFixed(vec, int64(v.Int32()), false, proc.Mp())
+		value, err := parquetRowValueToInt64(proc.Ctx, st, v)
+		if err != nil {
+			return err
 		}
-		return vector.AppendFixed(vec, v.Int64(), false, proc.Mp())
+		return vector.AppendFixed(vec, value, false, proc.Mp())
 	case types.T_uint8:
-		return vector.AppendFixed(vec, uint8(v.Int32()), false, proc.Mp())
+		value, err := parquetRowValueToUint64(proc.Ctx, st, v)
+		if err != nil {
+			return err
+		}
+		if value > math.MaxUint8 {
+			return moerr.NewInvalidInputf(proc.Ctx, "parquet value %d overflows TINYINT UNSIGNED", value)
+		}
+		return vector.AppendFixed(vec, uint8(value), false, proc.Mp())
 	case types.T_uint16:
-		return vector.AppendFixed(vec, uint16(v.Int32()), false, proc.Mp())
+		value, err := parquetRowValueToUint64(proc.Ctx, st, v)
+		if err != nil {
+			return err
+		}
+		if value > math.MaxUint16 {
+			return moerr.NewInvalidInputf(proc.Ctx, "parquet value %d overflows SMALLINT UNSIGNED", value)
+		}
+		return vector.AppendFixed(vec, uint16(value), false, proc.Mp())
 	case types.T_uint32:
-		if st.Kind() == parquet.Int32 {
-			return vector.AppendFixed(vec, uint32(v.Int32()), false, proc.Mp())
+		value, err := parquetRowValueToUint64(proc.Ctx, st, v)
+		if err != nil {
+			return err
 		}
-		return vector.AppendFixed(vec, uint32(v.Int64()), false, proc.Mp())
+		if value > math.MaxUint32 {
+			return moerr.NewInvalidInputf(proc.Ctx, "parquet value %d overflows INT UNSIGNED", value)
+		}
+		return vector.AppendFixed(vec, uint32(value), false, proc.Mp())
 	case types.T_uint64:
-		return vector.AppendFixed(vec, uint64(v.Int64()), false, proc.Mp())
-	case types.T_float32:
-		return vector.AppendFixed(vec, v.Float(), false, proc.Mp())
-	case types.T_float64:
-		if st.Kind() == parquet.Float {
-			return vector.AppendFixed(vec, float64(v.Float()), false, proc.Mp())
+		value, err := parquetRowValueToUint64(proc.Ctx, st, v)
+		if err != nil {
+			return err
 		}
-		return vector.AppendFixed(vec, v.Double(), false, proc.Mp())
+		return vector.AppendFixed(vec, value, false, proc.Mp())
+	case types.T_float32:
+		value, err := parquetValueToFloat32(proc.Ctx, st, v)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, value, false, proc.Mp())
+	case types.T_float64:
+		value, err := parquetValueToFloat64(proc.Ctx, st, v)
+		if err != nil {
+			return err
+		}
+		return vector.AppendFixed(vec, value, false, proc.Mp())
 	case types.T_char, types.T_varchar, types.T_text, types.T_blob,
 		types.T_binary, types.T_varbinary:
 		return vector.AppendBytes(vec, v.ByteArray(), false, proc.Mp())
 	default:
 		return moerr.NewNYIf(proc.Ctx, "row mode convert to %s", targetType.String())
 	}
+}
+
+func parquetRowValueToInt64(ctx context.Context, st parquet.Type, v parquet.Value) (int64, error) {
+	if isParquetRoundedIntegerSource(st) {
+		return parquetValueToRoundedInt64(ctx, st, v)
+	}
+	return parquetValueToInt64(ctx, st, v)
+}
+
+func parquetRowValueToUint64(ctx context.Context, st parquet.Type, v parquet.Value) (uint64, error) {
+	if isParquetRoundedIntegerSource(st) {
+		return parquetValueToRoundedUint64(ctx, st, v)
+	}
+	return parquetValueToUint64(ctx, st, v)
 }
 
 // processNestedValue processes a nested column value
@@ -321,6 +429,9 @@ func (h *ParquetHandler) processNestedValue(
 	proc *process.Process,
 ) error {
 	colValues := extractNestedColumnValues(row, col)
+	if err := validateParquetNestedValues(proc.Ctx, col, colValues); err != nil {
+		return err
+	}
 
 	if isNestedColumnNull(colValues, col) {
 		return appendNull(vec, def, proc)
@@ -334,6 +445,53 @@ func (h *ParquetHandler) processNestedValue(
 
 	targetType := types.T(def.Typ.Id)
 	return writeNestedToVector(nested, targetType, vec, proc)
+}
+
+func validateParquetNestedValues(ctx context.Context, col *parquet.Column, values []parquet.Value) error {
+	if col == nil {
+		return moerr.NewInvalidInput(ctx, "malformed parquet nested column: column is nil")
+	}
+
+	for i, value := range values {
+		leaf := findNestedLeafByIndex(col, value.Column())
+		if leaf == nil {
+			return moerr.NewInvalidInputf(ctx,
+				"malformed parquet nested value at row %d: column index %d is not in %s",
+				i, value.Column(), col.Name())
+		}
+		if value.RepetitionLevel() < 0 || value.RepetitionLevel() > leaf.MaxRepetitionLevel() {
+			return moerr.NewInvalidInputf(ctx,
+				"malformed parquet nested value at row %d: repetition level %d exceeds maximum %d",
+				i, value.RepetitionLevel(), leaf.MaxRepetitionLevel())
+		}
+		if _, err := validateParquetLeafValue(ctx, leaf, value); err != nil {
+			return err
+		}
+		if !value.IsNull() && value.Kind() != leaf.Type().Kind() {
+			return moerr.NewInvalidInputf(ctx,
+				"malformed parquet nested value at row %d: value kind %s, expected %s",
+				i, value.Kind(), leaf.Type().Kind())
+		}
+	}
+	return nil
+}
+
+func findNestedLeafByIndex(col *parquet.Column, index int) *parquet.Column {
+	if col == nil {
+		return nil
+	}
+	if col.Leaf() {
+		if col.Index() == index {
+			return col
+		}
+		return nil
+	}
+	for _, child := range col.Columns() {
+		if leaf := findNestedLeafByIndex(child, index); leaf != nil {
+			return leaf
+		}
+	}
+	return nil
 }
 
 // extractNestedColumnValues extracts all values for a nested column from row
@@ -377,8 +535,8 @@ func isNestedColumnNull(values []parquet.Value, col *parquet.Column) bool {
 	if len(values) == 0 {
 		return true
 	}
-	if col != nil && col.Optional() && len(values) > 0 {
-		return values[0].DefinitionLevel() == 0
+	if col != nil && col.Optional() {
+		return values[0].DefinitionLevel() < col.MaxDefinitionLevel()
 	}
 	return false
 }
@@ -455,16 +613,7 @@ func reconstructListFromPattern(ctx context.Context, col *parquet.Column, values
 	if len(listChild.Columns()) == 0 {
 		return nil, moerr.NewInternalErrorf(ctx, "list child has no element column")
 	}
-	elementCol := listChild.Columns()[0]
-
-	// Check if element is a leaf or nested structure
-	if elementCol.Leaf() {
-		// Simple case: list of primitive values
-		return reconstructList(ctx, listChild, values)
-	} else {
-		// Complex case: list of structs/maps/lists
-		return reconstructListOfNested(ctx, elementCol, values)
-	}
+	return reconstructList(ctx, listChild, values)
 }
 
 // reconstructMapFromPattern reconstructs Map from pattern
@@ -486,36 +635,23 @@ func reconstructListOfNested(ctx context.Context, elementCol *parquet.Column, va
 		return result, nil
 	}
 
-	expectedCols := make(map[int]bool)
-	for _, leaf := range leafCols {
-		expectedCols[leaf.Index()] = true
-	}
-
-	// Group values by column repetition - when we see a column again, new element starts
-	var groups [][]parquet.Value
-	currentGroup := make([]parquet.Value, 0, len(leafCols))
-	seenCols := make(map[int]bool)
-
-	for _, v := range values {
-		colIdx := v.Column()
-		if !expectedCols[colIdx] {
-			continue
-		}
-		if seenCols[colIdx] {
-			if len(currentGroup) > 0 {
-				groups = append(groups, currentGroup)
+	// Values in a parquet row are stored column-major. For an element made up
+	// only of non-repeated fields, the value at ordinal n in every leaf belongs
+	// to the same list element. This also preserves elements whose optional
+	// fields are populated in different columns. Nested repeated fields need
+	// repetition-level grouping below because their leaf counts can differ.
+	if !hasNestedRepeatedDescendant(elementCol) {
+		for _, group := range groupNestedValuesByLeafOrdinal(leafCols, values) {
+			nested, err := reconstructNestedByType(ctx, elementCol, group)
+			if err != nil {
+				return nil, err
 			}
-			currentGroup = make([]parquet.Value, 0, len(leafCols))
-			seenCols = make(map[int]bool)
+			result = append(result, nested)
 		}
-		currentGroup = append(currentGroup, v)
-		seenCols[colIdx] = true
-	}
-	if len(currentGroup) > 0 {
-		groups = append(groups, currentGroup)
+		return result, nil
 	}
 
-	for _, group := range groups {
+	for _, group := range groupNestedValuesByOuterRepetition(elementCol, leafCols, values) {
 		nested, err := reconstructNestedByType(ctx, elementCol, group)
 		if err != nil {
 			return nil, err
@@ -526,16 +662,130 @@ func reconstructListOfNested(ctx context.Context, elementCol *parquet.Column, va
 	return result, nil
 }
 
+func groupNestedValuesByOuterRepetition(
+	elementCol *parquet.Column,
+	leafCols []*parquet.Column,
+	values []parquet.Value,
+) [][]parquet.Value {
+	valuesByColumn := make(map[int][][]parquet.Value, len(leafCols))
+	maxGroups := 0
+	for _, leaf := range leafCols {
+		localRepetitionLevel, ok := repeatedDepthToLeaf(elementCol, leaf)
+		if !ok {
+			continue
+		}
+		outerRepetitionLevel := leaf.MaxRepetitionLevel() - localRepetitionLevel
+		if outerRepetitionLevel < 0 {
+			outerRepetitionLevel = 0
+		}
+		columnGroups := make([][]parquet.Value, 0)
+		for _, value := range values {
+			if value.Column() != leaf.Index() {
+				continue
+			}
+			if len(columnGroups) == 0 || int(value.RepetitionLevel()) <= outerRepetitionLevel {
+				columnGroups = append(columnGroups, nil)
+			}
+			last := len(columnGroups) - 1
+			columnGroups[last] = append(columnGroups[last], value)
+		}
+		valuesByColumn[leaf.Index()] = columnGroups
+		if len(columnGroups) > maxGroups {
+			maxGroups = len(columnGroups)
+		}
+	}
+
+	groups := make([][]parquet.Value, 0, maxGroups)
+	for i := 0; i < maxGroups; i++ {
+		group := make([]parquet.Value, 0, len(leafCols))
+		for _, leaf := range leafCols {
+			columnGroups := valuesByColumn[leaf.Index()]
+			if i < len(columnGroups) {
+				group = append(group, columnGroups[i]...)
+			}
+		}
+		if len(group) > 0 {
+			groups = append(groups, group)
+		}
+	}
+	return groups
+}
+
+func repeatedDepthToLeaf(col, target *parquet.Column) (int, bool) {
+	if col == target {
+		return 0, true
+	}
+	for _, child := range col.Columns() {
+		depth, ok := repeatedDepthToLeaf(child, target)
+		if !ok {
+			continue
+		}
+		if child.Repeated() {
+			depth++
+		}
+		return depth, true
+	}
+	return 0, false
+}
+
+func groupNestedValuesByLeafOrdinal(leafCols []*parquet.Column, values []parquet.Value) [][]parquet.Value {
+	valuesByColumn := make(map[int][]parquet.Value, len(leafCols))
+	expectedCols := make(map[int]struct{}, len(leafCols))
+	maxValues := 0
+	for _, leaf := range leafCols {
+		expectedCols[leaf.Index()] = struct{}{}
+	}
+	for _, v := range values {
+		if _, ok := expectedCols[v.Column()]; !ok {
+			continue
+		}
+		valuesByColumn[v.Column()] = append(valuesByColumn[v.Column()], v)
+		if len(valuesByColumn[v.Column()]) > maxValues {
+			maxValues = len(valuesByColumn[v.Column()])
+		}
+	}
+
+	groups := make([][]parquet.Value, 0, maxValues)
+	for i := 0; i < maxValues; i++ {
+		group := make([]parquet.Value, 0, len(leafCols))
+		for _, leaf := range leafCols {
+			columnValues := valuesByColumn[leaf.Index()]
+			if i < len(columnValues) {
+				group = append(group, columnValues[i])
+			}
+		}
+		if len(group) > 0 {
+			groups = append(groups, group)
+		}
+	}
+	return groups
+}
+
+func hasNestedRepeatedDescendant(col *parquet.Column) bool {
+	for _, child := range col.Columns() {
+		if child.Repeated() || hasNestedRepeatedDescendant(child) {
+			return true
+		}
+	}
+	return false
+}
+
 func reconstructList(ctx context.Context, col *parquet.Column, values []parquet.Value) ([]any, error) {
 	result := make([]any, 0)
 	// Empty list case: no values at all
 	if len(values) == 0 {
 		return result, nil
 	}
-	// Empty list case: single NULL value with low definition level
-	// This indicates an empty list, not a list with a NULL element
-	if len(values) == 1 && values[0].IsNull() && values[0].RepetitionLevel() == 0 {
+	elementCol := listElementColumn(col)
+	// An empty list is represented by a NULL placeholder at the definition
+	// level immediately before the element becomes defined. An optional
+	// element has one additional definition level, so a NULL element must not
+	// be mistaken for the empty-list marker.
+	if elementCol != nil && isEmptyListValues(elementCol, values) {
 		return result, nil
+	}
+	if elementCol != nil && !elementCol.Leaf() {
+		return reconstructListOfNested(ctx, elementCol, values)
 	}
 	for _, v := range values {
 		if v.IsNull() {
@@ -545,6 +795,56 @@ func reconstructList(ctx context.Context, col *parquet.Column, values []parquet.
 		}
 	}
 	return result, nil
+}
+
+func logicalListElementColumn(col *parquet.Column) *parquet.Column {
+	if col == nil || col.Leaf() {
+		return nil
+	}
+	children := col.Columns()
+	if len(children) != 1 || children[0].Name() != "list" || !children[0].Repeated() {
+		return nil
+	}
+	elements := children[0].Columns()
+	if len(elements) != 1 {
+		return nil
+	}
+	return elements[0]
+}
+
+func listElementColumn(col *parquet.Column) *parquet.Column {
+	if elementCol := logicalListElementColumn(col); elementCol != nil {
+		return elementCol
+	}
+	if col == nil || !col.Repeated() || col.Name() != "list" {
+		return nil
+	}
+	children := col.Columns()
+	if len(children) != 1 {
+		return nil
+	}
+	return children[0]
+}
+
+func listEmptyDefinitionLevel(elementCol *parquet.Column) int {
+	level := elementCol.MaxDefinitionLevel() - 1
+	if elementCol.Optional() {
+		level--
+	}
+	return level
+}
+
+func isEmptyListValues(elementCol *parquet.Column, values []parquet.Value) bool {
+	if len(values) == 0 {
+		return false
+	}
+	emptyLevel := listEmptyDefinitionLevel(elementCol)
+	for _, value := range values {
+		if !value.IsNull() || value.DefinitionLevel() != emptyLevel {
+			return false
+		}
+	}
+	return true
 }
 
 // reconstructMap reconstructs Map type
@@ -565,7 +865,13 @@ func reconstructMap(ctx context.Context, col *parquet.Column, values []parquet.V
 		return result, nil
 	}
 
-	keyColIdx := keyCol.Index()
+	keys, err := collectMapKeys(ctx, keyCol, values)
+	if err != nil {
+		return nil, err
+	}
+	if len(keys) == 0 {
+		return result, nil
+	}
 
 	// Simple case: both key and value are leaf columns
 	if keyCol.Leaf() && (valueCol == nil || valueCol.Leaf()) {
@@ -574,17 +880,18 @@ func reconstructMap(ctx context.Context, col *parquet.Column, values []parquet.V
 			valColIdx = valueCol.Index()
 		}
 
-		var keys, vals []parquet.Value
+		var vals []parquet.Value
 		for _, v := range values {
 			switch v.Column() {
-			case keyColIdx:
-				keys = append(keys, v)
 			case valColIdx:
 				vals = append(vals, v)
 			}
 		}
 
 		for i := 0; i < len(keys); i++ {
+			if keys[i].IsNull() {
+				return nil, moerr.NewInvalidInput(ctx, "parquet map key cannot be NULL")
+			}
 			keyStr := stringifyMapKey(keys[i])
 			if _, exists := result[keyStr]; exists {
 				return nil, moerr.NewInternalErrorf(ctx, "duplicate map key: %s", keyStr)
@@ -604,42 +911,44 @@ func reconstructMap(ctx context.Context, col *parquet.Column, values []parquet.V
 
 	// Complex case: value is nested (List/Struct/Map)
 	if valueCol != nil && !valueCol.Leaf() {
-		valueStartIdx, valueEndIdx := getNestedColumnIndexRange(valueCol)
-		groupCap := valueEndIdx - valueStartIdx
-		if groupCap < 0 {
-			groupCap = 0
-		}
-
-		// Collect all keys
-		var keys []parquet.Value
-		for _, v := range values {
-			if v.Column() == keyColIdx {
-				keys = append(keys, v)
-			}
-		}
-
-		// Group values by RepetitionLevel
-		// Rep=0 or Rep=1 starts a new map entry, Rep>=2 continues current entry
-		valueGroups := make([][]parquet.Value, 0)
-		currentGroup := make([]parquet.Value, 0, groupCap)
-
-		for _, v := range values {
-			colIdx := v.Column()
-			if colIdx >= valueStartIdx && colIdx < valueEndIdx {
-				rep := v.RepetitionLevel()
-				// Rep <= 1 means new map entry (0=new row, 1=new key_value)
-				if rep <= 1 && len(currentGroup) > 0 {
-					valueGroups = append(valueGroups, currentGroup)
-					currentGroup = make([]parquet.Value, 0, groupCap)
+		if !hasNestedRepeatedDescendant(valueCol) {
+			valueGroups := groupNestedValuesByLeafOrdinal(collectLeafColumns(valueCol), values)
+			for i, key := range keys {
+				if key.IsNull() {
+					return nil, moerr.NewInvalidInput(ctx, "parquet map key cannot be NULL")
 				}
-				currentGroup = append(currentGroup, v)
+				keyStr := stringifyMapKey(key)
+				if _, exists := result[keyStr]; exists {
+					return nil, moerr.NewInternalErrorf(ctx, "duplicate map key: %s", keyStr)
+				}
+				if i >= len(valueGroups) || len(valueGroups[i]) == 0 {
+					result[keyStr] = nil
+					continue
+				}
+				nested, err := reconstructNestedByType(ctx, valueCol, valueGroups[i])
+				if err != nil {
+					return nil, err
+				}
+				result[keyStr] = nested
 			}
+			return result, nil
 		}
-		if len(currentGroup) > 0 {
-			valueGroups = append(valueGroups, currentGroup)
-		}
+
+		// Group each leaf column independently before merging by entry ordinal.
+		// The first value in a column can have repetition level zero even when
+		// another leaf column already emitted values for the same map entry.
+		// Grouping the column-major stream as one sequence would split one
+		// nested value into multiple map entries.
+		valueGroups := groupNestedValuesByOuterRepetition(
+			valueCol,
+			collectLeafColumns(valueCol),
+			values,
+		)
 
 		for i, key := range keys {
+			if key.IsNull() {
+				return nil, moerr.NewInvalidInput(ctx, "parquet map key cannot be NULL")
+			}
 			keyStr := stringifyMapKey(key)
 			if _, exists := result[keyStr]; exists {
 				return nil, moerr.NewInternalErrorf(ctx, "duplicate map key: %s", keyStr)
@@ -657,6 +966,51 @@ func reconstructMap(ctx context.Context, col *parquet.Column, values []parquet.V
 	}
 
 	return result, nil
+}
+
+func collectMapKeys(ctx context.Context, keyCol *parquet.Column, values []parquet.Value) ([]parquet.Value, error) {
+	keyValues := make([]parquet.Value, 0)
+	for _, value := range values {
+		if value.Column() == keyCol.Index() {
+			keyValues = append(keyValues, value)
+		}
+	}
+
+	hasPresentKey := false
+	for _, key := range keyValues {
+		if !key.IsNull() {
+			hasPresentKey = true
+			break
+		}
+	}
+	if hasPresentKey {
+		for _, key := range keyValues {
+			if key.IsNull() {
+				return nil, moerr.NewInvalidInput(ctx, "parquet map key cannot be NULL")
+			}
+		}
+		return keyValues, nil
+	}
+
+	// A repeated key_value group that is absent is represented by NULL
+	// placeholders at the definition level immediately before that group.
+	// Treat the whole row as an empty map only when every key is such a
+	// placeholder and no value leaf proves that an entry was present.
+	emptyLevel := keyCol.MaxDefinitionLevel() - 1
+	for _, key := range keyValues {
+		if key.DefinitionLevel() != emptyLevel {
+			return nil, moerr.NewInvalidInput(ctx, "parquet map key cannot be NULL")
+		}
+	}
+	for _, value := range values {
+		if value.Column() == keyCol.Index() {
+			continue
+		}
+		if !value.IsNull() || value.DefinitionLevel() > emptyLevel {
+			return nil, moerr.NewInvalidInput(ctx, "parquet map key cannot be NULL")
+		}
+	}
+	return nil, nil
 }
 
 // stringifyMapKey converts map key to string
@@ -715,12 +1069,20 @@ func filterValuesByColumn(values []parquet.Value, col *parquet.Column) []parquet
 
 // reconstructNestedByType reconstructs nested structure by type
 func reconstructNestedByType(ctx context.Context, col *parquet.Column, values []parquet.Value) (any, error) {
+	if col.Optional() && isNestedColumnNull(values, col) {
+		return nil, nil
+	}
+
 	logicalType := col.Type().LogicalType()
 	if logicalType != nil {
 		if logicalType.List != nil {
 			return reconstructList(ctx, col, values)
 		}
 		if logicalType.Map != nil {
+			children := col.Columns()
+			if len(children) == 1 {
+				return reconstructMap(ctx, children[0], values)
+			}
 			return reconstructMap(ctx, col, values)
 		}
 	}

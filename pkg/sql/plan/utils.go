@@ -3179,23 +3179,54 @@ func NormalizePrepareParamRefs(ctx context.Context, preparePlan *Plan) error {
 	if preparePlan == nil || preparePlan.GetQuery() == nil {
 		return nil
 	}
+	query := preparePlan.GetQuery()
 	rule := &decrementParamOrdinalRule{
 		seen:         make(map[*plan.ParamRef]struct{}),
 		seenFallback: make(map[*plan.Expr]struct{}),
 	}
-	visit := NewVisitPlan(preparePlan, []VisitPlanRule{rule})
+	subqueryRoots := newSubqueryRootRule()
+	rules := []VisitPlanRule{rule, subqueryRoots}
+	visit := NewVisitPlan(preparePlan, rules)
 	if err := visit.Visit(ctx); err != nil {
 		return err
 	}
-	for i := range preparePlan.GetQuery().Params {
+	for i := range query.Params {
 		var err error
-		preparePlan.GetQuery().Params[i], err = rule.ApplyExpr(preparePlan.GetQuery().Params[i])
+		query.Params[i], err = subqueryRoots.ApplyExpr(query.Params[i])
+		if err != nil {
+			return err
+		}
+		query.Params[i], err = rule.ApplyExpr(query.Params[i])
 		if err != nil {
 			return err
 		}
 	}
-	return visitMissingNodeExprs(
-		preparePlan.GetQuery(), preparePlan.GetQuery().Steps, []VisitPlanRule{rule})
+	if err := visitMissingNodeExprs(query, query.Steps, rules); err != nil {
+		return err
+	}
+
+	visitedRoots := make(map[int32]struct{})
+	for len(subqueryRoots.pending) > 0 {
+		root := subqueryRoots.pending[0]
+		subqueryRoots.pending = subqueryRoots.pending[1:]
+		if _, ok := visitedRoots[root]; ok {
+			continue
+		}
+		if root < 0 || int(root) >= len(query.Nodes) {
+			return moerr.NewInternalErrorf(ctx, "missing query root %d for prepared subquery", root)
+		}
+		visitedRoots[root] = struct{}{}
+		queryCopy := *query
+		queryCopy.Steps = []int32{root}
+		queryPlan := &Plan{Plan: &plan.Plan_Query{Query: &queryCopy}}
+		if err := NewVisitPlan(queryPlan, rules).Visit(ctx); err != nil {
+			return err
+		}
+		if err := visitMissingNodeExprs(&queryCopy, queryCopy.Steps, rules); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func resetPreparePlan(
@@ -3224,14 +3255,46 @@ func resetPreparePlan(
 	resetQuery := func(query *Query) ([]*plan.ObjectRef, []int32, error) {
 		queryPlan := &Plan{Plan: &plan.Plan_Query{Query: query}}
 		getParamRule := NewGetParamRule()
-		visitQuery := NewVisitPlan(queryPlan, []VisitPlanRule{getParamRule})
+		subqueryRoots := newSubqueryRootRule()
+		visitQuery := NewVisitPlan(queryPlan, []VisitPlanRule{getParamRule, subqueryRoots})
 		if err := visitQuery.Visit(ctx.GetContext()); err != nil {
 			return nil, nil, err
 		}
 		for i := range query.Params {
 			var err error
+			query.Params[i], err = subqueryRoots.ApplyExpr(query.Params[i])
+			if err != nil {
+				return nil, nil, err
+			}
 			query.Params[i], err = getParamRule.ApplyExpr(query.Params[i])
 			if err != nil {
+				return nil, nil, err
+			}
+		}
+
+		// Scalar subquery plans are referenced by Expr_Sub.NodeId rather than
+		// linked through the writer's Children list. Visit each referenced root
+		// so parameters in its projection/filter remain part of the prepared
+		// statement, including nested subqueries in a discarded ODKU RHS.
+		visitedRoots := make(map[int32]struct{})
+		rootOrder := make([]int32, 0)
+		for len(subqueryRoots.pending) > 0 {
+			root := subqueryRoots.pending[0]
+			subqueryRoots.pending = subqueryRoots.pending[1:]
+			if _, ok := visitedRoots[root]; ok {
+				continue
+			}
+			if root < 0 || int(root) >= len(query.Nodes) {
+				return nil, nil, moerr.NewInternalErrorf(
+					ctx.GetContext(), "missing query root %d for prepared subquery", root)
+			}
+			visitedRoots[root] = struct{}{}
+			rootOrder = append(rootOrder, root)
+			queryCopy := *query
+			queryCopy.Steps = []int32{root}
+			queryPlan = &Plan{Plan: &plan.Plan_Query{Query: &queryCopy}}
+			visitQuery = NewVisitPlan(queryPlan, []VisitPlanRule{getParamRule, subqueryRoots})
+			if err := visitQuery.Visit(ctx.GetContext()); err != nil {
 				return nil, nil, err
 			}
 		}
@@ -3245,9 +3308,19 @@ func resetPreparePlan(
 		querySchemas = appendPrepareSchemas(querySchemas, query.GetCatalogDependencies()...)
 
 		resetParamRule := NewResetParamOrderRule(args)
+		queryPlan = &Plan{Plan: &plan.Plan_Query{Query: query}}
 		visitQuery = NewVisitPlan(queryPlan, []VisitPlanRule{resetParamRule})
 		if err := visitQuery.Visit(ctx.GetContext()); err != nil {
 			return nil, nil, err
+		}
+		for _, root := range rootOrder {
+			queryCopy := *query
+			queryCopy.Steps = []int32{root}
+			queryPlan = &Plan{Plan: &plan.Plan_Query{Query: &queryCopy}}
+			visitQuery = NewVisitPlan(queryPlan, []VisitPlanRule{resetParamRule})
+			if err := visitQuery.Visit(ctx.GetContext()); err != nil {
+				return nil, nil, err
+			}
 		}
 		for i := range query.Params {
 			var err error
@@ -4109,6 +4182,12 @@ func (rule *preparedRuntimeSpecializationScanRule) scanExpr(expr *plan.Expr, roo
 			return
 		}
 		name := strings.ToLower(exprImpl.F.Func.GetObjName())
+		if isPreparedGeometrySRIDFunction(name) && len(exprImpl.F.Args) >= 2 {
+			if len(preparedGeometrySRIDParamPositionsInExpr(exprImpl.F.Args[len(exprImpl.F.Args)-1])) > 0 {
+				rule.needs = true
+				return
+			}
+		}
 		if name == "bit_count" && len(exprImpl.F.Args) == 1 &&
 			isPreparedNumericFallbackExpr(exprImpl.F.Args[0]) {
 			// BIT_COUNT has its own value-aware trigger; text/BLOB executions keep
@@ -4161,6 +4240,218 @@ func (rule *preparedRuntimeSpecializationScanRule) scanExpr(expr *plan.Expr, roo
 			for _, item := range exprImpl.List.List {
 				rule.scanExpr(item, false)
 			}
+		}
+	}
+}
+
+// PreparedPlanGeometrySRIDParamPositions returns the direct prepared markers
+// that own geometry SRID metadata. The positions are part of the runtime cache
+// key because two executions with the same scalar parameter type can still
+// produce different geometry result types (for example SRID 0 and 4326).
+func PreparedPlanGeometrySRIDParamPositions(preparePlan *Plan) []int32 {
+	sridPositions, _ := PreparedPlanGeometrySRIDCacheParamPositions(preparePlan)
+	return sridPositions
+}
+
+// PreparedPlanGeometrySRIDSourceParamPositions returns the prepared markers at
+// the geometry input of explicit-SRID constructors. A typed runtime NULL at
+// these positions changes the result metadata to an undefined SRID even when
+// the explicit SRID is a constant.
+func PreparedPlanGeometrySRIDSourceParamPositions(preparePlan *Plan) []int32 {
+	_, sourcePositions := PreparedPlanGeometrySRIDCacheParamPositions(preparePlan)
+	return sourcePositions
+}
+
+// PreparedPlanGeometrySRIDCacheParamPositions collects both classes of
+// geometry-SRID cache dependencies in one plan walk. Callers that execute a
+// prepared statement repeatedly should retain the returned slices for the
+// lifetime of that prepared-plan generation.
+func PreparedPlanGeometrySRIDCacheParamPositions(preparePlan *Plan) ([]int32, []int32) {
+	if preparePlan == nil {
+		return nil, nil
+	}
+	sridPositions := make(map[int32]struct{})
+	sourcePositions := make(map[int32]struct{})
+	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
+		collectPreparedGeometrySRIDPositions(expr, sridPositions, sourcePositions)
+		return nil
+	})
+	return sortedPreparedGeometrySRIDPositions(sridPositions),
+		sortedPreparedGeometrySRIDPositions(sourcePositions)
+}
+
+func sortedPreparedGeometrySRIDPositions(positions map[int32]struct{}) []int32 {
+	result := make([]int32, 0, len(positions))
+	for position := range positions {
+		result = append(result, position)
+	}
+	slices.Sort(result)
+	return result
+}
+
+// PreparedPlanGeometrySRIDSemanticKey adds the value-dependent part of the
+// runtime cache key for prepared geometry SRID setters/constructors. The
+// regular prepared key intentionally groups values by scalar domain; geometry
+// Width is metadata and therefore must distinguish each SRID value.
+func PreparedPlanGeometrySRIDSemanticKey(preparePlan *Plan, paramVals []any) string {
+	sridPositions, sourcePositions := PreparedPlanGeometrySRIDCacheParamPositions(preparePlan)
+	return PreparedPlanGeometrySRIDSemanticKeyForPositions(paramVals, sridPositions, sourcePositions)
+}
+
+// PreparedPlanGeometrySRIDSemanticKeyForPositions encodes the runtime values
+// for precomputed geometry-SRID dependencies. Keeping plan discovery separate
+// from value encoding lets EXECUTE avoid walking an otherwise unrelated plan.
+func PreparedPlanGeometrySRIDSemanticKeyForPositions(
+	paramVals []any, sridPositions, sourcePositions []int32,
+) string {
+	if len(sridPositions) == 0 && len(sourcePositions) == 0 {
+		return ""
+	}
+	var key strings.Builder
+	for _, position := range sridPositions {
+		if position < 0 || int(position) >= len(paramVals) {
+			return ""
+		}
+		param, ok := paramVals[position].(ParamValue)
+		if !ok {
+			return ""
+		}
+		if preparedParamValueIsNull(param) {
+			fmt.Fprintf(&key, "geometry-srid:%d:null;", position)
+			continue
+		}
+		rawValue := param.MaterializedValue
+		if rawValue == "" && param.Value != nil {
+			switch value := param.Value.(type) {
+			case []byte:
+				rawValue = string(value)
+			default:
+				rawValue = fmt.Sprint(value)
+			}
+		}
+		// Encode the value length as well as its contents.  The explicit NULL
+		// token keeps a user value such as "<null>" from aliasing a typed
+		// protocol NULL, while the length keeps delimiters in a value from
+		// colliding with the next cache-key field.
+		fmt.Fprintf(&key, "geometry-srid:%d:value:%d:%s;", position, len(rawValue), rawValue)
+	}
+	// A NULL geometry source can make the binder produce an undefined-SRID
+	// result even when the SRID marker itself is valid. That metadata decision
+	// is part of the specialized plan, so a typed protocol NULL and a non-NULL
+	// payload must not share one cache category merely because their physical
+	// source type is the same (for example BLOB NULL -> WKB).
+	for _, position := range sourcePositions {
+		if position < 0 || int(position) >= len(paramVals) {
+			return ""
+		}
+		param, ok := paramVals[position].(ParamValue)
+		if !ok {
+			return ""
+		}
+		fmt.Fprintf(&key, "geometry-source-null:%d:%t;", position, preparedParamValueIsNull(param))
+	}
+	return key.String()
+}
+
+func preparedParamValueIsNull(param ParamValue) bool {
+	return param.Value == nil && param.MaterializedValue == ""
+}
+
+func collectPreparedGeometrySRIDSourceParamPositions(expr *plan.Expr, positions map[int32]struct{}) {
+	collectPreparedGeometryParamPositions(expr, positions)
+}
+
+func collectPreparedGeometrySRIDPositions(
+	expr *plan.Expr,
+	sridPositions map[int32]struct{},
+	sourcePositions map[int32]struct{},
+) {
+	if expr == nil {
+		return
+	}
+	if fn := expr.GetF(); fn != nil {
+		if fn.Func != nil && isGeometrySRIDProducingFunction(fn.Func.GetObjName()) && len(fn.Args) >= 2 {
+			if sridPositions != nil && isPreparedGeometrySRIDFunction(fn.Func.GetObjName()) {
+				for _, position := range preparedGeometrySRIDParamPositionsInExpr(fn.Args[len(fn.Args)-1]) {
+					sridPositions[position] = struct{}{}
+				}
+			}
+			if sourcePositions != nil {
+				collectPreparedGeometrySRIDSourceParamPositions(fn.Args[0], sourcePositions)
+			}
+		}
+		for _, arg := range fn.Args {
+			collectPreparedGeometrySRIDPositions(arg, sridPositions, sourcePositions)
+		}
+	}
+	if window := expr.GetW(); window != nil {
+		collectPreparedGeometrySRIDPositions(window.WindowFunc, sridPositions, sourcePositions)
+		for _, arg := range window.PartitionBy {
+			collectPreparedGeometrySRIDPositions(arg, sridPositions, sourcePositions)
+		}
+		for _, order := range window.OrderBy {
+			if order != nil {
+				collectPreparedGeometrySRIDPositions(order.Expr, sridPositions, sourcePositions)
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			collectPreparedGeometrySRIDPositions(item, sridPositions, sourcePositions)
+		}
+	}
+	if sub := expr.GetSub(); sub != nil {
+		collectPreparedGeometrySRIDPositions(sub.Child, sridPositions, sourcePositions)
+	}
+}
+
+func preparedGeometrySRIDParamPositionsInExpr(expr *plan.Expr) []int32 {
+	positions := make(map[int32]struct{})
+	collectPreparedGeometryParamPositions(expr, positions)
+	result := make([]int32, 0, len(positions))
+	for position := range positions {
+		result = append(result, position)
+	}
+	slices.Sort(result)
+	return result
+}
+
+func collectPreparedGeometryParamPositions(expr *plan.Expr, positions map[int32]struct{}) {
+	if expr == nil {
+		return
+	}
+	if param := expr.GetP(); param != nil && param.Pos >= 0 {
+		positions[param.Pos] = struct{}{}
+		return
+	}
+	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_F:
+		if exprImpl.F != nil {
+			for _, arg := range exprImpl.F.Args {
+				collectPreparedGeometryParamPositions(arg, positions)
+			}
+		}
+	case *plan.Expr_W:
+		if exprImpl.W != nil {
+			collectPreparedGeometryParamPositions(exprImpl.W.WindowFunc, positions)
+			for _, arg := range exprImpl.W.PartitionBy {
+				collectPreparedGeometryParamPositions(arg, positions)
+			}
+			for _, order := range exprImpl.W.OrderBy {
+				if order != nil {
+					collectPreparedGeometryParamPositions(order.Expr, positions)
+				}
+			}
+		}
+	case *plan.Expr_List:
+		if exprImpl.List != nil {
+			for _, item := range exprImpl.List.List {
+				collectPreparedGeometryParamPositions(item, positions)
+			}
+		}
+	case *plan.Expr_Sub:
+		if exprImpl.Sub != nil {
+			collectPreparedGeometryParamPositions(exprImpl.Sub.Child, positions)
 		}
 	}
 }
