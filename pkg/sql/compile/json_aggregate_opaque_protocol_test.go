@@ -15,13 +15,19 @@
 package compile
 
 import (
+	"os"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
+	queryclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -69,8 +75,10 @@ func TestJSONAggregateOpaqueRejectsPreviousCapability(t *testing.T) {
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
 	worker := engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 
-	// MORPC v75 and v76 do not include this aggregate executor.
-	for _, version := range []int64{defines.MORPCVersion75, defines.MORPCVersion76} {
+	// Current main v80 and the reserved v81 do not include this aggregate
+	// executor. The gate must not reuse a version already assigned to another
+	// wire contract.
+	for _, version := range []int64{defines.MORPCVersion80, defines.MORPCVersion81} {
 		client.version = version
 		c.execType = plan2.ExecTypeAP_MULTICN
 		c.cnList = worker
@@ -93,26 +101,26 @@ func TestJSONAggregateOpaqueRejectsPreviousCapability(t *testing.T) {
 	// sender's destination probe is the failing boundary.
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 	_, err := encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "MORPC protocol version 77")
+	require.ErrorContains(t, err, "MORPC protocol version 82")
 
 	wire := jsonAggregateOpaqueTestPipeline()
 	// The receiver-side gates must reject the same lowered plan from either
-	// pre-aggregate capability.
-	for _, version := range []int64{defines.MORPCVersion75, defines.MORPCVersion76} {
+	// current-main or the reserved pre-aggregate capability.
+	for _, version := range []int64{defines.MORPCVersion80, defines.MORPCVersion81} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		require.ErrorContains(t,
 			validateJSONAggregateOpaquePipelineProtocol(c.proc, wire),
-			"MORPC protocol version 77")
+			"MORPC protocol version 82")
 		require.ErrorContains(t,
 			validateJSONAggregateOpaqueAggregateProtocol(c.proc,
 				[]aggexec.AggFuncExecExpression{jsonAggregateOpaqueTestAgg()}),
-			"MORPC protocol version 77")
+			"MORPC protocol version 82")
 	}
 
-	// A v77 peer is admitted by every boundary, proving the new gate matches
+	// A v82 peer is admitted by every boundary, proving the new gate matches
 	// the aggregate implementation carried by this branch.
-	client.version = defines.MORPCVersion77
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion77)
+	client.version = defines.MORPCVersion82
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion82)
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = worker
 	require.NoError(t, c.constrainJSONAggregateOpaqueWorkers(qry))
@@ -120,6 +128,119 @@ func TestJSONAggregateOpaqueRejectsPreviousCapability(t *testing.T) {
 	require.NoError(t, validateJSONAggregateOpaquePipelineProtocol(c.proc, wire))
 	require.NoError(t, validateJSONAggregateOpaqueAggregateProtocol(c.proc,
 		[]aggexec.AggFuncExecExpression{jsonAggregateOpaqueTestAgg()}))
+}
+
+func TestJSONAggregateOpaqueRealMixedVersionPeer(t *testing.T) {
+	c := NewMockCompile(t)
+	c.addr = "local:6001"
+	c.ncpu = 4
+	coordinatorService := c.proc.GetService()
+	rt := moruntime.ServiceRuntime(coordinatorService)
+	oldVersion, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	oldCluster, hadCluster := rt.GetGlobalVariables(moruntime.ClusterService)
+
+	workerID := "json-aggregate-opaque-real-peer"
+	workerPipelineAddress := "json-aggregate-opaque-real-peer:pipeline"
+	workerQueryAddress := "unix:///tmp/mo-json-opaque-real-peer.sock"
+	require.NoError(t, os.RemoveAll(workerQueryAddress[len("unix://"):]))
+	workerRT := moruntime.ServiceRuntime(workerID)
+	if workerRT == nil {
+		moruntime.SetupServiceBasedRuntime(workerID, moruntime.DefaultRuntime())
+		workerRT = moruntime.ServiceRuntime(workerID)
+	}
+	oldWorkerVersion, hadWorkerVersion := workerRT.GetGlobalVariables(moruntime.MOProtocolVersion)
+	workerRT.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion80)
+
+	cluster := clusterservice.NewMOCluster(
+		coordinatorService,
+		nil,
+		0,
+		clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices([]metadata.CNService{{
+			ServiceID:              workerID,
+			QueryAddress:           workerQueryAddress,
+			PipelineServiceAddress: workerPipelineAddress,
+		}}, nil))
+	rt.SetGlobalVariables(moruntime.ClusterService, cluster)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion82)
+
+	qs, err := queryservice.NewQueryService(workerID, workerQueryAddress, morpc.Config{})
+	require.NoError(t, err)
+	require.NoError(t, qs.Start())
+	queryClient, err := queryclient.NewQueryClient(coordinatorService, morpc.Config{})
+	require.NoError(t, err)
+	c.proc.Base.QueryClient = queryClient
+
+	worker := engine.Nodes{{
+		Id:   workerID,
+		Addr: workerPipelineAddress,
+		Mcpu: 4,
+	}}
+	qry := jsonAggregateOpaqueTestQuery()
+	t.Cleanup(func() {
+		require.NoError(t, queryClient.Close())
+		require.NoError(t, qs.Close())
+		cluster.Close()
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		if hadWorkerVersion {
+			workerRT.SetGlobalVariables(moruntime.MOProtocolVersion, oldWorkerVersion)
+		} else {
+			workerRT.CompareAndDeleteGlobalVariables(
+				moruntime.MOProtocolVersion, defines.MORPCVersion82)
+		}
+		if hadCluster {
+			rt.SetGlobalVariables(moruntime.ClusterService, oldCluster)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.ClusterService, cluster)
+		}
+	})
+
+	// This is a real query-service MORPC peer. Its advertised v80 is the
+	// current-main capability boundary, so the coordinator must fail closed
+	// and fall back to one CN instead of trusting a local mock response.
+	supported, err := remoteWorkersSupportProtocol(
+		c.proc, worker, defines.MORPCVersion82)
+	require.NoError(t, err)
+	require.False(t, supported)
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.cnList = worker
+	require.NoError(t, c.constrainJSONAggregateOpaqueWorkers(qry))
+	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+	require.Equal(t, c.addr, c.cnList[0].Addr)
+
+	scope := &Scope{
+		Magic:    Remote,
+		Proc:     c.proc,
+		NodeInfo: worker[0],
+		RootOp:   value_scan.NewArgument(),
+		Plan:     &planpb.Plan{Plan: &planpb.Plan_Query{Query: qry}},
+	}
+	t.Cleanup(scope.release)
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.ErrorContains(t, err, "MORPC protocol version 82")
+
+	// Rolling the same live peer to v82 makes the real destination probe and
+	// placement admission succeed. The receiver-local gate is checked at both
+	// advertised versions as well.
+	workerRT.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion82)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion80)
+	wire := jsonAggregateOpaqueTestPipeline()
+	require.ErrorContains(t,
+		validateJSONAggregateOpaquePipelineProtocol(c.proc, wire),
+		"MORPC protocol version 82")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion82)
+	require.NoError(t, validateJSONAggregateOpaquePipelineProtocol(c.proc, wire))
+
+	supported, err = remoteWorkersSupportProtocol(
+		c.proc, worker, defines.MORPCVersion82)
+	require.NoError(t, err)
+	require.True(t, supported)
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.cnList = worker
+	require.NoError(t, c.constrainJSONAggregateOpaqueWorkers(qry))
+	require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.NoError(t, err)
 }
 
 func jsonAggregateOpaqueTestQuery() *planpb.Query {
