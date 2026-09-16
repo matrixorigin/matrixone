@@ -1,15 +1,17 @@
 # PR #28523: String Math Numeric Coercion and Prepared-Parameter Roles
 
 - Status: Draft / awaiting maintainer approval
-- Design revision: 4
+- Design revision: 5
 - Issue: [#28487](https://github.com/matrixorigin/matrixone/issues/28487)
 - Implementation PR: [#28523](https://github.com/matrixorigin/matrixone/pull/28523)
-- Implementation snapshot reviewed by this revision: `582a956c61` (rebased candidate; the
-  revision-4 benchmark is test-only and does not change runtime semantics)
-- Rebased implementation base: `2ea4ec2e6ef4b20321a235ef416228506813e39b`
-- Independent design review: GPT-6 Astra, medium reasoning; revision 4 records the
-  requested decisions and measurements, while exact maintainer approval remains pending
-- Review trigger: review `5199052257` identified a major-refactor/compatibility design gate
+- Implementation snapshot reviewed by this revision: `5b9766413c` (post-rebase
+  code/tests baseline; the revision-4 benchmark is test-only and does not
+  change runtime semantics)
+- Rebased implementation base: `01d60e1c4ded1b0f3fc1a4ecd75ce54e95e23b90`
+- Independent design review: GPT-6 Astra, medium reasoning; revision 5 records the
+  requested mode-boundary decision and validation additions, while exact maintainer
+  approval remains pending
+- Review trigger: review `5199052257` identified a major-refactor/compatibility design gate; review `5214666396` and comment `5687377735` require incomplete numeric strings to be mode-gated
 
 This document is the stable design revision requested before implementation
 approval. It must not be read as a maintainer approval until the approval
@@ -90,16 +92,27 @@ Only value arguments may use the permissive string-to-`DOUBLE` source. The
 
 ### 2.3 Compatibility mode, binary provenance, and warnings
 
-In MySQL compatibility mode, character value inputs preserve numeric prefixes
-and fractional digits (`'1.5tail'` becomes `1.5`), non-numeric input becomes
-zero with the applicable truncation warning, and an empty string retains the
-existing zero/no-warning behavior. NULL and masked rows do not create extra
-conversion warnings.
+The latest review feedback (review `5214666396`, comment `5687377735`) makes
+the mode boundary explicit: a character value with a suffix such as
+`'1.5tail'` must not be converted permissively unless MySQL compatibility is
+selected. The existing `MATRIXONE_NATIVE` SQL-mode bit is the selector:
 
-In MatrixOne native mode, existing native string-to-number rules remain the
-source of truth. Historical serialized CEIL/FLOOR VARCHAR overloads must also
-derive the process compatibility mode; they must not hardcode MySQL mode or
-emit MySQL-only warnings in native mode.
+| Effective process mode | `'1.5tail'` and other incomplete tokens |
+| --- | --- |
+| MySQL compatibility (the bit is absent) | Consume the decimal prefix and emit the existing truncation warning. A wholly non-numeric value becomes zero with a warning; an empty string remains zero without a warning. |
+| MatrixOne native (`MATRIXONE_NATIVE` is present) | Reject the incomplete, non-numeric, or empty token with the native conversion error and emit no MySQL truncation warning. |
+
+The default SQL mode currently omits `MATRIXONE_NATIVE`, so the default session
+continues to use the established MySQL-compatible contract. This is a
+compatibility-gated behavior, not a global default change; callers requiring
+the stricter rule must select `MATRIXONE_NATIVE`. NULL and masked rows do not
+create extra conversion warnings in either mode.
+
+Historical serialized CEIL/FLOOR VARCHAR overloads must derive this process
+compatibility mode as well. They must not hardcode MySQL mode or emit
+MySQL-only warnings in native mode. Every direct string executor and the
+prepared/cast path is required to make the same mode decision at execution
+time.
 
 HEX/BIT source provenance remains observable: `X'31'` is interpreted by its
 binary value (49), not as character text (`'1'`). Ordinary binary string types
@@ -144,7 +157,7 @@ prepare role/source classification
 String-to-number conversion is not monotonic under string ordering. For
 `'10'`, `'2'`, and `'30'`, string endpoints cannot prove the numeric interval
 contains or excludes `2`. Therefore CEIL/FLOOR/ROUND string paths do not expose
-a function-wide zonemap flag. The revision-4 decision proposal is to accept the
+a function-wide zonemap flag. The revision-5 decision proposal is to accept the
 loss of those numeric pruning opportunities for this PR because correctness is
 observable and the old flag could prune matching rows. A future
 overload-aware monotonicity proof may restore safe pruning independently; no
@@ -157,7 +170,7 @@ at least `O(P*N)` and can approach `O(P*N*D)` (or `O(P*N^2)` for repeated deep
 subtree checks). Source arrays are `O(P)`, while traversal state follows
 expression depth. The implementation does not claim zero specialization cost.
 
-Revision-4 measurement (Apple M1, macOS arm64, Go 1.27.0; one CPU;
+Revision-4 measurement (retained in revision 5; Apple M1, macOS arm64, Go 1.27.0; one CPU;
 `-benchtime=1s -count=5`) used reproducible benchmark commands:
 
 ```text
@@ -233,24 +246,28 @@ authorized maintainer decision.
 | --- | --- |
 | String prefix and type families | planner/function tests plus literal, VARCHAR/CHAR/TEXT column, and SQL EXECUTE paths |
 | Binary provenance | direct/prepared HEX/BIT controls and result assertions |
-| Warnings and native mode | warning-session tests and historical CEIL/FLOOR overload-12 tests in both modes |
+| Warnings and native mode | warning-session tests plus direct ABS/SIGN/CEIL/FLOOR/ROUND/TRUNCATE and historical CEIL/FLOOR overload-12 tests in both modes; incomplete tokens must fail only under `MATRIXONE_NATIVE` |
 | Precision role isolation | direct/prepared ROUND/TRUNCATE, nested expressions, explicit casts, INT64 plan assertions |
 | Native precision sources | BOOL, integer, DECIMAL, and FLOAT SQL sources; result and plan metadata comparison |
 | Cache/reuse | parameter type changes, repeated executions, error -> success -> NULL -> success, and source restoration |
 | Unknown/old identities | negative/unknown/out-of-range function and overload IDs; old identity lookup without panic |
 | Zonemap equivalence | string blocks containing endpoint traps; matching rows must not be pruned |
-| Distributed/compatibility | Compose and standalone BVT, cross-CN index controls, and serialization-boundary review |
+| Distributed/compatibility | Compose and standalone BVT, explicit MySQL/native SQL-mode BVT controls for literal/column/prepared paths, cross-CN index controls, and serialization-boundary review |
 | Resource/state safety | race tests, cancellation/error return paths, and no stale expression reuse after failure |
 | Performance | parameterized plan-size/depth measurements before any scan optimization |
 
 The pre-rebase head `85635cc` passed the required CI run
 `34813866468` (SCA, Ubuntu UT, coverage, build, Compose/Standalone BVT, and
- CI Required); that run is historical and is not evidence for the rebased head.
-After rebasing first to `7ffce04a`, then `a72a224c`, `0c3a04f3`, and finally
-current `2ea4ec2e`, local CGo validation passed the full
-`pkg/sql/plan/function` and `pkg/sql/plan` packages, the prepared numeric
-`-race` focus, the string-math/overload focus, and the three issue regressions;
-remote post-rebase CI remains required.
+CI Required); that run is historical and is not evidence for the current head.
+After rebasing onto current `main` `01d60e1c4d`, local validation passed the
+full `pkg/sql/plan/function`, `pkg/sql/plan`, and `pkg/frontend` packages, the
+prepared numeric `-race` focus, the string-math/overload focus, the SQL-mode
+setter regression, `go vet` with repository CGo headers, `make build`, and
+`git diff --check`. A direct current-source MySQL-protocol smoke recorded in
+the validation log also observed `ABS('1.5tail') = 1.5` with `sql_mode=''`, the native conversion
+error with `MATRIXONE_NATIVE`, and the same success/error/success sequence
+after a prepared-statement mode flip. The new distributed fixture remains a
+remote CI/BVT obligation rather than an unrun local claim.
 
 Known limitations: strict string precision behavior is intentionally not a
 claim of full MySQL integer-prefix compatibility; no unrun upgrade/downgrade
@@ -261,17 +278,17 @@ outside this scope.
 
 ```text
 Design path: docs/design/pr28523-string-math-coercion.md
-Design revision: 4
-Implementation baseline: 582a956c61 (rebased candidate)
-Rebased base: 2ea4ec2e6ef4b20321a235ef416228506813e39b
-Scope/trigger: PR review 5199052257; >500 production lines and planner/plan compatibility boundary
+Design revision: 5
+Implementation baseline: 5b9766413c (post-rebase code/tests baseline)
+Rebased base: 01d60e1c4ded1b0f3fc1a4ecd75ce54e95e23b90
+Scope/trigger: PR reviews 5199052257, 5214666396 and comment 5687377735; >500 production lines and planner/plan compatibility boundary
 Reviewer identity and role: GPT-6 Astra, medium reasoning, independent draft design review; final review pending after current-base rebase
 Review timestamp: 2026-09-15
 Decision: DRAFT / AWAITING MAINTAINER APPROVAL
 Resolved blockers: runtime review blockers and the requested scan-cost evidence are recorded; the process gate remains open until an authorized maintainer links approval of this exact revision
 Decisions proposed for maintainer acceptance: retain strict INT64 precision controls (no general integer-prefix widening); prefer correctness over function-wide zonemap pruning; retain the measured bounded scan and defer one-pass role collection
-Evidence links: [PR #28523](https://github.com/matrixorigin/matrixone/pull/28523); review [#5199052257](https://github.com/matrixorigin/matrixone/pull/28523#pullrequestreview-5199052257); historical CI run 34813866468; post-rebase local CGo validation and benchmark command/results recorded above
-Implementation deviations requiring follow-up: MOD native arithmetic widening regression fixed in 8fc4d5250; current-base final review and remote CI remain pending
+Evidence links: [PR #28523](https://github.com/matrixorigin/matrixone/pull/28523); review [#5199052257](https://github.com/matrixorigin/matrixone/pull/28523#pullrequestreview-5199052257); latest numeric-prefix review [#5214666396](https://github.com/matrixorigin/matrixone/pull/28523#pullrequestreview-5214666396); historical CI run 34813866468; post-rebase local CGo validation and benchmark command/results recorded above
+Implementation deviations requiring follow-up: MOD native arithmetic widening regression fixed in 8fc4d5250; incomplete-token mode gate is now covered by direct and distributed regressions; current-base final review and remote CI remain pending
 Approval link: pending maintainer review
 ```
 
