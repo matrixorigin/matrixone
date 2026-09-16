@@ -218,6 +218,11 @@ func (rule *GetParamRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			exprImpl.List.List[i], _ = rule.ApplyExpr(exprImpl.List.List[i])
 		}
 		return e, nil
+	case *plan.Expr_Sub:
+		if exprImpl.Sub != nil {
+			exprImpl.Sub.Child, _ = rule.ApplyExpr(exprImpl.Sub.Child)
+		}
+		return e, nil
 	default:
 		return e, nil
 	}
@@ -311,6 +316,11 @@ func (rule *ResetParamOrderRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			exprImpl.List.List[i], _ = rule.ApplyExpr(exprImpl.List.List[i])
 		}
 		return e, nil
+	case *plan.Expr_Sub:
+		if exprImpl.Sub != nil {
+			exprImpl.Sub.Child, _ = rule.ApplyExpr(exprImpl.Sub.Child)
+		}
+		return e, nil
 	default:
 		return e, nil
 	}
@@ -339,23 +349,13 @@ func (rule *subqueryRootRule) ApplyNode(_ *Node) error {
 }
 
 func (rule *subqueryRootRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
-	switch exprImpl := e.Expr.(type) {
-	case *plan.Expr_F:
-		for i := range exprImpl.F.Args {
-			exprImpl.F.Args[i], _ = rule.ApplyExpr(exprImpl.F.Args[i])
+	err := plan.VisitExprTree(e, func(expr *plan.Expr) error {
+		if sub := expr.GetSub(); sub != nil {
+			rule.pending = append(rule.pending, sub.NodeId)
 		}
-	case *plan.Expr_List:
-		for i := range exprImpl.List.List {
-			exprImpl.List.List[i], _ = rule.ApplyExpr(exprImpl.List.List[i])
-		}
-	case *plan.Expr_W:
-		if err := applyRuleToWindowSpec(rule, exprImpl.W); err != nil {
-			return nil, err
-		}
-	case *plan.Expr_Sub:
-		rule.pending = append(rule.pending, exprImpl.Sub.NodeId)
-	}
-	return e, nil
+		return nil
+	})
+	return e, err
 }
 
 // ---------------------------
@@ -419,6 +419,14 @@ func (rule *decrementParamOrdinalRule) ApplyExpr(e *plan.Expr) (*plan.Expr, erro
 			return nil, moerr.NewInternalErrorNoCtx("prepared parameter ordinal is not one-based")
 		}
 		exprImpl.P.Pos--
+	case *plan.Expr_Sub:
+		if exprImpl.Sub != nil && exprImpl.Sub.Child != nil {
+			var err error
+			exprImpl.Sub.Child, err = rule.ApplyExpr(exprImpl.Sub.Child)
+			if err != nil {
+				return nil, err
+			}
+		}
 	}
 	return e, nil
 }
@@ -2103,6 +2111,15 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					// for an invalid numeric string without raising a cast error.
 					source = DeepCopyExpr(rule.params[paramPos])
 				}
+				if functionName == "hex" && rule.sqlExecuteStringBackedParams[paramPos] {
+					// The shared numeric-source builder wraps a numeric-prefix SQL
+					// string in an explicit FLOAT64 cast. HEX instead owns a string
+					// operand as bytes, so restore the typed source below that wrapper.
+					if cast := source.GetF(); cast != nil && cast.GetFunc().GetObjName() == "cast" &&
+						len(cast.GetArgs()) > 0 {
+						source = cast.GetArgs()[0]
+					}
+				}
 				rewrittenArg = DeepCopyExpr(source)
 			} else {
 				var applyErr error
@@ -3571,6 +3588,13 @@ func preparedFunctionArgUsesSQLExecuteNumericSource(
 	argIndex int,
 	argCount int,
 ) bool {
+	// HEX owns the runtime domain of its sole argument: numeric source values
+	// use numeric conversion, while non-numeric strings retain byte encoding.
+	// The SQL EXECUTE source is materialized below without crossing an explicit
+	// user CAST boundary.
+	if name == "hex" {
+		return argIndex == 0 && argCount == 1
+	}
 	// A prepared TEXT marker can make result-selecting functions bind to a
 	// non-numeric envelope even though the execute-time SQL source is numeric.
 	// Decide from the argument's value role before consulting that provisional

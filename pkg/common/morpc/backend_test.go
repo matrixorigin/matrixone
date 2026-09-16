@@ -2632,6 +2632,117 @@ func TestBackendConnectTimeout(t *testing.T) {
 	require.Equal(t, err.Error(), terminalLogs[0].ContextMap()["error"])
 }
 
+type timeoutConnectSession struct {
+	*testIOSession
+	mu       sync.Mutex
+	failures int
+	timeouts []time.Duration
+	elapse   func(time.Duration)
+}
+
+func (s *timeoutConnectSession) Connect(_ string, timeout time.Duration) error {
+	s.mu.Lock()
+	s.timeouts = append(s.timeouts, timeout)
+	attempt := len(s.timeouts)
+	s.mu.Unlock()
+	if attempt > s.failures {
+		return nil
+	}
+	s.elapse(timeout)
+	return context.DeadlineExceeded
+}
+
+func (s *timeoutConnectSession) connectTimeouts() []time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]time.Duration(nil), s.timeouts...)
+}
+
+type connectTestClock struct {
+	mu  sync.Mutex
+	now time.Time
+}
+
+func newConnectTestClock() *connectTestClock {
+	return &connectTestClock{now: time.Unix(0, 0)}
+}
+
+func (c *connectTestClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now
+}
+
+func (c *connectTestClock) Advance(elapsed time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(elapsed)
+}
+
+func (c *connectTestClock) Wait(ctx context.Context, delay time.Duration) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+		c.Advance(delay)
+		return nil
+	}
+}
+
+func newConnectTimeoutTestBackend(
+	t *testing.T,
+	connectTimeout time.Duration,
+	failures int,
+) (*remoteBackend, *timeoutConnectSession, *connectTestClock) {
+	t.Helper()
+	clock := newConnectTestClock()
+	conn := &timeoutConnectSession{
+		testIOSession: newTestIOSession(nil, nil),
+		failures:      failures,
+		elapse:        clock.Advance,
+	}
+	t.Cleanup(func() { require.NoError(t, conn.Close()) })
+	readStopper := stopper.NewStopper(t.Name())
+	t.Cleanup(readStopper.Stop)
+	rb := &remoteBackend{
+		remote:      "temporarily-unreachable",
+		metrics:     newMetrics(t.Name()),
+		logger:      zap.NewNop(),
+		conn:        conn,
+		ctx:         context.Background(),
+		readStopper: readStopper,
+	}
+	rb.options.connectTimeout = connectTimeout
+	rb.options.connectAttemptTimeout = 50 * time.Millisecond
+	rb.options.connectNow = clock.Now
+	rb.options.connectWait = clock.Wait
+	rb.adjust()
+	return rb, conn, clock
+}
+
+func TestBackendConnectAttemptTimeoutRecoversOnRetry(t *testing.T) {
+	rb, conn, clock := newConnectTimeoutTestBackend(t, 1150*time.Millisecond, 1)
+
+	err := rb.resetConn()
+	require.NoError(t, err)
+	require.Equal(t,
+		[]time.Duration{50 * time.Millisecond, 50 * time.Millisecond},
+		conn.connectTimeouts(),
+		"the first attempt must time out without consuming the second attempt's budget")
+	require.Equal(t, 1050*time.Millisecond, clock.Now().Sub(time.Unix(0, 0)))
+}
+
+func TestBackendConnectAttemptTimeoutHonorsTotalBudget(t *testing.T) {
+	rb, conn, clock := newConnectTimeoutTestBackend(t, 1075*time.Millisecond, 2)
+
+	err := rb.resetConn()
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrRPCTimeout), err)
+	require.Equal(t,
+		[]time.Duration{50 * time.Millisecond, 25 * time.Millisecond},
+		conn.connectTimeouts())
+	require.Equal(t, 1075*time.Millisecond, clock.Now().Sub(time.Unix(0, 0)))
+}
+
 func TestInactiveAfterCannotConnect(t *testing.T) {
 	app := newTestApp(t, func(conn goetty.IOSession, msg interface{}, _ uint64) error {
 		return conn.Write(msg, goetty.WriteOptions{Flush: true})

@@ -24,8 +24,8 @@ import (
 )
 
 func TestArrowLoadForceMaterializeFallback(t *testing.T) {
-	c := startArrowLoadClusterWithForceModes(t)
 	path, _ := fixtureForceMaterialize(t)
+	c := startArrowLoadClusterWithForceModes(t)
 
 	t.Run("borrow", func(t *testing.T) {
 		borrowDB := openArrowLoadDB(t, c, 0)
