@@ -49,10 +49,30 @@ select sum(part_sum) from (
     select sum(v) over (partition by k) as part_sum from t
 ) q;
 
+-- Run the partition-sensitive Window result oracles under HASH as well. The
+-- following SORT block is the optimization-disabled control for the same
+-- fixture, so each physical choice must preserve the public result contract.
+select sum(rnk) from (
+    select rank() over (partition by k order by v) as rnk from t
+) q;
+select sum(first_v) from (
+    select first_value(v) over (partition by k order by v) as first_v from t
+) q;
+select sum(frame_sum) from (
+    select sum(v) over (
+        partition by k order by v rows between 1 preceding and current row
+    ) as frame_sum from t
+) q;
+select sum(frame_sum) from (
+    select sum(v) over (
+        partition by k order by v range between 50 preceding and current row
+    ) as frame_sum from t
+) q;
+
 set window_partition_algorithm = default;
 select @@window_partition_algorithm;
 
--- Aggregate / unordered Window contract.
+-- SORT is the optimization-disabled result control for the same fixture.
 select sum(part_sum) from (
     select sum(v) over (partition by k) as part_sum from t
 ) q;
@@ -65,7 +85,7 @@ select sum(first_v) from (
     select first_value(v) over (partition by k order by v) as first_v from t
 ) q;
 
--- ROWS and RANGE frames preserve the Window contract under the restored SORT control.
+-- ROWS and RANGE frames preserve the Window contract under the SORT control.
 select sum(frame_sum) from (
     select sum(v) over (
         partition by k order by v rows between 1 preceding and current row
