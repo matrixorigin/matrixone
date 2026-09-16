@@ -273,7 +273,11 @@ type container struct {
 	legacyApproxPercentileState bool
 	legacyHLLState              bool
 	floatZeroHLLState           bool
-	timeZone                    *time.Location
+	// legacyDistinctFloatKeys is frozen before aggregate groups are admitted.
+	// Pre-v78 remote producers keep the compatibility FLOAT key policy, which
+	// preserves every non-zero bit pattern in the fixed index and wire output.
+	legacyDistinctFloatKeys bool
+	timeZone                *time.Location
 
 	// spill, agglist to load spilled data.
 	spillMem        int64
@@ -685,6 +689,7 @@ func (ctr *container) free() {
 	ctr.hashKeyVecs = nil
 	ctr.mergePartialMetadataSet = false
 	ctr.groupConcatSourceRowsUntrusted = false
+	ctr.legacyDistinctFloatKeys = false
 	ctr.budget = nil
 
 	mpool.DeleteMPool(ctr.mp)

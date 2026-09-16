@@ -4512,6 +4512,66 @@ func TestRemoteApproxPercentileUsesLegacyStateBeforeProtocolV76(t *testing.T) {
 	require.True(t, math.IsNaN(vector.GetFixedAtNoTypeCheck[float64](results[0], 0)))
 }
 
+func TestRemoteDistinctFloatUsesProtocolKeyPolicy(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	arg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_float64)}}
+	for _, tc := range []struct {
+		name       string
+		version    int64
+		legacyWire bool
+		wantBits   uint64
+	}{
+		{
+			name:       "pre-v78",
+			version:    defines.MORPCVersion77,
+			legacyWire: true,
+			wantBits:   0x7ff8000000000001,
+		},
+		{
+			name:       "v78",
+			version:    defines.MORPCVersion78,
+			legacyWire: false,
+			wantBits:   0x7ff8000000000000,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, tc.version)
+			legacyWire := !canonicalDistinctKeyWireEnabled(proc)
+			require.Equal(t, tc.legacyWire, legacyWire)
+			ctr := &container{
+				mp:                      proc.Mp(),
+				mtyp:                    H8,
+				legacyDistinctFloatKeys: legacyWire,
+			}
+			aggs, err := ctr.makeAggList([]aggexec.AggFuncExecExpression{
+				aggexec.MakeAggFunctionExpression(
+					aggexec.AggIdOfCountColumn, true, []*plan.Expr{arg}, nil),
+			})
+			require.NoError(t, err)
+			require.Equal(t, !tc.legacyWire,
+				aggexec.RequiresModernDistinctFloatKeyWire(aggs[0]))
+			require.NoError(t, aggs[0].GroupGrow(aggexec.AggBatchSize/8))
+
+			values := testutil.NewFloat64Vector(
+				1, types.T_float64.ToType(), proc.Mp(), false, nil,
+				[]float64{math.Float64frombits(0x7ff8000000000001)})
+			require.NoError(t, aggs[0].BulkFill(0, []*vector.Vector{values}))
+			var wire bytes.Buffer
+			require.NoError(t, aggs[0].SaveIntermediateResultOfChunk(0, &wire))
+			got := binary.LittleEndian.Uint64(wire.Bytes()[20:28])
+			require.Equal(t, tc.wantBits, got)
+
+			values.Free(proc.Mp())
+			freeAggList(aggs)
+		})
+	}
+}
+
 func TestRemoteHLLStateRetainsCompatibilityAcrossProtocolVersions(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()

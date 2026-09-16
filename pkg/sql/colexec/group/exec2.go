@@ -118,6 +118,10 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	group.ctr.legacyApproxPercentileState = useLegacyApproxPercentileStateForRemote(proc)
 	group.ctr.legacyHLLState = useLegacyHLLStateForRemote(proc)
 	group.ctr.floatZeroHLLState = useFloatZeroHLLStateForRemote(proc)
+	// Freeze the FLOAT DISTINCT key policy before makeAggList creates any
+	// states. A pre-v78 remote producer keeps every legacy float key (including
+	// distinct NaN payloads); local and v78+ execution uses canonical keys.
+	group.ctr.legacyDistinctFloatKeys = !canonicalDistinctKeyWireEnabled(proc)
 	group.ctr.timeZone = proc.Base.SessionInfo.TimeZone
 
 	// debug,
@@ -1336,6 +1340,11 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 		aggexec.SetGroupConcatSourceRowWire(ag, groupConcatSourceRowWireEnabled(proc))
 		aggexec.SetGroupConcatSourceRowProvenanceWire(
 			ag, groupConcatSourceRowProvenanceWireEnabled(proc))
+		if aggexec.RequiresModernDistinctFloatKeyWire(ag) &&
+			!canonicalDistinctKeyWireEnabled(proc) {
+			return vm.CancelResult, false, moerr.NewInvalidStateNoCtx(
+				"modern FLOAT DISTINCT key state requires MORPCVersion78")
+		}
 		aggexec.SetCanonicalDistinctKeyWire(
 			ag, canonicalDistinctKeyWireEnabled(proc))
 		if aggexec.RequiresCanonicalDistinctKeyWire(ag) &&

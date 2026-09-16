@@ -2352,6 +2352,24 @@ func TestCompileShuffleGroupGatesAggregateWireByProtocolVersion(t *testing.T) {
 		"canonical opaque DISTINCT keys must stay local before MORPC v79")
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion79)
 	require.True(t, c.canCompileShuffleGroup(aggNode))
+
+	floatArg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_float64)}}
+	aggNode.AggList = []*plan.Expr{{
+		Typ: plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{
+				Obj:     int64(uint64(function.EncodeOverloadID(function.COUNT, 0)) | uint64(function.Distinct)),
+				ObjName: "count",
+			},
+			Args: []*plan.Expr{floatArg},
+		}},
+	}}
+	require.True(t, hasLegacyFloatDistinctKeyWire(aggNode))
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion77)
+	require.False(t, c.canCompileShuffleGroup(aggNode),
+		"fixed FLOAT DISTINCT must stay local before MORPC v78")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion78)
+	require.True(t, c.canCompileShuffleGroup(aggNode))
 }
 
 func TestRemoteApproxPercentileAndHLLCapabilitiesDefaultClosed(t *testing.T) {

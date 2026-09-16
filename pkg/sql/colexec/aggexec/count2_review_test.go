@@ -15,7 +15,9 @@
 package aggexec
 
 import (
+	"bytes"
 	"encoding/binary"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/arenaskl"
@@ -26,6 +28,279 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCountDistinctLegacyFloatKeepsFixedIndexAndAllPayloads(t *testing.T) {
+	tests := []struct {
+		name   string
+		typ    types.Type
+		width  int
+		values []uint64
+	}{
+		{
+			name:  "float32",
+			typ:   types.T_float32.ToType(),
+			width: 4,
+			values: []uint64{
+				0x7fc00001, 0x7fc00002, 0xffc00001,
+				0x80000000, 0x00000000, 0x3f800000,
+			},
+		},
+		{
+			name:  "float64",
+			typ:   types.T_float64.ToType(),
+			width: 8,
+			values: []uint64{
+				0x7ff8000000000001, 0x7ff8000000000002,
+				0xfff8000000000001, 0x8000000000000000,
+				0x0000000000000000, 0x3ff0000000000000,
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer func() { require.Zero(t, mp.CurrNB()) }()
+
+			var vec *vector.Vector
+			if tc.typ.Oid == types.T_float32 {
+				values := make([]float32, len(tc.values))
+				for i, bits := range tc.values {
+					values[i] = math.Float32frombits(uint32(bits))
+				}
+				vec = testutil.NewFloat32Vector(
+					len(values), tc.typ, mp, false, nil, values)
+			} else {
+				values := make([]float64, len(tc.values))
+				for i, bits := range tc.values {
+					values[i] = math.Float64frombits(bits)
+				}
+				vec = testutil.NewFloat64Vector(
+					len(values), tc.typ, mp, false, nil, values)
+			}
+
+			exec := newCountColumnExec(
+				mp, AggIdOfCountColumn, true, []types.Type{tc.typ},
+			).(*countColumnExec)
+			require.NoError(t, ConfigureLegacyDistinctFloatKeys(exec, true))
+			require.NoError(t, exec.GroupGrow(distinctFixedIndexMinGroups))
+			// Legacy mode still uses the fixed index. Its key policy, rather than a
+			// raw representative sidecar, preserves every old-protocol NaN bit
+			// pattern without sacrificing the hot-path performance.
+			require.True(t, exec.state[0].distinctFixedDeferred)
+			groups := make([]uint64, len(tc.values))
+			for i := range groups {
+				groups[i] = 1
+			}
+			require.NoError(t, exec.PreflightBatchFill(0, groups, []*vector.Vector{vec}))
+			require.NoError(t, exec.BatchFill(0, groups, []*vector.Vector{vec}))
+			result, err := exec.Flush()
+			require.NoError(t, err)
+			require.Equal(t, int64(5),
+				vector.GetFixedAtNoTypeCheck[int64](result[0], 0))
+			result[0].Free(mp)
+
+			var encoded bytes.Buffer
+			SetCanonicalDistinctKeyWire(exec, false)
+			require.NoError(t, exec.SaveIntermediateResultOfChunk(0, &encoded))
+			wire := encoded.Bytes()
+			require.GreaterOrEqual(t, len(wire), 20+len(tc.values)*tc.width)
+			seen := make(map[uint64]bool, len(tc.values))
+			for i := range tc.values {
+				var raw [8]byte
+				copy(raw[:tc.width], wire[20+i*tc.width:20+(i+1)*tc.width])
+				seen[binary.LittleEndian.Uint64(raw[:])] = true
+			}
+			for _, bits := range tc.values {
+				if bits == 0x80000000 || bits == 0x8000000000000000 {
+					bits = 0
+				}
+				require.True(t, seen[bits], "legacy wire lost key %#x", bits)
+			}
+
+			vec.Free(mp)
+			exec.Free()
+		})
+	}
+}
+
+func TestCountDistinctModernFloatKeepsFixedIndexFastPath(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	vec := testutil.NewFloat64Vector(
+		1, types.T_float64.ToType(), mp, false, nil,
+		[]float64{math.Float64frombits(0x7ff8000000000001)})
+	exec := newCountColumnExec(
+		mp, AggIdOfCountColumn, true,
+		[]types.Type{types.T_float64.ToType()},
+	).(*countColumnExec)
+	require.NoError(t, exec.GroupGrow(distinctFixedIndexMinGroups))
+	require.True(t, exec.state[0].distinctFixedDeferred)
+	require.NoError(t, exec.PreflightBatchFill(
+		0, []uint64{1}, []*vector.Vector{vec}))
+	require.NoError(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{vec}))
+	result, err := exec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](result[0], 0))
+	result[0].Free(mp)
+	vec.Free(mp)
+	exec.Free()
+}
+
+func TestCountDistinctLegacyFloatDoesNotDisableIntegerFixedIndex(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	exec := newCountColumnExec(
+		mp, AggIdOfCountColumn, true,
+		[]types.Type{types.T_int64.ToType()},
+	).(*countColumnExec)
+	require.NoError(t, ConfigureLegacyDistinctFloatKeys(exec, true))
+	require.NoError(t, exec.GroupGrow(distinctFixedIndexMinGroups))
+	require.True(t, exec.state[0].distinctFixedDeferred)
+	exec.Free()
+}
+
+func TestCountDistinctLegacyFloatPartialAndSpillRoundTrip(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	typ := types.T_float64.ToType()
+	bits := uint64(0x7ff8000000000001)
+	newValues := func() *vector.Vector {
+		return testutil.NewFloat64Vector(
+			1, typ, mp, false, nil,
+			[]float64{math.Float64frombits(bits)})
+	}
+	newExec := func(legacy bool, groups int) *countColumnExec {
+		exec := newCountColumnExec(
+			mp, AggIdOfCountColumn, true, []types.Type{typ},
+		).(*countColumnExec)
+		require.NoError(t, ConfigureLegacyDistinctFloatKeys(exec, legacy))
+		require.NoError(t, exec.GroupGrow(groups))
+		return exec
+	}
+
+	legacySource := newExec(true, distinctFixedIndexMinGroups)
+	values := newValues()
+	require.NoError(t, legacySource.PreflightBatchFill(
+		0, []uint64{1}, []*vector.Vector{values}))
+	require.NoError(t, legacySource.BatchFill(0, []uint64{1}, []*vector.Vector{values}))
+	var partial bytes.Buffer
+	require.NoError(t, legacySource.SaveIntermediateResultOfChunk(0, &partial))
+	partialBytes := partial.Bytes()
+	require.Equal(t, bits,
+		binary.LittleEndian.Uint64(partialBytes[20:28]))
+
+	modernTarget := newExec(false, distinctFixedIndexMinGroups)
+	require.NoError(t, modernTarget.UnmarshalFromReader(
+		bytes.NewReader(partialBytes), mp))
+	require.True(t, modernTarget.state[0].distinctFixedDeferred)
+	legacyPeer := newExec(true, 1)
+	peerValues := newValues()
+	require.NoError(t, legacyPeer.PreflightBatchFill(
+		0, []uint64{1}, []*vector.Vector{peerValues}))
+	require.NoError(t, legacyPeer.BatchFill(0, []uint64{1}, []*vector.Vector{peerValues}))
+	require.NoError(t, modernTarget.PreflightBatchMerge(
+		legacyPeer, 0, []uint64{1}))
+	require.NoError(t, modernTarget.BatchMerge(legacyPeer, 0, []uint64{1}))
+	result, err := modernTarget.Flush()
+	require.NoError(t, err)
+	require.Equal(t, int64(1), vector.GetFixedAtNoTypeCheck[int64](result[0], 0))
+	for _, vec := range result {
+		vec.Free(mp)
+	}
+
+	var spill bytes.Buffer
+	require.NoError(t, legacySource.SaveSpillIntermediateRows(
+		0, []int32{0}, &spill))
+	restored := newExec(false, 1)
+	require.NoError(t, restored.UnmarshalSpillFromReader(
+		bytes.NewReader(spill.Bytes()), mp))
+	var restoredWire bytes.Buffer
+	require.NoError(t, restored.SaveIntermediateResultOfChunk(0, &restoredWire))
+	restoredBytes := restoredWire.Bytes()
+	require.Equal(t, bits,
+		binary.LittleEndian.Uint64(restoredBytes[20:28]))
+
+	peerValues.Free(mp)
+	values.Free(mp)
+	restored.Free()
+	legacyPeer.Free()
+	modernTarget.Free()
+	legacySource.Free()
+}
+
+func TestCountDistinctFloatPolicyCrossRepresentationMerge(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	typ := types.T_float64.ToType()
+	values := func() *vector.Vector {
+		return testutil.NewFloat64Vector(
+			2, typ, mp, false, nil, []float64{
+				math.Float64frombits(0x7ff8000000000001),
+				math.Float64frombits(0x7ff8000000000002),
+			})
+	}
+	newExec := func(legacy bool, groups int) *countColumnExec {
+		exec := newCountColumnExec(
+			mp, AggIdOfCountColumn, true, []types.Type{typ},
+		).(*countColumnExec)
+		require.NoError(t, ConfigureLegacyDistinctFloatKeys(exec, legacy))
+		require.NoError(t, exec.GroupGrow(groups))
+		return exec
+	}
+	fill := func(exec *countColumnExec) {
+		vec := values()
+		require.NoError(t, exec.PreflightBatchFill(
+			0, []uint64{1, 1}, []*vector.Vector{vec}))
+		require.NoError(t, exec.BatchFill(
+			0, []uint64{1, 1}, []*vector.Vector{vec}))
+		vec.Free(mp)
+	}
+	count := func(exec *countColumnExec) int64 {
+		result, err := exec.Flush()
+		require.NoError(t, err)
+		got := vector.GetFixedAtNoTypeCheck[int64](result[0], 0)
+		result[0].Free(mp)
+		return got
+	}
+
+	t.Run("legacy-to-modern-fixed", func(t *testing.T) {
+		source := newExec(true, distinctFixedIndexMinGroups)
+		target := newExec(false, distinctFixedIndexMinGroups)
+		fill(source)
+		require.NoError(t, target.PreflightBatchMerge(source, 0, []uint64{1}))
+		require.NoError(t, target.BatchMerge(source, 0, []uint64{1}))
+		require.Equal(t, int64(1), count(target))
+		source.Free()
+		target.Free()
+	})
+
+	t.Run("legacy-to-modern-skiplist", func(t *testing.T) {
+		source := newExec(true, distinctFixedIndexMinGroups)
+		target := newExec(false, 1)
+		fill(source)
+		require.NoError(t, target.PreflightBatchMerge(source, 0, []uint64{1}))
+		require.NoError(t, target.BatchMerge(source, 0, []uint64{1}))
+		require.Equal(t, int64(1), count(target))
+		source.Free()
+		target.Free()
+	})
+
+	t.Run("modern-to-legacy-rejected-before-mutation", func(t *testing.T) {
+		source := newExec(false, distinctFixedIndexMinGroups)
+		target := newExec(true, distinctFixedIndexMinGroups)
+		require.False(t, source.legacyDistinctFloatKeys)
+		require.True(t, target.legacyDistinctFloatKeys)
+		require.False(t, source.state[0].legacyDistinctFloatKeys)
+		require.True(t, target.state[0].legacyDistinctFloatKeys)
+		fill(source)
+		require.NoError(t, target.PreflightBatchMerge(source, 0, []uint64{1}))
+		require.Error(t, target.BatchMerge(source, 0, []uint64{1}))
+		require.Equal(t, int64(0), count(target))
+		source.Free()
+		target.Free()
+	})
+}
 
 func TestCountDistinctBulkFillChunksBeyondUnitLimit(t *testing.T) {
 	for _, tc := range []struct {
