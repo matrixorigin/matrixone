@@ -63,12 +63,12 @@ set @json_ft2_index = (
     limit 1
 );
 insert into json_null_cdc values
- (1,'{"k":"leftboth"}','{"k":"rightboth"}'),
- (2,NULL,'{"k":"onlyrighttoken"}'),
- (3,'{"k":"onlylefttoken"}',NULL),
- (4,NULL,NULL),
- (5,'null','{"k":"literalcontrol"}'),
- (6,'"null"',NULL);
+(1,'{"k":"leftboth"}','{"k":"rightboth"}'),
+(2,NULL,'{"k":"onlyrighttoken"}'),
+(3,'{"k":"onlylefttoken"}',NULL),
+(4,NULL,NULL),
+(5,'null','{"k":"literalcontrol"}'),
+(6,'"null"',NULL);
 set @wait_json_sql = concat(
     'select coalesce(max(chunk_id), -1) >= 0 as json_ready from `', database(), '`.`', @json_ft2_index,
     '` where index_id = ''cdc_tail'' and tag = 1'
@@ -99,12 +99,12 @@ set @json_ft2_index = (
     limit 1
 );
 insert into json_null_cdc values
- (1,'{"k":"leftboth"}','{"k":"rightboth"}'),
- (2,NULL,'{"k":"onlyrighttoken"}'),
- (3,'{"k":"onlylefttoken"}',NULL),
- (4,NULL,NULL),
- (5,'null','{"k":"literalcontrol"}'),
- (6,'"null"',NULL);
+(1,'{"k":"leftboth"}','{"k":"rightboth"}'),
+(2,NULL,'{"k":"onlyrighttoken"}'),
+(3,'{"k":"onlylefttoken"}',NULL),
+(4,NULL,NULL),
+(5,'null','{"k":"literalcontrol"}'),
+(6,'"null"',NULL);
 set @wait_json_sql = concat(
     'select coalesce(max(chunk_id), -1) >= 0 as json_ready from `', database(), '`.`', @json_ft2_index,
     '` where index_id = ''cdc_tail'' and tag = 1'
@@ -205,6 +205,10 @@ prepare wait_json from @wait_json_sql;
 execute wait_json;
 deallocate prepare wait_json;
 select id from json_null_cdc where match(left_doc, right_doc) against('revived' in boolean mode) order by id;
+select id from json_null_cdc where match(left_doc, right_doc) against('onlyrighttoken' in boolean mode) order by id;
+select id from json_null_cdc where match(left_doc, right_doc) against('onlylefttoken' in boolean mode) order by id;
+select id from json_null_cdc where match(left_doc, right_doc) against('literalcontrol' in boolean mode) order by id;
+select id from json_null_cdc where match(left_doc, right_doc) against('null' in boolean mode) order by id;
 
 prepare capture_json_tail from @capture_json_tail_sql;
 execute capture_json_tail;
@@ -220,6 +224,10 @@ prepare wait_json from @wait_json_sql;
 execute wait_json;
 deallocate prepare wait_json;
 select id from json_null_cdc where match(left_doc, right_doc) against('revived' in boolean mode) order by id;
+select id from json_null_cdc where match(left_doc, right_doc) against('onlyrighttoken' in boolean mode) order by id;
+select id from json_null_cdc where match(left_doc, right_doc) against('onlylefttoken' in boolean mode) order by id;
+select id from json_null_cdc where match(left_doc, right_doc) against('literalcontrol' in boolean mode) order by id;
+select id from json_null_cdc where match(left_doc, right_doc) against('null' in boolean mode) order by id;
 prepare capture_json_tail from @capture_json_tail_sql;
 execute capture_json_tail;
 deallocate prepare capture_json_tail;
@@ -234,6 +242,10 @@ prepare wait_json from @wait_json_sql;
 execute wait_json;
 deallocate prepare wait_json;
 select id from json_null_cdc where match(left_doc, right_doc) against('reinserted' in boolean mode) order by id;
+select id from json_null_cdc where match(left_doc, right_doc) against('onlyrighttoken' in boolean mode) order by id;
+select id from json_null_cdc where match(left_doc, right_doc) against('onlylefttoken' in boolean mode) order by id;
+select id from json_null_cdc where match(left_doc, right_doc) against('literalcontrol' in boolean mode) order by id;
+select id from json_null_cdc where match(left_doc, right_doc) against('null' in boolean mode) order by id;
 
 -- src's initial-sync state is verified via src2 below (a never-re-mutated table).
 -- src itself is deliberately NOT searched here: fulltext2's per-CN index cache is

@@ -104,8 +104,12 @@ func TestFulltext2WriterRowText(t *testing.T) {
 // CDC codec and TailBuilder. This keeps the integration assertion independent
 // from hand-built Cdc events used by the lower-level LWW tests.
 func writerTailSegments(t *testing.T, parser string, cdcs ...*fulltext2.Cdc) []*fulltext2.Segment {
+	return writerTailSegmentsWithJSONOptions(t, parser, fulltext2.JSONTermOptions{}, cdcs...)
+}
+
+func writerTailSegmentsWithJSONOptions(t *testing.T, parser string, opt fulltext2.JSONTermOptions, cdcs ...*fulltext2.Cdc) []*fulltext2.Segment {
 	t.Helper()
-	tokenize, err := fulltext2.CdcTokenizerWithJSONOptions(parser, fulltext2.JSONTermOptions{})
+	tokenize, err := fulltext2.CdcTokenizerWithJSONOptions(parser, opt)
 	require.NoError(t, err)
 	tb, err := fulltext2.NewTailBuilder(int32(types.T_int64), 1, 0, "", tokenize)
 	require.NoError(t, err)
@@ -281,6 +285,104 @@ func TestFulltext2WriterJSONFlatSkipsNullColumn(t *testing.T) {
 	require.Equal(t, "right", txt)
 }
 
+func TestFulltext2WriterJSONFlatNullColumnMatrix(t *testing.T) {
+	w := newFT2Writer(fulltext2.ParserJSON)
+	w.cfg.JSONNoKeys = true
+	w.textPos = []int32{1, 2, 3}
+	w.textTypes = []int32{int32(types.T_varchar), int32(types.T_varchar), int32(types.T_varchar)}
+
+	for _, tc := range []struct {
+		name string
+		row  []any
+		want string
+	}{
+		{name: "left null", row: []any{int64(1), nil, []byte(`{"k":"right"}`), nil}, want: "right"},
+		{name: "right null", row: []any{int64(1), []byte(`{"k":"left"}`), nil, nil}, want: "left"},
+		{name: "middle null", row: []any{int64(1), []byte(`{"k":"left"}`), nil, []byte(`{"k":"right"}`)}, want: "left\nright"},
+		{name: "all null", row: []any{int64(1), nil, nil, nil}, want: ""},
+		{name: "literal null", row: []any{int64(1), []byte("null"), nil, nil}, want: ""},
+		{name: "string null", row: []any{int64(1), []byte(`"null"`), nil, nil}, want: "null"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := w.rowText(context.Background(), tc.row)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+	bj, err := bytejson.ParseFromString(`{"k":"binary"}`)
+	require.NoError(t, err)
+	got, err := w.rowText(context.Background(), []any{int64(1), nil, bj, nil})
+	require.NoError(t, err)
+	require.Equal(t, "binary", got, "T_json ByteJson follows the same NULL sibling rule")
+	txt, err := w.rowText(context.Background(), []any{int64(1), []byte(`{"k":"left"}`), nil, []byte(`{"k":"right"}`)})
+	require.NoError(t, err)
+	tok, err := fulltext2.CdcTokenizerWithJSONOptions(fulltext2.ParserJSON, fulltext2.JSONTermOptions{})
+	require.NoError(t, err)
+	require.Equal(t, []fulltext2.WordPos{{Word: "left", Pos: 0}, {Word: "right", Pos: 5}}, tok(txt))
+
+	// The same value-mode rows must survive the writer codec and TailBuilder.
+	w.Reset()
+	require.NoError(t, w.Upsert(context.Background(), []any{int64(1), nil, []byte(`{"k":"right"}`), nil}))
+	right := writerCdc(t, w)
+	w.Reset()
+	require.NoError(t, w.Upsert(context.Background(), []any{int64(2), []byte(`{"k":"control"}`), nil, nil}))
+	control := writerCdc(t, w)
+	prefix := writerTailSegmentsWithJSONOptions(t, fulltext2.ParserJSON, fulltext2.JSONTermOptions{}, right, control)
+	prefixIdx := fulltext2.NewIndex(prefix, nil)
+	got, err := prefixIdx.SearchQuery([]byte("right"), false, fulltext2.ParserJSON, fulltext2.BM25, 100, nil)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, int64(1), got[0].Pk)
+
+	w.Reset()
+	require.NoError(t, w.Upsert(context.Background(), []any{int64(1), nil, nil, nil}))
+	empty := writerCdc(t, w)
+	tails := writerTailSegmentsWithJSONOptions(t, fulltext2.ParserJSON, fulltext2.JSONTermOptions{}, right, control, empty)
+	idx := fulltext2.NewIndex(tails, nil)
+	got, err = idx.SearchQuery([]byte("right"), false, fulltext2.ParserJSON, fulltext2.BM25, 100, nil)
+	require.NoError(t, err)
+	require.Empty(t, got, "all-NULL value-mode upsert shadows the earlier sibling value")
+	got, err = idx.SearchQuery([]byte("control"), false, fulltext2.ParserJSON, fulltext2.BM25, 100, nil)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, int64(2), got[0].Pk)
+}
+
+func TestFulltext2WriterJSONTupleReachesProbe(t *testing.T) {
+	w := newFT2Writer(fulltext2.ParserJSON)
+	w.textPos = []int32{1, 2}
+	w.textTypes = []int32{int32(types.T_varchar), int32(types.T_varchar)}
+
+	require.NoError(t, w.Upsert(context.Background(), []any{int64(1), nil, []byte(`{"b":"right"}`)}))
+	partial := writerCdc(t, w)
+	w.Reset()
+	require.NoError(t, w.Upsert(context.Background(), []any{int64(2), []byte(`{"b":"control"}`), nil}))
+	control := writerCdc(t, w)
+	prefix := writerTailSegmentsWithJSONOptions(t, fulltext2.ParserJSON, fulltext2.DefaultJSONTermOptions(), partial, control)
+	prefixIdx := fulltext2.NewIndex(prefix, nil)
+	payload := []byte(fulltext2.EncodeJSONProbePayload([]string{fulltext2.JSONStringTerm("b", "right")}, nil))
+	got, err := prefixIdx.SearchJSONProbe(payload, fulltext2.BM25, 100, nil)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, int64(1), got[0].Pk)
+
+	w.Reset()
+	require.NoError(t, w.Upsert(context.Background(), []any{int64(1), nil, nil}))
+	empty := writerCdc(t, w)
+
+	tails := writerTailSegmentsWithJSONOptions(t, fulltext2.ParserJSON, fulltext2.DefaultJSONTermOptions(), partial, control, empty)
+	idx := fulltext2.NewIndex(tails, nil)
+	got, err = idx.SearchJSONProbe(payload, fulltext2.BM25, 100, nil)
+	require.NoError(t, err)
+	require.Empty(t, got, "the zero-word tuple upsert shadows the earlier carrier terms")
+
+	payload = []byte(fulltext2.EncodeJSONProbePayload([]string{fulltext2.JSONStringTerm("b", "control")}, nil))
+	got, err = idx.SearchJSONProbe(payload, fulltext2.BM25, 100, nil)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, int64(2), got[0].Pk)
+}
+
 func TestFulltext2WriterPartialNullRoundTrip(t *testing.T) {
 	w := newFT2Writer(fulltext2.ParserNgram)
 	w.textPos = []int32{1, 2}
@@ -313,6 +415,27 @@ func TestFulltext2WriterMalformedJSONWithNullSibling(t *testing.T) {
 		{int64(1), []byte("{bad"), nil},
 	} {
 		w := newFT2Writer(fulltext2.ParserJSONValue)
+		w.textPos = []int32{1, 2}
+		w.textTypes = []int32{int32(types.T_varchar), int32(types.T_varchar)}
+		_, err := w.rowText(context.Background(), row)
+		require.Error(t, err)
+	}
+	for _, row := range [][]any{
+		{int64(1), nil, []byte("{bad")},
+		{int64(1), []byte("{bad"), nil},
+	} {
+		w := newFT2Writer(fulltext2.ParserJSON)
+		w.cfg.JSONNoKeys = true
+		w.textPos = []int32{1, 2}
+		w.textTypes = []int32{int32(types.T_varchar), int32(types.T_varchar)}
+		_, err := w.rowText(context.Background(), row)
+		require.Error(t, err)
+	}
+	for _, row := range [][]any{
+		{int64(1), nil, []byte("{bad")},
+		{int64(1), []byte("{bad"), nil},
+	} {
+		w := newFT2Writer(fulltext2.ParserJSON)
 		w.textPos = []int32{1, 2}
 		w.textTypes = []int32{int32(types.T_varchar), int32(types.T_varchar)}
 		_, err := w.rowText(context.Background(), row)

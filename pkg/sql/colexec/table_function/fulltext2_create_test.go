@@ -179,6 +179,45 @@ func TestFulltext2CreateStartFeedsBuilder(t *testing.T) {
 	st.free(tf, proc, false, nil)
 }
 
+func TestFulltext2CreatePartialNullKeepsInclude(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	cfg, err := sonic.Marshal(fulltext2.TableConfig{
+		DbName: "db", IndexTable: "__idx", Parser: fulltext2.ParserNgram,
+		IncludeTypes: []int32{int32(types.T_varchar)},
+	})
+	require.NoError(t, err)
+
+	pk := vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed[int64](pk, 1, false, mp))
+	left := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(left, nil, true, mp))
+	right := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(right, []byte("right"), false, mp))
+	status := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(status, []byte("active"), false, mp))
+
+	st := &fulltext2CreateState{}
+	tf := newFT2TF([]string{"status"}, ft2StatusRets())
+	tf.Args = []*plan.Expr{
+		makeStrConstExpr(string(cfg)), makeStrConstExpr("pk"),
+		makeStrConstExpr("left"), makeStrConstExpr("right"), makeStrConstExpr("status"),
+	}
+	tf.ctr.argVecs = []*vector.Vector{ft2ConstStr(t, mp, string(cfg)), pk, left, right, status}
+	defer st.free(tf, proc, false, nil)
+	require.NoError(t, st.start(tf, proc, 0, nil))
+	require.Equal(t, 1, st.cur.NumDocs())
+
+	seg, err := st.cur.Finish()
+	require.NoError(t, err)
+	idx := fulltext2.NewIndex([]*fulltext2.Segment{seg}, nil)
+	got, err := idx.SearchQuery([]byte("right"), false, fulltext2.ParserNgram, fulltext2.BM25, 100, nil)
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	require.Equal(t, int64(1), got[0].Pk)
+	require.Equal(t, []any{[]byte("active")}, got[0].Include)
+}
+
 // TestFulltext2CreateRowTerms exercises the tokenization paths of rowTerms across the
 // ngram / json / json_value parsers and NULL/empty inputs, without touching the DB.
 func TestFulltext2CreateRowTerms(t *testing.T) {
@@ -291,6 +330,41 @@ func TestFulltext2CreateRowTermsNullColumnMatrix(t *testing.T) {
 			values:     []any{nil, `{"k":"right"}`},
 			want:       []fulltext2.WordPos{{Word: "right", Pos: 0}},
 		},
+		{
+			name:       "json flat right null",
+			parser:     fulltext2.ParserJSON,
+			jsonNoKeys: true,
+			values:     []any{`{"k":"left"}`, nil},
+			want:       []fulltext2.WordPos{{Word: "left", Pos: 0}},
+		},
+		{
+			name:       "json flat middle null",
+			parser:     fulltext2.ParserJSON,
+			jsonNoKeys: true,
+			values:     []any{`{"k":"left"}`, nil, `{"k":"right"}`},
+			want:       []fulltext2.WordPos{{Word: "left", Pos: 0}, {Word: "right", Pos: 5}},
+		},
+		{
+			name:       "json flat all null",
+			parser:     fulltext2.ParserJSON,
+			jsonNoKeys: true,
+			values:     []any{nil, nil, nil},
+			want:       nil,
+		},
+		{
+			name:       "json flat literal null",
+			parser:     fulltext2.ParserJSON,
+			jsonNoKeys: true,
+			values:     []any{"null", nil},
+			want:       nil,
+		},
+		{
+			name:       "json flat string null",
+			parser:     fulltext2.ParserJSON,
+			jsonNoKeys: true,
+			values:     []any{`"null"`, nil},
+			want:       []fulltext2.WordPos{{Word: "null", Pos: 0}},
+		},
 	}
 
 	for _, tt := range tests {
@@ -390,6 +464,26 @@ func TestFulltext2CreateRowTermsMalformedJSONWithNullSibling(t *testing.T) {
 	mp := mpool.MustNewZero()
 	proc := testutil.NewProcessWithMPool(t, "", mp)
 	st := &fulltext2CreateState{tblcfg: fulltext2.TableConfig{Parser: fulltext2.ParserJSONValue}}
+	for _, values := range [][]any{
+		{nil, "{bad"},
+		{"{bad", nil},
+	} {
+		tf, _ := ft2CreateNullableArgVecs(t, mp, "{}", 1, values...)
+		got, err := st.rowTerms(tf, proc, 0)
+		require.Error(t, err)
+		require.Nil(t, got)
+	}
+	st = &fulltext2CreateState{tblcfg: fulltext2.TableConfig{Parser: fulltext2.ParserJSON, JSONNoKeys: true}}
+	for _, values := range [][]any{
+		{nil, "{bad"},
+		{"{bad", nil},
+	} {
+		tf, _ := ft2CreateNullableArgVecs(t, mp, "{}", 1, values...)
+		got, err := st.rowTerms(tf, proc, 0)
+		require.Error(t, err)
+		require.Nil(t, got)
+	}
+	st = &fulltext2CreateState{tblcfg: fulltext2.TableConfig{Parser: fulltext2.ParserJSON}}
 	for _, values := range [][]any{
 		{nil, "{bad"},
 		{"{bad", nil},

@@ -48,7 +48,7 @@ insert into json_null_cdc values
 (2,NULL,'{"k":"onlyrighttoken"}'),
 (3,'{"k":"onlylefttoken"}',NULL),
 (4,NULL,NULL),
- (5,'null','{"k":"literalcontrol"}'),
+(5,'null','{"k":"literalcontrol"}'),
 (6,'"null"',NULL);
 set @wait_json_sql = concat(
 'select coalesce(max(chunk_id), -1) >= 0 as json_ready from `', database(), '`.`', @json_ft2_index,
@@ -88,7 +88,7 @@ insert into json_null_cdc values
 (2,NULL,'{"k":"onlyrighttoken"}'),
 (3,'{"k":"onlylefttoken"}',NULL),
 (4,NULL,NULL),
- (5,'null','{"k":"literalcontrol"}'),
+(5,'null','{"k":"literalcontrol"}'),
 (6,'"null"',NULL);
 set @wait_json_sql = concat(
 'select coalesce(max(chunk_id), -1) >= 0 as json_ready from `', database(), '`.`', @json_ft2_index,
@@ -225,6 +225,18 @@ deallocate prepare wait_json;
 select id from json_null_cdc where match(left_doc, right_doc) against('revived' in boolean mode) order by id;
 id
 1
+select id from json_null_cdc where match(left_doc, right_doc) against('onlyrighttoken' in boolean mode) order by id;
+id
+2
+select id from json_null_cdc where match(left_doc, right_doc) against('onlylefttoken' in boolean mode) order by id;
+id
+3
+select id from json_null_cdc where match(left_doc, right_doc) against('literalcontrol' in boolean mode) order by id;
+id
+5
+select id from json_null_cdc where match(left_doc, right_doc) against('null' in boolean mode) order by id;
+id
+6
 prepare capture_json_tail from @capture_json_tail_sql;
 execute capture_json_tail;
 deallocate prepare capture_json_tail;
@@ -241,6 +253,18 @@ execute wait_json;
 deallocate prepare wait_json;
 select id from json_null_cdc where match(left_doc, right_doc) against('revived' in boolean mode) order by id;
 id
+select id from json_null_cdc where match(left_doc, right_doc) against('onlyrighttoken' in boolean mode) order by id;
+id
+2
+select id from json_null_cdc where match(left_doc, right_doc) against('onlylefttoken' in boolean mode) order by id;
+id
+3
+select id from json_null_cdc where match(left_doc, right_doc) against('literalcontrol' in boolean mode) order by id;
+id
+5
+select id from json_null_cdc where match(left_doc, right_doc) against('null' in boolean mode) order by id;
+id
+6
 prepare capture_json_tail from @capture_json_tail_sql;
 execute capture_json_tail;
 deallocate prepare capture_json_tail;
@@ -258,6 +282,18 @@ deallocate prepare wait_json;
 select id from json_null_cdc where match(left_doc, right_doc) against('reinserted' in boolean mode) order by id;
 id
 1
+select id from json_null_cdc where match(left_doc, right_doc) against('onlyrighttoken' in boolean mode) order by id;
+id
+2
+select id from json_null_cdc where match(left_doc, right_doc) against('onlylefttoken' in boolean mode) order by id;
+id
+3
+select id from json_null_cdc where match(left_doc, right_doc) against('literalcontrol' in boolean mode) order by id;
+id
+5
+select id from json_null_cdc where match(left_doc, right_doc) against('null' in boolean mode) order by id;
+id
+6
 show create table src;
 Table    Create Table
 src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `body` varchar(65535) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT2 `ftidx`(`body`,`title`) WITH PARSER ngram\n)
