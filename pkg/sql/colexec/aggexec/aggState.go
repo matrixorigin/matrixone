@@ -687,6 +687,11 @@ func (ag *aggState) readSpillState(
 		if err := ag.initWithAllocation(mp, 0, cnt, info, false, allocation); err != nil {
 			return 0, err
 		}
+	} else if info.makeMarshalerUnmarshaler != nil {
+		// Spill records reuse the vector backing when the incoming record fits.
+		// Opaque states are independent account-backed allocations, so release
+		// every state from the previous record before replacing or omitting it.
+		ag.freeOpaqueStates()
 	}
 	if !info.saveArg {
 		for _, vec := range ag.vecs {
@@ -1499,15 +1504,26 @@ func (ag *aggState) free(mp *mpool.MPool) {
 		vec.Free(mp)
 	}
 	ag.vecs = nil
+	ag.freeOpaqueStates()
+	ag.mobs = nil
+	ag.length = 0
+	ag.capacity = 0
+	ag.allocation = nil
+}
+
+// freeOpaqueStates releases bounded aggregate states before a spill record is
+// replaced in a reusable aggState. Spill decoding reuses the physical vectors,
+// but opaque states own independent account-backed memory and cannot be
+// overwritten without first releasing the old owner.
+func (ag *aggState) freeOpaqueStates() {
 	for _, mob := range ag.mobs {
 		if freeable, ok := mob.(freeableMarshalerUnmarshaler); ok {
 			freeable.Free()
 		}
 	}
-	ag.mobs = nil
-	ag.length = 0
-	ag.capacity = 0
-	ag.allocation = nil
+	for i := range ag.mobs {
+		ag.mobs[i] = nil
+	}
 }
 
 type aggExec struct {
