@@ -521,9 +521,11 @@ endif
 ###############################################################################
 UT_PARALLEL ?= 1
 UT_SHARD ?= all
-# The outer lifecycle budget is separate from each Go test's UT_TIMEOUT. Keep
-# enough time after TERM for checkpoint flushing and artifact upload.
-UT_HARD_TIMEOUT ?= 70m
+# The outer lifecycle budget covers every sequential UT stage, not one package.
+# A cold race run can spend over an hour in light/issues/embedded before the
+# heavy/engine/plan stages start. Keep per-package UT_TIMEOUT unchanged and
+# leave enough time after TERM for checkpoint flushing and artifact upload.
+UT_HARD_TIMEOUT ?= 120m
 # Emit one bounded progress heartbeat per interval while UT is running.
 UT_HEARTBEAT_INTERVAL ?= 60
 # Build embedded test packages ahead of their execution while the issues
