@@ -130,6 +130,20 @@ func TestAllCNsSupportProtocolProbesEveryCN(t *testing.T) {
 	require.False(t, supported)
 }
 
+func TestAllCNsSupportProtocolWithContextIgnoresCanceledProcessContext(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	client.version = defines.MORPCVersion76
+	procCtx, cancel := context.WithCancel(c.proc.Ctx)
+	c.proc.Ctx = procCtx
+	cancel()
+
+	supported, err := AllCNsSupportProtocolWithContext(
+		context.Background(), c.proc, defines.MORPCVersion76)
+	require.NoError(t, err)
+	require.True(t, supported)
+	require.Equal(t, 1, client.calls)
+}
+
 func TestExpressionProtocolFailedResponsesAreReleased(t *testing.T) {
 	for _, tc := range []struct {
 		name     string

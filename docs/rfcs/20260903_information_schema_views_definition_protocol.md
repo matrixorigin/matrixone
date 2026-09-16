@@ -63,17 +63,18 @@ a mixed, unknown, RPC-failing, or incomplete capability probe records the
 predecessor VIEWS definition while still committing the final-version tenant
 row. A bounded post-upgrade reconciliation pass later rechecks common v76 and
 reuses the guarded transactional entry to replace only that predecessor
-definition. A v74-or-earlier cluster preserves all existing metadata definitions,
-including the v58 COLUMNS contract. Pipeline preparation, remote marshal, and
+definition. Any cluster with a CN below v76, including the immediate predecessor
+v75, preserves all existing metadata definitions, including the v58 COLUMNS
+contract. Pipeline preparation, remote marshal, and
 remote unmarshal reject a
 pipeline containing either function ID below v76. The receiver check protects
-stale prepared work as well as normal sender dispatch. Before admitting any
-v74-or-earlier CN during rollback, operators must stop or pause every v76
+stale prepared work as well as normal sender dispatch. Before admitting any CN
+below v76 during rollback, operators must stop or pause every v76
 binary that can run the reconciliation owner, pause related metadata plans,
 restore `InformationSchemaViewsLegacyDDL` transactionally, wait for the catalog
 change and in-flight work to converge, and verify that no v76 maintenance
 worker can re-install it. Only then may the older binary be admitted. Merely
-draining v74-dependent requests is not sufficient because the new persisted view
+draining below-v76 requests is not sufficient because the new persisted view
 text references the functions. The new JSON fields are additive and old
 binaries keep treating them as unknown.
 
