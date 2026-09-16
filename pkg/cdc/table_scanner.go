@@ -732,7 +732,7 @@ func (s *TableDetector) scanTable() error {
 		// The detector serves tasks with different persisted case modes. Scan a
 		// case-insensitive candidate superset; each task applies its own mode in
 		// matchAnyPattern before it can create a pipeline.
-		dbNamesSlice = append(dbNamesSlice, strings.ToLower(dbName))
+		dbNamesSlice = append(dbNamesSlice, CDCSourceIdentifierKey(dbName, 2))
 	}
 	if dbNames != "*" {
 		dbNames = AddSingleQuotesJoin(dbNamesSlice)
@@ -743,7 +743,7 @@ func (s *TableDetector) scanTable() error {
 			tableNames = "*"
 			break
 		}
-		tableNamesSlice = append(tableNamesSlice, strings.ToLower(tableName))
+		tableNamesSlice = append(tableNamesSlice, CDCSourceIdentifierKey(tableName, 2))
 	}
 	if tableNames != "*" {
 		tableNames = AddSingleQuotesJoin(tableNamesSlice)

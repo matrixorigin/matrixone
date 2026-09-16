@@ -1022,6 +1022,13 @@ func Test_CollectTableInfoSQL(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, sql, "lower(tbl.reldatabase) IN ('mixeddb')")
 	assert.Contains(t, sql, "lower(tbl.relname) IN ('orders')")
+
+	// Mode 2 catalog prefilter must use the same parser canonical key as task
+	// matching, not Unicode simple case folding.
+	sql = CollectCDCSourceCandidateSQL(1, "Σdb", "Orders", 2)
+	_, err = parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	assert.Contains(t, sql, "lower(tbl.reldatabase) IN ('σdb')")
 }
 
 func TestScanAndProcess(t *testing.T) {

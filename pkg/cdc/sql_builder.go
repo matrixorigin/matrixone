@@ -1328,14 +1328,14 @@ func CollectCDCSourceCandidateSQL(accountID uint32, dbName, tableName string, so
 	dbNames := "*"
 	if dbName != CDCPitrGranularity_All {
 		if caseInsensitive {
-			dbName = strings.ToLower(dbName)
+			dbName = CDCSourceIdentifierKey(dbName, sourceCaseMode[0])
 		}
 		dbNames = AddSingleQuotesJoin([]string{dbName})
 	}
 	tableNames := "*"
 	if tableName != CDCPitrGranularity_All {
 		if caseInsensitive {
-			tableName = strings.ToLower(tableName)
+			tableName = CDCSourceIdentifierKey(tableName, sourceCaseMode[0])
 		}
 		tableNames = AddSingleQuotesJoin([]string{tableName})
 	}

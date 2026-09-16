@@ -685,6 +685,10 @@ func TestNormalizeCDCSourcePatternCase(t *testing.T) {
 	assert.Equal(t, int64(2), modeTwo.SourceCaseMode)
 	assert.Equal(t, "SourceDB", modeTwo.Pts[0].Source.Database)
 	assert.Equal(t, "SourceTable", modeTwo.Pts[0].Source.Table)
+	assert.NotEqual(t,
+		CDCSourceIdentifierKey("Σdb", 2),
+		CDCSourceIdentifierKey("ςdb", 2),
+		"mode-2 identifier keys must not use Unicode simple case folding")
 }
 
 func TestNormalizeCDCSourcePatternCaseRejectsDuplicateNormalizedSources(t *testing.T) {

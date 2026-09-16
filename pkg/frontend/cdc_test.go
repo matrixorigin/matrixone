@@ -2879,6 +2879,14 @@ func TestCDCTaskExecutorMatchesModeTwoSourcePatterns(t *testing.T) {
 	exec.tables.SourceCaseMode = 0
 	require.False(t, exec.matchAnyPattern("sourcedb.orders", &cdc.DbTableInfo{}))
 	require.False(t, exec.matchesAnySourcePattern("SOURCEDB.ORDERS"))
+
+	// The shared detector deliberately scans a mode-2 candidate superset. A
+	// task must not bind a Greek final-sigma identifier that has a distinct
+	// MatrixOne canonical key from the configured source.
+	exec.tables.SourceCaseMode = 2
+	exec.tables.Pts[0].Source = cdc.PatternTable{Database: "Σdb", Table: "orders"}
+	require.True(t, exec.matchesAnySourcePattern("σdb.ORDERS"))
+	require.False(t, exec.matchesAnySourcePattern("ςdb.orders"))
 }
 
 func TestCdcTask_Restart(t *testing.T) {
