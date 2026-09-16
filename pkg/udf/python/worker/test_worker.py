@@ -1764,6 +1764,12 @@ class WorkerContractTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "empty response"):
             session._take_response()
 
+    def test_handler_response_frame_obeys_batch_byte_limit(self):
+        session = object.__new__(worker._HandlerProcessSession)
+        session._response_buffer = bytearray(struct.pack(">Q", 5) + b"\x01abcd")
+        with self.assertRaisesRegex(ValueError, "execution response is too large"):
+            session._take_response(4)
+
     def test_handler_response_frame_parts_keep_one_wire_frame(self):
         stream = io.BytesIO()
         worker._write_execution_frame_parts(
