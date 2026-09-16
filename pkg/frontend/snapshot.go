@@ -800,6 +800,12 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	if err = checkRestorePriv(ctx, ses, snapshot, stmt); err != nil {
 		return stats, err
 	}
+	// Validate every database identity before resolving the target account.
+	// Target resolution may create a dropped account, and account restore later
+	// invalidates view metadata, so neither may happen before capability admission.
+	if err = preflightRestoreSnapshotEntry(ctx, ses, bh, stmt, *snapshot); err != nil {
+		return stats, err
+	}
 
 	// default restore to src account
 	restoreAccount, toAccountId, err = getFromAccountIdAndToAccountId(ctx, ses, bh, stmt, *snapshot)
@@ -979,6 +985,51 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	}
 
 	return
+}
+
+func preflightRestoreSnapshotEntry(
+	ctx context.Context,
+	ses *Session,
+	bh BackgroundExec,
+	stmt *tree.RestoreSnapShot,
+	snapshot snapshotRecord,
+) error {
+	switch stmt.Level {
+	case tree.RESTORELEVELCLUSTER:
+		// Cluster restore builds and validates its complete account plan before
+		// the first account mutation.
+		return nil
+	case tree.RESTORELEVELACCOUNT:
+		if snapshot.level == tree.RESTORELEVELCLUSTER.String() {
+			account, err := getAccountRecordByTs(
+				ctx, ses, bh, snapshot.snapshotName, snapshot.ts, string(stmt.AccountName),
+			)
+			if err != nil {
+				return err
+			}
+			accountID := uint32(account.accountId)
+			return preflightLogicalRestoreAccountFromTS(
+				ctx, ses.GetService(), bh, snapshot.ts, accountID, accountID,
+			)
+		}
+		return preflightLogicalRestoreAccountFromSnapshot(
+			ctx, ses.GetService(), bh, snapshot.snapshotName, snapshot.ts, uint32(snapshot.objId),
+		)
+	case tree.RESTORELEVELDATABASE, tree.RESTORELEVELTABLE:
+		return preflightLogicalRestoreDatabases(
+			ctx,
+			[]string{string(stmt.DatabaseName)},
+			currentProtocolVersionForService(bh.Service()),
+			func(dbName string) (logicalRestoreDatabaseDefinition, error) {
+				return getCreateDatabaseSql(
+					ctx, ses.GetService(), bh, snapshot.snapshotName, snapshot.ts,
+					dbName, ses.GetTenantInfo().GetTenantID(),
+				)
+			},
+		)
+	default:
+		return nil
+	}
 }
 
 func restoreReplacesLineageOwnerCatalogs(level tree.RestoreLevel) bool {
@@ -1212,15 +1263,19 @@ func restoreToAccount(
 ) (err error) {
 	getLogger(sid).Debug(fmt.Sprintf("[%s] start to restore account: %v, restore timestamp : %d", snapshotName, toAccountId, snapshotTs))
 
-	var dbNames []string
+	var currentDBNames, restoreDBNames []string
 	toCtx := defines.AttachAccountId(ctx, toAccountId)
 
-	// delete current dbs
-	if dbNames, err = showDatabases(toCtx, sid, bh, ""); err != nil {
+	if restoreDBNames, err = showDatabases(ctx, sid, bh, snapshotName); err != nil {
 		return
 	}
 
-	for _, dbName := range dbNames {
+	// delete current dbs
+	if currentDBNames, err = showDatabases(toCtx, sid, bh, ""); err != nil {
+		return
+	}
+
+	for _, dbName := range currentDBNames {
 		if needSkipDb(dbName) {
 			if toAccountId == 0 && dbName == moCatalog {
 				// drop existing cluster tables
@@ -1239,11 +1294,7 @@ func restoreToAccount(
 	}
 
 	// restore dbs
-	if dbNames, err = showDatabases(ctx, sid, bh, snapshotName); err != nil {
-		return
-	}
-
-	for _, dbName := range dbNames {
+	for _, dbName := range restoreDBNames {
 		if err = restoreToDatabase(ctx,
 			sid,
 			bh,
@@ -1272,6 +1323,28 @@ func restoreToAccount(
 		return
 	}
 	return
+}
+
+func preflightLogicalRestoreAccountFromSnapshot(
+	ctx context.Context,
+	sid string,
+	bh BackgroundExec,
+	snapshotName string,
+	snapshotTS int64,
+	sourceAccount uint32,
+) error {
+	databaseNames, err := showDatabases(ctx, sid, bh, snapshotName)
+	if err != nil {
+		return err
+	}
+	return preflightLogicalRestoreDatabases(
+		ctx,
+		databaseNames,
+		currentProtocolVersionForService(bh.Service()),
+		func(dbName string) (logicalRestoreDatabaseDefinition, error) {
+			return getCreateDatabaseSql(ctx, sid, bh, snapshotName, snapshotTS, dbName, sourceAccount)
+		},
+	)
 }
 
 func restoreToDatabase(
@@ -1352,14 +1425,21 @@ func restoreToDatabaseOrTable(
 		return
 	}
 
-	var createDbSql string
+	var definition logicalRestoreDatabaseDefinition
 	var isSubDb bool
-	createDbSql, err = getCreateDatabaseSql(ctx, sid, bh, snapshotName, snapshotTs, dbName, restoreAccount)
+	definition, err = getCreateDatabaseSql(ctx, sid, bh, snapshotName, snapshotTs, dbName, restoreAccount)
 	if err != nil {
 		return
 	}
+	createDbSql := definition.createSQL
 
 	toCtx := defines.AttachAccountId(ctx, toAccountId)
+	toCtx, err = prepareLogicalRestoreDatabase(
+		toCtx, dbName, definition, currentProtocolVersionForService(bh.Service()),
+	)
+	if err != nil {
+		return
+	}
 	restoreToTbl := tblName != ""
 
 	// if restore to table, check if the db is sub db
@@ -2706,24 +2786,24 @@ func getCreateDatabaseSql(ctx context.Context,
 	snapshotName string,
 	snapshotTs int64,
 	dbName string,
-	accountId uint32) (string, error) {
+	accountId uint32) (logicalRestoreDatabaseDefinition, error) {
 
-	sql := "select datname, dat_createsql from mo_catalog.mo_database"
+	sql := "select datname, dat_createsql, dat_type from mo_catalog.mo_database"
 	if snapshotTs > 0 {
 		sql += fmt.Sprintf(" {MO_TS = %d}", snapshotTs)
 	}
 	sql += fmt.Sprintf(" where datname = '%s' and account_id = %d", dbName, accountId)
 	getLogger(sid).Debug(fmt.Sprintf("[%s] get create database `%s` sql: %s", snapshotName, dbName, sql))
 
-	// cols: database_name, create_sql
-	colsList, err := getStringColsList(ctx, bh, sql, 0, 1)
+	// cols: database_name, create_sql, database_type
+	colsList, err := getStringColsList(ctx, bh, sql, 0, 1, 2)
 	if err != nil {
-		return "", err
+		return logicalRestoreDatabaseDefinition{}, err
 	}
 	if len(colsList) == 0 || len(colsList[0]) == 0 {
-		return "", moerr.NewBadDB(ctx, dbName)
+		return logicalRestoreDatabaseDefinition{}, moerr.NewBadDB(ctx, dbName)
 	}
-	return colsList[0][1], nil
+	return newLogicalRestoreDatabaseDefinition(ctx, dbName, colsList[0])
 }
 
 func getTableInfo(
@@ -3122,6 +3202,17 @@ func restoreToCluster(ctx context.Context,
 	pastExistsAccount, err = getPastExistsAccounts(ctx, ses.GetService(), bh, snapshotName, snapshotTs)
 	if err != nil {
 		return err
+	}
+	// Validate every source account before dropping an account that is absent
+	// from the snapshot. Account drop terminates sessions and sends cross-CN
+	// kill requests that a catalog transaction rollback cannot undo.
+	for _, account := range pastExistsAccount {
+		accountID := uint32(account.accountId)
+		if err = preflightLogicalRestoreAccountFromTS(
+			ctx, ses.GetService(), bh, snapshotTs, accountID, accountID,
+		); err != nil {
+			return err
+		}
 	}
 
 	var currentMap = make(map[string]bool)

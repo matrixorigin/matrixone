@@ -95,6 +95,13 @@ func newInternalStatementContext(parent context.Context) context.Context {
 		statistic.NewStatsInfo())
 }
 
+func markInternalJSONMergeWarningContext(ctx context.Context) context.Context {
+	return plan.WithJSONMergeWarningOrigin(
+		ctx,
+		plan.JSONMergeWarningInternalReprepare,
+	)
+}
+
 // NewSQLExecutor returns a internal used sql service. It can execute sql in current CN.
 func NewSQLExecutor(
 	addr string,
@@ -345,7 +352,8 @@ func (exec *txnExecutor) Exec(
 	statementOption executor.StatementOption,
 ) (executor.Result, error) {
 	parentCtx := exec.ctx
-	exec.ctx = newInternalStatementContext(parentCtx)
+	exec.ctx = markInternalJSONMergeWarningContext(
+		newInternalStatementContext(parentCtx))
 	defer func() {
 		// The fresh StatsInfo is statement-owned. Do not retain it in a
 		// long-lived transaction executor or build an unbounded context chain.
@@ -445,6 +453,9 @@ func (exec *txnExecutor) Exec(
 		nil,
 		exec.s.taskservice,
 	)
+	// Internal DML (including CTAS population) needs the same expression error
+	// policy as frontend DML, before planning can fold any constants.
+	initInternalStatementProfile(proc, stmts[0])
 	// Attach original frontend session to support session-scoped metadata
 	// (e.g. temporary-table alias mapping) in internal SQL compilation.
 	proc.Session = getInternalExecutorSession(exec.ctx)
@@ -774,4 +785,10 @@ func (exec *txnExecutor) getDatabase() string {
 		return exec.database
 	}
 	return exec.opts.Database()
+}
+
+func initInternalStatementProfile(proc *process.Process, stmt tree.Statement) {
+	profile := &process.StmtProfile{}
+	proc.SetStmtProfile(profile)
+	profile.SetStatementRuntimeProfile(stmt.GetStatementType(), stmt.GetQueryType(), tree.IsIgnoreStatement(stmt))
 }

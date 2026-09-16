@@ -245,7 +245,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		// process view so statement-dependent cached decisions are recomputed.
 		proc.SetStmtProfile(&ses.stmtProfile)
 	}
-	ses.stmtProfile.SetStatementRuntimeProfile(stmtTyp, queryTyp, isIgnoreStatement(statement))
+	ses.stmtProfile.SetStatementRuntimeProfile(stmtTyp, queryTyp, tree.IsIgnoreStatement(statement))
 
 	//note: txn id here may be empty
 	// add by #9907, set the result of last_query_id(), this will pass those isCmdFieldListSql() from client.
@@ -389,27 +389,6 @@ func redactStatementErrorForLogging(err error, text string) error {
 	return moerr.NewParseErrorNoCtx("parse error in <redacted MongoDB __mo_query statement>")
 }
 
-func isIgnoreStatement(statement tree.Statement) bool {
-	switch stmt := statement.(type) {
-	case *tree.Insert:
-		return len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil
-	case *tree.Update:
-		return stmt.Ignore
-	case *tree.Load:
-		return isLoadDataIgnore(stmt)
-	default:
-		return false
-	}
-}
-
-func isLoadDataIgnore(stmt *tree.Load) bool {
-	if stmt == nil {
-		return false
-	}
-	_, ok := stmt.DuplicateHandling.(*tree.DuplicateKeyIgnore)
-	return ok
-}
-
 func refreshProcessStmtProfileForPreparedStmt(proc *process.Process, statement tree.Statement) {
 	if proc == nil || statement == nil {
 		return
@@ -419,7 +398,7 @@ func refreshProcessStmtProfileForPreparedStmt(proc *process.Process, statement t
 	stmtProfile.SetStatementRuntimeProfile(
 		getStatementType(statement).GetStatementType(),
 		getStatementType(statement).GetQueryType(),
-		isIgnoreStatement(statement),
+		tree.IsIgnoreStatement(statement),
 	)
 }
 
@@ -2030,6 +2009,7 @@ func isTopLevelClientStatement(ses *Session, execCtx *ExecCtx, input *UserInput)
 func resetDiagnosticsForStatement(ses *Session, execCtx *ExecCtx, input *UserInput, stmt tree.Statement) {
 	if isTopLevelClientStatement(ses, execCtx, input) && !isDiagnosticsStatement(stmt) {
 		ses.resetDiagnostics()
+		beginJSONMergeWarningStatement(ses, execCtx, input, stmt)
 	}
 }
 
@@ -3948,6 +3928,15 @@ func buildPlanWithPrepareMode(
 	if planContext == nil {
 		planContext = context.Background()
 	}
+	warningOrigin, ok := plan2.JSONMergeWarningOriginFromContext(planContext)
+	if !ok {
+		warningOrigin = plan2.JSONMergeWarningUser
+	}
+	var warningSink plan2.JSONMergeWarningSink
+	if ses != nil {
+		warningSink, _ = ses.(plan2.JSONMergeWarningSink)
+	}
+	planContext = plan2.AttachJSONMergeWarningContext(planContext, warningSink, warningOrigin)
 	stats := statistic.StatsInfoFromContext(planContext)
 	stats.PlanStart()
 
@@ -4132,6 +4121,13 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 
 func cachedPlanForInput(ses *Session, input *UserInput) *cachedPlan {
 	if !input.canUsePlanCache() {
+		return nil
+	}
+	if containsJSONMergeCall(input.getSql()) {
+		// A pre-existing entry may have been created before this compatibility
+		// guard was reached. Remove it so a later request cannot bypass binding
+		// and silently lose warning 1287.
+		ses.removeCachedPlan(input.getHash())
 		return nil
 	}
 	if !reusablePlanGenerationSupported(ses.proc) {
@@ -6294,6 +6290,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	}()
 
 	canCache := !stagedSQLMode && input.canUsePlanCache() &&
+		!containsJSONMergeCall(input.getSql()) &&
 		reusablePlanGenerationSupported(proc)
 	Cached := false
 	defer func() {

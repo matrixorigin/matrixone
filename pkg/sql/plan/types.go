@@ -489,6 +489,8 @@ type QueryBuilder struct {
 	isInsertIgnore        bool             // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
 	deleteNode            map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
 
+	insertHasOnDuplicateUpdate bool // statement-local: keep pure INSERT IGNORE auto-increment handling out of ODKU
+
 	// spill memory for aggregate function
 	// jsonProbeFtNodes marks the fulltext index-scan nodes built for a json
 	// PROBE — a prefilter the optimizer injected, not a user MATCH. Their score
@@ -1010,6 +1012,12 @@ type BindContext struct {
 	lower int64
 
 	groupingFlag []bool
+
+	// Only GROUP BY validation consumes this query-block-local proof. It is
+	// never a physical uniqueness property or prepared-execution state.
+	fullGroupByInputNode  int32
+	fullGroupByInputReady bool
+	fullGroupByProof      *fullGroupByDependencyProof
 
 	remapOption *tree.RewriteOption
 }
