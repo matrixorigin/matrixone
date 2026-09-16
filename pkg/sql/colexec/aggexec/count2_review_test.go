@@ -302,6 +302,246 @@ func TestCountDistinctFloatPolicyCrossRepresentationMerge(t *testing.T) {
 	})
 }
 
+func TestDistinctFloatCompatibilityKeyCodecs(t *testing.T) {
+	float32Type := types.T_float32.ToType()
+	float64Type := types.T_float64.ToType()
+	raw32 := make([]byte, 4)
+	raw64 := make([]byte, 8)
+	binary.LittleEndian.PutUint32(raw32, 0x7fc00001)
+	binary.LittleEndian.PutUint64(raw64, 0xfff8000000000001)
+
+	require.Equal(t, len(raw32), distinctPayloadKeySize(float32Type, raw32, true))
+	require.Equal(t, len(raw64), distinctPayloadKeySize(float64Type, raw64, true))
+	legacy32 := appendDistinctPayloadKey(nil, float32Type, raw32, true)
+	legacy64 := appendDistinctPayloadKey(nil, float64Type, raw64, true)
+	require.Equal(t, raw32, legacy32)
+	require.Equal(t, raw64, legacy64)
+
+	modern32 := appendDistinctPayloadKey(nil, float32Type, raw32, false)
+	modern64 := appendDistinctPayloadKey(nil, float64Type, raw64, false)
+	require.Equal(t,
+		distinctFloat32KeyBits(math.Float32frombits(0x7fc00001), 0, false),
+		binary.LittleEndian.Uint32(modern32))
+	require.Equal(t,
+		distinctFloat64KeyBits(math.Float64frombits(0xfff8000000000001), false),
+		binary.LittleEndian.Uint64(modern64))
+
+	integerType := types.T_int64.ToType()
+	integerRaw := make([]byte, 8)
+	binary.LittleEndian.PutUint64(integerRaw, 42)
+	require.Equal(t, len(integerRaw), distinctPayloadKeySize(integerType, integerRaw, true))
+	require.Len(t, appendDistinctPayloadKey(nil, integerType, integerRaw, true), len(integerRaw))
+}
+
+func TestDistinctFloatMergeNormalizesRepresentations(t *testing.T) {
+	float32Info := &aggInfo{
+		isDistinct: true,
+		argTypes:   []types.Type{types.T_float32.ToType()},
+	}
+	float64Info := &aggInfo{
+		isDistinct: true,
+		argTypes:   []types.Type{types.T_float64.ToType()},
+	}
+
+	legacy32 := uint64(0x7fc00001)
+	got32, err := normalizeDistinctFixedValue(
+		float32Info, legacy32, true, false)
+	require.NoError(t, err)
+	require.Equal(t, uint64(distinctFloat32KeyBits(
+		math.Float32frombits(uint32(legacy32)), 0, false)), got32)
+
+	legacy64 := uint64(0xfff8000000000001)
+	got64, err := normalizeDistinctFixedValue(
+		float64Info, legacy64, true, false)
+	require.NoError(t, err)
+	require.Equal(t, distinctFloat64KeyBits(
+		math.Float64frombits(legacy64), false), got64)
+
+	integerInfo := &aggInfo{
+		isDistinct: true,
+		argTypes:   []types.Type{types.T_int64.ToType()},
+	}
+	gotInteger, err := normalizeDistinctFixedValue(integerInfo, 42, true, false)
+	require.NoError(t, err)
+	require.Equal(t, uint64(42), gotInteger)
+	_, err = normalizeDistinctFixedValue(float64Info, legacy64, false, true)
+	require.Error(t, err)
+
+	payload32 := make([]byte, 4)
+	binary.LittleEndian.PutUint32(payload32, uint32(legacy32))
+	require.NoError(t, normalizeDistinctPayloadInPlace(
+		float32Info.argTypes[0], payload32, false))
+	require.Equal(t, uint32(got32), binary.LittleEndian.Uint32(payload32))
+
+	payload64 := make([]byte, 8)
+	binary.LittleEndian.PutUint64(payload64, legacy64)
+	require.NoError(t, normalizeDistinctPayloadInPlace(
+		float64Info.argTypes[0], payload64, false))
+	require.Equal(t, got64, binary.LittleEndian.Uint64(payload64))
+	require.Error(t, normalizeDistinctPayloadInPlace(
+		float64Info.argTypes[0], payload64, true))
+	require.ErrorIs(t, normalizeDistinctPayloadInPlace(
+		float32Info.argTypes[0], make([]byte, 3), false),
+		mpool.ErrAllocationAccountInvariant)
+	require.ErrorIs(t, normalizeDistinctPayloadInPlace(
+		float64Info.argTypes[0], make([]byte, 4), false),
+		mpool.ErrAllocationAccountInvariant)
+
+	key := make([]byte, kAggArgPrefixSz+len(payload64))
+	binary.BigEndian.PutUint16(key, 0)
+	binary.LittleEndian.PutUint64(key[kAggArgPrefixSz:], legacy64)
+	require.NoError(t, normalizeDistinctKeyInPlace(
+		float64Info, key, true, false))
+	require.Equal(t, got64,
+		binary.LittleEndian.Uint64(key[kAggArgPrefixSz:]))
+	require.ErrorIs(t, normalizeDistinctKeyInPlace(
+		float64Info, []byte{0}, true, false),
+		mpool.ErrAllocationAccountInvariant)
+
+	tupleInfo := &aggInfo{
+		isDistinct: true,
+		argTypes: []types.Type{
+			types.T_float64.ToType(),
+			types.New(types.T_char, 2, 0),
+		},
+	}
+	tuplePayload := make([]byte, 0, 4+8+4+1)
+	var size [4]byte
+	binary.BigEndian.PutUint32(size[:], uint32(len(payload64)))
+	tuplePayload = append(tuplePayload, size[:]...)
+	tuplePayload = append(tuplePayload, payload64...)
+	binary.BigEndian.PutUint32(size[:], 1)
+	tuplePayload = append(tuplePayload, size[:]...)
+	tuplePayload = append(tuplePayload, 'a')
+	tupleKey := append([]byte{0, 0}, tuplePayload...)
+	require.NoError(t, normalizeDistinctKeyInPlace(
+		tupleInfo, tupleKey, true, false))
+	require.Equal(t, got64,
+		binary.LittleEndian.Uint64(tupleKey[kAggArgPrefixSz+4:]))
+	require.Equal(t, []byte{'a'},
+		tupleKey[kAggArgPrefixSz+4+len(payload64)+4:])
+
+	malformed := append([]byte{0, 0}, tuplePayload...)
+	malformed = append(malformed, 0)
+	require.ErrorIs(t, normalizeDistinctKeyInPlace(
+		tupleInfo, malformed, true, false),
+		mpool.ErrAllocationAccountInvariant)
+	require.ErrorIs(t, normalizeDistinctKeyInPlace(
+		tupleInfo, []byte{0, 0, 0}, true, false),
+		mpool.ErrAllocationAccountInvariant)
+}
+
+func TestConfigureLegacyDistinctFloatKeysFreezesAfterStateAdmission(t *testing.T) {
+	var nilExec *aggExec
+	require.ErrorIs(t, nilExec.setLegacyDistinctFloatKeys(true),
+		mpool.ErrAllocationAccountInvalid)
+
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	exec := newCountColumnExec(
+		mp, AggIdOfCountColumn, true,
+		[]types.Type{types.T_float64.ToType()},
+	).(*countColumnExec)
+	require.True(t, RequiresModernDistinctFloatKeyWire(exec))
+	require.NoError(t, ConfigureLegacyDistinctFloatKeys(exec, true))
+	require.True(t, exec.legacyDistinctFloatKeys)
+	require.False(t, RequiresModernDistinctFloatKeyWire(exec))
+	require.NoError(t, ConfigureLegacyDistinctFloatKeys(exec, true))
+	require.NoError(t, exec.GroupGrow(1))
+	require.ErrorContains(t,
+		ConfigureLegacyDistinctFloatKeys(exec, false),
+		"after state admission")
+	exec.Free()
+}
+
+func TestCountDistinctLegacyTupleAppendNormalizesFloatKeys(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	tupleTypes := []types.Type{
+		types.T_float64.ToType(),
+		types.New(types.T_char, 2, 0),
+	}
+	source := newCountColumnExec(
+		mp, AggIdOfCountColumn, true, tupleTypes,
+	).(*countColumnExec)
+	target := newCountColumnExec(
+		mp, AggIdOfCountColumn, true, tupleTypes,
+	).(*countColumnExec)
+	require.NoError(t, ConfigureLegacyDistinctFloatKeys(source, true))
+	require.NoError(t, source.GroupGrow(1))
+	require.NoError(t, target.preAllocateGroupsWithNulls(1, true))
+
+	floats := testutil.NewFloat64Vector(
+		2, tupleTypes[0], mp, false, nil, []float64{
+			math.Float64frombits(0x7ff8000000000001),
+			math.Float64frombits(0xfff8000000000001),
+		})
+	chars := vector.NewVec(tupleTypes[1])
+	require.NoError(t, vector.AppendBytes(chars, []byte("a"), false, mp))
+	require.NoError(t, vector.AppendBytes(chars, []byte("a"), false, mp))
+	require.NoError(t, source.BatchFill(
+		0, []uint64{1, 1}, []*vector.Vector{floats, chars}))
+	require.Equal(t, uint32(2), source.state[0].argCnt[0])
+
+	offset, err := target.state[0].appendFromStateArg(
+		mp, 0, &source.state[0], &target.aggInfo)
+	require.NoError(t, err)
+	require.Equal(t, int32(1), offset)
+	require.Equal(t, uint32(1), target.state[0].argCnt[0])
+
+	result, err := target.Flush()
+	require.NoError(t, err)
+	require.Equal(t, int64(1),
+		vector.GetFixedAtNoTypeCheck[int64](result[0], 0))
+	result[0].Free(mp)
+	floats.Free(mp)
+	chars.Free(mp)
+	source.Free()
+	target.Free()
+}
+
+func TestCountDistinctModernToLegacyPreflightRejectsWithoutReservation(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, account, allocation := newReviewAggregateAllocation(t, 2<<20)
+	source := newCountColumnExec(
+		mp, AggIdOfCountColumn, true,
+		[]types.Type{types.T_float64.ToType()},
+	).(*countColumnExec)
+	target := newCountColumnExec(
+		mp, AggIdOfCountColumn, true,
+		[]types.Type{types.T_float64.ToType()},
+	).(*countColumnExec)
+	require.NoError(t, source.SetAllocationAccount(allocation))
+	require.NoError(t, target.SetAllocationAccount(allocation))
+	require.NoError(t, ConfigureLegacyDistinctFloatKeys(target, true))
+	require.NoError(t, source.GroupGrow(distinctFixedIndexMinGroups))
+	require.NoError(t, target.GroupGrow(distinctFixedIndexMinGroups))
+
+	values := testutil.NewFloat64Vector(
+		2, types.T_float64.ToType(), mp, false, nil, []float64{
+			math.Float64frombits(0x7ff8000000000001),
+			math.Float64frombits(0x7ff8000000000002),
+		})
+	require.NoError(t, source.PreflightBatchFill(
+		0, []uint64{1, 1}, []*vector.Vector{values}))
+	require.NoError(t, source.BatchFill(
+		0, []uint64{1, 1}, []*vector.Vector{values}))
+	beforeUsed := account.Snapshot().Used
+	beforeCount := target.state[0].argCnt[0]
+	err := target.PreflightBatchMerge(source, 0, []uint64{1})
+	require.ErrorContains(t, err, "canonical FLOAT DISTINCT state")
+	require.Equal(t, beforeUsed, account.Snapshot().Used)
+	require.Equal(t, beforeCount, target.state[0].argCnt[0])
+
+	values.Free(mp)
+	source.Free()
+	target.Free()
+	require.NoError(t, source.ClearAllocationAccount(allocation))
+	require.NoError(t, target.ClearAllocationAccount(allocation))
+	finishTestAggregateAllocation(t, registry, account)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestCountDistinctBulkFillChunksBeyondUnitLimit(t *testing.T) {
 	for _, tc := range []struct {
 		name         string

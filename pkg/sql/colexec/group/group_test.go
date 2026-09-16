@@ -4572,6 +4572,53 @@ func TestRemoteDistinctFloatUsesProtocolKeyPolicy(t *testing.T) {
 	}
 }
 
+func TestRemoteDistinctFloatDowngradeRejectsModernState(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	require.True(t, ok)
+	t.Cleanup(func() {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		proc.Free()
+	})
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion79)
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = testutil.NewFloat64Vector(
+		1, types.T_float64.ToType(), proc.Mp(), false, nil,
+		[]float64{math.Float64frombits(0x7ff8000000000001)})
+	input.SetRowCount(1)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	group := newGroupOp(proc, nil, []aggexec.AggFuncExecExpression{
+		aggexec.MakeAggFunctionExpression(
+			aggexec.AggIdOfCountColumn,
+			true,
+			[]*plan.Expr{colExpr(0, types.T_float64)},
+			nil,
+		),
+	})
+	group.NeedEval = false
+	group.AppendChild(child)
+	t.Cleanup(func() {
+		group.Free(proc, false, nil)
+		child.Free(proc, false, nil)
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+
+	require.NoError(t, group.Prepare(proc))
+	require.Len(t, group.ctr.aggList, 1)
+	require.True(t,
+		aggexec.RequiresModernDistinctFloatKeyWire(group.ctr.aggList[0]))
+	// The state was admitted while the deployment gate was new. A later
+	// capability downgrade must fail at the partial-output boundary instead of
+	// sending a canonicalized state to a legacy receiver.
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion78)
+	result, err := vm.Exec(group, proc)
+	require.Nil(t, result.Batch)
+	require.ErrorContains(t, err, "requires MORPCVersion79")
+}
+
 func TestRemoteHLLStateRetainsCompatibilityAcrossProtocolVersions(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
