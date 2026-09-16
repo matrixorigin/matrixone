@@ -68,6 +68,16 @@ func (blockingArtifactResolver) Resolve(ctx context.Context, _ uint64, _, _ stri
 	return "", ctx.Err()
 }
 
+type closeBlockingArtifactResolver struct {
+	started chan struct{}
+}
+
+func (r *closeBlockingArtifactResolver) Resolve(ctx context.Context, _ uint64, _, _ string) (string, error) {
+	close(r.started)
+	<-ctx.Done()
+	return "", ctx.Err()
+}
+
 func (r *recordingArtifactResolver) Resolve(_ context.Context, accountID uint64, handler, digest string) (string, error) {
 	r.calls++
 	r.account = accountID
@@ -114,6 +124,49 @@ func TestValidateDefinitionBoundsArtifactResolution(t *testing.T) {
 	case <-time.After(500 * time.Millisecond):
 		cancel()
 		require.FailNow(t, "artifact resolution was not bounded by the gateway request timeout")
+	}
+}
+
+func TestGatewayCloseCancelsDefinitionResolution(t *testing.T) {
+	invocation := validInvocation()
+	resolver := &closeBlockingArtifactResolver{started: make(chan struct{})}
+	gateway, err := NewGatewayWithArtifactStore(ClientConfig{
+		Enabled:         true,
+		AllowUnisolated: true,
+		ServerAddress:   "127.0.0.1:1",
+		RequestTimeout:  30 * time.Second,
+	}, resolver)
+	require.NoError(t, err)
+
+	definition := &udf.RoutineDefinition{
+		Language:                udf.LanguagePython,
+		AccountID:               invocation.FunctionRef.AccountID,
+		Handler:                 invocation.Handler,
+		Args:                    append([]types.Type(nil), invocation.Args...),
+		ReturnType:              invocation.ReturnType,
+		Mode:                    invocation.Mode,
+		NullPolicy:              invocation.NullPolicy,
+		ABIContract:             invocation.ABIContract,
+		AdapterVersion:          invocation.AdapterVersion,
+		SDKVersion:              invocation.SDKVersion,
+		DefinitionSchemaVersion: invocation.DefinitionSchemaVersion,
+		ArtifactDigest:          invocation.ArtifactDigest,
+		EnvironmentDigest:       invocation.EnvironmentDigest,
+		DefinitionFingerprint:   invocation.DefinitionFingerprint,
+	}
+	done := make(chan error, 1)
+	go func() { done <- gateway.ValidateDefinition(context.Background(), definition) }()
+	select {
+	case <-resolver.started:
+	case <-time.After(time.Second):
+		require.FailNow(t, "artifact resolution did not start")
+	}
+	require.NoError(t, gateway.Close())
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, context.Canceled)
+	case <-time.After(time.Second):
+		require.FailNow(t, "Gateway.Close did not cancel artifact resolution")
 	}
 }
 
