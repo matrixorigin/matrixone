@@ -431,6 +431,8 @@ func TestPreparedExportSetPrecisionExpressionRoles(t *testing.T) {
 		{"round integer", "round(x,0)", int64(1), types.T_int64.ToType(), "NNNN", false},
 		{"sign integer", "sign(x)", int64(1), types.T_int64.ToType(), "NNNN", false},
 		{"ifnull real", "ifnull(x,0)", 0.5, types.T_float64.ToType(), "YYYY", true},
+		{"bitwise real", "x & 1", 0.5, types.T_float64.ToType(), "YYYY", true},
+		{"coalesce text", "coalesce(x,'0')", "0.5", types.New(types.T_decimal64, 2, 1), "YYYY", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, stmt, cw, _ := newPreparedExecuteEnvForSQL(t, 401,
@@ -447,8 +449,12 @@ func TestPreparedExportSetPrecisionExpressionRoles(t *testing.T) {
 			inputs := []*batch.Batch{batch.EmptyForConstFoldBatch}
 			if tc.materialize {
 				input := batch.NewWithSize(1)
-				input.Vecs[0] = vector.NewVec(types.T_float64.ToType())
-				require.NoError(t, vector.AppendFixed(input.Vecs[0], tc.value.(float64), false, cw.proc.Mp()))
+				input.Vecs[0] = vector.NewVec(tc.typ)
+				if tc.typ.IsDecimal() {
+					require.NoError(t, vector.AppendFixed(input.Vecs[0], types.Decimal64(5), false, cw.proc.Mp()))
+				} else {
+					require.NoError(t, vector.AppendFixed(input.Vecs[0], tc.value.(float64), false, cw.proc.Mp()))
+				}
 				input.SetRowCount(1)
 				defer input.Clean(cw.proc.Mp())
 				inputs = []*batch.Batch{input}

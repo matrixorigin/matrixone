@@ -2245,11 +2245,12 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 			precisionPos, precisionOwned := rule.preparedExportSetPrecisionPosition(originalArgs[i], rewrittenArg)
 			if len(rule.exportSetParamPositions) > 0 && preparedExportSetIntegerPrecisionArg(functionName, i) && precisionOwned {
-				rewrittenArg = unwrapPreparedPrecisionEnvelope(rewrittenArg)
+				rewrittenArg = rewritePreparedPrecisionBitwiseOperands(unwrapPreparedPrecisionEnvelope(rewrittenArg))
 				sourceType := types.T(rewrittenArg.Typ.Id)
 				overload := int32(1)
-				if sourceType.IsMySQLString() && precisionPos >= 0 && precisionPos < len(rule.params) &&
-					rule.params[precisionPos] != nil && makeTypeByPlan2Expr(rule.params[precisionPos]).IsNumeric() {
+				if sourceType.IsMySQLString() && preparedPrecisionProducerUsesResolvedDomain(rewrittenArg) &&
+					precisionPos >= 0 && precisionPos < len(rule.params) && rule.params[precisionPos] != nil &&
+					makeTypeByPlan2Expr(rule.params[precisionPos]).IsNumeric() {
 					rewrittenArg, err = makePlan2CastExpr(rule.ctx, rewrittenArg, rule.params[precisionPos].Typ)
 					if err != nil {
 						return nil, err
@@ -3561,6 +3562,40 @@ func preparedPrecisionHasFallbackSource(expr *Expr) bool {
 		}
 	}
 	return false
+}
+
+func preparedPrecisionProducerUsesResolvedDomain(expr *Expr) bool {
+	fn := expr.GetF()
+	return fn == nil || fn.Func == nil || fn.Func.GetObjName() != "coalesce"
+}
+
+func rewritePreparedPrecisionBitwiseOperands(expr *Expr) *Expr {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || !preparedPrecisionBitwiseFunction(fn.Func.GetObjName()) {
+		return expr
+	}
+	copy := DeepCopyExpr(expr)
+	for _, arg := range copy.GetF().Args {
+		cast := arg.GetF()
+		if cast == nil || cast.Func == nil || cast.Func.GetObjName() != "cast" || len(cast.Args) == 0 ||
+			cast.GetSyntaxExplicitCast() || !types.T(arg.Typ.Id).IsInteger() {
+			continue
+		}
+		source := types.T(cast.Args[0].Typ.Id)
+		if source.IsFloat() || source.IsDecimal() {
+			setPreparedCastOverload(arg, 1)
+		}
+	}
+	return copy
+}
+
+func preparedPrecisionBitwiseFunction(name string) bool {
+	switch name {
+	case "&", "|", "^", "<<", ">>":
+		return true
+	default:
+		return false
+	}
 }
 
 func setPreparedCastOverload(expr *Expr, overload int32) {
