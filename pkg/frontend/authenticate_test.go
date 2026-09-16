@@ -670,7 +670,7 @@ func TestCreateTablesInformationSchemaPreservesKnownProtocolFallback(t *testing.
 func TestProtocolVersionForTenantInitializationUsesLegacyForUnknownRuntime(t *testing.T) {
 	version, err := protocolVersionForTenantInitialization("missing-pr27716-runtime", nil)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion74, version)
+	require.Equal(t, defines.MORPCVersion75, version)
 
 	rt := moruntime.ServiceRuntime("")
 	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -684,7 +684,7 @@ func TestProtocolVersionForTenantInitializationUsesLegacyForUnknownRuntime(t *te
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, "invalid")
 	version, err = protocolVersionForTenantInitialization("", nil)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion74, version)
+	require.Equal(t, defines.MORPCVersion75, version)
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion41)
 	version, err = protocolVersionForTenantInitialization("", nil)
@@ -710,14 +710,14 @@ func TestCreateTablesInformationSchemaUsesCommonProtocolGate(t *testing.T) {
 	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	oldCluster, hadCluster := rt.GetGlobalVariables(moruntime.ClusterService)
 	cluster := &tenantInitializationProtocolCluster{cns: []metadata.CNService{
+		{ServiceID: "cn-v76", QueryAddress: "cn-v76-query", PipelineServiceAddress: "cn-v76-pipeline"},
 		{ServiceID: "cn-v75", QueryAddress: "cn-v75-query", PipelineServiceAddress: "cn-v75-pipeline"},
-		{ServiceID: "cn-v74", QueryAddress: "cn-v74-query", PipelineServiceAddress: "cn-v74-pipeline"},
 	}}
 	t.Cleanup(func() {
 		if hadProtocol {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion75)
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion76)
 		}
 		if hadCluster {
 			rt.SetGlobalVariables(moruntime.ClusterService, oldCluster)
@@ -729,7 +729,7 @@ func TestCreateTablesInformationSchemaUsesCommonProtocolGate(t *testing.T) {
 	queryClient := newMockQueryClient()
 	proc.Base.QueryClient = queryClient
 	rt.SetGlobalVariables(moruntime.ClusterService, cluster)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion75)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion76)
 
 	setProtocolResponse := func(address string, version int64) {
 		queryClient.cnResponses[address] = &querypb.Response{
@@ -747,33 +747,33 @@ func TestCreateTablesInformationSchemaUsesCommonProtocolGate(t *testing.T) {
 		{
 			name: "mixed versions use legacy VIEWS",
 			responses: map[string]int64{
+				"cn-v76-query": defines.MORPCVersion76,
 				"cn-v75-query": defines.MORPCVersion75,
-				"cn-v74-query": defines.MORPCVersion74,
 			},
 			wantLegacy: true,
 		},
 		{
-			name: "all CNs at v75 use current DDL",
+			name: "all CNs at v76 use current DDL",
 			responses: map[string]int64{
-				"cn-v75-query": defines.MORPCVersion75,
-				"cn-v74-query": defines.MORPCVersion75,
+				"cn-v76-query": defines.MORPCVersion76,
+				"cn-v75-query": defines.MORPCVersion76,
 			},
 			wantLatest: true,
 		},
 		{
 			name: "unknown CN capability uses legacy VIEWS",
 			responses: map[string]int64{
-				"cn-v75-query": defines.MORPCVersion75,
+				"cn-v76-query": defines.MORPCVersion76,
 			},
 			wantLegacy: true,
 		},
 		{
 			name: "RPC failure uses legacy VIEWS",
 			responses: map[string]int64{
-				"cn-v75-query": defines.MORPCVersion75,
+				"cn-v76-query": defines.MORPCVersion76,
 			},
 			sendErrors: map[string]error{
-				"cn-v74-query": context.Canceled,
+				"cn-v75-query": context.Canceled,
 			},
 			wantLegacy: true,
 		},
@@ -799,7 +799,7 @@ func TestCreateTablesInformationSchemaUsesCommonProtocolGate(t *testing.T) {
 					return nil
 				}).AnyTimes()
 
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion75)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion76)
 			err := createTablesInInformationSchemaOfGeneralTenant(
 				context.Background(), bh, service, proc)
 			require.NoError(t, err)
