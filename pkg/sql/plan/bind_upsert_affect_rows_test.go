@@ -189,6 +189,30 @@ func noopFilterNotBranch(expr *planpb.Expr) *planpb.Function {
 func TestUpsertAffectRowsPlan(t *testing.T) {
 	mock := NewMockOptimizer(true)
 
+	t.Run("INSERT IGNORE with ODKU keeps UPDATE action", func(t *testing.T) {
+		p, err := runOneStmt(mock, t,
+			"insert ignore into constraint_test.dept(deptno, dname, loc) values (1, 'A', 'B') on duplicate key update loc = values(loc)")
+		require.NoError(t, err)
+		dedup := odkuDedupCtx(t, p)
+		require.NotNil(t, dedup)
+	})
+
+	t.Run("INSERT IGNORE with ODKU keeps pure-ignore auto increment metadata out", func(t *testing.T) {
+		tableDef := mock.ctxt.tables["dept"]
+		wasAutoIncrement := tableDef.Cols[0].Typ.AutoIncr
+		defer func() { tableDef.Cols[0].Typ.AutoIncr = wasAutoIncrement }()
+		tableDef.Cols[0].Typ.AutoIncr = true
+		p, err := runOneStmt(mock, t,
+			"insert ignore into constraint_test.dept(deptno, dname, loc) values (NULL, 'A', 'B') on duplicate key update loc = values(loc)")
+		require.NoError(t, err)
+		for _, node := range p.GetQuery().Nodes {
+			if preInsert := node.GetPreInsertCtx(); preInsert != nil {
+				require.False(t, preInsert.TrackAutoIncrementGenerated,
+					"ODKU must not carry INSERT IGNORE-only auto-increment provenance")
+			}
+		}
+	})
+
 	t.Run("ODKU carries logical count and physical marker", func(t *testing.T) {
 		// dept goes through the dedup-join + MULTI_UPDATE path; loc is not part of
 		// any key, so it is a legal ON DUPLICATE KEY UPDATE target.
