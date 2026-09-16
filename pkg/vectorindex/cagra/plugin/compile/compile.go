@@ -97,6 +97,12 @@ func (Hooks) RestoreInitSQL(ctx compileplugin.CompileContext, indexDefs map[stri
 		ctx.QryDatabase(), ctx.OriginalTableDef().Name, metaDef.IndexName), nil
 }
 
+// AlterCopyInitSQL — no InitSQL needed: the cuvs ISCP consumer rebuilds the model from the CDC
+// ts=0 replay, so the copy-alter replacement index converges without an explicit rebuild (#28837).
+func (Hooks) AlterCopyInitSQL(_ compileplugin.CompileContext, _ map[string]*plan.IndexDef) (bool, string, error) {
+	return false, "", nil
+}
+
 // handleCreate is the shared body for HandleCreateIndex and
 // HandleReindex. forceSync controls whether cagra_create runs inside
 // the current txn (true — background reindex) or is deferred to the

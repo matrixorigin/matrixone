@@ -170,6 +170,28 @@ type Hooks interface {
 	// cloned tables up from their watermark). See Scope.RestoreTable.
 	RestoreInitSQL(ctx CompileContext, indexDefs map[string]*plan.IndexDef) (startFromNow bool, initSQL string, err error)
 
+	// AlterCopyInitSQL returns (startFromNow, initSQL) for the CDC of an UNAFFECTED
+	// plugin index on the replacement table of a COPY ALTER (ALTER … ADD/CHANGE …
+	// that does not touch the indexed column). cloneUnaffectedIndexes SKIPS the clone
+	// for a SkipWholeIndex async index, so the replacement hidden tables start empty
+	// and the CDC is registered from ts=0.
+	//
+	// Almost every algorithm returns (false, ""): their ISCP consumer rebuilds the
+	// whole index from that ts=0 replay — RunHnsw/RunCuvs accumulate the snapshot and
+	// Save() the model (HNSW/CAGRA/IVF-PQ); IVF-FLAT clones metadata+centroids and
+	// CDC-rebuilds entries; classic fulltext is row-based so the replay re-inserts its
+	// rows.
+	//
+	// fulltext2 is the exception: its base (tag=0)+metadata are written ONLY by
+	// buildFromSource, and RunFulltext2 only APPENDS a cdc_tail — so the ts=0 replay
+	// yields a tail with no base, which is not queryable, and MATCH returns empty until
+	// a manual reindex/restart. It therefore returns (true, "ALTER … REINDEX …
+	// FORCE_SYNC"), run post-commit by the CDC's first iteration to build the base,
+	// then arms the tail at the post-build watermark (#28837). (This differs from
+	// fulltext2's RestoreInitSQL "SELECT 1", which is valid only because Restore's
+	// block clone copies the base — copy-alter does not.)
+	AlterCopyInitSQL(ctx CompileContext, indexDefs map[string]*plan.IndexDef) (startFromNow bool, initSQL string, err error)
+
 	// ValidateReindexParams checks a parameter update against the algorithm's
 	// schema and returns the merged params map. Replaces the inner switch
 	// at ddl.go:929. alter is the planner's AlterTable_Action_AlterIndex
