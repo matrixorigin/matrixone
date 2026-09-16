@@ -986,7 +986,12 @@ func Test_CollectTableInfoSQL(t *testing.T) {
 	require.NoError(t, err)
 	upperSQL := strings.ToUpper(sql)
 	assert.Contains(t, upperSQL, "AS HAS_USER_PK")
-	assert.Contains(t, upperSQL, "PK.NAME <> '__MO_FAKE_PK_COL'")
+	assert.Contains(t, upperSQL, "PK.ATT_DATABASE = TBL.RELDATABASE")
+	assert.Contains(t, upperSQL, "PK.ATT_RELNAME = TBL.RELNAME")
+	assert.Contains(t, upperSQL, "PK.ATT_CONSTRAINT_TYPE = 'P'")
+	assert.Contains(t, upperSQL, "PK.ATTNAME <> '__MO_FAKE_PK_COL'")
+	assert.NotContains(t, upperSQL, "PK.DB_NAME")
+	assert.NotContains(t, upperSQL, "PK.CONSTRAINT_TYPE")
 	assert.NotContains(t, upperSQL, "AND EXISTS")
 
 	sql = builder.CollectTableInfoSQL("0", "'source_db'", "'orders'")
