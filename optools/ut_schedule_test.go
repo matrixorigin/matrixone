@@ -386,6 +386,153 @@ exit 0
 	}
 }
 
+func TestEngineChildRegistrationSurvivesCancellation(t *testing.T) {
+	transform := func(text string) string {
+		const anchor = "        \"$@\" &\n        child_pid=$!\n        child_pids[slot]=${child_pid}\n"
+		if got := strings.Count(text, anchor); got != 1 {
+			t.Fatalf("engine child registration anchor count = %d, want 1", got)
+		}
+		return strings.Replace(text, anchor,
+			"        \"$@\" &\n        ut_test_after_engine_child_spawn \"$!\"\n        child_pid=$!\n        child_pids[slot]=${child_pid}\n", 1)
+	}
+	script := `source ./run_ut.sh UT
+function logger() { :; }
+ENGINE_RACE_REPORT="$CASE_DIR/engine-report"
+ENGINE_CHILD_PID_FILE="$CASE_DIR/engine-child.pid"
+cleanup() {
+    status=$?
+    if [[ -s "$ENGINE_CHILD_PID_FILE" ]]; then
+        child_pid=$(<"$ENGINE_CHILD_PID_FILE")
+        if kill -0 "$child_pid" 2>/dev/null || kill -0 -- -"$child_pid" 2>/dev/null; then
+            kill -KILL -- -"$child_pid" 2>/dev/null || kill -KILL "$child_pid" 2>/dev/null || true
+            status=90
+        fi
+    fi
+    printf 'ENGINE_CHILD_CANCEL status=%s\n' "$status"
+    exit "$status"
+}
+trap cleanup EXIT
+ut_test_after_engine_child_spawn() {
+	printf '%s\n' "$1" > "$ENGINE_CHILD_PID_FILE"
+	kill -TERM "$$"
+}
+function go() {
+    if [[ "$1" == list ]]; then
+        printf '%s\t%s\n' "$CASE_DIR" 'example/engine'
+        while :; do sleep 0.01; done
+    fi
+    return 0
+}
+run_engine_race_shards example/engine 1
+`
+	out, err := scheduleHarnessWithMockTransform(t, script, `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+exit 0
+`, transform)
+	exit, ok := err.(*exec.ExitError)
+	if !ok || exit.ExitCode() != 143 {
+		t.Fatalf("engine child cancellation: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "ENGINE_CHILD_CANCEL status=143") {
+		t.Fatalf("engine child registration was not fenced: %s", out)
+	}
+}
+
+func TestEngineRaceHelperPublishesCompleteReport(t *testing.T) {
+	script := `source ./run_ut.sh UT
+function logger() { :; }
+ENGINE_RACE_REPORT="$CASE_DIR/engine-report"
+ENGINE_RACE_REPORT_READY="$ENGINE_RACE_REPORT.ready"
+ENGINE_RACE_TEST_BINARY="$CASE_DIR/engine.test"
+function go() { command go "$@"; }
+run_engine_race_shards example/engine 2
+[[ -s "$ENGINE_RACE_REPORT" ]] || exit 90
+[[ -f "$ENGINE_RACE_REPORT.ready" ]] || exit 91
+[[ "$(grep -c '^engine-shard$' "$ENGINE_RACE_REPORT")" == 2 ]] || { cat "$ENGINE_RACE_REPORT"; exit 92; }
+`
+	mock := `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+if [[ "$1" == list ]]; then
+    printf '%s\t%s\n' "$CASE_DIR" 'example/engine'
+    exit 0
+fi
+if [[ "$1" == test && "$*" == *' -c '* ]]; then
+    output=""
+    previous=""
+    for arg in "$@"; do
+        if [[ "$previous" == -o ]]; then output="$arg"; fi
+        previous="$arg"
+    done
+    printf '#!/bin/bash\nprintf "TestEngine1\\nTestEngine2\\n"\n' > "$output"
+    chmod +x "$output"
+    exit 0
+fi
+if [[ "$1" == tool ]]; then
+    printf 'engine-shard\n'
+    exit 0
+fi
+exit 99
+`
+	out, err := scheduleHarnessWithMock(t, script, mock)
+	if err != nil {
+		t.Fatalf("engine helper report: %v\n%s", err, out)
+	}
+}
+
+func TestEngineRaceShardReportOpenFailureDrainsEarlierShard(t *testing.T) {
+	transform := func(text string) string {
+		const anchor = "        if ! exec 7>\"${shard_reports[shard]}\"; then\n"
+		if got := strings.Count(text, anchor); got != 1 {
+			t.Fatalf("shard report open anchor count = %d, want 1", got)
+		}
+		return strings.Replace(text, anchor,
+			"        if (( shard == 1 )); then while [[ ! -f \"${CASE_DIR}/engine-tool-ready\" ]]; do sleep 0.01; done; mkdir -p \"${CASE_DIR}/blocked-report\"; shard_reports[shard]=\"${CASE_DIR}/blocked-report\"; fi\n"+anchor, 1)
+	}
+	script := `source ./run_ut.sh UT
+function logger() { :; }
+ENGINE_RACE_REPORT="$CASE_DIR/engine-report"
+ENGINE_RACE_REPORT_READY="$ENGINE_RACE_REPORT.ready"
+ENGINE_RACE_TEST_BINARY="$CASE_DIR/engine.test"
+run_engine_race_shards example/engine 2
+status=$?
+[[ "$status" == 1 ]] || exit 90
+[[ -s "$CASE_DIR/engine-tool.pid" ]] || exit 91
+tool_pid=$(<"$CASE_DIR/engine-tool.pid")
+if kill -0 "$tool_pid" 2>/dev/null || kill -0 -- -"$tool_pid" 2>/dev/null; then
+    exit 92
+fi
+`
+	mock := `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+if [[ "$1" == list ]]; then
+    printf '%s\t%s\n' "$CASE_DIR" 'example/engine'
+    exit 0
+fi
+if [[ "$1" == test && "$*" == *' -c '* ]]; then
+    output=""
+    previous=""
+    for arg in "$@"; do
+        if [[ "$previous" == -o ]]; then output="$arg"; fi
+        previous="$arg"
+    done
+    printf '#!/bin/bash\nprintf "TestEngine1\\nTestEngine2\\n"\n' > "$output"
+    chmod +x "$output"
+    exit 0
+fi
+if [[ "$1" == tool ]]; then
+    printf '%s\n' "$$" > "$CASE_DIR/engine-tool.pid"
+    touch "$CASE_DIR/engine-tool-ready"
+    trap 'exit 143' TERM
+    while :; do sleep 0.01; done
+fi
+exit 99
+`
+	out, err := scheduleHarnessWithMockTransform(t, script, mock, transform)
+	if err != nil {
+		t.Fatalf("engine shard report-open failure: %v\n%s", err, out)
+	}
+}
+
 func TestHeavyPlanCancellationStopsWritersBeforeMerge(t *testing.T) {
 	script := `source ./run_ut.sh UT
 function logger() { :; }
