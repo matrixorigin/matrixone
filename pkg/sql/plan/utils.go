@@ -7195,6 +7195,16 @@ func replaceParamValsWithSelection(
 	// its execute-time type through transparent projection/sort/distinct nodes
 	// so the final visible ColDef agrees with the rewritten source expression.
 	directResultSpecialized := propagatePreparedDirectResultTypes(plan0, paramVals)
+	if len(paramRule.exportSetParamPositions) > 0 {
+		domain := paramRule.preparedExportSetResolvedDomainHint()
+		err = plan.VisitExpressionsInOwner(plan0, func(root *Expr) error {
+			rewritePreparedPrecisionBitwiseOperandsInPlace(root, domain)
+			return nil
+		})
+		if err != nil {
+			return false, err
+		}
+	}
 	return paramRule.specialized || projectionSpecialized || directResultSpecialized, nil
 }
 

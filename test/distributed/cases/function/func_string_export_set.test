@@ -683,6 +683,42 @@ SET @export_set_bits = CAST(0.5 AS DECIMAL(2,1));
 EXECUTE export_set_precision_greatest_text USING @export_set_bits;
 DEALLOCATE PREPARE export_set_precision_greatest_text;
 
+# DECIMAL 精度历史、DECIMAL 大值位运算和真实 producer 节点。
+PREPARE export_set_precision_decimal_history FROM
+  "SELECT EXPORT_SET(ROUND(15.5,x),'Y','N','',4) FROM (SELECT ? AS x) d";
+SET @export_set_bits = CAST(-0.5 AS DECIMAL(2,1));
+EXECUTE export_set_precision_decimal_history USING @export_set_bits;
+SET @export_set_bits = '-0.5';
+EXECUTE export_set_precision_decimal_history USING @export_set_bits;
+DEALLOCATE PREPARE export_set_precision_decimal_history;
+PREPARE export_set_precision_decimal_bitwise FROM
+  "SELECT EXPORT_SET(TRUNCATE(15.5,x & 1),'Y','N','',4) FROM (SELECT ? AS x) d";
+SET @export_set_bits = CAST(9223372036854775808 AS DECIMAL(20,0));
+EXECUTE export_set_precision_decimal_bitwise USING @export_set_bits;
+SET @export_set_bits = CAST(18446744073709551616 AS DECIMAL(21,0));
+EXECUTE export_set_precision_decimal_bitwise USING @export_set_bits;
+DEALLOCATE PREPARE export_set_precision_decimal_bitwise;
+PREPARE export_set_precision_ifnull_producer FROM
+  "SELECT EXPORT_SET(TRUNCATE(15.5,IFNULL(x & 1,0)),'Y','N','',4) FROM (SELECT ? AS x) d";
+SET @export_set_bits = CAST(0.5 AS DOUBLE);
+EXECUTE export_set_precision_ifnull_producer USING @export_set_bits;
+DEALLOCATE PREPARE export_set_precision_ifnull_producer;
+PREPARE export_set_precision_max_producer FROM
+  "SELECT EXPORT_SET(TRUNCATE(15.5,y),'Y','N','',4) FROM (SELECT MAX(x & 1) AS y FROM (SELECT ? AS x) d) p";
+SET @export_set_bits = CAST(0.5 AS DOUBLE);
+EXECUTE export_set_precision_max_producer USING @export_set_bits;
+DEALLOCATE PREPARE export_set_precision_max_producer;
+PREPARE export_set_precision_window_producer FROM
+  "SELECT EXPORT_SET(TRUNCATE(15.5,y),'Y','N','',4) FROM (SELECT FIRST_VALUE(x & 1) OVER () AS y FROM (SELECT ? AS x) d) p";
+SET @export_set_bits = CAST(0.5 AS DOUBLE);
+EXECUTE export_set_precision_window_producer USING @export_set_bits;
+DEALLOCATE PREPARE export_set_precision_window_producer;
+PREPARE export_set_precision_union_producer FROM
+  "SELECT EXPORT_SET(TRUNCATE(15.5,y),'Y','N','',4) FROM (SELECT (? & 1) AS y UNION ALL SELECT 0) p";
+SET @export_set_bits = CAST(0.5 AS DOUBLE);
+EXECUTE export_set_precision_union_producer USING @export_set_bits;
+DEALLOCATE PREPARE export_set_precision_union_producer;
+
 DROP TABLE export_set_scalar_input;
 
 DROP TABLE export_set_numeric_bits;

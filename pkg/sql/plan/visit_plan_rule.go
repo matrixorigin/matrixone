@@ -2376,7 +2376,12 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 			precisionPos, precisionOwned := rule.preparedExportSetPrecisionPosition(originalArgs[i], rewrittenArg)
 			if len(rule.exportSetParamPositions) > 0 && preparedExportSetIntegerPrecisionArg(functionName, i) && precisionOwned {
-				rewrittenArg = rewritePreparedPrecisionBitwiseOperands(unwrapPreparedPrecisionEnvelope(rewrittenArg))
+				precisionDomain := types.Type{}
+				if precisionPos >= 0 && precisionPos < len(rule.params) && rule.params[precisionPos] != nil {
+					precisionDomain = makeTypeByPlan2Expr(rule.params[precisionPos])
+				}
+				rewrittenArg = rewritePreparedPrecisionBitwiseOperands(
+					unwrapPreparedPrecisionEnvelope(rewrittenArg), precisionDomain)
 				sourceType := types.T(rewrittenArg.Typ.Id)
 				overload := int32(1)
 				if sourceType.IsMySQLString() && preparedPrecisionProducerUsesResolvedDomain(rewrittenArg) &&
@@ -2655,6 +2660,13 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				}
 			}
 		}
+		if preparedPrecisionBitwiseFunction(functionName) && rule.preparedExportSetExpressionOwned(e) {
+			bitwise := DeepCopyExpr(e)
+			bitwise.GetF().Args = boundArgs
+			bitwise = rewritePreparedPrecisionBitwiseOperands(bitwise, types.Type{})
+			boundArgs = bitwise.GetF().Args
+			needResetFunction, compareArgTypes, rule.specialized = true, true, true
+		}
 		if contextualArgs, changed, contextualErr := rule.preparedNumericPrefixArgs(
 			exprImpl.F.Func.GetObjName(), boundArgs,
 			numericPrefixArgs, numericPrefixKinds, numericPrefixListArgs, numericPrefixListKinds,
@@ -2767,7 +2779,10 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				return nil, err
 			}
 			for index, precisionArg := range precisionArgs {
-				rewritten.GetF().Args[index] = precisionArg
+				rewritten.GetF().Args[index] = rewritePreparedPrecisionBitwiseOperands(precisionArg, types.Type{})
+			}
+			if preparedPrecisionBitwiseFunction(functionName) && rule.preparedExportSetExpressionOwned(e) {
+				rewritten = rewritePreparedPrecisionBitwiseOperands(rewritten, rule.preparedExportSetResolvedDomainHint())
 			}
 			preserveReboundFunctionMetadata(exprImpl.F, rewritten.GetF())
 			if functionBindingChanged(originalTyp, originalFuncObj, originalArgTypes, rewritten, compareArgTypes) {
@@ -2779,6 +2794,9 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			if sqlExecuteNumericSourceDependent && !isExplicitPreparedCast(e) {
 				rule.markSQLExecuteNumericDependent(e, rewritten)
 			}
+			if len(rule.exportSetParamPositions) > 0 {
+				rewritten = rewritePreparedPrecisionBitwiseOperands(rewritten, rule.preparedExportSetResolvedDomainHint())
+			}
 			return rewritten, nil
 		}
 		if numericPrefixDependent && !isExplicitPreparedCast(e) {
@@ -2786,6 +2804,9 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		}
 		if sqlExecuteNumericSourceDependent && !isExplicitPreparedCast(e) {
 			rule.markSQLExecuteNumericDependent(e)
+		}
+		if len(rule.exportSetParamPositions) > 0 {
+			return rewritePreparedPrecisionBitwiseOperands(e, rule.preparedExportSetResolvedDomainHint()), nil
 		}
 		return e, nil
 	case *plan.Expr_W:
@@ -3675,6 +3696,27 @@ func windowHasNumericPrefixDependency(
 	return false
 }
 
+func (rule *ResetParamRefRule) preparedExportSetResolvedDomainHint() types.Type {
+	if len(rule.exportSetParamPositions) != 1 {
+		return types.Type{}
+	}
+	for pos := range rule.exportSetParamPositions {
+		if pos >= 0 && int(pos) < len(rule.params) && rule.params[pos] != nil {
+			return makeTypeByPlan2Expr(rule.params[pos])
+		}
+	}
+	return types.Type{}
+}
+
+func (rule *ResetParamRefRule) preparedExportSetExpressionOwned(expr *Expr) bool {
+	for pos := range preparedNumericValueParamPositions(expr) {
+		if _, owned := rule.exportSetParamPositions[pos]; owned {
+			return true
+		}
+	}
+	return len(rule.exportSetParamPositions) == 1 && preparedPrecisionHasFallbackSource(expr)
+}
+
 func (rule *ResetParamRefRule) preparedExportSetPrecisionPosition(original, rewritten *Expr) (int, bool) {
 	for pos := range preparedNumericValueParamPositions(original) {
 		if rule.hasExportSetResolvedDomain(int(pos)) {
@@ -3707,20 +3749,50 @@ func preparedPrecisionHasFallbackSource(expr *Expr) bool {
 }
 
 func preparedPrecisionProducerUsesResolvedDomain(expr *Expr) bool {
-	return expr != nil && expr.GetPreparedNumeric().GetFallbackSource()
+	if expr == nil {
+		return false
+	}
+	if expr.GetPreparedNumeric().GetFallbackSource() || expr.GetP() != nil {
+		return true
+	}
+	if literal := expr.GetLit(); literal != nil && literal.Src != nil {
+		_, direct := preparedParamPosition(literal.Src)
+		return direct
+	}
+	return false
 }
 
-func rewritePreparedPrecisionBitwiseOperands(expr *Expr) *Expr {
-	if expr == nil || expr.GetF() == nil {
-		return expr
-	}
+func rewritePreparedPrecisionBitwiseOperands(expr *Expr, resolvedDomain types.Type) *Expr {
 	copy := DeepCopyExpr(expr)
-	fn := copy.GetF()
-	for i, arg := range fn.Args {
-		fn.Args[i] = rewritePreparedPrecisionBitwiseOperands(arg)
+	rewritePreparedPrecisionBitwiseOperandsInPlace(copy, resolvedDomain)
+	return copy
+}
+
+func rewritePreparedPrecisionBitwiseOperandsInPlace(expr *Expr, resolvedDomain types.Type) {
+	if expr == nil {
+		return
+	}
+	if window := expr.GetW(); window != nil {
+		rewritePreparedPrecisionBitwiseOperandsInPlace(window.WindowFunc, resolvedDomain)
+		for _, partition := range window.PartitionBy {
+			rewritePreparedPrecisionBitwiseOperandsInPlace(partition, resolvedDomain)
+		}
+		for _, order := range window.OrderBy {
+			if order != nil {
+				rewritePreparedPrecisionBitwiseOperandsInPlace(order.Expr, resolvedDomain)
+			}
+		}
+		return
+	}
+	if expr.GetF() == nil {
+		return
+	}
+	fn := expr.GetF()
+	for _, arg := range fn.Args {
+		rewritePreparedPrecisionBitwiseOperandsInPlace(arg, resolvedDomain)
 	}
 	if fn.Func == nil || !preparedPrecisionBitwiseFunction(fn.Func.GetObjName()) {
-		return copy
+		return
 	}
 	for _, arg := range fn.Args {
 		cast := arg.GetF()
@@ -3728,12 +3800,20 @@ func rewritePreparedPrecisionBitwiseOperands(expr *Expr) *Expr {
 			cast.GetSyntaxExplicitCast() || !types.T(arg.Typ.Id).IsInteger() {
 			continue
 		}
-		source := types.T(cast.Args[0].Typ.Id)
-		if source.IsFloat() || source.IsDecimal() {
+		sourceType := makeTypeByPlan2Expr(cast.Args[0])
+		if !sourceType.IsNumeric() && preparedPrecisionHasFallbackSource(cast.Args[0]) && resolvedDomain.IsNumeric() {
+			sourceType = resolvedDomain
+		}
+		if sourceType.Oid.IsFloat() {
 			setPreparedCastOverload(arg, 4)
 		}
+		if sourceType.IsDecimal() {
+			target := makePlan2Type(&types.Type{Oid: types.T_int64})
+			arg.Typ = target
+			cast.Args[1] = &Expr{Typ: target, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
+			setPreparedCastOverload(arg, 5)
+		}
 	}
-	return copy
 }
 
 func preparedPrecisionBitwiseFunction(name string) bool {

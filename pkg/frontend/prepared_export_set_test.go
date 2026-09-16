@@ -433,6 +433,7 @@ func TestPreparedExportSetPrecisionExpressionRoles(t *testing.T) {
 		{"ifnull real", "ifnull(x,0)", 0.5, types.T_float64.ToType(), "YYYY", true},
 		{"bitwise real", "x & 1", 0.5, types.T_float64.ToType(), "YYYY", true},
 		{"nested bitwise real", "abs(x & 1)", 0.5, types.T_float64.ToType(), "YYYY", true},
+		{"ifnull bitwise producer", "ifnull(x & 1,0)", 0.5, types.T_float64.ToType(), "YYYY", true},
 		{"bitwise real saturation", "x & 1", 1e100, types.T_float64.ToType(), "NNNN", true},
 		{"coalesce text", "coalesce(x,'0')", "0.5", types.New(types.T_decimal64, 2, 1), "YYYY", true},
 		{"greatest coalesce text", "greatest(coalesce(x,'0'),'0')", "0.5", types.New(types.T_decimal64, 2, 1), "YYYY", true},
@@ -466,6 +467,67 @@ func TestPreparedExportSetPrecisionExpressionRoles(t *testing.T) {
 			require.NoError(t, err)
 			defer free()
 			require.Equal(t, tc.want, result.GetStringAt(0), "expr=%s", expr.String())
+		})
+	}
+}
+
+func TestPreparedExportSetPrecisionDecimalHistory(t *testing.T) {
+	_, stmt, cw, _ := newPreparedExecuteEnvForSQL(t, 402,
+		`select export_set(round(15.5,x),'Y','N','',4) from (select ? as x) d`)
+	defer stmt.Close()
+	cached := stmt.PreparePlan.GetDcl().GetPrepare().Plan
+	decimal := types.New(types.T_decimal64, 2, 1)
+	for step, binding := range []struct {
+		value any
+		typ   types.Type
+	}{
+		{"-0.5", decimal},
+		{"-0.5", types.T_text.ToType()},
+	} {
+		values := []any{plan2.ParamValue{Value: binding.value, SourceType: binding.typ, HasSourceType: true,
+			EnableNumericPrefix: true}}
+		stmt.applyExportSetNullRuntimeTypes(values)
+		filled, err := plan2.FillValuesOfParamsInPlan(cw.proc.Ctx, cached, values)
+		require.NoError(t, err)
+		q := filled.GetQuery()
+		expr := q.Nodes[q.Steps[len(q.Steps)-1]].ProjectList[0]
+		result, free, err := colexec.GetReadonlyResultFromExpression(cw.proc, expr,
+			[]*batch.Batch{batch.EmptyForConstFoldBatch})
+		require.NoError(t, err)
+		func() {
+			defer free()
+			require.Equal(t, "NNYN", result.GetStringAt(0), "step=%d expr=%s", step, expr.String())
+		}()
+	}
+}
+
+func TestPreparedExportSetPrecisionDecimalBitwiseSaturation(t *testing.T) {
+	for _, value := range []string{"9223372036854775808", "18446744073709551616"} {
+		t.Run(value, func(t *testing.T) {
+			_, stmt, cw, _ := newPreparedExecuteEnvForSQL(t, 403,
+				`select export_set(truncate(15.5,x & 1),'Y','N','',4) from (select ? as x) d`)
+			defer stmt.Close()
+			width := int32(len(value))
+			decimalType := types.New(types.T_decimal128, width, 0)
+			decimalValue, err := types.ParseDecimal128(value, width, 0)
+			require.NoError(t, err)
+			values := []any{plan2.ParamValue{Value: value, SourceType: decimalType, HasSourceType: true,
+				EnableNumericPrefix: true}}
+			stmt.applyExportSetNullRuntimeTypes(values)
+			filled, err := plan2.FillValuesOfParamsInPlan(cw.proc.Ctx,
+				stmt.PreparePlan.GetDcl().GetPrepare().Plan, values)
+			require.NoError(t, err)
+			q := filled.GetQuery()
+			expr := q.Nodes[q.Steps[len(q.Steps)-1]].ProjectList[0]
+			input := batch.NewWithSize(1)
+			input.Vecs[0] = vector.NewVec(decimalType)
+			defer input.Clean(cw.proc.Mp())
+			require.NoError(t, vector.AppendFixed(input.Vecs[0], decimalValue, false, cw.proc.Mp()))
+			input.SetRowCount(1)
+			result, free, err := colexec.GetReadonlyResultFromExpression(cw.proc, expr, []*batch.Batch{input})
+			require.NoError(t, err)
+			defer free()
+			require.Equal(t, "NNNN", result.GetStringAt(0), "expr=%s", expr.String())
 		})
 	}
 }

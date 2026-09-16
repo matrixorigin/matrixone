@@ -3017,6 +3017,17 @@ var supportedOperators = []FuncNew{
 					return NewBitwiseAggregateCast
 				},
 			},
+			{
+				// Internal scalar-bitwise DECIMAL saturation. Keep it
+				// separate from aggregate CAST4 and user-written CAST.
+				overloadId: 5,
+				retType: func(parameters []types.Type) types.Type {
+					return parameters[1]
+				},
+				newOp: func() executeLogicOfOverload {
+					return NewBitwiseScalarDecimalCast
+				},
+			},
 		},
 	},
 
