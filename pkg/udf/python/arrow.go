@@ -1249,6 +1249,13 @@ func AppendArrowResult(descriptor TypeDescriptor, input arrow.Array, result vect
 	if result == nil {
 		return fmt.Errorf("python udf: missing result wrapper")
 	}
+	// AppendArrowResult is also the public adapter boundary used by runtimes
+	// other than the Flight Gateway. Do not let an invalid manually-built
+	// descriptor become executable merely because its Arrow physical type can
+	// be constructed (for example DECIMAL64 precision 19).
+	if err := descriptor.Validate(); err != nil {
+		return err
+	}
 	if err := validateArrayType(descriptor, input); err != nil {
 		return err
 	}
