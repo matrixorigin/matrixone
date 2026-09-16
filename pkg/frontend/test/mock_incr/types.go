@@ -283,18 +283,18 @@ func (mr *MockincrTableCacheMockRecorder) commit() *gomock.Call {
 }
 
 // currentValue mocks base method.
-func (m *MockincrTableCache) currentValue(ctx context.Context, tableID uint64, col string) (uint64, error) {
+func (m *MockincrTableCache) currentValue(ctx context.Context, tableID uint64, col string, store incrservice.IncrValueStore) (uint64, error) {
 	m.ctrl.T.Helper()
-	ret := m.ctrl.Call(m, "currentValue", ctx, tableID, col)
+	ret := m.ctrl.Call(m, "currentValue", ctx, tableID, col, store)
 	ret0, _ := ret[0].(uint64)
 	ret1, _ := ret[1].(error)
 	return ret0, ret1
 }
 
 // currentValue indicates an expected call of currentValue.
-func (mr *MockincrTableCacheMockRecorder) currentValue(ctx, tableID, col interface{}) *gomock.Call {
+func (mr *MockincrTableCacheMockRecorder) currentValue(ctx, tableID, col, store interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
-	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "currentValue", reflect.TypeOf((*MockincrTableCache)(nil).currentValue), ctx, tableID, col)
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "currentValue", reflect.TypeOf((*MockincrTableCache)(nil).currentValue), ctx, tableID, col, store)
 }
 
 // epoch mocks base method.
@@ -565,6 +565,22 @@ func (m *MockIncrValueStore) ForceSetOffset(ctx context.Context, tableID uint64,
 func (mr *MockIncrValueStoreMockRecorder) ForceSetOffset(ctx, tableID, colIndex, colName, offset, txnOp interface{}) *gomock.Call {
 	mr.mock.ctrl.T.Helper()
 	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "ForceSetOffset", reflect.TypeOf((*MockIncrValueStore)(nil).ForceSetOffset), ctx, tableID, colIndex, colName, offset, txnOp)
+}
+
+// GetColumnValue mocks base method.
+func (m *MockIncrValueStore) GetColumnValue(ctx context.Context, tableID uint64, colName string, txnOp client.TxnOperator) (uint64, uint64, error) {
+	m.ctrl.T.Helper()
+	ret := m.ctrl.Call(m, "GetColumnValue", ctx, tableID, colName, txnOp)
+	ret0, _ := ret[0].(uint64)
+	ret1, _ := ret[1].(uint64)
+	ret2, _ := ret[2].(error)
+	return ret0, ret1, ret2
+}
+
+// GetColumnValue indicates an expected call of GetColumnValue.
+func (mr *MockIncrValueStoreMockRecorder) GetColumnValue(ctx, tableID, colName, txnOp interface{}) *gomock.Call {
+	mr.mock.ctrl.T.Helper()
+	return mr.mock.ctrl.RecordCallWithMethodType(mr.mock, "GetColumnValue", reflect.TypeOf((*MockIncrValueStore)(nil).GetColumnValue), ctx, tableID, colName, txnOp)
 }
 
 // GetColumns mocks base method.

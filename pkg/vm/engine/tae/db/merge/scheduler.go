@@ -46,7 +46,6 @@ var ErrMergeSchedulerStopped = moerr.NewInternalErrorNoCtx("merge scheduler stop
 
 type mergeTask struct {
 	objs        []*objectio.ObjectStats
-	kind        taskHostKind
 	isTombstone bool
 	level       int8
 	note        string
@@ -253,12 +252,6 @@ func (o *taskObserver) Admit() {
 		o.f()
 	}
 }
-
-func (a *MergeScheduler) CNActiveObjectsString() string { return "" }
-
-func (a *MergeScheduler) RemoveCNActiveObjects(ids []objectio.ObjectId) {}
-
-func (a *MergeScheduler) PruneCNActiveObjects(id uint64, ago time.Duration) {}
 
 // region: msg def & sender
 

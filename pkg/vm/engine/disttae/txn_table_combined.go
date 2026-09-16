@@ -943,31 +943,6 @@ func (t *combinedTxnTable) ApproxObjectsNum(ctx context.Context) int {
 	return num
 }
 
-func (t *combinedTxnTable) MergeObjects(
-	ctx context.Context,
-	objstats []objectio.ObjectStats,
-	targetObjSize uint32,
-) (*api.MergeCommitEntry, error) {
-	panic("not implemented")
-}
-
-func (t *combinedTxnTable) GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error) {
-	tables, err := t.tablesFunc()
-	if err != nil {
-		return nil, err
-	}
-
-	var stats []objectio.ObjectStats
-	for _, rel := range tables {
-		values, err := rel.GetNonAppendableObjectStats(ctx)
-		if err != nil {
-			return nil, err
-		}
-		stats = append(stats, values...)
-	}
-	return stats, nil
-}
-
 func (t *combinedTxnTable) GetColumMetadataScanInfo(
 	ctx context.Context,
 	name string,

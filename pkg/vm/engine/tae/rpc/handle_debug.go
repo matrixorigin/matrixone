@@ -31,11 +31,9 @@ import (
 	"github.com/google/shlex"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
@@ -48,10 +46,7 @@ import (
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/mergesort"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"go.uber.org/zap"
 )
 
@@ -998,70 +993,6 @@ func (h *Handle) HandleInspectTN(
 	return nil, nil
 }
 
-func (h *Handle) HandleCommitMerge(
-	ctx context.Context,
-	meta txn.TxnMeta,
-	req *api.MergeCommitEntry,
-	resp *api.TNStringResponse,
-) (err error) {
-
-	defer func() {
-		if err != nil {
-			e := moerr.DowncastError(err)
-			logutil.Error("mergeblocks err handle commit merge",
-				zap.String("table", fmt.Sprintf("%v-%v", req.TblId, req.TableName)),
-				zap.String("start-ts", req.StartTs.DebugString()),
-				zap.String("error", e.Display()))
-		}
-	}()
-	txn, err := h.db.GetOrCreateTxnWithMeta(nil, meta.GetID(),
-		types.TimestampToTS(meta.GetSnapshotTS()))
-	txn.GetMemo().IsFlushOrMerge = true
-	if err != nil {
-		return
-	}
-	ids := make([]objectio.ObjectId, 0, len(req.MergedObjs))
-	for _, o := range req.MergedObjs {
-		stat := objectio.ObjectStats(o)
-		ids = append(ids, *stat.ObjectName().ObjectId())
-	}
-	h.GetDB().MergeScheduler.RemoveCNActiveObjects(ids)
-	if req.Err != "" {
-		resp.ReturnStr = req.Err
-		err = moerr.NewInternalErrorf(ctx, "merge err in cn: %s", req.Err)
-		return
-	}
-
-	defer func() {
-		if err != nil {
-			resp.ReturnStr = err.Error()
-			merge.CleanUpUselessFiles(req, h.db.Runtime.Fs)
-		}
-	}()
-
-	transferMaps, err := marshalTransferMaps(ctx, req, h.db.Runtime.SID(), h.db.Runtime.Fs)
-	if err != nil {
-		return err
-	}
-	_, err = jobs.HandleMergeEntryInTxn(ctx, txn, txn.String(), req, mergesort.NewTransferTableFromMaps(transferMaps), h.db.Runtime, false)
-	if err != nil {
-		return
-	}
-	b := new(bytes.Buffer)
-	b.WriteString("merged success\n")
-	for _, o := range req.CreatedObjs {
-		stat := objectio.ObjectStats(o)
-		b.WriteString(fmt.Sprintf("%v, rows %v, blks %v, osize %v, csize %v",
-			stat.ObjectName().String(), stat.Rows(), stat.BlkCnt(),
-			common.HumanReadableBytes(int(stat.OriginSize())),
-			common.HumanReadableBytes(int(stat.Size())),
-		))
-		b.WriteByte('\n')
-	}
-	resp.ReturnStr = b.String()
-	return
-}
-
 func (h *Handle) HandleGetLatestCheckpoint(
 	_ context.Context,
 	_ txn.TxnMeta,
@@ -1081,98 +1012,6 @@ func (h *Handle) HandleGetLatestCheckpoint(
 	}
 	resp.Location = locations
 	return nil, err
-}
-
-func marshalTransferMaps(
-	ctx context.Context,
-	req *api.MergeCommitEntry,
-	sid string,
-	fs fileservice.FileService,
-) (api.TransferMaps, error) {
-	if len(req.BookingLoc) > 0 {
-		// load transfer info from s3
-		if req.Booking != nil {
-			logutil.Error("mergeblocks err booking loc is not empty, but booking is not nil")
-		}
-
-		blkCnt := types.DecodeInt32(util.UnsafeStringToBytes(req.BookingLoc[0]))
-		booking := make(api.TransferMaps, blkCnt)
-		for i := range blkCnt {
-			rowCnt := types.DecodeInt32(util.UnsafeStringToBytes(req.BookingLoc[i+1]))
-			if rowCnt == 0 {
-				// fully-deleted block: leave booking[i] == nil so downstream
-				// mapping == nil checks correctly identify it as all-deleted.
-				continue
-			}
-			tm := make(api.TransferMap, rowCnt)
-			for j := range tm {
-				tm[j].ObjIdx = api.NoTransfer
-			}
-			booking[i] = tm
-		}
-		req.BookingLoc = req.BookingLoc[blkCnt+1:]
-		locations := req.BookingLoc
-		for _, filepath := range locations {
-			reader, err := ioutil.NewFileReader(fs, filepath)
-			if err != nil {
-				return nil, err
-			}
-			bats, releases, err := reader.LoadAllColumns(ctx, nil, nil)
-			if err != nil {
-				return nil, err
-			}
-
-			for _, bat := range bats {
-				for i := range bat.RowCount() {
-					srcBlk := vector.GetFixedAtNoTypeCheck[int32](bat.Vecs[0], i)
-					srcRow := vector.GetFixedAtNoTypeCheck[uint32](bat.Vecs[1], i)
-					destObj := vector.GetFixedAtNoTypeCheck[uint8](bat.Vecs[2], i)
-					destBlk := vector.GetFixedAtNoTypeCheck[uint16](bat.Vecs[3], i)
-					destRow := vector.GetFixedAtNoTypeCheck[uint32](bat.Vecs[4], i)
-
-					booking[srcBlk][srcRow] = api.TransferDestPos{
-						ObjIdx: destObj,
-						BlkIdx: destBlk,
-						RowIdx: destRow,
-					}
-				}
-			}
-			releases()
-			_ = fs.Delete(ctx, filepath)
-		}
-		return booking, nil
-	} else if req.Booking != nil {
-		booking := make(api.TransferMaps, len(req.Booking.Mappings))
-		for i, m := range req.Booking.Mappings {
-			// Find the maximum source row key to size the dense slice correctly.
-			maxKey := int32(-1)
-			for r := range m.M {
-				if r > maxKey {
-					maxKey = r
-				}
-			}
-			if maxKey < 0 {
-				// fully-deleted block: leave booking[i] == nil so downstream
-				// mapping == nil checks correctly identify it as all-deleted.
-				continue
-			}
-			sliceLen := int(maxKey) + 1
-			tm := make(api.TransferMap, sliceLen)
-			for j := range tm {
-				tm[j].ObjIdx = api.NoTransfer
-			}
-			for r, pos := range m.M {
-				tm[uint32(r)] = api.TransferDestPos{
-					ObjIdx: uint8(pos.ObjIdx),
-					BlkIdx: uint16(pos.BlkIdx),
-					RowIdx: uint32(pos.RowIdx),
-				}
-			}
-			booking[i] = tm
-		}
-		return booking, nil
-	}
-	return nil, nil
 }
 
 func (h *Handle) HandleFaultInject(

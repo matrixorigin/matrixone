@@ -116,7 +116,8 @@ const (
 	MORPCVersion78     int64 = 78 // length-delimited variable-length GROUP hash keys
 	MORPCVersion79     int64 = 79 // canonical opaque DISTINCT argument wire keys
 	MORPCVersion80     int64 = 80 // signed and widened string numeric result contracts
-	MORPCLatestVersion       = MORPCVersion80
+	MORPCVersion81     int64 = 81 // opt-in table-owned AUTO_ID_CACHE and its PRE_INSERT wire marker
+	MORPCLatestVersion       = MORPCVersion81
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

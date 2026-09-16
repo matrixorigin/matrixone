@@ -193,7 +193,7 @@ func BenchmarkColumnCacheStatementSeries(b *testing.B) {
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {
 					err := c.applyAutoValues(ctx, 0, 1, nil, func(int) bool { return false }, apply, nil,
-						NormalizeAutoIncrementOptions(increment, 1))
+						NormalizeAutoIncrementOptions(increment, 1), 1)
 					if err != nil {
 						b.Fatal(err)
 					}
@@ -529,7 +529,7 @@ func TestOverflow(t *testing.T) {
 						return nil
 					},
 					nil,
-					AutoIncrementOptions{}))
+					AutoIncrementOptions{}, 1))
 		},
 	)
 }
@@ -557,7 +557,7 @@ func TestOverflowWithInit(t *testing.T) {
 						return nil
 					},
 					nil,
-					AutoIncrementOptions{}))
+					AutoIncrementOptions{}, 1))
 		},
 	)
 }
@@ -594,7 +594,7 @@ func TestMergeAllocate(t *testing.T) {
 								return nil
 							},
 							nil,
-							AutoIncrementOptions{})
+							AutoIncrementOptions{}, batch)
 					}
 				}()
 			}

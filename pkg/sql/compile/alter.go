@@ -1871,7 +1871,7 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 			return err
 		}
 		if err := svc.SetOffset(
-			c.proc.Ctx,
+			incrservice.WithAutoIDCachePolicy(c.proc.Ctx, createdDef.TblId, createdDef.AutoIdCache),
 			tableID,
 			col.ColIndex,
 			col.ColName,
