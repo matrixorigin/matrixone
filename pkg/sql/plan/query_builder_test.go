@@ -1420,6 +1420,30 @@ func TestQueryBuilderSortRollupFallsBackForDerivedSource(t *testing.T) {
 	}
 }
 
+func TestQueryBuilderSortRollupFallsBackForNestedDerivedRollup(t *testing.T) {
+	rt := moruntime.ServiceRuntime("")
+	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
+	defer func() {
+		if hadHints {
+			rt.SetGlobalVariables("optimizer_hints", oldHints)
+		} else {
+			rt.SetGlobalVariables("optimizer_hints", "")
+		}
+	}()
+	rt.SetGlobalVariables("optimizer_hints", "rollupSort=1")
+
+	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL,
+		`select * from (
+			select a, count(*) as c
+			from select_test.bind_select
+			group by a with rollup
+		) d`, 1)
+	require.NoError(t, err)
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
+	require.NoError(t, err)
+	require.False(t, planHasSortRollup(queryPlan.GetQuery()))
+}
+
 func TestQueryBuilderSortRollupReusesOrderedDerivedSource(t *testing.T) {
 	rt := moruntime.ServiceRuntime("")
 	oldHints, hadHints := rt.GetGlobalVariables("optimizer_hints")
@@ -1561,11 +1585,10 @@ func TestQueryBuilderSortRollupFilterIsAggregateBoundary(t *testing.T) {
 	rt.SetGlobalVariables("optimizer_hints", "rollupSort=1")
 
 	stmts, err := parsers.Parse(context.TODO(), dialect.MYSQL,
-		`select * from (
-			select a, b, count(*) as c
+		`select a, b, count(*) as c
 			from select_test.bind_select
 			group by a, b with rollup
-		) r where a = 1`, 1)
+			having a = 1`, 1)
 	require.NoError(t, err)
 	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmts[0], false)
 	require.NoError(t, err)

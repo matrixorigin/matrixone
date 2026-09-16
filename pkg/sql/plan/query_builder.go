@@ -5495,7 +5495,8 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			}
 			selectClause = &nextSelectClause
 		}
-		sortRollupCandidate := selectClause.GroupBy != nil &&
+		sortRollupCandidate := isRoot &&
+			selectClause.GroupBy != nil &&
 			selectClause.GroupBy.Rollup &&
 			builder.sortRollupMode() != 2 &&
 			len(selectClause.GroupBy.GroupByExprsList) == 1 &&
