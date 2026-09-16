@@ -193,7 +193,7 @@ func TestTableScanner1(t *testing.T) {
 
 	mockSqlExecutor.EXPECT().Exec(
 		gomock.Any(),
-		CDCSQLBuilder.CollectTableInfoSQL("1", "'db4'", "'tbl4'"),
+		CDCSQLBuilder.CollectTableInfoSQLCaseInsensitive("1", "'db4'", "'tbl4'"),
 		executor.Options{}.WithStatementOption(executor.StatementOption{}.WithDisableLog()),
 	).Return(executor.Result{}, moerr.NewInternalErrorNoCtx("mock error")).AnyTimes()
 
@@ -240,7 +240,7 @@ func TestAuditTableScannerSkipsForeignKeyTable(t *testing.T) {
 	mockSqlExecutor := mock_executor.NewMockSQLExecutor(ctrl)
 	mockSqlExecutor.EXPECT().Exec(
 		gomock.Any(),
-		CDCSQLBuilder.CollectTableInfoSQL("1", "'source_db'", "'child'"),
+		CDCSQLBuilder.CollectTableInfoSQLCaseInsensitive("1", "'source_db'", "'child'"),
 		gomock.Any(),
 	).Return(res, nil)
 
@@ -296,7 +296,7 @@ func TestTableScannerDoesNotSkipForeignKeyTextLiteral(t *testing.T) {
 	mockSqlExecutor := mock_executor.NewMockSQLExecutor(ctrl)
 	mockSqlExecutor.EXPECT().Exec(
 		gomock.Any(),
-		CDCSQLBuilder.CollectTableInfoSQL("1", "'source_db'", "'child'"),
+		CDCSQLBuilder.CollectTableInfoSQLCaseInsensitive("1", "'source_db'", "'child'"),
 		gomock.Any(),
 	).Return(res, nil)
 
@@ -353,7 +353,7 @@ func TestTableScannerSkipsForeignKeyMetadataWithoutCreateSQLText(t *testing.T) {
 	mockSqlExecutor := mock_executor.NewMockSQLExecutor(ctrl)
 	mockSqlExecutor.EXPECT().Exec(
 		gomock.Any(),
-		CDCSQLBuilder.CollectTableInfoSQL("1", "'source_db'", "'child'"),
+		CDCSQLBuilder.CollectTableInfoSQLCaseInsensitive("1", "'source_db'", "'child'"),
 		gomock.Any(),
 	).Return(res, nil)
 
@@ -410,7 +410,7 @@ func TestTableScannerConstraintDecodeErrorPreservesOldTableMap(t *testing.T) {
 	mockSqlExecutor := mock_executor.NewMockSQLExecutor(ctrl)
 	mockSqlExecutor.EXPECT().Exec(
 		gomock.Any(),
-		CDCSQLBuilder.CollectTableInfoSQL("1", "'source_db'", "*"),
+		CDCSQLBuilder.CollectTableInfoSQLCaseInsensitive("1", "'source_db'", "*"),
 		gomock.Any(),
 	).Return(res, nil)
 
@@ -1217,13 +1217,13 @@ func TestTableScanner_UpdateTableInfo(t *testing.T) {
 
 	mockSqlExecutor.EXPECT().Exec(
 		gomock.Any(),
-		CDCSQLBuilder.CollectTableInfoSQL("1", "'db1'", "'tbl1'"),
+		CDCSQLBuilder.CollectTableInfoSQLCaseInsensitive("1", "'db1'", "'tbl1'"),
 		gomock.Any(),
 	).Return(res1, nil)
 
 	mockSqlExecutor.EXPECT().Exec(
 		gomock.Any(),
-		CDCSQLBuilder.CollectTableInfoSQL("1", "'db1'", "'tbl1'"),
+		CDCSQLBuilder.CollectTableInfoSQLCaseInsensitive("1", "'db1'", "'tbl1'"),
 		gomock.Any(),
 	).Return(res2, nil)
 
