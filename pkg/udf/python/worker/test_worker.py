@@ -1196,6 +1196,16 @@ class WorkerContractTest(unittest.TestCase):
         visible = valid.slice(1, 1)
         self.assertEqual(visible.to_pylist(), worker._output_array(visible, vector_descriptor, 1).to_pylist())
 
+    def test_output_array_rejects_invalid_semantic_descriptor(self):
+        descriptor = {
+            "type_id": worker.DECIMAL64,
+            "width": 19,
+            "scale": 0,
+            "offset_width": 32,
+        }
+        with self.assertRaisesRegex(ValueError, "precision is outside"):
+            worker._output_array([__import__("decimal").Decimal("1")], descriptor, 1)
+
     def test_descriptor_rejects_unused_domain_fields(self):
         invalid = [
             {"type_id": worker.DATE, "width": 1, "offset_width": 32, "temporal_encoding": "sql_zero_struct"},
