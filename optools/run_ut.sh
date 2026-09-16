@@ -55,14 +55,20 @@ UT_OVERLAP_LIGHT_PARALLEL=${UT_OVERLAP_LIGHT_PARALLEL:-"2"}
 # child a bounded TERM grace period, so the parent must retain the helper long
 # enough for both children to finish before escalating to KILL.
 UT_HELPER_TERM_GRACE_TICKS=${UT_HELPER_TERM_GRACE_TICKS:-"60"}
-HEAVY_RACE_PARALLEL=${HEAVY_RACE_PARALLEL:-"3"}
+# Keep the constrained runner's heavy-stage task budget at two. With the
+# engine stage using two fresh race processes, this makes resource-heavy tests
+# finish before the engine shards start instead of creating the observed
+# engine(2)+resource(1) overlap. This is a process/task budget, not a hard
+# memory guarantee; stronger runners may explicitly override it.
+HEAVY_RACE_PARALLEL=${HEAVY_RACE_PARALLEL:-"2"}
 PLAN_RACE_SHARDS=${PLAN_RACE_SHARDS:-"8"}
 # Keep plan race processes bounded because each shard owns a race-instrumented
 # test process and its package resources. The default stays serial on the
 # constrained CI runner; stronger runners can opt into two independent shards.
 PLAN_RACE_PARALLEL=${PLAN_RACE_PARALLEL:-"1"}
-# Two engine shards cut the measured engine/test race runtime roughly in half
-# while keeping the default heavy-stage memory/process budget bounded.
+# Two engine shards cut the measured engine/test race runtime roughly in half.
+# The default heavy-stage budget above intentionally serializes these shards
+# from the other resource-heavy package wave on the constrained runner.
 ENGINE_RACE_SHARDS=2
 SCA_REPORT="$G_WKSP/$G_TS-SCA-Report.out"
 UT_REPORT="$G_WKSP/$G_TS-UT-Report.out"

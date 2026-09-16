@@ -30,6 +30,12 @@ import (
 func scheduleHarness(t *testing.T, script string, variables ...string) ([]byte, error) {
 	return scheduleHarnessWithMock(t, script, `#!/bin/bash
 if [[ "$1" == version ]]; then exit 0; fi
+if [[ -n "${EXPECTED_HEAVY_PARALLEL:-}" ]]; then
+ case " $* " in
+  *" -p ${EXPECTED_HEAVY_PARALLEL} "*) ;;
+  *) printf 'unexpected heavy parallelism: %s\n' "$*" >&2; exit 94 ;;
+ esac
+fi
 # The real env/go command must preserve both events around the report merge.
 printf 'heavy-start\n'
 printf started > "$CASE_DIR/heavy-started"
@@ -37,6 +43,7 @@ if [[ "$EXPECT_OVERLAP" == 1 ]]; then
  while [[ ! -e "$CASE_DIR/plan-started" ]]; do sleep 0.01; done
 fi
 printf 'heavy-end\n'
+touch "$CASE_DIR/heavy-finished"
 exit "$HEAVY_STATUS"
 `, variables...)
 }
@@ -206,7 +213,8 @@ printf 'scope=%s limit=%s complete=%s events_hierarchical=%s boundaries=%s\n' "$
 
 func TestHeavyPlanReusesReleasedEngineCapacity(t *testing.T) {
 	for _, tc := range []struct{ name, budget, overlap, engine, heavy, plan, expected string }{
-		{"default", "3", "", "0", "0", "0", "0"},
+		{"default-safe", "", "1", "0", "0", "0", "0"},
+		{"explicit-three", "3", "", "0", "0", "0", "0"},
 		{"overlap", "3", "1", "0", "0", "0", "0"},
 		{"engine-failure", "3", "1", "7", "0", "0", "1"},
 		{"heavy-failure", "3", "1", "0", "8", "0", "1"},
@@ -248,6 +256,9 @@ function go() {
 function run_engine_race_shards() {
  mkdir "$CASE_DIR/engine-once" || return 90
  while [[ ! -e "$CASE_DIR/heavy-started" ]]; do sleep 0.01; done
+ if [[ "$EXPECT_SERIAL" == 1 ]]; then
+  [[ -e "$CASE_DIR/heavy-finished" ]] || return 92
+ fi
  printf 'engine\n' > "$ENGINE_RACE_REPORT"
  touch "$CASE_DIR/engine-finished"
  return "$ENGINE_STATUS"
@@ -267,7 +278,13 @@ run_tests
 printf '\nREPORT\n'
 cat "$UT_REPORT"
 `
-			out, err := scheduleHarness(t, script, "HEAVY_RACE_PARALLEL="+tc.budget, "UT_OVERLAP_PLAN="+tc.overlap, "ENGINE_STATUS="+tc.engine, "HEAVY_STATUS="+tc.heavy, "PLAN_STATUS="+tc.plan, "EXPECTED_STATUS="+tc.expected, "EXPECT_OVERLAP="+expectedOverlap)
+			expectSerial := "0"
+			expectedHeavyParallel := ""
+			if tc.name == "default-safe" {
+				expectSerial = "1"
+				expectedHeavyParallel = "2"
+			}
+			out, err := scheduleHarness(t, script, "HEAVY_RACE_PARALLEL="+tc.budget, "UT_OVERLAP_PLAN="+tc.overlap, "ENGINE_STATUS="+tc.engine, "HEAVY_STATUS="+tc.heavy, "PLAN_STATUS="+tc.plan, "EXPECTED_STATUS="+tc.expected, "EXPECT_OVERLAP="+expectedOverlap, "EXPECT_SERIAL="+expectSerial, "EXPECTED_HEAVY_PARALLEL="+expectedHeavyParallel)
 			if err != nil {
 				t.Fatalf("schedule: %v\n%s", err, out)
 			}
