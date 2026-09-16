@@ -56,6 +56,67 @@ order by ordinal_position;
 select length(compressed_v), length(compressed_binary_v), uncompressed_v,
        length(aes_v), length(aes_text_v) from bounded_binary_ctas;
 
+select count(*) as concat_contract_failures
+from source
+where not (concat('x') <=> 'x')
+   or not (concat(NULL) <=> NULL)
+   or not (concat(42) <=> '42')
+   or not (concat(s) <=> s);
+
+create table concat_runtime_result(expected varchar(10), got varchar(10));
+prepare concat_runtime from
+    'insert into concat_runtime_result values (?, concat(?))';
+set @concat_expected = 'hello';
+set @concat_value = 'hello';
+execute concat_runtime using @concat_expected, @concat_value;
+set @concat_expected = NULL;
+set @concat_value = NULL;
+execute concat_runtime using @concat_expected, @concat_value;
+select count(*) as concat_prepare_failures
+from concat_runtime_result
+where not (expected <=> got);
+deallocate prepare concat_runtime;
+
+create table elt_runtime_result(expected varchar(10), got varchar(10));
+prepare elt_runtime from
+    'insert into elt_runtime_result values (?, elt(?, ''a'', ''b'', ''c''))';
+set @elt_expected = 'a';
+set @elt_index = cast(1.4 as decimal(4,2));
+execute elt_runtime using @elt_expected, @elt_index;
+set @elt_expected = 'b';
+set @elt_index = cast(1.5 as decimal(4,2));
+execute elt_runtime using @elt_expected, @elt_index;
+set @elt_expected = 'b';
+set @elt_index = cast(1.6 as decimal(4,2));
+execute elt_runtime using @elt_expected, @elt_index;
+set @elt_expected = 'c';
+set @elt_index = cast(2.5 as decimal(4,2));
+execute elt_runtime using @elt_expected, @elt_index;
+set @elt_expected = 'c';
+set @elt_index = cast(2.6 as decimal(4,2));
+execute elt_runtime using @elt_expected, @elt_index;
+set @elt_expected = 'b';
+set @elt_index = '2tail';
+execute elt_runtime using @elt_expected, @elt_index;
+set @elt_expected = NULL;
+set @elt_index = NULL;
+execute elt_runtime using @elt_expected, @elt_index;
+set @elt_expected = NULL;
+set @elt_index = 4;
+execute elt_runtime using @elt_expected, @elt_index;
+select count(*) as elt_contract_failures
+from elt_runtime_result
+where not (expected <=> got);
+deallocate prepare elt_runtime;
+
+create table elt_double_result(got varchar(10));
+prepare elt_double from
+    'insert into elt_double_result values (elt(cast(? as double), ''a'', ''b''))';
+set @elt_index = 1.5;
+execute elt_double using @elt_index;
+select count(*) as elt_double_rows from elt_double_result where got is not null;
+deallocate prepare elt_double;
+
 create view bounded_numeric_view as
 select find_in_set('b', 'a,b') as pos_v,
        strcmp('a', 'b') as cmp_v,
