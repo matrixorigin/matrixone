@@ -11077,7 +11077,7 @@ func protocolVersionForTenantInitializationWithContext(
 	// the parser-derived VIEWS functions. The predecessor definition is safe on
 	// every CN and the final-version account row is revisited by bootstrap
 	// maintenance once the capability becomes available.
-	legacyVersion := defines.MORPCVersion72
+	legacyVersion := defines.MORPCVersion74
 	rt := moruntime.ServiceRuntime(service)
 	if rt == nil {
 		return legacyVersion, nil
@@ -11090,14 +11090,14 @@ func protocolVersionForTenantInitializationWithContext(
 	if !ok {
 		return legacyVersion, nil
 	}
-	if version < defines.MORPCVersion73 {
+	if version < defines.MORPCVersion75 {
 		// Preserve every pre-existing protocol-specific information_schema
-		// contract. Only the new VIEWS function needs the v72 predecessor
+		// contract. Only the new VIEWS function needs the v74 predecessor
 		// fallback; promoting an older known protocol would also install newer
 		// TABLES/COLUMNS and role-closure definitions.
 		return version, nil
 	}
-	supported, err := compile.AllCNsSupportProtocol(proc, defines.MORPCVersion73)
+	supported, err := compile.AllCNsSupportProtocol(proc, defines.MORPCVersion75)
 	if err != nil {
 		// Capability discovery is deliberately best-effort for account
 		// creation. Do not turn a temporary inventory/RPC failure into a
