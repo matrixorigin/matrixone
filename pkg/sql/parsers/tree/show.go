@@ -960,3 +960,25 @@ func (e EmptyStmt) GetStatementType() string {
 func (e EmptyStmt) GetQueryType() string {
 	return QueryTypeOth
 }
+
+// CompatibilityNoOpStmt is recognized compatibility syntax that intentionally
+// returns success without changing state. Unlike EmptyStmt, it represents a
+// real client statement and can therefore participate in PREPARE and EXECUTE.
+type CompatibilityNoOpStmt struct {
+	statementImpl
+}
+
+func (c *CompatibilityNoOpStmt) String() string {
+	return ""
+}
+
+func (c *CompatibilityNoOpStmt) Format(ctx *FmtCtx) {
+}
+
+func (c CompatibilityNoOpStmt) GetStatementType() string {
+	return "Compatibility No-Op"
+}
+
+func (c CompatibilityNoOpStmt) GetQueryType() string {
+	return QueryTypeOth
+}

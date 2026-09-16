@@ -203,6 +203,17 @@ func TestPrepareDataBranchUsesFrontendExecutionPlan(t *testing.T) {
 	}
 }
 
+func TestPrepareEmptySQLRejected(t *testing.T) {
+	for _, sql := range []string{
+		"prepare stmt from ''",
+		"prepare stmt from '   '",
+		"prepare stmt from '/* comment */'",
+	} {
+		_, err := runOneStmt(NewMockOptimizer(false), t, sql)
+		require.Error(t, err)
+	}
+}
+
 func TestPrepareCompatibilityNoOpUsesFrontendExecutionPlan(t *testing.T) {
 	p, err := runOneStmt(NewMockOptimizer(false), t,
 		"prepare stmt from 'alter database d character set utf8mb4 collate utf8mb4_bin'")

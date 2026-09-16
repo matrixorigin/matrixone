@@ -6959,7 +6959,7 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		objType = objectTypeNone
 		kind = privilegeKindSpecial
 		special = specialTagAdmin
-	case *tree.EmptyStmt:
+	case *tree.EmptyStmt, *tree.CompatibilityNoOpStmt:
 		objType = objectTypeNone
 		kind = privilegeKindNone
 	case *tree.CreateCDC, *tree.ShowCDC, *tree.PauseCDC, *tree.DropCDC, *tree.ResumeCDC, *tree.RestartCDC:

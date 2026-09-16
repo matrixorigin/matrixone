@@ -4617,7 +4617,7 @@ alter_database_config_stmt:
     {
         // Compatibility-only syntax accepted by applications such as Gitea.
         // MatrixOne does not mutate database charset/collation metadata here.
-        $$ = &tree.EmptyStmt{}
+        $$ = &tree.CompatibilityNoOpStmt{}
     }
 |   ALTER DATABASE db_name SET MYSQL_COMPATIBILITY_MODE '=' STRING
     {

@@ -3734,7 +3734,7 @@ func handleShowBackendServers(ses FeSession, execCtx *ExecCtx) error {
 	return err
 }
 
-func handleEmptyStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.EmptyStmt) error {
+func handleEmptyStmt(ses FeSession, execCtx *ExecCtx, stmt tree.Statement) error {
 	var err error
 	return err
 }

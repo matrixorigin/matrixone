@@ -3982,6 +3982,37 @@ func Test_HandlePrepareVarUsesSessionSQLMode(t *testing.T) {
 	})
 }
 
+func TestHandlePrepareVarRejectsEmptySQL(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	setSessionAlloc("", NewLeakCheckAllocator())
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ec := newTestExecCtx(ctx, ctrl)
+
+	runTestHandle("handlePrepareVarRejectsEmptySQL", t, func(ses *Session) error {
+		ec.resper = ses.respr
+		for _, testCase := range []struct {
+			name  string
+			value string
+		}{
+			{name: "empty", value: ""},
+			{name: "whitespace", value: "   "},
+			{name: "comment", value: "/* comment */"},
+		} {
+			t.Run(testCase.name, func(t *testing.T) {
+				require.NoError(t, ses.SetUserDefinedVar(testCase.name, testCase.value, ""))
+				stmt := tree.NewPrepareVar(tree.Identifier("stmt_"+testCase.name),
+					tree.NewVarExpr(testCase.name, false, false, nil))
+				defer stmt.Free()
+				prepared, err := handlePrepareVar(ses, ec, stmt)
+				require.Error(t, err)
+				require.Nil(t, prepared)
+			})
+		}
+		return nil
+	})
+}
+
 func TestHandlePrepareVarWithNonStringValue(t *testing.T) {
 	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
 	setSessionAlloc("", NewLeakCheckAllocator())
@@ -5091,8 +5122,8 @@ func Test_statement_type(t *testing.T) {
 			{&tree.AnalyzeStmt{}},
 			{&tree.CheckTableStmt{}},
 			{&tree.ShowProfileStmt{}},
-			{&tree.EmptyStmt{}},
-			{tree.NewPrepareStmt("compat_noop", &tree.EmptyStmt{})},
+			{&tree.CompatibilityNoOpStmt{}},
+			{tree.NewPrepareStmt("compat_noop", &tree.CompatibilityNoOpStmt{})},
 		}
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -8702,7 +8733,7 @@ func TestExecRequestStmtPrepareAcceptsExplainAndSetVariable(t *testing.T) {
 	stmtName = getPrepareStmtName(ses.GetLastStmtId())
 	prepared, err = ses.GetPrepareStmt(ctx, stmtName)
 	require.NoError(t, err)
-	require.IsType(t, &tree.EmptyStmt{}, prepared.PrepareStmt)
+	require.IsType(t, &tree.CompatibilityNoOpStmt{}, prepared.PrepareStmt)
 	require.NotNil(t, prepared.PreparePlan.GetDcl().GetPrepare().GetPlan())
 
 	resp, err = ExecRequest(ses, execCtx, &Request{
