@@ -917,13 +917,25 @@ func dataBranchDeleteDatabase(
 		return
 	}
 
-	if err = lockDataBranchDeleteDatabaseTarget(execCtx.reqCtx, ses, bh, dbName.String()); err != nil {
-		return
-	}
-	if tableIDs, err = validateDataBranchDeleteDatabaseTarget(
-		execCtx.reqCtx, ses, bh, dbName.String(), currentProtocolVersion(ses.proc),
-	); err != nil {
-		return
+	for attempts := 0; ; attempts++ {
+		if err = lockDataBranchDeleteDatabaseTarget(execCtx.reqCtx, ses, bh, dbName.String()); err != nil {
+			if attempts == 0 && isCloneDatabaseTargetLockRetry(err) {
+				var retried bool
+				if retried, err = restartCloneDatabaseTargetLockTxn(execCtx.reqCtx, bh); err != nil {
+					return
+				}
+				if retried {
+					continue
+				}
+			}
+			return
+		}
+		if tableIDs, err = validateDataBranchDeleteDatabaseTarget(
+			execCtx.reqCtx, ses, bh, dbName.String(), currentProtocolVersion(ses.proc),
+		); err != nil {
+			return
+		}
+		break
 	}
 
 	{
