@@ -1,4 +1,11 @@
 set experimental_fulltext2_index = 1;
+select mo_ctl('cn', 'SetVectorIndexFreshnessInterval', '1s');
+➤ mo_ctl(cn, SetVectorIndexFreshnessInterval, 1s)[12,65535,0]  𝄀
+{
+  "method": "SETVECTORINDEXFRESHNESSINTERVAL",
+  "result": "applied=[127.0.0.1:18102:1000000000, 127.0.0.1:18202:1000000000]"
+}
+
 drop database if exists ft2_copy_alter_case;
 create database ft2_copy_alter_case;
 use ft2_copy_alter_case;
@@ -31,9 +38,6 @@ select id from docs where match(body) against('quantum') order by id;
 3  𝄀
 5
 alter table docs add column extra int;
-select count(*) >= 0 as prewarmed from docs where match(body) against('quantum');
-➤ prewarmed[-7,1,0]  𝄀
-1
 set @ft2_index2 = (
 select index_table_name from mo_catalog.mo_indexes
 where name = 'ftidx' and algo = 'fulltext2' and algo_table_type = 'ftv2_index'
@@ -79,6 +83,13 @@ execute wait_tail;
 ➤ ready[-7,1,0]  𝄀
 1
 deallocate prepare wait_tail;
+set @wait_sweep_sql = concat(
+'select json_extract(mo_ctl(''cn'', ''GetVectorIndexCacheInfo'', ''', @ft2_index2, '''), ''$.result.cached'') as cached');
+prepare wait_sweep from @wait_sweep_sql;
+execute wait_sweep;
+➤ cached[-1,2147483647,0]  𝄀
+0
+deallocate prepare wait_sweep;
 select id from docs where match(body) against('neutrino') order by id;
 ➤ id[-5,64,0]  𝄀
 100  𝄀
@@ -88,4 +99,31 @@ select id from docs where match(body) against('quantum') order by id;
 1  𝄀
 3  𝄀
 5
+set @evict_sql = concat('select mo_ctl(''cn'', ''EvictVectorIndexCache'', ''', @ft2_index2, ''')');
+prepare do_evict from @evict_sql;
+execute do_evict;
+➤ mo_ctl(cn, EvictVectorIndexCache, __mo_index_secondary_01a0aacd-ad4c-776e-b2dd-3f81d7274c67)[12,65535,0]  𝄀
+{
+  "method": "EVICTVECTORINDEXCACHE",
+  "result": {
+    "evicted": 1,
+    "cns": 2
+  }
+}
+
+deallocate prepare do_evict;
+set @check_info_sql = concat(
+'select json_extract(mo_ctl(''cn'', ''GetVectorIndexCacheInfo'', ''', @ft2_index2, '''), ''$.result.cached'') as cached');
+prepare check_info from @check_info_sql;
+execute check_info;
+➤ cached[-1,2147483647,0]  𝄀
+0
+deallocate prepare check_info;
+select mo_ctl('cn', 'SetVectorIndexFreshnessInterval', '0');
+➤ mo_ctl(cn, SetVectorIndexFreshnessInterval, 0)[12,65535,0]  𝄀
+{
+  "method": "SETVECTORINDEXFRESHNESSINTERVAL",
+  "result": "applied=[127.0.0.1:18102:0, 127.0.0.1:18202:0]"
+}
+
 drop database ft2_copy_alter_case;

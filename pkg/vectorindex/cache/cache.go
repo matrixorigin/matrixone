@@ -27,10 +27,26 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
+
+// Register the freshness-interval override hook so the query-service handler (mo_ctl
+// SetVectorIndexFreshnessInterval) can drive the global cache without importing this package --
+// that edge would close a test import cycle through catalog/fileservice.
+func init() {
+	moruntime.RegisterVectorIndexStaleCheckIntervalSetter(func(d time.Duration) {
+		Cache.SetStaleCheckInterval(d)
+	})
+	moruntime.RegisterVectorIndexCacheKeyCounter(func(key string) int64 {
+		return Cache.CountKey(key)
+	})
+	moruntime.RegisterVectorIndexCacheEvictor(func(key string) int64 {
+		return Cache.EvictKey(key)
+	})
+}
 
 // stalenessCheckEveryNTicks runs the IsStale freshness sweep every Nth HouseKeeping tick.
 // The ticker is VectorIndexCacheTTL/2 (2.5m), so N=4 ≈ a 10-minute cross-CN freshness
@@ -661,6 +677,14 @@ type VectorIndexCache struct {
 	staleChecking  atomic.Bool // single-flight guard for the async freshness sweep
 	capRefreshing  atomic.Bool // single-flight guard for the async cap refresh + enforcement
 
+	// staleCheckIntervalNs overrides the cross-CN freshness (IsStale) sweep's BASE ticker, in
+	// nanoseconds. 0 (the default) keeps the built-in ~10-minute cadence (VectorIndexCacheTTL/2
+	// ticker × stalenessCheckEveryNTicks). >0 shortens the ticker; the sweep still runs every
+	// stalenessCheckEveryNTicks ticks, so the effective freshness period is that × the override
+	// (e.g. 2s → ~8s). Refresh remains entirely the periodic sweep's job -- this only changes its
+	// cadence. Sys-admin-only test/ops knob (mo_ctl SetVectorIndexFreshnessInterval), never persisted.
+	staleCheckIntervalNs atomic.Int64
+
 	// The residency budget and everything that decides it. Held by value so a zero
 	// VectorIndexCache is usable; gov() attaches the back-reference on first use.
 	governor     VectorIndexGovernor
@@ -682,13 +706,90 @@ func NewVectorIndexCache() *VectorIndexCache {
 	return c
 }
 
+// staleTickerInterval is the base ticker cadence in effect: the override when set (>0), else the
+// default TickerInterval. HouseKeeping (TTL eviction) and the every-Nth-tick IsStale sweep both run
+// off this ticker, so a short override speeds up both. The IsStale sweep still runs every
+// stalenessCheckEveryNTicks ticks (never every tick), so the effective ongoing freshness period is
+// stalenessCheckEveryNTicks × this -- the same 4x relationship as the default. An immediate
+// one-shot sweep (see SetStaleCheckInterval) covers the "evict now" case so the ongoing cadence
+// does not need to be hammered every tick.
+func (c *VectorIndexCache) staleTickerInterval() time.Duration {
+	if ns := c.staleCheckIntervalNs.Load(); ns > 0 {
+		return time.Duration(ns)
+	}
+	return c.TickerInterval
+}
+
+// SetStaleCheckInterval overrides the cross-CN freshness sweep cadence live. d<=0 restores the
+// default. It re-arms the running ticker immediately (via Reset), so the shortened cadence takes
+// effect within one new interval rather than waiting out the remainder of the old (possibly
+// ~10-min) cycle. Safe before serve() starts: the value is stored and serve() arms the ticker
+// from it.
+//
+// It deliberately does NOT evict anything itself -- refresh is left entirely to the periodic
+// IsStale sweep now running at the shortened cadence. That is the whole point: this is a knob on
+// the eventual-consistency mechanism, not a manual "evict now" command, so a test that lowers it
+// and then observes a stale cross-CN entry refresh is proving the periodic sweep works.
+func (c *VectorIndexCache) SetStaleCheckInterval(d time.Duration) {
+	if d < 0 {
+		d = 0
+	}
+	c.staleCheckIntervalNs.Store(int64(d))
+	reset := false
+	// Only re-arm a live ticker: after Destroy() the serve goroutine is gone (exited=true) but
+	// started stays true, so without the exited guard this would Reset a stopped ticker whose
+	// consumer no longer exists. The stored value above still governs if serve() runs again.
+	if c.started.Load() && !c.exited.Load() && c.ticker != nil {
+		c.ticker.Reset(c.staleTickerInterval())
+		reset = true
+	}
+	// Debug-logged (not hot-path: only the sys-admin mo_ctl reaches here) so an operator/test can
+	// confirm the override actually applied on THIS CN -- the mo_ctl Result only echoes the request.
+	logutil.Debugf("[veccache] stale-check interval override set to %v; effective sweep ticker=%v (every %d ticks), ticker_reset=%v",
+		d, c.staleTickerInterval(), stalenessCheckEveryNTicks, reset)
+}
+
+// CountKey returns how many cached entries this cache holds for an index key: the current
+// generation plus any named-snapshot generations of it. key=="" counts every entry. It is a
+// read-only introspection used by the SetVectorIndexFreshnessInterval companion mo_ctl
+// (GetVectorIndexCacheInfo) to observe cross-CN eviction; it does not touch or warm any entry.
+func (c *VectorIndexCache) CountKey(key string) int64 {
+	var n int64
+	c.IndexMap.Range(func(k, _ any) bool {
+		ks, ok := k.(string)
+		if !ok {
+			return true
+		}
+		if key == "" || ks == key || strings.HasPrefix(ks, key+snapshotKeySep) {
+			n++
+		}
+		return true
+	})
+	return n
+}
+
+// EvictKey drops an index's cache entries (current generation + any named-snapshot generations),
+// returning how many it removed. Synchronous force-evict (waits out any in-flight search), so the
+// next query reloads a current generation. Backs the EvictVectorIndexCache mo_ctl. key=="" is a
+// no-op returning 0 (refuse to flush the whole cache by accident).
+func (c *VectorIndexCache) EvictKey(key string) int64 {
+	if key == "" {
+		return 0
+	}
+	n := c.CountKey(key)
+	if n > 0 {
+		c.RemoveAllGenerations(key, "ctl")
+	}
+	return n
+}
+
 func (c *VectorIndexCache) serve() {
 	if c.started.Load() {
 		return
 	}
 
 	// try clean up the temp directory. set tempdir to /tmp/hnsw
-	c.ticker = time.NewTicker(c.TickerInterval)
+	c.ticker = time.NewTicker(c.staleTickerInterval())
 	c.done = make(chan bool)
 	c.sigc = make(chan os.Signal, 3)
 	signal.Notify(c.sigc, syscall.SIGTERM, syscall.SIGINT, os.Interrupt)
@@ -832,7 +933,7 @@ func (c *VectorIndexCache) HouseKeeping() {
 			reason = "generation_changed"
 		}
 		if c.evictEntry(entry.key, entry.algo, reason) {
-			logutil.Debugf("[veccache] evicted expired/stale index %s from cache", entry.key)
+			logutil.Debugf("[veccache] evicted index %s from cache (reason=%s)", entry.key, reason)
 		}
 	}
 	c.refreshAndEnforceCaps()
@@ -888,6 +989,11 @@ func (c *VectorIndexCache) checkStale() {
 		}
 		return true
 	})
+	// Debug-logged every sweep so an operator/test can see the freshness sweep actually running at
+	// the configured cadence (interval override via SetVectorIndexFreshnessInterval); the per-entry
+	// "marking"/"evicted" lines below show what it found and dropped.
+	logutil.Debugf("[veccache] freshness sweep: checking %d loaded stale-checkable entries (ticker=%v)",
+		len(entries), c.staleTickerInterval())
 	for _, e := range entries {
 		// Bail promptly on shutdown so a K-entry sweep of ≤1-min SQL reads can't keep this
 		// goroutine (and any resources it pins) alive long after Destroy.
