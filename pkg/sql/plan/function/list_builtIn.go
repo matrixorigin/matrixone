@@ -794,6 +794,13 @@ var supportedStringBuiltIns = []FuncNew{
 					return builtInConcat
 				},
 			},
+			{
+				overloadId: 1,
+				retType:    jsonStringConsumerReturnType,
+				newOp: func() executeLogicOfOverload {
+					return builtInConcat
+				},
+			},
 		},
 	},
 
@@ -828,6 +835,14 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{},
 				retType:    concatWsReturnType,
+				newOp: func() executeLogicOfOverload {
+					return ConcatWs
+				},
+			},
+			{
+				overloadId: 1,
+				args:       []types.T{},
+				retType:    jsonStringConsumerReturnType,
 				newOp: func() executeLogicOfOverload {
 					return ConcatWs
 				},
@@ -972,6 +987,13 @@ var supportedStringBuiltIns = []FuncNew{
 				retType: func(parameters []types.Type) types.Type {
 					return selectedStringReturnType(parameters, 1)
 				},
+				newOp: func() executeLogicOfOverload {
+					return Elt
+				},
+			},
+			{
+				overloadId: 1,
+				retType:    jsonStringConsumerReturnType,
 				newOp: func() executeLogicOfOverload {
 					return Elt
 				},
