@@ -527,11 +527,6 @@ func rollupSpillPenalty(baseCost, bytes, limit float64) float64 {
 
 const bytesPerRollupGroupID = 8
 
-func estimateRollupPrefixGroups(probe *sortRollupProbe) (float64, bool) {
-	total, _, ok := estimateRollupPrefixGroupStats(probe)
-	return total, ok
-}
-
 func estimateRollupPrefixGroupStats(probe *sortRollupProbe) (float64, float64, bool) {
 	if probe == nil || probe.source == nil || probe.source.Stats == nil {
 		return 0, 0, false
