@@ -1567,7 +1567,14 @@ func (exec *CDCTaskExecutor) Pause() error {
 }
 
 // Cancel cdc task
-func (exec *CDCTaskExecutor) Cancel() (err error) {
+func (exec *CDCTaskExecutor) Cancel() error { return exec.cancel(true) }
+
+// CancelWithoutWatermarkCleanup stops local work after claim loss. The task may
+// already have been taken over, so deleting shared progress would destroy the
+// replacement owner's watermark.
+func (exec *CDCTaskExecutor) CancelWithoutWatermarkCleanup() error { return exec.cancel(false) }
+
+func (exec *CDCTaskExecutor) cancel(deleteWatermarks bool) (err error) {
 	exec.callbackMu.Lock()
 	// Check if running before state transition
 	stateBeforeCancel := exec.stateMachine.State()
@@ -1596,7 +1603,7 @@ func (exec *CDCTaskExecutor) Cancel() (err error) {
 	// watermark delete. Callbacks queued behind this fence observe the increment
 	// above and return without publishing work.
 	exec.cancelLifecycleContext()
-	if exec.watermarkUpdater != nil && exec.spec != nil {
+	if deleteWatermarks && exec.watermarkUpdater != nil && exec.spec != nil {
 		// The tombstone is installed before waiting for any control mutex or
 		// reader shutdown so late callbacks remain fenced on every timeout path.
 		exec.watermarkUpdater.MarkTaskDeleted(exec.spec.TaskId)
@@ -1672,7 +1679,7 @@ func (exec *CDCTaskExecutor) Cancel() (err error) {
 	// routine. Drain all earlier updater work after readers have stopped, remove
 	// the task from the shared updater caches, then perform the terminal delete.
 	// This also covers paused tasks, whose readers were stopped by Pause.
-	if exec.watermarkUpdater != nil && exec.spec != nil && len(exec.spec.Accounts) > 0 {
+	if deleteWatermarks && exec.watermarkUpdater != nil && exec.spec != nil && len(exec.spec.Accounts) > 0 {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if err := exec.watermarkUpdater.DeleteTaskWatermarks(
