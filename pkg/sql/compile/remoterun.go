@@ -2937,7 +2937,7 @@ func validateRemoteViewDefinitionPipelineProtocol(
 	}
 	if proc == nil || !supportsRemoteViewDefinitionFunction(proc.GetService()) {
 		return moerr.NewNotSupportedNoCtx(
-			"view metadata remote execution requires MORPC protocol version 81",
+			"view metadata remote execution requires MORPC protocol version 82",
 		)
 	}
 	return nil
@@ -2963,14 +2963,14 @@ func validateRemoteViewDefinitionDestinationProtocol(
 	supported, err := remoteWorkersSupportProtocol(
 		proc,
 		engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}},
-		defines.MORPCVersion81,
+		defines.MORPCVersion82,
 	)
 	if err != nil {
 		return err
 	}
 	if !supported {
 		return moerr.NewNotSupportedNoCtx(
-			"remote destination does not support view metadata functions (MORPC version 81)",
+			"remote destination does not support view metadata functions (MORPC version 82)",
 		)
 	}
 	return nil
