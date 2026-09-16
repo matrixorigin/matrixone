@@ -55,14 +55,20 @@ UT_OVERLAP_LIGHT_PARALLEL=${UT_OVERLAP_LIGHT_PARALLEL:-"2"}
 # child a bounded TERM grace period, so the parent must retain the helper long
 # enough for both children to finish before escalating to KILL.
 UT_HELPER_TERM_GRACE_TICKS=${UT_HELPER_TERM_GRACE_TICKS:-"60"}
+# Keep the constrained runner's existing three-slot heavy-stage budget. The
+# engine race wave runs exclusively, then one slot is reserved for the plan
+# race wave while the resource-heavy packages use the remaining two slots.
+# This is a process/task budget, not a hard memory guarantee; stronger runners
+# may explicitly override it.
 HEAVY_RACE_PARALLEL=${HEAVY_RACE_PARALLEL:-"3"}
 PLAN_RACE_SHARDS=${PLAN_RACE_SHARDS:-"8"}
 # Keep plan race processes bounded because each shard owns a race-instrumented
 # test process and its package resources. The default stays serial on the
 # constrained CI runner; stronger runners can opt into two independent shards.
 PLAN_RACE_PARALLEL=${PLAN_RACE_PARALLEL:-"1"}
-# Two engine shards cut the measured engine/test race runtime roughly in half
-# while keeping the default heavy-stage memory/process budget bounded.
+# Two engine shards cut the measured engine/test race runtime roughly in half.
+# They run as an exclusive wave so resource-heavy package work cannot delay the
+# ISCP progress made by either shard.
 ENGINE_RACE_SHARDS=2
 SCA_REPORT="$G_WKSP/$G_TS-SCA-Report.out"
 UT_REPORT="$G_WKSP/$G_TS-UT-Report.out"
@@ -917,6 +923,29 @@ function consume_plan_race_report(){
     fi
 }
 
+function start_engine_race(){
+    if (( $# != 2 )) || [[ -n "${ENGINE_RACE_JOB_PID}" ]]; then
+        logger "ERR" "start_engine_race requires package, shard count and no active helper"
+        return 2
+    fi
+
+    local saved_term_trap
+    local term_pending=0
+    saved_term_trap=$(trap -p TERM)
+    # The helper can publish its process only after Bash has assigned `$!`.
+    # Defer TERM across that handoff so cancellation always sees and terminates
+    # the exact engine process group before consuming its report.
+    trap 'term_pending=1' TERM
+    set -m
+    run_engine_race_shards "$1" "$2" &
+    ENGINE_RACE_JOB_PID=$!
+    set +m
+    restore_ut_term_trap "${saved_term_trap}"
+    if (( term_pending != 0 )); then
+        handle_ut_termination
+    fi
+}
+
 function handle_ut_termination(){
     trap - TERM
     if (( UT_TERMINATING != 0 )); then
@@ -1011,6 +1040,10 @@ function run_engine_race_shards(){
     local test_count=0
     local pid=""
     local metadata_status=0
+    local metadata_start_status=0
+    local build_start_status=0
+    local list_start_status=0
+    local shard_start_status=0
     local previous_term_trap=""
     local report_ready="${ENGINE_RACE_REPORT}.ready"
     local -a child_pids=(0)
@@ -1018,6 +1051,51 @@ function run_engine_race_shards(){
     local -a shard_counts
     local -a shard_pids
     local -a shard_reports
+
+    # A TERM can arrive after a child has been forked but before `$!` is
+    # copied into child_pids.  Mask TERM across that tiny handoff, then let the
+    # normal helper trap terminate the now-registered process group.  This is
+    # deliberately local to the engine helper: each build/list/test child has
+    # the same ownership contract.
+    function start_engine_child(){
+        local slot=$1
+        shift
+        local saved_term_trap
+        local term_pending=0
+        local child_pid
+        saved_term_trap=$(trap -p TERM)
+        trap 'term_pending=1' TERM
+        set -m
+        "$@" &
+        child_pid=$!
+        child_pids[slot]=${child_pid}
+        set +m
+        restore_ut_term_trap "${saved_term_trap}"
+        if (( term_pending != 0 )); then
+            terminate_ut_process_groups 20 "${child_pids[@]}"
+            wait 2>/dev/null || true
+            return 143
+        fi
+        return 0
+    }
+
+    function run_engine_test_list(){
+        cd "${engine_package_dir}" || return 2
+        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
+            "${ENGINE_RACE_TEST_BINARY}" -test.short=true \
+            -test.list='^(Test|Fuzz|Example)'
+    }
+
+    function run_engine_test_shard(){
+        local test_shard=$1
+        cd "${engine_package_dir}" || return 2
+        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
+            go tool test2json -t -p "${engine_package_import}" \
+            "${ENGINE_RACE_TEST_BINARY}" -test.short=true -test.v=test2json \
+            -test.paniconexit0=true -test.count=1 \
+            -test.timeout="${UT_TIMEOUT}m" \
+            -test.run="${shard_patterns[test_shard]}"
+    }
 
     if ! [[ "${engine_race_shards}" =~ ^[1-9][0-9]*$ ]] ||
         (( engine_race_shards > ENGINE_RACE_SHARDS )); then
@@ -1028,12 +1106,16 @@ function run_engine_race_shards(){
     checkpoint_ut_event "start" "engine" "${engine_package}" "" "shards=${engine_race_shards}"
     previous_term_trap=$(trap -p TERM)
     trap 'terminate_ut_process_groups 20 "${child_pids[@]}"; wait 2>/dev/null || true; rm -f "${metadata_file}"; exit 143' TERM
-    set -m
-    go list ${GO_MODULE_MODE} \
+    start_engine_child 0 go list ${GO_MODULE_MODE} \
         -f '{{.Dir}}{{"\t"}}{{.ImportPath}}' "${engine_package}" \
-        > "${metadata_file}" 2>&1 &
-    child_pids=("$!")
-    set +m
+        > "${metadata_file}" 2>&1
+    metadata_start_status=$?
+    if (( metadata_start_status != 0 )); then
+        restore_ut_term_trap "${previous_term_trap}"
+        set +m
+        checkpoint_ut_event "finish" "engine" "${engine_package}" "${metadata_start_status}" "phase=discover-start"
+        return "${metadata_start_status}"
+    fi
     wait "${child_pids[0]}"
     metadata_status=$?
     child_pids=(0)
@@ -1054,14 +1136,18 @@ function run_engine_race_shards(){
 
     : > "${ENGINE_RACE_REPORT}"
     rm -f "${report_ready}" "${ENGINE_RACE_REPORT}".*
-    set -m
-    LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
+    start_engine_child 0 env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
         CGO_CFLAGS="${CGO_CFLAGS}" \
         CGO_LDFLAGS="${CGO_LDFLAGS}" \
         go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -race -tags "${TAGS}" \
-        -p 1 -c -o "${ENGINE_RACE_TEST_BINARY}" "${engine_package}" > "${build_log}" 2>&1 &
-    child_pids=("$!")
-    set +m
+        -p 1 -c -o "${ENGINE_RACE_TEST_BINARY}" "${engine_package}" > "${build_log}" 2>&1
+    build_start_status=$?
+    if (( build_start_status != 0 )); then
+        restore_ut_term_trap "${previous_term_trap}"
+        set +m
+        checkpoint_ut_event "finish" "engine" "${engine_package}" "${build_start_status}" "phase=build-start"
+        return "${build_start_status}"
+    fi
     wait "${child_pids[0]}"
     build_status=$?
     child_pids=(0)
@@ -1074,15 +1160,14 @@ function run_engine_race_shards(){
         return "${build_status}"
     fi
 
-    set -m
-    (
-        cd "${engine_package_dir}" || exit 2
-        LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
-            "${ENGINE_RACE_TEST_BINARY}" -test.short=true \
-            -test.list='^(Test|Fuzz|Example)'
-    ) > "${test_list}" 2>&1 &
-    child_pids=("$!")
-    set +m
+    start_engine_child 0 run_engine_test_list > "${test_list}" 2>&1
+    list_start_status=$?
+    if (( list_start_status != 0 )); then
+        restore_ut_term_trap "${previous_term_trap}"
+        set +m
+        checkpoint_ut_event "finish" "engine" "${engine_package}" "${list_start_status}" "phase=list-start"
+        return "${list_start_status}"
+    fi
     wait "${child_pids[0]}"
     list_status=$?
     child_pids=(0)
@@ -1127,6 +1212,10 @@ function run_engine_race_shards(){
     fi
 
     logger "INF" "Run ${test_count} tests in ${engine_package} across ${engine_race_shards} concurrent fresh race-detector processes"
+    # All preparation is complete.  From this point until report_ready is
+    # published, the engine race wave owns the constrained runner's heavy
+    # execution window; run_tests admits the resource-heavy wave only after
+    # this helper has been joined.
     set -m
     for (( shard = 0; shard < engine_race_shards; shard++ )); do
         if (( shard_counts[shard] == 0 )); then
@@ -1135,17 +1224,27 @@ function run_engine_race_shards(){
         shard_patterns[shard]+=')$'
         logger "INF" "Start ${engine_package} race shard $(( shard + 1 ))/${engine_race_shards} (${shard_counts[shard]} tests)"
         checkpoint_ut_event "start" "engine" "${engine_package} shard $(( shard + 1 ))/${engine_race_shards}" "" "tests=${shard_counts[shard]}"
-        (
-            cd "${engine_package_dir}" || exit 2
-            LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
-                go tool test2json -t -p "${engine_package_import}" \
-                "${ENGINE_RACE_TEST_BINARY}" -test.short=true -test.v=test2json \
-                -test.paniconexit0=true -test.count=1 \
-                -test.timeout="${UT_TIMEOUT}m" \
-                -test.run="${shard_patterns[shard]}"
-        ) > "${shard_reports[shard]}" &
-        shard_pids[shard]=$!
-        child_pids[shard]=${shard_pids[shard]}
+        # Open the report before spawning.  A shell redirection placed directly
+        # on the function call would fail before start_engine_child runs, which
+        # could otherwise leave earlier shards alive and unjoined.
+        if ! exec 7>"${shard_reports[shard]}"; then
+            terminate_ut_process_groups 20 "${child_pids[@]}"
+            wait 2>/dev/null || true
+            restore_ut_term_trap "${previous_term_trap}"
+            set +m
+            checkpoint_ut_event "finish" "engine" "${engine_package}" 1 "phase=shard-report-open"
+            return 1
+        fi
+        start_engine_child "${shard}" run_engine_test_shard "${shard}" >&7
+        shard_start_status=$?
+        exec 7>&-
+        if (( shard_start_status != 0 )); then
+            restore_ut_term_trap "${previous_term_trap}"
+            set +m
+            checkpoint_ut_event "finish" "engine" "${engine_package}" "${shard_start_status}" "phase=shard-start"
+            return "${shard_start_status}"
+        fi
+        shard_pids[shard]=${child_pids[shard]}
     done
     set +m
 
@@ -1764,7 +1863,6 @@ function run_tests(){
         local resource_heavy_parallel=1
         local engine_race_parallel=1
         local shard_engine=1
-        local engine_joined=0
         local light_started=0
         local overlap_light=0
         local light_parallel=${UT_OVERLAP_LIGHT_PARALLEL}
@@ -1974,81 +2072,54 @@ function run_tests(){
         if should_run_ut_stage heavy && (( shard_engine == 1 )); then
             # engine/test is dominated by serial fixture lifecycles inside one
             # process. Build it once and split every discovered top-level test
-            # across fresh race processes. The effective shard count and the
-            # remaining go-test parallelism share HEAVY_RACE_PARALLEL as one
-            # strict process budget. Low custom budgets use sequential waves.
+            # across fresh race processes. Run the complete engine wave before
+            # any resource-heavy package starts: those package lifecycles can
+            # otherwise delay the engine's ISCP progress and make watermark
+            # assertions depend on which runner process gets CPU first.
             engine_race_parallel=${ENGINE_RACE_SHARDS}
             if (( engine_race_parallel > HEAVY_RACE_PARALLEL )); then
                 engine_race_parallel=${HEAVY_RACE_PARALLEL}
-            fi
-            resource_heavy_parallel=$(( HEAVY_RACE_PARALLEL - engine_race_parallel ))
-            if (( HEAVY_RACE_PARALLEL <= engine_race_parallel )); then
-                resource_heavy_parallel=0
             fi
             ENGINE_RACE_TEST_BINARY="${G_WKSP}/${G_TS}-engine-race.test"
             ENGINE_RACE_REPORT="${G_WKSP}/${G_TS}-engine-race-report.out"
             ENGINE_RACE_REPORT_READY="${ENGINE_RACE_REPORT}.ready"
 
-            if (( resource_heavy_parallel > 0 )); then
-                set -m
-                run_engine_race_shards "${engine_package}" "${engine_race_parallel}" &
-                ENGINE_RACE_JOB_PID=$!
-                set +m
-            else
-                resource_heavy_parallel=${HEAVY_RACE_PARALLEL}
+            # Keep the helper in its own process group for cancellation, but
+            # wait for it before admitting the resource-heavy wave. A failed
+            # engine still releases the runner: all stages run and its status
+            # remains authoritative.
+            start_engine_race "${engine_package}" "${engine_race_parallel}"
+            wait "${ENGINE_RACE_JOB_PID}"
+            engine_status=$?
+            ENGINE_RACE_JOB_PID=""
+            consume_engine_race_report
+            report_status=$?
+            if (( report_status != 0 )); then
+                # A report transfer failure is a failed UT stage, even if all
+                # test processes themselves exited successfully. The source is
+                # intentionally retained for diagnostics.
+                engine_status=1
             fi
-        elif should_run_ut_stage heavy; then
-            resource_heavy_parallel=${HEAVY_RACE_PARALLEL}
         fi
 
+        # The plan race wave is independent after the engine wave has completed.
+        # Reserve exactly its configured process count from the existing heavy
+        # budget, so plan+resource work never exceeds the prior three-slot cap.
+        # If the budget cannot admit both waves, keep the phases sequential.
         if should_run_ut_stage heavy; then
-            logger "INF" "Run remaining resource-heavy race-test packages with parallelism ${resource_heavy_parallel}"
-            start_ut_command "heavy" "resource-heavy race-test packages" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p ${resource_heavy_parallel} -timeout "${UT_TIMEOUT}m" -race $resource_heavy_test_scope
-
-            # Reuse the engine slots only after its helper has exited. At the
-            # default budget, engine(2)+resource(1) becomes plan(1)+resource(1).
-            # A failed engine still releases capacity: all tests must run and
-            # its status remains authoritative. Defer report transfer until the
-            # foreground writer stops; an atomic rename during its writes would
-            # otherwise lose subsequent events written to the old inode.
-            if [[ -n "${ENGINE_RACE_JOB_PID}" ]] &&
-                (( UT_OVERLAP_PLAN == 1 )) && should_run_ut_stage plan; then
-                wait "${ENGINE_RACE_JOB_PID}"
-                engine_status=$?
-                ENGINE_RACE_JOB_PID=""
-                engine_joined=1
-                logger "INF" "Engine finished; reuse released capacity for plan race tests"
+            resource_heavy_parallel=${HEAVY_RACE_PARALLEL}
+            if (( UT_OVERLAP_PLAN == 1 )) && should_run_ut_stage plan &&
+                [[ "${PLAN_RACE_PARALLEL}" =~ ^[1-9][0-9]*$ ]] &&
+                (( PLAN_RACE_PARALLEL <= 2 && HEAVY_RACE_PARALLEL > PLAN_RACE_PARALLEL )); then
+                resource_heavy_parallel=$(( HEAVY_RACE_PARALLEL - PLAN_RACE_PARALLEL ))
+                logger "INF" "Start plan race wave before resource-heavy tests; reserve ${PLAN_RACE_PARALLEL} of ${HEAVY_RACE_PARALLEL} heavy slots"
                 start_plan_race "${plan_package}"
             fi
+
+            logger "INF" "Run remaining resource-heavy race-test packages with parallelism ${resource_heavy_parallel}"
+            start_ut_command "heavy" "resource-heavy race-test packages" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p ${resource_heavy_parallel} -timeout "${UT_TIMEOUT}m" -race $resource_heavy_test_scope
             finish_ut_command
             resource_heavy_status=$?
-
-            if (( shard_engine == 1 )); then
-                if [[ -n "${ENGINE_RACE_JOB_PID}" ]]; then
-                    wait "${ENGINE_RACE_JOB_PID}"
-                    engine_status=$?
-                    ENGINE_RACE_JOB_PID=""
-                elif (( engine_joined == 0 )); then
-                    # Keep the helper's process-group TERM trap scoped to a
-                    # subshell even when a low budget requires sequential waves.
-                    set -m
-                    run_engine_race_shards "${engine_package}" "${engine_race_parallel}" &
-                    ENGINE_RACE_JOB_PID=$!
-                    set +m
-                    wait "${ENGINE_RACE_JOB_PID}"
-                    engine_status=$?
-                    ENGINE_RACE_JOB_PID=""
-                fi
-                consume_engine_race_report
-                report_status=$?
-                if (( report_status != 0 )); then
-                    # A report transfer failure is a failed UT stage, even if
-                    # all test processes themselves exited successfully.  The
-                    # source is intentionally retained for diagnostics.
-                    engine_status=1
-                fi
-            fi
-
             report_cgroup_memory_usage "Resource-heavy UT"
         fi
 

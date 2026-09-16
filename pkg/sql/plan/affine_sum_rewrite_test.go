@@ -83,6 +83,13 @@ func affineTestContext(aggregates []*planpb.Expr) *BindContext {
 	}
 }
 
+func unwrapAffineResultCast(expr *planpb.Expr) *planpb.Expr {
+	if fn := expr.GetF(); fn != nil && fn.Func.ObjName == "cast" && len(fn.Args) > 0 {
+		return fn.Args[0]
+	}
+	return expr
+}
+
 func TestRewriteAffineSumFamilies(t *testing.T) {
 	builder := NewQueryBuilder(
 		planpb.Query_SELECT, NewMockCompilerContext(false), false, true)
@@ -113,10 +120,10 @@ func TestRewriteAffineSumFamilies(t *testing.T) {
 		require.Equal(t, map[string]int32{"anchor": 0}, ctx.aggregateByAst)
 		require.Equal(t, int32(0), ctx.projects[0].GetCol().ColPos)
 		require.Equal(t, int32(1), ctx.projects[1].GetCol().ColPos)
-		require.Equal(t, "+", ctx.projects[2].GetF().Func.ObjName)
-		require.Equal(t, "+", ctx.projects[3].GetF().Func.ObjName)
-		require.Equal(t, "+", having[0].GetF().Func.ObjName)
-		require.Equal(t, "+", orderBy.Expr.GetF().Func.ObjName)
+		require.Equal(t, "+", unwrapAffineResultCast(ctx.projects[2]).GetF().Func.ObjName)
+		require.Equal(t, "+", unwrapAffineResultCast(ctx.projects[3]).GetF().Func.ObjName)
+		require.Equal(t, "+", unwrapAffineResultCast(having[0]).GetF().Func.ObjName)
+		require.Equal(t, "+", unwrapAffineResultCast(orderBy.Expr).GetF().Func.ObjName)
 		for i := range ctx.projects {
 			require.True(t, sameAffineResultType(ctx.projects[i], aggregates[i]))
 		}
@@ -186,7 +193,7 @@ func TestRewriteAffineSumFamilies(t *testing.T) {
 		})
 		builder.rewriteAffineSumFamilies(ctx, [][]*planpb.Expr{ctx.projects}, nil)
 		require.Len(t, ctx.aggregates, 2)
-		require.Equal(t, "+", ctx.projects[0].GetF().Func.ObjName)
+		require.Equal(t, "+", unwrapAffineResultCast(ctx.projects[0]).GetF().Func.ObjName)
 	})
 
 	t.Run("central adjacent pair covers the complete safe coefficient radius", func(t *testing.T) {
@@ -227,7 +234,7 @@ func TestRewriteAffineSumFamilies(t *testing.T) {
 		builder.rewriteAffineSumFamilies(ctx, [][]*planpb.Expr{ctx.projects}, nil)
 
 		require.Len(t, ctx.aggregates, 2)
-		require.Equal(t, "+", ctx.projects[2].GetF().Func.ObjName)
+		require.Equal(t, "+", unwrapAffineResultCast(ctx.projects[2]).GetF().Func.ObjName)
 	})
 
 	tests := []struct {
