@@ -1,0 +1,59 @@
+name: Cancel doomed PR CI
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Report doomed runs without cancelling them
+        required: true
+        type: boolean
+        default: true
+
+concurrency:
+  group: cancel-doomed-pr-ci
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  watchdog:
+    name: Cancel runs with a failed CI Required dependency
+    if: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
+    runs-on: ubuntu-22.04
+    timeout-minutes: 5
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          sparse-checkout: .github/ci
+      - name: Inspect active PR CI runs
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7
+        env:
+          POLICY_SHA: ${{ github.workflow_sha }}
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && 'true' || 'false' }}
+        with:
+          script: |
+            const {
+              cancelDoomedRuns,
+              renderSummary,
+            } = require('./.github/ci/cancel-doomed-runs.cjs');
+            const result = await cancelDoomedRuns({
+              github,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              policyRef: process.env.POLICY_SHA,
+              dryRun: process.env.DRY_RUN === 'true',
+            });
+            await core.summary.addRaw(renderSummary(result)).write();
+            for (const record of [...result.cancelled, ...result.wouldCancel]) {
+              core.info(`PR #${record.pullNumber}: ${record.failedJob}; run ${record.runId}/${record.attempt}`);
+            }
+            if (result.errors.length > 0) {
+              core.setFailed(`${result.errors.length} run(s) could not be inspected safely`);
+            }
