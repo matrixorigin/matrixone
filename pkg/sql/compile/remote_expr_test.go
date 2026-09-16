@@ -567,6 +567,72 @@ func TestOrderedSetPercentileRemoteProtocolValidation(t *testing.T) {
 	require.NoError(t, validateRemoteAggregateProtocol(proc, percentile))
 }
 
+func TestApproxPercentileRemoteProtocolValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	percentile := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfApproxPercentile,
+		false,
+		[]*plan.Expr{makeTestVarExpr("value")},
+		aggexec.EncodeApproxPercentileConfig([]byte("0.5"), true),
+	)}
+
+	require.ErrorContains(t, validateRemoteAggregateProtocol(nil, percentile),
+		"requires MORPC protocol version 75")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion70)
+	require.ErrorContains(t, validateRemoteAggregateProtocol(proc, percentile),
+		"requires MORPC protocol version 75")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion73)
+	require.ErrorContains(t, validateRemoteAggregateProtocol(proc, percentile),
+		"requires MORPC protocol version 75")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion74)
+	require.ErrorContains(t, validateRemoteAggregateProtocol(proc, percentile),
+		"requires MORPC protocol version 75")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion75)
+	require.NoError(t, validateRemoteAggregateProtocol(proc, percentile))
+
+	// Rollback must reject both the new DESC config and ordinary ASC state: the
+	// NaN ordering changed for both forms, so an old receiver cannot merge it.
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion70)
+	percentile[0].SetExtraConfig([]byte("0.5"))
+	require.ErrorContains(t, validateRemoteAggregateProtocol(proc, percentile),
+		"requires MORPC protocol version 75")
+}
+
+func TestHLLRemoteProtocolValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	for _, aggID := range []int64{
+		aggexec.AggIdOfApproxCount,
+		aggexec.AggIdOfApproxCountDistinct,
+		aggexec.AggIdOfHllAdd,
+		aggexec.AggIdOfHllMerge,
+	} {
+		agg := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+			aggID,
+			false,
+			[]*plan.Expr{makeTestVarExpr("value")},
+			nil,
+		)}
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion70)
+		require.ErrorContains(t, validateRemoteAggregateProtocol(proc, agg),
+			"HLL remote execution requires MORPC protocol version 76")
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion73)
+		require.ErrorContains(t, validateRemoteAggregateProtocol(proc, agg),
+			"HLL remote execution requires MORPC protocol version 76")
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion74)
+		require.ErrorContains(t, validateRemoteAggregateProtocol(proc, agg),
+			"HLL remote execution requires MORPC protocol version 76")
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion75)
+		require.ErrorContains(t, validateRemoteAggregateProtocol(proc, agg),
+			"HLL remote execution requires MORPC protocol version 76")
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion76)
+		require.NoError(t, validateRemoteAggregateProtocol(proc, agg))
+	}
+}
+
 func TestTextMinMaxRemoteProtocolValidation(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	rt := runtime.ServiceRuntime(proc.GetService())
