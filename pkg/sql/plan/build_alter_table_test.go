@@ -114,6 +114,110 @@ func TestAlterTableAutoIncrementRejectsTableWithoutUserAutoColumn(t *testing.T) 
 	require.ErrorContains(t, err, "does not have an AUTO_INCREMENT column")
 }
 
+func TestAlterTableCharsetConversionRebuildsNativePhysicalKeys(t *testing.T) {
+	name := &plan.ColDef{
+		Name:    "name",
+		Primary: true,
+		Typ:     plan.Type{Id: int32(types.T_varchar), Width: 32, Charset: uint32(types.CharsetUTF8)},
+		Default: &plan.Default{NullAbility: false},
+	}
+	table := &plan.TableDef{
+		DefaultCharset: uint32(types.CharsetUTF8),
+		Cols: []*plan.ColDef{
+			{Name: "id", Typ: plan.Type{Id: int32(types.T_int32)}, Default: &plan.Default{}},
+			name,
+		},
+		Name2ColIndex: map[string]int32{"id": 0, "name": 1},
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"name"}, PkeyColName: "name"},
+		Indexes:       []*plan.IndexDef{{IndexName: "idx_name", Parts: []string{"name"}}},
+	}
+	option := tree.NewTableOptionCharsetConversionWithCollation("utf8mb4", "utf8mb4_0900_ai_ci")
+	require.NoError(t, applyAlterTableCharsetConversion(context.Background(), table, option))
+
+	require.Equal(t, uint32(types.CharsetUTF8MB40900AI), table.DefaultCharset)
+	require.Equal(t, uint32(types.CollationVersionV1), table.CollationVersion)
+	require.Equal(t, uint32(types.CharsetUTF8MB40900AI), FindColumn(table.Cols, "name").Typ.Charset)
+	require.False(t, FindColumn(table.Cols, "name").Primary)
+	require.NotNil(t, table.Pkey.CompPkeyCol)
+	require.True(t, table.Pkey.CompPkeyCol.Hidden)
+	require.Equal(t, catalog.CPrimaryKeyColName, table.Pkey.PkeyColName)
+	require.Equal(t, int32(1), table.Name2ColIndex["name"])
+	require.Equal(t, int32(2), table.Name2ColIndex[catalog.CPrimaryKeyColName])
+	require.Equal(t, uint32(types.PADSpaceKeyV1), table.KeyFormat)
+	require.Equal(t, uint32(types.PADSpaceKeyV1), table.Indexes[0].KeyFormat)
+
+	// A native single-column primary key without secondary indexes must keep
+	// the table format set by the hidden physical key rebuild.
+	pkOnly := &plan.TableDef{
+		DefaultCharset: uint32(types.CharsetUTF8),
+		Cols: []*plan.ColDef{{
+			Name:    "name",
+			Primary: true,
+			Typ:     plan.Type{Id: int32(types.T_varchar), Width: 32, Charset: uint32(types.CharsetUTF8)},
+			Default: &plan.Default{NullAbility: false},
+		}},
+		Pkey: &plan.PrimaryKeyDef{Names: []string{"name"}, PkeyColName: "name"},
+	}
+	require.NoError(t, applyAlterTableCharsetConversion(context.Background(), pkOnly, option))
+	require.Equal(t, uint32(types.PADSpaceKeyV1), pkOnly.KeyFormat)
+	require.NotNil(t, pkOnly.Pkey.CompPkeyCol)
+	require.Empty(t, pkOnly.Indexes)
+
+	legacy := tree.NewTableOptionCharsetConversionWithCollation("utf8mb4", "utf8mb4_general_ci")
+	require.NoError(t, applyAlterTableCharsetConversion(context.Background(), table, legacy))
+	require.Equal(t, uint32(types.CharsetUTF8), table.DefaultCharset)
+	require.Equal(t, uint32(types.CollationVersionV1), table.CollationVersion)
+	require.Equal(t, uint32(types.CharsetUTF8), FindColumn(table.Cols, "name").Typ.Charset)
+	// general-ci is part of the corrected V1 delivery, so converting from
+	// native 0900 keeps a hidden physical key and the same tuple format.
+	require.NotNil(t, table.Pkey.CompPkeyCol)
+	require.True(t, table.Pkey.CompPkeyCol.Hidden)
+	require.Equal(t, catalog.CPrimaryKeyColName, table.Pkey.PkeyColName)
+	require.Equal(t, int32(1), table.Name2ColIndex["name"])
+	require.Equal(t, int32(2), table.Name2ColIndex[catalog.CPrimaryKeyColName])
+	require.False(t, FindColumn(table.Cols, "name").Primary)
+	require.Equal(t, uint32(types.PADSpaceKeyV1), table.KeyFormat)
+	require.Equal(t, uint32(types.PADSpaceKeyV1), table.Indexes[0].KeyFormat)
+}
+
+func TestAlterTableCharsetConversionRequiresCopy(t *testing.T) {
+	option := tree.NewTableOptionCharsetConversionWithCollation("utf8mb4", "utf8mb4_0900_ai_ci")
+	algorithm, err := ResolveAlterTableAlgorithm(context.Background(),
+		[]tree.AlterTableOption{option}, &plan.TableDef{})
+	require.NoError(t, err)
+	require.Equal(t, plan.AlterTable_COPY, algorithm)
+}
+
+func TestAlterTableCharsetOptionMarksOnlyConvertAsMigration(t *testing.T) {
+	for _, tc := range []struct {
+		sql     string
+		convert bool
+	}{
+		{sql: "ALTER TABLE t1 DEFAULT CHARACTER SET utf8mb4", convert: false},
+		{sql: "ALTER TABLE t1 CONVERT TO CHARACTER SET utf8mb4", convert: true},
+	} {
+		stmt, err := mysql.ParseOne(context.Background(), tc.sql, 1)
+		require.NoError(t, err)
+		alter, ok := stmt.(*tree.AlterTable)
+		require.True(t, ok)
+		require.Len(t, alter.Options, 1)
+		option, ok := alter.Options[0].(*tree.TableOptionCharset)
+		require.True(t, ok)
+		require.Equal(t, tc.convert, option.Convert)
+	}
+	defaultOption := tree.NewTableOptionCharset("utf8mb4")
+	algorithm, err := ResolveAlterTableAlgorithm(context.Background(),
+		[]tree.AlterTableOption{defaultOption}, &plan.TableDef{})
+	require.NoError(t, err)
+	require.Equal(t, plan.AlterTable_INPLACE, algorithm)
+
+	convertOption := tree.NewTableOptionCharsetConversion("utf8mb4")
+	algorithm, err = ResolveAlterTableAlgorithm(context.Background(),
+		[]tree.AlterTableOption{convertOption}, &plan.TableDef{})
+	require.NoError(t, err)
+	require.Equal(t, plan.AlterTable_COPY, algorithm)
+}
+
 func TestAlterTable1(t *testing.T) {
 	//sql := "ALTER TABLE t1 ADD (d TIMESTAMP, e INT not null);"
 	//sql := "ALTER TABLE t1 ADD d INT NOT NULL PRIMARY KEY;"
@@ -319,6 +423,32 @@ func TestAlterTableAddColumnInheritsTableDefaultCharset(t *testing.T) {
 	}
 }
 
+func TestAlterTableAddColumnUsesTableDefaultVersionOnly(t *testing.T) {
+	// A column-level collation must not silently become the default for columns
+	// added by a later COPY ALTER.  TableDef.CollationVersion records the table
+	// default semantic domain, while each column carries its own override.
+	mixed := NewMockOptimizer(false)
+	mixed.ctxt.tables["t1"].DefaultCharset = uint32(types.CharsetUTF8)
+	mixed.ctxt.tables["t1"].CollationVersion = uint32(types.CollationVersionLegacy)
+	mixed.ctxt.tables["t1"].Cols[1].Typ.Charset = uint32(types.CharsetUTF8)
+	mixed.ctxt.tables["t1"].Cols[1].Typ.CollationVersion = uint32(types.CollationVersionV1)
+
+	logicPlan, err := buildSingleStmt(mixed, t, "alter table t1 add column d varchar(10)")
+	require.NoError(t, err)
+	copyDef := logicPlan.GetDdl().GetAlterTable().CopyTableDef
+	require.Zero(t, copyDef.CollationVersion)
+	require.Equal(t, uint32(types.CollationVersionLegacy), FindColumn(copyDef.Cols, "d").Typ.CollationVersion)
+
+	versioned := NewMockOptimizer(false)
+	versioned.ctxt.tables["t1"].DefaultCharset = uint32(types.CharsetUTF8)
+	versioned.ctxt.tables["t1"].CollationVersion = uint32(types.CollationVersionV1)
+	logicPlan, err = buildSingleStmt(versioned, t, "alter table t1 add column d varchar(10)")
+	require.NoError(t, err)
+	copyDef = logicPlan.GetDdl().GetAlterTable().CopyTableDef
+	require.Equal(t, uint32(types.CollationVersionV1), copyDef.CollationVersion)
+	require.Equal(t, uint32(types.CollationVersionV1), FindColumn(copyDef.Cols, "d").Typ.CollationVersion)
+}
+
 func TestAlterTableAddColumnOverridesBinaryTableCharsetBeforeTypeConversion(t *testing.T) {
 	for _, clause := range []string{
 		"character set utf8mb4",
@@ -340,6 +470,60 @@ func TestAlterTableAddColumnOverridesBinaryTableCharsetBeforeTypeConversion(t *t
 			}
 		})
 	}
+}
+
+func TestAlterTableModifyColumnSemanticVersionForcesCopy(t *testing.T) {
+	newModify := func() *tree.AlterTableModifyColumnClause {
+		return &tree.AlterTableModifyColumnClause{NewColumn: &tree.ColumnTableDef{
+			Name: tree.NewUnresolvedColName("c"),
+			Type: &tree.T{InternalType: tree.InternalType{
+				FamilyString: "varchar",
+				Oid:          uint32(defines.MYSQL_TYPE_VARCHAR),
+				DisplayWith:  64,
+			}},
+		}}
+	}
+
+	// The column-level override is versioned while the table default remains
+	// legacy. A width-only MODIFY inherits the table default and therefore must
+	// take COPY to regenerate the comparison identity.
+	legacyDefault := &TableDef{
+		DefaultCharset:   uint32(types.CharsetUTF8),
+		CollationVersion: uint32(types.CollationVersionLegacy),
+		Cols: []*ColDef{{
+			Name: "c",
+			Typ: plan.Type{
+				Id:               int32(types.T_varchar),
+				Width:            32,
+				Charset:          uint32(types.CharsetUTF8),
+				CollationVersion: uint32(types.CollationVersionV1),
+			},
+			Default: &plan.Default{NullAbility: true},
+		}},
+	}
+	ok, err := isInplaceModifyColumn(context.Background(), newModify(), legacyDefault)
+	require.NoError(t, err)
+	require.False(t, ok)
+
+	// The inverse transition is equally significant: an old column inheriting a
+	// versioned table default cannot use the width-only fast path either.
+	versionedDefault := &TableDef{
+		DefaultCharset:   uint32(types.CharsetUTF8),
+		CollationVersion: uint32(types.CollationVersionV1),
+		Cols: []*ColDef{{
+			Name: "c",
+			Typ: plan.Type{
+				Id:               int32(types.T_varchar),
+				Width:            32,
+				Charset:          uint32(types.CharsetUTF8),
+				CollationVersion: uint32(types.CollationVersionLegacy),
+			},
+			Default: &plan.Default{NullAbility: true},
+		}},
+	}
+	ok, err = isInplaceModifyColumn(context.Background(), newModify(), versionedDefault)
+	require.NoError(t, err)
+	require.False(t, ok)
 }
 
 func TestAlterTableModifyColumnInheritsTableDefaultCharset(t *testing.T) {

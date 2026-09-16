@@ -182,7 +182,7 @@ func (builder *QueryBuilder) makeIndexPartExpr(
 
 	length := prefixLengths[colName]
 	if length <= 0 {
-		return expr, nil
+		return makeNativeCollationKeyExpr(builder.GetContext(), expr, colType)
 	}
 
 	prefixExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "substring", []*plan.Expr{
@@ -200,7 +200,7 @@ func (builder *QueryBuilder) makeIndexPartExpr(
 			return nil, err
 		}
 	}
-	return prefixExpr, nil
+	return makeNativeCollationKeyExpr(builder.GetContext(), prefixExpr, colType)
 }
 
 func (builder *QueryBuilder) makeIndexPartExprFromInputExpr(
@@ -211,7 +211,16 @@ func (builder *QueryBuilder) makeIndexPartExprFromInputExpr(
 	expr := DeepCopyExpr(inputExpr)
 	length := prefixLengths[colName]
 	if length <= 0 {
-		return expr, nil
+		return makeNativeCollationKeyExpr(builder.GetContext(), expr, inputExpr.Typ)
+	}
+	// Comparison binding may already have converted a native 0900 operand to
+	// internal_collation_key. Prefix indexes are defined in SQL characters, so
+	// unwrap that probe before substring and regenerate the weight key instead
+	// of slicing opaque weight bytes.
+	keyType := inputExpr.Typ
+	if fn := expr.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "internal_collation_key" && len(fn.Args) > 0 {
+		expr = DeepCopyExpr(fn.Args[0])
+		keyType = expr.Typ
 	}
 
 	prefixExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "substring", []*plan.Expr{
@@ -223,13 +232,13 @@ func (builder *QueryBuilder) makeIndexPartExprFromInputExpr(
 		return nil, err
 	}
 
-	if prefixType, ok := indexTableKeyTypeForPrefix(inputExpr.Typ); ok {
+	if prefixType, ok := indexTableKeyTypeForPrefix(keyType); ok {
 		prefixExpr, err = appendCastBeforeExpr(builder.GetContext(), prefixExpr, prefixType)
 		if err != nil {
 			return nil, err
 		}
 	}
-	return prefixExpr, nil
+	return makeNativeCollationKeyExpr(builder.GetContext(), prefixExpr, keyType)
 }
 
 func (builder *QueryBuilder) makeInsertIndexPartExpr(

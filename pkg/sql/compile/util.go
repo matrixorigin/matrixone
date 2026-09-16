@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -196,10 +197,10 @@ func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexD
 	if err != nil {
 		return "", err
 	}
-	temp := partsToIndexExprStr(indexDef.Parts, prefixLengths)
+	temp := partsToIndexExprStrForTable(indexDef.Parts, prefixLengths, originTableDef)
 	spatialIndex := catalog.IsRTreeIndexAlgo(indexDef.IndexAlgo)
 	if spatialIndex && len(indexDef.Parts) > 0 {
-		temp = partsToIndexExprStr(indexDef.Parts[:1], prefixLengths)
+		temp = partsToIndexExprStrForTable(indexDef.Parts[:1], prefixLengths, originTableDef)
 	}
 	if len(originTableDef.Pkey.PkeyColName) == 0 {
 		if len(indexDef.Parts) == 1 || spatialIndex {
@@ -211,15 +212,10 @@ func genInsertIndexTableSql(originTableDef *plan.TableDef, indexDef *plan.IndexD
 		pkeyName := originTableDef.Pkey.PkeyColName
 		var pKeyMsg string
 		if pkeyName == catalog.CPrimaryKeyColName {
-			pKeyMsg = "serial("
-			for i, part := range originTableDef.Pkey.Names {
-				if i == 0 {
-					pKeyMsg += quoteMySQLIdent(part)
-				} else {
-					pKeyMsg += "," + quoteMySQLIdent(part)
-				}
-			}
-			pKeyMsg += ")"
+			// Pkey.Names are the user-visible components even when the
+			// physical key is hidden. Native 0900 components must be converted
+			// before serializing the physical key used by the index table.
+			pKeyMsg = "serial(" + partsToIndexExprStrForTable(originTableDef.Pkey.Names, nil, originTableDef) + ")"
 		} else {
 			pKeyMsg = quoteMySQLQualifiedIdent(pkeyName)
 		}
@@ -244,15 +240,7 @@ func genInsertIndexTableSqlForMasterIndex(originTableDef *plan.TableDef, indexDe
 	pkeyName := originTableDef.Pkey.PkeyColName
 	var pKeyMsg string
 	if pkeyName == catalog.CPrimaryKeyColName {
-		pKeyMsg = "serial("
-		for i, part := range originTableDef.Pkey.Names {
-			if i == 0 {
-				pKeyMsg += quoteMySQLIdent(part)
-			} else {
-				pKeyMsg += "," + quoteMySQLIdent(part)
-			}
-		}
-		pKeyMsg += ")"
+		pKeyMsg = "serial(" + partsToIndexExprStrForTable(originTableDef.Pkey.Names, nil, originTableDef) + ")"
 	} else {
 		pKeyMsg = quoteMySQLQualifiedIdent(pkeyName)
 	}
@@ -542,12 +530,26 @@ func (s *Scope) checkTableWithValidIndexes(c *Compile, relation engine.Relation)
 }
 
 func partsToIndexExprStr(parts []string, prefixLengths map[string]int) string {
+	return partsToIndexExprStrForTable(parts, prefixLengths, nil)
+}
+
+func partsToIndexExprStrForTable(parts []string, prefixLengths map[string]int, tableDef *plan.TableDef) string {
 	var temp string
 	for i, part := range parts {
-		part = catalog.ResolveAlias(part)
-		partExpr := quoteMySQLQualifiedIdent(part)
-		if length := prefixLengths[part]; length > 0 {
+		resolvedPart := catalog.ResolveAlias(part)
+		partExpr := quoteMySQLQualifiedIdent(resolvedPart)
+		if length := prefixLengths[resolvedPart]; length > 0 {
 			partExpr = fmt.Sprintf("substring(%s, 1, %d)", partExpr, length)
+		}
+		if tableDef != nil {
+			if typ, ok := tableColumnType(tableDef, resolvedPart); ok &&
+				isVersionedPlanStringType(typ) {
+				// Prefix length is applied to the SQL value before the
+				// irreversible comparison transform. The hidden index column
+				// stores the resulting opaque bytes, so backfill and probes use
+				// exactly the same identity.
+				partExpr = fmt.Sprintf("internal_collation_key(%s, %d)", partExpr, typ.Charset)
+			}
 		}
 		if i == 0 {
 			temp += partExpr
@@ -556,6 +558,32 @@ func partsToIndexExprStr(parts []string, prefixLengths map[string]int) string {
 		}
 	}
 	return temp
+}
+
+func isVersionedPlanStringType(typ plan.Type) bool {
+	if !types.T(typ.Id).IsMySQLString() {
+		return false
+	}
+	runtimeType := types.NewWithCharsetVersion(
+		types.T(typ.Id), typ.Width, typ.Scale,
+		uint8(typ.Charset), uint8(typ.CollationVersion),
+	)
+	return types.NeedsCollationKey(runtimeType, types.PADSpaceKeyV1)
+}
+
+func tableColumnType(tableDef *plan.TableDef, name string) (plan.Type, bool) {
+	if tableDef == nil {
+		return plan.Type{}, false
+	}
+	if pos, ok := tableDef.Name2ColIndex[name]; ok && pos >= 0 && int(pos) < len(tableDef.Cols) && tableDef.Cols[pos] != nil {
+		return tableDef.Cols[pos].Typ, true
+	}
+	for _, col := range tableDef.Cols {
+		if col != nil && col.Name == name {
+			return col.Typ, true
+		}
+	}
+	return plan.Type{}, false
 }
 
 func quoteMySQLIdent(ident string) string {

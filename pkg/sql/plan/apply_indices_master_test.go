@@ -170,3 +170,68 @@ func TestMasterIndexPublishesSortedPrefixPayload(t *testing.T) {
 			"needles must ascend in the byte order PrefixIn searches")
 	}
 }
+
+func TestMasterIndexNative0900FilterUsesPhysicalKey(t *testing.T) {
+	compCtx := NewEmptyCompilerContext()
+	compCtx.isDml = true
+	compCtx.objects["__mo_master_idx"] = &planpb.ObjectRef{SchemaName: "test", ObjName: "__mo_master_idx"}
+	compCtx.tables["__mo_master_idx"] = &planpb.TableDef{
+		Name: "__mo_master_idx",
+		Cols: []*planpb.ColDef{
+			{Name: catalog.IndexTableIndexColName, Typ: planpb.Type{Id: int32(types.T_varbinary), Width: types.MaxVarBinaryLen}, Seqnum: 0},
+			{Name: catalog.IndexTablePrimaryColName, Typ: planpb.Type{Id: int32(types.T_int64)}, Seqnum: 1},
+		},
+		Name2ColIndex: map[string]int32{
+			catalog.IndexTableIndexColName:   0,
+			catalog.IndexTablePrimaryColName: 1,
+		},
+	}
+
+	builder := NewQueryBuilder(planpb.Query_SELECT, compCtx, false, true)
+	ctx := NewBindContext(builder, nil)
+	baseTag := builder.genNewBindTag()
+	native := planpb.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB40900AI)}
+	baseDef := &planpb.TableDef{
+		Name: "t",
+		Cols: []*planpb.ColDef{
+			{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}, Seqnum: 0},
+			{Name: "a", Typ: native, Seqnum: 1},
+		},
+		Name2ColIndex: map[string]int32{"id": 0, "a": 1},
+		Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+	}
+	column := GetColExpr(native, baseTag, 1)
+	literal := MakePlan2StringConstExprWithType("Alpha")
+	literal.Typ = native
+	columnKey, err := makeNativeCollationKeyExpr(builder.GetContext(), column, native)
+	require.NoError(t, err)
+	literalKey, err := makeNativeCollationKeyExpr(builder.GetContext(), literal, native)
+	require.NoError(t, err)
+	filter, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*planpb.Expr{columnKey, literalKey})
+	require.NoError(t, err)
+
+	scanID := builder.appendNode(&planpb.Node{
+		NodeType:    planpb.Node_TABLE_SCAN,
+		ObjRef:      &planpb.ObjectRef{SchemaName: "test", ObjName: "t"},
+		TableDef:    baseDef,
+		BindingTags: []int32{baseTag},
+		FilterList:  []*planpb.Expr{filter},
+	}, ctx)
+	outerID := builder.applyIndicesForFiltersUsingMasterIndex(scanID, builder.qry.Nodes[scanID], &planpb.IndexDef{
+		IndexName:      "idx_master",
+		IndexAlgo:      catalog.MOIndexMasterAlgo.ToString(),
+		IndexTableName: "__mo_master_idx",
+		Parts:          []string{"a"},
+		TableExist:     true,
+	})
+
+	inner := builder.qry.Nodes[builder.qry.Nodes[outerID].Children[1]]
+	require.NotNil(t, inner)
+	require.NotEmpty(t, inner.FilterList)
+	lookup := inner.FilterList[0]
+	require.NotNil(t, lookup)
+	require.NotNil(t, lookup.GetF())
+	require.Equal(t, "prefix_eq", lookup.GetF().Func.ObjName)
+	require.Equal(t, types.T_varbinary, types.T(lookup.GetF().Args[0].Typ.Id))
+	require.True(t, exprContainsFuncName(lookup.GetF().Args[1], "serial_full"))
+}

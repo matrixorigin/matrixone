@@ -189,6 +189,48 @@ func BuildUniqueKeyBatch(
 // input vec is [[1, 1, 1], [2, 2, null], [3, 3, 3]]
 // result vec is [serial(1, 2, 3), serial(1, 2, 3)]
 // result bitmap is [2]
+// encodeCollationStringVector handles the physical key path used by the
+// pre-insert operators. The output is already an opaque tuple component, so
+// callers must keep its destination vector binary and must not run the key
+// transform again in a later hash or index step.
+func encodeCollationStringVector(
+	v *vector.Vector,
+	ps []*types.Packer,
+	bitMap *nulls.Nulls,
+	compactNulls bool,
+) (bool, error) {
+	typ := v.GetType()
+	if typ == nil || !types.NeedsCollationKey(*typ, types.PADSpaceKeyV1) {
+		return false, nil
+	}
+	part, err := types.ResolveStringKeyPart(*typ, types.PADSpaceKeyV1)
+	if err != nil {
+		return true, err
+	}
+	values, area := vector.MustVarlenaRawData(v)
+	var scratch []byte
+	for i := range values {
+		if v.IsNull(uint64(i)) {
+			if compactNulls {
+				nulls.Add(bitMap, uint64(i))
+			} else {
+				ps[i].EncodeNull()
+			}
+			continue
+		}
+		key, err := part.Key(scratch, values[i].GetByteSlice(area))
+		if err != nil {
+			return true, err
+		}
+		ps[i].EncodeStringType(key)
+		if err := ps[i].Err(); err != nil {
+			return true, err
+		}
+		scratch = key[:0]
+	}
+	return true, nil
+}
+
 func serialWithCompacted(
 	vs []*vector.Vector,
 	vec *vector.Vector,
@@ -214,6 +256,12 @@ func serialWithCompacted(
 	for _, v := range vs {
 		vNull := v.GetNulls()
 		hasNull := v.HasNull()
+		if handled, err := encodeCollationStringVector(v, ps, bitMap, true); handled {
+			if err != nil {
+				return nil, err
+			}
+			continue
+		}
 		switch v.GetType().Oid {
 		case types.T_bool:
 			s := vector.MustFixedColNoTypeCheck[bool](v)
@@ -581,6 +629,12 @@ func serialWithoutCompacted(
 			}
 			continue
 		}
+		if handled, err := encodeCollationStringVector(v, ps, nil, false); handled {
+			if err != nil {
+				return nil, err
+			}
+			continue
+		}
 		function.SerialHelper(v, nil, ps, true)
 	}
 
@@ -599,6 +653,31 @@ func compactSingleIndexCol(
 	proc *process.Process,
 ) (*nulls.Nulls, error) {
 	var err error
+
+	if v.GetType() != nil && types.NeedsCollationKey(*v.GetType(), types.PADSpaceKeyV1) {
+		part, resolveErr := types.ResolveStringKeyPart(*v.GetType(), types.PADSpaceKeyV1)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		values, area := vector.MustVarlenaRawData(v)
+		encoded := make([][]byte, 0, len(values))
+		var scratch []byte
+		for i := range values {
+			if v.IsNull(uint64(i)) {
+				continue
+			}
+			key, keyErr := part.Key(scratch, values[i].GetByteSlice(area))
+			if keyErr != nil {
+				return nil, keyErr
+			}
+			encoded = append(encoded, append([]byte(nil), key...))
+			scratch = key[:0]
+		}
+		if err = vector.AppendBytesList(vec, encoded, nil, proc.Mp()); err != nil {
+			return nil, err
+		}
+		return v.GetNulls(), nil
+	}
 
 	hasNull := v.HasNull()
 	if !hasNull {
@@ -1066,7 +1145,9 @@ func XXHashVectors(vs []*vector.Vector,
 			}
 			continue
 		}
-		function.SerialHelper(v, nil, packers.ps, true)
+		if err := function.SerialHelperWithError(v, nil, packers.ps, true); err != nil {
+			return nil, 0, err
+		}
 	}
 
 	for i := 0; i < rowCount; i++ {

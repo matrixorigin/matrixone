@@ -1954,7 +1954,7 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 			}
 		}
 	}
-	if primaryKeyChanged && len(childTableDef.Pkey.Names) > 1 {
+	if primaryKeyChanged && childTableDef.Pkey.CompPkeyCol != nil && childTableDef.Pkey.CompPkeyCol.Hidden {
 		primaryParts := make([]*plan.Expr, len(childTableDef.Pkey.Names))
 		for i, name := range childTableDef.Pkey.Names {
 			partPos := childTableDef.Name2ColIndex[catalog.ResolveAlias(name)]

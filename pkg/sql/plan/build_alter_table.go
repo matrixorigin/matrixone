@@ -50,6 +50,12 @@ func skipPkDedup(old, new *TableDef, sourceColumns map[string]selectExpr) bool {
 	if noOldPk {
 		return false
 	}
+	// A copied primary-key value can only be reused when its physical encoding
+	// is unchanged.  The table-level format is the persisted format for the
+	// primary key (including a hidden single-column physical key).
+	if old.KeyFormat != new.KeyFormat || old.CollationVersion != new.CollationVersion {
+		return false
+	}
 
 	// The copy INSERT can skip PK dedup only when every target key value is
 	// guaranteed to be identical to its source value. Matching column names are
@@ -81,6 +87,8 @@ func skipUniqueIdxDedup(old, new *TableDef, sourceColumns map[string]selectExpr)
 				slices.Equal(idx.Parts, oldidx.Parts) &&
 				oldidx.IndexAlgo == idx.IndexAlgo &&
 				oldidx.IndexAlgoParams == idx.IndexAlgoParams &&
+				oldidx.KeyFormat == idx.KeyFormat &&
+				old.CollationVersion == new.CollationVersion &&
 				alterCopyKeyPartsValueUnchanged(old, new, idx.Parts, sourceColumns) {
 				if skip == nil {
 					skip = make(map[string]bool)
@@ -135,7 +143,10 @@ func alterCopyKeyColumnValueUnchanged(oldCol, newCol *ColDef) bool {
 		oldTyp.Width == newTyp.Width &&
 		oldTyp.Scale == newTyp.Scale &&
 		oldTyp.Table == newTyp.Table &&
-		oldTyp.Enumvalues == newTyp.Enumvalues
+		oldTyp.Enumvalues == newTyp.Enumvalues &&
+		oldTyp.Charset == newTyp.Charset &&
+		oldTyp.CollationVersion == newTyp.CollationVersion &&
+		oldTyp.PadSpace == newTyp.PadSpace
 }
 
 func tableHasAutoIncrementColumn(tableDef *TableDef) bool {
@@ -280,6 +291,23 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	if err := reconcileIndexVisibility(cctx, tableDef.TblId, copyTableDef, nil); err != nil {
 		return nil, err
 	}
+	hasCharsetConversion := false
+	for _, option := range stmt.Options {
+		if charsetOption, ok := option.(*tree.TableOptionCharset); ok {
+			if !charsetOption.Convert {
+				continue
+			}
+			if err := applyAlterTableCharsetConversion(ctx, copyTableDef, charsetOption); err != nil {
+				return nil, err
+			}
+			hasCharsetConversion = true
+		}
+	}
+	if hasCharsetConversion {
+		if err := requireNative0900Admission(ctx, cctx.GetProcess(), copyTableDef); err != nil {
+			return nil, err
+		}
+	}
 	// The copied definition contains the source allocator's cached offset. It
 	// is not a user request and can be far ahead of the actual rows. The copy
 	// executor reconciles the explicit request, copied maximum, and source
@@ -330,6 +358,11 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		for _, idxDef := range tableDef.Indexes {
 			affectedIndexes = append(affectedIndexes, idxDef.IndexName)
 		}
+	}
+	if hasCharsetConversion {
+		// Collation changes affect every visible string value and therefore every
+		// dependent key, even when the key's column list itself is unchanged.
+		affectedAllIdxCols()
 	}
 
 	for _, spec := range validAlterSpecs {
@@ -415,6 +448,10 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			// is resolved by ResolveAlterTableAlgorithm via the full options list
 		case *tree.AlterOptionLock:
 			// lock already validated by resolveAndValidateLock; no-op here
+		case *tree.TableOptionCharset:
+			// CONVERT TO CHARACTER SET was applied to the copied schema before
+			// the ALTER context was built. Default-charset and compatibility
+			// clauses remain metadata/no-op compatibility paths here.
 		default:
 			return nil, moerr.NewInvalidInputf(ctx,
 				unsupportedErrorFmt, formatTreeNode(option))
@@ -429,6 +466,8 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	if !tableHasAutoIncrementColumn(copyTableDef) {
 		copyTableDef.AutoIdCache = 0
 	}
+	if err := recomputeTableCollationMetadata(ctx, copyTableDef); err != nil {
+		return nil, err
 	if err := validateDefaultColumnDependencies(ctx, copyTableDef.Cols); err != nil {
 		return nil, err
 	}
@@ -967,6 +1006,174 @@ func buildCopyTableDef(ctx context.Context, tableDef *TableDef) (*TableDef, erro
 	return replicaTableDef, nil
 }
 
+// applyAlterTableCharsetConversion rewrites the copied schema for
+// ALTER TABLE ... CONVERT TO CHARACTER SET.  The data copy itself still reads
+// the visible source columns; PRE_INSERT regenerates hidden physical keys from
+// those values under the copied schema.  That is what makes a conversion an
+// actual physical-key migration instead of a metadata-only reinterpretation.
+func applyAlterTableCharsetConversion(
+	ctx context.Context,
+	tableDef *TableDef,
+	option *tree.TableOptionCharset,
+) error {
+	if tableDef == nil || option == nil {
+		return moerr.NewInternalError(ctx, "missing ALTER TABLE charset conversion definition")
+	}
+	// Validate the source schema before any conversion step clears/rebuilds its
+	// key metadata. An unknown persisted format must never be normalized to the
+	// legacy value as a side effect of ALTER ... CONVERT.
+	if err := validateTableCollationMetadata(ctx, tableDef); err != nil {
+		return err
+	}
+
+	charset := uint32(types.CharsetUTF8)
+	if option.Charset != "" {
+		var ok bool
+		charset, ok = charsetForName(option.Charset)
+		if !ok {
+			return moerr.NewInvalidInputf(ctx, "unsupported character set '%s'", option.Charset)
+		}
+	}
+	if option.Collate != "" {
+		if !charsetAndCollationCompatible(option.Charset, option.Collate) {
+			return moerr.NewInvalidInputf(ctx,
+				"COLLATION '%s' is not valid for CHARACTER SET '%s'",
+				option.Collate, option.Charset)
+		}
+		var ok bool
+		charset, ok = collationForName(option.Collate)
+		if !ok {
+			return unsupportedCollationError(ctx, option.Collate)
+		}
+	}
+	// Recompute the table-level format from the final primary key and indexes.
+	// Doing this before rebuilding the hidden key prevents the later index pass
+	// from accidentally erasing a native format on a PK-only table.
+	tableDef.KeyFormat = uint32(types.LegacyKeyFormat)
+	// Conversion explicitly changes the table default semantic domain. Keep it
+	// even when the schema currently has no textual column so a later unqualified
+	// column inherits the requested target identity.
+	tableDef.CollationVersion = collationSemanticVersion(charset)
+
+	for _, col := range tableDef.Cols {
+		if col == nil || col.Hidden {
+			continue
+		}
+		if charset == uint32(types.CharsetBinary) {
+			applyCharsetToPlanType(&col.Typ, charset)
+		} else {
+			applyTextCharsetToPlanType(&col.Typ, charset)
+		}
+	}
+	tableDef.DefaultCharset = charset
+	if err := rebuildConvertedPrimaryKey(tableDef); err != nil {
+		return err
+	}
+	// DeepCopyTableDef intentionally shares Name2ColIndex because the catalog
+	// treats it as planner cache data.  The conversion above can add or remove
+	// the hidden physical primary-key column, so a copied definition must not
+	// retain an index into the old column slice.  Rebuild the map on a fresh
+	// allocation when the source definition carried one; keep nil as nil for
+	// callers that have not initialized the planner cache yet.
+	if tableDef.Name2ColIndex != nil {
+		name2ColIndex := make(map[string]int32, len(tableDef.Cols))
+		for i, col := range tableDef.Cols {
+			if col != nil {
+				name2ColIndex[col.Name] = int32(i)
+			}
+		}
+		tableDef.Name2ColIndex = name2ColIndex
+	}
+
+	// Every affected index is rebuilt by the COPY path.  Clear stale metadata
+	// first so a legacy index cannot be mistaken for a native key after a
+	// conversion that removes native text from its parts.
+	colMap := make(map[string]*ColDef, len(tableDef.Cols))
+	for _, col := range tableDef.Cols {
+		if col != nil {
+			colMap[col.Name] = col
+			colMap[catalog.ResolveAlias(col.Name)] = col
+		}
+	}
+	for _, index := range tableDef.Indexes {
+		if index == nil {
+			continue
+		}
+		index.KeyFormat = uint32(types.LegacyKeyFormat)
+		for _, part := range index.Parts {
+			col := colMap[part]
+			if col == nil {
+				col = colMap[catalog.ResolveAlias(part)]
+			}
+			if col == nil {
+				return moerr.NewInvalidInputf(ctx, "index %q references unknown column %q", index.IndexName, part)
+			}
+			if col != nil && isNative0900Type(col.Typ) {
+				index.KeyFormat = uint32(types.PADSpaceKeyV1)
+				tableDef.KeyFormat = uint32(types.PADSpaceKeyV1)
+				break
+			}
+		}
+	}
+	return recomputeTableCollationMetadata(ctx, tableDef)
+}
+
+func rebuildConvertedPrimaryKey(tableDef *TableDef) error {
+	if tableDef == nil || tableDef.Pkey == nil ||
+		catalog.IsFakePkName(tableDef.Pkey.PkeyColName) {
+		return nil
+	}
+
+	pkey := tableDef.Pkey
+	native := false
+	for _, name := range pkey.Names {
+		if col := FindColumn(tableDef.Cols, name); col != nil && isNative0900Type(col.Typ) {
+			native = true
+			break
+		}
+	}
+	hidden := pkey.CompPkeyCol != nil && pkey.CompPkeyCol.Hidden
+	if native {
+		if !hidden {
+			for _, name := range pkey.Names {
+				if col := FindColumn(tableDef.Cols, name); col != nil {
+					col.Primary = false
+				}
+			}
+			pkey.CompPkeyCol = MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
+			tableDef.Cols = append(tableDef.Cols, pkey.CompPkeyCol)
+		}
+		if pkey.CompPkeyCol == nil {
+			return moerr.NewInternalErrorNoCtx("native primary key has no hidden physical column")
+		}
+		pkey.CompPkeyCol.Hidden = true
+		pkey.CompPkeyCol.Typ = makeHiddenColTyp()
+		pkey.PkeyColName = pkey.CompPkeyCol.Name
+		tableDef.KeyFormat = uint32(types.PADSpaceKeyV1)
+		return nil
+	}
+
+	// A one-part non-native key can return to the direct physical-key layout.
+	// Composite keys still need their serialized hidden column even when their
+	// components are legacy/binary strings.
+	if hidden && len(pkey.Names) == 1 {
+		hiddenName := pkey.CompPkeyCol.Name
+		tableDef.Cols = RemoveIf[*ColDef](tableDef.Cols, func(col *ColDef) bool {
+			return col != nil && col.Name == hiddenName
+		})
+		pkey.CompPkeyCol = nil
+		pkey.PkeyColName = pkey.Names[0]
+		if col := FindColumn(tableDef.Cols, pkey.PkeyColName); col != nil {
+			col.Primary = true
+			col.NotNull = true
+			if col.Default != nil {
+				col.Default.NullAbility = false
+			}
+		}
+	}
+	return nil
+}
+
 func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) {
 	// ALTER TABLE tbl_name
 	//		[alter_option [, alter_option] ...]
@@ -1231,6 +1438,16 @@ Loop:
 			algorithm = plan.AlterTable_COPY
 		case *tree.AlterTableOrderByColumnClause:
 			algorithm = plan.AlterTable_COPY
+		case *tree.TableOptionCharset:
+			if option.Convert {
+				algorithm = plan.AlterTable_COPY
+			} else {
+				// DEFAULT CHARACTER SET and the historical ENABLE/DISABLE
+				// KEYS compatibility clauses share this AST node, but neither
+				// rewrites stored values or physical keys. Preserve the old
+				// INPLACE classification for these metadata/no-op options.
+				algorithm = plan.AlterTable_INPLACE
+			}
 		case *tree.TableOptionAutoIncrement:
 			algorithm = plan.AlterTable_INPLACE
 		default:
@@ -1338,7 +1555,7 @@ func isInplaceColumnDefinition(
 		return
 	}
 
-	ok, err = storageAgnosticType(ctx, column, oCol, tableDef.DefaultCharset)
+	ok, err = storageAgnosticType(ctx, column, oCol, tableDef.DefaultCharset, tableDef.CollationVersion)
 	if err != nil {
 		return
 	}
@@ -1384,6 +1601,7 @@ func storageAgnosticType(
 	nCol *tree.ColumnTableDef,
 	oCol *ColDef,
 	defaultCharset uint32,
+	defaultCollationVersion uint32,
 ) (ok bool, err error) {
 
 	nTy, err := getTypeFromAst(ctx, nCol.Type)
@@ -1391,7 +1609,9 @@ func storageAgnosticType(
 		return
 	}
 	nTy.Charset = uint32(types.CharsetType(types.T(nTy.Id)))
-	if err = applyDefaultAndColumnAttributesToType(ctx, &nTy, defaultCharset, nCol.Attributes); err != nil {
+	if err = applyDefaultAndColumnAttributesToTypeWithVersion(
+		ctx, &nTy, defaultCharset, defaultCollationVersion, nCol.Attributes,
+	); err != nil {
 		return
 	}
 
@@ -1401,7 +1621,8 @@ func storageAgnosticType(
 		oTy.Scale != nTy.Scale ||
 		oTy.Enumvalues != nTy.Enumvalues ||
 		oTy.AutoIncr != nTy.AutoIncr ||
-		oTy.Charset != nTy.Charset {
+		oTy.Charset != nTy.Charset ||
+		oTy.CollationVersion != nTy.CollationVersion {
 		return
 	}
 

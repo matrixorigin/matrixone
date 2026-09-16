@@ -836,6 +836,38 @@ func CompileFilterExpr(
 	return compileFilterExpr(expr, tableDef, fs, nil)
 }
 
+func rawNative0900FilterOperand(expr *plan.Expr_F, tableDef *plan.TableDef) bool {
+	if expr == nil || expr.F == nil {
+		return false
+	}
+	for _, arg := range expr.F.Args {
+		colExpr, ok := arg.Expr.(*plan.Expr_Col)
+		if !ok || colExpr.Col == nil {
+			continue
+		}
+		typ := arg.Typ
+		if tableDef != nil {
+			pos := colExpr.Col.ColPos
+			if pos >= 0 && int(pos) < len(tableDef.Cols) && tableDef.Cols[pos] != nil {
+				typ = tableDef.Cols[pos].Typ
+			} else if tableDef.Name2ColIndex != nil {
+				if mapped, ok := tableDef.Name2ColIndex[colExpr.Col.Name]; ok &&
+					mapped >= 0 && int(mapped) < len(tableDef.Cols) && tableDef.Cols[mapped] != nil {
+					typ = tableDef.Cols[mapped].Typ
+				}
+			}
+		}
+		if types.T(typ.Id).IsMySQLString() && types.NeedsCollationKey(
+			types.NewWithCharsetVersion(
+				types.T(typ.Id), typ.Width, typ.Scale,
+				uint8(typ.Charset), uint8(typ.CollationVersion),
+			), types.PADSpaceKeyV1) {
+			return true
+		}
+	}
+	return false
+}
+
 func compileFilterExpr(
 	expr *plan.Expr,
 	tableDef *plan.TableDef,
@@ -858,6 +890,21 @@ func compileFilterExpr(
 	// case *plan.Expr_Lit:
 	// case *plan.Expr_Col:
 	case *plan.Expr_F:
+		// A native 0900 string's persisted value is compared by its collation
+		// identity, while the visible-column zonemap contains the original
+		// string bytes.  A stale or older plan can still arrive here with the
+		// column directly under the comparison function.  Do not let this
+		// reader silently apply raw-byte zonemap/Bloom pruning; the residual
+		// executor remains the correctness path until storage publishes a
+		// matching weight-key zonemap.  Null-count pruning is independent of
+		// string ordering and remains safe.
+		if rawNative0900FilterOperand(exprImpl, tableDef) {
+			switch exprImpl.F.Func.ObjName {
+			case "isnull", "is_null", "isnotnull", "is_not_null":
+			default:
+				return nil, nil, nil, nil, nil, false, false
+			}
+		}
 		if op1, op2, op3, op4, op5, can, hsh, handled := compileTemporalFilterExpr(
 			expr, exprImpl, tableDef, fs, zone,
 		); handled {

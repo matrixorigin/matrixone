@@ -132,10 +132,20 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 	// a. Scan * WHERE prefix_eq(`__mo_index_idx_col`,serial_full("0","value"))
 	idxScanTag := builder.genNewBindTag()
 	args := filterExp.GetF().Args
+	filterCol := indexFilterColumn(args[0])
+	if filterCol == nil || filterCol.ColPos < 0 || int(filterCol.ColPos) >= len(colDefs) {
+		panic("master index filter has no source column")
+	}
+	indexedType := colDefs[filterCol.ColPos].Typ
+	indexKeyType := varcharType
+	if idxTableDef != nil && len(idxTableDef.Cols) > 0 {
+		indexKeyType = makeTypeByPlan2Type(idxTableDef.Cols[0].Typ)
+	}
+	indexedVecType := makeTypeByPlan2Type(indexedType)
 
 	var filterList *plan.Expr
 	indexKeyCol := &plan.Expr{
-		Typ: makePlan2Type(&varcharType),
+		Typ: makePlan2Type(&indexKeyType),
 		Expr: &plan.Expr_Col{
 			Col: &plan.ColRef{
 				RelPos: idxScanTag, //__mo_index_idx_col
@@ -148,7 +158,7 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 	case "=":
 		serialExpr1, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full",
 			[]*plan.Expr{
-				makePlan2StringConstExprWithType(getColSeqFromColDef(colDefs[args[0].GetCol().GetColPos()])), // "0"
+				makePlan2StringConstExprWithType(getColSeqFromColDef(colDefs[filterCol.ColPos])), // "0"
 				args[1], // value
 			})
 
@@ -158,11 +168,11 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 		})
 	case "between":
 		serialExpr1, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", []*plan.Expr{
-			makePlan2StringConstExprWithType(getColSeqFromColDef(colDefs[args[0].GetCol().GetColPos()])), // "0"
+			makePlan2StringConstExprWithType(getColSeqFromColDef(colDefs[filterCol.ColPos])), // "0"
 			args[1], // value1
 		})
 		serialExpr2, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial_full", []*plan.Expr{
-			makePlan2StringConstExprWithType(getColSeqFromColDef(colDefs[args[0].GetCol().GetColPos()])), // "0"
+			makePlan2StringConstExprWithType(getColSeqFromColDef(colDefs[filterCol.ColPos])), // "0"
 			args[2], // value2
 		})
 		filterList, _ = bindFuncExprAndConstFold(builder.GetContext(), builder.compCtx.GetProcess(), "prefix_between", []*Expr{
@@ -173,7 +183,12 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 
 	case "in":
 		// Since this master index specifically for varchar, we assume the `IN` to contain only varchar values.
-		inVecType := types.T_varchar.ToType()
+		inVecType := indexedVecType
+		if args[1].Typ.Charset == uint32(types.CharsetBinary) {
+			// A folded native key list already contains opaque weights. Preserve
+			// its binary provenance so SerialHelper does not transform it again.
+			inVecType = types.T_varchar.ToType()
+		}
 
 		// a. varchar vector ("value1", "value2", "value3")
 		arg1AsColValuesVec := vector.NewVec(inVecType)
@@ -182,7 +197,7 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 
 		// b. const vector "0"
 		mp := mpool.MustNewZero()
-		arg0AsColNameVec, _ := vector.NewConstBytes(inVecType, []byte(getColSeqFromColDef(colDefs[args[0].GetCol().GetColPos()])), inExprListLen, mp)
+		arg0AsColNameVec, _ := vector.NewConstBytes(types.T_varchar.ToType(), []byte(getColSeqFromColDef(colDefs[filterCol.ColPos])), inExprListLen, mp)
 
 		// c. (serial_full("0","value1"), serial_full("0","value2"), serial_full("0","value3"))
 		ps := types.NewPackerArray(inExprListLen)
@@ -193,7 +208,7 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 		}()
 		function.SerialHelper(arg0AsColNameVec, nil, ps, true)
 		function.SerialHelper(arg1AsColValuesVec, nil, ps, true)
-		arg1ForPrefixInVec := vector.NewVec(inVecType)
+		arg1ForPrefixInVec := vector.NewVec(indexKeyType)
 		for i := 0; i < inExprListLen; i++ {
 			_ = vector.AppendBytes(arg1ForPrefixInVec, ps[i].Bytes(), false, mp)
 		}
@@ -206,7 +221,7 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 		arg1ForPrefixInVec.InplaceSortAndCompact()
 		arg1ForPrefixInBytes, _ := arg1ForPrefixInVec.MarshalBinary()
 		arg1ForPrefixInLitVec := &plan.Expr{
-			Typ: makePlan2Type(&varcharType),
+			Typ: makePlan2Type(&indexKeyType),
 			Expr: &plan.Expr_Vec{
 				Vec: &plan.LiteralVec{
 					Len:          int32(arg1ForPrefixInVec.Length()),

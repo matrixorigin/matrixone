@@ -4315,7 +4315,18 @@ func appendPreInsertPlan(
 
 	var ukType Type
 	if len(idxDef.Parts) == 1 || isSpatialIndexDef(idxDef) {
-		ukType = builder.qry.Nodes[lastNodeId].ProjectList[useColumns[0]].Typ
+		// The pre-insert operator emits the physical index key. Native 0900
+		// single-part keys are stored as opaque varbinary weights, so use the
+		// hidden index table schema instead of relabelling the source text type.
+		for _, col := range uniqueTableDef.Cols {
+			if col.Name == catalog.IndexTableIndexColName {
+				ukType = col.Typ
+				break
+			}
+		}
+		if ukType.Id == 0 {
+			ukType = builder.qry.Nodes[lastNodeId].ProjectList[useColumns[0]].Typ
+		}
 	} else {
 		ukType = makeHiddenColTyp()
 	}

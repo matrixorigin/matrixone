@@ -80,6 +80,31 @@ func TestGenInsertIndexTableSql_UsesPrefixExpression(t *testing.T) {
 	require.Equal(t, "insert into  `test`.`__mo_index_unique_test` select (substring(`order`, 1, 5)), `id` from `test`.`orders` where (substring(`order`, 1, 5)) is not null;", sql)
 }
 
+func TestGenInsertIndexTableSql_UsesNative0900KeyAfterCharacterPrefix(t *testing.T) {
+	originTableDef := &planpb.TableDef{
+		Name: "orders",
+		Cols: []*planpb.ColDef{{
+			Name: "order",
+			Typ:  planpb.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB40900AI)},
+		}, {
+			Name: "id",
+			Typ:  planpb.Type{Id: int32(types.T_int64)},
+		}},
+		Pkey: &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+	}
+	indexDef := &planpb.IndexDef{
+		IndexTableName:  "__mo_index_unique_native",
+		Parts:           []string{"order"},
+		Unique:          true,
+		IndexAlgoParams: `{"prefix_lengths":"order:5"}`,
+	}
+
+	sql, err := genInsertIndexTableSql(originTableDef, indexDef, "test", true)
+	require.NoError(t, err)
+	require.Contains(t, sql, "internal_collation_key(substring(`order`, 1, 5), 4)")
+	require.NotContains(t, sql, "select (substring(`order`, 1, 5)), `id`")
+}
+
 func TestGenInsertIndexTableSql_SpatialIndexUsesRawGeometryColumn(t *testing.T) {
 	originTableDef := &planpb.TableDef{
 		Name: "geo_t",
@@ -146,6 +171,26 @@ func TestBuildCreateUniqueIndexDuplicateCheckSQL(t *testing.T) {
 		require.NoError(t, err)
 
 		require.Equal(t, "SELECT substring(`order`, 1, 5) FROM `test`.`orders` WHERE substring(`order`, 1, 5) IS NOT NULL GROUP BY substring(`order`, 1, 5) HAVING count(*) > 1 LIMIT 1", sql)
+	})
+
+	t.Run("native compound columns use the physical serial identity", func(t *testing.T) {
+		tableDef := &planpb.TableDef{
+			Name: "orders",
+			Cols: []*planpb.ColDef{{
+				Name: "order",
+				Typ:  planpb.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB40900AI)},
+			}, {
+				Name: "id",
+				Typ:  planpb.Type{Id: int32(types.T_int64)},
+			}},
+		}
+		indexDef := &planpb.IndexDef{Parts: []string{"order", "id"}, Unique: true}
+
+		sql, err := buildCreateUniqueIndexDuplicateCheckSQL("test", tableDef, indexDef)
+		require.NoError(t, err)
+		require.Contains(t, sql, "SELECT serial(internal_collation_key(`order`, 4),`id`)")
+		require.Contains(t, sql, "GROUP BY serial(internal_collation_key(`order`, 4),`id`)")
+		require.Contains(t, sql, "`order` IS NOT NULL AND `id` IS NOT NULL")
 	})
 
 	t.Run("invalid prefix params", func(t *testing.T) {

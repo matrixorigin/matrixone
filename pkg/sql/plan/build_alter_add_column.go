@@ -62,7 +62,9 @@ func AddColumn(
 		return false, err
 	}
 	colType.Charset = uint32(types.CharsetType(types.T(colType.Id)))
-	if err = applyDefaultAndColumnAttributesToType(ctx.GetContext(), &colType, tableDef.DefaultCharset, specNewColumn.Attributes); err != nil {
+	if err = applyDefaultAndColumnAttributesToTypeWithVersion(
+		ctx.GetContext(), &colType, tableDef.DefaultCharset, tableDef.CollationVersion, specNewColumn.Attributes,
+	); err != nil {
 		return false, err
 	}
 	if err = checkTypeCapSize(ctx.GetContext(), &colType, newColName); err != nil {
@@ -83,6 +85,9 @@ func AddColumn(
 		}
 	}
 
+	if err := recomputeTableCollationMetadata(ctx.GetContext(), tableDef); err != nil {
+		return newCol.Primary, err
+	}
 	return newCol.Primary, nil
 }
 
@@ -431,6 +436,9 @@ func DropColumn(
 
 	delete(alterCtx.alterColMap, colName)
 	delete(alterCtx.changColDefMap, column.ColId)
+	if err := recomputeTableCollationMetadata(ctx.GetContext(), tableDef); err != nil {
+		return column.Primary, err
+	}
 	return column.Primary, nil
 }
 
@@ -521,18 +529,53 @@ func handleDropColumnWithPrimaryKey(ctx context.Context, colName string, tbInfo 
 	if tbInfo.Pkey != nil && tbInfo.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 		return nil
 	} else {
+		if tbInfo.Pkey == nil {
+			return nil
+		}
+		compPkeyCol := tbInfo.Pkey.CompPkeyCol
+		// Some catalog/test builders mirror a simple primary key in
+		// CompPkeyCol. Only a separately stored hidden column participates in
+		// the composite-key storage transition below.
+		if compPkeyCol != nil && !compPkeyCol.Hidden {
+			compPkeyCol = nil
+		}
 		tbInfo.Pkey.Names = RemoveIf[string](tbInfo.Pkey.Names, func(t string) bool {
 			return t == colName
 		})
 
 		if len(tbInfo.Pkey.Names) == 0 {
+			if compPkeyCol != nil {
+				tbInfo.Cols = RemoveIf[*ColDef](tbInfo.Cols, func(coldef *ColDef) bool {
+					return coldef != nil && coldef.Name == compPkeyCol.Name
+				})
+			}
 			tbInfo.Pkey = nil
+			tbInfo.KeyFormat = uint32(types.LegacyKeyFormat)
 		} else if len(tbInfo.Pkey.Names) == 1 {
-			tbInfo.Pkey.PkeyColName = tbInfo.Pkey.Names[0]
-			for _, coldef := range tbInfo.Cols {
-				if coldef.Name == tbInfo.Pkey.PkeyColName {
-					coldef.Primary = true
-					break
+			remainingName := tbInfo.Pkey.Names[0]
+			remainingCol := FindColumn(tbInfo.Cols, remainingName)
+			keepHidden := compPkeyCol != nil && remainingCol != nil &&
+				isNative0900Type(remainingCol.Typ)
+			if keepHidden {
+				// A native 0900 key is compared through its opaque physical
+				// identity even when only one user column remains. Keep the
+				// hidden key instead of silently changing the storage contract.
+				tbInfo.Pkey.PkeyColName = compPkeyCol.Name
+				tbInfo.KeyFormat = uint32(types.PADSpaceKeyV1)
+			} else {
+				if compPkeyCol != nil {
+					tbInfo.Cols = RemoveIf[*ColDef](tbInfo.Cols, func(coldef *ColDef) bool {
+						return coldef != nil && coldef.Name == compPkeyCol.Name
+					})
+				}
+				tbInfo.Pkey.CompPkeyCol = nil
+				tbInfo.Pkey.PkeyColName = remainingName
+				tbInfo.KeyFormat = uint32(types.LegacyKeyFormat)
+				for _, coldef := range tbInfo.Cols {
+					if coldef.Name == remainingName {
+						coldef.Primary = true
+						break
+					}
 				}
 			}
 		}

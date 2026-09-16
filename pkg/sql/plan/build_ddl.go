@@ -3131,7 +3131,15 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 	if err != nil {
 		return err
 	}
+	tableCollationVersion := uint32(types.CollationVersionLegacy)
+	if hasExplicitTableCharsetOrCollation(stmt.Options) {
+		tableCollationVersion = collationSemanticVersion(tableCharset)
+	}
 	createTable.TableDef.DefaultCharset = tableCharset
+	// This field records the table's default semantic version.  A column-level
+	// COLLATE is carried by that column type and must not silently become the
+	// default for unrelated columns added or altered later.
+	createTable.TableDef.CollationVersion = tableCollationVersion
 
 	if stmt.Param != nil || stmt.IcebergParam != nil || stmt.MongoDBParam != nil {
 		if err := rejectExternalTableInlineIndexes(ctx.GetContext(), stmt); err != nil {
@@ -3155,7 +3163,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				return err
 			}
 			cType.Charset = uint32(types.CharsetType(types.T(cType.Id)))
-			if err = applyDefaultAndColumnAttributesToType(ctx.GetContext(), &cType, tableCharset, def.Attributes); err != nil {
+			if err = applyDefaultAndColumnAttributesToTypeWithVersion(ctx.GetContext(), &cType, tableCharset, tableCollationVersion, def.Attributes); err != nil {
 				return err
 			}
 			isGen := false
@@ -3181,7 +3189,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				return err
 			}
 			colType.Charset = uint32(types.CharsetType(types.T(colType.Id)))
-			if err = applyDefaultAndColumnAttributesToType(ctx.GetContext(), &colType, tableCharset, def.Attributes); err != nil {
+			if err = applyDefaultAndColumnAttributesToTypeWithVersion(ctx.GetContext(), &colType, tableCharset, tableCollationVersion, def.Attributes); err != nil {
 				return err
 			}
 			if colType.Id == int32(types.T_char) || colType.Id == int32(types.T_varchar) ||
@@ -3736,7 +3744,7 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					fmt.Sprintf("defining a virtual generated column '%s' as primary key", col.OriginName))
 			}
 		}
-		if len(primaryKeys) == 1 {
+		if len(primaryKeys) == 1 && !isNative0900Type(colMap[primaryKeys[0]].Typ) {
 			pkeyName = primaryKeys[0]
 			for _, col := range createTable.TableDef.Cols {
 				if col.Name == pkeyName {
@@ -3762,6 +3770,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				CompPkeyCol: colDef,
 			}
 			createTable.TableDef.Pkey = pkeyDef
+		}
+		if hasNative0900Columns(colMap, primaryKeys) {
+			createTable.TableDef.KeyFormat = uint32(types.PADSpaceKeyV1)
 		}
 		for _, primaryKey := range primaryKeys {
 			colMap[primaryKey].Default.NullAbility = false
@@ -3941,6 +3952,9 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				}
 			}
 		}
+	}
+	if err := requireNative0900Admission(ctx.GetContext(), ctx.GetProcess(), createTable.TableDef); err != nil {
+		return err
 	}
 
 	return nil
@@ -4434,6 +4448,10 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 
 			indexParts = append(indexParts, name)
 		}
+		setPhysicalKeyFormat(tableDef, indexDef, hasNative0900KeyParts(colMap, indexInfo.KeyParts))
+		if err := requireNative0900Admission(ctx.GetContext(), ctx.GetProcess(), tableDef); err != nil {
+			return err
+		}
 
 		var keyName string
 		if len(indexInfo.KeyParts) == 1 {
@@ -4479,10 +4497,11 @@ func buildUniqueIndexTable(createTable *plan.CreateTable, indexInfos []*tree.Uni
 				Alg:  plan.CompressType_Lz4,
 				Typ: plan.Type{
 					// don't copy auto increment
-					Id:      colMap[pkeyName].Typ.Id,
-					Width:   colMap[pkeyName].Typ.Width,
-					Scale:   colMap[pkeyName].Typ.Scale,
-					Charset: colMap[pkeyName].Typ.Charset,
+					Id:               colMap[pkeyName].Typ.Id,
+					Width:            colMap[pkeyName].Typ.Width,
+					Scale:            colMap[pkeyName].Typ.Scale,
+					Charset:          colMap[pkeyName].Typ.Charset,
+					CollationVersion: colMap[pkeyName].Typ.CollationVersion,
 				},
 				Default: &plan.Default{
 					NullAbility:  false,
@@ -4671,6 +4690,10 @@ func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, co
 		}
 		indexParts = append(indexParts, name)
 	}
+	setPhysicalKeyFormat(tableDef, indexDef, hasNative0900KeyParts(colMap, indexInfo.KeyParts))
+	if err := requireNative0900Admission(ctx.GetContext(), ctx.GetProcess(), tableDef); err != nil {
+		return nil, nil, err
+	}
 
 	var keyName = catalog.MasterIndexTableIndexColName
 	colDef := &ColDef{
@@ -4694,10 +4717,11 @@ func buildMasterSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, co
 			Alg:  plan.CompressType_Lz4,
 			Typ: plan.Type{
 				// don't copy auto increment
-				Id:      colMap[pkeyName].Typ.Id,
-				Width:   colMap[pkeyName].Typ.Width,
-				Scale:   colMap[pkeyName].Typ.Scale,
-				Charset: colMap[pkeyName].Typ.Charset,
+				Id:               colMap[pkeyName].Typ.Id,
+				Width:            colMap[pkeyName].Typ.Width,
+				Scale:            colMap[pkeyName].Typ.Scale,
+				Charset:          colMap[pkeyName].Typ.Charset,
+				CollationVersion: colMap[pkeyName].Typ.CollationVersion,
 			},
 			Default: &plan.Default{
 				NullAbility:  false,
@@ -4818,6 +4842,10 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		}
 		indexParts = append(indexParts, name)
 	}
+	setPhysicalKeyFormat(tableDef, indexDef, hasNative0900KeyParts(colMap, indexInfo.KeyParts))
+	if err := requireNative0900Admission(ctx.GetContext(), ctx.GetProcess(), tableDef); err != nil {
+		return nil, nil, err
+	}
 
 	if !isPkAlreadyPresentInIndexParts {
 		indexParts = append(indexParts, catalog.CreateAlias(pkeyName))
@@ -4830,13 +4858,7 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 		colDef := &ColDef{
 			Name: keyName,
 			Alg:  plan.CompressType_Lz4,
-			Typ: plan.Type{
-				// don't copy auto increment
-				Id:      colMap[pkeyName].Typ.Id,
-				Width:   colMap[pkeyName].Typ.Width,
-				Scale:   colMap[pkeyName].Typ.Scale,
-				Charset: colMap[pkeyName].Typ.Charset,
-			},
+			Typ:  indexTableKeyTypeForSinglePart(colMap[pkeyName], nil),
 			Default: &plan.Default{
 				NullAbility:  false,
 				Expr:         nil,
@@ -4876,10 +4898,11 @@ func buildRegularSecondaryIndexDef(ctx CompilerContext, indexInfo *tree.Index, c
 			Alg:  plan.CompressType_Lz4,
 			Typ: plan.Type{
 				// don't copy auto increment
-				Id:      colMap[pkeyName].Typ.Id,
-				Width:   colMap[pkeyName].Typ.Width,
-				Scale:   colMap[pkeyName].Typ.Scale,
-				Charset: colMap[pkeyName].Typ.Charset,
+				Id:               colMap[pkeyName].Typ.Id,
+				Width:            colMap[pkeyName].Typ.Width,
+				Scale:            colMap[pkeyName].Typ.Scale,
+				Charset:          colMap[pkeyName].Typ.Charset,
+				CollationVersion: colMap[pkeyName].Typ.CollationVersion,
 			},
 			Default: &plan.Default{
 				NullAbility:  false,

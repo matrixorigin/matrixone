@@ -1311,7 +1311,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			alias := dmlCtx.aliases[i]
 
 			if pkNeedUpdate[i] {
-				if len(tableDef.Pkey.Names) > 1 {
+				if tableDef.Pkey.CompPkeyCol != nil && tableDef.Pkey.CompPkeyCol.Hidden {
 					newColName2Idx[alias+"."+catalog.CPrimaryKeyColName] = int32(len(newProjNode.ProjectList))
 					args := make([]*plan.Expr, len(tableDef.Pkey.Names))
 

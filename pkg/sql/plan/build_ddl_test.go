@@ -432,7 +432,6 @@ func TestBuildCreateTableRejectsUnsupportedCollations(t *testing.T) {
 	for _, sql := range []string{
 		"create table t(v varchar(8)) collate utf8mb4_de_pb_0900_ai_ci",
 		"create table t(v varchar(8)) collate utf8mb4_unicode_ci",
-		"create table t(v varchar(8) collate utf8mb4_0900_bin)",
 		"create table t(v varchar(8) collate utf8_unicode_ci)",
 	} {
 		t.Run(sql, func(t *testing.T) {
@@ -445,12 +444,13 @@ func TestBuildCreateTableRejectsUnsupportedCollations(t *testing.T) {
 	}
 }
 
-func TestBuildCreateTableAcceptsMySQL8DefaultCollationCompatibilityAlias(t *testing.T) {
+func TestBuildCreateTableAcceptsNative0900Collations(t *testing.T) {
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, `
 		create table t_charset_mix (
 			id bigint not null auto_increment,
 			c_utf8mb4_ci varchar(100) character set utf8mb4 collate utf8mb4_0900_ai_ci null,
 			c_utf8mb4_bin varchar(100) character set utf8mb4 collate utf8mb4_bin null,
+			c_utf8mb4_0900_bin varchar(100) character set utf8mb4 collate utf8mb4_0900_bin null,
 			c_utf8mb4_general varchar(100) character set utf8mb4 collate utf8mb4_general_ci null,
 			c_latin1 varchar(100) character set latin1 collate latin1_swedish_ci null,
 			c_ascii varchar(100) character set ascii collate ascii_general_ci null,
@@ -465,8 +465,9 @@ func TestBuildCreateTableAcceptsMySQL8DefaultCollationCompatibilityAlias(t *test
 	require.NoError(t, err)
 	tableDef := p.GetDdl().GetCreateTable().GetTableDef()
 	require.Equal(t, uint32(types.CharsetUTF8), tableDef.DefaultCharset)
-	require.Equal(t, uint32(types.CharsetUTF8), FindColumn(tableDef.Cols, "c_utf8mb4_ci").Typ.Charset)
+	require.Equal(t, uint32(types.CharsetUTF8MB40900AI), FindColumn(tableDef.Cols, "c_utf8mb4_ci").Typ.Charset)
 	require.Equal(t, uint32(types.CharsetUTF8MB4Bin), FindColumn(tableDef.Cols, "c_utf8mb4_bin").Typ.Charset)
+	require.Equal(t, uint32(types.CharsetUTF8MB40900Bin), FindColumn(tableDef.Cols, "c_utf8mb4_0900_bin").Typ.Charset)
 	require.Equal(t, uint32(types.CharsetUTF8), FindColumn(tableDef.Cols, "c_utf8mb4_general").Typ.Charset)
 	require.Equal(t, uint32(types.CharsetUTF8), FindColumn(tableDef.Cols, "c_latin1").Typ.Charset)
 	require.Equal(t, uint32(types.CharsetUTF8), FindColumn(tableDef.Cols, "c_ascii").Typ.Charset)
@@ -474,8 +475,26 @@ func TestBuildCreateTableAcceptsMySQL8DefaultCollationCompatibilityAlias(t *test
 
 	showSQL, _, err := ConstructCreateTableSQL(ctx, tableDef, nil, false, nil)
 	require.NoError(t, err)
-	require.NotContains(t, showSQL, "0900")
+	require.Contains(t, showSQL, "COLLATE utf8mb4_0900_ai_ci")
+	require.Contains(t, showSQL, "COLLATE utf8mb4_0900_bin")
 	require.Contains(t, showSQL, "COLLATE utf8mb4_bin")
+}
+
+func TestNative0900StringPrimaryKeyUsesHiddenPhysicalKey(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create table t_native_pk (name varchar(32) collate utf8mb4_0900_ai_ci primary key, payload int)", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(NewMockCompilerContext(false), stmt, false)
+	require.NoError(t, err)
+	tableDef := p.GetDdl().GetCreateTable().GetTableDef()
+	require.Equal(t, catalog.CPrimaryKeyColName, tableDef.Pkey.PkeyColName)
+	require.Equal(t, []string{"name"}, tableDef.Pkey.Names)
+	require.NotNil(t, tableDef.Pkey.CompPkeyCol)
+	require.Equal(t, uint32(types.PADSpaceKeyV1), tableDef.KeyFormat)
+	require.True(t, tableDef.Pkey.CompPkeyCol.Hidden)
+	require.Equal(t, uint32(types.CharsetBinary), tableDef.Pkey.CompPkeyCol.Typ.Charset)
 }
 
 func TestUnsupportedLegacyCollationExplainsDumpReplacement(t *testing.T) {

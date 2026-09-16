@@ -429,7 +429,7 @@ func canUsePkFilter(builder *QueryBuilder, ctx CompilerContext, stmt *tree.Inser
 	if used4UniqueIndex {
 		isCompound = len(uniqueIndexDef.Parts) > 1
 	} else {
-		isCompound = len(tableDef.Pkey.Names) > 1
+		isCompound = tableDef.Pkey.CompPkeyCol != nil && tableDef.Pkey.CompPkeyCol.Hidden
 	}
 
 	if !config.CNPrimaryCheck.Load() {
@@ -582,8 +582,9 @@ func getPkValueExpr(builder *QueryBuilder, ctx CompilerContext, tableDef *TableD
 	var col *ColDef
 	proc := ctx.GetProcess()
 	node := builder.qry.Nodes[0]
-	isCompound := len(lmap.m) > 1
 	forUniqueHiddenTable := lmap.isUnique
+	isCompound := len(lmap.m) > 1 ||
+		(!forUniqueHiddenTable && tableDef.Pkey != nil && tableDef.Pkey.CompPkeyCol != nil && tableDef.Pkey.CompPkeyCol.Hidden)
 
 	// insert pk col with default value, skip build pk filter expr
 	insertColMap := make(map[string]bool)

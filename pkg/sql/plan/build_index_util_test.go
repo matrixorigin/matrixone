@@ -19,6 +19,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -122,6 +123,18 @@ func TestIndexTableKeyTypeForSinglePart(t *testing.T) {
 		require.Equal(t, int32(50), got.Width)
 	})
 
+	t.Run("native 0900 key is opaque binary", func(t *testing.T) {
+		col := &ColDef{Typ: Type{
+			Id:      int32(types.T_varchar),
+			Width:   50,
+			Charset: uint32(types.CharsetUTF8MB40900AI),
+		}}
+		got := indexTableKeyTypeForSinglePart(col, keyPartWithLength("v", 0))
+		require.Equal(t, int32(types.T_varbinary), got.Id)
+		require.Equal(t, int32(types.MaxVarBinaryLen), got.Width)
+		require.Equal(t, uint32(types.CharsetBinary), got.Charset)
+	})
+
 	t.Run("no length keeps original type", func(t *testing.T) {
 		col := &ColDef{Typ: Type{Id: int32(types.T_text), Width: 100, Scale: 2}}
 		got := indexTableKeyTypeForSinglePart(col, keyPartWithLength("t", 0))
@@ -153,6 +166,102 @@ func TestIndexTableKeyTypeForSinglePart(t *testing.T) {
 		require.Equal(t, int32(types.T_uint64), got.Id)
 		require.Equal(t, "a,b,c", got.Enumvalues)
 	})
+}
+
+func TestNative0900PhysicalKeyFormatMetadata(t *testing.T) {
+	colMap := map[string]*ColDef{
+		"v": {Name: "v", Typ: Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB40900AI)}},
+	}
+	parts := []*tree.KeyPart{keyPartWithLength("v", 0)}
+	tableDef := &TableDef{}
+	indexDef := &plan.IndexDef{}
+	setPhysicalKeyFormat(tableDef, indexDef, hasNative0900KeyParts(colMap, parts))
+	require.Equal(t, uint32(types.PADSpaceKeyV1), tableDef.KeyFormat)
+	require.Equal(t, uint32(types.PADSpaceKeyV1), indexDef.KeyFormat)
+	payload, err := proto.Marshal(&TableDef{KeyFormat: tableDef.KeyFormat, Indexes: []*plan.IndexDef{indexDef}})
+	require.NoError(t, err)
+	decoded := new(TableDef)
+	require.NoError(t, proto.Unmarshal(payload, decoded))
+	require.Equal(t, tableDef.KeyFormat, decoded.KeyFormat)
+	require.Equal(t, indexDef.KeyFormat, decoded.Indexes[0].KeyFormat)
+
+	legacyTable := &TableDef{}
+	legacyIndex := &plan.IndexDef{}
+	setPhysicalKeyFormat(legacyTable, legacyIndex, false)
+	require.Zero(t, legacyTable.KeyFormat)
+	require.Zero(t, legacyIndex.KeyFormat)
+}
+
+func TestRecomputeTableCollationMetadataRejectsUnknownFormat(t *testing.T) {
+	table := &TableDef{
+		Name:      "t",
+		KeyFormat: 2,
+	}
+	require.ErrorContains(t,
+		recomputeTableCollationMetadata(context.Background(), table),
+		"unsupported collation key format",
+	)
+
+	table = &TableDef{
+		Name: "t",
+		Indexes: []*plan.IndexDef{{
+			IndexName: "idx",
+			KeyFormat: 2,
+		}},
+	}
+	require.ErrorContains(t,
+		recomputeTableCollationMetadata(context.Background(), table),
+		"unsupported collation key format",
+	)
+}
+
+func TestIndexPhysicalKeyFormatUsableRejectsUnknownMetadata(t *testing.T) {
+	legacyColumn := &plan.ColDef{Typ: plan.Type{
+		Id:      int32(types.T_varchar),
+		Charset: uint32(types.CharsetUTF8),
+	}}
+	table := &plan.TableDef{Cols: []*plan.ColDef{legacyColumn}}
+	idx := &plan.IndexDef{KeyFormat: 2}
+	require.False(t, indexPhysicalKeyFormatUsable(idx, table))
+
+	table.KeyFormat = 2
+	idx.KeyFormat = uint32(types.LegacyKeyFormat)
+	require.False(t, indexPhysicalKeyFormatUsable(idx, table))
+
+	table.KeyFormat = uint32(types.LegacyKeyFormat)
+	legacyColumn.Typ.CollationVersion = 2
+	require.False(t, indexPhysicalKeyFormatUsable(idx, table))
+}
+
+func TestIndexOnlyRejectsOpaqueNative0900Values(t *testing.T) {
+	native := &ColDef{Name: "name", Typ: Type{
+		Id:      int32(types.T_varchar),
+		Charset: uint32(types.CharsetUTF8MB40900AI),
+	}}
+	legacy := &ColDef{Name: "legacy", Typ: Type{
+		Id:      int32(types.T_varchar),
+		Charset: uint32(types.CharsetUTF8),
+	}}
+	tableDef := &TableDef{
+		Cols:          []*ColDef{native, legacy},
+		Name2ColIndex: map[string]int32{"name": 0, "legacy": 1},
+		Pkey:          &PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+	}
+	require.True(t, indexOnlyHasOpaqueNativeValue(
+		&plan.IndexDef{Parts: []string{"name"}}, tableDef))
+	require.False(t, indexOnlyHasOpaqueNativeValue(
+		&plan.IndexDef{Parts: []string{"legacy"}}, tableDef))
+
+	// A unique index may expose the base-table primary-key payload. A native
+	// string primary key is itself hidden and opaque, so it also requires a
+	// backfill before returning a user value.
+	tableDef.Pkey = &PrimaryKeyDef{
+		PkeyColName: "__mo_cpkey",
+		Names:       []string{"name"},
+		CompPkeyCol: &ColDef{Name: "__mo_cpkey", Typ: Type{Id: int32(types.T_varbinary)}},
+	}
+	require.True(t, indexOnlyHasOpaqueNativeValue(
+		&plan.IndexDef{Unique: true, Parts: []string{"legacy"}}, tableDef))
 }
 
 func TestIndexColumnCheckKind(t *testing.T) {

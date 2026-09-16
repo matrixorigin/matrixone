@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
@@ -170,6 +171,16 @@ func indexTableKeyTypeForSinglePart(col *ColDef, keyPart *tree.KeyPart) Type {
 	if col == nil {
 		return Type{}
 	}
+	if isVersionedCollationType(col.Typ) {
+		// Native 0900 keys are opaque comparison weights. Keep the source
+		// column's value in the base table, but make the hidden index column
+		// binary so storage and hash consumers never apply the transform twice.
+		return Type{
+			Id:      int32(types.T_varbinary),
+			Width:   types.MaxVarBinaryLen,
+			Charset: uint32(types.CharsetBinary),
+		}
+	}
 	if keyPart != nil && keyPart.Length > 0 {
 		if prefixType, ok := indexTableKeyTypeForPrefix(col.Typ); ok {
 			return prefixType
@@ -182,21 +193,178 @@ func indexTableKeyTypeForSinglePart(col *ColDef, keyPart *tree.KeyPart) Type {
 	// either fails (nil-pointer panic) or compares values in incompatible
 	// representations.
 	return Type{
-		Id:         col.Typ.Id,
-		Width:      col.Typ.Width,
-		Scale:      col.Typ.Scale,
-		Enumvalues: col.Typ.Enumvalues,
-		Charset:    col.Typ.Charset,
+		Id:               col.Typ.Id,
+		Width:            col.Typ.Width,
+		Scale:            col.Typ.Scale,
+		Enumvalues:       col.Typ.Enumvalues,
+		Charset:          col.Typ.Charset,
+		CollationVersion: col.Typ.CollationVersion,
 	}
+}
+
+func hasNative0900KeyParts(colMap map[string]*ColDef, parts []*tree.KeyPart) bool {
+	for _, part := range parts {
+		if part == nil || part.ColName == nil {
+			continue
+		}
+		col, ok := colMap[part.ColName.ColName()]
+		if ok && isVersionedCollationType(col.Typ) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasNative0900Columns(colMap map[string]*ColDef, names []string) bool {
+	for _, name := range names {
+		col, ok := colMap[name]
+		if ok && isVersionedCollationType(col.Typ) {
+			return true
+		}
+	}
+	return false
+}
+
+func isNative0900Type(typ Type) bool {
+	// Keep the historical helper name for callers, but make the decision from
+	// the explicit semantic version as well. General-ci and utf8mb4_bin use the
+	// same physical hidden-key layout once a rebuilt schema opts into V1.
+	return isVersionedCollationType(typ)
+}
+
+func setPhysicalKeyFormat(tableDef *TableDef, indexDef *IndexDef, native0900 bool) {
+	if !native0900 {
+		return
+	}
+	format := uint32(types.PADSpaceKeyV1)
+	if tableDef != nil {
+		tableDef.KeyFormat = format
+	}
+	if indexDef != nil {
+		indexDef.KeyFormat = format
+	}
+}
+
+// recomputeTableCollationMetadata derives the physical key format from the
+// final schema. The table CollationVersion field records the default semantic
+// domain and is deliberately preserved here; a column-level collation must not
+// become the default for unrelated columns. ALTER COPY mutates the copied
+// schema in several independent steps (column changes, primary-key changes and
+// index removal), so stale key formats must be cleared and rebuilt from the
+// final PK/index references.
+func recomputeTableCollationMetadata(ctx context.Context, tableDef *TableDef) error {
+	if tableDef == nil {
+		return nil
+	}
+	if err := validateTableCollationMetadata(ctx, tableDef); err != nil {
+		return err
+	}
+	byName := make(map[string]*ColDef, len(tableDef.Cols)*2)
+	for _, col := range tableDef.Cols {
+		if col == nil {
+			continue
+		}
+		byName[col.Name] = col
+		byName[catalog.ResolveAlias(col.Name)] = col
+	}
+	lookup := func(name string) (*ColDef, bool) {
+		col, ok := byName[name]
+		if ok {
+			return col, true
+		}
+		col, ok = byName[catalog.ResolveAlias(name)]
+		return col, ok
+	}
+	containsVersioned := func(names []string) (bool, error) {
+		for _, name := range names {
+			col, ok := lookup(name)
+			if !ok {
+				return false, moerr.NewInvalidInputf(ctx,
+					"key references unknown column '%s'", name)
+			}
+			if isVersionedCollationType(col.Typ) {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+
+	tableDef.KeyFormat = uint32(types.LegacyKeyFormat)
+	if tableDef.Pkey != nil {
+		versioned, err := containsVersioned(tableDef.Pkey.Names)
+		if err != nil {
+			return err
+		}
+		if versioned {
+			tableDef.KeyFormat = uint32(types.PADSpaceKeyV1)
+		}
+	}
+	for _, index := range tableDef.Indexes {
+		if index == nil {
+			continue
+		}
+		versioned, err := containsVersioned(index.Parts)
+		if err != nil {
+			return moerr.NewInvalidInputf(ctx, "index %q: %s", index.IndexName, err.Error())
+		}
+		if versioned {
+			index.KeyFormat = uint32(types.PADSpaceKeyV1)
+			tableDef.KeyFormat = uint32(types.PADSpaceKeyV1)
+		} else {
+			index.KeyFormat = uint32(types.LegacyKeyFormat)
+		}
+	}
+	return nil
+}
+
+// validateTableCollationMetadata is the schema boundary for the versioned
+// collation contract. Protobuf keeps unknown integers when decoding, so a
+// caller must reject them before recomputing formats or narrowing them into
+// the in-memory Type/KeyFormat representation. In particular, recompute must
+// not turn an unknown persisted format into legacy merely because the final
+// schema happens to have no transformed key parts.
+func validateTableCollationMetadata(ctx context.Context, tableDef *TableDef) error {
+	if tableDef == nil {
+		return nil
+	}
+	if err := types.ValidateKeyFormat(tableDef.KeyFormat); err != nil {
+		return moerr.NewInvalidInputf(ctx, "table %q: %s", tableDef.Name, err.Error())
+	}
+	if err := types.ValidateCollationVersion(tableDef.CollationVersion); err != nil {
+		return moerr.NewInvalidInputf(ctx, "table %q: %s", tableDef.Name, err.Error())
+	}
+	for _, col := range tableDef.Cols {
+		if col == nil {
+			continue
+		}
+		if col.Typ.Id < 0 || col.Typ.Id > 255 {
+			return moerr.NewInvalidInputf(ctx, "table %q column %q has unsupported type id %d", tableDef.Name, col.Name, col.Typ.Id)
+		}
+		if err := types.ValidateCollationTypeMetadata(
+			types.T(col.Typ.Id), col.Typ.Charset, col.Typ.CollationVersion,
+		); err != nil {
+			return moerr.NewInvalidInputf(ctx, "table %q column %q: %s", tableDef.Name, col.Name, err.Error())
+		}
+	}
+	for _, index := range tableDef.Indexes {
+		if index == nil {
+			continue
+		}
+		if err := types.ValidateKeyFormat(index.KeyFormat); err != nil {
+			return moerr.NewInvalidInputf(ctx, "index %q: %s", index.IndexName, err.Error())
+		}
+	}
+	return nil
 }
 
 func indexTableKeyTypeForPrefix(colType Type) (Type, bool) {
 	switch colType.Id {
 	case int32(types.T_text):
 		return Type{
-			Id:      int32(types.T_varchar),
-			Width:   types.MaxVarcharLen,
-			Charset: colType.Charset,
+			Id:               int32(types.T_varchar),
+			Width:            types.MaxVarcharLen,
+			Charset:          colType.Charset,
+			CollationVersion: colType.CollationVersion,
 		}, true
 	case int32(types.T_blob):
 		return Type{

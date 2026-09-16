@@ -7497,6 +7497,18 @@ func TestRegularIndexPrefixMetadataUsable(t *testing.T) {
 	require.ErrorContains(t, validateTableRegularIndexPrefixMetadata(&planpb.TableDef{
 		Indexes: []*planpb.IndexDef{staleIndex},
 	}), "rebuild the index")
+	nativeTable := &planpb.TableDef{
+		Cols: []*planpb.ColDef{{Name: "name", Typ: planpb.Type{
+			Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB40900AI),
+		}}},
+		Name2ColIndex: map[string]int32{"name": 0},
+		Indexes: []*planpb.IndexDef{{
+			IndexName: "uq_name", TableExist: true, Parts: []string{"name"}, Unique: true,
+		}},
+	}
+	require.ErrorContains(t, validateTableRegularIndexPrefixMetadata(nativeTable), "legacy physical key format")
+	nativeTable.Indexes[0].KeyFormat = uint32(types.PADSpaceKeyV1)
+	require.NoError(t, validateTableRegularIndexPrefixMetadata(nativeTable))
 }
 
 func TestGetIndexForNonEquiCondSkipsDeclaredPrefixIndexes(t *testing.T) {
@@ -7655,6 +7667,30 @@ func TestReplaceEqualConditionTruncatesSinglePartPrefixIndexLookup(t *testing.T)
 	require.NotNil(t, expr.GetF())
 	require.Equal(t, "=", expr.GetF().Func.ObjName)
 	require.True(t, exprContainsFuncName(expr.GetF().Args[1], "substring"))
+}
+
+func TestNative0900PrefixLookupSlicesCharactersBeforeWeightTransform(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true), false, true)
+	nativeType := planpb.Type{
+		Id:      int32(types.T_varchar),
+		Width:   types.MaxVarcharLen,
+		Charset: uint32(types.CharsetUTF8MB40900AI),
+	}
+	input := &planpb.Expr{
+		Typ:  nativeType,
+		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "Alphabet"}}},
+	}
+	probe, err := makeNativeCollationKeyExpr(context.Background(), input, nativeType)
+	require.NoError(t, err)
+	lookup, err := builder.makeIndexPartExprFromInputExpr(probe, "name", map[string]int{"name": 4})
+	require.NoError(t, err)
+	require.Equal(t, "internal_collation_key", lookup.GetF().Func.ObjName)
+	inner := lookup.GetF().Args[0]
+	if inner.GetF() != nil && inner.GetF().Func.ObjName == "cast" {
+		inner = inner.GetF().Args[0]
+	}
+	require.Equal(t, "substring", inner.GetF().Func.ObjName)
+	require.False(t, exprContainsFuncName(inner.GetF().Args[0], "internal_collation_key"))
 }
 
 func TestApplyExtraFiltersOnIndexUsesPhysicalKeyShape(t *testing.T) {
@@ -9826,6 +9862,44 @@ func TestCheckIndexFilter_RangeOps(t *testing.T) {
 			assert.Equal(t, tt.wantColPos, gotCol.ColPos)
 		})
 	}
+}
+
+func TestNative0900IndexFilterUsesTransformedColumnAndDoesNotDoubleTransform(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, true)
+	nativeType := planpb.Type{
+		Id:      int32(types.T_varchar),
+		Width:   types.MaxVarcharLen,
+		Charset: uint32(types.CharsetUTF8MB40900AI),
+	}
+	column := &planpb.Expr{
+		Typ: nativeType,
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+			RelPos: 7, ColPos: 3, Name: "name",
+		}},
+	}
+	constant := MakePlan2StringConstExprWithType("Alpha")
+	constant.Typ = nativeType
+	columnKey, err := makeNativeCollationKeyExpr(ctx.GetContext(), column, nativeType)
+	require.NoError(t, err)
+	constantKey, err := makeNativeCollationKeyExpr(ctx.GetContext(), constant, nativeType)
+	require.NoError(t, err)
+	filter, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{columnKey, constantKey})
+	require.NoError(t, err)
+
+	filterType, col := checkIndexFilter(filter.GetF())
+	require.Equal(t, EqualIndexCondition, filterType)
+	require.NotNil(t, col)
+	require.Equal(t, int32(3), col.ColPos)
+
+	idxDef := &planpb.IndexDef{Parts: []string{"name"}, Unique: true}
+	idxTableDef := makeTestIndexTableDef()
+	idxTableDef.Cols[0].Typ = planpb.Type{Id: int32(types.T_varbinary), Width: types.MaxVarBinaryLen}
+	lookup, err := builder.replaceEqualCondition(idxDef, []*planpb.Expr{filter}, []int32{0}, 42, idxTableDef)
+	require.NoError(t, err)
+	require.Equal(t, int32(42), lookup.GetF().Args[0].GetCol().RelPos)
+	require.Equal(t, int32(0), lookup.GetF().Args[0].GetCol().ColPos)
+	require.Nil(t, lookup.GetF().Args[0].GetF(), "the stored native key must not be transformed again")
 }
 
 func TestCanonicalRangeOp(t *testing.T) {

@@ -189,6 +189,32 @@ func TestODKUValueEqualityUsesSQLJSONAndScaledFloatSemantics(t *testing.T) {
 		"FLOAT32 comparisons normalize values to the declared scale")
 }
 
+func TestODKUValueEqualityUsesNative0900Collation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	for _, tc := range []struct {
+		name    string
+		charset uint8
+		left    string
+		right   string
+		equal   bool
+	}{
+		{name: "ai case insensitive", charset: types.CharsetUTF8MB40900AI, left: "A", right: "a", equal: true},
+		{name: "bin no pad", charset: types.CharsetUTF8MB40900Bin, left: "a", right: "a ", equal: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			typ := types.NewWithCharset(types.T_varchar, 16, 0, tc.charset)
+			left, right := vector.NewVec(typ), vector.NewVec(typ)
+			defer left.Free(proc.Mp())
+			defer right.Free(proc.Mp())
+			require.NoError(t, vector.AppendBytes(left, []byte(tc.left), false, proc.Mp()))
+			require.NoError(t, vector.AppendBytes(right, []byte(tc.right), false, proc.Mp()))
+			require.Equal(t, tc.equal, odkuValuesEqual(left, right))
+		})
+	}
+}
+
 func TestODKUNoOpActionRestoresImplicitColumnsImmediately(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()

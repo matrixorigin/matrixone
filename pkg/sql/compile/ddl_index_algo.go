@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -74,7 +75,10 @@ func buildCreateUniqueIndexDuplicateCheckSQL(dbName string, tableDef *plan.Table
 	if err != nil {
 		return "", err
 	}
-	groupExpr := partsToIndexExprStr(indexDef.Parts, prefixLengths)
+	groupExpr := partsToIndexExprStrForTable(indexDef.Parts, prefixLengths, tableDef)
+	if len(indexDef.Parts) > 1 && hasNative0900IndexParts(tableDef, indexDef.Parts) {
+		groupExpr = "serial(" + groupExpr + ")"
+	}
 	nullCheckExpr := fmt.Sprintf("%s IS NOT NULL", groupExpr)
 	if len(indexDef.Parts) > 1 {
 		nullChecks := make([]string, 0, len(indexDef.Parts))
@@ -97,6 +101,16 @@ func buildCreateUniqueIndexDuplicateCheckSQL(dbName string, tableDef *plan.Table
 	), nil
 }
 
+func hasNative0900IndexParts(tableDef *plan.TableDef, parts []string) bool {
+	for _, part := range parts {
+		if typ, ok := tableColumnType(tableDef, catalog.ResolveAlias(part)); ok &&
+			isVersionedPlanStringType(typ) {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Compile) precheckAndInsertUniqueIndexTable(
 	dbName string,
 	tableDef *plan.TableDef,
@@ -116,7 +130,13 @@ func (c *Compile) precheckAndInsertUniqueIndexTable(
 	}
 	defer duplicateCheckRes.Close()
 
-	if values, _, ok := firstAlterCopyResultRow(duplicateCheckRes, len(indexDef.Parts)); ok {
+	resultColumnCount := len(indexDef.Parts)
+	if resultColumnCount > 1 && hasNative0900IndexParts(tableDef, indexDef.Parts) {
+		// The physical serial key is one opaque column even when the logical
+		// index has several parts.
+		resultColumnCount = 1
+	}
+	if values, _, ok := firstAlterCopyResultRow(duplicateCheckRes, resultColumnCount); ok {
 		return moerr.NewDuplicateEntry(c.proc.Ctx, formatAlterCopyPkValue(values), catalog.IndexTableIndexColName)
 	}
 

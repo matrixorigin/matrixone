@@ -17,6 +17,7 @@ package plan
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -33,6 +34,7 @@ func AddPrimaryKey(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.P
 
 	primaryKeys := make([]string, 0)
 	pksMap := map[string]bool{}
+	hasNative0900Part := false
 	for _, key := range spec.KeyParts {
 		colName := key.ColName.ColName() // name of primary key column
 		col := FindColumn(tableDef.Cols, colName)
@@ -52,10 +54,17 @@ func AddPrimaryKey(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.P
 
 		primaryKeys = append(primaryKeys, colName)
 		pksMap[colName] = true
+		hasNative0900Part = hasNative0900Part || isNative0900Type(col.Typ)
 	}
 
 	pkeyName := ""
-	if len(primaryKeys) == 1 {
+	// A native 0900 string primary key keeps the user-visible column and
+	// stores its comparison identity in the hidden physical primary-key
+	// column, just like CREATE TABLE.  Treating it as an ordinary single
+	// column primary key would make the table's physical key use the original
+	// bytes and would disagree with inserts, lookups, and index backfill.
+	native0900Primary := len(primaryKeys) == 1 && isNative0900Type(FindColumn(tableDef.Cols, primaryKeys[0]).Typ)
+	if !native0900Primary && len(primaryKeys) == 1 {
 		pkeyName = primaryKeys[0]
 		for _, col := range tableDef.Cols {
 			if col.Name == pkeyName {
@@ -78,7 +87,12 @@ func AddPrimaryKey(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.P
 			for _, primaryKey := range primaryKeys {
 				if coldef.Name == primaryKey {
 					coldef.NotNull = true
-					coldef.Default.NullAbility = true
+					if coldef.Default != nil {
+						// Preserve the existing composite-key behavior.  The
+						// native single-column case follows CREATE TABLE and
+						// must be explicitly non-null.
+						coldef.Default.NullAbility = !native0900Primary
+					}
 				}
 			}
 		}
@@ -93,8 +107,11 @@ func AddPrimaryKey(ctx CompilerContext, alterPlan *plan.AlterTable, spec *tree.P
 			CompPkeyCol: colDef,
 		}
 		tableDef.Pkey = pkeyDef
+		if hasNative0900Part {
+			tableDef.KeyFormat = uint32(types.PADSpaceKeyV1)
+		}
 	}
-	return nil
+	return recomputeTableCollationMetadata(ctx.GetContext(), tableDef)
 }
 
 func DropPrimaryKey(ctx CompilerContext, alterPlan *plan.AlterTable, alterCtx *AlterTableContext) error {
@@ -107,9 +124,16 @@ func DropPrimaryKey(ctx CompilerContext, alterPlan *plan.AlterTable, alterCtx *A
 	}
 	pkey := tableDef.Pkey
 	if len(pkey.Names) == 1 {
-		for _, coldef := range tableDef.Cols {
-			if pkey.PkeyColName == coldef.Name {
-				coldef.Primary = false
+		if pkey.CompPkeyCol != nil && pkey.CompPkeyCol.Hidden {
+			compName := pkey.CompPkeyCol.Name
+			tableDef.Cols = RemoveIf[*ColDef](tableDef.Cols, func(coldef *ColDef) bool {
+				return coldef != nil && coldef.Name == compName
+			})
+		} else {
+			for _, coldef := range tableDef.Cols {
+				if pkey.PkeyColName == coldef.Name {
+					coldef.Primary = false
+				}
 			}
 		}
 	} else {
@@ -118,5 +142,5 @@ func DropPrimaryKey(ctx CompilerContext, alterPlan *plan.AlterTable, alterCtx *A
 		})
 	}
 	tableDef.Pkey = nil
-	return nil
+	return recomputeTableCollationMetadata(ctx.GetContext(), tableDef)
 }

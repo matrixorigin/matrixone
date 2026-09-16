@@ -769,7 +769,8 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 	{
 		masterIndexes := make([]*plan.IndexDef, 0)
 		for _, indexDef := range node.TableDef.Indexes {
-			if indexDef != nil && indexDef.TableExist && !indexDef.Unique && catalog.IsMasterIndexAlgo(indexDef.IndexAlgo) {
+			if indexDef != nil && indexDef.TableExist && !indexDef.Unique && catalog.IsMasterIndexAlgo(indexDef.IndexAlgo) &&
+				indexPhysicalKeyFormatUsable(indexDef, node.TableDef) {
 				masterIndexes = append(masterIndexes, indexDef)
 			}
 		}
@@ -787,7 +788,7 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 
 			switch fn.Func.ObjName {
 			case "=":
-				if isRuntimeConstExpr(fn.Args[0]) && fn.Args[1].GetCol() != nil {
+				if isRuntimeConstExpr(fn.Args[0]) && indexFilterColumn(fn.Args[1]) != nil {
 					fn.Args[0], fn.Args[1] = fn.Args[1], fn.Args[0]
 				}
 
@@ -801,7 +802,7 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 				goto END0
 			}
 
-			col := fn.Args[0].GetCol()
+			col := indexFilterColumn(fn.Args[0])
 			if col == nil {
 				goto END0
 			}
@@ -810,7 +811,7 @@ func (builder *QueryBuilder) applyIndicesForFilters(nodeID int32, node *plan.Nod
 			isAllFilterColumnsIncluded := true
 			for _, expr := range node.FilterList {
 				fn := expr.GetF()
-				col := fn.Args[0].GetCol()
+				col := indexFilterColumn(fn.Args[0])
 				if !isKeyPresentInList(col.Name, indexDef.Parts) {
 					isAllFilterColumnsIncluded = false
 					break
@@ -1505,7 +1506,7 @@ func (builder *QueryBuilder) applyForcedHintAccessToScan(scanNode *plan.Node, sc
 		return scanNode.NodeId, nil
 	}
 	for _, idxDef := range filterIndexesByHintScope(scanNode.TableDef.Indexes, scope) {
-		if !usableRegularHintIndex(idxDef) {
+		if !usableRegularHintIndex(idxDef) || !indexPhysicalKeyFormatUsable(idxDef, scanNode.TableDef) {
 			continue
 		}
 		accessNodeID, _, _, err := builder.tryHintedIndexAccess(idxDef, scanNode, colRefCnt, idxColMap)
@@ -1536,6 +1537,9 @@ func (builder *QueryBuilder) tryHintedIndexAccess(idxDef *plan.IndexDef, node *p
 
 func (builder *QueryBuilder) buildHintedIndexBackfillJoin(idxDef *plan.IndexDef, node *plan.Node) (int32, int32, error) {
 	if !usableRegularHintIndex(idxDef) || node == nil || node.TableDef == nil || node.TableDef.Pkey == nil || len(node.BindingTags) == 0 {
+		return -1, -1, nil
+	}
+	if !indexPhysicalKeyFormatUsable(idxDef, node.TableDef) {
 		return -1, -1, nil
 	}
 	snapshot := node.ScanSnapshot
@@ -1591,6 +1595,12 @@ func (builder *QueryBuilder) buildHintedIndexBackfillJoin(idxDef *plan.IndexDef,
 
 func (builder *QueryBuilder) tryHintedCoveringIndexScan(idxDef *plan.IndexDef, node *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 	if !usableRegularHintIndex(idxDef) || node == nil || len(node.BindingTags) == 0 {
+		return -1, nil
+	}
+	if !indexPhysicalKeyFormatUsable(idxDef, node.TableDef) {
+		return -1, nil
+	}
+	if indexOnlyHasOpaqueNativeValue(idxDef, node.TableDef) {
 		return -1, nil
 	}
 	for i, col := range node.TableDef.Cols {
@@ -2192,6 +2202,13 @@ func validateTableRegularIndexPrefixMetadata(tableDef *TableDef) error {
 		if err := validateRegularIndexPrefixMetadata(idxDef); err != nil {
 			return err
 		}
+		if indexHasNative0900Parts(idxDef, tableDef) &&
+			idxDef.KeyFormat != uint32(types.PADSpaceKeyV1) {
+			return moerr.NewInvalidInputNoCtxf(
+				"native 0900 index %q has legacy physical key format; rebuild the index before writing to the table",
+				idxDef.IndexName,
+			)
+		}
 	}
 	return nil
 }
@@ -2243,6 +2260,9 @@ func (builder *QueryBuilder) applyIndicesForFiltersRegularIndex(nodeID int32, no
 		}
 		if isSpatialIndexDef(node.TableDef.Indexes[i]) {
 			spatialIndexes = append(spatialIndexes, node.TableDef.Indexes[i])
+			continue
+		}
+		if !indexPhysicalKeyFormatUsable(node.TableDef.Indexes[i], node.TableDef) {
 			continue
 		}
 		if !regularIndexPrefixMetadataUsable(node.TableDef.Indexes[i]) {
@@ -2467,7 +2487,7 @@ func tryMatchMoreLeadingFilters(idxDef *IndexDef, node *plan.Node, pos int32) []
 			}
 			switch fn.Func.ObjName {
 			case "=":
-				col := fn.Args[0].GetCol()
+				col := indexFilterColumn(fn.Args[0])
 				if col != nil && col.ColPos == currentPos && isRuntimeConstExpr(fn.Args[1]) {
 					leadingPos = append(leadingPos, int32(j))
 					found = true
@@ -2492,30 +2512,30 @@ func checkIndexFilter(fn *plan.Function) (int, *plan.ColRef) {
 	}
 	switch fn.Func.ObjName {
 	case "=":
-		if isRuntimeConstExpr(fn.Args[0]) && fn.Args[1].GetCol() != nil {
+		if isRuntimeConstExpr(fn.Args[0]) && indexFilterColumn(fn.Args[1]) != nil {
 			fn.Args[0], fn.Args[1] = fn.Args[1], fn.Args[0]
 		}
-		col := fn.Args[0].GetCol()
+		col := indexFilterColumn(fn.Args[0])
 		if col != nil && isRuntimeConstExpr(fn.Args[1]) {
 			return EqualIndexCondition, col
 		}
 
 	case "in", "between":
-		col := fn.Args[0].GetCol()
+		col := indexFilterColumn(fn.Args[0])
 		if col != nil {
 			return NonEqualIndexCondition, col
 		}
 
 	case ">", ">=", "<", "<=":
-		if fn.Args[0].GetCol() != nil && isRuntimeConstExpr(fn.Args[1]) {
-			return NonEqualIndexCondition, fn.Args[0].GetCol()
+		if indexFilterColumn(fn.Args[0]) != nil && isRuntimeConstExpr(fn.Args[1]) {
+			return NonEqualIndexCondition, indexFilterColumn(fn.Args[0])
 		}
-		if isRuntimeConstExpr(fn.Args[0]) && fn.Args[1].GetCol() != nil {
-			return NonEqualIndexCondition, fn.Args[1].GetCol()
+		if isRuntimeConstExpr(fn.Args[0]) && indexFilterColumn(fn.Args[1]) != nil {
+			return NonEqualIndexCondition, indexFilterColumn(fn.Args[1])
 		}
 
 	case "in_range":
-		col := fn.Args[0].GetCol()
+		col := indexFilterColumn(fn.Args[0])
 		if col != nil && isRuntimeConstExpr(fn.Args[1]) && isRuntimeConstExpr(fn.Args[2]) {
 			return NonEqualIndexCondition, col
 		}
@@ -2538,6 +2558,16 @@ func checkIndexFilter(fn *plan.Function) (int, *plan.ColRef) {
 		return NonEqualIndexCondition, col
 	}
 	return UnsupportedIndexCondition, nil
+}
+
+func indexFilterColumn(expr *plan.Expr) *plan.ColRef {
+	if expr == nil {
+		return nil
+	}
+	if col := expr.GetCol(); col != nil {
+		return col
+	}
+	return nativeComparisonColumn(expr)
 }
 
 func findLeadingFilter(idxDef *IndexDef, node *plan.Node) ([]int32, bool) {
@@ -2577,8 +2607,11 @@ func (builder *QueryBuilder) replaceEqualCondition(idxDef *IndexDef, filterList 
 	if numParts == 1 { //directly equal
 		expr := DeepCopyExpr(filterList[filterPos[0]])
 		args := expr.GetF().Args
-		args[0].GetCol().RelPos = idxTag
-		args[0].GetCol().ColPos = 0
+		// A native-0900 predicate reaches index binding as
+		// internal_collation_key(column). The index table already stores the
+		// opaque key, so replace the whole operand with the physical key column;
+		// retaining the transform would apply it a second time.
+		args[0] = GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
 		var err error
 		args[1], err = builder.makeIndexLookupPartExpr(idxDef, 0, args[1])
 		if err != nil {
@@ -2645,7 +2678,7 @@ func (builder *QueryBuilder) replaceNonEqualCondition(idxDef *IndexDef, filter *
 	switch fn.Func.ObjName {
 	case ">", ">=", "<", "<=":
 		// Canonicalize: ensure column is on the left
-		if isRuntimeConstExpr(fn.Args[0]) && fn.Args[1].GetCol() != nil {
+		if isRuntimeConstExpr(fn.Args[0]) && indexFilterColumn(fn.Args[1]) != nil {
 			fn.Args[0], fn.Args[1] = fn.Args[1], fn.Args[0]
 			switch fn.Func.ObjName {
 			case ">":
@@ -2661,8 +2694,7 @@ func (builder *QueryBuilder) replaceNonEqualCondition(idxDef *IndexDef, filter *
 	}
 
 	indexedPartType := fn.Args[0].Typ
-	fn.Args[0].GetCol().RelPos = idxTag
-	fn.Args[0].GetCol().ColPos = 0
+	fn.Args[0] = GetColExpr(idxTableDef.Cols[0].Typ, idxTag, 0)
 	fn.Args[0].Typ = idxTableDef.Cols[0].Typ
 	if numParts > 1 {
 		serialFunc := indexTableComparisonSerialFunc()
@@ -3153,7 +3185,9 @@ func estimatedRegularIndexPartBytes(col *plan.ColDef, sizeMap map[string]uint64,
 	}
 	oid := types.T(col.Typ.Id)
 	if oid.FixedLength() >= 0 {
-		if bound, ok := function.SerialEncodedTypeSizeBound(types.New(oid, col.Typ.Width, col.Typ.Scale)); ok {
+		if bound, ok := function.SerialEncodedTypeSizeBound(types.NewWithCharsetVersion(
+			oid, col.Typ.Width, col.Typ.Scale, uint8(col.Typ.Charset), uint8(col.Typ.CollationVersion),
+		)); ok {
 			return float64(bound)
 		}
 	}
@@ -3840,6 +3874,12 @@ func (builder *QueryBuilder) matchRegularIndexOnlyScan(
 	costCtx *encodedRegularIndexCostContext,
 ) (*regularIndexOnlyMatch, bool) {
 	if idxDef == nil || len(idxDef.Parts) == 0 || node == nil || node.TableDef == nil || node.TableDef.Pkey == nil || len(node.BindingTags) == 0 {
+		return nil, false
+	}
+	if !indexPhysicalKeyFormatUsable(idxDef, node.TableDef) {
+		return nil, false
+	}
+	if indexOnlyHasOpaqueNativeValue(idxDef, node.TableDef) {
 		return nil, false
 	}
 	if regularIndexHasDeclaredPrefix(idxDef) {
@@ -4735,6 +4775,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 		if idxDef == nil || !idxDef.TableExist ||
 			!catalog.IsRegularIndexAlgo(idxDef.IndexAlgo) ||
 			isSpatialIndexDef(idxDef) ||
+			!indexPhysicalKeyFormatUsable(idxDef, leftChild.TableDef) ||
 			!regularIndexPrefixMetadataUsable(idxDef) ||
 			regularIndexHasDeclaredPrefix(idxDef) {
 			continue

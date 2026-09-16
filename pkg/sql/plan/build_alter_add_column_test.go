@@ -42,6 +42,106 @@ func TestDropColumnWithIndex(t *testing.T) {
 	require.Equal(t, "title", def.Indexes[0].Parts[0])
 }
 
+func TestDropColumnWithNative0900PrimaryKeyPreservesOrRemovesHiddenKey(t *testing.T) {
+	native := &ColDef{
+		Name: "name",
+		Typ:  Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB40900AI)},
+	}
+	hidden := MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
+	hidden.Primary = true
+
+	def := TableDef{
+		Cols:      []*ColDef{native, hidden},
+		KeyFormat: uint32(types.PADSpaceKeyV1),
+		Pkey: &PrimaryKeyDef{
+			Names:       []string{"name"},
+			PkeyColName: hidden.Name,
+			CompPkeyCol: hidden,
+		},
+	}
+	require.NoError(t, handleDropColumnWithPrimaryKey(context.Background(), "name", &def))
+	require.Nil(t, def.Pkey)
+	require.Nil(t, FindColumn(def.Cols, hidden.Name))
+	require.Zero(t, def.KeyFormat)
+
+	first := &ColDef{Name: "first", Typ: Type{Id: int32(types.T_int64)}}
+	remaining := &ColDef{
+		Name: "name",
+		Typ:  Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB40900AI)},
+	}
+	hidden = MakeHiddenColDefByName(catalog.CPrimaryKeyColName)
+	hidden.Primary = true
+	def = TableDef{
+		Cols:      []*ColDef{first, remaining, hidden},
+		KeyFormat: uint32(types.PADSpaceKeyV1),
+		Pkey: &PrimaryKeyDef{
+			Names:       []string{"first", "name"},
+			PkeyColName: hidden.Name,
+			CompPkeyCol: hidden,
+		},
+	}
+	require.NoError(t, handleDropColumnWithPrimaryKey(context.Background(), "first", &def))
+	require.NotNil(t, def.Pkey)
+	require.Equal(t, []string{"name"}, def.Pkey.Names)
+	require.Equal(t, hidden.Name, def.Pkey.PkeyColName)
+	require.Same(t, hidden, def.Pkey.CompPkeyCol)
+	require.NotNil(t, FindColumn(def.Cols, hidden.Name))
+	require.Equal(t, uint32(types.PADSpaceKeyV1), def.KeyFormat)
+}
+
+func TestAddPrimaryKeyWithNative0900StringUsesHiddenPhysicalKey(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	ctx.SetContext(context.Background())
+	name := &ColDef{
+		Name: "name",
+		Typ:  Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB40900AI)},
+		Default: &plan.Default{
+			NullAbility: true,
+		},
+	}
+	def := &TableDef{Cols: []*ColDef{name}}
+	spec := &tree.PrimaryKeyIndex{
+		KeyParts: []*tree.KeyPart{{ColName: tree.NewUnresolvedColName("name")}},
+	}
+
+	err := AddPrimaryKey(ctx, &plan.AlterTable{CopyTableDef: def}, spec, nil)
+	require.NoError(t, err)
+	require.NotNil(t, def.Pkey)
+	require.Equal(t, []string{"name"}, def.Pkey.Names)
+	require.Equal(t, catalog.CPrimaryKeyColName, def.Pkey.PkeyColName)
+	require.NotNil(t, def.Pkey.CompPkeyCol)
+	require.True(t, def.Pkey.CompPkeyCol.Hidden)
+	require.Same(t, def.Pkey.CompPkeyCol, FindColumn(def.Cols, catalog.CPrimaryKeyColName))
+	require.True(t, name.NotNull)
+	require.False(t, name.Primary)
+	require.False(t, name.Default.NullAbility)
+	require.Equal(t, uint32(types.PADSpaceKeyV1), def.KeyFormat)
+}
+
+func TestAddCompositePrimaryKeyWithNative0900PartUsesVersionedPhysicalKey(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	ctx.SetContext(context.Background())
+	name := &ColDef{
+		Name: "name",
+		Typ:  Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB40900AI)},
+		Default: &plan.Default{
+			NullAbility: true,
+		},
+	}
+	id := &ColDef{Name: "id", Typ: Type{Id: int32(types.T_int64)}, Default: &plan.Default{NullAbility: true}}
+	def := &TableDef{Cols: []*ColDef{id, name}}
+	spec := &tree.PrimaryKeyIndex{
+		KeyParts: []*tree.KeyPart{
+			{ColName: tree.NewUnresolvedColName("id")},
+			{ColName: tree.NewUnresolvedColName("name")},
+		},
+	}
+
+	require.NoError(t, AddPrimaryKey(ctx, &plan.AlterTable{CopyTableDef: def}, spec, nil))
+	require.Equal(t, uint32(types.PADSpaceKeyV1), def.KeyFormat)
+	require.Equal(t, catalog.CPrimaryKeyColName, def.Pkey.PkeyColName)
+}
+
 func TestDropColumnRemovesEveryAdjacentSingleColumnIndex(t *testing.T) {
 	def := TableDef{Indexes: []*IndexDef{
 		{IndexName: "uk_body", Unique: true, Parts: []string{"body"}},
