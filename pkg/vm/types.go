@@ -112,6 +112,9 @@ const (
 	// opcode before execution instead of silently using legacy key ownership.
 	// Keep its numeric value stable and append future opcodes after it.
 	ShuffleStable
+	// PreInsertAutoIDCache is a wire-only marker for the opt-in table policy.
+	// Old decoders reject it rather than silently discarding AutoIdCache.
+	PreInsertAutoIDCache
 	// OpTypeEnd is the exclusive upper bound for executable operator types.
 	// New operator types must be added before it.
 	OpTypeEnd
@@ -187,6 +190,7 @@ func init() {
 		TableClone:              "TableClone",
 		MongoScan:               "MongoScan",
 		ShuffleStable:           "ShuffleStable",
+		PreInsertAutoIDCache:    "PreInsertAutoIDCache",
 	}
 
 	// Initialize StrToOperatorMap
