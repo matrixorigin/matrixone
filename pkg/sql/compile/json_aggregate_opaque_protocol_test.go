@@ -69,15 +69,16 @@ func TestJSONAggregateOpaqueRejectsPreviousCapability(t *testing.T) {
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
 	worker := engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 
-	// MORPC v75 is the current main capability for persistent data-branch
-	// identity, but it does not include this aggregate executor.
-	client.version = defines.MORPCVersion75
-	c.execType = plan2.ExecTypeAP_MULTICN
-	c.cnList = worker
-	require.NoError(t, c.constrainJSONAggregateOpaqueWorkers(qry))
-	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
-	require.Len(t, c.cnList, 1)
-	require.Equal(t, c.addr, c.cnList[0].Addr)
+	// MORPC v75 and v76 do not include this aggregate executor.
+	for _, version := range []int64{defines.MORPCVersion75, defines.MORPCVersion76} {
+		client.version = version
+		c.execType = plan2.ExecTypeAP_MULTICN
+		c.cnList = worker
+		require.NoError(t, c.constrainJSONAggregateOpaqueWorkers(qry))
+		require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+		require.Len(t, c.cnList, 1)
+		require.Equal(t, c.addr, c.cnList[0].Addr)
+	}
 
 	scope := &Scope{
 		Magic:    Remote,
@@ -92,24 +93,26 @@ func TestJSONAggregateOpaqueRejectsPreviousCapability(t *testing.T) {
 	// sender's destination probe is the failing boundary.
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 	_, err := encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "MORPC protocol version 76")
+	require.ErrorContains(t, err, "MORPC protocol version 77")
 
-	// The receiver-side pipeline gate must reject the same lowered plan when a
-	// worker reports only main's v75 capability.
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion75)
 	wire := jsonAggregateOpaqueTestPipeline()
-	require.ErrorContains(t,
-		validateJSONAggregateOpaquePipelineProtocol(c.proc, wire),
-		"MORPC protocol version 76")
-	require.ErrorContains(t,
-		validateJSONAggregateOpaqueAggregateProtocol(c.proc,
-			[]aggexec.AggFuncExecExpression{jsonAggregateOpaqueTestAgg()}),
-		"MORPC protocol version 76")
+	// The receiver-side gates must reject the same lowered plan from either
+	// pre-aggregate capability.
+	for _, version := range []int64{defines.MORPCVersion75, defines.MORPCVersion76} {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		require.ErrorContains(t,
+			validateJSONAggregateOpaquePipelineProtocol(c.proc, wire),
+			"MORPC protocol version 77")
+		require.ErrorContains(t,
+			validateJSONAggregateOpaqueAggregateProtocol(c.proc,
+				[]aggexec.AggFuncExecExpression{jsonAggregateOpaqueTestAgg()}),
+			"MORPC protocol version 77")
+	}
 
-	// A v76 peer is admitted by every boundary, proving the new gate matches
+	// A v77 peer is admitted by every boundary, proving the new gate matches
 	// the aggregate implementation carried by this branch.
-	client.version = defines.MORPCVersion76
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion76)
+	client.version = defines.MORPCVersion77
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion77)
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = worker
 	require.NoError(t, c.constrainJSONAggregateOpaqueWorkers(qry))
