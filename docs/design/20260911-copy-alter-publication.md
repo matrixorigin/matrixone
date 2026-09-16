@@ -2,9 +2,10 @@
 
 - Issue: [#28319](https://github.com/matrixorigin/matrixone/issues/28319)
 - Implementation PR: [#28418](https://github.com/matrixorigin/matrixone/pull/28418)
-- Revision: 2 (2026-09-15)
-- Status: implementation revision for maintainer decision; the linked PR is
-  Ready for review, but this document is not itself an approval.
+- Revision: 3 (2026-09-16)
+- Status: implementation and acceptance-scope revision for maintainer
+  decision; the linked PR is Ready for review, but this document is not itself
+  an approval.
 - Target branch: `main`
 
 This document is the versioned design artifact for the COPY ALTER lock
@@ -259,7 +260,7 @@ paired baseline; and no unexpected connection failure or timeout appears in
 three equivalent nightly runs. Missing remote or workload evidence remains a
 pending gate and cannot be replaced by a small local test.
 
-## Revision 2 change record
+## Revision 2 protocol change record
 
 Revision 2 makes the publication wait contract uniform across the optimized
 frontends. The previous implementation selected FastFail from executor or
@@ -271,3 +272,24 @@ the private coordination hook; the regression suite has separate assertions
 for one-copy ordinary waits and a real two-transaction injected retry. The
 conditional handoff in the companion review remains historical evidence, so a
 maintainer decision on this revision is still required.
+
+## Revision 3 acceptance-scope proposal (pending maintainer decision)
+
+The implementation and this design retain the original correctness contract. To
+make the performance gate proportional to the reported regression, the author
+proposes the following merge-before evidence set:
+
+1. deterministic different-table and same-table concurrency and consistency
+   regressions;
+2. the reconstructed 8192-row, two-worker, 80-ALTER counterexample;
+3. paired baseline/head measurements for one worker and a representative
+   two-worker workload; and
+4. three equivalent runs of the original nightly ADD/DROP workload with its
+   original error contract.
+
+The 4/8-worker cases, additional large data scales and the broader scalability
+matrix are proposed for follow-up QA. This is a request for a maintainer
+decision, not a unilateral change to the required gates. Until it is accepted,
+the full Revision 2 validation list remains applicable. Any missing original
+workload parameter or isolated environment is recorded as `BLOCKED_ENVIRONMENT`
+or `NOT_RUN`, rather than replaced by a smaller local workload.

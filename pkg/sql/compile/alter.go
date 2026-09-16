@@ -1643,6 +1643,12 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 	}
 	opt := alterCopyStatementOption(alterCopyOpt)
 	insertTmpDataSQL := alterCopySQLAtLineageSnapshot(qry.InsertTmpDataSql, lineagePlan)
+	// Mark the beginning of the physical copy separately from its completion.
+	// Test observers use this boundary to account for failed or retried attempts;
+	// production behavior is unchanged because no hook is installed normally.
+	if err = c.observeAlterCopyPhase(dbName, tblName, "copy-started"); err != nil {
+		return err
+	}
 	err = func() error {
 		if !shouldEnableAlterCopyPipelineFlush(alterCopyOpt) {
 			return c.runSqlWithOptions(insertTmpDataSQL, opt)

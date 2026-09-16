@@ -981,7 +981,13 @@ func TestIssue28319CopyAlterPublicationSkipsGlobalLineageCompaction(t *testing.T
 
 // A peer commits after the target has prepared its writes. Both committing and
 // aborting after AdvanceSnapshot must preserve the atomic replacement contract.
-func TestIssue28319CopyAlterRefreshTerminal(t *testing.T) {
+//
+// Keep each write-path/failure combination as a top-level test. The phase hook
+// is process-global, so these tests intentionally remain sequential, but a
+// failure in one combination no longer makes the whole matrix exceed the
+// per-test race budget.
+func runIssue28319CopyAlterRefreshTerminal(t *testing.T, database string, forceFlush bool, failurePhase string) {
+	t.Helper()
 	embed.RunBaseClusterTests(t, func(cluster embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 		defer cancel()
@@ -990,146 +996,186 @@ func TestIssue28319CopyAlterRefreshTerminal(t *testing.T) {
 		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
 		require.NoError(t, err)
 		defer db.Close()
-		const database = "issue_28319_refresh"
 		execSQLRequire(t, ctx, db, "create database "+database)
 		defer func() {
 			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cleanupCancel()
 			execSQLRequire(t, cleanupCtx, db, "drop database "+database)
 		}()
-		for _, writePath := range []struct {
-			name       string
-			forceFlush bool
-		}{
-			{"in-memory", false},
-			{"object-backed", true},
-		} {
-			const rows = 3
-			for _, failurePhase := range []string{"", "catalog-refreshed", "old-dropped", "renamed", "tasks-published", "renamed-cancel"} {
-				abort := failurePhase != ""
-				t.Run(fmt.Sprintf("write-path=%s/failure=%s", writePath.name, failurePhase), func(t *testing.T) {
-					alterCtx, cancelAlter := context.WithCancel(ctx)
-					defer cancelAlter()
-					execSQLRequire(t, ctx, db, "create table "+database+".a(id int not null, v varchar(1024))")
-					execSQLRequire(t, ctx, db, "create table "+database+".b(id int not null)")
-					execSQLRequire(t, ctx, db, fmt.Sprintf("insert into %s.a select result, repeat('x',1024) from generate_series(1,%d) g", database, rows))
-					originalID := currentRelationID(t, ctx, db, database, "a")
-					stopForceFlush := func() {}
-					if writePath.forceFlush {
-						fault.Enable()
-						defer fault.Disable()
-						remove, injectErr := objectio.SimpleInject(objectio.FJ_CNWorkspaceForceFlush)
-						require.NoError(t, injectErr)
-						var removeOnce sync.Once
-						stopForceFlush = func() { removeOnce.Do(remove) }
-						defer stopForceFlush()
-					}
-					prepared := make(chan struct{})
-					release := make(chan struct{})
-					var once, released sync.Once
-					unblock := func() { released.Do(func() { close(release) }) }
-					defer unblock()
-					var copies, refreshes atomic.Int32
-					var spilled atomic.Bool
-					restore := compile.SetAlterCopyPhaseHookForTest(func(callCtx context.Context, dbName, table, phase string, op client.TxnOperator) error {
-						if dbName != database || table != "a" {
-							return nil
-						}
-						switch phase {
-						case "data-copied":
-							stopForceFlush()
-							copies.Add(1)
-						case "prepared":
-							result, inspectErr := testutils.GetSQLExecutor(cn).Exec(callCtx,
-								"select rel_id, reldatabase_id from mo_catalog.mo_tables where reldatabase='"+database+"' and relname not in ('a','b')",
-								executor.Options{}.WithAccountID(0).WithTxn(op).WithKeepTxnAlive().WithDisableIncrStatement())
-							if inspectErr != nil {
-								result.Close()
-								return inspectErr
-							}
-							result.ReadRows(func(n int, cols []*vector.Vector) bool {
-								ids := executor.GetFixedRows[uint64](cols[0])
-								dbIDs := executor.GetFixedRows[uint64](cols[1])
-								workspace := op.GetWorkspace().(*disttae.Transaction)
-								for i := 0; i < n; i++ {
-									workspace.ForEachTableWrites(dbIDs[i], ids[i], int(workspace.WriteOffset()), func(entry disttae.Entry) {
-										if entry.FileName() != "" {
-											spilled.Store(true)
-										}
-									})
-								}
-								return true
-							})
-							result.Close()
-							once.Do(func() { close(prepared) })
-							select {
-							case <-release:
-							case <-callCtx.Done():
-								return context.Cause(callCtx)
-							}
-						case "catalog-refreshed":
-							refreshes.Add(1)
-						}
-						if phase == "renamed" && failurePhase == "renamed-cancel" {
-							cancelAlter()
-							return context.Canceled
-						}
-						if phase == failurePhase {
-							return moerr.NewInternalError(callCtx, "issue 28319 abort at "+failurePhase)
-						}
-						return nil
-					})
-					defer restore()
-					done := make(chan error, 1)
-					go func() {
-						_, e := db.ExecContext(alterCtx, "alter table "+database+".a add primary key(id)")
-						done <- e
-					}()
-					select {
-					case <-prepared:
-					case e := <-done:
-						t.Fatalf("did not prepare: %v", e)
-					case <-ctx.Done():
-						unblock()
-						<-done
-						t.Fatal(ctx.Err())
-					}
-					_, peerErr := db.ExecContext(ctx, "alter table "+database+".b add primary key(id)")
-					unblock()
-					alterErr := <-done
-					require.NoError(t, peerErr)
-					if abort {
-						if failurePhase == "renamed-cancel" {
-							require.Error(t, alterErr)
-						} else {
-							require.ErrorContains(t, alterErr, "issue 28319 abort at "+failurePhase)
-						}
-						require.Equal(t, originalID, currentRelationID(t, ctx, db, database, "a"))
-					} else {
-						require.NoError(t, alterErr)
-						require.NotEqual(t, originalID, currentRelationID(t, ctx, db, database, "a"))
-					}
-					require.Equal(t, int32(1), copies.Load())
-					require.Equal(t, int32(1), refreshes.Load())
-					require.Equal(t, writePath.forceFlush, spilled.Load(), "exercise both in-memory and object-backed preparation writes")
-					var actualRows, bytes, tables int
-					require.NoError(t, db.QueryRowContext(ctx, "select count(*),sum(length(v)) from "+database+".a").Scan(&actualRows, &bytes))
-					require.Equal(t, rows, actualRows)
-					require.Equal(t, rows*1024, bytes)
-					require.NoError(t, db.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase=?", database).Scan(&tables))
-					require.Equal(t, 2, tables)
-					restore()
-					if abort {
-						execSQLRequire(t, ctx, db, "alter table "+database+".a add primary key(id)")
-					}
-					execSQLRequire(t, ctx, db, "alter table "+database+".a drop primary key")
-					execSQLRequire(t, ctx, db, "drop table "+database+".a")
-					execSQLRequire(t, ctx, db, "drop table "+database+".b")
-				})
-				if t.Failed() {
-					return
-				}
-			}
+		const rows = 3
+		alterCtx, cancelAlter := context.WithCancel(ctx)
+		defer cancelAlter()
+		execSQLRequire(t, ctx, db, "create table "+database+".a(id int not null, v varchar(1024))")
+		execSQLRequire(t, ctx, db, "create table "+database+".b(id int not null)")
+		execSQLRequire(t, ctx, db, fmt.Sprintf("insert into %s.a select result, repeat('x',1024) from generate_series(1,%d) g", database, rows))
+		originalID := currentRelationID(t, ctx, db, database, "a")
+		stopForceFlush := func() {}
+		if forceFlush {
+			fault.Enable()
+			defer fault.Disable()
+			remove, injectErr := objectio.SimpleInject(objectio.FJ_CNWorkspaceForceFlush)
+			require.NoError(t, injectErr)
+			var removeOnce sync.Once
+			stopForceFlush = func() { removeOnce.Do(remove) }
+			defer stopForceFlush()
 		}
+		prepared := make(chan struct{})
+		release := make(chan struct{})
+		var once, released sync.Once
+		unblock := func() { released.Do(func() { close(release) }) }
+		defer unblock()
+		var copies, refreshes atomic.Int32
+		var spilled atomic.Bool
+		restore := compile.SetAlterCopyPhaseHookForTest(func(callCtx context.Context, dbName, table, phase string, op client.TxnOperator) error {
+			if dbName != database || table != "a" {
+				return nil
+			}
+			switch phase {
+			case "data-copied":
+				stopForceFlush()
+				copies.Add(1)
+			case "prepared":
+				result, inspectErr := testutils.GetSQLExecutor(cn).Exec(callCtx,
+					"select rel_id, reldatabase_id from mo_catalog.mo_tables where reldatabase='"+database+"' and relname not in ('a','b')",
+					executor.Options{}.WithAccountID(0).WithTxn(op).WithKeepTxnAlive().WithDisableIncrStatement())
+				if inspectErr != nil {
+					result.Close()
+					return inspectErr
+				}
+				result.ReadRows(func(n int, cols []*vector.Vector) bool {
+					ids := executor.GetFixedRows[uint64](cols[0])
+					dbIDs := executor.GetFixedRows[uint64](cols[1])
+					workspace := op.GetWorkspace().(*disttae.Transaction)
+					for i := 0; i < n; i++ {
+						workspace.ForEachTableWrites(dbIDs[i], ids[i], int(workspace.WriteOffset()), func(entry disttae.Entry) {
+							if entry.FileName() != "" {
+								spilled.Store(true)
+							}
+						})
+					}
+					return true
+				})
+				result.Close()
+				once.Do(func() { close(prepared) })
+				select {
+				case <-release:
+				case <-callCtx.Done():
+					return context.Cause(callCtx)
+				}
+			case "catalog-refreshed":
+				refreshes.Add(1)
+			}
+			if phase == "renamed" && failurePhase == "renamed-cancel" {
+				cancelAlter()
+				return context.Canceled
+			}
+			if phase == failurePhase {
+				return moerr.NewInternalError(callCtx, "issue 28319 abort at "+failurePhase)
+			}
+			return nil
+		})
+		restoreHook := true
+		defer func() {
+			if restoreHook {
+				restore()
+			}
+		}()
+		done := make(chan error, 1)
+		go func() {
+			_, e := db.ExecContext(alterCtx, "alter table "+database+".a add primary key(id)")
+			done <- e
+		}()
+		select {
+		case <-prepared:
+		case e := <-done:
+			unblock()
+			t.Fatalf("did not prepare: %v", e)
+		case <-ctx.Done():
+			unblock()
+			<-done
+			t.Fatal(ctx.Err())
+		}
+		_, peerErr := db.ExecContext(ctx, "alter table "+database+".b add primary key(id)")
+		unblock()
+		alterErr := <-done
+		require.NoError(t, peerErr)
+		// The goroutine has stopped before the process-global hook is restored.
+		restore()
+		restoreHook = false
+		abort := failurePhase != ""
+		if abort {
+			if failurePhase == "renamed-cancel" {
+				require.Error(t, alterErr)
+			} else {
+				require.ErrorContains(t, alterErr, "issue 28319 abort at "+failurePhase)
+			}
+			require.Equal(t, originalID, currentRelationID(t, ctx, db, database, "a"))
+		} else {
+			require.NoError(t, alterErr)
+			require.NotEqual(t, originalID, currentRelationID(t, ctx, db, database, "a"))
+		}
+		require.Equal(t, int32(1), copies.Load())
+		require.Equal(t, int32(1), refreshes.Load())
+		require.Equal(t, forceFlush, spilled.Load(), "exercise both in-memory and object-backed preparation writes")
+		var actualRows, bytes, tables int
+		require.NoError(t, db.QueryRowContext(ctx, "select count(*),sum(length(v)) from "+database+".a").Scan(&actualRows, &bytes))
+		require.Equal(t, rows, actualRows)
+		require.Equal(t, rows*1024, bytes)
+		require.NoError(t, db.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase=?", database).Scan(&tables))
+		require.Equal(t, 2, tables)
+		if abort {
+			execSQLRequire(t, ctx, db, "alter table "+database+".a add primary key(id)")
+		}
+		execSQLRequire(t, ctx, db, "alter table "+database+".a drop primary key")
+		execSQLRequire(t, ctx, db, "drop table "+database+".a")
+		execSQLRequire(t, ctx, db, "drop table "+database+".b")
 	})
+}
+
+func TestIssue28319CopyAlterRefreshTerminalInMemoryCommit(t *testing.T) {
+	runIssue28319CopyAlterRefreshTerminal(t, "issue_28319_refresh_mem_commit", false, "")
+}
+
+func TestIssue28319CopyAlterRefreshTerminalInMemoryCatalogRefresh(t *testing.T) {
+	runIssue28319CopyAlterRefreshTerminal(t, "issue_28319_refresh_mem_catalog", false, "catalog-refreshed")
+}
+
+func TestIssue28319CopyAlterRefreshTerminalInMemoryOldDropped(t *testing.T) {
+	runIssue28319CopyAlterRefreshTerminal(t, "issue_28319_refresh_mem_old_dropped", false, "old-dropped")
+}
+
+func TestIssue28319CopyAlterRefreshTerminalInMemoryRenamed(t *testing.T) {
+	runIssue28319CopyAlterRefreshTerminal(t, "issue_28319_refresh_mem_renamed", false, "renamed")
+}
+
+func TestIssue28319CopyAlterRefreshTerminalInMemoryTasksPublished(t *testing.T) {
+	runIssue28319CopyAlterRefreshTerminal(t, "issue_28319_refresh_mem_tasks", false, "tasks-published")
+}
+
+func TestIssue28319CopyAlterRefreshTerminalInMemoryRenamedCancel(t *testing.T) {
+	runIssue28319CopyAlterRefreshTerminal(t, "issue_28319_refresh_mem_renamed_cancel", false, "renamed-cancel")
+}
+
+func TestIssue28319CopyAlterRefreshTerminalObjectBackedCommit(t *testing.T) {
+	runIssue28319CopyAlterRefreshTerminal(t, "issue_28319_refresh_obj_commit", true, "")
+}
+
+func TestIssue28319CopyAlterRefreshTerminalObjectBackedCatalogRefresh(t *testing.T) {
+	runIssue28319CopyAlterRefreshTerminal(t, "issue_28319_refresh_obj_catalog", true, "catalog-refreshed")
+}
+
+func TestIssue28319CopyAlterRefreshTerminalObjectBackedOldDropped(t *testing.T) {
+	runIssue28319CopyAlterRefreshTerminal(t, "issue_28319_refresh_obj_old_dropped", true, "old-dropped")
+}
+
+func TestIssue28319CopyAlterRefreshTerminalObjectBackedRenamed(t *testing.T) {
+	runIssue28319CopyAlterRefreshTerminal(t, "issue_28319_refresh_obj_renamed", true, "renamed")
+}
+
+func TestIssue28319CopyAlterRefreshTerminalObjectBackedTasksPublished(t *testing.T) {
+	runIssue28319CopyAlterRefreshTerminal(t, "issue_28319_refresh_obj_tasks", true, "tasks-published")
+}
+
+func TestIssue28319CopyAlterRefreshTerminalObjectBackedRenamedCancel(t *testing.T) {
+	runIssue28319CopyAlterRefreshTerminal(t, "issue_28319_refresh_obj_renamed_cancel", true, "renamed-cancel")
 }

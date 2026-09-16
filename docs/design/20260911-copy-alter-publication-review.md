@@ -4,7 +4,7 @@
 - Issue: [#28319](https://github.com/matrixorigin/matrixone/issues/28319)
 - Implementation PR: [#28418](https://github.com/matrixorigin/matrixone/pull/28418)
 - Revision reviewed: 1 (2026-09-11; historical)
-- Current implementation/design revision: 2 (2026-09-15; pending review)
+- Current implementation/design revision: 3 (2026-09-16; pending review)
 - Review type: independent design handoff review
 
 ## Decision
@@ -44,3 +44,12 @@ The implementation PR must obtain a distinct maintainer design decision, then
 re-request the blocking reviewers. The original nightly ADD/DROP workload,
 paired performance comparison and QA evidence remain delivery gates even when
 unit, BVT and CI checks are green.
+
+## Pending scope decision
+
+Revision 3 proposes keeping deterministic correctness, the reconstructed
+8192-row/two-worker/80-ALTER counterexample, one-worker and representative
+two-worker paired measurements, and three original-nightly runs as merge-before
+evidence. The 4/8-worker cases, additional large scales and the broader
+scalability matrix may move to follow-up QA only after a maintainer explicitly
+accepts that scope. This proposal does not change the current required gates.
