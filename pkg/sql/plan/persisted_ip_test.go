@@ -18,9 +18,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
+	"github.com/gogo/protobuf/proto"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -28,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	planrule "github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -479,6 +483,208 @@ func TestPersistedBoundedConditionalStringProtocolAdmission(t *testing.T) {
 		RequirePersistedExpressionProtocol(proc.Ctx, proc, expr), "protocol version 83")
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion83)
 	require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, expr))
+
+}
+
+func TestPersistedDecimalLiteralProtocolAdmission(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	old, exists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	oldFloor, hadFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor)
+	t.Cleanup(func() {
+		if exists {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+		if hadFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, oldFloor)
+		} else if value, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolFloor, value)
+		}
+	})
+
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		"select 12345678901234567890123456789012345678.1", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	ast := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+	binder := NewGeneratedColBinder(proc.Ctx, nil, nil)
+	expr, err := binder.BindExpr(ast, 0, false)
+	require.NoError(t, err)
+	features, err := planpb.RequiredRemoteExpressionFeatures(expr)
+	require.NoError(t, err)
+	require.True(t, features.DecimalLiteralSemantics, expr.String())
+
+	for _, version := range []int64{defines.MORPCVersion81, defines.MORPCVersion82} {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, version)
+		err = RequirePersistedExpressionProtocol(proc.Ctx, proc, expr)
+		if version < defines.MORPCVersion82 {
+			require.ErrorContains(t, err, "protocol version 82")
+		} else {
+			require.NoError(t, err)
+		}
+	}
+
+	plain := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_decimal64)}, Expr: &planpb.Expr_Lit{
+		Lit: &planpb.Literal{Value: &planpb.Literal_Decimal64Val{
+			Decimal64Val: &planpb.Decimal64{A: 125},
+		}},
+	}}
+	require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, plain))
+}
+
+func TestPersistedDecimalLiteralTargetTypedDefaultAdmission(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	proc := ctx.GetProcess()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	oldFloor, hadFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor)
+	oldAuthoringFloor, hadAuthoringFloor := rt.GetGlobalVariables(
+		moruntime.PersistedExpressionProtocolAuthoringFloor)
+	t.Cleanup(func() {
+		if hadProtocol {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+		if hadFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, oldFloor)
+		} else if value, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolFloor, value)
+		}
+		if hadAuthoringFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, oldAuthoringFloor)
+		} else if value, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(
+				moruntime.PersistedExpressionProtocolAuthoringFloor, value)
+		}
+	})
+
+	// This spelling is numerically just 1.25, but a target-typed default is
+	// bound through the destination DECIMAL type rather than the untyped path.
+	// The provenance marker must still fence the persisted default from v81
+	// readers and writers.
+	source := strings.Repeat("0", 100) + "1.25"
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		"create table t(a decimal(10,2) default ("+source+"))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	col := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
+	typ := planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2}
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion81))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion81))
+	_, err = buildDefaultExpr(col, typ, proc)
+	require.ErrorContains(t, err, "protocol version 82")
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion82))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion82))
+	defaultExpr, err := buildDefaultExpr(col, typ, proc)
+	require.NoError(t, err)
+	require.NotNil(t, defaultExpr)
+	require.Equal(t, int64(defines.MORPCVersion82), func() int64 {
+		version, versionErr := RequiredPersistedExpressionProtocolVersion(defaultExpr)
+		require.NoError(t, versionErr)
+		return version
+	}())
+
+	// A temporal/non-DECIMAL target keeps the original spelling for the cast,
+	// so it does not depend on the exact DECIMAL literal carrier introduced by
+	// v82 and remains admissible at the v81 floor.
+	timeSource := "0.001"
+	timeStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		"create table t_time(a time(3) default ("+timeSource+"))", 1)
+	require.NoError(t, err)
+	defer timeStmt.Free()
+	timeCol := timeStmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
+	timeTyp := planpb.Type{Id: int32(types.T_time), Scale: 3}
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion81))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion81))
+	timeDefault, err := buildDefaultExpr(timeCol, timeTyp, proc)
+	require.NoError(t, err)
+	require.NotNil(t, timeDefault)
+	timeVersion, err := RequiredPersistedExpressionProtocolVersion(timeDefault)
+	require.NoError(t, err)
+	require.Zero(t, timeVersion)
+}
+
+func TestPersistedDecimalLiteralMarkerSurvivesDeepCopyAndListFold(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	wide, err := makePlan2DecimalExprWithType(proc.Ctx,
+		"000000000000000000000000000000000000000001.25")
+	require.NoError(t, err)
+	features, err := planpb.RequiredRemoteExpressionFeatures(wide)
+	require.NoError(t, err)
+	require.True(t, features.DecimalLiteralSemantics)
+	ordinary, err := makePlan2DecimalExprWithType(proc.Ctx, "1.25")
+	require.NoError(t, err)
+	ordinaryFeatures, err := planpb.RequiredRemoteExpressionFeatures(ordinary)
+	require.NoError(t, err)
+	require.False(t, ordinaryFeatures.DecimalLiteralSemantics)
+	ordinaryVersion, err := RequiredPersistedExpressionProtocolVersion(ordinary)
+	require.NoError(t, err)
+	require.Zero(t, ordinaryVersion)
+
+	copied := DeepCopyExpr(wide)
+	require.True(t, copied.GetF().GetArgs()[0].GetLit().GetDecimalLiteralRequiresV82())
+	copiedFeatures, err := planpb.RequiredRemoteExpressionFeatures(copied)
+	require.NoError(t, err)
+	require.True(t, copiedFeatures.DecimalLiteralSemantics)
+	list := &planpb.Expr{
+		Typ: wide.Typ,
+		Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{
+			wide,
+			ordinary,
+		}}},
+	}
+	foldedByAPI, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(list), proc, false, true)
+	require.NoError(t, err)
+	node := &planpb.Node{ProjectList: []*planpb.Expr{DeepCopyExpr(list)}}
+	planrule.NewConstantFold(false).Apply(node, nil, proc)
+	for name, folded := range map[string]*planpb.Expr{
+		"public-api": foldedByAPI,
+		"rule":       node.ProjectList[0],
+	} {
+		t.Run(name, func(t *testing.T) {
+			require.NotNil(t, folded.GetVec(), "decimal provenance should not disable LiteralVec folding")
+			require.True(t, folded.GetVec().GetDecimalLiteralRequiresV82())
+			foldedFeatures, featureErr := planpb.RequiredRemoteExpressionFeatures(folded)
+			require.NoError(t, featureErr)
+			require.True(t, foldedFeatures.DecimalLiteralSemantics)
+			require.Equal(t, int64(defines.MORPCVersion82), func() int64 {
+				version, versionErr := RequiredPersistedExpressionProtocolVersion(folded)
+				require.NoError(t, versionErr)
+				return version
+			}())
+			copiedVec := DeepCopyExpr(folded)
+			require.True(t, copiedVec.GetVec().GetDecimalLiteralRequiresV82())
+			payload, marshalErr := proto.Marshal(folded)
+			require.NoError(t, marshalErr)
+			decoded := new(planpb.Expr)
+			require.NoError(t, proto.Unmarshal(payload, decoded))
+			require.True(t, decoded.GetVec().GetDecimalLiteralRequiresV82())
+		})
+	}
+}
+
+func TestPersistedDecimalLiteralMarkerSurvivesConstantFold(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	wide, err := makePlan2DecimalExprWithType(proc.Ctx,
+		"12345678901234567890123456789012345678.1")
+	require.NoError(t, err)
+	expr, err := BindFuncExprImplByPlanExpr(proc.Ctx, "+", []*planpb.Expr{
+		wide, makePlan2Int64ConstExprWithType(1),
+	})
+	require.NoError(t, err)
+	folded, err := ConstantFold(batch.EmptyForConstFoldBatch, expr, proc, false, true)
+	require.NoError(t, err)
+	features, err := planpb.RequiredRemoteExpressionFeatures(folded)
+	require.NoError(t, err)
+	require.True(t, features.DecimalLiteralSemantics, folded.String())
 }
 
 func TestPersistedFollowupExpressionProtocolAdmission(t *testing.T) {

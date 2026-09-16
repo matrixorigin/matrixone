@@ -203,6 +203,14 @@ func RequiresMORPCVersion83BoundedConditionalStringDomains(owner any) (bool, err
 	return features.BoundedConditionalStringDomains, err
 }
 
+// RequiresMORPCVersion82DecimalLiteralSemantics reports whether an owner
+// contains a plain decimal literal whose exact normalized binding must not be
+// replayed by a pre-v82 binder.
+func RequiresMORPCVersion82DecimalLiteralSemantics(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.DecimalLiteralSemantics, err
+}
+
 // RequiresMORPCVersion86ExpressionResultContracts reports whether an owner
 // contains a follow-up expression contract that changes a result domain or
 // overload identity.
@@ -285,6 +293,10 @@ const (
 // ExpressionResultMetadataContracts also requires MORPC v86 because bounded
 // character slicing and fractional temporal conditional results change the
 // serialized result metadata consumed by persisted views and remote workers.
+// DecimalLiteralSemantics requires MORPC v82 because plain DECIMAL256
+// literals are normalized and kept exact by the new planner, while older
+// binders can round or reject the same persisted SQL at the Decimal128
+// boundary.
 type RemoteExpressionFeatures struct {
 	NumericPrefix                   bool
 	JSONComparisonParam             bool
@@ -302,6 +314,7 @@ type RemoteExpressionFeatures struct {
 	TOBase64ResultContracts           bool
 	IPFunctionResultContracts         bool
 	ExpressionResultMetadataContracts bool
+	DecimalLiteralSemantics           bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
@@ -319,7 +332,8 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.IntegerParameterCoercion ||
 		features.TOBase64ResultContracts ||
 		features.IPFunctionResultContracts ||
-		features.ExpressionResultMetadataContracts
+		features.ExpressionResultMetadataContracts ||
+		features.DecimalLiteralSemantics
 }
 
 func isBoundedConditionalStringDomain(fn *Function) bool {
@@ -714,6 +728,14 @@ func isExpressionResultMetadataContract(expr *Expr) bool {
 func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatures, err error) {
 	err = walkExpressionsInOwner(owner, func(expr *Expr) error {
 		return VisitExprTree(expr, func(current *Expr) error {
+			if !features.DecimalLiteralSemantics {
+				if literal := current.GetLit(); literal != nil {
+					features.DecimalLiteralSemantics = literal.DecimalLiteralRequiresV82
+				}
+				if literalVec := current.GetVec(); literalVec != nil {
+					features.DecimalLiteralSemantics = literalVec.DecimalLiteralRequiresV82
+				}
+			}
 			fn := current.GetF()
 			if fn != nil && fn.Func != nil {
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)

@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -66,9 +67,40 @@ func MakePlan2Decimal128ExprWithType(v types.Decimal128, typ *Type) *plan.Expr {
 
 func makePlan2DecimalExprWithType(ctx context.Context, v string, isBin ...bool) (*plan.Expr, error) {
 	var typ plan.Type
+	canonical := v
 	width := decimalLiteralPrecision(v)
-	_, scale, err := types.Parse128(v)
-	if err == nil && scale < 18 && len(v) < 18 {
+	plain := isPlainDecimalLiteral(v)
+	requiresV82 := false
+	if normalized, normalizedWidth, _, ok := normalizePlainDecimalLiteral(v); ok {
+		canonical = normalized
+		width = normalizedWidth
+		requiresV82 = decimalLiteralRequiresV82(v, canonical, width)
+	}
+	// Parse128 rounds the first digit after its 38-digit physical boundary and
+	// still returns nil error. Select the wide carrier from the source token
+	// before parsing so an exact DECIMAL256 literal is never materialized from
+	// an already-rounded Decimal128 value. Scientific notation keeps the
+	// existing parser path because its effective precision is exponent-sensitive.
+	if isPlainDecimalLiteral(v) && width > types.T_decimal128.ToType().Width {
+		if width > types.T_decimal256.ToType().Width {
+			return nil, moerr.NewInvalidInputNoCtxf(
+				"%s beyond the range, can't be converted to Decimal256.", v)
+		}
+		_, scale, err := types.Parse256(canonical)
+		if err != nil {
+			return nil, err
+		}
+		typ = plan.Type{
+			Id:          int32(types.T_decimal256),
+			Width:       width,
+			Scale:       scale,
+			NotNullable: true,
+		}
+		return appendCastBeforeExpr(ctx,
+			makePlan2DecimalSourceExpr(canonical, requiresV82 && plain, isBin...), typ)
+	}
+	_, scale, err := types.Parse128(canonical)
+	if err == nil && scale < 18 && len(canonical) < 18 {
 		typ = plan.Type{
 			Id:          int32(types.T_decimal64),
 			Width:       width,
@@ -83,7 +115,7 @@ func makePlan2DecimalExprWithType(ctx context.Context, v string, isBin ...bool) 
 			NotNullable: true,
 		}
 	} else {
-		_, scale, err = types.Parse256(v)
+		_, scale, err = types.Parse256(canonical)
 		if err != nil {
 			return nil, err
 		}
@@ -94,7 +126,97 @@ func makePlan2DecimalExprWithType(ctx context.Context, v string, isBin ...bool) 
 			NotNullable: true,
 		}
 	}
-	return appendCastBeforeExpr(ctx, makePlan2StringConstExprWithType(v, isBin...), typ)
+	return appendCastBeforeExpr(ctx,
+		makePlan2DecimalSourceExpr(canonical, requiresV82 && plain, isBin...), typ)
+}
+
+// makePlan2DecimalSourceExpr keeps the canonical decimal text in an ordinary
+// string literal so the existing cast executor can materialize Decimal256.
+// The provenance bit is execution-inert and only records that an older binder
+// would not necessarily reconstruct the same exact value from persisted SQL.
+func makePlan2DecimalSourceExpr(value string, requiresV82 bool, isBin ...bool) *plan.Expr {
+	expr := makePlan2StringConstExprWithType(value, isBin...)
+	if requiresV82 {
+		expr.GetLit().DecimalLiteralRequiresV82 = true
+	}
+	return expr
+}
+
+func markDecimalLiteralRequiresV82(expr *plan.Expr, source, canonical string, width int32) {
+	if expr == nil || !decimalLiteralRequiresV82(source, canonical, width) {
+		return
+	}
+	if literal := expr.GetLit(); literal != nil {
+		literal.DecimalLiteralRequiresV82 = true
+	}
+}
+
+func decimalLiteralRequiresV82(source, canonical string, normalizedWidth int32) bool {
+	return isPlainDecimalLiteral(source) &&
+		(canonical != source || normalizedWidth > types.T_decimal128.ToType().Width)
+}
+
+func isPlainDecimalLiteral(v string) bool {
+	if v == "" {
+		return false
+	}
+	pos := 0
+	if v[pos] == '+' || v[pos] == '-' {
+		pos++
+	}
+	seenDigit, seenPoint := false, false
+	for ; pos < len(v); pos++ {
+		switch ch := v[pos]; {
+		case ch >= '0' && ch <= '9':
+			seenDigit = true
+		case ch == '.' && !seenPoint:
+			seenPoint = true
+		default:
+			return false
+		}
+	}
+	return seenDigit
+}
+
+// normalizePlainDecimalLiteral removes spelling-only integer zeroes before a
+// decimal literal is parsed. The parser's decimal width is based on the
+// digits it sees, so retaining those zeroes can make a value such as
+// 000...001.25 or 0.000...001 exceed the physical Decimal256 boundary even
+// though its numeric value fits. Fractional zeroes remain significant because
+// they define scale.
+func normalizePlainDecimalLiteral(v string) (string, int32, int32, bool) {
+	if !isPlainDecimalLiteral(v) {
+		return "", 0, 0, false
+	}
+
+	pos := 0
+	sign := ""
+	if v[pos] == '+' || v[pos] == '-' {
+		sign = v[pos : pos+1]
+		pos++
+	}
+	rest := v[pos:]
+	integerPart := rest
+	fractionPart := ""
+	if dot := strings.IndexByte(rest, '.'); dot >= 0 {
+		integerPart = rest[:dot]
+		fractionPart = rest[dot+1:]
+	}
+
+	integerPart = strings.TrimLeft(integerPart, "0")
+	scale := int32(len(fractionPart))
+	if integerPart == "" {
+		if fractionPart == "" {
+			return sign + "0", 1, 0, true
+		}
+		return sign + "." + fractionPart, scale, scale, true
+	}
+
+	canonical := sign + integerPart
+	if fractionPart != "" {
+		canonical += "." + fractionPart
+	}
+	return canonical, int32(len(integerPart) + len(fractionPart)), scale, true
 }
 
 func decimalLiteralPrecision(v string) int32 {
