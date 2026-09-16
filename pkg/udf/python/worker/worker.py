@@ -2727,11 +2727,11 @@ class _HandlerProcessSession:
             or time.monotonic() - self._burst_started >= DEFAULT_BURST_SECONDS
         )
 
-    def _take_response(self) -> Optional[tuple[int, bytes]]:
+    def _take_response(self, max_payload_size: int = MAX_EXECUTION_FRAME_BYTES) -> Optional[tuple[int, bytes]]:
         if len(self._response_buffer) < 8:
             return None
         expected = struct.unpack(">Q", self._response_buffer[:8])[0]
-        if expected > MAX_EXECUTION_FRAME_BYTES:
+        if expected > max_payload_size or expected > MAX_EXECUTION_FRAME_BYTES:
             raise ValueError("RESOURCE_EXHAUSTED: execution response is too large")
         if len(self._response_buffer) < expected + 8:
             return None
@@ -2761,6 +2761,24 @@ class _HandlerProcessSession:
         request_parts, request_size = _encode_execution_request(
             request, compact=self._burst_batches > 0
         )
+        max_batch_bytes = request.get("max_batch_bytes")
+        if max_batch_bytes is None:
+            # Direct helper callers from older tests do not carry the full
+            # exchange contract. The real do_exchange path always supplies
+            # this field; retaining the global bound here keeps those helper
+            # calls diagnostic rather than silently weakening the real path.
+            response_payload_limit = MAX_EXECUTION_FRAME_BYTES
+        elif type(max_batch_bytes) is not int or max_batch_bytes <= 0:
+            raise ValueError("PROTOCOL: handler request has an invalid max_batch_bytes")
+        else:
+            # The response payload consists of one status byte followed by
+            # the schema-free Arrow message. The child checks the same
+            # max_batch_bytes before serializing, but the parent must bound
+            # its receive buffer independently in case a mismatched or
+            # malformed child writes an oversized frame.
+            response_payload_limit = min(
+                MAX_EXECUTION_FRAME_BYTES, max_batch_bytes + 1
+            )
 
         def check_budget() -> None:
             if _context_is_cancelled(context):
@@ -2779,7 +2797,7 @@ class _HandlerProcessSession:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise TimeoutError("DEADLINE_EXCEEDED: handler execution timeout")
-                response = self._take_response()
+                response = self._take_response(response_payload_limit)
                 if response is not None:
                     break
                 events = self._selector.select(min(remaining, 0.1))
@@ -2819,6 +2837,8 @@ class _HandlerProcessSession:
                             continue
                         if not chunk:
                             raise ValueError("USER_CODE: handler process exited without a response")
+                        if len(self._response_buffer) + len(chunk) > response_payload_limit + 8:
+                            raise ValueError("RESOURCE_EXHAUSTED: execution response exceeds batch byte limit")
                         self._response_buffer.extend(chunk)
                 if self._process.poll() is not None:
                     if self._process.returncode != 0:
