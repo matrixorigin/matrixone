@@ -37,6 +37,11 @@ Project
         ->  Hash Partition
               Sort Key: t.k INTERNAL
               ->  Table Scan on window_hash_partition.t
+select sum(part_sum) from (
+select sum(v) over (partition by k) as part_sum from t
+) q;
+sum(part_sum)
+10001000000
 set window_partition_algorithm = 'SORT';
 explain (check '["Partition"]')
 select sum(v) over (partition by k) from t;
@@ -59,6 +64,11 @@ Project
         ->  Hash Partition
               Sort Key: t.k INTERNAL
               ->  Table Scan on window_hash_partition.t
+select sum(part_sum) from (
+select sum(v) over (partition by k) as part_sum from t
+) q;
+sum(part_sum)
+10001000000
 set window_partition_algorithm = default;
 select @@window_partition_algorithm;
 @@window_partition_algorithm

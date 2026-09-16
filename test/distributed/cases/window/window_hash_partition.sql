@@ -30,6 +30,10 @@ set window_partition_algorithm = 'COST';
 -- @regex("Hash Partition",true)
 explain (check '["Hash Partition"]')
 select sum(v) over (partition by k) from t;
+-- Execute the COST-selected Window, not only its plan shape.
+select sum(part_sum) from (
+    select sum(v) over (partition by k) as part_sum from t
+) q;
 
 set window_partition_algorithm = 'SORT';
 -- @regex("Hash Partition",false)
@@ -40,6 +44,10 @@ set window_partition_algorithm = 'HASH';
 -- @regex("Hash Partition",true)
 explain (check '["Hash Partition"]')
 select sum(v) over (partition by k) from t;
+-- Execute the explicitly HASH-selected Window, not only its plan shape.
+select sum(part_sum) from (
+    select sum(v) over (partition by k) as part_sum from t
+) q;
 
 set window_partition_algorithm = default;
 select @@window_partition_algorithm;
