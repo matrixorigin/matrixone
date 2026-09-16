@@ -7540,6 +7540,9 @@ func preparedSetOperationCommonType(
 	if len(argTypes) == 0 {
 		return types.Type{}, false, nil
 	}
+	if pureCharType, ok := setOperationPureCharCommonType(argTypes); ok {
+		return pureCharType, true, nil
+	}
 	preserveGroupingBinary :=
 		(types.T(currentOutputType.Id) == types.T_binary || types.T(currentOutputType.Id) == types.T_varbinary) &&
 			(argTypes[0].Oid == types.T_binary || argTypes[0].Oid == types.T_varbinary)
@@ -7601,6 +7604,19 @@ func preparedSetOperationOutputType(
 	branchExprs []*plan.Expr,
 ) plan.Type {
 	outputType := setOperationOutputType(nodeType, leftType, rightType)
+	if len(branchExprs) > 0 {
+		sourceTypes := make([]types.Type, 0, len(branchExprs))
+		for _, expr := range branchExprs {
+			if expr != nil {
+				sourceTypes = append(sourceTypes, makeTypeByPlan2Expr(expr))
+			}
+		}
+		if pureCharType, ok := setOperationPureCharCommonType(sourceTypes); ok {
+			pureCharPlanType := makePlan2Type(&pureCharType)
+			pureCharPlanType.NotNullable = outputType.NotNullable
+			return pureCharPlanType
+		}
+	}
 	if types.T(outputType.Id) != types.T_varchar && types.T(outputType.Id) != types.T_text {
 		return outputType
 	}
@@ -7949,6 +7965,11 @@ func reconcilePreparedSetOperationInputs(
 			outputType = setOperationOutputType(
 				node.NodeType, outputType, childProjectLists[branchIdx][colPos].Typ,
 			)
+		}
+		if targetValid[colPos] {
+			resolved := makePlan2Type(&targetTypes[colPos])
+			resolved.NotNullable = outputType.NotNullable
+			outputType = resolved
 		}
 		branchExprs := make([]*plan.Expr, len(childProjectLists))
 		for branchIdx, projects := range childProjectLists {
