@@ -9110,11 +9110,13 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 		if !typ.IsEmpty() && types.T(typ.Id).IsDecimal() {
 			return returnDecimalExpr(originString)
 		}
-		if !strings.ContainsAny(originString, "eE") {
-			expr, err := returnDecimalExpr(originString)
-			if err == nil {
-				return expr, nil
-			}
+		// A plain decimal is exact SQL numeric syntax. Keep the decimal error
+		// visible when it cannot be represented, instead of silently changing
+		// the value to an approximate float64. Scientific notation retains its
+		// existing float path because its effective decimal precision depends on
+		// the exponent.
+		if isPlainDecimalLiteral(originString) {
+			return returnDecimalExpr(originString)
 		}
 		floatValue, ok := astExpr.Float64()
 		if !ok {
