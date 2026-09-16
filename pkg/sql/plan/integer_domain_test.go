@@ -20,7 +20,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 	"testing"
@@ -66,8 +66,19 @@ func TestBoundUnsignedDomainSurvivesParentAndPlanTransport(t *testing.T) {
 	}
 }
 
+func TestBoundMixedIntegerArithmeticUsesCheckedIntegerOverload(t *testing.T) {
+	ctx := context.Background()
+	unsigned := makePlan2Uint64ConstExprWithType(0)
+	signed := makePlan2Int64ConstExprWithType(0)
+	expr, err := BindFuncExprImplByPlanExpr(ctx, "+", []*Expr{unsigned, signed})
+	require.NoError(t, err)
+	_, overload := planfunction.DecodeOverloadID(expr.GetF().Func.GetObj())
+	require.EqualValues(t, 2, overload)
+	require.Equal(t, int32(types.T_uint64), expr.Typ.Id)
+}
+
 func TestPreparedUnsignedSubtractionRebindingKeepsBoundMode(t *testing.T) {
-	ctx := function.WithNoUnsignedSubtraction(context.Background(), true)
+	ctx := planfunction.WithNoUnsignedSubtraction(context.Background(), true)
 	args := []*Expr{makePlan2Uint64ConstExprWithType(0), {Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}}
 	expr, err := BindFuncExprImplByPlanExpr(ctx, "-", args)
 	require.NoError(t, err)
@@ -99,6 +110,22 @@ func TestPreparedIntegerPeerRetainsOriginalDomain(t *testing.T) {
 		require.Equal(t, direct.Typ.Id, rebound.Typ.Id, "explicit cast: %v", explicit)
 		require.Equal(t, direct.GetF().Func.Obj, rebound.GetF().Func.Obj)
 	}
+}
+
+func TestPreparedIntegerRestoreKeepsNonDefaultBitCastBoundary(t *testing.T) {
+	ctx := context.Background()
+	peer := &Expr{Typ: planpb.Type{Id: int32(types.T_bit), Width: 64},
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+	comparisonCast, err := appendComparisonCastBeforeExpr(
+		ctx, peer, planpb.Type{Id: int32(types.T_uint64), Width: 64, Scale: -1})
+	require.NoError(t, err)
+	args := []*Expr{comparisonCast}
+
+	restorePreparedIntegerArithmeticOperands("+", args)
+
+	require.Same(t, comparisonCast, args[0])
+	require.Equal(t, int32(types.T_uint64), args[0].Typ.Id)
+	require.Equal(t, comparisonCast.GetF().Func.Obj, args[0].GetF().Func.Obj)
 }
 
 func TestPreparedExplicitCastRetainsItsDomain(t *testing.T) {

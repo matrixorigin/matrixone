@@ -218,6 +218,13 @@ func TestWWConflict(t *testing.T) {
 				"insert into "+table+" values (1, 1)",
 			)
 
+			// The transaction context bounds the database operations. Keep a
+			// separate coordination context for the test-only hand-off below so
+			// a missed callback cannot leave the test blocked forever. Create it
+			// after cluster setup so slow setup does not consume the budget.
+			coordCtx, coordCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer coordCancel()
+
 			// workflow:
 			// cn1: txn1 update t
 			// cn1: txn1 lock mo_tables, and found changed in lock op
@@ -229,15 +236,25 @@ func TestWWConflict(t *testing.T) {
 			// cn1: txn1 commit
 			// no ww conflict error
 
-			var wg sync.WaitGroup
-			wg.Add(2)
-
 			txn2StartedC := make(chan struct{})
 			txn2CommittedC := make(chan struct{})
+			txnDoneC := make(chan struct{}, 2)
+			txnErrC := make(chan error, 1)
+			reportTxnErr := func(err error) {
+				if err == nil {
+					return
+				}
+				select {
+				case txnErrC <- err:
+				default:
+				}
+			}
 
 			// txn1 workflow
 			go func() {
-				defer wg.Done()
+				defer func() {
+					txnDoneC <- struct{}{}
+				}()
 
 				var retried atomic.Bool
 				var txn2Triggered atomic.Bool
@@ -268,7 +285,13 @@ func TestWWConflict(t *testing.T) {
 								close(txn2StartedC)
 
 								// wait txn2 update committed
-								<-txn2CommittedC
+								select {
+								case <-txn2CommittedC:
+								case <-ctx.Done():
+									reportTxnErr(fmt.Errorf("txn1 waiting for txn2 commit: %w", ctx.Err()))
+								case <-coordCtx.Done():
+									reportTxnErr(fmt.Errorf("txn1 waiting for txn2 commit: %w", coordCtx.Err()))
+								}
 							},
 						)
 
@@ -313,17 +336,27 @@ func TestWWConflict(t *testing.T) {
 						WithDatabase(db).
 						WithMinCommittedTS(committedAt),
 				)
-				require.NoError(t, err)
+				if err != nil {
+					reportTxnErr(fmt.Errorf("txn1: %w", err))
+				}
 			}()
 
 			// txn2 workflow
 			go func() {
 				defer func() {
 					close(txn2CommittedC)
-					wg.Done()
+					txnDoneC <- struct{}{}
 				}()
 
-				<-txn2StartedC
+				select {
+				case <-txn2StartedC:
+				case <-ctx.Done():
+					reportTxnErr(fmt.Errorf("txn2 waiting for start signal: %w", ctx.Err()))
+					return
+				case <-coordCtx.Done():
+					reportTxnErr(fmt.Errorf("txn2 waiting for start signal: %w", coordCtx.Err()))
+					return
+				}
 				exec := testutils.GetSQLExecutor(cn2)
 
 				res, err := exec.Exec(
@@ -333,11 +366,26 @@ func TestWWConflict(t *testing.T) {
 						WithDatabase(db).
 						WithMinCommittedTS(committedAt),
 				)
-				require.NoError(t, err)
+				if err != nil {
+					reportTxnErr(fmt.Errorf("txn2: %w", err))
+					return
+				}
 				res.Close()
 			}()
 
-			wg.Wait()
+			for i := 0; i < 2; i++ {
+				select {
+				case <-txnDoneC:
+				case <-coordCtx.Done():
+					t.Fatalf("WW conflict coordination timed out: %v", coordCtx.Err())
+				}
+			}
+
+			select {
+			case err := <-txnErrC:
+				require.NoError(t, err)
+			default:
+			}
 		},
 	)
 }

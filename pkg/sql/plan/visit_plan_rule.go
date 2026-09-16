@@ -1316,11 +1316,24 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExpr(
 		if name == "cast" && isImplicitPreparedParamCast(expr) {
 			return copy.GetF().Args[0], true, nil
 		}
-		restorePreparedIntegerArithmeticOperands(name, copy.GetF().Args)
-		bound, err := BindFuncExprImplByPlanExpr(rule.ctx, name, copy.GetF().Args)
+		bound, err := bindRuntimeUnsignedArithmetic(
+			rule.ctx,
+			name,
+			fn.Args,
+			copy.GetF().Args,
+			rule.runtimePreparedArithmeticTypeForOriginal,
+			expr.GetPreparedNumeric().GetDeferredUnsignedArithmeticBoundary(),
+			expr.GetPreparedNumeric().GetNativeBitArithmeticBoundary(),
+			expr.GetPreparedNumeric().GetStrictUnsignedArithmeticBoundary(),
+		)
+		if err == nil && bound == nil {
+			restorePreparedIntegerArithmeticOperands(name, copy.GetF().Args)
+			bound, err = BindFuncExprImplByPlanExpr(rule.ctx, name, copy.GetF().Args)
+		}
 		if err != nil {
 			return nil, false, err
 		}
+		preserveReboundPreparedArithmeticMetadata(expr, bound)
 		preserveReboundFunctionMetadata(fn, bound.GetF())
 		return bound, true, nil
 	}
@@ -1342,6 +1355,492 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExpr(
 		}
 	}
 	return expr, false, nil
+}
+
+// bindRuntimeUnsignedArithmetic closes PREPARE's bare-marker deferral once
+// EXECUTE has supplied concrete operand domains. Both ordinary replacement and
+// numeric-source reconstruction (for example under ABS) must retain this bound.
+// Subtraction already has its prepare-time SQL-mode result cast; fractional
+// operands remain on the ordinary decimal/float overload path.
+func bindRuntimeUnsignedArithmetic(
+	ctx context.Context,
+	name string,
+	originalArgs, args []*Expr,
+	runtimeTypeForOriginal func(*Expr) (types.Type, bool),
+	forceBoundary bool,
+	nativeBitBoundary bool,
+	strictBoundary bool,
+) (*Expr, error) {
+	if len(args) != 2 || len(originalArgs) != 2 ||
+		(name != "+" && name != "*" && !isModuloArithmeticName(name) && name != "div") ||
+		(!forceBoundary && !nativeBitBoundary && !preparedArithmeticOperandNeedsRuntimeBound(originalArgs[0]) &&
+			!preparedArithmeticOperandNeedsRuntimeBound(originalArgs[1])) {
+		return nil, nil
+	}
+	// The native arithmetic resolver owns BIT plus signed-marker semantics:
+	// that combination is DECIMAL128, not the generic UINT64 runtime boundary.
+	// Stop at explicit non-BIT casts and ordinary function result boundaries so
+	// a nested BIT input cannot leak through a semantically different operand.
+	hasBitValue := nativeBitBoundary
+	for _, original := range originalArgs {
+		if runtimeExprContainsBitValue(original) {
+			hasBitValue = true
+			break
+		}
+	}
+	if hasBitValue {
+		for i, original := range originalArgs {
+			// PREPARE may have wrapped the text transport literal in an implicit
+			// UINT64 cast before the concrete execute-time value was known. Remove
+			// only those implementation casts, recover the exact numeric domain from
+			// the materialized value, and let the native resolver select the BIT
+			// contract. Explicit user casts remain untouched.
+			candidate := args[i]
+			if bitSource := runtimeBitArithmeticSource(candidate); bitSource != nil {
+				// Constant folding can leave the BIT expression only in a
+				// literal's Src provenance. Reuse the materialized source so the
+				// native resolver sees BIT instead of the UINT64 transport envelope.
+				args[i] = bitSource
+				continue
+			}
+			for original.GetF() != nil && original.GetF().Func != nil &&
+				strings.EqualFold(original.GetF().Func.GetObjName(), "cast") &&
+				!isExplicitPreparedCast(original) && candidate.GetF() != nil &&
+				candidate.GetF().Func != nil && strings.EqualFold(candidate.GetF().Func.GetObjName(), "cast") {
+				original = original.GetF().Args[0]
+				candidate = candidate.GetF().Args[0]
+			}
+			if runtimeType, ok := runtimeTypeForOriginal(original); ok {
+				converted, convertErr := appendCastBeforeExpr(ctx, candidate, makePlan2Type(&runtimeType))
+				if convertErr != nil {
+					return nil, convertErr
+				}
+				args[i] = converted
+				continue
+			}
+			if runtimeType, ok := runtimePreparedArithmeticType(candidate); ok {
+				converted, convertErr := appendCastBeforeExpr(ctx, candidate, makePlan2Type(&runtimeType))
+				if convertErr != nil {
+					return nil, convertErr
+				}
+				args[i] = converted
+			} else {
+				// NULL and non-integer numeric values still need the provisional
+				// implicit cast removed. Otherwise the stale UINT64 envelope can
+				// turn BIT + NULL/DECIMAL/FLOAT into the wrong overload before the
+				// native resolver sees the execute-time domain.
+				args[i] = candidate
+			}
+		}
+		return nil, nil
+	}
+	// A normal prepared marker still needs the enclosing function rebound from
+	// its execute-time type, but it does not need the strict checked wrapper.
+	// Top-level unsigned arithmetic still gets a semantic UINT64 result cast;
+	// the cast is applied after the native integer resolver, so an overflow is
+	// reported with the native BIGINT domain rather than with a generic cast
+	// error. Only a nested deferred boundary widens to DECIMAL128 and installs
+	// the strict intermediate check that prevents outer cancellation.
+	if !forceBoundary {
+		return nil, nil
+	}
+	operandUnsigned := [2]bool{}
+	for i, arg := range args {
+		original := originalArgs[i]
+		if _, hasExplicitCast := findPreparedExplicitCast(original); hasExplicitCast {
+			// Numeric fallback binding may leave a provisional DOUBLE envelope
+			// inside an explicit CAST(? AS UNSIGNED).  Rebinding that envelope
+			// first rounds UINT64_MAX to 2^64 on some architectures, so an
+			// enclosing checked operation can no longer observe the true value.
+			// Restore the exact execute-time value under the user cast before
+			// widening arithmetic to DECIMAL128.
+			restored, restoreErr := restorePreparedExplicitCastOperand(ctx, original, arg)
+			if restoreErr != nil {
+				return nil, restoreErr
+			}
+			arg = restored
+			args[i] = arg
+		}
+		// Remove only prepare-time implementation envelopes before selecting the
+		// execute-time native integer overload. Semantic CASTs remain intact.
+		for original.GetF() != nil && original.GetF().Func.GetObjName() == "cast" &&
+			!isExplicitPreparedCast(original) && arg.GetF() != nil && arg.GetF().Func.GetObjName() == "cast" {
+			original = original.GetF().Args[0]
+			arg = arg.GetF().Args[0]
+		}
+		args[i] = arg
+		if !strictBoundary {
+			integer, isUnsigned := runtimePreparedUnsignedIntegerOperand(original, arg)
+			if !integer {
+				return nil, nil
+			}
+			operandUnsigned[i] = isUnsigned
+			continue
+		}
+		// Ignore only prepare-time coercion envelopes, never semantic CASTs.
+		integer, isUnsigned := runtimePreparedUnsignedIntegerOperand(original, arg)
+		if !integer {
+			return nil, nil
+		}
+		operandUnsigned[i] = isUnsigned
+	}
+	unsigned := operandUnsigned[0] || operandUnsigned[1]
+	if isModuloArithmeticName(name) {
+		// MOD keeps the signedness of its dividend. An unsigned divisor
+		// alone must not add a UINT64 boundary to a signed remainder.
+		unsigned = operandUnsigned[0]
+	}
+	if !unsigned {
+		return nil, nil
+	}
+	if !strictBoundary {
+		bound, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+		if err != nil {
+			return nil, err
+		}
+		resultType := types.New(types.T_uint64, 64, -1)
+		if isModuloArithmeticName(name) && !operandUnsigned[0] {
+			resultType = types.New(types.T_int64, 64, -1)
+		}
+		if name == "div" {
+			return appendSyntaxExplicitCastBeforeExpr(ctx, bound, makePlan2Type(&resultType))
+		}
+		return appendCastBeforeExpr(ctx, bound, makePlan2Type(&resultType))
+	}
+	decimalType := types.New(types.T_decimal128, 38, 0)
+	wideArgs := make([]*Expr, 2)
+	for i, arg := range args {
+		var err error
+		wideArgs[i], err = appendCastBeforeExpr(ctx, arg, makePlan2Type(&decimalType))
+		if err != nil {
+			return nil, err
+		}
+	}
+	bound, err := BindFuncExprImplByPlanExpr(ctx, name, wideArgs)
+	if err != nil {
+		return nil, err
+	}
+	// Decimal-to-UINT64 conversion saturates positive values above UINT64_MAX
+	// on some vector paths.  Keep the arithmetic in Decimal128, then pass the
+	// result through a strict runtime helper which checks the range before the
+	// final cast.  Unlike CASE-based sentinels, the helper cannot be skipped or
+	// folded away when the expression is reused by an enclosing operation.
+	checked, err := BindFuncExprImplByPlanExpr(ctx, "__unsigned_arithmetic_bound", []*Expr{bound})
+	if err != nil {
+		return nil, err
+	}
+	// Feed the checked value through the same operator's identity element so
+	// the result cast remains directly attached to the arithmetic node.  The
+	// helper is volatile and therefore must execute even though checked-bound
+	// is algebraically zero for every valid value.
+	guardDelta, err := BindFuncExprImplByPlanExpr(ctx, "-", []*Expr{checked, DeepCopyExpr(bound)})
+	if err != nil {
+		return nil, err
+	}
+	identity := makePlan2Int64ConstExprWithType(1)
+	if name == "+" {
+		identity = makePlan2Int64ConstExprWithType(0)
+	} else if isModuloArithmeticName(name) {
+		decimalMax, castErr := appendCastBeforeExpr(
+			ctx,
+			makePlan2Uint64ConstExprWithType(^uint64(0)),
+			makePlan2Type(&decimalType),
+		)
+		if castErr != nil {
+			return nil, castErr
+		}
+		identity, err = BindFuncExprImplByPlanExpr(ctx, "+", []*Expr{
+			decimalMax,
+			makePlan2Int64ConstExprWithType(1),
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	identity, err = appendCastBeforeExpr(ctx, identity, makePlan2Type(&decimalType))
+	if err != nil {
+		return nil, err
+	}
+	guard, err := BindFuncExprImplByPlanExpr(ctx, "+", []*Expr{identity, guardDelta})
+	if err != nil {
+		return nil, err
+	}
+	// Use the checked value as the primary operand, not only in the neutral
+	// guard.  This makes the strict helper part of the value-producing data
+	// path, so an enclosing expression cannot cancel or otherwise elide the
+	// intermediate range check (notably for ABS-wrapped operands on x86).
+	bound, err = BindFuncExprImplByPlanExpr(ctx, name, []*Expr{checked, guard})
+	if err != nil {
+		return nil, err
+	}
+	resultType := types.T_uint64.ToType()
+	if name == "div" {
+		// DIV is itself an integer result.  The enclosing subtraction's
+		// normalization would otherwise treat the binder-created UINT64 cast as
+		// an ordinary implementation envelope and strip it before resolving the
+		// parent, allowing the checked intermediate to be widened back to
+		// DECIMAL.  Mark this runtime boundary as semantic so the parent keeps
+		// the checked UINT64 result attached to DIV.
+		return appendSyntaxExplicitCastBeforeExpr(ctx, bound, makePlan2Type(&resultType))
+	}
+	return appendCastBeforeExpr(ctx, bound, makePlan2Type(&resultType))
+}
+
+func (rule *ResetParamRefRule) runtimePreparedArithmeticTypeForOriginal(original *Expr) (types.Type, bool) {
+	if pos, ok := preparedParamPosition(original); ok {
+		return rule.runtimeParamType(pos)
+	}
+	return types.Type{}, false
+}
+
+func runtimeExprContainsBitValue(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if types.T(expr.Typ.Id) == types.T_bit {
+		return true
+	}
+	if literal := expr.GetLit(); literal != nil && literal.GetSrc() != nil {
+		if runtimeExprContainsBitValue(literal.GetSrc()) {
+			return true
+		}
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	switch strings.ToLower(fn.Func.GetObjName()) {
+	case "cast":
+		// Rebinding can leave a provisional implicit cast around a BIT
+		// expression (for example CAST(CAST(0 AS BIT) AS UINT64)). Preserve
+		// the source provenance through that implementation cast, but stop at
+		// a user-authored non-BIT cast because it fixes a new numeric domain.
+		// The source BIT node may already have been constant-folded away. The
+		// explicit target is still enough to prove that this is a semantic BIT
+		// boundary, whereas an explicit cast to UNSIGNED deliberately hides it.
+		if len(fn.Args) > 1 && fn.Args[1] != nil &&
+			fn.Args[1].GetT() != nil && types.T(fn.Args[1].Typ.Id) == types.T_bit {
+			return true
+		}
+		if isExplicitPreparedCast(expr) {
+			return false
+		}
+		for _, arg := range fn.Args {
+			if runtimeExprContainsBitValue(arg) {
+				return true
+			}
+		}
+	case "+", "-", "*", "%", "mod", "unary_plus", "unary_minus":
+		for _, arg := range fn.Args {
+			if runtimeExprContainsBitValue(arg) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// runtimeBitArithmeticSource recovers a BIT expression from the execute-time
+// operand. PREPARE may constant-fold a literal BIT cast into a UINT64 literal,
+// retaining the original cast only through Literal.Src; feeding the transport
+// type back to the binder would select the generic unsigned overload and lose
+// the native DECIMAL128 contract.
+func runtimeBitArithmeticSource(expr *Expr) *Expr {
+	if expr == nil {
+		return nil
+	}
+	if types.T(expr.Typ.Id) == types.T_bit {
+		return expr
+	}
+	if literal := expr.GetLit(); literal != nil && literal.GetSrc() != nil {
+		// Literal.Src is provenance, not a semantic cast boundary.  Recover
+		// only a source that represents the same value through a transparent
+		// implementation cast; never descend into a nested arithmetic tree and
+		// replace the whole value with its BIT leaf.
+		if source := runtimeBitArithmeticSource(literal.GetSrc()); source != nil {
+			return source
+		}
+	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil {
+		switch strings.ToLower(fn.Func.GetObjName()) {
+		case "cast":
+			if len(fn.Args) > 1 && fn.Args[1] != nil && fn.Args[1].GetT() != nil &&
+				types.T(fn.Args[1].Typ.Id) == types.T_bit {
+				return expr
+			}
+			if isExplicitPreparedCast(expr) || len(fn.Args) == 0 {
+				return nil
+			}
+			return runtimeBitArithmeticSource(fn.Args[0])
+		}
+	}
+	return nil
+}
+
+func runtimePreparedArithmeticType(expr *Expr) (types.Type, bool) {
+	if expr == nil {
+		return types.Type{}, false
+	}
+	// The execute-time literal representation is more authoritative than the
+	// provisional Expr.Typ envelope left by PREPARE. In particular, a FLOAT
+	// marker is materialized as Dval/Fval even when the prepare-time resolver
+	// wrapped the marker in DECIMAL128; preserving that protocol domain prevents
+	// a stale exact-numeric envelope from changing BIT + FLOAT overloads.
+	if literal := expr.GetLit(); literal != nil {
+		switch literal.Value.(type) {
+		case *plan.Literal_Dval:
+			return types.T_float64.ToType(), true
+		case *plan.Literal_Fval:
+			return types.T_float32.ToType(), true
+		}
+	}
+	if typ := makeTypeByPlan2Expr(expr); typ.IsNumeric() {
+		return typ, true
+	}
+	if literal := expr.GetLit(); literal != nil && literal.GetSval() != "" {
+		typ, ok := PreparedRuntimeTypeFromString(literal.GetSval())
+		if ok && typ.IsNumeric() {
+			return typ, true
+		}
+	}
+	return types.Type{}, false
+}
+
+// restorePreparedExplicitCastOperand removes only binder-inserted numeric
+// envelopes below a user-written prepared CAST. The outer semantic cast is
+// rebuilt with its original target, preserving exact integer protocol values
+// instead of routing them through a provisional DOUBLE representation.
+func restorePreparedExplicitCastOperand(ctx context.Context, original, expr *plan.Expr) (*plan.Expr, error) {
+	explicit, ok := findPreparedExplicitCast(original)
+	if explicit == nil || expr == nil || !ok {
+		return expr, nil
+	}
+	expr = stripPreparedRuntimeNumericEnvelopes(expr)
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 {
+		return expr, nil
+	}
+	child := stripPreparedRuntimeNumericEnvelopes(fn.Args[0])
+	return appendExplicitCastBeforeExpr(ctx, child, explicit.Typ)
+}
+
+func findPreparedExplicitCast(expr *plan.Expr) (*plan.Expr, bool) {
+	for expr != nil {
+		if isExplicitPreparedCast(expr) {
+			return expr, true
+		}
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 {
+			return nil, false
+		}
+		expr = fn.Args[0]
+	}
+	return nil, false
+}
+
+func stripPreparedRuntimeNumericEnvelopes(expr *plan.Expr) *plan.Expr {
+	if expr == nil {
+		return nil
+	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil && fn.Func.GetObjName() == "cast" &&
+		len(fn.Args) == 1 && !isExplicitPreparedCast(expr) {
+		return stripPreparedRuntimeNumericEnvelopes(fn.Args[0])
+	}
+	if fn := expr.GetF(); fn != nil {
+		copy := DeepCopyExpr(expr)
+		for i, arg := range fn.Args {
+			copy.GetF().Args[i] = stripPreparedRuntimeNumericEnvelopes(arg)
+		}
+		return copy
+	}
+	return expr
+}
+
+func preparedArithmeticOperandNeedsRuntimeBound(expr *plan.Expr) bool {
+	if preparedArithmeticOperandHasUnresolvedMarker(expr) {
+		return true
+	}
+	return !isExplicitPreparedCast(expr) && preparedExprContainsParam(expr)
+}
+
+// runtimePreparedUnsignedIntegerOperand recognizes a result-selecting wrapper
+// whose DECIMAL type was introduced while an unresolved marker still had its
+// provisional prepare-time domain. It deliberately accepts only exact integer
+// leaves. A genuine DECIMAL (for example 0.5), FLOAT, or explicit DECIMAL CAST
+// remains on the ordinary fractional arithmetic path.
+func runtimePreparedUnsignedIntegerOperand(original, expr *plan.Expr) (integer, unsigned bool) {
+	if expr == nil {
+		return false, false
+	}
+	oid := types.T(expr.Typ.Id)
+	if integerSubtractionOperand(oid) {
+		return true, unsignedIntegerSubtractionOperand(oid) || oid == types.T_year
+	}
+	if literal := expr.GetLit(); literal != nil {
+		return oid.IsDecimal() && expr.Typ.Scale == 0, false
+	}
+	if !preparedExprContainsParam(original) {
+		return false, false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false, false
+	}
+	name := strings.ToLower(fn.Func.GetObjName())
+	if name == "cast" {
+		if isExplicitPreparedCast(original) && !original.GetPreparedNumeric().GetProvisionalResultCast() {
+			return false, false
+		}
+		if len(fn.Args) == 0 {
+			return false, false
+		}
+		// Rebinding may add a provisional DECIMAL cast around a result-selecting
+		// wrapper (for example ABS(?)) even though the prepare-time source was
+		// not itself a cast.  Only advance the source AST when the original
+		// expression is the matching cast; otherwise retain it so the wrapper's
+		// runtime marker remains visible.  Dropping ABS here made
+		// CAST(? AS UNSIGNED) + ABS(?) lose its UINT64 boundary at EXECUTE.
+		if originalFn := original.GetF(); originalFn != nil && originalFn.Func != nil &&
+			strings.EqualFold(originalFn.Func.GetObjName(), "cast") && len(originalFn.Args) > 0 {
+			return runtimePreparedUnsignedIntegerOperand(originalFn.Args[0], fn.Args[0])
+		}
+		return runtimePreparedUnsignedIntegerOperand(original, fn.Args[0])
+	}
+	if name == "abs" || name == "unary_plus" || name == "unary_minus" {
+		if len(fn.Args) != 1 || original.GetF() == nil || len(original.GetF().Args) != 1 {
+			return false, false
+		}
+		return runtimePreparedUnsignedIntegerOperand(original.GetF().Args[0], fn.Args[0])
+	}
+	if !preparedExactIntegerResultSelector(name) {
+		return false, false
+	}
+	seenValue := false
+	for i, arg := range fn.Args {
+		if !preparedSQLExecuteNumericResultValueArg(name, i, len(fn.Args)) {
+			continue
+		}
+		originalArg := original
+		if originalFn := original.GetF(); originalFn != nil && i < len(originalFn.Args) {
+			originalArg = originalFn.Args[i]
+		}
+		argInteger, argUnsigned := runtimePreparedUnsignedIntegerOperand(originalArg, arg)
+		if !argInteger {
+			return false, false
+		}
+		seenValue = true
+		unsigned = unsigned || argUnsigned
+	}
+	return seenValue, unsigned
+}
+
+func preparedExactIntegerResultSelector(name string) bool {
+	switch canonicalPreparedResultFunctionName(name) {
+	case "case", "if", "coalesce", "ifnull", "nullif", "greatest", "least":
+		return true
+	default:
+		return false
+	}
 }
 
 // A user CAST fixes the target domain and conversion semantics. Revalidate its
@@ -1409,7 +1908,17 @@ func restorePreparedIntegerArithmeticOperands(name string, args []*Expr) {
 			}
 			_, overload := planfunction.DecodeOverloadID(fn.Func.Obj)
 			source := types.T(fn.Args[0].Typ.Id)
-			if overload != 0 || (!source.IsInteger() && source != types.T_bit) {
+			// BIT is a native arithmetic domain, not an unsigned integer
+			// implementation envelope. Only the default overload (or the
+			// dedicated aggregate conversion) is an implicit implementation cast;
+			// comparison/set-operation overloads remain semantic boundaries even
+			// when a legacy plan omitted SyntaxExplicitCast.
+			if source == types.T_bit && (overload == 0 || isBitwiseAggregatePrivateCast(arg)) {
+				arg = fn.Args[0]
+				args[i] = arg
+				continue
+			}
+			if overload != 0 || !source.IsInteger() {
 				break
 			}
 			arg = fn.Args[0]
@@ -1485,6 +1994,7 @@ func (rule *ResetParamRefRule) refreshPreparedNumericSource(expr *plan.Expr) (*E
 		if err != nil {
 			return nil, false, err
 		}
+		preserveReboundPreparedArithmeticMetadata(expr, bound)
 		preserveReboundFunctionMetadata(fn, bound.GetF())
 		return bound, true, nil
 	}
@@ -1936,8 +2446,14 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		// Type equality alone cannot prove that all current sibling domains are
 		// compatible.
 		regexpDomainsDeferred := preparedRegexpStringDomainCheckModes(functionName, originalArgs) != nil
-		needResetFunction := regexpDomainsDeferred
-		compareArgTypes := regexpDomainsDeferred
+		runtimeUnsignedBoundaryDeferred := (functionName == "+" || functionName == "*" ||
+			functionName == "%" || functionName == "div") &&
+			(e.GetPreparedNumeric().GetDeferredUnsignedArithmeticBoundary() ||
+				e.GetPreparedNumeric().GetNativeBitArithmeticBoundary() ||
+				(len(originalArgs) == 2 && (preparedArithmeticOperandNeedsRuntimeBound(originalArgs[0]) ||
+					preparedArithmeticOperandNeedsRuntimeBound(originalArgs[1]))))
+		needResetFunction := regexpDomainsDeferred || runtimeUnsignedBoundaryDeferred
+		compareArgTypes := regexpDomainsDeferred || runtimeUnsignedBoundaryDeferred
 		geometrySRIDParamPos := -1
 		if isPreparedGeometrySRIDFunction(functionName) && len(originalArgs) >= 2 {
 			positions := preparedGeometrySRIDParamPositionsInExpr(originalArgs[len(originalArgs)-1])
@@ -2394,6 +2910,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					if bindErr != nil {
 						return nil, bindErr
 					}
+					preserveReboundPreparedArithmeticMetadata(e, rewritten)
 					preserveReboundFunctionMetadata(exprImpl.F, rewritten.GetF())
 					rule.specialized = true
 					return rewritten, nil
@@ -2412,6 +2929,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					if bindErr != nil {
 						return nil, bindErr
 					}
+					preserveReboundPreparedArithmeticMetadata(e, rewritten)
 					preserveReboundFunctionMetadata(exprImpl.F, rewritten.GetF())
 					rule.specialized = true
 					return rewritten, nil
@@ -2430,6 +2948,22 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 
 		// reset function
 		if needResetFunction {
+			if bounded, bindErr := bindRuntimeUnsignedArithmetic(
+				rule.ctx,
+				functionName,
+				originalArgs,
+				boundArgs,
+				rule.runtimePreparedArithmeticTypeForOriginal,
+				e.GetPreparedNumeric().GetDeferredUnsignedArithmeticBoundary(),
+				e.GetPreparedNumeric().GetNativeBitArithmeticBoundary(),
+				e.GetPreparedNumeric().GetStrictUnsignedArithmeticBoundary(),
+			); bindErr != nil {
+				return nil, bindErr
+			} else if bounded != nil {
+				preserveReboundPreparedArithmeticMetadata(e, bounded)
+				rule.specialized = true
+				return bounded, nil
+			}
 			restorePreparedIntegerArithmeticOperands(functionName, boundArgs)
 			stringDomainModes, resolveErr := rule.resolvePreparedRegexpStringDomainCheckModes(
 				functionName, boundArgs, originalArgs)
@@ -2452,6 +2986,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			if err != nil {
 				return nil, err
 			}
+			preserveReboundPreparedArithmeticMetadata(e, rewritten)
 			preserveReboundFunctionMetadata(exprImpl.F, rewritten.GetF())
 			if functionBindingChanged(originalTyp, originalFuncObj, originalArgTypes, rewritten, compareArgTypes) {
 				rule.specialized = true
@@ -3617,6 +4152,28 @@ func preparedExprBindingChanged(originalTyp plan.Type, originalFuncObj int64, re
 		return true
 	}
 	return preparedExprFunctionObj(rewritten) != originalFuncObj
+}
+
+// Rebinding creates a fresh operator expression, so sparse arithmetic
+// provenance must be copied explicitly. Function metadata alone cannot carry
+// the deferred boundary through plan copies or RPC round trips.
+func preserveReboundPreparedArithmeticMetadata(original, rebound *plan.Expr) {
+	if original == nil || rebound == nil {
+		return
+	}
+	originalMetadata := original.GetPreparedNumeric()
+	if !originalMetadata.GetDeferredUnsignedArithmeticBoundary() &&
+		!originalMetadata.GetNativeBitArithmeticBoundary() &&
+		!originalMetadata.GetStrictUnsignedArithmeticBoundary() {
+		return
+	}
+	metadata := ensurePreparedNumericMetadata(rebound)
+	metadata.DeferredUnsignedArithmeticBoundary = metadata.GetDeferredUnsignedArithmeticBoundary() ||
+		originalMetadata.GetDeferredUnsignedArithmeticBoundary()
+	metadata.NativeBitArithmeticBoundary = metadata.GetNativeBitArithmeticBoundary() ||
+		originalMetadata.GetNativeBitArithmeticBoundary()
+	metadata.StrictUnsignedArithmeticBoundary = metadata.GetStrictUnsignedArithmeticBoundary() ||
+		originalMetadata.GetStrictUnsignedArithmeticBoundary()
 }
 
 func preserveReboundFunctionMetadata(original, rebound *plan.Function) {

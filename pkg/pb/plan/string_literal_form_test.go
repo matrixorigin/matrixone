@@ -308,6 +308,27 @@ func TestRequiresMORPCVersion36JSONComparisonParam(t *testing.T) {
 	require.False(t, features.Any())
 }
 
+func TestRequiresMORPCVersion76PreparedUnsignedArithmeticBound(t *testing.T) {
+	helper := &Expr{Typ: Type{Id: 23}, Expr: &Expr_F{F: &Function{
+		Func: &ObjectRef{Obj: int64(internalUnsignedArithmeticBoundFunctionID) << 32},
+	}}}
+	features, err := RequiredRemoteExpressionFeatures(helper)
+	require.NoError(t, err)
+	require.True(t, features.PreparedUnsignedArithmeticBound)
+	require.True(t, features.Any())
+	require.True(t, func() bool {
+		required, helperErr := RequiresMORPCVersion76PreparedUnsignedArithmeticBound(helper)
+		return helperErr == nil && required
+	}())
+
+	ordinary := &Expr{Typ: Type{Id: 23}, Expr: &Expr_F{F: &Function{
+		Func: &ObjectRef{Obj: int64(10) << 32},
+	}}}
+	features, err = RequiredRemoteExpressionFeatures(ordinary)
+	require.NoError(t, err)
+	require.False(t, features.PreparedUnsignedArithmeticBound)
+}
+
 func TestRequiresMORPCVersion36MixedJSONBooleanEquality(t *testing.T) {
 	operand := func(typeID int32, position int32) *Expr {
 		return &Expr{

@@ -479,6 +479,7 @@ func AlterColumn(
 				}()
 				defaultValue, err := buildDefaultExprWithColumns(
 					tmpColumnDef, colDef.Typ, ctx.GetProcess(), tableDef.Cols,
+					noUnsignedSubtractionMode(ctx),
 				)
 				if err != nil {
 					return false, err

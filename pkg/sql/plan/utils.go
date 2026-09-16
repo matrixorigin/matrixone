@@ -1195,17 +1195,20 @@ func copyPreparedNumericMetadata(metadata *plan.PreparedNumericMetadata) *plan.P
 		return nil
 	}
 	return &plan.PreparedNumericMetadata{
-		Fallback:                    metadata.Fallback,
-		ParamPos:                    metadata.ParamPos,
-		FallbackSource:              metadata.FallbackSource,
-		FallbackSourceNodeId:        metadata.FallbackSourceNodeId,
-		FallbackSourceColPos:        metadata.FallbackSourceColPos,
-		ProvisionalResultCast:       metadata.ProvisionalResultCast,
-		ProvisionalResultPeer:       metadata.ProvisionalResultPeer,
-		ProvisionalResultPeerTypeId: metadata.ProvisionalResultPeerTypeId,
-		ProvisionalResultPeerWidth:  metadata.ProvisionalResultPeerWidth,
-		ProvisionalResultPeerScale:  metadata.ProvisionalResultPeerScale,
-		StringDomainSource:          DeepCopyExpr(metadata.StringDomainSource),
+		Fallback:                           metadata.Fallback,
+		ParamPos:                           metadata.ParamPos,
+		FallbackSource:                     metadata.FallbackSource,
+		FallbackSourceNodeId:               metadata.FallbackSourceNodeId,
+		FallbackSourceColPos:               metadata.FallbackSourceColPos,
+		ProvisionalResultCast:              metadata.ProvisionalResultCast,
+		ProvisionalResultPeer:              metadata.ProvisionalResultPeer,
+		ProvisionalResultPeerTypeId:        metadata.ProvisionalResultPeerTypeId,
+		ProvisionalResultPeerWidth:         metadata.ProvisionalResultPeerWidth,
+		ProvisionalResultPeerScale:         metadata.ProvisionalResultPeerScale,
+		StringDomainSource:                 DeepCopyExpr(metadata.StringDomainSource),
+		DeferredUnsignedArithmeticBoundary: metadata.DeferredUnsignedArithmeticBoundary,
+		NativeBitArithmeticBoundary:        metadata.NativeBitArithmeticBoundary,
+		StrictUnsignedArithmeticBoundary:   metadata.StrictUnsignedArithmeticBoundary,
 	}
 }
 

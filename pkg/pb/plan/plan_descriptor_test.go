@@ -82,6 +82,45 @@ func TestPlanDescriptorContainsAsofFields(t *testing.T) {
 	t.Fatal("plan descriptor missing Node.asof_right_col = 86")
 }
 
+func TestPlanDescriptorContainsPreparedArithmeticBoundaryFields(t *testing.T) {
+	file := decodePlanDescriptor(t, proto.FileDescriptor("plan.proto"))
+	for _, message := range file.GetMessageType() {
+		if message.GetName() != "PreparedNumericMetadata" {
+			continue
+		}
+		want := map[string]struct {
+			number   int32
+			jsonName string
+		}{
+			"deferred_unsigned_arithmetic_boundary": {
+				number: 12, jsonName: "deferredUnsignedArithmeticBoundary",
+			},
+			"native_bit_arithmetic_boundary": {
+				number: 13, jsonName: "nativeBitArithmeticBoundary",
+			},
+			"strict_unsigned_arithmetic_boundary": {
+				number: 14, jsonName: "strictUnsignedArithmeticBoundary",
+			},
+		}
+		for _, field := range message.GetField() {
+			if expected, ok := want[field.GetName()]; ok {
+				if expected.number != field.GetNumber() ||
+					expected.jsonName != field.GetJsonName() ||
+					field.GetType() != descriptor.FieldDescriptorProto_TYPE_BOOL ||
+					field.GetLabel() != descriptor.FieldDescriptorProto_LABEL_OPTIONAL {
+					t.Fatalf("prepared arithmetic field %s has unexpected descriptor: %v", field.GetName(), field)
+				}
+				delete(want, field.GetName())
+			}
+		}
+		if len(want) == 0 {
+			return
+		}
+		t.Fatalf("plan descriptor missing prepared arithmetic fields: %v", want)
+	}
+	t.Fatal("plan descriptor missing PreparedNumericMetadata")
+}
+
 func TestGeneratedPlanDescriptorContainsAsofContract(t *testing.T) {
 	b, _ := (&Node{}).Descriptor()
 	file := decodePlanDescriptor(t, b)

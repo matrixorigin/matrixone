@@ -27,6 +27,7 @@ const SQLModeMatrixOneNative = "MATRIXONE_NATIVE"
 const SQLModeEnableBoolSumAvg = "ENABLE_BOOL_SUMAVG"
 
 const sqlModeIgnoreSpace = "IGNORE_SPACE"
+const SQLModeNoUnsignedSubtraction = "NO_UNSIGNED_SUBTRACTION"
 
 const (
 	sqlModeANSIQuotes         = "ANSI_QUOTES"
