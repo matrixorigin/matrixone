@@ -146,6 +146,11 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 			return nil, err
 		}
 	}
+	if features.StringNumericResultContracts {
+		if err = validateStringNumericResultDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
 	if err = validateStrictWriteDestination(proc, p); err != nil {
 		return nil, err
 	}
@@ -1944,6 +1949,21 @@ func validateRemoteAggregateProtocol(
 				)
 			}
 		}
+		if agg.GetAggID() == aggexec.AggIdOfApproxPercentile &&
+			(proc == nil || !supportsRemoteApproxPercentile(proc.GetService())) {
+			return moerr.NewNotSupportedNoCtx(
+				"approx_percentile remote execution requires MORPC protocol version 76",
+			)
+		}
+		if (agg.GetAggID() == aggexec.AggIdOfApproxCount ||
+			agg.GetAggID() == aggexec.AggIdOfApproxCountDistinct ||
+			agg.GetAggID() == aggexec.AggIdOfHllAdd ||
+			agg.GetAggID() == aggexec.AggIdOfHllMerge) &&
+			(proc == nil || !supportsRemoteHLL(proc.GetService())) {
+			return moerr.NewNotSupportedNoCtx(
+				"HLL remote execution requires MORPC protocol version 77",
+			)
+		}
 		if agg.GetConfigType() == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
 			if proc == nil || !supportsRemoteOrderedAggregates(proc.GetService()) {
 				return moerr.NewNotSupportedNoCtx(
@@ -2101,8 +2121,8 @@ func validateRemoteExpressionPipelineProtocol(
 	if proc != nil {
 		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
 	}
-	if features.IntegerParameterCoercion && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion76) {
-		return moerr.NewNotSupportedNoCtx("integer parameter coercion requires MORPC protocol version 76")
+	if features.IntegerParameterCoercion && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion81) {
+		return moerr.NewNotSupportedNoCtx("integer parameter coercion requires MORPC protocol version 81")
 	}
 	if features.NumericPrefix &&
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion30) {
@@ -2144,6 +2164,12 @@ func validateRemoteExpressionPipelineProtocol(
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion65) {
 		return moerr.NewNotSupportedNoCtx(
 			"signed INT ASCII results require MORPC protocol version 65",
+		)
+	}
+	if features.StringNumericResultContracts &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion80) {
+		return moerr.NewNotSupportedNoCtx(
+			"corrected string numeric result contracts require MORPC protocol version 80",
 		)
 	}
 	if features.IPFunctionSemantics &&

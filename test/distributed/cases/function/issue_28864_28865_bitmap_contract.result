@@ -1,0 +1,15 @@
+drop table if exists issue_28864_bitmap_position;
+create table issue_28864_bitmap_position(v bigint unsigned);
+insert into issue_28864_bitmap_position values (0), (1), (32767);
+select bitmap_count(bitmap_construct_agg(v)) as valid_positions
+from issue_28864_bitmap_position;
+➤ valid_positions[-5,64,0]  𝄀
+3
+truncate table issue_28864_bitmap_position;
+insert into issue_28864_bitmap_position values (32768);
+select bitmap_count(bitmap_construct_agg(v)) as rejected_position
+from issue_28864_bitmap_position;
+invalid input: bitmap_construct_agg: bit position 32768 is out of range [0, 32767]
+select bitmap_count(cast('not-a-bitmap' as varbinary)) as malformed_bitmap;
+invalid input: invalid bitmap: error in roaringArray.readFrom: did not find expected serialCookie in header
+drop table issue_28864_bitmap_position;

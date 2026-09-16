@@ -367,6 +367,10 @@ type ViewData struct {
 	SecurityType        string           `json:"security_type,omitempty"`
 	LowerCaseTableNames *int64           `json:"lower_case_table_names,omitempty"`
 	Dependencies        []ViewDependency `json:"dependencies,omitempty"`
+	// RequiredProtocolVersion records the minimum protocol needed to bind the
+	// persisted view expression on a local CN. It is a defense-in-depth marker;
+	// cluster admission remains the authoritative old-CN re-entry fence.
+	RequiredProtocolVersion *int64 `json:"required_protocol_version,omitempty"`
 }
 
 type QueryBuilder struct {

@@ -1182,7 +1182,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint64.ToType()
+					return types.T_int32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return FindInSet
@@ -1196,7 +1196,7 @@ var supportedStringBuiltIns = []FuncNew{
 				// public FIND_IN_SET SQL arity.
 				args: []types.T{types.T_varchar, types.T_uint64, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint64.ToType()
+					return types.T_int32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return FindInSet
@@ -3034,7 +3034,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint64.ToType()
+					return types.T_int64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return LengthUTF8
@@ -3044,7 +3044,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint64.ToType()
+					return types.T_int64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return LengthUTF8
@@ -3054,7 +3054,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint64.ToType()
+					return types.T_int64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return LengthUTF8
@@ -3064,7 +3064,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 3,
 				args:       []types.T{types.T_binary},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint64.ToType()
+					return types.T_int64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return LengthBinary
@@ -3074,7 +3074,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 4,
 				args:       []types.T{types.T_varbinary},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint64.ToType()
+					return types.T_int64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return LengthBinary
@@ -3084,7 +3084,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 5,
 				args:       []types.T{types.T_blob},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint64.ToType()
+					return types.T_int64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return LengthBinary
@@ -4227,7 +4227,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_blob},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_int32.ToType()
+					return types.T_int64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return UncompressedLength
@@ -4237,7 +4237,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_int32.ToType()
+					return types.T_int64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return UncompressedLength
@@ -4247,7 +4247,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_char},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_int32.ToType()
+					return types.T_int64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return UncompressedLength
@@ -4257,7 +4257,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 3,
 				args:       []types.T{types.T_text},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_int32.ToType()
+					return types.T_int64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return UncompressedLength
@@ -4360,7 +4360,7 @@ var supportedStringBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar, types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_int8.ToType()
+					return types.T_int32.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return StrCmp
@@ -8619,7 +8619,7 @@ var supportedMathBuiltIns = []FuncNew{
 				overloadId: 0,
 				args:       []types.T{types.T_varchar},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_uint32.ToType()
+					return types.T_uint64.ToType()
 				},
 				newOp: func() executeLogicOfOverload {
 					return newCrc32ExecContext().builtInCrc32

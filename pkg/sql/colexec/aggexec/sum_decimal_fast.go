@@ -367,8 +367,8 @@ func (exec *sumDecimal64FastExec) Flush() (_ []*vector.Vector, retErr error) {
 					continue
 				}
 				var sum types.Decimal128
-				err := exec.state[i].iter(uint16(j), func(k []byte) error {
-					ptr := util.UnsafeFromBytes[types.Decimal64](k[kAggArgPrefixSz:])
+				err := exec.state[i].iterWithValue(uint16(j), func(k, stored []byte) error {
+					ptr := util.UnsafeFromBytes[types.Decimal64](aggPayloadFromKeyValue(&exec.aggInfo, k, stored))
 					raw := *ptr
 					hi := uint64(int64(raw) >> 63)
 					val := types.Decimal128{B0_63: uint64(raw), B64_127: hi}
@@ -773,8 +773,8 @@ func (exec *sumDecimal128FastExec) Flush() (_ []*vector.Vector, retErr error) {
 					continue
 				}
 				var sum types.Decimal128
-				err := exec.state[i].iter(uint16(j), func(k []byte) error {
-					ptr := util.UnsafeFromBytes[types.Decimal128](k[kAggArgPrefixSz:])
+				err := exec.state[i].iterWithValue(uint16(j), func(k, stored []byte) error {
+					ptr := util.UnsafeFromBytes[types.Decimal128](aggPayloadFromKeyValue(&exec.aggInfo, k, stored))
 					if exec.overflowCheck {
 						var addErr error
 						sum, addErr = sum.Add128(*ptr)

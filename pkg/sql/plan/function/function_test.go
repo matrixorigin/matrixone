@@ -444,28 +444,28 @@ func Test_GetFunctionByName(t *testing.T) {
 			shouldErr:  false,
 			requireFid: LENGTH_UTF8, requireOid: 3,
 			shouldCast: false,
-			requireRet: types.T_uint64.ToType(),
+			requireRet: types.T_int64.ToType(),
 		},
 		{
 			name: "char_length", args: []types.Type{types.T_varbinary.ToType()},
 			shouldErr:  false,
 			requireFid: LENGTH_UTF8, requireOid: 4,
 			shouldCast: false,
-			requireRet: types.T_uint64.ToType(),
+			requireRet: types.T_int64.ToType(),
 		},
 		{
 			name: "char_length", args: []types.Type{types.T_blob.ToType()},
 			shouldErr:  false,
 			requireFid: LENGTH_UTF8, requireOid: 5,
 			shouldCast: false,
-			requireRet: types.T_uint64.ToType(),
+			requireRet: types.T_int64.ToType(),
 		},
 		{
 			name: "character_length", args: []types.Type{types.T_varbinary.ToType()},
 			shouldErr:  false,
 			requireFid: LENGTH_UTF8, requireOid: 4,
 			shouldCast: false,
-			requireRet: types.T_uint64.ToType(),
+			requireRet: types.T_int64.ToType(),
 		},
 
 		{

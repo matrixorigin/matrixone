@@ -16,6 +16,7 @@ package aggexec
 
 import (
 	"bytes"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -1035,6 +1036,58 @@ func TestSum(t *testing.T) {
 
 func TestSumDistinct(t *testing.T) {
 	testSumAvg(t, makeSumDistinctExec, newExpectedSumAvg(66, 36, 30, 222000))
+}
+
+func TestSumDistinctUsesRepresentativePayloadAcrossExecutionShapes(t *testing.T) {
+	typ := types.New(types.T_float32, 10, 2)
+	values := []float32{1.2300001, 1.23}
+	for _, chunkSize := range []int{1, AggBatchSize} {
+		t.Run(fmt.Sprintf("chunk-%d", chunkSize), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			input := buildAvgFixedVector(t, mp, typ, values)
+			defer input.Free(mp)
+
+			exec := makeSumDistinctExec(t, mp, typ)
+			defer exec.Free()
+			SyncAggregatorsToChunkSize([]AggFuncExec{exec}, chunkSize)
+			require.NoError(t, exec.GroupGrow(1))
+			require.NoError(t, exec.BatchFill(0, []uint64{1, 1}, []*vector.Vector{input}))
+			result, err := exec.Flush()
+			require.NoError(t, err)
+			defer result[0].Free(mp)
+			require.Equal(t, uint32(1), exec.(*sumAvgExec[float64, float32]).state[0].argCnt[0])
+			require.Equal(t, float64(values[0]), vector.MustFixedColNoTypeCheck[float64](result[0])[0])
+		})
+	}
+}
+
+func TestSumDistinctScaledFloat32PreservesRepresentativeAcrossIntermediateRoundTrip(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	typ := types.New(types.T_float32, 10, 2)
+	values := []float32{1.2300001, 1.23}
+	input := buildAvgFixedVector(t, mp, typ, values)
+	defer input.Free(mp)
+
+	source := makeSumDistinctExec(t, mp, typ)
+	require.NoError(t, source.GroupGrow(1))
+	require.NoError(t, source.BatchFill(0, []uint64{1, 1}, []*vector.Vector{input}))
+	SetCanonicalDistinctKeyWire(source, false)
+	var encoded bytes.Buffer
+	require.NoError(t, source.SaveIntermediateResultOfChunk(0, &encoded))
+	source.Free()
+
+	restored := makeSumDistinctExec(t, mp, typ)
+	defer restored.Free()
+	SetCanonicalDistinctKeyWire(restored, false)
+	require.NoError(t, restored.UnmarshalFromReader(
+		bytes.NewReader(encoded.Bytes()), mp))
+	result, err := restored.Flush()
+	require.NoError(t, err)
+	require.Equal(t, float64(values[0]),
+		vector.MustFixedColNoTypeCheck[float64](result[0])[0])
+	result[0].Free(mp)
 }
 
 func TestAvg(t *testing.T) {

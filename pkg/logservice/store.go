@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/bootstrap"
@@ -966,12 +967,35 @@ func (l *store) getViewMetadataAdmissionState(
 	return v.(hakeeper.ViewMetadataAdmissionState), nil
 }
 
-func (l *store) viewMetadataAdmissionLogStoresReady(state *pb.CheckerState) bool {
-	cfg := l.cfg.GetHAKeeperConfig()
-	cfg.Fill()
-	for _, info := range state.LogState.Stores {
-		if !cfg.LogStoreExpired(info.Tick, state.Tick) &&
-			!info.ViewMetadataAdmissionSupported {
+func (l *store) viewMetadataAdmissionLogStoresReadyWithProtocol(
+	state *pb.CheckerState,
+	requireProtocolV3 bool,
+) bool {
+	if state == nil {
+		return false
+	}
+	shard, ok := state.LogState.Shards[hakeeper.DefaultHAKeeperShardID]
+	if !ok || len(shard.Replicas) == 0 {
+		return false
+	}
+	check := func(uuid string) bool {
+		info, ok := state.LogState.Stores[uuid]
+		if !ok || !info.ViewMetadataAdmissionSupported {
+			return false
+		}
+		return !requireProtocolV3 || info.ViewMetadataAdmissionProtocolV3Supported
+	}
+	// A Store record can outlive membership, but every current voting and
+	// non-voting HAKeeper member is still a Raft recipient. Heartbeat expiry is
+	// therefore not a capability exemption: an old member must advertise V3
+	// before a protocol-bearing entry can be proposed.
+	for _, uuid := range shard.Replicas {
+		if !check(uuid) {
+			return false
+		}
+	}
+	for _, uuid := range shard.NonVotingReplicas {
+		if !check(uuid) {
 			return false
 		}
 	}
@@ -986,7 +1010,16 @@ func (l *store) tryEnableViewMetadataAdmission(
 	if err != nil {
 		return false, err
 	}
-	if admission.Enabled && !admission.Pending {
+	// A downgraded LogStore must not continue driving admission after the
+	// cluster has committed a floor it cannot understand. Treat the state as
+	// not ready and leave the durable barrier untouched until a compatible
+	// binary takes over.
+	if admission.RequiredProtocolVersion > uint64(defines.MORPCLatestVersion) {
+		return false, nil
+	}
+	if admission.Enabled && !admission.Pending &&
+		!admission.PersistedExpressionProtocolActivationPending &&
+		admission.RequiredProtocolVersion >= uint64(defines.MORPCLatestVersion) {
 		return true, nil
 	}
 	if state == nil {
@@ -1020,16 +1053,22 @@ func (l *store) tryEnableViewMetadataAdmission(
 	}
 	if !admission.Preparing && !admission.Enabled {
 		if !admission.HAKeeperAdmissionReady ||
-			!l.viewMetadataAdmissionLogStoresReady(state) {
+			!l.viewMetadataAdmissionLogStoresReadyWithProtocol(state, true) {
 			return false, nil
 		}
 		cfg := l.cfg.GetHAKeeperConfig()
 		cfg.Fill()
+		requiredProtocol := admission.RequiredProtocolVersion
+		if requiredProtocol < uint64(defines.MORPCLatestVersion) {
+			requiredProtocol = uint64(defines.MORPCLatestVersion)
+		}
 		hasLiveCN := false
 		for _, info := range state.CNState.Stores {
 			if !cfg.CNStoreExpired(info.Tick, state.Tick) {
 				hasLiveCN = true
-				break
+				if info.PersistedExpressionProtocolVersion < requiredProtocol {
+					return false, nil
+				}
 			}
 		}
 		if !hasLiveCN {
@@ -1037,8 +1076,38 @@ func (l *store) tryEnableViewMetadataAdmission(
 		}
 	}
 	cmd := hakeeper.GetEnableViewMetadataAdmissionCmd()
-	if admission.Preparing || admission.Enabled {
-		cmd = hakeeper.GetEnableViewMetadataAdmissionCmdForConfig(l.cfg.GetHAKeeperConfig())
+	if !admission.Preparing && !admission.Enabled {
+		requiredProtocol := admission.RequiredProtocolVersion
+		if requiredProtocol < uint64(defines.MORPCLatestVersion) {
+			requiredProtocol = uint64(defines.MORPCLatestVersion)
+		}
+		cmd = hakeeper.GetEnableViewMetadataAdmissionCmdForConfigWithProtocol(
+			l.cfg.GetHAKeeperConfig(), requiredProtocol)
+	} else if admission.Preparing {
+		// The protocol-bearing tag is reserved for the initial floor commit and
+		// later monotonic raises. Phase-two admission reconciliation remains on
+		// the legacy tag after the floor is durable.
+		cmd = hakeeper.GetEnableViewMetadataAdmissionCmdForConfig(
+			l.cfg.GetHAKeeperConfig())
+	} else if admission.Enabled {
+		if admission.Pending {
+			// A pending generation drain can only make progress through the
+			// legacy reconciliation entry, which expires abandoned targets. The
+			// protocol-bearing entry deliberately remains fail-closed while the
+			// durable pending bit is set.
+			cmd = hakeeper.GetEnableViewMetadataAdmissionCmdForConfig(
+				l.cfg.GetHAKeeperConfig())
+		} else if admission.PersistedExpressionProtocolActivationPending ||
+			admission.RequiredProtocolVersion < uint64(defines.MORPCLatestVersion) {
+			if !l.viewMetadataAdmissionLogStoresReadyWithProtocol(state, true) {
+				return false, nil
+			}
+			cmd = hakeeper.GetEnableViewMetadataAdmissionCmdForConfigWithProtocol(
+				l.cfg.GetHAKeeperConfig(), uint64(defines.MORPCLatestVersion))
+		} else {
+			cmd = hakeeper.GetEnableViewMetadataAdmissionCmdForConfig(
+				l.cfg.GetHAKeeperConfig())
+		}
 	}
 	session := l.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
 	result, err := l.propose(ctx, session, cmd)
@@ -1650,15 +1719,16 @@ func (l *store) hakeeperTick() {
 
 func (l *store) getHeartbeatMessage() pb.LogStoreHeartbeat {
 	m := pb.LogStoreHeartbeat{
-		UUID:                           l.id(),
-		RaftAddress:                    l.cfg.RaftServiceAddr(),
-		ServiceAddress:                 l.cfg.LogServiceServiceAddr(),
-		GossipAddress:                  l.cfg.GossipServiceAddr(),
-		StoreIncarnation:               l.getStoreIncarnation(),
-		Replicas:                       make([]pb.LogReplicaInfo, 0),
-		Locality:                       l.cfg.getLocality(),
-		CommandDeliverySupported:       true,
-		ViewMetadataAdmissionSupported: true,
+		UUID:                                     l.id(),
+		RaftAddress:                              l.cfg.RaftServiceAddr(),
+		ServiceAddress:                           l.cfg.LogServiceServiceAddr(),
+		GossipAddress:                            l.cfg.GossipServiceAddr(),
+		StoreIncarnation:                         l.getStoreIncarnation(),
+		Replicas:                                 make([]pb.LogReplicaInfo, 0),
+		Locality:                                 l.cfg.getLocality(),
+		CommandDeliverySupported:                 true,
+		ViewMetadataAdmissionSupported:           true,
+		ViewMetadataAdmissionProtocolV3Supported: true,
 	}
 	opts := dragonboat.NodeHostInfoOption{
 		SkipLogInfo: true,
