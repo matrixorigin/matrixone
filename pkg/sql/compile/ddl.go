@@ -698,7 +698,7 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 		}
 	}
 	targetTableDef := persistedIPFunctionAlterTarget(qry)
-	if err := plan2.RequirePersistedIPFunctionProtocol(c.proc.Ctx, c.proc, targetTableDef); err != nil {
+	if err := plan2.RequirePersistedIPFunctionProtocolForAuthoring(c.proc.Ctx, c.proc, targetTableDef); err != nil {
 		return err
 	}
 
@@ -1523,11 +1523,11 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 	if err := incrservice.CheckAutoIDCache(c.proc.Ctx, c.proc.GetService(), qry.GetTableDef().GetAutoIdCache()); err != nil {
 		return err
 	}
-	if err := plan2.RequirePersistedIPFunctionProtocol(c.proc.Ctx, c.proc, qry.GetTableDef()); err != nil {
+	if err := plan2.RequirePersistedIPFunctionProtocolForAuthoring(c.proc.Ctx, c.proc, qry.GetTableDef()); err != nil {
 		return err
 	}
 	for _, indexTableDef := range qry.GetIndexTables() {
-		if err := plan2.RequirePersistedIPFunctionProtocol(c.proc.Ctx, c.proc, indexTableDef); err != nil {
+		if err := plan2.RequirePersistedIPFunctionProtocolForAuthoring(c.proc.Ctx, c.proc, indexTableDef); err != nil {
 			return err
 		}
 	}

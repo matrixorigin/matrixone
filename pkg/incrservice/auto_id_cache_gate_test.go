@@ -79,14 +79,14 @@ func TestAutoIDCacheDDLAndProtocolGate(t *testing.T) {
 		enabled := NewIncrService(t.Name(), NewMemStore(), Config{EnableAutoIDCache: true})
 		defer enabled.Close()
 		rt.SetGlobalVariables(runtime.AutoIncrementService, enabled)
-		for _, version := range []any{nil, "76", defines.MORPCVersion57, defines.MORPCVersion58, defines.MORPCVersion59, defines.MORPCVersion60, defines.MORPCVersion61, defines.MORPCVersion62, defines.MORPCVersion63, defines.MORPCVersion64, defines.MORPCVersion65, defines.MORPCVersion66, defines.MORPCVersion67, defines.MORPCVersion68, defines.MORPCVersion69, defines.MORPCVersion70, defines.MORPCVersion71, defines.MORPCVersion72, defines.MORPCVersion73, defines.MORPCVersion74, defines.MORPCVersion75} {
+		for _, version := range []any{nil, "81", defines.MORPCVersion57, defines.MORPCVersion58, defines.MORPCVersion59, defines.MORPCVersion60, defines.MORPCVersion61, defines.MORPCVersion62, defines.MORPCVersion63, defines.MORPCVersion64, defines.MORPCVersion65, defines.MORPCVersion66, defines.MORPCVersion67, defines.MORPCVersion68, defines.MORPCVersion69, defines.MORPCVersion70, defines.MORPCVersion71, defines.MORPCVersion72, defines.MORPCVersion73, defines.MORPCVersion74, defines.MORPCVersion75, defines.MORPCVersion76, defines.MORPCVersion77, defines.MORPCVersion78, defines.MORPCVersion79, defines.MORPCVersion80} {
 			rt.SetGlobalVariables(runtime.MOProtocolVersion, version)
-			require.ErrorContains(t, CheckAutoIDCache(t.Context(), t.Name(), 1), "version 76")
+			require.ErrorContains(t, CheckAutoIDCache(t.Context(), t.Name(), 1), "version 81")
 			// The service path is independently fenced even if the caller bypasses DDL planning.
-			require.ErrorContains(t, enabled.Create(t.Context(), 42, []AutoColumn{{ColName: "id", Step: 1, CacheSize: 1}}, nil), "version 76")
+			require.ErrorContains(t, enabled.Create(t.Context(), 42, []AutoColumn{{ColName: "id", Step: 1, CacheSize: 1}}, nil), "version 81")
 			require.NoError(t, CheckAutoIDCache(t.Context(), t.Name(), 0))
 		}
-		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion76)
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion81)
 		require.NoError(t, CheckAutoIDCache(t.Context(), t.Name(), 1))
 	})
 }

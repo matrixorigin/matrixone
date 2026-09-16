@@ -1857,6 +1857,16 @@ func (ctr *container) makeAggListWithAllocation(
 			freeAggListPartial(aggList, i)
 			return nil, err
 		}
+		if ctr.legacyApproxPercentileState {
+			aggexec.ConfigureApproxPercentileLegacyState(aggList[i])
+		}
+		if ctr.legacyHLLState {
+			if ctr.floatZeroHLLState && hllFloatZeroStateSupported(agExpr.GetAggID()) {
+				aggexec.ConfigureHLLFloatZeroState(aggList[i])
+			} else {
+				aggexec.ConfigureHLLLegacyState(aggList[i])
+			}
+		}
 		aggexec.ConfigureGroupConcatTimeZone(aggList[i], ctr.timeZone)
 		// mtyp is the logical Group mode and survives resident-spill resets.
 		// Preserve it in each rebuilt GROUP_CONCAT executor even when the
@@ -1878,6 +1888,15 @@ func (ctr *container) makeAggListWithAllocation(
 		}
 	}
 	return aggList, nil
+}
+
+// hllFloatZeroStateSupported is deliberately limited to APPROX_COUNT
+// families. Protocol v76 introduced signed-zero canonicalization for those
+// newly versioned states; persisted HLL_ADD_AGG/HLL_MERGE_AGG states retain
+// their v2 raw-value wire contract until a future explicit migration.
+func hllFloatZeroStateSupported(aggID int64) bool {
+	return aggID == aggexec.AggIdOfApproxCount ||
+		aggID == aggexec.AggIdOfApproxCountDistinct
 }
 
 func useLegacyTextMinMaxForRemote(proc *process.Process) bool {
@@ -1925,6 +1944,20 @@ func useLegacyDecimalSumState(proc *process.Process) bool {
 	return !ok || !valid || version < defines.MORPCVersion73
 }
 
+func useLegacyApproxPercentileStateForRemote(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return false
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return false
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return !ok || !valid || version < defines.MORPCVersion76
+}
+
 // An old coordinator can send a final Group to an upgraded worker without
 // running the upgraded shuffle-plan gate. Below v73 that Group must preserve
 // the old Decimal128 result contract. Partial Groups still use the legacy wire
@@ -1936,6 +1969,62 @@ func useLegacyDecimalSumResultForRemote(proc *process.Process, needEval bool) bo
 	}
 	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
 	return remote
+}
+
+func useLegacyHLLStateForRemote(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return false
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return false
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return !ok || !valid || version < defines.MORPCVersion77
+}
+
+func useFloatZeroHLLStateForRemote(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return false
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return false
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return ok && valid && version == defines.MORPCVersion76
+}
+
+func groupHashStringWireEnabled(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return true
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return true
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return ok && valid && version >= defines.MORPCVersion78
+}
+
+func canonicalDistinctKeyWireEnabled(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return true
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return true
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return ok && valid && version >= defines.MORPCVersion79
 }
 
 // freeAggListPartial frees the first n aggregators in the list.
