@@ -1164,6 +1164,7 @@ type HavingBinder struct {
 	bindingProjectedAlias bool
 	rollupHaving          bool
 	bindingHaving         bool
+	exactAggregateInputs  bool
 }
 
 type ProjectionBinder struct {

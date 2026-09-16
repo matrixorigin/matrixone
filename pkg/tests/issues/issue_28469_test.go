@@ -183,9 +183,22 @@ func TestIssue28469BinaryPreparedIntegerAssignment(t *testing.T) {
 			const predicate = "(1000000000000000000/1)*1000000000000000000*1000000000000000000>0"
 			mustExec(t, ctx, conn, "insert into predicate_domain_dst select 1 where "+predicate)
 			mustExec(t, ctx, conn, "update predicate_domain_dst set i=2 where "+predicate)
-			var got int
-			require.NoError(t, conn.QueryRowContext(ctx, "select i from predicate_domain_dst").Scan(&got))
-			require.Equal(t, 2, got)
+			mustExec(t, ctx, conn, "insert into predicate_domain_dst select 3 having "+predicate)
+			mustExec(t, ctx, conn, "insert into predicate_domain_dst select (select 7/2 where "+predicate+")")
+			mustExec(t, ctx, conn, "create table predicate_aggregate_src(x bigint)")
+			mustExec(t, ctx, conn, "insert into predicate_aggregate_src values (5)")
+			mustExec(t, ctx, conn, "insert into predicate_domain_dst select sum(x/2) from predicate_aggregate_src having sum(x/2)>0")
+			rows, err := conn.QueryContext(ctx, "select i from predicate_domain_dst order by i")
+			require.NoError(t, err)
+			defer rows.Close()
+			var got []int
+			for rows.Next() {
+				var value int
+				require.NoError(t, rows.Scan(&value))
+				got = append(got, value)
+			}
+			require.NoError(t, rows.Err())
+			require.Equal(t, []int{2, 3, 3, 4}, got)
 		})
 
 		t.Run("prepared_strict_division_by_zero", func(t *testing.T) {

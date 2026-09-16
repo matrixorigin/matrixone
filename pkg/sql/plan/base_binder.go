@@ -867,6 +867,12 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		b.builder.isForUpdate = savedIsForUpdate
 	}()
 
+	// A nested SELECT must establish its exact domain from its own propagated
+	// target. Inheriting the outer producer scope would also change independent
+	// predicates inside the subquery.
+	restoreIntegerDomain := b.builder.suspendIntegerAssignmentDomain()
+	defer restoreIntegerDomain()
+
 	var nodeID int32
 	var err error
 	switch subquery := astExpr.Select.(type) {

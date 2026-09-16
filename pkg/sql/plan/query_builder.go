@@ -8209,9 +8209,8 @@ func (builder *QueryBuilder) bindSelectClause(
 	// WHERE and lock predicates above retain ordinary SELECT semantics. Enter
 	// the exact domain only for alias, aggregate, window, and grouping producer
 	// discovery needed by integer-bound outputs.
-	restoreResultDomain := builder.enterIntegerAssignmentDomain(
-		allNumericProjectionTargetsInteger(ctx.numericProjectionTypes),
-	)
+	integerResultDomain := allNumericProjectionTargetsInteger(ctx.numericProjectionTypes)
+	restoreResultDomain := builder.enterIntegerAssignmentDomain(integerResultDomain)
 	defer restoreResultDomain()
 
 	if len(selectList) == 0 {
@@ -8316,9 +8315,15 @@ func (builder *QueryBuilder) bindSelectClause(
 	// bind HAVING clause
 	ctx.fullGroupByInputNode = nodeID
 	ctx.fullGroupByInputReady = true
+	// Keep an exact binder for aggregate/window producer discovery, but bind the
+	// HAVING predicate itself in the ordinary query domain.
 	havingBinder = NewHavingBinder(builder, ctx)
 	if clause.Having != nil {
-		boundHavingList, err = builder.bindHaving(ctx, clause.Having, havingBinder)
+		restoreIntegerDomain := builder.suspendIntegerAssignmentDomain()
+		predicateBinder := NewHavingBinder(builder, ctx)
+		predicateBinder.exactAggregateInputs = integerResultDomain
+		boundHavingList, err = builder.bindHaving(ctx, clause.Having, predicateBinder)
+		restoreIntegerDomain()
 		if err != nil {
 			return
 		}

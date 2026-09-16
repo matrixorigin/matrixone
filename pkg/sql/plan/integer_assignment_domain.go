@@ -46,6 +46,12 @@ func (builder *QueryBuilder) enterIntegerAssignmentDomain(enabled bool) func() {
 	return func() { builder.integerAssignmentDomain = previous }
 }
 
+func (builder *QueryBuilder) suspendIntegerAssignmentDomain() func() {
+	previous := builder.integerAssignmentDomain
+	builder.integerAssignmentDomain = false
+	return func() { builder.integerAssignmentDomain = previous }
+}
+
 func allNumericProjectionTargetsInteger(targets []Type) bool {
 	if len(targets) == 0 {
 		return false
