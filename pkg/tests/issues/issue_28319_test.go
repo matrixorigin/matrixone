@@ -988,7 +988,11 @@ func TestIssue28319CopyAlterPublicationSkipsGlobalLineageCompaction(t *testing.T
 // per-test race budget.
 func runIssue28319CopyAlterRefreshTerminal(t *testing.T, database string, forceFlush bool, failurePhase string) {
 	t.Helper()
-	embed.RunBaseClusterTests(t, func(cluster embed.Cluster) {
+	// This matrix only uses CN 0. Keep it on the one-CN fixture so an
+	// individually selected race test does not spend its reviewer budget
+	// starting an unused peer CN; the separate different-CN regression remains
+	// on RunBaseClusterTests.
+	embed.RunSingleCNBaseClusterTests(t, func(cluster embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 		defer cancel()
 		cn, err := cluster.GetCNService(0)
