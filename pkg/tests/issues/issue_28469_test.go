@@ -216,6 +216,38 @@ func TestIssue28469BinaryPreparedIntegerAssignment(t *testing.T) {
 			require.Equal(t, 4, sum)
 		})
 
+		t.Run("group_value_dependency_is_wrapper_and_order_independent", func(t *testing.T) {
+			mustExec(t, ctx, conn, "create table group_dependency_src(x bigint)")
+			mustExec(t, ctx, conn, "insert into group_dependency_src values (5)")
+			mustExec(t, ctx, conn, "create table group_dependency_a(i bigint, d double)")
+			mustExec(t, ctx, conn, "insert into group_dependency_a select abs(x/2), x/2+0 from group_dependency_src group by x/2")
+			mustExec(t, ctx, conn, "create table group_dependency_b(d double, i bigint)")
+			mustExec(t, ctx, conn, "insert into group_dependency_b select x/2+0, abs(x/2) from group_dependency_src group by x/2")
+			mustExec(t, ctx, conn, "create table group_dependency_add(i bigint)")
+			mustExec(t, ctx, conn, "insert into group_dependency_add select x/2+0 from group_dependency_src group by x/2")
+			for _, table := range []string{"group_dependency_a", "group_dependency_b"} {
+				var integerValue int64
+				var approximateValue float64
+				query := "select i,d from " + table
+				require.NoError(t, conn.QueryRowContext(ctx, query).Scan(&integerValue, &approximateValue))
+				require.Equal(t, int64(3), integerValue)
+				require.Equal(t, 2.5, approximateValue)
+			}
+			var wrappedAdd int64
+			require.NoError(t, conn.QueryRowContext(ctx, "select i from group_dependency_add").Scan(&wrappedAdd))
+			require.Equal(t, int64(3), wrappedAdd)
+		})
+
+		t.Run("on_duplicate_key_update_keeps_case_condition_ordinary", func(t *testing.T) {
+			mustExec(t, ctx, conn, "create table ondup_control_dst(id int primary key, i int)")
+			mustExec(t, ctx, conn, "insert into ondup_control_dst values (1,0)")
+			const condition = "(1000000000000000000/1)*1000000000000000000*1000000000000000000>0"
+			mustExec(t, ctx, conn, "insert into ondup_control_dst values (1,0) on duplicate key update i=case when "+condition+" then 1 else 0 end")
+			var got int
+			require.NoError(t, conn.QueryRowContext(ctx, "select i from ondup_control_dst where id=1").Scan(&got))
+			require.Equal(t, 1, got)
+		})
+
 		t.Run("prepared_strict_division_by_zero", func(t *testing.T) {
 			mustExec(t, ctx, conn, "set sql_mode='STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO'")
 			defer func() { _, _ = conn.ExecContext(ctx, "set sql_mode='STRICT_TRANS_TABLES'") }()

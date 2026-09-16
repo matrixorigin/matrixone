@@ -96,8 +96,13 @@ func (b *OndupUpdateBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool
 func (b *OndupUpdateBinder) BindAssignmentExpr(astExpr tree.Expr, target Type) (*plan.Expr, error) {
 	if types.T(target.Id).IsInteger() {
 		previous := b.sysCtx
+		previousBaseCtx := b.integerAssignmentBaseCtx
+		b.integerAssignmentBaseCtx = previous
 		b.sysCtx = withIntegerAssignmentDomain(previous)
-		defer func() { b.sysCtx = previous }()
+		defer func() {
+			b.sysCtx = previous
+			b.integerAssignmentBaseCtx = previousBaseCtx
+		}()
 		if b.builder != nil {
 			restoreDomain := b.builder.enterIntegerAssignmentDomain(true)
 			defer restoreDomain()

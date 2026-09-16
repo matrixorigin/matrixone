@@ -279,6 +279,27 @@ INSERT INTO control_domain_dst SELECT CASE WHEN (x/1)*x*x>0 THEN 1 ELSE 0 END FR
 SELECT COUNT(*), SUM(i) FROM control_domain_dst;
 DROP TABLE control_domain_dst;
 DROP TABLE control_domain_src;
+CREATE TABLE group_dependency_src(x BIGINT);
+INSERT INTO group_dependency_src VALUES (5);
+CREATE TABLE group_dependency_a(i BIGINT, d DOUBLE);
+INSERT INTO group_dependency_a SELECT ABS(x/2), x/2+0 FROM group_dependency_src GROUP BY x/2;
+CREATE TABLE group_dependency_b(d DOUBLE, i BIGINT);
+INSERT INTO group_dependency_b SELECT x/2+0, ABS(x/2) FROM group_dependency_src GROUP BY x/2;
+CREATE TABLE group_dependency_add(i BIGINT);
+INSERT INTO group_dependency_add SELECT x/2+0 FROM group_dependency_src GROUP BY x/2;
+SELECT i,d FROM group_dependency_a;
+SELECT i,d FROM group_dependency_b;
+SELECT * FROM group_dependency_add;
+DROP TABLE group_dependency_a;
+DROP TABLE group_dependency_b;
+DROP TABLE group_dependency_add;
+DROP TABLE group_dependency_src;
+CREATE TABLE ondup_control_dst(id INT PRIMARY KEY, i INT);
+INSERT INTO ondup_control_dst VALUES (1,0);
+INSERT INTO ondup_control_dst VALUES (1,0) ON DUPLICATE KEY UPDATE
+i=CASE WHEN (1000000000000000000/1)*1000000000000000000*1000000000000000000>0 THEN 1 ELSE 0 END;
+SELECT * FROM ondup_control_dst;
+DROP TABLE ondup_control_dst;
 
 SELECT 5/2 AS q;
 SELECT q FROM select_contract;

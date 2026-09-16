@@ -22,7 +22,54 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
+
+func numericAstResultDependsOn(output, candidate tree.Expr) bool {
+	output = unwrapParenExpr(output)
+	candidate = unwrapParenExpr(candidate)
+	if windowExprAstKey(output) == windowExprAstKey(candidate) {
+		return true
+	}
+	switch expr := output.(type) {
+	case *tree.CastExpr:
+		return false
+	case *tree.UnaryExpr:
+		if expr.Op == tree.UNARY_PLUS || expr.Op == tree.UNARY_MINUS {
+			return numericAstResultDependsOn(expr.Expr, candidate)
+		}
+	case *tree.BinaryExpr:
+		switch expr.Op {
+		case tree.PLUS, tree.MINUS, tree.MULTI, tree.DIV, tree.INTEGER_DIV, tree.MOD:
+			return numericAstResultDependsOn(expr.Left, candidate) ||
+				numericAstResultDependsOn(expr.Right, candidate)
+		}
+	case *tree.FuncExpr:
+		ref, ok := expr.Func.FunctionReference.(*tree.UnresolvedName)
+		if !ok {
+			return false
+		}
+		indexes, ok := function.NumericFunctionResultArgs(
+			strings.ToLower(ref.ColName()), len(expr.Exprs), false,
+		)
+		if !ok {
+			return false
+		}
+		for _, index := range indexes {
+			if numericAstResultDependsOn(expr.Exprs[index], candidate) {
+				return true
+			}
+		}
+	case *tree.CaseExpr:
+		for _, when := range expr.Whens {
+			if numericAstResultDependsOn(when.Val, candidate) {
+				return true
+			}
+		}
+		return expr.Else != nil && numericAstResultDependsOn(expr.Else, candidate)
+	}
+	return false
+}
 
 func normalizeGroupByName(name *tree.UnresolvedName) {
 	for i := 0; i < name.NumParts; i++ {
@@ -235,18 +282,20 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 		}
 	}
 	if isRoot && !reusesProjection {
-		groupKey := windowExprAstKey(astExpr)
 		for pos := range b.selectList {
-			if windowExprAstKey(b.selectList[pos].Expr) != groupKey ||
-				pos >= len(b.ctx.numericProjectionTypes) {
+			if pos >= len(b.ctx.numericProjectionTypes) ||
+				!numericAstResultDependsOn(b.selectList[pos].Expr, astExpr) {
 				continue
 			}
 			target := b.ctx.numericProjectionTypes[pos]
-			if target.Id != 0 {
-				numericTarget = &target
-				reusesProjection = true
-				break
+			if target.Id == 0 {
+				continue
 			}
+			if numericTarget == nil || types.T(target.Id).IsInteger() {
+				targetCopy := target
+				numericTarget = &targetCopy
+			}
+			reusesProjection = true
 		}
 	}
 	// An alias has already selected and substituted its projection expression.
