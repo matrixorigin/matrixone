@@ -1897,7 +1897,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 		}
 		duplicateWarnings.Add(
 			moerr.ER_DUP_ENTRY,
-			moerr.NewDuplicateEntry(proc.Ctx, rowStr, ap.DedupColName).Error(),
+			moerr.FormatDuplicateEntry(rowStr, ap.DedupColName),
 		)
 	}
 	for i := 0; i < count; i += hashmap.UnitLimit {
