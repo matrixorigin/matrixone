@@ -248,7 +248,7 @@ CI 中硬编码 `if: false` 的 Upgrade jobs 只能记录为 SKIPPED，不能替
 6. **接受** rollback 后 fail closed + 再 revalidate；不承诺旧 binary 可独立开放新 lifecycle。
 7. **实现偏差**：原 prototype 使用 SQL 文本识别 `information_schema.columns`，review 发现可绕过；本版本将 section 6.3 固化为 AST contract。
 
-历史设计门禁由 `fengttt` 的 review `5126100008` 关闭，审批只覆盖上述获批 checkpoint。待审锁协议语义 checkpoint 为 `a97f8074d7514428d042de482650c7b4f3f855e1`（其 base 为 `f0c31cd4b830be32442cf329e0a3fb08aa9c16c3`）；当前 conformance head 为 `e9fa99fcf40e1b11a6fcba32fc313147b779447f`（merge base `2ea4ec2e6e`，后续仅调整 lifecycle/upgrade/生成结果 fixture 与合并冲突，不改变待审锁协议）；本次后台锁协调改变不能自动继承历史审批。若真实 mixed-version binary evidence 与上述 sequence 不一致，设计进入 REQUEST_CHANGES，不以修改测试预期解决。
+历史设计门禁由 `fengttt` 的 review `5126100008` 关闭，审批只覆盖上述获批 checkpoint。待审锁协议语义 checkpoint 为 `a97f8074d7514428d042de482650c7b4f3f855e1`（其 base 为 `f0c31cd4b830be32442cf329e0a3fb08aa9c16c3`）；当前 conformance head 为 `4b07308cc9931dc8c81c09c9b701a75c19a2b6ba`（merge base `091825aac2`，后续仅调整 lifecycle/upgrade/生成结果 fixture 与合并冲突，不改变待审锁协议）；本次后台锁协调改变不能自动继承历史审批。若真实 mixed-version binary evidence 与上述 sequence 不一致，设计进入 REQUEST_CHANGES，不以修改测试预期解决。
 
 ### 12.1 后台恢复与显式 owner 事务的锁协调修复
 
@@ -279,3 +279,5 @@ Merge `dd2f2fd9d8` 与 main 的唯一文本冲突位于 prepared-plan rebuild pu
 CI run `34680338003` 暴露 cluster restore probe 仍按旧协议要求后台 recovery 在 SNAPSHOT gate 上排队。`3d46565954` 将 canceled 与 successful restore 两条路径都对齐当前协议：restore 持有 SNAPSHOT 时后台 probe 必须以 lock conflict fast-fail、不得建立反向 wait edge；restore 完成释放两把 gate 后，新 probe 必须成功并观察非零 generation。该 isolated restore 用例 race 三次及 frontend/compile coverage 模式通过；main `be30a70fe5` 同时包含该 run 的 JSON ColumnBuffer fixture producer 修复，定向 coverage 十次通过。
 
 合并 main `2ea4ec2e6e` 时，prepared statement 构造冲突按字段并集解决：同时保留 View lease dependency 与 upstream `NoUnsignedSubtraction` SQL mode snapshot。两项 focused 测试各五次、完整 compile 通过；完整 frontend 唯一失败为 upstream `TestConnMeasuresOnlyPhysicalOutputWrite` 的瞬时计量断言，单独二十次复跑通过。
+
+合并 main `091825aac2` 时，isolated cluster restore fixture 冲突保留 upstream 对 loaded race runner 的 transaction-timeout retry helper，同时移除已被后台 FastFail 协议淘汰的锁 waiter introspection；lock conflict 仍直接返回，不被 helper 重试。restore race 三次、prepared View/SQL-mode focused 测试三次及完整 compile 通过。
