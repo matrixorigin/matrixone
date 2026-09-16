@@ -320,6 +320,74 @@ func TestNewAssignCastHonorsSqlMode(t *testing.T) {
 	require.Error(t, NewStrictCast([]*vector.Vector{src, dst}, rs, proc, 1, nil))
 }
 
+func TestAssignStringWidthWarningDiagnostics(t *testing.T) {
+	cases := []struct {
+		name        string
+		target      types.T
+		input       string
+		want        string
+		wantWarning bool
+	}{
+		{name: "char non-space overflow", target: types.T_char, input: "abcd", want: "abc", wantWarning: true},
+		{name: "char multibyte overflow", target: types.T_char, input: "你好世界", want: "你好世", wantWarning: true},
+		{name: "varchar non-space overflow", target: types.T_varchar, input: "abcd", want: "abc", wantWarning: true},
+		{name: "varchar multibyte overflow", target: types.T_varchar, input: "你好世界", want: "你好世", wantWarning: true},
+		{name: "varchar trailing space overflow", target: types.T_varchar, input: "abc ", want: "abc", wantWarning: true},
+		{name: "char trailing space exemption", target: types.T_char, input: "abc ", want: "abc", wantWarning: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			session := &numericWarningSession{}
+			proc.Session = session
+			source := vector.NewVec(types.T_varchar.ToType())
+			defer source.Free(proc.Mp())
+			require.NoError(t, vector.AppendBytes(source, []byte(tc.input), false, proc.Mp()))
+			target := types.New(tc.target, 3, 0)
+			destination := vector.NewVec(target)
+			defer destination.Free(proc.Mp())
+			result := vector.NewFunctionResultWrapper(target, proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+
+			require.NoError(t, NewAssignIgnoreCast([]*vector.Vector{source, destination}, result, proc, 1, nil))
+			got, null := vector.GenerateFunctionStrParameter(result.GetResultVector()).GetStrValue(0)
+			require.False(t, null)
+			require.Equal(t, tc.want, string(got))
+			if !tc.wantWarning {
+				require.Empty(t, session.warnings)
+				return
+			}
+			require.Len(t, session.warnings, 1)
+			require.Equal(t, moerr.WARN_DATA_TRUNCATED, session.warnings[0].code)
+			require.Contains(t, session.warnings[0].msg, "Data truncated for column")
+			require.Contains(t, session.warnings[0].msg, "row 1")
+		})
+	}
+}
+
+func TestAssignStringWidthWarningUsesExecutionAttemptSink(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	sink := &numericWarningSession{}
+	proc.WarningSink = sink
+
+	source := vector.NewVec(types.T_varchar.ToType())
+	defer source.Free(proc.Mp())
+	require.NoError(t, vector.AppendBytes(source, []byte("abcd"), false, proc.Mp()))
+	target := types.New(types.T_varchar, 3, 0)
+	destination := vector.NewVec(target)
+	defer destination.Free(proc.Mp())
+	result := vector.NewFunctionResultWrapper(target, proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(1))
+
+	require.NoError(t, NewAssignIgnoreCast([]*vector.Vector{source, destination}, result, proc, 1, nil))
+	require.Nil(t, proc.Session)
+	require.Len(t, sink.warnings, 1)
+	require.Equal(t, moerr.WARN_DATA_TRUNCATED, sink.warnings[0].code)
+}
+
 func TestNewAssignCastRemoteEmptyResolverUsesSessionSnapshot(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	// A remote CN has no frontend session. Its resolver may still be attached
