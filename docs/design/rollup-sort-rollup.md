@@ -195,7 +195,7 @@ The derived-order shape can be run separately with:
 
 ```text
 go test -mod=mod ./pkg/sql/colexec/group -run '^$' \
-  -bench 'BenchmarkRollupAlgorithms/million_(ordered_low_ndv|derived_order_low_ndv)/(sort|hash-serial|hash-parallel)$' \
+  -bench 'BenchmarkRollupAlgorithms/million_(ordered_low_ndv|derived_order_low_ndv|derived_order_avg_low_ndv)/(sort|hash-serial|hash-parallel)$' \
   -benchtime=5x -count=3
 ```
 
@@ -219,6 +219,7 @@ shape                              sort          hash-serial       hash-parallel
 100000 rows, 32 keys, NDV=2       10.19–10.60 ms  202.27–205.88 ms     46.93–53.68 ms
 1000000 rows, 3 keys, NDV=4       10.61–11.17 ms   43.81–46.05 ms     22.48–22.72 ms
 1000000 rows, child ORDER BY      24.49–24.64 ms   96.75–99.30 ms     40.65–41.55 ms
+1000000 rows, child ORDER BY + AVG 23.84–25.27 ms  64.06–69.27 ms     36.15–42.28 ms
 ```
 
 The 100000-row cases show the actual advantage of the new combination:
@@ -249,7 +250,9 @@ streaming aggregate. The forced HASH plan expands to four table scans, four
 sorts, five aggregates, and three `UNION ALL` nodes. The derived-order benchmark
 therefore charges the child `ORDER BY` once for SORT and once per grouping-set
 branch for HASH; it is a comparison of the current physical plan shapes, not a
-claim that an arbitrary unordered ROLLUP should always sort.
+claim that an arbitrary unordered ROLLUP should always sort. The additional
+`AVG` row uses two grouping keys plus a third measure column and matches the
+issue's `AVG(x)` shape.
 
 The aggregate marker is carried in `ExtraOptions`, which is already part of
 the plan representation. The final group is compiled only after the global
