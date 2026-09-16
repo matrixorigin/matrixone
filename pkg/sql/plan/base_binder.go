@@ -6880,7 +6880,7 @@ func preparedStrToDateArgs(original *Expr, name string, args []*Expr) bool {
 		return false
 	}
 	switch types.T(fn.Args[2].Typ.Id) {
-	case types.T_date, types.T_datetime, types.T_time:
+	case types.T_date, types.T_datetime, types.T_time, types.T_varchar:
 		return true
 	}
 	return false
