@@ -7028,19 +7028,36 @@ func (c *Compile) checkPitrGranularity(
 			// admission and runtime can fail closed for a no-PK table.
 			continue
 		}
-		pkSQL := fmt.Sprintf("SELECT %s FROM %s.%s WHERE %s = %d AND %s = %s AND %s = %s AND %s = 'p' AND %s <> %s LIMIT 1",
-			sqlquote.Ident(catalog.SystemColAttr_Name), sqlquote.Ident(catalog.MO_CATALOG), sqlquote.Ident(catalog.MO_COLUMNS),
-			sqlquote.Ident(catalog.SystemColAttr_AccID), accountId,
-			sqlquote.Ident(catalog.SystemColAttr_DBName), sqlquote.String(pt.Source.Database),
-			sqlquote.Ident(catalog.SystemColAttr_RelName), sqlquote.String(pt.Source.Table),
-			sqlquote.Ident(catalog.SystemColAttr_ConstraintType),
-			sqlquote.Ident(catalog.SystemColAttr_Name), sqlquote.String(catalog.FakePrimaryKeyColName))
-		res, err := c.runSqlWithResultAndOptions(pkSQL, int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog())
+		res, err := c.runSqlWithResultAndOptions(
+			cdc.CollectCDCSourceCandidateSQL(accountId, pt.Source.Database, pt.Source.Table),
+			int32(catalog.System_Account), executor.StatementOption{}.WithDisableLog())
 		if err != nil {
 			return err
 		}
-		valid := len(res.Batches) > 0 && res.Batches[0].RowCount() > 0
+		valid := false
+		var validationErr error
+		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
+			for i := 0; i < rows; i++ {
+				hasForeignKey, decodeErr := cdc.TableHasForeignKeyConstraint(cols[6].GetBytesAt(i))
+				if decodeErr != nil {
+					validationErr = decodeErr
+					return false
+				}
+				if hasForeignKey {
+					valid = true
+					continue
+				}
+				if !vector.MustFixedColNoTypeCheck[bool](cols[7])[i] {
+					return true
+				}
+				valid = true
+			}
+			return true
+		})
 		res.Close()
+		if validationErr != nil {
+			return validationErr
+		}
 		if !valid {
 			return moerr.NewInternalErrorf(ctx, "source table %s has no primary key; CDC does not support tables without a user-visible primary key", pt.Source)
 		}
