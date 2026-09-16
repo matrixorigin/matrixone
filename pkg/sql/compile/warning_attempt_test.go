@@ -277,7 +277,7 @@ func TestWarningAttemptCapturesStatementRetentionSnapshot(t *testing.T) {
 	require.Equal(t, uint16(2), session.warnings[1].code)
 }
 
-	func TestStringAssignmentWarningAttemptDiscard(t *testing.T) {
+func TestStringAssignmentWarningAttemptDiscard(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	session := &remoteWarningSession{}
 	proc.Session = session

@@ -1702,6 +1702,15 @@ func (e *errInfo) pushWithLevel(code uint16, msg, level string) {
 }
 
 func (e *errInfo) pushStored(code uint16, msg, level string) {
+	e.pushStoredWithReplacement(code, msg, level, nil)
+}
+
+func (e *errInfo) pushStoredWithReplacement(
+	code uint16,
+	msg string,
+	level string,
+	replacement *uint64,
+) {
 	if e.maxCnt <= 0 || len(e.codes) >= e.maxCnt {
 		return
 	}
@@ -1721,7 +1730,17 @@ func (e *errInfo) pushStored(code uint16, msg, level string) {
 		}
 		msg = process.BoundWarningMessage(msg, process.WarningDiagnosticMaxMessageBytes)
 		charge := process.WarningDiagnosticRecordBytes(msg)
-		if !budget.Reserve(charge) {
+		reserved := false
+		if replacement != nil && *replacement != 0 {
+			var consumed bool
+			reserved, consumed = budget.Reconcile(*replacement, charge)
+			if consumed {
+				*replacement = 0
+			}
+		} else {
+			reserved = budget.Reserve(charge)
+		}
+		if !reserved {
 			e.warningRetentionSealed = true
 			return
 		}
@@ -1786,7 +1805,9 @@ func (e *errInfo) appendWarningBatchOwned(
 	e.addWarningCount(total)
 	budget := e.ensureWarningBudget()
 	sameBudget := source != nil && source == budget
+	undercharged := false
 	if sameBudget {
+		accounted := uint64(0)
 		for _, msg := range msgs {
 			if len(msg) > process.WarningDiagnosticMaxMessageBytes {
 				// Production producers pass bounded strings. A malformed
@@ -1795,7 +1816,34 @@ func (e *errInfo) appendWarningBatchOwned(
 				sameBudget = false
 				break
 			}
+			accounted += process.WarningDiagnosticRecordBytes(msg)
 		}
+		if sameBudget && chargedBytes < accounted {
+			// Reconcile the source charge atomically with the first retained
+			// payload so another producer cannot consume the freed capacity.
+			undercharged = true
+			sameBudget = false
+		}
+	}
+	if undercharged {
+		replacement := chargedBytes
+		limit := len(codes)
+		if len(msgs) < limit {
+			limit = len(msgs)
+		}
+		if uint64(limit) > total {
+			limit = int(total)
+		}
+		for i := 0; i < limit; i++ {
+			e.pushStoredWithReplacement(codes[i], msgs[i], "Warning", &replacement)
+		}
+		if replacement != 0 {
+			_, consumed := budget.Reconcile(replacement, 0)
+			if consumed {
+				replacement = 0
+			}
+		}
+		return replacement == 0
 	}
 	if !sameBudget {
 		limit := len(codes)

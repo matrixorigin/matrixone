@@ -578,6 +578,35 @@ func TestRemoteWarningCollectorMaxErrorCountUsesStatementBudget(t *testing.T) {
 	require.Zero(t, collector.warningBudget.Used())
 }
 
+func TestRemoteWarningCollectorRejectsUnderchargedSameBudgetTransfer(t *testing.T) {
+	messages := []string{"first remote warning", "later remote warning"}
+	firstCharge := process.WarningDiagnosticRecordBytes(messages[0])
+	accounted := firstCharge + process.WarningDiagnosticRecordBytes(messages[1])
+	sourceCharge := accounted - 1
+	otherCharge := uint64(7)
+	budget := process.NewWarningDiagnosticBudget(otherCharge + sourceCharge)
+	require.True(t, budget.Reserve(otherCharge))
+	require.True(t, budget.Reserve(sourceCharge))
+	collector := &remoteWarningCollector{
+		maxRetained:    1,
+		maxRetainedSet: true,
+		warningBudget:  budget,
+	}
+
+	require.True(t, process.AppendWarningBatchToSinkOwned(
+		collector, 2, []uint16{1292, 1292}, messages, budget, sourceCharge))
+	total, retained := collector.SnapshotWarnings()
+	require.Equal(t, uint64(2), total)
+	require.Len(t, retained, 1)
+	require.Equal(t, messages[0], retained[0].Message)
+	require.Equal(t, otherCharge+firstCharge, budget.Used())
+
+	collector.closeWarnings(false)
+	require.Equal(t, otherCharge, budget.Used())
+	budget.Release(otherCharge)
+	require.Zero(t, budget.Used())
+}
+
 func TestRemoteWarningCollectorDoesNotRetainMoreRecordsThanTotal(t *testing.T) {
 	collector := &remoteWarningCollector{}
 	collector.AppendWarningBatch(1, []uint16{1292, 1292}, []string{"first", "second"})

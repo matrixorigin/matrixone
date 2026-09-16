@@ -2025,6 +2025,30 @@ func TestGroupConcatWarningAccumulatorBudgetOwnershipBoundaries(t *testing.T) {
 	require.Equal(t, ^uint64(0), saturated.total)
 }
 
+func TestGroupConcatWarningAccumulatorRejectsUnderchargedSameBudgetTransfer(t *testing.T) {
+	rows := []GroupConcatWarning{{Row: 1}, {Row: 2}}
+	firstCharge := groupConcatWarningRecordBytes(rows[0].Row)
+	accounted := firstCharge + groupConcatWarningRecordBytes(rows[1].Row)
+	sourceCharge := accounted - 1
+	otherCharge := uint64(7)
+	budget := process.NewWarningDiagnosticBudget(otherCharge + sourceCharge)
+	require.True(t, budget.Reserve(otherCharge))
+	require.True(t, budget.Reserve(sourceCharge))
+
+	accumulator := &GroupConcatWarningAccumulator{}
+	accumulator.SetWarningRetentionLimit(1)
+	accumulator.SetWarningBudget(budget)
+	accumulator.addBatchOwned(2, rows, budget, sourceCharge)
+
+	require.Equal(t, rows[:1], accumulator.rows)
+	require.Equal(t, uint64(2), accumulator.total)
+	require.Equal(t, otherCharge+firstCharge, budget.Used())
+	accumulator.Reset()
+	require.Equal(t, otherCharge, budget.Used())
+	budget.Release(otherCharge)
+	require.Zero(t, budget.Used())
+}
+
 func TestGroupConcatWarningsAreDiscardedAfterFailedFinalization(t *testing.T) {
 	mp := mpool.MustNewZero()
 	info := multiAggInfo{
