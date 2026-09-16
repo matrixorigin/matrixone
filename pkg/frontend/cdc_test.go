@@ -135,6 +135,24 @@ func TestCDCCheckPitrGranularityPrimaryKeyValidation(t *testing.T) {
 		require.Len(t, bh.executedSQLs, 1)
 	})
 
+	t.Run("mode two accepts mixed-case catalog source", func(t *testing.T) {
+		bh := &backgroundExecTest{}
+		bh.init()
+		pts := &cdc.PatternTuples{
+			SourceCaseMode: 2,
+			Pts: []*cdc.PatternTuple{{
+				Source: cdc.PatternTable{Database: "mixeddb", Table: "orders"},
+			}},
+		}
+		candidateSQL := cdc.CollectCDCSourceCandidateSQL(1, "mixeddb", "orders", 2)
+		bh.sql2result[candidateSQL] = &MysqlResultSet{Columns: make([]Column, 8), Data: [][]interface{}{{
+			uint64(1), "Orders", uint64(1), "MixedDB", "", uint32(1), []byte{}, true,
+		}}}
+		require.NoError(t, CDCCheckPitrGranularity(ctx, bh, "acc", pts))
+		require.Contains(t, bh.executedSQLs[0], "lower(tbl.reldatabase) IN ('mixeddb')")
+		require.Contains(t, bh.executedSQLs[0], "lower(tbl.relname) IN ('orders')")
+	})
+
 	t.Run("catalog query error is returned", func(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()

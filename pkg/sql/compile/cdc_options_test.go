@@ -265,6 +265,34 @@ func TestCheckPitrGranularityConcretePrimaryKeyBranches(t *testing.T) {
 		})
 	}
 
+	t.Run("mode two uses case insensitive candidate query", func(t *testing.T) {
+		exec := &recordingInternalSQLExecutor{mocker: func(sql string) (executor.Result, error) {
+			if strings.Contains(sql, catalog.MO_TABLES) {
+				require.Contains(t, sql, "lower(tbl.reldatabase) IN ('mixeddb')")
+				require.Contains(t, sql, "lower(tbl.relname) IN ('orders')")
+				return candidateResult(true), nil
+			}
+			return validPitrResult(), nil
+		}}
+		rt := moruntime.ServiceRuntime(proc.GetService())
+		previous, hadPrevious := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+		rt.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
+		t.Cleanup(func() {
+			if hadPrevious {
+				rt.SetGlobalVariables(moruntime.InternalSQLExecutor, previous)
+			} else {
+				rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, exec)
+			}
+		})
+		c := NewCompile("", "", "create cdc", "", "", nil, proc, nil, false, nil, time.Now())
+		defer c.Release()
+		pts := &cdc.PatternTuples{
+			SourceCaseMode: 2,
+			Pts:            []*cdc.PatternTuple{{Source: cdc.PatternTable{Database: "mixeddb", Table: "orders"}}},
+		}
+		require.NoError(t, c.checkPitrGranularity(ctx, pts, ""))
+	})
+
 	t.Run("invalid concrete exclude is returned", func(t *testing.T) {
 		c := NewCompile("", "", "create cdc", "", "", nil, proc, nil, false, nil, time.Now())
 		defer c.Release()
