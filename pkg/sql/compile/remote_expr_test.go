@@ -574,8 +574,8 @@ func TestOrderedSetPercentileRemoteProtocolValidation(t *testing.T) {
 		aggexec.EncodeOrderedPercentileConfig([]byte("0.5"), false),
 		plan.AggregateConfigType_AGG_CONFIG_NONE,
 	)}
-	// Main's v76-v80 features do not implement extended discrete-percentile inputs.
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion80)
+	// Main's v76-v81 features do not implement extended discrete-percentile inputs.
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion81)
 	require.ErrorContains(
 		t,
 		validateRemoteAggregateProtocol(proc, extended),
@@ -583,7 +583,7 @@ func TestOrderedSetPercentileRemoteProtocolValidation(t *testing.T) {
 	)
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion82)
 	require.NoError(t, validateRemoteAggregateProtocol(proc, extended))
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion80)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion81)
 	require.Error(t, validateRemoteAggregateProtocol(proc, extended),
 		"rollback must disable extended discrete-percentile state before exchange")
 }
