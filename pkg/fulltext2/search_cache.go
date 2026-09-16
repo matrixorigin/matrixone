@@ -98,6 +98,11 @@ type Fulltext2Search struct {
 	// preloadBytes is the on-disk size of the bases Load will map. See baseDocCountAndBytes.
 	preloadBytes int64
 	preloaded    bool
+
+	// baseSegs / tailSegs are the tag=0 base and tag=1 cdc_tail segment counts captured at
+	// Load. A generation with neither serves no docs (see EmptyGeneration).
+	baseSegs int
+	tailSegs int
 }
 
 var _ veccache.VectorIndexSearchIf = (*Fulltext2Search)(nil)
@@ -106,6 +111,17 @@ var _ veccache.VectorIndexSearchIf = (*Fulltext2Search)(nil)
 // the first Search.
 func NewFulltext2Search(cfg TableConfig) *Fulltext2Search {
 	return &Fulltext2Search{cfg: cfg}
+}
+
+// EvictIdleCache drops the live cached index for indexTable IF no search is in
+// flight, so the next query reloads the just-appended cdc_tail generation. A busy
+// entry is left warm (RemoveIdle returns false) and refreshes at a later idle
+// moment or via the IsStale sweep. Called after a CDC tail flush commits, this
+// bounds the stale-empty window an index created empty (copy-alter / create on an
+// empty table, no tag=0 base) would otherwise show until the housekeeping sweep,
+// without the reader thrash a forced evict on every flush would cause.
+func EvictIdleCache(indexTable string) bool {
+	return veccache.Cache.RemoveIdle(indexTable, "cdc")
 }
 
 // Load reads the index from the chunk store: the tag=0 base sub-indexes plus the
@@ -159,6 +175,8 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) error {
 	segs := append(bases, tails...)
 	s.idx = NewIndex(segs, deletes)
 	s.loaded = true
+	s.baseSegs = len(bases)
+	s.tailSegs = len(tails)
 
 	// Capture the generation + durable handles for IsStale. Same txn as the load, so the
 	// captured generation matches the loaded snapshot exactly. On any capture failure genValid
@@ -171,6 +189,16 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) error {
 		}
 	}
 	return nil
+}
+
+// EmptyGeneration reports a loaded generation with NO tag=0 base AND NO tag=1 cdc_tail: the
+// transient copy-alter init window (hidden tables created empty, before the REINDEX FORCE_SYNC
+// builds the base) or an index on an empty table. The cache declines to retain such a
+// generation so the next query reloads and picks up the base once it appears, instead of
+// pinning a doc-less generation -- which returns false-negative MATCH -- until the housekeeping
+// sweep. A base- or tail-bearing generation has data worth serving and is cached normally.
+func (s *Fulltext2Search) EmptyGeneration() bool {
+	return s.loaded && s.baseSegs == 0 && s.tailSegs == 0
 }
 
 // GetIndexSize reports the Go-heap cost of the loaded index, charged with the SAME per-doc

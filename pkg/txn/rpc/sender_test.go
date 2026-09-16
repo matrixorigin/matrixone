@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -45,6 +46,24 @@ type backendRetryErrorClient struct {
 	sendErr       error
 	newStreamWait <-chan struct{}
 	sendCalls     atomic.Int32
+}
+
+type startServerAfterSendErrorClient struct {
+	morpc.RPCClient
+	onError func(error)
+	once    sync.Once
+}
+
+func (c *startServerAfterSendErrorClient) Send(
+	ctx context.Context,
+	backend string,
+	request morpc.Message,
+) (*morpc.Future, error) {
+	future, err := c.RPCClient.Send(ctx, backend, request)
+	if err != nil {
+		c.once.Do(func() { c.onError(err) })
+	}
+	return future, err
 }
 
 type postFlushCommitStream struct{}
@@ -522,32 +541,12 @@ func TestCanSendWithLargeRequest(t *testing.T) {
 }
 
 func TestSendWithRequestRetry(t *testing.T) {
-	ch := make(chan struct{})
-	var s morpc.RPCServer
-	go func() {
-		time.Sleep(time.Second)
-		s = newTestTxnServer(t, testTN1Addr, func(
-			ctx context.Context,
-			request morpc.RPCMessage,
-			sequence uint64,
-			cs morpc.ClientSession) error {
-			return cs.Write(ctx, &txn.TxnResponse{
-				RequestID: request.Message.GetID(),
-				Method:    txn.TxnMethod_Write,
-				CNOpResponse: &txn.CNOpResponse{
-					Payload: make([]byte, 10),
-				},
-			})
-		})
-		ch <- struct{}{}
-	}()
+	oldWait := defaultWaitTimeOnRetryBackendSend
+	defaultWaitTimeOnRetryBackendSend = 10 * time.Millisecond
+	defer func() { defaultWaitTimeOnRetryBackendSend = oldWait }()
 
-	defer func() {
-		<-ch
-		if s != nil {
-			assert.NoError(t, s.Close())
-		}
-	}()
+	firstError := make(chan error, 1)
+	var s morpc.RPCServer
 
 	sd, err := NewSender(
 		Config{},
@@ -556,6 +555,32 @@ func TestSendWithRequestRetry(t *testing.T) {
 	assert.NoError(t, err)
 	defer func() {
 		assert.NoError(t, sd.Close())
+	}()
+
+	sender := sd.(*sender)
+	sender.client = &startServerAfterSendErrorClient{
+		RPCClient: sender.client,
+		onError: func(err error) {
+			firstError <- err
+			s = newTestTxnServer(t, testTN1Addr, func(
+				ctx context.Context,
+				request morpc.RPCMessage,
+				sequence uint64,
+				cs morpc.ClientSession) error {
+				return cs.Write(ctx, &txn.TxnResponse{
+					RequestID: request.Message.GetID(),
+					Method:    txn.TxnMethod_Write,
+					CNOpResponse: &txn.CNOpResponse{
+						Payload: make([]byte, 10),
+					},
+				})
+			})
+		},
+	}
+	defer func() {
+		if s != nil {
+			assert.NoError(t, s.Close())
+		}
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -572,6 +597,14 @@ func TestSendWithRequestRetry(t *testing.T) {
 	}
 	result, err := sd.Send(ctx, []txn.TxnRequest{req})
 	assert.NoError(t, err)
+	var firstErr error
+	select {
+	case firstErr = <-firstError:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for the first backend send error")
+	}
+	assert.Error(t, firstErr)
+	assert.True(t, isBackendConnectRetryError(firstErr))
 	defer result.Release()
 	assert.Equal(t, 1, len(result.Responses))
 	assert.Equal(t, txn.TxnMethod_Write, result.Responses[0].Method)
