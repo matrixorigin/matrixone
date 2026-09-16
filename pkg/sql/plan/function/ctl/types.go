@@ -53,6 +53,7 @@ var (
 	SetVectorIndexFreshnessIntervalMethod = strings.ToUpper("SetVectorIndexFreshnessInterval")
 	GetVectorIndexCacheInfoMethod         = strings.ToUpper("GetVectorIndexCacheInfo")
 	EvictVectorIndexCacheMethod           = strings.ToUpper("EvictVectorIndexCache")
+	GetVectorIndexCacheKeysMethod         = strings.ToUpper("GetVectorIndexCacheKeys")
 	RemoveRemoteLockTable                 = strings.ToUpper("RemoveRemoteLockTable")
 	GetLatestBind                         = strings.ToUpper("GetLatestBind")
 	UnsubscribeTable                      = "UNSUBSCRIBE_TABLE"
@@ -102,6 +103,7 @@ var (
 		SetVectorIndexFreshnessIntervalMethod: handleSetVectorIndexFreshnessInterval,
 		GetVectorIndexCacheInfoMethod:         handleGetVectorIndexCacheInfo,
 		EvictVectorIndexCacheMethod:           handleEvictVectorIndexCache,
+		GetVectorIndexCacheKeysMethod:         handleGetVectorIndexCacheKeys,
 		RemoveRemoteLockTable:                 handleRemoveRemoteLockTable,
 		GetLatestBind:                         handleGetLatestBind,
 		UnsubscribeTable:                      handleUnsubscribeTable,

@@ -119,6 +119,9 @@ enum CmdMethod {
   // EvictVectorIndexCache drops a vector/fulltext2 index's cache entries on a CN so the next query
   // reloads a current generation (sys-admin/test; synchronous).
   EvictVectorIndexCache = 43;
+  // GetVectorIndexCacheKeys lists the exact cache keys a CN currently holds, so an operator can
+  // discover the key to pass to GetVectorIndexCacheInfo / EvictVectorIndexCache (test/ops).
+  GetVectorIndexCacheKeys = 44;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -209,6 +212,14 @@ message EvictVectorIndexCacheResponse {
   int64 Evicted = 1;
 }
 
+message GetVectorIndexCacheKeysRequest {
+}
+
+message GetVectorIndexCacheKeysResponse {
+  // Keys are the exact cache keys this CN currently holds.
+  repeated string Keys = 1;
+}
+
 message SetProtocolVersionResponse {
   // ProtocolVersion is the version of the protocol
   int64 Version = 1;
@@ -297,6 +308,7 @@ message Request {
   SetVectorIndexFreshnessIntervalRequest SetVectorIndexFreshnessInterval = 43 [ (gogoproto.nullable) = false ];
   GetVectorIndexCacheInfoRequest GetVectorIndexCacheInfo = 44 [ (gogoproto.nullable) = false ];
   EvictVectorIndexCacheRequest EvictVectorIndexCache = 45 [ (gogoproto.nullable) = false ];
+  GetVectorIndexCacheKeysRequest GetVectorIndexCacheKeys = 46 [ (gogoproto.nullable) = false ];
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -370,6 +382,7 @@ message Response {
   SetVectorIndexFreshnessIntervalResponse SetVectorIndexFreshnessInterval = 44 [ (gogoproto.nullable) = false ];
   GetVectorIndexCacheInfoResponse GetVectorIndexCacheInfo = 45 [ (gogoproto.nullable) = false ];
   EvictVectorIndexCacheResponse EvictVectorIndexCache = 46 [ (gogoproto.nullable) = false ];
+  GetVectorIndexCacheKeysResponse GetVectorIndexCacheKeys = 47 [ (gogoproto.nullable) = false ];
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.

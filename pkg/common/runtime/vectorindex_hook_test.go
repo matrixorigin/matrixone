@@ -22,15 +22,16 @@ import (
 )
 
 func TestVectorIndexHooks(t *testing.T) {
-	oldSetter, oldCounter, oldEvictor := vectorIndexStaleCheckIntervalSetter, vectorIndexCacheKeyCounter, vectorIndexCacheEvictor
+	oldSetter, oldCounter, oldEvictor, oldLister := vectorIndexStaleCheckIntervalSetter, vectorIndexCacheKeyCounter, vectorIndexCacheEvictor, vectorIndexCacheKeyLister
 	t.Cleanup(func() {
 		vectorIndexStaleCheckIntervalSetter = oldSetter
 		vectorIndexCacheKeyCounter = oldCounter
 		vectorIndexCacheEvictor = oldEvictor
+		vectorIndexCacheKeyLister = oldLister
 	})
 
-	// Unregistered: setter is a no-op, get/evict report not-linked.
-	vectorIndexStaleCheckIntervalSetter, vectorIndexCacheKeyCounter, vectorIndexCacheEvictor = nil, nil, nil
+	// Unregistered: setter is a no-op, get/evict/list report not-linked.
+	vectorIndexStaleCheckIntervalSetter, vectorIndexCacheKeyCounter, vectorIndexCacheEvictor, vectorIndexCacheKeyLister = nil, nil, nil, nil
 	SetVectorIndexStaleCheckInterval(time.Second) // must not panic
 	n, ok := VectorIndexCacheCountKey("k")
 	require.False(t, ok)
@@ -38,6 +39,9 @@ func TestVectorIndexHooks(t *testing.T) {
 	n, ok = EvictVectorIndexCache("k")
 	require.False(t, ok)
 	require.Zero(t, n)
+	keys, ok := VectorIndexCacheKeys()
+	require.False(t, ok)
+	require.Nil(t, keys)
 
 	// Registered: wrappers dispatch to the registered funcs.
 	var gotDur time.Duration
@@ -45,6 +49,7 @@ func TestVectorIndexHooks(t *testing.T) {
 	RegisterVectorIndexStaleCheckIntervalSetter(func(d time.Duration) { gotDur = d })
 	RegisterVectorIndexCacheKeyCounter(func(key string) int64 { gotCountKey = key; return 7 })
 	RegisterVectorIndexCacheEvictor(func(key string) int64 { gotEvictKey = key; return 3 })
+	RegisterVectorIndexCacheKeyLister(func() []string { return []string{"a", "b"} })
 
 	SetVectorIndexStaleCheckInterval(2 * time.Second)
 	require.Equal(t, 2*time.Second, gotDur)
@@ -58,4 +63,8 @@ func TestVectorIndexHooks(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, int64(3), n)
 	require.Equal(t, "idx", gotEvictKey)
+
+	keys, ok = VectorIndexCacheKeys()
+	require.True(t, ok)
+	require.Equal(t, []string{"a", "b"}, keys)
 }

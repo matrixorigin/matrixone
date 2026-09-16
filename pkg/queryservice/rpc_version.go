@@ -85,3 +85,13 @@ func (s *queryService) handleEvictVectorIndexCache() func(ctx context.Context, r
 		return nil
 	}
 }
+
+// handleGetVectorIndexCacheKeys lists the exact cache keys this CN currently holds (mo_ctl
+// GetVectorIndexCacheKeys).
+func (s *queryService) handleGetVectorIndexCacheKeys() func(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
+	return func(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
+		keys, _ := runtime.VectorIndexCacheKeys()
+		resp.GetVectorIndexCacheKeys = query.GetVectorIndexCacheKeysResponse{Keys: keys}
+		return nil
+	}
+}

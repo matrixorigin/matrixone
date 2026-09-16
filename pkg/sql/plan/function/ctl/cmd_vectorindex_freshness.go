@@ -17,6 +17,7 @@ package ctl
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -106,10 +107,14 @@ func handleSetVectorIndexFreshnessInterval(
 }
 
 // handleGetVectorIndexCacheInfo reports the TOTAL number of vector/fulltext2 index cache entries
-// held across all CNs for a given index key, so a test/operator can observe cross-CN eviction
+// held across all CNs for a given EXACT cache key, so a test/operator can observe cross-CN eviction
 // deterministically (0 = evicted everywhere) instead of guessing a sleep. Read-only.
 //
-//	mo_ctl("cn", "GetVectorIndexCacheInfo", "<index hidden table name>")   // empty = all entries
+//	mo_ctl("cn", "GetVectorIndexCacheInfo", "<exact cache key>")   // empty = all entries
+//
+// The key is the exact cache key: fulltext2 and hnsw key by the bare hidden index-table name, while
+// the ivf family keys by "<index-table>:<version>". The match is exact (see cache.CountKey), so it
+// reports exactly what EvictVectorIndexCache would remove.
 //
 // The Result's numeric total is JSON-addressable as $.result, so a BVT can poll it with @wait_expect
 // (e.g. json_extract(mo_ctl(...), '$.result') until 0).
@@ -170,10 +175,14 @@ type vectorIndexCacheInfo struct {
 	CNs    int   `json:"cns"`
 }
 
-// handleEvictVectorIndexCache drops a specific index's vector/fulltext2 cache entries on EVERY CN
+// handleEvictVectorIndexCache drops the cache entry under an EXACT cache key on EVERY CN
 // (synchronous), so the next query reloads a current generation. Sys-admin/test tool.
 //
-//	mo_ctl("cn", "EvictVectorIndexCache", "<index hidden table name>")
+//	mo_ctl("cn", "EvictVectorIndexCache", "<exact cache key>")
+//
+// The key is the exact cache key (see GetVectorIndexCacheInfo / cache.EvictKey): fulltext2 and hnsw
+// use the bare hidden index-table name, the ivf family uses "<index-table>:<version>". Only that
+// exact entry is evicted -- not other versions or named-snapshot generations.
 //
 // Unlike SetVectorIndexFreshnessInterval this is fail-on-first-error: an eviction that only reached
 // some CNs is not "done", so the caller must see the failure rather than a misleading success.
@@ -233,4 +242,83 @@ func handleEvictVectorIndexCache(
 type vectorIndexEvictInfo struct {
 	Evicted int64 `json:"evicted"`
 	CNs     int   `json:"cns"`
+}
+
+// handleGetVectorIndexCacheKeys lists the exact cache keys held across all CNs, so an operator can
+// discover the key (e.g. an ivf "<index-table>:<version>") to pass to GetVectorIndexCacheInfo /
+// EvictVectorIndexCache. Read-only.
+//
+//	mo_ctl("cn", "GetVectorIndexCacheKeys", "")
+//
+// The Result lists each distinct key once with the number of CNs that hold it, sorted by key for a
+// stable output. The parameter is ignored.
+func handleGetVectorIndexCacheKeys(
+	proc *process.Process,
+	service serviceType,
+	parameter string,
+	sender requestSender,
+) (Result, error) {
+	if service != cn {
+		return Result{}, moerr.NewInternalError(proc.Ctx, "GetVectorIndexCacheKeys only supports cn")
+	}
+
+	qt := proc.GetQueryClient()
+	mc := clusterservice.GetMOCluster(proc.GetService())
+	var addrs []string
+	mc.GetCNService(clusterservice.NewSelector(), func(c metadata.CNService) bool {
+		if c.QueryAddress != "" {
+			addrs = append(addrs, c.QueryAddress)
+		}
+		return true
+	})
+	if len(addrs) == 0 {
+		return Result{}, moerr.NewInternalError(proc.Ctx,
+			"GetVectorIndexCacheKeys: no CN with a query address to query")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
+	defer cancel()
+	counts := make(map[string]int)
+	for _, addr := range addrs {
+		req := qt.NewRequest(querypb.CmdMethod_GetVectorIndexCacheKeys)
+		req.GetVectorIndexCacheKeys = querypb.GetVectorIndexCacheKeysRequest{}
+		resp, err := qt.SendMessage(ctx, addr, req)
+		if err != nil {
+			return Result{}, err
+		}
+		for _, k := range resp.GetVectorIndexCacheKeys.Keys {
+			counts[k]++
+		}
+		qt.Release(resp)
+	}
+
+	keys := make([]string, 0, len(counts))
+	for k := range counts {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	entries := make([]vectorIndexCacheKeyEntry, 0, len(keys))
+	for _, k := range keys {
+		entries = append(entries, vectorIndexCacheKeyEntry{Key: k, CNs: counts[k]})
+	}
+
+	return Result{
+		Method: GetVectorIndexCacheKeysMethod,
+		Data: vectorIndexCacheKeys{
+			Keys: entries,
+			CNs:  len(addrs),
+		},
+	}, nil
+}
+
+// vectorIndexCacheKeys is the GetVectorIndexCacheKeys Result payload: Keys lists each distinct cache
+// key (sorted) with the number of CNs holding it; CNs is how many CNs were queried.
+type vectorIndexCacheKeys struct {
+	Keys []vectorIndexCacheKeyEntry `json:"keys"`
+	CNs  int                        `json:"cns"`
+}
+
+type vectorIndexCacheKeyEntry struct {
+	Key string `json:"key"`
+	CNs int    `json:"cns"`
 }

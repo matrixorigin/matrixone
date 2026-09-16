@@ -19,6 +19,12 @@
 -- serially, so this global knob is safe, and a short interval is benign to any later case (it only
 -- refreshes caches sooner). At the very end it also directly exercises the manual EvictVectorIndexCache
 -- mo_ctl and confirms via GetVectorIndexCacheInfo that no CN holds the entry afterwards.
+--
+-- This is a MULTI-CN test (it runs in the pessimistic multi-CN BVT suite). That is what makes the
+-- GetVectorIndexCacheInfo=0 poll a genuine proof of the cross-CN sweep: cached is summed over ALL
+-- CNs, and RemoveIdle only evicts the CDC-consumer CN, so a non-consumer CN's stale entry can be
+-- cleared only by the periodic sweep. The sum can reach 0 only once the sweep has evicted the
+-- non-consumer CN(s) -- RemoveIdle alone cannot zero it.
 set experimental_fulltext2_index = 1;
 
 -- Lower the periodic cross-CN freshness sweep cadence for the duration of this case. Everything
@@ -118,6 +124,18 @@ deallocate prepare wait_sweep;
 -- The entry was just evicted everywhere, so this first MATCH cold-reloads base+tail on any CN.
 select id from docs where match(body) against('neutrino') order by id;
 select id from docs where match(body) against('quantum') order by id;
+
+-- The operator workflow before evicting: list the cached keys to discover the exact key. The two
+-- MATCHes above re-warmed @ft2_index2, so GetVectorIndexCacheKeys must now list it. The full key
+-- list is not clean across BVT cases (dynamic hidden-table names, other cases' cached indexes, and
+-- possibly snapshot generations of this same index), so assert only the stable fact that
+-- @ft2_index2 appears AT LEAST ONCE: LIKE returns 1 whether it is listed once (base only) or more
+-- (base + snapshot generations), and it matches this index's unique table name only.
+set @list_sql = concat(
+    'select mo_ctl(''cn'', ''GetVectorIndexCacheKeys'', '''') like ''%', @ft2_index2, '%'' as found');
+prepare list_keys from @list_sql;
+execute list_keys;
+deallocate prepare list_keys;
 
 -- Directly exercise the manual eviction command: the two MATCHes above re-warmed the entry on
 -- whichever CN(s) served them. EvictVectorIndexCache broadcasts to every CN and drops @ft2_index2

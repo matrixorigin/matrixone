@@ -29,11 +29,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// vecCtlQueryClient answers the three vector-index-cache ctl commands with fixed per-CN values, and
-// can be told to fail a specific address to exercise the best-effort / fail-on-first branches.
+// vecCtlQueryClient answers the vector-index-cache ctl commands with fixed per-CN values, and can
+// be told to fail a specific address to exercise the best-effort / fail-on-first branches.
 type vecCtlQueryClient struct {
 	cachedPerCN  int64
 	evictedPerCN int64
+	keysPerCN    []string
 	failAddr     string
 }
 
@@ -53,6 +54,8 @@ func (c *vecCtlQueryClient) SendMessage(_ context.Context, addr string, req *que
 		return &query.Response{GetVectorIndexCacheInfo: query.GetVectorIndexCacheInfoResponse{Count: c.cachedPerCN}}, nil
 	case query.CmdMethod_EvictVectorIndexCache:
 		return &query.Response{EvictVectorIndexCache: query.EvictVectorIndexCacheResponse{Evicted: c.evictedPerCN}}, nil
+	case query.CmdMethod_GetVectorIndexCacheKeys:
+		return &query.Response{GetVectorIndexCacheKeys: query.GetVectorIndexCacheKeysResponse{Keys: c.keysPerCN}}, nil
 	}
 	return nil, moerr.NewInternalErrorNoCtx("unexpected query method")
 }
@@ -112,6 +115,27 @@ func TestHandleGetVectorIndexCacheInfo(t *testing.T) {
 		require.Equal(t, vectorIndexCacheInfo{Cached: 2, CNs: 2}, ret.Data) // 1 per CN x 2 CNs
 
 		_, err = handleGetVectorIndexCacheInfo(proc, tn, "idx", nil)
+		require.Error(t, err)
+	})
+}
+
+func TestHandleGetVectorIndexCacheKeys(t *testing.T) {
+	runtime.RunTest("", func(rt runtime.Runtime) {
+		// Each CN reports the same two keys; the handler unions them, counts CNs per key, and sorts.
+		proc := vecCtlProc(t, rt, &vecCtlQueryClient{keysPerCN: []string{"ivf_tbl:7", "ft2_tbl"}})
+		ret, err := handleGetVectorIndexCacheKeys(proc, cn, "", nil)
+		require.NoError(t, err)
+		require.Equal(t, GetVectorIndexCacheKeysMethod, ret.Method)
+		require.Equal(t, vectorIndexCacheKeys{
+			Keys: []vectorIndexCacheKeyEntry{{Key: "ft2_tbl", CNs: 2}, {Key: "ivf_tbl:7", CNs: 2}},
+			CNs:  2,
+		}, ret.Data)
+
+		// Wrong service refused; a failing CN aborts.
+		_, err = handleGetVectorIndexCacheKeys(proc, tn, "", nil)
+		require.Error(t, err)
+		proc2 := vecCtlProc(t, rt, &vecCtlQueryClient{failAddr: "addr1"})
+		_, err = handleGetVectorIndexCacheKeys(proc2, cn, "", nil)
 		require.Error(t, err)
 	})
 }

@@ -72,3 +72,21 @@ func EvictVectorIndexCache(key string) (int64, bool) {
 	}
 	return 0, false
 }
+
+// vectorIndexCacheKeyLister returns the exact cache keys this process currently holds. Same
+// dependency-inversion pattern; registered by the cache at init, invoked by the query-service
+// handler (GetVectorIndexCacheKeys).
+var vectorIndexCacheKeyLister func() []string
+
+// RegisterVectorIndexCacheKeyLister is called once by the cache package's init.
+func RegisterVectorIndexCacheKeyLister(fn func() []string) {
+	vectorIndexCacheKeyLister = fn
+}
+
+// VectorIndexCacheKeys returns (keys, true) if the cache is linked; (nil, false) otherwise.
+func VectorIndexCacheKeys() ([]string, bool) {
+	if vectorIndexCacheKeyLister != nil {
+		return vectorIndexCacheKeyLister(), true
+	}
+	return nil, false
+}

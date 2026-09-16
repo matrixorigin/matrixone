@@ -15,6 +15,7 @@
 package cache
 
 import (
+	"sync"
 	"testing"
 	"time"
 
@@ -69,6 +70,24 @@ func TestSetStaleCheckIntervalResetsRunningTicker(t *testing.T) {
 	require.Equal(t, 3*time.Second, c.staleTickerInterval())
 }
 
+// The startup race: an override landing while serve() is arming the ticker must not be lost.
+// serveMu serializes serve()'s ticker-create+started-publish with SetStaleCheckInterval's
+// check+reset, so after both run the override governs (either serve() read it when creating the
+// ticker, or SetStaleCheckInterval Reset the live ticker). Run under -race to prove no data race
+// or deadlock on serveMu/ticker/started across the two goroutines.
+func TestSetStaleCheckIntervalDuringServeIsNotLost(t *testing.T) {
+	for i := 0; i < 100; i++ {
+		c := NewVectorIndexCache()
+		var wg sync.WaitGroup
+		wg.Add(2)
+		go func() { defer wg.Done(); c.serve() }()
+		go func() { defer wg.Done(); c.SetStaleCheckInterval(2 * time.Second) }()
+		wg.Wait()
+		require.Equal(t, 2*time.Second, c.staleTickerInterval())
+		c.Destroy()
+	}
+}
+
 // The rigorous, placement-free proof of the mechanism the configurable interval accelerates: the
 // periodic sweep evicts a stale entry (so the next load is fresh) and leaves a fresh one alone.
 // A multi-CN BVT cannot prove this deterministically (query placement is non-deterministic), so it
@@ -115,6 +134,16 @@ func TestCountKey(t *testing.T) {
 	require.Equal(t, int64(1), c.CountKey(""), "empty key counts all entries")
 	require.Equal(t, int64(0), c.CountKey("other"))
 
+	// The ivf family keys by "<index-table>:<version>": the EXACT key matches; the bare index-table
+	// name does NOT (the exact-key contract, so what GetVectorIndexCacheInfo reports is what
+	// EvictVectorIndexCache would drop).
+	ivf := newVectorIndexSearch(&countingSearch{})
+	ivf.Status.Store(STATUS_LOADED)
+	c.IndexMap.Store("tbl:7", ivf)
+	require.Equal(t, int64(1), c.CountKey("tbl:7"), "ivf exact key matches")
+	require.Equal(t, int64(0), c.CountKey("tbl"), "bare table name must not match an ivf :version key")
+	require.Equal(t, int64(2), c.CountKey(""), "empty key counts all entries")
+
 	c.IndexMap.Delete("idx") // eviction -> back to 0
 	require.Equal(t, int64(0), c.CountKey("idx"))
 }
@@ -137,4 +166,28 @@ func TestEvictKey(t *testing.T) {
 	c.IndexMap.Store("keep", other)
 	require.Equal(t, int64(0), c.EvictKey(""), "empty key is a no-op")
 	require.Equal(t, int64(1), c.CountKey("keep"), "empty-key evict must not drop other entries")
+
+	// ivf family: only the EXACT "<index-table>:<version>" key evicts; the bare table name is a
+	// no-op that leaves the entry resident.
+	ivf := newVectorIndexSearch(&countingSearch{})
+	ivf.Status.Store(STATUS_LOADED)
+	c.IndexMap.Store("tbl:7", ivf)
+	require.Equal(t, int64(0), c.EvictKey("tbl"), "bare table name must not evict an ivf :version key")
+	require.Equal(t, int64(1), c.CountKey("tbl:7"), "the ivf entry survives a bare-name evict")
+	require.Equal(t, int64(1), c.EvictKey("tbl:7"), "exact ivf key evicts")
+	require.Equal(t, int64(0), c.CountKey("tbl:7"), "entry is gone after exact evict")
+}
+
+// Keys lists the exact cache keys, sorted -- the signal GetVectorIndexCacheKeys aggregates across
+// CNs so an operator can discover the exact key (e.g. an ivf "<table>:<version>") to evict.
+func TestKeys(t *testing.T) {
+	c := NewVectorIndexCache()
+	require.Empty(t, c.Keys(), "an empty cache lists no keys")
+
+	for _, k := range []string{"ft2_tbl", "ivf_tbl:9", "ivf_tbl:7"} {
+		e := newVectorIndexSearch(&countingSearch{})
+		e.Status.Store(STATUS_LOADED)
+		c.IndexMap.Store(k, e)
+	}
+	require.Equal(t, []string{"ft2_tbl", "ivf_tbl:7", "ivf_tbl:9"}, c.Keys(), "keys are returned sorted")
 }

@@ -99,10 +99,17 @@ select id from docs where match(body) against('quantum') order by id;
 1  𝄀
 3  𝄀
 5
+set @list_sql = concat(
+'select mo_ctl(''cn'', ''GetVectorIndexCacheKeys'', '''') like ''%', @ft2_index2, '%'' as found');
+prepare list_keys from @list_sql;
+execute list_keys;
+➤ found[-7,1,0]  𝄀
+1
+deallocate prepare list_keys;
 set @evict_sql = concat('select mo_ctl(''cn'', ''EvictVectorIndexCache'', ''', @ft2_index2, ''')');
 prepare do_evict from @evict_sql;
 execute do_evict;
-➤ mo_ctl(cn, EvictVectorIndexCache, __mo_index_secondary_01a0aacd-ad4c-776e-b2dd-3f81d7274c67)[12,65535,0]  𝄀
+➤ mo_ctl(cn, EvictVectorIndexCache, __mo_index_secondary_01a0ab6e-a2c2-737a-8fff-ec338203ed9c)[12,65535,0]  𝄀
 {
   "method": "EVICTVECTORINDEXCACHE",
   "result": {

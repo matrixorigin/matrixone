@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -45,6 +46,9 @@ func init() {
 	})
 	moruntime.RegisterVectorIndexCacheEvictor(func(key string) int64 {
 		return Cache.EvictKey(key)
+	})
+	moruntime.RegisterVectorIndexCacheKeyLister(func() []string {
+		return Cache.Keys()
 	})
 }
 
@@ -685,6 +689,12 @@ type VectorIndexCache struct {
 	// cadence. Sys-admin-only test/ops knob (mo_ctl SetVectorIndexFreshnessInterval), never persisted.
 	staleCheckIntervalNs atomic.Int64
 
+	// serveMu serializes serve()'s ticker creation + started publication with
+	// SetStaleCheckInterval's started-check + Reset. Without it an override that lands during the
+	// first lazy serve() (after serve reads the default interval but before it publishes started)
+	// would be stored yet never applied, leaving this CN on the default cadence indefinitely.
+	serveMu sync.Mutex
+
 	// The residency budget and everything that decides it. Held by value so a zero
 	// VectorIndexCache is usable; gov() attaches the back-reference on first use.
 	governor     VectorIndexGovernor
@@ -736,23 +746,31 @@ func (c *VectorIndexCache) SetStaleCheckInterval(d time.Duration) {
 	}
 	c.staleCheckIntervalNs.Store(int64(d))
 	reset := false
+	// serveMu makes this check+Reset atomic w.r.t. serve()'s ticker-create + started publication:
+	// the store above happens-before the lock, so if serve() has not published started yet, serve()
+	// will read the new value when it creates the ticker; otherwise we Reset the live ticker here.
 	// Only re-arm a live ticker: after Destroy() the serve goroutine is gone (exited=true) but
 	// started stays true, so without the exited guard this would Reset a stopped ticker whose
 	// consumer no longer exists. The stored value above still governs if serve() runs again.
+	c.serveMu.Lock()
 	if c.started.Load() && !c.exited.Load() && c.ticker != nil {
 		c.ticker.Reset(c.staleTickerInterval())
 		reset = true
 	}
+	c.serveMu.Unlock()
 	// Debug-logged (not hot-path: only the sys-admin mo_ctl reaches here) so an operator/test can
 	// confirm the override actually applied on THIS CN -- the mo_ctl Result only echoes the request.
 	logutil.Debugf("[veccache] stale-check interval override set to %v; effective sweep ticker=%v (every %d ticks), ticker_reset=%v",
 		d, c.staleTickerInterval(), stalenessCheckEveryNTicks, reset)
 }
 
-// CountKey returns how many cached entries this cache holds for an index key: the current
-// generation plus any named-snapshot generations of it. key=="" counts every entry. It is a
-// read-only introspection used by the SetVectorIndexFreshnessInterval companion mo_ctl
-// (GetVectorIndexCacheInfo) to observe cross-CN eviction; it does not touch or warm any entry.
+// CountKey returns how many cached entries this cache holds under the EXACT cache key (0 or 1 on
+// one CN); key=="" counts every entry. The key is the exact cache key, which is algorithm-specific:
+// fulltext2 and hnsw key by the bare hidden index-table name, while the ivf family keys by
+// "<index-table>:<version>" (optionally "tenant=<id>:" prefixed and ":<part>/<parts>" suffixed).
+// Distinct versions and named-snapshot generations are separate keys and are counted only when
+// passed exactly -- matching EvictKey, so what GetVectorIndexCacheInfo reports is exactly what
+// EvictVectorIndexCache would remove. Read-only: it does not touch or warm any entry.
 func (c *VectorIndexCache) CountKey(key string) int64 {
 	var n int64
 	c.IndexMap.Range(func(k, _ any) bool {
@@ -760,7 +778,7 @@ func (c *VectorIndexCache) CountKey(key string) int64 {
 		if !ok {
 			return true
 		}
-		if key == "" || ks == key || strings.HasPrefix(ks, key+snapshotKeySep) {
+		if key == "" || ks == key {
 			n++
 		}
 		return true
@@ -768,19 +786,36 @@ func (c *VectorIndexCache) CountKey(key string) int64 {
 	return n
 }
 
-// EvictKey drops an index's cache entries (current generation + any named-snapshot generations),
-// returning how many it removed. Synchronous force-evict (waits out any in-flight search), so the
-// next query reloads a current generation. Backs the EvictVectorIndexCache mo_ctl. key=="" is a
-// no-op returning 0 (refuse to flush the whole cache by accident).
+// EvictKey drops the cache entry under the EXACT cache key (see CountKey for the per-algorithm key
+// form), returning how many it removed (0 or 1 on one CN). Synchronous force-evict (waits out any
+// in-flight search), so the next query reloads a current generation. It deliberately evicts only
+// the exact key -- not other versions or named-snapshot generations -- so the caller controls
+// precisely what is dropped. Backs the EvictVectorIndexCache mo_ctl. key=="" is a no-op returning 0
+// (refuse to flush the whole cache by accident).
 func (c *VectorIndexCache) EvictKey(key string) int64 {
 	if key == "" {
 		return 0
 	}
 	n := c.CountKey(key)
 	if n > 0 {
-		c.RemoveAllGenerations(key, "ctl")
+		c.RemoveWithReason(key, "ctl")
 	}
 	return n
+}
+
+// Keys returns the exact cache keys this cache currently holds, sorted. Read-only introspection
+// backing the GetVectorIndexCacheKeys mo_ctl: an operator lists the keys here to learn the exact
+// key (e.g. an ivf "<index-table>:<version>") to pass to GetVectorIndexCacheInfo / EvictKey.
+func (c *VectorIndexCache) Keys() []string {
+	var keys []string
+	c.IndexMap.Range(func(k, _ any) bool {
+		if ks, ok := k.(string); ok {
+			keys = append(keys, ks)
+		}
+		return true
+	})
+	sort.Strings(keys)
+	return keys
 }
 
 func (c *VectorIndexCache) serve() {
@@ -789,6 +824,9 @@ func (c *VectorIndexCache) serve() {
 	}
 
 	// try clean up the temp directory. set tempdir to /tmp/hnsw
+	// serveMu makes ticker creation + started publication atomic w.r.t. SetStaleCheckInterval, so a
+	// freshness-interval override that lands during startup is either read here or Reset afterwards.
+	c.serveMu.Lock()
 	c.ticker = time.NewTicker(c.staleTickerInterval())
 	c.done = make(chan bool)
 	c.sigc = make(chan os.Signal, 3)
@@ -796,6 +834,7 @@ func (c *VectorIndexCache) serve() {
 
 	// channel initizalized.  set started to true
 	c.started.Store(true)
+	c.serveMu.Unlock()
 
 	go func() {
 		defer c.ticker.Stop()

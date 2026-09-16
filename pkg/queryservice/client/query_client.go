@@ -48,6 +48,7 @@ var methodVersions = map[pb.CmdMethod]int64{
 	pb.CmdMethod_SetVectorIndexFreshnessInterval: defines.MORPCVersion82,
 	pb.CmdMethod_GetVectorIndexCacheInfo:         defines.MORPCVersion82,
 	pb.CmdMethod_EvictVectorIndexCache:           defines.MORPCVersion82,
+	pb.CmdMethod_GetVectorIndexCacheKeys:         defines.MORPCVersion82,
 	pb.CmdMethod_CoreDumpConfig:                  defines.MORPCMinVersion,
 	pb.CmdMethod_MigrateConnFrom:                 defines.MORPCVersion1,
 	pb.CmdMethod_MigrateConnTo:                   defines.MORPCVersion1,

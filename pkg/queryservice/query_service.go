@@ -107,6 +107,7 @@ func (s *queryService) initHandleFunc() {
 	s.AddHandleFunc(pb.CmdMethod_SetVectorIndexFreshnessInterval, s.handleSetVectorIndexFreshnessInterval(), false)
 	s.AddHandleFunc(pb.CmdMethod_GetVectorIndexCacheInfo, s.handleGetVectorIndexCacheInfo(), false)
 	s.AddHandleFunc(pb.CmdMethod_EvictVectorIndexCache, s.handleEvictVectorIndexCache(), false)
+	s.AddHandleFunc(pb.CmdMethod_GetVectorIndexCacheKeys, s.handleGetVectorIndexCacheKeys(), false)
 	s.AddHandleFunc(pb.CmdMethod_CoreDumpConfig, handleCoreDumpConfig, false)
 }
 
