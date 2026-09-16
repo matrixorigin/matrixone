@@ -372,7 +372,15 @@ func (b *baseBinder) baseBindParam(astExpr *tree.ParamExpr, depth int32, isRoot 
 		},
 	}
 	if runtimeType, ok := preparedIntegerBinding(b.GetContext(), astExpr.Offset); ok {
-		return appendCastBeforeExpr(b.GetContext(), param, makePlan2Type(&runtimeType))
+		casted, err := appendCastBeforeExpr(b.GetContext(), param, makePlan2Type(&runtimeType))
+		if err != nil {
+			return nil, err
+		}
+		if runtimeType.Oid.IsInteger() || runtimeType.IsDecimal() {
+			ensurePreparedNumericMetadata(param).ProvisionalResultPeer = true
+			ensurePreparedNumericMetadata(casted).ProvisionalResultPeer = true
+		}
+		return casted, nil
 	}
 	if b.numericParamType != nil {
 		return appendCastBeforeExpr(b.GetContext(), param, *b.numericParamType)
@@ -5072,8 +5080,14 @@ func bindFuncExprImplByPlanExpr(
 	// after prepared rebinding removes provisional parameter casts.
 	if name == "/" && len(args) == 2 {
 		left, right := types.T(args[0].Typ.Id), types.T(args[1].Typ.Id)
+		_, leftPreparedExact := provisionalExactNumericSource(args[0])
+		_, rightPreparedExact := provisionalExactNumericSource(args[1])
+		preparedExactBinding := exprHasPreparedExactBinding(ctx, args[0]) || exprHasPreparedExactBinding(ctx, args[1])
+		preparedExactMarker := exprHasPreparedExactMarker(args[0]) || exprHasPreparedExactMarker(args[1])
 		exact := (left.IsInteger() || left.IsDecimal()) && (right.IsInteger() || right.IsDecimal())
-		if exact && inIntegerAssignmentDomain(ctx) && (left.IsInteger() || right.IsInteger()) {
+		if exact && (inIntegerAssignmentDomain(ctx) || leftPreparedExact || rightPreparedExact ||
+			preparedExactBinding || preparedExactMarker) &&
+			(left.IsInteger() || right.IsInteger()) {
 			args = append([]*Expr(nil), args...)
 			for i, arg := range args {
 				scale := arg.Typ.Scale

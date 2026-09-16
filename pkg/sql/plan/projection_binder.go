@@ -123,6 +123,15 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 		target := b.numericTargetType
 		b.numericTargetType = nil
 		defer func() { b.numericTargetType = target }()
+		if b.builder != nil && types.T(target.Id).IsInteger() {
+			restoreDomain := b.builder.enterIntegerAssignmentDomain(true)
+			previousCtx := b.sysCtx
+			b.sysCtx = b.builder.GetContext()
+			defer func() {
+				b.sysCtx = previousCtx
+				restoreDomain()
+			}()
+		}
 		_, isDirectPreparedParam := unwrapParenExpr(astExpr).(*tree.ParamExpr)
 		if b.builder != nil && b.builder.isPrepareStatement && isDirectPreparedParam &&
 			(b.builder.isInsertIgnore || (b.ctx != nil && b.ctx.assignmentIgnore)) &&

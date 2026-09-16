@@ -4630,9 +4630,6 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		}
 	}
 
-	restoreDomain := builder.enterIntegerAssignmentDomain(hasIntegerInsertTarget(insertColumns, tableDef))
-	defer restoreDomain()
-
 	var astSelect *tree.Select
 	switch selectImpl := rowsForInsert.Select.(type) {
 	// rewrite 'insert into tbl values (1,1)' to 'insert into tbl select * from (values row(1,1))'

@@ -166,6 +166,16 @@ func TestIssue28469BinaryPreparedIntegerAssignment(t *testing.T) {
 			require.NoError(t, conn.QueryRowContext(ctx,
 				"select cast(d as char) from mixed_assignment_dst where i=2").Scan(&got))
 			require.Equal(t, coefficient, got)
+
+			mustExec(t, ctx, conn, "create table mixed_float_dst(i int, d double)")
+			const floatExpr = "(1000000000000000000/1)*1000000000000000000*1000000000000000000"
+			mustExec(t, ctx, conn, "insert into mixed_float_dst select 1,"+floatExpr)
+			var approximate float64
+			require.NoError(t, conn.QueryRowContext(ctx, "select d from mixed_float_dst").Scan(&approximate))
+			require.Equal(t, 1e54, approximate)
+			mustExec(t, ctx, conn, "update mixed_float_dst set i=2,d="+floatExpr+" where i=1")
+			require.NoError(t, conn.QueryRowContext(ctx, "select d from mixed_float_dst where i=2").Scan(&approximate))
+			require.Equal(t, 1e54, approximate)
 		})
 
 		t.Run("prepared_strict_division_by_zero", func(t *testing.T) {

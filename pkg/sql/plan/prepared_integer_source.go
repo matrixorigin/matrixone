@@ -202,3 +202,44 @@ func preparedIntegerBinding(ctx context.Context, ordinal int) (types.Type, bool)
 	typ, ok := bindings[ordinal]
 	return typ, ok
 }
+
+func exprHasPreparedExactMarker(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if expr.GetPreparedNumeric().GetProvisionalResultPeer() {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if exprHasPreparedExactMarker(arg) {
+				return true
+			}
+		}
+	}
+	if literal := expr.GetLit(); literal != nil {
+		return exprHasPreparedExactMarker(literal.Src)
+	}
+	return false
+}
+
+func exprHasPreparedExactBinding(ctx context.Context, expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if param := expr.GetP(); param != nil {
+		typ, ok := preparedIntegerBinding(ctx, int(param.Pos))
+		return ok && (typ.Oid.IsInteger() || typ.IsDecimal())
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if exprHasPreparedExactBinding(ctx, arg) {
+				return true
+			}
+		}
+	}
+	if literal := expr.GetLit(); literal != nil {
+		return exprHasPreparedExactBinding(ctx, literal.Src)
+	}
+	return false
+}

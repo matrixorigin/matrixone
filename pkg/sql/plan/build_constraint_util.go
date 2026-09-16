@@ -722,9 +722,6 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 		syntaxHasColumnNames = true
 	}
 
-	restoreDomain := builder.enterIntegerAssignmentDomain(hasIntegerInsertTarget(insertColumns, tableDef))
-	defer restoreDomain()
-
 	var astSlt *tree.Select
 	switch slt := stmt.Rows.Select.(type) {
 	// rewrite 'insert into tbl values (1,1)' to 'insert into tbl select * from (values row(1,1))'

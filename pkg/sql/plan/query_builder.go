@@ -5330,6 +5330,15 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	seedPreparedNumericAggregateTableProjectionTypes(builder, stmt, ctx)
 	seedNumericTableProjectionTypes(builder, stmt, ctx)
 	seedNumericCteProjectionTypes(builder, ctx)
+	// numericProjectionTypes describes this query block's consumers after target
+	// propagation. Enter exact execution only when every output of this block is
+	// integer-bound; mixed top-level DML projections keep unrelated expressions
+	// in their ordinary domains, while a shared producer seeded as integer stays
+	// exact for all of its consumers.
+	restoreIntegerDomain := builder.enterIntegerAssignmentDomain(
+		allNumericProjectionTargetsInteger(ctx.numericProjectionTypes),
+	)
+	defer restoreIntegerDomain()
 
 	// preprocess CTEs
 	if err = builder.preprocessCte(stmt, ctx); err != nil {
@@ -6893,6 +6902,42 @@ func seedNumericColumnTarget(sources []numericProjectionSourceInfo, name *tree.U
 	}
 }
 
+type exactDivisionAstVisitor struct{ found bool }
+
+func (v *exactDivisionAstVisitor) Enter(expr tree.Expr) (tree.Expr, bool) {
+	if binary, ok := expr.(*tree.BinaryExpr); ok && binary.Op == tree.DIV {
+		v.found = true
+		return expr, true
+	}
+	return expr, false
+}
+
+func (v *exactDivisionAstVisitor) Exit(expr tree.Expr) (tree.Expr, bool) { return expr, !v.found }
+
+func numericSourceOutputContainsDivision(source *numericProjectionSourceInfo, pos int) (found bool) {
+	if source == nil || source.source == nil || pos < 0 {
+		return false
+	}
+	defer func() {
+		if recover() != nil {
+			found = false
+		}
+	}()
+	clause, ok := getSelectTree(source.source).Select.(*tree.SelectClause)
+	if !ok || pos >= len(clause.Exprs) {
+		return false
+	}
+	outputExpr := unwrapParenExpr(clause.Exprs[pos].Expr)
+	if name, ok := outputExpr.(*tree.UnresolvedName); ok && !name.Star {
+		// Preserve an integer preference through forwarding projections; the
+		// referenced producer is inspected when its own target is seeded.
+		return true
+	}
+	visitor := &exactDivisionAstVisitor{}
+	_, _ = outputExpr.Accept(visitor)
+	return visitor.found
+}
+
 func seedNumericSourceTarget(source *numericProjectionSourceInfo, pos int, target Type) {
 	if target.Id == 0 || pos < 0 || pos >= len(source.targets) ||
 		pos >= len(source.targetAmbiguous) || source.targetAmbiguous[pos] {
@@ -6905,6 +6950,19 @@ func seedNumericSourceTarget(source *numericProjectionSourceInfo, pos int, targe
 	}
 	if sameNumericProjectionTarget(existing, target) {
 		return
+	}
+	// A division producer shared by integer and approximate assignment consumers
+	// must execute exactly once in the integer domain. Approximate consumers can
+	// cast that exact physical result; unrelated polymorphic producers retain the
+	// existing conflicting-target fallback.
+	if numericSourceOutputContainsDivision(source, pos) {
+		if types.T(existing.Id).IsInteger() {
+			return
+		}
+		if types.T(target.Id).IsInteger() {
+			source.targets[pos] = target
+			return
+		}
 	}
 	if source.mergeCompatibleNumericTargets {
 		if merged, ok := mergeNumericProjectionTargets(existing, target); ok {
@@ -9921,7 +9979,12 @@ func (builder *QueryBuilder) bindValues(
 			if i < len(ctx.numericProjectionTypes) &&
 				isNumericAssignmentTarget(ctx.numericProjectionTypes[i]) {
 				target := ctx.numericProjectionTypes[i]
+				restoreDomain := builder.enterIntegerAssignmentDomain(types.T(target.Id).IsInteger())
+				previousCtx := valuesBinder.sysCtx
+				valuesBinder.sysCtx = builder.GetContext()
 				planExpr, err = valuesBinder.bindNumericExprWithContext(valuesClause.Rows[j][i], 0, &target)
+				valuesBinder.sysCtx = previousCtx
+				restoreDomain()
 			} else {
 				planExpr, err = valuesBinder.BindExpr(valuesClause.Rows[j][i], 0, true)
 			}
