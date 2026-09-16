@@ -231,7 +231,7 @@ const (
 // StringNumericResultContracts requires MORPC v80 because the listed string
 // numeric functions keep overload IDs while changing their physical result
 // vectors to signed INT/ BIGINT or BIGINT UNSIGNED.
-// ExportSetNumericContracts requires MORPC v81 because EXPORT_SET float
+// ExportSetNumericContracts requires MORPC v82 because EXPORT_SET float
 // semantics changed and private CAST overload 5 does not exist on old workers.
 type RemoteExpressionFeatures struct {
 	NumericPrefix                bool

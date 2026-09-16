@@ -66,7 +66,7 @@ func TestExportSetNumericProtocolSenderAndReceiver(t *testing.T) {
 
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 1}}
-	client.version = defines.MORPCVersion81
+	client.version = defines.MORPCVersion82
 	require.NoError(t, c.constrainExportSetNumericWorkers(qry))
 	require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
@@ -78,5 +78,5 @@ func TestExportSetNumericProtocolSenderAndReceiver(t *testing.T) {
 
 	moruntime.ServiceRuntime(c.proc.GetService()).SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion80)
 	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc,
-		&pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{cast5}}}}), "version 81")
+		&pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{cast5}}}}), "version 82")
 }
