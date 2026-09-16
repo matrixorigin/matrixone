@@ -45,7 +45,8 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 		return b.BindExpr(aliasExpr.Expr, depth, isRoot)
 	}
 	if b.numericTargetType != nil && b.builder != nil &&
-		types.T(b.numericTargetType.Id).IsInteger() && b.integerAssignmentBaseCtx == nil {
+		types.T(b.numericTargetType.Id).IsInteger() && b.integerAssignmentBaseCtx == nil &&
+		!b.numericAssignmentAstProducesApproximate(astExpr, depth) {
 		restoreDomain := b.builder.enterIntegerAssignmentDomain(true)
 		previousCtx := b.sysCtx
 		b.integerAssignmentBaseCtx = previousCtx
@@ -138,7 +139,8 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 		target := b.numericTargetType
 		b.numericTargetType = nil
 		defer func() { b.numericTargetType = target }()
-		if b.builder != nil && types.T(target.Id).IsInteger() && b.integerAssignmentBaseCtx == nil {
+		if b.builder != nil && types.T(target.Id).IsInteger() && b.integerAssignmentBaseCtx == nil &&
+			!b.numericAssignmentAstProducesApproximate(astExpr, depth) {
 			restoreDomain := b.builder.enterIntegerAssignmentDomain(true)
 			previousCtx := b.sysCtx
 			previousBaseCtx := b.integerAssignmentBaseCtx

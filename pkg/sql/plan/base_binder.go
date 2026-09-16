@@ -1271,6 +1271,22 @@ func (b *baseBinder) numericAstTypesWithHint(
 	return b.numericAstTypesInternalWithHint(astExpr, depth, b.numericAstColumnResolver(), hint)
 }
 
+func (b *baseBinder) numericAssignmentAstProducesApproximate(astExpr tree.Expr, depth int32) bool {
+	if numericAstProducesApproximate(astExpr) {
+		return true
+	}
+	scan, err := b.numericAstTypesWithHint(astExpr, depth, nil)
+	if err != nil {
+		return false
+	}
+	for _, typ := range scan.strong {
+		if types.T(typ.Id).IsFloat() {
+			return true
+		}
+	}
+	return false
+}
+
 func (b *baseBinder) numericAstColumnResolver() numericAstColumnResolver {
 	return func(name *tree.UnresolvedName) (numericAstTypeScan, bool) {
 		typ, ok := b.numericColumnType(name)

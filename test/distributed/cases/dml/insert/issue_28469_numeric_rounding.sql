@@ -300,6 +300,30 @@ INSERT INTO ondup_control_dst VALUES (1,0) ON DUPLICATE KEY UPDATE
 i=CASE WHEN (1000000000000000000/1)*1000000000000000000*1000000000000000000>0 THEN 1 ELSE 0 END;
 SELECT * FROM ondup_control_dst;
 DROP TABLE ondup_control_dst;
+CREATE TABLE group_scope_src(x BIGINT);
+INSERT INTO group_scope_src VALUES (5);
+CREATE TABLE group_constant_dst(i BIGINT);
+INSERT INTO group_constant_dst SELECT 5/2 FROM group_scope_src GROUP BY 1/2;
+SELECT * FROM group_constant_dst;
+CREATE TABLE group_alias_a(d DOUBLE, i BIGINT);
+INSERT INTO group_alias_a SELECT x/2 AS q, ABS(x/2) FROM group_scope_src GROUP BY q;
+CREATE TABLE group_alias_b(i BIGINT, d DOUBLE);
+INSERT INTO group_alias_b SELECT ABS(x/2), x/2 AS q FROM group_scope_src GROUP BY q;
+SELECT i,d FROM group_alias_a;
+SELECT i,d FROM group_alias_b;
+CREATE TABLE float_boundary_dst(i BIGINT);
+INSERT INTO float_boundary_dst
+SELECT ((1000000000000000000/1e0)*1000000000000000000*1000000000000000000)/1e54;
+CREATE TABLE float_boundary_src(f DOUBLE);
+INSERT INTO float_boundary_src VALUES (1000000000000000000);
+INSERT INTO float_boundary_dst SELECT ((f/1)*f*f)/1e54 FROM float_boundary_src;
+SELECT COUNT(*),SUM(i) FROM float_boundary_dst;
+DROP TABLE float_boundary_src;
+DROP TABLE float_boundary_dst;
+DROP TABLE group_alias_a;
+DROP TABLE group_alias_b;
+DROP TABLE group_constant_dst;
+DROP TABLE group_scope_src;
 
 SELECT 5/2 AS q;
 SELECT q FROM select_contract;

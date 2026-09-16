@@ -248,6 +248,38 @@ func TestIssue28469BinaryPreparedIntegerAssignment(t *testing.T) {
 			require.Equal(t, 1, got)
 		})
 
+		t.Run("group_ordinals_aliases_and_float_boundaries", func(t *testing.T) {
+			mustExec(t, ctx, conn, "create table group_scope_src(x bigint)")
+			mustExec(t, ctx, conn, "insert into group_scope_src values (5)")
+			mustExec(t, ctx, conn, "create table group_constant_dst(i bigint)")
+			mustExec(t, ctx, conn, "insert into group_constant_dst select 5/2 from group_scope_src group by 1/2")
+			var constantGroup int64
+			require.NoError(t, conn.QueryRowContext(ctx, "select i from group_constant_dst").Scan(&constantGroup))
+			require.Equal(t, int64(3), constantGroup)
+
+			mustExec(t, ctx, conn, "create table group_alias_a(d double, i bigint)")
+			mustExec(t, ctx, conn, "insert into group_alias_a select x/2 as q, abs(x/2) from group_scope_src group by q")
+			mustExec(t, ctx, conn, "create table group_alias_b(i bigint, d double)")
+			mustExec(t, ctx, conn, "insert into group_alias_b select abs(x/2), x/2 as q from group_scope_src group by q")
+			for _, table := range []string{"group_alias_a", "group_alias_b"} {
+				var integerValue int64
+				var approximateValue float64
+				require.NoError(t, conn.QueryRowContext(ctx, "select i,d from "+table).Scan(&integerValue, &approximateValue))
+				require.Equal(t, int64(3), integerValue)
+				require.Equal(t, 2.5, approximateValue)
+			}
+
+			mustExec(t, ctx, conn, "create table float_boundary_dst(i bigint)")
+			mustExec(t, ctx, conn, "insert into float_boundary_dst select ((1000000000000000000/1e0)*1000000000000000000*1000000000000000000)/1e54")
+			mustExec(t, ctx, conn, "create table float_boundary_src(f double)")
+			mustExec(t, ctx, conn, "insert into float_boundary_src values (1000000000000000000)")
+			mustExec(t, ctx, conn, "insert into float_boundary_dst select ((f/1)*f*f)/1e54 from float_boundary_src")
+			var count, sum int64
+			require.NoError(t, conn.QueryRowContext(ctx, "select count(*),sum(i) from float_boundary_dst").Scan(&count, &sum))
+			require.Equal(t, int64(2), count)
+			require.Equal(t, int64(2), sum)
+		})
+
 		t.Run("prepared_strict_division_by_zero", func(t *testing.T) {
 			mustExec(t, ctx, conn, "set sql_mode='STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO'")
 			defer func() { _, _ = conn.ExecContext(ctx, "set sql_mode='STRICT_TRANS_TABLES'") }()

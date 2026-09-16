@@ -25,9 +25,16 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
-func numericAstResultDependsOn(output, candidate tree.Expr) bool {
+func numericAstResultDependsOn(output, candidate tree.Expr, alias string) bool {
 	output = unwrapParenExpr(output)
 	candidate = unwrapParenExpr(candidate)
+	if numericAstProducesApproximate(output) {
+		return false
+	}
+	if name, ok := output.(*tree.UnresolvedName); ok && alias != "" &&
+		name.NumParts == 1 && strings.EqualFold(name.ColName(), alias) {
+		return true
+	}
 	if windowExprAstKey(output) == windowExprAstKey(candidate) {
 		return true
 	}
@@ -36,13 +43,16 @@ func numericAstResultDependsOn(output, candidate tree.Expr) bool {
 		return false
 	case *tree.UnaryExpr:
 		if expr.Op == tree.UNARY_PLUS || expr.Op == tree.UNARY_MINUS {
-			return numericAstResultDependsOn(expr.Expr, candidate)
+			return numericAstResultDependsOn(expr.Expr, candidate, alias)
 		}
 	case *tree.BinaryExpr:
+		if numericAstProducesApproximate(expr.Left) || numericAstProducesApproximate(expr.Right) {
+			return false
+		}
 		switch expr.Op {
 		case tree.PLUS, tree.MINUS, tree.MULTI, tree.DIV, tree.INTEGER_DIV, tree.MOD:
-			return numericAstResultDependsOn(expr.Left, candidate) ||
-				numericAstResultDependsOn(expr.Right, candidate)
+			return numericAstResultDependsOn(expr.Left, candidate, alias) ||
+				numericAstResultDependsOn(expr.Right, candidate, alias)
 		}
 	case *tree.FuncExpr:
 		ref, ok := expr.Func.FunctionReference.(*tree.UnresolvedName)
@@ -56,17 +66,59 @@ func numericAstResultDependsOn(output, candidate tree.Expr) bool {
 			return false
 		}
 		for _, index := range indexes {
-			if numericAstResultDependsOn(expr.Exprs[index], candidate) {
+			if numericAstProducesApproximate(expr.Exprs[index]) {
+				continue
+			}
+			if numericAstResultDependsOn(expr.Exprs[index], candidate, alias) {
 				return true
 			}
 		}
 	case *tree.CaseExpr:
 		for _, when := range expr.Whens {
-			if numericAstResultDependsOn(when.Val, candidate) {
+			if numericAstResultDependsOn(when.Val, candidate, alias) {
 				return true
 			}
 		}
-		return expr.Else != nil && numericAstResultDependsOn(expr.Else, candidate)
+		return expr.Else != nil && numericAstResultDependsOn(expr.Else, candidate, alias)
+	}
+	return false
+}
+
+func numericAstProducesApproximate(expr tree.Expr) bool {
+	expr = unwrapParenExpr(expr)
+	switch item := expr.(type) {
+	case *tree.NumVal:
+		return item.Kind() == tree.Float
+	case *tree.CastExpr:
+		if typ, ok := item.Type.(*tree.T); ok {
+			return typ.InternalType.Family == tree.FloatFamily
+		}
+		return false
+	case *tree.UnaryExpr:
+		return numericAstProducesApproximate(item.Expr)
+	case *tree.BinaryExpr:
+		return numericAstProducesApproximate(item.Left) || numericAstProducesApproximate(item.Right)
+	case *tree.FuncExpr:
+		ref, ok := item.Func.FunctionReference.(*tree.UnresolvedName)
+		if !ok {
+			return false
+		}
+		indexes, ok := function.NumericFunctionResultArgs(strings.ToLower(ref.ColName()), len(item.Exprs), false)
+		if !ok {
+			return false
+		}
+		for _, index := range indexes {
+			if numericAstProducesApproximate(item.Exprs[index]) {
+				return true
+			}
+		}
+	case *tree.CaseExpr:
+		for _, when := range item.Whens {
+			if numericAstProducesApproximate(when.Val) {
+				return true
+			}
+		}
+		return item.Else != nil && numericAstProducesApproximate(item.Else)
 	}
 	return false
 }
@@ -274,33 +326,15 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 		pos := b.projectionExprPos
 		astExpr = b.selectList[pos].Expr
 		reusesProjection = true
-		if int(pos) < len(b.ctx.numericProjectionTypes) {
-			target := b.ctx.numericProjectionTypes[pos]
-			if target.Id != 0 {
-				numericTarget = &target
-			}
+		alias := ""
+		if b.selectList[pos].As != nil {
+			alias = b.selectList[pos].As.Compare()
 		}
+		numericTarget = b.mergedNumericTarget(astExpr, alias)
 	}
-	if isRoot && !reusesProjection {
-		for pos := range b.selectList {
-			if pos >= len(b.ctx.numericProjectionTypes) ||
-				!numericAstResultDependsOn(b.selectList[pos].Expr, astExpr) {
-				continue
-			}
-			target := b.ctx.numericProjectionTypes[pos]
-			if target.Id == 0 {
-				continue
-			}
-			if numericTarget == nil || types.T(target.Id).IsInteger() {
-				targetCopy := target
-				numericTarget = &targetCopy
-			}
-			reusesProjection = true
-		}
-	}
-	// An alias has already selected and substituted its projection expression.
-	// Do not interpret a numeric literal inside that expression as an ordinal a
-	// second time.
+	// Classify a direct numeric GROUP BY item before dependency matching. Only a
+	// direct integer literal is an ordinal; arithmetic such as GROUP BY 1/2 is a
+	// constant expression and must stay on the normal GROUP BY path.
 	if isRoot && !reusesProjection {
 		if numVal, ok := astExpr.(*tree.NumVal); ok {
 			switch numVal.Kind() {
@@ -312,12 +346,11 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 				}
 
 				astExpr = b.selectList[colPos-1].Expr
-				if int(colPos) <= len(b.ctx.numericProjectionTypes) {
-					target := b.ctx.numericProjectionTypes[colPos-1]
-					if target.Id != 0 {
-						numericTarget = &target
-					}
+				alias := ""
+				if b.selectList[colPos-1].As != nil {
+					alias = b.selectList[colPos-1].As.Compare()
 				}
+				numericTarget = b.mergedNumericTarget(astExpr, alias)
 
 			case tree.Unknown:
 				if numVal.ValType != tree.P_null {
@@ -328,6 +361,10 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 				return nil, moerr.NewSyntaxError(b.GetContext(), "non-integer constant in GROUP BY")
 			}
 		}
+	}
+	if isRoot && !reusesProjection {
+		numericTarget = b.mergedNumericTarget(astExpr, "")
+		reusesProjection = numericTarget != nil
 	}
 
 	var expr *plan.Expr
@@ -403,6 +440,26 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 	}
 
 	return expr, err
+}
+
+func (b *GroupBinder) mergedNumericTarget(candidate tree.Expr, alias string) *plan.Type {
+	var merged *plan.Type
+	for pos := range b.selectList {
+		if pos >= len(b.ctx.numericProjectionTypes) ||
+			b.numericAssignmentAstProducesApproximate(b.selectList[pos].Expr, 0) ||
+			!numericAstResultDependsOn(b.selectList[pos].Expr, candidate, alias) {
+			continue
+		}
+		target := b.ctx.numericProjectionTypes[pos]
+		if target.Id == 0 {
+			continue
+		}
+		if merged == nil || types.T(target.Id).IsInteger() {
+			targetCopy := target
+			merged = &targetCopy
+		}
+	}
+	return merged
 }
 
 func parameterizedGroupByKey(ast string, expr *plan.Expr) string {
