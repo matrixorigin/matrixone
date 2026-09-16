@@ -388,6 +388,18 @@ func applyDefaultAndColumnAttributesToType(
 	tableCharset uint32,
 	attrs []tree.ColumnAttribute,
 ) error {
+	return applyDefaultAndColumnAttributesToTypeWithVersion(
+		ctx, colType, tableCharset, uint32(types.CollationVersionLegacy), attrs,
+	)
+}
+
+func applyDefaultAndColumnAttributesToTypeWithVersion(
+	ctx context.Context,
+	colType *plan.Type,
+	tableCharset uint32,
+	tableCollationVersion uint32,
+	attrs []tree.ColumnAttribute,
+) error {
 	isGeometry := isGeometryPlanType(colType)
 	srid, sridDefined := geometrySRIDValue(colType)
 	var columnCharset string
@@ -448,7 +460,7 @@ func applyDefaultAndColumnAttributesToType(
 	case columnCollation != "":
 		applyTextCharsetToPlanType(colType, collation)
 	default:
-		applyTableDefaultCharsetToPlanType(colType, tableCharset)
+		applyTableDefaultCharsetToPlanTypeWithVersion(colType, tableCharset, tableCollationVersion)
 	}
 	if isGeometry {
 		// Scale (subtype) is already set by getTypeFromAst; an SRID column
@@ -462,6 +474,20 @@ func applyTextCharsetToPlanType(typ *plan.Type, charset uint32) {
 	switch types.T(typ.Id) {
 	case types.T_char, types.T_varchar, types.T_text:
 		typ.Charset = charset
+		// A non-binary text identity authored by the current planner uses the
+		// versioned comparison contract. Legacy catalog types retain zero and
+		// are never upgraded merely because their Charset name matches.
+		typ.CollationVersion = collationSemanticVersion(charset)
+	}
+}
+
+func collationSemanticVersion(charset uint32) uint32 {
+	switch uint8(charset) {
+	case types.CharsetUTF8MB4Bin, types.CharsetUTF8,
+		types.CharsetUTF8MB40900AI, types.CharsetUTF8MB40900Bin:
+		return uint32(types.CollationVersionV1)
+	default:
+		return uint32(types.CollationVersionLegacy)
 	}
 }
 
@@ -484,6 +510,7 @@ func applyCharsetToPlanType(typ *plan.Type, charset uint32) {
 		return
 	}
 	typ.Charset = uint32(types.CharsetBinary)
+	typ.CollationVersion = uint32(types.CollationVersionLegacy)
 }
 
 func charsetForName(name string) (uint32, bool) {
@@ -506,12 +533,13 @@ func collationForName(name string) (uint32, bool) {
 		return uint32(types.CharsetBinary), true
 	case "utf8_bin", "utf8mb3_bin", "utf8mb4_bin":
 		return uint32(types.CharsetUTF8MB4Bin), true
-	case "utf8_general_ci", "utf8mb3_general_ci", "utf8mb4_general_ci", "utf8mb4_0900_ai_ci",
+	case "utf8_general_ci", "utf8mb3_general_ci", "utf8mb4_general_ci",
 		"latin1_swedish_ci", "ascii_general_ci":
-		// MySQL 8 uses utf8mb4_0900_ai_ci by default. Accept that exact spelling
-		// as a DDL compatibility alias, but normalize it to MatrixOne's existing
-		// general-ci identity instead of claiming native UCA 9.0 semantics.
 		return uint32(types.CharsetUTF8), true
+	case "utf8mb4_0900_ai_ci":
+		return uint32(types.CharsetUTF8MB40900AI), true
+	case "utf8mb4_0900_bin":
+		return uint32(types.CharsetUTF8MB40900Bin), true
 	default:
 		// Do not silently alias other advertised UCA/0900 collations to either
 		// legacy general_ci or byte ordering. Their weight and padding contracts differ.
@@ -531,8 +559,6 @@ func unsupportedCollationError(ctx context.Context, name string) error {
 	case "utf8mb4_unicode_ci",
 		"utf8mb4_de_pb_0900_ai_ci", "utf8mb4_is_0900_ai_ci", "utf8mb4_lv_0900_ai_ci":
 		replacement = "utf8mb4_general_ci"
-	case "utf8mb4_0900_bin":
-		replacement = "utf8mb4_bin"
 	}
 	if replacement != "" {
 		return moerr.NewInvalidInputf(ctx,
@@ -543,7 +569,17 @@ func unsupportedCollationError(ctx context.Context, name string) error {
 }
 
 func applyTableDefaultCharsetToPlanType(typ *plan.Type, charset uint32) {
+	applyTableDefaultCharsetToPlanTypeWithVersion(typ, charset, uint32(types.CollationVersionLegacy))
+}
+
+func applyTableDefaultCharsetToPlanTypeWithVersion(typ *plan.Type, charset, version uint32) {
 	applyCharsetToPlanType(typ, charset)
+	if types.T(typ.Id).IsMySQLString() {
+		// A zero version means an inherited legacy default. An explicit table
+		// option passes the resolved version so table-level and column-level
+		// COLLATE clauses produce the same comparison identity.
+		typ.CollationVersion = version
+	}
 }
 
 func charsetAndCollationCompatible(charset, collation string) bool {
@@ -625,6 +661,16 @@ func tableDefaultCharset(ctx CompilerContext, options []tree.TableOption) (uint3
 		}
 	}
 	return tableCharset, nil
+}
+
+func hasExplicitTableCharsetOrCollation(options []tree.TableOption) bool {
+	for _, option := range options {
+		switch option.(type) {
+		case *tree.TableOptionCharset, *tree.TableOptionCollate:
+			return true
+		}
+	}
+	return false
 }
 
 func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Process) (*plan.Default, error) {
@@ -2096,10 +2142,12 @@ func substituteColRefsInExpr(expr *plan.Expr, projList []*plan.Expr, offset int3
 			Typ: expr.Typ,
 			Expr: &plan.Expr_F{
 				F: &plan.Function{
-					Func:          e.F.Func,
-					Args:          newArgs,
-					AggConfig:     bytes.Clone(e.F.AggConfig),
-					AggConfigType: e.F.AggConfigType,
+					Func:               e.F.Func,
+					Args:               newArgs,
+					AggConfig:          bytes.Clone(e.F.AggConfig),
+					AggConfigType:      e.F.AggConfigType,
+					SyntaxExplicitCast: e.F.SyntaxExplicitCast,
+					ExplicitCollation:  e.F.ExplicitCollation,
 				},
 			},
 		}

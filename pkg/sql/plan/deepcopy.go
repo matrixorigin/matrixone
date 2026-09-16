@@ -542,15 +542,19 @@ func DeepCopyType(typ *plan.Type) *plan.Type {
 		return nil
 	}
 	return &plan.Type{
-		Id:          typ.Id,
-		NotNullable: typ.NotNullable,
-		Width:       typ.Width,
-		Scale:       typ.Scale,
-		AutoIncr:    typ.AutoIncr,
-		Table:       typ.Table,
-		Enumvalues:  typ.Enumvalues,
-		Charset:     typ.Charset,
-		PadSpace:    typ.PadSpace,
+		Id:                       typ.Id,
+		NotNullable:              typ.NotNullable,
+		Width:                    typ.Width,
+		Scale:                    typ.Scale,
+		AutoIncr:                 typ.AutoIncr,
+		Table:                    typ.Table,
+		Enumvalues:               typ.Enumvalues,
+		Charset:                  typ.Charset,
+		CollationVersion:         typ.CollationVersion,
+		PadSpace:                 typ.PadSpace,
+		CollationCoercibility:    typ.CollationCoercibility,
+		CollationCoercibilitySet: typ.CollationCoercibilitySet,
+		CollationMergeConflict:   typ.CollationMergeConflict,
 	}
 }
 
@@ -623,6 +627,7 @@ func DeepCopyIndexDef(indexDef *plan.IndexDef) *plan.IndexDef {
 		IndexAlgoParams:    indexDef.IndexAlgoParams,
 		Parts:              slices.Clone(indexDef.Parts),
 		IncludedColumns:    slices.Clone(indexDef.IncludedColumns),
+		KeyFormat:          indexDef.KeyFormat,
 	}
 	newindexDef.Option = DeepCopyIndexOption(indexDef.Option)
 	return newindexDef
@@ -705,31 +710,33 @@ func DeepCopyTableDef(table *plan.TableDef, withCols bool) *plan.TableDef {
 		return nil
 	}
 	newTable := &plan.TableDef{
-		TblId:          table.TblId,
-		Name:           table.Name,
-		Hidden:         table.Hidden,
-		TableType:      table.TableType,
-		LogicalId:      table.LogicalId,
-		Createsql:      table.Createsql,
-		Version:        table.Version,
-		Pkey:           DeepCopyPrimaryKeyDef(table.Pkey),
-		Indexes:        make([]*IndexDef, len(table.Indexes)),
-		Fkeys:          make([]*plan.ForeignKeyDef, len(table.Fkeys)),
-		RefChildTbls:   slices.Clone(table.RefChildTbls),
-		Checks:         make([]*plan.CheckDef, len(table.Checks)),
-		Props:          make([]*plan.PropertyDef, len(table.Props)),
-		Defs:           make([]*plan.TableDef_DefType, len(table.Defs)),
-		Name2ColIndex:  table.Name2ColIndex,
-		IsLocked:       table.IsLocked,
-		TableLockType:  table.TableLockType,
-		IsTemporary:    table.IsTemporary,
-		AutoIncrOffset: table.AutoIncrOffset,
-		AutoIncrEpoch:  table.AutoIncrEpoch,
-		AutoIdCache:    table.AutoIdCache,
-		DefaultCharset: table.DefaultCharset,
-		DbName:         table.DbName,
-		DbId:           table.DbId,
-		FeatureFlag:    table.FeatureFlag,
+		TblId:            table.TblId,
+		Name:             table.Name,
+		Hidden:           table.Hidden,
+		TableType:        table.TableType,
+		LogicalId:        table.LogicalId,
+		Createsql:        table.Createsql,
+		Version:          table.Version,
+		Pkey:             DeepCopyPrimaryKeyDef(table.Pkey),
+		Indexes:          make([]*IndexDef, len(table.Indexes)),
+		Fkeys:            make([]*plan.ForeignKeyDef, len(table.Fkeys)),
+		RefChildTbls:     slices.Clone(table.RefChildTbls),
+		Checks:           make([]*plan.CheckDef, len(table.Checks)),
+		Props:            make([]*plan.PropertyDef, len(table.Props)),
+		Defs:             make([]*plan.TableDef_DefType, len(table.Defs)),
+		Name2ColIndex:    table.Name2ColIndex,
+		IsLocked:         table.IsLocked,
+		TableLockType:    table.TableLockType,
+		IsTemporary:      table.IsTemporary,
+		AutoIncrOffset:   table.AutoIncrOffset,
+		AutoIncrEpoch:    table.AutoIncrEpoch,
+		AutoIdCache:      table.AutoIdCache,
+		DefaultCharset:   table.DefaultCharset,
+		KeyFormat:        table.KeyFormat,
+		CollationVersion: table.CollationVersion,
+		DbName:           table.DbName,
+		DbId:             table.DbId,
+		FeatureFlag:      table.FeatureFlag,
 	}
 
 	if withCols {
@@ -1267,6 +1274,7 @@ func DeepCopyExpr(expr *Expr) *Expr {
 				AggConfig:          bytes.Clone(item.F.AggConfig),
 				AggConfigType:      item.F.AggConfigType,
 				SyntaxExplicitCast: item.F.SyntaxExplicitCast,
+				ExplicitCollation:  item.F.ExplicitCollation,
 			},
 		}
 

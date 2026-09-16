@@ -21,6 +21,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -246,8 +247,9 @@ func newExpressionExecutorWithAllocation(
 	}
 	switch t := planExpr.Expr.(type) {
 	case *plan.Expr_Lit:
-		typ := types.NewWithCharset(
-			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
+		typ := types.NewWithCharsetVersion(
+			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale,
+			uint8(planExpr.Typ.Charset), uint8(planExpr.Typ.CollationVersion),
 		)
 		vec, err := generateConstExpressionExecutor(proc, typ, t.Lit, selection)
 		if err != nil {
@@ -256,8 +258,9 @@ func newExpressionExecutorWithAllocation(
 		return NewFixedVectorExpressionExecutor(proc.Mp(), false, vec), nil
 
 	case *plan.Expr_T:
-		typ := types.NewWithCharset(
-			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
+		typ := types.NewWithCharsetVersion(
+			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale,
+			uint8(planExpr.Typ.Charset), uint8(planExpr.Typ.CollationVersion),
 		)
 		vec, err := newExpressionConstNull(typ, 1, selection)
 		if err != nil {
@@ -266,8 +269,9 @@ func newExpressionExecutorWithAllocation(
 		return NewFixedVectorExpressionExecutor(proc.Mp(), false, vec), nil
 
 	case *plan.Expr_Col:
-		typ := types.NewWithCharset(
-			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
+		typ := types.NewWithCharsetVersion(
+			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale,
+			uint8(planExpr.Typ.Charset), uint8(planExpr.Typ.CollationVersion),
 		)
 		ce := NewColumnExpressionExecutor()
 		*ce = ColumnExpressionExecutor{
@@ -285,16 +289,18 @@ func newExpressionExecutorWithAllocation(
 		return ce, nil
 
 	case *plan.Expr_P:
-		typ := types.NewWithCharset(
-			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
+		typ := types.NewWithCharsetVersion(
+			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale,
+			uint8(planExpr.Typ.Charset), uint8(planExpr.Typ.CollationVersion),
 		)
 		executor := NewParamExpressionExecutor(proc.Mp(), int(t.P.Pos), typ)
 		executor.allocation = selection
 		return executor, nil
 
 	case *plan.Expr_V:
-		typ := types.NewWithCharset(
-			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
+		typ := types.NewWithCharsetVersion(
+			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale,
+			uint8(planExpr.Typ.Charset), uint8(planExpr.Typ.CollationVersion),
 		)
 		ve := NewVarExpressionExecutor()
 		*ve = VarExpressionExecutor{
@@ -332,8 +338,9 @@ func newExpressionExecutorWithAllocation(
 	case *plan.Expr_List:
 		executor := NewListExpressionExecutor()
 		resultVecTyp := t.List.List[0].GetTyp()
-		typ := types.NewWithCharset(
-			types.T(resultVecTyp.Id), resultVecTyp.Width, resultVecTyp.Scale, uint8(resultVecTyp.Charset),
+		typ := types.NewWithCharsetVersion(
+			types.T(resultVecTyp.Id), resultVecTyp.Width, resultVecTyp.Scale,
+			uint8(resultVecTyp.Charset), uint8(resultVecTyp.CollationVersion),
 		)
 		if err := executor.init(proc, typ, len(t.List.List), selection); err != nil {
 			executor.Free()
@@ -374,8 +381,9 @@ func newExpressionExecutorWithAllocation(
 			executor.fid, _ = function.DecodeOverloadID(overloadID)
 			executor.evalFn, executor.resetFn, executor.freeFn, executor.retainedBytesFn = overload.GetExecuteMethod()
 		}
-		typ := types.NewWithCharset(
-			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale, uint8(planExpr.Typ.Charset),
+		typ := types.NewWithCharsetVersion(
+			types.T(planExpr.Typ.Id), planExpr.Typ.Width, planExpr.Typ.Scale,
+			uint8(planExpr.Typ.Charset), uint8(planExpr.Typ.CollationVersion),
 		)
 
 		if err = executor.init(proc, len(t.F.Args), typ, selection); err != nil {
@@ -1984,8 +1992,9 @@ func DecodeLiteralStringSource(literal *plan.Literal) (types.StringSource, error
 
 func GenerateConstListExpressionExecutor(proc *process.Process, exprs []*plan.Expr) (*vector.Vector, error) {
 	lenList := len(exprs)
-	vec, err := proc.AllocVectorOfRows(types.NewWithCharset(
-		types.T(exprs[0].Typ.Id), exprs[0].Typ.Width, exprs[0].Typ.Scale, uint8(exprs[0].Typ.Charset),
+	vec, err := proc.AllocVectorOfRows(types.NewWithCharsetVersion(
+		types.T(exprs[0].Typ.Id), exprs[0].Typ.Width, exprs[0].Typ.Scale,
+		uint8(exprs[0].Typ.Charset), uint8(exprs[0].Typ.CollationVersion),
 	), lenList, nil)
 	if err != nil {
 		return nil, err
@@ -2384,12 +2393,24 @@ func zoneMapInVectorOrderIsKnown(vec *vector.Vector) bool {
 	prev := col[0].GetByteSlice(area)
 	for i := 1; i < len(col); i++ {
 		cur := col[i].GetByteSlice(area)
-		if checkOrder && bytes.Compare(prev, cur) > 0 {
+		if checkOrder && compareExpressionStringBytes(vec.GetType(), prev, cur) > 0 {
 			return false
 		}
 		prev = cur
 	}
 	return true
+}
+
+func compareExpressionStringBytes(typ *types.Type, left, right []byte) int {
+	if typ != nil {
+		switch typ.Charset {
+		case types.CharsetUTF8MB40900AI:
+			return collation.UCA0900AICollate(left, right)
+		case types.CharsetUTF8MB40900Bin:
+			return collation.UCA0900BinCollate(left, right)
+		}
+	}
+	return bytes.Compare(left, right)
 }
 
 func GetExprZoneMap(
@@ -2414,6 +2435,16 @@ func GetExprZoneMap(
 		zms[expr.AuxId] = meta.MustGetColumn(uint16(columnMap[int(t.Col.ColPos)])).ZoneMap()
 
 	case *plan.Expr_F:
+		// The physical key produced by internal_collation_key is an opaque
+		// weight byte string.  Column zonemaps are built from the user-visible
+		// string, so comparing that raw zonemap with a weight key is not a
+		// sound ordering test and can prune a matching block.  Until storage
+		// publishes a zonemap in the same physical key format, fail open and
+		// let the residual filter evaluate the predicate.
+		if t.F != nil && t.F.Func != nil && t.F.Func.ObjName == "internal_collation_key" {
+			zms[expr.AuxId].Reset()
+			return zms[expr.AuxId]
+		}
 		id := t.F.GetFunc().GetObj()
 		if overload, errGetFunc := function.GetFunctionById(ctx, id); errGetFunc != nil {
 			zms[expr.AuxId].Reset()
@@ -2763,8 +2794,9 @@ func GetExprZoneMap(
 					}
 				}
 				fn, _, fnFree, _ := overload.GetExecuteMethod()
-				typ := types.NewWithCharset(
-					types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset),
+				typ := types.NewWithCharsetVersion(
+					types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale,
+					uint8(expr.Typ.Charset), uint8(expr.Typ.CollationVersion),
 				)
 
 				result := vector.NewFunctionResultWrapper(typ, proc.Mp())
@@ -3299,8 +3331,9 @@ func MakeEvalVectorWithAllocation(
 	ev.Vec = make([]*vector.Vector, len(ev.Executor))
 	ev.Typ = make([]types.Type, len(ev.Executor))
 	for i, expr := range expressions {
-		ev.Typ[i] = types.NewWithCharset(
-			types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset),
+		ev.Typ[i] = types.NewWithCharsetVersion(
+			types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale,
+			uint8(expr.Typ.Charset), uint8(expr.Typ.CollationVersion),
 		)
 	}
 	return

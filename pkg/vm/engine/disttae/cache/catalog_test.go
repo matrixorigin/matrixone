@@ -149,12 +149,16 @@ func TestGetTableDefRestoresChecksFromSchemaExtra(t *testing.T) {
 	tableDef, _ := getTableDef(&TableItem{
 		Name: "t",
 		ExtraInfo: &api.SchemaExtra{
-			Checks:         []*plan.CheckDef{check},
-			DefaultCharset: uint32(types.CharsetBinary),
+			Checks:           []*plan.CheckDef{check},
+			DefaultCharset:   uint32(types.CharsetBinary),
+			KeyFormat:        uint32(types.PADSpaceKeyV1),
+			CollationVersion: uint32(types.CollationVersionV1),
 		},
 	}, nil)
 	require.Equal(t, []*plan.CheckDef{check}, tableDef.Checks)
 	require.Equal(t, uint32(types.CharsetBinary), tableDef.DefaultCharset)
+	require.Equal(t, uint32(types.PADSpaceKeyV1), tableDef.KeyFormat)
+	require.Equal(t, uint32(types.CollationVersionV1), tableDef.CollationVersion)
 }
 
 func TestGetTableDefRestoresAutoIDCache(t *testing.T) {

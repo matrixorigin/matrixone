@@ -63,7 +63,13 @@ func ivfFloat64Expr(value float64) *plan.Expr {
 func ivfFuncExpr(ctx context.Context, name string, args ...*plan.Expr) (*plan.Expr, error) {
 	argTypes := make([]types.Type, len(args))
 	for i, arg := range args {
-		argTypes[i] = types.New(types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale)
+		argTypes[i] = types.NewWithCharsetVersion(
+			types.T(arg.Typ.Id),
+			arg.Typ.Width,
+			arg.Typ.Scale,
+			uint8(arg.Typ.Charset),
+			uint8(arg.Typ.CollationVersion),
+		)
 	}
 	fn, err := function.GetFunctionByName(ctx, name, argTypes)
 	if err != nil {

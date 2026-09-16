@@ -1592,14 +1592,15 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 					Name:       name,
 					OriginName: attr.Attr.Name,
 					Typ: plan.Type{
-						Id:          int32(attr.Attr.Type.Oid),
-						Width:       attr.Attr.Type.Width,
-						Scale:       attr.Attr.Type.Scale,
-						AutoIncr:    attr.Attr.AutoIncrement,
-						Table:       tbl.tableName,
-						NotNullable: attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
-						Enumvalues:  attr.Attr.EnumVlaues,
-						Charset:     uint32(attr.Attr.Type.Charset),
+						Id:               int32(attr.Attr.Type.Oid),
+						Width:            attr.Attr.Type.Width,
+						Scale:            attr.Attr.Type.Scale,
+						AutoIncr:         attr.Attr.AutoIncrement,
+						Table:            tbl.tableName,
+						NotNullable:      attr.Attr.Default != nil && !attr.Attr.Default.NullAbility,
+						Enumvalues:       attr.Attr.EnumVlaues,
+						Charset:          uint32(attr.Attr.Type.Charset),
+						CollationVersion: uint32(attr.Attr.Type.CollationVersion),
 					},
 					Primary:      attr.Attr.Primary,
 					Default:      attr.Attr.Default,
@@ -1732,6 +1733,8 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			tbl.tableDef.AutoIdCache = tbl.extraInfo.AutoIdCache
 			tbl.tableDef.Checks = tbl.extraInfo.Checks
 			tbl.tableDef.DefaultCharset = tbl.extraInfo.DefaultCharset
+			tbl.tableDef.KeyFormat = tbl.extraInfo.KeyFormat
+			tbl.tableDef.CollationVersion = tbl.extraInfo.CollationVersion
 		}
 	}
 	return tbl.tableDef

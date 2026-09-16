@@ -30,9 +30,10 @@ func TestPlanColsToExeColsPreservesCharset(t *testing.T) {
 			Name:       "name",
 			OriginName: "name",
 			Typ: plan.Type{
-				Id:      int32(types.T_varchar),
-				Width:   32,
-				Charset: uint32(types.CharsetBinary),
+				Id:               int32(types.T_varchar),
+				Width:            32,
+				Charset:          uint32(types.CharsetBinary),
+				CollationVersion: uint32(types.CollationVersionV1),
 			},
 		},
 		{
@@ -46,6 +47,7 @@ func TestPlanColsToExeColsPreservesCharset(t *testing.T) {
 	})
 	require.Len(t, defs, 2)
 	require.Equal(t, types.CharsetBinary, defs[0].(*AttributeDef).Attr.Type.Charset)
+	require.Equal(t, types.CollationVersionV1, defs[0].(*AttributeDef).Attr.Type.CollationVersion)
 	require.Equal(t, types.CharsetBinary, defs[1].(*AttributeDef).Attr.Type.Charset)
 }
 
@@ -57,20 +59,28 @@ func TestPlanDefsToExeDefsPersistsChecksInSchemaExtra(t *testing.T) {
 		},
 	}
 	_, extra, err := PlanDefsToExeDefs(&plan.TableDef{
-		Name:           "t",
-		Checks:         []*plan.CheckDef{check},
-		DefaultCharset: uint32(types.CharsetBinary),
+		Name:             "t",
+		Checks:           []*plan.CheckDef{check},
+		DefaultCharset:   uint32(types.CharsetBinary),
+		KeyFormat:        uint32(types.PADSpaceKeyV1),
+		CollationVersion: uint32(types.CollationVersionV1),
 	})
 	require.NoError(t, err)
 	require.Equal(t, []*plan.CheckDef{check}, extra.Checks)
 	require.Equal(t, uint32(types.CharsetBinary), extra.DefaultCharset)
+	require.Equal(t, uint32(types.PADSpaceKeyV1), extra.KeyFormat)
+	require.Equal(t, uint32(types.CollationVersionV1), extra.CollationVersion)
 
 	roundTrip := api.MustUnmarshalTblExtra(api.MustMarshalTblExtra(extra))
 	require.Equal(t, extra.Checks, roundTrip.Checks)
 	require.Equal(t, extra.DefaultCharset, roundTrip.DefaultCharset)
+	require.Equal(t, extra.KeyFormat, roundTrip.KeyFormat)
+	require.Equal(t, extra.CollationVersion, roundTrip.CollationVersion)
 
 	clone := api.CloneExtra(extra)
 	require.Equal(t, extra.Checks, clone.Checks)
 	require.Equal(t, extra.DefaultCharset, clone.DefaultCharset)
+	require.Equal(t, extra.KeyFormat, clone.KeyFormat)
+	require.Equal(t, extra.CollationVersion, clone.CollationVersion)
 	require.NotSame(t, extra.Checks[0], clone.Checks[0])
 }

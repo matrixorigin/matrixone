@@ -19,6 +19,7 @@ import (
 	"math"
 	"unicode/utf8"
 
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -37,7 +38,25 @@ func SerialEncodedTypeSizeBound(typ types.Type) (uint64, bool) {
 	}
 
 	payload, ok := serialTypePayloadSizeBound(typ)
-	if !ok || payload > (math.MaxUint64-3)/2 {
+	if !ok {
+		return 0, false
+	}
+	// A versioned text component is encoded after its SQL value has been
+	// converted to an opaque comparison key. Its output can be larger than the
+	// source UTF-8 bytes (UCA 9.0 may emit several weights per code point), so a
+	// raw column-width bound is not sufficient for packer/recovery admission.
+	if types.NeedsCollationKey(typ, types.PADSpaceKeyV1) {
+		part, err := types.ResolveStringKeyPart(typ, types.PADSpaceKeyV1)
+		if err != nil || payload > uint64(^uint(0)>>1) {
+			return 0, false
+		}
+		keyBound, boundErr := part.KeySizeUpperBound(int(payload))
+		if boundErr != nil {
+			return 0, false
+		}
+		payload = uint64(keyBound)
+	}
+	if payload > (math.MaxUint64-3)/2 {
 		return 0, false
 	}
 	// string-type code + bytes code + terminator; every payload byte can be
@@ -129,6 +148,29 @@ type SerialValueEncoder func(
 func NewSerialValueEncoder(
 	v *vector.Vector,
 ) (SerialValueEncoder, error) {
+	if v == nil {
+		return nil, moerr.NewInternalErrorNoCtx("nil serial runtime-filter vector")
+	}
+	// The public encoder callback predates error returns and is intentionally
+	// kept compatible with its callers. Validate the complete source vector at
+	// construction time so a malformed versioned string cannot be silently
+	// dropped by the callback's scratch-key fast path.
+	if v.GetType() != nil && v.GetType().Oid.IsMySQLString() &&
+		types.NeedsCollationKey(*v.GetType(), types.PADSpaceKeyV1) {
+		part, err := types.ResolveStringKeyPart(*v.GetType(), types.PADSpaceKeyV1)
+		if err != nil {
+			return nil, err
+		}
+		values, area := vector.MustVarlenaRawData(v)
+		for i := range values {
+			if v.IsNull(uint64(i)) {
+				continue
+			}
+			if _, err = part.Key(nil, values[i].GetByteSlice(area)); err != nil {
+				return nil, err
+			}
+		}
+	}
 	return getPackFun(v)
 }
 
@@ -184,6 +226,24 @@ func SerialEncodedValueSizeBound(
 		types.T_array_int8, types.T_array_uint8,
 		types.T_datalink:
 		value := v.GetBytesAt(idx)
+		if types.NeedsCollationKey(*v.GetType(), types.PADSpaceKeyV1) {
+			part, resolveErr := types.ResolveStringKeyPart(*v.GetType(), types.PADSpaceKeyV1)
+			if resolveErr != nil {
+				return 0, resolveErr
+			}
+			if !utf8.Valid(value) {
+				return 0, collation.ErrUTF8
+			}
+			keyBound, boundErr := part.KeySizeUpperBound(len(value))
+			if boundErr != nil || keyBound > (math.MaxUint64-3)/2 {
+				if boundErr != nil {
+					return 0, boundErr
+				}
+				return 0, moerr.NewInternalErrorNoCtx("collation key size overflow")
+			}
+			// Every key byte may be zero and require one tuple escape byte.
+			return uint64(2*keyBound + 3), nil
+		}
 		// string-type code + bytes code + terminator; every embedded zero
 		// gains one escape byte.
 		return uint64(len(value) + bytes.Count(value, []byte{0}) + 3), nil

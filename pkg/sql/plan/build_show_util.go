@@ -239,8 +239,10 @@ func constructCreateTableSQL(
 		}
 	}
 
-	// If it is a composite primary key, get the component columns of the composite primary key
-	if tableDef.Pkey != nil && len(tableDef.Pkey.Names) > 1 {
+	// Hidden physical primary keys (including native 0900 single-string keys)
+	// retain the user-facing component names in Pkey.Names.
+	if tableDef.Pkey != nil && (len(tableDef.Pkey.Names) > 1 ||
+		(tableDef.Pkey.CompPkeyCol != nil && tableDef.Pkey.CompPkeyCol.Hidden)) {
 		pkDefs = append(pkDefs, tableDef.Pkey.Names...)
 	}
 
@@ -882,6 +884,10 @@ func appendTextCharsetForShowCreate(buf *bytes.Buffer, typ plan.Type, tableChars
 		if tableCharset != uint32(types.CharsetUTF8) {
 			buf.WriteString(" COLLATE utf8mb4_general_ci")
 		}
+	case uint32(types.CharsetUTF8MB40900AI):
+		buf.WriteString(" COLLATE utf8mb4_0900_ai_ci")
+	case uint32(types.CharsetUTF8MB40900Bin):
+		buf.WriteString(" COLLATE utf8mb4_0900_bin")
 	}
 }
 
@@ -931,6 +937,10 @@ func tableCharsetForShowCreate(ctx CompilerContext, charset uint32) string {
 		return " COLLATE=utf8mb4_general_ci"
 	case uint32(types.CharsetUTF8MB4Bin):
 		return " COLLATE=utf8mb4_bin"
+	case uint32(types.CharsetUTF8MB40900AI):
+		return " COLLATE=utf8mb4_0900_ai_ci"
+	case uint32(types.CharsetUTF8MB40900Bin):
+		return " COLLATE=utf8mb4_0900_bin"
 	case uint32(types.CharsetBinary):
 		return " CHARACTER SET=binary"
 	default:

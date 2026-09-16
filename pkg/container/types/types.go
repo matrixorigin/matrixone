@@ -150,12 +150,14 @@ const (
 type Type struct {
 	Oid T
 
-	// Charset originally existed only to keep T four-byte aligned and was always
-	// zero-filled. It now carries text collation identity; the two following
-	// bytes remain explicit padding so the serialized layout stays unchanged.
-	Charset uint8
-	notNull uint8
-	dummy2  uint8
+	// Charset originally occupied one byte in the four-byte header. The former
+	// dummy byte at offset 3 was never consumed by execution or storage and is
+	// now the explicit semantic-version slot. Keeping the first four bytes and
+	// the Size offset unchanged is required because object/vector/catalog data
+	// uses the native fixed-width Type representation.
+	Charset          uint8
+	notNull          uint8
+	CollationVersion uint8
 
 	Size int32
 	// Width means max Display width for float and double, char and varchar
@@ -166,6 +168,13 @@ type Type struct {
 }
 
 const (
+	// CollationVersionLegacy preserves the interpretation used by schemas and
+	// plans written before versioned collation semantics were introduced.
+	CollationVersionLegacy uint8 = 0
+	// CollationVersionV1 identifies the corrected, schema-aware collation
+	// semantics paired with PADSpaceKeyV1 physical keys.
+	CollationVersionV1 uint8 = 1
+
 	// CharsetLegacy is the zero value written before text collation metadata
 	// became meaningful. Text values with this identity keep the historical
 	// bytewise ordering so an upgrade cannot change results for existing data.
@@ -180,32 +189,63 @@ const (
 	// CharsetUTF8 is the explicit utf8mb4_general_ci text identity. It must not
 	// use zero: old catalog rows have zero in this formerly dummy field.
 	CharsetUTF8 uint8 = 3
+	// CharsetUTF8MB40900AI and CharsetUTF8MB40900Bin are native MySQL UCA 9.0
+	// identities. They are distinct from CharsetUTF8 and CharsetUTF8MB4Bin;
+	// historical aliases are never reinterpreted as these values.
+	CharsetUTF8MB40900AI  uint8 = 4
+	CharsetUTF8MB40900Bin uint8 = 5
 )
 
+func IsCaseInsensitiveCollation(charset uint8) bool {
+	return charset == CharsetUTF8 || charset == CharsetUTF8MB40900AI
+}
+
+func IsNative0900Collation(charset uint8) bool {
+	return charset == CharsetUTF8MB40900AI || charset == CharsetUTF8MB40900Bin
+}
+
+func IsTextCollation(charset uint8) bool {
+	return charset == CharsetLegacy || charset == CharsetUTF8MB4Bin ||
+		charset == CharsetUTF8 || IsNative0900Collation(charset)
+}
+
 // MergeStringCharset derives one collation identity for a value composed from
-// multiple MySQL strings. Binary bytes must never be reinterpreted as UTF-8;
-// binary-collated utf8mb4 and legacy text likewise retain their stronger
-// ordering identity when combined with default general-ci text.
+// multiple MySQL strings. Binary bytes must never be reinterpreted as UTF-8.
+// The precedence is deterministic rather than operand-order dependent: an
+// opaque binary domain wins first, then binary collations, then native 0900
+// accent-insensitive text, then legacy/general text. The expression binder is
+// still responsible for MySQL coercibility (explicit COLLATE, column,
+// literal, and parameter provenance) before it calls this type-only fallback.
 func MergeStringCharset(parameters []Type, fallback uint8) uint8 {
 	result := fallback
 	for _, parameter := range parameters {
 		if !parameter.Oid.IsMySQLString() {
 			continue
 		}
-		switch parameter.Charset {
-		case CharsetBinary:
-			result = CharsetBinary
-		case CharsetUTF8MB4Bin:
-			if result != CharsetBinary {
-				result = CharsetUTF8MB4Bin
-			}
-		case CharsetLegacy:
-			if result == CharsetUTF8 {
-				result = CharsetLegacy
-			}
+		if stringCharsetPrecedence(parameter.Charset) > stringCharsetPrecedence(result) {
+			result = parameter.Charset
 		}
 	}
 	return result
+}
+
+func stringCharsetPrecedence(charset uint8) uint8 {
+	switch charset {
+	case CharsetBinary:
+		return 6
+	case CharsetUTF8MB40900Bin:
+		return 5
+	case CharsetUTF8MB4Bin:
+		return 4
+	case CharsetUTF8MB40900AI:
+		return 3
+	case CharsetLegacy:
+		return 2
+	case CharsetUTF8:
+		return 1
+	default:
+		return 0
+	}
 }
 
 // ProtoSize is used by gogoproto.
@@ -219,9 +259,16 @@ func (t *Type) MarshalToSizedBuffer(data []byte) (int, error) {
 		panic("invalid byte slice")
 	}
 	binary.BigEndian.PutUint16(data[0:], uint16(t.Oid))
-	binary.BigEndian.PutUint16(data[2:], uint16(t.Charset))
+	// Keep the historical two-byte charset slot byte-compatible for legacy
+	// values (charset occupied the low byte) and use its previously unused high
+	// byte for the explicit semantic version. Old readers therefore continue to
+	// see the same charset while new readers can distinguish legacy from V1.
+	binary.BigEndian.PutUint16(data[2:], uint16(t.CollationVersion)<<8|uint16(t.Charset))
 	binary.BigEndian.PutUint16(data[4:], uint16(t.notNull))
-	binary.BigEndian.PutUint16(data[6:], uint16(t.dummy2))
+	// The old dummy slot remains zero in this explicit codec. The semantic
+	// version is carried in the unused high byte of the charset slot above;
+	// leaving the old slot unchanged keeps legacy readers byte-compatible.
+	binary.BigEndian.PutUint16(data[6:], 0)
 	binary.BigEndian.PutUint32(data[8:], Int32ToUint32(t.Size))
 	binary.BigEndian.PutUint32(data[12:], Int32ToUint32(t.Width))
 	binary.BigEndian.PutUint32(data[16:], Int32ToUint32(t.Scale))
@@ -250,9 +297,10 @@ func (t *Type) Unmarshal(data []byte) error {
 		panic("invalid byte slice")
 	}
 	t.Oid = T(binary.BigEndian.Uint16(data[0:]))
-	t.Charset = uint8(binary.BigEndian.Uint16(data[2:]))
+	charsetSlot := binary.BigEndian.Uint16(data[2:])
+	t.Charset = uint8(charsetSlot)
+	t.CollationVersion = uint8(charsetSlot >> 8)
 	t.notNull = uint8(binary.BigEndian.Uint16(data[4:]))
-	t.dummy2 = uint8(binary.BigEndian.Uint16(data[6:]))
 	t.Size = Uint32ToInt32(binary.BigEndian.Uint32(data[8:]))
 	t.Width = Uint32ToInt32(binary.BigEndian.Uint32(data[12:]))
 	t.Scale = Uint32ToInt32(binary.BigEndian.Uint32(data[16:]))
@@ -543,6 +591,15 @@ func NewWithCharset(oid T, width, scale int32, charset uint8) Type {
 	return typ
 }
 
+// NewWithCharsetVersion restores both collation identity and its semantic
+// version from a plan or catalog definition. Keeping this as a separate
+// constructor preserves all legacy call sites that only carry Charset.
+func NewWithCharsetVersion(oid T, width, scale int32, charset, version uint8) Type {
+	typ := NewWithCharset(oid, width, scale, charset)
+	typ.CollationVersion = version
+	return typ
+}
+
 func CharsetType(oid T) uint8 {
 	switch oid {
 	case T_blob, T_varbinary, T_binary, T_geometry, T_geometry32:
@@ -715,6 +772,7 @@ func (t Type) Eq(b Type) bool {
 		return t.Oid == b.Oid
 	case T_char, T_varchar, T_text:
 		return t.Oid == b.Oid && t.Charset == b.Charset &&
+			t.CollationVersion == b.CollationVersion &&
 			t.Size == b.Size && t.Width == b.Width && t.Scale == b.Scale
 	default:
 		return t.Oid == b.Oid && t.Size == b.Size &&

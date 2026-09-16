@@ -847,14 +847,17 @@ const (
 	// logical payload size and currently-supported free-space contract.
 	JSON_STORAGE_SIZE = 579
 	JSON_STORAGE_FREE = 580
+	// Keep the internal collation key after IDs already allocated by main.
+	INTERNAL_COLLATION_KEY = 581
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 581
+	FUNCTION_END_NUMBER = 582
 )
 
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
+	"internal_collation_key": INTERNAL_COLLATION_KEY,
 	// operators
 	"=":            EQUAL,
 	"<=>":          NULL_SAFE_EQUAL,

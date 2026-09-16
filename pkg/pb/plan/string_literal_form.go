@@ -199,6 +199,7 @@ const (
 	notEqualFunctionID               int32 = 1
 	nullSafeEqualFunctionID          int32 = 406
 	internalJSONComparisonFunctionID int32 = 577
+	internalCollationKeyFunctionID   int32 = 581
 	planBooleanTypeID                int32 = 10
 	planJSONTypeID                   int32 = 62
 	binFunctionID                    int32 = 270
@@ -242,6 +243,9 @@ type RemoteExpressionFeatures struct {
 	ASCIIInt32Result             bool
 	StringNumericResultContracts bool
 	IPFunctionSemantics          bool
+	CollationKeyV1               bool
+	NativeCollationV1            bool
+	NativeCollationSchemaV1      bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
@@ -254,7 +258,10 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.IntegerArithmeticDomains ||
 		features.RowDependentConvBases ||
 		features.StringNumericResultContracts ||
-		features.IPFunctionSemantics
+		features.IPFunctionSemantics ||
+		features.CollationKeyV1 ||
+		features.NativeCollationV1 ||
+		features.NativeCollationSchemaV1
 }
 
 // These IDs are kept numeric deliberately: pkg/pb/plan cannot import the
@@ -295,7 +302,19 @@ func isRemoteIPFunction(functionID int32) bool {
 func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatures, err error) {
 	err = walkExpressionsInOwner(owner, func(expr *Expr) error {
 		return VisitExprTree(expr, func(current *Expr) error {
+			if current == nil {
+				return nil
+			}
+			if err := validatePlanCollationType(current.Typ); err != nil {
+				return err
+			}
 			fn := current.GetF()
+			if current.Typ.CollationVersion != 0 || current.Typ.Charset == 4 || current.Typ.Charset == 5 {
+				features.NativeCollationV1 = true
+			}
+			if fn != nil && fn.Func != nil && int32(fn.Func.Obj>>32) == internalCollationKeyFunctionID {
+				features.CollationKeyV1 = true
+			}
 			if fn != nil && fn.Func != nil {
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
 				// PLUS/MINUS/MULTI are stable function IDs 10/11/12.
@@ -345,7 +364,81 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			return nil
 		})
 	})
+	if err != nil {
+		return
+	}
+	err = walkTableDefsInOwner(owner, func(table *TableDef) error {
+		if table == nil {
+			return nil
+		}
+		if err := validatePlanTableCollationMetadata(table); err != nil {
+			return err
+		}
+		if table.KeyFormat != 0 || table.CollationVersion != 0 {
+			features.NativeCollationV1 = true
+			features.NativeCollationSchemaV1 = true
+		}
+		for _, col := range table.Cols {
+			if col != nil && (col.Typ.CollationVersion != 0 || col.Typ.Charset == 4 || col.Typ.Charset == 5) {
+				features.NativeCollationV1 = true
+				features.NativeCollationSchemaV1 = true
+			}
+		}
+		for _, index := range table.Indexes {
+			if index != nil && index.KeyFormat != 0 {
+				features.NativeCollationV1 = true
+				features.NativeCollationSchemaV1 = true
+			}
+		}
+		return nil
+	})
 	return
+}
+
+// validatePlanCollationType is kept in the protobuf package to avoid an import
+// cycle with container/types. Charset 255 remains valid for the existing
+// numeric-prefix cast sentinel on non-string expressions.
+func validatePlanCollationType(typ Type) error {
+	if typ.CollationVersion > 1 {
+		return moerr.NewInvalidInputNoCtxf("unsupported collation semantic version %d", typ.CollationVersion)
+	}
+	if isPlanMySQLStringType(typ.Id) && typ.Charset > 5 {
+		return moerr.NewInvalidInputNoCtxf("unsupported collation identity %d", typ.Charset)
+	}
+	if !isPlanMySQLStringType(typ.Id) && typ.CollationVersion != 0 {
+		return moerr.NewInvalidInputNoCtxf(
+			"collation semantic version %d on non-string type %d", typ.CollationVersion, typ.Id,
+		)
+	}
+	return nil
+}
+
+func validatePlanTableCollationMetadata(table *TableDef) error {
+	if table.KeyFormat > 1 {
+		return moerr.NewInvalidInputNoCtxf("unsupported collation key format %d", table.KeyFormat)
+	}
+	if table.CollationVersion > 1 {
+		return moerr.NewInvalidInputNoCtxf("unsupported collation semantic version %d", table.CollationVersion)
+	}
+	for _, col := range table.Cols {
+		if col == nil {
+			continue
+		}
+		if err := validatePlanCollationType(col.Typ); err != nil {
+			return moerr.NewInvalidInputNoCtxf("column %q: %s", col.Name, err.Error())
+		}
+	}
+	for _, index := range table.Indexes {
+		if index == nil {
+			continue
+		}
+		if index.KeyFormat > 1 {
+			return moerr.NewInvalidInputNoCtxf(
+				"index %q: unsupported collation key format %d", index.IndexName, index.KeyFormat,
+			)
+		}
+	}
+	return nil
 }
 
 // isASCIIInt32Result identifies the new physical result contract of ASCII.
@@ -789,6 +882,67 @@ func walkExpressionsInOwner(owner any, visitor func(*Expr) error) error {
 			}
 			if expr, ok := value.Interface().(*Expr); ok {
 				return visitor(expr)
+			}
+			pointer := value.Pointer()
+			if _, ok := seen[pointer]; ok {
+				return nil
+			}
+			seen[pointer] = struct{}{}
+			return walk(value.Elem())
+		}
+		switch value.Kind() {
+		case reflect.Struct:
+			for field := 0; field < value.NumField(); field++ {
+				if value.Type().Field(field).PkgPath == "" {
+					if err := walk(value.Field(field)); err != nil {
+						return err
+					}
+				}
+			}
+		case reflect.Slice, reflect.Array:
+			if value.Type().Elem().Kind() == reflect.Uint8 {
+				return nil
+			}
+			for item := 0; item < value.Len(); item++ {
+				if err := walk(value.Index(item)); err != nil {
+					return err
+				}
+			}
+		case reflect.Map:
+			iterator := value.MapRange()
+			for iterator.Next() {
+				if err := walk(iterator.Value()); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	return walk(reflect.ValueOf(owner))
+}
+
+// walkTableDefsInOwner visits persisted relation definitions independently of
+// expression roots. An optimized remote plan may retain only integer
+// projections while still reading a native-format relation or index.
+func walkTableDefsInOwner(owner any, visitor func(*TableDef) error) error {
+	seen := make(map[uintptr]struct{})
+	var walk func(reflect.Value) error
+	walk = func(value reflect.Value) error {
+		if !value.IsValid() {
+			return nil
+		}
+		if value.Kind() == reflect.Interface {
+			if value.IsNil() {
+				return nil
+			}
+			return walk(value.Elem())
+		}
+		if value.Kind() == reflect.Pointer {
+			if value.IsNil() {
+				return nil
+			}
+			if table, ok := value.Interface().(*TableDef); ok {
+				return visitor(table)
 			}
 			pointer := value.Pointer()
 			if _, ok := seen[pointer]; ok {

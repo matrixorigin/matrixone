@@ -534,3 +534,50 @@ func TestRequiredRemoteExpressionFeaturesASCIIResultContract(t *testing.T) {
 		"legacy UINT8 ASCII plans remain executable on a newer worker")
 
 }
+
+func TestRequiredRemoteExpressionFeaturesDetectsNativeSchema(t *testing.T) {
+	owner := &Plan{Plan: &Plan_Query{Query: &Query{
+		Nodes: []*Node{{TableDef: &TableDef{
+			Cols:    []*ColDef{{Typ: Type{Id: 61, Charset: 4}}},
+			Indexes: []*IndexDef{{KeyFormat: 1}},
+		}}},
+	}}}
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	require.NoError(t, err)
+	require.True(t, features.NativeCollationV1)
+	require.True(t, features.NativeCollationSchemaV1)
+
+	legacy := &Plan{Plan: &Plan_Query{Query: &Query{
+		Nodes: []*Node{{TableDef: &TableDef{
+			Cols: []*ColDef{{Typ: Type{Id: 61, Charset: 2}}},
+		}}},
+	}}}
+	features, err = RequiredRemoteExpressionFeatures(legacy)
+	require.NoError(t, err)
+	require.False(t, features.NativeCollationV1)
+	require.False(t, features.NativeCollationSchemaV1)
+}
+
+func TestRequiredRemoteExpressionFeaturesRejectsUnknownCollationMetadata(t *testing.T) {
+	unknownVersion := &Plan{Plan: &Plan_Query{Query: &Query{
+		Nodes: []*Node{{TableDef: &TableDef{
+			Cols: []*ColDef{{Typ: Type{Id: 61, Charset: 3, CollationVersion: 2}}},
+		}}},
+	}}}
+	_, err := RequiredRemoteExpressionFeatures(unknownVersion)
+	require.ErrorContains(t, err, "unsupported collation semantic version")
+
+	unknownFormat := &Plan{Plan: &Plan_Query{Query: &Query{
+		Nodes: []*Node{{TableDef: &TableDef{
+			KeyFormat: 2,
+		}}},
+	}}}
+	_, err = RequiredRemoteExpressionFeatures(unknownFormat)
+	require.ErrorContains(t, err, "unsupported collation key format")
+
+	unknownExpr := &Expr{Typ: Type{Id: 61, Charset: 6}}
+	_, err = RequiredRemoteExpressionFeatures(&struct{ Expressions []*Expr }{
+		Expressions: []*Expr{unknownExpr},
+	})
+	require.ErrorContains(t, err, "unsupported collation identity")
+}

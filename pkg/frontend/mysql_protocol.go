@@ -110,10 +110,9 @@ const (
 	clientProtocolVersion uint8 = 10
 
 	/**
-	An answer talks about the charset utf8mb4.
-	https://stackoverflow.com/questions/766809/whats-the-difference-between-utf8-general-ci-and-utf8-unicode-ci
-	It recommends the charset utf8mb4_0900_ai_ci.
-	Maybe we can support utf8mb4_0900_ai_ci in the future.
+	The handshake remains utf8mb4_bin for compatibility. Native 0900
+	collations are advertised in column metadata only when the result column
+	actually carries that schema identity.
 
 	A concise research in the Mysql 8.0.23.
 
@@ -152,7 +151,12 @@ const (
 
 	*/
 	// DefaultCollationID is utf8mb4_bin(46)
-	utf8mb4BinCollationID uint8 = 46
+	utf8mb4BinCollationID    uint8 = 46
+	utf8mb40900AICollationID uint8 = 255
+	// Column-definition metadata carries a two-byte collation ID. 309 is the
+	// native MySQL ID for utf8mb4_0900_bin and cannot be represented by the
+	// one-byte handshake character-set field (which remains utf8mb4_bin).
+	utf8mb40900BinCollationID uint16 = 309
 
 	Utf8mb4CollationID uint8 = 45
 

@@ -2859,11 +2859,24 @@ func NewTableOptionSecondaryEngineNull() *TableOptionSecondaryEngineNull {
 type TableOptionCharset struct {
 	tableOptionImpl
 	Charset string
+	// Collate is populated by ALTER TABLE ... CONVERT TO CHARACTER SET ...
+	// COLLATE ....  CREATE TABLE keeps the field empty because its table-level
+	// charset and collation are represented by separate options.
+	Collate string
+	// Convert distinguishes ALTER TABLE ... CONVERT TO CHARACTER SET from
+	// ALTER TABLE's default-charset option and compatibility clauses such as
+	// ENABLE/DISABLE KEYS.  The latter share this AST node for historical
+	// parser compatibility but must not trigger a data rewrite.
+	Convert bool
 }
 
 func (node *TableOptionCharset) Format(ctx *FmtCtx) {
 	ctx.WriteString("charset = ")
 	ctx.WriteString(node.Charset)
+	if node.Collate != "" {
+		ctx.WriteString(" collate = ")
+		ctx.WriteString(node.Collate)
+	}
 }
 
 func (node TableOptionCharset) TypeName() string { return "tree.TableOptionCharset" }
@@ -2879,6 +2892,24 @@ func (node *TableOptionCharset) Free() {
 func NewTableOptionCharset(s string) *TableOptionCharset {
 	t := reuse.Alloc[TableOptionCharset](nil)
 	t.Charset = s
+	return t
+}
+
+func NewTableOptionCharsetWithCollation(charset, collate string) *TableOptionCharset {
+	t := NewTableOptionCharset(charset)
+	t.Collate = collate
+	return t
+}
+
+func NewTableOptionCharsetConversion(charset string) *TableOptionCharset {
+	t := NewTableOptionCharset(charset)
+	t.Convert = true
+	return t
+}
+
+func NewTableOptionCharsetConversionWithCollation(charset, collate string) *TableOptionCharset {
+	t := NewTableOptionCharsetWithCollation(charset, collate)
+	t.Convert = true
 	return t
 }
 

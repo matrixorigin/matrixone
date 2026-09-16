@@ -184,12 +184,14 @@ var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaEx
 		exeDefs = append(exeDefs, propDef)
 	}
 	extra := &api.SchemaExtra{
-		FeatureFlag:    tableDef.FeatureFlag,
-		AutoIncrOffset: tableDef.AutoIncrOffset,
-		AutoIncrEpoch:  tableDef.AutoIncrEpoch,
-		AutoIdCache:    tableDef.AutoIdCache,
-		Checks:         tableDef.Checks,
-		DefaultCharset: tableDef.DefaultCharset,
+		FeatureFlag:      tableDef.FeatureFlag,
+		AutoIncrOffset:   tableDef.AutoIncrOffset,
+		AutoIncrEpoch:    tableDef.AutoIncrEpoch,
+		AutoIdCache:      tableDef.AutoIdCache,
+		Checks:           tableDef.Checks,
+		DefaultCharset:   tableDef.DefaultCharset,
+		KeyFormat:        tableDef.KeyFormat,
+		CollationVersion: tableDef.CollationVersion,
 	}
 	propDef.Properties = append(
 		propDef.Properties,
@@ -243,8 +245,9 @@ func PlanColsToExeCols(planCols []*plan.ColDef) []TableDef {
 			alg = compress.Lz4
 		}
 		colTyp := col.GetTyp()
-		exeTyp := types.NewWithCharset(
-			types.T(colTyp.GetId()), colTyp.GetWidth(), colTyp.GetScale(), uint8(colTyp.GetCharset()),
+		exeTyp := types.NewWithCharsetVersion(
+			types.T(colTyp.GetId()), colTyp.GetWidth(), colTyp.GetScale(),
+			uint8(colTyp.GetCharset()), uint8(colTyp.GetCollationVersion()),
 		)
 		exeCols[i] = &AttributeDef{
 			Attr: Attribute{

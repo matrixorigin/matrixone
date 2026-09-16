@@ -78,8 +78,9 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 	}
 	typs := make([]types.Type, len(cols))
 	for i, c := range cols {
-		typs[i] = types.NewWithCharset(
-			types.T(c.Typ.Id), c.Typ.Width, c.Typ.Scale, uint8(c.Typ.Charset),
+		typs[i] = types.NewWithCharsetVersion(
+			types.T(c.Typ.Id), c.Typ.Width, c.Typ.Scale,
+			uint8(c.Typ.Charset), uint8(c.Typ.CollationVersion),
 		)
 	}
 	builder.compCtx.GetProcess().GetSessionInfo().ResultColTypes = typs

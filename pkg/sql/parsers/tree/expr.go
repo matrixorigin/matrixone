@@ -985,6 +985,16 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 	if node.FuncName != nil {
 		funcName = node.FuncName.Origin()
 	}
+	if strings.EqualFold(funcName, "collate") && len(node.Exprs) == 2 {
+		node.Exprs[0].Format(ctx)
+		ctx.WriteString(" collate ")
+		if name, ok := node.Exprs[1].(*NumVal); ok && name.ValType == P_char {
+			ctx.WriteString(name.String())
+		} else {
+			node.Exprs[1].Format(ctx)
+		}
+		return
+	}
 	if ctx.detectDateTimeFormat && isDateTimeFormatFunction(funcName) {
 		ctx.sawDateTimeFormat = true
 	}

@@ -1925,10 +1925,11 @@ func convertToPlanTypes(ts []types.Type) []plan.Type {
 	result := make([]plan.Type, len(ts))
 	for i, t := range ts {
 		result[i] = plan.Type{
-			Id:      int32(t.Oid),
-			Width:   t.Width,
-			Scale:   t.Scale,
-			Charset: uint32(t.Charset),
+			Id:               int32(t.Oid),
+			Width:            t.Width,
+			Scale:            t.Scale,
+			Charset:          uint32(t.Charset),
+			CollationVersion: uint32(t.CollationVersion),
 		}
 	}
 	return result
@@ -1938,7 +1939,7 @@ func convertToPlanTypes(ts []types.Type) []plan.Type {
 func convertToTypes(ts []plan.Type) []types.Type {
 	result := make([]types.Type, len(ts))
 	for i, t := range ts {
-		result[i] = types.NewWithCharset(types.T(t.Id), t.Width, t.Scale, uint8(t.Charset))
+		result[i] = types.NewWithCharsetVersion(types.T(t.Id), t.Width, t.Scale, uint8(t.Charset), uint8(t.CollationVersion))
 	}
 	return result
 }
@@ -2176,16 +2177,20 @@ func validateRemoteExpressionPipelineProtocol(
 			"signed INT ASCII results require MORPC protocol version 65",
 		)
 	}
-	if features.StringNumericResultContracts &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion80) {
+	// CollationKeyV1 is introduced together with the native collation
+	// implementation in this branch.  The historical MORPC v68 check cannot
+	// be used as an activation gate: live-main nodes at v81 still do not have
+	// the new function ID or its execution contract.  Keep the feature disabled
+	// until the durable cluster gate is implemented, just like the persisted
+	// schema/key format.
+	if features.CollationKeyV1 {
 		return moerr.NewNotSupportedNoCtx(
-			"corrected string numeric result contracts require MORPC protocol version 80",
+			"versioned collation key expressions are disabled until all cluster nodes support the persisted key format",
 		)
 	}
-	if features.IPFunctionSemantics &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion72) {
+	if features.NativeCollationV1 || features.NativeCollationSchemaV1 {
 		return moerr.NewNotSupportedNoCtx(
-			"corrected IP function semantics require MORPC protocol version 72",
+			"utf8mb4_0900 collation keys are disabled until all cluster nodes support the persisted key format",
 		)
 	}
 	return nil
@@ -2684,8 +2689,8 @@ func aggregateUsesCollationAwareTextMinMax(agg aggexec.AggFuncExecExpression) bo
 	}
 	args := agg.GetArgExpressions()
 	if len(args) == 0 || args[0] == nil ||
-		(args[0].Typ.Charset != uint32(types.CharsetUTF8) &&
-			args[0].Typ.Charset != uint32(types.CharsetUTF8MB4Bin)) {
+		(!types.IsTextCollation(uint8(args[0].Typ.Charset)) ||
+			args[0].Typ.Charset == uint32(types.CharsetLegacy)) {
 		return false
 	}
 	switch types.T(args[0].Typ.Id) {

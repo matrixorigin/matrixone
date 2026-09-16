@@ -863,6 +863,24 @@ func TestConvertUsingDeparseRoundTrip(t *testing.T) {
 	}
 }
 
+func TestExpressionCollateIsPreserved(t *testing.T) {
+	stmt, err := ParseOne(context.Background(), "select name collate utf8mb4_0900_ai_ci from t", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	expr := firstSelectExpr(t, stmt)
+	collate, ok := expr.(*tree.FuncExpr)
+	require.True(t, ok)
+	require.Equal(t, "collate", collate.FuncName.Compare())
+	require.Len(t, collate.Exprs, 2)
+	name, ok := collate.Exprs[1].(*tree.NumVal)
+	require.True(t, ok)
+	require.Equal(t, "utf8mb4_0900_ai_ci", name.String())
+
+	fmtCtx := tree.NewFmtCtx(dialect.MYSQL)
+	stmt.Format(fmtCtx)
+	require.Contains(t, fmtCtx.String(), "name collate utf8mb4_0900_ai_ci")
+}
+
 func TestParseFirstWithSQLMode(t *testing.T) {
 	ctx := context.Background()
 	parser := &MySQLParser{}
@@ -4913,10 +4931,10 @@ var (
 			output: "alter table t1 algorithm = COPY",
 		}, {
 			input:  "alter table t1 default CHARACTER SET = a COLLATE = b",
-			output: "alter table t1 charset = a",
+			output: "alter table t1 charset = a collate = b",
 		}, {
 			input:  "alter table t1 CONVERT TO CHARACTER SET a COLLATE b",
-			output: "alter table t1 charset = a",
+			output: "alter table t1 charset = a collate = b",
 		}, {
 			input:  "alter table t1 DISABLE KEYS",
 			output: "alter table t1 charset = DISABLE",

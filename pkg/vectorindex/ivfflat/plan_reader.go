@@ -1210,7 +1210,13 @@ func makeRelationScanBatch(tableDef *plan.TableDef, columns []string) (*batch.Ba
 			return nil, moerr.NewInternalErrorNoCtxf("ivfflat hidden column %q not found in %s", name, tableDef.Name)
 		}
 		colType := tableDef.Cols[pos].Typ
-		bat.Vecs[i] = vector.NewVec(types.New(types.T(colType.Id), colType.Width, colType.Scale))
+		bat.Vecs[i] = vector.NewVec(types.NewWithCharsetVersion(
+			types.T(colType.Id),
+			colType.Width,
+			colType.Scale,
+			uint8(colType.Charset),
+			uint8(colType.CollationVersion),
+		))
 	}
 	return bat, nil
 }

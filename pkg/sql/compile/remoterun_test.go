@@ -1799,6 +1799,105 @@ func TestRemoteASCIIResultProtocolValidation(t *testing.T) {
 	require.Nil(t, decoded)
 }
 
+func TestRemoteCollationKeyProtocolValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(0))
+	proc.Base.TxnOperator = fakeTxnOperator{}
+	proc.Base.SessionInfo.TimeZone = time.UTC
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	collationKey := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_varbinary)},
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{
+				Obj:     int64(planfunction.INTERNAL_COLLATION_KEY) << 32,
+				ObjName: "internal_collation_key",
+			},
+			Args: []*planpb.Expr{{
+				Typ:  planpb.Type{Id: int32(types.T_varchar)},
+				Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
+			}, {
+				Typ:  planpb.Type{Id: int32(types.T_uint64)},
+				Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_U64Val{U64Val: uint64(types.CharsetUTF8)}}},
+			}},
+		}},
+	}
+	scope := &Scope{
+		Magic:  Remote,
+		Proc:   proc,
+		RootOp: value_scan.NewArgument(),
+		Plan: &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+			Steps: []int32{0},
+			Nodes: []*planpb.Node{{NodeId: 0, ProjectList: []*planpb.Expr{collationKey}}},
+		}}},
+	}
+
+	const expected = "versioned collation key expressions are disabled until all cluster nodes support the persisted key format"
+	features, featureErr := planpb.RequiredRemoteExpressionFeatures(&pipeline.Pipeline{
+		InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{collationKey}}},
+	})
+	require.NoError(t, featureErr)
+	require.True(t, features.CollationKeyV1, collationKey.String())
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion67)
+	err := validateRemoteExpressionPipelineProtocol(proc, &pipeline.Pipeline{
+		InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{collationKey}}},
+	})
+	require.ErrorContains(t, err, expected)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+	_, _, _, _, err = prepareRemoteRunSendingData("", scope, proc, nil, uuid.Nil)
+	require.ErrorContains(t, err, expected)
+
+	for _, version := range []int64{
+		defines.MORPCVersion68,
+		defines.MORPCLatestVersion,
+		defines.MORPCVersionNativeCollation,
+	} {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		require.ErrorContains(t,
+			validateRemoteExpressionPipelineProtocol(proc, &pipeline.Pipeline{
+				InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{collationKey}}},
+			}), expected)
+	}
+}
+
+func TestRemoteNativeCollationRequiresDurableAdmission(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldVersion, hadVersion := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+	native := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_varchar), Charset: uint32(types.CharsetUTF8MB40900AI)},
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
+	}
+	p := &pipeline.Pipeline{
+		InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{native}}},
+	}
+	features, err := planpb.RequiredRemoteExpressionFeatures(p)
+	require.NoError(t, err)
+	require.True(t, features.NativeCollationV1)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	err = validateRemoteExpressionPipelineProtocol(proc, p)
+	require.ErrorContains(t, err,
+		"utf8mb4_0900 collation keys are disabled until all cluster nodes support the persisted key format")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersionNativeCollation)
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(proc, p),
+		"utf8mb4_0900 collation keys are disabled until all cluster nodes support the persisted key format")
+}
+
 func TestExternalScanParquetRowGroupShardsRoundtrip(t *testing.T) {
 	ctx := &scopeContext{
 		id:     1,

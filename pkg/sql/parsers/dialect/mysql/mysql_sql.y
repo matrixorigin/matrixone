@@ -4313,15 +4313,15 @@ alter_option:
     }
 |   default_opt charset_keyword equal_opt charset_name COLLATE equal_opt charset_name
     {
-        $$ = tree.NewTableOptionCharset($4)
+        $$ = tree.NewTableOptionCharsetWithCollation($4, $7)
     }
 |   CONVERT TO CHARACTER SET charset_name
     {
-        $$ = tree.NewTableOptionCharset($5)
+        $$ = tree.NewTableOptionCharsetConversion($5)
     }
 |   CONVERT TO CHARACTER SET charset_name COLLATE equal_opt charset_name
     {
-        $$ = tree.NewTableOptionCharset($5)
+        $$ = tree.NewTableOptionCharsetConversionWithCollation($5, $8)
     }
 |   able_type KEYS
     {
@@ -12855,7 +12855,17 @@ simple_expr:
     }
 |   simple_expr COLLATE collate_name
     {
-        $$ = $1
+        // Preserve an expression-level COLLATE for the planner.  The old
+        // action discarded the clause, which made an explicit 0900 identity
+        // indistinguishable from the column/default identity.  Keep the
+        // collation name as a string literal; the binder resolves it with
+        // explicit coercibility precedence before producing the physical key.
+        name := tree.NewUnresolvedColName("collate")
+        $$ = &tree.FuncExpr{
+            Func: tree.FuncName2ResolvableFunctionReference(name),
+            FuncName: tree.NewCStr("collate", 1),
+            Exprs: tree.Exprs{$1, tree.NewNumVal($3, $3, false, tree.P_char)},
+        }
     }
 |   MATCH '(' index_column_list ')' AGAINST '(' search_pattern fulltext_search_opt ')'
     {

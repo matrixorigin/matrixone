@@ -2024,6 +2024,10 @@ func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColum
 		// A _bin collation still describes nonbinary UTF-8 text. Protocol
 		// collation 63 is reserved for the binary character set.
 		col.SetCharset(uint16(utf8mb4BinCollationID))
+	case types.CharsetUTF8MB40900AI:
+		col.SetCharset(uint16(utf8mb40900AICollationID))
+	case types.CharsetUTF8MB40900Bin:
+		col.SetCharset(uint16(utf8mb40900BinCollationID))
 	case types.CharsetBinary:
 		// Some internal functions intentionally return packed bytes in a VARCHAR
 		// container. Keep those values binary even though their physical OID is a
@@ -2103,7 +2107,8 @@ func mysqlTemporalDisplayLength(base int, scale int32) uint32 {
 
 func mysqlTextMaxBytesPerCharacter(charset uint8) uint32 {
 	switch charset {
-	case types.CharsetUTF8, types.CharsetUTF8MB4Bin:
+	case types.CharsetUTF8, types.CharsetUTF8MB4Bin,
+		types.CharsetUTF8MB40900AI, types.CharsetUTF8MB40900Bin:
 		return utf8mb4MaxBytesPerCharacter
 	case types.CharsetBinary:
 		return 1

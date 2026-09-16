@@ -42,6 +42,19 @@ message Type {
   // Internal semantic marker for VARCHAR/TEXT values that can carry
   // representation-only CHAR padding through a transparent query boundary.
   bool pad_space = 9;
+  // Planner provenance for the effective string collation.  The separate
+  // presence bit is required because coercibility zero is a valid value for
+  // an explicit COLLATE expression.
+  uint32 collation_coercibility = 10;
+  bool collation_coercibility_set = 11;
+  // A derived expression whose source collations could only be merged into a
+  // binary fallback keeps this marker until an operation-specific consumer
+  // decides whether that fallback is legal (for example CONCAT versus =).
+  bool collation_merge_conflict = 12;
+  // Semantic version of the resolved text collation. Zero preserves the
+  // legacy interpretation of the charset identity; non-zero values are
+  // versioned semantics and must never be inferred from the collation name.
+  uint32 collation_version = 13;
 }
 
 message msgHeader {
@@ -248,6 +261,11 @@ message Function {
   // overload while optimizers still distinguish it from an implicit cast.
   // Older CNs safely ignore this unknown field and execute the legacy overload.
   bool syntax_explicit_cast = 5;
+  // Planner provenance for an expression-level COLLATE. The executor still
+  // evaluates the ordinary cast overload; this bit lets later coercion keep
+  // MySQL's explicit-collation precedence after the wrapper crosses a plan
+  // boundary.
+  bool explicit_collation = 6;
 }
 
 // PreparedNumericMetadata is sparse planner provenance for a numeric overload
@@ -449,6 +467,9 @@ message IndexDef {
   // identity would misinterpret plans produced by versions that carried it.
   reserved 14;
   reserved "visibility_set";
+  // Physical key encoding used by the index table. Zero is legacy and is
+  // intentionally kept as the default for pre-format-version catalogs.
+  uint32 key_format = 15;
 }
 
 message ForeignKeyDef {
@@ -578,6 +599,12 @@ message TableDef {
   uint32 default_charset = 39;
   // Zero inherits the service policy; one disables speculative ID reservation.
   uint64 auto_id_cache = 40;
+  // Physical tuple/key encoding used by this relation. Zero is legacy and is
+  // intentionally kept as the default for pre-format-version catalogs.
+  uint32 key_format = 41;
+  // Semantic version of the textual default in this relation. Zero is legacy;
+  // column-level identities live on each ColDef and are not aggregated here.
+  uint32 collation_version = 42;
 }
 
 message TableFunction {

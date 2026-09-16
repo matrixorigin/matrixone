@@ -305,15 +305,16 @@ func ProtoVectorToVector(vec api.Vector) (*Vector, error) {
 
 func TypeToProtoType(typ types.Type) plan.Type {
 	return plan.Type{
-		Id:      int32(typ.Oid),
-		Width:   typ.Width,
-		Scale:   typ.Scale,
-		Charset: uint32(typ.Charset),
+		Id:               int32(typ.Oid),
+		Width:            typ.Width,
+		Scale:            typ.Scale,
+		Charset:          uint32(typ.Charset),
+		CollationVersion: uint32(typ.CollationVersion),
 	}
 }
 
 func ProtoTypeToType(typ plan.Type) types.Type {
-	return types.NewWithCharset(types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset))
+	return types.NewWithCharsetVersion(types.T(typ.Id), typ.Width, typ.Scale, uint8(typ.Charset), uint8(typ.CollationVersion))
 }
 
 func appendBytesToFixSized[T types.FixedSizeT](vec *Vector) func([]byte, bool, *mpool.MPool) error {

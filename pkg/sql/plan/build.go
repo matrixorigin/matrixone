@@ -624,13 +624,22 @@ func selectTreeHasExportParam(value reflect.Value) bool {
 	return false
 }
 
-func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*Plan, error) {
+func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (built *Plan, err error) {
 	start := time.Now()
 	defer func() {
 		v2.TxnStatementBuildPlanHistogram.Observe(time.Since(start).Seconds())
 	}()
 	_, task := gotrace.NewTask(context.TODO(), "plan.BuildPlan")
 	defer task.End()
+	defer func() {
+		if err != nil || built == nil {
+			return
+		}
+		if admissionErr := requireNative0900PlanAdmission(ctx.GetContext(), ctx.GetProcess(), built); admissionErr != nil {
+			built = nil
+			err = admissionErr
+		}
+	}()
 	switch stmt := stmt.(type) {
 	case *tree.Select:
 		if stmt.IsPerform && selectHasExportParam(stmt) {

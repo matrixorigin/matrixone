@@ -93,13 +93,13 @@ func TestDecimal128MarshalAndUnmarshal(t *testing.T) {
 
 func TestTypeMarshalAndUnmarshal(t *testing.T) {
 	typ := Type{
-		Oid:     T(1),
-		Charset: 2,
-		notNull: 0,
-		dummy2:  4,
-		Size:    5,
-		Width:   6,
-		Scale:   -1,
+		Oid:              T(1),
+		Charset:          2,
+		notNull:          0,
+		CollationVersion: 1,
+		Size:             5,
+		Width:            6,
+		Scale:            -1,
 	}
 
 	size := typ.ProtoSize()
@@ -139,6 +139,11 @@ func TestMergeStringCharset(t *testing.T) {
 	require.Equal(t, CharsetLegacy, MergeStringCharset([]Type{general, legacy}, CharsetUTF8))
 	require.Equal(t, CharsetUTF8MB4Bin, MergeStringCharset([]Type{legacy, utf8mb4Bin}, CharsetUTF8))
 	require.Equal(t, CharsetBinary, MergeStringCharset([]Type{utf8mb4Bin, opaqueBinary}, CharsetUTF8))
+	ai := NewWithCharset(T_varchar, 32, 0, CharsetUTF8MB40900AI)
+	bin0900 := NewWithCharset(T_varchar, 32, 0, CharsetUTF8MB40900Bin)
+	require.Equal(t, CharsetUTF8MB40900Bin, MergeStringCharset([]Type{ai, bin0900}, CharsetUTF8))
+	require.Equal(t, CharsetUTF8MB40900Bin, MergeStringCharset([]Type{bin0900, ai}, CharsetUTF8))
+	require.Equal(t, CharsetUTF8MB40900AI, MergeStringCharset([]Type{legacy, ai}, CharsetUTF8))
 }
 
 func TestType_String(t *testing.T) {

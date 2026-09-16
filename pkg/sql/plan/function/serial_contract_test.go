@@ -20,6 +20,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -78,6 +79,14 @@ func TestSerialEncodedTypeSizeBound(t *testing.T) {
 			want:      2*types.MaxBlobLen + 3,
 			supported: true,
 		},
+		{
+			name: "versioned general-ci varchar",
+			typ: types.NewWithCharsetVersion(
+				types.T_varchar, 128, 0, types.CharsetUTF8,
+				types.CollationVersionV1),
+			want:      2*(4*(128*utf8.UTFMax)+1) + 3,
+			supported: true,
+		},
 		{name: "unsupported", typ: types.T_decimal256.ToType()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -121,6 +130,17 @@ func TestSerialEncodedTypeSizeBoundCoversRuntimeValue(t *testing.T) {
 				return vec
 			}(),
 		},
+		{
+			name: "versioned key expansion",
+			vec: func() *vector.Vector {
+				typ := types.NewWithCharsetVersion(
+					types.T_varchar, 32, 0, types.CharsetUTF8MB40900AI,
+					types.CollationVersionV1)
+				vec := vector.NewVec(typ)
+				require.NoError(t, vector.AppendBytes(vec, []byte("𐍈é\x00"), false, mp))
+				return vec
+			}(),
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			defer tc.vec.Free(mp)
@@ -142,4 +162,17 @@ func TestSerialEncodedTypeSizeBoundCoversRuntimeValue(t *testing.T) {
 				"the type contract must cover every admitted runtime value")
 		})
 	}
+}
+
+func TestNewSerialValueEncoderRejectsInvalidVersionedUTF8(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	typ := types.NewWithCharsetVersion(
+		types.T_varchar, 16, 0, types.CharsetUTF8MB40900AI,
+		types.CollationVersionV1)
+	vec := vector.NewVec(typ)
+	defer vec.Free(mp)
+	require.NoError(t, vector.AppendBytes(vec, []byte{0xff}, false, mp))
+	_, err := NewSerialValueEncoder(vec)
+	require.ErrorIs(t, err, collation.ErrUTF8)
 }
