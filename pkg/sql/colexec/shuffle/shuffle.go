@@ -400,7 +400,8 @@ func (shuffle *Shuffle) failLocalProducer(proc *process.Process, err error) {
 }
 
 func (shuffle *Shuffle) stopWritingOnce() {
-	if shuffle.ctr.writingStopped || shuffle.ctr.shufflePool == nil {
+	// Only a successfully admitted holder may publish pool completion.
+	if !shuffle.ctr.held || shuffle.ctr.writingStopped || shuffle.ctr.shufflePool == nil {
 		return
 	}
 	shuffle.ctr.writingStopped = true
