@@ -6893,6 +6893,7 @@ func (opts *CDCCreateTaskOptions) handleLevel(
 	); err != nil {
 		return
 	}
+	cdc.NormalizeCDCSourcePatternCase(patterTupples, c.getLower())
 
 	// ensure PITR checks run with the target tenant account id
 	ctx = defines.AttachAccountId(ctx, opts.UserInfo.AccountId)
@@ -7211,6 +7212,7 @@ func (opts *CDCCreateTaskOptions) handleFrequency(
 	); err != nil {
 		return
 	}
+	cdc.NormalizeCDCSourcePatternCase(patterTupples, c.getLower())
 
 	if err = c.checkPitrGranularity(ctx, patterTupples, opts.ExcludePattern, normalized); err != nil {
 		return err

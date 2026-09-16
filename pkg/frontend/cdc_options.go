@@ -393,6 +393,7 @@ func (opts *CDCCreateTaskOptions) handleLevel(
 	); err != nil {
 		return
 	}
+	cdc.NormalizeCDCSourcePatternCase(patterTupples, parserLowerCaseTableNames(ses))
 	if err = WithBackgroundExec(
 		ctx,
 		ses,
@@ -434,6 +435,7 @@ func (opts *CDCCreateTaskOptions) handleFrequency(
 	); err != nil {
 		return
 	}
+	cdc.NormalizeCDCSourcePatternCase(patterTupples, parserLowerCaseTableNames(ses))
 	if err = WithBackgroundExec(
 		ctx,
 		ses,
