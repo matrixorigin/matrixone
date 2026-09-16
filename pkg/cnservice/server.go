@@ -1110,8 +1110,6 @@ func (s *service) initShardService() {
 			shardservice.ReadBuildReader:              disttae.HandleShardingReadBuildReader,
 			shardservice.ReadPrimaryKeysMayBeModified: disttae.HandleShardingReadPrimaryKeysMayBeModified,
 			shardservice.ReadPrimaryKeysMayBeUpserted: disttae.HandleShardingReadPrimaryKeysMayBeUpserted,
-			shardservice.ReadMergeObjects:             disttae.HandleShardingReadMergeObjects,
-			shardservice.ReadVisibleObjectStats:       disttae.HandleShardingReadVisibleObjectStats,
 			shardservice.ReadClose:                    disttae.HandleShardingReadClose,
 			shardservice.ReadNext:                     disttae.HandleShardingReadNext,
 			shardservice.ReadCollectTombstones:        disttae.HandleShardingReadCollectTombstones,
