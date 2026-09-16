@@ -1,6 +1,6 @@
 # COPY ALTER validation matrix
 
-Candidate: `d1fdf00bf6b315b06a6133d2cce07c91af52da3f`  
+Candidate: `d1fdf00bf6b315b06a6133d2cce07c91af52da3f`
 Target baseline used for local builds: `upstream/main`
 (`8a4c84f4516d5098de9eef50b8afecc7524f37a2`). The PR remains Ready and is
 not being merged by this work.

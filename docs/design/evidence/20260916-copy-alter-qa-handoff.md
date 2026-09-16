@@ -1,7 +1,7 @@
 # COPY ALTER QA handoff
 
-Candidate: `d1fdf00bf6b315b06a6133d2cce07c91af52da3f`  
-Issue: [#28319](https://github.com/matrixorigin/matrixone/issues/28319)  
+Candidate: `d1fdf00bf6b315b06a6133d2cce07c91af52da3f`
+Issue: [#28319](https://github.com/matrixorigin/matrixone/issues/28319)
 PR: [#28418](https://github.com/matrixorigin/matrixone/pull/28418)
 
 Status: **BLOCKED_ENVIRONMENT / owner not assigned**. This document prepares
