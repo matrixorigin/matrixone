@@ -1527,6 +1527,7 @@ func TestRestoreTableRejectsReferencedTableBeforeMutation(t *testing.T) {
 	require.EqualError(t, err, "not supported: can not restore table 'db1.parent' referenced by some foreign key constraint")
 	require.Equal(t, []string{
 		"begin;",
+		catalog.SnapshotLifecycleGateSQL,
 		catalog.ViewMetadataLifecycleGateSQL,
 		snapshotSQL,
 		masterSQL,
