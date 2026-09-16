@@ -183,7 +183,7 @@ The reproducible operator benchmark is:
 
 ```text
 go test -mod=mod ./pkg/sql/colexec/group -run '^$' \
-  -bench 'BenchmarkRollupAlgorithms/(large_ordered_low_ndv|large_unordered_low_ndv|large_ordered_one_key|large_ordered_single_group|large_ordered_many_levels|large_ordered_very_many_levels)/(sort|hash-serial|hash-parallel)$' \
+  -bench 'BenchmarkRollupAlgorithms/(large_ordered_low_ndv|large_unordered_low_ndv|large_ordered_one_key|large_ordered_single_group|large_ordered_many_levels|large_ordered_wider_ndv|large_ordered_high_ndv|large_ordered_avg_many_levels|large_ordered_very_many_levels|large_ordered_extreme_levels|million_ordered_low_ndv)/(sort|hash-serial|hash-parallel)$' \
   -benchtime=5x -count=3
 ```
 
@@ -195,22 +195,32 @@ matrix was:
 
 ```text
 shape                              sort          hash-serial       hash-parallel
-100000 rows, 3 keys, NDV=4         1.55–1.59 ms   4.23–4.34 ms       2.21–2.27 ms
-100000 rows, 3 keys, unordered     2.82–2.85 ms   4.26–4.39 ms       2.25–2.30 ms
-100000 rows, one key, NDV=8        0.66–0.71 ms   0.57–0.60 ms       0.55–0.58 ms
-100000 rows, one complete group    5.33–5.40 ms   35.70–35.82 ms     9.63–10.77 ms
-100000 rows, 12 keys, NDV=2        5.42–5.50 ms   35.79–35.96 ms     10.07–11.01 ms
-100000 rows, 20 keys, NDV=2        8.88–9.25 ms   85.20–85.88 ms     21.45–25.43 ms
+100000 rows, 3 keys, NDV=4         1.10–1.20 ms   4.44–4.51 ms       2.38–2.42 ms
+100000 rows, 3 keys, unordered     2.40–2.49 ms   4.53–4.72 ms       2.40–2.43 ms
+100000 rows, one key, NDV=8        0.42–0.45 ms   0.60–0.62 ms       0.58–0.60 ms
+100000 rows, one complete group    3.75–4.00 ms   36.53–37.19 ms     11.12–12.01 ms
+100000 rows, 12 keys, NDV=2        3.73–3.91 ms   36.67–37.50 ms     10.66–11.44 ms
+100000 rows, 12 keys, NDV=4        3.85–4.03 ms   36.68–36.95 ms     11.37–12.44 ms
+100000 rows, 12 keys, NDV=64       5.58–6.12 ms   38.40–39.01 ms     10.76–12.24 ms
+100000 rows, 12 keys, AVG          6.37–6.52 ms   39.51–39.67 ms     11.26–12.25 ms
+100000 rows, 20 keys, NDV=2        6.63–6.86 ms   87.39–91.03 ms     22.72–24.37 ms
+100000 rows, 32 keys, NDV=2       10.19–10.60 ms  202.27–205.88 ms     46.93–53.68 ms
+1000000 rows, 3 keys, NDV=4       10.47–10.93 ms   43.58–43.67 ms     22.27–22.69 ms
 ```
 
 The 100000-row cases show the actual advantage of the new combination:
 reusing an existing order removes the global sort, and streaming keeps only
 `L+1` active states. The strongest CPU wins are many ROLLUP levels or very few
-complete-key runs; one key still favors parallel hash despite order reuse.
-The paired unordered low-NDV case is a deliberate counterexample where adding
-a global sort is slower than parallel hash. These measurements are calibration
-evidence, not machine-independent elapsed-time constants; the planner keeps a
-cost margin and falls back to hash when statistics or order proof is uncertain.
+complete-key runs. The single-group `BulkFill` fast path makes even one ordered
+key faster in this operator-level test, but its margin is small and the
+automatic selector remains conservative. The serial hash column approximates a
+`max_dop=1` or otherwise serialized UNION ALL; that is where the advantage is
+largest, reaching about 20x on 32 levels. With concurrent branches, 12 levels
+are about 2.8–3.0x faster and 32 levels about 4–5x faster. The paired unordered
+low-NDV case remains a counterexample where adding a global sort is not better
+than parallel hash. These measurements are calibration evidence, not
+machine-independent elapsed-time constants; the planner keeps a cost margin
+and falls back to hash when statistics or order proof is uncertain.
 Known empty-table statistics remain valid and estimate one grand-total group.
 
 The aggregate marker is carried in `ExtraOptions`, which is already part of
@@ -232,8 +242,11 @@ active ROLLUP prefix, one-row last-key vectors, and one bounded output batch.
 At a key boundary it flushes the finished prefixes, emits their grouping
 sentinels, and recreates those single-group executors. Its retained aggregate
 state is therefore proportional to the number of levels, not the total number
-of input groups. `agg_spill_mem` is resolved to the effective executor
-threshold before setup and is enforced against that bounded state; unordered
+of input groups. Complete key-runs use the aggregate API's single-group
+`BulkFill` after chunk-level capacity preflight, avoiding repeated group-id
+dispatch for a state that can only contain group 1. `agg_spill_mem` is resolved
+to the effective executor threshold before setup and is enforced against that
+bounded state; unordered
 input sorting remains responsible for its own workspace/spill limit.
 The capacity check includes retained aggregate/key vectors, last-key vectors,
 and per-input-batch group-id scratch; initialization, empty-input
