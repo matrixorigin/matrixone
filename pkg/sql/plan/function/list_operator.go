@@ -3017,6 +3017,26 @@ var supportedOperators = []FuncNew{
 					return NewBitwiseAggregateCast
 				},
 			},
+			{
+				overloadId: int(IntegerArgumentCastOverload),
+				retType:    func(parameters []types.Type) types.Type { return parameters[1] },
+				newOp:      func() executeLogicOfOverload { return NewIntegerArgumentCast },
+			},
+			{
+				overloadId: int(TruncatedIntegerArgumentCastOverload),
+				retType:    func(parameters []types.Type) types.Type { return parameters[1] },
+				newOp:      func() executeLogicOfOverload { return NewTruncatedIntegerArgumentCast },
+			},
+			{
+				overloadId: int(TextIntegerBitsCastOverload),
+				retType:    func(parameters []types.Type) types.Type { return parameters[1] },
+				newOp:      func() executeLogicOfOverload { return NewTextIntegerBitsCast },
+			},
+			{
+				overloadId: int(TemporalIntegerArgumentCastOverload),
+				retType:    func(parameters []types.Type) types.Type { return parameters[1] },
+				newOp:      func() executeLogicOfOverload { return NewTemporalIntegerArgumentCast },
+			},
 		},
 	},
 
