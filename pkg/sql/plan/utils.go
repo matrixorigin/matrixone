@@ -1137,6 +1137,21 @@ func collectPreparedIntegerArgumentParamPositions(
 		if node == nil {
 			return nil
 		}
+		// AGG emits grouping columns as negative-relation ColRefs. Their value
+		// lineage is the corresponding GROUP BY expression on this node, not a
+		// child projection with the same column ordinal.
+		if col.RelPos < 0 && node.NodeType == plan.Node_AGG &&
+			int(col.ColPos) < len(node.GroupBy) && node.GroupBy[col.ColPos] != nil {
+			// Use a distinct key namespace from child projections: the same
+			// (node, column) pair was consumed to arrive at this AGG output.
+			key := [2]int32{nodeID, -col.ColPos - 1}
+			if _, ok := visited[key]; !ok {
+				visited[key] = struct{}{}
+				collectPreparedIntegerArgumentParamPositions(
+					query, nodeID, node.GroupBy[col.ColPos], positions, visited)
+			}
+			return nil
+		}
 		childID := int32(-1)
 		if col.RelPos >= 0 && int(col.RelPos) < len(node.Children) {
 			childID = node.Children[col.RelPos]
@@ -7277,6 +7292,15 @@ func unwrapPreparedSetOperationCoercion(
 		branch.ProjectList[colPos] != expr {
 		return expr
 	}
+	metadata := expr.GetPreparedNumeric()
+	if metadata.GetProvisionalResultPeer() && samePreparedSetOperationType(expr.Typ, targetType) {
+		if source := metadata.GetStringDomainSource(); source != nil {
+			return source
+		}
+		if literal := expr.GetLit(); literal != nil && literal.Src != nil {
+			return literal.Src
+		}
+	}
 	fn := expr.GetF()
 	if fn == nil || fn.Func == nil || strings.ToLower(fn.Func.GetObjName()) != "cast" ||
 		fn.GetSyntaxExplicitCast() || len(fn.Args) != 2 || fn.Args[1] == nil || fn.Args[1].GetT() == nil {
@@ -7694,6 +7718,13 @@ func reconcilePreparedSetOperationInputs(
 			return false, inputTypeChanged, err
 		}
 		changed = changed || wrapped
+		// A wrapper replaces this branch in node.Children. Refresh the local
+		// view before deriving the set output and before downstream ColRefs are
+		// rebound; otherwise they retain the PREPARE-time common TEXT type.
+		childID := node.Children[branchIdx]
+		if childID >= 0 && int(childID) < len(query.Nodes) && query.Nodes[childID] != nil {
+			childProjectLists[branchIdx] = query.Nodes[childID].ProjectList
+		}
 	}
 	for colPos := range node.ProjectList {
 		if !inputTypeChanged[colPos] {

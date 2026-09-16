@@ -1421,7 +1421,7 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExprWithBound(
 		// prepare-time envelope. Source-less scientific literals and explicit
 		// FLOAT casts are semantic FLOAT boundaries and must remain unchanged.
 		for i, arg := range copy.GetF().Args {
-			if source, sourceOK := provisionalExactNumericSource(arg); sourceOK {
+			if source, sourceOK := provisionalNumericPeerSource(arg); sourceOK {
 				copy.GetF().Args[i] = source
 			}
 		}
@@ -1483,6 +1483,33 @@ func rebindExplicitPreparedCast(ctx context.Context, original *Expr, args []*Exp
 	bound := DeepCopyExpr(original)
 	bound.GetF().Args = args
 	return bound, nil
+}
+
+// provisionalNumericPeerSource restores a semantic numeric peer that PREPARE
+// temporarily converted to TEXT to coexist with an unresolved marker. Unlike
+// provisionalExactNumericSource, FLOAT is valid here: it remains a deliberate
+// semantic boundary and is restored only after a numeric runtime source proves
+// that the enclosing common-type function must be rebound numerically.
+func provisionalNumericPeerSource(expr *plan.Expr) (*Expr, bool) {
+	if source, ok := provisionalExactNumericSource(expr); ok {
+		return source, true
+	}
+	if expr == nil || !expr.GetPreparedNumeric().GetProvisionalResultPeer() {
+		return nil, false
+	}
+	literal := expr.GetLit()
+	if literal == nil || literal.Src == nil {
+		return nil, false
+	}
+	source := literal.Src
+	if fn := source.GetF(); fn != nil && fn.Func != nil && fn.Func.GetObjName() == "cast" &&
+		!fn.GetSyntaxExplicitCast() && len(fn.Args) > 0 {
+		source = fn.Args[0]
+	}
+	if source != nil && preparedNumericCommonOperandType(makeTypeByPlan2Expr(source).Oid) {
+		return DeepCopyExpr(source), true
+	}
+	return nil, false
 }
 
 func provisionalExactNumericSource(expr *plan.Expr) (*Expr, bool) {
@@ -2437,7 +2464,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				candidate := arg
 				if sqlExecuteNumericPeerDependent && !sqlExecuteNumericSourceArgs[i] && originalArgs[i] != nil {
 					candidate = originalArgs[i]
-					if source, ok := provisionalExactNumericSource(candidate); ok {
+					if source, ok := provisionalNumericPeerSource(candidate); ok {
 						boundArgs[i] = source
 						candidate = source
 						needResetFunction = true

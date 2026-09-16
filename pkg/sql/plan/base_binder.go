@@ -3783,9 +3783,11 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				source = fn.Args[0]
 			}
 			sourceType := makeTypeByPlan2Expr(source)
-			if preparedNumericCommonOperandType(sourceType.Oid) && !sourceType.Oid.IsFloat() {
-				// Preserve only a proven exact peer. Scientific FLOAT literals and
-				// explicit FLOAT casts remain source-less semantic FLOAT boundaries.
+			if preparedNumericCommonOperandType(sourceType.Oid) {
+				// Preserve the peer's semantic domain even when PREPARE coerces it
+				// into the marker's temporary TEXT envelope. Exact sources may be
+				// restored directly; FLOAT sources remain boundaries but mark the
+				// coerced peer so EXECUTE can cast it to a numeric runtime domain.
 				preparedPeerSources[i] = DeepCopyExpr(source)
 			}
 		}
