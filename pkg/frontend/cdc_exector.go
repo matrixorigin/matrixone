@@ -3340,6 +3340,18 @@ func (exec *CDCTaskExecutor) retrieveCdcTask(ctx context.Context) error {
 	}
 
 	protocol, _ := exec.additionalConfig[cdc.CDCTaskExtraOptions_InitialSnapshotProtocol].(string)
-	exec.stableInitialSnapshot = protocol == cdc.CDCInitialSnapshotProtocolStableEpoch
+	// Lossless NoFull tasks use the same owner-fenced watermark path as stable
+	// snapshot tasks. Without this, their buffered checkpoints use the legacy
+	// unfenced updater and an obsolete executor can overwrite a replacement
+	// generation's durable progress after claim loss.
+	exec.stableInitialSnapshot = protocol == cdc.CDCInitialSnapshotProtocolStableEpoch ||
+		protocol == cdc.CDCInitialSnapshotProtocolNoFullHLC
+	if exec.noFull && exec.startTs.IsEmpty() && protocol == "" {
+		// A pre-capability frontend could persist NoFull with an empty start_ts.
+		// Starting from a fresh snapshot would silently skip the interval between
+		// CREATE CDC and executor admission, so fail closed during mixed-version
+		// operation instead of inventing a later boundary.
+		return moerr.NewNotSupportedf(ctx, "legacy NoFull CDC task has no durable creation start; recreate after all CNs support protocol version %d", defines.MORPCVersion76)
+	}
 	return nil
 }

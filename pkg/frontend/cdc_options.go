@@ -288,7 +288,7 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 			return
 		}
 	} else if opts.startTsFromSnapshot {
-		if err = cdc.ValidateLosslessNoFullStartProtocol(ctx, currentProtocolVersion(ses.proc)); err != nil {
+		if err = validateLosslessNoFullStartProtocol(ctx, currentProtocolVersion(ses.proc)); err != nil {
 			return
 		}
 	}
@@ -309,6 +309,10 @@ func validateStableInitialSnapshotProtocol(
 	protocolVersion int64,
 ) error {
 	return cdc.ValidateStableInitialSnapshotProtocol(ctx, stable, protocolVersion)
+}
+
+func validateLosslessNoFullStartProtocol(ctx context.Context, protocolVersion int64) error {
+	return cdc.ValidateLosslessNoFullStartProtocol(ctx, protocolVersion)
 }
 
 func (opts *CDCCreateTaskOptions) BuildTaskMetadata() task.TaskMetadata {

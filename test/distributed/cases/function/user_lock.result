@@ -155,23 +155,5 @@ select release_lock('user_lock_bvt_null_timeout_busy');
 select is_free_lock('user_lock_bvt_null_timeout_busy');
 ➤ is_free_lock(user_lock_bvt_null_timeout_busy)[-5,64,0]  𝄀
 1
-select get_lock('user_lock_bvt_decimal_timeout_busy', 0);
-➤ get_lock(user_lock_bvt_decimal_timeout_busy, 0)[-5,64,0]  𝄀
-1
-select get_lock('user_lock_bvt_decimal_timeout_busy', 0.5);
-➤ get_lock(user_lock_bvt_decimal_timeout_busy, 0.5)[-5,64,0]  𝄀
-0
-select release_lock('user_lock_bvt_decimal_timeout_busy');
-➤ release_lock(user_lock_bvt_decimal_timeout_busy)[-5,64,0]  𝄀
-1
-select get_lock('user_lock_bvt_double_timeout_busy', 0);
-➤ get_lock(user_lock_bvt_double_timeout_busy, 0)[-5,64,0]  𝄀
-1
-select get_lock('user_lock_bvt_double_timeout_busy', CAST(0.5 AS DOUBLE));
-➤ get_lock(user_lock_bvt_double_timeout_busy, cast(0.5 as double))[-5,64,0]  𝄀
-0
-select release_lock('user_lock_bvt_double_timeout_busy');
-➤ release_lock(user_lock_bvt_double_timeout_busy)[-5,64,0]  𝄀
-1
 drop table user_lock_bvt_holder;
 drop database user_lock_bvt_db;

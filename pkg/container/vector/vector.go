@@ -134,8 +134,8 @@ type Vector struct {
 	preparedJSONComparisonParam bool
 	// prepareParamType keeps the concrete SQL type of a direct prepared
 	// parameter independently from its coarse string-conversion category. It is
-	// scalar because one ParamRef resolves to one value for an execution; the
-	// JSON comparison adapter consumes it before values can be materialized or
+	// scalar because one ParamRef resolves to one value for an execution;
+	// domain-sensitive consumers inspect it before values can be materialized or
 	// merged with other rows.
 	prepareParamType types.T
 	// prepareParamKindSeen distinguishes an observed string/byte source
@@ -944,7 +944,9 @@ func (v *Vector) SetPrepareParamKind(kind PrepareParamKind) {
 }
 
 // GetPrepareParamType returns the concrete SQL type attached to a direct
-// prepared parameter, or T_any when no exact type is available.
+// prepared parameter, or T_any when no exact type is available. Domain-
+// sensitive consumers use this to distinguish text transport from the source
+// SQL type.
 func (v *Vector) GetPrepareParamType() types.T {
 	if v == nil {
 		return types.T_any

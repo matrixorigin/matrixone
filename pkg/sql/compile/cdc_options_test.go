@@ -155,6 +155,27 @@ func TestValidateStableInitialSnapshotCompileProtocol(t *testing.T) {
 		context.Background(), nil, true))
 }
 
+func TestValidateLosslessNoFullStartCompileProtocol(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	c := &Compile{proc: proc}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	original, hadOriginal := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	defer func() {
+		if hadOriginal {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, original)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	}()
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion75)
+	require.ErrorContains(t, validateLosslessNoFullStartCompileProtocol(
+		context.Background(), c), "protocol version 76")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion76)
+	require.NoError(t, validateLosslessNoFullStartCompileProtocol(
+		context.Background(), c))
+}
+
 func TestDeleteManyWatermarkRetainsSnapshotEpochOnRestart(t *testing.T) {
 	keys := map[taskservice.CDCTaskKey]struct{}{
 		{AccountId: 7, TaskId: "task"}: {},
