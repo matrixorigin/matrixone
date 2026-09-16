@@ -266,7 +266,8 @@ func makeWindowHashAcceptanceInput(
 				vec := vector.NewVec(types.T_int32.ToType())
 				values := make([]int32, partRows)
 				for row := range values {
-					values[row] = int32((start+row)*7919+key*104729) % int32(ndv)
+					value := (int64(start)+int64(row))*7919 + int64(key)*104729
+					values[row] = int32(value % int64(ndv))
 				}
 				if err := vector.AppendFixedList(vec, values, nil, proc.Mp()); err != nil {
 					t.Fatal(err)

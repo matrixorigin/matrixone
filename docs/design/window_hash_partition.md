@@ -334,9 +334,9 @@ minimum and maximum of the three rounds; wall time is per operation:
 | --- | ---: | ---: | --- |
 | 1K, NDV 1, one fixed key, unordered | 1.74--3.28 ms | 0.58--1.06 ms | HASH wins |
 | 64K, NDV 1%, one fixed key, unordered | 80.8--95.0 ms | 30.4--53.7 ms | HASH wins |
-| 1M, NDV 1%, one fixed key, unordered | 1.66--1.80 s | 0.875--0.941 s | HASH wins |
+| 1M, NDV 1%, one fixed key, unordered | 1.27--1.48 s | 0.630--0.837 s | HASH wins |
 | 64K, NDV 100%, one fixed key, unordered | 0.759--0.819 s | 0.754--0.800 s | no material win; SORT control |
-| 1M, NDV 100%, one fixed key, unordered | 12.35--12.45 s | 12.06--12.30 s | no material win; SORT control |
+| 1M, NDV 100%, one fixed key, unordered | 10.78--11.75 s | 8.94--12.57 s | no stable material win; SORT control |
 
 The same three-round protocol covered all eight 64K/1%-NDV shape pairs formed
 by one or three fixed/variable-width keys and ordered/unordered windows. HASH
