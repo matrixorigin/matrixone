@@ -99,6 +99,11 @@ func sumAgg(pos int32) aggexec.AggFuncExecExpression {
 	return aggexec.MakeAggFunctionExpression(e.GetEncodedOverloadID(), false, []*plan.Expr{colExpr(pos, types.T_int32)}, nil)
 }
 
+func avgAgg(pos int32) aggexec.AggFuncExecExpression {
+	e, _ := function.GetFunctionByName(context.Background(), "avg", []types.Type{types.T_int32.ToType()})
+	return aggexec.MakeAggFunctionExpression(e.GetEncodedOverloadID(), false, []*plan.Expr{colExpr(pos, types.T_int32)}, nil)
+}
+
 func countStarAgg() aggexec.AggFuncExecExpression {
 	return aggexec.MakeAggFunctionExpression(aggexec.AggIdOfCountStar, false, []*plan.Expr{colExpr(0, types.T_int32)}, nil)
 }
