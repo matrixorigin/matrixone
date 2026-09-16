@@ -315,15 +315,8 @@ func (runner *rollupBenchmarkRunner) runSort() (int64, error) {
 		child.Free(source.proc, true, err)
 		return 0, err
 	}
-	groupMP := group.ctr.mp
-	peak, outputs, err := drainRollupBenchmarkOp(
+	peak, err := drainRollupBenchmarkOp(
 		group, source.proc, source.proc.Mp().CurrNB(), group.ctr.mp)
-	for _, output := range outputs {
-		// SortRollup transfers returned vectors out of the group state. They are
-		// allocated from the group's private mpool, so release them before that
-		// pool is deleted by Group.Free.
-		output.Clean(groupMP)
-	}
 	group.Free(source.proc, err != nil, err)
 	if order != nil {
 		order.Free(source.proc, err != nil, err)
@@ -407,7 +400,7 @@ func (runner *rollupBenchmarkRunner) runHashBranch(prefix int) (int64, error) {
 		child.Free(input.proc, true, err)
 		return 0, err
 	}
-	peak, _, err := drainRollupBenchmarkOp(
+	peak, err := drainRollupBenchmarkOp(
 		group, input.proc, input.proc.Mp().CurrNB(), group.ctr.mp)
 	group.Free(input.proc, err != nil, err)
 	if order != nil {
@@ -422,12 +415,11 @@ func drainRollupBenchmarkOp(
 	proc *process.Process,
 	peak int64,
 	additional ...*mpool.MPool,
-) (int64, []*batch.Batch, error) {
-	var outputs []*batch.Batch
+) (int64, error) {
 	for {
 		result, err := vm.Exec(op, proc)
 		if err != nil {
-			return peak, outputs, err
+			return peak, err
 		}
 		current := proc.Mp().CurrNB()
 		for _, mp := range additional {
@@ -438,11 +430,8 @@ func drainRollupBenchmarkOp(
 		if current > peak {
 			peak = current
 		}
-		if result.Batch != nil {
-			outputs = append(outputs, result.Batch)
-		}
 		if result.Status == vm.ExecStop || result.Batch == nil {
-			return peak, outputs, nil
+			return peak, nil
 		}
 	}
 }
