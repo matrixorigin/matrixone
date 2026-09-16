@@ -815,6 +815,57 @@ func TestCreateTablesInformationSchemaUsesCommonProtocolGate(t *testing.T) {
 	}
 }
 
+func TestCreateTablesInformationSchemaUsesCallerContext(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	procCtx, cancel := context.WithCancel(proc.Ctx)
+	proc.Ctx = procCtx
+	cancel()
+	service := proc.GetService()
+	rt := moruntime.ServiceRuntime(service)
+	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	oldCluster, hadCluster := rt.GetGlobalVariables(moruntime.ClusterService)
+	cluster := &tenantInitializationProtocolCluster{cns: []metadata.CNService{
+		{ServiceID: "cn-v76", QueryAddress: "cn-v76-query", PipelineServiceAddress: "cn-v76-pipeline"},
+	}}
+	t.Cleanup(func() {
+		if hadProtocol {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion76)
+		}
+		if hadCluster {
+			rt.SetGlobalVariables(moruntime.ClusterService, oldCluster)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.ClusterService, cluster)
+		}
+	})
+
+	queryClient := newMockQueryClient()
+	queryClient.cnResponses["cn-v76-query"] = &querypb.Response{
+		GetProtocolVersion: &querypb.GetProtocolVersionResponse{Version: defines.MORPCVersion76},
+	}
+	proc.Base.QueryClient = queryClient
+	rt.SetGlobalVariables(moruntime.ClusterService, cluster)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion76)
+
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	var executed []string
+	bh := mock_frontend.NewMockBackgroundExec(ctrl)
+	bh.EXPECT().ClearExecResultSet().AnyTimes()
+	bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, sql string) error {
+			executed = append(executed, sql)
+			return nil
+		}).AnyTimes()
+
+	err := createTablesInInformationSchemaOfGeneralTenant(
+		context.Background(), bh, service, proc)
+	require.NoError(t, err)
+	require.Contains(t, executed, sysview.InformationSchemaViewsDDL)
+	require.NotContains(t, executed, sysview.InformationSchemaViewsLegacyDDL)
+}
+
 func containsSQL(sqls []string, expected string) bool {
 	for _, sql := range sqls {
 		if sql == expected {

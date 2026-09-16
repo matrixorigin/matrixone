@@ -11091,7 +11091,7 @@ func protocolVersionForTenantInitializationWithContext(
 		// TABLES/COLUMNS and role-closure definitions.
 		return version, nil
 	}
-	supported, err := compile.AllCNsSupportProtocol(proc, defines.MORPCVersion76)
+	supported, err := compile.AllCNsSupportProtocolWithContext(ctx, proc, defines.MORPCVersion76)
 	if err != nil {
 		// Capability discovery is deliberately best-effort for account
 		// creation. Do not turn a temporary inventory/RPC failure into a
