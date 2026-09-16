@@ -664,17 +664,42 @@ func TestNormalizeCDCSourcePatternCase(t *testing.T) {
 		},
 	}}
 
-	NormalizeCDCSourcePatternCase(pts, 0)
+	require.NoError(t, NormalizeCDCSourcePatternCase(pts, 0))
 	assert.Equal(t, "SourceDB", pts.Pts[0].Source.Database)
 	assert.Equal(t, "SourceTable", pts.Pts[0].Source.Table)
 
-	NormalizeCDCSourcePatternCase(pts, 1)
+	require.NoError(t, NormalizeCDCSourcePatternCase(pts, 1))
 	assert.Equal(t, "sourcedb", pts.Pts[0].Source.Database)
 	assert.Equal(t, "sourcetable", pts.Pts[0].Source.Table)
 	assert.Equal(t, "SinkDB", pts.Pts[0].Sink.Database)
 	assert.Equal(t, "SinkTable", pts.Pts[0].Sink.Table)
 	assert.Equal(t, CDCPitrGranularity_All, pts.Pts[1].Source.Database)
 	assert.Equal(t, CDCPitrGranularity_All, pts.Pts[1].Source.Table)
+
+	modeTwo := &PatternTuples{Pts: []*PatternTuple{{
+		Source: PatternTable{Database: "SourceDB", Table: "SourceTable"},
+	}}}
+	require.NoError(t, NormalizeCDCSourcePatternCase(modeTwo, 2))
+	assert.Equal(t, "SourceDB", modeTwo.Pts[0].Source.Database)
+	assert.Equal(t, "SourceTable", modeTwo.Pts[0].Source.Table)
+}
+
+func TestNormalizeCDCSourcePatternCaseRejectsDuplicateNormalizedSources(t *testing.T) {
+	pts := &PatternTuples{Pts: []*PatternTuple{
+		{Source: PatternTable{Database: "SourceDB", Table: "Orders"}},
+		{Source: PatternTable{Database: "sourcedb", Table: "orders"}},
+	}}
+	err := NormalizeCDCSourcePatternCase(pts, 1)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sourcedb.orders")
+
+	pts = &PatternTuples{Pts: []*PatternTuple{
+		{Source: PatternTable{Database: "SourceDB", Table: "Orders"}},
+		{Source: PatternTable{Database: "sourcedb", Table: "orders"}},
+	}}
+	err = NormalizeCDCSourcePatternCase(pts, 2)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "sourcedb.orders")
 }
 
 func TestPatternTuples_String(t *testing.T) {

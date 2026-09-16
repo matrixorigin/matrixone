@@ -194,37 +194,42 @@ func checkCDCSourcePrimaryKey(ctx context.Context, bh BackgroundExec, dbName, ta
 		return moerr.NewInternalErrorf(ctx, "source table %s.%s has no primary key; CDC does not support tables without a user-visible primary key", dbName, tableName)
 	}
 	for _, result := range results {
-		for row := uint64(0); row < result.GetRowCount(); row++ {
-			constraintIsNull, err := result.ColumnIsNull(ctx, row, 6)
+		// A concrete-table candidate query returns at most one row. Keep the
+		// result-set iteration so empty result sets are skipped without using a
+		// loop whose body always returns on its first iteration.
+		if result.GetRowCount() == 0 {
+			continue
+		}
+		row := uint64(0)
+		constraintIsNull, err := result.ColumnIsNull(ctx, row, 6)
+		if err != nil {
+			return err
+		}
+		var constraintBytes []byte
+		if !constraintIsNull {
+			constraint, err := result.GetString(ctx, row, 6)
 			if err != nil {
 				return err
 			}
-			var constraintBytes []byte
-			if !constraintIsNull {
-				constraint, err := result.GetString(ctx, row, 6)
-				if err != nil {
-					return err
-				}
-				constraintBytes = []byte(constraint)
-			}
-			hasForeignKey, err := cdc.TableHasForeignKeyConstraint(constraintBytes)
-			if err != nil {
-				return err
-			}
-			if hasForeignKey {
-				// Concrete sources name exactly one table. TableDetector skips FK
-				// children, so admission must accept this same non-source.
-				return nil
-			}
-			hasUserPK, err := result.GetUint64(ctx, row, 7)
-			if err != nil {
-				return err
-			}
-			if hasUserPK == 0 {
-				return moerr.NewInternalErrorf(ctx, "source table %s.%s has no primary key; CDC does not support tables without a user-visible primary key", dbName, tableName)
-			}
+			constraintBytes = []byte(constraint)
+		}
+		hasForeignKey, err := cdc.TableHasForeignKeyConstraint(constraintBytes)
+		if err != nil {
+			return err
+		}
+		if hasForeignKey {
+			// Concrete sources name exactly one table. TableDetector skips FK
+			// children, so admission must accept this same non-source.
 			return nil
 		}
+		hasUserPK, err := result.GetUint64(ctx, row, 7)
+		if err != nil {
+			return err
+		}
+		if hasUserPK == 0 {
+			return moerr.NewInternalErrorf(ctx, "source table %s.%s has no primary key; CDC does not support tables without a user-visible primary key", dbName, tableName)
+		}
+		return nil
 	}
 	return moerr.NewInternalErrorf(ctx, "source table %s.%s has no primary key; CDC does not support tables without a user-visible primary key", dbName, tableName)
 }

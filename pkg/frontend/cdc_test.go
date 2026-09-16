@@ -160,6 +160,54 @@ func TestCDCCheckPitrGranularityPrimaryKeyValidation(t *testing.T) {
 	})
 }
 
+func TestCheckCDCSourcePrimaryKeySkipsEmptyResultSets(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), 1)
+	query := cdc.CollectCDCSourceCandidateSQL(1, "db", "table")
+	valid := &MysqlResultSet{Columns: make([]Column, 8), Data: [][]interface{}{{
+		uint64(1), "table", uint64(1), "db", "", uint32(1), []byte{}, true,
+	}}}
+	bh := &backgroundExecTest{resultSets: []interface{}{
+		&MysqlResultSet{},
+		valid,
+	}}
+	bh.init()
+	// Preserve the explicitly supplied result-set shape after init.
+	bh.resultSets = []interface{}{&MysqlResultSet{}, valid}
+	require.NoError(t, checkCDCSourcePrimaryKey(ctx, bh, "db", "table"))
+	// A concrete candidate may be represented by more than one result set; an
+	// empty first set must not prevent the later non-empty set from being read.
+	require.Equal(t, query, bh.currentSql)
+}
+
+func TestCheckCDCSourcePrimaryKeyRejectsEmptyAndMalformedResults(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), 1)
+	validRow := func(constraint interface{}, hasPK interface{}) *MysqlResultSet {
+		return &MysqlResultSet{Columns: make([]Column, 8), Data: [][]interface{}{{
+			uint64(1), "table", uint64(1), "db", "", uint32(1), constraint, hasPK,
+		}}}
+	}
+	for _, tc := range []struct {
+		name      string
+		results   []interface{}
+		wantError string
+	}{
+		{name: "no result sets", results: []interface{}{}, wantError: "no primary key"},
+		{name: "invalid result type", results: []interface{}{struct{}{}}, wantError: "result set"},
+		{name: "malformed primary key value", results: []interface{}{validRow([]byte{}, "not a bool")}, wantError: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bh := &backgroundExecTest{resultSets: tc.results}
+			bh.init()
+			bh.resultSets = tc.results
+			err := checkCDCSourcePrimaryKey(ctx, bh, "db", "table")
+			require.Error(t, err)
+			if tc.wantError != "" {
+				require.Contains(t, err.Error(), tc.wantError)
+			}
+		})
+	}
+}
+
 // Global stub for GetTableDetector - initialized in init() to prevent panics across all tests
 var _globalTableDetectorStub *gostub.Stubs
 

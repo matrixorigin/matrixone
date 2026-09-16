@@ -190,6 +190,81 @@ func TestCheckPitrGranularityConcreteForeignKeyIsSkipped(t *testing.T) {
 	require.Contains(t, exec.sqls[0], "mo_tables")
 }
 
+func TestCheckPitrGranularityConcretePrimaryKeyBranches(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ctx := defines.AttachAccountId(context.Background(), 7)
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+
+	candidateResult := func(hasPK bool) executor.Result {
+		result := executor.NewMemResult([]types.Type{
+			types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_uint64.ToType(),
+			types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_uint32.ToType(), types.T_blob.ToType(), types.T_bool.ToType(),
+		}, proc.Mp())
+		result.NewBatchWithRowCount(1)
+		require.NoError(t, executor.AppendFixedRows(result, 0, []uint64{1}))
+		require.NoError(t, executor.AppendStringRows(result, 1, []string{"table"}))
+		require.NoError(t, executor.AppendFixedRows(result, 2, []uint64{1}))
+		require.NoError(t, executor.AppendStringRows(result, 3, []string{"db"}))
+		require.NoError(t, executor.AppendStringRows(result, 4, []string{""}))
+		require.NoError(t, executor.AppendFixedRows(result, 5, []uint32{7}))
+		require.NoError(t, executor.AppendBytesRows(result, 6, [][]byte{{}}))
+		require.NoError(t, executor.AppendFixedRows(result, 7, []bool{hasPK}))
+		return result.GetResult()
+	}
+	validPitrResult := func() executor.Result {
+		result := executor.NewMemResult([]types.Type{types.T_uint8.ToType(), types.T_varchar.ToType()}, proc.Mp())
+		result.NewBatchWithRowCount(1)
+		require.NoError(t, executor.AppendFixedRows(result, 0, []uint8{24}))
+		require.NoError(t, executor.AppendStringRows(result, 1, []string{"h"}))
+		return result.GetResult()
+	}
+
+	for _, tc := range []struct {
+		name, exclude  string
+		hasPK, wantErr bool
+	}{
+		{name: "visible primary key", hasPK: true},
+		{name: "missing primary key", wantErr: true},
+		{name: "excluded missing primary key", exclude: `^db\.table$`, wantErr: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			exec := &recordingInternalSQLExecutor{mocker: func(sql string) (executor.Result, error) {
+				if strings.Contains(sql, catalog.MO_TABLES) {
+					return candidateResult(tc.hasPK), nil
+				}
+				return validPitrResult(), nil
+			}}
+			rt := moruntime.ServiceRuntime(proc.GetService())
+			previous, hadPrevious := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+			rt.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
+			t.Cleanup(func() {
+				if hadPrevious {
+					rt.SetGlobalVariables(moruntime.InternalSQLExecutor, previous)
+				} else {
+					rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, exec)
+				}
+			})
+			c := NewCompile("", "", "create cdc", "", "", nil, proc, nil, false, nil, time.Now())
+			defer c.Release()
+			pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{{Source: cdc.PatternTable{Database: "db", Table: "table"}}}}
+			err := c.checkPitrGranularity(ctx, pts, tc.exclude)
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+
+	t.Run("invalid concrete exclude is returned", func(t *testing.T) {
+		c := NewCompile("", "", "create cdc", "", "", nil, proc, nil, false, nil, time.Now())
+		defer c.Release()
+		pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{{Source: cdc.PatternTable{Database: "db", Table: "table"}}}}
+		require.Error(t, c.checkPitrGranularity(ctx, pts, "["))
+	})
+}
+
 type cdcRecordingSQLExecutor struct {
 	queries []string
 }
