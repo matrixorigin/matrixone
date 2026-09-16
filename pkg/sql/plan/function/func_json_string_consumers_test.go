@@ -127,9 +127,9 @@ func TestJSONStringConsumerBinaryReturnType(t *testing.T) {
 	for _, name := range []string{"concat", "concat_ws", "elt"} {
 		t.Run(name, func(t *testing.T) {
 			args := map[string][]types.Type{
-				"concat":    []types.Type{types.T_json.ToType(), binaryType},
-				"concat_ws": []types.Type{types.T_json.ToType(), binaryType},
-				"elt":       []types.Type{types.T_int64.ToType(), types.T_json.ToType(), binaryType},
+				"concat":    {types.T_json.ToType(), binaryType},
+				"concat_ws": {types.T_json.ToType(), binaryType},
+				"elt":       {types.T_int64.ToType(), types.T_json.ToType(), binaryType},
 			}[name]
 			got, err := GetFunctionByName(context.Background(), name, args)
 			require.NoError(t, err)
