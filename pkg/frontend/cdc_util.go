@@ -17,14 +17,12 @@ package frontend
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"math"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -180,17 +178,11 @@ func (pc *PitrConfig) IsValid(minLength int64) bool {
 }
 
 func checkCDCSourcePrimaryKey(ctx context.Context, bh BackgroundExec, dbName, tableName string) error {
-	// Read att_constraint_type directly; parsing SHOW CREATE text would
-	// incorrectly treat comments or identifiers containing "PRIMARY KEY" as an
-	// actual constraint. Keep hidden composite-PK markers; only the engine-only
-	// fake key denotes a table without a user primary key.
-	pkSQL := fmt.Sprintf("SELECT count(*) FROM %s.%s WHERE %s = %s AND %s = %s AND %s = 'p' AND %s <> %s",
-		quoteIdentifierForSQL(catalog.MO_CATALOG), quoteIdentifierForSQL(catalog.MO_COLUMNS),
-		quoteIdentifierForSQL(catalog.SystemColAttr_DBName), quoteSQLStringLiteral(dbName),
-		quoteIdentifierForSQL(catalog.SystemColAttr_RelName), quoteSQLStringLiteral(tableName),
-		quoteIdentifierForSQL(catalog.SystemColAttr_ConstraintType),
-		quoteIdentifierForSQL(catalog.SystemColAttr_Name), quoteSQLStringLiteral(catalog.FakePrimaryKeyColName))
-	if err := bh.Exec(ctx, pkSQL); err != nil {
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+	if err := bh.Exec(ctx, cdc.CollectCDCSourceCandidateSQL(accountID, dbName, tableName)); err != nil {
 		return err
 	}
 	results, err := getResultSet(ctx, bh)
@@ -198,17 +190,43 @@ func checkCDCSourcePrimaryKey(ctx context.Context, bh BackgroundExec, dbName, ta
 	if err != nil {
 		return err
 	}
-	if len(results) == 0 || results[0].GetRowCount() == 0 {
+	if len(results) == 0 {
 		return moerr.NewInternalErrorf(ctx, "source table %s.%s has no primary key; CDC does not support tables without a user-visible primary key", dbName, tableName)
 	}
-	pkCount, err := results[0].GetUint64(ctx, 0, 0)
-	if err != nil {
-		return err
+	for _, result := range results {
+		for row := uint64(0); row < result.GetRowCount(); row++ {
+			constraintIsNull, err := result.ColumnIsNull(ctx, row, 6)
+			if err != nil {
+				return err
+			}
+			var constraintBytes []byte
+			if !constraintIsNull {
+				constraint, err := result.GetString(ctx, row, 6)
+				if err != nil {
+					return err
+				}
+				constraintBytes = []byte(constraint)
+			}
+			hasForeignKey, err := cdc.TableHasForeignKeyConstraint(constraintBytes)
+			if err != nil {
+				return err
+			}
+			if hasForeignKey {
+				// Concrete sources name exactly one table. TableDetector skips FK
+				// children, so admission must accept this same non-source.
+				return nil
+			}
+			hasUserPK, err := result.GetUint64(ctx, row, 7)
+			if err != nil {
+				return err
+			}
+			if hasUserPK == 0 {
+				return moerr.NewInternalErrorf(ctx, "source table %s.%s has no primary key; CDC does not support tables without a user-visible primary key", dbName, tableName)
+			}
+			return nil
+		}
 	}
-	if pkCount == 0 {
-		return moerr.NewInternalErrorf(ctx, "source table %s.%s has no primary key; CDC does not support tables without a user-visible primary key", dbName, tableName)
-	}
-	return nil
+	return moerr.NewInternalErrorf(ctx, "source table %s.%s has no primary key; CDC does not support tables without a user-visible primary key", dbName, tableName)
 }
 
 // CDCCheckPitrGranularity checks if the PITR (Point-in-Time Recovery) granularity settings

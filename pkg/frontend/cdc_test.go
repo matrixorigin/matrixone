@@ -40,7 +40,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"go.uber.org/zap"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -68,30 +67,24 @@ func TestCDCCheckPitrGranularityPrimaryKeyValidation(t *testing.T) {
 	})
 	defer stub.Reset()
 
-	query := func(db, table string) string {
-		return fmt.Sprintf("SELECT count(*) FROM %s.%s WHERE %s = %s AND %s = %s AND %s = 'p' AND %s <> %s",
-			quoteIdentifierForSQL(catalog.MO_CATALOG), quoteIdentifierForSQL(catalog.MO_COLUMNS),
-			quoteIdentifierForSQL(catalog.SystemColAttr_DBName), quoteSQLStringLiteral(db),
-			quoteIdentifierForSQL(catalog.SystemColAttr_RelName), quoteSQLStringLiteral(table),
-			quoteIdentifierForSQL(catalog.SystemColAttr_ConstraintType),
-			quoteIdentifierForSQL(catalog.SystemColAttr_Name), quoteSQLStringLiteral(catalog.FakePrimaryKeyColName))
-	}
+	ctx := defines.AttachAccountId(context.Background(), 1)
+	query := func(db, table string) string { return cdc.CollectCDCSourceCandidateSQL(1, db, table) }
 	for _, tc := range []struct {
 		name      string
 		db, table string
-		count     uint64
+		count     bool
 		wantErr   bool
 	}{
-		{name: "single primary key", db: "db", table: "with_pk", count: 1},
-		{name: "composite primary key marker", db: "db", table: "composite", count: 1},
-		{name: "fake primary key rejected", db: "db", table: "without_pk", count: 0, wantErr: true},
+		{name: "single primary key", db: "db", table: "with_pk", count: true},
+		{name: "composite primary key marker", db: "db", table: "composite", count: true},
+		{name: "fake primary key rejected", db: "db", table: "without_pk", count: false, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			bh := &backgroundExecTest{}
 			bh.init()
-			bh.sql2result[query(tc.db, tc.table)] = &MysqlResultSet{Columns: []Column{&MysqlColumn{}}, Data: [][]interface{}{{tc.count}}}
+			bh.sql2result[query(tc.db, tc.table)] = &MysqlResultSet{Columns: make([]Column, 8), Data: [][]interface{}{{uint64(1), tc.table, uint64(1), tc.db, "", uint32(1), []byte{}, tc.count}}}
 			pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{{Source: cdc.PatternTable{Database: tc.db, Table: tc.table}}}}
-			err := CDCCheckPitrGranularity(context.Background(), bh, "acc", pts)
+			err := CDCCheckPitrGranularity(ctx, bh, "acc", pts)
 			if tc.wantErr {
 				require.Error(t, err)
 			} else {
@@ -99,6 +92,18 @@ func TestCDCCheckPitrGranularityPrimaryKeyValidation(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("foreign key child without primary key is skipped", func(t *testing.T) {
+		constraint, err := (&engine.ConstraintDef{Cts: []engine.Constraint{&engine.ForeignKeyDef{
+			Fkeys: []*plan.ForeignKeyDef{{Name: "fk", Cols: []uint64{1}, ForeignTbl: 2, ForeignCols: []uint64{1}}},
+		}}}).MarshalBinary()
+		require.NoError(t, err)
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[query("db", "child")] = &MysqlResultSet{Columns: make([]Column, 8), Data: [][]interface{}{{uint64(1), "child", uint64(1), "db", "", uint32(1), constraint, false}}}
+		pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{{Source: cdc.PatternTable{Database: "db", Table: "child"}}}}
+		require.NoError(t, CDCCheckPitrGranularity(ctx, bh, "acc", pts))
+	})
 
 	t.Run("wildcard rejects discovered no primary key table", func(t *testing.T) {
 		bh := &backgroundExecTest{}
@@ -109,7 +114,6 @@ func TestCDCCheckPitrGranularityPrimaryKeyValidation(t *testing.T) {
 		candidateSQL := cdc.CollectCDCSourceCandidateSQL(1, "db", cdc.CDCPitrGranularity_All)
 		bh.sql2result[candidateSQL] = &MysqlResultSet{Columns: make([]Column, 8), Data: [][]interface{}{{uint64(1), "without_pk", uint64(1), "db", "", uint32(1), []byte{}, false}}}
 		bh.sql2result[query("db", "without_pk")] = &MysqlResultSet{Columns: []Column{&MysqlColumn{}}, Data: [][]interface{}{{uint64(0)}}}
-		ctx := defines.AttachAccountId(context.Background(), 1)
 		err := CDCCheckPitrGranularityWithExclude(ctx, bh, "acc", pts, "")
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "db.without_pk")
@@ -137,22 +141,22 @@ func TestCDCCheckPitrGranularityPrimaryKeyValidation(t *testing.T) {
 		wantErr := errors.New("catalog unavailable")
 		bh.sql2err[query("db", "broken")] = wantErr
 		pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{{Source: cdc.PatternTable{Database: "db", Table: "broken"}}}}
-		require.ErrorIs(t, CDCCheckPitrGranularity(context.Background(), bh, "acc", pts), wantErr)
+		require.ErrorIs(t, CDCCheckPitrGranularity(ctx, bh, "acc", pts), wantErr)
 	})
 
 	t.Run("missing result is rejected", func(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
 		pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{{Source: cdc.PatternTable{Database: "db", Table: "missing_result"}}}}
-		require.Error(t, CDCCheckPitrGranularity(context.Background(), bh, "acc", pts))
+		require.Error(t, CDCCheckPitrGranularity(ctx, bh, "acc", pts))
 	})
 
 	t.Run("malformed count is returned", func(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
-		bh.sql2result[query("db", "malformed")] = &MysqlResultSet{Columns: []Column{&MysqlColumn{}}, Data: [][]interface{}{{"not-a-count"}}}
+		bh.sql2result[query("db", "malformed")] = &MysqlResultSet{Columns: make([]Column, 8), Data: [][]interface{}{{uint64(1), "malformed", uint64(1), "db", "", uint32(1), []byte{}, "not-a-bool"}}}
 		pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{{Source: cdc.PatternTable{Database: "db", Table: "malformed"}}}}
-		require.Error(t, CDCCheckPitrGranularity(context.Background(), bh, "acc", pts))
+		require.Error(t, CDCCheckPitrGranularity(ctx, bh, "acc", pts))
 	})
 }
 

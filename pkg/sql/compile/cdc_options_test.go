@@ -29,12 +29,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
 
@@ -148,6 +150,44 @@ func TestCheckPitrGranularityWildcardExcludeAndPrimaryKey(t *testing.T) {
 			require.NotContains(t, exec.sqls[1], "mo_columns")
 		})
 	}
+}
+
+func TestCheckPitrGranularityConcreteForeignKeyIsSkipped(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ctx := defines.AttachAccountId(context.Background(), 7)
+	proc.Ctx = ctx
+	proc.ReplaceTopCtx(ctx)
+	constraint, err := (&engine.ConstraintDef{Cts: []engine.Constraint{&engine.ForeignKeyDef{
+		Fkeys: []*plan.ForeignKeyDef{{Name: "fk", Cols: []uint64{1}, ForeignTbl: 2, ForeignCols: []uint64{1}}},
+	}}}).MarshalBinary()
+	require.NoError(t, err)
+	exec := &recordingInternalSQLExecutor{mocker: func(sql string) (executor.Result, error) {
+		if !strings.Contains(sql, catalog.MO_TABLES) {
+			result := executor.NewMemResult([]types.Type{types.T_uint8.ToType(), types.T_varchar.ToType()}, proc.Mp())
+			result.NewBatchWithRowCount(1)
+			require.NoError(t, executor.AppendFixedRows(result, 0, []uint8{24}))
+			require.NoError(t, executor.AppendStringRows(result, 1, []string{"h"}))
+			return result.GetResult(), nil
+		}
+		result := executor.NewMemResult([]types.Type{types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_uint32.ToType(), types.T_blob.ToType(), types.T_bool.ToType()}, proc.Mp())
+		result.NewBatchWithRowCount(1)
+		require.NoError(t, executor.AppendFixedRows(result, 0, []uint64{1}))
+		require.NoError(t, executor.AppendStringRows(result, 1, []string{"child"}))
+		require.NoError(t, executor.AppendFixedRows(result, 2, []uint64{1}))
+		require.NoError(t, executor.AppendStringRows(result, 3, []string{"db"}))
+		require.NoError(t, executor.AppendStringRows(result, 4, []string{""}))
+		require.NoError(t, executor.AppendFixedRows(result, 5, []uint32{7}))
+		require.NoError(t, executor.AppendBytesRows(result, 6, [][]byte{constraint}))
+		require.NoError(t, executor.AppendFixedRows(result, 7, []bool{false}))
+		return result.GetResult(), nil
+	}}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
+	c := NewCompile("", "", "create cdc", "", "", nil, proc, nil, false, nil, time.Now())
+	defer c.Release()
+	pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{{Source: cdc.PatternTable{Database: "db", Table: "child"}}}}
+	require.NoError(t, c.checkPitrGranularity(ctx, pts, ""))
+	require.Contains(t, exec.sqls[0], "mo_tables")
 }
 
 type cdcRecordingSQLExecutor struct {
