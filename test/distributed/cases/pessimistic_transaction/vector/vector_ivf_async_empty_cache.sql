@@ -6,10 +6,12 @@
 -- kept routing to bucket 1 and returned the wrong nearest neighbor -- and, having no IsStale,
 -- ivfflat never self-healed until a reindex/restart. The fix makes the cache NOT retain an empty
 -- generation (IvfflatSearch.EmptyGeneration), so the next query cold-reloads the real centroids.
--- The deterministic mechanism proof is TestIvfflatEmptyGeneration in pkg/vectorindex/ivfflat; this
--- case exercises the end-to-end async-build -> warm -> query flow. The cross-CN stale read is
--- placement-dependent (single-CN self-heals via RemoveIdle on the consumer CN), so the assertion
--- here is that once the build commits the complete generation, the query returns the true neighbor.
+-- SCOPE: end-to-end SMOKE coverage of the async-build -> warm -> query flow, NOT a pre/post
+-- regression gate. The not-ready window cannot be held open from SQL and the stale read is
+-- placement-dependent (a single CN self-heals via RemoveIdle on the consumer CN), so these
+-- assertions also pass on pre-fix code. The deterministic mechanism proof is
+-- TestIvfflatEmptyGeneration in pkg/vectorindex/ivfflat, which covers both the empty generation
+-- and the bucket-1 generation that must stay cached.
 SET experimental_ivf_index=1;
 drop database if exists ivf_async_partial_cache;
 CREATE DATABASE ivf_async_partial_cache;

@@ -596,4 +596,14 @@ func TestHnswEmptyGeneration(t *testing.T) {
 	full := newModel(true)
 	defer func() { require.NoError(t, full.Index.Destroy()) }()
 	require.False(t, (&HnswSearch[float32]{Indexes: []*HnswModel[float32]{e2, full}}).EmptyGeneration())
+
+	// A model whose size cannot be read (nil usearch handle -> Empty errors) fails CLOSED:
+	// counting it as vector-less would evict a full generation and re-stream every model file
+	// on the next query.
+	e3 := newModel(false)
+	defer func() { require.NoError(t, e3.Index.Destroy()) }()
+	unreadable := &HnswModel[float32]{Id: "no-handle"}
+	_, err := unreadable.Empty()
+	require.Error(t, err, "a nil usearch handle is what makes this model unreadable")
+	require.False(t, (&HnswSearch[float32]{Indexes: []*HnswModel[float32]{e3, unreadable}}).EmptyGeneration())
 }

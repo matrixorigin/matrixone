@@ -360,12 +360,18 @@ func (s *HnswSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 // The cache declines to retain such a generation, so the next query reloads and picks up the
 // models once the build writes them -- instead of pinning a vector-less generation until the
 // IsStale sweep evicts it. A generation with any populated model is cached normally.
+//
+// Fails CLOSED: a model whose size cannot be read (Empty errors on a nil usearch handle, or
+// usearch Len fails) counts as populated. Reading such a model as vector-less would evict a
+// full generation and re-stream every model file on the next query, where the opposite mistake
+// only keeps a vector-less generation until the IsStale sweep -- which hnsw has.
 func (s *HnswSearch[T]) EmptyGeneration() bool {
 	for _, m := range s.Indexes {
 		if m == nil {
 			continue
 		}
-		if empty, err := m.Empty(); err == nil && !empty {
+		empty, err := m.Empty()
+		if err != nil || !empty {
 			return false
 		}
 	}

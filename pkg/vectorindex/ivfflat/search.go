@@ -1219,6 +1219,14 @@ func (s *IvfflatSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 // centroids once the build writes them under the same version -- instead of pinning a
 // bucket-1-only routing model until the housekeeping sweep. A generation with real centroids is
 // cached normally.
+//
+// The entries table deliberately does NOT enter this predicate. The centroids are the only part
+// of an IVF-FLAT index the cache holds resident (GetIndexSize reports them alone; entries are read
+// from the table per query), so a generation with Centroids nil retains nothing either way: not
+// caching it costs one re-read of the single placeholder row, while caching it pins bucket-1
+// routing on a CN that has no IsStale to recover. Counting bucket-1 entries as "populated" would
+// also re-open #29011 whenever entries land under the version before the build commits the real
+// centroids.
 func (s *IvfflatSearch[T]) EmptyGeneration() bool {
 	return s.Index != nil && s.Index.Centroids == nil
 }
