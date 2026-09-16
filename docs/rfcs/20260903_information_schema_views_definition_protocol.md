@@ -12,7 +12,7 @@
 not the original CREATE statement. New views persist a parser-derived definition
 and legacy rows are read through parser-aware metadata functions. The functions
 are new distributed plan functions (IDs 581 and 582), so the catalog contract is fenced by MORPC
-v73.
+v75.
 
 ## Problem and invariant
 
@@ -50,30 +50,30 @@ by CREATE/ALTER or by the bounded regeneration path. Adding a historical column
 snapshot to the legacy catalog format would be a separate compatibility
 migration and is outside this PR.
 
-MORPC v73 is allocated as `MORPCLatestVersion + 1` from official main v72,
-which already owns v70 through v72. The two function IDs are the next available
+MORPC v75 is allocated as `MORPCLatestVersion + 1` from official main v74,
+which already owns v70 through v74. The two function IDs are the next available
 IDs after main's exclusive function bound 581, and the bound advances to 583.
 The capability is specific to these functions and the persisted VIEWS definition.
 A sender probes the selected destination CN as well as its local runtime before
 encoding a pipeline containing either function ID; an unknown or unavailable
 destination capability fails closed. The v4.0.6 VIEWS upgrade waits for common
-v73. New tenant initialization installs the new VIEWS DDL only after the local
-coordinator and every CN in the current inventory have positively confirmed v73;
+v75. New tenant initialization installs the new VIEWS DDL only after the local
+coordinator and every CN in the current inventory have positively confirmed v75;
 a mixed, unknown, RPC-failing, or incomplete capability probe records the
 predecessor VIEWS definition while still committing the final-version tenant
-row. A bounded post-upgrade reconciliation pass later rechecks common v73 and
+row. A bounded post-upgrade reconciliation pass later rechecks common v75 and
 reuses the guarded transactional entry to replace only that predecessor
-definition. A v72-or-earlier cluster preserves all existing metadata definitions,
+definition. A v74-or-earlier cluster preserves all existing metadata definitions,
 including the v58 COLUMNS contract. Pipeline preparation, remote marshal, and
 remote unmarshal reject a
-pipeline containing either function ID below v73. The receiver check protects
+pipeline containing either function ID below v75. The receiver check protects
 stale prepared work as well as normal sender dispatch. Before admitting any
-v72-or-earlier CN during rollback, operators must stop or pause every v73
+v74-or-earlier CN during rollback, operators must stop or pause every v75
 binary that can run the reconciliation owner, pause related metadata plans,
 restore `InformationSchemaViewsLegacyDDL` transactionally, wait for the catalog
-change and in-flight work to converge, and verify that no v73 maintenance
+change and in-flight work to converge, and verify that no v75 maintenance
 worker can re-install it. Only then may the older binary be admitted. Merely
-draining v72-dependent requests is not sufficient because the new persisted view
+draining v74-dependent requests is not sufficient because the new persisted view
 text references the functions. The new JSON fields are additive and old
 binaries keep treating them as unknown.
 
@@ -83,7 +83,7 @@ Keeping raw SQL regexp extraction was rejected because it repeatedly diverged
 from the SQL lexer for comments and quoted strings. Eagerly rewriting every
 legacy row was rejected because the existing recovery lifecycle is deliberately
 inactive and a metadata read must not perform unbounded catalog writes. Allowing
-the DDL before v73 was rejected because an old CN cannot bind the metadata functions.
+the DDL before v75 was rejected because an old CN cannot bind the metadata functions.
 
 ## Bounds, security, and operations
 
@@ -102,18 +102,18 @@ Focused parser/function tests cover current and legacy definitions, quoted and
 commented inputs, malformed rows, frozen wildcard expansion, the documented
 legacy raw-wildcard boundary, explicit derived-table column lists with inner
 alias preservation, and CHECK OPTION.
-Protocol tests cover the v72 predecessor
-rejection and v73 acceptance at prepare, sender, and receiver boundaries,
+Protocol tests cover the v74 predecessor
+rejection and v75 acceptance at prepare, sender, and receiver boundaries,
 including a mixed-version destination probe and the all-CN capability fence.
 System-view tests prove mixed, unknown, and RPC-failing CN capability probes
-fall back to the predecessor VIEWS DDL, while an all-v73 inventory uses the
+fall back to the predecessor VIEWS DDL, while an all-v75 inventory uses the
 parser-derived DDL. Tenant initialization keeps the final account version but
 records the predecessor VIEWS definition when capability discovery is
 incomplete. The post-upgrade bounded reconciliation pass rediscovers that
-durable definition marker, retries only after a positive all-CN v73 check, and
+durable definition marker, retries only after a positive all-CN v75 check, and
 uses the same guarded transactional entry to publish the parser-derived
 definition once it is safe. Upgrade tests prove both the v4.0.7 handler and
-its VIEWS entry require v73. The
+its VIEWS entry require v75. The
 predecessor-init test is also the rollback guard: it proves that the restoration
 target has no function reference before an older CN is admitted.
 
