@@ -999,6 +999,15 @@ func Test_CollectTableInfoSQL(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, strings.ToUpper(sql), "TBL.RELDATABASE IN ('SOURCE_DB')")
 	assert.Contains(t, strings.ToUpper(sql), "TBL.RELNAME IN ('ORDERS')")
+
+	// CDC source identifiers can be legal when quoted even if they contain a
+	// SQL string delimiter. Candidate discovery must keep them inside the
+	// catalog predicate rather than allowing the identifier to alter that SQL.
+	sql = CollectCDCSourceCandidateSQL(1, "source'db", `orders\archive`)
+	_, err = parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	assert.Contains(t, sql, "tbl.reldatabase IN ('source''db')")
+	assert.Contains(t, sql, `tbl.relname IN ('orders\\archive')`)
 }
 
 func TestScanAndProcess(t *testing.T) {
