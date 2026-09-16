@@ -1462,7 +1462,10 @@ func d64AllFitInt32(vs []types.Decimal64) bool {
 func d256AllFitInt64(vs []types.Decimal256, n int) bool {
 	for i := 0; i < n; i++ {
 		signExt := uint64(int64(vs[i].B0_63) >> 63)
-		if vs[i].B64_127^signExt|vs[i].B128_191^signExt|vs[i].B192_255^signExt != 0 {
+		upperMismatch := (vs[i].B64_127 ^ signExt) |
+			(vs[i].B128_191 ^ signExt) |
+			(vs[i].B192_255 ^ signExt)
+		if upperMismatch != 0 {
 			return false
 		}
 	}
@@ -1475,7 +1478,10 @@ func d256AllFitInt32(vs []types.Decimal256, n int) bool {
 	var or uint64
 	for i := 0; i < n; i++ {
 		signExt := uint64(int64(vs[i].B0_63) >> 63)
-		or |= vs[i].B64_127 ^ signExt | vs[i].B128_191 ^ signExt | vs[i].B192_255 ^ signExt
+		upperMismatch := (vs[i].B64_127 ^ signExt) |
+			(vs[i].B128_191 ^ signExt) |
+			(vs[i].B192_255 ^ signExt)
+		or |= upperMismatch
 		or |= (vs[i].B0_63 + 0x80000000) >> 32
 	}
 	return or == 0
