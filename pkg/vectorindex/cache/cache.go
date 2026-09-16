@@ -809,6 +809,22 @@ func algoEmptyGeneration(algo *VectorIndexSearch) bool {
 	return ok && e.EmptyGeneration()
 }
 
+// retireEmptyGeneration drops a just-loaded generation that reports no searchable vectors, so the
+// next query reloads and picks up the vectors once the build writes them under the same
+// generation. Only the LOADER retires it: a caller that found the entry already resident is
+// looking at another caller's generation, and a concurrent reader already completed on it.
+//
+// Called on BOTH the success and the post-load error path. An error after Load must retire it
+// too: the loader is the only one who ever would, a later query finds the entry resident and
+// skips this, and ivfflat has no IsStale -- so one failed entries scan during the async-build
+// window would pin bucket-1 routing for as long as traffic keeps refreshing the TTL (#29011).
+func (c *VectorIndexCache) retireEmptyGeneration(key string, algo *VectorIndexSearch, loaded, emptyGen bool) {
+	if loaded || !emptyGen {
+		return
+	}
+	c.evictEntry(key, algo, "empty-generation")
+}
+
 // house keeping to check expired keys and delete from cache
 func (c *VectorIndexCache) HouseKeeping() {
 
@@ -1035,19 +1051,20 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 				}
 				continue
 			}
+			// The generation stays behind on a non-retryable error, so retire it here as well
+			// as on the success path -- see retireEmptyGeneration. The error returns no keys,
+			// so nothing aliases the index memory the teardown frees.
+			c.retireEmptyGeneration(key, algo, loaded, emptyGen)
 			return nil, nil, err
 		}
 
 		// Do not retain a generation with no searchable vectors (the transient copy-alter init
 		// window, the ASYNC-build window before the first vectors are committed, or an empty
 		// table): serve its empty result, but evict so the next query reloads and picks up the
-		// vectors once the build writes them under the same generation. Only the loader evicts
-		// (a concurrent reader already completed on the same generation); the CDC-flush
+		// vectors once the build writes them under the same generation. The CDC-flush
 		// RemoveIdle still refreshes a NON-empty stale generation. The evicted result is empty,
 		// so its keys alias no index memory the teardown frees.
-		if !loaded && emptyGen {
-			c.evictEntry(key, algo, "empty-generation")
-		}
+		c.retireEmptyGeneration(key, algo, loaded, emptyGen)
 		return keys, distances, nil
 	}
 }
@@ -1146,13 +1163,13 @@ func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, n
 				}
 				continue
 			}
+			// Retire an empty generation on the error path too -- see Search.
+			c.retireEmptyGeneration(key, algo, loaded, emptyGen)
 			return err
 		}
 		// Do not retain a vector-less generation; see Search. out already holds the (empty)
 		// result and is caller-owned, so the teardown frees nothing it references.
-		if !loaded && emptyGen {
-			c.evictEntry(key, algo, "empty-generation")
-		}
+		c.retireEmptyGeneration(key, algo, loaded, emptyGen)
 		return nil
 	}
 }
