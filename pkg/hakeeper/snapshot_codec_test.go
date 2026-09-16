@@ -5,6 +5,12 @@
 // You may obtain a copy of the License at
 //
 //     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
 
 package hakeeper
 
@@ -15,6 +21,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
 
@@ -188,43 +195,135 @@ func TestHAKeeperSnapshotRejectsBarrierInLegacyFormats(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestHAKeeperSnapshotRejectsInvalidEnvelopeAtomically(t *testing.T) {
+func marshalSnapshotEnvelopeFixture(
+	t *testing.T,
+	version uint32,
+	features uint64,
+	state []byte,
+) []byte {
+	t.Helper()
+	envelope, err := (&pb.HAKeeperSnapshotEnvelope{
+		FormatVersion: version, RSMState: state, RequiredFeatures: features,
+	}).Marshal()
+	require.NoError(t, err)
+	return append(append([]byte{}, hakeeperSnapshotMagicV3...), envelope...)
+}
+
+func TestHAKeeperSnapshotRejectsUnknownFeatureBeforePayload(t *testing.T) {
+	fixture := marshalSnapshotEnvelopeFixture(t, 1, 1<<63, []byte{0x0a, 0x7f})
+	_, err := unmarshalHAKeeperSnapshot(fixture)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%T: %v", err, err)
+	require.ErrorContains(t, err, "unknown features")
+}
+
+func TestHAKeeperSnapshotRejectsInvalidInputAtomically(t *testing.T) {
 	valid := pb.NewRSMState()
 	valid.Index = 9
-	payload, err := valid.Marshal()
-	require.NoError(t, err)
-	makeEnvelope := func(version uint32, features uint64, state []byte) []byte {
-		t.Helper()
-		envelope, marshalErr := (&pb.HAKeeperSnapshotEnvelope{
-			FormatVersion: version, RSMState: state, RequiredFeatures: features,
-		}).Marshal()
-		require.NoError(t, marshalErr)
-		return append(append([]byte{}, hakeeperSnapshotMagicV3...), envelope...)
-	}
-	invalidPhase := valid
-	invalidPhase.CatalogMetadataBarrier = &pb.CatalogMetadataBarrierState{Phase: 99}
-	invalidPhasePayload, err := invalidPhase.Marshal()
+	validPayload, err := valid.Marshal()
 	require.NoError(t, err)
 
 	fixtures := map[string][]byte{
-		"empty":           makeEnvelope(1, 0, nil),
-		"unknown-version": makeEnvelope(2, 0, payload),
-		"unknown-feature": makeEnvelope(1, 1<<63, payload),
-		"unknown-phase":   makeEnvelope(1, 0, invalidPhasePayload),
+		"empty":           marshalSnapshotEnvelopeFixture(t, 1, 0, nil),
+		"unknown-version": marshalSnapshotEnvelopeFixture(t, 2, 0, validPayload),
+		"unknown-feature": marshalSnapshotEnvelopeFixture(t, 1, 1<<63, []byte{0x0a, 0x7f}),
 		"unknown-magic":   append(append([]byte{}, hakeeperSnapshotPrefix...), '9'),
 		"truncated-moh3":  append(append([]byte{}, hakeeperSnapshotMagicV3...), 0x12, 0x7f),
 		"truncated-moh2":  append(append([]byte{}, hakeeperSnapshotMagicV2...), 0x0a, 0x7f),
 		"corrupt-raw":     {0x0a, 0x7f},
 	}
+
+	invalidStates := []struct {
+		name  string
+		state *pb.CatalogMetadataBarrierState
+	}{
+		{name: "phase-positive", state: &pb.CatalogMetadataBarrierState{Phase: 99}},
+		{name: "phase-negative", state: &pb.CatalogMetadataBarrierState{Phase: -1}},
+		{name: "disabled-epoch", state: &pb.CatalogMetadataBarrierState{MembershipEpoch: 1}},
+		{name: "disabled-required", state: &pb.CatalogMetadataBarrierState{RequiredGeneration: 1}},
+		{name: "disabled-completed", state: &pb.CatalogMetadataBarrierState{CompletedGeneration: 1}},
+		{name: "disabled-view-protocol", state: &pb.CatalogMetadataBarrierState{RequiredViewDependencyProtocol: 1}},
+		{name: "disabled-recovery-protocol", state: &pb.CatalogMetadataBarrierState{RequiredRecoveryProtocol: 1}},
+	}
+	for _, test := range invalidStates {
+		state := valid
+		state.CatalogMetadataBarrier = test.state
+		payload, marshalErr := state.Marshal()
+		require.NoError(t, marshalErr)
+		fixtures[test.name] = marshalSnapshotEnvelopeFixture(t, 1, snapshotRequiredFeatures(&state), payload)
+	}
+	for _, test := range []struct {
+		name string
+		fn   func(*pb.CatalogMetadataBarrierState)
+	}{
+		{name: "missing-epoch", fn: func(s *pb.CatalogMetadataBarrierState) { s.MembershipEpoch = 0 }},
+		{name: "missing-required", fn: func(s *pb.CatalogMetadataBarrierState) { s.RequiredGeneration = 0 }},
+		{name: "missing-view-protocol", fn: func(s *pb.CatalogMetadataBarrierState) { s.RequiredViewDependencyProtocol = 0 }},
+		{name: "missing-recovery-protocol", fn: func(s *pb.CatalogMetadataBarrierState) { s.RequiredRecoveryProtocol = 0 }},
+		{name: "completed-ahead", fn: func(s *pb.CatalogMetadataBarrierState) { s.CompletedGeneration = s.RequiredGeneration + 1 }},
+		{name: "nonterminal-complete", fn: func(s *pb.CatalogMetadataBarrierState) { s.CompletedGeneration = s.RequiredGeneration }},
+	} {
+		state := valid
+		state.CatalogMetadataBarrier = validCatalogBarrier(pb.CATALOG_METADATA_BARRIER_RECOVERING)
+		test.fn(state.CatalogMetadataBarrier)
+		payload, marshalErr := state.Marshal()
+		require.NoError(t, marshalErr)
+		fixtures[test.name] = marshalSnapshotEnvelopeFixture(t, 1, snapshotRequiredFeatures(&state), payload)
+	}
+	activated := valid
+	activated.CatalogMetadataBarrier = validCatalogBarrier(pb.CATALOG_METADATA_BARRIER_ACTIVATED)
+	activated.CatalogMetadataBarrier.CompletedGeneration--
+	activatedPayload, err := activated.Marshal()
+	require.NoError(t, err)
+	fixtures["activated-incomplete"] = marshalSnapshotEnvelopeFixture(
+		t, 1, snapshotRequiredFeatures(&activated), activatedPayload)
+
+	featureStates := []pb.HAKeeperRSMState{valid, func() pb.HAKeeperRSMState {
+		state := valid
+		state.PersistedExpressionRequiredProtocolVersion = 1
+		return state
+	}(), func() pb.HAKeeperRSMState {
+		state := valid
+		state.CatalogMetadataBarrier = validCatalogBarrier(pb.CATALOG_METADATA_BARRIER_PREPARING)
+		return state
+	}(), func() pb.HAKeeperRSMState {
+		state := valid
+		state.PersistedExpressionRequiredProtocolVersion = 1
+		state.CatalogMetadataBarrier = validCatalogBarrier(pb.CATALOG_METADATA_BARRIER_PREPARING)
+		return state
+	}()}
+	for i, state := range featureStates {
+		payload, marshalErr := state.Marshal()
+		require.NoError(t, marshalErr)
+		for features := uint64(0); features < 4; features++ {
+			if features != snapshotRequiredFeatures(&state) {
+				fixtures[fmt.Sprintf("feature-mismatch-%d-%d", i, features)] =
+					marshalSnapshotEnvelopeFixture(t, 1, features, payload)
+			}
+		}
+	}
+
 	for name, fixture := range fixtures {
 		t.Run(name, func(t *testing.T) {
 			rsm := NewStateMachine(0, 1).(*stateMachine)
 			rsm.state.Index = 1234
 			rsm.state.NextID = 5678
-			before := rsm.state
+			rsm.state.NextIDByKey["preserved"] = 99
+			rsm.state.CatalogMetadataBarrier = validCatalogBarrier(pb.CATALOG_METADATA_BARRIER_ACTIVATED)
+			beforeBytes, marshalErr := rsm.state.Marshal()
+			require.NoError(t, marshalErr)
+			beforeIDs := map[string]uint64{"preserved": rsm.state.NextIDByKey["preserved"]}
+			beforeBarrier := *rsm.state.CatalogMetadataBarrier
+
 			err := rsm.RecoverFromSnapshot(bytes.NewReader(fixture), nil, nil)
 			require.Error(t, err)
-			require.Equal(t, before, rsm.state)
+
+			afterBytes, marshalErr := rsm.state.Marshal()
+			require.NoError(t, marshalErr)
+			require.Equal(t, beforeBytes, afterBytes, "live state bytes changed after failed recovery")
+			require.Equal(t, beforeIDs, rsm.state.NextIDByKey, "nested live map changed after failed recovery")
+			require.Equal(t, beforeBarrier, *rsm.state.CatalogMetadataBarrier,
+				"nested live pointer changed after failed recovery")
 		})
 	}
 }

@@ -138,6 +138,13 @@ func unmarshalHAKeeperSnapshot(data []byte) (pb.HAKeeperRSMState, error) {
 			return pb.HAKeeperRSMState{}, moerr.NewInvalidInputNoCtx(fmt.Sprintf(
 				"unsupported HAKeeper snapshot envelope version %d", envelope.FormatVersion))
 		}
+		// Required features describe how the payload must be decoded. Reject an
+		// unsupported contract before touching payload bytes so callers always
+		// receive the typed compatibility error, even when the payload is corrupt.
+		if envelope.RequiredFeatures&^hakeeperSnapshotKnownFeatures != 0 {
+			return pb.HAKeeperRSMState{}, moerr.NewInvalidInputNoCtx(fmt.Sprintf(
+				"HAKeeper snapshot requires unknown features %#x", envelope.RequiredFeatures))
+		}
 		if len(envelope.RSMState) == 0 {
 			return pb.HAKeeperRSMState{}, moerr.NewInvalidInputNoCtx("HAKeeper snapshot envelope has no RSM state")
 		}
