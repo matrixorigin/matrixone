@@ -665,10 +665,12 @@ func TestNormalizeCDCSourcePatternCase(t *testing.T) {
 	}}
 
 	require.NoError(t, NormalizeCDCSourcePatternCase(pts, 0))
+	assert.Equal(t, int64(0), pts.SourceCaseMode)
 	assert.Equal(t, "SourceDB", pts.Pts[0].Source.Database)
 	assert.Equal(t, "SourceTable", pts.Pts[0].Source.Table)
 
 	require.NoError(t, NormalizeCDCSourcePatternCase(pts, 1))
+	assert.Equal(t, int64(1), pts.SourceCaseMode)
 	assert.Equal(t, "sourcedb", pts.Pts[0].Source.Database)
 	assert.Equal(t, "sourcetable", pts.Pts[0].Source.Table)
 	assert.Equal(t, "SinkDB", pts.Pts[0].Sink.Database)
@@ -680,6 +682,7 @@ func TestNormalizeCDCSourcePatternCase(t *testing.T) {
 		Source: PatternTable{Database: "SourceDB", Table: "SourceTable"},
 	}}}
 	require.NoError(t, NormalizeCDCSourcePatternCase(modeTwo, 2))
+	assert.Equal(t, int64(2), modeTwo.SourceCaseMode)
 	assert.Equal(t, "SourceDB", modeTwo.Pts[0].Source.Database)
 	assert.Equal(t, "SourceTable", modeTwo.Pts[0].Source.Table)
 }

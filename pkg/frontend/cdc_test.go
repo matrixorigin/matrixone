@@ -2844,6 +2844,25 @@ func TestCdcTask_Resume(t *testing.T) {
 	assert.NoErrorf(t, err, "Resume()")
 }
 
+func TestCDCTaskExecutorMatchesModeTwoSourcePatterns(t *testing.T) {
+	exec := &CDCTaskExecutor{tables: cdc.PatternTuples{
+		SourceCaseMode: 2,
+		Pts: []*cdc.PatternTuple{{
+			Source: cdc.PatternTable{Database: "SourceDB", Table: "Orders"},
+			Sink:   cdc.PatternTable{Database: "sink", Table: "target"},
+		}},
+	}}
+	info := &cdc.DbTableInfo{}
+	require.True(t, exec.matchAnyPattern("sourcedb.orders", info))
+	require.True(t, exec.matchesAnySourcePattern("SOURCEDB.ORDERS"))
+	require.Equal(t, "sink", info.SinkDbName)
+	require.Equal(t, "target", info.SinkTblName)
+
+	exec.tables.SourceCaseMode = 0
+	require.False(t, exec.matchAnyPattern("sourcedb.orders", &cdc.DbTableInfo{}))
+	require.False(t, exec.matchesAnySourcePattern("SOURCEDB.ORDERS"))
+}
+
 func TestCdcTask_Restart(t *testing.T) {
 	var timeoutReports atomic.Int32
 	previousReporter := errutil.GetReportErrorFunc()

@@ -20,6 +20,7 @@ import (
 	"errors"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -2964,16 +2965,9 @@ var GetTableErrMsg = func(
 }
 
 func (exec *CDCTaskExecutor) matchAnyPattern(key string, info *cdc.DbTableInfo) bool {
-	match := func(s, p string) bool {
-		if p == cdc.CDCPitrGranularity_All {
-			return true
-		}
-		return s == p
-	}
-
 	db, table := cdc.SplitDbTblKey(key)
 	for _, pt := range exec.tables.Pts {
-		if match(db, pt.Source.Database) && match(table, pt.Source.Table) {
+		if exec.matchesSourceName(db, pt.Source.Database) && exec.matchesSourceName(table, pt.Source.Table) {
 			// complete sink info
 			info.SinkDbName = pt.Sink.Database
 			if info.SinkDbName == cdc.CDCPitrGranularity_All {
@@ -2990,20 +2984,27 @@ func (exec *CDCTaskExecutor) matchAnyPattern(key string, info *cdc.DbTableInfo) 
 }
 
 func (exec *CDCTaskExecutor) matchesAnySourcePattern(key string) bool {
-	match := func(s, p string) bool {
-		if p == cdc.CDCPitrGranularity_All {
-			return true
-		}
-		return s == p
-	}
-
 	db, table := cdc.SplitDbTblKey(key)
 	for _, pt := range exec.tables.Pts {
-		if match(db, pt.Source.Database) && match(table, pt.Source.Table) {
+		if exec.matchesSourceName(db, pt.Source.Database) && exec.matchesSourceName(table, pt.Source.Table) {
 			return true
 		}
 	}
 	return false
+}
+
+// matchesSourceName follows the source server's persisted identifier policy.
+// Mode 2 preserves the spelling supplied at CREATE CDC time but compares table
+// names case-insensitively; legacy tasks have no marker and retain the prior
+// exact-match behavior.
+func (exec *CDCTaskExecutor) matchesSourceName(name, pattern string) bool {
+	if pattern == cdc.CDCPitrGranularity_All {
+		return true
+	}
+	if exec.tables.SourceCaseMode == 2 {
+		return strings.EqualFold(name, pattern)
+	}
+	return name == pattern
 }
 
 // reader ----> sinker ----> remote db

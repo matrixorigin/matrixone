@@ -801,8 +801,9 @@ func (tuple *PatternTuple) String() string {
 }
 
 type PatternTuples struct {
-	Pts      []*PatternTuple `json:"pts"`
-	Reserved string          `json:"reserved"`
+	Pts            []*PatternTuple `json:"pts"`
+	Reserved       string          `json:"reserved"`
+	SourceCaseMode int64           `json:"source_case_mode,omitempty"`
 }
 
 func (pts *PatternTuples) Append(pt *PatternTuple) {
@@ -819,6 +820,7 @@ func NormalizeCDCSourcePatternCase(pts *PatternTuples, lowerCaseTableNames int64
 	if pts == nil {
 		return nil
 	}
+	pts.SourceCaseMode = lowerCaseTableNames
 	seen := make(map[string]struct{}, len(pts.Pts))
 	for _, pt := range pts.Pts {
 		if pt == nil {
