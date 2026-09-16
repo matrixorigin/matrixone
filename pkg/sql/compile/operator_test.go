@@ -365,7 +365,7 @@ func TestConstructAggregateConfigApproxPercentileWithinGroup(t *testing.T) {
 	}{
 		{name: "ordinary form", want: "0.25"},
 		{name: "ordered ascending", planConfig: []byte{0}, want: "0.25"},
-		{name: "ordered descending", planConfig: []byte{1}, want: "0.75"},
+		{name: "ordered descending", planConfig: []byte{1}, want: "DESC:0.25"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			args, config := constructAggregateConfig(&plan.Function{

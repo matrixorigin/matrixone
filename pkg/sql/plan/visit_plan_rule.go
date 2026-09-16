@@ -1062,7 +1062,31 @@ func (rule *ResetParamRefRule) typedRuntimeParamExpr(pos int) (*Expr, bool, erro
 		return nil, false, nil
 	}
 	if kind != vector.PrepareParamFloat && typ.Oid != types.T_float64 && typ.Oid != types.T_float32 {
-		return nil, false, nil
+		if !typ.Oid.IsMySQLString() {
+			return nil, false, nil
+		}
+		raw := fmt.Sprint(value)
+		if pos < len(rule.paramValues) {
+			if param, ok := rule.paramValues[pos].(ParamValue); ok {
+				raw = preparedParamValueText(param)
+			}
+		}
+		inferred, inferredOK := PreparedRuntimeTypeFromString(strings.TrimSpace(raw))
+		if !inferredOK {
+			return nil, false, nil
+		}
+		isBin := false
+		if pos < len(rule.paramValues) {
+			if param, ok := rule.paramValues[pos].(ParamValue); ok {
+				isBin = param.IsBin
+			}
+		}
+		bound, err := preparedRuntimeParamExpr(rule.ctx, raw, isBin, inferred)
+		if err != nil {
+			return nil, false, err
+		}
+		rule.retainRuntimeParamRef(pos, bound)
+		return bound, true, nil
 	}
 	isBin := false
 	if pos < len(rule.paramValues) {
@@ -1249,29 +1273,78 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExpr(
 	expr *plan.Expr,
 	positions map[int32]struct{},
 ) (*Expr, bool, error) {
+	return rule.rebindPreparedNumericExprWithBound(expr, expr, positions)
+}
+
+// rebindPreparedNumericExprWithBound carries two views of a deferred numeric
+// expression: expr is the immutable prepare-time provenance, while bound is
+// the occurrence already materialized for this EXECUTE.  A runtime value may
+// refine the numeric envelope, but an unsupported value (for example "foo")
+// must not resurrect the prepare-time cast or raw transport text.  Returning
+// the bound occurrence with changed=false lets the enclosing numeric context
+// apply its own conversion rules.
+func (rule *ResetParamRefRule) rebindPreparedNumericExprWithBound(
+	expr, bound *plan.Expr,
+	positions map[int32]struct{},
+) (*Expr, bool, error) {
 	if expr == nil {
-		return nil, false, nil
+		return bound, false, nil
 	}
 	if param := expr.GetP(); param != nil {
 		if _, ok := positions[param.Pos]; !ok {
+			if bound != nil {
+				return bound, false, nil
+			}
 			return expr, false, nil
 		}
-		bound, ok, err := rule.typedRuntimeParamExpr(int(param.Pos))
-		return bound, ok, err
+		typedBound, ok, err := rule.typedRuntimeParamExpr(int(param.Pos))
+		if err != nil || ok {
+			return typedBound, ok, err
+		}
+		// A NULL or an otherwise non-numeric runtime value may not have a
+		// typed numeric replacement. Keep the already materialized execution
+		// occurrence and report no refinement so a surrounding comparison can
+		// still apply its own numeric-prefix conversion.
+		if bound != nil {
+			return bound, false, nil
+		}
+		return expr, false, nil
 	}
 	if isImplicitPreparedParamCast(expr) {
 		if param, ok := implicitPreparedParam(expr); ok {
 			if _, selected := positions[param.Pos]; !selected {
+				if bound != nil {
+					return bound, false, nil
+				}
 				return expr, false, nil
 			}
-			bound, changed, err := rule.rebindPreparedNumericExpr(expr.GetF().Args[0], positions)
-			return bound, changed, err
+			boundChild := bound
+			if bound != nil {
+				if boundFn := bound.GetF(); boundFn != nil && len(boundFn.Args) > 0 {
+					boundChild = boundFn.Args[0]
+				}
+			}
+			return rule.rebindPreparedNumericExprWithBound(
+				expr.GetF().Args[0], boundChild, positions)
 		}
 	}
 	if sub := expr.GetSub(); sub != nil {
-		child, changed, err := rule.rebindPreparedNumericExpr(sub.Child, positions)
-		if err != nil || !changed {
-			return expr, false, err
+		boundChild := sub.Child
+		if bound != nil {
+			if boundSub := bound.GetSub(); boundSub != nil {
+				boundChild = boundSub.Child
+			}
+		}
+		child, changed, err := rule.rebindPreparedNumericExprWithBound(
+			sub.Child, boundChild, positions)
+		if err != nil {
+			return nil, false, err
+		}
+		if !changed {
+			if bound != nil {
+				return bound, false, nil
+			}
+			return expr, false, nil
 		}
 		copy := DeepCopyExpr(expr)
 		copy.GetSub().Child = child
@@ -1282,12 +1355,28 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExpr(
 		copy := DeepCopyExpr(expr)
 		changed := false
 		for i, item := range list.List {
-			bound, itemChanged, err := rule.rebindPreparedNumericExpr(item, positions)
+			boundItem := item
+			if bound != nil {
+				if boundList := bound.GetList(); boundList != nil && i < len(boundList.List) {
+					boundItem = boundList.List[i]
+				}
+			}
+			itemBound, itemChanged, err := rule.rebindPreparedNumericExprWithBound(
+				item, boundItem, positions)
 			if err != nil {
 				return nil, false, err
 			}
-			copy.GetList().List[i] = bound
+			if itemBound == nil {
+				itemBound = boundItem
+			}
+			if itemBound == nil {
+				itemBound = item
+			}
+			copy.GetList().List[i] = itemBound
 			changed = changed || itemChanged
+		}
+		if !changed && bound != nil {
+			return bound, false, nil
 		}
 		return copy, changed, nil
 	}
@@ -1298,14 +1387,30 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExpr(
 		copy := DeepCopyExpr(expr)
 		changed := false
 		for i, arg := range fn.Args {
-			bound, argChanged, err := rule.rebindPreparedNumericExpr(arg, positions)
+			boundArg := arg
+			if bound != nil {
+				if boundFn := bound.GetF(); boundFn != nil && i < len(boundFn.Args) {
+					boundArg = boundFn.Args[i]
+				}
+			}
+			argBound, argChanged, err := rule.rebindPreparedNumericExprWithBound(
+				arg, boundArg, positions)
 			if err != nil {
 				return nil, false, err
 			}
-			copy.GetF().Args[i] = bound
+			if argBound == nil {
+				argBound = boundArg
+			}
+			if argBound == nil {
+				argBound = arg
+			}
+			copy.GetF().Args[i] = argBound
 			changed = changed || argChanged
 		}
 		if !changed {
+			if bound != nil {
+				return bound, false, nil
+			}
 			return expr, false, nil
 		}
 		if isExplicitPreparedCast(expr) {
@@ -1339,15 +1444,24 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExpr(
 	// would drop scalar-subquery filtering, LIMIT, and empty-result semantics.
 	metadata := expr.GetPreparedNumeric()
 	if expr.GetCol() != nil && metadata.GetFallbackSource() {
+		if bound != nil {
+			return bound, false, nil
+		}
 		return expr, false, nil
 	}
 	if metadata.GetFallback() && metadata.GetParamPos() >= 0 {
 		if _, selected := positions[metadata.GetParamPos()]; !selected {
+			if bound != nil {
+				return bound, false, nil
+			}
 			return expr, false, nil
 		}
 		if bound, ok, err := rule.typedRuntimeParamExpr(int(metadata.GetParamPos())); err != nil || ok {
 			return bound, ok, err
 		}
+	}
+	if bound != nil {
+		return bound, false, nil
 	}
 	return expr, false, nil
 }
@@ -1431,7 +1545,7 @@ func (rule *ResetParamRefRule) rebindPreparedIntegerExpr(expr *plan.Expr) (*Expr
 	if len(positions) == 0 {
 		return expr, false, nil
 	}
-	return rule.rebindPreparedNumericExpr(expr, positions)
+	return rule.rebindPreparedNumericExprWithBound(expr, expr, positions)
 }
 
 func (rule *ResetParamRefRule) rebindPreparedDecimalExpr(expr *plan.Expr) (*Expr, bool, error) {
@@ -1439,7 +1553,7 @@ func (rule *ResetParamRefRule) rebindPreparedDecimalExpr(expr *plan.Expr) (*Expr
 	if len(positions) == 0 {
 		return expr, false, nil
 	}
-	return rule.rebindPreparedNumericExpr(expr, positions)
+	return rule.rebindPreparedNumericExprWithBound(expr, expr, positions)
 }
 
 func (rule *ResetParamRefRule) preparedNumericSourceType(expr *plan.Expr) (plan.Type, bool) {
@@ -1564,7 +1678,8 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 		if source, ok := preparedNumericFallbackSource(fallbackSource); ok {
 			positions := preparedNumericValueParamPositions(fallbackSource)
 			if len(positions) > 0 {
-				bound, changed, bindErr := rule.rebindPreparedNumericExpr(source, positions)
+				bound, changed, bindErr := rule.rebindPreparedNumericExprWithBound(
+					source, rewritten, positions)
 				if bindErr != nil {
 					return nil, bindErr
 				}
@@ -1905,7 +2020,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			// function and selects a numeric overload.
 			return e, nil
 		}
-		isDeferredNumeric := isPreparedNumericFallbackFunction(functionName) && len(exprImpl.F.Args) == 1
+		isDeferredNumeric := isPreparedNumericFallbackFunctionCall(functionName, len(exprImpl.F.Args))
 		var originalDeferredNumericArg *plan.Expr
 		var hasPreparedDeferredNumericValue bool
 		if isDeferredNumeric {
@@ -2389,7 +2504,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		if isDeferredNumeric && hasPreparedDeferredNumericValue {
 			// A flattened scalar subquery leaves the ABS/SIGN argument as a column
 			// reference.  Its inner projection has already been rebound above;
-			// refresh the reference type and rebind ABS/SIGN, but keep the reference so
+			// refresh the reference type and rebind the function, but keep the reference so
 			// empty/multi-row scalar-subquery semantics remain intact.
 			if originalDeferredNumericArg.GetPreparedNumeric().GetFallbackSource() {
 				refreshed, changed, refreshErr := rule.refreshPreparedNumericSource(boundArgs[0])
@@ -2397,8 +2512,13 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					return nil, refreshErr
 				}
 				if changed {
+					reboundArgs := []*Expr{refreshed}
+					if functionName == "elt" {
+						reboundArgs = append([]*Expr(nil), boundArgs...)
+						reboundArgs[0] = refreshed
+					}
 					rewritten, bindErr := BindFuncExprImplByPlanExpr(
-						rule.ctx, functionName, []*Expr{refreshed})
+						rule.ctx, functionName, reboundArgs)
 					if bindErr != nil {
 						return nil, bindErr
 					}
@@ -2410,13 +2530,19 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			source, sourceOK := preparedNumericFallbackSource(originalDeferredNumericArg)
 			positions := preparedNumericValueParamPositions(originalDeferredNumericArg)
 			if sourceOK && len(positions) > 0 {
-				rebound, changed, reboundErr := rule.rebindPreparedNumericExpr(source, positions)
+				rebound, changed, reboundErr := rule.rebindPreparedNumericExprWithBound(
+					source, boundArgs[0], positions)
 				if reboundErr != nil {
 					return nil, reboundErr
 				}
 				if changed {
+					reboundArgs := []*Expr{rebound}
+					if functionName == "elt" {
+						reboundArgs = append([]*Expr(nil), boundArgs...)
+						reboundArgs[0] = rebound
+					}
 					rewritten, bindErr := BindFuncExprImplByPlanExpr(
-						rule.ctx, functionName, []*Expr{rebound})
+						rule.ctx, functionName, reboundArgs)
 					if bindErr != nil {
 						return nil, bindErr
 					}

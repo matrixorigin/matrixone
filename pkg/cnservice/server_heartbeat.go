@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -203,13 +204,14 @@ func (s *service) newCNStoreHeartbeat() logservicepb.CNStoreHeartbeat {
 			MemTotal:     system.MemoryTotal(),
 			MemAvailable: system.MemoryAvailable(),
 		},
-		CommitID:                        version.CommitID,
-		AckedCommandBatchID:             s.ackedCommandBatchID.Load(),
-		CommandDeliveryAckSupported:     true,
-		ViewMetadataAdmissionSupported:  s.viewMetadataAdmissionGeneration != 0,
-		ViewMetadataAdmissionGeneration: s.viewMetadataAdmissionGeneration,
-		ViewMetadataCatalogFencedEpoch:  s.viewMetadataCatalogFencedEpoch.Load(),
-		ViewMetadataIngressReady:        s.viewMetadataIngressReady.Load(),
+		CommitID:                           version.CommitID,
+		AckedCommandBatchID:                s.ackedCommandBatchID.Load(),
+		CommandDeliveryAckSupported:        true,
+		ViewMetadataAdmissionSupported:     s.viewMetadataAdmissionGeneration != 0,
+		ViewMetadataAdmissionGeneration:    s.viewMetadataAdmissionGeneration,
+		ViewMetadataCatalogFencedEpoch:     s.viewMetadataCatalogFencedEpoch.Load(),
+		ViewMetadataIngressReady:           s.viewMetadataIngressReady.Load(),
+		PersistedExpressionProtocolVersion: uint64(defines.MORPCLatestVersion),
 	}
 	if s.viewMetadataEpochFence != nil {
 		hb.ViewMetadataObservedEpoch = s.viewMetadataEpochFence.Epoch()
