@@ -39,8 +39,13 @@ func checkPythonUdf(overloads []overload, inputs []types.Type) checkResult {
 	needCast := false
 	for i := 0; i < size; i++ {
 		if !pythonTypesEqual(receivedArgs[i], requiredArgs[i]) {
-			canCast, _ := fixedImplicitTypeCast(receivedArgs[i], requiredArgs[i].Oid)
+			canCast := false
 			if receivedArgs[i].Oid == requiredArgs[i].Oid {
+				canCast = pythonSameOIDCanNormalize(receivedArgs[i], requiredArgs[i])
+			} else {
+				canCast, _ = fixedImplicitTypeCast(receivedArgs[i], requiredArgs[i].Oid)
+			}
+			if canCast && receivedArgs[i].Oid == requiredArgs[i].Oid {
 				// SQL's cast executor is also the type normalizer for Python's
 				// frozen descriptor.  In particular, DECIMAL scale and precision
 				// must be normalized before Arrow encoding; comparing only OID
@@ -89,11 +94,14 @@ func PythonUdfArgTypeMatch(from, to []types.Type) (bool, int) {
 		if pythonTypesEqual(from[index], to[index]) {
 			continue
 		}
-		if from[index].Oid == to[index].Oid {
+		if pythonSameOIDCanNormalize(from[index], to[index]) {
 			// A same-OID descriptor change is a SQL cast to the declared
 			// width/scale. It is valid, but less specific than an exact match.
 			cost++
 			continue
+		}
+		if from[index].Oid == to[index].Oid {
+			return false, -1
 		}
 		canCast, castCost := fixedImplicitTypeCast(from[index], to[index].Oid)
 		if !canCast {
@@ -106,6 +114,25 @@ func PythonUdfArgTypeMatch(from, to []types.Type) (bool, int) {
 		}
 	}
 	return true, cost
+}
+
+// pythonSameOIDCanNormalize reports whether a descriptor change with the same
+// SQL OID has a meaningful SQL cast. Fixed-size vector dimensions are part of
+// the value shape: the existing array->array cast preserves bytes when the
+// element OID is unchanged, so accepting VECF32(4) for VECF32(3) would publish
+// a value with a descriptor that lies about its child count. Other supported
+// same-OID metadata (decimal precision/scale, text width/charset, and temporal
+// scale) is normalized by the ordinary SQL cast executor.
+func pythonSameOIDCanNormalize(from, to types.Type) bool {
+	if from.Oid != to.Oid || pythonTypesEqual(from, to) {
+		return false
+	}
+	switch from.Oid {
+	case types.T_array_float32, types.T_array_float64:
+		return false
+	default:
+		return true
+	}
 }
 
 // PythonUdfArgTypeCast returns the exact descriptor that the Python handler
@@ -124,6 +151,9 @@ func PythonUdfArgTypeCast(from, to []types.Type) []types.Type {
 		if pythonTypesEqual(from[index], to[index]) {
 			castTypes[index] = from[index]
 			continue
+		}
+		if from[index].Oid == to[index].Oid && !pythonSameOIDCanNormalize(from[index], to[index]) {
+			return nil
 		}
 		castTypes[index] = to[index]
 	}
