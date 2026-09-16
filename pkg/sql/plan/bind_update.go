@@ -140,18 +140,14 @@ func (builder *QueryBuilder) makeUpdateChangedRowsPredicate(
 			continue
 		}
 		oldTyp := selectNode.ProjectList[newPos].Typ
-		oldExpr := &plan.Expr{
-			Typ:  oldTyp,
-			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectNodeTag, ColPos: oldPos}},
-		}
-		// UPDATE projection trimming can remove the appended OLD-value copy,
-		// leaving oldPos outside ProjectList. Prefer the underlying scan column
-		// whenever it is available so the predicate remains valid after that
-		// trimming pass.
-		columnName := qualifiedName[strings.LastIndexByte(qualifiedName, '.')+1:]
-		if sourceRef := findSourceColumnRef(selectNode.ProjectList[newPos], selectNodeTag, newPos, columnName); sourceRef != nil {
-			oldExpr.Expr = &plan.Expr_Col{Col: sourceRef}
-		} else if oldPos < 0 || int(oldPos) >= len(selectNode.ProjectList) {
+		var oldExpr *plan.Expr
+		if oldPos >= 0 && int(oldPos) < len(selectNode.ProjectList) {
+			// Inline the OLD projection expression. Multi-target UPDATE can
+			// extend/remap the projection before this predicate is consumed, so
+			// the pre-remap slot is not a stable column reference.
+			oldExpr = DeepCopyExpr(selectNode.ProjectList[oldPos])
+			oldExpr.Typ = oldTyp
+		} else {
 			continue
 		}
 		// Inline the computed assignment instead of referring to the mutable
@@ -187,46 +183,6 @@ func (builder *QueryBuilder) makeUpdateChangedRowsPredicate(
 		return nil, nil
 	}
 	return BindFuncExprImplByPlanExpr(builder.GetContext(), "not", []*plan.Expr{allEqual})
-}
-
-// findSourceColumnRef returns a scan-level reference embedded in an updated
-// assignment expression. Keeping the reference on the source relation avoids
-// depending on an optimizer-preserved OLD-value projection slot.
-func findSourceColumnRef(expr *plan.Expr, projectionTag, columnPos int32, columnName string) *plan.ColRef {
-	var fallback *plan.ColRef
-	var visit func(*plan.Expr)
-	visit = func(current *plan.Expr) {
-		if current == nil {
-			return
-		}
-		if col := current.GetCol(); col != nil {
-			if col.RelPos == projectionTag {
-				return
-			}
-			if col.ColPos == columnPos && (columnName == "" || col.Name == "" || col.Name == columnName) {
-				copy := *col
-				fallback = &copy
-				return
-			}
-			if fallback == nil {
-				copy := *col
-				fallback = &copy
-			}
-			return
-		}
-		if fn := current.GetF(); fn != nil {
-			for _, arg := range fn.Args {
-				visit(arg)
-			}
-		}
-		if list := current.GetList(); list != nil {
-			for _, item := range list.List {
-				visit(item)
-			}
-		}
-	}
-	visit(expr)
-	return fallback
 }
 
 // appendSequentialSingleTableUpdateAssignments materializes the current row in
@@ -802,14 +758,8 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 
 					oldPos := oldColName2Idx[alias+"."+col.Name]
 					if changed := changedPredicates[alias]; changed != nil {
-						oldRef := &plan.ColRef{RelPos: selectNodeTag, ColPos: oldPos}
-						if sourceRef := findSourceColumnRef(selectNode.ProjectList[oldPos], selectNodeTag, oldPos, col.Name); sourceRef != nil {
-							oldRef = sourceRef
-						}
-						oldValue := &plan.Expr{
-							Typ:  selectNode.ProjectList[oldPos].Typ,
-							Expr: &plan.Expr_Col{Col: oldRef},
-						}
+						oldValue := DeepCopyExpr(selectNode.ProjectList[oldPos])
+						oldValue.Typ = selectNode.ProjectList[oldPos].Typ
 						newDefExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "if", []*plan.Expr{
 							DeepCopyExpr(changed), newDefExpr, oldValue,
 						})
