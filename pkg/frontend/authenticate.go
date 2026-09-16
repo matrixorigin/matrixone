@@ -11074,10 +11074,10 @@ func protocolVersionForTenantInitializationWithContext(
 	proc *process.Process,
 ) (int64, error) {
 	// Account creation must remain available while the cluster is rolling out
-	// the parser-derived VIEWS functions. The predecessor definition is safe on
-	// every CN and the final-version account row is revisited by bootstrap
+	// the parser-derived VIEWS functions. The v75 predecessor definition is safe
+	// on every CN and the final-version account row is revisited by bootstrap
 	// maintenance once the capability becomes available.
-	legacyVersion := defines.MORPCVersion74
+	legacyVersion := defines.MORPCVersion75
 	rt := moruntime.ServiceRuntime(service)
 	if rt == nil {
 		return legacyVersion, nil
@@ -11090,14 +11090,14 @@ func protocolVersionForTenantInitializationWithContext(
 	if !ok {
 		return legacyVersion, nil
 	}
-	if version < defines.MORPCVersion75 {
+	if version < defines.MORPCVersion76 {
 		// Preserve every pre-existing protocol-specific information_schema
-		// contract. Only the new VIEWS function needs the v74 predecessor
+		// contract. Only the new VIEWS function needs the v75 predecessor
 		// fallback; promoting an older known protocol would also install newer
 		// TABLES/COLUMNS and role-closure definitions.
 		return version, nil
 	}
-	supported, err := compile.AllCNsSupportProtocol(proc, defines.MORPCVersion75)
+	supported, err := compile.AllCNsSupportProtocol(proc, defines.MORPCVersion76)
 	if err != nil {
 		// Capability discovery is deliberately best-effort for account
 		// creation. Do not turn a temporary inventory/RPC failure into a
