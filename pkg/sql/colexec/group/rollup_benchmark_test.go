@@ -85,6 +85,7 @@ func BenchmarkRollupAlgorithms(b *testing.B) {
 		// The sort path pays for the derived ORDER BY once. The hash path sorts
 		// every grouping-set branch, matching the current expanded plan shape.
 		{name: "million_derived_order_low_ndv", rows: 1000000, ndv: 4, keyCount: 3, derivedOrder: true},
+		{name: "million_derived_order_avg_low_ndv", rows: 1000000, ndv: 4, keyCount: 2, derivedOrder: true, aggregate: "avg"},
 	}
 
 	for _, tc := range cases {
