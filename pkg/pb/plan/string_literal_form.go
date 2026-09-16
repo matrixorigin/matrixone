@@ -187,11 +187,11 @@ func RequiresMORPCVersion72IPFunctionSemantics(owner any) (bool, error) {
 	return features.IPFunctionSemantics, err
 }
 
-// RequiresMORPCVersion75PreparedUnsignedArithmeticBound reports whether an
+// RequiresMORPCVersion76PreparedUnsignedArithmeticBound reports whether an
 // owner contains the strict runtime range-check helper introduced for
 // prepared unsigned arithmetic. Older workers do not have that internal
 // function in their registry and must not receive such a plan.
-func RequiresMORPCVersion75PreparedUnsignedArithmeticBound(owner any) (bool, error) {
+func RequiresMORPCVersion76PreparedUnsignedArithmeticBound(owner any) (bool, error) {
 	features, err := RequiredRemoteExpressionFeatures(owner)
 	return features.PreparedUnsignedArithmeticBound, err
 }
@@ -223,7 +223,7 @@ const (
 // RowDependentConvBases requires MORPC v69 for nonconstant or unsigned bases.
 // IPFunctionSemantics requires MORPC v72 because the IP functions change
 // existing overload semantics and add numeric INET_NTOA overloads.
-// PreparedUnsignedArithmeticBound requires MORPC v75 because the strict
+// PreparedUnsignedArithmeticBound requires MORPC v76 because the strict
 // runtime range-check helper is a new internal function registry entry.
 type RemoteExpressionFeatures struct {
 	NumericPrefix                   bool

@@ -308,7 +308,7 @@ func TestRequiresMORPCVersion36JSONComparisonParam(t *testing.T) {
 	require.False(t, features.Any())
 }
 
-func TestRequiresMORPCVersion75PreparedUnsignedArithmeticBound(t *testing.T) {
+func TestRequiresMORPCVersion76PreparedUnsignedArithmeticBound(t *testing.T) {
 	helper := &Expr{Typ: Type{Id: 23}, Expr: &Expr_F{F: &Function{
 		Func: &ObjectRef{Obj: int64(internalUnsignedArithmeticBoundFunctionID) << 32},
 	}}}
@@ -317,7 +317,7 @@ func TestRequiresMORPCVersion75PreparedUnsignedArithmeticBound(t *testing.T) {
 	require.True(t, features.PreparedUnsignedArithmeticBound)
 	require.True(t, features.Any())
 	require.True(t, func() bool {
-		required, helperErr := RequiresMORPCVersion75PreparedUnsignedArithmeticBound(helper)
+		required, helperErr := RequiresMORPCVersion76PreparedUnsignedArithmeticBound(helper)
 		return helperErr == nil && required
 	}())
 

@@ -34,7 +34,7 @@ func (c *Compile) constrainIntegerDomainWorkers(qry *plan.Query) error {
 	}
 	minimum := defines.MORPCVersion71
 	if features.PreparedUnsignedArithmeticBound {
-		minimum = defines.MORPCVersion75
+		minimum = defines.MORPCVersion76
 	}
 	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, minimum)
 	if err != nil {
@@ -65,12 +65,12 @@ func validatePreparedUnsignedArithmeticBoundDestination(proc *process.Process, p
 	if p == nil || p.Node == nil {
 		return moerr.NewNotSupportedNoCtx("prepared unsigned arithmetic runtime bounds require a versioned remote destination")
 	}
-	supported, err := remoteWorkersSupportProtocol(proc, engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion75)
+	supported, err := remoteWorkersSupportProtocol(proc, engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion76)
 	if err != nil {
 		return err
 	}
 	if !supported {
-		return moerr.NewNotSupportedNoCtx("prepared unsigned arithmetic runtime bounds require MORPC protocol version 75")
+		return moerr.NewNotSupportedNoCtx("prepared unsigned arithmetic runtime bounds require MORPC protocol version 76")
 	}
 	return nil
 }

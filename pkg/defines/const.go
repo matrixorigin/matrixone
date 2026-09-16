@@ -110,8 +110,9 @@ const (
 	MORPCVersion72     int64 = 72 // corrected IP function semantics and overload identities
 	MORPCVersion73     int64 = 73 // widened DECIMAL SUM partial state
 	MORPCVersion74     int64 = 74 // corrected numeric HEX overload identities
-	MORPCVersion75     int64 = 75 // strict prepared unsigned-arithmetic runtime bounds
-	MORPCLatestVersion       = MORPCVersion75
+	MORPCVersion75     int64 = 75 // persistent data-branch database identity
+	MORPCVersion76     int64 = 76 // strict prepared unsigned-arithmetic runtime bounds
+	MORPCLatestVersion       = MORPCVersion76
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

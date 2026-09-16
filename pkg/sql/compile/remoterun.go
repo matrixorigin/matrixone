@@ -2134,8 +2134,8 @@ func validateRemoteExpressionPipelineProtocol(
 	if features.IntegerArithmeticDomains && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion71) {
 		return moerr.NewNotSupportedNoCtx("checked integer arithmetic requires MORPC protocol version 71")
 	}
-	if features.PreparedUnsignedArithmeticBound && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion75) {
-		return moerr.NewNotSupportedNoCtx("prepared unsigned arithmetic runtime bounds require MORPC protocol version 75")
+	if features.PreparedUnsignedArithmeticBound && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion76) {
+		return moerr.NewNotSupportedNoCtx("prepared unsigned arithmetic runtime bounds require MORPC protocol version 76")
 	}
 	if features.RowDependentConvBases && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion70) {
 		return moerr.NewNotSupportedNoCtx("row-dependent CONV bases require MORPC protocol version 70")

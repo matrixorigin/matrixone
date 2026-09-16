@@ -121,9 +121,9 @@ func TestPreparedUnsignedArithmeticBoundProtocolFence(t *testing.T) {
 		multi              bool
 		wantEncodeErr      bool
 	}{
-		{name: "legacy worker is isolated", workerVersion: defines.MORPCVersion74, coordinatorVersion: defines.MORPCVersion75, wantEncodeErr: true},
-		{name: "coordinator gate rejects old version", workerVersion: defines.MORPCVersion75, coordinatorVersion: defines.MORPCVersion74, wantEncodeErr: true},
-		{name: "new worker accepts helper", workerVersion: defines.MORPCVersion75, coordinatorVersion: defines.MORPCVersion75, multi: true},
+		{name: "legacy worker is isolated", workerVersion: defines.MORPCVersion75, coordinatorVersion: defines.MORPCVersion76, wantEncodeErr: true},
+		{name: "coordinator gate rejects old version", workerVersion: defines.MORPCVersion76, coordinatorVersion: defines.MORPCVersion75, wantEncodeErr: true},
+		{name: "new worker accepts helper", workerVersion: defines.MORPCVersion76, coordinatorVersion: defines.MORPCVersion76, multi: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			client.version = tc.workerVersion
@@ -140,23 +140,23 @@ func TestPreparedUnsignedArithmeticBoundProtocolFence(t *testing.T) {
 			data, encodeErr := encodeRemoteScope(scope, c.proc)
 			if tc.multi {
 				if tc.wantEncodeErr {
-					require.ErrorContains(t, encodeErr, "protocol version 75")
+					require.ErrorContains(t, encodeErr, "protocol version 76")
 				} else {
 					require.NoError(t, encodeErr)
 					wire := new(pipeline.Pipeline)
 					require.NoError(t, wire.Unmarshal(data))
 				}
 			} else {
-				require.ErrorContains(t, encodeErr, "protocol version 75")
+				require.ErrorContains(t, encodeErr, "protocol version 76")
 			}
 		})
 	}
 
-	// A coordinator may be at v75 while a selected destination has
-	// rolled back to v74. The final sender-side probe must reject the helper
+	// A coordinator may be at v76 while a selected destination has
+	// rolled back to v75. The final sender-side probe must reject the helper
 	// even when compile-time placement was performed against a newer view.
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion75)
-	client.version = defines.MORPCVersion74
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion76)
+	client.version = defines.MORPCVersion75
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "protocol version 75")
+	require.ErrorContains(t, err, "protocol version 76")
 }
