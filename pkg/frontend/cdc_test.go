@@ -194,6 +194,7 @@ func TestCheckCDCSourcePrimaryKeyRejectsEmptyAndMalformedResults(t *testing.T) {
 		{name: "no result sets", results: []interface{}{}, wantError: "no primary key"},
 		{name: "only empty result set", results: []interface{}{&MysqlResultSet{}}, wantError: "no primary key"},
 		{name: "invalid result type", results: []interface{}{struct{}{}}, wantError: "result set"},
+		{name: "malformed foreign key", results: []interface{}{validRow([]byte{byte(engine.ForeignKey)}, true)}, wantError: ""},
 		{name: "malformed primary key value", results: []interface{}{validRow([]byte{}, "not a bool")}, wantError: ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
