@@ -3094,19 +3094,6 @@ func distinctFloat64KeyBits(value float64, legacy bool) uint64 {
 	return keycodec.CanonicalFloat64Bits(value)
 }
 
-// canonicalDistinctArgumentSize reports the fixed-width key size for a float
-// argument. The caller writes its canonical payload into existing accounted
-// scratch, avoiding a temporary slice and heap allocation.
-func canonicalDistinctArgumentSize(vec *vector.Vector, row int) (int, bool) {
-	switch vec.GetType().Oid {
-	case types.T_float32:
-		return 4, true
-	case types.T_float64:
-		return 8, true
-	}
-	return 0, false
-}
-
 // copyCanonicalDistinctArgument copies one DISTINCT equivalence key into dst.
 // legacy selects the pre-v79 float key policy.
 func copyCanonicalDistinctArgument(

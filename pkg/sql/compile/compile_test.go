@@ -2365,10 +2365,10 @@ func TestCompileShuffleGroupGatesAggregateWireByProtocolVersion(t *testing.T) {
 		}},
 	}}
 	require.True(t, hasLegacyFloatDistinctKeyWire(aggNode))
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion77)
-	require.False(t, c.canCompileShuffleGroup(aggNode),
-		"fixed FLOAT DISTINCT must stay local before MORPC v78")
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion78)
+	require.False(t, c.canCompileShuffleGroup(aggNode),
+		"fixed FLOAT DISTINCT must stay local before MORPC v79")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion79)
 	require.True(t, c.canCompileShuffleGroup(aggNode))
 }
 

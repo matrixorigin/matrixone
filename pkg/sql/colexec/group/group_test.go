@@ -4527,14 +4527,14 @@ func TestRemoteDistinctFloatUsesProtocolKeyPolicy(t *testing.T) {
 		wantBits   uint64
 	}{
 		{
-			name:       "pre-v78",
-			version:    defines.MORPCVersion77,
+			name:       "pre-v79",
+			version:    defines.MORPCVersion78,
 			legacyWire: true,
 			wantBits:   0x7ff8000000000001,
 		},
 		{
-			name:       "v78",
-			version:    defines.MORPCVersion78,
+			name:       "v79",
+			version:    defines.MORPCVersion79,
 			legacyWire: false,
 			wantBits:   0x7ff8000000000000,
 		},
