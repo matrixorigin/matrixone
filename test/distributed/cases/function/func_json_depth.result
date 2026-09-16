@@ -1,0 +1,53 @@
+SELECT JSON_DEPTH(NULL) AS result;
+➤ result[-5,64,0]  𝄀
+null
+SELECT JSON_DEPTH('null') AS result;
+➤ result[-5,64,0]  𝄀
+1
+SELECT JSON_DEPTH('true') AS result;
+➤ result[-5,64,0]  𝄀
+1
+SELECT JSON_DEPTH('42') AS result;
+➤ result[-5,64,0]  𝄀
+1
+SELECT JSON_DEPTH('"hello"') AS result;
+➤ result[-5,64,0]  𝄀
+1
+SELECT JSON_DEPTH('[]') AS result;
+➤ result[-5,64,0]  𝄀
+1
+SELECT JSON_DEPTH('{}') AS result;
+➤ result[-5,64,0]  𝄀
+1
+SELECT JSON_DEPTH('{"a":[1]}') AS result;
+➤ result[-5,64,0]  𝄀
+3
+SELECT JSON_DEPTH('[{},[1,[2]]]') AS result;
+➤ result[-5,64,0]  𝄀
+4
+SELECT JSON_DEPTH('[null,{"值":[false,"文字"]}]') AS result;
+➤ result[-5,64,0]  𝄀
+4
+SELECT JSON_DEPTH(CAST('{"a":[1]}' AS JSON)) AS result;
+➤ result[-5,64,0]  𝄀
+3
+DROP TABLE IF EXISTS t_json_depth;
+CREATE TABLE t_json_depth (id INT PRIMARY KEY, doc VARCHAR(1024));
+INSERT INTO t_json_depth VALUES
+    (0, '{"a":[1]}'),
+    (1, 'not-json'),
+    (2, '{"a":{"b":1}}');
+SELECT id, JSON_DEPTH(doc) FROM t_json_depth ORDER BY id;
+invalid argument json_depth, bad value invalid JSON document
+DROP TABLE t_json_depth;
+SELECT JSON_DEPTH('not-json') AS result;
+invalid argument json_depth, bad value invalid JSON document
+SELECT JSON_DEPTH(1) AS result;
+Invalid data type for JSON data in argument 1 to function json_depth; a JSON string or JSON type is required.
+SELECT JSON_DEPTH(CAST('1' AS BINARY)) AS result;
+Invalid data type for JSON data in argument 1 to function json_depth; a JSON string or JSON type is required.
+SELECT JSON_DEPTH(CONCAT(REPEAT('{"a":', 100), '1', REPEAT('}', 100))) AS result;
+➤ result[-5,64,0]  𝄀
+101
+SELECT JSON_DEPTH(CONCAT(REPEAT('{"a":', 101), '1', REPEAT('}', 101))) AS result;
+invalid input: json document nesting depth exceeds 100
