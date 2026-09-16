@@ -134,6 +134,9 @@ func (c *Compile) Compile(
 	execTopContext context.Context,
 	queryPlan *plan.Plan,
 	resultWriteBack func(batch *batch.Batch, crs *perfcounter.CounterSet) error) (err error) {
+	if err = validateJSONStringConsumerProtocol(c.proc, queryPlan); err != nil {
+		return err
+	}
 	if err = validateOctStringProtocol(c.proc, queryPlan); err != nil {
 		return err
 	}
@@ -411,6 +414,9 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	defer func() { warnings.finish(warningsSucceeded, warningDestination) }()
 
 	// Cached plans can outlive the negotiated cluster capability.
+	if err = validateJSONStringConsumerProtocol(c.proc, c.pn); err != nil {
+		return nil, err
+	}
 	if err = validateOctStringProtocol(c.proc, c.pn); err != nil {
 		return nil, err
 	}

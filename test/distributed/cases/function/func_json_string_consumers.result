@@ -19,6 +19,9 @@ id    elt_selected
 2    1
 3    null
 4    null
+select concat(cast('{"k":1}' as json), '!') as constant_concat, concat_ws('|', cast('[1,2]' as json), 'x') as constant_concat_ws, elt(1, cast('{"k":1}' as json), 'fallback') as constant_elt;
+constant_concat    constant_concat_ws    constant_elt
+{"k": 1}!    [1, 2]|x    {"k": 1}
 create view json_string_view as select id, concat_ws('|', 'x', js, 'y') as c from src;
 select id, c from json_string_view order by id;
 id    c
@@ -33,12 +36,20 @@ id    c
 2    1
 3    null
 4    null
-prepare json_string_stmt from 'select id, concat_ws(''|'',''x'',js,''y'') as c from src order by id';
-execute json_string_stmt;
+set @json_string_param = '{"p":1}';
+prepare json_string_stmt from 'select id, concat(cast(? as json), js) as c from src order by id';
+execute json_string_stmt using @json_string_param;
 id    c
-1    x|{"a": 1, "b": 2}|y
-2    x|1|y
-3    x|null|y
-4    x|y
+1    {"p": 1}{"a": 1, "b": 2}
+2    {"p": 1}1
+3    {"p": 1}null
+4    null
+set @json_string_param = '[2]';
+execute json_string_stmt using @json_string_param;
+id    c
+1    [2]{"a": 1, "b": 2}
+2    [2]1
+3    [2]null
+4    null
 deallocate prepare json_string_stmt;
 drop database issue28905_json_string_consumers;

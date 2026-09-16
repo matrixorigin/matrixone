@@ -202,26 +202,39 @@ func RequiresMORPCVersion83BoundedConditionalStringDomains(owner any) (bool, err
 	return features.BoundedConditionalStringDomains, err
 }
 
+// RequiresMORPCVersion86JSONStringConsumerOverload reports whether an owner
+// contains one of the JSON-aware CONCAT, CONCAT_WS, or ELT overload identities.
+// Older workers dispatch overload 0 and would read JSON's internal binary
+// representation as ordinary varlena bytes, so overload 1 must not cross the
+// remote pipeline boundary before MORPC version 86.
+func RequiresMORPCVersion86JSONStringConsumerOverload(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.JSONStringConsumerOverload, err
+}
+
 const (
-	equalFunctionID                  int32 = 0
-	notEqualFunctionID               int32 = 1
-	nullSafeEqualFunctionID          int32 = 406
-	internalJSONComparisonFunctionID int32 = 577
-	planBooleanTypeID                int32 = 10
-	planJSONTypeID                   int32 = 62
-	binFunctionID                    int32 = 270
-	convFunctionID                   int32 = 367
-	asciiFunctionID                  int32 = 52
-	asciiInt32ResultTypeID           int32 = 22
-	findInSetFunctionID              int32 = 101
-	lengthUTF8FunctionID             int32 = 125
-	strCmpFunctionID                 int32 = 344
-	uncompressedLengthFunctionID     int32 = 389
-	crc32FunctionID                  int32 = 81
-	coalesceFunctionID               int32 = 74
-	stringNumericInt32ResultTypeID   int32 = 22
-	stringNumericInt64ResultTypeID   int32 = 23
-	stringNumericUint64ResultTypeID  int32 = 28
+	equalFunctionID                            int32 = 0
+	notEqualFunctionID                         int32 = 1
+	nullSafeEqualFunctionID                    int32 = 406
+	internalJSONComparisonFunctionID           int32 = 577
+	planBooleanTypeID                          int32 = 10
+	planJSONTypeID                             int32 = 62
+	binFunctionID                              int32 = 270
+	convFunctionID                             int32 = 367
+	asciiFunctionID                            int32 = 52
+	asciiInt32ResultTypeID                     int32 = 22
+	findInSetFunctionID                        int32 = 101
+	lengthUTF8FunctionID                       int32 = 125
+	strCmpFunctionID                           int32 = 344
+	uncompressedLengthFunctionID               int32 = 389
+	crc32FunctionID                            int32 = 81
+	coalesceFunctionID                         int32 = 74
+	stringNumericInt32ResultTypeID             int32 = 22
+	stringNumericInt64ResultTypeID             int32 = 23
+	stringNumericUint64ResultTypeID            int32 = 28
+	remoteJSONStringConsumerConcatFunctionID   int32 = 16
+	remoteJSONStringConsumerConcatWSFunctionID int32 = 76
+	remoteJSONStringConsumerELTFunctionID      int32 = 384
 )
 
 // RemoteExpressionFeatures is the complete set of versioned expression
@@ -242,6 +255,9 @@ const (
 // vectors to signed INT/ BIGINT or BIGINT UNSIGNED.
 // BoundedConditionalStringDomains requires MORPC v83 because the bounded
 // BINARY/VARBINARY COALESCE overload identities are new to the registry.
+// JSONStringConsumerOverload requires MORPC v86 because CONCAT, CONCAT_WS,
+// and ELT overload 1 consumes JSON's visible representation instead of its
+// binary storage bytes.
 type RemoteExpressionFeatures struct {
 	NumericPrefix                   bool
 	JSONComparisonParam             bool
@@ -254,6 +270,7 @@ type RemoteExpressionFeatures struct {
 	StringNumericResultContracts    bool
 	BoundedConditionalStringDomains bool
 	IPFunctionSemantics             bool
+	JSONStringConsumerOverload      bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
@@ -267,7 +284,8 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.RowDependentConvBases ||
 		features.StringNumericResultContracts ||
 		features.BoundedConditionalStringDomains ||
-		features.IPFunctionSemantics
+		features.IPFunctionSemantics ||
+		features.JSONStringConsumerOverload
 }
 
 func isBoundedConditionalStringDomain(fn *Function) bool {
@@ -295,6 +313,20 @@ const (
 	remoteIPIsIPv4CompatFunctionID int32 = 398
 )
 
+func isRemoteJSONStringConsumerOverload(functionID, overloadID int32) bool {
+	if overloadID != 1 {
+		return false
+	}
+	switch functionID {
+	case remoteJSONStringConsumerConcatFunctionID,
+		remoteJSONStringConsumerConcatWSFunctionID,
+		remoteJSONStringConsumerELTFunctionID:
+		return true
+	default:
+		return false
+	}
+}
+
 func isRemoteIPFunction(functionID int32) bool {
 	switch functionID {
 	case remoteIPInet6AtonFunctionID,
@@ -320,6 +352,9 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			fn := current.GetF()
 			if fn != nil && fn.Func != nil {
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
+				if isRemoteJSONStringConsumerOverload(id, overload) {
+					features.JSONStringConsumerOverload = true
+				}
 				// PLUS/MINUS/MULTI are stable function IDs 10/11/12.
 				if (id >= 10 && id <= 12 && overload == 2) || (id == 11 && overload == 3) {
 					features.IntegerArithmeticDomains = true
