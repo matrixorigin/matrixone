@@ -1379,7 +1379,7 @@ func TestRegisterCdcExecutor(t *testing.T) {
 		pwd,
 		tables,
 		filters,
-		"2026-09-16 00:00:00",
+		"2026-09-16T00:00:00Z",
 		"",
 		true,
 		fmt.Sprintf("{\"%s\":%v,\"%s\":\"%s\",\"%s\":%v,\"%s\":\"%s\"}",
