@@ -4547,10 +4547,7 @@ func (b *baseBinder) bindPythonUdf(udf *function.Udf, astArgs []tree.Expr, depth
 		required := udf.GetArgsType()[idx]
 		actual := makeTypeByPlan2Expr(expr)
 		if !actual.Eq(required) {
-			canCast, _ := function.UdfArgTypeMatch([]types.Type{actual}, []types.T{required.Oid})
-			if actual.Oid == required.Oid {
-				canCast = true
-			}
+			canCast, _ := function.PythonUdfArgTypeMatch([]types.Type{actual}, []types.Type{required})
 			if !canCast {
 				return nil, moerr.NewInvalidInputf(b.GetContext(), "Python routine argument %d has type %s, expected %s", idx+1, actual.String(), required.String())
 			}
