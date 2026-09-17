@@ -248,6 +248,10 @@ message Function {
   // overload while optimizers still distinguish it from an implicit cast.
   // Older CNs safely ignore this unknown field and execute the legacy overload.
   bool syntax_explicit_cast = 5;
+  // IFNULL lowers to CASE, but its REAL integer evaluation remains checked;
+  // a native CASE delegates integer evaluation to its selected result branch.
+  // Planner provenance only: execution still uses the existing CASE overload.
+  bool syntax_if_null = 6;
 }
 
 // PreparedNumericMetadata is sparse planner provenance for a numeric overload

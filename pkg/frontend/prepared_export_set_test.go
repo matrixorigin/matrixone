@@ -591,6 +591,86 @@ func TestPreparedExportSetPrecisionTextBitwiseProducer(t *testing.T) {
 	require.Equal(t, "YYYY", result.GetStringAt(0), "expr=%s", expr.String())
 }
 
+func TestPreparedExportSetUnaryBitwiseDomain(t *testing.T) {
+	for _, tc := range []struct {
+		value any
+		typ   types.Type
+		want  string
+		query string
+	}{
+		{float64(0.5), types.T_float64.ToType(), "YYYY", `select export_set(~?,'Y','N','',4)`},
+		{"-0.5", types.New(types.T_decimal64, 2, 1), "NNNN", `select export_set(~?,'Y','N','',4)`},
+		{float64(0.5), types.T_float64.ToType(), "YYYY", `select export_set(~x,'Y','N','',4) from (select ? x)d`},
+		{"-0.5", types.New(types.T_decimal64, 2, 1), "NNNN", `select export_set(~x,'Y','N','',4) from (select ? x)d`},
+	} {
+		t.Run(tc.typ.String()+tc.query, func(t *testing.T) {
+			_, stmt, cw, _ := newPreparedExecuteEnvForSQL(t, 413, tc.query)
+			defer stmt.Close()
+			require.True(t, plan2.PreparedPlanNeedsRuntimeSpecialization(stmt.PreparePlan.GetDcl().GetPrepare().Plan), "%s", stmt.PreparePlan.String())
+			values := []any{plan2.ParamValue{Value: tc.value, SourceType: tc.typ, HasSourceType: true, EnableNumericPrefix: true}}
+			stmt.applyExportSetNullRuntimeTypes(values)
+			filled, err := plan2.FillValuesOfParamsInPlan(cw.proc.Ctx, stmt.PreparePlan.GetDcl().GetPrepare().Plan, values)
+			require.NoError(t, err)
+			q := filled.GetQuery()
+			expr := q.Nodes[q.Steps[len(q.Steps)-1]].ProjectList[0]
+			result, free, err := colexec.GetReadonlyResultFromExpression(cw.proc, expr, []*batch.Batch{batch.EmptyForConstFoldBatch})
+			require.NoError(t, err)
+			defer free()
+			require.Equal(t, tc.want, result.GetStringAt(0), "expr=%s", expr.String())
+		})
+	}
+}
+
+func TestPreparedExportSetDirectGreatestContext(t *testing.T) {
+	for _, tc := range []struct{ query, want string }{
+		{`select export_set(greatest(?,1),'Y','N','',4)`, "YNNN"},
+		{`select export_set(greatest(x,1),'Y','N','',4) from (select ? x)d`, "NNNN"},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			_, stmt, cw, _ := newPreparedExecuteEnvForSQL(t, 412, tc.query)
+			defer stmt.Close()
+			values := []any{plan2.ParamValue{Value: "abc", SourceType: types.T_text.ToType(), HasSourceType: true, EnableNumericPrefix: true}}
+			stmt.applyExportSetNullRuntimeTypes(values)
+			filled, err := plan2.FillValuesOfParamsInPlan(cw.proc.Ctx, stmt.PreparePlan.GetDcl().GetPrepare().Plan, values)
+			require.NoError(t, err)
+			q := filled.GetQuery()
+			expr := q.Nodes[q.Steps[len(q.Steps)-1]].ProjectList[0]
+			result, free, err := colexec.GetReadonlyResultFromExpression(cw.proc, expr, []*batch.Batch{batch.EmptyForConstFoldBatch})
+			require.NoError(t, err)
+			defer free()
+			require.Equal(t, tc.want, result.GetStringAt(0))
+		})
+	}
+}
+
+func TestPreparedExportSetSharedTextNumericConsumers(t *testing.T) {
+	for _, tc := range []struct {
+		expr string
+		want float64
+	}{{"abs(x)", 2.5}, {"floor(x)", 2}, {"ceil(x)", 3}, {"x+0", 2.5}} {
+		t.Run(tc.expr, func(t *testing.T) {
+			_, stmt, cw, _ := newPreparedExecuteEnvForSQL(t, 411, `select export_set(x,'Y','N','',4),`+tc.expr+` from (select ? x)d`)
+			defer stmt.Close()
+			values := []any{plan2.ParamValue{Value: "2.5", SourceType: types.T_text.ToType(), HasSourceType: true, EnableNumericPrefix: true}}
+			stmt.applyExportSetNullRuntimeTypes(values)
+			filled, err := plan2.FillValuesOfParamsInPlan(cw.proc.Ctx, stmt.PreparePlan.GetDcl().GetPrepare().Plan, values)
+			require.NoError(t, err)
+			q := filled.GetQuery()
+			expr := q.Nodes[q.Steps[len(q.Steps)-1]].ProjectList[1]
+			input := batch.NewWithSize(1)
+			input.Vecs[0] = vector.NewVec(types.T_text.ToType())
+			defer input.Clean(cw.proc.Mp())
+			require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte("2.5"), false, cw.proc.Mp()))
+			input.SetRowCount(1)
+			result, free, err := colexec.GetReadonlyResultFromExpression(cw.proc, expr, []*batch.Batch{input})
+			require.NoError(t, err)
+			defer free()
+			require.Equal(t, types.T_float64, result.GetType().Oid)
+			require.Equal(t, tc.want, vector.GetFixedAtNoTypeCheck[float64](result, 0))
+		})
+	}
+}
+
 func TestPreparedExportSetSharedTextAggregateDomain(t *testing.T) {
 	for _, value := range []any{"2.5", nil} {
 		t.Run(fmt.Sprint(value), func(t *testing.T) {
@@ -643,14 +723,30 @@ func TestPreparedExportSetUnsignedPrecisionDomain(t *testing.T) {
 }
 
 func TestPreparedExportSetDirectRealOverflowSaturates(t *testing.T) {
-	for _, consumer := range []string{"?", "abs(?)"} {
+	for _, tc := range []struct {
+		consumer  string
+		wantError bool
+	}{
+		{"?", false}, {"(select ?)", false}, {"if(true,?,0e0)", false},
+		{"case when true then ? else 0e0 end", false}, {"abs(?)", true},
+		{"if(true,abs(?),0e0)", true}, {"if(false,abs(?),1e100)", false},
+		{"case when true then abs(?) else 0e0 end", true},
+		{"coalesce(?,0e0)", true}, {"ifnull(?,0e0)", true}, {"(select abs(?))", true},
+		{"if(true,ifnull(?,0e0),0e0)", true}, {"ifnull(if(true,?,0e0),0e0)", true},
+		{"(select ifnull(?,0e0))", true},
+	} {
+		consumer := tc.consumer
 		t.Run(consumer, func(t *testing.T) {
 			_, stmt, cw, _ := newPreparedExecuteEnvForSQL(t, 409,
 				`select export_set(`+consumer+`,'Y','N','',4)`)
 			defer stmt.Close()
 			values := []any{plan2.ParamValue{Value: float64(1e100), SourceType: types.T_float64.ToType(), HasSourceType: true, EnableNumericPrefix: true}}
 			stmt.applyExportSetNullRuntimeTypes(values)
-			filled, err := plan2.FillValuesOfParamsInPlan(cw.proc.Ctx, stmt.PreparePlan.GetDcl().GetPrepare().Plan, values)
+			encoded, err := stmt.PreparePlan.GetDcl().GetPrepare().Plan.Marshal()
+			require.NoError(t, err)
+			var restored plan.Plan
+			require.NoError(t, restored.Unmarshal(encoded))
+			filled, err := plan2.FillValuesOfParamsInPlan(cw.proc.Ctx, &restored, values)
 			require.NoError(t, err)
 			q := filled.GetQuery()
 			expr := q.Nodes[q.Steps[len(q.Steps)-1]].ProjectList[0]
@@ -658,7 +754,7 @@ func TestPreparedExportSetDirectRealOverflowSaturates(t *testing.T) {
 			if free != nil {
 				defer free()
 			}
-			if consumer != "?" {
+			if tc.wantError {
 				require.Error(t, err)
 				return
 			}

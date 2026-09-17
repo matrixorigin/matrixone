@@ -4071,6 +4071,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				}
 			}
 			if isIfNull {
+				e.GetF().SyntaxIfNull = true
 				e.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
 			}
 			markPreparedResultCastsProvisional(
@@ -4094,6 +4095,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			b.GetContext(), name, args, false, nil, nil, findInSetInternalArgs)
 		if err == nil {
 			if isIfNull {
+				builtinExpr.GetF().SyntaxIfNull = true
 				builtinExpr.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
 			}
 			return builtinExpr, nil
@@ -5301,12 +5303,25 @@ func bindFuncExprImplByPlanExpr(
 	allowInternalFunctionArgs bool,
 ) (*plan.Expr, error) {
 	var err error
-	if name == "export_set" && len(args) > 0 && args[0].GetCol() != nil && types.T(args[0].Typ.Id).IsFloat() {
-		// A physical REAL column, unlike an expression such as ABS(column),
-		// exposes a saturating val_int conversion to EXPORT_SET.
+	if name == "unary_tilde" && len(args) == 1 {
+		source := makeTypeByPlan2Expr(args[0])
+		if source.Oid.IsFloat() || source.IsDecimal() {
+			overload := int32(4)
+			if source.IsDecimal() {
+				overload = 5
+			}
+			converted, castErr := appendCastBeforeExprWithOverload(ctx, args[0],
+				makePlan2Type(&types.Type{Oid: types.T_int64}), overload)
+			if castErr != nil {
+				return nil, castErr
+			}
+			args = []*Expr{converted}
+		}
+	}
+	if name == "export_set" && len(args) > 0 && types.T(args[0].Typ.Id).IsFloat() &&
+		!containsDynamicParam(args[0]) && exportSetRealIntegerConversionNeeded(args[0]) {
 		args = append([]*Expr(nil), args...)
-		args[0], err = appendBitwiseAggregateCastBeforeExpr(ctx, args[0],
-			makePlan2Type(&types.Type{Oid: types.T_int64}))
+		args[0], err = bindExportSetIntegerSource(ctx, args[0])
 		if err != nil {
 			return nil, err
 		}

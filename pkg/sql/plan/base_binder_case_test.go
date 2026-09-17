@@ -1074,7 +1074,13 @@ func TestPreparedExportSetScalarSubqueryUsesExecuteNumericSourceType(t *testing.
 			require.NoError(t, err)
 			expr := findPlanFunctionExpr(filled, "export_set")
 			require.NotNil(t, expr)
-			require.Equal(t, int32(test.wantType), expr.GetF().Args[0].Typ.Id, expr.String())
+			source := expr.GetF().Args[0]
+			if test.wantType.IsFloat() {
+				require.True(t, isBitwiseAggregatePrivateCast(source), "scalar REAL requires saturating conversion")
+				require.Equal(t, int32(types.T_int64), source.Typ.Id)
+				source = source.GetF().Args[0]
+			}
+			require.Equal(t, int32(test.wantType), source.Typ.Id, expr.String())
 
 			proc := testutil.NewProc(t)
 			defer proc.Free()
@@ -1227,8 +1233,15 @@ func TestPreparedExportSetPreservesExplicitCast(t *testing.T) {
 			require.NoError(t, err)
 			filledExpr := findPlanFunctionExpr(filled, "export_set")
 			require.NotNil(t, filledExpr)
-			require.Equal(t, expr.GetF().Args[0].Typ.Id, filledExpr.GetF().Args[0].Typ.Id,
-				"an explicit cast must retain its prepared result domain")
+			originalSource, filledSource := expr.GetF().Args[0], filledExpr.GetF().Args[0]
+			if isBitwiseAggregatePrivateCast(originalSource) {
+				originalSource = originalSource.GetF().Args[0]
+			}
+			if isBitwiseAggregatePrivateCast(filledSource) {
+				filledSource = filledSource.GetF().Args[0]
+			}
+			require.Equal(t, originalSource.Typ.Id, filledSource.Typ.Id,
+				"an explicit cast must retain its prepared result domain under the consumer conversion")
 		})
 	}
 }

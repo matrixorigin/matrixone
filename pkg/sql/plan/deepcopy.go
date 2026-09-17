@@ -1267,6 +1267,7 @@ func DeepCopyExpr(expr *Expr) *Expr {
 				AggConfig:          bytes.Clone(item.F.AggConfig),
 				AggConfigType:      item.F.AggConfigType,
 				SyntaxExplicitCast: item.F.SyntaxExplicitCast,
+				SyntaxIfNull:       item.F.SyntaxIfNull,
 			},
 		}
 

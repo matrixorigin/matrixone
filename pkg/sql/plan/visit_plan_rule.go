@@ -2286,7 +2286,9 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 			prefixEligibleOccurrence := !(sharedControlParam &&
 				paramPos < len(rule.sqlExecuteStringBackedParams) && rule.sqlExecuteStringBackedParams[paramPos])
-			if hasParamPos && rule.numericPrefixParamPositions[paramPos] && prefixEligibleOccurrence {
+			if hasParamPos && rule.numericPrefixParamPositions[paramPos] && prefixEligibleOccurrence &&
+				!(rule.hasExportSetResolvedDomain(paramPos) &&
+					(functionName == "export_set" && i == 0 || preparedNumericResultPolymorphicFunction(functionName))) {
 				numericPrefixArgs[i] = true
 				numericPrefixKinds[i] = rule.numericPrefixParamKinds[paramPos]
 			}
@@ -3824,7 +3826,7 @@ func rewritePreparedPrecisionBitwiseOperandsInPlace(expr *Expr) {
 
 func preparedPrecisionBitwiseFunction(name string) bool {
 	switch name {
-	case "&", "|", "^", "<<", ">>":
+	case "&", "|", "^", "<<", ">>", "unary_tilde":
 		return true
 	default:
 		return false
@@ -4186,6 +4188,7 @@ func preserveReboundFunctionMetadata(original, rebound *plan.Function) {
 	if original == nil || rebound == nil {
 		return
 	}
+	rebound.SyntaxIfNull = original.SyntaxIfNull
 	rebound.AggConfig = bytes.Clone(original.AggConfig)
 	rebound.AggConfigType = original.AggConfigType
 	if original.Func != nil && rebound.Func != nil {

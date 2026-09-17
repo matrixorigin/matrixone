@@ -3888,6 +3888,45 @@ func preparedExportSetContextDomains(p *Plan, positions map[int32]struct{}) map[
 	}
 	_ = plan.VisitExpressionsInOwner(p, func(root *Expr) error {
 		return plan.VisitExprTree(root, func(expr *Expr) error {
+			if fn := expr.GetF(); fn != nil && fn.Func != nil &&
+				(fn.Func.ObjName == "greatest" || fn.Func.ObjName == "least") {
+				var peers []*Expr
+				var markers []int32
+				for _, arg := range fn.Args {
+					if pos, direct := preparedParamPosition(arg); direct {
+						markers = append(markers, int32(pos))
+					} else if peer, provisional := provisionalNumericSource(arg); provisional {
+						peers = append(peers, peer)
+					} else {
+						peers = append(peers, arg)
+					}
+				}
+				peerTypes := make([]types.Type, 0, len(peers)+1)
+				for _, peer := range peers {
+					typ := makeTypeByPlan2Expr(peer)
+					if !typ.IsNumeric() {
+						peerTypes = nil
+						break
+					}
+					peerTypes = append(peerTypes, typ)
+				}
+				if len(peerTypes) > 0 {
+					if len(peerTypes) == 1 {
+						peerTypes = append(peerTypes, peerTypes[0])
+					}
+					if resolved, err := function.GetFunctionByName(context.Background(), fn.Func.ObjName, peerTypes); err == nil {
+						typ := resolved.GetReturnType()
+						if typ.IsDecimal() {
+							typ = mysqlPreparedDecimalReprepareType()
+						}
+						for _, pos := range markers {
+							if _, owned := positions[pos]; owned {
+								domains[pos] = typ
+							}
+						}
+					}
+				}
+			}
 			metadata := expr.GetPreparedNumeric()
 			if metadata.GetFallbackSource() {
 				return nil
@@ -4907,6 +4946,11 @@ func preparedExprRequiresRuntimeSpecialization(functionName string, expr *plan.E
 	if !preparedExprContainsParam(expr) {
 		return false
 	}
+	// A bitwise operand's numeric-prefix CAST2 is provisional, not user
+	// syntax. Its integer output hides the source domain until EXECUTE.
+	if preparedPrecisionBitwiseFunction(functionName) && !isExplicitPreparedLineageCast(expr) {
+		return true
+	}
 	if isExplicitPreparedCast(expr) {
 		return false
 	}
@@ -5069,7 +5113,7 @@ func preparedRuntimeSpecializationFunction(name string) bool {
 	// the type of its first argument, so a binary parameter can change the
 	// result-column type from the prepare-time placeholder domain.
 	switch name {
-	case "bin", "char", "conv", "ntile", "sleep",
+	case "bin", "char", "conv", "ntile", "sleep", "unary_tilde",
 		"date_add", "date_sub", "adddate", "subdate", "timestampadd", "timestampdiff",
 		"ord", "char_length", "character_length",
 		"left", "right", "substring", "substr", "mid", "reverse",
@@ -7131,7 +7175,7 @@ func replaceParamValsWithSelection(
 			_, exportSet := exportSetPositions[int32(i)]
 			_, contextual := exportSetContexts[int32(i)]
 			untypedExportSetNull := exportSet && !contextual && params[i].GetLit().GetIsnull() && types.T(params[i].Typ.Id) == types.T_text
-			if param.EnableNumericPrefix && numericPrefixPositions[i] && !untypedExportSetNull && !param.ExportSetResolvedDomain {
+			if param.EnableNumericPrefix && numericPrefixPositions[i] && !untypedExportSetNull {
 				paramRule.numericPrefixParamPositions[i] = true
 				paramRule.numericPrefixParamKinds[i] = param.PrepareParamKind
 				// The numeric-prefix capability is the stronger execute-time
@@ -7418,18 +7462,46 @@ func refreshPreparedPlanProjectionExprType(
 			if err != nil {
 				return false, err
 			}
+			numericValueArg := preparedExportSetNumericStringAsReal(functionName, i) &&
+				!preparedNumericResultPolymorphicFunction(functionName) && !preparedPrecisionBitwiseFunction(functionName)
+			// Only a rebindable consumer may replace its provisional operand
+			// conversion. A projection-root CAST can be the final DML assignment
+			// boundary; refreshing its input must never change its output ABI.
+			if preparedRuntimeSpecializationFunction(functionName) || functionName == "export_set" ||
+				isPreparedNumericComparison(functionName) {
+				if cast := arg.GetF(); cast != nil && cast.Func != nil && cast.Func.ObjName == "cast" &&
+					len(cast.Args) > 0 && !isExplicitPreparedLineageCast(arg) {
+					_, overload := function.DecodeOverloadID(cast.Func.Obj)
+					source := cast.Args[0]
+					if (overload == 0 || overload == 2) &&
+						(source.GetPreparedNumeric().GetFallbackSource() || argChanged && source.GetCol() != nil ||
+							numericValueArg && source.GetCol() != nil && types.T(source.Typ.Id).IsMySQLString()) {
+						exprImpl.F.Args[i] = DeepCopyExpr(source)
+						argChanged = true
+					}
+				}
+			}
+			if numericValueArg && types.T(exprImpl.F.Args[i].Typ.Id).IsMySQLString() {
+				converted, err := appendComparisonCastBeforeExpr(ctx, exprImpl.F.Args[i],
+					makePlan2Type(&types.Type{Oid: types.T_float64}))
+				if err != nil {
+					return false, err
+				}
+				exprImpl.F.Args[i] = converted
+				argChanged = true
+			}
 			changed = changed || argChanged
 		}
-
-		// The EXPORT_SET lineage marks a deferred producer, not an explicit
-		// conversion. Discard its provisional envelope only after the producer
-		// column has been refreshed in dependency order.
-		if functionName == "cast" && !isExplicitPreparedLineageCast(expr) && !isBitwiseAggregatePrivateCast(expr) && len(exprImpl.F.Args) > 0 &&
-			(exprImpl.F.Args[0].GetPreparedNumeric().GetFallbackSource() ||
-				changed && exprImpl.F.Args[0].GetCol() != nil) {
-			source := DeepCopyExpr(exprImpl.F.Args[0])
-			*expr = *source
-			return true, nil
+		if functionName == "export_set" && len(exprImpl.F.Args) > 0 {
+			source := exprImpl.F.Args[0]
+			if types.T(source.Typ.Id).IsFloat() && !containsDynamicParam(source) && exportSetRealIntegerConversionNeeded(source) {
+				converted, err := bindExportSetIntegerSource(ctx, source)
+				if err != nil {
+					return false, err
+				}
+				exprImpl.F.Args[0] = converted
+				changed = true
+			}
 		}
 		if functionName == "export_set" && len(exprImpl.F.Args) == 5 {
 			source := exprImpl.F.Args[4]
