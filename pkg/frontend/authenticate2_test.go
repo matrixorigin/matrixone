@@ -250,6 +250,29 @@ func Test_hasMoCtrl(t *testing.T) {
 	assert.False(t, hasMoCtrl(planWith(&plan3.Node{NodeType: plan3.Node_FILTER, FilterList: []*plan3.Expr{
 		{Expr: &plan3.Expr_F{F: &plan3.Function{Func: &plan3.ObjectRef{ObjName: "="}}}},
 	}})))
+
+	// A prepared SET stores its bound value in the DCL plan (GetQuery() is nil) and EXECUTE evaluates
+	// it directly, so mo_ctl in a SET-variable Value/Reserved must be gated here too -- otherwise
+	// `PREPARE s FROM 'set @v = mo_ctl(...)'; EXECUTE s` bypasses the sys-admin check.
+	dclSet := func(item *plan3.SetVariablesItem) *plan2.Plan {
+		return &plan2.Plan{Plan: &plan3.Plan_Dcl{Dcl: &plan3.DataControl{
+			Control: &plan3.DataControl_SetVariables{SetVariables: &plan3.SetVariables{
+				Items: []*plan3.SetVariablesItem{item},
+			}},
+		}}}
+	}
+	assert.True(t, hasMoCtrl(dclSet(&plan3.SetVariablesItem{Name: "v", Value: moCtl()})))
+	assert.True(t, hasMoCtrl(dclSet(&plan3.SetVariablesItem{Name: "v", Reserved: moCtl()})))
+	// mo_ctl nested inside a larger SET value expression is still caught
+	assert.True(t, hasMoCtrl(dclSet(&plan3.SetVariablesItem{Name: "v", Value: &plan3.Expr{
+		Expr: &plan3.Expr_F{F: &plan3.Function{Func: &plan3.ObjectRef{ObjName: "+"}, Args: []*plan3.Expr{moCtl()}}},
+	}})))
+	// an ordinary prepared SET is not flagged
+	assert.False(t, hasMoCtrl(dclSet(&plan3.SetVariablesItem{Name: "v", Value: &plan3.Expr{
+		Expr: &plan3.Expr_F{F: &plan3.Function{Func: &plan3.ObjectRef{ObjName: "+"}}},
+	}})))
+	// a DCL plan carrying no set variables is safe
+	assert.False(t, hasMoCtrl(&plan2.Plan{Plan: &plan3.Plan_Dcl{Dcl: &plan3.DataControl{}}}))
 }
 
 func newTestExecCtx(ctx context.Context, ctrl *gomock.Controller) *ExecCtx {

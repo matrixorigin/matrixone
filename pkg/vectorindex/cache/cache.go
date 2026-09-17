@@ -825,11 +825,15 @@ func (c *VectorIndexCache) EvictKey(key string) int64 {
 	if key == "" {
 		return 0
 	}
-	n := c.CountKey(key)
-	if n > 0 {
-		c.RemoveWithReason(key, "ctl")
+	// Report what THIS call actually removed, not a pre-read occupancy count. evictEntry claims the
+	// entry (beginEviction + CompareAndDelete) and synchronously destroys it, returning true only for
+	// the caller that won the claim. A pre-count instead let two concurrent callers both see 1 and
+	// both report evicted=1 while only one owned the removal, and let a losing caller report success
+	// though it removed nothing. The winner's Destroy waits out any in-flight search before returning.
+	if c.evictEntry(key, nil, "ctl") {
+		return 1
 	}
-	return n
+	return 0
 }
 
 // Keys returns the exact cache keys this cache currently holds, sorted. Read-only introspection

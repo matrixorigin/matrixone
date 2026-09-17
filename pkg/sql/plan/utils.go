@@ -3510,6 +3510,28 @@ func HasMoCtrl(expr *plan.Expr) bool {
 		}
 		return false
 
+	case *plan.Expr_W:
+		// A window entry carries its function and OVER partition/order-by as nested exprs, so a
+		// call hidden in `mo_ctl(...) OVER ()` or `MAX(mo_ctl(...)) OVER ()` must be seen too --
+		// WinSpecList holds Expr_W, not the bare Expr_F these Args recursions reach otherwise.
+		if exprImpl.W == nil {
+			return false
+		}
+		if HasMoCtrl(exprImpl.W.WindowFunc) {
+			return true
+		}
+		for _, p := range exprImpl.W.PartitionBy {
+			if HasMoCtrl(p) {
+				return true
+			}
+		}
+		for _, o := range exprImpl.W.OrderBy {
+			if o != nil && HasMoCtrl(o.Expr) {
+				return true
+			}
+		}
+		return false
+
 	default:
 		return false
 	}

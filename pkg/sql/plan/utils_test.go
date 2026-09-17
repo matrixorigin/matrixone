@@ -3141,4 +3141,24 @@ func TestNodeHasMoCtrl(t *testing.T) {
 	require.True(t, NodeHasMoCtrl(&plan.Node{FilterList: []*plan.Expr{
 		{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: "is_not_null"}, Args: []*plan.Expr{moCtl}}}},
 	}}))
+
+	// A window entry hides the call inside an Expr_W (WinSpecList), where the pre-Expr_W traversal
+	// never looked: MAX(mo_ctl(...)) OVER () or mo_ctl(...) OVER (...) must still be detected.
+	winWith := func(spec *plan.WindowSpec) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_W{W: spec}}
+	}
+	require.True(t, NodeHasMoCtrl(&plan.Node{WinSpecList: []*plan.Expr{
+		winWith(&plan.WindowSpec{WindowFunc: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: "max"}, Args: []*plan.Expr{moCtl}}}}}),
+	}}))
+	require.True(t, NodeHasMoCtrl(&plan.Node{WinSpecList: []*plan.Expr{
+		winWith(&plan.WindowSpec{PartitionBy: []*plan.Expr{moCtl}}),
+	}}))
+	require.True(t, NodeHasMoCtrl(&plan.Node{WinSpecList: []*plan.Expr{
+		winWith(&plan.WindowSpec{OrderBy: []*plan.OrderBySpec{{Expr: moCtl}}}),
+	}}))
+	// a window with no mo_ctl, and a nil spec, must be safe and false.
+	require.False(t, NodeHasMoCtrl(&plan.Node{WinSpecList: []*plan.Expr{
+		winWith(&plan.WindowSpec{WindowFunc: &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: "row_number"}}}}}),
+	}}))
+	require.False(t, HasMoCtrl(&plan.Expr{Expr: &plan.Expr_W{W: nil}}))
 }

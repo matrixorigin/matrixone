@@ -16,6 +16,7 @@ package cache
 
 import (
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -182,6 +183,36 @@ func TestEvictKey(t *testing.T) {
 	require.Equal(t, int64(1), c.CountKey("tbl:7"), "the ivf entry survives a bare-name evict")
 	require.Equal(t, int64(1), c.EvictKey("tbl:7"), "exact ivf key evicts")
 	require.Equal(t, int64(0), c.CountKey("tbl:7"), "entry is gone after exact evict")
+}
+
+// EvictKey must report only the removal THIS call performed. Before the fix it returned a pre-read
+// occupancy count, so N concurrent callers could all read 1 and all report evicted=1 while only one
+// owned the removal (and a losing caller reported success though it removed nothing). Exactly one
+// caller wins the claim and reports 1; the rest report 0, and the entry is gone afterward.
+func TestEvictKeyConcurrentReportsSingleOwner(t *testing.T) {
+	c := NewVectorIndexCache()
+	e := newVectorIndexSearch(&countingSearch{})
+	e.Status.Store(STATUS_LOADED)
+	c.IndexMap.Store("idx", e)
+
+	const n = 16
+	var start sync.WaitGroup
+	start.Add(1)
+	var wg sync.WaitGroup
+	var total atomic.Int64
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			start.Wait()
+			total.Add(c.EvictKey("idx"))
+		}()
+	}
+	start.Done()
+	wg.Wait()
+
+	require.Equal(t, int64(1), total.Load(), "exactly one concurrent caller may report the eviction")
+	require.Equal(t, int64(0), c.CountKey("idx"), "the entry is gone after concurrent evict")
 }
 
 // Keys lists the exact cache keys, sorted -- the signal GetVectorIndexCacheKeys aggregates across

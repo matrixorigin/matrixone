@@ -248,12 +248,29 @@ var privilegeCacheIsEnabled = func(ctx context.Context, ses *Session) (bool, err
 // VALUES row cannot bypass the sys-admin gate. Subqueries add their own nodes to the flat node list,
 // so nested placements are covered too.
 func hasMoCtrl(p *plan2.Plan) bool {
-	if p == nil || p.GetQuery() == nil {
+	if p == nil {
 		return false
 	}
-	for _, node := range p.GetQuery().Nodes {
-		if plan2.NodeHasMoCtrl(node) {
-			return true
+	if q := p.GetQuery(); q != nil {
+		for _, node := range q.Nodes {
+			if plan2.NodeHasMoCtrl(node) {
+				return true
+			}
+		}
+		return false
+	}
+	// A prepared SET stores its bound value expression in the DCL plan and EXECUTE evaluates it
+	// directly (getPreparedPlanExprValueWithMeta), never through the synthetic SELECT whose Query
+	// plan the branch above scans. Scan those expressions here so `PREPARE s FROM 'set @v =
+	// mo_ctl(...)'; EXECUTE s` cannot reach the cluster-wide handler as an ordinary tenant.
+	if sv := p.GetDcl().GetSetVariables(); sv != nil {
+		for _, item := range sv.Items {
+			if item == nil {
+				continue
+			}
+			if plan2.HasMoCtrl(item.Value) || plan2.HasMoCtrl(item.Reserved) {
+				return true
+			}
 		}
 	}
 	return false
