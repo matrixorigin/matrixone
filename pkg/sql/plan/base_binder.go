@@ -3427,6 +3427,10 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 			return nil, err
 		}
 		if deferredIndex && bound != nil && bound.GetF() != nil && len(bound.GetF().Args) > 0 {
+			// ELT's numeric envelope can add a second implicit cast around the
+			// marker. Keep the deferred marker on the complete function argument,
+			// not only on the inner cast, so execute-time metadata discovery can
+			// select the full-arity ELT rebind path.
 			b.markPreparedNumericFallback(bound.GetF().Args[0])
 		}
 		return bound, nil
@@ -3785,7 +3789,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			}
 			source := arg
 			fn := arg.GetF()
-			explicitCast, explicitPeerCast := unwrapParenExpr(astArgs[i]).(*tree.CastExpr)
+			explicitCast, explicitPeerCast := astArgs[i].(*tree.CastExpr)
 			if explicitPeerCast {
 				target, targetErr := getTypeFromAst(b.GetContext(), explicitCast.Type)
 				if targetErr != nil {
@@ -3803,17 +3807,15 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				}
 			}
 			if fn != nil && fn.Func != nil && strings.EqualFold(fn.Func.GetObjName(), "cast") && len(fn.Args) > 0 &&
-				!explicitPeerCast && !fn.GetSyntaxExplicitCast() &&
+				(!explicitPeerCast || makeTypeByPlan2Expr(arg).Oid.IsMySQLString()) &&
 				!preparedExprContainsParam(fn.Args[0]) &&
 				preparedNumericCommonOperandType(makeTypeByPlan2Expr(fn.Args[0]).Oid) {
 				source = fn.Args[0]
 			}
 			sourceType := makeTypeByPlan2Expr(source)
-			if preparedNumericCommonOperandType(sourceType.Oid) {
-				// Preserve the peer's semantic domain even when PREPARE coerces it
-				// into the marker's temporary TEXT envelope. Exact sources may be
-				// restored directly; FLOAT sources remain boundaries but mark the
-				// coerced peer so EXECUTE can cast it to a numeric runtime domain.
+			if preparedNumericCommonOperandType(sourceType.Oid) && !sourceType.Oid.IsFloat() {
+				// Preserve only a proven exact peer. Scientific FLOAT literals and
+				// explicit FLOAT casts remain source-less semantic FLOAT boundaries.
 				preparedPeerSources[i] = DeepCopyExpr(source)
 			}
 		}
@@ -4123,12 +4125,17 @@ func markPreparedResultCastsProvisional(
 		}
 		if i < len(astArgs) {
 			if explicitCast, ok := unwrapParenExpr(astArgs[i]).(*tree.CastExpr); ok {
-				if target, err := getTypeFromAst(ctx, explicitCast.Type); err == nil && types.T(target.Id).IsDecimal() {
-					metadata := ensurePreparedNumericMetadata(arg)
-					metadata.ProvisionalResultPeer = true
-					metadata.ProvisionalResultPeerTypeId = target.Id
-					metadata.ProvisionalResultPeerWidth = target.Width
-					metadata.ProvisionalResultPeerScale = target.Scale
+				if target, err := getTypeFromAst(ctx, explicitCast.Type); err == nil {
+					if types.T(target.Id) == types.T_time && i < len(args) && args[i] != nil {
+						markPreparedTemporalNumericPeer(arg, target)
+					}
+					if types.T(target.Id).IsDecimal() {
+						metadata := ensurePreparedNumericMetadata(arg)
+						metadata.ProvisionalResultPeer = true
+						metadata.ProvisionalResultPeerTypeId = target.Id
+						metadata.ProvisionalResultPeerWidth = target.Width
+						metadata.ProvisionalResultPeerScale = target.Scale
+					}
 				}
 			}
 		}
@@ -4148,6 +4155,28 @@ func markPreparedResultCastsProvisional(
 		// can be identical to a user-authored CAST, which remains authoritative.
 		fn.SyntaxExplicitCast = false
 		ensurePreparedNumericMetadata(arg).ProvisionalResultCast = true
+	}
+}
+
+// markPreparedTemporalNumericPeer keeps the original TIME provenance on the
+// decimal peer introduced while a prepared numeric marker is still TEXT. The
+// executable expression uses the decimal envelope, but execute-time rebinding
+// must not reinterpret an integer marker as DECIMAL128 merely because this
+// envelope has replaced the TIME operand.
+func markPreparedTemporalNumericPeer(expr *Expr, temporal Type) {
+	if expr == nil {
+		return
+	}
+	metadata := ensurePreparedNumericMetadata(expr)
+	metadata.ProvisionalResultPeer = true
+	metadata.ProvisionalResultPeerTypeId = temporal.Id
+	metadata.ProvisionalResultPeerWidth = temporal.Width
+	metadata.ProvisionalResultPeerScale = temporal.Scale
+	if literal := expr.GetLit(); literal != nil {
+		literal.Src = &Expr{
+			Typ:  temporal,
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
+		}
 	}
 }
 
@@ -5682,10 +5711,6 @@ func bindFuncExprImplByPlanExpr(
 	allowInternalFunctionArgs bool,
 ) (*plan.Expr, error) {
 	var err error
-	args, err = bindIntegerFunctionArguments(ctx, name, args)
-	if err != nil {
-		return nil, err
-	}
 	rejectIntervalArgs := rejectBoundIntervalFunctionArgs
 	if descendFunctions {
 		rejectIntervalArgs = rejectStandaloneIntervalFunctionArgs
@@ -9018,7 +9043,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 		if !typ.IsEmpty() && types.T(typ.Id).IsDecimal() {
 			return returnDecimalExpr(originString)
 		}
-		if !strings.ContainsAny(originString, "eE") {
+		if !strings.Contains(originString, "e") {
 			expr, err := returnDecimalExpr(originString)
 			if err == nil {
 				return expr, nil

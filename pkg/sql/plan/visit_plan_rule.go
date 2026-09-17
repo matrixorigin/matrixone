@@ -1641,6 +1641,171 @@ func restorePreparedIntegerArithmeticOperands(name string, args []*Expr) {
 	}
 }
 
+func preparedTemporalNumericPeer(expr *Expr) (types.Type, bool) {
+	if expr == nil {
+		return types.Type{}, false
+	}
+	if metadata := expr.GetPreparedNumeric(); metadata.GetProvisionalResultPeer() &&
+		metadata.GetProvisionalResultPeerTypeId() == int32(types.T_time) {
+		return makeTypeByPlan2Expr(expr), true
+	}
+	if literal := expr.GetLit(); literal != nil && literal.Src != nil &&
+		types.T(literal.Src.Typ.Id) == types.T_time {
+		return makeTypeByPlan2Expr(expr), true
+	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil &&
+		strings.EqualFold(fn.Func.GetObjName(), "cast") && !isExplicitPreparedCast(expr) && len(fn.Args) > 0 &&
+		types.T(fn.Args[0].Typ.Id) == types.T_time {
+		return makeTypeByPlan2Expr(expr), true
+	}
+	return types.Type{}, false
+}
+
+func preparedTemporalNumericPeerFromArgs(args []*Expr) (types.Type, bool) {
+	for _, arg := range args {
+		peerType, ok := preparedTemporalNumericPeer(arg)
+		if ok && peerType.Oid.IsDecimal() {
+			return peerType, true
+		}
+	}
+	return types.Type{}, false
+}
+
+func (rule *ResetParamRefRule) rebindPreparedTemporalIntegerNestedExpr(
+	original *Expr,
+	bound *Expr,
+	target types.Type,
+) (*Expr, bool, error) {
+	if original == nil {
+		return bound, false, nil
+	}
+	if param := original.GetP(); param != nil && param.Pos >= 0 {
+		typed, ok, err := rule.typedRuntimeParamExpr(int(param.Pos))
+		if err != nil || !ok || typed == nil || !types.T(typed.Typ.Id).IsSignedInt() {
+			return bound, false, err
+		}
+		narrowed, err := appendCastBeforeExpr(rule.ctx, typed, makePlan2Type(&target))
+		return narrowed, true, err
+	}
+	if fn := original.GetF(); fn != nil && fn.Func != nil {
+		name := strings.ToLower(fn.Func.GetObjName())
+		if isExplicitPreparedCast(original) {
+			return bound, false, nil
+		}
+		if name == "cast" && isImplicitPreparedParamCast(original) && len(fn.Args) > 0 {
+			boundChild := bound
+			if boundFn := bound.GetF(); boundFn != nil && len(boundFn.Args) > 0 {
+				boundChild = boundFn.Args[0]
+			}
+			child, changed, err := rule.rebindPreparedTemporalIntegerNestedExpr(
+				fn.Args[0], boundChild, target)
+			if err != nil || !changed {
+				return bound, false, err
+			}
+			return child, true, nil
+		}
+		if !isPreparedTemporalIntegerArithmetic(name) {
+			return bound, false, nil
+		}
+		// The recursive ApplyExpr call may have wrapped a nested arithmetic
+		// expression in the outer provisional result cast (for example, the
+		// DECIMAL128 cast around `? + ?`).  Align the bound view with the
+		// prepare-time function before pairing child arguments; otherwise the
+		// first child is paired with the cast's value and the second with its
+		// target-type literal.
+		boundForFn := bound
+		for boundForFn != nil {
+			boundFn := boundForFn.GetF()
+			if boundFn == nil || boundFn.Func == nil ||
+				!strings.EqualFold(boundFn.Func.GetObjName(), "cast") ||
+				boundFn.GetSyntaxExplicitCast() || len(boundFn.Args) == 0 {
+				break
+			}
+			_, overload := planfunction.DecodeOverloadID(boundFn.GetFunc().GetObj())
+			if overload != 0 || boundFn.Args[0] == nil {
+				break
+			}
+			childFn := boundFn.Args[0].GetF()
+			if childFn == nil || childFn.Func == nil ||
+				!strings.EqualFold(childFn.Func.GetObjName(), name) {
+				break
+			}
+			boundForFn = boundFn.Args[0]
+		}
+		copy := DeepCopyExpr(boundForFn)
+		if copy == nil || copy.GetF() == nil {
+			copy = DeepCopyExpr(original)
+		}
+		if copy == nil || copy.GetF() == nil || len(copy.GetF().Args) < len(fn.Args) {
+			return bound, false, nil
+		}
+		changed := false
+		for i, arg := range fn.Args {
+			boundArg := boundForFn
+			if boundForFn != nil {
+				if boundFn := boundForFn.GetF(); boundFn != nil && i < len(boundFn.Args) {
+					boundArg = boundFn.Args[i]
+				}
+			}
+			child, childChanged, err := rule.rebindPreparedTemporalIntegerNestedExpr(
+				arg, boundArg, target)
+			if err != nil {
+				return nil, false, err
+			}
+			if child == nil {
+				child = boundArg
+			}
+			if child == nil {
+				child = arg
+			}
+			copy.GetF().Args[i] = child
+			changed = changed || childChanged
+		}
+		if !changed {
+			return bound, false, nil
+		}
+		rebound, err := BindFuncExprImplByPlanExpr(rule.ctx, name, copy.GetF().Args)
+		if err != nil {
+			return nil, false, err
+		}
+		preserveReboundFunctionMetadata(fn, rebound.GetF())
+		return rebound, true, nil
+	}
+	return bound, false, nil
+}
+
+func isPreparedTemporalIntegerArithmetic(name string) bool {
+	switch name {
+	case "+", "-", "%", "mod":
+		return true
+	default:
+		return false
+	}
+}
+
+func (rule *ResetParamRefRule) narrowPreparedTemporalIntegerParam(
+	name string,
+	paramIndex int,
+	bound *Expr,
+	args []*Expr,
+) (*Expr, error) {
+	if bound == nil || !isPreparedTemporalIntegerArithmetic(name) ||
+		!types.T(bound.Typ.Id).IsSignedInt() {
+		return bound, nil
+	}
+	for i, arg := range args {
+		if i == paramIndex {
+			continue
+		}
+		peerType, ok := preparedTemporalNumericPeer(arg)
+		if !ok || !peerType.Oid.IsDecimal() {
+			continue
+		}
+		return appendCastBeforeExpr(rule.ctx, bound, makePlan2Type(&peerType))
+	}
+	return bound, nil
+}
+
 func (rule *ResetParamRefRule) rebindPreparedIntegerExpr(expr *plan.Expr) (*Expr, bool, error) {
 	positions := preparedNumericValueParamPositions(expr)
 	if len(positions) == 0 {
@@ -2493,6 +2658,24 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			) {
 				numericComparisonFallback = true
 			}
+			if !implicitParamCast && isPreparedTemporalIntegerArithmetic(functionName) &&
+				len(preparedNumericValueParamPositions(originalArgs[i])) > 0 {
+				if temporalPeer, ok := preparedTemporalNumericPeerFromArgs(originalArgs); ok {
+					nested, nestedChanged, nestedErr := rule.rebindPreparedTemporalIntegerNestedExpr(
+						originalArgs[i], rewrittenArg, temporalPeer)
+					if nestedErr != nil {
+						return nil, nestedErr
+					}
+					if nestedChanged {
+						rewrittenArg = nested
+						exprImpl.F.Args[i] = rewrittenArg
+						boundArgs[i] = rewrittenArg
+						needResetFunction = true
+						compareArgTypes = true
+						rule.specialized = true
+					}
+				}
+			}
 			if rule.isNumericPrefixDependent(rewrittenArg) {
 				if !preparedSQLExecuteNumericResultConsumer(functionName) ||
 					preparedSQLExecuteNumericResultValueArg(functionName, i, len(exprImpl.F.Args)) {
@@ -2540,6 +2723,11 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 						return nil, typedErr
 					}
 					if typedOK {
+						typed, typedErr = rule.narrowPreparedTemporalIntegerParam(
+							functionName, i, typed, originalArgs)
+						if typedErr != nil {
+							return nil, typedErr
+						}
 						boundArgs[i] = typed
 						needResetFunction = true
 						compareArgTypes = true
