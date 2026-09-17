@@ -81,22 +81,55 @@ select id from docs where match(body) against('quantum') order by id;
 show create table docs;
 select id, extra from docs where match(body) against('quantum') order by id;
 
--- After the REINDEX rebuilt the tag=0 base, ordinary CDC must keep flowing: a fresh INSERT
+-- Independently check that ordinary CDC keeps flowing after COPY ALTER. Use a second
+-- table whose REPLACEMENT index has never been searched: the assertions above warmed
+-- docs' base generation, and a CDC writer on another CN only evicts its OWN cache.
+-- Waiting for a durable tail does not refresh an already-warm remote generation.
+-- Keep the original rebuild/prewarm assertions above instead of assuming immediate
+-- cross-CN cache coherence here (the same isolation is used in fulltext2_async.sql).
+create table docs_cdc(id bigint primary key, body text);
+insert into docs_cdc values
+  (1,'quantum physics is deep'),(2,'classical mechanics only'),
+  (3,'quantum computing rocks'),(4,'organic chemistry notes'),(5,'a quantum leap forward');
+create fulltext2 index ftidx on docs_cdc(body);
+alter table docs_cdc add column extra int;
+set @ft2_cdc_index = (
+    select index_table_name from mo_catalog.mo_indexes
+    where name = 'ftidx' and algo = 'fulltext2' and algo_table_type = 'ftv2_index'
+      and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'docs_cdc')
+    limit 1
+);
+set @wait_cdc_base_sql = concat(
+    'select count(*) > 0 as ready from `', database(), '`.`', @ft2_cdc_index, '` where tag = 0');
+prepare wait_cdc_base from @wait_cdc_base_sql;
+-- @wait_expect(1, 120)
+execute wait_cdc_base;
+deallocate prepare wait_cdc_base;
+
+-- After the REINDEX rebuilt this tag=0 base, ordinary CDC must keep flowing: a fresh INSERT
 -- (a term absent from the base) must arrive in the tag=1 cdc_tail and become searchable. The
 -- copy-alter registered the CDC with startFromNow=true, so the first normal iteration does NOT
 -- replay the copied rows (that would need an empty ts=0 watermark) -- it carries only the new
 -- rows. MATCH then composes the base (copied rows) with the tail (new rows). Wait on the
 -- durable tag=1 tail, never MATCH (which can pin a stale per-CN cache).
-insert into docs(id, body, extra) values (100,'neutrino oscillation study',1),(101,'neutrino detector array',1);
+set @capture_tail_sql = concat(
+    'select coalesce(max(chunk_id), -1) into @tail_before_insert from `', database(), '`.`', @ft2_cdc_index,
+    '` where index_id = ''cdc_tail'' and tag = 1');
+prepare capture_tail from @capture_tail_sql;
+execute capture_tail;
+deallocate prepare capture_tail;
+insert into docs_cdc(id, body, extra) values (100,'neutrino oscillation study',1),(101,'neutrino detector array',1);
 set @wait_tail_sql = concat(
-    'select count(*) > 0 as ready from `', database(), '`.`', @ft2_index2, '` where tag = 1');
+    'select coalesce(max(chunk_id), -1) > ', @tail_before_insert,
+    ' as ready from `', database(), '`.`', @ft2_cdc_index, '` where index_id = ''cdc_tail'' and tag = 1');
 prepare wait_tail from @wait_tail_sql;
 -- @wait_expect(1, 120)
 execute wait_tail;
 deallocate prepare wait_tail;
 
 -- New rows arrived via the CDC tail; the base still serves the copied rows.
-select id from docs where match(body) against('neutrino') order by id;
-select id from docs where match(body) against('quantum') order by id;
+select id from docs_cdc where body like '%neutrino%' order by id;
+select id from docs_cdc where match(body) against('neutrino') order by id;
+select id from docs_cdc where match(body) against('quantum') order by id;
 
 drop database ft2_copy_alter_case;
