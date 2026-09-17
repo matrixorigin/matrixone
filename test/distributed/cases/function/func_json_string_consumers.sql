@@ -25,7 +25,7 @@ select id, c from json_string_view order by id;
 create table json_string_ctas as select id, concat('', js) as c from src;
 select id, c from json_string_ctas order by id;
 
-set @json_string_param = '{"p":1}';
+set @json_string_param = binary '{"p":1}';
 prepare json_string_stmt from 'select id, concat(cast(? as json), js) as c from src order by id';
 -- @metacmp(true)
 execute json_string_stmt using @json_string_param;
