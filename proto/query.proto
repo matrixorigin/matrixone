@@ -110,6 +110,9 @@ enum CmdMethod {
   MongoDBClientRetire = 39;
   // RefreshSessionAuth revalidates a cached backend against the current catalog.
   RefreshSessionAuth = 40;
+  // GetPythonUdfStatus returns the bounded, read-only Python runtime status of
+  // the addressed CN. It is consumed by the Operator for same-Pod workers.
+  GetPythonUdfStatus = 41;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -255,6 +258,8 @@ message Request {
   MongoDBClientRetireRequest MongoDBClientRetireRequest = 41 [ (gogoproto.nullable) = false ];
   // RefreshSessionAuthRequest reauthenticates a cached backend for a new login.
   RefreshSessionAuthRequest RefreshSessionAuthRequest = 42;
+  // GetPythonUdfStatusRequest asks this CN for its local Python runtime state.
+  GetPythonUdfStatusRequest GetPythonUdfStatusRequest = 43 [ (gogoproto.nullable) = false ];
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -325,6 +330,38 @@ message Response {
   MongoDBClientRetireResponse MongoDBClientRetireResponse = 42 [ (gogoproto.nullable) = false ];
   // RefreshSessionAuthResponse contains the current authentication string.
   RefreshSessionAuthResponse RefreshSessionAuthResponse = 43;
+  // GetPythonUdfStatus is a bounded summary of the CN-local Python contract.
+  GetPythonUdfStatusResponse GetPythonUdfStatus = 44 [ (gogoproto.nullable) = false ];
+}
+
+message GetPythonUdfStatusRequest {
+}
+
+message GetPythonUdfStatusResponse {
+  string CNUUID = 1;
+  string Language = 2;
+  bool Enabled = 3;
+  bool AllowUnisolated = 4;
+  bool Ready = 5;
+  string ErrorClass = 6;
+  string Reason = 7;
+  int32 ProtocolVersion = 8;
+  string ABIContract = 9;
+  string AdapterVersion = 10;
+  string SDKVersion = 11;
+  int32 DefinitionSchemaVersion = 12;
+  int32 PlanContractVersion = 13;
+  string TypeDescriptorContract = 14;
+  string TimezoneDatabaseVersion = 15;
+  int32 WindowBatches = 16;
+  bool CumulativeAck = 17;
+  int64 MaxExecutionFrameBytes = 18;
+  int32 MaxHandlerProcesses = 19;
+  int32 MaxAccountHandlerProcesses = 20;
+  int32 MaxOwnerHandlerProcesses = 21;
+  uint64 LeaseEpoch = 22;
+  repeated string Modes = 23;
+  repeated string NullPolicies = 24;
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
