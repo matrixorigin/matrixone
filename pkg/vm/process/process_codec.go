@@ -51,6 +51,22 @@ func MockProcessInfoWithPro(
 func (proc *Process) BuildProcessInfo(
 	sql string,
 ) (pipeline.ProcessInfo, error) {
+	return proc.buildProcessInfo(sql, false)
+}
+
+// BuildProcessInfoWithStatementDigest captures the SQL-mode snapshot strictly
+// for a remote scope that contains STATEMENT_DIGEST. The receiving CN must hash
+// the same parsed statement representation as the coordinator.
+func (proc *Process) BuildProcessInfoWithStatementDigest(
+	sql string,
+) (pipeline.ProcessInfo, error) {
+	return proc.buildProcessInfo(sql, true)
+}
+
+func (proc *Process) buildProcessInfo(
+	sql string,
+	captureStatementDigest bool,
+) (pipeline.ProcessInfo, error) {
 	procInfo := pipeline.ProcessInfo{}
 	{
 		procInfo.Id = proc.QueryId()
@@ -151,6 +167,19 @@ func (proc *Process) BuildProcessInfo(
 		if err != nil {
 			return procInfo, err
 		}
+		var sqlMode string
+		if captureStatementDigest {
+			// STATEMENT_DIGEST is placement-invariant: a coordinator resolver
+			// failure must not turn into a successful remote evaluation with a
+			// different SQL-mode snapshot. Ordinary remote scopes retain the
+			// historical best-effort fallback above.
+			sqlMode, err = ResolveSQLMode(proc)
+			if err != nil {
+				return procInfo, err
+			}
+		} else {
+			sqlMode = resolveSqlMode(proc)
+		}
 
 		procInfo.SessionInfo = pipeline.SessionInfo{
 			User:                   proc.Base.SessionInfo.GetUser(),
@@ -165,13 +194,24 @@ func (proc *Process) BuildProcessInfo(
 			LockWaitTimeout:        resolveLockWaitTimeoutSeconds(proc),
 			LockWaitTimeoutSet:     proc.Base.SessionInfo.LockWaitTimeoutSet,
 			MatrixoneNativeMode:    proc.Base.SessionInfo.MatrixOneNativeMode,
-			SqlMode:                resolveSqlMode(proc),
+			SqlMode:                sqlMode,
 			AutoIncrementIncrement: proc.Base.SessionInfo.AutoIncrementIncrement,
 			AutoIncrementOffset:    proc.Base.SessionInfo.AutoIncrementOffset,
 		}
-		nullifyZeroTemporal, err := ResolveExplicitZeroTemporalCastReturnsNull(proc)
-		if err != nil {
-			return procInfo, err
+		var nullifyZeroTemporal bool
+		if captureStatementDigest {
+			// The digest path already resolved (or restored) the SQL-mode
+			// snapshot above. Derive the temporal-cast flag from that same
+			// snapshot instead of consulting a receiving-CN resolver a second
+			// time. A false snapshot is meaningful too: it must not be
+			// replaced by the receiving CN's current mode.
+			nullifyZeroTemporal = proc.Base.SessionInfo.ExplicitZeroTemporalCastReturnsNull ||
+				IsStrictNoZeroDateMode(sqlMode)
+		} else {
+			nullifyZeroTemporal, err = ResolveExplicitZeroTemporalCastReturnsNull(proc)
+			if err != nil {
+				return procInfo, err
+			}
 		}
 		procInfo.SessionInfo.ExplicitZeroTemporalCastReturnsNull = nullifyZeroTemporal
 	}
@@ -485,45 +525,55 @@ func ConvertToProcessSessionInfo(
 	t := time.Time{}
 	err := t.UnmarshalBinary(sei.TimeZone)
 	if err != nil {
-		return sessionInfo, nil
+		return sessionInfo, err
 	}
 	sessionInfo.TimeZone = t.Location()
 	return sessionInfo, nil
 }
 
-func resolveSqlMode(proc *Process) string {
-	if proc == nil {
-		return ""
+// ResolveSQLMode returns the SQL-mode snapshot used by STATEMENT_DIGEST.
+// Resolver errors are returned so the digest-specific process codec can fail
+// before dispatch; callers that preserve the historical best-effort behavior
+// may use resolveSqlMode below.
+func ResolveSQLMode(proc *Process) (string, error) {
+	if proc == nil || proc.Base == nil {
+		return "", nil
+	}
+	// A remote/background process carries the coordinator's session snapshot.
+	// It must survive every encode/decode/forward hop unchanged; a resolver on
+	// the receiving CN describes that CN's defaults, not the remote statement.
+	if !proc.Base.IsFrontend && proc.Base.SessionInfo.SqlMode != "" {
+		return proc.Base.SessionInfo.SqlMode, nil
 	}
 	if f := proc.GetResolveVariableFunc(); f != nil {
-		if v, err := f("sql_mode", true, false); err == nil {
-			if s, ok := v.(string); ok {
-				if s == "" {
-					// Internal/background processes can retain a resolver from the
-					// executor that supplied the process. An empty value from that
-					// resolver is a compiled default, not an instruction to discard
-					// the session snapshot captured for remote execution. Keep an
-					// explicit empty sentinel as non-strict, but preserve any other
-					// snapshot so a second CN forward cannot silently lose strict
-					// assignment-cast behavior.
-					if proc.Base != nil && !proc.Base.IsFrontend {
-						if snapshot := proc.Base.SessionInfo.SqlMode; snapshot != "" {
-							return snapshot
-						}
-					}
-					return EmptySqlModeSentinel // explicitly non-strict
-				}
-				return s
+		v, err := f("sql_mode", true, false)
+		if err != nil {
+			return proc.Base.SessionInfo.SqlMode, err
+		}
+		if s, ok := v.(string); ok {
+			if s == "" {
+				return EmptySqlModeSentinel, nil // explicitly non-strict
 			}
+			return s, nil
+		}
+		if v != nil {
+			// A non-string resolver result is a malformed session variable,
+			// not an absent value.  Preserve the captured snapshot for callers
+			// that need the last known mode while making the strict digest path
+			// fail before it can be dispatched under a different mode.
+			return proc.Base.SessionInfo.SqlMode,
+				moerr.NewInternalErrorNoCtxf("unexpected sql_mode type %T", v)
 		}
 	}
 	// Resolver is nil on a remote CN (no session). Fall back to the sql_mode
 	// captured from the upstream CN so it survives a second forward
 	// (encode -> decode -> encode); otherwise the next hop defaults to strict.
-	if proc.Base == nil {
-		return ""
-	}
-	return proc.Base.SessionInfo.SqlMode
+	return proc.Base.SessionInfo.SqlMode, nil
+}
+
+func resolveSqlMode(proc *Process) string {
+	sqlMode, _ := ResolveSQLMode(proc)
+	return sqlMode
 }
 
 func resolveLockWaitTimeoutSeconds(proc *Process) int64 {

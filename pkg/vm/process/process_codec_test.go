@@ -166,9 +166,21 @@ func TestProcessCodecHelpers(t *testing.T) {
 		require.Equal(t, uint64(4), info.AutoIncrementOffset)
 		require.Equal(t, "UTC", info.TimeZone.String())
 
-		info, err = ConvertToProcessSessionInfo(pipeline.SessionInfo{TimeZone: []byte("bad")})
-		require.NoError(t, err)
-		require.Nil(t, info.TimeZone)
+		for _, tc := range []struct {
+			name string
+			data []byte
+		}{
+			{"missing", nil},
+			{"empty", []byte{}},
+			{"malformed", []byte("bad")},
+			{"truncated", timeBytes[:len(timeBytes)-1]},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				info, err := ConvertToProcessSessionInfo(pipeline.SessionInfo{TimeZone: tc.data})
+				require.Error(t, err)
+				require.Nil(t, info.TimeZone)
+			})
+		}
 	})
 
 	t.Run("lock wait timeout resolution", func(t *testing.T) {
@@ -213,7 +225,7 @@ func TestProcessCodecHelpers(t *testing.T) {
 		require.Equal(t, "", resolveSqlMode(nil))
 
 		// Resolver present: its value wins.
-		proc := &Process{Base: &BaseProcess{SessionInfo: SessionInfo{SqlMode: "STRICT_ALL_TABLES"}}}
+		proc := &Process{Base: &BaseProcess{IsFrontend: true, SessionInfo: SessionInfo{SqlMode: "STRICT_ALL_TABLES"}}}
 		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
 			return "STRICT_TRANS_TABLES", nil
 		})
@@ -241,6 +253,11 @@ func TestProcessCodecHelpers(t *testing.T) {
 			return nil, moerr.NewInternalErrorNoCtx("boom")
 		})
 		require.Equal(t, "STRICT_ALL_TABLES", resolveSqlMode(proc))
+		proc.Base.IsFrontend = true
+		strictMode, err := ResolveSQLMode(proc)
+		require.Equal(t, "STRICT_ALL_TABLES", strictMode)
+		require.EqualError(t, err, "internal error: boom")
+		proc.Base.IsFrontend = false
 
 		// Resolver is nil (remote CN): fall back to SessionInfo.SqlMode so a second
 		// forward preserves the upstream mode instead of defaulting to strict.
@@ -253,6 +270,87 @@ func TestProcessCodecHelpers(t *testing.T) {
 		emptyProc := &Process{Base: &BaseProcess{SessionInfo: SessionInfo{}}}
 		require.Equal(t, "", resolveSqlMode(emptyProc))
 	})
+}
+
+func TestResolveSQLModeResolverValueTypes(t *testing.T) {
+	var typedNilString *string
+	var typedNilBytes []byte
+
+	cases := []struct {
+		name     string
+		value    any
+		wantMode string
+		wantErr  bool
+	}{
+		{name: "valid string", value: "STRICT_ALL_TABLES", wantMode: "STRICT_ALL_TABLES"},
+		{name: "explicit empty string", value: "", wantMode: EmptySqlModeSentinel},
+		{name: "plain nil", value: nil, wantMode: "STRICT_TRANS_TABLES"},
+		{name: "integer", value: int64(123), wantMode: "STRICT_TRANS_TABLES", wantErr: true},
+		{name: "boolean", value: true, wantMode: "STRICT_TRANS_TABLES", wantErr: true},
+		{name: "typed nil string", value: typedNilString, wantMode: "STRICT_TRANS_TABLES", wantErr: true},
+		{name: "typed nil bytes", value: typedNilBytes, wantMode: "STRICT_TRANS_TABLES", wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := &Process{Base: &BaseProcess{
+				IsFrontend:  true,
+				SessionInfo: SessionInfo{SqlMode: "STRICT_TRANS_TABLES"},
+			}}
+			proc.SetResolveVariableFunc(func(name string, _, _ bool) (any, error) {
+				require.Equal(t, "sql_mode", name)
+				return tc.value, nil
+			})
+
+			mode, err := ResolveSQLMode(proc)
+			require.Equal(t, tc.wantMode, mode)
+			if !tc.wantErr {
+				require.NoError(t, err)
+				return
+			}
+			require.EqualError(t, err,
+				fmt.Sprintf("internal error: unexpected sql_mode type %T", tc.value))
+		})
+	}
+}
+
+func TestBuildProcessInfoStatementDigestRejectsInvalidSQLModeType(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	proc.Base.IsFrontend = true
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (any, error) {
+		if name == "sql_mode" {
+			return int64(123), nil
+		}
+		return nil, nil
+	})
+
+	// Non-digest remote scopes retain the historical best-effort behavior.
+	_, err := proc.BuildProcessInfo("select 1")
+	require.NoError(t, err)
+
+	// A digest-bearing scope must reject the malformed variable before it can
+	// be serialized and evaluated under a different SQL mode remotely.
+	_, err = proc.BuildProcessInfoWithStatementDigest("select 1")
+	require.EqualError(t, err, "internal error: unexpected sql_mode type int64")
+
+	// A failed resolution must not poison the process; a later retry resolves a
+	// fresh valid snapshot and succeeds.
+	calls := 0
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (any, error) {
+		if name != "sql_mode" {
+			return nil, nil
+		}
+		calls++
+		if calls == 1 {
+			return int64(123), nil
+		}
+		return "STRICT_ALL_TABLES", nil
+	})
+	_, err = proc.BuildProcessInfoWithStatementDigest("select 1")
+	require.EqualError(t, err, "internal error: unexpected sql_mode type int64")
+	info, err := proc.BuildProcessInfoWithStatementDigest("select 1")
+	require.NoError(t, err)
+	require.Equal(t, "STRICT_ALL_TABLES", info.SessionInfo.SqlMode)
+	require.Equal(t, 2, calls)
 }
 
 func TestBuildProcessInfoPreservesBackgroundSqlModeAcrossForwards(t *testing.T) {
@@ -277,6 +375,110 @@ func TestBuildProcessInfoPreservesBackgroundSqlModeAcrossForwards(t *testing.T) 
 	second, err := decoded.BuildProcessInfo("select 1")
 	require.NoError(t, err)
 	require.Equal(t, "STRICT_TRANS_TABLES", second.SessionInfo.SqlMode)
+}
+
+func TestBuildProcessInfoBackgroundSqlModeSnapshotBeatsResolver(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	proc.Base.IsFrontend = false
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return "ANSI_QUOTES", nil
+	})
+
+	first, err := proc.BuildProcessInfo("select 1")
+	require.NoError(t, err)
+	require.Equal(t, "STRICT_TRANS_TABLES", first.SessionInfo.SqlMode)
+
+	svc := NewCodecService(fakeCodecTxnClient{op: fakeCodecTxnOperator{}}, nil, nil, nil, nil, nil, nil, nil)
+	decoded, err := svc.Decode(defines.AttachAccountId(context.Background(), 42), first)
+	require.NoError(t, err)
+	defer decoded.Free()
+
+	second, err := decoded.BuildProcessInfo("select 1")
+	require.NoError(t, err)
+	require.Equal(t, "STRICT_TRANS_TABLES", second.SessionInfo.SqlMode)
+}
+
+func TestBuildProcessInfoStatementDigestPropagatesSQLModeResolverErrors(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	proc.Base.IsFrontend = true
+	proc.Base.SessionInfo.ExplicitZeroTemporalCastReturnsNull = true
+	resolverErr := moerr.NewInternalErrorNoCtx("resolve sql_mode")
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == "sql_mode" {
+			return nil, resolverErr
+		}
+		return nil, nil
+	})
+
+	// The generic codec path preserves its historical best-effort behavior and
+	// remains usable for scopes that do not contain STATEMENT_DIGEST.
+	_, err := proc.BuildProcessInfo("select 1")
+	require.NoError(t, err)
+
+	// A digest-bearing remote scope must fail before serialization/dispatch
+	// rather than let the receiving CN evaluate under a different mode.
+	_, err = proc.BuildProcessInfoWithStatementDigest("select 1")
+	require.ErrorIs(t, err, resolverErr)
+
+	// A transient resolver failure must not poison the process: a later retry
+	// resolves a fresh snapshot and succeeds.
+	calls := 0
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		switch name {
+		case "sql_mode":
+			calls++
+			if calls == 1 {
+				return nil, resolverErr
+			}
+			return "STRICT_TRANS_TABLES", nil
+		default:
+			return nil, nil
+		}
+	})
+	_, err = proc.BuildProcessInfoWithStatementDigest("select 1")
+	require.ErrorIs(t, err, resolverErr)
+	info, err := proc.BuildProcessInfoWithStatementDigest("select 1")
+	require.NoError(t, err)
+	require.Equal(t, "STRICT_TRANS_TABLES", info.SessionInfo.SqlMode)
+	require.Equal(t, 2, calls, "failed and successful digest builds")
+
+	// Once a remote process carries a non-empty snapshot, the receiving
+	// resolver is never consulted, even on the strict digest path.
+	proc.Base.IsFrontend = false
+	proc.Base.SessionInfo.SqlMode = EmptySqlModeSentinel
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return nil, moerr.NewInternalErrorNoCtx("must not resolve captured sql_mode")
+	})
+	info, err = proc.BuildProcessInfoWithStatementDigest("select 1")
+	require.NoError(t, err)
+	require.Equal(t, EmptySqlModeSentinel, info.SessionInfo.SqlMode)
+
+	// A false temporal flag is also a captured snapshot. The digest codec
+	// must derive it from the already captured sql_mode and never consult the
+	// receiving CN's resolver, or a second hop can change the local behavior.
+	remote, _ := newCodecTestProcess(t)
+	remote.Base.IsFrontend = false
+	remote.Base.SessionInfo.SqlMode = EmptySqlModeSentinel
+	remote.Base.SessionInfo.ExplicitZeroTemporalCastReturnsNull = false
+	resolverCalls := 0
+	remote.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		resolverCalls++
+		return nil, moerr.NewInternalErrorNoCtx("must not resolve captured sql_mode")
+	})
+	info, err = remote.BuildProcessInfoWithStatementDigest("select 1")
+	require.NoError(t, err)
+	require.Equal(t, EmptySqlModeSentinel, info.SessionInfo.SqlMode)
+	require.False(t, info.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
+	require.Zero(t, resolverCalls)
+
+	// If the captured mode itself requires the temporal adjustment, derive it
+	// even when the serialized boolean was false (for example, an older peer
+	// that did not carry that field yet).
+	remote.Base.SessionInfo.SqlMode = "STRICT_TRANS_TABLES,NO_ZERO_DATE"
+	info, err = remote.BuildProcessInfoWithStatementDigest("select 1")
+	require.NoError(t, err)
+	require.True(t, info.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
+	require.Zero(t, resolverCalls)
 }
 
 func TestPrepareParamMetadataForRemoteCompatibility(t *testing.T) {

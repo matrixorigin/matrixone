@@ -1,0 +1,40 @@
+select length(statement_digest('SELECT 1')) as digest_length;
+digest_length
+64
+select statement_digest('SELECT 1') = statement_digest(' select /* ignored */ 1; ') as formatting_normalized;
+formatting_normalized
+true
+select statement_digest('SELECT 1') <> statement_digest('SELECT 2') as literal_values_distinct;
+literal_values_distinct
+true
+select statement_digest('SELECT a') <> statement_digest('SELECT ''a''') as identifier_and_literal_distinct;
+identifier_and_literal_distinct
+true
+select statement_digest('SELECT @MiXeD') = statement_digest('SELECT @mixed') as user_variable_case_normalized;
+user_variable_case_normalized
+true
+select statement_digest(NULL) is null as null_propagates;
+null_propagates
+true
+select statement_digest('SELECT TRIM(BOTH ''x'' FROM ''xxx'')') is not null as trim_formats;
+trim_formats
+true
+select statement_digest('SELECT (SELECT 1)') is not null as nested_query_formats;
+nested_query_formats
+true
+select statement_digest('PREPARE p FROM ''SELECT 1''') is not null as prepare_formats;
+prepare_formats
+true
+drop database if exists statement_digest_23024;
+create database statement_digest_23024;
+use statement_digest_23024;
+create table statement_digest_inputs_23024(sql_text text);
+insert into statement_digest_inputs_23024 values
+('SELECT 1'),
+('select 2'),
+('SELECT ''中文'''),
+(NULL);
+select count(*) as rows, count(statement_digest(sql_text)) as hashed_rows from statement_digest_inputs_23024;
+rows	hashed_rows
+4	3
+drop database statement_digest_23024;

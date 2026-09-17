@@ -31,6 +31,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
@@ -248,7 +249,8 @@ func prepareRemoteRunSendingData(
 	}
 
 	// Encode the ScopeList which need to be sent.
-	if scopeData, err = encodeRemoteScope(encodedScope, proc); err != nil {
+	var features plan.RemoteExpressionFeatures
+	if scopeData, features, err = encodeRemoteScopeWithFeatures(encodedScope, proc); err != nil {
 		return nil, false, nil, false, err
 	}
 
@@ -258,6 +260,7 @@ func prepareRemoteRunSendingData(
 		sqlStr,
 		remoteFragmentCounts,
 		remoteExecutionID,
+		features.StatementDigestFunction,
 	); err != nil {
 		return nil, false, nil, false, err
 	}

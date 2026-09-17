@@ -40,6 +40,7 @@ type FmtCtx struct {
 	// NO_BACKSLASH_ESCAPES.
 	modeIndependentStringLiterals bool
 	paramExprOffset               bool
+	canonicalUserVariableNames    bool
 	detectDateTimeFormat          bool
 	sawDateTimeFormat             bool
 	stringLiteralPositions        *[]StringLiteralPosition
@@ -118,6 +119,16 @@ func (ctx *FmtCtx) ModeIndependentStringLiterals() bool {
 func WithParamExprOffset() FmtCtxOption {
 	return FmtCtxOption(func(ctx *FmtCtx) {
 		ctx.paramExprOffset = true
+	})
+}
+
+// WithCanonicalUserVariableNames lowercases user-defined variable names
+// while formatting. MatrixOne resolves those names case-insensitively; this
+// option lets semantic-key callers use the same identity without changing the
+// AST or the default SQL rendering.
+func WithCanonicalUserVariableNames() FmtCtxOption {
+	return FmtCtxOption(func(ctx *FmtCtx) {
+		ctx.canonicalUserVariableNames = true
 	})
 }
 
