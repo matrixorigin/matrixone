@@ -47,6 +47,10 @@ func TestIssue26875ForeignKeyActions(t *testing.T) {
 		t.Logf("MO_UT_SETUP fixture=issue26875 phase=database-create-and-select duration=%s", time.Since(databaseStarted))
 		defer dropIssue26875Database(t, conn, dbName)
 
+		// The database is created through CN0 and selected through CN1. Publish
+		// the DDL commit before CN1 resolves the database; otherwise its catalog
+		// snapshot can still predate the successful CREATE DATABASE.
+		mustExec(t, ctx, conn2, "select mo_ctl('cn', 'SYNCCOMMIT', '')")
 		selectStarted := time.Now()
 		mustExec(t, ctx, conn2, fmt.Sprintf("use `%s`", dbName))
 		t.Logf("MO_UT_SETUP fixture=issue26875 phase=second-connection-select duration=%s", time.Since(selectStarted))
