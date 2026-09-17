@@ -45,10 +45,10 @@ direct_v  ¦  select `t`.`a`, `t`.`b` from `t`  ¦  NO  𝄀
 dollar_quoted_definer_v  ¦  select `t`.`a` from `t`  ¦  NO  𝄀
 dump_v  ¦  select `t`.`a` from `t`  ¦  NO  𝄀
 escaped_quoted_definer_v  ¦  select `t`.`a` from `t`  ¦  NO  𝄀
-executable_dollar_terminator_v  ¦  select "x*/y" as `s`  ¦  NO  𝄀
+executable_dollar_terminator_v  ¦  select 'x*/y' as `s`  ¦  NO  𝄀
 executable_double_minus_v  ¦  select 1 - -2 as `x`  ¦  NO  𝄀
-executable_double_quote_terminator_v  ¦  select "x\"*/y" as `s`  ¦  NO  𝄀
-executable_string_terminator_v  ¦  select "x*/y" as `s`  ¦  NO  𝄀
+executable_double_quote_terminator_v  ¦  select 'x"*/y' as `s`  ¦  NO  𝄀
+executable_string_terminator_v  ¦  select 'x*/y' as `s`  ¦  NO  𝄀
 executable_trailing_comment_v  ¦  select `t`.`a` from `t`  ¦  NO  𝄀
 executable_without_version_v  ¦  select `t`.`a` from `t`  ¦  NO  𝄀
 hash_comment_v  ¦  select `t`.`a` from `t`  ¦  NO  𝄀
