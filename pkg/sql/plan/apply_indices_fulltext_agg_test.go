@@ -216,3 +216,181 @@ func TestFullTextAggHavingCoAggregateNotDriven(t *testing.T) {
 	require.Equal(t, 0, countReachableFullTextScans(builder.qry), "a co-aggregate query must not drive the index")
 	require.Positive(t, countReachableFullTextMatches(builder.qry), "the raw MATCH survives (query stays unsupported)")
 }
+
+func TestSafeAggForFullTextDriver(t *testing.T) {
+	require.True(t, safeAggForFullTextDriver("max"))
+	require.True(t, safeAggForFullTextDriver("sum"))
+	for _, n := range []string{"min", "avg", "count", "starcount", "group_concat", ""} {
+		require.False(t, safeAggForFullTextDriver(n), n)
+	}
+}
+
+func TestUnwrapMonotoneScalar(t *testing.T) {
+	require.Nil(t, unwrapMonotoneScalar(nil))
+	col := &planpb.Expr{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}
+	require.Same(t, col, unwrapMonotoneScalar(col), "a non-function expr is returned as-is")
+	wrap := func(name string, arg *planpb.Expr) *planpb.Expr {
+		return &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: name}, Args: []*planpb.Expr{arg}}}}
+	}
+	for _, n := range []string{"cast", "round", "floor", "ceil"} {
+		require.Same(t, col, unwrapMonotoneScalar(wrap(n, col)), n)
+	}
+	require.Same(t, col, unwrapMonotoneScalar(wrap("cast", wrap("round", col))), "nested wrappers are peeled")
+	plus := wrap("+", col)
+	require.Same(t, plus, unwrapMonotoneScalar(plus), "a non-order-preserving function stops the peel")
+	emptyCast := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: "cast"}}}}
+	require.Same(t, emptyCast, unwrapMonotoneScalar(emptyCast), "a wrapper with no args is returned as-is")
+}
+
+func TestExprContainsFullTextMatch(t *testing.T) {
+	match := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: "fulltext_match"}}}}
+	col := &planpb.Expr{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}
+	require.False(t, exprContainsFullTextMatch(nil))
+	require.False(t, exprContainsFullTextMatch(col))
+	require.True(t, exprContainsFullTextMatch(match))
+	nested := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: ">"}, Args: []*planpb.Expr{col, match}}}}
+	require.True(t, exprContainsFullTextMatch(nested))
+	noMatch := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: ">"}, Args: []*planpb.Expr{col, col}}}}
+	require.False(t, exprContainsFullTextMatch(noMatch))
+}
+
+func TestFullTextDriverFuncs(t *testing.T) {
+	match := func() *planpb.Expr {
+		return &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: "fulltext_match"}}}}
+	}
+	require.Empty(t, fullTextDriverFuncs(nil, []int32{0}, nil), "a nil scan contributes no filter funcs")
+	scan := &planpb.Node{FilterList: []*planpb.Expr{match(), {Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}}}
+	// id 0 -> a fulltext_match filter (kept); id 5 -> out of range (skipped); id 1 -> a colref (no fn).
+	funcs := fullTextDriverFuncs(scan, []int32{0, 5, 1}, []*planpb.Expr{match()})
+	require.Len(t, funcs, 2, "scan filter 0 plus the one wrapped expr; out-of-range and non-func skipped")
+}
+
+// aggHavingFixture builds a QueryBuilder with a registered fulltext index and a base scan, for
+// exercising getFullTextMatchFromAggHaving / aggOutputInvariantToMatcherFilter directly.
+func aggHavingFixture(t *testing.T) (*QueryBuilder, *planpb.TableDef, int32, *planpb.Node) {
+	t.Helper()
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	ctx := NewBindContext(builder, nil)
+	tableDef := makeFullTextJoinTestTableDef("ft", true)
+	registerFullTextJoinRegularIndexTable(builder, tableDef.Indexes[0].IndexTableName)
+	scanTag := builder.genNewBindTag()
+	scanID := builder.appendNode(makeFullTextJoinTestScan(tableDef, scanTag, nil), ctx)
+	return builder, tableDef, scanTag, builder.qry.Nodes[scanID]
+}
+
+func TestGetFullTextMatchFromAggHaving(t *testing.T) {
+	const aggTag = 999
+	ftyp := types.T_float32.ToType()
+	aggCol := func(pos int32) *planpb.Expr {
+		return &planpb.Expr{Typ: makePlan2Type(&ftyp), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: aggTag, ColPos: pos}}}
+	}
+	cmp := func(t *testing.T, op string, l, r *planpb.Expr) *planpb.Expr {
+		e, err := BindFuncExprImplByPlanExpr(context.Background(), op, []*planpb.Expr{l, r})
+		require.NoError(t, err)
+		return e
+	}
+	f0 := makePlan2Float64ConstExprWithType(0)
+	f1 := makePlan2Float64ConstExprWithType(1)
+
+	for _, tc := range []struct {
+		name     string
+		aggList  func(m *planpb.Expr) []*planpb.Expr
+		groupBy  func(m *planpb.Expr) []*planpb.Expr
+		having   func(t *testing.T, m *planpb.Expr) []*planpb.Expr
+		wrongIdx bool // match on a column the index cannot serve
+		want     int
+	}{
+		{name: "max>0 colref", aggList: func(m *planpb.Expr) []*planpb.Expr { return []*planpb.Expr{ftAggFn("max", m)} },
+			having: func(t *testing.T, m *planpb.Expr) []*planpb.Expr { return []*planpb.Expr{cmp(t, ">", aggCol(0), f0)} }, want: 1},
+		{name: "max>=0 rejected", aggList: func(m *planpb.Expr) []*planpb.Expr { return []*planpb.Expr{ftAggFn("max", m)} },
+			having: func(t *testing.T, m *planpb.Expr) []*planpb.Expr { return []*planpb.Expr{cmp(t, ">=", aggCol(0), f0)} }, want: 0},
+		{name: "max>=1 accepted", aggList: func(m *planpb.Expr) []*planpb.Expr { return []*planpb.Expr{ftAggFn("max", m)} },
+			having: func(t *testing.T, m *planpb.Expr) []*planpb.Expr { return []*planpb.Expr{cmp(t, ">=", aggCol(0), f1)} }, want: 1},
+		{name: "max<5 rejected", aggList: func(m *planpb.Expr) []*planpb.Expr { return []*planpb.Expr{ftAggFn("max", m)} },
+			having: func(t *testing.T, m *planpb.Expr) []*planpb.Expr {
+				return []*planpb.Expr{cmp(t, "<", aggCol(0), makePlan2Float64ConstExprWithType(5))}
+			}, want: 0},
+		{name: "reversed 0<max", aggList: func(m *planpb.Expr) []*planpb.Expr { return []*planpb.Expr{ftAggFn("max", m)} },
+			having: func(t *testing.T, m *planpb.Expr) []*planpb.Expr { return []*planpb.Expr{cmp(t, "<", f0, aggCol(0))} }, want: 1},
+		{name: "inline max>0", aggList: func(m *planpb.Expr) []*planpb.Expr { return []*planpb.Expr{ftAggFn("max", m)} },
+			having: func(t *testing.T, m *planpb.Expr) []*planpb.Expr {
+				return []*planpb.Expr{cmp(t, ">", ftAggFn("max", m), f0)}
+			}, want: 1},
+		{name: "sum>0", aggList: func(m *planpb.Expr) []*planpb.Expr { return []*planpb.Expr{ftAggFn("sum", m)} },
+			having: func(t *testing.T, m *planpb.Expr) []*planpb.Expr { return []*planpb.Expr{cmp(t, ">", aggCol(0), f0)} }, want: 1},
+		{name: "min>0 not-safe", aggList: func(m *planpb.Expr) []*planpb.Expr { return []*planpb.Expr{ftAggFn("min", m)} },
+			having: func(t *testing.T, m *planpb.Expr) []*planpb.Expr {
+				return []*planpb.Expr{cmp(t, ">", ftAggFn("min", m), f0)}
+			}, want: 0},
+		{name: "and both membership dedups to 1", aggList: func(m *planpb.Expr) []*planpb.Expr { return []*planpb.Expr{ftAggFn("max", m)} },
+			having: func(t *testing.T, m *planpb.Expr) []*planpb.Expr {
+				return []*planpb.Expr{cmp(t, "and", cmp(t, ">", aggCol(0), f0), cmp(t, ">=", aggCol(0), f1))}
+			}, want: 1},
+		{name: "no membership", aggList: func(m *planpb.Expr) []*planpb.Expr { return []*planpb.Expr{ftAggFn("max", m)} },
+			having: func(t *testing.T, m *planpb.Expr) []*planpb.Expr {
+				return []*planpb.Expr{cmp(t, "<", aggCol(0), makePlan2Float64ConstExprWithType(5))}
+			}, want: 0},
+		{name: "co-aggregate refused", aggList: func(m *planpb.Expr) []*planpb.Expr { return []*planpb.Expr{ftAggFn("count", m), ftAggFn("max", m)} },
+			having: func(t *testing.T, m *planpb.Expr) []*planpb.Expr { return []*planpb.Expr{cmp(t, ">", aggCol(1), f0)} }, want: 0},
+		{name: "groupby match refused", aggList: func(m *planpb.Expr) []*planpb.Expr { return []*planpb.Expr{ftAggFn("max", m)} },
+			groupBy: func(m *planpb.Expr) []*planpb.Expr { return []*planpb.Expr{m} },
+			having:  func(t *testing.T, m *planpb.Expr) []*planpb.Expr { return []*planpb.Expr{cmp(t, ">", aggCol(0), f0)} }, want: 0},
+		{name: "no matching index", aggList: func(m *planpb.Expr) []*planpb.Expr { return []*planpb.Expr{ftAggFn("max", m)} },
+			having: func(t *testing.T, m *planpb.Expr) []*planpb.Expr { return []*planpb.Expr{cmp(t, ">", aggCol(0), f0)} }, wrongIdx: true, want: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			builder, tableDef, scanTag, scanNode := aggHavingFixture(t)
+			cols := []int32{2, 3}
+			if tc.wrongIdx {
+				cols = []int32{2} // the index covers {2,3}; a {2}-only match cannot be served
+			}
+			m := makeFullTextMatchExpr("hello", 0, tableDef, scanTag, cols)
+			var groupBy []*planpb.Expr
+			if tc.groupBy != nil {
+				groupBy = tc.groupBy(m)
+			}
+			aggNode := &planpb.Node{NodeType: planpb.Node_AGG, AggList: tc.aggList(m), GroupBy: groupBy, BindingTags: []int32{aggTag - 1, aggTag}}
+			exprs, idxs := builder.getFullTextMatchFromAggHaving(tc.having(t, m), aggNode, scanNode, nil)
+			require.Len(t, exprs, tc.want, tc.name)
+			require.Len(t, idxs, tc.want, tc.name)
+		})
+	}
+
+	t.Run("dedup against existing driver", func(t *testing.T) {
+		builder, tableDef, scanTag, scanNode := aggHavingFixture(t)
+		m := makeFullTextMatchExpr("hello", 0, tableDef, scanTag, []int32{2, 3})
+		aggNode := &planpb.Node{NodeType: planpb.Node_AGG, AggList: []*planpb.Expr{ftAggFn("max", m)}, BindingTags: []int32{aggTag - 1, aggTag}}
+		having := []*planpb.Expr{cmp(t, ">", aggCol(0), f0)}
+		existing := []*planpb.Function{makeFullTextMatchExpr("hello", 0, tableDef, scanTag, []int32{2, 3}).GetF()}
+		exprs, _ := builder.getFullTextMatchFromAggHaving(having, aggNode, scanNode, existing)
+		require.Empty(t, exprs, "a match already driving a stream is not collected again")
+	})
+
+	t.Run("nil agg / no bindingtags", func(t *testing.T) {
+		builder, _, _, scanNode := aggHavingFixture(t)
+		exprs, _ := builder.getFullTextMatchFromAggHaving(nil, nil, scanNode, nil)
+		require.Empty(t, exprs)
+		exprs, _ = builder.getFullTextMatchFromAggHaving(nil, &planpb.Node{NodeType: planpb.Node_AGG}, scanNode, nil)
+		require.Empty(t, exprs, "an agg with fewer than 2 binding tags is skipped")
+	})
+}
+
+func TestAggOutputInvariantToMatcherFilter(t *testing.T) {
+	builder, tableDef, scanTag, _ := aggHavingFixture(t)
+	match := makeFullTextMatchExpr("hello", 0, tableDef, scanTag, []int32{2, 3})
+	other := makeFullTextMatchExpr("world", 0, tableDef, scanTag, []int32{2, 3})
+	drivers := []*planpb.Expr{match}
+	agg := func(aggList, groupBy []*planpb.Expr) *planpb.Node {
+		return &planpb.Node{NodeType: planpb.Node_AGG, AggList: aggList, GroupBy: groupBy}
+	}
+
+	require.False(t, builder.aggOutputInvariantToMatcherFilter(nil, drivers))
+	require.False(t, builder.aggOutputInvariantToMatcherFilter(agg(nil, nil), drivers), "empty AggList")
+	require.True(t, builder.aggOutputInvariantToMatcherFilter(agg([]*planpb.Expr{ftAggFn("max", match)}, nil), drivers))
+	require.True(t, builder.aggOutputInvariantToMatcherFilter(agg([]*planpb.Expr{ftAggFn("max", match), ftAggFn("sum", match)}, nil), drivers))
+	require.False(t, builder.aggOutputInvariantToMatcherFilter(agg([]*planpb.Expr{ftAggFn("count", match)}, nil), drivers), "count is not a safe agg")
+	require.False(t, builder.aggOutputInvariantToMatcherFilter(agg([]*planpb.Expr{ftAggFn("max", ftjColExpr(tableDef, scanTag, 1))}, nil), drivers), "max over a non-match column")
+	require.False(t, builder.aggOutputInvariantToMatcherFilter(agg([]*planpb.Expr{ftAggFn("max", other)}, nil), drivers), "max over a different match")
+	require.False(t, builder.aggOutputInvariantToMatcherFilter(agg([]*planpb.Expr{ftAggFn("max", match)}, []*planpb.Expr{match}), drivers), "grouping key is a match")
+	require.True(t, builder.aggOutputInvariantToMatcherFilter(agg([]*planpb.Expr{ftAggFn("max", match)}, []*planpb.Expr{ftjColExpr(tableDef, scanTag, 1)}), drivers))
+}
