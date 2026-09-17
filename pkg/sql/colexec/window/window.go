@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/partition"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sort"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -2141,16 +2142,12 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 	if err := ctr.evalOrderVector(bat, proc); err != nil {
 		return false, err
 	}
-	if bat.RowCount() < 2 {
-		return false, nil
-	}
-
 	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
 	if ap.PartitionTopN {
 		// Grouping-set sentinels are SQL NULLs to a downstream PARTITION BY.
-		// Normalize only the private order-key copies: otherwise the sorter can
-		// compare their physical zero payload with an ordinary value (for example
-		// an empty string) and the boundary detector can merge two partitions.
+		// Normalize only the private order-key copies before external sorting;
+		// otherwise the sorter can compare their physical zero payload with an
+		// ordinary value (for example an empty string) and merge two partitions.
 		for i := 0; i < len(w.PartitionBy); i++ {
 			vec := ctr.orderVecs[i].Vec[0]
 			if vec.HasGrouping() {
@@ -2158,6 +2155,120 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 				vec.SetGrouping(nil)
 			}
 		}
+	}
+
+	sortSize := int64(bat.Size())
+	for i := range ctr.aggVecs {
+		for _, vec := range ctr.aggVecs[i].Vec {
+			if vec != nil && !vec.IsConst() {
+				sortSize += int64(vec.Size())
+			}
+		}
+	}
+	for i := range ctr.orderVecs {
+		for _, vec := range ctr.orderVecs[i].Vec {
+			if vec != nil {
+				sortSize += int64(vec.Size())
+			}
+		}
+	}
+
+	externalSorted := false
+	if bat.RowCount() > 1 && sortSize > colexec.ResolveSpillThreshold(ap.SpillThreshold) {
+		var (
+			orderCols    []*vector.Vector
+			orderRefs    [][2]int
+			extraAggVecs []*vector.Vector
+			extraRefs    [][2]int
+		)
+		if len(ctr.orderVecs) != len(ap.Fs) {
+			return false, moerr.NewInternalErrorNoCtx("window order vector count mismatch")
+		}
+		for i := range ctr.orderVecs {
+			if len(ctr.orderVecs[i].Vec) != 1 || ctr.orderVecs[i].Vec[0] == nil {
+				return false, moerr.NewInternalErrorNoCtx("window order vector is missing")
+			}
+			orderCols = append(orderCols, ctr.orderVecs[i].Vec[0])
+			orderRefs = append(orderRefs, [2]int{i, 0})
+		}
+		for i := range ctr.aggVecs {
+			for j, vec := range ctr.aggVecs[i].Vec {
+				if vec == nil || vec.IsConst() {
+					continue
+				}
+				extraAggVecs = append(extraAggVecs, vec)
+				extraRefs = append(extraRefs, [2]int{i, j})
+			}
+		}
+
+		inputConsumed := func() {
+			// The sorter has copied every row into sorter-owned resident or spill
+			// state. Release the materialized source and the carried expression
+			// vectors before final merge collection so the sorted partition does
+			// not overlap a second full copy of the same window payload.
+			if ctr.bat == bat {
+				bat.Clean(proc.Mp())
+				ctr.bat = nil
+			}
+			for _, ref := range orderRefs {
+				vec := ctr.orderVecs[ref[0]].Vec[ref[1]]
+				if vec != nil {
+					vec.Free(proc.Mp())
+					ctr.orderVecs[ref[0]].Vec[ref[1]] = nil
+				}
+			}
+			for _, ref := range extraRefs {
+				vec := ctr.aggVecs[ref[0]].Vec[ref[1]]
+				if vec != nil {
+					vec.Free(proc.Mp())
+					ctr.aggVecs[ref[0]].Vec[ref[1]] = nil
+				}
+			}
+		}
+
+		sorted, sortedOrderVecs, sortedAggVecs, err := mergeorder.SortBatchWithPrecomputedOrderAndRelease(
+			proc,
+			bat,
+			ap.Fs,
+			ap.SpillThreshold,
+			ap.OpAnalyzer,
+			orderCols,
+			extraAggVecs,
+			inputConsumed,
+		)
+		if err != nil {
+			return false, err
+		}
+		if len(sortedOrderVecs) != len(orderRefs) || len(sortedAggVecs) != len(extraRefs) {
+			for _, vec := range sortedOrderVecs {
+				if vec != nil {
+					vec.Free(proc.Mp())
+				}
+			}
+			for _, vec := range sortedAggVecs {
+				if vec != nil {
+					vec.Free(proc.Mp())
+				}
+			}
+			sorted.Clean(proc.Mp())
+			return false, moerr.NewInternalErrorNoCtx("window sorted vector count mismatch")
+		}
+		ctr.bat = sorted
+		bat = sorted
+		// Keep the values evaluated before sorting. Re-evaluating either the order
+		// expressions or the window arguments would duplicate work and change the
+		// result of volatile expressions.
+		for k, ref := range orderRefs {
+			ctr.orderVecs[ref[0]].Vec[ref[1]] = sortedOrderVecs[k]
+		}
+		for k, ref := range extraRefs {
+			ctr.aggVecs[ref[0]].Vec[ref[1]] = sortedAggVecs[k]
+		}
+		externalSorted = true
+	}
+
+	if bat.RowCount() < 2 {
+		return false, nil
 	}
 
 	ovec := ctr.orderVecs[0].Vec[0]
@@ -2181,7 +2292,7 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 	}
 
 	// skip sort for const vector
-	if !ovec.IsConst() {
+	if !externalSorted && !ovec.IsConst() {
 		if err := checkCanceled(proc, 0); err != nil {
 			return false, err
 		}
@@ -2222,7 +2333,7 @@ func (ctr *container) processOrder(idx int, ap *Window, bat *batch.Batch, proc *
 			scratch = &jsonOrderScratch
 		}
 		// skip sort for const vector
-		if !vec.IsConst() {
+		if !externalSorted && !vec.IsConst() {
 			if nullCnt < vec.Length() {
 				for group, groupCount := 0, len(ps); group < groupCount; group++ {
 					if err := checkCanceled(proc, group); err != nil {

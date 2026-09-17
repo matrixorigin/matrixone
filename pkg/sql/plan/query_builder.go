@@ -106,7 +106,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 			mysqlCompatible = !onlyFullGroupBy
 			mysqlFullGroupByCompat = onlyFullGroupBy && !mysql.HasMatrixOneNativeSQLMode(modeStr)
 			boolSumAvgCompat = mysql.HasEnableBoolSumAvgSQLMode(modeStr)
-			noUnsignedSubtraction = mysql.HasSQLMode(modeStr, "NO_UNSIGNED_SUBTRACTION")
+			noUnsignedSubtraction = mysql.HasSQLMode(modeStr, mysql.SQLModeNoUnsignedSubtraction)
 		}
 	}
 
@@ -10273,6 +10273,7 @@ func (builder *QueryBuilder) appendWindowNode(
 			WinSpecList: []*Expr{w},
 			WindowIdx:   int32(i),
 			BindingTags: []int32{ctx.windowTag},
+			SpillMem:    builder.sortSpillMem,
 		}, ctx)
 		builder.userWindowNodes[nodeID] = struct{}{}
 	}

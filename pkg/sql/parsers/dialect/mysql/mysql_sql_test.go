@@ -6177,6 +6177,18 @@ var (
 		input string
 	}{
 		{
+			input: "alter table t1 alter reindex idx1 ivfflat lists = 2, alter reindex idx1 ivfflat quantization 'float16'",
+		},
+		{
+			input: "alter table t1 alter reindex idx1 ivfflat lists = 2, alter reindex idx2 ivfflat lists = 4",
+		},
+		{
+			input: "alter table t1 alter reindex idx1 ivfflat lists = 2, add column c int",
+		},
+		{
+			input: "alter table t1 add column c int, alter reindex idx1 ivfflat lists = 2",
+		},
+		{
 			input: "alter table t1 add constraint index (col3, col4)",
 		},
 		{

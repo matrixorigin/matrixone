@@ -2652,11 +2652,15 @@ func TestH0OrderedPercentileSpillsIndependently(t *testing.T) {
 	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
 	g := newGroupOp(proc, nil, []aggexec.AggFuncExecExpression{
 		orderedPercentileAgg(aggexec.AggIdOfPercentileCont, 0, []byte("0.5"), false),
+		orderedPercentileAgg(aggexec.AggIdOfPercentileDisc, 0, []byte("0.95"), true),
 	})
 	g.SpillMem = 1
 	g.AppendChild(child)
+	allocation := installGroupTestAllocation(t, g, proc, 128<<20)
 	t.Cleanup(func() {
 		g.Free(proc, false, nil)
+		require.Zero(t, allocation.account.Snapshot().Used)
+		finalizeGroupTestAllocation(t, g, allocation)
 		child.Free(proc, false, nil)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
@@ -2666,7 +2670,9 @@ func TestH0OrderedPercentileSpillsIndependently(t *testing.T) {
 	outputs := collectBatches(t, g, proc)
 	require.Len(t, outputs, 1)
 	require.Equal(t, 10000.0, vector.GetFixedAtNoTypeCheck[float64](outputs[0].Vecs[0], 0))
+	require.Equal(t, int64(1000), vector.GetFixedAtNoTypeCheck[int64](outputs[0].Vecs[1], 0))
 	require.Positive(t, g.OpAnalyzer.GetOpStats().SpillRows)
+	require.Positive(t, g.OpAnalyzer.GetOpStats().SpillSize)
 	require.Zero(t, g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillWriteCalls"])
 }
 
@@ -2693,8 +2699,11 @@ func TestSingleHotGroupOrderedPercentileSpillsAfterHashSpillLimit(t *testing.T) 
 	)
 	g.SpillMem = 1
 	g.AppendChild(child)
+	allocation := installGroupTestAllocation(t, g, proc, 128<<20)
 	t.Cleanup(func() {
 		g.Free(proc, false, nil)
+		require.Zero(t, allocation.account.Snapshot().Used)
+		finalizeGroupTestAllocation(t, g, allocation)
 		child.Free(proc, false, nil)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
@@ -3824,6 +3833,123 @@ func TestMergeGroupH0SkipsGenericSpillAndReuses(t *testing.T) {
 	run([][]int32{{4}, {5, 6}}, 3)
 }
 
+func TestMergeGroupAccountedOrderedPercentileSpillModes(t *testing.T) {
+	for _, mode := range []int32{H0, H8, HStr} {
+		t.Run(fmt.Sprint(mode), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			const rows, groups, producers = 8192, 64, 3
+			var groupBy []*plan.Expr
+			valueCol := int32(0)
+			if mode != H0 {
+				keyType := types.T_int32
+				if mode == HStr {
+					keyType = types.T_varchar
+				}
+				groupBy = []*plan.Expr{colExpr(0, keyType)}
+				valueCol = 1
+			}
+			aggs := []aggexec.AggFuncExecExpression{
+				orderedPercentileAgg(aggexec.AggIdOfPercentileCont, valueCol, []byte("0.5"), false),
+				orderedPercentileAgg(aggexec.AggIdOfPercentileDisc, valueCol, []byte("0.95"), true),
+			}
+			var partials []*batch.Batch
+			for producer := 0; producer < producers; producer++ {
+				input := batch.NewWithSize(int(valueCol) + 1)
+				values := make([]int64, rows)
+				for i := range values {
+					values[i] = int64(producer*rows + i)
+				}
+				input.Vecs[valueCol] = testutil.MakeInt64Vector(values, nil, proc.Mp())
+				if mode == H8 {
+					keys := make([]int32, rows)
+					for i := range keys {
+						keys[i] = int32(i % groups)
+					}
+					input.Vecs[0] = testutil.MakeInt32Vector(keys, nil, proc.Mp())
+				} else if mode == HStr {
+					keys := make([]string, rows)
+					for i := range keys {
+						keys[i] = fmt.Sprintf("percentile-key-%02d", i%groups)
+					}
+					input.Vecs[0] = testutil.MakeVarcharVector(keys, nil, proc.Mp())
+				}
+				input.SetRowCount(rows)
+				child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+				partial := newGroupOp(proc, groupBy, aggs)
+				partial.NeedEval = false
+				partial.SpillMem = 536870912
+				partial.AppendChild(child)
+				allocation := installGroupTestAllocation(t, partial, proc, 128<<20)
+				require.NoError(t, partial.Prepare(proc))
+				for _, bat := range collectBatches(t, partial, proc) {
+					partials = append(partials, cloneBatch(t, proc, bat))
+				}
+				partial.Free(proc, false, nil)
+				require.NoError(t, partial.ctr.clearAllocationAccount(allocation.account))
+				// Dup retains the allocation owner for transported key vectors.
+				// Finalize the producer account after the merge child frees them.
+				t.Cleanup(func() {
+					require.Zero(t, allocation.account.Snapshot().Used)
+					finalizeGroupTestAllocation(t, partial, allocation)
+				})
+				child.Free(proc, false, nil)
+			}
+			child := colexec.NewMockOperator().WithBatchs(partials)
+			merge := newMergeGroupOp(aggs)
+			merge.SpillMem = 1
+			merge.AppendChild(child)
+			allocation := installGroupTestAllocation(t, merge, proc, 128<<20)
+			t.Cleanup(func() {
+				merge.Free(proc, false, nil)
+				child.Free(proc, false, nil)
+				require.Zero(t, allocation.account.Snapshot().Used)
+				finalizeGroupTestAllocation(t, merge, allocation)
+				proc.Free()
+				require.Zero(t, proc.Mp().CurrNB())
+			})
+			require.NoError(t, merge.Prepare(proc))
+			seen := make(map[int32]bool)
+			for {
+				result, err := vm.Exec(merge, proc)
+				require.NoError(t, err)
+				if result.Status == vm.ExecStop || result.Batch == nil {
+					break
+				}
+				bat := result.Batch
+				for row := 0; row < bat.RowCount(); row++ {
+					if mode == H0 {
+						require.Equal(t, 12287.5, vector.GetFixedAtNoTypeCheck[float64](bat.Vecs[0], row))
+						require.Equal(t, int64(1228), vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[1], row))
+						seen[0] = true
+					} else {
+						var key int32
+						if mode == H8 {
+							key = vector.GetFixedAtNoTypeCheck[int32](bat.Vecs[0], row)
+						} else {
+							_, err := fmt.Sscanf(string(bat.Vecs[0].GetBytesAt(row)), "percentile-key-%d", &key)
+							require.NoError(t, err)
+						}
+						require.False(t, seen[key])
+						seen[key] = true
+						require.Equal(t, float64(key)+12256, vector.GetFixedAtNoTypeCheck[float64](bat.Vecs[1], row))
+						require.Equal(t, int64(key)+1216, vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[2], row))
+					}
+				}
+			}
+			extra := merge.OpAnalyzer.GetOpStats().ExtraStats
+			if mode == H0 {
+				require.Len(t, seen, 1)
+				require.Zero(t, extra["GroupSpillWriteCalls"])
+				require.Positive(t, merge.OpAnalyzer.GetOpStats().SpillRows)
+				require.Positive(t, merge.OpAnalyzer.GetOpStats().SpillSize)
+			} else {
+				require.Len(t, seen, groups)
+				require.Positive(t, extra["GroupSpillWriteCalls"])
+			}
+		})
+	}
+}
+
 func TestMergeGroupUsesIncomingGroupedModeForMedian(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	t.Cleanup(func() {
@@ -4384,6 +4510,181 @@ func TestRemoteApproxPercentileUsesLegacyStateBeforeProtocolV76(t *testing.T) {
 	require.NoError(t, err)
 	defer results[0].Free(proc.Mp())
 	require.True(t, math.IsNaN(vector.GetFixedAtNoTypeCheck[float64](results[0], 0)))
+}
+
+func TestRemoteDistinctFloatUsesProtocolKeyPolicy(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	arg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_float64)}}
+	for _, tc := range []struct {
+		name       string
+		version    int64
+		legacyWire bool
+		wantBits   uint64
+	}{
+		{
+			name:       "pre-v79",
+			version:    defines.MORPCVersion78,
+			legacyWire: true,
+			wantBits:   0x7ff8000000000001,
+		},
+		{
+			name:       "v79",
+			version:    defines.MORPCVersion79,
+			legacyWire: false,
+			wantBits:   0x7ff8000000000000,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, tc.version)
+			legacyWire := !canonicalDistinctKeyWireEnabled(proc)
+			require.Equal(t, tc.legacyWire, legacyWire)
+			ctr := &container{
+				mp:                      proc.Mp(),
+				mtyp:                    H8,
+				legacyDistinctFloatKeys: legacyWire,
+			}
+			aggs, err := ctr.makeAggList([]aggexec.AggFuncExecExpression{
+				aggexec.MakeAggFunctionExpression(
+					aggexec.AggIdOfCountColumn, true, []*plan.Expr{arg}, nil),
+			})
+			require.NoError(t, err)
+			require.Equal(t, !tc.legacyWire,
+				aggexec.RequiresModernDistinctFloatKeyWire(aggs[0]))
+			require.NoError(t, aggs[0].GroupGrow(aggexec.AggBatchSize/8))
+
+			values := testutil.NewFloat64Vector(
+				1, types.T_float64.ToType(), proc.Mp(), false, nil,
+				[]float64{math.Float64frombits(0x7ff8000000000001)})
+			require.NoError(t, aggs[0].BulkFill(0, []*vector.Vector{values}))
+			var wire bytes.Buffer
+			require.NoError(t, aggs[0].SaveIntermediateResultOfChunk(0, &wire))
+			got := binary.LittleEndian.Uint64(wire.Bytes()[20:28])
+			require.Equal(t, tc.wantBits, got)
+
+			values.Free(proc.Mp())
+			freeAggList(aggs)
+		})
+	}
+}
+
+func TestRemoteDistinctFloatLegacyStateKeepsLegacyWireAfterGateAdvance(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	require.True(t, ok)
+	t.Cleanup(func() {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		proc.Free()
+	})
+
+	countDistinctTuple := func() aggexec.AggFuncExecExpression {
+		return aggexec.MakeAggFunctionExpression(
+			aggexec.AggIdOfCountColumn,
+			true,
+			[]*plan.Expr{
+				colExpr(0, types.T_float64),
+				colExpr(1, types.T_varchar),
+			},
+			nil,
+		)
+	}
+
+	// Admit the state while the remote peer is still pre-v79. The two NaNs
+	// must remain distinct in the legacy producer's in-memory state.
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion78)
+	input := batch.NewWithSize(2)
+	input.Vecs[0] = testutil.NewFloat64Vector(
+		2, types.T_float64.ToType(), proc.Mp(), false, nil,
+		[]float64{
+			math.Float64frombits(0x7ff8000000000001),
+			math.Float64frombits(0x7ff8000000000002),
+		})
+	input.Vecs[1] = testutil.MakeVarcharVector([]string{"a", "a"}, nil, proc.Mp())
+	input.SetRowCount(2)
+	partial := newGroupOp(proc, nil, []aggexec.AggFuncExecExpression{countDistinctTuple()})
+	partial.NeedEval = false
+	require.NoError(t, partial.Prepare(proc))
+	_, err := partial.buildOneBatch(proc, input)
+	require.NoError(t, err)
+
+	// Do not emit while the state is admitted. Advance the capability gate
+	// before calling the partial-output boundary so this exercises a prepared
+	// Group whose legacy state is drained under the newer protocol.
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion79)
+	partialResult, _, err := partial.getNextIntermediateResult(proc)
+	require.NoError(t, err)
+	require.NotNil(t, partialResult.Batch)
+	partialBatch := cloneBatch(t, proc, partialResult.Batch)
+	partial.Free(proc, false, nil)
+	input.Clean(proc.Mp())
+
+	// The capability gate advances before the prepared partial is emitted to
+	// the receiver. The output must retain legacy framing so the v79 receiver
+	// canonicalizes the legacy FLOAT member instead of trusting it as modern.
+	mergeChild := colexec.NewMockOperator().WithBatchs([]*batch.Batch{partialBatch})
+	merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{countDistinctTuple()})
+	merge.AppendChild(mergeChild)
+	require.NoError(t, merge.Prepare(proc))
+	outputs := collectBatches(t, merge, proc)
+	require.Len(t, outputs, 1)
+	require.Equal(t, int64(1),
+		vector.MustFixedColNoTypeCheck[int64](outputs[0].Vecs[0])[0])
+	merge.Free(proc, false, nil)
+	mergeChild.Free(proc, false, nil)
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestRemoteDistinctFloatDowngradeRejectsModernState(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	require.True(t, ok)
+	t.Cleanup(func() {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		proc.Free()
+	})
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion79)
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = testutil.NewFloat64Vector(
+		1, types.T_float64.ToType(), proc.Mp(), false, nil,
+		[]float64{math.Float64frombits(0x7ff8000000000001)})
+	input.SetRowCount(1)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	group := newGroupOp(proc, nil, []aggexec.AggFuncExecExpression{
+		aggexec.MakeAggFunctionExpression(
+			aggexec.AggIdOfCountColumn,
+			true,
+			[]*plan.Expr{colExpr(0, types.T_float64)},
+			nil,
+		),
+	})
+	group.NeedEval = false
+	group.AppendChild(child)
+	t.Cleanup(func() {
+		group.Free(proc, false, nil)
+		child.Free(proc, false, nil)
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+
+	require.NoError(t, group.Prepare(proc))
+	require.Len(t, group.ctr.aggList, 1)
+	require.True(t,
+		aggexec.RequiresModernDistinctFloatKeyWire(group.ctr.aggList[0]))
+	// The state was admitted while the deployment gate was new. A later
+	// capability downgrade must fail at the partial-output boundary instead of
+	// sending a canonicalized state to a legacy receiver.
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion78)
+	result, err := vm.Exec(group, proc)
+	require.Nil(t, result.Batch)
+	require.ErrorContains(t, err, "requires MORPCVersion79")
 }
 
 func TestRemoteHLLStateRetainsCompatibilityAcrossProtocolVersions(t *testing.T) {

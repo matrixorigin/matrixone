@@ -107,6 +107,10 @@ GO_MODULE_MODE="-mod=readonly"
 # Static analysis owns vet in the separate SCA job. Running it again for every
 # UT package duplicates work and increases race-test compile CPU/memory.
 GO_TEST_VET_FLAGS="-vet=off"
+# Ordinary `go test` omits DWARF, but `go test -c` retains it by default.
+# Our temporary race binaries are executed, not debugged: give the compile-only
+# paths the same policy without stripping the Go symbol table or race support.
+GO_TEST_BINARY_FLAGS="-ldflags=-w"
 # CI runs the checked-out MatrixOne module, never a caller's Go workspace.
 export GOWORK=off
 
@@ -487,8 +491,16 @@ function start_ut_heartbeat(){
             done
             active_cases=$(grep -c '^active UT case:' <<< "${active_records}" || true)
             active_detail=$(grep '^active UT case:' <<< "${active_records}" | LC_ALL=C sort -u | head -n 3 | paste -sd ';' - || true)
-            process_count=$(ps -e --no-headers 2>/dev/null | wc -l | tr -d ' ' || true)
+            local process_snapshot
+            process_snapshot=$(ps -eo pid=,ppid=,rss=,comm= 2>/dev/null || true)
+            process_count=$(awk 'NF { n++ } END { print n+0 }' <<< "${process_snapshot}")
             memory=$(cgroup_memory_metrics)
+            # RSS is per process (shared pages may be counted more than once),
+            # whereas cgroup memory also includes file cache and kernel memory.
+            # Do not print command arguments, which may contain credentials.
+            local top_rss
+            top_rss=$(LC_ALL=C sort -k3,3nr <<< "${process_snapshot}" | awk 'NF && NR <= 8 { printf "pid=%s,ppid=%s,rss_kib=%s,comm=%s;", $1, $2, $3, $4 }' || true)
+            memory+=" processes.top_rss=${top_rss:-unavailable}"
             logger "INF" "[ut_heartbeat] stage=${stage} label=${label} active_cases=${active_cases:-0} active=${active_detail:-none} processes=${process_count:-unknown} memory=${memory:-unknown} report=${UT_REPORT}"
             checkpoint_ut_event "heartbeat" "${stage}" "${label}" "" \
                 "active_cases=${active_cases:-0} active=${active_detail:-none} processes=${process_count:-unknown} memory=${memory:-unknown}"
@@ -737,6 +749,25 @@ function resolve_cgroup_memory_boundary(){
     fi
 }
 
+function cgroup_resource_breakdown(){
+    local path="$1"
+    # These counters overlap: file includes shmem, and kernel includes slab.
+    # Preserve names rather than presenting their sum as total memory.
+    local stat
+    for stat in memory.stat memory.events cpu.stat memory.pressure cpu.pressure io.pressure; do
+        if [[ -r "${path}/${stat}" ]]; then
+            awk -v prefix="${stat}" '
+                prefix == "memory.stat" && $1 !~ /^(anon|file|shmem|kernel|slab|file_dirty|file_writeback|pagetables)$/ { next }
+                /^(some|full) / {
+                    for (i=2; i<=NF; i++) if ($i ~ /^total=/) printf " %s.%s.%s", prefix, $1, $i
+                    next
+                }
+                NF == 2 { printf " %s.%s=%s", prefix, $1, $2 }
+            ' "${path}/${stat}" 2>/dev/null || true
+        fi
+    done
+}
+
 function cgroup_memory_metrics(){
     local relative_path=""
     local cgroup_root="/sys/fs/cgroup"
@@ -767,6 +798,7 @@ function cgroup_memory_metrics(){
                 "${CGROUP_MEMORY_LIMIT}" "${cgroup_path}" "${CGROUP_MEMORY_PATH}" \
                 "${CGROUP_MEMORY_HIERARCHY_COMPLETE}" "${CGROUP_MEMORY_EVENTS_HIERARCHICAL}" \
                 "${CGROUP_MEMORY_HIERARCHY}"
+            cgroup_resource_breakdown "${CGROUP_MEMORY_PATH}"
             return 0
         fi
     fi
@@ -1135,7 +1167,7 @@ function run_engine_race_shards(){
     start_engine_child 0 env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
         CGO_CFLAGS="${CGO_CFLAGS}" \
         CGO_LDFLAGS="${CGO_LDFLAGS}" \
-        go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -race -tags "${TAGS}" \
+        go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} ${GO_TEST_BINARY_FLAGS} -short -race -tags "${TAGS}" \
         -p 1 -c -o "${ENGINE_RACE_TEST_BINARY}" "${engine_package}" > "${build_log}" 2>&1
     build_start_status=$?
     if (( build_start_status != 0 )); then
@@ -1372,7 +1404,7 @@ function run_plan_race_shards(){
     LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
         CGO_CFLAGS="${CGO_CFLAGS}" \
         CGO_LDFLAGS="${CGO_LDFLAGS}" \
-        go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -race -tags "${TAGS}" \
+        go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} ${GO_TEST_BINARY_FLAGS} -short -race -tags "${TAGS}" \
         -p 1 -c -o "${plan_test_binary}" "${plan_package}" > "${build_log}" 2>&1 &
     plan_child_pid=$!
     set +m
@@ -1634,7 +1666,7 @@ function run_embedded_prebuild(){
             set -m
             env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
                 CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" \
-                go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -race \
+                go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} ${GO_TEST_BINARY_FLAGS} -short -race \
                 -tags "${TAGS}" -p 1 -timeout "${UT_TIMEOUT}m" \
                 -c -o "${output_path}" "${package}" > "${package_report}" 2>&1 &
             child_pids[package_index]=$!

@@ -208,6 +208,9 @@ func (idx *UsearchBruteForceIndex[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 
 // GetIndexSize reports the flattened dataset the index holds in host memory. Nothing here
 // reaches a GPU, so the device figure is 0.
+// BuildTS is the fulltext2 async-freshness hook; brute-force search has no async watermark.
+func (idx *UsearchBruteForceIndex[T]) BuildTS() int64 { return 0 }
+
 func (idx *UsearchBruteForceIndex[T]) GetIndexSize() (hostBytes, deviceBytes int64) {
 	if idx.Dataset == nil {
 		return 0, 0
@@ -346,6 +349,9 @@ func (idx *GoBruteForceIndex[T, R]) Load(sqlproc *sqlexec.SqlProcess) error {
 
 // GetIndexSize reports the row-major dataset the index holds in host memory: the vectors plus
 // the per-row slice headers backing them. Nothing here reaches a GPU, so the device figure is 0.
+// BuildTS is the fulltext2 async-freshness hook; brute-force search has no async watermark.
+func (idx *GoBruteForceIndex[T, R]) BuildTS() int64 { return 0 }
+
 func (idx *GoBruteForceIndex[T, R]) GetIndexSize() (hostBytes, deviceBytes int64) {
 	var elems int64
 	for _, row := range idx.Dataset {

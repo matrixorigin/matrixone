@@ -63,6 +63,10 @@ func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 	mergeGroup.ctr.legacyApproxPercentileState = useLegacyApproxPercentileStateForRemote(proc)
 	mergeGroup.ctr.legacyHLLState = useLegacyHLLStateForRemote(proc)
 	mergeGroup.ctr.floatZeroHLLState = useFloatZeroHLLStateForRemote(proc)
+	// MergeGroup is a receiver. It canonicalizes legacy producer payloads into
+	// the current in-memory DISTINCT domain, so its destination uses the modern
+	// key policy even when the incoming peer is below v79.
+	mergeGroup.ctr.legacyDistinctFloatKeys = false
 	mergeGroup.ctr.timeZone = proc.Base.SessionInfo.TimeZone
 	mergeGroup.ctr.groupByTypes = nil
 	mergeGroup.ctr.keyNullable = false
@@ -525,7 +529,12 @@ func (mergeGroup *MergeGroup) prepareBuildBatch(
 		if err != nil {
 			return err
 		}
-		ctr.configureOrderedAggSpill(proc, mergeGroup.OpAnalyzer, ctr.aggList)
+		// Grouped destinations can still enter generic hash spill, whose wire
+		// grammar does not include local ordered runs. Configure those only
+		// at the terminal reload pass, or here for an incoming H0 partial.
+		if incomingType == H0 {
+			ctr.configureOrderedAggSpill(proc, mergeGroup.OpAnalyzer, ctr.aggList)
+		}
 	}
 	if int(nAggs) != len(ctr.spillAggList) {
 		return moerr.NewInternalError(

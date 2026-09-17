@@ -37,6 +37,7 @@ if [[ "$1" == version ]]; then exit 0; fi
 [[ "$1" == test ]] || exit 81
 [[ " $* " == *' -race '* && " $* " == *' -short '* && " $* " == *' -tags matrixone_test '* && " $* " == *' -timeout 17m '* && " $* " == *' -mod=readonly '* && " $* " == *' -vet=off '* ]] || exit 82
 if [[ " $* " == *' -c '* ]]; then
+ [[ " $* " == *' -ldflags=-w '* ]] || exit 89
  package=${!#}; leaf=${package##*/}
  [[ " $* " == *' -p 1 '* ]] || exit 83
  mkdir "$CASE_DIR/compiled-$leaf" || exit 84
@@ -60,6 +61,7 @@ if [[ " $* " == *' -c '* ]]; then
  chmod +x "$output"
  exit 0
 fi
+[[ " $* " != *' -ldflags=-w '* ]] || exit 88
 [[ " $* " == *' -p 2 '* && " $* " == *' -json '* && " $* " == *' -v '* && " $* " == *' example/a example/b example/c '* ]] || exit 85
 [[ "$PWD" -ef "$CASE_DIR" ]] || exit 86
 mkdir "$CASE_DIR/authoritative" || exit 87
