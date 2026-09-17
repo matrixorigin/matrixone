@@ -16,6 +16,7 @@ package function
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -266,6 +267,70 @@ func TestViewDefinitionReplayPreservesStringValuesAcrossSQLModes(t *testing.T) {
 				literal, ok := selectClause.Exprs[0].Expr.(*tree.NumVal)
 				require.True(t, ok)
 				require.Equal(t, "a'b", literal.String())
+			})
+		}
+	}
+}
+
+func TestViewDefinitionReplayPreservesImplicitBinaryHeadingAcrossSQLModes(t *testing.T) {
+	modes := []string{
+		"",
+		"ANSI_QUOTES",
+		"NO_BACKSLASH_ESCAPES",
+		"ANSI_QUOTES,NO_BACKSLASH_ESCAPES",
+	}
+	for _, mode := range modes {
+		for _, test := range []struct {
+			name      string
+			statement string
+			heading   string
+		}{
+			{
+				name:      "implicit heading",
+				statement: "CREATE VIEW v AS SELECT _binary 'ab'",
+				heading:   "ab",
+			},
+			{
+				name:      "explicit heading",
+				statement: "CREATE VIEW v AS SELECT _binary 'ab' AS binary_value",
+				heading:   "binary_value",
+			},
+		} {
+			t.Run(test.name+"/"+strings.ReplaceAll(mode, ",", "_"), func(t *testing.T) {
+				encoded, err := json.Marshal(map[string]string{
+					"Stmt":     test.statement,
+					"sql_mode": mode,
+				})
+				require.NoError(t, err)
+
+				definition, ok := viewDefinitionFromPersistedData(
+					context.Background(), string(encoded))
+				require.True(t, ok)
+				require.Contains(t, definition, "as `"+test.heading+"`")
+
+				statements, err := parsers.ParseWithSQLMode(
+					context.Background(), dialect.MYSQL, definition, 1, mode)
+				require.NoError(t, err)
+				require.Len(t, statements, 1)
+				defer func() {
+					for _, statement := range statements {
+						statement.Free()
+					}
+				}()
+
+				selectStmt, ok := statements[0].(*tree.Select)
+				require.True(t, ok)
+				selectClause, ok := selectStmt.Select.(*tree.SelectClause)
+				require.True(t, ok)
+				require.Equal(t, test.heading, selectClause.Exprs[0].As.Origin())
+				literal, ok := selectClause.Exprs[0].Expr.(*tree.NumVal)
+				require.True(t, ok)
+				require.Equal(t, tree.P_ScoreBinaryHexnum, literal.ValType)
+				rawValue := literal.String()
+				require.True(t, strings.HasPrefix(rawValue, "0x"))
+				decoded, err := hex.DecodeString(rawValue[2:])
+				require.NoError(t, err)
+				require.Equal(t, []byte("ab"), decoded)
 			})
 		}
 	}
