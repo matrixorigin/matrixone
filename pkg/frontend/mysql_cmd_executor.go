@@ -3734,11 +3734,6 @@ func handleShowBackendServers(ses FeSession, execCtx *ExecCtx) error {
 	return err
 }
 
-func handleEmptyStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.EmptyStmt) error {
-	var err error
-	return err
-}
-
 func getExplainOption(reqCtx context.Context, options []tree.OptionElem) (*explain.ExplainOptions, error) {
 	es := explain.NewExplainDefaultOptions()
 	if options == nil {
