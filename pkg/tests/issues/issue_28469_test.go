@@ -247,15 +247,16 @@ func TestIssue28469BinaryPreparedIntegerAssignment(t *testing.T) {
 			require.NoError(t, conn.QueryRowContext(ctx, "select i from ondup_control_dst where id=1").Scan(&got))
 			require.Equal(t, 1, got)
 
-			mustExec(t, ctx, conn, "create table ondup_float_dst(id int primary key, x bigint, i bigint)")
-			mustExec(t, ctx, conn, "insert into ondup_float_dst values (1,1000000000000000000,0),(2,1000000000000000000,0)")
-			const floatAssignment = "((x/1)*x*x+0E0)/1E54"
+			mustExec(t, ctx, conn, "create table ondup_float_dst(id int primary key, x bigint, z double, r double, i bigint)")
+			mustExec(t, ctx, conn, "insert into ondup_float_dst values (1,1000000000000000000,0,1E54,0),(2,1000000000000000000,0,1E54,0),(3,1000000000000000000,0,1E54,0)")
+			const floatAssignment = "((x/1)*x*x+z)/r"
 			mustExec(t, ctx, conn, "update ondup_float_dst set i="+floatAssignment+" where id=1")
-			mustExec(t, ctx, conn, "insert into ondup_float_dst values (2,0,0) on duplicate key update i="+floatAssignment)
+			mustExec(t, ctx, conn, "insert into ondup_float_dst values (2,0,0,1,0) on duplicate key update i="+floatAssignment)
+			mustExec(t, ctx, conn, "insert into ondup_float_dst values (3,0,0,1E54,0) on duplicate key update i=((x/1)*x*x+values(z))/values(r)")
 			var count, sum int64
 			require.NoError(t, conn.QueryRowContext(ctx, "select count(*),sum(i) from ondup_float_dst").Scan(&count, &sum))
-			require.Equal(t, int64(2), count)
-			require.Equal(t, int64(2), sum)
+			require.Equal(t, int64(3), count)
+			require.Equal(t, int64(3), sum)
 		})
 
 		t.Run("group_ordinals_aliases_and_float_boundaries", func(t *testing.T) {

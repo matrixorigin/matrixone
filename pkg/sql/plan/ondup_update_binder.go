@@ -16,11 +16,13 @@ package plan
 
 import (
 	"context"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 // use for on duplicate key update clause:  eg: insert into t1 values(1,1),(2,2) on duplicate key update a = a + abs(b), b = values(b)-2
@@ -94,7 +96,7 @@ func (b *OndupUpdateBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool
 }
 
 func (b *OndupUpdateBinder) BindAssignmentExpr(astExpr tree.Expr, target Type) (*plan.Expr, error) {
-	if types.T(target.Id).IsInteger() && !b.numericAssignmentAstProducesApproximate(astExpr, 0) {
+	if types.T(target.Id).IsInteger() && !b.assignmentAstProducesApproximate(astExpr) {
 		previous := b.sysCtx
 		previousBaseCtx := b.integerAssignmentBaseCtx
 		b.integerAssignmentBaseCtx = previous
@@ -118,6 +120,49 @@ func (b *OndupUpdateBinder) BindAssignmentExpr(astExpr tree.Expr, target Type) (
 		return b.baseBindExpr(astExpr, 0, true)
 	}
 	return b.bindNumericExprWithContext(astExpr, 0, &target)
+}
+
+func (b *OndupUpdateBinder) assignmentAstProducesApproximate(astExpr tree.Expr) bool {
+	astExpr = unwrapParenExpr(astExpr)
+	if numericAstProducesApproximate(astExpr) {
+		return true
+	}
+	switch expr := astExpr.(type) {
+	case *tree.UnresolvedName:
+		idx, ok := b.tableDef.Name2ColIndex[expr.ColName()]
+		return ok && types.T(b.tableDef.Cols[idx].Typ.Id).IsFloat()
+	case *tree.UnaryExpr:
+		return b.assignmentAstProducesApproximate(expr.Expr)
+	case *tree.BinaryExpr:
+		return b.assignmentAstProducesApproximate(expr.Left) ||
+			b.assignmentAstProducesApproximate(expr.Right)
+	case *tree.FuncExpr:
+		ref, ok := expr.Func.FunctionReference.(*tree.UnresolvedName)
+		if !ok {
+			return false
+		}
+		name := strings.ToLower(ref.ColName())
+		if name == "values" && len(expr.Exprs) == 1 {
+			return b.assignmentAstProducesApproximate(expr.Exprs[0])
+		}
+		indexes, ok := function.NumericFunctionResultArgs(name, len(expr.Exprs), false)
+		if !ok {
+			return false
+		}
+		for _, index := range indexes {
+			if b.assignmentAstProducesApproximate(expr.Exprs[index]) {
+				return true
+			}
+		}
+	case *tree.CaseExpr:
+		for _, when := range expr.Whens {
+			if b.assignmentAstProducesApproximate(when.Val) {
+				return true
+			}
+		}
+		return expr.Else != nil && b.assignmentAstProducesApproximate(expr.Else)
+	}
+	return false
 }
 
 func scalarSubqueryExpr(astExpr tree.Expr) (*tree.Subquery, bool) {

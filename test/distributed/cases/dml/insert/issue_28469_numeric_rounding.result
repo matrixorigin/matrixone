@@ -404,16 +404,21 @@ SELECT * FROM ondup_control_dst;
 ➤ id[4,32,0]  ¦  i[4,32,0]  𝄀
 1  ¦  1
 DROP TABLE ondup_control_dst;
-CREATE TABLE ondup_float_dst(id INT PRIMARY KEY, x BIGINT, i BIGINT);
+CREATE TABLE ondup_float_dst(id INT PRIMARY KEY, x BIGINT, z DOUBLE, r DOUBLE, i BIGINT);
 INSERT INTO ondup_float_dst VALUES
-(1,1000000000000000000,0),(2,1000000000000000000,0);
-UPDATE ondup_float_dst SET i=((x/1)*x*x+0E0)/1E54 WHERE id=1;
-INSERT INTO ondup_float_dst VALUES (2,0,0) ON DUPLICATE KEY UPDATE
-i=((x/1)*x*x+0E0)/1E54;
+(1,1000000000000000000,0,1E54,0),
+(2,1000000000000000000,0,1E54,0),
+(3,1000000000000000000,0,1E54,0);
+UPDATE ondup_float_dst SET i=((x/1)*x*x+z)/r WHERE id=1;
+INSERT INTO ondup_float_dst VALUES (2,0,0,1,0) ON DUPLICATE KEY UPDATE
+i=((x/1)*x*x+z)/r;
+INSERT INTO ondup_float_dst VALUES (3,0,0,1E54,0) ON DUPLICATE KEY UPDATE
+i=((x/1)*x*x+VALUES(z))/VALUES(r);
 SELECT id,i FROM ondup_float_dst ORDER BY id;
 ➤ id[4,32,0]  ¦  i[-5,64,0]  𝄀
 1  ¦  1  𝄀
-2  ¦  1
+2  ¦  1  𝄀
+3  ¦  1
 DROP TABLE ondup_float_dst;
 CREATE TABLE group_scope_src(x BIGINT);
 INSERT INTO group_scope_src VALUES (5);
