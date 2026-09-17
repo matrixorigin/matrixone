@@ -177,6 +177,103 @@ func benchmarkStringMathRoleCases() []struct {
 	}
 }
 
+func TestPreparedStringMathRoleDiscoveryAcrossExpressionContainers(t *testing.T) {
+	stringMath := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		return &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{ObjName: name},
+			Args: args,
+		}}}
+	}
+	position := func(pos int32) *planpb.Expr {
+		return benchmarkStringMathParam(pos)
+	}
+	list := func(items ...*planpb.Expr) *planpb.Expr {
+		return &planpb.Expr{Expr: &planpb.Expr_List{List: &planpb.ExprList{List: items}}}
+	}
+
+	tests := []struct {
+		name string
+		expr *planpb.Expr
+		want map[int]bool
+	}{
+		{
+			name: "scalar-subquery",
+			expr: stringMath("abs", &planpb.Expr{Expr: &planpb.Expr_Sub{Sub: &planpb.SubqueryRef{
+				Child: stringMath("coalesce",
+					stringMath("abs", position(0)),
+					stringMath("round", benchmarkStringMathDecimalColumn(), position(1)),
+				),
+			}}}),
+			// The inner ABS owns position 0 as a value; the inner ROUND owns
+			// position 1 as a control argument. The outer ABS must not override
+			// either role across the scalar-subquery boundary.
+			want: map[int]bool{0: true, 1: false, -1: false},
+		},
+		{
+			name: "list",
+			expr: stringMath("round", benchmarkStringMathDecimalColumn(), list(
+				stringMath("abs", position(2)),
+				position(3),
+			)),
+			// A nested value function retains its value role while a bare
+			// parameter in ROUND's list-shaped precision argument stays control.
+			want: map[int]bool{2: true, 3: false, -1: false},
+		},
+		{
+			name: "literal-source",
+			expr: stringMath("round", benchmarkStringMathDecimalColumn(), &planpb.Expr{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Src: stringMath("coalesce",
+				stringMath("abs", position(11)),
+				stringMath("round", benchmarkStringMathDecimalColumn(), position(12)),
+			)}}}),
+			want: map[int]bool{11: true, 12: false, -1: false},
+		},
+		{
+			name: "window",
+			expr: stringMath("round", benchmarkStringMathDecimalColumn(), &planpb.Expr{Expr: &planpb.Expr_W{W: &planpb.WindowSpec{
+				WindowFunc: stringMath("abs", position(4)),
+				PartitionBy: []*planpb.Expr{
+					stringMath("round", benchmarkStringMathDecimalColumn(), position(5)),
+					stringMath("abs", position(9)),
+				},
+				OrderBy: []*planpb.OrderBySpec{{Expr: stringMath("abs", position(6))}},
+				Frame: &planpb.FrameClause{
+					Type: planpb.FrameClause_ROWS,
+					Start: &planpb.FrameBound{
+						Type: planpb.FrameBound_PRECEDING,
+						Val: stringMath("coalesce",
+							stringMath("round", benchmarkStringMathDecimalColumn(), position(7)),
+							stringMath("abs", position(10)),
+						),
+					},
+					End: &planpb.FrameBound{
+						Type: planpb.FrameBound_FOLLOWING,
+						Val:  stringMath("abs", position(8)),
+					},
+				},
+			}}}),
+			// Window values/order keys and frame/partition controls must be
+			// traversed independently while preserving each function's role. The
+			// window is nested under ROUND's control argument so both containment
+			// and role-discovery walkers must cross every window container.
+			want: map[int]bool{4: true, 5: false, 6: true, 7: false, 8: true, 9: true, 10: true, -1: false},
+		},
+	}
+
+	if preparedParamUsesStringMathFunction(nil, 0) {
+		t.Fatal("nil plan unexpectedly reports a string-math value parameter")
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			owner := benchmarkStringMathOwnerPlan(test.expr)
+			for position, want := range test.want {
+				if got := preparedParamUsesStringMathFunction(owner, position); got != want {
+					t.Errorf("position %d: want value-role=%v, got %v", position, want, got)
+				}
+			}
+		})
+	}
+}
+
 func benchmarkStringMathValues(params int, enabled bool) []any {
 	values := make([]any, params)
 	for i := range values {

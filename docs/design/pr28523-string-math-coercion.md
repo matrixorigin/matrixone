@@ -4,16 +4,43 @@
 - Design revision: 7
 - Issue: [#28487](https://github.com/matrixorigin/matrixone/issues/28487)
 - Implementation PR: [#28523](https://github.com/matrixorigin/matrixone/pull/28523)
-- Rebased main base: `4ff27bb9b35c43c1b0961bb9a01bf8fc0b6a2171`
-- Rebased code/test baseline: `d56711fa5b429e5e6e52f64f603d2e853478edca`, based
-  on the rebased main base above; 14 commits replayed cleanly. The final local
-  candidate additionally includes a gofmt-only indentation correction in
-  `pkg/sql/plan/visit_plan_rule_test.go`.
-- Independent design review: GPT-6 Astra, medium reasoning, found one pre-push
-  documentation-only discrepancy in this record (stale current base/candidate
-  and validation evidence). This revision corrects it; authorized maintainer
-  approval remains pending. The final exact-head review result is recorded in
-  the PR evidence ledger.
+- Current upstream main base: `5453d72b7372a9f77263d1dd4c982e616446d4cb`
+- Current main tree: `9d637166adc3c93cb5aaaf696004b3f74eb9a6eb`
+- Current source inputs: original PR head `d27667a4936e813fb612de6cd245be03a2d6f101`
+  (tree `d02aa9a8b2c219b7767b9793c700287ecfc24c0b`) and current main tree
+  `9d637166adc3c93cb5aaaf696004b3f74eb9a6eb`. All 16 PR commits were replayed
+  from the original head onto main `5453d72b7372a9f77263d1dd4c982e616446d4cb`
+  in a clean detached worktree; `git rebase --onto` completed without conflicts.
+  The source/test snapshot before this design-record update (with the design
+  file still at its original PR contents) is
+  `ad88c4dcaf67ff148c5a274f52180cc4f4d7bbaf`.
+- The initial rebase had two shared paths with main since the historical
+  base, `pkg/sql/plan/base_binder.go` and `pkg/sql/plan/utils.go`; both applied
+  cleanly. The `4c31142` to `a3ede72` delta added 18 paths and the subsequent
+  `a3ede72` to `5453d72` delta added 14 paths; neither overlaps the current PR
+  file list.
+- Upstream changes since the historical `4ff27bb9b35c43c1b0961bb9a01bf8fc0b6a2171`
+  base are `25794ebdf4814f3f2e17b90416432a7405da5ea2` (`fix(plan): honor
+  NO_UNSIGNED_SUBTRACTION`), `0370bb4d6b118da29e164c54aa34ee010ed897bc`
+  (`test: avoid DWARF linking for temporary race binaries`),
+  `7f9505e7b8eb4ba45264114a76e3145f6fa26c7a` (`fix(fulltext2): retain
+  non-null columns in multi-column indexes`),
+  `5bf6d24157959febb839615462c30eafb5046fc9` (`feat: support prepared and
+  sortable discrete percentiles`), and `4c31142f4dbd0c46e9674b365826acc015b35ac2`
+  (HAKeeper catalog metadata design checkpoint), `e66c9da813ccbb8b9d1eedbdc40b619b7ee5dff3`
+  (`test(iscp): prepare sink fixtures and avoid redundant target DDL`), and
+  `a3ede72bef53bcd72a10b7bba17002f19f8132cf`
+  (`fix: make aggregate states version compatible`), `db3915689fc9bccfd58a1a05b38b6e5329d43190`
+  (`fix(snapshot): reject RESTORE TABLE of referenced tables`), and
+  `5453d72b7372a9f77263d1dd4c982e616446d4cb`
+  (`fix(fulltext2): avoid boxing loaded UUID membership probes`).
+- Historical code/test baseline: `d56711fa5b429e5e6e52f64f603d2e853478edca`
+  on base `4ff27bb9b35c43c1b0961bb9a01bf8fc0b6a2171`; its 14-commit rebase,
+  validation, and gofmt-only correction remain historical evidence below.
+- Prior independent design review: GPT-6 Astra, medium reasoning, reviewed the
+  historical `d56711fa5b429e5e6e52f64f603d2e853478edca` candidate against
+  base `4ff27bb9b35c43c1b0961bb9a01bf8fc0b6a2171`; this is historical review
+  evidence. Maintainer approval remains pending.
 - Review trigger: review `5199052257` identified a major-refactor/compatibility design gate; review `5214666396` and comment `5687377735` require incomplete numeric strings to be mode-gated
 
 This document is the stable design revision requested before implementation
@@ -260,7 +287,7 @@ authorized maintainer decision.
 | Resource/state safety | race tests, cancellation/error return paths, and no stale expression reuse after failure |
 | Performance | parameterized plan-size/depth measurements before any scan optimization |
 
-Rebase integration delta for this candidate:
+Historical rebase integration history (superseded by the current source snapshot above):
 
 - Rebased onto the verified main commit `8e8e1998ef02b1f6233ddb1c2d3208f3b70d2d83`,
   a descendant of the earlier `049dad215cf69bad4e8bd9911169aabe7493d691` base.
@@ -300,20 +327,75 @@ Rebase integration delta for this candidate:
   unsupported-text bound identity, and direct-versus-prepared
   `ROUND`/`TRUNCATE(CAST(? AS SIGNED), ?)` plan/source/result equivalence.
 
+Initial rebase integration evidence (main `4c31142f4dbd0c46e9674b365826acc015b35ac2`):
+
+- Upstream compare from historical base `4ff27bb9b35c43c1b0961bb9a01bf8fc0b6a2171`
+  to main `4c31142f4dbd0c46e9674b365826acc015b35ac2` contains five commits and
+  52 changed paths.
+- The GitHub PR files API at this checkpoint listed 24 PR paths. The two shared paths are
+  `pkg/sql/plan/base_binder.go` and `pkg/sql/plan/utils.go`; all 16 original PR
+  commit patches replayed in order onto the current main without conflicts.
+  The rebased code/test tree is `0de7f80912eadd97754fb371a33d03ca7843e619`
+  before this metadata-only design-record update. Review, CI, and BVT records
+  are tracked separately in the PR/evidence ledger.
+- Maintainer design approval remains pending.
+
+Main integration through `a3ede72` (intermediate checkpoint):
+
+- The new main delta is `e66c9da813ccbb8b9d1eedbdc40b619b7ee5dff3`
+  (`test(iscp): prepare sink fixtures and avoid redundant target DDL`) followed
+  by `a3ede72bef53bcd72a10b7bba17002f19f8132cf`
+  (`fix: make aggregate states version compatible`). The 18 changed paths are:
+  `pkg/iscp/mock_consumer.go`, `pkg/iscp/mock_consumer_test.go`;
+  `pkg/sql/colexec/aggexec/aggState.go`, `aggexec_compat_test.go`,
+  `capacity_preflight.go`, `count2_review_test.go`, `distinct_spill.go`,
+  `distinct_spill_test.go`, `types.go`;
+  `pkg/sql/colexec/group/exec2.go`, `group_test.go`, `helper.go`,
+  `mergeGroup.go`, `types2.go`; `pkg/sql/compile/compile.go`,
+  `pkg/sql/compile/compile_test.go`; and
+  `pkg/vm/engine/test/cdc_testutil.go`,
+  `pkg/vm/engine/test/change_handle_test.go`.
+- The fetched PR-file list and new-main path list have zero overlap. Both
+  commit diffs applied cleanly in order. The clean latest-main rebase and
+  validation below supersede this intermediate checkpoint.
+- The latest role/materialization test and local coverage evidence is recorded
+  below for this checkpoint. It is not the repository's merged changed-line
+  coverage result; no CI pass is claimed.
+
+Latest-main integration evidence (`5453d72`):
+
+- The subsequent main delta is `db3915689fc9bccfd58a1a05b38b6e5329d43190`
+  (`fix(snapshot): reject RESTORE TABLE of referenced tables`) followed by
+  `5453d72b7372a9f77263d1dd4c982e616446d4cb`
+  (`fix(fulltext2): avoid boxing loaded UUID membership probes`), producing
+  main tree `9d637166adc3c93cb5aaaf696004b3f74eb9a6eb`. Its 14 paths are:
+  `pkg/frontend/snapshot.go`, `pkg/frontend/snapshot_test.go`;
+  `pkg/fulltext2/coverage_query_membership_test.go`, `membership.go`,
+  `uuid_membership_bench_test.go`, `uuid_membership_test.go`;
+  `test/distributed/cases/fulltext2/fulltext2_membership.result` and `.sql`;
+  and the six `test/distributed/cases/snapshot` FK-restore `.sql` / `.result`
+  files (`restore_fk_restore_master_table`, `restore_fk_table`, and
+  `restore_table_referenced_by_fk`).
+- REST path comparison confirmed zero overlap with the 24 current PR files.
+  Both commit diffs applied cleanly in order. A clean detached worktree then
+  replayed all 16 PR commits directly onto `5453d72` without conflicts; the
+  source/test snapshot before this design-record update is
+  `ad88c4dcaf67ff148c5a274f52180cc4f4d7bbaf`.
+
 The pre-rebase head `85635cc` passed required CI run `34813866468` (SCA,
 Ubuntu UT, coverage, build, Compose/Standalone BVT, and CI Required); it is
-historical and is not evidence for the current base/candidate. The previously
+historical evidence. The previously
 recorded full package, frontend, race, vet, build, and protocol-smoke results
 were collected against base `66b1672403e9b9efb1971d00b7ea87572891fe2a`; those
-results are historical as well and are not claimed for this candidate.
+results are historical as well.
 
 Historical evidence on the intermediate base `a52a665ec1e6670d1ee4d84831f24a1b83cd4f0b`
 and candidate `ef4424cc0b4206d804537432b5599e5c5d0f9881` remains in the record:
 its focused selection passed and its full CGo-wrapped `pkg/sql/plan` and
 `pkg/sql/plan/function` packages passed in 6.940s and 15.803s. These results do
-not describe the final rebase below.
+not describe the current source inputs above; they remain historical evidence.
 
-Post-rebase evidence applies to the code/test baseline
+Historical post-rebase evidence applies to the code/test baseline
 `d56711fa5b429e5e6e52f64f603d2e853478edca`, based on main
 `4ff27bb9b35c43c1b0961bb9a01bf8fc0b6a2171` (14 commits replayed cleanly),
 plus the gofmt-only indentation correction to
@@ -361,35 +443,195 @@ PASS
 
 `gofmt` and `git diff --check` passed.
 
-Local incremental `golangci-lint` did not pass: with the CGo include/link
+Previous local validation applies to the source-tree integration snapshot on
+main `0370bb4d6b118da29e164c54aa34ee010ed897bc`. The candidate's native input
+trees were checked against the cached artifact provenance before the CGo
+wrapper was run. All commands used Go 1.26.4 darwin/arm64; these results do not
+cover the three later upstream commits now in the rebase base:
+
+```text
+PATH=/Users/ljy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.darwin-arm64/bin:$PATH ./.agents/skills/mo-dev/scripts/mo-cgo-test -count=1 -timeout=600s ./pkg/sql/parsers/dialect/mysql
+PATH=/Users/ljy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.darwin-arm64/bin:$PATH ./.agents/skills/mo-dev/scripts/mo-cgo-test -count=1 -timeout=600s ./pkg/sql/plan/function
+PATH=/Users/ljy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.darwin-arm64/bin:$PATH ./.agents/skills/mo-dev/scripts/mo-cgo-test -count=1 -timeout=600s ./pkg/sql/plan
+PATH=/Users/ljy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.darwin-arm64/bin:$PATH ./.agents/skills/mo-dev/scripts/mo-cgo-test -count=1 -timeout=600s ./pkg/frontend
+```
+
+| Package | Result |
+| --- | --- |
+| `./pkg/sql/parsers/dialect/mysql` | passed, 1.358s |
+| `./pkg/sql/plan/function` | passed, 17.835s |
+| `./pkg/sql/plan` | passed, 7.680s |
+| `./pkg/frontend` | passed, 26.666s |
+
+The absolute Go 1.26.4 `gofmt -d` check on all candidate Go files produced no
+output; `git diff --check` passed. The four package results are local evidence
+only. Commit replay, review, CI, and BVT records are tracked in the PR/evidence
+ledger; maintainer approval remains pending.
+
+Previous post-rebase validation on the `4c31142` checkpoint applies to the rebased code/test tree
+`0de7f80912eadd97754fb371a33d03ca7843e619` on main
+`4c31142f4dbd0c46e9674b365826acc015b35ac2`. All commands used Go 1.26.4
+darwin/arm64 and the CGo wrapper:
+
+```text
+PATH=/Users/ljy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.darwin-arm64/bin:$PATH ./.agents/skills/mo-dev/scripts/mo-cgo-test -count=1 -timeout=600s ./pkg/sql/parsers/dialect/mysql
+PATH=/Users/ljy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.darwin-arm64/bin:$PATH ./.agents/skills/mo-dev/scripts/mo-cgo-test -count=1 -timeout=600s ./pkg/sql/plan/function
+PATH=/Users/ljy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.darwin-arm64/bin:$PATH ./.agents/skills/mo-dev/scripts/mo-cgo-test -count=1 -timeout=600s ./pkg/sql/plan
+PATH=/Users/ljy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.darwin-arm64/bin:$PATH ./.agents/skills/mo-dev/scripts/mo-cgo-test -count=1 -timeout=600s ./pkg/frontend
+PATH=/Users/ljy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.darwin-arm64/bin:$PATH ./.agents/skills/mo-dev/scripts/mo-cgo-test -v -count=1 -timeout=600s -run '^TestIssue27294PreparedNumericOverloads$' ./pkg/tests/issues
+```
+
+| Package/regression | Result |
+| --- | --- |
+| `./pkg/sql/parsers/dialect/mysql` | passed, 1.203s |
+| `./pkg/sql/plan/function` | passed, 16.386s |
+| `./pkg/sql/plan` | passed, 7.148s |
+| `./pkg/frontend` | passed, 23.929s |
+| `TestIssue27294PreparedNumericOverloads` | passed, 15.207s |
+
+These are local results, not CI or distributed BVT results. Maintainer design
+approval remains pending.
+
+Validation on the `a3ede72` intermediate checkpoint applies to candidate source/test tree
+`bf9de5ae36d64211c8ccddfef6f9d8afe22b2903` on main
+`a3ede72bef53bcd72a10b7bba17002f19f8132cf` (tree
+`f6b770d78e64c7064364cacaf603f7b27c41fadc`). Commands used Go 1.26.4
+darwin/arm64 and the CGo wrapper.
+
+The focused prepared-role/materialization selection passed after the new main
+delta; both tests and all ten named subtests ran:
+
+```text
+PATH=/Users/ljy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.darwin-arm64/bin:$PATH ./.agents/skills/mo-dev/scripts/mo-cgo-test -v -count=1 -timeout=180s -run '^(TestPreparedStringMathRoleDiscoveryAcrossExpressionContainers|TestPreparedPrecisionFallbackMaterializesOnlyMatchingParam)$' ./pkg/sql/plan
+```
+
+The current CGo coverage profile also passed:
+
+```text
+PATH=/Users/ljy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.darwin-arm64/bin:$PATH ./.agents/skills/mo-dev/scripts/mo-cgo-test -coverpkg=./pkg/sql/plan/... -coverprofile=/tmp/mo28523-current-coverage.5xiLGz/coverage.out -count=1 -timeout=180s ./pkg/sql/plan ./pkg/sql/plan/function
+```
+
+The profile reported `pkg/sql/plan` 51.8% and `pkg/sql/plan/function` 29.0%
+of statements in `./pkg/sql/plan/...`. `exprContainsPreparedPosition`,
+`preparedParamUsesStringMathFunction`, `preparedExprUsesStringMathValueArg`,
+`preparedExprContainsStringMathFunction`, and `materializePreparedParam` are
+100%; `rebindPreparedNumericExprWithRole` is 74.5%. These are local
+package/profile results, not the repository's PR-wide merged changed-line
+coverage gate.
+
+The requested owning and dependent package checks all passed with exit code 0:
+
+```text
+PATH=/Users/ljy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.darwin-arm64/bin:$PATH ./.agents/skills/mo-dev/scripts/mo-cgo-test -p=1 -count=1 -timeout=600s ./pkg/sql/plan ./pkg/sql/plan/function ./pkg/sql/compile ./pkg/sql/colexec/aggexec ./pkg/iscp
+PATH=/Users/ljy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.darwin-arm64/bin:$PATH ./.agents/skills/mo-dev/scripts/mo-cgo-test -p=1 -count=1 -timeout=600s ./pkg/frontend ./pkg/sql/parsers/dialect/mysql
+PATH=/Users/ljy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.darwin-arm64/bin:$PATH ./.agents/skills/mo-dev/scripts/mo-cgo-test -v -count=1 -timeout=600s -run '^TestIssue27294PreparedNumericOverloads$' ./pkg/tests/issues
+```
+
+| Package/regression | Result |
+| --- | --- |
+| `./pkg/sql/plan` | passed, 6.950s |
+| `./pkg/sql/plan/function` | passed, 16.980s |
+| `./pkg/sql/compile` | passed, 6.596s |
+| `./pkg/sql/colexec/aggexec` | passed, 3.537s |
+| `./pkg/iscp` | passed, 1.530s |
+| `./pkg/frontend` | passed, 26.331s |
+| `./pkg/sql/parsers/dialect/mysql` | passed, 0.975s |
+| `TestIssue27294PreparedNumericOverloads` | passed, 11.54s test / 13.794s package |
+
+`gofmt -d` on candidate Go files produced no output; `git diff --check` and
+`git diff --cached --check` passed. Link commands emitted duplicate-rpath and
+duplicate-library warnings, but all test commands exited 0. No distributed
+BVT or current CI run is claimed; maintainer design approval remains pending.
+
+Latest-main diagnostic validation on `5453d72` applies to the staged
+candidate worktree snapshot on main tree
+`9d637166adc3c93cb5aaaf696004b3f74eb9a6eb`. The two newly affected packages
+and the prepared end-to-end regression were rerun after this main delta:
+
+```text
+PATH=/Users/ljy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.darwin-arm64/bin:$PATH ./.agents/skills/mo-dev/scripts/mo-cgo-test -p=1 -count=1 -timeout=600s ./pkg/frontend ./pkg/fulltext2
+PATH=/Users/ljy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.darwin-arm64/bin:$PATH ./.agents/skills/mo-dev/scripts/mo-cgo-test -v -count=1 -timeout=600s -run '^TestIssue27294PreparedNumericOverloads$' ./pkg/tests/issues
+```
+
+| Package/regression | Result |
+| --- | --- |
+| `./pkg/frontend` | passed, 27.363s |
+| `./pkg/fulltext2` | passed, 2.086s |
+| `TestIssue27294PreparedNumericOverloads` | passed, 11.54s test / 13.668s package |
+
+These frontend/fulltext2/issue checks were local diagnostics on a staged
+candidate snapshot, not exact-PR-head validation. The clean exact-rebase
+results below supersede that snapshot evidence. Neither section claims CI,
+distributed BVT, or a passing merged changed-line coverage gate.
+
+Exact clean-rebase validation on source/test snapshot
+`ad88c4dcaf67ff148c5a274f52180cc4f4d7bbaf`, based on main
+`5453d72b7372a9f77263d1dd4c982e616446d4cb` (tree
+`9d637166adc3c93cb5aaaf696004b3f74eb9a6eb`), passed:
+
+| Package/regression | Result |
+| --- | --- |
+| `./pkg/sql/plan` | passed, 10.256s |
+| `./pkg/sql/plan/function` | passed, 16.194s |
+| `./pkg/sql/compile` | passed, 6.509s |
+| `./pkg/sql/colexec/aggexec` | passed, 3.119s |
+| `./pkg/iscp` | passed, 1.580s |
+| `./pkg/frontend` | passed, 26.995s |
+| `./pkg/sql/parsers/dialect/mysql` | passed, 0.776s |
+| `./pkg/fulltext2` | passed, 2.053s |
+| `TestIssue27294PreparedNumericOverloads` | passed, 11.52s test / 13.592s package |
+
+The exact commands were:
+
+```text
+PATH=/Users/ljy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.darwin-arm64/bin:$PATH ./.agents/skills/mo-dev/scripts/mo-cgo-test -p=1 -count=1 -timeout=600s ./pkg/sql/plan ./pkg/sql/plan/function ./pkg/sql/compile ./pkg/sql/colexec/aggexec ./pkg/iscp
+PATH=/Users/ljy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.darwin-arm64/bin:$PATH ./.agents/skills/mo-dev/scripts/mo-cgo-test -p=1 -count=1 -timeout=600s ./pkg/frontend ./pkg/sql/parsers/dialect/mysql
+PATH=/Users/ljy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.darwin-arm64/bin:$PATH ./.agents/skills/mo-dev/scripts/mo-cgo-test -p=1 -count=1 -timeout=600s ./pkg/fulltext2
+PATH=/Users/ljy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.darwin-arm64/bin:$PATH ./.agents/skills/mo-dev/scripts/mo-cgo-test -v -count=1 -timeout=600s -run '^TestIssue27294PreparedNumericOverloads$' ./pkg/tests/issues
+PATH=/Users/ljy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.darwin-arm64/bin:$PATH ./.agents/skills/mo-dev/scripts/mo-cgo-test -coverpkg=./pkg/sql/plan/... -coverprofile=/private/tmp/mo28523-exact-coverage.out -count=1 -timeout=180s ./pkg/sql/plan ./pkg/sql/plan/function
+```
+
+The plan package run includes the new role-discovery and matching-parameter
+materialization counterexamples. All checks used the repository CGo wrapper
+with Go 1.26.4 on darwin/arm64; `gofmt -d` and `git diff --check` passed.
+Duplicate-rpath and duplicate-library linker warnings were non-fatal. These
+are local UT results only; no distributed BVT, current CI pass, or PR-wide
+merged changed-line coverage pass is claimed.
+
+The local plan-subtree coverage profile reported `pkg/sql/plan` 51.8% and
+`pkg/sql/plan/function` 29.0% of statements. The four prepared-role walkers
+and `materializePreparedParam` were 100%; `rebindPreparedNumericExprWithRole`
+was 74.5%. These package/profile figures are not the repository's merged
+changed-line coverage gate.
+
+Historical tooling/BVT record on the earlier `4ff27bb9b35c43c1b0961bb9a01bf8fc0b6a2171`
+baseline: local incremental `golangci-lint` did not pass. With the CGo include/link
 environment configured, local golangci-lint v2.6.2 still rejected Go 1.27
 export-data version 4 as newer than its maximum supported version 2. This is a
-local linter/toolchain incompatibility, not a product-code pass; CI SCA remains
-pending after push. Local distributed BVT was not run, and post-push CI/BVT
-remain pending. Also not run on this candidate: `-race`, `make build`, and
-protocol smoke tests. The historical results on base `66b167...` above remain
-historical only.
+local linter/toolchain incompatibility, not a product-code pass. Local
+distributed BVT was not run on that baseline. This linter/BVT record is
+historical; current CI/BVT records are tracked in the PR/evidence ledger. The
+historical results on base `66b167...` above remain historical only.
 
 Known limitations: strict string precision behavior is intentionally not a
-claim of full MySQL integer-prefix compatibility; no unrun upgrade/downgrade
-topology is claimed; and unrelated historical behavior such as FLOOR(NULL) is
-outside this scope.
+claim of full MySQL integer-prefix compatibility; upgrade/downgrade topology
+and unrelated historical behavior such as FLOOR(NULL) are outside this scope.
 
 ## 7. Approval record
 
 ```text
 Design path: docs/design/pr28523-string-math-coercion.md
 Design revision: 7
-Candidate snapshot: rebased code/test baseline d56711fa5b429e5e6e52f64f603d2e853478edca plus the gofmt-only indentation correction in pkg/sql/plan/visit_plan_rule_test.go; this revision-7 document update only corrects the validation record
-Rebased base: 4ff27bb9b35c43c1b0961bb9a01bf8fc0b6a2171
+Candidate source inputs: PR d27667a4936e813fb612de6cd245be03a2d6f101 (tree d02aa9a8b2c219b7767b9793c700287ecfc24c0b), rebased as 16 commits onto main 5453d72b7372a9f77263d1dd4c982e616446d4cb (tree 9d637166adc3c93cb5aaaf696004b3f74eb9a6eb); exact clean-rebase source/test validation is recorded above
+Integration base: 5453d72b7372a9f77263d1dd4c982e616446d4cb (tree 9d637166adc3c93cb5aaaf696004b3f74eb9a6eb)
 Scope/trigger: PR reviews 5199052257, 5214666396 and comment 5687377735; >500 production lines and planner/plan compatibility boundary
-Reviewer identity and role: GPT-6 Astra, medium reasoning, pre-push exact-head review of d56711fa5b429e5e6e52f64f603d2e853478edca against base 4ff27bb9b35c43c1b0961bb9a01bf8fc0b6a2171; one documentation-only current-base/evidence discrepancy was identified and corrected in this revision; final exact-head review result is in the PR evidence ledger
-Review timestamp: revision 7 exact-head review and documentation correction recorded 2026-09-17
+Reviewer identity and role: historical GPT-6 Astra review of d56711fa5b429e5e6e52f64f603d2e853478edca against base 4ff27bb9b35c43c1b0961bb9a01bf8fc0b6a2171; exact-head GPT-6 Astra medium review remains a separate gate for this candidate
+Review timestamp: historical revision-7 review was recorded 2026-09-17; exact-head review pending
 Decision: DRAFT / AWAITING MAINTAINER APPROVAL
-Resolved blockers: the two prior code-integration findings are fixed; latest-base focused and full package tests plus CGo-aware vet pass; the pre-push documentation-only finding is corrected here; authorized maintainer approval remains pending
-Decisions proposed for maintainer acceptance: retain strict INT64 precision controls (no general integer-prefix widening); prefer correctness over function-wide zonemap pruning; retain the bounded scan and defer one-pass role collection pending current-candidate scan-cost review
-Evidence links: [PR #28523](https://github.com/matrixorigin/matrixone/pull/28523); review [#5199052257](https://github.com/matrixorigin/matrixone/pull/28523#pullrequestreview-5199052257); latest numeric-prefix review [#5214666396](https://github.com/matrixorigin/matrixone/pull/28523#pullrequestreview-5214666396); historical CI run 34813866468; final-base focused/full CGo tests and vet recorded above
-Implementation deviations requiring follow-up: MOD native arithmetic widening regression fixed in 8fc4d5250; local incremental golangci-lint is incompatible with Go 1.27 export data (v2.6.2 max version 2), so CI SCA remains pending after push; local distributed BVT was not run and post-push CI/BVT remain pending; strict INT64 precision acceptance, zonemap-pruning decision, and scan-cost acceptance remain pending
+Validation evidence: exact clean-rebase CGo runs passed for plan, plan/function, compile, aggexec, iscp, frontend, MySQL parser, fulltext2, and TestIssue27294PreparedNumericOverloads; these are local results, not CI/BVT, the PR-wide merged changed-line coverage gate is not claimed, and maintainer design approval remains pending
+Decisions proposed for maintainer acceptance: retain strict INT64 precision controls (no general integer-prefix widening); prefer correctness over function-wide zonemap pruning; retain the bounded scan and defer one-pass role collection pending scan-cost acceptance
+Evidence links: [PR #28523](https://github.com/matrixorigin/matrixone/pull/28523); the PR/evidence ledger is the record for commit replay, review, CI, and BVT; historical CI run 34813866468 and the older local linter/BVT and d56711fa evidence are historical; current local CGo tests and formatting checks are recorded above
+Implementation deviations requiring follow-up: MOD native arithmetic widening regression fixed in 8fc4d5250; strict INT64 precision acceptance, zonemap-pruning decision, and scan-cost acceptance remain pending
 Approval link: pending maintainer review
 ```
 

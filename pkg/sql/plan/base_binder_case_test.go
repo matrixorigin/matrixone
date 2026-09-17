@@ -959,6 +959,126 @@ func TestPreparedNumericRebindPreservesUnsupportedAndNullBoundOccurrences(t *tes
 	}
 }
 
+func TestPreparedPrecisionFallbackMaterializesOnlyMatchingParam(t *testing.T) {
+	ctx := context.Background()
+	param := func(pos int32) *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_text)},
+			Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: pos}},
+		}
+	}
+	textLiteral := func(value string) *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_text)},
+			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: value}}},
+		}
+	}
+	function := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		return &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{ObjName: name},
+			Args: args,
+		}}}
+	}
+	int64Type := types.T_int64.ToType()
+	precisionCast, err := makePlan2CastExpr(ctx, param(0), makePlan2Type(&int64Type))
+	require.NoError(t, err)
+	require.True(t, isImplicitPreparedParamCast(precisionCast))
+	round := function("round", param(1), precisionCast)
+	list := &planpb.Expr{Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{param(0), param(1)}}}}
+	subquery := &planpb.Expr{Expr: &planpb.Expr_Sub{Sub: &planpb.SubqueryRef{
+		Child: function("coalesce", param(0), param(1)),
+	}}}
+	literalSource := &planpb.Expr{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+		Value: &planpb.Literal_Sval{Sval: "prepared"},
+		Src:   function("coalesce", param(0), param(1)),
+	}}}
+	tests := []struct {
+		name  string
+		expr  *planpb.Expr
+		check func(*testing.T, *planpb.Expr)
+	}{
+		{
+			name: "round precision cast",
+			expr: round,
+			check: func(t *testing.T, got *planpb.Expr) {
+				require.Equal(t, "round", got.GetF().GetFunc().GetObjName())
+				require.Equal(t, int32(1), got.GetF().GetArgs()[0].GetP().Pos)
+				cast := got.GetF().GetArgs()[1]
+				require.Equal(t, "cast", cast.GetF().GetFunc().GetObjName())
+				require.Equal(t, int32(types.T_int64), cast.Typ.Id)
+				require.Equal(t, "1.5tail", cast.GetF().GetArgs()[0].GetLit().GetSval())
+			},
+		},
+		{
+			name: "list",
+			expr: list,
+			check: func(t *testing.T, got *planpb.Expr) {
+				require.Equal(t, "1.5tail", got.GetList().GetList()[0].GetLit().GetSval())
+				require.Equal(t, int32(1), got.GetList().GetList()[1].GetP().Pos)
+			},
+		},
+		{
+			name: "scalar subquery",
+			expr: subquery,
+			check: func(t *testing.T, got *planpb.Expr) {
+				child := got.GetSub().GetChild()
+				require.Equal(t, "coalesce", child.GetF().GetFunc().GetObjName())
+				require.Equal(t, "1.5tail", child.GetF().GetArgs()[0].GetLit().GetSval())
+				require.Equal(t, int32(1), child.GetF().GetArgs()[1].GetP().Pos)
+			},
+		},
+		{
+			name: "literal source",
+			expr: literalSource,
+			check: func(t *testing.T, got *planpb.Expr) {
+				require.Equal(t, "prepared", got.GetLit().GetSval())
+				source := got.GetLit().GetSrc()
+				require.Equal(t, "1.5tail", source.GetF().GetArgs()[0].GetLit().GetSval())
+				require.Equal(t, int32(1), source.GetF().GetArgs()[1].GetP().Pos)
+			},
+		},
+	}
+	rule := NewResetParamRefRule(ctx, []*planpb.Expr{textLiteral("1.5tail"), textLiteral("not-target")})
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			materialized, changed := rule.materializePreparedParam(test.expr, 0)
+			require.True(t, changed)
+			require.NotSame(t, test.expr, materialized)
+			require.True(t, exprContainsPreparedPosition(test.expr, 0), "source tree should remain unchanged")
+			require.False(t, exprContainsPreparedPosition(materialized, 0), "only the selected marker should be replaced")
+			require.True(t, exprContainsPreparedPosition(materialized, 1), "the unrelated marker must be preserved")
+			test.check(t, materialized)
+		})
+	}
+	t.Run("invalid position leaves expression unchanged", func(t *testing.T) {
+		unmatched := param(0)
+		got, changed := rule.materializePreparedParam(unmatched, -1)
+		require.False(t, changed)
+		require.Same(t, unmatched, got)
+	})
+	t.Run("unmatched marker and leaf remain unchanged", func(t *testing.T) {
+		unmatched := param(1)
+		got, changed := rule.materializePreparedParam(unmatched, 0)
+		require.False(t, changed)
+		require.Same(t, unmatched, got)
+
+		leaf := &planpb.Expr{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}
+		got, changed = rule.materializePreparedParam(leaf, 0)
+		require.False(t, changed)
+		require.Same(t, leaf, got)
+	})
+
+	// Exercise the rebinder fallback that materializes invalid precision text
+	// beneath its existing cast rather than dropping the wrapper.
+	fallback, changed, err := rule.rebindPreparedNumericExprWithRole(
+		precisionCast, nil, map[int32]struct{}{}, preparedStringMathRoleControl)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.Equal(t, "cast", fallback.GetF().GetFunc().GetObjName())
+	require.Equal(t, int32(types.T_int64), fallback.Typ.Id)
+	require.Equal(t, "1.5tail", fallback.GetF().GetArgs()[0].GetLit().GetSval())
+}
+
 func TestUnwrapImplicitPreparedParamCastRetainsParamSource(t *testing.T) {
 	ctx := context.Background()
 	source := &planpb.Expr{
