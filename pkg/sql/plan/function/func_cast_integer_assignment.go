@@ -17,6 +17,7 @@ package function
 import (
 	"context"
 	"math"
+	"strconv"
 	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -24,6 +25,52 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"golang.org/x/exp/constraints"
 )
+
+// Keep ordinary decimal casts unchanged: only assignment converts the exact
+// rounded integer, and ParseUint checks the destination range after rounding.
+func decimalToUnsignedAssignment[D types.Decimal64 | types.Decimal128 | types.Decimal256](
+	ctx context.Context, source vector.FunctionParameterWrapper[D], target types.T,
+	result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList,
+	round func(D, int32) string,
+) error {
+	switch target {
+	case types.T_uint8:
+		return roundDecimalAssignment(ctx, source, vector.MustFunctionResult[uint8](result), length, selectList, round)
+	case types.T_uint16:
+		return roundDecimalAssignment(ctx, source, vector.MustFunctionResult[uint16](result), length, selectList, round)
+	case types.T_uint32:
+		return roundDecimalAssignment(ctx, source, vector.MustFunctionResult[uint32](result), length, selectList, round)
+	case types.T_uint64:
+		return roundDecimalAssignment(ctx, source, vector.MustFunctionResult[uint64](result), length, selectList, round)
+	default:
+		return moerr.NewInternalError(ctx, "non-unsigned assignment destination")
+	}
+}
+
+func roundDecimalAssignment[D types.Decimal64 | types.Decimal128 | types.Decimal256, I constraints.Unsigned](
+	ctx context.Context, source vector.FunctionParameterWrapper[D], result *vector.FunctionResult[I],
+	length int, selectList *FunctionSelectList, round func(D, int32) string,
+) error {
+	var zero I
+	for i := 0; i < length; i++ {
+		value, isNull := source.GetValue(uint64(i))
+		if isNull || functionRowSkipped(selectList, uint64(i)) {
+			if err := result.Append(zero, true); err != nil {
+				return err
+			}
+			continue
+		}
+		rounded := round(value, source.GetType().Scale)
+		integer, err := strconv.ParseUint(rounded, 10, int(unsafe.Sizeof(zero))*8)
+		if err != nil {
+			return moerr.NewOutOfRangef(ctx, result.GetType().String(), "value %s", rounded)
+		}
+		if err := result.Append(I(integer), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 func floatToIntegerAssignment[F constraints.Float](ctx context.Context, source vector.FunctionParameterWrapper[F], target types.T, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList) error {
 	switch target {

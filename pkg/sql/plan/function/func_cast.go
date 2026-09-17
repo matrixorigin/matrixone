@@ -1025,6 +1025,16 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 			return floatToIntegerAssignment(proc.Ctx, vector.GenerateFunctionFixedTypeParameter[float64](from), toType.Oid, result, length, selectList)
 		}
 	}
+	if mode.isAssignment() && toType.Oid.IsUnsignedInt() {
+		switch fromType.Oid {
+		case types.T_decimal64:
+			return decimalToUnsignedAssignment(proc.Ctx, vector.GenerateFunctionFixedTypeParameter[types.Decimal64](from), toType.Oid, result, length, selectList, decimal64RoundedIntegerString)
+		case types.T_decimal128:
+			return decimalToUnsignedAssignment(proc.Ctx, vector.GenerateFunctionFixedTypeParameter[types.Decimal128](from), toType.Oid, result, length, selectList, decimal128RoundedIntegerString)
+		case types.T_decimal256:
+			return decimalToUnsignedAssignment(proc.Ctx, vector.GenerateFunctionFixedTypeParameter[types.Decimal256](from), toType.Oid, result, length, selectList, decimal256RoundedIntegerString)
+		}
+	}
 	if mode == castModeExplicit && toType.IsDecimal() && fromType.IsNumeric() {
 		if handled, err := explicitNumericToDecimal(from, *toType, result, length); handled {
 			return err

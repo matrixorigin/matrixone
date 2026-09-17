@@ -23,6 +23,58 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestDecimalUnsignedAssignmentRounding(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, oid := range []types.T{types.T_decimal64, types.T_decimal128, types.T_decimal256} {
+		t.Run(oid.String(), func(t *testing.T) {
+			typ := oid.ToType()
+			typ.Scale = 1
+			var values, overflow any
+			switch oid {
+			case types.T_decimal64:
+				values, overflow = []types.Decimal64{25, 35, 0}, []types.Decimal64{2555}
+			case types.T_decimal128:
+				values = []types.Decimal128{{B0_63: 25}, {B0_63: 35}, {}}
+				overflow = []types.Decimal128{{B0_63: 2555}}
+			case types.T_decimal256:
+				values = []types.Decimal256{{B0_63: 25}, {B0_63: 35}, {}}
+				overflow = []types.Decimal256{{B0_63: 2555}}
+			}
+			for _, tc := range []struct {
+				target         types.T
+				want, ordinary any
+			}{
+				{types.T_uint8, []uint8{3, 4, 0}, []uint8{2, 3, 0}},
+				{types.T_uint16, []uint16{3, 4, 0}, []uint16{2, 3, 0}},
+				{types.T_uint32, []uint32{3, 4, 0}, []uint32{2, 3, 0}},
+				{types.T_uint64, []uint64{3, 4, 0}, []uint64{2, 3, 0}},
+			} {
+				t.Run(tc.target.String(), func(t *testing.T) {
+					inputs := []FunctionTestInput{
+						NewFunctionTestInput(typ, values, []bool{false, false, true}),
+						NewFunctionTestInput(tc.target.ToType(), tc.want, nil),
+					}
+					expected := NewFunctionTestResult(tc.target.ToType(), false, tc.want, []bool{false, false, true})
+					testCase := NewFunctionTestCase(proc, inputs, expected, NewAssignCast)
+					ok, info := testCase.Run()
+					require.True(t, ok, info)
+					testCase = NewFunctionTestCase(proc, inputs, expected, NewAssignIgnoreCast)
+					ok, info = testCase.Run()
+					require.True(t, ok, info)
+					expected = NewFunctionTestResult(tc.target.ToType(), false, tc.ordinary, []bool{false, false, true})
+					testCase = NewFunctionTestCase(proc, inputs, expected, NewCast)
+					ok, info = testCase.Run()
+					require.True(t, ok, info)
+				})
+			}
+			inputs := []FunctionTestInput{NewFunctionTestInput(typ, overflow, nil), NewFunctionTestInput(types.T_uint8.ToType(), []uint8{}, nil)}
+			testCase := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(types.T_uint8.ToType(), true, []uint8{0}, nil), NewAssignCast)
+			ok, info := testCase.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
 func TestFloatIntegerAssignmentRounding(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, tc := range []struct {

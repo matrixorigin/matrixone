@@ -50,4 +50,23 @@ SELECT v FROM dst WHERE id=6;
 SELECT CAST(2.5 AS SIGNED),CAST(-2.5 AS SIGNED),CAST(2.5E0 AS SIGNED),CAST(-2.5E0 AS SIGNED);
 ➤ cast(2.5 as signed)[-5,64,0]  ¦  cast(-2.5 as signed)[-5,64,0]  ¦  cast(2.5e0 as signed)[-5,64,0]  ¦  cast(-2.5e0 as signed)[-5,64,0]  𝄀
 3  ¦  -3  ¦  2  ¦  -2
+CREATE TABLE unsigned_dst(v BIGINT UNSIGNED);
+INSERT INTO unsigned_dst VALUES (2.5),(CAST(2.5 AS DECIMAL(30,1))),(CAST(2.5 AS DECIMAL(65,1)));
+SELECT v FROM unsigned_dst ORDER BY v;
+➤ v[-5,64,0]  𝄀
+3  𝄀
+3  𝄀
+3
+CREATE TABLE tiny_unsigned_dst(v TINYINT UNSIGNED);
+INSERT INTO tiny_unsigned_dst VALUES (2.5),(255.5);
+Data truncation: data out of range: data type TINYINT UNSIGNED, value 256
+SELECT COUNT(*) FROM tiny_unsigned_dst;
+➤ COUNT(*)[-5,64,0]  𝄀
+0
+CREATE TABLE no_key_dst(v BIGINT);
+INSERT INTO no_key_dst VALUES ((2.5)),((-2.5)) ON DUPLICATE KEY UPDATE v=VALUES(v);
+SELECT v FROM no_key_dst ORDER BY v;
+➤ v[-5,64,0]  𝄀
+-3  𝄀
+3
 DROP DATABASE integer_assignment_rounding;

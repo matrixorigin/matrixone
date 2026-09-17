@@ -1478,7 +1478,9 @@ func forceAssignmentCastExprWithProcess(
 func assignmentCastFunctionNameForSource(expr *Expr, targetType Type, isIgnore bool, proc *process.Process) string {
 	name := assignmentCastFunctionName(targetType, isIgnore, proc)
 	if types.T(targetType.Id).IsInteger() &&
-		(types.T(expr.Typ.Id).IsFloat() || expr.GetP() != nil) && assignmentCastProtocolSupported(proc) {
+		(types.T(expr.Typ.Id).IsFloat() ||
+			(types.T(targetType.Id).IsUnsignedInt() && makeTypeByPlan2Expr(expr).IsDecimal()) ||
+			expr.GetP() != nil) && assignmentCastProtocolSupported(proc) {
 		name = "cast_assign"
 		if isIgnore {
 			name = "cast_ignore"
@@ -2064,7 +2066,11 @@ func buildValueScan(
 				}
 			}
 		} else {
-			binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
+			sourceType := col.Typ
+			if types.T(col.Typ.Id).IsInteger() {
+				sourceType = plan.Type{}
+			}
+			binder := NewDefaultBinder(builder.GetContext(), nil, nil, sourceType, nil)
 			binder.builder = builder
 			for _, r := range slt.Rows {
 				if nv, ok := r[i].(*tree.NumVal); ok && builder.isInsertIgnore {

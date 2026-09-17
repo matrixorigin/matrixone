@@ -115,6 +115,30 @@ func TestIssue28469IntegerAssignment(t *testing.T) {
 			require.NoError(t, conn.QueryRowContext(ctx, "select v from dst").Scan(&got))
 			require.Equal(t, int64(-2), got)
 		})
+		t.Run("decimal_unsigned_assignment", func(t *testing.T) {
+			mustExec(t, ctx, conn, "create table unsigned_dst(v bigint unsigned)")
+			for _, source := range []string{"2.5", "cast(2.5 as decimal(30,1))", "cast(2.5 as decimal(65,1))"} {
+				mustExec(t, ctx, conn, "delete from unsigned_dst where v>=0")
+				mustExec(t, ctx, conn, "insert into unsigned_dst values ("+source+")")
+				var got uint64
+				require.NoError(t, conn.QueryRowContext(ctx, "select v from unsigned_dst").Scan(&got))
+				require.Equal(t, uint64(3), got)
+			}
+			mustExec(t, ctx, conn, "create table tiny_unsigned_dst(v tinyint unsigned)")
+			_, err := conn.ExecContext(ctx, "insert into tiny_unsigned_dst values (2.5),(255.5)")
+			require.Error(t, err)
+			var count int
+			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from tiny_unsigned_dst").Scan(&count))
+			require.Zero(t, count)
+		})
+		t.Run("legacy_values_parenthesized_decimal", func(t *testing.T) {
+			mustExec(t, ctx, conn, "create table no_key_dst(v bigint)")
+			mustExec(t, ctx, conn, "insert into no_key_dst values ((2.5)),((-2.5)) on duplicate key update v=values(v)")
+			var low, high int64
+			require.NoError(t, conn.QueryRowContext(ctx, "select min(v),max(v) from no_key_dst").Scan(&low, &high))
+			require.Equal(t, int64(-3), low)
+			require.Equal(t, int64(3), high)
+		})
 		t.Run("typed_assignment_controls", func(t *testing.T) {
 			mustExec(t, ctx, conn, "delete from dst where id=1")
 			mustExec(t, ctx, conn, "insert into dst select 1,cast(2.5 as decimal(5,1))")
