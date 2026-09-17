@@ -377,11 +377,14 @@ func genViewTableDef(
 		}
 	}
 	persistedCreateSQL := rootSQL
-	definitionStmt := stmt
+	definitionStmt := cloneTreeSelect(stmt)
 	if stableViewSQL, stableSelect, rewritten := stableViewSQLWithExpandedStarsAndSelect(ctx, stmt, viewSql, expandedSelectLists); rewritten {
 		viewSql = stableViewSQL
 		persistedCreateSQL = stableViewSQL
 		definitionStmt = stableSelect
+	}
+	if len(colNames) == 0 {
+		definitionStmt = viewSelectWithStableOutputHeadings(definitionStmt, query.Headings)
 	}
 	definitionStmt = tree.WithViewColumnNames(definitionStmt, colNames)
 
@@ -395,7 +398,7 @@ func genViewTableDef(
 		// Definition must be generated from the same star-expanded SELECT that is
 		// persisted in Stmt. Formatting the original AST would let metadata replay
 		// a later schema's columns even though the View itself remains frozen.
-		Definition:              tree.StringWithOpts(definitionStmt, dialect.MYSQL, tree.WithQuoteString(true), tree.WithQuoteIdentifier(), tree.WithModeIndependentStringLiterals()),
+		Definition:              tree.StringWithOpts(definitionStmt, dialect.MYSQL, tree.WithSingleQuoteString(), tree.WithQuoteIdentifier(), tree.WithModeIndependentStringLiterals()),
 		CheckOption:             strings.ToUpper(checkOption),
 		DefaultDatabase:         ctx.DefaultDatabase(),
 		SQLMode:                 parserSQLModeFromContext(ctx),
@@ -992,6 +995,73 @@ func viewSelectExprsWithExpandedStars(
 		}
 	}
 	return stableExprs, rewritten
+}
+
+// viewSelectWithStableOutputHeadings keeps the public names assigned during
+// CREATE VIEW stable after binding has qualified identifiers. A bare column
+// already derives the same heading from its final identifier, while a
+// compound expression such as `a + 1` would otherwise replay as `t.a + 1`.
+// Aliases are added only when the expression's actual mode-independent
+// persisted rendering differs from the resolved heading, preserving the
+// existing SQL shape for stable column and literal projections.
+func viewSelectWithStableOutputHeadings(stmt *tree.Select, headings []string) *tree.Select {
+	if stmt == nil || len(headings) == 0 {
+		return stmt
+	}
+	clause := viewTopLevelSelectClause(stmt.Select)
+	if clause == nil || len(clause.Exprs) != len(headings) {
+		return stmt
+	}
+	clause.Exprs = viewSelectExprsWithStableOutputHeadings(clause.Exprs, headings)
+	return stmt
+}
+
+func viewTopLevelSelectClause(stmt tree.SelectStatement) *tree.SelectClause {
+	switch selectStmt := stmt.(type) {
+	case *tree.SelectClause:
+		return selectStmt
+	case *tree.Select:
+		return viewTopLevelSelectClause(selectStmt.Select)
+	case *tree.ParenSelect:
+		if selectStmt.Select == nil {
+			return nil
+		}
+		return viewTopLevelSelectClause(selectStmt.Select)
+	case *tree.UnionClause:
+		return viewTopLevelSelectClause(selectStmt.Left)
+	default:
+		return nil
+	}
+}
+
+func viewSelectExprsWithStableOutputHeadings(
+	exprs tree.SelectExprs,
+	headings []string,
+) tree.SelectExprs {
+	stableExprs := cloneTreeSelectExprs(exprs)
+	for i := range stableExprs {
+		if stableExprs[i].As != nil && !stableExprs[i].As.Empty() {
+			continue
+		}
+		if i >= len(headings) || headings[i] == "" {
+			continue
+		}
+		if _, ok := unwrapParenExpr(stableExprs[i].Expr).(*tree.UnresolvedName); ok {
+			continue
+		}
+		persistedExpr := tree.StringWithOpts(
+			stableExprs[i].Expr,
+			dialect.MYSQL,
+			tree.WithSingleQuoteString(),
+			tree.WithQuoteIdentifier(),
+			tree.WithModeIndependentStringLiterals(),
+		)
+		if persistedExpr == headings[i] {
+			continue
+		}
+		stableExprs[i].As = tree.NewCStr(headings[i], 1)
+	}
+	return stableExprs
 }
 
 func viewSelectExprsWithExpandedStableHeadings(

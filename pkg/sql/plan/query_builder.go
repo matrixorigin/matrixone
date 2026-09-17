@@ -9478,6 +9478,14 @@ func cloneTreeExpr(astExpr tree.Expr) tree.Expr {
 	return cloned.Interface().(tree.Expr)
 }
 
+func cloneTreeSelect(stmt *tree.Select) *tree.Select {
+	if stmt == nil {
+		return nil
+	}
+	cloned := cloneTreeValue(reflect.ValueOf(stmt), make(map[treeClonePointer]reflect.Value))
+	return cloned.Interface().(*tree.Select)
+}
+
 func cloneTreeSelectExprs(exprs tree.SelectExprs) tree.SelectExprs {
 	if len(exprs) == 0 {
 		return nil
