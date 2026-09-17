@@ -226,6 +226,30 @@ func Test_hasMoCtrl(t *testing.T) {
 		},
 	})
 	assert.True(t, ret)
+
+	// mo_ctl outside the SELECT projection must also be detected, otherwise a WHERE/JOIN placement
+	// bypasses the sys-admin gate.
+	moCtl := func() *plan3.Expr {
+		return &plan3.Expr{Expr: &plan3.Expr_F{F: &plan3.Function{Func: &plan3.ObjectRef{ObjName: "mo_ctl"}}}}
+	}
+	planWith := func(node *plan3.Node) *plan2.Plan {
+		return &plan2.Plan{Plan: &plan2.Plan_Query{Query: &plan2.Query{
+			StmtType: plan3.Query_SELECT, Nodes: []*plan3.Node{node},
+		}}}
+	}
+	// WHERE filter (the reported bypass)
+	assert.True(t, hasMoCtrl(planWith(&plan3.Node{NodeType: plan3.Node_FILTER, FilterList: []*plan3.Expr{moCtl()}})))
+	// JOIN condition
+	assert.True(t, hasMoCtrl(planWith(&plan3.Node{NodeType: plan3.Node_JOIN, OnList: []*plan3.Expr{moCtl()}})))
+	// a DELETE (or any query stmt type) carrying it in a filter
+	assert.True(t, hasMoCtrl(&plan2.Plan{Plan: &plan2.Plan_Query{Query: &plan2.Query{
+		StmtType: plan3.Query_DELETE,
+		Nodes:    []*plan3.Node{{NodeType: plan3.Node_TABLE_SCAN, FilterList: []*plan3.Expr{moCtl()}}},
+	}}}))
+	// a plan with no mo_ctl anywhere is not flagged
+	assert.False(t, hasMoCtrl(planWith(&plan3.Node{NodeType: plan3.Node_FILTER, FilterList: []*plan3.Expr{
+		{Expr: &plan3.Expr_F{F: &plan3.Function{Func: &plan3.ObjectRef{ObjName: "="}}}},
+	}})))
 }
 
 func newTestExecCtx(ctx context.Context, ctrl *gomock.Controller) *ExecCtx {

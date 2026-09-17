@@ -241,23 +241,19 @@ var privilegeCacheIsEnabled = func(ctx context.Context, ses *Session) (bool, err
 	return newValue, err
 }
 
-// hasMoCtrl checks whether the plan has mo_ctrl
+// hasMoCtrl checks whether the plan has mo_ctrl / fault_inject anywhere it can be evaluated.
+// It scans EVERY node's executable expressions (not just the SELECT projection) across every query
+// statement type, so a call placed in a WHERE/HAVING filter, a JOIN condition, GROUP BY / aggregate
+// / window / ORDER BY / LIMIT, a table-function argument, an ON UPDATE assignment, or an INSERT
+// VALUES row cannot bypass the sys-admin gate. Subqueries add their own nodes to the flat node list,
+// so nested placements are covered too.
 func hasMoCtrl(p *plan2.Plan) bool {
-	if p != nil && p.GetQuery() != nil { //select,insert select, update, delete
-		q := p.GetQuery()
-		if q.StmtType == plan.Query_INSERT || q.StmtType == plan.Query_SELECT {
-			for _, node := range q.Nodes {
-				if node != nil && node.NodeType == plan.Node_PROJECT {
-					//restrict :
-					//	select mo_ctrl ...
-					//	insert into ... select mo_ctrl ...
-					for _, proj := range node.ProjectList {
-						if plan2.HasMoCtrl(proj) {
-							return true
-						}
-					}
-				}
-			}
+	if p == nil || p.GetQuery() == nil {
+		return false
+	}
+	for _, node := range p.GetQuery().Nodes {
+		if plan2.NodeHasMoCtrl(node) {
+			return true
 		}
 	}
 	return false
