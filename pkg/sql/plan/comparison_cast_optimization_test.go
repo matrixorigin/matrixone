@@ -1123,9 +1123,10 @@ func TestDecimalNotEqualAlwaysTrue(t *testing.T) {
 			// Create column expression
 			colExpr := &plan.Expr{
 				Typ: plan.Type{
-					Id:    int32(types.T_decimal64),
-					Width: 10,
-					Scale: tt.colScale,
+					Id:          int32(types.T_decimal64),
+					Width:       10,
+					Scale:       tt.colScale,
+					NotNullable: true,
 				},
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
