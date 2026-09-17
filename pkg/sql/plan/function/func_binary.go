@@ -11188,10 +11188,7 @@ func stDiscreteDistanceWithUnit[T float32 | float64](functionName string, ivecs 
 	return nil
 }
 
-func discreteFrechetDistancePlanar(left, right []byte, srid uint32) (float64, error) {
-	if err := validateComputationSRID(srid); err != nil {
-		return 0, err
-	}
+func discreteFrechetDistancePlanar(left, right []byte, _ uint32) (float64, error) {
 	a, err := decodeGeoGeometry(left)
 	if err != nil {
 		return 0, err
@@ -11240,10 +11237,7 @@ func discreteFrechetDistanceBySRID(left, right []byte, srid uint32) (float64, er
 	return d, nil
 }
 
-func discreteHausdorffDistancePlanar(left, right []byte, srid uint32) (float64, error) {
-	if err := validateComputationSRID(srid); err != nil {
-		return 0, err
-	}
+func discreteHausdorffDistancePlanar(left, right []byte, _ uint32) (float64, error) {
 	a, err := decodeGeoGeometry(left)
 	if err != nil {
 		return 0, err
