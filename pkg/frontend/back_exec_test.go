@@ -90,15 +90,15 @@ func TestBindBackExecSessionWithoutUpstream(t *testing.T) {
 	require.Equal(t, uuid.Nil, proc.Base.SessionInfo.SessionId)
 }
 
-func TestExecInFrontendInBackCompatibilityNoOp(t *testing.T) {
+func TestExecInFrontendInBackCompatibilityNoOpRejectsDifferentSemantics(t *testing.T) {
 	backSes := &backSession{}
 	execCtx := &ExecCtx{
 		reqCtx: context.Background(),
 		ses:    backSes,
-		stmt:   &tree.CompatibilityNoOpStmt{},
+		stmt:   tree.NewCompatibilityNoOpStmt("db", "utf8mb4", "utf8mb4_general_ci"),
 	}
 
-	require.NoError(t, execInFrontendInBack(backSes, execCtx))
+	require.ErrorContains(t, execInFrontendInBack(backSes, execCtx), "supported only as a compatibility no-op")
 }
 
 func TestExecInFrontendInBackRequiresUpstreamForPreparedStatements(t *testing.T) {

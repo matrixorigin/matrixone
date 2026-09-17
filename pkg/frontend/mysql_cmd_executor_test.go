@@ -5211,16 +5211,16 @@ func Test_statement_type(t *testing.T) {
 	})
 }
 
-func TestExecInFrontendCompatibilityNoOp(t *testing.T) {
+func TestExecInFrontendCompatibilityNoOpRejectsDifferentSemantics(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 	ses := newTestSession(t, ctrl)
 	execCtx := newTestExecCtx(context.Background(), ctrl)
 	execCtx.ses = ses
-	execCtx.stmt = &tree.CompatibilityNoOpStmt{}
+	execCtx.stmt = tree.NewCompatibilityNoOpStmt("db", "utf8mb4", "utf8mb4_general_ci")
 
 	_, err := execInFrontend(ses, execCtx)
-	require.NoError(t, err)
+	require.ErrorContains(t, err, "supported only as a compatibility no-op")
 }
 
 func TestLockTablesSessionState(t *testing.T) {
@@ -8736,10 +8736,13 @@ func TestExecRequestStmtPrepareAcceptsExplainAndSetVariable(t *testing.T) {
 	require.IsType(t, &tree.SetVar{}, prepared.PrepareStmt)
 	require.Len(t, prepared.PreparePlan.GetDcl().GetPrepare().GetParamTypes(), 1)
 
+	tenant := ses.GetTenantInfo()
+	ses.SetTenantInfo(nil)
 	resp, err = ExecRequest(ses, execCtx, &Request{
 		cmd:  COM_STMT_PREPARE,
 		data: []byte("alter database d character set utf8mb4 collate utf8mb4_bin"),
 	})
+	ses.SetTenantInfo(tenant)
 	require.NoError(t, err)
 	require.Nil(t, resp)
 	stmtName = getPrepareStmtName(ses.GetLastStmtId())

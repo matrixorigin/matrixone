@@ -3,6 +3,8 @@ create database alter_database_collation_compat;
 alter database `alter_database_collation_compat` character set utf8mb4 collate utf8mb4_bin;
 use alter_database_collation_compat;
 select database();
+alter database missing_alter_database_collation_compat character set utf8mb4 collate utf8mb4_bin;
+alter database alter_database_collation_compat character set utf8mb4 collate utf8mb4_general_ci;
 create table t(a int);
 begin;
 insert into t values (1);

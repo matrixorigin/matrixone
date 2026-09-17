@@ -85,7 +85,9 @@ func execInFrontendInBack(backSes *backSession,
 				return
 			}
 		}
-	case *tree.EmptyStmt, *tree.CompatibilityNoOpStmt:
+	case *tree.EmptyStmt:
+	case *tree.CompatibilityNoOpStmt:
+		err = handleCompatibilityNoOpStmt(backSes, execCtx, st)
 	case *tree.CallStmt:
 		// XXXSP
 		// handle call procedure in backend.  This is to support calling procedures

@@ -19247,7 +19247,7 @@ yydefault:
 		{
 			// Compatibility-only syntax accepted by applications such as Gitea.
 			// MatrixOne does not mutate database charset/collation metadata here.
-			yyLOCAL = &tree.CompatibilityNoOpStmt{}
+			yyLOCAL = tree.NewCompatibilityNoOpStmt(yyDollar[3].str, yyDollar[6].str, yyDollar[8].str)
 		}
 		yyVAL.union = yyLOCAL
 	case 606:

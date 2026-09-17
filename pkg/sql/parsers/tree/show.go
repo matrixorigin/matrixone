@@ -966,6 +966,13 @@ func (e EmptyStmt) GetQueryType() string {
 // real client statement and can therefore participate in PREPARE and EXECUTE.
 type CompatibilityNoOpStmt struct {
 	statementImpl
+	Database  string
+	Charset   string
+	Collation string
+}
+
+func NewCompatibilityNoOpStmt(database, charset, collation string) *CompatibilityNoOpStmt {
+	return &CompatibilityNoOpStmt{Database: database, Charset: charset, Collation: collation}
 }
 
 func (c *CompatibilityNoOpStmt) String() string {

@@ -3734,6 +3734,18 @@ func handleShowBackendServers(ses FeSession, execCtx *ExecCtx) error {
 	return err
 }
 
+func handleCompatibilityNoOpStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.CompatibilityNoOpStmt) error {
+	if !strings.EqualFold(stmt.Charset, "utf8mb4") || !strings.EqualFold(stmt.Collation, "utf8mb4_bin") {
+		return moerr.NewInvalidInputf(execCtx.reqCtx,
+			"ALTER DATABASE CHARACTER SET/COLLATE is supported only as a compatibility no-op for utf8mb4/utf8mb4_bin")
+	}
+	txn := ses.GetTxnHandler().GetTxn()
+	if _, err := getPu(ses.GetService()).StorageEngine.Database(execCtx.reqCtx, stmt.Database, txn); err != nil {
+		return moerr.NewBadDB(execCtx.reqCtx, stmt.Database)
+	}
+	return nil
+}
+
 func getExplainOption(reqCtx context.Context, options []tree.OptionElem) (*explain.ExplainOptions, error) {
 	es := explain.NewExplainDefaultOptions()
 	if options == nil {

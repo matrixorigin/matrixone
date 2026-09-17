@@ -65,6 +65,10 @@ func TestAlterDatabaseCharsetCollationCompatibilityNoOp(t *testing.T) {
 		"ALTER DATABASE `gitea_mo` CHARACTER SET utf8mb4 COLLATE utf8mb4_bin", 1)
 	require.NoError(t, err)
 	require.IsType(t, &tree.CompatibilityNoOpStmt{}, stmt)
+	compatStmt := stmt.(*tree.CompatibilityNoOpStmt)
+	require.Equal(t, "gitea_mo", compatStmt.Database)
+	require.Equal(t, "utf8mb4", compatStmt.Charset)
+	require.Equal(t, "utf8mb4_bin", compatStmt.Collation)
 	require.Empty(t, tree.String(stmt, dialect.MYSQL))
 }
 

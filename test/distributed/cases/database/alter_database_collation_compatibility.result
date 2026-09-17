@@ -5,6 +5,10 @@ use alter_database_collation_compat;
 select database();
 database()
 alter_database_collation_compat
+alter database missing_alter_database_collation_compat character set utf8mb4 collate utf8mb4_bin;
+Unknown database missing_alter_database_collation_compat
+alter database alter_database_collation_compat character set utf8mb4 collate utf8mb4_general_ci;
+invalid input: ALTER DATABASE CHARACTER SET/COLLATE is supported only as a compatibility no-op for utf8mb4/utf8mb4_bin
 create table t(a int);
 begin;
 insert into t values (1);
