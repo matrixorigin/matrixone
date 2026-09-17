@@ -619,6 +619,62 @@ func TestPersistedSpatialDistanceViewProtocolLifecycle(t *testing.T) {
 	require.Equal(t, int64(defines.MORPCVersion86), *regeneratedData.RequiredProtocolVersion)
 }
 
+func TestPersistedIPFunctionRequirementSurvivesViewFilterFold(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	proc := ctx.GetProcess()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	oldReadFloor, hadReadFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor)
+	oldAuthoringFloor, hadAuthoringFloor := rt.GetGlobalVariables(
+		moruntime.PersistedExpressionProtocolAuthoringFloor)
+	t.Cleanup(func() {
+		if hadProtocol {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+		if hadReadFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, oldReadFloor)
+		} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolFloor, current)
+		}
+		if hadAuthoringFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, oldAuthoringFloor)
+		} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, current)
+		}
+	})
+
+	const createSQL = `create view v_ip_filter as select n_name from nation
+where inet_ntoa(cast('"2"' as json)) = '0.0.0.2'`
+	build := func() (*Plan, error) {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		root := &rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createSQL, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		return BuildPlan(root, stmt, false)
+	}
+
+	// The filter is constant-foldable, but its INET_NTOA overload is a v85
+	// persisted-expression contract. A pre-v85 writer must still reject the
+	// view instead of persisting only the folded NULL/literal result.
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion84))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion84))
+	_, err := build()
+	require.ErrorContains(t, err, "protocol version 85")
+
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion85))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion85))
+	created, err := build()
+	require.NoError(t, err)
+	var data ViewData
+	require.NoError(t, json.Unmarshal(
+		[]byte(created.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()), &data))
+	require.NotNil(t, data.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion85), *data.RequiredProtocolVersion)
+}
+
 func TestRegenerateViewDefinitionPersistsExpandedStar(t *testing.T) {
 	for _, rootSQL := range []string{
 		"create view v as select * from nation",
