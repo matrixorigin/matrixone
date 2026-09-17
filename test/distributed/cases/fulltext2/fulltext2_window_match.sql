@@ -32,4 +32,33 @@ from docs where match(body) against('alpha' in boolean mode) order by id;
 select id, row_number() over (order by match(body) against('alpha' in boolean mode) desc, id) as rn
 from docs where match(body) against('alpha' in boolean mode) order by id;
 
+-- #28974 P2: OVER (PARTITION BY ...) makes the binder insert a PARTITION node between the WINDOW and
+-- the scan. The rewrite must descend that PARTITION to serve the WHERE MATCH and reparent below it;
+-- the partitioned form returned ERROR 20105 before the fix.
+select id, row_number() over (partition by body order by id) as rn
+from docs where match(body) against('alpha' in boolean mode) order by id;
+
+-- @separator:table
+-- @regex("fulltext2_search",true)
+explain select id, row_number() over (partition by body order by id) as rn
+from docs where match(body) against('alpha' in boolean mode) order by id;
+
+-- #28974 P2: a MATCH projected in the SELECT list above the WINDOW is resolved to the served score
+-- (published into ftJoinServed), not left as a bare fulltext_match that throws 20105.
+select id, (match(body) against('alpha' in boolean mode) > 0) as hit,
+       row_number() over (order by id) as rn
+from docs where match(body) against('alpha' in boolean mode) order by id;
+
+-- #28974 P2: a MATCH in an ancestor ORDER BY above the WINDOW is resolved the same way.
+select id, row_number() over (order by id) as rn
+from docs where match(body) against('alpha' in boolean mode)
+order by match(body) against('alpha' in boolean mode) desc, id;
+
+-- #28974 P2: stacked window functions each referencing the served MATCH in their own OVER clause;
+-- the inner window serves the scan, the outer window resolves against the published scores.
+select id,
+       row_number() over (order by match(body) against('alpha' in boolean mode) desc, id) as r1,
+       rank() over (order by match(body) against('alpha' in boolean mode) desc, id) as r2
+from docs where match(body) against('alpha' in boolean mode) order by id;
+
 drop database ft2_window;

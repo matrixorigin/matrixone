@@ -667,9 +667,10 @@ func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]i
 		// survives to execution as error 20105 (#28974). Anchor on the WINDOW like the AGG case:
 		// its single child is the scan, so rewrite the scan's MATCH to the index scan and reparent.
 		// Post-order recursion runs this before the PROJECT pass, which then finds no MATCH and
-		// no-ops -- no double rewrite.
+		// no-ops -- no double rewrite. resolveScanNodeUnderWindow descends the PARTITION node that
+		// OVER(PARTITION BY ...) inserts between the window and the scan.
 		if len(node.Children) == 1 {
-			if scanNode := builder.resolveScanNodeWithIndex(builder.qry.Nodes[node.Children[0]], 0); scanNode != nil {
+			if scanNode := builder.resolveScanNodeUnderWindow(builder.qry.Nodes[node.Children[0]]); scanNode != nil {
 				filterids, filterFTIdxs := builder.getFullTextMatchFiltersFromScanNode(scanNode)
 				wrappedFTExprs, wrappedFTIdxs := builder.getWrappedFullTextMatches(nil, scanNode, filterids, nil)
 				if len(filterids) > 0 || len(wrappedFTExprs) > 0 {
@@ -678,6 +679,10 @@ func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]i
 				}
 			}
 		}
+		// A stacked outer window whose scan MATCH was already consumed by an inner window can
+		// still carry that MATCH in its own OVER spec; resolve it against the scores served
+		// below. No-op when nothing was served or the spec holds no MATCH.
+		builder.rewriteWindowMatchesFromServed(node)
 	}
 
 	return nodeID, nil

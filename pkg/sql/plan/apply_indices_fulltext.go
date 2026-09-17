@@ -321,9 +321,59 @@ func (builder *QueryBuilder) applyIndicesForAggUsingFullTextIndex(nodeID int32, 
 	return nodeID, nil
 }
 
-// applyIndicesForWindowUsingFullTextIndex rewrites a WINDOW -> SCAN(MATCH) shape (#28974). The
-// WINDOW's single child is the base scan carrying the WHERE-clause fulltext_match; build the
-// index-scan join for those MATCHes and reparent the window onto it, mirroring the aggregate path.
+// resolveScanNodeUnderWindow finds the base TABLE_SCAN carrying the WHERE-clause MATCH beneath a
+// WINDOW node. OVER(PARTITION BY ...) makes the binder insert a Node_PARTITION between the window
+// and the scan (appendWindowNode), and a single-input PROJECT may also sit in between; both are
+// passthroughs to descend. A WINDOW child that is itself a WINDOW is NOT descended: stacked
+// windows are rewritten innermost-first by post-order recursion.
+func (builder *QueryBuilder) resolveScanNodeUnderWindow(node *plan.Node) *plan.Node {
+	for node != nil {
+		switch {
+		case node.NodeType == plan.Node_TABLE_SCAN:
+			if node.TableDef != nil && node.TableDef.Indexes != nil {
+				return node
+			}
+			return nil
+		case (node.NodeType == plan.Node_PARTITION || node.NodeType == plan.Node_PROJECT) && len(node.Children) == 1:
+			node = builder.qry.Nodes[node.Children[0]]
+		default:
+			return nil
+		}
+	}
+	return nil
+}
+
+// rewriteWindowMatchesFromServed replaces a fulltext_match inside a WINDOW's own spec (a
+// window-function argument or its OVER clause in WinSpecList), and inside the PARTITION node the
+// binder places under it for OVER(PARTITION BY ...), with the score column of an index scan
+// already served (builder.ftJoinServed). servedFullTextScoreSameTable is binding-tag-aware, so a
+// MATCH no served scan answers is left intact and still raises 20105.
+func (builder *QueryBuilder) rewriteWindowMatchesFromServed(windowNode *plan.Node) {
+	if windowNode == nil || len(builder.ftJoinServed) == 0 {
+		return
+	}
+	rewriter := func(fn *plan.Function) *plan.Expr {
+		return builder.servedFullTextScoreSameTable(fn, builder.ftJoinServed)
+	}
+	for i := range windowNode.WinSpecList {
+		if exprCallsFunc(windowNode.WinSpecList[i], "fulltext_match") {
+			windowNode.WinSpecList[i] = replaceScoreFnInExprBy(windowNode.WinSpecList[i], rewriter)
+		}
+	}
+	if len(windowNode.Children) == 1 {
+		if child := builder.qry.Nodes[windowNode.Children[0]]; child != nil && child.NodeType == plan.Node_PARTITION {
+			for _, ob := range child.OrderBy {
+				if ob != nil && exprCallsFunc(ob.Expr, "fulltext_match") {
+					ob.Expr = replaceScoreFnInExprBy(ob.Expr, rewriter)
+				}
+			}
+		}
+	}
+}
+
+// applyIndicesForWindowUsingFullTextIndex rewrites a WINDOW -> [PARTITION ->] SCAN(MATCH) shape
+// (#28974). The scan carries the WHERE-clause fulltext_match; build the index-scan join for those
+// MATCHes and reparent the scan's immediate parent onto it, mirroring the aggregate path.
 func (builder *QueryBuilder) applyIndicesForWindowUsingFullTextIndex(nodeID int32, windowNode *plan.Node, scanNode *plan.Node,
 	filterids []int32, filterIndexDefs []*plan.IndexDef,
 	wrappedExprs []*plan.Expr, wrappedIndexDefs []*plan.IndexDef,
@@ -346,18 +396,26 @@ func (builder *QueryBuilder) applyIndicesForWindowUsingFullTextIndex(nodeID int3
 	scanNode.Limit = nil
 	scanNode.Offset = nil
 
-	windowNode.Children[0] = idxID
-
-	// A MATCH inside the window's own expressions -- a window-function argument or its OVER order-by
-	// in WinSpecList -- is served by the index scan just built; reparenting alone would leave the raw
-	// fulltext_match there and throw 20105, so rewrite it to the score column (as the aggregate path
-	// does for AggList/GroupBy).
-	if len(served) > 0 {
-		rewriter := builder.fullTextScoreRewriter(served)
-		for i := range windowNode.WinSpecList {
-			windowNode.WinSpecList[i] = replaceScoreFnInExprBy(windowNode.WinSpecList[i], rewriter)
+	// Reparent the scan's immediate parent onto the index-scan join. With OVER(PARTITION BY ...) a
+	// Node_PARTITION (and any single-input PROJECT) sits between the window and the scan, so the
+	// join must attach below it -- hardcoding windowNode.Children[0] would drop the partition.
+	for parent := windowNode; parent != nil; {
+		childID := parent.Children[0]
+		if childID == scanNode.NodeId {
+			parent.Children[0] = idxID
+			break
 		}
+		parent = builder.qry.Nodes[childID]
 	}
+
+	// Publish the served scores so the PROJECT/SORT above the window (resolveProjectMatchesOverJoin)
+	// and any stacked outer window resolve a MATCH they carry to the score column instead of leaving
+	// a raw fulltext_match that reaches execution as 20105.
+	builder.ftJoinServed = append(builder.ftJoinServed, served...)
+
+	// This window's own spec, and the partition node between it and the scan, may reference the
+	// MATCHes just served.
+	builder.rewriteWindowMatchesFromServed(windowNode)
 
 	return nodeID, nil
 }

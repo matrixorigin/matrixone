@@ -163,6 +163,160 @@ func TestFullTextWindowMatchRewritten(t *testing.T) {
 		"the WHERE MATCH beneath the WINDOW must be served by a fulltext index scan")
 }
 
+// ftWindowSpecWithMatch builds a WINDOW node's WinSpecList entry (an Expr_W) whose OVER order-by
+// references match, the way the binder builds ROW_NUMBER() OVER (ORDER BY MATCH(...)).
+func ftWindowSpecWithMatch(match *planpb.Expr) *planpb.Expr {
+	ityp := types.T_int64.ToType()
+	return &planpb.Expr{
+		Typ: makePlan2Type(&ityp),
+		Expr: &planpb.Expr_W{W: &planpb.WindowSpec{
+			WindowFunc: &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: "rank"}}}},
+			OrderBy:    []*planpb.OrderBySpec{{Expr: match}},
+		}},
+	}
+}
+
+// OVER (PARTITION BY col ORDER BY id) makes the binder place a Node_PARTITION between the WINDOW
+// and the base scan (appendWindowNode). The WINDOW fulltext anchor must descend that partition to
+// reach the scan's WHERE MATCH and reparent BELOW it, or the partition is dropped and the raw
+// fulltext_match survives to execution as 20105 (#28974 P2). Plan shape
+// PROJECT -> WINDOW -> PARTITION -> SCAN(match filter): after applyIndices no fulltext_match may
+// remain, the index scan must exist, and the PARTITION node must still be in the plan.
+func TestFullTextWindowPartitionMatchRewritten(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	ctx := NewBindContext(builder, nil)
+
+	matchScanID, scanNode := matchScanWithFulltextIndex(builder, ctx)
+	scanTag := scanNode.BindingTags[0]
+
+	winTag := builder.genNewBindTag()
+	partID := builder.appendNode(&planpb.Node{
+		NodeType:    planpb.Node_PARTITION,
+		Children:    []int32{matchScanID},
+		OrderBy:     []*planpb.OrderBySpec{{Expr: ftjColExpr(scanNode.TableDef, scanTag, 1), Flag: planpb.OrderBySpec_INTERNAL}},
+		BindingTags: []int32{winTag},
+	}, ctx)
+	winID := builder.appendNode(&planpb.Node{
+		NodeType:    planpb.Node_WINDOW,
+		Children:    []int32{partID},
+		BindingTags: []int32{winTag},
+	}, ctx)
+
+	ityp := types.T_int64.ToType()
+	projTag := builder.genNewBindTag()
+	projID := builder.appendNode(&planpb.Node{
+		NodeType:    planpb.Node_PROJECT,
+		Children:    []int32{winID},
+		BindingTags: []int32{projTag},
+		ProjectList: []*planpb.Expr{{
+			Typ:  makePlan2Type(&ityp),
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: winTag, ColPos: 0}},
+		}},
+	}, ctx)
+
+	newID, err := builder.applyIndices(projID, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	builder.qry.Steps = []int32{newID}
+
+	require.Zero(t, countReachableFullTextMatches(builder.qry),
+		"a fulltext_match beneath a WINDOW -> PARTITION throws 20105 at execution (#28974)")
+	require.Equal(t, 1, countReachableFullTextScans(builder.qry),
+		"the WHERE MATCH beneath the partitioned WINDOW must be served by a fulltext index scan")
+	require.True(t, planHasReachableNodeType(builder.qry, newID, planpb.Node_PARTITION),
+		"the PARTITION node must survive the rewrite -- reparenting the window directly would drop it")
+}
+
+// A MATCH projected in the SELECT list above a WINDOW is served by the same scan the window's WHERE
+// MATCH drives, but only if the window anchor publishes its served scores so the PROJECT anchor's
+// resolveProjectMatchesOverJoin can rewrite the projection. Without that publication the projected
+// fulltext_match survives to 20105 despite the index scan existing (#28974 P2). Plan shape
+// PROJECT(projects match) -> WINDOW -> SCAN(match filter).
+func TestFullTextWindowProjectedMatchPropagated(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	ctx := NewBindContext(builder, nil)
+
+	matchScanID, scanNode := matchScanWithFulltextIndex(builder, ctx)
+	scanTag := scanNode.BindingTags[0]
+
+	winTag := builder.genNewBindTag()
+	winID := builder.appendNode(&planpb.Node{
+		NodeType:    planpb.Node_WINDOW,
+		Children:    []int32{matchScanID},
+		BindingTags: []int32{winTag},
+	}, ctx)
+
+	ftyp := types.T_float32.ToType()
+	projTag := builder.genNewBindTag()
+	projID := builder.appendNode(&planpb.Node{
+		NodeType:    planpb.Node_PROJECT,
+		Children:    []int32{winID},
+		BindingTags: []int32{projTag},
+		ProjectList: []*planpb.Expr{
+			makeFullTextMatchExpr("hello", 0, scanNode.TableDef, scanTag, []int32{2, 3}),
+			{Typ: makePlan2Type(&ftyp), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: winTag, ColPos: 0}}},
+		},
+	}, ctx)
+
+	newID, err := builder.applyIndices(projID, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	builder.qry.Steps = []int32{newID}
+
+	require.Zero(t, countReachableFullTextMatches(builder.qry),
+		"a projected fulltext_match over a WINDOW must be rewritten to the served score (#28974 P2)")
+	require.Equal(t, 1, countReachableFullTextScans(builder.qry),
+		"the projected MATCH must resolve to the WHERE MATCH's fulltext index scan")
+}
+
+// Two window functions each referencing the served MATCH in their OVER clause build stacked WINDOW
+// nodes (WINDOW_outer -> WINDOW_inner -> SCAN). Post-order rewrites the inner window (which serves
+// the scan's WHERE MATCH); the outer window's own spec must then be resolved against the published
+// served scores, or its fulltext_match survives to 20105 (#28974 P2 subsequent windows).
+func TestFullTextWindowStackedSpecMatchPropagated(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	ctx := NewBindContext(builder, nil)
+
+	matchScanID, scanNode := matchScanWithFulltextIndex(builder, ctx)
+	scanTag := scanNode.BindingTags[0]
+	match := func() *planpb.Expr {
+		return makeFullTextMatchExpr("hello", 0, scanNode.TableDef, scanTag, []int32{2, 3})
+	}
+
+	winTag := builder.genNewBindTag()
+	innerWinID := builder.appendNode(&planpb.Node{
+		NodeType:    planpb.Node_WINDOW,
+		Children:    []int32{matchScanID},
+		WinSpecList: []*planpb.Expr{ftWindowSpecWithMatch(match())},
+		BindingTags: []int32{winTag},
+	}, ctx)
+	outerWinID := builder.appendNode(&planpb.Node{
+		NodeType:    planpb.Node_WINDOW,
+		Children:    []int32{innerWinID},
+		WinSpecList: []*planpb.Expr{ftWindowSpecWithMatch(match())},
+		BindingTags: []int32{winTag},
+	}, ctx)
+
+	ityp := types.T_int64.ToType()
+	projTag := builder.genNewBindTag()
+	projID := builder.appendNode(&planpb.Node{
+		NodeType:    planpb.Node_PROJECT,
+		Children:    []int32{outerWinID},
+		BindingTags: []int32{projTag},
+		ProjectList: []*planpb.Expr{{
+			Typ:  makePlan2Type(&ityp),
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: winTag, ColPos: 0}},
+		}},
+	}, ctx)
+
+	newID, err := builder.applyIndices(projID, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	builder.qry.Steps = []int32{newID}
+
+	require.Zero(t, countReachableFullTextMatches(builder.qry),
+		"a MATCH in a stacked outer window's spec must be rewritten to the served score (#28974 P2)")
+	require.Equal(t, 1, countReachableFullTextScans(builder.qry),
+		"both windows' MATCHes must resolve to a single WHERE-MATCH fulltext index scan")
+}
+
 // replaceScoreFnInExprBy must rewrite a served MATCH wherever it sits, including inside a window
 // spec (window function argument, PARTITION BY, ORDER BY) reached from the WINDOW fulltext anchor
 // (#28974). Covers every traversal branch: Expr_F (direct hit + recurse into args), Expr_List, and
@@ -200,4 +354,136 @@ func TestReplaceScoreFnInExprByTraversesWindowSpec(t *testing.T) {
 	require.Same(t, sentinel, ws.WindowFunc.GetF().Args[0])
 	require.Same(t, sentinel, ws.PartitionBy[0])
 	require.Same(t, sentinel, ws.OrderBy[0].Expr)
+}
+
+// resolveScanNodeUnderWindow must descend the PARTITION and single-input PROJECT passthroughs the
+// binder can place between a WINDOW and its base scan, stop at a scan that carries indexes, and
+// refuse to descend a WINDOW child (stacked windows are handled innermost-first) or a JOIN.
+func TestResolveScanNodeUnderWindow(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	ctx := NewBindContext(builder, nil)
+	scanID, scanNode := matchScanWithFulltextIndex(builder, ctx)
+
+	require.Same(t, scanNode, builder.resolveScanNodeUnderWindow(scanNode),
+		"a direct indexed scan resolves to itself")
+
+	partID := builder.appendNode(&planpb.Node{NodeType: planpb.Node_PARTITION, Children: []int32{scanID}}, ctx)
+	require.Same(t, scanNode, builder.resolveScanNodeUnderWindow(builder.qry.Nodes[partID]),
+		"PARTITION passthrough is descended to the scan")
+
+	projID := builder.appendNode(&planpb.Node{NodeType: planpb.Node_PROJECT, Children: []int32{partID}}, ctx)
+	require.Same(t, scanNode, builder.resolveScanNodeUnderWindow(builder.qry.Nodes[projID]),
+		"PROJECT -> PARTITION -> scan chain is fully descended")
+
+	winID := builder.appendNode(&planpb.Node{NodeType: planpb.Node_WINDOW, Children: []int32{scanID}}, ctx)
+	require.Nil(t, builder.resolveScanNodeUnderWindow(builder.qry.Nodes[winID]),
+		"a WINDOW child is NOT descended -- stacked windows resolve innermost-first")
+
+	joinID := builder.appendNode(&planpb.Node{NodeType: planpb.Node_JOIN, Children: []int32{scanID, scanID}}, ctx)
+	require.Nil(t, builder.resolveScanNodeUnderWindow(builder.qry.Nodes[joinID]),
+		"a JOIN is not a passthrough")
+
+	noIdx := builder.appendNode(&planpb.Node{NodeType: planpb.Node_TABLE_SCAN, TableDef: &planpb.TableDef{}}, ctx)
+	require.Nil(t, builder.resolveScanNodeUnderWindow(builder.qry.Nodes[noIdx]),
+		"a scan with no indexes cannot serve a fulltext rewrite")
+}
+
+// exprCallsFunc must detect a fulltext_match anywhere inside a window spec (Expr_W) -- window
+// function argument, PARTITION BY, or ORDER BY -- mirroring replaceScoreFnInExprBy, so the WINDOW
+// rewrite guard does not skip a MATCH that lives in the OVER clause (#28974).
+func TestExprCallsFuncTraversesWindowSpec(t *testing.T) {
+	match := func() *planpb.Expr {
+		return &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: "fulltext_match"}}}}
+	}
+	inFunc := &planpb.Expr{Expr: &planpb.Expr_W{W: &planpb.WindowSpec{
+		WindowFunc: &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: "sum"}, Args: []*planpb.Expr{match()}}}},
+	}}}
+	require.True(t, exprCallsFunc(inFunc, "fulltext_match"))
+	inPart := &planpb.Expr{Expr: &planpb.Expr_W{W: &planpb.WindowSpec{PartitionBy: []*planpb.Expr{match()}}}}
+	require.True(t, exprCallsFunc(inPart, "fulltext_match"))
+	inOrder := &planpb.Expr{Expr: &planpb.Expr_W{W: &planpb.WindowSpec{OrderBy: []*planpb.OrderBySpec{{Expr: match()}}}}}
+	require.True(t, exprCallsFunc(inOrder, "fulltext_match"))
+
+	noMatch := &planpb.Expr{Expr: &planpb.Expr_W{W: &planpb.WindowSpec{
+		WindowFunc: &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: "row_number"}}}},
+	}}}
+	require.False(t, exprCallsFunc(noMatch, "fulltext_match"))
+	require.False(t, exprCallsFunc(&planpb.Expr{Expr: &planpb.Expr_W{W: &planpb.WindowSpec{}}}, "fulltext_match"),
+		"an empty window spec is nil-safe")
+	require.False(t, exprCallsFunc(&planpb.Expr{Expr: &planpb.Expr_W{W: nil}}, "fulltext_match"),
+		"a nil window spec must not panic, matching replaceScoreFnInExprBy's guard")
+}
+
+// OVER (PARTITION BY match(...)) puts the MATCH in BOTH the WinSpecList Expr_W.PartitionBy AND the
+// sibling Node_PARTITION's OrderBy (appendWindowNode builds both). The WINDOW rewrite must resolve
+// BOTH copies to the served score, or the un-rewritten copy reaches execution as 20105 (#28974 P2).
+func TestFullTextWindowPartitionByMatchServed(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	ctx := NewBindContext(builder, nil)
+
+	matchScanID, scanNode := matchScanWithFulltextIndex(builder, ctx)
+	scanTag := scanNode.BindingTags[0]
+	match := func() *planpb.Expr {
+		return makeFullTextMatchExpr("hello", 0, scanNode.TableDef, scanTag, []int32{2, 3})
+	}
+
+	winTag := builder.genNewBindTag()
+	partID := builder.appendNode(&planpb.Node{
+		NodeType:    planpb.Node_PARTITION,
+		Children:    []int32{matchScanID},
+		OrderBy:     []*planpb.OrderBySpec{{Expr: match(), Flag: planpb.OrderBySpec_INTERNAL}},
+		BindingTags: []int32{winTag},
+	}, ctx)
+	winID := builder.appendNode(&planpb.Node{
+		NodeType: planpb.Node_WINDOW,
+		Children: []int32{partID},
+		WinSpecList: []*planpb.Expr{{Expr: &planpb.Expr_W{W: &planpb.WindowSpec{
+			WindowFunc:  &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: "row_number"}}}},
+			PartitionBy: []*planpb.Expr{match()},
+		}}}},
+		BindingTags: []int32{winTag},
+	}, ctx)
+
+	ityp := types.T_int64.ToType()
+	projTag := builder.genNewBindTag()
+	projID := builder.appendNode(&planpb.Node{
+		NodeType:    planpb.Node_PROJECT,
+		Children:    []int32{winID},
+		BindingTags: []int32{projTag},
+		ProjectList: []*planpb.Expr{{
+			Typ:  makePlan2Type(&ityp),
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: winTag, ColPos: 0}},
+		}},
+	}, ctx)
+
+	newID, err := builder.applyIndices(projID, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	builder.qry.Steps = []int32{newID}
+
+	require.Zero(t, countReachableFullTextMatches(builder.qry),
+		"both the WinSpecList and the PARTITION-node copies of a PARTITION BY MATCH must be rewritten")
+	require.Equal(t, 1, countReachableFullTextScans(builder.qry),
+		"the partition-by MATCH must resolve to the WHERE MATCH's fulltext index scan")
+}
+
+func planHasReachableNodeType(query *planpb.Query, from int32, nt planpb.Node_NodeType) bool {
+	seen := make(map[int32]bool)
+	var visit func(int32) bool
+	visit = func(nodeID int32) bool {
+		if nodeID < 0 || int(nodeID) >= len(query.Nodes) || seen[nodeID] {
+			return false
+		}
+		seen[nodeID] = true
+		node := query.Nodes[nodeID]
+		if node.NodeType == nt {
+			return true
+		}
+		for _, childID := range node.Children {
+			if visit(childID) {
+				return true
+			}
+		}
+		return false
+	}
+	return visit(from)
 }

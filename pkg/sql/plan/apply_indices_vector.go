@@ -1458,6 +1458,25 @@ func exprCallsFunc(expr *plan.Expr, fnName string) bool {
 				return true
 			}
 		}
+	case *plan.Expr_W:
+		// A MATCH inside a window spec (function arg, PARTITION BY, ORDER BY) must be detected
+		// too, mirroring replaceScoreFnInExprBy's Expr_W traversal (#28974). Guard e.W like that
+		// sibling does, so a partially-built Expr_W with a nil spec does not panic here.
+		if e.W != nil {
+			if exprCallsFunc(e.W.WindowFunc, fnName) {
+				return true
+			}
+			for _, p := range e.W.PartitionBy {
+				if exprCallsFunc(p, fnName) {
+					return true
+				}
+			}
+			for _, o := range e.W.OrderBy {
+				if o != nil && exprCallsFunc(o.Expr, fnName) {
+					return true
+				}
+			}
+		}
 	}
 	return false
 }
