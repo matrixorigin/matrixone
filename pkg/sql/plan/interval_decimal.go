@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 // normalizeDecimalIntervalValue converts a constant Decimal256 interval to the
@@ -113,10 +114,19 @@ func decimalIntervalText(expr *Expr) (string, bool, error) {
 	if err != nil || !ok {
 		return "", false, err
 	}
-	return decimalIntervalCastText(text, expr.Typ)
+	return decimalIntervalCastText(
+		text,
+		expr.Typ,
+		decimalIntervalCastIsExplicit(fn),
+		decimalIntervalSourceIsBinary(fn.Args[0]),
+	)
 }
 
-func decimalIntervalCastText(text string, typ planpb.Type) (string, bool, error) {
+func decimalIntervalCastText(
+	text string,
+	typ planpb.Type,
+	explicit, binary bool,
+) (string, bool, error) {
 	scale := typ.Scale
 	if scale < 0 {
 		scale = 0
@@ -127,7 +137,7 @@ func decimalIntervalCastText(text string, typ planpb.Type) (string, bool, error)
 		if width <= 0 {
 			width = types.T_decimal64.ToType().Width
 		}
-		value, err := types.ParseDecimal64(text, width, scale)
+		value, err := parseDecimal64IntervalCast(text, width, scale, explicit, binary)
 		if err != nil {
 			return "", false, err
 		}
@@ -136,7 +146,7 @@ func decimalIntervalCastText(text string, typ planpb.Type) (string, bool, error)
 		if width <= 0 {
 			width = types.T_decimal128.ToType().Width
 		}
-		value, err := types.ParseDecimal128(text, width, scale)
+		value, err := parseDecimal128IntervalCast(text, width, scale, explicit, binary)
 		if err != nil {
 			return "", false, err
 		}
@@ -145,7 +155,7 @@ func decimalIntervalCastText(text string, typ planpb.Type) (string, bool, error)
 		if width <= 0 {
 			width = types.T_decimal256.ToType().Width
 		}
-		value, err := types.ParseDecimal256(text, width, scale)
+		value, err := parseDecimal256IntervalCast(text, width, scale, explicit, binary)
 		if err != nil {
 			return "", false, err
 		}
@@ -153,6 +163,63 @@ func decimalIntervalCastText(text string, typ planpb.Type) (string, bool, error)
 	default:
 		return "", false, nil
 	}
+}
+
+func parseDecimal64IntervalCast(
+	text string, width, scale int32, explicit, binary bool,
+) (types.Decimal64, error) {
+	if binary {
+		return types.ParseDecimal64FromByte(text, width, scale)
+	}
+	if explicit {
+		return planfunction.ParseExplicitDecimal64CastString(text, width, scale)
+	}
+	return planfunction.ParseDecimal64CastString(text, width, scale)
+}
+
+func parseDecimal128IntervalCast(
+	text string, width, scale int32, explicit, binary bool,
+) (types.Decimal128, error) {
+	if binary {
+		return types.ParseDecimal128FromByte(text, width, scale)
+	}
+	if explicit {
+		return planfunction.ParseExplicitDecimal128CastString(text, width, scale)
+	}
+	return planfunction.ParseDecimal128CastString(text, width, scale)
+}
+
+func parseDecimal256IntervalCast(
+	text string, width, scale int32, explicit, binary bool,
+) (types.Decimal256, error) {
+	if binary {
+		return types.ParseDecimal256FromByte(text, width, scale)
+	}
+	if explicit {
+		return planfunction.ParseExplicitDecimal256CastString(text, width, scale)
+	}
+	return planfunction.ParseDecimal256CastString(text, width, scale)
+}
+
+func decimalIntervalCastIsExplicit(fn *planpb.Function) bool {
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	if fn.GetSyntaxExplicitCast() {
+		return true
+	}
+	_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
+	return overload != 0
+}
+
+func decimalIntervalSourceIsBinary(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if lit := expr.GetLit(); lit != nil {
+		return lit.GetIsBin()
+	}
+	return false
 }
 
 func decimalIntervalSourceText(expr *Expr) (string, bool) {
