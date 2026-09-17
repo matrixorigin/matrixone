@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
@@ -2328,17 +2329,28 @@ func (builder *QueryBuilder) subqueryPredicatePlanningDisabled() bool {
 }
 
 func (builder *QueryBuilder) parseOptimizeHints() {
-	v, ok := runtime.ServiceRuntime(builder.compCtx.GetProcess().GetService()).GetGlobalVariables("optimizer_hints")
-	if !ok {
-		return
+	applyHints := func(str string) {
+		if len(str) == 0 {
+			return
+		}
+		kvs := strings.Split(str, ",")
+		for i := range kvs {
+			handleOptimizerHints(kvs[i], builder)
+		}
 	}
-	str := v.(string)
-	if len(str) == 0 {
-		return
+	if v, ok := runtime.ServiceRuntime(builder.compCtx.GetProcess().GetService()).GetGlobalVariables("optimizer_hints"); ok {
+		if str, ok := v.(string); ok {
+			applyHints(str)
+		}
 	}
-	kvs := strings.Split(str, ",")
-	for i := range kvs {
-		handleOptimizerHints(kvs[i], builder)
+	// Per-statement optimizer_hints (same key=value format as the global variable) carried on the
+	// execution context by the internal SQL executor (StatementOption.WithOptimizerHints). Applied
+	// AFTER the global so a statement can override it -- e.g. the fulltext2 json probe's fallback/
+	// tail SQL passes applyIndices=1 so its base-table scan does not re-trigger the probe rewrite.
+	if v := builder.compCtx.GetContext().Value(defines.OptimizerHints{}); v != nil {
+		if str, ok := v.(string); ok {
+			applyHints(str)
+		}
 	}
 }
 

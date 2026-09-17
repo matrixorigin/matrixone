@@ -625,3 +625,6 @@ func TestValidateReindexParams_EmptyOpTypeIsUnchanged(t *testing.T) {
 func (f *fakeCachedIndex) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ *vectorindex.SearchOutput) error {
 	return nil
 }
+
+// BuildTS stubs (fulltext2 async-freshness interface method).
+func (f *fakeCachedIndex) BuildTS() int64 { return 0 }
