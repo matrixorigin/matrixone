@@ -80,7 +80,7 @@ func (c *Compile) constrainJSONMinMaxWorkers(qry *plan.Query) error {
 	if c.execType != plan2.ExecTypeAP_MULTICN || !queryUsesJSONMinMax(qry) {
 		return nil
 	}
-	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion85)
+	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion87)
 	if err != nil {
 		return err
 	}
@@ -99,7 +99,7 @@ func supportsRemoteJSONMinMax(service string) bool {
 	}
 	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	protocolVersion, valid := version.(int64)
-	return ok && valid && protocolVersion >= defines.MORPCVersion85
+	return ok && valid && protocolVersion >= defines.MORPCVersion87
 }
 
 func (c *Compile) supportsRemoteJSONMinMax() bool {
@@ -148,13 +148,13 @@ func validateJSONMinMaxDestination(proc *process.Process, p *pipeline.Pipeline) 
 		)
 	}
 	supported, err := remoteWorkersSupportProtocol(proc,
-		engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion85)
+		engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion87)
 	if err != nil {
 		return err
 	}
 	if !supported {
 		return moerr.NewNotSupportedNoCtx(
-			"JSON MIN/MAX remote execution requires MORPC protocol version 85",
+			"JSON MIN/MAX remote execution requires MORPC protocol version 87",
 		)
 	}
 	return nil

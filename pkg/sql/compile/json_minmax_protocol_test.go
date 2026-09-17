@@ -54,12 +54,12 @@ func TestJSONMinMaxCapabilityGateCoversAggregateAndWindowPlans(t *testing.T) {
 	}}}
 	require.True(t, queryUsesJSONMinMax(qry))
 
-	for _, version := range []int64{defines.MORPCVersion75, defines.MORPCVersion80, 81, 82, 83, defines.MORPCVersion85} {
+	for _, version := range []int64{defines.MORPCVersion75, defines.MORPCVersion80, defines.MORPCVersion81, defines.MORPCVersion82, defines.MORPCVersion83, defines.MORPCVersion84, defines.MORPCVersion85, defines.MORPCVersion86, defines.MORPCVersion87} {
 		client.version = version
 		c.execType = plan2.ExecTypeAP_MULTICN
 		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 		require.NoError(t, c.constrainJSONMinMaxWorkers(qry))
-		if version < defines.MORPCVersion85 {
+		if version < defines.MORPCVersion87 {
 			require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 			require.Equal(t, c.addr, c.cnList[0].Addr)
 		} else {
@@ -88,11 +88,11 @@ func TestJSONMinMaxRemoteDestinationRejectsLegacyComparator(t *testing.T) {
 		RootOp:   operator,
 	}
 
-	for _, version := range []int64{defines.MORPCVersion75, defines.MORPCVersion80, 81, 82, 83, defines.MORPCVersion85} {
+	for _, version := range []int64{defines.MORPCVersion75, defines.MORPCVersion80, defines.MORPCVersion81, defines.MORPCVersion82, defines.MORPCVersion83, defines.MORPCVersion84, defines.MORPCVersion85, defines.MORPCVersion86, defines.MORPCVersion87} {
 		client.version = version
 		data, err := encodeRemoteScope(scope, c.proc)
-		if version < defines.MORPCVersion85 {
-			require.ErrorContains(t, err, "JSON MIN/MAX remote execution requires MORPC protocol version 85")
+		if version < defines.MORPCVersion87 {
+			require.ErrorContains(t, err, "JSON MIN/MAX remote execution requires MORPC protocol version 87")
 			continue
 		}
 		require.NoError(t, err)
@@ -108,15 +108,15 @@ func TestJSONMinMaxRemoteDestinationRejectsLegacyComparator(t *testing.T) {
 	scope.NodeInfo.Addr = "stale:6001"
 	_, err := encodeRemoteScope(scope, c.proc)
 	require.ErrorContains(t, err,
-		"JSON MIN/MAX remote execution requires MORPC protocol version 85")
+		"JSON MIN/MAX remote execution requires MORPC protocol version 87")
 	scope.NodeInfo.Addr = "remote:6001"
 
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion80)
 	require.ErrorContains(t,
 		validateRemoteAggregateProtocol(c.proc, operator.Aggs),
-		"JSON MIN/MAX remote execution requires MORPC protocol version 85")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion85)
+		"JSON MIN/MAX remote execution requires MORPC protocol version 87")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion87)
 	require.NoError(t, validateRemoteAggregateProtocol(c.proc, operator.Aggs))
 }
 

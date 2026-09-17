@@ -2011,7 +2011,7 @@ func validateRemoteAggregateProtocol(
 		if aggregateUsesJSONMinMax(agg) &&
 			(proc == nil || !supportsRemoteJSONMinMax(proc.GetService())) {
 			return moerr.NewNotSupportedNoCtx(
-				"JSON MIN/MAX remote execution requires MORPC protocol version 85",
+				"JSON MIN/MAX remote execution requires MORPC protocol version 87",
 			)
 		}
 	}

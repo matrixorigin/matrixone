@@ -120,8 +120,10 @@ const (
 	MORPCVersion82     int64 = 82 // self-completing fulltext2 json index probe (probe_tail contract)
 	MORPCVersion83     int64 = 83 // bounded COALESCE character and binary result domains
 	MORPCVersion84     int64 = 84 // extended discrete percentile input types
-	MORPCVersion85     int64 = 85 // typed JSON MIN/MAX aggregate comparison
-	MORPCLatestVersion       = MORPCVersion85
+	MORPCVersion85     int64 = 85 // reserved for JSON aggregate opaque value execution (PR #28947 predecessor)
+	MORPCVersion86     int64 = 86 // reserved for JSON string-consumer overload identities (PR #28938 predecessor)
+	MORPCVersion87     int64 = 87 // provisional typed JSON MIN/MAX aggregate comparison
+	MORPCLatestVersion       = MORPCVersion87
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

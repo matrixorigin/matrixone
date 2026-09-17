@@ -32,7 +32,7 @@ import (
 // TestJSONMinMaxMixedVersionRemoteTopology executes the protocol counterexample
 // through a real two-CN SQL topology. The coordinator runs the candidate
 // code, while the peer is first made legacy-compatible (v80) and then capable
-// (candidate v85).
+// (provisional v87).
 // Draining the coordinator makes the peer the actual remote destination rather
 // than merely inspecting a mocked pipeline or version response.
 func TestJSONMinMaxMixedVersionRemoteTopology(t *testing.T) {
@@ -97,23 +97,23 @@ func TestJSONMinMaxMixedVersionRemoteTopology(t *testing.T) {
 			[]string{cn.ServiceID(), peer.ServiceID()},
 			func(err error) { fixtureInvalidationErr = err },
 			func() {
-				// v80 is the current-main worker before this change. The
+				// v86 is the reserved JSON string-consumer predecessor worker. The
 				// coordinator must reject remote JSON partials and fall back to
 				// one-CN execution, while retaining the correct SQL result.
-				peerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion80)
+				peerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion86)
 				physical, err := testutils.QueryTextResult(ctx, db, "explain phyplan analyze "+query)
 				require.NoError(t, err)
 				require.NotContains(t, physical.Text, peerAddr,
-					"a v80 worker must not receive a JSON MIN/MAX partial")
+					"a v86 worker must not receive a JSON MIN/MAX partial")
 				var minValue, maxValue string
 				require.NoError(t, db.QueryRowContext(ctx, query).Scan(&minValue, &maxValue))
 				require.Equal(t, "1", minValue)
 				require.Equal(t, "256", maxValue)
 
-				// Candidate v85 is the capable remote worker. The same production SQL
+				// Provisional v87 is the capable remote worker. The same production SQL
 				// query must place the JSON aggregate on the peer and preserve
 				// the typed ordering counterexample 1 < 256.
-				peerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion85)
+				peerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion87)
 				physical, err = testutils.QueryTextResult(ctx, db, "explain phyplan analyze "+query)
 				require.NoError(t, err)
 				require.Contains(t, physical.Text, peerAddr,
