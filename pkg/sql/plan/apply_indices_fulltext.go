@@ -1540,6 +1540,57 @@ func (builder *QueryBuilder) fullTextRewriteContextNodeID(preferredNodeID int32,
 	return preferredNodeID
 }
 
+// fullTextColumnName normalizes the display name carried by a ColRef. The same
+// bound column can appear as `title` in a scan predicate and as `ft.title` in
+// an expression copied through a projection. The binding/position is the
+// authoritative identity; the display name is only the fallback used by the
+// lightweight fulltext expression matcher.
+func fullTextColumnName(name string) string {
+	name = strings.TrimSpace(name)
+	if dot := strings.LastIndexByte(name, '.'); dot >= 0 {
+		name = name[dot+1:]
+	}
+	return strings.ToLower(strings.Trim(name, "`"))
+}
+
+func fullTextColumnRefsEqual(left, right *plan.ColRef) bool {
+	if left == nil || right == nil {
+		return false
+	}
+	leftName, rightName := fullTextColumnName(left.GetName()), fullTextColumnName(right.GetName())
+	if leftName != "" && rightName != "" {
+		return leftName == rightName
+	}
+	return left.GetColPos() == right.GetColPos()
+}
+
+// fullTextMatchArgEqual compares MATCH's pattern and mode as execution
+// expressions, excluding decimal provenance metadata. A decimal comparison
+// may annotate every literal in its expression tree for protocol negotiation;
+// that annotation does not change the pattern or mode of a nested MATCH.
+func fullTextMatchArgEqual(left, right *plan.Expr) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	left = DeepCopyExpr(left)
+	right = DeepCopyExpr(right)
+	clearFullTextMatchArgProvenance(left)
+	clearFullTextMatchArgProvenance(right)
+	return exprStructuralEqual(left, right)
+}
+
+func clearFullTextMatchArgProvenance(expr *plan.Expr) {
+	_ = plan.VisitExprTree(expr, func(current *plan.Expr) error {
+		if literal := current.GetLit(); literal != nil {
+			literal.DecimalLiteralRequiresV82 = false
+		}
+		if vector := current.GetVec(); vector != nil {
+			vector.DecimalLiteralRequiresV82 = false
+		}
+		return nil
+	})
+}
+
 func (builder *QueryBuilder) equalsFullTextMatchFunc(fn1 *plan.Function, fn2 *plan.Function) bool {
 
 	nargs1 := len(fn1.Args)
@@ -1551,13 +1602,13 @@ func (builder *QueryBuilder) equalsFullTextMatchFunc(fn1 *plan.Function, fn2 *pl
 
 	// Pattern arguments may be bound parameters, so compare the bound
 	// expression tree instead of dereferencing literal strings.
-	if !exprStructuralEqual(fn1.Args[0], fn2.Args[0]) || !exprStructuralEqual(fn1.Args[1], fn2.Args[1]) {
+	if !fullTextMatchArgEqual(fn1.Args[0], fn2.Args[0]) || !fullTextMatchArgEqual(fn1.Args[1], fn2.Args[1]) {
 		return false
 	}
 
 	// check index parts
 	for i := 2; i < nargs1; i++ {
-		if !strings.EqualFold(fn1.Args[i].GetCol().GetName(), fn2.Args[i].GetCol().GetName()) {
+		if !fullTextColumnRefsEqual(fn1.Args[i].GetCol(), fn2.Args[i].GetCol()) {
 			return false
 		}
 	}
