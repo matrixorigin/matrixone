@@ -64,6 +64,18 @@ func TestIssue27854RequiredVectorDomainStaysCoordinatorLocal(t *testing.T) {
 			"create index filtered_idx using ivfflat on filtered_t(v) lists=1 op_type 'vector_l2_ops'")
 
 		// AUTO must preserve computed output values even when POST fills K.
+		t.Run("side effect executes once", func(t *testing.T) {
+			execSQLRequire(t, ctx, db, "create sequence adaptive_seq as bigint maxvalue 3 start with 1 no cycle")
+			q := fmt.Sprintf("select nextval('adaptive_seq') from filtered_t where id <= 3 order by l2_distance(v,'%s') limit 10 by rank with option 'mode=auto'", vec(0))
+			require.Equal(t, []string{"1", "2", "3"}, querySingleStringColumn(t, ctx, db, q))
+		})
+		t.Run("small exact auto is terminal", func(t *testing.T) {
+			execSQLRequire(t, ctx, db, "create table adaptive_small(id int primary key, v vecf32(32))")
+			execSQLRequire(t, ctx, db, fmt.Sprintf("insert into adaptive_small values (1,'%s'),(2,'%s'),(3,'%s')", vec(1), vec(2), vec(3)))
+			execSQLRequire(t, ctx, db, "create index adaptive_small_idx using ivfflat on adaptive_small(v) lists=1 op_type 'vector_l2_ops'")
+			q := fmt.Sprintf("select id from (select id from adaptive_small where id > 10 order by l2_distance(v,'%s') limit 10 by rank with option 'mode=auto') q", vec(0))
+			require.Empty(t, queryInt64Rows(t, ctx, db, q))
+		})
 		t.Run("adaptive output boundary", func(t *testing.T) {
 			q := fmt.Sprintf("select id + 100 from filtered_t where file_id = 'file1' order by l2_distance(v,'%s') limit 1 by rank with option 'mode=auto'", vec(0))
 			text := strings.Join(querySingleStringColumn(t, ctx, db, "explain "+q), "\n")

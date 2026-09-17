@@ -473,8 +473,13 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 		enableVectorAutoModeByDefault,
 	)
 
-	// If index should be disabled (force mode), return nil
+	// An AUTO decision that selects the exact path is terminal for this region.
+	// Persist FORCE so the legacy statement-output retry owner cannot retry the
+	// unchanged AUTO AST forever (including implicit AUTO from session config).
 	if shouldDisableIndex {
+		if isAutoMode {
+			builder.forceAdaptiveVectorRegion(vecCtx)
+		}
 		return nil, nil
 	}
 
@@ -604,6 +609,16 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	childNode := vecCtx.childNode
 	orderExpr := vecCtx.orderExpr
 	limit := vecCtx.limit
+
+	// AUTO regions that already select an exact scan must stop advertising AUTO
+	// to the legacy statement-output retry owner. Replay-unsafe expressions must
+	// likewise execute exactly once; discarded candidate batches cannot roll back
+	// sequence allocations or other volatile evaluation.
+	if vectorRankMode(vecCtx) == "auto" &&
+		(builder.shouldUseForceMode(vecCtx) || !builder.adaptiveIvfReplaySafe(nodeID)) {
+		builder.forceAdaptiveVectorRegion(vecCtx)
+		return nodeID, nil
+	}
 
 	ivfCtx, err := builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
 	if err != nil || ivfCtx == nil {
@@ -1174,6 +1189,72 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	return builder.spliceVectorRewrite(vecCtx, nodeID, sortByID, remap, idxColMap), nil
 }
 
+func vectorRankMode(vecCtx *vectorSortContext) string {
+	if vecCtx == nil || vecCtx.rankOption == nil {
+		return ""
+	}
+	return vecCtx.rankOption.Mode
+}
+
+func (builder *QueryBuilder) forceAdaptiveVectorRegion(vecCtx *vectorSortContext) {
+	if vecCtx == nil {
+		return
+	}
+	option := DeepCopyRankOption(vecCtx.rankOption)
+	if option == nil {
+		option = &plan.RankOption{}
+	}
+	option.Mode = "force"
+	vecCtx.rankOption = option
+	for _, node := range []*plan.Node{vecCtx.projNode, vecCtx.sortNode, vecCtx.scanNode} {
+		if node != nil {
+			node.RankOption = DeepCopyRankOption(option)
+		}
+	}
+}
+
+func (builder *QueryBuilder) adaptiveIvfReplaySafe(root int32) bool {
+	visited := make(map[int32]struct{})
+	var safe func(int32) bool
+	safe = func(id int32) bool {
+		if id < 0 || int(id) >= len(builder.qry.Nodes) {
+			return false
+		}
+		if _, ok := visited[id]; ok {
+			return true
+		}
+		visited[id] = struct{}{}
+		node := builder.qry.Nodes[id]
+		if containsSequenceNodeExpressions(node) {
+			return false
+		}
+		exprLists := [][]*plan.Expr{
+			node.ProjectList, node.OnList, node.FilterList, node.GroupBy,
+			node.AggList, node.WinSpecList, node.TblFuncExprList,
+			node.BlockFilterList, node.FillVal, node.OnUpdateExprs,
+		}
+		for _, exprs := range exprLists {
+			for _, expr := range exprs {
+				if ContainsVolatileFunction(expr) {
+					return false
+				}
+			}
+		}
+		for _, spec := range node.OrderBy {
+			if spec != nil && ContainsVolatileFunction(spec.Expr) {
+				return false
+			}
+		}
+		for _, child := range node.Children {
+			if !safe(child) {
+				return false
+			}
+		}
+		return true
+	}
+	return safe(root)
+}
+
 func (builder *QueryBuilder) buildAdaptiveIvfTop(
 	nodeID int32,
 	vecCtx *vectorSortContext,
@@ -1187,17 +1268,9 @@ func (builder *QueryBuilder) buildAdaptiveIvfTop(
 	// remapping; copying its empty ProjectList cannot define candidate layouts.
 	// Keep unsupported regions intact and exact, before cloning or rewriting tags.
 	if vecCtx.projNode == nil || len(vecCtx.projNode.ProjectList) != 1 ||
-		vecCtx.hasMembership || vecCtx.providerNodeID >= 0 {
-		vecCtx.rankOption = DeepCopyRankOption(vecCtx.rankOption)
-		if vecCtx.rankOption == nil {
-			vecCtx.rankOption = &plan.RankOption{}
-		}
-		vecCtx.rankOption.Mode = "force"
-		if vecCtx.projNode != nil {
-			vecCtx.projNode.RankOption = DeepCopyRankOption(vecCtx.rankOption)
-		}
-		vecCtx.sortNode.RankOption = DeepCopyRankOption(vecCtx.rankOption)
-		vecCtx.scanNode.RankOption = DeepCopyRankOption(vecCtx.rankOption)
+		vecCtx.hasMembership || vecCtx.providerNodeID >= 0 ||
+		!builder.adaptiveIvfReplaySafe(nodeID) {
+		builder.forceAdaptiveVectorRegion(vecCtx)
 		return nodeID, nil
 	}
 	preRoot := builder.copyNode(ctx, nodeID)

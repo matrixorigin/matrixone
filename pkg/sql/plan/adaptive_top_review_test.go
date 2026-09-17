@@ -37,6 +37,30 @@ func TestAdaptiveTopPreservesCandidateProjection(t *testing.T) {
 	require.Equal(t, "+", b.qry.Nodes[project].ProjectList[0].GetF().Func.ObjName)
 }
 
+func TestAdaptiveTopRejectsVolatileReplayAndCopiesForceMode(t *testing.T) {
+	b := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	ctx := NewBindContext(b, nil)
+	randExpr, err := BindFuncExprImplByPlanExpr(context.Background(), "rand", nil)
+	require.NoError(t, err)
+	scan := b.appendNode(&plan.Node{NodeType: plan.Node_TABLE_SCAN}, ctx)
+	projectNode := &plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{scan}, ProjectList: []*plan.Expr{randExpr}}
+	project := b.appendNode(projectNode, ctx)
+	require.False(t, b.adaptiveIvfReplaySafe(project))
+
+	original := &plan.RankOption{Mode: "auto"}
+	v := &vectorSortContext{
+		projNode:   projectNode,
+		sortNode:   &plan.Node{},
+		scanNode:   b.qry.Nodes[scan],
+		rankOption: original,
+	}
+	b.forceAdaptiveVectorRegion(v)
+	require.Equal(t, "auto", original.Mode)
+	require.Equal(t, "force", v.rankOption.Mode)
+	require.Equal(t, "force", v.projNode.RankOption.Mode)
+	require.NotSame(t, v.rankOption, v.projNode.RankOption)
+}
+
 func TestAdaptiveTopUnsupportedRegionKeepsExactGraph(t *testing.T) {
 	for _, shape := range []string{"sort", "membership", "provider"} {
 		t.Run(shape, func(t *testing.T) {
