@@ -1117,6 +1117,9 @@ message CatalogMetadataArbitration {
   CatalogMetadataReceipt StartedReceipt = 9;
   CatalogMetadataReceipt CompletedReceipt = 10;
   map<uint64, CatalogMetadataReplicaIdentity> Members = 11 [(gogoproto.nullable) = false];
+  // Durable lower bound from completed membership readback, independent of
+  // delayed heartbeat configuration. Zero means no completion recorded yet.
+  uint64 ConfirmedConfigChangeIndex = 12;
 }
 
 message CatalogMetadataReplicaIdentity {

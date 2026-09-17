@@ -133,6 +133,9 @@ func (s *stateMachine) catalogMetadataReplicasReady() bool {
 	}
 	var admitted map[uint64]pb.CatalogMetadataReplicaIdentity
 	if b := s.state.CatalogMetadataBarrier; b != nil && b.Arbitration != nil && b.Arbitration.MaintenanceEnabled {
+		if shard.Epoch < b.Arbitration.ConfirmedConfigChangeIndex {
+			return false
+		}
 		admitted = b.Arbitration.Members
 		if len(admitted) != len(shard.Replicas)+len(shard.NonVotingReplicas) {
 			return false
@@ -332,7 +335,7 @@ func (s *stateMachine) reserveCatalogMembership(a *pb.CatalogMetadataArbitration
 		return CatalogMetadataRejected, 0
 	}
 	shard, exists := s.state.LogState.Shards[DefaultHAKeeperShardID]
-	if !exists || shard.Epoch != m.ConfigChangeIndex || len(shard.Replicas) == 0 {
+	if !exists || shard.Epoch != m.ConfigChangeIndex || m.ConfigChangeIndex < a.ConfirmedConfigChangeIndex || len(shard.Replicas) == 0 {
 		return CatalogMetadataRejected, 0
 	}
 	switch m.ChangeType {
@@ -443,6 +446,10 @@ func completeCatalogMembership(a *pb.CatalogMetadataArbitration, r *pb.CatalogMe
 		}
 		sort.Slice(a.StartPermits, func(i, j int) bool { return a.StartPermits[i].UUID < a.StartPermits[j].UUID })
 	}
+	// Completion and its configuration high-water must commit together.
+	// Heartbeats can lag this proof; they cannot authorize the next mutation
+	// against the older configuration, even after snapshot recovery.
+	a.ConfirmedConfigChangeIndex = r.ObservedConfigChangeIndex
 	a.Reservation = nil
 	return CatalogMetadataApplied, r.Token
 }

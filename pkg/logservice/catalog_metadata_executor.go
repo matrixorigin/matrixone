@@ -17,12 +17,12 @@ package logservice
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"maps"
 	"sync"
 	"time"
 
 	"github.com/lni/dragonboat/v4"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
@@ -65,7 +65,7 @@ type catalogExecutor struct {
 }
 
 func catalogExecutionError() error {
-	return fmt.Errorf("catalog metadata executor rejected stale or unauthorized HAKeeper operation")
+	return moerr.NewInvalidStateNoCtx("catalog metadata executor rejected stale or unauthorized HAKeeper operation")
 }
 
 func (l *store) loadCatalogExecutor() error {

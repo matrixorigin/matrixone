@@ -34,7 +34,7 @@ func validateCatalogMetadataArbitration(b *pb.CatalogMetadataBarrierState) error
 	if a.MaintenanceEnabled && len(a.Members) == 0 {
 		return invalid()
 	}
-	if !a.MaintenanceEnabled && (len(a.Members) != 0 || a.LastConsumedFence != 0) {
+	if !a.MaintenanceEnabled && (len(a.Members) != 0 || a.LastConsumedFence != 0 || a.ConfirmedConfigChangeIndex != 0) {
 		return invalid()
 	}
 	for id, member := range a.Members {
@@ -63,7 +63,7 @@ func validateCatalogMetadataArbitration(b *pb.CatalogMetadataBarrierState) error
 	}
 	if a.Reservation != nil {
 		m := a.Reservation
-		if len(m.ExpectedVoting) == 0 {
+		if len(m.ExpectedVoting) == 0 || m.ConfigChangeIndex < a.ConfirmedConfigChangeIndex {
 			return invalid()
 		}
 		for _, members := range []map[uint64]string{m.ExpectedVoting, m.ExpectedNonVoting} {

@@ -323,6 +323,9 @@ func TestCatalogUnhappySnapshotArbitrationCorruptionIsAtomic(t *testing.T) {
 			b.Arbitration.Members[1] = pb.CatalogMetadataReplicaIdentity{UUID: "log"}
 		}},
 		{"disabled-owner", func(b *pb.CatalogMetadataBarrierState) { b.Arbitration.MaintenanceEnabled = false }},
+		{"disabled-confirmed-config", func(b *pb.CatalogMetadataBarrierState) {
+			b.Arbitration = &pb.CatalogMetadataArbitration{ConfirmedConfigChangeIndex: 7}
+		}},
 		{"future-fence", func(b *pb.CatalogMetadataBarrierState) { b.Arbitration.Fence.Token++ }},
 		{"empty-owner", func(b *pb.CatalogMetadataBarrierState) { b.Arbitration.Fence.Owner = "" }},
 		{"wrong-fence-phase", func(b *pb.CatalogMetadataBarrierState) {

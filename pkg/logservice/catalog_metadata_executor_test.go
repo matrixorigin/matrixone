@@ -24,11 +24,16 @@ import (
 
 	"github.com/lni/dragonboat/v4"
 	"github.com/lni/vfs"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCatalogExecutorErrorClass(t *testing.T) {
+	require.True(t, moerr.IsMoErrCode(catalogExecutionError(), moerr.ErrInvalidState))
+}
 
 func TestCatalogExecutorLatch(t *testing.T) {
 	cfg := Config{UUID: "store", DataDir: "catalog-test", FS: vfs.NewMem()}
