@@ -122,7 +122,7 @@ func TestReconstructLiveDocsDropsZeroTermShadow(t *testing.T) {
 
 	// CompactSegments intentionally does not persist zero-term documents: once
 	// the old base is replaced, there is no posting left for the shadow to hide.
-	var rebuilt []*Segment
+	rebuilt := make([]*Segment, 0, len(docs))
 	for _, d := range docs {
 		if len(d.Terms) == 0 {
 			continue
