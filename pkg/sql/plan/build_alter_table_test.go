@@ -1861,10 +1861,10 @@ func TestAlterTableAlgorithmValidation(t *testing.T) {
 		runTestShouldPass(mock, t, sqls, false, false)
 	})
 
-	t.Run("INPLACE-eligible operations reject ALGORITHM=COPY", func(t *testing.T) {
-		_, err := buildSingleStmt(mock, t,
-			`ALTER TABLE t1 ALGORITHM=COPY, ADD INDEX idx_a(a);`)
-		assert.ErrorContains(t, err, "unsupported alter option in copy mode")
+	t.Run("INPLACE-eligible operations accept explicit ALGORITHM=COPY", func(t *testing.T) {
+		runTestShouldPass(mock, t, []string{
+			`ALTER TABLE t1 ALGORITHM=COPY, ADD INDEX idx_a(a);`,
+		}, false, false)
 	})
 
 	t.Run("COPY with LOCK=NONE", func(t *testing.T) {
@@ -1899,12 +1899,10 @@ func TestAlterTableAlgorithmValidation(t *testing.T) {
 		runTestShouldPass(mock, t, sqls, false, false)
 	})
 
-	t.Run("repeated ALGORITHM hints on INPLACE operation, last hint COPY rejected", func(t *testing.T) {
-		// ALGORITHM=INPLACE then ALGORITHM=COPY on ADD INDEX: last hint (COPY)
-		// routes through buildAlterTableCopy which does not support ADD INDEX.
-		_, err := buildSingleStmt(mock, t,
-			`ALTER TABLE t1 ALGORITHM=INPLACE, ALGORITHM=COPY, ADD INDEX idx_a(a);`)
-		assert.ErrorContains(t, err, "unsupported alter option in copy mode")
+	t.Run("repeated ALGORITHM hints on INPLACE operation, last hint COPY accepted", func(t *testing.T) {
+		runTestShouldPass(mock, t, []string{
+			`ALTER TABLE t1 ALGORITHM=INPLACE, ALGORITHM=COPY, ADD INDEX idx_a(a);`,
+		}, false, false)
 	})
 
 	t.Run("repeated ALGORITHM hints on COPY-required operation, non-COPY rejected", func(t *testing.T) {
@@ -1928,12 +1926,158 @@ func TestAlterTableAlgorithmValidation(t *testing.T) {
 	})
 }
 
+func TestAlterTableCopyAddIndex(t *testing.T) {
+	tests := []struct {
+		name      string
+		sql       string
+		indexName string
+		parts     []string
+		algo      string
+		unique    bool
+		hnsw      bool
+	}{
+		{
+			name:      "regular index on newly added column",
+			sql:       `ALTER TABLE constraint_test.t1 ADD COLUMN c BIGINT, ADD INDEX idx_c(c);`,
+			indexName: "idx_c",
+			parts:     []string{"c"},
+		},
+		{
+			name:      "regular index before newly added column",
+			sql:       `ALTER TABLE constraint_test.t1 ADD INDEX idx_c(c), ADD COLUMN c BIGINT;`,
+			indexName: "idx_c",
+			parts:     []string{"c"},
+		},
+		{
+			name:      "unique index on newly added stored generated column",
+			sql:       `ALTER TABLE constraint_test.t1 ADD COLUMN g BIGINT GENERATED ALWAYS AS (a + 1) STORED, ADD UNIQUE INDEX uk_g(g);`,
+			indexName: "uk_g",
+			parts:     []string{"g"},
+			unique:    true,
+		},
+		{
+			name:      "unique index before newly added stored generated column",
+			sql:       `ALTER TABLE constraint_test.t1 ADD UNIQUE INDEX uk_g(g), ADD COLUMN g BIGINT GENERATED ALWAYS AS (a + 1) STORED;`,
+			indexName: "uk_g",
+			parts:     []string{"g"},
+			unique:    true,
+		},
+		{
+			name:      "regular index on newly added virtual generated column",
+			sql:       `ALTER TABLE constraint_test.t1 ADD COLUMN g BIGINT GENERATED ALWAYS AS (a + 1) VIRTUAL, ADD INDEX idx_g(g);`,
+			indexName: "idx_g",
+			parts:     []string{"g"},
+		},
+		{
+			name:      "fulltext index on newly added column",
+			sql:       `ALTER TABLE constraint_test.t1 ADD COLUMN body TEXT, ADD FULLTEXT INDEX ft_body(body);`,
+			indexName: "ft_body",
+			parts:     []string{"body"},
+			algo:      catalog.MOIndexFullTextAlgo.ToString(),
+		},
+		{
+			name:      "fulltext index before newly added column",
+			sql:       `ALTER TABLE constraint_test.t1 ADD FULLTEXT INDEX ft_body(body), ADD COLUMN body TEXT;`,
+			indexName: "ft_body",
+			parts:     []string{"body"},
+			algo:      catalog.MOIndexFullTextAlgo.ToString(),
+		},
+		{
+			name:      "hnsw index on existing column with unrelated added column",
+			sql:       `ALTER TABLE constraint_test.docs_vec_raw ADD COLUMN note INT, ADD INDEX h_embedding USING HNSW (embedding) OP_TYPE 'vector_l2_ops';`,
+			indexName: "h_embedding",
+			parts:     []string{"embedding"},
+			algo:      catalog.MoIndexHnswAlgo.ToString(),
+			hnsw:      true,
+		},
+		{
+			name:      "explicit copy index-only alter",
+			sql:       `ALTER TABLE constraint_test.t1 ALGORITHM=COPY, ADD INDEX idx_b(b);`,
+			indexName: "idx_b",
+			parts:     []string{"b"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false)
+			if test.hnsw {
+				tableDef := mock.ctxt.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "docs_vec_raw")]
+				tableDef.Cols[0].Typ.Id = int32(types.T_int64)
+				tableDef.Pkey.CompPkeyCol.Typ.Id = int32(types.T_int64)
+			}
+			logicPlan, err := buildSingleStmt(mock, t, test.sql)
+			require.NoError(t, err)
+
+			alter := logicPlan.GetDdl().GetAlterTable()
+			require.Equal(t, plan.AlterTable_COPY, alter.AlgorithmType)
+			if test.algo == "" {
+				require.NotContains(t, alter.AffectedCols, test.indexName,
+					"regular indexes must not spuriously invalidate plugin indexes on same-named columns")
+			} else {
+				require.NotContains(t, alter.AffectedCols, test.indexName,
+					"plugin index identity must not be mixed into the affected-column namespace")
+			}
+			require.NotNil(t, alter.Options)
+			require.Equal(t, test.algo != "", alter.Options.NewPluginIndexes[test.indexName],
+				"only a newly added plugin index needs a post-copy rebuild marker")
+
+			var copiedDefs []*plan.IndexDef
+			for _, indexDef := range alter.CopyTableDef.Indexes {
+				if indexDef.IndexName == test.indexName {
+					copiedDefs = append(copiedDefs, indexDef)
+				}
+			}
+			require.NotEmpty(t, copiedDefs)
+			for _, indexDef := range copiedDefs {
+				require.GreaterOrEqual(t, len(indexDef.Parts), len(test.parts))
+				require.Equal(t, test.parts, indexDef.Parts[:len(test.parts)])
+				require.Equal(t, test.unique, indexDef.Unique)
+				if test.algo != "" {
+					require.Equal(t, test.algo, indexDef.IndexAlgo)
+				}
+			}
+
+			var actionDefs []*plan.IndexDef
+			for _, action := range alter.Actions {
+				if addIndex := action.GetAddIndex(); addIndex != nil {
+					actionDefs = append(actionDefs, addIndex.IndexInfo.TableDef.Indexes...)
+				}
+			}
+			require.Len(t, actionDefs, len(copiedDefs))
+			for _, indexDef := range actionDefs {
+				require.Equal(t, test.indexName, indexDef.IndexName)
+			}
+		})
+	}
+}
+
+func TestAlterTableCopyNewUniqueIndexKeepsDedup(t *testing.T) {
+	logicPlan, err := buildSingleStmt(NewMockOptimizer(false), t,
+		`ALTER TABLE constraint_test.t1 ADD COLUMN c INT, ADD UNIQUE INDEX uk_b(b);`)
+	require.NoError(t, err)
+
+	alter := logicPlan.GetDdl().GetAlterTable()
+	require.Equal(t, plan.AlterTable_COPY, alter.AlgorithmType)
+	require.NotNil(t, alter.Options)
+	require.False(t, alter.Options.SkipUniqueIdxDedup["uk_b"],
+		"a new UNIQUE index must validate copied rows for duplicates")
+}
+
+func TestAlterTableCopyAddIndexRejectsDuplicateName(t *testing.T) {
+	_, err := buildSingleStmt(NewMockOptimizer(false), t,
+		`ALTER TABLE constraint_test.t1 ADD COLUMN c INT, ADD INDEX idx_c(c), ADD INDEX IDX_C(c);`)
+	require.Error(t, err)
+	require.Contains(t, strings.ToLower(err.Error()), "duplicate key")
+}
+
 func TestAlterTemporaryTablePlan(t *testing.T) {
 	for _, tc := range []struct {
 		option string
 		copy   bool
 	}{
 		{"ADD COLUMN extra INT DEFAULT 7", true},
+		{"ADD COLUMN extra INT DEFAULT 7, ADD INDEX idx_v(v)", true},
 		{"DROP COLUMN v", true},
 		{"MODIFY COLUMN v BIGINT", true},
 		{"RENAME COLUMN v TO value_col", false},

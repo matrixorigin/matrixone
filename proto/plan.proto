@@ -2054,6 +2054,7 @@ message AlterCopyOpt {
   bool skip_pk_dedup = 2;
   string target_table_name = 3;
   map<string, bool> skip_indexes_copy = 4;
+  map<string, bool> new_plugin_indexes = 5;
 }
 
 message AlterTable {
