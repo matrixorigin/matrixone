@@ -4156,8 +4156,8 @@ func (rule *preparedRuntimeTextComparisonScanRule) paramTypeIsNumeric(position i
 		preparedComparisonTypeIsNumeric(rule.runtimeParamTypes[position].Oid)
 }
 
-func directIntegerAssignmentParam(expr *plan.Expr) (int, bool) {
-	if expr == nil || !types.T(expr.Typ.Id).IsInteger() {
+func directAssignmentParam(expr *plan.Expr) (int, bool) {
+	if expr == nil {
 		return 0, false
 	}
 	fn := expr.GetF()
@@ -4170,6 +4170,13 @@ func directIntegerAssignmentParam(expr *plan.Expr) (int, bool) {
 		return 0, false
 	}
 	return int(param.Pos), true
+}
+
+func directIntegerAssignmentParam(expr *plan.Expr) (int, bool) {
+	if expr == nil || !types.T(expr.Typ.Id).IsInteger() {
+		return 0, false
+	}
+	return directAssignmentParam(expr)
 }
 
 func preparedComparisonTypeIsNumeric(typ types.T) bool {

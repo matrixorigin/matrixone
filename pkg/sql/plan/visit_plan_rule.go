@@ -1762,6 +1762,32 @@ func (rule *ResetParamRefRule) applyExprPreservingRoot(e *plan.Expr) (*plan.Expr
 		// may infer numeric-prefix types for other consumers of the same marker.
 		return e, nil
 	}
+	// A sibling direct assignment marker must keep its runtime vector metadata
+	// (notably PrepareParamKind for BIT). Replacing it with a TEXT literal while
+	// another assignment triggers specialization changes numeric values to bytes.
+	if fn := e.GetF(); fn != nil && len(fn.Args) == 2 && !types.T(e.Typ.Id).IsInteger() {
+		switch fn.Func.GetObjName() {
+		case "cast", "cast_strict", "cast_assign", "cast_ignore":
+			if param := fn.Args[0].GetP(); param != nil {
+				position := int(param.Pos)
+				if position >= 0 && position < len(rule.paramValues) {
+					if value, ok := rule.paramValues[position].(ParamValue); ok &&
+						(value.PrepareParamKind != vector.PrepareParamNone ||
+							(value.HasSourceType && value.SourceType.IsNumeric()) ||
+							(value.HasRuntimeType && value.RuntimeType.IsNumeric())) {
+						return e, nil
+					}
+				}
+				bound, err := rule.ApplyExpr(fn.Args[0])
+				if err != nil {
+					return nil, err
+				}
+				rule.retainRuntimeParamRef(int(param.Pos), bound)
+				fn.Args[0] = bound
+				return e, nil
+			}
+		}
+	}
 	switch exprImpl := e.Expr.(type) {
 	case *plan.Expr_P:
 		return e, nil

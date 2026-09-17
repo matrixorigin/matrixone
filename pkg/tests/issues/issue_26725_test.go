@@ -180,6 +180,14 @@ func TestIssue26725PreparedBit64Numeric(t *testing.T) {
 		require.NoError(t, db.QueryRowContext(ctx,
 			"select cast(b as unsigned) from "+dbName+".t64 where id = 6").Scan(&stringValue))
 		require.Equal(t, "53", stringValue)
+
+		// Specializing the integer assignment must not materialize the sibling
+		// BIT parameter as a metadata-free TEXT literal.
+		_, err = singleStmt.ExecContext(ctx, int64(99), float64(5.0))
+		require.NoError(t, err)
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select cast(b as unsigned) from "+dbName+".t64 where id = 99").Scan(&stringValue))
+		require.Equal(t, "5", stringValue)
 		connMu.Lock()
 		capturedConn := bitConn
 		connMu.Unlock()
