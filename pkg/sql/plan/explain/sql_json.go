@@ -141,7 +141,7 @@ func BuildSQLJSONPlan(ctx context.Context, query *plan.Query) ([]byte, error) {
 	builder := &sqlJSONPlanBuilder{
 		ctx:        ctx,
 		query:      query,
-		textOpts:   ExplainOptions{Format: EXPLAIN_FORMAT_TEXT},
+		textOpts:   ExplainOptions{Format: EXPLAIN_FORMAT_TEXT, CompleteLiteralVectors: true},
 		byID:       make(map[int32]*plan.Node, len(query.Nodes)),
 		bindings:   make(map[int32][]*plan.Node),
 		state:      make(map[int32]uint8, len(query.Nodes)),
@@ -182,6 +182,9 @@ func BuildSQLJSONPlan(ctx context.Context, query *plan.Query) ([]byte, error) {
 		})
 	}
 	result.MatrixOne.Nodes = builder.nodes
+	if builder.edges == nil {
+		builder.edges = make([]sqlJSONEdge, 0)
+	}
 	result.MatrixOne.Edges = builder.edges
 	table, err := builder.singleTable()
 	if err != nil {
@@ -554,10 +557,29 @@ func sqlJSONVectorIndexExpressions(ctx context.Context, spec *plan.VectorIndexSc
 	if spec == nil || spec.Index == nil {
 		return nil, moerr.NewInvalidInput(ctx, "vector index scan metadata is missing")
 	}
-	values := make([]string, 0, 8+len(spec.PreFilters))
+	values := make([]string, 0, 16+len(spec.PreFilters)+len(spec.IncludedColumns))
 	values = append(values, "index="+spec.Index.IndexName)
 	if spec.DistanceFunction != "" {
 		values = append(values, "metric="+spec.DistanceFunction)
+	}
+	direction := spec.Direction.String()
+	switch spec.Direction {
+	case plan.OrderBySpec_INTERNAL, plan.OrderBySpec_ASC, plan.OrderBySpec_DESC:
+		// valid vector scan directions
+	default:
+		return nil, moerr.NewInvalidInputf(ctx, "vector index scan has unknown direction %d", spec.Direction)
+	}
+	values = append(values,
+		"direction="+direction,
+		"initial_probe_count="+strconv.FormatUint(uint64(spec.InitialProbeCount), 10),
+		"bucket_expand_step="+strconv.FormatUint(uint64(spec.BucketExpandStep), 10),
+		"post_filter_over_fetch="+strconv.FormatBool(spec.PostFilterOverFetch),
+	)
+	if spec.ThreadsSearch != 0 {
+		values = append(values, "threads_search="+strconv.FormatInt(spec.ThreadsSearch, 10))
+	}
+	for i, column := range spec.IncludedColumns {
+		values = append(values, "included_column["+strconv.Itoa(i)+"]="+column)
 	}
 	for _, field := range []struct {
 		name string

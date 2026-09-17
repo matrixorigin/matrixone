@@ -96,6 +96,8 @@ func TestExplainPlanJSONWritesOneDocumentLine(t *testing.T) {
 	var decoded map[string]any
 	require.NoError(t, json.Unmarshal([]byte(buffer.Lines[0]), &decoded))
 	require.Contains(t, decoded, "query_block")
+	matrixone := decoded["matrixone"].(map[string]any)
+	require.Equal(t, []any{}, matrixone["edges"], "leaf plans must encode an empty edge array")
 }
 
 func TestBuildSQLJSONPlanDeduplicatesSharedNodes(t *testing.T) {
@@ -598,11 +600,53 @@ func TestBuildSQLJSONPlanPreservesVectorIndexPayload(t *testing.T) {
 	require.Equal(t, []string{
 		"index=idx_embedding",
 		"metric=l2_distance",
+		"direction=INTERNAL",
+		"initial_probe_count=0",
+		"bucket_expand_step=0",
+		"post_filter_over_fetch=false",
 		"query_vector=1",
 		"candidate_limit=10",
 		"first_round_limit=4",
 		"pre_filter[0]=2",
 	}, decoded.MatrixOne.Nodes[0].Expressions)
+}
+
+func TestBuildSQLJSONPlanPreservesVectorExecutionSettings(t *testing.T) {
+	buildExpressions := func(probe uint32, direction plan.OrderBySpec_OrderByFlag, expand uint32, overfetch bool) []string {
+		data, err := BuildSQLJSONPlan(context.Background(), &plan.Query{
+			StmtType: plan.Query_SELECT,
+			Steps:    []int32{0},
+			Nodes: []*plan.Node{{
+				NodeId:   0,
+				NodeType: plan.Node_VECTOR_INDEX_SCAN,
+				VectorIndexScan: &plan.VectorIndexScan{
+					Index:               &plan.IndexDef{IndexName: "idx_embedding"},
+					Direction:           direction,
+					InitialProbeCount:   probe,
+					BucketExpandStep:    expand,
+					PostFilterOverFetch: overfetch,
+				},
+			}},
+		})
+		require.NoError(t, err)
+		var decoded struct {
+			MatrixOne struct {
+				Nodes []sqlJSONNode `json:"nodes"`
+			} `json:"matrixone"`
+		}
+		require.NoError(t, json.Unmarshal(data, &decoded))
+		return decoded.MatrixOne.Nodes[0].Expressions
+	}
+
+	low := buildExpressions(1, plan.OrderBySpec_ASC, 2, false)
+	high := buildExpressions(16, plan.OrderBySpec_DESC, 8, true)
+	require.NotEqual(t, low, high)
+	require.Contains(t, low, "initial_probe_count=1")
+	require.Contains(t, low, "direction=ASC")
+	require.Contains(t, high, "initial_probe_count=16")
+	require.Contains(t, high, "direction=DESC")
+	require.Contains(t, high, "bucket_expand_step=8")
+	require.Contains(t, high, "post_filter_over_fetch=true")
 }
 
 func TestBuildSQLJSONPlanPreservesVectorIndexDistanceRange(t *testing.T) {
@@ -638,11 +682,19 @@ func TestBuildSQLJSONPlanPreservesVectorIndexDistanceRange(t *testing.T) {
 	require.NotEqual(t, lower, upper)
 	require.Equal(t, []string{
 		"index=idx_embedding",
+		"direction=INTERNAL",
+		"initial_probe_count=0",
+		"bucket_expand_step=0",
+		"post_filter_over_fetch=false",
 		"distance_upper_bound_type=INCLUSIVE",
 		"distance_upper_bound=5",
 	}, lower)
 	require.Equal(t, []string{
 		"index=idx_embedding",
+		"direction=INTERNAL",
+		"initial_probe_count=0",
+		"bucket_expand_step=0",
+		"post_filter_over_fetch=false",
 		"distance_upper_bound_type=INCLUSIVE",
 		"distance_upper_bound=50",
 	}, upper)
