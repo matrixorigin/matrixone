@@ -315,6 +315,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		affectedCols             = make([]string, 0, len(tableDef.Cols))
 		affectedIndexes          = make([]string, 0, len(tableDef.Indexes))
 		generatedDependencySeeds = make(map[string]struct{})
+		pendingForeignKeys       = make([]*tree.ForeignKey, 0)
 		unsupportedErrorFmt      = "unsupported alter option in copy mode: %s"
 		copyFakePKCol            = catalog.IsFakePkName(tableDef.Pkey.PkeyColName)
 	)
@@ -339,9 +340,13 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			case *tree.PrimaryKeyIndex:
 				err = AddPrimaryKey(cctx, alterTablePlan, optionAdd, alterTableCtx)
 				affectedAllIdxCols()
+			case *tree.ForeignKey:
+				// Bind foreign keys after column mutations so the combined
+				// ADD COLUMN/ADD FOREIGN KEY form can resolve either clause order.
+				pendingForeignKeys = append(pendingForeignKeys, optionAdd)
 			default:
 				// column adding is handled in *tree.AlterAddCol
-				// various indexes\fks adding are handled in inplace mode.
+				// various indexes adding are handled in inplace mode.
 				return nil, moerr.NewInvalidInputf(ctx,
 					unsupportedErrorFmt, formatTreeNode(option))
 			}
@@ -422,6 +427,11 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		if err != nil {
 			return nil, err
 		}
+	}
+	if err = addAlterCopyForeignKeys(
+		cctx, alterTablePlan, alterTableCtx, pendingForeignKeys,
+	); err != nil {
+		return nil, err
 	}
 	// Normalize the final COPY definition, after all ALTER clauses. Keeping a
 	// table cache policy without a visible auto column would make its internal
@@ -523,6 +533,129 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			},
 		},
 	}, nil
+}
+
+func addAlterCopyForeignKeys(
+	cctx CompilerContext,
+	alterTablePlan *plan.AlterTable,
+	alterTableCtx *AlterTableContext,
+	foreignKeys []*tree.ForeignKey,
+) error {
+	if len(foreignKeys) == 0 {
+		return nil
+	}
+	ctx := cctx.GetContext()
+	if alterTablePlan.CopyTableDef.GetIsTemporary() {
+		return moerr.NewNotSupported(ctx, "add foreign key for temporary table")
+	}
+
+	// Bind against a planner-owned view of the final schema. Keep the original
+	// relation name so self references are recognized even though the physical
+	// COPY target has a generated temporary name.
+	finalTableDef := DeepCopyTableDef(alterTablePlan.CopyTableDef, true)
+	finalTableDef.Name = alterTablePlan.TableDef.Name
+	finalTableDef.DbName = alterTablePlan.Database
+
+	foreignKeyNames := make(map[string]struct{}, len(finalTableDef.Fkeys)+len(foreignKeys))
+	for _, foreignKey := range finalTableDef.Fkeys {
+		if foreignKey != nil && foreignKey.Name != "" {
+			foreignKeyNames[strings.ToLower(foreignKey.Name)] = struct{}{}
+		}
+	}
+
+	for _, foreignKey := range foreignKeys {
+		if err := adjustConstraintName(ctx, foreignKey); err != nil {
+			return err
+		}
+		nameKey := strings.ToLower(foreignKey.ConstraintSymbol)
+		if _, exists := foreignKeyNames[nameKey]; exists {
+			return moerr.NewErrDuplicateKeyName(ctx, foreignKey.ConstraintSymbol)
+		}
+
+		fkData, err := getForeignKeyData(
+			cctx, alterTablePlan.Database, finalTableDef, foreignKey,
+		)
+		if err != nil {
+			return err
+		}
+		if fkData.IsSelfRefer {
+			if err = checkFkColsAreValid(cctx, fkData, finalTableDef); err != nil {
+				return err
+			}
+			fkData.UpdateSql = getSqlForAddFkWithCatalogLayout(
+				alterTablePlan.Database,
+				alterTablePlan.TableDef.Name,
+				fkData,
+				fkData.catalogLayout,
+			)
+		}
+		// Match the existing ALTER ADD FOREIGN KEY contract: unlike CREATE TABLE,
+		// ALTER does not retain an unresolved parent under foreign_key_checks=0.
+		if fkData.ForwardRefer {
+			return moerr.NewNoSuchTable(
+				ctx, fkData.ParentDbName, fkData.ParentTableName,
+			)
+		}
+
+		foreignKeyNames[nameKey] = struct{}{}
+		finalTableDef.Fkeys = append(finalTableDef.Fkeys, fkData.Def)
+		alterTablePlan.CopyTableDef.Fkeys = append(
+			alterTablePlan.CopyTableDef.Fkeys, fkData.Def,
+		)
+		alterTablePlan.Actions = append(alterTablePlan.Actions, &plan.AlterTable_Action{
+			Action: &plan.AlterTable_Action_AddFk{
+				AddFk: &plan.AlterTableAddFk{
+					DbName:    fkData.ParentDbName,
+					TableName: fkData.ParentTableName,
+					Cols:      slices.Clone(fkData.Cols.Cols),
+					Fkey:      fkData.Def,
+				},
+			},
+		})
+		alterTableCtx.UpdateSqls = append(alterTableCtx.UpdateSqls, fkData.UpdateSql)
+
+		if fkData.IsSelfRefer {
+			detectSQLs, err := genSqlsForCheckFKSelfRefer(
+				ctx,
+				alterTablePlan.Database,
+				alterTablePlan.TableDef.Name,
+				finalTableDef.Cols,
+				[]*plan.ForeignKeyDef{fkData.Def},
+			)
+			if err != nil {
+				return err
+			}
+			alterTablePlan.DetectSqls = append(alterTablePlan.DetectSqls, detectSQLs...)
+			continue
+		}
+
+		_, parentTableDef, err := cctx.Resolve(
+			fkData.ParentDbName, fkData.ParentTableName, nil,
+		)
+		if err != nil {
+			return err
+		}
+		if parentTableDef == nil {
+			return moerr.NewNoSuchTable(
+				ctx, fkData.ParentDbName, fkData.ParentTableName,
+			)
+		}
+		detectSQL, err := genSqlForCheckFKConstraints(
+			ctx,
+			fkData.Def,
+			alterTablePlan.Database,
+			alterTablePlan.TableDef.Name,
+			finalTableDef.Cols,
+			fkData.ParentDbName,
+			fkData.ParentTableName,
+			parentTableDef.Cols,
+		)
+		if err != nil {
+			return err
+		}
+		alterTablePlan.DetectSqls = append(alterTablePlan.DetectSqls, detectSQL)
+	}
+	return nil
 }
 
 func appendAffectedAlterColumnNames(affectedCols []string, oldColName, newColName string) []string {
