@@ -30,6 +30,11 @@ select st_area(st_geomfromtext('POLYGON((0 0,3 0,3 4,0 4,0 0))', 4326), 0) as fo
 select st_distance(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(1 0)', 4326), 'kilometre') as geodesic_distance_km;
 select st_frechetdistance(st_geomfromtext('LINESTRING(0 0,1 0)', 4326), st_geomfromtext('LINESTRING(0 1,1 1)', 4326), 'kilometre') as geodesic_frechet_km;
 select st_hausdorffdistance(st_geomfromtext('LINESTRING(0 0,1 0)', 4326), st_geomfromtext('LINESTRING(0 1,1 1)', 4326), 'kilometre') as geodesic_hausdorff_km;
+-- Exercise the authoritative MySQL unit names, case/accent-insensitive
+-- lookup, and an independently scaled meter oracle. Abbreviations such as
+-- "km" are intentionally not accepted as aliases.
+select round(st_distance(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(1 0)', 4326), 'US SURVEY FOOT') * 0.30480060960121924, 6) as us_survey_foot_m, round(st_distance(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(1 0)', 4326), 'Statute mile') * 1609.344, 6) as statute_mile_m, round(st_distance(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(1 0)', 4326), 'fathom') * 1.8288, 6) as fathom_m, round(st_distance(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(1 0)', 4326), 'chain') * 20.1168, 6) as chain_m, round(st_distance(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(1 0)', 4326), 'link') * 0.201168, 6) as link_m, round(st_distance(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(1 0)', 4326), 'MÈTRE'), 6) as accented_metre_m;
+select st_distance(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(1 0)', 4326), 'km');
 
 -- S2 normalizes finite out-of-range coordinates. SRID-4326 measurement
 -- functions must reject them before entering the S2 kernels; validate both

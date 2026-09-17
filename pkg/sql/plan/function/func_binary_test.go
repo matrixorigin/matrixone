@@ -8108,6 +8108,114 @@ func TestSpatialDistanceUnitOverloadsResolve(t *testing.T) {
 	}
 }
 
+func TestSpatialDistanceRegisteredExecutors(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+	geometry := types.T_geometry.ToType()
+	geometry.Width = 4327
+	geometry32 := types.T_geometry32.ToType()
+	geometry32.Width = 4327
+	lineA := "LINESTRING(0 0,1 0)"
+	lineB := "LINESTRING(0 1,1 1)"
+	oneDegreeMeters := math.Pi / 180 * geo.EarthRadiusMeters
+
+	tests := []struct {
+		name       string
+		function   string
+		argTypes   []types.Type
+		inputTypes []types.Type
+		values     []any
+		resultType types.T
+		want       float64
+		delta      float64
+	}{
+		{
+			name: "distance geometry unit", function: "st_distance",
+			argTypes:   []types.Type{geometry, geometry, types.T_varchar.ToType()},
+			inputTypes: []types.Type{geometry, geometry, types.T_varchar.ToType()},
+			values:     []any{[]string{"POINT(0 0)"}, []string{"POINT(1 0)"}, []string{"metre"}}, resultType: types.T_float64, want: oneDegreeMeters, delta: 1,
+		},
+		{
+			name: "distance geometry32 unit", function: "st_distance",
+			argTypes:   []types.Type{geometry32, geometry32, types.T_varchar.ToType()},
+			inputTypes: []types.Type{geometry32, geometry32, types.T_varchar.ToType()},
+			values:     []any{[]string{"POINT(0 0)"}, []string{"POINT(1 0)"}, []string{"metre"}}, resultType: types.T_float32, want: oneDegreeMeters, delta: 1,
+		},
+		{
+			name: "frechet geometry unit", function: "st_frechetdistance",
+			argTypes:   []types.Type{geometry, geometry, types.T_varchar.ToType()},
+			inputTypes: []types.Type{geometry, geometry, types.T_varchar.ToType()},
+			values:     []any{[]string{lineA}, []string{lineB}, []string{"metre"}}, resultType: types.T_float64, want: oneDegreeMeters, delta: 1,
+		},
+		{
+			name: "frechet geometry32 unit", function: "st_frechetdistance",
+			argTypes:   []types.Type{geometry32, geometry32, types.T_varchar.ToType()},
+			inputTypes: []types.Type{geometry32, geometry32, types.T_varchar.ToType()},
+			values:     []any{[]string{lineA}, []string{lineB}, []string{"metre"}}, resultType: types.T_float32, want: oneDegreeMeters, delta: 1,
+		},
+		{
+			name: "frechet geometry geodetic", function: "st_frechetdistance",
+			argTypes:   []types.Type{geometry, geometry},
+			inputTypes: []types.Type{geometry, geometry},
+			values:     []any{[]string{lineA}, []string{lineB}}, resultType: types.T_float64, want: oneDegreeMeters, delta: 1,
+		},
+		{
+			name: "frechet geometry32 geodetic", function: "st_frechetdistance",
+			argTypes:   []types.Type{geometry32, geometry32},
+			inputTypes: []types.Type{geometry32, geometry32},
+			values:     []any{[]string{lineA}, []string{lineB}}, resultType: types.T_float32, want: oneDegreeMeters, delta: 1,
+		},
+		{
+			name: "hausdorff geometry unit", function: "st_hausdorffdistance",
+			argTypes:   []types.Type{geometry, geometry, types.T_varchar.ToType()},
+			inputTypes: []types.Type{geometry, geometry, types.T_varchar.ToType()},
+			values:     []any{[]string{lineA}, []string{lineB}, []string{"metre"}}, resultType: types.T_float64, want: oneDegreeMeters, delta: 1,
+		},
+		{
+			name: "hausdorff geometry32 unit", function: "st_hausdorffdistance",
+			argTypes:   []types.Type{geometry32, geometry32, types.T_varchar.ToType()},
+			inputTypes: []types.Type{geometry32, geometry32, types.T_varchar.ToType()},
+			values:     []any{[]string{lineA}, []string{lineB}, []string{"metre"}}, resultType: types.T_float32, want: oneDegreeMeters, delta: 1,
+		},
+		{
+			name: "hausdorff geometry geodetic", function: "st_hausdorffdistance",
+			argTypes:   []types.Type{geometry, geometry},
+			inputTypes: []types.Type{geometry, geometry},
+			values:     []any{[]string{lineA}, []string{lineB}}, resultType: types.T_float64, want: oneDegreeMeters, delta: 1,
+		},
+		{
+			name: "hausdorff geometry32 geodetic", function: "st_hausdorffdistance",
+			argTypes:   []types.Type{geometry32, geometry32},
+			inputTypes: []types.Type{geometry32, geometry32},
+			values:     []any{[]string{lineA}, []string{lineB}}, resultType: types.T_float32, want: oneDegreeMeters, delta: 1,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(context.Background(), tc.function, tc.argTypes)
+			require.NoError(t, err)
+			inputs := make([]*vector.Vector, len(tc.inputTypes))
+			for i, typ := range tc.inputTypes {
+				input := newVectorByType(mp, typ, tc.values[i], nil)
+				inputs[i] = input
+				t.Cleanup(func() { input.Free(mp) })
+			}
+			out, err := RunFunctionDirectly(proc, resolved.GetEncodedOverloadID(), inputs, 1)
+			require.NoError(t, err)
+			t.Cleanup(func() { out.Free(mp) })
+			require.Equal(t, tc.resultType, out.GetType().Oid)
+			require.False(t, out.IsNull(0))
+			var got float64
+			if tc.resultType == types.T_float32 {
+				got = float64(vector.MustFixedColWithTypeCheck[float32](out)[0])
+			} else {
+				got = vector.MustFixedColWithTypeCheck[float64](out)[0]
+			}
+			require.InDelta(t, tc.want, got, tc.delta)
+		})
+	}
+}
+
 func TestLinearReferencing(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

@@ -36,6 +36,30 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestPersistedDecimalLiteralUsesDedicatedEpochInMixedOwner(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	decimalExpr, err := makePlan2DecimalExprWithType(proc.Ctx,
+		"12345678901234567890123456789012345678.1")
+	require.NoError(t, err)
+	spatialExpr := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_float64)},
+		Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{
+			Obj: function.EncodeOverloadID(function.ST_DISTANCE, 4),
+		}}},
+	}
+	mixed := &planpb.TableDef{Cols: []*planpb.ColDef{
+		{Default: &planpb.Default{Expr: decimalExpr}},
+		{Default: &planpb.Default{Expr: spatialExpr}},
+	}}
+
+	required, err := RequiredPersistedExpressionProtocolVersion(mixed)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion87, required,
+		"the dedicated decimal epoch must dominate v85/v86 features")
+}
+
 func TestPersistedDecimalLiteralProtocolAdmission(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	rt := moruntime.ServiceRuntime(proc.GetService())
@@ -66,12 +90,12 @@ func TestPersistedDecimalLiteralProtocolAdmission(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, features.DecimalLiteralSemantics, expr.String())
 
-	for _, version := range []int64{defines.MORPCVersion81, defines.MORPCVersion84} {
+	for _, version := range []int64{defines.MORPCVersion81, defines.MORPCVersion86, defines.MORPCVersion87} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, version)
 		err = RequirePersistedExpressionProtocol(proc.Ctx, proc, expr)
-		if version < defines.MORPCVersion84 {
-			require.ErrorContains(t, err, "protocol version 84")
+		if version < defines.MORPCVersion87 {
+			require.ErrorContains(t, err, "protocol version 87")
 		} else {
 			require.NoError(t, err)
 		}
@@ -128,15 +152,15 @@ func TestPersistedDecimalLiteralTargetTypedDefaultAdmission(t *testing.T) {
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion81))
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion81))
 	_, err = buildDefaultExpr(col, typ, proc)
-	require.ErrorContains(t, err, "protocol version 84")
+	require.ErrorContains(t, err, "protocol version 87")
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion84))
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion84))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion87))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion87))
 	defaultExpr, err := buildDefaultExpr(col, typ, proc)
 	require.NoError(t, err)
 	require.NotNil(t, defaultExpr)
-	require.Equal(t, int64(defines.MORPCVersion84), func() int64 {
+	require.Equal(t, int64(defines.MORPCVersion87), func() int64 {
 		version, versionErr := RequiredPersistedExpressionProtocolVersion(defaultExpr)
 		require.NoError(t, versionErr)
 		return version
@@ -148,10 +172,9 @@ func TestPersistedDecimalLiteralTargetTypedDefaultAdmission(t *testing.T) {
 		}},
 	}}
 	require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, plain))
-
 	// A temporal/non-DECIMAL target keeps the original spelling for the cast,
 	// so it does not depend on the exact DECIMAL literal carrier introduced by
-	// v84 and remains admissible at the v81 floor.
+	// v87 and remains admissible at the v81 floor.
 	timeSource := "0.001"
 	timeStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
 		"create table t_time(a time(3) default ("+timeSource+"))", 1)
@@ -212,7 +235,7 @@ func TestPersistedDecimalLiteralMarkerSurvivesDeepCopyAndListFold(t *testing.T) 
 			foldedFeatures, featureErr := planpb.RequiredRemoteExpressionFeatures(folded)
 			require.NoError(t, featureErr)
 			require.True(t, foldedFeatures.DecimalLiteralSemantics)
-			require.Equal(t, int64(defines.MORPCVersion84), func() int64 {
+			require.Equal(t, int64(defines.MORPCVersion87), func() int64 {
 				version, versionErr := RequiredPersistedExpressionProtocolVersion(folded)
 				require.NoError(t, versionErr)
 				return version
