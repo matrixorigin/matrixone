@@ -13,8 +13,27 @@ insert into t_rollup_sort values
 (1, 2, 40),
 (2, 1, 50);
 set session rollup_algorithm = 'SORT';
-select a, b, cnt, total, grouping_a, grouping_b
-from (
+explain select a, b,
+count(*) as cnt,
+sum(amount) as total,
+grouping(a) as grouping_a,
+grouping(b) as grouping_b
+from t_rollup_sort
+group by a, b with rollup
+order by grouping_a, grouping_b, a, b;
+-- @regex("(?s)Aggregate.*Sort", true)
+-- @regex("Union All", false)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: grouping(t_rollup_sort.a) INTERNAL, grouping(t_rollup_sort.b) INTERNAL, t_rollup_sort.a INTERNAL, t_rollup_sort.b INTERNAL  𝄀
+        ->  Project  𝄀
+              ->  Aggregate  𝄀
+                    Group Key: t_rollup_sort.a, t_rollup_sort.b  𝄀
+                    Aggregate Functions: starcount(1), sum(t_rollup_sort.amount)  𝄀
+                    ->  Sort  𝄀
+                          Sort Key: t_rollup_sort.a , t_rollup_sort.b   𝄀
+                          ->  Table Scan on rollup_sort_bvt.t_rollup_sort
 select a, b,
 count(*) as cnt,
 sum(amount) as total,
@@ -22,7 +41,6 @@ grouping(a) as grouping_a,
 grouping(b) as grouping_b
 from t_rollup_sort
 group by a, b with rollup
-) q
 order by grouping_a, grouping_b, a, b;
 ➤ a[4,32,0]  ¦  b[4,32,0]  ¦  cnt[-5,64,0]  ¦  total[-5,64,0]  ¦  grouping_a[-5,64,0]  ¦  grouping_b[-5,64,0]  𝄀
 null  ¦  1  ¦  2  ¦  30  ¦  0  ¦  0  𝄀
