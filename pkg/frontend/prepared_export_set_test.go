@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"fmt"
 	"math"
 	"testing"
 
@@ -532,6 +533,41 @@ func TestPreparedExportSetPrecisionDecimalBitwiseSaturation(t *testing.T) {
 	}
 }
 
+func TestPreparedExportSetBitwiseCastUsesActualOperandDomain(t *testing.T) {
+	for _, query := range []string{
+		`select export_set(x,'Y','N','',4), y & 1 from (select ? x, ? y) d`,
+		`select export_set(truncate(15.5,y & 1),'Y','N','',4) from (select coalesce(x,'0') y from (select ? x) d limit 1) p`,
+		`select export_set(truncate(15.5,y & 1),'Y','N','',4) from (select coalesce(?,'0') y union all select '0') p`,
+		`select export_set(truncate(15.5,y & 1),'Y','N','',4) from (select max(coalesce(x,'0')) y from (select ? x) d) p`,
+		`select export_set(truncate(15.5,y & 1),'Y','N','',4) from (select first_value(coalesce(x,'0')) over () y from (select ? x) d) p`,
+	} {
+		t.Run(query, func(t *testing.T) {
+			_, stmt, cw, _ := newPreparedExecuteEnvForSQL(t, 406, query)
+			defer stmt.Close()
+			values := []any{plan2.ParamValue{Value: "0.5", SourceType: types.New(types.T_decimal64, 2, 1), HasSourceType: true, EnableNumericPrefix: true}}
+			if len(stmt.PreparePlan.GetDcl().GetPrepare().ParamTypes) == 2 {
+				values = append(values, plan2.ParamValue{Value: "0.5", SourceType: types.T_text.ToType(), HasSourceType: true, EnableNumericPrefix: true})
+			}
+			stmt.applyExportSetNullRuntimeTypes(values)
+			filled, err := plan2.FillValuesOfParamsInPlan(cw.proc.Ctx, stmt.PreparePlan.GetDcl().GetPrepare().Plan, values)
+			require.NoError(t, err)
+			err = plan.VisitExpressionsInOwner(filled, func(expr *plan.Expr) error {
+				err := plan.VisitExprTree(expr, func(e *plan.Expr) error {
+					if fn := e.GetF(); fn != nil && fn.Func != nil {
+						id, overload := function.DecodeOverloadID(fn.Func.Obj)
+						if id == function.CAST && overload == 5 {
+							require.True(t, types.T(fn.Args[0].Typ.Id).ToType().IsDecimal(), "CAST5 source must be DECIMAL: %s", e.String())
+						}
+					}
+					return nil
+				})
+				return err
+			})
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestPreparedExportSetPrecisionTextBitwiseProducer(t *testing.T) {
 	_, stmt, cw, _ := newPreparedExecuteEnvForSQL(t, 404,
 		`select export_set(truncate(15.5,ifnull(concat(x,''),'0') & 1),'Y','N','',4) from (select ? as x) d`)
@@ -553,6 +589,118 @@ func TestPreparedExportSetPrecisionTextBitwiseProducer(t *testing.T) {
 	require.NoError(t, err)
 	defer free()
 	require.Equal(t, "YYYY", result.GetStringAt(0), "expr=%s", expr.String())
+}
+
+func TestPreparedExportSetSharedTextAggregateDomain(t *testing.T) {
+	for _, value := range []any{"2.5", nil} {
+		t.Run(fmt.Sprint(value), func(t *testing.T) {
+			_, stmt, cw, _ := newPreparedExecuteEnvForSQL(t, 410,
+				`select export_set(x,'Y','N','',4),sum(x),avg(x) from (select ? x) d group by x`)
+			defer stmt.Close()
+			values := []any{plan2.ParamValue{Value: value, SourceType: types.T_text.ToType(), HasSourceType: true, EnableNumericPrefix: true}}
+			stmt.applyExportSetNullRuntimeTypes(values)
+			filled, err := plan2.FillValuesOfParamsInPlan(cw.proc.Ctx, stmt.PreparePlan.GetDcl().GetPrepare().Plan, values)
+			require.NoError(t, err)
+			seen := 0
+			for _, node := range filled.GetQuery().Nodes {
+				for _, agg := range node.AggList {
+					if fn := agg.GetF(); fn != nil && (fn.Func.ObjName == "sum" || fn.Func.ObjName == "avg") {
+						require.Equal(t, int32(types.T_float64), fn.Args[0].Typ.Id)
+						seen++
+					}
+				}
+			}
+			require.Equal(t, 2, seen)
+		})
+	}
+}
+
+func TestPreparedExportSetUnsignedPrecisionDomain(t *testing.T) {
+	for _, precision := range []string{"x | 1", "x ^ 0", "x << 1"} {
+		t.Run(precision, func(t *testing.T) {
+			_, stmt, cw, _ := newPreparedExecuteEnvForSQL(t, 408,
+				`select export_set(truncate(13.5,`+precision+`),'Y','N','',4) from (select ? x) d`)
+			defer stmt.Close()
+			decimal := types.New(types.T_decimal64, 2, 1)
+			values := []any{plan2.ParamValue{Value: "-0.5", SourceType: decimal, HasSourceType: true, EnableNumericPrefix: true}}
+			stmt.applyExportSetNullRuntimeTypes(values)
+			filled, err := plan2.FillValuesOfParamsInPlan(cw.proc.Ctx, stmt.PreparePlan.GetDcl().GetPrepare().Plan, values)
+			require.NoError(t, err)
+			q := filled.GetQuery()
+			expr := q.Nodes[q.Steps[len(q.Steps)-1]].ProjectList[0]
+			input := batch.NewWithSize(1)
+			input.Vecs[0] = vector.NewVec(decimal)
+			defer input.Clean(cw.proc.Mp())
+			negativeHalf := int64(-5)
+			require.NoError(t, vector.AppendFixed(input.Vecs[0], types.Decimal64(negativeHalf), false, cw.proc.Mp()))
+			input.SetRowCount(1)
+			result, free, err := colexec.GetReadonlyResultFromExpression(cw.proc, expr, []*batch.Batch{input})
+			require.NoError(t, err)
+			defer free()
+			require.Equal(t, "NYYY", result.GetStringAt(0), "expr=%s", expr.String())
+		})
+	}
+}
+
+func TestPreparedExportSetDirectRealOverflowSaturates(t *testing.T) {
+	for _, consumer := range []string{"?", "abs(?)"} {
+		t.Run(consumer, func(t *testing.T) {
+			_, stmt, cw, _ := newPreparedExecuteEnvForSQL(t, 409,
+				`select export_set(`+consumer+`,'Y','N','',4)`)
+			defer stmt.Close()
+			values := []any{plan2.ParamValue{Value: float64(1e100), SourceType: types.T_float64.ToType(), HasSourceType: true, EnableNumericPrefix: true}}
+			stmt.applyExportSetNullRuntimeTypes(values)
+			filled, err := plan2.FillValuesOfParamsInPlan(cw.proc.Ctx, stmt.PreparePlan.GetDcl().GetPrepare().Plan, values)
+			require.NoError(t, err)
+			q := filled.GetQuery()
+			expr := q.Nodes[q.Steps[len(q.Steps)-1]].ProjectList[0]
+			result, free, err := colexec.GetReadonlyResultFromExpression(cw.proc, expr, []*batch.Batch{batch.EmptyForConstFoldBatch})
+			if free != nil {
+				defer free()
+			}
+			if consumer != "?" {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, "YYYY", result.GetStringAt(0))
+		})
+	}
+}
+
+func TestPreparedExportSetSiblingNumericConsumerValue(t *testing.T) {
+	for _, tc := range []struct {
+		consumer string
+		want     string
+	}{
+		{"floor(x)", "2"}, {"ceil(x)", "3"}, {"round(x,1)", "2.5"}, {"x+0", "2.5"},
+		{"floor(cast(x as signed))", "2"}, {"round(cast(x as signed),1)", "2"},
+		{"export_set(2,'Y','N','',x)", "NY"},
+	} {
+		t.Run(tc.consumer, func(t *testing.T) {
+			_, stmt, cw, _ := newPreparedExecuteEnvForSQL(t, 407,
+				`select export_set(x,'Y','N','',4), `+tc.consumer+` from (select ? x) d`)
+			defer stmt.Close()
+			values := []any{plan2.ParamValue{Value: float64(2.5), SourceType: types.T_float64.ToType(), HasSourceType: true, EnableNumericPrefix: true}}
+			stmt.applyExportSetNullRuntimeTypes(values)
+			filled, err := plan2.FillValuesOfParamsInPlan(cw.proc.Ctx, stmt.PreparePlan.GetDcl().GetPrepare().Plan, values)
+			require.NoError(t, err)
+			q := filled.GetQuery()
+			expr := q.Nodes[q.Steps[len(q.Steps)-1]].ProjectList[1]
+			target := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar), Width: 65535}, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
+			text, err := plan2.BindFuncExprImplByPlanExpr(cw.proc.Ctx, "cast", []*plan.Expr{expr, target})
+			require.NoError(t, err)
+			input := batch.NewWithSize(1)
+			input.Vecs[0] = vector.NewVec(types.T_float64.ToType())
+			defer input.Clean(cw.proc.Mp())
+			require.NoError(t, vector.AppendFixed(input.Vecs[0], float64(2.5), false, cw.proc.Mp()))
+			input.SetRowCount(1)
+			result, free, err := colexec.GetReadonlyResultFromExpression(cw.proc, text, []*batch.Batch{input})
+			require.NoError(t, err)
+			defer free()
+			require.Equal(t, tc.want, result.GetStringAt(0), "expr=%s", expr.String())
+		})
+	}
 }
 
 func TestPreparedExportSetSiblingAbsKeepsDecimalDomain(t *testing.T) {

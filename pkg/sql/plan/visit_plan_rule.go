@@ -2374,14 +2374,21 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					return nil, err
 				}
 			}
+			if functionName == "export_set" && i == 0 && hasParamPos &&
+				types.T(rewrittenArg.Typ.Id).IsFloat() {
+				// A direct marker uses MySQL's saturating parameter val_int;
+				// expression producers such as ABS keep their checked conversion.
+				rewrittenArg, err = appendBitwiseAggregateCastBeforeExpr(rule.ctx, rewrittenArg,
+					makePlan2Type(&types.Type{Oid: types.T_int64}))
+				if err != nil {
+					return nil, err
+				}
+				needResetFunction, compareArgTypes, rule.specialized = true, true, true
+			}
 			precisionPos, precisionOwned := rule.preparedExportSetPrecisionPosition(originalArgs[i], rewrittenArg)
 			if len(rule.exportSetParamPositions) > 0 && preparedExportSetIntegerPrecisionArg(functionName, i) && precisionOwned {
-				precisionDomain := types.Type{}
-				if precisionPos >= 0 && precisionPos < len(rule.params) && rule.params[precisionPos] != nil {
-					precisionDomain = makeTypeByPlan2Expr(rule.params[precisionPos])
-				}
 				rewrittenArg = rewritePreparedPrecisionBitwiseOperands(
-					unwrapPreparedPrecisionEnvelope(rewrittenArg), precisionDomain)
+					unwrapPreparedPrecisionEnvelope(rewrittenArg))
 				sourceType := types.T(rewrittenArg.Typ.Id)
 				overload := int32(1)
 				if sourceType.IsMySQLString() && preparedPrecisionProducerUsesResolvedDomain(rewrittenArg) &&
@@ -2392,6 +2399,17 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 						return nil, err
 					}
 					sourceType = types.T(rewrittenArg.Typ.Id)
+				}
+				if sourceType == types.T_uint64 {
+					// Precision is a signed executor control, but a bitwise result
+					// remains unsigned. Large positive precisions are equivalent to
+					// MaxInt64, never to negative decimal positions.
+					rewrittenArg, err = BindFuncExprImplByPlanExpr(rule.ctx, "least", []*Expr{
+						rewrittenArg, makePlan2Uint64ConstExprWithType(math.MaxInt64),
+					})
+					if err != nil {
+						return nil, err
+					}
 				}
 				target := makePlan2Type(&types.Type{Oid: types.T_int64})
 				if sourceType.IsMySQLString() {
@@ -2663,7 +2681,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		if preparedPrecisionBitwiseFunction(functionName) && rule.preparedExportSetExpressionOwned(e) {
 			bitwise := DeepCopyExpr(e)
 			bitwise.GetF().Args = boundArgs
-			bitwise = rewritePreparedPrecisionBitwiseOperands(bitwise, types.Type{})
+			bitwise = rewritePreparedPrecisionBitwiseOperands(bitwise)
 			boundArgs = bitwise.GetF().Args
 			needResetFunction, compareArgTypes, rule.specialized = true, true, true
 		}
@@ -2779,10 +2797,10 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				return nil, err
 			}
 			for index, precisionArg := range precisionArgs {
-				rewritten.GetF().Args[index] = rewritePreparedPrecisionBitwiseOperands(precisionArg, types.Type{})
+				rewritten.GetF().Args[index] = rewritePreparedPrecisionBitwiseOperands(precisionArg)
 			}
 			if preparedPrecisionBitwiseFunction(functionName) && rule.preparedExportSetExpressionOwned(e) {
-				rewritten = rewritePreparedPrecisionBitwiseOperands(rewritten, rule.preparedExportSetResolvedDomainHint())
+				rewritten = rewritePreparedPrecisionBitwiseOperands(rewritten)
 			}
 			preserveReboundFunctionMetadata(exprImpl.F, rewritten.GetF())
 			if functionBindingChanged(originalTyp, originalFuncObj, originalArgTypes, rewritten, compareArgTypes) {
@@ -2795,7 +2813,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				rule.markSQLExecuteNumericDependent(e, rewritten)
 			}
 			if len(rule.exportSetParamPositions) > 0 {
-				rewritten = rewritePreparedPrecisionBitwiseOperands(rewritten, rule.preparedExportSetResolvedDomainHint())
+				rewritten = rewritePreparedPrecisionBitwiseOperands(rewritten)
 			}
 			return rewritten, nil
 		}
@@ -2806,7 +2824,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			rule.markSQLExecuteNumericDependent(e)
 		}
 		if len(rule.exportSetParamPositions) > 0 {
-			return rewritePreparedPrecisionBitwiseOperands(e, rule.preparedExportSetResolvedDomainHint()), nil
+			return rewritePreparedPrecisionBitwiseOperands(e), nil
 		}
 		return e, nil
 	case *plan.Expr_W:
@@ -3696,18 +3714,6 @@ func windowHasNumericPrefixDependency(
 	return false
 }
 
-func (rule *ResetParamRefRule) preparedExportSetResolvedDomainHint() types.Type {
-	if len(rule.exportSetParamPositions) != 1 {
-		return types.Type{}
-	}
-	for pos := range rule.exportSetParamPositions {
-		if pos >= 0 && int(pos) < len(rule.params) && rule.params[pos] != nil {
-			return makeTypeByPlan2Expr(rule.params[pos])
-		}
-	}
-	return types.Type{}
-}
-
 func (rule *ResetParamRefRule) preparedExportSetExpressionOwned(expr *Expr) bool {
 	for pos := range preparedNumericValueParamPositions(expr) {
 		if _, owned := rule.exportSetParamPositions[pos]; owned {
@@ -3762,24 +3768,24 @@ func preparedPrecisionProducerUsesResolvedDomain(expr *Expr) bool {
 	return false
 }
 
-func rewritePreparedPrecisionBitwiseOperands(expr *Expr, resolvedDomain types.Type) *Expr {
+func rewritePreparedPrecisionBitwiseOperands(expr *Expr) *Expr {
 	copy := DeepCopyExpr(expr)
-	rewritePreparedPrecisionBitwiseOperandsInPlace(copy, resolvedDomain)
+	rewritePreparedPrecisionBitwiseOperandsInPlace(copy)
 	return copy
 }
 
-func rewritePreparedPrecisionBitwiseOperandsInPlace(expr *Expr, resolvedDomain types.Type) {
+func rewritePreparedPrecisionBitwiseOperandsInPlace(expr *Expr) {
 	if expr == nil {
 		return
 	}
 	if window := expr.GetW(); window != nil {
-		rewritePreparedPrecisionBitwiseOperandsInPlace(window.WindowFunc, resolvedDomain)
+		rewritePreparedPrecisionBitwiseOperandsInPlace(window.WindowFunc)
 		for _, partition := range window.PartitionBy {
-			rewritePreparedPrecisionBitwiseOperandsInPlace(partition, resolvedDomain)
+			rewritePreparedPrecisionBitwiseOperandsInPlace(partition)
 		}
 		for _, order := range window.OrderBy {
 			if order != nil {
-				rewritePreparedPrecisionBitwiseOperandsInPlace(order.Expr, resolvedDomain)
+				rewritePreparedPrecisionBitwiseOperandsInPlace(order.Expr)
 			}
 		}
 		return
@@ -3789,7 +3795,7 @@ func rewritePreparedPrecisionBitwiseOperandsInPlace(expr *Expr, resolvedDomain t
 	}
 	fn := expr.GetF()
 	for _, arg := range fn.Args {
-		rewritePreparedPrecisionBitwiseOperandsInPlace(arg, resolvedDomain)
+		rewritePreparedPrecisionBitwiseOperandsInPlace(arg)
 	}
 	if fn.Func == nil || !preparedPrecisionBitwiseFunction(fn.Func.GetObjName()) {
 		return
@@ -3801,9 +3807,9 @@ func rewritePreparedPrecisionBitwiseOperandsInPlace(expr *Expr, resolvedDomain t
 			continue
 		}
 		sourceType := makeTypeByPlan2Expr(cast.Args[0])
-		if !sourceType.IsNumeric() && preparedPrecisionBitwiseUsesResolvedDomain(cast.Args[0]) && resolvedDomain.IsNumeric() {
-			sourceType = resolvedDomain
-		}
+		// Executor overloads consume the actual vector domain. A parameter's
+		// historical domain cannot change a TEXT producer (or another parameter)
+		// into a DECIMAL vector. Projection refresh must resolve that upstream.
 		if sourceType.Oid.IsFloat() {
 			setPreparedCastOverload(arg, 4)
 		}
@@ -3814,30 +3820,6 @@ func rewritePreparedPrecisionBitwiseOperandsInPlace(expr *Expr, resolvedDomain t
 			setPreparedCastOverload(arg, 5)
 		}
 	}
-}
-
-func preparedPrecisionBitwiseUsesResolvedDomain(expr *Expr) bool {
-	if expr == nil {
-		return false
-	}
-	if fn := expr.GetF(); fn != nil && types.T(expr.Typ.Id).IsMySQLString() {
-		name := ""
-		if fn.Func != nil {
-			name = fn.Func.GetObjName()
-		}
-		if name == "cast" && len(fn.Args) > 0 && !fn.GetSyntaxExplicitCast() {
-			return preparedPrecisionBitwiseUsesResolvedDomain(fn.Args[0])
-		}
-		if name != "ifnull" && name != "coalesce" && name != "case" {
-			return false
-		}
-		for _, arg := range fn.Args {
-			if types.T(arg.Typ.Id).IsMySQLString() && !preparedPrecisionBitwiseUsesResolvedDomain(arg) {
-				return false
-			}
-		}
-	}
-	return preparedPrecisionProducerUsesResolvedDomain(expr)
 }
 
 func preparedPrecisionBitwiseFunction(name string) bool {

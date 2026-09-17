@@ -1017,7 +1017,13 @@ func TestPreparedExportSetUsesExecuteNumericSourceType(t *testing.T) {
 			require.NoError(t, err)
 			expr := findPlanFunctionExpr(filled, "export_set")
 			require.NotNil(t, expr)
-			require.Equal(t, int32(test.wantType), expr.GetF().Args[0].Typ.Id, expr.String())
+			source := expr.GetF().Args[0]
+			if test.wantType.IsFloat() {
+				require.True(t, isBitwiseAggregatePrivateCast(source), "direct REAL requires saturating conversion")
+				require.Equal(t, int32(types.T_int64), source.Typ.Id)
+				source = source.GetF().Args[0]
+			}
+			require.Equal(t, int32(test.wantType), source.Typ.Id, expr.String())
 
 			proc := testutil.NewProc(t)
 			defer proc.Free()

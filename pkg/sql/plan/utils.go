@@ -7196,9 +7196,8 @@ func replaceParamValsWithSelection(
 	// so the final visible ColDef agrees with the rewritten source expression.
 	directResultSpecialized := propagatePreparedDirectResultTypes(plan0, paramVals)
 	if len(paramRule.exportSetParamPositions) > 0 {
-		domain := paramRule.preparedExportSetResolvedDomainHint()
 		err = plan.VisitExpressionsInOwner(plan0, func(root *Expr) error {
-			rewritePreparedPrecisionBitwiseOperandsInPlace(root, domain)
+			rewritePreparedPrecisionBitwiseOperandsInPlace(root)
 			return nil
 		})
 		if err != nil {
@@ -7426,10 +7425,23 @@ func refreshPreparedPlanProjectionExprType(
 		// conversion. Discard its provisional envelope only after the producer
 		// column has been refreshed in dependency order.
 		if functionName == "cast" && !isExplicitPreparedLineageCast(expr) && !isBitwiseAggregatePrivateCast(expr) && len(exprImpl.F.Args) > 0 &&
-			exprImpl.F.Args[0].GetPreparedNumeric().GetFallbackSource() {
+			(exprImpl.F.Args[0].GetPreparedNumeric().GetFallbackSource() ||
+				changed && exprImpl.F.Args[0].GetCol() != nil) {
 			source := DeepCopyExpr(exprImpl.F.Args[0])
 			*expr = *source
 			return true, nil
+		}
+		if functionName == "export_set" && len(exprImpl.F.Args) == 5 {
+			source := exprImpl.F.Args[4]
+			if source.GetCol() != nil && types.T(source.Typ.Id).IsFloat() {
+				converted, err := appendBitwiseAggregateCastBeforeExpr(ctx, source,
+					makePlan2Type(&types.Type{Oid: types.T_int64}))
+				if err != nil {
+					return false, err
+				}
+				exprImpl.F.Args[4] = converted
+				changed = true
+			}
 		}
 		if functionName == "export_set" && len(exprImpl.F.Args) > 0 {
 			source := exprImpl.F.Args[0]
@@ -7446,18 +7458,6 @@ func refreshPreparedPlanProjectionExprType(
 				changed = true
 			}
 		}
-		if functionName == "abs" {
-			for i, arg := range exprImpl.F.Args {
-				if cast := arg.GetF(); cast != nil && cast.Func != nil && cast.Func.GetObjName() == "cast" &&
-					len(cast.Args) > 0 && !cast.GetSyntaxExplicitCast() && makeTypeByPlan2Expr(cast.Args[0]).IsNumeric() {
-					// A sibling EXPORT_SET may have provisionally forced the shared
-					// producer through INT64. ABS owns no integer conversion: rebind
-					// it from the refreshed producer domain instead.
-					exprImpl.F.Args[i] = DeepCopyExpr(cast.Args[0])
-					changed = true
-				}
-			}
-		}
 		argsChanged := false
 		for i, arg := range exprImpl.F.Args {
 			if arg != nil && !reflect.DeepEqual(arg.Typ, originalArgTypes[i]) {
@@ -7472,6 +7472,18 @@ func refreshPreparedPlanProjectionExprType(
 
 		originalType := expr.Typ
 		rebindArgs := DeepCopyExprList(exprImpl.F.Args)
+		if (functionName == "sum" || functionName == "avg") && len(rebindArgs) == 1 &&
+			types.T(rebindArgs[0].Typ.Id).IsMySQLString() {
+			// The aggregate owns numeric evaluation; the shared producer remains
+			// TEXT for sibling consumers. Recreate its local numeric-prefix cast
+			// after replacing a provisional prepare-time integer envelope.
+			target := types.T_float64.ToType()
+			converted, err := appendComparisonCastBeforeExpr(ctx, rebindArgs[0], makePlan2Type(&target))
+			if err != nil {
+				return false, err
+			}
+			rebindArgs[0] = converted
+		}
 		if preparedExprHasFallbackSource(expr) {
 			for i, arg := range rebindArgs {
 				if source, ok := provisionalNumericSource(arg); ok {

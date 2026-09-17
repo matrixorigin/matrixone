@@ -194,6 +194,14 @@ func RequiresMORPCVersion80StringNumericResultContracts(owner any) (bool, error)
 	return features.StringNumericResultContracts, err
 }
 
+// RequiresMORPCVersion83BoundedConditionalStringDomains reports whether an
+// owner contains a conditional string overload introduced with the bounded
+// CHAR/VARCHAR and BINARY/VARBINARY result-domain contract.
+func RequiresMORPCVersion83BoundedConditionalStringDomains(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.BoundedConditionalStringDomains, err
+}
+
 const (
 	equalFunctionID                  int32 = 0
 	notEqualFunctionID               int32 = 1
@@ -210,6 +218,7 @@ const (
 	strCmpFunctionID                 int32 = 344
 	uncompressedLengthFunctionID     int32 = 389
 	crc32FunctionID                  int32 = 81
+	coalesceFunctionID               int32 = 74
 	stringNumericInt32ResultTypeID   int32 = 22
 	stringNumericInt64ResultTypeID   int32 = 23
 	stringNumericUint64ResultTypeID  int32 = 28
@@ -231,20 +240,23 @@ const (
 // StringNumericResultContracts requires MORPC v80 because the listed string
 // numeric functions keep overload IDs while changing their physical result
 // vectors to signed INT/ BIGINT or BIGINT UNSIGNED.
-// ExportSetNumericContracts requires MORPC v82 because EXPORT_SET float
+// ExportSetNumericContracts requires MORPC v84 because EXPORT_SET numeric
 // semantics changed and private CAST overload 5 does not exist on old workers.
+// BoundedConditionalStringDomains requires MORPC v83 because the bounded
+// BINARY/VARBINARY COALESCE overload identities are new to the registry.
 type RemoteExpressionFeatures struct {
-	NumericPrefix                bool
-	JSONComparisonParam          bool
-	MixedJSONBooleanEquality     bool
-	FormatNumericArguments       bool
-	TypedConversionFunctions     bool
-	IntegerArithmeticDomains     bool
-	RowDependentConvBases        bool
-	ASCIIInt32Result             bool
-	StringNumericResultContracts bool
-	ExportSetNumericContracts    bool
-	IPFunctionSemantics          bool
+	NumericPrefix                   bool
+	JSONComparisonParam             bool
+	MixedJSONBooleanEquality        bool
+	FormatNumericArguments          bool
+	TypedConversionFunctions        bool
+	IntegerArithmeticDomains        bool
+	RowDependentConvBases           bool
+	ASCIIInt32Result                bool
+	StringNumericResultContracts    bool
+	ExportSetNumericContracts       bool
+	BoundedConditionalStringDomains bool
+	IPFunctionSemantics             bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
@@ -258,7 +270,17 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.RowDependentConvBases ||
 		features.StringNumericResultContracts ||
 		features.ExportSetNumericContracts ||
+		features.BoundedConditionalStringDomains ||
 		features.IPFunctionSemantics
+}
+
+func isBoundedConditionalStringDomain(fn *Function) bool {
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	functionID := int32(fn.Func.Obj >> 32)
+	overloadID := int32(fn.Func.Obj)
+	return functionID == coalesceFunctionID && (overloadID == 30 || overloadID == 31)
 }
 
 // These IDs are kept numeric deliberately: pkg/pb/plan cannot import the
@@ -346,6 +368,9 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			if !features.ExportSetNumericContracts && isExportSetNumericContract(current) {
 				features.ExportSetNumericContracts = true
 			}
+			if !features.BoundedConditionalStringDomains && isBoundedConditionalStringDomain(fn) {
+				features.BoundedConditionalStringDomains = true
+			}
 			if !features.IPFunctionSemantics && fn != nil && fn.Func != nil {
 				features.IPFunctionSemantics = isRemoteIPFunction(int32(fn.Func.Obj >> 32))
 			}
@@ -370,7 +395,17 @@ func isExportSetNumericContract(expr *Expr) bool {
 	if functionID != 385 && !strings.EqualFold(fn.Func.GetObjName(), "export_set") {
 		return false
 	}
-	return len(fn.Args) > 0 && (fn.Args[0].Typ.Id == 30 || fn.Args[0].Typ.Id == 31)
+	if len(fn.Args) == 0 || fn.Args[0] == nil {
+		return false
+	}
+	// BOOL and DECIMAL256 inputs were not executable on pre-v84 workers;
+	// FLOAT/DOUBLE retain their IDs but have a different numeric contract.
+	switch fn.Args[0].Typ.Id {
+	case 10, 30, 31, 34:
+		return true
+	default:
+		return false
+	}
 }
 
 // isASCIIInt32Result identifies the new physical result contract of ASCII.

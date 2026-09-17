@@ -46,7 +46,7 @@ func TestExportSetNumericProtocolSenderAndReceiver(t *testing.T) {
 	for _, tc := range []struct {
 		typ  types.T
 		want bool
-	}{{types.T_float64, true}, {types.T_int64, false}} {
+	}{{types.T_float64, true}, {types.T_bool, true}, {types.T_decimal256, true}, {types.T_int64, false}} {
 		exportSet := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_F{F: &planpb.Function{
 			Func: &planpb.ObjectRef{Obj: int64(385) << 32, ObjName: "export_set"},
 			Args: []*planpb.Expr{{Typ: planpb.Type{Id: int32(tc.typ)}}},
@@ -54,7 +54,17 @@ func TestExportSetNumericProtocolSenderAndReceiver(t *testing.T) {
 		direct, featureErr := planpb.RequiredRemoteExpressionFeatures(exportSet)
 		require.NoError(t, featureErr)
 		require.Equal(t, tc.want, direct.ExportSetNumericContracts)
+		if tc.want {
+			client.version = defines.MORPCVersion83
+			op.ProjectList = []*planpb.Expr{exportSet}
+			_, sendErr := encodeRemoteScope(scope, c.proc)
+			require.ErrorContains(t, sendErr, "remote destination")
+			floor, floorErr := plan2.RequiredPersistedExpressionProtocolVersion(exportSet)
+			require.NoError(t, floorErr)
+			require.Equal(t, defines.MORPCVersion84, floor)
+		}
 	}
+	op.ProjectList = []*planpb.Expr{cast5}
 
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 1}}
@@ -66,17 +76,17 @@ func TestExportSetNumericProtocolSenderAndReceiver(t *testing.T) {
 
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 1}}
-	client.version = defines.MORPCVersion82
+	client.version = defines.MORPCVersion84
 	require.NoError(t, c.constrainExportSetNumericWorkers(qry))
 	require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
 	require.NoError(t, err)
 
-	client.version = defines.MORPCVersion80
+	client.version = defines.MORPCVersion83
 	_, err = encodeRemoteScope(scope, c.proc)
 	require.ErrorContains(t, err, "remote destination")
 
 	moruntime.ServiceRuntime(c.proc.GetService()).SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion80)
 	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc,
-		&pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{cast5}}}}), "version 82")
+		&pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{cast5}}}}), "version 84")
 }

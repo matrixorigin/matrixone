@@ -2616,8 +2616,11 @@ func TestH0OrderedGroupConcatSpillsIndependently(t *testing.T) {
 	// ConfigureGroupConcatH0Spill clamps this to its independent run-size floor.
 	g.SpillMem = 1
 	g.AppendChild(child)
+	allocation := installGroupTestAllocation(t, g, proc, 128<<20)
 	t.Cleanup(func() {
 		g.Free(proc, false, nil)
+		require.Zero(t, allocation.account.Snapshot().Used)
+		finalizeGroupTestAllocation(t, g, allocation)
 		child.Free(proc, false, nil)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
@@ -2631,6 +2634,7 @@ func TestH0OrderedGroupConcatSpillsIndependently(t *testing.T) {
 	require.Equal(t, values[rows-1], parts[0])
 	require.Equal(t, values[0], parts[rows-1])
 	require.Positive(t, g.OpAnalyzer.GetOpStats().SpillRows)
+	require.Positive(t, g.OpAnalyzer.GetOpStats().SpillSize)
 	require.Zero(t, g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillWriteCalls"])
 }
 
@@ -3818,6 +3822,77 @@ func TestMergeGroupH0SkipsGenericSpillAndReuses(t *testing.T) {
 	run([][]int32{{1, 2}, {3}}, 3)
 	// Reset must leave no old H0 state in the next generation.
 	run([][]int32{{4}, {5, 6}}, 3)
+}
+
+func TestMergeGroupUsesIncomingGroupedModeForMedian(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(func() {
+		proc.Free()
+	})
+
+	input := batch.NewWithSize(2)
+	input.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
+	input.Vecs[1] = testutil.MakeInt64Vector([]int64{10, 20}, nil, proc.Mp())
+	input.SetRowCount(2)
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	partialGroup := newGroupOp(proc,
+		[]*plan.Expr{colExpr(0, types.T_int32)},
+		[]aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+			aggexec.AggIdOfMedian,
+			false,
+			[]*plan.Expr{colExpr(1, types.T_int64)},
+			nil,
+		)},
+	)
+	partialGroup.NeedEval = false
+	partialGroup.AppendChild(child)
+	require.NoError(t, partialGroup.Prepare(proc))
+	partials := collectBatches(t, partialGroup, proc)
+	require.NotEmpty(t, partials)
+	partial := cloneBatch(t, proc, partials[0])
+	partialGroup.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+
+	mergeChild := colexec.NewMockOperator().WithBatchs([]*batch.Batch{partial})
+	merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfMedian,
+		false,
+		[]*plan.Expr{colExpr(1, types.T_int64)},
+		nil,
+	)})
+	merge.AppendChild(mergeChild)
+	allocation := installGroupTestAllocation(t, merge, proc, 64<<20)
+	mergeFreed := false
+	mergeChildFreed := false
+	allocationFinalized := false
+	t.Cleanup(func() {
+		if !mergeFreed {
+			merge.Free(proc, false, nil)
+		}
+		if !mergeChildFreed {
+			mergeChild.Free(proc, false, nil)
+		}
+		if !allocationFinalized {
+			require.Zero(t, allocation.account.Snapshot().Used)
+			finalizeGroupTestAllocation(t, merge, allocation)
+		}
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+	require.NoError(t, merge.Prepare(proc))
+	outputs := collectBatches(t, merge, proc)
+	require.Len(t, outputs, 1)
+	require.Equal(t, 2, outputs[0].RowCount())
+	require.Len(t, outputs[0].Vecs, 2)
+	require.Equal(t, []int32{1, 2}, vector.MustFixedColNoTypeCheck[int32](outputs[0].Vecs[0]))
+	require.Equal(t, []float64{10, 20}, vector.MustFixedColNoTypeCheck[float64](outputs[0].Vecs[1]))
+	require.Equal(t, int32(H8), merge.ctr.mtyp)
+	merge.Free(proc, false, nil)
+	mergeFreed = true
+	mergeChild.Free(proc, false, nil)
+	mergeChildFreed = true
+	require.Zero(t, allocation.account.Snapshot().Used)
+	finalizeGroupTestAllocation(t, merge, allocation)
+	allocationFinalized = true
 }
 
 func TestMergeGroupHonorsCancellationAfterInput(t *testing.T) {

@@ -117,8 +117,9 @@ const (
 	MORPCVersion79     int64 = 79 // canonical opaque DISTINCT argument wire keys
 	MORPCVersion80     int64 = 80 // signed and widened string numeric result contracts
 	MORPCVersion81     int64 = 81 // opt-in table-owned AUTO_ID_CACHE and its PRE_INSERT wire marker
-	MORPCVersion82     int64 = 82 // prepared EXPORT_SET numeric and private CAST execution contracts
-	MORPCLatestVersion       = MORPCVersion82
+	MORPCVersion83     int64 = 83 // bounded COALESCE character and binary result domains
+	MORPCVersion84     int64 = 84 // EXPORT_SET numeric and private CAST execution contracts
+	MORPCLatestVersion       = MORPCVersion84
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
