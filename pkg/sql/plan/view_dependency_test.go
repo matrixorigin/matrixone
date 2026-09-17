@@ -772,7 +772,7 @@ func TestPersistedDecimalComparisonViewProtocolLifecycle(t *testing.T) {
 			Typ: planpb.Type{
 				Id:          int32(types.T_decimal64),
 				Width:       10,
-				Scale:       0,
+				Scale:       1,
 				NotNullable: true,
 			},
 			NotNull: true,
@@ -867,7 +867,7 @@ func TestPersistedDecimalComparisonViewProtocolLifecycle(t *testing.T) {
 	// A small source-scale mismatch is also a semantic boundary: the cast
 	// rounds 1.01 to 1.0 before comparison, while the v83 binder could inspect
 	// the source spelling and fold the predicate as if the extra digit survived.
-	const castSQL = "create view v_decimal_cast_compare as select d = cast('1.01' as decimal(10,1)) as eq, d <> cast('1.01' as decimal(10,1)) as ne from decimal_cast_compare_source"
+	const castSQL = "create view v_decimal_cast_compare as select d = cast('1.01' as decimal(10,1)) as eq, d <> cast('1.01' as decimal(10,1)) as ne, d < cast('1.010' as decimal(10,2)) as lt, d >= cast('1.010' as decimal(10,2)) as ge from decimal_cast_compare_source"
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion83))
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion83))
 	_, err = buildSQL(castSQL)
