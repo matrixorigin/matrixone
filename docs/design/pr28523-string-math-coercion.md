@@ -1,19 +1,20 @@
 # PR #28523: String Math Numeric Coercion and Prepared-Parameter Roles
 
 - Status: Draft / awaiting maintainer approval
-- Design revision: 8
+- Design revision: 9
 - Issue: [#28487](https://github.com/matrixorigin/matrixone/issues/28487)
 - Implementation PR: [#28523](https://github.com/matrixorigin/matrixone/pull/28523)
-- Current upstream main base: `24e66eba121c781c29998ff2611db11335e3028c`
-- Current main tree: `b717729c7e1b0cc33d808f271f3211e8d6028f37`
+- Current upstream main base: `bc90a61230f02032b06351d0cfb317ae13a08258`
+- Current main tree: `4867dffe812b9c43bd4f1672c2d337da975d734d`
 - Current source inputs: original PR head `d27667a4936e813fb612de6cd245be03a2d6f101`
   (tree `d02aa9a8b2c219b7767b9793c700287ecfc24c0b`) and current main tree
-  `b717729c7e1b0cc33d808f271f3211e8d6028f37`. The original 16 PR commits
-  plus one test/documentation follow-up were replayed onto main
-  `24e66eba121c781c29998ff2611db11335e3028c` in a clean detached worktree;
-  all 17 commits applied without conflicts. The revision-8 source/test
-  snapshot before this design-record update, retaining the previous design
-  record in the tree, is `cd4072a5ce7bb760e9545a09faafb490b2564964`.
+  `4867dffe812b9c43bd4f1672c2d337da975d734d`. The revision-8 candidate,
+  previously based on main `24e66eba121c781c29998ff2611db11335e3028c`
+  (tree `b717729c7e1b0cc33d808f271f3211e8d6028f37`), was rebased onto this
+  main in an isolated worktree; all 19 candidate commits replayed without
+  conflicts. The validated code/test commit before this revision-9
+  design-record refresh is `e0bc0aabc16217dbb1bef9df655d83e04da59d26`
+  (tree `8f419516495fb55333aa71c9e3b50f5b5e75342c`).
 - The initial rebase had two shared paths with main since the historical
   base, `pkg/sql/plan/base_binder.go` and `pkg/sql/plan/utils.go`; both applied
   cleanly. The `4c31142` to `a3ede72` delta added 18 paths and the subsequent
@@ -33,9 +34,13 @@
   (`fix: make aggregate states version compatible`), `db3915689fc9bccfd58a1a05b38b6e5329d43190`
   (`fix(snapshot): reject RESTORE TABLE of referenced tables`), and
   `5453d72b7372a9f77263d1dd4c982e616446d4cb`
-  (`fix(fulltext2): avoid boxing loaded UUID membership probes`), and
+  (`fix(fulltext2): avoid boxing loaded UUID membership probes`),
   `24e66eba121c781c29998ff2611db11335e3028c`
-  (`fix: release embedded cluster ownership after terminal cleanup`).
+  (`fix: release embedded cluster ownership after terminal cleanup`),
+  `2243a0b636e18ebae82400246893e796dd4d6a6c` (`fix(window): spill internal sorting when sort_spill_mem is
+  reached (#28877)`), and `bc90a61230f02032b06351d0cfb317ae13a08258`
+  (`test: contain shared CN state failures and attribute race UT stalls
+  (#29043)`).
 - Historical code/test baseline: `d56711fa5b429e5e6e52f64f603d2e853478edca`
   on base `4ff27bb9b35c43c1b0961bb9a01bf8fc0b6a2171`; its 14-commit rebase,
   validation, and gofmt-only correction remain historical evidence below.
@@ -284,39 +289,40 @@ asserted before timing. The generic specialization rows include the existing
 comparison/common-type plan shapes; they are a rebinding baseline, not a claim
 that every string-math executor has identical cost.
 
-Revision-8 candidate source-discovery measurement (2026-09-17, Darwin/arm64,
-Apple M1; the wrapper's default benchmark duration and CPU count; three
-samples) used:
+Revision-9 post-rebase candidate source-discovery measurement (2026-09-17,
+Darwin/arm64, Apple M1; the wrapper's default benchmark duration and CPU
+count; three samples) used:
 
 ```text
 .agents/skills/mo-dev/scripts/mo-cgo-test -run '^$' -bench '^BenchmarkPreparedStringMathRoleDiscovery$' -benchmem -count=3 ./pkg/sql/plan
 ```
 
-The command exited 0 in 40.514s. All samples reported `0 B/op` and
-`0 allocs/op`; the raw `ns/op` samples were:
+The command exited 0 in 40.961s. The Go runtime reported that sonic/ast was
+outside its supported Go version range and fell back to `encoding/json`.
+All samples reported `0 B/op` and `0 allocs/op`; the raw `ns/op` samples were:
 
 | Path/case | Sample 1 | Sample 2 | Sample 3 |
 | --- | ---: | ---: | ---: |
-| ABS value P1 | 2,694 | 2,724 | 2,691 |
-| ROUND control P1 | 2,729 | 2,732 | 2,735 |
-| ABS(ROUND precision) P1 | 2,782 | 2,792 | 2,795 |
-| ROUND(ABS value) P1 | 2,777 | 2,785 | 2,930 |
-| CONCAT no-match P1 | 2,696 | 2,706 | 2,689 |
-| ABS does not own LENGTH argument P1 | 2,727 | 2,714 | 2,743 |
-| nested ABS owner through LENGTH P1 | 2,721 | 2,713 | 2,768 |
-| ROUND does not own CONCAT argument P1 | 2,820 | 2,819 | 2,811 |
-| deep no-match P8/D8/N128 | 50,159 | 49,923 | 49,883 |
-| mixed roles P5/N128 | 23,484 | 23,443 | 23,460 |
+| ABS value P1 | 2,702 | 2,685 | 2,688 |
+| ROUND control P1 | 2,742 | 2,736 | 2,721 |
+| ABS(ROUND precision) P1 | 2,780 | 2,777 | 2,778 |
+| ROUND(ABS value) P1 | 2,773 | 2,777 | 2,786 |
+| CONCAT no-match P1 | 2,708 | 2,684 | 2,707 |
+| ABS does not own LENGTH argument P1 | 2,868 | 2,730 | 2,814 |
+| nested ABS owner through LENGTH P1 | 2,710 | 2,718 | 2,720 |
+| ROUND does not own CONCAT argument P1 | 2,793 | 2,793 | 2,808 |
+| deep no-match P8/D8/N128 | 50,759 | 50,524 | 50,925 |
+| mixed roles P5/N128 | 23,773 | 23,424 | 23,408 |
 
-The no-match deep case is about 11.6% slower than the immediately preceding
+The no-match deep case is about 13.5% slower than the immediately preceding
 per-edge descendant-scan diagnostic (44,734/44,629/45,062 ns/op); that earlier
 command failed overall because three benchmark fixtures queried position 0
 while their markers were at positions 13–15, although the no-match case itself
 passed. Revision 8 corrected those benchmark positions and added the
-no-inherited-role fast path. The current run is the valid all-cases-passing
-candidate measurement; the modest no-match delta remains visible for review
-rather than being presented as an improvement. No one-pass role cache or
-cross-execution cache is introduced.
+no-inherited-role fast path. This post-rebase run is the valid
+all-cases-passing candidate measurement; the no-match delta remains visible
+for review rather than being presented as an improvement. No one-pass role
+cache or cross-execution cache is introduced.
 
 The specialization rows include `DeepCopyPlan` and the complete rebinding
 walk, so they are end-to-end execute-copy costs rather than scan-only costs.
@@ -724,15 +730,14 @@ Known limitations: strict string precision behavior is intentionally not a
 claim of full MySQL integer-prefix compatibility; upgrade/downgrade topology
 and unrelated historical behavior such as FLOOR(NULL) are outside this scope.
 
-## Current owner-boundary implementation evidence (revision 8)
+## Current owner-boundary implementation evidence (revision 9)
 
-This evidence applies to the isolated exact-rebase worktree with Git HEAD
-`273d00ea06bd634dee4ab382d2153ba0fbe6bdc1` on integration base
-`24e66eba121c781c29998ff2611db11335e3028c` (main tree
-`b717729c7e1b0cc33d808f271f3211e8d6028f37`). The source/test tree before this
-documentation-only update is `cd4072a5ce7bb760e9545a09faafb490b2564964`.
-This is a local implementation and validation record, not CI or maintainer
-approval.
+This evidence applies to the isolated post-rebase candidate code/test commit
+`e0bc0aabc16217dbb1bef9df655d83e04da59d26` (tree
+`8f419516495fb55333aa71c9e3b50f5b5e75342c`) on integration base
+`bc90a61230f02032b06351d0cfb317ae13a08258` (main tree
+`4867dffe812b9c43bd4f1672c2d337da975d734d`). This is local implementation
+and validation evidence, not current PR CI or maintainer approval.
 
 Before the production change, the focused planner tests failed with concrete
 ownership violations:
@@ -772,50 +777,61 @@ by the plan tests. The bounded verification commands passed:
 
 ```text
 .agents/skills/mo-dev/scripts/mo-cgo-test -count=1 ./pkg/sql/plan -run '^(TestPreparedStringMathRoleDiscoveryAcrossExpressionContainers|TestPreparedNumericRebindingStopsAtNonNumericFunctionArguments)$'
+.agents/skills/mo-dev/scripts/mo-cgo-test -race -count=1 -run '^(TestPreparedStringMathRoleDiscoveryAcrossExpressionContainers|TestPreparedNumericRebindingStopsAtNonNumericFunctionArguments)$' ./pkg/sql/plan
 .agents/skills/mo-dev/scripts/mo-cgo-test -count=1 -timeout=600s ./pkg/sql/plan
+.agents/skills/mo-dev/scripts/mo-cgo-test -count=1 -timeout=600s ./pkg/sql/plan/function
 .agents/skills/mo-dev/scripts/mo-cgo-test -count=1 ./pkg/tests/issues -run '^TestIssue27294PreparedNumericOverloads$'
+go vet -mod=readonly ./pkg/sql/plan ./pkg/sql/plan/function ./pkg/tests/issues
 gofmt -d pkg/sql/plan/prepared_string_math_measure_test.go pkg/sql/plan/utils.go pkg/sql/plan/visit_plan_rule.go pkg/tests/issues/issue_27294_test.go
-git diff --check
+git diff --check origin/main...HEAD
 ```
 
-The focused CGo planner command exited 0 (`pkg/sql/plan`, 1.636s); the full
-`pkg/sql/plan` CGo suite exited 0 in 5.810s; the final public COM_STMT command
-exited 0 (`pkg/tests/issues`, 13.675s). `gofmt -d` produced no output and
-`git diff --check` passed. Public assertions include the three
-semantic regressions and literal oracle above, MySQL/native `"1.5tail"`
+After rebase, the focused owner-boundary race command exited 0 (`pkg/sql/plan`,
+3.073s), full `pkg/sql/plan` exited 0 (6.039s), full
+`pkg/sql/plan/function` exited 0 (16.849s), and the public COM_STMT regression
+exited 0 (`pkg/tests/issues`, 12.790s). CGo-aware `go vet` for those three
+packages exited 0 with `GOWORK=off` and the candidate `cgo/` plus
+`thirdparties/install/{include,lib}` flags. Go 1.26.4 `gofmt -d` produced no
+output and `git diff --check origin/main...HEAD` passed. Public assertions include the
+three semantic regressions and literal oracle above, MySQL/native `"1.5tail"`
 behavior on the same prepared template, nested `LENGTH(ABS(?))`, precision
 control ownership, explicit CAST preservation, and the passing ROUND/CONCAT
 control.
 
-The corrected role-discovery benchmark command and raw samples are recorded in
-Section 4. In summary, it exited 0 and all ten cases passed; the deep
-no-match P8/D8/N128 case measured 50,159/49,923/49,883 ns/op with zero
-allocations. The earlier per-edge descendant-scan diagnostic measured
-44,734/44,629/45,062 ns/op for that case but failed overall because three
-benchmark fixtures queried position 0 while storing markers at 13–15. The
-current benchmark fixtures were corrected and the modest timing difference is
-reported transparently above. This is a narrow source-discovery diagnostic;
-it does not establish the PR-wide merged changed-line coverage gate.
+The corrected post-rebase role-discovery benchmark exited 0 in 40.961s and all
+ten cases passed; the deep no-match P8/D8/N128 case measured
+50,759/50,524/50,925 ns/op with zero allocations. The previous per-edge
+descendant-scan diagnostic measured 44,734/44,629/45,062 ns/op but failed
+overall because three benchmark fixtures queried position 0 while their
+markers were at 13–15. The current run is valid and its modest no-match timing
+delta is reported above. This is a narrow source-discovery diagnostic; it
+does not establish the PR-wide merged changed-line coverage gate.
 
-No current GitHub CI, distributed BVT, or PR-wide coverage-gate pass is
-claimed here. The historical CI failure/timeout remains historical and is not
-attributed to this implementation without a reproduction. Maintainer design
-approval remains pending.
+The published PR head remains `d27667a4936e813fb612de6cd245be03a2d6f101`, so
+no GitHub CI has run on this local candidate. On that old head, CI run
+`35197284882` passed SCA, shared build, UT coverage producer, and selected
+Compose BVT jobs, but Ubuntu UT failed after 2h03m47s with failures/timeouts in
+`pkg/tests/issues`, `pkg/tests/dml`, and `pkg/tests/sqlintegration`; the
+Coverage merge job failed because a required producer artifact was missing,
+so no coverage threshold verdict was produced. These failures have not been
+reproduced on a clean base and are not attributed to this local delta.
+Distributed BVT and the PR-wide changed-line coverage gate are not claimed.
+Maintainer design approval remains pending.
 
 ## 7. Approval record
 
 ```text
 Design path: docs/design/pr28523-string-math-coercion.md
-Design revision: 8
-Candidate source inputs: PR d27667a4936e813fb612de6cd245be03a2d6f101 (tree d02aa9a8b2c219b7767b9793c700287ecfc24c0b), rebased as 16 commits plus one test/documentation follow-up onto main 24e66eba121c781c29998ff2611db11335e3028c (tree b717729c7e1b0cc33d808f271f3211e8d6028f37); revision-8 source/test snapshot cd4072a5ce7bb760e9545a09faafb490b2564964 and local owner-boundary validation are recorded above
-Integration base: 24e66eba121c781c29998ff2611db11335e3028c (tree b717729c7e1b0cc33d808f271f3211e8d6028f37)
+Design revision: 9
+Candidate source inputs: PR d27667a4936e813fb612de6cd245be03a2d6f101 (tree d02aa9a8b2c219b7767b9793c700287ecfc24c0b), revision-8 candidate rebased as 19 commits onto main bc90a61230f02032b06351d0cfb317ae13a08258 (tree 4867dffe812b9c43bd4f1672c2d337da975d734d); tested code/test commit e0bc0aabc16217dbb1bef9df655d83e04da59d26 and tree 8f419516495fb55333aa71c9e3b50f5b5e75342c are recorded above
+Integration base: bc90a61230f02032b06351d0cfb317ae13a08258 (tree 4867dffe812b9c43bd4f1672c2d337da975d734d)
 Scope/trigger: PR reviews 5199052257, 5214666396 and comment 5687377735; >500 production lines and planner/plan compatibility boundary
 Reviewer identity and role: historical GPT-6 Astra review of d56711fa5b429e5e6e52f64f603d2e853478edca against base 4ff27bb9b35c43c1b0961bb9a01bf8fc0b6a2171; any exact-head review decision is tracked separately from maintainer design approval
-Review timestamp: historical revision-7 review was recorded 2026-09-17; the owner-boundary revision-8 delta has not yet received maintainer approval; see the PR/evidence ledger for later exact-head reviews
+Review timestamp: historical revision-7 review was recorded 2026-09-17; the revision-9 exact-candidate review is recorded separately from the maintainer design-approval decision in the PR/evidence ledger
 Decision: DRAFT / AWAITING MAINTAINER APPROVAL
-Validation evidence: exact clean-rebase CGo runs passed for plan, plan/function, compile, aggexec, iscp, frontend, MySQL parser, fulltext2, cnservice, embed, and TestIssue27294PreparedNumericOverloads; revision-8 focused owner-boundary planner tests, corrected role-discovery benchmark, and public COM_STMT regression also passed locally; none of these are current CI/BVT or a PR-wide merged changed-line coverage pass, and maintainer design approval remains pending
-Decisions proposed for maintainer acceptance: retain strict INT64 precision controls (no general integer-prefix widening); prefer correctness over function-wide zonemap pruning; retain the bounded per-parameter source scan with its measured owner-boundary traversal cost; approve the revision-8 argument-owner boundaries and no-inherited-role fast path
-Evidence links: [PR #28523](https://github.com/matrixorigin/matrixone/pull/28523); the PR/evidence ledger is the record for commit replay, review, CI, and BVT; historical CI run 34813866468 and the older local linter/BVT and d56711fa evidence are historical; current local CGo tests and formatting checks are recorded above
+Validation evidence: local post-rebase full CGo tests for plan and plan/function, focused owner-boundary race tests, TestIssue27294PreparedNumericOverloads, CGo-aware go vet, Go 1.26.4 formatting, and the corrected benchmark passed; none is current PR CI, distributed BVT, or a PR-wide merged changed-line coverage pass
+Decisions proposed for maintainer acceptance: retain strict INT64 precision controls (no general integer-prefix widening); prefer correctness over function-wide zonemap pruning; retain the bounded per-parameter source scan with its measured owner-boundary traversal cost; approve the revision-9 argument-owner boundaries and no-inherited-role fast path
+Evidence links: [PR #28523](https://github.com/matrixorigin/matrixone/pull/28523); [historical-head CI run 35197284882](https://github.com/matrixorigin/matrixone/actions/runs/35197284882); the PR/evidence ledger is the record for commit replay, review, CI, and BVT; current local post-rebase evidence is recorded above
 Implementation deviations requiring follow-up: MOD native arithmetic widening regression fixed in 8fc4d5250; strict INT64 precision acceptance, zonemap-pruning decision, and scan-cost acceptance remain pending
 Approval link: pending maintainer review
 ```
