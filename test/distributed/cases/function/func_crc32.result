@@ -110,6 +110,32 @@ crc32(a)    b
 634125391    9
 null    10
 drop table t1;
+drop table if exists crc32_json_api;
+create table crc32_json_api(id int primary key, doc json);
+insert into crc32_json_api values (1, '{"b":2,"a":1}'), (2, '[1,true,"x"]');
+prepare crc32_json_stmt from 'select crc32(doc) from crc32_json_api where id = ?';
+set @crc32_json_id = 1;
+execute crc32_json_stmt using @crc32_json_id;
+crc32(doc)
+733321759
+set @crc32_json_id = 2;
+execute crc32_json_stmt using @crc32_json_id;
+crc32(doc)
+3071756745
+deallocate prepare crc32_json_stmt;
+create view crc32_json_view as select id, crc32(doc) as checksum from crc32_json_api;
+select id, checksum from crc32_json_view order by id;
+id    checksum
+1    733321759
+2    3071756745
+create table crc32_json_ctas as select id, crc32(doc) as checksum from crc32_json_api;
+select id, checksum from crc32_json_ctas order by id;
+id    checksum
+1    733321759
+2    3071756745
+drop view crc32_json_view;
+drop table crc32_json_ctas;
+drop table crc32_json_api;
 
 drop table if exists crc32_binary;
 create table crc32_binary(id int, b varbinary(2));

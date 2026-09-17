@@ -15,6 +15,7 @@
 package function
 
 import (
+	stdcrc32 "hash/crc32"
 	"strings"
 	"testing"
 
@@ -23,6 +24,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
+
+func independentCRC32Bytes(values ...[]byte) []uint32 {
+	out := make([]uint32, len(values))
+	for i, value := range values {
+		out[i] = stdcrc32.ChecksumIEEE(value)
+	}
+	return out
+}
 
 func TestCRC32AcceptsScalarArgumentsWithoutChangingStringDomains(t *testing.T) {
 	proc := testutil.NewProcess(t)
@@ -90,15 +99,24 @@ func TestCRC32JSONUsesSerializedText(t *testing.T) {
 	nulls := []bool{false, false, false, false, false, false, false, true}
 	encoded := makeJSONEncodedFromText(t, jsonTexts, nulls)
 
-	// These checksums are for the independent visible JSON bytes:
-	// {"a": 1, "b": 2}, [1, true, "x"], 1, "x", true, false, null.
+	// Build the expected values from explicit visible bytes with the standard
+	// library. This intentionally does not call MatrixOne's JSON serializer.
+	expected := independentCRC32Bytes(
+		[]byte(`{"a": 1, "b": 2}`),
+		[]byte(`[1, true, "x"]`),
+		[]byte(`1`),
+		[]byte(`"x"`),
+		[]byte(`true`),
+		[]byte(`false`),
+		[]byte(`null`),
+		[]byte(nil),
+	)
 	testCase := NewFunctionTestCase(
 		proc,
 		[]FunctionTestInput{
 			NewFunctionTestInput(types.T_json.ToType(), encoded, nulls),
 		},
-		NewFunctionTestResult(types.T_uint32.ToType(), false,
-			[]uint32{733321759, 3071756745, 2212294583, 4128176518, 4261170317, 734881840, 634125391, 0},
+		NewFunctionTestResult(types.T_uint32.ToType(), false, expected,
 			[]bool{false, false, false, false, false, false, false, true}),
 		newCrc32ExecContext().builtInCrc32,
 	)
@@ -219,13 +237,16 @@ func TestCRC32JSONLongSerializedValues(t *testing.T) {
 	}
 	encoded := makeJSONEncodedFromText(t, jsonTexts, nil)
 
-	// The expected values are CRC32 checksums of the quoted JSON strings at
-	// serialized lengths 65534, 65535, 65536, and 131072 respectively.
+	expected := make([]uint32, len(payloadLengths))
+	for i, payloadLength := range payloadLengths {
+		visible := append([]byte{'"'}, []byte(strings.Repeat("x", payloadLength))...)
+		visible = append(visible, '"')
+		expected[i] = stdcrc32.ChecksumIEEE(visible)
+	}
 	testCase := NewFunctionTestCase(
 		proc,
 		[]FunctionTestInput{NewFunctionTestInput(types.T_json.ToType(), encoded, nil)},
-		NewFunctionTestResult(types.T_uint32.ToType(), false,
-			[]uint32{3992308327, 2483886726, 1132015800, 3633420607}, nil),
+		NewFunctionTestResult(types.T_uint32.ToType(), false, expected, nil),
 		newCrc32ExecContext().builtInCrc32,
 	)
 	succeed, info := testCase.Run()
