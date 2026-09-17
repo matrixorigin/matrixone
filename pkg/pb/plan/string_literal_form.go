@@ -832,9 +832,10 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				overloadID := int32(fn.Func.Obj)
 				switch functionID {
 				case remoteFrechetDistanceFunctionID, remoteHausdorffDistanceFunctionID:
-					// The existing two-argument overloads now dispatch geodetic
-					// semantics for SRID 4326, so every overload is fenced.
-					features.SpatialDistanceSemantics = true
+					// Overloads 0/1 are the historical planar identities. The
+					// unit overloads 2/3 and the corrected two-argument
+					// geodetic identities 4/5 are v86 contracts.
+					features.SpatialDistanceSemantics = overloadID >= 2 && overloadID <= 5
 				case remoteSpatialDistanceFunctionID:
 					// ST_DISTANCE overloads 4/5 are the new length-unit forms.
 					// Legacy two-argument and explicit-SRID forms retain their

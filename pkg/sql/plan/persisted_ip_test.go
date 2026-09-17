@@ -719,8 +719,8 @@ func TestPersistedExpressionProtocolAdmissionForSpatialDistance(t *testing.T) {
 		name string
 		expr *planpb.Expr
 	}{
-		{name: "frechet legacy", expr: spatialExpr(506, 0)},
-		{name: "hausdorff legacy", expr: spatialExpr(507, 1)},
+		{name: "frechet geodetic", expr: spatialExpr(506, 4)},
+		{name: "hausdorff geodetic", expr: spatialExpr(507, 4)},
 		{name: "distance unit", expr: spatialExpr(421, 4)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

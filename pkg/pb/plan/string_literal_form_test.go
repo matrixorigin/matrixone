@@ -875,14 +875,18 @@ func TestRequiredRemoteExpressionFeaturesSpatialDistance(t *testing.T) {
 		overload int32
 		want     bool
 	}{
-		{name: "legacy frechet geometry", id: remoteFrechetDistanceFunctionID, overload: 0, want: true},
-		{name: "legacy frechet geometry32", id: remoteFrechetDistanceFunctionID, overload: 1, want: true},
+		{name: "legacy frechet geometry", id: remoteFrechetDistanceFunctionID, overload: 0},
+		{name: "legacy frechet geometry32", id: remoteFrechetDistanceFunctionID, overload: 1},
 		{name: "unit frechet geometry", id: remoteFrechetDistanceFunctionID, overload: 2, want: true},
 		{name: "unit frechet geometry32", id: remoteFrechetDistanceFunctionID, overload: 3, want: true},
-		{name: "legacy hausdorff geometry", id: remoteHausdorffDistanceFunctionID, overload: 0, want: true},
-		{name: "legacy hausdorff geometry32", id: remoteHausdorffDistanceFunctionID, overload: 1, want: true},
+		{name: "geodetic frechet geometry", id: remoteFrechetDistanceFunctionID, overload: 4, want: true},
+		{name: "geodetic frechet geometry32", id: remoteFrechetDistanceFunctionID, overload: 5, want: true},
+		{name: "legacy hausdorff geometry", id: remoteHausdorffDistanceFunctionID, overload: 0},
+		{name: "legacy hausdorff geometry32", id: remoteHausdorffDistanceFunctionID, overload: 1},
 		{name: "unit hausdorff geometry", id: remoteHausdorffDistanceFunctionID, overload: 2, want: true},
 		{name: "unit hausdorff geometry32", id: remoteHausdorffDistanceFunctionID, overload: 3, want: true},
+		{name: "geodetic hausdorff geometry", id: remoteHausdorffDistanceFunctionID, overload: 4, want: true},
+		{name: "geodetic hausdorff geometry32", id: remoteHausdorffDistanceFunctionID, overload: 5, want: true},
 		{name: "new distance geometry unit", id: remoteSpatialDistanceFunctionID, overload: 4, want: true},
 		{name: "new distance geometry32 unit", id: remoteSpatialDistanceFunctionID, overload: 5, want: true},
 		{name: "legacy distance", id: remoteSpatialDistanceFunctionID, overload: 0, want: false},

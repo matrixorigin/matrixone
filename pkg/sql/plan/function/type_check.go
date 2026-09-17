@@ -446,6 +446,20 @@ func hexTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 // the prepared execution rebinder can select the unit overload once the value
 // domain is known.
 func spatialDistanceTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	// The two-argument Fréchet/Hausdorff contracts were corrected to use
+	// geodetic meters for SRID 4326. Keep overloads 0/1 as the historical
+	// planar identities for old serialized plans, and select the new 4/5
+	// identities for newly bound SQL. ST_DISTANCE has no such two-argument
+	// replacement, so the shape check below leaves it on the ordinary matcher.
+	if len(inputs) == 2 {
+		for i := 4; i < len(overloads); i++ {
+			if len(overloads[i].args) == 2 &&
+				overloads[i].args[0] == inputs[0].Oid &&
+				overloads[i].args[1] == inputs[1].Oid {
+				return newCheckResultWithSuccess(i)
+			}
+		}
+	}
 	if len(inputs) == 3 && inputs[2].Oid.IsMySQLString() {
 		return stringDomainFixedTypeMatch(overloads, inputs)
 	}
