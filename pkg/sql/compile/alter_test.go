@@ -776,6 +776,7 @@ func TestApplyAlterCopyForeignKeyStateCanonicalizesLegacySelfReference(t *testin
 				c,
 				replacement,
 				[]*plan2.ForeignKeyDef{sourceForeignKey},
+				nil,
 				[]uint64{reverseMarker},
 				map[uint64]*plan2.ColDef{1: {ColId: 101}},
 				10,
@@ -784,6 +785,52 @@ func TestApplyAlterCopyForeignKeyStateCanonicalizesLegacySelfReference(t *testin
 			require.Equal(t, uint64(10), sourceForeignKey.ForeignTbl)
 		})
 	}
+}
+
+func TestCollectAlterCopyAddedForeignKeys(t *testing.T) {
+	qry := &plan2.AlterTable{
+		Database: "db",
+		TableDef: &plan2.TableDef{Name: "child"},
+		Actions: []*plan2.AlterTable_Action{
+			{Action: &plan2.AlterTable_Action_AddFk{AddFk: &plan2.AlterTableAddFk{
+				DbName: "db", TableName: "child", Cols: []string{"parent_id"},
+				Fkey: &plan2.ForeignKeyDef{Name: "fk_self"},
+			}}},
+			{Action: &plan2.AlterTable_Action_AddFk{AddFk: &plan2.AlterTableAddFk{
+				DbName: "db", TableName: "parent", Cols: []string{"parent_id"},
+				Fkey: &plan2.ForeignKeyDef{Name: "fk_parent"},
+			}}},
+		},
+	}
+	replacement := &plan2.TableDef{Fkeys: []*plan2.ForeignKeyDef{
+		{Name: "fk_existing", Cols: []uint64{101}, ForeignTbl: 50, ForeignCols: []uint64{51}},
+		{Name: "FK_SELF", Cols: []uint64{102}, ForeignTbl: 0, ForeignCols: []uint64{101}},
+		{Name: "fk_parent", Cols: []uint64{102}, ForeignTbl: 50, ForeignCols: []uint64{51}},
+	}}
+
+	foreignKeys, err := collectAlterCopyAddedForeignKeys(
+		context.Background(), qry, replacement,
+	)
+	require.NoError(t, err)
+	require.Len(t, foreignKeys, 2)
+	require.Equal(t, []uint64{102}, foreignKeys[0].Cols)
+	require.Equal(t, []uint64{101}, foreignKeys[0].ForeignCols)
+	require.Equal(t, uint64(0), foreignKeys[0].ForeignTbl)
+	require.Equal(t, []uint64{102}, foreignKeys[1].Cols)
+	require.Equal(t, []uint64{51}, foreignKeys[1].ForeignCols)
+	require.Equal(t, uint64(50), foreignKeys[1].ForeignTbl)
+	foreignKeys[0].Cols[0] = 999
+	require.Equal(t, []uint64{102}, replacement.Fkeys[1].Cols)
+
+	merged, refChildren, err := mergeAlterCopyAddedForeignKeys(
+		context.Background(),
+		[]*plan2.ForeignKeyDef{{Name: "fk_existing"}},
+		[]uint64{7},
+		foreignKeys,
+	)
+	require.NoError(t, err)
+	require.Len(t, merged, 3)
+	require.Equal(t, []uint64{7, 0}, refChildren)
 }
 
 func TestReconcileRefChildTableIDForAlterCopy(t *testing.T) {
