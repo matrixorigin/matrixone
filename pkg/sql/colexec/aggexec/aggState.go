@@ -1238,11 +1238,13 @@ func (ag *aggState) readSpillState(
 		return 0, moerr.NewInvalidInputNoCtxf(
 			"invalid aggregate spill count %d", cnt)
 	}
-	if knownProducerPolicy && cnt > 0 &&
-		info.legacyDistinctFloatKeys && !producerLegacyFloatKeys {
+	if cnt > 0 && distinctFloatArgument(info) && info.legacyDistinctFloatKeys &&
+		(!knownProducerPolicy || !producerLegacyFloatKeys) {
 		// A modern producer may have collapsed distinct NaN bit patterns before
-		// spilling. A legacy receiver cannot reconstruct those missing members;
-		// reject before freeing, allocating, or publishing receiver state.
+		// spilling. A headerless old spill cannot identify its producer policy,
+		// and a modern tagged spill is explicitly incompatible. A legacy receiver
+		// cannot reconstruct missing members in either case; reject before
+		// freeing, allocating, or publishing receiver state.
 		return 0, moerr.NewInvalidStateNoCtx(
 			"cannot restore canonical FLOAT DISTINCT spill into legacy state")
 	}

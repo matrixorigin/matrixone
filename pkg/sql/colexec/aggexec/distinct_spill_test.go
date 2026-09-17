@@ -233,6 +233,12 @@ func TestCountDistinctSpillRestoresAcrossFloatPolicies(t *testing.T) {
 			charVec.Free(mp)
 		}
 	}
+	withoutPolicyHeader := func(payload []byte) []byte {
+		require.GreaterOrEqual(t, len(payload), 16)
+		// Keep the spill magic and trailer, but remove the v-new policy tag and
+		// policy value. This is the headerless layout emitted by older writers.
+		return append(bytes.Clone(payload[:8]), payload[16:]...)
+	}
 
 	t.Run("legacy-to-modern-normalizes-and-deduplicates", func(t *testing.T) {
 		source := makeExec(true)
@@ -261,6 +267,16 @@ func TestCountDistinctSpillRestoresAcrossFloatPolicies(t *testing.T) {
 		result[0].Free(mp)
 		freeOne()
 		target.Free()
+
+		headerlessTarget := makeExec(false)
+		require.NoError(t, headerlessTarget.UnmarshalSpillFromReader(
+			bytes.NewReader(withoutPolicyHeader(spill.Bytes())), mp))
+		headerlessResult, err := headerlessTarget.Flush()
+		require.NoError(t, err)
+		require.Equal(t, []int64{1},
+			vector.MustFixedColNoTypeCheck[int64](headerlessResult[0]))
+		headerlessResult[0].Free(mp)
+		headerlessTarget.Free()
 	})
 
 	t.Run("modern-to-legacy-rejects-before-publication", func(t *testing.T) {
@@ -286,6 +302,15 @@ func TestCountDistinctSpillRestoresAcrossFloatPolicies(t *testing.T) {
 		require.ErrorContains(t, err, "canonical FLOAT DISTINCT spill")
 		require.Equal(t, usedBefore, account.Snapshot().Used)
 		target.Free()
+
+		headerless := withoutPolicyHeader(spill.Bytes())
+		headerlessTarget := makeExec(true)
+		headerlessUsedBefore := account.Snapshot().Used
+		err = headerlessTarget.UnmarshalSpillFromReader(
+			bytes.NewReader(headerless), mp)
+		require.ErrorContains(t, err, "canonical FLOAT DISTINCT spill")
+		require.Equal(t, headerlessUsedBefore, account.Snapshot().Used)
+		headerlessTarget.Free()
 		source.Free()
 	})
 
@@ -321,6 +346,19 @@ func TestCountDistinctSpillRestoresAcrossFloatPolicies(t *testing.T) {
 		require.ErrorContains(t, err, "canonical FLOAT DISTINCT spill")
 		require.Equal(t, usedBefore, account.Snapshot().Used)
 		target.Free()
+
+		headerless := withoutPolicyHeader(spill.Bytes())
+		headerlessTarget := newCountColumnExec(
+			mp, AggIdOfCountColumn, true, []types.Type{typ},
+		).(*countColumnExec)
+		require.NoError(t, headerlessTarget.SetAllocationAccount(allocation))
+		require.NoError(t, ConfigureLegacyDistinctFloatKeys(headerlessTarget, true))
+		headerlessUsedBefore := account.Snapshot().Used
+		err = headerlessTarget.UnmarshalSpillFromReader(
+			bytes.NewReader(headerless), mp)
+		require.ErrorContains(t, err, "canonical FLOAT DISTINCT spill")
+		require.Equal(t, headerlessUsedBefore, account.Snapshot().Used)
+		headerlessTarget.Free()
 		source.Free()
 	})
 }
