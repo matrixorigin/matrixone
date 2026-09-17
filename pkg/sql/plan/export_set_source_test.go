@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
@@ -67,6 +68,28 @@ func TestExportSetFoldedRealRetainsIntegerContract(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestExportSetConditionalAndRelationalScalarOutputs(t *testing.T) {
+	for _, tc := range []struct {
+		source  string
+		integer bool
+	}{
+		{"if(true,(select 1e100),0e0)", true},
+		{"case when true then (select 1e100) else 0e0 end", true},
+		{"(select abs(cast(n_regionkey as double)) from nation limit 1)", true},
+		{"if(true,(select abs(cast(n_regionkey as double)) from nation limit 1),0e0)", true},
+		{"(select abs(1e100))", false},
+		{"ifnull((select 1e100),0e0)", false},
+	} {
+		t.Run(tc.source, func(t *testing.T) {
+			p, err := runOneStmt(NewMockOptimizer(false), t, `select export_set(`+tc.source+`,'Y','N','',4)`)
+			require.NoError(t, err)
+			expr := findPlanFunctionExpr(p, "export_set")
+			require.NotNil(t, expr)
+			require.Equal(t, tc.integer, expr.GetF().Args[0].Typ.Id == int32(types.T_int64), expr.String())
+		})
 	}
 }
 

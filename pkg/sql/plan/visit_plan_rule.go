@@ -2606,7 +2606,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		sqlExecuteNumericPeerDependent := sqlExecuteNumericNestedDependent ||
 			(sqlExecuteNumericSourceDependent &&
 				(functionName == "/" || preparedSQLExecuteNumericResultConsumer(functionName)))
-		if numericPrefixDependent || sqlExecuteNumericPeerDependent {
+		if numericPrefixDependent || sqlExecuteNumericPeerDependent || needResetFunction && isNumericContextFunction(functionName) {
 			var sqlExecuteResultType plan.Type
 			if sqlExecuteNumericPeerDependent {
 				for i, sourceArg := range boundArgs {
@@ -2625,7 +2625,14 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				// so a DECIMAL peer is not left behind a FLOAT cast selected while
 				// the parameter marker was still TEXT.
 				candidate := arg
-				if sqlExecuteNumericPeerDependent && !sqlExecuteNumericSourceArgs[i] && originalArgs[i] != nil {
+				// Prefer the rebound producer: its result domain may have changed
+				// underneath an otherwise unchanged implicit FLOAT envelope.
+				if source, ok := provisionalNumericSource(candidate); ok {
+					boundArgs[i] = source
+					candidate = source
+					needResetFunction = true
+					compareArgTypes = true
+				} else if sqlExecuteNumericPeerDependent && !sqlExecuteNumericSourceArgs[i] && originalArgs[i] != nil {
 					candidate = originalArgs[i]
 					if source, ok := provisionalNumericSource(candidate); ok {
 						boundArgs[i] = source

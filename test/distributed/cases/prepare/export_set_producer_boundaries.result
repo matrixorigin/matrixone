@@ -1,0 +1,88 @@
+PREPARE export_set_boundary FROM "SELECT EXPORT_SET(ABS(?)+0,'Y','N','',4)";
+SET @export_set_value=CAST(2.5 AS DECIMAL(3,1));
+EXECUTE export_set_boundary USING @export_set_value;
+➤ EXPORT_SET(ABS(?) + 0, Y, N, , 4)[12,64,0]  𝄀
+YYNN
+SET @export_set_value='2.5';
+EXECUTE export_set_boundary USING @export_set_value;
+➤ EXPORT_SET(ABS(?) + 0, Y, N, , 4)[12,64,0]  𝄀
+YYNN
+DEALLOCATE PREPARE export_set_boundary;
+PREPARE export_set_boundary FROM "SELECT EXPORT_SET(CAST(ABS(?) AS DOUBLE)+0,'Y','N','',4)";
+SET @export_set_value=CAST(2.5 AS DECIMAL(3,1));
+EXECUTE export_set_boundary USING @export_set_value;
+➤ EXPORT_SET(cast(ABS(?) as double) + 0, Y, N, , 4)[12,64,0]  𝄀
+NYNN
+DEALLOCATE PREPARE export_set_boundary;
+PREPARE export_set_boundary FROM "SELECT EXPORT_SET((SELECT ABS(?)),'Y','N','',4)";
+SET @export_set_value='2.5';
+EXECUTE export_set_boundary USING @export_set_value;
+➤ EXPORT_SET((select ABS(?)), Y, N, , 4)[12,64,0]  𝄀
+NYNN
+SET @export_set_value=CAST(2.5 AS DECIMAL(3,1));
+EXECUTE export_set_boundary USING @export_set_value;
+➤ EXPORT_SET((select ABS(?)), Y, N, , 4)[12,64,0]  𝄀
+NYNN
+SET @export_set_value=NULL;
+EXECUTE export_set_boundary USING @export_set_value;
+➤ EXPORT_SET((select ABS(?)), Y, N, , 4)[12,64,0]  𝄀
+null
+DEALLOCATE PREPARE export_set_boundary;
+PREPARE export_set_boundary FROM "SELECT EXPORT_SET(ABS(?),'Y','N','',4)";
+SET @export_set_value='2.5';
+EXECUTE export_set_boundary USING @export_set_value;
+➤ EXPORT_SET(ABS(?), Y, N, , 4)[12,64,0]  𝄀
+YYNN
+DEALLOCATE PREPARE export_set_boundary;
+PREPARE export_set_boundary FROM "SELECT EXPORT_SET(IF(TRUE,ABS(?),0e0),'Y','N','',4)";
+EXECUTE export_set_boundary USING @export_set_value;
+➤ EXPORT_SET(IF(true, ABS(?), 0e0), Y, N, , 4)[12,64,0]  𝄀
+NYNN
+SET @export_set_value=CAST(2.5 AS DECIMAL(3,1));
+EXECUTE export_set_boundary USING @export_set_value;
+➤ EXPORT_SET(IF(true, ABS(?), 0e0), Y, N, , 4)[12,64,0]  𝄀
+NYNN
+DEALLOCATE PREPARE export_set_boundary;
+PREPARE export_set_boundary FROM "SELECT EXPORT_SET(IF(TRUE,ABS(?),0),'Y','N','',4)";
+EXECUTE export_set_boundary USING @export_set_value;
+➤ EXPORT_SET(IF(true, ABS(?), 0), Y, N, , 4)[12,64,0]  𝄀
+YYNN
+DEALLOCATE PREPARE export_set_boundary;
+SELECT EXPORT_SET(IF(TRUE,(SELECT 1e100),0e0),'Y','N','',4);
+➤ EXPORT_SET(IF(true, (select 1e100), 0e0), Y, N, , 4)[12,64,0]  𝄀
+YYYY
+SELECT EXPORT_SET(CASE WHEN TRUE THEN (SELECT 1e100) ELSE 0e0 END,'Y','N','',4);
+➤ EXPORT_SET(case when true then (select 1e100) else 0e0 end, Y, N, , 4)[12,64,0]  𝄀
+YYYY
+SELECT EXPORT_SET((SELECT ABS(1e100)),'Y','N','',4);
+Data truncation: data out of range: data type int64, value '1e+100'
+SELECT EXPORT_SET((SELECT ABS(1e100) FROM (SELECT 1) d),'Y','N','',4);
+➤ EXPORT_SET((select ABS(1e100) from (select 1) as d), Y, N, , 4)[12,64,0]  𝄀
+YYYY
+DROP TABLE IF EXISTS export_set_producer_real;
+CREATE TABLE export_set_producer_real(x DOUBLE);
+INSERT INTO export_set_producer_real VALUES(1e100),(1e100);
+SELECT EXPORT_SET((SELECT ABS(x) FROM export_set_producer_real LIMIT 1),'Y','N','',4);
+➤ EXPORT_SET((select ABS(x) from export_set_producer_real limit 1), Y, N, , 4)[12,64,0]  𝄀
+YYYY
+SELECT EXPORT_SET(IF(TRUE,(SELECT ABS(x) FROM export_set_producer_real LIMIT 1),0e0),'Y','N','',4);
+➤ EXPORT_SET(IF(true, (select ABS(x) from export_set_producer_real limit 1), 0e0), Y, N, , 4)[12,64,0]  𝄀
+YYYY
+SELECT EXPORT_SET(IF(FALSE,(SELECT ABS(x) FROM export_set_producer_real LIMIT 1),0e0),'Y','N','',4);
+➤ EXPORT_SET(IF(false, (select ABS(x) from export_set_producer_real limit 1), 0e0), Y, N, , 4)[12,64,0]  𝄀
+NNNN
+SELECT EXPORT_SET((SELECT x+0 FROM export_set_producer_real LIMIT 1),'Y','N','',4);
+➤ EXPORT_SET((select x + 0 from export_set_producer_real limit 1), Y, N, , 4)[12,64,0]  𝄀
+YYYY
+SELECT EXPORT_SET((SELECT SUM(x) FROM export_set_producer_real),'Y','N','',4);
+➤ EXPORT_SET((select SUM(x) from export_set_producer_real), Y, N, , 4)[12,64,0]  𝄀
+YYYY
+SELECT EXPORT_SET((SELECT FIRST_VALUE(x) OVER() FROM export_set_producer_real LIMIT 1),'Y','N','',4);
+➤ EXPORT_SET((select FIRST_VALUE(x) over () from export_set_producer_real limit 1), Y, N, , 4)[12,64,0]  𝄀
+YYYY
+SELECT EXPORT_SET((SELECT ABS(x) FROM export_set_producer_real WHERE FALSE),'Y','N','',4);
+➤ EXPORT_SET((select ABS(x) from export_set_producer_real where false), Y, N, , 4)[12,64,0]  𝄀
+null
+SELECT EXPORT_SET((SELECT ABS(x) FROM export_set_producer_real),'Y','N','',4);
+Subquery returns more than 1 row
+DROP TABLE export_set_producer_real;

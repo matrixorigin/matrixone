@@ -3585,13 +3585,15 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 	if err != nil {
 		return nil, err
 	}
-	if _, direct := unwrapParenExpr(astArgs[0]).(*tree.ParamExpr); direct && strings.EqualFold(name, "abs") {
+	if strings.EqualFold(name, "abs") {
 		marker := arg
-		for marker.GetF() != nil && marker.GetF().Func.ObjName == "cast" && len(marker.GetF().Args) > 0 {
+		for isImplicitPreparedParamCast(marker) {
 			marker = marker.GetF().Args[0]
 		}
 		if marker.GetP() != nil {
-			ensurePreparedNumericMetadata(marker).InitialNumericType = int32(types.T_decimal128)
+			// An independent numeric producer defaults to REAL. An integer
+			// consumer in this same expression may establish an exact default.
+			ensurePreparedNumericMetadata(marker).InitialNumericType = int32(types.T_float64)
 		}
 	}
 	if (strings.EqualFold(name, "abs") && !hasExplicitFloatCast) ||
@@ -3871,19 +3873,15 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			b.markPreparedNumericFallback(args[0])
 		}
 	}
-	if name == "export_set" && len(args) > 0 && b.builder != nil && types.T(args[0].Typ.Id).IsFloat() {
-		if sub := args[0].GetSub(); sub != nil && sub.Typ == plan.SubqueryRef_SCALAR && sub.NodeId >= 0 && int(sub.NodeId) < len(b.builder.qry.Nodes) {
-			node := b.builder.qry.Nodes[sub.NodeId]
-			if node != nil && len(node.ProjectList) == 1 && exportSetRealLeafSaturates(node.ProjectList[0]) {
-				// Convert at the scalar consumer, not inside its query: preserve
-				// empty/multiple-row behavior and do not change shared producers.
-				converted, err := appendBitwiseAggregateCastBeforeExpr(b.GetContext(), args[0], makeSimplePlan2Type(types.T_int64))
-				if err != nil {
-					return nil, err
-				}
-				args[0] = converted
-			}
+	if name == "export_set" && len(args) > 0 {
+		if b.builder != nil && b.builder.isPrepareStatement {
+			markPreparedExportSetNumericDefaults(args[0])
 		}
+		converted, _, err := b.bindExportSetScalarIntegerSources(args[0])
+		if err != nil {
+			return nil, err
+		}
+		args[0] = converted
 	}
 	preparedNumericPeer := false
 	preparedNumericProvenance := false

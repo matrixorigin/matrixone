@@ -33,7 +33,8 @@ func (prepareStmt *PrepareStmt) refreshExportSetParamPositions(p *plan2.Plan, pa
 	prepareStmt.exportSetParamDefaults = plan2.PreparedPlanNumericParameterDefaults(p)
 	prepareStmt.exportSetParamTypes = make([]types.Type, paramCount)
 	for pos, typ := range domains {
-		if pos >= 0 && int(pos) < paramCount && prepareStmt.exportSetParamDefaults[pos].Oid == types.T_any {
+		if pos >= 0 && int(pos) < paramCount &&
+			(prepareStmt.exportSetParamDefaults[pos].Oid == types.T_any || prepareStmt.exportSetParamDefaults[pos].Oid.IsFloat()) {
 			prepareStmt.exportSetParamTypes[pos] = typ
 		}
 	}
