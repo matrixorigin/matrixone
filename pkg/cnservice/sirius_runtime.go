@@ -55,6 +55,9 @@ func (s *service) startSiriusRuntime(ctx context.Context) error {
 	if !config.Enabled {
 		return nil
 	}
+	if err := config.validateBackend(); err != nil {
+		return err
+	}
 	if config.BenchmarkNoGC {
 		if !config.benchmarkGCDisabled {
 			return siriusInternalErrorf("substrait: Sirius benchmark-no-gc requires verified TN GC disablement")
@@ -96,7 +99,7 @@ func (s *service) startSiriusRuntime(ctx context.Context) error {
 		return errors.Join(err, resolver.Close(cleanupCtx))
 	}
 	runtime := &compile.SiriusRuntime{
-		Flight: flight, Leases: s.options.siriusLeases, Resolver: resolver,
+		Backend: compile.NewSiriusFlightBackend(flight), Leases: s.options.siriusLeases, Resolver: resolver,
 		AuthorizedClientSPKIHash: authorizedSPKI, DataDir: config.DataDir,
 		LeaseTTL: config.LeaseTTL.Duration, CleanupTimeout: config.CleanupTimeout.Duration,
 		BenchmarkNoGC: config.BenchmarkNoGC,

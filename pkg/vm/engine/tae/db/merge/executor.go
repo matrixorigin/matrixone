@@ -25,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/jobs"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
-	"go.uber.org/zap"
 )
 
 type MergeTaskExecutor interface {
@@ -35,7 +34,6 @@ type MergeTaskExecutor interface {
 // executor consider resources to decide to merge or not.
 type executor struct {
 	rt *dbutils.Runtime
-	// cnSched *CNMergeScheduler
 }
 
 func NewTNMergeExecutor(rt *dbutils.Runtime) *executor {
@@ -50,7 +48,6 @@ func (e *executor) ExecuteFor(target catalog.MergeTable, task mergeTask) (succes
 }
 
 func (e *executor) executeFor(entry *catalog.TableEntry, task mergeTask) (success bool) {
-	kind := task.kind
 	level := task.level
 	note := task.note
 	doneCB := task.doneCB
@@ -71,15 +68,6 @@ func (e *executor) executeFor(entry *catalog.TableEntry, task mergeTask) (succes
 		if o.IsTombstone != task.isTombstone {
 			panic("merging tombstone and data objects in one merge")
 		}
-	}
-
-	if kind != taskHostDN {
-		logutil.Error("MergeExecutorError",
-			zap.String("error", "not supported task host"),
-			zap.String("task", task.String()),
-			zap.String("table", entry.GetNameDesc()),
-		)
-		return
 	}
 
 	return e.scheduleMergeObjects(slices.Clone(objs), entry, task.isTombstone, level, note, doneCB)
