@@ -15,10 +15,10 @@
 package mergeorder
 
 import (
-	"errors"
 	"io"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -284,13 +284,13 @@ func TestAccountedMergeOrderPhysicalPressureSpillsBelowPolicyHint(t *testing.T) 
 
 func TestAccountedMergeOrderSpillResourceAdmissionCleans(t *testing.T) {
 	tests := []struct {
-		name      string
-		component process.ExecutionResourceComponent
-		reserve   func(*process.ExecutionResourceGeneration) (func(), error)
+		name    string
+		message string
+		reserve func(*process.ExecutionResourceGeneration) (func(), error)
 	}{
 		{
-			name:      "disk",
-			component: process.ExecutionResourceComponentSpillDisk,
+			name:    "disk",
+			message: "merge order spill disk budget exceeded",
 			reserve: func(generation *process.ExecutionResourceGeneration) (func(), error) {
 				token, err := generation.ReserveSpillDisk(generation.SpillDiskCap())
 				return func() {
@@ -301,8 +301,8 @@ func TestAccountedMergeOrderSpillResourceAdmissionCleans(t *testing.T) {
 			},
 		},
 		{
-			name:      "file-descriptor",
-			component: process.ExecutionResourceComponentSpillFD,
+			name:    "file-descriptor",
+			message: "merge order spill file descriptor budget exceeded",
 			reserve: func(generation *process.ExecutionResourceGeneration) (func(), error) {
 				token, err := generation.ReserveSpillFD(generation.SpillFDCap())
 				return func() {
@@ -326,22 +326,21 @@ func TestAccountedMergeOrderSpillResourceAdmissionCleans(t *testing.T) {
 					releaseBlocker()
 				}
 			}()
+			op.SpillThreshold = 1
+			child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{
+				newValuesBatch(proc, []int8{1, 2, 3}),
+			})
+			op.AppendChild(child)
 			require.NoError(t, op.Prepare(proc))
 
-			bat := newValuesBatch(proc, []int8{1, 2, 3})
-			_, err = op.ctr.spillBatchToNewRun(
-				proc,
-				bat,
-				nil,
-				process.NewAnalyzer(0, false, false, "mergeorder-admission"),
-			)
-			bat.Clean(proc.Mp())
-			var resourceErr *process.ExecutionResourceError
-			require.True(t, errors.As(err, &resourceErr))
-			require.Equal(t, tc.component, resourceErr.Component)
+			_, err = vm.Exec(op, proc)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM), err)
+			require.Contains(t, err.Error(), tc.message)
+			require.NotContains(t, err.Error(), process.ErrExecutionResourceAdmission.Error())
 
 			releaseBlocker()
 			released = true
+			child.Free(proc, true, err)
 			op.Free(proc, true, err)
 			require.Zero(t, state.generation.SpillDiskUsed())
 			require.Zero(t, state.generation.SpillFDUsed())

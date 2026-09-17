@@ -117,6 +117,7 @@ const (
 	MORPCVersion79     int64 = 79 // canonical opaque DISTINCT argument wire keys
 	MORPCVersion80     int64 = 80 // signed and widened string numeric result contracts
 	MORPCVersion81     int64 = 81 // opt-in table-owned AUTO_ID_CACHE and its PRE_INSERT wire marker
+	MORPCVersion82     int64 = 82 // self-completing fulltext2 json index probe (probe_tail contract)
 	MORPCVersion83     int64 = 83 // bounded COALESCE character and binary result domains
 	MORPCLatestVersion       = MORPCVersion83
 )
