@@ -1,0 +1,13 @@
+-- @suite
+-- @case
+-- @desc:Decimal256 interval keeps exact fractional seconds
+-- @label:bvt
+
+select date_add(cast('2026-01-01 00:00:00' as datetime(6)),
+    interval 1.25000000000000000000000000000000000000 second);
+select date_sub(cast('2026-01-01 00:00:00' as datetime(6)),
+    interval 1.25000000000000000000000000000000000000 second);
+select date_add(cast('2026-01-01 00:00:00' as datetime(6)),
+    interval 1.25000000000000000000000000000000000000 minute);
+select date_add(cast('2026-01-01 00:00:00' as datetime(6)),
+    interval 1.00000050000000000000000000000000000000 second);
