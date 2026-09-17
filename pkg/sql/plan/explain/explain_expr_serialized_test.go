@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"strings"
 	"testing"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -197,6 +198,60 @@ func TestLiteralVecExplainNeverWritesRawNonTextBytes(t *testing.T) {
 	assertPrintableExplainText(t, buf.String())
 	if got, want := buf.String(), "0xFF00"; got != want {
 		t.Fatalf("non-text vector was not rendered canonically: got %q, want %q", got, want)
+	}
+}
+
+func TestJSONExplainPreservesTimestampPrecisionAndCompleteLiteralVector(t *testing.T) {
+	ts, err := types.ParseTimestamp(time.UTC, "2024-01-02 03:04:05.123456", 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	timestamp := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_timestamp), Scale: 6},
+		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+			Value: &planpb.Literal_Timestampval{Timestampval: int64(ts)},
+		}},
+	}
+	var timestampBuf bytes.Buffer
+	if err := describeExpr(t.Context(), timestamp, &ExplainOptions{Format: EXPLAIN_FORMAT_JSON}, &timestampBuf); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := timestampBuf.String(), "2024-01-02 03:04:05.123456"; got != want {
+		t.Fatalf("timestamp precision was not preserved: got %q, want %q", got, want)
+	}
+
+	mp := mpool.MustNew(t.Name())
+	vec := vector.NewVec(types.T_int32.ToType())
+	for i := 1; i <= 17; i++ {
+		if err := vector.AppendFixed[int32](vec, int32(i), false, mp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data, err := vec.MarshalBinary()
+	vec.Free(mp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vectorExpr := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_int32)},
+		Expr: &planpb.Expr_Vec{Vec: &planpb.LiteralVec{Len: 17, Data: data}},
+	}
+	var vectorBuf bytes.Buffer
+	if err := describeExpr(t.Context(), vectorExpr, &ExplainOptions{
+		Format:                 EXPLAIN_FORMAT_TEXT,
+		CompleteLiteralVectors: true,
+	}, &vectorBuf); err != nil {
+		t.Fatal(err)
+	}
+	if got := vectorBuf.String(); !strings.Contains(got, "16") || !strings.Contains(got, "17") {
+		t.Fatalf("complete JSON vector lost its 17th value: %q", got)
+	}
+	var textBuf bytes.Buffer
+	if err := describeExpr(t.Context(), vectorExpr, NewExplainDefaultOptions(), &textBuf); err != nil {
+		t.Fatal(err)
+	}
+	if got := textBuf.String(); !strings.Contains(got, "... 17 values") {
+		t.Fatalf("text EXPLAIN vector truncation changed: %q", got)
 	}
 }
 

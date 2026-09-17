@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -100,6 +101,8 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 			fmt.Fprintf(buf, "%s", types.Datetime(val.Datetimeval).String2(expr.Typ.Scale))
 		case *plan.Literal_Timeval:
 			fmt.Fprintf(buf, "%s", types.Time(val.Timeval).String2(expr.Typ.Scale))
+		case *plan.Literal_Timestampval:
+			fmt.Fprintf(buf, "%s", types.Timestamp(val.Timestampval).String2(time.UTC, expr.Typ.Scale))
 		case *plan.Literal_Sval:
 			if expr.Typ.Id == int32(types.T_geometry) || expr.Typ.Id == int32(types.T_geometry32) {
 				// A geometry literal carries raw WKB bytes that are not
@@ -200,7 +203,7 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 			}
 		}
 	case *plan.Expr_Vec:
-		buf.WriteString(literalVecText(exprImpl.Vec))
+		buf.WriteString(literalVecText(exprImpl.Vec, options != nil && options.CompleteLiteralVectors))
 	case *plan.Expr_T:
 		tt := types.T(expr.Typ.Id)
 		if tt == types.T_decimal64 || tt == types.T_decimal128 {
@@ -226,7 +229,7 @@ func printableVectorText(value string) string {
 	return fmt.Sprintf("0x%X", []byte(value))
 }
 
-func literalVecText(literalVec *plan.LiteralVec) (text string) {
+func literalVecText(literalVec *plan.LiteralVec, complete bool) (text string) {
 	if literalVec == nil {
 		return "<invalid-vector>"
 	}
@@ -251,11 +254,11 @@ func literalVecText(literalVec *plan.LiteralVec) (text string) {
 	}
 
 	originalLen := vec.Length()
-	if originalLen > 16 {
+	if !complete && originalLen > 16 {
 		vec.SetLength(16)
 	}
 	text = printableVectorText(vec.String())
-	if originalLen > 16 {
+	if !complete && originalLen > 16 {
 		text += fmt.Sprintf("... %v values", originalLen)
 	}
 	return text
