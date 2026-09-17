@@ -1,16 +1,17 @@
 # PR #28523: String Math Numeric Coercion and Prepared-Parameter Roles
 
 - Status: Draft / awaiting maintainer approval
-- Design revision: 5
+- Design revision: 6
 - Issue: [#28487](https://github.com/matrixorigin/matrixone/issues/28487)
 - Implementation PR: [#28523](https://github.com/matrixorigin/matrixone/pull/28523)
-- Implementation snapshot reviewed by this revision: `2b2fe56ea3` (post-rebase
-  code/tests baseline; the revision-4 benchmark is test-only and does not
-  change runtime semantics)
-- Rebased implementation base: `66b1672403e9b9efb1971d00b7ea87572891fe2a`
-- Independent design review: GPT-6 Astra, medium reasoning; revision 5 records the
-  requested mode-boundary decision and validation additions, while exact maintainer
-  approval remains pending
+- Rebased main base: `8e8e1998ef02b1f6233ddb1c2d3208f3b70d2d83`
+- Candidate snapshot: HEAD `9845abcce48646a3770c685e15a10f5e4ad23ab5` plus
+  the revision-6 working-tree delta in `pkg/sql/plan/visit_plan_rule.go` and
+  `pkg/sql/plan/base_binder_case_test.go`; validation below was run on that
+  exact uncommitted candidate, not on HEAD alone
+- Independent design review: GPT-6 Astra, medium reasoning, reviewed revision 5
+  as a read-only draft; exact-candidate revision-6 review and maintainer approval
+  remain pending
 - Review trigger: review `5199052257` identified a major-refactor/compatibility design gate; review `5214666396` and comment `5687377735` require incomplete numeric strings to be mode-gated
 
 This document is the stable design revision requested before implementation
@@ -170,8 +171,9 @@ at least `O(P*N)` and can approach `O(P*N*D)` (or `O(P*N^2)` for repeated deep
 subtree checks). Source arrays are `O(P)`, while traversal state follows
 expression depth. The implementation does not claim zero specialization cost.
 
-Revision-4 measurement (retained in revision 5; Apple M1, macOS arm64, Go 1.27.0; one CPU;
-`-benchtime=1s -count=5`) used reproducible benchmark commands:
+Historical revision-4 measurement (Apple M1, macOS arm64, Go 1.27.0; one CPU;
+`-benchtime=1s -count=5`) used reproducible benchmark commands. It predates the
+revision-6 candidate and is not a measurement of the rebased implementation:
 
 ```text
 go test -mod=readonly -run '^$' -bench '^BenchmarkPreparedStringMath(Eligibility|Specialization)$' -benchmem -benchtime=1s -count=5 -cpu=1 ./pkg/sql/plan
@@ -256,18 +258,65 @@ authorized maintainer decision.
 | Resource/state safety | race tests, cancellation/error return paths, and no stale expression reuse after failure |
 | Performance | parameterized plan-size/depth measurements before any scan optimization |
 
-The pre-rebase head `85635cc` passed the required CI run
-`34813866468` (SCA, Ubuntu UT, coverage, build, Compose/Standalone BVT, and
-CI Required); that run is historical and is not evidence for the current head.
-After rebasing onto current `main` `66b1672403`, local validation passed the
-full `pkg/sql/plan/function`, `pkg/sql/plan`, and `pkg/frontend` packages, the
-prepared numeric `-race` focus, the string-math/overload focus, the SQL-mode
-setter regression, `go vet` with repository CGo headers, `make build`, and
-`git diff --check`. A direct current-source MySQL-protocol smoke recorded in
-the validation log also observed `ABS('1.5tail') = 1.5` with `sql_mode=''`, the native conversion
-error with `MATRIXONE_NATIVE`, and the same success/error/success sequence
-after a prepared-statement mode flip. The new distributed fixture remains a
-remote CI/BVT obligation rather than an unrun local claim.
+Rebase integration delta for this candidate:
+
+- Rebased onto the verified main commit `8e8e1998ef02b1f6233ddb1c2d3208f3b70d2d83`,
+  a descendant of the earlier `049dad215cf69bad4e8bd9911169aabe7493d691` base.
+  The rebase conflicts in `pkg/sql/plan/utils.go` and
+  `pkg/sql/plan/visit_plan_rule.go` were resolved locally.
+- The upstream two-view `rebindPreparedNumericExprWithBound(expr, bound,
+  positions)` remains the rebinding foundation, including recursive bound-child
+  propagation, scalar-subquery refresh, explicit-cast metadata, unsupported and
+  NULL bound preservation, and arity-aware ABS/SIGN/ELT handling.
+- The integration keeps the PR's separate SQL-mode-aware string-math source
+  scoped to the nearest value-role occurrence. ROUND/TRUNCATE precision
+  occurrences retain their already-materialized INT64 cast even when they share
+  a ParamRef position with a value occurrence; deferred ABS/SIGN value callers
+  explicitly supply the value role, while ELT's index does not consume that
+  source. Explicit casts and binary provenance are preserved.
+- Regression coverage adds unsupported/NULL-bound preservation, nested
+  ABS/ROUND/TRUNCATE role ownership, shared-ParamRef channel isolation,
+  same-template MySQL/native mode flips, and DECIMAL scale assertions for
+  precision-zero ROUND/TRUNCATE results.
+
+The pre-rebase head `85635cc` passed required CI run `34813866468` (SCA,
+Ubuntu UT, coverage, build, Compose/Standalone BVT, and CI Required); it is
+historical and is not evidence for the current base/candidate. The previously
+recorded full package, frontend, race, vet, build, and protocol-smoke results
+were collected against base `66b1672403e9b9efb1971d00b7ea87572891fe2a`; those
+results are historical as well and are not claimed for this candidate.
+
+On the revision-6 working-tree candidate (HEAD `9845abcce48646a3770c685e15a10f5e4ad23ab5`
+plus the code/test delta above), the following exact CGo-wrapper selection was
+first listed and then executed. `-list` returned six planner tests and three
+function tests (non-empty selection); execution passed with exit code 0:
+
+```text
+.agents/skills/mo-dev/scripts/mo-cgo-test -list '^(TestPreparedEltRebindsRuntimeNumericDomain|TestPreparedSignRebindsRuntimeNumericDomain|TestPreparedMathStringValueAndPrecisionRoles|TestPreparedNumericRebindPreservesUnsupportedAndNullBoundOccurrences|TestPreparedMathStringParametersRebindToNumericOverloads|TestPreparedNestedMathStringParameterRebindsToNumericOverload|TestDirectMathStringExecutorsHonorNativeMode|TestMathStringExecutorsPreserveBinaryLiteralProvenance|TestMathStringExecutorsEmitNumericCoercionWarnings)$' ./pkg/sql/plan ./pkg/sql/plan/function
+.agents/skills/mo-dev/scripts/mo-cgo-test -v -count=1 -timeout=180s -run '^(TestPreparedEltRebindsRuntimeNumericDomain|TestPreparedSignRebindsRuntimeNumericDomain|TestPreparedMathStringValueAndPrecisionRoles|TestPreparedNumericRebindPreservesUnsupportedAndNullBoundOccurrences|TestPreparedMathStringParametersRebindToNumericOverloads|TestPreparedNestedMathStringParameterRebindsToNumericOverload|TestDirectMathStringExecutorsHonorNativeMode|TestMathStringExecutorsPreserveBinaryLiteralProvenance|TestMathStringExecutorsEmitNumericCoercionWarnings)$' ./pkg/sql/plan ./pkg/sql/plan/function
+```
+
+The focused run passed the upstream ELT 10-case rebind regression; ABS/SIGN
+runtime-domain rebinding; unsupported and NULL bound preservation; nested
+value/control role tests including `ABS(ROUND(1, ?))`, `ROUND(1, ABS(?))`, and
+the TRUNCATE analogues; shared-ParamRef source-type/error isolation; a prepared
+template MySQL/native/MySQL mode flip; binary-literal provenance; and direct
+native-mode/warning executor cases. Full owning-package results are recorded
+below. The distributed fixture remains a remote CI/BVT obligation.
+
+After the focused selection, both owning packages passed in full with the
+repository CGo wrapper, `-count=1`, and a 600-second test timeout (exit code 0):
+
+```text
+.agents/skills/mo-dev/scripts/mo-cgo-test -count=1 -timeout=600s ./pkg/sql/plan ./pkg/sql/plan/function
+ok  github.com/matrixorigin/matrixone/pkg/sql/plan           6.093s
+ok  github.com/matrixorigin/matrixone/pkg/sql/plan/function 17.566s
+```
+
+Not run on this revision-6 candidate: `go vet`, `-race`, `./pkg/frontend`,
+`make build`, protocol smoke tests, remote CI, and Compose/Standalone BVT.
+Similarly named validations recorded for the old `66b167...` base above remain
+historical only.
 
 Known limitations: strict string precision behavior is intentionally not a
 claim of full MySQL integer-prefix compatibility; no unrun upgrade/downgrade
@@ -278,17 +327,17 @@ outside this scope.
 
 ```text
 Design path: docs/design/pr28523-string-math-coercion.md
-Design revision: 5
-Implementation baseline: 2b2fe56ea3 (post-rebase code/tests baseline)
-Rebased base: 66b1672403e9b9efb1971d00b7ea87572891fe2a
+Design revision: 6
+Candidate snapshot: HEAD 9845abcce48646a3770c685e15a10f5e4ad23ab5 plus the validated, uncommitted revision-6 code/test delta described above
+Rebased base: 8e8e1998ef02b1f6233ddb1c2d3208f3b70d2d83
 Scope/trigger: PR reviews 5199052257, 5214666396 and comment 5687377735; >500 production lines and planner/plan compatibility boundary
-Reviewer identity and role: GPT-6 Astra, medium reasoning, independent draft design review; final review pending after current-base rebase
-Review timestamp: 2026-09-15
+Reviewer identity and role: GPT-6 Astra, medium reasoning, independent read-only draft design review of revision 5; exact-candidate revision-6 review pending
+Review timestamp: revision 5 reviewed 2026-09-15; revision 6 candidate recorded 2026-09-17
 Decision: DRAFT / AWAITING MAINTAINER APPROVAL
-Resolved blockers: runtime review blockers and the requested scan-cost evidence are recorded; the process gate remains open until an authorized maintainer links approval of this exact revision
-Decisions proposed for maintainer acceptance: retain strict INT64 precision controls (no general integer-prefix widening); prefer correctness over function-wide zonemap pruning; retain the measured bounded scan and defer one-pass role collection
-Evidence links: [PR #28523](https://github.com/matrixorigin/matrixone/pull/28523); review [#5199052257](https://github.com/matrixorigin/matrixone/pull/28523#pullrequestreview-5199052257); latest numeric-prefix review [#5214666396](https://github.com/matrixorigin/matrixone/pull/28523#pullrequestreview-5214666396); historical CI run 34813866468; post-rebase local CGo validation and benchmark command/results recorded above
-Implementation deviations requiring follow-up: MOD native arithmetic widening regression fixed in 8fc4d5250; incomplete-token mode gate is now covered by direct and distributed regressions; current-base final review and remote CI remain pending
+Resolved blockers: the local rebase integration and focused regression evidence are recorded; the process gate remains open until an authorized maintainer approves this exact design revision
+Decisions proposed for maintainer acceptance: retain strict INT64 precision controls (no general integer-prefix widening); prefer correctness over function-wide zonemap pruning; retain the bounded scan and defer one-pass role collection pending current-candidate scan-cost review
+Evidence links: [PR #28523](https://github.com/matrixorigin/matrixone/pull/28523); review [#5199052257](https://github.com/matrixorigin/matrixone/pull/28523#pullrequestreview-5199052257); latest numeric-prefix review [#5214666396](https://github.com/matrixorigin/matrixone/pull/28523#pullrequestreview-5214666396); historical CI run 34813866468; current-base focused and full-package CGo evidence recorded above
+Implementation deviations requiring follow-up: MOD native arithmetic widening regression fixed in 8fc4d5250; exact-candidate independent review, remote CI/BVT, strict INT64 precision acceptance, zonemap-pruning decision, and scan-cost acceptance remain pending
 Approval link: pending maintainer review
 ```
 

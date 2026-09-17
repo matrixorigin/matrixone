@@ -1320,6 +1320,14 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExpr(
 	return rule.rebindPreparedNumericExprWithBound(expr, expr, positions)
 }
 
+type preparedStringMathRole uint8
+
+const (
+	preparedStringMathRoleNone preparedStringMathRole = iota
+	preparedStringMathRoleValue
+	preparedStringMathRoleControl
+)
+
 // rebindPreparedNumericExprWithBound carries two views of a deferred numeric
 // expression: expr is the immutable prepare-time provenance, while bound is
 // the occurrence already materialized for this EXECUTE.  A runtime value may
@@ -1331,6 +1339,19 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExprWithBound(
 	expr, bound *plan.Expr,
 	positions map[int32]struct{},
 ) (*Expr, bool, error) {
+	return rule.rebindPreparedNumericExprWithRole(expr, bound, positions, preparedStringMathRoleNone)
+}
+
+// rebindPreparedNumericExprWithRole carries the nearest string-math argument
+// role through recursive fallback rebinding. Parameter positions identify
+// which execute values may refine an expression, but a shared position can
+// occur in both a value and a control argument; the occurrence role decides
+// whether the separate permissive string-math source is available there.
+func (rule *ResetParamRefRule) rebindPreparedNumericExprWithRole(
+	expr, bound *plan.Expr,
+	positions map[int32]struct{},
+	role preparedStringMathRole,
+) (*Expr, bool, error) {
 	if expr == nil {
 		return bound, false, nil
 	}
@@ -1341,12 +1362,19 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExprWithBound(
 			}
 			return expr, false, nil
 		}
+		if role == preparedStringMathRoleControl && bound != nil {
+			// A nearest ROUND/TRUNCATE control role owns this occurrence. Keep its
+			// already materialized text/INT64 cast rather than borrowing a source
+			// created for another occurrence of the same parameter position.
+			return bound, false, nil
+		}
 		// A parameter nested below a string-math function has a dedicated
 		// permissive DOUBLE source prepared by replaceParamValsWithSelection.
 		// Prefer it over the generic runtime literal here; otherwise rebuilding
 		// an inner arithmetic node such as `? + 0` falls back to BIGINT and
 		// discards MySQL's numeric-prefix conversion.
-		if param.Pos >= 0 && int(param.Pos) < len(rule.sqlExecuteStringMathParams) {
+		if role == preparedStringMathRoleValue &&
+			param.Pos >= 0 && int(param.Pos) < len(rule.sqlExecuteStringMathParams) {
 			if source := rule.sqlExecuteStringMathParams[param.Pos]; source != nil {
 				return DeepCopyExpr(source), true, nil
 			}
@@ -1385,14 +1413,17 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExprWithBound(
 				}
 				return expr, false, nil
 			}
+			if role == preparedStringMathRoleControl && bound != nil {
+				return bound, false, nil
+			}
 			boundChild := bound
 			if bound != nil {
 				if boundFn := bound.GetF(); boundFn != nil && len(boundFn.Args) > 0 {
 					boundChild = boundFn.Args[0]
 				}
 			}
-			return rule.rebindPreparedNumericExprWithBound(
-				expr.GetF().Args[0], boundChild, positions)
+			return rule.rebindPreparedNumericExprWithRole(
+				expr.GetF().Args[0], boundChild, positions, role)
 		}
 	}
 	if sub := expr.GetSub(); sub != nil {
@@ -1402,8 +1433,12 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExprWithBound(
 				boundChild = boundSub.Child
 			}
 		}
-		child, changed, err := rule.rebindPreparedNumericExprWithBound(
-			sub.Child, boundChild, positions)
+		childRole := role
+		if childRole == preparedStringMathRoleControl {
+			childRole = preparedStringMathRoleNone
+		}
+		child, changed, err := rule.rebindPreparedNumericExprWithRole(
+			sub.Child, boundChild, positions, childRole)
 		if err != nil {
 			return nil, false, err
 		}
@@ -1421,6 +1456,10 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExprWithBound(
 	if list := expr.GetList(); list != nil {
 		copy := DeepCopyExpr(expr)
 		changed := false
+		itemRole := role
+		if itemRole == preparedStringMathRoleControl {
+			itemRole = preparedStringMathRoleNone
+		}
 		for i, item := range list.List {
 			boundItem := item
 			if bound != nil {
@@ -1428,8 +1467,8 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExprWithBound(
 					boundItem = boundList.List[i]
 				}
 			}
-			itemBound, itemChanged, err := rule.rebindPreparedNumericExprWithBound(
-				item, boundItem, positions)
+			itemBound, itemChanged, err := rule.rebindPreparedNumericExprWithRole(
+				item, boundItem, positions, itemRole)
 			if err != nil {
 				return nil, false, err
 			}
@@ -1454,14 +1493,29 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExprWithBound(
 		copy := DeepCopyExpr(expr)
 		changed := false
 		for i, arg := range fn.Args {
+			argRole := role
+			if fn.Func != nil && isPreparedStringMathFunction(fn.Func.GetObjName()) {
+				if preparedStringMathFunctionValueArg(
+					strings.ToLower(fn.Func.GetObjName()), i, len(fn.Args)) {
+					argRole = preparedStringMathRoleValue
+				} else {
+					argRole = preparedStringMathRoleControl
+				}
+			} else if role == preparedStringMathRoleControl &&
+				!(isImplicitPreparedParamCast(expr) || isPreparedStringMathParamCast(expr)) {
+				// A precision control applies only to a bare marker/cast occurrence.
+				// Nested arithmetic follows its own generic rebinding contract, while
+				// a nested string-math function will establish its own nearest role.
+				argRole = preparedStringMathRoleNone
+			}
 			boundArg := arg
 			if bound != nil {
 				if boundFn := bound.GetF(); boundFn != nil && i < len(boundFn.Args) {
 					boundArg = boundFn.Args[i]
 				}
 			}
-			argBound, argChanged, err := rule.rebindPreparedNumericExprWithBound(
-				arg, boundArg, positions)
+			argBound, argChanged, err := rule.rebindPreparedNumericExprWithRole(
+				arg, boundArg, positions, argRole)
 			if err != nil {
 				return nil, false, err
 			}
@@ -2410,6 +2464,16 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				sqlExecuteNumericSource != nil &&
 				(paramPos >= len(rule.sqlExecuteStringBackedParams) ||
 					!rule.sqlExecuteStringBackedParams[paramPos])
+			// A string parameter can be shared by a value occurrence and a
+			// ROUND/TRUNCATE control occurrence. Its per-position DOUBLE source
+			// belongs only to the value occurrence; materialize the original text
+			// under this control occurrence's existing INT64 cast instead.
+			useSQLExecuteStringControlSource := hasParamPos && implicitParamCast &&
+				isPreparedStringMathFunction(functionName) &&
+				!preparedStringMathFunctionValueArg(functionName, i, len(exprImpl.F.Args)) &&
+				paramPos >= 0 && paramPos < len(rule.sqlExecuteStringBackedParams) &&
+				rule.sqlExecuteStringBackedParams[paramPos] &&
+				paramPos < len(rule.params) && rule.params[paramPos] != nil
 			sharedControlParam := false
 			if paramPos >= 0 && preparedSQLExecuteNumericResultValueArg(functionName, i, len(exprImpl.F.Args)) {
 				for j, sibling := range originalArgs {
@@ -2489,6 +2553,12 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 					}
 				}
 				rewrittenArg = DeepCopyExpr(source)
+			} else if useSQLExecuteStringControlSource {
+				rewrittenArg = replaceImplicitPreparedParamCastSource(arg, rule.params[paramPos])
+				needResetFunction = true
+				compareArgTypes = true
+				numericPrefixArgs[i] = false
+				rule.specialized = true
 			} else if useSQLExecuteControlSource {
 				// Materialize the native source while preserving the precision
 				// argument's prepare-time target type.  BOOL is represented by the
@@ -2804,8 +2874,16 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			source, sourceOK := preparedNumericFallbackSource(originalDeferredNumericArg)
 			positions := preparedNumericValueParamPositions(originalDeferredNumericArg)
 			if sourceOK && len(positions) > 0 {
-				rebound, changed, reboundErr := rule.rebindPreparedNumericExprWithBound(
-					source, boundArgs[0], positions)
+				sourceRole := preparedStringMathRoleNone
+				if preparedStringMathFunctionValueArg(functionName, 0, len(exprImpl.F.Args)) {
+					// This fallback source is already the outer function's argument,
+					// so recursive rebinding cannot infer the parent value role. ABS
+					// and SIGN must still consume the SQL-mode-aware string source;
+					// ELT's first argument is an index and stays on its native path.
+					sourceRole = preparedStringMathRoleValue
+				}
+				rebound, changed, reboundErr := rule.rebindPreparedNumericExprWithRole(
+					source, boundArgs[0], positions, sourceRole)
 				if reboundErr != nil {
 					return nil, reboundErr
 				}
@@ -4134,27 +4212,42 @@ func isImplicitPreparedParamCast(expr *plan.Expr) bool {
 // is rebound.  CAST2 is provisional in this context; explicit SQL CASTs carry
 // SyntaxExplicitCast and remain authoritative.
 func isPreparedStringMathParamCast(expr *plan.Expr) bool {
-	if expr == nil {
-		return false
-	}
-	fn := expr.GetF()
-	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" ||
-		len(fn.Args) == 0 || fn.GetSyntaxExplicitCast() {
-		return false
-	}
-	_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
-	if overload != 2 {
-		return false
-	}
-	param := fn.Args[0].GetP()
-	return param != nil && param.Pos >= 0
+	_, ok := preparedStringMathParam(expr)
+	return ok
 }
 
 func preparedStringMathParamPosition(expr *plan.Expr) (int, bool) {
-	if !isPreparedStringMathParamCast(expr) {
+	param, ok := preparedStringMathParam(expr)
+	if !ok {
 		return 0, false
 	}
-	return int(expr.GetF().Args[0].GetP().Pos), true
+	return int(param.Pos), true
+}
+
+func preparedStringMathParam(expr *plan.Expr) (*plan.ParamRef, bool) {
+	current := expr
+	hasNumericPrefixCast := false
+	for current != nil {
+		if param := current.GetP(); param != nil {
+			return param, hasNumericPrefixCast && param.Pos >= 0
+		}
+		fn := current.GetF()
+		if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.GetObjName(), "cast") ||
+			len(fn.Args) == 0 || fn.GetSyntaxExplicitCast() {
+			return nil, false
+		}
+		_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
+		switch overload {
+		case 0, 4:
+			// Ordinary binder-inserted cast wrappers can surround the source cast.
+		case 2:
+			hasNumericPrefixCast = true
+		default:
+			return nil, false
+		}
+		current = fn.Args[0]
+	}
+	return nil, false
 }
 
 func implicitPreparedParamPosition(expr *plan.Expr) (int, bool) {
@@ -4190,6 +4283,38 @@ func implicitPreparedParam(expr *plan.Expr) (*plan.ParamRef, bool) {
 		current = fn.Args[0]
 	}
 	return nil, false
+}
+
+// replaceImplicitPreparedParamCastSource copies a binder-inserted cast chain
+// and replaces only its parameter leaf. String-backed ROUND/TRUNCATE controls
+// use this to keep the original INT64 cast while preventing a shared parameter
+// position's numeric-prefix DOUBLE source from leaking in from a value role.
+func replaceImplicitPreparedParamCastSource(expr, source *plan.Expr) *plan.Expr {
+	if expr == nil || source == nil {
+		return nil
+	}
+	if _, ok := implicitPreparedParam(expr); !ok && !isPreparedStringMathParamCast(expr) {
+		return DeepCopyExpr(expr)
+	}
+	copy := DeepCopyExpr(expr)
+	current := copy
+	for current != nil {
+		fn := current.GetF()
+		if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.GetObjName(), "cast") ||
+			fn.GetSyntaxExplicitCast() || len(fn.Args) == 0 {
+			return copy
+		}
+		_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
+		if overload != 0 && overload != 2 && overload != 4 {
+			return copy
+		}
+		if fn.Args[0].GetP() != nil {
+			fn.Args[0] = DeepCopyExpr(source)
+			return copy
+		}
+		current = fn.Args[0]
+	}
+	return copy
 }
 
 func isPreparedBitwiseOperator(name string) bool {
