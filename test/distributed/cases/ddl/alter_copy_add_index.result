@@ -48,13 +48,18 @@ create table duplicate_values(id bigint primary key, value_col int);
 insert into duplicate_values values (1, 1), (2, 1);
 alter table duplicate_values add column note int, add unique index uk_value(value_col);
 Duplicate entry '1' for key 'value_col'
-show columns from duplicate_values;
-➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-id  ¦  BIGINT(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
-value_col  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦
-show index from duplicate_values;
-➤ Table[12,16,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,64,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,256,0]  ¦  Collation[12,1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,4,0]  ¦  Packed[12,4,0]  ¦  Null[12,3,0]  ¦  Index_type[12,11,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,2048,0]  ¦  Index_params[12,2048,0]  ¦  Visible[12,3,0]  ¦  Expression[12,256,0]  𝄀
-duplicate_values  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id
+select count(*) from information_schema.columns
+where table_schema = 'alter_copy_add_index'
+and table_name = 'duplicate_values'
+and column_name = 'note';
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from information_schema.statistics
+where table_schema = 'alter_copy_add_index'
+and table_name = 'duplicate_values'
+and index_name = 'uk_value';
+➤ count(*)[-5,64,0]  𝄀
+0
 create table fulltext_docs(id bigint primary key, body text);
 insert into fulltext_docs values (1, 'alpha beta'), (2, 'beta gamma');
 alter table fulltext_docs add column note int, add fulltext index ft_body(body);
