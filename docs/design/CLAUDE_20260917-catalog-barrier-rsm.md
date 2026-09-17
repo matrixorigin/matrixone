@@ -1,6 +1,7 @@
 # #29004：Catalog Metadata Barrier RSM 补充合同
 
 - 状态：Draft；新增合同尚未获得设计审批。
+- Review 修订：[仲裁、证据与恢复合同](CLAUDE_20260917-catalog-barrier-review-resolution.md)。若与本文候选方案冲突，以修订文档为准；其中维护切换与显式退休约束仍待 reviewer 接受。
 - 父设计：`CLAUDE_20260916-catalog-metadata-barrier.md`。
 - 基线：`e4511d6af419354f76f413df7602d24bfffe5a54`。
 - 交付：设计与实现放在同一个 #29004 Draft PR；不另开 documentation PR。
