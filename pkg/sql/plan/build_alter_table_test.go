@@ -311,6 +311,44 @@ func TestAlterTableCopySupportsForeignKeyOnAddedColumn(t *testing.T) {
 	}
 }
 
+func TestAlterTableCopySupportsExternalForeignKeyOnAddedColumn(t *testing.T) {
+	logicPlan, err := buildSingleStmt(NewMockOptimizer(false), t, `
+		ALTER TABLE constraint_test.t1
+		ADD COLUMN parent_id INT,
+		ADD CONSTRAINT fk_t1_external FOREIGN KEY (parent_id)
+			REFERENCES constraint_test.replace_fk_p(id)`)
+	require.NoError(t, err)
+
+	alter := logicPlan.GetDdl().GetAlterTable()
+	require.Equal(t, plan.AlterTable_COPY, alter.AlgorithmType)
+	require.Len(t, alter.CopyTableDef.Fkeys, 1)
+	require.Len(t, alter.Actions, 1)
+	require.Len(t, alter.DetectSqls, 1)
+	require.Len(t, alter.UpdateFkSqls, 1)
+
+	addFk := alter.Actions[0].GetAddFk()
+	require.NotNil(t, addFk)
+	require.Equal(t, "constraint_test", addFk.DbName)
+	require.Equal(t, "replace_fk_p", addFk.TableName)
+	require.Equal(t, []string{"parent_id"}, addFk.Cols)
+	require.Equal(t, uint64(77001), addFk.Fkey.ForeignTbl)
+	require.Contains(t, alter.CreateTmpTableSql, "CONSTRAINT `fk_t1_external`")
+	require.Contains(t, alter.DetectSqls[0], "`constraint_test`.`replace_fk_p`")
+}
+
+func TestAlterTableCopyRejectsDuplicateForeignKeyName(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef := mock.ctxt.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "t1")]
+	tableDef.Fkeys = []*plan.ForeignKeyDef{{Name: "FK_T1_PARENT"}}
+
+	_, err := buildSingleStmt(mock, t, `
+		ALTER TABLE constraint_test.t1
+		ADD COLUMN parent_id BIGINT,
+		ADD CONSTRAINT fk_t1_parent FOREIGN KEY (parent_id)
+			REFERENCES constraint_test.t1(a)`)
+	require.ErrorContains(t, err, "Duplicate foreign key constraint name 'fk_t1_parent'")
+}
+
 func TestNextAlterCopyColumnIDIsUnique(t *testing.T) {
 	const unknownColumnID = ^uint64(0)
 	cols := []*ColDef{{ColId: 1}, {ColId: unknownColumnID}}

@@ -833,6 +833,120 @@ func TestCollectAlterCopyAddedForeignKeys(t *testing.T) {
 	require.Equal(t, []uint64{7, 0}, refChildren)
 }
 
+func TestCollectAlterCopyAddedForeignKeysRejectsInconsistentPlan(t *testing.T) {
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name        string
+		qry         *plan2.AlterTable
+		replacement *plan2.TableDef
+		wantError   string
+	}{
+		{
+			name:        "nil replacement foreign key",
+			qry:         &plan2.AlterTable{},
+			replacement: &plan2.TableDef{Fkeys: []*plan2.ForeignKeyDef{nil}},
+			wantError:   "nil foreign key definition in ALTER COPY replacement",
+		},
+		{
+			name: "nil action foreign key",
+			qry: &plan2.AlterTable{Actions: []*plan2.AlterTable_Action{{
+				Action: &plan2.AlterTable_Action_AddFk{AddFk: &plan2.AlterTableAddFk{}},
+			}}},
+			replacement: &plan2.TableDef{},
+			wantError:   "nil foreign key definition in ALTER COPY action",
+		},
+		{
+			name: "action foreign key missing from replacement",
+			qry: &plan2.AlterTable{Actions: []*plan2.AlterTable_Action{{
+				Action: &plan2.AlterTable_Action_AddFk{AddFk: &plan2.AlterTableAddFk{
+					Fkey: &plan2.ForeignKeyDef{Name: "fk_missing"},
+				}},
+			}}},
+			replacement: &plan2.TableDef{},
+			wantError:   "foreign key fk_missing was not created by ALTER COPY",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			foreignKeys, err := collectAlterCopyAddedForeignKeys(ctx, tc.qry, tc.replacement)
+			require.Nil(t, foreignKeys)
+			require.ErrorContains(t, err, tc.wantError)
+		})
+	}
+
+	for _, tc := range []struct {
+		name        string
+		qry         *plan2.AlterTable
+		replacement *plan2.TableDef
+	}{
+		{name: "nil query", replacement: &plan2.TableDef{}},
+		{name: "nil replacement", qry: &plan2.AlterTable{}},
+		{
+			name: "non foreign key actions are ignored",
+			qry: &plan2.AlterTable{Actions: []*plan2.AlterTable_Action{
+				nil,
+				{},
+			}},
+			replacement: &plan2.TableDef{},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			foreignKeys, err := collectAlterCopyAddedForeignKeys(ctx, tc.qry, tc.replacement)
+			require.NoError(t, err)
+			require.Empty(t, foreignKeys)
+		})
+	}
+}
+
+func TestMergeAlterCopyAddedForeignKeysRejectsInvalidState(t *testing.T) {
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name              string
+		sourceForeignKeys []*plan2.ForeignKeyDef
+		addedForeignKeys  []*plan2.ForeignKeyDef
+		wantError         string
+	}{
+		{
+			name:              "nil source foreign key",
+			sourceForeignKeys: []*plan2.ForeignKeyDef{nil},
+			wantError:         "nil foreign key definition in ALTER COPY",
+		},
+		{
+			name:             "nil added foreign key",
+			addedForeignKeys: []*plan2.ForeignKeyDef{nil},
+			wantError:        "nil added foreign key definition in ALTER COPY",
+		},
+		{
+			name:              "duplicate name is case insensitive",
+			sourceForeignKeys: []*plan2.ForeignKeyDef{{Name: "fk_parent"}},
+			addedForeignKeys:  []*plan2.ForeignKeyDef{{Name: "FK_PARENT"}},
+			wantError:         "duplicate foreign key FK_PARENT in ALTER COPY",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			foreignKeys, refChildren, err := mergeAlterCopyAddedForeignKeys(
+				ctx, tc.sourceForeignKeys, nil, tc.addedForeignKeys,
+			)
+			require.Nil(t, foreignKeys)
+			require.Nil(t, refChildren)
+			require.ErrorContains(t, err, tc.wantError)
+		})
+	}
+
+	t.Run("existing self marker is not duplicated", func(t *testing.T) {
+		foreignKeys, refChildren, err := mergeAlterCopyAddedForeignKeys(
+			ctx,
+			nil,
+			[]uint64{0},
+			[]*plan2.ForeignKeyDef{{Name: "fk_self", ForeignTbl: 0}},
+		)
+		require.NoError(t, err)
+		require.Len(t, foreignKeys, 1)
+		require.Equal(t, []uint64{0}, refChildren)
+	})
+}
+
 func TestReconcileRefChildTableIDForAlterCopy(t *testing.T) {
 	t.Run("replace child in existing reverse reference", func(t *testing.T) {
 		constraintDef := &engine.ConstraintDef{Cts: []engine.Constraint{
