@@ -839,6 +839,53 @@ PREPARE export_set_real_source FROM "SELECT EXPORT_SET(IF(TRUE,IFNULL(?,0e0),0e0
 EXECUTE export_set_real_source USING @export_set_bits;
 DEALLOCATE PREPARE export_set_real_source;
 
+# Precision is an integer-prefix consumer, independent of a shared EXPORT_SET.
+PREPARE export_set_text_precision FROM "SELECT ROUND(15.567,x),TRUNCATE(15.567,x) FROM (SELECT ? x)d";
+SET @export_set_bits = '2.5';
+EXECUTE export_set_text_precision USING @export_set_bits;
+DEALLOCATE PREPARE export_set_text_precision;
+PREPARE export_set_text_precision FROM "SELECT EXPORT_SET(x,'Y','N','',4),ROUND(15.567,x),TRUNCATE(15.567,x) FROM (SELECT ? x)d";
+EXECUTE export_set_text_precision USING @export_set_bits;
+SET @export_set_bits = 'abc';
+EXECUTE export_set_text_precision USING @export_set_bits;
+SET @export_set_bits = NULL;
+EXECUTE export_set_text_precision USING @export_set_bits;
+DEALLOCATE PREPARE export_set_text_precision;
+
+# ABS's syntax default is DECIMAL, but actual numeric bindings own their domain.
+PREPARE export_set_abs_context FROM "SELECT EXPORT_SET(ABS(?),'Y','N','',4)";
+SET @export_set_bits = '2.5';
+EXECUTE export_set_abs_context USING @export_set_bits;
+SET @export_set_bits = '-2.5';
+EXECUTE export_set_abs_context USING @export_set_bits;
+SET @export_set_bits = CAST(2.5 AS DOUBLE);
+EXECUTE export_set_abs_context USING @export_set_bits;
+SET @export_set_bits = '2.5';
+EXECUTE export_set_abs_context USING @export_set_bits;
+DEALLOCATE PREPARE export_set_abs_context;
+PREPARE export_set_abs_context FROM "SELECT EXPORT_SET(ABS(?),'Y','N','',4)";
+SET @export_set_bits = CAST('-9223372036854775808' AS SIGNED);
+EXECUTE export_set_abs_context USING @export_set_bits;
+DEALLOCATE PREPARE export_set_abs_context;
+PREPARE export_set_abs_context FROM "SELECT EXPORT_SET(ABS(x),'Y','N','',4) FROM (SELECT ? x)d";
+SET @export_set_bits = '2.5';
+EXECUTE export_set_abs_context USING @export_set_bits;
+DEALLOCATE PREPARE export_set_abs_context;
+
+# Constant folding preserves checked arithmetic; unary plus is only an identity.
+SELECT EXPORT_SET(1e100+0,'Y','N','',4);
+SELECT EXPORT_SET(1e100*1,'Y','N','',4);
+SELECT EXPORT_SET(1e100/1,'Y','N','',4);
+SELECT EXPORT_SET(-1e100,'Y','N','',4);
+SELECT EXPORT_SET(+1e100,'Y','N','',4);
+SELECT EXPORT_SET(+(1e100+0),'Y','N','',4);
+SELECT EXPORT_SET((SELECT 1e100),'Y','N','',4);
+SELECT EXPORT_SET((SELECT 1e100+0),'Y','N','',4);
+SELECT EXPORT_SET((SELECT -1e100),'Y','N','',4);
+SELECT EXPORT_SET((SELECT 1e100 WHERE FALSE),'Y','N','',4);
+SELECT EXPORT_SET((SELECT 1e100 LIMIT 0),'Y','N','',4);
+SELECT EXPORT_SET((SELECT 1e100 UNION ALL SELECT 2e0),'Y','N','',4);
+
 DROP TABLE export_set_scalar_input;
 
 DROP TABLE export_set_numeric_bits;

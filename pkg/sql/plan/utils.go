@@ -5006,6 +5006,12 @@ func preparedExprRequiresRuntimeSpecialization(functionName string, expr *plan.E
 }
 
 func preparedExprRequiresRuntimeSpecializationAt(functionName string, argIndex int, expr *plan.Expr) bool {
+	// A provisional TEXT precision cast must be reconsidered for DECIMAL or
+	// REAL bindings, even when projection folding leaves no naked marker.
+	if preparedExportSetIntegerPrecisionArg(functionName, argIndex) && preparedExprContainsParam(expr) &&
+		!isExplicitPreparedLineageCast(expr) {
+		return true
+	}
 	// Only CONV's first operand changes the executor domain. The base operands
 	// are numeric controls and do not justify copying/rebinding the plan.
 	if functionName == "bin" || functionName == "conv" {

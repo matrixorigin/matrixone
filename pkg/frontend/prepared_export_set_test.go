@@ -644,6 +644,40 @@ func TestPreparedExportSetDirectNumericContext(t *testing.T) {
 	}
 }
 
+func TestPreparedExportSetFoldedPrecisionSpecializationAdmission(t *testing.T) {
+	for _, name := range []string{"round", "truncate"} {
+		t.Run(name, func(t *testing.T) {
+			_, stmt, cw, _ := newPreparedExecuteEnvForSQL(t, 465, `select export_set(`+name+`(15.5,x),'Y','N','',4) from (select ? as x)d`)
+			defer stmt.Close()
+			cached := stmt.PreparePlan.GetDcl().GetPrepare().Plan
+			require.True(t, plan2.PreparedPlanNeedsRuntimeSpecialization(cached), "the public EXECUTE entry must admit the folded precision marker")
+			for _, tc := range []struct {
+				value string
+				typ   types.Type
+			}{
+				{"-0.5", types.New(types.T_decimal64, 4, 1)},
+				{"-0.6", types.T_float64.ToType()},
+			} {
+				values := []any{plan2.ParamValue{Value: tc.value, SourceType: tc.typ, HasSourceType: true, EnableNumericPrefix: true}}
+				stmt.applyExportSetNullRuntimeTypes(values)
+				filled, err := plan2.FillValuesOfParamsInPlan(cw.proc.Ctx, plan2.DeepCopyPlan(cached), values)
+				require.NoError(t, err)
+				expr := filled.GetQuery().Nodes[filled.GetQuery().Steps[0]].ProjectList[0]
+				result, free, err := colexec.GetReadonlyResultFromExpression(cw.proc, expr, []*batch.Batch{batch.EmptyForConstFoldBatch})
+				require.NoError(t, err)
+				func() {
+					defer free()
+					want := "NNYN"
+					if name == "truncate" {
+						want = "NYNY"
+					}
+					require.Equal(t, want, result.GetStringAt(0))
+				}()
+			}
+		})
+	}
+}
+
 func TestPreparedExportSetAbsDefaultsAreNotBindingHistory(t *testing.T) {
 	_, stmt, cw, _ := newPreparedExecuteEnvForSQL(t, 463, `select export_set(abs(?),'Y','N','',4)`)
 	defer stmt.Close()

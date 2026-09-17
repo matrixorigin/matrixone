@@ -5347,7 +5347,9 @@ func bindFuncExprImplByPlanExpr(
 	allowInternalFunctionArgs bool,
 ) (*plan.Expr, error) {
 	var err error
-	if (name == "round" || name == "truncate") && len(args) == 2 && types.T(args[1].Typ.Id).IsMySQLString() {
+	// A TEXT producer uses integer-prefix conversion. A direct marker still
+	// owns a provisional integer context and must be resolved at EXECUTE.
+	if (name == "round" || name == "truncate") && len(args) == 2 && args[1].GetP() == nil && types.T(args[1].Typ.Id).IsMySQLString() {
 		args = append([]*Expr(nil), args...)
 		args[1], err = appendComparisonCastBeforeExpr(ctx, args[1], makeSimplePlan2Type(types.T_int64))
 		if err != nil {

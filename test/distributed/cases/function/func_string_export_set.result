@@ -1298,5 +1298,81 @@ PREPARE export_set_real_source FROM "SELECT EXPORT_SET(IF(TRUE,IFNULL(?,0e0),0e0
 EXECUTE export_set_real_source USING @export_set_bits;
 Data truncation: data out of range: data type int64, value '1e+100'
 DEALLOCATE PREPARE export_set_real_source;
+PREPARE export_set_text_precision FROM "SELECT ROUND(15.567,x),TRUNCATE(15.567,x) FROM (SELECT ? x)d";
+SET @export_set_bits = '2.5';
+EXECUTE export_set_text_precision USING @export_set_bits;
+➤ ROUND(15.567, x)[3,5,3]  ¦  TRUNCATE(15.567, x)[3,5,3]  𝄀
+15.570  ¦  15.560
+DEALLOCATE PREPARE export_set_text_precision;
+PREPARE export_set_text_precision FROM "SELECT EXPORT_SET(x,'Y','N','',4),ROUND(15.567,x),TRUNCATE(15.567,x) FROM (SELECT ? x)d";
+EXECUTE export_set_text_precision USING @export_set_bits;
+➤ EXPORT_SET(x, Y, N, , 4)[12,64,0]  ¦  ROUND(15.567, x)[3,5,3]  ¦  TRUNCATE(15.567, x)[3,5,3]  𝄀
+NYNN  ¦  15.570  ¦  15.560
+SET @export_set_bits = 'abc';
+EXECUTE export_set_text_precision USING @export_set_bits;
+➤ EXPORT_SET(x, Y, N, , 4)[12,64,0]  ¦  ROUND(15.567, x)[3,5,3]  ¦  TRUNCATE(15.567, x)[3,5,3]  𝄀
+NNNN  ¦  16.000  ¦  15.000
+SET @export_set_bits = NULL;
+EXECUTE export_set_text_precision USING @export_set_bits;
+➤ EXPORT_SET(x, Y, N, , 4)[12,64,0]  ¦  ROUND(15.567, x)[3,5,3]  ¦  TRUNCATE(15.567, x)[3,5,3]  𝄀
+null  ¦  null  ¦  null
+DEALLOCATE PREPARE export_set_text_precision;
+PREPARE export_set_abs_context FROM "SELECT EXPORT_SET(ABS(?),'Y','N','',4)";
+SET @export_set_bits = '2.5';
+EXECUTE export_set_abs_context USING @export_set_bits;
+➤ EXPORT_SET(ABS(?), Y, N, , 4)[12,64,0]  𝄀
+YYNN
+SET @export_set_bits = '-2.5';
+EXECUTE export_set_abs_context USING @export_set_bits;
+➤ EXPORT_SET(ABS(?), Y, N, , 4)[12,64,0]  𝄀
+YYNN
+SET @export_set_bits = CAST(2.5 AS DOUBLE);
+EXECUTE export_set_abs_context USING @export_set_bits;
+➤ EXPORT_SET(ABS(?), Y, N, , 4)[12,64,0]  𝄀
+NYNN
+SET @export_set_bits = '2.5';
+EXECUTE export_set_abs_context USING @export_set_bits;
+➤ EXPORT_SET(ABS(?), Y, N, , 4)[12,64,0]  𝄀
+NYNN
+DEALLOCATE PREPARE export_set_abs_context;
+PREPARE export_set_abs_context FROM "SELECT EXPORT_SET(ABS(?),'Y','N','',4)";
+SET @export_set_bits = CAST('-9223372036854775808' AS SIGNED);
+EXECUTE export_set_abs_context USING @export_set_bits;
+Data truncation: data out of range: data type int, '-9223372036854775808'
+DEALLOCATE PREPARE export_set_abs_context;
+PREPARE export_set_abs_context FROM "SELECT EXPORT_SET(ABS(x),'Y','N','',4) FROM (SELECT ? x)d";
+SET @export_set_bits = '2.5';
+EXECUTE export_set_abs_context USING @export_set_bits;
+➤ EXPORT_SET(ABS(x), Y, N, , 4)[12,64,0]  𝄀
+NYNN
+DEALLOCATE PREPARE export_set_abs_context;
+SELECT EXPORT_SET(1e100+0,'Y','N','',4);
+Data truncation: data out of range: data type int64, value '1e+100'
+SELECT EXPORT_SET(1e100*1,'Y','N','',4);
+Data truncation: data out of range: data type int64, value '1e+100'
+SELECT EXPORT_SET(1e100/1,'Y','N','',4);
+Data truncation: data out of range: data type int64, value '1e+100'
+SELECT EXPORT_SET(-1e100,'Y','N','',4);
+Data truncation: data out of range: data type int64, value '-1e+100'
+SELECT EXPORT_SET(+1e100,'Y','N','',4);
+➤ EXPORT_SET(+1e100, Y, N, , 4)[12,64,0]  𝄀
+YYYY
+SELECT EXPORT_SET(+(1e100+0),'Y','N','',4);
+Data truncation: data out of range: data type int64, value '1e+100'
+SELECT EXPORT_SET((SELECT 1e100),'Y','N','',4);
+➤ EXPORT_SET((select 1e100), Y, N, , 4)[12,64,0]  𝄀
+YYYY
+SELECT EXPORT_SET((SELECT 1e100+0),'Y','N','',4);
+Data truncation: data out of range: data type int64, value '1e+100'
+SELECT EXPORT_SET((SELECT -1e100),'Y','N','',4);
+Data truncation: data out of range: data type int64, value '-1e+100'
+SELECT EXPORT_SET((SELECT 1e100 WHERE FALSE),'Y','N','',4);
+➤ EXPORT_SET((select 1e100 where false), Y, N, , 4)[12,64,0]  𝄀
+null
+SELECT EXPORT_SET((SELECT 1e100 LIMIT 0),'Y','N','',4);
+➤ EXPORT_SET((select 1e100 limit 0), Y, N, , 4)[12,64,0]  𝄀
+YYYY
+SELECT EXPORT_SET((SELECT 1e100 UNION ALL SELECT 2e0),'Y','N','',4);
+Subquery returns more than 1 row
 DROP TABLE export_set_scalar_input;
 DROP TABLE export_set_numeric_bits;

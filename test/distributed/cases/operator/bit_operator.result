@@ -17,7 +17,7 @@ SELECT 100 << ABS(-3);
 ➤ 100 << ABS(-3)[-5,64,0]  𝄀
 800
 SELECT BIN(~1);
-➤ BIN(~1)[12,-1,0]  𝄀
+➤ BIN(~1)[12,65,0]  𝄀
 1111111111111111111111111111111111111111111111111111111111111110
 SELECT 3 & ~8;
 ➤ 3 & ~8[-5,64,0]  𝄀
@@ -85,7 +85,7 @@ SELECT float_32 | float_64 FROM t1;
 123  𝄀
 1
 SELECT float_32 ^ float_64 + 11 FROM t1;
-➤ float_32 ^ float_64 + 11[3,38,0]  𝄀
+➤ float_32 ^ float_64 + 11[-5,64,0]  𝄀
 134  𝄀
 12
 SELECT float_32 >> int_test FROM t1;
@@ -101,7 +101,9 @@ d1 DECIMAL NOT NULL
 INSERT INTO t1() VALUES(1, 0.000001, 1.00000000000000000000000001);
 INSERT INTO t1() VALUES(YEAR('2022-02-02'), SIN(1), LENGTH('abcdefghijk') - MONTH('2022-09-09'));
 SELECT ~float_32 & float_32 FROM t1;
-invalid argument operator unary_tilde, bad value [FLOAT]
+➤ ~float_32 & float_32[-5,64,0]  𝄀
+0  𝄀
+0
 DROP TABLE IF EXISTS t1;
 CREATE TABLE t1(
 str1 CHAR(10),
@@ -274,7 +276,7 @@ UPDATE t1,t2 SET str1 = 2 >> str1, n1 = 3 >> 3 WHERE t1.id = 1;
 INSERT INTO t1() VALUES(2 << 4, 'shift'), (3 & 0, 'bit');
 INSERT INTO t1 SELECT 2 << 8, 'UK';
 SELECT * FROM t1;
-➤ id[4,32,0]  ¦  str1[12,-1,0]  𝄀
+➤ id[4,32,0]  ¦  str1[12,20,0]  𝄀
 3  ¦  United  𝄀
 2  ¦  4040  𝄀
 4  ¦  18446744073709551612  𝄀
@@ -299,16 +301,16 @@ PRIMARY KEY (id)
 INSERT INTO t1() VALUES(1,'c1','nion'), (2,'c2','unitd'), (3,'c1','jake'), (4,'c2','hadd'), (5,'c3','laik');
 INSERT INTO t2() VALUES(1,'A',70.1), (2,'B',59.3), (3,'C',81.2), (4,'B',48.3), (5,'C',99.4);
 SELECT id,MAX(score),grade FROM t2 GROUP BY id,grade HAVING id > (2 << 2);
-➤ id[4,32,0]  ¦  MAX(score)[7,24,0]  ¦  grade[12,-1,0]
+➤ id[4,32,0]  ¦  MAX(score)[7,23,31]  ¦  grade[12,10,0]
 SELECT t1.id, t1.name, t2.grade FROM t1, t2 WHERE t1.id = t2.id AND t1.id < (2 << 2);
-➤ id[4,32,0]  ¦  name[12,-1,0]  ¦  grade[12,-1,0]  𝄀
+➤ id[4,32,0]  ¦  name[12,10,0]  ¦  grade[12,10,0]  𝄀
 1  ¦  nion  ¦  A  𝄀
 2  ¦  unitd  ¦  B  𝄀
 3  ¦  jake  ¦  C  𝄀
 4  ¦  hadd  ¦  B  𝄀
 5  ¦  laik  ¦  C
 SELECT score FROM t2 WHERE t2.score BETWEEN 2 << 5 AND 2 << 8;
-➤ score[7,24,0]  𝄀
+➤ score[7,23,31]  𝄀
 70.1  𝄀
 81.2  𝄀
 99.4
@@ -369,8 +371,8 @@ SELECT HEX(str1) >> BIN(88) << BIN(str1) >> HEX(100) FROM t1;
 0
 DROP TABLE t1;
 select binary(3) & binary(4);
-➤ binary(3) & binary(4)[12,765,0]  𝄀
+➤ binary(3) & binary(4)[-2,255,0]  𝄀
 0
 select binary(3) | binary(4);
-➤ binary(3) | binary(4)[12,765,0]  𝄀
+➤ binary(3) | binary(4)[-2,255,0]  𝄀
 7
