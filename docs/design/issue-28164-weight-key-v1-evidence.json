@@ -118,6 +118,11 @@
       "status": "PASS",
       "command": "GOWORK=off go test -mod=readonly -count=1 -timeout 240s ./pkg/fileservice -run '^(TestNewAwsSDKv2UsesCompatibilityChecksumPolicy|TestAwsSDKv2BasicObjectOperations|TestAwsSDKv2WriteUnknownSizeMultipartCompletes|TestAwsParallelMultipartSuccess|TestAwsParallelMultipartUnknownSize|TestAwsSDKv2ConditionalObjectIdentityReads)$'",
       "scope": "current dependency compatibility and existing storage-path regression tests"
+    },
+    {
+      "status": "PASS",
+      "command": "GOWORK=off go test -mod=readonly -count=1 -timeout 240s ./pkg/fileservice -run '^TestAwsDeleteMulti'",
+      "scope": "current PR1 checksum-compatibility fallback and HTTP regression"
     }
   ],
   "bvt": {
@@ -147,7 +152,11 @@
     "pkg/common/collation/testdata/mysql_8_0_45.json.gz": "1e1e3cf2cbfc29f8ff564eada87e874105deb1ebabb33bb31749fef34a9dd572",
     "pkg/common/collation/testdata/mysql_8_0_45_extended.json.gz": "6a68c024f090c6cca99486007c3bfebfcb163e0ce6b0349969430fbb4c446323",
     "go.mod": "7ace4bff50e74de3f1feba9bc8c2f978cc4581954150dc00a01029247e1e2e8b",
-    "go.sum": "f1d10f90e94c3b62a09ef24c9433aaeba6647176e4330860848be2dadcf3123b"
+    "go.sum": "f1d10f90e94c3b62a09ef24c9433aaeba6647176e4330860848be2dadcf3123b",
+    "pkg/common/collation/uca0900_test.go": "7f7389e3825e2f0d811680da0aa50558217127e326cbf3a5d1ef52144d46cca7",
+    "pkg/fileservice/aws_sdk_v2.go": "4e98391e414e9fc934bdd490c1feb953746ef2fe4978e2372ca3e7159f5909fb",
+    "pkg/fileservice/aws_sdk_v2_test.go": "c9efeb06da9089b5f84c5f28d7bdb8805276456a8bcfbea6d62cc0beed22371c",
+    "pkg/fileservice/parallel_sdk_test.go": "23ade21f4734429786c525e4662ec73fda4dec5efed20b6b29baa0fd09bc8d11"
   },
   "review": {
     "status": "PASS_LOCAL_SCOPE",
