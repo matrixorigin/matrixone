@@ -692,6 +692,9 @@ func (s *stateMachine) handleActivatePersistedExpressionProtocol(
 // generation already owns this UUID. It returns false for a stale heartbeat.
 func (s *stateMachine) updateCNViewMetadataAdmission(hb pb.CNStoreHeartbeat) bool {
 	previous, existed := s.state.CNState.Stores[hb.UUID]
+	if b := s.state.CatalogMetadataBarrier; b != nil && b.EvidenceInitialized && existed && hb.ViewMetadataAdmissionGeneration < previous.ViewMetadataAdmissionGeneration {
+		return false
+	}
 	active := s.viewMetadataAdmissionActive()
 	if active && existed &&
 		hb.ViewMetadataAdmissionGeneration < previous.ViewMetadataAdmissionGeneration {
@@ -780,6 +783,9 @@ func (s *stateMachine) updateCNViewMetadataAdmission(hb pb.CNStoreHeartbeat) boo
 
 func (s *stateMachine) updateProxyViewMetadataAdmission(hb pb.ProxyHeartbeat) bool {
 	previous, existed := s.state.ProxyState.Stores[hb.UUID]
+	if b := s.state.CatalogMetadataBarrier; b != nil && b.EvidenceInitialized && existed && hb.ViewMetadataAdmissionGeneration < previous.ViewMetadataAdmissionGeneration {
+		return false
+	}
 	active := s.viewMetadataAdmissionActive()
 	if active && existed &&
 		hb.ViewMetadataAdmissionGeneration < previous.ViewMetadataAdmissionGeneration {
@@ -866,7 +872,7 @@ func (s *stateMachine) attachViewMetadataAdmission(
 		supported = s.state.CNState.Stores[uuid].ViewMetadataAdmissionSupported
 	}
 	if !supported {
-		return result
+		return s.attachCatalogMetadataBarrier(result, uuid, proxy)
 	}
 	var batch pb.CommandBatch
 	if len(result.Data) > 0 {
@@ -880,5 +886,5 @@ func (s *stateMachine) attachViewMetadataAdmission(
 		panic(err)
 	}
 	result.Data = data
-	return result
+	return s.attachCatalogMetadataBarrier(result, uuid, proxy)
 }

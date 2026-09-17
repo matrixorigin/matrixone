@@ -37,6 +37,32 @@ func runtimeEvidenceFixture(phase pb.CatalogMetadataBarrierPhase) pb.HAKeeperRSM
 	return s
 }
 
+func initializeRuntimeEvidence(s *pb.HAKeeperRSMState) {
+	b := s.CatalogMetadataBarrier
+	b.EvidenceInitialized = true
+	b.Arbitration = &pb.CatalogMetadataArbitration{
+		MaintenanceEnabled: true, LastOperationID: 2, LastConsumedFence: 1,
+		Members: map[uint64]pb.CatalogMetadataReplicaIdentity{1: {UUID: "log", StoreIncarnation: "inc"}},
+	}
+	for _, stage := range []struct {
+		phase  pb.CatalogMetadataBarrierPhase
+		action pb.CatalogMetadataAction
+		slot   **pb.CatalogMetadataReceipt
+	}{
+		{pb.CATALOG_METADATA_BARRIER_CATALOG_REQUIRED, pb.CATALOG_ACTION_CATALOG_REQUIRED, &b.Arbitration.RequiredReceipt},
+		{pb.CATALOG_METADATA_BARRIER_RECOVERING, pb.CATALOG_ACTION_RECOVERY_STARTED, &b.Arbitration.StartedReceipt},
+		{pb.CATALOG_METADATA_BARRIER_ACTIVATED, pb.CATALOG_ACTION_COMPLETE, &b.Arbitration.CompletedReceipt},
+	} {
+		if b.Phase >= stage.phase {
+			claim := uint64(0)
+			if stage.action != pb.CATALOG_ACTION_CATALOG_REQUIRED {
+				claim, b.Arbitration.ClaimID = 2, 2
+			}
+			*stage.slot = &pb.CatalogMetadataReceipt{MembershipEpoch: b.MembershipEpoch, RequiredGeneration: b.RequiredGeneration, ClaimID: claim, Action: stage.action, Digest: make([]byte, 32)}
+		}
+	}
+}
+
 func TestCatalogMetadataRuntimeSnapshotMatrix(t *testing.T) {
 	// Exercise every phase independently of the old expression floor, including
 	// an initialized empty capture and the explicitly uninitialized legacy state.
@@ -46,7 +72,9 @@ func TestCatalogMetadataRuntimeSnapshotMatrix(t *testing.T) {
 				t.Run(fmt.Sprintf("phase-%d/expression-%d/initialized-%t", phase, expression, initialized), func(t *testing.T) {
 					s := runtimeEvidenceFixture(phase)
 					s.PersistedExpressionRequiredProtocolVersion = expression
-					s.CatalogMetadataBarrier.EvidenceInitialized = initialized
+					if initialized {
+						initializeRuntimeEvidence(&s)
+					}
 					encoded, err := marshalHAKeeperSnapshot(&s, false)
 					if phase == pb.CATALOG_METADATA_BARRIER_DISABLED && initialized {
 						require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
@@ -119,7 +147,7 @@ func TestCatalogMetadataEvidenceRejectsInvalidSnapshotsAtomically(t *testing.T) 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			s := runtimeEvidenceFixture(pb.CATALOG_METADATA_BARRIER_SEALED)
-			s.CatalogMetadataBarrier.EvidenceInitialized = true
+			initializeRuntimeEvidence(&s)
 			s.CatalogMetadataBarrier.Targets = []pb.CatalogMetadataBarrierTarget{{ServiceType: pb.CNService, UUID: "cn", Generation: 7, CapturedTick: 10}}
 			tc.mutate(&s)
 			_, err := marshalHAKeeperSnapshot(&s, false)
@@ -155,7 +183,7 @@ func TestCatalogMetadataRuntimeRejectsLegacyContainers(t *testing.T) {
 
 func TestCatalogMetadataRuntimeTargetsRoundTripAndLegacyReplacement(t *testing.T) {
 	s := runtimeEvidenceFixture(pb.CATALOG_METADATA_BARRIER_SEALED)
-	s.CatalogMetadataBarrier.EvidenceInitialized = true
+	initializeRuntimeEvidence(&s)
 	s.CatalogMetadataBarrier.Targets = []pb.CatalogMetadataBarrierTarget{
 		{ServiceType: pb.CNService, UUID: "a", Generation: 1, ObservedPreparing: true, SealComplete: true},
 		{ServiceType: pb.CNService, UUID: "a", Generation: 2},

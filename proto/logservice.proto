@@ -145,6 +145,15 @@ message CatalogMetadataCapabilities {
   uint64 ViewDependencyProtocol = 2;
   uint64 RecoveryProtocol = 3;
   uint64 HAKeeperBarrierProtocol = 4;
+  uint64 BarrierParticipantProtocol = 5;
+}
+
+message CatalogMetadataAck {
+  uint64 Generation = 1;
+  uint64 MembershipEpoch = 2;
+  uint64 RequiredGeneration = 3;
+  CatalogMetadataBarrierPhase ObservedPhase = 4;
+  bool SealComplete = 5;
 }
 
 // CNStoreHeartbeat is the periodic message sent tp the HAKeeper by CN stores.
@@ -185,6 +194,7 @@ message CNStoreHeartbeat {
   // compatibility floor is raised.
   uint64          PersistedExpressionProtocolVersion = 25;
   CatalogMetadataCapabilities CatalogMetadataCapabilities = 26;
+  CatalogMetadataAck CatalogMetadataAck = 27;
 }
 
 // CNAllocateID is the periodic message sent tp the HAKeeper by CN stores.
@@ -232,6 +242,7 @@ message LogStoreHeartbeat {
   // versioned snapshot envelope.
   bool ViewMetadataAdmissionProtocolV3Supported = 13;
   CatalogMetadataCapabilities CatalogMetadataCapabilities = 14;
+  CatalogMetadataStartPermit CatalogMetadataStartResult = 15;
 };
 
 // TNShardInfo contains information of a launched TN shard.
@@ -472,6 +483,7 @@ enum HAKeeperUpdateType {
   // entry instead of replaying it while ignoring the persisted-expression
   // protocol floor.
   ActivatePersistedExpressionProtocolUpdate = 22;
+  CatalogMetadataBarrierUpdate = 23;
 }
 
 // HAKeeperState state transition diagram
@@ -585,6 +597,8 @@ message ScheduleCommand {
   DeleteProxyStore  DeleteProxyStore  = 9;
   AddLogShard       AddLogShard       = 10;
   BootstrapShard    BootstrapShard    = 11;
+  CatalogMetadataMembershipOperation CatalogMetadataMembership = 12;
+  CatalogMetadataStartPermit CatalogMetadataStart = 13;
 }
 
 // ScheduleCommandQuery fetches the pending command batch for a service without
@@ -677,6 +691,7 @@ message CatalogMetadataBarrier {
   uint64 CompletedGeneration = 4;
   bool Admitted = 5;
   bool MetadataReadsEnabled = 6;
+  uint64 RecipientGeneration = 7;
 }
 
 // ViewMetadataAdmission is the durable cluster admission snapshot. Generation
@@ -748,6 +763,7 @@ message CNStoreInfo {
   bool ViewMetadataIngressReady = 26;
   uint64 PersistedExpressionProtocolVersion = 27;
   CatalogMetadataCapabilities CatalogMetadataCapabilities = 28;
+  CatalogMetadataAck CatalogMetadataAck = 29;
 }
 
 // CNState contains all CN details known to the HAKeeper.
@@ -797,6 +813,8 @@ message ProxyStore {
   uint64 ViewMetadataAdmissionGeneration = 6;
   uint64 ViewMetadataObservedEpoch = 7;
   bool ViewMetadataAdmissionReady = 8;
+  CatalogMetadataCapabilities CatalogMetadataCapabilities = 9;
+  CatalogMetadataAck CatalogMetadataAck = 10;
 }
 
 message ProxyState {
@@ -810,6 +828,8 @@ message ProxyHeartbeat {
   bool ViewMetadataAdmissionSupported = 4;
   uint64 ViewMetadataAdmissionGeneration = 5;
   uint64 ViewMetadataObservedEpoch = 6;
+  CatalogMetadataCapabilities CatalogMetadataCapabilities = 7;
+  CatalogMetadataAck CatalogMetadataAck = 8;
 };
 
 message ClusterDetails {
@@ -1019,6 +1039,113 @@ message CatalogMetadataBarrierState {
   // Version zero is a legacy snapshot, not evidence of an empty capture.
   uint32 RuntimeEvidenceVersion = 8;
   bool EvidenceInitialized = 9;
+  CatalogMetadataArbitration Arbitration = 10;
+}
+
+// These operations are internal control-plane entries. No public SQL or
+// heartbeat may supply catalog completion or maintenance authorization.
+enum CatalogMetadataAction {
+  CATALOG_ACTION_UNKNOWN = 0;
+  CATALOG_ACTION_ENABLE_MAINTENANCE = 1;
+  CATALOG_ACTION_ACQUIRE_FENCE = 2;
+  CATALOG_ACTION_TAKEOVER_FENCE = 3;
+  CATALOG_ACTION_RELEASE_FENCE = 4;
+  CATALOG_ACTION_RESERVE_MEMBERSHIP = 5;
+  CATALOG_ACTION_COMPLETE_MEMBERSHIP = 6;
+  CATALOG_ACTION_GRANT_START = 7;
+  CATALOG_ACTION_COMPLETE_START = 8;
+  CATALOG_ACTION_BEGIN = 9;
+  CATALOG_ACTION_ACK_TARGET = 10;
+  CATALOG_ACTION_SEAL = 11;
+  CATALOG_ACTION_CATALOG_REQUIRED = 12;
+  CATALOG_ACTION_CLAIM = 13;
+  CATALOG_ACTION_RECOVERY_STARTED = 14;
+  CATALOG_ACTION_COMPLETE = 15;
+  CATALOG_ACTION_SUPERSEDE = 16;
+  CATALOG_ACTION_REVOKE_START = 17;
+}
+
+message CatalogMetadataFence {
+  uint64 Token = 1;
+  string Owner = 2;
+  CatalogMetadataBarrierPhase ExpectedPhase = 3;
+  uint64 MembershipEpoch = 4;
+  uint64 RequiredGeneration = 5;
+}
+
+message CatalogMetadataMembershipOperation {
+  uint64 Token = 1;
+  uint64 ConfigChangeIndex = 2;
+  uint64 ReplicaID = 3;
+  string UUID = 4;
+  string StoreIncarnation = 5;
+  ConfigChangeType ChangeType = 6;
+  map<uint64, string> ExpectedVoting = 7;
+  map<uint64, string> ExpectedNonVoting = 8;
+}
+
+message CatalogMetadataStartPermit {
+  uint64 Token = 1;
+  uint64 ReplicaID = 2;
+  string UUID = 3;
+  string StoreIncarnation = 4;
+  bool NonVoting = 5;
+  bool Completed = 6;
+  bool Revoked = 7;
+  bool RevocationPending = 8;
+}
+
+message CatalogMetadataReceipt {
+  uint64 MembershipEpoch = 1;
+  uint64 RequiredGeneration = 2;
+  uint64 ClaimID = 3;
+  CatalogMetadataAction Action = 4;
+  bytes Digest = 5;
+}
+
+message CatalogMetadataArbitration {
+  bool MaintenanceEnabled = 1;
+  uint64 LastOperationID = 2;
+  CatalogMetadataFence Fence = 3;
+  CatalogMetadataMembershipOperation Reservation = 4;
+  repeated CatalogMetadataStartPermit StartPermits = 5 [(gogoproto.nullable) = false];
+  uint64 LastConsumedFence = 6;
+  uint64 ClaimID = 7;
+  // Fixed slots, one per durable catalog stage; never a generation history.
+  CatalogMetadataReceipt RequiredReceipt = 8;
+  CatalogMetadataReceipt StartedReceipt = 9;
+  CatalogMetadataReceipt CompletedReceipt = 10;
+  map<uint64, CatalogMetadataReplicaIdentity> Members = 11 [(gogoproto.nullable) = false];
+}
+
+message CatalogMetadataReplicaIdentity {
+  string UUID = 1;
+  string StoreIncarnation = 2;
+  // A mismatched incarnation cannot be cleared by a delayed old heartbeat.
+  bool Revoked = 3;
+  bool NonVoting = 4;
+}
+
+message CatalogMetadataRequest {
+  uint32 Version = 1;
+  CatalogMetadataAction Action = 2;
+  uint64 Token = 3;
+  string Owner = 4;
+  string NewOwner = 5;
+  CatalogMetadataBarrierPhase ExpectedPhase = 6;
+  uint64 MembershipEpoch = 7;
+  uint64 RequiredGeneration = 8;
+  uint64 RequiredViewDependencyProtocol = 9;
+  uint64 RequiredRecoveryProtocol = 10;
+  CatalogMetadataMembershipOperation Membership = 11;
+  CatalogMetadataStartPermit StartPermit = 12;
+  CatalogMetadataBarrierTarget Target = 13;
+  CatalogMetadataReceipt Receipt = 14;
+  // The trusted reconciler obtains this from a linearizable Raft membership
+  // read, never from a caller timeout or an executor transport ack.
+  uint64 ObservedConfigChangeIndex = 15;
+  map<uint64, string> ObservedVoting = 16;
+  map<uint64, string> ObservedNonVoting = 17;
 }
 
 // Targets are scoped to the enclosing barrier's epoch and generation and

@@ -38,13 +38,16 @@ func validateCatalogMetadataEvidence(state *pb.HAKeeperRSMState) error {
 		return nil
 	}
 	if floor == 0 {
-		if barrier.RuntimeEvidenceVersion != 0 || barrier.EvidenceInitialized || len(barrier.Targets) != 0 {
+		if barrier.RuntimeEvidenceVersion != 0 || barrier.EvidenceInitialized || len(barrier.Targets) != 0 || barrier.Arbitration != nil {
 			return moerr.NewInvalidInputNoCtx("catalog metadata runtime evidence has no decoder floor")
 		}
 		return nil
 	}
 	if barrier.RuntimeEvidenceVersion != catalogMetadataEvidenceVersion {
 		return moerr.NewInvalidInputNoCtx("unsupported catalog metadata runtime evidence version")
+	}
+	if err := validateCatalogMetadataArbitration(barrier); err != nil {
+		return err
 	}
 	if !barrier.EvidenceInitialized {
 		if len(barrier.Targets) != 0 {

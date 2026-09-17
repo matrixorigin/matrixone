@@ -805,15 +805,18 @@ func (s *stateMachine) getCommandBatchFiltered(
 			pendingIDs = make([]pb.ScheduleCommandID, 0, len(batch.CommandIDs))
 		}
 		for i, cmd := range batch.Commands {
-			if filterHAKeeperAdmissions && !s.logScheduleCommandDeliverable(cmd) {
-				pending = append(pending, cmd)
-				if pendingIDs != nil {
-					pendingIDs = append(pendingIDs, batch.CommandIDs[i])
-				}
+			if s.catalogScheduleObsolete(cmd) {
 				continue
 			}
 			retryable, applied := s.bootstrapReplicaCommandStatus(cmd)
 			if applied {
+				continue
+			}
+			if (filterHAKeeperAdmissions && !s.logScheduleCommandDeliverable(cmd)) || !s.prepareCatalogSchedule(&cmd) {
+				pending = append(pending, cmd)
+				if pendingIDs != nil {
+					pendingIDs = append(pendingIDs, batch.CommandIDs[i])
+				}
 				continue
 			}
 			deliver = append(deliver, cmd)
@@ -1064,6 +1067,7 @@ func (s *stateMachine) handleLogHeartbeat(cmd []byte) sm.Result {
 		panic(err)
 	}
 	s.state.LogState.Update(hb, s.state.Tick)
+	s.observeCatalogStartResult(hb)
 	if s.state.ViewMetadataAdmissionPreparing {
 		if s.state.ViewMetadataAdmissionLogReady == nil {
 			s.state.ViewMetadataAdmissionLogReady = make(map[string]bool)
@@ -1084,7 +1088,7 @@ func (s *stateMachine) handleLogHeartbeat(cmd []byte) sm.Result {
 			delete(s.state.CommandDeliveryReady, hb.UUID)
 		}
 	}
-	return s.getCommandBatchFiltered(hb.UUID, true)
+	return s.attachPendingCatalogStart(s.getCommandBatchFiltered(hb.UUID, true), hb)
 }
 
 func (s *stateMachine) handleTick(cmd []byte) sm.Result {
@@ -1649,6 +1653,8 @@ func (s *stateMachine) Update(e sm.Entry) (sm.Result, error) {
 		return s.handleEnableViewMetadataAdmission(cmd), nil
 	case pb.ActivatePersistedExpressionProtocolUpdate:
 		return s.handleActivatePersistedExpressionProtocol(cmd), nil
+	case pb.CatalogMetadataBarrierUpdate:
+		return s.handleCatalogMetadataRequest(cmd), nil
 	case pb.SetTaskTableUserUpdate:
 		s.assertState()
 		return s.handleTaskTableUserCmd(cmd), nil
@@ -1847,6 +1853,19 @@ func (s *stateMachine) handlePatchCNStore(cmd []byte) sm.Result {
 }
 
 func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
+	if _, ok := query.(*CatalogMetadataStateQuery); ok {
+		var result pb.CatalogMetadataBarrierState
+		if s.state.CatalogMetadataBarrier != nil {
+			data, err := s.state.CatalogMetadataBarrier.Marshal()
+			if err != nil {
+				return nil, err
+			}
+			if err := result.Unmarshal(data); err != nil {
+				return nil, err
+			}
+		}
+		return &result, nil
+	}
 	if _, ok := query.(*StateQuery); ok {
 		return s.handleStateQuery(), nil
 	} else if q, ok := query.(*ScheduleCommandQuery); ok {
