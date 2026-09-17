@@ -1,0 +1,73 @@
+set experimental_fulltext2_index = 1;
+drop database if exists ft2_char_padding;
+create database ft2_char_padding;
+use ft2_char_padding;
+create table t(
+id bigint primary key,
+body text,
+ch char(4),
+vc varchar(4),
+note text
+);
+insert into t values
+(1, 'alpha document', 'a',    'a',   'n1'),
+(2, 'alpha document', 'a ',   'a ',  'n2'),
+(3, 'alpha document', 'a  ',  'a  ', 'n3'),
+(4, 'alpha document', 'abc',  'abc', 'n4'),
+(5, 'alpha document', 'abc ', 'abc ','n5'),
+(6, 'alpha document', '',     '',    'n6');
+create fulltext2 index ft on t(body) include(ch, vc);
+alter table t alter reindex ft fulltext2 force_sync;
+select id from t where body like '%alpha%' and ch = 'a' order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select id from t where match(body) against('+alpha' in boolean mode) and ch = 'a' order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select id from t where match(body) against('+alpha' in boolean mode) and ch = 'a ' order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select id from t where match(body) against('+alpha' in boolean mode) and ch = 'a  ' order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select id from t where match(body) against('+alpha' in boolean mode) and ch <> 'a' order by id;
+➤ id[-5,64,0]  𝄀
+4  𝄀
+5  𝄀
+6
+select id from t where match(body) against('+alpha' in boolean mode) and ch in ('a') order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select id, ch, note from t where match(body) against('+alpha' in boolean mode) and ch = 'a' order by id;
+➤ id[-5,64,0]  ¦  ch[1,4,0]  ¦  note[-1,16383,0]  𝄀
+1  ¦  a  ¦  n1  𝄀
+2  ¦  a   ¦  n2  𝄀
+3  ¦  a    ¦  n3
+select id from t where match(body) against('+alpha' in boolean mode) and rtrim(ch) = 'a' order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+select id from t where match(body) against('+alpha' in boolean mode) and vc = 'a' order by id;
+➤ id[-5,64,0]  𝄀
+1
+explain select id from t where match(body) against('+alpha' in boolean mode) and ch = 'a' order by id;
+-- @regex("fulltext2_search", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_doc_id INTERNAL  𝄀
+        ->  Sort  𝄀
+              Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+              ->  Table Function on fulltext2_search
+drop database ft2_char_padding;

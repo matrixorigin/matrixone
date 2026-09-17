@@ -209,3 +209,76 @@ func TestResultCarriesInclude(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, res[0].Include)
 }
+
+func TestPadSpaceCompare(t *testing.T) {
+	require.Equal(t, 0, padSpaceCompare([]byte("a"), []byte("a  ")), "trailing spaces ignored")
+	require.Equal(t, 0, padSpaceCompare([]byte("a "), []byte("a")))
+	require.Equal(t, 0, padSpaceCompare(nil, []byte("   ")), "empty vs all-spaces are equal")
+	require.Equal(t, 0, padSpaceCompare([]byte(""), []byte("")))
+	require.True(t, padSpaceCompare([]byte("a"), []byte("ab")) < 0, "'a' < 'ab' (space < 'b')")
+	require.True(t, padSpaceCompare([]byte("ab"), []byte("a")) > 0)
+	require.True(t, padSpaceCompare([]byte("a\t"), []byte("a")) < 0, "trailing tab (0x09) < padding space, NOT rtrim")
+	require.True(t, padSpaceEqual([]byte("abc"), []byte("abc")))
+	require.False(t, padSpaceEqual([]byte("abc"), []byte("abd")))
+}
+
+// TestIncludePredicateCharPadSpace: a CHAR INCLUDE column (#29062) compares with SQL pad-space
+// semantics (trailing spaces ignored), while a VARCHAR column stays byte-exact.
+func TestIncludePredicateCharPadSpace(t *testing.T) {
+	incTypes := []int32{int32(types.T_char), int32(types.T_varchar)} // col0 CHAR, col1 VARCHAR
+	pk := int32(types.T_int64)
+
+	eq, err := compileIncludePredicates([]byte(`[{"col":0,"op":"=","val":"a"}]`), incTypes, pk)
+	require.NoError(t, err)
+	require.True(t, eq[0].test([]byte("a"), false))
+	require.True(t, eq[0].test([]byte("a "), false), "'a ' = 'a' under CHAR")
+	require.True(t, eq[0].test([]byte("a  "), false), "'a  ' = 'a' under CHAR")
+	require.False(t, eq[0].test([]byte("ab"), false))
+	require.False(t, eq[0].test([]byte("a\t"), false), "trailing tab is significant (pad-space, not rtrim)")
+
+	// a trailing-space literal is likewise ignored.
+	eq2, _ := compileIncludePredicates([]byte(`[{"col":0,"op":"=","val":"a  "}]`), incTypes, pk)
+	require.True(t, eq2[0].test([]byte("a"), false))
+
+	// '<>' is the complement.
+	ne, _ := compileIncludePredicates([]byte(`[{"col":0,"op":"!=","val":"a"}]`), incTypes, pk)
+	require.False(t, ne[0].test([]byte("a  "), false))
+	require.True(t, ne[0].test([]byte("abc"), false))
+
+	// ordering pads with spaces.
+	lt, _ := compileIncludePredicates([]byte(`[{"col":0,"op":"<","val":"ab"}]`), incTypes, pk)
+	require.True(t, lt[0].test([]byte("a  "), false), "'a' < 'ab'")
+	require.False(t, lt[0].test([]byte("ab"), false))
+
+	le, _ := compileIncludePredicates([]byte(`[{"col":0,"op":"<=","val":"a"}]`), incTypes, pk)
+	require.True(t, le[0].test([]byte("a  "), false), "'a  ' <= 'a' (pad-equal)")
+	require.False(t, le[0].test([]byte("ab"), false))
+
+	gt, _ := compileIncludePredicates([]byte(`[{"col":0,"op":">","val":"a"}]`), incTypes, pk)
+	require.True(t, gt[0].test([]byte("ab"), false))
+	require.False(t, gt[0].test([]byte("a  "), false), "'a  ' is not > 'a'")
+
+	ge, _ := compileIncludePredicates([]byte(`[{"col":0,"op":">=","val":"a"}]`), incTypes, pk)
+	require.True(t, ge[0].test([]byte("a  "), false))
+	require.True(t, ge[0].test([]byte("ab"), false))
+
+	bw, _ := compileIncludePredicates([]byte(`[{"col":0,"op":"between","lo":"a","hi":"b"}]`), incTypes, pk)
+	require.True(t, bw[0].test([]byte("a  "), false))
+	require.True(t, bw[0].test([]byte("ab"), false))
+	require.False(t, bw[0].test([]byte("c"), false))
+
+	// IN with pad-space.
+	in, _ := compileIncludePredicates([]byte(`[{"col":0,"op":"in","vals":["a","zzz"]}]`), incTypes, pk)
+	require.True(t, in[0].test([]byte("a  "), false))
+	require.False(t, in[0].test([]byte("b"), false))
+
+	// VARCHAR (col1) stays byte-exact.
+	veq, _ := compileIncludePredicates([]byte(`[{"col":1,"op":"=","val":"a"}]`), incTypes, pk)
+	require.True(t, veq[0].test([]byte("a"), false))
+	require.False(t, veq[0].test([]byte("a "), false), "VARCHAR is byte-exact: 'a ' != 'a'")
+
+	// a CHAR PRIMARY KEY stays byte-exact (mirrors MO's base pk lookup): 'a' matches only 'a'.
+	pkeq, _ := compileIncludePredicates([]byte(`[{"col":-1,"op":"=","val":"a"}]`), incTypes, int32(types.T_char))
+	require.True(t, pkeq[0].test([]byte("a"), false))
+	require.False(t, pkeq[0].test([]byte("a  "), false), "CHAR pk is byte-exact, not pad-space")
+}

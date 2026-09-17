@@ -81,6 +81,7 @@ type compiledIncludePred struct {
 	col        int
 	kind       includeCmpKind
 	isStr      bool
+	padSpace   bool     // CHAR column: compare with SQL pad-space semantics (trailing spaces ignored)
 	isUnsigned bool     // uint64/bit column: compare as uint64 (int64 wraps values above MaxInt64)
 	ints       []int64  // signed integer-column operands (all int types + uint8/16/32, which fit int64)
 	uints      []uint64 // unsigned-64 column operands
@@ -126,7 +127,14 @@ func compileIncludePredicates(specJSON []byte, includeTypes []int32, pkType int3
 		// silently exclude a matching row. All other integer types (int8..64, uint8..32) fit
 		// in int64. isStr takes precedence (varchar/char).
 		unsigned := colType == int32(types.T_uint64) || colType == int32(types.T_bit)
-		cp := compiledIncludePred{col: p.Col, kind: kind, isStr: isVarlenaIncludeType(colType), isUnsigned: unsigned}
+		cp := compiledIncludePred{
+			col: p.Col, kind: kind, isStr: isVarlenaIncludeType(colType), isUnsigned: unsigned,
+			// A CHAR INCLUDE column compares pad-space (trailing spaces ignored), matching the base
+			// table's regular-column semantics. The primary key is EXCLUDED: MO's base pk lookup is
+			// byte-exact for CHAR (a serialized-key compare), so a CHAR pk predicate must stay
+			// byte-exact here too to return the same rows as the base table. varchar is byte-exact.
+			padSpace: colType == int32(types.T_char) && p.Col != IncludePredPkCol,
+		}
 		// Gather the op's operands from the shape-appropriate field(s).
 		var operands []any
 		switch kind {
@@ -204,6 +212,36 @@ func isVarlenaIncludeType(t int32) bool {
 		return false
 	}
 }
+
+// padSpaceCompare compares a and b under SQL CHAR pad-space semantics: the shorter operand is
+// treated as if right-padded with spaces to the other's length, so trailing spaces are not
+// significant ('a' == 'a  ') and ordering pads with 0x20. Returns -1, 0, or 1 like bytes.Compare.
+// This is the exact SQL definition -- NOT rtrim-then-compare, which disagrees for trailing bytes
+// below space (e.g. a tab sorts before a space).
+func padSpaceCompare(a, b []byte) int {
+	n := len(a)
+	if len(b) > n {
+		n = len(b)
+	}
+	for i := 0; i < n; i++ {
+		ca, cb := byte(' '), byte(' ')
+		if i < len(a) {
+			ca = a[i]
+		}
+		if i < len(b) {
+			cb = b[i]
+		}
+		if ca != cb {
+			if ca < cb {
+				return -1
+			}
+			return 1
+		}
+	}
+	return 0
+}
+
+func padSpaceEqual(a, b []byte) bool { return padSpaceCompare(a, b) == 0 }
 
 // includeOperandUint64 extracts a uint64 operand from a decoded JSON value, for uint64/bit
 // columns whose values can exceed MaxInt64 (where includeOperandInt64 would fail or saturate).
@@ -297,26 +335,35 @@ func (p *compiledIncludePred) test(v any, isNull bool) bool {
 	}
 	if p.isStr {
 		b := includeBytes(v)
+		// CHAR uses SQL pad-space comparison (operands compared as if right-padded with spaces to
+		// equal length, so trailing spaces are ignored); varchar is byte-exact. Prefix is byte
+		// HasPrefix for both -- a LIKE 'x%' prefix matches the stored value regardless of padding.
+		strEqual := bytes.Equal
+		strCompare := bytes.Compare
+		if p.padSpace {
+			strEqual = padSpaceEqual
+			strCompare = padSpaceCompare
+		}
 		switch p.kind {
 		case incEq:
-			return bytes.Equal(b, p.strs[0])
+			return strEqual(b, p.strs[0])
 		case incNe:
-			return !bytes.Equal(b, p.strs[0])
+			return !strEqual(b, p.strs[0])
 		case incLt:
-			return bytes.Compare(b, p.strs[0]) < 0
+			return strCompare(b, p.strs[0]) < 0
 		case incLe:
-			return bytes.Compare(b, p.strs[0]) <= 0
+			return strCompare(b, p.strs[0]) <= 0
 		case incGt:
-			return bytes.Compare(b, p.strs[0]) > 0
+			return strCompare(b, p.strs[0]) > 0
 		case incGe:
-			return bytes.Compare(b, p.strs[0]) >= 0
+			return strCompare(b, p.strs[0]) >= 0
 		case incBetween:
-			return bytes.Compare(b, p.strs[0]) >= 0 && bytes.Compare(b, p.strs[1]) <= 0
+			return strCompare(b, p.strs[0]) >= 0 && strCompare(b, p.strs[1]) <= 0
 		case incPrefix:
 			return bytes.HasPrefix(b, p.strs[0])
 		case incIn:
 			for _, s := range p.strs {
-				if bytes.Equal(b, s) {
+				if strEqual(b, s) {
 					return true
 				}
 			}
