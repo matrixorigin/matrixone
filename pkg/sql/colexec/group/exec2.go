@@ -1340,13 +1340,20 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 		aggexec.SetGroupConcatSourceRowWire(ag, groupConcatSourceRowWireEnabled(proc))
 		aggexec.SetGroupConcatSourceRowProvenanceWire(
 			ag, groupConcatSourceRowProvenanceWireEnabled(proc))
+		// The FLOAT DISTINCT membership policy is frozen when the aggregate
+		// state is admitted. If the capability gate advances while a prepared
+		// Group is draining, keep legacy-policy state on the legacy framing;
+		// the v79 marker would make a receiver treat legacy float bytes as
+		// already canonical and preserve distinct NaN payloads incorrectly.
+		canonicalDistinctWire := canonicalDistinctKeyWireEnabled(proc) &&
+			!group.ctr.legacyDistinctFloatKeys
 		if aggexec.RequiresModernDistinctFloatKeyWire(ag) &&
-			!canonicalDistinctKeyWireEnabled(proc) {
+			!canonicalDistinctWire {
 			return vm.CancelResult, false, moerr.NewInvalidStateNoCtx(
 				"modern FLOAT DISTINCT key state requires MORPCVersion79")
 		}
 		aggexec.SetCanonicalDistinctKeyWire(
-			ag, canonicalDistinctKeyWireEnabled(proc))
+			ag, canonicalDistinctWire)
 		if aggexec.RequiresCanonicalDistinctKeyWire(ag) &&
 			!canonicalDistinctKeyWireEnabled(proc) {
 			return vm.CancelResult, false, moerr.NewInvalidStateNoCtx(

@@ -4572,6 +4572,74 @@ func TestRemoteDistinctFloatUsesProtocolKeyPolicy(t *testing.T) {
 	}
 }
 
+func TestRemoteDistinctFloatLegacyStateKeepsLegacyWireAfterGateAdvance(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	require.True(t, ok)
+	t.Cleanup(func() {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		proc.Free()
+	})
+
+	countDistinctTuple := func() aggexec.AggFuncExecExpression {
+		return aggexec.MakeAggFunctionExpression(
+			aggexec.AggIdOfCountColumn,
+			true,
+			[]*plan.Expr{
+				colExpr(0, types.T_float64),
+				colExpr(1, types.T_varchar),
+			},
+			nil,
+		)
+	}
+
+	// Admit the state while the remote peer is still pre-v79. The two NaNs
+	// must remain distinct in the legacy producer's in-memory state.
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion78)
+	input := batch.NewWithSize(2)
+	input.Vecs[0] = testutil.NewFloat64Vector(
+		2, types.T_float64.ToType(), proc.Mp(), false, nil,
+		[]float64{
+			math.Float64frombits(0x7ff8000000000001),
+			math.Float64frombits(0x7ff8000000000002),
+		})
+	input.Vecs[1] = testutil.MakeVarcharVector([]string{"a", "a"}, nil, proc.Mp())
+	input.SetRowCount(2)
+	partial := newGroupOp(proc, nil, []aggexec.AggFuncExecExpression{countDistinctTuple()})
+	partial.NeedEval = false
+	require.NoError(t, partial.Prepare(proc))
+	_, err := partial.buildOneBatch(proc, input)
+	require.NoError(t, err)
+
+	// Do not emit while the state is admitted. Advance the capability gate
+	// before calling the partial-output boundary so this exercises a prepared
+	// Group whose legacy state is drained under the newer protocol.
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion79)
+	partialResult, _, err := partial.getNextIntermediateResult(proc)
+	require.NoError(t, err)
+	require.NotNil(t, partialResult.Batch)
+	partialBatch := cloneBatch(t, proc, partialResult.Batch)
+	partial.Free(proc, false, nil)
+	input.Clean(proc.Mp())
+
+	// The capability gate advances before the prepared partial is emitted to
+	// the receiver. The output must retain legacy framing so the v79 receiver
+	// canonicalizes the legacy FLOAT member instead of trusting it as modern.
+	mergeChild := colexec.NewMockOperator().WithBatchs([]*batch.Batch{partialBatch})
+	merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{countDistinctTuple()})
+	merge.AppendChild(mergeChild)
+	require.NoError(t, merge.Prepare(proc))
+	outputs := collectBatches(t, merge, proc)
+	require.Len(t, outputs, 1)
+	require.Equal(t, int64(1),
+		vector.MustFixedColNoTypeCheck[int64](outputs[0].Vecs[0])[0])
+	merge.Free(proc, false, nil)
+	mergeChild.Free(proc, false, nil)
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestRemoteDistinctFloatDowngradeRejectsModernState(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
