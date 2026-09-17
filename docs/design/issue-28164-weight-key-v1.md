@@ -39,8 +39,11 @@ checksum behavior while retaining checksums required by an operation. The
 compatibility policy is covered by
 `TestNewAwsSDKv2UsesCompatibilityChecksumPolicy`; existing small PUT, read,
 unknown-size multipart and parallel multipart tests remain separate storage
-path evidence. A live S3-compatible backend matrix is still NOT_RUN and is a
-required follow-up before treating the dependency closure as production-ready.
+path evidence. `DeleteObjects` checksum rejection is treated as a compatibility
+signal: MatrixOne disables subsequent batch deletes and falls back to individual
+`DeleteObject` calls, covered by `TestAwsDeleteMultiFallsBackToSinglesOnChecksumRejection`.
+A live S3-compatible backend matrix is still NOT_RUN and is a required follow-up
+before treating the dependency closure as production-ready.
 
 ## Normative payloads
 

@@ -937,10 +937,10 @@ func (a *AwsSDKv2) deleteMultiObj(ctx context.Context, objs []types.ObjectIdenti
 	})
 	// delete api failed
 	if err != nil {
-		if isS3APIErrorCode(err, "MalformedXML") {
+		if isS3APIErrorCode(err, "MalformedXML") || isS3APIMultiDeleteChecksumError(err) {
 			a.disableMultiDelete.Store(true)
 			logutil.Warn(
-				"s3 delete objects returned MalformedXML, disabling multi-delete and falling back to single deletes",
+				"s3 delete objects is incompatible with this endpoint, disabling multi-delete and falling back to single deletes",
 				zap.String("fs", a.name),
 				zap.String("bucket", a.bucket),
 				zap.Int("count", len(objs)),
@@ -964,6 +964,20 @@ func (a *AwsSDKv2) deleteMultiObj(ctx context.Context, objs []types.ObjectIdenti
 		return moerr.NewInternalErrorNoCtxf("S3 Delete failed: %s", message.String())
 	}
 	return nil
+}
+
+// Newer AWS SDK v2 releases use CRC32 for the required DeleteObjects checksum,
+// while older SDKs sent Content-MD5. Some S3-compatible endpoints still reject
+// the newer request with one of these errors. A failed batch has not deleted
+// any objects, so falling back to individual DeleteObject calls preserves
+// correctness and keeps the endpoint usable; disable batching for later calls.
+func isS3APIMultiDeleteChecksumError(err error) bool {
+	for _, code := range []string{"MissingContentMD5", "InvalidDigest", "BadDigest", "InvalidRequest"} {
+		if isS3APIErrorCode(err, code) {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *AwsSDKv2) deleteMultiObjOneByOne(ctx context.Context, objs []types.ObjectIdentifier) error {
