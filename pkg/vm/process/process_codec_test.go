@@ -177,7 +177,7 @@ func TestProcessCodecHelpers(t *testing.T) {
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				info, err := ConvertToProcessSessionInfo(pipeline.SessionInfo{TimeZone: tc.data})
-				require.Error(t, err)
+				require.NoError(t, err)
 				require.Nil(t, info.TimeZone)
 			})
 		}
@@ -225,7 +225,7 @@ func TestProcessCodecHelpers(t *testing.T) {
 		require.Equal(t, "", resolveSqlMode(nil))
 
 		// Resolver present: its value wins.
-		proc := &Process{Base: &BaseProcess{IsFrontend: true, SessionInfo: SessionInfo{SqlMode: "STRICT_ALL_TABLES"}}}
+		proc := &Process{Base: &BaseProcess{SessionInfo: SessionInfo{SqlMode: "STRICT_ALL_TABLES"}}}
 		proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
 			return "STRICT_TRANS_TABLES", nil
 		})
@@ -377,23 +377,36 @@ func TestBuildProcessInfoPreservesBackgroundSqlModeAcrossForwards(t *testing.T) 
 	require.Equal(t, "STRICT_TRANS_TABLES", second.SessionInfo.SqlMode)
 }
 
-func TestBuildProcessInfoBackgroundSqlModeSnapshotBeatsResolver(t *testing.T) {
+func TestBuildProcessInfoGenericAndStatementDigestSQLModeResolution(t *testing.T) {
 	proc, _ := newCodecTestProcess(t)
 	proc.Base.IsFrontend = false
 	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
 		return "ANSI_QUOTES", nil
 	})
 
-	first, err := proc.BuildProcessInfo("select 1")
+	// Ordinary process-info encoding retains its legacy resolver precedence.
+	ordinary, err := proc.BuildProcessInfo("select 1")
 	require.NoError(t, err)
-	require.Equal(t, "STRICT_TRANS_TABLES", first.SessionInfo.SqlMode)
+	require.Equal(t, "ANSI_QUOTES", ordinary.SessionInfo.SqlMode)
+
+	// Digest-bearing encoding instead preserves the coordinator's captured
+	// snapshot so the receiver parses under the same SQL mode.
+	digest, err := proc.BuildProcessInfoWithStatementDigest("select 1")
+	require.NoError(t, err)
+	require.Equal(t, "STRICT_TRANS_TABLES", digest.SessionInfo.SqlMode)
 
 	svc := NewCodecService(fakeCodecTxnClient{op: fakeCodecTxnOperator{}}, nil, nil, nil, nil, nil, nil, nil)
-	decoded, err := svc.Decode(defines.AttachAccountId(context.Background(), 42), first)
+	decoded, err := svc.Decode(defines.AttachAccountId(context.Background(), 42), digest)
 	require.NoError(t, err)
 	defer decoded.Free()
+	decoded.Base.IsFrontend = false
+	decoded.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return "ANSI_QUOTES", nil
+	})
 
-	second, err := decoded.BuildProcessInfo("select 1")
+	// Even if an intermediate CN has a different resolver, a second digest
+	// forward must retain the original snapshot.
+	second, err := decoded.BuildProcessInfoWithStatementDigest("select 1")
 	require.NoError(t, err)
 	require.Equal(t, "STRICT_TRANS_TABLES", second.SessionInfo.SqlMode)
 }

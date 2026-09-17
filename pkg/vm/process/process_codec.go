@@ -525,7 +525,7 @@ func ConvertToProcessSessionInfo(
 	t := time.Time{}
 	err := t.UnmarshalBinary(sei.TimeZone)
 	if err != nil {
-		return sessionInfo, err
+		return sessionInfo, nil
 	}
 	sessionInfo.TimeZone = t.Location()
 	return sessionInfo, nil
@@ -572,8 +572,31 @@ func ResolveSQLMode(proc *Process) (string, error) {
 }
 
 func resolveSqlMode(proc *Process) string {
-	sqlMode, _ := ResolveSQLMode(proc)
-	return sqlMode
+	// Preserve the legacy best-effort behavior for ordinary remote scopes.
+	// STATEMENT_DIGEST uses ResolveSQLMode directly because it must preserve a
+	// captured SQL-mode snapshot and fail closed when the resolver fails.
+	if proc == nil {
+		return ""
+	}
+	if f := proc.GetResolveVariableFunc(); f != nil {
+		if v, err := f("sql_mode", true, false); err == nil {
+			if s, ok := v.(string); ok {
+				if s == "" {
+					if proc.Base != nil && !proc.Base.IsFrontend {
+						if snapshot := proc.Base.SessionInfo.SqlMode; snapshot != "" {
+							return snapshot
+						}
+					}
+					return EmptySqlModeSentinel
+				}
+				return s
+			}
+		}
+	}
+	if proc.Base == nil {
+		return ""
+	}
+	return proc.Base.SessionInfo.SqlMode
 }
 
 func resolveLockWaitTimeoutSeconds(proc *Process) int64 {
