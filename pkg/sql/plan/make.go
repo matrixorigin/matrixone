@@ -152,20 +152,65 @@ func markDecimalLiteralRequiresV82(expr *plan.Expr, source, canonical string, wi
 }
 
 // markDecimalComparisonProtocolRequirement carries the exact-decimal fence
-// through an early comparison simplification. The replacement boolean is
-// semantically equivalent only for the current binder; an older binder may
-// bind the persisted source literal differently.
+// through comparison binding. The expanded zero-tail analysis can change a
+// narrow literal's result without changing its literal spelling, so the
+// source literal itself must be marked even when the comparison is retained.
 func markDecimalComparisonProtocolRequirement(expr *plan.Expr, owner any) {
-	if expr == nil {
-		return
-	}
 	required, err := plan.RequiresMORPCVersion84DecimalLiteralSemantics(owner)
-	if err != nil || !required {
+	args, hasArgs := owner.([]*plan.Expr)
+	extended := hasArgs && decimalComparisonUsesExtendedTrailingZeroSemantics(args)
+	if err != nil || (!required && !extended) {
 		return
 	}
-	if literal := expr.GetLit(); literal != nil {
-		literal.DecimalLiteralRequiresV82 = true
+	if expr != nil {
+		if literal := expr.GetLit(); literal != nil {
+			literal.DecimalLiteralRequiresV82 = true
+		}
 	}
+	if hasArgs {
+		for _, arg := range args {
+			_ = plan.VisitExprTree(arg, func(current *plan.Expr) error {
+				if literal := current.GetLit(); literal != nil {
+					literal.DecimalLiteralRequiresV82 = true
+				}
+				return nil
+			})
+		}
+	}
+}
+
+func decimalComparisonUsesExtendedTrailingZeroSemantics(args []*plan.Expr) bool {
+	if len(args) != 2 {
+		return false
+	}
+	left, right := unwrapCast(args[0]), unwrapCast(args[1])
+	var colExpr, constExpr *plan.Expr
+	var originalConst *plan.Expr
+	if left != nil && left.GetCol() != nil && right != nil && right.GetLit() != nil {
+		colExpr, constExpr, originalConst = left, right, args[1]
+	} else if right != nil && right.GetCol() != nil && left != nil && left.GetLit() != nil {
+		colExpr, constExpr, originalConst = right, left, args[0]
+	} else {
+		return false
+	}
+	colType := makeTypeByPlan2Expr(colExpr)
+	constType := makeTypeByPlan2Expr(originalConst)
+	return colType.Oid.IsDecimal() && constType.Oid.IsDecimal() &&
+		constType.Scale-colType.Scale > 18 && constExpr.GetLit() != nil
+}
+
+func decimalComparisonColumnIsNotNullable(args []*plan.Expr) bool {
+	if len(args) != 2 {
+		return false
+	}
+	left, right := unwrapCast(args[0]), unwrapCast(args[1])
+	if left != nil && left.GetCol() != nil && right != nil && right.GetLit() != nil {
+		return left.Typ.NotNullable
+	}
+	if right != nil && right.GetCol() != nil && left != nil && left.GetLit() != nil {
+		return right.Typ.NotNullable
+	}
+	return false
 }
 
 func decimalLiteralRequiresV82(source, canonical string, normalizedWidth int32) bool {

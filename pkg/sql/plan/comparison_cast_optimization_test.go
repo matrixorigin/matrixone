@@ -748,6 +748,7 @@ func TestDecimalComparisonKeepsWideZeroSuffixAndCarriesProtocolMarker(t *testing
 		Typ:  makePlan2Type(&columnType),
 		Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "d"}},
 	}
+	column.Typ.NotNullable = true
 
 	for _, operator := range []string{"=", "<>"} {
 		for _, tc := range []struct {
@@ -794,6 +795,29 @@ func TestDecimalComparisonKeepsWideZeroSuffixAndCarriesProtocolMarker(t *testing
 				require.Equal(t, tc.wantMarker, requires)
 			})
 		}
+	}
+}
+
+func TestDecimalComparisonPreservesNullableColumnSemantics(t *testing.T) {
+	ctx := context.Background()
+	columnType := types.New(types.T_decimal128, 38, 0)
+	column := &plan.Expr{
+		Typ:  makePlan2Type(&columnType),
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "d"}},
+	}
+	literalText := "12345678901234567890123456789012345678.1"
+
+	for _, operator := range []string{"=", "<>"} {
+		t.Run(operator, func(t *testing.T) {
+			literal, err := makePlan2DecimalExprWithType(ctx, literalText)
+			require.NoError(t, err)
+			result, err := BindFuncExprImplByPlanExpr(ctx, operator,
+				[]*plan.Expr{DeepCopyExpr(column), literal})
+			require.NoError(t, err)
+			require.NotNil(t, result.GetF(), "nullable comparison must not fold to a constant")
+			require.False(t, result.Typ.NotNullable,
+				"comparison result must preserve SQL NULL semantics")
+		})
 	}
 }
 
