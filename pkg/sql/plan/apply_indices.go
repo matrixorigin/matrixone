@@ -834,9 +834,10 @@ func getColSeqFromColDef(tblCol *plan.ColDef) string {
 }
 
 type fullTextIndexPath struct {
-	sortNode *plan.Node
-	aggNode  *plan.Node
-	scanNode *plan.Node
+	sortNode   *plan.Node
+	aggNode    *plan.Node
+	havingNode *plan.Node // FILTER carrying HAVING between the project and the agg, if any
+	scanNode   *plan.Node
 }
 
 // resolveFullTextIndexPath finds the fulltext rewrite boundary. Projection
@@ -854,12 +855,19 @@ func (builder *QueryBuilder) resolveFullTextIndexPath(projNode *plan.Node) *full
 		}
 	}
 
+	var havingNode *plan.Node
 	for node := projNode; node != nil && len(node.Children) == 1; node = builder.qry.Nodes[node.Children[0]] {
+		if node.NodeType == plan.Node_FILTER {
+			// The HAVING clause sits in a FILTER between the project and the agg
+			// (appendAggNode). Its predicates are what can make an aggregate MATCH a driver.
+			havingNode = node
+			continue
+		}
 		if node.NodeType != plan.Node_AGG {
 			continue
 		}
 		if scanNode := builder.resolveScanNodeWithIndex(node, 1); scanNode != nil {
-			return &fullTextIndexPath{aggNode: node, scanNode: scanNode}
+			return &fullTextIndexPath{aggNode: node, havingNode: havingNode, scanNode: scanNode}
 		}
 	}
 	return nil
@@ -888,6 +896,19 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 			// `select count(*) from t where match(...) > 0.5` has no bare match at all.
 			wrappedFTExprs, wrappedFTIdxs := builder.getWrappedFullTextMatches(
 				nil, path.scanNode, filterids, nil)
+
+			// #29065: a grouped query whose only MATCH is an aggregate -- `MAX(match) AS score ...
+			// HAVING score > 0` / `HAVING MAX(match) > 0` -- has no scan-level driver, so the
+			// aggregate MATCH proven present by the membership-implying HAVING must drive the index.
+			var havingPreds []*plan.Expr
+			if path.havingNode != nil {
+				havingPreds = append(havingPreds, path.havingNode.FilterList...)
+			}
+			havingPreds = append(havingPreds, path.aggNode.FilterList...)
+			aggExprs, aggFTIdxs := builder.getFullTextMatchFromAggHaving(
+				havingPreds, path.aggNode, path.scanNode, fullTextDriverFuncs(path.scanNode, filterids, wrappedFTExprs))
+			wrappedFTExprs = append(wrappedFTExprs, aggExprs...)
+			wrappedFTIdxs = append(wrappedFTIdxs, aggFTIdxs...)
 
 			// apply the match indices (one unified pass handles a mix of MATCH + BM25)
 			if len(filterids) > 0 || len(wrappedFTExprs) > 0 {

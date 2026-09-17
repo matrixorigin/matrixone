@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -121,4 +122,97 @@ func TestFullTextAggMatchRewrittenToScore(t *testing.T) {
 				"the aggregate's MATCH must be served by a fulltext index scan")
 		})
 	}
+}
+
+// #29065: PROJECT -> FILTER(HAVING max(match)>0 as colref) -> AGG(AggList max(match)) -> SCAN(no where).
+// The membership-implying HAVING must let the aggregate MATCH drive the index scan.
+func TestFullTextAggHavingDrivesIndex(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	ctx := NewBindContext(builder, nil)
+
+	tableDef := makeFullTextJoinTestTableDef("ft", true)
+	registerFullTextJoinRegularIndexTable(builder, tableDef.Indexes[0].IndexTableName)
+	scanTag := builder.genNewBindTag()
+	scanID := builder.appendNode(makeFullTextJoinTestScan(tableDef, scanTag, nil), ctx)
+
+	match := makeFullTextMatchExpr("hello", 0, tableDef, scanTag, []int32{2, 3})
+	maxMatch := ftAggFn("max", match)
+	groupTag := builder.genNewBindTag()
+	aggTag := builder.genNewBindTag()
+	ftyp := types.T_float32.ToType()
+	aggID := builder.appendNode(&planpb.Node{
+		NodeType:    planpb.Node_AGG,
+		Children:    []int32{scanID},
+		AggList:     []*planpb.Expr{maxMatch},
+		GroupBy:     []*planpb.Expr{ftjColExpr(tableDef, scanTag, 1)},
+		BindingTags: []int32{groupTag, aggTag},
+	}, ctx)
+
+	aggCol := &planpb.Expr{Typ: makePlan2Type(&ftyp), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: aggTag, ColPos: 0}}}
+	havingPred, err := BindFuncExprImplByPlanExpr(context.Background(), ">", []*planpb.Expr{aggCol, makePlan2Float64ConstExprWithType(0)})
+	require.NoError(t, err)
+	filterID := builder.appendNode(&planpb.Node{NodeType: planpb.Node_FILTER, Children: []int32{aggID}, FilterList: []*planpb.Expr{havingPred}}, ctx)
+
+	projTag := builder.genNewBindTag()
+	projID := builder.appendNode(&planpb.Node{
+		NodeType:    planpb.Node_PROJECT,
+		Children:    []int32{filterID},
+		BindingTags: []int32{projTag},
+		ProjectList: []*planpb.Expr{{Typ: makePlan2Type(&ftyp), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: aggTag, ColPos: 0}}}},
+	}, ctx)
+
+	newID, err := builder.applyIndices(projID, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	builder.qry.Steps = []int32{newID}
+
+	require.Zero(t, countReachableFullTextMatches(builder.qry), "aggregate MATCH proven by membership HAVING must be rewritten")
+	require.Equal(t, 1, countReachableFullTextScans(builder.qry), "the aggregate MATCH must drive one fulltext index scan")
+}
+
+// #29065 safety: a co-aggregate (COUNT here) over a group would be computed over matchers only if
+// the aggregate MATCH drove the index (driving drops non-matching rows before aggregation), so the
+// query must NOT be driven -- the raw match survives (left to 20105) rather than returning wrong
+// counts for a multi-row group.
+func TestFullTextAggHavingCoAggregateNotDriven(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	ctx := NewBindContext(builder, nil)
+
+	tableDef := makeFullTextJoinTestTableDef("ft", true)
+	registerFullTextJoinRegularIndexTable(builder, tableDef.Indexes[0].IndexTableName)
+	scanTag := builder.genNewBindTag()
+	scanID := builder.appendNode(makeFullTextJoinTestScan(tableDef, scanTag, nil), ctx)
+
+	match := makeFullTextMatchExpr("hello", 0, tableDef, scanTag, []int32{2, 3})
+	countAgg := ftAggFn("count", ftjColExpr(tableDef, scanTag, 1))
+	maxMatch := ftAggFn("max", match)
+	groupTag := builder.genNewBindTag()
+	aggTag := builder.genNewBindTag()
+	ftyp := types.T_float32.ToType()
+	aggID := builder.appendNode(&planpb.Node{
+		NodeType:    planpb.Node_AGG,
+		Children:    []int32{scanID},
+		AggList:     []*planpb.Expr{countAgg, maxMatch}, // count(*) alongside max(match)
+		GroupBy:     []*planpb.Expr{ftjColExpr(tableDef, scanTag, 1)},
+		BindingTags: []int32{groupTag, aggTag},
+	}, ctx)
+
+	aggCol := &planpb.Expr{Typ: makePlan2Type(&ftyp), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: aggTag, ColPos: 1}}}
+	havingPred, err := BindFuncExprImplByPlanExpr(context.Background(), ">", []*planpb.Expr{aggCol, makePlan2Float64ConstExprWithType(0)})
+	require.NoError(t, err)
+	filterID := builder.appendNode(&planpb.Node{NodeType: planpb.Node_FILTER, Children: []int32{aggID}, FilterList: []*planpb.Expr{havingPred}}, ctx)
+
+	projTag := builder.genNewBindTag()
+	projID := builder.appendNode(&planpb.Node{
+		NodeType:    planpb.Node_PROJECT,
+		Children:    []int32{filterID},
+		BindingTags: []int32{projTag},
+		ProjectList: []*planpb.Expr{{Typ: makePlan2Type(&ftyp), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: aggTag, ColPos: 1}}}},
+	}, ctx)
+
+	newID, err := builder.applyIndices(projID, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	builder.qry.Steps = []int32{newID}
+
+	require.Equal(t, 0, countReachableFullTextScans(builder.qry), "a co-aggregate query must not drive the index")
+	require.Positive(t, countReachableFullTextMatches(builder.qry), "the raw MATCH survives (query stays unsupported)")
 }

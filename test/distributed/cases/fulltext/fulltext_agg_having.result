@@ -1,0 +1,70 @@
+set experimental_fulltext_index = 1;
+drop database if exists ft_agg_having;
+create database ft_agg_having;
+use ft_agg_having;
+create table docs(id int primary key, body text);
+insert into docs values
+(1,'alpha alpha common'),
+(2,'alpha common'),
+(3,'beta common'),
+(4,'alpha beta'),
+(5,'gamma'),
+(6,'alpha alpha alpha');
+create fulltext index ft on docs(body);
+select id from docs group by id, body having match(body) against('alpha') > 0 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+4  𝄀
+6
+select id, max(match(body) against('alpha')) as score
+from docs group by id, body having score > 0 order by id;
+➤ id[4,32,0]  ¦  score[7,23,31]  𝄀
+1  ¦  0.062016264  𝄀
+2  ¦  0.031008132  𝄀
+4  ¦  0.031008132  𝄀
+6  ¦  0.093024395
+select id, max(match(body) against('alpha')) as score
+from docs group by id, body having max(match(body) against('alpha')) > 0 order by id;
+➤ id[4,32,0]  ¦  score[7,23,31]  𝄀
+1  ¦  0.062016264  𝄀
+2  ¦  0.031008132  𝄀
+4  ¦  0.031008132  𝄀
+6  ¦  0.093024395
+select id from docs group by id, body having sum(match(body) against('alpha')) > 0 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2  𝄀
+4  𝄀
+6
+explain select id, max(match(body) against('alpha')) as score
+from docs group by id, body having score > 0 order by id;
+-- @regex("fulltext_index_scan", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: docs.id INTERNAL  𝄀
+        ->  Aggregate  𝄀
+              Group Key: docs.id, docs.body  𝄀
+              Hash Key: docs.id  𝄀
+              Aggregate Functions: max(mo_fulltext_alias_0.score)  𝄀
+              Filter Cond: (max(MATCH (body) AGAINST ('alpha')) > 0)  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (docs.id = mo_fulltext_alias_0.doc_id)  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on ft_agg_having.docs  𝄀
+                          Runtime Filter Probe: docs.id  𝄀
+                    ->  Table Function on fulltext_index_scan
+select id from docs group by id, body having min(match(body) against('alpha')) > 0 order by id;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+create table cat_docs(id int primary key, cat int, body text);
+insert into cat_docs values (1,10,'alpha x'),(2,10,'alpha y'),(3,10,'nomatch'),(4,20,'alpha z'),(5,20,'beta only');
+create fulltext index cft on cat_docs(body);
+select cat, count(*) as c, max(match(body) against('alpha')) as s
+from cat_docs group by cat having max(match(body) against('alpha')) > 0 order by cat;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+select cat, max(id) as mx, max(match(body) against('alpha')) as s
+from cat_docs group by cat having s > 0 order by cat;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+drop database ft_agg_having;

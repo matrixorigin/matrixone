@@ -1825,6 +1825,28 @@ func collectNestedFullTextMatches(expr *plan.Expr, out []*plan.Expr) []*plan.Exp
 // comparison against a constant tells us anything about index membership; a wrapper that is
 // not order-preserving (negation, subtraction from a constant) must not qualify, because it
 // can make the predicate TRUE for a document the index never returns.
+// unwrapMonotoneScalar strips order-preserving scalar wrappers (round, cast, floor, ceil) and
+// returns the inner expression. Used to see through the cast a comparison inserts around an
+// aggregate result before matching the aggregate itself.
+func unwrapMonotoneScalar(expr *plan.Expr) *plan.Expr {
+	for expr != nil {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil {
+			return expr
+		}
+		switch fn.Func.ObjName {
+		case "round", "cast", "floor", "ceil":
+			if len(fn.Args) == 0 {
+				return expr
+			}
+			expr = fn.Args[0]
+		default:
+			return expr
+		}
+	}
+	return expr
+}
+
 func monotoneWrappedFullTextMatch(expr *plan.Expr) *plan.Expr {
 	if expr == nil {
 		return nil
@@ -2338,6 +2360,228 @@ func (builder *QueryBuilder) getWrappedFullTextMatches(projNode, scanNode *plan.
 		idx := builder.findMatchFullTextIndex(fn, scanNode)
 		if idx == nil {
 			continue // no index can serve it: leave it to throw, as it does today
+		}
+		seen = append(seen, fn)
+		exprs = append(exprs, cand)
+		idxdefs = append(idxdefs, idx)
+	}
+	return exprs, idxdefs
+}
+
+// fullTextDriverFuncs returns the fulltext_match functions that already drive a stream -- the bare
+// scan-filter matches (filterids) and the wrapped ones -- so a later collector can dedup an
+// aggregate copy of one against them instead of building a second scan.
+func fullTextDriverFuncs(scanNode *plan.Node, filterids []int32, wrappedExprs []*plan.Expr) []*plan.Function {
+	funcs := make([]*plan.Function, 0, len(filterids)+len(wrappedExprs))
+	if scanNode != nil {
+		for _, id := range filterids {
+			if id >= 0 && int(id) < len(scanNode.FilterList) {
+				if fn := scanNode.FilterList[id].GetF(); fn != nil {
+					funcs = append(funcs, fn)
+				}
+			}
+		}
+	}
+	for _, e := range wrappedExprs {
+		if fn := e.GetF(); fn != nil {
+			funcs = append(funcs, fn)
+		}
+	}
+	return funcs
+}
+
+// exprContainsFullTextMatch reports whether a fulltext_match appears anywhere in a scalar expr.
+func exprContainsFullTextMatch(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	if fn.Func.ObjName == "fulltext_match" {
+		return true
+	}
+	for _, a := range fn.Args {
+		if exprContainsFullTextMatch(a) {
+			return true
+		}
+	}
+	return false
+}
+
+// aggOutputInvariantToMatcherFilter reports whether driving the index from an aggregate HAVING is
+// result-preserving: since driving drops each group's non-matching rows before aggregation, EVERY
+// aggregate must be a MAX/SUM of one of the driver matches (its value is unchanged by an absent/0
+// relevance) and no grouping key may itself be a match. A COUNT(*), AVG, or aggregate over another
+// column or a different match would be computed over matchers only and silently wrong for a
+// multi-row group, so those queries are left at 20105.
+func (builder *QueryBuilder) aggOutputInvariantToMatcherFilter(aggNode *plan.Node, drivers []*plan.Expr) bool {
+	if aggNode == nil || len(aggNode.AggList) == 0 {
+		return false
+	}
+	for _, agg := range aggNode.AggList {
+		fn := agg.GetF()
+		if fn == nil || fn.Func == nil || !safeAggForFullTextDriver(fn.Func.ObjName) || len(fn.Args) != 1 {
+			return false
+		}
+		m := monotoneWrappedFullTextMatch(fn.Args[0])
+		if m == nil {
+			return false
+		}
+		mfn := m.GetF()
+		ok := false
+		for _, d := range drivers {
+			if df := d.GetF(); df != nil && builder.equalsFullTextMatchFunc(mfn, df) {
+				ok = true
+				break
+			}
+		}
+		if !ok {
+			return false
+		}
+	}
+	for _, g := range aggNode.GroupBy {
+		if exprContainsFullTextMatch(g) {
+			return false
+		}
+	}
+	return true
+}
+
+// safeAggForFullTextDriver reports whether an aggregate over a fulltext_match can drive the index
+// from a membership-implying HAVING. Driving INNER-joins the scan to the matching rows BEFORE
+// aggregation, so it is result-preserving only when the aggregate's value over the whole group
+// equals its value over the matching rows alone: MAX and SUM qualify (a non-matching row contributes
+// an absent/0 relevance, changing neither the max nor the sum). MIN/AVG/COUNT do NOT -- MIN(match)>0
+// means EVERY row in the group matches, and AVG/COUNT change value once the non-matchers are dropped
+// -- so those are left to raise 20105 rather than being silently filtered to matchers.
+func safeAggForFullTextDriver(name string) bool {
+	return name == "max" || name == "sum"
+}
+
+// getFullTextMatchFromAggHaving collects the fulltext_match inside a MAX/SUM aggregate that a
+// membership-implying HAVING predicate (`agg(match) > c`, `agg(match) >= c` with c making relevance 0
+// fail) proves must be present, so a grouped query whose ONLY match is the aggregate itself can drive
+// the index scan (#29065). Without this the aggregate MATCH is only a consumer -- with no scan-level
+// or projected driver `served` is empty and the raw fulltext_match reaches execution as 20105.
+//
+// The HAVING references the aggregate either as a colref to AggList output or inline; both resolve to
+// AggList[k] = safeAgg(monotone(match)). Returned matches are fed as drivers alongside the wrapped
+// ones; applyIndicesForAggUsingFullTextIndex rewrites the AggList arg to the served score and the
+// HAVING colref then resolves to it. `existing` are the matches that already drive a stream (scan
+// filters + wrapped), so an aggregate copy of one reuses it instead of building a second scan.
+func (builder *QueryBuilder) getFullTextMatchFromAggHaving(havingPreds []*plan.Expr, aggNode, scanNode *plan.Node,
+	existing []*plan.Function) ([]*plan.Expr, []*plan.IndexDef) {
+	if aggNode == nil || scanNode == nil || len(aggNode.BindingTags) < 2 {
+		return nil, nil
+	}
+	aggTag := aggNode.BindingTags[1]
+
+	// The match inside a safe aggregate, whether the HAVING holds the aggregate inline or a colref
+	// to the AggList output it produces. The comparison casts the aggregate result to compare
+	// against the constant, so strip the order-preserving scalar wrappers (cast/round/floor/ceil)
+	// that sit between the comparison and the aggregate first.
+	matchForAggExpr := func(e *plan.Expr) *plan.Expr {
+		e = unwrapMonotoneScalar(e)
+		aggfn := e.GetF()
+		if aggfn == nil {
+			if col := e.GetCol(); col != nil && col.RelPos == aggTag &&
+				col.ColPos >= 0 && int(col.ColPos) < len(aggNode.AggList) {
+				aggfn = unwrapMonotoneScalar(aggNode.AggList[col.ColPos]).GetF()
+			}
+		}
+		if aggfn == nil || aggfn.Func == nil || !safeAggForFullTextDriver(aggfn.Func.ObjName) || len(aggfn.Args) != 1 {
+			return nil
+		}
+		return monotoneWrappedFullTextMatch(aggfn.Args[0])
+	}
+
+	candidates := make([]*plan.Expr, 0)
+	var walk func(expr *plan.Expr)
+	walk = func(expr *plan.Expr) {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil {
+			return
+		}
+		switch fn.Func.ObjName {
+		case "and":
+			for _, arg := range fn.Args {
+				walk(arg)
+			}
+		case ">", ">=", "<", "<=":
+			if len(fn.Args) != 2 {
+				return
+			}
+			op := fn.Func.ObjName
+			aggSide, constSide := fn.Args[0], fn.Args[1]
+			if matchForAggExpr(aggSide) == nil {
+				// reversed form `0 < agg(match)` is `agg(match) > 0`
+				aggSide, constSide = fn.Args[1], fn.Args[0]
+				switch op {
+				case "<":
+					op = ">"
+				case "<=":
+					op = ">="
+				default:
+					return
+				}
+			}
+			m := matchForAggExpr(aggSide)
+			if m == nil {
+				return
+			}
+			// The comparison casts the constant to the aggregate's type, so strip the
+			// order-preserving wrapper before reading the literal.
+			c, ok := nonNegativeConstValue(unwrapMonotoneScalar(constSide))
+			if !ok {
+				return
+			}
+			// score > c (c >= 0) or score >= c (c > 0): a relevance of 0 fails both, so the
+			// predicate implies membership. `< / <=` and `>= 0` do not and are left to 20105.
+			if op == ">" || (op == ">=" && c > 0) {
+				candidates = append(candidates, m)
+			}
+		}
+	}
+	for _, pred := range havingPreds {
+		walk(pred)
+	}
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+
+	// Driving INNER-joins the scan to the matchers BEFORE aggregation, dropping every non-matching
+	// row from each group. That is result-preserving ONLY if no output depends on those rows: every
+	// aggregate must be a MAX/SUM of a driver match (whose value ignores an absent/0 relevance), and
+	// no grouping key may be a match. Any other aggregate -- COUNT(*), AVG, or an aggregate over
+	// another column or a different match -- would be silently computed over matchers only, so bail
+	// and leave the query at 20105 rather than return wrong rows for a multi-row group (#29065).
+	if !builder.aggOutputInvariantToMatcherFilter(aggNode, candidates) {
+		return nil, nil
+	}
+
+	seen := append([]*plan.Function(nil), existing...)
+	exprs := make([]*plan.Expr, 0, len(candidates))
+	idxdefs := make([]*plan.IndexDef, 0, len(candidates))
+	for _, cand := range candidates {
+		fn := cand.GetF()
+		if fn == nil || len(fn.Args) < 2 {
+			continue
+		}
+		dup := false
+		for _, s := range seen {
+			if builder.equalsFullTextMatchFunc(fn, s) {
+				dup = true
+				break
+			}
+		}
+		if dup {
+			continue
+		}
+		idx := builder.findMatchFullTextIndex(fn, scanNode)
+		if idx == nil {
+			continue
 		}
 		seen = append(seen, fn)
 		exprs = append(exprs, cand)
