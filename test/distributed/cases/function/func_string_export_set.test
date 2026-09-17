@@ -734,6 +734,11 @@ DEALLOCATE PREPARE export_set_real_column;
 PREPARE export_set_real_expression FROM "SELECT EXPORT_SET(ABS(?),'Y','N','',4)";
 EXECUTE export_set_real_expression USING @export_set_bits;
 DEALLOCATE PREPARE export_set_real_expression;
+CREATE TABLE export_set_real_values(v DOUBLE);
+INSERT INTO export_set_real_values VALUES (1e100);
+SELECT EXPORT_SET(v,'Y','N','',4) FROM export_set_real_values;
+SELECT EXPORT_SET(ABS(v),'Y','N','',4) FROM export_set_real_values;
+DROP TABLE export_set_real_values;
 
 # 真实 TEXT producer 不继承底层 DECIMAL 域；同源 ABS 保持独立 DECIMAL 消费语义。
 PREPARE export_set_precision_text_bitwise FROM

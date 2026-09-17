@@ -5301,6 +5301,16 @@ func bindFuncExprImplByPlanExpr(
 	allowInternalFunctionArgs bool,
 ) (*plan.Expr, error) {
 	var err error
+	if name == "export_set" && len(args) > 0 && args[0].GetCol() != nil && types.T(args[0].Typ.Id).IsFloat() {
+		// A physical REAL column, unlike an expression such as ABS(column),
+		// exposes a saturating val_int conversion to EXPORT_SET.
+		args = append([]*Expr(nil), args...)
+		args[0], err = appendBitwiseAggregateCastBeforeExpr(ctx, args[0],
+			makePlan2Type(&types.Type{Oid: types.T_int64}))
+		if err != nil {
+			return nil, err
+		}
+	}
 	rejectIntervalArgs := rejectBoundIntervalFunctionArgs
 	if descendFunctions {
 		rejectIntervalArgs = rejectStandaloneIntervalFunctionArgs

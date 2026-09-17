@@ -776,6 +776,22 @@ func TestPreparedExportSetMaterializedRealSaturation(t *testing.T) {
 		require.Equal(t, want, result.GetStringAt(i))
 	}
 	require.True(t, result.GetNulls().Contains(3))
+
+	// Physical columns have no prepared-parameter lineage, but own the same
+	// saturating val_int contract. The binder must protect them independently.
+	physicalSource := plan2.DeepCopyExpr(source)
+	physicalSource.PreparedNumeric = nil
+	args := append([]*plan.Expr(nil), expr.GetF().Args...)
+	args[0] = physicalSource
+	physical, err := plan2.BindFuncExprImplByPlanExpr(cw.proc.Ctx, "export_set", args)
+	require.NoError(t, err)
+	physicalResult, physicalFree, err := colexec.GetReadonlyResultFromExpression(cw.proc, physical, []*batch.Batch{input})
+	require.NoError(t, err)
+	defer physicalFree()
+	for i, want := range []string{"NYNN", "YYYY", "NNNN"} {
+		require.Equal(t, want, physicalResult.GetStringAt(i))
+	}
+	require.True(t, physicalResult.GetNulls().Contains(3))
 }
 
 func TestPreparedExportSetRebuildTypeOwnership(t *testing.T) {

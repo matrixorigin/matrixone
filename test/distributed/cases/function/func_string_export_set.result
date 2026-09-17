@@ -1159,6 +1159,14 @@ PREPARE export_set_real_expression FROM "SELECT EXPORT_SET(ABS(?),'Y','N','',4)"
 EXECUTE export_set_real_expression USING @export_set_bits;
 Data truncation: data out of range: data type int64, value '1e+100'
 DEALLOCATE PREPARE export_set_real_expression;
+CREATE TABLE export_set_real_values(v DOUBLE);
+INSERT INTO export_set_real_values VALUES (1e100);
+SELECT EXPORT_SET(v,'Y','N','',4) FROM export_set_real_values;
+➤ EXPORT_SET(v, Y, N, , 4)[12,64,0]  𝄀
+YYYY
+SELECT EXPORT_SET(ABS(v),'Y','N','',4) FROM export_set_real_values;
+Data truncation: data out of range: data type int64, value '1e+100'
+DROP TABLE export_set_real_values;
 PREPARE export_set_precision_text_bitwise FROM
 "SELECT EXPORT_SET(TRUNCATE(15.5,IFNULL(CONCAT(x,''),'0') & 1),'Y','N','',4) FROM (SELECT ? AS x) d";
 SET @export_set_bits = CAST(0.5 AS DECIMAL(2,1));
