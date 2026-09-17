@@ -46,8 +46,14 @@ select id, kind from docs_virtual force index(idx_kind) where kind = 'updated';
 create table duplicate_values(id bigint primary key, value_col int);
 insert into duplicate_values values (1, 1), (2, 1);
 alter table duplicate_values add column note int, add unique index uk_value(value_col);
-show columns from duplicate_values;
-show index from duplicate_values;
+select count(*) from information_schema.columns
+where table_schema = 'alter_copy_add_index'
+  and table_name = 'duplicate_values'
+  and column_name = 'note';
+select count(*) from information_schema.statistics
+where table_schema = 'alter_copy_add_index'
+  and table_name = 'duplicate_values'
+  and index_name = 'uk_value';
 
 -- A new plugin index on an existing column has no source hidden table to clone;
 -- COPY must rebuild it even though the added column is unrelated.
