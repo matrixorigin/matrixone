@@ -270,9 +270,11 @@ func runOrderedPercentileFloatNaNSpillMatchesInMemory[T float32 | float64](
 				direction = "desc"
 			}
 			t.Run(modeCase.name+"_"+direction, func(t *testing.T) {
-				inMemory := runOrderedPercentileFloatNaNCase(t, mp, typ, values, modeCase.aggID, modeCase.mode, descending, false)
-				spilled := runOrderedPercentileFloatNaNCase(t, mp, typ, values, modeCase.aggID, modeCase.mode, descending, true)
-				requireSameFloatResult(t, inMemory, spilled)
+				for _, accounted := range []bool{false, true} {
+					inMemory := runOrderedPercentileFloatNaNCase(t, mp, typ, values, modeCase.aggID, modeCase.mode, descending, false, accounted)
+					spilled := runOrderedPercentileFloatNaNCase(t, mp, typ, values, modeCase.aggID, modeCase.mode, descending, true, accounted)
+					requireSameFloatResult(t, inMemory, spilled)
+				}
 			})
 		}
 	}
@@ -287,6 +289,7 @@ func runOrderedPercentileFloatNaNCase[T float32 | float64](
 	mode orderedPercentileMode,
 	descending bool,
 	spill bool,
+	accounted bool,
 ) float64 {
 	t.Helper()
 	valueVec := buildFixedVec(t, mp, typ, values)
@@ -294,6 +297,11 @@ func runOrderedPercentileFloatNaNCase[T float32 | float64](
 
 	exec, err := makeOrderedPercentileExec(mp, aggID, false, typ, mode)
 	require.NoError(t, err)
+	if accounted {
+		registry, account, allocation := newTestAggregateAllocation(t)
+		require.NoError(t, exec.(AllocationAccountOwner).SetAllocationAccount(allocation))
+		defer finishTestAggregateAllocation(t, registry, account)
+	}
 	require.NoError(t, exec.GroupGrow(1))
 	require.NoError(t, exec.SetExtraInformation(EncodeOrderedPercentileConfig([]byte("0"), descending), 0))
 

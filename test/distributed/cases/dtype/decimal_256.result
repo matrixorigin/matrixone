@@ -89,4 +89,35 @@ cast('-170141183460469231731687303715884105728' as decimal(65,0)) as decimal(65,
 ➤ issue_28774_min_d128_divisor_positive_numerator[3,65,6]  ¦  issue_28774_min_d128_divisor_negative_numerator[3,65,6]  𝄀
 -0.000001  ¦  0.000001
 
+create index decimal_256_idx on decimal_256_t(d);
+insert into decimal_256_t values
+(4, cast('7.500000000000000000000000000000' as decimal(65,30)));
+select d from decimal_256_t force index (decimal_256_idx) order by d;
+➤ d[3,65,30]  𝄀
+-1E-30  𝄀
+7.500000000000000000000000000000  𝄀
+42.000000000000000000000000000000  𝄀
+12345678901234567890123456789012345.123456789012345678901234567890
 drop table decimal_256_t;
+
+drop table if exists decimal_256_unique_t;
+create table decimal_256_unique_t (
+id int primary key,
+d decimal(65,30),
+k int
+);
+insert into decimal_256_unique_t values
+(1, cast('7.500000000000000000000000000000' as decimal(65,30)), 7);
+create unique index decimal_256_unique_idx on decimal_256_unique_t(d, k);
+load data inline format='csv', data='2,8.500000000000000000000000000000,8\n'
+into table decimal_256_unique_t fields terminated by ',';
+select id from decimal_256_unique_t
+force index (decimal_256_unique_idx)
+where d = cast('8.500000000000000000000000000000' as decimal(65,30)) and k = 8;
+➤ id[4,32,0]  𝄀
+2
+select id, d, k from decimal_256_unique_t order by id;
+➤ id[4,32,0]  ¦  d[3,65,30]  ¦  k[4,32,0]  𝄀
+1  ¦  7.500000000000000000000000000000  ¦  7  𝄀
+2  ¦  8.500000000000000000000000000000  ¦  8
+drop table decimal_256_unique_t;

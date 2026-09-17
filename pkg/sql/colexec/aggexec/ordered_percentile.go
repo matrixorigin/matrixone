@@ -475,14 +475,8 @@ func (exec *orderedPercentileExec[T, R]) SetAllocationAccount(
 	if exec.hasSpillRuns() || exec.spillData != nil {
 		return mpool.ErrAllocationAccountInvariant
 	}
-	// In accounted Group mode the generic saved-argument arena is the only
-	// retained value representation. Group owns externalization of that state,
-	// so the standalone ordered-run implementation remains confined to callers
-	// that do not install an allocation account.
-	exec.spillLimit = 0
-	exec.spillContext = nil
-	exec.spillFile = nil
-	exec.spillReport = nil
+	// Installing the account must not discard terminal ordered-run settings.
+	// Partial producers and generic grouped spill stages do not install them.
 	return exec.medianColumnExecSelf.SetAllocationAccount(allocation)
 }
 
@@ -538,17 +532,15 @@ func (exec *orderedPercentileExec[T, R]) Merge(next AggFuncExec, groupIdx1, grou
 	if exec.descending != other.descending {
 		return moerr.NewInvalidInputNoCtx("ordered percentile: cannot merge different sort directions")
 	}
+	if other.hasSpillRuns() {
+		return moerr.NewInternalErrorNoCtx("spilled ordered percentile cannot be merged as a partial result")
+	}
 	if exec.accounted != nil || other.accounted != nil {
 		if exec.accounted == nil || other.accounted == nil ||
 			exec.mode != other.mode || !exec.argType.Eq(other.argType) ||
 			!exec.retType.Eq(other.retType) {
 			return mpool.ErrAllocationAccountMismatch
 		}
-		return exec.medianColumnExecSelf.Merge(
-			&other.medianColumnExecSelf, groupIdx1, groupIdx2)
-	}
-	if other.hasSpillRuns() {
-		return moerr.NewInternalErrorNoCtx("spilled ordered percentile cannot be merged as a partial result")
 	}
 	if err := exec.medianColumnExecSelf.Merge(&other.medianColumnExecSelf, groupIdx1, groupIdx2); err != nil {
 		return err
@@ -564,17 +556,15 @@ func (exec *orderedPercentileExec[T, R]) BatchMerge(next AggFuncExec, offset int
 	if exec.descending != other.descending {
 		return moerr.NewInvalidInputNoCtx("ordered percentile: cannot merge different sort directions")
 	}
+	if other.hasSpillRuns() {
+		return moerr.NewInternalErrorNoCtx("spilled ordered percentile cannot be merged as a partial result")
+	}
 	if exec.accounted != nil || other.accounted != nil {
 		if exec.accounted == nil || other.accounted == nil ||
 			exec.mode != other.mode || !exec.argType.Eq(other.argType) ||
 			!exec.retType.Eq(other.retType) {
 			return mpool.ErrAllocationAccountMismatch
 		}
-		return exec.medianColumnExecSelf.BatchMerge(
-			&other.medianColumnExecSelf, offset, groups)
-	}
-	if other.hasSpillRuns() {
-		return moerr.NewInternalErrorNoCtx("spilled ordered percentile cannot be merged as a partial result")
 	}
 	if err := exec.medianColumnExecSelf.BatchMerge(&other.medianColumnExecSelf, offset, groups); err != nil {
 		return err
@@ -590,8 +580,11 @@ func (exec *orderedPercentileExec[T, R]) FlushWithContext(ctx context.Context) (
 	if exec.percentile == nil {
 		return nil, moerr.NewInternalErrorNoCtx("ordered percentile: percentile configuration is not set")
 	}
-	if exec.accounted != nil {
-		return exec.flushAccounted()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := context.Cause(ctx); err != nil {
+		return nil, err
 	}
 	if exec.hasSpillRuns() {
 		if err := exec.spillOrderedState(ctx); err != nil {
@@ -600,6 +593,9 @@ func (exec *orderedPercentileExec[T, R]) FlushWithContext(ctx context.Context) (
 		if err := exec.compactAllSpilledRuns(ctx); err != nil {
 			return nil, err
 		}
+	}
+	if exec.accounted != nil {
+		return exec.flushAccounted(ctx)
 	}
 	groups := len(exec.groups)
 	lim := exec.ret.getChunkSize()
@@ -624,7 +620,7 @@ func (exec *orderedPercentileExec[T, R]) FlushWithContext(ctx context.Context) (
 	return exec.ret.flushAll(), nil
 }
 
-func (exec *orderedPercentileExec[T, R]) flushAccounted() (
+func (exec *orderedPercentileExec[T, R]) flushAccounted(ctx context.Context) (
 	_ []*vector.Vector, retErr error,
 ) {
 	results := make([]*vector.Vector, len(exec.accounted.state))
@@ -644,52 +640,89 @@ func (exec *orderedPercentileExec[T, R]) flushAccounted() (
 		}
 		result.SetLength(int(state.length))
 		for row := uint16(0); row < uint16(state.length); row++ {
-			if state.argCnt[row] == 0 {
-				result.SetNull(uint64(row))
-				continue
-			}
-			values, err := makeAccountedScratch[T](
-				exec.accounted.allocation, exec.mp, int(state.argCnt[row]))
-			if err != nil {
+			if err := context.Cause(ctx); err != nil {
 				return nil, err
 			}
-			index := 0
-			err = state.iterWithValue(row, func(key, stored []byte) error {
-				payload := aggPayloadFromKeyValue(&exec.accounted.aggInfo, key, stored)
-				if len(payload) != exec.argType.TypeSize() || index >= len(values) {
-					return moerr.NewInternalErrorNoCtx(
-						"ordered percentile has invalid retained argument")
+			groupIndex := chunk*AggBatchSize + int(row)
+			if exec.groupHasSpillRuns(groupIndex) {
+				lo, hi, fraction := orderedPercentileRanksWithScratch(
+					&exec.arithmetic, exec.spilledGroupRows(groupIndex), exec.percentile, exec.mode)
+				low, high, err := exec.selectSpilledValues(ctx, groupIndex, lo, hi)
+				if err != nil {
+					return nil, err
 				}
-				values[index] = types.DecodeFixed[T](payload)
-				index++
-				return nil
-			})
-			if err == nil && index != len(values) {
-				err = moerr.NewInternalErrorNoCtx(
-					"ordered percentile retained argument count mismatch")
-			}
-			if err == nil {
-				err = exec.setAccountedResult(values, result, int(row))
-			}
-			mpool.FreeSlice(exec.mp, values)
-			if err != nil {
-				return nil, err
+				if err = exec.setAccountedRankResult(low, high, fraction, result, int(row)); err != nil {
+					return nil, err
+				}
+			} else if state.argCnt[row] == 0 {
+				result.SetNull(uint64(row))
+			} else {
+				values, err := exec.accountedValues(ctx, state, row)
+				if err != nil {
+					return nil, err
+				}
+				err = exec.sortAccountedValues(ctx, values)
+				if err == nil {
+					lo, hi, fraction := orderedPercentileRanksWithScratch(
+						&exec.arithmetic, uint64(len(values)), exec.percentile, exec.mode)
+					err = exec.setAccountedRankResult(values[lo], values[hi], fraction, result, int(row))
+				}
+				mpool.FreeSlice(exec.mp, values)
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
 	return results, nil
 }
 
-func (exec *orderedPercentileExec[T, R]) setAccountedResult(
-	values []T, result *vector.Vector, row int,
-) error {
+func (exec *orderedPercentileExec[T, R]) accountedValues(
+	ctx context.Context, state *aggState, row uint16,
+) ([]T, error) {
+	values, err := makeAccountedScratch[T](
+		exec.accounted.allocation, exec.mp, int(state.argCnt[row]))
+	if err != nil {
+		return nil, err
+	}
+	index := 0
+	err = state.iterWithValue(row, func(key, stored []byte) error {
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
+		payload := aggPayloadFromKeyValue(&exec.accounted.aggInfo, key, stored)
+		if len(payload) != exec.argType.TypeSize() || index >= len(values) {
+			return moerr.NewInternalErrorNoCtx("ordered percentile has invalid retained argument")
+		}
+		values[index] = types.DecodeFixed[T](payload)
+		index++
+		return nil
+	})
+	if err == nil && index != len(values) {
+		err = moerr.NewInternalErrorNoCtx("ordered percentile retained argument count mismatch")
+	}
+	if err != nil {
+		mpool.FreeSlice(exec.mp, values)
+		return nil, err
+	}
+	return values, nil
+}
+
+func (exec *orderedPercentileExec[T, R]) sortAccountedValues(ctx context.Context, values []T) error {
+	if err := context.Cause(ctx); err != nil {
+		return err
+	}
 	slices.SortFunc(values, func(left, right T) int {
 		return compareOrderedPercentileValueWithDirection(left, right, exec.descending)
 	})
-	lo, hi, fraction := orderedPercentileRanksWithScratch(
-		&exec.arithmetic, uint64(len(values)), exec.percentile, exec.mode)
+	return context.Cause(ctx)
+}
+
+func (exec *orderedPercentileExec[T, R]) setAccountedRankResult(
+	low, high T, fraction percentileFraction, result *vector.Vector, row int,
+) error {
 	if exec.mode == orderedPercentileDiscrete {
-		value, ok := any(values[lo]).(R)
+		value, ok := any(low).(R)
 		if !ok {
 			return moerr.NewInternalErrorNoCtx(
 				"ordered percentile: result type mismatch")
@@ -698,11 +731,11 @@ func (exec *orderedPercentileExec[T, R]) setAccountedResult(
 		return nil
 	}
 	var value R
-	switch low := any(values[lo]).(type) {
+	switch typedLow := any(low).(type) {
 	case types.Decimal64:
 		interpolated, err := exec.arithmetic.interpolateDecimal(
-			FromD64ToD128(low),
-			FromD64ToD128(any(values[hi]).(types.Decimal64)),
+			FromD64ToD128(typedLow),
+			FromD64ToD128(any(high).(types.Decimal64)),
 			fraction,
 			exec.retType.Scale-exec.argType.Scale,
 		)
@@ -712,8 +745,8 @@ func (exec *orderedPercentileExec[T, R]) setAccountedResult(
 		value = any(interpolated).(R)
 	case types.Decimal128:
 		interpolated, err := exec.arithmetic.interpolateDecimal(
-			low,
-			any(values[hi]).(types.Decimal128),
+			typedLow,
+			any(high).(types.Decimal128),
 			fraction,
 			exec.retType.Scale-exec.argType.Scale,
 		)
@@ -723,7 +756,7 @@ func (exec *orderedPercentileExec[T, R]) setAccountedResult(
 		value = any(interpolated).(R)
 	default:
 		value = any(interpolateOrderedNumericValueWithScratch(
-			&exec.arithmetic, values[lo], values[hi], fraction)).(R)
+			&exec.arithmetic, low, high, fraction)).(R)
 	}
 	vector.SetFixedAtWithTypeCheck(result, row, value)
 	return nil
@@ -843,6 +876,15 @@ func (exec *orderedPercentileExec[T, R]) SaveIntermediateResult(
 	return exec.medianColumnExecSelf.SaveIntermediateResult(cnt, flags, writer)
 }
 
+func (exec *orderedPercentileExec[T, R]) SaveSpillIntermediateRows(
+	chunk int, rows []int32, writer io.Writer,
+) error {
+	if exec.hasSpillRuns() {
+		return moerr.NewInternalErrorNoCtx("spilled ordered percentile cannot be serialized as a partial result")
+	}
+	return exec.medianColumnExecSelf.SaveSpillIntermediateRows(chunk, rows, writer)
+}
+
 func (exec *orderedPercentileExec[T, R]) PreflightBatchMerge(
 	next AggFuncExec, offset int, groups []uint64,
 ) error {
@@ -853,6 +895,9 @@ func (exec *orderedPercentileExec[T, R]) PreflightBatchMerge(
 		exec.percentile.Cmp(other.percentile) != 0 ||
 		exec.descending != other.descending {
 		return mpool.ErrAllocationAccountMismatch
+	}
+	if other.hasSpillRuns() {
+		return moerr.NewInternalErrorNoCtx("spilled ordered percentile cannot be merged as a partial result")
 	}
 	return exec.medianColumnExecSelf.preflightBatchMerge(
 		&other.medianColumnExecSelf, offset, groups)
@@ -870,7 +915,11 @@ func (exec *orderedPercentileExec[T, R]) SaveIntermediateResultOfChunk(
 
 func (exec *orderedPercentileExec[T, R]) UnmarshalFromReader(reader io.Reader, mp *mpool.MPool) error {
 	if exec.accounted != nil {
-		return exec.medianColumnExecSelf.UnmarshalFromReader(reader, mp)
+		if err := exec.medianColumnExecSelf.UnmarshalFromReader(reader, mp); err != nil {
+			return err
+		}
+		exec.closeSpillData()
+		return nil
 	}
 	replacement := newMedianColumnExecSelf[T, R](
 		mp,
@@ -922,6 +971,20 @@ func (exec *orderedPercentileExec[T, R]) fixedAndSpilledMemorySize() int64 {
 
 func (exec *orderedPercentileExec[T, R]) activeOrderedMemorySize() int64 {
 	var size int64
+	if exec.accounted != nil {
+		for i := range exec.accounted.state {
+			state := &exec.accounted.state[i]
+			for _, count := range state.argCnt[:state.length] {
+				if count != 0 {
+					// Use the occupied arena, not its allocation floor/capacity:
+					// an empty arena may already exceed a small spill limit.
+					size += int64(state.argSkl.Arena().Size())
+					break
+				}
+			}
+		}
+		return size
+	}
 	for _, group := range exec.groups {
 		if group != nil {
 			size += group.Size()
@@ -937,7 +1000,7 @@ func (exec *orderedPercentileExec[T, R]) maybeSpillOrdered() error {
 	return nil
 }
 
-func (exec *orderedPercentileExec[T, R]) spillOrderedState(ctx context.Context) error {
+func (exec *orderedPercentileExec[T, R]) spillOrderedState(ctx context.Context) (retErr error) {
 	if exec.spillFile == nil {
 		return nil
 	}
@@ -948,8 +1011,47 @@ func (exec *orderedPercentileExec[T, R]) spillOrderedState(ctx context.Context) 
 		return err
 	}
 	groupCount := len(exec.groups)
+	if exec.accounted != nil {
+		groupCount = exec.accounted.GetNumGroups()
+	}
+	// Keep published descriptors intact if any write/compaction fails. The
+	// old resident values remain authoritative until the entire drain succeeds.
+	previousRuns := make([][]orderedPercentileRun, len(exec.spillRuns))
+	for i, runs := range exec.spillRuns {
+		previousRuns[i] = slices.Clone(runs)
+	}
+	drained := false
+	defer func() {
+		if retErr != nil && !drained {
+			exec.spillRuns = previousRuns
+		}
+	}()
 	for len(exec.spillRuns) < groupCount {
 		exec.spillRuns = append(exec.spillRuns, nil)
+	}
+	if exec.accounted != nil {
+		for chunk := range exec.accounted.state {
+			state := &exec.accounted.state[chunk]
+			for row := uint16(0); row < uint16(state.length); row++ {
+				if state.argCnt[row] == 0 {
+					continue
+				}
+				values, err := exec.accountedValues(ctx, state, row)
+				if err != nil {
+					return err
+				}
+				err = exec.writeOrderedRun(ctx, chunk*AggBatchSize+int(row), values)
+				mpool.FreeSlice(exec.mp, values)
+				if err != nil {
+					return err
+				}
+			}
+		}
+		// Saved arguments share a chunk arena. Release it only after every
+		// group's run is published, then recreate empty resident group slots.
+		exec.accounted.Free()
+		drained = true
+		return exec.accounted.GroupGrow(groupCount)
 	}
 	for groupIndex, group := range exec.groups {
 		if group == nil || group.Length() == 0 {
@@ -965,6 +1067,7 @@ func (exec *orderedPercentileExec[T, R]) spillOrderedState(ctx context.Context) 
 			group.Free(exec.mp)
 		}
 	}
+	drained = true
 	exec.groups = nil
 	if groupCount > 0 {
 		exec.groups = make([]*Vectors[T], groupCount)
@@ -976,7 +1079,15 @@ func (exec *orderedPercentileExec[T, R]) spillOrderedState(ctx context.Context) 
 }
 
 func (exec *orderedPercentileExec[T, R]) writeOrderedRun(ctx context.Context, groupIndex int, values []T) error {
-	selectors, err := sortOrderedPercentileValues(exec.mp, exec.argType, values, exec.descending)
+	var selectors []int64
+	var err error
+	if exec.accounted != nil {
+		// Scratch belongs to the account; sort directly without a second,
+		// unaccounted selector allocation proportional to the input.
+		err = exec.sortAccountedValues(ctx, values)
+	} else {
+		selectors, err = sortOrderedPercentileValues(exec.mp, exec.argType, values, exec.descending)
+	}
 	if err != nil {
 		return err
 	}
@@ -992,11 +1103,15 @@ func (exec *orderedPercentileExec[T, R]) writeOrderedRun(ctx context.Context, gr
 	}
 	writer := bufio.NewWriterSize(exec.spillData, 64*1024)
 	var rows int64
-	for _, selector := range selectors {
+	for i := range values {
 		if err := context.Cause(ctx); err != nil {
 			return err
 		}
-		if _, err = writer.Write(types.EncodeFixed(values[selector])); err != nil {
+		value := values[i]
+		if selectors != nil {
+			value = values[selectors[i]]
+		}
+		if _, err = writer.Write(types.EncodeFixed(value)); err != nil {
 			return err
 		}
 		rows++
@@ -1063,7 +1178,7 @@ func firstCompactableRunLevel(runs []orderedPercentileRun) (uint8, bool) {
 func (exec *orderedPercentileExec[T, R]) compactRunsAtLevel(ctx context.Context, groupIndex int, level uint8) error {
 	runs := exec.spillRuns[groupIndex]
 	source := make([]orderedPercentileRun, 0, orderedPercentileRunFanIn)
-	remaining := runs[:0]
+	remaining := make([]orderedPercentileRun, 0, len(runs)-orderedPercentileRunFanIn)
 	for _, run := range runs {
 		if run.level == level && len(source) < orderedPercentileRunFanIn {
 			source = append(source, run)

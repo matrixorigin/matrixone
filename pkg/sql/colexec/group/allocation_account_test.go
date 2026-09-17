@@ -28,6 +28,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -2227,21 +2228,21 @@ func TestAccountedGroupingSetSpillPreservesSentinelDomain(t *testing.T) {
 
 func TestAccountedGroupSpillResourceAdmissionCleans(t *testing.T) {
 	tests := []struct {
-		name      string
-		component process.ExecutionResourceComponent
-		reserve   func(*process.ExecutionResourceGeneration) (func(), error)
+		name    string
+		message string
+		reserve func(*process.ExecutionResourceGeneration) (func(), error)
 	}{
 		{
-			name:      "disk",
-			component: process.ExecutionResourceComponentSpillDisk,
+			name:    "disk",
+			message: "group spill disk budget exceeded",
 			reserve: func(generation *process.ExecutionResourceGeneration) (func(), error) {
 				token, err := generation.ReserveSpillDisk(generation.SpillDiskCap())
 				return func() { token.Release() }, err
 			},
 		},
 		{
-			name:      "file-descriptor",
-			component: process.ExecutionResourceComponentSpillFD,
+			name:    "file-descriptor",
+			message: "group spill file descriptor budget exceeded",
 			reserve: func(generation *process.ExecutionResourceGeneration) (func(), error) {
 				token, err := generation.ReserveSpillFD(generation.SpillFDCap())
 				return func() { token.Release() }, err
@@ -2283,9 +2284,9 @@ func TestAccountedGroupSpillResourceAdmissionCleans(t *testing.T) {
 					t.Fatal("expected spill resource admission error")
 				}
 			}
-			var resourceErr *process.ExecutionResourceError
-			require.ErrorAs(t, err, &resourceErr)
-			require.Equal(t, tc.component, resourceErr.Component)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM), err)
+			require.Contains(t, err.Error(), tc.message)
+			require.NotContains(t, err.Error(), process.ErrExecutionResourceAdmission.Error())
 
 			releaseBlocker()
 			released = true

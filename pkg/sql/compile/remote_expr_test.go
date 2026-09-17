@@ -574,14 +574,17 @@ func TestOrderedSetPercentileRemoteProtocolValidation(t *testing.T) {
 		aggexec.EncodeOrderedPercentileConfig([]byte("0.5"), false),
 		plan.AggregateConfigType_AGG_CONFIG_NONE,
 	)}
-	// Main's v76-v81 features do not implement extended discrete-percentile inputs.
+	// Main's v76-v83 features do not implement extended discrete-percentile inputs.
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion81)
 	require.ErrorContains(
 		t,
 		validateRemoteAggregateProtocol(proc, extended),
-		"extended discrete percentile input types require MORPC protocol version 82",
+		"extended discrete percentile input types require MORPC protocol version 84",
 	)
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion82)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion83)
+	require.Error(t, validateRemoteAggregateProtocol(proc, extended),
+		"v83 is reserved for bounded conditional string domains")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion84)
 	require.NoError(t, validateRemoteAggregateProtocol(proc, extended))
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion81)
 	require.Error(t, validateRemoteAggregateProtocol(proc, extended),

@@ -72,6 +72,8 @@ func serialFixedEncodedTypeSizeBound(oid types.T) (uint64, bool) {
 		return 9, true
 	case types.T_decimal128:
 		return 17, true
+	case types.T_decimal256:
+		return 33, true
 	case types.T_uuid:
 		return 17, true
 	default:
@@ -145,7 +147,7 @@ func SerialTypeSupported(oid types.T) bool {
 		types.T_float32, types.T_float64,
 		types.T_date, types.T_time, types.T_datetime, types.T_timestamp,
 		types.T_enum, types.T_year,
-		types.T_decimal64, types.T_decimal128,
+		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_uuid,
 		types.T_json, types.T_char, types.T_varchar,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_text,

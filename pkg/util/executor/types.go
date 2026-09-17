@@ -109,6 +109,7 @@ type StatementOption struct {
 	hasKeepRelKind           bool
 	disableLock              bool
 	allowMoColumnsUpdate     bool
+	optimizerHints           string
 }
 
 // Result exec sql result

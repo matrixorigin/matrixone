@@ -196,6 +196,9 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	if err = validateRemoteAutoIDCachePipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
+	if err = validateFulltext2ProbeTailDestination(proc, p); err != nil {
+		return nil, err
+	}
 	return p.Marshal()
 }
 
@@ -1970,7 +1973,7 @@ func validateRemoteAggregateProtocol(
 				orderedSetPercentileDiscUsesExtendedType(agg) &&
 				!supportsRemoteOrderedSetExtendedTypes(proc.GetService()) {
 				return moerr.NewNotSupportedNoCtx(
-					"extended discrete percentile input types require MORPC protocol version 82",
+					"extended discrete percentile input types require MORPC protocol version 84",
 				)
 			}
 		}
