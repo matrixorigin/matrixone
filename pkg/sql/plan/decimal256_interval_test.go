@@ -33,11 +33,11 @@ func makeWideDecimalIntervalExpr(t *testing.T, value string) *plan.Expr {
 	return expr
 }
 
-func makeWideDecimalCastIntervalExpr(
-	t *testing.T, value string, width, scale int32,
+func makeDecimalIntervalCastExpr(
+	t *testing.T, source *plan.Expr, width, scale int32,
 ) *plan.Expr {
 	t.Helper()
-	expr, err := appendCastBeforeExpr(context.Background(), makeStringConst(value), plan.Type{
+	expr, err := appendCastBeforeExpr(context.Background(), source, plan.Type{
 		Id:          int32(types.T_decimal256),
 		Width:       width,
 		Scale:       scale,
@@ -46,6 +46,13 @@ func makeWideDecimalCastIntervalExpr(
 	require.NoError(t, err)
 	require.Equal(t, int32(types.T_decimal256), expr.Typ.Id, expr.String())
 	return expr
+}
+
+func makeWideDecimalCastIntervalExpr(
+	t *testing.T, value string, width, scale int32,
+) *plan.Expr {
+	t.Helper()
+	return makeDecimalIntervalCastExpr(t, makeStringConst(value), width, scale)
 }
 
 func TestDecimal256IntervalPreservesFractionalSeconds(t *testing.T) {
@@ -103,6 +110,24 @@ func TestDecimalIntervalUsesCastTargetScale(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(1260000), extractInt64FromExpr(args[0]))
 	require.Equal(t, int64(types.MicroSecond), extractInt64FromExpr(args[1]))
+}
+
+func TestDecimal256IntervalHandlesFloatAndNestedCasts(t *testing.T) {
+	ctx := context.Background()
+	floatCast := makeDecimalIntervalCastExpr(t, makeFloat64Const(1.25), 40, 2)
+	args, err := resetIntervalFunctionArgs(ctx, makeIntervalExpr(floatCast, "SECOND"))
+	require.NoError(t, err)
+	require.Equal(t, int64(1250000), extractInt64FromExpr(args[0]))
+	require.Equal(t, int64(types.MicroSecond), extractInt64FromExpr(args[1]))
+	require.True(t, args[0].GetLit().GetDecimalLiteralRequiresV82())
+
+	inner := makeWideDecimalCastIntervalExpr(t, "1.25", 40, 2)
+	nested := makeDecimalIntervalCastExpr(t, inner, 40, 4)
+	args, err = resetIntervalFunctionArgs(ctx, makeIntervalExpr(nested, "SECOND"))
+	require.NoError(t, err)
+	require.Equal(t, int64(1250000), extractInt64FromExpr(args[0]))
+	require.Equal(t, int64(types.MicroSecond), extractInt64FromExpr(args[1]))
+	require.True(t, args[0].GetLit().GetDecimalLiteralRequiresV82())
 }
 
 func TestDecimal256IntervalRejectsInt64OverflowAfterRounding(t *testing.T) {

@@ -9899,22 +9899,27 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 			}, nil
 		}
 	}
-	isFloat := firstExpr.Typ.Id == int32(types.T_float32) ||
+	isDecimalOrFloat := firstExpr.Typ.Id == int32(types.T_decimal64) ||
+		firstExpr.Typ.Id == int32(types.T_decimal128) ||
+		firstExpr.Typ.Id == int32(types.T_float32) ||
 		firstExpr.Typ.Id == int32(types.T_float64)
 
 	// Try to get literal value, either directly or from a cast function
 	var lit *plan.Literal
+	var innerExpr *plan.Expr
 	if firstExpr.GetLit() != nil {
 		lit = firstExpr.GetLit()
+		innerExpr = firstExpr
 	} else if funcExpr, ok := firstExpr.Expr.(*plan.Expr_F); ok && funcExpr.F != nil &&
 		funcExpr.F.Func != nil && funcExpr.F.Func.GetObjName() == "cast" {
 		// Check if it's a cast function with a literal argument
 		if len(funcExpr.F.Args) > 0 && funcExpr.F.Args[0].GetLit() != nil {
 			lit = funcExpr.F.Args[0].GetLit()
+			innerExpr = firstExpr
 		}
 	}
 
-	if isTimeUnit && isFloat && lit != nil {
+	if isTimeUnit && isDecimalOrFloat && lit != nil {
 		// Extract the value from the literal and convert to microseconds
 		var floatVal float64
 		var hasValue bool
@@ -9925,6 +9930,22 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 				hasValue = true
 			} else if fval, ok := lit.Value.(*plan.Literal_Fval); ok {
 				floatVal = float64(fval.Fval)
+				hasValue = true
+			} else if d64val, ok := lit.Value.(*plan.Literal_Decimal64Val); ok {
+				d64 := types.Decimal64(d64val.Decimal64Val.A)
+				scale := innerExpr.Typ.Scale
+				if scale < 0 {
+					scale = 0
+				}
+				floatVal = types.Decimal64ToFloat64(d64, scale)
+				hasValue = true
+			} else if d128val, ok := lit.Value.(*plan.Literal_Decimal128Val); ok {
+				d128 := types.Decimal128{B0_63: uint64(d128val.Decimal128Val.A), B64_127: uint64(d128val.Decimal128Val.B)}
+				scale := innerExpr.Typ.Scale
+				if scale < 0 {
+					scale = 0
+				}
+				floatVal = types.Decimal128ToFloat64(d128, scale)
 				hasValue = true
 			} else if sval, ok := lit.Value.(*plan.Literal_Sval); ok {
 				// Handle string literal (from cast function's first argument)
@@ -10089,10 +10110,12 @@ func resetIntervalFunctionArgs(ctx context.Context, intervalExpr *Expr) ([]*Expr
 			}, nil
 		}
 	}
-	isFloat := firstExpr.Typ.Id == int32(types.T_float32) ||
+	isDecimalOrFloat := firstExpr.Typ.Id == int32(types.T_decimal64) ||
+		firstExpr.Typ.Id == int32(types.T_decimal128) ||
+		firstExpr.Typ.Id == int32(types.T_float32) ||
 		firstExpr.Typ.Id == int32(types.T_float64)
 
-	if isTimeUnit && isFloat && firstExpr.GetLit() != nil {
+	if isTimeUnit && isDecimalOrFloat && firstExpr.GetLit() != nil {
 		// Extract the value from the literal and convert to microseconds
 		lit := firstExpr.GetLit()
 		var floatVal float64
@@ -10104,6 +10127,22 @@ func resetIntervalFunctionArgs(ctx context.Context, intervalExpr *Expr) ([]*Expr
 				hasValue = true
 			} else if fval, ok := lit.Value.(*plan.Literal_Fval); ok {
 				floatVal = float64(fval.Fval)
+				hasValue = true
+			} else if d64val, ok := lit.Value.(*plan.Literal_Decimal64Val); ok {
+				d64 := types.Decimal64(d64val.Decimal64Val.A)
+				scale := firstExpr.Typ.Scale
+				if scale < 0 {
+					scale = 0
+				}
+				floatVal = types.Decimal64ToFloat64(d64, scale)
+				hasValue = true
+			} else if d128val, ok := lit.Value.(*plan.Literal_Decimal128Val); ok {
+				d128 := types.Decimal128{B0_63: uint64(d128val.Decimal128Val.A), B64_127: uint64(d128val.Decimal128Val.B)}
+				scale := firstExpr.Typ.Scale
+				if scale < 0 {
+					scale = 0
+				}
+				floatVal = types.Decimal128ToFloat64(d128, scale)
 				hasValue = true
 			}
 		}
