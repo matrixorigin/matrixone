@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/topsites"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -167,7 +168,12 @@ func (top *Top) Prepare(proc *process.Process) (err error) {
 	return nil
 }
 
-func (top *Top) Call(proc *process.Process) (vm.CallResult, error) {
+func (top *Top) Call(
+	proc *process.Process,
+) (callResult vm.CallResult, callErr error) {
+	defer func() {
+		callErr = hashbuild.TerminalBudgetErrorForOperator(proc.Ctx, "top", callErr)
+	}()
 	analyzer := top.OpAnalyzer
 
 	if top.ctr.limit == 0 {

@@ -1438,6 +1438,9 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	if err = c.constrainStringNumericResultWorkers(qry); err != nil {
 		return nil, err
 	}
+	if err = c.constrainBoundedConditionalStringWorkers(qry); err != nil {
+		return nil, err
+	}
 	if err = c.constrainStrictWriteWorkers(); err != nil {
 		return nil, err
 	}
@@ -1954,6 +1957,9 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		ss = c.compileSort(node, ss)
 		return ss, nil
 	case plan.Node_AGG:
+		if err = validateAggregateConfigs(node, c.proc); err != nil {
+			return nil, err
+		}
 		childNodeID := node.Children[0]
 		childNode := nodes[childNodeID]
 		if isLocalPreAggregationGroup(node, childNode) &&
@@ -1990,6 +1996,9 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileSample(node, ss))))
 		return ss, nil
 	case plan.Node_WINDOW:
+		if err = validateAggregateConfigs(node, c.proc); err != nil {
+			return nil, err
+		}
 		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
 			return nil, err
@@ -2000,6 +2009,9 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileWin(node, ss))))
 		return ss, nil
 	case plan.Node_TIME_WINDOW:
+		if err = validateAggregateConfigs(node, c.proc); err != nil {
+			return nil, err
+		}
 		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
 			return nil, err
