@@ -1248,6 +1248,9 @@ func (s *IvfflatSearch[T]) DeviceResidency() map[int]int64 {
 	return nil
 }
 
+// BuildTS is the fulltext2 async-freshness hook; ivfflat freshness is handled elsewhere.
+func (s *IvfflatSearch[T]) BuildTS() int64 { return 0 }
+
 func (s *IvfflatSearch[T]) GetIndexSize() (hostBytes, deviceBytes int64) {
 	if s.Index == nil {
 		return s.preloadHostBytes, s.preloadDeviceBytes
