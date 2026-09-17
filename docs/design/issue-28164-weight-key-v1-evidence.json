@@ -70,23 +70,20 @@
       "scope": "current PR1 collation package only"
     },
     {
-      "status": "PASS",
+      "status": "NOT_RUN",
       "command": "GOWORK=off go test -mod=readonly -count=1 -timeout 120s -v ./pkg/common/collation",
-      "scope": "current PR1 collation package only"
+      "scope": "previous-head evidence; full non-verbose package test is recorded above"
     },
     {
-      "status": "PASS",
-      "command": "./.agents/skills/mo-dev/scripts/mo-cgo-test -count=1 -timeout 180s ./pkg/sql/plan/function -run 'Collation|Serial'"
-    },
-    {
-      "status": "PASS",
+      "status": "BLOCKED_ENVIRONMENT",
       "command": "GOWORK=off go test -mod=readonly -race -count=1 -timeout 180s ./pkg/common/collation",
-      "scope": "current PR1 collation package only"
+      "scope": "not rerun after repair; prior focused race compile exhausted local disk"
     },
     {
-      "status": "PASS",
+      "status": "NOT_RUN",
       "command": "GOWORK=off go test -mod=readonly ./pkg/common/collation -run '^$' -fuzz '^FuzzKey$' -fuzztime 15s -parallel 2",
-      "executions": 50168
+      "executions": 50168,
+      "scope": "previous-head evidence; repeat after the repaired head if required"
     },
     {
       "status": "NOT_RUN",
@@ -96,16 +93,12 @@
       "evidence": "Re-run is required in PR2 against the tuple implementation source."
     },
     {
-      "status": "PASS",
+      "status": "NOT_RUN",
       "command": "GOWORK=off go test -mod=readonly ./pkg/common/collation -run '^$' -bench '^BenchmarkFrozenKeys$' -benchmem -benchtime 100ms -count 3",
       "rows": 30,
       "allocations_per_op": 0,
-      "limit": "Preallocated steady-state microbenchmark, concurrent local tests; CPU numbers are not production performance acceptance."
-    },
-    {
-      "status": "FAIL_BEFORE_PASS_AFTER",
-      "test": "TestFrozenTupleRejectsTruncatedNativeWeight",
-      "defect": "Odd-byte UCA payload accepted despite complete outer framing."
+      "limit": "Preallocated steady-state microbenchmark, concurrent local tests; CPU numbers are not production performance acceptance.",
+      "scope": "previous-head evidence; repeat after the repaired head if required"
     },
     {
       "status": "PASS",
@@ -113,7 +106,18 @@
     },
     {
       "status": "PASS",
-      "command": "git diff --check"
+      "command": "git diff --check 5bf6d24157959febb839615462c30eafb5046fc9..HEAD",
+      "scope": "current PR1 exact base-to-head diff"
+    },
+    {
+      "status": "PASS",
+      "command": "make err-check",
+      "scope": "current PR1 production-source SCA rule"
+    },
+    {
+      "status": "PASS",
+      "command": "GOWORK=off go test -mod=readonly -count=1 -timeout 240s ./pkg/fileservice -run '^(TestNewAwsSDKv2UsesCompatibilityChecksumPolicy|TestAwsSDKv2BasicObjectOperations|TestAwsSDKv2WriteUnknownSizeMultipartCompletes|TestAwsParallelMultipartSuccess|TestAwsParallelMultipartUnknownSize|TestAwsSDKv2ConditionalObjectIdentityReads)$'",
+      "scope": "current dependency compatibility and existing storage-path regression tests"
     }
   ],
   "bvt": {
@@ -134,126 +138,16 @@
   ],
   "production_admission": "DISABLED_UNCHANGED",
   "source_sha256": {
-    "pkg/common/collation/key.go": "c48ad640b32d5fd6a305eb2f84bf1be4cba63a8b521c6045d6c5dfbb88929737",
+    "pkg/common/collation/key.go": "26117bf38bc70f8b8b437346f1c2dd0d5f33c5f89a6b9407ddd49d868f6cb618",
     "pkg/common/collation/general_ci.go": "b9df94a5c6341b24febec13d8bacf5a2b2fa2747890b7d05cd2e93926b14ef77",
     "pkg/common/collation/uca0900.go": "2f509910fdeb6328008167fe1fd3d6a9934abc3a7d024d40eb206a37d1b36c77",
-    "pkg/common/collation/freeze_test.go": "8fc9bcc27d00a4dd66614cdc841368500c40e3ed8a8a9e83114993375145f5f2",
+    "pkg/common/collation/freeze_test.go": "4e7580354db582d24c41e9507e32262bb28ae1abfa5c90768eb795e34778dc16",
     "pkg/common/collation/key_test.go": "4b4da3a58547af1504d83102a45267eb8be374719cb162387fc4e7821c915252",
     "pkg/common/collation/testdata/extend_oracle.py": "546f258f46af0bb87d30aa5c03de861e92a3c3155349e5cf49e84c16165f4179",
     "pkg/common/collation/testdata/mysql_8_0_45.json.gz": "1e1e3cf2cbfc29f8ff564eada87e874105deb1ebabb33bb31749fef34a9dd572",
     "pkg/common/collation/testdata/mysql_8_0_45_extended.json.gz": "6a68c024f090c6cca99486007c3bfebfcb163e0ce6b0349969430fbb4c446323",
-    "go.mod": "2dac8bf126f10c1540910feca27726a9bac531e1bdaa3b85f7ec1a2ec16eeb61",
+    "go.mod": "7ace4bff50e74de3f1feba9bc8c2f978cc4581954150dc00a01029247e1e2e8b",
     "go.sum": "f1d10f90e94c3b62a09ef24c9433aaeba6647176e4330860848be2dadcf3123b"
-  },
-  "raw_evidence": {
-    "artifacts/issue-28164-freeze-20260916/28164-freeze-vet.log": {
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    "artifacts/issue-28164-freeze-20260916/28164-freeze-hashes.log": {
-      "sha256": "78f6ea275ee0a78309252093a01c0050f8ee03ab94832cca61a01f2239fb8f55"
-    },
-    "artifacts/issue-28164-freeze-20260916/28164-freeze-tuple-fuzz.log": {
-      "sha256": "acf463d1a7beb8d9496daefbb812e0f4934afd490b63e14a6e20a7a8fb127ca0"
-    },
-    "artifacts/issue-28164-freeze-20260916/28164-freeze-race.log": {
-      "sha256": "64d23204180c49ba584bc60406a8a5fefe5513807cdde0c54906f6e5696ec37e"
-    },
-    "artifacts/issue-28164-freeze-20260916/28164-freeze-packages.log": {
-      "sha256": "0310bbc993ccec336d6ad9711b7b582ae065d56d34a10d351489d1c0f6233125"
-    },
-    "artifacts/issue-28164-freeze-20260916/28164-freeze-weights.log": {
-      "sha256": "e67f8b11cb1cf0a4d93809f1ee895f8e0d5d60f9c39eaca0ebf2bf674e2d803d"
-    },
-    "artifacts/issue-28164-freeze-20260916/28164-freeze-truncated-before.log": {
-      "sha256": "cb58cb5c1db916de14fb8605aa081a974eea00ec75ee558d6f0f476f110fe492"
-    },
-    "artifacts/issue-28164-freeze-20260916/28164-freeze-key-fuzz.log": {
-      "sha256": "f70e0f3a7054383289e1f6377d725a9bb6657dd3f3890cc4efbc5702e55a4433"
-    },
-    "artifacts/issue-28164-freeze-20260916/28164-freeze-baseline.log": {
-      "sha256": "ee7fedd11d0758d9c6337f1a68f63ff2daa6673f17b1e9499bc321c5256c0a29"
-    },
-    "artifacts/issue-28164-freeze-20260916/28164-freeze-build.log": {
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    "artifacts/issue-28164-freeze-20260916/28164-freeze-bench.log": {
-      "sha256": "9eb64a88bee4950ab8550a0b7a44b626c7efa0c261a8c88beccb3843a958d43d"
-    },
-    "artifacts/issue-28164-freeze-20260916/28164-freeze-consumer.log": {
-      "sha256": "3eca031bd875b6284c392c6b8d9d41343c18107e31b348594ef2a120ed37263d"
-    },
-    "artifacts/issue-28164-freeze-20260916/28164-freeze-final-tests.log": {
-      "sha256": "082787234b55c8d94a9f6525e8693005488870fbd161c3d38412925341b029e0"
-    },
-    "artifacts/issue-28164-freeze-20260916/28164-freeze-codec.log": {
-      "sha256": "e1cc66e49ce9c0ddbe4e70454ad5fafafbb7fae9f7ccbf213ccda67735cd5952"
-    },
-    "artifacts/issue-28164-freeze-20260916/oracle/sample_weights_utf8mb4_0900_ai_ci.tsv": {
-      "sha256": "f03cd492ff240f7bc8aca277210379c0217acbfea9e52acd5a183cd677264cfa"
-    },
-    "artifacts/issue-28164-freeze-20260916/oracle/server.tsv": {
-      "sha256": "78d2e3b29070e2ce3dfc9ff4ca33d32de8fd7250bcf57ee12d7043f27fc6959c"
-    },
-    "artifacts/issue-28164-freeze-20260916/oracle/mapping_utf8mb4_0900_ai_ci.tsv": {
-      "sha256": "b979bdf514075a4d0707206be39eaf8bce599d5697657f9b9b5eea76b78ac077"
-    },
-    "artifacts/issue-28164-freeze-20260916/oracle/order_utf8mb4_bin.sql": {
-      "sha256": "56c00a928a36143bb9e68dde171c8deec54ba7f48e0c9f38700c50a71aa48ea8"
-    },
-    "artifacts/issue-28164-freeze-20260916/oracle/codepoints.tsv": {
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    "artifacts/issue-28164-freeze-20260916/oracle/setup.sql": {
-      "sha256": "d8e6479f16740d76eea48e56915f63de0bac21ec1d61de7229b0a8e5e4961523"
-    },
-    "artifacts/issue-28164-freeze-20260916/oracle/order_utf8mb4_0900_bin.tsv": {
-      "sha256": "465a4f2516c883dd44327b76c6125a2f6e56db959a2debde2db5b0058d1043e8"
-    },
-    "artifacts/issue-28164-freeze-20260916/oracle/order_utf8mb4_general_ci.sql": {
-      "sha256": "b03a687a600794fbd409a121c4053841f5d513a8ca7a6dd128abba4ed7e2f6ce"
-    },
-    "artifacts/issue-28164-freeze-20260916/oracle/sample_weights_utf8mb4_0900_bin.sql": {
-      "sha256": "ac6e9dfd0119c52ed52711c292e101f3aafdc3c12e658313764b03f3b2398974"
-    },
-    "artifacts/issue-28164-freeze-20260916/oracle/mapping_utf8mb4_0900_bin.tsv": {
-      "sha256": "f3250757c63f7e713f8dd60b6c8822caa2a83996957398d14f220f531693fcf1"
-    },
-    "artifacts/issue-28164-freeze-20260916/oracle/order_utf8mb4_0900_ai_ci.tsv": {
-      "sha256": "604d173a382969a2b072ed59a954fddae833cdae9d4bfafde87a8ab6564d5859"
-    },
-    "artifacts/issue-28164-freeze-20260916/oracle/order_utf8mb4_bin.tsv": {
-      "sha256": "8286b3024026886219c9992ca635227261afb632c7c34b3c9fb160cbce3b9748"
-    },
-    "artifacts/issue-28164-freeze-20260916/oracle/mapping_utf8mb4_0900_ai_ci.sql": {
-      "sha256": "d51d9847e3493450d47e035886c42668908bca97595135f0f73ef9a825da9f5a"
-    },
-    "artifacts/issue-28164-freeze-20260916/oracle/setup.tsv": {
-      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-    },
-    "artifacts/issue-28164-freeze-20260916/oracle/codepoints.sql": {
-      "sha256": "0f8054a8b2ef1d99f1e2db2f7ab4995a5b415347ef94d2718f7552895a18e869"
-    },
-    "artifacts/issue-28164-freeze-20260916/oracle/server.sql": {
-      "sha256": "f03f00eedb69593d15d3c80e910c57294b90e0859c01e88fbf3b44913a692f3e"
-    },
-    "artifacts/issue-28164-freeze-20260916/oracle/sample_weights_utf8mb4_0900_ai_ci.sql": {
-      "sha256": "60aee423652bbd91da4d78c0642693437216b3dda73fe9f98376806e4370c445"
-    },
-    "artifacts/issue-28164-freeze-20260916/oracle/order_utf8mb4_0900_ai_ci.sql": {
-      "sha256": "9a5a9c8346091414a5cfc071416606f497465890c81a2d3221cbeffbcb18b516"
-    },
-    "artifacts/issue-28164-freeze-20260916/oracle/sample_weights_utf8mb4_0900_bin.tsv": {
-      "sha256": "634a765f6ee2072cc8093def70a9fc42cfc56c2e086f5eb9d53b6fe20ee69620"
-    },
-    "artifacts/issue-28164-freeze-20260916/oracle/mapping_utf8mb4_0900_bin.sql": {
-      "sha256": "6644b0e6221cb75b40f3d70f415ce4c666821a6784dcb39abf709a47634409d8"
-    },
-    "artifacts/issue-28164-freeze-20260916/oracle/order_utf8mb4_general_ci.tsv": {
-      "sha256": "0e7a5082b93011ea057c7ce71300a661fd6fa984bc656067f2fb0fa53d257996"
-    },
-    "artifacts/issue-28164-freeze-20260916/oracle/order_utf8mb4_0900_bin.sql": {
-      "sha256": "0c2c068cb5606738c016a278dadf19ae0e342643ee90fce7f6739ae77499cef1"
-    }
   },
   "review": {
     "status": "PASS_LOCAL_SCOPE",
@@ -276,8 +170,8 @@
   },
   "scope": {
     "current_pr": "weight backend, oracle/golden fixtures, error/capacity/ownership tests and dependency closure",
-    "historical_integration": "tuple framing, packer/decoder, tuple fuzz and consumer checks from the recorded integration baseline",
-    "next_pr": "PR2 must re-run tuple/decoder tests against its own source and commit"
+    "next_pr": "PR2 must re-run tuple/decoder tests against its own source and commit",
+    "historical_integration_evidence": "tuple framing, packer/decoder, tuple fuzz and consumer checks from the recorded integration baseline"
   },
   "historical_integration_source_sha256": {
     "pkg/container/types/collation_key.go": "9918d0e4a913f1b0ae244279a6e13375a1eeb1aad4113bd2c10886ec42057876",
@@ -289,6 +183,130 @@
     "baseline": "993957c232ac29e81009bb94275734b4f5d8786f",
     "scope": "tuple field encoding/decoding, packer order/capacity, tuple fuzz and executable consumer checks",
     "status": "HISTORICAL_EVIDENCE_NOT_CURRENT_PR1_PASS",
-    "required_follow_up": "PR2 must reproduce these checks after schema-aware tuple code is submitted"
-  }
+    "required_follow_up": "PR2 must reproduce these checks after schema-aware tuple code is submitted",
+    "validation": [
+      {
+        "status": "PASS",
+        "command": "./.agents/skills/mo-dev/scripts/mo-cgo-test -count=1 -timeout 180s ./pkg/sql/plan/function -run 'Collation|Serial'",
+        "scope": "historical integration evidence; not current PR1 validation"
+      },
+      {
+        "status": "FAIL_BEFORE_PASS_AFTER",
+        "test": "TestFrozenTupleRejectsTruncatedNativeWeight",
+        "defect": "Odd-byte UCA payload accepted despite complete outer framing.",
+        "scope": "historical integration evidence; not current PR1 validation"
+      }
+    ],
+    "raw_evidence": {
+      "artifacts/issue-28164-freeze-20260916/28164-freeze-vet.log": {
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "artifacts/issue-28164-freeze-20260916/28164-freeze-hashes.log": {
+        "sha256": "78f6ea275ee0a78309252093a01c0050f8ee03ab94832cca61a01f2239fb8f55"
+      },
+      "artifacts/issue-28164-freeze-20260916/28164-freeze-tuple-fuzz.log": {
+        "sha256": "acf463d1a7beb8d9496daefbb812e0f4934afd490b63e14a6e20a7a8fb127ca0"
+      },
+      "artifacts/issue-28164-freeze-20260916/28164-freeze-race.log": {
+        "sha256": "64d23204180c49ba584bc60406a8a5fefe5513807cdde0c54906f6e5696ec37e"
+      },
+      "artifacts/issue-28164-freeze-20260916/28164-freeze-packages.log": {
+        "sha256": "0310bbc993ccec336d6ad9711b7b582ae065d56d34a10d351489d1c0f6233125"
+      },
+      "artifacts/issue-28164-freeze-20260916/28164-freeze-weights.log": {
+        "sha256": "e67f8b11cb1cf0a4d93809f1ee895f8e0d5d60f9c39eaca0ebf2bf674e2d803d"
+      },
+      "artifacts/issue-28164-freeze-20260916/28164-freeze-truncated-before.log": {
+        "sha256": "cb58cb5c1db916de14fb8605aa081a974eea00ec75ee558d6f0f476f110fe492"
+      },
+      "artifacts/issue-28164-freeze-20260916/28164-freeze-key-fuzz.log": {
+        "sha256": "f70e0f3a7054383289e1f6377d725a9bb6657dd3f3890cc4efbc5702e55a4433"
+      },
+      "artifacts/issue-28164-freeze-20260916/28164-freeze-baseline.log": {
+        "sha256": "ee7fedd11d0758d9c6337f1a68f63ff2daa6673f17b1e9499bc321c5256c0a29"
+      },
+      "artifacts/issue-28164-freeze-20260916/28164-freeze-build.log": {
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "artifacts/issue-28164-freeze-20260916/28164-freeze-bench.log": {
+        "sha256": "9eb64a88bee4950ab8550a0b7a44b626c7efa0c261a8c88beccb3843a958d43d"
+      },
+      "artifacts/issue-28164-freeze-20260916/28164-freeze-consumer.log": {
+        "sha256": "3eca031bd875b6284c392c6b8d9d41343c18107e31b348594ef2a120ed37263d"
+      },
+      "artifacts/issue-28164-freeze-20260916/28164-freeze-final-tests.log": {
+        "sha256": "082787234b55c8d94a9f6525e8693005488870fbd161c3d38412925341b029e0"
+      },
+      "artifacts/issue-28164-freeze-20260916/28164-freeze-codec.log": {
+        "sha256": "e1cc66e49ce9c0ddbe4e70454ad5fafafbb7fae9f7ccbf213ccda67735cd5952"
+      },
+      "artifacts/issue-28164-freeze-20260916/oracle/sample_weights_utf8mb4_0900_ai_ci.tsv": {
+        "sha256": "f03cd492ff240f7bc8aca277210379c0217acbfea9e52acd5a183cd677264cfa"
+      },
+      "artifacts/issue-28164-freeze-20260916/oracle/server.tsv": {
+        "sha256": "78d2e3b29070e2ce3dfc9ff4ca33d32de8fd7250bcf57ee12d7043f27fc6959c"
+      },
+      "artifacts/issue-28164-freeze-20260916/oracle/mapping_utf8mb4_0900_ai_ci.tsv": {
+        "sha256": "b979bdf514075a4d0707206be39eaf8bce599d5697657f9b9b5eea76b78ac077"
+      },
+      "artifacts/issue-28164-freeze-20260916/oracle/order_utf8mb4_bin.sql": {
+        "sha256": "56c00a928a36143bb9e68dde171c8deec54ba7f48e0c9f38700c50a71aa48ea8"
+      },
+      "artifacts/issue-28164-freeze-20260916/oracle/codepoints.tsv": {
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "artifacts/issue-28164-freeze-20260916/oracle/setup.sql": {
+        "sha256": "d8e6479f16740d76eea48e56915f63de0bac21ec1d61de7229b0a8e5e4961523"
+      },
+      "artifacts/issue-28164-freeze-20260916/oracle/order_utf8mb4_0900_bin.tsv": {
+        "sha256": "465a4f2516c883dd44327b76c6125a2f6e56db959a2debde2db5b0058d1043e8"
+      },
+      "artifacts/issue-28164-freeze-20260916/oracle/order_utf8mb4_general_ci.sql": {
+        "sha256": "b03a687a600794fbd409a121c4053841f5d513a8ca7a6dd128abba4ed7e2f6ce"
+      },
+      "artifacts/issue-28164-freeze-20260916/oracle/sample_weights_utf8mb4_0900_bin.sql": {
+        "sha256": "ac6e9dfd0119c52ed52711c292e101f3aafdc3c12e658313764b03f3b2398974"
+      },
+      "artifacts/issue-28164-freeze-20260916/oracle/mapping_utf8mb4_0900_bin.tsv": {
+        "sha256": "f3250757c63f7e713f8dd60b6c8822caa2a83996957398d14f220f531693fcf1"
+      },
+      "artifacts/issue-28164-freeze-20260916/oracle/order_utf8mb4_0900_ai_ci.tsv": {
+        "sha256": "604d173a382969a2b072ed59a954fddae833cdae9d4bfafde87a8ab6564d5859"
+      },
+      "artifacts/issue-28164-freeze-20260916/oracle/order_utf8mb4_bin.tsv": {
+        "sha256": "8286b3024026886219c9992ca635227261afb632c7c34b3c9fb160cbce3b9748"
+      },
+      "artifacts/issue-28164-freeze-20260916/oracle/mapping_utf8mb4_0900_ai_ci.sql": {
+        "sha256": "d51d9847e3493450d47e035886c42668908bca97595135f0f73ef9a825da9f5a"
+      },
+      "artifacts/issue-28164-freeze-20260916/oracle/setup.tsv": {
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "artifacts/issue-28164-freeze-20260916/oracle/codepoints.sql": {
+        "sha256": "0f8054a8b2ef1d99f1e2db2f7ab4995a5b415347ef94d2718f7552895a18e869"
+      },
+      "artifacts/issue-28164-freeze-20260916/oracle/server.sql": {
+        "sha256": "f03f00eedb69593d15d3c80e910c57294b90e0859c01e88fbf3b44913a692f3e"
+      },
+      "artifacts/issue-28164-freeze-20260916/oracle/sample_weights_utf8mb4_0900_ai_ci.sql": {
+        "sha256": "60aee423652bbd91da4d78c0642693437216b3dda73fe9f98376806e4370c445"
+      },
+      "artifacts/issue-28164-freeze-20260916/oracle/order_utf8mb4_0900_ai_ci.sql": {
+        "sha256": "9a5a9c8346091414a5cfc071416606f497465890c81a2d3221cbeffbcb18b516"
+      },
+      "artifacts/issue-28164-freeze-20260916/oracle/sample_weights_utf8mb4_0900_bin.tsv": {
+        "sha256": "634a765f6ee2072cc8093def70a9fc42cfc56c2e086f5eb9d53b6fe20ee69620"
+      },
+      "artifacts/issue-28164-freeze-20260916/oracle/mapping_utf8mb4_0900_bin.sql": {
+        "sha256": "6644b0e6221cb75b40f3d70f415ce4c666821a6784dcb39abf709a47634409d8"
+      },
+      "artifacts/issue-28164-freeze-20260916/oracle/order_utf8mb4_general_ci.tsv": {
+        "sha256": "0e7a5082b93011ea057c7ce71300a661fd6fa984bc656067f2fb0fa53d257996"
+      },
+      "artifacts/issue-28164-freeze-20260916/oracle/order_utf8mb4_0900_bin.sql": {
+        "sha256": "0c2c068cb5606738c016a278dadf19ae0e342643ee90fce7f6739ae77499cef1"
+      }
+    }
+  },
+  "evidence_binding": "Current PASS entries are bound by the source_sha256 map and exact commands; historical, NOT_RUN and BLOCKED_ENVIRONMENT entries are labeled separately."
 }
