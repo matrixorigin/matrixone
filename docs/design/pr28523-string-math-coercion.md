@@ -4,16 +4,13 @@
 - Design revision: 7
 - Issue: [#28487](https://github.com/matrixorigin/matrixone/issues/28487)
 - Implementation PR: [#28523](https://github.com/matrixorigin/matrixone/pull/28523)
-- Rebased main base: `8e8e1998ef02b1f6233ddb1c2d3208f3b70d2d83`
-- Candidate snapshot: post-rebase HEAD `85d5deae4af97d12e76223111d69357f7674b531`
-  plus the validated revision-7 working-tree delta in
-  `pkg/sql/plan/visit_plan_rule.go`, `pkg/sql/plan/prepared_sign_test.go`, and
-  `pkg/sql/plan/base_binder_case_test.go`; exact candidate will be pinned by its
-  commit after review-fix validation
-- Independent design review: GPT-6 Astra, medium reasoning, reviewed revision 6
-  at `85d5deae4af97d12e76223111d69357f7674b531` and identified two integration
-  blockers; revision 7 records the fixes and new counterexamples. Exact-candidate
-  re-review and authorized maintainer approval remain pending
+- Rebased main base: `370c310a994de258ee01e87c31062590a7022f34`
+- Code/test candidate: `716c3292a621ebb14fe4a6f484180d68c011fcaf`; the design
+  record below reflects focused/full validation on this exact current-base tree
+- Independent design review: GPT-6 Astra, medium reasoning, reviewed revision 7
+  at `680342dbb3b34c21544ffaa560ce5006cb58b77a` against the earlier `8e8e199`
+  base and found no unresolved findings. Exact review after rebase onto current
+  `main` and authorized maintainer approval remain pending
 - Review trigger: review `5199052257` identified a major-refactor/compatibility design gate; review `5214666396` and comment `5687377735` require incomplete numeric strings to be mode-gated
 
 This document is the stable design revision requested before implementation
@@ -266,6 +263,8 @@ Rebase integration delta for this candidate:
   a descendant of the earlier `049dad215cf69bad4e8bd9911169aabe7493d691` base.
   The rebase conflicts in `pkg/sql/plan/utils.go` and
   `pkg/sql/plan/visit_plan_rule.go` were resolved locally.
+- Rebased again onto current main `370c310a994de258ee01e87c31062590a7022f34`;
+  all ten commits replayed without further conflicts.
 - The upstream two-view `rebindPreparedNumericExprWithBound(expr, bound,
   positions)` remains the rebinding foundation, including recursive bound-child
   propagation, scalar-subquery refresh, explicit-cast metadata, unsupported and
@@ -300,8 +299,9 @@ recorded full package, frontend, race, vet, build, and protocol-smoke results
 were collected against base `66b1672403e9b9efb1971d00b7ea87572891fe2a`; those
 results are historical as well and are not claimed for this candidate.
 
-On the revision-7 working-tree candidate (HEAD
-`85d5deae4af97d12e76223111d69357f7674b531` plus the code/test delta above), the
+On the revision-7 candidate at code/test commit
+`716c3292a621ebb14fe4a6f484180d68c011fcaf`, based on main
+`370c310a994de258ee01e87c31062590a7022f34`, the
 following exact CGo-wrapper selection was first listed and then executed.
 `-list` returned seven planner tests and three function tests (non-empty
 selection); execution passed with exit code 0:
@@ -326,8 +326,8 @@ repository CGo wrapper, `-count=1`, and a 600-second test timeout (exit code 0):
 
 ```text
 .agents/skills/mo-dev/scripts/mo-cgo-test -count=1 -timeout=600s ./pkg/sql/plan ./pkg/sql/plan/function
-ok  github.com/matrixorigin/matrixone/pkg/sql/plan           5.916s
-ok  github.com/matrixorigin/matrixone/pkg/sql/plan/function 17.101s
+ok  github.com/matrixorigin/matrixone/pkg/sql/plan           5.969s
+ok  github.com/matrixorigin/matrixone/pkg/sql/plan/function 17.131s
 ```
 
 Not run on this revision-7 candidate: `go vet`, `-race`, `./pkg/frontend`,
@@ -345,16 +345,16 @@ outside this scope.
 ```text
 Design path: docs/design/pr28523-string-math-coercion.md
 Design revision: 7
-Candidate snapshot: HEAD 85d5deae4af97d12e76223111d69357f7674b531 plus the validated revision-7 code/test delta described above
-Rebased base: 8e8e1998ef02b1f6233ddb1c2d3208f3b70d2d83
+Candidate snapshot: code/test commit 716c3292a621ebb14fe4a6f484180d68c011fcaf, rebased onto main 370c310a994de258ee01e87c31062590a7022f34
+Rebased base: 370c310a994de258ee01e87c31062590a7022f34
 Scope/trigger: PR reviews 5199052257, 5214666396 and comment 5687377735; >500 production lines and planner/plan compatibility boundary
-Reviewer identity and role: GPT-6 Astra, medium reasoning, independent code/design review of revision 6; revision 7 exact-candidate review pending
-Review timestamp: revision 6 reviewed 2026-09-17; revision 7 candidate recorded 2026-09-17
+Reviewer identity and role: GPT-6 Astra, medium reasoning, independent code/design review of revision 7 at 680342dbb3b34c21544ffaa560ce5006cb58b77a against the earlier 8e8e199 base; current-main exact-head review pending
+Review timestamp: prior-base revision 7 reviewed 2026-09-17; current-main revision 7 candidate recorded 2026-09-17
 Decision: DRAFT / AWAITING MAINTAINER APPROVAL
-Resolved blockers: the two revision-6 integration findings have focused regression coverage and pass current plan/function CGo suites; exact revision-7 Astra review and authorized maintainer approval remain pending
+Resolved blockers: the two prior-base integration findings have focused regression coverage and pass current-main plan/function CGo suites; current-main exact-head Astra review and authorized maintainer approval remain pending
 Decisions proposed for maintainer acceptance: retain strict INT64 precision controls (no general integer-prefix widening); prefer correctness over function-wide zonemap pruning; retain the bounded scan and defer one-pass role collection pending current-candidate scan-cost review
 Evidence links: [PR #28523](https://github.com/matrixorigin/matrixone/pull/28523); review [#5199052257](https://github.com/matrixorigin/matrixone/pull/28523#pullrequestreview-5199052257); latest numeric-prefix review [#5214666396](https://github.com/matrixorigin/matrixone/pull/28523#pullrequestreview-5214666396); historical CI run 34813866468; current-base focused and full-package CGo evidence recorded above
-Implementation deviations requiring follow-up: MOD native arithmetic widening regression fixed in 8fc4d5250; exact revision-7 independent review, remote CI/BVT, strict INT64 precision acceptance, zonemap-pruning decision, and scan-cost acceptance remain pending
+Implementation deviations requiring follow-up: MOD native arithmetic widening regression fixed in 8fc4d5250; current-main exact-head independent review, remote CI/BVT, strict INT64 precision acceptance, zonemap-pruning decision, and scan-cost acceptance remain pending
 Approval link: pending maintainer review
 ```
 
