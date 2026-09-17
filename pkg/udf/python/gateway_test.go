@@ -10,6 +10,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -27,6 +28,15 @@ type gatewayResultStream struct {
 	grpc.ClientStream
 	results []*flight.FlightData
 	index   int
+}
+
+type gatedGatewayResultStream struct {
+	grpc.ClientStream
+	results  []*flight.FlightData
+	index    int
+	release  <-chan struct{}
+	waiting  chan<- struct{}
+	waitOnce sync.Once
 }
 
 type finishAckActionStream struct {
@@ -200,6 +210,21 @@ func (s *gatewayResultStream) Recv() (*flight.FlightData, error) {
 }
 
 func (s *gatewayResultStream) Send(*flight.FlightData) error {
+	return nil
+}
+
+func (s *gatedGatewayResultStream) Recv() (*flight.FlightData, error) {
+	if s.index < len(s.results) {
+		result := s.results[s.index]
+		s.index++
+		return result, nil
+	}
+	s.waitOnce.Do(func() { close(s.waiting) })
+	<-s.release
+	return nil, io.EOF
+}
+
+func (s *gatedGatewayResultStream) Send(*flight.FlightData) error {
 	return nil
 }
 
@@ -558,6 +583,42 @@ func TestGatewayFinishRejectsLateHalfStreamControls(t *testing.T) {
 			require.ErrorContains(t, err, "arrived after result stream was drained")
 		})
 	}
+}
+
+func TestGatewayFinishWaitsForExchangeEOF(t *testing.T) {
+	tuple := validInvocation().Tuple
+	sequence := protocol.Sequence{}
+	require.NoError(t, sequence.AcceptInput(1))
+	require.NoError(t, sequence.EndInput(1))
+	require.NoError(t, sequence.AcceptResult(1))
+	require.NoError(t, sequence.AcknowledgeResults(1))
+	finish := gatewayControl(t, "Finish", tuple, func(value *protocol.Control) {
+		value.Status = statusOK
+		value.FinishID = "finish-1"
+		value.LastSequence = 1
+		value.LastResultSequence = 1
+	})
+	release := make(chan struct{})
+	waiting := make(chan struct{})
+	stream := &gatedGatewayResultStream{
+		results: []*flight.FlightData{finish},
+		release: release,
+		waiting: waiting,
+	}
+	gateway := &Gateway{cfg: ClientConfig{RequestTimeout: time.Second}}
+	done := make(chan error, 1)
+	go func() {
+		done <- gateway.receiveFinish(context.Background(), &finishAckFlightClient{}, stream, tuple, 1, 1, &sequence)
+	}()
+
+	<-waiting
+	select {
+	case err := <-done:
+		require.Failf(t, "Finish returned before the exchange reached EOF", "%v", err)
+	default:
+	}
+	close(release)
+	require.NoError(t, <-done)
 }
 
 func TestGatewayRejectsArrowBodyOnControlFrame(t *testing.T) {
