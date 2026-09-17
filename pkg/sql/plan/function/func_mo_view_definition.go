@@ -180,7 +180,7 @@ func viewMetadataFromPersistedData(ctx context.Context, persisted string) (persi
 	}
 	selectStmt = tree.WithViewColumnNames(selectStmt, columnNames)
 	return persistedViewMetadata{definition: tree.StringWithOpts(
-		selectStmt, dialect.MYSQL, tree.WithQuoteString(true),
+		selectStmt, dialect.MYSQL, tree.WithSingleQuoteString(),
 		tree.WithQuoteIdentifier(), tree.WithModeIndependentStringLiterals()), checkOption: checkOption}, true
 }
 

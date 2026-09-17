@@ -16,6 +16,7 @@ package function
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -23,6 +24,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
@@ -204,6 +208,128 @@ func TestViewMetadataPreservesLegacyCheckOption(t *testing.T) {
 			require.Equal(t, test.definition, strings.ToLower(metadata.definition))
 			require.Equal(t, test.checkOption, metadata.checkOption)
 		})
+	}
+}
+
+func TestViewDefinitionReplayPreservesStringValuesAcrossSQLModes(t *testing.T) {
+	const legacyStatement = "CREATE VIEW v AS SELECT 'a''b' AS value"
+	const currentDefinition = "select 'a''b' as `value`"
+
+	modes := []string{
+		"",
+		"ANSI_QUOTES",
+		"NO_BACKSLASH_ESCAPES",
+		"ANSI_QUOTES,NO_BACKSLASH_ESCAPES",
+	}
+	for _, mode := range modes {
+		for _, row := range []struct {
+			name      string
+			persisted func(t *testing.T) string
+		}{
+			{
+				name: "current",
+				persisted: func(t *testing.T) string {
+					return `{"Stmt":"` + legacyStatement + `","definition":"` + currentDefinition + `"}`
+				},
+			},
+			{
+				name: "legacy",
+				persisted: func(t *testing.T) string {
+					encoded, err := json.Marshal(map[string]string{
+						"Stmt":     legacyStatement,
+						"sql_mode": mode,
+					})
+					require.NoError(t, err)
+					return string(encoded)
+				},
+			},
+		} {
+			t.Run(row.name+"/"+strings.ReplaceAll(mode, ",", "_"), func(t *testing.T) {
+				definition, ok := viewDefinitionFromPersistedData(
+					context.Background(), row.persisted(t))
+				require.True(t, ok)
+
+				statements, err := parsers.ParseWithSQLMode(
+					context.Background(), dialect.MYSQL, definition, 1, mode)
+				require.NoError(t, err)
+				require.Len(t, statements, 1)
+				defer func() {
+					for _, statement := range statements {
+						statement.Free()
+					}
+				}()
+
+				selectStmt, ok := statements[0].(*tree.Select)
+				require.True(t, ok)
+				selectClause, ok := selectStmt.Select.(*tree.SelectClause)
+				require.True(t, ok)
+				literal, ok := selectClause.Exprs[0].Expr.(*tree.NumVal)
+				require.True(t, ok)
+				require.Equal(t, "a'b", literal.String())
+			})
+		}
+	}
+}
+
+func TestViewDefinitionReplayPreservesEmptyBinaryAcrossSQLModes(t *testing.T) {
+	const legacyStatement = "CREATE VIEW v AS SELECT _binary '' AS value"
+	const currentDefinition = "select _binary '' as `value`"
+
+	modes := []string{
+		"",
+		"ANSI_QUOTES",
+		"NO_BACKSLASH_ESCAPES",
+		"ANSI_QUOTES,NO_BACKSLASH_ESCAPES",
+	}
+	for _, mode := range modes {
+		for _, row := range []struct {
+			name      string
+			persisted func(t *testing.T) string
+		}{
+			{
+				name: "current",
+				persisted: func(t *testing.T) string {
+					return `{"Stmt":"` + legacyStatement + `","definition":"` + currentDefinition + `"}`
+				},
+			},
+			{
+				name: "legacy",
+				persisted: func(t *testing.T) string {
+					encoded, err := json.Marshal(map[string]string{
+						"Stmt":     legacyStatement,
+						"sql_mode": mode,
+					})
+					require.NoError(t, err)
+					return string(encoded)
+				},
+			},
+		} {
+			t.Run(row.name+"/"+strings.ReplaceAll(mode, ",", "_"), func(t *testing.T) {
+				definition, ok := viewDefinitionFromPersistedData(
+					context.Background(), row.persisted(t))
+				require.True(t, ok)
+				require.NotContains(t, definition, "_binary 0x")
+
+				statements, err := parsers.ParseWithSQLMode(
+					context.Background(), dialect.MYSQL, definition, 1, mode)
+				require.NoError(t, err)
+				require.Len(t, statements, 1)
+				defer func() {
+					for _, statement := range statements {
+						statement.Free()
+					}
+				}()
+
+				selectStmt, ok := statements[0].(*tree.Select)
+				require.True(t, ok)
+				selectClause, ok := selectStmt.Select.(*tree.SelectClause)
+				require.True(t, ok)
+				literal, ok := selectClause.Exprs[0].Expr.(*tree.NumVal)
+				require.True(t, ok)
+				require.Equal(t, tree.P_ScoreBinary, literal.ValType)
+				require.Empty(t, literal.String())
+			})
+		}
 	}
 }
 
