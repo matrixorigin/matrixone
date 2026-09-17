@@ -5223,6 +5223,43 @@ func TestExecInFrontendCompatibilityNoOpRejectsDifferentSemantics(t *testing.T) 
 	require.ErrorContains(t, err, "supported only as a compatibility no-op")
 }
 
+func TestHandleCompatibilityNoOpStmtDatabaseErrors(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		database  string
+		lookupErr error
+		wantCode  uint16
+	}{
+		{
+			name:      "missing database",
+			database:  "missing_db",
+			lookupErr: moerr.GetOkExpectedEOB(),
+			wantCode:  moerr.ErrBadDB,
+		},
+		{
+			name:      "infrastructure error",
+			database:  "db",
+			lookupErr: context.Canceled,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ses := newTestSession(t, ctrl)
+			eng := mock_frontend.NewMockEngine(ctrl)
+			getPu(ses.GetService()).StorageEngine = eng
+			eng.EXPECT().Database(gomock.Any(), test.database, gomock.Any()).Return(nil, test.lookupErr)
+
+			err := handleCompatibilityNoOpStmt(ses, &ExecCtx{reqCtx: context.Background()},
+				tree.NewCompatibilityNoOpStmt(test.database, "utf8mb4", "utf8mb4_bin"))
+			if test.wantCode != 0 {
+				require.True(t, moerr.IsMoErrCode(err, test.wantCode))
+			} else {
+				require.ErrorIs(t, err, test.lookupErr)
+			}
+		})
+	}
+}
+
 func TestLockTablesSessionState(t *testing.T) {
 	ses := &Session{}
 

@@ -3741,7 +3741,10 @@ func handleCompatibilityNoOpStmt(ses FeSession, execCtx *ExecCtx, stmt *tree.Com
 	}
 	txn := ses.GetTxnHandler().GetTxn()
 	if _, err := getPu(ses.GetService()).StorageEngine.Database(execCtx.reqCtx, stmt.Database, txn); err != nil {
-		return moerr.NewBadDB(execCtx.reqCtx, stmt.Database)
+		if moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+			return moerr.NewBadDB(execCtx.reqCtx, stmt.Database)
+		}
+		return err
 	}
 	return nil
 }
