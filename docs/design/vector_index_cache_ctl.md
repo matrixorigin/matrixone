@@ -34,9 +34,9 @@ unused; the override is process-local and never persisted.
 ## 3. Decisions and invariants
 
 - **Security boundary.** These operations read or mutate cluster-wide, cross-tenant cache state, so
-  they are restricted to the **sys account's admin role**. This is enforced on the statement path
-  and additionally re-checked at the operation boundary (fail-closed defense-in-depth), so a path
-  that bypasses statement-level privilege cannot reach them.
+  they are restricted to the **sys account's admin role**. This is enforced by the existing `mo_ctl`
+  statement-path privilege gate, which already admits only that principal; the operations add no
+  authorization of their own.
 - **Exact-key contract.** Get and Evict act on the **exact** cache key (algorithm-specific:
   bag-of-tables index by table name, IVF-family index by table + generation). Get reports exactly
   what Evict would remove; a bare table name does not match a generation-qualified key. List keys is
