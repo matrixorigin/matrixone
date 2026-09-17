@@ -1240,6 +1240,17 @@ func binaryProtocolPrepareParamCategoryType(
 	return runtimeType, ok
 }
 
+func binaryProtocolTemporalParamType(oid types.T, value string) types.Type {
+	typ := oid.ToType()
+	if dot := strings.LastIndexByte(value, '.'); dot >= 0 {
+		scale := len(value) - dot - 1
+		if scale > 0 && scale <= 6 {
+			typ.Scale = int32(scale)
+		}
+	}
+	return typ
+}
+
 func binaryProtocolPrepareParamDomains(
 	mysqlType defines.MysqlType,
 	isUnsigned bool,
@@ -1314,6 +1325,31 @@ func binaryProtocolTemporalType(oid types.T, value string) types.Type {
 		return oid.ToTypeWithScale(6)
 	}
 	return oid.ToType()
+}
+
+// binaryProtocolInetNtoaSourceType keeps protocol source domains local to the
+// INET_NTOA consumer. COM_STMT_EXECUTE values otherwise share one ParamValue
+// runtime category with every other expression in the statement; publishing a
+// JSON or temporal RuntimeType here would make unrelated arithmetic,
+// concatenation, and comparisons inherit INET_NTOA's coercion rules.
+func binaryProtocolInetNtoaSourceType(
+	mysqlType defines.MysqlType,
+	value string,
+) (types.Type, bool) {
+	switch mysqlType {
+	case defines.MYSQL_TYPE_JSON:
+		return types.T_json.ToType(), true
+	case defines.MYSQL_TYPE_DATE:
+		return types.T_date.ToType(), true
+	case defines.MYSQL_TYPE_TIME:
+		return binaryProtocolTemporalParamType(types.T_time, value), true
+	case defines.MYSQL_TYPE_DATETIME:
+		return binaryProtocolTemporalParamType(types.T_datetime, value), true
+	case defines.MYSQL_TYPE_TIMESTAMP:
+		return binaryProtocolTemporalParamType(types.T_timestamp, value), true
+	default:
+		return types.Type{}, false
+	}
 }
 
 func invalidBinaryDecimalParameter(ctx context.Context, value any) error {
@@ -1483,6 +1519,8 @@ func initExecuteStmtParamWithResolverInSession(
 			newPreparePlan.Plan)
 		prepareStmt.conversionParamPositions = plan2.PreparedPlanConversionParamPositions(
 			newPreparePlan.Plan)
+		prepareStmt.inetNtoaParamPositions = plan2.PreparedPlanInetNtoaParamPositions(
+			newPreparePlan.Plan)
 		// Parameter type evolution belongs to one prepared-plan generation. The
 		// rebuilt plan has resolved against fresh metadata and must not inherit a
 		// numeric BIT_COUNT category selected by the preceding generation.
@@ -1634,7 +1672,8 @@ func initExecuteStmtParamWithResolverInSession(
 	runtimeDirectResultPositions := make([]int32, 0, len(directResultPositions))
 	needsRuntimeParamVals := !binaryExecute || binaryLiteralPlan ||
 		prepareStmt.hasPaginationParams || prepareStmt.hasLagLeadParams || preparedExplain ||
-		runtimeNumericOverloadCandidate || deferredBitCountOverloadCandidate
+		runtimeNumericOverloadCandidate || deferredBitCountOverloadCandidate ||
+		len(prepareStmt.inetNtoaParamPositions) > 0
 	cwft.paramVals = nil
 	cwft.runtimeDirectResultSpecialization = false
 	if prepareStmt.params != nil && prepareStmt.params.Length() > 0 { // use binary protocol
@@ -1744,7 +1783,8 @@ func initExecuteStmtParamWithResolverInSession(
 		needsRuntimeParamVals = needsRuntimeParamVals || needsRuntimeSpecialization ||
 			runtimeNumericPrefixCandidate || runtimeNumericOverloadCandidate || runtimeDirectResultCandidate
 		if needsRuntimeParamVals {
-			cwft.paramVals, err = preparedParamValues(cwft.proc, prepareStmt.ParamTypes)
+			cwft.paramVals, err = preparedParamValues(
+				cwft.proc, prepareStmt.ParamTypes, prepareStmt.inetNtoaParamPositions)
 			if err != nil {
 				return nil, nil, nil, originSQL, false, err
 			}
@@ -1786,7 +1826,7 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 		params, paramVals, paramIsBin, paramBinaryString, paramKinds, paramTypes, err := buildExecuteUserParamsWithMemberOfPositions(
 			cwft.proc, execPlan.Args, prepareStmt.jsonComparisonParamPositions,
-			prepareStmt.jsonMemberOfParamPositions)
+			prepareStmt.jsonMemberOfParamPositions, prepareStmt.inetNtoaParamPositions)
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
@@ -2188,6 +2228,11 @@ func preparedRuntimeSemanticKey(paramVals []any) string {
 				param.SourceType.Oid, param.SourceType.Charset,
 				param.SourceType.Width, param.SourceType.Scale)
 		}
+		if param.HasInetNtoaSourceType {
+			fmt.Fprintf(&key, "inet-ntoa-source:%d:%d:%d:%d;",
+				param.InetNtoaSourceType.Oid, param.InetNtoaSourceType.Charset,
+				param.InetNtoaSourceType.Width, param.InetNtoaSourceType.Scale)
+		}
 	}
 	return key.String()
 }
@@ -2579,10 +2624,14 @@ func preparedDDLNeedsCatalogRefresh(stmt tree.Statement) bool {
 	}
 }
 
-func preparedParamValues(proc *process.Process, paramTypes []byte) ([]any, error) {
+func preparedParamValues(proc *process.Process, paramTypes []byte, inetNtoaPositionsArg ...[]int32) ([]any, error) {
 	params := proc.GetPrepareParams()
 	if params == nil || params.Length() == 0 {
 		return nil, nil
+	}
+	var inetNtoaPositions []int32
+	if len(inetNtoaPositionsArg) > 0 {
+		inetNtoaPositions = inetNtoaPositionsArg[0]
 	}
 	values := make([]any, params.Length())
 	for i := range values {
@@ -2616,6 +2665,13 @@ func preparedParamValues(proc *process.Process, paramTypes []byte) ([]any, error
 		if i*2+1 < len(paramTypes) {
 			mysqlType := defines.MysqlType(paramTypes[i*2])
 			isUnsigned := paramTypes[i*2+1]&0x80 != 0
+			if _, relevant := slices.BinarySearch(inetNtoaPositions, int32(i)); relevant {
+				if sourceType, sourceTypeOK := binaryProtocolInetNtoaSourceType(
+					mysqlType, paramValue.Value.(string)); sourceTypeOK {
+					paramValue.InetNtoaSourceType = sourceType
+					paramValue.HasInetNtoaSourceType = true
+				}
+			}
 			// The MySQL binary protocol represents Go bool values as signed
 			// MYSQL_TYPE_TINY 0/1.  Keep the protocol type helper numeric for
 			// ordinary TINYINT callers, but restore the Boolean semantic kind
@@ -2929,6 +2985,7 @@ func buildExecuteUserParamsWithMemberOfPositions(
 	args []*plan.Expr,
 	typedPositions []int32,
 	memberOfPositions []int32,
+	inetNtoaPositionsArg ...[]int32,
 ) (
 	params *vector.Vector,
 	paramVals []any,
@@ -2950,6 +3007,10 @@ func buildExecuteUserParamsWithMemberOfPositions(
 	paramDomains := make([]types.RuntimeStringDomain, len(args))
 	effectiveParamDomains := make([]types.RuntimeStringDomain, len(args))
 	paramKinds = make([]vector.PrepareParamKind, len(args))
+	var inetNtoaPositions []int32
+	if len(inetNtoaPositionsArg) > 0 {
+		inetNtoaPositions = inetNtoaPositionsArg[0]
+	}
 	for i, arg := range args {
 		exprImpl := arg.Expr.(*plan.Expr_V)
 		var param any
@@ -2958,6 +3019,7 @@ func buildExecuteUserParamsWithMemberOfPositions(
 			return
 		}
 		sourceType := arg.Typ
+		resolvedSourceType := types.Type{}
 		if resolveType := proc.GetResolveVariableTypeFunc(); resolveType != nil {
 			var resolvedType plan.Type
 			resolvedType, err = resolveType(exprImpl.V.Name, exprImpl.V.System, exprImpl.V.Global)
@@ -2965,6 +3027,7 @@ func buildExecuteUserParamsWithMemberOfPositions(
 				return
 			}
 			resolvedSQLType := executeArgumentSourceType(resolvedType)
+			resolvedSourceType = resolvedSQLType
 			if types.StaticStringDomain(resolvedSQLType) == types.StringDomainBinary || resolvedSQLType.IsDecimal() {
 				sourceType = resolvedType
 			}
@@ -3035,6 +3098,11 @@ func buildExecuteUserParamsWithMemberOfPositions(
 			RuntimeStringDomain: paramDomains[i],
 			EnableNumericPrefix: currentProtocolVersion(proc) >= defines.MORPCVersion30,
 		}
+		if _, relevant := slices.BinarySearch(inetNtoaPositions, int32(i)); relevant &&
+			isInetNtoaTemporalOrJSONSourceType(resolvedSourceType) {
+			paramValue.InetNtoaSourceType = resolvedSourceType
+			paramValue.HasInetNtoaSourceType = true
+		}
 		if paramKinds[i] == vector.PrepareParamBoolean {
 			// SQL EXECUTE keeps its historical text transport for a bare result
 			// parameter.  Carry the logical source type so numeric consumers can
@@ -3076,6 +3144,15 @@ func normalizeMemberOfUserParam(arg *plan.Expr, param any) (any, error) {
 		return param, nil
 	}
 	return types.ParseEnumIndex(arg.Typ.Enumvalues, index)
+}
+
+func isInetNtoaTemporalOrJSONSourceType(typ types.Type) bool {
+	switch typ.Oid {
+	case types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_json:
+		return true
+	default:
+		return false
+	}
 }
 
 func executeArgumentSourceType(typ plan.Type) types.Type {

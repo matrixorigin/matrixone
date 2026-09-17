@@ -16,12 +16,14 @@ package function
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/hex"
 	"math"
 	"net"
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -346,7 +348,7 @@ func TestIPFunctionRegisteredExecutors(t *testing.T) {
 		out := run(t, "is_ipv4", types.T_varchar.ToType(),
 			[]string{"010.000.005.009", "0001.2.3.4", "127.1", "192.0.2.1", ""},
 			[]bool{false, false, false, false, true}, 5, false)
-		require.Equal(t, []int64{1, 0, 0, 1, 0}, vector.MustFixedColWithTypeCheck[int64](out))
+		require.Equal(t, []int32{1, 0, 0, 1, 0}, vector.MustFixedColWithTypeCheck[int32](out))
 		require.True(t, out.IsNull(4))
 	})
 
@@ -354,7 +356,7 @@ func TestIPFunctionRegisteredExecutors(t *testing.T) {
 		out := run(t, "is_ipv6", types.T_varchar.ToType(),
 			[]string{"::ffff:192.0.2.1", "::192.0.2.1", "192.0.2.1", "bad", ""},
 			[]bool{false, false, false, false, true}, 5, false)
-		require.Equal(t, []int64{1, 1, 0, 0, 0}, vector.MustFixedColWithTypeCheck[int64](out))
+		require.Equal(t, []int32{1, 1, 0, 0, 0}, vector.MustFixedColWithTypeCheck[int32](out))
 		require.True(t, out.IsNull(4))
 	})
 
@@ -366,7 +368,7 @@ func TestIPFunctionRegisteredExecutors(t *testing.T) {
 			string([]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, 192, 0, 2, 1}),
 			"x", "",
 		}, []bool{false, false, false, false, false, true}, 6, false)
-		require.Equal(t, []int64{0, 0, 1, 0, 0, 0}, vector.MustFixedColWithTypeCheck[int64](out))
+		require.Equal(t, []int32{0, 0, 1, 0, 0, 0}, vector.MustFixedColWithTypeCheck[int32](out))
 		require.True(t, out.IsNull(5))
 	})
 
@@ -389,6 +391,65 @@ func TestIPFunctionRegisteredExecutors(t *testing.T) {
 			assertStrings(t, out, tc.want, tc.nulls)
 		})
 	}
+
+	t.Run("inet_ntoa dynamic source families", func(t *testing.T) {
+		out := run(t, "inet_ntoa", types.T_varchar.ToType(), []string{"1.6", "4294967295.9", "-1", "abc"}, nil, 4, false)
+		assertStrings(t, out, []string{"0.0.0.1", "255.255.255.255", "", "0.0.0.0"}, []bool{false, false, true, false})
+
+		out = run(t, "inet_ntoa", types.T_bool.ToType(), []bool{true, false}, nil, 2, false)
+		assertStrings(t, out, []string{"0.0.0.1", "0.0.0.0"}, []bool{false, false})
+
+		date, err := types.ParseDateCast("2024-01-02")
+		require.NoError(t, err)
+		out = run(t, "inet_ntoa", types.T_date.ToType(), []types.Date{date}, nil, 1, false)
+		assertStrings(t, out, []string{"1.52.214.230"}, []bool{false})
+
+		clock, err := types.ParseTime("00:00:02", 0)
+		require.NoError(t, err)
+		out = run(t, "inet_ntoa", types.T_time.ToType(), []types.Time{clock}, nil, 1, false)
+		assertStrings(t, out, []string{"0.0.0.2"}, []bool{false})
+
+		encodeJSON := func(value any) string {
+			bj, err := bytejson.CreateByteJSON(value)
+			require.NoError(t, err)
+			encoded, err := types.EncodeJson(bj)
+			require.NoError(t, err)
+			return string(encoded)
+		}
+		out = run(t, "inet_ntoa", types.T_json.ToType(), []string{encodeJSON(float64(1.6)), encodeJSON(int64(2)), encodeJSON(true), encodeJSON(false), encodeJSON("258"), encodeJSON("not-a-number"), encodeJSON("1e100"), ""}, []bool{false, false, false, false, false, false, true, true}, 8, false)
+		assertStrings(t, out, []string{"0.0.0.2", "0.0.0.2", "0.0.0.1", "0.0.0.0", "0.0.1.2", "0.0.0.0", "", ""}, []bool{false, false, false, false, false, false, true, true})
+
+		timeValues := []types.Time{
+			types.TimeFromClock(false, 0, 0, 0, 499999),
+			types.TimeFromClock(false, 0, 0, 0, 500000),
+			types.TimeFromClock(false, 0, 0, 1, 500000),
+			types.TimeFromClock(true, 0, 0, 0, 500000),
+		}
+		out = run(t, "inet_ntoa", types.New(types.T_time, 0, 6), timeValues, nil, len(timeValues), false)
+		assertStrings(t, out,
+			[]string{"0.0.0.0", "0.0.0.1", "0.0.0.2", ""},
+			[]bool{false, false, false, true})
+
+		encodeDecimalJSON := func(value string) string {
+			data := make([]byte, binary.MaxVarintLen64+len(value))
+			n := binary.PutUvarint(data, uint64(len(value)))
+			copy(data[n:], value)
+			bj := bytejson.ByteJson{Type: bytejson.TpCodeDecimal, Data: data[:n+len(value)]}
+			encoded, err := types.EncodeJson(bj)
+			require.NoError(t, err)
+			return string(encoded)
+		}
+		out = run(t, "inet_ntoa", types.T_json.ToType(), []string{
+			encodeDecimalJSON("4294967295.4999999"),
+			encodeDecimalJSON("4294967295.5"),
+			encodeDecimalJSON("0.5"),
+			encodeDecimalJSON("-0.4999999"),
+			encodeDecimalJSON("-0.5"),
+		}, nil, 5, false)
+		assertStrings(t, out,
+			[]string{"255.255.255.255", "", "0.0.0.1", "0.0.0.0", ""},
+			[]bool{false, true, false, false, true})
+	})
 }
 
 func TestIPFunctionsSelectionMasksInvalidRows(t *testing.T) {
@@ -415,6 +476,13 @@ func TestIPFunctionsSelectionMasksInvalidRows(t *testing.T) {
 				[]string{"", "1.2.3.4"}, []bool{true, false}),
 			fn: InetNtoa,
 		},
+		{
+			name:  "is_ipv4 legacy INT64 result",
+			input: NewFunctionTestInput(types.T_varchar.ToType(), []string{"127.0.0.1", "bad"}, nil),
+			result: NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{1, 0}, []bool{true, false}),
+			fn: IsIPv4,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -422,6 +490,52 @@ func TestIPFunctionsSelectionMasksInvalidRows(t *testing.T) {
 				WithSelectList(selected)
 			ok, info := caseRun.Run()
 			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestInetNtoaPreparedParameterKinds(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, test := range []struct {
+		name  string
+		kind  vector.PrepareParamKind
+		value string
+		want  string
+		null  bool
+	}{
+		{name: "float preserves numeric rounding", kind: vector.PrepareParamFloat, value: "1.6", want: "0.0.0.2"},
+		{name: "decimal uses decimal rounding", kind: vector.PrepareParamDecimal, value: "1.5", want: "0.0.0.2"},
+		{name: "boolean true", kind: vector.PrepareParamBoolean, value: "true", want: "0.0.0.1"},
+		{name: "integer prefix", kind: vector.PrepareParamInteger, value: "4294967295.9", want: "255.255.255.255"},
+		{name: "untyped NULL", kind: vector.PrepareParamNone, value: "", null: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var input *vector.Vector
+			if test.null {
+				input = vector.NewConstNull(types.T_any.ToType(), 1, proc.Mp())
+			} else {
+				data, err := proc.Mp().Alloc(types.VarlenaSize, false)
+				require.NoError(t, err)
+				var value types.Varlena
+				value[0] = byte(len(test.value))
+				copy(value[1:], test.value)
+				copy(data, value[:])
+				input = vector.NewVecWithData(types.T_any.ToType(), 1, data, nil)
+				input.SetClass(vector.CONSTANT)
+			}
+			input.SetPrepareParamKind(test.kind)
+			t.Cleanup(func() { input.Free(proc.Mp()) })
+
+			result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+			require.NoError(t, result.PreExtendAndReset(1))
+			require.NoError(t, InetNtoaDynamic([]*vector.Vector{input}, result, proc, 1, nil))
+			output := result.GetResultVector()
+			t.Cleanup(func() { output.Free(proc.Mp()) })
+			got, isNull := vector.GenerateFunctionStrParameter(output).GetStrValue(0)
+			require.Equal(t, test.null, isNull)
+			if !test.null {
+				require.Equal(t, test.want, string(got))
+			}
 		})
 	}
 }

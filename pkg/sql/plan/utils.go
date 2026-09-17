@@ -1317,6 +1317,42 @@ func PreparedPlanConversionParamPositions(preparePlan *Plan) []int32 {
 	return result
 }
 
+// PreparedPlanInetNtoaParamPositions returns marker positions whose direct
+// value is consumed by INET_NTOA. SQL EXECUTE uses this bounded plan metadata
+// to carry temporal/JSON source provenance only to that function; the same
+// marker can still retain the ordinary text transport contract elsewhere in
+// the statement.
+func PreparedPlanInetNtoaParamPositions(preparePlan *Plan) []int32 {
+	if preparePlan == nil {
+		return nil
+	}
+	positions := make(map[int32]struct{})
+	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil ||
+			!strings.EqualFold(fn.Func.GetObjName(), "inet_ntoa") || len(fn.Args) != 1 {
+			return nil
+		}
+		if position, ok := preparedParamPosition(fn.Args[0]); ok {
+			positions[int32(position)] = struct{}{}
+			return nil
+		}
+		if position, ok := preparedResultParamPosition(fn.Args[0], "inet_ntoa"); ok {
+			positions[int32(position)] = struct{}{}
+		}
+		return nil
+	})
+	if len(positions) == 0 {
+		return nil
+	}
+	result := make([]int32, 0, len(positions))
+	for position := range positions {
+		result = append(result, position)
+	}
+	slices.Sort(result)
+	return result
+}
+
 func preparedPlanFunctionFallbackParamPositions(preparePlan *Plan, functionName string) []int32 {
 	if preparePlan == nil || preparePlan.GetQuery() == nil {
 		return nil
@@ -5537,6 +5573,12 @@ type ParamValue struct {
 	// the cached plan.
 	RuntimeType    types.Type
 	HasRuntimeType bool
+	// InetNtoaSourceType carries a SQL EXECUTE user's assignment-time domain
+	// only for INET_NTOA. It must not participate in generic parameter
+	// coercion: a DATE/TIME/JSON user variable is still a text transport value
+	// for unrelated arithmetic and comparisons.
+	InetNtoaSourceType    types.Type
+	HasInetNtoaSourceType bool
 	// DirectResultType is the wire-visible DECIMAL domain parsed from the same
 	// binary-protocol lexeme as RuntimeType. RuntimeType keeps the normalized
 	// numeric-prefix domain used by common-type consumers; a direct result keeps

@@ -49,7 +49,13 @@ func TestPersistedIPFunctionProtocolAdmission(t *testing.T) {
 		"create table t(a bigint, b varchar(32) generated always as (inet_ntoa(a)) stored)",
 		"create table t(a bigint, check (inet_ntoa(a) <> ''))",
 	}
-	for _, version := range []int64{defines.MORPCVersion70, defines.MORPCVersion71, defines.MORPCVersion72} {
+	for _, version := range []int64{
+		defines.MORPCVersion70,
+		defines.MORPCVersion71,
+		defines.MORPCVersion72,
+		defines.MORPCVersion84,
+		defines.MORPCVersion85,
+	} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		for _, sql := range statements {
 			t.Run(fmt.Sprintf("%s/v%d", sql, version), func(t *testing.T) {
@@ -87,7 +93,13 @@ func TestPersistedIPFunctionProtocolAdmissionAcrossOwners(t *testing.T) {
 	expr, err := binder.BindExpr(ast, 0, false)
 	require.NoError(t, err)
 
-	for _, version := range []int64{defines.MORPCVersion70, defines.MORPCVersion71, defines.MORPCVersion72} {
+	for _, version := range []int64{
+		defines.MORPCVersion70,
+		defines.MORPCVersion71,
+		defines.MORPCVersion72,
+		defines.MORPCVersion84,
+		defines.MORPCVersion85,
+	} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		if version < defines.MORPCVersion72 {
 			require.ErrorContains(t, RequirePersistedIPFunctionProtocol(proc.Ctx, proc, expr), "protocol version 72")
@@ -229,24 +241,30 @@ func TestPersistedIPFunctionProtocolAdmissionForCatalogBuilders(t *testing.T) {
 		"create table t(a bigint, b varchar(32) generated always as (inet_ntoa(a)) stored)", 1)
 	columns := []*ColDef{{Name: "a", Typ: planpb.Type{Id: int32(types.T_int64), Width: 64}}}
 
-	for _, version := range []int64{defines.MORPCVersion70, defines.MORPCVersion71, defines.MORPCVersion72} {
+	for _, version := range []int64{
+		defines.MORPCVersion70,
+		defines.MORPCVersion71,
+		defines.MORPCVersion72,
+		defines.MORPCVersion84,
+		defines.MORPCVersion85,
+	} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		t.Run(fmt.Sprintf("v%d", version), func(t *testing.T) {
 			_, err := buildDefaultExprWithColumns(defaultCol,
 				planpb.Type{Id: int32(types.T_varchar), Width: 32}, proc, columns)
-			checkAdmissionResult(t, version, err)
+			checkAdmissionResult(t, version, err, defines.MORPCVersion72)
 
 			_, err = buildOnUpdate(onUpdateCol, planpb.Type{Id: int32(types.T_varchar), Width: 32}, proc)
-			checkAdmissionResult(t, version, err)
+			checkAdmissionResult(t, version, err, defines.MORPCVersion72)
 
 			_, err = buildGeneratedExpr(generatedCol,
 				planpb.Type{Id: int32(types.T_varchar), Width: 32}, columns, proc)
-			checkAdmissionResult(t, version, err)
+			checkAdmissionResult(t, version, err, defines.MORPCVersion72)
 
 			_, err = buildCTASDefaultFromOrigin(ctx,
 				planpb.Type{Id: int32(types.T_varchar), Width: 32}, true,
 				"inet_ntoa(1)", columns...)
-			checkAdmissionResult(t, version, err)
+			checkAdmissionResult(t, version, err, defines.MORPCVersion72)
 		})
 	}
 }
@@ -321,10 +339,158 @@ func TestPersistedBoundedConditionalStringProtocolAdmission(t *testing.T) {
 	require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, expr))
 }
 
-func checkAdmissionResult(t *testing.T, version int64, err error) {
+func TestPersistedFollowupExpressionProtocolAdmission(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	old, exists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if exists {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	column := func(typ types.Type) *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  makePlan2Type(&typ),
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
+		}
+	}
+	cases := []struct {
+		name     string
+		function string
+		input    types.Type
+		required int64
+	}{
+		{name: "native INET_NTOA remains v72", function: "inet_ntoa", input: types.T_int64.ToType(), required: defines.MORPCVersion72},
+		{name: "dynamic INET_NTOA is v85", function: "inet_ntoa", input: types.T_varchar.ToType(), required: defines.MORPCVersion85},
+		{name: "TO_BASE64 binary result is v85", function: "to_base64", input: types.NewWithCharset(types.T_varbinary, 8, 0, types.CharsetBinary), required: defines.MORPCVersion85},
+		{name: "IP predicate INT32 result is v85", function: "is_ipv4", input: types.T_varchar.ToType(), required: defines.MORPCVersion85},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			expr, err := BindFuncExprImplByPlanExpr(proc.Ctx, test.function, []*planpb.Expr{column(test.input)})
+			require.NoError(t, err)
+			got, err := RequiredPersistedExpressionProtocolVersion(expr)
+			require.NoError(t, err)
+			require.Equal(t, test.required, got)
+
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.required-1)
+			require.ErrorContains(t,
+				RequirePersistedExpressionProtocol(proc.Ctx, proc, expr),
+				fmt.Sprintf("protocol version %d", test.required))
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.required)
+			require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, expr))
+		})
+	}
+
+	metadataCases := []struct {
+		name string
+		expr *planpb.Expr
+	}{
+		{
+			name: "bounded character substring is v85",
+			expr: func() *planpb.Expr {
+				return mustBindPersistedFollowupExpr(t, proc.Ctx, "substring", []*planpb.Expr{
+					column(types.New(types.T_varchar, 64, 0)),
+					makePlan2Int64ConstExprWithType(1),
+					makePlan2Int64ConstExprWithType(7),
+				})
+			}(),
+		},
+		{
+			name: "fractional temporal coalesce is v85",
+			expr: func() *planpb.Expr {
+				return mustBindPersistedFollowupExpr(t, proc.Ctx, "coalesce", []*planpb.Expr{
+					column(types.T_time.ToTypeWithScale(0)),
+					column(types.T_time.ToTypeWithScale(6)),
+				})
+			}(),
+		},
+	}
+	for _, test := range metadataCases {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := RequiredPersistedExpressionProtocolVersion(test.expr)
+			require.NoError(t, err)
+			require.Equal(t, int64(defines.MORPCVersion85), got)
+
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion84)
+			require.ErrorContains(t,
+				RequirePersistedExpressionProtocol(proc.Ctx, proc, test.expr), "protocol version 85")
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion85)
+			require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, test.expr))
+		})
+	}
+}
+
+func TestInetNtoaLiteralDomains(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		sql        string
+		argType    types.T
+		overloadID int32
+	}{
+		{name: "hex literal is numeric", sql: "select inet_ntoa(0x0102)", argType: types.T_uint64, overloadID: 0},
+		{name: "X hex literal is numeric", sql: "select inet_ntoa(X'31')", argType: types.T_uint64, overloadID: 0},
+		{name: "bit literal is numeric", sql: "select inet_ntoa(b'100000010')", argType: types.T_uint64, overloadID: 0},
+		{name: "binary string keeps text prefix", sql: "select inet_ntoa(_binary '1.6')", argType: types.T_varbinary, overloadID: 20},
+		{name: "binary hex keeps text prefix", sql: "select inet_ntoa(_binary X'31')", argType: types.T_varbinary, overloadID: 20},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			ast := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			binder := NewGeneratedColBinder(proc.Ctx, nil, nil)
+			expr, err := binder.BindExpr(ast, 0, false)
+			require.NoError(t, err)
+			require.Equal(t, int32(test.argType), expr.GetF().Args[0].Typ.Id, expr.String())
+			functionID, overloadID := function.DecodeOverloadID(expr.GetF().Func.Obj)
+			require.Equal(t, int32(function.INET_NTOA), functionID)
+			require.Equal(t, test.overloadID, overloadID, expr.String())
+		})
+	}
+}
+
+func TestInetNtoaNestedLiteralDomains(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		sql  string
+	}{
+		{name: "concat keeps nested hex as string prefix", sql: "select inet_ntoa(concat(X'31'))"},
+		{name: "cast keeps nested hex as string prefix", sql: "select inet_ntoa(cast(X'31' as char))"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			ast := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			binder := NewGeneratedColBinder(proc.Ctx, nil, nil)
+			expr, err := binder.BindExpr(ast, 0, false)
+			require.NoError(t, err)
+			_, overloadID := function.DecodeOverloadID(expr.GetF().Func.Obj)
+			require.GreaterOrEqual(t, overloadID, int32(9), expr.String())
+			require.NotEqual(t, int32(types.T_uint64), expr.GetF().Args[0].Typ.Id, expr.String())
+		})
+	}
+}
+
+func mustBindPersistedFollowupExpr(t *testing.T, ctx context.Context, name string, args []*planpb.Expr) *planpb.Expr {
 	t.Helper()
-	if version < defines.MORPCVersion72 {
-		require.ErrorContains(t, err, "protocol version 72")
+	expr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+	require.NoError(t, err)
+	return expr
+}
+
+func checkAdmissionResult(t *testing.T, version int64, err error, required int64) {
+	t.Helper()
+	if version < required {
+		require.ErrorContains(t, err, fmt.Sprintf("protocol version %d", required))
 	} else {
 		require.NoError(t, err)
 	}

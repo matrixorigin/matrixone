@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"math/big"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -3697,6 +3698,18 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			}
 			var expr *Expr
 			var err error
+			previousSuppressDefaultValueBindType := b.suppressDefaultValueBindType
+			previousInetNtoaNumericLiteralContext := b.inetNtoaNumericLiteralContext
+			if strings.EqualFold(name, "inet_ntoa") && isDirectInetNtoaNumericLiteral(arg) {
+				// The destination type of a DEFAULT/CTAS expression must not turn
+				// a compile-time numeric literal into VARCHAR before INET_NTOA
+				// chooses its overload. Otherwise INET_NTOA(1) would take the
+				// runtime string contract even though its source is statically
+				// numeric, unnecessarily raising persisted-expression admission
+				// from v72 to v85.
+				b.suppressDefaultValueBindType = true
+				b.inetNtoaNumericLiteralContext = true
+			}
 			if target, integerContext := function.IntegerArgumentTarget(name, idx); integerContext {
 				b.numericParamType = nil
 				b.numericSubqueryTarget = nil
@@ -3704,6 +3717,8 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			} else {
 				expr, err = b.impl.BindExpr(arg, depth, false)
 			}
+			b.suppressDefaultValueBindType = previousSuppressDefaultValueBindType
+			b.inetNtoaNumericLiteralContext = previousInetNtoaNumericLiteralContext
 			b.numericParamType = paramType
 			b.numericSubqueryTarget = subqueryTarget
 			if err != nil {
@@ -5226,6 +5241,9 @@ func bindFuncExprImplByPlanExpr(
 	if err := normalizeTimeStringComparisonArgs(ctx, name, args); err != nil {
 		return nil, err
 	}
+	if strings.EqualFold(name, "inet_ntoa") {
+		normalizeInetNtoaBinaryPlanLiteral(args)
+	}
 	// HEX/BIT literals are stored as raw bytes in a VARCHAR-shaped plan
 	// expression. BIN and CONV treat non-empty values up to eight bytes as
 	// unsigned numeric values, while ordinary string and binary-string operands
@@ -6294,6 +6312,9 @@ func bindFuncExprImplByPlanExpr(
 	case "substring", "substr", "mid":
 		refineSubstringLiteralReturnType(args, &returnType)
 
+	case "left", "right":
+		refineLeftRightLiteralReturnType(args, &returnType)
+
 	case "lpad", "rpad":
 		refinePadLiteralReturnType(args, &returnType)
 
@@ -6599,12 +6620,21 @@ func refineSubstringLiteralReturnType(args []*plan.Expr, returnType *types.Type)
 		return
 	}
 
-	// This refinement exists for byte-preserving binary expressions. Text
-	// SUBSTRING keeps its existing metadata contract; narrowing it here would
-	// change the overload's declared result width and make consumers that rely
-	// on the text semantic family reject an otherwise valid expression.
 	binary := types.StaticStringDomain(sourceType) == types.StringDomainBinary
 	if !binary {
+		// Character SUBSTRING's two-argument form has no fixed output length;
+		// only the explicit length in the three-argument form is a sound bound.
+		if len(args) != 3 {
+			return
+		}
+		length, known := binarySubstringLengthBound(args[2].GetLit())
+		if !known {
+			return
+		}
+		if sourceBound, sourceKnown := stringExprBound(args[0], false); sourceKnown && sourceBound < length {
+			length = sourceBound
+		}
+		refineKnownStringResultType(returnType, length, false)
 		return
 	}
 
@@ -6644,6 +6674,29 @@ func refineSubstringLiteralReturnType(args []*plan.Expr, returnType *types.Type)
 	// one of the other inputs is dynamic or the source declaration is wider
 	// than the aggregate limit.
 	refineKnownStringResultType(returnType, bound, binary)
+}
+
+// refineLeftRightLiteralReturnType narrows LEFT/RIGHT when the requested
+// length is a constant.  The result cannot exceed either that length or the
+// source's proven bound; an unknown length keeps the overload's conservative
+// metadata.
+func refineLeftRightLiteralReturnType(args []*plan.Expr, returnType *types.Type) {
+	if len(args) != 2 {
+		return
+	}
+	sourceType := makeTypeByPlan2Expr(args[0])
+	if sourceType.Oid == types.T_blob {
+		return
+	}
+	length, known := binarySubstringLengthBound(args[1].GetLit())
+	if !known {
+		return
+	}
+	binary := types.StaticStringDomain(sourceType) == types.StringDomainBinary
+	if sourceBound, sourceKnown := stringExprBound(args[0], binary); sourceKnown && sourceBound < length {
+		length = sourceBound
+	}
+	refineKnownStringResultType(returnType, length, binary)
 }
 
 func binarySubstringLengthBound(lit *plan.Literal) (uint64, bool) {
@@ -6761,15 +6814,7 @@ func stringExprBound(expr *plan.Expr, binary bool) (uint64, bool) {
 	if binary {
 		return binaryExprByteBound(expr)
 	}
-	if lit := expr.GetLit(); lit != nil && !lit.Isnull {
-		if value, ok := lit.GetValue().(*plan.Literal_Sval); ok {
-			return uint64(utf8.RuneCountInString(value.Sval)), true
-		}
-	}
-	if expr.Typ.Width > 0 && types.T(expr.Typ.Id) != types.T_text {
-		return uint64(expr.Typ.Width), true
-	}
-	return 0, false
+	return function.TextSourceCharacterBound(expr)
 }
 
 func binaryExprByteBound(expr *plan.Expr) (uint64, bool) {
@@ -7060,6 +7105,8 @@ func adjustControlFlowMetadata(name string, args []*Expr, argTypes []types.Type,
 		changed = adjustControlFlowBinaryMetadata(args, argTypes, valueIndexes, returnType)
 	case returnType.Oid.IsDecimal():
 		changed = adjustControlFlowDecimalLiteralMetadata(args, argTypes, valueIndexes, returnType)
+	case returnType.Oid == types.T_datetime || returnType.Oid == types.T_timestamp || returnType.Oid == types.T_time:
+		changed = adjustControlFlowTemporalMetadata(argTypes, valueIndexes, returnType)
 	}
 
 	if !changed || len(argsCastType) != len(args) {
@@ -7087,7 +7134,45 @@ func adjustControlFlowMetadata(name string, args []*Expr, argTypes []types.Type,
 		for _, idx := range valueIndexes {
 			argsCastType[idx] = *returnType
 		}
+		return
 	}
+	if returnType.Oid == types.T_datetime || returnType.Oid == types.T_timestamp || returnType.Oid == types.T_time {
+		for _, idx := range valueIndexes {
+			argsCastType[idx] = *returnType
+		}
+	}
+}
+
+func adjustControlFlowTemporalMetadata(argTypes []types.Type, valueIndexes []int, returnType *types.Type) bool {
+	maxScale := returnType.Scale
+	for _, idx := range valueIndexes {
+		if idx >= len(argTypes) {
+			return false
+		}
+		switch argTypes[idx].Oid {
+		case types.T_time, types.T_datetime, types.T_timestamp:
+			if argTypes[idx].Scale > maxScale {
+				maxScale = argTypes[idx].Scale
+			}
+		}
+	}
+	if maxScale < 0 {
+		maxScale = 0
+	}
+	changed := maxScale != returnType.Scale
+	if maxScale > 0 && returnType.Width != maxScale {
+		changed = true
+	}
+	if !changed {
+		return false
+	}
+	returnType.Scale = maxScale
+	if maxScale > 0 {
+		// Width is the plan's persisted temporal precision marker. Keep it in
+		// lockstep with Scale so CTAS/view metadata cannot regress to FSP 0.
+		returnType.Width = maxScale
+	}
+	return true
 }
 
 // adjustDateFormatMetadata starts with MySQL's format-dependent result length
@@ -8135,6 +8220,12 @@ func lagLeadOffsetIsNullLiteral(expr *Expr) bool {
 }
 
 func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
+	if b.inetNtoaNumericLiteralContext {
+		switch astExpr.ValType {
+		case tree.P_hexnum, tree.P_bit:
+			return b.bindInetNtoaBinaryLiteral(astExpr, typ)
+		}
+	}
 	// over_int64_err := moerr.NewInternalError(b.GetContext(), "", "Constants over int64 will support in future version.")
 	// rewrite the hexnum process logic
 	// for float64, if the number is over 1<<53-1,it will lost, so if typ is float64,
@@ -8327,6 +8418,70 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 	default:
 		return nil, moerr.NewInvalidInputf(b.GetContext(), "unsupport value '%s'", astExpr.String())
 	}
+}
+
+// isDirectInetNtoaNumericLiteral limits the INET_NTOA literal override to the
+// literal expression that is its argument. Applying the context to an entire
+// argument subtree would silently change nested function semantics, e.g.
+// INET_NTOA(CONCAT(X'31')) would make CONCAT see a number instead of its normal
+// binary string. Unary +/- remain part of the direct numeric-literal form.
+func isDirectInetNtoaNumericLiteral(expr tree.Expr) bool {
+	expr = stripNameConstParens(expr)
+	switch value := expr.(type) {
+	case *tree.NumVal:
+		switch value.ValType {
+		case tree.P_hexnum, tree.P_bit,
+			tree.P_int64, tree.P_uint64, tree.P_decimal, tree.P_float64:
+			return true
+		default:
+			return false
+		}
+	case *tree.UnaryExpr:
+		if value.Op != tree.UNARY_PLUS && value.Op != tree.UNARY_MINUS {
+			return false
+		}
+		return isDirectInetNtoaNumericLiteral(value.Expr)
+	default:
+		return false
+	}
+}
+
+// bindInetNtoaBinaryLiteral retains MySQL's numeric interpretation of HEX/BIT
+// literals for INET_NTOA. The generic literal binder intentionally represents
+// the same syntax as a binary string for functions where byte semantics are
+// required, so this conversion is kept local to INET_NTOA.
+func (b *baseBinder) bindInetNtoaBinaryLiteral(astExpr *tree.NumVal, typ Type) (*Expr, error) {
+	digits := strings.TrimSpace(astExpr.String())
+	base := 16
+	switch astExpr.ValType {
+	case tree.P_bit:
+		base = 2
+	}
+	if len(digits) >= 2 && digits[0] == '0' &&
+		((base == 16 && (digits[1] == 'x' || digits[1] == 'X')) ||
+			(base == 2 && (digits[1] == 'b' || digits[1] == 'B'))) {
+		digits = digits[2:]
+	}
+	if digits == "" {
+		return makePlan2Uint64ConstExprWithType(0), nil
+	}
+	value, ok := new(big.Int).SetString(digits, base)
+	if !ok {
+		return nil, moerr.NewInvalidInputf(b.GetContext(), "invalid binary numeric literal '%s'", astExpr.String())
+	}
+	var expr *Expr
+	if value.BitLen() > 64 {
+		// Any value wider than UINT64 is outside INET_NTOA's valid IPv4
+		// range. A typed maximum keeps the error-to-NULL behavior in the
+		// existing numeric executor without introducing a new wide vector.
+		expr = makePlan2Uint64ConstExprWithType(math.MaxUint64)
+	} else {
+		expr = makePlan2Uint64ConstExprWithType(value.Uint64())
+	}
+	if !typ.IsEmpty() {
+		return appendCastBeforeExpr(b.GetContext(), expr, typ)
+	}
+	return expr, nil
 }
 
 func (b *baseBinder) GetContext() context.Context { return b.sysCtx }
@@ -9450,6 +9605,29 @@ func isBinaryNumericLiteral(expr *Expr) bool {
 	}
 }
 
+// normalizeInetNtoaBinaryPlanLiteral mirrors the AST-side HEX/BIT handling for
+// callers that already own a plan expression. The literal payload is big
+// endian for both forms, so SetBytes preserves the numeric value even when the
+// value has leading zero bytes. Binary introducer strings are deliberately not
+// included: unlike HEX/BIT literals, they retain ordinary string-prefix
+// semantics in INET_NTOA.
+func normalizeInetNtoaBinaryPlanLiteral(args []*Expr) {
+	if len(args) != 1 || !isBinaryNumericLiteral(args[0]) {
+		return
+	}
+	literal := args[0].GetLit()
+	payload := []byte(literal.GetSval())
+	if len(payload) == 0 {
+		return
+	}
+	value := new(big.Int).SetBytes(payload)
+	if value.BitLen() > 64 {
+		args[0] = makePlan2Uint64ConstExprWithType(math.MaxUint64)
+		return
+	}
+	args[0] = makePlan2Uint64ConstExprWithType(value.Uint64())
+}
+
 func stripNameConstParens(expr tree.Expr) tree.Expr {
 	for {
 		paren, ok := expr.(*tree.ParenExpr)
@@ -9486,7 +9664,7 @@ func isDecimalLiteralCast(arg *plan.Expr) bool {
 // DefaultBinder or ReplaceValueBinder. For other binder implementations it
 // returns an empty Type so literal binding falls back to the generic path.
 func (b *baseBinder) defaultValueBindType() plan.Type {
-	if b.integerArgumentSourceContext {
+	if b.integerArgumentSourceContext || b.suppressDefaultValueBindType {
 		return plan.Type{}
 	}
 	if d, ok := b.impl.(*DefaultBinder); ok {

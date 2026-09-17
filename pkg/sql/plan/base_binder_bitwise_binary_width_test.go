@@ -200,7 +200,7 @@ func TestRefineBinarySubstringReturnTypeConservativeCases(t *testing.T) {
 	require.Equal(t, int32(511), returnType.Width)
 }
 
-func TestRefineCharacterSubstringKeepsEstablishedMetadata(t *testing.T) {
+func TestRefineCharacterSubstringAndLeftRightReturnTypes(t *testing.T) {
 	textType := types.New(types.T_varchar, 512, 0)
 	source := func() *planpb.Expr {
 		return &planpb.Expr{
@@ -223,8 +223,14 @@ func TestRefineCharacterSubstringKeepsEstablishedMetadata(t *testing.T) {
 		[]*planpb.Expr{source(), makePlan2Int64ConstExprWithType(2), makePlan2Int64ConstExprWithType(7)},
 		&textSubstring,
 	)
-	require.Equal(t, int32(512), textSubstring.Width,
-		"character SUBSTRING keeps the established conservative metadata contract")
+	require.Equal(t, int32(7), textSubstring.Width)
+
+	for _, name := range []string{"left", "right"} {
+		result := returnType()
+		refineLeftRightLiteralReturnType(
+			[]*planpb.Expr{source(), makePlan2Int64ConstExprWithType(7)}, &result)
+		require.Equal(t, int32(7), result.Width, "%s must honor its literal result length", name)
+	}
 }
 
 func TestRefineCharacterStringReturnTypesUseFormattedNumericBounds(t *testing.T) {
@@ -256,6 +262,54 @@ func TestRefineCharacterStringReturnTypesUseFormattedNumericBounds(t *testing.T)
 		})
 	}
 }
+
+func TestBindPublicFunctionResultContracts(t *testing.T) {
+	ctx := context.Background()
+	sourceExpr := func(typ types.Type) *planpb.Expr {
+		return &planpb.Expr{
+			Typ: makePlan2Type(&typ),
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+				RelPos: 0,
+				ColPos: 0,
+			}},
+		}
+	}
+	length := makePlan2Int64ConstExprWithType(7)
+
+	varbinary := types.NewWithCharset(types.T_varbinary, 128, 0, types.CharsetBinary)
+	base64Expr, err := BindFuncExprImplByPlanExpr(ctx, "to_base64", []*planpb.Expr{
+		sourceExpr(varbinary),
+	})
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_varchar), base64Expr.Typ.Id)
+	require.Equal(t, int32(174), base64Expr.Typ.Width)
+
+	varchar := types.New(types.T_varchar, 512, 0)
+	for _, name := range []string{"substring", "left", "right"} {
+		args := []*planpb.Expr{sourceExpr(varchar), length}
+		if name == "substring" {
+			args = append(args, length)
+		}
+		bound, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_varchar), bound.Typ.Id, name)
+		require.Equal(t, int32(7), bound.Typ.Width, name)
+	}
+
+	inetNtoa, err := BindFuncExprImplByPlanExpr(ctx, "inet_ntoa", []*planpb.Expr{
+		sourceExpr(varchar),
+	})
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_varchar), inetNtoa.Typ.Id)
+	require.Equal(t, int32(31), inetNtoa.Typ.Width)
+
+	isIPv4, err := BindFuncExprImplByPlanExpr(ctx, "is_ipv4", []*planpb.Expr{
+		sourceExpr(varchar),
+	})
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_int32), isIPv4.Typ.Id)
+}
+
 func TestBindBitwiseAggregateLeavesBlobSubstringInTextDomain(t *testing.T) {
 	ctx := context.Background()
 	sourceType := types.T_blob.ToType()

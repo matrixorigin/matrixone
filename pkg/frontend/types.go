@@ -398,6 +398,10 @@ type PrepareStmt struct {
 	// prepared-plan generation. SQL EXECUTE uses it to restore the variable's
 	// concrete domain without walking the plan for every execution.
 	conversionParamPositions []int32
+	// inetNtoaParamPositions identifies direct INET_NTOA markers once per
+	// prepared-plan generation. SQL EXECUTE uses it to carry temporal/JSON
+	// provenance only to INET_NTOA, without changing unrelated expressions.
+	inetNtoaParamPositions []int32
 	// runtimePlan/runtimeCompile form a one-entry bounded cache keyed by the
 	// stable parameter semantic category. The cached runtime plan retains
 	// ParamRefs, so equivalent values reuse the compile without embedding the

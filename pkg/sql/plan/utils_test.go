@@ -684,8 +684,16 @@ func TestPreparedSQLExecuteNumericParamExprPreservesSourceDomain(t *testing.T) {
 			sourceType: types.T_int64.ToType(), wantType: types.T_int64},
 		{name: "year retains numeric type", value: int32(2026),
 			sourceType: types.T_year.ToType(), wantType: types.T_year},
-		{name: "date is not an arithmetic source", value: "2026-08-28",
+		{name: "date is not a shared numeric source", value: "2026-08-28",
 			sourceType: types.T_date.ToType(), wantNil: true},
+		{name: "time is not a shared numeric source", value: "12:34:56.123456",
+			sourceType: types.New(types.T_time, 6, 6), wantNil: true},
+		{name: "datetime is not a shared numeric source", value: "2026-08-28 12:34:56.123456",
+			sourceType: types.New(types.T_datetime, 6, 6), wantNil: true},
+		{name: "timestamp is not a shared numeric source", value: "2026-08-28 12:34:56.123456",
+			sourceType: types.New(types.T_timestamp, 6, 6), wantNil: true},
+		{name: "json is not a shared numeric source", value: "1.6",
+			sourceType: types.T_json.ToType(), wantNil: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			expr, err := preparedSQLExecuteNumericParamExpr(
@@ -1096,6 +1104,28 @@ func TestPreparedPlanConversionParamPositions(t *testing.T) {
 	require.Nil(t, PreparedPlanConversionParamPositions(&plan.Plan{
 		Plan: &plan.Plan_Query{Query: &plan.Query{StmtType: plan.Query_SELECT}},
 	}))
+}
+
+func TestPreparedPlanInetNtoaParamPositions(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		sql  string
+		want []int32
+	}{
+		{name: "direct", sql: "prepare inet_direct from 'select inet_ntoa(?)'", want: []int32{0}},
+		{name: "multiple", sql: "prepare inet_multiple from 'select inet_ntoa(?), inet_ntoa(?)'", want: []int32{0, 1}},
+		{name: "nested expression owns its text domain", sql: "prepare inet_nested from 'select inet_ntoa(concat(?))'", want: nil},
+		{name: "other function", sql: "prepare inet_other from 'select inet_aton(?)'", want: nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+			planUnderTest := prepared.GetDcl().GetPrepare().GetPlan()
+			require.Equal(t, test.want, PreparedPlanInetNtoaParamPositions(planUnderTest))
+		})
+	}
+
+	require.Nil(t, PreparedPlanInetNtoaParamPositions(nil))
 }
 
 func TestPreparedDirectResultSpecializationUpdatesVisibleType(t *testing.T) {
