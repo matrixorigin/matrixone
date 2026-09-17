@@ -23,7 +23,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_8"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
@@ -32,7 +32,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestV407UpgradeRefreshesStatistics(t *testing.T) {
+func TestV408UpgradeRefreshesStatistics(t *testing.T) {
 	embed.RunSingleCNBaseClusterTests(t, func(cluster embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
@@ -134,7 +134,7 @@ func TestV407UpgradeRefreshesStatistics(t *testing.T) {
 				for run := 0; run < 2; run++ {
 					var creates int
 					require.NoError(t, sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
-						return v4_0_7.Handler.HandleTenantUpgrade(ctx, int32(test.accountID),
+						return v4_0_8.Handler.HandleTenantUpgrade(ctx, int32(test.accountID),
 							&statisticsUpgradeTxn{TxnExecutor: txn, creates: &creates})
 					}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).
 						WithAccountID(test.accountID).WithWaitCommittedLogApplied()))

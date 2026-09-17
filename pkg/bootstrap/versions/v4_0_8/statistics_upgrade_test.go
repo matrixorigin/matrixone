@@ -12,16 +12,22 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v4_0_7
+package v4_0_8
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/stretchr/testify/require"
@@ -29,11 +35,12 @@ import (
 
 func TestStatisticsUpgradeRegistration(t *testing.T) {
 	metadata := Handler.Metadata()
-	require.Equal(t, "4.0.7", metadata.Version)
-	require.Equal(t, "4.0.6", metadata.MinUpgradeVersion)
+	require.Equal(t, "4.0.8", metadata.Version)
+	require.Equal(t, "4.0.7", metadata.MinUpgradeVersion)
+	require.Greater(t, versions.Compare(metadata.Version, "4.0.7"), 0, "old workers must reject the target version")
+	require.False(t, metadata.CanDirectUpgrade("4.0.6"), "do not bypass the 4.0.7 provenance migration")
 	require.Equal(t, versions.Yes, metadata.UpgradeTenant)
-	require.Greater(t, metadata.VersionOffset, uint32(0), "old 4.0.7 clusters must not skip the refresh")
-	require.Equal(t, uint32(len(tenantUpgEntries)+len(clusterUpgEntries)), metadata.VersionOffset)
+	require.Equal(t, uint32(len(tenantUpgEntries)), metadata.VersionOffset)
 
 	var found bool
 	for _, entry := range tenantUpgEntries {
@@ -44,6 +51,26 @@ func TestStatisticsUpgradeRegistration(t *testing.T) {
 		}
 	}
 	require.True(t, found)
+}
+
+func TestStatisticsUpgradeHandlerLifecycle(t *testing.T) {
+	runtime.RunTest("", func(runtime.Runtime) {
+		ctx := context.Background()
+		txn := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
+			require.True(t, strings.HasPrefix(sql, "SELECT tbl.rel_createsql"), "unexpected SQL: %s", sql)
+			return statisticsStringResult(t, sysview.InformationSchemaStatisticsDDL), nil
+		})
+		require.NoError(t, Handler.Prepare(ctx, txn, true))
+		require.NoError(t, Handler.HandleClusterUpgrade(ctx, txn))
+		require.ErrorContains(t, Handler.HandleCreateFrameworkDeps(txn), "Only v1.2.0 can initialize upgrade framework")
+		require.NoError(t, Handler.HandleTenantUpgrade(ctx, int32(catalog.System_Account), txn))
+
+		injected := errors.New("injected STATISTICS definition query failure")
+		failedTxn := newVersionTxnExecutor(t, func(string) (executor.Result, error) {
+			return executor.Result{}, injected
+		})
+		require.ErrorIs(t, Handler.HandleTenantUpgrade(ctx, 7, failedTxn), injected)
+	})
 }
 
 func TestStatisticsUpgradeRefreshesOnlyStaleDefinitions(t *testing.T) {
@@ -110,4 +137,11 @@ func statisticsStringResult(t *testing.T, values ...string) executor.Result {
 	res.NewBatchWithRowCount(len(values))
 	require.NoError(t, executor.AppendStringRows(res, 0, values))
 	return res.GetResult()
+}
+
+func newVersionTxnExecutor(t *testing.T, mocker func(string) (executor.Result, error)) executor.TxnExecutor {
+	t.Helper()
+	txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
+	return executor.NewMemTxnExecutor(mocker, txnOperator)
 }
