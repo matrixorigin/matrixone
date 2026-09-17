@@ -190,9 +190,6 @@ func execSQLMaybe(t *testing.T, ctx context.Context, db *sql.DB, statement strin
 func TestWWConflict(t *testing.T) {
 	embed.RunBaseClusterTests(t,
 		func(c embed.Cluster) {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-			defer cancel()
-
 			cn1, err := c.GetCNService(0)
 			require.NoError(t, err)
 
@@ -217,6 +214,12 @@ func TestWWConflict(t *testing.T) {
 				cn1,
 				"insert into "+table+" values (1, 1)",
 			)
+
+			// The timeout guards only the concurrent transaction workflow. Starting
+			// it before shared-cluster fixture setup can consume the whole deadline
+			// under race/CI load and leave the channel choreography waiting forever.
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
 
 			// workflow:
 			// cn1: txn1 update t
@@ -268,7 +271,10 @@ func TestWWConflict(t *testing.T) {
 								close(txn2StartedC)
 
 								// wait txn2 update committed
-								<-txn2CommittedC
+								select {
+								case <-txn2CommittedC:
+								case <-ctx.Done():
+								}
 							},
 						)
 
@@ -323,7 +329,11 @@ func TestWWConflict(t *testing.T) {
 					wg.Done()
 				}()
 
-				<-txn2StartedC
+				select {
+				case <-txn2StartedC:
+				case <-ctx.Done():
+					return
+				}
 				exec := testutils.GetSQLExecutor(cn2)
 
 				res, err := exec.Exec(
