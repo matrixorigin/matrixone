@@ -102,8 +102,8 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.BoundedConditionalStringDomains && requiredVersion < defines.MORPCVersion83 {
 		requiredVersion = defines.MORPCVersion83
 	}
-	if features.ExportSetNumericContracts && requiredVersion < defines.MORPCVersion84 {
-		requiredVersion = defines.MORPCVersion84
+	if features.ExportSetNumericContracts && requiredVersion < defines.MORPCVersion85 {
+		requiredVersion = defines.MORPCVersion85
 	}
 	return requiredVersion, nil
 }

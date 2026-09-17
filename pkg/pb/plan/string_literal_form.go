@@ -240,7 +240,7 @@ const (
 // StringNumericResultContracts requires MORPC v80 because the listed string
 // numeric functions keep overload IDs while changing their physical result
 // vectors to signed INT/ BIGINT or BIGINT UNSIGNED.
-// ExportSetNumericContracts requires MORPC v84 because EXPORT_SET numeric
+// ExportSetNumericContracts requires MORPC v85 because EXPORT_SET numeric
 // semantics changed and private CAST overload 5 does not exist on old workers.
 // BoundedConditionalStringDomains requires MORPC v83 because the bounded
 // BINARY/VARBINARY COALESCE overload identities are new to the registry.
@@ -398,7 +398,7 @@ func isExportSetNumericContract(expr *Expr) bool {
 	if len(fn.Args) == 0 || fn.Args[0] == nil {
 		return false
 	}
-	// BOOL and DECIMAL256 inputs were not executable on pre-v84 workers;
+	// BOOL and DECIMAL256 inputs were not executable on pre-v85 workers;
 	// FLOAT/DOUBLE retain their IDs but have a different numeric contract.
 	switch fn.Args[0].Typ.Id {
 	case 10, 30, 31, 34:

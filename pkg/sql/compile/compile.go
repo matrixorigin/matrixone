@@ -1960,6 +1960,9 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		ss = c.compileSort(node, ss)
 		return ss, nil
 	case plan.Node_AGG:
+		if err = preflightPercentileConfigs(node, c.proc); err != nil {
+			return nil, err
+		}
 		if err = validateAggregateConfigs(node, c.proc); err != nil {
 			return nil, err
 		}
@@ -8009,6 +8012,16 @@ func supportsRemoteOrderedSetAggregates(service string) bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion17
+}
+
+func supportsRemoteOrderedSetExtendedTypes(service string) bool {
+	version, ok := moruntime.ServiceRuntime(service).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion84
 }
 
 func supportsRemoteApproxPercentile(service string) bool {

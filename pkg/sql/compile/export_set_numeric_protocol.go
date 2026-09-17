@@ -32,7 +32,7 @@ func (c *Compile) constrainExportSetNumericWorkers(qry *plan.Query) error {
 	if err != nil || !features.ExportSetNumericContracts {
 		return err
 	}
-	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion84)
+	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion85)
 	if err != nil {
 		return err
 	}
@@ -51,13 +51,13 @@ func validateExportSetNumericDestination(proc *process.Process, p *pipeline.Pipe
 		)
 	}
 	supported, err := remoteWorkersSupportProtocol(proc,
-		engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion84)
+		engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion85)
 	if err != nil {
 		return err
 	}
 	if !supported {
 		return moerr.NewNotSupportedNoCtx(
-			"remote destination does not support prepared EXPORT_SET numeric contracts (MORPC version 84)",
+			"remote destination does not support prepared EXPORT_SET numeric contracts (MORPC version 85)",
 		)
 	}
 	return nil
