@@ -63,6 +63,22 @@ func TestIssue27854RequiredVectorDomainStaysCoordinatorLocal(t *testing.T) {
 		execSQLRequire(t, ctx, db,
 			"create index filtered_idx using ivfflat on filtered_t(v) lists=1 op_type 'vector_l2_ops'")
 
+		// AUTO must preserve computed output values even when POST fills K.
+		t.Run("adaptive output boundary", func(t *testing.T) {
+			q := fmt.Sprintf("select id + 100 from filtered_t where file_id = 'file1' order by l2_distance(v,'%s') limit 1 by rank with option 'mode=auto'", vec(0))
+			text := strings.Join(querySingleStringColumn(t, ctx, db, "explain "+q), "\n")
+			require.Contains(t, text, "Adaptive Top", "the result oracle must exercise adaptive selection")
+			require.Equal(t, []int64{101}, queryInt64Rows(t, ctx, db, q))
+		})
+		t.Run("sort anchored layout", func(t *testing.T) {
+			q := fmt.Sprintf("select id from (select id, l2_distance(v,'%s') as distance from filtered_t where file_id = 'file1' order by distance limit 2 by rank with option 'mode=auto') q order by distance", vec(0))
+			require.Equal(t, []int64{1, 2}, queryInt64Rows(t, ctx, db, q))
+		})
+		t.Run("membership auto", func(t *testing.T) {
+			q := fmt.Sprintf("select id from filtered_t where id in (select result from generate_series(1,3) g) order by l2_distance(v,'%s') limit 2 by rank with option 'mode=auto'", vec(0))
+			require.Equal(t, []int64{1, 2}, queryInt64Rows(t, ctx, db, q))
+		})
+
 		query := fmt.Sprintf("select id from filtered_t where file_id = 'file1' and "+
 			"l2_distance(v,'%s') <= 3 order by l2_distance(v,'%s') "+
 			"limit 10 by rank with option 'mode=pre'", vec(0), vec(0))

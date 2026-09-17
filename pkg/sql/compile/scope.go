@@ -439,6 +439,14 @@ func (s *Scope) InitAllDataSource(c *Compile) error {
 	return nil
 }
 
+// initLazyPreScope leaves ordinary branches with their Compile.Run-owned state.
+func (s *Scope) initLazyPreScope(branch *Scope, c *Compile) error {
+	if !s.LazyPreScopes {
+		return nil
+	}
+	return branch.InitAllDataSource(c)
+}
+
 func (s *Scope) SetOperatorInfoRecursively(cb func() int32) {
 	vm.HandleAllOp(s.RootOp, func(parentOp vm.Operator, op vm.Operator) error {
 		opBase := op.GetOperatorBase()
@@ -590,13 +598,15 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 			return cause
 		}
 		claimedPreScopes[i] = true
-		if initErr := scope.InitAllDataSource(c); initErr != nil {
+		startedPreScopeCount++
+		// Ordinary branches were initialized serially by Compile.Run. Repeating
+		// initialization here would rebuild DOP clones' filters concurrently.
+		if initErr := s.initLazyPreScope(scope, c); initErr != nil {
 			cleanScopeTreeWithStartFail(scope, initErr, c.isPrepare)
 			s.cancelMergeSiblingsOnError(initErr)
 			publishPreScopeResult(i, newScopeRunResult(initErr, scope))
 			return initErr
 		}
-		startedPreScopeCount++
 		wg.Add(1)
 
 		submitPreScope := ants.Submit(
@@ -1329,6 +1339,8 @@ func (s *Scope) handleRuntimeFilters(c *Compile, runtimeFilters []receivedRuntim
 		s.DataSource.FilterExpr = colexec.RewriteFilterExprList(pkFilters)
 	}
 
+	c.filterExprMu.Lock()
+	defer c.filterExprMu.Unlock()
 	blockFilterList := s.DataSource.BlockFilterList
 	if s.IsRemote {
 		// Keep the decoded scope as a reusable raw-expression template. Fold IDs

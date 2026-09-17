@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -385,6 +386,9 @@ type Compile struct {
 	loadUniqueIndexPromotion      *loadUniqueIndexPromotionState
 	loadUniqueIndexPromotionOwner bool
 
+	// Lazy scopes may register folds while another scope evaluates block filters.
+	// Protect both the registry and its mutable executors for the whole operation.
+	filterExprMu   sync.Mutex
 	filterExprExes []colexec.ExpressionExecutor
 
 	// compiledLocalRuntimeFilterNodes records SINGLE nodes with current-CN

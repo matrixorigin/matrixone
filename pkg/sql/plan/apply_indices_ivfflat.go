@@ -1182,13 +1182,20 @@ func (builder *QueryBuilder) buildAdaptiveIvfTop(
 	idxColMap map[[2]int32]*plan.Expr,
 ) (int32, error) {
 	ctx := builder.ctxByNode[nodeID]
-	if vecCtx.projNode != nil && len(vecCtx.projNode.ProjectList) != 1 {
+	// Replay requires an explicit positional output boundary and no external
+	// membership/provider dependency. A SORT alone has no output schema before
+	// remapping; copying its empty ProjectList cannot define candidate layouts.
+	// Keep unsupported regions intact and exact, before cloning or rewriting tags.
+	if vecCtx.projNode == nil || len(vecCtx.projNode.ProjectList) != 1 ||
+		vecCtx.hasMembership || vecCtx.providerNodeID >= 0 {
 		vecCtx.rankOption = DeepCopyRankOption(vecCtx.rankOption)
 		if vecCtx.rankOption == nil {
 			vecCtx.rankOption = &plan.RankOption{}
 		}
 		vecCtx.rankOption.Mode = "force"
-		vecCtx.projNode.RankOption = DeepCopyRankOption(vecCtx.rankOption)
+		if vecCtx.projNode != nil {
+			vecCtx.projNode.RankOption = DeepCopyRankOption(vecCtx.rankOption)
+		}
 		vecCtx.sortNode.RankOption = DeepCopyRankOption(vecCtx.rankOption)
 		vecCtx.scanNode.RankOption = DeepCopyRankOption(vecCtx.rankOption)
 		return nodeID, nil

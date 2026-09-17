@@ -204,7 +204,7 @@ func (c *Compile) Release() {
 	doCompileRelease(c)
 }
 
-func (c Compile) TypeName() string {
+func (c *Compile) TypeName() string {
 	return "compile.Compile"
 }
 
@@ -5554,6 +5554,8 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	}
 	tblDef = s.DataSource.Rel.GetTableDef(ctx)
 
+	c.filterExprMu.Lock()
+	defer c.filterExprMu.Unlock()
 	storageFilters := filterScanStorageExprs(node.FilterList)
 	filters, executors, rebuilt, err := prepareFoldedFilterExprs(
 		c.proc, storageFilters, s.DataSource.FilterList, c.filterExprExes, true)

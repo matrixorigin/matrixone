@@ -24,12 +24,14 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/adaptivetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -42,6 +44,61 @@ type observedWaitContext struct {
 func (c *observedWaitContext) Done() <-chan struct{} {
 	c.once.Do(func() { close(c.entered) })
 	return c.Context.Done()
+}
+
+func TestConcurrentRemoteBlockFoldOwnership(t *testing.T) {
+	c := &Compile{}
+	defer func() {
+		for _, e := range c.filterExprExes {
+			e.Free()
+		}
+	}()
+	const n = 8
+	scopes := make([]*Scope, n)
+	for i := range scopes {
+		proc := testutil.NewProcess(t)
+		col := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+		expr, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), ">=", []*planpb.Expr{col, plan2.MakePlan2Int64ConstExprWithType(int64(i))})
+		require.NoError(t, err)
+		scopes[i] = &Scope{IsRemote: true, Proc: proc, DataSource: &Source{BlockFilterList: []*planpb.Expr{expr}}}
+	}
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	results := make([][]*planpb.Expr, n)
+	errs := make([]error, n)
+	for i := range scopes {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			<-start
+			results[i], errs[i] = scopes[i].handleRuntimeFilters(c, nil)
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+	ids := make(map[int32]bool)
+	for i := range results {
+		require.NoError(t, errs[i])
+		require.Len(t, results[i], 1)
+		fold := results[i][0].GetF().Args[1].GetFold()
+		require.NotNil(t, fold)
+		require.False(t, ids[fold.Id], "fold IDs must have one executor owner")
+		ids[fold.Id] = true
+		require.NotEmpty(t, fold.Data)
+	}
+	require.Len(t, c.filterExprExes, n)
+}
+
+func TestOrdinaryMergeDoesNotReinitializeSources(t *testing.T) {
+	// A DOP clone's initialized source need not retain the compile-time node.
+	// The activation boundary must not attempt to build it a second time.
+	branch := &Scope{DataSource: &Source{}}
+	root := &Scope{PreScopes: []*Scope{branch}}
+	require.NoError(t, root.initLazyPreScope(branch, &Compile{}))
+	require.Same(t, branch, root.PreScopes[0])
+	// A lazy merge with no data sources still traverses its source-free tree.
+	root.LazyPreScopes = true
+	require.NoError(t, root.initLazyPreScope(&Scope{PreScopes: []*Scope{{}}}, &Compile{}))
 }
 
 func TestLazyBranchCompletionWaitsForCleanup(t *testing.T) {
