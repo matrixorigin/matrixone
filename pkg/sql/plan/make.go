@@ -151,6 +151,23 @@ func markDecimalLiteralRequiresV82(expr *plan.Expr, source, canonical string, wi
 	}
 }
 
+// markDecimalComparisonProtocolRequirement carries the exact-decimal fence
+// through an early comparison simplification. The replacement boolean is
+// semantically equivalent only for the current binder; an older binder may
+// bind the persisted source literal differently.
+func markDecimalComparisonProtocolRequirement(expr *plan.Expr, owner any) {
+	if expr == nil {
+		return
+	}
+	required, err := plan.RequiresMORPCVersion84DecimalLiteralSemantics(owner)
+	if err != nil || !required {
+		return
+	}
+	if literal := expr.GetLit(); literal != nil {
+		literal.DecimalLiteralRequiresV82 = true
+	}
+}
+
 func decimalLiteralRequiresV82(source, canonical string, normalizedWidth int32) bool {
 	return isPlainDecimalLiteral(source) &&
 		(canonical != source || normalizedWidth > types.T_decimal128.ToType().Width)

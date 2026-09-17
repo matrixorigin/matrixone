@@ -2240,8 +2240,17 @@ func unwindTupleComparison(ctx context.Context, nonEqOp, op string, leftExprs, r
 // hasTrailingZeros checks if a decimal constant has trailing zeros that can be safely truncated
 // to match the column's scale, allowing index usage
 func hasTrailingZeros(constExpr *plan.Expr, constT types.Type, columnScale int32) bool {
+	hasZeros, _ := decimalTrailingZerosStatus(constExpr, constT, columnScale)
+	return hasZeros
+}
+
+// decimalTrailingZerosStatus returns whether the removable suffix is zero and
+// whether that answer was proven from the literal representation. The second
+// result keeps an arithmetic/parsing limitation from being mistaken for a
+// proven non-zero suffix by the early-comparison simplifier.
+func decimalTrailingZerosStatus(constExpr *plan.Expr, constT types.Type, columnScale int32) (bool, bool) {
 	if constT.Scale <= columnScale {
-		return false
+		return false, true
 	}
 
 	// Try to get the literal value
@@ -2260,37 +2269,35 @@ func hasTrailingZeros(constExpr *plan.Expr, constT types.Type, columnScale int32
 	}
 
 	if lit == nil || lit.Isnull {
-		return false
+		return false, false
 	}
 
 	// Calculate how many trailing digits we need to check
 	trailingDigits := constT.Scale - columnScale
-	if trailingDigits <= 0 || trailingDigits > 18 {
-		return false
-	}
-
-	// Get the decimal value and check trailing zeros
-	// Try DECIMAL64, DECIMAL128, and string literals
-	divisor := int64(types.Pow10[trailingDigits])
-
+	// Convert all fixed-width decimal carriers to Decimal256 so the suffix
+	// check does not silently narrow a wide value or stop at Decimal128's
+	// 18-digit divisor boundary.
 	if val, ok := lit.Value.(*plan.Literal_Decimal64Val); ok {
-		return val.Decimal64Val.A%divisor == 0
+		return decimal256TrailingZerosStatus(
+			types.Decimal256FromInt64(val.Decimal64Val.A), trailingDigits)
 	} else if val, ok := lit.Value.(*plan.Literal_Decimal128Val); ok {
-		// For Decimal128, we need to check if the trailing digits are all zeros
-		// using 128-bit arithmetic
-		return decimal128HasTrailingZeros(val.Decimal128Val.A, val.Decimal128Val.B, trailingDigits)
+		return decimal256TrailingZerosStatus(
+			types.Decimal256FromDecimal128(types.Decimal128{
+				B0_63:   uint64(val.Decimal128Val.A),
+				B64_127: uint64(val.Decimal128Val.B),
+			}), trailingDigits)
 	} else if sval, ok := lit.Value.(*plan.Literal_Sval); ok {
 		// The literal is a string. It may be an exact DECIMAL256 source, so
 		// parsing through Decimal128 can round the coefficient before we inspect
 		// the removable suffix and incorrectly report a non-zero tail.
 		dec, _, err := types.Parse256(sval.Sval)
 		if err != nil {
-			return false
+			return false, false
 		}
-		return decimal256HasTrailingZeros(dec, trailingDigits)
+		return decimal256TrailingZerosStatus(dec, trailingDigits)
 	}
 
-	return false
+	return false, false
 }
 
 // decimal128HasTrailingZeros checks if a 128-bit decimal value has trailing zeros
@@ -2322,23 +2329,54 @@ func decimal128HasTrailingZeros(low, high int64, trailingDigits int32) bool {
 	return remainder.B0_63 == 0 && remainder.B64_127 == 0
 }
 
-// decimal256HasTrailingZeros checks an exact Decimal256 coefficient without
-// narrowing it through Decimal128. Returning false on an arithmetic error is
-// deliberate: the caller may lose an index-cast optimization, but must never
-// turn a potentially matching comparison into an always-false predicate.
-func decimal256HasTrailingZeros(value types.Decimal256, trailingDigits int32) bool {
-	if trailingDigits <= 0 || trailingDigits > 18 {
-		return false
+func decimal256TrailingZerosStatus(value types.Decimal256, trailingDigits int32) (bool, bool) {
+	if trailingDigits <= 0 {
+		return false, true
 	}
-	divisor := types.Decimal256{B0_63: types.Pow10[trailingDigits]}
+	if trailingDigits > types.T_decimal256.ToType().Width {
+		// A Decimal256 coefficient has at most 76 decimal digits. Only zero is
+		// divisible by a larger power of ten, so this remains a proven answer.
+		return decimal256IsZero(value), true
+	}
+	divisor, ok := decimal256PowerOfTen(trailingDigits)
+	if !ok {
+		return false, false
+	}
 	remainder, err := value.Mod256(divisor)
 	if err != nil {
-		return false
+		return false, false
 	}
-	return remainder.B0_63 == 0 &&
-		remainder.B64_127 == 0 &&
-		remainder.B128_191 == 0 &&
-		remainder.B192_255 == 0
+	return decimal256IsZero(remainder), true
+}
+
+func decimal256PowerOfTen(power int32) (types.Decimal256, bool) {
+	if power < 0 || power > types.T_decimal256.ToType().Width {
+		return types.Decimal256{}, false
+	}
+	result := types.Decimal256{B0_63: 1}
+	for power >= 19 {
+		next, err := result.Mul256(types.Decimal256{B0_63: types.Pow10[19]})
+		if err != nil {
+			return types.Decimal256{}, false
+		}
+		result = next
+		power -= 19
+	}
+	if power > 0 {
+		next, err := result.Mul256(types.Decimal256{B0_63: types.Pow10[power]})
+		if err != nil {
+			return types.Decimal256{}, false
+		}
+		result = next
+	}
+	return result, true
+}
+
+func decimal256IsZero(value types.Decimal256) bool {
+	return value.B0_63 == 0 &&
+		value.B64_127 == 0 &&
+		value.B128_191 == 0 &&
+		value.B192_255 == 0
 }
 
 // isDecimalComparisonAlwaysFalseCore checks if a decimal comparison is always false
@@ -2348,8 +2386,14 @@ func isDecimalComparisonAlwaysFalseCore(constExpr *plan.Expr, constT types.Type,
 		return false
 	}
 
-	// If it has trailing zeros, it's not always false (can be optimized instead)
-	if hasTrailingZeros(constExpr, constT, columnScale) {
+	// If it has trailing zeros, it's not always false (can be optimized instead).
+	// If the exact suffix cannot be proven, retain the comparison rather than
+	// replacing a potentially matching predicate with a constant.
+	hasZeros, proven := decimalTrailingZerosStatus(constExpr, constT, columnScale)
+	if !proven {
+		return false
+	}
+	if hasZeros {
 		return false
 	}
 

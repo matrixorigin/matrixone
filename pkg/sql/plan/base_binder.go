@@ -5868,11 +5868,15 @@ func bindFuncExprImplByPlanExpr(
 		if len(args) == 2 {
 			if name == "=" && isDecimalComparisonAlwaysFalse(ctx, args[0], args[1]) {
 				// Equality with incompatible precision is always false
-				return makePlan2BoolConstExprWithType(false), nil
+				result := makePlan2BoolConstExprWithType(false)
+				markDecimalComparisonProtocolRequirement(result, args)
+				return result, nil
 			}
 			if name == "<>" && isDecimalComparisonAlwaysFalse(ctx, args[0], args[1]) {
 				// Inequality with incompatible precision is always true
-				return makePlan2BoolConstExprWithType(true), nil
+				result := makePlan2BoolConstExprWithType(true)
+				markDecimalComparisonProtocolRequirement(result, args)
+				return result, nil
 			}
 		}
 	case "date_add", "date_sub":

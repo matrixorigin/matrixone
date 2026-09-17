@@ -722,6 +722,79 @@ where inet_ntoa(cast('"2"' as json)) = '0.0.0.2'`
 	require.Equal(t, int64(defines.MORPCVersion86), *data.RequiredProtocolVersion)
 }
 
+func TestPersistedDecimalComparisonViewProtocolLifecycle(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	ctx.tables["decimal_view_source"] = &planpb.TableDef{
+		Name:      "decimal_view_source",
+		DbName:    "tpch",
+		TableType: catalog.SystemOrdinaryRel,
+		Cols: []*planpb.ColDef{{
+			Name:       "d",
+			OriginName: "d",
+			Typ: planpb.Type{
+				Id:    int32(types.T_decimal128),
+				Width: 38,
+				Scale: 0,
+			},
+		}},
+	}
+	ctx.objects["decimal_view_source"] = &planpb.ObjectRef{
+		SchemaName: "tpch",
+		ObjName:    "decimal_view_source",
+	}
+
+	proc := ctx.GetProcess()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	oldReadFloor, hadReadFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor)
+	oldAuthoringFloor, hadAuthoringFloor := rt.GetGlobalVariables(
+		moruntime.PersistedExpressionProtocolAuthoringFloor)
+	t.Cleanup(func() {
+		if hadProtocol {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+		if hadReadFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, oldReadFloor)
+		} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolFloor, current)
+		}
+		if hadAuthoringFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, oldAuthoringFloor)
+		} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, current)
+		}
+	})
+
+	const createSQL = "create view v_decimal_compare as select d = 12345678901234567890123456789012345678.1 as matches from decimal_view_source"
+	build := func() (*Plan, error) {
+		root := &rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createSQL, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		return BuildPlan(root, stmt, false)
+	}
+
+	// The comparison is folded to a boolean by the binder, so the protocol
+	// requirement must survive that rewrite and still fence view publication.
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion83))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion83))
+	_, err := build()
+	require.ErrorContains(t, err, "protocol version 84")
+
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion84))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion84))
+	created, err := build()
+	require.NoError(t, err)
+	var data ViewData
+	require.NoError(t, json.Unmarshal(
+		[]byte(created.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()), &data))
+	require.NotNil(t, data.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion84), *data.RequiredProtocolVersion)
+}
+
 func TestRegenerateViewDefinitionPersistsExpandedStar(t *testing.T) {
 	for _, rootSQL := range []string{
 		"create view v as select * from nation",
