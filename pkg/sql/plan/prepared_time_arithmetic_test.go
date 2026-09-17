@@ -322,7 +322,10 @@ func TestPreparedTimeArithmeticPreservesUnsignedDomain(t *testing.T) {
 	require.Equal(t, int32(types.T_decimal64), ordinaryExpr.Typ.Id)
 	require.Equal(t, int32(18), ordinaryExpr.Typ.Width)
 	require.Equal(t, int32(0), ordinaryExpr.Typ.Scale)
-	require.Equal(t, ordinaryExpr.Typ, preparedExpr.Typ)
+	require.Equal(t, ordinaryExpr.Typ.Id, preparedExpr.Typ.Id)
+	require.Equal(t, ordinaryExpr.Typ.Width, preparedExpr.Typ.Width)
+	require.Equal(t, ordinaryExpr.Typ.Scale, preparedExpr.Typ.Scale)
+	require.False(t, preparedExpr.Typ.NotNullable)
 
 	proc := testutil.NewProc(t)
 	defer proc.Free()
@@ -333,6 +336,72 @@ func TestPreparedTimeArithmeticPreservesUnsignedDomain(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, result.IsNull(0))
 	require.Equal(t, "11", formatDecimalResult(result))
+}
+
+func TestPreparedTimeArithmeticPreservesNullEnvelope(t *testing.T) {
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt_null_envelope from 'select cast(''00:00:01'' as time(0)) + (? + ?)'")
+	require.NoError(t, err)
+	preparePlan := prepared.GetDcl().GetPrepare().Plan
+	cachedPlan, err := preparePlan.Marshal()
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name   string
+		values []any
+		width  int32
+		id     types.T
+	}{
+		{name: "left null", values: []any{
+			ParamValue{Value: nil, PrepareParamKind: vector.PrepareParamNone},
+			ParamValue{Value: "2", PrepareParamKind: vector.PrepareParamInteger},
+		}, width: 65, id: types.T_decimal256},
+		{name: "right null", values: []any{
+			ParamValue{Value: "1", PrepareParamKind: vector.PrepareParamInteger},
+			ParamValue{Value: nil, PrepareParamKind: vector.PrepareParamNone},
+		}, width: 65, id: types.T_decimal256},
+		{name: "both null", values: []any{
+			ParamValue{Value: nil, PrepareParamKind: vector.PrepareParamNone},
+			ParamValue{Value: nil, PrepareParamKind: vector.PrepareParamNone},
+		}, width: 65, id: types.T_decimal256},
+		{name: "both integers", values: []any{
+			ParamValue{Value: "1", PrepareParamKind: vector.PrepareParamInteger},
+			ParamValue{Value: "2", PrepareParamKind: vector.PrepareParamInteger},
+		}, width: 18, id: types.T_decimal64},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			filled, _, err := FillValuesOfParamsInPlanWithSpecialization(
+				context.Background(), preparePlan, tc.values)
+			require.NoError(t, err)
+			expr := filled.GetQuery().Nodes[len(filled.GetQuery().Nodes)-1].ProjectList[0]
+			require.Equal(t, int32(tc.id), expr.Typ.Id)
+			require.Equal(t, tc.width, expr.Typ.Width)
+			require.Equal(t, int32(0), expr.Typ.Scale)
+			if tc.name != "both integers" {
+				require.False(t, expr.Typ.NotNullable)
+			}
+		})
+	}
+	after, err := preparePlan.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, cachedPlan, after, "NULL specialization must not mutate the cached prepared plan")
+}
+
+func TestPreparedTimeArithmeticPreservesNullEnvelopeThroughAbs(t *testing.T) {
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt_null_envelope_abs from 'select abs(cast(''00:00:01'' as time(0)) + (? + ?))'")
+	require.NoError(t, err)
+	filled, _, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(), prepared.GetDcl().GetPrepare().Plan, []any{
+			ParamValue{Value: nil, PrepareParamKind: vector.PrepareParamNone},
+			ParamValue{Value: "2", PrepareParamKind: vector.PrepareParamInteger},
+		})
+	require.NoError(t, err)
+	expr := filled.GetQuery().Nodes[len(filled.GetQuery().Nodes)-1].ProjectList[0]
+	require.Equal(t, int32(types.T_decimal256), expr.Typ.Id)
+	require.Equal(t, int32(65), expr.Typ.Width)
+	require.Equal(t, int32(0), expr.Typ.Scale)
+	require.False(t, expr.Typ.NotNullable)
 }
 
 func TestPreparedTimeArithmeticPreservesExplicitDecimalAndNestedDomains(t *testing.T) {

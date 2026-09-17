@@ -497,6 +497,11 @@ type ResetParamRefRule struct {
 	// String-domain lineage is self-contained in sparse expression metadata and
 	// does not add a plan-graph walk to prepared execution.
 	preparedPlan *Plan
+	// preparedTemporalNullEnvelopeExprs marks runtime-only casts that restore a
+	// strict NULL TIME-arithmetic envelope. Deferred numeric consumers must keep
+	// these casts intact instead of pairing their target-type argument with the
+	// original arithmetic children during a later fallback rebind.
+	preparedTemporalNullEnvelopeExprs map[*plan.Expr]struct{}
 	// paramKinds is populated by the execute-time replacement path.  It is
 	// deliberately kept on the rule rather than inferred from Expr.Typ: a
 	// prepared marker is TEXT at prepare time while COM_STMT carries the
@@ -1361,6 +1366,11 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExprWithBound(
 	if expr == nil {
 		return bound, false, nil
 	}
+	if bound != nil {
+		if _, marked := rule.preparedTemporalNullEnvelopeExprs[bound]; marked {
+			return bound, false, nil
+		}
+	}
 	if param := expr.GetP(); param != nil {
 		if _, ok := positions[param.Pos]; !ok {
 			if bound != nil {
@@ -1698,6 +1708,115 @@ func (rule *ResetParamRefRule) coercePreparedTemporalIntegerOperand(
 	temporalPeer.Scale = 0
 	coerced, err := appendCastBeforeExpr(rule.ctx, bound, makePlan2Type(&temporalPeer))
 	return coerced, true, err
+}
+
+// preparedTemporalStrictNullNestedArithmetic reports whether expr is a nested
+// arithmetic expression whose result is forced NULL by the current execution
+// parameters. Keep this separate from the integer boundary coercion: a NULL
+// marker has no execute-time numeric domain, so the prepared decimal envelope
+// is the only stable result metadata for a strict nested operation.
+func (rule *ResetParamRefRule) preparedTemporalStrictNullNestedArithmetic(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil {
+		name := strings.ToLower(fn.Func.GetObjName())
+		if name == "cast" && len(fn.Args) > 0 {
+			return rule.preparedTemporalStrictNullNestedArithmetic(fn.Args[0])
+		}
+		if !isPreparedTemporalIntegerArithmetic(name) {
+			return false
+		}
+		for _, arg := range fn.Args {
+			if rule.preparedTemporalStrictNullValue(arg) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func (rule *ResetParamRefRule) preparedTemporalStrictNullValue(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if param := expr.GetP(); param != nil && param.Pos >= 0 {
+		return rule.preparedRuntimeParamIsNull(int(param.Pos))
+	}
+	if literal := expr.GetLit(); literal != nil {
+		return literal.GetIsnull()
+	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil {
+		name := strings.ToLower(fn.Func.GetObjName())
+		if name == "cast" && len(fn.Args) > 0 {
+			return rule.preparedTemporalStrictNullValue(fn.Args[0])
+		}
+		if isPreparedTemporalIntegerArithmetic(name) {
+			for _, arg := range fn.Args {
+				if rule.preparedTemporalStrictNullValue(arg) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func (rule *ResetParamRefRule) preparedRuntimeParamIsNull(pos int) bool {
+	if pos < 0 {
+		return false
+	}
+	if pos < len(rule.paramValues) {
+		if param, ok := rule.paramValues[pos].(ParamValue); ok {
+			return preparedParamValueIsNull(param)
+		}
+	}
+	value, _, ok := rule.runtimeParamValue(pos)
+	return ok && value == nil
+}
+
+// restorePreparedTemporalNullEnvelope keeps the result metadata selected when
+// a prepared TIME arithmetic expression had no runtime numeric category. It
+// is deliberately limited to strict nested arithmetic: COALESCE/IFNULL/CASE
+// can turn a NULL marker into a value and must continue through normal
+// execute-time type inference.
+func (rule *ResetParamRefRule) restorePreparedTemporalNullEnvelope(
+	functionName string,
+	originalTyp plan.Type,
+	originalArgs []*Expr,
+	rewritten *Expr,
+) (*Expr, bool, error) {
+	if rewritten == nil || !isPreparedTemporalIntegerArithmetic(functionName) ||
+		!types.T(originalTyp.Id).IsDecimal() {
+		return rewritten, false, nil
+	}
+	if _, ok := preparedTemporalNumericPeerFromArgs(originalArgs); !ok {
+		return rewritten, false, nil
+	}
+	strictNull := false
+	for _, arg := range originalArgs {
+		if rule.preparedTemporalStrictNullNestedArithmetic(arg) {
+			strictNull = true
+			break
+		}
+	}
+	if !strictNull ||
+		(types.T(rewritten.Typ.Id) == types.T(originalTyp.Id) &&
+			rewritten.Typ.Width == originalTyp.Width &&
+			rewritten.Typ.Scale == originalTyp.Scale &&
+			rewritten.Typ.Charset == originalTyp.Charset) {
+		return rewritten, false, nil
+	}
+	target := originalTyp
+	target.NotNullable = rewritten.Typ.NotNullable
+	restored, err := appendCastBeforeExpr(rule.ctx, rewritten, target)
+	if err == nil && restored != nil {
+		if rule.preparedTemporalNullEnvelopeExprs == nil {
+			rule.preparedTemporalNullEnvelopeExprs = make(map[*plan.Expr]struct{})
+		}
+		rule.preparedTemporalNullEnvelopeExprs[restored] = struct{}{}
+	}
+	return restored, true, err
 }
 
 func (rule *ResetParamRefRule) rebindPreparedIntegerExpr(expr *plan.Expr) (*Expr, bool, error) {
@@ -2892,6 +3011,14 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				return nil, err
 			}
 			preserveReboundFunctionMetadata(exprImpl.F, rewritten.GetF())
+			if restored, restoredChanged, restoreErr := rule.restorePreparedTemporalNullEnvelope(
+				functionName, originalTyp, originalArgs, rewritten,
+			); restoreErr != nil {
+				return nil, restoreErr
+			} else if restoredChanged {
+				rewritten = restored
+				rule.specialized = true
+			}
 			if functionBindingChanged(originalTyp, originalFuncObj, originalArgTypes, rewritten, compareArgTypes) {
 				rule.specialized = true
 			}
