@@ -677,6 +677,18 @@ func foreignKeyParentIDs(fkeys []*plan.ForeignKeyDef) map[uint64]struct{} {
 	return parents
 }
 
+func alterTableAddsForeignKey(actions []*plan.AlterTable_Action) bool {
+	for _, action := range actions {
+		if action == nil {
+			continue
+		}
+		if _, ok := action.Action.(*plan.AlterTable_Action_AddFk); ok {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *Scope) AlterTableInplace(c *Compile) (err error) {
 	cleanup := newAlterAutoIncrementResetCleanup(c)
 	defer cleanup.finish(&err)
@@ -788,8 +800,14 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 			retryErr = moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
 		}
 
-		// 2. lock origin table
-		if err = lockTable(c.proc.Ctx, c.e, c.proc, rel, dbName, true); err != nil {
+		// 2. lock origin table. ADD FOREIGN KEY validates existing child rows,
+		// so it opts into advancing the RC snapshot through the latest child
+		// commit after acquiring the table lock.
+		lockOriginTable := lockTable
+		if alterTableAddsForeignKey(qry.Actions) {
+			lockOriginTable = lockTableForSnapshotRefresh
+		}
+		if err = lockOriginTable(c.proc.Ctx, c.e, c.proc, rel, dbName, true); err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
 				!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
 				return err
@@ -829,7 +847,13 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 			}
 		}
 
-		// 3. lock foreign key's table
+		// 3. Lock every foreign-key parent in both the catalog and the data
+		// keyspace. The child table lock above serializes child writes with FK
+		// validation; the parent data lock is equally necessary to serialize a
+		// concurrent parent delete. These validation locks opt into advancing an
+		// RC snapshot past commits that completed before each lock was granted, so
+		// the later detect SQL validates the exact locked state.
+		lockedForeignKeyParents := make(map[string]struct{})
 		for _, action := range qry.Actions {
 			if action == nil {
 				continue
@@ -857,15 +881,35 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 					}
 				}
 			case *plan.AlterTable_Action_AddFk:
-				// lock fk table
-				if !(act.AddFk.DbName != dbName && act.AddFk.TableName != tblName) { //skip self ref foreign key
-					if err = lockMoTable(c, act.AddFk.DbName, act.AddFk.TableName, lock.LockMode_Exclusive); err != nil {
-						if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
-							!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
-							return err
-						}
-						retryErr = moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+				parentDB, parentTable := act.AddFk.DbName, act.AddFk.TableName
+				if parentDB == dbName && parentTable == tblName { // child lock already covers self references
+					continue
+				}
+				parentKey := parentDB + "\x00" + parentTable
+				if _, ok := lockedForeignKeyParents[parentKey]; ok {
+					continue
+				}
+				lockedForeignKeyParents[parentKey] = struct{}{}
+
+				if err = lockMoTable(c, parentDB, parentTable, lock.LockMode_Exclusive); err != nil {
+					if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
+						!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+						return err
 					}
+					retryErr = moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+				}
+				// FOREIGN_KEY_CHECKS=0 permits a forward reference whose parent
+				// does not exist yet. Its catalog key is still serialized above,
+				// but there is no parent data keyspace to lock.
+				if act.AddFk.Fkey.ForeignTbl == 0 {
+					continue
+				}
+				if err = lockAlterForeignKeyParentTable(c, parentDB, parentTable); err != nil {
+					if !moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) &&
+						!moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged) {
+						return err
+					}
+					retryErr = moerr.NewTxnNeedRetryWithDefChangedNoCtx()
 				}
 			}
 		}
@@ -5411,6 +5455,30 @@ func doLockTable(
 	return err
 }
 
+func doLockTableForSnapshotRefresh(
+	ctx context.Context,
+	eng engine.Engine,
+	proc *process.Process,
+	rel engine.Relation,
+	defChanged bool) error {
+	id := rel.GetTableID(ctx)
+	defs, err := rel.GetPrimaryKeys(ctx)
+	if err != nil {
+		return err
+	}
+	if len(defs) != 1 {
+		panic("invalid primary keys")
+	}
+	return lockop.LockTableForSnapshotRefreshWithContext(
+		ctx,
+		eng,
+		proc,
+		id,
+		defs[0].Type,
+		lock.LockMode_Exclusive,
+		defChanged)
+}
+
 var lockTable = func(
 	ctx context.Context,
 	eng engine.Engine,
@@ -5420,6 +5488,29 @@ var lockTable = func(
 	defChanged bool,
 ) error {
 	return doLockTable(eng, proc, rel, defChanged)
+}
+
+var lockTableForSnapshotRefresh = func(
+	ctx context.Context,
+	eng engine.Engine,
+	proc *process.Process,
+	rel engine.Relation,
+	dbName string,
+	defChanged bool,
+) error {
+	return doLockTableForSnapshotRefresh(ctx, eng, proc, rel, defChanged)
+}
+
+func lockAlterForeignKeyParentTable(c *Compile, dbName, tableName string) error {
+	db, err := c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
+	if err != nil {
+		return err
+	}
+	rel, err := db.Relation(c.proc.Ctx, tableName, nil)
+	if err != nil {
+		return err
+	}
+	return lockTableForSnapshotRefresh(c.proc.Ctx, c.e, c.proc, rel, dbName, true)
 }
 
 // lockIndexTable
