@@ -178,24 +178,77 @@ func requireDecimalReturn(source []types.Type) bool {
 }
 
 func textStringCommonType(source []types.Type) (types.Type, bool, bool) {
+	hasString := false
 	hasText := false
 	aligned := true
 	for _, input := range source {
 		switch input.Oid {
 		case types.T_text:
+			hasString = true
 			hasText = true
 		case types.T_any:
 			aligned = false
 		case types.T_char, types.T_varchar:
+			hasString = true
 			aligned = false
 		default:
 			return types.Type{}, false, false
 		}
 	}
-	if !hasText {
+	if !hasString {
 		return types.Type{}, false, false
 	}
-	return commonConditionalStringType(types.T_text.ToType(), source), aligned, true
+	result := types.T_varchar.ToType()
+	if hasText {
+		result = types.T_text.ToType()
+	}
+	return commonConditionalStringType(result, source), aligned, true
+}
+
+// coalesceBinaryStringResult handles the bounded binary family before the
+// generic overload-cost search. The generic search prefers BLOB for a
+// BINARY/VARBINARY mixture, which loses the common finite byte bound and makes
+// a materialized result ineligible for ordinary indexes.
+func coalesceBinaryStringResult(overloads []overload, inputs []types.Type) (checkResult, bool) {
+	hasBinary := false
+	for _, input := range inputs {
+		switch input.Oid {
+		case types.T_any:
+			continue
+		case types.T_binary, types.T_varbinary:
+			hasBinary = true
+		default:
+			return checkResult{}, false
+		}
+	}
+	if !hasBinary {
+		return checkResult{}, false
+	}
+	target, ok := binaryStringCommonType(inputs)
+	if !ok {
+		return newCheckResultWithFailure(failedFunctionParametersWrong), true
+	}
+	for i, over := range overloads {
+		if len(over.args) != 1 || over.args[0] != target.Oid {
+			continue
+		}
+		aligned := true
+		for _, input := range inputs {
+			if !input.Eq(target) {
+				aligned = false
+				break
+			}
+		}
+		if aligned {
+			return newCheckResultWithSuccess(i), true
+		}
+		castTypes := make([]types.Type, len(inputs))
+		for j := range castTypes {
+			castTypes[j] = target
+		}
+		return newCheckResultWithCast(i, castTypes), true
+	}
+	return newCheckResultWithFailure(failedFunctionParametersWrong), true
 }
 
 // caseCheck check `case X then Y case X1 then Y1 ... (else Z)`
