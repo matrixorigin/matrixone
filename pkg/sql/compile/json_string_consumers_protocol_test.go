@@ -103,9 +103,9 @@ func TestJSONStringConsumerProtocolPlanAdmissionAndCachedRun(t *testing.T) {
 					c := &Compile{proc: proc, pn: queryPlan}
 					require.ErrorContains(t,
 						c.Compile(context.Background(), queryPlan, nil),
-						"protocol version 76")
+						"protocol version 86")
 					_, err := c.Run(0)
-					require.ErrorContains(t, err, "protocol version 76")
+					require.ErrorContains(t, err, "protocol version 86")
 				})
 			}
 		})
@@ -154,10 +154,10 @@ func TestJSONStringConsumerRollingUpgradeFencesOldWorker(t *testing.T) {
 	require.NotEmpty(t, data)
 
 	// An old-head receiver rejects the already serialized overload instead of
-	// reaching GetFunctionById, while a v76 receiver accepts and executes it.
+	// reaching GetFunctionById, while a v86 receiver accepts and executes it.
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion75)
 	_, err = decodeScope(data, c.proc, true, nil)
-	require.ErrorContains(t, err, "protocol version 76")
+	require.ErrorContains(t, err, "protocol version 86")
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion86)
 	decoded, err := decodeScope(data, c.proc, true, nil)
 	require.NoError(t, err)
