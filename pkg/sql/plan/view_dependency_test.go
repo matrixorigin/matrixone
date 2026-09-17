@@ -588,6 +588,26 @@ func TestPersistedDecimalComparisonViewProtocolLifecycle(t *testing.T) {
 		SchemaName: "tpch",
 		ObjName:    "decimal_nullable_compare_source",
 	}
+	ctx.tables["decimal_cast_compare_source"] = &planpb.TableDef{
+		Name:      "decimal_cast_compare_source",
+		DbName:    "tpch",
+		TableType: catalog.SystemOrdinaryRel,
+		Cols: []*planpb.ColDef{{
+			Name:       "d",
+			OriginName: "d",
+			Typ: planpb.Type{
+				Id:          int32(types.T_decimal64),
+				Width:       10,
+				Scale:       0,
+				NotNullable: true,
+			},
+			NotNull: true,
+		}},
+	}
+	ctx.objects["decimal_cast_compare_source"] = &planpb.ObjectRef{
+		SchemaName: "tpch",
+		ObjName:    "decimal_cast_compare_source",
+	}
 
 	proc := ctx.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
@@ -668,6 +688,35 @@ func TestPersistedDecimalComparisonViewProtocolLifecycle(t *testing.T) {
 	require.ErrorContains(t, err, "protocol version 84")
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion84))
 	_, err = RegenerateViewDefinition(ctx, string(nullableMarkerless))
+	require.NoError(t, err)
+
+	// A small source-scale mismatch is also a semantic boundary: the cast
+	// rounds 1.01 to 1.0 before comparison, while the v83 binder could inspect
+	// the source spelling and fold the predicate as if the extra digit survived.
+	const castSQL = "create view v_decimal_cast_compare as select d = cast('1.01' as decimal(10,1)) as eq, d <> cast('1.01' as decimal(10,1)) as ne from decimal_cast_compare_source"
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion83))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion83))
+	_, err = buildSQL(castSQL)
+	require.ErrorContains(t, err, "protocol version 84")
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion84))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion84))
+	castPlan, err := buildSQL(castSQL)
+	require.NoError(t, err)
+	castPersisted := castPlan.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()
+	var castData ViewData
+	require.NoError(t, json.Unmarshal([]byte(castPersisted), &castData))
+	require.NotNil(t, castData.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion84), *castData.RequiredProtocolVersion)
+	var castFields map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal([]byte(castPersisted), &castFields))
+	delete(castFields, "required_protocol_version")
+	castMarkerless, err := json.Marshal(castFields)
+	require.NoError(t, err)
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion83))
+	_, err = RegenerateViewDefinition(ctx, string(castMarkerless))
+	require.ErrorContains(t, err, "protocol version 84")
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion84))
+	_, err = RegenerateViewDefinition(ctx, string(castMarkerless))
 	require.NoError(t, err)
 }
 

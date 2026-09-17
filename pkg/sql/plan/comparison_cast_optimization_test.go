@@ -853,6 +853,38 @@ func TestDecimalComparisonDoesNotNarrowExplicitCastWithDifferentSourceScale(t *t
 	}
 }
 
+func TestDecimalComparisonFencesSmallExplicitCastSourceScaleMismatch(t *testing.T) {
+	ctx := context.Background()
+	columnType := types.New(types.T_decimal64, 10, 0)
+	column := &plan.Expr{
+		Typ:  makePlan2Type(&columnType),
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "d"}},
+	}
+	column.Typ.NotNullable = true
+
+	for _, operator := range []string{"=", "<>"} {
+		t.Run(operator, func(t *testing.T) {
+			source := makePlan2StringConstExprWithType("1.01")
+			casted, err := appendCastBeforeExpr(ctx, source, plan.Type{
+				Id:          int32(types.T_decimal64),
+				Width:       10,
+				Scale:       1,
+				NotNullable: true,
+			})
+			require.NoError(t, err)
+			result, err := BindFuncExprImplByPlanExpr(ctx, operator,
+				[]*plan.Expr{DeepCopyExpr(column), casted})
+			require.NoError(t, err)
+			require.NotNil(t, result.GetF(),
+				"source-scale mismatch must retain the executable comparison")
+			requires, err := plan.RequiresMORPCVersion84DecimalLiteralSemantics(result)
+			require.NoError(t, err)
+			require.True(t, requires,
+				"source-scale mismatch must carry the v84 persisted-expression fence")
+		})
+	}
+}
+
 // TestUnwrapCast tests the unwrapCast helper function
 func TestUnwrapCast(t *testing.T) {
 	tests := []struct {
