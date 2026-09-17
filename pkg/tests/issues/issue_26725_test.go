@@ -142,6 +142,18 @@ func TestIssue26725PreparedBit64Numeric(t *testing.T) {
 		execSQLRequire(t, ctx, db, "create database "+dbName)
 		execSQLRequire(t, ctx, db,
 			"create table "+dbName+".t64(id bigint primary key, b bit(64))")
+		execSQLRequire(t, ctx, db,
+			"create table "+dbName+".sql_prepare_t64(id bigint primary key, b bit(64))")
+		execSQLRequire(t, ctx, db,
+			"prepare issue26725_sql_prepare from 'insert into "+dbName+".sql_prepare_t64 values (?, ?)' ")
+		execSQLRequire(t, ctx, db, "set @issue26725_id = 9, @issue26725_bit = 5.0")
+		execSQLRequire(t, ctx, db,
+			"execute issue26725_sql_prepare using @issue26725_id, @issue26725_bit")
+		defer execSQLMaybe(t, context.Background(), db, "deallocate prepare issue26725_sql_prepare")
+		var sqlPrepareBitValue string
+		require.NoError(t, db.QueryRowContext(ctx,
+			"select cast(b as unsigned) from "+dbName+".sql_prepare_t64 where id = 9").Scan(&sqlPrepareBitValue))
+		require.Equal(t, "5", sqlPrepareBitValue)
 
 		stmt, err := db.PrepareContext(ctx,
 			"insert into "+dbName+".t64(id, b) values (?, ?), (?, ?), (?, ?), (?, ?), (?, ?)")
