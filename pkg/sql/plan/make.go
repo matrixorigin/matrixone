@@ -200,7 +200,40 @@ func decimalComparisonUsesExtendedTrailingZeroSemantics(args []*plan.Expr) bool 
 	colType := makeTypeByPlan2Expr(colExpr)
 	constType := makeTypeByPlan2Expr(originalConst)
 	return colType.Oid.IsDecimal() && constType.Oid.IsDecimal() &&
-		constType.Scale-colType.Scale > 18 && constExpr.GetLit() != nil
+		constExpr.GetLit() != nil &&
+		(decimalComparisonSourceScaleMismatch(originalConst, constExpr, constType) ||
+			constType.Scale-colType.Scale > 18)
+}
+
+// decimalComparisonSourceScaleMismatch identifies an explicit DECIMAL cast
+// whose source literal scale differs from the cast target scale. The legacy
+// comparison binder inspected the source spelling as if it already had the
+// target scale, while execution evaluates the cast first; that can change a
+// comparison from a folded constant to a matching predicate even when the
+// scale difference is small.
+func decimalComparisonSourceScaleMismatch(
+	originalConst, sourceExpr *plan.Expr,
+	constType types.Type,
+) bool {
+	if originalConst == nil || sourceExpr == nil || !constType.Oid.IsDecimal() {
+		return false
+	}
+	cast := originalConst.GetF()
+	if cast == nil || cast.Func == nil || cast.Func.GetObjName() != "cast" ||
+		len(cast.Args) == 0 || cast.Args[0].GetLit() == nil {
+		return false
+	}
+	lit := cast.Args[0].GetLit()
+	switch value := lit.Value.(type) {
+	case *plan.Literal_Sval:
+		_, sourceScale, err := types.Parse256(value.Sval)
+		return err == nil && sourceScale != constType.Scale
+	case *plan.Literal_Decimal64Val, *plan.Literal_Decimal128Val:
+		sourceType := makeTypeByPlan2Expr(sourceExpr)
+		return sourceType.Oid.IsDecimal() && sourceType.Scale != constType.Scale
+	default:
+		return false
+	}
 }
 
 func decimalComparisonColumnIsNotNullable(args []*plan.Expr) bool {
