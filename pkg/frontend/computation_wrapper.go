@@ -223,6 +223,73 @@ func (cwft *TxnComputationWrapper) ResetPlanAndStmt(stmt tree.Statement) {
 	cwft.stmtBorrowed = false
 }
 
+// resetForTxnRetry discards execution state that was bound to the rolled-back
+// transaction while retaining the parsed statement and prepared-parameter
+// ownership. The next Compile call therefore rebuilds the plan and physical
+// compile against the new transaction generation.
+func (cwft *TxnComputationWrapper) resetForTxnRetry(execCtx *ExecCtx, originalSQL string) error {
+	var stmt tree.Statement
+	borrowed := false
+	if execCtx.input != nil && execCtx.input.isBinaryProtExecute {
+		if cwft.preparedStmt == nil {
+			return moerr.NewInternalError(execCtx.reqCtx, "missing prepared COPY ALTER owner")
+		}
+		stmt = cwft.preparedStmt.PrepareStmt
+		borrowed = true
+	} else {
+		stmts, err := mysql.ParseWithSQLMode(execCtx.reqCtx, originalSQL,
+			parserLowerCaseTableNames(cwft.ses), sessionSQLModeForParser(cwft.ses))
+		if err != nil {
+			return err
+		}
+		if len(stmts) != 1 {
+			for _, parsed := range stmts {
+				parsed.Free()
+			}
+			return moerr.NewInternalError(execCtx.reqCtx, "COPY ALTER retry must contain one statement")
+		}
+		stmt = stmts[0]
+	}
+	cwft.freeStmt()
+	cwft.stmt, cwft.stmtBorrowed = stmt, borrowed
+	if execCtx.input != nil && execCtx.input.isBinaryProtExecute {
+		// Binary EXECUTE starts with the prepared DCL plan already installed.
+		// Keep that same sentinel across a transaction-generation reset so
+		// Compile reaches initExecuteStmtParam before it tries to plan the inner
+		// ALTER against the session's current database.  The prepared initializer
+		// still validates and rebuilds the logical plan for the new transaction.
+		preparedPlan := cwft.preparedStmt.PreparePlan
+		if preparedPlan == nil || preparedPlan.GetDcl() == nil ||
+			preparedPlan.GetDcl().GetPrepare() == nil ||
+			preparedPlan.GetDcl().GetPrepare().GetPlan() == nil {
+			return moerr.NewInternalError(execCtx.reqCtx, "prepared COPY ALTER has no logical plan")
+		}
+		cwft.plan = preparedPlan.GetDcl().GetPrepare().GetPlan()
+	} else {
+		cwft.plan = nil
+	}
+	cwft.planSnapshotTS = timestamp.Timestamp{}
+	cwft.hasPlanSnapshotTS = false
+	cwft.planGenerationReused = false
+	cwft.cachedPlanSQL = ""
+	cwft.cachedPlanIndex = 0
+	cwft.cachedPlanGeneration = nil
+	cwft.optimizerStatsVersions = nil
+	cwft.compile = nil
+	cwft.runResult = nil
+	cwft.discardRuntimeCacheCandidate()
+	cwft.schedulingTrace.Reset()
+	return nil
+}
+
+func isCopyAlterPublicationRetryOwner(execCtx *ExecCtx) bool {
+	return execCtx != nil && execCtx.input != nil &&
+		execCtx.input.isBinaryProtExecute &&
+		execCtx.txnOpt.autoCommit &&
+		!execCtx.txnOpt.byBegin && !execCtx.txnOpt.byCommit && !execCtx.txnOpt.byRollback &&
+		execCtx.txnOpt.activeTxnAtStartKnown && !execCtx.txnOpt.activeTxnAtStart
+}
+
 func (cwft *TxnComputationWrapper) GetAst() tree.Statement {
 	return cwft.stmt
 }
@@ -663,7 +730,6 @@ func (cwft *TxnComputationWrapper) Compile(any any, fill func(*batch.Batch, *per
 			return nil, err
 		}
 	}
-
 	return cwft.compile, err
 }
 
