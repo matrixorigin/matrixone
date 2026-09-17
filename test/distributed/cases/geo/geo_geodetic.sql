@@ -30,6 +30,31 @@ select st_area(st_geomfromtext('POLYGON((0 0,3 0,3 4,0 4,0 0))', 4326), 0) as fo
 select st_distance(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(1 0)', 4326), 'kilometre') as geodesic_distance_km;
 select st_frechetdistance(st_geomfromtext('LINESTRING(0 0,1 0)', 4326), st_geomfromtext('LINESTRING(0 1,1 1)', 4326), 'kilometre') as geodesic_frechet_km;
 select st_hausdorffdistance(st_geomfromtext('LINESTRING(0 0,1 0)', 4326), st_geomfromtext('LINESTRING(0 1,1 1)', 4326), 'kilometre') as geodesic_hausdorff_km;
+select st_frechetdistance(st_geomfromtext('GEOMETRYCOLLECTION EMPTY', 4326), st_geomfromtext('LINESTRING(0 0,1 0)', 4326), 'metre') as geodetic_frechet_empty_left;
+select st_hausdorffdistance(st_geomfromtext('LINESTRING(0 0,1 0)', 4326), st_geomfromtext('LINESTRING EMPTY', 4326), 'metre') as geodetic_hausdorff_empty_right;
+select st_frechetdistance(cast('LINESTRING EMPTY' as geography32), cast('LINESTRING(0 0,1 0)' as geography32), 'metre') as geodetic_frechet32_empty_left;
+select st_hausdorffdistance(cast('LINESTRING(0 0,1 0)' as geography32), cast('LINESTRING EMPTY' as geography32), 'metre') as geodetic_hausdorff32_empty_right;
+
+prepare geo_frechet_unit_empty from 'select st_frechetdistance(st_geomfromtext(?,4326), st_geomfromtext(?,4326), ?) as distance_m';
+set @geo_discrete_left = 'LINESTRING EMPTY';
+set @geo_discrete_right = 'LINESTRING(0 1,1 1)';
+set @geo_discrete_unit = 'metre';
+execute geo_frechet_unit_empty using @geo_discrete_left, @geo_discrete_right, @geo_discrete_unit;
+set @geo_discrete_left = 'LINESTRING(0 0,1 0)';
+execute geo_frechet_unit_empty using @geo_discrete_left, @geo_discrete_right, @geo_discrete_unit;
+set @geo_discrete_right = 'LINESTRING EMPTY';
+execute geo_frechet_unit_empty using @geo_discrete_left, @geo_discrete_right, @geo_discrete_unit;
+deallocate prepare geo_frechet_unit_empty;
+
+prepare geo_hausdorff_unit_empty from 'select st_hausdorffdistance(st_geomfromtext(?,4326), st_geomfromtext(?,4326), ?) as distance_m';
+set @geo_discrete_left = 'LINESTRING EMPTY';
+set @geo_discrete_right = 'LINESTRING(0 1,1 1)';
+execute geo_hausdorff_unit_empty using @geo_discrete_left, @geo_discrete_right, @geo_discrete_unit;
+set @geo_discrete_left = 'LINESTRING(0 0,1 0)';
+execute geo_hausdorff_unit_empty using @geo_discrete_left, @geo_discrete_right, @geo_discrete_unit;
+set @geo_discrete_right = 'LINESTRING EMPTY';
+execute geo_hausdorff_unit_empty using @geo_discrete_left, @geo_discrete_right, @geo_discrete_unit;
+deallocate prepare geo_hausdorff_unit_empty;
 -- Exercise the authoritative MySQL unit names, case/accent-insensitive
 -- lookup, and an independently scaled meter oracle. Abbreviations such as
 -- "km" are intentionally not accepted as aliases.

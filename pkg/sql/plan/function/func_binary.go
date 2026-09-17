@@ -11060,7 +11060,7 @@ func StFrechetDistanceWithUnit32(ivecs []*vector.Vector, result vector.FunctionR
 
 func stFrechetDistanceWithUnit[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	return stDiscreteDistanceWithUnit[T]("ST_FrechetDistance", ivecs, result, length, selectList,
-		discreteFrechetDistanceBySRID, nil)
+		discreteFrechetDistanceBySRID, geometryDistancePayloadEmpty)
 }
 
 // StHausdorffDistance is the legacy planar directed Hausdorff-distance
@@ -11122,7 +11122,7 @@ func StHausdorffDistanceWithUnit32(ivecs []*vector.Vector, result vector.Functio
 
 func stHausdorffDistanceWithUnit[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
 	return stDiscreteDistanceWithUnit[T]("ST_HausdorffDistance", ivecs, result, length, selectList,
-		discreteHausdorffDistanceBySRID, nil)
+		discreteHausdorffDistanceBySRID, geometryDistancePayloadEmpty)
 }
 
 type discreteDistanceBySRID func(left, right []byte, srid uint32) (float64, error)
