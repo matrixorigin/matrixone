@@ -1533,27 +1533,36 @@ func (builder *QueryBuilder) applyFullTextFiltersForJoinChildren(nodeID int32, j
 	// fulltext-index result on the pk/doc_id. Fulltext search yields one row per matching
 	// doc, so that join is 1:1 and ROW-EQUIVALENT to the filter it replaces.
 	//
-	// A child is eligible iff rewriting it cannot change the enclosing join's
-	// row-preservation:
+	// A fulltext_match on a scan's FilterList is a pure filter on that input's own columns, so
+	// re-expressing it as the 1-row-per-pk semi-join is ROW-EQUIVALENT to the WHERE that placed it
+	// there -- on EITHER side of a join, whether the input is null-extending or row-preserved:
 	//   - INNER/SEMI: neither input is row-preserving, so both are eligible.
-	//   - outer joins (LEFT/RIGHT/SINGLE/OUTER): only the NULL-EXTENDING (non-preserved)
-	//     child. That is where a scalar subquery's match lands -- correlated
-	//     `select (select count(*) ... where match(...))` decorrelates to AGG over
-	//     `outer LEFT/SINGLE JOIN docs(match)` with docs as the non-preserved child (#27962).
+	//   - LEFT/RIGHT/SINGLE: both children are eligible.
+	//       * the NULL-EXTENDING child carries a decorrelated subquery's own filter -- correlated
+	//         `select (select count(*) ... where match(...))` decorrelates to AGG over
+	//         `outer LEFT/SINGLE JOIN docs(match)` with docs as the non-preserved child (#27962);
+	//       * the ROW-PRESERVED child carries the outer query's WHERE MATCH, which filters the
+	//         preserved input BEFORE the outer join exactly as the WHERE did. `A LEFT JOIN B WHERE
+	//         match(A.x)` becomes `(A INNER JOIN A_ft) LEFT JOIN B`: A's matchers, null-extending B
+	//         where B is absent -- the row-preserving matcher with no partner is kept, not dropped.
+	//         This shape was unsupported and failed with 20105 (#20687).
+	//   - all other join types keep the conservative null-extending-only gate: ANTI/MARK/DEDUP
+	//     (filtering the anti/mark input is not a pure filter) and ASOF/ASOF_LEFT (filtering the
+	//     nearest-match input would change which row is "nearest") stay as before. FULL OUTER does
+	//     not exist in MO (its filters never reach a child scan), so it is not listed.
 	//
-	// Critically, applyIndices runs AFTER determineBuildAndProbeSide + swapJoinChildren, which
-	// can physically swap the children and convert LEFT->RIGHT (IsRightJoin) based on input-size
-	// statistics. So the non-preserved child is NOT a fixed index -- it is whatever
-	// nodeNullExtendsChild reports for the POST-SWAP shape (RIGHT -> child 0; right-swapped
-	// SINGLE -> child 0). Hard-coding child 1 made the fix stats-dependent: a swapped plan left
-	// the match unrewritten and failed with 20105 (#27952). The preserved child is never
-	// null-extending, so it stays untouched (TestFullTextJoinRewriteSkipsOuterJoins).
+	// Because both children of these outer joins are eligible, the rewrite is robust to
+	// determineBuildAndProbeSide + swapJoinChildren, which run BEFORE applyIndices and can physically
+	// swap the children and convert LEFT->RIGHT (IsRightJoin) by input-size stats: whichever physical
+	// index the match lands on is served (the earlier child-1 hard-coding was stats-dependent, #27952).
+	// The loop only rewrites a child that actually carries a fulltext filter (ok=false otherwise).
 	if joinNode == nil {
 		return false, nil
 	}
 	eligible := func(i int) bool {
 		switch joinNode.JoinType {
-		case plan.Node_INNER, plan.Node_SEMI:
+		case plan.Node_INNER, plan.Node_SEMI,
+			plan.Node_LEFT, plan.Node_RIGHT, plan.Node_SINGLE:
 			return true
 		default:
 			return nodeNullExtendsChild(joinNode, i)
