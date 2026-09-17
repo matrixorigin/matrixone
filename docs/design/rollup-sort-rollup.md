@@ -1,6 +1,6 @@
 # Sort-based ROLLUP design
 
-Status: design revision R1 is accepted for implementation; implementation and
+Status: design revision R1.1 is accepted for implementation; implementation and
 follow-up validation are complete. Independent implementation approval remains
 pending on the existing PR review lane.
 
@@ -57,6 +57,16 @@ count.
 - Implementation conformance: no production deviation from R1; the changed
   planner test and SQL case only make the planned path and its semantic oracle
   observable.
+- Clarification revision R1.1: the lifecycle wording below records the actual
+  admission boundary and the distinction between the COST contract and the
+  forced SORT experiment. It also records the rejected shared-materialization
+  alternative; these clarifications do not change the production design.
+- R1.1 consistency re-review: GPT-6 medium returned `PASS` for the corrected
+  working-tree document blob
+  `a385a406238b08dd8db5350b7eba96c2403d1228` (delegated session
+  `01a0ad87-7730-7b41-8c81-55c3533cc2a9`). It found no remaining design
+  blocker; this is an AI design-gate result, not independent human approval
+  or implementation-validation evidence.
 - Independent human approval remains `PENDING`; this record does not grant or
   substitute for it. Implementation validation and normal BVT comparison are
   recorded separately after the patch is tested.
@@ -234,8 +244,13 @@ The state estimate is admitted automatically only for aggregates with a fixed
 state contract whose arguments can be proven fixed-width by the isolated
 probe. DISTINCT and variable-cardinality
 aggregates such as `GROUP_CONCAT`, JSON/array aggregation, percentiles, and
-bitmap construction use the legacy hash path. The bound also includes hidden
-aggregates referenced by `HAVING` or `ORDER BY`, not only projected expressions.
+bitmap construction use the legacy hash path in `COST` mode. The bound also
+includes hidden aggregates referenced by `HAVING` or `ORDER BY`, not only
+projected expressions. The forced `SORT` mode is an explicit experimental
+override for plan validation and may admit an order-safe aggregate whose state
+does not have the automatic fixed-state proof; it is not a promise of bounded
+memory for such a query, and a runtime capacity failure is terminal rather than
+an implicit fallback to HASH.
 
 Automatic selection requires `SortCost < 0.80 * HashCost`. The probe binds the
 WHERE predicate on an isolated scan before reading `N`; unsupported predicates,
@@ -331,34 +346,49 @@ aggregate state.
 The streaming implementation uses one single-group aggregate executor per
 active ROLLUP prefix, one-row last-key vectors, and one bounded output batch.
 At a key boundary it flushes the finished prefixes, emits their grouping
-sentinels, and recreates those single-group executors. Its retained aggregate
-state is therefore proportional to the number of levels, not the total number
-of input groups. Complete key-runs use the aggregate API's single-group
-`BulkFill` after chunk-level capacity preflight, avoiding repeated group-id
-dispatch for a state that can only contain group 1. `agg_spill_mem` is resolved
-to the effective executor threshold before setup and is enforced against that
-bounded state; unordered
-input sorting remains responsible for its own workspace/spill limit.
-The capacity check includes retained aggregate/key vectors, last-key vectors,
-and per-input-batch group-id scratch; initialization, empty-input
-finalization, and every materialization boundary are checked. Exceeding it
-returns an OOM error and `Free` releases the partially built state. This is an
-explicit experimental boundary, not a claim of streaming spill support.
-Cancellation is checked before input and before output. Partial prepare or
-fill failure is terminal and `Free` owns cleanup. `EvalReset` is rejected for
-this fully-draining operator because resetting generic group state without
-resetting prefix IDs would be unsafe.
+sentinels, and recreates those single-group executors. For the automatically
+admitted fixed-state aggregates, retained state is therefore proportional to
+the number of levels, not the total number of input groups. Complete key-runs
+use the aggregate API's single-group `BulkFill` after chunk-level capacity
+preflight, avoiding repeated group-id dispatch for a state that can only
+contain group 1. `agg_spill_mem` is resolved to the effective executor
+threshold during preparation and is enforced against the resident state after
+input work and before output publication; unordered input sorting remains
+responsible for its own workspace/spill limit.
+
+`prepareSortRollup` allocates and structurally validates the state but
+deliberately does not perform a memory admission check. The first input chunk,
+empty-input finalization, and every output materialization call
+`checkSortRollupCapacity`; exceeding the threshold returns an OOM error before
+the output is published, and `Free` releases partially built state. This timing
+preserves the reusable `Prepare` contract and is the explicit experimental
+boundary, not a claim of streaming spill support. Forced `SORT` remains a
+plan-shape experiment and does not acquire the COST path's fixed-state proof.
+Cancellation is checked before input and before output. Partial prepare or fill
+failure is terminal and `Free` owns cleanup. The sort operator is fully
+draining, so its normal state transitions do not enter the legacy `EvalReset`
+branch; `callSortRollup` handles `End` directly. A caller that invents an
+`EvalReset` transition would be outside this operator contract and must be
+guarded explicitly if a future reuse path introduces one.
 
 ## Alternatives
 
 1. Keep the current hash/grouping-set rewrite. It is semantically mature and
    can execute branches concurrently, but it repeats scans and hash work.
-2. Use the implemented streaming rollup aggregate with recyclable per-prefix
-   aggregate states. It gives bounded state with the existing aggregate API;
-   an internal Sort is added only when no compatible input order is available.
-   The cost model selects it only when the estimated work has a safety margin;
+2. Materialize or spool one sorted input and feed that shared input to the
+   existing grouping-set branches. This removes repeated scans and child sorts,
+   but retains one aggregate state per grouping level, needs a second bounded
+   buffer/spool ownership protocol, and still duplicates aggregation work. It
+   is easier to compare with the status quo but has higher memory/disk,
+   backpressure, and distributed-lifecycle cost than the selected one-pass
+   operator, so it was rejected for this first version.
+3. Use the implemented streaming rollup aggregate with recyclable per-prefix
+   aggregate states. It gives bounded state for the automatically admitted
+   fixed-state aggregates with the existing aggregate API; an internal Sort is
+   added only when no compatible input order is available. The cost model
+   selects it only when the estimated work has a safety margin;
    `SET SESSION rollup_algorithm = 'SORT'` remains available for controlled
-   experiments.
+   experiments with the explicit capacity caveat above.
 
 ## Compatibility, rollout, and observability
 
