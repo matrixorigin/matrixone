@@ -6517,137 +6517,107 @@ func preparedParamUsesStringMathFunction(plan0 *Plan, position int) bool {
 	return found
 }
 
-// preparedExprUsesStringMathValueArg finds the nearest string-math function
-// containing position and checks that occurrence's argument role.  Looking at
-// every ancestor independently is incorrect for expressions such as
-// ABS(ROUND(1, ?)): the outer ABS consumes the ROUND result as a value, but
-// the marker itself is ROUND's precision and must not be rebound through the
-// permissive DOUBLE source.  A nested string-math occurrence therefore owns
-// the marker's role; non-string-math wrappers are transparent.
+// preparedExprUsesStringMathValueArg finds a string-math value occurrence for
+// position. Numeric roles cross only function arguments whose domain is
+// explicitly known; a string-domain or unknown function resets the inherited
+// role while still allowing an independently nested math owner to be found.
 func preparedExprUsesStringMathValueArg(expr *plan.Expr, position int) bool {
+	return preparedExprUsesStringMathValueArgWithRole(
+		expr, position, preparedStringMathRoleNone)
+}
+
+func preparedExprUsesStringMathValueArgWithRole(
+	expr *plan.Expr,
+	position int,
+	role preparedStringMathRole,
+) bool {
 	if expr == nil {
 		return false
 	}
 	if param := expr.GetP(); param != nil {
-		return false
+		return int(param.Pos) == position && role == preparedStringMathRoleValue
 	}
-	if literal := expr.GetLit(); literal != nil &&
-		preparedExprUsesStringMathValueArg(literal.Src, position) {
-		return true
+	if literal := expr.GetLit(); literal != nil {
+		if preparedExprUsesStringMathValueArgWithRole(literal.Src, position, role) {
+			return true
+		}
 	}
 	if fn := expr.GetF(); fn != nil {
 		name := ""
 		if fn.Func != nil {
 			name = fn.Func.GetObjName()
 		}
-		if isPreparedStringMathFunction(name) {
-			for index, arg := range fn.Args {
-				if !exprContainsPreparedPosition(arg, position) {
-					continue
-				}
-				// A nested string-math function is the nearest role owner for
-				// any marker below it. Do not let this ancestor override it.
-				if preparedExprContainsStringMathFunction(arg, position) {
-					if preparedExprUsesStringMathValueArg(arg, position) {
-						return true
+		for index, arg := range fn.Args {
+			childRole := preparedStringMathRoleNone
+			if role == preparedStringMathRoleNone {
+				// With no inherited role, ordinary wrappers cannot leak a role.
+				// Avoid running the full ownership classifier for every argument in
+				// large no-match trees; only string-math functions establish a new
+				// role at this point.
+				if isPreparedStringMathFunction(name) {
+					if preparedStringMathFunctionValueArg(name, index, len(fn.Args)) {
+						childRole = preparedStringMathRoleValue
+					} else {
+						childRole = preparedStringMathRoleControl
 					}
-					continue
 				}
-				return preparedStringMathFunctionValueArg(name, index, len(fn.Args))
+			} else {
+				var ownsRole bool
+				childRole, ownsRole = preparedNumericFunctionArgRole(expr, index, role)
+				if !ownsRole {
+					// This argument is outside the current numeric function's proven
+					// value domain. Continue searching for a deeper independent
+					// string-math owner without inheriting this ancestor's role.
+					childRole = preparedStringMathRoleNone
+				}
 			}
-			return false
-		}
-		for _, arg := range fn.Args {
-			if preparedExprUsesStringMathValueArg(arg, position) {
+			if preparedExprUsesStringMathValueArgWithRole(arg, position, childRole) {
 				return true
 			}
 		}
 	}
 	if list := expr.GetList(); list != nil {
 		for _, item := range list.List {
-			if preparedExprUsesStringMathValueArg(item, position) {
+			// A list is a multi-value container, not a scalar numeric-result
+			// function. Search its members for their own string-math owners, but
+			// do not lend an enclosing scalar role to a bare member.
+			if preparedExprUsesStringMathValueArgWithRole(item, position, preparedStringMathRoleNone) {
 				return true
 			}
 		}
 	}
+	// A scalar subquery's child is its single value expression, so the enclosing
+	// numeric role can reach that result. Function arguments inside the child
+	// still have to prove their own value-domain ownership above.
 	if sub := expr.GetSub(); sub != nil &&
-		preparedExprUsesStringMathValueArg(sub.Child, position) {
+		preparedExprUsesStringMathValueArgWithRole(sub.Child, position, role) {
 		return true
 	}
 	if window := expr.GetW(); window != nil {
-		if preparedExprUsesStringMathValueArg(window.WindowFunc, position) {
+		// Only WindowFunc contributes the window expression's scalar value.
+		// Partition/order/frame expressions are independent controls and can
+		// contain their own math owners, but never inherit the outer value role.
+		if preparedExprUsesStringMathValueArgWithRole(window.WindowFunc, position, role) {
 			return true
 		}
 		for _, arg := range window.PartitionBy {
-			if preparedExprUsesStringMathValueArg(arg, position) {
+			if preparedExprUsesStringMathValueArgWithRole(arg, position, preparedStringMathRoleNone) {
 				return true
 			}
 		}
 		for _, order := range window.OrderBy {
-			if order != nil && preparedExprUsesStringMathValueArg(order.Expr, position) {
+			if order != nil && preparedExprUsesStringMathValueArgWithRole(
+				order.Expr, position, preparedStringMathRoleNone) {
 				return true
 			}
 		}
 		if window.Frame != nil {
-			if window.Frame.Start != nil && preparedExprUsesStringMathValueArg(window.Frame.Start.Val, position) {
+			if window.Frame.Start != nil && preparedExprUsesStringMathValueArgWithRole(
+				window.Frame.Start.Val, position, preparedStringMathRoleNone) {
 				return true
 			}
-			if window.Frame.End != nil && preparedExprUsesStringMathValueArg(window.Frame.End.Val, position) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-func preparedExprContainsStringMathFunction(expr *plan.Expr, position int) bool {
-	if expr == nil || !exprContainsPreparedPosition(expr, position) {
-		return false
-	}
-	if fn := expr.GetF(); fn != nil {
-		if fn.Func != nil && isPreparedStringMathFunction(fn.Func.GetObjName()) {
-			return true
-		}
-		for _, arg := range fn.Args {
-			if preparedExprContainsStringMathFunction(arg, position) {
-				return true
-			}
-		}
-	}
-	if literal := expr.GetLit(); literal != nil &&
-		preparedExprContainsStringMathFunction(literal.Src, position) {
-		return true
-	}
-	if list := expr.GetList(); list != nil {
-		for _, item := range list.List {
-			if preparedExprContainsStringMathFunction(item, position) {
-				return true
-			}
-		}
-	}
-	if sub := expr.GetSub(); sub != nil &&
-		preparedExprContainsStringMathFunction(sub.Child, position) {
-		return true
-	}
-	if window := expr.GetW(); window != nil {
-		if preparedExprContainsStringMathFunction(window.WindowFunc, position) {
-			return true
-		}
-		for _, arg := range window.PartitionBy {
-			if preparedExprContainsStringMathFunction(arg, position) {
-				return true
-			}
-		}
-		for _, order := range window.OrderBy {
-			if order != nil && preparedExprContainsStringMathFunction(order.Expr, position) {
-				return true
-			}
-		}
-		if window.Frame != nil {
-			if window.Frame.Start != nil && preparedExprContainsStringMathFunction(window.Frame.Start.Val, position) {
-				return true
-			}
-			if window.Frame.End != nil && preparedExprContainsStringMathFunction(window.Frame.End.Val, position) {
+			if window.Frame.End != nil && preparedExprUsesStringMathValueArgWithRole(
+				window.Frame.End.Val, position, preparedStringMathRoleNone) {
 				return true
 			}
 		}

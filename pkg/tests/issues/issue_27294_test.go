@@ -44,6 +44,10 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 			"dump:111@tcp(127.0.0.1:%d)/?interpolateParams=false", port))
 		require.NoError(t, err)
 		defer db.Close()
+		// Keep all session-level setup and prepared statements on one COM_STMT
+		// connection. In particular, USE and sql_mode must remain paired with
+		// the statement being exercised below.
+		db.SetMaxOpenConns(1)
 		_, err = db.ExecContext(ctx, "drop database if exists issue_27294_numeric_db")
 		require.NoError(t, err)
 		_, err = db.ExecContext(ctx, "create database issue_27294_numeric_db")
@@ -210,6 +214,127 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 		require.NoError(t, nestedArithmetic.QueryRowContext(
 			ctx, int64(-9007199254740993)).Scan(&nestedArithmeticResult))
 		require.Equal(t, int64(9007199254740993), nestedArithmeticResult)
+
+		queryPreparedNumeric := func(t *testing.T, query string, args ...any) (float64, error) {
+			t.Helper()
+			stmt, err := db.PrepareContext(ctx, query)
+			require.NoError(t, err, query)
+			defer func() { require.NoError(t, stmt.Close()) }()
+			var result float64
+			err = stmt.QueryRowContext(ctx, args...).Scan(&result)
+			return result, err
+		}
+
+		// A numeric-prefix math source is only correct in MySQL-compatible mode.
+		// Pin the connection so SET sql_mode and COM_STMT_EXECUTE use the same
+		// session, and reuse the statement across mode changes to cover plan cache
+		// invalidation as well as the runtime cast contract.
+		modeConn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		var originalSQLMode string
+		require.NoError(t, modeConn.QueryRowContext(ctx, "select @@sql_mode").Scan(&originalSQLMode))
+		_, err = modeConn.ExecContext(ctx, "use issue_27294_numeric_db")
+		require.NoError(t, err)
+		modeConnClosed := false
+		defer func() {
+			if modeConnClosed {
+				return
+			}
+			_, restoreErr := modeConn.ExecContext(context.Background(), fmt.Sprintf(
+				"set session sql_mode = '%s'", strings.ReplaceAll(originalSQLMode, "'", "''")))
+			if restoreErr != nil {
+				t.Errorf("restore sql_mode: %v", restoreErr)
+			}
+			if closeErr := modeConn.Close(); closeErr != nil {
+				t.Errorf("close pinned sql_mode connection: %v", closeErr)
+			}
+		}()
+		prefixModeStmt, err := modeConn.PrepareContext(ctx, "select abs(? + 0)")
+		require.NoError(t, err)
+		defer prefixModeStmt.Close()
+		_, err = modeConn.ExecContext(ctx, "set session sql_mode = 'STRICT_TRANS_TABLES'")
+		require.NoError(t, err)
+		var literalCastResult float64
+		require.NoError(t, modeConn.QueryRowContext(ctx,
+			"select abs(cast(concat('1', '01') as char))").Scan(&literalCastResult))
+		require.Equal(t, float64(101), literalCastResult,
+			"the explicit-cast regression oracle is the ordinary literal SQL result")
+		var prefixModeResult float64
+		require.NoError(t, prefixModeStmt.QueryRowContext(ctx, "1.5tail").Scan(&prefixModeResult))
+		require.Equal(t, float64(1.5), prefixModeResult,
+			"MySQL-compatible mode consumes the numeric prefix for a string-math value")
+		nestedLength, err := modeConn.PrepareContext(ctx, "select length(abs(?))")
+		require.NoError(t, err)
+		var nestedLengthResult float64
+		require.NoError(t, nestedLength.QueryRowContext(ctx, "1.5tail").Scan(&nestedLengthResult))
+		require.Equal(t, float64(3), nestedLengthResult,
+			"LENGTH must preserve the independently nested ABS owner")
+		require.NoError(t, nestedLength.Close())
+		_, err = modeConn.ExecContext(ctx,
+			"set session sql_mode = 'STRICT_TRANS_TABLES,MATRIXONE_NATIVE'")
+		require.NoError(t, err)
+		err = prefixModeStmt.QueryRowContext(ctx, "1.5tail").Scan(&prefixModeResult)
+		require.Error(t, err,
+			"MATRIXONE_NATIVE must reject trailing text instead of consuming a numeric prefix")
+		_, err = modeConn.ExecContext(ctx, "set session sql_mode = 'STRICT_TRANS_TABLES'")
+		require.NoError(t, err)
+		require.NoError(t, prefixModeStmt.QueryRowContext(ctx, "1.5tail").Scan(&prefixModeResult))
+		require.Equal(t, float64(1.5), prefixModeResult,
+			"returning to MySQL-compatible mode must restore prefix behavior on the cached statement")
+		_, err = modeConn.ExecContext(ctx, fmt.Sprintf(
+			"set session sql_mode = '%s'", strings.ReplaceAll(originalSQLMode, "'", "''")))
+		require.NoError(t, err)
+		require.NoError(t, modeConn.Close())
+		modeConnClosed = true
+
+		// Numeric-prefix candidates are only an eligibility superset. An outer
+		// math owner must not rewrite text-domain arguments before LENGTH,
+		// CONCAT, or REPLACE consumes them.
+		for _, test := range []struct {
+			name  string
+			query string
+			args  []any
+			want  float64
+		}{
+			{
+				name:  "numeric-return string argument",
+				query: "select abs(length(?))",
+				args:  []any{"abc"},
+				want:  3,
+			},
+			{
+				name:  "round outside concat",
+				query: "select round(concat('1', ?), ?)",
+				args:  []any{"01", int64(0)},
+				want:  101,
+			},
+			{
+				name:  "abs outside replace",
+				query: "select abs(replace('11', '1', ?))",
+				args:  []any{"01"},
+				want:  101,
+			},
+		} {
+			t.Run("string-domain boundary/"+test.name, func(t *testing.T) {
+				got, err := queryPreparedNumeric(t, test.query, test.args...)
+				require.NoError(t, err, test.query)
+				require.Equal(t, test.want, got, test.query)
+			})
+		}
+
+		// These controls ensure a boundary fix does not suppress the nearest
+		// ROUND precision contract or explicit CAST's text-preserving subtree.
+		t.Run("numeric-owner control/nested round precision remains owned", func(t *testing.T) {
+			_, err := queryPreparedNumeric(t, "select abs(round(1, ?))", "0.5tail")
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "bad value 0.5tail")
+		})
+		t.Run("numeric-owner control/explicit cast remains explicit", func(t *testing.T) {
+			got, err := queryPreparedNumeric(t,
+				"select abs(cast(concat('1', ?) as char))", "01")
+			require.NoError(t, err)
+			require.Equal(t, float64(101), got)
+		})
 
 		multiMarker, err := db.PrepareContext(ctx, "select abs(? + ?)")
 		require.NoError(t, err)

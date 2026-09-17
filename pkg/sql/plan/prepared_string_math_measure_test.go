@@ -165,6 +165,29 @@ func benchmarkStringMathRoleCases() []struct {
 			want: []bool{false},
 		},
 		{
+			name: "outer-abs-does-not-own-length-argument",
+			plan: benchmarkStringMathOwnerPlan(benchmarkStringMathBind("abs", []*planpb.Expr{
+				benchmarkStringMathBind("length", []*planpb.Expr{benchmarkStringMathParam(0)}),
+			})),
+			want: []bool{false},
+		},
+		{
+			name: "nested-abs-owner-through-length",
+			plan: benchmarkStringMathOwnerPlan(benchmarkStringMathBind("length", []*planpb.Expr{
+				benchmarkStringMathBind("abs", []*planpb.Expr{benchmarkStringMathParam(0)}),
+			})),
+			want: []bool{true},
+		},
+		{
+			name: "outer-round-does-not-own-concat-argument",
+			plan: benchmarkStringMathOwnerPlan(benchmarkStringMathBind("round", []*planpb.Expr{
+				benchmarkStringMathBind("concat", []*planpb.Expr{
+					benchmarkStringMathTextLiteral("1"), benchmarkStringMathParam(0),
+				}), benchmarkStringMathIntLiteral(0),
+			})),
+			want: []bool{false},
+		},
+		{
 			name: "no-match-deep-p8-d8-n128",
 			plan: benchmarkStringMathPlan(8, 8, 128, false, true),
 			want: []bool{false, false, false, false, false, false, false, false},
@@ -220,6 +243,68 @@ func TestPreparedStringMathRoleDiscoveryAcrossExpressionContainers(t *testing.T)
 			want: map[int]bool{2: true, 3: false, -1: false},
 		},
 		{
+			name: "outer-math-does-not-own-through-length",
+			expr: stringMath("abs", stringMath("length", position(13))),
+			want: map[int]bool{13: false},
+		},
+		{
+			name: "nested-owner-through-length",
+			expr: stringMath("length", stringMath("abs", position(14))),
+			want: map[int]bool{14: true},
+		},
+		{
+			name: "outer-math-does-not-own-through-concat",
+			expr: stringMath("round",
+				stringMath("concat", benchmarkStringMathTextLiteral("1"), position(15)),
+				benchmarkStringMathIntLiteral(0)),
+			want: map[int]bool{15: false},
+		},
+		{
+			name: "outer-math-does-not-own-list-members",
+			expr: stringMath("abs", list(position(16))),
+			want: map[int]bool{16: false},
+		},
+		{
+			name: "nested-owner-in-list-remains-discoverable",
+			expr: stringMath("abs", list(stringMath("abs", position(17)))),
+			want: map[int]bool{17: true},
+		},
+		{
+			name: "window-value-and-controls-have-separate-roles",
+			expr: stringMath("abs", &planpb.Expr{Expr: &planpb.Expr_W{W: &planpb.WindowSpec{
+				WindowFunc: stringMath("abs", position(18)),
+				PartitionBy: []*planpb.Expr{
+					position(19),
+					stringMath("abs", position(20)),
+				},
+				OrderBy: []*planpb.OrderBySpec{{Expr: position(21)}},
+				Frame: &planpb.FrameClause{Start: &planpb.FrameBound{
+					Type: planpb.FrameBound_PRECEDING,
+					Val:  position(22),
+				}},
+			}}}),
+			want: map[int]bool{18: true, 19: false, 20: true, 21: false, 22: false},
+		},
+		{
+			name: "planner-bound-implicit-cast",
+			expr: benchmarkStringMathBind("abs", []*planpb.Expr{position(23)}),
+			want: map[int]bool{23: true},
+		},
+		{
+			name: "planner-bound-inner-owner-through-length",
+			expr: benchmarkStringMathBind("length", []*planpb.Expr{
+				benchmarkStringMathBind("abs", []*planpb.Expr{position(14)}),
+			}),
+			want: map[int]bool{14: true},
+		},
+		{
+			name: "planner-bound-length-domain-boundary",
+			expr: benchmarkStringMathBind("abs", []*planpb.Expr{
+				benchmarkStringMathBind("length", []*planpb.Expr{position(25)}),
+			}),
+			want: map[int]bool{25: false},
+		},
+		{
 			name: "literal-source",
 			expr: stringMath("round", benchmarkStringMathDecimalColumn(), &planpb.Expr{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Src: stringMath("coalesce",
 				stringMath("abs", position(11)),
@@ -272,6 +357,96 @@ func TestPreparedStringMathRoleDiscoveryAcrossExpressionContainers(t *testing.T)
 			}
 		})
 	}
+}
+
+func TestPreparedNumericRebindingStopsAtNonNumericFunctionArguments(t *testing.T) {
+	param := benchmarkStringMathParam(0)
+	positions := map[int32]struct{}{0: {}}
+	rule := NewResetParamRefRule(context.Background(), []*planpb.Expr{
+		benchmarkStringMathTextLiteral("01"),
+	})
+	// The outer deferred numeric owner has an eligible position and has already
+	// produced this text-preserving CONCAT occurrence. Neither a permissive
+	// string-math value role nor role=None may rewrite the marker inside CONCAT.
+	rule.sqlExecuteStringMathParams = []*planpb.Expr{makePlan2Float64ConstExprWithType(1)}
+
+	for _, role := range []struct {
+		name string
+		role preparedStringMathRole
+	}{
+		{name: "outer value role", role: preparedStringMathRoleValue},
+		{name: "fallback role none", role: preparedStringMathRoleNone},
+	} {
+		t.Run(role.name, func(t *testing.T) {
+			expr := benchmarkStringMathBind("concat", []*planpb.Expr{
+				benchmarkStringMathTextLiteral("1"), param,
+			})
+			bound := benchmarkStringMathBind("concat", []*planpb.Expr{
+				benchmarkStringMathTextLiteral("1"), benchmarkStringMathTextLiteral("01"),
+			})
+			got, changed, err := rule.rebindPreparedNumericExprWithRole(
+				expr, bound, positions, role.role)
+			if err != nil {
+				t.Fatalf("rebind returned an error across CONCAT: %v", err)
+			}
+			if changed {
+				t.Fatalf("rebind crossed CONCAT argument boundary; got %v", got)
+			}
+			if got != bound {
+				t.Fatal("unchanged nonnumeric occurrence did not preserve its bound wrapper")
+			}
+		})
+	}
+	t.Run("list wrapper is preserved", func(t *testing.T) {
+		expr := &planpb.Expr{Expr: &planpb.Expr_List{List: &planpb.ExprList{
+			List: []*planpb.Expr{param},
+		}}}
+		bound := &planpb.Expr{Expr: &planpb.Expr_List{List: &planpb.ExprList{
+			List: []*planpb.Expr{benchmarkStringMathTextLiteral("01")},
+		}}}
+		got, changed, err := rule.rebindPreparedNumericExprWithRole(
+			expr, bound, positions, preparedStringMathRoleValue)
+		if err != nil {
+			t.Fatalf("rebind returned an error across a list wrapper: %v", err)
+		}
+		if changed || got != bound {
+			t.Fatalf("rebind changed the non-scalar list occurrence: changed=%v got=%v", changed, got)
+		}
+	})
+	t.Run("window wrapper preserves bound controls", func(t *testing.T) {
+		boundParam := benchmarkStringMathTextLiteral("01")
+		expr := &planpb.Expr{Expr: &planpb.Expr_W{W: &planpb.WindowSpec{
+			WindowFunc:  benchmarkStringMathBind("abs", []*planpb.Expr{param}),
+			PartitionBy: []*planpb.Expr{param},
+			OrderBy:     []*planpb.OrderBySpec{{Expr: param}},
+			Frame: &planpb.FrameClause{Start: &planpb.FrameBound{
+				Type: planpb.FrameBound_PRECEDING,
+				Val:  param,
+			}},
+		}}}
+		bound := &planpb.Expr{Expr: &planpb.Expr_W{W: &planpb.WindowSpec{
+			WindowFunc:  benchmarkStringMathBind("abs", []*planpb.Expr{boundParam}),
+			PartitionBy: []*planpb.Expr{boundParam},
+			OrderBy:     []*planpb.OrderBySpec{{Expr: boundParam}},
+			Frame: &planpb.FrameClause{Start: &planpb.FrameBound{
+				Type: planpb.FrameBound_PRECEDING,
+				Val:  boundParam,
+			}},
+		}}}
+		got, changed, err := rule.rebindPreparedNumericExprWithRole(
+			expr, bound, positions, preparedStringMathRoleValue)
+		if err != nil {
+			t.Fatalf("rebind returned an error across a window wrapper: %v", err)
+		}
+		if changed || got != bound {
+			t.Fatalf("rebind changed the bound window/control subtree: changed=%v got=%v", changed, got)
+		}
+		window := got.GetW()
+		if window.PartitionBy[0] != boundParam || window.OrderBy[0].Expr != boundParam ||
+			window.Frame.Start.Val != boundParam {
+			t.Fatal("window partition/order/frame did not retain the already-bound text marker")
+		}
+	})
 }
 
 func benchmarkStringMathValues(params int, enabled bool) []any {

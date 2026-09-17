@@ -1,7 +1,7 @@
 # PR #28523: String Math Numeric Coercion and Prepared-Parameter Roles
 
 - Status: Draft / awaiting maintainer approval
-- Design revision: 7
+- Design revision: 8
 - Issue: [#28487](https://github.com/matrixorigin/matrixone/issues/28487)
 - Implementation PR: [#28523](https://github.com/matrixorigin/matrixone/pull/28523)
 - Current upstream main base: `24e66eba121c781c29998ff2611db11335e3028c`
@@ -11,9 +11,9 @@
   `b717729c7e1b0cc33d808f271f3211e8d6028f37`. The original 16 PR commits
   plus one test/documentation follow-up were replayed onto main
   `24e66eba121c781c29998ff2611db11335e3028c` in a clean detached worktree;
-  all 17 commits applied without conflicts. The source/test snapshot before
-  this design-record update, with the design file at its original PR contents,
-  is `1e363305ec142410f5f9e95c803d8e0db18f5127`.
+  all 17 commits applied without conflicts. The revision-8 source/test
+  snapshot before this design-record update, retaining the previous design
+  record in the tree, is `cd4072a5ce7bb760e9545a09faafb490b2564964`.
 - The initial rebase had two shared paths with main since the historical
   base, `pkg/sql/plan/base_binder.go` and `pkg/sql/plan/utils.go`; both applied
   cleanly. The `4c31142` to `a3ede72` delta added 18 paths and the subsequent
@@ -122,7 +122,39 @@ Only value arguments may use the permissive string-to-`DOUBLE` source. The
 - an expression such as `ROUND(x, ? + 0)` follows its own arithmetic contract
   and is not treated as a bare precision marker.
 
-### 2.3 Compatibility mode, binary provenance, and warnings
+### 2.3 Numeric occurrence ownership boundaries
+
+Numeric conversion is owned by a particular argument occurrence, not by the
+parameter position or by any ancestor that happens to return a number. A
+prepared parameter may use the permissive string-to-`DOUBLE` source only when
+the complete expression path from a string-math value argument to that
+occurrence proves the argument belongs to the same numeric result domain.
+Numeric return type alone is not such proof: `LENGTH` returns a number but
+consumes a string, and `CONCAT`/`REPLACE` preserve text semantics.
+
+| Expression edge | Source discovery | Execute-time rebinding |
+| --- | --- | --- |
+| Known numeric function/value argument | Carry the nearest value/control role selected by the shared role classifier | Rebind only the occurrence whose argument contract proves ownership |
+| Unknown or string-domain function argument | Reset inherited role, but continue looking for an independently nested string-math owner | Preserve the already-bound child subtree; `role=None` alone is not sufficient because a full numeric-looking text such as `"01"` can still be converted |
+| Implicit prepared cast | Carry role through its non-explicit source envelope | Rebind through the provisional cast |
+| SQL-authored explicit `CAST` | Stop inherited source discovery | Preserve the current bound CAST/source subtree |
+| Scalar-subquery child | Carry a role to its single scalar result; function edges inside still enforce their own contracts | Preserve the subquery wrapper while refreshing only an independently owned child |
+| List member | Reset inherited role; search each member for its own nested owner | Under inherited string-math Value/Control role, preserve the bound list; direct role-none integer/decimal fallback retains existing per-item rebinding; `ApplyExpr` has already visited members |
+| Window value (`WindowFunc`) | Carry the scalar result role | Preserve the bound window wrapper while independently visited owners specialize |
+| Window partition/order/frame | Reset inherited role because these are controls, not the scalar window result | Preserve the bound control subtree |
+
+The numeric-position collectors intentionally remain conservative eligibility
+supersets; occurrence rebinding is the authority that prevents a candidate
+position from crossing a domain boundary. The shared semantic classifier is
+used by source discovery and rebinding, while a no-inherited-role discovery
+fast path establishes roles only at string-math functions and avoids
+classifying every ordinary argument. Consequently `ABS(LENGTH(?))` must not
+apply the outer ABS numeric-prefix conversion to the parameter, whereas
+`LENGTH(ABS(?))` still discovers and specializes the inner ABS independently.
+List and window control containers likewise must not inherit a scalar owner's
+role, but nested owners inside them remain discoverable through `ApplyExpr`.
+
+### 2.4 Compatibility mode, binary provenance, and warnings
 
 The latest review feedback (review `5214666396`, comment `5687377735`) makes
 the mode boundary explicit: a character value with a suffix such as
@@ -151,7 +183,7 @@ binary value (49), not as character text (`'1'`). Ordinary binary string types
 and HEX/BIT literal provenance are distinct. Rebinding, deep-copy, and
 parameter-restoration paths must preserve the marker that affects this result.
 
-### 2.4 Overload and mixed-version safety
+### 2.5 Overload and mixed-version safety
 
 The implementation reuses existing numeric overload identities and existing
 warning-aware/binary-aware casts instead of introducing new serialized string
@@ -197,10 +229,10 @@ such proof is part of this change. Maintainer acceptance of this trade-off
 remains pending.
 
 Execute-time source discovery scans the plan for each parameter. With `P`
-parameters, `N` expression nodes, and nesting depth `D`, the expected cost is
-at least `O(P*N)` and can approach `O(P*N*D)` (or `O(P*N^2)` for repeated deep
-subtree checks). Source arrays are `O(P)`, while traversal state follows
-expression depth. The implementation does not claim zero specialization cost.
+parameters and `N` expression nodes, the current traversal is `O(P*N)`; it no
+longer performs a separate descendant-position scan at every function edge.
+Source arrays are `O(P)`, while traversal state follows expression depth. The
+implementation does not claim zero specialization cost.
 
 Historical revision-4 measurement (Apple M1, macOS arm64, Go 1.27.0; one CPU;
 `-benchtime=1s -count=5`) used reproducible benchmark commands. It predates the
@@ -251,6 +283,40 @@ five-sample median is recorded above and all eight expected `false` results are
 asserted before timing. The generic specialization rows include the existing
 comparison/common-type plan shapes; they are a rebinding baseline, not a claim
 that every string-math executor has identical cost.
+
+Revision-8 candidate source-discovery measurement (2026-09-17, Darwin/arm64,
+Apple M1; the wrapper's default benchmark duration and CPU count; three
+samples) used:
+
+```text
+.agents/skills/mo-dev/scripts/mo-cgo-test -run '^$' -bench '^BenchmarkPreparedStringMathRoleDiscovery$' -benchmem -count=3 ./pkg/sql/plan
+```
+
+The command exited 0 in 40.514s. All samples reported `0 B/op` and
+`0 allocs/op`; the raw `ns/op` samples were:
+
+| Path/case | Sample 1 | Sample 2 | Sample 3 |
+| --- | ---: | ---: | ---: |
+| ABS value P1 | 2,694 | 2,724 | 2,691 |
+| ROUND control P1 | 2,729 | 2,732 | 2,735 |
+| ABS(ROUND precision) P1 | 2,782 | 2,792 | 2,795 |
+| ROUND(ABS value) P1 | 2,777 | 2,785 | 2,930 |
+| CONCAT no-match P1 | 2,696 | 2,706 | 2,689 |
+| ABS does not own LENGTH argument P1 | 2,727 | 2,714 | 2,743 |
+| nested ABS owner through LENGTH P1 | 2,721 | 2,713 | 2,768 |
+| ROUND does not own CONCAT argument P1 | 2,820 | 2,819 | 2,811 |
+| deep no-match P8/D8/N128 | 50,159 | 49,923 | 49,883 |
+| mixed roles P5/N128 | 23,484 | 23,443 | 23,460 |
+
+The no-match deep case is about 11.6% slower than the immediately preceding
+per-edge descendant-scan diagnostic (44,734/44,629/45,062 ns/op); that earlier
+command failed overall because three benchmark fixtures queried position 0
+while their markers were at positions 13–15, although the no-match case itself
+passed. Revision 8 corrected those benchmark positions and added the
+no-inherited-role fast path. The current run is the valid all-cases-passing
+candidate measurement; the modest no-match delta remains visible for review
+rather than being presented as an improvement. No one-pass role cache or
+cross-execution cache is introduced.
 
 The specialization rows include `DeepCopyPlan` and the complete rebinding
 walk, so they are end-to-end execute-copy costs rather than scan-only costs.
@@ -658,19 +724,97 @@ Known limitations: strict string precision behavior is intentionally not a
 claim of full MySQL integer-prefix compatibility; upgrade/downgrade topology
 and unrelated historical behavior such as FLOOR(NULL) are outside this scope.
 
+## Current owner-boundary implementation evidence (revision 8)
+
+This evidence applies to the isolated exact-rebase worktree with Git HEAD
+`273d00ea06bd634dee4ab382d2153ba0fbe6bdc1` on integration base
+`24e66eba121c781c29998ff2611db11335e3028c` (main tree
+`b717729c7e1b0cc33d808f271f3211e8d6028f37`). The source/test tree before this
+documentation-only update is `cd4072a5ce7bb760e9545a09faafb490b2564964`.
+This is a local implementation and validation record, not CI or maintainer
+approval.
+
+Before the production change, the focused planner tests failed with concrete
+ownership violations:
+
+```text
+.agents/skills/mo-dev/scripts/mo-cgo-test -count=1 ./pkg/sql/plan -run '^(TestPreparedStringMathRoleDiscoveryAcrossExpressionContainers|TestPreparedNumericRebindingStopsAtNonNumericFunctionArguments)$'
+```
+
+`outer-math-does-not-own-through-length` reported position 13 wanted false,
+got true; `outer-math-does-not-own-through-concat` reported position 15 wanted
+false, got true. The rebinding counterexample also showed both a permissive
+value role and `role=None` rewriting the already-bound CONCAT marker instead
+of preserving its text wrapper.
+
+The public COM_STMT fixture also failed before the fix:
+
+```text
+.agents/skills/mo-dev/scripts/mo-cgo-test -count=1 ./pkg/tests/issues -run '^TestIssue27294PreparedNumericOverloads$'
+```
+
+The prepared query `ABS(LENGTH(?))` with `"abc"` returned 1 instead of 3;
+`ABS(REPLACE('11','1',?))` with `"01"` returned 11 instead of 101; and
+`ABS(CAST(CONCAT('1', ?) AS CHAR))` returned 1011 instead of 101. The ordinary
+literal SQL oracle `select abs(cast(concat('1', '01') as char))` returned 101.
+`ROUND(CONCAT('1', ?), ?)` with `"01", 0` returned the expected 101 before
+and after the change; it is retained as a passing control, not claimed as a
+reproduced defect.
+
+The fix applies the same argument-ownership classifier to source discovery
+and execute-time rebinding. Unproven function edges reset discovery role and
+preserve the already-bound subtree at rebinding; list members and window
+controls do not inherit scalar result roles, while `ApplyExpr` independently
+visits nested owners. Planner-bound implicit casts, scalar-subquery result
+edges, explicit CAST boundaries, list-role isolation, and preservation of
+window partition/order/frame markers under an inherited value role are covered
+by the plan tests. The bounded verification commands passed:
+
+```text
+.agents/skills/mo-dev/scripts/mo-cgo-test -count=1 ./pkg/sql/plan -run '^(TestPreparedStringMathRoleDiscoveryAcrossExpressionContainers|TestPreparedNumericRebindingStopsAtNonNumericFunctionArguments)$'
+.agents/skills/mo-dev/scripts/mo-cgo-test -count=1 -timeout=600s ./pkg/sql/plan
+.agents/skills/mo-dev/scripts/mo-cgo-test -count=1 ./pkg/tests/issues -run '^TestIssue27294PreparedNumericOverloads$'
+gofmt -d pkg/sql/plan/prepared_string_math_measure_test.go pkg/sql/plan/utils.go pkg/sql/plan/visit_plan_rule.go pkg/tests/issues/issue_27294_test.go
+git diff --check
+```
+
+The focused CGo planner command exited 0 (`pkg/sql/plan`, 1.636s); the full
+`pkg/sql/plan` CGo suite exited 0 in 5.810s; the final public COM_STMT command
+exited 0 (`pkg/tests/issues`, 13.675s). `gofmt -d` produced no output and
+`git diff --check` passed. Public assertions include the three
+semantic regressions and literal oracle above, MySQL/native `"1.5tail"`
+behavior on the same prepared template, nested `LENGTH(ABS(?))`, precision
+control ownership, explicit CAST preservation, and the passing ROUND/CONCAT
+control.
+
+The corrected role-discovery benchmark command and raw samples are recorded in
+Section 4. In summary, it exited 0 and all ten cases passed; the deep
+no-match P8/D8/N128 case measured 50,159/49,923/49,883 ns/op with zero
+allocations. The earlier per-edge descendant-scan diagnostic measured
+44,734/44,629/45,062 ns/op for that case but failed overall because three
+benchmark fixtures queried position 0 while storing markers at 13–15. The
+current benchmark fixtures were corrected and the modest timing difference is
+reported transparently above. This is a narrow source-discovery diagnostic;
+it does not establish the PR-wide merged changed-line coverage gate.
+
+No current GitHub CI, distributed BVT, or PR-wide coverage-gate pass is
+claimed here. The historical CI failure/timeout remains historical and is not
+attributed to this implementation without a reproduction. Maintainer design
+approval remains pending.
+
 ## 7. Approval record
 
 ```text
 Design path: docs/design/pr28523-string-math-coercion.md
-Design revision: 7
-Candidate source inputs: PR d27667a4936e813fb612de6cd245be03a2d6f101 (tree d02aa9a8b2c219b7767b9793c700287ecfc24c0b), rebased as 16 commits plus one test/documentation follow-up onto main 24e66eba121c781c29998ff2611db11335e3028c (tree b717729c7e1b0cc33d808f271f3211e8d6028f37); exact clean-rebase source/test validation is recorded above
+Design revision: 8
+Candidate source inputs: PR d27667a4936e813fb612de6cd245be03a2d6f101 (tree d02aa9a8b2c219b7767b9793c700287ecfc24c0b), rebased as 16 commits plus one test/documentation follow-up onto main 24e66eba121c781c29998ff2611db11335e3028c (tree b717729c7e1b0cc33d808f271f3211e8d6028f37); revision-8 source/test snapshot cd4072a5ce7bb760e9545a09faafb490b2564964 and local owner-boundary validation are recorded above
 Integration base: 24e66eba121c781c29998ff2611db11335e3028c (tree b717729c7e1b0cc33d808f271f3211e8d6028f37)
 Scope/trigger: PR reviews 5199052257, 5214666396 and comment 5687377735; >500 production lines and planner/plan compatibility boundary
 Reviewer identity and role: historical GPT-6 Astra review of d56711fa5b429e5e6e52f64f603d2e853478edca against base 4ff27bb9b35c43c1b0961bb9a01bf8fc0b6a2171; any exact-head review decision is tracked separately from maintainer design approval
-Review timestamp: historical revision-7 review was recorded 2026-09-17; see the PR/evidence ledger for later exact-head reviews
+Review timestamp: historical revision-7 review was recorded 2026-09-17; the owner-boundary revision-8 delta has not yet received maintainer approval; see the PR/evidence ledger for later exact-head reviews
 Decision: DRAFT / AWAITING MAINTAINER APPROVAL
-Validation evidence: exact clean-rebase CGo runs passed for plan, plan/function, compile, aggexec, iscp, frontend, MySQL parser, fulltext2, cnservice, embed, and TestIssue27294PreparedNumericOverloads; these are local results, not CI/BVT, the PR-wide merged changed-line coverage gate is not claimed, and maintainer design approval remains pending
-Decisions proposed for maintainer acceptance: retain strict INT64 precision controls (no general integer-prefix widening); prefer correctness over function-wide zonemap pruning; retain the bounded scan and defer one-pass role collection pending scan-cost acceptance
+Validation evidence: exact clean-rebase CGo runs passed for plan, plan/function, compile, aggexec, iscp, frontend, MySQL parser, fulltext2, cnservice, embed, and TestIssue27294PreparedNumericOverloads; revision-8 focused owner-boundary planner tests, corrected role-discovery benchmark, and public COM_STMT regression also passed locally; none of these are current CI/BVT or a PR-wide merged changed-line coverage pass, and maintainer design approval remains pending
+Decisions proposed for maintainer acceptance: retain strict INT64 precision controls (no general integer-prefix widening); prefer correctness over function-wide zonemap pruning; retain the bounded per-parameter source scan with its measured owner-boundary traversal cost; approve the revision-8 argument-owner boundaries and no-inherited-role fast path
 Evidence links: [PR #28523](https://github.com/matrixorigin/matrixone/pull/28523); the PR/evidence ledger is the record for commit replay, review, CI, and BVT; historical CI run 34813866468 and the older local linter/BVT and d56711fa evidence are historical; current local CGo tests and formatting checks are recorded above
 Implementation deviations requiring follow-up: MOD native arithmetic widening regression fixed in 8fc4d5250; strict INT64 precision acceptance, zonemap-pruning decision, and scan-cost acceptance remain pending
 Approval link: pending maintainer review

@@ -1357,6 +1357,64 @@ const (
 	preparedStringMathRoleControl
 )
 
+// preparedNumericFunctionArgRole describes whether a parent function proves
+// that an argument belongs to the inherited numeric occurrence. Numeric
+// output alone is not sufficient: unknown functions, string-domain functions,
+// and explicit CASTs are hard boundaries. String-math functions establish a
+// fresh nearest value/control role; numeric operators and result-selecting
+// functions may carry the current role through only their numeric result args.
+// The same classifier is used by source discovery and execute-time rebinding;
+// candidate positions remain an eligibility superset, not rewrite authority.
+func preparedNumericFunctionArgRole(
+	parent *plan.Expr,
+	argIndex int,
+	inherited preparedStringMathRole,
+) (preparedStringMathRole, bool) {
+	if parent == nil || argIndex < 0 {
+		return preparedStringMathRoleNone, false
+	}
+	fn := parent.GetF()
+	if fn == nil || fn.Func == nil || argIndex >= len(fn.Args) {
+		return preparedStringMathRoleNone, false
+	}
+	name := strings.ToLower(fn.Func.GetObjName())
+	argCount := len(fn.Args)
+	// Provisional prepared-parameter casts may have a nonzero overload id, so
+	// recognize their source envelope before treating overloaded CASTs as an
+	// explicit SQL conversion boundary. Both helpers reject SyntaxExplicitCast.
+	if isImplicitPreparedParamCast(parent) || isPreparedStringMathParamCast(parent) {
+		return inherited, true
+	}
+	if isExplicitPreparedCast(parent) {
+		return preparedStringMathRoleNone, false
+	}
+	if isPreparedStringMathFunction(name) {
+		if preparedStringMathFunctionValueArg(name, argIndex, argCount) {
+			return preparedStringMathRoleValue, true
+		}
+		return preparedStringMathRoleControl, true
+	}
+	if name == "case" || isNumericContextFunction(name) {
+		if numericFunctionHasSelectiveContext(name) &&
+			!numericFunctionArgKeepsContext(name, argIndex, argCount) {
+			return preparedStringMathRoleNone, false
+		}
+		if inherited == preparedStringMathRoleControl {
+			// ROUND/TRUNCATE precision ownership applies to a bare marker/cast.
+			// A nested numeric expression keeps its ordinary numeric conversion.
+			return preparedStringMathRoleNone, true
+		}
+		return inherited, true
+	}
+	if supportsGenericNumericFunctionContext(name) {
+		if inherited == preparedStringMathRoleControl {
+			return preparedStringMathRoleNone, true
+		}
+		return inherited, true
+	}
+	return preparedStringMathRoleNone, false
+}
+
 // rebindPreparedNumericExprWithBound carries two views of a deferred numeric
 // expression: expr is the immutable prepare-time provenance, while bound is
 // the occurrence already materialized for this EXECUTE.  A runtime value may
@@ -1483,12 +1541,19 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExprWithRole(
 		return copy, true, nil
 	}
 	if list := expr.GetList(); list != nil {
+		if role != preparedStringMathRoleNone {
+			// Lists are multi-value containers, not scalar numeric operands. When
+			// nested under a string-math value/control role, preserve the already
+			// bound list; ApplyExpr has independently visited nested owners. A
+			// direct role-none integer/decimal fallback retains the existing
+			// per-item rebinding contract.
+			if bound != nil {
+				return bound, false, nil
+			}
+			return expr, false, nil
+		}
 		copy := DeepCopyExpr(expr)
 		changed := false
-		itemRole := role
-		if itemRole == preparedStringMathRoleControl {
-			itemRole = preparedStringMathRoleNone
-		}
 		for i, item := range list.List {
 			boundItem := item
 			if bound != nil {
@@ -1497,7 +1562,7 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExprWithRole(
 				}
 			}
 			itemBound, itemChanged, err := rule.rebindPreparedNumericExprWithRole(
-				item, boundItem, positions, itemRole)
+				item, boundItem, positions, preparedStringMathRoleNone)
 			if err != nil {
 				return nil, false, err
 			}
@@ -1514,6 +1579,14 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExprWithRole(
 			return bound, false, nil
 		}
 		return copy, changed, nil
+	}
+	if expr.GetW() != nil {
+		// A window wrapper is not a scalar function argument. ApplyExpr has
+		// already visited its value and control expressions independently.
+		if bound != nil {
+			return bound, false, nil
+		}
+		return expr, false, nil
 	}
 	if fn := expr.GetF(); fn != nil {
 		if role == preparedStringMathRoleValue && isExplicitPreparedCast(expr) {
@@ -1532,26 +1605,20 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExprWithRole(
 		copy := DeepCopyExpr(expr)
 		changed := false
 		for i, arg := range fn.Args {
-			argRole := role
-			if fn.Func != nil && isPreparedStringMathFunction(fn.Func.GetObjName()) {
-				if preparedStringMathFunctionValueArg(
-					strings.ToLower(fn.Func.GetObjName()), i, len(fn.Args)) {
-					argRole = preparedStringMathRoleValue
-				} else {
-					argRole = preparedStringMathRoleControl
-				}
-			} else if role == preparedStringMathRoleControl &&
-				!(isImplicitPreparedParamCast(expr) || isPreparedStringMathParamCast(expr)) {
-				// A precision control applies only to a bare marker/cast occurrence.
-				// Nested arithmetic follows its own generic rebinding contract, while
-				// a nested string-math function will establish its own nearest role.
-				argRole = preparedStringMathRoleNone
-			}
 			boundArg := arg
 			if bound != nil {
 				if boundFn := bound.GetF(); boundFn != nil && i < len(boundFn.Args) {
 					boundArg = boundFn.Args[i]
 				}
+			}
+			copy.GetF().Args[i] = boundArg
+			argRole, carriesRole := preparedNumericFunctionArgRole(expr, i, role)
+			if !carriesRole {
+				// This function does not prove that the argument belongs to the
+				// numeric occurrence being refined. Preserve the already-bound
+				// subtree wholesale; role=None is not enough because a complete
+				// numeric-looking text marker can still be materialized as a number.
+				continue
 			}
 			argBound, argChanged, err := rule.rebindPreparedNumericExprWithRole(
 				arg, boundArg, positions, argRole)
