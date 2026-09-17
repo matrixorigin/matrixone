@@ -224,6 +224,14 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	if !exists {
 		return expr
 	}
+	// The persisted-expression admission pass runs after optimization. Keep
+	// spatial-distance functions visible until that pass has observed the v86
+	// requirement; folding them to a literal would erase the only durable
+	// capability marker and let an older reader rebind the original SQL under
+	// incompatible planar semantics.
+	if requiresSpatial, err := plan.RequiresMORPCVersion86SpatialDistanceSemantics(expr); err != nil || requiresSpatial {
+		return expr
+	}
 	if f.CannotFold() { // function cannot be fold
 		return expr
 	}

@@ -748,6 +748,44 @@ func TestPersistedExpressionProtocolAdmissionForSpatialDistance(t *testing.T) {
 	require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, mixed))
 }
 
+func TestSpatialDistanceRequirementSurvivesConstantFold(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, sql := range []string{
+		"select st_frechetdistance(st_geomfromtext('LINESTRING(0 0, 1 0)', 4326), st_geomfromtext('LINESTRING(0 1, 1 1)', 4326))",
+		"select st_distance(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(1 0)', 4326), 'kilometre')",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			ast := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+			expr, err := NewGeneratedColBinder(proc.Ctx, nil, nil).
+				BindExpr(ast, 0, false)
+			require.NoError(t, err)
+			required, err := RequiredPersistedExpressionProtocolVersion(expr)
+			require.NoError(t, err)
+			require.Equal(t, defines.MORPCVersion86, required)
+
+			folded, err := ConstantFold(
+				batch.EmptyForConstFoldBatch, DeepCopyExpr(expr), proc, false, true)
+			require.NoError(t, err)
+			require.NotNil(t, folded.GetF(),
+				"spatial capability must remain visible after constant folding")
+			required, err = RequiredPersistedExpressionProtocolVersion(folded)
+			require.NoError(t, err)
+			require.Equal(t, defines.MORPCVersion86, required)
+
+			node := &planpb.Node{ProjectList: []*planpb.Expr{DeepCopyExpr(expr)}}
+			planrule.NewConstantFold(false).Apply(node, nil, proc)
+			require.NotNil(t, node.ProjectList[0].GetF(),
+				"optimizer constant folding must preserve spatial provenance")
+			required, err = RequiredPersistedExpressionProtocolVersion(node.ProjectList[0])
+			require.NoError(t, err)
+			require.Equal(t, defines.MORPCVersion86, required)
+		})
+	}
+}
+
 func TestPersistedFollowupExpressionProtocolAdmission(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	rt := moruntime.ServiceRuntime(proc.GetService())
