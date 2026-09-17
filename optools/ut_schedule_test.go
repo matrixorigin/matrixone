@@ -598,6 +598,30 @@ exit 0
 	}
 }
 
+func TestCgroupResourceBreakdown(t *testing.T) {
+	script := `source ./run_ut.sh UT
+mkdir "$CASE_DIR/cgroup"
+printf 'anon 1024\nfile 2048\nshmem 512\nslab 256\nunrelated 999\n' > "$CASE_DIR/cgroup/memory.stat"
+printf 'max 6\noom 0\noom_kill 0\n' > "$CASE_DIR/cgroup/memory.events"
+printf 'usage_usec 100\nnr_throttled 3\nthrottled_usec 40\n' > "$CASE_DIR/cgroup/cpu.stat"
+printf 'some avg10=1.00 avg60=0.50 avg300=0.10 total=123\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=4\n' > "$CASE_DIR/cgroup/memory.pressure"
+cgroup_resource_breakdown "$CASE_DIR/cgroup"
+cgroup_resource_breakdown "$CASE_DIR/missing"
+`
+	out, err := scheduleHarness(t, script)
+	if err != nil {
+		t.Fatalf("resource breakdown: %v\n%s", err, out)
+	}
+	for _, field := range []string{"memory.stat.anon=1024", "memory.stat.file=2048", "memory.stat.shmem=512", "memory.events.max=6", "memory.events.oom_kill=0", "cpu.stat.nr_throttled=3", "cpu.stat.throttled_usec=40", "memory.pressure.some.total=123", "memory.pressure.full.total=4"} {
+		if !strings.Contains(string(out), field) {
+			t.Errorf("missing %s in %s", field, out)
+		}
+	}
+	if strings.Contains(string(out), "unrelated") || strings.Contains(string(out), "avg10") {
+		t.Fatalf("unexpected fields: %s", out)
+	}
+}
+
 func TestUTHeartbeatStopsCleanly(t *testing.T) {
 	script := `source ./run_ut.sh UT
 mkfifo "$CASE_DIR/heartbeat-ready"
