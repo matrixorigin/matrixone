@@ -72,13 +72,18 @@ const (
 
 // MOServer MatrixOne Server
 type MOServer struct {
-	addr    string
-	uaddr   string
-	rm      *RoutineManager
-	handler func(*Conn, []byte) error
-	mu      sync.RWMutex
-	wg      sync.WaitGroup
-	running bool
+	addr         string
+	uaddr        string
+	rm           *RoutineManager
+	handler      func(*Conn, []byte) error
+	mu           sync.RWMutex
+	wg           sync.WaitGroup
+	running      bool
+	stopping     bool
+	stopOnce     sync.Once
+	stopErr      error
+	connections  map[net.Conn]struct{}
+	connectionWG sync.WaitGroup
 
 	pu        *config.ParameterUnit
 	listeners []net.Listener
@@ -114,6 +119,11 @@ func (mo *MOServer) GetRoutineManager() *RoutineManager {
 }
 
 func (mo *MOServer) Start() error {
+	mo.mu.Lock()
+	defer mo.mu.Unlock()
+	if mo.stopping {
+		return moerr.NewInvalidStateNoCtx("frontend server is stopped")
+	}
 	address := mo.addr
 	if len(mo.listeners) > 0 && mo.listeners[0] != nil {
 		address = mo.listeners[0].Addr().String()
@@ -148,11 +158,13 @@ func (mo *MOServer) startConnectionLivenessMonitor() {
 }
 
 func (mo *MOServer) Stop() error {
+	mo.stopOnce.Do(func() { mo.stopErr = mo.stop() })
+	return mo.stopErr
+}
+
+func (mo *MOServer) stop() error {
 	mo.mu.Lock()
-	if !mo.running && len(mo.listeners) == 0 {
-		mo.mu.Unlock()
-		return nil
-	}
+	mo.stopping = true
 	mo.running = false
 	listeners := mo.listeners
 	mo.listeners = nil
@@ -168,10 +180,27 @@ func (mo *MOServer) Stop() error {
 	// Cancel context first to allow goroutines (like startTempTableGC) to exit,
 	// then wait for them to complete. This prevents deadlock where wg.Wait()
 	// blocks while goroutines wait for ctx.Done().
-	mo.rm.cancelCtx()
+	if mo.rm != nil {
+		mo.rm.cancelCtx()
+	}
 	mo.wg.Wait()
 
-	mo.rm.killNetConns()
+	// Include connections still allocating a session or handshaking, which are
+	// not necessarily registered in RoutineManager yet. Admission is sealed;
+	// never hold mu while interrupting I/O or joining deferred session cleanup.
+	mo.mu.Lock()
+	connections := make([]net.Conn, 0, len(mo.connections))
+	for conn := range mo.connections {
+		connections = append(connections, conn)
+	}
+	mo.mu.Unlock()
+	for _, conn := range connections {
+		_ = conn.Close()
+	}
+	if mo.rm != nil {
+		mo.rm.killNetConns()
+	}
+	mo.connectionWG.Wait()
 
 	logutil.Debug("application stopped")
 	return err
@@ -229,8 +258,38 @@ func (mo *MOServer) startAccept(ctx context.Context, listener net.Listener) {
 		}
 		tempDelay = 0
 
-		go mo.handleConn(ctx, conn)
+		if !mo.admitConnection(conn) {
+			_ = conn.Close()
+			return
+		}
+		go func() {
+			defer mo.releaseConnection(conn)
+			mo.handleConn(ctx, conn)
+		}()
 	}
+}
+
+func (mo *MOServer) admitConnection(conn net.Conn) bool {
+	mo.mu.Lock()
+	defer mo.mu.Unlock()
+	if mo.stopping {
+		return false
+	}
+	if mo.connections == nil {
+		mo.connections = make(map[net.Conn]struct{})
+	}
+	mo.connections[conn] = struct{}{}
+	mo.connectionWG.Add(1)
+	return true
+}
+
+func (mo *MOServer) releaseConnection(conn net.Conn) {
+	// Also close connections whose session allocation failed before rs existed.
+	_ = conn.Close()
+	mo.mu.Lock()
+	delete(mo.connections, conn)
+	mo.mu.Unlock()
+	mo.connectionWG.Done()
 }
 
 func (mo *MOServer) cleanOrphanTempTables() error {

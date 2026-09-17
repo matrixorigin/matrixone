@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
@@ -228,6 +229,7 @@ func genViewTableDef(
 	colNames tree.IdentifierList,
 	viewDatabase string,
 	viewName string,
+	forAuthoring bool,
 ) (*plan.TableDef, error) {
 	var tableDef plan.TableDef
 	dependencyCapture := newViewDependencyCaptureContext(ctx)
@@ -289,6 +291,22 @@ func genViewTableDef(
 	if err = validateViewDefinitionPlugins(ctx, query); err != nil {
 		return nil, err
 	}
+	viewRequiredProtocol, err := RequiredPersistedIPFunctionProtocolVersion(query)
+	if err != nil {
+		return nil, err
+	}
+	if viewRequiredProtocol > 0 {
+		if forAuthoring {
+			err = RequirePersistedProtocolVersionForAuthoring(
+				ctx.GetContext(), ctx.GetProcess(), viewRequiredProtocol)
+		} else {
+			err = RequirePersistedProtocolVersion(
+				ctx.GetContext(), ctx.GetProcess(), viewRequiredProtocol)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
 	projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
 	if len(colNames) > 0 && len(colNames) != len(projectList) {
 		return nil, moerr.NewViewWrongList(ctx.GetContext())
@@ -346,13 +364,18 @@ func genViewTableDef(
 	}
 
 	lowerCaseTableNames := ctx.GetLowerCaseTableNames()
+	var persistedRequiredProtocol *int64
+	if viewRequiredProtocol > 0 {
+		persistedRequiredProtocol = &viewRequiredProtocol
+	}
 	viewData, err := json.Marshal(ViewData{
-		Stmt:                viewSql,
-		DefaultDatabase:     ctx.DefaultDatabase(),
-		SQLMode:             parserSQLModeFromContext(ctx),
-		SecurityType:        getViewSecurityTypeFromContext(ctx),
-		LowerCaseTableNames: &lowerCaseTableNames,
-		Dependencies:        dependencyCapture.dependencies(),
+		Stmt:                    viewSql,
+		DefaultDatabase:         ctx.DefaultDatabase(),
+		SQLMode:                 parserSQLModeFromContext(ctx),
+		SecurityType:            getViewSecurityTypeFromContext(ctx),
+		LowerCaseTableNames:     &lowerCaseTableNames,
+		Dependencies:            dependencyCapture.dependencies(),
+		RequiredProtocolVersion: persistedRequiredProtocol,
 	})
 	if err != nil {
 		return nil, err
@@ -1668,7 +1691,7 @@ func buildCTASDefaultFromOrigin(
 	if err = preservePersistedFormatCompatibility(ctx.GetContext(), defaultExpr); err != nil {
 		return nil, err
 	}
-	if err = RequirePersistedIPFunctionProtocol(ctx.GetContext(), ctx.GetProcess(), defaultExpr); err != nil {
+	if err = RequirePersistedIPFunctionProtocolForAuthoring(ctx.GetContext(), ctx.GetProcess(), defaultExpr); err != nil {
 		return nil, err
 	}
 	if exprHasLocalColumnRef(defaultExpr) {
@@ -1797,7 +1820,7 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	}
 
 	tableDef, err := genViewTableDef(
-		ctx, stmt.AsSource, stmt.ColNames, createView.Database, string(viewName))
+		ctx, stmt.AsSource, stmt.ColNames, createView.Database, string(viewName), true)
 	if err != nil {
 		return nil, err
 	}
@@ -2531,6 +2554,7 @@ func buildCreateTable(
 	}
 
 	// set option
+	seenAutoIDCache := false
 	for _, option := range stmt.Options {
 		switch opt := option.(type) {
 		case *tree.TableOptionProperties:
@@ -2567,6 +2591,18 @@ func buildCreateTable(
 					},
 				},
 			})
+		case *tree.TableOptionAutoIDCache:
+			if seenAutoIDCache {
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "AUTO_ID_CACHE specified more than once")
+			}
+			seenAutoIDCache = true
+			if opt.Value > incrservice.MaxAutoIDCache {
+				return nil, moerr.NewInvalidInputf(ctx.GetContext(), "AUTO_ID_CACHE must be between 0 and %d", incrservice.MaxAutoIDCache)
+			}
+			if opt.Value != 0 && !tableHasAutoIncrementColumn(createTable.TableDef) {
+				return nil, moerr.NewInvalidInput(ctx.GetContext(), "AUTO_ID_CACHE requires an AUTO_INCREMENT column")
+			}
+			createTable.TableDef.AutoIdCache = opt.Value
 		case *tree.TableOptionAutoIncrement:
 			if opt.Value != 0 {
 				createTable.TableDef.AutoIncrOffset = autoIncrementValueToOffset(opt.Value)
@@ -4006,7 +4042,7 @@ func appendCheckDef(
 	if err = preservePersistedFormatCompatibility(ctx.GetContext(), checkExpr); err != nil {
 		return err
 	}
-	if err = RequirePersistedIPFunctionProtocol(ctx.GetContext(), ctx.GetProcess(), checkExpr); err != nil {
+	if err = RequirePersistedIPFunctionProtocolForAuthoring(ctx.GetContext(), ctx.GetProcess(), checkExpr); err != nil {
 		return err
 	}
 	if err = validateCheckExpr(ctx.GetContext(), tableDef, checkExpr, columnPos); err != nil {
@@ -5914,7 +5950,7 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 	defer func() {
 		ctx.SetBuildingAlterView(false, "", "")
 	}()
-	tableDef, err := genViewTableDef(ctx, stmt.AsSource, stmt.ColNames, alterView.Database, viewName)
+	tableDef, err := genViewTableDef(ctx, stmt.AsSource, stmt.ColNames, alterView.Database, viewName, true)
 	if err != nil {
 		return nil, err
 	}

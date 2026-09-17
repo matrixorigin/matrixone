@@ -647,11 +647,19 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 func (s *S3FS) Read(ctx context.Context, vector *IOVector) (err error) {
 	var finishDecode func()
 	var decodePrepared bool
+	var fillTicket *decodedFillTicket
+	var fillAttempted bool
+	finishFill := func() {
+		ticket := fillTicket
+		fillTicket = nil
+		ticket.finish()
+	}
 	defer func() {
 		if finishDecode != nil {
 			finishDecode()
 		}
 	}()
+	defer finishFill()
 	// A merge leader must not wake its waiters until caller-visible cache work
 	// has completed. Cache updates are deferred below, so register this defer
 	// first and let their later defers run before the merge is marked done.
@@ -751,9 +759,29 @@ read_memory_cache:
 read_disk_cache:
 	if !decodePrepared {
 		decodePrepared = true
-		finishDecode, err = s.prepareSharedDecode(vector)
+		finishDecode, fillTicket, fillAttempted, err = s.prepareSharedDecodeForRead(vector)
 		if err != nil {
 			return err
+		}
+		if fillAttempted {
+			if fillTicket != nil && !fillTicket.leader {
+				if err = fillTicket.wait(ctx, sharedDecodeFillWait); err != nil {
+					finishFill()
+					return err
+				}
+			}
+			if err = readCache(ctx, s.memCache, vector); err != nil {
+				finishFill()
+				return err
+			}
+			if vector.allDone() {
+				return nil
+			}
+			if fillTicket != nil && !fillTicket.leader {
+				// This request did not receive an admitted disk-cache fill. Do
+				// not carry its notification participation into remote or S3 IO.
+				finishFill()
+			}
 		}
 	}
 	if s.diskCache != nil {
@@ -769,6 +797,7 @@ read_disk_cache:
 		LogEvent(ctx, str_read_disk_cache_Caches_end)
 		metric.FSReadDurationReadDiskCache.Observe(time.Since(t0).Seconds())
 		if err != nil {
+			finishFill()
 			return err
 		}
 		// Count bytes actually read from disk cache (entries that became done and from disk cache)
@@ -801,6 +830,7 @@ read_disk_cache:
 				metric.FSReadDurationUpdateDiskCache.Observe(time.Since(t0).Seconds())
 			}()
 		}
+		finishFill()
 
 	}
 
@@ -963,9 +993,8 @@ read_s3:
 }
 
 func (s *S3FS) readEntriesIndividually(ctx context.Context, vector *IOVector) error {
-	// The full-object merge is still stalled after its bounded wait. Read exact
-	// entry ranges sequentially so this follower can progress without fetching
-	// the potentially much larger sparse envelope.
+	// Read exact entry ranges when a full-object cache fill cannot serve this
+	// request, without fetching the potentially much larger sparse envelope.
 	for i := range vector.Entries {
 		if vector.Entries[i].done {
 			continue
@@ -1080,6 +1109,15 @@ func (s *S3FS) read(ctx context.Context, vector *IOVector, forceMinimalRangeRead
 		if done {
 			return nil
 		}
+		// A skipped cache fill does not imply the cache file is readable: another
+		// writer may still own its asynchronous publication after releasing the
+		// I/O merge. Fetch only the missing ranges instead of reading the whole
+		// object again without a cache publication to amortize that read.
+		if _, _, expensive := vector.expensiveMinimalRangeRead(); expensive {
+			return s.readEntriesIndividually(ctx, vector)
+		}
+		min, max = vector.readMinimalRange()
+		readFullObject = false
 	}
 
 	// a function to get data lazily
@@ -1404,8 +1442,8 @@ func (s *S3FS) readFullObjectToDiskCacheStreaming(
 		return true, err
 	}
 	if !stream.opened {
-		// The cache already has an index entry. Fall back to the regular read path,
-		// which can serve the request from cache without opening another S3 reader.
+		// SetFile may skip an existing file or a busy publication reservation.
+		// The caller must fall back without assuming a cache file is readable.
 		return false, nil
 	}
 	if stream.err != nil {

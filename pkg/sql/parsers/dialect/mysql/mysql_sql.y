@@ -890,7 +890,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 //%type <resourceOptions> conn_option_list conn_options
 //%type <resourceOption> conn_option
 %type <updateExpr> update_value
-%type <updateExprs> update_list on_duplicate_key_update_opt
+%type <updateExprs> update_list on_duplicate_key_update on_duplicate_key_update_opt
 %type <completionType> completion_type
 %type <str> password_opt
 %type <boolVal> grant_option_opt enforce enforce_opt generated_column_type_opt
@@ -925,6 +925,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <partitions> partition_list_opt partition_list
 %type <values> values_opt
 %type <tableOptions> partition_option_list
+%type <tableOption> partition_table_option
 %type <subPartition> sub_partition
 %type <subPartitions> sub_partition_list sub_partition_list_opt
 %type <subquery> subquery
@@ -1039,6 +1040,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 // Explicit MySQL default for value-window null treatment.
 %token <str> RESPECT
 %left <str> MEMBER
+%token <str> AUTO_ID_CACHE
 %type<tableLock> table_lock_elem
 %type<tableLocks> table_lock_list
 %type<tableLockType> table_lock_type
@@ -6120,6 +6122,10 @@ insert_no_with_stmt:
             ins.PartitionValues = $3.Values
         }
         ins.OnDuplicateUpdate = $5
+        if len(ins.OnDuplicateUpdate) == 1 && ins.OnDuplicateUpdate[0] == nil {
+            ins.Ignore = true
+            ins.OnDuplicateUpdate = nil
+        }
         ins.Returning = $6
         $$ = ins
     }
@@ -6157,8 +6163,32 @@ insert_no_with_stmt:
             ins.PartitionNames = $4.Names
             ins.PartitionValues = $4.Values
         }
-        ins.OnDuplicateUpdate = []*tree.UpdateExpr{nil}
+        ins.Ignore = true
+        ins.OnDuplicateUpdate = nil
         ins.Returning = $6
+        $$ = ins
+    }
+|   INSERT IGNORE into_table_name insert_partition_clause_opt insert_data on_duplicate_key_update returning_clause_opt
+    {
+        ins := $5
+        if intoErr := tree.ValidateSelectIntoNotAllowed(ins.Rows); intoErr != "" {
+            yylex.Error(intoErr)
+            goto ret1
+        }
+        ins.Table = $3
+		target := $3.(*tree.TableName)
+		ins.TargetDatabaseName = target.SchemaName
+		ins.TargetTableName = target.ObjectName
+        if $4 != nil {
+            ins.PartitionNames = $4.Names
+            ins.PartitionValues = $4.Values
+        }
+        ins.Ignore = true
+        ins.OnDuplicateUpdate = $6
+        if len(ins.OnDuplicateUpdate) == 1 && ins.OnDuplicateUpdate[0] == nil {
+            ins.OnDuplicateUpdate = nil
+        }
+        ins.Returning = $7
         $$ = ins
     }
 
@@ -6363,13 +6393,19 @@ on_duplicate_key_update_opt:
     {
 		$$ = []*tree.UpdateExpr{}
     }
-|   ON DUPLICATE KEY UPDATE update_list
+|   on_duplicate_key_update
     {
-      	$$ = $5
+	      $$ = $1
+    }
+
+on_duplicate_key_update:
+    ON DUPLICATE KEY UPDATE update_list
+    {
+        $$ = $5
     }
 |   ON DUPLICATE KEY IGNORE
     {
-      	$$ = []*tree.UpdateExpr{nil}
+	      $$ = []*tree.UpdateExpr{nil}
     }
 
 set_value_list:
@@ -11070,13 +11106,24 @@ sub_partition:
     }
 
 partition_option_list:
-    table_option
+    partition_table_option
     {
         $$ = []tree.TableOption{$1}
     }
-|   partition_option_list table_option
+|   partition_option_list partition_table_option
     {
         $$ = append($1, $2)
+    }
+
+partition_table_option:
+    table_option
+    {
+        if option, ok := $1.(*tree.TableOptionAutoIDCache); ok {
+            option.Free()
+            yylex.Error("AUTO_ID_CACHE is a table option, not a partition or subpartition option")
+            goto ret1
+        }
+        $$ = $1
     }
 
 values_opt:
@@ -11469,6 +11516,10 @@ table_option:
 |   AUTO_INCREMENT equal_opt INTEGRAL
     {
         $$ = tree.NewTableOptionAutoIncrement(integralToUint64($3))
+    }
+|   AUTO_ID_CACHE equal_opt INTEGRAL
+    {
+        $$ = tree.NewTableOptionAutoIDCache(integralToUint64($3))
     }
 |   AVG_ROW_LENGTH equal_opt INTEGRAL
     {
@@ -16269,6 +16320,7 @@ non_reserved_keyword:
 |	MODIFY
 |	ASCII
 |	AUTO_INCREMENT
+|	AUTO_ID_CACHE
 |	AUTOEXTEND_SIZE
 |	BSI
 |	BINDINGS

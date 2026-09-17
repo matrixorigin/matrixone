@@ -1932,6 +1932,40 @@ func TestInformationSchemaMetadataPlansShareCurrentRolesOnce(t *testing.T) {
 	}
 }
 
+func TestInformationSchemaSchemataSQLPathIsNullableCharZero(t *testing.T) {
+	as := strings.Index(sysview.InformationSchemaSchemataDDL, " AS ")
+	require.Greater(t, as, 0)
+	logicPlan, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		sysview.InformationSchemaSchemataDDL[as+4:],
+	)
+	require.NoError(t, err)
+
+	var found bool
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType != planpb.Node_PROJECT || len(node.ProjectList) <= 4 {
+			continue
+		}
+		// SCHEMATA's fifth output column is SQL_PATH. Checking the stable
+		// output position prevents an unrelated CHAR(0) expression elsewhere
+		// in the metadata plan from satisfying this regression test.
+		expr := node.ProjectList[4]
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) < 2 {
+			continue
+		}
+		if fn.Args[1].Typ.Id != int32(types.T_char) || fn.Args[1].Typ.Width != 0 {
+			continue
+		}
+		found = true
+		require.Equal(t, int32(types.T_char), expr.Typ.Id)
+		require.Zero(t, expr.Typ.Width)
+		require.False(t, expr.Typ.NotNullable)
+	}
+	require.True(t, found, "SCHEMATA SQL_PATH must retain an explicit nullable CHAR(0) cast")
+}
+
 func BenchmarkInformationSchemaSchemataPlanSharesCurrentRoles(b *testing.B) {
 	as := strings.Index(sysview.InformationSchemaSchemataDDL, " AS ")
 	if as <= 0 {

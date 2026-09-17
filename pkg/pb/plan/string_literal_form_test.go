@@ -534,3 +534,33 @@ func TestRequiredRemoteExpressionFeaturesASCIIResultContract(t *testing.T) {
 		"legacy UINT8 ASCII plans remain executable on a newer worker")
 
 }
+
+func TestRequiredRemoteExpressionFeaturesBoundedConditionalStringDomains(t *testing.T) {
+	coalesce := func(overload int32) *Expr {
+		return &Expr{
+			Typ: Type{Id: 65, Width: 12, Charset: 2},
+			Expr: &Expr_F{F: &Function{
+				Func: &ObjectRef{
+					Obj:     int64(coalesceFunctionID)<<32 | int64(overload),
+					ObjName: "coalesce",
+				},
+			}},
+		}
+	}
+
+	for _, overload := range []int32{30, 31} {
+		features, err := RequiredRemoteExpressionFeatures(coalesce(overload))
+		require.NoError(t, err)
+		require.True(t, features.BoundedConditionalStringDomains)
+		require.True(t, features.Any())
+
+		required, err := RequiresMORPCVersion83BoundedConditionalStringDomains(coalesce(overload))
+		require.NoError(t, err)
+		require.True(t, required)
+	}
+
+	features, err := RequiredRemoteExpressionFeatures(coalesce(0))
+	require.NoError(t, err)
+	require.False(t, features.BoundedConditionalStringDomains,
+		"the existing character overload remains wire-compatible")
+}

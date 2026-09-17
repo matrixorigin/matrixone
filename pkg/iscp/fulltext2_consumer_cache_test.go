@@ -111,18 +111,27 @@ func (p *cacheFlushProbe) Load(*sqlexec.SqlProcess) error {
 
 func (*cacheFlushProbe) GetIndexSize() (int64, int64) { return 0, 0 }
 
+func (*cacheFlushProbe) BuildTS() int64 { return 0 }
+
 func (p *cacheFlushProbe) Destroy() { p.destroys.Add(1) }
 
 var _ veccache.VectorIndexSearchIf = (*cacheFlushProbe)(nil)
 var _ executor.SQLExecutor = (*fulltext2FlushSQLExecutor)(nil)
 
-// TestRunFulltext2KeepsWarmCacheOnNonEmptyCDCFlush proves the #28005 contract
-// through the real consumer path. A non-empty encoded writer blob is consumed by
-// RunFulltext2, the tail INSERT and watermark happen before a commit barrier, and
-// a reader of the exact index key still uses the same warm object while that flush
-// is blocked. Only a later, explicitly driven ordinary TTL sweep destroys it and
-// permits a replacement load.
-func TestRunFulltext2KeepsWarmCacheOnNonEmptyCDCFlush(t *testing.T) {
+// TestRunFulltext2RefreshesIdleCacheAfterNonEmptyCDCFlush proves the #28837
+// refinement of the #28005 keep-warm contract through the real consumer path. A
+// non-empty encoded writer blob is consumed by RunFulltext2; the tail INSERT and
+// watermark happen before a commit barrier. Two properties are asserted:
+//
+//   - WHILE the flush is still blocked at the commit barrier, a reader of the exact
+//     index key keeps using the same warm object -- the refresh is post-commit
+//     (EvictIdleCache), never a mid-flush yank out from under a concurrent reader.
+//   - AFTER the flush commits, the now-idle warm entry is evicted (RemoveIdle) so
+//     the next query reloads the just-appended tail. An index created empty (no
+//     tag=0 base) would otherwise serve the stale doc-less generation until the
+//     ~10-min IsStale sweep. A busy entry would stay warm (covered by the cache
+//     unit test); here the reader has finished, so the entry is idle and refreshed.
+func TestRunFulltext2RefreshesIdleCacheAfterNonEmptyCDCFlush(t *testing.T) {
 	const (
 		indexKey    = "__store"
 		serviceID   = "ft2-cache-contract-28005"
@@ -310,23 +319,21 @@ func TestRunFulltext2KeepsWarmCacheOnNonEmptyCDCFlush(t *testing.T) {
 	}
 	require.Equal(t, serviceID, watermarkService.Load())
 	require.Same(t, txnOp, watermarkTxn.Load())
-	require.Equal(t, int32(1), warm.loads.Load())
-	require.Equal(t, int32(0), warm.destroys.Load())
-	require.Same(t, warm, warmEntry.Algo)
 
-	// A separately driven ordinary stale/TTL sweep is allowed to retire the
-	// entry. This is intentionally after the successful flush: it distinguishes
-	// ordinary cache lifecycle from a CDC-triggered invalidation.
-	warmEntry.ExpireAt.Store(time.Now().Add(-time.Second).UnixMicro())
-	testCache.HouseKeeping()
+	// The reader above has finished, so once the flush commits the consumer's
+	// post-commit EvictIdleCache finds the entry idle and evicts it: the warm
+	// backend is destroyed and the key no longer resident. This is the refresh a
+	// base-less index needs -- the next query will reload the appended tail rather
+	// than serve the doc-less generation loaded before the flush.
+	require.Equal(t, int32(1), warm.loads.Load())
+	require.Equal(t, int32(1), warm.destroys.Load(), "an idle warm entry is refreshed after the CDC flush")
 	_, stillWarm := testCache.IndexMap.Load(indexKey)
-	require.False(t, stillWarm)
-	require.Equal(t, int32(1), warm.destroys.Load())
+	require.False(t, stillWarm, "RemoveIdle evicted the idle entry so the next query reloads")
 
 	replacement := &cacheFlushProbe{}
 	_, _, err = testCache.Search(nil, indexKey, replacement, nil, vectorindex.RuntimeConfig{})
 	require.NoError(t, err)
-	require.Equal(t, int32(1), replacement.loads.Load())
+	require.Equal(t, int32(1), replacement.loads.Load(), "the next reader reloads the refreshed generation")
 	value, ok = testCache.IndexMap.Load(indexKey)
 	require.True(t, ok)
 	replacementEntry, ok := value.(*veccache.VectorIndexSearch)

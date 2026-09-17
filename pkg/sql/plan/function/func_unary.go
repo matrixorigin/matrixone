@@ -7720,18 +7720,171 @@ func HexUint64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	return opUnaryFixedToStr[uint64](ivecs, result, proc, length, hexEncodeUint64, selectList)
 }
 
-func HexFloat32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToStr[float32](ivecs, result, proc, length, func(v float32) string {
-		// round is used to handle select hex(456.789); which should return 1C9 and not 1C8
-		return fmt.Sprintf("%X", uint64(math.Round(float64(v))))
+// HexLegacyFloat32 and HexLegacyFloat64 preserve overloads 4 and 5 exactly.
+// Their wire identities predate MORPCVersion74 and can execute on old CNs.
+func HexLegacyFloat32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToStr[float32](ivecs, result, proc, length, func(value float32) string {
+		return fmt.Sprintf("%X", uint64(math.Round(float64(value))))
 	}, selectList)
 }
 
-func HexFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToStr[float64](ivecs, result, proc, length, func(v float64) string {
-		// round is used to handle select hex(456.789); which should return 1C9 and not 1C8
-		return fmt.Sprintf("%X", uint64(math.Round(v)))
+func HexLegacyFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToStr[float64](ivecs, result, proc, length, func(value float64) string {
+		return fmt.Sprintf("%X", uint64(math.Round(value)))
 	}, selectList)
+}
+
+func HexFloat32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return hexFloat[float32](ivecs, result, proc, length, selectList, false)
+}
+
+func HexFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return hexFloat[float64](ivecs, result, proc, length, selectList, false)
+}
+
+// HexExplicitFloat32 and HexExplicitFloat64 implement Item_typecast_real's
+// integer conversion. MySQL truncates an explicit REAL CAST, while ordinary
+// REAL constants, expressions, and fields use round-to-nearest-even.
+func HexExplicitFloat32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return hexFloat[float32](ivecs, result, proc, length, selectList, true)
+}
+
+func HexExplicitFloat64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return hexFloat[float64](ivecs, result, proc, length, selectList, true)
+}
+
+func hexFloat[T constraints.Float](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, truncate bool) error {
+	if truncate {
+		return opUnaryFixedToStrWithErrorCheck[T](ivecs, result, proc, length, func(value T) (string, error) {
+			converted := math.Trunc(float64(value))
+			if converted >= float64(math.MaxInt64) || converted <= float64(math.MinInt64) {
+				return "", moerr.NewOutOfRange(proc.Ctx, "BIGINT", fmt.Sprintf("'%v'", value))
+			}
+			if math.IsNaN(converted) {
+				converted = 0
+			}
+			return hexEncodeInt64(int64(converted)), nil
+		}, selectList)
+	}
+	return opUnaryFixedToStr[T](ivecs, result, proc, length, func(value T) string {
+		converted := math.RoundToEven(float64(value))
+		switch {
+		case math.IsNaN(converted):
+			converted = 0
+		case converted >= float64(math.MaxInt64):
+			return hexEncodeInt64(math.MaxInt64)
+		case converted <= float64(math.MinInt64):
+			return hexEncodeInt64(math.MinInt64)
+		}
+		return hexEncodeInt64(int64(converted))
+	}, selectList)
+}
+
+func HexDecimal64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	scale := ivecs[0].GetType().Scale
+	return opUnaryFixedToStr[types.Decimal64](ivecs, result, proc, length, func(value types.Decimal64) string {
+		return hexEncodeInt64(int64(value.Round(scale, 0, true)))
+	}, selectList)
+}
+
+func HexDecimal128(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	scale := ivecs[0].GetType().Scale
+	divisor := decimal128PowerOfTen(scale)
+	minimum := types.Decimal128FromInt64(math.MinInt64)
+	maximum := types.Decimal128FromInt64(math.MaxInt64)
+	return opUnaryFixedToStr[types.Decimal128](ivecs, result, proc, length, func(value types.Decimal128) string {
+		rounded := roundDecimal128Integral(value, divisor)
+		switch {
+		case rounded.Less(minimum):
+			return hexEncodeInt64(math.MinInt64)
+		case maximum.Less(rounded):
+			return hexEncodeInt64(math.MaxInt64)
+		default:
+			return hexEncodeInt64(int64(rounded.B0_63))
+		}
+	}, selectList)
+}
+
+func HexDecimal256(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	scale := ivecs[0].GetType().Scale
+	divisor := decimal256PowerOfTen(scale)
+	minimum := types.Decimal256FromInt64(math.MinInt64)
+	maximum := types.Decimal256FromInt64(math.MaxInt64)
+	return opUnaryFixedToStr[types.Decimal256](ivecs, result, proc, length, func(value types.Decimal256) string {
+		rounded := roundDecimal256Integral(value, divisor)
+		switch {
+		case rounded.Less(minimum):
+			return hexEncodeInt64(math.MinInt64)
+		case maximum.Less(rounded):
+			return hexEncodeInt64(math.MaxInt64)
+		default:
+			return hexEncodeInt64(int64(rounded.B0_63))
+		}
+	}, selectList)
+}
+
+func decimal128PowerOfTen(scale int32) types.Decimal128 {
+	result := types.Decimal128FromInt64(1)
+	for scale >= 19 {
+		result, _ = result.Mul128(types.Decimal128{B0_63: types.Pow10[19]})
+		scale -= 19
+	}
+	if scale > 0 {
+		result, _ = result.Mul128(types.Decimal128{B0_63: types.Pow10[scale]})
+	}
+	return result
+}
+
+func decimal256PowerOfTen(scale int32) types.Decimal256 {
+	result := types.Decimal256FromInt64(1)
+	for scale >= 19 {
+		result, _ = result.Mul256(types.Decimal256{B0_63: types.Pow10[19]})
+		scale -= 19
+	}
+	if scale > 0 {
+		result, _ = result.Mul256(types.Decimal256{B0_63: types.Pow10[scale]})
+	}
+	return result
+}
+
+func roundDecimal128Integral(value, divisor types.Decimal128) types.Decimal128 {
+	if divisor == types.Decimal128FromInt64(1) {
+		return value
+	}
+	negative := value.Sign()
+	if negative {
+		value = value.Minus()
+	}
+	quotient, _ := value.Div128Trunc(divisor)
+	remainder, _ := value.Mod128(divisor)
+	half, _ := divisor.Div128Trunc(types.Decimal128FromInt64(2))
+	if !remainder.Less(half) {
+		quotient, _ = quotient.Add128(types.Decimal128FromInt64(1))
+	}
+	if negative {
+		return quotient.Minus()
+	}
+	return quotient
+}
+
+func roundDecimal256Integral(value, divisor types.Decimal256) types.Decimal256 {
+	if divisor == types.Decimal256FromInt64(1) {
+		return value
+	}
+	negative := value.Sign()
+	if negative {
+		value = value.Minus()
+	}
+	quotient, _ := value.Div256Trunc(divisor)
+	remainder, _ := value.Mod256(divisor)
+	half, _ := divisor.Div256Trunc(types.Decimal256FromInt64(2))
+	if !remainder.Less(half) {
+		quotient, _ = quotient.Add256(types.Decimal256FromInt64(1))
+	}
+	if negative {
+		return quotient.Minus()
+	}
+	return quotient
 }
 
 func HexArray(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -8780,15 +8933,34 @@ func newCrc32ExecContext() *crc32ExecContext {
 }
 
 func (content *crc32ExecContext) builtInCrc32(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToFixedWithErrorCheck[uint32](
+	if _, legacy := result.(*vector.FunctionResult[uint32]); legacy {
+		return builtInCrc32Result[uint32](content, parameters, result, proc, length, selectList, func(value uint32) uint32 {
+			return value
+		})
+	}
+	return builtInCrc32Result[uint64](content, parameters, result, proc, length, selectList, func(value uint32) uint64 {
+		return uint64(value)
+	})
+}
+
+func builtInCrc32Result[Tr types.FixedSizeTExceptStrType](
+	content *crc32ExecContext,
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+	toResult func(uint32) Tr,
+) error {
+	return opUnaryBytesToFixedWithErrorCheck[Tr](
 		parameters,
-		result, proc, length, func(v []byte) (uint32, error) {
+		result, proc, length, func(v []byte) (Tr, error) {
 			content.hah.Reset()
 			_, err := content.hah.Write(v)
 			if err != nil {
-				return 0, err
+				return toResult(0), err
 			}
-			return content.hah.Sum32(), nil
+			return toResult(content.hah.Sum32()), nil
 		}, selectList)
 }
 
@@ -9225,12 +9397,20 @@ func strLength(xs string) int64 {
 }
 
 func LengthUTF8(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToFixedByStringDomain[uint64](
-		ivecs, result, proc, length, strLengthUTF8, strLengthBinary, selectList)
+	if _, legacy := result.(*vector.FunctionResult[uint64]); legacy {
+		return opUnaryBytesToFixedByStringDomain[uint64](
+			ivecs, result, proc, length, strLengthUTF8, strLengthBinary, selectList)
+	}
+	return opUnaryBytesToFixedByStringDomain[int64](
+		ivecs, result, proc, length, strLengthUTF8Int64, strLengthBinaryInt64, selectList)
 }
 
 func strLengthUTF8(xs []byte) uint64 {
 	return lengthutf8.CountUTF8CodePoints(xs)
+}
+
+func strLengthUTF8Int64(xs []byte) int64 {
+	return int64(strLengthUTF8(xs))
 }
 
 func LengthBinary(
@@ -9240,12 +9420,20 @@ func LengthBinary(
 	length int,
 	selectList *FunctionSelectList,
 ) error {
-	return opUnaryBytesToFixedByStringDomain[uint64](
-		ivecs, result, proc, length, strLengthUTF8, strLengthBinary, selectList)
+	if _, legacy := result.(*vector.FunctionResult[uint64]); legacy {
+		return opUnaryBytesToFixedByStringDomain[uint64](
+			ivecs, result, proc, length, strLengthUTF8, strLengthBinary, selectList)
+	}
+	return opUnaryBytesToFixedByStringDomain[int64](
+		ivecs, result, proc, length, strLengthUTF8Int64, strLengthBinaryInt64, selectList)
 }
 
 func strLengthBinary(xs []byte) uint64 {
 	return uint64(len(xs))
+}
+
+func strLengthBinaryInt64(xs []byte) int64 {
+	return int64(len(xs))
 }
 
 func Ltrim(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -9547,13 +9735,24 @@ func Decode(parameters []*vector.Vector, result vector.FunctionResultWrapper, pr
 // UncompressedLength: UNCOMPRESSED_LENGTH(compressed_string) - Returns the length that the compressed string had before being compressed
 // Reads the first 4 bytes (little-endian) from the compressed string
 func UncompressedLength(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if _, legacy := result.(*vector.FunctionResult[int32]); legacy {
+		return uncompressedLengthResult[int32](parameters, result, proc, length, selectList, func(value uint32) int32 {
+			return int32(value)
+		})
+	}
+	return uncompressedLengthResult[int64](parameters, result, proc, length, selectList, func(value uint32) int64 {
+		return int64(value)
+	})
+}
+
+func uncompressedLengthResult[Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, toResult func(uint32) Tr) error {
 	source := vector.GenerateFunctionStrParameter(parameters[0])
-	rs := vector.MustFunctionResult[int32](result)
+	rs := vector.MustFunctionResult[Tr](result)
 
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
 		if selectList != nil && selectList.Contains(i) {
-			if err := rs.Append(0, true); err != nil {
+			if err := rs.Append(toResult(0), true); err != nil {
 				return err
 			}
 			continue
@@ -9561,21 +9760,21 @@ func UncompressedLength(parameters []*vector.Vector, result vector.FunctionResul
 
 		data, null := source.GetStrValue(i)
 		if null {
-			if err := rs.Append(0, true); err != nil {
+			if err := rs.Append(toResult(0), true); err != nil {
 				return err
 			}
 			continue
 		}
 
 		if len(data) <= 4 {
-			if err := rs.Append(0, false); err != nil {
+			if err := rs.Append(toResult(0), false); err != nil {
 				return err
 			}
 			continue
 		}
 
 		originalLen := binary.LittleEndian.Uint32(data[0:4]) & mysqlCompressedLengthMask
-		if err := rs.Append(int32(originalLen), false); err != nil {
+		if err := rs.Append(toResult(originalLen), false); err != nil {
 			return err
 		}
 	}
@@ -13328,12 +13527,12 @@ func BitmapBucketNumber(parameters []*vector.Vector, result vector.FunctionResul
 }
 
 func BitmapCount(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToFixed[uint64](parameters, result, proc, length, func(v []byte) (cnt uint64) {
+	return opUnaryBytesToFixedWithErrorCheck[uint64](parameters, result, proc, length, func(v []byte) (uint64, error) {
 		bmp := roaring.New()
 		if err := bmp.UnmarshalBinary(v); err != nil {
-			return 0
+			return 0, moerr.NewInvalidInputf(proc.Ctx, "invalid bitmap: %v", err)
 		}
-		return bmp.GetCardinality()
+		return bmp.GetCardinality(), nil
 	}, selectList)
 }
 

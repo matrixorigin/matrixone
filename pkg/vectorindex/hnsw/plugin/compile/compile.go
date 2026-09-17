@@ -189,8 +189,18 @@ func (Hooks) RestoreInitSQL(ctx compileplugin.CompileContext, indexDefs map[stri
 	if !ok {
 		return false, "", moerr.NewInternalErrorNoCtx("hnsw_meta index definition not found")
 	}
-	return true, fmt.Sprintf("ALTER TABLE `%s`.`%s` ALTER REINDEX `%s` hnsw FORCE_SYNC",
-		ctx.QryDatabase(), ctx.OriginalTableDef().Name, metaDef.IndexName), nil
+	return true, fmt.Sprintf("ALTER TABLE %s ALTER REINDEX %s hnsw FORCE_SYNC",
+		sqlquote.QualifiedIdent(ctx.QryDatabase(), ctx.OriginalTableDef().Name),
+		sqlquote.Ident(metaDef.IndexName)), nil
+}
+
+// AlterCopyInitSQL — no InitSQL needed. RunHnsw (the ISCP consumer) rebuilds the whole graph
+// from the CDC ts=0 replay (it accumulates every snapshot+tail batch and Save()s the model with
+// build_ts=GetToTS), so the copy-alter replacement index converges without an explicit rebuild.
+// (Restore differs: it block-clones the hidden tables and REINDEXes, hence RestoreInitSQL. This is
+// the fulltext2 case's opposite -- fulltext2's consumer writes only a cdc_tail with no base.) #28837
+func (Hooks) AlterCopyInitSQL(_ compileplugin.CompileContext, _ map[string]*plan.IndexDef) (bool, string, error) {
+	return false, "", nil
 }
 
 func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.ReindexParamUpdate) (map[string]string, error) {
