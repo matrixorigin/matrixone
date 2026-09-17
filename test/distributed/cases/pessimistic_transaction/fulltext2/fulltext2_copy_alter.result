@@ -71,19 +71,49 @@ select id, extra from docs where match(body) against('quantum') order by id;
 1  ¦  null  𝄀
 3  ¦  null  𝄀
 5  ¦  null
-insert into docs(id, body, extra) values (100,'neutrino oscillation study',1),(101,'neutrino detector array',1);
+create table docs_cdc(id bigint primary key, body text);
+insert into docs_cdc values
+(1,'quantum physics is deep'),(2,'classical mechanics only'),
+(3,'quantum computing rocks'),(4,'organic chemistry notes'),(5,'a quantum leap forward');
+create fulltext2 index ftidx on docs_cdc(body);
+alter table docs_cdc add column extra int;
+set @ft2_cdc_index = (
+select index_table_name from mo_catalog.mo_indexes
+where name = 'ftidx' and algo = 'fulltext2' and algo_table_type = 'ftv2_index'
+and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'docs_cdc')
+limit 1
+);
+set @wait_cdc_base_sql = concat(
+'select count(*) > 0 as ready from `', database(), '`.`', @ft2_cdc_index, '` where tag = 0');
+prepare wait_cdc_base from @wait_cdc_base_sql;
+execute wait_cdc_base;
+➤ ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_cdc_base;
+set @capture_tail_sql = concat(
+'select coalesce(max(chunk_id), -1) into @tail_before_insert from `', database(), '`.`', @ft2_cdc_index,
+'` where index_id = ''cdc_tail'' and tag = 1');
+prepare capture_tail from @capture_tail_sql;
+execute capture_tail;
+deallocate prepare capture_tail;
+insert into docs_cdc(id, body, extra) values (100,'neutrino oscillation study',1),(101,'neutrino detector array',1);
 set @wait_tail_sql = concat(
-'select count(*) > 0 as ready from `', database(), '`.`', @ft2_index2, '` where tag = 1');
+'select coalesce(max(chunk_id), -1) > ', @tail_before_insert,
+' as ready from `', database(), '`.`', @ft2_cdc_index, '` where index_id = ''cdc_tail'' and tag = 1');
 prepare wait_tail from @wait_tail_sql;
 execute wait_tail;
 ➤ ready[-7,1,0]  𝄀
 1
 deallocate prepare wait_tail;
-select id from docs where match(body) against('neutrino') order by id;
+select id from docs_cdc where body like '%neutrino%' order by id;
 ➤ id[-5,64,0]  𝄀
 100  𝄀
 101
-select id from docs where match(body) against('quantum') order by id;
+select id from docs_cdc where match(body) against('neutrino') order by id;
+➤ id[-5,64,0]  𝄀
+100  𝄀
+101
+select id from docs_cdc where match(body) against('quantum') order by id;
 ➤ id[-5,64,0]  𝄀
 1  𝄀
 3  𝄀
