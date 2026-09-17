@@ -7651,6 +7651,7 @@ func (c *Compile) hasUnsupportedRemoteGroupWire(node *plan.Node) bool {
 		(hasHLLAggregate(node) && !c.supportsRemoteHLL()) ||
 		(hasVariableLengthGroupKey(node) && !c.supportsRemoteGroupHashString()) ||
 		(hasCanonicalDistinctKeyWire(node) && !c.supportsRemoteCanonicalDistinctKeyWire()) ||
+		(hasLegacyFloatDistinctKeyWire(node) && !c.supportsRemoteCanonicalDistinctKeyWire()) ||
 		(hasVarianceAggregate(node) && !c.supportsRemoteVarianceAggregates())
 }
 
@@ -7922,6 +7923,31 @@ func hasCanonicalDistinctKeyWire(node *plan.Node) bool {
 			continue
 		}
 		if len(fn.Args) != 1 || types.T(fn.Args[0].Typ.Id).FixedLength() < 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// hasLegacyFloatDistinctKeyWire identifies the fixed-width FLOAT DISTINCT
+// contract that changed with the canonical key fast path. Before MORPC v79 a
+// remote producer must keep every non-zero float bit pattern as a separate
+// key, so a new coordinator keeps this aggregation local until all remote
+// peers understand the modern contract. GROUP_CONCAT has an independent
+// ordered wire format and is intentionally excluded.
+func hasLegacyFloatDistinctKeyWire(node *plan.Node) bool {
+	if node == nil {
+		return false
+	}
+	for _, expr := range node.AggList {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil ||
+			uint64(fn.Func.Obj)&function.Distinct == 0 ||
+			fn.Func.ObjName == plan2.NameGroupConcat || len(fn.Args) != 1 {
+			continue
+		}
+		oid := types.T(fn.Args[0].Typ.Id)
+		if oid == types.T_float32 || oid == types.T_float64 {
 			return true
 		}
 	}
@@ -8362,6 +8388,7 @@ func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
 		(!hasHLLAggregate(node) || c.supportsRemoteHLL()) &&
 		(!hasVariableLengthGroupKey(node) || c.supportsRemoteGroupHashString()) &&
 		(!hasCanonicalDistinctKeyWire(node) || c.supportsRemoteCanonicalDistinctKeyWire()) &&
+		(!hasLegacyFloatDistinctKeyWire(node) || c.supportsRemoteCanonicalDistinctKeyWire()) &&
 		(!hasVarianceAggregate(node) || c.supportsRemoteVarianceAggregates()) &&
 		(!hasWidenedDecimalSum(node) || c.supportsRemoteWidenedDecimalSum())
 }
