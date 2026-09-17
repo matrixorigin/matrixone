@@ -404,6 +404,56 @@ func TestPreparedTimeArithmeticPreservesNullEnvelopeThroughAbs(t *testing.T) {
 	require.False(t, expr.Typ.NotNullable)
 }
 
+func TestPreparedTimeArithmeticPreservesExplicitIntegerBoundary(t *testing.T) {
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt_null_envelope_signed from 'select cast(''00:00:01'' as time(0)) + cast((? + ?) as signed)'")
+	require.NoError(t, err)
+	filled, _, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(), prepared.GetDcl().GetPrepare().Plan, []any{
+			ParamValue{Value: nil, PrepareParamKind: vector.PrepareParamNone},
+			ParamValue{Value: "2", PrepareParamKind: vector.PrepareParamInteger},
+		})
+	require.NoError(t, err)
+	expr := filled.GetQuery().Nodes[len(filled.GetQuery().Nodes)-1].ProjectList[0]
+	require.Equal(t, int32(types.T_decimal64), expr.Typ.Id)
+	require.Equal(t, int32(18), expr.Typ.Width)
+	require.Equal(t, int32(0), expr.Typ.Scale)
+
+	folded, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt_null_envelope_folded_signed from 'select cast(''00:00:01'' as time(0)) + (cast(NULL as signed) + ?)'")
+	require.NoError(t, err)
+	foldedPlan, _, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(), folded.GetDcl().GetPrepare().Plan, []any{
+			ParamValue{Value: "2", PrepareParamKind: vector.PrepareParamInteger},
+		})
+	require.NoError(t, err)
+	foldedExpr := foldedPlan.GetQuery().Nodes[len(foldedPlan.GetQuery().Nodes)-1].ProjectList[0]
+	require.Equal(t, int32(types.T_decimal64), foldedExpr.Typ.Id)
+	require.Equal(t, int32(18), foldedExpr.Typ.Width)
+	require.Equal(t, int32(0), foldedExpr.Typ.Scale)
+}
+
+func TestPreparedTimeArithmeticPositionScopeKeepsUnselectedMarkers(t *testing.T) {
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt_position_scope from 'select ? as direct, cast(''00:00:01'' as time(0)) + (? + ?) as nested'")
+	require.NoError(t, err)
+	preparePlan := prepared.GetDcl().GetPrepare().Plan
+	originalRoot := preparePlan.GetQuery().Nodes[len(preparePlan.GetQuery().Nodes)-1]
+	originalNested := originalRoot.ProjectList[1].String()
+
+	runtimePlan, specialized, err := FillValuesOfParamsInPlanWithSpecializationAtPositions(
+		context.Background(), preparePlan, []any{
+			ParamValue{Value: "7", RuntimeType: types.T_int64.ToType(), HasRuntimeType: true, IsBinaryProtocol: true},
+			ParamValue{Value: nil, PrepareParamKind: vector.PrepareParamNone},
+			ParamValue{Value: "2", PrepareParamKind: vector.PrepareParamInteger},
+		}, []int32{0})
+	require.NoError(t, err)
+	require.True(t, specialized)
+	runtimeRoot := runtimePlan.GetQuery().Nodes[len(runtimePlan.GetQuery().Nodes)-1]
+	require.Equal(t, originalNested, runtimeRoot.ProjectList[1].String(),
+		"unselected TIME arithmetic markers must not be treated as execute-time NULL")
+}
+
 func TestPreparedTimeArithmeticPreservesExplicitDecimalAndNestedDomains(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	mock.ctxt.tables["nation"].Cols[0].Typ = planpb.Type{

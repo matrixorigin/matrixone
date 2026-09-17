@@ -1762,8 +1762,29 @@ func (rule *ResetParamRefRule) preparedTemporalStrictNullValue(expr *plan.Expr) 
 	return false
 }
 
+func (rule *ResetParamRefRule) preparedRuntimeParamSelected(pos int) bool {
+	if pos < 0 {
+		return false
+	}
+	// A nil params slice is used by direct helper tests that provide runtime
+	// values through SetParamValues. The execute-time plan replacement path
+	// always supplies a slot for every marker; an absent slot there means the
+	// position was deliberately left unselected.
+	if rule.params == nil {
+		return true
+	}
+	return pos < len(rule.params) && rule.params[pos] != nil
+}
+
 func (rule *ResetParamRefRule) preparedRuntimeParamIsNull(pos int) bool {
 	if pos < 0 {
+		return false
+	}
+	// A position-scoped specialization leaves unselected entries absent from
+	// rule.params while its parallel ParamValue slot is the zero value. That
+	// zero value is not an execute-time NULL and must not participate in the
+	// unresolved envelope inference.
+	if !rule.preparedRuntimeParamSelected(pos) {
 		return false
 	}
 	if pos < len(rule.paramValues) {
@@ -1773,6 +1794,127 @@ func (rule *ResetParamRefRule) preparedRuntimeParamIsNull(pos int) bool {
 	}
 	value, _, ok := rule.runtimeParamValue(pos)
 	return ok && value == nil
+}
+
+// inferPreparedTemporalNullExpr derives one operand type for the unresolved
+// NULL envelope without changing the executable expression. A domainless NULL
+// uses the complete DECIMAL128 operand domain for inference only; a concrete
+// marker uses its current execute-time numeric type. Provisional casts are
+// transparent, while explicit casts and non-arithmetic control-flow functions
+// remain semantic boundaries.
+func (rule *ResetParamRefRule) inferPreparedTemporalNullExpr(
+	expr *plan.Expr,
+) (types.Type, bool, error) {
+	if expr == nil {
+		return types.Type{}, false, nil
+	}
+	if param := expr.GetP(); param != nil && param.Pos >= 0 {
+		if !rule.preparedRuntimeParamSelected(int(param.Pos)) {
+			return types.Type{}, false, nil
+		}
+		if rule.preparedRuntimeParamIsNull(int(param.Pos)) {
+			return types.New(types.T_decimal128, 38, 0), true, nil
+		}
+		typ, ok := rule.runtimeParamType(int(param.Pos))
+		if !ok || !typ.IsNumeric() {
+			return types.Type{}, false, nil
+		}
+		return typ, true, nil
+	}
+	if literal := expr.GetLit(); literal != nil {
+		if literal.GetIsnull() {
+			// Constant folding can erase an explicit CAST(NULL AS ...)
+			// wrapper while retaining the literal's declared type. Only a
+			// T_any NULL is domainless; a typed NULL must keep its explicit
+			// integer/decimal boundary during envelope inference.
+			typedNull := makeTypeByPlan2Expr(expr)
+			if typedNull.Oid != types.T_any {
+				return typedNull, true, nil
+			}
+			return types.New(types.T_decimal128, 38, 0), true, nil
+		}
+		return makeTypeByPlan2Expr(expr), true, nil
+	}
+	if len(preparedNumericValueParamPositions(expr)) == 0 &&
+		!rule.preparedTemporalStrictNullValue(expr) {
+		return makeTypeByPlan2Expr(expr), true, nil
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return types.Type{}, false, nil
+	}
+	name := strings.ToLower(fn.Func.GetObjName())
+	if name == "cast" && len(fn.Args) > 0 {
+		if isExplicitPreparedCast(expr) {
+			return makeTypeByPlan2Expr(expr), true, nil
+		}
+		// Binder-inserted casts around a marker or a marker-bearing arithmetic
+		// subtree are provisional overload artifacts. Infer from their source;
+		// keeping this cast would reintroduce the DECIMAL64 PREPARE hint.
+		return rule.inferPreparedTemporalNullExpr(fn.Args[0])
+	}
+	if !isPreparedTemporalIntegerArithmetic(name) {
+		// In particular, do not cross COALESCE/IFNULL/CASE: those functions can
+		// turn a NULL marker into a concrete value before TIME arithmetic sees it.
+		return types.Type{}, false, nil
+	}
+	argTypes := make([]types.Type, len(fn.Args))
+	for i, arg := range fn.Args {
+		typ, ok, err := rule.inferPreparedTemporalNullExpr(arg)
+		if err != nil || !ok {
+			return types.Type{}, false, err
+		}
+		argTypes[i] = typ
+	}
+	resolved, err := planfunction.GetFunctionByName(rule.ctx, name, argTypes)
+	if err != nil {
+		return types.Type{}, false, nil
+	}
+	return resolved.GetReturnType(), true, nil
+}
+
+// preparedTemporalNullEnvelopeType resolves the guarded outer operation from
+// its original operands. originalTyp is intentionally only a scale fallback:
+// it is the narrow PREPARE-time hint, not the NULL execution envelope.
+func (rule *ResetParamRefRule) preparedTemporalNullEnvelopeType(
+	functionName string,
+	temporalPeer types.Type,
+	originalTyp plan.Type,
+	originalArgs []*Expr,
+) (plan.Type, bool, error) {
+	argTypes := make([]types.Type, len(originalArgs))
+	for i, arg := range originalArgs {
+		if peer, ok := preparedTemporalNumericPeer(arg); ok && peer.Oid.IsDecimal() {
+			argTypes[i] = peer
+			continue
+		}
+		typ, ok, err := rule.inferPreparedTemporalNullExpr(arg)
+		if err != nil || !ok {
+			return plan.Type{}, false, err
+		}
+		// The executable TIME boundary first coerces a completed integer
+		// operand into the TIME peer's DECIMAL64 domain. Reproduce that boundary
+		// in the type-only inference as well; resolving DECIMAL64 + INT directly
+		// would widen an explicit CAST(... AS SIGNED/UNSIGNED) to DECIMAL128.
+		if types.T(typ.Oid).IsInteger() {
+			integerPeer := temporalPeer
+			integerPeer.Scale = 0
+			typ = integerPeer
+		}
+		argTypes[i] = typ
+	}
+	resolved, err := planfunction.GetFunctionByName(rule.ctx, functionName, argTypes)
+	if err != nil {
+		return plan.Type{}, false, nil
+	}
+	target := resolved.GetReturnType()
+	if target.Scale < originalTyp.Scale {
+		target.Scale = originalTyp.Scale
+	}
+	if target.Scale < temporalPeer.Scale {
+		target.Scale = temporalPeer.Scale
+	}
+	return makePlan2Type(&target), true, nil
 }
 
 // restorePreparedTemporalNullEnvelope keeps the result metadata selected when
@@ -1790,7 +1932,8 @@ func (rule *ResetParamRefRule) restorePreparedTemporalNullEnvelope(
 		!types.T(originalTyp.Id).IsDecimal() {
 		return rewritten, false, nil
 	}
-	if _, ok := preparedTemporalNumericPeerFromArgs(originalArgs); !ok {
+	temporalPeer, ok := preparedTemporalNumericPeerFromArgs(originalArgs)
+	if !ok {
 		return rewritten, false, nil
 	}
 	strictNull := false
@@ -1800,17 +1943,30 @@ func (rule *ResetParamRefRule) restorePreparedTemporalNullEnvelope(
 			break
 		}
 	}
-	if !strictNull ||
-		(types.T(rewritten.Typ.Id) == types.T(originalTyp.Id) &&
-			rewritten.Typ.Width == originalTyp.Width &&
-			rewritten.Typ.Scale == originalTyp.Scale &&
-			rewritten.Typ.Charset == originalTyp.Charset) {
+	if !strictNull {
 		return rewritten, false, nil
 	}
-	target := originalTyp
-	target.NotNullable = rewritten.Typ.NotNullable
+	target, ok, inferErr := rule.preparedTemporalNullEnvelopeType(
+		functionName, temporalPeer, originalTyp, originalArgs)
+	if inferErr != nil {
+		return rewritten, false, inferErr
+	}
+	if !ok || (types.T(rewritten.Typ.Id) == types.T(target.Id) &&
+		rewritten.Typ.Width == target.Width &&
+		rewritten.Typ.Scale == target.Scale &&
+		rewritten.Typ.Charset == target.Charset &&
+		rewritten.Typ.NotNullable == target.NotNullable) {
+		return rewritten, false, nil
+	}
+	// A strict nested NULL is nullable even if the prepare-time hint was
+	// marked non-nullable by the provisional overload.
+	target.NotNullable = false
 	restored, err := appendCastBeforeExpr(rule.ctx, rewritten, target)
 	if err == nil && restored != nil {
+		restored.Typ.NotNullable = false
+		if cast := restored.GetF(); cast != nil && len(cast.Args) > 1 && cast.Args[1] != nil {
+			cast.Args[1].Typ.NotNullable = false
+		}
 		if rule.preparedTemporalNullEnvelopeExprs == nil {
 			rule.preparedTemporalNullEnvelopeExprs = make(map[*plan.Expr]struct{})
 		}
@@ -3029,6 +3185,14 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				rule.markSQLExecuteNumericDependent(e, rewritten)
 			}
 			return rewritten, nil
+		}
+		if restored, restoredChanged, restoreErr := rule.restorePreparedTemporalNullEnvelope(
+			functionName, originalTyp, originalArgs, e,
+		); restoreErr != nil {
+			return nil, restoreErr
+		} else if restoredChanged {
+			rule.specialized = true
+			return restored, nil
 		}
 		if numericPrefixDependent && !isExplicitPreparedCast(e) {
 			rule.markNumericPrefixDependent(e)
