@@ -165,6 +165,14 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		}
 		parentParamType := b.numericParamType
 		b.numericParamType = nil
+		var restoreAssignmentDomain func()
+		assignmentCtx := b.sysCtx
+		assignmentBaseCtx := b.integerAssignmentBaseCtx
+		if assignmentBaseCtx != nil {
+			restoreAssignmentDomain = b.builder.suspendIntegerAssignmentDomain()
+			b.sysCtx = assignmentBaseCtx
+			b.integerAssignmentBaseCtx = nil
+		}
 		if b.mysqlSpecialTypeInAst(exprImpl.Expr) && makeTypeByPlan2Type(typ).IsNumeric() {
 			expr, err = b.bindWithRawMySQLSpecialTypes(func() (*Expr, error) {
 				return b.impl.BindExpr(exprImpl.Expr, depth, false)
@@ -174,6 +182,11 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 			expr, err = b.bindNumericExprWithContext(exprImpl.Expr, depth, &typ)
 		} else {
 			expr, err = b.impl.BindExpr(exprImpl.Expr, depth, false)
+		}
+		if restoreAssignmentDomain != nil {
+			restoreAssignmentDomain()
+			b.sysCtx = assignmentCtx
+			b.integerAssignmentBaseCtx = assignmentBaseCtx
 		}
 		b.numericParamType = parentParamType
 		if err != nil {

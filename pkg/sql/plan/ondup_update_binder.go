@@ -128,6 +128,9 @@ func (b *OndupUpdateBinder) assignmentAstProducesApproximate(astExpr tree.Expr) 
 		return true
 	}
 	switch expr := astExpr.(type) {
+	case *tree.ParamExpr, *tree.VarExpr, *tree.Subquery:
+		// Runtime-owned values are not proven exact while the ODKU plan is bound.
+		return true
 	case *tree.UnresolvedName:
 		idx, ok := b.tableDef.Name2ColIndex[expr.ColName()]
 		return ok && types.T(b.tableDef.Cols[idx].Typ.Id).IsFloat()
@@ -147,7 +150,8 @@ func (b *OndupUpdateBinder) assignmentAstProducesApproximate(astExpr tree.Expr) 
 		}
 		indexes, ok := function.NumericFunctionResultArgs(name, len(expr.Exprs), false)
 		if !ok {
-			return false
+			// POWER and other unclassified functions own their result domain.
+			return true
 		}
 		for _, index := range indexes {
 			if b.assignmentAstProducesApproximate(expr.Exprs[index]) {

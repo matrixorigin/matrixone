@@ -6913,19 +6913,34 @@ func numericSourceOutputContainsDivision(source *numericProjectionSourceInfo, po
 			found = false
 		}
 	}()
-	clause, ok := getSelectTree(source.source).Select.(*tree.SelectClause)
-	if !ok || pos >= len(clause.Exprs) {
+	return numericSelectOutputContainsDivision(getSelectTree(source.source).Select, pos)
+}
+
+func numericSelectOutputContainsDivision(statement tree.SelectStatement, pos int) bool {
+	switch clause := statement.(type) {
+	case *tree.SelectClause:
+		if pos >= len(clause.Exprs) {
+			return false
+		}
+		outputExpr := unwrapParenExpr(clause.Exprs[pos].Expr)
+		if name, ok := outputExpr.(*tree.UnresolvedName); ok && !name.Star {
+			// Preserve an integer preference through forwarding projections; the
+			// referenced producer is inspected when its own target is seeded.
+			return true
+		}
+		visitor := &exactDivisionAstVisitor{}
+		_, _ = outputExpr.Accept(visitor)
+		return visitor.found
+	case *tree.UnionClause:
+		return numericSelectOutputContainsDivision(clause.Left, pos) ||
+			numericSelectOutputContainsDivision(clause.Right, pos)
+	case *tree.ParenSelect:
+		return numericSelectOutputContainsDivision(clause.Select.Select, pos)
+	case *tree.Select:
+		return numericSelectOutputContainsDivision(clause.Select, pos)
+	default:
 		return false
 	}
-	outputExpr := unwrapParenExpr(clause.Exprs[pos].Expr)
-	if name, ok := outputExpr.(*tree.UnresolvedName); ok && !name.Star {
-		// Preserve an integer preference through forwarding projections; the
-		// referenced producer is inspected when its own target is seeded.
-		return true
-	}
-	visitor := &exactDivisionAstVisitor{}
-	_, _ = outputExpr.Accept(visitor)
-	return visitor.found
 }
 
 func seedNumericSourceTarget(source *numericProjectionSourceInfo, pos int, target Type) {
@@ -11082,7 +11097,9 @@ func bindProjectionList(
 	sampleRangeLeft, sampleRangeRight := ctx.sampleFunc.start, ctx.sampleFunc.start+ctx.sampleFunc.offset
 	if ctx.sampleFunc.hasSampleFunc {
 		// IF sample function exists, we should bind the sample column first.
-		sampleList, err := ctx.sampleFunc.BindSampleColumn(ctx, projectionBinder, selectList[sampleRangeLeft:sampleRangeRight])
+		sampleList, err := ctx.sampleFunc.BindSampleColumn(
+			ctx, projectionBinder, selectList[sampleRangeLeft:sampleRangeRight], sampleRangeLeft,
+		)
 		if err != nil {
 			return err
 		}

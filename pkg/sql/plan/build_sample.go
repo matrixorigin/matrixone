@@ -55,11 +55,16 @@ func (s *SampleFuncCtx) GenerateSampleFunc(se *tree.SampleExpr) error {
 	return nil
 }
 
-func (s *SampleFuncCtx) BindSampleColumn(ctx *BindContext, binder *ProjectionBinder, sampleList tree.SelectExprs) ([]*plan.Expr, error) {
+func (s *SampleFuncCtx) BindSampleColumn(
+	ctx *BindContext,
+	binder *ProjectionBinder,
+	sampleList tree.SelectExprs,
+	projectionOffset int,
+) ([]*plan.Expr, error) {
 	s.columns = make([]*plan.Expr, 0, s.offset)
 
 	pList := make([]*plan.Expr, 0, len(sampleList))
-	for _, se := range sampleList {
+	for index, se := range sampleList {
 		astStr := semanticAstKey(se.Expr)
 
 		_, grouped := ctx.groupByAst[astStr]
@@ -81,7 +86,9 @@ func (s *SampleFuncCtx) BindSampleColumn(ctx *BindContext, binder *ProjectionBin
 			ctx.projects = append(ctx.projects, expr)
 			continue
 		}
-		expr, err := binder.baseBindExpr(se.Expr, 0, true)
+		expr, err := bindProjectionExprWithNumericTarget(
+			ctx, binder, se.Expr, projectionOffset+index,
+		)
 		if err != nil {
 			return nil, err
 		}

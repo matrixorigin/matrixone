@@ -452,6 +452,49 @@ DROP TABLE group_alias_a;
 DROP TABLE group_alias_b;
 DROP TABLE group_constant_dst;
 DROP TABLE group_scope_src;
+CREATE TABLE shared_rel_src(x BIGINT);
+INSERT INTO shared_rel_src VALUES (5);
+CREATE TABLE shared_window_a(d DOUBLE,i BIGINT);
+INSERT INTO shared_window_a SELECT SUM(x/2) OVER(),SUM(x/2) OVER() FROM shared_rel_src;
+CREATE TABLE shared_window_b(i BIGINT,d DOUBLE);
+INSERT INTO shared_window_b SELECT SUM(x/2) OVER(),SUM(x/2) OVER() FROM shared_rel_src;
+SELECT i,d FROM shared_window_a;
+➤ i[-5,64,0]  ¦  d[8,53,31]  𝄀
+3  ¦  2.5
+SELECT i,d FROM shared_window_b;
+➤ i[-5,64,0]  ¦  d[8,53,31]  𝄀
+3  ¦  2.5
+INSERT INTO shared_rel_src VALUES (7);
+CREATE TABLE shared_lag_dst(d DOUBLE,i BIGINT);
+INSERT INTO shared_lag_dst SELECT
+LAG(x/2,1,x/2) OVER(ORDER BY x),LAG(x/2,1,x/2) OVER(ORDER BY x) FROM shared_rel_src;
+SELECT MIN(i) FROM shared_lag_dst;
+➤ min(i)[-5,64,0]  𝄀
+3
+CREATE TABLE shared_union_dst(d DOUBLE,i BIGINT);
+INSERT INTO shared_union_dst SELECT q,q FROM
+(SELECT x/2 q FROM shared_rel_src UNION ALL SELECT x/2 FROM shared_rel_src) u;
+SELECT MIN(i) FROM shared_union_dst;
+➤ min(i)[-5,64,0]  𝄀
+3
+CREATE TABLE signed_boundary_dst(i BIGINT);
+INSERT INTO signed_boundary_dst SELECT
+CAST(((1000000000000000000/1)*1000000000000000000*1000000000000000000+0E0)/1E54 AS SIGNED);
+SELECT * FROM signed_boundary_dst;
+➤ i[-5,64,0]  𝄀
+1
+CREATE TABLE sample_dst(i BIGINT);
+INSERT INTO sample_dst SELECT SAMPLE(x/2,1 ROWS) FROM shared_rel_src WHERE x=5;
+SELECT * FROM sample_dst;
+➤ i[-5,64,0]  𝄀
+3
+DROP TABLE sample_dst;
+DROP TABLE signed_boundary_dst;
+DROP TABLE shared_union_dst;
+DROP TABLE shared_lag_dst;
+DROP TABLE shared_window_a;
+DROP TABLE shared_window_b;
+DROP TABLE shared_rel_src;
 SELECT 5/2 AS q;
 ➤ q[8,53,31]  𝄀
 2.5

@@ -291,6 +291,43 @@ func TestIssue28469BinaryPreparedIntegerAssignment(t *testing.T) {
 			require.Equal(t, int64(2), sum)
 		})
 
+		t.Run("shared_relational_producers_and_cast_boundaries", func(t *testing.T) {
+			mustExec(t, ctx, conn, "create table shared_rel_src(x bigint)")
+			mustExec(t, ctx, conn, "insert into shared_rel_src values (5)")
+			mustExec(t, ctx, conn, "create table shared_window_a(d double,i bigint)")
+			mustExec(t, ctx, conn, "insert into shared_window_a select sum(x/2) over(),sum(x/2) over() from shared_rel_src")
+			mustExec(t, ctx, conn, "create table shared_window_b(i bigint,d double)")
+			mustExec(t, ctx, conn, "insert into shared_window_b select sum(x/2) over(),sum(x/2) over() from shared_rel_src")
+			for _, table := range []string{"shared_window_a", "shared_window_b"} {
+				var integerValue int64
+				var approximateValue float64
+				require.NoError(t, conn.QueryRowContext(ctx, "select i,d from "+table).Scan(&integerValue, &approximateValue))
+				require.Equal(t, int64(3), integerValue)
+				require.Equal(t, 2.5, approximateValue)
+			}
+			mustExec(t, ctx, conn, "insert into shared_rel_src values (7)")
+			mustExec(t, ctx, conn, "create table shared_lag_dst(d double,i bigint)")
+			mustExec(t, ctx, conn, "insert into shared_lag_dst select lag(x/2,1,x/2) over(order by x),lag(x/2,1,x/2) over(order by x) from shared_rel_src")
+			var lagMin int64
+			require.NoError(t, conn.QueryRowContext(ctx, "select min(i) from shared_lag_dst").Scan(&lagMin))
+			require.Equal(t, int64(3), lagMin)
+			mustExec(t, ctx, conn, "create table shared_union_dst(d double,i bigint)")
+			mustExec(t, ctx, conn, "insert into shared_union_dst select q,q from (select x/2 q from shared_rel_src union all select x/2 from shared_rel_src) u")
+			var unionMin int64
+			require.NoError(t, conn.QueryRowContext(ctx, "select min(i) from shared_union_dst").Scan(&unionMin))
+			require.Equal(t, int64(3), unionMin)
+			mustExec(t, ctx, conn, "create table signed_boundary_dst(i bigint)")
+			mustExec(t, ctx, conn, "insert into signed_boundary_dst select cast(((1000000000000000000/1)*1000000000000000000*1000000000000000000+0E0)/1E54 as signed)")
+			var signedValue int64
+			require.NoError(t, conn.QueryRowContext(ctx, "select i from signed_boundary_dst").Scan(&signedValue))
+			require.Equal(t, int64(1), signedValue)
+			mustExec(t, ctx, conn, "create table sample_dst(i bigint)")
+			mustExec(t, ctx, conn, "insert into sample_dst select sample(x/2,1 rows) from shared_rel_src")
+			var sampleValue int64
+			require.NoError(t, conn.QueryRowContext(ctx, "select i from sample_dst").Scan(&sampleValue))
+			require.Equal(t, int64(3), sampleValue)
+		})
+
 		t.Run("prepared_strict_division_by_zero", func(t *testing.T) {
 			mustExec(t, ctx, conn, "set sql_mode='STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO'")
 			defer func() { _, _ = conn.ExecContext(ctx, "set sql_mode='STRICT_TRANS_TABLES'") }()

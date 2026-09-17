@@ -107,6 +107,10 @@ func (b *ProjectionBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool)
 	}
 
 	if colPos, ok := b.ctx.windowByAst[astStr]; ok {
+		if fn, exactOutput := astExpr.(*tree.FuncExpr); exactOutput && b.integerAssignmentBaseCtx != nil {
+			delete(b.ctx.windowByAst, astStr)
+			return b.BindWinFunc(fn.Func.FunctionReference.(*tree.UnresolvedName).ColName(), fn, depth, isRoot)
+		}
 		return &plan.Expr{
 			Typ: b.ctx.windows[colPos].Typ,
 			Expr: &plan.Expr_Col{

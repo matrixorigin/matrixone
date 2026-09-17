@@ -207,6 +207,10 @@ func exprHasPreparedExactMarker(expr *Expr) bool {
 	if expr == nil {
 		return false
 	}
+	if types.T(expr.Typ.Id).IsFloat() && expr.GetF() != nil &&
+		!function.IsExactNumericExpression(expr, nil) {
+		return false
+	}
 	if expr.GetPreparedNumeric().GetProvisionalResultPeer() {
 		return true
 	}
