@@ -68,6 +68,20 @@ EXECUTE p_time_unsigned USING @p_time_numeric_v;
 ➤ result[3,18,0]  𝄀
 11
 DEALLOCATE PREPARE p_time_unsigned;
+PREPARE p_time_folded_signed FROM
+'SELECT CAST(''00:00:01'' AS TIME(0)) + (CAST(NULL AS SIGNED) + ?) AS result';
+SET @p_time_folded_v = CAST(2 AS SIGNED);
+EXECUTE p_time_folded_signed USING @p_time_folded_v;
+➤ result[3,18,0]  𝄀
+null
+DEALLOCATE PREPARE p_time_folded_signed;
+PREPARE p_time_folded_signed_value FROM
+'SELECT CAST(''00:00:01'' AS TIME(0)) + (CAST(1 AS SIGNED) + ?) AS result';
+SET @p_time_folded_v = CAST(2 AS SIGNED);
+EXECUTE p_time_folded_signed_value USING @p_time_folded_v;
+➤ result[3,18,0]  𝄀
+4
+DEALLOCATE PREPARE p_time_folded_signed_value;
 PREPARE p_time_explicit_decimal FROM
 'SELECT CAST(CAST(''00:00:01'' AS TIME(0)) AS DECIMAL(10,2)) + ? AS result';
 SET @p_time_numeric_v = CAST(9223372036854775807 AS SIGNED);

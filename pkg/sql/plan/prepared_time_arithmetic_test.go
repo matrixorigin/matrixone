@@ -419,18 +419,52 @@ func TestPreparedTimeArithmeticPreservesExplicitIntegerBoundary(t *testing.T) {
 	require.Equal(t, int32(18), expr.Typ.Width)
 	require.Equal(t, int32(0), expr.Typ.Scale)
 
-	folded, err := runOneStmt(NewMockOptimizer(false), t,
-		"prepare stmt_null_envelope_folded_signed from 'select cast(''00:00:01'' as time(0)) + (cast(NULL as signed) + ?)'")
-	require.NoError(t, err)
-	foldedPlan, _, err := FillValuesOfParamsInPlanWithSpecialization(
-		context.Background(), folded.GetDcl().GetPrepare().Plan, []any{
-			ParamValue{Value: "2", PrepareParamKind: vector.PrepareParamInteger},
+	for _, tc := range []struct {
+		name  string
+		query string
+		want  string
+	}{
+		{
+			name:  "folded typed null",
+			query: "prepare stmt_null_envelope_folded_signed from 'select cast(''00:00:01'' as time(0)) + (cast(NULL as signed) + ?)'",
+		},
+		{
+			name:  "reverse outer order",
+			query: "prepare stmt_null_envelope_folded_signed_reverse from 'select (cast(NULL as signed) + ?) + cast(''00:00:01'' as time(0))'",
+		},
+		{
+			name:  "non-null signed control",
+			query: "prepare stmt_null_envelope_signed_value from 'select cast(''00:00:01'' as time(0)) + (cast(1 as signed) + ?)'",
+			want:  "4",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			folded, err := runOneStmt(NewMockOptimizer(false), t, tc.query)
+			require.NoError(t, err)
+			foldedPlan, _, err := FillValuesOfParamsInPlanWithSpecialization(
+				context.Background(), folded.GetDcl().GetPrepare().Plan, []any{
+					ParamValue{Value: "2", PrepareParamKind: vector.PrepareParamInteger},
+				})
+			require.NoError(t, err)
+			foldedExpr := foldedPlan.GetQuery().Nodes[len(foldedPlan.GetQuery().Nodes)-1].ProjectList[0]
+			require.Equal(t, int32(types.T_decimal64), foldedExpr.Typ.Id)
+			require.Equal(t, int32(18), foldedExpr.Typ.Width)
+			require.Equal(t, int32(0), foldedExpr.Typ.Scale)
+			if tc.want == "" {
+				return
+			}
+
+			proc := testutil.NewProc(t)
+			defer proc.Free()
+			executor, err := colexec.NewExpressionExecutor(proc, foldedExpr)
+			require.NoError(t, err)
+			defer executor.Free()
+			result, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			require.NoError(t, err)
+			require.False(t, result.IsNull(0))
+			require.Equal(t, tc.want, formatDecimalResult(result))
 		})
-	require.NoError(t, err)
-	foldedExpr := foldedPlan.GetQuery().Nodes[len(foldedPlan.GetQuery().Nodes)-1].ProjectList[0]
-	require.Equal(t, int32(types.T_decimal64), foldedExpr.Typ.Id)
-	require.Equal(t, int32(18), foldedExpr.Typ.Width)
-	require.Equal(t, int32(0), foldedExpr.Typ.Scale)
+	}
 }
 
 func TestPreparedTimeArithmeticPositionScopeKeepsUnselectedMarkers(t *testing.T) {

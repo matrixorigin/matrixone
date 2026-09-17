@@ -1202,9 +1202,10 @@ func (b *baseBinder) bindNumericExprWithCurrentContext(astExpr tree.Expr, depth 
 }
 
 type numericAstTypeScan struct {
-	strong       []Type
-	weakDecimals []Type
-	hasParam     bool
+	strong        []Type
+	temporalHints []Type
+	weakDecimals  []Type
+	hasParam      bool
 	// hasParamRef identifies an actual prepared marker in the scanned
 	// expression. hasParam is broader: scalar subqueries use it to preserve
 	// deferred numeric-context propagation even when their result type cannot
@@ -1218,6 +1219,7 @@ type numericAstTypeScan struct {
 
 func (s numericAstTypeScan) merge(other numericAstTypeScan) numericAstTypeScan {
 	s.strong = append(s.strong, other.strong...)
+	s.temporalHints = append(s.temporalHints, other.temporalHints...)
 	s.weakDecimals = append(s.weakDecimals, other.weakDecimals...)
 	s.hasParam = s.hasParam || other.hasParam
 	s.hasParamRef = s.hasParamRef || other.hasParamRef
@@ -1240,7 +1242,7 @@ func numericAstTypedOperand(typ Type) numericAstTypeScan {
 	if oid == types.T_time {
 		hint := types.T_decimal64.ToType()
 		hint.Scale = typ.Scale
-		return numericAstTypeScan{strong: []Type{makePlan2Type(&hint)}}
+		return numericAstTypeScan{temporalHints: []Type{makePlan2Type(&hint)}}
 	}
 	if !makeTypeByPlan2Type(typ).IsNumeric() {
 		return numericAstTypeScan{incompatible: true}
@@ -1255,6 +1257,62 @@ func shouldActivateWeakDecimal(strong []types.Type, outer *types.Type) bool {
 		}
 	}
 	return outer != nil && (outer.Oid.IsInteger() || outer.Oid.IsDecimal() || outer.Oid == types.T_bit)
+}
+
+func numericAstScanHasKnownType(scan numericAstTypeScan) bool {
+	// Weak decimal literals are deliberately not static types here. Their
+	// activation depends on the surrounding numeric context; treating one as
+	// known would bypass the deferred context propagation for expressions such
+	// as ? + 0.5.
+	return len(scan.strong) > 0 || len(scan.temporalHints) > 0
+}
+
+func numericAstScanSingleType(scan numericAstTypeScan) (Type, bool) {
+	if len(scan.weakDecimals) != 0 || len(scan.strong)+len(scan.temporalHints) != 1 {
+		return Type{}, false
+	}
+	if len(scan.strong) == 1 {
+		return scan.strong[0], true
+	}
+	return scan.temporalHints[0], true
+}
+
+func shouldIncludeTemporalHints(scan numericAstTypeScan, outer *types.Type) bool {
+	if len(scan.temporalHints) == 0 {
+		return false
+	}
+	// A TIME operand supplies the numeric context when no genuine numeric
+	// operand is available. In that case the hint must remain visible so a
+	// direct TIME + ? expression still selects DECIMAL64.
+	if len(scan.strong) == 0 {
+		return true
+	}
+	// Do not let a provisional TIME decimal widen an independently integral
+	// subtree. The completed integer result is coerced at the outer TIME
+	// boundary by the normal arithmetic binder.
+	integralOnly := true
+	for _, typ := range scan.strong {
+		oid := types.T(typ.Id)
+		if !oid.IsInteger() && oid != types.T_bit {
+			integralOnly = false
+			break
+		}
+	}
+	if !integralOnly {
+		return true
+	}
+	if len(scan.weakDecimals) > 0 && shouldActivateWeakDecimal(scanTypes(scan.strong), outer) {
+		return true
+	}
+	return outer != nil && (outer.Oid.IsDecimal() || outer.Oid.IsFloat())
+}
+
+func scanTypes(planTypes []Type) []types.Type {
+	typesKnown := make([]types.Type, 0, len(planTypes))
+	for _, typ := range planTypes {
+		typesKnown = append(typesKnown, makeTypeByPlan2Type(typ))
+	}
+	return typesKnown
 }
 
 func (b *baseBinder) numericAstTypesWithHint(
@@ -1518,7 +1576,7 @@ func (b *baseBinder) numericAstStaticType(
 		}
 		scan, err := b.numericAstTypesInternal(expr, depth, resolveColumn)
 		if err != nil || scan.incompatible || scan.hasUnknown ||
-			(scan.hasParam && len(scan.strong) == 0) {
+			(scan.hasParam && !numericAstScanHasKnownType(scan)) {
 			return Type{}, false, err
 		}
 		typ, ok := numericTypeFromAstScan(scan, nil)
@@ -1529,7 +1587,7 @@ func (b *baseBinder) numericAstStaticType(
 		}
 		scan, err := b.numericAstTypesInternal(expr, depth, resolveColumn)
 		if err != nil || scan.incompatible || scan.hasUnknown ||
-			(scan.hasParam && len(scan.strong) == 0) {
+			(scan.hasParam && !numericAstScanHasKnownType(scan)) {
 			return Type{}, false, err
 		}
 		typ, ok := numericTypeFromAstScan(scan, nil)
@@ -1539,19 +1597,21 @@ func (b *baseBinder) numericAstStaticType(
 			return Type{}, false, nil
 		}
 		scan, ok := resolveColumn(expr)
-		if !ok || scan.incompatible || scan.hasParam || len(scan.strong) != 1 || len(scan.weakDecimals) != 0 {
+		if !ok || scan.incompatible || scan.hasParam {
 			return Type{}, false, nil
 		}
-		return scan.strong[0], true, nil
+		typ, known := numericAstScanSingleType(scan)
+		return typ, known, nil
 	case *tree.Subquery:
 		if expr.Exists {
 			return Type{}, false, nil
 		}
 		scan, err := b.numericScalarSubqueryAstTypes(expr, depth)
-		if err != nil || scan.incompatible || scan.hasParam || len(scan.strong) != 1 || len(scan.weakDecimals) != 0 {
+		if err != nil || scan.incompatible || scan.hasParam {
 			return Type{}, false, err
 		}
-		return scan.strong[0], true, nil
+		typ, known := numericAstScanSingleType(scan)
+		return typ, known, nil
 	case *tree.FuncExpr:
 		name := numericAstFunctionName(expr)
 		if name == "" {
@@ -1577,14 +1637,16 @@ func (b *baseBinder) numericAstStaticType(
 }
 
 func numericTypeFromAstScan(scan numericAstTypeScan, outer *Type) (Type, bool) {
-	typesKnown := make([]types.Type, 0, len(scan.strong)+len(scan.weakDecimals))
-	for i := range scan.strong {
-		typesKnown = append(typesKnown, makeTypeByPlan2Type(scan.strong[i]))
-	}
+	typesKnown := scanTypes(scan.strong)
 	var outerType *types.Type
 	if outer != nil {
 		typ := makeTypeByPlan2Type(*outer)
 		outerType = &typ
+	}
+	if shouldIncludeTemporalHints(scan, outerType) {
+		for i := range scan.temporalHints {
+			typesKnown = append(typesKnown, makeTypeByPlan2Type(scan.temporalHints[i]))
+		}
 	}
 	if len(scan.weakDecimals) > 0 && shouldActivateWeakDecimal(typesKnown, outerType) {
 		for i := range scan.weakDecimals {

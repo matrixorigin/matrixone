@@ -73,6 +73,22 @@ SET @p_time_numeric_v = CAST(10 AS UNSIGNED);
 EXECUTE p_time_unsigned USING @p_time_numeric_v;
 DEALLOCATE PREPARE p_time_unsigned;
 
+-- A folded typed NULL must not promote the independently signed integer
+-- subtree to DECIMAL256 before it meets the TIME operand.
+PREPARE p_time_folded_signed FROM
+    'SELECT CAST(''00:00:01'' AS TIME(0)) + (CAST(NULL AS SIGNED) + ?) AS result';
+SET @p_time_folded_v = CAST(2 AS SIGNED);
+-- @metacmp(true)
+EXECUTE p_time_folded_signed USING @p_time_folded_v;
+DEALLOCATE PREPARE p_time_folded_signed;
+
+PREPARE p_time_folded_signed_value FROM
+    'SELECT CAST(''00:00:01'' AS TIME(0)) + (CAST(1 AS SIGNED) + ?) AS result';
+SET @p_time_folded_v = CAST(2 AS SIGNED);
+-- @metacmp(true)
+EXECUTE p_time_folded_signed_value USING @p_time_folded_v;
+DEALLOCATE PREPARE p_time_folded_signed_value;
+
 -- An explicit DECIMAL cast remains a DECIMAL128 boundary for a large integer.
 PREPARE p_time_explicit_decimal FROM
     'SELECT CAST(CAST(''00:00:01'' AS TIME(0)) AS DECIMAL(10,2)) + ? AS result';
