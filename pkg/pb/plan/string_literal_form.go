@@ -254,7 +254,7 @@ type RemoteExpressionFeatures struct {
 	StringNumericResultContracts    bool
 	BoundedConditionalStringDomains bool
 	IPFunctionSemantics             bool
-	// IntegerParameterCoercion requires v82 for private CAST 5..8.
+	// IntegerParameterCoercion requires v84 for private CAST 5..8.
 	IntegerParameterCoercion bool
 }
 

@@ -201,6 +201,9 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	if err = validateRemoteAutoIDCachePipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
+	if err = validateFulltext2ProbeTailDestination(proc, p); err != nil {
+		return nil, err
+	}
 	return p.Marshal()
 }
 
@@ -2144,8 +2147,8 @@ func validateRemoteExpressionPipelineProtocol(
 	if proc != nil {
 		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
 	}
-	if features.IntegerParameterCoercion && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion82) {
-		return moerr.NewNotSupportedNoCtx("integer parameter coercion requires MORPC protocol version 82")
+	if features.IntegerParameterCoercion && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion84) {
+		return moerr.NewNotSupportedNoCtx("integer parameter coercion requires MORPC protocol version 84")
 	}
 	if features.NumericPrefix &&
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion30) {
