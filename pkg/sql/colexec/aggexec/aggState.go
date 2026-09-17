@@ -658,32 +658,24 @@ func (ag *aggState) readStateArg(
 					}
 				}
 				// The spill record carries both the producer's membership key and
-				// one raw representative.  Rebuild membership from the raw value
-				// under the restoring executor's policy.  A legacy producer can be
-				// normalized into a modern target; the reverse direction must be
-				// rejected because the modern key may already have discarded
-				// legacy FLOAT NaN distinctions.
-				var ownedCanonical []byte
+				// one raw representative.  The membership key is already encoded
+				// by the producer's DISTINCT policy; never canonicalize the raw
+				// representative as a whole payload.  Doing so changes opaque
+				// members such as JSON a second time (for example, canonical JSON
+				// "1" becomes a different key after restore).  A modern receiver
+				// may still need to translate legacy FLOAT members, so normalize
+				// only those fields and preserve every other canonical byte.
+				kbuf, ownedCanonical, canonicalErr :=
+					normalizeSpillDistinctKeyForPolicy(
+						ag, mp, info, kbuf[:kAggArgPrefixSz], kbuf)
+				if canonicalErr != nil {
+					if rawValue != nil {
+						mp.Free(rawValue)
+					}
+					return canonicalErr
+				}
 				legacyValue := rawValue
 				if len(rawValue) != 0 {
-					derived, owned, canonicalErr := canonicalizeDistinctPayloadForPolicy(
-						ag, mp, info, kbuf[:kAggArgPrefixSz], rawValue,
-						info.legacyDistinctFloatKeys)
-					if canonicalErr != nil {
-						mp.Free(rawValue)
-						return canonicalErr
-					}
-					if info.legacyDistinctFloatKeys &&
-						!bytes.Equal(kbuf[kAggArgPrefixSz:], derived[kAggArgPrefixSz:]) {
-						if owned != nil {
-							mp.Free(owned)
-						}
-						mp.Free(rawValue)
-						return moerr.NewInvalidStateNoCtx(
-							"cannot restore canonical FLOAT DISTINCT spill into legacy state")
-					}
-					kbuf = derived
-					ownedCanonical = owned
 					needsRaw, needsErr := distinctPayloadNeedsRepresentative(
 						info, kbuf[kAggArgPrefixSz:], rawValue)
 					if needsErr != nil {
@@ -866,6 +858,126 @@ func canonicalizeLegacyDistinctPayload(
 ) (canonical, owned []byte, err error) {
 	return canonicalizeDistinctPayloadForPolicy(
 		ag, mp, info, prefix, payload, info.legacyDistinctFloatKeys)
+}
+
+// normalizeSpillDistinctKeyForPolicy preserves a spill record's canonical
+// membership key. A spill key may contain canonical opaque encodings (JSON,
+// CHAR, vectors, ...), which are not safe to feed through the raw-value
+// canonicalizer a second time. The only cross-policy conversion that can be
+// needed here is legacy FLOAT -> modern FLOAT; rewrite those fixed-width
+// members in a copied tuple and leave every other member byte-for-byte
+// unchanged.
+func normalizeSpillDistinctKeyForPolicy(
+	ag *aggState,
+	mp *mpool.MPool,
+	info *aggInfo,
+	prefix, canonical []byte,
+) (normalized, owned []byte, err error) {
+	if info == nil || len(info.argTypes) == 0 || len(prefix) > len(canonical) {
+		return nil, nil, moerr.NewInvalidInputNoCtx(
+			"invalid spilled DISTINCT membership key")
+	}
+	if info.legacyDistinctFloatKeys || !distinctFloatArgument(info) {
+		return canonical, nil, nil
+	}
+	payload := canonical[len(prefix):]
+	if len(info.argTypes) == 1 {
+		typ := info.argTypes[0]
+		if typ.Oid != types.T_float32 && typ.Oid != types.T_float64 {
+			return canonical, nil, nil
+		}
+		if len(payload) != int(typ.GetSize()) {
+			return nil, nil, moerr.NewInvalidInputNoCtx(
+				"invalid spilled FLOAT DISTINCT membership key")
+		}
+		converted := appendDistinctPayloadKey(nil, typ, payload, false)
+		if bytes.Equal(converted, payload) {
+			return canonical, nil, nil
+		}
+		return allocateSpillDistinctKey(ag, mp, prefix, converted)
+	}
+
+	// Validate the canonical tuple and determine whether a FLOAT member needs
+	// conversion before allocating a replacement key.
+	offset := 0
+	hasFloat := false
+	for _, typ := range info.argTypes {
+		if len(payload)-offset < 4 {
+			return nil, nil, moerr.NewInvalidInputNoCtx(
+				"invalid spilled DISTINCT tuple membership key")
+		}
+		size := int(binary.BigEndian.Uint32(payload[offset:]))
+		offset += 4
+		if size > len(payload)-offset {
+			return nil, nil, moerr.NewInvalidInputNoCtx(
+				"invalid spilled DISTINCT tuple membership key")
+		}
+		if typ.Oid == types.T_float32 || typ.Oid == types.T_float64 {
+			if size != int(typ.GetSize()) {
+				return nil, nil, moerr.NewInvalidInputNoCtx(
+					"invalid spilled FLOAT DISTINCT tuple member")
+			}
+			hasFloat = true
+		}
+		offset += size
+	}
+	if offset != len(payload) {
+		return nil, nil, moerr.NewInvalidInputNoCtx(
+			"invalid spilled DISTINCT tuple membership key")
+	}
+	if !hasFloat {
+		return canonical, nil, nil
+	}
+
+	keySize := len(prefix) + len(payload)
+	var result []byte
+	if ag.allocation != nil {
+		result, err = ag.allocation.allocArgumentArena(mp, keySize)
+		if err != nil {
+			return nil, nil, err
+		}
+		owned = result
+	} else {
+		result = make([]byte, keySize)
+	}
+	copy(result, prefix)
+	out, offset := len(prefix), 0
+	for _, typ := range info.argTypes {
+		size := int(binary.BigEndian.Uint32(payload[offset:]))
+		copy(result[out:out+4], payload[offset:offset+4])
+		offset += 4
+		out += 4
+		member := payload[offset : offset+size]
+		if typ.Oid == types.T_float32 || typ.Oid == types.T_float64 {
+			converted := appendDistinctPayloadKey(result[:out], typ, member, false)
+			out = len(converted)
+		} else {
+			copy(result[out:], member)
+			out += size
+		}
+		offset += size
+	}
+	return result[:out], owned, nil
+}
+
+func allocateSpillDistinctKey(
+	ag *aggState,
+	mp *mpool.MPool,
+	prefix, payload []byte,
+) (normalized, owned []byte, err error) {
+	keySize := len(prefix) + len(payload)
+	if ag.allocation != nil {
+		normalized, err = ag.allocation.allocArgumentArena(mp, keySize)
+		if err != nil {
+			return nil, nil, err
+		}
+		owned = normalized
+	} else {
+		normalized = make([]byte, keySize)
+	}
+	copy(normalized, prefix)
+	copy(normalized[len(prefix):], payload)
+	return normalized, owned, nil
 }
 
 func canonicalizeDistinctPayloadForPolicy(
