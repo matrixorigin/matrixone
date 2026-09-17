@@ -25,18 +25,18 @@
 
 ### A.2 升级后共同线性化点
 
-HAKeeper RSM持有唯一 `MembershipArbitration` owner。状态至少包括 `Mode`、`NextOperationID`、单个 `Reservation` 和 `BarrierSubmissionFence`。reservation绑定 operation ID、当前 config-change-index、完整目标 membership摘要、目标UUID/replica ID/incarnation、action。
+HAKeeper RSM持有唯一 `MembershipArbitration` owner。状态至少包括 `Mode`、`NextOperationID`、单个 `Reservation` 和 `BarrierSubmissionFence`。**Reservation只用于Raft membership mutation（add/remove voting或non-voting），不用于本地StartReplica。** reservation绑定 operation ID、当前 config-change-index、完整目标 membership摘要、目标UUID/replica ID/incarnation、action。本地start使用A.4的独立permit。
 
 - `ReserveAdmission` 与 `FenceBarrierSubmission` 是同一 RSM上的互斥转移。后者只在无 reservation时成功；前者在 fence存在时拒绝。这两个 entry 的 apply顺序是共同线性化点。
 - fence提交后重新做线性一致 membership读取和 incarnation能力检查。检查通过才提交 Begin；失败保留decoder floor，显式释放submission fence，但不撤销已经持久化的protocol floor。
-- 从任何executor调用Dragonboat add/start前必须先获得匹配reservation。没有token的调用拒绝；普通数据shard不受此新合同影响。
+- executor调用Dragonboat add/remove前必须获得匹配reservation；本地start前必须获得A.4的permit。无对应token的调用拒绝；普通数据shard不受此新合同影响。
 - reservation存在期间不得推进首次Begin，也不得授权另一个membership mutation，包括remove操作，避免结果归属歧义。
 - token仅允许一个指定的mutation及expected config-change-index。重试不分配新token，不刷新expected index；旧token不能授权新目标。
 - capability只证明指定incarnation；replacement需要独立reservation。外部进程启动门禁必须继续禁止低于durable decoder floor的binary使用既有replica身份启动。
 
-### A.3 未知结果与恢复
+### A.3 Membership mutation的未知结果与恢复
 
-RPC success、timeout或executor ack都不直接删除reservation。reconciler从线性一致Raft membership取得结果：
+本节仅适用于改变membership的add/remove，不适用于StartReplica。RPC success、timeout或executor ack都不直接删除reservation。reconciler从线性一致Raft membership取得结果：
 
 | 观察 | 行为 |
 |---|---|
@@ -48,6 +48,33 @@ RPC success、timeout或executor ack都不直接删除reservation。reconciler�
 | 请求取消/超时 | 只结束调用者等待，不撤销Raft操作、不释放reservation |
 
 不提供未经证明的自动abort。无法确认结果时允许阻塞membership/首次activation，普通SQL不受影响。活性依赖quorum恢复及目标操作最终得到确定结果；运维不能靠清空map解除阻塞。确需取消未决操作时，必须用维护切换停掉所有executor后核对Raft结果，不能实现TTL清理。
+
+### A.4 Local start：独立permit，不等待membership index推进
+
+StartReplica只启动已经admitted的本地replica，不是membership mutation。RSM核对authoritative membership确实包含该UUID/replica ID后签发 `StartPermit(PermitID, UUID, ReplicaID, StoreIncarnation, DecoderFloor)`。Bootstrap初始建群不通过这个已admitted成员入口；首次协议启用必须在bootstrap完成后。
+
+- permit每个当前member最多一个pending项，签发时验证对应incarnation capability符合durable floor。pending start期间禁止首次submission fence及该member的remove/replacement；不占用全局mutation reservation，但两者的冲突检查由同一RSM执行。
+- executor的本地supervisor必须持久保存permit high-water及STARTING/STARTED/REVOKED状态。启动和撤销在该supervisor中串行执行；只有`StartReplica`返回并核实本地实际shard/replica身份后才持久记录STARTED。
+- supervisor将绑定PermitID/incarnation的STARTED结果重发给RSM；RSM校验pending permit精确匹配后，将其转成当前member的有界start证明并清除pending。**不要求membership/config-change-index改变。** 正常start完成后允许新的admission。
+- RPC timeout不等于启动失败。executor或RSM leader重启后，使用同一permit查询supervisor的durable状态及实际本地replica；已经启动则补发STARTED，尚未启动则重试同一permit，不新分配token。
+- 取消需supervisor持久记录REVOKED，并确认没有该permit的启动正在执行；若已启动，先StopReplica成功，再记录REVOKED。RSM收到精确token的撤销证明才清pending。迟到start被supervisor的high-water/tombstone拒绝；不能仅靠调用前远程读取permit来避免TOCTOU。
+- supervisor永久丢失时不能清pending。需A.1的部署停止/旧incarnation禁止重启证明才能退休旧permit。新incarnation不能替旧incarnation发送成功ack。
+- high-water及当前状态每个当前/未退休member只存一项，旧permit号不可复用。member退休后可清本地记录，但必须先禁止其旧incarnation重新执行；不能凭清本地文件重新取得旧身份。
+
+该supervisor持久执行合同是新增实现要求，不声称当前StartReplica wrapper已经提供。不存在该owner时生产start-permit路径保持不可达。
+
+### A.5 BarrierSubmissionFence：完整终止与接管合同
+
+RSM保存单个 `Fence(Token, OwnerIncarnation, ExpectedPhase, E, R)` 以及全局单调`NextOperationID`。token与reservation/permit同源分配，永不复用；溢出拒绝新操作。fence token不是leader term，leader变化不会隐式释放它。
+
+1. **Acquire**：CAS无reservation、无pending start且无fence，记录expected phase/E/R。已识别的新协议entry依C.2持久提高decoder floor，不能等到Begin成功才保护后续admission。
+2. **Begin/consume**：请求必须携带完整fence token、owner及expected tuple。RSM再次检查成员/能力条件；成功推进PREPARING和消费fence在同一次apply中完成。消费后迟到同token请求只能返回ALREADY_CONSUMED或STALE，不能再次递增E/R。
+3. **业务拒绝**：保留fence及floor，由owner修正证据后重试或显式Release；不因一次checker read失败开放membership。
+4. **Release**：仅接受当前token/owner的CAS，在一次apply中清除fence。随后延迟Begin因token不存在/不匹配拒绝；先后顺序由Raft apply确定。若Begin已先成功，则Release不能撤销phase。release不降低floor。
+5. **Takeover**：经认证的控制面新owner以当前token CAS接管，分配更大的token并保留冻结状态；不依赖旧owner存活或主动释放。旧owner的Begin/Release从此STALE。新owner必须重新取得线性一致membership和当前incarnation能力证据，不能继承旧checker read。
+6. **崩溃恢复**：fence、next ID、最后一个consumed token及结果进入同一snapshot。proposer死在Acquire后，由successor执行Takeover再Begin或Release；死在Begin提交后通过readback确认结果，不重新Begin。
+
+仅保留最后一次consumed token用于精确幂等响应；更老token返回STALE并要求readback，不保存无限历史。请求处理遇到旧token必须先拒绝，不能因为phase恰好又回到PREPARING就重放旧操作。Release后不要求保留每个tombstone，单调计数器+当前fence精确匹配即可拒绝旧token。
 
 ## B. Catalog证据：提交后outbox与claim身份
 
@@ -73,7 +100,29 @@ supersession先在RSM推进E/R，立即禁止旧completion授权。新catalog wo
 
 这些wire/认证/outbox/claim owner属于#29005接口合同；#29004仅实现consumer时不能宣称跨服务集成已验证。
 
-### B.3 Authority退休及背压
+### B.3 Evidence清理、去重与容量
+
+证据不是永久事件日志。每个协调范围只允许一个当前E/R/ClaimID；RSM保存三个阶段的固定receipt槽（required/started/complete）、当前claim及一个退休watermark，不保存逐generation历史。Sequence是该阶段的固定序号；同一identity不同内容必须拒绝，不生成新Sequence规避错误。
+
+清理握手：
+
+1. catalog事务提交outbox，publisher按同一identity发送。
+2. RSM apply后返回 `ACCEPTED(identity,digest,result)`；该结果必须来自已提交状态，不能在propose之前或仅进入queue时返回。
+3. publisher收到ACCEPTED，或通过线性一致readback得到相同receipt，才能事务删除对应outbox。删除失败重试；删除前崩溃重发仍幂等。
+4. supersession使旧E/R/claim的证据永久不可授权后，RSM返回 `RETIRED(identity,currentWatermark)`。publisher验证watermark严格越过该证据后事务删除outbox；不能因timeout/普通STALE字符串删除。
+5. 当前tuple下身份冲突或future证据不能删除为“已处理”；保留一个有界失败槽，停止该scope生产并告警，等待修复，不持续生成相同失败事件。
+
+retirement watermark由单调E/R和不可复用ClaimID构成，随snapshot保存。claim replacement必须先在RSM提升claim ID并使旧claim永久无效，再由catalog CAS安装；旧claim outbox于是可获得RETIRED。恢复不得回退watermark后直接开放producer，必须完成committed log replay。已接受但receipt槽被新generation替换的重试，用watermark返回RETIRED，不需要保留旧payload。
+
+容量是提交前的硬门禁：每个scope最多3条未确认outbox、每条编码后最多4 KiB；控制面部署固定全局上限1024条/4 MiB（两者分别计数），最多一个活动claim。额度计数和outbox插入在同一catalog事务中完成；相同identity重试不重复扣额度。超限回滚该控制事务并返回明确backpressure，不提交业务marker后丢掉outbox，不影响普通SQL事务。
+
+supersession若旧outbox占满scope额度，先通过RETIRED握手回收；否则新marker事务等待/拒绝，不绕过额度另建scope。同一scope身份必须稳定，不能每generation新建quota桶。RSM receipt为固定3槽，publisher每scope最多一个in-flight RPC；全局dispatcher最多16个in-flight，失败采用有上限退避并受context取消，绝不把durable backlog全部读入内存。
+
+required/completion marker不是outbox：每scope覆盖保存当前generation的固定row，历史generation不无限追加。旧claim/recovery工作数据只有在worker事务CAS已被新claim fencing后才允许分批清理；每批有固定条数上限，尚未清理的数据计入catalog recovery预算。#29005必须实现并验证这项预算，不能通过提前删marker释放额度。
+
+retirement record每UUID仅保留当前/尚未退休owner；老record清理后依单调身份allocator及部署旧incarnation禁令拒绝复用，不保留每代tombstone。证据服务不可用时积压最多达到上述上限，随后暂停新的metadata lifecycle工作；不设置丢弃安全证据的TTL。
+
+### B.4 Authority退休及背压
 
 不把heartbeat timeout/store deletion当作退休证明。选择显式drain：issuer先在durable issuance owner中停止为旧E签发新的authority，旧进程关闭该E的新metadata response/COMMIT授权入口并排空已经进入的授权操作，之后才发送绑定generation/E/R的seal ack。终止点定义为authorization linearization point，不承诺网络中已经发送的字节被收回。
 
@@ -129,6 +178,9 @@ F=0旧非DISABLEDstate首次遇到新tag时可以升级成F=1/V=1/I=false，但�
 ## D. 对应验证与交付状态
 
 - 成员调度：用阻塞点复现投递后未执行、Begin争用reservation；executor崩溃/timeout/leader change后reservation不得消失；旧token在index推进后拒绝。
+- Local start：成功start且config index不变时清pending，随后新admission成功；STARTED丢ack/restart补发，cancel与start交错，旧permit迟到、incarnation替换不得错误清pending。
+- Submission fence：Acquire后死亡、Begin提交但响应丢失、Takeover与旧Begin/Release交错、Release后延迟Begin、snapshot恢复接管、token overflow与幂等receipt有界性。
+- Evidence容量：提交后/ACCEPTED后/删除前各崩溃点；superseded outbox获RETIRED后回收；当前identity冲突不得删除；连续generation运行中receipt恒定3槽、outbox条数/字节不越界，满额时marker事务原子回滚。
 - 升级：维护切换前无自动Begin；新executor拒绝旧无token命令；部署owner未提供停止/启动禁令证明时不启用新协议。
 - Catalog：outbox提交前不发送、提交后崩溃可重放、重复幂等、旧E/R/claim拒绝、完成响应丢失重试；事务CAS阻止旧worker写入。
 - Authority：g2不替g1退休，delete/timeout不完成seal；backpressure不影响普通SQL；无issuer时没有生产authority。
