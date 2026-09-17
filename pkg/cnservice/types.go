@@ -854,6 +854,7 @@ type service struct {
 	lifecycle           serviceLifecycleState
 	closeOnce           sync.Once
 	closeErr            error
+	closeComplete       bool
 
 	task struct {
 		sync.RWMutex
