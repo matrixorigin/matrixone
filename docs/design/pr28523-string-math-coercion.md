@@ -4,13 +4,14 @@
 - Design revision: 7
 - Issue: [#28487](https://github.com/matrixorigin/matrixone/issues/28487)
 - Implementation PR: [#28523](https://github.com/matrixorigin/matrixone/pull/28523)
-- Rebased main base: `370c310a994de258ee01e87c31062590a7022f34`
-- Code/test candidate: `716c3292a621ebb14fe4a6f484180d68c011fcaf`; the design
+- Rebased main base: `a52a665ec1e6670d1ee4d84831f24a1b83cd4f0b`
+- Code/test candidate: `ef4424cc0b4206d804537432b5599e5c5d0f9881`; the design
   record below reflects focused/full validation on this exact current-base tree
 - Independent design review: GPT-6 Astra, medium reasoning, reviewed exact HEAD
-  `dbbca6d612f62635420877bb556248ae0b654593` against current base `370c310` and
+  `dbbca6d612f62635420877bb556248ae0b654593` against prior base `370c310` and
   found no unresolved findings. The earlier two integration blockers were
-  corrected. Authorized maintainer approval remains pending
+  corrected; exact review after this latest rebase and authorized maintainer
+  approval remain pending
 - Review trigger: review `5199052257` identified a major-refactor/compatibility design gate; review `5214666396` and comment `5687377735` require incomplete numeric strings to be mode-gated
 
 This document is the stable design revision requested before implementation
@@ -265,6 +266,8 @@ Rebase integration delta for this candidate:
   `pkg/sql/plan/visit_plan_rule.go` were resolved locally.
 - Rebased again onto current main `370c310a994de258ee01e87c31062590a7022f34`;
   all ten commits replayed without further conflicts.
+- Rebased once more onto current main `a52a665ec1e6670d1ee4d84831f24a1b83cd4f0b`
+  (ordered-percentile spill fix); all twelve commits replayed without conflicts.
 - The upstream two-view `rebindPreparedNumericExprWithBound(expr, bound,
   positions)` remains the rebinding foundation, including recursive bound-child
   propagation, scalar-subquery refresh, explicit-cast metadata, unsupported and
@@ -300,8 +303,8 @@ were collected against base `66b1672403e9b9efb1971d00b7ea87572891fe2a`; those
 results are historical as well and are not claimed for this candidate.
 
 On the revision-7 candidate at code/test commit
-`716c3292a621ebb14fe4a6f484180d68c011fcaf`, based on main
-`370c310a994de258ee01e87c31062590a7022f34`, the
+`ef4424cc0b4206d804537432b5599e5c5d0f9881`, based on main
+`a52a665ec1e6670d1ee4d84831f24a1b83cd4f0b`, the
 following exact CGo-wrapper selection was first listed and then executed.
 `-list` returned seven planner tests and three function tests (non-empty
 selection); execution passed with exit code 0:
@@ -326,8 +329,8 @@ repository CGo wrapper, `-count=1`, and a 600-second test timeout (exit code 0):
 
 ```text
 .agents/skills/mo-dev/scripts/mo-cgo-test -count=1 -timeout=600s ./pkg/sql/plan ./pkg/sql/plan/function
-ok  github.com/matrixorigin/matrixone/pkg/sql/plan           5.969s
-ok  github.com/matrixorigin/matrixone/pkg/sql/plan/function 17.131s
+ok  github.com/matrixorigin/matrixone/pkg/sql/plan           6.940s
+ok  github.com/matrixorigin/matrixone/pkg/sql/plan/function 15.803s
 ```
 
 Not run on this revision-7 candidate: `go vet`, `-race`, `./pkg/frontend`,
@@ -345,13 +348,13 @@ outside this scope.
 ```text
 Design path: docs/design/pr28523-string-math-coercion.md
 Design revision: 7
-Candidate snapshot: code/test commit 716c3292a621ebb14fe4a6f484180d68c011fcaf, rebased onto main 370c310a994de258ee01e87c31062590a7022f34
-Rebased base: 370c310a994de258ee01e87c31062590a7022f34
+Candidate snapshot: code/test commit ef4424cc0b4206d804537432b5599e5c5d0f9881, rebased onto main a52a665ec1e6670d1ee4d84831f24a1b83cd4f0b
+Rebased base: a52a665ec1e6670d1ee4d84831f24a1b83cd4f0b
 Scope/trigger: PR reviews 5199052257, 5214666396 and comment 5687377735; >500 production lines and planner/plan compatibility boundary
-Reviewer identity and role: GPT-6 Astra, medium reasoning, independent code/design review of exact HEAD dbbca6d612f62635420877bb556248ae0b654593 against current main; no unresolved findings
-Review timestamp: revision 7 exact-head review completed 2026-09-17; this doc-only review-record update follows it
+Reviewer identity and role: GPT-6 Astra, medium reasoning, independent code/design review of exact HEAD dbbca6d612f62635420877bb556248ae0b654593 against prior main 370c310; no unresolved findings; latest-base exact review pending
+Review timestamp: revision 7 exact-head review on prior base completed 2026-09-17; latest-base revision 7 candidate recorded 2026-09-17
 Decision: DRAFT / AWAITING MAINTAINER APPROVAL
-Resolved blockers: both prior-base integration findings are fixed; the current-main exact-head Astra review found no unresolved technical findings; authorized maintainer approval remains pending
+Resolved blockers: both prior-base integration findings are fixed and the latest-base plan/function CGo suites pass; latest-base exact-head Astra review and authorized maintainer approval remain pending
 Decisions proposed for maintainer acceptance: retain strict INT64 precision controls (no general integer-prefix widening); prefer correctness over function-wide zonemap pruning; retain the bounded scan and defer one-pass role collection pending current-candidate scan-cost review
 Evidence links: [PR #28523](https://github.com/matrixorigin/matrixone/pull/28523); review [#5199052257](https://github.com/matrixorigin/matrixone/pull/28523#pullrequestreview-5199052257); latest numeric-prefix review [#5214666396](https://github.com/matrixorigin/matrixone/pull/28523#pullrequestreview-5214666396); historical CI run 34813866468; current-base focused and full-package CGo evidence recorded above
 Implementation deviations requiring follow-up: MOD native arithmetic widening regression fixed in 8fc4d5250; remote CI/BVT, strict INT64 precision acceptance, zonemap-pruning decision, and scan-cost acceptance remain pending
