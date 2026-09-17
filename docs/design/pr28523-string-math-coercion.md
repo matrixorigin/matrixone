@@ -4,13 +4,16 @@
 - Design revision: 7
 - Issue: [#28487](https://github.com/matrixorigin/matrixone/issues/28487)
 - Implementation PR: [#28523](https://github.com/matrixorigin/matrixone/pull/28523)
-- Rebased main base: `a52a665ec1e6670d1ee4d84831f24a1b83cd4f0b`
-- Code/test candidate: `ef4424cc0b4206d804537432b5599e5c5d0f9881`; the design
-  record below reflects focused/full validation on this exact current-base tree
-- Independent design review: GPT-6 Astra, medium reasoning, reviewed exact HEAD
-  `68b9fbf9616491ee07b5614092361b15daf93b98` against current base `a52a665` and
-  found no unresolved findings. The earlier two integration blockers were
-  corrected. Authorized maintainer approval remains pending
+- Rebased main base: `4ff27bb9b35c43c1b0961bb9a01bf8fc0b6a2171`
+- Rebased code/test baseline: `d56711fa5b429e5e6e52f64f603d2e853478edca`, based
+  on the rebased main base above; 14 commits replayed cleanly. The final local
+  candidate additionally includes a gofmt-only indentation correction in
+  `pkg/sql/plan/visit_plan_rule_test.go`.
+- Independent design review: GPT-6 Astra, medium reasoning, found one pre-push
+  documentation-only discrepancy in this record (stale current base/candidate
+  and validation evidence). This revision corrects it; authorized maintainer
+  approval remains pending. The final exact-head review result is recorded in
+  the PR evidence ledger.
 - Review trigger: review `5199052257` identified a major-refactor/compatibility design gate; review `5214666396` and comment `5687377735` require incomplete numeric strings to be mode-gated
 
 This document is the stable design revision requested before implementation
@@ -265,8 +268,11 @@ Rebase integration delta for this candidate:
   `pkg/sql/plan/visit_plan_rule.go` were resolved locally.
 - Rebased again onto current main `370c310a994de258ee01e87c31062590a7022f34`;
   all ten commits replayed without further conflicts.
-- Rebased once more onto current main `a52a665ec1e6670d1ee4d84831f24a1b83cd4f0b`
-  (ordered-percentile spill fix); all twelve commits replayed without conflicts.
+- The intermediate rebase onto main `a52a665ec1e6670d1ee4d84831f24a1b83cd4f0b`
+  (ordered-percentile spill fix) replayed twelve commits without conflicts; it
+  is historical, not the current base.
+- Final rebase onto main `4ff27bb9b35c43c1b0961bb9a01bf8fc0b6a2171` replayed 14
+  commits cleanly; current HEAD is `d56711fa5b429e5e6e52f64f603d2e853478edca`.
 - The upstream two-view `rebindPreparedNumericExprWithBound(expr, bound,
   positions)` remains the rebinding foundation, including recursive bound-child
   propagation, scalar-subquery refresh, explicit-cast metadata, unsupported and
@@ -301,12 +307,22 @@ recorded full package, frontend, race, vet, build, and protocol-smoke results
 were collected against base `66b1672403e9b9efb1971d00b7ea87572891fe2a`; those
 results are historical as well and are not claimed for this candidate.
 
-On the revision-7 candidate at code/test commit
-`ef4424cc0b4206d804537432b5599e5c5d0f9881`, based on main
-`a52a665ec1e6670d1ee4d84831f24a1b83cd4f0b`, the
-following exact CGo-wrapper selection was first listed and then executed.
+Historical evidence on the intermediate base `a52a665ec1e6670d1ee4d84831f24a1b83cd4f0b`
+and candidate `ef4424cc0b4206d804537432b5599e5c5d0f9881` remains in the record:
+its focused selection passed and its full CGo-wrapped `pkg/sql/plan` and
+`pkg/sql/plan/function` packages passed in 6.940s and 15.803s. These results do
+not describe the final rebase below.
+
+Post-rebase evidence applies to the code/test baseline
+`d56711fa5b429e5e6e52f64f603d2e853478edca`, based on main
+`4ff27bb9b35c43c1b0961bb9a01bf8fc0b6a2171` (14 commits replayed cleanly),
+plus the gofmt-only indentation correction to
+`pkg/sql/plan/visit_plan_rule_test.go`. The full plan package and the integration
+regression below were rerun after that correction.
+
+The following exact CGo-wrapper selection was first listed and then executed.
 `-list` returned seven planner tests and three function tests (non-empty
-selection); execution passed with exit code 0:
+selection); focused execution passed with exit code 0:
 
 ```text
 .agents/skills/mo-dev/scripts/mo-cgo-test -list '^(TestPreparedEltRebindsRuntimeNumericDomain|TestPreparedEltRebindsNumericTextWithStringRuntimeMetadata|TestPreparedSignRebindsRuntimeNumericDomain|TestPreparedMathStringValueAndPrecisionRoles|TestPreparedNumericRebindPreservesUnsupportedAndNullBoundOccurrences|TestPreparedMathStringParametersRebindToNumericOverloads|TestPreparedNestedMathStringParameterRebindsToNumericOverload|TestDirectMathStringExecutorsHonorNativeMode|TestMathStringExecutorsPreserveBinaryLiteralProvenance|TestMathStringExecutorsEmitNumericCoercionWarnings)$' ./pkg/sql/plan ./pkg/sql/plan/function
@@ -320,21 +336,38 @@ tests including `ABS(ROUND(1, ?))`, `ROUND(1, ABS(?))`, and the TRUNCATE
 analogues; shared-ParamRef source-type/error isolation; explicit CAST source
 preservation with direct/prepared ROUND and TRUNCATE results; a prepared
 template MySQL/native/MySQL mode flip; binary-literal provenance; and direct
-native-mode/warning executor cases. Full owning-package results are recorded
-below. The distributed fixture remains a remote CI/BVT obligation.
+native-mode/warning executor cases.
 
-After the focused selection, both owning packages passed in full with the
-repository CGo wrapper, `-count=1`, and a 600-second test timeout (exit code 0):
+Full CGo-wrapped package tests passed with exit code 0 on the post-rebase
+candidate:
+
+| Package | Result |
+| --- | --- |
+| `./pkg/sql/plan` | passed, 10.137s |
+| `./pkg/sql/plan/function` | passed, 21.960s |
+| `./pkg/frontend` | passed, 25.729s |
+
+After the gofmt correction to `pkg/sql/plan/visit_plan_rule_test.go`,
+`./pkg/sql/plan` passed again with the CGo wrapper in 6.219s. CGo-aware
+`go vet` passed for `./pkg/frontend`, `./pkg/sql/plan`,
+`./pkg/sql/plan/function`, and `./pkg/tests/issues`. The real-protocol issue
+regression also passed after the correction:
 
 ```text
-.agents/skills/mo-dev/scripts/mo-cgo-test -count=1 -timeout=600s ./pkg/sql/plan ./pkg/sql/plan/function
-ok  github.com/matrixorigin/matrixone/pkg/sql/plan           6.940s
-ok  github.com/matrixorigin/matrixone/pkg/sql/plan/function 15.803s
+.agents/skills/mo-dev/scripts/mo-cgo-test -v -count=1 -timeout=600s -run '^TestIssue27294PreparedNumericOverloads$' ./pkg/tests/issues
+--- PASS: TestIssue27294PreparedNumericOverloads
+PASS
 ```
 
-Not run on this revision-7 candidate: `go vet`, `-race`, `./pkg/frontend`,
-`make build`, protocol smoke tests, remote CI, and Compose/Standalone BVT.
-Similarly named validations recorded for the old `66b167...` base above remain
+`gofmt` and `git diff --check` passed.
+
+Local incremental `golangci-lint` did not pass: with the CGo include/link
+environment configured, local golangci-lint v2.6.2 still rejected Go 1.27
+export-data version 4 as newer than its maximum supported version 2. This is a
+local linter/toolchain incompatibility, not a product-code pass; CI SCA remains
+pending after push. Local distributed BVT was not run, and post-push CI/BVT
+remain pending. Also not run on this candidate: `-race`, `make build`, and
+protocol smoke tests. The historical results on base `66b167...` above remain
 historical only.
 
 Known limitations: strict string precision behavior is intentionally not a
@@ -347,16 +380,16 @@ outside this scope.
 ```text
 Design path: docs/design/pr28523-string-math-coercion.md
 Design revision: 7
-Candidate snapshot: code/test commit ef4424cc0b4206d804537432b5599e5c5d0f9881, rebased onto main a52a665ec1e6670d1ee4d84831f24a1b83cd4f0b
-Rebased base: a52a665ec1e6670d1ee4d84831f24a1b83cd4f0b
+Candidate snapshot: rebased code/test baseline d56711fa5b429e5e6e52f64f603d2e853478edca plus the gofmt-only indentation correction in pkg/sql/plan/visit_plan_rule_test.go; this revision-7 document update only corrects the validation record
+Rebased base: 4ff27bb9b35c43c1b0961bb9a01bf8fc0b6a2171
 Scope/trigger: PR reviews 5199052257, 5214666396 and comment 5687377735; >500 production lines and planner/plan compatibility boundary
-Reviewer identity and role: GPT-6 Astra, medium reasoning, independent code/design review of exact HEAD 68b9fbf9616491ee07b5614092361b15daf93b98 against current main a52a665; no unresolved findings
-Review timestamp: revision 7 exact-head review completed 2026-09-17; this doc-only review-record update follows it
+Reviewer identity and role: GPT-6 Astra, medium reasoning, pre-push exact-head review of d56711fa5b429e5e6e52f64f603d2e853478edca against base 4ff27bb9b35c43c1b0961bb9a01bf8fc0b6a2171; one documentation-only current-base/evidence discrepancy was identified and corrected in this revision; final exact-head review result is in the PR evidence ledger
+Review timestamp: revision 7 exact-head review and documentation correction recorded 2026-09-17
 Decision: DRAFT / AWAITING MAINTAINER APPROVAL
-Resolved blockers: both prior-base integration findings are fixed; latest-base focused/full plan/function CGo suites pass; exact-head Astra review found no unresolved technical findings; authorized maintainer approval remains pending
+Resolved blockers: the two prior code-integration findings are fixed; latest-base focused and full package tests plus CGo-aware vet pass; the pre-push documentation-only finding is corrected here; authorized maintainer approval remains pending
 Decisions proposed for maintainer acceptance: retain strict INT64 precision controls (no general integer-prefix widening); prefer correctness over function-wide zonemap pruning; retain the bounded scan and defer one-pass role collection pending current-candidate scan-cost review
-Evidence links: [PR #28523](https://github.com/matrixorigin/matrixone/pull/28523); review [#5199052257](https://github.com/matrixorigin/matrixone/pull/28523#pullrequestreview-5199052257); latest numeric-prefix review [#5214666396](https://github.com/matrixorigin/matrixone/pull/28523#pullrequestreview-5214666396); historical CI run 34813866468; current-base focused and full-package CGo evidence recorded above
-Implementation deviations requiring follow-up: MOD native arithmetic widening regression fixed in 8fc4d5250; remote CI/BVT, strict INT64 precision acceptance, zonemap-pruning decision, and scan-cost acceptance remain pending
+Evidence links: [PR #28523](https://github.com/matrixorigin/matrixone/pull/28523); review [#5199052257](https://github.com/matrixorigin/matrixone/pull/28523#pullrequestreview-5199052257); latest numeric-prefix review [#5214666396](https://github.com/matrixorigin/matrixone/pull/28523#pullrequestreview-5214666396); historical CI run 34813866468; final-base focused/full CGo tests and vet recorded above
+Implementation deviations requiring follow-up: MOD native arithmetic widening regression fixed in 8fc4d5250; local incremental golangci-lint is incompatible with Go 1.27 export data (v2.6.2 max version 2), so CI SCA remains pending after push; local distributed BVT was not run and post-push CI/BVT remain pending; strict INT64 precision acceptance, zonemap-pruning decision, and scan-cost acceptance remain pending
 Approval link: pending maintainer review
 ```
 
