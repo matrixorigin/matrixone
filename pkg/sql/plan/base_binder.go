@@ -5812,28 +5812,32 @@ func bindFuncExprImplByPlanExpr(
 			return nil, err
 		}
 
-		// Early detection for decimal comparisons
-		if len(args) == 2 && (name == "=" || name == "<>") {
+		// A source-scale mismatch can change ordered comparisons as well as
+		// equality. Mark every affected comparison before any narrowing; retain
+		// the legacy constant-folding optimization only for = and <>.
+		if len(args) == 2 && name != "<=>" {
 			markDecimalComparisonProtocolRequirement(nil, args)
-			alwaysFalse := isDecimalComparisonAlwaysFalse(ctx, args[0], args[1])
-			columnNotNullable := decimalComparisonColumnIsNotNullable(args)
-			if alwaysFalse && !columnNotNullable {
-				// The legacy binder would fold this comparison, but SQL NULL
-				// semantics require retaining it for a nullable column. Preserve
-				// the v84 fence on the source literal for persisted views.
-				markDecimalComparisonLiteralRequirement(args)
-			}
-			if name == "=" && columnNotNullable && alwaysFalse {
-				// Equality with incompatible precision is always false
-				result := makePlan2BoolConstExprWithType(false)
-				markDecimalComparisonProtocolRequirement(result, args)
-				return result, nil
-			}
-			if name == "<>" && columnNotNullable && alwaysFalse {
-				// Inequality with incompatible precision is always true
-				result := makePlan2BoolConstExprWithType(true)
-				markDecimalComparisonProtocolRequirement(result, args)
-				return result, nil
+			if name == "=" || name == "<>" {
+				alwaysFalse := isDecimalComparisonAlwaysFalse(ctx, args[0], args[1])
+				columnNotNullable := decimalComparisonColumnIsNotNullable(args)
+				if alwaysFalse && !columnNotNullable {
+					// The legacy binder would fold this comparison, but SQL NULL
+					// semantics require retaining it for a nullable column. Preserve
+					// the v84 fence on the source literal for persisted views.
+					markDecimalComparisonLiteralRequirement(args)
+				}
+				if name == "=" && columnNotNullable && alwaysFalse {
+					// Equality with incompatible precision is always false
+					result := makePlan2BoolConstExprWithType(false)
+					markDecimalComparisonProtocolRequirement(result, args)
+					return result, nil
+				}
+				if name == "<>" && columnNotNullable && alwaysFalse {
+					// Inequality with incompatible precision is always true
+					result := makePlan2BoolConstExprWithType(true)
+					markDecimalComparisonProtocolRequirement(result, args)
+					return result, nil
+				}
 			}
 		}
 	case "date_add", "date_sub":
