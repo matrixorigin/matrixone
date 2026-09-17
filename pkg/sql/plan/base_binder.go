@@ -5815,15 +5815,21 @@ func bindFuncExprImplByPlanExpr(
 		// Early detection for decimal comparisons
 		if len(args) == 2 && (name == "=" || name == "<>") {
 			markDecimalComparisonProtocolRequirement(nil, args)
-			if name == "=" && decimalComparisonColumnIsNotNullable(args) &&
-				isDecimalComparisonAlwaysFalse(ctx, args[0], args[1]) {
+			alwaysFalse := isDecimalComparisonAlwaysFalse(ctx, args[0], args[1])
+			columnNotNullable := decimalComparisonColumnIsNotNullable(args)
+			if alwaysFalse && !columnNotNullable {
+				// The legacy binder would fold this comparison, but SQL NULL
+				// semantics require retaining it for a nullable column. Preserve
+				// the v84 fence on the source literal for persisted views.
+				markDecimalComparisonLiteralRequirement(args)
+			}
+			if name == "=" && columnNotNullable && alwaysFalse {
 				// Equality with incompatible precision is always false
 				result := makePlan2BoolConstExprWithType(false)
 				markDecimalComparisonProtocolRequirement(result, args)
 				return result, nil
 			}
-			if name == "<>" && decimalComparisonColumnIsNotNullable(args) &&
-				isDecimalComparisonAlwaysFalse(ctx, args[0], args[1]) {
+			if name == "<>" && columnNotNullable && alwaysFalse {
 				// Inequality with incompatible precision is always true
 				result := makePlan2BoolConstExprWithType(true)
 				markDecimalComparisonProtocolRequirement(result, args)
