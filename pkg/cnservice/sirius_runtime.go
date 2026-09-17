@@ -132,15 +132,18 @@ func (s *service) closeSiriusRuntime() error {
 		return nil
 	}
 	runtime := s.siriusRuntime
-	s.siriusRuntime = nil
-	moruntime.ServiceRuntime(s.cfg.UUID).CompareAndDeleteGlobalVariables(compile.SiriusRuntimeKey, runtime)
 	timeout := s.cfg.Sirius.CleanupTimeout.Duration
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	return runtime.Close(ctx)
+	if err := runtime.Close(ctx); err != nil {
+		return err
+	}
+	s.siriusRuntime = nil
+	moruntime.ServiceRuntime(s.cfg.UUID).CompareAndDeleteGlobalVariables(compile.SiriusRuntimeKey, runtime)
+	return nil
 }
 
 func loadSiriusClientTLS(config SiriusConfig) (*tls.Config, error) {
