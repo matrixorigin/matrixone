@@ -3149,21 +3149,6 @@ func getEvaluatedPercentileConfigNamed(vec *vector.Vector, functionName string) 
 	return getPercentileConfigValue(vec, functionName, true)
 }
 
-func complementPercentileConfig(config []byte) ([]byte, error) {
-	text := string(config)
-	percentile, ok := new(big.Rat).SetString(text)
-	if !ok || percentile.Sign() < 0 || percentile.Cmp(big.NewRat(1, 1)) > 0 {
-		return nil, moerr.NewInvalidInputNoCtxf(
-			"invalid percentile configuration %q", text)
-	}
-	scale := 0
-	if point := strings.IndexByte(text, '.'); point >= 0 {
-		scale = len(text) - point - 1
-	}
-	complement := new(big.Rat).Sub(big.NewRat(1, 1), percentile)
-	return []byte(complement.FloatString(scale)), nil
-}
-
 func getPercentileConfigNamed(vec *vector.Vector, functionName string) ([]byte, error) {
 	return getPercentileConfigValue(vec, functionName, false)
 }
