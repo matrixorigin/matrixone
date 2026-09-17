@@ -6177,6 +6177,7 @@ func TestQueryBuilder_appendTimeWindowNode(t *testing.T) {}
 
 func TestQueryBuilder_appendWindowNode(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder.sortSpillMem = 4096
 	bindCtx := NewBindContext(builder, nil)
 	bindCtx.groupTag = builder.GenNewBindTag()
 	bindCtx.aggregateTag = builder.GenNewBindTag()
@@ -6216,6 +6217,7 @@ func TestQueryBuilder_appendWindowNode(t *testing.T) {
 	for _, node := range builder.qry.Nodes {
 		if node.NodeType == plan.Node_WINDOW {
 			windowNodeFound = true
+			require.Equal(t, int64(4096), node.SpillMem)
 			break
 		}
 	}

@@ -315,13 +315,9 @@ func (Hooks) BuildSecondaryIndexDefs(
 				// int8 base with QUANTIZATION='float32') is unsupported — it costs 2-4x the
 				// entry storage for no precision gain and forces the f32 distance kernel
 				// over narrow entries. Omit QUANTIZATION to keep the base-width entries.
-				baseSize := types.Type{Oid: types.T(colMap[colName].Typ.Id)}.GetArrayElementSize()
-				quantSize := types.Type{Oid: qt}.GetArrayElementSize()
-				if quantSize > baseSize {
-					return nil, nil, moerr.NewNotSupportedf(ctx.GetContext(),
-						"ivfflat QUANTIZATION '%s' (%d bytes/element) cannot upcast base column %s (%d bytes/element); use a quantization of equal or smaller width, or omit it to keep the base type",
-						indexInfo.IndexOption.Quantization, quantSize,
-						types.T(colMap[colName].Typ.Id).String(), baseSize)
+				if err := quantizer.CheckNoUpcast("ivfflat", indexInfo.IndexOption.Quantization,
+					types.T(colMap[colName].Typ.Id)); err != nil {
+					return nil, nil, err
 				}
 				entryTyp.Id = int32(qt)
 				entryTyp.Scale = 0
