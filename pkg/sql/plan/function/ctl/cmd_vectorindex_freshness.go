@@ -28,10 +28,20 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+// minFreshnessInterval is the smallest positive sweep cadence accepted by
+// SetVectorIndexFreshnessInterval; below it the sweep would peg every CN (see
+// cache.MinStaleCheckInterval, the matching floor the cache clamps to). 0 restores the default.
+//
+// These commands are restricted to the sys account moadmin role by the frontend privilege layer
+// (verifyAccountCanExecMoCtrl gates ALL mo_ctl to IsSysTenant() && IsMoAdminRole()), so the handlers
+// carry no per-caller account check of their own -- see the vector_index_cache_ctl_authz BVT.
+const minFreshnessInterval = time.Second
+
 // handleSetVectorIndexFreshnessInterval overrides the vector/fulltext2 index cache's cross-CN
-// freshness (IsStale) sweep cadence on every CN. It is a sys-admin-only knob (mo_ctl is gated to
-// moadmin) intended for tests/ops that need read-your-writes to converge fast in multi-CN; the
-// default (~10 min) is unchanged and a value of 0 restores it.
+// freshness (IsStale) sweep cadence on every CN. It is a sys-admin-only knob (mo_ctl is gated to the
+// sys account moadmin role by the frontend) intended for tests/ops that need read-your-writes to
+// converge fast in multi-CN; the default (~10 min) is unchanged, a value of 0 restores it, and a
+// positive value below minFreshnessInterval is rejected.
 //
 //	mo_ctl("cn", "SetVectorIndexFreshnessInterval", "<duration>")
 //
@@ -55,6 +65,10 @@ func handleSetVectorIndexFreshnessInterval(
 	}
 	if d < 0 {
 		d = 0
+	}
+	if d > 0 && d < minFreshnessInterval {
+		return Result{}, moerr.NewInternalErrorf(proc.Ctx,
+			"freshness interval %v is too small; the minimum is %v (use 0 to restore the default)", d, minFreshnessInterval)
 	}
 
 	qt := proc.GetQueryClient()

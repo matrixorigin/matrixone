@@ -57,6 +57,12 @@ func init() {
 // cadence — the bound on how long a remote CN can serve a stale index before it ages out.
 const stalenessCheckEveryNTicks = 4
 
+// MinStaleCheckInterval is the safety floor for a positive freshness-sweep override
+// (SetStaleCheckInterval). A sub-second base ticker would run HouseKeeping every tick and the
+// IsStale scan every few ticks fast enough to peg a CN; 1s is small enough for tests to converge
+// in seconds yet far from a busy loop. 0 (restore default) is unaffected.
+const MinStaleCheckInterval = time.Second
+
 /*
    VectorIndexCache is the generalized cache structure for various algorithm types that share the VectorIndexSearchIf interface.
    Implement the VectorIndexSearchIf such as HnswSearch to able to use VectorIndexCache.
@@ -743,6 +749,10 @@ func (c *VectorIndexCache) staleTickerInterval() time.Duration {
 func (c *VectorIndexCache) SetStaleCheckInterval(d time.Duration) {
 	if d < 0 {
 		d = 0
+	} else if d > 0 && d < MinStaleCheckInterval {
+		// Floor a positive override: a sub-second ticker turns the per-tick HouseKeeping (and the
+		// every-Nth-tick stale scan) into a near busy-loop on every CN. 0 still restores the default.
+		d = MinStaleCheckInterval
 	}
 	c.staleCheckIntervalNs.Store(int64(d))
 	reset := false

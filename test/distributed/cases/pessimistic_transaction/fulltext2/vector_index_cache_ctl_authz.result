@@ -1,0 +1,18 @@
+drop account if exists ivfcache_tnt;
+create account ivfcache_tnt admin_name 'a1' identified by '111';
+select mo_ctl('cn', 'GetVectorIndexCacheKeys', '');
+internal error: do not have privilege to execute the statement
+select mo_ctl('cn', 'GetVectorIndexCacheInfo', 'x');
+internal error: do not have privilege to execute the statement
+select mo_ctl('cn', 'SetVectorIndexFreshnessInterval', '2s');
+internal error: do not have privilege to execute the statement
+select mo_ctl('cn', 'EvictVectorIndexCache', 'x');
+internal error: do not have privilege to execute the statement
+set role public;
+select mo_ctl('cn', 'GetVectorIndexCacheKeys', '');
+internal error: do not have privilege to execute the statement
+set role moadmin;
+select mo_ctl('cn', 'GetVectorIndexCacheKeys', '') like '%GETVECTORINDEXCACHEKEYS%' as allowed_for_moadmin;
+➤ allowed_for_moadmin[-7,1,0]  𝄀
+1
+drop account if exists ivfcache_tnt;

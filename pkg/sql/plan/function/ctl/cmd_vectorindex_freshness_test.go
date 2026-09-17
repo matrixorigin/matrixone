@@ -158,3 +158,19 @@ func TestHandleEvictVectorIndexCache(t *testing.T) {
 		require.Error(t, err)
 	})
 }
+
+// A positive interval below the floor would peg every CN with HouseKeeping/stale scans, so it is
+// rejected; the floor itself and 0 (restore default) are accepted.
+func TestHandleSetVectorIndexFreshnessIntervalRejectsTinyInterval(t *testing.T) {
+	runtime.RunTest("", func(rt runtime.Runtime) {
+		proc := vecCtlProc(t, rt, &vecCtlQueryClient{})
+		_, err := handleSetVectorIndexFreshnessInterval(proc, cn, "1ns", nil)
+		require.Error(t, err)
+		_, err = handleSetVectorIndexFreshnessInterval(proc, cn, "999ms", nil)
+		require.Error(t, err)
+		_, err = handleSetVectorIndexFreshnessInterval(proc, cn, "1s", nil)
+		require.NoError(t, err)
+		_, err = handleSetVectorIndexFreshnessInterval(proc, cn, "0", nil)
+		require.NoError(t, err)
+	})
+}

@@ -43,6 +43,12 @@ func TestStaleCheckIntervalOverride(t *testing.T) {
 	c.SetStaleCheckInterval(-5 * time.Second)
 	require.Zero(t, c.staleCheckIntervalNs.Load())
 	require.Equal(t, c.TickerInterval, c.staleTickerInterval())
+
+	// A positive value below the floor is clamped up to MinStaleCheckInterval, never a busy loop.
+	c.SetStaleCheckInterval(time.Millisecond)
+	require.Equal(t, MinStaleCheckInterval, c.staleTickerInterval())
+	c.SetStaleCheckInterval(MinStaleCheckInterval) // the floor itself is kept as-is
+	require.Equal(t, MinStaleCheckInterval, c.staleTickerInterval())
 }
 
 // SetStaleCheckInterval before serve() only stores the value (no started ticker to reset); the
