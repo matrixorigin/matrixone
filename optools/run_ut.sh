@@ -107,6 +107,10 @@ GO_MODULE_MODE="-mod=readonly"
 # Static analysis owns vet in the separate SCA job. Running it again for every
 # UT package duplicates work and increases race-test compile CPU/memory.
 GO_TEST_VET_FLAGS="-vet=off"
+# Ordinary `go test` omits DWARF, but `go test -c` retains it by default.
+# Our temporary race binaries are executed, not debugged: give the compile-only
+# paths the same policy without stripping the Go symbol table or race support.
+GO_TEST_BINARY_FLAGS="-ldflags=-w"
 # CI runs the checked-out MatrixOne module, never a caller's Go workspace.
 export GOWORK=off
 
@@ -1163,7 +1167,7 @@ function run_engine_race_shards(){
     start_engine_child 0 env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
         CGO_CFLAGS="${CGO_CFLAGS}" \
         CGO_LDFLAGS="${CGO_LDFLAGS}" \
-        go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -race -tags "${TAGS}" \
+        go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} ${GO_TEST_BINARY_FLAGS} -short -race -tags "${TAGS}" \
         -p 1 -c -o "${ENGINE_RACE_TEST_BINARY}" "${engine_package}" > "${build_log}" 2>&1
     build_start_status=$?
     if (( build_start_status != 0 )); then
@@ -1400,7 +1404,7 @@ function run_plan_race_shards(){
     LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
         CGO_CFLAGS="${CGO_CFLAGS}" \
         CGO_LDFLAGS="${CGO_LDFLAGS}" \
-        go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -race -tags "${TAGS}" \
+        go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} ${GO_TEST_BINARY_FLAGS} -short -race -tags "${TAGS}" \
         -p 1 -c -o "${plan_test_binary}" "${plan_package}" > "${build_log}" 2>&1 &
     plan_child_pid=$!
     set +m
@@ -1662,7 +1666,7 @@ function run_embedded_prebuild(){
             set -m
             env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
                 CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" \
-                go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -race \
+                go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} ${GO_TEST_BINARY_FLAGS} -short -race \
                 -tags "${TAGS}" -p 1 -timeout "${UT_TIMEOUT}m" \
                 -c -o "${output_path}" "${package}" > "${package_report}" 2>&1 &
             child_pids[package_index]=$!

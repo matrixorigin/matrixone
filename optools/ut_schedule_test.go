@@ -457,6 +457,7 @@ if [[ "$1" == list ]]; then
     exit 0
 fi
 if [[ "$1" == test && "$*" == *' -c '* ]]; then
+    [[ " $* " == *' -ldflags=-w '* ]] || exit 98
     output=""
     previous=""
     for arg in "$@"; do
@@ -476,6 +477,44 @@ exit 99
 	out, err := scheduleHarnessWithMock(t, script, mock)
 	if err != nil {
 		t.Fatalf("engine helper report: %v\n%s", err, out)
+	}
+}
+
+// Inspect the real compile commands without compiling MO again in every UT.
+// A failed build must still propagate; omitting DWARF must not bypass race,
+// tags, the bounded build parallelism, or module/vet policy.
+func TestRaceBinaryBuildPolicyAndFailure(t *testing.T) {
+	for _, tc := range []struct{ name, command string }{
+		{"engine", "run_engine_race_shards example/engine 1"},
+		{"plan", "run_plan_race_shards example/plan"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			script := `source ./run_ut.sh UT
+ENGINE_RACE_REPORT="$CASE_DIR/engine-report"
+ENGINE_RACE_TEST_BINARY="$CASE_DIR/engine.test"
+` + tc.command
+			mock := `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+if [[ "$1" == list ]]; then
+    printf '%s\t%s\n' "$CASE_DIR" example/package
+    exit 0
+fi
+if [[ "$1" == test ]]; then
+    for flag in -ldflags=-w -race -short -c -mod=readonly -vet=off; do
+        [[ " $* " == *" $flag "* ]] || exit 98
+    done
+    [[ " $* " == *' -tags matrixone_test '* && " $* " == *' -p 1 '* ]] || exit 99
+    printf 'COMPILE_POLICY_VERIFIED\n'
+    exit 42
+fi
+exit 97
+`
+			out, err := scheduleHarnessWithMock(t, script, mock)
+			exit, ok := err.(*exec.ExitError)
+			if !ok || exit.ExitCode() != 42 || !strings.Contains(string(out), "COMPILE_POLICY_VERIFIED") {
+				t.Fatalf("compile policy/failure propagation: %v\n%s", err, out)
+			}
+		})
 	}
 }
 

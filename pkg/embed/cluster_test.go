@@ -58,6 +58,96 @@ type closeTrackingFileService struct {
 	closeCount atomic.Int32
 }
 
+// A diagnostic error does not imply that the owner still uses dependencies.
+type completedCloseService struct {
+	closeTrackingService
+	complete bool
+}
+
+func (s *completedCloseService) CloseComplete() bool { return s.complete }
+
+func TestClusterCloseCompletedErrorReleasesOwnership(t *testing.T) {
+	failure := errors.New("final metadata withdrawal failed")
+	cn := &completedCloseService{closeTrackingService: closeTrackingService{closeErr: failure}, complete: true}
+	dependency := &closeTrackingService{}
+	fs := &closeTrackingFileService{}
+	op := &operator{state: started}
+	op.reset.svc, op.reset.fs = cn, fs
+	dep := &operator{state: started}
+	dep.reset.svc = dependency
+	c := &cluster{state: started, services: []*operator{dep, op}}
+	ports, err := acquireClusterPortLease()
+	require.NoError(t, err)
+	c.portLease = ports
+	t.Cleanup(func() { require.NoError(t, ports.lock.Close()) })
+	lease, err := clusteradmission.Acquire(t.Context(), clusteradmission.Exclusive)
+	require.NoError(t, err)
+	c.testAdmission = lease
+	t.Cleanup(func() { require.NoError(t, lease.Release()) })
+	err = c.Close()
+	require.ErrorIs(t, err, failure)
+	require.False(t, op.needsCleanup())
+	require.Equal(t, int32(1), fs.closeCount.Load())
+	require.Equal(t, int32(1), dependency.closeCount.Load())
+	require.Nil(t, c.testAdmission)
+	require.Nil(t, c.portLease)
+	require.True(t, c.CloseComplete())
+	next, err := clusteradmission.Acquire(t.Context(), clusteradmission.Exclusive)
+	require.NoError(t, err, "completed close must not poison the next cluster")
+	t.Cleanup(func() { require.NoError(t, next.Release()) })
+	require.NoError(t, c.Close())
+	require.Equal(t, int32(1), cn.closeCount.Load())
+	require.Equal(t, int32(1), fs.closeCount.Load())
+}
+
+func TestClusterClosePendingOwnerPrecedesDependencies(t *testing.T) {
+	failure := errors.New("pending CN drain")
+	pending := &completedCloseService{closeTrackingService: closeTrackingService{closeErr: failure}}
+	op := &operator{}
+	op.reset.svc = pending
+	depService := &closeTrackingService{}
+	dep := &operator{state: started}
+	dep.reset.svc = depService
+	c := &cluster{state: started, services: []*operator{dep}, pendingCleanup: []*operator{op}}
+	require.ErrorIs(t, c.Close(), failure)
+	require.Zero(t, depService.closeCount.Load())
+	require.False(t, c.CloseComplete())
+	require.ErrorContains(t, c.Start(), "cleanup is incomplete")
+	require.Nil(t, c.portLease, "rejected Start must not allocate a lease")
+	pending.complete = true
+	require.ErrorIs(t, c.Close(), failure)
+	require.Equal(t, int32(1), depService.closeCount.Load())
+	require.Empty(t, c.pendingCleanup)
+	require.True(t, c.CloseComplete())
+}
+
+func TestOperatorStartPreservesIncompleteOwnership(t *testing.T) {
+	svc := &completedCloseService{}
+	op := &operator{}
+	op.reset.svc = svc // partial startup did not reach state=started
+	require.ErrorContains(t, op.Start(), "cleanup is incomplete")
+	require.Same(t, svc, op.reset.svc)
+	require.ErrorContains(t, op.Close(), "cleanup is incomplete", "nil error is not a completion certificate")
+	require.True(t, op.needsCleanup())
+	svc.complete = true
+	require.NoError(t, op.Close())
+	require.False(t, op.needsCleanup())
+}
+
+func TestClusterStartRollbackCompletedErrorReleasesAdmission(t *testing.T) {
+	failure := errors.New("startup and withdrawal failed")
+	svc := &completedCloseService{closeTrackingService: closeTrackingService{closeErr: failure}, complete: true}
+	op := &operator{serviceType: metadata.ServiceType_CN}
+	c := &cluster{services: []*operator{op}}
+	c.options.testing = true
+	c.startFn = func(op *operator) error { op.reset.svc = svc; return failure }
+	t.Cleanup(func() { require.NoError(t, c.Close()) })
+	require.ErrorIs(t, c.Start(), failure)
+	require.Nil(t, c.testAdmission)
+	require.False(t, op.needsCleanup())
+	require.Equal(t, int32(1), svc.closeCount.Load())
+}
+
 func (s *closeTrackingFileService) Close(context.Context) {
 	s.closeCount.Add(1)
 }
