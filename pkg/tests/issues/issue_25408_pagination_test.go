@@ -150,8 +150,9 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 				}
 			})
 			for _, tc := range []struct {
-				name, source, assignment, want string
-				args                           []any
+				name, source, assignment string
+				want                     any
+				args                     []any
 			}{
 				{"explicit char peer", "coalesce(?,cast(0e0 as char))", "set @integer_a=1.5e0", "a", []any{float64(1.5)}},
 				{"parenthesized char peer", "coalesce(?,(cast(0e0 as char)))", "set @integer_a=1.5e0", "a", []any{float64(1.5)}},
@@ -161,6 +162,19 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 				{"subquery peer", "coalesce(?,(select 1.5e0 where true))", "set @integer_a=NULL", "a.b", []any{nil}},
 				{"union text", "(select 0e0 where false union all select ?)", `set @integer_a="1.5"`, "a", []any{"1.5"}},
 				{"group marker", "(select ? group by 1)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
+				{"group null", "(select ? group by 1)", "set @integer_a=NULL", nil, []any{nil}},
+				{"union null", "(select ? union all select null limit 1)", "set @integer_a=NULL", nil, []any{nil}},
+				{"group coalesce null", "(select coalesce(?,null) group by 1)", "set @integer_a=NULL", nil, []any{nil}},
+				{"null peer", "coalesce(?,null)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
+				{"null peer ifnull", "ifnull(?,null)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
+				{"null peer case", "coalesce(case when true then ? else null end,null)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
+				{"null peer nullif", "coalesce(nullif(?,0),null)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
+				{"null peer text", "coalesce(?,null)", `set @integer_a="1.5"`, "a", []any{"1.5"}},
+				{"bit or text", "(select bit_or(?) from " + dbName + ".integer_peer)", `set @integer_a="1.5"`, "a", []any{"1.5"}},
+				{"bit and text", "(select bit_and(?) from " + dbName + ".integer_peer)", `set @integer_a="1.5"`, "a", []any{"1.5"}},
+				{"bit xor text", "(select bit_xor(?) from " + dbName + ".integer_peer)", `set @integer_a="1.5"`, "a", []any{"1.5"}},
+				{"bit or double", "(select bit_or(?) from " + dbName + ".integer_peer)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
+				{"bit or null peer", "(select bit_or(coalesce(?,null)) from " + dbName + ".integer_peer)", `set @integer_a="1.5"`, "a", []any{"1.5"}},
 				{"max source", "(select max(coalesce(?,0e0)) from " + dbName + ".integer_peer)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
 				{"min source", "(select min(coalesce(?,0e0)) from " + dbName + ".integer_peer)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
 				{"window source", "(select first_value(coalesce(?,0e0)) over () from " + dbName + ".integer_peer)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
@@ -195,7 +209,7 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 										query = "insert into " + dbName + ".integer_sources select " + expr
 									}
 								}
-								var got string
+								var got sql.NullString
 								if binary {
 									stmt, err := conn.PrepareContext(ctx, query)
 									require.NoError(t, err)
@@ -226,7 +240,12 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 								if write {
 									require.NoError(t, conn.QueryRowContext(ctx, "select v from "+dbName+".integer_sources").Scan(&got))
 								}
-								require.Equal(t, tc.want, got)
+								if tc.want == nil {
+									require.False(t, got.Valid)
+								} else {
+									require.True(t, got.Valid)
+									require.Equal(t, tc.want, got.String)
+								}
 							})
 						}
 					}

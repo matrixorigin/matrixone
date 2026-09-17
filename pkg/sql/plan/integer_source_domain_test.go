@@ -40,6 +40,12 @@ func TestPreparedIntegerSourceDomainBoundaries(t *testing.T) {
 		{"mixed text first", "coalesce(?,?)", "a", []any{text, real}},
 		{"null first", "coalesce(?,?)", "a.b", []any{null, real}},
 		{"numeric peer", "coalesce(?,0e0)", "a.b", []any{real}},
+		{"null peer", "coalesce(?,null)", "a.b", []any{real}},
+		{"null peer ifnull", "ifnull(?,null)", "a.b", []any{real}},
+		{"null peer nested case", "coalesce(case when true then ? else null end,null)", "a.b", []any{real}},
+		{"null peer nested nullif", "coalesce(nullif(?,0),null)", "a.b", []any{real}},
+		{"null peer text", "coalesce(?,null)", "a", []any{text}},
+		{"explicit text null peer", "coalesce(?,cast(null as char))", "a", []any{real}},
 		{"explicit float peer", "coalesce(?,cast(0 as double))", "a.b", []any{real}},
 	} {
 		for _, insert := range []bool{false, true} {
@@ -131,6 +137,58 @@ func TestPreparedIntegerSourceProjectionDomains(t *testing.T) {
 	}
 }
 
+func TestPreparedIntegerNullPhysicalDomains(t *testing.T) {
+	for _, source := range []string{
+		"(select ? group by 1)",
+		"(select ? union all select null limit 1)",
+		"(select coalesce(?,null) group by 1)",
+	} {
+		t.Run(source, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+				`prepare null_domain from 'select substring_index("a.b.c.d",".",`+source+`) '`)
+			require.NoError(t, err)
+			original := prepared.GetDcl().GetPrepare().Plan
+			for _, binary := range []bool{false, true} {
+				bound, specialized, err := FillValuesOfParamsInPlanWithSpecialization(proc.Ctx, original, []any{
+					ParamValue{Value: nil, SourceType: types.T_text.ToType(), HasSourceType: true, IsBinaryProtocol: binary},
+				})
+				require.NoError(t, err)
+				require.True(t, specialized)
+				for _, node := range bound.GetQuery().Nodes {
+					for _, expressions := range [][]*Expr{node.ProjectList, node.GroupBy, node.AggList} {
+						for _, expr := range expressions {
+							require.NotEqual(t, int32(types.T_any), expr.Typ.Id, "physical output in node %d", node.NodeId)
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestPreparedIntegerNestedBitAggregateSource(t *testing.T) {
+	for _, name := range []string{"bit_or", "bit_and", "bit_xor"} {
+		t.Run(name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+				`prepare bit_source from 'select substring_index("a.b.c.d",".",(select `+name+`(?) from nation))'`)
+			require.NoError(t, err)
+			bound, _, err := FillValuesOfParamsInPlanWithSpecialization(proc.Ctx, prepared.GetDcl().GetPrepare().Plan, []any{
+				ParamValue{Value: "1.5", IsBinaryProtocol: true},
+			})
+			require.NoError(t, err)
+			aggregate := findPlanFunctionExpr(bound, name)
+			require.NotNil(t, aggregate)
+			input := aggregate.GetF().Args[0]
+			result, free, err := colexec.GetReadonlyResultFromExpression(proc, input, []*batch.Batch{batch.EmptyForConstFoldBatch})
+			require.NoError(t, err)
+			defer free()
+			require.Equal(t, uint64(1), vector.MustFixedColWithTypeCheck[uint64](result)[0])
+		})
+	}
+}
+
 func TestPreparedResultPeerUsesCurrentOccurrence(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	floatType := types.T_float64.ToType()
@@ -156,6 +214,15 @@ func TestPreparedResultPeerUsesCurrentOccurrence(t *testing.T) {
 	defer free()
 	require.Equal(t, 1.5, vector.MustFixedColWithTypeCheck[float64](result)[0])
 	require.Equal(t, int32(types.T_varchar), folded.Typ.Id, "cached source must stay unchanged")
+
+	nullPeer := &Expr{Typ: makePlan2Type(&textType), Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}}}
+	nullPeer.PreparedNumeric = &planpb.PreparedNumericMetadata{ProvisionalResultPeer: true}
+	restored, err = restorePreparedResultPeer(proc.Ctx, nullPeer)
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_any), restored.Typ.Id)
+	require.True(t, restored.GetLit().GetIsnull())
+	require.Nil(t, restored.PreparedNumeric)
+	require.Equal(t, int32(types.T_text), nullPeer.Typ.Id, "cached NULL peer must stay unchanged")
 
 	for _, value := range []*Expr{currentColumn, makePlan2StringConstExprWithType("1.5")} {
 		restored, err = restorePreparedResultPeer(proc.Ctx, value)

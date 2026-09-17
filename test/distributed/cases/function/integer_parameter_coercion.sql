@@ -45,4 +45,24 @@ set @v=1.5e0;
 execute integer_source using @v,@v;
 deallocate prepare integer_source;
 
+-- Domainless NULL stays nullable across physical projections and cached executions.
+prepare nullable_source from 'select substring_index("a.b.c.d",".",(select ? group by 1)),substring_index("a.b.c.d",".",(select ? union all select null limit 1)),substring_index("a.b.c.d",".",coalesce(?,null))';
+set @v=null;
+execute nullable_source using @v,@v,@v;
+set @v=1.5e0;
+execute nullable_source using @v,@v,@v;
+set @v='1.5';
+execute nullable_source using @v,@v,@v;
+set @v=null;
+execute nullable_source using @v,@v,@v;
+deallocate prepare nullable_source;
+
+-- Nested bit aggregates own their source conversion, including protocol text.
+prepare bit_source from 'select substring_index("a.b.c.d",".",(select bit_or(?) from sources where id=1)),substring_index("a.b.c.d",".",(select bit_and(?) from sources where id=1)),substring_index("a.b.c.d",".",(select bit_xor(?) from sources where id=1))';
+set @v='1.5';
+execute bit_source using @v,@v,@v;
+set @v=1.5e0;
+execute bit_source using @v,@v,@v;
+deallocate prepare bit_source;
+
 drop database integer_parameter_coercion;

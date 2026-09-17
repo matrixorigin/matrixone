@@ -8,6 +8,12 @@
 - 设计 owner：function registry（参数契约与稳定 execution identity）、planner/binder（source-domain coercion）、function executor（逐行转换）、compile/remote pipeline（发送与接收准入）、catalog expression publisher/reader（持久化准入）
 - 设计门禁：跨越 function registry、planner、remote pipeline 和 catalog persistence；改变 MORPC、混合版本、持久化表达式及 rollback compatibility contract
 
+## 2026-09-17 合并基线后的协议编号修订
+
+最新 `main` 已将 MORPC v84 分配给扩展离散百分位输入类型。本设计下文原有的整数转换 v84 门槛统一迁移至 **v85**，原有“v83/旧节点”边界相应扩展至 **v84 及以下**；CAST 5–8 identity、转换语义与准入机制不变。代码与协议测试以此修订为准，v84 节点必须拒绝整数转换 identity，不能因为支持百分位功能而获得整数转换能力。
+
+本次 prepared 修复同时明确：无域 NULL 只在表达式公共类型推导期间使用 ANY，输出到 PROJECT/GROUP BY/UNION 前必须具体化；NULL peer 的 `T_any=0` 由显式 provenance 标志确认，不能当作缺失类型；嵌套位聚合必须从实际协议源类型重新绑定其私有转换。
+
 ## 1. 问题、证据与成功标准
 
 MatrixOne 中 count、offset、length、position、precision 等参数在 SQL 语义上要求整数，但历史 function registry 往往用多个 FLOAT、DECIMAL、UINT 或 INT overload 兼任“输入转换”和“函数执行”。通用 conversion-cost resolver 因而可以先把精确 DECIMAL 转成 DOUBLE，再由某个 executor 截断；相同值来自 literal、column、CASE、SQL `EXECUTE` 或 binary prepared parameter 时还可能选择不同 identity 或转换规则。

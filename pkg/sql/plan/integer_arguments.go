@@ -204,6 +204,22 @@ func (rule *ResetParamRefRule) rebindIntegerArgumentCast(expr *Expr) (*Expr, err
 }
 
 func (rule *ResetParamRefRule) integerArgumentRuntimeSource(source *Expr) (*Expr, error) {
+	value, err := rule.integerArgumentLogicalSource(source)
+	if err != nil || value == nil || types.T(value.Typ.Id) != types.T_any {
+		return value, err
+	}
+	// ANY is useful while reconciling domainless NULL with its siblings, but
+	// projected/grouped values must have a concrete vector representation.
+	typ := types.T_int64.ToType()
+	if value.GetLit().GetIsnull() {
+		value = DeepCopyExpr(value)
+		value.Typ = makePlan2Type(&typ)
+		return value, nil
+	}
+	return appendCastBeforeExpr(rule.ctx, value, makePlan2Type(&typ))
+}
+
+func (rule *ResetParamRefRule) integerArgumentLogicalSource(source *Expr) (*Expr, error) {
 	if isIntegerArgumentCast(source) {
 		return rule.rebindIntegerArgumentCast(source)
 	}
@@ -221,11 +237,28 @@ func (rule *ResetParamRefRule) integerArgumentRuntimeSource(source *Expr) (*Expr
 		}
 	}
 	if fn := source.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" && len(fn.Args) == 2 {
-		value, err := rule.integerArgumentRuntimeSource(fn.Args[0])
+		value, err := rule.integerArgumentLogicalSource(fn.Args[0])
 		if err != nil {
 			return nil, err
 		}
 		return rebindExplicitPreparedCast(rule.ctx, source, []*Expr{value, fn.Args[1]})
+	}
+	// The aggregate owns CAST4. Rebuild it from the actual source domain;
+	// ordinary numeric fallback would infer DECIMAL from COM_STMT text.
+	if fn := source.GetF(); fn != nil && fn.Func != nil && isPreparedBitwiseAggregate(fn.Func.ObjName) && len(fn.Args) == 1 {
+		arg := fn.Args[0]
+		if isBitwiseAggregatePrivateCast(arg) {
+			arg = arg.GetF().Args[0]
+		}
+		value, err := rule.integerArgumentRuntimeSource(arg)
+		if err != nil {
+			return nil, err
+		}
+		bound, err := BindFuncExprImplByPlanExpr(rule.ctx, fn.Func.ObjName, []*Expr{value})
+		if err == nil {
+			preserveReboundFunctionMetadata(fn, bound.GetF())
+		}
+		return bound, err
 	}
 	// Reconstruct common-type producers from each actual source, not numeric
 	// spelling inference or an all-parameters-are-text shortcut. In particular,
@@ -247,7 +280,7 @@ func (rule *ResetParamRefRule) integerArgumentRuntimeSource(source *Expr) (*Expr
 				}
 			}
 			var err error
-			args[i], err = rule.integerArgumentRuntimeSource(arg)
+			args[i], err = rule.integerArgumentLogicalSource(arg)
 			if err != nil {
 				return nil, err
 			}
@@ -266,8 +299,16 @@ func (rule *ResetParamRefRule) integerArgumentRuntimeSource(source *Expr) (*Expr
 // old ColRefs and SubqueryRefs are invalid after remapping and flattening.
 func restorePreparedResultPeer(ctx context.Context, expr *Expr) (*Expr, error) {
 	metadata := expr.GetPreparedNumeric()
-	if !metadata.GetProvisionalResultPeer() || metadata.GetProvisionalResultPeerTypeId() == 0 {
+	if !metadata.GetProvisionalResultPeer() {
 		return expr, nil
+	}
+	// T_any == 0 is a recorded domainless NULL, not missing provenance.
+	if metadata.GetProvisionalResultPeerTypeId() == int32(types.T_any) && expr.GetLit().GetIsnull() {
+		value := DeepCopyExpr(expr)
+		typ := types.T_any.ToType()
+		value.Typ = makePlan2Type(&typ)
+		value.PreparedNumeric = nil
+		return value, nil
 	}
 	if fn := expr.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" &&
 		!fn.SyntaxExplicitCast && len(fn.Args) == 2 && types.T(expr.Typ.Id).IsMySQLString() {
