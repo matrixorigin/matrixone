@@ -76,6 +76,12 @@ func TestIssue27854RequiredVectorDomainStaysCoordinatorLocal(t *testing.T) {
 			q := fmt.Sprintf("select id from (select id from adaptive_small where id > 10 order by l2_distance(v,'%s') limit 10 by rank with option 'mode=auto') q", vec(0))
 			require.Empty(t, queryInt64Rows(t, ctx, db, q))
 		})
+		t.Run("unmatched multi-key auto is terminal", func(t *testing.T) {
+			q := fmt.Sprintf("select id from (select id from filtered_t where id < 0 order by l2_distance(v,'%s'), id limit 10 by rank with option 'mode=auto') q", vec(0))
+			planText := strings.Join(querySingleStringColumn(t, ctx, db, "explain "+q), "\n")
+			require.NotContains(t, planText, "Adaptive Top")
+			require.Empty(t, queryInt64Rows(t, ctx, db, q))
+		})
 		t.Run("adaptive output boundary", func(t *testing.T) {
 			q := fmt.Sprintf("select id + 100 from filtered_t where file_id = 'file1' order by l2_distance(v,'%s') limit 1 by rank with option 'mode=auto'", vec(0))
 			text := strings.Join(querySingleStringColumn(t, ctx, db, "explain "+q), "\n")

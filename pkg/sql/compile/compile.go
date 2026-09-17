@@ -1599,21 +1599,6 @@ func (c *Compile) isMaterializedCTEStep(qry *plan.Query, step int32) bool {
 		sink.ExtraOptions == materialized.CTESinkOption
 }
 
-func (c *Compile) isAdaptiveVectorSearch(qry *plan.Query) bool {
-	if qry == nil {
-		return false
-	}
-
-	for _, node := range qry.Nodes {
-		// Check for vector search in auto mode
-		if node.RankOption != nil && node.RankOption.Mode == "auto" {
-			return true
-		}
-	}
-
-	return false
-}
-
 func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Scope, error) {
 	if qry.Nodes[step].NodeType == plan.Node_SINK {
 		return ss, nil
@@ -1676,13 +1661,14 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Sco
 			}
 		}
 
-		isAdaptive := c.isAdaptiveVectorSearch(qry)
-
+		// IVF AUTO fallback is owned by the local ADAPTIVE_TOP region. Unmatched
+		// AUTO shapes execute their exact plan once; enabling Output retry here
+		// would replay the whole statement and can loop when AST rewriting cannot
+		// reach a nested SELECT.
 		rs.setRootOperator(
 			output.NewArgument().
 				WithFunc(c.resultWriter()).
-				WithBlock(c.needBlock).
-				WithAdaptive(isAdaptive),
+				WithBlock(c.needBlock),
 		)
 		return []*Scope{rs}, nil
 	}
