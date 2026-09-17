@@ -5549,11 +5549,12 @@ func TestCheckLeaseFailed(t *testing.T) {
 
 	err = cdcExecutor.Start()
 	require.NoError(t, err)
-	t.Cleanup(cdcExecutor.Stop)
+	// Join background work before restoring the lease stub or closing the engines.
+	defer cdcExecutor.Stop()
 
-	bat := CreateDBAndTableForCNConsumerAndGetAppendData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", 10)
-	bats := bat.Split(10)
+	bat := CreateDBAndTableForCNConsumerAndGetAppendData(t, disttaeEngine, ctxWithTimeout, "srcdb", "src_table", 2)
 	defer bat.Close()
+	bats := bat.Split(2)
 
 	// append 1 row
 	_, rel, txn, err := disttaeEngine.GetTable(ctxWithTimeout, "srcdb", "src_table")
@@ -5565,6 +5566,9 @@ func TestCheckLeaseFailed(t *testing.T) {
 	require.Nil(t, err)
 
 	require.NoError(t, txn.Commit(ctxWithTimeout))
+
+	// Keep cold sink DDL outside the initial propagation budget.
+	prepareISCPConsumerTarget(t, ctxWithTimeout, "srcdb", "src_table", tableID, "hnsw_idx")
 
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	require.NoError(t, err)
@@ -5597,6 +5601,8 @@ func TestCheckLeaseFailed(t *testing.T) {
 		tableID,
 		"hnsw_idx",
 	)
+
+	checkISCPConsumerData(t, ctxWithTimeout, "srcdb", "src_table", tableID, "hnsw_idx")
 
 	require.True(t, fault.Enable(), "fault injection was already enabled before TestCheckLeaseFailed")
 	t.Cleanup(func() {
