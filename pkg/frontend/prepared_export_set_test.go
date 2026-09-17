@@ -19,6 +19,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -621,7 +622,7 @@ func TestPreparedExportSetUnaryBitwiseDomain(t *testing.T) {
 	}
 }
 
-func TestPreparedExportSetDirectGreatestContext(t *testing.T) {
+func TestPreparedExportSetDirectNumericContext(t *testing.T) {
 	for _, tc := range []struct{ query, want string }{
 		{`select export_set(greatest(?,1),'Y','N','',4)`, "YNNN"},
 		{`select export_set(greatest(x,1),'Y','N','',4) from (select ? x)d`, "NNNN"},
@@ -643,11 +644,108 @@ func TestPreparedExportSetDirectGreatestContext(t *testing.T) {
 	}
 }
 
+func TestPreparedExportSetAbsDefaultsAreNotBindingHistory(t *testing.T) {
+	_, stmt, cw, _ := newPreparedExecuteEnvForSQL(t, 463, `select export_set(abs(?),'Y','N','',4)`)
+	defer stmt.Close()
+	cached := stmt.PreparePlan.GetDcl().GetPrepare().Plan
+	before := cached.String()
+	text := types.T_text.ToType()
+	for _, tc := range []struct {
+		value any
+		typ   types.Type
+		want  string
+		err   bool
+	}{
+		{"2.5", text, "YYNN", false},
+		{nil, text, "", false},
+		{int64(math.MinInt64), types.T_int64.ToType(), "", true},
+		{2.5, types.T_float64.ToType(), "NYNN", false},
+		{"2.5", text, "NYNN", false},
+	} {
+		values := []any{plan2.ParamValue{Value: tc.value, SourceType: tc.typ, HasSourceType: true, EnableNumericPrefix: true}}
+		stmt.applyExportSetNullRuntimeTypes(values)
+		filled, err := plan2.FillValuesOfParamsInPlan(cw.proc.Ctx, plan2.DeepCopyPlan(cached), values)
+		require.NoError(t, err)
+		expr := filled.GetQuery().Nodes[filled.GetQuery().Steps[0]].ProjectList[0]
+		result, free, err := colexec.GetReadonlyResultFromExpression(cw.proc, expr, []*batch.Batch{batch.EmptyForConstFoldBatch})
+		func() {
+			if free != nil {
+				defer free()
+			}
+			if tc.err {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "%v", err)
+				return
+			}
+			require.NoError(t, err)
+			if tc.value == nil {
+				require.True(t, result.IsNull(0))
+			} else {
+				require.Equal(t, tc.want, result.GetStringAt(0))
+			}
+		}()
+		require.Equal(t, before, cached.String())
+	}
+	stmt.refreshExportSetParamPositions(cached, 1)
+	require.Equal(t, types.T_any, stmt.exportSetParamTypes[0].Oid)
+	require.True(t, stmt.exportSetParamDefaults[0].IsDecimal())
+}
+
+func TestPreparedExportSetCachedNumericStringHasNoSampleWidth(t *testing.T) {
+	_, stmt, cw, _ := newPreparedExecuteEnvForSQL(t, 464, `select export_set(abs(?),'Y','N','',4)`)
+	defer stmt.Close()
+	cached := stmt.PreparePlan.GetDcl().GetPrepare().Plan
+	values := []any{plan2.ParamValue{Value: "2.5", IsBinaryProtocol: true, EnableNumericPrefix: true}}
+	stmt.applyExportSetNullRuntimeTypes(values)
+	filled, err := plan2.FillValuesOfParamsInPlan(cw.proc.Ctx, plan2.DeepCopyPlan(cached), values)
+	require.NoError(t, err)
+	require.NoError(t, plan2.RestorePreparedRuntimeParamRefs(cw.proc.Ctx, filled))
+	expr := filled.GetQuery().Nodes[filled.GetQuery().Steps[0]].ProjectList[0]
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("2.5"), false, cw.proc.Mp()))
+	cw.proc.SetPrepareParams(params)
+	defer func() { cw.proc.SetPrepareParams(nil); params.Free(cw.proc.Mp()) }()
+	for _, value := range []string{"2.5", "-2.5", "0002.5", "  -2.5"} {
+		require.NoError(t, vector.SetStringAt(params, 0, value, cw.proc.Mp()))
+		result, free, err := colexec.GetReadonlyResultFromExpression(cw.proc, expr, []*batch.Batch{batch.EmptyForConstFoldBatch})
+		require.NoError(t, err)
+		func() { defer free(); require.Equal(t, "YYNN", result.GetStringAt(0), value) }()
+	}
+}
+
+func TestPreparedExportSetAbsDirectTextContext(t *testing.T) {
+	for _, tc := range []struct{ query, want string }{
+		{`select export_set(abs(?),'Y','N','',4)`, "YYNN"},
+		{`select export_set(abs(x),'Y','N','',4) from (select ? x)d`, "NYNN"},
+	} {
+		t.Run(tc.query, func(t *testing.T) {
+			_, stmt, cw, _ := newPreparedExecuteEnvForSQL(t, 415, tc.query)
+			defer stmt.Close()
+			values := []any{plan2.ParamValue{Value: "2.5", SourceType: types.T_text.ToType(), HasSourceType: true, EnableNumericPrefix: true}}
+			stmt.applyExportSetNullRuntimeTypes(values)
+			encoded, err := stmt.PreparePlan.GetDcl().GetPrepare().Plan.Marshal()
+			require.NoError(t, err)
+			var restored plan.Plan
+			require.NoError(t, restored.Unmarshal(encoded))
+			_, domains, _ := plan2.PreparedPlanExportSetParameters(&restored)
+			require.Equal(t, tc.want == "YYNN", domains[0].IsDecimal())
+			filled, err := plan2.FillValuesOfParamsInPlan(cw.proc.Ctx, &restored, values)
+			require.NoError(t, err)
+			q := filled.GetQuery()
+			expr := q.Nodes[q.Steps[len(q.Steps)-1]].ProjectList[0]
+			result, free, err := colexec.GetReadonlyResultFromExpression(cw.proc, expr, []*batch.Batch{batch.EmptyForConstFoldBatch})
+			require.NoError(t, err)
+			defer free()
+			require.Equal(t, tc.want, result.GetStringAt(0), "expr=%s", expr.String())
+		})
+	}
+}
+
 func TestPreparedExportSetSharedTextNumericConsumers(t *testing.T) {
 	for _, tc := range []struct {
 		expr string
 		want float64
-	}{{"abs(x)", 2.5}, {"floor(x)", 2}, {"ceil(x)", 3}, {"x+0", 2.5}} {
+	}{{"abs(x)", 2.5}, {"floor(x)", 2}, {"ceil(x)", 3}, {"x+0", 2.5},
+		{"round(15.567e0,x)", 15.57}, {"truncate(15.567e0,x)", 15.56}} {
 		t.Run(tc.expr, func(t *testing.T) {
 			_, stmt, cw, _ := newPreparedExecuteEnvForSQL(t, 411, `select export_set(x,'Y','N','',4),`+tc.expr+` from (select ? x)d`)
 			defer stmt.Close()

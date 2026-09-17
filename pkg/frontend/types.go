@@ -399,6 +399,7 @@ type PrepareStmt struct {
 	// them. Both slices are bounded by the marker count and own no values.
 	exportSetParamPositions []int32
 	exportSetParamTypes     []types.Type
+	exportSetParamDefaults  map[int32]types.Type
 	// Bare value consumers keep numeric bindings' actual category.
 	exportSetBareParams map[int32]bool
 	// conversionParamPositions identifies BIN/CONV value markers once per
@@ -891,6 +892,7 @@ func (prepareStmt *PrepareStmt) Close() {
 	prepareStmt.directResultParamPositionsSet = false
 	prepareStmt.exportSetParamPositions = nil
 	prepareStmt.exportSetParamTypes = nil
+	prepareStmt.exportSetParamDefaults = nil
 	prepareStmt.exportSetBareParams = nil
 	prepareStmt.remapDb = nil
 }

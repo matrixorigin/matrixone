@@ -77,6 +77,10 @@ func exportSetRealLeafSaturates(source *Expr) bool {
 		}
 		return true
 	}
+	// Unary plus is an identity, unlike unary minus or binary arithmetic.
+	if fn := source.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "unary_plus" && len(fn.Args) == 1 {
+		return exportSetRealLeafSaturates(fn.Args[0])
+	}
 	if fn := source.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" && len(fn.Args) == 2 && !fn.SyntaxExplicitCast {
 		_, overload := function.DecodeOverloadID(fn.Func.Obj)
 		return overload == 0 && exportSetRealLeafSaturates(fn.Args[0])

@@ -1223,6 +1223,7 @@ func copyPreparedNumericMetadata(metadata *plan.PreparedNumericMetadata) *plan.P
 	}
 	return &plan.PreparedNumericMetadata{
 		Fallback:                    metadata.Fallback,
+		InitialNumericType:          metadata.InitialNumericType,
 		ParamPos:                    metadata.ParamPos,
 		FallbackSource:              metadata.FallbackSource,
 		FallbackSourceNodeId:        metadata.FallbackSourceNodeId,
@@ -1948,6 +1949,11 @@ func constantFoldWithPreparedExactSource(
 		c.StringSource = uint32(source) + 1
 	}
 	rule.MarkFoldedLiteralSerialized(overloadID, fn.Args, c)
+	if types.T(expr.Typ.Id).IsFloat() && c.Src == nil {
+		// Integer consumers distinguish a REAL literal from a computed REAL.
+		// Retain that source even when this fold precedes consumer binding.
+		c.Src = DeepCopyExpr(expr)
+	}
 	ec := &plan.Expr_Lit{
 		Lit: c,
 	}
@@ -3822,6 +3828,26 @@ func PreparedPlanExportSetParameters(preparePlan *Plan) ([]int32, map[int32]type
 	return result, domains, bare
 }
 
+// PreparedPlanNumericParameterDefaults returns syntax defaults, not binding
+// history. A typed numeric binding may replace these defaults; TEXT and NULL
+// merely use them until a numeric domain has actually been established.
+func PreparedPlanNumericParameterDefaults(p *Plan) map[int32]types.Type {
+	defaults := make(map[int32]types.Type)
+	_ = plan.VisitExpressionsInOwner(p, func(root *Expr) error {
+		return plan.VisitExprTree(root, func(expr *Expr) error {
+			if marker := expr.GetP(); marker != nil && expr.PreparedNumeric != nil && expr.PreparedNumeric.InitialNumericType != 0 {
+				typ := types.T(expr.PreparedNumeric.InitialNumericType).ToType()
+				if typ.IsDecimal() {
+					typ = mysqlPreparedDecimalReprepareType()
+				}
+				defaults[marker.Pos] = typ
+			}
+			return nil
+		})
+	})
+	return defaults
+}
+
 // preparedExportSetFoldedSourceKinds must run before the lineage scan mutates
 // its private plan copy. A folded derived-table projection and a direct marker
 // can both end as CAST(ParamRef AS BIGINT); the ParamRef's existing fallback
@@ -3868,7 +3894,7 @@ func collectPreparedExportSetFoldedParams(expr *Expr, scalarSource bool, positio
 	}
 	scalarSource = scalarSource || expr.GetPreparedNumeric().GetFallbackSource()
 	if param := expr.GetP(); param != nil && param.Pos >= 0 {
-		positions[param.Pos] = positions[param.Pos] || expr.GetPreparedNumeric().GetFallback() && !scalarSource
+		positions[param.Pos] = positions[param.Pos] || expr.GetPreparedNumeric().GetFallback() && expr.GetPreparedNumeric().GetInitialNumericType() == 0 && !scalarSource
 		return
 	}
 	if fn := expr.GetF(); fn != nil {
@@ -3883,6 +3909,7 @@ func collectPreparedExportSetFoldedParams(expr *Expr, scalarSource bool, positio
 
 func preparedExportSetContextDomains(p *Plan, positions map[int32]struct{}) map[int32]types.Type {
 	domains := make(map[int32]types.Type)
+	initialDomains := make(map[int32]types.Type)
 	if len(positions) == 0 {
 		return domains
 	}
@@ -3928,6 +3955,16 @@ func preparedExportSetContextDomains(p *Plan, positions map[int32]struct{}) map[
 				}
 			}
 			metadata := expr.GetPreparedNumeric()
+			if param := expr.GetP(); param != nil && metadata.GetInitialNumericType() != 0 {
+				if _, eligible := positions[param.Pos]; eligible {
+					typ := types.T(metadata.InitialNumericType).ToType()
+					if typ.IsDecimal() {
+						typ = mysqlPreparedDecimalReprepareType()
+					}
+					initialDomains[param.Pos] = typ
+				}
+				return nil
+			}
 			if metadata.GetFallbackSource() {
 				return nil
 			}
@@ -3952,6 +3989,9 @@ func preparedExportSetContextDomains(p *Plan, positions map[int32]struct{}) map[
 			return nil
 		})
 	})
+	for pos, typ := range initialDomains {
+		domains[pos] = typ
+	}
 	return domains
 }
 
@@ -6717,7 +6757,12 @@ func preparedExportSetStringExpr(ctx context.Context, value any, isBin bool, tar
 	text := fmt.Sprint(value)
 	prefixType := PreparedNumericPrefixTypeFromString(text)
 	prefixType.Charset = 255
-	source, err := makePlan2CastExpr(ctx, makePlan2StringConstExprWithType(text, isBin), makePlan2Type(&prefixType))
+	input := makePlan2StringConstExprWithType(text, isBin)
+	// Restoring a cached ParamRef must not retain the first value's VARCHAR
+	// width: "-2.5" and "2.5" share a numeric domain, but not a byte length.
+	input.Typ.Id = int32(types.T_text)
+	input.Typ.Width = 0
+	source, err := makePlan2CastExpr(ctx, input, makePlan2Type(&prefixType))
 	if err != nil || target.IsDecimal() {
 		return source, err
 	}

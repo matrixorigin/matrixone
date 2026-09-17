@@ -3853,7 +3853,7 @@ func unwrapPreparedPrecisionEnvelope(expr *Expr) *Expr {
 			return expr
 		}
 		_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
-		if overload != 0 {
+		if overload != 0 && overload != 2 {
 			return expr
 		}
 		expr = fn.Args[0]

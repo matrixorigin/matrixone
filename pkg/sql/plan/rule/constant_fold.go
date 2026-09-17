@@ -335,6 +335,10 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 		}
 	}
 
+	if types.T(expr.Typ.Id).IsFloat() && c.Src == nil {
+		// Preserve literal-versus-computed REAL semantics for later consumers.
+		c.Src = &plan.Expr{Typ: expr.Typ, Expr: &plan.Expr_F{F: fn}}
+	}
 	ec := &plan.Expr_Lit{
 		Lit: c,
 	}

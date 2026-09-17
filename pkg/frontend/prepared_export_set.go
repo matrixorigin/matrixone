@@ -25,13 +25,15 @@ func (prepareStmt *PrepareStmt) refreshExportSetParamPositions(p *plan2.Plan, pa
 	positions, domains, bare := plan2.PreparedPlanExportSetParameters(p)
 	prepareStmt.exportSetParamPositions = positions
 	prepareStmt.exportSetBareParams = bare
+	prepareStmt.exportSetParamDefaults = nil
 	prepareStmt.exportSetParamTypes = nil
 	if len(positions) == 0 {
 		return
 	}
+	prepareStmt.exportSetParamDefaults = plan2.PreparedPlanNumericParameterDefaults(p)
 	prepareStmt.exportSetParamTypes = make([]types.Type, paramCount)
 	for pos, typ := range domains {
-		if pos >= 0 && int(pos) < paramCount {
+		if pos >= 0 && int(pos) < paramCount && prepareStmt.exportSetParamDefaults[pos].Oid == types.T_any {
 			prepareStmt.exportSetParamTypes[pos] = typ
 		}
 	}
@@ -94,7 +96,8 @@ func (prepareStmt *PrepareStmt) applyExportSetNullRuntimeTypes(values []any) {
 			actual, numeric := plan2.PreparedParamValueNumericReprepareType(values[pos])
 			actualNumeric = numeric
 			_, textual := param.Value.(string)
-			numericString = !numeric && textual && exportSetNumericDomainRank(domain) > 0
+			numericString = !numeric && textual && (exportSetNumericDomainRank(domain) > 0 ||
+				exportSetNumericDomainRank(prepareStmt.exportSetParamDefaults[pos]) > 0)
 			if numeric {
 				if param.HasRuntimeType && exportSetNumericDomainRank(param.RuntimeType) > 0 {
 					actual = param.RuntimeType
@@ -111,6 +114,9 @@ func (prepareStmt *PrepareStmt) applyExportSetNullRuntimeTypes(values []any) {
 			}
 		}
 		prepareStmt.exportSetParamTypes[pos] = domain
+		if domain.Oid == types.T_any {
+			domain = prepareStmt.exportSetParamDefaults[pos]
+		}
 		if prepareStmt.exportSetBareParams[pos] {
 			// A bare EXPORT_SET marker uses val_int on the actual value.
 			// Composite/producer consumers instead evaluate in their resolved
