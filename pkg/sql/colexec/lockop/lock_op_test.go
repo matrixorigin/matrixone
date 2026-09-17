@@ -306,12 +306,14 @@ func TestLockOpHelpers(t *testing.T) {
 		WithLockSharding(lock.Sharding_ByRow).
 		WithLockGroup(7).
 		WithLockMode(lock.LockMode_Shared).
-		WithLockTable(true, true)
+		WithLockTable(true, true).
+		WithTableSnapshotRefresh(true)
 	require.Equal(t, lock.Sharding_ByRow, opts.sharding)
 	require.Equal(t, uint32(7), opts.group)
 	require.Equal(t, lock.LockMode_Shared, opts.mode)
 	require.True(t, opts.lockTable)
 	require.True(t, opts.changeDef)
+	require.True(t, opts.refreshTableSnapshot)
 }
 
 func TestLockTableRefreshPolicy(t *testing.T) {
@@ -328,11 +330,12 @@ func TestLockTableRefreshPolicy(t *testing.T) {
 
 func TestLockTableRefreshesForNewerWholeTableCommit(t *testing.T) {
 	tests := []struct {
-		name      string
-		commitTS  func(timestamp.Timestamp) timestamp.Timestamp
-		waiter    func() client.TimestampWaiter
-		wantRetry bool
-		wantErr   error
+		name            string
+		commitTS        func(timestamp.Timestamp) timestamp.Timestamp
+		waiter          func() client.TimestampWaiter
+		snapshotRefresh bool
+		wantAdvance     bool
+		wantErr         error
 	}{
 		{
 			name: "newer commit",
@@ -342,7 +345,8 @@ func TestLockTableRefreshesForNewerWholeTableCommit(t *testing.T) {
 			waiter: func() client.TimestampWaiter {
 				return immediateLockTimestampWaiter{}
 			},
-			wantRetry: true,
+			snapshotRefresh: true,
+			wantAdvance:     true,
 		},
 		{
 			name: "commit visible at snapshot",
@@ -352,7 +356,7 @@ func TestLockTableRefreshesForNewerWholeTableCommit(t *testing.T) {
 			waiter: func() client.TimestampWaiter {
 				return immediateLockTimestampWaiter{}
 			},
-			wantRetry: false,
+			snapshotRefresh: true,
 		},
 		{
 			name: "logtail wait failure",
@@ -362,7 +366,17 @@ func TestLockTableRefreshesForNewerWholeTableCommit(t *testing.T) {
 			waiter: func() client.TimestampWaiter {
 				return &failAfterInitialTimestampWaiter{}
 			},
-			wantErr: assert.AnError,
+			snapshotRefresh: true,
+			wantErr:         assert.AnError,
+		},
+		{
+			name: "ordinary table lock preserves snapshot",
+			commitTS: func(snapshot timestamp.Timestamp) timestamp.Timestamp {
+				return snapshot.Next()
+			},
+			waiter: func() client.TimestampWaiter {
+				return immediateLockTimestampWaiter{}
+			},
 		},
 	}
 
@@ -389,17 +403,23 @@ func TestLockTableRefreshesForNewerWholeTableCommit(t *testing.T) {
 					})
 					defer testingContext.SetAdjustLockResultFunc(nil)
 
-					err := LockTable(nil, proc, 1, types.T_int32.ToType(), false)
+					var err error
+					if test.snapshotRefresh {
+						err = LockTableForSnapshotRefreshWithContext(
+							proc.Ctx, nil, proc, 1, types.T_int32.ToType(), lock.LockMode_Exclusive, false)
+					} else {
+						err = LockTable(nil, proc, 1, types.T_int32.ToType(), false)
+					}
 					if test.wantErr != nil {
 						require.ErrorIs(t, err, test.wantErr)
 						return
 					}
-					if test.wantRetry {
-						require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry), err)
-						require.False(t, proc.GetTxnOperator().Txn().SnapshotTS.Less(commitTS))
-						return
-					}
 					require.NoError(t, err)
+					if test.wantAdvance {
+						require.False(t, proc.GetTxnOperator().Txn().SnapshotTS.Less(commitTS))
+					} else {
+						require.True(t, proc.GetTxnOperator().Txn().SnapshotTS.LessEq(snapshot))
+					}
 				},
 				client.WithTimestampWaiter(test.waiter()),
 			)
