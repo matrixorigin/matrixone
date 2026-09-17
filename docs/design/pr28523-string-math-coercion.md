@@ -7,10 +7,10 @@
 - Rebased main base: `370c310a994de258ee01e87c31062590a7022f34`
 - Code/test candidate: `716c3292a621ebb14fe4a6f484180d68c011fcaf`; the design
   record below reflects focused/full validation on this exact current-base tree
-- Independent design review: GPT-6 Astra, medium reasoning, reviewed revision 7
-  at `680342dbb3b34c21544ffaa560ce5006cb58b77a` against the earlier `8e8e199`
-  base and found no unresolved findings. Exact review after rebase onto current
-  `main` and authorized maintainer approval remain pending
+- Independent design review: GPT-6 Astra, medium reasoning, reviewed exact HEAD
+  `dbbca6d612f62635420877bb556248ae0b654593` against current base `370c310` and
+  found no unresolved findings. The earlier two integration blockers were
+  corrected. Authorized maintainer approval remains pending
 - Review trigger: review `5199052257` identified a major-refactor/compatibility design gate; review `5214666396` and comment `5687377735` require incomplete numeric strings to be mode-gated
 
 This document is the stable design revision requested before implementation
@@ -348,13 +348,13 @@ Design revision: 7
 Candidate snapshot: code/test commit 716c3292a621ebb14fe4a6f484180d68c011fcaf, rebased onto main 370c310a994de258ee01e87c31062590a7022f34
 Rebased base: 370c310a994de258ee01e87c31062590a7022f34
 Scope/trigger: PR reviews 5199052257, 5214666396 and comment 5687377735; >500 production lines and planner/plan compatibility boundary
-Reviewer identity and role: GPT-6 Astra, medium reasoning, independent code/design review of revision 7 at 680342dbb3b34c21544ffaa560ce5006cb58b77a against the earlier 8e8e199 base; current-main exact-head review pending
-Review timestamp: prior-base revision 7 reviewed 2026-09-17; current-main revision 7 candidate recorded 2026-09-17
+Reviewer identity and role: GPT-6 Astra, medium reasoning, independent code/design review of exact HEAD dbbca6d612f62635420877bb556248ae0b654593 against current main; no unresolved findings
+Review timestamp: revision 7 exact-head review completed 2026-09-17; this doc-only review-record update follows it
 Decision: DRAFT / AWAITING MAINTAINER APPROVAL
-Resolved blockers: the two prior-base integration findings have focused regression coverage and pass current-main plan/function CGo suites; current-main exact-head Astra review and authorized maintainer approval remain pending
+Resolved blockers: both prior-base integration findings are fixed; the current-main exact-head Astra review found no unresolved technical findings; authorized maintainer approval remains pending
 Decisions proposed for maintainer acceptance: retain strict INT64 precision controls (no general integer-prefix widening); prefer correctness over function-wide zonemap pruning; retain the bounded scan and defer one-pass role collection pending current-candidate scan-cost review
 Evidence links: [PR #28523](https://github.com/matrixorigin/matrixone/pull/28523); review [#5199052257](https://github.com/matrixorigin/matrixone/pull/28523#pullrequestreview-5199052257); latest numeric-prefix review [#5214666396](https://github.com/matrixorigin/matrixone/pull/28523#pullrequestreview-5214666396); historical CI run 34813866468; current-base focused and full-package CGo evidence recorded above
-Implementation deviations requiring follow-up: MOD native arithmetic widening regression fixed in 8fc4d5250; current-main exact-head independent review, remote CI/BVT, strict INT64 precision acceptance, zonemap-pruning decision, and scan-cost acceptance remain pending
+Implementation deviations requiring follow-up: MOD native arithmetic widening regression fixed in 8fc4d5250; remote CI/BVT, strict INT64 precision acceptance, zonemap-pruning decision, and scan-cost acceptance remain pending
 Approval link: pending maintainer review
 ```
 
