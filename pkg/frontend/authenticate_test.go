@@ -586,7 +586,7 @@ func TestCreateTablesInformationSchemaPreservesKnownProtocolFallback(t *testing.
 		if hadProtocol {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion81)
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion83)
 		}
 	})
 	for _, test := range []struct {
@@ -606,9 +606,9 @@ func TestCreateTablesInformationSchemaPreservesKnownProtocolFallback(t *testing.
 		{name: "protocol 57", protocol: defines.MORPCVersion57, wantColumnsV46: true, wantCurrentRoles: true},
 		{name: "protocol 58", protocol: defines.MORPCVersion58, wantCurrentColumns: true, wantCurrentRoles: true},
 		{name: "protocol 72", protocol: defines.MORPCVersion72, wantCurrentColumns: true, wantCurrentRoles: true},
-		// Without a process there is no all-CN proof, so even a v81 local
+		// Without a process there is no all-CN proof, so even a v83 local
 		// runtime must use the safe predecessor VIEWS definition.
-		{name: "protocol 81 without process", protocol: defines.MORPCVersion81, wantCurrentColumns: true, wantCurrentRoles: true},
+		{name: "protocol 83 without process", protocol: defines.MORPCVersion83, wantCurrentColumns: true, wantCurrentRoles: true},
 		{name: "unknown runtime", service: "missing-pr27716-runtime", protocol: defines.MORPCVersion72, wantCurrentColumns: true, wantCurrentRoles: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -630,7 +630,7 @@ func TestCreateTablesInformationSchemaPreservesKnownProtocolFallback(t *testing.
 			err := createTablesInInformationSchemaOfGeneralTenant(
 				context.Background(), bh, test.service, nil)
 			require.NoError(t, err)
-			// Protocols below v81 also use the predecessor VIEWS definition; the
+			// Protocols below v83 also use the predecessor VIEWS definition; the
 			// historical role-visibility
 			// wrapper, so compare the VIEWS-specific contract rather than the
 			// whole SQL string.
@@ -671,7 +671,7 @@ func TestCreateTablesInformationSchemaPreservesKnownProtocolFallback(t *testing.
 func TestProtocolVersionForTenantInitializationUsesLegacyForUnknownRuntime(t *testing.T) {
 	version, err := protocolVersionForTenantInitialization("missing-pr27716-runtime", nil)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion81, version)
+	require.Equal(t, defines.MORPCVersion83, version)
 
 	rt := moruntime.ServiceRuntime("")
 	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -685,7 +685,7 @@ func TestProtocolVersionForTenantInitializationUsesLegacyForUnknownRuntime(t *te
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, "invalid")
 	version, err = protocolVersionForTenantInitialization("", nil)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion81, version)
+	require.Equal(t, defines.MORPCVersion83, version)
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion41)
 	version, err = protocolVersionForTenantInitialization("", nil)
@@ -711,14 +711,14 @@ func TestCreateTablesInformationSchemaUsesCommonProtocolGate(t *testing.T) {
 	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	oldCluster, hadCluster := rt.GetGlobalVariables(moruntime.ClusterService)
 	cluster := &tenantInitializationProtocolCluster{cns: []metadata.CNService{
-		{ServiceID: "cn-v82", QueryAddress: "cn-v82-query", PipelineServiceAddress: "cn-v82-pipeline"},
-		{ServiceID: "cn-v81", QueryAddress: "cn-v81-query", PipelineServiceAddress: "cn-v81-pipeline"},
+		{ServiceID: "cn-v84", QueryAddress: "cn-v84-query", PipelineServiceAddress: "cn-v84-pipeline"},
+		{ServiceID: "cn-v83", QueryAddress: "cn-v83-query", PipelineServiceAddress: "cn-v83-pipeline"},
 	}}
 	t.Cleanup(func() {
 		if hadProtocol {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion82)
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion84)
 		}
 		if hadCluster {
 			rt.SetGlobalVariables(moruntime.ClusterService, oldCluster)
@@ -730,7 +730,7 @@ func TestCreateTablesInformationSchemaUsesCommonProtocolGate(t *testing.T) {
 	queryClient := newMockQueryClient()
 	proc.Base.QueryClient = queryClient
 	rt.SetGlobalVariables(moruntime.ClusterService, cluster)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion82)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion84)
 
 	setProtocolResponse := func(address string, version int64) {
 		queryClient.cnResponses[address] = &querypb.Response{
@@ -748,33 +748,33 @@ func TestCreateTablesInformationSchemaUsesCommonProtocolGate(t *testing.T) {
 		{
 			name: "mixed versions use legacy VIEWS",
 			responses: map[string]int64{
-				"cn-v82-query": defines.MORPCVersion82,
-				"cn-v81-query": defines.MORPCVersion81,
+				"cn-v84-query": defines.MORPCVersion84,
+				"cn-v83-query": defines.MORPCVersion83,
 			},
 			wantLegacy: true,
 		},
 		{
-			name: "all CNs at v82 use current DDL",
+			name: "all CNs at v84 use current DDL",
 			responses: map[string]int64{
-				"cn-v82-query": defines.MORPCVersion82,
-				"cn-v81-query": defines.MORPCVersion82,
+				"cn-v84-query": defines.MORPCVersion84,
+				"cn-v83-query": defines.MORPCVersion84,
 			},
 			wantLatest: true,
 		},
 		{
 			name: "unknown CN capability uses legacy VIEWS",
 			responses: map[string]int64{
-				"cn-v82-query": defines.MORPCVersion82,
+				"cn-v84-query": defines.MORPCVersion84,
 			},
 			wantLegacy: true,
 		},
 		{
 			name: "RPC failure uses legacy VIEWS",
 			responses: map[string]int64{
-				"cn-v82-query": defines.MORPCVersion82,
+				"cn-v84-query": defines.MORPCVersion84,
 			},
 			sendErrors: map[string]error{
-				"cn-v81-query": context.Canceled,
+				"cn-v83-query": context.Canceled,
 			},
 			wantLegacy: true,
 		},
@@ -800,7 +800,7 @@ func TestCreateTablesInformationSchemaUsesCommonProtocolGate(t *testing.T) {
 					return nil
 				}).AnyTimes()
 
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion82)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion84)
 			err := createTablesInInformationSchemaOfGeneralTenant(
 				context.Background(), bh, service, proc)
 			require.NoError(t, err)
@@ -826,13 +826,13 @@ func TestCreateTablesInformationSchemaUsesCallerContext(t *testing.T) {
 	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	oldCluster, hadCluster := rt.GetGlobalVariables(moruntime.ClusterService)
 	cluster := &tenantInitializationProtocolCluster{cns: []metadata.CNService{
-		{ServiceID: "cn-v82", QueryAddress: "cn-v82-query", PipelineServiceAddress: "cn-v82-pipeline"},
+		{ServiceID: "cn-v84", QueryAddress: "cn-v84-query", PipelineServiceAddress: "cn-v84-pipeline"},
 	}}
 	t.Cleanup(func() {
 		if hadProtocol {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion82)
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion84)
 		}
 		if hadCluster {
 			rt.SetGlobalVariables(moruntime.ClusterService, oldCluster)
@@ -842,12 +842,12 @@ func TestCreateTablesInformationSchemaUsesCallerContext(t *testing.T) {
 	})
 
 	queryClient := newMockQueryClient()
-	queryClient.cnResponses["cn-v82-query"] = &querypb.Response{
-		GetProtocolVersion: &querypb.GetProtocolVersionResponse{Version: defines.MORPCVersion82},
+	queryClient.cnResponses["cn-v84-query"] = &querypb.Response{
+		GetProtocolVersion: &querypb.GetProtocolVersionResponse{Version: defines.MORPCVersion84},
 	}
 	proc.Base.QueryClient = queryClient
 	rt.SetGlobalVariables(moruntime.ClusterService, cluster)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion82)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion84)
 
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
