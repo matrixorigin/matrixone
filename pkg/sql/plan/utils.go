@@ -2355,6 +2355,12 @@ func decimal256TrailingZerosStatus(value types.Decimal256, trailingDigits int32)
 	if !ok {
 		return false, false
 	}
+	// Divisibility by a positive power of ten is independent of the sign.
+	// Mod256 operates on magnitudes, so normalize signed decimal coefficients
+	// before using it as the trailing-zero oracle.
+	if value.Sign() {
+		value = value.Minus()
+	}
 	remainder, err := value.Mod256(divisor)
 	if err != nil {
 		return false, false
