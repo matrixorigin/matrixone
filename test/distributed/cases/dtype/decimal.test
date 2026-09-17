@@ -720,7 +720,7 @@ DROP TABLE decimal_compare_test;
 DROP TABLE IF EXISTS decimal_opt_test;
 CREATE TABLE decimal_opt_test (
     id INT PRIMARY KEY,
-    price DECIMAL(10, 2),
+    price DECIMAL(10, 2) NOT NULL,
     amount DECIMAL(20, 5),
     quantity DECIMAL(18, 0)
 );
@@ -861,7 +861,7 @@ DROP TABLE decimal128_large_test;
 DROP TABLE IF EXISTS decimal_neq_test;
 CREATE TABLE decimal_neq_test (
     id INT PRIMARY KEY,
-    price DECIMAL(10, 2)
+    price DECIMAL(10, 2) NOT NULL
 );
 INSERT INTO decimal_neq_test VALUES (1, 99.99), (2, 199.99), (3, 299.99);
 
