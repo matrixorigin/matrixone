@@ -2018,6 +2018,23 @@ func TestDecimal128HasTrailingZeros(t *testing.T) {
 	}
 }
 
+func TestDecimal256StringHasTrailingZerosWithoutNarrowing(t *testing.T) {
+	value := "1.1234567890123456789012345678900000000000"
+	constType := types.New(types.T_decimal256, 50, 40)
+	constExpr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_decimal256), Width: 50, Scale: 40},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Isnull: false,
+			Value:  &plan.Literal_Sval{Sval: value},
+		}},
+	}
+
+	require.True(t, hasTrailingZeros(constExpr, constType, 30))
+	require.False(t, isDecimalComparisonAlwaysFalseCore(
+		constExpr, constType, 30),
+		"an exact Decimal256 value with only removable tail digits must remain comparable")
+}
+
 // TestParseHiveOptionKV verifies hive key parsing via Init*Param helper.
 // Covers legacy-JSON fallback where Option[] still carries hive_partitioning /
 // hive_partition_columns (stripHiveOptionKeys did not run). The key behavior:

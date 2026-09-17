@@ -3638,7 +3638,7 @@ type LiteralVec struct {
 	// zero is Expression so legacy and runtime-produced payloads stay ordinary.
 	StringSource uint32 `protobuf:"varint,4,opt,name=string_source,json=stringSource,proto3" json:"string_source,omitempty"`
 	// True when at least one element came from a plain decimal literal whose
-	// exact normalized binding requires MORPC v82. The aggregate bit preserves
+	// exact normalized binding requires MORPC v84. The aggregate bit preserves
 	// the compatibility fence without disabling the compact vector encoding.
 	DecimalLiteralRequiresV82 bool     `protobuf:"varint,5,opt,name=decimal_literal_requires_v82,json=decimalLiteralRequiresV82,proto3" json:"decimal_literal_requires_v82,omitempty"`
 	XXX_NoUnkeyedLiteral      struct{} `json:"-"`
