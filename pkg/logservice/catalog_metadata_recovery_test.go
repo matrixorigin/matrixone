@@ -15,11 +15,46 @@
 package logservice
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/stretchr/testify/require"
 )
+
+func TestCatalogRetirementOvertakesFailedRestart(t *testing.T) {
+	for _, pending := range []string{"STARTING", "REVOKING"} {
+		t.Run(pending, func(t *testing.T) {
+			s, permit := catalogTestSupervisor(t)
+			host := &catalogTestReplica{ready: true}
+			require.NoError(t, s.executeCatalogStartWith(permit, host))
+			if pending == "STARTING" {
+				host.present, host.ready = false, false
+				host.startHook = func() error { return errors.New("restart failed") }
+				require.ErrorContains(t, s.executeCatalogStartWith(permit, host), "restart failed")
+			} else {
+				host.stopHook = func() error { return errors.New("stop failed") }
+				revoke := permit
+				revoke.Revoked = true
+				require.ErrorContains(t, s.executeCatalogStartWith(revoke, host), "stop failed")
+			}
+			require.Equal(t, pending, catalogReadRecord(t, s).State)
+			retire := permit
+			retire.Token++
+			retire.Revoked = true
+			wrongIdentity := retire
+			wrongIdentity.ReplicaID++
+			require.Error(t, s.executeCatalogStartWith(wrongIdentity, host))
+			starts := host.starts
+			host.stopHook = nil
+			require.NoError(t, s.executeCatalogStartWith(retire, host))
+			require.Equal(t, starts, host.starts, "retirement must not retry the failed start")
+			require.Equal(t, "REVOKED", catalogReadRecord(t, s).State)
+			require.Equal(t, retire.Token, catalogReadRecord(t, s).Permit.Token)
+			require.Error(t, s.executeCatalogStartWith(permit, host))
+		})
+	}
+}
 
 func TestCatalogExecutorDoesNotAdvertiseStaleIncarnation(t *testing.T) {
 	s, permit := catalogTestSupervisor(t)

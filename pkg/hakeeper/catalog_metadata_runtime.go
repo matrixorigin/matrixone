@@ -239,24 +239,11 @@ func (s *stateMachine) applyCatalogMetadataRequest(b *pb.CatalogMetadataBarrierS
 		if !ok {
 			return CatalogMetadataRejected, 0
 		}
-		// Repeated invalidation may supersede an unfinished generation, but
-		// it may not exchange an unretired owner for a replacement. Keeping
-		// the same captured owner set also bounds retained generations.
-		for _, t := range b.Targets {
-			if !t.SealComplete {
-				if len(targets) != len(b.Targets) {
-					return CatalogMetadataRejected, 0
-				}
-				for i := range targets {
-					old := b.Targets[i]
-					if old.ServiceType != targets[i].ServiceType || old.UUID != targets[i].UUID || old.Generation != targets[i].Generation {
-						return CatalogMetadataRejected, 0
-					}
-					targets[i].CapturedTick = old.CapturedTick
-				}
-				break
-			}
-		}
+		// Capture new participants without dropping unretired owners. A
+		// same-UUID replacement waits behind its old owner, not a growing
+		// history of generations. ACTIVATE may have issued fresh authority:
+		// the previous pre-activation seal is not its retirement proof.
+		targets = recaptureCatalogTargets(b, targets)
 		b.MembershipEpoch++
 		b.RequiredGeneration++
 		b.Phase = pb.CATALOG_METADATA_BARRIER_PREPARING
@@ -276,6 +263,24 @@ func (s *stateMachine) applyCatalogMetadataRequest(b *pb.CatalogMetadataBarrierS
 		return CatalogMetadataStale, 0
 	}
 	switch r.Action {
+	case pb.CATALOG_ACTION_RETIRE_TARGET:
+		if r.Target == nil || len(r.Target.AuthorityRetirementDigest) != 32 {
+			return CatalogMetadataRejected, 0
+		}
+		for i := range b.Targets {
+			t := &b.Targets[i]
+			if t.ServiceType == r.Target.ServiceType && t.UUID == r.Target.UUID && t.Generation == r.Target.Generation {
+				if len(t.AuthorityRetirementDigest) != 0 && !bytes.Equal(t.AuthorityRetirementDigest, r.Target.AuthorityRetirementDigest) {
+					return CatalogMetadataConflict, 0
+				}
+				// Only the trusted authority owner / deployment retirement
+				// coordinator submits this proof, never a generic heartbeat.
+				t.AuthorityRetirementDigest = append([]byte(nil), r.Target.AuthorityRetirementDigest...)
+				t.ObservedPreparing, t.SealComplete = true, true
+				return CatalogMetadataApplied, 0
+			}
+		}
+		return CatalogMetadataStale, 0
 	case pb.CATALOG_ACTION_ACK_TARGET:
 		if r.Target == nil {
 			return CatalogMetadataRejected, 0
@@ -548,7 +553,11 @@ func (s *stateMachine) applyCatalogStart(a *pb.CatalogMetadataArbitration, r *pb
 }
 
 func (s *stateMachine) captureCatalogTargets(view, recovery uint64) ([]pb.CatalogMetadataBarrierTarget, bool) {
-	var targets []pb.CatalogMetadataBarrierTarget
+	capacity := len(s.state.CNState.Stores) + len(s.state.ProxyState.Stores)
+	if capacity == 0 {
+		return nil, true
+	}
+	targets := make([]pb.CatalogMetadataBarrierTarget, 0, capacity)
 	for uuid, info := range s.state.CNState.Stores {
 		cap := info.CatalogMetadataCapabilities
 		if info.ViewMetadataAdmissionGeneration == 0 || cap == nil || cap.BarrierParticipantProtocol < 1 || cap.ViewDependencyProtocol < view || cap.RecoveryProtocol < recovery ||

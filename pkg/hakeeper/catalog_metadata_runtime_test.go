@@ -231,6 +231,21 @@ func TestCatalogRuntimeLifecycleAndGenerationFencing(t *testing.T) {
 	}
 	require.Equal(t, pb.CATALOG_METADATA_BARRIER_ACTIVATED, s.state.CatalogMetadataBarrier.Phase)
 	require.Equal(t, uint64(1), s.state.CatalogMetadataBarrier.CompletedGeneration)
+	retired := runtimeRestore(t, s)
+	retire := runtimeRequest(retired, pb.CATALOG_ACTION_RETIRE_TARGET)
+	retire.Target = &pb.CatalogMetadataBarrierTarget{ServiceType: pb.CNService, UUID: "cn", Generation: 11, AuthorityRetirementDigest: bytes.Repeat([]byte{7}, 32)}
+	runtimeApply(t, retired, retire, CatalogMetadataApplied)
+	var response pb.CommandBatch
+	require.NoError(t, response.Unmarshal(retired.attachCatalogMetadataBarrier(sm.Result{}, "cn", false).Data))
+	require.False(t, response.CatalogMetadataBarrier.Admitted, "a retired issuer cannot reacquire authority in ACTIVATED")
+	retireToken := runtimeApply(t, retired, runtimeRequest(retired, pb.CATALOG_ACTION_ACQUIRE_FENCE), CatalogMetadataApplied)
+	retireNext := runtimeRequest(retired, pb.CATALOG_ACTION_SUPERSEDE)
+	retireNext.Token, retireNext.RequiredViewDependencyProtocol, retireNext.RequiredRecoveryProtocol = retireToken, 1, 1
+	runtimeApply(t, retired, retireNext, CatalogMetadataApplied)
+	require.Equal(t, retire.Target.AuthorityRetirementDigest, runtimeRestore(t, retired).state.CatalogMetadataBarrier.Targets[0].AuthorityRetirementDigest)
+	// The pre-activation seal does not retire fresh authority issued after
+	// ACTIVATE. Deleting its heartbeat record must not discard that owner.
+	delete(s.state.CNState.Stores, "cn")
 	token = runtimeApply(t, s, runtimeRequest(s, pb.CATALOG_ACTION_ACQUIRE_FENCE), CatalogMetadataApplied)
 	supersede := runtimeRequest(s, pb.CATALOG_ACTION_SUPERSEDE)
 	supersede.Token, supersede.RequiredViewDependencyProtocol, supersede.RequiredRecoveryProtocol = token, 1, 1
@@ -239,6 +254,9 @@ func TestCatalogRuntimeLifecycleAndGenerationFencing(t *testing.T) {
 	require.Equal(t, uint64(2), s.state.CatalogMetadataBarrier.RequiredGeneration)
 	require.Equal(t, uint64(1), s.state.CatalogMetadataBarrier.CompletedGeneration)
 	require.Nil(t, s.state.CatalogMetadataBarrier.Arbitration.CompletedReceipt)
+	require.Len(t, s.state.CatalogMetadataBarrier.Targets, 1)
+	require.Equal(t, uint64(11), s.state.CatalogMetadataBarrier.Targets[0].Generation)
+	require.False(t, s.state.CatalogMetadataBarrier.Targets[0].SealComplete)
 	require.Equal(t, uint64(3), s.state.PersistedExpressionRequiredProtocolVersion)
 	require.True(t, s.state.PersistedExpressionProtocolActivationPending)
 }

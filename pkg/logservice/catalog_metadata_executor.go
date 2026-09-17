@@ -185,7 +185,10 @@ func (l *store) executeCatalogStartLocked(p pb.CatalogMetadataStartPermit, host 
 			return catalogExecutionError()
 		}
 	} else {
-		if r.State == "STARTING" || r.State == "REVOKING" {
+		// Retirement of the same identity must not depend on successfully
+		// finishing (or restarting) the older start operation.
+		if (r.State == "STARTING" || r.State == "REVOKING") &&
+			!(p.Revoked && r.Permit.ReplicaID == p.ReplicaID && r.Permit.NonVoting == p.NonVoting) {
 			return catalogExecutionError()
 		}
 		// A new incarnation cannot retire or acknowledge the old supervisor.

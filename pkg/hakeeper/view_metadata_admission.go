@@ -692,11 +692,10 @@ func (s *stateMachine) handleActivatePersistedExpressionProtocol(
 // generation already owns this UUID. It returns false for a stale heartbeat.
 func (s *stateMachine) updateCNViewMetadataAdmission(hb pb.CNStoreHeartbeat) bool {
 	previous, existed := s.state.CNState.Stores[hb.UUID]
-	if b := s.state.CatalogMetadataBarrier; b != nil && b.EvidenceInitialized && existed && hb.ViewMetadataAdmissionGeneration < previous.ViewMetadataAdmissionGeneration {
-		return false
-	}
+	b := s.state.CatalogMetadataBarrier
+	catalogActive := b != nil && b.EvidenceInitialized
 	active := s.viewMetadataAdmissionActive()
-	if active && existed &&
+	if (active || catalogActive) && existed &&
 		hb.ViewMetadataAdmissionGeneration < previous.ViewMetadataAdmissionGeneration {
 		if s.state.PersistedExpressionRequiredProtocolVersion > 0 &&
 			hb.PersistedExpressionProtocolVersion <

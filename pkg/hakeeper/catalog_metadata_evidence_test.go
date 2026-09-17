@@ -130,6 +130,17 @@ func TestCatalogMetadataEvidenceRejectsInvalidSnapshotsAtomically(t *testing.T) 
 		{"zero-generation", func(s *pb.HAKeeperRSMState) { s.CatalogMetadataBarrier.Targets[0].Generation = 0 }},
 		{"future-capture", func(s *pb.HAKeeperRSMState) { s.CatalogMetadataBarrier.Targets[0].CapturedTick = 11 }},
 		{"unobserved-seal", func(s *pb.HAKeeperRSMState) { s.CatalogMetadataBarrier.Targets[0].SealComplete = true }},
+		{"malformed-retirement", func(s *pb.HAKeeperRSMState) {
+			s.CatalogMetadataBarrier.Targets[0].AuthorityRetirementDigest = []byte{1}
+		}},
+		{"retirement-without-seal", func(s *pb.HAKeeperRSMState) {
+			s.CatalogMetadataBarrier.Targets[0].AuthorityRetirementDigest = bytes.Repeat([]byte{1}, 32)
+			s.CatalogMetadataBarrier.Targets[0].ObservedPreparing = true
+		}},
+		{"retirement-without-observation", func(s *pb.HAKeeperRSMState) {
+			s.CatalogMetadataBarrier.Targets[0].AuthorityRetirementDigest = bytes.Repeat([]byte{1}, 32)
+			s.CatalogMetadataBarrier.Targets[0].SealComplete = true
+		}},
 		{"premature-seal", func(s *pb.HAKeeperRSMState) {
 			s.CatalogMetadataBarrier.Phase = pb.CATALOG_METADATA_BARRIER_PREPARING
 			s.CatalogMetadataBarrier.Targets[0].ObservedPreparing = true

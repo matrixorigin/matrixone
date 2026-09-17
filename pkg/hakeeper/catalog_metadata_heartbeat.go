@@ -21,16 +21,25 @@ import (
 
 func (s *stateMachine) catalogMetadataTargetsCurrent(b *pb.CatalogMetadataBarrierState) bool {
 	current, ok := s.captureCatalogTargets(b.RequiredViewDependencyProtocol, b.RequiredRecoveryProtocol)
-	if !ok || len(current) != len(b.Targets) {
+	if !ok {
 		return false
 	}
-	for i := range current {
-		a, target := current[i], b.Targets[i]
-		if a.ServiceType != target.ServiceType || a.UUID != target.UUID || a.Generation != target.Generation {
+	remaining := make(map[catalogTargetKey]uint64, len(current))
+	for _, target := range current {
+		remaining[catalogTargetKey{target.ServiceType, target.UUID}] = target.Generation
+	}
+	for _, target := range b.Targets {
+		key := catalogTargetKey{target.ServiceType, target.UUID}
+		generation, exists := remaining[key]
+		if !exists && len(target.AuthorityRetirementDigest) != 0 {
+			continue
+		}
+		if !exists || generation != target.Generation {
 			return false
 		}
+		delete(remaining, key)
 	}
-	return true
+	return len(remaining) == 0
 }
 
 func (s *stateMachine) attachCatalogMetadataBarrier(result sm.Result, uuid string, proxy bool) sm.Result {
@@ -62,7 +71,7 @@ func (s *stateMachine) attachCatalogMetadataBarrier(result sm.Result, uuid strin
 			// generic heartbeat path: it needs the authority issuer's drain proof.
 			t.ObservedPreparing = true
 		}
-		admitted = b.Phase == pb.CATALOG_METADATA_BARRIER_ACTIVATED && t.SealComplete && s.catalogMetadataTargetsCurrent(b) && s.catalogMetadataReplicasReady()
+		admitted = b.Phase == pb.CATALOG_METADATA_BARRIER_ACTIVATED && t.SealComplete && len(t.AuthorityRetirementDigest) == 0 && s.catalogMetadataTargetsCurrent(b) && s.catalogMetadataReplicasReady()
 	}
 	var batch pb.CommandBatch
 	if len(result.Data) != 0 {

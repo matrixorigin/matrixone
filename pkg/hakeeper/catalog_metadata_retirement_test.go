@@ -15,8 +15,10 @@
 package hakeeper
 
 import (
+	"bytes"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/stretchr/testify/require"
 )
@@ -42,9 +44,6 @@ func TestCatalogUnfinishedGenerationCanBeSupersededWithoutLosingOwners(t *testin
 			info := s.state.CNState.Stores["cn"]
 			info.ViewMetadataAdmissionGeneration = 2
 			s.state.CNState.Stores["cn"] = info
-			unhappyReject(t, s, r, CatalogMetadataRejected)
-			info.ViewMetadataAdmissionGeneration = 1
-			s.state.CNState.Stores["cn"] = info
 			runtimeApply(t, s, r, CatalogMetadataApplied)
 			b := runtimeRestore(t, s).state.CatalogMetadataBarrier
 			require.Equal(t, uint64(2), b.RequiredGeneration)
@@ -53,6 +52,85 @@ func TestCatalogUnfinishedGenerationCanBeSupersededWithoutLosingOwners(t *testin
 			require.Equal(t, old.CapturedTick, b.Targets[0].CapturedTick)
 			require.False(t, b.Targets[0].ObservedPreparing)
 			require.False(t, b.Targets[0].SealComplete)
+		})
+	}
+}
+
+func TestCatalogGenerationFencePreservesDecoderFloorWithdrawal(t *testing.T) {
+	s := catalogRuntimeFixture(t)
+	version := uint64(defines.MORPCLatestVersion)
+	s.state.CNState.Stores["cn"] = pb.CNStoreInfo{ViewMetadataAdmissionGeneration: 9,
+		ViewMetadataAdmissionSupported: true, ViewMetadataAdmissionReady: true, ViewMetadataIngressReady: true,
+		PersistedExpressionProtocolVersion: version,
+		CatalogMetadataCapabilities:        &pb.CatalogMetadataCapabilities{BarrierParticipantProtocol: 1, ViewDependencyProtocol: 1, RecoveryProtocol: 1, PersistedExpressionProtocol: version}}
+	unhappyBegin(t, s)
+	s.state.ViewMetadataAdmissionEnabled = true
+	s.state.ViewMetadataAdmissionEpoch = 4
+	s.state.PersistedExpressionRequiredProtocolVersion = version
+	s.state.ViewMetadataAdmissionCNReady = map[string]bool{"cn": true}
+	updateViewMetadataCN(t, s, pb.CNStoreHeartbeat{UUID: "cn", ViewMetadataAdmissionGeneration: 8,
+		ViewMetadataAdmissionSupported: true, ViewMetadataIngressReady: true})
+	require.False(t, s.state.CNState.Stores["cn"].ViewMetadataAdmissionReady)
+	require.NotContains(t, s.state.ViewMetadataAdmissionCNReady, "cn")
+	require.True(t, s.state.ViewMetadataAdmissionPending)
+	require.Equal(t, uint64(9), s.state.CNState.Stores["cn"].ViewMetadataAdmissionGeneration)
+	require.Equal(t, uint64(9), s.state.CatalogMetadataBarrier.Targets[0].Generation)
+}
+
+func TestCatalogLateParticipantAndRetirementProgress(t *testing.T) {
+	for _, change := range []string{"add", "replace", "delete"} {
+		t.Run(change, func(t *testing.T) {
+			s := catalogRuntimeFixture(t)
+			info := pb.CNStoreInfo{ViewMetadataAdmissionGeneration: 1,
+				CatalogMetadataCapabilities: &pb.CatalogMetadataCapabilities{BarrierParticipantProtocol: 1, ViewDependencyProtocol: 1, RecoveryProtocol: 1}}
+			s.state.CNState.Stores["a"] = info
+			unhappyBegin(t, s)
+			ack := runtimeRequest(s, pb.CATALOG_ACTION_ACK_TARGET)
+			ack.Target = &pb.CatalogMetadataBarrierTarget{ServiceType: pb.CNService, UUID: "a", Generation: 1, ObservedPreparing: true}
+			runtimeApply(t, s, ack, CatalogMetadataApplied)
+			switch change {
+			case "add":
+				s.state.CNState.Stores["b"] = info
+			case "replace":
+				info.ViewMetadataAdmissionGeneration = 2
+				s.state.CNState.Stores["a"] = info
+			case "delete":
+				delete(s.state.CNState.Stores, "a")
+			}
+			unhappyReject(t, s, runtimeRequest(s, pb.CATALOG_ACTION_SEAL), CatalogMetadataRejected)
+			supersede := func() {
+				token := runtimeApply(t, s, runtimeRequest(s, pb.CATALOG_ACTION_ACQUIRE_FENCE), CatalogMetadataApplied)
+				r := runtimeRequest(s, pb.CATALOG_ACTION_SUPERSEDE)
+				r.Token, r.RequiredViewDependencyProtocol, r.RequiredRecoveryProtocol = token, 1, 1
+				runtimeApply(t, s, r, CatalogMetadataApplied)
+			}
+			supersede()
+			s = runtimeRestore(t, s)
+			require.Equal(t, uint64(1), s.state.CatalogMetadataBarrier.Targets[0].Generation)
+			if change != "add" {
+				retire := runtimeRequest(s, pb.CATALOG_ACTION_RETIRE_TARGET)
+				retire.Target = &pb.CatalogMetadataBarrierTarget{ServiceType: pb.CNService, UUID: "a", Generation: 1}
+				unhappyReject(t, s, retire, CatalogMetadataRejected)
+				retire.Target.AuthorityRetirementDigest = bytes.Repeat([]byte{1}, 32)
+				runtimeApply(t, s, retire, CatalogMetadataApplied)
+				runtimeApply(t, s, retire, CatalogMetadataApplied)
+				retire.Target.AuthorityRetirementDigest = bytes.Repeat([]byte{2}, 32)
+				unhappyReject(t, s, retire, CatalogMetadataConflict)
+				s = runtimeRestore(t, s)
+				if change == "replace" {
+					supersede()
+				}
+			}
+			for _, target := range s.state.CatalogMetadataBarrier.Targets {
+				if len(target.AuthorityRetirementDigest) != 0 {
+					continue
+				}
+				ack := runtimeRequest(s, pb.CATALOG_ACTION_ACK_TARGET)
+				ack.Target = &pb.CatalogMetadataBarrierTarget{ServiceType: target.ServiceType, UUID: target.UUID, Generation: target.Generation, ObservedPreparing: true}
+				runtimeApply(t, s, ack, CatalogMetadataApplied)
+			}
+			runtimeApply(t, s, runtimeRequest(s, pb.CATALOG_ACTION_SEAL), CatalogMetadataApplied)
+			require.Equal(t, pb.CATALOG_METADATA_BARRIER_SEALED, runtimeRestore(t, s).state.CatalogMetadataBarrier.Phase)
 		})
 	}
 }

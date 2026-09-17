@@ -64,7 +64,11 @@ func validateCatalogMetadataEvidence(state *pb.HAKeeperRSMState) error {
 			target.UUID == "" || target.Generation == 0 || target.CapturedTick > state.Tick {
 			return moerr.NewInvalidInputNoCtx("invalid catalog metadata target identity or capture tick")
 		}
-		if target.SealComplete && (!target.ObservedPreparing || barrier.Phase < pb.CATALOG_METADATA_BARRIER_SEALED) {
+		retired := len(target.AuthorityRetirementDigest) != 0
+		if retired && (len(target.AuthorityRetirementDigest) != 32 || !target.ObservedPreparing || !target.SealComplete) {
+			return moerr.NewInvalidInputNoCtx("invalid catalog authority retirement proof")
+		}
+		if target.SealComplete && (!target.ObservedPreparing || (barrier.Phase < pb.CATALOG_METADATA_BARRIER_SEALED && !retired)) {
 			return moerr.NewInvalidInputNoCtx("catalog metadata target has premature seal evidence")
 		}
 		if i > 0 && !catalogMetadataTargetLess(&barrier.Targets[i-1], target) {

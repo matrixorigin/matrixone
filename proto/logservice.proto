@@ -1063,6 +1063,7 @@ enum CatalogMetadataAction {
   CATALOG_ACTION_COMPLETE = 15;
   CATALOG_ACTION_SUPERSEDE = 16;
   CATALOG_ACTION_REVOKE_START = 17;
+  CATALOG_ACTION_RETIRE_TARGET = 18;
 }
 
 message CatalogMetadataFence {
@@ -1158,6 +1159,9 @@ message CatalogMetadataBarrierTarget {
   uint64 CapturedTick = 4;
   bool ObservedPreparing = 5;
   bool SealComplete = 6;
+  // Digest of the trusted issuer-retirement or deployment-termination proof.
+  // Permanently retires this captured process generation; never set by heartbeat.
+  bytes AuthorityRetirementDigest = 7;
 }
 
 // HAKeeperSnapshotEnvelope is the MOH3 payload. RSMState is deliberately bytes
