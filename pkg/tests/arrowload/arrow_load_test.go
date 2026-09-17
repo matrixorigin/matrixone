@@ -129,19 +129,28 @@ func testArrowCommitPhaseFailureRollback(t *testing.T, db *sql.DB) {
 	require.Equal(t, int64(2), queryCount(t, db, "select count(*) from commit_failure_rollback"))
 }
 
-// TestArrowLoadGateModes keeps the two static rollback-policy checks in one
-// two-CN fixture. Each subtest uses the CN whose complete Arrow policy matches
-// the scenario, preserving the explicit gate matrix without paying for two
-// independent cluster admissions.
-func TestArrowLoadGateModes(t *testing.T) {
+// TestArrowLoadStaticPolicyModes keeps the two static policy matrices in one
+// four-CN fixture. The nested names retain the two independently reviewable
+// scenarios, while the fixture is closed before another test starts an
+// exclusive cluster lifecycle.
+func TestArrowLoadStaticPolicyModes(t *testing.T) {
+	c := startArrowLoadStaticPolicyCluster(t)
+	t.Run("TestArrowLoadForceMaterializeFallback", func(t *testing.T) {
+		testArrowLoadForceMaterializeFallback(t, c)
+	})
+	t.Run("TestArrowLoadGateModes", func(t *testing.T) {
+		testArrowLoadGateModes(t, c)
+	})
+}
+
+func testArrowLoadGateModes(t *testing.T, c embed.Cluster) {
 	missingPath := filepath.Join(t.TempDir(), "missing-before-gate.arrow")
 	distributedPath := prepareArrowLoadDistributedDisabledSoftFallback(t)
-	c := startArrowLoadClusterWithGateModes(t)
-	requireArrowLoadPolicy(t, c, 0, false, true, true)
-	requireArrowLoadPolicy(t, c, 1, true, true, false)
+	requireArrowLoadPolicy(t, c, 2, false, true, true)
+	requireArrowLoadPolicy(t, c, 3, true, true, false)
 
 	t.Run("GateDisabled", func(t *testing.T) {
-		db := openArrowLoadDB(t, c, 0)
+		db := openArrowLoadDB(t, c, 2)
 		mustExec(t, db, "create database if not exists arrow_gate_off")
 		mustExec(t, db, "use arrow_gate_off")
 		mustExec(t, db, "create table t(id bigint not null, amount decimal(18,2), score double, flag bool)")
@@ -153,7 +162,7 @@ func TestArrowLoadGateModes(t *testing.T) {
 	})
 
 	t.Run("DistributedDisabledSoftFallback", func(t *testing.T) {
-		db := openArrowLoadDB(t, c, 1)
+		db := openArrowLoadDB(t, c, 3)
 		testArrowLoadDistributedDisabledSoftFallback(t, db, distributedPath)
 	})
 }
