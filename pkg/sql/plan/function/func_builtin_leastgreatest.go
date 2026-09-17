@@ -312,6 +312,16 @@ func leastGreatestSameOidAlignedType(inputs []types.Type) (types.Type, bool) {
 	switch target.Oid {
 	case types.T_char, types.T_varchar, types.T_text:
 		mergedCharset := types.MergeStringCharset(inputs, target.Charset)
+		if target.Oid == types.T_varchar && leastGreatestMetadataDiffers(inputs) {
+			// A bounded conditional expression (for example COALESCE(CHAR, VARCHAR))
+			// can arrive here as VARCHAR with the first branch's width.  Do not let
+			// that intermediate width become LEAST/GREATEST's result metadata: the
+			// established string overload contract uses the conservative VARCHAR
+			// capacity when the argument widths need promotion.
+			target = types.T_varchar.ToType()
+			target.Charset = mergedCharset
+			return target, true
+		}
 		for i := range inputs {
 			if inputs[i].Charset != mergedCharset {
 				// Aligning collation requires casts even when the OIDs already
