@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 )
@@ -36,6 +37,12 @@ type minMaxExecBytes struct {
 	comp     func([]byte, []byte) int
 	hasExtra bool
 	extra    []byte
+	// JSON extras are validated once at the SetExtraInformation boundary and
+	// retained independently of the caller's buffer. When an allocation
+	// account is installed after that boundary, the owned copy is moved into
+	// the account's argument arena before any state is published.
+	isJSONExtra    bool
+	extraAccounted bool
 }
 
 // Merge copies or compares the source state without transferring ownership or
@@ -550,6 +557,43 @@ func (exec *minMaxExecBytes) BatchMerge(next AggFuncExec, offset int, groups []u
 }
 
 func (exec *minMaxExecBytes) SetExtraInformation(partialResult any, _ int) error {
+	if exec.isJSONExtra {
+		raw, ok := partialResult.([]byte)
+		if !ok {
+			return moerr.NewInternalErrorNoCtxf("invalid extra information type %T", partialResult)
+		}
+		if len(raw) == 0 {
+			return moerr.NewInvalidInputNoCtx("invalid JSON extra information")
+		}
+		value := bytejson.ByteJson{Type: bytejson.TpCode(raw[0]), Data: raw[1:]}
+		if !bytejson.IsValidByteJson(value) {
+			return moerr.NewInvalidInputNoCtx("invalid JSON extra information")
+		}
+
+		// Allocate before releasing a previously retained extra so a capacity
+		// failure leaves the old optimizer state unchanged.
+		var retained []byte
+		accounted := false
+		var err error
+		if exec.allocation != nil {
+			retained, err = exec.allocation.allocArgumentArena(exec.mp, len(raw))
+			accounted = err == nil
+		} else {
+			retained = slices.Clone(raw)
+		}
+		if err != nil {
+			return err
+		}
+		if accounted {
+			copy(retained, raw)
+		}
+		exec.releaseJSONExtra()
+		exec.extra = retained
+		exec.extraAccounted = accounted
+		exec.hasExtra = true
+		return nil
+	}
+
 	var ok bool
 	exec.extra, ok = partialResult.([]byte)
 	if !ok {
@@ -557,6 +601,55 @@ func (exec *minMaxExecBytes) SetExtraInformation(partialResult any, _ int) error
 	}
 	exec.hasExtra = true
 	return nil
+}
+
+func (exec *minMaxExecBytes) SetAllocationAccount(allocation *AllocationAccount) error {
+	if err := exec.aggExec.SetAllocationAccount(allocation); err != nil {
+		return err
+	}
+	if !exec.isJSONExtra || !exec.hasExtra || exec.extraAccounted {
+		return nil
+	}
+	retained, err := allocation.allocArgumentArena(exec.mp, len(exec.extra))
+	if err != nil {
+		// SetAllocationAccount has no externally visible state yet; roll the
+		// base pointer back so callers can safely retry with another account.
+		_ = exec.aggExec.ClearAllocationAccount(allocation)
+		return err
+	}
+	copy(retained, exec.extra)
+	exec.extra = retained
+	exec.extraAccounted = true
+	return nil
+}
+
+func (exec *minMaxExecBytes) ClearAllocationAccount(allocation *AllocationAccount) error {
+	if err := exec.aggExec.ClearAllocationAccount(allocation); err != nil {
+		return err
+	}
+	if exec.isJSONExtra && exec.extraAccounted {
+		retained := slices.Clone(exec.extra)
+		exec.mp.Free(exec.extra)
+		exec.extra = retained
+		exec.extraAccounted = false
+	}
+	return nil
+}
+
+func (exec *minMaxExecBytes) releaseJSONExtra() {
+	if !exec.isJSONExtra {
+		return
+	}
+	if exec.extraAccounted && exec.extra != nil {
+		exec.mp.Free(exec.extra)
+	}
+	exec.extra = nil
+	exec.extraAccounted = false
+}
+
+func (exec *minMaxExecBytes) Free() {
+	exec.releaseJSONExtra()
+	exec.aggExec.Free()
 }
 
 func (exec *minMaxExecBytes) Flush() ([]*vector.Vector, error) {
@@ -690,8 +783,10 @@ func makeMinMaxExecWithLegacyText(
 			return newUTF8mb4BinMinMaxExec(mp, aggID, isMin, param)
 		}
 		return newTextMinMaxExec(mp, aggID, isMin, param)
-	case types.T_blob, types.T_binary, types.T_varbinary, types.T_json, types.T_datalink:
+	case types.T_blob, types.T_binary, types.T_varbinary, types.T_datalink:
 		return newStrMinMaxExec(mp, aggID, isMin, param)
+	case types.T_json:
+		return newJSONMinMaxExec(mp, aggID, isMin, param)
 	case types.T_array_float32, types.T_array_float64:
 		return newArrayMinMaxExec(mp, aggID, isMin, param)
 	}
@@ -792,6 +887,28 @@ func newStrMinMaxExec(mp *mpool.MPool, aggID int64, isMin bool, param types.Type
 	}
 	setupAggInfo(&exec.aggInfo, aggID, param)
 	return &exec
+}
+
+func newJSONMinMaxExec(mp *mpool.MPool, aggID int64, isMin bool, param types.Type) AggFuncExec {
+	var exec minMaxExecBytes
+	exec.mp = mp
+	exec.isJSONExtra = true
+	if isMin {
+		exec.comp = compareJSONBytes
+	} else {
+		exec.comp = func(x, y []byte) int { return -compareJSONBytes(x, y) }
+	}
+	setupAggInfo(&exec.aggInfo, aggID, param)
+	return &exec
+}
+
+// compareJSONBytes is used only after vector/extra admission has established
+// complete ByteJSON values. Keeping the hot comparison on the trusted path
+// avoids recursively validating every candidate in every Fill call.
+func compareJSONBytes(x, y []byte) int {
+	left := bytejson.ByteJson{Type: bytejson.TpCode(x[0]), Data: x[1:]}
+	right := bytejson.ByteJson{Type: bytejson.TpCode(y[0]), Data: y[1:]}
+	return bytejson.CompareByteJsonTrusted(left, right)
 }
 
 func newTextMinMaxExec(mp *mpool.MPool, aggID int64, isMin bool, param types.Type) AggFuncExec {

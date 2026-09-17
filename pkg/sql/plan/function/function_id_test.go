@@ -82,15 +82,22 @@ func TestAggregateExecutorIDs(t *testing.T) {
 	}
 }
 
-func TestMinMaxRejectJSON(t *testing.T) {
+func TestMinMaxAcceptJSON(t *testing.T) {
 	for _, name := range []string{"min", "max"} {
-		_, err := GetFunctionByName(
+		fn, err := GetFunctionByName(
 			context.Background(),
 			name,
 			[]types.Type{types.T_json.ToType()},
 		)
-		require.Error(t, err, name)
+		require.NoError(t, err, name)
+		require.Equal(t, types.T_json, fn.GetReturnType().Oid, name)
 	}
+	_, err := GetFunctionByName(
+		context.Background(),
+		"sum",
+		[]types.Type{types.T_json.ToType()},
+	)
+	require.Error(t, err)
 }
 
 func TestInOverloadWireIDsRemainAppendOnly(t *testing.T) {
