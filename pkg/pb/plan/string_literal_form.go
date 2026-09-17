@@ -203,10 +203,10 @@ func RequiresMORPCVersion83BoundedConditionalStringDomains(owner any) (bool, err
 	return features.BoundedConditionalStringDomains, err
 }
 
-// RequiresMORPCVersion82DecimalLiteralSemantics reports whether an owner
+// RequiresMORPCVersion84DecimalLiteralSemantics reports whether an owner
 // contains a plain decimal literal whose exact normalized binding must not be
-// replayed by a pre-v82 binder.
-func RequiresMORPCVersion82DecimalLiteralSemantics(owner any) (bool, error) {
+// replayed by a pre-v84 binder.
+func RequiresMORPCVersion84DecimalLiteralSemantics(owner any) (bool, error) {
 	features, err := RequiredRemoteExpressionFeatures(owner)
 	return features.DecimalLiteralSemantics, err
 }
@@ -226,6 +226,12 @@ func RequiresMORPCVersion86ExpressionResultContracts(owner any) (bool, error) {
 // Deprecated: use RequiresMORPCVersion86ExpressionResultContracts.
 func RequiresMORPCVersion85ExpressionResultContracts(owner any) (bool, error) {
 	return RequiresMORPCVersion86ExpressionResultContracts(owner)
+}
+
+// RequiresMORPCVersion82DecimalLiteralSemantics is retained as a source-level
+// compatibility alias for callers introduced before the v84 contract.
+func RequiresMORPCVersion82DecimalLiteralSemantics(owner any) (bool, error) {
+	return RequiresMORPCVersion84DecimalLiteralSemantics(owner)
 }
 
 const (
@@ -293,7 +299,7 @@ const (
 // ExpressionResultMetadataContracts also requires MORPC v86 because bounded
 // character slicing and fractional temporal conditional results change the
 // serialized result metadata consumed by persisted views and remote workers.
-// DecimalLiteralSemantics requires MORPC v82 because plain DECIMAL256
+// DecimalLiteralSemantics requires MORPC v84 because plain DECIMAL256
 // literals are normalized and kept exact by the new planner, while older
 // binders can round or reject the same persisted SQL at the Decimal128
 // boundary.

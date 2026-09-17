@@ -2041,7 +2041,7 @@ func constantFoldWithPreparedExactSource(
 			// and visible to the remote protocol capability analysis.
 			return expr, nil
 		}
-		requiresDecimalProvenance, err := plan.RequiresMORPCVersion82DecimalLiteralSemantics(exprList)
+		requiresDecimalProvenance, err := plan.RequiresMORPCVersion84DecimalLiteralSemantics(exprList)
 		if err != nil {
 			return nil, err
 		}
@@ -2144,7 +2144,7 @@ func constantFoldWithPreparedExactSource(
 	defer free()
 
 	if isVec {
-		requiresDecimalProvenance, err := plan.RequiresMORPCVersion82DecimalLiteralSemantics(fn.Args)
+		requiresDecimalProvenance, err := plan.RequiresMORPCVersion84DecimalLiteralSemantics(fn.Args)
 		if err != nil {
 			return nil, err
 		}
@@ -2273,12 +2273,14 @@ func hasTrailingZeros(constExpr *plan.Expr, constT types.Type, columnScale int32
 		// using 128-bit arithmetic
 		return decimal128HasTrailingZeros(val.Decimal128Val.A, val.Decimal128Val.B, trailingDigits)
 	} else if sval, ok := lit.Value.(*plan.Literal_Sval); ok {
-		// The literal is a string, parse it as decimal
-		dec, _, err := types.Parse128(sval.Sval)
+		// The literal is a string. It may be an exact DECIMAL256 source, so
+		// parsing through Decimal128 can round the coefficient before we inspect
+		// the removable suffix and incorrectly report a non-zero tail.
+		dec, _, err := types.Parse256(sval.Sval)
 		if err != nil {
 			return false
 		}
-		return decimal128HasTrailingZeros(int64(dec.B0_63), int64(dec.B64_127), trailingDigits)
+		return decimal256HasTrailingZeros(dec, trailingDigits)
 	}
 
 	return false
@@ -2311,6 +2313,25 @@ func decimal128HasTrailingZeros(low, high int64, trailingDigits int32) bool {
 	}
 
 	return remainder.B0_63 == 0 && remainder.B64_127 == 0
+}
+
+// decimal256HasTrailingZeros checks an exact Decimal256 coefficient without
+// narrowing it through Decimal128. Returning false on an arithmetic error is
+// deliberate: the caller may lose an index-cast optimization, but must never
+// turn a potentially matching comparison into an always-false predicate.
+func decimal256HasTrailingZeros(value types.Decimal256, trailingDigits int32) bool {
+	if trailingDigits <= 0 || trailingDigits > 18 {
+		return false
+	}
+	divisor := types.Decimal256{B0_63: types.Pow10[trailingDigits]}
+	remainder, err := value.Mod256(divisor)
+	if err != nil {
+		return false
+	}
+	return remainder.B0_63 == 0 &&
+		remainder.B64_127 == 0 &&
+		remainder.B128_191 == 0 &&
+		remainder.B192_255 == 0
 }
 
 // isDecimalComparisonAlwaysFalseCore checks if a decimal comparison is always false
