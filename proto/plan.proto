@@ -576,6 +576,8 @@ message TableDef {
   // Default collation class inherited by textual columns without an explicit
   // column-level collation. Uses the container/types Charset constants.
   uint32 default_charset = 39;
+  // Zero inherits the service policy; one disables speculative ID reservation.
+  uint64 auto_id_cache = 40;
 }
 
 message TableFunction {

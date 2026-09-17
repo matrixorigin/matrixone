@@ -57,6 +57,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
@@ -1109,8 +1110,6 @@ func (s *service) initShardService() {
 			shardservice.ReadBuildReader:              disttae.HandleShardingReadBuildReader,
 			shardservice.ReadPrimaryKeysMayBeModified: disttae.HandleShardingReadPrimaryKeysMayBeModified,
 			shardservice.ReadPrimaryKeysMayBeUpserted: disttae.HandleShardingReadPrimaryKeysMayBeUpserted,
-			shardservice.ReadMergeObjects:             disttae.HandleShardingReadMergeObjects,
-			shardservice.ReadVisibleObjectStats:       disttae.HandleShardingReadVisibleObjectStats,
 			shardservice.ReadClose:                    disttae.HandleShardingReadClose,
 			shardservice.ReadNext:                     disttae.HandleShardingReadNext,
 			shardservice.ReadCollectTombstones:        disttae.HandleShardingReadCollectTombstones,
@@ -1301,6 +1300,9 @@ func (s *service) initIncrService() {
 	store, err := incrservice.NewSQLStore(
 		s.sqlExecutor,
 		s.lockService,
+		func(ctx context.Context) (timestamp.Timestamp, error) {
+			return acquireIncrLogtailReadBarrier(ctx, s.storeEngine)
+		},
 	)
 	if err != nil {
 		panic(err)
@@ -1313,6 +1315,14 @@ func (s *service) initIncrService() {
 		runtime.AutoIncrementService,
 		s.incrservice)
 	incrservice.SetAutoIncrementServiceByID(s.cfg.UUID, s.incrservice)
+}
+
+func acquireIncrLogtailReadBarrier(ctx context.Context, eng any) (timestamp.Timestamp, error) {
+	barrier, ok := eng.(engine.LogtailReadBarrier)
+	if !ok {
+		return timestamp.Timestamp{}, moerr.NewInternalError(ctx, "AUTO_INCREMENT observation requires an engine logtail read barrier")
+	}
+	return barrier.AcquireLogtailReadBarrier(ctx)
 }
 
 func (s *service) bootstrap() error {

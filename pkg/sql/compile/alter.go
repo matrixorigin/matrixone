@@ -1553,12 +1553,13 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 						if valid {
 							// The replacement table's hidden index tables may be empty: cloneUnaffectedIndexes
 							// SKIPS the clone for a SkipWholeIndex async index and the CDC is registered from
-							// ts=0. Ask the plugin how to seed it (#28837): almost every algo returns (false, "")
-							// because its consumer rebuilds the whole index from the ts=0 replay (hnsw/cagra/
-							// ivfpq via RunHnsw/RunCuvs, ivfflat entries, classic row-based fulltext). fulltext2
-							// is the exception: RunFulltext2 only appends a cdc_tail and its base is built ONLY by
-							// buildFromSource, so it returns a REINDEX FORCE_SYNC InitSQL, run post-commit by the
-							// CDC's first iteration. Mirrors RestoreTable's plugin-InitSQL dispatch.
+							// ts=0. Ask the plugin how to seed it: an algo whose consumer rebuilds the whole
+							// index from the ts=0 replay returns (false, "") — hnsw via RunHnsw, ivfflat
+							// entries, classic row-based fulltext. An algo whose consumer only appends an event
+							// tail returns a REINDEX FORCE_SYNC InitSQL, run post-commit by the CDC's first
+							// iteration: fulltext2 (#28837), and cagra/ivfpq (#29011), whose RunCuvs sync writes
+							// tag=1 chunks only and never a tag=0 sub-index. Mirrors RestoreTable's
+							// plugin-InitSQL dispatch.
 							startFromNow, initSQL := false, ""
 							if p, ok := indexplugin.Get(indexDef.IndexAlgo); ok {
 								if idxcronCctx == nil {
@@ -1871,7 +1872,7 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 			return err
 		}
 		if err := svc.SetOffset(
-			c.proc.Ctx,
+			incrservice.WithAutoIDCachePolicy(c.proc.Ctx, createdDef.TblId, createdDef.AutoIdCache),
 			tableID,
 			col.ColIndex,
 			col.ColName,
@@ -2755,9 +2756,11 @@ func cloneUnaffectedIndexes(
 		// Per-algo clone semantics live entirely on the plugin's
 		// AlterTableCloneBehavior, which declares two mutually exclusive
 		// policies:
-		//   - SkipWholeIndex: skip the entire index when async. Algorithms that
-		//     leave every hidden table empty at CREATE and rebuild all of them
-		//     via CDC from ts=0 (HNSW / CAGRA / IVF-PQ / fulltext).
+		//   - SkipWholeIndex: skip the entire index when async. Algorithms whose
+		//     replacement hidden tables are repopulated after the copy rather than
+		//     cloned (HNSW / CAGRA / IVF-PQ / fulltext) -- from the ts=0 CDC replay
+		//     alone, or from the REINDEX their AlterCopyInitSQL seeds when their
+		//     consumer cannot write the base (see alterCopyCdcSeed).
 		//   - DeleteBeforeClone + SkipWhenAsync (per hidden table): IVF-FLAT is
 		//     the only case today. All three hidden tables get DELETE'd (the
 		//     CREATE on the temp table already seeded them), entries are

@@ -506,14 +506,14 @@ endif
 ut: $(UT_PREREQUISITES)
 	$(info [Unit testing])
 ifeq ($(UNAME_S),darwin)
-	@cd optools && ./run_ut.sh UT $(SKIP_TEST)
+	@cd optools && UT_NATIVE_PREPARED="$(NATIVE_PROVENANCE_ACCELERATOR):$(NATIVE_PROVENANCE_OPTIMIZATION):$(NATIVE_PROVENANCE_SIMSIMD)" ./run_ut.sh UT $(SKIP_TEST)
 else
 	# The race suite is internally partitioned into light/HNSW, exclusive issues,
 	# embedded-cluster, heavy/engine, and plan stages. Keep the outer budget above
 	# the per-package timeout so an expanded main branch cannot be killed while a
 	# selected stage is still making progress. GNU timeout sends TERM first so
 	# run_ut.sh can preserve its checkpoint and active-case diagnostics.
-	@cd optools && timeout --signal=TERM --kill-after=120s $(UT_HARD_TIMEOUT) ./run_ut.sh UT $(SKIP_TEST)
+	@cd optools && UT_NATIVE_PREPARED="$(NATIVE_PROVENANCE_ACCELERATOR):$(NATIVE_PROVENANCE_OPTIMIZATION):$(NATIVE_PROVENANCE_SIMSIMD)" timeout --signal=TERM --kill-after=120s $(UT_HARD_TIMEOUT) ./run_ut.sh UT $(SKIP_TEST)
 endif
 
 ###############################################################################
@@ -521,9 +521,11 @@ endif
 ###############################################################################
 UT_PARALLEL ?= 1
 UT_SHARD ?= all
-# The outer lifecycle budget is separate from each Go test's UT_TIMEOUT. Keep
-# enough time after TERM for checkpoint flushing and artifact upload.
-UT_HARD_TIMEOUT ?= 70m
+# The outer lifecycle budget covers every sequential UT stage, not one package.
+# A cold race run can spend over an hour in light/issues/embedded before the
+# heavy/engine/plan stages start. Keep per-package UT_TIMEOUT unchanged and
+# leave enough time after TERM for checkpoint flushing and artifact upload.
+UT_HARD_TIMEOUT ?= 120m
 # Emit one bounded progress heartbeat per interval while UT is running.
 UT_HEARTBEAT_INTERVAL ?= 60
 # Build embedded test packages ahead of their execution while the issues

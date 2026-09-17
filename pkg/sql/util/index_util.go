@@ -509,6 +509,21 @@ func serialWithCompacted(
 					ps[i].EncodeDecimal128(b)
 				}
 			}
+		case types.T_decimal256:
+			s := vector.MustFixedColNoTypeCheck[types.Decimal256](v)
+			if hasNull {
+				for i, b := range s {
+					if nulls.Contains(vNull, uint64(i)) {
+						nulls.Add(bitMap, uint64(i))
+					} else {
+						ps[i].EncodeDecimal256(b)
+					}
+				}
+			} else {
+				for i, b := range s {
+					ps[i].EncodeDecimal256(b)
+				}
+			}
 		case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text,
 			types.T_array_float32, types.T_array_float64, types.T_datalink:
 			// NOTE 1: We will consider T_array as bytes here just like JSON, VARBINARY and BLOB.
@@ -790,6 +805,15 @@ func compactSingleIndexCol(
 			}
 		}
 		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
+	case types.T_decimal256:
+		s := vector.MustFixedColNoTypeCheck[types.Decimal256](v)
+		ns := make([]types.Decimal256, 0, len(s))
+		for i, b := range s {
+			if !nulls.Contains(v.GetNulls(), uint64(i)) {
+				ns = append(ns, b)
+			}
+		}
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
 	case types.T_json, types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob,
 		types.T_array_float32, types.T_array_float64:
 		s, area := vector.MustVarlenaRawData(v)
@@ -992,6 +1016,15 @@ func compactPrimaryCol(
 	case types.T_decimal128:
 		s := vector.MustFixedColNoTypeCheck[types.Decimal128](v)
 		ns := make([]types.Decimal128, 0)
+		for i, b := range s {
+			if !nulls.Contains(bitMap, uint64(i)) {
+				ns = append(ns, b)
+			}
+		}
+		err = vector.AppendFixedList(vec, ns, nil, proc.Mp())
+	case types.T_decimal256:
+		s := vector.MustFixedColNoTypeCheck[types.Decimal256](v)
+		ns := make([]types.Decimal256, 0)
 		for i, b := range s {
 			if !nulls.Contains(bitMap, uint64(i)) {
 				ns = append(ns, b)

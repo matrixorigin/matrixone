@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -45,6 +46,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
+
+type restoreServiceBackgroundExec struct {
+	BackgroundExec
+	service string
+}
+
+func (b *restoreServiceBackgroundExec) Service() string { return b.service }
 
 func TestGetFkDepsFromTableInfos(t *testing.T) {
 	tableInfos := []*tableInfo{
@@ -1729,6 +1737,35 @@ func restoreTestExecutedSQLContains(bh *backgroundExecTest, needle string) bool 
 		}
 	}
 	return false
+}
+
+func TestRestoreRejectsPersistedViewFromNewerProtocol(t *testing.T) {
+	const serviceID = "snapshot-persisted-view-protocol"
+	runtime.SetupServiceBasedRuntime(serviceID, runtime.DefaultRuntime())
+	rt := runtime.ServiceRuntime(serviceID)
+	old, exists := rt.GetGlobalVariables(runtime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if exists {
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, old)
+		} else {
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	viewDef, err := json.Marshal(plan.ViewData{
+		Stmt:                    "create view v as select 1",
+		RequiredProtocolVersion: func() *int64 { v := defines.MORPCVersion72; return &v }(),
+	})
+	require.NoError(t, err)
+	b := &restoreServiceBackgroundExec{service: serviceID}
+	tblInfo := &tableInfo{viewDef: string(viewDef), createSql: "create view v as select 1"}
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion71)
+	require.ErrorContains(t,
+		requirePersistedViewProtocolForRestore(context.Background(), b, tblInfo),
+		"protocol version 72")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion72)
+	require.NoError(t, requirePersistedViewProtocolForRestore(context.Background(), b, tblInfo))
 }
 
 func TestRestoreSQLQuotesEmbeddedBackticks(t *testing.T) {

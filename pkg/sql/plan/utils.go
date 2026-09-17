@@ -1051,7 +1051,7 @@ func combinePlanConjunction(ctx context.Context, exprs []*plan.Expr) (expr *plan
 }
 
 // PreparedPlanHasDeferredNumericFunction reports whether a prepared plan has
-// an ABS or SIGN argument whose overload was deferred until execution. This is
+// a deferred numeric function argument whose overload was deferred until execution. This is
 // kept as a plan-introspection helper for tests and diagnostics; execute-time
 // eligibility is cached on PrepareStmt and must not call this walker for every
 // execution.
@@ -1060,7 +1060,7 @@ func PreparedPlanHasDeferredNumericFunction(preparePlan *Plan) bool {
 }
 
 // PreparedPlanNumericFallbackParamPositions returns the parameter positions
-// whose value supplies a deferred numeric ABS or SIGN argument. The result is
+// whose value supplies a deferred numeric function argument. The result is
 // plan metadata, not an execute-time decision: callers can compute it once when a
 // prepared plan is built and use it to decide whether runtime values must be
 // decoded. In particular, this avoids scanning/deep-copying the entire plan
@@ -1072,13 +1072,14 @@ func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
 	positions := make(map[int32]struct{})
 	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
 		fn := expr.GetF()
-		if fn == nil || fn.Func == nil || !isPreparedNumericFallbackFunction(fn.Func.GetObjName()) || len(fn.Args) != 1 {
+		if fn == nil || fn.Func == nil {
 			return nil
 		}
-		if !isPreparedNumericFallbackExpr(fn.Args[0]) {
+		arg, ok := preparedNumericFallbackFunctionArg(fn)
+		if !ok {
 			return nil
 		}
-		for pos := range preparedNumericValueParamPositions(fn.Args[0]) {
+		for pos := range preparedNumericValueParamPositions(arg) {
 			positions[pos] = struct{}{}
 		}
 		return nil
@@ -1169,11 +1170,37 @@ func preparedPlanFunctionFallbackParamPositions(preparePlan *Plan, functionName 
 
 func isPreparedNumericFallbackFunction(name string) bool {
 	switch strings.ToLower(name) {
-	case "abs", "sign":
+	case "abs", "sign", "elt":
 		return true
 	default:
 		return false
 	}
+}
+
+func isPreparedNumericFallbackFunctionCall(name string, argCount int) bool {
+	if !isPreparedNumericFallbackFunction(name) {
+		return false
+	}
+	switch strings.ToLower(name) {
+	case "elt":
+		return argCount >= 2
+	case "abs", "sign":
+		return argCount == 1
+	default:
+		return false
+	}
+}
+
+func preparedNumericFallbackFunctionArg(fn *plan.Function) (*plan.Expr, bool) {
+	if fn == nil || fn.Func == nil ||
+		!isPreparedNumericFallbackFunctionCall(fn.Func.GetObjName(), len(fn.Args)) {
+		return nil, false
+	}
+	arg := fn.Args[0]
+	if !isPreparedNumericFallbackExpr(arg) {
+		return nil, false
+	}
+	return arg, true
 }
 
 func isPreparedNumericFallbackExpr(expr *plan.Expr) bool {
@@ -4832,6 +4859,42 @@ func ValidatePreparedPaginationParams(ctx context.Context, preparePlan *Plan, pa
 // compile from an earlier execution.
 func PreparedPlanHasPaginationParams(preparePlan *Plan) bool {
 	return len(preparedPaginationParamPositions(preparePlan)) > 0
+}
+
+// PreparedPlanHasPercentileParams reports whether an aggregate percentile is
+// supplied by a prepared marker. The value is compiled into aggregate
+// configuration rather than read as a row argument, so a plan with such a
+// marker must build a fresh physical aggregate for every EXECUTE value.
+func PreparedPlanHasPercentileParams(preparePlan *Plan) bool {
+	if preparePlan == nil {
+		return false
+	}
+	found := false
+	seen := make(map[*plan.Expr]struct{})
+	_ = plan.VisitExpressionsInOwner(preparePlan, func(root *plan.Expr) error {
+		if found {
+			return nil
+		}
+		return plan.VisitExprTree(root, func(expr *plan.Expr) error {
+			if found || expr == nil {
+				return nil
+			}
+			if _, ok := seen[expr]; ok {
+				return nil
+			}
+			seen[expr] = struct{}{}
+			fn := expr.GetF()
+			if fn == nil || fn.Func == nil || len(fn.Args) != 2 {
+				return nil
+			}
+			switch strings.ToLower(fn.Func.ObjName) {
+			case NameApproxPercentile, NamePercentileCont, NamePercentileDisc:
+				found = preparedExprContainsParam(fn.Args[1])
+			}
+			return nil
+		})
+	})
+	return found
 }
 
 // PreparedPlanHasDirectResultParams reports whether a visible SELECT result

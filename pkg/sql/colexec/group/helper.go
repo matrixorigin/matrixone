@@ -1784,13 +1784,28 @@ func (ctr *container) needSpill(opAnalyzer process.Analyzer) bool {
 }
 
 func (ctr *container) makeAggList(aggExprs []aggexec.AggFuncExecExpression) ([]aggexec.GroupAggFuncExec, error) {
-	return ctr.makeAggListWithAllocation(aggExprs, ctr.aggregateAllocation)
+	return ctr.makeAggListForMode(aggExprs, ctr.aggregateAllocation, ctr.mtyp == H0)
 }
 
 func (ctr *container) makeSpillAggList(
 	aggExprs []aggexec.AggFuncExecExpression,
 ) ([]aggexec.GroupAggFuncExec, error) {
-	return ctr.makeAggListWithAllocation(aggExprs, ctr.spillAggregateAllocation)
+	return ctr.makeAggListForMode(aggExprs, ctr.spillAggregateAllocation, ctr.mtyp == H0)
+}
+
+func (ctr *container) makeSpillAggListForMode(
+	aggExprs []aggexec.AggFuncExecExpression,
+	singleGroup bool,
+) ([]aggexec.GroupAggFuncExec, error) {
+	return ctr.makeAggListForMode(aggExprs, ctr.spillAggregateAllocation, singleGroup)
+}
+
+func (ctr *container) makeAggListForMode(
+	aggExprs []aggexec.AggFuncExecExpression,
+	allocation *aggexec.AllocationAccount,
+	singleGroup bool,
+) ([]aggexec.GroupAggFuncExec, error) {
+	return ctr.makeAggListWithAllocation(aggExprs, allocation, singleGroup)
 }
 
 func (ctr *container) buildSpillReloadHashTable(
@@ -1820,6 +1835,7 @@ func (ctr *container) buildSpillReloadHashTable(
 func (ctr *container) makeAggListWithAllocation(
 	aggExprs []aggexec.AggFuncExecExpression,
 	allocation *aggexec.AllocationAccount,
+	singleGroup bool,
 ) ([]aggexec.GroupAggFuncExec, error) {
 	var err error
 	aggList := make([]aggexec.GroupAggFuncExec, len(aggExprs))
@@ -1830,7 +1846,6 @@ func (ctr *container) makeAggListWithAllocation(
 				types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale, uint8(arg.Typ.Charset),
 			)
 		}
-		singleGroup := ctr.mtyp == H0
 		if ctr.legacyTextMinMax || ctr.legacyVarianceState ||
 			ctr.legacyDecimalSumState || ctr.legacyDecimalSumResult {
 			if singleGroup {
@@ -1857,16 +1872,26 @@ func (ctr *container) makeAggListWithAllocation(
 			freeAggListPartial(aggList, i)
 			return nil, err
 		}
+		if ctr.legacyApproxPercentileState {
+			aggexec.ConfigureApproxPercentileLegacyState(aggList[i])
+		}
+		if ctr.legacyHLLState {
+			if ctr.floatZeroHLLState && hllFloatZeroStateSupported(agExpr.GetAggID()) {
+				aggexec.ConfigureHLLFloatZeroState(aggList[i])
+			} else {
+				aggexec.ConfigureHLLLegacyState(aggList[i])
+			}
+		}
 		aggexec.ConfigureGroupConcatTimeZone(aggList[i], ctr.timeZone)
-		// mtyp is the logical Group mode and survives resident-spill resets.
-		// Preserve it in each rebuilt GROUP_CONCAT executor even when the
-		// current spill bucket contains only one group.
-		aggexec.SetGroupConcatMultiGroupContext(aggList[i], ctr.mtyp != H0)
+		// Preserve the mode used to construct this list. A merge partial's wire
+		// header may be the first authoritative mode before ctr.mtyp is published;
+		// deriving this from ctr.mtyp would configure a grouped median as H0.
+		aggexec.SetGroupConcatMultiGroupContext(aggList[i], !singleGroup)
 		aggexec.SetGroupConcatSourceRowsTrusted(
 			aggList[i], !ctr.groupConcatSourceRowsUntrusted)
 	}
 
-	if ctr.mtyp != H0 {
+	if !singleGroup {
 		aggexec.SyncAggregatorsToChunkSize(aggList, aggBatchSize)
 	} else {
 		aggexec.SyncAggregatorsToChunkSize(aggList, 1)
@@ -1878,6 +1903,15 @@ func (ctr *container) makeAggListWithAllocation(
 		}
 	}
 	return aggList, nil
+}
+
+// hllFloatZeroStateSupported is deliberately limited to APPROX_COUNT
+// families. Protocol v76 introduced signed-zero canonicalization for those
+// newly versioned states; persisted HLL_ADD_AGG/HLL_MERGE_AGG states retain
+// their v2 raw-value wire contract until a future explicit migration.
+func hllFloatZeroStateSupported(aggID int64) bool {
+	return aggID == aggexec.AggIdOfApproxCount ||
+		aggID == aggexec.AggIdOfApproxCountDistinct
 }
 
 func useLegacyTextMinMaxForRemote(proc *process.Process) bool {
@@ -1925,6 +1959,20 @@ func useLegacyDecimalSumState(proc *process.Process) bool {
 	return !ok || !valid || version < defines.MORPCVersion73
 }
 
+func useLegacyApproxPercentileStateForRemote(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return false
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return false
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return !ok || !valid || version < defines.MORPCVersion76
+}
+
 // An old coordinator can send a final Group to an upgraded worker without
 // running the upgraded shuffle-plan gate. Below v73 that Group must preserve
 // the old Decimal128 result contract. Partial Groups still use the legacy wire
@@ -1936,6 +1984,62 @@ func useLegacyDecimalSumResultForRemote(proc *process.Process, needEval bool) bo
 	}
 	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
 	return remote
+}
+
+func useLegacyHLLStateForRemote(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return false
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return false
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return !ok || !valid || version < defines.MORPCVersion77
+}
+
+func useFloatZeroHLLStateForRemote(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return false
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return false
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return ok && valid && version == defines.MORPCVersion76
+}
+
+func groupHashStringWireEnabled(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return true
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return true
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return ok && valid && version >= defines.MORPCVersion78
+}
+
+func canonicalDistinctKeyWireEnabled(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return true
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return true
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return ok && valid && version >= defines.MORPCVersion79
 }
 
 // freeAggListPartial frees the first n aggregators in the list.

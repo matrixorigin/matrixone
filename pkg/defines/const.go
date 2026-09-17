@@ -111,7 +111,16 @@ const (
 	MORPCVersion73     int64 = 73 // widened DECIMAL SUM partial state
 	MORPCVersion74     int64 = 74 // corrected numeric HEX overload identities
 	MORPCVersion75     int64 = 75 // persistent data-branch database identity
-	MORPCLatestVersion       = MORPCVersion75
+	MORPCVersion76     int64 = 76 // NaN-ordered percentile and compatible HLL states
+	MORPCVersion77     int64 = 77 // complete typed SQL equivalence keys in HLL states
+	MORPCVersion78     int64 = 78 // length-delimited variable-length GROUP hash keys
+	MORPCVersion79     int64 = 79 // canonical opaque DISTINCT argument wire keys
+	MORPCVersion80     int64 = 80 // signed and widened string numeric result contracts
+	MORPCVersion81     int64 = 81 // opt-in table-owned AUTO_ID_CACHE and its PRE_INSERT wire marker
+	MORPCVersion82     int64 = 82 // self-completing fulltext2 json index probe (probe_tail contract)
+	MORPCVersion83     int64 = 83 // bounded COALESCE character and binary result domains
+	MORPCVersion84     int64 = 84 // extended discrete percentile input types
+	MORPCLatestVersion       = MORPCVersion84
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

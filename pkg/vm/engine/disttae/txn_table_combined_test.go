@@ -821,18 +821,6 @@ func newMixedTimestampChangesHandle(
 	return &combinedChangesHandle{handles: handles, mp: mp}, children
 }
 
-func TestCombinedTxnTable_MergeObjects(t *testing.T) {
-	table := newMockCombinedTxnTable()
-
-	assert.PanicsWithValue(t, "not implemented", func() {
-		table.MergeObjects(
-			context.Background(),
-			[]objectio.ObjectStats{},
-			1024,
-		)
-	})
-}
-
 func TestCombinedTxnTable_UpdateConstraint(t *testing.T) {
 	table := newMockCombinedTxnTable()
 
@@ -1205,161 +1193,6 @@ func TestCombinedTxnTable_GetColumMetadataScanInfo(t *testing.T) {
 		assert.Equal(t, mockInfo1, result[0])
 		assert.Equal(t, mockInfo2, result[1])
 		assert.Equal(t, mockInfo3, result[2])
-	})
-}
-
-func TestCombinedTxnTable_GetNonAppendableObjectStats(t *testing.T) {
-	// Test case 1: Success case with multiple tables
-	t.Run("Success with multiple tables", func(t *testing.T) {
-		// Create mock object stats
-		mockStats1 := objectio.NewObjectStats()
-		objectio.SetObjectStatsSize(mockStats1, 1024)
-		objectio.SetObjectStatsOriginSize(mockStats1, 2048)
-		objectio.SetObjectStatsRowCnt(mockStats1, 100)
-
-		mockStats2 := objectio.NewObjectStats()
-		objectio.SetObjectStatsSize(mockStats2, 2048)
-		objectio.SetObjectStatsOriginSize(mockStats2, 4096)
-		objectio.SetObjectStatsRowCnt(mockStats2, 200)
-
-		// Create mock relations that return object stats
-		mockRel1 := &mockRelation{
-			getNonAppendableObjectStatsFunc: func(ctx context.Context) ([]objectio.ObjectStats, error) {
-				return []objectio.ObjectStats{*mockStats1}, nil
-			},
-		}
-		mockRel2 := &mockRelation{
-			getNonAppendableObjectStatsFunc: func(ctx context.Context) ([]objectio.ObjectStats, error) {
-				return []objectio.ObjectStats{*mockStats2}, nil
-			},
-		}
-
-		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
-				return []engine.Relation{mockRel1, mockRel2}, nil
-			},
-		}
-
-		result, err := table.GetNonAppendableObjectStats(context.Background())
-		assert.NoError(t, err)
-		assert.Len(t, result, 2)
-		assert.Equal(t, *mockStats1, result[0])
-		assert.Equal(t, *mockStats2, result[1])
-	})
-
-	// Test case 2: Error when tablesFunc returns error
-	t.Run("Error from tablesFunc", func(t *testing.T) {
-		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
-				return nil, assert.AnError
-			},
-		}
-
-		result, err := table.GetNonAppendableObjectStats(context.Background())
-		assert.Error(t, err)
-		assert.Nil(t, result)
-		assert.Equal(t, assert.AnError, err)
-	})
-
-	// Test case 3: Error from individual table's GetNonAppendableObjectStats
-	t.Run("Error from individual table", func(t *testing.T) {
-		mockRel := &mockRelation{
-			getNonAppendableObjectStatsFunc: func(ctx context.Context) ([]objectio.ObjectStats, error) {
-				return nil, assert.AnError
-			},
-		}
-
-		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
-				return []engine.Relation{mockRel}, nil
-			},
-		}
-
-		result, err := table.GetNonAppendableObjectStats(context.Background())
-		assert.Error(t, err)
-		assert.Nil(t, result)
-		assert.Equal(t, assert.AnError, err)
-	})
-
-	// Test case 4: Empty tables list
-	t.Run("Empty tables list", func(t *testing.T) {
-		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
-				return []engine.Relation{}, nil
-			},
-		}
-
-		result, err := table.GetNonAppendableObjectStats(context.Background())
-		assert.NoError(t, err)
-		assert.Len(t, result, 0)
-	})
-
-	// Test case 5: Multiple tables with mixed results
-	t.Run("Multiple tables with mixed results", func(t *testing.T) {
-		mockStats1 := objectio.NewObjectStats()
-		objectio.SetObjectStatsSize(mockStats1, 1024)
-		objectio.SetObjectStatsRowCnt(mockStats1, 100)
-
-		mockStats2 := objectio.NewObjectStats()
-		objectio.SetObjectStatsSize(mockStats2, 2048)
-		objectio.SetObjectStatsRowCnt(mockStats2, 200)
-
-		mockStats3 := objectio.NewObjectStats()
-		objectio.SetObjectStatsSize(mockStats3, 3072)
-		objectio.SetObjectStatsRowCnt(mockStats3, 300)
-
-		mockRel1 := &mockRelation{
-			getNonAppendableObjectStatsFunc: func(ctx context.Context) ([]objectio.ObjectStats, error) {
-				return []objectio.ObjectStats{*mockStats1}, nil
-			},
-		}
-		mockRel2 := &mockRelation{
-			getNonAppendableObjectStatsFunc: func(ctx context.Context) ([]objectio.ObjectStats, error) {
-				return []objectio.ObjectStats{*mockStats2, *mockStats3}, nil
-			},
-		}
-
-		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
-				return []engine.Relation{mockRel1, mockRel2}, nil
-			},
-		}
-
-		result, err := table.GetNonAppendableObjectStats(context.Background())
-		assert.NoError(t, err)
-		assert.Len(t, result, 3)
-		assert.Equal(t, *mockStats1, result[0])
-		assert.Equal(t, *mockStats2, result[1])
-		assert.Equal(t, *mockStats3, result[2])
-	})
-
-	// Test case 6: Single table with multiple object stats
-	t.Run("Single table with multiple object stats", func(t *testing.T) {
-		mockStats1 := objectio.NewObjectStats()
-		objectio.SetObjectStatsSize(mockStats1, 1024)
-		objectio.SetObjectStatsRowCnt(mockStats1, 100)
-
-		mockStats2 := objectio.NewObjectStats()
-		objectio.SetObjectStatsSize(mockStats2, 2048)
-		objectio.SetObjectStatsRowCnt(mockStats2, 200)
-
-		mockRel := &mockRelation{
-			getNonAppendableObjectStatsFunc: func(ctx context.Context) ([]objectio.ObjectStats, error) {
-				return []objectio.ObjectStats{*mockStats1, *mockStats2}, nil
-			},
-		}
-
-		table := &combinedTxnTable{
-			tablesFunc: func() ([]engine.Relation, error) {
-				return []engine.Relation{mockRel}, nil
-			},
-		}
-
-		result, err := table.GetNonAppendableObjectStats(context.Background())
-		assert.NoError(t, err)
-		assert.Len(t, result, 2)
-		assert.Equal(t, *mockStats1, result[0])
-		assert.Equal(t, *mockStats2, result[1])
 	})
 }
 
@@ -2246,7 +2079,6 @@ func (m *mockReader) SetFilterZM(objectio.ZoneMap) {}
 type mockRelation struct {
 	rangesFunc                          func(ctx context.Context, param engine.RangesParam) (engine.RelData, error)
 	getColumMetadataScanInfoFunc        func(ctx context.Context, name string, visitTombstone bool) ([]*plan.MetadataScanInfo, error)
-	getNonAppendableObjectStatsFunc     func(ctx context.Context) ([]objectio.ObjectStats, error)
 	approxObjectsNumFunc                func(ctx context.Context) int
 	collectTombstonesFunc               func(ctx context.Context, txnOffset int, policy engine.TombstoneCollectPolicy) (engine.Tombstoner, error)
 	sizeFunc                            func(ctx context.Context, columnName string) (uint64, error)
@@ -2332,17 +2164,6 @@ func (m *mockRelation) ApproxObjectsNum(ctx context.Context) int {
 		return m.approxObjectsNumFunc(ctx)
 	}
 	return 0
-}
-
-func (m *mockRelation) MergeObjects(ctx context.Context, objstats []objectio.ObjectStats, targetObjSize uint32) (*api.MergeCommitEntry, error) {
-	return nil, nil
-}
-
-func (m *mockRelation) GetNonAppendableObjectStats(ctx context.Context) ([]objectio.ObjectStats, error) {
-	if m.getNonAppendableObjectStatsFunc != nil {
-		return m.getNonAppendableObjectStatsFunc(ctx)
-	}
-	return nil, nil
 }
 
 func (m *mockRelation) GetColumMetadataScanInfo(ctx context.Context, name string, visitTombstone bool) ([]*plan.MetadataScanInfo, error) {

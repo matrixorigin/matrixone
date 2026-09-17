@@ -450,7 +450,7 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 		}
 		duplicateWarnings.Add(
 			moerr.ER_DUP_ENTRY,
-			moerr.NewDuplicateEntry(proc.Ctx, rowStr, keyName).Error(),
+			moerr.FormatDuplicateEntry(rowStr, keyName),
 		)
 	}
 	var autoIncrementVec, autoIncrementGeneratedVec *vector.Vector
