@@ -658,6 +658,26 @@ func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]i
 					filterids, filterFTIdxs, wrappedFTExprs, wrappedFTIdxs, colRefCnt, idxColMap)
 			}
 		}
+
+	case plan.Node_WINDOW:
+		// Fourth fulltext anchor: a WINDOW -> SCAN(MATCH). Adding a window function --
+		// `select ..., row_number() over (...) from t where match(...) against(...)` -- puts a
+		// WINDOW between the query block and the base scan, which the PROJECT-anchored
+		// resolveFullTextIndexPath (SORT/AGG hops only) never sees, so the scan's fulltext_match
+		// survives to execution as error 20105 (#28974). Anchor on the WINDOW like the AGG case:
+		// its single child is the scan, so rewrite the scan's MATCH to the index scan and reparent.
+		// Post-order recursion runs this before the PROJECT pass, which then finds no MATCH and
+		// no-ops -- no double rewrite.
+		if len(node.Children) == 1 {
+			if scanNode := builder.resolveScanNodeWithIndex(builder.qry.Nodes[node.Children[0]], 0); scanNode != nil {
+				filterids, filterFTIdxs := builder.getFullTextMatchFiltersFromScanNode(scanNode)
+				wrappedFTExprs, wrappedFTIdxs := builder.getWrappedFullTextMatches(nil, scanNode, filterids, nil)
+				if len(filterids) > 0 || len(wrappedFTExprs) > 0 {
+					return builder.applyIndicesForWindowUsingFullTextIndex(nodeID, node, scanNode,
+						filterids, filterFTIdxs, wrappedFTExprs, wrappedFTIdxs, colRefCnt, idxColMap)
+				}
+			}
+		}
 	}
 
 	return nodeID, nil

@@ -122,3 +122,43 @@ func TestFullTextAggMatchRewrittenToScore(t *testing.T) {
 		})
 	}
 }
+
+// A WINDOW between the query block and the base scan -- SELECT ..., ROW_NUMBER() OVER (...) FROM t
+// WHERE MATCH(...) -- hides the scan's WHERE-clause fulltext_match from the PROJECT-anchored rewrite
+// (which hops only SORT/AGG), so the raw fulltext_match survives to execution as error 20105
+// (#28974). Plan shape PROJECT -> WINDOW -> SCAN(match filter); after applyIndices no fulltext_match
+// may remain anywhere and the index scan must exist.
+func TestFullTextWindowMatchRewritten(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	ctx := NewBindContext(builder, nil)
+
+	matchScanID, _ := matchScanWithFulltextIndex(builder, ctx)
+
+	winTag := builder.genNewBindTag()
+	winID := builder.appendNode(&planpb.Node{
+		NodeType:    planpb.Node_WINDOW,
+		Children:    []int32{matchScanID},
+		BindingTags: []int32{winTag},
+	}, ctx)
+
+	ityp := types.T_int64.ToType()
+	projTag := builder.genNewBindTag()
+	projID := builder.appendNode(&planpb.Node{
+		NodeType:    planpb.Node_PROJECT,
+		Children:    []int32{winID},
+		BindingTags: []int32{projTag},
+		ProjectList: []*planpb.Expr{{
+			Typ:  makePlan2Type(&ityp),
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: winTag, ColPos: 0}},
+		}},
+	}, ctx)
+
+	newID, err := builder.applyIndices(projID, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	builder.qry.Steps = []int32{newID}
+
+	require.Zero(t, countReachableFullTextMatches(builder.qry),
+		"a fulltext_match beneath a WINDOW throws 20105 at execution (#28974)")
+	require.Equal(t, 1, countReachableFullTextScans(builder.qry),
+		"the WHERE MATCH beneath the WINDOW must be served by a fulltext index scan")
+}

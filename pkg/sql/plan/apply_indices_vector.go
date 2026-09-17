@@ -1485,6 +1485,22 @@ func replaceScoreFnInExprBy(expr *plan.Expr, rewrite func(*plan.Function) *plan.
 		for i, sub := range e.List.List {
 			e.List.List[i] = replaceScoreFnInExprBy(sub, rewrite)
 		}
+	case *plan.Expr_W:
+		// A window spec carries its function and OVER partition/order-by as nested exprs. Recurse so a
+		// served MATCH inside a window function argument or its OVER order-by is rewritten to the score
+		// column too -- reached only from the WINDOW fulltext anchor; aggregate/projection exprs never
+		// hold an Expr_W, so existing callers are unaffected.
+		if e.W != nil {
+			e.W.WindowFunc = replaceScoreFnInExprBy(e.W.WindowFunc, rewrite)
+			for i, p := range e.W.PartitionBy {
+				e.W.PartitionBy[i] = replaceScoreFnInExprBy(p, rewrite)
+			}
+			for i, o := range e.W.OrderBy {
+				if o != nil {
+					e.W.OrderBy[i].Expr = replaceScoreFnInExprBy(o.Expr, rewrite)
+				}
+			}
+		}
 	}
 	return expr
 }

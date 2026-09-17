@@ -321,6 +321,47 @@ func (builder *QueryBuilder) applyIndicesForAggUsingFullTextIndex(nodeID int32, 
 	return nodeID, nil
 }
 
+// applyIndicesForWindowUsingFullTextIndex rewrites a WINDOW -> SCAN(MATCH) shape (#28974). The
+// WINDOW's single child is the base scan carrying the WHERE-clause fulltext_match; build the
+// index-scan join for those MATCHes and reparent the window onto it, mirroring the aggregate path.
+func (builder *QueryBuilder) applyIndicesForWindowUsingFullTextIndex(nodeID int32, windowNode *plan.Node, scanNode *plan.Node,
+	filterids []int32, filterIndexDefs []*plan.IndexDef,
+	wrappedExprs []*plan.Expr, wrappedIndexDefs []*plan.IndexDef,
+	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+	var err error
+
+	projids := make([]int32, 0)
+	projIndexDefs := make([]*plan.IndexDef, 0)
+	eqmap := make(map[int32]int32)
+
+	idxID, _, _, served, err := builder.applyJoinFullTextIndices(nodeID, nil, scanNode,
+		scanNode.Limit, scanNode.Offset, filterids, filterIndexDefs, projids, projIndexDefs,
+		wrappedExprs, wrappedIndexDefs, eqmap, colRefCnt, idxColMap)
+	if err != nil {
+		return -1, err
+	}
+	joinNode := builder.qry.Nodes[idxID]
+	joinNode.Limit = DeepCopyExpr(scanNode.Limit)
+	joinNode.Offset = DeepCopyExpr(scanNode.Offset)
+	scanNode.Limit = nil
+	scanNode.Offset = nil
+
+	windowNode.Children[0] = idxID
+
+	// A MATCH inside the window's own expressions -- a window-function argument or its OVER order-by
+	// in WinSpecList -- is served by the index scan just built; reparenting alone would leave the raw
+	// fulltext_match there and throw 20105, so rewrite it to the score column (as the aggregate path
+	// does for AggList/GroupBy).
+	if len(served) > 0 {
+		rewriter := builder.fullTextScoreRewriter(served)
+		for i := range windowNode.WinSpecList {
+			windowNode.WinSpecList[i] = replaceScoreFnInExprBy(windowNode.WinSpecList[i], rewriter)
+		}
+	}
+
+	return nodeID, nil
+}
+
 func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *plan.Node, scanNode *plan.Node,
 	paginationLimit, paginationOffset *plan.Expr,
 	filterids []int32, filter_indexDefs []*plan.IndexDef,
