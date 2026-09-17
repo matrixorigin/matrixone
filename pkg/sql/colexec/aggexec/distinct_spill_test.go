@@ -166,6 +166,126 @@ func TestCountDistinctArgumentDrainKeepsRepresentative(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestCountDistinctLegacyKeepsNonFloatRepresentative(t *testing.T) {
+	mp := mpool.MustNewZero()
+	json, err := types.ParseStringToByteJson("1")
+	require.NoError(t, err)
+	raw, err := types.EncodeJson(json)
+	require.NoError(t, err)
+	values := vector.NewVec(types.T_json.ToType())
+	require.NoError(t, vector.AppendBytes(values, raw, false, mp))
+
+	exec := newCountColumnExec(
+		mp, AggIdOfCountColumn, true, []types.Type{types.T_json.ToType()},
+	).(*countColumnExec)
+	require.NoError(t, ConfigureLegacyDistinctFloatKeys(exec, true))
+	require.NoError(t, exec.GroupGrow(1))
+	require.NoError(t, exec.PreflightBatchFill(
+		0, []uint64{1}, []*vector.Vector{values}))
+	require.NoError(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{values}))
+
+	drain, err := exec.BeginArgumentDrain(nil)
+	require.NoError(t, err)
+	var membership, representative []byte
+	require.NoError(t, drain.ForEachWithRepresentative(
+		func(_ int, payload, value []byte) error {
+			membership = bytes.Clone(payload)
+			representative = bytes.Clone(value)
+			return nil
+		}))
+	require.NotEqual(t, raw, membership)
+	require.Equal(t, raw, representative)
+	drain.Abort()
+
+	exec.Free()
+	values.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestCountDistinctSpillRestoresAcrossFloatPolicies(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, account, allocation := newTestAggregateAllocation(t)
+	defer finishTestAggregateAllocation(t, registry, account)
+
+	tupleTypes := []types.Type{
+		types.T_float64.ToType(),
+		types.New(types.T_char, 2, 0),
+	}
+	makeExec := func(legacy bool) *countColumnExec {
+		exec := newCountColumnExec(
+			mp, AggIdOfCountColumn, true, tupleTypes,
+		).(*countColumnExec)
+		require.NoError(t, exec.SetAllocationAccount(allocation))
+		require.NoError(t, ConfigureLegacyDistinctFloatKeys(exec, legacy))
+		return exec
+	}
+	makeTuple := func(bits []uint64) ([]*vector.Vector, func()) {
+		floats := make([]float64, len(bits))
+		for i, value := range bits {
+			floats[i] = math.Float64frombits(value)
+		}
+		floatVec := testutil.NewFloat64Vector(
+			len(floats), tupleTypes[0], mp, false, nil, floats)
+		charVec := buildVarlenVec(t, mp, tupleTypes[1],
+			[]string{"a", "a"}[:len(bits)])
+		return []*vector.Vector{floatVec, charVec}, func() {
+			floatVec.Free(mp)
+			charVec.Free(mp)
+		}
+	}
+
+	t.Run("legacy-to-modern-normalizes-and-deduplicates", func(t *testing.T) {
+		source := makeExec(true)
+		vectors, freeVectors := makeTuple([]uint64{
+			0x7ff8000000000001,
+			0x7ff8000000000002,
+		})
+		require.NoError(t, source.GroupGrow(1))
+		require.NoError(t, source.BatchFill(
+			0, []uint64{1, 1}, vectors))
+		var spill bytes.Buffer
+		require.NoError(t, source.SaveSpillIntermediateRows(
+			0, []int32{0}, &spill))
+		source.Free()
+		freeVectors()
+
+		target := makeExec(false)
+		require.NoError(t, target.UnmarshalSpillFromReader(
+			bytes.NewReader(spill.Bytes()), mp))
+		one, freeOne := makeTuple([]uint64{0x7ff8000000000001})
+		require.NoError(t, target.BatchFill(0, []uint64{1}, one))
+		result, err := target.Flush()
+		require.NoError(t, err)
+		require.Equal(t, []int64{1},
+			vector.MustFixedColNoTypeCheck[int64](result[0]))
+		result[0].Free(mp)
+		freeOne()
+		target.Free()
+	})
+
+	t.Run("modern-to-legacy-rejects-before-publication", func(t *testing.T) {
+		source := makeExec(false)
+		vectors, freeVectors := makeTuple([]uint64{
+			0x7ff8000000000001,
+		})
+		require.NoError(t, source.GroupGrow(1))
+		require.NoError(t, source.BatchFill(0, []uint64{1}, vectors))
+		var spill bytes.Buffer
+		require.NoError(t, source.SaveSpillIntermediateRows(
+			0, []int32{0}, &spill))
+		freeVectors()
+		usedBefore := account.Snapshot().Used
+
+		target := makeExec(true)
+		err := target.UnmarshalSpillFromReader(
+			bytes.NewReader(spill.Bytes()), mp)
+		require.ErrorContains(t, err, "canonical FLOAT DISTINCT spill")
+		require.Equal(t, usedBefore, account.Snapshot().Used)
+		target.Free()
+		source.Free()
+	})
+}
+
 func TestCountDistinctStateRestoresFloatEquivalencePeers(t *testing.T) {
 	for _, tc := range []struct {
 		name string

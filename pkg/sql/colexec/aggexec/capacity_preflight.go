@@ -1040,7 +1040,8 @@ func (ae *aggExec) addDistinctArgumentCapacity(
 	if state.argSkl.Contains(key) {
 		return nil
 	}
-	valueSize, err := distinctLegacyRepresentativeSize(vectors, logicalRow, key)
+	valueSize, err := distinctLegacyRepresentativeSize(
+		vectors, logicalRow, key, state.legacyDistinctFloatKeys)
 	if err != nil {
 		return err
 	}
@@ -1058,6 +1059,7 @@ func distinctLegacyRepresentativeSize(
 	vectors []*vector.Vector,
 	logicalRow int,
 	key []byte,
+	legacyFloat bool,
 ) (int, error) {
 	if len(vectors) == 0 || len(key) < kAggArgPrefixSz {
 		return 0, mpool.ErrAllocationAccountInvariant
@@ -1068,7 +1070,8 @@ func distinctLegacyRepresentativeSize(
 			return 0, err
 		}
 		raw := vectors[0].GetRawBytesAt(row)
-		if !bytes.Equal(key[kAggArgPrefixSz:], raw) {
+		if distinctRepresentativeNeedsRaw(
+			*vectors[0].GetType(), key[kAggArgPrefixSz:], raw, legacyFloat) {
 			return len(raw), nil
 		}
 		return 0, nil
@@ -1094,7 +1097,8 @@ func distinctLegacyRepresentativeSize(
 			return 0, mpool.ErrAllocationAllocatorLimit
 		}
 		rawSize += 4 + len(raw)
-		if !bytes.Equal(key[off:off+canonicalSize], raw) {
+		if distinctRepresentativeNeedsRaw(
+			*vec.GetType(), key[off:off+canonicalSize], raw, legacyFloat) {
 			needsRaw = true
 		}
 		off += canonicalSize

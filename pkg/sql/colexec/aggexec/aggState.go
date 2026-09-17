@@ -650,7 +650,50 @@ func (ag *aggState) readStateArg(
 						return err
 					}
 				}
-				err = ag.insertArgValueWithInserter(mp, kbuf, rawValue, &inserter)
+				// The spill record carries both the producer's membership key and
+				// one raw representative.  Rebuild membership from the raw value
+				// under the restoring executor's policy.  A legacy producer can be
+				// normalized into a modern target; the reverse direction must be
+				// rejected because the modern key may already have discarded
+				// legacy FLOAT NaN distinctions.
+				var ownedCanonical []byte
+				legacyValue := rawValue
+				if len(rawValue) != 0 {
+					derived, owned, canonicalErr := canonicalizeDistinctPayloadForPolicy(
+						ag, mp, info, kbuf[:kAggArgPrefixSz], rawValue,
+						info.legacyDistinctFloatKeys)
+					if canonicalErr != nil {
+						mp.Free(rawValue)
+						return canonicalErr
+					}
+					if info.legacyDistinctFloatKeys &&
+						!bytes.Equal(kbuf[kAggArgPrefixSz:], derived[kAggArgPrefixSz:]) {
+						if owned != nil {
+							mp.Free(owned)
+						}
+						mp.Free(rawValue)
+						return moerr.NewInvalidStateNoCtx(
+							"cannot restore canonical FLOAT DISTINCT spill into legacy state")
+					}
+					kbuf = derived
+					ownedCanonical = owned
+					needsRaw, needsErr := distinctPayloadNeedsRepresentative(
+						info, kbuf[kAggArgPrefixSz:], rawValue)
+					if needsErr != nil {
+						if ownedCanonical != nil {
+							mp.Free(ownedCanonical)
+						}
+						mp.Free(rawValue)
+						return needsErr
+					}
+					if !needsRaw {
+						legacyValue = nil
+					}
+				}
+				err = ag.insertArgValueWithInserter(mp, kbuf, legacyValue, &inserter)
+				if ownedCanonical != nil {
+					mp.Free(ownedCanonical)
+				}
 				if rawValue != nil {
 					mp.Free(rawValue)
 				}
@@ -814,6 +857,17 @@ func canonicalizeLegacyDistinctPayload(
 	info *aggInfo,
 	prefix, payload []byte,
 ) (canonical, owned []byte, err error) {
+	return canonicalizeDistinctPayloadForPolicy(
+		ag, mp, info, prefix, payload, info.legacyDistinctFloatKeys)
+}
+
+func canonicalizeDistinctPayloadForPolicy(
+	ag *aggState,
+	mp *mpool.MPool,
+	info *aggInfo,
+	prefix, payload []byte,
+	legacyFloat bool,
+) (canonical, owned []byte, err error) {
 	if len(info.argTypes) == 0 {
 		return nil, nil, moerr.NewInvalidInputNoCtx(
 			"legacy DISTINCT state has no argument type")
@@ -821,7 +875,7 @@ func canonicalizeLegacyDistinctPayload(
 	canonicalSize := 0
 	if len(info.argTypes) == 1 {
 		canonicalSize = distinctPayloadKeySize(
-			info.argTypes[0], payload, info.legacyDistinctFloatKeys)
+			info.argTypes[0], payload, legacyFloat)
 	} else {
 		offset := 0
 		for _, typ := range info.argTypes {
@@ -836,7 +890,7 @@ func canonicalizeLegacyDistinctPayload(
 					"invalid legacy DISTINCT tuple payload")
 			}
 			canonicalSize += 4 + distinctPayloadKeySize(
-				typ, payload[offset:offset+size], info.legacyDistinctFloatKeys)
+				typ, payload[offset:offset+size], legacyFloat)
 			offset += size
 		}
 		if offset != len(payload) {
@@ -858,7 +912,7 @@ func canonicalizeLegacyDistinctPayload(
 	if len(info.argTypes) == 1 {
 		canonical = appendDistinctPayloadKey(
 			canonical[:len(prefix)], info.argTypes[0], payload,
-			info.legacyDistinctFloatKeys)
+			legacyFloat)
 	} else {
 		offset, out := 0, len(prefix)
 		storage := canonical
@@ -869,16 +923,78 @@ func canonicalizeLegacyDistinctPayload(
 			raw := payload[offset : offset+size]
 			offset += size
 			keySize := distinctPayloadKeySize(
-				typ, raw, info.legacyDistinctFloatKeys)
+				typ, raw, legacyFloat)
 			binary.BigEndian.PutUint32(storage[out:out+4], uint32(keySize))
 			out += 4
 			encoded = appendDistinctPayloadKey(
-				storage[:out], typ, raw, info.legacyDistinctFloatKeys)
+				storage[:out], typ, raw, legacyFloat)
 			out = len(encoded)
 		}
 		canonical = encoded
 	}
 	return canonical, owned, nil
+}
+
+func distinctRepresentativeNeedsRaw(
+	typ types.Type,
+	canonical, raw []byte,
+	legacyFloat bool,
+) bool {
+	// The legacy compatibility switch changes only FLOAT equality.  Canonical
+	// CHAR/JSON (and other opaque) keys can still differ from their physical
+	// input under the legacy aggregate protocol, so their representative must
+	// remain available to value-producing DISTINCT aggregates and old readers.
+	if legacyFloat &&
+		(typ.Oid == types.T_float32 || typ.Oid == types.T_float64) {
+		return false
+	}
+	return !bytes.Equal(canonical, raw)
+}
+
+func distinctPayloadNeedsRepresentative(
+	info *aggInfo,
+	canonical, raw []byte,
+) (bool, error) {
+	if info == nil || len(info.argTypes) == 0 {
+		return false, mpool.ErrAllocationAccountInvariant
+	}
+	if len(info.argTypes) == 1 {
+		return distinctRepresentativeNeedsRaw(
+			info.argTypes[0], canonical, raw, info.legacyDistinctFloatKeys), nil
+	}
+	canonicalOffset, rawOffset := 0, 0
+	needsRaw := false
+	for _, typ := range info.argTypes {
+		if len(canonical)-canonicalOffset < 4 || len(raw)-rawOffset < 4 {
+			return false, moerr.NewInvalidInputNoCtx(
+				"invalid DISTINCT tuple representative")
+		}
+		canonicalSize := int(binary.BigEndian.Uint32(
+			canonical[canonicalOffset:]))
+		canonicalOffset += 4
+		rawSize := int(binary.BigEndian.Uint32(raw[rawOffset:]))
+		rawOffset += 4
+		if canonicalSize < 0 || canonicalSize > len(canonical)-canonicalOffset ||
+			rawSize < 0 || rawSize > len(raw)-rawOffset {
+			return false, moerr.NewInvalidInputNoCtx(
+				"invalid DISTINCT tuple representative")
+		}
+		if distinctRepresentativeNeedsRaw(
+			typ,
+			canonical[canonicalOffset:canonicalOffset+canonicalSize],
+			raw[rawOffset:rawOffset+rawSize],
+			info.legacyDistinctFloatKeys,
+		) {
+			needsRaw = true
+		}
+		canonicalOffset += canonicalSize
+		rawOffset += rawSize
+	}
+	if canonicalOffset != len(canonical) || rawOffset != len(raw) {
+		return false, moerr.NewInvalidInputNoCtx(
+			"invalid DISTINCT tuple representative")
+	}
+	return needsRaw, nil
 }
 
 func distinctPayloadKeySize(typ types.Type, raw []byte, legacyFloat bool) int {
@@ -3208,7 +3324,10 @@ func (ag *aggState) fillDistinctVectorArg(
 	}
 	var value []byte
 	raw := vec.GetRawBytesAt(row)
-	if !ag.legacyDistinctFloatKeys && !bytes.Equal(k[kAggArgPrefixSz:], raw) {
+	if distinctRepresentativeNeedsRaw(
+		*vec.GetType(), k[kAggArgPrefixSz:], raw,
+		ag.legacyDistinctFloatKeys,
+	) {
 		value = raw
 	}
 	return ag.insertPreparedArgWithValue(mp, y, k, true, value)
@@ -3555,7 +3674,12 @@ func (ae *aggExec) batchFillArgs(offset int, groups []uint64, vectors []*vector.
 				}
 				valueSize := canonicalDistinctArgumentKeySize(vec, row)
 				off += 4
-				if !bytes.Equal(key[off:off+valueSize], vec.GetRawBytesAt(row)) {
+				if distinctRepresentativeNeedsRaw(
+					*vec.GetType(),
+					key[off:off+valueSize],
+					vec.GetRawBytesAt(row),
+					state.legacyDistinctFloatKeys,
+				) {
 					needsLegacyValue = true
 				}
 				off += valueSize
