@@ -187,12 +187,12 @@ func viewMetadataFromPersistedData(ctx context.Context, persisted string) (persi
 		tree.WithQuoteIdentifier(), tree.WithModeIndependentStringLiterals()), checkOption: checkOption}, true
 }
 
-// legacyViewSelectWithStableOutputHeadings preserves the implicit name of a
-// binary literal while formatting a legacy Stmt-only row. The parser derives
-// `_binary 'ab'` as the public name `ab`, whereas the mode-independent
-// formatter renders its value as `_binary 0x6162`. Add an alias only for the
-// unaliased, non-empty binary-literal case; explicit aliases and empty binary
-// values already have stable output names.
+// legacyViewSelectWithStableOutputHeadings preserves implicit output headings
+// while formatting a legacy Stmt-only row. The parser derives `_binary 'ab'`
+// as the public name `ab`, whereas the mode-independent formatter renders its
+// value as `_binary 0x6162`; the same mismatch can occur inside a compound
+// expression. Compare the parser-derived heading with the persisted rendering
+// and add an alias only when serialization changes it.
 func legacyViewSelectWithStableOutputHeadings(stmt *tree.Select) *tree.Select {
 	if stmt == nil {
 		return stmt
@@ -206,8 +206,18 @@ func legacyViewSelectWithStableOutputHeadings(stmt *tree.Select) *tree.Select {
 		if selectExpr.As != nil && !selectExpr.As.Empty() {
 			continue
 		}
-		heading, ok := legacyViewImplicitHeading(selectExpr.Expr)
-		if ok && heading != "" {
+		heading, ok := legacyViewOutputHeading(selectExpr.Expr)
+		if !ok || heading == "" || legacyViewIsUnresolvedName(selectExpr.Expr) {
+			continue
+		}
+		persistedExpr := tree.StringWithOpts(
+			selectExpr.Expr,
+			dialect.MYSQL,
+			tree.WithSingleQuoteString(),
+			tree.WithQuoteIdentifier(),
+			tree.WithModeIndependentStringLiterals(),
+		)
+		if persistedExpr != heading {
 			selectExpr.As = tree.NewCStr(heading, 1)
 		}
 	}
@@ -232,7 +242,10 @@ func legacyViewTopLevelSelectClause(stmt tree.SelectStatement) *tree.SelectClaus
 	}
 }
 
-func legacyViewImplicitHeading(expr tree.Expr) (string, bool) {
+func legacyViewOutputHeading(expr tree.Expr) (string, bool) {
+	if expr == nil {
+		return "", false
+	}
 	for {
 		paren, ok := expr.(*tree.ParenExpr)
 		if !ok {
@@ -240,11 +253,37 @@ func legacyViewImplicitHeading(expr tree.Expr) (string, bool) {
 		}
 		expr = paren.Expr
 	}
-	literal, ok := expr.(*tree.NumVal)
-	if !ok || literal.ValType != tree.P_ScoreBinary {
-		return "", false
+	detectCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithDateTimeFormatDetection())
+	expr.Format(detectCtx)
+	heading := detectCtx.String()
+	if !detectCtx.HasDateTimeFormatFunction() {
+		return heading, heading != ""
 	}
-	return literal.String(), true
+
+	var positions []tree.StringLiteralPosition
+	formattedCtx := tree.NewFmtCtx(
+		dialect.MYSQL,
+		tree.WithSingleQuoteString(),
+		tree.WithStringLiteralPositions(&positions),
+	)
+	expr.Format(formattedCtx)
+	if len(positions) == 0 {
+		return heading, heading != ""
+	}
+	formatted := formattedCtx.String()
+	return formatted, formatted != ""
+}
+
+func legacyViewIsUnresolvedName(expr tree.Expr) bool {
+	for {
+		paren, ok := expr.(*tree.ParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.Expr
+	}
+	_, ok := expr.(*tree.UnresolvedName)
+	return ok
 }
 
 func checkOptionOrNone(checkOption string) string {
