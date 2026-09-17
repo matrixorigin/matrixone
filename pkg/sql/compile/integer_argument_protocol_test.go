@@ -60,25 +60,25 @@ func TestIntegerArgumentProtocolBoundaries(t *testing.T) {
 			features, err := planpb.RequiredRemoteExpressionFeatures(p)
 			require.NoError(t, err)
 			require.Equal(t, id >= function.IntegerArgumentCastOverload, features.IntegerParameterCoercion)
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion75)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion84)
 			err = validateRemoteExpressionPipelineProtocol(c.proc, p)
 			if !features.IntegerParameterCoercion {
 				require.NoError(t, err)
 				return
 			}
-			require.ErrorContains(t, err, "version 84")
-			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(nil, p), "version 84")
+			require.ErrorContains(t, err, "version 85")
+			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(nil, p), "version 85")
 			data, err := p.Marshal()
 			require.NoError(t, err)
 			_, err = decodeScope(data, c.proc, true, nil)
-			require.ErrorContains(t, err, "version 84")
+			require.ErrorContains(t, err, "version 85")
 			table := &planpb.TableDef{Cols: []*planpb.ColDef{{Default: &planpb.Default{Expr: expr}}}}
-			require.ErrorContains(t, plan2.RequirePersistedExpressionProtocol(c.proc.Ctx, c.proc, table), "version 84")
+			require.ErrorContains(t, plan2.RequirePersistedExpressionProtocol(c.proc.Ctx, c.proc, table), "version 85")
 			// Existing publication hooks must cover the newly shared feature too.
-			require.ErrorContains(t, plan2.RequirePersistedIPFunctionProtocol(c.proc.Ctx, c.proc, table), "version 84")
+			require.ErrorContains(t, plan2.RequirePersistedIPFunctionProtocol(c.proc.Ctx, c.proc, table), "version 85")
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, nil)
-			require.ErrorContains(t, plan2.RequirePersistedExpressionProtocol(nil, c.proc, expr), "version 84")
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion84)
+			require.ErrorContains(t, plan2.RequirePersistedExpressionProtocol(nil, c.proc, expr), "version 85")
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion85)
 			require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 			require.NoError(t, plan2.RequirePersistedExpressionProtocol(c.proc.Ctx, c.proc, table))
 		})
@@ -99,17 +99,17 @@ func TestIntegerArgumentProtocolPlacementAndSend(t *testing.T) {
 		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 		require.NoError(t, c.constrainIntegerArgumentWorkers(qry))
 	}
-	place(defines.MORPCVersion75)
+	place(defines.MORPCVersion84)
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	_, err := encodeRemoteScope(scope, c.proc)
 	require.ErrorContains(t, err, "remote destination")
-	place(defines.MORPCVersion84)
+	place(defines.MORPCVersion85)
 	require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
 	data, err := encodeRemoteScope(scope, c.proc)
 	require.NoError(t, err)
 	require.NotEmpty(t, data)
 	// A downgrade/replacement after successful placement must fail at send time.
-	client.version = defines.MORPCVersion75
+	client.version = defines.MORPCVersion84
 	_, err = encodeRemoteScope(scope, c.proc)
 	require.ErrorContains(t, err, "remote destination")
 	require.Error(t, validateIntegerArgumentDestination(c.proc, nil))
