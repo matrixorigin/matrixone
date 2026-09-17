@@ -164,7 +164,9 @@ select mo_ctl('dn', 'flush', 'test_gc_diff.c4_root');
 -- @ignore:0
 select mo_ctl('dn', 'flush', 'test_gc_diff.c4_leaf');
 -- @ignore:0
-select mo_ctl('cn', 'mergeobjects', 't:test_gc_diff.c4_leaf:overlap');
+select mo_ctl('dn', 'inspect', 'merge trigger -t test_gc_diff.c4_leaf --kind l0 --l0-oneshot');
+-- @wait_expect(1, 60)
+select count(*) as merged_objects from metadata_scan('test_gc_diff.c4_leaf', 'id') having count(*) = 1;
 data branch diff c4_leaf against c4_root;
 
 -- Cycle 1.
@@ -232,7 +234,9 @@ select mo_ctl('dn', 'flush', 'test_gc_diff.c5_root');
 -- @ignore:0
 select mo_ctl('dn', 'flush', 'test_gc_diff.c5_leaf');
 -- @ignore:0
-select mo_ctl('cn', 'mergeobjects', 't:test_gc_diff.c5_leaf:overlap');
+select mo_ctl('dn', 'inspect', 'merge trigger -t test_gc_diff.c5_leaf --kind l0 --l0-oneshot');
+-- @wait_expect(1, 60)
+select count(*) as merged_objects from metadata_scan('test_gc_diff.c5_leaf', 'id') having count(*) = 1;
 
 -- Advance past the compacted predecessor objects.
 -- @ignore:0

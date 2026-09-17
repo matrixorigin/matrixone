@@ -4335,6 +4335,7 @@ func (builder *QueryBuilder) appendTargetRowNumberBelowAssignmentProject(
 		WinSpecList: []*plan.Expr{rowNumberExpr},
 		WindowIdx:   0,
 		BindingTags: []int32{windowTag},
+		SpillMem:    builder.sortSpillMem,
 	}, bindCtx)
 	selectNode.Children[0] = windowID
 
@@ -4819,6 +4820,7 @@ func (builder *QueryBuilder) appendTargetRowNumberNode(
 		WinSpecList: []*plan.Expr{rowNumberExpr},
 		WindowIdx:   0,
 		BindingTags: []int32{windowTag},
+		SpillMem:    builder.sortSpillMem,
 	}, bindCtx)
 
 	rowNumberProjectPos := int32(len(selectNode.ProjectList))
@@ -5033,6 +5035,7 @@ func (builder *QueryBuilder) appendRowNumberGuardNode(
 		WinSpecList: []*plan.Expr{rowNumberExpr},
 		WindowIdx:   rowNumberIdx,
 		BindingTags: []int32{windowTag},
+		SpillMem:    builder.sortSpillMem,
 	}, bindCtx)
 
 	windowProjectTag := builder.genNewBindTag()

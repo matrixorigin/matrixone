@@ -93,8 +93,27 @@ func (Hooks) RestoreInitSQL(ctx compileplugin.CompileContext, indexDefs map[stri
 	if !ok {
 		return false, "", moerr.NewInternalErrorNoCtx("cagra_meta index definition not found")
 	}
-	return true, fmt.Sprintf("ALTER TABLE `%s`.`%s` ALTER REINDEX `%s` cagra FORCE_SYNC",
-		ctx.QryDatabase(), ctx.OriginalTableDef().Name, metaDef.IndexName), nil
+	return true, fmt.Sprintf("ALTER TABLE %s ALTER REINDEX %s cagra FORCE_SYNC",
+		sqlquote.QualifiedIdent(ctx.QryDatabase(), ctx.OriginalTableDef().Name),
+		sqlquote.Ident(metaDef.IndexName)), nil
+}
+
+// AlterCopyInitSQL — a COPY ALTER's cloneUnaffectedIndexes SKIPS this (SkipWholeIndex) async
+// index, so the replacement hidden tables start EMPTY. The cuvs ISCP consumer is stateless
+// across flushes: CagraSync only APPENDS tag=1 event chunks under the CdcTailId sentinel and
+// never writes a tag=0 sub-index, so the ts=0 replay alone leaves the whole table living in the
+// CDC tail with no base index -- every query brute-forces the overflow, and a table large enough
+// makes that overflow refuse admission. Return a REINDEX FORCE_SYNC as the InitSQL: the CDC's
+// first iteration (post-commit) builds the base from source, then arms the tail at the post-build
+// watermark. Same shape as this algorithm's RestoreInitSQL, and as fulltext2's fix for #28837.
+func (Hooks) AlterCopyInitSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) (bool, string, error) {
+	metaDef, ok := indexDefs[catalog.Cagra_TblType_Metadata]
+	if !ok {
+		return false, "", moerr.NewInternalErrorNoCtx("cagra_meta index definition not found")
+	}
+	return true, fmt.Sprintf("ALTER TABLE %s ALTER REINDEX %s cagra FORCE_SYNC",
+		sqlquote.QualifiedIdent(ctx.QryDatabase(), ctx.OriginalTableDef().Name),
+		sqlquote.Ident(metaDef.IndexName)), nil
 }
 
 // handleCreate is the shared body for HandleCreateIndex and

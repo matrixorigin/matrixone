@@ -797,6 +797,7 @@ func buildViewsForLowerCaseTest(
 	ctx.EXPECT().GetProcess().Return(nil).AnyTimes()
 	ctx.EXPECT().Stats(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	ctx.EXPECT().GetBuildingAlterView().Return(false, "", "").AnyTimes()
+	ctx.EXPECT().SetContext(gomock.Any()).AnyTimes()
 	ctx.EXPECT().DatabaseExists(gomock.Any(), gomock.Any()).Return(true).AnyTimes()
 	ctx.EXPECT().GetLowerCaseTableNames().Return(int64(1)).AnyTimes()
 	ctx.EXPECT().GetSubscriptionMeta(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
@@ -861,6 +862,7 @@ func buildViewForSQLModeTest(t *testing.T, viewName string, viewData ViewData) (
 			return x.obj, x.table, nil
 		}).AnyTimes()
 	ctx.EXPECT().GetContext().Return(context.Background()).AnyTimes()
+	ctx.EXPECT().SetContext(gomock.Any()).AnyTimes()
 	ctx.EXPECT().GetProcess().Return(nil).AnyTimes()
 	ctx.EXPECT().Stats(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	ctx.EXPECT().GetBuildingAlterView().Return(false, "", "").AnyTimes()
@@ -4842,6 +4844,24 @@ func TestSetOperationMixedCharVarcharUsesSeparatePadSpaceKey(t *testing.T) {
 			wantKey:  true,
 		},
 		{
+			name:     "char-only union",
+			sql:      "select cast('MO' as char(8)) union select cast('MO' as char(4))",
+			nodeType: plan.Node_UNION,
+			wantKey:  true,
+		},
+		{
+			name:     "char-only intersect",
+			sql:      "select cast('MO' as char(8)) intersect select cast('MO' as char(4))",
+			nodeType: plan.Node_INTERSECT,
+			wantKey:  true,
+		},
+		{
+			name:     "char-only minus",
+			sql:      "select cast('MO' as char(8)) minus select cast('MO' as char(4))",
+			nodeType: plan.Node_MINUS,
+			wantKey:  true,
+		},
+		{
 			name:     "promoted char union",
 			sql:      "select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))) from nation union select cast(r_name as varchar(8)) from region",
 			nodeType: plan.Node_UNION,
@@ -4887,6 +4907,98 @@ func TestSetOperationMixedCharVarcharUsesSeparatePadSpaceKey(t *testing.T) {
 			require.Equal(t, "cast", keyFn.Func.ObjName)
 			_, overloadID := function.DecodeOverloadID(keyFn.Func.Obj)
 			require.Equal(t, int32(3), overloadID)
+		})
+	}
+}
+
+func TestSetOperationMixedWidthCharUsesCommonPaddedType(t *testing.T) {
+	cases := []struct {
+		name     string
+		sql      string
+		nodeType plan.Node_NodeType
+	}{
+		{
+			name:     "union",
+			sql:      "select cast('MO' as char(8)) union select cast('MO' as char(4))",
+			nodeType: plan.Node_UNION,
+		},
+		{
+			name:     "intersect",
+			sql:      "select cast('MO' as char(8)) intersect select cast('MO' as char(4))",
+			nodeType: plan.Node_INTERSECT,
+		},
+		{
+			name:     "minus",
+			sql:      "select cast('MO' as char(8)) minus select cast('MO' as char(4))",
+			nodeType: plan.Node_MINUS,
+		},
+		{
+			name:     "reversed union",
+			sql:      "select cast('MO' as char(4)) union select cast('MO' as char(8))",
+			nodeType: plan.Node_UNION,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			require.NoError(t, err)
+
+			query := logicPlan.GetQuery()
+			var setNode *plan.Node
+			for _, node := range query.Nodes {
+				if node.NodeType == tc.nodeType {
+					setNode = node
+					break
+				}
+			}
+			require.NotNil(t, setNode)
+			require.Len(t, setNode.ProjectList, 1)
+			require.Equal(t, int32(types.T_char), setNode.ProjectList[0].Typ.Id)
+			require.Equal(t, int32(8), setNode.ProjectList[0].Typ.Width)
+
+			require.Len(t, setNode.Children, 2)
+			for branch, childID := range setNode.Children {
+				require.GreaterOrEqual(t, childID, int32(0))
+				require.Less(t, int(childID), len(query.Nodes))
+				child := query.Nodes[childID]
+				require.Len(t, child.ProjectList, 1)
+				require.Equal(t, setNode.ProjectList[0].Typ, child.ProjectList[0].Typ,
+					"set-operation branch %d must use the common CHAR width", branch)
+			}
+		})
+	}
+}
+
+func TestSetOperationMixedCharVarcharCommonTypeIsOrderIndependent(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "char first",
+			sql:  "select cast('MO' as char(8)) intersect select cast('MO' as varchar(8))",
+		},
+		{
+			name: "varchar first",
+			sql:  "select cast('MO' as varchar(8)) intersect select cast('MO' as char(8))",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			require.NoError(t, err)
+
+			var intersect *plan.Node
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_INTERSECT {
+					intersect = node
+					break
+				}
+			}
+			require.NotNil(t, intersect)
+			require.Len(t, intersect.ProjectList, 1)
+			require.Equal(t, int32(types.T_varchar), intersect.ProjectList[0].Typ.Id)
+			require.Equal(t, int32(8), intersect.ProjectList[0].Typ.Width)
 		})
 	}
 }
@@ -6065,6 +6177,7 @@ func TestQueryBuilder_appendTimeWindowNode(t *testing.T) {}
 
 func TestQueryBuilder_appendWindowNode(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder.sortSpillMem = 4096
 	bindCtx := NewBindContext(builder, nil)
 	bindCtx.groupTag = builder.GenNewBindTag()
 	bindCtx.aggregateTag = builder.GenNewBindTag()
@@ -6104,6 +6217,7 @@ func TestQueryBuilder_appendWindowNode(t *testing.T) {
 	for _, node := range builder.qry.Nodes {
 		if node.NodeType == plan.Node_WINDOW {
 			windowNodeFound = true
+			require.Equal(t, int64(4096), node.SpillMem)
 			break
 		}
 	}

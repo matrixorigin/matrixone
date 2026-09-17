@@ -23,6 +23,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -252,67 +253,64 @@ func TestDataBranchDiffAsFile(t *testing.T) {
 			execSQLDB(t, ctx, sqlDB, fmt.Sprintf("create database `%s`", dbName))
 			execSQLDB(t, ctx, sqlDB, fmt.Sprintf("use `%s`", dbName))
 
-			t.Run("single_pk_with_base", func(t *testing.T) {
-				runSinglePKWithBase(t, ctx, sqlDB, dbName)
-			})
-			t.Run("composite_pk_with_base", func(t *testing.T) {
-				runMultiPKWithBase(t, ctx, sqlDB, dbName)
-			})
-			t.Run("single_pk_without_base", func(t *testing.T) {
-				runSinglePKNoBase(t, ctx, sqlDB, dbName)
-			})
-			t.Run("composite_pk_without_base", func(t *testing.T) {
-				runMultiPKNoBase(t, ctx, sqlDB, dbName)
-			})
-			t.Run("composite_multi_column_mutations", func(t *testing.T) {
-				runCompositeDiffMultiColumn(t, ctx, sqlDB, dbName)
-			})
-			t.Run("single_pk_update_split", func(t *testing.T) {
-				runUpdateSplitDiffAsFile(t, ctx, sqlDB, dbName)
-			})
-			t.Run("composite_pk_update_split", func(t *testing.T) {
-				runCompositeUpdateSplitDiffAsFile(t, ctx, sqlDB, dbName)
-			})
-			t.Run("no_pk_duplicates_and_null_delete", func(t *testing.T) {
-				runNoPKDuplicateDiffAsFile(t, ctx, sqlDB, dbName)
-			})
-			t.Run("complex_types_and_string_edges", func(t *testing.T) {
-				runComplexTypeDiffAsFile(t, ctx, sqlDB, dbName)
-			})
-			t.Run("sql_null_values", func(t *testing.T) {
-				runSQLDiffHandlesNulls(t, ctx, sqlDB, dbName)
-			})
-			t.Run("database_branch_metadata", func(t *testing.T) {
-				runBranchDatabaseMetadata(t, ctx, sqlDB, dbName+"_metadata")
-				execSQLDB(t, ctx, sqlDB, fmt.Sprintf("use `%s`", dbName))
-			})
-			t.Run("csv_multi_block_round_trip", func(t *testing.T) {
-				runCSVLoadSimple(t, ctx, sqlDB, dbName)
-			})
-			t.Run("csv_rich_types_round_trip", func(t *testing.T) {
-				runCSVLoadRichTypes(t, ctx, sqlDB, dbName)
-			})
-			t.Run("csv_user_diff_prefix_identifier", func(t *testing.T) {
-				runCSVUserDiffPrefixIdentifier(t, ctx, sqlDB, dbName)
-			})
-			t.Run("output_limit_subset", func(t *testing.T) {
-				runDiffOutputLimitSubset(t, ctx, sqlDB, dbName)
-			})
-			t.Run("output_limit_without_base", func(t *testing.T) {
-				runDiffOutputLimitNoBase(t, ctx, sqlDB, dbName)
-			})
-			t.Run("output_limit_multi_block", func(t *testing.T) {
-				runDiffOutputLimitMultiBlockBase(t, ctx, sqlDB, dbName)
-			})
-			t.Run("output_summary", func(t *testing.T) {
-				runDiffOutputSummaryComplex(t, ctx, sqlDB, dbName)
-			})
-			t.Run("stage_round_trip", func(t *testing.T) {
-				runDiffOutputToStage(t, ctx, sqlDB, dbName)
-			})
-			t.Run("update_apply_special_columns", func(t *testing.T) {
-				runDataBranchUpdateApplySpecialColumns(t, ctx, sqlDB)
-			})
+			cases := []struct {
+				name string
+				run  func(*testing.T, context.Context, *sql.DB, string)
+			}{
+				// Start the longest independent scenarios first so the second
+				// slot can drain short cases while the special-column matrix runs.
+				{name: "update_apply_special_columns", run: func(t *testing.T, ctx context.Context, db *sql.DB, _ string) {
+					runDataBranchUpdateApplySpecialColumns(t, ctx, db)
+				}},
+				{name: "composite_multi_column_mutations", run: runCompositeDiffMultiColumn},
+				{name: "single_pk_update_split", run: runUpdateSplitDiffAsFile},
+				{name: "output_limit_multi_block", run: runDiffOutputLimitMultiBlockBase},
+				{name: "single_pk_with_base", run: runSinglePKWithBase},
+				{name: "composite_pk_with_base", run: runMultiPKWithBase},
+				{name: "single_pk_without_base", run: runSinglePKNoBase},
+				{name: "composite_pk_without_base", run: runMultiPKNoBase},
+				{name: "composite_pk_update_split", run: runCompositeUpdateSplitDiffAsFile},
+				{name: "no_pk_duplicates_and_null_delete", run: runNoPKDuplicateDiffAsFile},
+				{name: "complex_types_and_string_edges", run: runComplexTypeDiffAsFile},
+				{name: "sql_null_values", run: runSQLDiffHandlesNulls},
+				{name: "database_branch_metadata", run: func(t *testing.T, ctx context.Context, db *sql.DB, dbName string) {
+					runBranchDatabaseMetadata(t, ctx, db, dbName+"_metadata")
+					execSQLDB(t, ctx, db, fmt.Sprintf("use `%s`", dbName))
+				}},
+				{name: "csv_multi_block_round_trip", run: runCSVLoadSimple},
+				{name: "csv_rich_types_round_trip", run: runCSVLoadRichTypes},
+				{name: "csv_user_diff_prefix_identifier", run: runCSVUserDiffPrefixIdentifier},
+				{name: "output_limit_subset", run: runDiffOutputLimitSubset},
+				{name: "output_limit_without_base", run: runDiffOutputLimitNoBase},
+				{name: "output_summary", run: runDiffOutputSummaryComplex},
+				{name: "stage_round_trip", run: runDiffOutputToStage},
+			}
+
+			sem := make(chan struct{}, 2)
+			var wg sync.WaitGroup
+			for _, tc := range cases {
+				// Admit in declaration order, rather than launching every case
+				// and letting goroutines race for the two execution slots. t.Run
+				// joins the child (including FailNow cleanup) before releasing it.
+				sem <- struct{}{}
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					defer func() { <-sem }()
+
+					t.Run(tc.name, func(t *testing.T) {
+						subDB, openErr := sql.Open("mysql", dsn)
+						require.NoError(t, openErr)
+						defer subDB.Close()
+						subDB.SetMaxOpenConns(1)
+						subCtx, subCancel := context.WithTimeout(ctx, time.Second*240)
+						defer subCancel()
+						execSQLDB(t, subCtx, subDB, fmt.Sprintf("use `%s`", dbName))
+						tc.run(t, subCtx, subDB, dbName)
+					})
+				}()
+			}
+			wg.Wait()
 		})
 }
 
@@ -716,8 +714,11 @@ func runCompositeDiffMultiColumn(t *testing.T, parentCtx context.Context, db *sq
 	diffDir := t.TempDir()
 	diffLiteral := strings.ReplaceAll(diffDir, "'", "''")
 	const (
-		baseRows   = 2000
-		insertRows = 200
+		// This is a mixed-type mutation round trip, not a block-boundary
+		// test. Retain repeated composite-key components and all six
+		// base/inserted x updated/deleted/untouched cells below.
+		baseRows   = 274
+		insertRows = 137
 	)
 
 	execSQLDB(t, ctx, db, fmt.Sprintf(`
@@ -759,6 +760,16 @@ select
 	date_add('2024-02-01 00:00:00', interval g.result second) as created_at
 from generate_series(%d, %d) as g`, branch, baseRows+1, baseRows+insertRows)
 	execSQLDB(t, ctx, db, newInserts)
+	require.Equal(t, [][]string{{"3", "2", "269", "1", "1", "135"}},
+		queryStringRows(t, ctx, db, fmt.Sprintf(`select
+			sum(seq <= %[2]d and seq %% 91 = 0 and seq %% 137 <> 0),
+			sum(seq <= %[2]d and seq %% 137 = 0),
+			sum(seq <= %[2]d and seq %% 91 <> 0 and seq %% 137 <> 0),
+			sum(seq > %[2]d and seq %% 91 = 0 and seq %% 137 <> 0),
+			sum(seq > %[2]d and seq %% 137 = 0),
+			sum(seq > %[2]d and seq %% 91 <> 0 and seq %% 137 <> 0)
+			from %[1]s`, branch, baseRows)),
+		"fixture must retain all six mutation cells before diff/replay")
 
 	execSQLDB(t, ctx, db, fmt.Sprintf(
 		"update %s set amount = amount + 77.7700, ratio = ratio * 1.05, memo = concat(memo, '-upd') where seq %% 91 = 0",

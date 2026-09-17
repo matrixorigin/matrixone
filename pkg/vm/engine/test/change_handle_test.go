@@ -34,7 +34,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cdc"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -45,7 +44,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	cmd_util "github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
@@ -2996,6 +2994,7 @@ func TestISCPExecutor7(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, txn.Commit(ctxWithTimeout))
+	prepareISCPConsumerTarget(t, ctxWithTimeout, "srcdb", "src_table", tableID, "hnsw_idx")
 
 	// init cdc executor
 	checkLeaseStub := gostub.Stub(
@@ -3064,6 +3063,7 @@ func TestISCPExecutor7(t *testing.T) {
 		tableID,
 		jobName,
 	)
+	checkISCPConsumerData(t, ctxWithTimeout, "srcdb", "src_table", tableID, jobName)
 
 }
 
@@ -3358,6 +3358,7 @@ func TestISCPExecutor8(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, txn.Commit(ctxWithTimeout))
+	prepareISCPConsumerTarget(t, ctxWithTimeout, "srcdb", "src_table", tableID, "hnsw_idx")
 
 	// init cdc executor
 	checkLeaseStub := gostub.Stub(
@@ -3430,9 +3431,11 @@ func TestISCPExecutor8(t *testing.T) {
 	}
 
 	waitForWatermark(types.TimestampToTS(txn.Txn().CommitTS))
+	checkISCPConsumerData(t, ctxWithTimeout, "srcdb", "src_table", tableID, jobName)
 
 	deleteCommitTS := testutil2.DeleteAllWithCommitTS(t, accountId, taeHandler.GetDB(), "srcdb", "src_table")
 	waitForWatermark(deleteCommitTS)
+	checkISCPConsumerData(t, ctxWithTimeout, "srcdb", "src_table", tableID, jobName)
 
 }
 
@@ -3475,6 +3478,7 @@ func TestUpdateJobSpec(t *testing.T) {
 	tableID := rel.GetTableID(ctxWithTimeout)
 
 	require.NoError(t, txn.Commit(ctxWithTimeout))
+	prepareISCPConsumerTarget(t, ctxWithTimeout, "srcdb", "src_table", tableID, "job1")
 
 	// init cdc executor
 	checkLeaseStub := gostub.Stub(
@@ -3844,7 +3848,13 @@ func TestGCInMemoryJob(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, txn.Commit(ctxWithTimeout))
 
-	const jobName = "hnsw_idx"
+	const (
+		jobName       = "hnsw_idx"
+		watermarkWait = 30 * time.Second
+	)
+	// Creating the consumer table and committing its first batch can exceed ten
+	// seconds on a loaded race runner. Keep the wait bounded while allowing the
+	// asynchronous ISCP path to make progress under scheduler pressure.
 	target := types.TimestampToTS(txn.Txn().CommitTS)
 	waitForISCPWatermark(
 		t,
@@ -3852,7 +3862,7 @@ func TestGCInMemoryJob(t *testing.T) {
 			return cdcExecutor.GetWatermark(accountId, tableID, jobName)
 		},
 		target,
-		10*time.Second,
+		watermarkWait,
 		10*time.Millisecond,
 		accountId,
 		tableID,
@@ -3881,7 +3891,7 @@ func TestGCInMemoryJob(t *testing.T) {
 		func() (types.TS, bool) {
 			return cdcExecutor.GetWatermark(accountId, tableID, jobName)
 		},
-		10*time.Second,
+		watermarkWait,
 		10*time.Millisecond,
 		accountId,
 		tableID,
@@ -4273,22 +4283,9 @@ func TestInvalidTimestamp(t *testing.T) {
 
 	require.NoError(t, txn.Commit(ctxWithTimeout))
 
-	// The recovery budget must not include cold consumer DDL. Prepare only
-	// its empty destination; the executor still has to discover the job, copy
-	// the source row and advance the watermark after the fault is removed.
-	v, ok := moruntime.ServiceRuntime("").GetGlobalVariables(moruntime.InternalSQLExecutor)
-	require.True(t, ok)
-	sqlExecutor := v.(executor.SQLExecutor)
-	for _, sql := range []string{
-		fmt.Sprintf("create database if not exists %s", iscp.TargetDbName),
-		fmt.Sprintf("create table %s.test_table_%d_%s like srcdb.src_table", iscp.TargetDbName, tableID, jobName),
-	} {
-		// No caller-owned transaction: Exec owns commit/rollback, including
-		// SQL errors. Release any result before a fatal assertion exits.
-		result, err := sqlExecutor.Exec(ctxWithTimeout, sql, executor.Options{})
-		result.Close()
-		require.NoError(t, err)
-	}
+	// The recovery budget starts with an empty sink; copying data and advancing
+	// the watermark must still happen after the injected fault is released.
+	prepareISCPConsumerTarget(t, ctxWithTimeout, "srcdb", "src_table", tableID, jobName)
 
 	require.True(t, fault.Enable(), "fault injection was already enabled before TestInvalidTimestamp")
 	t.Cleanup(func() {
@@ -4299,7 +4296,7 @@ func TestInvalidTimestamp(t *testing.T) {
 
 	txn, err = disttaeEngine.NewTxnOperator(ctx, disttaeEngine.Engine.LatestLogtailAppliedTime())
 	require.NoError(t, err)
-	ok, err = iscp.RegisterJob(
+	ok, err := iscp.RegisterJob(
 		ctx, "", txn,
 		&iscp.JobSpec{
 			ConsumerInfo: iscp.ConsumerInfo{
@@ -4336,23 +4333,7 @@ func TestInvalidTimestamp(t *testing.T) {
 	)
 	// Compare both directions: watermark progress must represent copied data,
 	// not just job discovery. Let the SQL executor own these transactions too.
-	destination := fmt.Sprintf("%s.test_table_%d_%s", iscp.TargetDbName, tableID, jobName)
-	for _, sql := range []string{
-		fmt.Sprintf("select * from srcdb.src_table except select * from %s", destination),
-		fmt.Sprintf("select * from %s except select * from srcdb.src_table", destination),
-	} {
-		result, err := sqlExecutor.Exec(ctxWithTimeout, sql, executor.Options{})
-		rows := 0
-		if err == nil {
-			result.ReadRows(func(n int, _ []*vector.Vector) bool {
-				rows += n
-				return true
-			})
-		}
-		result.Close()
-		require.NoError(t, err)
-		require.Zero(t, rows, sql)
-	}
+	checkISCPConsumerData(t, ctxWithTimeout, "srcdb", "src_table", tableID, jobName)
 }
 
 func TestCancelIteration1(t *testing.T) {

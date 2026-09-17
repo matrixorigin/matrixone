@@ -854,6 +854,14 @@ func rebuildPreparePlan(
 	err = execCtx.withRootSQL(prepareStmt.Sql, func() (err error) {
 		compilerCtx := executionSes.GetTxnCompileCtx()
 		currentDatabase := compilerCtx.GetDatabase()
+		currentContext := compilerCtx.GetContext()
+		warningContext := currentContext
+		if warningContext == nil {
+			warningContext = execCtx.reqCtx
+		}
+		compilerCtx.SetContext(plan2.WithJSONMergeWarningOrigin(
+			warningContext, plan2.JSONMergeWarningInternalReprepare))
+		defer compilerCtx.SetContext(currentContext)
 		compilerCtx.SetDatabase(prepareStmt.defaultDatabase)
 		defer compilerCtx.SetDatabase(currentDatabase)
 		newPlan, err = buildFn(execCtx.reqCtx, executionSes, compilerCtx, originPrepareStmt)
@@ -933,9 +941,10 @@ func binaryProtocolPrepareParamKind(
 }
 
 // binaryProtocolPrepareParamConcreteType retains the protocol's SQL domain
-// for direct JSON-comparison parameters. The text vector is only a transport
+// for direct JSON-comparison parameters and domains whose distinction must
+// survive the text transport. The text vector is only a transport
 // representation; using it as the semantic type would turn TINYINT 0/1 into
-// Boolean guesses and would erase JSON and temporal domains.
+// Boolean guesses and would erase JSON, temporal, or ENUM domains.
 func binaryProtocolPrepareParamConcreteType(
 	mysqlType defines.MysqlType,
 	isUnsigned bool,
@@ -987,6 +996,8 @@ func binaryProtocolPrepareParamConcreteType(
 		return types.T_enum, true
 	case defines.MYSQL_TYPE_GEOMETRY:
 		return types.T_geometry, true
+	case defines.MYSQL_TYPE_UUID:
+		return types.T_uuid, true
 	default:
 		return types.T_any, false
 	}
@@ -1280,6 +1291,11 @@ func binaryProtocolPrepareParamDomains(
 		// that only available domain distinction through specialization and the
 		// Process binary-string sidecar.
 		return types.T_blob.ToType(), types.Type{}, "", false, true
+	case defines.MYSQL_TYPE_ENUM:
+		// ENUM values are length-encoded strings on the wire, but ENUM is a
+		// distinct SQL domain. Preserve it so consumers that reject implicit
+		// stringification (for example JSON_STORAGE) can fail closed.
+		return types.T_enum.ToType(), types.Type{}, "", false, true
 	default:
 		return types.T_text.ToType(), types.Type{}, "", false, true
 	}
@@ -1643,6 +1659,19 @@ func initExecuteStmtParamWithResolverInSession(
 			isUnsigned := prepareStmt.ParamTypes[i*2+1]&0x80 != 0
 			kind := binaryProtocolPrepareParamKind(
 				mysqlType, isUnsigned, prepareStmt.params.GetRawBytesAt(i))
+			// Several non-string protocol domains have PrepareParamKind=None
+			// because their wire payload is length-encoded text. Keep their
+			// concrete SQL domain in metadata even when the parameter is consumed
+			// by JSON_STORAGE, whose position is not a JSON-comparison adapter
+			// position. Numeric and Boolean domains continue to use their existing
+			// kind metadata and therefore do not need a second type section.
+			if kind == vector.PrepareParamNone {
+				concreteType, supported := binaryProtocolPrepareParamConcreteType(mysqlType, isUnsigned)
+				if supported && concreteType != types.T_any && !concreteType.IsMySQLString() {
+					prepareStmt.paramConcreteTypes[i] = concreteType
+					hasConcreteType = true
+				}
+			}
 			if _, relevant := slices.BinarySearch(
 				prepareStmt.jsonComparisonParamPositions, int32(i)); relevant {
 				_, memberOfParam := slices.BinarySearch(
@@ -1820,10 +1849,22 @@ func initExecuteStmtParamWithResolverInSession(
 	runtimePlan, runtimeSpecialized, runtimePlanApplied := executionPlan, false, false
 	var cachedRuntimeCompile *compile.Compile
 	runtimeCacheKey := ""
+	// Percentile values are consumed while the physical aggregate is built.
+	// Unlike the other runtime-specialization categories, the value is not
+	// retained as a parameter vector in the resulting plan.  Do not let the
+	// one-entry runtime cache install or retrieve a compile for such a plan:
+	// a second EXECUTE with the same parameter domain but a different percentile
+	// would otherwise run the first execution's immutable aggregate config.
+	runtimeCacheEligible := shouldCachePreparedRuntimeSpecialization(preparePlan.Plan) &&
+		shouldCachePreparedRuntimeSpecialization(executionPlan)
+	if !runtimeCacheEligible {
+		prepareStmt.clearRuntimeSpecializationCache()
+	}
 	runtimeCategoryCandidate := runtimeNumericPrefixCandidate || runtimeNumericOverloadCandidate ||
 		runtimeConversionCandidate || stableRuntimeSpecializationCandidate
 	runtimeSpecializationCandidate := runtimeCategoryCandidate || runtimeDirectResultCandidate
 	cacheableRuntimeQuery := executionPlan.GetQuery() != nil && !runtimeTextComparisonSpecialization &&
+		runtimeCacheEligible &&
 		(runtimeDirectResultCandidate ||
 			(runtimeCategoryCandidate && preparedRuntimeCacheSupports(cwft.paramVals)))
 	if cacheableRuntimeQuery {
@@ -3041,6 +3082,12 @@ func shouldCachePrepareCompile(p *plan.Plan) bool {
 	if p == nil {
 		return true
 	}
+	if plan2.PreparedPlanHasPercentileParams(p) {
+		// The percentile marker is evaluated while the physical aggregate is
+		// constructed and becomes immutable executor configuration. Reusing that
+		// compile would reuse an earlier EXECUTE value for the same parameter type.
+		return false
+	}
 	query := p.GetQuery()
 	if query == nil {
 		return true
@@ -3059,13 +3106,22 @@ func shouldCachePrepareCompile(p *plan.Plan) bool {
 	return !query.GetHasForeignKeyAction()
 }
 
+// shouldCachePreparedRuntimeSpecialization is stricter than the ordinary
+// prepared Compile cache. Runtime specialization can cache a physical compile
+// keyed by parameter domains; percentile markers are value-sensitive physical
+// configuration and therefore cannot share that cache even when domains match.
+func shouldCachePreparedRuntimeSpecialization(p *plan.Plan) bool {
+	return !plan2.PreparedPlanHasPercentileParams(p)
+}
+
 func shouldRebuildPreparePlan(schemaChanged bool, p *plan.Plan) bool {
 	if schemaChanged || p == nil {
 		return schemaChanged
 	}
 	query := p.GetQuery()
 	return query != nil && (query.GetHasForeignKeyAction() ||
-		plan2.PreparedPlanDependsOnSubscriptionMetadata(p))
+		plan2.PreparedPlanDependsOnSubscriptionMetadata(p) ||
+		plan2.PreparedPlanDependsOnIndexCoverage(p))
 }
 
 func createCompile(

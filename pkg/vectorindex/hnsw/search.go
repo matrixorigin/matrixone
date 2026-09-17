@@ -58,6 +58,11 @@ type HnswSearch[T types.RealNumbers] struct {
 	loadedFp    uint64
 	loadedCount int64
 	genValid    bool
+
+	// buildTS is MAX(metadata.build_ts) over the whole metadata read (base generations +
+	// cdc_tail frames), captured at metadata read so it reflects the generation searched.
+	// 0 = unknown. See BuildTS.
+	buildTS int64
 }
 
 func NewHnswSearch[T types.RealNumbers](idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) *HnswSearch[T] {
@@ -233,12 +238,16 @@ func (s *HnswSearch[T]) Destroy() {
 }
 
 // load metadata from database
-func LoadMetadata[T types.RealNumbers](sqlproc *sqlexec.SqlProcess, dbname string, metatbl string) ([]*HnswModel[T], error) {
+// LoadMetadata returns the index's model rows and maxBuildTS, the greatest source-table
+// commit reflected across ALL metadata rows -- base generations AND cdc_tail frames (which
+// LoadIndex later drops from the resident set). It is the coverage point the async-index
+// freshness gate reports via BuildTS. 0 = unknown (pre-migration index).
+func LoadMetadata[T types.RealNumbers](sqlproc *sqlexec.SqlProcess, dbname string, metatbl string) ([]*HnswModel[T], int64, error) {
 
 	sql := fmt.Sprintf("SELECT * FROM %s ORDER BY timestamp ASC", sqlquote.QualifiedIdent(dbname, metatbl))
 	res, err := runSql(sqlproc, sql)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer res.Close()
 
@@ -283,7 +292,7 @@ func LoadMetadata[T types.RealNumbers](sqlproc *sqlexec.SqlProcess, dbname strin
 	}
 	logMetadataProvenance(metatbl, len(indexes), rows, newest)
 
-	return indexes, nil
+	return indexes, newest, nil
 }
 
 // load index from database
@@ -311,11 +320,12 @@ func (s *HnswSearch[T]) LoadIndex(sqlproc *sqlexec.SqlProcess, indexes []*HnswMo
 // Load will claim in host memory. The models are parked on s.Indexes unloaded, so GetIndexSize
 // answers before a single model file is read.
 func (s *HnswSearch[T]) Preload(sqlproc *sqlexec.SqlProcess) error {
-	indexes, err := LoadMetadata[T](sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable)
+	indexes, buildTS, err := LoadMetadata[T](sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable)
 	if err != nil {
 		return err
 	}
 	s.Indexes = indexes
+	s.buildTS = buildTS
 	return nil
 }
 
@@ -325,7 +335,7 @@ func (s *HnswSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 	indexes := s.Indexes
 	if indexes == nil {
 		var err error
-		if indexes, err = LoadMetadata[T](sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable); err != nil {
+		if indexes, s.buildTS, err = LoadMetadata[T](sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable); err != nil {
 			return err
 		}
 	}
@@ -353,6 +363,29 @@ func (s *HnswSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 		}
 	}
 	return nil
+}
+
+// EmptyGeneration reports a loaded generation with no vectors: no model rows (a freshly created
+// index, or the async-build window before the first model is written) or every loaded model empty.
+// The cache declines to retain such a generation, so the next query reloads and picks up the
+// models once the build writes them -- instead of pinning a vector-less generation until the
+// IsStale sweep evicts it. A generation with any populated model is cached normally.
+//
+// Fails CLOSED: a model whose size cannot be read (Empty errors on a nil usearch handle, or
+// usearch Len fails) counts as populated. Reading such a model as vector-less would evict a
+// full generation and re-stream every model file on the next query, where the opposite mistake
+// only keeps a vector-less generation until the IsStale sweep -- which hnsw has.
+func (s *HnswSearch[T]) EmptyGeneration() bool {
+	for _, m := range s.Indexes {
+		if m == nil {
+			continue
+		}
+		empty, err := m.Empty()
+		if err != nil || !empty {
+			return false
+		}
+	}
+	return true
 }
 
 // hnswViewedBytesPerRow is the HOST cost of one row in a VIEWED (mmap'd) usearch index: the
@@ -407,6 +440,12 @@ func logMetadataProvenance(metatbl string, count int, rows, buildTS int64) {
 //
 // Existing four-column metadata cannot estimate this before Load, so the charge lands after
 // materialization. No catalog migration is introduced just to estimate a cache entry.
+// BuildTS reports the greatest source-table commit this loaded generation reflects
+// (MAX(metadata.build_ts) over base + cdc_tail), for the async-index freshness gate.
+func (s *HnswSearch[T]) BuildTS() int64 {
+	return s.buildTS
+}
+
 func (s *HnswSearch[T]) GetIndexSize() (hostBytes, deviceBytes int64) {
 	for _, idx := range s.Indexes {
 		if idx == nil {
