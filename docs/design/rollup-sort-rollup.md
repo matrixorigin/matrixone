@@ -1,9 +1,12 @@
 # Sort-based ROLLUP design
 
-Status: implementation complete in the dedicated worktree; follow-up review
-validation evidence is complete
+Status: design revision R1 is accepted for implementation; implementation and
+follow-up validation are complete. Independent implementation approval remains
+pending on the existing PR review lane.
 
 Owner issue: [#20653](https://github.com/matrixorigin/matrixone/issues/20653)
+
+Implementation PR: [#28987](https://github.com/matrixorigin/matrixone/pull/28987)
 
 Implementation branch: `codex/issue-20653-sort-rollup`
 
@@ -29,12 +32,19 @@ count.
 
 ### Follow-up remediation design
 
-- Reviewed revision: corrected remediation specification `r1`, reviewed by
-  `PR28987-DESIGN-FOLLOWUP-20260917-C` before implementation. The specification
-  is recorded by this section; it was not yet committed when reviewed, so no
-  future commit or blob is claimed.
+- Reviewed revision: corrected remediation specification `R1`, materialized in
+  this document at commit
+  `991bec6912ac944a27e884278a8450a4966765da`, blob
+  `eaf64365e75203e699f004f49c4cdd39e0c29f0a`. This is the canonical design
+  input for the follow-up review; later commits may change the record without
+  changing the R1 design.
 - Review type and decision: AI-assisted GPT-6 medium design-first follow-up;
   `PASS`, limited to this remediation design and not implementation validation.
+- Review artifact: `PR28987-DESIGN-FOLLOWUP-20260917-C` (delegated session
+  `01a0acb4-e994-79c0-9ccb-3bd60d555bdf`).
+- Design decision: `PASS`. The prior blockers are closed by a traceable R1
+  revision and an independently observable top-level public witness; no
+  blocking design question is deferred to implementation.
 - Scope: add traceable historical and follow-up design decisions; make the
   non-empty ROLLUP a top-level public witness; extend typed planner coverage to
   prove the `sort_rollup` marker, aggregation-input Sort, no `UNION ALL`, and a
@@ -44,6 +54,9 @@ count.
   aliases before using them in its deterministic `ORDER BY`. The source NULL,
   subtotal, grand-total, and GROUPING bitmap are asserted by the result oracle.
 - No production planner or EXPLAIN behavior is changed by this remediation.
+- Implementation conformance: no production deviation from R1; the changed
+  planner test and SQL case only make the planned path and its semantic oracle
+  observable.
 - Independent human approval remains `PENDING`; this record does not grant or
   substitute for it. Implementation validation and normal BVT comparison are
   recorded separately after the patch is tested.
