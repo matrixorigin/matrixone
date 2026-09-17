@@ -162,3 +162,42 @@ func TestFullTextWindowMatchRewritten(t *testing.T) {
 	require.Equal(t, 1, countReachableFullTextScans(builder.qry),
 		"the WHERE MATCH beneath the WINDOW must be served by a fulltext index scan")
 }
+
+// replaceScoreFnInExprBy must rewrite a served MATCH wherever it sits, including inside a window
+// spec (window function argument, PARTITION BY, ORDER BY) reached from the WINDOW fulltext anchor
+// (#28974). Covers every traversal branch: Expr_F (direct hit + recurse into args), Expr_List, and
+// Expr_W, plus the nil guard.
+func TestReplaceScoreFnInExprByTraversesWindowSpec(t *testing.T) {
+	sentinel := &planpb.Expr{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 9, ColPos: 9}}}
+	match := func() *planpb.Expr {
+		return &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: "fulltext_match"}}}}
+	}
+	rewrite := func(fn *planpb.Function) *planpb.Expr {
+		if fn != nil && fn.Func != nil && fn.Func.ObjName == "fulltext_match" {
+			return sentinel
+		}
+		return nil
+	}
+
+	require.Nil(t, replaceScoreFnInExprBy(nil, rewrite))
+
+	// Expr_F: a direct hit is replaced; a non-matching function recurses into its args.
+	require.Same(t, sentinel, replaceScoreFnInExprBy(match(), rewrite))
+	fn := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: "gt"}, Args: []*planpb.Expr{match()}}}}
+	require.Same(t, sentinel, replaceScoreFnInExprBy(fn, rewrite).GetF().Args[0])
+
+	// Expr_List recurses into every element.
+	lst := &planpb.Expr{Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{match()}}}}
+	require.Same(t, sentinel, replaceScoreFnInExprBy(lst, rewrite).GetList().List[0])
+
+	// Expr_W recurses into the window function, PARTITION BY, and ORDER BY.
+	w := &planpb.Expr{Expr: &planpb.Expr_W{W: &planpb.WindowSpec{
+		WindowFunc:  &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: "sum"}, Args: []*planpb.Expr{match()}}}},
+		PartitionBy: []*planpb.Expr{match()},
+		OrderBy:     []*planpb.OrderBySpec{{Expr: match()}},
+	}}}
+	ws := replaceScoreFnInExprBy(w, rewrite).GetW()
+	require.Same(t, sentinel, ws.WindowFunc.GetF().Args[0])
+	require.Same(t, sentinel, ws.PartitionBy[0])
+	require.Same(t, sentinel, ws.OrderBy[0].Expr)
+}
