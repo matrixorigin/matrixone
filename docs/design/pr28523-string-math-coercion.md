@@ -1,26 +1,26 @@
 # PR #28523: String Math Numeric Coercion and Prepared-Parameter Roles
 
 - Status: Draft / awaiting maintainer approval
-- Design revision: 10
+- Design revision: 11
 - Issue: [#28487](https://github.com/matrixorigin/matrixone/issues/28487)
 - Implementation PR: [#28523](https://github.com/matrixorigin/matrixone/pull/28523)
-- Candidate integration base: `bc90a61230f02032b06351d0cfb317ae13a08258`
-  (tree `4867dffe812b9c43bd4f1672c2d337da975d734d`). The latest local
-  `origin/main` ref observed for revision 10 is `89d28d5f3858f9d0164701c02e98b9eff2ce210e`
-  (tree `856eb9f70be0f3479865d3f2b2a1c24d75d913f9`), a descendant of that
-  integration base; the candidate has not been rebased onto this newer ref.
+- Candidate integration base: `89d28d5f3858f9d0164701c02e98b9eff2ce210e`
+  (tree `856eb9f70be0f3479865d3f2b2a1c24d75d913f9`), fetched from
+  `origin/main` and integrated by a clean rebase. All 21 candidate commits
+  replayed without conflicts.
 - Published PR source head: `d27667a4936e813fb612de6cd245be03a2d6f101`
   (tree `d02aa9a8b2c219b7767b9793c700287ecfc24c0b`). The revision-8
   candidate, previously based on main `24e66eba121c781c29998ff2611db11335e3028c`
-  (tree `b717729c7e1b0cc33d808f271f3211e8d6028f37`), was rebased onto the
-  candidate integration base above in an isolated worktree; all 19 candidate
-  commits replayed without conflicts. The code/test commit is
-  `e0bc0aabc16217dbb1bef9df655d83e04da59d26` (tree
-  `8f419516495fb55333aa71c9e3b50f5b5e75342c`); the local candidate HEAD before
-  this revision-10 follow-up is `0178762005244dc16ff99bde2ee0c3aeeed8b753`
-  (tree `b99e3a4249be07fd03e9dbd52419b58e99f64553`), a design-record-only
-  descendant of that code/test commit. Revision-10 test/design edits are
-  worktree-only and uncommitted; no commit or tree hash captures them yet.
+  (tree `b717729c7e1b0cc33d808f271f3211e8d6028f37`), was rebased onto
+  `bc90a61230f02032b06351d0cfb317ae13a08258` (tree
+  `4867dffe812b9c43bd4f1672c2d337da975d734d`) in revision 9. That
+  historical rebase replayed 19 commits without conflicts. The earlier
+  code/test snapshot is `e0bc0aabc16217dbb1bef9df655d83e04da59d26` (tree
+  `8f419516495fb55333aa71c9e3b50f5b5e75342c`). The current post-rebase
+  implementation/test snapshot is `e400dfef43c089a447af2aeeff646f882be509dd`
+  (tree `5c368e3efd17b153080b00dd1293fc6041aed834`); revision 11 records its
+  validation and the proposed interpretation of Fengtt's compatibility note.
+  A documentation-only approval-record refresh follows this snapshot.
 - The initial rebase had two shared paths with main since the historical
   base, `pkg/sql/plan/base_binder.go` and `pkg/sql/plan/utils.go`; both applied
   cleanly. The `4c31142` to `a3ede72` delta added 18 paths and the subsequent
@@ -46,7 +46,9 @@
   `2243a0b636e18ebae82400246893e796dd4d6a6c` (`fix(window): spill internal sorting when sort_spill_mem is
   reached (#28877)`), and `bc90a61230f02032b06351d0cfb317ae13a08258`
   (`test: contain shared CN state failures and attribute race UT stalls
-  (#29043)`).
+  (#29043)`), followed by the candidate's current integration base
+  `89d28d5f3858f9d0164701c02e98b9eff2ce210e` (`Reduce idle startup
+  allocations in embedded race UT (#29067)`).
 - Historical code/test baseline: `d56711fa5b429e5e6e52f64f603d2e853478edca`
   on base `4ff27bb9b35c43c1b0961bb9a01bf8fc0b6a2171`; its 14-commit rebase,
   validation, and gofmt-only correction remain historical evidence below.
@@ -829,8 +831,9 @@ markers were at 13–15. The current run is valid and its modest no-match timing
 delta is reported above. This is a narrow source-discovery diagnostic; it
 does not establish the PR-wide merged changed-line coverage gate.
 
-The published PR head remains `d27667a4936e813fb612de6cd245be03a2d6f101`, so
-no GitHub CI has run on this local candidate. On that old head, CI run
+At the time of the revision-9 record, the published PR head was
+`d27667a4936e813fb612de6cd245be03a2d6f101`, so no GitHub CI had run on that
+local candidate. On that old head, CI run
 `35197284882` passed SCA, shared build, UT coverage producer, and selected
 Compose BVT jobs, but Ubuntu UT failed after 2h03m47s with failures/timeouts in
 `pkg/tests/issues`, `pkg/tests/dml`, and `pkg/tests/sqlintegration`; the
@@ -840,19 +843,58 @@ reproduced on a clean base and are not attributed to this local delta.
 Distributed BVT and the PR-wide changed-line coverage gate are not claimed.
 Maintainer design approval remains pending.
 
+## Current post-rebase feedback-specific verification (revision 11)
+
+The fresh-session COM_STMT counterexample now reads the actual server-default
+`@@sql_mode` on a new connection. It was
+`ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,ENABLE_BOOL_SUMAVG`
+and did not contain `MATRIXONE_NATIVE`. In that session, prepared
+`ABS(?)` with the string `1.5tail` returned `1.5`; `SHOW WARNINGS` returned
+warning 1292 (`Truncated incorrect DOUBLE value`). This confirms the current
+candidate's proposed default-session mapping, not Feng's approval of that
+mapping. The same public COM_STMT test switches the session to
+`STRICT_TRANS_TABLES,MATRIXONE_NATIVE` and asserts the value conversion fails.
+
+To close the previously untested argument-position case, native-mode
+`MOD(2, '1.5tail')` now has both a BVT oracle and a local SQL execution
+assertion expecting `invalid input: "1.5tail" is invalid numeric string`.
+The BVT fixture change was not run against a local distributed service; no
+shared mutable service was used. No local distributed-BVT result is claimed;
+use CI on the published head as the authoritative validation for that fixture.
+
+On base `89d28d5f3858f9d0164701c02e98b9eff2ce210e`, these commands passed with
+Go 1.26.4 and the repository CGo wrapper:
+
+```text
+PATH=/Users/ljy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.darwin-arm64/bin:$PATH GOWORK=off ./.agents/skills/mo-dev/scripts/mo-cgo-test -count=1 -timeout=600s ./pkg/sql/plan
+PATH=/Users/ljy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.darwin-arm64/bin:$PATH GOWORK=off ./.agents/skills/mo-dev/scripts/mo-cgo-test -count=1 -timeout=600s ./pkg/sql/plan/function
+PATH=/Users/ljy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.darwin-arm64/bin:$PATH GOWORK=off ./.agents/skills/mo-dev/scripts/mo-cgo-test -race -count=1 -timeout=600s ./pkg/sql/plan -run '^(TestPreparedStringMathRoleDiscoveryAcrossExpressionContainers|TestPreparedNumericRebindingStopsAtNonNumericFunctionArguments)$'
+PATH=/Users/ljy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.darwin-arm64/bin:$PATH GOWORK=off ./.agents/skills/mo-dev/scripts/mo-cgo-test -v -count=1 -timeout=600s ./pkg/tests/issues -run '^TestIssue27294PreparedNumericOverloads$'
+PATH=/Users/ljy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.darwin-arm64/bin:$PATH GOWORK=off ./.agents/skills/mo-dev/scripts/mo-cgo-test -count=1 -timeout=600s ./pkg/frontend -run '^TestSetSessionSQLModeMatrixOneNativeLiteralAndModeFlip$'
+git diff --check origin/main...HEAD
+```
+
+The package results were: `pkg/sql/plan` passed in 6.621s,
+`pkg/sql/plan/function` in 17.536s, the focused race tests in 3.095s,
+`TestIssue27294PreparedNumericOverloads` in 12.646s, and the frontend mode
+test in 1.999s. Local distributed BVT, current GitHub CI, and the PR-wide
+changed-line coverage gate are not claimed. The previous CI run
+`35197284882` is historical evidence on the old published head, not this
+post-rebase candidate.
+
 ## 7. Approval record
 
 ```text
 Design path: docs/design/pr28523-string-math-coercion.md
-Design revision: 10
-Candidate source inputs: published PR head d27667a4936e813fb612de6cd245be03a2d6f101 (tree d02aa9a8b2c219b7767b9793c700287ecfc24c0b); isolated candidate integration base bc90a61230f02032b06351d0cfb317ae13a08258 (tree 4867dffe812b9c43bd4f1672c2d337da975d734d); code/test commit e0bc0aabc16217dbb1bef9df655d83e04da59d26 (tree 8f419516495fb55333aa71c9e3b50f5b5e75342c); pre-follow-up candidate HEAD 0178762005244dc16ff99bde2ee0c3aeeed8b753 (tree b99e3a4249be07fd03e9dbd52419b58e99f64553). Revision-10 test/design edits are uncommitted in the worktree. Latest local origin/main ref 89d28d5f3858f9d0164701c02e98b9eff2ce210e (tree 856eb9f70be0f3479865d3f2b2a1c24d75d913f9) is not integrated.
-Integration base: bc90a61230f02032b06351d0cfb317ae13a08258 (tree 4867dffe812b9c43bd4f1672c2d337da975d734d)
+Design revision: 11
+Candidate source inputs: published PR head d27667a4936e813fb612de6cd245be03a2d6f101 (tree d02aa9a8b2c219b7767b9793c700287ecfc24c0b); latest main base 89d28d5f3858f9d0164701c02e98b9eff2ce210e (tree 856eb9f70be0f3479865d3f2b2a1c24d75d913f9); implementation/test snapshot e400dfef43c089a447af2aeeff646f882be509dd (tree 5c368e3efd17b153080b00dd1293fc6041aed834); revision-11 design record adds a documentation-only commit after this tested snapshot.
+Integration base: 89d28d5f3858f9d0164701c02e98b9eff2ce210e (tree 856eb9f70be0f3479865d3f2b2a1c24d75d913f9)
 Scope/trigger: PR reviews 5199052257, 5214666396 and comment 5687377735; >500 production lines and planner/plan compatibility boundary
 Reviewer identity and role: historical GPT-6 Astra review of d56711fa5b429e5e6e52f64f603d2e853478edca against base 4ff27bb9b35c43c1b0961bb9a01bf8fc0b6a2171; any exact-head review decision is tracked separately from maintainer design approval
-Review timestamp: historical revision-7 review was recorded 2026-09-17; revision-10 follow-up is local and uncommitted, with maintainer design approval still pending
+Review timestamp: historical revision-7 review was recorded 2026-09-17; exact revision-11 independent implementation review and maintainer design approval remain separate and pending
 Decision: DRAFT / AWAITING MAINTAINER APPROVAL
-Validation evidence: local post-rebase full CGo tests for plan and plan/function, focused owner-boundary race tests, TestIssue27294PreparedNumericOverloads, CGo-aware go vet, Go 1.26.4 formatting, and the corrected benchmark passed; none is current PR CI, distributed BVT, or a PR-wide merged changed-line coverage pass
-Decisions proposed for maintainer acceptance: retain strict INT64 precision controls (no general integer-prefix widening); prefer correctness over function-wide zonemap pruning; retain the bounded per-parameter source scan with its measured owner-boundary traversal cost; approve the revision-9 argument-owner boundaries and no-inherited-role fast path; confirm or revise the revision-10 proposal to map MySQL-compatible permissive conversion to absence of MATRIXONE_NATIVE and to retain permissive behavior in the default session
+Validation evidence: historical revision-9 CGo, vet, formatting, and benchmark results are recorded above; current-base revision-11 CGo tests, mode-flip race tests, COM_STMT/default-warning regression, frontend SQL-mode regression, and diff check passed as recorded above. No local distributed BVT, current PR CI, or PR-wide merged changed-line coverage pass is claimed.
+Decisions proposed for maintainer acceptance: retain strict INT64 precision controls (no general integer-prefix widening); prefer correctness over function-wide zonemap pruning; retain the bounded per-parameter source scan with its measured owner-boundary traversal cost; approve the revision-9 argument-owner boundaries and no-inherited-role fast path; confirm or revise the revision-11 proposal to map MySQL-compatible permissive conversion to absence of MATRIXONE_NATIVE and to retain permissive behavior in the default session
 Evidence links: [PR #28523](https://github.com/matrixorigin/matrixone/pull/28523); [historical-head CI run 35197284882](https://github.com/matrixorigin/matrixone/actions/runs/35197284882); the PR/evidence ledger is the record for commit replay, review, CI, and BVT; current local post-rebase evidence is recorded above
 Implementation deviations requiring follow-up: MOD native arithmetic widening regression fixed in 8fc4d5250; strict INT64 precision acceptance, zonemap-pruning decision, and scan-cost acceptance remain pending
 Approval link: pending maintainer review
