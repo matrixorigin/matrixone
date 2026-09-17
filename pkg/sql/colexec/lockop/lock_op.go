@@ -865,6 +865,29 @@ func doLock(
 		return true, true, newSnapshotTS, nil
 	}
 
+	// A table lock covers the complete keyspace. Unlike a row lock, it has no
+	// input batch that hasNewVersionInRange can probe. Therefore, a table commit
+	// newer than the statement snapshot is itself sufficient proof that the
+	// locked range changed. Refresh and retry before a DDL validation or a
+	// table-locked DML operation can continue on its stale snapshot.
+	//
+	// Use a strict comparison: a commit at the snapshot is already visible and
+	// must not cause an endless retry at the same table timestamp.
+	if opts.lockTable &&
+		snapshotTS.Less(lockedTS) &&
+		txnOp.Txn().IsRCIsolation() {
+		start = time.Now()
+		newSnapshotTS, err := txnClient.WaitLogTailAppliedAt(ctx, lockedTS)
+		if err != nil {
+			return false, false, timestamp.Timestamp{}, err
+		}
+		analyzeLockWaitTime(analyzer, start)
+		if err := txnOp.UpdateSnapshot(ctx, newSnapshotTS); err != nil {
+			return false, false, timestamp.Timestamp{}, err
+		}
+		return true, false, newSnapshotTS, nil
+	}
+
 	// Normal path: NewLockAdd=true, no conflict - original check
 	if result.NewLockAdd &&
 		!result.HasConflict &&
