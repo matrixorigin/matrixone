@@ -16,22 +16,26 @@ package plan
 
 import (
 	"math/big"
+	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-// normalizeDecimalIntervalValue converts a constant decimal interval to the
+// normalizeDecimalIntervalValue converts a constant Decimal256 interval to the
 // microsecond representation used by date and window functions. Decimal256
 // literals are represented as string-to-decimal casts in plan expressions, so
 // this helper owns both direct decimal literals and that cast representation.
+// Decimal64 and Decimal128 intentionally stay on their historical float64 path
+// in the callers: changing their rounding here would change old persisted-plan
+// results without a protocol fence.
 // The returned negative flag describes the exact value before rounding; window
 // frame validation uses it to reject a negative sub-microsecond bound.
 func normalizeDecimalIntervalValue(
 	expr *Expr, intervalType types.IntervalType,
 ) (value int64, negative, handled bool, err error) {
-	if expr == nil || !types.T(expr.Typ.Id).IsDecimal() {
+	if expr == nil || types.T(expr.Typ.Id) != types.T_decimal256 {
 		return 0, false, false, nil
 	}
 	multiplier, ok := intervalMicrosecondMultiplier(intervalType)
@@ -85,38 +89,40 @@ func intervalMicrosecondMultiplier(intervalType types.IntervalType) (int64, bool
 	}
 }
 
-// decimalIntervalText returns the exact value after an optional constant
-// decimal cast. Parsing through the target type is important for explicit
-// casts whose target scale differs from the source literal's scale.
+// decimalIntervalText returns the exact value after a constant decimal cast
+// chain. Parsing through every target type is important for explicit casts
+// whose target scale differs from the source literal's scale. Numeric source
+// literals use the same textual representation as the decimal cast executor.
 func decimalIntervalText(expr *Expr) (string, bool, error) {
-	source := expr
-	casted := false
-	if source.GetLit() == nil {
-		fn := source.GetF()
-		if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 {
+	if expr == nil {
+		return "", false, nil
+	}
+	if lit := expr.GetLit(); lit != nil {
+		if lit.Isnull {
 			return "", false, nil
 		}
-		source = fn.Args[0]
-		casted = true
-	}
-	lit := source.GetLit()
-	if lit == nil || lit.Isnull {
-		return "", false, nil
-	}
-	text, ok := decimalIntervalSourceText(source)
-	if !ok {
-		return "", false, nil
-	}
-	if !casted {
-		return text, true, nil
+		text, ok := decimalIntervalSourceText(expr)
+		return text, ok, nil
 	}
 
-	scale := expr.Typ.Scale
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 {
+		return "", false, nil
+	}
+	text, ok, err := decimalIntervalText(fn.Args[0])
+	if err != nil || !ok {
+		return "", false, err
+	}
+	return decimalIntervalCastText(text, expr.Typ)
+}
+
+func decimalIntervalCastText(text string, typ planpb.Type) (string, bool, error) {
+	scale := typ.Scale
 	if scale < 0 {
 		scale = 0
 	}
-	width := expr.Typ.Width
-	switch types.T(expr.Typ.Id) {
+	width := typ.Width
+	switch types.T(typ.Id) {
 	case types.T_decimal64:
 		if width <= 0 {
 			width = types.T_decimal64.ToType().Width
@@ -151,7 +157,7 @@ func decimalIntervalText(expr *Expr) (string, bool, error) {
 
 func decimalIntervalSourceText(expr *Expr) (string, bool) {
 	lit := expr.GetLit()
-	if lit == nil {
+	if lit == nil || lit.Isnull {
 		return "", false
 	}
 	scale := expr.Typ.Scale
@@ -169,6 +175,31 @@ func decimalIntervalSourceText(expr *Expr) (string, bool) {
 		return decimal.Format(scale), true
 	case *planpb.Literal_Sval:
 		return value.Sval, true
+	case *planpb.Literal_Dval:
+		return strconv.FormatFloat(value.Dval, 'g', -1, 64), true
+	case *planpb.Literal_Fval:
+		return strconv.FormatFloat(float64(value.Fval), 'g', -1, 64), true
+	case *planpb.Literal_I8Val:
+		return strconv.FormatInt(int64(value.I8Val), 10), true
+	case *planpb.Literal_I16Val:
+		return strconv.FormatInt(int64(value.I16Val), 10), true
+	case *planpb.Literal_I32Val:
+		return strconv.FormatInt(int64(value.I32Val), 10), true
+	case *planpb.Literal_I64Val:
+		return strconv.FormatInt(value.I64Val, 10), true
+	case *planpb.Literal_U8Val:
+		return strconv.FormatUint(uint64(value.U8Val), 10), true
+	case *planpb.Literal_U16Val:
+		return strconv.FormatUint(uint64(value.U16Val), 10), true
+	case *planpb.Literal_U32Val:
+		return strconv.FormatUint(uint64(value.U32Val), 10), true
+	case *planpb.Literal_U64Val:
+		return strconv.FormatUint(value.U64Val, 10), true
+	case *planpb.Literal_Bval:
+		if value.Bval {
+			return "1", true
+		}
+		return "0", true
 	default:
 		return "", false
 	}
@@ -176,7 +207,11 @@ func decimalIntervalSourceText(expr *Expr) (string, bool) {
 
 func makeDecimalIntervalValueExpr(source *Expr, value int64) *Expr {
 	expr := makePlan2Int64ConstExprWithType(value)
-	if decimalIntervalRequiresProtocol(source) {
+	// Decimal256 interval normalization is a new exact plan contract even
+	// when its source is a float or a cast chain without literal provenance.
+	// Fence the rewritten value itself so an older CN cannot replay the old
+	// integer-second fallback.
+	if types.T(source.Typ.Id) == types.T_decimal256 || decimalIntervalRequiresProtocol(source) {
 		expr.GetLit().DecimalLiteralRequiresV82 = true
 	}
 	return expr
@@ -185,6 +220,9 @@ func makeDecimalIntervalValueExpr(source *Expr, value int64) *Expr {
 func decimalIntervalRequiresProtocol(expr *Expr) bool {
 	if expr == nil {
 		return false
+	}
+	if types.T(expr.Typ.Id) == types.T_decimal256 {
+		return true
 	}
 	if lit := expr.GetLit(); lit != nil {
 		return lit.DecimalLiteralRequiresV82
