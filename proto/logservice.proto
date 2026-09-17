@@ -138,6 +138,15 @@ message Resource {
   uint64 MemAvailable = 4;
 }
 
+// CatalogMetadataCapabilities advertises independent catalog metadata protocol
+// capabilities. Existing scalar capabilities remain canonical during rollout.
+message CatalogMetadataCapabilities {
+  uint64 PersistedExpressionProtocol = 1;
+  uint64 ViewDependencyProtocol = 2;
+  uint64 RecoveryProtocol = 3;
+  uint64 HAKeeperBarrierProtocol = 4;
+}
+
 // CNStoreHeartbeat is the periodic message sent tp the HAKeeper by CN stores.
 message CNStoreHeartbeat {
   string          UUID               = 1;
@@ -175,6 +184,7 @@ message CNStoreHeartbeat {
   // older binaries and is therefore never admitted after the expression
   // compatibility floor is raised.
   uint64          PersistedExpressionProtocolVersion = 25;
+  CatalogMetadataCapabilities CatalogMetadataCapabilities = 26;
 }
 
 // CNAllocateID is the periodic message sent tp the HAKeeper by CN stores.
@@ -221,6 +231,7 @@ message LogStoreHeartbeat {
   // understands the independent persisted-expression activation entry and
   // versioned snapshot envelope.
   bool ViewMetadataAdmissionProtocolV3Supported = 13;
+  CatalogMetadataCapabilities CatalogMetadataCapabilities = 14;
 };
 
 // TNShardInfo contains information of a launched TN shard.
@@ -654,6 +665,18 @@ message CommandBatch {
   // ViewMetadataAdmission is the authoritative snapshot for the heartbeat
   // sender. Old services ignore this additive field.
   ViewMetadataAdmission ViewMetadataAdmission = 5;
+  CatalogMetadataBarrier CatalogMetadataBarrier = 6;
+}
+
+// CatalogMetadataBarrier is the sender-specific catalog metadata authority
+// snapshot. Its producer remains disabled until the barrier protocol activates.
+message CatalogMetadataBarrier {
+  CatalogMetadataBarrierPhase Phase = 1;
+  uint64 MembershipEpoch = 2;
+  uint64 RequiredGeneration = 3;
+  uint64 CompletedGeneration = 4;
+  bool Admitted = 5;
+  bool MetadataReadsEnabled = 6;
 }
 
 // ViewMetadataAdmission is the durable cluster admission snapshot. Generation
@@ -724,6 +747,7 @@ message CNStoreInfo {
   bool ViewMetadataAdmissionReady = 25;
   bool ViewMetadataIngressReady = 26;
   uint64 PersistedExpressionProtocolVersion = 27;
+  CatalogMetadataCapabilities CatalogMetadataCapabilities = 28;
 }
 
 // CNState contains all CN details known to the HAKeeper.
@@ -837,6 +861,7 @@ message LogStoreInfo {
   string StoreIncarnation = 11;
   reserved 12;
   bool ViewMetadataAdmissionProtocolV3Supported = 13;
+  CatalogMetadataCapabilities CatalogMetadataCapabilities = 14;
 }
 
 message LogState {
@@ -966,6 +991,35 @@ message HAKeeperRSMState {
   // have not completed yet. It is cleared only when the activation barrier
   // starts, so retries cannot mistake a rejected entry for a completed raise.
   bool PersistedExpressionProtocolActivationPending = 44;
+  CatalogMetadataBarrierState CatalogMetadataBarrier = 45;
+}
+
+// CatalogMetadataBarrierPhase is the durable catalog metadata lifecycle phase.
+// Unknown numeric values are invalid and must be rejected by snapshot codecs.
+enum CatalogMetadataBarrierPhase {
+  CATALOG_METADATA_BARRIER_DISABLED = 0;
+  CATALOG_METADATA_BARRIER_PREPARING = 1;
+  CATALOG_METADATA_BARRIER_SEALED = 2;
+  CATALOG_METADATA_BARRIER_CATALOG_REQUIRED = 3;
+  CATALOG_METADATA_BARRIER_RECOVERING = 4;
+  CATALOG_METADATA_BARRIER_ACTIVATED = 5;
+}
+
+message CatalogMetadataBarrierState {
+  CatalogMetadataBarrierPhase Phase = 1;
+  uint64 MembershipEpoch = 2;
+  uint64 RequiredGeneration = 3;
+  uint64 CompletedGeneration = 4;
+  uint64 RequiredViewDependencyProtocol = 5;
+  uint64 RequiredRecoveryProtocol = 6;
+}
+
+// HAKeeperSnapshotEnvelope is the MOH3 payload. RSMState is deliberately bytes
+// so format/features can be validated before publishing decoded state.
+message HAKeeperSnapshotEnvelope {
+  uint32 FormatVersion = 1;
+  bytes RSMState = 2;
+  uint64 RequiredFeatures = 3;
 }
 
 // ReplicaInfo contains details of a replica

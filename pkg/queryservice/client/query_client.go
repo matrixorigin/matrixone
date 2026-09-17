@@ -45,10 +45,10 @@ var methodVersions = map[pb.CmdMethod]int64{
 	pb.CmdMethod_SetProtocolVersion:    defines.MORPCMinVersion,
 	// Sys-admin vector-index cache knobs: gated so a mixed-version cluster rejects the call
 	// cluster-wide until every CN is upgraded, instead of dispatching to a CN with no handler.
-	pb.CmdMethod_SetVectorIndexFreshnessInterval: defines.MORPCVersion82,
-	pb.CmdMethod_GetVectorIndexCacheInfo:         defines.MORPCVersion82,
-	pb.CmdMethod_EvictVectorIndexCache:           defines.MORPCVersion82,
-	pb.CmdMethod_GetVectorIndexCacheKeys:         defines.MORPCVersion82,
+	pb.CmdMethod_SetVectorIndexFreshnessInterval: defines.MORPCVersion84,
+	pb.CmdMethod_GetVectorIndexCacheInfo:         defines.MORPCVersion84,
+	pb.CmdMethod_EvictVectorIndexCache:           defines.MORPCVersion84,
+	pb.CmdMethod_GetVectorIndexCacheKeys:         defines.MORPCVersion84,
 	pb.CmdMethod_CoreDumpConfig:                  defines.MORPCMinVersion,
 	pb.CmdMethod_MigrateConnFrom:                 defines.MORPCVersion1,
 	pb.CmdMethod_MigrateConnTo:                   defines.MORPCVersion1,

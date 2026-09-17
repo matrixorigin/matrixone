@@ -525,7 +525,12 @@ func (mergeGroup *MergeGroup) prepareBuildBatch(
 		if err != nil {
 			return err
 		}
-		ctr.configureOrderedAggSpill(proc, mergeGroup.OpAnalyzer, ctr.aggList)
+		// Grouped destinations can still enter generic hash spill, whose wire
+		// grammar does not include local ordered runs. Configure those only
+		// at the terminal reload pass, or here for an incoming H0 partial.
+		if incomingType == H0 {
+			ctr.configureOrderedAggSpill(proc, mergeGroup.OpAnalyzer, ctr.aggList)
+		}
 	}
 	if int(nAggs) != len(ctr.spillAggList) {
 		return moerr.NewInternalError(

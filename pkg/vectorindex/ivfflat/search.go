@@ -1211,6 +1211,26 @@ func (s *IvfflatSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 	return nil
 }
 
+// EmptyGeneration reports a loaded generation with no real centroids: the centroids table for
+// this version holds only the single NULL-vector placeholder row (a freshly created index, or the
+// transient async-build window before the real centroids are committed). LoadCentroids skips the
+// NULL row and leaves Index.Centroids nil, so findCentroids routes every query to bucket 1. The
+// cache declines to retain such a generation, so the next query reloads and picks up the real
+// centroids once the build writes them under the same version -- instead of pinning a
+// bucket-1-only routing model until the housekeeping sweep. A generation with real centroids is
+// cached normally.
+//
+// The entries table deliberately does NOT enter this predicate. The centroids are the only part
+// of an IVF-FLAT index the cache holds resident (GetIndexSize reports them alone; entries are read
+// from the table per query), so a generation with Centroids nil retains nothing either way: not
+// caching it costs one re-read of the single placeholder row, while caching it pins bucket-1
+// routing on a CN that has no IsStale to recover. Counting bucket-1 entries as "populated" would
+// also re-open #29011 whenever entries land under the version before the build commits the real
+// centroids.
+func (s *IvfflatSearch[T]) EmptyGeneration() bool {
+	return s.Index != nil && s.Index.Centroids == nil
+}
+
 // GetIndexSize reports the centroids, the only part of an IVFFLAT index the cache holds
 // resident: the entries stay in the index table and are read per query. Centroids is itself a
 // VectorIndexSearchIf (a brute-force index over the centroid vectors), so both arenas come
@@ -1227,6 +1247,9 @@ func (s *IvfflatSearch[T]) DeviceResidency() map[int]int64 {
 	}
 	return nil
 }
+
+// BuildTS is the fulltext2 async-freshness hook; ivfflat freshness is handled elsewhere.
+func (s *IvfflatSearch[T]) BuildTS() int64 { return 0 }
 
 func (s *IvfflatSearch[T]) GetIndexSize() (hostBytes, deviceBytes int64) {
 	if s.Index == nil {
