@@ -967,10 +967,10 @@ func (a *AwsSDKv2) deleteMultiObj(ctx context.Context, objs []types.ObjectIdenti
 }
 
 // Newer AWS SDK v2 releases use CRC32 for the required DeleteObjects checksum,
-// while older SDKs sent Content-MD5. Some S3-compatible endpoints still reject
-// the newer request with one of these errors. A failed batch has not deleted
-// any objects, so falling back to individual DeleteObject calls preserves
-// correctness and keeps the endpoint usable; disable batching for later calls.
+// while older SDKs sent Content-MD5. Some S3-compatible endpoints reject the
+// newer request with one of these request-level errors. Treat that response as
+// endpoint incompatibility, fall back to individual DeleteObject calls, and
+// disable batching for later calls.
 func isS3APIMultiDeleteChecksumError(err error) bool {
 	for _, code := range []string{"MissingContentMD5", "InvalidDigest", "BadDigest", "InvalidRequest"} {
 		if isS3APIErrorCode(err, code) {
