@@ -1223,7 +1223,8 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 					// graph degrees) into the algo params and rejects any
 					// other option it does not support, including a QUANTIZATION
 					// change it cannot honor (ivfflat rejects any change; cagra/ivfpq
-					// reject an upcast of the base column type). The
+					// reject an upcast of the base column type) and, for the vector
+					// indexes, MERGE. The
 					// REINDEX rule shares index_option_list with CREATE INDEX, so
 					// the specified options are read straight off the parse tree
 					// (c.stmt) here — no plan proto field is needed to carry them.

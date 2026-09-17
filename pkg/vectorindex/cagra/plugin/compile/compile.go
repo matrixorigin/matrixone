@@ -254,7 +254,7 @@ func registerIdxcronUpdate(
 }
 
 func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.ReindexParamUpdate) (map[string]string, error) {
-	if err := compileplugin.RejectMergeQuantizationChange(old, alter, "cagra"); err != nil {
+	if err := compileplugin.RejectMerge(alter, "cagra"); err != nil {
 		return nil, err
 	}
 	// Merge first, then validate the EFFECTIVE quantization via the per-algo

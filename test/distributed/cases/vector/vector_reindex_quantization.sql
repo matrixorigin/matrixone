@@ -15,7 +15,7 @@ alter table t alter reindex ix ivfflat quantization 'float16';
 alter table t alter reindex ix ivfflat quantization 'bf16';
 alter table t alter reindex ix ivfflat quantization 'int8';
 alter table t alter reindex ix ivfflat quantization 'uint8';
-alter table t alter reindex ix ivfflat merge quantization 'float16';
+alter table t alter reindex ix ivfflat merge;
 show create table t;
 select id from t order by l2_distance(v, '[7,7,7]') limit 3 by rank with option 'mode=post';
 

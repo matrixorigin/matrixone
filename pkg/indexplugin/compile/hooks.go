@@ -260,18 +260,14 @@ func ReindexQuantizationChange(old map[string]string, update ReindexParamUpdate)
 	return q, true
 }
 
-// RejectMergeQuantizationChange returns an error when update is a MERGE whose QUANTIZATION
-// differs from the stored one.
-func RejectMergeQuantizationChange(old map[string]string, update ReindexParamUpdate, algo string) error {
+// RejectMerge returns an error when update is a MERGE. algo names the index algorithm in the
+// message. For plugins whose HandleReindex has no MERGE (tail-compaction) path.
+func RejectMerge(update ReindexParamUpdate, algo string) error {
 	if !update.Merge {
 		return nil
 	}
-	if _, changed := ReindexQuantizationChange(old, update); !changed {
-		return nil
-	}
 	return moerr.NewNotSupportedNoCtxf(
-		"%s: changing QUANTIZATION requires a REBUILD (ALTER ... REINDEX without MERGE); "+
-			"a MERGE compacts the tail into the existing base and cannot re-quantize it", algo)
+		"ALTER ... REINDEX MERGE is not supported for a %s index; use ALTER ... REINDEX without MERGE", algo)
 }
 
 // MergeReindexParams is the shared body for a plugin's

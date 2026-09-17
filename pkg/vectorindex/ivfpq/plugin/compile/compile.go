@@ -299,7 +299,7 @@ func registerIdxcronUpdate(
 // IVF-PQ supports updating `lists` at REINDEX time — mirrors IVF-FLAT
 // since both algorithms key on the inverted-list count for their build.
 func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.ReindexParamUpdate) (map[string]string, error) {
-	if err := compileplugin.RejectMergeQuantizationChange(old, alter, "ivfpq"); err != nil {
+	if err := compileplugin.RejectMerge(alter, "ivfpq"); err != nil {
 		return nil, err
 	}
 	// Merge first, then validate the EFFECTIVE quantization via the per-algo

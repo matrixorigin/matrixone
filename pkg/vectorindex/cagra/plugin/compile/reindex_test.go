@@ -24,37 +24,6 @@ import (
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 )
 
-// MERGE with a different QUANTIZATION is rejected; MERGE with the stored or no QUANTIZATION,
-// and a non-MERGE change, are accepted.
-func TestValidateReindexParams_MergeCannotChangeQuantization(t *testing.T) {
-	old := map[string]string{
-		catalog.IndexAlgoParamOpType: "vector_l2_ops",
-		catalog.Quantization:         "float16",
-	}
-
-	_, err := Hooks{}.ValidateReindexParams(old, compileplugin.ReindexParamUpdate{
-		Params: map[string]string{catalog.Quantization: "int8"},
-		Merge:  true,
-	})
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "changing QUANTIZATION requires a REBUILD")
-
-	_, err = Hooks{}.ValidateReindexParams(old, compileplugin.ReindexParamUpdate{
-		Params: map[string]string{catalog.Quantization: "FLOAT16"},
-		Merge:  true,
-	})
-	require.NoError(t, err)
-
-	_, err = Hooks{}.ValidateReindexParams(old, compileplugin.ReindexParamUpdate{Merge: true})
-	require.NoError(t, err)
-
-	got, err := Hooks{}.ValidateReindexParams(old, compileplugin.ReindexParamUpdate{
-		Params: map[string]string{catalog.Quantization: "int8"},
-	})
-	require.NoError(t, err)
-	require.Equal(t, "int8", got[catalog.Quantization])
-}
-
 // A REINDEX that changes QUANTIZATION to a wider type than the base column is rejected; a change
 // to an equal or narrower type, an unchanged value, and an unknown base type are accepted.
 func TestValidateReindexParams_QuantizationUpcast(t *testing.T) {

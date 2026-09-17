@@ -30,6 +30,8 @@ Table    Create Table
 ivf_t    CREATE TABLE `ivf_t` (\n  `a` int NOT NULL,\n  `b` vecf32(4) DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `idx` USING ivfflat (`b`) lists = 4  op_type 'vector_l2_ops'  kmeans_train_percent = 80  kmeans_max_iteration = 50 \n)
 alter table ivf_t alter reindex idx ivfflat quantization 'garbage';
 not supported: ivfflat quantization "garbage" (supported: float32, float16, bf16, int8, uint8)
+alter table ivf_t alter reindex idx ivfflat merge;
+not supported: ALTER ... REINDEX MERGE is not supported for a ivfflat index; use ALTER ... REINDEX without MERGE
 create table hnsw_t(a bigint primary key, b vecf32(4));
 insert into hnsw_t values(1,"[1,2,3,4]"),(2,"[5,6,7,8]"),(3,"[9,10,11,12]"),(4,"[2,1,4,3]");
 create index hidx using hnsw on hnsw_t(b) op_type "vector_bogus_ops";
@@ -46,4 +48,6 @@ alter table hnsw_t alter reindex hidx hnsw lists=4;
 not supported: ALTER REINDEX option "lists" on a hnsw index
 alter table hnsw_t alter reindex hidx hnsw kmeans_train_percent=5;
 not supported: ALTER REINDEX option "kmeans_train_percent" on a hnsw index
+alter table hnsw_t alter reindex hidx hnsw merge m=32;
+not supported: ALTER ... REINDEX MERGE is not supported for a hnsw index; use ALTER ... REINDEX without MERGE
 drop database test_reindex_options;

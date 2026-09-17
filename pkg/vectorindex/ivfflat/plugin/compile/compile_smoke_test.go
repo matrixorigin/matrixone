@@ -123,8 +123,6 @@ func TestIvfflatValidateReindexParams_Quantization(t *testing.T) {
 			Params: map[string]string{catalog.Quantization: "float16"}}},
 		{"unquantized to int8", nil, compileplugin.ReindexParamUpdate{
 			Params: map[string]string{catalog.Quantization: "int8"}}},
-		{"merge", old, compileplugin.ReindexParamUpdate{
-			Params: map[string]string{catalog.Quantization: "uint8"}, Merge: true}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := Hooks{}.ValidateReindexParams(tc.old, tc.update)

@@ -97,6 +97,9 @@ func (Hooks) AlterCopyInitSQL(_ compileplugin.CompileContext, _ map[string]*plan
 // inline — that persistence stays at the SQL-layer call site, so this
 // hook only performs the map merge.
 func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.ReindexParamUpdate) (map[string]string, error) {
+	if err := compileplugin.RejectMerge(alter, "ivfflat"); err != nil {
+		return nil, err
+	}
 	// Merge first, then validate the EFFECTIVE quantization via the per-algo
 	// catalog hook (the single home shared with CREATE; the value the reindex
 	// set, or the index's stored value when the statement omitted it — e.g. the

@@ -15,8 +15,8 @@ alter table t alter reindex ix ivfflat quantization 'int8';
 not supported: ivfflat: ALTER ... REINDEX cannot change QUANTIZATION from 'none' to 'int8'; drop and re-create the index
 alter table t alter reindex ix ivfflat quantization 'uint8';
 not supported: ivfflat: ALTER ... REINDEX cannot change QUANTIZATION from 'none' to 'uint8'; drop and re-create the index
-alter table t alter reindex ix ivfflat merge quantization 'float16';
-not supported: ivfflat: ALTER ... REINDEX cannot change QUANTIZATION from 'none' to 'float16'; drop and re-create the index
+alter table t alter reindex ix ivfflat merge;
+not supported: ALTER ... REINDEX MERGE is not supported for a ivfflat index; use ALTER ... REINDEX without MERGE
 show create table t;
 ➤ Table[12,1,0]  ¦  Create Table[12,159,0]  𝄀
 t  ¦  CREATE TABLE `t` (

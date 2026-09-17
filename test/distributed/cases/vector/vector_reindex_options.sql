@@ -38,6 +38,8 @@ alter table ivf_t alter reindex idx ivfflat graph_degree=64;
 alter table ivf_t alter reindex idx ivfflat quantization 'Float16';
 show create table ivf_t;
 alter table ivf_t alter reindex idx ivfflat quantization 'garbage';
+-- Vector indexes have no MERGE.
+alter table ivf_t alter reindex idx ivfflat merge;
 
 -- ----------------------------------------------------------------------------
 -- HNSW: honors m + ef_construction + ef_search + max_index_capacity
@@ -54,5 +56,6 @@ show create table hnsw_t;
 -- HNSW rejects options it does not honor (IVF params)
 alter table hnsw_t alter reindex hidx hnsw lists=4;
 alter table hnsw_t alter reindex hidx hnsw kmeans_train_percent=5;
+alter table hnsw_t alter reindex hidx hnsw merge m=32;
 
 drop database test_reindex_options;
