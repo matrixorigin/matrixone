@@ -817,6 +817,38 @@ func TestDecimalComparisonPreservesNullableColumnSemantics(t *testing.T) {
 			require.NotNil(t, result.GetF(), "nullable comparison must not fold to a constant")
 			require.False(t, result.Typ.NotNullable,
 				"comparison result must preserve SQL NULL semantics")
+			requires, err := plan.RequiresMORPCVersion84DecimalLiteralSemantics(result)
+			require.NoError(t, err)
+			require.True(t, requires,
+				"retained nullable comparison must preserve the v84 fence")
+		})
+	}
+}
+
+func TestDecimalComparisonDoesNotNarrowExplicitCastWithDifferentSourceScale(t *testing.T) {
+	ctx := context.Background()
+	columnType := types.New(types.T_decimal128, 18, 1)
+	column := &plan.Expr{
+		Typ:  makePlan2Type(&columnType),
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "d"}},
+	}
+	column.Typ.NotNullable = true
+
+	for _, operator := range []string{"=", "<>"} {
+		t.Run(operator, func(t *testing.T) {
+			source := makePlan2StringConstExprWithType("1.010000000000000000000")
+			casted, err := appendCastBeforeExpr(ctx, source, plan.Type{
+				Id:          int32(types.T_decimal128),
+				Width:       21,
+				Scale:       20,
+				NotNullable: true,
+			})
+			require.NoError(t, err)
+			result, err := BindFuncExprImplByPlanExpr(ctx, operator,
+				[]*plan.Expr{DeepCopyExpr(column), casted})
+			require.NoError(t, err)
+			require.NotNil(t, result.GetF(),
+				"a cast whose source scale differs must not be narrowed by tail analysis")
 		})
 	}
 }

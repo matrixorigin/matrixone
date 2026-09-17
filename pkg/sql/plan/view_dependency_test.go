@@ -570,6 +570,24 @@ func TestPersistedDecimalComparisonViewProtocolLifecycle(t *testing.T) {
 		SchemaName: "tpch",
 		ObjName:    "decimal_view_source",
 	}
+	ctx.tables["decimal_nullable_compare_source"] = &planpb.TableDef{
+		Name:      "decimal_nullable_compare_source",
+		DbName:    "tpch",
+		TableType: catalog.SystemOrdinaryRel,
+		Cols: []*planpb.ColDef{{
+			Name:       "d",
+			OriginName: "d",
+			Typ: planpb.Type{
+				Id:    int32(types.T_decimal64),
+				Width: 10,
+				Scale: 0,
+			},
+		}},
+	}
+	ctx.objects["decimal_nullable_compare_source"] = &planpb.ObjectRef{
+		SchemaName: "tpch",
+		ObjName:    "decimal_nullable_compare_source",
+	}
 
 	proc := ctx.GetProcess()
 	rt := moruntime.ServiceRuntime(proc.GetService())
@@ -596,13 +614,14 @@ func TestPersistedDecimalComparisonViewProtocolLifecycle(t *testing.T) {
 	})
 
 	const createSQL = "create view v_decimal_compare as select d = 12345678901234567890123456789012345678.1 as matches from decimal_view_source"
-	build := func() (*Plan, error) {
-		root := &rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}
-		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createSQL, 1)
+	buildSQL := func(sql string) (*Plan, error) {
+		root := &rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: sql}
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 		require.NoError(t, err)
 		defer stmt.Free()
 		return BuildPlan(root, stmt, false)
 	}
+	build := func() (*Plan, error) { return buildSQL(createSQL) }
 
 	// The comparison is folded to a boolean by the binder, so the protocol
 	// requirement must survive that rewrite and still fence view publication.
@@ -621,6 +640,35 @@ func TestPersistedDecimalComparisonViewProtocolLifecycle(t *testing.T) {
 		[]byte(created.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()), &data))
 	require.NotNil(t, data.RequiredProtocolVersion)
 	require.Equal(t, int64(defines.MORPCVersion84), *data.RequiredProtocolVersion)
+
+	// Nullable comparisons are retained to preserve SQL NULL semantics, but
+	// the old binder would have folded them to false/true. The retained source
+	// literal therefore still needs the v84 persisted-expression fence.
+	const nullableSQL = "create view v_decimal_nullable_compare as select d = 1.1 as eq, d <> 1.1 as ne from decimal_nullable_compare_source"
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion83))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion83))
+	_, err = buildSQL(nullableSQL)
+	require.ErrorContains(t, err, "protocol version 84")
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion84))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion84))
+	nullablePlan, err := buildSQL(nullableSQL)
+	require.NoError(t, err)
+	nullablePersisted := nullablePlan.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()
+	var nullableData ViewData
+	require.NoError(t, json.Unmarshal([]byte(nullablePersisted), &nullableData))
+	require.NotNil(t, nullableData.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion84), *nullableData.RequiredProtocolVersion)
+	var nullableFields map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal([]byte(nullablePersisted), &nullableFields))
+	delete(nullableFields, "required_protocol_version")
+	nullableMarkerless, err := json.Marshal(nullableFields)
+	require.NoError(t, err)
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion83))
+	_, err = RegenerateViewDefinition(ctx, string(nullableMarkerless))
+	require.ErrorContains(t, err, "protocol version 84")
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion84))
+	_, err = RegenerateViewDefinition(ctx, string(nullableMarkerless))
+	require.NoError(t, err)
 }
 
 func TestPersistedDecimalZeroTailComparisonViewProtocolLifecycle(t *testing.T) {
