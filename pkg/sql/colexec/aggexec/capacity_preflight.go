@@ -398,7 +398,9 @@ func preflightArgumentRowsEqual(
 	vectors []*vector.Vector,
 	left int,
 	right int,
+	legacyPolicy ...bool,
 ) (bool, error) {
+	legacy := len(legacyPolicy) > 0 && legacyPolicy[0]
 	for _, vec := range vectors {
 		leftRow, err := preflightPhysicalRow(vec, left)
 		if err != nil {
@@ -413,7 +415,7 @@ func preflightArgumentRowsEqual(
 		if leftNull || rightNull {
 			return leftNull && rightNull, nil
 		}
-		if !distinctArgumentRowsEqual(vec, leftRow, rightRow) {
+		if !distinctArgumentRowsEqual(vec, leftRow, rightRow, legacy) {
 			return false, nil
 		}
 	}
@@ -574,6 +576,16 @@ func (batch *distinctArgumentLinearBatch) seen(
 	offset int,
 	row int,
 ) (bool, error) {
+	return batch.seenWithPolicy(groups, vectors, offset, row, false)
+}
+
+func (batch *distinctArgumentLinearBatch) seenWithPolicy(
+	groups []uint64,
+	vectors []*vector.Vector,
+	offset int,
+	row int,
+	legacy bool,
+) (bool, error) {
 	// Cardinality one is the common duplicate-heavy case. Keep its control
 	// flow as short as the former scan over earlier rows: one group check and
 	// one exact comparison, without entering the representative loop.
@@ -581,7 +593,7 @@ func (batch *distinctArgumentLinearBatch) seen(
 		earlier := int(batch.rows[0])
 		if groups[earlier] == groups[row] {
 			equal, err := preflightArgumentRowsEqual(
-				vectors, offset+earlier, offset+row)
+				vectors, offset+earlier, offset+row, legacy)
 			if err != nil {
 				return false, err
 			}
@@ -596,7 +608,7 @@ func (batch *distinctArgumentLinearBatch) seen(
 			continue
 		}
 		equal, err := preflightArgumentRowsEqual(
-			vectors, offset+earlier, offset+row)
+			vectors, offset+earlier, offset+row, legacy)
 		if err != nil {
 			return false, err
 		}
@@ -630,6 +642,7 @@ func distinctArgumentRowHash(
 	vectors []*vector.Vector,
 	logicalRow int,
 	scratch []byte,
+	legacy bool,
 ) (uint64, error) {
 	// Start from the target group because DISTINCT is scoped to one aggregate
 	// group. Hash combination preserves column boundaries for multi-argument
@@ -645,11 +658,15 @@ func distinctArgumentRowHash(
 		switch typ.Oid {
 		case types.T_float32:
 			values := vector.MustFixedColNoTypeCheck[float32](vec)
-			encoded := keycodec.NewFloat32Codec(typ.Scale).CanonicalBytes(values[row])
+			bits := distinctFloat32KeyBits(values[row], typ.Scale, legacy)
+			var encoded [4]byte
+			binary.LittleEndian.PutUint32(encoded[:], bits)
 			value = encoded[:]
 		case types.T_float64:
 			values := vector.MustFixedColNoTypeCheck[float64](vec)
-			encoded := keycodec.CanonicalFloat64Bytes(values[row])
+			bits := distinctFloat64KeyBits(values[row], legacy)
+			var encoded [8]byte
+			binary.LittleEndian.PutUint64(encoded[:], bits)
 			value = encoded[:]
 		case types.T_char:
 			value = keycodec.CanonicalCharValue(vec.GetRawBytesAt(row))
@@ -673,6 +690,18 @@ func (batch *distinctArgumentBatch) seenOrInsert(
 	row int,
 	scratchArgs ...[]byte,
 ) (bool, error) {
+	return batch.seenOrInsertWithPolicy(
+		groups, vectors, offset, row, false, scratchArgs...)
+}
+
+func (batch *distinctArgumentBatch) seenOrInsertWithPolicy(
+	groups []uint64,
+	vectors []*vector.Vector,
+	offset int,
+	row int,
+	legacy bool,
+	scratchArgs ...[]byte,
+) (bool, error) {
 	if batch == nil || row < 0 || row >= len(groups) || len(groups) > hashmap.UnitLimit {
 		return false, mpool.ErrAllocationAccountInvalid
 	}
@@ -681,7 +710,7 @@ func (batch *distinctArgumentBatch) seenOrInsert(
 		scratch = scratchArgs[0]
 	}
 	hash, err := distinctArgumentRowHash(
-		groups[row], vectors, offset+row, scratch)
+		groups[row], vectors, offset+row, scratch, legacy)
 	if err != nil {
 		return false, err
 	}
@@ -698,7 +727,7 @@ func (batch *distinctArgumentBatch) seenOrInsert(
 			continue
 		}
 		equal, err := preflightArgumentRowsEqual(
-			vectors, offset+earlier, offset+row)
+			vectors, offset+earlier, offset+row, legacy)
 		if err != nil {
 			return false, err
 		}
@@ -774,7 +803,8 @@ func (ag *aggState) preparePreflightArgumentKey(
 		}
 		raw := vectors[0].GetRawBytesAt(row)
 		if distinct {
-			if copied := copyCanonicalDistinctArgument(key[off:], vectors[0], row); copied != payload {
+			if copied := copyCanonicalDistinctArgument(
+				key[off:], vectors[0], row, ag.legacyDistinctFloatKeys); copied != payload {
 				return nil, mpool.ErrAllocationAccountInvariant
 			}
 		} else {
@@ -794,7 +824,8 @@ func (ag *aggState) preparePreflightArgumentKey(
 			binary.BigEndian.PutUint32(key[off:], uint32(valueSize))
 			off += 4
 			if distinct {
-				if copied := copyCanonicalDistinctArgument(key[off:], vec, row); copied != valueSize {
+				if copied := copyCanonicalDistinctArgument(
+					key[off:], vec, row, ag.legacyDistinctFloatKeys); copied != valueSize {
 					return nil, mpool.ErrAllocationAccountInvariant
 				}
 			} else {
@@ -1009,7 +1040,8 @@ func (ae *aggExec) addDistinctArgumentCapacity(
 	if state.argSkl.Contains(key) {
 		return nil
 	}
-	valueSize, err := distinctLegacyRepresentativeSize(vectors, logicalRow, key)
+	valueSize, err := distinctLegacyRepresentativeSize(
+		vectors, logicalRow, key, state.legacyDistinctFloatKeys)
 	if err != nil {
 		return err
 	}
@@ -1027,6 +1059,7 @@ func distinctLegacyRepresentativeSize(
 	vectors []*vector.Vector,
 	logicalRow int,
 	key []byte,
+	legacyFloat bool,
 ) (int, error) {
 	if len(vectors) == 0 || len(key) < kAggArgPrefixSz {
 		return 0, mpool.ErrAllocationAccountInvariant
@@ -1037,7 +1070,8 @@ func distinctLegacyRepresentativeSize(
 			return 0, err
 		}
 		raw := vectors[0].GetRawBytesAt(row)
-		if !bytes.Equal(key[kAggArgPrefixSz:], raw) {
+		if distinctRepresentativeNeedsRaw(
+			*vectors[0].GetType(), key[kAggArgPrefixSz:], raw, legacyFloat) {
 			return len(raw), nil
 		}
 		return 0, nil
@@ -1063,7 +1097,8 @@ func distinctLegacyRepresentativeSize(
 			return 0, mpool.ErrAllocationAllocatorLimit
 		}
 		rawSize += 4 + len(raw)
-		if !bytes.Equal(key[off:off+canonicalSize], raw) {
+		if distinctRepresentativeNeedsRaw(
+			*vec.GetType(), key[off:off+canonicalSize], raw, legacyFloat) {
 			needsRaw = true
 		}
 		off += canonicalSize
@@ -1149,7 +1184,8 @@ func (ae *aggExec) preflightDistinctBatchFillArgsOnce(
 				continue
 			}
 		}
-		duplicate, err := linear.seen(groups, vectors, offset, i)
+		duplicate, err := linear.seenWithPolicy(
+			groups, vectors, offset, i, ae.legacyDistinctFloatKeys)
 		if err != nil {
 			return err
 		}
@@ -1237,7 +1273,8 @@ func (ae *aggExec) preflightFixedDistinctBatchFillArgs(
 		if vec.IsNull(uint64(row)) {
 			continue
 		}
-		value, err := distinctFixedValue(vec, row, state.distinctKeyWidth)
+		value, err := distinctFixedValue(
+			vec, row, state.distinctKeyWidth, state.legacyDistinctFloatKeys)
 		if err != nil {
 			return err
 		}
@@ -1291,8 +1328,8 @@ func (ae *aggExec) preflightDistinctBatchFillArgsHashed(
 		if err != nil {
 			return err
 		}
-		duplicate, err := hashed.seenOrInsert(
-			groups, vectors, offset, row, scratch)
+		duplicate, err := hashed.seenOrInsertWithPolicy(
+			groups, vectors, offset, row, ae.legacyDistinctFloatKeys, scratch)
 		if err != nil {
 			return err
 		}
@@ -1345,8 +1382,8 @@ func (ae *aggExec) preflightDistinctBatchFillArgsHashed(
 		if err != nil {
 			return err
 		}
-		duplicate, err := hashed.seenOrInsert(
-			groups, vectors, offset, i, scratch)
+		duplicate, err := hashed.seenOrInsertWithPolicy(
+			groups, vectors, offset, i, ae.legacyDistinctFloatKeys, scratch)
 		if err != nil {
 			return err
 		}
@@ -1378,6 +1415,16 @@ func (ae *aggExec) preflightBatchMergeArgs(
 ) error {
 	if other == nil || offset < 0 || offset > other.GetNumGroups()-len(groups) {
 		return mpool.ErrAllocationAccountInvalid
+	}
+	if err := validateDistinctFloatMergePolicy(
+		&ae.aggInfo,
+		ae.legacyDistinctFloatKeys,
+		other.legacyDistinctFloatKeys,
+	); err != nil {
+		// The destination must reject a modern-to-legacy merge before any
+		// capacity reservation or key publication. Canonical state cannot
+		// recreate the legacy NaN variants that the old contract distinguishes.
+		return err
 	}
 	// A merge destination may already contain published fixed-index keys when
 	// a later work unit is admitted. Converting that representation to a
@@ -1474,14 +1521,19 @@ func (ae *aggExec) preflightBatchMergeArgs(
 		var targetKey []byte
 		var targetOK bool
 		targetStarted := false
+		policyConversion := ae.isDistinct &&
+			distinctFloatArgument(&ae.aggInfo) &&
+			other.legacyDistinctFloatKeys && !ae.legacyDistinctFloatKeys
 		if ae.isDistinct {
 			if state == nil || state.argSkl == nil {
 				return mpool.ErrAllocationAccountInvariant
 			}
-			if sourceState.distinctFixedDeferred {
+			if sourceState.distinctFixedDeferred || policyConversion {
 				// Fixed-index iteration is newest-first, so it cannot share the
-				// ordered target cursor used by legacy skiplists.  Membership
-				// checks for this source representation stay exact below.
+				// ordered target cursor used by legacy skiplists.  A legacy to
+				// modern conversion also changes the byte ordering of FLOAT keys,
+				// so its normalized candidates cannot share that cursor either.
+				// Membership checks for these paths stay exact below.
 			} else {
 				if sourceState.argSkl == nil {
 					return mpool.ErrAllocationAccountInvariant
@@ -1502,13 +1554,19 @@ func (ae *aggExec) preflightBatchMergeArgs(
 			copy(candidate, key)
 			binary.BigEndian.PutUint16(candidate[:kAggArgPrefixSz], y)
 			if ae.isDistinct {
+				if err := normalizeDistinctKeyInPlace(
+					&ae.aggInfo, candidate,
+					other.legacyDistinctFloatKeys,
+					ae.legacyDistinctFloatKeys); err != nil {
+					return err
+				}
 				if sourceState.distinctFixedDeferred {
 					// Fixed-index iteration is reverse insertion order, so use
 					// exact target membership rather than an ordered cursor.
 					if state.argSkl.Contains(candidate) {
 						return nil
 					}
-				} else {
+				} else if !policyConversion {
 					if !targetStarted {
 						targetOK, targetKey, _ = targetIter.SeekGE(candidate)
 						targetStarted = true
@@ -1526,7 +1584,12 @@ func (ae *aggExec) preflightBatchMergeArgs(
 				// so also suppress a value already supplied by an earlier source
 				// group in this unit. Rewriting only the two-byte group prefix lets
 				// each source skiplist answer that lookup without a temporary set.
-				for earlier := 0; earlier < i; earlier++ {
+				// During legacy-to-modern conversion the normalized key order is
+				// different from every source skiplist's order.  Comparing the
+				// unnormalized key against earlier source states would be wrong;
+				// conservatively retain those candidates and let the real merge
+				// deduplicate them after normalization.
+				for earlier := 0; earlier < i && !policyConversion; earlier++ {
 					if groups[earlier] != group {
 						continue
 					}
@@ -1572,8 +1635,11 @@ func (ae *aggExec) preflightBatchMergeArgs(
 				)
 			}
 			valueSize := 0
-			if ae.isDistinct && len(stored) != 0 {
-				valueSize = len(stored)
+			if ae.isDistinct {
+				valueSize = len(distinctMergeRepresentative(
+					&ae.aggInfo, key, stored,
+					ae.legacyDistinctFloatKeys,
+					other.legacyDistinctFloatKeys))
 			}
 			if ae.preserveDistinctInputOrder {
 				valueSize = ae.distinctInputOrderValueSize()
