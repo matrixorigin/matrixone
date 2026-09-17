@@ -33,6 +33,106 @@ from t_fd
 group by id
 order by id;
 
+-- Issue #27983 original three-table query: job.source is functionally
+-- dependent on the grouped job primary key.  Compare it with the explicit
+-- GROUP BY form while retaining fanout, zero-child, unmatched-owner, and NULL
+-- owner rows.
+create table issue_27983_job(
+  job_id bigint primary key,
+  source varchar(255),
+  owner_id bigint
+);
+create table issue_27983_cv(
+  cv_id bigint primary key,
+  job_id bigint
+);
+create table issue_27983_app_user(
+  user_id bigint primary key,
+  full_name varchar(255)
+);
+insert into issue_27983_job values
+  (1,'portal',10),(2,'referral',10),(3,'direct',99),(4,'empty',null);
+insert into issue_27983_cv values
+  (101,1),(102,1),(103,2),(104,3),(105,3),(106,3);
+insert into issue_27983_app_user values (10,'Alice'),(20,'Bob');
+select job.job_id,job.source,count(cv.cv_id) as cv_count,
+       job.owner_id,owner.full_name
+from issue_27983_job job
+left join issue_27983_cv cv using(job_id)
+left join issue_27983_app_user owner on owner.user_id=job.owner_id
+group by job.job_id,job.owner_id,owner.full_name
+order by job.job_id;
+select job.job_id,job.source,count(cv.cv_id) as cv_count,
+       job.owner_id,owner.full_name
+from issue_27983_job job
+left join issue_27983_cv cv using(job_id)
+left join issue_27983_app_user owner on owner.user_id=job.owner_id
+group by job.job_id,job.source,job.owner_id,owner.full_name
+order by job.job_id;
+
+-- Public-SQL boundary coverage for supported equality domains and payloads.
+create table issue_27983_payload_edges(
+  id int primary key,
+  payload varchar(64),
+  amount int
+);
+insert into issue_27983_payload_edges values
+  (1,null,1),(2,'',2),(3,repeat('x',64),3);
+select id,payload,sum(amount) as total
+from issue_27983_payload_edges
+group by id
+order by id;
+
+create table issue_27983_decimal_key(
+  k decimal(18,2) not null,
+  payload varchar(20),
+  amount int,
+  unique key uk_decimal(k)
+);
+insert into issue_27983_decimal_key values
+  (-9999999999999999.99,'min',1),(0.00,'zero',2),(9999999999999999.99,'max',3);
+select k,payload,sum(amount) as total
+from issue_27983_decimal_key
+group by k
+order by k;
+
+create table issue_27983_date_key(
+  k date not null,
+  payload varchar(20),
+  unique key uk_date(k)
+);
+insert into issue_27983_date_key values
+  ('1000-01-01','min'),('2024-02-29','leap'),('9999-12-31','max');
+select k,payload,count(*) as n
+from issue_27983_date_key
+group by k
+order by k;
+
+create table issue_27983_datetime_key(
+  k datetime(6) not null,
+  payload varchar(20),
+  unique key uk_datetime(k)
+);
+insert into issue_27983_datetime_key values
+  ('1000-01-01 00:00:00.000001','min'),
+  ('9999-12-31 23:59:59.999999','max');
+select k,payload,count(*) as n
+from issue_27983_datetime_key
+group by k
+order by k;
+
+create table issue_27983_binary_key(
+  k varbinary(8) not null,
+  payload varchar(20),
+  unique key uk_binary(k)
+);
+insert into issue_27983_binary_key values
+  ('A','upper'),('a','lower'),('A ','space');
+select k,payload,count(*) as n
+from issue_27983_binary_key
+group by k
+order by hex(k);
+
 -- A WHERE-single-valued column remains available to window arguments,
 -- partition keys, and order keys after the aggregate stage.
 select region,
