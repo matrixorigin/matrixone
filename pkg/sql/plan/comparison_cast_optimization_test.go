@@ -741,6 +741,62 @@ func TestDecimalEarlyFalseDetection(t *testing.T) {
 	}
 }
 
+func TestDecimalComparisonKeepsWideZeroSuffixAndCarriesProtocolMarker(t *testing.T) {
+	ctx := context.Background()
+	columnType := types.New(types.T_decimal128, 38, 0)
+	column := &plan.Expr{
+		Typ:  makePlan2Type(&columnType),
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "d"}},
+	}
+
+	for _, operator := range []string{"=", "<>"} {
+		for _, tc := range []struct {
+			name       string
+			literal    string
+			wantFunc   bool
+			wantMarker bool
+		}{
+			{
+				name:       "18 digit zero suffix",
+				literal:    "12345678901234567890.000000000000000000",
+				wantFunc:   true,
+				wantMarker: false,
+			},
+			{
+				name:       "19 digit zero suffix",
+				literal:    "12345678901234567890.0000000000000000000",
+				wantFunc:   true,
+				wantMarker: true,
+			},
+			{
+				name:       "wide zero suffix",
+				literal:    "1234567890123456789012345678901234567890.000000000000000000000000000000",
+				wantFunc:   true,
+				wantMarker: true,
+			},
+			{
+				name:       "19 digit nonzero suffix",
+				literal:    "12345678901234567890.0000000000000000001",
+				wantFunc:   false,
+				wantMarker: true,
+			},
+		} {
+			t.Run(operator+"/"+tc.name, func(t *testing.T) {
+				literal, err := makePlan2DecimalExprWithType(ctx, tc.literal)
+				require.NoError(t, err)
+				result, err := BindFuncExprImplByPlanExpr(ctx, operator,
+					[]*plan.Expr{DeepCopyExpr(column), literal})
+				require.NoError(t, err)
+				require.Equal(t, tc.wantFunc, result.GetF() != nil,
+					"wide decimal comparison was folded unexpectedly")
+				requires, err := plan.RequiresMORPCVersion84DecimalLiteralSemantics(result)
+				require.NoError(t, err)
+				require.Equal(t, tc.wantMarker, requires)
+			})
+		}
+	}
+}
+
 // TestUnwrapCast tests the unwrapCast helper function
 func TestUnwrapCast(t *testing.T) {
 	tests := []struct {
