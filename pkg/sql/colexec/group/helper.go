@@ -1912,7 +1912,7 @@ func (ctr *container) makeAggListWithAllocation(
 	singleGroup bool,
 ) ([]aggexec.GroupAggFuncExec, error) {
 	return ctr.makeAggListWithAllocationMode(
-		aggExprs, allocation, ctr.mtyp == H0)
+		aggExprs, allocation, singleGroup)
 }
 
 func (ctr *container) makeAggListWithAllocationMode(
