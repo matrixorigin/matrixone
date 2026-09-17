@@ -300,6 +300,68 @@ type RuntimeReadiness interface {
 	CheckLanguageReady(context.Context, string) error
 }
 
+// RuntimeStatusSnapshot is the bounded, read-only state exposed to control
+// planes that need to observe a language runtime without entering the
+// invocation path.  A snapshot never contains source, artifacts, secrets, or
+// invocation identifiers.  The capability fields are a summary of the
+// already negotiated worker contract; the runtime remains responsible for
+// deciding whether the summary is valid.
+type RuntimeStatusSnapshot struct {
+	Language                   string
+	Enabled                    bool
+	AllowUnisolated            bool
+	Ready                      bool
+	ErrorClass                 string
+	Reason                     string
+	ProtocolVersion            int32
+	ABIContract                string
+	AdapterVersion             string
+	SDKVersion                 string
+	DefinitionSchemaVersion    int32
+	PlanContractVersion        int32
+	TypeDescriptorContract     string
+	TimezoneDatabaseVersion    string
+	WindowBatches              int32
+	CumulativeAck              bool
+	MaxExecutionFrameBytes     int64
+	MaxHandlerProcesses        int32
+	MaxAccountHandlerProcesses int32
+	MaxOwnerHandlerProcesses   int32
+	LeaseEpoch                 uint64
+	Modes                      []string
+	NullPolicies               []string
+}
+
+const (
+	RuntimeStatusReady            = "READY"
+	RuntimeStatusDisabled         = "DISABLED"
+	RuntimeStatusNotAllowed       = "NOT_ALLOWED"
+	RuntimeStatusUnavailable      = "UNAVAILABLE"
+	RuntimeStatusContractMismatch = "CONTRACT_MISMATCH"
+	RuntimeStatusTimeout          = "TIMEOUT"
+	RuntimeStatusClosed           = "CLOSED"
+	RuntimeStatusInvalid          = "INVALID"
+	RuntimeStatusInternal         = "INTERNAL"
+
+	RuntimeStatusReasonReady                = "CapabilityHandshakeReady"
+	RuntimeStatusReasonRuntimeDisabled      = "RuntimeDisabled"
+	RuntimeStatusReasonUnisolatedNotAllowed = "UnisolatedExecutionNotAllowed"
+	RuntimeStatusReasonWorkerUnavailable    = "WorkerUnavailable"
+	RuntimeStatusReasonCapabilityMismatch   = "CapabilityContractMismatch"
+	RuntimeStatusReasonRequestTimeout       = "CapabilityRequestTimeout"
+	RuntimeStatusReasonRuntimeClosed        = "RuntimeClosed"
+	RuntimeStatusReasonStatusUnavailable    = "RuntimeStatusUnavailable"
+	RuntimeStatusReasonInvalidLanguage      = "InvalidLanguage"
+	RuntimeStatusReasonRuntimeError         = "RuntimeError"
+)
+
+// RuntimeStatusProvider supplies the bounded status view used by the CN query
+// service.  Implementations may refresh a capability handshake, but must not
+// execute user code or allocate invocation/ledger state.
+type RuntimeStatusProvider interface {
+	StatusSnapshot(context.Context, string) RuntimeStatusSnapshot
+}
+
 // RoutineDefinition is the typed, pre-publication contract handed to a
 // language runtime for definition validation. It is deliberately separate
 // from Invocation: a CREATE or REPLACE has no FunctionRef/revision yet and
@@ -387,6 +449,44 @@ func (r *runtimeRegistry) CheckLanguageReady(ctx context.Context, language strin
 		return moerr.NewNotSupportedf(ctx, "%s UDF runtime does not expose the current contract", language)
 	}
 	return readiness.CheckLanguageReady(ctx, language)
+}
+
+func (r *runtimeRegistry) StatusSnapshot(ctx context.Context, language string) RuntimeStatusSnapshot {
+	runtime := r.byLanguage[language]
+	if runtime == nil {
+		return RuntimeStatusSnapshot{
+			Language:   language,
+			ErrorClass: RuntimeStatusDisabled,
+			Reason:     RuntimeStatusReasonRuntimeDisabled,
+		}
+	}
+	if provider, ok := runtime.(RuntimeStatusProvider); ok {
+		return provider.StatusSnapshot(ctx, language)
+	}
+	readiness, ok := runtime.(RuntimeReadiness)
+	if !ok {
+		return RuntimeStatusSnapshot{
+			Language:   language,
+			Enabled:    true,
+			ErrorClass: RuntimeStatusUnavailable,
+			Reason:     RuntimeStatusReasonStatusUnavailable,
+		}
+	}
+	if err := readiness.CheckLanguageReady(ctx, language); err != nil {
+		return RuntimeStatusSnapshot{
+			Language:   language,
+			Enabled:    true,
+			ErrorClass: RuntimeStatusUnavailable,
+			Reason:     RuntimeStatusReasonWorkerUnavailable,
+		}
+	}
+	return RuntimeStatusSnapshot{
+		Language:   language,
+		Enabled:    true,
+		Ready:      true,
+		ErrorClass: "",
+		Reason:     RuntimeStatusReasonReady,
+	}
 }
 
 func (r *runtimeRegistry) ValidateDefinition(ctx context.Context, definition *RoutineDefinition) error {
