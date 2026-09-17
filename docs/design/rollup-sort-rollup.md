@@ -1,11 +1,52 @@
 # Sort-based ROLLUP design
 
-Status: implementation complete in the dedicated worktree; validation evidence
-is complete
+Status: implementation complete in the dedicated worktree; follow-up review
+validation evidence is complete
 
 Owner issue: [#20653](https://github.com/matrixorigin/matrixone/issues/20653)
 
 Implementation branch: `codex/issue-20653-sort-rollup`
+
+## Design review record
+
+This feature crosses the planner, compiler, executor, and frontend ownership
+boundaries, and changes a hot-path aggregation and lifecycle contract. It
+therefore meets the feature-design gate independently of the PR label or line
+count.
+
+### Historical baseline review
+
+- Reviewed revision: commit
+  `0ed92b5105c8f0507b34caaade70ef1c19ede4bd`, design-document blob
+  `1f0cfaef80ab20dea6789a158ad4c9655387c3da`.
+- Review artifact: `PR28987-DESIGN-0ed92b5-20260917-A`, an AI-assisted
+  GPT-6 medium design-first review (delegated session
+  `01a0acb4-e994-79c0-9ccb-3bd60d555bdf`).
+- Decision on that revision: `REQUEST_CHANGES`.
+- Findings: the design decision was not traceable, and the non-empty public
+  BVT did not reach the marked SORT ROLLUP path because its ROLLUP was in a
+  derived query block.
+
+### Follow-up remediation design
+
+- Reviewed revision: corrected remediation specification `r1`, reviewed by
+  `PR28987-DESIGN-FOLLOWUP-20260917-C` before implementation. The specification
+  is recorded by this section; it was not yet committed when reviewed, so no
+  future commit or blob is claimed.
+- Review type and decision: AI-assisted GPT-6 medium design-first follow-up;
+  `PASS`, limited to this remediation design and not implementation validation.
+- Scope: add traceable historical and follow-up design decisions; make the
+  non-empty ROLLUP a top-level public witness; extend typed planner coverage to
+  prove the `sort_rollup` marker, aggregation-input Sort, no `UNION ALL`, and a
+  HASH control; use the same query's EXPLAIN shape only as auxiliary evidence;
+  retain the eight-row result oracle and empty-input control.
+- The top-level witness defines `cnt`, `total`, `grouping_a`, and `grouping_b`
+  aliases before using them in its deterministic `ORDER BY`. The source NULL,
+  subtotal, grand-total, and GROUPING bitmap are asserted by the result oracle.
+- No production planner or EXPLAIN behavior is changed by this remediation.
+- Independent human approval remains `PENDING`; this record does not grant or
+  substitute for it. Implementation validation and normal BVT comparison are
+  recorded separately after the patch is tested.
 
 ## Problem and scope
 
