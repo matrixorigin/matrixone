@@ -143,12 +143,12 @@ func (op *operator) Close() error {
 	var err error
 	if op.reset.svc != nil {
 		err = op.reset.svc.Close()
-		if err != nil {
+		if !closeComplete(op.reset.svc, err) {
 			// A service may return a drain timeout while accepted requests still
 			// use its storage and WAL dependencies.  Keep every cleanup owner
 			// reachable and let the caller retry or fail-stop; closing the
 			// stopper or file service here would destroy those dependencies.
-			return err
+			return errors.Join(err, moerr.NewInvalidStateNoCtx("service cleanup is incomplete"))
 		}
 		op.reset.svc = nil
 	}
@@ -161,15 +161,26 @@ func (op *operator) Close() error {
 		op.reset.fs = nil
 	}
 	op.reset.shutdownC = nil
-	if err == nil {
-		op.state = stopped
-	}
+	op.state = stopped
 	return err
+}
+
+// Completion is an ownership contract, independent of diagnostics. Unknown
+// implementations retain the legacy nil-error contract and fail closed on error.
+func closeComplete(owner any, err error) bool {
+	if owner, ok := owner.(interface{ CloseComplete() bool }); ok {
+		return owner.CloseComplete()
+	}
+	return err == nil
 }
 
 func (op *operator) needsCleanup() bool {
 	op.RLock()
 	defer op.RUnlock()
+	return op.needsCleanupLocked()
+}
+
+func (op *operator) needsCleanupLocked() bool {
 	return op.reset.svc != nil ||
 		op.reset.stopper != nil ||
 		op.reset.fs != nil
@@ -181,6 +192,9 @@ func (op *operator) Start() error {
 
 	if op.state == started {
 		return moerr.NewInvalidStateNoCtx("service already started")
+	}
+	if op.needsCleanupLocked() {
+		return moerr.NewInvalidStateNoCtx("service cleanup is incomplete")
 	}
 	configuredType, err := op.cfg.getServiceType()
 	if err != nil {
