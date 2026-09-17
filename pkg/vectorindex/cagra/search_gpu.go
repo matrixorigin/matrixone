@@ -357,6 +357,21 @@ func (s *CagraSearch[B, Q]) IsStale() (bool, error) {
 	return ts != s.loadedTs || tail != s.loadedTail, nil
 }
 
+// EmptyGeneration reports a loaded generation with nothing to search: buildMultiIndex left
+// MultiIndex nil, which happens only when no sub-index was deserialized AND no CDC overflow was
+// built -- a freshly created index, or the async-build window before the first vectors are
+// committed. Search answers empty on exactly that state. The cache declines to retain it, so the
+// next query reloads and picks up the vectors once the build writes them under the same
+// generation, instead of pinning an empty generation until the IsStale sweep evicts it. The
+// Overflow term is redundant with MultiIndex (buildMultiIndex returns non-nil whenever Overflow
+// is set) and is kept so the predicate does not silently depend on that.
+//
+// A loaded sub-index makes the generation non-empty even if the CDC delete bitset has since
+// removed all of its rows: that is a live index, cached as any other.
+func (s *CagraSearch[B, Q]) EmptyGeneration() bool {
+	return s.MultiIndex == nil && s.Overflow == nil
+}
+
 // loadCdcTail loads the tag=1 event-log rows persisted by CDC under the
 // fixed vectorindex.CdcTailId sentinel, replays them to derive the
 // (deleted, overflow) state, applies the deletes to every loaded sub-index
@@ -367,9 +382,11 @@ func (s *CagraSearch[B, Q]) IsStale() (bool, error) {
 //
 // includeBytesPerRow comes from the first sub-index that successfully
 // loaded; cdc_tail's INSERT records share the col-meta layout with the main
-// index by construction (CDC writer side is fed the same colMetaJSON). If
-// no sub-index loaded (empty index — never built, or built and dropped),
-// we have no col-meta and skip; cdc_tail data is moot without a main index.
+// index by construction (CDC writer side is fed the same colMetaJSON). With
+// no sub-index loaded (never built, small-data-only, or a copy-alter
+// replacement) the layout is recovered from the first tag=1 chunk's frame
+// header instead, and the tail IS loaded: those rows become the brute-force
+// overflow, which is the whole index in that state.
 func (s *CagraSearch[B, Q]) loadCdcTail(sqlproc *sqlexec.SqlProcess) error {
 	var (
 		includeBytesPerRow int
