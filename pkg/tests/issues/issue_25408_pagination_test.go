@@ -129,9 +129,9 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 			defer conn.Close()
 			_, connErr = conn.ExecContext(ctx, "create table "+dbName+".integer_sources(v varchar(20))")
 			require.NoError(t, connErr)
-			_, connErr = conn.ExecContext(ctx, "create table "+dbName+".integer_peer(v double)")
+			_, connErr = conn.ExecContext(ctx, "create table "+dbName+".integer_peer(pad bigint, v double)")
 			require.NoError(t, connErr)
-			_, connErr = conn.ExecContext(ctx, "insert into "+dbName+".integer_peer values (0)")
+			_, connErr = conn.ExecContext(ctx, "insert into "+dbName+".integer_peer values (42,1.5)")
 			require.NoError(t, connErr)
 			t.Run("binary cached source domain transitions", func(t *testing.T) {
 				stmt, err := conn.PrepareContext(ctx, `select substring_index("a.b.c.d",".",coalesce(?,0e0))`)
@@ -153,6 +153,17 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 				name, source, assignment, want string
 				args                           []any
 			}{
+				{"explicit char peer", "coalesce(?,cast(0e0 as char))", "set @integer_a=1.5e0", "a", []any{float64(1.5)}},
+				{"parenthesized char peer", "coalesce(?,(cast(0e0 as char)))", "set @integer_a=1.5e0", "a", []any{float64(1.5)}},
+				{"parenthesized char marker", "coalesce((cast(? as char)),0e0)", "set @integer_a=1.5e0", "a", []any{float64(1.5)}},
+				{"derived null fallback", "(select coalesce(?,x) from (select 1.5e0 as x) d)", "set @integer_a=NULL", "a.b", []any{nil}},
+				{"scan null fallback", "(select coalesce(?,v) from " + dbName + ".integer_peer)", "set @integer_a=NULL", "a.b", []any{nil}},
+				{"subquery peer", "coalesce(?,(select 1.5e0 where true))", "set @integer_a=NULL", "a.b", []any{nil}},
+				{"union text", "(select 0e0 where false union all select ?)", `set @integer_a="1.5"`, "a", []any{"1.5"}},
+				{"group marker", "(select ? group by 1)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
+				{"max source", "(select max(coalesce(?,0e0)) from " + dbName + ".integer_peer)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
+				{"min source", "(select min(coalesce(?,0e0)) from " + dbName + ".integer_peer)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
+				{"window source", "(select first_value(coalesce(?,0e0)) over () from " + dbName + ".integer_peer)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
 				{"text", "coalesce(?,0e0)", `set @integer_a="1.5"`, "a", []any{"1.5"}},
 				{"text ifnull", "ifnull(?,0e0)", `set @integer_a="1.5"`, "a", []any{"1.5"}},
 				{"double", "coalesce(?,0e0)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
@@ -178,7 +189,7 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 									_, err := conn.ExecContext(ctx, "delete from "+dbName+".integer_sources")
 									require.NoError(t, err)
 									query = "insert into " + dbName + ".integer_sources values (" + expr + ")"
-									if strings.HasPrefix(tc.source, "(select") {
+									if strings.Contains(tc.source, "select") {
 										// Scalar subqueries use INSERT SELECT; the VALUES
 										// planner does not support this subquery shape.
 										query = "insert into " + dbName + ".integer_sources select " + expr

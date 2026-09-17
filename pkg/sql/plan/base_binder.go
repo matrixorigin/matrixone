@@ -3759,7 +3759,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			}
 			source := arg
 			fn := arg.GetF()
-			explicitCast, explicitPeerCast := astArgs[i].(*tree.CastExpr)
+			explicitCast, explicitPeerCast := unwrapParenExpr(astArgs[i]).(*tree.CastExpr)
 			if explicitPeerCast {
 				target, targetErr := getTypeFromAst(b.GetContext(), explicitCast.Type)
 				if targetErr != nil {
@@ -3777,7 +3777,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				}
 			}
 			if fn != nil && fn.Func != nil && strings.EqualFold(fn.Func.GetObjName(), "cast") && len(fn.Args) > 0 &&
-				(!explicitPeerCast || makeTypeByPlan2Expr(arg).Oid.IsMySQLString()) &&
+				!explicitPeerCast && !fn.GetSyntaxExplicitCast() &&
 				!preparedExprContainsParam(fn.Args[0]) &&
 				preparedNumericCommonOperandType(makeTypeByPlan2Expr(fn.Args[0]).Oid) {
 				source = fn.Args[0]
@@ -4084,10 +4084,12 @@ func markPreparedResultCastsProvisional(
 			attachPreparedRuntimeParamSource(arg, DeepCopyExpr(peerSources[i]))
 			metadata := ensurePreparedNumericMetadata(arg)
 			metadata.ProvisionalResultPeer = true
-			metadata.StringDomainSource = DeepCopyExpr(peerSources[i])
+			metadata.ProvisionalResultPeerTypeId = peerSources[i].Typ.Id
+			metadata.ProvisionalResultPeerWidth = peerSources[i].Typ.Width
+			metadata.ProvisionalResultPeerScale = peerSources[i].Typ.Scale
 		}
 		if i < len(astArgs) {
-			if explicitCast, ok := astArgs[i].(*tree.CastExpr); ok {
+			if explicitCast, ok := unwrapParenExpr(astArgs[i]).(*tree.CastExpr); ok {
 				if target, err := getTypeFromAst(ctx, explicitCast.Type); err == nil && types.T(target.Id).IsDecimal() {
 					metadata := ensurePreparedNumericMetadata(arg)
 					metadata.ProvisionalResultPeer = true
@@ -4100,7 +4102,7 @@ func markPreparedResultCastsProvisional(
 		if i >= len(astArgs) || !preparedSQLExecuteNumericResultValueArg(name, i, len(args)) {
 			continue
 		}
-		if _, explicit := astArgs[i].(*tree.CastExpr); explicit {
+		if _, explicit := unwrapParenExpr(astArgs[i]).(*tree.CastExpr); explicit {
 			continue
 		}
 		fn := arg.GetF()

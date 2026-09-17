@@ -437,8 +437,8 @@ type ResetParamRefRule struct {
 	ctx      context.Context
 	params   []*Expr
 	exprMemo map[*plan.Expr]*plan.Expr
-	// Common-type producers reached through integer-consumer value lineage,
-	// including producers separated from that consumer by PROJECT nodes.
+	// Runtime value sources reached through integer-consumer lineage, including
+	// bare markers and producers behind PROJECT, set, aggregate or window nodes.
 	integerSourceRoots map[*plan.Expr]struct{}
 	// preserveRoots contains DML write expressions whose outer shape must
 	// remain stable while nested parameters are rebound.  The write operator
@@ -1720,6 +1720,9 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 	var rewritten *plan.Expr
 	var err error
 	if _, source := rule.integerSourceRoots[e]; source {
+		// This occurrence already uses the actual runtime domain. A second
+		// numeric-fallback pass would infer a number from real TEXT again.
+		fallbackSource = nil
 		rewritten, err = rule.integerArgumentRuntimeSource(e)
 		rule.specialized = true
 	} else if isIntegerArgumentCast(e) {

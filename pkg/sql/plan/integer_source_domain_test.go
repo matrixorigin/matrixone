@@ -131,6 +131,39 @@ func TestPreparedIntegerSourceProjectionDomains(t *testing.T) {
 	}
 }
 
+func TestPreparedResultPeerUsesCurrentOccurrence(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	floatType := types.T_float64.ToType()
+	textType := types.T_text.ToType()
+	currentColumn := &Expr{Typ: makePlan2Type(&floatType), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+	peer, err := appendCastBeforeExpr(proc.Ctx, currentColumn, makePlan2Type(&textType))
+	require.NoError(t, err)
+	peer.PreparedNumeric = &planpb.PreparedNumericMetadata{
+		ProvisionalResultPeer: true, ProvisionalResultPeerTypeId: int32(types.T_float64),
+		// Deliberately invalid legacy snapshot: it must never enter execution.
+		StringDomainSource: &Expr{Typ: makePlan2Type(&floatType), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 7, ColPos: 999}}},
+	}
+	restored, err := restorePreparedResultPeer(proc.Ctx, peer)
+	require.NoError(t, err)
+	require.Same(t, currentColumn, restored)
+
+	folded := makePlan2StringConstExprWithType("1.5")
+	folded.PreparedNumeric = peer.PreparedNumeric
+	restored, err = restorePreparedResultPeer(proc.Ctx, folded)
+	require.NoError(t, err)
+	result, free, err := colexec.GetReadonlyResultFromExpression(proc, restored, []*batch.Batch{batch.EmptyForConstFoldBatch})
+	require.NoError(t, err)
+	defer free()
+	require.Equal(t, 1.5, vector.MustFixedColWithTypeCheck[float64](result)[0])
+	require.Equal(t, int32(types.T_varchar), folded.Typ.Id, "cached source must stay unchanged")
+
+	for _, value := range []*Expr{currentColumn, makePlan2StringConstExprWithType("1.5")} {
+		restored, err = restorePreparedResultPeer(proc.Ctx, value)
+		require.NoError(t, err)
+		require.Same(t, value, restored)
+	}
+}
+
 func TestPreparedArithmeticExplicitDoublePeer(t *testing.T) {
 	prepared, err := runOneStmt(NewMockOptimizer(false), t, `prepare cast_boundary from 'select (? / 2) + cast(1 as double)'`)
 	require.NoError(t, err)

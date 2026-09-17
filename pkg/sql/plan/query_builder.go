@@ -4287,7 +4287,9 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 						attachPreparedRuntimeParamSource(node.ProjectList[columnIdx], DeepCopyExpr(source))
 						metadata := ensurePreparedNumericMetadata(node.ProjectList[columnIdx])
 						metadata.ProvisionalResultPeer = true
-						metadata.StringDomainSource = DeepCopyExpr(source)
+						metadata.ProvisionalResultPeerTypeId = source.Typ.Id
+						metadata.ProvisionalResultPeerWidth = source.Typ.Width
+						metadata.ProvisionalResultPeerScale = source.Typ.Scale
 					}
 				}
 				if preparedDeferredColumn && preparedExprContainsParam(builder.qry.Nodes[tmpID].ProjectList[columnIdx]) {

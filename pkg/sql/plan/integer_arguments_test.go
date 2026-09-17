@@ -172,6 +172,8 @@ func TestIntegerArgumentPreparedRuntimeCandidates(t *testing.T) {
 		{`select substring_index("a.b.c",".",(select coalesce(?,0e0) where ?))`, []int32{0}},
 		{`select substring_index("a.b.c",".",(select 0e0 where ? union all select ?))`, []int32{1}},
 		{`select substring_index("a.b.c",".",(select ? where false union select ?))`, []int32{0, 1}},
+		{`select substring_index("a.b.c",".",(select max(coalesce(?,0e0)) where ?))`, []int32{0}},
+		{`select substring_index("a.b.c",".",(select first_value(coalesce(?,0e0)) over (order by ?) where true))`, []int32{0}},
 		{`select substring_index("a.b.c",".",(select ? union all select cast(0 as double) limit 1))`, []int32{0}},
 		{`select substring_index(?,".",2)`, nil},
 	} {

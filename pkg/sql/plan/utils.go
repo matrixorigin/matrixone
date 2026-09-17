@@ -1130,11 +1130,9 @@ func collectPreparedIntegerArgumentParamPositions(
 		positions[pos] = struct{}{}
 	}
 	_ = plan.VisitExprTree(expr, func(nested *plan.Expr) error {
-		if sources != nil && preparedExprContainsParam(nested) {
-			if fn := nested.GetF(); fn != nil && fn.Func != nil &&
-				(fn.Func.ObjName == "coalesce" || fn.Func.ObjName == "case" || fn.Func.ObjName == "if" || fn.Func.ObjName == "iff") {
-				sources[nested] = struct{}{}
-			}
+		if sources != nil && preparedExprContainsParam(nested) &&
+			(nested.GetP() != nil || nested.GetF() != nil || nested.GetW() != nil) {
+			sources[nested] = struct{}{}
 		}
 		col := nested.GetCol()
 		if col == nil || col.ColPos < 0 {
@@ -1142,6 +1140,32 @@ func collectPreparedIntegerArgumentParamPositions(
 		}
 		node := query.Nodes[nodeID]
 		if node == nil {
+			return nil
+		}
+		// Aggregate and window outputs refer to local value producers, not
+		// ordinary child projections. Resolve those producers before walking
+		// their inputs; predicate/order-only parameters are not output values.
+		var producer *plan.Expr
+		if node.NodeType == plan.Node_AGG && col.RelPos == -2 {
+			index := col.ColPos - int32(len(node.GroupBy))
+			if index >= 0 && int(index) < len(node.AggList) {
+				producer = node.AggList[index]
+			}
+		} else if node.NodeType == plan.Node_WINDOW && col.RelPos == -1 && len(node.Children) == 1 {
+			childID := node.Children[0]
+			if childID >= 0 && int(childID) < len(query.Nodes) && query.Nodes[childID] != nil {
+				index := col.ColPos - int32(len(query.Nodes[childID].ProjectList))
+				if index >= 0 && int(index) < len(node.WinSpecList) {
+					producer = node.WinSpecList[index].GetW().GetWindowFunc()
+				}
+			}
+		}
+		if producer != nil {
+			key := [2]int32{nodeID, -col.ColPos - 1}
+			if _, seen := visited[key]; !seen {
+				visited[key] = struct{}{}
+				collectPreparedIntegerArgumentParamPositions(query, nodeID, producer, positions, visited, sources)
+			}
 			return nil
 		}
 		// AGG emits grouping columns as negative-relation ColRefs. Their value
@@ -7202,9 +7226,16 @@ func snapshotPreparedSetOperationInputTypes(
 				if source == nil {
 					continue
 				}
+				typ := source.Typ
+				metadata := source.GetPreparedNumeric()
+				if metadata.GetProvisionalResultPeer() && metadata.GetProvisionalResultPeerTypeId() != 0 {
+					typ.Id = metadata.ProvisionalResultPeerTypeId
+					typ.Width = metadata.ProvisionalResultPeerWidth
+					typ.Scale = metadata.ProvisionalResultPeerScale
+				}
 				inputTypes[preparedSetOperationInputKey{
 					node: node, branchIdx: branchIdx, colPos: colPos,
-				}] = source.Typ
+				}] = typ
 			}
 		}
 	}
@@ -7304,15 +7335,6 @@ func unwrapPreparedSetOperationCoercion(
 	if branch == nil || branch.NodeType != plan.Node_PROJECT || colPos >= len(branch.ProjectList) ||
 		branch.ProjectList[colPos] != expr {
 		return expr
-	}
-	metadata := expr.GetPreparedNumeric()
-	if metadata.GetProvisionalResultPeer() && samePreparedSetOperationType(expr.Typ, targetType) {
-		if source := metadata.GetStringDomainSource(); source != nil {
-			return source
-		}
-		if literal := expr.GetLit(); literal != nil && literal.Src != nil {
-			return literal.Src
-		}
 	}
 	fn := expr.GetF()
 	if fn == nil || fn.Func == nil || strings.ToLower(fn.Func.GetObjName()) != "cast" ||
@@ -7659,6 +7681,11 @@ func reconcilePreparedSetOperationInputs(
 				sourceExpressions[branchIdx][colPos] = unwrapPreparedSetOperationCoercion(
 					query, node.Children[branchIdx], colPos, currentOutputType, projects[colPos],
 				)
+				source, err := restorePreparedResultPeer(ctx, sourceExpressions[branchIdx][colPos])
+				if err != nil {
+					return false, nil, err
+				}
+				sourceExpressions[branchIdx][colPos] = source
 			}
 			if colPos < len(node.ProjectList) && sourceExpressions[branchIdx][colPos] != nil {
 				originalType, ok := originalInputTypes[preparedSetOperationInputKey{

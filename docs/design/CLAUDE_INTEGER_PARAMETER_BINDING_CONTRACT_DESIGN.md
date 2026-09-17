@@ -23,7 +23,7 @@ MatrixOne 中 count、offset、length、position、precision 等参数在 SQL �
 5. **identity 不变量**：旧 function overload 和 CAST 0–4 的编号、含义及可执行性不变；新 binding 可以停止选择 compatibility-only overload，但不得删除、重排或复用旧 identity。
 6. **范围不变量**：转换先保留完整 signed/unsigned magnitude，再对目标 `INT64`/`UINT64` 检查；overflow 是错误，不 wrap、saturate 或仅发 warning。
 7. **分布式/持久化不变量**：任何包含 private CAST 5–8 的 plan 都要求 MORPC v82。旧 CN 不得接收、执行、发布或读取其无法解释的新 identity。
-8. **inactive-row 不变量**：NULL 或未被 select mask 选中的 row 不读取、不舍入、不解析，也不产生 overflow；输出保持 NULL。
+8. **inactive-row 不变量**：转换自身的 NULL source 或未被 select mask 选中的 row 不读取、不舍入、不解析，也不产生 overflow；输出保持 NULL。外层函数的其它参数为 NULL 不等价于该转换已被 mask：例如 `SUBSTRING_INDEX(NULL, '.', 9223372036854775808)` 的非 NULL count 仍须报范围错误。
 
 ### 1.2 可度量成功标准
 
@@ -177,6 +177,8 @@ EXECUTE 时 rebind：
 3. 仅替换 private CAST source，不把 identity 重建为 CAST0；
 4. source type/value变化时按同一 declaration 重新 specialization；
 5. 不修改 cached template plan，重复执行和 NULL-first execution 不污染下一 generation。
+
+peer provenance 只记录源类型，不允许把优化前的可执行表达式快照恢复到最终计划。临时 TEXT 调和的撤销必须作用于已经完成列重映射、子查询展开的当前表达式；被折叠的 peer 使用其当前值及保存的源类型恢复。显式 CHAR、DOUBLE 等 CAST 都保持权威边界。值 lineage 覆盖 PROJECT、UNION 各输入、GROUP BY、AGG 和 WINDOW 的真实生产者；裸参数的真实 TEXT 类型也不得通过字符串内容推断改为数值。
 
 ## 7. Remote protocol、混合版本与 rollback
 

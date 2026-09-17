@@ -235,8 +235,12 @@ func (rule *ResetParamRefRule) integerArgumentRuntimeSource(source *Expr) (*Expr
 		args := make([]*Expr, len(fn.Args))
 		for i, arg := range fn.Args {
 			metadata := arg.GetPreparedNumeric()
-			if metadata.GetProvisionalResultPeer() && metadata.GetStringDomainSource() != nil {
-				arg = DeepCopyExpr(metadata.GetStringDomainSource())
+			if metadata.GetProvisionalResultPeer() {
+				var err error
+				arg, err = restorePreparedResultPeer(rule.ctx, arg)
+				if err != nil {
+					return nil, err
+				}
 			} else if metadata.GetProvisionalResultCast() && !isExplicitPreparedCast(arg) {
 				if cast := arg.GetF(); cast != nil && len(cast.Args) == 2 {
 					arg = cast.Args[0]
@@ -254,7 +258,32 @@ func (rule *ResetParamRefRule) integerArgumentRuntimeSource(source *Expr) (*Expr
 		}
 		return bound, err
 	}
-	return rule.ApplyExpr(source)
+	return rule.applyExpr(source)
+}
+
+// restorePreparedResultPeer works exclusively on the current plan occurrence.
+// Provenance records a type, never an executable pre-optimization snapshot:
+// old ColRefs and SubqueryRefs are invalid after remapping and flattening.
+func restorePreparedResultPeer(ctx context.Context, expr *Expr) (*Expr, error) {
+	metadata := expr.GetPreparedNumeric()
+	if !metadata.GetProvisionalResultPeer() || metadata.GetProvisionalResultPeerTypeId() == 0 {
+		return expr, nil
+	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" &&
+		!fn.SyntaxExplicitCast && len(fn.Args) == 2 && types.T(expr.Typ.Id).IsMySQLString() {
+		_, overload := function.DecodeOverloadID(fn.Func.Obj)
+		if overload == 0 {
+			return fn.Args[0], nil
+		}
+	}
+	if !types.T(expr.Typ.Id).IsMySQLString() {
+		return expr, nil
+	}
+	typ := types.New(types.T(metadata.ProvisionalResultPeerTypeId),
+		metadata.ProvisionalResultPeerWidth, metadata.ProvisionalResultPeerScale)
+	value := DeepCopyExpr(expr)
+	value.PreparedNumeric = nil
+	return appendCastBeforeExpr(ctx, value, makePlan2Type(&typ))
 }
 
 // Only validated integer results are reconciled here. Source REAL/DECIMAL
