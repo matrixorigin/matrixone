@@ -204,6 +204,9 @@ func (Hooks) AlterCopyInitSQL(_ compileplugin.CompileContext, _ map[string]*plan
 }
 
 func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.ReindexParamUpdate) (map[string]string, error) {
+	if err := compileplugin.RejectMerge(alter, "hnsw"); err != nil {
+		return nil, err
+	}
 	return compileplugin.MergeReindexParams(old, alter, "hnsw",
 		catalog.HnswM,
 		catalog.HnswEfConstruction,
