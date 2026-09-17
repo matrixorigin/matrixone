@@ -1,14 +1,16 @@
 # PR #28523: String Math Numeric Coercion and Prepared-Parameter Roles
 
 - Status: Draft / awaiting maintainer approval
-- Design revision: 11
+- Design revision: 12
 - Issue: [#28487](https://github.com/matrixorigin/matrixone/issues/28487)
 - Implementation PR: [#28523](https://github.com/matrixorigin/matrixone/pull/28523)
-- Candidate integration base: `89d28d5f3858f9d0164701c02e98b9eff2ce210e`
-  (tree `856eb9f70be0f3479865d3f2b2a1c24d75d913f9`), fetched from
-  `origin/main` and integrated by a clean rebase. All 21 candidate commits
-  replayed without conflicts.
-- Published PR source head: `d27667a4936e813fb612de6cd245be03a2d6f101`
+- Candidate integration base: `6690f1af97977ad5671235e9204296cd2d504ad5`
+  (tree `5784b2173a5574becc206a4ecb323bb755fea823`), fetched from
+  `origin/main` and integrated by a clean rebase. All 24 candidate commits
+  replayed without conflicts. The 29 paths changed by this upstream commit
+  do not overlap the candidate's 24 changed paths.
+- Prior published PR source head (before revision 12):
+  `d27667a4936e813fb612de6cd245be03a2d6f101`
   (tree `d02aa9a8b2c219b7767b9793c700287ecfc24c0b`). The revision-8
   candidate, previously based on main `24e66eba121c781c29998ff2611db11335e3028c`
   (tree `b717729c7e1b0cc33d808f271f3211e8d6028f37`), was rebased onto
@@ -18,9 +20,14 @@
   code/test snapshot is `e0bc0aabc16217dbb1bef9df655d83e04da59d26` (tree
   `8f419516495fb55333aa71c9e3b50f5b5e75342c`). The current post-rebase
   implementation/test snapshot is `e400dfef43c089a447af2aeeff646f882be509dd`
-  (tree `5c368e3efd17b153080b00dd1293fc6041aed834`); revision 11 records its
-  validation and the proposed interpretation of Fengtt's compatibility note.
-  A documentation-only approval-record refresh follows this snapshot.
+  (tree `5c368e3efd17b153080b00dd1293fc6041aed834`) was tested on base
+  `89d28d5`. Revision 12's rebased implementation/test snapshot is
+  `19d0047c71de2088f7383ed1dad6804bf5c01843` (tree
+  `9229cf5dd59fb166183528f903b94751583b48a4`) on base `6690f1a`; all focused
+  package, race, COM_STMT, and SQL-mode tests were rerun successfully there.
+  This revision records the latest-main integration evidence and the proposed
+  interpretation of Fengtt's compatibility note. A documentation-only
+  approval-record refresh follows this tested snapshot.
 - The initial rebase had two shared paths with main since the historical
   base, `pkg/sql/plan/base_binder.go` and `pkg/sql/plan/utils.go`; both applied
   cleanly. The `4c31142` to `a3ede72` delta added 18 paths and the subsequent
@@ -843,7 +850,7 @@ reproduced on a clean base and are not attributed to this local delta.
 Distributed BVT and the PR-wide changed-line coverage gate are not claimed.
 Maintainer design approval remains pending.
 
-## Current post-rebase feedback-specific verification (revision 11)
+## Current post-rebase feedback-specific verification (revision 12)
 
 The fresh-session COM_STMT counterexample now reads the actual server-default
 `@@sql_mode` on a new connection. It was
@@ -862,8 +869,9 @@ The BVT fixture change was not run against a local distributed service; no
 shared mutable service was used. No local distributed-BVT result is claimed;
 use CI on the published head as the authoritative validation for that fixture.
 
-On base `89d28d5f3858f9d0164701c02e98b9eff2ce210e`, these commands passed with
-Go 1.26.4 and the repository CGo wrapper:
+These commands were rerun after the clean rebase onto
+`6690f1af97977ad5671235e9204296cd2d504ad5` with Go 1.26.4 and the repository
+CGo wrapper:
 
 ```text
 PATH=/Users/ljy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.darwin-arm64/bin:$PATH GOWORK=off ./.agents/skills/mo-dev/scripts/mo-cgo-test -count=1 -timeout=600s ./pkg/sql/plan
@@ -874,10 +882,12 @@ PATH=/Users/ljy/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.4.darwin-arm64/bin
 git diff --check origin/main...HEAD
 ```
 
-The package results were: `pkg/sql/plan` passed in 6.621s,
-`pkg/sql/plan/function` in 17.536s, the focused race tests in 3.095s,
-`TestIssue27294PreparedNumericOverloads` in 12.646s, and the frontend mode
-test in 1.999s. Local distributed BVT, current GitHub CI, and the PR-wide
+The latest-base results were: `pkg/sql/plan` passed in 6.489s,
+`pkg/sql/plan/function` in 17.060s, the focused race tests in 3.099s,
+`TestIssue27294PreparedNumericOverloads` in 13.817s, and the frontend mode
+test in 2.013s. `git diff --check origin/main...HEAD` also passed before this
+documentation-only revision update and is rerun for the final head below.
+Local distributed BVT, current GitHub CI, and the PR-wide
 changed-line coverage gate are not claimed. The previous CI run
 `35197284882` is historical evidence on the old published head, not this
 post-rebase candidate.
@@ -886,14 +896,14 @@ post-rebase candidate.
 
 ```text
 Design path: docs/design/pr28523-string-math-coercion.md
-Design revision: 11
-Candidate source inputs: published PR head d27667a4936e813fb612de6cd245be03a2d6f101 (tree d02aa9a8b2c219b7767b9793c700287ecfc24c0b); latest main base 89d28d5f3858f9d0164701c02e98b9eff2ce210e (tree 856eb9f70be0f3479865d3f2b2a1c24d75d913f9); implementation/test snapshot e400dfef43c089a447af2aeeff646f882be509dd (tree 5c368e3efd17b153080b00dd1293fc6041aed834); revision-11 design record adds a documentation-only commit after this tested snapshot.
-Integration base: 89d28d5f3858f9d0164701c02e98b9eff2ce210e (tree 856eb9f70be0f3479865d3f2b2a1c24d75d913f9)
+Design revision: 12
+Candidate source inputs: published PR head d27667a4936e813fb612de6cd245be03a2d6f101 (tree d02aa9a8b2c219b7767b9793c700287ecfc24c0b); latest main base 6690f1af97977ad5671235e9204296cd2d504ad5 (tree 5784b2173a5574becc206a4ecb323bb755fea823); rebased implementation/test snapshot 19d0047c71de2088f7383ed1dad6804bf5c01843 (tree 9229cf5dd59fb166183528f903b94751583b48a4); revision-12 design record adds a documentation-only commit after this tested snapshot.
+Integration base: 6690f1af97977ad5671235e9204296cd2d504ad5 (tree 5784b2173a5574becc206a4ecb323bb755fea823)
 Scope/trigger: PR reviews 5199052257, 5214666396 and comment 5687377735; >500 production lines and planner/plan compatibility boundary
 Reviewer identity and role: historical GPT-6 Astra review of d56711fa5b429e5e6e52f64f603d2e853478edca against base 4ff27bb9b35c43c1b0961bb9a01bf8fc0b6a2171; any exact-head review decision is tracked separately from maintainer design approval
-Review timestamp: historical revision-7 review was recorded 2026-09-17; exact revision-11 independent implementation review and maintainer design approval remain separate and pending
+Review timestamp: historical revision-7 review was recorded 2026-09-17; revision-11 Astra Medium follow-up resolved its P3 evidence-label correction; exact revision-12 implementation review is tracked separately from maintainer design approval, which remains pending
 Decision: DRAFT / AWAITING MAINTAINER APPROVAL
-Validation evidence: historical revision-9 CGo, vet, formatting, and benchmark results are recorded above; current-base revision-11 CGo tests, focused owner-boundary race tests, COM_STMT/default-warning regression, frontend SQL-mode regression, and diff check passed as recorded above. No local distributed BVT, current PR CI, or PR-wide merged changed-line coverage pass is claimed.
+Validation evidence: historical revision-9 CGo, vet, formatting, and benchmark results are recorded above; latest-base revision-12 CGo package tests, focused owner-boundary race tests, COM_STMT/default-warning regression, frontend SQL-mode regression, and clean rebase passed as recorded above. No local distributed BVT, current PR CI, or PR-wide merged changed-line coverage pass is claimed.
 Decisions proposed for maintainer acceptance: retain strict INT64 precision controls (no general integer-prefix widening); prefer correctness over function-wide zonemap pruning; retain the bounded per-parameter source scan with its measured owner-boundary traversal cost; approve the revision-9 argument-owner boundaries and no-inherited-role fast path; confirm or revise the revision-11 proposal to map MySQL-compatible permissive conversion to absence of MATRIXONE_NATIVE and to retain permissive behavior in the default session
 Evidence links: [PR #28523](https://github.com/matrixorigin/matrixone/pull/28523); [historical-head CI run 35197284882](https://github.com/matrixorigin/matrixone/actions/runs/35197284882); the PR/evidence ledger is the record for commit replay, review, CI, and BVT; current local post-rebase evidence is recorded above
 Implementation deviations requiring follow-up: MOD native arithmetic widening regression fixed in 8fc4d5250; strict INT64 precision acceptance, zonemap-pruning decision, and scan-cost acceptance remain pending
