@@ -516,7 +516,13 @@ func TestPersistedDecimalLiteralProtocolAdmission(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, features.DecimalLiteralSemantics, expr.String())
 
-	for _, version := range []int64{defines.MORPCVersion83, defines.MORPCVersion85} {
+	// v84 is already owned by the discrete-percentile protocol contract; the
+	// decimal literal fence must remain v85 rather than silently consuming v84.
+	for _, version := range []int64{
+		defines.MORPCVersion83,
+		defines.MORPCVersion84,
+		defines.MORPCVersion85,
+	} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, version)
 		err = RequirePersistedExpressionProtocol(proc.Ctx, proc, expr)
