@@ -997,7 +997,7 @@ func builtInInternalCharacterSet(parameters []*vector.Vector, result vector.Func
 }
 
 func builtInConcatCheck(overloads []overload, inputs []types.Type) checkResult {
-	if len(inputs) > 1 {
+	if len(inputs) > 0 {
 		hasJSON := false
 		shouldCast := false
 
