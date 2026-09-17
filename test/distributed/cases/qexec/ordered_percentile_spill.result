@@ -1,0 +1,47 @@
+drop database if exists ordered_percentile_spill;
+create database ordered_percentile_spill;
+use ordered_percentile_spill;
+create table t(v bigint);
+insert into t select result from generate_series(1, 20000) g;
+insert into t values (null);
+set @percentile_saved_dop = @@max_dop;
+set @percentile_saved_spill = @@agg_spill_mem;
+set @@max_dop = 1;
+set @@agg_spill_mem = 65536;
+select percentile_cont(0.95) within group(order by v) as pc,
+percentile_disc(0.95) within group(order by v) as pd from t;
+➤ pc[8,53,31]  ¦  pd[-5,64,0]  𝄀
+19000.05  ¦  19000
+set @@agg_spill_mem = 536870912;
+select percentile_cont(0.95) within group(order by v) as pc,
+percentile_disc(0.95) within group(order by v) as pd from t;
+➤ pc[8,53,31]  ¦  pd[-5,64,0]  𝄀
+19000.05  ¦  19000
+set @@agg_spill_mem = 65536;
+explain (analyze true)
+select percentile_cont(0.95) within group(order by v),
+percentile_disc(0.95) within group(order by v) from t;
+-- @regex("SpillRows=[1-9][0-9]*", true)
+-- @regex("SpillSize=[1-9][0-9.]* [KMGT]iB", true)
+➤ tp query plan[12,-1,0]  𝄀
+Project  𝄀
+  Analyze: timeConsumed=0ms waitTime=0ms inputRows=1 outputRows=1 (min=1, max=1) InputSize=16 bytes OutputSize=16 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=16 bytes (min=16 bytes, max=16 bytes)  𝄀
+  ->  Aggregate  𝄀
+        Analyze: timeConsumed=25ms waitTime=0ms inputRows=20001 outputRows=1 (min=1, max=1) InputSize=156.26 KiB OutputSize=16 bytes ReadSize=0 bytes|0 bytes|0 bytes MemorySize=1.05 MiB (min=1.05 MiB, max=1.05 MiB) SpillRows=40000 SpillSize=312.50 KiB (min=312.50 KiB, max=312.50 KiB)  𝄀
+        Aggregate Functions: percentile_cont(0.95) WITHIN GROUP (ORDER BY t.v ASC), percentile_disc(0.95) WITHIN GROUP (ORDER BY t.v ASC)  𝄀
+        ->  Table Scan on ordered_percentile_spill.t  𝄀
+              Analyze: timeConsumed=0ms waitTime=0ms inputBlocks=4 inputRows=20001 outputRows=20001 (min=20001, max=20001) InputSize=156.26 KiB OutputSize=156.26 KiB ReadSize=78.27 KiB|0 bytes|0 bytes MemorySize=128.00 KiB (min=128.00 KiB, max=128.00 KiB)
+set @@max_dop = 4;
+select percentile_cont(0.5) within group(order by v) as pc,
+percentile_disc(0.95) within group(order by v desc) as pd_desc,
+percentile_cont(0) within group(order by v) as first_v,
+percentile_disc(1) within group(order by v) as last_v from t;
+➤ pc[8,53,31]  ¦  pd_desc[-5,64,0]  ¦  first_v[8,53,31]  ¦  last_v[-5,64,0]  𝄀
+10000.5  ¦  1001  ¦  1.0  ¦  20000
+select percentile_cont(0.5) within group(order by v) as pc,
+percentile_disc(0.5) within group(order by v) as pd from t where v is null;
+➤ pc[8,53,31]  ¦  pd[-5,64,0]  𝄀
+null  ¦  null
+set @@max_dop = @percentile_saved_dop;
+set @@agg_spill_mem = @percentile_saved_spill;
+drop database ordered_percentile_spill;
