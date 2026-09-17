@@ -201,6 +201,9 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	if err = validateRemoteAutoIDCachePipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
+	if err = validateFulltext2ProbeTailDestination(proc, p); err != nil {
+		return nil, err
+	}
 	return p.Marshal()
 }
 
