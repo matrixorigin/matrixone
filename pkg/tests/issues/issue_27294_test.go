@@ -314,6 +314,10 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 		err = prefixModeStmt.QueryRowContext(ctx, "1.5tail").Scan(&prefixModeResult)
 		require.Error(t, err,
 			"MATRIXONE_NATIVE must reject trailing text instead of consuming a numeric prefix")
+		err = modeConn.QueryRowContext(ctx, "select mod(2, '1.5tail')").Scan(&prefixModeResult)
+		require.Error(t, err,
+			"MATRIXONE_NATIVE must reject trailing text in MOD's right operand")
+		require.Contains(t, err.Error(), `invalid input: "1.5tail" is invalid numeric string`)
 		_, err = modeConn.ExecContext(ctx, "set session sql_mode = 'STRICT_TRANS_TABLES'")
 		require.NoError(t, err)
 		require.NoError(t, prefixModeStmt.QueryRowContext(ctx, "1.5tail").Scan(&prefixModeResult))
