@@ -55,6 +55,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/adaptivetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
@@ -2104,6 +2105,22 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileSort(node, ss)
 		return ss, nil
+	case plan.Node_ADAPTIVE_TOP:
+		if len(node.Children) < 2 || len(node.Children) > 3 || node.Limit == nil {
+			return nil, moerr.NewInternalErrorNoCtx("invalid adaptive top plan")
+		}
+		branches := make([][]*Scope, len(node.Children))
+		for i, childID := range node.Children {
+			branches[i], err = c.compilePlanScope(step, childID, nodes)
+			if err != nil {
+				for j := 0; j < i; j++ {
+					ReleaseScopes(branches[j])
+				}
+				return nil, err
+			}
+		}
+		c.setAnalyzeCurrent(nil, int(curNodeIdx))
+		return c.compileAdaptiveTop(node, branches), nil
 	case plan.Node_UNION_ALL:
 		lazy := streamingUnionAllDemand(node, outerUnionAllDemand)
 		if !lazy && c.pn != nil {
@@ -6120,6 +6137,37 @@ func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right
 	}
 	c.anal.isFirst = false
 	return rs
+}
+
+func (c *Compile) compileAdaptiveTop(node *plan.Node, candidates [][]*Scope) []*Scope {
+	branches := make([]*Scope, len(candidates))
+	for i := range candidates {
+		branches[i] = c.newMergeScope(candidates[i])
+	}
+	rs := c.newMergeScope(branches)
+	rs.LazyPreScopes = true
+	mergeOp, ok := rs.RootOp.(*merge.Merge)
+	if !ok {
+		panic("adaptive top scope has no merge input")
+	}
+	mergeOp.WithPartial(0, 0)
+	op := adaptivetop.NewArgument()
+	op.LimitExpr = plan2.DeepCopyExpr(node.Limit)
+	op.Branches = len(branches)
+	op.SpillConfig = materialized.SpillConfig{
+		FileFactory: func(name string) (*os.File, error) {
+			spillFS, err := c.proc.GetSpillFileService()
+			if err != nil {
+				return nil, err
+			}
+			return spillFS.CreateAndRemoveFile(c.proc.Ctx, name)
+		},
+		Budget: newMaterializedSpillBudget(c.proc),
+	}
+	op.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
+	rs.setRootOperator(op)
+	c.anal.isFirst = false
+	return []*Scope{rs}
 }
 
 func (c *Compile) compileUnionAll(

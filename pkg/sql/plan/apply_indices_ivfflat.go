@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"fmt"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -608,6 +609,9 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	if err != nil || ivfCtx == nil {
 		return nodeID, err
 	}
+	if ivfCtx.isAutoMode {
+		return builder.buildAdaptiveIvfTop(nodeID, vecCtx, multiTableIndex, colRefCnt, idxColMap)
+	}
 
 	// Persist the inferred auto mode back to the plan nodes so downstream
 	// adaptive-vector-search checks see the same mode consistently.
@@ -776,7 +780,9 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	}
 	tableFuncNodeID := builder.appendNode(tableFuncNode, ctx)
 
-	err = builder.addBinding(tableFuncNodeID, tree.AliasClause{Alias: tree.Identifier("mo_ivf_alias_0")}, ctx)
+	err = builder.addBinding(tableFuncNodeID, tree.AliasClause{
+		Alias: tree.Identifier(fmt.Sprintf("mo_ivf_alias_%d", tableFuncNodeID)),
+	}, ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -1166,6 +1172,105 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	}
 	remap := vectorRemapForChildProject(childNode, orderExpr, orderByScore[0].Expr, scanRemap)
 	return builder.spliceVectorRewrite(vecCtx, nodeID, sortByID, remap, idxColMap), nil
+}
+
+func (builder *QueryBuilder) buildAdaptiveIvfTop(
+	nodeID int32,
+	vecCtx *vectorSortContext,
+	multiTableIndex *MultiTableIndex,
+	colRefCnt map[[2]int32]int,
+	idxColMap map[[2]int32]*plan.Expr,
+) (int32, error) {
+	ctx := builder.ctxByNode[nodeID]
+	if vecCtx.projNode != nil && len(vecCtx.projNode.ProjectList) != 1 {
+		vecCtx.rankOption = DeepCopyRankOption(vecCtx.rankOption)
+		if vecCtx.rankOption == nil {
+			vecCtx.rankOption = &plan.RankOption{}
+		}
+		vecCtx.rankOption.Mode = "force"
+		vecCtx.projNode.RankOption = DeepCopyRankOption(vecCtx.rankOption)
+		vecCtx.sortNode.RankOption = DeepCopyRankOption(vecCtx.rankOption)
+		vecCtx.scanNode.RankOption = DeepCopyRankOption(vecCtx.rankOption)
+		return nodeID, nil
+	}
+	preRoot := builder.copyNode(ctx, nodeID)
+	forceRoot := builder.copyNode(ctx, nodeID)
+
+	setVectorMode := func(root int32, mode string) {
+		visited := make(map[int32]struct{})
+		var walk func(int32)
+		walk = func(id int32) {
+			if _, ok := visited[id]; ok || id < 0 || int(id) >= len(builder.qry.Nodes) {
+				return
+			}
+			visited[id] = struct{}{}
+			node := builder.qry.Nodes[id]
+			if node.RankOption != nil || node.NodeType == plan.Node_SORT ||
+				node.NodeType == plan.Node_PROJECT || node.NodeType == plan.Node_TABLE_SCAN {
+				node.RankOption = DeepCopyRankOption(node.RankOption)
+				if node.RankOption == nil {
+					node.RankOption = &plan.RankOption{}
+				}
+				node.RankOption.Mode = mode
+			}
+			for _, child := range node.Children {
+				walk(child)
+			}
+		}
+		walk(root)
+	}
+	contextFor := func(root int32) *vectorSortContext {
+		if vecCtx.projNode != nil {
+			return builder.buildVectorSortContext(builder.qry.Nodes[root])
+		}
+		return builder.buildVectorSortContextFromSort(builder.qry.Nodes[root])
+	}
+
+	setVectorMode(nodeID, "post")
+	postCtx := contextFor(nodeID)
+	if postCtx == nil {
+		return nodeID, moerr.NewInternalErrorNoCtx("cannot rebuild adaptive POST vector context")
+	}
+	postMap := make(map[[2]int32]*plan.Expr)
+	postRoot, err := builder.applyIndicesForSortUsingIvfflat(nodeID, postCtx, multiTableIndex, colRefCnt, postMap)
+	if err != nil {
+		return nodeID, err
+	}
+
+	setVectorMode(forceRoot, "force")
+	setVectorMode(preRoot, "pre")
+	preCtx := contextFor(preRoot)
+	if preCtx == nil {
+		return nodeID, moerr.NewInternalErrorNoCtx("cannot rebuild adaptive PRE vector context")
+	}
+	preRoot, err = builder.applyIndicesForSortUsingIvfflat(preRoot, preCtx, multiTableIndex, colRefCnt, make(map[[2]int32]*plan.Expr))
+	if err != nil {
+		return nodeID, err
+	}
+	for key, expr := range postMap {
+		idxColMap[key] = expr
+	}
+
+	resultLimit, _ := vectorResultPagination(vecCtx)
+	if resultLimit == nil {
+		return nodeID, moerr.NewInternalErrorNoCtx("adaptive vector result limit is missing")
+	}
+	postNode := builder.qry.Nodes[postRoot]
+	adaptive := &plan.Node{
+		NodeType:    plan.Node_ADAPTIVE_TOP,
+		Children:    []int32{postRoot, preRoot, forceRoot},
+		Limit:       DeepCopyExpr(resultLimit),
+		ProjectList: DeepCopyExprList(postNode.ProjectList),
+		BindingTags: append([]int32(nil), postNode.BindingTags...),
+		Stats:       DeepCopyStats(postNode.Stats),
+	}
+	if adaptive.Stats != nil && resultLimit.GetLit() != nil {
+		limit := resultLimit.GetLit().GetU64Val()
+		if adaptive.Stats.Outcnt > float64(limit) {
+			adaptive.Stats.Outcnt = float64(limit)
+		}
+	}
+	return builder.appendNode(adaptive, ctx), nil
 }
 
 func rebindIvfPreFilters(filters []*plan.Expr, scanNode *plan.Node, includeColumns []string) []*plan.Expr {
