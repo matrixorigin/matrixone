@@ -90,6 +90,17 @@ func TestBindBackExecSessionWithoutUpstream(t *testing.T) {
 	require.Equal(t, uuid.Nil, proc.Base.SessionInfo.SessionId)
 }
 
+func TestExecInFrontendInBackCompatibilityNoOp(t *testing.T) {
+	backSes := &backSession{}
+	execCtx := &ExecCtx{
+		reqCtx: context.Background(),
+		ses:    backSes,
+		stmt:   &tree.CompatibilityNoOpStmt{},
+	}
+
+	require.NoError(t, execInFrontendInBack(backSes, execCtx))
+}
+
 func TestExecInFrontendInBackRequiresUpstreamForPreparedStatements(t *testing.T) {
 	ctx := context.Background()
 	varExpr := tree.NewVarExpr("sql", false, false, nil)

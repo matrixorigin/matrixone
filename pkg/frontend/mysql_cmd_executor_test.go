@@ -5211,6 +5211,18 @@ func Test_statement_type(t *testing.T) {
 	})
 }
 
+func TestExecInFrontendCompatibilityNoOp(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	execCtx := newTestExecCtx(context.Background(), ctrl)
+	execCtx.ses = ses
+	execCtx.stmt = &tree.CompatibilityNoOpStmt{}
+
+	_, err := execInFrontend(ses, execCtx)
+	require.NoError(t, err)
+}
+
 func TestLockTablesSessionState(t *testing.T) {
 	ses := &Session{}
 
