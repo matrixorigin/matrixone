@@ -8062,6 +8062,191 @@ func TestGeodeticDiscreteDistanceDispatchAndUnits(t *testing.T) {
 	}
 }
 
+func TestGeodeticDiscreteDistanceUnitEmpty(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	geom := types.T_geometry.ToType()
+	geom.Width = 4327 // SRID 4326
+	geom32 := types.T_geometry32.ToType()
+	geom32.Width = 4327 // SRID 4326
+
+	line := "LINESTRING(0 0,1 0)"
+	oneDegreeMeters := math.Pi / 180 * geo.EarthRadiusMeters
+	encode32 := func(t *testing.T, wkt string) string {
+		t.Helper()
+		if wkt == "\x01" {
+			return wkt
+		}
+		g, err := geo.ParseWKT(wkt)
+		require.NoError(t, err)
+		payload, err := geo.WriteWKBFloat32(g)
+		require.NoError(t, err)
+		return string(payload)
+	}
+
+	cases := []struct {
+		name     string
+		left     string
+		right    string
+		want     float64
+		wantNull bool
+		wantErr  bool
+	}{
+		{name: "empty left", left: "GEOMETRYCOLLECTION EMPTY", right: line, wantNull: true},
+		{name: "empty right", left: line, right: "LINESTRING EMPTY", wantNull: true},
+		{name: "both empty", left: "GEOMETRYCOLLECTION EMPTY", right: "LINESTRING EMPTY", wantNull: true},
+		{name: "nested all-empty collection", left: "GEOMETRYCOLLECTION(GEOMETRYCOLLECTION EMPTY)", right: line, wantNull: true},
+		{name: "mixed collection remains non-empty", left: "GEOMETRYCOLLECTION(POINT(0 0),POINT(1 0))", right: line},
+		{name: "mixed collection ignores empty member", left: "GEOMETRYCOLLECTION(POINT(0 0),POINT EMPTY,POINT(1 0))", right: line},
+		{name: "malformed left", left: "\x01", right: line, wantErr: true},
+		{name: "malformed right", left: line, right: "\x01", wantErr: true},
+		{name: "empty left malformed right", left: "LINESTRING EMPTY", right: "\x01", wantErr: true},
+		{name: "malformed left empty right", left: "\x01", right: "LINESTRING EMPTY", wantErr: true},
+	}
+
+	for _, fn := range []struct {
+		name string
+		fn   fEvalFn
+		fn32 fEvalFn
+	}{
+		{name: "frechet", fn: StFrechetDistanceWithUnit, fn32: StFrechetDistanceWithUnit32},
+		{name: "hausdorff", fn: StHausdorffDistanceWithUnit, fn32: StHausdorffDistanceWithUnit32},
+	} {
+		for _, tc := range cases {
+			t.Run(fn.name+"/"+tc.name, func(t *testing.T) {
+				want := tc.want
+				if tc.wantNull {
+					want = 0
+				}
+				fc := NewFunctionTestCase(proc,
+					[]FunctionTestInput{
+						NewFunctionTestInput(geom, []string{tc.left}, []bool{false}),
+						NewFunctionTestInput(geom, []string{tc.right}, []bool{false}),
+						NewFunctionTestInput(types.T_varchar.ToType(), []string{"metre"}, []bool{false}),
+					},
+					NewFunctionTestResult(types.T_float64.ToType(), tc.wantErr, []float64{want}, []bool{tc.wantNull}), fn.fn)
+				ok, info := fc.Run()
+				require.True(t, ok, info)
+
+				fc32 := NewFunctionTestCase(proc,
+					[]FunctionTestInput{
+						NewFunctionTestInput(geom32, []string{encode32(t, tc.left)}, []bool{false}),
+						NewFunctionTestInput(geom32, []string{encode32(t, tc.right)}, []bool{false}),
+						NewFunctionTestInput(types.T_varchar.ToType(), []string{"metre"}, []bool{false}),
+					},
+					NewFunctionTestResult(types.T_float32.ToType(), tc.wantErr, []float32{float32(want)}, []bool{tc.wantNull}), fn.fn32)
+				ok, info = fc32.Run()
+				require.True(t, ok, info)
+			})
+		}
+	}
+
+	for _, fn := range []struct {
+		name string
+		fn   fEvalFn
+		fn32 fEvalFn
+	}{
+		{name: "frechet", fn: StFrechetDistanceWithUnit, fn32: StFrechetDistanceWithUnit32},
+		{name: "hausdorff", fn: StHausdorffDistanceWithUnit, fn32: StHausdorffDistanceWithUnit32},
+	} {
+		t.Run(fn.name+"/empty preserves invalid unit", func(t *testing.T) {
+			for _, tc := range []struct {
+				name string
+				typ  types.Type
+				fn   fEvalFn
+			}{
+				{name: "geometry", typ: geom, fn: fn.fn},
+				{name: "geometry32", typ: geom32, fn: fn.fn32},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					fc := NewFunctionTestCase(proc,
+						[]FunctionTestInput{
+							NewFunctionTestInput(tc.typ, []string{"LINESTRING EMPTY"}, []bool{false}),
+							NewFunctionTestInput(tc.typ, []string{line}, []bool{false}),
+							NewFunctionTestInput(types.T_varchar.ToType(), []string{"parsec"}, []bool{false}),
+						}, NewFunctionTestResult(types.T_float64.ToType(), true, []float64{0}, nil), tc.fn)
+					if tc.typ.Oid == types.T_geometry32 {
+						fc = NewFunctionTestCase(proc,
+							[]FunctionTestInput{
+								NewFunctionTestInput(tc.typ, []string{encode32(t, "LINESTRING EMPTY")}, []bool{false}),
+								NewFunctionTestInput(tc.typ, []string{encode32(t, line)}, []bool{false}),
+								NewFunctionTestInput(types.T_varchar.ToType(), []string{"parsec"}, []bool{false}),
+							}, NewFunctionTestResult(types.T_float32.ToType(), true, []float32{0}, nil), tc.fn)
+					}
+					ok, info := fc.Run()
+					require.True(t, ok, info)
+				})
+			}
+		})
+
+		t.Run(fn.name+"/empty preserves unsupported SRID", func(t *testing.T) {
+			for _, tc := range []struct {
+				name string
+				typ  types.Type
+				fn   fEvalFn
+			}{
+				{name: "geometry", typ: types.T_geometry.ToType(), fn: fn.fn},
+				{name: "geometry32", typ: types.T_geometry32.ToType(), fn: fn.fn32},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					fc := NewFunctionTestCase(proc,
+						[]FunctionTestInput{
+							NewFunctionTestInput(tc.typ, []string{"LINESTRING EMPTY"}, []bool{false}),
+							NewFunctionTestInput(tc.typ, []string{line}, []bool{false}),
+							NewFunctionTestInput(types.T_varchar.ToType(), []string{"metre"}, []bool{false}),
+						}, NewFunctionTestResult(types.T_float64.ToType(), true, []float64{0}, nil), tc.fn)
+					if tc.typ.Oid == types.T_geometry32 {
+						fc = NewFunctionTestCase(proc,
+							[]FunctionTestInput{
+								NewFunctionTestInput(tc.typ, []string{encode32(t, "LINESTRING EMPTY")}, []bool{false}),
+								NewFunctionTestInput(tc.typ, []string{encode32(t, line)}, []bool{false}),
+								NewFunctionTestInput(types.T_varchar.ToType(), []string{"metre"}, []bool{false}),
+							}, NewFunctionTestResult(types.T_float32.ToType(), true, []float32{0}, nil), tc.fn)
+					}
+					ok, info := fc.Run()
+					require.True(t, ok, info)
+				})
+			}
+		})
+	}
+
+	for _, fn := range []struct {
+		name string
+		fn   fEvalFn
+		fn32 fEvalFn
+	}{
+		{name: "frechet", fn: StFrechetDistanceWithUnit, fn32: StFrechetDistanceWithUnit32},
+		{name: "hausdorff", fn: StHausdorffDistanceWithUnit, fn32: StHausdorffDistanceWithUnit32},
+	} {
+		t.Run(fn.name+"/mixed rows and mask", func(t *testing.T) {
+			selectList := &FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, false, true}}
+			fc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(geom, []string{line, "LINESTRING EMPTY", line, "\x01"}, []bool{false, false, false, true}),
+					NewFunctionTestInput(geom, []string{"LINESTRING(0 1,1 1)", line, "\x01", line}, nil),
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"metre", "metre", "metre", "metre"}, nil),
+				},
+				NewFunctionTestResult(types.T_float64.ToType(), false,
+					[]float64{oneDegreeMeters, 0, 0, 0}, []bool{false, true, true, true}), fn.fn).WithSelectList(selectList)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+
+			line32 := encode32(t, line)
+			other32 := encode32(t, "LINESTRING(0 1,1 1)")
+			empty32 := encode32(t, "LINESTRING EMPTY")
+			fc32 := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(geom32, []string{line32, empty32, line32, "\x01"}, []bool{false, false, false, true}),
+					NewFunctionTestInput(geom32, []string{other32, line32, "\x01", line32}, nil),
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"metre", "metre", "metre", "metre"}, nil),
+				},
+				NewFunctionTestResult(types.T_float32.ToType(), false,
+					[]float32{float32(oneDegreeMeters), 0, 0, 0}, []bool{false, true, true, true}), fn.fn32).WithSelectList(selectList)
+			ok, info = fc32.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
 func TestSpatialDistanceUnitOverloadsResolve(t *testing.T) {
 	geom := types.T_geometry.ToType()
 	geom32 := types.T_geometry32.ToType()
