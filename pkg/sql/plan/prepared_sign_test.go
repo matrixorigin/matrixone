@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -177,4 +178,64 @@ func TestPreparedEltRebindsRuntimeNumericDomain(t *testing.T) {
 	doubleFn := findPlanFunctionExpr(filled, "elt")
 	require.NotNil(t, doubleFn)
 	require.Equal(t, int32(types.T_float64), doubleFn.GetF().Args[0].GetF().Args[0].Typ.Id)
+}
+
+func TestPreparedEltRebindsNumericTextWithStringRuntimeMetadata(t *testing.T) {
+	ctx := context.Background()
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt_elt_text_metadata from 'select elt(?, ''a'', ''b'', ''c'')'")
+	require.NoError(t, err)
+	preparePlan := prepared.GetDcl().GetPrepare().Plan
+
+	for _, tc := range []struct {
+		name            string
+		param           ParamValue
+		want            string
+		wantNull        bool
+		wantSpecialized bool
+	}{
+		{
+			name: "runtime text type with complete decimal token",
+			param: ParamValue{Value: "1.6", RuntimeType: types.T_text.ToType(),
+				HasRuntimeType: true},
+			want:            "b",
+			wantSpecialized: true,
+		},
+		{
+			name: "source text type with complete decimal token",
+			param: ParamValue{Value: "1.6", SourceType: types.T_text.ToType(),
+				HasSourceType: true},
+			want:            "b",
+			wantSpecialized: true,
+		},
+		{
+			name: "runtime text type with unsupported token preserves bound value",
+			param: ParamValue{Value: "foo", MaterializedValue: "foo",
+				RuntimeType: types.T_text.ToType(), HasRuntimeType: true},
+			wantNull: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			runtimePlan, specialized, err := FillValuesOfParamsInPlanWithPreparedNumericOverload(
+				ctx, preparePlan, []any{tc.param})
+			require.NoError(t, err)
+			require.Equal(t, tc.wantSpecialized, specialized)
+			fn := findPlanFunctionExpr(runtimePlan, "elt")
+			require.NotNil(t, fn, runtimePlan.String())
+
+			proc := testutil.NewProc(t)
+			defer proc.Free()
+			executor, err := colexec.NewExpressionExecutor(proc, fn)
+			require.NoError(t, err)
+			defer executor.Free()
+			result, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			require.NoError(t, err)
+			if tc.wantNull {
+				require.True(t, result.IsNull(0), runtimePlan.String())
+			} else {
+				require.False(t, result.IsNull(0), runtimePlan.String())
+				require.Equal(t, tc.want, result.GetStringAt(0), runtimePlan.String())
+			}
+		})
+	}
 }

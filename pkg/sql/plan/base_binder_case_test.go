@@ -927,6 +927,15 @@ func TestPreparedNumericRebindPreservesUnsupportedAndNullBoundOccurrences(t *tes
 				Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "bad"}}}},
 		},
 		{
+			name: "unsupported text runtime type preserves already materialized bound",
+			value: ParamValue{
+				Value: "foo", MaterializedValue: "foo",
+				RuntimeType: types.T_text.ToType(), HasRuntimeType: true,
+			},
+			bound: &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text)},
+				Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "foo"}}}},
+		},
+		{
 			name: "NULL source preserves materialized NULL",
 			value: ParamValue{
 				Value: nil, PrepareParamKind: vector.PrepareParamInteger,
@@ -1673,6 +1682,55 @@ func TestPreparedMathStringValueAndPrecisionRoles(t *testing.T) {
 		require.NoError(t, err, "the same prepared template must work again in MySQL mode")
 		require.Equal(t, float64(1.5), mysqlValue.value)
 	})
+	for _, name := range []string{"round", "truncate"} {
+		t.Run(name+" explicit value CAST matches direct SQL", func(t *testing.T) {
+			directPlan, err := runOneStmt(NewMockOptimizer(false), t,
+				"select "+name+"(cast('1.5tail' as signed), 0)")
+			require.NoError(t, err)
+			directFn := findPlanFunctionExpr(directPlan, name)
+			require.NotNil(t, directFn, directPlan.String())
+			directCast := directFn.GetF().Args[0]
+			require.True(t, isExplicitPreparedCast(directCast), directFn.String())
+			require.True(t, isStringBackedType(makeTypeByPlan2Expr(directCast.GetF().Args[0])))
+			directSource := directCast.GetF().Args[0].GetLit()
+			require.NotNil(t, directSource, directFn.String())
+			require.Equal(t, "1.5tail", directSource.GetSval())
+			directResult, err := eval(t, directFn)
+			require.NoError(t, err)
+			require.False(t, directResult.isNull)
+			require.Equal(t, types.T_int64, directResult.typ)
+			require.Equal(t, int64(1), directResult.value)
+
+			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+				"prepare stmt_explicit_value_cast_"+name+
+					" from 'select "+name+"(cast(? as signed), ?)'")
+			require.NoError(t, err)
+			boundPlan, _, err := FillValuesOfParamsInPlanWithSpecialization(
+				ctx, prepared.GetDcl().GetPrepare().Plan, []any{
+					stringParam("1.5tail"),
+					ParamValue{Value: int64(0), RuntimeType: types.T_int64.ToType(), HasRuntimeType: true},
+				})
+			require.NoError(t, err)
+			boundFn := findPlanFunctionExpr(boundPlan, name)
+			require.NotNil(t, boundFn, boundPlan.String())
+			require.True(t, isExplicitPreparedCast(boundFn.GetF().Args[0]), boundFn.String())
+			require.Equal(t, int32(types.T_int64), boundFn.GetF().Args[0].Typ.Id, boundFn.String())
+			boundSource := boundFn.GetF().Args[0].GetF().Args[0]
+			require.True(t, isStringBackedType(makeTypeByPlan2Expr(boundSource)), boundFn.String())
+			require.NotNil(t, boundSource.GetLit(), boundFn.String())
+			require.Equal(t, "1.5tail", boundSource.GetLit().GetSval(), boundFn.String())
+			require.Equal(t, int32(types.T_int64), boundFn.GetF().Args[1].Typ.Id, boundFn.String())
+
+			boundResult, err := eval(t, boundFn)
+			require.NoError(t, err)
+			require.False(t, boundResult.isNull)
+			require.Equal(t, types.T_int64, boundResult.typ)
+			require.Equal(t, int64(1), boundResult.value)
+			require.Equal(t, directResult.typ, boundResult.typ)
+			require.Equal(t, directResult.scale, boundResult.scale)
+			require.Equal(t, directResult.value, boundResult.value)
+		})
+	}
 }
 
 func TestBindFuncExprImplByPlanExpr_CaseDifferentDecimalScale(t *testing.T) {

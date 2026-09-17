@@ -1112,9 +1112,38 @@ func (rule *ResetParamRefRule) typedRuntimeParamExpr(pos int) (*Expr, bool, erro
 	if !typOK {
 		return nil, false, nil
 	}
-	if kind != vector.PrepareParamFloat && typ.Oid != types.T_float64 && typ.Oid != types.T_float32 &&
-		!typ.Oid.IsMySQLString() {
-		return nil, false, nil
+	if kind != vector.PrepareParamFloat && typ.Oid != types.T_float64 && typ.Oid != types.T_float32 {
+		// A string-backed protocol type is still eligible for numeric overload
+		// refinement when its complete lexeme proves a numeric domain.  Keep
+		// unsupported or incomplete text on the already-materialized fallback;
+		// do not invent a numeric source from a prefix here.  Value-role math
+		// arguments use their separate SQL-mode-aware source before reaching
+		// this generic inference path.
+		if !typ.Oid.IsMySQLString() {
+			return nil, false, nil
+		}
+		raw := fmt.Sprint(value)
+		if pos < len(rule.paramValues) {
+			if param, ok := rule.paramValues[pos].(ParamValue); ok {
+				raw = preparedParamValueText(param)
+			}
+		}
+		inferred, inferredOK := PreparedRuntimeTypeFromString(strings.TrimSpace(raw))
+		if !inferredOK {
+			return nil, false, nil
+		}
+		isBin := false
+		if pos < len(rule.paramValues) {
+			if param, ok := rule.paramValues[pos].(ParamValue); ok {
+				isBin = param.IsBin
+			}
+		}
+		bound, err := preparedRuntimeParamExpr(rule.ctx, raw, isBin, inferred)
+		if err != nil {
+			return nil, false, err
+		}
+		rule.retainRuntimeParamRef(pos, bound)
+		return bound, true, nil
 	}
 	isBin := false
 	if pos < len(rule.paramValues) {
@@ -1487,6 +1516,16 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExprWithRole(
 		return copy, changed, nil
 	}
 	if fn := expr.GetF(); fn != nil {
+		if role == preparedStringMathRoleValue && isExplicitPreparedCast(expr) {
+			// A SQL-authored CAST is an explicit conversion boundary. Do not let
+			// the surrounding math value's permissive DOUBLE source replace the
+			// cast's source operand; the visitor's current bound copy already has
+			// this EXECUTE's materialized parameter under the original CAST.
+			if bound != nil {
+				return bound, false, nil
+			}
+			return expr, false, nil
+		}
 		// A provisional cast is not an explicit user cast.  Removing it before
 		// rebuilding the enclosing expression is what prevents ABS(? + 0) from
 		// reintroducing the prepare-time DOUBLE round trip.
