@@ -432,7 +432,7 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 	require.Nil(t, helper.txnOperator.GetWorkspace(), "rebuilt txnOperator should have nil workspace initially")
 }
 
-func TestGenerateProcessHelperRejectsEmptyTimeZone(t *testing.T) {
+func TestGenerateProcessHelperToleratesEmptyTimeZone(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -443,9 +443,9 @@ func TestGenerateProcessHelperRejectsEmptyTimeZone(t *testing.T) {
 	data, err := (&pipeline.ProcessInfo{}).Marshal()
 	require.NoError(t, err)
 
-	_, err = generateProcessHelper(context.Background(), data, txnClient)
-	require.Error(t, err)
-	require.ErrorContains(t, err, "Time.UnmarshalBinary: no data")
+	helper, err := generateProcessHelper(context.Background(), data, txnClient)
+	require.NoError(t, err)
+	require.Nil(t, helper.sessionInfo.TimeZone)
 }
 
 func TestGenerateProcessHelperRejectsUnknownStringShuffleHashAlgorithm(t *testing.T) {
