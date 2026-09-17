@@ -266,6 +266,11 @@ type IgnoreForeignKey struct{}
 
 type AlterCopyOpt struct{}
 
+// OptimizerHints carries a per-statement optimizer_hints string (same key=value
+// format as the global variable) set by the internal SQL executor via
+// StatementOption.WithOptimizerHints and applied by the planner's parseOptimizeHints.
+type OptimizerHints struct{}
+
 // Determine if now is a bg sql.
 type BgKey struct{}
 
