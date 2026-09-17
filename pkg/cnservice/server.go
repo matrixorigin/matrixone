@@ -522,20 +522,17 @@ func (s *service) closeService() error {
 		// withdrawal below is the ownership handoff linearization point.
 		s.stopper.Stop()
 
-		s.closeErr = closeCNServiceSteps(
+		// A failed producer drain must not tear down its dependencies. Unknown
+		// local errors remain fail-stop; only remote withdrawal is diagnostic.
+		s.closeErr = drainCNServiceSteps(
 			// Query commands can reach frontend, task, engine, lock, shard,
 			// auto-increment, and transaction state. Stop and drain this remote
 			// ingress before clearing any of those dependencies.
 			s.closeQueryService,
 			s.stopFrontendSerialized,
-			s.closeSiriusRuntime,
 			s.closeBootstrapService,
-			// Frontend shutdown stops accepting interactive work, while stopTask
-			// drains scheduled ingestion statements. Only after both producers have
-			// stopped may the MongoDB pool disconnect clients still leased by a
-			// MongoScan operator.
+			// Stop scheduled statements as well as interactive frontend work.
 			s.stopTask,
-			s.closeMongoDBRuntime,
 			s.closePipelineAdmission,
 			s.server.Close,
 			// Pipeline handlers and the auto-increment cleanup worker can issue
@@ -543,7 +540,16 @@ func (s *service) closeService() error {
 			// dependencies, while keeping the trace consumer alive for final events.
 			s.waitPipelineHandlers,
 			s.closeIncrService,
-			s.withdrawViewMetadataAdmission,
+			// Cancel and join pipeline users before retiring execution runtimes;
+			// otherwise retirement can wait for the work we have not stopped yet.
+			s.closeSiriusRuntime,
+			s.closeMongoDBRuntime,
+		)
+		if s.closeErr != nil {
+			return
+		}
+		withdrawErr := s.withdrawViewMetadataAdmission()
+		localErr := closeCNServiceSteps(
 			s.stopRPCs,
 			s.closeTxnTraceService,
 			func() error {
@@ -571,8 +577,27 @@ func (s *service) closeService() error {
 				return nil
 			},
 		)
+		s.closeComplete = localErr == nil
+		s.closeErr = errors.Join(withdrawErr, localErr)
 	})
 	return s.closeErr
+}
+
+// CloseComplete certifies local teardown, not a successful remote generation
+// handoff. A withdrawal error remains observable through every Close call.
+func (s *service) CloseComplete() bool {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	return s.closeComplete
+}
+
+func drainCNServiceSteps(steps ...func() error) error {
+	for _, step := range steps {
+		if err := step(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *service) closePipelineAdmission() error {
