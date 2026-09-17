@@ -17,6 +17,7 @@ package test
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/test/testutil"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
@@ -387,6 +389,57 @@ func CreateDBAndTableForCNConsumerAndGetAppendData(
 		0,
 		nil,
 	)
+}
+
+// prepareISCPConsumerTarget separates empty sink setup from the propagation
+// budget. Call before registering the job, so its consumer cannot race DDL.
+// Keep CREATE TABLE strict: an unexpectedly reused target is a fixture error.
+func prepareISCPConsumerTarget(t *testing.T, ctx context.Context, sourceDB, sourceTable string, tableID uint64, jobName string) {
+	t.Helper()
+	quote := func(name string) string { return "`" + strings.ReplaceAll(name, "`", "``") + "`" }
+	v, ok := moruntime.ServiceRuntime("").GetGlobalVariables(moruntime.InternalSQLExecutor)
+	require.True(t, ok)
+	exec := v.(executor.SQLExecutor)
+	target := fmt.Sprintf("test_table_%d_%s", tableID, jobName)
+	// Both statements belong to one fixture transaction, avoiding an extra
+	// durable commit. ExecTxn rolls back partial setup on a statement error.
+	err := exec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+		for _, sql := range []string{
+			fmt.Sprintf("create database if not exists %s", quote(iscp.TargetDbName)),
+			fmt.Sprintf("create table %s.%s like %s.%s", quote(iscp.TargetDbName), quote(target), quote(sourceDB), quote(sourceTable)),
+		} {
+			result, err := txn.Exec(sql, executor.StatementOption{})
+			result.Close()
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	}, executor.Options{})
+	require.NoError(t, err)
+}
+
+func checkISCPConsumerData(t *testing.T, ctx context.Context, sourceDB, sourceTable string, tableID uint64, jobName string) {
+	t.Helper()
+	v, ok := moruntime.ServiceRuntime("").GetGlobalVariables(moruntime.InternalSQLExecutor)
+	require.True(t, ok)
+	exec := v.(executor.SQLExecutor)
+	source := fmt.Sprintf("%s.%s", sourceDB, sourceTable)
+	target := fmt.Sprintf("%s.test_table_%d_%s", iscp.TargetDbName, tableID, jobName)
+	for _, pair := range [][2]string{{source, target}, {target, source}} {
+		sql := fmt.Sprintf("select * from %s except select * from %s", pair[0], pair[1])
+		result, err := exec.Exec(ctx, sql, executor.Options{})
+		rows := 0
+		if err == nil {
+			result.ReadRows(func(n int, _ []*vector.Vector) bool {
+				rows += n
+				return true
+			})
+		}
+		result.Close()
+		require.NoError(t, err)
+		require.Zero(t, rows, sql)
+	}
 }
 
 func GetTestISCPExecutorOption() *iscp.ISCPExecutorOption {
