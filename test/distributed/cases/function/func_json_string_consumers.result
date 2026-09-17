@@ -36,7 +36,7 @@ id    c
 2    1
 3    null
 4    null
-set @json_string_param = '{"p":1}';
+set @json_string_param = binary '{"p":1}';
 prepare json_string_stmt from 'select id, concat(cast(? as json), js) as c from src order by id';
 execute json_string_stmt using @json_string_param;
 ➤ id[4,32,0]  ¦  c[12,65535,0]  𝄀
