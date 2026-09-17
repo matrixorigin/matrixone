@@ -15,6 +15,7 @@
 package compile
 
 import (
+	"fmt"
 	"os"
 	"testing"
 
@@ -75,10 +76,9 @@ func TestJSONAggregateOpaqueRejectsPreviousCapability(t *testing.T) {
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
 	worker := engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 
-	// Current main v80 and the reserved v81 do not include this aggregate
-	// executor. The gate must not reuse a version already assigned to another
-	// wire contract.
-	for _, version := range []int64{defines.MORPCVersion80, defines.MORPCVersion81} {
+	// Current main v82/v83 do not include this aggregate executor. The gate
+	// must not reuse a version already assigned to another wire contract.
+	for _, version := range []int64{defines.MORPCVersion82, defines.MORPCVersion83} {
 		client.version = version
 		c.execType = plan2.ExecTypeAP_MULTICN
 		c.cnList = worker
@@ -101,26 +101,26 @@ func TestJSONAggregateOpaqueRejectsPreviousCapability(t *testing.T) {
 	// sender's destination probe is the failing boundary.
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 	_, err := encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "MORPC protocol version 82")
+	require.ErrorContains(t, err, fmt.Sprintf("MORPC protocol version %d", jsonAggregateOpaqueCapabilityVersion))
 
 	wire := jsonAggregateOpaqueTestPipeline()
 	// The receiver-side gates must reject the same lowered plan from either
-	// current-main or the reserved pre-aggregate capability.
-	for _, version := range []int64{defines.MORPCVersion80, defines.MORPCVersion81} {
+	// current-main capability.
+	for _, version := range []int64{defines.MORPCVersion82, defines.MORPCVersion83} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		require.ErrorContains(t,
 			validateJSONAggregateOpaquePipelineProtocol(c.proc, wire),
-			"MORPC protocol version 82")
+			fmt.Sprintf("MORPC protocol version %d", jsonAggregateOpaqueCapabilityVersion))
 		require.ErrorContains(t,
 			validateJSONAggregateOpaqueAggregateProtocol(c.proc,
 				[]aggexec.AggFuncExecExpression{jsonAggregateOpaqueTestAgg()}),
-			"MORPC protocol version 82")
+			fmt.Sprintf("MORPC protocol version %d", jsonAggregateOpaqueCapabilityVersion))
 	}
 
-	// A v82 peer is admitted by every boundary, proving the new gate matches
+	// A v84 peer is admitted by every boundary, proving the new gate matches
 	// the aggregate implementation carried by this branch.
-	client.version = defines.MORPCVersion82
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion82)
+	client.version = jsonAggregateOpaqueCapabilityVersion
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, jsonAggregateOpaqueCapabilityVersion)
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = worker
 	require.NoError(t, c.constrainJSONAggregateOpaqueWorkers(qry))
@@ -149,7 +149,7 @@ func TestJSONAggregateOpaqueRealMixedVersionPeer(t *testing.T) {
 		workerRT = moruntime.ServiceRuntime(workerID)
 	}
 	oldWorkerVersion, hadWorkerVersion := workerRT.GetGlobalVariables(moruntime.MOProtocolVersion)
-	workerRT.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion80)
+	workerRT.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion83)
 
 	cluster := clusterservice.NewMOCluster(
 		coordinatorService,
@@ -162,7 +162,7 @@ func TestJSONAggregateOpaqueRealMixedVersionPeer(t *testing.T) {
 			PipelineServiceAddress: workerPipelineAddress,
 		}}, nil))
 	rt.SetGlobalVariables(moruntime.ClusterService, cluster)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion82)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, jsonAggregateOpaqueCapabilityVersion)
 
 	qs, err := queryservice.NewQueryService(workerID, workerQueryAddress, morpc.Config{})
 	require.NoError(t, err)
@@ -186,7 +186,7 @@ func TestJSONAggregateOpaqueRealMixedVersionPeer(t *testing.T) {
 			workerRT.SetGlobalVariables(moruntime.MOProtocolVersion, oldWorkerVersion)
 		} else {
 			workerRT.CompareAndDeleteGlobalVariables(
-				moruntime.MOProtocolVersion, defines.MORPCVersion82)
+				moruntime.MOProtocolVersion, jsonAggregateOpaqueCapabilityVersion)
 		}
 		if hadCluster {
 			rt.SetGlobalVariables(moruntime.ClusterService, oldCluster)
@@ -195,11 +195,11 @@ func TestJSONAggregateOpaqueRealMixedVersionPeer(t *testing.T) {
 		}
 	})
 
-	// This is a real query-service MORPC peer. Its advertised v80 is the
+	// This is a real query-service MORPC peer. Its advertised v83 is the
 	// current-main capability boundary, so the coordinator must fail closed
 	// and fall back to one CN instead of trusting a local mock response.
 	supported, err := remoteWorkersSupportProtocol(
-		c.proc, worker, defines.MORPCVersion82)
+		c.proc, worker, jsonAggregateOpaqueCapabilityVersion)
 	require.NoError(t, err)
 	require.False(t, supported)
 	c.execType = plan2.ExecTypeAP_MULTICN
@@ -217,22 +217,22 @@ func TestJSONAggregateOpaqueRealMixedVersionPeer(t *testing.T) {
 	}
 	t.Cleanup(scope.release)
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "MORPC protocol version 82")
+	require.ErrorContains(t, err, fmt.Sprintf("MORPC protocol version %d", jsonAggregateOpaqueCapabilityVersion))
 
-	// Rolling the same live peer to v82 makes the real destination probe and
+	// Rolling the same live peer to v84 makes the real destination probe and
 	// placement admission succeed. The receiver-local gate is checked at both
 	// advertised versions as well.
-	workerRT.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion82)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion80)
+	workerRT.SetGlobalVariables(moruntime.MOProtocolVersion, jsonAggregateOpaqueCapabilityVersion)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion83)
 	wire := jsonAggregateOpaqueTestPipeline()
 	require.ErrorContains(t,
 		validateJSONAggregateOpaquePipelineProtocol(c.proc, wire),
-		"MORPC protocol version 82")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion82)
+		fmt.Sprintf("MORPC protocol version %d", jsonAggregateOpaqueCapabilityVersion))
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, jsonAggregateOpaqueCapabilityVersion)
 	require.NoError(t, validateJSONAggregateOpaquePipelineProtocol(c.proc, wire))
 
 	supported, err = remoteWorkersSupportProtocol(
-		c.proc, worker, defines.MORPCVersion82)
+		c.proc, worker, jsonAggregateOpaqueCapabilityVersion)
 	require.NoError(t, err)
 	require.True(t, supported)
 	c.execType = plan2.ExecTypeAP_MULTICN
