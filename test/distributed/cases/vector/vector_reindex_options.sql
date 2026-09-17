@@ -33,8 +33,8 @@ alter table ivf_t alter reindex idx ivfflat m=16;
 alter table ivf_t alter reindex idx ivfflat ef_construction=200;
 alter table ivf_t alter reindex idx ivfflat graph_degree=64;
 
--- IVF-FLAT honors quantization (narrow-type entries); value is normalized to
--- lowercase and an unsupported name is rejected.
+-- IVF-FLAT cannot change quantization on REINDEX (the entries column type is fixed
+-- at CREATE); an unsupported name is rejected.
 alter table ivf_t alter reindex idx ivfflat quantization 'Float16';
 show create table ivf_t;
 alter table ivf_t alter reindex idx ivfflat quantization 'garbage';

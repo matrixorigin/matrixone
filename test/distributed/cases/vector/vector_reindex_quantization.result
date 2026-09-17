@@ -1,0 +1,60 @@
+SET experimental_ivf_index = 1;
+SET probe_limit = 4;
+drop database if exists reindex_quantization;
+create database reindex_quantization;
+use reindex_quantization;
+create table t(id bigint primary key, v vecf32(3) not null);
+insert into t select result, concat('[', result % 31, ',', result % 37, ',', result % 41, ']')
+from generate_series(1, 256) g;
+create index ix using ivfflat on t(v) lists = 4 op_type 'vector_l2_ops';
+alter table t alter reindex ix ivfflat quantization 'float16';
+not supported: ivfflat: ALTER ... REINDEX cannot change QUANTIZATION from 'none' to 'float16'; drop and re-create the index
+alter table t alter reindex ix ivfflat quantization 'bf16';
+not supported: ivfflat: ALTER ... REINDEX cannot change QUANTIZATION from 'none' to 'bf16'; drop and re-create the index
+alter table t alter reindex ix ivfflat quantization 'int8';
+not supported: ivfflat: ALTER ... REINDEX cannot change QUANTIZATION from 'none' to 'int8'; drop and re-create the index
+alter table t alter reindex ix ivfflat quantization 'uint8';
+not supported: ivfflat: ALTER ... REINDEX cannot change QUANTIZATION from 'none' to 'uint8'; drop and re-create the index
+alter table t alter reindex ix ivfflat merge quantization 'float16';
+not supported: ivfflat: ALTER ... REINDEX cannot change QUANTIZATION from 'none' to 'float16'; drop and re-create the index
+show create table t;
+➤ Table[12,1,0]  ¦  Create Table[12,159,0]  𝄀
+t  ¦  CREATE TABLE `t` (
+  `id` bigint NOT NULL,
+  `v` vecf32(3) NOT NULL,
+  PRIMARY KEY (`id`),
+  KEY `ix` USING ivfflat (`v`) lists = 4  op_type 'vector_l2_ops' 
+)
+select id from t order by l2_distance(v, '[7,7,7]') limit 3 by rank with option 'mode=post';
+➤ id[-5,64,0]  𝄀
+7  𝄀
+8  𝄀
+6
+create table q(id bigint primary key, v vecf32(3) not null);
+insert into q select id, v from t;
+create index qi using ivfflat on q(v) lists = 4 op_type 'vector_l2_ops' quantization 'int8';
+alter table q alter reindex qi ivfflat quantization 'INT8' lists = 2;
+show create table q;
+➤ Table[12,1,0]  ¦  Create Table[12,180,0]  𝄀
+q  ¦  CREATE TABLE `q` (
+  `id` bigint NOT NULL,
+  `v` vecf32(3) NOT NULL,
+  PRIMARY KEY (`id`),
+  KEY `qi` USING ivfflat (`v`) lists = 2  op_type 'vector_l2_ops'  quantization 'int8' 
+)
+select id from q order by l2_distance(v, '[7,7,7]') limit 3 by rank with option 'mode=post';
+➤ id[-5,64,0]  𝄀
+7  𝄀
+8  𝄀
+6
+alter table q alter reindex qi ivfflat quantization 'float16';
+not supported: ivfflat: ALTER ... REINDEX cannot change QUANTIZATION from 'int8' to 'float16'; drop and re-create the index
+show create table q;
+➤ Table[12,1,0]  ¦  Create Table[12,180,0]  𝄀
+q  ¦  CREATE TABLE `q` (
+  `id` bigint NOT NULL,
+  `v` vecf32(3) NOT NULL,
+  PRIMARY KEY (`id`),
+  KEY `qi` USING ivfflat (`v`) lists = 2  op_type 'vector_l2_ops'  quantization 'int8' 
+)
+drop database reindex_quantization;

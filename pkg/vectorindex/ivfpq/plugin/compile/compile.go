@@ -58,6 +58,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	ivfpqruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/runtime"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 )
 
 // insertIntoIvfpqIndexTableFormat is the SQL template used to populate the
@@ -298,6 +299,9 @@ func registerIdxcronUpdate(
 // IVF-PQ supports updating `lists` at REINDEX time — mirrors IVF-FLAT
 // since both algorithms key on the inverted-list count for their build.
 func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.ReindexParamUpdate) (map[string]string, error) {
+	if err := compileplugin.RejectMergeQuantizationChange(old, alter, "ivfpq"); err != nil {
+		return nil, err
+	}
 	// Merge first, then validate the EFFECTIVE quantization via the per-algo
 	// catalog hook (the single home shared with CREATE). The merged map is the
 	// index's actual post-reindex config: the value the reindex set, or — when
@@ -321,6 +325,11 @@ func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.Re
 	if err := (ivfpqruntime.CatalogHooks{}).ValidQuantization(
 		merged[catalog.Quantization], merged[catalog.IndexAlgoParamOpType]); err != nil {
 		return nil, err
+	}
+	if q, changed := compileplugin.ReindexQuantizationChange(old, alter); changed && alter.BaseVectorType != 0 {
+		if err := quantizer.CheckNoUpcast("IvfPQ", q, alter.BaseVectorType); err != nil {
+			return nil, err
+		}
 	}
 	return merged, nil
 }

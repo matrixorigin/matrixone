@@ -1,0 +1,62 @@
+SET experimental_cagra_index = 1;
+SET experimental_ivfpq_index = 1;
+drop database if exists reindex_quantization_gpu;
+create database reindex_quantization_gpu;
+use reindex_quantization_gpu;
+create table c(id bigint primary key, v vecf32(8) not null);
+insert into c select result,
+concat('[', result, ',', result, ',', result, ',', result, ',', result, ',', result, ',', result, ',', result, ']')
+from generate_series(1, 200) g;
+create index ix using cagra on c(v) op_type 'vector_l2_ops' intermediate_graph_degree = 8 graph_degree = 4;
+alter table c alter reindex ix cagra quantization 'int8' force_sync;
+show create table c;
+➤ Table[12,1,0]  ¦  Create Table[12,244,0]  𝄀
+c  ¦  CREATE TABLE `c` (
+  `id` bigint NOT NULL,
+  `v` vecf32(8) NOT NULL,
+  PRIMARY KEY (`id`),
+  KEY `ix` USING cagra (`v`) op_type 'vector_l2_ops'  quantization 'int8'  distribution_mode 'single'  intermediate_graph_degree = 8  graph_degree = 4 
+)
+select id from c order by l2_distance(v, '[50,50,50,50,50,50,50,50]') limit 1;
+➤ id[-5,64,0]  𝄀
+50
+alter table c alter reindex ix cagra merge quantization 'uint8';
+not supported: cagra: changing QUANTIZATION requires a REBUILD (ALTER ... REINDEX without MERGE); a MERGE compacts the tail into the existing base and cannot re-quantize it
+create table c16(id bigint primary key, v vecf16(8) not null);
+insert into c16 select id, cast(v as vecf16(8)) from c;
+create index ix using cagra on c16(v) op_type 'vector_l2_ops' intermediate_graph_degree = 8 graph_degree = 4;
+alter table c16 alter reindex ix cagra quantization 'int8';
+alter table c16 alter reindex ix cagra quantization 'float32';
+not supported: Cagra QUANTIZATION 'float32' (4 bytes/element) cannot upcast base column VECF16 (2 bytes/element); use a quantization of equal or smaller width, or omit it to keep the base type
+show create table c16;
+➤ Table[12,3,0]  ¦  Create Table[12,246,0]  𝄀
+c16  ¦  CREATE TABLE `c16` (
+  `id` bigint NOT NULL,
+  `v` vecf16(8) NOT NULL,
+  PRIMARY KEY (`id`),
+  KEY `ix` USING cagra (`v`) op_type 'vector_l2_ops'  quantization 'int8'  distribution_mode 'single'  intermediate_graph_degree = 8  graph_degree = 4 
+)
+create table p(id bigint primary key, v vecf32(8) not null);
+insert into p select id, v from c;
+create index ix using ivfpq on p(v) op_type 'vector_l2_ops' lists = 2 m = 2 bits_per_code = 8;
+alter table p alter reindex ix ivfpq quantization 'float16' force_sync;
+show create table p;
+➤ Table[12,1,0]  ¦  Create Table[12,235,0]  𝄀
+p  ¦  CREATE TABLE `p` (
+  `id` bigint NOT NULL,
+  `v` vecf32(8) NOT NULL,
+  PRIMARY KEY (`id`),
+  KEY `ix` USING ivfpq (`v`) lists = 2  m = 2  op_type 'vector_l2_ops'  quantization 'float16'  distribution_mode 'single'  bits_per_code = 8 
+)
+select abs(id - 50) <= 5 as near from p order by l2_distance(v, '[50,50,50,50,50,50,50,50]') limit 1;
+➤ near[-7,1,0]  𝄀
+1
+alter table p alter reindex ix ivfpq merge quantization 'int8';
+not supported: ivfpq: changing QUANTIZATION requires a REBUILD (ALTER ... REINDEX without MERGE); a MERGE compacts the tail into the existing base and cannot re-quantize it
+create table p16(id bigint primary key, v vecf16(8) not null);
+insert into p16 select id, v from c16;
+create index ix using ivfpq on p16(v) op_type 'vector_l2_ops' lists = 2 m = 2 bits_per_code = 8;
+alter table p16 alter reindex ix ivfpq quantization 'int8';
+alter table p16 alter reindex ix ivfpq quantization 'float32';
+not supported: IvfPQ QUANTIZATION 'float32' (4 bytes/element) cannot upcast base column VECF16 (2 bytes/element); use a quantization of equal or smaller width, or omit it to keep the base type
+drop database reindex_quantization_gpu;

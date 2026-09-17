@@ -619,6 +619,21 @@ func reindexSpecifiedParams(stmt tree.Statement, indexName string) map[string]st
 	return m
 }
 
+// indexBaseColumnType returns the type of indexDef's first key column in tableDef, or zero when
+// the column is not found.
+func indexBaseColumnType(tableDef *plan.TableDef, indexDef *plan.IndexDef) types.T {
+	if len(indexDef.Parts) == 0 {
+		return 0
+	}
+	part := catalog.ResolveAlias(indexDef.Parts[0])
+	for _, col := range tableDef.Cols {
+		if col.Name == part {
+			return types.T(col.Typ.Id)
+		}
+	}
+	return 0
+}
+
 func validateAlterForeignKeyNameActions(
 	ctx context.Context,
 	existing map[string]bool,
@@ -1206,9 +1221,9 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 					// merges the build options it honors on a rebuild
 					// (e.g. IVF-FLAT's `lists`, HNSW's `m`/`ef_*`, CAGRA's
 					// graph degrees) into the algo params and rejects any
-					// other option it does not support. (quantization is left
-					// entirely to the vecf16 quantization work — reindexSpecified
-					// Params does not extract it, so reindex ignores it.) The
+					// other option it does not support, including a QUANTIZATION
+					// change it cannot honor (ivfflat rejects any change; cagra/ivfpq
+					// reject an upcast of the base column type). The
 					// REINDEX rule shares index_option_list with CREATE INDEX, so
 					// the specified options are read straight off the parse tree
 					// (c.stmt) here — no plan proto field is needed to carry them.
@@ -1219,8 +1234,9 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 					p, _ := indexplugin.Get(indexAlgo)
 					newParamsMap, err := p.Compile().ValidateReindexParams(oldParams,
 						compileplugin.ReindexParamUpdate{
-							Params: reindexSpecifiedParams(c.stmt, constraintName),
-							Merge:  tableAlterIndex.Merge,
+							Params:         reindexSpecifiedParams(c.stmt, constraintName),
+							Merge:          tableAlterIndex.Merge,
+							BaseVectorType: indexBaseColumnType(oTableDef, alterIndex),
 						})
 					if err != nil {
 						return err

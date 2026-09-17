@@ -20,7 +20,11 @@
 package compile
 
 import (
+	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -241,6 +245,33 @@ type ReindexParamUpdate struct {
 	// — e.g. fulltext2 forbids changing POSITION_FREE on a MERGE, since a
 	// tail-into-base compaction cannot re-derive positions the base does not hold.
 	Merge bool
+
+	// BaseVectorType is the type of the indexed column; zero when unknown.
+	BaseVectorType types.T
+}
+
+// ReindexQuantizationChange returns the QUANTIZATION update specifies and whether it differs,
+// ignoring case, from the stored one.
+func ReindexQuantizationChange(old map[string]string, update ReindexParamUpdate) (string, bool) {
+	q, ok := update.Params[catalog.Quantization]
+	if !ok || strings.EqualFold(q, old[catalog.Quantization]) {
+		return q, false
+	}
+	return q, true
+}
+
+// RejectMergeQuantizationChange returns an error when update is a MERGE whose QUANTIZATION
+// differs from the stored one.
+func RejectMergeQuantizationChange(old map[string]string, update ReindexParamUpdate, algo string) error {
+	if !update.Merge {
+		return nil
+	}
+	if _, changed := ReindexQuantizationChange(old, update); !changed {
+		return nil
+	}
+	return moerr.NewNotSupportedNoCtxf(
+		"%s: changing QUANTIZATION requires a REBUILD (ALTER ... REINDEX without MERGE); "+
+			"a MERGE compacts the tail into the existing base and cannot re-quantize it", algo)
 }
 
 // MergeReindexParams is the shared body for a plugin's

@@ -98,19 +98,41 @@ func TestIvfflatValidateReindexParams_Passthrough(t *testing.T) {
 	require.Equal(t, old, got)
 }
 
-// TestIvfflatValidateReindexParams_Quantization: IVF-FLAT honors a narrow-type
-// quantization on reindex (same set as CREATE) and rejects unknown values.
+// TestIvfflatValidateReindexParams_Quantization: REINDEX accepts the stored quantization, rejects
+// an unknown value, and rejects a change with a drop-and-re-create error.
 func TestIvfflatValidateReindexParams_Quantization(t *testing.T) {
-	got, err := Hooks{}.ValidateReindexParams(nil, compileplugin.ReindexParamUpdate{
-		Params: map[string]string{catalog.Quantization: "int8"},
+	old := map[string]string{catalog.Quantization: "int8"}
+	got, err := Hooks{}.ValidateReindexParams(old, compileplugin.ReindexParamUpdate{
+		Params: map[string]string{catalog.Quantization: "INT8"},
 	})
 	require.NoError(t, err)
-	require.Equal(t, "int8", got[catalog.Quantization])
+	require.Equal(t, "INT8", got[catalog.Quantization])
 
-	_, err = Hooks{}.ValidateReindexParams(nil, compileplugin.ReindexParamUpdate{
+	_, err = Hooks{}.ValidateReindexParams(old, compileplugin.ReindexParamUpdate{
 		Params: map[string]string{catalog.Quantization: "garbage"},
 	})
 	require.Error(t, err)
+	require.Contains(t, err.Error(), "supported:")
+
+	for _, tc := range []struct {
+		name   string
+		old    map[string]string
+		update compileplugin.ReindexParamUpdate
+	}{
+		{"int8 to float16", old, compileplugin.ReindexParamUpdate{
+			Params: map[string]string{catalog.Quantization: "float16"}}},
+		{"unquantized to int8", nil, compileplugin.ReindexParamUpdate{
+			Params: map[string]string{catalog.Quantization: "int8"}}},
+		{"merge", old, compileplugin.ReindexParamUpdate{
+			Params: map[string]string{catalog.Quantization: "uint8"}, Merge: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Hooks{}.ValidateReindexParams(tc.old, tc.update)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), "cannot change QUANTIZATION")
+			require.Contains(t, err.Error(), "drop and re-create the index")
+		})
+	}
 }
 
 // TestIvfflatIdxcronMetadata_BackgroundLog covers the entry log line

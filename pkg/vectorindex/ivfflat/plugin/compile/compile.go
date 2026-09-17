@@ -114,6 +114,17 @@ func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.Re
 		merged[catalog.Quantization], merged[catalog.IndexAlgoParamOpType]); err != nil {
 		return nil, err
 	}
+	// QUANTIZATION decides the entries (and, for a vecf64 base, centroids) column types, which
+	// are set when the hidden tables are created; REINDEX rebuilds into the existing tables.
+	if q, changed := compileplugin.ReindexQuantizationChange(old, alter); changed {
+		stored := old[catalog.Quantization]
+		if stored == "" {
+			stored = "none"
+		}
+		return nil, moerr.NewNotSupportedNoCtxf(
+			"ivfflat: ALTER ... REINDEX cannot change QUANTIZATION from '%s' to '%s'; drop and re-create the index",
+			stored, catalog.ToLower(q))
+	}
 	return merged, nil
 }
 
