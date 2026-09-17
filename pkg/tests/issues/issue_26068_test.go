@@ -25,6 +25,8 @@ import (
 	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/status"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/stretchr/testify/require"
 )
 
@@ -128,7 +130,17 @@ func TestIssue26068DataBranchDatabaseIdentityLifecycle(t *testing.T) {
 			require.NoError(t, creator.QueryRowContext(ctx,
 				"select connection_id()",
 			).Scan(&creatorConnectionID))
-			creatorTxnID, err := issue26068SessionTxnID(ctx, db, cn.ServiceID(), creatorConnectionID)
+			sessionProvider, ok := cn.RawService().(interface {
+				SessionMgr() *queryservice.SessionManager
+			})
+			require.True(t, ok, "CN service does not expose its session manager")
+			sessionManager := sessionProvider.SessionMgr()
+			require.NotNil(t, sessionManager)
+			creatorTxnID, err := issue26068SessionTxnID(
+				sessionManager.GetAllStatusSessions(),
+				cn.ServiceID(),
+				creatorConnectionID,
+			)
 			require.NoError(t, err)
 			require.NotEmpty(t, creatorTxnID)
 			creatorLockService := lockservice.GetLockServiceByServiceID(cn.ServiceID())
@@ -181,17 +193,63 @@ func TestIssue26068DataBranchDatabaseIdentityLifecycle(t *testing.T) {
 }
 
 func issue26068SessionTxnID(
-	ctx context.Context,
-	db *sql.DB,
+	sessions []*status.Session,
 	nodeID string,
 	connectionID uint32,
 ) ([]byte, error) {
-	var txnHex string
-	if err := db.QueryRowContext(ctx,
-		"select s.txn_id from mo_sessions() as s where s.node_id=? and s.conn_id=?",
-		nodeID, connectionID,
-	).Scan(&txnHex); err != nil {
-		return nil, err
+	var matched *status.Session
+	for _, session := range sessions {
+		if session == nil || session.NodeID != nodeID || session.ConnID != connectionID {
+			continue
+		}
+		if matched != nil {
+			return nil, fmt.Errorf(
+				"found multiple sessions for node %q and connection %d",
+				nodeID,
+				connectionID,
+			)
+		}
+		matched = session
 	}
-	return hex.DecodeString(txnHex)
+	if matched == nil {
+		return nil, fmt.Errorf(
+			"session for node %q and connection %d was not found",
+			nodeID,
+			connectionID,
+		)
+	}
+	if matched.TxnID == "" {
+		return nil, fmt.Errorf(
+			"session for node %q and connection %d has an empty transaction ID",
+			nodeID,
+			connectionID,
+		)
+	}
+	txnID, err := hex.DecodeString(matched.TxnID)
+	if err != nil {
+		return nil, fmt.Errorf("decode transaction ID %q: %w", matched.TxnID, err)
+	}
+	if len(txnID) != 16 {
+		return nil, fmt.Errorf(
+			"transaction ID for node %q and connection %d has length %d, want 16",
+			nodeID,
+			connectionID,
+			len(txnID),
+		)
+	}
+	allZero := true
+	for _, b := range txnID {
+		if b != 0 {
+			allZero = false
+			break
+		}
+	}
+	if allZero {
+		return nil, fmt.Errorf(
+			"transaction ID for node %q and connection %d is zero",
+			nodeID,
+			connectionID,
+		)
+	}
+	return txnID, nil
 }
