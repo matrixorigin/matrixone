@@ -17,9 +17,10 @@
 package collation
 
 import (
-	"errors"
 	"math"
 	"unicode/utf8"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
 // Domain is resolved from schema metadata, never from a key's contents.
@@ -34,10 +35,10 @@ const (
 )
 
 var (
-	ErrDomain = errors.New("unsupported collation key domain")
-	ErrUTF8   = errors.New("invalid UTF-8 in collation key")
-	ErrKey    = errors.New("invalid collation key encoding")
-	ErrSize   = errors.New("collation key size overflow")
+	ErrDomain = moerr.NewNotSupportedNoCtx("unsupported collation key domain")
+	ErrUTF8   = moerr.NewInvalidInputNoCtx("invalid UTF-8 in collation key")
+	ErrKey    = moerr.NewInvalidInputNoCtx("invalid collation key encoding")
+	ErrSize   = moerr.NewInvalidInputNoCtx("collation key size overflow")
 )
 
 // KeySizeUpperBound bounds the payload allocation for an input byte length.
