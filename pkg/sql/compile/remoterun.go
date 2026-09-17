@@ -2234,9 +2234,9 @@ func validateRemoteExpressionPipelineProtocol(
 		)
 	}
 	if features.JSONValueContract &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion74) {
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion85) {
 		return moerr.NewNotSupportedNoCtx(
-			"seven-argument JSON_VALUE plans require MORPC protocol version 74",
+			"seven-argument JSON_VALUE plans require MORPC protocol version 85",
 		)
 	}
 	return nil

@@ -57,30 +57,30 @@ explicit rebuild procedure.
 ### Versioned compatibility decision (revision 3, 2026-09-16)
 
 The seven-argument representation is a new wire and persisted-plan contract.
-MORPC version 74 is the first version that may carry JSON_VALUE function ID 462
+MORPC version 85 is the first version that may carry JSON_VALUE function ID 462
 with overload index 2. The planner admits `RETURNING`, `ON EMPTY`, and `ON
-ERROR` only when the deployment-wide `MOProtocolVersion` is at least 74; below
+ERROR` only when the deployment-wide `MOProtocolVersion` is at least 85; below
 that threshold it returns a not-supported error before publishing the plan.
 An ordinary two-argument call remains the legacy overload and is still allowed
-at version 57. MORPC version 73 remains the independent DECIMAL SUM partial
-state contract already used by the current `main` branch.
+at version 57. MORPC versions 73 and 74 remain the independent DECIMAL SUM and
+numeric HEX contracts already used by the current `main` branch.
 
 Both remote pipeline boundaries enforce the same contract. The sender and
 receiver expression validators identify overload 2 and reject it when the
-local deployment gate is below version 74 or unavailable. This prevents a new
+local deployment gate is below version 85 or unavailable. This prevents a new
 sender from sending the plan to an old CN and prevents a current receiver from
 executing a plan after a rollback lowered the gate. The function-ID lookup also
 rejects an out-of-range overload instead of indexing the overload slice.
 
 Creating a view, generated column, index expression, or persisted prepared plan
-that contains overload 2 is therefore a version-74-only operation. The
+that contains overload 2 is therefore a version-85-only operation. The
 catalog-owner admission covers table defaults, generated columns, checks,
 on-update expressions, index tables, and view plans before publication.
-Upgrade all CNs and raise the oldest-live protocol gate to 74 before enabling
-the syntax. Do not lower the gate or roll back to a pre-74 binary while such a plan remains
+Upgrade all CNs and raise the oldest-live protocol gate to 85 before enabling
+the syntax. Do not lower the gate or roll back to a pre-85 binary while such a plan remains
 persisted; rebuild or remove that metadata first. A legacy two-argument plan
 does not carry this prerequisite and remains readable by older CNs. The
-regression matrix covers sender/receiver rejection below 74, acceptance at 74,
+regression matrix covers sender/receiver rejection below 85, acceptance at 85,
 planner and persisted-owner admission at both thresholds, and the legacy
 two-argument control.
 
