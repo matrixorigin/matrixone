@@ -1280,6 +1280,14 @@ func binaryProtocolPrepareParamDomains(
 	case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
 		normalized, visible, canonical, valid := plan2.PreparedDecimalRuntimeDomains(value)
 		return normalized, visible, canonical, valid, valid
+	case defines.MYSQL_TYPE_DATE:
+		return types.T_date.ToType(), types.Type{}, "", false, true
+	case defines.MYSQL_TYPE_TIME:
+		return types.T_time.ToType(), types.Type{}, "", false, true
+	case defines.MYSQL_TYPE_DATETIME:
+		return types.T_datetime.ToType(), types.Type{}, "", false, true
+	case defines.MYSQL_TYPE_TIMESTAMP:
+		return types.T_timestamp.ToType(), types.Type{}, "", false, true
 	case defines.MYSQL_TYPE_NULL:
 		// Keep NULL on the prepared plan's original domain.  The next execute
 		// packet may carry a concrete type and will specialize it then.

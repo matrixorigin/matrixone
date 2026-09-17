@@ -5333,6 +5333,24 @@ func TestBinaryProtocolPrepareParamConcreteType(t *testing.T) {
 	}
 }
 
+func TestBinaryProtocolPrepareParamTemporalDomains(t *testing.T) {
+	for _, test := range []struct {
+		mysqlType defines.MysqlType
+		want      types.T
+	}{
+		{defines.MYSQL_TYPE_DATE, types.T_date},
+		{defines.MYSQL_TYPE_TIME, types.T_time},
+		{defines.MYSQL_TYPE_DATETIME, types.T_datetime},
+		{defines.MYSQL_TYPE_TIMESTAMP, types.T_timestamp},
+	} {
+		runtimeType, _, materialized, hasDirect, ok := binaryProtocolPrepareParamDomains(test.mysqlType, false, "")
+		require.True(t, ok)
+		require.Equal(t, test.want, runtimeType.Oid)
+		require.False(t, hasDirect)
+		require.Empty(t, materialized)
+	}
+}
+
 func TestBinaryProtocolPrepareParamBinaryStringMetadataNoBlobDoesNotAllocate(t *testing.T) {
 	const paramCount = 64
 	paramTypes := make([]byte, paramCount*2)

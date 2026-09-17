@@ -32,6 +32,80 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/embed"
 )
 
+type issue28989TemporalTypeConn struct {
+	net.Conn
+
+	mu          sync.Mutex
+	rewriteDate bool
+	rewritten   bool
+}
+
+func (c *issue28989TemporalTypeConn) rewriteNextDate() {
+	c.mu.Lock()
+	c.rewriteDate = true
+	c.rewritten = false
+	c.mu.Unlock()
+}
+
+func (c *issue28989TemporalTypeConn) wasRewritten() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.rewritten
+}
+
+func (c *issue28989TemporalTypeConn) Write(data []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	originalLen := len(data)
+	if c.rewriteDate {
+		if modified, ok := issue28989RewriteStringParamAsDate(data); ok {
+			data = modified
+			c.rewriteDate = false
+			c.rewritten = true
+		}
+	}
+	written, err := c.Conn.Write(data)
+	if err == nil && written == len(data) {
+		return originalLen, nil
+	}
+	return written, err
+}
+
+// issue28989RewriteStringParamAsDate emits one real MYSQL_TYPE_DATE binary
+// value (2024-01-02), rather than changing only the descriptor of text bytes.
+func issue28989RewriteStringParamAsDate(data []byte) ([]byte, bool) {
+	const (
+		packetHeaderSize = 4
+		stmtExecute      = 0x17
+		executeHeaderLen = 1 + 4 + 1 + 4
+	)
+	if len(data) < packetHeaderSize+executeHeaderLen+1+1+2 || data[packetHeaderSize] != stmtExecute {
+		return data, false
+	}
+	payloadLen := int(data[0]) | int(data[1])<<8 | int(data[2])<<16
+	packetEnd := packetHeaderSize + payloadLen
+	if packetEnd > len(data) {
+		return data, false
+	}
+	newTypesFlagPos := packetHeaderSize + executeHeaderLen + 1
+	typePos := newTypesFlagPos + 1
+	valuePos := typePos + 2
+	if valuePos >= packetEnd || data[newTypesFlagPos] != 1 ||
+		(data[typePos] != byte(defines.MYSQL_TYPE_VAR_STRING) && data[typePos] != byte(defines.MYSQL_TYPE_STRING)) {
+		return data, false
+	}
+	modified := append([]byte(nil), data[:valuePos]...)
+	modified[typePos] = byte(defines.MYSQL_TYPE_DATE)
+	// Binary temporal values use a length byte followed by little-endian year,
+	// month and day.
+	modified = append(modified, 4, 0xe8, 0x07, 1, 2)
+	newPayloadLen := len(modified) - packetHeaderSize
+	modified[0] = byte(newPayloadLen)
+	modified[1] = byte(newPayloadLen >> 8)
+	modified[2] = byte(newPayloadLen >> 16)
+	return modified, true
+}
+
 type issue27907ODBCTypeConn struct {
 	net.Conn
 
@@ -541,6 +615,55 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 			defer ctas.Close()
 			_, err = ctas.ExecContext(ctx, "1.0")
 			assertMySQLError(t, err, 1210)
+		})
+
+		t.Run("COM_STMT temporal descriptor remains temporal", func(t *testing.T) {
+			var connMu sync.Mutex
+			var wireConn *issue28989TemporalTypeConn
+			mysqlDriver.RegisterDialContext("issue28989temporal", func(ctx context.Context, addr string) (net.Conn, error) {
+				conn, dialErr := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+				if dialErr != nil {
+					return nil, dialErr
+				}
+				wrapped := &issue28989TemporalTypeConn{Conn: conn}
+				connMu.Lock()
+				wireConn = wrapped
+				connMu.Unlock()
+				return wrapped, nil
+			})
+			defer mysqlDriver.DeregisterDialContext("issue28989temporal")
+			cn, cnErr := c.GetCNService(0)
+			require.NoError(t, cnErr)
+			temporalDB, openErr := sql.Open("mysql", fmt.Sprintf(
+				"dump:111@issue28989temporal(127.0.0.1:%d)/?interpolateParams=false",
+				cn.GetServiceConfig().CN.Frontend.Port))
+			require.NoError(t, openErr)
+			temporalDB.SetMaxOpenConns(1)
+			temporalDB.SetMaxIdleConns(1)
+			defer temporalDB.Close()
+
+			stmt, prepareErr := temporalDB.PrepareContext(ctx,
+				`select substring_index("a.b.c",".",?)`)
+			require.NoError(t, prepareErr)
+			defer stmt.Close()
+			var textResult string
+			require.NoError(t, stmt.QueryRowContext(ctx, "2024-01-02").Scan(&textResult))
+			require.Equal(t, "a.b.c", textResult)
+
+			connMu.Lock()
+			capturedConn := wireConn
+			connMu.Unlock()
+			require.NotNil(t, capturedConn)
+			capturedConn.rewriteNextDate()
+			var dateResult string
+			dateErr := stmt.QueryRowContext(ctx, "2024-01-02").Scan(&dateResult)
+			require.Error(t, dateErr)
+			require.NotErrorIs(t, dateErr, net.ErrClosed)
+			require.True(t, capturedConn.wasRewritten(), "test did not emit MYSQL_TYPE_DATE")
+			// Prove the packet was valid and the cached statement remains reusable;
+			// a malformed rewrite could otherwise satisfy only the error assertion.
+			require.NoError(t, stmt.QueryRowContext(ctx, "2024-01-02").Scan(&textResult))
+			require.Equal(t, "a.b.c", textResult)
 		})
 
 		t.Run("Connector ODBC HAVING and pagination", func(t *testing.T) {
