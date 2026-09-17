@@ -301,13 +301,17 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 		require.NoError(t, prefixModeStmt.QueryRowContext(ctx, "1.5tail").Scan(&prefixModeResult))
 		require.Equal(t, float64(1.5), prefixModeResult,
 			"MySQL-compatible mode consumes the numeric prefix for a string-math value")
-		nestedLength, err := modeConn.PrepareContext(ctx, "select length(abs(?))")
-		require.NoError(t, err)
-		var nestedLengthResult float64
-		require.NoError(t, nestedLength.QueryRowContext(ctx, "1.5tail").Scan(&nestedLengthResult))
-		require.Equal(t, float64(3), nestedLengthResult,
-			"LENGTH must preserve the independently nested ABS owner")
-		require.NoError(t, nestedLength.Close())
+		func() {
+			nestedLength, err := modeConn.PrepareContext(ctx, "select length(abs(?))")
+			require.NoError(t, err)
+			defer func() {
+				require.NoError(t, nestedLength.Close())
+			}()
+			var nestedLengthResult float64
+			require.NoError(t, nestedLength.QueryRowContext(ctx, "1.5tail").Scan(&nestedLengthResult))
+			require.Equal(t, float64(3), nestedLengthResult,
+				"LENGTH must preserve the independently nested ABS owner")
+		}()
 		_, err = modeConn.ExecContext(ctx,
 			"set session sql_mode = 'STRICT_TRANS_TABLES,MATRIXONE_NATIVE'")
 		require.NoError(t, err)
