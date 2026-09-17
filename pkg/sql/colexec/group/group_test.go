@@ -2616,8 +2616,11 @@ func TestH0OrderedGroupConcatSpillsIndependently(t *testing.T) {
 	// ConfigureGroupConcatH0Spill clamps this to its independent run-size floor.
 	g.SpillMem = 1
 	g.AppendChild(child)
+	allocation := installGroupTestAllocation(t, g, proc, 128<<20)
 	t.Cleanup(func() {
 		g.Free(proc, false, nil)
+		require.Zero(t, allocation.account.Snapshot().Used)
+		finalizeGroupTestAllocation(t, g, allocation)
 		child.Free(proc, false, nil)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
@@ -2631,6 +2634,7 @@ func TestH0OrderedGroupConcatSpillsIndependently(t *testing.T) {
 	require.Equal(t, values[rows-1], parts[0])
 	require.Equal(t, values[0], parts[rows-1])
 	require.Positive(t, g.OpAnalyzer.GetOpStats().SpillRows)
+	require.Positive(t, g.OpAnalyzer.GetOpStats().SpillSize)
 	require.Zero(t, g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillWriteCalls"])
 }
 

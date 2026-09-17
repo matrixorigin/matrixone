@@ -506,14 +506,14 @@ endif
 ut: $(UT_PREREQUISITES)
 	$(info [Unit testing])
 ifeq ($(UNAME_S),darwin)
-	@cd optools && ./run_ut.sh UT $(SKIP_TEST)
+	@cd optools && UT_NATIVE_PREPARED="$(NATIVE_PROVENANCE_ACCELERATOR):$(NATIVE_PROVENANCE_OPTIMIZATION):$(NATIVE_PROVENANCE_SIMSIMD)" ./run_ut.sh UT $(SKIP_TEST)
 else
 	# The race suite is internally partitioned into light/HNSW, exclusive issues,
 	# embedded-cluster, heavy/engine, and plan stages. Keep the outer budget above
 	# the per-package timeout so an expanded main branch cannot be killed while a
 	# selected stage is still making progress. GNU timeout sends TERM first so
 	# run_ut.sh can preserve its checkpoint and active-case diagnostics.
-	@cd optools && timeout --signal=TERM --kill-after=120s $(UT_HARD_TIMEOUT) ./run_ut.sh UT $(SKIP_TEST)
+	@cd optools && UT_NATIVE_PREPARED="$(NATIVE_PROVENANCE_ACCELERATOR):$(NATIVE_PROVENANCE_OPTIMIZATION):$(NATIVE_PROVENANCE_SIMSIMD)" timeout --signal=TERM --kill-after=120s $(UT_HARD_TIMEOUT) ./run_ut.sh UT $(SKIP_TEST)
 endif
 
 ###############################################################################

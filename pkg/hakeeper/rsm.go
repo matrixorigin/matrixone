@@ -18,7 +18,6 @@ Package hakeeper implements MO's hakeeper component.
 package hakeeper
 
 import (
-	"bytes"
 	"encoding/binary"
 	"fmt"
 	"io"
@@ -44,11 +43,6 @@ var (
 var (
 	binaryEnc = binary.BigEndian
 )
-
-// hakeeperSnapshotMagic is an intentionally invalid protobuf prefix.  A
-// pre-floor HAKeeper decoder therefore rejects a post-floor snapshot instead
-// of silently ignoring the additive fields and rejoining with unsafe state.
-var hakeeperSnapshotMagic = []byte{0x0f, 'M', 'O', 'H', '2'}
 
 const (
 	// When bootstrapping, k8s will first bootstrap the HAKeeper by starting some
@@ -1931,20 +1925,11 @@ func (s *stateMachine) Lookup(query interface{}) (interface{}, error) {
 
 func (s *stateMachine) SaveSnapshot(w io.Writer,
 	_ sm.ISnapshotFileCollection, _ <-chan struct{}) error {
-	// FIXME: memory recycling when necessary
-	data := make([]byte, s.state.ProtoSize())
-	n, err := s.state.MarshalToSizedBuffer(data)
+	data, err := marshalHAKeeperSnapshot(&s.state, false)
 	if err != nil {
 		return err
 	}
-	if s.state.PersistedExpressionRequiredProtocolVersion == 0 {
-		_, err = w.Write(data[:n])
-		return err
-	}
-	output := make([]byte, len(hakeeperSnapshotMagic)+n)
-	copy(output, hakeeperSnapshotMagic)
-	copy(output[len(hakeeperSnapshotMagic):], data[:n])
-	_, err = w.Write(output)
+	_, err = w.Write(data)
 	return err
 }
 
@@ -1954,17 +1939,9 @@ func (s *stateMachine) RecoverFromSnapshot(r io.Reader,
 	if err != nil {
 		return err
 	}
-	enveloped := bytes.HasPrefix(data, hakeeperSnapshotMagic)
-	if enveloped {
-		data = data[len(hakeeperSnapshotMagic):]
-	}
-	decoded := pb.NewRSMState()
-	if err := decoded.Unmarshal(data); err != nil {
+	decoded, err := unmarshalHAKeeperSnapshot(data)
+	if err != nil {
 		return err
-	}
-	if enveloped && decoded.PersistedExpressionRequiredProtocolVersion == 0 {
-		return moerr.NewInvalidInputNoCtx(
-			"persisted HAKeeper snapshot envelope is missing its protocol floor")
 	}
 	// Keep the legacy omitted-map shape for the command-delivery barrier.  The
 	// zero-value is meaningful to the recovery code (it rebuilds these maps on

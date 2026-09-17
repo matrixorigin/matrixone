@@ -28,6 +28,27 @@ import (
 // operator's public Call boundary. Spill and other recovery paths must keep the
 // typed admission error until they have exhausted every recovery option.
 func TerminalBudgetError(ctx context.Context, err error) error {
+	return terminalBudgetError(ctx, "hash build", true, err)
+}
+
+// TerminalBudgetErrorForOperator applies the same client-facing conversion to
+// operators that share the execution-resource admission contract with
+// HashBuild. The operator name keeps the resulting resource-exhausted message
+// actionable without exposing the internal admission sentinel.
+func TerminalBudgetErrorForOperator(
+	ctx context.Context,
+	operator string,
+	err error,
+) error {
+	return terminalBudgetError(ctx, operator, false, err)
+}
+
+func terminalBudgetError(
+	ctx context.Context,
+	operator string,
+	normalizePhysical bool,
+	err error,
+) error {
 	if err == nil {
 		return err
 	}
@@ -45,11 +66,16 @@ func TerminalBudgetError(ctx context.Context, err error) error {
 		case mpool.AllocationFailureReasonOf(err) ==
 			mpool.AllocationFailureCapacity &&
 			!mpool.IsMPoolCapacityFailure(err):
+			if !normalizePhysical {
+				return err
+			}
 			return moerr.NewResourceExhaustedf(ctx,
-				"hash build memory budget exceeded; reduce join build width or query concurrency, increase processLimitationSize, or lower join_spill_mem for an eligible shuffle join")
+				"%s memory budget exceeded; reduce query width or concurrency, or increase processLimitationSize",
+				operator)
 		case errors.Is(err, process.ErrExecutionResourceAdmission):
 			return moerr.NewResourceExhaustedf(ctx,
-				"hash build resource budget exceeded; inspect execution-resource metrics and resource limits")
+				"%s resource budget exceeded; inspect execution-resource metrics and resource limits",
+				operator)
 		default:
 			return err
 		}
@@ -61,7 +87,8 @@ func TerminalBudgetError(ctx context.Context, err error) error {
 		}
 		return moerr.NewResourceExhaustedf(
 			ctx,
-			"hash build resource budget exceeded; inspect execution-resource metrics and resource limits",
+			"%s resource budget exceeded; inspect execution-resource metrics and resource limits",
+			operator,
 		)
 	}
 
@@ -70,7 +97,11 @@ func TerminalBudgetError(ctx context.Context, err error) error {
 	switch budgetErr.Component {
 	case process.ExecutionResourceComponentMemory:
 		resource = "memory"
-		action = "reduce join build width or query concurrency, increase processLimitationSize, or lower join_spill_mem for an eligible shuffle join; automatic spill can still exhaust recovery headroom for wide or skewed partitions"
+		if operator == "hash build" {
+			action = "reduce join build width or query concurrency, increase processLimitationSize, or lower join_spill_mem for an eligible shuffle join; automatic spill can still exhaust recovery headroom for wide or skewed partitions"
+		} else {
+			action = "reduce query width or concurrency, or increase processLimitationSize"
+		}
 	case process.ExecutionResourceComponentSpillDisk:
 		resource = "spill disk"
 		action = "free spill storage or increase processLimitationSpillSize"
@@ -83,13 +114,15 @@ func TerminalBudgetError(ctx context.Context, err error) error {
 		}
 		return moerr.NewResourceExhaustedf(
 			ctx,
-			"hash build resource budget exceeded; inspect execution-resource metrics and resource limits",
+			"%s resource budget exceeded; inspect execution-resource metrics and resource limits",
+			operator,
 		)
 	}
 	if reason != "" {
 		return moerr.NewResourceExhaustedf(
 			ctx,
-			"hash build %s budget exceeded (requested=%d, used=%d, limit=%d); %s; %s",
+			"%s %s budget exceeded (requested=%d, used=%d, limit=%d); %s; %s",
+			operator,
 			resource,
 			budgetErr.Requested,
 			budgetErr.Used,
@@ -99,8 +132,8 @@ func TerminalBudgetError(ctx context.Context, err error) error {
 		)
 	}
 	return moerr.NewResourceExhaustedf(ctx,
-		"hash build %s budget exceeded (requested=%d, used=%d, limit=%d); %s",
-		resource, budgetErr.Requested, budgetErr.Used, budgetErr.Cap, action)
+		"%s %s budget exceeded (requested=%d, used=%d, limit=%d); %s",
+		operator, resource, budgetErr.Requested, budgetErr.Used, budgetErr.Cap, action)
 }
 
 func terminalBudgetReason(message string) string {
