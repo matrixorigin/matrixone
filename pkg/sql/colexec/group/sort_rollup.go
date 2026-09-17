@@ -812,6 +812,11 @@ func (group *Group) callSortRollup(proc *process.Process) (vm.CallResult, error)
 
 	for {
 		if s.outputRows >= aggBatchSize {
+			// A child may cancel after vm.Exec's entry check. Do not publish
+			// buffered output without observing that cancellation first.
+			if err, canceled := vm.CancelCheck(proc); canceled {
+				return vm.CancelResult, err
+			}
 			if err := group.checkSortRollupCapacity(proc); err != nil {
 				return vm.CancelResult, err
 			}
@@ -866,11 +871,19 @@ func (group *Group) callSortRollup(proc *process.Process) (vm.CallResult, error)
 					continue
 				}
 			}
+			if err, canceled := vm.CancelCheck(proc); canceled {
+				return vm.CancelResult, err
+			}
 			if !s.finalized {
 				s.finalized = true
 				group.ctr.state = vm.End
 			}
 			if s.outputRows > 0 {
+				// Final partial output is still a publication boundary. A
+				// cancellation observed after EOF must win over that output.
+				if err, canceled := vm.CancelCheck(proc); canceled {
+					return vm.CancelResult, err
+				}
 				if err := group.checkSortRollupCapacity(proc); err != nil {
 					return vm.CancelResult, err
 				}
@@ -885,6 +898,11 @@ func (group *Group) callSortRollup(proc *process.Process) (vm.CallResult, error)
 		}
 		if result.Batch == nil {
 			group.ctr.inputDone = true
+			// Children can cancel the process while returning EOF, after this
+			// operator has passed vm.Exec's entry cancellation check.
+			if err, canceled := vm.CancelCheck(proc); canceled {
+				return vm.CancelResult, err
+			}
 			continue
 		}
 		if result.Batch.IsEmpty() {
