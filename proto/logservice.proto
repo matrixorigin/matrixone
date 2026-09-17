@@ -992,6 +992,9 @@ message HAKeeperRSMState {
   // starts, so retries cannot mistake a rejected entry for a completed raise.
   bool PersistedExpressionProtocolActivationPending = 44;
   CatalogMetadataBarrierState CatalogMetadataBarrier = 45;
+  // Independent of phase: even a rejected new-protocol entry requires a
+  // compatible decoder on replay. A nonzero floor requires MOH3 feature bit 2.
+  uint64 CatalogMetadataBarrierRequiredProtocolVersion = 46;
 }
 
 // CatalogMetadataBarrierPhase is the durable catalog metadata lifecycle phase.
@@ -1012,6 +1015,22 @@ message CatalogMetadataBarrierState {
   uint64 CompletedGeneration = 4;
   uint64 RequiredViewDependencyProtocol = 5;
   uint64 RequiredRecoveryProtocol = 6;
+  repeated CatalogMetadataBarrierTarget Targets = 7 [(gogoproto.nullable) = false];
+  // Version zero is a legacy snapshot, not evidence of an empty capture.
+  uint32 RuntimeEvidenceVersion = 8;
+  bool EvidenceInitialized = 9;
+}
+
+// Targets are scoped to the enclosing barrier's epoch and generation and
+// sorted by (ServiceType, UUID, Generation). A replacement cannot ack for an
+// older process. Heartbeat expiry does not retire an authority owner.
+message CatalogMetadataBarrierTarget {
+  ServiceType ServiceType = 1;
+  string UUID = 2;
+  uint64 Generation = 3;
+  uint64 CapturedTick = 4;
+  bool ObservedPreparing = 5;
+  bool SealComplete = 6;
 }
 
 // HAKeeperSnapshotEnvelope is the MOH3 payload. RSMState is deliberately bytes
