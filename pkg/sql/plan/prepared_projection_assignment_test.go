@@ -35,6 +35,8 @@ func TestPreparedProjectionPreservesAssignmentCast(t *testing.T) {
 			})
 			require.NoError(t, err)
 			require.Equal(t, int32(target.Oid), assignment.Typ.Id, "write projection must retain destination vector ABI")
+			require.Equal(t, target.Width, assignment.Typ.Width)
+			require.Equal(t, target.Scale, assignment.Typ.Scale)
 			require.NotNil(t, assignment.GetF(), "final write conversion must not become a raw producer column")
 		})
 	}

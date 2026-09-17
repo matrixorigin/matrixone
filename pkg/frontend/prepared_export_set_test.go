@@ -722,6 +722,29 @@ func TestPreparedExportSetUnsignedPrecisionDomain(t *testing.T) {
 	}
 }
 
+func TestPreparedExportSetConditionalDecimalSource(t *testing.T) {
+	for _, tc := range []struct {
+		value float64
+		want  string
+	}{{2.5, "YYNN"}, {-0.5, "YYYY"}} {
+		t.Run(fmt.Sprint(tc.value), func(t *testing.T) {
+			_, stmt, cw, _ := newPreparedExecuteEnvForSQL(t, 414,
+				`select export_set(if(true,cast(? as decimal(2,1)),0e0),'Y','N','',4)`)
+			defer stmt.Close()
+			values := []any{plan2.ParamValue{Value: tc.value, SourceType: types.T_float64.ToType(), HasSourceType: true}}
+			stmt.applyExportSetNullRuntimeTypes(values)
+			filled, err := plan2.FillValuesOfParamsInPlan(cw.proc.Ctx, stmt.PreparePlan.GetDcl().GetPrepare().Plan, values)
+			require.NoError(t, err)
+			q := filled.GetQuery()
+			expr := q.Nodes[q.Steps[len(q.Steps)-1]].ProjectList[0]
+			result, free, err := colexec.GetReadonlyResultFromExpression(cw.proc, expr, []*batch.Batch{batch.EmptyForConstFoldBatch})
+			require.NoError(t, err)
+			defer free()
+			require.Equal(t, tc.want, result.GetStringAt(0))
+		})
+	}
+}
+
 func TestPreparedExportSetDirectRealOverflowSaturates(t *testing.T) {
 	for _, tc := range []struct {
 		consumer  string

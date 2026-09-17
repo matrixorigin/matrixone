@@ -788,6 +788,57 @@ SET @export_set_bits = CAST(0.5 AS DOUBLE);
 EXECUTE export_set_precision_union_producer USING @export_set_bits;
 DEALLOCATE PREPARE export_set_precision_union_producer;
 
+# Each numeric consumer owns its conversion of a shared TEXT producer.
+PREPARE export_set_shared_text FROM
+  "SELECT EXPORT_SET(x,'Y','N','',4),ABS(x),FLOOR(x),CEIL(x),x+0 FROM (SELECT ? x)d";
+SET @export_set_bits = '2.5';
+EXECUTE export_set_shared_text USING @export_set_bits;
+DEALLOCATE PREPARE export_set_shared_text;
+
+# A direct marker inherits GREATEST's numeric peer, unlike a derived TEXT value.
+PREPARE export_set_greatest_context FROM "SELECT EXPORT_SET(GREATEST(?,1),'Y','N','',4)";
+SET @export_set_bits = 'abc';
+EXECUTE export_set_greatest_context USING @export_set_bits;
+DEALLOCATE PREPARE export_set_greatest_context;
+PREPARE export_set_greatest_context FROM "SELECT EXPORT_SET(GREATEST(x,1),'Y','N','',4) FROM (SELECT ? x)d";
+EXECUTE export_set_greatest_context USING @export_set_bits;
+DEALLOCATE PREPARE export_set_greatest_context;
+
+# Unary bitwise conversion must enter the same specialization path as binary bitwise.
+PREPARE export_set_unary_real FROM "SELECT EXPORT_SET(x,'Y','N','',4),~x FROM (SELECT ? x)d";
+SET @export_set_bits = CAST(0.5 AS DOUBLE);
+EXECUTE export_set_unary_real USING @export_set_bits;
+DEALLOCATE PREPARE export_set_unary_real;
+PREPARE export_set_unary_decimal FROM "SELECT EXPORT_SET(~x,'Y','N','',4) FROM (SELECT ? x)d";
+SET @export_set_bits = CAST(-0.5 AS DECIMAL(2,1));
+EXECUTE export_set_unary_decimal USING @export_set_bits;
+DEALLOCATE PREPARE export_set_unary_decimal;
+
+# REAL leaves saturate; selectors delegate to their chosen branch, not IFNULL.
+SELECT EXPORT_SET(1e100,'Y','N','',4);
+SET @export_set_bits = 1e100;
+PREPARE export_set_real_source FROM "SELECT EXPORT_SET((SELECT ?),'Y','N','',4)";
+EXECUTE export_set_real_source USING @export_set_bits;
+DEALLOCATE PREPARE export_set_real_source;
+PREPARE export_set_real_source FROM "SELECT EXPORT_SET(IF(TRUE,?,0e0),'Y','N','',4)";
+EXECUTE export_set_real_source USING @export_set_bits;
+DEALLOCATE PREPARE export_set_real_source;
+PREPARE export_set_real_source FROM "SELECT EXPORT_SET(CASE WHEN TRUE THEN ? ELSE 0e0 END,'Y','N','',4)";
+EXECUTE export_set_real_source USING @export_set_bits;
+DEALLOCATE PREPARE export_set_real_source;
+PREPARE export_set_real_source FROM "SELECT EXPORT_SET(IF(FALSE,ABS(?),1e100),'Y','N','',4)";
+EXECUTE export_set_real_source USING @export_set_bits;
+DEALLOCATE PREPARE export_set_real_source;
+PREPARE export_set_real_source FROM "SELECT EXPORT_SET(IF(TRUE,ABS(?),0e0),'Y','N','',4)";
+EXECUTE export_set_real_source USING @export_set_bits;
+DEALLOCATE PREPARE export_set_real_source;
+PREPARE export_set_real_source FROM "SELECT EXPORT_SET(IFNULL(?,0e0),'Y','N','',4)";
+EXECUTE export_set_real_source USING @export_set_bits;
+DEALLOCATE PREPARE export_set_real_source;
+PREPARE export_set_real_source FROM "SELECT EXPORT_SET(IF(TRUE,IFNULL(?,0e0),0e0),'Y','N','',4)";
+EXECUTE export_set_real_source USING @export_set_bits;
+DEALLOCATE PREPARE export_set_real_source;
+
 DROP TABLE export_set_scalar_input;
 
 DROP TABLE export_set_numeric_bits;
