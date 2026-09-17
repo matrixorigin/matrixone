@@ -22,16 +22,27 @@ insert into t_rollup_sort values
 
 set session rollup_algorithm = 'SORT';
 
-select a, b, cnt, total, grouping_a, grouping_b
-from (
-  select a, b,
-         count(*) as cnt,
-         sum(amount) as total,
-         grouping(a) as grouping_a,
-         grouping(b) as grouping_b
-  from t_rollup_sort
-  group by a, b with rollup
-) q
+-- The typed planner test proves the internal sort_rollup marker. This public
+-- shape check proves the same top-level query reaches one Aggregate with an
+-- input-side Sort instead of the legacy Union All expansion.
+-- @regex("(?s)Aggregate.*Sort",true)
+-- @regex("Union All",false)
+explain select a, b,
+                count(*) as cnt,
+                sum(amount) as total,
+                grouping(a) as grouping_a,
+                grouping(b) as grouping_b
+from t_rollup_sort
+group by a, b with rollup
+order by grouping_a, grouping_b, a, b;
+
+select a, b,
+       count(*) as cnt,
+       sum(amount) as total,
+       grouping(a) as grouping_a,
+       grouping(b) as grouping_b
+from t_rollup_sort
+group by a, b with rollup
 order by grouping_a, grouping_b, a, b;
 
 truncate table t_rollup_sort;
