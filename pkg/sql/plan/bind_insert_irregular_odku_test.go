@@ -21,7 +21,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	fulltextplan "github.com/matrixorigin/matrixone/pkg/fulltext/plugin/plan"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
@@ -29,6 +31,8 @@ import (
 	idxcronplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/idxcron"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -385,6 +389,82 @@ func TestBindStoredValueEqualityUsesStoredBytes(t *testing.T) {
 			})
 		require.Error(t, err)
 		require.Equal(t, 2, calls)
+	})
+}
+
+func makeStoredTextLiteral(value string, isNull bool, oid types.T) *planpb.Expr {
+	lit := &planpb.Literal{Isnull: isNull}
+	if !isNull {
+		lit.Value = &planpb.Literal_Sval{Sval: value}
+	}
+	return &planpb.Expr{
+		Typ: planpb.Type{
+			Id:      int32(oid),
+			Width:   types.MaxVarcharLen,
+			Charset: uint32(types.CharsetUTF8),
+		},
+		Expr: &planpb.Expr_Lit{Lit: lit},
+	}
+}
+
+func evalStoredValueEquality(t *testing.T, oldExpr, newExpr *planpb.Expr) bool {
+	t.Helper()
+	expr, err := bindStoredValueEquality(context.Background(), oldExpr, newExpr)
+	require.NoError(t, err)
+
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	executor, err := colexec.NewExpressionExecutor(proc, expr)
+	require.NoError(t, err)
+	defer executor.Free()
+
+	result, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	require.NoError(t, err)
+	require.Equal(t, types.T_bool, result.GetType().Oid)
+	require.False(t, result.IsNull(0))
+	return vector.GetFixedAtWithTypeCheck[bool](result, 0)
+}
+
+func TestBindStoredValueEqualityEvaluatesStoredIdentity(t *testing.T) {
+	longOld := strings.Repeat("x", 4096) + "a"
+	longNew := strings.Repeat("x", 4096) + "b"
+	for _, tc := range []struct {
+		name    string
+		old     string
+		new     string
+		oldNull bool
+		newNull bool
+		want    bool
+	}{
+		{name: "same bytes", old: "Alpha", new: "Alpha", want: true},
+		{name: "case differs", old: "Alpha", new: "alpha", want: false},
+		{name: "trailing space differs", old: "Alpha", new: "Alpha ", want: false},
+		{name: "embedded NUL differs", old: "a\x00b", new: "a\x00c", want: false},
+		{name: "long TEXT tail differs", old: longOld, new: longNew, want: false},
+		{name: "NULL to NULL", oldNull: true, newNull: true, want: true},
+		{name: "NULL to value", new: "value", oldNull: true, want: false},
+		{name: "value to NULL", old: "value", newNull: true, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := evalStoredValueEquality(
+				t,
+				makeStoredTextLiteral(tc.old, tc.oldNull, types.T_text),
+				makeStoredTextLiteral(tc.new, tc.newNull, types.T_text),
+			)
+			require.Equal(t, tc.want, got)
+		})
+	}
+
+	t.Run("different expressions with the same final value", func(t *testing.T) {
+		ctx := context.Background()
+		concat, err := BindFuncExprImplByPlanExpr(ctx, "concat", []*planpb.Expr{
+			makeStoredTextLiteral("val", false, types.T_varchar),
+			makeStoredTextLiteral("ue", false, types.T_varchar),
+		})
+		require.NoError(t, err)
+		require.Equal(t, "concat", concat.GetF().Func.ObjName)
+		require.True(t, evalStoredValueEquality(t,
+			makeStoredTextLiteral("value", false, types.T_text), concat))
 	})
 }
 

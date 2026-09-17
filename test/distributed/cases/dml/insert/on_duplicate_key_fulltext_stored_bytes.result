@@ -55,16 +55,19 @@ select id from docs where match(body) against('token') order by id;
 select id from docs where match(notes) against('nulnotenew') order by id;
 ➤ id[4,32,0]  𝄀
 2
-insert into docs values (1, concat('longtoken ', repeat('x', 128)), 'notelong', 6)
+insert into docs values (1, concat('longtoken ', repeat('x', 128)), concat('texttailtoken ', repeat('y', 4096)), 6)
 on duplicate key update body = values(body), notes = values(notes), payload = values(payload);
-select id, length(body) as stored_len, payload from docs where id = 1;
-➤ id[4,32,0]  ¦  stored_len[4,32,0]  ¦  payload[4,32,0]  𝄀
-1  ¦  138  ¦  6
+select id, length(body) as stored_len, length(notes) as notes_len, payload from docs where id = 1;
+➤ id[4,32,0]  ¦  stored_len[4,32,0]  ¦  notes_len[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  138  ¦  4110  ¦  6
 select id from docs where match(body) against('longtoken') order by id;
 ➤ id[4,32,0]  𝄀
 1
+select id from docs where match(notes) against('texttailtoken') order by id;
+➤ id[4,32,0]  𝄀
+1
 insert into docs values
-(1, concat('longtoken ', repeat('x', 128)), 'notelong', 7),
+(1, concat('changedlongtoken ', repeat('x', 128)), 'changednote', 7),
 (3, 'freshword', 'freshnote', 8)
 on duplicate key update body = values(body), notes = values(notes), payload = values(payload);
 select id, payload from docs order by id;
@@ -72,6 +75,12 @@ select id, payload from docs order by id;
 1  ¦  7  𝄀
 2  ¦  5  𝄀
 3  ¦  8
+select id from docs where match(body) against('changedlongtoken') order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from docs where match(notes) against('changednote') order by id;
+➤ id[4,32,0]  𝄀
+1
 select id from docs where match(body) against('freshword') order by id;
 ➤ id[4,32,0]  𝄀
 3
@@ -82,10 +91,18 @@ begin;
 insert into docs values (1, 'rollbacktoken', 'rollbacknote', 9)
 on duplicate key update body = values(body), notes = values(notes), payload = values(payload);
 rollback;
+select id, length(body) as stored_len, length(notes) as notes_len, payload from docs where id = 1;
+➤ id[4,32,0]  ¦  stored_len[4,32,0]  ¦  notes_len[4,32,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  145  ¦  11  ¦  7
 select id from docs where match(body) against('rollbacktoken') order by id;
 ➤ id[4,32,0]
-select id from docs where match(body) against('longtoken') order by id;
+select id from docs where match(body) against('changedlongtoken') order by id;
 ➤ id[4,32,0]  𝄀
+1
+select id from docs where match(notes) against('rollbacknote') order by id;
+➤ id[4,32,0]
+select id from docs where match(notes) against('changednote') order by id;
+➤ id[4,32,0]
 1
 insert into docs values (4, NULL, 'nullnote', 10);
 insert into docs values (4, NULL, 'nullnote', 11)

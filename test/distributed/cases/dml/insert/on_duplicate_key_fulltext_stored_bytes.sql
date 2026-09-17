@@ -51,19 +51,24 @@ select id, length(body) as stored_len from docs where id = 2;
 select id from docs where match(body) against('token') order by id;
 select id from docs where match(notes) against('nulnotenew') order by id;
 
--- A bounded long value exercises the complete binary payload without relying
--- on truncation or SQL-mode-specific assignment behavior.
-insert into docs values (1, concat('longtoken ', repeat('x', 128)), 'notelong', 6)
+-- A long VARCHAR and a long TEXT value exercise the complete binary payload
+-- without relying on truncation or SQL-mode-specific assignment behavior.
+insert into docs values (1, concat('longtoken ', repeat('x', 128)), concat('texttailtoken ', repeat('y', 4096)), 6)
     on duplicate key update body = values(body), notes = values(notes), payload = values(payload);
-select id, length(body) as stored_len, payload from docs where id = 1;
+select id, length(body) as stored_len, length(notes) as notes_len, payload from docs where id = 1;
 select id from docs where match(body) against('longtoken') order by id;
+select id from docs where match(notes) against('texttailtoken') order by id;
 
--- A mixed batch must keep the unchanged conflicting row and index the fresh row.
+-- A mixed batch must maintain a changed conflict, leave its final bytes visible,
+-- and index the fresh row. The changed body and notes also prove the two
+-- FULLTEXT hooks receive the final stored values rather than the old image.
 insert into docs values
-    (1, concat('longtoken ', repeat('x', 128)), 'notelong', 7),
+    (1, concat('changedlongtoken ', repeat('x', 128)), 'changednote', 7),
     (3, 'freshword', 'freshnote', 8)
     on duplicate key update body = values(body), notes = values(notes), payload = values(payload);
 select id, payload from docs order by id;
+select id from docs where match(body) against('changedlongtoken') order by id;
+select id from docs where match(notes) against('changednote') order by id;
 select id from docs where match(body) against('freshword') order by id;
 select id from docs where match(notes) against('freshnote') order by id;
 
@@ -72,8 +77,11 @@ begin;
 insert into docs values (1, 'rollbacktoken', 'rollbacknote', 9)
     on duplicate key update body = values(body), notes = values(notes), payload = values(payload);
 rollback;
+select id, length(body) as stored_len, length(notes) as notes_len, payload from docs where id = 1;
 select id from docs where match(body) against('rollbacktoken') order by id;
-select id from docs where match(body) against('longtoken') order by id;
+select id from docs where match(body) against('changedlongtoken') order by id;
+select id from docs where match(notes) against('rollbacknote') order by id;
+select id from docs where match(notes) against('changednote') order by id;
 
 -- NULL-safe equality must distinguish NULL-to-NULL from NULL-to-value and
 -- value-to-NULL transitions while keeping the base and postings consistent.
