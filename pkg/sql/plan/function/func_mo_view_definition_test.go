@@ -336,6 +336,98 @@ func TestViewDefinitionReplayPreservesImplicitBinaryHeadingAcrossSQLModes(t *tes
 	}
 }
 
+func TestViewDefinitionReplayPreservesCompoundBinaryHeadingAcrossSQLModes(t *testing.T) {
+	modes := []string{
+		"",
+		"ANSI_QUOTES",
+		"NO_BACKSLASH_ESCAPES",
+		"ANSI_QUOTES,NO_BACKSLASH_ESCAPES",
+	}
+	for _, mode := range modes {
+		t.Run(strings.ReplaceAll(mode, ",", "_"), func(t *testing.T) {
+			encoded, err := json.Marshal(map[string]string{
+				"Stmt":     "CREATE VIEW v AS SELECT length(_binary 'ab')",
+				"sql_mode": mode,
+			})
+			require.NoError(t, err)
+
+			definition, ok := viewDefinitionFromPersistedData(
+				context.Background(), string(encoded))
+			require.True(t, ok)
+			require.Contains(t, definition, "as `length(ab)`")
+
+			statements, err := parsers.ParseWithSQLMode(
+				context.Background(), dialect.MYSQL, definition, 1, mode)
+			require.NoError(t, err)
+			require.Len(t, statements, 1)
+			defer func() {
+				for _, statement := range statements {
+					statement.Free()
+				}
+			}()
+
+			selectStmt, ok := statements[0].(*tree.Select)
+			require.True(t, ok)
+			selectClause, ok := selectStmt.Select.(*tree.SelectClause)
+			require.True(t, ok)
+			require.Equal(t, "length(ab)", selectClause.Exprs[0].As.Origin())
+			fn, ok := selectClause.Exprs[0].Expr.(*tree.FuncExpr)
+			require.True(t, ok)
+			literal, ok := fn.Exprs[0].(*tree.NumVal)
+			require.True(t, ok)
+			require.Equal(t, tree.P_ScoreBinaryHexnum, literal.ValType)
+			decoded, err := hex.DecodeString(literal.String()[2:])
+			require.NoError(t, err)
+			require.Equal(t, []byte("ab"), decoded)
+		})
+	}
+}
+
+func TestViewDefinitionReplayPreservesBackslashLiteralHeading(t *testing.T) {
+	const statement = "CREATE VIEW v AS SELECT 'a\\\\b'"
+	const mode = ""
+
+	encoded, err := json.Marshal(map[string]string{
+		"Stmt":     statement,
+		"sql_mode": mode,
+	})
+	require.NoError(t, err)
+	definition, ok := viewDefinitionFromPersistedData(
+		context.Background(), string(encoded))
+	require.True(t, ok)
+
+	originalStatements, err := parsers.ParseWithSQLMode(
+		context.Background(), dialect.MYSQL, statement, 1, mode)
+	require.NoError(t, err)
+	require.Len(t, originalStatements, 1)
+	defer func() {
+		for _, statement := range originalStatements {
+			statement.Free()
+		}
+	}()
+	originalSelect, ok := originalStatements[0].(*tree.CreateView)
+	require.True(t, ok)
+	originalClause, ok := originalSelect.AsSource.Select.(*tree.SelectClause)
+	require.True(t, ok)
+	expectedHeading := tree.String(originalClause.Exprs[0].Expr, dialect.MYSQL)
+	require.NotEmpty(t, expectedHeading)
+
+	replayStatements, err := parsers.ParseWithSQLMode(
+		context.Background(), dialect.MYSQL, definition, 1, mode)
+	require.NoError(t, err)
+	require.Len(t, replayStatements, 1)
+	defer func() {
+		for _, statement := range replayStatements {
+			statement.Free()
+		}
+	}()
+	replaySelect, ok := replayStatements[0].(*tree.Select)
+	require.True(t, ok)
+	replayClause, ok := replaySelect.Select.(*tree.SelectClause)
+	require.True(t, ok)
+	require.Equal(t, expectedHeading, replayClause.Exprs[0].As.Origin())
+}
+
 func TestViewDefinitionReplayPreservesEmptyBinaryAcrossSQLModes(t *testing.T) {
 	const legacyStatement = "CREATE VIEW v AS SELECT _binary '' AS value"
 	const currentDefinition = "select _binary '' as `value`"
