@@ -1882,6 +1882,12 @@ func (ctr *container) makeAggListWithAllocation(
 				aggexec.ConfigureHLLLegacyState(aggList[i])
 			}
 		}
+		if ctr.legacyDistinctFloatKeys {
+			if err := aggexec.ConfigureLegacyDistinctFloatKeys(aggList[i], true); err != nil {
+				freeAggListPartial(aggList, i+1)
+				return nil, err
+			}
+		}
 		aggexec.ConfigureGroupConcatTimeZone(aggList[i], ctr.timeZone)
 		// Preserve the mode used to construct this list. A merge partial's wire
 		// header may be the first authoritative mode before ctr.mtyp is published;

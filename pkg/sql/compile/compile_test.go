@@ -1968,6 +1968,83 @@ func TestCompileClearReleasesLockMetaBeforeProcess(t *testing.T) {
 	require.Nil(t, c.lockMeta)
 }
 
+func TestCompilePreparedApproxPercentilePreflightsBeforeChildScope(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		descending bool
+	}{
+		{name: "ordinary"},
+		{name: "ordered descending", descending: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c := newCompileForShuffleGroupTest(t)
+			value := &plan.Expr{
+				Typ:  plan.Type{Id: int32(types.T_int64)},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+			}
+			percentile := &plan.Expr{
+				Typ:  plan.Type{Id: int32(types.T_text)},
+				Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+			}
+			bound, err := plan2.BindFuncExprImplByPlanExpr(
+				context.Background(), plan2.NameApproxPercentile,
+				[]*plan.Expr{value, percentile})
+			require.NoError(t, err)
+			if test.descending {
+				bound.GetF().AggConfig = []byte{1}
+			}
+
+			child := &plan.Node{
+				NodeType:    plan.Node_VALUE_SCAN,
+				Stats:       &plan.Stats{Dop: 1},
+				ProjectList: []*plan.Expr{value},
+				TableDef: &plan.TableDef{Cols: []*plan.ColDef{{
+					Typ: plan.Type{Id: int32(types.T_int64)},
+				}}},
+				RowsetData: &plan.RowsetData{Cols: []*plan.ColData{{Data: []*plan.RowsetExpr{{
+					Expr: plan2.MakePlan2Int64ConstExprWithType(1),
+				}}}}},
+			}
+			aggregate := &plan.Node{
+				NodeType: plan.Node_AGG,
+				Children: []int32{0},
+				Stats:    &plan.Stats{Dop: 1},
+				AggList:  []*plan.Expr{bound},
+			}
+			nodes := []*plan.Node{child, aggregate}
+
+			compileWithParam := func(param []byte, isNull bool) ([]*Scope, error) {
+				params := vector.NewVec(types.T_text.ToType())
+				require.NoError(t, vector.AppendBytes(params, param, isNull, c.proc.Mp()))
+				c.proc.SetPrepareParams(params)
+				baseline := c.proc.Mp().CurrNB()
+				scopes, compileErr := c.compilePlanScope(0, 1, nodes)
+				require.Equal(t, baseline, c.proc.Mp().CurrNB())
+				c.proc.SetPrepareParams(nil)
+				params.Free(c.proc.Mp())
+				return scopes, compileErr
+			}
+
+			scopes, err := compileWithParam([]byte("1.5"), false)
+			require.Nil(t, scopes)
+			require.ErrorContains(t, err, "must be finite and in [0,1]")
+			require.Empty(t, c.scopes,
+				"preflight rejection must happen before any child scope becomes owned")
+
+			scopes, err = compileWithParam(nil, true)
+			require.Nil(t, scopes)
+			require.ErrorContains(t, err, "cannot be NULL")
+			require.Empty(t, c.scopes)
+
+			scopes, err = compileWithParam([]byte("0.25"), false)
+			require.NoError(t, err,
+				"the same prepared plan must compile after invalid and NULL executions")
+			require.NotEmpty(t, scopes)
+			ReleaseScopes(scopes)
+		})
+	}
+}
+
 func TestCompileShuffleGroupUsesDistributedPathWhenScopeMcpuDiffersFromDop(t *testing.T) {
 	c := newCompileForShuffleGroupTest(t)
 	aggNode, nodes := newShuffleGroupTestNodes(16)
@@ -2350,6 +2427,24 @@ func TestCompileShuffleGroupGatesAggregateWireByProtocolVersion(t *testing.T) {
 	require.True(t, hasCanonicalDistinctKeyWire(aggNode))
 	require.False(t, c.canCompileShuffleGroup(aggNode),
 		"canonical opaque DISTINCT keys must stay local before MORPC v79")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion79)
+	require.True(t, c.canCompileShuffleGroup(aggNode))
+
+	floatArg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_float64)}}
+	aggNode.AggList = []*plan.Expr{{
+		Typ: plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{
+				Obj:     int64(uint64(function.EncodeOverloadID(function.COUNT, 0)) | uint64(function.Distinct)),
+				ObjName: "count",
+			},
+			Args: []*plan.Expr{floatArg},
+		}},
+	}}
+	require.True(t, hasLegacyFloatDistinctKeyWire(aggNode))
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion78)
+	require.False(t, c.canCompileShuffleGroup(aggNode),
+		"fixed FLOAT DISTINCT must stay local before MORPC v79")
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion79)
 	require.True(t, c.canCompileShuffleGroup(aggNode))
 }
