@@ -10998,18 +10998,41 @@ func StSymDifference(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 	return overlayBinary("ST_SYMDIFFERENCE", geo.OpXOR)(ivecs, result, proc, length, selectList)
 }
 
-// StFrechetDistance returns the discrete Fréchet distance (planar) between two
-// geometries' vertex sequences.
+// StFrechetDistance is the legacy planar Fréchet-distance identity. Its
+// overload is retained for already-serialized plans; newly bound SQL uses the
+// separate geodetic identity below.
 func StFrechetDistance(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return stFrechetDistance[float64]("ST_FRECHETDISTANCE", ivecs, result, proc, length, selectList)
 }
 
-// StFrechetDistance32 is the GEOMETRY32 overload of ST_FrechetDistance.
+// StFrechetDistance32 is the legacy planar GEOMETRY32 identity.
 func StFrechetDistance32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return stFrechetDistance[float32]("ST_FRECHETDISTANCE", ivecs, result, proc, length, selectList)
 }
 
+// StFrechetDistanceGeodetic is the v86 two-argument geodetic identity. It is
+// deliberately distinct from StFrechetDistance so a v86 worker cannot apply
+// the new SRID-4326 meaning to an old producer's overload 0.
+func StFrechetDistanceGeodetic(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFrechetDistanceGeodetic[float64]("ST_FRECHETDISTANCE", ivecs, result, proc, length, selectList)
+}
+
+// StFrechetDistanceGeodetic32 is the GEOMETRY32 v86 geodetic identity.
+func StFrechetDistanceGeodetic32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFrechetDistanceGeodetic[float32]("ST_FRECHETDISTANCE", ivecs, result, proc, length, selectList)
+}
+
 func stFrechetDistance[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFrechetDistanceWithKernel[T](functionName, ivecs, result, proc, length, selectList,
+		discreteFrechetDistancePlanar)
+}
+
+func stFrechetDistanceGeodetic[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFrechetDistanceWithKernel[T](functionName, ivecs, result, proc, length, selectList,
+		discreteFrechetDistanceBySRID)
+}
+
+func stFrechetDistanceWithKernel[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, distanceFn discreteDistanceBySRID) error {
 	emptyBatch, err := checkBinaryGeometryTypeSRID(functionName, ivecs, length, selectList)
 	if err != nil {
 		return err
@@ -11019,7 +11042,7 @@ func stFrechetDistance[T float32 | float64](functionName string, ivecs []*vector
 	}
 	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(v1, v2 []byte) (T, error) {
-		d, err := discreteFrechetDistanceBySRID(v1, v2, srid)
+		d, err := distanceFn(v1, v2, srid)
 		return T(d), err
 	}, selectList)
 }
@@ -11040,18 +11063,38 @@ func stFrechetDistanceWithUnit[T float32 | float64](ivecs []*vector.Vector, resu
 		discreteFrechetDistanceBySRID, nil)
 }
 
-// StHausdorffDistance returns the discrete directed Hausdorff distance (planar)
-// from the first geometry's vertex set to the second geometry's vertex set.
+// StHausdorffDistance is the legacy planar directed Hausdorff-distance
+// identity retained for already-serialized plans.
 func StHausdorffDistance(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return stHausdorffDistance[float64]("ST_HAUSDORFFDISTANCE", ivecs, result, proc, length, selectList)
 }
 
-// StHausdorffDistance32 is the GEOMETRY32 overload of ST_HausdorffDistance.
+// StHausdorffDistance32 is the legacy planar GEOMETRY32 identity.
 func StHausdorffDistance32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return stHausdorffDistance[float32]("ST_HAUSDORFFDISTANCE", ivecs, result, proc, length, selectList)
 }
 
+// StHausdorffDistanceGeodetic is the v86 two-argument geodetic identity.
+func StHausdorffDistanceGeodetic(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stHausdorffDistanceGeodetic[float64]("ST_HAUSDORFFDISTANCE", ivecs, result, proc, length, selectList)
+}
+
+// StHausdorffDistanceGeodetic32 is the GEOMETRY32 v86 geodetic identity.
+func StHausdorffDistanceGeodetic32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stHausdorffDistanceGeodetic[float32]("ST_HAUSDORFFDISTANCE", ivecs, result, proc, length, selectList)
+}
+
 func stHausdorffDistance[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stHausdorffDistanceWithKernel[T](functionName, ivecs, result, proc, length, selectList,
+		discreteHausdorffDistancePlanar)
+}
+
+func stHausdorffDistanceGeodetic[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stHausdorffDistanceWithKernel[T](functionName, ivecs, result, proc, length, selectList,
+		discreteHausdorffDistanceBySRID)
+}
+
+func stHausdorffDistanceWithKernel[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, distanceFn discreteDistanceBySRID) error {
 	emptyBatch, err := checkBinaryGeometryTypeSRID(functionName, ivecs, length, selectList)
 	if err != nil {
 		return err
@@ -11061,7 +11104,7 @@ func stHausdorffDistance[T float32 | float64](functionName string, ivecs []*vect
 	}
 	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(v1, v2 []byte) (T, error) {
-		d, err := discreteHausdorffDistanceBySRID(v1, v2, srid)
+		d, err := distanceFn(v1, v2, srid)
 		return T(d), err
 	}, selectList)
 }
@@ -11145,6 +11188,25 @@ func stDiscreteDistanceWithUnit[T float32 | float64](functionName string, ivecs 
 	return nil
 }
 
+func discreteFrechetDistancePlanar(left, right []byte, srid uint32) (float64, error) {
+	if err := validateComputationSRID(srid); err != nil {
+		return 0, err
+	}
+	a, err := decodeGeoGeometry(left)
+	if err != nil {
+		return 0, err
+	}
+	b, err := decodeGeoGeometry(right)
+	if err != nil {
+		return 0, err
+	}
+	d, ok := geo.FrechetDistance(a, b)
+	if !ok {
+		return 0, moerr.NewInvalidInputNoCtx("ST_FrechetDistance: empty geometry")
+	}
+	return d, nil
+}
+
 func discreteFrechetDistanceBySRID(left, right []byte, srid uint32) (float64, error) {
 	if err := validateComputationSRID(srid); err != nil {
 		return 0, err
@@ -11174,6 +11236,25 @@ func discreteFrechetDistanceBySRID(left, right []byte, srid uint32) (float64, er
 	}
 	if !ok {
 		return 0, moerr.NewInvalidInputNoCtx("ST_FrechetDistance: empty geometry")
+	}
+	return d, nil
+}
+
+func discreteHausdorffDistancePlanar(left, right []byte, srid uint32) (float64, error) {
+	if err := validateComputationSRID(srid); err != nil {
+		return 0, err
+	}
+	a, err := decodeGeoGeometry(left)
+	if err != nil {
+		return 0, err
+	}
+	b, err := decodeGeoGeometry(right)
+	if err != nil {
+		return 0, err
+	}
+	d, ok := geo.DirectedHausdorffDistance(a, b)
+	if !ok {
+		return 0, moerr.NewInvalidInputNoCtx("ST_HausdorffDistance: empty geometry")
 	}
 	return d, nil
 }

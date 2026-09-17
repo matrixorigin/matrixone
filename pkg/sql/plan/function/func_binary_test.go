@@ -7780,8 +7780,27 @@ func TestGeodeticDiscreteDistanceDispatchAndUnits(t *testing.T) {
 		name string
 		fn   fEvalFn
 	}{
-		{name: "frechet", fn: StFrechetDistance},
-		{name: "hausdorff", fn: StHausdorffDistance},
+		{name: "frechet legacy planar", fn: StFrechetDistance},
+		{name: "hausdorff legacy planar", fn: StHausdorffDistance},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(geom4326, []string{lineA}, []bool{false}),
+					NewFunctionTestInput(geom4326, []string{lineB}, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_float64.ToType(), false, []float64{1}, []bool{false}), tc.fn)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	for _, tc := range []struct {
+		name string
+		fn   fEvalFn
+	}{
+		{name: "frechet geodetic", fn: StFrechetDistanceGeodetic},
+		{name: "hausdorff geodetic", fn: StHausdorffDistanceGeodetic},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			fc := NewFunctionTestCase(proc,
@@ -7790,6 +7809,55 @@ func TestGeodeticDiscreteDistanceDispatchAndUnits(t *testing.T) {
 					NewFunctionTestInput(geom4326, []string{lineB}, []bool{false}),
 				},
 				NewFunctionTestResult(types.T_float64.ToType(), false, []float64{oneDegreeMeters}, []bool{false}), tc.fn)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	// The wire-identity split applies to GEOMETRY32 as well.  An upgraded
+	// worker must keep the historical two-argument overloads planar while the
+	// new overloads opt into geodetic semantics.
+	geom4326_32 := types.T_geometry32.ToType()
+	geom4326_32.Width = 4327 // SRID 4326
+	g32 := func(text string) string {
+		g, err := geo.ParseWKT(text)
+		require.NoError(t, err)
+		wkb, err := geo.WriteWKBFloat32(g)
+		require.NoError(t, err)
+		return string(wkb)
+	}
+	for _, tc := range []struct {
+		name string
+		fn   fEvalFn
+	}{
+		{name: "frechet legacy geometry32 planar", fn: StFrechetDistance32},
+		{name: "hausdorff legacy geometry32 planar", fn: StHausdorffDistance32},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(geom4326_32, []string{g32(lineA)}, []bool{false}),
+					NewFunctionTestInput(geom4326_32, []string{g32(lineB)}, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_float32.ToType(), false, []float32{1}, []bool{false}), tc.fn)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
+	}
+	for _, tc := range []struct {
+		name string
+		fn   fEvalFn
+	}{
+		{name: "frechet geodetic geometry32", fn: StFrechetDistanceGeodetic32},
+		{name: "hausdorff geodetic geometry32", fn: StHausdorffDistanceGeodetic32},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(geom4326_32, []string{g32(lineA)}, []bool{false}),
+					NewFunctionTestInput(geom4326_32, []string{g32(lineB)}, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_float32.ToType(), false, []float32{float32(oneDegreeMeters)}, []bool{false}), tc.fn)
 			ok, info := fc.Run()
 			require.True(t, ok, info)
 		})
@@ -7958,8 +8026,12 @@ func TestSpatialDistanceUnitOverloadsResolve(t *testing.T) {
 		{name: "st_distance geometry32 text unit", args: []types.Type{geom32, geom32, types.T_text.ToType()}, want: 5},
 		{name: "st_frechet geometry unit", args: []types.Type{geom, geom, unit}, want: 2},
 		{name: "st_frechet geometry32 unit", args: []types.Type{geom32, geom32, unit}, want: 3},
+		{name: "st_frechet geometry geodetic", args: []types.Type{geom, geom}, want: 4},
+		{name: "st_frechet geometry32 geodetic", args: []types.Type{geom32, geom32}, want: 5},
 		{name: "st_hausdorff geometry unit", args: []types.Type{geom, geom, unit}, want: 2},
 		{name: "st_hausdorff geometry32 unit", args: []types.Type{geom32, geom32, unit}, want: 3},
+		{name: "st_hausdorff geometry geodetic", args: []types.Type{geom, geom}, want: 4},
+		{name: "st_hausdorff geometry32 geodetic", args: []types.Type{geom32, geom32}, want: 5},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var name string

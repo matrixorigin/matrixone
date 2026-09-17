@@ -68,10 +68,12 @@ func TestRemoteSpatialDistanceProtocolValidation(t *testing.T) {
 		overload int32
 		fenced   bool
 	}{
-		{name: "frechet legacy", id: function.ST_FRECHETDISTANCE, overload: 0, fenced: true},
+		{name: "frechet legacy", id: function.ST_FRECHETDISTANCE, overload: 0, fenced: false},
 		{name: "frechet unit", id: function.ST_FRECHETDISTANCE, overload: 2, fenced: true},
-		{name: "hausdorff legacy", id: function.ST_HAUSDORFFDISTANCE, overload: 1, fenced: true},
+		{name: "frechet geodetic", id: function.ST_FRECHETDISTANCE, overload: 4, fenced: true},
+		{name: "hausdorff legacy", id: function.ST_HAUSDORFFDISTANCE, overload: 1, fenced: false},
 		{name: "hausdorff unit", id: function.ST_HAUSDORFFDISTANCE, overload: 3, fenced: true},
+		{name: "hausdorff geodetic", id: function.ST_HAUSDORFFDISTANCE, overload: 4, fenced: true},
 		{name: "distance unit", id: function.ST_DISTANCE, overload: 4, fenced: true},
 		{name: "distance unit32", id: function.ST_DISTANCE, overload: 5, fenced: true},
 		{name: "distance two-geometry overload", id: function.ST_DISTANCE, overload: 0, fenced: false},
@@ -100,7 +102,7 @@ func TestSpatialDistanceDestinationProtocolValidation(t *testing.T) {
 		Typ: planpb.Type{Id: int32(types.T_float64)},
 		Expr: &planpb.Expr_F{F: &planpb.Function{
 			Func: &planpb.ObjectRef{
-				Obj:     function.EncodeOverloadID(function.ST_FRECHETDISTANCE, 0),
+				Obj:     function.EncodeOverloadID(function.ST_FRECHETDISTANCE, 4),
 				ObjName: "st_frechetdistance",
 			},
 		}},
@@ -141,22 +143,22 @@ func TestSpatialDistanceDestinationProtocolValidation(t *testing.T) {
 
 func TestSpatialDistanceProtocolFeatureIDsRemainStable(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		id   int32
+		name     string
+		id       int32
+		overload int32
+		want     bool
 	}{
-		{name: "distance", id: function.ST_DISTANCE},
-		{name: "frechet", id: function.ST_FRECHETDISTANCE},
-		{name: "hausdorff", id: function.ST_HAUSDORFFDISTANCE},
+		{name: "distance", id: function.ST_DISTANCE, overload: 0, want: false},
+		{name: "frechet legacy", id: function.ST_FRECHETDISTANCE, overload: 0, want: false},
+		{name: "frechet geodetic", id: function.ST_FRECHETDISTANCE, overload: 4, want: true},
+		{name: "hausdorff legacy", id: function.ST_HAUSDORFFDISTANCE, overload: 1, want: false},
+		{name: "hausdorff geodetic", id: function.ST_HAUSDORFFDISTANCE, overload: 4, want: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			features, err := planpb.RequiredRemoteExpressionFeatures(
-				remoteSpatialDistanceProtocolPipeline(tc.id, 0))
+				remoteSpatialDistanceProtocolPipeline(tc.id, tc.overload))
 			require.NoError(t, err)
-			if tc.id == function.ST_DISTANCE {
-				require.False(t, features.SpatialDistanceSemantics)
-			} else {
-				require.True(t, features.SpatialDistanceSemantics)
-			}
+			require.Equal(t, tc.want, features.SpatialDistanceSemantics)
 		})
 	}
 }
