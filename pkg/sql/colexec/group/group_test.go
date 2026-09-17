@@ -2616,8 +2616,11 @@ func TestH0OrderedGroupConcatSpillsIndependently(t *testing.T) {
 	// ConfigureGroupConcatH0Spill clamps this to its independent run-size floor.
 	g.SpillMem = 1
 	g.AppendChild(child)
+	allocation := installGroupTestAllocation(t, g, proc, 128<<20)
 	t.Cleanup(func() {
 		g.Free(proc, false, nil)
+		require.Zero(t, allocation.account.Snapshot().Used)
+		finalizeGroupTestAllocation(t, g, allocation)
 		child.Free(proc, false, nil)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
@@ -2631,6 +2634,7 @@ func TestH0OrderedGroupConcatSpillsIndependently(t *testing.T) {
 	require.Equal(t, values[rows-1], parts[0])
 	require.Equal(t, values[0], parts[rows-1])
 	require.Positive(t, g.OpAnalyzer.GetOpStats().SpillRows)
+	require.Positive(t, g.OpAnalyzer.GetOpStats().SpillSize)
 	require.Zero(t, g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillWriteCalls"])
 }
 
@@ -2648,11 +2652,15 @@ func TestH0OrderedPercentileSpillsIndependently(t *testing.T) {
 	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
 	g := newGroupOp(proc, nil, []aggexec.AggFuncExecExpression{
 		orderedPercentileAgg(aggexec.AggIdOfPercentileCont, 0, []byte("0.5"), false),
+		orderedPercentileAgg(aggexec.AggIdOfPercentileDisc, 0, []byte("0.95"), true),
 	})
 	g.SpillMem = 1
 	g.AppendChild(child)
+	allocation := installGroupTestAllocation(t, g, proc, 128<<20)
 	t.Cleanup(func() {
 		g.Free(proc, false, nil)
+		require.Zero(t, allocation.account.Snapshot().Used)
+		finalizeGroupTestAllocation(t, g, allocation)
 		child.Free(proc, false, nil)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
@@ -2662,7 +2670,9 @@ func TestH0OrderedPercentileSpillsIndependently(t *testing.T) {
 	outputs := collectBatches(t, g, proc)
 	require.Len(t, outputs, 1)
 	require.Equal(t, 10000.0, vector.GetFixedAtNoTypeCheck[float64](outputs[0].Vecs[0], 0))
+	require.Equal(t, int64(1000), vector.GetFixedAtNoTypeCheck[int64](outputs[0].Vecs[1], 0))
 	require.Positive(t, g.OpAnalyzer.GetOpStats().SpillRows)
+	require.Positive(t, g.OpAnalyzer.GetOpStats().SpillSize)
 	require.Zero(t, g.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillWriteCalls"])
 }
 
@@ -2689,8 +2699,11 @@ func TestSingleHotGroupOrderedPercentileSpillsAfterHashSpillLimit(t *testing.T) 
 	)
 	g.SpillMem = 1
 	g.AppendChild(child)
+	allocation := installGroupTestAllocation(t, g, proc, 128<<20)
 	t.Cleanup(func() {
 		g.Free(proc, false, nil)
+		require.Zero(t, allocation.account.Snapshot().Used)
+		finalizeGroupTestAllocation(t, g, allocation)
 		child.Free(proc, false, nil)
 		proc.Free()
 		require.Zero(t, proc.Mp().CurrNB())
@@ -3818,6 +3831,123 @@ func TestMergeGroupH0SkipsGenericSpillAndReuses(t *testing.T) {
 	run([][]int32{{1, 2}, {3}}, 3)
 	// Reset must leave no old H0 state in the next generation.
 	run([][]int32{{4}, {5, 6}}, 3)
+}
+
+func TestMergeGroupAccountedOrderedPercentileSpillModes(t *testing.T) {
+	for _, mode := range []int32{H0, H8, HStr} {
+		t.Run(fmt.Sprint(mode), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			const rows, groups, producers = 8192, 64, 3
+			var groupBy []*plan.Expr
+			valueCol := int32(0)
+			if mode != H0 {
+				keyType := types.T_int32
+				if mode == HStr {
+					keyType = types.T_varchar
+				}
+				groupBy = []*plan.Expr{colExpr(0, keyType)}
+				valueCol = 1
+			}
+			aggs := []aggexec.AggFuncExecExpression{
+				orderedPercentileAgg(aggexec.AggIdOfPercentileCont, valueCol, []byte("0.5"), false),
+				orderedPercentileAgg(aggexec.AggIdOfPercentileDisc, valueCol, []byte("0.95"), true),
+			}
+			var partials []*batch.Batch
+			for producer := 0; producer < producers; producer++ {
+				input := batch.NewWithSize(int(valueCol) + 1)
+				values := make([]int64, rows)
+				for i := range values {
+					values[i] = int64(producer*rows + i)
+				}
+				input.Vecs[valueCol] = testutil.MakeInt64Vector(values, nil, proc.Mp())
+				if mode == H8 {
+					keys := make([]int32, rows)
+					for i := range keys {
+						keys[i] = int32(i % groups)
+					}
+					input.Vecs[0] = testutil.MakeInt32Vector(keys, nil, proc.Mp())
+				} else if mode == HStr {
+					keys := make([]string, rows)
+					for i := range keys {
+						keys[i] = fmt.Sprintf("percentile-key-%02d", i%groups)
+					}
+					input.Vecs[0] = testutil.MakeVarcharVector(keys, nil, proc.Mp())
+				}
+				input.SetRowCount(rows)
+				child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+				partial := newGroupOp(proc, groupBy, aggs)
+				partial.NeedEval = false
+				partial.SpillMem = 536870912
+				partial.AppendChild(child)
+				allocation := installGroupTestAllocation(t, partial, proc, 128<<20)
+				require.NoError(t, partial.Prepare(proc))
+				for _, bat := range collectBatches(t, partial, proc) {
+					partials = append(partials, cloneBatch(t, proc, bat))
+				}
+				partial.Free(proc, false, nil)
+				require.NoError(t, partial.ctr.clearAllocationAccount(allocation.account))
+				// Dup retains the allocation owner for transported key vectors.
+				// Finalize the producer account after the merge child frees them.
+				t.Cleanup(func() {
+					require.Zero(t, allocation.account.Snapshot().Used)
+					finalizeGroupTestAllocation(t, partial, allocation)
+				})
+				child.Free(proc, false, nil)
+			}
+			child := colexec.NewMockOperator().WithBatchs(partials)
+			merge := newMergeGroupOp(aggs)
+			merge.SpillMem = 1
+			merge.AppendChild(child)
+			allocation := installGroupTestAllocation(t, merge, proc, 128<<20)
+			t.Cleanup(func() {
+				merge.Free(proc, false, nil)
+				child.Free(proc, false, nil)
+				require.Zero(t, allocation.account.Snapshot().Used)
+				finalizeGroupTestAllocation(t, merge, allocation)
+				proc.Free()
+				require.Zero(t, proc.Mp().CurrNB())
+			})
+			require.NoError(t, merge.Prepare(proc))
+			seen := make(map[int32]bool)
+			for {
+				result, err := vm.Exec(merge, proc)
+				require.NoError(t, err)
+				if result.Status == vm.ExecStop || result.Batch == nil {
+					break
+				}
+				bat := result.Batch
+				for row := 0; row < bat.RowCount(); row++ {
+					if mode == H0 {
+						require.Equal(t, 12287.5, vector.GetFixedAtNoTypeCheck[float64](bat.Vecs[0], row))
+						require.Equal(t, int64(1228), vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[1], row))
+						seen[0] = true
+					} else {
+						var key int32
+						if mode == H8 {
+							key = vector.GetFixedAtNoTypeCheck[int32](bat.Vecs[0], row)
+						} else {
+							_, err := fmt.Sscanf(string(bat.Vecs[0].GetBytesAt(row)), "percentile-key-%d", &key)
+							require.NoError(t, err)
+						}
+						require.False(t, seen[key])
+						seen[key] = true
+						require.Equal(t, float64(key)+12256, vector.GetFixedAtNoTypeCheck[float64](bat.Vecs[1], row))
+						require.Equal(t, int64(key)+1216, vector.GetFixedAtNoTypeCheck[int64](bat.Vecs[2], row))
+					}
+				}
+			}
+			extra := merge.OpAnalyzer.GetOpStats().ExtraStats
+			if mode == H0 {
+				require.Len(t, seen, 1)
+				require.Zero(t, extra["GroupSpillWriteCalls"])
+				require.Positive(t, merge.OpAnalyzer.GetOpStats().SpillRows)
+				require.Positive(t, merge.OpAnalyzer.GetOpStats().SpillSize)
+			} else {
+				require.Len(t, seen, groups)
+				require.Positive(t, extra["GroupSpillWriteCalls"])
+			}
+		})
+	}
 }
 
 func TestMergeGroupUsesIncomingGroupedModeForMedian(t *testing.T) {

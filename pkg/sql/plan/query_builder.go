@@ -106,7 +106,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 			mysqlCompatible = !onlyFullGroupBy
 			mysqlFullGroupByCompat = onlyFullGroupBy && !mysql.HasMatrixOneNativeSQLMode(modeStr)
 			boolSumAvgCompat = mysql.HasEnableBoolSumAvgSQLMode(modeStr)
-			noUnsignedSubtraction = mysql.HasSQLMode(modeStr, "NO_UNSIGNED_SUBTRACTION")
+			noUnsignedSubtraction = mysql.HasSQLMode(modeStr, mysql.SQLModeNoUnsignedSubtraction)
 		}
 	}
 
@@ -4195,20 +4195,43 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			} else {
 				targetArgType = argsCastType[0]
 			}
-			if targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_text {
-				hasChar, hasVariableString, hasPromotedChar := false, false, false
+			allCharInputs := len(tmpArgsType) > 0
+			for _, typ := range tmpArgsType {
+				if typ.Oid != types.T_char {
+					allCharInputs = false
+					break
+				}
+			}
+			if allCharInputs &&
+				(targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_text) {
+				// The common-type resolver may promote CHAR-only inputs to
+				// VARCHAR for ordinary value-selecting functions. A set operation
+				// must retain the fixed-width CHAR contract so PAD_CHAR_TO_FULL_LENGTH
+				// pads the visible representative to the common width as well as
+				// comparing the branches in the right equality domain.
+				for _, typ := range tmpArgsType {
+					if typ.Width > targetArgType.Width {
+						targetArgType.Width = typ.Width
+					}
+				}
+				targetArgType.Oid = types.T_char
+			}
+			if targetArgType.Oid == types.T_char ||
+				targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_text {
+				hasChar, hasPromotedChar := false, false
 				for _, typ := range tmpArgsType {
 					switch typ.Oid {
 					case types.T_char:
 						hasChar = true
-					case types.T_varchar, types.T_text:
-						hasVariableString = true
 					}
 				}
 				for branchIdx := range setBranchPadSpaceProvenance {
 					hasPromotedChar = hasPromotedChar || setBranchPadSpaceProvenance[branchIdx][columnIdx]
 				}
-				setOperationKeyRequired[columnIdx] = hasPromotedChar || hasChar && hasVariableString
+				// CHAR equality is PAD SPACE even when every branch remains CHAR.
+				// Keep its physical equality key separate from the visible row so
+				// legacy H8/group hashing cannot compare representation-only padding.
+				setOperationKeyRequired[columnIdx] = hasPromotedChar || hasChar
 			}
 
 			preserveGroupingBinary := distinct && groupingOrderResolve != nil &&

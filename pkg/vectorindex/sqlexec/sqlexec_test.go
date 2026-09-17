@@ -288,3 +288,38 @@ func TestSqlProcessServiceAndAccount(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint32(42), acc)
 }
+
+// The *WithOptimizerHints run variants thread a per-statement optimizer_hints string into the
+// executor's StatementOption (StatementOption.WithOptimizerHints), scoped to that one call. The
+// fulltext2 json probe uses the streaming variant to pass applyIndices=1 to its fallback/tail SQL.
+func TestRunSqlWithOptimizerHints(t *testing.T) {
+	uuid := "optimizer-hints-identity"
+	spy := &identityCapturingSQLExecutor{}
+	rt := moruntime.DefaultRuntime()
+	rt.SetGlobalVariables(moruntime.InternalSQLExecutor, spy)
+	t.Cleanup(func() { rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, spy) })
+	moruntime.SetupServiceBasedRuntime(uuid, rt)
+
+	ctx := defines.AttachAccountId(context.Background(), 7)
+	sqlproc := NewSqlProcessWithContext(NewSqlContext(ctx, uuid, nil, 7, nil))
+
+	// Batch variant carries the hint; plain RunSql does not.
+	_, err := RunSqlWithOptimizerHints(sqlproc, "select 1", "applyIndices=1")
+	require.NoError(t, err)
+	require.Equal(t, "applyIndices=1", spy.opts.StatementOption().OptimizerHints())
+
+	_, err = RunSql(sqlproc, "select 1")
+	require.NoError(t, err)
+	require.Equal(t, "", spy.opts.StatementOption().OptimizerHints(), "plain RunSql carries no hint")
+
+	// Streaming variant carries the hint; empty hint is a no-op.
+	streamCh := make(chan executor.Result, 1)
+	errCh := make(chan error, 1)
+	_, err = RunStreamingSqlWithOptimizerHints(ctx, sqlproc, "select 1", "applyIndices=1", streamCh, errCh)
+	require.NoError(t, err)
+	require.Equal(t, "applyIndices=1", spy.opts.StatementOption().OptimizerHints())
+
+	_, err = RunStreamingSqlWithOptimizerHints(ctx, sqlproc, "select 1", "", streamCh, errCh)
+	require.NoError(t, err)
+	require.Equal(t, "", spy.opts.StatementOption().OptimizerHints(), "empty hint is a no-op")
+}

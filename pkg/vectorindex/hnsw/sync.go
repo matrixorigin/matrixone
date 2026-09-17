@@ -201,7 +201,7 @@ func NewHnswSync[T types.RealNumbers](sqlproc *sqlexec.SqlProcess,
 	//os.Stderr.WriteString(fmt.Sprintf("idxcfg: %v\n", idxcfg))
 
 	// load metadata
-	indexes, err := LoadMetadata[T](sqlproc, idxtblcfg.DbName, idxtblcfg.MetadataTable)
+	indexes, _, err := LoadMetadata[T](sqlproc, idxtblcfg.DbName, idxtblcfg.MetadataTable)
 	if err != nil {
 		return nil, err
 	}

@@ -595,9 +595,9 @@ func waitStartupRetry(ctx context.Context, interval time.Duration) error {
 }
 
 func (op *operator) waitHAKeeperReadyLocked() (logservice.CNHAKeeperClient, error) {
-	getClient := func() (logservice.CNHAKeeperClient, error) {
-		ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*5, moerr.CauseWaitHAKeeperReadyLocked)
-		defer cancel()
+	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute*5, moerr.CauseWaitHAKeeperReadyLocked2)
+	defer cancel()
+	return waitHAKeeperClient(ctx, func(ctx context.Context) (logservice.CNHAKeeperClient, error) {
 		client, err := logservice.NewCNHAKeeperClient(
 			ctx,
 			op.sid,
@@ -612,20 +612,26 @@ func (op *operator) waitHAKeeperReadyLocked() (logservice.CNHAKeeperClient, erro
 			return nil, err
 		}
 		return client, nil
-	}
+	})
+}
 
-	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Minute*5, moerr.CauseWaitHAKeeperReadyLocked2)
-	defer cancel()
+// Each attempt shares the owner's deadline; a failed attempt never sleeps
+// beyond cancellation. A successful client is transferred to the caller.
+func waitHAKeeperClient(ctx context.Context, create func(context.Context) (logservice.CNHAKeeperClient, error)) (logservice.CNHAKeeperClient, error) {
 	for {
 		select {
 		case <-ctx.Done():
 			return nil, errors.Join(moerr.NewInternalErrorNoCtx("wait hakeeper ready timeout"), moerr.CauseWaitHAKeeperReadyLocked2)
 		default:
-			client, err := getClient()
+			attempt, cancel := context.WithTimeoutCause(ctx, 5*time.Second, moerr.CauseWaitHAKeeperReadyLocked)
+			client, err := create(attempt)
+			cancel()
 			if err == nil {
 				return client, nil
 			}
-			time.Sleep(time.Second)
+			if err := waitStartupRetry(ctx, time.Second); err != nil {
+				return nil, errors.Join(moerr.NewInternalErrorNoCtx("wait hakeeper ready timeout"), moerr.CauseWaitHAKeeperReadyLocked2)
+			}
 		}
 	}
 }

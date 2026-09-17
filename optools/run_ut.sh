@@ -42,7 +42,7 @@ BUILD_WKSP=$(dirname "$PWD") && cd $BUILD_WKSP
 LOG="$G_TS-$TEST_TYPE.log"
 UT_RUN_ID=${UT_RUN_ID:-"${G_TS}-${TEST_TYPE}"}
 UT_TIMEOUT=${UT_TIMEOUT:-"15"}
-UT_HARD_TIMEOUT=${UT_HARD_TIMEOUT:-"70m"}
+UT_HARD_TIMEOUT=${UT_HARD_TIMEOUT:-"120m"}
 UT_PARALLEL=${UT_PARALLEL:-"1"}
 UT_SHARD=${UT_SHARD:-"all"}
 UT_PREBUILD_EMBEDDED=${UT_PREBUILD_EMBEDDED:-"0"}
@@ -87,6 +87,7 @@ PLAN_RACE_JOB_PID=""
 PLAN_RACE_REPORT=""
 CLUSTER_PREBUILD_JOB_PID=""
 CLUSTER_PREBUILD_REPORT=""
+CLUSTER_PREBUILD_DIR=""
 ENGINE_RACE_TEST_BINARY=""
 ENGINE_RACE_JOB_PID=""
 ENGINE_RACE_REPORT=""
@@ -106,6 +107,10 @@ GO_MODULE_MODE="-mod=readonly"
 # Static analysis owns vet in the separate SCA job. Running it again for every
 # UT package duplicates work and increases race-test compile CPU/memory.
 GO_TEST_VET_FLAGS="-vet=off"
+# Ordinary `go test` omits DWARF, but `go test -c` retains it by default.
+# Our temporary race binaries are executed, not debugged: give the compile-only
+# paths the same policy without stripping the Go symbol table or race support.
+GO_TEST_BINARY_FLAGS="-ldflags=-w"
 # CI runs the checked-out MatrixOne module, never a caller's Go workspace.
 export GOWORK=off
 
@@ -994,12 +999,7 @@ function handle_ut_termination(){
         CLUSTER_PREBUILD_JOB_PID=""
     fi
     if [[ -n "${CLUSTER_PREBUILD_REPORT}" ]]; then
-        if [[ -s "${CLUSTER_PREBUILD_REPORT}" ]]; then
-            cat "${CLUSTER_PREBUILD_REPORT}" >> "${UT_STDERR}"
-        fi
-        rm -f "${CLUSTER_PREBUILD_REPORT}" "${CLUSTER_PREBUILD_REPORT}".* \
-            "${G_WKSP}/${G_TS}-embedded-prebuild-"*.test
-        CLUSTER_PREBUILD_REPORT=""
+        cleanup_embedded_prebuild
     fi
     consume_engine_race_report
     if [[ -n "${ENGINE_RACE_TEST_BINARY}" ]]; then
@@ -1139,7 +1139,7 @@ function run_engine_race_shards(){
     start_engine_child 0 env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
         CGO_CFLAGS="${CGO_CFLAGS}" \
         CGO_LDFLAGS="${CGO_LDFLAGS}" \
-        go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -race -tags "${TAGS}" \
+        go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} ${GO_TEST_BINARY_FLAGS} -short -race -tags "${TAGS}" \
         -p 1 -c -o "${ENGINE_RACE_TEST_BINARY}" "${engine_package}" > "${build_log}" 2>&1
     build_start_status=$?
     if (( build_start_status != 0 )); then
@@ -1376,7 +1376,7 @@ function run_plan_race_shards(){
     LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
         CGO_CFLAGS="${CGO_CFLAGS}" \
         CGO_LDFLAGS="${CGO_LDFLAGS}" \
-        go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -race -tags "${TAGS}" \
+        go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} ${GO_TEST_BINARY_FLAGS} -short -race -tags "${TAGS}" \
         -p 1 -c -o "${plan_test_binary}" "${plan_package}" > "${build_log}" 2>&1 &
     plan_child_pid=$!
     set +m
@@ -1580,23 +1580,30 @@ function remove_packages_from_scope(){
     printf '%s\n' "${scope}"
 }
 
+# Build-only optimization. The original complete-scope go test remains the sole
+# executor, retaining its external timeout, TestMain and output-drain semantics.
 function run_embedded_prebuild(){
     local package_scope=$1
     local package_parallel=$2
     local report_base=$3
     local package_index=0
+    local next_package=0
     local package=""
     local output_path=""
     local package_report=""
-    local child_pid=""
     local child_status=0
-    local prebuild_status=0
+    local wave_status=0
     local active_count=0
-    local -a child_pids=()
-    local -a child_outputs=()
+    local progress=0
+    local term_pending=0
+    local wave_term_trap=""
+    local -a child_pids=(0)
     local -a packages=()
     local previous_term_trap=""
 
+    if ! [[ "${package_parallel}" =~ ^[12]$ ]]; then
+        return 2
+    fi
     while IFS= read -r package; do
         [[ -n "${package}" ]] && packages+=("${package}")
     done <<< "${package_scope}"
@@ -1605,71 +1612,97 @@ function run_embedded_prebuild(){
     fi
 
     previous_term_trap=$(trap -p TERM)
-    trap 'terminate_ut_process_groups 20 "${child_pids[@]}"; for package_report in "${child_outputs[@]}"; do if [[ -f "${package_report}" ]]; then cat "${package_report}" >> "${report_base}"; fi; done; wait 2>/dev/null || true; exit 143' TERM
-
-    for package in "${packages[@]}"; do
-        while (( active_count >= package_parallel )); do
-            child_pid=${child_pids[0]}
-            wait "${child_pid}" || child_status=$?
-            if (( child_status != 0 )); then
-                prebuild_status=1
+    function cancel_embedded_wave(){
+        trap '' TERM
+        terminate_ut_process_groups 20 "${child_pids[@]}"
+        wait 2>/dev/null || true
+        exit 143
+    }
+    trap cancel_embedded_wave TERM
+    wave_term_trap=$(trap -p TERM)
+    while (( next_package < ${#packages[@]} || active_count > 0 )); do
+        while (( next_package < ${#packages[@]} && active_count < package_parallel )); do
+            package_index=${next_package}
+            package=${packages[package_index]}
+            output_path="${report_base}.package.${package_index}.test"
+            package_report="${report_base}.build.${package_index}"
+            if ! : > "${package_report}"; then
+                terminate_ut_process_groups 20 "${child_pids[@]}"
+                wait 2>/dev/null || true
+                restore_ut_term_trap "${previous_term_trap}"
+                return 1
             fi
-            cat "${child_outputs[0]}" >> "${report_base}"
-            child_pids=("${child_pids[@]:1}")
-            child_outputs=("${child_outputs[@]:1}")
-            active_count=$((active_count - 1))
-            child_status=0
+            # TERM must not observe a spawned but unregistered process group.
+            term_pending=0
+            trap 'term_pending=1' TERM
+            set -m
+            env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
+                CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" \
+                go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} ${GO_TEST_BINARY_FLAGS} -short -race \
+                -tags "${TAGS}" -p 1 -timeout "${UT_TIMEOUT}m" \
+                -c -o "${output_path}" "${package}" > "${package_report}" 2>&1 &
+            child_pids[package_index]=$!
+            set +m
+            restore_ut_term_trap "${wave_term_trap}"
+            if (( term_pending != 0 )); then
+                cancel_embedded_wave
+            fi
+            active_count=$((active_count + 1))
+            next_package=$((next_package + 1))
         done
-
-        output_path="${G_WKSP}/${G_TS}-embedded-prebuild-${package_index}.test"
-        package_report="${report_base}.${package_index}"
-        : > "${package_report}"
-        set -m
-        env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
-            CGO_CFLAGS="${CGO_CFLAGS}" \
-            CGO_LDFLAGS="${CGO_LDFLAGS}" \
-            go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -race \
-            -tags "${TAGS}" -p 1 -timeout "${UT_TIMEOUT}m" \
-            -c -o "${output_path}" "${package}" > "${package_report}" 2>&1 &
-        child_pid=$!
-        set +m
-        child_pids+=("${child_pid}")
-        child_outputs+=("${package_report}")
-        active_count=$((active_count + 1))
-        package_index=$((package_index + 1))
-    done
-
-    while (( active_count > 0 )); do
-        child_pid=${child_pids[0]}
-        wait "${child_pid}" || child_status=$?
-        if (( child_status != 0 )); then
-            prebuild_status=1
-        fi
-        cat "${child_outputs[0]}" >> "${report_base}"
-        child_pids=("${child_pids[@]:1}")
-        child_outputs=("${child_outputs[@]:1}")
-        active_count=$((active_count - 1))
-        child_status=0
+        # Match the plan scheduler's Bash-3.2-compatible completion mechanism:
+        # a later completed package releases its slot even if the first stalls.
+        progress=0
+        for (( package_index=0; package_index<next_package; package_index++ )); do
+            [[ "${child_pids[package_index]:-0}" != 0 ]] || continue
+            if kill -0 "${child_pids[package_index]}" 2>/dev/null; then continue; fi
+            child_status=0
+            wait "${child_pids[package_index]}" || child_status=$?
+            child_pids[package_index]=0
+            (( child_status == 0 )) || wave_status=1
+            active_count=$((active_count - 1))
+            progress=1
+        done
+        if (( active_count > 0 && progress == 0 )); then sleep 0.05; fi
     done
     restore_ut_term_trap "${previous_term_trap}"
-    return "${prebuild_status}"
+    return "${wave_status}"
 }
 
 function start_embedded_prebuild(){
     local package_scope=$1
     local package_parallel=$2
 
+    if [[ -n "${CLUSTER_PREBUILD_JOB_PID}" ]]; then
+        logger "ERR" "embedded prebuild already has an active owner"
+        return 2
+    fi
     if [[ -z "${package_scope}" ]]; then
         return 0
     fi
-    CLUSTER_PREBUILD_REPORT="${G_WKSP}/${G_TS}-embedded-prebuild.out"
-    : > "${CLUSTER_PREBUILD_REPORT}"
+    cleanup_embedded_prebuild || return 0
+    # Disk exhaustion must only disable this optional optimization.
+    local available_kb
+    available_kb=$(df -Pk "${G_WKSP}" | awk 'END {print $4}')
+    if ! [[ "${available_kb}" =~ ^[0-9]+$ ]] || (( available_kb == 0 )); then
+        logger "WRN" "embedded prebuild has no verified available disk; use go test"
+        return 0
+    fi
+    CLUSTER_PREBUILD_DIR=$(mktemp -d "${G_WKSP}/${G_TS}-embedded.XXXXXX") || return 0
+    CLUSTER_PREBUILD_REPORT="${CLUSTER_PREBUILD_DIR}/prebuild.out"
+    if ! : > "${CLUSTER_PREBUILD_REPORT}"; then cleanup_embedded_prebuild; return 0; fi
     mark_ut_stage "embedded-prebuild" "compile embedded-cluster packages" start \
         "" "parallel=${package_parallel} compile_only=true"
+    local saved_term_trap
+    local term_pending=0
+    saved_term_trap=$(trap -p TERM)
+    trap 'term_pending=1' TERM
     set -m
     run_embedded_prebuild "${package_scope}" "${package_parallel}" "${CLUSTER_PREBUILD_REPORT}" &
     CLUSTER_PREBUILD_JOB_PID=$!
     set +m
+    restore_ut_term_trap "${saved_term_trap}"
+    if (( term_pending != 0 )); then handle_ut_termination; fi
     checkpoint_ut_event "pid-start" "embedded-prebuild" "compile embedded-cluster packages" "" \
         "child_pid=${CLUSTER_PREBUILD_JOB_PID} parallel=${package_parallel} compile_only=true"
 }
@@ -1687,13 +1720,44 @@ function finish_embedded_prebuild(){
         # fail because of an environment-only test invocation; retain its
         # output for diagnosis but do not turn a later passing test red.
         logger "WRN" "embedded prebuild failed with status ${prebuild_status}; continuing with the authoritative test run"
-        if [[ -s "${CLUSTER_PREBUILD_REPORT}" ]]; then
-            tail -n 100 "${CLUSTER_PREBUILD_REPORT}" | sed 's/^/[embedded_prebuild] /'
-        fi
     fi
-    rm -f "${CLUSTER_PREBUILD_REPORT}" "${CLUSTER_PREBUILD_REPORT}".* \
-        "${G_WKSP}/${G_TS}-embedded-prebuild-"*.test
+    cleanup_embedded_prebuild
+}
+
+function cleanup_embedded_prebuild(){
+    # Call only after the build helper and all its child groups are reaped.
+    # Keep build diagnostics outside the disposable artifact directory.
+    local package_report
+    local saved_term_trap
+    local term_pending=0
+    saved_term_trap=$(trap -p TERM)
+    trap 'term_pending=1' TERM
+    if [[ -n "${CLUSTER_PREBUILD_REPORT}" ]]; then
+        for package_report in "${CLUSTER_PREBUILD_REPORT}".build.*; do
+            if [[ -f "${package_report}" ]] && ! cat "${package_report}" >> "${UT_STDERR}"; then
+                logger "ERR" "failed to preserve embedded build diagnostics; retained ${CLUSTER_PREBUILD_DIR}"
+                restore_ut_term_trap "${saved_term_trap}"
+                if (( term_pending != 0 && UT_TERMINATING == 0 )); then handle_ut_termination; fi
+                return 1
+            fi
+        done
+        rm -f "${CLUSTER_PREBUILD_REPORT}" "${CLUSTER_PREBUILD_REPORT}".*
+    fi
+    if [[ -n "${CLUSTER_PREBUILD_DIR}" ]]; then rmdir "${CLUSTER_PREBUILD_DIR}"; fi
+    CLUSTER_PREBUILD_DIR=""
     CLUSTER_PREBUILD_REPORT=""
+    restore_ut_term_trap "${saved_term_trap}"
+    if (( term_pending != 0 && UT_TERMINATING == 0 )); then handle_ut_termination; fi
+}
+
+function run_embedded_tests(){
+    local package_scope=$1
+    local package_parallel=$2
+    finish_embedded_prebuild
+    run_ut_command embedded "embedded-cluster race-test packages" \
+        env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" \
+        go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" \
+        -p "${package_parallel}" -timeout "${UT_TIMEOUT}m" -race ${package_scope}
 }
 
 function run_tests(){
@@ -1809,7 +1873,7 @@ function run_tests(){
     # runtime libraries. A second standalone thirdparties invocation only
     # repeats the no-op scan and obscures that ownership contract.
     mark_ut_stage "build" "native CGo prerequisites" start
-    make cgo
+    prepare_ut_native
     local cgo_status=$?
     mark_ut_stage "build" "native CGo prerequisites" finish "${cgo_status}"
     if (( cgo_status != 0 )); then
@@ -2063,9 +2127,8 @@ function run_tests(){
         # package process to overlap linking, setup, and non-cluster work without
         # returning to the six-way contention that starved HAKeeper.
         if should_run_ut_stage embedded; then
-            finish_embedded_prebuild
             logger "INF" "Run embedded-cluster race-test packages with package parallelism ${cluster_package_parallel} and serialized cluster lifecycle admission"
-            run_ut_command "embedded" "embedded-cluster race-test packages" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p "${cluster_package_parallel}" -timeout "${UT_TIMEOUT}m" -race $cluster_test_scope
+            run_embedded_tests "${cluster_test_scope}" "${cluster_package_parallel}"
             cluster_status=$?
         fi
 

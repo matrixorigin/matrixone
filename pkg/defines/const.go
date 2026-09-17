@@ -117,7 +117,10 @@ const (
 	MORPCVersion79     int64 = 79 // canonical opaque DISTINCT argument wire keys
 	MORPCVersion80     int64 = 80 // signed and widened string numeric result contracts
 	MORPCVersion81     int64 = 81 // opt-in table-owned AUTO_ID_CACHE and its PRE_INSERT wire marker
-	MORPCLatestVersion       = MORPCVersion81
+	MORPCVersion82     int64 = 82 // self-completing fulltext2 json index probe (probe_tail contract)
+	MORPCVersion83     int64 = 83 // bounded COALESCE character and binary result domains
+	MORPCVersion84     int64 = 84 // extended discrete percentile input types
+	MORPCLatestVersion       = MORPCVersion84
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
