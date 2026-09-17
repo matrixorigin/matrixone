@@ -178,10 +178,73 @@ func viewMetadataFromPersistedData(ctx context.Context, persisted string) (persi
 	if selectStmt == nil {
 		return persistedViewMetadata{}, false
 	}
+	if len(columnNames) == 0 {
+		selectStmt = legacyViewSelectWithStableOutputHeadings(selectStmt)
+	}
 	selectStmt = tree.WithViewColumnNames(selectStmt, columnNames)
 	return persistedViewMetadata{definition: tree.StringWithOpts(
 		selectStmt, dialect.MYSQL, tree.WithSingleQuoteString(),
 		tree.WithQuoteIdentifier(), tree.WithModeIndependentStringLiterals()), checkOption: checkOption}, true
+}
+
+// legacyViewSelectWithStableOutputHeadings preserves the implicit name of a
+// binary literal while formatting a legacy Stmt-only row. The parser derives
+// `_binary 'ab'` as the public name `ab`, whereas the mode-independent
+// formatter renders its value as `_binary 0x6162`. Add an alias only for the
+// unaliased, non-empty binary-literal case; explicit aliases and empty binary
+// values already have stable output names.
+func legacyViewSelectWithStableOutputHeadings(stmt *tree.Select) *tree.Select {
+	if stmt == nil {
+		return stmt
+	}
+	clause := legacyViewTopLevelSelectClause(stmt.Select)
+	if clause == nil {
+		return stmt
+	}
+	for i := range clause.Exprs {
+		selectExpr := &clause.Exprs[i]
+		if selectExpr.As != nil && !selectExpr.As.Empty() {
+			continue
+		}
+		heading, ok := legacyViewImplicitHeading(selectExpr.Expr)
+		if ok && heading != "" {
+			selectExpr.As = tree.NewCStr(heading, 1)
+		}
+	}
+	return stmt
+}
+
+func legacyViewTopLevelSelectClause(stmt tree.SelectStatement) *tree.SelectClause {
+	switch selectStmt := stmt.(type) {
+	case *tree.SelectClause:
+		return selectStmt
+	case *tree.Select:
+		return legacyViewTopLevelSelectClause(selectStmt.Select)
+	case *tree.ParenSelect:
+		if selectStmt.Select == nil {
+			return nil
+		}
+		return legacyViewTopLevelSelectClause(selectStmt.Select)
+	case *tree.UnionClause:
+		return legacyViewTopLevelSelectClause(selectStmt.Left)
+	default:
+		return nil
+	}
+}
+
+func legacyViewImplicitHeading(expr tree.Expr) (string, bool) {
+	for {
+		paren, ok := expr.(*tree.ParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.Expr
+	}
+	literal, ok := expr.(*tree.NumVal)
+	if !ok || literal.ValType != tree.P_ScoreBinary {
+		return "", false
+	}
+	return literal.String(), true
 }
 
 func checkOptionOrNone(checkOption string) string {
