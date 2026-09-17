@@ -27,8 +27,10 @@ select id, c from json_string_ctas order by id;
 
 set @json_string_param = '{"p":1}';
 prepare json_string_stmt from 'select id, concat(cast(? as json), js) as c from src order by id';
+-- @metacmp(true)
 execute json_string_stmt using @json_string_param;
 set @json_string_param = '[2]';
+-- @metacmp(true)
 execute json_string_stmt using @json_string_param;
 deallocate prepare json_string_stmt;
 
