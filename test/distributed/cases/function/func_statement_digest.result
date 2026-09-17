@@ -1,28 +1,43 @@
 select length(statement_digest('SELECT 1')) as digest_length;
 digest_length
 64
-select statement_digest('SELECT 1') = statement_digest(' select /* ignored */ 1; ') as formatting_normalized;
+select if(statement_digest('SELECT 1') = statement_digest(' select /* ignored */ 1; '), 'true', 'false') as formatting_normalized;
 formatting_normalized
 true
-select statement_digest('SELECT 1') <> statement_digest('SELECT 2') as literal_values_distinct;
+select if(statement_digest('SELECT 1') <> statement_digest('SELECT 2'), 'true', 'false') as literal_values_distinct;
 literal_values_distinct
 true
-select statement_digest('SELECT a') <> statement_digest('SELECT ''a''') as identifier_and_literal_distinct;
+select if(statement_digest('SELECT a') <> statement_digest('SELECT ''a'''), 'true', 'false') as identifier_and_literal_distinct;
 identifier_and_literal_distinct
 true
-select statement_digest('SELECT @MiXeD') = statement_digest('SELECT @mixed') as user_variable_case_normalized;
+select if(statement_digest('SELECT @MiXeD') = statement_digest('SELECT @mixed'), 'true', 'false') as user_variable_case_normalized;
 user_variable_case_normalized
 true
-select statement_digest(NULL) is null as null_propagates;
+select if(statement_digest(NULL) is null, 'true', 'false') as null_propagates;
 null_propagates
 true
-select statement_digest('SELECT TRIM(BOTH ''x'' FROM ''xxx'')') is not null as trim_formats;
+select statement_digest('SELECT FROM');
+-- @regex("parser|syntax|empty|eof", true)
+You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 11 near " FROM";
+select length(statement_digest('SELECT 1')) as digest_after_parse_error;
+digest_after_parse_error
+64
+select statement_digest('SELECT 1; SELECT 2');
+-- @regex("parser|syntax|empty|eof", true)
+SQL parser error: STATEMENT_DIGEST requires exactly one statement
+select statement_digest('');
+-- @regex("parser|syntax|empty|eof", true)
+SQL parser error: STATEMENT_DIGEST requires a non-empty statement
+select statement_digest('/* comment only */');
+-- @regex("parser|syntax|empty|eof", true)
+SQL parser error: STATEMENT_DIGEST requires a non-empty statement
+select if(statement_digest('SELECT TRIM(BOTH ''x'' FROM ''xxx'')') is not null, 'true', 'false') as trim_formats;
 trim_formats
 true
-select statement_digest('SELECT (SELECT 1)') is not null as nested_query_formats;
+select if(statement_digest('SELECT (SELECT 1)') is not null, 'true', 'false') as nested_query_formats;
 nested_query_formats
 true
-select statement_digest('PREPARE p FROM ''SELECT 1''') is not null as prepare_formats;
+select if(statement_digest('PREPARE p FROM ''SELECT 1''') is not null, 'true', 'false') as prepare_formats;
 prepare_formats
 true
 drop database if exists statement_digest_23024;
@@ -38,3 +53,8 @@ select count(*) as rows, count(statement_digest(sql_text)) as hashed_rows from s
 rows	hashed_rows
 4	3
 drop database statement_digest_23024;
+select count(*) as leftover_statement_digest_databases
+from mo_catalog.mo_database
+where datname = 'statement_digest_23024';
+leftover_statement_digest_databases
+0
