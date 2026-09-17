@@ -7795,6 +7795,60 @@ func TestGeodeticDiscreteDistanceDispatchAndUnits(t *testing.T) {
 		})
 	}
 
+	// Legacy planar identities preserve the historical same-SRID behavior for
+	// projected coordinate systems too. The v86 geodetic identities are the
+	// ones that reject unsupported computation SRIDs.
+	geom3857 := types.T_geometry.ToType()
+	geom3857.Width = 3858 // SRID 3857
+	geom3857_32 := types.T_geometry32.ToType()
+	geom3857_32.Width = 3858 // SRID 3857
+	line3857A := "LINESTRING(0 0,3 0)"
+	line3857B := "LINESTRING(0 4,3 4)"
+	for _, tc := range []struct {
+		name string
+		fn   fEvalFn
+	}{
+		{name: "frechet legacy planar 3857", fn: StFrechetDistance},
+		{name: "hausdorff legacy planar 3857", fn: StHausdorffDistance},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(geom3857, []string{line3857A}, []bool{false}),
+					NewFunctionTestInput(geom3857, []string{line3857B}, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_float64.ToType(), false, []float64{4}, []bool{false}), tc.fn)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
+	}
+	for _, tc := range []struct {
+		name string
+		fn   fEvalFn
+	}{
+		{name: "frechet legacy geometry32 planar 3857", fn: StFrechetDistance32},
+		{name: "hausdorff legacy geometry32 planar 3857", fn: StHausdorffDistance32},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			left, err := geo.ParseWKT(line3857A)
+			require.NoError(t, err)
+			leftWKB, err := geo.WriteWKBFloat32(left)
+			require.NoError(t, err)
+			right, err := geo.ParseWKT(line3857B)
+			require.NoError(t, err)
+			rightWKB, err := geo.WriteWKBFloat32(right)
+			require.NoError(t, err)
+			fc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(geom3857_32, []string{string(leftWKB)}, []bool{false}),
+					NewFunctionTestInput(geom3857_32, []string{string(rightWKB)}, []bool{false}),
+				},
+				NewFunctionTestResult(types.T_float32.ToType(), false, []float32{4}, []bool{false}), tc.fn)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
+	}
+
 	for _, tc := range []struct {
 		name string
 		fn   fEvalFn
