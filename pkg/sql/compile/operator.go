@@ -1968,51 +1968,115 @@ func expressionContainsParam(expr *plan.Expr) bool {
 }
 
 func constructAggregateConfig(f *plan.Function, proc *process.Process) ([]*plan.Expr, []byte) {
+	args, config, err := constructAggregateConfigWithError(f, proc)
+	if err != nil {
+		panic(err)
+	}
+	return args, config
+}
+
+// constructAggregateConfigWithError is the error-bearing configuration
+// boundary used by SQL compilation. Invalid user configuration is expected
+// input, so it must leave the compile path as an error instead of entering
+// Compile's panic recovery (which adds internal stack frames and source
+// paths). The legacy wrapper above remains for callers that have no error
+// channel, but the query compiler validates before constructing operators.
+func constructAggregateConfigWithError(
+	f *plan.Function,
+	proc *process.Process,
+) ([]*plan.Expr, []byte, error) {
+	if f == nil || f.Func == nil {
+		return nil, nil, moerr.NewInternalErrorNoCtx(
+			"aggregate function configuration is nil")
+	}
 	args := f.Args
 	switch f.Func.ObjName {
 	case plan2.NameGroupConcat:
 		value, err := resolveVariableOrDefault(proc, "group_concat_max_len", true, false)
 		if err != nil {
-			panic(err)
+			return nil, nil, err
 		}
 		maxLen, ok := groupConcatMaxLenAsUint64(value)
 		if !ok {
-			panic(moerr.NewInternalErrorNoCtxf(
-				"group_concat_max_len has invalid value %v", value))
+			return nil, nil, moerr.NewInternalErrorNoCtxf(
+				"group_concat_max_len has invalid value %v", value)
 		}
 		if f.AggConfigType == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
-			return args, aggexec.EncodeGroupConcatOrderedConfig(f.AggConfig, maxLen)
+			return args, aggexec.EncodeGroupConcatOrderedConfig(f.AggConfig, maxLen), nil
 		}
 		separator := ","
 		if len(args) > 1 {
-			separator = evaluateAggregateConfigString(proc, args[len(args)-1])
+			var err error
+			separator, err = evaluateAggregateConfigString(proc, args[len(args)-1])
+			if err != nil {
+				return nil, nil, err
+			}
 			args = args[:len(args)-1]
 		}
-		return args, aggexec.EncodeGroupConcatConfig(separator, maxLen)
+		return args, aggexec.EncodeGroupConcatConfig(separator, maxLen), nil
 
 	case plan2.NameClusterCenters:
 		if len(args) > 1 {
-			config := evaluateAggregateConfigString(proc, args[len(args)-1])
-			return args[:len(args)-1], []byte(config)
+			config, err := evaluateAggregateConfigString(proc, args[len(args)-1])
+			if err != nil {
+				return nil, nil, err
+			}
+			return args[:len(args)-1], []byte(config), nil
 		}
 
 	case plan2.NameApproxPercentile:
 		if len(args) > 1 {
 			args, config, err := constructApproxPercentileConfig(f, proc)
 			if err != nil {
-				panic(err)
+				return nil, nil, err
 			}
-			return args, config
+			return args, config, nil
 		}
 
 	case plan2.NamePercentileCont, plan2.NamePercentileDisc:
 		args, config, err := constructOrderedPercentileConfig(f, proc)
 		if err != nil {
-			panic(err)
+			return nil, nil, err
 		}
-		return args, config
+		return args, config, nil
 	}
-	return args, nil
+	return args, nil, nil
+}
+
+// validateAggregateConfigs checks only operator nodes whose aggregate
+// configuration is consumed during physical construction. It intentionally
+// runs before the child scopes are built so an invalid percentile cannot leave
+// partially constructed pipelines behind before returning its user error.
+func validateAggregateConfigs(node *plan.Node, proc *process.Process) error {
+	if node == nil {
+		return nil
+	}
+	validate := func(expr *plan.Expr) error {
+		if expr == nil {
+			return nil
+		}
+		f, ok := expr.Expr.(*plan.Expr_F)
+		if !ok || f.F == nil || f.F.Func == nil {
+			return nil
+		}
+		_, _, err := constructAggregateConfigWithError(f.F, proc)
+		return err
+	}
+	for _, expr := range node.AggList {
+		if err := validate(expr); err != nil {
+			return err
+		}
+	}
+	for _, expr := range node.WinSpecList {
+		w, ok := expr.Expr.(*plan.Expr_W)
+		if !ok || w.W == nil || w.W.WindowFunc == nil {
+			continue
+		}
+		if err := validate(w.W.WindowFunc); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func constructApproxPercentileConfig(
@@ -2099,13 +2163,13 @@ func normalizeAggregateConfigExpr(proc *process.Process, expr *plan.Expr) (*plan
 	return folded, nil
 }
 
-func evaluateAggregateConfigString(proc *process.Process, expr *plan.Expr) string {
+func evaluateAggregateConfigString(proc *process.Process, expr *plan.Expr) (string, error) {
 	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, expr)
 	if err != nil {
-		panic(err)
+		return "", err
 	}
 	defer free()
-	return vec.GetStringAt(0)
+	return vec.GetStringAt(0), nil
 }
 
 func constructDispatchLocal(all bool, isSink, rec bool, recCTE bool, regs []*process.WaitRegister) *dispatch.Dispatch {
