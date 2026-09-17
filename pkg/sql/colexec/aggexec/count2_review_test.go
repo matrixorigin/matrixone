@@ -508,40 +508,56 @@ func TestCountDistinctLegacyMergeReservesRepresentativeBeforePublication(t *test
 	}
 	run := func(limit uint64) (preflightErr, mergeErr error, peak uint64) {
 		mp := mpool.MustNewZero()
-		registry, account, allocation := newReviewAggregateAllocation(t, limit)
+		sourceRegistry, sourceAccount, sourceAllocation :=
+			newReviewAggregateAllocation(t, 2<<20)
+		targetRegistry, targetAccount, targetAllocation :=
+			newReviewAggregateAllocation(t, limit)
 		makeExec := func(legacy bool) *countColumnExec {
 			exec := newCountColumnExec(
 				mp, AggIdOfCountColumn, true, tupleTypes,
 			).(*countColumnExec)
+			allocation := targetAllocation
+			if legacy {
+				allocation = sourceAllocation
+			}
 			require.NoError(t, exec.SetAllocationAccount(allocation))
 			require.NoError(t, ConfigureLegacyDistinctFloatKeys(exec, legacy))
-			require.NoError(t, exec.GroupGrow(1))
 			return exec
 		}
 		source := makeExec(true)
 		target := makeExec(false)
+		SyncAggregatorsToChunkSize([]AggFuncExec{source, target}, 1)
+		require.NoError(t, source.GroupGrow(1))
+		require.NoError(t, target.GroupGrow(1))
 		floats := testutil.NewFloat64Vector(
-			1, tupleTypes[0], mp, false, nil,
-			[]float64{math.Float64frombits(0x7ff8000000000001)})
+			2, tupleTypes[0], mp, false, nil, []float64{
+				math.Float64frombits(0x7ff8000000000001),
+				math.Float64frombits(0x7ff8000000000002),
+			})
 		chars := buildVarlenVec(t, mp, tupleTypes[1],
-			[]string{strings.Repeat("x", 2048)})
-		groups := []uint64{1}
+			[]string{
+				"0180" + strings.Repeat("x", 3918),
+				"0181" + strings.Repeat("x", 3918),
+			})
+		fillGroups := []uint64{1, 1}
+		mergeGroups := []uint64{1}
 		vectors := []*vector.Vector{floats, chars}
-		require.NoError(t, source.PreflightBatchFill(0, groups, vectors))
-		require.NoError(t, source.BatchFill(0, groups, vectors))
-		preflightErr = target.PreflightBatchMerge(source, 0, groups)
+		require.NoError(t, source.PreflightBatchFill(0, fillGroups, vectors))
+		require.NoError(t, source.BatchFill(0, fillGroups, vectors))
+		preflightErr = target.PreflightBatchMerge(source, 0, mergeGroups)
 		if preflightErr == nil {
-			mergeErr = target.BatchMerge(source, 0, groups)
+			mergeErr = target.BatchMerge(source, 0, mergeGroups)
 		}
-		peak = account.Snapshot().Peak
+		peak = targetAccount.Snapshot().Peak
 
 		floats.Free(mp)
 		chars.Free(mp)
 		source.Free()
 		target.Free()
-		require.NoError(t, source.ClearAllocationAccount(allocation))
-		require.NoError(t, target.ClearAllocationAccount(allocation))
-		finishTestAggregateAllocation(t, registry, account)
+		require.NoError(t, source.ClearAllocationAccount(sourceAllocation))
+		require.NoError(t, target.ClearAllocationAccount(targetAllocation))
+		finishTestAggregateAllocation(t, sourceRegistry, sourceAccount)
+		finishTestAggregateAllocation(t, targetRegistry, targetAccount)
 		require.Zero(t, mp.CurrNB())
 		return
 	}

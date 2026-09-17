@@ -1521,14 +1521,19 @@ func (ae *aggExec) preflightBatchMergeArgs(
 		var targetKey []byte
 		var targetOK bool
 		targetStarted := false
+		policyConversion := ae.isDistinct &&
+			distinctFloatArgument(&ae.aggInfo) &&
+			other.legacyDistinctFloatKeys && !ae.legacyDistinctFloatKeys
 		if ae.isDistinct {
 			if state == nil || state.argSkl == nil {
 				return mpool.ErrAllocationAccountInvariant
 			}
-			if sourceState.distinctFixedDeferred {
+			if sourceState.distinctFixedDeferred || policyConversion {
 				// Fixed-index iteration is newest-first, so it cannot share the
-				// ordered target cursor used by legacy skiplists.  Membership
-				// checks for this source representation stay exact below.
+				// ordered target cursor used by legacy skiplists.  A legacy to
+				// modern conversion also changes the byte ordering of FLOAT keys,
+				// so its normalized candidates cannot share that cursor either.
+				// Membership checks for these paths stay exact below.
 			} else {
 				if sourceState.argSkl == nil {
 					return mpool.ErrAllocationAccountInvariant
@@ -1549,13 +1554,19 @@ func (ae *aggExec) preflightBatchMergeArgs(
 			copy(candidate, key)
 			binary.BigEndian.PutUint16(candidate[:kAggArgPrefixSz], y)
 			if ae.isDistinct {
+				if err := normalizeDistinctKeyInPlace(
+					&ae.aggInfo, candidate,
+					other.legacyDistinctFloatKeys,
+					ae.legacyDistinctFloatKeys); err != nil {
+					return err
+				}
 				if sourceState.distinctFixedDeferred {
 					// Fixed-index iteration is reverse insertion order, so use
 					// exact target membership rather than an ordered cursor.
 					if state.argSkl.Contains(candidate) {
 						return nil
 					}
-				} else {
+				} else if !policyConversion {
 					if !targetStarted {
 						targetOK, targetKey, _ = targetIter.SeekGE(candidate)
 						targetStarted = true
@@ -1573,7 +1584,12 @@ func (ae *aggExec) preflightBatchMergeArgs(
 				// so also suppress a value already supplied by an earlier source
 				// group in this unit. Rewriting only the two-byte group prefix lets
 				// each source skiplist answer that lookup without a temporary set.
-				for earlier := 0; earlier < i; earlier++ {
+				// During legacy-to-modern conversion the normalized key order is
+				// different from every source skiplist's order.  Comparing the
+				// unnormalized key against earlier source states would be wrong;
+				// conservatively retain those candidates and let the real merge
+				// deduplicate them after normalization.
+				for earlier := 0; earlier < i && !policyConversion; earlier++ {
 					if groups[earlier] != group {
 						continue
 					}
