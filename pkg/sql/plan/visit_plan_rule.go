@@ -1040,6 +1040,31 @@ func (rule *ResetParamRefRule) runtimeParamType(pos int) (types.Type, bool) {
 	return types.Type{}, false
 }
 
+func (rule *ResetParamRefRule) hasNumericRuntimeParam(pos int) bool {
+	_, kind, ok := rule.runtimeParamValue(pos)
+	if !ok {
+		return false
+	}
+	switch kind {
+	case vector.PrepareParamInteger, vector.PrepareParamDecimal,
+		vector.PrepareParamFloat, vector.PrepareParamBoolean:
+		return true
+	}
+	if pos < 0 || pos >= len(rule.paramValues) {
+		return false
+	}
+	param, ok := rule.paramValues[pos].(ParamValue)
+	if !ok {
+		return false
+	}
+	if param.HasSourceType {
+		return param.SourceType.IsNumeric() || param.SourceType.Oid == types.T_bool ||
+			param.SourceType.Oid == types.T_year
+	}
+	return param.HasRuntimeType && (param.RuntimeType.IsNumeric() ||
+		param.RuntimeType.Oid == types.T_bool || param.RuntimeType.Oid == types.T_year)
+}
+
 // typedIntegerParamExpr materializes the exact integer representation of a
 // protocol value.  It intentionally refuses non-integer categories so an
 // invalid/fractional value keeps the ordinary fallback semantics.
@@ -2502,6 +2527,26 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				}
 			}
 			if implicitParamCast {
+				// Numeric arithmetic uses the prepare-time cast only to make a
+				// TEXT marker resolvable. Once an execute-time numeric source is
+				// available, rebind from that source instead of narrowing it to the
+				// provisional decimal hint used for a TIME operand. Explicit CAST
+				// expressions do not enter this branch because implicitParamCast
+				// excludes them.
+				if isNumericContextFunction(functionName) && hasParamPos &&
+					rule.hasNumericRuntimeParam(paramPos) {
+					typed, typedOK, typedErr := rule.typedRuntimeParamExpr(paramPos)
+					if typedErr != nil {
+						return nil, typedErr
+					}
+					if typedOK {
+						boundArgs[i] = typed
+						needResetFunction = true
+						compareArgTypes = true
+						rule.specialized = true
+						continue
+					}
+				}
 				// Keep decimal casts: decimal arithmetic requires every operand to
 				// be materialized as a decimal vector, even when the protocol value
 				// was encoded as an integer. For casts to other numeric domains, use

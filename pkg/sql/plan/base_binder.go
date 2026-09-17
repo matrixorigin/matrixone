@@ -1232,6 +1232,16 @@ func numericAstTypedOperand(typ Type) numericAstTypeScan {
 	if oid == types.T_any {
 		return numericAstTypeScan{}
 	}
+	// TIME participates in numeric arithmetic through the existing decimal
+	// coercion rules, even though it is not a numeric type to IsNumeric(). Keep
+	// the TIME expression itself typed as TIME; this hint is only used while
+	// inferring the type of a prepared marker or user variable in the same
+	// arithmetic subtree.
+	if oid == types.T_time {
+		hint := types.T_decimal64.ToType()
+		hint.Scale = typ.Scale
+		return numericAstTypeScan{strong: []Type{makePlan2Type(&hint)}}
+	}
 	if !makeTypeByPlan2Type(typ).IsNumeric() {
 		return numericAstTypeScan{incompatible: true}
 	}
