@@ -1309,11 +1309,25 @@ func resetWindowIntervalExpr(bindCtx context.Context, proc *process.Process, e *
 
 	isTimeUnit := intervalType == types.Second || intervalType == types.Minute ||
 		intervalType == types.Hour || intervalType == types.Day
-	isDecimalOrFloat := e1.Typ.Id == int32(types.T_decimal64) ||
-		e1.Typ.Id == int32(types.T_decimal128) || e1.Typ.Id == int32(types.T_float32) ||
+	if isTimeUnit {
+		if finalValue, negative, handled, err := normalizeDecimalIntervalValue(e1, intervalType); err != nil {
+			return nil, err
+		} else if handled {
+			if negative {
+				return nil, newWindowFrameIllegalError(bindCtx)
+			}
+			result, err := setWindowIntervalValue(bindCtx, e, finalValue, types.MicroSecond)
+			if err == nil {
+				result.GetList().List[0].GetLit().DecimalLiteralRequiresV82 =
+					decimalIntervalRequiresProtocol(e1)
+			}
+			return result, err
+		}
+	}
+	isFloat := e1.Typ.Id == int32(types.T_float32) ||
 		e1.Typ.Id == int32(types.T_float64)
 	lit := e1.GetLit()
-	if isTimeUnit && isDecimalOrFloat && lit != nil && !lit.Isnull {
+	if isTimeUnit && isFloat && lit != nil && !lit.Isnull {
 		var floatVal float64
 		var hasValue bool
 
@@ -1322,22 +1336,6 @@ func resetWindowIntervalExpr(bindCtx context.Context, proc *process.Process, e *
 			hasValue = true
 		} else if fval, ok := lit.Value.(*plan.Literal_Fval); ok {
 			floatVal = float64(fval.Fval)
-			hasValue = true
-		} else if d64val, ok := lit.Value.(*plan.Literal_Decimal64Val); ok {
-			d64 := types.Decimal64(d64val.Decimal64Val.A)
-			scale := e1.Typ.Scale
-			if scale < 0 {
-				scale = 0
-			}
-			floatVal = types.Decimal64ToFloat64(d64, scale)
-			hasValue = true
-		} else if d128val, ok := lit.Value.(*plan.Literal_Decimal128Val); ok {
-			d128 := types.Decimal128{B0_63: uint64(d128val.Decimal128Val.A), B64_127: uint64(d128val.Decimal128Val.B)}
-			scale := e1.Typ.Scale
-			if scale < 0 {
-				scale = 0
-			}
-			floatVal = types.Decimal128ToFloat64(d128, scale)
 			hasValue = true
 		}
 
