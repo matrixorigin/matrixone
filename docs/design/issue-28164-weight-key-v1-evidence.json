@@ -1,8 +1,8 @@
 {
-  "status": "PASS_CODEC_BYTE_FREEZE",
+  "status": "PASS_WEIGHT_BACKEND_V1_CANDIDATE",
   "date": "2026-09-16",
   "baseline": "993957c232ac29e81009bb94275734b4f5d8786f",
-  "identity": "Baseline plus source_sha256 below; documentation and comment-only changes do not alter codec semantics.",
+  "identity": "PR1 current-branch evidence covers the weight backend and frozen payload fixtures. Tuple/decoder evidence from the integration baseline is retained separately and is not a PASS for this PR.",
   "design": "76099145e701eb6c0412d3c3c73e8faf262fde3d",
   "toolchain": "go version go1.26.4 darwin/arm64",
   "backend": {
@@ -51,24 +51,28 @@
   "validation": [
     {
       "status": "PASS",
-      "command": "GOWORK=off go list -mod=readonly ./pkg/common/collation ./pkg/container/types"
+      "command": "GOWORK=off go list -mod=readonly ./pkg/common/collation",
+      "scope": "current PR1 collation package only"
     },
     {
       "status": "PASS",
-      "command": "GOWORK=off go test -mod=readonly -count=1 ./pkg/common/collation ./pkg/container/types",
-      "scope": "clean PR1 extraction"
+      "command": "GOWORK=off go test -mod=readonly -count=1 ./pkg/common/collation",
+      "scope": "current PR1 collation package only"
     },
     {
       "status": "PASS",
-      "command": "GOWORK=off go build -mod=readonly ./pkg/common/collation ./pkg/container/types"
+      "command": "GOWORK=off go build -mod=readonly ./pkg/common/collation",
+      "scope": "current PR1 collation package only"
     },
     {
       "status": "PASS",
-      "command": "GOWORK=off go vet -mod=readonly ./pkg/common/collation ./pkg/container/types"
+      "command": "GOWORK=off go vet -mod=readonly ./pkg/common/collation",
+      "scope": "current PR1 collation package only"
     },
     {
       "status": "PASS",
-      "command": "GOWORK=off go test -mod=readonly -count=1 -timeout 120s -v ./pkg/common/collation ./pkg/container/types"
+      "command": "GOWORK=off go test -mod=readonly -count=1 -timeout 120s -v ./pkg/common/collation",
+      "scope": "current PR1 collation package only"
     },
     {
       "status": "PASS",
@@ -76,7 +80,8 @@
     },
     {
       "status": "PASS",
-      "command": "GOWORK=off go test -mod=readonly -race -count=1 -timeout 180s ./pkg/common/collation ./pkg/container/types"
+      "command": "GOWORK=off go test -mod=readonly -race -count=1 -timeout 180s ./pkg/common/collation",
+      "scope": "current PR1 collation package only"
     },
     {
       "status": "PASS",
@@ -84,9 +89,11 @@
       "executions": 50168
     },
     {
-      "status": "PASS",
+      "status": "NOT_RUN",
       "command": "GOWORK=off go test -mod=readonly ./pkg/container/types -run '^$' -fuzz '^FuzzCollationTupleDecode$' -fuzztime 15s -parallel 2",
-      "executions": 26711
+      "executions": 26711,
+      "scope": "historical integration evidence; tuple decoder is not in current PR1",
+      "evidence": "Re-run is required in PR2 against the tuple implementation source."
     },
     {
       "status": "PASS",
@@ -120,7 +127,10 @@
     "migration and rollback",
     "mixed-version and recovery",
     "production CPU/index-space budgets",
-    "current-diff CI and QA"
+    "current-diff CI and QA",
+    "current PR1 tuple framing/decoder implementation and tuple fuzz",
+    "PR2 tuple integration and current-source decoder evidence",
+    "live S3-compatible backend matrix (small PUT, unknown-size multipart, large parallel multipart and read)"
   ],
   "production_admission": "DISABLED_UNCHANGED",
   "source_sha256": {
@@ -132,10 +142,6 @@
     "pkg/common/collation/testdata/extend_oracle.py": "546f258f46af0bb87d30aa5c03de861e92a3c3155349e5cf49e84c16165f4179",
     "pkg/common/collation/testdata/mysql_8_0_45.json.gz": "1e1e3cf2cbfc29f8ff564eada87e874105deb1ebabb33bb31749fef34a9dd572",
     "pkg/common/collation/testdata/mysql_8_0_45_extended.json.gz": "6a68c024f090c6cca99486007c3bfebfcb163e0ce6b0349969430fbb4c446323",
-    "pkg/container/types/collation_key.go": "9918d0e4a913f1b0ae244279a6e13375a1eeb1aad4113bd2c10886ec42057876",
-    "pkg/container/types/packer.go": "41cb7da1607be0b846c002a253d98d94a1904947b2d761e005b40a0624129719",
-    "pkg/container/types/collation_freeze_test.go": "71173a883de8ebb4c89e92bc52057d37bf0ba6e06efc26f5cfa83ea7cd9f8f1a",
-    "pkg/container/types/collation_key_test.go": "9b6aeb5571b18fcb48c80de753df8f34b17e872b59c531a0e1ded680ca3a93da",
     "go.mod": "2dac8bf126f10c1540910feca27726a9bac531e1bdaa3b85f7ec1a2ec16eeb61",
     "go.sum": "f1d10f90e94c3b62a09ef24c9433aaeba6647176e4330860848be2dadcf3123b"
   },
@@ -253,18 +259,36 @@
     "status": "PASS_LOCAL_SCOPE",
     "map": [
       "weight ownership and bounded output -> source preservation, allocation and overflow tests",
-      "tuple decoder -> malformed pre-fix failure/post-fix pass, real Packer order and capacity checks, canonical framing fuzz",
       "oracle -> pinned MySQL, immutable parent hash, expected answers independent of MO",
-      "compatibility -> no bytes changed, new odd-weight rejection only, no enablement or migration"
+      "compatibility -> no bytes changed, new odd-weight rejection only, no enablement or migration",
+      "tuple/decoder -> historical integration evidence only; PR2 owns current tuple validation"
     ],
     "limitations": [
       "finite oracle corpus; not exhaustive Unicode sequence equivalence",
       "prefix decoder cannot detect corruption yielding another syntactically valid field",
-      "full feature persistence/restart and consumers not certified"
+      "full feature persistence/restart and consumers not certified",
+      "tuple/decoder source and fuzz results are not part of the current PR1 diff"
     ]
   },
   "environment_cleanup": {
     "mysql_container": "REMOVED",
     "task_colima_vm": "STOPPED"
+  },
+  "scope": {
+    "current_pr": "weight backend, oracle/golden fixtures, error/capacity/ownership tests and dependency closure",
+    "historical_integration": "tuple framing, packer/decoder, tuple fuzz and consumer checks from the recorded integration baseline",
+    "next_pr": "PR2 must re-run tuple/decoder tests against its own source and commit"
+  },
+  "historical_integration_source_sha256": {
+    "pkg/container/types/collation_key.go": "9918d0e4a913f1b0ae244279a6e13375a1eeb1aad4113bd2c10886ec42057876",
+    "pkg/container/types/packer.go": "41cb7da1607be0b846c002a253d98d94a1904947b2d761e005b40a0624129719",
+    "pkg/container/types/collation_freeze_test.go": "71173a883de8ebb4c89e92bc52057d37bf0ba6e06efc26f5cfa83ea7cd9f8f1a",
+    "pkg/container/types/collation_key_test.go": "9b6aeb5571b18fcb48c80de753df8f34b17e872b59c531a0e1ded680ca3a93da"
+  },
+  "historical_integration": {
+    "baseline": "993957c232ac29e81009bb94275734b4f5d8786f",
+    "scope": "tuple field encoding/decoding, packer order/capacity, tuple fuzz and executable consumer checks",
+    "status": "HISTORICAL_EVIDENCE_NOT_CURRENT_PR1_PASS",
+    "required_follow_up": "PR2 must reproduce these checks after schema-aware tuple code is submitted"
   }
 }

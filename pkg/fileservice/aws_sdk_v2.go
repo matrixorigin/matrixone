@@ -100,6 +100,14 @@ func NewAwsSDKv2(
 	// options for loading configs
 	loadConfigOptions := []func(*config.LoadOptions) error{
 		config.WithLogger(logutil.GetS3Logger()),
+		// Keep the pre-v1.99 S3 behavior for existing object-storage
+		// deployments. Newer AWS SDKs default to calculating and validating
+		// checksums whenever an operation supports them, which changes the
+		// wire contract for S3-compatible services. Required checksums remain
+		// enabled while optional checksums stay disabled until each backend has
+		// an explicit compatibility test.
+		config.WithRequestChecksumCalculation(aws.RequestChecksumCalculationWhenRequired),
+		config.WithResponseChecksumValidation(aws.ResponseChecksumValidationWhenRequired),
 		config.WithClientLogMode(
 			aws.LogSigning |
 				aws.LogRetries |

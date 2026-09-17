@@ -1,9 +1,11 @@
 # Collation key V1: byte contract and independent validation
 
 Parent design: #28842, merged as `76099145e701eb6c0412d3c3c73e8faf262fde3d`.
-Validation baseline: integration `993957c232ac29e81009bb94275734b4f5d8786f` plus
-this change. See `issue-28164-weight-key-v1-evidence.json` for source hashes,
-commands, terminal results and the exact fixture identities.
+Validation baseline: the weight-backend checks in this PR are bound to this
+branch and its source hashes. Integration `993957c232ac29e81009bb94275734b4f5d8786f`
+is retained as historical evidence for tuple/decoder consumers only; it is not
+current PR1 PASS. See `issue-28164-weight-key-v1-evidence.json` for the separate
+source hashes, commands, terminal results and exact fixture identities.
 
 This document freezes the **weight payload and tuple-field byte contract** for
 the supported domains. It does not activate new tables or certify complete
@@ -24,6 +26,21 @@ closed; durable cluster admission and end-to-end acceptance remain separate.
   and expression metadata supplies the domain; relation/index metadata supplies
   format. Missing format remains legacy (0). The current implementation symbol
   `PADSpaceKeyV1` (1) also selects the NO PAD domains; its name does not impose PAD.
+
+## Dependency and existing storage-path compatibility
+
+Vitess v0.24.0 brings a newer AWS SDK v2 dependency closure into the module
+graph. This PR does not enable new SQL semantics, but the AWS SDK is already
+used by MatrixOne's object-storage path, so the upgrade is treated as an
+independent compatibility surface. `NewAwsSDKv2` explicitly selects
+`RequestChecksumCalculationWhenRequired` and
+`ResponseChecksumValidationWhenRequired`, preserving the pre-upgrade optional
+checksum behavior while retaining checksums required by an operation. The
+compatibility policy is covered by
+`TestNewAwsSDKv2UsesCompatibilityChecksumPolicy`; existing small PUT, read,
+unknown-size multipart and parallel multipart tests remain separate storage
+path evidence. A live S3-compatible backend matrix is still NOT_RUN and is a
+required follow-up before treating the dependency closure as production-ready.
 
 ## Normative payloads
 
@@ -130,19 +147,23 @@ fixture records its SHA-256 and reuses only its existing answers. The new
 - Corpus includes controls/NUL, whitespace, accents, combining order,
   ignorables, expansions, supplementary/unassigned values, long strings and
   character prefixes. Tests also retain the independent 609,961-pair PAD model.
-- Real Packer tuples with numeric prefix/suffix match all four MySQL order
-  matrices. Exact/one-short capacity, ownership, golden bytes and malformed
-  fields are exercised separately.
+- The recorded integration baseline exercised real Packer tuples with numeric
+  prefix/suffix, exact/one-short capacity, ownership, golden bytes and
+  malformed fields. Those tuple/decoder checks are historical evidence for
+  PR2 and are not implemented by this PR1 diff.
 - Four corpus payload digests in `TestFrozenKeysMySQLOracle` lock V1 bytes.
   Those digests are MO format regression oracles, not independent MySQL results.
 - The odd-length native-payload regression failed before the decoder repair
   and passed afterward. Fuzz and race are bounded evidence, not exhaustive
   proof over every Unicode string or corruption pattern.
 
-Package tests and executable query-expression consumer tests establish this
-codec boundary only. General-ci/new-table semantics, all DML/index producers,
-real persisted pruning, migration/rollback, mixed-version recovery, production
-performance and CI/QA remain NOT_RUN for this delivery. #28164 is not closed.
+The current PR1 package tests establish the weight-backend codec boundary only.
+Tuple/decoder and executable consumer tests in the integration baseline are
+listed as historical evidence; PR2 must rerun them against its own source.
+General-ci/new-table semantics, all DML/index producers, real persisted
+pruning, migration/rollback, mixed-version recovery, production performance,
+the S3-compatible backend matrix and CI/QA remain NOT_RUN for this delivery.
+#28164 is not closed.
 
 Earlier local benchmark/fuzz records belong to their original versions and
 remain in git history and `artifacts/issue-28164-d1`; they are not rebranded as
