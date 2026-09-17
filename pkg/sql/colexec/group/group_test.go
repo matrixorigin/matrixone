@@ -1699,6 +1699,60 @@ func TestSortRollupEmptyInputProducesGrandTotal(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestSortRollupDoesNotPublishAfterEOFCancellation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	baseCtx := proc.Ctx
+	ctx, cancel := context.WithCancel(baseCtx)
+	proc.Ctx = ctx
+
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = testutil.MakeInt32Vector([]int32{7}, nil, proc.Mp())
+	input.SetRowCount(1)
+	child := colexec.NewMockOperator().
+		WithBatchs([]*batch.Batch{input}).
+		WithEndOfDataCallback(cancel)
+	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)},
+		[]aggexec.AggFuncExecExpression{countStarAgg()})
+	g.SortRollup = true
+	g.AppendChild(child)
+	require.NoError(t, g.Prepare(proc))
+
+	t.Cleanup(func() {
+		proc.Ctx = baseCtx
+		if g.ctr.mp != nil {
+			g.Free(proc, true, context.Canceled)
+		}
+		child.Free(proc, true, context.Canceled)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+
+	result, err := vm.Exec(g, proc)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, result.Batch,
+		"EOF cancellation must not publish a finalized rollup batch")
+
+	// Cancellation must release the first generation before the operator is
+	// reused for a fresh statement.
+	g.Reset(proc, true, context.Canceled)
+	child.Free(proc, true, context.Canceled)
+	g.Children = nil
+	proc.Ctx = baseCtx
+
+	fresh := batch.NewWithSize(1)
+	fresh.Vecs[0] = testutil.MakeInt32Vector([]int32{8}, nil, proc.Mp())
+	fresh.SetRowCount(1)
+	child = colexec.NewMockOperator().WithBatchs([]*batch.Batch{fresh})
+	g.AppendChild(child)
+	require.NoError(t, g.Prepare(proc))
+	results := collectSortRollupBatches(t, g, proc)
+	require.Len(t, results, 1)
+	require.Equal(t, 2, results[0].RowCount())
+	for _, result := range results {
+		result.Clean(proc.Mp())
+	}
+}
+
 func TestSortRollupStreamsMultipleOutputBatches(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	const rows = aggBatchSize + 1
