@@ -56,6 +56,7 @@ const (
 var errGatewayClosed = errors.New("python udf gateway is closed")
 
 var _ udf.RuntimeDefinitionValidator = (*Gateway)(nil)
+var _ udf.RuntimeStatusProvider = (*Gateway)(nil)
 
 type Gateway struct {
 	cfg               ClientConfig
@@ -70,6 +71,7 @@ type Gateway struct {
 	admissionMu       sync.Mutex
 	capabilityReady   bool
 	workerLeaseEpoch  uint64
+	capability        *capabilityResponse
 	closed            bool
 	active            chan struct{}
 	ledger            *protocol.TerminalLedger
@@ -183,6 +185,101 @@ func (g *Gateway) CheckLanguageReady(ctx context.Context, language string) error
 	// capability record so a worker replacement at the same endpoint cannot
 	// inherit a stale success from the previous process.
 	return g.ensureCapabilities(requestCtx, client, true)
+}
+
+// StatusSnapshot is the control-plane view of the current Python runtime. It
+// deliberately reuses CheckLanguageReady, so the status reported for a
+// same-Pod CN is the same capability handshake that gates an invocation. The
+// action only probes the worker and does not acquire an invocation, handler,
+// input credit, or terminal-ledger entry.
+func (g *Gateway) StatusSnapshot(ctx context.Context, language string) udf.RuntimeStatusSnapshot {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	snapshot := udf.RuntimeStatusSnapshot{
+		Language:        language,
+		Enabled:         g.cfg.Enabled,
+		AllowUnisolated: g.cfg.AllowUnisolated,
+	}
+	if language != udf.LanguagePython {
+		snapshot.ErrorClass = udf.RuntimeStatusInvalid
+		snapshot.Reason = udf.RuntimeStatusReasonInvalidLanguage
+		return snapshot
+	}
+	if !g.cfg.Enabled {
+		snapshot.ErrorClass = udf.RuntimeStatusDisabled
+		snapshot.Reason = udf.RuntimeStatusReasonRuntimeDisabled
+		return snapshot
+	}
+	if !g.cfg.AllowUnisolated {
+		snapshot.ErrorClass = udf.RuntimeStatusNotAllowed
+		snapshot.Reason = udf.RuntimeStatusReasonUnisolatedNotAllowed
+		return snapshot
+	}
+
+	err := g.CheckLanguageReady(ctx, language)
+	g.mu.Lock()
+	capability := g.capability
+	ready := g.capabilityReady && g.workerLeaseEpoch != 0 && !g.closed
+	if capability != nil {
+		snapshot.ProtocolVersion = int32(capability.ProtocolVersion)
+		snapshot.ABIContract = capability.ABIContract
+		snapshot.AdapterVersion = capability.AdapterVersion
+		snapshot.SDKVersion = capability.SDKVersion
+		snapshot.DefinitionSchemaVersion = int32(capability.DefinitionSchemaVersion)
+		snapshot.PlanContractVersion = int32(capability.PlanContractVersion)
+		snapshot.TypeDescriptorContract = capability.TypeDescriptorContract
+		snapshot.TimezoneDatabaseVersion = capability.TimezoneDatabaseVersion
+		snapshot.WindowBatches = int32(capability.WindowBatches)
+		snapshot.CumulativeAck = capability.CumulativeAck
+		snapshot.MaxExecutionFrameBytes = capability.MaxExecutionFrameBytes
+		snapshot.MaxHandlerProcesses = int32(capability.MaxHandlerProcesses)
+		snapshot.MaxAccountHandlerProcesses = int32(capability.MaxAccountHandlerProcesses)
+		snapshot.MaxOwnerHandlerProcesses = int32(capability.MaxOwnerHandlerProcesses)
+		snapshot.LeaseEpoch = capability.LeaseEpoch
+		snapshot.Modes = append([]string(nil), capability.Modes...)
+		snapshot.NullPolicies = append([]string(nil), capability.NullPolicies...)
+	}
+	g.mu.Unlock()
+
+	if err == nil && ready {
+		snapshot.Ready = true
+		snapshot.ErrorClass = ""
+		snapshot.Reason = udf.RuntimeStatusReasonReady
+		return snapshot
+	}
+	if err == nil {
+		snapshot.ErrorClass = udf.RuntimeStatusUnavailable
+		snapshot.Reason = udf.RuntimeStatusReasonWorkerUnavailable
+		return snapshot
+	}
+	snapshot.ErrorClass, snapshot.Reason = classifyStatusError(err)
+	return snapshot
+}
+
+func classifyStatusError(err error) (string, string) {
+	if err == nil {
+		return "", udf.RuntimeStatusReasonReady
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return udf.RuntimeStatusTimeout, udf.RuntimeStatusReasonRequestTimeout
+	}
+	if errors.Is(err, errGatewayClosed) {
+		return udf.RuntimeStatusClosed, udf.RuntimeStatusReasonRuntimeClosed
+	}
+	message := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(message, "contract does not match"),
+		strings.Contains(message, "capability set does not match"):
+		return udf.RuntimeStatusContractMismatch, udf.RuntimeStatusReasonCapabilityMismatch
+	case strings.Contains(message, "deadline exceeded"), strings.Contains(message, "timeout"):
+		return udf.RuntimeStatusTimeout, udf.RuntimeStatusReasonRequestTimeout
+	case strings.Contains(message, "connection"), strings.Contains(message, "transport"),
+		strings.Contains(message, "flight"), strings.Contains(message, "unavailable"):
+		return udf.RuntimeStatusUnavailable, udf.RuntimeStatusReasonWorkerUnavailable
+	default:
+		return udf.RuntimeStatusInternal, udf.RuntimeStatusReasonRuntimeError
+	}
 }
 
 // ValidateDefinition asks the current worker to compile the exact artifact
@@ -1145,6 +1242,7 @@ func (g *Gateway) ensureCapabilities(ctx context.Context, client flight.FlightSe
 		// success that could authorize a lease-less Flight Action.
 		g.capabilityReady = false
 		g.workerLeaseEpoch = 0
+		g.capability = nil
 	}
 	ready := g.capabilityReady
 	closed := g.closed
@@ -1203,6 +1301,10 @@ func (g *Gateway) ensureCapabilities(ctx context.Context, client flight.FlightSe
 	if !g.closed {
 		g.capabilityReady = true
 		g.workerLeaseEpoch = response.LeaseEpoch
+		capability := response
+		capability.Modes = append([]string(nil), response.Modes...)
+		capability.NullPolicies = append([]string(nil), response.NullPolicies...)
+		g.capability = &capability
 	}
 	g.mu.Unlock()
 	return nil
@@ -1219,6 +1321,7 @@ func (g *Gateway) invalidateCapabilities() {
 	g.mu.Lock()
 	g.capabilityReady = false
 	g.workerLeaseEpoch = 0
+	g.capability = nil
 	g.mu.Unlock()
 }
 
@@ -1605,9 +1708,33 @@ func (g *Gateway) receiveFinish(
 			if control.LastResultSequence != lastResult {
 				return fmt.Errorf("python udf: invalid Finish result sequence %d, expected %d", control.LastResultSequence, lastResult)
 			}
-			return g.acknowledgeFinish(ctx, client, "AcknowledgeFinish", protocol.Control{Kind: "AcknowledgeFinish", Tuple: tuple, FinishID: control.FinishID})
+			if err := g.acknowledgeFinish(ctx, client, "AcknowledgeFinish", protocol.Control{Kind: "AcknowledgeFinish", Tuple: tuple, FinishID: control.FinishID}); err != nil {
+				return err
+			}
+			// AcknowledgeFinish is accepted by the worker's action RPC before
+			// the DoExchange callback runs its finally block.  The callback owns
+			// the input reader, handler process, and worker group fence, so the
+			// action ACK alone is not a safe re-entry boundary.  Wait for the
+			// exchange to reach EOF; Flight reports EOF only after the callback
+			// has returned and its cleanup owner has completed.
+			return g.waitExchangeEOF(ctx, stream)
 		default:
 			return fmt.Errorf("python udf: unexpected control %q", control.Kind)
+		}
+	}
+}
+
+func (g *Gateway) waitExchangeEOF(ctx context.Context, stream flight.FlightService_DoExchangeClient) error {
+	for {
+		data, err := stream.Recv()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("python udf: wait for exchange completion: %w", err)
+		}
+		if data == nil || len(data.DataHeader) != 0 || len(data.DataBody) != 0 || len(data.AppMetadata) != 0 {
+			return fmt.Errorf("python udf: exchange returned data after Finish ACK")
 		}
 	}
 }
