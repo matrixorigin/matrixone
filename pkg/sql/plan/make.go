@@ -168,14 +168,18 @@ func markDecimalComparisonProtocolRequirement(expr *plan.Expr, owner any) {
 		}
 	}
 	if hasArgs {
-		for _, arg := range args {
-			_ = plan.VisitExprTree(arg, func(current *plan.Expr) error {
-				if literal := current.GetLit(); literal != nil {
-					literal.DecimalLiteralRequiresV82 = true
-				}
-				return nil
-			})
-		}
+		markDecimalComparisonLiteralRequirement(args)
+	}
+}
+
+func markDecimalComparisonLiteralRequirement(args []*plan.Expr) {
+	for _, arg := range args {
+		_ = plan.VisitExprTree(arg, func(current *plan.Expr) error {
+			if literal := current.GetLit(); literal != nil {
+				literal.DecimalLiteralRequiresV82 = true
+			}
+			return nil
+		})
 	}
 }
 

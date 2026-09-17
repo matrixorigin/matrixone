@@ -2278,9 +2278,23 @@ func decimalTrailingZerosStatus(constExpr *plan.Expr, constT types.Type, columnS
 	// check does not silently narrow a wide value or stop at Decimal128's
 	// 18-digit divisor boundary.
 	if val, ok := lit.Value.(*plan.Literal_Decimal64Val); ok {
+		if constExpr.Typ.Id == int32(types.T_decimal64) ||
+			constExpr.Typ.Id == int32(types.T_decimal128) ||
+			constExpr.Typ.Id == int32(types.T_decimal256) {
+			if constExpr.Typ.Scale != constT.Scale {
+				return false, false
+			}
+		}
 		return decimal256TrailingZerosStatus(
 			types.Decimal256FromInt64(val.Decimal64Val.A), trailingDigits)
 	} else if val, ok := lit.Value.(*plan.Literal_Decimal128Val); ok {
+		if constExpr.Typ.Id == int32(types.T_decimal64) ||
+			constExpr.Typ.Id == int32(types.T_decimal128) ||
+			constExpr.Typ.Id == int32(types.T_decimal256) {
+			if constExpr.Typ.Scale != constT.Scale {
+				return false, false
+			}
+		}
 		return decimal256TrailingZerosStatus(
 			types.Decimal256FromDecimal128(types.Decimal128{
 				B0_63:   uint64(val.Decimal128Val.A),
@@ -2290,8 +2304,14 @@ func decimalTrailingZerosStatus(constExpr *plan.Expr, constT types.Type, columnS
 		// The literal is a string. It may be an exact DECIMAL256 source, so
 		// parsing through Decimal128 can round the coefficient before we inspect
 		// the removable suffix and incorrectly report a non-zero tail.
-		dec, _, err := types.Parse256(sval.Sval)
+		dec, sourceScale, err := types.Parse256(sval.Sval)
 		if err != nil {
+			return false, false
+		}
+		if sourceScale != constT.Scale {
+			// An explicit cast may have rescaled the source literal. The
+			// source coefficient cannot be checked against the target scale
+			// without reproducing cast rounding, so do not claim a safe tail.
 			return false, false
 		}
 		return decimal256TrailingZerosStatus(dec, trailingDigits)
