@@ -5813,14 +5813,17 @@ func bindFuncExprImplByPlanExpr(
 		}
 
 		// Early detection for decimal comparisons
-		if len(args) == 2 {
-			if name == "=" && isDecimalComparisonAlwaysFalse(ctx, args[0], args[1]) {
+		if len(args) == 2 && (name == "=" || name == "<>") {
+			markDecimalComparisonProtocolRequirement(nil, args)
+			if name == "=" && decimalComparisonColumnIsNotNullable(args) &&
+				isDecimalComparisonAlwaysFalse(ctx, args[0], args[1]) {
 				// Equality with incompatible precision is always false
 				result := makePlan2BoolConstExprWithType(false)
 				markDecimalComparisonProtocolRequirement(result, args)
 				return result, nil
 			}
-			if name == "<>" && isDecimalComparisonAlwaysFalse(ctx, args[0], args[1]) {
+			if name == "<>" && decimalComparisonColumnIsNotNullable(args) &&
+				isDecimalComparisonAlwaysFalse(ctx, args[0], args[1]) {
 				// Inequality with incompatible precision is always true
 				result := makePlan2BoolConstExprWithType(true)
 				markDecimalComparisonProtocolRequirement(result, args)
