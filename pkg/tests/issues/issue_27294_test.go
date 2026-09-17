@@ -40,8 +40,8 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 		cn, err := c.GetCNService(0)
 		require.NoError(t, err)
 		port := cn.GetServiceConfig().CN.Frontend.Port
-		db, err := sql.Open("mysql", fmt.Sprintf(
-			"dump:111@tcp(127.0.0.1:%d)/?interpolateParams=false", port))
+		dsn := fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?interpolateParams=false", port)
+		db, err := sql.Open("mysql", dsn)
 		require.NoError(t, err)
 		defer db.Close()
 		// Keep all session-level setup and prepared statements on one COM_STMT
@@ -224,6 +224,44 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 			err = stmt.QueryRowContext(ctx, args...).Scan(&result)
 			return result, err
 		}
+
+		// First assert the server-default SQL mode through a fresh connection and
+		// prepared statement. This must not accidentally inherit the mode changes
+		// exercised below by the cached-statement mode-flip regression.
+		defaultModeDB, err := sql.Open("mysql", dsn)
+		require.NoError(t, err)
+		defaultModeDB.SetMaxOpenConns(1)
+		defer func() { require.NoError(t, defaultModeDB.Close()) }()
+		defaultModeConn, err := defaultModeDB.Conn(ctx)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, defaultModeConn.Close()) }()
+		var defaultSQLMode string
+		require.NoError(t, defaultModeConn.QueryRowContext(ctx,
+			"select @@sql_mode").Scan(&defaultSQLMode))
+		t.Logf("fresh COM_STMT session default @@sql_mode: %q", defaultSQLMode)
+		defaultHasNativeMode := false
+		for _, mode := range strings.Split(defaultSQLMode, ",") {
+			if strings.EqualFold(strings.TrimSpace(mode), "MATRIXONE_NATIVE") {
+				defaultHasNativeMode = true
+				break
+			}
+		}
+		require.False(t, defaultHasNativeMode,
+			"server-default @@sql_mode must not contain MATRIXONE_NATIVE")
+		defaultAbs, err := defaultModeConn.PrepareContext(ctx, "select abs(?)")
+		require.NoError(t, err)
+		defer func() { require.NoError(t, defaultAbs.Close()) }()
+		var defaultPrefixResult float64
+		require.NoError(t, defaultAbs.QueryRowContext(ctx, "1.5tail").Scan(&defaultPrefixResult))
+		require.Equal(t, float64(1.5), defaultPrefixResult,
+			"the default MySQL-compatible COM_STMT session must consume the numeric prefix")
+		var defaultWarningLevel, defaultWarningMessage string
+		var defaultWarningCode uint16
+		require.NoError(t, defaultModeConn.QueryRowContext(ctx, "show warnings").Scan(
+			&defaultWarningLevel, &defaultWarningCode, &defaultWarningMessage))
+		require.Equal(t, "Warning", defaultWarningLevel)
+		require.Equal(t, uint16(1292), defaultWarningCode)
+		require.Contains(t, defaultWarningMessage, "Truncated incorrect DOUBLE value")
 
 		// A numeric-prefix math source is only correct in MySQL-compatible mode.
 		// Pin the connection so SET sql_mode and COM_STMT_EXECUTE use the same

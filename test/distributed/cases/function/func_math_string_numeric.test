@@ -81,6 +81,7 @@ SELECT SIGN('1.5tail') AS sign_native_prefix_error;
 SELECT ROUND('1.5tail') AS round_native_prefix_error;
 SELECT TRUNCATE('1.5tail', 0) AS truncate_native_prefix_error;
 SELECT MOD('1.5tail', 2) AS mod_native_prefix_error;
+SELECT MOD(2, '1.5tail') AS mod_native_right_prefix_error;
 
 -- The same native-mode contract must hold for VARCHAR columns; do not let a
 -- literal-only constant-folding path hide a column execution mismatch.

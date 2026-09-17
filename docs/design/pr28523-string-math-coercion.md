@@ -1,20 +1,26 @@
 # PR #28523: String Math Numeric Coercion and Prepared-Parameter Roles
 
 - Status: Draft / awaiting maintainer approval
-- Design revision: 9
+- Design revision: 10
 - Issue: [#28487](https://github.com/matrixorigin/matrixone/issues/28487)
 - Implementation PR: [#28523](https://github.com/matrixorigin/matrixone/pull/28523)
-- Current upstream main base: `bc90a61230f02032b06351d0cfb317ae13a08258`
-- Current main tree: `4867dffe812b9c43bd4f1672c2d337da975d734d`
-- Current source inputs: original PR head `d27667a4936e813fb612de6cd245be03a2d6f101`
-  (tree `d02aa9a8b2c219b7767b9793c700287ecfc24c0b`) and current main tree
-  `4867dffe812b9c43bd4f1672c2d337da975d734d`. The revision-8 candidate,
-  previously based on main `24e66eba121c781c29998ff2611db11335e3028c`
-  (tree `b717729c7e1b0cc33d808f271f3211e8d6028f37`), was rebased onto this
-  main in an isolated worktree; all 19 candidate commits replayed without
-  conflicts. The validated code/test commit before this revision-9
-  design-record refresh is `e0bc0aabc16217dbb1bef9df655d83e04da59d26`
-  (tree `8f419516495fb55333aa71c9e3b50f5b5e75342c`).
+- Candidate integration base: `bc90a61230f02032b06351d0cfb317ae13a08258`
+  (tree `4867dffe812b9c43bd4f1672c2d337da975d734d`). The latest local
+  `origin/main` ref observed for revision 10 is `89d28d5f3858f9d0164701c02e98b9eff2ce210e`
+  (tree `856eb9f70be0f3479865d3f2b2a1c24d75d913f9`), a descendant of that
+  integration base; the candidate has not been rebased onto this newer ref.
+- Published PR source head: `d27667a4936e813fb612de6cd245be03a2d6f101`
+  (tree `d02aa9a8b2c219b7767b9793c700287ecfc24c0b`). The revision-8
+  candidate, previously based on main `24e66eba121c781c29998ff2611db11335e3028c`
+  (tree `b717729c7e1b0cc33d808f271f3211e8d6028f37`), was rebased onto the
+  candidate integration base above in an isolated worktree; all 19 candidate
+  commits replayed without conflicts. The code/test commit is
+  `e0bc0aabc16217dbb1bef9df655d83e04da59d26` (tree
+  `8f419516495fb55333aa71c9e3b50f5b5e75342c`); the local candidate HEAD before
+  this revision-10 follow-up is `0178762005244dc16ff99bde2ee0c3aeeed8b753`
+  (tree `b99e3a4249be07fd03e9dbd52419b58e99f64553`), a design-record-only
+  descendant of that code/test commit. Revision-10 test/design edits are
+  worktree-only and uncommitted; no commit or tree hash captures them yet.
 - The initial rebase had two shared paths with main since the historical
   base, `pkg/sql/plan/base_binder.go` and `pkg/sql/plan/utils.go`; both applied
   cleanly. The `4c31142` to `a3ede72` delta added 18 paths and the subsequent
@@ -161,21 +167,37 @@ role, but nested owners inside them remain discoverable through `ApplyExpr`.
 
 ### 2.4 Compatibility mode, binary provenance, and warnings
 
-The latest review feedback (review `5214666396`, comment `5687377735`) makes
-the mode boundary explicit: a character value with a suffix such as
-`'1.5tail'` must not be converted permissively unless MySQL compatibility is
-selected. The existing `MATRIXONE_NATIVE` SQL-mode bit is the selector:
+Fengtt's review `5214666396` and follow-up `5687377735` state: “1.5tail convert
+to number should fail. We are not as stupid as mysql folks. At minimum this
+should be protected by mysql compatibility flag.” The compatibility
+requirement is that permissive numeric-prefix parsing of an incomplete token
+such as `'1.5tail'` must not be unconditional; MySQL-style prefix conversion
+belongs behind a MySQL-compatibility flag. The comments do not name a specific
+SQL-mode bit or define the server default.
 
-| Effective process mode | `'1.5tail'` and other incomplete tokens |
+The current candidate's proposed interpretation, pending maintainer approval,
+maps the existing `MATRIXONE_NATIVE` SQL-mode bit inversely: its absence selects
+the MySQL-compatible behavior and its presence selects strict conversion.
+This is a candidate implementation choice, not an explicit selector/default
+specified by Feng or an approved maintainer decision:
+
+| Proposed candidate mode mapping (not approved) | `'1.5tail'` and other incomplete tokens |
 | --- | --- |
-| MySQL compatibility (the bit is absent) | Consume the decimal prefix and emit the existing truncation warning. A wholly non-numeric value becomes zero with a warning; an empty string remains zero without a warning. |
-| MatrixOne native (`MATRIXONE_NATIVE` is present) | Reject the incomplete, non-numeric, or empty token with the native conversion error and emit no MySQL truncation warning. |
+| MySQL-compatible behavior (`MATRIXONE_NATIVE` is absent) | Consume the decimal prefix and emit the existing truncation warning. A wholly non-numeric value becomes zero with a warning; an empty string remains zero without a warning. |
+| Strict behavior (`MATRIXONE_NATIVE` is present) | Reject the incomplete, non-numeric, or empty token with the native conversion error and emit no MySQL truncation warning. |
 
-The default SQL mode currently omits `MATRIXONE_NATIVE`, so the default session
-continues to use the established MySQL-compatible contract. This is a
-compatibility-gated behavior, not a global default change; callers requiring
-the stricter rule must select `MATRIXONE_NATIVE`. NULL and masked rows do not
+Under this proposed map, the default SQL mode omits `MATRIXONE_NATIVE`, so a
+default session remains permissive. That default behavior and use of this
+inverse selector are not explicit in the review wording and are not yet
+approved by a maintainer; approval remains pending. NULL and masked rows do not
 create extra conversion warnings in either mode.
+
+The similarly named account/database `MYSQL_COMPATIBILITY_MODE` setting maps
+to `version_compatibility`; it is not the process-level numeric-conversion mode
+selector and is not used by this proposal. If Feng intended a different
+positive MySQL-compatibility flag, the exact flag and its default remain an
+approval question rather than something this change infers from the setting's
+name.
 
 Historical serialized CEIL/FLOOR VARCHAR overloads must derive this process
 compatibility mode as well. They must not hardcode MySQL mode or emit
@@ -351,7 +373,7 @@ authorized maintainer decision.
 | --- | --- |
 | String prefix and type families | planner/function tests plus literal, VARCHAR/CHAR/TEXT column, and SQL EXECUTE paths |
 | Binary provenance | direct/prepared HEX/BIT controls and result assertions |
-| Warnings and native mode | warning-session tests plus direct ABS/SIGN/CEIL/FLOOR/ROUND/TRUNCATE and historical CEIL/FLOOR overload-12 tests in both modes; incomplete tokens must fail only under `MATRIXONE_NATIVE` |
+| Warnings and native mode | warning-session tests plus direct ABS/SIGN/CEIL/FLOOR/ROUND/TRUNCATE and historical CEIL/FLOOR overload-12 tests in both modes; verify the default-session path, while the `MATRIXONE_NATIVE` mapping remains a proposed interpretation pending approval |
 | Precision role isolation | direct/prepared ROUND/TRUNCATE, nested expressions, explicit casts, INT64 plan assertions |
 | Native precision sources | BOOL, integer, DECIMAL, and FLOAT SQL sources; result and plan metadata comparison |
 | Cache/reuse | parameter type changes, repeated executions, error -> success -> NULL -> success, and source restoration |
@@ -822,15 +844,15 @@ Maintainer design approval remains pending.
 
 ```text
 Design path: docs/design/pr28523-string-math-coercion.md
-Design revision: 9
-Candidate source inputs: PR d27667a4936e813fb612de6cd245be03a2d6f101 (tree d02aa9a8b2c219b7767b9793c700287ecfc24c0b), revision-8 candidate rebased as 19 commits onto main bc90a61230f02032b06351d0cfb317ae13a08258 (tree 4867dffe812b9c43bd4f1672c2d337da975d734d); tested code/test commit e0bc0aabc16217dbb1bef9df655d83e04da59d26 and tree 8f419516495fb55333aa71c9e3b50f5b5e75342c are recorded above
+Design revision: 10
+Candidate source inputs: published PR head d27667a4936e813fb612de6cd245be03a2d6f101 (tree d02aa9a8b2c219b7767b9793c700287ecfc24c0b); isolated candidate integration base bc90a61230f02032b06351d0cfb317ae13a08258 (tree 4867dffe812b9c43bd4f1672c2d337da975d734d); code/test commit e0bc0aabc16217dbb1bef9df655d83e04da59d26 (tree 8f419516495fb55333aa71c9e3b50f5b5e75342c); pre-follow-up candidate HEAD 0178762005244dc16ff99bde2ee0c3aeeed8b753 (tree b99e3a4249be07fd03e9dbd52419b58e99f64553). Revision-10 test/design edits are uncommitted in the worktree. Latest local origin/main ref 89d28d5f3858f9d0164701c02e98b9eff2ce210e (tree 856eb9f70be0f3479865d3f2b2a1c24d75d913f9) is not integrated.
 Integration base: bc90a61230f02032b06351d0cfb317ae13a08258 (tree 4867dffe812b9c43bd4f1672c2d337da975d734d)
 Scope/trigger: PR reviews 5199052257, 5214666396 and comment 5687377735; >500 production lines and planner/plan compatibility boundary
 Reviewer identity and role: historical GPT-6 Astra review of d56711fa5b429e5e6e52f64f603d2e853478edca against base 4ff27bb9b35c43c1b0961bb9a01bf8fc0b6a2171; any exact-head review decision is tracked separately from maintainer design approval
-Review timestamp: historical revision-7 review was recorded 2026-09-17; the revision-9 exact-candidate review is recorded separately from the maintainer design-approval decision in the PR/evidence ledger
+Review timestamp: historical revision-7 review was recorded 2026-09-17; revision-10 follow-up is local and uncommitted, with maintainer design approval still pending
 Decision: DRAFT / AWAITING MAINTAINER APPROVAL
 Validation evidence: local post-rebase full CGo tests for plan and plan/function, focused owner-boundary race tests, TestIssue27294PreparedNumericOverloads, CGo-aware go vet, Go 1.26.4 formatting, and the corrected benchmark passed; none is current PR CI, distributed BVT, or a PR-wide merged changed-line coverage pass
-Decisions proposed for maintainer acceptance: retain strict INT64 precision controls (no general integer-prefix widening); prefer correctness over function-wide zonemap pruning; retain the bounded per-parameter source scan with its measured owner-boundary traversal cost; approve the revision-9 argument-owner boundaries and no-inherited-role fast path
+Decisions proposed for maintainer acceptance: retain strict INT64 precision controls (no general integer-prefix widening); prefer correctness over function-wide zonemap pruning; retain the bounded per-parameter source scan with its measured owner-boundary traversal cost; approve the revision-9 argument-owner boundaries and no-inherited-role fast path; confirm or revise the revision-10 proposal to map MySQL-compatible permissive conversion to absence of MATRIXONE_NATIVE and to retain permissive behavior in the default session
 Evidence links: [PR #28523](https://github.com/matrixorigin/matrixone/pull/28523); [historical-head CI run 35197284882](https://github.com/matrixorigin/matrixone/actions/runs/35197284882); the PR/evidence ledger is the record for commit replay, review, CI, and BVT; current local post-rebase evidence is recorded above
 Implementation deviations requiring follow-up: MOD native arithmetic widening regression fixed in 8fc4d5250; strict INT64 precision acceptance, zonemap-pruning decision, and scan-cost acceptance remain pending
 Approval link: pending maintainer review

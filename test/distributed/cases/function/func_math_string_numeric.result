@@ -104,6 +104,8 @@ SELECT TRUNCATE('1.5tail', 0) AS truncate_native_prefix_error;
 invalid input: "1.5tail" is invalid numeric string
 SELECT MOD('1.5tail', 2) AS mod_native_prefix_error;
 invalid input: "1.5tail" is invalid numeric string
+SELECT MOD(2, '1.5tail') AS mod_native_right_prefix_error;
+invalid input: "1.5tail" is invalid numeric string
 SELECT id, ABS(s) AS abs_native_column_error FROM src WHERE id = 5;
 invalid input: "1.5tail" is invalid numeric string
 SELECT id, CEIL(s) AS ceil_native_column_error FROM src WHERE id = 5;
