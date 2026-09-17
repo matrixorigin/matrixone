@@ -602,14 +602,7 @@ func execInFrontend(ses *Session, execCtx *ExecCtx) (stats statistic.StatsArray,
 		if err = handleStartBackup(ses, execCtx, st); err != nil {
 			return
 		}
-	case *tree.EmptyStmt:
-		if err = handleEmptyStmt(ses, execCtx, st); err != nil {
-			return
-		}
-	case *tree.CompatibilityNoOpStmt:
-		if err = handleEmptyStmt(ses, execCtx, st); err != nil {
-			return
-		}
+	case *tree.EmptyStmt, *tree.CompatibilityNoOpStmt:
 	case *tree.CreateSnapShot:
 		ses.EnterFPrint(FPCreateSnapShot)
 		defer ses.ExitFPrint(FPCreateSnapShot)
