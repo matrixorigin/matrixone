@@ -1,6 +1,6 @@
 # Race UT resource attribution
 
-Related issue: #28419.
+Related issues: #29039, #28419.
 
 Run 35176331513, job 105058855532, PR #29031 head b9491ab697:
 
@@ -53,3 +53,42 @@ cover overlapping memory fields, event and throttling counters, pressure totals
 and missing files. Shell syntax and whitespace checks pass. Linux CI resource
 and wall-time improvement remain unmeasured; no production or SQL behavior,
 test selection or coverage is changed.
+
+## Containing shared CN-state failures
+
+Run 35177731314, job 105063157387, exposes a separate, concrete lifecycle
+defect. `TestGroupConcatNamedTimeZoneRemoteOwner` fails its Draining RPC
+before registering restoration. The subsequent prepared-cache test observes
+the same CN still Draining. `TestConvRowBasesRemoteFallback` has the same
+unsafe ordering. This is contamination within one DML test process, not shared
+Go state between different package binaries.
+
+Both consumers now use the existing `withCNDraining` contract:
+
+- An ambiguous Draining response fails the original test, does not run the
+  query body, and marks the fixture for disposal. No compensating write can
+  race a late Draining commit.
+- An acknowledged transition must be authoritatively visible before queries.
+  Its restoration runs on normal return, Goexit or panic using a fresh context;
+  reuse requires verified topology. Unverified restoration also invalidates.
+- Query resources and saved runtime/plan values unwind first. Database DROP
+  is omitted only for a fixture owned by destruction; the client still closes.
+  The outer test defer discards the fixture after Run releases its mutex. A
+  close error remains a test failure and the existing fixture owner blocks reuse.
+
+These callers are serial: no DML test enters the shared fixture in parallel.
+This approach does not authorize parallel reuse across the unlock/discard gap.
+No production, shared-helper, scheduling or overall test-timeout changes are
+made. Existing two-row SQL, remote-plan and old-protocol fallback assertions
+remain. Fake tests cover the ambiguous write and failed restoration; new
+cancel/panic controls complement existing Goexit coverage without a cluster.
+
+The two migrated callers adopt the existing helper's 30-second phase budget
+instead of the legacy API's 3-second write timeout. This is an explicit
+failure-path tradeoff, not a claim of identical worst-case latency: a stalled
+phase can wait longer, and invalidation can require shutdown and later startup.
+The healthy path retains two writes and two successful authoritative refreshes,
+the shared fixture and unchanged data sizes. Failed writes are not retried;
+only existing bounded authoritative-read polling is reused. No suite speedup
+or solution to the initial control-plane/resource stall is claimed. #29039
+remains open for that attribution work.
