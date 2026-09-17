@@ -1,6 +1,6 @@
 # Catalog Metadata Capability Barrier：Wire 与 Snapshot Contract
 
-- **状态**：Draft，等待 design-first approval
+- **状态**：Approved；[XuPeng-SH review 5221796725](https://github.com/matrixorigin/matrixone/pull/29008#pullrequestreview-5221796725)，批准 revision `5be1ad8802575c558743048443dbf4f7b5a50076`
 - **Owning issue**：#29003（parent #26227）
 - **实现系列**：#29003 → #29004 → #29005 → #29006 → #29007
 - **基线**：`mo/main@8a4c84f4516d5098de9eef50b8afecc7524f37a2`
@@ -301,7 +301,7 @@ Downgrade 规则：只要 durable barrier 曾非 disabled，旧 HAKeeper 不得�
 
 诊断时必须能区分 snapshot format、required feature bits、barrier phase 和 generation；不记录 tenant payload。旧 raw/MOH2 decoder 在至少一个完整升级窗口内保留。删除前需要证明不再存在旧 snapshot/backup/rollback reader。
 
-## 13. Decision log 与开放项
+## 13. Decision log 与审批结论
 
 已决定：
 
@@ -311,10 +311,10 @@ Downgrade 规则：只要 durable barrier 曾非 disabled，旧 HAKeeper 不得�
 4. 默认 runtime behavior 不变；
 5. 后续 PR 不得在未更新并重审本文的情况下改变 tags、terminal predicate 或 downgrade contract。
 
-阻塞审批的问题：
+审批已关闭以下问题：
 
-1. 是否接受 `MOH3` magic + protobuf envelope，还是统一把现有 MOH2 也迁移为 envelope？本文选择前者以保持 byte compatibility。
-2. 是否接受 nested capability 在迁移期镜像现有 scalar，并以不一致 fail-closed？本文选择接受，不在 #29003 启用 producer。
-3. RSM tag 45 与 heartbeat tags 26/28/14、CommandBatch tag 6 需由 reviewer 确认未与并行工作保留范围冲突。
+1. 接受 `MOH3` magic + protobuf envelope，不迁移既有 MOH2，以保持 byte compatibility。
+2. 接受 nested capability 在迁移期镜像现有 scalar，并以不一致 fail-closed；#29003 不启用 producer。
+3. 确认 RSM tag 45、heartbeat tags 26/28/14 与 CommandBatch tag 6 在审批基线未被占用。
 
-上述问题必须在 design approval 中关闭，之后才开始 production schema/snapshot 实现。
+实现若改变上述结论，必须更新设计并重新获得审批。

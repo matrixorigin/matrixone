@@ -176,20 +176,21 @@ type Hooks interface {
 	// for a SkipWholeIndex async index, so the replacement hidden tables start empty
 	// and the CDC is registered from ts=0.
 	//
-	// Almost every algorithm returns (false, ""): their ISCP consumer rebuilds the
-	// whole index from that ts=0 replay — RunHnsw/RunCuvs accumulate the snapshot and
-	// Save() the model (HNSW/CAGRA/IVF-PQ); IVF-FLAT clones metadata+centroids and
-	// CDC-rebuilds entries; classic fulltext is row-based so the replay re-inserts its
-	// rows.
+	// An algorithm whose ISCP consumer rebuilds the whole index from that ts=0 replay
+	// returns (false, ""): RunHnsw mutates and Save()s the usearch model; IVF-FLAT clones
+	// metadata+centroids and CDC-rebuilds entries; classic fulltext is row-based so the
+	// replay re-inserts its rows.
 	//
-	// fulltext2 is the exception: its base (tag=0)+metadata are written ONLY by
-	// buildFromSource, and RunFulltext2 only APPENDS a cdc_tail — so the ts=0 replay
-	// yields a tail with no base, which is not queryable, and MATCH returns empty until
-	// a manual reindex/restart. It therefore returns (true, "ALTER … REINDEX …
-	// FORCE_SYNC"), run post-commit by the CDC's first iteration to build the base,
-	// then arms the tail at the post-build watermark (#28837). (This differs from
-	// fulltext2's RestoreInitSQL "SELECT 1", which is valid only because Restore's
-	// block clone copies the base — copy-alter does not.)
+	// An algorithm whose consumer only APPENDS an event tail returns (true, "ALTER …
+	// REINDEX … FORCE_SYNC") instead, run post-commit by the CDC's first iteration to build
+	// the base, then arming the tail at the post-build watermark. fulltext2 (#28837): its
+	// base (tag=0)+metadata are written ONLY by buildFromSource and RunFulltext2 only
+	// appends a cdc_tail, so the ts=0 replay yields a tail with no base and MATCH returns
+	// empty. CAGRA/IVF-PQ (#29011): CagraSync/IvfpqSync are stateless across flushes and
+	// write only tag=1 chunks, so the replay leaves the whole table in the CDC tail with no
+	// sub-index — correct but brute-forced per query, and large enough to refuse admission.
+	// (This differs from their RestoreInitSQL, valid there only because Restore's block
+	// clone copies the base — copy-alter does not.)
 	AlterCopyInitSQL(ctx CompileContext, indexDefs map[string]*plan.IndexDef) (startFromNow bool, initSQL string, err error)
 
 	// ValidateReindexParams checks a parameter update against the algorithm's

@@ -180,6 +180,61 @@ func TestIvfflatSearchFloat32_BadQueryType(t *testing.T) {
 	require.Error(t, err)
 }
 
+// TestIvfflatEmptyGeneration: a loaded generation whose centroids table holds only the single
+// NULL-vector placeholder row (an empty index, or the async-build window before the real
+// centroids are written) reports EmptyGeneration -> true, so the cache does not retain the
+// bucket-1-only routing model that pins stale results on one CN (#29011). A generation with a
+// real centroid, and a not-yet-loaded search, report false.
+func TestIvfflatEmptyGeneration(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	load := func(id int64, isNull bool) *IvfflatSearch[float32] {
+		proc := testutil.NewProcessWithMPool(t, "", mp)
+		sqlproc := sqlexec.NewSqlProcess(proc)
+		sqlproc.RelationScanner = &scriptedRelationScanner{t: t, run: func(req sqlexec.RelationScanRequest) executor.Result {
+			bat := batch.NewWithSize(3)
+			bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+			bat.Vecs[1] = vector.NewVec(types.T_int64.ToType())
+			bat.Vecs[2] = vector.NewVec(types.New(types.T_array_float32, 2, 0))
+			require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(7), false, mp))
+			require.NoError(t, vector.AppendFixed(bat.Vecs[1], id, false, mp))
+			require.NoError(t, vector.AppendArray(bat.Vecs[2], []float32{0, 0}, isNull, mp))
+			bat.SetRowCount(1)
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{bat}}
+		}}
+		idxcfg := vectorindex.IndexConfig{}
+		idxcfg.Ivfflat.Lists = 1
+		idxcfg.Ivfflat.Version = 7
+		idxcfg.Ivfflat.Dimensions = 2
+		idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2sqDistance)
+		idxcfg.Ivfflat.VectorType = int32(types.T_array_float32)
+		s := &IvfflatSearch[float32]{
+			Idxcfg:        idxcfg,
+			Tblcfg:        vectorindex.IndexTableConfig{DbName: "db", IndexTable: "centroids"},
+			ThreadsSearch: 1,
+		}
+		require.NoError(t, s.Load(sqlproc))
+		return s
+	}
+
+	// Not loaded: nothing to evict.
+	require.False(t, (&IvfflatSearch[float32]{}).EmptyGeneration())
+
+	// Empty: only the NULL placeholder (id=1) -> LoadCentroids leaves Centroids nil.
+	empty := load(1, true)
+	t.Cleanup(empty.Destroy)
+	require.NotNil(t, empty.Index)
+	require.Nil(t, empty.Index.Centroids)
+	require.True(t, empty.EmptyGeneration())
+
+	// Built: a real centroid (id=0) -> Centroids non-nil.
+	full := load(0, false)
+	t.Cleanup(full.Destroy)
+	require.NotNil(t, full.Index)
+	require.NotNil(t, full.Index.Centroids)
+	require.False(t, full.EmptyGeneration())
+}
+
 func TestIvfSearchRace(t *testing.T) {
 
 	runSql = mock_runSql

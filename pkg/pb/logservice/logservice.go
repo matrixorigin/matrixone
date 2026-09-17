@@ -164,6 +164,7 @@ func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
 	storeInfo.ViewMetadataRevalidatedEpoch = hb.ViewMetadataRevalidatedEpoch
 	storeInfo.ViewMetadataIngressReady = hb.ViewMetadataIngressReady
 	storeInfo.PersistedExpressionProtocolVersion = hb.PersistedExpressionProtocolVersion
+	storeInfo.CatalogMetadataCapabilities = hb.CatalogMetadataCapabilities
 	s.Stores[hb.UUID] = storeInfo
 }
 
@@ -276,6 +277,7 @@ func (s *LogState) updateStores(hb LogStoreHeartbeat, tick uint64) {
 	storeInfo.CommandDeliverySupported = hb.CommandDeliverySupported
 	storeInfo.ViewMetadataAdmissionSupported = hb.ViewMetadataAdmissionSupported
 	storeInfo.ViewMetadataAdmissionProtocolV3Supported = hb.ViewMetadataAdmissionProtocolV3Supported
+	storeInfo.CatalogMetadataCapabilities = hb.CatalogMetadataCapabilities
 	// Preserve a known incarnation when receiving a heartbeat from an older
 	// binary during a rolling upgrade. Incarnation fencing is enabled only once
 	// the store has reported a non-empty value.
