@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -38,6 +39,21 @@ func makeDecimalIntervalCastExpr(
 ) *plan.Expr {
 	t.Helper()
 	expr, err := appendCastBeforeExpr(context.Background(), source, plan.Type{
+		Id:          int32(types.T_decimal256),
+		Width:       width,
+		Scale:       scale,
+		NotNullable: true,
+	})
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_decimal256), expr.Typ.Id, expr.String())
+	return expr
+}
+
+func makeExplicitDecimalIntervalCastExpr(
+	t *testing.T, source *plan.Expr, width, scale int32,
+) *plan.Expr {
+	t.Helper()
+	expr, err := appendExplicitCastBeforeExpr(context.Background(), source, plan.Type{
 		Id:          int32(types.T_decimal256),
 		Width:       width,
 		Scale:       scale,
@@ -126,6 +142,20 @@ func TestDecimal256IntervalHandlesFloatAndNestedCasts(t *testing.T) {
 	args, err = resetIntervalFunctionArgs(ctx, makeIntervalExpr(nested, "SECOND"))
 	require.NoError(t, err)
 	require.Equal(t, int64(1250000), extractInt64FromExpr(args[0]))
+	require.Equal(t, int64(types.MicroSecond), extractInt64FromExpr(args[1]))
+	require.True(t, args[0].GetLit().GetDecimalLiteralRequiresV82())
+}
+
+func TestDecimal256IntervalMatchesExplicitDecimalCastToken(t *testing.T) {
+	ctx := context.Background()
+	value, err := planfunction.ParseExplicitDecimal256CastString("0b10", 40, 2)
+	require.NoError(t, err)
+	require.Equal(t, "2.00", value.Format(2))
+
+	cast := makeExplicitDecimalIntervalCastExpr(t, makeStringConst("0b10"), 40, 2)
+	args, err := resetIntervalFunctionArgs(ctx, makeIntervalExpr(cast, "SECOND"))
+	require.NoError(t, err)
+	require.Equal(t, int64(2000000), extractInt64FromExpr(args[0]))
 	require.Equal(t, int64(types.MicroSecond), extractInt64FromExpr(args[1]))
 	require.True(t, args[0].GetLit().GetDecimalLiteralRequiresV82())
 }
