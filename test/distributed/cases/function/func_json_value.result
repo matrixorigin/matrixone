@@ -28,6 +28,12 @@ back
 select json_value(null, '$.a' default 'empty' on empty);
 json_value(null, $.a default 'empty' on empty)
 null
+select json_value('{"d":"2024-01-02 12:34:56"}', '$.d' returning date default '2000-01-01' on error) as d;
+d
+2000-01-01
+select json_value('{"d":"2024-01-02"}', '$.d' returning date) as d;
+d
+2024-01-02
 select json_value('{}', '$.a' returning unsigned default 5 on empty default 7 on error) as n;
 n
 5

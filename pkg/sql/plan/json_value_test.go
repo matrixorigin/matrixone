@@ -108,10 +108,10 @@ func TestJSONValueProtocolGatePreservesLegacyPlans(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, legacy.GetF().Args, 2)
 
-	_, err = bind(defines.MORPCVersion72, `select json_value('1', '$' returning unsigned)`)
-	require.ErrorContains(t, err, "MORPC protocol version 73")
+	_, err = bind(defines.MORPCVersion73, `select json_value('1', '$' returning unsigned)`)
+	require.ErrorContains(t, err, "MORPC protocol version 74")
 
-	contract, err := bind(defines.MORPCVersion73, `select json_value('1', '$' returning unsigned)`)
+	contract, err := bind(defines.MORPCVersion74, `select json_value('1', '$' returning unsigned)`)
 	require.NoError(t, err)
 	require.Len(t, contract.GetF().Args, 7)
 }
@@ -329,6 +329,8 @@ func TestJSONValueDefaultValidationMatrix(t *testing.T) {
 		typ   types.Type
 	}{
 		{"date invalid", "not-a-date", types.New(types.T_date, 0, 0)},
+		{"date datetime is not truncated", "2024-01-02 12:34:56", types.New(types.T_date, 0, 0)},
+		{"date iso datetime is not truncated", "2024-01-02T12:34:56", types.New(types.T_date, 0, 0)},
 		{"date zero", "0000-00-00", types.New(types.T_date, 0, 0)},
 		{"time invalid", "not-a-time", types.New(types.T_time, 0, 3)},
 		{"time excess fractional precision", "12:34:56.1234", types.New(types.T_time, 0, 3)},

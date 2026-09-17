@@ -3028,15 +3028,15 @@ func requireJSONValueContractProtocol(ctx context.Context, proc *process.Process
 	if rt == nil {
 		return moerr.NewNotSupported(
 			ctx,
-			"JSON_VALUE RETURNING and response clauses require all CNs to support MORPC protocol version 73",
+			"JSON_VALUE RETURNING and response clauses require all CNs to support MORPC protocol version 74",
 		)
 	}
 	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	if !ok || !valid || version < defines.MORPCVersion73 {
+	if !ok || !valid || version < defines.MORPCVersion74 {
 		return moerr.NewNotSupported(
 			ctx,
-			"JSON_VALUE RETURNING and response clauses require all CNs to support MORPC protocol version 73",
+			"JSON_VALUE RETURNING and response clauses require all CNs to support MORPC protocol version 74",
 		)
 	}
 	return nil
@@ -3258,7 +3258,7 @@ func validateJSONValueDefaultLiteral(ctx context.Context, expr tree.Expr, target
 		}
 	case types.T_date:
 		var parsed types.Date
-		if parsed, err = types.ParseDateCast(value); err != nil {
+		if parsed, err = types.ParseDateCastWithoutTime(value); err != nil {
 			return err
 		}
 		if parsed == types.ZeroDate {

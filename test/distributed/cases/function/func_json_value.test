@@ -13,6 +13,11 @@ select json_value('{"a":[12]}', '$.a' returning json);
 select json_value('{"a":"longer"}', '$.a' returning char(4) default 'back' on error);
 select json_value(null, '$.a' default 'empty' on empty);
 
+-- RETURNING DATE must route a datetime-valued scalar through ON ERROR;
+-- DATE-only text remains valid.
+select json_value('{"d":"2024-01-02 12:34:56"}', '$.d' returning date default '2000-01-01' on error) as d;
+select json_value('{"d":"2024-01-02"}', '$.d' returning date) as d;
+
 -- Different response defaults must remain independent in every result family.
 select json_value('{}', '$.a' returning unsigned default 5 on empty default 7 on error) as n;
 select json_value('{"a":"bad"}', '$.a' returning unsigned default 5 on empty default 7 on error) as n;

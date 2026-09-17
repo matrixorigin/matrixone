@@ -818,7 +818,7 @@ func parseJSONValueDate(e jsonValueExtracted, _ types.Type) (types.Date, error) 
 	if err != nil {
 		return 0, err
 	}
-	value, err := types.ParseDateCast(s)
+	value, err := types.ParseDateCastWithoutTime(s)
 	if err != nil {
 		return 0, err
 	}

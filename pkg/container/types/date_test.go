@@ -189,6 +189,29 @@ func TestParseDateCast(t *testing.T) {
 	}
 }
 
+func TestParseDateCastWithoutTime(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{name: "date", input: " 2024-01-02 ", want: "2024-01-02"},
+		{name: "datetime", input: "2024-01-02 12:34:56", wantErr: true},
+		{name: "iso datetime", input: "2024-01-02T12:34:56", wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := ParseDateCastWithoutTime(test.input)
+			if test.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, test.want, got.String())
+		})
+	}
+}
+
 func TestParseDateCastComponents(t *testing.T) {
 	tests := []struct {
 		name    string

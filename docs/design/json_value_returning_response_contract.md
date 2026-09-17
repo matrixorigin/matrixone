@@ -54,31 +54,39 @@ values are not automatically recomputed. Upgrade validation covers views,
 generated columns, indexes, values over the 512-character boundary, and the
 explicit rebuild procedure.
 
-### Versioned compatibility decision (revision 2, 2026-09-09)
+### Versioned compatibility decision (revision 3, 2026-09-16)
 
 The seven-argument representation is a new wire and persisted-plan contract.
-MORPC version 73 is the first version that may carry JSON_VALUE function ID 462
+MORPC version 74 is the first version that may carry JSON_VALUE function ID 462
 with overload index 2. The planner admits `RETURNING`, `ON EMPTY`, and `ON
-ERROR` only when the deployment-wide `MOProtocolVersion` is at least 73; below
+ERROR` only when the deployment-wide `MOProtocolVersion` is at least 74; below
 that threshold it returns a not-supported error before publishing the plan.
 An ordinary two-argument call remains the legacy overload and is still allowed
-at version 57.
+at version 57. MORPC version 73 remains the independent DECIMAL SUM partial
+state contract already used by the current `main` branch.
 
 Both remote pipeline boundaries enforce the same contract. The sender and
 receiver expression validators identify overload 2 and reject it when the
-local deployment gate is below version 73 or unavailable. This prevents a new
+local deployment gate is below version 74 or unavailable. This prevents a new
 sender from sending the plan to an old CN and prevents a current receiver from
 executing a plan after a rollback lowered the gate. The function-ID lookup also
 rejects an out-of-range overload instead of indexing the overload slice.
 
 Creating a view, generated column, index expression, or persisted prepared plan
-that contains overload 2 is therefore a version-73-only operation. Upgrade all
-CNs and raise the oldest-live protocol gate to 73 before enabling the syntax.
-Do not lower the gate or roll back to a pre-73 binary while such a plan remains
+that contains overload 2 is therefore a version-74-only operation. The
+catalog-owner admission covers table defaults, generated columns, checks,
+on-update expressions, index tables, and view plans before publication.
+Upgrade all CNs and raise the oldest-live protocol gate to 74 before enabling
+the syntax. Do not lower the gate or roll back to a pre-74 binary while such a plan remains
 persisted; rebuild or remove that metadata first. A legacy two-argument plan
 does not carry this prerequisite and remains readable by older CNs. The
-regression matrix covers sender/receiver rejection below 73, acceptance at 73,
-planner admission at both thresholds, and the legacy two-argument control.
+regression matrix covers sender/receiver rejection below 74, acceptance at 74,
+planner and persisted-owner admission at both thresholds, and the legacy
+two-argument control.
+
+Independent design approval for this revision is still pending. This document
+records the implementation contract and rollback prerequisite; it is not an
+approval record.
 
 ## Required evidence
 
@@ -86,4 +94,5 @@ Parser, AST, binder/type, executor, protocol, CTAS, VIEW, generated-column and
 index tests must cover the state/policy matrix, prepared execution, warnings,
 and invalid inputs. A single-CN BVT is run twice on a clean instance. The final
 change requires `git diff --check`, `mo-self-review`, schema-v7 semantic
-preflight, and exact-head CI.
+preflight, exact-head CI, and a separate traceable independent approval for
+this compatibility revision.
