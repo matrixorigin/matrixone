@@ -1619,8 +1619,11 @@ func (ae *aggExec) preflightBatchMergeArgs(
 				)
 			}
 			valueSize := 0
-			if ae.isDistinct && len(stored) != 0 {
-				valueSize = len(stored)
+			if ae.isDistinct {
+				valueSize = len(distinctMergeRepresentative(
+					&ae.aggInfo, key, stored,
+					ae.legacyDistinctFloatKeys,
+					other.legacyDistinctFloatKeys))
 			}
 			if ae.preserveDistinctInputOrder {
 				valueSize = ae.distinctInputOrderValueSize()

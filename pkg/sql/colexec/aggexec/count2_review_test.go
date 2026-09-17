@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/arenaskl"
@@ -498,6 +499,60 @@ func TestCountDistinctLegacyTupleAppendNormalizesFloatKeys(t *testing.T) {
 	chars.Free(mp)
 	source.Free()
 	target.Free()
+}
+
+func TestCountDistinctLegacyMergeReservesRepresentativeBeforePublication(t *testing.T) {
+	tupleTypes := []types.Type{
+		types.T_float64.ToType(),
+		types.New(types.T_char, 4096, 0),
+	}
+	run := func(limit uint64) (preflightErr, mergeErr error, peak uint64) {
+		mp := mpool.MustNewZero()
+		registry, account, allocation := newReviewAggregateAllocation(t, limit)
+		makeExec := func(legacy bool) *countColumnExec {
+			exec := newCountColumnExec(
+				mp, AggIdOfCountColumn, true, tupleTypes,
+			).(*countColumnExec)
+			require.NoError(t, exec.SetAllocationAccount(allocation))
+			require.NoError(t, ConfigureLegacyDistinctFloatKeys(exec, legacy))
+			require.NoError(t, exec.GroupGrow(1))
+			return exec
+		}
+		source := makeExec(true)
+		target := makeExec(false)
+		floats := testutil.NewFloat64Vector(
+			1, tupleTypes[0], mp, false, nil,
+			[]float64{math.Float64frombits(0x7ff8000000000001)})
+		chars := buildVarlenVec(t, mp, tupleTypes[1],
+			[]string{strings.Repeat("x", 2048)})
+		groups := []uint64{1}
+		vectors := []*vector.Vector{floats, chars}
+		require.NoError(t, source.PreflightBatchFill(0, groups, vectors))
+		require.NoError(t, source.BatchFill(0, groups, vectors))
+		preflightErr = target.PreflightBatchMerge(source, 0, groups)
+		if preflightErr == nil {
+			mergeErr = target.BatchMerge(source, 0, groups)
+		}
+		peak = account.Snapshot().Peak
+
+		floats.Free(mp)
+		chars.Free(mp)
+		source.Free()
+		target.Free()
+		require.NoError(t, source.ClearAllocationAccount(allocation))
+		require.NoError(t, target.ClearAllocationAccount(allocation))
+		finishTestAggregateAllocation(t, registry, account)
+		require.Zero(t, mp.CurrNB())
+		return
+	}
+
+	_, err, peak := run(2 << 20)
+	require.NoError(t, err)
+	_, err, _ = run(peak)
+	require.NoError(t, err)
+	preflightErr, mergeErr, _ := run(peak - 1)
+	require.ErrorIs(t, preflightErr, mpool.ErrAllocationAccountCapacity)
+	require.NoError(t, mergeErr)
 }
 
 func TestCountDistinctModernToLegacyPreflightRejectsWithoutReservation(t *testing.T) {

@@ -266,10 +266,14 @@ func TestCountDistinctSpillRestoresAcrossFloatPolicies(t *testing.T) {
 	t.Run("modern-to-legacy-rejects-before-publication", func(t *testing.T) {
 		source := makeExec(false)
 		vectors, freeVectors := makeTuple([]uint64{
+			// Start with the canonical NaN spelling. A raw-key comparison alone
+			// cannot distinguish this modern representative from a legacy one;
+			// the spill policy header must carry the producer contract explicitly.
+			0x7ff8000000000000,
 			0x7ff8000000000001,
 		})
 		require.NoError(t, source.GroupGrow(1))
-		require.NoError(t, source.BatchFill(0, []uint64{1}, vectors))
+		require.NoError(t, source.BatchFill(0, []uint64{1, 1}, vectors))
 		var spill bytes.Buffer
 		require.NoError(t, source.SaveSpillIntermediateRows(
 			0, []int32{0}, &spill))
@@ -277,6 +281,41 @@ func TestCountDistinctSpillRestoresAcrossFloatPolicies(t *testing.T) {
 		usedBefore := account.Snapshot().Used
 
 		target := makeExec(true)
+		err := target.UnmarshalSpillFromReader(
+			bytes.NewReader(spill.Bytes()), mp)
+		require.ErrorContains(t, err, "canonical FLOAT DISTINCT spill")
+		require.Equal(t, usedBefore, account.Snapshot().Used)
+		target.Free()
+		source.Free()
+	})
+
+	t.Run("modern-fixed-to-legacy-rejects-before-publication", func(t *testing.T) {
+		typ := types.T_float64.ToType()
+		source := newCountColumnExec(
+			mp, AggIdOfCountColumn, true, []types.Type{typ},
+		).(*countColumnExec)
+		require.NoError(t, source.SetAllocationAccount(allocation))
+		require.NoError(t, ConfigureLegacyDistinctFloatKeys(source, false))
+		require.NoError(t, source.GroupGrow(distinctFixedIndexMinGroups))
+		values := testutil.NewFloat64Vector(
+			1, typ, mp, false, nil,
+			[]float64{math.Float64frombits(0x7ff8000000000000)})
+		require.NoError(t, source.PreflightBatchFill(
+			0, []uint64{1}, []*vector.Vector{values}))
+		require.NoError(t, source.BatchFill(
+			0, []uint64{1}, []*vector.Vector{values}))
+		require.True(t, source.state[0].distinctFixedDeferred)
+		var spill bytes.Buffer
+		require.NoError(t, source.SaveSpillIntermediateRows(
+			0, []int32{0}, &spill))
+		values.Free(mp)
+
+		usedBefore := account.Snapshot().Used
+		target := newCountColumnExec(
+			mp, AggIdOfCountColumn, true, []types.Type{typ},
+		).(*countColumnExec)
+		require.NoError(t, target.SetAllocationAccount(allocation))
+		require.NoError(t, ConfigureLegacyDistinctFloatKeys(target, true))
 		err := target.UnmarshalSpillFromReader(
 			bytes.NewReader(spill.Bytes()), mp)
 		require.ErrorContains(t, err, "canonical FLOAT DISTINCT spill")

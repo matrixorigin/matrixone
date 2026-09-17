@@ -50,6 +50,13 @@ const (
 	aggGroupConcatSourceRowTrailerVersion = byte(1)
 	canonicalDistinctWireTag              = int32(-1)
 	spillDistinctWireTag                  = int32(-2)
+	// spillDistinctPolicyTag introduces an optional spill header for DISTINCT
+	// states whose FLOAT equality policy affects the recoverable key space. Old
+	// spill records start with a non-negative row count, so this negative tag is
+	// backward-compatible with the existing private spill format.
+	spillDistinctPolicyTag    = int32(-3)
+	spillDistinctPolicyModern = int32(0)
+	spillDistinctPolicyLegacy = int32(1)
 )
 
 var _ [0]struct{} = [AggBatchSize & aggBatchSizeMask]struct{}{}       // mask == size-1
@@ -1135,6 +1142,18 @@ func (ag *aggState) writeSpillStateRows(
 		}
 	}
 	cnt := int32(len(rows))
+	if distinctFloatArgument(info) {
+		if err := types.WriteInt32(writer, spillDistinctPolicyTag); err != nil {
+			return 0, err
+		}
+		policy := spillDistinctPolicyModern
+		if info.legacyDistinctFloatKeys {
+			policy = spillDistinctPolicyLegacy
+		}
+		if err := types.WriteInt32(writer, policy); err != nil {
+			return 0, err
+		}
+	}
 	if err := types.WriteInt32(writer, cnt); err != nil {
 		return 0, err
 	}
@@ -1184,13 +1203,48 @@ func (ag *aggState) readSpillState(
 	info *aggInfo,
 	allocation *AllocationAccount,
 ) (int32, error) {
-	cnt, err := types.ReadInt32(reader)
+	header, err := types.ReadInt32(reader)
 	if err != nil {
 		return 0, err
 	}
+	knownProducerPolicy := false
+	producerLegacyFloatKeys := false
+	if header == spillDistinctPolicyTag {
+		if !distinctFloatArgument(info) {
+			return 0, moerr.NewInvalidInputNoCtx(
+				"unexpected FLOAT DISTINCT spill policy header")
+		}
+		policy, policyErr := types.ReadInt32(reader)
+		if policyErr != nil {
+			return 0, policyErr
+		}
+		switch policy {
+		case spillDistinctPolicyModern:
+			knownProducerPolicy = true
+		case spillDistinctPolicyLegacy:
+			knownProducerPolicy = true
+			producerLegacyFloatKeys = true
+		default:
+			return 0, moerr.NewInvalidInputNoCtxf(
+				"invalid FLOAT DISTINCT spill policy %d", policy)
+		}
+		header, err = types.ReadInt32(reader)
+		if err != nil {
+			return 0, err
+		}
+	}
+	cnt := header
 	if cnt < 0 || cnt > AggBatchSize {
 		return 0, moerr.NewInvalidInputNoCtxf(
 			"invalid aggregate spill count %d", cnt)
+	}
+	if knownProducerPolicy && cnt > 0 &&
+		info.legacyDistinctFloatKeys && !producerLegacyFloatKeys {
+		// A modern producer may have collapsed distinct NaN bit patterns before
+		// spilling. A legacy receiver cannot reconstruct those missing members;
+		// reject before freeing, allocating, or publishing receiver state.
+		return 0, moerr.NewInvalidStateNoCtx(
+			"cannot restore canonical FLOAT DISTINCT spill into legacy state")
 	}
 	if info.makeMarshalerUnmarshaler != nil && !info.boundedOpaqueState {
 		return 0, moerr.NewNotSupportedNoCtxf(
@@ -2008,7 +2062,6 @@ func (ag *aggState) mergeArgs(mp *mpool.MPool, y uint16, other *aggState, otherY
 	}
 	var inserter arenaskl.Inserter
 	merge := func(k, value []byte) error {
-		sourcePayload := aggPayloadFromKey(info, k)
 		kcpy, err := ag.resizeArgScratch(mp, len(k))
 		if err != nil {
 			return err
@@ -2020,13 +2073,12 @@ func (ag *aggState) mergeArgs(mp *mpool.MPool, y uint16, other *aggState, otherY
 				ag.legacyDistinctFloatKeys); err != nil {
 				return err
 			}
-			if len(value) == 0 && other.legacyDistinctFloatKeys &&
-				!ag.legacyDistinctFloatKeys {
-				// A legacy source has no canonical representative sidecar. Keep
-				// its raw payload for value-producing DISTINCT aggregates while
-				// the modern destination uses the normalized membership key.
-				value = sourcePayload
-			}
+			// A legacy source has no canonical representative sidecar. Keep its
+			// raw payload for value-producing DISTINCT aggregates while the
+			// modern destination uses the normalized membership key.
+			value = distinctMergeRepresentative(
+				info, k, value, ag.legacyDistinctFloatKeys,
+				other.legacyDistinctFloatKeys)
 		}
 		binary.BigEndian.PutUint16(kcpy[:kAggArgPrefixSz], y)
 		if !info.isDistinct {
@@ -2296,6 +2348,24 @@ func aggPayloadFromKeyValue(info *aggInfo, k, value []byte) []byte {
 		return value
 	}
 	return aggPayloadFromKey(info, k)
+}
+
+// distinctMergeRepresentative mirrors the value selection in mergeArgs and is
+// also used by preflight. A legacy source stores only its policy-specific
+// membership key; a modern target must retain the source payload as the
+// representative so value-producing DISTINCT aggregates can still consume the
+// original spelling. Keeping this decision in one helper prevents admission
+// from under-reserving the arena used by the subsequent insertion.
+func distinctMergeRepresentative(
+	info *aggInfo,
+	key, stored []byte,
+	targetLegacy, sourceLegacy bool,
+) []byte {
+	if len(stored) == 0 && info != nil && info.isDistinct &&
+		distinctFloatArgument(info) && sourceLegacy && !targetLegacy {
+		return aggPayloadFromKey(info, key)
+	}
+	return stored
 }
 
 func (ag *aggState) free(mp *mpool.MPool) {
