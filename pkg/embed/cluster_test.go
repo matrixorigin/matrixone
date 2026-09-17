@@ -170,6 +170,7 @@ func TestClusterLifecycleAndCNExpansion(t *testing.T) {
 	cn, err = c.GetCNService(3)
 	require.NoError(t, err)
 	require.False(t, cn.GetServiceConfig().CN.AutomaticUpgrade)
+	require.Equal(t, 1024, cn.GetServiceConfig().CN.Txn.Trace.BufferSize)
 }
 
 func TestSharedBaseClusterCanWorkWithConcurrentCluster(t *testing.T) {
@@ -535,6 +536,7 @@ func TestWithTestingBoundsHeartbeatRecoveryInsideStoreLiveness(t *testing.T) {
 			cfg.HAKeeperClient.BackendReadTimeout.Duration)
 		switch svc.ServiceType() {
 		case metadata.ServiceType_CN:
+			require.Equal(t, 1024, cfg.CN.Txn.Trace.BufferSize)
 			require.Equal(t, testHAKeeperHeartbeatTimeout,
 				cfg.CN.HAKeeper.HeatbeatTimeout.Duration)
 			require.Less(t, cfg.CN.HAKeeper.HeatbeatTimeout.Duration,
@@ -552,6 +554,42 @@ func TestWithTestingBoundsHeartbeatRecoveryInsideStoreLiveness(t *testing.T) {
 			require.Less(t, cfg.HAKeeperClient.BackendReadTimeout.Duration,
 				cfg.LogService.HAKeeperConfig.TNStoreTimeout.Duration)
 		}
+	}
+}
+
+func TestTestingTxnTraceBufferPreservesOverrides(t *testing.T) {
+	cfg := newServiceConfig()
+	cfg.CN.Txn.Trace.BufferSize = 4096
+	applyTestingTxnTraceBuffer(&cfg)
+	require.Equal(t, 4096, cfg.CN.Txn.Trace.BufferSize)
+	for _, testingMode := range []bool{false, true} {
+		t.Run(fmt.Sprintf("testing=%t", testingMode), func(t *testing.T) {
+			opts := []Option{WithCNCount(2)}
+			if testingMode {
+				opts = append(opts, WithTesting())
+			}
+			opts = append(opts, WithPreStart(func(svc ServiceOperator) {
+				if svc.ServiceType() != metadata.ServiceType_CN {
+					return
+				}
+				want := 0
+				if testingMode {
+					want = 1024
+				}
+				require.Equal(t, want, svc.GetServiceConfig().CN.Txn.Trace.BufferSize)
+				svc.Adjust(func(cfg *ServiceConfig) { cfg.CN.Txn.Trace.BufferSize = 8192 })
+			}))
+			c, err := NewCluster(opts...)
+			if c != nil {
+				t.Cleanup(func() { require.NoError(t, c.Close()) })
+			}
+			require.NoError(t, err)
+			for i := range 2 {
+				cn, err := c.GetCNService(i)
+				require.NoError(t, err)
+				require.Equal(t, 8192, cn.GetServiceConfig().CN.Txn.Trace.BufferSize)
+			}
+		})
 	}
 }
 
