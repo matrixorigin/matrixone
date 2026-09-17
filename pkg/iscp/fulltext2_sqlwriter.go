@@ -324,27 +324,24 @@ func ftRowDataBytes(pk any, include []any) int {
 	return n
 }
 
-// rowText joins the indexed columns with '\n' (matching fulltext2_create's build
-// tokenization). If ANY indexed column is NULL the doc yields no tokens — the
-// whole-doc-skip the create-TVF's rowTerms does — so CREATE and CDC tokenize a
-// row identically (a doc's searchability must not depend on which path indexed
-// it). For a json parser each column is flattened to its leaf values PER COLUMN
-// (FlattenJSONColumn), exactly as rowTerms does, so CdcTokenizer then just ngrams the
-// flattened text (it no longer re-flattens). A datalink column is resolved to its file
-// CONTENT via load_text (datalinkText) — parity with the sync build's GetPlainText, so
-// identical values index identically whether seen at CREATE or via CDC; a resolution error
-// is propagated (the CDC iteration retries), matching the sync build.
+// rowText joins the non-NULL indexed columns with '\n' (matching
+// fulltext2_create's build tokenization). A SQL NULL content column contributes no
+// text; the other indexed columns remain searchable. For a json parser each column
+// is flattened to its leaf values PER COLUMN (FlattenJSONColumn), exactly as rowTerms
+// does, so CdcTokenizer then just ngrams the flattened text (it no longer re-flattens).
+// A datalink column is resolved to its file CONTENT via load_text (datalinkText) —
+// parity with the sync build's GetPlainText, so identical values index identically
+// whether seen at CREATE or via CDC; a resolution error is propagated (the CDC
+// iteration retries), matching the sync build.
 func (w *Fulltext2SqlWriter) rowText(ctx context.Context, row []any) (string, error) {
-	for _, pos := range w.textPos {
-		if row[pos] == nil {
-			return "", nil
-		}
-	}
 	isJSON := fulltext2.IsJSONParser(w.cfg.Parser)
 	jsonValue := fulltext2.IsJSONValueParser(w.cfg.Parser)
 	var b strings.Builder
 	for i, pos := range w.textPos {
-		if i > 0 {
+		if row[pos] == nil {
+			continue
+		}
+		if b.Len() > 0 {
 			b.WriteByte('\n')
 		}
 		if isJSON {

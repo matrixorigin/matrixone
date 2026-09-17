@@ -158,8 +158,9 @@ func (u *fulltext2CreateState) start(tf *TableFunction, proc *process.Process, n
 		}
 	}
 	// Attach this row's INCLUDE column values (actual values → segment docmap for
-	// prefilter + coverage). Only for docs the Add loop created, i.e. non-empty text
-	// (a NULL/empty-text row is skipped above), consistent with the CDC/build empty-doc skip.
+	// prefilter + coverage). Only for docs the Add loop created, i.e. rows with
+	// searchable content (a no-searchable-content row is skipped above), consistent
+	// with the CDC/build empty-doc skip.
 	if len(u.tblcfg.IncludeTypes) > 0 {
 		u.cur.SetInclude(pk, u.rowInclude(tf, nthRow))
 	}
@@ -250,19 +251,14 @@ func fulltext2SourceColumnBytes(vec *vector.Vector, proc *process.Process, row i
 
 // rowTerms tokenizes source row nthRow (columns argVecs[2..]) into ordered terms,
 // applying the index's parser. datalink columns are resolved to plain text and
-// json columns to their flattened values; a NULL column yields no tokens (matches
-// the classic tokenizer's per-row NULL handling).
+// json columns to their flattened values; a SQL NULL column yields no tokens
+// while other columns in the row continue to contribute terms.
 func (u *fulltext2CreateState) rowTerms(tf *TableFunction, proc *process.Process, nthRow int) ([]fulltext2.WordPos, error) {
 	argVecs := tf.ctr.argVecs
 	// Text columns are argVecs[2 : textEnd); the trailing len(IncludeTypes) args are INCLUDE
-	// columns (their values are stored verbatim, NOT tokenized). A NULL in any TEXT column
-	// yields no tokens (empty doc); a NULL INCLUDE column is fine (stored as NULL).
+	// columns (their values are stored verbatim, NOT tokenized). A SQL NULL text column
+	// contributes no terms; the other indexed columns in the same row remain searchable.
 	textEnd := len(argVecs) - len(u.tblcfg.IncludeTypes)
-	for i := 2; i < textEnd; i++ {
-		if argVecs[i].IsNull(uint64(nthRow)) {
-			return nil, nil
-		}
-	}
 
 	jsonValue := fulltext2.IsJSONValueParser(u.tblcfg.Parser)
 	var content bytes.Buffer
@@ -294,6 +290,9 @@ func (u *fulltext2CreateState) rowTerms(tf *TableFunction, proc *process.Process
 		}
 	} else {
 		for i := 2; i < textEnd; i++ {
+			if argVecs[i].IsNull(uint64(nthRow)) {
+				continue
+			}
 			if content.Len() > 0 {
 				content.WriteByte('\n')
 			}

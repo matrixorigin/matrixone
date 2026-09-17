@@ -82,4 +82,22 @@ select id from docs where match(body) against('learning') and status = 'active' 
 select count(*) from docs where match(body) against('learning') and status = 'active';
 select count(*) from docs where match(body) against('learning') and prio between 15 and 30;
 
+-- ================= multi-column SQL NULL content + INCLUDE =================
+-- A NULL content column must not suppress a non-NULL sibling. INCLUDE values
+-- retain their own NULL/non-NULL semantics and remain available to filtering and
+-- projection on the same indexed document.
+drop table if exists docs_null;
+create table docs_null(id bigint primary key, left_doc text, right_doc text, status varchar(20));
+insert into docs_null values
+ (1,NULL,'righttoken','active'),
+ (2,'lefttoken',NULL,NULL),
+ (3,NULL,NULL,NULL),
+ (4,'lefttoken','righttoken','pending');
+create fulltext2 index ft_null on docs_null(left_doc, right_doc) include (status);
+select id, status from docs_null where match(left_doc, right_doc) against('righttoken') order by id;
+select id, status from docs_null where match(left_doc, right_doc) against('lefttoken') and status is null order by id;
+select id, status from docs_null where match(left_doc, right_doc) against('righttoken') and status = 'active' order by id;
+select id, status from docs_null where match(left_doc, right_doc) against('righttoken') and status is not null order by id;
+drop table docs_null;
+
 drop database fulltext2_include;
