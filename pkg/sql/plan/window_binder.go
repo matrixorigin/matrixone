@@ -1324,10 +1324,11 @@ func resetWindowIntervalExpr(bindCtx context.Context, proc *process.Process, e *
 			return result, err
 		}
 	}
-	isFloat := e1.Typ.Id == int32(types.T_float32) ||
+	isDecimalOrFloat := e1.Typ.Id == int32(types.T_decimal64) ||
+		e1.Typ.Id == int32(types.T_decimal128) || e1.Typ.Id == int32(types.T_float32) ||
 		e1.Typ.Id == int32(types.T_float64)
 	lit := e1.GetLit()
-	if isTimeUnit && isFloat && lit != nil && !lit.Isnull {
+	if isTimeUnit && isDecimalOrFloat && lit != nil && !lit.Isnull {
 		var floatVal float64
 		var hasValue bool
 
@@ -1336,6 +1337,22 @@ func resetWindowIntervalExpr(bindCtx context.Context, proc *process.Process, e *
 			hasValue = true
 		} else if fval, ok := lit.Value.(*plan.Literal_Fval); ok {
 			floatVal = float64(fval.Fval)
+			hasValue = true
+		} else if d64val, ok := lit.Value.(*plan.Literal_Decimal64Val); ok {
+			d64 := types.Decimal64(d64val.Decimal64Val.A)
+			scale := e1.Typ.Scale
+			if scale < 0 {
+				scale = 0
+			}
+			floatVal = types.Decimal64ToFloat64(d64, scale)
+			hasValue = true
+		} else if d128val, ok := lit.Value.(*plan.Literal_Decimal128Val); ok {
+			d128 := types.Decimal128{B0_63: uint64(d128val.Decimal128Val.A), B64_127: uint64(d128val.Decimal128Val.B)}
+			scale := e1.Typ.Scale
+			if scale < 0 {
+				scale = 0
+			}
+			floatVal = types.Decimal128ToFloat64(d128, scale)
 			hasValue = true
 		}
 
