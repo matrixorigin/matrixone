@@ -122,6 +122,9 @@ enum CmdMethod {
   // GetVectorIndexCacheKeys lists the exact cache keys a CN currently holds, so an operator can
   // discover the key to pass to GetVectorIndexCacheInfo / EvictVectorIndexCache (test/ops).
   GetVectorIndexCacheKeys = 44;
+  // GetPythonUdfStatus returns the bounded, read-only Python runtime status of
+  // the addressed CN. It is consumed by the Operator for same-Pod workers.
+  GetPythonUdfStatus = 45;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -309,6 +312,8 @@ message Request {
   GetVectorIndexCacheInfoRequest GetVectorIndexCacheInfo = 44 [ (gogoproto.nullable) = false ];
   EvictVectorIndexCacheRequest EvictVectorIndexCache = 45 [ (gogoproto.nullable) = false ];
   GetVectorIndexCacheKeysRequest GetVectorIndexCacheKeys = 46 [ (gogoproto.nullable) = false ];
+  // GetPythonUdfStatusRequest asks this CN for its local Python runtime state.
+  GetPythonUdfStatusRequest GetPythonUdfStatusRequest = 47 [ (gogoproto.nullable) = false ];
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -383,6 +388,38 @@ message Response {
   GetVectorIndexCacheInfoResponse GetVectorIndexCacheInfo = 45 [ (gogoproto.nullable) = false ];
   EvictVectorIndexCacheResponse EvictVectorIndexCache = 46 [ (gogoproto.nullable) = false ];
   GetVectorIndexCacheKeysResponse GetVectorIndexCacheKeys = 47 [ (gogoproto.nullable) = false ];
+  // GetPythonUdfStatus is a bounded summary of the CN-local Python contract.
+  GetPythonUdfStatusResponse GetPythonUdfStatus = 48 [ (gogoproto.nullable) = false ];
+}
+
+message GetPythonUdfStatusRequest {
+}
+
+message GetPythonUdfStatusResponse {
+  string CNUUID = 1;
+  string Language = 2;
+  bool Enabled = 3;
+  bool AllowUnisolated = 4;
+  bool Ready = 5;
+  string ErrorClass = 6;
+  string Reason = 7;
+  int32 ProtocolVersion = 8;
+  string ABIContract = 9;
+  string AdapterVersion = 10;
+  string SDKVersion = 11;
+  int32 DefinitionSchemaVersion = 12;
+  int32 PlanContractVersion = 13;
+  string TypeDescriptorContract = 14;
+  string TimezoneDatabaseVersion = 15;
+  int32 WindowBatches = 16;
+  bool CumulativeAck = 17;
+  int64 MaxExecutionFrameBytes = 18;
+  int32 MaxHandlerProcesses = 19;
+  int32 MaxAccountHandlerProcesses = 20;
+  int32 MaxOwnerHandlerProcesses = 21;
+  uint64 LeaseEpoch = 22;
+  repeated string Modes = 23;
+  repeated string NullPolicies = 24;
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
