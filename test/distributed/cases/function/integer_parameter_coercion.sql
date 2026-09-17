@@ -65,4 +65,14 @@ set @v=1.5e0;
 execute bit_source using @v,@v,@v;
 deallocate prepare bit_source;
 
+-- Source lineage crosses scalar subqueries, derived UNION branches and recursive CTE source steps.
+prepare lineage_source from 'select substring_index("a.b.c.d",".",coalesce((select ? where true),2.5e0)),substring_index("a.b.c.d",".",(select 0e0 where false union all select x from (select ? x) d)),substring_index("a.b.c.d",".",(with recursive r(n) as (select ? union all select n from r where false) select n from r)),substring_index("a.b.c.d",".",bit_count(?))';
+set @v=1.5e0,@bits=2;
+execute lineage_source using @v,@v,@v,@bits;
+set @v='1.5',@bits='2';
+execute lineage_source using @v,@v,@v,@bits;
+set @v=null,@bits=null;
+execute lineage_source using @v,@v,@v,@bits;
+deallocate prepare lineage_source;
+
 drop database integer_parameter_coercion;

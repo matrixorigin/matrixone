@@ -4257,7 +4257,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			preparedDeferredColumn := false
 			if builder.isPrepareStatement {
 				for _, tmpID := range nodes {
-					if preparedExprContainsParam(builder.qry.Nodes[tmpID].ProjectList[columnIdx]) {
+					if preparedNodeOutputContainsParam(builder.qry, tmpID, int32(columnIdx), make(map[[2]int32]struct{})) {
 						preparedDeferredColumn = true
 						break
 					}

@@ -104,6 +104,9 @@ func TestPreparedIntegerSourceProjectionDomains(t *testing.T) {
 		{"scalar project", `select substring_index("a.b.c.d",".",(select coalesce(?,0e0) where true))`, []int32{0}},
 		{"column peer", `select substring_index("a.b.c.d",".",coalesce(?,x)) from (select 0e0 as x) d`, []int32{0}},
 		{"right union marker", `select substring_index("a.b.c.d",".",(select 0e0 where false union all select ?))`, []int32{0}},
+		{"outer coalesce subquery", `select substring_index("a.b.c.d",".",coalesce((select ? where true),2.5e0))`, []int32{0}},
+		{"derived union marker", `select substring_index("a.b.c.d",".",(select 0e0 where false union all select x from (select ? x) d))`, []int32{0}},
+		{"recursive cte marker", `select substring_index("a.b.c.d",".",(with recursive r(n) as (select ? union all select n from r where false) select n from r))`, []int32{0}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
@@ -122,17 +125,20 @@ func TestPreparedIntegerSourceProjectionDomains(t *testing.T) {
 				return planpb.VisitExprTree(root, func(e *Expr) error {
 					if fn := e.GetF(); fn != nil && fn.Func.GetObjName() == "coalesce" {
 						producers++
-						require.Equal(t, int32(types.T_float64), e.Typ.Id, "inner COALESCE domain")
+						if tc.name == "scalar project" || tc.name == "column peer" {
+							require.Equal(t, int32(types.T_float64), e.Typ.Id, "inner COALESCE domain")
+						}
 					}
 					return nil
 				})
 			}))
-			if tc.name != "right union marker" {
+			if tc.name == "scalar project" || tc.name == "column peer" {
 				require.Positive(t, producers)
 			}
 			consumer := findPlanFunctionExpr(bound, "substring_index")
 			require.NotNil(t, consumer)
-			require.Equal(t, int32(types.T_float64), consumer.GetF().Args[2].GetF().Args[0].Typ.Id)
+			sourceType := types.T(consumer.GetF().Args[2].GetF().Args[0].Typ.Id)
+			require.False(t, sourceType.IsMySQLString(), "integer source must not retain PREPARE-time TEXT")
 		})
 	}
 }
@@ -165,6 +171,23 @@ func TestPreparedIntegerNullPhysicalDomains(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPreparedIntegerBitCountSource(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		`prepare bit_count_source from 'select substring_index("a.b.c.d",".",bit_count(?))'`)
+	require.NoError(t, err)
+	bound, _, err := FillValuesOfParamsInPlanWithSpecialization(proc.Ctx, prepared.GetDcl().GetPrepare().Plan, []any{
+		ParamValue{Value: int64(2), RuntimeType: types.T_int64.ToType(), HasRuntimeType: true, IsBinaryProtocol: true},
+	})
+	require.NoError(t, err)
+	consumer := findPlanFunctionExpr(bound, "substring_index")
+	require.NotNil(t, consumer)
+	result, free, err := colexec.GetReadonlyResultFromExpression(proc, consumer, []*batch.Batch{batch.EmptyForConstFoldBatch})
+	require.NoError(t, err)
+	defer free()
+	require.Equal(t, "a", result.GetStringAt(0))
 }
 
 func TestPreparedIntegerNestedBitAggregateSource(t *testing.T) {

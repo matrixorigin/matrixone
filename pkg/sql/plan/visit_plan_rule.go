@@ -833,6 +833,29 @@ func (rule *ResetParamRefRule) setPreparedPlan(preparePlan *Plan) {
 			})
 		})
 	}
+	// BIT_COUNT owns its marker's text-vs-numeric dispatch. Keep the complete
+	// function as an integer source, but let its descendants pass through the
+	// ordinary BIT_COUNT fallback path instead of forcing protocol TEXT.
+	for _, node := range query.Nodes {
+		if node == nil {
+			continue
+		}
+		_ = plan.VisitExpressionsInOwner(node, func(root *plan.Expr) error {
+			return plan.VisitExprTree(root, func(expr *plan.Expr) error {
+				fn := expr.GetF()
+				if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.ObjName, "bit_count") {
+					return nil
+				}
+				for _, arg := range fn.Args {
+					_ = plan.VisitExprTree(arg, func(descendant *plan.Expr) error {
+						delete(rule.integerSourceRoots, descendant)
+						return nil
+					})
+				}
+				return nil
+			})
+		})
+	}
 }
 
 // SetParamKinds is used by the plan-level replacement tests and by callers

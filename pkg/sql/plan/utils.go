@@ -1110,6 +1110,45 @@ func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
 	return result
 }
 
+// preparedNodeOutputContainsParam follows projected columns through derived
+// tables so set-operation reconciliation can see a marker hidden behind ColRef.
+func preparedNodeOutputContainsParam(
+	query *plan.Query, nodeID, colPos int32, visited map[[2]int32]struct{},
+) bool {
+	if query == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) || colPos < 0 {
+		return false
+	}
+	key := [2]int32{nodeID, colPos}
+	if _, seen := visited[key]; seen {
+		return false
+	}
+	visited[key] = struct{}{}
+	node := query.Nodes[nodeID]
+	if node == nil || int(colPos) >= len(node.ProjectList) || node.ProjectList[colPos] == nil {
+		return false
+	}
+	expr := node.ProjectList[colPos]
+	if preparedExprContainsParam(expr) {
+		return true
+	}
+	found := false
+	_ = plan.VisitExprTree(expr, func(nested *plan.Expr) error {
+		col := nested.GetCol()
+		if found || col == nil || col.ColPos < 0 {
+			return nil
+		}
+		if col.RelPos >= 0 && int(col.RelPos) < len(node.Children) &&
+			preparedNodeOutputContainsParam(query, node.Children[col.RelPos], col.ColPos, visited) {
+			found = true
+		} else if len(node.Children) == 1 &&
+			preparedNodeOutputContainsParam(query, node.Children[0], col.ColPos, visited) {
+			found = true
+		}
+		return nil
+	})
+	return found
+}
+
 // collectPreparedIntegerArgumentParamPositions follows only projected ColRef
 // lineage from the private CAST's owning node. After scalar-subquery
 // flattening, the outer CAST sees a ColRef while the contributing ParamRef
@@ -1129,9 +1168,16 @@ func collectPreparedIntegerArgumentParamPositions(
 	for pos := range preparedNumericValueParamPositions(expr) {
 		positions[pos] = struct{}{}
 	}
+	if sources != nil {
+		// This occurrence is itself a value producer for the integer consumer,
+		// even when flattening replaced its marker with a ColRef.
+		sources[expr] = struct{}{}
+	}
 	_ = plan.VisitExprTree(expr, func(nested *plan.Expr) error {
-		if sources != nil && preparedExprContainsParam(nested) &&
-			(nested.GetP() != nil || nested.GetF() != nil || nested.GetW() != nil) {
+		if sources != nil && (nested.GetP() != nil || nested.GetF() != nil || nested.GetW() != nil) {
+			// Every expression on this selected-value path belongs to the integer
+			// source contract. Flattening may have replaced its marker with a
+			// ColRef, so marker containment is not a valid admission test here.
 			sources[nested] = struct{}{}
 		}
 		col := nested.GetCol()
@@ -1192,6 +1238,23 @@ func collectPreparedIntegerArgumentParamPositions(
 			children = node.Children[col.RelPos : col.RelPos+1]
 		} else if len(node.Children) == 1 {
 			children = node.Children
+		}
+		// SINK_SCAN/recursive CTE inputs are connected by step ordinals rather
+		// than Children. Follow every producer step because each generation can
+		// supply the same output column.
+		for _, sourceStep := range node.SourceStep {
+			if sourceStep >= 0 && int(sourceStep) < len(query.Steps) {
+				children = append(children, query.Steps[sourceStep])
+			}
+		}
+		anchorOwnsDomain := node.NodeType == plan.Node_RECURSIVE_CTE && len(children) > 0
+		if sources != nil && (len(children) == 1 || anchorOwnsDomain) {
+			// A recursive CTE's anchor (the first source step) owns its output
+			// domain; recursive terms must conform to that schema.
+			metadata := ensurePreparedNumericMetadata(nested)
+			metadata.FallbackSource = true
+			metadata.FallbackSourceNodeId = children[0]
+			metadata.FallbackSourceColPos = col.ColPos
 		}
 		for _, childID := range children {
 			key := [2]int32{childID, col.ColPos}

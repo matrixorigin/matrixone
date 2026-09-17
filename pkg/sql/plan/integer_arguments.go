@@ -220,6 +220,11 @@ func (rule *ResetParamRefRule) integerArgumentRuntimeSource(source *Expr) (*Expr
 }
 
 func (rule *ResetParamRefRule) integerArgumentLogicalSource(source *Expr) (*Expr, error) {
+	if refreshed, changed, err := rule.refreshPreparedNumericSource(source); err != nil {
+		return nil, err
+	} else if changed {
+		source = refreshed
+	}
 	if isIntegerArgumentCast(source) {
 		return rule.rebindIntegerArgumentCast(source)
 	}
@@ -267,6 +272,15 @@ func (rule *ResetParamRefRule) integerArgumentLogicalSource(source *Expr) (*Expr
 		(fn.Func.ObjName == "coalesce" || fn.Func.ObjName == "case" || fn.Func.ObjName == "if" || fn.Func.ObjName == "iff") {
 		args := make([]*Expr, len(fn.Args))
 		for i, arg := range fn.Args {
+			// This common-type producer is itself inside the private integer
+			// conversion, so its binder-owned TEXT/REAL envelope is provisional.
+			// Explicit CAST remains authoritative.
+			arg = stripIntegerSelectionReconciliation(arg)
+			if refreshed, changed, refreshErr := rule.refreshPreparedNumericSource(arg); refreshErr != nil {
+				return nil, refreshErr
+			} else if changed {
+				arg = refreshed
+			}
 			metadata := arg.GetPreparedNumeric()
 			if metadata.GetProvisionalResultPeer() {
 				var err error
@@ -283,6 +297,15 @@ func (rule *ResetParamRefRule) integerArgumentLogicalSource(source *Expr) (*Expr
 			args[i], err = rule.integerArgumentLogicalSource(arg)
 			if err != nil {
 				return nil, err
+			}
+			// A scalar-subquery ColRef can acquire the provisional peer marker
+			// only after its producer is rebound. Restore that current occurrence
+			// as well as the original PREPARE-time argument above.
+			if args[i].GetPreparedNumeric().GetProvisionalResultPeer() {
+				args[i], err = restorePreparedResultPeer(rule.ctx, args[i])
+				if err != nil {
+					return nil, err
+				}
 			}
 		}
 		bound, err := BindFuncExprImplByPlanExpr(rule.ctx, fn.Func.ObjName, args)
