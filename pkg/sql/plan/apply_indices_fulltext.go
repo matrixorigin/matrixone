@@ -1557,6 +1557,15 @@ func fullTextColumnRefsEqual(left, right *plan.ColRef) bool {
 	if left == nil || right == nil {
 		return false
 	}
+	// Within one scan binding, a different column position is authoritative.
+	// This guard prevents a real column named `a.body` from being conflated with
+	// the column `body` merely because the display-name fallback strips a
+	// qualifier. Positions may legitimately be remapped across projection
+	// boundaries, so the name fallback remains available when the bindings
+	// differ.
+	if left.GetRelPos() == right.GetRelPos() && left.GetColPos() != right.GetColPos() {
+		return false
+	}
 	leftName, rightName := fullTextColumnName(left.GetName()), fullTextColumnName(right.GetName())
 	if leftName != "" && rightName != "" {
 		return leftName == rightName
@@ -1635,12 +1644,13 @@ type fulltextServedMatch struct {
 // This asks only about the match, not about its scan node, so it is usable before the build
 // loop has created them.
 //
-// Index parts are compared by column NAME, so two tables with an identically named column
-// would look equal. Sound here because both sides always belong to the SAME scan node: the
-// served set is built from that scan's filters and projections, and the callers sweep only
-// expressions of the project sitting directly over it. (A MATCH on the other side of a join
-// never reaches this code -- the join path passes no project node, and such a query raises
-// 20105 today.) equalsFullTextMatchFunc carries the same assumption for eqmap.
+// Index parts are compared by normalized column display name, with the same-binding column
+// position taking precedence. That keeps qualified/unqualified copies stable across projection
+// remaps while not aliasing two columns with different positions in one scan. Two tables with
+// an identically named column would still look equal here, but both sides belong to the SAME
+// scan node: the served set is built from that scan's filters and projections, and callers sweep
+// only expressions of the project sitting directly over it. The join path uses the
+// binding-aware equalsFullTextMatchFuncSameTable variant instead.
 func (builder *QueryBuilder) isServedFullTextMatch(fn *plan.Function, served []fulltextServedMatch) bool {
 	if fn == nil || fn.Func == nil || fn.Func.ObjName != "fulltext_match" || len(fn.Args) < 2 {
 		return false
@@ -1656,8 +1666,9 @@ func (builder *QueryBuilder) isServedFullTextMatch(fn *plan.Function, served []f
 // equalsFullTextMatchFuncSameTable is equalsFullTextMatchFunc plus the requirement that the
 // index-part columns come from the SAME binding, i.e. the same table instance.
 //
-// equalsFullTextMatchFunc compares index parts by column NAME, which is sound while both sides
-// belong to one scan. Resolving a MATCH across the children of a JOIN breaks that assumption:
+// equalsFullTextMatchFunc compares index parts by normalized display name with a same-binding
+// position guard, which is sound while both sides belong to one scan. Resolving a MATCH across
+// the children of a JOIN breaks that assumption:
 // `match(a.body) against('hello')` and `match(b.body) against('hello')` differ only in the
 // binding tag of their column argument, so by name alone they look like the same question and
 // one table's relevance would be reported for the other's.
