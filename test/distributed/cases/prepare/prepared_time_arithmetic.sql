@@ -55,6 +55,24 @@ SET @p_time_nested_right = CAST(2 AS SIGNED);
 EXECUTE p_time_nested_add USING @p_time_nested_left, @p_time_nested_right;
 DEALLOCATE PREPARE p_time_nested_add;
 
+-- The nested integer operation must finish in its ordinary integer domain
+-- before the completed value is coerced to the TIME(6) decimal boundary.
+PREPARE p_time_nested_scale FROM
+    'SELECT CAST(''00:00:01.000000'' AS TIME(6)) + (? - ?) AS result';
+SET @p_time_nested_left = CAST(10000000000000 AS SIGNED);
+SET @p_time_nested_right = CAST(9999999999999 AS SIGNED);
+-- @metacmp(true)
+EXECUTE p_time_nested_scale USING @p_time_nested_left, @p_time_nested_right;
+DEALLOCATE PREPARE p_time_nested_scale;
+
+-- TIME plus an unsigned integer follows the ordinary DECIMAL64 domain too.
+PREPARE p_time_unsigned FROM
+    'SELECT CAST(''00:00:01'' AS TIME(0)) + ? AS result';
+SET @p_time_numeric_v = CAST(10 AS UNSIGNED);
+-- @metacmp(true)
+EXECUTE p_time_unsigned USING @p_time_numeric_v;
+DEALLOCATE PREPARE p_time_unsigned;
+
 -- An explicit DECIMAL cast remains a DECIMAL128 boundary for a large integer.
 PREPARE p_time_explicit_decimal FROM
     'SELECT CAST(CAST(''00:00:01'' AS TIME(0)) AS DECIMAL(10,2)) + ? AS result';

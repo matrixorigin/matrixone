@@ -261,6 +261,80 @@ func TestPreparedTimeArithmeticPreservesTemporalIntegerDomain(t *testing.T) {
 	}
 }
 
+func TestPreparedTimeArithmeticCoercesNestedIntegerAtBoundary(t *testing.T) {
+	const ordinarySQL = "select cast('00:00:01.000000' as time(6)) + (10000000000000 - 9999999999999)"
+	ordinary, err := runOneStmt(NewMockOptimizer(false), t, ordinarySQL)
+	require.NoError(t, err)
+
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt_nested_scale from 'select cast(''00:00:01.000000'' as time(6)) + (? - ?)'")
+	require.NoError(t, err)
+	filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(),
+		prepared.GetDcl().GetPrepare().Plan, []any{
+			ParamValue{Value: "10000000000000", PrepareParamKind: vector.PrepareParamInteger},
+			ParamValue{Value: "9999999999999", PrepareParamKind: vector.PrepareParamInteger},
+		})
+	require.NoError(t, err)
+
+	evaluate := func(expr *planpb.Expr) (types.Type, string) {
+		proc := testutil.NewProc(t)
+		defer proc.Free()
+		executor, err := colexec.NewExpressionExecutor(proc, expr)
+		require.NoError(t, err)
+		defer executor.Free()
+		result, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+		require.NoError(t, err)
+		require.False(t, result.IsNull(0))
+		return *result.GetType(), formatDecimalResult(result)
+	}
+
+	ordinaryExpr := ordinary.GetQuery().Nodes[len(ordinary.GetQuery().Nodes)-1].ProjectList[0]
+	preparedExpr := filled.GetQuery().Nodes[len(filled.GetQuery().Nodes)-1].ProjectList[0]
+	ordinaryType, ordinaryValue := evaluate(ordinaryExpr)
+	preparedType, preparedValue := evaluate(preparedExpr)
+	require.Equal(t, types.T_decimal64, ordinaryType.Oid)
+	require.Equal(t, int32(18), ordinaryType.Width)
+	require.Equal(t, int32(6), ordinaryType.Scale)
+	require.Equal(t, ordinaryType, preparedType)
+	require.Equal(t, "2.000000", ordinaryValue)
+	require.Equal(t, ordinaryValue, preparedValue)
+}
+
+func TestPreparedTimeArithmeticPreservesUnsignedDomain(t *testing.T) {
+	ordinary, err := runOneStmt(NewMockOptimizer(false), t,
+		"select cast('00:00:01' as time(0)) + cast(10 as unsigned)")
+	require.NoError(t, err)
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt_unsigned from 'select cast(''00:00:01'' as time(0)) + ?'")
+	require.NoError(t, err)
+	filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(),
+		prepared.GetDcl().GetPrepare().Plan, []any{
+			ParamValue{
+				Value: "10", PrepareParamKind: vector.PrepareParamInteger,
+				RuntimeType: types.T_uint64.ToType(), HasRuntimeType: true,
+				IsBinaryProtocol: true,
+			},
+		})
+	require.NoError(t, err)
+
+	ordinaryExpr := ordinary.GetQuery().Nodes[len(ordinary.GetQuery().Nodes)-1].ProjectList[0]
+	preparedExpr := filled.GetQuery().Nodes[len(filled.GetQuery().Nodes)-1].ProjectList[0]
+	require.Equal(t, int32(types.T_decimal64), ordinaryExpr.Typ.Id)
+	require.Equal(t, int32(18), ordinaryExpr.Typ.Width)
+	require.Equal(t, int32(0), ordinaryExpr.Typ.Scale)
+	require.Equal(t, ordinaryExpr.Typ, preparedExpr.Typ)
+
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	executor, err := colexec.NewExpressionExecutor(proc, preparedExpr)
+	require.NoError(t, err)
+	defer executor.Free()
+	result, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	require.NoError(t, err)
+	require.False(t, result.IsNull(0))
+	require.Equal(t, "11", formatDecimalResult(result))
+}
+
 func TestPreparedTimeArithmeticPreservesExplicitDecimalAndNestedDomains(t *testing.T) {
 	mock := NewMockOptimizer(false)
 	mock.ctxt.tables["nation"].Cols[0].Typ = planpb.Type{

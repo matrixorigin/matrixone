@@ -103,6 +103,14 @@ func TestCOMStmtPreparedTimeArithmeticRebindsDecodedNumericTypes(t *testing.T) {
 			},
 			wantType: types.T_decimal128, wantWidth: 38, wantScale: 0, wantValue: "10",
 		},
+		{
+			name: "unsigned multiplication keeps wide domain",
+			packet: func() []byte {
+				return buildLongLongExecutePacket(^uint64(0), true)
+			},
+			wantType: types.T_decimal128, wantWidth: 38, wantScale: 0,
+			wantValue: "18446744073709551615",
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			require.NoError(t, proto.ParseExecuteData(
@@ -143,14 +151,16 @@ func TestCOMStmtPreparedTimeArithmeticRebindsDecodedNumericTypes(t *testing.T) {
 
 func TestCOMStmtPreparedTimeArithmeticPreservesTemporalIntegerDomain(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		op    string
-		want  string
-		value uint64
+		name     string
+		op       string
+		want     string
+		value    uint64
+		unsigned bool
 	}{
 		{name: "add", op: "+", want: "11", value: 10},
 		{name: "subtract", op: "-", want: "-9", value: 10},
 		{name: "mod", op: "%", want: "1", value: 10},
+		{name: "unsigned-add", op: "+", want: "11", value: 10, unsigned: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			query := "select cast('00:00:01' as time(0)) " + tc.op + " ? as result"
@@ -164,7 +174,7 @@ func TestCOMStmtPreparedTimeArithmeticPreservesTemporalIntegerDomain(t *testing.
 
 			require.NoError(t, proto.ParseExecuteData(
 				execCtx.reqCtx, cw.proc, prepareStmt,
-				buildLongLongExecutePacket(tc.value, false), 0))
+				buildLongLongExecutePacket(tc.value, tc.unsigned), 0))
 			_, runtimePlan, executionStmt, _, owned, err := initExecuteStmtParam(
 				execCtx, ses, cw, nil, prepareStmt.Name)
 			require.NoError(t, err)
@@ -273,4 +283,41 @@ func TestCOMStmtPreparedTimeArithmeticPreservesExplicitDecimalBoundary(t *testin
 			require.Equal(t, cachedPlan, after, "execute-time rebinding must not mutate the cached plan")
 		})
 	}
+
+	t.Run("unsigned-int64-overflow-matches-decimal64", func(t *testing.T) {
+		query := "select cast('00:00:01' as time(0)) + ? as result"
+		ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 28963, query)
+		proto, _, scratchPrepare := newBinaryPrepareProtocolTestCase(t, query)
+		t.Cleanup(func() {
+			cw.proc.SetPrepareParams(nil)
+			prepareStmt.Close()
+			scratchPrepare.Close()
+		})
+
+		require.NoError(t, proto.ParseExecuteData(
+			execCtx.reqCtx, cw.proc, prepareStmt,
+			buildLongLongExecutePacket(^uint64(0)>>1, true), 0))
+		_, runtimePlan, executionStmt, _, owned, err := initExecuteStmtParam(
+			execCtx, ses, cw, nil, prepareStmt.Name)
+		require.NoError(t, err)
+		require.NotNil(t, runtimePlan)
+		t.Cleanup(func() {
+			if owned && executionStmt != nil {
+				executionStmt.Free()
+			}
+			prepareStmt.clearBinaryParamState(cw.proc)
+		})
+
+		queryPlan := runtimePlan.GetQuery()
+		project := queryPlan.Nodes[queryPlan.Steps[len(queryPlan.Steps)-1]].ProjectList[0]
+		require.Equal(t, types.T_decimal64, types.T(project.Typ.Id))
+		require.Equal(t, int32(18), project.Typ.Width)
+		require.Equal(t, int32(0), project.Typ.Scale)
+		executor, err := colexec.NewExpressionExecutor(cw.proc, project)
+		require.NoError(t, err)
+		result, err := executor.Eval(cw.proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+		executor.Free()
+		require.Error(t, err)
+		require.Nil(t, result)
+	})
 }
