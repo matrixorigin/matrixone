@@ -862,26 +862,31 @@ func TestDecimalComparisonFencesSmallExplicitCastSourceScaleMismatch(t *testing.
 	}
 	column.Typ.NotNullable = true
 
-	for _, operator := range []string{"=", "<>"} {
-		t.Run(operator, func(t *testing.T) {
-			source := makePlan2StringConstExprWithType("1.01")
-			casted, err := appendCastBeforeExpr(ctx, source, plan.Type{
-				Id:          int32(types.T_decimal64),
-				Width:       10,
-				Scale:       1,
-				NotNullable: true,
+	for _, operator := range []string{"=", "<>", "<", "<=", ">", ">="} {
+		for _, reversed := range []bool{false, true} {
+			t.Run(operator+"/reversed="+strconv.FormatBool(reversed), func(t *testing.T) {
+				source := makePlan2StringConstExprWithType("1.01")
+				casted, err := appendCastBeforeExpr(ctx, source, plan.Type{
+					Id:          int32(types.T_decimal64),
+					Width:       10,
+					Scale:       1,
+					NotNullable: true,
+				})
+				require.NoError(t, err)
+				args := []*plan.Expr{DeepCopyExpr(column), casted}
+				if reversed {
+					args[0], args[1] = args[1], args[0]
+				}
+				result, err := BindFuncExprImplByPlanExpr(ctx, operator, args)
+				require.NoError(t, err)
+				require.NotNil(t, result.GetF(),
+					"source-scale mismatch must retain the executable comparison")
+				requires, err := plan.RequiresMORPCVersion84DecimalLiteralSemantics(result)
+				require.NoError(t, err)
+				require.True(t, requires,
+					"source-scale mismatch must carry the v84 persisted-expression fence")
 			})
-			require.NoError(t, err)
-			result, err := BindFuncExprImplByPlanExpr(ctx, operator,
-				[]*plan.Expr{DeepCopyExpr(column), casted})
-			require.NoError(t, err)
-			require.NotNil(t, result.GetF(),
-				"source-scale mismatch must retain the executable comparison")
-			requires, err := plan.RequiresMORPCVersion84DecimalLiteralSemantics(result)
-			require.NoError(t, err)
-			require.True(t, requires,
-				"source-scale mismatch must carry the v84 persisted-expression fence")
-		})
+		}
 	}
 }
 
