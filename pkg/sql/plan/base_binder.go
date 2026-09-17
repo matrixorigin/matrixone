@@ -8248,7 +8248,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 		if !typ.IsEmpty() && types.T(typ.Id).IsDecimal() {
 			return returnDecimalExpr(originString)
 		}
-		if !strings.Contains(originString, "e") {
+		if !strings.ContainsAny(originString, "eE") {
 			expr, err := returnDecimalExpr(originString)
 			if err == nil {
 				return expr, nil

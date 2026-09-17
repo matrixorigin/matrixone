@@ -1017,6 +1017,14 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	fromType := parameters[0].GetType()
 	toType := parameters[1].GetType()
 	from := parameters[0]
+	if mode.isAssignment() && toType.Oid.IsInteger() {
+		switch fromType.Oid {
+		case types.T_float32:
+			return floatToIntegerAssignment(proc.Ctx, vector.GenerateFunctionFixedTypeParameter[float32](from), toType.Oid, result, length, selectList)
+		case types.T_float64:
+			return floatToIntegerAssignment(proc.Ctx, vector.GenerateFunctionFixedTypeParameter[float64](from), toType.Oid, result, length, selectList)
+		}
+	}
 	if mode == castModeExplicit && toType.IsDecimal() && fromType.IsNumeric() {
 		if handled, err := explicitNumericToDecimal(from, *toType, result, length); handled {
 			return err

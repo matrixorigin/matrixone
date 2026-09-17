@@ -1666,7 +1666,8 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 	}
 	var rewritten *plan.Expr
 	var err error
-	if _, preserve := rule.preserveRoots[e]; preserve {
+	_, directAssignment := directIntegerAssignmentParam(e)
+	if _, preserve := rule.preserveRoots[e]; preserve || directAssignment {
 		rewritten, err = rule.applyExprPreservingRoot(e)
 	} else {
 		rewritten, err = rule.applyExpr(e)
@@ -1737,6 +1738,29 @@ func (rule *ResetParamRefRule) NormalizePreparedLockRows(rewritten *Expr, target
 func (rule *ResetParamRefRule) applyExprPreservingRoot(e *plan.Expr) (*plan.Expr, error) {
 	if e == nil {
 		return nil, nil
+	}
+	// The writer's integer type stays fixed, but a directly assigned numeric
+	// parameter must not be interpreted as TEXT merely because of transport.
+	// Do not reinterpret string parameters or descend through user expressions.
+	if pos, ok := directIntegerAssignmentParam(e); ok {
+		if pos < len(rule.paramValues) {
+			if param, ok := rule.paramValues[pos].(ParamValue); ok &&
+				((param.IsBinaryProtocol && (!param.HasRuntimeType || param.RuntimeType.Oid.IsMySQLString())) ||
+					(param.HasSourceType && param.SourceType.Oid.IsMySQLString())) {
+				return e, nil
+			}
+		}
+		if typ, known := rule.runtimeParamType(pos); known && typ.IsNumeric() {
+			if source, bound, err := rule.typedRuntimeParamExpr(pos); err != nil {
+				return nil, err
+			} else if bound {
+				rule.specialized = true
+				return forceAssignmentCastExprWithName(rule.ctx, source, e.Typ, e.GetF().Func.GetObjName())
+			}
+		}
+		// A textual marker remains parameterized: generic parameter replacement
+		// may infer numeric-prefix types for other consumers of the same marker.
+		return e, nil
 	}
 	switch exprImpl := e.Expr.(type) {
 	case *plan.Expr_P:

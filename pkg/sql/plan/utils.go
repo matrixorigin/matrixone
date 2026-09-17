@@ -4156,6 +4156,22 @@ func (rule *preparedRuntimeTextComparisonScanRule) paramTypeIsNumeric(position i
 		preparedComparisonTypeIsNumeric(rule.runtimeParamTypes[position].Oid)
 }
 
+func directIntegerAssignmentParam(expr *plan.Expr) (int, bool) {
+	if expr == nil || !types.T(expr.Typ.Id).IsInteger() {
+		return 0, false
+	}
+	fn := expr.GetF()
+	if fn == nil || len(fn.Args) != 2 ||
+		(fn.Func.GetObjName() != "cast_assign" && fn.Func.GetObjName() != "cast_ignore") {
+		return 0, false
+	}
+	param := fn.Args[0].GetP()
+	if param == nil || param.Pos < 0 {
+		return 0, false
+	}
+	return int(param.Pos), true
+}
+
 func preparedComparisonTypeIsNumeric(typ types.T) bool {
 	return typ == types.T_bit || (types.Type{Oid: typ}).IsNumeric()
 }
@@ -4192,6 +4208,10 @@ func (rule *preparedRuntimeSpecializationScanRule) ApplyExpr(expr *plan.Expr) (*
 
 func (rule *preparedRuntimeSpecializationScanRule) scanExpr(expr *plan.Expr, root bool) {
 	if expr == nil || rule.needs {
+		return
+	}
+	if _, ok := directIntegerAssignmentParam(expr); ok {
+		rule.needs = true
 		return
 	}
 	if _, ok := rule.seen[expr]; ok {
