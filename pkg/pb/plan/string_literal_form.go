@@ -235,6 +235,15 @@ func RequiresMORPCVersion82DecimalLiteralSemantics(owner any) (bool, error) {
 	return RequiresMORPCVersion84DecimalLiteralSemantics(owner)
 }
 
+// RequiresMORPCVersion86SpatialDistanceSemantics reports whether an owner
+// contains a spatial-distance expression whose meaning or overload contract
+// changed in MORPC v86. Constant folding must retain such an expression until
+// persisted-expression admission has observed this requirement.
+func RequiresMORPCVersion86SpatialDistanceSemantics(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.SpatialDistanceSemantics, err
+}
+
 const (
 	equalFunctionID                  int32 = 0
 	notEqualFunctionID               int32 = 1

@@ -551,6 +551,78 @@ func TestPersistedBinarySliceViewProtocolAdmission(t *testing.T) {
 	require.Equal(t, int64(defines.MORPCVersion86), *regeneratedData.RequiredProtocolVersion)
 }
 
+func TestPersistedSpatialDistanceViewProtocolLifecycle(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	proc := ctx.GetProcess()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	oldReadFloor, hadReadFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor)
+	oldAuthoringFloor, hadAuthoringFloor := rt.GetGlobalVariables(
+		moruntime.PersistedExpressionProtocolAuthoringFloor)
+	t.Cleanup(func() {
+		if hadProtocol {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+		if hadReadFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, oldReadFloor)
+		} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolFloor, current)
+		}
+		if hadAuthoringFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, oldAuthoringFloor)
+		} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, current)
+		}
+	})
+
+	const createSQL = "create view v_spatial_distance as select st_frechetdistance(" +
+		"st_geomfromtext('LINESTRING(0 0, 1 0)', 4326), " +
+		"st_geomfromtext('LINESTRING(0 1, 1 1)', 4326)) as d"
+	build := func() (*Plan, error) {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		root := &rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createSQL, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		return BuildPlan(root, stmt, false)
+	}
+
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion83))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion83))
+	_, err := build()
+	require.ErrorContains(t, err, "protocol version 86")
+
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion86))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion86))
+	created, err := build()
+	require.NoError(t, err)
+	createdView := created.GetDdl().GetCreateView().GetTableDef()
+	var data ViewData
+	require.NoError(t, json.Unmarshal([]byte(createdView.GetViewSql().GetView()), &data))
+	require.NotNil(t, data.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion86), *data.RequiredProtocolVersion)
+
+	// Rebinding a markerless historical definition must rediscover the spatial
+	// requirement from the optimized plan rather than trust a missing marker.
+	var fields map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal([]byte(createdView.GetViewSql().GetView()), &fields))
+	delete(fields, "required_protocol_version")
+	markerless, err := json.Marshal(fields)
+	require.NoError(t, err)
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion83))
+	_, err = RegenerateViewDefinition(ctx, string(markerless))
+	require.ErrorContains(t, err, "protocol version 86")
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion86))
+	regenerated, err := RegenerateViewDefinition(ctx, string(markerless))
+	require.NoError(t, err)
+	var regeneratedData ViewData
+	require.NoError(t, json.Unmarshal(
+		[]byte(regenerated.TableDef.GetViewSql().GetView()), &regeneratedData))
+	require.Equal(t, int64(defines.MORPCVersion86), *regeneratedData.RequiredProtocolVersion)
+}
+
 func TestRegenerateViewDefinitionPersistsExpandedStar(t *testing.T) {
 	for _, rootSQL := range []string{
 		"create view v as select * from nation",
