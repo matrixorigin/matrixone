@@ -172,7 +172,7 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 				// and visible to the remote protocol capability analysis.
 				return expr
 			}
-			requiresDecimalProvenance, err := plan.RequiresMORPCVersion82DecimalLiteralSemantics(exprList)
+			requiresDecimalProvenance, err := plan.RequiresMORPCVersion84DecimalLiteralSemantics(exprList)
 			if err != nil {
 				return expr
 			}
@@ -276,7 +276,7 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	defer free()
 
 	if isVec {
-		requiresDecimalProvenance, err := plan.RequiresMORPCVersion82DecimalLiteralSemantics(fn.Args)
+		requiresDecimalProvenance, err := plan.RequiresMORPCVersion84DecimalLiteralSemantics(fn.Args)
 		if err != nil {
 			return expr
 		}
