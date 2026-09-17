@@ -46,6 +46,11 @@ geodesic_frechet_km
 select st_hausdorffdistance(st_geomfromtext('LINESTRING(0 0,1 0)', 4326), st_geomfromtext('LINESTRING(0 1,1 1)', 4326), 'kilometre') as geodesic_hausdorff_km;
 geodesic_hausdorff_km
 111.1950802335329
+select round(st_distance(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(1 0)', 4326), 'US SURVEY FOOT') * 0.30480060960121924, 6) as us_survey_foot_m, round(st_distance(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(1 0)', 4326), 'Statute mile') * 1609.344, 6) as statute_mile_m, round(st_distance(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(1 0)', 4326), 'fathom') * 1.8288, 6) as fathom_m, round(st_distance(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(1 0)', 4326), 'chain') * 20.1168, 6) as chain_m, round(st_distance(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(1 0)', 4326), 'link') * 0.201168, 6) as link_m, round(st_distance(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(1 0)', 4326), 'MÈTRE'), 6) as accented_metre_m;
+us_survey_foot_m    statute_mile_m    fathom_m    chain_m    link_m    accented_metre_m
+111195.080234       111195.080234     111195.080234    111195.080234    111195.080234    111195.080234
+select st_distance(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(1 0)', 4326), 'km');
+invalid input: unknown length unit "km"
 select st_distance(st_geomfromtext('POINT(181 0)', 4326), st_geomfromtext('POINT(0 0)', 4326));
 invalid input: SRID 4326 longitude 181 is out of range [-180, 180]
 select st_distance(st_geomfromtext('POINT(0 0)', 4326), st_geomfromtext('POINT(0 91)', 4326));
