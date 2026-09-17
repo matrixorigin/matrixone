@@ -134,8 +134,7 @@ func init() {
 	MaxPrepareNumberInOneSession.Store(100000)
 }
 
-// TODO: this variable should be configure by set variable
-const MoDefaultErrorCount = 64
+const MoDefaultErrorCount = process.WarningDiagnosticDefaultRetentionLimit
 
 const (
 	warningCountSystemVariable = "warning_count"
@@ -512,10 +511,19 @@ func (ses *Session) initSystemVariablesFromGlobal(ctx context.Context, sv *Syste
 		return err
 	}
 	sessionVars.Set(transactionIsolationSystemVariable, normalizedTransactionIsolation)
+	maxErrorCount := process.WarningDiagnosticDefaultRetentionLimit
+	if value := sessionVars.Get("max_error_count"); value != nil {
+		if parsed, ok := sessionWarningRetentionLimit(value); ok {
+			maxErrorCount = parsed
+		}
+	}
 
 	ses.mu.Lock()
 	ses.gSysVars = sv
 	ses.sesSysVars = sessionVars
+	if ses.errInfo != nil {
+		ses.errInfo.setMaxCnt(maxErrorCount)
+	}
 	txnHandler := ses.txnHandler
 	ses.mu.Unlock()
 	atomic.StoreInt32(&ses.sqlModeNoAutoValueOnZero, -1)
@@ -1497,13 +1505,187 @@ func parseNoAutoValueOnZero(val interface{}) (bool, bool) {
 }
 
 type errInfo struct {
-	codes         []uint16
-	msgs          []string
-	levels        []string
-	maxCnt        int
-	totalWarnings uint64
-	totalErrors   uint64
-	warningBytes  int
+	codes                  []uint16
+	msgs                   []string
+	levels                 []string
+	maxCnt                 int
+	totalWarnings          uint64
+	totalErrors            uint64
+	warningBytes           int
+	warningChargeBytes     uint64
+	warningBudget          *process.WarningDiagnosticBudget
+	warningRetentionSealed bool
+}
+
+func isRetainedWarningLevel(level string) bool {
+	return !strings.EqualFold(level, "Error")
+}
+
+func (e *errInfo) ensureWarningBudget() *process.WarningDiagnosticBudget {
+	if e == nil {
+		return nil
+	}
+	if e.warningBudget == nil {
+		e.warningBudget = process.NewWarningDiagnosticBudget(process.WarningDiagnosticMaxBytes)
+	}
+	return e.warningBudget
+}
+
+func (e *errInfo) releaseWarningCharge() {
+	if e == nil || e.warningBudget == nil || e.warningChargeBytes == 0 {
+		return
+	}
+	e.warningBudget.Release(e.warningChargeBytes)
+	e.warningChargeBytes = 0
+}
+
+func (e *errInfo) warningChargeAt(index int) uint64 {
+	if e == nil || index < 0 || index >= len(e.msgs) {
+		return 0
+	}
+	level := "Error"
+	if index < len(e.levels) && e.levels[index] != "" {
+		level = e.levels[index]
+	}
+	if !isRetainedWarningLevel(level) {
+		return 0
+	}
+	return process.WarningDiagnosticRecordBytes(e.msgs[index])
+}
+
+func (e *errInfo) setWarningBudget(budget *process.WarningDiagnosticBudget) {
+	if e == nil {
+		return
+	}
+	if budget == nil {
+		budget = process.NewWarningDiagnosticBudget(process.WarningDiagnosticMaxBytes)
+	}
+	if e.warningBudget == budget {
+		return
+	}
+	e.releaseWarningCharge()
+	e.warningBudget = budget
+	e.warningBytes = 0
+	e.warningChargeBytes = 0
+	e.warningRetentionSealed = false
+	if len(e.codes) == 0 {
+		return
+	}
+	oldCodes, oldMessages, oldLevels := e.codes, e.msgs, e.levels
+	e.codes = make([]uint16, 0, len(oldCodes))
+	e.msgs = make([]string, 0, len(oldMessages))
+	e.levels = make([]string, 0, len(oldLevels))
+	for i := range oldCodes {
+		level := "Error"
+		if i < len(oldLevels) && oldLevels[i] != "" {
+			level = oldLevels[i]
+		}
+		message := ""
+		if i < len(oldMessages) {
+			message = oldMessages[i]
+		}
+		if isRetainedWarningLevel(level) {
+			if e.warningRetentionSealed {
+				continue
+			}
+			charge := process.WarningDiagnosticRecordBytes(message)
+			if !budget.Reserve(charge) {
+				e.warningRetentionSealed = true
+				continue
+			}
+			e.warningBytes += len(message)
+			e.warningChargeBytes += charge
+		}
+		e.codes = append(e.codes, oldCodes[i])
+		e.msgs = append(e.msgs, message)
+		e.levels = append(e.levels, level)
+	}
+	clear(oldCodes)
+	clear(oldMessages)
+	clear(oldLevels)
+}
+
+func sessionWarningRetentionLimit(value interface{}) (int, bool) {
+	var limit int64
+	switch v := value.(type) {
+	case int64:
+		limit = v
+	case int:
+		limit = int64(v)
+	case uint64:
+		if v > uint64(^uint16(0)) {
+			return 0, false
+		}
+		limit = int64(v)
+	case uint32:
+		limit = int64(v)
+	case int32:
+		limit = int64(v)
+	default:
+		return 0, false
+	}
+	if limit < 0 || limit > int64(^uint16(0)) {
+		return 0, false
+	}
+	return int(limit), true
+}
+
+func (e *errInfo) setMaxCnt(limit int) {
+	if e == nil {
+		return
+	}
+	if limit < 0 {
+		limit = 0
+	} else if limit > int(^uint16(0)) {
+		limit = int(^uint16(0))
+	}
+	e.maxCnt = limit
+	if len(e.codes) > limit {
+		for i := limit; i < len(e.codes); i++ {
+			if charge := e.warningChargeAt(i); charge != 0 && e.warningBudget != nil {
+				e.warningBudget.Release(charge)
+			}
+		}
+		clear(e.codes[limit:])
+		clear(e.msgs[limit:])
+		clear(e.levels[limit:])
+		e.codes = e.codes[:limit]
+		e.msgs = e.msgs[:limit]
+		e.levels = e.levels[:limit]
+		e.warningBytes = 0
+		e.warningChargeBytes = 0
+		for i, message := range e.msgs {
+			if i < len(e.levels) && !isRetainedWarningLevel(e.levels[i]) {
+				continue
+			}
+			e.warningBytes += len(message)
+			if e.warningBudget != nil {
+				e.warningChargeBytes += process.WarningDiagnosticRecordBytes(message)
+			}
+		}
+	}
+	if limit == 0 {
+		e.releaseWarningCharge()
+		e.codes = nil
+		e.msgs = nil
+		e.levels = nil
+		e.warningBytes = 0
+		e.warningChargeBytes = 0
+		return
+	}
+	// Do not retain a large backing array after a substantial capacity
+	// reduction. Small changes keep the existing storage to avoid churn.
+	if cap(e.codes) > limit*2 || cap(e.msgs) > limit*2 || cap(e.levels) > limit*2 {
+		// Use exact-length allocations: append(nil, ...) may round a one-element
+		// copy up to a larger capacity, defeating the backing-array bound.
+		codes := make([]uint16, len(e.codes))
+		msgs := make([]string, len(e.msgs))
+		levels := make([]string, len(e.levels))
+		copy(codes, e.codes)
+		copy(msgs, e.msgs)
+		copy(levels, e.levels)
+		e.codes, e.msgs, e.levels = codes, msgs, levels
+	}
 }
 
 func (e *errInfo) push(code uint16, msg string) {
@@ -1520,35 +1702,61 @@ func (e *errInfo) pushWithLevel(code uint16, msg, level string) {
 }
 
 func (e *errInfo) pushStored(code uint16, msg, level string) {
-	dropOldest := e.maxCnt > 0 && len(e.codes) >= e.maxCnt
-	droppedWarningBytes := 0
-	if dropOldest && len(e.levels) > 0 && !strings.EqualFold(e.levels[0], "Error") {
-		droppedWarningBytes = len(e.msgs[0])
+	e.pushStoredWithReplacement(code, msg, level, nil)
+}
+
+func (e *errInfo) pushStoredWithReplacement(
+	code uint16,
+	msg string,
+	level string,
+	replacement *uint64,
+) {
+	if e.maxCnt <= 0 || len(e.codes) >= e.maxCnt {
+		return
 	}
 	if !strings.EqualFold(level, "Error") {
-		remaining := process.WarningDiagnosticMaxBytes - (e.warningBytes - droppedWarningBytes)
-		if remaining <= 0 {
+		if e.warningRetentionSealed {
 			return
 		}
-		if remaining > process.WarningDiagnosticMaxMessageBytes {
-			remaining = process.WarningDiagnosticMaxMessageBytes
+		budget := e.ensureWarningBudget()
+		candidateBytes := len(msg)
+		if candidateBytes > process.WarningDiagnosticMaxMessageBytes {
+			candidateBytes = process.WarningDiagnosticMaxMessageBytes
 		}
-		msg = process.BoundWarningMessage(msg, remaining)
-		if dropOldest {
-			e.warningBytes -= droppedWarningBytes
+		available := budget.Limit() - budget.Used()
+		if uint64(candidateBytes)+process.WarningDiagnosticRecordOverhead > available {
+			e.warningRetentionSealed = true
+			return
 		}
-		e.warningBytes += len(msg)
-	} else if dropOldest {
-		e.warningBytes -= droppedWarningBytes
-	}
-	if dropOldest {
-		e.codes = e.codes[1:]
-		e.msgs = e.msgs[1:]
-		e.levels = e.levels[1:]
+		msg = process.BoundWarningMessage(msg, process.WarningDiagnosticMaxMessageBytes)
+		charge := process.WarningDiagnosticRecordBytes(msg)
+		reserved := false
+		if replacement != nil && *replacement != 0 {
+			var consumed bool
+			reserved, consumed = budget.Reconcile(*replacement, charge)
+			if consumed {
+				*replacement = 0
+			}
+		} else {
+			reserved = budget.Reserve(charge)
+		}
+		if !reserved {
+			e.warningRetentionSealed = true
+			return
+		}
+		e.warningChargeBytes += charge
+	} else {
+		// Error responses carry their full text through ERR packets. Keep the
+		// existing SHOW ERRORS payload semantics while sharing the same record
+		// capacity with warnings and notes.
+		msg = strings.Clone(msg)
 	}
 	e.codes = append(e.codes, code)
 	e.msgs = append(e.msgs, msg)
 	e.levels = append(e.levels, level)
+	if !strings.EqualFold(level, "Error") {
+		e.warningBytes += len(msg)
+	}
 }
 
 func (e *errInfo) addWarningCount(delta uint64) {
@@ -1584,13 +1792,114 @@ func (e *errInfo) appendWarningBatch(total uint64, codes []uint16, msgs []string
 	}
 }
 
+func (e *errInfo) appendWarningBatchOwned(
+	total uint64,
+	codes []uint16,
+	msgs []string,
+	source *process.WarningDiagnosticBudget,
+	chargedBytes uint64,
+) bool {
+	if e == nil {
+		return false
+	}
+	e.addWarningCount(total)
+	budget := e.ensureWarningBudget()
+	sameBudget := source != nil && source == budget
+	undercharged := false
+	if sameBudget {
+		accounted := uint64(0)
+		for _, msg := range msgs {
+			if len(msg) > process.WarningDiagnosticMaxMessageBytes {
+				// Production producers pass bounded strings. A malformed
+				// caller falls back to the copying path so the destination
+				// still owns a bounded charge before the source is released.
+				sameBudget = false
+				break
+			}
+			accounted += process.WarningDiagnosticRecordBytes(msg)
+		}
+		if sameBudget && chargedBytes < accounted {
+			// Reconcile the source charge atomically with the first retained
+			// payload so another producer cannot consume the freed capacity.
+			undercharged = true
+			sameBudget = false
+		}
+	}
+	if undercharged {
+		replacement := chargedBytes
+		limit := len(codes)
+		if len(msgs) < limit {
+			limit = len(msgs)
+		}
+		if uint64(limit) > total {
+			limit = int(total)
+		}
+		for i := 0; i < limit; i++ {
+			e.pushStoredWithReplacement(codes[i], msgs[i], "Warning", &replacement)
+		}
+		if replacement != 0 {
+			_, consumed := budget.Reconcile(replacement, 0)
+			if consumed {
+				replacement = 0
+			}
+		}
+		return replacement == 0
+	}
+	if !sameBudget {
+		limit := len(codes)
+		if len(msgs) < limit {
+			limit = len(msgs)
+		}
+		if uint64(limit) > total {
+			limit = int(total)
+		}
+		for i := 0; i < limit; i++ {
+			e.pushStored(codes[i], msgs[i], "Warning")
+		}
+		return false
+	}
+	limit := len(codes)
+	if len(msgs) < limit {
+		limit = len(msgs)
+	}
+	if uint64(limit) > total {
+		limit = int(total)
+	}
+	for i := 0; i < len(msgs); i++ {
+		charge := process.WarningDiagnosticRecordBytes(msgs[i])
+		if i >= limit || e.maxCnt <= 0 || len(e.codes) >= e.maxCnt || e.warningRetentionSealed {
+			source.Release(charge)
+			continue
+		}
+		e.codes = append(e.codes, codes[i])
+		e.msgs = append(e.msgs, msgs[i])
+		e.levels = append(e.levels, "Warning")
+		e.warningBytes += len(msgs[i])
+		e.warningChargeBytes += charge
+	}
+	accounted := uint64(0)
+	for _, message := range msgs {
+		accounted += process.WarningDiagnosticRecordBytes(message)
+	}
+	if chargedBytes > accounted {
+		source.Release(chargedBytes - accounted)
+	}
+	return true
+}
+
 func (e *errInfo) reset() {
+	e.releaseWarningCharge()
+	clear(e.codes)
+	clear(e.msgs)
+	clear(e.levels)
 	e.codes = e.codes[:0]
 	e.msgs = e.msgs[:0]
 	e.levels = e.levels[:0]
 	e.totalWarnings = 0
 	e.totalErrors = 0
 	e.warningBytes = 0
+	e.warningChargeBytes = 0
+	e.warningRetentionSealed = false
 }
 
 func (e *errInfo) snapshot() errInfo {
@@ -1680,8 +1989,6 @@ func NewSession(
 			service:        service,
 		},
 		errInfo: &errInfo{
-			codes:  make([]uint16, 0, MoDefaultErrorCount),
-			msgs:   make([]string, 0, MoDefaultErrorCount),
 			maxCnt: MoDefaultErrorCount,
 		},
 		cache:     &privilegeCache{},
@@ -1933,6 +2240,9 @@ func (ses *Session) Close() {
 	ses.allResultSet = nil
 	ses.tenant = nil
 	ses.priv = nil
+	if ses.errInfo != nil {
+		ses.errInfo.reset()
+	}
 	ses.errInfo = nil
 	ses.cache = nil
 	ses.debugStr = ""
@@ -2339,6 +2649,36 @@ func (ses *Session) resetDiagnostics() {
 	}
 }
 
+// beginWarningDiagnostics fixes the configured session capacity for the next
+// top-level statement and clears the previous statement's retained records.
+// SET max_error_count updates the session variable immediately, but the active
+// diagnostic capacity changes only at this boundary so warnings produced by
+// that SET statement remain observable through the following SHOW command.
+// The returned value is the immutable snapshot to propagate to nested work.
+func (ses *Session) beginWarningDiagnostics() int {
+	limit := process.WarningDiagnosticDefaultRetentionLimit
+	if value, err := ses.GetSessionSysVar("max_error_count"); err == nil {
+		if parsed, ok := sessionWarningRetentionLimit(value); ok {
+			limit = parsed
+		}
+	}
+	budgetLimit := uint64(process.WarningDiagnosticMaxBytes)
+	if ses.proc != nil && ses.proc.Base != nil && ses.proc.Base.Lim.Size > 0 {
+		if statementLimit := uint64(ses.proc.Base.Lim.Size); statementLimit < budgetLimit {
+			budgetLimit = statementLimit
+		}
+	}
+	budget := process.NewWarningDiagnosticBudget(budgetLimit)
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.errInfo != nil {
+		ses.errInfo.reset()
+		ses.errInfo.setMaxCnt(limit)
+		ses.errInfo.setWarningBudget(budget)
+	}
+	return limit
+}
+
 func (ses *Session) appendErrorDiagnostic(code uint16, msg string) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -2386,6 +2726,53 @@ func (ses *Session) AppendWarningBatch(total uint64, codes []uint16, messages []
 	}
 }
 
+func (ses *Session) AppendWarningBatchOwned(
+	total uint64,
+	codes []uint16,
+	messages []string,
+	source *process.WarningDiagnosticBudget,
+	chargedBytes uint64,
+) bool {
+	if ses == nil {
+		return false
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.errInfo == nil {
+		return false
+	}
+	return ses.errInfo.appendWarningBatchOwned(total, codes, messages, source, chargedBytes)
+}
+
+// GetWarningRetentionLimit exposes the session's statement diagnostic
+// capacity through the narrow process warning capability interface.
+func (ses *Session) GetWarningRetentionLimit() int {
+	if ses == nil {
+		return process.WarningDiagnosticDefaultRetentionLimit
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.errInfo == nil {
+		return process.WarningDiagnosticDefaultRetentionLimit
+	}
+	if ses.errInfo.maxCnt < 0 || ses.errInfo.maxCnt > int(^uint16(0)) {
+		return process.WarningDiagnosticDefaultRetentionLimit
+	}
+	return ses.errInfo.maxCnt
+}
+
+func (ses *Session) GetWarningDiagnosticBudget() *process.WarningDiagnosticBudget {
+	if ses == nil {
+		return nil
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.errInfo == nil {
+		return nil
+	}
+	return ses.errInfo.ensureWarningBudget()
+}
+
 func (ses *Session) diagnosticsSnapshot() errInfo {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
@@ -2393,6 +2780,18 @@ func (ses *Session) diagnosticsSnapshot() errInfo {
 		return errInfo{}
 	}
 	return ses.errInfo.snapshot()
+}
+
+func (ses *Session) warningCount() uint16 {
+	if ses == nil {
+		return 0
+	}
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	if ses.errInfo == nil {
+		return 0
+	}
+	return ses.errInfo.warningCount()
 }
 
 func (ses *Session) diagnosticsCounts() (warningCount, errorCount uint64) {
@@ -3392,7 +3791,7 @@ func (ses *Session) SetNewResponse(category int, affectedRows uint64, cmd int, d
 	// If the stmt has next stmt, should add SERVER_MORE_RESULTS_EXISTS to the server status.
 	var resp *Response
 	serverStatus := ses.GetTxnHandler().GetServerStatus()
-	warnings := ses.diagnosticsSnapshot().warningCount()
+	warnings := ses.warningCount()
 	if !isLastStmt {
 		resp = NewResponse(category, affectedRows, 0, warnings,
 			serverStatus|SERVER_MORE_RESULTS_EXISTS, cmd, d)

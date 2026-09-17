@@ -484,6 +484,10 @@ func (ctr *container) newAggregateExecutor(
 	if err != nil {
 		return nil, err
 	}
+	aggexec.ConfigureGroupConcatWarningRetention(
+		exec, process.WarningDiagnosticRetentionLimitForProcess(proc))
+	aggexec.ConfigureGroupConcatWarningBudget(
+		exec, process.WarningDiagnosticBudgetForProcess(proc))
 	aggexec.ConfigureGroupConcatTimeZone(exec, proc.Base.SessionInfo.TimeZone)
 	succeeded := false
 	defer func() {
