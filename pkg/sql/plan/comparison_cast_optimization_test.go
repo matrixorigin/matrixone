@@ -790,7 +790,7 @@ func TestDecimalComparisonKeepsWideZeroSuffixAndCarriesProtocolMarker(t *testing
 				require.NoError(t, err)
 				require.Equal(t, tc.wantFunc, result.GetF() != nil,
 					"wide decimal comparison was folded unexpectedly")
-				requires, err := plan.RequiresMORPCVersion84DecimalLiteralSemantics(result)
+				requires, err := plan.RequiresMORPCVersion85DecimalLiteralSemantics(result)
 				require.NoError(t, err)
 				require.Equal(t, tc.wantMarker, requires)
 			})
@@ -817,10 +817,10 @@ func TestDecimalComparisonPreservesNullableColumnSemantics(t *testing.T) {
 			require.NotNil(t, result.GetF(), "nullable comparison must not fold to a constant")
 			require.False(t, result.Typ.NotNullable,
 				"comparison result must preserve SQL NULL semantics")
-			requires, err := plan.RequiresMORPCVersion84DecimalLiteralSemantics(result)
+			requires, err := plan.RequiresMORPCVersion85DecimalLiteralSemantics(result)
 			require.NoError(t, err)
 			require.True(t, requires,
-				"retained nullable comparison must preserve the v84 fence")
+				"retained nullable comparison must preserve the v85 fence")
 		})
 	}
 }
@@ -881,10 +881,10 @@ func TestDecimalComparisonFencesSmallExplicitCastSourceScaleMismatch(t *testing.
 				require.NoError(t, err)
 				require.NotNil(t, result.GetF(),
 					"source-scale mismatch must retain the executable comparison")
-				requires, err := plan.RequiresMORPCVersion84DecimalLiteralSemantics(result)
+				requires, err := plan.RequiresMORPCVersion85DecimalLiteralSemantics(result)
 				require.NoError(t, err)
 				require.True(t, requires,
-					"source-scale mismatch must carry the v84 persisted-expression fence")
+					"source-scale mismatch must carry the v85 persisted-expression fence")
 			})
 		}
 	}

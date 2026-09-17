@@ -132,6 +132,15 @@ func matchExpr(fn *plan.Function) *plan.Expr {
 	return &plan.Expr{Typ: plan.Type{Id: int32(types.T_float32)}, Expr: &plan.Expr_F{F: fn}}
 }
 
+func TestEqualsFullTextMatchIgnoresBindingProvenance(t *testing.T) {
+	left := matchFn("hello", 0, "title", "body")
+	right := matchFn("hello", 0, "ft.title", "ft.body")
+	right.Args[0].GetLit().DecimalLiteralRequiresV82 = true
+	right.Args[1].GetLit().DecimalLiteralRequiresV82 = true
+
+	require.True(t, (&QueryBuilder{}).equalsFullTextMatchFunc(left, right))
+}
+
 // ftScanNode is a stand-in for the fulltext TVF node: col 1 is the score.
 func ftScanNode(tag int32) *plan.Node {
 	return &plan.Node{
