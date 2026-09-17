@@ -118,12 +118,12 @@ func TestV407UpgradeRefreshesStatistics(t *testing.T) {
 				require.Empty(t, statisticsIndexNames(t, ctx, conn, btreeQuery))
 				showRows, err := conn.QueryContext(ctx, "show index from t where Index_type = 'BTREE'")
 				require.NoError(t, err)
+				defer showRows.Close()
 				var showCount int
 				for showRows.Next() {
 					showCount++
 				}
 				require.NoError(t, showRows.Err())
-				require.NoError(t, showRows.Close())
 				require.Equal(t, 3, showCount, "SHOW INDEX already uses the current runtime definition")
 				specializedQuery := "select index_type from information_schema.statistics where table_schema = '" +
 					dbName + "' and table_name = 't' and index_name = 'vidx'"
