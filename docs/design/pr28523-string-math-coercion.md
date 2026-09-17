@@ -1,14 +1,21 @@
 # PR #28523: String Math Numeric Coercion and Prepared-Parameter Roles
 
 - Status: Draft / awaiting maintainer approval
-- Design revision: 12
+- Design revision: 13
 - Issue: [#28487](https://github.com/matrixorigin/matrixone/issues/28487)
 - Implementation PR: [#28523](https://github.com/matrixorigin/matrixone/pull/28523)
-- Candidate integration base: `6690f1af97977ad5671235e9204296cd2d504ad5`
-  (tree `5784b2173a5574becc206a4ecb323bb755fea823`), fetched from
-  `origin/main` and integrated by a clean rebase. All 24 candidate commits
-  replayed without conflicts. The 29 paths changed by this upstream commit
-  do not overlap the candidate's 24 changed paths.
+- Candidate integration base: `780ef933f2479aa1679faf13d08850ce6c8f7c2f`
+  (tree `2a9c8a48c882411b3b1b44f29f5137378bd88a7c`), confirmed as current
+  `main` and integrated by a clean rebase. All 26 candidate commits replayed
+  without conflicts. Since the prior base `6690f1af`, main adds one commit
+  changing only `pkg/vm/engine/test/change_handle_test.go`; it does not overlap
+  the candidate's 24 changed paths. The post-rebase implementation/test
+  snapshot before this revision-13 documentation update is
+  `7c88f8473f6ff723ef1da2d768932c975cc1b991` (tree
+  `6bcec702c1dcc627395f76f6bc46b5882bdd01e4`).
+- Published PR source head before the local SCA repair:
+  `7535f9f4023cd6c7d4e9485409477beaa4dbf61b` (tree
+  `7b2b0c8236b1e5111b2e970137596a762439dcfd`).
 - Prior published PR source head (before revision 12):
   `d27667a4936e813fb612de6cd245be03a2d6f101`
   (tree `d02aa9a8b2c219b7767b9793c700287ecfc24c0b`). The revision-8
@@ -25,9 +32,10 @@
   `19d0047c71de2088f7383ed1dad6804bf5c01843` (tree
   `9229cf5dd59fb166183528f903b94751583b48a4`) on base `6690f1a`; all focused
   package, race, COM_STMT, and SQL-mode tests were rerun successfully there.
-  This revision records the latest-main integration evidence and the proposed
-  interpretation of Fengtt's compatibility note. A documentation-only
-  approval-record refresh follows this tested snapshot.
+  Revision 12 records the latest-main integration evidence and proposed
+  interpretation of Fengtt's compatibility note. Revision 13 records the
+  subsequent SCA repair and latest-main rebase below; the design decision
+  remains pending maintainer approval.
 - The initial rebase had two shared paths with main since the historical
   base, `pkg/sql/plan/base_binder.go` and `pkg/sql/plan/utils.go`; both applied
   cleanly. The `4c31142` to `a3ede72` delta added 18 paths and the subsequent
@@ -892,18 +900,52 @@ changed-line coverage gate are not claimed. The previous CI run
 `35197284882` is historical evidence on the old published head, not this
 post-rebase candidate.
 
+## Current SCA repair and latest-main verification (revision 13)
+
+CI run `35242989945` on published head `7535f9f4023cd6c7d4e9485409477beaa4dbf61b`
+reported two PR-caused SCA findings: Go 1.26.4 gofmt rejected indentation in
+`pkg/sql/plan/visit_plan_rule_test.go`, while `sqlclosecheck` required the
+`nestedLength` prepared statement in `pkg/tests/issues/issue_27294_test.go` to
+use deferred cleanup. Go 1.26.4 reproduced the formatter-only hunk; formatting
+with that toolchain now reports no diff. The prepared statement's unchanged
+Prepare/query/assert sequence is scoped in an immediately invoked closure with
+deferred Close, so assertion failure also closes it before the subsequent
+`MATRIXONE_NATIVE` mode switch. No SQL, result, or compatibility expectation
+changed.
+
+The candidate was rebased onto current main
+`780ef933f2479aa1679faf13d08850ce6c8f7c2f` (tree
+`2a9c8a48c882411b3b1b44f29f5137378bd88a7c`): 26 commits replayed cleanly.
+The only upstream change since base `6690f1af` is the unrelated test-only
+`pkg/vm/engine/test/change_handle_test.go` edit; it does not overlap the PR's
+24 changed paths. On the exact rebased implementation/test snapshot
+`7c88f8473f6ff723ef1da2d768932c975cc1b991` (tree
+`6bcec702c1dcc627395f76f6bc46b5882bdd01e4`), Go 1.26.4, the repository CGo
+wrapper, incremental configured golangci-lint for the four changed packages
+(`0 issues`), `go vet`, targeted `sqlclosecheck`, gofmt, and diff checks passed. The
+COM_STMT regression passed (test 9.65s; package 11.818s); full
+`pkg/sql/plan`, `pkg/sql/plan/function`, and `pkg/frontend` passed in 6.433s,
+17.040s, and 27.195s respectively.
+
+The same CI run's successful Compose(PROXY) BVT job `105278780404` selected
+`test/distributed/cases/function/func_math_string_numeric.test`. The successful
+Standalone multi-CN job `105278780515` did not show this case in its selection
+log. This is reusable evidence for the unchanged SQL/BVT behavior, not a CI run
+on the new local head; no local BVT or post-fix remote SCA/CI run is claimed.
+Maintainer design approval remains pending.
+
 ## 7. Approval record
 
 ```text
 Design path: docs/design/pr28523-string-math-coercion.md
-Design revision: 12
-Candidate source inputs: published PR head d27667a4936e813fb612de6cd245be03a2d6f101 (tree d02aa9a8b2c219b7767b9793c700287ecfc24c0b); latest main base 6690f1af97977ad5671235e9204296cd2d504ad5 (tree 5784b2173a5574becc206a4ecb323bb755fea823); rebased implementation/test snapshot 19d0047c71de2088f7383ed1dad6804bf5c01843 (tree 9229cf5dd59fb166183528f903b94751583b48a4); revision-12 design record adds a documentation-only commit after this tested snapshot.
-Integration base: 6690f1af97977ad5671235e9204296cd2d504ad5 (tree 5784b2173a5574becc206a4ecb323bb755fea823)
+Design revision: 13
+Candidate source inputs: published PR head before SCA repair 7535f9f4023cd6c7d4e9485409477beaa4dbf61b (tree 7b2b0c8236b1e5111b2e970137596a762439dcfd); latest main base 780ef933f2479aa1679faf13d08850ce6c8f7c2f (tree 2a9c8a48c882411b3b1b44f29f5137378bd88a7c); rebased implementation/test snapshot 7c88f8473f6ff723ef1da2d768932c975cc1b991 (tree 6bcec702c1dcc627395f76f6bc46b5882bdd01e4). This revision-13 approval-record update is documentation-only after that tested snapshot.
+Integration base: 780ef933f2479aa1679faf13d08850ce6c8f7c2f (tree 2a9c8a48c882411b3b1b44f29f5137378bd88a7c)
 Scope/trigger: PR reviews 5199052257, 5214666396 and comment 5687377735; >500 production lines and planner/plan compatibility boundary
 Reviewer identity and role: historical GPT-6 Astra review of d56711fa5b429e5e6e52f64f603d2e853478edca against base 4ff27bb9b35c43c1b0961bb9a01bf8fc0b6a2171; any exact-head review decision is tracked separately from maintainer design approval
 Review timestamp: historical revision-7 review was recorded 2026-09-17; revision-11 Astra Medium follow-up resolved its P3 evidence-label correction; exact revision-12 implementation review is tracked separately from maintainer design approval, which remains pending
 Decision: DRAFT / AWAITING MAINTAINER APPROVAL
-Validation evidence: historical revision-9 CGo, vet, formatting, and benchmark results are recorded above; latest-base revision-12 CGo package tests, focused owner-boundary race tests, COM_STMT/default-warning regression, frontend SQL-mode regression, and clean rebase passed as recorded above. No local distributed BVT, current PR CI, or PR-wide merged changed-line coverage pass is claimed.
+Validation evidence: historical revision-9 CGo, vet, formatting, and benchmark results are recorded above; revision-12 owner-boundary and COM_STMT evidence remains recorded above; revision-13 SCA repair, Go 1.26.4 formatting, incremental four-package SCA/vet/sqlclosecheck, exact COM_STMT test, full plan/function/frontend packages, and clean rebase are recorded immediately above. The prior-head Compose(PROXY) run selected the numeric-string BVT case, but no post-fix current-head CI or PR-wide merged changed-line coverage pass is claimed.
 Decisions proposed for maintainer acceptance: retain strict INT64 precision controls (no general integer-prefix widening); prefer correctness over function-wide zonemap pruning; retain the bounded per-parameter source scan with its measured owner-boundary traversal cost; approve the revision-9 argument-owner boundaries and no-inherited-role fast path; confirm or revise the revision-11 proposal to map MySQL-compatible permissive conversion to absence of MATRIXONE_NATIVE and to retain permissive behavior in the default session
 Evidence links: [PR #28523](https://github.com/matrixorigin/matrixone/pull/28523); [historical-head CI run 35197284882](https://github.com/matrixorigin/matrixone/actions/runs/35197284882); the PR/evidence ledger is the record for commit replay, review, CI, and BVT; current local post-rebase evidence is recorded above
 Implementation deviations requiring follow-up: MOD native arithmetic widening regression fixed in 8fc4d5250; strict INT64 precision acceptance, zonemap-pruning decision, and scan-cost acceptance remain pending
