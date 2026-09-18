@@ -35,10 +35,11 @@ x-python-udf-worker: &python-udf-worker
       - launch
       - launch-multi-cn
     healthcheck:
-      test: ["CMD", "python", "-c", "import socket; s=socket.create_connection(('127.0.0.1', 50051), 1); s.close()"]
-      interval: 1s
-      timeout: 2s
+      test: ["CMD", "python", "healthcheck.py"]
+      interval: 2s
+      timeout: 3s
       retries: 30
+      start_period: 1s
 
 
 services:
