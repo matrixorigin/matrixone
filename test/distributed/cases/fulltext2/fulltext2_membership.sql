@@ -113,5 +113,16 @@ set fulltext_bloom_filter_pushdown = 1;
 select id, category from ft_uuid where match(body) against('learning') and category = 'tech' order by id;
 select count(*) from ft_uuid where match(body) against('learning') and category = 'tech';
 
+-- UUID mixed membership, an exact top-k page, a no-LIMIT stream, and an empty
+-- category all keep the same result set when the loaded UUID probe is enabled.
+set fulltext_bloom_filter_pushdown = 0;
+select id, category from ft_uuid where match(body) against('learning') and category in ('tech', 'food') order by id;
+select id, category from ft_uuid where match(body) against('learning') and category = 'tech' order by id limit 1;
+select id, category from ft_uuid where match(body) against('learning') and category = 'nope' order by id;
+set fulltext_bloom_filter_pushdown = 1;
+select id, category from ft_uuid where match(body) against('learning') and category in ('tech', 'food') order by id;
+select id, category from ft_uuid where match(body) against('learning') and category = 'tech' order by id limit 1;
+select id, category from ft_uuid where match(body) against('learning') and category = 'nope' order by id;
+
 set fulltext_bloom_filter_pushdown = 0;
 drop database fulltext2_pushdown;
