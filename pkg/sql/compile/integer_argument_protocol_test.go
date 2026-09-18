@@ -110,6 +110,20 @@ func TestIntegerArgumentReceiverRejectsInvalidSignatures(t *testing.T) {
 			want: "source type",
 		},
 		{
+			name: "int128 source",
+			mutate: func(expr *planpb.Expr) {
+				expr.GetF().Args[0].Typ.Id = int32(types.T_int128)
+			},
+			want: "source type",
+		},
+		{
+			name: "uint128 source",
+			mutate: func(expr *planpb.Expr) {
+				expr.GetF().Args[0].Typ.Id = int32(types.T_uint128)
+			},
+			want: "source type",
+		},
+		{
 			name: "target marker",
 			mutate: func(expr *planpb.Expr) {
 				expr.GetF().Args[1].Expr = &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}
@@ -152,6 +166,37 @@ func TestIntegerArgumentReceiverRejectsInvalidSignatures(t *testing.T) {
 	require.NoError(t, err)
 	_, err = decodeScope(data, c.proc, true, nil)
 	require.NoError(t, err)
+}
+
+func TestIntegerArgumentAdmissionSourceAllowlistMatchesRegistry(t *testing.T) {
+	registrySupports := func(overload int32, source types.T) bool {
+		standard := source == types.T_any || source.IsInteger() || source.IsFloat() || source.IsDecimal() ||
+			source == types.T_bool || source == types.T_bit || source == types.T_year ||
+			source == types.T_enum || source.IsMySQLString()
+		switch overload {
+		case function.TextIntegerBitsCastOverload:
+			return source == types.T_any || source.IsMySQLString()
+		case function.TemporalIntegerArgumentCastOverload:
+			return standard || source == types.T_date || source == types.T_time ||
+				source == types.T_datetime || source == types.T_timestamp || source == types.T_uuid
+		default:
+			return standard
+		}
+	}
+
+	for overload := function.IntegerArgumentCastOverload; overload <= function.TemporalIntegerArgumentCastOverload; overload++ {
+		for sourceID := int32(0); sourceID <= 255; sourceID++ {
+			expr := integerProtocolExpr(overload)
+			expr.GetF().Args[0].Typ.Id = sourceID
+			p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
+			_, err := planpb.RequiredRemoteExpressionFeatures(p)
+			if registrySupports(overload, types.T(sourceID)) {
+				require.NoErrorf(t, err, "overload=%d source=%d", overload, sourceID)
+			} else {
+				require.Errorf(t, err, "overload=%d source=%d", overload, sourceID)
+			}
+		}
+	}
 }
 
 func TestIntegerArgumentProtocolPlacementAndSend(t *testing.T) {

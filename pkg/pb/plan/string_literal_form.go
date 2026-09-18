@@ -299,9 +299,8 @@ const (
 )
 
 func isValidIntegerArgumentSource(id, source int32) bool {
-	standard := source == 0 || source == 10 || source == 11 ||
-		(source >= 20 && source <= 34) || source == 55 || source == 66 ||
-		isPlanMySQLStringType(source)
+	standard := source == 0 || source == 10 || isPlanNumericType(source) ||
+		source == 55 || source == 66 || isPlanMySQLStringType(source)
 	if id == 7 {
 		return source == 0 || isPlanMySQLStringType(source)
 	}
