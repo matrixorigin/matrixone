@@ -4961,6 +4961,12 @@ func (b *baseBinder) annotateStringDomainSource(expr *Expr, visited map[[2]int32
 			return
 		}
 		visited[key] = struct{}{}
+		// This map is a recursion stack, not a global cache. The same derived
+		// column may occur in multiple independent branches (for example, once
+		// in an IF condition and again in a selected value). Keeping the key
+		// after this source is resolved would silently skip provenance for the
+		// later occurrence.
+		defer delete(visited, key)
 		source := node.ProjectList[col.ColPos]
 		if source == nil || source == expr {
 			return

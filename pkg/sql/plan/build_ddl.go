@@ -234,6 +234,10 @@ func genViewTableDef(
 	var tableDef plan.TableDef
 	dependencyCapture := newViewDependencyCaptureContext(ctx)
 	ctx = dependencyCapture
+	// The optimizer may constant-fold a protocol-sensitive function out of a
+	// persisted view. Keep the requirement observed on the bound plan so the
+	// catalog marker cannot depend on whether that fold happened to run.
+	var preOptimizeViewRequiredProtocol int64
 	validate := func(query *Query) error {
 		for _, node := range query.Nodes {
 			if node == nil || node.NodeType != plan.Node_TABLE_SCAN || node.TableDef == nil {
@@ -248,6 +252,13 @@ func genViewTableDef(
 				tableName = node.TableDef.Name
 			}
 			return moerr.NewViewSelectTmpTable(ctx.GetContext(), tableName)
+		}
+		requiredProtocol, err := RequiredPersistedExpressionProtocolVersion(query)
+		if err != nil {
+			return err
+		}
+		if requiredProtocol > preOptimizeViewRequiredProtocol {
+			preOptimizeViewRequiredProtocol = requiredProtocol
 		}
 		return nil
 	}
@@ -294,6 +305,9 @@ func genViewTableDef(
 	viewRequiredProtocol, err := RequiredPersistedIPFunctionProtocolVersion(query)
 	if err != nil {
 		return nil, err
+	}
+	if preOptimizeViewRequiredProtocol > viewRequiredProtocol {
+		viewRequiredProtocol = preOptimizeViewRequiredProtocol
 	}
 	if viewRequiredProtocol > 0 {
 		if forAuthoring {

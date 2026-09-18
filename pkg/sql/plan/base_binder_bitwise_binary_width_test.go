@@ -21,6 +21,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/stretchr/testify/require"
 )
 
@@ -346,6 +348,33 @@ func TestRefineStringSliceRequiresBinaryRuntimeDomain(t *testing.T) {
 		expr := bind(t, "left", derived)
 		require.Equal(t, int32(512), expr.Typ.Width)
 	})
+}
+
+func TestCTASRepeatedDerivedStringDomainReferenceStaysConservative(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, `
+		create table repeated_derived_string_domain as
+		select left(if(d.value is not null, d.value, _binary 'x'), 1) as sliced
+		from (
+			select if(n_nationkey > 0, X'ff', n_name) as value
+			from nation
+		) d`, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	plan, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+	require.NoError(t, err)
+	var visible []*planpb.ColDef
+	for _, col := range plan.GetDdl().GetCreateTable().GetTableDef().GetCols() {
+		if !col.Hidden {
+			visible = append(visible, col)
+		}
+	}
+	require.Len(t, visible, 1)
+	require.Equal(t, int32(types.T_varbinary), visible[0].Typ.Id)
+	// The derived value is binary-shaped but can produce text at runtime. The
+	// repeated reference in IF's condition and value branch must retain that
+	// lineage; narrowing it to VARBINARY(1) would truncate a multibyte text row.
+	require.Greater(t, visible[0].Typ.Width, int32(1))
 }
 
 func TestRefineCharacterStringReturnTypesUseFormattedNumericBounds(t *testing.T) {
