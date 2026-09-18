@@ -2,8 +2,8 @@ drop database if exists udf_python_arrow_compute_strings_bvt;
 create database udf_python_arrow_compute_strings_bvt;
 use udf_python_arrow_compute_strings_bvt;
 create function python_bvt_pc_upper (x varchar(64)) returns varchar(64) language python as 'python_bvt_pc_upper = lambda ctx, values: __import__("pyarrow.compute", fromlist=["utf8_upper"]).utf8_upper(values)' handler 'python_bvt_pc_upper' mode vector;
-create function python_bvt_pc_contains (x varchar(64)) returns bool language python as 'python_bvt_pc_contains = lambda ctx, values: __import__("pyarrow.compute", fromlist=["match_substring"]).match_substring(values, "a")' handler 'python_bvt_pc_contains' mode vector;
-create function python_bvt_pc_replace (x varchar(64)) returns varchar(64) language python as 'python_bvt_pc_replace = lambda ctx, values: __import__("pyarrow.compute", fromlist=["replace_substring"]).replace_substring(values, "a", "X")' handler 'python_bvt_pc_replace' mode vector;
+create function python_bvt_pc_contains (x varchar(64)) returns bool language python as 'python_bvt_pc_contains = lambda ctx, values: __import__("pyarrow.compute", fromlist=["match_substring"]).match_substring(values, "a", ignore_case=False)' handler 'python_bvt_pc_contains' mode vector;
+create function python_bvt_pc_replace (x varchar(64)) returns varchar(64) language python as 'python_bvt_pc_replace = lambda ctx, values: __import__("pyarrow.compute", fromlist=["replace_substring"]).replace_substring(values, "a", "X", max_replacements=-1)' handler 'python_bvt_pc_replace' mode vector;
 create function python_bvt_pc_length (x varchar(64)) returns int language python as 'python_bvt_pc_length = lambda ctx, values: __import__("pyarrow.compute", fromlist=["utf8_length"]).utf8_length(values)' handler 'python_bvt_pc_length' mode vector;
 create table string_values (id int, value varchar(64));
 insert into string_values values
