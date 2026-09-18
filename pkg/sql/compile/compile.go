@@ -1433,6 +1433,9 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	if err = c.constrainConvBasesWorkers(qry); err != nil {
 		return nil, err
 	}
+	if err = c.constrainIntegerArgumentWorkers(qry); err != nil {
+		return nil, err
+	}
 	if err = c.constrainIPFunctionWorkers(qry); err != nil {
 		return nil, err
 	}

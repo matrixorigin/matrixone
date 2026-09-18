@@ -122,6 +122,20 @@ func (r *ConstantFold) Apply(node *plan.Node, _ *plan.Query, proc *process.Proce
 	}
 }
 
+// IsNullIntegerArgumentCast protects the source domain until EXECUTE.
+// Folding this to an INT64 NULL would make a selecting expression choose a
+// signed domain even when its actual non-NULL source is UINT64.
+func IsNullIntegerArgumentCast(expr *plan.Expr) bool {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) != 2 {
+		return false
+	}
+	id, overload := function.DecodeOverloadID(fn.Func.Obj)
+	return id == function.CAST &&
+		function.IsIntegerArgumentCastOverload(overload) &&
+		fn.Args[0].GetLit().GetIsnull()
+}
+
 func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *plan.Expr {
 	if expr == nil {
 		return expr
@@ -197,6 +211,9 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 		return expr
 	}
 	overloadID := fn.Func.GetObj()
+	if r.isPrepared && IsNullIntegerArgumentCast(expr) {
+		return expr
+	}
 	f, exists := function.GetFunctionByIdWithoutError(overloadID)
 
 	if !exists {

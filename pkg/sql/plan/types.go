@@ -1097,11 +1097,14 @@ type Binder interface {
 }
 
 type baseBinder struct {
-	sysCtx                           context.Context
-	builder                          *QueryBuilder
-	ctx                              *BindContext
-	impl                             Binder
-	boundCols                        []boundColumn
+	sysCtx    context.Context
+	builder   *QueryBuilder
+	ctx       *BindContext
+	impl      Binder
+	boundCols []boundColumn
+	// Integer consumers own the source domain of their operands. An enclosing
+	// default/assignment target must not pre-convert their numeric literals.
+	integerArgumentSourceContext     bool
 	numericParamType                 *Type
 	numericSubqueryTarget            *Type
 	numericFunctionTarget            bool
