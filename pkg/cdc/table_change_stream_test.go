@@ -2723,7 +2723,6 @@ func TestTableChangeStreamNoFullAdmissionBoundaryLifecycle(t *testing.T) {
 		withHarnessFrequency(time.Millisecond),
 		withHarnessWatermarkUpdater(updater, nil),
 	)
-	h.Stream().start.Done()
 	// The harness seeds a zero watermark for custom updaters. Replace it with
 	// the durable CREATE boundary before starting the executor.
 	require.NoError(t, updater.RemoveCachedWM(h.Context(), h.Stream().watermarkKey, WatermarkCleanupAll))
