@@ -4,18 +4,32 @@ set -euo pipefail
 
 SECONDS=0
 
-# mv log to mount path
+# Move logs to the mounted path without masking the original CI failure when
+# preparation or compilation stops before one of the normal artifacts exists.
 function packLog() {
-    mv /matrixone-test/mo-service.log /matrixone-test/tester-log
-    mv /matrixone-test/mo-tester/report /matrixone-test/tester-log
-    mv /root/scratch /matrixone-test/tester-log
+    local log_dir=/matrixone-test/tester-log
+    if ! mkdir -p "$log_dir"; then
+        echo "failed to create $log_dir; preserving the original CI failure" >&2
+        return 0
+    fi
+    for artifact in \
+        /matrixone-test/mo-service.log \
+        /matrixone-test/mo-tester/report \
+        /root/scratch; do
+        if [[ ! -e "$artifact" ]]; then
+            continue
+        fi
+        if ! mv "$artifact" "$log_dir"; then
+            echo "failed to archive $artifact" >&2
+        fi
+    done
 
     duration=$SECONDS
     echo "$(($duration / 60)) minutes and $(($duration % 60)) seconds elapsed."
 }
 
 function prepare() {
-  mkdir /root/scratch
+  mkdir -p /root/scratch
   echo ">>>>>>>>>>>>>>>>>>>>>>>> show locale"
   echo `locale`
 
