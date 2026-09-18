@@ -40,7 +40,11 @@ function run_bvt() {
   make build
 
   echo ">>>>>>>>>>>>>>>>>>>>>>>> start mo service"
-   ./optools/run_bvt.sh ./ "${LAUNCH}"
+   # Source the launcher so this entrypoint owns the service children until
+   # mo-tester finishes. A standalone run_bvt.sh invocation still returns
+   # with services alive for callers that launch the tester separately.
+   source ./optools/run_bvt.sh ./ "${LAUNCH}"
+   trap 'cleanup_all; packLog' EXIT
 
   echo ">>>>>>>>>>>>>>>>>>>>>>>> start bvt"
    # use test/distributed/cases as default test cases
