@@ -58,6 +58,96 @@ type closeTrackingFileService struct {
 	closeCount atomic.Int32
 }
 
+// A diagnostic error does not imply that the owner still uses dependencies.
+type completedCloseService struct {
+	closeTrackingService
+	complete bool
+}
+
+func (s *completedCloseService) CloseComplete() bool { return s.complete }
+
+func TestClusterCloseCompletedErrorReleasesOwnership(t *testing.T) {
+	failure := errors.New("final metadata withdrawal failed")
+	cn := &completedCloseService{closeTrackingService: closeTrackingService{closeErr: failure}, complete: true}
+	dependency := &closeTrackingService{}
+	fs := &closeTrackingFileService{}
+	op := &operator{state: started}
+	op.reset.svc, op.reset.fs = cn, fs
+	dep := &operator{state: started}
+	dep.reset.svc = dependency
+	c := &cluster{state: started, services: []*operator{dep, op}}
+	ports, err := acquireClusterPortLease()
+	require.NoError(t, err)
+	c.portLease = ports
+	t.Cleanup(func() { require.NoError(t, ports.lock.Close()) })
+	lease, err := clusteradmission.Acquire(t.Context(), clusteradmission.Exclusive)
+	require.NoError(t, err)
+	c.testAdmission = lease
+	t.Cleanup(func() { require.NoError(t, lease.Release()) })
+	err = c.Close()
+	require.ErrorIs(t, err, failure)
+	require.False(t, op.needsCleanup())
+	require.Equal(t, int32(1), fs.closeCount.Load())
+	require.Equal(t, int32(1), dependency.closeCount.Load())
+	require.Nil(t, c.testAdmission)
+	require.Nil(t, c.portLease)
+	require.True(t, c.CloseComplete())
+	next, err := clusteradmission.Acquire(t.Context(), clusteradmission.Exclusive)
+	require.NoError(t, err, "completed close must not poison the next cluster")
+	t.Cleanup(func() { require.NoError(t, next.Release()) })
+	require.NoError(t, c.Close())
+	require.Equal(t, int32(1), cn.closeCount.Load())
+	require.Equal(t, int32(1), fs.closeCount.Load())
+}
+
+func TestClusterClosePendingOwnerPrecedesDependencies(t *testing.T) {
+	failure := errors.New("pending CN drain")
+	pending := &completedCloseService{closeTrackingService: closeTrackingService{closeErr: failure}}
+	op := &operator{}
+	op.reset.svc = pending
+	depService := &closeTrackingService{}
+	dep := &operator{state: started}
+	dep.reset.svc = depService
+	c := &cluster{state: started, services: []*operator{dep}, pendingCleanup: []*operator{op}}
+	require.ErrorIs(t, c.Close(), failure)
+	require.Zero(t, depService.closeCount.Load())
+	require.False(t, c.CloseComplete())
+	require.ErrorContains(t, c.Start(), "cleanup is incomplete")
+	require.Nil(t, c.portLease, "rejected Start must not allocate a lease")
+	pending.complete = true
+	require.ErrorIs(t, c.Close(), failure)
+	require.Equal(t, int32(1), depService.closeCount.Load())
+	require.Empty(t, c.pendingCleanup)
+	require.True(t, c.CloseComplete())
+}
+
+func TestOperatorStartPreservesIncompleteOwnership(t *testing.T) {
+	svc := &completedCloseService{}
+	op := &operator{}
+	op.reset.svc = svc // partial startup did not reach state=started
+	require.ErrorContains(t, op.Start(), "cleanup is incomplete")
+	require.Same(t, svc, op.reset.svc)
+	require.ErrorContains(t, op.Close(), "cleanup is incomplete", "nil error is not a completion certificate")
+	require.True(t, op.needsCleanup())
+	svc.complete = true
+	require.NoError(t, op.Close())
+	require.False(t, op.needsCleanup())
+}
+
+func TestClusterStartRollbackCompletedErrorReleasesAdmission(t *testing.T) {
+	failure := errors.New("startup and withdrawal failed")
+	svc := &completedCloseService{closeTrackingService: closeTrackingService{closeErr: failure}, complete: true}
+	op := &operator{serviceType: metadata.ServiceType_CN}
+	c := &cluster{services: []*operator{op}}
+	c.options.testing = true
+	c.startFn = func(op *operator) error { op.reset.svc = svc; return failure }
+	t.Cleanup(func() { require.NoError(t, c.Close()) })
+	require.ErrorIs(t, c.Start(), failure)
+	require.Nil(t, c.testAdmission)
+	require.False(t, op.needsCleanup())
+	require.Equal(t, int32(1), svc.closeCount.Load())
+}
+
 func (s *closeTrackingFileService) Close(context.Context) {
 	s.closeCount.Add(1)
 }
@@ -170,6 +260,7 @@ func TestClusterLifecycleAndCNExpansion(t *testing.T) {
 	cn, err = c.GetCNService(3)
 	require.NoError(t, err)
 	require.False(t, cn.GetServiceConfig().CN.AutomaticUpgrade)
+	require.Equal(t, 1024, cn.GetServiceConfig().CN.Txn.Trace.BufferSize)
 }
 
 func TestSharedBaseClusterCanWorkWithConcurrentCluster(t *testing.T) {
@@ -535,6 +626,7 @@ func TestWithTestingBoundsHeartbeatRecoveryInsideStoreLiveness(t *testing.T) {
 			cfg.HAKeeperClient.BackendReadTimeout.Duration)
 		switch svc.ServiceType() {
 		case metadata.ServiceType_CN:
+			require.Equal(t, 1024, cfg.CN.Txn.Trace.BufferSize)
 			require.Equal(t, testHAKeeperHeartbeatTimeout,
 				cfg.CN.HAKeeper.HeatbeatTimeout.Duration)
 			require.Less(t, cfg.CN.HAKeeper.HeatbeatTimeout.Duration,
@@ -552,6 +644,42 @@ func TestWithTestingBoundsHeartbeatRecoveryInsideStoreLiveness(t *testing.T) {
 			require.Less(t, cfg.HAKeeperClient.BackendReadTimeout.Duration,
 				cfg.LogService.HAKeeperConfig.TNStoreTimeout.Duration)
 		}
+	}
+}
+
+func TestTestingTxnTraceBufferPreservesOverrides(t *testing.T) {
+	cfg := newServiceConfig()
+	cfg.CN.Txn.Trace.BufferSize = 4096
+	applyTestingTxnTraceBuffer(&cfg)
+	require.Equal(t, 4096, cfg.CN.Txn.Trace.BufferSize)
+	for _, testingMode := range []bool{false, true} {
+		t.Run(fmt.Sprintf("testing=%t", testingMode), func(t *testing.T) {
+			opts := []Option{WithCNCount(2)}
+			if testingMode {
+				opts = append(opts, WithTesting())
+			}
+			opts = append(opts, WithPreStart(func(svc ServiceOperator) {
+				if svc.ServiceType() != metadata.ServiceType_CN {
+					return
+				}
+				want := 0
+				if testingMode {
+					want = 1024
+				}
+				require.Equal(t, want, svc.GetServiceConfig().CN.Txn.Trace.BufferSize)
+				svc.Adjust(func(cfg *ServiceConfig) { cfg.CN.Txn.Trace.BufferSize = 8192 })
+			}))
+			c, err := NewCluster(opts...)
+			if c != nil {
+				t.Cleanup(func() { require.NoError(t, c.Close()) })
+			}
+			require.NoError(t, err)
+			for i := range 2 {
+				cn, err := c.GetCNService(i)
+				require.NoError(t, err)
+				require.Equal(t, 8192, cn.GetServiceConfig().CN.Txn.Trace.BufferSize)
+			}
+		})
 	}
 }
 
