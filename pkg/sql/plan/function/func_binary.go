@@ -1165,8 +1165,14 @@ func concatWsCheck(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) > 1 {
 		ret := make([]types.Type, len(inputs))
 		shouldConvert := false
+		hasJSON := false
 
 		for i, t := range inputs {
+			if t.Oid == types.T_json {
+				hasJSON = true
+				ret[i] = t
+				continue
+			}
 			if t.Oid.IsMySQLString() {
 				ret[i] = t
 				continue
@@ -1177,6 +1183,16 @@ func concatWsCheck(overloads []overload, inputs []types.Type) checkResult {
 			} else {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
 			}
+		}
+		if hasJSON {
+			idx := jsonStringConsumerOverloadIndex(overloads)
+			if idx < 0 {
+				return newCheckResultWithFailure(failedFunctionParametersWrong)
+			}
+			if shouldConvert {
+				return newCheckResultWithCast(idx, ret)
+			}
+			return newCheckResultWithSuccess(idx)
 		}
 		if shouldConvert {
 			return newCheckResultWithCast(0, ret)
@@ -1199,7 +1215,10 @@ func ConcatWs(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 			}
 			continue
 		}
-		sp, null := vecs[0].GetStrValue(i)
+		sp, null, err := getJSONStringConsumerValue(vecs[0], i)
+		if err != nil {
+			return err
+		}
 		if null {
 			if err = rs.AppendBytes(nil, true); err != nil {
 				return err
@@ -1210,7 +1229,10 @@ func ConcatWs(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 		canSp := false
 		var str string
 		for j := 1; j < len(vecs); j++ {
-			v, null := vecs[j].GetStrValue(i)
+			v, null, err := getJSONStringConsumerValue(vecs[j], i)
+			if err != nil {
+				return err
+			}
 			if null {
 				continue
 			}
@@ -6025,6 +6047,7 @@ func eltCheck(overloads []overload, inputs []types.Type) checkResult {
 	}
 
 	shouldCast := false
+	hasJSON := false
 	castTypes := make([]types.Type, len(inputs))
 
 	// ELT accepts numeric and string-convertible indexes.
@@ -6046,7 +6069,10 @@ func eltCheck(overloads []overload, inputs []types.Type) checkResult {
 
 	// Rest arguments must be strings
 	for i := 1; i < len(inputs); i++ {
-		if !inputs[i].Oid.IsMySQLString() && inputs[i].Oid != types.T_any {
+		if inputs[i].Oid == types.T_json {
+			hasJSON = true
+			castTypes[i] = inputs[i]
+		} else if !inputs[i].Oid.IsMySQLString() && inputs[i].Oid != types.T_any {
 			c, _ := tryToMatch([]types.Type{inputs[i]}, []types.T{types.T_varchar})
 			if c == matchFailed {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
@@ -6062,6 +6088,16 @@ func eltCheck(overloads []overload, inputs []types.Type) checkResult {
 		}
 	}
 
+	if hasJSON {
+		idx := jsonStringConsumerOverloadIndex(overloads)
+		if idx < 0 {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+		if shouldCast {
+			return newCheckResultWithCast(idx, castTypes)
+		}
+		return newCheckResultWithSuccess(idx)
+	}
 	if shouldCast {
 		return newCheckResultWithCast(0, castTypes)
 	}
@@ -6083,7 +6119,10 @@ func Elt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process
 		return rs.AppendBytes(nil, true)
 	}
 	appendValue := func(row uint64, idx uint64) error {
-		str, null := strParams[idx].GetStrValue(row)
+		str, null, err := getJSONStringConsumerValue(strParams[idx], row)
+		if err != nil {
+			return err
+		}
 		if null {
 			return appendNull()
 		}

@@ -1,0 +1,57 @@
+drop database if exists issue28905_json_string_consumers;
+create database issue28905_json_string_consumers;
+use issue28905_json_string_consumers;
+create table src (id int primary key, js json, v varchar(20));
+insert into src values
+(1, '{"b":2,"a":1}', 'A'),
+(2, '1', ''),
+(3, 'null', null),
+(4, null, null);
+select id, concat('', js) as concat_left, concat(js, '') as concat_right, concat('', js) is null as concat_left_is_null, concat(js, '') is null as concat_right_is_null, concat_ws('|', 'x', js, 'y') as concat_ws_middle, concat_ws('|', js, v) as concat_ws_column, concat_ws('|', js, v) = '' as concat_ws_empty from src order by id;
+id    concat_left    concat_right    concat_left_is_null    concat_right_is_null    concat_ws_middle    concat_ws_column    concat_ws_empty
+1    {"a": 1, "b": 2}    {"a": 1, "b": 2}    0    0    x|{"a": 1, "b": 2}|y    {"a": 1, "b": 2}|A    0
+2    1    1    0    0    x|1|y    1|    0
+3    null    null    0    0    x|null|y    null    0
+4    null    null    1    1    x|y        1
+select id, elt(2, 'fallback', js, 'other') as elt_selected from src order by id;
+id    elt_selected
+1    {"a": 1, "b": 2}
+2    1
+3    null
+4    null
+select concat(cast('{"k":1}' as json), '!') as constant_concat, concat_ws('|', cast('[1,2]' as json), 'x') as constant_concat_ws, elt(1, cast('{"k":1}' as json), 'fallback') as constant_elt;
+constant_concat    constant_concat_ws    constant_elt
+{"k": 1}!    [1, 2]|x    {"k": 1}
+create view json_string_view as select id, concat_ws('|', 'x', js, 'y') as c from src;
+select id, c from json_string_view order by id;
+id    c
+1    x|{"a": 1, "b": 2}|y
+2    x|1|y
+3    x|null|y
+4    x|y
+create table json_string_ctas as select id, concat('', js) as c from src;
+select id, c from json_string_ctas order by id;
+id    c
+1    {"a": 1, "b": 2}
+2    1
+3    null
+4    null
+set @json_string_param = binary '{"p":1}';
+prepare json_string_stmt from 'select id, concat(cast(? as json), js) as c from src order by id';
+execute json_string_stmt using @json_string_param;
+➤ id[4,32,0]  ¦  c[12,65535,0]  𝄀
+id    c
+1    {"p": 1}{"a": 1, "b": 2}
+2    {"p": 1}1
+3    {"p": 1}null
+4    null
+set @json_string_param = '[2]';
+execute json_string_stmt using @json_string_param;
+➤ id[4,32,0]  ¦  c[12,65535,0]  𝄀
+id    c
+1    [2]{"a": 1, "b": 2}
+2    [2]1
+3    [2]null
+4    null
+deallocate prepare json_string_stmt;
+drop database issue28905_json_string_consumers;

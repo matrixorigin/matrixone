@@ -96,6 +96,9 @@ func encodeScope(s *Scope) ([]byte, error) {
 	if err = validateRemotePadSpacePipelineProtocol(s.Proc, p); err != nil {
 		return nil, err
 	}
+	if err = validateJSONStringConsumerProtocol(s.Proc, p); err != nil {
+		return nil, err
+	}
 	if err = validateRemoteBinaryStringPipelineProtocol(s.Proc, p); err != nil {
 		return nil, err
 	}
@@ -119,6 +122,9 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
+	if err = validateJSONStringConsumerProtocol(proc, p); err != nil {
+		return nil, err
+	}
 	if err = validateRemoteExpressionPipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
@@ -138,6 +144,11 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	}
 	if features.IPFunctionSemantics {
 		if err = validateIPFunctionDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
+	if features.JSONStringConsumerOverload {
+		if err = validateJSONStringConsumerDestination(proc, p); err != nil {
 			return nil, err
 		}
 	}
@@ -261,6 +272,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 	}
 	if isRemote {
 		if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
+		if err = validateJSONStringConsumerProtocol(proc, p); err != nil {
 			return nil, err
 		}
 		if err = validateRemoteExpressionPipelineProtocol(proc, p); err != nil {
