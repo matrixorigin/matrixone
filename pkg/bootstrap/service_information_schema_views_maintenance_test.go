@@ -236,25 +236,51 @@ func TestMaintainInformationSchemaViewsSerializesConcurrentCallAndRetries(t *tes
 	installTransactionalInformationSchemaViewsCheck(t, state, accountID)
 	service := newTransactionalInformationSchemaViewsMaintenanceTestService(t, state)
 
-	firstDone := make(chan error, 1)
-	go func() { firstDone <- service.maintainInformationSchemaViews(t.Context()) }()
+	firstDone := make(chan struct{})
+	var firstErr error
+	secondDone := make(chan struct{})
+	var secondErr error
+	var releaseOnce sync.Once
+	release := func() {
+		releaseOnce.Do(func() { close(state.protocolRelease) })
+	}
+	t.Cleanup(func() {
+		release()
+		select {
+		case <-firstDone:
+		case <-time.After(time.Second):
+			t.Errorf("first maintenance call did not exit during cleanup")
+		}
+		select {
+		case <-secondDone:
+		case <-time.After(time.Second):
+			t.Errorf("concurrent maintenance call did not exit during cleanup")
+		}
+	})
+	go func() {
+		firstErr = service.maintainInformationSchemaViews(t.Context())
+		close(firstDone)
+	}()
 	select {
 	case <-state.protocolEntered:
 	case <-time.After(time.Second):
 		t.Fatal("first maintenance call did not reach the protocol barrier")
 	}
 
-	secondDone := make(chan error, 1)
-	go func() { secondDone <- service.maintainInformationSchemaViews(t.Context()) }()
+	go func() {
+		secondErr = service.maintainInformationSchemaViews(t.Context())
+		close(secondDone)
+	}()
 	select {
-	case err := <-secondDone:
-		require.NoError(t, err, "the concurrent call should be a no-op")
+	case <-secondDone:
+		require.NoError(t, secondErr, "the concurrent call should be a no-op")
 	case <-time.After(time.Second):
 		t.Fatal("concurrent maintenance call did not return")
 	}
 
-	close(state.protocolRelease)
-	require.ErrorContains(t, <-firstDone, "commit VIEWS replacement failed")
+	release()
+	<-firstDone
+	require.ErrorContains(t, firstErr, "commit VIEWS replacement failed")
 	require.Equal(t, int32(1), state.execTxnCalls.Load())
 	require.Equal(t, sysview.InformationSchemaViewsLegacyDDL, state.definition)
 

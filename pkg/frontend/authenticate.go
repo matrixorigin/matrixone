@@ -11091,6 +11091,22 @@ func protocolVersionForTenantInitializationWithContext(
 		// TABLES/COLUMNS and role-closure definitions.
 		return version, nil
 	}
+	// The local protocol version and the authoring floor advance at different
+	// points during admission. The former only says that this CN can decode
+	// v86; the latter says that the local catalog fence has completed and new
+	// v86 metadata may be published. Keep account creation on the predecessor
+	// until that write-side fence is ready. A missing key preserves the
+	// standalone/unit-test behavior used by runtimes created before admission.
+	if floorValue, present := rt.GetGlobalVariables(
+		moruntime.PersistedExpressionProtocolAuthoringFloor); present {
+		floor, valid := floorValue.(int64)
+		if !valid || floor < defines.MORPCVersion86 {
+			if err := ctx.Err(); err != nil {
+				return 0, err
+			}
+			return legacyVersion, nil
+		}
+	}
 	supported, err := compile.AllCNsSupportProtocolWithContext(ctx, proc, defines.MORPCVersion86)
 	if err != nil {
 		// Capability discovery is deliberately best-effort for account
