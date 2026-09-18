@@ -16,9 +16,15 @@
 
 set -o nounset
 
+if (( $# < 2 )); then
+    echo "usage: $0 <matrixone-workspace> <launch-config> [proxy-args ...]" >&2
+    exit 2
+fi
+
 MO_WORKSPACE=$1
 LAUNCH=$2
-PROXY=${3:-}
+shift 2
+PROXY_ARGS=("$@")
 LAUNCH_CONFIG=$LAUNCH
 MO_PID=""
 JSTFU_PID=""
@@ -89,7 +95,7 @@ trap 'cleanup_all; exit 130' INT
 trap 'cleanup_all; exit 143' TERM
 
 function launch_mo() {
-    cd $MO_WORKSPACE
+    cd "$MO_WORKSPACE"
     # Ordinary launch BVT remains the single CI entry point, but its Python
     # cases opt into the worker-enabled manifest explicitly.  The generic
     # etc/launch manifest stays safe for users who start mo-service directly.
@@ -97,7 +103,11 @@ function launch_mo() {
     if [[ "$LAUNCH" == "launch" ]]; then
         LAUNCH_CONFIG=launch-with-python-udf-worker
     fi
-    ./mo-service -debug-http=:12345 -launch ./etc/$LAUNCH_CONFIG/launch.toml $PROXY &>mo-service.log &
+    if ((${#PROXY_ARGS[@]} > 0)); then
+        ./mo-service -debug-http=:12345 -launch "./etc/${LAUNCH_CONFIG}/launch.toml" "${PROXY_ARGS[@]}" &>mo-service.log &
+    else
+        ./mo-service -debug-http=:12345 -launch "./etc/${LAUNCH_CONFIG}/launch.toml" &>mo-service.log &
+    fi
     MO_PID=$!
 }
 
@@ -126,7 +136,7 @@ function wait_python_udf_worker() {
     do
         if [[ -n "$MO_PID" ]] && ! kill -0 "$MO_PID" 2>/dev/null; then
             echo "MatrixOne exited before Python UDF worker became ready" >&2
-            tail -n 160 mo-service.log >&2 || true
+            tail -n 160 "$MO_WORKSPACE/mo-service.log" >&2 || true
             return 1
         fi
         if python3 - <<'PY'
@@ -163,7 +173,7 @@ PY
         sleep 1
     done
     echo "Python UDF capability handshake did not become ready on 127.0.0.1:50051" >&2
-    tail -n 160 mo-service.log >&2 || true
+    tail -n 160 "$MO_WORKSPACE/mo-service.log" >&2 || true
     return 1
 }
 
@@ -175,7 +185,7 @@ PY
 # the Maven wrapper bootstraps its own Maven, and the pom emits Java 8
 # bytecode on any JDK.
 function launch_jstfu() {
-    cd $MO_WORKSPACE
+    cd "$MO_WORKSPACE"
     if bash -c 'exec 3<>/dev/tcp/127.0.0.1/4444' 2>/dev/null; then
         echo "jstfu already listening on :4444, skip"
         return 0
