@@ -849,12 +849,18 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 	if execResultArrayHasData(erArray) {
 		fromList := make([]types.Type, len(args))
 		for i, arg := range args {
-			fromList[i] = types.Type{
-				Oid:     types.T(arg.Typ.Id),
-				Charset: uint8(arg.Typ.Charset),
-				Width:   arg.Typ.Width,
-				Scale:   arg.Typ.Scale,
-			}
+			// Reconstruct the complete SQL type instead of filling only the
+			// plan-visible fields.  Type.Eq includes the physical size, which is
+			// not serialized in plan.Type but is required for exact Python ABI
+			// matching.  In particular, a vector type built with Size == 0 is
+			// rejected against the declared VECF32/VECF64 descriptor because its
+			// fixed child width is no longer comparable.
+			fromList[i] = types.NewWithCharset(
+				types.T(arg.Typ.Id),
+				arg.Typ.Width,
+				arg.Typ.Scale,
+				uint8(arg.Typ.Charset),
+			)
 
 			argTypeStr += strings.ToLower(fromList[i].String())
 			if i+1 != len(args) {
