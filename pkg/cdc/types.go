@@ -827,14 +827,14 @@ func (table *PatternTable) UnmarshalJSON(data []byte) error {
 	if encoded.DatabaseBytes != "" {
 		bytes, err := base64.StdEncoding.DecodeString(encoded.DatabaseBytes)
 		if err != nil {
-			return fmt.Errorf("decode CDC source database bytes: %w", err)
+			return moerr.NewInternalErrorNoCtxf("decode CDC source database bytes: %v", err)
 		}
 		encoded.Database = string(bytes)
 	}
 	if encoded.TableBytes != "" {
 		bytes, err := base64.StdEncoding.DecodeString(encoded.TableBytes)
 		if err != nil {
-			return fmt.Errorf("decode CDC source table bytes: %w", err)
+			return moerr.NewInternalErrorNoCtxf("decode CDC source table bytes: %v", err)
 		}
 		encoded.Table = string(bytes)
 	}
