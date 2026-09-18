@@ -8047,6 +8047,16 @@ func supportsRemoteOrderedSetExtendedTypes(service string) bool {
 	return ok && protocolVersion >= defines.MORPCVersion84
 }
 
+func supportsRemotePartitionFulltextRoute(service string) bool {
+	version, ok := moruntime.ServiceRuntime(service).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion87
+}
+
 func supportsRemoteApproxPercentile(service string) bool {
 	version, ok := moruntime.ServiceRuntime(service).
 		GetGlobalVariables(moruntime.MOProtocolVersion)

@@ -1077,11 +1077,11 @@ func TestRemoteAutoIncrementStatementLastInsertIDProtocolValidation(t *testing.T
 	}}}
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion84)
 	_, _, err = convertToPipelineInstruction(routePreInsert, proc, ctx, 1)
-	require.ErrorContains(t, err, "requires MORPC protocol version 85")
+	require.ErrorContains(t, err, "requires MORPC protocol version 87")
 	require.ErrorContains(t,
 		validateRemoteStatementLastInsertIDPipelineProtocol(proc, routePipeline),
-		"requires MORPC protocol version 85")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion85)
+		"requires MORPC protocol version 87")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion87)
 	_, instruction, err = convertToPipelineInstruction(routePreInsert, proc, ctx, 1)
 	require.NoError(t, err)
 	require.True(t, instruction.PreInsert.PreserveInput)
