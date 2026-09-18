@@ -10,7 +10,9 @@ insert into string_values values
 (1, ''),
 (2, 'Alpha'),
 (3, '中a😀'),
-(4, null);
+(4, 'banana'),
+(5, 'A'),
+(6, null);
 select id,
 python_bvt_pc_upper(value) as upper_value,
 python_bvt_pc_contains(value) as contains_a,
@@ -21,7 +23,9 @@ from string_values order by id;
 1  ¦    ¦  0  ¦    ¦  0  𝄀
 2  ¦  ALPHA  ¦  1  ¦  AlphX  ¦  5  𝄀
 3  ¦  中A😀  ¦  1  ¦  中X😀  ¦  3  𝄀
-4  ¦  null  ¦  null  ¦  null  ¦  null
+4  ¦  BANANA  ¦  1  ¦  bXnXnX  ¦  6  𝄀
+5  ¦  A  ¦  0  ¦  A  ¦  1  𝄀
+6  ¦  null  ¦  null  ¦  null  ¦  null
 drop function python_bvt_pc_upper(varchar(64));
 drop function python_bvt_pc_contains(varchar(64));
 drop function python_bvt_pc_replace(varchar(64));
