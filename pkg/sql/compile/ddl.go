@@ -6468,7 +6468,8 @@ const (
 
 func (opts *CDCCreateTaskOptions) BuildTaskMetadata() task.TaskMetadata {
 	executor := task.TaskCode_InitCdc
-	if !opts.NoFull && cdc.UsesStableEpochInitialSnapshot(opts.ExtraOpts) {
+	if cdc.UsesSourcePatternProtocol(opts.ExtraOpts) ||
+		(!opts.NoFull && cdc.UsesStableEpochInitialSnapshot(opts.ExtraOpts)) {
 		executor = task.TaskCode_InitCdcStableEpoch
 	}
 	return task.TaskMetadata{
@@ -6843,13 +6844,20 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 	if _, ok := extraOpts[cdc.CDCTaskExtraOptions_MaxSqlLength]; !ok {
 		extraOpts[cdc.CDCTaskExtraOptions_MaxSqlLength] = cdc.CDCDefaultTaskExtra_MaxSQLLen
 	}
-	// Only full snapshots need the stable-epoch capability fence. NoFull tasks
-	// remain eligible for legacy executors because they cannot partially commit
-	// an initial snapshot.
+	// Full snapshots use the stable-epoch capability fence. Source patterns
+	// that need lossless bytes or mode-2 case metadata use the same executor
+	// fence even for NoFull tasks; legacy readers would silently drop fields.
+	stable := false
 	if !opts.NoFull {
 		cdc.FinalizeInitialSnapshotOptions(extraOpts)
-		_, stable := extraOpts[cdc.CDCTaskExtraOptions_InitialSnapshotProtocol]
-		if err = validateStableInitialSnapshotCompileProtocol(ctx, c, stable); err != nil {
+		_, stable = extraOpts[cdc.CDCTaskExtraOptions_InitialSnapshotProtocol]
+	}
+	sourcePattern := cdc.RequiresSourcePatternProtocol(opts.PitrTables)
+	if sourcePattern {
+		extraOpts[cdc.CDCTaskExtraOptions_SourcePatternProtocol] = cdc.CDCSourcePatternProtocolV1
+	}
+	if stable || sourcePattern {
+		if err = validateStableInitialSnapshotCompileProtocol(ctx, c, true); err != nil {
 			return
 		}
 	}

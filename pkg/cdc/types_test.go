@@ -983,6 +983,42 @@ func TestUsesStableEpochInitialSnapshot(t *testing.T) {
 	assert.False(t, UsesStableEpochInitialSnapshot(`not-json`))
 }
 
+func TestSourcePatternProtocolCompatibility(t *testing.T) {
+	valid := &PatternTuples{SourceCaseMode: 0, Pts: []*PatternTuple{{
+		Source: PatternTable{Database: "db", Table: "table"},
+	}}}
+	encoded, err := JsonEncode(valid)
+	require.NoError(t, err)
+	assert.False(t, RequiresSourcePatternProtocol(encoded))
+
+	modeTwo := &PatternTuples{SourceCaseMode: 2, Pts: valid.Pts}
+	encoded, err = JsonEncode(modeTwo)
+	require.NoError(t, err)
+	assert.True(t, RequiresSourcePatternProtocol(encoded))
+
+	malformed := &PatternTuples{Pts: []*PatternTuple{{
+		Source: PatternTable{Database: string([]byte{'d', 0xe9, 'b'}), Table: "table"},
+	}}}
+	encoded, err = JsonEncode(malformed)
+	require.NoError(t, err)
+	assert.True(t, RequiresSourcePatternProtocol(encoded))
+
+	malformedSink := &PatternTuples{Pts: []*PatternTuple{{
+		Source: PatternTable{Database: "db", Table: "table"},
+		Sink:   PatternTable{Database: string([]byte{'s', 0xe9, 'n', 'k'}), Table: "table"},
+	}}}
+	encoded, err = JsonEncode(malformedSink)
+	require.NoError(t, err)
+	assert.True(t, RequiresSourcePatternProtocol(encoded))
+
+	assert.True(t, UsesSourcePatternProtocol(fmt.Sprintf(
+		`{"%s":"%s"}`,
+		CDCTaskExtraOptions_SourcePatternProtocol,
+		CDCSourcePatternProtocolV1,
+	)))
+	assert.False(t, UsesSourcePatternProtocol(`{"_SourcePatternProtocol":"future"}`))
+}
+
 func TestValidateStableInitialSnapshotProtocol(t *testing.T) {
 	require.NoError(t, ValidateStableInitialSnapshotProtocol(
 		context.Background(), false, defines.MORPCVersion47))

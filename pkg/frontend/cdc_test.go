@@ -1481,6 +1481,16 @@ func TestCDCCreateTaskMetadataUsesCapabilityFence(t *testing.T) {
 		TaskId: "no-full", NoFull: true, ExtraOpts: stableOpts,
 	}).BuildTaskMetadata()
 	require.Equal(t, task.TaskCode_InitCdc, noFull.Executor)
+
+	patternOpts := fmt.Sprintf(
+		`{"%s":"%s"}`,
+		cdc.CDCTaskExtraOptions_SourcePatternProtocol,
+		cdc.CDCSourcePatternProtocolV1,
+	)
+	noFullPattern := (&CDCCreateTaskOptions{
+		TaskId: "no-full-pattern", NoFull: true, ExtraOpts: patternOpts,
+	}).BuildTaskMetadata()
+	require.Equal(t, task.TaskCode_InitCdcStableEpoch, noFullPattern.Executor)
 }
 
 func TestRegisterCdcExecutor(t *testing.T) {
