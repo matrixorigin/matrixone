@@ -61,4 +61,23 @@ select id,
        rank() over (order by match(body) against('alpha' in boolean mode) desc, id) as r2
 from docs where match(body) against('alpha' in boolean mode) order by id;
 
+-- #28974 P2: a post-window predicate that ALSO references a window column (rn) cannot be pushed
+-- below the WINDOW, so it stays on WINDOW.FilterList and is evaluated AFTER the window. Predicate
+-- pushdown expands the projected `score` alias back to the raw MATCH there; that post-window copy
+-- must be rewritten to the served index score too, or it reaches execution as ERROR 20105. Returns
+-- (1,1),(3,2),(4,3).
+select id, rn from (
+  select id, match(body) against('alpha' in boolean mode) as score,
+         row_number() over (order by id) as rn
+  from docs where match(body) against('alpha' in boolean mode)
+) q where rn = 1 or score > 0 order by id;
+
+-- @separator:table
+-- @regex("fulltext2_search",true)
+explain select id, rn from (
+  select id, match(body) against('alpha' in boolean mode) as score,
+         row_number() over (order by id) as rn
+  from docs where match(body) against('alpha' in boolean mode)
+) q where rn = 1 or score > 0 order by id;
+
 drop database ft2_window;

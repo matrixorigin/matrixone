@@ -344,10 +344,13 @@ func (builder *QueryBuilder) resolveScanNodeUnderWindow(node *plan.Node) *plan.N
 }
 
 // rewriteWindowMatchesFromServed replaces a fulltext_match inside a WINDOW's own spec (a
-// window-function argument or its OVER clause in WinSpecList), and inside the PARTITION node the
-// binder places under it for OVER(PARTITION BY ...), with the score column of an index scan
-// already served (builder.ftJoinServed). servedFullTextScoreSameTable is binding-tag-aware, so a
-// MATCH no served scan answers is left intact and still raises 20105.
+// window-function argument or its OVER clause in WinSpecList), inside the WINDOW's post-evaluation
+// FilterList (a predicate that survives predicate-pushdown onto the window because it also
+// references a window column, e.g. `rn = 1 OR score > 0` -- Node_WINDOW runs compileRestrict on it
+// AFTER compileWin), and inside the PARTITION node the binder places under it for
+// OVER(PARTITION BY ...), with the score column of an index scan already served
+// (builder.ftJoinServed). servedFullTextScoreSameTable is binding-tag-aware, so a MATCH no served
+// scan answers is left intact and still raises 20105.
 func (builder *QueryBuilder) rewriteWindowMatchesFromServed(windowNode *plan.Node) {
 	if windowNode == nil || len(builder.ftJoinServed) == 0 {
 		return
@@ -358,6 +361,11 @@ func (builder *QueryBuilder) rewriteWindowMatchesFromServed(windowNode *plan.Nod
 	for i := range windowNode.WinSpecList {
 		if exprCallsFunc(windowNode.WinSpecList[i], "fulltext_match") {
 			windowNode.WinSpecList[i] = replaceScoreFnInExprBy(windowNode.WinSpecList[i], rewriter)
+		}
+	}
+	for i := range windowNode.FilterList {
+		if exprCallsFunc(windowNode.FilterList[i], "fulltext_match") {
+			windowNode.FilterList[i] = replaceScoreFnInExprBy(windowNode.FilterList[i], rewriter)
 		}
 	}
 	if len(windowNode.Children) == 1 {

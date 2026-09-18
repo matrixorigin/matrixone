@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -161,6 +162,68 @@ func TestFullTextWindowMatchRewritten(t *testing.T) {
 		"a fulltext_match beneath a WINDOW throws 20105 at execution (#28974)")
 	require.Equal(t, 1, countReachableFullTextScans(builder.qry),
 		"the WHERE MATCH beneath the WINDOW must be served by a fulltext index scan")
+}
+
+// A predicate that survives predicate-pushdown onto the WINDOW because it also references a window
+// column lands on windowNode.FilterList and is evaluated AFTER the window (Node_WINDOW runs
+// compileRestrict on it). Predicate pushdown expands a projected `score` alias back to the raw
+// fulltext_match, so `rn = 1 OR score > 0` carries a served MATCH in that post-window filter. The
+// window anchor must rewrite that copy too, or the raw fulltext_match reaches execution as 20105
+// (#28974 P2). Plan shape PROJECT -> WINDOW(FilterList: OR(served MATCH > 0, winCol = 1)) ->
+// SCAN(match filter): after applyIndices no fulltext_match may remain, and exactly one index scan
+// serves both the scan's WHERE MATCH and the post-window copy.
+func TestFullTextWindowFilterListMatchRewritten(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	ctx := NewBindContext(builder, nil)
+
+	matchScanID, scanNode := matchScanWithFulltextIndex(builder, ctx)
+	scanTag := scanNode.BindingTags[0]
+
+	// The SAME MATCH the scan's WHERE clause carries, as it reappears (via score pushdown) in the
+	// post-window filter: OR(match('hello') > 0, winCol = 1). A projected score is float, so the
+	// comparison copy is float-typed (the rewrite matches on the fulltext_match function, not the
+	// wrapper type).
+	match := makeFullTextMatchExpr("hello", 0, scanNode.TableDef, scanTag, []int32{2, 3})
+	match.Typ = planpb.Type{Id: int32(types.T_float32)}
+	matchGt0, err := BindFuncExprImplByPlanExpr(context.Background(), ">",
+		[]*planpb.Expr{match, makePlan2Float64ConstExprWithType(0)})
+	require.NoError(t, err)
+
+	winTag := builder.genNewBindTag()
+	ityp := types.T_int64.ToType()
+	winCol := &planpb.Expr{Typ: makePlan2Type(&ityp), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: winTag, ColPos: 0}}}
+	rnEq1, err := BindFuncExprImplByPlanExpr(context.Background(), "=",
+		[]*planpb.Expr{winCol, makePlan2Int64ConstExprWithType(1)})
+	require.NoError(t, err)
+	orExpr, err := BindFuncExprImplByPlanExpr(context.Background(), "or", []*planpb.Expr{matchGt0, rnEq1})
+	require.NoError(t, err)
+
+	winID := builder.appendNode(&planpb.Node{
+		NodeType:    planpb.Node_WINDOW,
+		Children:    []int32{matchScanID},
+		FilterList:  []*planpb.Expr{orExpr},
+		BindingTags: []int32{winTag},
+	}, ctx)
+
+	projTag := builder.genNewBindTag()
+	projID := builder.appendNode(&planpb.Node{
+		NodeType:    planpb.Node_PROJECT,
+		Children:    []int32{winID},
+		BindingTags: []int32{projTag},
+		ProjectList: []*planpb.Expr{{
+			Typ:  makePlan2Type(&ityp),
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: winTag, ColPos: 0}},
+		}},
+	}, ctx)
+
+	newID, err := builder.applyIndices(projID, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	builder.qry.Steps = []int32{newID}
+
+	require.Zero(t, countReachableFullTextMatches(builder.qry),
+		"a served fulltext_match left in WINDOW.FilterList reaches execution as 20105 (#28974 P2)")
+	require.Equal(t, 1, countReachableFullTextScans(builder.qry),
+		"one index scan serves both the WHERE MATCH and its post-window filter copy")
 }
 
 // ftWindowSpecWithMatch builds a WINDOW node's WinSpecList entry (an Expr_W) whose OVER order-by
