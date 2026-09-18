@@ -80,4 +80,24 @@ explain select id, rn from (
   from docs where match(body) against('alpha' in boolean mode)
 ) q where rn = 1 or score > 0 order by id;
 
+-- #28974 P2: an outer predicate that references NEITHER a window column NOR a partition key cannot be
+-- pushed below the WINDOW and stays in an INDEPENDENT FILTER above it (unlike `rn = 1 or score > 0`,
+-- which stays on WINDOW.FilterList). Predicate pushdown inlines the projected `score` back to the raw
+-- MATCH there; that copy must be rewritten to the served index score too, or it reaches execution as
+-- ERROR 20105. Returns (1,1),(3,2),(4,3).
+select id, rn from (
+  select id, match(body) against('alpha' in boolean mode) as score,
+         row_number() over (order by id) as rn
+  from docs where match(body) against('alpha' in boolean mode)
+) q where score > 0 order by id;
+
+-- @separator:table
+-- @regex("fulltext_index_scan",true)
+-- @regex("fulltext_match",false)
+explain select id, rn from (
+  select id, match(body) against('alpha' in boolean mode) as score,
+         row_number() over (order by id) as rn
+  from docs where match(body) against('alpha' in boolean mode)
+) q where score > 0 order by id;
+
 drop database ft_window;

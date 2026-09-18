@@ -683,6 +683,16 @@ func (builder *QueryBuilder) applyIndices(nodeID int32, colRefCnt map[[2]int32]i
 		// still carry that MATCH in its own OVER spec; resolve it against the scores served
 		// below. No-op when nothing was served or the spec holds no MATCH.
 		builder.rewriteWindowMatchesFromServed(node)
+
+	case plan.Node_FILTER:
+		// A FILTER above a WINDOW can retain a served fulltext_match that predicate pushdown could not
+		// move below the window: it neither references a window column (which would land it in
+		// WINDOW.FilterList, handled above) nor pushes onto the partition keys, so an outer
+		// `... where score > 0` stays here as `fulltext_match(...) > 0`. Child recursion already
+		// served the scan below and published its score (builder.ftJoinServed); rewrite the copy to
+		// that score column in place, so it still evaluates post-window. Binding-tag-aware: a MATCH no
+		// served scan answers is left intact and still raises 20105 (#28974 P2).
+		builder.rewriteServedMatchesInFilterList(node)
 	}
 
 	return nodeID, nil

@@ -226,6 +226,63 @@ func TestFullTextWindowFilterListMatchRewritten(t *testing.T) {
 		"one index scan serves both the WHERE MATCH and its post-window filter copy")
 }
 
+// TestFullTextOuterFilterAboveWindowMatchRewritten pins the #28974 P2 follow-up: an independent
+// FILTER above a WINDOW can carry a served fulltext_match that predicate pushdown could not move
+// below the window (it references neither a window column -- which would land it in WINDOW.FilterList
+// -- nor a partition key), e.g. an outer `where score > 0` inlined to `fulltext_match(...) > 0`. The
+// WINDOW anchor serves the score below during child recursion; the FILTER anchor must rewrite this
+// independent copy too, preserving its post-window position, or the raw fulltext_match reaches
+// execution as 20105. Plan shape PROJECT -> FILTER(match > 0) -> WINDOW -> SCAN(match filter): after
+// applyIndices no fulltext_match may remain, and exactly one index scan serves both copies.
+func TestFullTextOuterFilterAboveWindowMatchRewritten(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+	ctx := NewBindContext(builder, nil)
+
+	matchScanID, scanNode := matchScanWithFulltextIndex(builder, ctx)
+	scanTag := scanNode.BindingTags[0]
+
+	ityp := types.T_int64.ToType()
+	winTag := builder.genNewBindTag()
+	winID := builder.appendNode(&planpb.Node{
+		NodeType:    planpb.Node_WINDOW,
+		Children:    []int32{matchScanID},
+		BindingTags: []int32{winTag},
+	}, ctx)
+
+	// The SAME served MATCH as the scan's WHERE clause, in an independent FILTER above the window --
+	// the shape `where score > 0` leaves when it cannot push below the window.
+	match := makeFullTextMatchExpr("hello", 0, scanNode.TableDef, scanTag, []int32{2, 3})
+	match.Typ = planpb.Type{Id: int32(types.T_float32)}
+	matchGt0, err := BindFuncExprImplByPlanExpr(context.Background(), ">",
+		[]*planpb.Expr{match, makePlan2Float64ConstExprWithType(0)})
+	require.NoError(t, err)
+	filterID := builder.appendNode(&planpb.Node{
+		NodeType:   planpb.Node_FILTER,
+		Children:   []int32{winID},
+		FilterList: []*planpb.Expr{matchGt0},
+	}, ctx)
+
+	projTag := builder.genNewBindTag()
+	projID := builder.appendNode(&planpb.Node{
+		NodeType:    planpb.Node_PROJECT,
+		Children:    []int32{filterID},
+		BindingTags: []int32{projTag},
+		ProjectList: []*planpb.Expr{{
+			Typ:  makePlan2Type(&ityp),
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: winTag, ColPos: 0}},
+		}},
+	}, ctx)
+
+	newID, err := builder.applyIndices(projID, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	builder.qry.Steps = []int32{newID}
+
+	require.Zero(t, countReachableFullTextMatches(builder.qry),
+		"a served fulltext_match left in a FILTER above the WINDOW reaches execution as 20105 (#28974 P2)")
+	require.Equal(t, 1, countReachableFullTextScans(builder.qry),
+		"one index scan serves both the WHERE MATCH and the outer-filter copy")
+}
+
 // ftWindowSpecWithMatch builds a WINDOW node's WinSpecList entry (an Expr_W) whose OVER order-by
 // references match, the way the binder builds ROW_NUMBER() OVER (ORDER BY MATCH(...)).
 func ftWindowSpecWithMatch(match *planpb.Expr) *planpb.Expr {

@@ -363,11 +363,7 @@ func (builder *QueryBuilder) rewriteWindowMatchesFromServed(windowNode *plan.Nod
 			windowNode.WinSpecList[i] = replaceScoreFnInExprBy(windowNode.WinSpecList[i], rewriter)
 		}
 	}
-	for i := range windowNode.FilterList {
-		if exprCallsFunc(windowNode.FilterList[i], "fulltext_match") {
-			windowNode.FilterList[i] = replaceScoreFnInExprBy(windowNode.FilterList[i], rewriter)
-		}
-	}
+	builder.rewriteServedMatchesInFilterList(windowNode)
 	if len(windowNode.Children) == 1 {
 		if child := builder.qry.Nodes[windowNode.Children[0]]; child != nil && child.NodeType == plan.Node_PARTITION {
 			for _, ob := range child.OrderBy {
@@ -375,6 +371,28 @@ func (builder *QueryBuilder) rewriteWindowMatchesFromServed(windowNode *plan.Nod
 					ob.Expr = replaceScoreFnInExprBy(ob.Expr, rewriter)
 				}
 			}
+		}
+	}
+}
+
+// rewriteServedMatchesInFilterList rewrites every served fulltext_match in a node's FilterList to the
+// score column of the index scan that answers it (builder.ftJoinServed), binding-tag-aware. It backs
+// two post-window predicates: the WINDOW's own FilterList (a predicate kept on the window because it
+// also references a window column, e.g. `rn = 1 OR score > 0`) and the independent Node_FILTER that
+// predicate pushdown may leave ABOVE a WINDOW -- a `score > 0` it cannot move below the window because
+// it neither references a window column nor pushes onto the partition keys. The node keeps its place,
+// so evaluation stays post-window. A MATCH no served scan answers is left intact and still raises
+// 20105 (#28974 P2).
+func (builder *QueryBuilder) rewriteServedMatchesInFilterList(node *plan.Node) {
+	if node == nil || len(builder.ftJoinServed) == 0 {
+		return
+	}
+	rewriter := func(fn *plan.Function) *plan.Expr {
+		return builder.servedFullTextScoreSameTable(fn, builder.ftJoinServed)
+	}
+	for i := range node.FilterList {
+		if exprCallsFunc(node.FilterList[i], "fulltext_match") {
+			node.FilterList[i] = replaceScoreFnInExprBy(node.FilterList[i], rewriter)
 		}
 	}
 }
