@@ -472,7 +472,7 @@ func TestPreparedRegexpDerivedScalarPreservesResultBranchParams(t *testing.T) {
 	prepared, err := runOneStmt(NewMockOptimizer(false), t,
 		"prepare stmt_regexp_multi_derived_domain from 'select regexp_instr("+
 			"(select d.subject from (select if(?, ?, ?) as subject) d), "+
-			"''中'', 2)'")
+			"?, 2)'")
 	require.NoError(t, err)
 	preparedRegexp := findPlanFunctionExpr(
 		prepared.GetDcl().GetPrepare().Plan, "regexp_instr")
@@ -484,6 +484,37 @@ func TestPreparedRegexpDerivedScalarPreservesResultBranchParams(t *testing.T) {
 		witness.GetF().Args[0].GetP().Pos,
 		witness.GetF().Args[1].GetP().Pos,
 	})
+
+	ctx := context.Background()
+	preparedPlan := prepared.GetDcl().GetPrepare().Plan
+	cached := proto.Clone(preparedPlan).(*planpb.Plan)
+	textPlan, _, err := FillValuesOfParamsInPlanWithSpecialization(ctx, preparedPlan, []any{
+		ParamValue{Value: true, RuntimeType: types.T_bool.ToType(), HasRuntimeType: true},
+		ParamValue{Value: int64(7), RuntimeType: types.T_int64.ToType(), HasRuntimeType: true},
+		ParamValue{Value: int64(8), RuntimeType: types.T_int64.ToType(), HasRuntimeType: true},
+		ParamValue{Value: "x", IsBinaryProtocol: true, RuntimeType: types.T_text.ToType(), HasRuntimeType: true},
+	})
+	require.NoError(t, err)
+	regexpInstr := findPlanFunctionExpr(textPlan, "regexp_instr")
+	require.NotNil(t, regexpInstr)
+	require.Equal(t, types.StringDomainText,
+		types.StaticStringDomain(makeTypeByPlan2Expr(regexpInstr.GetF().Args[0])))
+
+	binaryPlan, _, err := FillValuesOfParamsInPlanWithSpecialization(ctx, preparedPlan, []any{
+		ParamValue{Value: true, RuntimeType: types.T_bool.ToType(), HasRuntimeType: true},
+		ParamValue{Value: "7", IsBin: true, IsBinaryProtocol: true,
+			RuntimeType: types.T_varbinary.ToType(), HasRuntimeType: true},
+		ParamValue{Value: "8", IsBin: true, IsBinaryProtocol: true,
+			RuntimeType: types.T_varbinary.ToType(), HasRuntimeType: true},
+		ParamValue{Value: "x", IsBin: true, IsBinaryProtocol: true,
+			RuntimeType: types.T_varbinary.ToType(), HasRuntimeType: true},
+	})
+	require.NoError(t, err)
+	regexpInstr = findPlanFunctionExpr(binaryPlan, "regexp_instr")
+	require.NotNil(t, regexpInstr)
+	require.Equal(t, int32(types.T_varbinary), regexpInstr.GetF().Args[0].Typ.Id)
+	require.True(t, proto.Equal(cached, preparedPlan),
+		"multi-branch runtime-domain specialization must not mutate the cached plan")
 }
 
 func TestStringDomainWitnessKeepsImplicitTextConversion(t *testing.T) {
