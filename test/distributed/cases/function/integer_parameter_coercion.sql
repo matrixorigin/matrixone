@@ -75,4 +75,34 @@ set @v=null,@bits=null;
 execute lineage_source using @v,@v,@v,@bits;
 deallocate prepare lineage_source;
 
+-- String position/count/length consumers share the same conversion for columns.
+select id,left('abcdef',d),right('abcdef',v),substring('abcdef',d),substr('abcdef',1,v),mid('abcdef',1,cast(v as double)),lpad('x',d,'.'),rpad('x',v,'.') from sources order by id;
+select id,insert('abcdef',d,1,'X'),insert('abcdef',1,v,'X'),locate('a','baaa',d),repeat('x',v),length(space(d)),elt(d,'a','b','c'),elt(s,'a','b','c') from sources order by id;
+select left('abcdef',2.5),left('abcdef',2.5e0),left('abcdef',cast(1.5 as double)),left('abcdef','1.9tail');
+select id,left('abcdef',if(id=1,d,v)),substring('abcdef',1,case when id=1 then d else v end),elt(if(id=1,d,v),'a','b','c') from sources order by id;
+select left('abc',-1),right('abc',0),substring('abc',-2),substring('abc',1,0),lpad('x',0,'.'),rpad('x',0,'.'),insert('abc',0,1,'X'),locate('a','abc',0),repeat('x',-1),length(space(-1)),elt(0,'a','b');
+select locate('a','baaa'),substring('abcdef',2),substr('abcdef',2),mid('abcdef',2);
+select left('abc',cast('9223372036854775807.4' as decimal(38,1))),elt(9223372036854775807,'a','b'),length(space(-9223372036854775808));
+select left('abc',cast('9223372036854775807.5' as decimal(38,1)));
+select substring('abc',1,18446744073709551615);
+select elt(18446744073709551615,'a','b');
+select space('-9223372036854775809');
+select repeat('x',if(true,2,18446744073709551615)),elt(case when false then 18446744073709551615 else 1 end,'a','b');
+
+-- Every migrated parameter participates in cached SQL EXECUTE specialization.
+prepare string_source from 'select left("abcdef",?),right("abcdef",?),substring("abcdef",?),substr("abcdef",1,?),mid("abcdef",1,?),lpad("x",?,"."),rpad("x",?,"."),insert("abcdef",?,1,"X"),insert("abcdef",1,?,"X"),locate("a","baaa",?),repeat("x",?),length(space(?)),elt(?,"a","b","c")';
+set @v=null;
+execute string_source using @v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v;
+set @v=2.5;
+execute string_source using @v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v;
+set @v=2.5e0;
+execute string_source using @v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v;
+set @v='1.9tail';
+execute string_source using @v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v;
+set @v='9223372036854775808';
+execute string_source using @v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v;
+set @v=2;
+execute string_source using @v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v;
+deallocate prepare string_source;
+
 drop database integer_parameter_coercion;

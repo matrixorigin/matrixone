@@ -1,35 +1,35 @@
 SELECT LEFT('ABCDEFG', 2);
-left(ABCDEFG, 2)
+➤ LEFT(ABCDEFG, 2)[12,7,0]  𝄀
 AB
 SELECT LEFT('ABCDEFG', 0);
-left(ABCDEFG, 0)
+➤ LEFT(ABCDEFG, 0)[12,7,0]  𝄀
 
 SELECT LEFT('ABCDEFG', -1);
-left(ABCDEFG, -1)
+➤ LEFT(ABCDEFG, -1)[12,7,0]  𝄀
 
 SELECT LEFT('ABCDEFG', 2+1);
-left(ABCDEFG, 2 + 1)
+➤ LEFT(ABCDEFG, 2 + 1)[12,7,0]  𝄀
 ABC
 SELECT LEFT('ABCDEFG', ABS(-2));
-left(ABCDEFG, abs(-2))
+➤ LEFT(ABCDEFG, ABS(-2))[12,7,0]  𝄀
 AB
 SELECT LEFT('ABCDEFG', COS(0));
-left(ABCDEFG, cos(0))
+➤ LEFT(ABCDEFG, COS(0))[12,7,0]  𝄀
 A
 SELECT LEFT('ABCDEFG', LENGTH('KING'));
-left(ABCDEFG, length(KING))
+➤ LEFT(ABCDEFG, LENGTH(KING))[12,7,0]  𝄀
 ABCD
 SELECT LEFT('ABCDEFG', NULL);
-left(ABCDEFG, null)
+➤ LEFT(ABCDEFG, null)[12,7,0]  𝄀
 null
 SELECT LEFT(NULL, 1);
-left(null, 1)
+➤ LEFT(null, 1)[12,65535,0]  𝄀
 null
 SELECT LEFT(NULL, 0);
-left(null, 0)
+➤ LEFT(null, 0)[12,65535,0]  𝄀
 null
 SELECT LEFT(NULL, -1);
-left(null, -1)
+➤ LEFT(null, -1)[12,65535,0]  𝄀
 null
 DROP TABLE IF EXISTS t;
 CREATE TABLE t(
@@ -40,27 +40,29 @@ PRIMARY KEY (id)
 );
 INSERT INTO t VALUES (123456, 'anike1001@gmail.com', 'googood'), (123457, 'nitin5438@yahoo.com','hainghing');
 SELECT LEFT(id, 3), LEFT(str1, 5), LEFT(str2, 5) FROM t;
-left(id, 3)    left(str1, 5)    left(str2, 5)
-123    anike    googo
-123    nitin    haing
+➤ LEFT(id, 3)[12,11,0]  ¦  LEFT(str1, 5)[12,20,0]  ¦  LEFT(str2, 5)[12,20,0]  𝄀
+123  ¦  anike  ¦  googo  𝄀
+123  ¦  nitin  ¦  haing
 SELECT LEFT(id, '1'), LEFT(str1, '1'), LEFT(str2, '1') FROM t;
-left(id, 1)    left(str1, 1)    left(str2, 1)
-1    a    g
-1    n    h
+➤ LEFT(id, 1)[12,11,0]  ¦  LEFT(str1, 1)[12,20,0]  ¦  LEFT(str2, 1)[12,20,0]  𝄀
+1  ¦  a  ¦  g  𝄀
+1  ¦  n  ¦  h
 SELECT LEFT(id, LENGTH(str1)/1-1), LEFT(str1, 1) FROM t;
-left(id, length(str1) / 1 - 1)    left(str1, 1)
-123456    a
-123457    n
+➤ LEFT(id, LENGTH(str1) / 1 - 1)[12,11,0]  ¦  LEFT(str1, 1)[12,20,0]  𝄀
+123456  ¦  a  𝄀
+123457  ¦  n
 SELECT LEFT(id, FIND_IN_SET('b','a,b,c,d')), LEFT(str2, EMPTY(str1)) FROM t;
-invalid argument function left, bad value [CHAR BOOL]
+➤ LEFT(id, FIND_IN_SET(b, a,b,c,d))[12,11,0]  ¦  LEFT(str2, EMPTY(str1))[12,20,0]  𝄀
+12  ¦    𝄀
+12  ¦  
 SELECT LEFT(id, '-1'), LEFT(str1, '0') FROM t;
-left(id, -1)    left(str1, 0)
-    
-    
+➤ LEFT(id, -1)[12,11,0]  ¦  LEFT(str1, 0)[12,20,0]  𝄀
+  ¦    𝄀
+  ¦  
 SELECT LEFT(id, '1'+2), LEFT(str1, '1'+'1'), LEFT(str2, '1'+'0') FROM t;
-left(id, 1 + 2)    left(str1, 1 + 1)    left(str2, 1 + 0)
-123    anike1001@g    googood
-123    nitin5438@y    hainghing
+➤ LEFT(id, 1 + 2)[12,11,0]  ¦  LEFT(str1, 1 + 1)[12,20,0]  ¦  LEFT(str2, 1 + 0)[12,20,0]  𝄀
+123  ¦  anike1001@g  ¦  googood  𝄀
+123  ¦  nitin5438@y  ¦  hainghing
 DROP TABLE IF EXISTS t;
 CREATE TABLE t(
 id INT,
@@ -72,20 +74,20 @@ PRIMARY KEY (id)
 INSERT INTO t VALUES (1, '2020-01-01', '2020-01-01 12:12:12', '2020-02-02 06:06:06.163');
 INSERT INTO t VALUES (2, '2021-11-11', '2021-01-11 23:23:23', '2021-12-12 16:16:16.843');
 SELECT LEFT(d1, MONTH(d1)), LEFT(d2, DAY(d2)) FROM t;
-left(d1, month(d1))    left(d2, day(d2))
-2    2
-2021-11-11    2021-01-11 
+➤ LEFT(d1, MONTH(d1))[12,10,0]  ¦  LEFT(d2, DAY(d2))[12,26,0]  𝄀
+2  ¦  2  𝄀
+2021-11-11  ¦  2021-01-11 
 SELECT LEFT(d2, LENGTH(d2)) FROM t;
-left(d2, length(d2))
-2020-01-01 12:12:12
+➤ LEFT(d2, LENGTH(d2))[12,26,0]  𝄀
+2020-01-01 12:12:12  𝄀
 2021-01-11 23:23:23
 SELECT LEFT(d1, SIN(0)+MONTH(d1)) FROM t;
-left(d1, sin(0) + month(d1))
-2
+➤ LEFT(d1, SIN(0) + MONTH(d1))[12,10,0]  𝄀
+2  𝄀
 2021-11-11
 SELECT LEFT(d1, COS(10)+MONTH(d1)) FROM t;
-left(d1, cos(10) + month(d1))
-
+➤ LEFT(d1, COS(10) + MONTH(d1))[12,10,0]  𝄀
+  𝄀
 2021-11-11
 CREATE TABLE t(
 d INT,
@@ -128,34 +130,34 @@ INSERT INTO t VALUES (3,'ixioklakmaria',69456486), (4,'brzilaiusd',6448781575);
 INSERT INTO t1 VALUES (1,'usaisagoodnat','1970-01-02'),(2,'chanialfakbjap','1971-11-12');
 INSERT INTO t1 VALUES (3,'indiaisashit','1972-09-09'),(4,'xingoporelka','1973-12-07');
 SELECT t.d, LEFT(t.d1,FIND_IN_SET('d','a,b,c,d')) FROM t;
-d    left(t.d1, find_in_set(d, a,b,c,d))
-1    lijk
-2    xlzi
-3    ixio
-4    brzi
+➤ d[4,32,0]  ¦  LEFT(t.d1, FIND_IN_SET(d, a,b,c,d))[12,20,0]  𝄀
+1  ¦  lijk  𝄀
+2  ¦  xlzi  𝄀
+3  ¦  ixio  𝄀
+4  ¦  brzi
 SELECT t.d, LEFT(t.d2, FIND_IN_SET('d','a,b,c,d')), LEFT(t1.d1, ABS(-3)+1) FROM t,t1 WHERE t.d = t1.d;
-d    left(t.d2, find_in_set(d, a,b,c,d))    left(t1.d1, abs(-3) + 1)
-1    1929    usai
-2    1949    chan
-3    6945    indi
-4    6448    xing
+➤ d[4,32,0]  ¦  LEFT(t.d2, FIND_IN_SET(d, a,b,c,d))[12,20,0]  ¦  LEFT(t1.d1, ABS(-3) + 1)[12,20,0]  𝄀
+1  ¦  1929  ¦  usai  𝄀
+2  ¦  1949  ¦  chan  𝄀
+3  ¦  6945  ¦  indi  𝄀
+4  ¦  6448  ¦  xing
 SELECT t.d, LEFT(t1.d2, NULL) FROM t JOIN t1 ON t.d = t1.d;
-d    left(t1.d2, null)
-1    null
-2    null
-3    null
-4    null
+➤ d[4,32,0]  ¦  LEFT(t1.d2, null)[12,10,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null  𝄀
+3  ¦  null  𝄀
+4  ¦  null
 SELECT t.d, LEFT(t1.d2, BIN(1)) FROM t RIGHT JOIN t1 ON t.d = t1.d;
-d    left(t1.d2, bin(1))
-1    1
-2    1
-3    1
-4    1
+➤ d[4,32,0]  ¦  LEFT(t1.d2, BIN(1))[12,10,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1  𝄀
+3  ¦  1  𝄀
+4  ¦  1
 SELECT t.d, LEFT(t1.d2, BIN(2)) FROM t RIGHT JOIN t1 ON t.d = t1.d;
-d    left(t1.d2, bin(2))
-1    1970-01-02
-2    1971-11-12
-3    1972-09-09
-4    1973-12-07
+➤ d[4,32,0]  ¦  LEFT(t1.d2, BIN(2))[12,10,0]  𝄀
+1  ¦  1970-01-02  𝄀
+2  ¦  1971-11-12  𝄀
+3  ¦  1972-09-09  𝄀
+4  ¦  1973-12-07
 DROP TABLE IF EXISTS t;
 DROP TABLE IF EXISTS t1;

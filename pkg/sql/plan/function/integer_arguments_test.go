@@ -326,11 +326,24 @@ func TestIntegerArgumentText(t *testing.T) {
 }
 
 func TestStringIntegerArgumentConsumers(t *testing.T) {
-	for _, name := range []string{"left", "right", "substring", "substr", "mid", "lpad", "rpad", "insert", "locate", "repeat", "space", "elt"} {
+	for _, tc := range []struct {
+		name      string
+		positions []int
+	}{
+		{"left", []int{1}}, {"right", []int{1}},
+		{"substring", []int{1, 2}}, {"substr", []int{1, 2}}, {"mid", []int{1, 2}},
+		{"lpad", []int{1}}, {"rpad", []int{1}}, {"insert", []int{1, 2}},
+		{"locate", []int{2}}, {"repeat", []int{1}}, {"space", []int{0}}, {"elt", []int{0}},
+	} {
+		name := tc.name
 		t.Run(name, func(t *testing.T) {
 			id, ok := getFunctionIdByNameWithoutErr(name)
 			require.True(t, ok)
 			f := allSupportedFunctions[id]
+			require.Len(t, f.integerParameters, len(tc.positions))
+			for i, position := range tc.positions {
+				require.Equal(t, integerParameter{position: position, target: types.T_int64}, f.integerParameters[i])
+			}
 			index := 0
 			if len(f.bindingOverloads) > 0 {
 				index = f.bindingOverloads[0]
