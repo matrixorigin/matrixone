@@ -144,6 +144,11 @@ type SessionInfo struct {
 	// evaluation against the exact coordinator build whose AST formatter was
 	// selected during remote placement.
 	StatementHashExpectedBuildCommitID string
+	// statementHashProcessInfoReceived is local-only provenance. It is set
+	// when this session snapshot is decoded from a remote ProcessInfo so a
+	// forwarding CN preserves the coordinator's build identity instead of
+	// reseeding it with its own build.
+	statementHashProcessInfoReceived bool
 	// AutoIncrementIncrement and AutoIncrementOffset are captured on the
 	// initiating CN and used by remote PRE_INSERT operators.  They are
 	// statement-scoped; zero means the default value one for compatibility with

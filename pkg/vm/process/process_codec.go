@@ -67,6 +67,60 @@ func (proc *Process) BuildProcessInfoWithStatementHash(
 	return proc.buildProcessInfo(sql, true)
 }
 
+// StatementHashBuildCommitIDForRemote returns the immutable coordinator build
+// identity to carry and probe when dispatching a remote MO_STATEMENT_HASH
+// scope. A received process may forward only when its own full build matches
+// the identity it received; it must never substitute its local build ID.
+func (proc *Process) StatementHashBuildCommitIDForRemote() (string, error) {
+	if proc == nil || proc.Base == nil {
+		return "", moerr.NewNotSupportedNoCtx(
+			"MO_STATEMENT_HASH remote execution requires a process build identity",
+		)
+	}
+	if proc.Base.SessionInfo.statementHashProcessInfoReceived {
+		if err := proc.ValidateStatementHashBuildCommitID(); err != nil {
+			return "", err
+		}
+		return proc.Base.SessionInfo.StatementHashExpectedBuildCommitID, nil
+	}
+	if !version.IsFullBuildCommitID(version.BuildCommitID) {
+		return "", moerr.NewNotSupportedNoCtx(
+			"MO_STATEMENT_HASH remote execution requires a full 40-character local build commit ID from a clean source tree",
+		)
+	}
+	return version.BuildCommitID, nil
+}
+
+// ValidateStatementHashBuildCommitID checks the build fence when a hash
+// expression is actually evaluated. Local-only execution remains usable in a
+// build without an identity; received remote work must carry a valid identity.
+func (proc *Process) ValidateStatementHashBuildCommitID() error {
+	if proc == nil || proc.Base == nil {
+		return nil
+	}
+	sessionInfo := proc.Base.SessionInfo
+	expected := sessionInfo.StatementHashExpectedBuildCommitID
+	if expected == "" {
+		if sessionInfo.statementHashProcessInfoReceived {
+			return moerr.NewNotSupportedNoCtx(
+				"MO_STATEMENT_HASH received process info is missing a valid full 40-character coordinator build commit ID",
+			)
+		}
+		return nil
+	}
+	if !version.IsFullBuildCommitID(expected) {
+		return moerr.NewNotSupportedNoCtx(
+			"MO_STATEMENT_HASH received process info has an invalid coordinator build commit ID",
+		)
+	}
+	if !version.IsFullBuildCommitID(version.BuildCommitID) || expected != version.BuildCommitID {
+		return moerr.NewNotSupportedNoCtx(
+			"MO_STATEMENT_HASH worker build does not match the build selected by its coordinator",
+		)
+	}
+	return nil
+}
+
 func (proc *Process) buildProcessInfo(
 	sql string,
 	captureStatementHash bool,
@@ -178,7 +232,10 @@ func (proc *Process) buildProcessInfo(
 			statementHashExpectedBuildCommitID string
 		)
 		if captureStatementHash {
-			statementHashExpectedBuildCommitID = version.BuildCommitID
+			statementHashExpectedBuildCommitID, err = proc.StatementHashBuildCommitIDForRemote()
+			if err != nil {
+				return procInfo, err
+			}
 			// Preserve both the originating SQL mode and any resolver failure.
 			// The error is raised only if the remote function evaluates an active
 			// row; process-info serialization itself must not make a masked or
@@ -192,6 +249,11 @@ func (proc *Process) buildProcessInfo(
 				}
 			}
 		} else {
+			// Preserve received provenance through ordinary intermediate hops
+			// without applying the hash-only build gate to unrelated scopes.
+			if proc.Base.SessionInfo.statementHashProcessInfoReceived {
+				statementHashExpectedBuildCommitID = proc.Base.SessionInfo.StatementHashExpectedBuildCommitID
+			}
 			sqlMode = resolveSqlMode(proc)
 		}
 
@@ -528,6 +590,7 @@ func ConvertToProcessSessionInfo(
 		StatementHashSQLModeError:           append([]byte(nil), sei.StatementHashSqlModeError...),
 		StatementHashSQLModeErrorDetail:     sei.StatementHashSqlModeErrorDetail,
 		StatementHashExpectedBuildCommitID:  sei.StatementHashExpectedBuildCommitId,
+		statementHashProcessInfoReceived:    true,
 		AutoIncrementIncrement:              sei.AutoIncrementIncrement,
 		AutoIncrementOffset:                 sei.AutoIncrementOffset,
 	}

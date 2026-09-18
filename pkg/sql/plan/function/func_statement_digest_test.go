@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -619,8 +620,12 @@ func TestStatementHashRejectsRemoteWorkerBuildMismatch(t *testing.T) {
 
 	proc := testutil.NewProcess(t)
 	proc.Base.IsFrontend = false
-	proc.Base.SessionInfo.SqlMode = process.EmptySqlModeSentinel
-	proc.Base.SessionInfo.StatementHashExpectedBuildCommitID = version.BuildCommitID
+	remoteSession, err := process.ConvertToProcessSessionInfo(pipeline.SessionInfo{
+		SqlMode:                            process.EmptySqlModeSentinel,
+		StatementHashExpectedBuildCommitId: version.BuildCommitID,
+	})
+	require.NoError(t, err)
+	proc.Base.SessionInfo = remoteSession
 	matchingBuild := NewFunctionTestCase(
 		proc,
 		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{"SELECT 1"}, nil)},
@@ -631,7 +636,9 @@ func TestStatementHashRejectsRemoteWorkerBuildMismatch(t *testing.T) {
 	succeed, info := matchingBuild.Run()
 	require.True(t, succeed, info)
 
-	proc.Base.SessionInfo.StatementHashExpectedBuildCommitID = strings.Repeat("b", 40)
+	// A receiver that matched during dispatch can be replaced before function
+	// execution; the active-row fence must still reject the new build.
+	version.BuildCommitID = strings.Repeat("b", 40)
 	caseRun := NewFunctionTestCase(
 		proc,
 		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{"SELECT 1"}, nil)},

@@ -316,6 +316,10 @@ func TestResolveSQLModeResolverValueTypes(t *testing.T) {
 }
 
 func TestBuildProcessInfoStatementHashRejectsInvalidSQLModeType(t *testing.T) {
+	oldBuildCommitID := version.BuildCommitID
+	version.BuildCommitID = strings.Repeat("a", 40)
+	t.Cleanup(func() { version.BuildCommitID = oldBuildCommitID })
+
 	proc, _ := newCodecTestProcess(t)
 	proc.Base.IsFrontend = true
 	proc.SetResolveVariableFunc(func(name string, _, _ bool) (any, error) {
@@ -385,6 +389,12 @@ func TestBuildProcessInfoPreservesBackgroundSqlModeAcrossForwards(t *testing.T) 
 }
 
 func TestBuildProcessInfoGenericAndStatementHashSQLModeResolution(t *testing.T) {
+	oldBuildCommitID := version.BuildCommitID
+	const originBuild = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const intermediateBuild = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	version.BuildCommitID = originBuild
+	t.Cleanup(func() { version.BuildCommitID = oldBuildCommitID })
+
 	proc, _ := newCodecTestProcess(t)
 	proc.Base.IsFrontend = false
 	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
@@ -406,16 +416,106 @@ func TestBuildProcessInfoGenericAndStatementHashSQLModeResolution(t *testing.T) 
 	decoded, err := svc.Decode(defines.AttachAccountId(context.Background(), 42), hashProcessInfo)
 	require.NoError(t, err)
 	defer decoded.Free()
+	require.True(t, decoded.Base.SessionInfo.statementHashProcessInfoReceived)
 	decoded.Base.IsFrontend = false
 	decoded.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
 		return "ANSI_QUOTES", nil
 	})
+
+	// An ordinary no-hash hop preserves received provenance without applying
+	// the hash-specific same-build rejection to unrelated scopes.
+	version.BuildCommitID = intermediateBuild
+	ordinaryForward, err := decoded.BuildProcessInfo("select 1")
+	require.NoError(t, err)
+	require.Equal(t, originBuild, ordinaryForward.SessionInfo.StatementHashExpectedBuildCommitId)
+	version.BuildCommitID = originBuild
 
 	// Even if an intermediate CN has a different resolver, a second hash
 	// forward must retain the original snapshot.
 	second, err := decoded.BuildProcessInfoWithStatementHash("select 1")
 	require.NoError(t, err)
 	require.Equal(t, "STRICT_TRANS_TABLES", second.SessionInfo.SqlMode)
+	require.Equal(t, originBuild, second.SessionInfo.StatementHashExpectedBuildCommitId,
+		"an intermediate on the coordinator build must forward the immutable origin identity")
+}
+
+func TestValidateStatementHashBuildCommitIDPreservesLocalNoBuildBehavior(t *testing.T) {
+	oldBuildCommitID := version.BuildCommitID
+	const originBuild = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const replacementBuild = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	version.BuildCommitID = ""
+	t.Cleanup(func() { version.BuildCommitID = oldBuildCommitID })
+
+	local := &Process{Base: &BaseProcess{}}
+	require.NoError(t, local.ValidateStatementHashBuildCommitID(),
+		"local-only execution does not require a build identity")
+
+	receivedSession, err := ConvertToProcessSessionInfo(pipeline.SessionInfo{})
+	require.NoError(t, err)
+	received := &Process{Base: &BaseProcess{SessionInfo: receivedSession}}
+	require.True(t, received.Base.SessionInfo.statementHashProcessInfoReceived)
+	require.ErrorContains(t, received.ValidateStatementHashBuildCommitID(),
+		"missing a valid full 40-character coordinator build commit ID")
+
+	version.BuildCommitID = originBuild
+	matchedSession, err := ConvertToProcessSessionInfo(pipeline.SessionInfo{
+		StatementHashExpectedBuildCommitId: originBuild,
+	})
+	require.NoError(t, err)
+	matched := &Process{Base: &BaseProcess{SessionInfo: matchedSession}}
+	require.NoError(t, matched.ValidateStatementHashBuildCommitID())
+
+	// If the probed receiver is replaced after placement, active hash
+	// evaluation still enforces the original coordinator build.
+	version.BuildCommitID = replacementBuild
+	require.ErrorContains(t, matched.ValidateStatementHashBuildCommitID(),
+		"worker build does not match the build selected by its coordinator")
+}
+
+func TestBuildProcessInfoWithStatementHashDoesNotReseedReceivedBuildIdentity(t *testing.T) {
+	oldBuildCommitID := version.BuildCommitID
+	const originBuild = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const intermediateBuild = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	version.BuildCommitID = originBuild
+	t.Cleanup(func() { version.BuildCommitID = oldBuildCommitID })
+
+	origin, _ := newCodecTestProcess(t)
+	origin.Base.IsFrontend = true
+	wire, err := origin.BuildProcessInfoWithStatementHash("select 1")
+	require.NoError(t, err)
+
+	codec := NewCodecService(fakeCodecTxnClient{op: fakeCodecTxnOperator{}}, nil, nil, nil, nil, nil, nil, nil)
+	for _, tc := range []struct {
+		name     string
+		identity string
+	}{
+		{name: "missing identity", identity: ""},
+		{name: "malformed identity", identity: strings.Repeat("g", 40)},
+		{name: "abbreviated identity", identity: originBuild[:7]},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			version.BuildCommitID = originBuild
+			incoming := wire
+			incoming.SessionInfo.StatementHashExpectedBuildCommitId = tc.identity
+			remote, err := codec.Decode(defines.AttachAccountId(context.Background(), 42), incoming)
+			require.NoError(t, err)
+			defer remote.Free()
+			require.True(t, remote.Base.SessionInfo.statementHashProcessInfoReceived)
+
+			// A different intermediate build cannot replace a missing or
+			// malformed coordinator identity with its own local revision. An
+			// unrelated ordinary scope may forward it, but must not reseed it.
+			version.BuildCommitID = intermediateBuild
+			ordinaryForward, err := remote.BuildProcessInfo("select 1")
+			require.NoError(t, err)
+			require.Equal(t, tc.identity, ordinaryForward.SessionInfo.StatementHashExpectedBuildCommitId)
+
+			forwarded, err := remote.BuildProcessInfoWithStatementHash("select 1")
+			require.ErrorContains(t, err, "coordinator build commit ID")
+			require.Empty(t, forwarded.SessionInfo.StatementHashExpectedBuildCommitId)
+			require.Equal(t, tc.identity, remote.Base.SessionInfo.StatementHashExpectedBuildCommitID)
+		})
+	}
 }
 
 func TestBuildProcessInfoStatementHashPropagatesSQLModeResolverErrors(t *testing.T) {

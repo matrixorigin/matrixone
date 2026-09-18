@@ -26,7 +26,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	mysqlparser "github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
-	"github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -245,11 +244,8 @@ func StatementHash(
 			return nil, statementHashInputTooLargeError(len(input))
 		}
 		if proc != nil && proc.Base != nil {
-			expectedBuild := proc.Base.SessionInfo.StatementHashExpectedBuildCommitID
-			if expectedBuild != "" && expectedBuild != version.BuildCommitID {
-				return nil, moerr.NewNotSupportedNoCtx(
-					"MO_STATEMENT_HASH worker build does not match the build selected by its coordinator",
-				)
+			if err := proc.ValidateStatementHashBuildCommitID(); err != nil {
+				return nil, err
 			}
 		}
 		if !sqlModeResolved {

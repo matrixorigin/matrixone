@@ -62,7 +62,7 @@ func TestIsFullBuildCommitID(t *testing.T) {
 		{name: "uppercase spelling", id: strings.Repeat("A", 40)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			require.Equal(t, tc.want, isFullBuildCommitID(tc.id))
+			require.Equal(t, tc.want, version.IsFullBuildCommitID(tc.id))
 		})
 	}
 }
@@ -127,6 +127,65 @@ func TestStatementHashDestinationProtocolValidation(t *testing.T) {
 	_, err = encodeRemoteScope(scope, c.proc)
 	require.ErrorContains(t, err, "same build commit")
 	require.Equal(t, client.calls, client.releases)
+}
+
+func TestStatementHashRemoteForwardingPreservesOriginBuildAcrossHops(t *testing.T) {
+	const originBuild = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const replacementBuild = "cccccccccccccccccccccccccccccccccccccccc"
+
+	c, client := expressionProtocolTestCompile(t)
+	oldBuildCommitID := version.BuildCommitID
+	version.BuildCommitID = originBuild
+	t.Cleanup(func() { version.BuildCommitID = oldBuildCommitID })
+	client.version = defines.MORPCVersion87
+	client.buildCommitID = originBuild
+
+	remoteSession, err := process.ConvertToProcessSessionInfo(pipeline.SessionInfo{
+		StatementHashExpectedBuildCommitId: originBuild,
+	})
+	require.NoError(t, err)
+	c.proc.Base.SessionInfo = remoteSession
+
+	scope := statementHashProtocolScope(c.proc)
+	defer scope.RootOp.Release()
+
+	// The first probe is against A, and a later worker replacement must be
+	// probed again rather than inheriting a cached success.
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.NoError(t, err)
+	require.Equal(t, 1, client.calls)
+	client.buildCommitID = replacementBuild
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.ErrorContains(t, err, "same build commit")
+	require.Equal(t, 2, client.calls)
+}
+
+func TestStatementHashRemoteForwardingRejectsIntermediateBuildBeforeProbe(t *testing.T) {
+	const originBuild = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const intermediateBuild = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+	c, client := expressionProtocolTestCompile(t)
+	oldBuildCommitID := version.BuildCommitID
+	version.BuildCommitID = originBuild
+	t.Cleanup(func() { version.BuildCommitID = oldBuildCommitID })
+	client.version = defines.MORPCVersion87
+	client.buildCommitID = originBuild
+
+	remoteSession, err := process.ConvertToProcessSessionInfo(pipeline.SessionInfo{
+		StatementHashExpectedBuildCommitId: originBuild,
+	})
+	require.NoError(t, err)
+	c.proc.Base.SessionInfo = remoteSession
+
+	scope := statementHashProtocolScope(c.proc)
+	defer scope.RootOp.Release()
+
+	// A B binary receiving work from A must reject before any destination
+	// capability probe or dispatch; it cannot reinterpret the request as B.
+	version.BuildCommitID = intermediateBuild
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.ErrorContains(t, err, "worker build does not match")
+	require.Zero(t, client.calls)
 }
 
 func TestStatementHashDestinationRejectsUnknownOrFailedProbe(t *testing.T) {

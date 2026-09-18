@@ -14,6 +14,20 @@
 
 package version
 
+// IsFullBuildCommitID reports whether id is a full lowercase hexadecimal
+// SHA-1 revision suitable for fencing build-scoped remote behavior.
+func IsFullBuildCommitID(id string) bool {
+	if len(id) != 40 {
+		return false
+	}
+	for _, ch := range id {
+		if !((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f')) {
+			return false
+		}
+	}
+	return true
+}
+
 var (
 	// GoVersion go version, setup by makefile
 	GoVersion = ""

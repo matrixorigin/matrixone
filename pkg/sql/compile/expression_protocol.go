@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
+	versionpkg "github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -106,7 +107,7 @@ func remoteWorkersSupportProtocolAndBuild(
 		supported := resp.GetProtocolVersion != nil && resp.GetProtocolVersion.Version >= minimum
 		if supported && expectedBuildCommitID != "" {
 			reportedBuildID := resp.GetProtocolVersion.BuildCommitID
-			supported = isFullBuildCommitID(reportedBuildID) && reportedBuildID == expectedBuildCommitID
+			supported = versionpkg.IsFullBuildCommitID(reportedBuildID) && reportedBuildID == expectedBuildCommitID
 		}
 		client.Release(resp)
 		if !supported {

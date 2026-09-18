@@ -18,7 +18,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
-	"github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -33,13 +32,12 @@ func validateStatementHashDestination(proc *process.Process, p *pipeline.Pipelin
 			"MO_STATEMENT_HASH remote execution requires a versioned remote destination",
 		)
 	}
-	if !isFullBuildCommitID(version.BuildCommitID) {
-		return moerr.NewNotSupportedNoCtx(
-			"MO_STATEMENT_HASH remote execution requires a full 40-character local build commit ID from a clean source tree",
-		)
+	expectedBuildCommitID, err := proc.StatementHashBuildCommitIDForRemote()
+	if err != nil {
+		return err
 	}
 	supported, err := remoteWorkersSupportProtocolAndBuild(proc,
-		engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion87, version.BuildCommitID)
+		engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion87, expectedBuildCommitID)
 	if err != nil {
 		return err
 	}
@@ -49,16 +47,4 @@ func validateStatementHashDestination(proc *process.Process, p *pipeline.Pipelin
 		)
 	}
 	return nil
-}
-
-func isFullBuildCommitID(id string) bool {
-	if len(id) != 40 {
-		return false
-	}
-	for _, ch := range id {
-		if !((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f')) {
-			return false
-		}
-	}
-	return true
 }
