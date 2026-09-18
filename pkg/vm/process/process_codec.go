@@ -253,6 +253,13 @@ func (proc *Process) buildProcessInfo(
 			// without applying the hash-only build gate to unrelated scopes.
 			if proc.Base.SessionInfo.statementHashProcessInfoReceived {
 				statementHashExpectedBuildCommitID = proc.Base.SessionInfo.StatementHashExpectedBuildCommitID
+				// An ordinary scope can be an intermediate hop for a later
+				// MO_STATEMENT_HASH scope. Preserve the deferred resolver failure
+				// just like the build identity; otherwise the next hash hop could
+				// silently resolve sql_mode locally and produce a placement-
+				// dependent hash.
+				statementHashResolverErr = append([]byte(nil), proc.Base.SessionInfo.StatementHashSQLModeError...)
+				statementHashResolverErrDetail = proc.Base.SessionInfo.StatementHashSQLModeErrorDetail
 			}
 			sqlMode = resolveSqlMode(proc)
 		}

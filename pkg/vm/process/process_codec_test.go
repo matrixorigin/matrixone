@@ -559,11 +559,41 @@ func TestBuildProcessInfoStatementHashPropagatesSQLModeResolverErrors(t *testing
 	require.EqualError(t, err, resolverErr.Error())
 	require.True(t, moerr.IsMoErrCode(err, resolverErr.ErrorCode()))
 
-	forwarded, err := remote.BuildProcessInfoWithStatementHash("select 1")
+	// A scope without MO_STATEMENT_HASH can still be an intermediate hop for a
+	// later hash-bearing scope. It must preserve the deferred resolver failure
+	// instead of letting the next hash hop consult its local resolver.
+	ordinaryForward, err := remote.BuildProcessInfo("select 1")
+	require.NoError(t, err)
+	require.Equal(t, info.SessionInfo.StatementHashSqlModeError,
+		ordinaryForward.SessionInfo.StatementHashSqlModeError)
+	require.Equal(t, info.SessionInfo.StatementHashSqlModeErrorDetail,
+		ordinaryForward.SessionInfo.StatementHashSqlModeErrorDetail)
+
+	ordinaryRemote, err := remoteService.Decode(defines.AttachAccountId(context.Background(), 42), ordinaryForward)
+	require.NoError(t, err)
+	defer ordinaryRemote.Free()
+	ordinaryRemote.Base.IsFrontend = false
+	ordinaryRemote.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return nil, moerr.NewInternalErrorNoCtx("second worker-local resolver must not replace coordinator error")
+	})
+	_, err = ResolveSQLMode(ordinaryRemote)
+	require.EqualError(t, err, resolverErr.Error())
+
+	forwarded, err := ordinaryRemote.BuildProcessInfoWithStatementHash("select 1")
 	require.NoError(t, err)
 	require.Equal(t, version.BuildCommitID, forwarded.SessionInfo.StatementHashExpectedBuildCommitId)
 	require.Equal(t, info.SessionInfo.StatementHashSqlModeError, forwarded.SessionInfo.StatementHashSqlModeError)
 	require.Equal(t, info.SessionInfo.StatementHashSqlModeErrorDetail, forwarded.SessionInfo.StatementHashSqlModeErrorDetail)
+
+	finalRemote, err := remoteService.Decode(defines.AttachAccountId(context.Background(), 42), forwarded)
+	require.NoError(t, err)
+	defer finalRemote.Free()
+	finalRemote.Base.IsFrontend = false
+	finalRemote.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return nil, moerr.NewInternalErrorNoCtx("final worker-local resolver must not replace coordinator error")
+	})
+	_, err = ResolveSQLMode(finalRemote)
+	require.EqualError(t, err, resolverErr.Error())
 
 	// A transient resolver failure must not poison the process: a later retry
 	// resolves a fresh snapshot and succeeds.
