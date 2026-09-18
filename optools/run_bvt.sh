@@ -45,15 +45,15 @@ function cleanup_mo() {
     local pid="$MO_PID"
     local -a BVT_CHILD_PIDS=()
     collect_descendants "$pid"
-    if kill -0 "$MO_PID" 2>/dev/null; then
+    if process_is_alive "$MO_PID"; then
         kill -TERM "$MO_PID" 2>/dev/null || true
         for _ in {1..30}; do
-            if ! kill -0 "$MO_PID" 2>/dev/null; then
+            if ! process_is_alive "$MO_PID"; then
                 break
             fi
             sleep 1
         done
-        if kill -0 "$MO_PID" 2>/dev/null; then
+        if process_is_alive "$MO_PID"; then
             kill -KILL "$MO_PID" 2>/dev/null || true
         fi
     fi
@@ -70,15 +70,15 @@ function cleanup_jstfu() {
     if [[ -z "$JSTFU_PID" ]]; then
         return
     fi
-    if kill -0 "$JSTFU_PID" 2>/dev/null; then
+    if process_is_alive "$JSTFU_PID"; then
         kill -TERM "$JSTFU_PID" 2>/dev/null || true
         for _ in {1..15}; do
-            if ! kill -0 "$JSTFU_PID" 2>/dev/null; then
+            if ! process_is_alive "$JSTFU_PID"; then
                 break
             fi
             sleep 1
         done
-        if kill -0 "$JSTFU_PID" 2>/dev/null; then
+        if process_is_alive "$JSTFU_PID"; then
             kill -KILL "$JSTFU_PID" 2>/dev/null || true
         fi
     fi
