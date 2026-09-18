@@ -668,7 +668,12 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
 		return 0, err
 	}
 	includeAwareColumns := includeColumns
-	if vecCtx.rankOption != nil {
+	// The local POST candidate is annotated as explicit POST to prevent nested
+	// adaptive construction, but it still owns the AUTO resolution semantics.
+	// Preserve AUTO's include-aware index-only eligibility from the prepared
+	// context. A user-written explicit POST keeps its historical behavior.
+	preserveAutoInclude := prepared != nil && ivfCtx.isAutoMode
+	if vecCtx.rankOption != nil && !preserveAutoInclude {
 		switch vecCtx.rankOption.Mode {
 		case "", "include", "auto":
 		default:
