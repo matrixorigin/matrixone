@@ -4553,10 +4553,6 @@ func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name s
 	return bindFuncExprAndConstFoldInternal(ctx, proc, name, args, true, false, nil)
 }
 
-func bindBoundFuncExprAndConstFold(ctx context.Context, proc *process.Process, name string, args []*Expr) (*plan.Expr, error) {
-	return bindFuncExprAndConstFoldInternal(ctx, proc, name, args, false, false, nil)
-}
-
 func bindBoundFuncExprAndConstFoldWithObserver(
 	ctx context.Context,
 	proc *process.Process,
@@ -7262,6 +7258,13 @@ func possibleStringDomainsForExpr(expr *plan.Expr) uint8 {
 	case "if", "iff":
 		if len(fn.Args) > 1 {
 			selected = fn.Args[1:]
+			// A constant condition makes the other branch unreachable.  Keep
+			// its string domain out of the result proof so a byte-preserving
+			// function outside IF can narrow metadata for the selected binary
+			// value.  Unknown and non-boolean conditions remain conservative.
+			if selectedBranch, ok := constantIfBranch(fn.Args); ok {
+				selected = []*plan.Expr{selectedBranch}
+			}
 		}
 	case "case":
 		for i := 1; i < len(fn.Args); i += 2 {
@@ -7304,6 +7307,24 @@ func possibleStringDomainsForExpr(expr *plan.Expr) uint8 {
 		return possibleStringDomainText | possibleStringDomainBinary
 	}
 	return staticDomains
+}
+
+func constantIfBranch(args []*plan.Expr) (*plan.Expr, bool) {
+	if len(args) < 3 {
+		return nil, false
+	}
+	lit := args[0].GetLit()
+	if lit == nil || lit.Isnull {
+		return nil, false
+	}
+	condition, ok := lit.Value.(*plan.Literal_Bval)
+	if !ok {
+		return nil, false
+	}
+	if condition.Bval {
+		return args[1], true
+	}
+	return args[2], true
 }
 
 func possibleStringDomainsForType(typ types.Type) uint8 {

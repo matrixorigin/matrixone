@@ -28,6 +28,45 @@ import (
 func TestBindControlFlowMetadata(t *testing.T) {
 	ctx := context.Background()
 
+	t.Run("constant IF exposes only the selected string domain to byte slicing", func(t *testing.T) {
+		for _, test := range []struct {
+			name       string
+			condition  bool
+			wantDomain uint8
+		}{
+			{name: "selected binary", condition: true, wantDomain: possibleStringDomainBinary},
+			{name: "selected text", condition: false, wantDomain: possibleStringDomainText},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				selected, err := BindFuncExprImplByPlanExpr(ctx, "if", []*planpb.Expr{
+					makePlan2BoolConstExprWithType(test.condition),
+					makePlan2VarBinaryConstExprWithType("e4bda0e5a5bd"),
+					makePlan2StringConstExprWithType("你好"),
+				})
+				require.NoError(t, err)
+				require.Equal(t, test.wantDomain, possibleStringDomainsForExpr(selected))
+
+				left, err := BindFuncExprImplByPlanExpr(ctx, "left", []*planpb.Expr{
+					selected, makePlan2Int64ConstExprWithType(2),
+				})
+				require.NoError(t, err)
+				substring, err := BindFuncExprImplByPlanExpr(ctx, "substring", []*planpb.Expr{
+					left, makePlan2Int64ConstExprWithType(2), makePlan2Int64ConstExprWithType(1),
+				})
+				require.NoError(t, err)
+
+				hex, err := BindFuncExprImplByPlanExpr(ctx, "hex", []*planpb.Expr{substring})
+				require.NoError(t, err)
+				require.Equal(t, int32(types.T_varchar), hex.Typ.Id)
+				if test.condition {
+					require.Equal(t, int32(2), hex.Typ.Width)
+				} else {
+					require.Greater(t, hex.Typ.Width, int32(2))
+				}
+			})
+		}
+	})
+
 	t.Run("if mixed string numeric keeps bounded varchar", func(t *testing.T) {
 		expr, err := BindFuncExprImplByPlanExpr(ctx, "if", []*planpb.Expr{
 			makePlan2BoolConstExprWithType(true),

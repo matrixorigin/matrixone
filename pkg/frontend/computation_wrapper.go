@@ -1292,13 +1292,17 @@ func binaryProtocolPrepareParamDomains(
 		normalized, visible, canonical, valid := plan2.PreparedDecimalRuntimeDomains(value)
 		return normalized, visible, canonical, valid, valid
 	case defines.MYSQL_TYPE_DATE:
-		return types.T_date.ToType(), types.Type{}, "", false, true
+		// Temporal wire values stay in the generic text category for the
+		// prepared plan.  A concrete temporal type is consumer-specific (for
+		// example INET_NTOA); publishing it as RuntimeType would make every
+		// other expression in the statement inherit the protocol source domain.
+		return types.T_text.ToType(), types.Type{}, "", false, true
 	case defines.MYSQL_TYPE_TIME:
-		return binaryProtocolTemporalType(types.T_time, value), types.Type{}, "", false, true
+		return types.T_text.ToType(), types.Type{}, "", false, true
 	case defines.MYSQL_TYPE_DATETIME:
-		return binaryProtocolTemporalType(types.T_datetime, value), types.Type{}, "", false, true
+		return types.T_text.ToType(), types.Type{}, "", false, true
 	case defines.MYSQL_TYPE_TIMESTAMP:
-		return binaryProtocolTemporalType(types.T_timestamp, value), types.Type{}, "", false, true
+		return types.T_text.ToType(), types.Type{}, "", false, true
 	case defines.MYSQL_TYPE_NULL:
 		// Keep NULL on the prepared plan's original domain.  The next execute
 		// packet may carry a concrete type and will specialize it then.
@@ -1318,13 +1322,6 @@ func binaryProtocolPrepareParamDomains(
 	default:
 		return types.T_text.ToType(), types.Type{}, "", false, true
 	}
-}
-
-func binaryProtocolTemporalType(oid types.T, value string) types.Type {
-	if strings.Contains(value, ".") {
-		return oid.ToTypeWithScale(6)
-	}
-	return oid.ToType()
 }
 
 // binaryProtocolInetNtoaSourceType keeps protocol source domains local to the
