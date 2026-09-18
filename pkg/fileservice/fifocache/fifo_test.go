@@ -43,6 +43,22 @@ func TestCacheSetGet(t *testing.T) {
 	assert.False(t, ok)
 }
 
+func TestCacheIndexGrowsWithCollidingKeys(t *testing.T) {
+	const count = 1025 // Cross the old per-shard reservation with real entries.
+	ctx := context.Background()
+	cache := New[int, int](fscache.ConstCapacity(count*2), func(int) uint64 { return 0 }, nil, nil, nil)
+	for key := range count {
+		inserted, rejected := cache.Set(ctx, key, key+1, 1)
+		assert.True(t, inserted)
+		assert.False(t, rejected)
+	}
+	for key := range count {
+		value, ok := cache.Get(ctx, key)
+		assert.True(t, ok)
+		assert.Equal(t, key+1, value)
+	}
+}
+
 func TestCacheEvict(t *testing.T) {
 	ctx := context.Background()
 	cache := New[int, int](fscache.ConstCapacity(8), ShardInt[int], nil, nil, nil)

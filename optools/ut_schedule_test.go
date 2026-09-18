@@ -637,6 +637,30 @@ exit 0
 	}
 }
 
+func TestCgroupResourceBreakdown(t *testing.T) {
+	script := `source ./run_ut.sh UT
+mkdir "$CASE_DIR/cgroup"
+printf 'anon 1024\nfile 2048\nshmem 512\nslab 256\nunrelated 999\n' > "$CASE_DIR/cgroup/memory.stat"
+printf 'max 6\noom 0\noom_kill 0\n' > "$CASE_DIR/cgroup/memory.events"
+printf 'usage_usec 100\nnr_throttled 3\nthrottled_usec 40\n' > "$CASE_DIR/cgroup/cpu.stat"
+printf 'some avg10=1.00 avg60=0.50 avg300=0.10 total=123\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=4\n' > "$CASE_DIR/cgroup/memory.pressure"
+cgroup_resource_breakdown "$CASE_DIR/cgroup"
+cgroup_resource_breakdown "$CASE_DIR/missing"
+`
+	out, err := scheduleHarness(t, script)
+	if err != nil {
+		t.Fatalf("resource breakdown: %v\n%s", err, out)
+	}
+	for _, field := range []string{"memory.stat.anon=1024", "memory.stat.file=2048", "memory.stat.shmem=512", "memory.events.max=6", "memory.events.oom_kill=0", "cpu.stat.nr_throttled=3", "cpu.stat.throttled_usec=40", "memory.pressure.some.total=123", "memory.pressure.full.total=4"} {
+		if !strings.Contains(string(out), field) {
+			t.Errorf("missing %s in %s", field, out)
+		}
+	}
+	if strings.Contains(string(out), "unrelated") || strings.Contains(string(out), "avg10") {
+		t.Fatalf("unexpected fields: %s", out)
+	}
+}
+
 func TestUTHeartbeatStopsCleanly(t *testing.T) {
 	script := `source ./run_ut.sh UT
 mkfifo "$CASE_DIR/heartbeat-ready"
@@ -658,6 +682,11 @@ stop_ut_heartbeat
 ! kill -0 "$heartbeat_pid" 2>/dev/null || exit 90
 
 UT_HEARTBEAT_INTERVAL=1
+# Exercise the actual heartbeat formatting without exposing real process data.
+function ps() {
+    [[ "$*" == '-eo pid=,ppid=,rss=,comm=' ]] || return 93
+    printf '1 0 100 tiny\n2 1 200 small\n3 1 300 third\n4 1 400 fourth\n5 1 500 fifth\n6 1 600 sixth\n7 1 700 seventh\n8 1 800 eighth\n9 1 900 largest\n'
+}
 start_ut_heartbeat
 LIGHT_RACE_REPORT="$G_WKSP/${G_TS}-light-race-report.out"
 cat > "$LIGHT_RACE_REPORT" <<'EOF'
@@ -674,6 +703,10 @@ grep -q 'event=heartbeat' "$UT_CHECKPOINT"
 grep -q 'active_cases=2' "$CASE_DIR/ut.log"
 grep -q 'TestPrivate' "$CASE_DIR/ut.log"
 grep -q 'TestShard' "$CASE_DIR/ut.log"
+grep -q 'processes=9' "$CASE_DIR/ut.log"
+grep -q 'processes.top_rss=pid=9,ppid=1,rss_kib=900,comm=largest;pid=8,ppid=1,rss_kib=800,comm=eighth;' "$CASE_DIR/ut.log"
+grep -q 'pid=2,ppid=1,rss_kib=200,comm=small;' "$CASE_DIR/ut.log"
+! grep -q 'pid=1,ppid=0,rss_kib=100,comm=tiny;' "$CASE_DIR/ut.log"
 `
 	mock := `#!/bin/bash
 if [[ "$1" == version ]]; then exit 0; fi
