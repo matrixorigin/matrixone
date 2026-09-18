@@ -68,8 +68,9 @@ const (
 	// Valid dates use the compact day-offset representation below 4 million.
 	// Keep a separate, fixed-width range for ALLOW_INVALID_DATES values so the
 	// original calendar fields survive vector/storage round trips instead of
-	// being normalized by DateFromCalendar.
-	invalidDateEncodingBase = Date(100_000_000)
+	// being normalized by DateFromCalendar. Starting at MinInt32 keeps the
+	// tagged range disjoint from both valid dates and arbitrary raw values.
+	invalidDateEncodingBase = Date(-2_147_483_648)
 )
 
 type TimeType int32

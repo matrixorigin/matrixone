@@ -300,6 +300,15 @@ func TestCalendarCompareOrdersInvalidDatesByFields(t *testing.T) {
 	require.Equal(t, 1, DateDescCompare(invalid, valid))
 }
 
+func TestDateCompareDoesNotTreatRawValuesAsTaggedDates(t *testing.T) {
+	raw := []Date{Date(0x06f3a1a8), Date(0x57b5ffc5), Date(-700000)}
+	for i := range raw {
+		for j := range raw {
+			require.Equal(t, GenericAscCompare(raw[i], raw[j]), DateAscCompare(raw[i], raw[j]))
+		}
+	}
+}
+
 func TestInvalidDateArithmeticUsesCalendarFields(t *testing.T) {
 	invalid, err := ParseDateCastWithInvalidDates("2024-02-30")
 	require.NoError(t, err)

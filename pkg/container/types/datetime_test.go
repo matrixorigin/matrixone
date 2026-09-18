@@ -427,6 +427,16 @@ func TestCalendarCompareOrdersInvalidDatetimesByFields(t *testing.T) {
 	require.Equal(t, 1, DatetimeDescCompare(invalid, valid))
 }
 
+func TestDatetimeCompareKeepsPreEpochValuesInTheLegacyEncoding(t *testing.T) {
+	preEpoch := DatetimeFromClock(1900, 1, 1, 0, 0, 0, 0)
+	invalid, err := ParseDatetimeWithInvalidDates("1900-02-30 00:00:00", 6)
+	require.NoError(t, err)
+
+	require.Equal(t, "1900-01-01 00:00:00", preEpoch.String())
+	require.Equal(t, "1900-02-30 00:00:00", invalid.String())
+	require.Less(t, DatetimeAscCompare(preEpoch, invalid), 0)
+}
+
 func TestInvalidDatetimeArithmeticUsesCalendarFields(t *testing.T) {
 	invalid, err := ParseDatetimeWithInvalidDates("2024-02-30 12:34:56", 6)
 	require.NoError(t, err)

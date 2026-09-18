@@ -41,6 +41,10 @@ const (
 	minMinuteInHour, maxMinuteInHour     = 0, 59
 	minSecondInMinute, maxSecondInMinute = 0, 59
 	invalidDatetimeDayMicros             = int64(SecsPerDay) * MicroSecsPerSec
+	// Valid DATETIME values, including dates before the epoch, are well above
+	// this range. Keeping invalid calendar values below MinInt64 plus their
+	// packed payload makes the tag unambiguous for arbitrary Datetime values.
+	invalidDatetimeEncodingBase = int64(math.MinInt64)
 )
 
 var (
@@ -583,17 +587,18 @@ func DatetimeFromClock(year int32, month, day, hour, minute, sec uint8, msec uin
 }
 
 func isEncodedInvalidDatetime(dt Datetime) bool {
-	return dt < ZeroDatetime
+	maxPayload := int64(MaxDatetimeYear*10000+12*100+31)*invalidDatetimeDayMicros + invalidDatetimeDayMicros - 1
+	return int64(dt) >= invalidDatetimeEncodingBase+1 && int64(dt) <= invalidDatetimeEncodingBase+maxPayload
 }
 
 func encodeInvalidDatetime(year int32, month, day, hour, minute, sec uint8, msec uint32) Datetime {
 	date := int64(year)*10000 + int64(month)*100 + int64(day)
 	clock := (int64(hour)*SecsPerHour+int64(minute)*SecsPerMinute+int64(sec))*MicroSecsPerSec + int64(msec)
-	return Datetime(-(date*invalidDatetimeDayMicros + clock))
+	return Datetime(invalidDatetimeEncodingBase + date*invalidDatetimeDayMicros + clock)
 }
 
 func decodeInvalidDatetime(dt Datetime) (year int32, month, day, hour, minute, sec uint8, msec int64) {
-	packed := -int64(dt)
+	packed := int64(dt) - invalidDatetimeEncodingBase
 	date := packed / invalidDatetimeDayMicros
 	clock := packed % invalidDatetimeDayMicros
 	year = int32(date / 10000)
