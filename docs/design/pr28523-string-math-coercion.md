@@ -1,18 +1,19 @@
 # PR #28523: String Math Numeric Coercion and Prepared-Parameter Roles
 
 - Status: Draft / awaiting maintainer approval
-- Design revision: 14
+- Design revision: 15
 - Issue: [#28487](https://github.com/matrixorigin/matrixone/issues/28487)
 - Implementation PR: [#28523](https://github.com/matrixorigin/matrixone/pull/28523)
-- Candidate integration base: `780ef933f2479aa1679faf13d08850ce6c8f7c2f`
-  (tree `2a9c8a48c882411b3b1b44f29f5137378bd88a7c`), confirmed as current
-  `main` and integrated by a clean rebase. All 26 candidate commits replayed
-  without conflicts. Since the prior base `6690f1af`, main adds one commit
-  changing only `pkg/vm/engine/test/change_handle_test.go`; it does not overlap
-  the candidate's 24 changed paths. The post-rebase implementation/test
-  snapshot before this revision-13 documentation update is
-  `7c88f8473f6ff723ef1da2d768932c975cc1b991` (tree
-  `6bcec702c1dcc627395f76f6bc46b5882bdd01e4`).
+- Candidate integration base: `480b91764a94cf9ab49d3f2b43a60cb63ce677c6`
+  (tree `c1f82a34b4dae57623c1217301ae6a2dd4a35fd3`), confirmed as current
+  `main` and integrated by a clean rebase. All 29 candidate commits replayed
+  without conflicts. Since the prior base `780ef933`, main adds one commit
+  changing `pkg/sql/plan/stats.go`, `pkg/sql/plan/stats_test.go`, and
+  `pkg/tests/issues/issue_29068_test.go`; none overlap this candidate's 46
+  changed paths. The exact post-rebase candidate is
+  implementation/test snapshot before this revision-15 documentation-only
+  update is `ee613d767e4daa269ad0f3cf7c3599118de5b076` (tree
+  `8cc85f221c73b86f46cdc32e4627755065ae3058`).
 - Published PR source head before the local SCA repair:
   `7535f9f4023cd6c7d4e9485409477beaa4dbf61b` (tree
   `7b2b0c8236b1e5111b2e970137596a762439dcfd`).
@@ -34,9 +35,10 @@
   package, race, COM_STMT, and SQL-mode tests were rerun successfully there.
   Revision 12 records the latest-main integration evidence and proposed
   interpretation of Fengtt's compatibility note. Revision 13 records the
-  subsequent SCA repair and latest-main rebase below. Revision 14 records the
-  user-selected positive SQL-mode contract; formal maintainer design approval
-  remains pending.
+  earlier SCA repair and main rebase below. Revision 14 records the
+  user-selected positive SQL-mode contract. Revision 15 records the exact
+  current-main rebase and local validation; implementation proceeds without
+  waiting for formal maintainer design approval, which remains pending.
 - The initial rebase had two shared paths with main since the historical
   base, `pkg/sql/plan/base_binder.go` and `pkg/sql/plan/utils.go`; both applied
   cleanly. The `4c31142` to `a3ede72` delta added 18 paths and the subsequent
@@ -78,7 +80,7 @@ This document is the stable design revision requested before implementation
 approval. It must not be read as a maintainer approval until the approval
 record at the end is filled by an authorized reviewer.
 
-Revision 14 supersedes the revision-13 candidate mapping described in the
+Revision 15 supersedes the revision-13 candidate mapping described in the
 historical feedback records below. The user selected the explicit, opt-in
 `MYSQL_NUMERIC_COMPATIBILITY` contract documented here and asked that
 implementation proceed without waiting for maintainer design approval. This
@@ -902,7 +904,7 @@ changed-line coverage gate are not claimed. The previous CI run
 `35197284882` is historical evidence on the old published head, not this
 post-rebase candidate.
 
-## Current SCA repair and latest-main verification (revision 13)
+## Historical SCA repair and latest-main verification (revision 13)
 
 CI run `35242989945` on published head `7535f9f4023cd6c7d4e9485409477beaa4dbf61b`
 reported two PR-caused SCA findings: Go 1.26.4 gofmt rejected indentation in
@@ -936,18 +938,68 @@ log. This is reusable evidence for the unchanged SQL/BVT behavior, not a CI run
 on the new local head; no local BVT or post-fix remote SCA/CI run is claimed.
 Maintainer design approval remains pending.
 
+## Current strict-default implementation and latest-main verification (revision 15)
+
+The strict-by-default contract selected by the user is implemented: default,
+empty, unset, and legacy/nil process state are strict; only the explicit
+`MYSQL_NUMERIC_COMPATIBILITY` SQL mode enables MySQL numeric-prefix parsing;
+`MATRIXONE_NATIVE` remains strict and takes precedence if both are set. The
+separate account/database `MYSQL_COMPATIBILITY_MODE` setting is not reused.
+Session/process propagation, protobuf transport, prepared-plan/cache mode
+transitions, direct and prepared conversion paths, warnings, and the
+function-role boundaries are covered by the implementation and tests above.
+
+The exact implementation/test snapshot `ee613d767e4daa269ad0f3cf7c3599118de5b076` (tree
+`8cc85f221c73b86f46cdc32e4627755065ae3058`) was rebased onto current main
+`480b91764a94cf9ab49d3f2b43a60cb63ce677c6` (tree
+`c1f82a34b4dae57623c1217301ae6a2dd4a35fd3`): 29 commits replayed cleanly,
+with no overlapping paths from main's one-commit delta. This implementation/test
+snapshot is 29 commits ahead of this base; revision 15 is documentation-only.
+
+On the exact rebased source, Go 1.26.4 and the repository CGo test wrapper
+passed the full parser, process, math-function, frontend, and planner packages.
+The two real embedded-cluster prepared-statement regressions
+`TestIssue27294PreparedNumericOverloads` and
+`TestIssue28523NumericCompatibilityOverBinaryPreparedStatement` passed
+together. The focused prepared-owner planner race tests passed. CGo-aware
+`go vet` passed for the parser, process, math-function, planner, frontend, and
+issue-test packages. Exact durations and commands are retained in the local
+issue-to-PR evidence ledger.
+
+The focused distributed BVT
+`test/distributed/cases/function/func_math_string_numeric.test` passed twice
+at 118/118. Those two BVT runs used the existing test-built standalone service
+binary from the strict-mode implementation snapshot before the latest-main
+rebase; the runtime implementation paths were unchanged by the single
+non-overlapping main commit. A final-head `make build` was attempted but could
+not finish because the host temporary volume ran out of space (`no space left
+on device`); this is an environment limit, not a source compile diagnostic.
+Therefore no exact-final-binary build, remote CI run, PR-wide coverage result,
+or multi-CN runtime claim is made. The BVT evidence is supplemental to the
+exact-source Go and COM_STMT validation, not a substitute for it.
+
+Both BVT invocations used `-o`, which intentionally ignores result-set
+metadata. The checked-in fixture records the DECIMAL `TRUNCATE` result as
+`[3,5,1]`, value `1.0`; these runs do not establish an exact-head metadata
+comparison or a base-only metadata change, so neither is claimed.
+
+The implementation is complete on this local candidate and does not wait for
+design approval, as requested. The approval record remains explicitly pending
+and must not be represented as maintainer-approved. No PR comment, review
+request, push, or merge was performed in this turn.
+
 ## 7. Approval record
 
 ```text
 Design path: docs/design/pr28523-string-math-coercion.md
-Design revision: 14
-Candidate source inputs: published PR head before SCA repair 7535f9f4023cd6c7d4e9485409477beaa4dbf61b (tree 7b2b0c8236b1e5111b2e970137596a762439dcfd); latest main base 780ef933f2479aa1679faf13d08850ce6c8f7c2f (tree 2a9c8a48c882411b3b1b44f29f5137378bd88a7c); rebased implementation/test snapshot 7c88f8473f6ff723ef1da2d768932c975cc1b991 (tree 6bcec702c1dcc627395f76f6bc46b5882bdd01e4). This revision-13 approval-record update is documentation-only after that tested snapshot.
-Integration base: 780ef933f2479aa1679faf13d08850ce6c8f7c2f (tree 2a9c8a48c882411b3b1b44f29f5137378bd88a7c)
+Design revision: 15
+Candidate source inputs: local candidate at intake c0e0ad3553b4036ca132db4a31ded544f24a16c1; strict-default implementation commit before rebase 0bdc2c625fe23c5c28294047467e2960dab3269f; final rebased candidate ee613d767e4daa269ad0f3cf7c3599118de5b076 (tree 8cc85f221c73b86f46cdc32e4627755065ae3058).
+Integration base: 480b91764a94cf9ab49d3f2b43a60cb63ce677c6 (tree c1f82a34b4dae57623c1217301ae6a2dd4a35fd3)
 Scope/trigger: PR reviews 5199052257, 5214666396 and comment 5687377735; >500 production lines and planner/plan compatibility boundary
 Reviewer identity and role: historical GPT-6 Astra review of d56711fa5b429e5e6e52f64f603d2e853478edca against base 4ff27bb9b35c43c1b0961bb9a01bf8fc0b6a2171; any exact-head review decision is tracked separately from maintainer design approval
-Review timestamp: historical revision-7 review was recorded 2026-09-17; revision-11 Astra Medium follow-up resolved its P3 evidence-label correction; exact revision-12 implementation review is tracked separately from maintainer design approval, which remains pending
+Review timestamp: exact final-candidate Astra Medium review is tracked separately from maintainer design approval, which remains pending
 Decision: DRAFT / AWAITING MAINTAINER APPROVAL
-Validation evidence: historical revision-9 CGo, vet, formatting, and benchmark results are recorded above; revision-12 owner-boundary and COM_STMT evidence remains recorded above; revision-13 SCA repair, Go 1.26.4 formatting, incremental four-package SCA/vet/sqlclosecheck, exact COM_STMT test, full plan/function/frontend packages, and clean rebase are recorded immediately above. The prior-head Compose(PROXY) run selected the numeric-string BVT case, but no post-fix current-head CI or PR-wide merged changed-line coverage pass is claimed.
+Validation evidence: historical revisions 9-14 remain recorded above. Revision 15 records clean rebase, exact-source Go packages, focused planner race tests, both COM_STMT regressions, CGo-aware vet, and two 118/118 BVT comparisons using the pre-rebase strict-mode binary. Exact-final-head build was blocked by host temporary-volume capacity; no remote CI or PR-wide coverage pass is claimed.
 User-selected compatibility contract for this revision: default/empty/unset/nil is strict; only explicit MYSQL_NUMERIC_COMPATIBILITY selects MySQL numeric-prefix conversion; MATRIXONE_NATIVE is always strict and wins if both are present; the new token is absent from the existing default SQL mode. This design decision was selected by the user and implementation proceeds on that basis; it is not maintainer approval. Remaining decisions proposed for maintainer acceptance: retain strict INT64 precision controls (no general integer-prefix widening); prefer correctness over function-wide zonemap pruning; retain the bounded per-parameter source scan with its measured owner-boundary traversal cost; approve the revision-9 argument-owner boundaries and no-inherited-role fast path
 Evidence links: [PR #28523](https://github.com/matrixorigin/matrixone/pull/28523); [historical-head CI run 35197284882](https://github.com/matrixorigin/matrixone/actions/runs/35197284882); the PR/evidence ledger is the record for commit replay, review, CI, and BVT; current local post-rebase evidence is recorded above
 Implementation deviations requiring follow-up: MOD native arithmetic widening regression fixed in 8fc4d5250; strict INT64 precision acceptance, zonemap-pruning decision, and scan-cost acceptance remain pending
