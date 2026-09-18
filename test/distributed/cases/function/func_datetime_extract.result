@@ -141,6 +141,13 @@ set @@session.default_week_format = 6;
 INSERT INTO t1 SELECT '2000-01-01', EXTRACT(WEEK FROM '2000-01-01'), weekday('2000-01-01'), WEEK('2000-01-01'), @@session.default_week_format;
 set @@session.default_week_format = 7;
 INSERT INTO t1 SELECT '2000-01-01', EXTRACT(WEEK FROM '2000-01-01'), weekday('2000-01-01'), WEEK('2000-01-01'), @@session.default_week_format;
+set @@session.default_week_format = 1;
+prepare week_after_set_stmt from 'select week(''2016-01-01'')';
+set @@session.default_week_format = 2;
+execute week_after_set_stmt;
+➤ week(2016-01-01)[4,32,0]  𝄀
+52
+deallocate prepare week_after_set_stmt;
 set @@session.default_week_format = 0;
 INSERT INTO t1 SELECT '2000-01-01', EXTRACT(WEEK FROM '2000-01-01'), weekday('2000-01-01'), WEEK('2000-01-01'), @@session.default_week_format;
 SELECT * FROM t1;
