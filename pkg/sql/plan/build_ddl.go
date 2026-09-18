@@ -331,6 +331,13 @@ func inferViewColumns(
 	if preOptimizeViewRequiredProtocol > viewRequiredProtocol {
 		viewRequiredProtocol = preOptimizeViewRequiredProtocol
 	}
+	viewDefinitionProtocol, err := requiredViewDefinitionFunctionProtocolVersion(query)
+	if err != nil {
+		return nil, err
+	}
+	if viewDefinitionProtocol > viewRequiredProtocol {
+		viewRequiredProtocol = viewDefinitionProtocol
+	}
 	if viewRequiredProtocol > 0 {
 		if forAuthoring {
 			err = RequirePersistedProtocolVersionForAuthoring(
