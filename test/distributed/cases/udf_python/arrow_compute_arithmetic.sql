@@ -3,7 +3,7 @@ drop database if exists udf_python_arrow_compute_arithmetic_bvt;
 create database udf_python_arrow_compute_arithmetic_bvt;
 use udf_python_arrow_compute_arithmetic_bvt;
 
-create function python_bvt_pc_add (x int) returns bigint language python as 'python_bvt_pc_add = lambda ctx, values: __import__("pyarrow.compute", fromlist=["add"]).add(values, 10)' handler 'python_bvt_pc_add' mode vector;
+create function python_bvt_pc_add (x int) returns int language python as 'python_bvt_pc_add = lambda ctx, values: __import__("pyarrow.compute", fromlist=["add"]).add(values, __import__("pyarrow").scalar(10, type=__import__("pyarrow").int32()))' handler 'python_bvt_pc_add' mode vector;
 create function python_bvt_pc_multiply (x int, y int) returns int language python as 'python_bvt_pc_multiply = lambda ctx, left, right: __import__("pyarrow.compute", fromlist=["multiply"]).multiply(left, right)' handler 'python_bvt_pc_multiply' mode vector;
 create function python_bvt_pc_if_else (flag bool, x int, y int) returns int language python as 'python_bvt_pc_if_else = lambda ctx, flag, left, right: __import__("pyarrow.compute", fromlist=["if_else"]).if_else(flag, left, right)' handler 'python_bvt_pc_if_else' mode vector;
 create function python_bvt_pc_fill_null (x int) returns int language python as 'python_bvt_pc_fill_null = lambda ctx, values: __import__("pyarrow.compute", fromlist=["fill_null"]).fill_null(values, -7)' handler 'python_bvt_pc_fill_null' mode vector;
