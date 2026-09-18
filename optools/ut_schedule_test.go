@@ -35,6 +35,12 @@ if [[ -n "${EXPECTED_HEAVY_PARALLEL:-}" ]]; then
   *) printf 'unexpected heavy parallelism: %s\n' "$*" >&2; exit 94 ;;
  esac
 fi
+if [[ "$1" == test && -n "${EXPECTED_LIGHT_PARALLEL:-}" && "$*" == *pkg/light-package* ]]; then
+ case " $* " in
+  *" -p ${EXPECTED_LIGHT_PARALLEL} "*) ;;
+  *) printf 'unexpected light parallelism: %s\n' "$*" >&2; exit 96 ;;
+ esac
+fi
 if [[ "${EXPECT_ENGINE_BEFORE_HEAVY:-}" == 1 && "$1" == test && "$*" == *" -json "* && "$*" == *" -race "* ]]; then
  [[ -e "$CASE_DIR/engine-joined" ]] || { printf 'heavy started before engine join\n' >&2; exit 95; }
 fi
@@ -1069,6 +1075,12 @@ if [[ "$*" == *pkg/vectorindex/hnsw* ]]; then
  exit 0
 fi
 if [[ "$*" == *pkg/light-package* ]]; then
+ if [[ -n "${EXPECTED_LIGHT_PARALLEL:-}" ]]; then
+  case " $* " in
+   *" -p ${EXPECTED_LIGHT_PARALLEL} "*) ;;
+   *) printf 'unexpected light parallelism: %s\n' "$*" >&2; exit 96 ;;
+  esac
+ fi
  if [[ "$EXPECT_OVERLAP" == 1 ]]; then
   [[ -e "$CASE_DIR/hnsw-done" ]] || exit 81
  fi
@@ -1093,17 +1105,20 @@ if [[ "$*" == *pkg/tests/embedded* ]]; then printf 'embedded\n'; exit 0; fi
 if [[ "$*" == *pkg/backup* ]]; then printf 'heavy\n'; exit 0; fi
 exit 0
 `
-	for _, tc := range []struct {
-		name, parallel, overlap, expectOverlap, expected string
-	}{
-		{name: "default-off", parallel: "6", overlap: "__default__", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end"},
-		{name: "overlap", parallel: "6", overlap: "1", expectOverlap: "1", expected: "hnsw\nserial\nserial-end\nlight\nlight-end"},
-		{name: "sequential-explicit-off", parallel: "6", overlap: "0", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end"},
-		{name: "sequential-single-slot", parallel: "1", overlap: "0", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end"},
-		{name: "single-slot-guard", parallel: "1", overlap: "1", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end"},
-	} {
+	type lightScheduleCase struct {
+		name, parallel, lightParallel, expectedLightParallel, overlap, overlapParallel, expectOverlap, expected, expectedStatus, forceLaunchFailure string
+	}
+	cases := []lightScheduleCase{
+		{name: "default-off", parallel: "6", lightParallel: "__default__", expectedLightParallel: "3", overlap: "__default__", overlapParallel: "2", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end", expectedStatus: "0", forceLaunchFailure: "0"},
+		{name: "overlap", parallel: "6", lightParallel: "__default__", expectedLightParallel: "2", overlap: "1", overlapParallel: "2", expectOverlap: "1", expected: "hnsw\nserial\nserial-end\nlight\nlight-end", expectedStatus: "0", forceLaunchFailure: "0"},
+		{name: "sequential-explicit-off", parallel: "6", lightParallel: "__default__", expectedLightParallel: "3", overlap: "0", overlapParallel: "2", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end", expectedStatus: "0", forceLaunchFailure: "0"},
+		{name: "sequential-single-slot", parallel: "1", lightParallel: "6", expectedLightParallel: "1", overlap: "0", overlapParallel: "2", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end", expectedStatus: "0", forceLaunchFailure: "0"},
+		{name: "single-slot-guard", parallel: "1", lightParallel: "6", expectedLightParallel: "1", overlap: "1", overlapParallel: "2", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end", expectedStatus: "0", forceLaunchFailure: "0"},
+	}
+	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			script := `if [[ "$UT_OVERLAP_VALUE" == "__default__" ]]; then unset UT_OVERLAP_LIGHT; fi
+if [[ "$UT_LIGHT_PARALLEL_VALUE" == "__default__" ]]; then unset UT_LIGHT_PARALLEL; else UT_LIGHT_PARALLEL="$UT_LIGHT_PARALLEL_VALUE"; fi
 source ./run_ut.sh UT
 function logger() { :; }
 function make() { :; }
@@ -1112,9 +1127,12 @@ function egrep() { echo fake.pb.go; }
 	UT_SHARD=all
 UT_PARALLEL=${UT_PARALLEL_VALUE}
 if [[ "$UT_OVERLAP_VALUE" != "__default__" ]]; then UT_OVERLAP_LIGHT=${UT_OVERLAP_VALUE}; fi
-UT_OVERLAP_LIGHT_PARALLEL=2
+UT_OVERLAP_LIGHT_PARALLEL=${OVERLAP_PARALLEL_VALUE}
 UT_OVERLAP_PLAN=0
 UT_PREBUILD_EMBEDDED=0
+if [[ "$FORCE_LIGHT_LAUNCH_FAILURE" == 1 ]]; then
+ function start_light_race() { return 1; }
+fi
 function go() {
  if [[ "$1" == clean ]]; then return 0; fi
  if [[ "$1" != list ]]; then return 0; fi
@@ -1132,18 +1150,51 @@ function run_engine_race_shards() { printf 'engine\n' > "$ENGINE_RACE_REPORT"; r
 function run_plan_race_shards() { return 0; }
 trap handle_ut_termination TERM
 run_tests
-[[ "$UT_TEST_STATUS" == 0 ]] || exit 90
+[[ "$UT_TEST_STATUS" == "$EXPECTED_STATUS" ]] || exit 90
+if [[ "$EXPECTED_STATUS" != 0 ]]; then exit 0; fi
 [[ -z "$CURRENT_UT_PID$LIGHT_RACE_JOB_PID$ENGINE_RACE_JOB_PID$PLAN_RACE_JOB_PID" ]] || exit 91
 report=$(cat "$UT_REPORT")
 [[ "$report" == *"$EXPECTED_REPORT"* ]] || { printf 'REPORT=%q\n' "$report"; exit 92; }
 `
-			out, err := scheduleHarnessWithMock(t, script, mock,
-				"UT_PARALLEL_VALUE="+tc.parallel,
-				"UT_OVERLAP_VALUE="+tc.overlap,
-				"EXPECT_OVERLAP="+tc.expectOverlap,
-				"EXPECTED_REPORT="+tc.expected)
+			runCase := func(caseData lightScheduleCase) ([]byte, error) {
+				return scheduleHarnessWithMock(t, script, mock,
+					"UT_PARALLEL_VALUE="+caseData.parallel,
+					"UT_LIGHT_PARALLEL_VALUE="+caseData.lightParallel,
+					"UT_OVERLAP_VALUE="+caseData.overlap,
+					"OVERLAP_PARALLEL_VALUE="+caseData.overlapParallel,
+					"EXPECT_OVERLAP="+caseData.expectOverlap,
+					"EXPECTED_LIGHT_PARALLEL="+caseData.expectedLightParallel,
+					"EXPECTED_STATUS="+caseData.expectedStatus,
+					"EXPECTED_REPORT="+caseData.expected,
+					"FORCE_LIGHT_LAUNCH_FAILURE="+caseData.forceLaunchFailure)
+			}
+			out, err := runCase(tc)
 			if err != nil {
 				t.Fatalf("scheduler: %v\n%s", err, out)
+			}
+			if tc.name != "default-off" {
+				return
+			}
+
+			// Keep the existing subtest identity set stable while adding the
+			// new budget and fallback counterexamples as same-test harness runs.
+			for _, extra := range []lightScheduleCase{
+				{name: "explicit-light-six", parallel: "6", lightParallel: "6", expectedLightParallel: "6", overlap: "0", overlapParallel: "2", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end", expectedStatus: "0", forceLaunchFailure: "0"},
+				{name: "overlap-capped", parallel: "6", lightParallel: "1", expectedLightParallel: "1", overlap: "1", overlapParallel: "4", expectOverlap: "1", expected: "hnsw\nserial\nserial-end\nlight\nlight-end", expectedStatus: "0", forceLaunchFailure: "0"},
+				{name: "overlap-fallback-capped", parallel: "6", lightParallel: "1", expectedLightParallel: "1", overlap: "1", overlapParallel: "4", expectOverlap: "0", expected: "hnsw\nlight\nlight-end\nserial\nserial-end", expectedStatus: "0", forceLaunchFailure: "1"},
+				{name: "reject-zero-light-budget", parallel: "6", lightParallel: "0", overlap: "0", overlapParallel: "2", expectOverlap: "0", expectedStatus: "1", forceLaunchFailure: "0"},
+				{name: "reject-malformed-light-budget", parallel: "6", lightParallel: "not-a-number", overlap: "0", overlapParallel: "2", expectOverlap: "0", expectedStatus: "1", forceLaunchFailure: "0"},
+			} {
+				out, err = runCase(extra)
+				if err != nil {
+					t.Fatalf("scheduler case %s: %v\n%s", extra.name, err, out)
+				}
+			}
+
+			wrong := tc
+			wrong.expectedLightParallel = "6"
+			if out, err = runCase(wrong); err == nil {
+				t.Fatalf("scheduler accepted an intentionally wrong light budget assertion\n%s", out)
 			}
 		})
 	}

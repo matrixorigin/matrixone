@@ -44,6 +44,7 @@ UT_RUN_ID=${UT_RUN_ID:-"${G_TS}-${TEST_TYPE}"}
 UT_TIMEOUT=${UT_TIMEOUT:-"15"}
 UT_HARD_TIMEOUT=${UT_HARD_TIMEOUT:-"120m"}
 UT_PARALLEL=${UT_PARALLEL:-"1"}
+UT_LIGHT_PARALLEL=${UT_LIGHT_PARALLEL:-"3"}
 UT_SHARD=${UT_SHARD:-"all"}
 UT_PREBUILD_EMBEDDED=${UT_PREBUILD_EMBEDDED:-"0"}
 UT_OVERLAP_PLAN=${UT_OVERLAP_PLAN:-"1"}
@@ -1798,6 +1799,7 @@ function run_tests(){
     echo "#  UT TIMEOUT:      $UT_TIMEOUT"
     echo "#  UT HARD TIMEOUT: $UT_HARD_TIMEOUT"
     echo "#  UT PARALLEL:     $UT_PARALLEL"
+    echo "#  LIGHT PARALLEL:  $UT_LIGHT_PARALLEL"
     echo "#  UT SHARD:        $UT_SHARD"
     echo "#  EMBEDDED PREBUILD: $UT_PREBUILD_EMBEDDED"
     echo "#  PLAN OVERLAP:    $UT_OVERLAP_PLAN"
@@ -1957,6 +1959,7 @@ function run_tests(){
         local shard_engine=1
         local light_started=0
         local overlap_light=0
+        local light_stage_parallel=${UT_LIGHT_PARALLEL}
         local light_parallel=${UT_OVERLAP_LIGHT_PARALLEL}
 
         if ! [[ "${UT_PARALLEL}" =~ ^[1-9][0-9]*$ ]]; then
@@ -1964,9 +1967,23 @@ function run_tests(){
             UT_TEST_STATUS=1
             return 0
         fi
+        if ! [[ "${UT_LIGHT_PARALLEL}" =~ ^[1-9][0-9]*$ ]] ||
+            (( UT_LIGHT_PARALLEL > 64 )); then
+            logger "ERR" "UT_LIGHT_PARALLEL must be an integer from 1 through 64, got '${UT_LIGHT_PARALLEL}'"
+            UT_TEST_STATUS=1
+            return 0
+        fi
+        if (( light_stage_parallel > UT_PARALLEL )); then
+            light_stage_parallel=${UT_PARALLEL}
+            logger "INF" "Cap light race parallelism to UT_PARALLEL=${UT_PARALLEL}"
+        fi
         if (( light_parallel > UT_PARALLEL )); then
             light_parallel=${UT_PARALLEL}
             logger "INF" "Cap overlapping light package parallelism to UT_PARALLEL=${UT_PARALLEL}"
+        fi
+        if (( light_parallel > light_stage_parallel )); then
+            light_parallel=${light_stage_parallel}
+            logger "INF" "Cap overlapping light package parallelism to UT_LIGHT_PARALLEL=${light_stage_parallel}"
         fi
 
         if ! [[ "${HEAVY_RACE_PARALLEL}" =~ ^[1-9][0-9]*$ ]] ||
@@ -2101,14 +2118,14 @@ function run_tests(){
                 # from the authoritative suite. Fall back to the original
                 # foreground command so the package scope still executes.
                 logger "ERR" "failed to start overlapping light race-test helper; retrying in foreground"
-                run_ut_command "light" "light race-test packages" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $light_test_scope
+                run_ut_command "light" "light race-test packages" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p ${light_stage_parallel} -timeout "${UT_TIMEOUT}m" -race $light_test_scope
                 light_status=$?
                 overlap_light=0
             fi
         else
             if should_run_ut_stage light && [[ -n "${light_test_scope}" ]]; then
-                logger "INF" "Run light race-test packages with parallelism ${UT_PARALLEL}"
-                run_ut_command "light" "light race-test packages" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $light_test_scope
+                logger "INF" "Run light race-test packages with parallelism ${light_stage_parallel} (requested ${UT_LIGHT_PARALLEL}, global ${UT_PARALLEL})"
+                run_ut_command "light" "light race-test packages" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p ${light_stage_parallel} -timeout "${UT_TIMEOUT}m" -race $light_test_scope
                 light_status=$?
             fi
 
