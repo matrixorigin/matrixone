@@ -1500,6 +1500,65 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
 	})
 
+	t.Run("CRC32 JSON text-byte sender and receiver boundary", func(t *testing.T) {
+		jsonInput := &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_json)},
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
+		}
+		crc32JSON := &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_uint64)},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{
+					Obj:     planfunction.EncodeOverloadID(planfunction.CRC32, 0),
+					ObjName: "crc32",
+				},
+				Args: []*planpb.Expr{jsonInput},
+			}},
+		}
+		remotePipeline := &pipeline.Pipeline{
+			InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{crc32JSON}}},
+		}
+		features, err := planpb.RequiredRemoteExpressionFeatures(remotePipeline)
+		require.NoError(t, err)
+		require.True(t, features.CRC32JSONTextBytes)
+		require.True(t, features.StringNumericResultContracts)
+		c, client := expressionProtocolTestCompile(t)
+		op := projection.NewArgument()
+		op.ProjectList = []*planpb.Expr{crc32JSON}
+		scope := &Scope{
+			Magic:    Remote,
+			Proc:     c.proc,
+			NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"},
+			RootOp:   op,
+		}
+		t.Cleanup(op.Release)
+		cRT := moruntime.ServiceRuntime(c.proc.GetService())
+
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion85)
+		err = validateRemoteExpressionPipelineProtocol(proc, remotePipeline)
+		require.ErrorContains(t, err, "CRC32 JSON text-byte semantics require MORPC protocol version 86")
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+		client.version = defines.MORPCVersion85
+		_, err = encodeRemoteScope(scope, c.proc)
+		require.ErrorContains(t, err, "CRC32 JSON text-byte semantics require MORPC protocol version 86")
+
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion86)
+		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
+		client.version = defines.MORPCVersion86
+		cRT.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion86)
+		encoded, err := encodeRemoteScope(scope, c.proc)
+		require.NoError(t, err)
+		decoded, err := decodeScope(encoded, c.proc, true, nil)
+		require.NoError(t, err)
+		decoded.release()
+
+		cRT.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion85)
+		decoded, err = decodeScope(encoded, c.proc, true, nil)
+		require.ErrorContains(t, err, "CRC32 JSON text-byte semantics require MORPC protocol version 86")
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+		require.Nil(t, decoded)
+	})
+
 	t.Run("typed BIN/CONV sender and receiver boundary", func(t *testing.T) {
 		cases := []struct {
 			name       string

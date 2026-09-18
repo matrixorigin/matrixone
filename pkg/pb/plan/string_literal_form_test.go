@@ -564,3 +564,32 @@ func TestRequiredRemoteExpressionFeaturesBoundedConditionalStringDomains(t *test
 	require.False(t, features.BoundedConditionalStringDomains,
 		"the existing character overload remains wire-compatible")
 }
+
+func TestRequiredRemoteExpressionFeaturesCRC32JSONTextBytes(t *testing.T) {
+	crc32 := func(inputType int32) *Expr {
+		return &Expr{
+			Typ: Type{Id: stringNumericUint64ResultTypeID},
+			Expr: &Expr_F{F: &Function{
+				Func: &ObjectRef{Obj: int64(crc32FunctionID) << 32, ObjName: "crc32"},
+				Args: []*Expr{{Typ: Type{Id: inputType}, Expr: &Expr_Col{Col: &ColRef{ColPos: 0}}}},
+			}},
+		}
+	}
+
+	jsonExpr := crc32(planJSONTypeID)
+	features, err := RequiredRemoteExpressionFeatures(jsonExpr)
+	require.NoError(t, err)
+	require.True(t, features.CRC32JSONTextBytes)
+	require.True(t, features.StringNumericResultContracts)
+	require.True(t, features.Any())
+	required, err := RequiresMORPCVersion86CRC32JSONTextBytes(jsonExpr)
+	require.NoError(t, err)
+	require.True(t, required)
+
+	textFeatures, err := RequiredRemoteExpressionFeatures(crc32(61))
+	require.NoError(t, err)
+	require.False(t, textFeatures.CRC32JSONTextBytes,
+		"ordinary text CRC32 keeps its historical input bytes")
+	require.True(t, textFeatures.StringNumericResultContracts,
+		"the existing uint64 result contract remains independently gated")
+}
