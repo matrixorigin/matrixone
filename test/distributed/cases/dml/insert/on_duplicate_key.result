@@ -333,6 +333,12 @@ select * from t_odku_row_alias order by id;
 1  ¦  10  ¦  80
 delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 0);
+insert into t_odku_row_alias values (1, 5, 0) as n(x, y, z) on duplicate key update a = (select s.y + t_odku_row_alias.a from t_odku_scope_source as s where s.x = t_odku_row_alias.id), b = (select max(s.y) from t_odku_scope_source as s);
+select * from t_odku_row_alias order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  80  ¦  70
+delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 0);
 insert into t_odku_row_alias values (1, 5, 0) as n(x, y, z) on duplicate key update a = t_odku_row_alias.a + 1, b = (select n.y + t_odku_row_alias.a from t_odku_scope_source as n where n.x = t_odku_row_alias.id);
 unsupported DML: target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action
 delete from t_odku_row_alias;
