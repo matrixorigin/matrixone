@@ -32,10 +32,18 @@ from selection_values order by id;
 --error
 select python_bvt_pc_filter(value) from selection_values order by id;
 
+create table invalid_selection_values (value int, index_value int);
+insert into invalid_selection_values values (30, 99);
+
+-- boundscheck=True must turn an out-of-range index into a handler error.
+--error
+select python_bvt_pc_take(value, index_value) from invalid_selection_values;
+
 drop function python_bvt_pc_take(int, int);
 drop function python_bvt_pc_sort_take(int);
 drop function python_bvt_pc_equal(int);
 drop function python_bvt_pc_cast(int);
 drop function python_bvt_pc_filter(int);
+drop table invalid_selection_values;
 drop table selection_values;
 drop database udf_python_arrow_compute_selection_bvt;
