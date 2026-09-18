@@ -290,11 +290,21 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 	if opts.NoFull && opts.StartTs != "" && opts.startTsFromSnapshot {
 		extraOpts[cdc.CDCTaskExtraOptions_InitialSnapshotProtocol] = cdc.CDCInitialSnapshotProtocolNoFullHLC
 	}
+	// Full snapshots use the stable-epoch capability fence. Source patterns
+	// that need lossless bytes or mode-2 case metadata use the same executor
+	// fence even for NoFull tasks; legacy readers would silently drop fields.
+	stable := false
 	if !opts.NoFull {
 		cdc.FinalizeInitialSnapshotOptions(extraOpts)
-		_, stable := extraOpts[cdc.CDCTaskExtraOptions_InitialSnapshotProtocol]
+		_, stable = extraOpts[cdc.CDCTaskExtraOptions_InitialSnapshotProtocol]
+	}
+	sourcePattern := cdc.RequiresSourcePatternProtocol(opts.PitrTables)
+	if sourcePattern {
+		extraOpts[cdc.CDCTaskExtraOptions_SourcePatternProtocol] = cdc.CDCSourcePatternProtocolV1
+	}
+	if stable || sourcePattern {
 		if err = validateStableInitialSnapshotProtocol(
-			ctx, stable, currentProtocolVersion(ses.proc)); err != nil {
+			ctx, true, currentProtocolVersion(ses.proc)); err != nil {
 			return
 		}
 	} else if opts.startTsFromSnapshot {
@@ -330,7 +340,8 @@ func (opts *CDCCreateTaskOptions) BuildTaskMetadata() task.TaskMetadata {
 	switch {
 	case opts.NoFull && cdc.UsesLosslessNoFullStart(opts.ExtraOpts):
 		executor = task.TaskCode_InitCdcLosslessStart
-	case !opts.NoFull && cdc.UsesStableEpochInitialSnapshot(opts.ExtraOpts):
+	case cdc.UsesSourcePatternProtocol(opts.ExtraOpts) ||
+		(!opts.NoFull && cdc.UsesStableEpochInitialSnapshot(opts.ExtraOpts)):
 		executor = task.TaskCode_InitCdcStableEpoch
 	}
 	return task.TaskMetadata{

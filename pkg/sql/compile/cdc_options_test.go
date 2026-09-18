@@ -445,6 +445,19 @@ func TestCDCCreateTaskOptionsSetNoFullStartTS(t *testing.T) {
 	require.Empty(t, noSnapshot.StartTs)
 }
 
+func TestCDCCreateTaskOptionsSourcePatternCode(t *testing.T) {
+
+	patternOpts := fmt.Sprintf(
+		`{"%s":"%s"}`,
+		cdc.CDCTaskExtraOptions_SourcePatternProtocol,
+		cdc.CDCSourcePatternProtocolV1,
+	)
+	noFullPattern := (&CDCCreateTaskOptions{
+		TaskId: "no-full-pattern", NoFull: true, ExtraOpts: patternOpts,
+	}).BuildTaskMetadata()
+	require.Equal(t, task.TaskCode_InitCdcStableEpoch, noFullPattern.Executor)
+}
+
 func TestValidateStableInitialSnapshotCompileProtocol(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	c := &Compile{proc: proc}

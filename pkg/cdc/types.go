@@ -283,6 +283,11 @@ const (
 	CDCTaskExtraOptions_InitialSnapshotProtocol = "_InitialSnapshotProtocol"
 	CDCInitialSnapshotProtocolStableEpoch       = "stable-epoch-v1"
 	CDCInitialSnapshotProtocolNoFullHLC         = "no-full-hlc-v1"
+	// CDCTaskExtraOptions_SourcePatternProtocol marks tasks whose persisted
+	// source patterns require the new lossless identifier representation or
+	// source-case metadata. Legacy runners must not claim these tasks.
+	CDCTaskExtraOptions_SourcePatternProtocol = "_SourcePatternProtocol"
+	CDCSourcePatternProtocolV1                = "source-pattern-v1"
 )
 
 var CDCRequestOptions = []string{
@@ -364,6 +369,44 @@ func UsesStableEpochInitialSnapshot(extraOptsJSON string) bool {
 	}
 	protocol, _ := extraOpts[CDCTaskExtraOptions_InitialSnapshotProtocol].(string)
 	return protocol == CDCInitialSnapshotProtocolStableEpoch
+}
+
+// RequiresSourcePatternProtocol reports whether persisted pattern data cannot
+// be interpreted correctly by legacy CDC runners. Mode 2 needs the
+// source_case_mode field, while invalid UTF-8 in source or sink identifiers
+// needs the auxiliary byte fields.
+func RequiresSourcePatternProtocol(patternsJSON string) bool {
+	var patterns PatternTuples
+	if err := JsonDecode(patternsJSON, &patterns); err != nil {
+		// Creation validates and encodes this value first. If a caller reaches
+		// this helper with an undecodable value, fail closed onto the capable
+		// executor instead of allowing a legacy reader to silently reinterpret it.
+		return true
+	}
+	if patterns.SourceCaseMode == 2 {
+		return true
+	}
+	for _, tuple := range patterns.Pts {
+		if tuple == nil {
+			continue
+		}
+		if !utf8.ValidString(tuple.Source.Database) ||
+			!utf8.ValidString(tuple.Source.Table) ||
+			!utf8.ValidString(tuple.Sink.Database) ||
+			!utf8.ValidString(tuple.Sink.Table) {
+			return true
+		}
+	}
+	return false
+}
+
+func UsesSourcePatternProtocol(extraOptsJSON string) bool {
+	extraOpts := make(map[string]any)
+	if err := json.Unmarshal([]byte(extraOptsJSON), &extraOpts); err != nil {
+		return false
+	}
+	protocol, _ := extraOpts[CDCTaskExtraOptions_SourcePatternProtocol].(string)
+	return protocol == CDCSourcePatternProtocolV1
 }
 
 type TaskId = uuid.UUID
