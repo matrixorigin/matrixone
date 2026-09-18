@@ -7527,8 +7527,14 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 	}
 	if partitioned {
 		apply_project = append(apply_project, &plan.Expr{
-			Typ:  routeTyp,
-			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: sourceTag, ColPos: routePos}},
+			Typ: routeTyp,
+			// APPLY's left input is relation 0. sourceTag is the binding tag
+			// used while binding the left input and cannot be used in the
+			// executor result projection: non-zero relations are read from
+			// the table-function output. Using sourceTag here made the route
+			// column read from the tokenizer at position len(ftcols), causing
+			// an out-of-range access on every partitioned FULLTEXT INSERT.
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: routePos}},
 		})
 	}
 
