@@ -540,6 +540,65 @@ func TestBuildControlFlowTemporalFSPMetadata(t *testing.T) {
 	}
 }
 
+func TestBindControlFlowTemporalFSPMetadataProtocolFence(t *testing.T) {
+	ctx := context.Background()
+	condition := func(pos int32) *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_bool)},
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: pos}},
+		}
+	}
+	timestamp := func() *planpb.Expr {
+		expr := makePlan2TimestampConstExprWithType(0)
+		expr.Typ.Scale = 6
+		return expr
+	}
+	datetime := func() *planpb.Expr {
+		expr := makePlan2DateTimeConstExprWithType(0)
+		expr.Typ.Scale = 3
+		return expr
+	}
+
+	for _, test := range []struct {
+		name     string
+		function string
+		args     func() []*planpb.Expr
+		valuePos []int
+	}{
+		{
+			name:     "if mixed temporal branches",
+			function: "if",
+			args:     func() []*planpb.Expr { return []*planpb.Expr{condition(0), timestamp(), datetime()} },
+			valuePos: []int{1, 2},
+		},
+		{
+			name:     "case mixed temporal branches with else",
+			function: "case",
+			args: func() []*planpb.Expr {
+				return []*planpb.Expr{condition(0), timestamp(), condition(1), datetime(), datetime()}
+			},
+			valuePos: []int{1, 3, 4},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			expr, err := BindFuncExprImplByPlanExpr(ctx, test.function, test.args())
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_datetime), expr.Typ.Id)
+			require.Equal(t, int32(6), expr.Typ.Scale)
+			require.Equal(t, int32(6), expr.Typ.Width)
+			features, err := planpb.RequiredRemoteExpressionFeatures(expr)
+			require.NoError(t, err)
+			require.True(t, features.ExpressionResultMetadataContracts)
+
+			for _, pos := range test.valuePos {
+				value := expr.GetF().Args[pos]
+				require.Equal(t, int32(types.T_datetime), value.Typ.Id)
+				require.Equal(t, int32(6), value.Typ.Scale)
+			}
+		})
+	}
+}
+
 func TestBindControlFlowBinaryCharacterCharsetWidth(t *testing.T) {
 	for _, test := range []struct {
 		name    string

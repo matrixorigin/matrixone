@@ -260,4 +260,32 @@ func TestExpressionResultContractDestinationProtocolValidation(t *testing.T) {
 
 	client.version = defines.MORPCVersion86
 	require.NoError(t, validateIPFunctionDestination(c.proc, remotePipeline))
+
+	t.Run("mixed temporal conditional", func(t *testing.T) {
+		expr, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "if", []*planpb.Expr{
+			{Typ: planpb.Type{Id: int32(types.T_bool)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+			{Typ: planpb.Type{Id: int32(types.T_timestamp), Width: 6, Scale: 6}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}},
+			{Typ: planpb.Type{Id: int32(types.T_datetime), Width: 3, Scale: 3}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 2}}},
+		})
+		require.NoError(t, err)
+		op := projection.NewArgument()
+		defer op.Release()
+		op.ProjectList = []*planpb.Expr{expr}
+		scope := &Scope{
+			Magic:    Remote,
+			Proc:     c.proc,
+			NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"},
+			RootOp:   op,
+		}
+		client.version = defines.MORPCVersion85
+		_, err = encodeRemoteScope(scope, c.proc)
+		require.ErrorContains(t, err, "remote destination")
+		client.version = defines.MORPCVersion86
+		data, err := encodeRemoteScope(scope, c.proc)
+		require.NoError(t, err)
+		require.NotEmpty(t, data)
+		wire := new(pipeline.Pipeline)
+		require.NoError(t, wire.Unmarshal(data))
+		require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, wire))
+	})
 }

@@ -256,6 +256,7 @@ const (
 	planTimeTypeID                   int32 = 51
 	planDatetimeTypeID               int32 = 52
 	planTimestampTypeID              int32 = 53
+	planAnyTypeID                    int32 = 0
 	maxVarcharWidth                  int32 = 65535
 )
 
@@ -585,6 +586,52 @@ func expressionSourceType(expr *Expr) Type {
 	return expr.Typ
 }
 
+func conditionalValueSources(fn *Function, functionID int32, name string) (values []*Expr, omittedElse bool) {
+	if fn == nil {
+		return nil, false
+	}
+	switch {
+	case functionID == caseFunctionID || name == "case":
+		// CASE arguments are condition/value pairs, followed by an optional
+		// ELSE value. An even number of arguments therefore means that the
+		// implicit ELSE NULL is part of the result contract.
+		for i := 1; i < len(fn.Args); i += 2 {
+			values = append(values, fn.Args[i])
+		}
+		if len(fn.Args)%2 == 1 && len(fn.Args) > 0 {
+			values = append(values, fn.Args[len(fn.Args)-1])
+		}
+		return values, len(fn.Args)%2 == 0
+	case functionID == iffFunctionID || name == "if" || name == "iff":
+		if len(fn.Args) >= 3 {
+			return fn.Args[1:3], false
+		}
+	}
+	return nil, false
+}
+
+func conditionalConditionNeedsMetadataFence(fn *Function, functionID int32, name string) bool {
+	if fn == nil {
+		return false
+	}
+	switch {
+	case functionID == caseFunctionID || name == "case":
+		// CASE conditions are lowered to BOOL. Preserve the original source
+		// type so a legacy condition cast cannot silently select the old
+		// temporal overload.
+		for i := 0; i+1 < len(fn.Args); i += 2 {
+			if expressionSourceType(fn.Args[i]).Id != planBooleanTypeID {
+				return true
+			}
+		}
+	case functionID == iffFunctionID || name == "if" || name == "iff":
+		// IF/IFF intentionally keep the legacy numeric/string condition
+		// behavior. Only an unresolved ANY condition needs the new fence.
+		return len(fn.Args) == 0 || expressionSourceType(fn.Args[0]).Id == planAnyTypeID
+	}
+	return false
+}
+
 func isChangedTemporalConditionalResultContract(expr *Expr, functionID int32, name string) bool {
 	if !isPlanTemporalType(expr.Typ.Id) || expr.Typ.Scale <= 0 {
 		return false
@@ -605,6 +652,22 @@ func isChangedTemporalConditionalResultContract(expr *Expr, functionID int32, na
 		return expr.Typ.Scale > first.Scale
 	case functionID == caseFunctionID || functionID == iffFunctionID ||
 		name == "case" || name == "if" || name == "iff":
+		if conditionalConditionNeedsMetadataFence(fn, functionID, name) {
+			return true
+		}
+		values, omittedElse := conditionalValueSources(fn, functionID, name)
+		if omittedElse {
+			return true
+		}
+		for _, value := range values {
+			source := expressionSourceType(value)
+			if source.Id == planAnyTypeID {
+				return true
+			}
+			if isPlanTemporalType(source.Id) && source.Id != expr.Typ.Id {
+				return true
+			}
+		}
 		first := expressionSourceType(conditionalFirstValue(fn, functionID, name))
 		return expr.Typ.Scale > first.Scale
 	default:

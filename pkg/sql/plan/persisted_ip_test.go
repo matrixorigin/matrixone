@@ -400,6 +400,50 @@ func TestPersistedViewProtocolAdmissionCapturesBindTimeBetweenFold(t *testing.T)
 	require.Equal(t, int64(defines.MORPCVersion86), *viewData.RequiredProtocolVersion)
 }
 
+func TestPersistedMixedTemporalViewProtocolAdmission(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	proc := ctx.GetProcess()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	oldAuthoringFloor, hadAuthoringFloor := rt.GetGlobalVariables(
+		moruntime.PersistedExpressionProtocolAuthoringFloor)
+	t.Cleanup(func() {
+		if hadProtocol {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+		if hadAuthoringFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, oldAuthoringFloor)
+		} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, current)
+		}
+	})
+
+	const createSQL = "create view v_mixed_temporal as select if(1 = 1, cast('2024-01-02 12:34:56.123456' as timestamp(6)), cast('2024-01-02 12:34:56.123' as datetime(3))) as value"
+	build := func(authoringFloor int64) (*Plan, error) {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion86)
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, authoringFloor)
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createSQL, 1)
+		if err != nil {
+			return nil, err
+		}
+		defer stmt.Free()
+		return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}, stmt, false)
+	}
+
+	_, err := build(defines.MORPCVersion85)
+	require.ErrorContains(t, err, "protocol version 86")
+
+	created, err := build(defines.MORPCVersion86)
+	require.NoError(t, err)
+	var viewData ViewData
+	require.NoError(t, json.Unmarshal(
+		[]byte(created.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()), &viewData))
+	require.NotNil(t, viewData.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion86), *viewData.RequiredProtocolVersion)
+}
+
 func TestPersistedBoundedConditionalStringProtocolAdmission(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	rt := moruntime.ServiceRuntime(proc.GetService())
@@ -506,6 +550,29 @@ func TestPersistedFollowupExpressionProtocolAdmission(t *testing.T) {
 				return mustBindPersistedFollowupExpr(t, proc.Ctx, "coalesce", []*planpb.Expr{
 					column(types.T_time.ToTypeWithScale(0)),
 					column(types.T_time.ToTypeWithScale(6)),
+				})
+			}(),
+		},
+		{
+			name:     "mixed temporal if is v86",
+			required: defines.MORPCVersion86,
+			expr: func() *planpb.Expr {
+				return mustBindPersistedFollowupExpr(t, proc.Ctx, "if", []*planpb.Expr{
+					column(types.T_bool.ToType()),
+					column(types.T_timestamp.ToTypeWithScale(6)),
+					column(types.T_datetime.ToTypeWithScale(3)),
+				})
+			}(),
+		},
+		{
+			name:     "mixed temporal case without else is v86",
+			required: defines.MORPCVersion86,
+			expr: func() *planpb.Expr {
+				return mustBindPersistedFollowupExpr(t, proc.Ctx, "case", []*planpb.Expr{
+					column(types.T_bool.ToType()),
+					column(types.T_timestamp.ToTypeWithScale(6)),
+					column(types.T_bool.ToType()),
+					column(types.T_datetime.ToTypeWithScale(3)),
 				})
 			}(),
 		},
