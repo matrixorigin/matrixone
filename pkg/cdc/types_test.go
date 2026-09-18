@@ -516,6 +516,26 @@ func TestJsonEncode(t *testing.T) {
 	}
 }
 
+func TestPatternTableJSONPreservesMalformedIdentifierBytes(t *testing.T) {
+	original := PatternTuples{SourceCaseMode: 2, Pts: []*PatternTuple{{
+		Source: PatternTable{
+			Database: string([]byte{'d', 0xe9, 'B'}),
+			Table:    string([]byte{'t', 0xe9, 'A'}),
+		},
+		Sink: PatternTable{Database: "sink", Table: "target"},
+	}}}
+
+	encoded, err := JsonEncode(original)
+	require.NoError(t, err)
+	var restored PatternTuples
+	require.NoError(t, JsonDecode(encoded, &restored))
+	require.Equal(t, original, restored)
+	require.True(t, CDCSourceNameMatches(
+		string([]byte{'d', 0xe9, 'b'}), restored.Pts[0].Source.Database, 2))
+	require.True(t, CDCSourceNameMatches(
+		string([]byte{'t', 0xe9, 'a'}), restored.Pts[0].Source.Table, 2))
+}
+
 func TestOutputType_String(t *testing.T) {
 	tests := []struct {
 		name string
