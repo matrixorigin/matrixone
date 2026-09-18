@@ -3000,6 +3000,17 @@ func (exec *CDCTaskExecutor) matchesAnySourcePattern(key string) bool {
 	return false
 }
 
+// effectiveCDCStartTS returns the durable activation boundary used by the
+// reader. Legacy NoFull rows have no serialized start_ts, so a previously
+// committed watermark is the only safe boundary; passing an empty start_ts
+// would allow stale-read recovery to advance past unprocessed commits.
+func effectiveCDCStartTS(taskStart, durableProgress types.TS, legacyNoFull bool) types.TS {
+	if legacyNoFull && !durableProgress.IsEmpty() {
+		return durableProgress
+	}
+	return taskStart
+}
+
 // reader ----> sinker ----> remote db
 func (exec *CDCTaskExecutor) addExecPipelineForTable(
 	ctx context.Context,
@@ -3059,6 +3070,7 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 	); err != nil {
 		return err
 	}
+	streamStartTs := effectiveCDCStartTS(exec.startTs, watermark, legacyNoFull)
 	initialSnapshotPending = !exec.noFull && exec.startTs.IsEmpty() && watermark.IsEmpty()
 	if exec.stableInitialSnapshot {
 		if err = ownerFence.Check(ctx); err != nil {
@@ -3223,7 +3235,7 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		tableDef,
 		initSnapshotSplitTxn,
 		exec.runningReaders,
-		exec.startTs,
+		streamStartTs,
 		exec.endTs,
 		exec.noFull,
 		frequency,

@@ -5842,6 +5842,14 @@ func TestCdcTask_addExecPipelineForTable(t *testing.T) {
 	require.Error(t, legacyTask.addExecPipelineForTable(ctx, info, txnOperator, nil))
 }
 
+func TestEffectiveCDCStartTSUsesLegacyDurableProgress(t *testing.T) {
+	durableProgress := types.BuildTS(100, 5)
+
+	assert.Equal(t, durableProgress, effectiveCDCStartTS(types.TS{}, durableProgress, true))
+	assert.Equal(t, types.BuildTS(200, 1), effectiveCDCStartTS(types.BuildTS(200, 1), durableProgress, false))
+	assert.Equal(t, types.TS{}, effectiveCDCStartTS(types.TS{}, types.TS{}, true))
+}
+
 func TestCdcTask_checkPitr(t *testing.T) {
 	pts := &cdc.PatternTuples{
 		Pts: []*cdc.PatternTuple{
