@@ -56,9 +56,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/udf"
+	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -98,6 +100,34 @@ func (s *listeningMOServer) Stop() error {
 type closeOnlyRPCServer struct {
 	closeErr error
 	onClose  func()
+}
+
+type closeOnlySiriusBackend struct {
+	compile.SiriusBackend
+	closeFn func() error
+}
+
+func (b closeOnlySiriusBackend) Close(context.Context) error { return b.closeFn() }
+
+func TestCloseSiriusRuntimeRetainsFailedOwner(t *testing.T) {
+	moruntime.RunTest(t.Name(), func(rt moruntime.Runtime) {
+		failure := errors.New("runtime cleanup failed")
+		var closeErr error = failure
+		owner := &compile.SiriusRuntime{Backend: closeOnlySiriusBackend{closeFn: func() error { return closeErr }}}
+		s := &service{cfg: &Config{UUID: t.Name()}, siriusRuntime: owner}
+		rt.SetGlobalVariables(compile.SiriusRuntimeKey, owner)
+		t.Cleanup(func() { rt.CompareAndDeleteGlobalVariables(compile.SiriusRuntimeKey, owner) })
+		require.ErrorIs(t, s.closeSiriusRuntime(), failure)
+		require.Same(t, owner, s.siriusRuntime)
+		published, ok := rt.GetGlobalVariables(compile.SiriusRuntimeKey)
+		require.True(t, ok)
+		require.Same(t, owner, published)
+		closeErr = nil
+		require.NoError(t, s.closeSiriusRuntime())
+		require.Nil(t, s.siriusRuntime)
+		_, ok = rt.GetGlobalVariables(compile.SiriusRuntimeKey)
+		require.False(t, ok)
+	})
 }
 
 func (s closeOnlyRPCServer) Start() error {
@@ -222,10 +252,11 @@ func TestServiceCloseDoesNotHangOnNeverReadyClusterAfterEarlyError(t *testing.T)
 			refreshErr := errors.New("hakeeper refresh failed")
 			hc := &testHAKClient{clusterErr: refreshErr}
 			moCluster := clusterservice.NewMOCluster(t.Name(), hc, time.Hour)
+			defer moCluster.Close()
 			ctrl := gomock.NewController(t)
 			defer ctrl.Finish()
 			ls := mock_lock.NewMockLockService(ctrl)
-			ls.EXPECT().Close().Return(nil).Times(2)
+			ls.EXPECT().Close().Times(0)
 			sv := &service{
 				cfg:                &Config{UUID: t.Name()},
 				logger:             zap.NewNop(),
@@ -247,12 +278,51 @@ func TestServiceCloseDoesNotHangOnNeverReadyClusterAfterEarlyError(t *testing.T)
 			select {
 			case err := <-done:
 				require.ErrorIs(t, err, frontendErr)
-				require.Equal(t, 1, hc.closed)
+				require.Equal(t, 0, hc.closed, "unknown producer failure must preserve dependencies")
+				require.False(t, sv.CloseComplete())
 			case <-time.After(time.Second):
 				t.Fatal("service.Close blocked on never-ready cluster")
 			}
 		},
 	)
+}
+
+func TestServiceCloseWithdrawalErrorIsLocallyComplete(t *testing.T) {
+	for _, localFailure := range []bool{false, true} {
+		t.Run(fmt.Sprintf("local-failure=%t", localFailure), func(t *testing.T) {
+			moruntime.RunTest(t.Name(), func(rt moruntime.Runtime) {
+				failure := errors.New("withdrawal failed")
+				hc := &failingWithdrawalHeartbeatClient{testHAKClient: &testHAKClient{}, err: failure}
+				mc := clusterservice.NewMOCluster(t.Name(), hc, time.Hour)
+				t.Cleanup(mc.Close)
+				ctrl := gomock.NewController(t)
+				ls := mock_lock.NewMockLockService(ctrl)
+				var tailErr error
+				if localFailure {
+					// A tail failure is not certified complete even when remote
+					// withdrawal failed too; both diagnostics must survive.
+					tailErr = errors.New("local tail failed")
+				}
+				ls.EXPECT().Close().Return(tailErr).Times(2)
+				sv := &service{
+					cfg: &Config{UUID: t.Name()}, logger: zap.NewNop(), config: util.NewConfigData(nil),
+					stopper:          stopper.NewStopper(t.Name()),
+					bootstrapService: &testBootService{}, mo: closeErrorMOServer{},
+					_hakeeperClient: hc, moCluster: mc, server: closeOnlyRPCServer{}, lockService: ls,
+					viewMetadataAdmissionGeneration: 1,
+				}
+				require.False(t, sv.CloseComplete())
+				require.ErrorIs(t, sv.Close(), failure)
+				if tailErr != nil {
+					require.ErrorIs(t, sv.Close(), tailErr)
+				}
+				require.Equal(t, !localFailure, sv.CloseComplete())
+				require.Equal(t, 1, hc.closed)
+				require.ErrorIs(t, sv.Close(), failure)
+				require.Equal(t, 1, hc.closed, "cached diagnostics must not replay teardown")
+			})
+		})
+	}
 }
 
 func TestMakeRSSCacheEvictorEvictsMemoryCacheOnly(t *testing.T) {
@@ -1375,6 +1445,23 @@ func TestServiceCloseCancelsAdmittedPipeline(t *testing.T) {
 			server:             closeOnlyRPCServer{},
 			lockService:        ls,
 		}
+		// A deliberately wrong retirement order must fail without stranding the
+		// admitted handler, even when public Close has cached its failure.
+		t.Cleanup(func() {
+			_ = s.closePipelineAdmission()
+			_ = s.waitPipelineHandlers()
+			s.stopper.Stop()
+		})
+		var runtimeClosed bool
+		s.siriusRuntime = &compile.SiriusRuntime{Backend: closeOnlySiriusBackend{closeFn: func() error {
+			select {
+			case <-handlerExited:
+				runtimeClosed = true
+				return nil
+			default:
+				return errors.New("runtime retired before its pipeline user exited")
+			}
+		}}}
 		s.requestHandler = func(
 			ctx context.Context,
 			_ string,
@@ -1428,6 +1515,7 @@ func TestServiceCloseCancelsAdmittedPipeline(t *testing.T) {
 			t.Fatal("CN close returned before the canceled pipeline exited")
 		}
 		require.Equal(t, int32(1), cancelCount.Load())
+		require.True(t, runtimeClosed)
 	})
 }
 

@@ -660,6 +660,54 @@ func TestWithCNDrainingRestoresAfterGoexit(t *testing.T) {
 	}
 }
 
+func TestWithCNDrainingRestoresAfterCanceledBody(t *testing.T) {
+	for _, panicBody := range []bool{false, true} {
+		t.Run(fmt.Sprintf("panic=%t", panicBody), func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			inventory := newFakeCNWorkStateInventory("cn0", "cn1")
+			var cleanupContextErr error
+			inventory.onUpdate = func(updateCtx context.Context, id string, state int) error {
+				if state == int(metadata.WorkState_Working) {
+					cleanupContextErr = updateCtx.Err()
+				}
+				service := inventory.services[id]
+				service.WorkState = metadata.WorkState(state)
+				inventory.services[id] = service
+				return nil
+			}
+			refresher := &fakeCNInventoryRefresher{}
+			var invalidationErr error
+			var runErr error
+			var recovered any
+			panicValue := errors.New("body panic")
+			func() {
+				defer func() { recovered = recover() }()
+				runErr = withCNDraining(ctx, inventory, refresher, "cn0", []string{"cn0", "cn1"},
+					func(err error) { invalidationErr = err },
+					func() {
+						cancel()
+						if panicBody {
+							panic(panicValue)
+						}
+					})
+			}()
+
+			if panicBody {
+				require.Same(t, panicValue, recovered, "cleanup must preserve the original panic")
+			} else {
+				require.Nil(t, recovered)
+			}
+			require.NoError(t, runErr)
+			require.NoError(t, invalidationErr)
+			require.NoError(t, cleanupContextErr, "restoration must not inherit the canceled body context")
+			require.Equal(t, []int{int(metadata.WorkState_Draining), int(metadata.WorkState_Working)}, inventory.updates)
+			require.Equal(t, 2, refresher.calls)
+			require.NoError(t, verifyWorkingCNTopology(inventory, "cn0", []string{"cn0", "cn1"}))
+		})
+	}
+}
+
 func TestWithCNDrainingReconcilesAmbiguousRestoreResponse(t *testing.T) {
 	restoreErr := context.DeadlineExceeded
 	inventory := newFakeCNWorkStateInventory("cn0", "cn1")
