@@ -21,11 +21,24 @@ LAUNCH=$2
 PROXY=${3:-}
 LAUNCH_CONFIG=$LAUNCH
 MO_PID=""
+JSTFU_PID=""
+
+function collect_descendants() {
+    local parent="$1"
+    local child
+    for child in $(pgrep -P "$parent" 2>/dev/null || true); do
+        BVT_CHILD_PIDS+=("$child")
+        collect_descendants "$child"
+    done
+}
 
 function cleanup_mo() {
     if [[ -z "$MO_PID" ]]; then
         return
     fi
+    local pid="$MO_PID"
+    local -a BVT_CHILD_PIDS=()
+    collect_descendants "$pid"
     if kill -0 "$MO_PID" 2>/dev/null; then
         kill -TERM "$MO_PID" 2>/dev/null || true
         for _ in {1..30}; do
@@ -38,11 +51,39 @@ function cleanup_mo() {
             kill -KILL "$MO_PID" 2>/dev/null || true
         fi
     fi
-    wait "$MO_PID" 2>/dev/null || true
+    for child in "${BVT_CHILD_PIDS[@]}"; do
+        kill -KILL "$child" 2>/dev/null || true
+    done
+    wait "$pid" 2>/dev/null || true
     MO_PID=""
 }
 
-trap cleanup_mo EXIT
+function cleanup_jstfu() {
+    if [[ -z "$JSTFU_PID" ]]; then
+        return
+    fi
+    if kill -0 "$JSTFU_PID" 2>/dev/null; then
+        kill -TERM "$JSTFU_PID" 2>/dev/null || true
+        for _ in {1..15}; do
+            if ! kill -0 "$JSTFU_PID" 2>/dev/null; then
+                break
+            fi
+            sleep 1
+        done
+        if kill -0 "$JSTFU_PID" 2>/dev/null; then
+            kill -KILL "$JSTFU_PID" 2>/dev/null || true
+        fi
+    fi
+    wait "$JSTFU_PID" 2>/dev/null || true
+    JSTFU_PID=""
+}
+
+function cleanup_all() {
+    cleanup_jstfu
+    cleanup_mo
+}
+
+trap cleanup_all EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
@@ -119,6 +160,7 @@ function launch_jstfu() {
         }
     fi
     nohup ./optools/jstfu_bvt.sh "$MO_WORKSPACE/test/distributed/resources" 127.0.0.1:6001 &>jstfu.log &
+    JSTFU_PID=$!
     for _ in {1..30}; do
         if bash -c 'exec 3<>/dev/tcp/127.0.0.1/4444' 2>/dev/null; then
             echo "jstfu ready on :4444"
