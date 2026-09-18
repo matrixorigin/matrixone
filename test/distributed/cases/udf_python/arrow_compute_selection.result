@@ -10,7 +10,8 @@ insert into selection_values values
 (1, 30, 2),
 (2, null, 0),
 (3, 20, 1),
-(4, 10, 3);
+(4, 10, 3),
+(5, 40, null);
 select id,
 python_bvt_pc_take(value, index_value) as taken,
 python_bvt_pc_sort_take(value) as sorted_value,
@@ -21,7 +22,8 @@ from selection_values order by id;
 1  ¦  20  ¦  10  ¦  0  ¦  30  𝄀
 2  ¦  30  ¦  20  ¦  null  ¦  null  𝄀
 3  ¦  null  ¦  30  ¦  1  ¦  20  𝄀
-4  ¦  10  ¦  null  ¦  0  ¦  10
+4  ¦  10  ¦  40  ¦  0  ¦  10  𝄀
+5  ¦  null  ¦  null  ¦  0  ¦  40
 drop function python_bvt_pc_take(int, int);
 drop function python_bvt_pc_sort_take(int);
 drop function python_bvt_pc_equal(int);
