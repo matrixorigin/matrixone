@@ -22,7 +22,7 @@ the normal worker-enabled launch running and use `mo-tester`'s `genrs` mode:
 ```bash
 SKIP_JSTFU=true ./optools/run_bvt.sh . launch
 cd /path/to/mo-tester
-./run.sh -p /path/to/matrixone/test/distributed/cases/udf_python/example.sql -m genrs -g
+./run.sh -p /path/to/matrixone/test/distributed/cases/udf_python/control_flow.sql -m genrs -g
 ```
 
 The ordinary BVT launch starts one worker for the single CN. Compose BVT starts
