@@ -3534,9 +3534,10 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 
 		for i, updateExpr := range updateColExprList {
 			builder.odkuTargetCorrelationGuard = nil
-			if targetCorrelationGuard != nil &&
+			needsTargetProjection := targetCorrelationGuard != nil &&
 				(builder.exprHasTargetCorrelatedSubquery(updateExpr, targetCorrelationTag) ||
-					builder.exprHasCandidateCorrelatedSubquery(updateExpr, selectTag)) {
+					builder.exprHasCandidateCorrelatedSubquery(updateExpr, selectTag))
+			if needsTargetProjection {
 				builder.odkuTargetCorrelationGuard = targetCorrelationGuard
 			}
 			previousNodeID := lastNodeID
@@ -3549,7 +3550,13 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			if lastNodeID != previousNodeID {
 				oldSelectTag := selectTag
 				canonicalTargetTag := int32(0)
-				if targetCorrelationGuard != nil {
+				// Carry the private target lookup only while the expression being
+				// flattened actually needs it. Once a correlated assignment has
+				// been canonicalized, its target columns already live in the
+				// protected candidate row image. Re-reading targetCorrelationTag
+				// for a later uncorrelated assignment would point the new PROJECT
+				// at a tag that its child no longer exposes.
+				if needsTargetProjection {
 					canonicalTargetTag = targetCorrelationTag
 				}
 				lastNodeID, selectTag, selectNode, err = builder.canonicalizeInsertSubqueryInput(
