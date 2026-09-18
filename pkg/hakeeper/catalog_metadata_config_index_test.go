@@ -43,8 +43,15 @@ func TestCatalogTokenlessStaleCommandIsReclaimedAtCompletion(t *testing.T) {
 	runtimeApply(t, s, complete, CatalogMetadataApplied)
 	require.NotContains(t, s.state.ScheduleCommands, "log")
 	require.False(t, s.hasPendingHAKeeperAdmission())
-	// Simulate a snapshot written by the buggy version after completion.
+	// A command generated late from the stale checker view is rejected by its
+	// real UpdateCommands admission boundary. No heartbeat, catalog operation,
+	// or restart is needed to keep admission unblocked.
 	unhappyQueue(t, s, stale)
+	require.NotContains(t, s.state.ScheduleCommands, "log")
+	require.False(t, s.hasPendingHAKeeperAdmission())
+	// Simulate a snapshot written by the buggy version; do not use the fixed
+	// admission path to manufacture an impossible current-version state.
+	s.state.ScheduleCommands["log"] = pb.CommandBatch{Commands: []pb.ScheduleCommand{stale}}
 	require.True(t, s.hasPendingHAKeeperAdmission())
 	s = runtimeRestore(t, s)
 	require.NotContains(t, s.state.ScheduleCommands, "log", "snapshot recovery must reclaim inherited stale history")
@@ -55,7 +62,6 @@ func TestCatalogTokenlessStaleCommandIsReclaimedAtCompletion(t *testing.T) {
 	equal.ConfigChange.Replica.Epoch = 8
 	future.ConfigChange.Replica.Epoch = 9
 	unhappyQueue(t, s, equal, future)
-	s.pruneObsoleteCatalogSchedule()
 	require.Len(t, s.state.ScheduleCommands["log"].Commands, 2)
 }
 

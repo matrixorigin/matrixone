@@ -555,6 +555,12 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 		s.state.ScheduleCommands = make(map[string]pb.CommandBatch)
 	}
 	for _, c := range b.Commands {
+		// Reject terminally obsolete work at its only admission boundary.
+		// Cleanup and recovery remain defense in depth for commands accepted
+		// by an older binary or made stale while already queued.
+		if s.catalogScheduleObsolete(c) {
+			continue
+		}
 		if c.Bootstrapping {
 			s.handleSetStateCmd(GetSetStateCmd(pb.HAKeeperBootstrapCommandsReceived))
 		}
