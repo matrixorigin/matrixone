@@ -128,13 +128,40 @@ function wait_python_udf_worker() {
             tail -n 160 mo-service.log >&2 || true
             return 1
         fi
-        if bash -c 'exec 3<>/dev/tcp/127.0.0.1/50051' 2>/dev/null; then
-            echo "Python UDF worker is ready, cost $num seconds"
+        if python3 - <<'PY'
+import json
+import signal
+
+import pyarrow.flight as flight
+
+
+def _timeout(_signum, _frame):
+    raise TimeoutError("capability probe timed out")
+
+
+signal.signal(signal.SIGALRM, _timeout)
+signal.alarm(2)
+try:
+    client = flight.FlightClient("grpc://127.0.0.1:50051")
+    reader = client.do_action(
+        flight.Action("GetPythonCapabilities", b'{"protocol_version":1}')
+    )
+    result = next(iter(reader), None)
+    if result is None:
+        raise RuntimeError("empty capability response")
+    response = json.loads(bytes(result.body))
+    if response.get("protocol_version") != 1:
+        raise RuntimeError("unsupported capability protocol version")
+finally:
+    signal.alarm(0)
+PY
+        then
+            echo "Python UDF capability handshake is ready, cost $num seconds"
             return 0
         fi
         sleep 1
     done
-    echo "Python UDF worker did not become ready on 127.0.0.1:50051" >&2
+    echo "Python UDF capability handshake did not become ready on 127.0.0.1:50051" >&2
     tail -n 160 mo-service.log >&2 || true
     return 1
 }
