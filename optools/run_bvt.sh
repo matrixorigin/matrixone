@@ -22,6 +22,30 @@ PROXY=${3:-}
 LAUNCH_CONFIG=$LAUNCH
 MO_PID=""
 
+function cleanup_mo() {
+    if [[ -z "$MO_PID" ]]; then
+        return
+    fi
+    if kill -0 "$MO_PID" 2>/dev/null; then
+        kill -TERM "$MO_PID" 2>/dev/null || true
+        for _ in {1..30}; do
+            if ! kill -0 "$MO_PID" 2>/dev/null; then
+                break
+            fi
+            sleep 1
+        done
+        if kill -0 "$MO_PID" 2>/dev/null; then
+            kill -KILL "$MO_PID" 2>/dev/null || true
+        fi
+    fi
+    wait "$MO_PID" 2>/dev/null || true
+    MO_PID=""
+}
+
+trap cleanup_mo EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 function launch_mo() {
     cd $MO_WORKSPACE
     # Ordinary launch BVT remains the single CI entry point, but its Python
@@ -39,7 +63,7 @@ function launch_mo() {
 function wait_system_init() {
     for num in {1..300}  
     do
-        if MYSQL_PWD=111 mysql -h 127.0.0.1 -P 6001 -u dump -e "show databases;"; then
+        if MYSQL_PWD=111 mysql --connect-timeout=2 -h 127.0.0.1 -P 6001 -u dump -e "show databases;"; then
             echo "ok, cost $num seconds"
             return 0
         fi
