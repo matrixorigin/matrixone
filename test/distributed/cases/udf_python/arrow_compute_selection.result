@@ -1,10 +1,10 @@
 drop database if exists udf_python_arrow_compute_selection_bvt;
 create database udf_python_arrow_compute_selection_bvt;
 use udf_python_arrow_compute_selection_bvt;
-create function python_bvt_pc_take (x int, index_value int) returns int language python as 'python_bvt_pc_take = lambda ctx, values, indices: __import__("pyarrow.compute", fromlist=["take"]).take(values, indices)' handler 'python_bvt_pc_take' mode vector;
+create function python_bvt_pc_take (x int, index_value int) returns int language python as 'python_bvt_pc_take = lambda ctx, values, indices: __import__("pyarrow.compute", fromlist=["take"]).take(values, indices, boundscheck=True)' handler 'python_bvt_pc_take' mode vector;
 create function python_bvt_pc_sort_take (x int) returns int language python as 'python_bvt_pc_sort_take = lambda ctx, values: __import__("pyarrow.compute", fromlist=["take"]).take(values, __import__("pyarrow.compute", fromlist=["sort_indices"]).sort_indices(values, null_placement="at_end"))' handler 'python_bvt_pc_sort_take' mode vector;
 create function python_bvt_pc_equal (x int) returns bool language python as 'python_bvt_pc_equal = lambda ctx, values: __import__("pyarrow.compute", fromlist=["equal"]).equal(values, 20)' handler 'python_bvt_pc_equal' mode vector;
-create function python_bvt_pc_cast (x int) returns bigint language python as 'python_bvt_pc_cast = lambda ctx, values: __import__("pyarrow.compute", fromlist=["cast"]).cast(values, __import__("pyarrow").int64())' handler 'python_bvt_pc_cast' mode vector;
+create function python_bvt_pc_cast (x int) returns bigint language python as 'python_bvt_pc_cast = lambda ctx, values: __import__("pyarrow.compute", fromlist=["cast"]).cast(values, __import__("pyarrow").int64(), safe=True)' handler 'python_bvt_pc_cast' mode vector;
 create table selection_values (id int, value int, index_value int);
 insert into selection_values values
 (1, 30, 2),
