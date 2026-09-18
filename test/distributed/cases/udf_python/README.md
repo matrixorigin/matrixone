@@ -51,11 +51,19 @@ The cases keep the data sets small and target contract boundaries:
   prepared-plan invalidation, drop, and recreate on the same SQL signature.
 - `vector_mode.sql` checks Arrow VECTOR handlers, zero-argument batch shape,
   NULL policies, and handler validation during create and replace.
+- `arrow_compute_arithmetic.sql` checks `pyarrow.compute` arithmetic,
+  conditional, fill-null, and validity kernels while preserving NULLs and
+  batch length.
+- `arrow_compute_selection.sql` checks Arrow take, sort-indices, comparison,
+  and physical cast kernels with indexed and NULL input.
+- `arrow_compute_strings.sql` checks UTF-8 uppercasing, substring matching,
+  replacement, and code-point length for empty, Unicode, and NULL values.
 
 The shape follows established correctness coverage from
 [DuckDB's scalar UDF tests](https://github.com/duckdb/duckdb-go/blob/main/scalar_udf_test.go)
-(NULLs, multiple rows, multiple arguments, and errors) and
-[Apache Arrow's extension type tests](https://github.com/apache/arrow/blob/main/python/pyarrow/tests/test_extension_type.py)
-(null-aware arrays, fixed-size binary values, and type validation). The SQL
-cases adapt those ideas to MatrixOne's Python Arrow boundary rather than
-copying another project's implementation.
+(NULLs, multiple rows, multiple arguments, and errors), and the added compute
+cases use the common kernels documented by
+[PyArrow's compute API](https://arrow.apache.org/docs/python/compute.html)
+(arithmetic, validity, selection, cast, and UTF-8). The SQL cases adapt those
+ideas to MatrixOne's Python Arrow boundary rather than copying another
+project's implementation.
