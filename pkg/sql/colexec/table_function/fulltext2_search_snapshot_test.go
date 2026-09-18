@@ -222,3 +222,6 @@ func TestFulltext2SearchStreamingSnapshotUsesTSSuffixedCacheKey(t *testing.T) {
 	_, bare := veccache.Cache.IndexMap.Load(idxTable)
 	require.False(t, bare, "a historical read must not create or warm the current-index entry")
 }
+
+// BuildTS stubs (fulltext2 async-freshness interface method).
+func (s *ft2StubIndex) BuildTS() int64 { return 0 }

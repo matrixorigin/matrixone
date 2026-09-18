@@ -114,6 +114,10 @@ type Window struct {
 	// PartitionTopN allows the bounded ROW_NUMBER path to coalesce complete
 	// candidate partitions and evaluate their explicit boundaries once.
 	PartitionTopN bool
+	// SpillThreshold is the session sort_spill_mem value captured in the plan.
+	// Window uses it for the internal ordering pass when a partition exceeds
+	// the configured resident sort budget.
+	SpillThreshold int64
 
 	vm.OperatorBase
 }

@@ -3037,7 +3037,7 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 			return err
 		}
 		if !found || watermark.IsEmpty() {
-			return moerr.NewNotSupportedf(ctx, "legacy NoFull CDC task has no durable creation start; recreate after all CNs support protocol version %d", defines.MORPCVersion81)
+			return moerr.NewNotSupportedf(ctx, "legacy NoFull CDC task has no durable creation start; recreate after all CNs support protocol version %d", defines.MORPCVersion85)
 		}
 	} else if exec.noFull && watermark.IsEmpty() {
 		// New NoFull tasks persist the CREATE CDC snapshot in startTs. Keep the

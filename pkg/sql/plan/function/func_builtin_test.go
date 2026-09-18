@@ -1603,6 +1603,11 @@ func TestSerialAndSerialFullEncodeNonNullRowsIdentically(t *testing.T) {
 	parameters := []*vector.Vector{
 		newVectorByType(proc.Mp(), types.T_int64.ToType(), []int64{-1, 0, 42}, nil),
 		newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"a", "b\x00c", "世界"}, nil),
+		newVectorByType(proc.Mp(), types.New(types.T_decimal256, 65, 2), []types.Decimal256{
+			mustParseDecimal256(t, "-1.23", 2),
+			mustParseDecimal256(t, "0.00", 2),
+			mustParseDecimal256(t, "123.45", 2),
+		}, nil),
 	}
 	for _, parameter := range parameters {
 		defer parameter.Free(proc.Mp())
@@ -2111,6 +2116,21 @@ func TestSerialExtractUUID(t *testing.T) {
 	}
 }
 
+func TestSerialExtractDecimal256(t *testing.T) {
+	typ := types.New(types.T_decimal256, 65, 2)
+	testSerialExtractNamedType(
+		t,
+		typ,
+		[]types.Decimal256{
+			mustParseDecimal256(t, "-123.45", 2),
+			mustParseDecimal256(t, "678.90", 2),
+		},
+		func(ps *types.Packer, value types.Decimal256) {
+			ps.EncodeDecimal256(value)
+		},
+	)
+}
+
 func TestSerialExtractEnumAndYear(t *testing.T) {
 	t.Run("enum", func(t *testing.T) {
 		testSerialExtractNamedType(
@@ -2135,7 +2155,7 @@ func TestSerialExtractEnumAndYear(t *testing.T) {
 	})
 }
 
-func testSerialExtractNamedType[T types.Enum | types.MoYear](
+func testSerialExtractNamedType[T types.Enum | types.MoYear | types.Decimal256](
 	t *testing.T,
 	typ types.Type,
 	values []T,

@@ -180,7 +180,9 @@ func newCache[K comparable, V any](
 		postEvict:    postEvict,
 	}
 	for i := range ret.shards {
-		ret.shards[i].values = make(map[K]*_CacheItem[K, V], 1024)
+		// An empty cache need not reserve 1024 entries in every shard.
+		// Grow the index with actual occupancy; data capacity is unchanged.
+		ret.shards[i].values = make(map[K]*_CacheItem[K, V])
 	}
 	return ret
 }

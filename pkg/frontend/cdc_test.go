@@ -742,9 +742,9 @@ func TestValidateStableInitialSnapshotProtocol(t *testing.T) {
 func TestValidateLosslessNoFullStartProtocolBoundary(t *testing.T) {
 	err := validateLosslessNoFullStartProtocol(
 		context.Background(), defines.MORPCVersion80)
-	require.ErrorContains(t, err, "protocol version 81")
+	require.ErrorContains(t, err, "protocol version 85")
 	require.NoError(t, validateLosslessNoFullStartProtocol(
-		context.Background(), defines.MORPCVersion81))
+		context.Background(), defines.MORPCVersion85))
 }
 
 func (ts *testTaskService) TruncateCompletedTasks(ctx context.Context) error {

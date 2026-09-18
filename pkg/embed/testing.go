@@ -104,10 +104,10 @@ func (c *SharedTestCluster) Run(
 		logTestSetup(t,
 			"MO_UT_SETUP fixture=shared-cluster phase=rollback-cleanup duration=%s status=%s",
 			time.Since(cleanupStarted), cleanupStatus)
-		if cleanupErr == nil {
+		complete := closeComplete(c.cluster, cleanupErr)
+		c.err = errors.Join(c.err, cleanupErr)
+		if complete {
 			c.cluster = nil
-		} else {
-			c.err = errors.Join(c.err, cleanupErr)
 		}
 	}
 	if c.err != nil {
@@ -119,7 +119,7 @@ func (c *SharedTestCluster) Run(
 
 // Close releases the shared cluster or retries cleanup retained from a failed
 // initialization. Ownership is cleared only after the underlying Close has
-// completed successfully.
+// completed locally, independently of any returned diagnostic.
 func (c *SharedTestCluster) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -127,12 +127,13 @@ func (c *SharedTestCluster) Close() error {
 		c.closed = true
 		return nil
 	}
-	if err := c.cluster.Close(); err != nil {
+	err := c.cluster.Close()
+	if !closeComplete(c.cluster, err) {
 		return err
 	}
 	c.cluster = nil
 	c.closed = true
-	return nil
+	return err
 }
 
 // CloseIfActive releases an initialized shared fixture and resets a successful
@@ -146,7 +147,8 @@ func (c *SharedTestCluster) CloseIfActive() error {
 	if c.cluster == nil {
 		return nil
 	}
-	if err := c.cluster.Close(); err != nil {
+	err := c.cluster.Close()
+	if !closeComplete(c.cluster, err) {
 		// A failed close leaves ownership with this state, but prevents a later
 		// scenario from observing a partially closed fixture. A subsequent
 		// CloseIfActive call can retry the underlying cleanup.
@@ -157,7 +159,7 @@ func (c *SharedTestCluster) CloseIfActive() error {
 	c.err = nil
 	c.once = sync.Once{}
 	c.closed = false
-	return nil
+	return err
 }
 
 func init() {
@@ -246,6 +248,8 @@ func adjustBasicClusterService(svc ServiceOperator) {
 				config.CN.LockService.MaxFixedSliceSize = 10001
 				config.CN.LockService.MaxLockRowCount = 10000
 				config.CN.Frontend.SkipCheckUser = false
+				// The shared feature-test fixture is a fully upgraded cluster.
+				config.CN.AutoIncrement.EnableAutoIDCache = true
 				config.CN.Frontend.Iceberg.Enable = true
 				config.CN.Frontend.Iceberg.EnableWrite = true
 				config.CN.Frontend.Iceberg.EnableDelete = true

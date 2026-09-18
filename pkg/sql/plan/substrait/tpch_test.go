@@ -31,13 +31,15 @@ import (
 
 func TestExportCanonicalTPCHPlans(t *testing.T) {
 	mock := planbuilder.NewMockOptimizer(false)
-	// Substrait's decimal primitive is limited to 38 digits. These queries have
-	// a SUM whose MatrixOne result now uses Decimal256 so that accumulation can
-	// exceed Decimal128 without becoming input-order dependent. They must take
-	// the normal not-eligible path and fall back to local execution.
-	decimal256SumQueries := map[int]struct{}{
-		1: {}, 3: {}, 5: {}, 6: {}, 7: {}, 8: {}, 9: {}, 10: {},
-		11: {}, 14: {}, 15: {}, 19: {},
+	// Exact DECIMAL arithmetic and SUM widening make these plans contain
+	// Decimal256 expressions. Substrait decimal is capped at precision 38, so
+	// declining Sirius offload preserves MatrixOne's wider arithmetic semantics.
+	decimal256Plans := map[int]EligibilityReason{
+		1: EligibilityExpression, 3: EligibilityExpression, 5: EligibilityExpression,
+		6: EligibilityType, 7: EligibilityExpression, 8: EligibilityExpression,
+		9: EligibilityExpression, 10: EligibilityExpression, 11: EligibilityType,
+		14: EligibilityExpression, 15: EligibilityExpression, 17: EligibilityExpression,
+		19: EligibilityExpression, 20: EligibilityExpression,
 	}
 	for queryNumber := 1; queryNumber <= 22; queryNumber++ {
 		t.Run(fmt.Sprintf("q%d", queryNumber), func(t *testing.T) {
@@ -62,13 +64,15 @@ func TestExportCanonicalTPCHPlans(t *testing.T) {
 			}
 
 			candidate, err := Export(query)
-			if _, expectsDecimal256Fallback := decimal256SumQueries[queryNumber]; expectsDecimal256Fallback {
+			if expectedReason, expectedIneligible := decimal256Plans[queryNumber]; expectedIneligible {
 				require.Error(t, err)
 				require.True(t, IsNotEligible(err))
 				reason, ok := NotEligibleReason(err)
 				require.True(t, ok)
-				require.Equal(t, EligibilityType, reason)
-				require.ErrorContains(t, err, "unsupported type DECIMAL256")
+				require.Equal(t, expectedReason, reason)
+				if expectedReason == EligibilityType {
+					require.ErrorContains(t, err, "unsupported type DECIMAL256")
+				}
 				return
 			}
 			require.NoError(t, err)

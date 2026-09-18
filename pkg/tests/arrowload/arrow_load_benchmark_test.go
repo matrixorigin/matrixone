@@ -18,14 +18,14 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/embed"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
-func TestArrowLoadForceMaterializeFallback(t *testing.T) {
+func testArrowLoadForceMaterializeFallback(t *testing.T, c embed.Cluster) {
 	path, _ := fixtureForceMaterialize(t)
-	c := startArrowLoadClusterWithForceModes(t)
 
 	t.Run("borrow", func(t *testing.T) {
 		borrowDB := openArrowLoadDB(t, c, 0)
