@@ -29,6 +29,23 @@ without changing which packages or tests execute. A caller can set
 `UT_LIGHT_PARALLEL=6` to reproduce the former light-stage admission for a
 controlled comparison or rollback.
 
+## Follow-up critical-path treatment
+
+The single-runner race path also enables the existing bounded
+`UT_PREBUILD_EMBEDDED=1` cache-warming path. During the exclusive issues
+package, up to two embedded packages are compiled with `go test -c`; no
+prebuilt binary is executed. The later authoritative embedded `go test`
+command still owns package discovery, `TestMain`, fixture admission, test
+events, exit status, timeout handling, and report publication. Set
+`UT_PREBUILD_EMBEDDED=0` to restore the serial control path.
+
+The prebuild records package and join checkpoints so a wall-time comparison
+can distinguish reusable compilation from fixture admission and test-body
+time. This is an experiment toward the issue's end-to-end latency target, not
+a claim that compilation time equals the whole embedded-stage duration. The
+light/issues overlap remains disabled, and embedded execution remains capped
+at two package workers until same-runner measurements prove otherwise.
+
 ## Acceptance and limits
 
 The default of three is a resource-pressure treatment, not a performance
