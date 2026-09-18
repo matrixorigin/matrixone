@@ -274,7 +274,7 @@ select cast('02 10:11:12' as time);
 58:11:12
 select cast('255 10:11:12' as time);
 ➤ cast(255 10:11:12 as time)[92,64,0]  𝄀
-6130:11:12
+838:59:59
 create database if not exists test;
 use test;
 drop table if exists mysql_ts_test;
