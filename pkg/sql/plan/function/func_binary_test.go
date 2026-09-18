@@ -8073,7 +8073,7 @@ func TestGeodeticDiscreteDistanceUnitEmpty(t *testing.T) {
 	oneDegreeMeters := math.Pi / 180 * geo.EarthRadiusMeters
 	encode32 := func(t *testing.T, wkt string) string {
 		t.Helper()
-		if wkt == "\x01" {
+		if wkt == "\x01" || wkt == "GEOMETRYCOLLECTION() trailing" {
 			return wkt
 		}
 		g, err := geo.ParseWKT(wkt)
@@ -8099,6 +8099,7 @@ func TestGeodeticDiscreteDistanceUnitEmpty(t *testing.T) {
 		{name: "mixed collection ignores empty member", left: "GEOMETRYCOLLECTION(POINT(0 0),POINT EMPTY,POINT(1 0))", right: line},
 		{name: "malformed left", left: "\x01", right: line, wantErr: true},
 		{name: "malformed right", left: line, right: "\x01", wantErr: true},
+		{name: "empty collection trailing payload", left: "GEOMETRYCOLLECTION() trailing", right: line, wantErr: true},
 		{name: "empty left malformed right", left: "LINESTRING EMPTY", right: "\x01", wantErr: true},
 		{name: "malformed left empty right", left: "\x01", right: "LINESTRING EMPTY", wantErr: true},
 	}
@@ -9296,6 +9297,7 @@ func TestValidateGeometryCollectionNestingDepthContract(t *testing.T) {
 	}{
 		{name: "typed empty leaf", wkt: "GEOMETRYCOLLECTION EMPTY"},
 		{name: "nested typed empty leaf", wkt: "GEOMETRYCOLLECTION(GEOMETRYCOLLECTION EMPTY)"},
+		{name: "nested typed empty leaf with extra whitespace", wkt: "GEOMETRYCOLLECTION(GEOMETRYCOLLECTION  EMPTY)"},
 		{name: "mixed empty members", wkt: "GEOMETRYCOLLECTION(POINT EMPTY,GEOMETRYCOLLECTION EMPTY)"},
 		{name: "empty parentheses remains valid", wkt: "GEOMETRYCOLLECTION()"},
 		{name: "nested collection", wkt: "GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(POINT(0 0)))"},
@@ -9304,6 +9306,7 @@ func TestValidateGeometryCollectionNestingDepthContract(t *testing.T) {
 		{name: "trailing parenthesized payload", wkt: "GEOMETRYCOLLECTION(POINT(0 0))(bad)", wantErr: true},
 		{name: "empty member", wkt: "GEOMETRYCOLLECTION(POINT(0 0),)", wantErr: true},
 		{name: "typed empty trailing payload", wkt: "GEOMETRYCOLLECTION EMPTY trailing", wantErr: true},
+		{name: "empty parentheses trailing payload", wkt: "GEOMETRYCOLLECTION() trailing", wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := validateGeometryCollectionNestingDepthFromText(tc.wkt)
