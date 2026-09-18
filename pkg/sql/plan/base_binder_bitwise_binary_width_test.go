@@ -317,6 +317,35 @@ func TestRefineStringSliceRequiresBinaryRuntimeDomain(t *testing.T) {
 		expr := bind(t, "left", text)
 		require.Equal(t, int32(6), expr.Typ.Width)
 	})
+
+	t.Run("derived mixed-domain column stays conservative", func(t *testing.T) {
+		mixed, err := BindFuncExprImplByPlanExpr(ctx, "if", []*planpb.Expr{
+			makePlan2BoolConstExprWithType(false),
+			binaryLiteral("x"),
+			makePlan2StringConstExprWithType("你好"),
+		})
+		require.NoError(t, err)
+		builder := &QueryBuilder{
+			qry: &planpb.Query{Nodes: []*planpb.Node{{
+				NodeType:    planpb.Node_PROJECT,
+				BindingTags: []int32{7},
+				ProjectList: []*planpb.Expr{mixed},
+			}}},
+			tag2NodeID: map[int32]int32{7: 0},
+		}
+		binder := &baseBinder{builder: builder}
+		derived := &planpb.Expr{
+			Typ: makePlan2Type(&varbinaryType),
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+				RelPos: 7,
+				ColPos: 0,
+			}},
+		}
+		binder.annotateStringDomainSources([]*planpb.Expr{derived})
+		require.NotNil(t, derived.GetPreparedNumeric().GetStringDomainSource())
+		expr := bind(t, "left", derived)
+		require.Equal(t, int32(512), expr.Typ.Width)
+	})
 }
 
 func TestRefineCharacterStringReturnTypesUseFormattedNumericBounds(t *testing.T) {

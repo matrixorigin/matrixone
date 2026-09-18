@@ -3829,6 +3829,10 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		return nil, rewriteErr
 	}
 	args = rewrittenArgs
+	// Preserve the source expression behind derived columns before the generic
+	// plan binder loses that query-block boundary. A derived column can have a
+	// binary-shaped common type while still carrying text rows at runtime.
+	b.annotateStringDomainSources(args)
 	if b.builder != nil && b.builder.isPrepareStatement {
 		b.markPreparedStringDomainSubquerySources(name, args)
 	}
@@ -4921,6 +4925,70 @@ func (b *baseBinder) markPreparedStringDomainSubquerySources(name string, args [
 	stringOperands := preparedRegexpCompatibilityStringOperandCount(name, len(args))
 	for i := 0; i < stringOperands; i++ {
 		b.markPreparedStringDomainSubquerySource(args[i], make(map[[2]int32]struct{}))
+	}
+}
+
+// annotateStringDomainSources retains the source expression for a derived
+// column whenever that source can carry a runtime string-domain override.
+// Physical table columns remain represented by their declared type; derived
+// projections need their expression lineage because control-flow common types
+// may be binary-shaped even when a selected row is text.
+func (b *baseBinder) annotateStringDomainSources(args []*Expr) {
+	visited := make(map[[2]int32]struct{})
+	for _, arg := range args {
+		b.annotateStringDomainSource(arg, visited)
+	}
+}
+
+func (b *baseBinder) annotateStringDomainSource(expr *Expr, visited map[[2]int32]struct{}) {
+	if expr == nil {
+		return
+	}
+	if col := expr.GetCol(); col != nil {
+		if b.builder == nil || b.builder.qry == nil {
+			return
+		}
+		nodeID, ok := b.builder.tag2NodeID[col.RelPos]
+		if !ok || nodeID < 0 || int(nodeID) >= len(b.builder.qry.Nodes) {
+			return
+		}
+		node := b.builder.qry.Nodes[nodeID]
+		if node == nil || col.ColPos < 0 || int(col.ColPos) >= len(node.ProjectList) {
+			return
+		}
+		key := [2]int32{nodeID, col.ColPos}
+		if _, seen := visited[key]; seen {
+			return
+		}
+		visited[key] = struct{}{}
+		source := node.ProjectList[col.ColPos]
+		if source == nil || source == expr {
+			return
+		}
+		b.annotateStringDomainSource(source, visited)
+		if source.GetCol() != nil &&
+			source.GetPreparedNumeric().GetStringDomainSource() == nil {
+			// A direct physical column has no runtime override to preserve. Keep
+			// its static binary domain eligible for the existing fast path.
+			return
+		}
+		ensurePreparedNumericMetadata(expr).StringDomainSource = DeepCopyExpr(source)
+		return
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			b.annotateStringDomainSource(arg, visited)
+		}
+		return
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			b.annotateStringDomainSource(item, visited)
+		}
+		return
+	}
+	if sub := expr.GetSub(); sub != nil {
+		b.annotateStringDomainSource(sub.Child, visited)
 	}
 }
 
