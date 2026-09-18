@@ -136,6 +136,11 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 			return nil, err
 		}
 	}
+	if features.IntegerParameterCoercion {
+		if err = validateIntegerArgumentDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
 	if features.IPFunctionSemantics {
 		if err = validateIPFunctionDestination(proc, p); err != nil {
 			return nil, err
@@ -2172,6 +2177,9 @@ func validateRemoteExpressionPipelineProtocol(
 	protocolVersion, hasProtocolVersion := int64(0), false
 	if proc != nil {
 		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
+	}
+	if features.IntegerParameterCoercion && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion85) {
+		return moerr.NewNotSupportedNoCtx("integer parameter coercion requires MORPC protocol version 85")
 	}
 	if features.NumericPrefix &&
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion30) {
