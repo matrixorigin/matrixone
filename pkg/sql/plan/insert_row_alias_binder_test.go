@@ -447,6 +447,15 @@ func TestInsertRowAliasUncorrelatedScalarSubqueryDoesNotAddTargetLookup(t *testi
 		"an uncorrelated ODKU subquery must not add a target-correlation lookup")
 }
 
+func TestInsertRowAliasTargetCorrelationThenUncorrelatedSubqueryKeepsBindings(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') as n(id, name, location) "+
+			"on duplicate key update loc = (select e.ename from constraint_test.emp as e "+
+			"where e.deptno = constraint_test.dept.deptno), dname = (select max(e.ename) from constraint_test.emp as e)")
+	require.NoError(t, err)
+	require.NotNil(t, logicPlan)
+}
+
 func TestInsertRowAliasBinderRejectsAmbiguousAndInvalidNames(t *testing.T) {
 	tableDef := testInsertAliasTable()
 	binding, err := validateInsertRowAlias(
