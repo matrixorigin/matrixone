@@ -42,6 +42,29 @@ func (s *stateMachine) discardLegacyCatalogSchedule() {
 	}
 }
 
+func (s *stateMachine) pruneObsoleteCatalogSchedule() {
+	for uuid, batch := range s.state.ScheduleCommands {
+		kept := make([]pb.ScheduleCommand, 0, len(batch.Commands))
+		var ids []pb.ScheduleCommandID
+		aligned := len(batch.CommandIDs) == len(batch.Commands)
+		for i, cmd := range batch.Commands {
+			if s.catalogScheduleObsolete(cmd) {
+				continue
+			}
+			kept = append(kept, cmd)
+			if aligned {
+				ids = append(ids, batch.CommandIDs[i])
+			}
+		}
+		if len(kept) == 0 {
+			delete(s.state.ScheduleCommands, uuid)
+			continue
+		}
+		batch.Commands, batch.CommandIDs = kept, ids
+		s.state.ScheduleCommands[uuid] = batch
+	}
+}
+
 func (s *stateMachine) catalogScheduleObsolete(cmd pb.ScheduleCommand) bool {
 	b := s.state.CatalogMetadataBarrier
 	if b == nil || b.Arbitration == nil {
@@ -50,6 +73,14 @@ func (s *stateMachine) catalogScheduleObsolete(cmd pb.ScheduleCommand) bool {
 	a := b.Arbitration
 	if m := cmd.CatalogMetadataMembership; m != nil {
 		return a.Reservation == nil || m.Token != a.Reservation.Token
+	}
+	cfg := cmd.ConfigChange
+	if cmd.ServiceType == pb.LogService && cfg != nil && cfg.Replica.ShardID == DefaultHAKeeperShardID &&
+		cfg.Replica.Epoch < a.ConfirmedConfigChangeIndex {
+		switch cfg.ChangeType {
+		case pb.AddReplica, pb.AddNonVotingReplica, pb.RemoveReplica, pb.RemoveNonVotingReplica:
+			return true
+		}
 	}
 	if p := cmd.CatalogMetadataStart; p != nil {
 		for _, current := range a.StartPermits {

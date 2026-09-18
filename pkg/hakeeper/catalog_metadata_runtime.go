@@ -101,6 +101,11 @@ func (s *stateMachine) handleCatalogMetadataRequest(cmd []byte) sm.Result {
 	s.state.CatalogMetadataBarrier = &next
 	if cutover {
 		s.discardLegacyCatalogSchedule()
+	} else {
+		// A completed membership proof can make previously queued, tokenless
+		// commands permanently stale. Reclaim them at the replicated owner so
+		// stores that no longer poll cannot retain or block on them forever.
+		s.pruneObsoleteCatalogSchedule()
 	}
 	return catalogMetadataResult(status, token)
 }

@@ -1973,5 +1973,9 @@ func (s *stateMachine) RecoverFromSnapshot(r io.Reader,
 		decoded.CommandDeliveryTNReady = nil
 	}
 	s.state = decoded
+	// Older binaries could snapshot tokenless membership commands after a
+	// later configuration had already been confirmed. They can never become
+	// valid again; reclaim them during publication of the recovered owner.
+	s.pruneObsoleteCatalogSchedule()
 	return nil
 }
