@@ -324,7 +324,7 @@ func TestAssignmentCastAllowsInvalidCalendarDates(t *testing.T) {
 	require.False(t, date.nulls[0])
 	require.Equal(t, "2024-02-30", date.dates[0].String())
 
-	datetime := runStringTemporalCast(t, proc, NewStrictCast, "2024-02-30 12:34:56.123456", types.T_datetime.ToType(), nil)
+	datetime := runStringTemporalCast(t, proc, NewStrictCast, "2024-02-30 12:34:56.123456", types.T_datetime.ToTypeWithScale(6), nil)
 	require.False(t, datetime.nulls[0])
 	require.Equal(t, "2024-02-30 12:34:56.123456", datetime.datetimes[0].String2(6))
 
