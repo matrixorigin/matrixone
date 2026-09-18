@@ -13,10 +13,7 @@ SELECT JSON_DEPTH(CAST('{"a":[1]}' AS JSON)) AS result;
 
 DROP TABLE IF EXISTS t_json_depth;
 CREATE TABLE t_json_depth (id INT PRIMARY KEY, doc VARCHAR(1024));
-INSERT INTO t_json_depth VALUES
-    (0, '{"a":[1]}'),
-    (1, 'not-json'),
-    (2, '{"a":{"b":1}}');
+INSERT INTO t_json_depth VALUES (0, '{"a":[1]}'), (1, 'not-json'), (2, '{"a":{"b":1}}');
 SELECT id, JSON_DEPTH(doc) FROM t_json_depth ORDER BY id;
 DROP TABLE t_json_depth;
 
