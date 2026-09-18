@@ -514,14 +514,7 @@ func TestInetNtoaPreparedParameterKinds(t *testing.T) {
 			if test.null {
 				input = vector.NewConstNull(types.T_any.ToType(), 1, proc.Mp())
 			} else {
-				data, err := proc.Mp().Alloc(types.VarlenaSize, false)
-				require.NoError(t, err)
-				var value types.Varlena
-				value[0] = byte(len(test.value))
-				copy(value[1:], test.value)
-				copy(data, value[:])
-				input = vector.NewVecWithData(types.T_any.ToType(), 1, data, nil)
-				input.SetClass(vector.CONSTANT)
+				input = newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{test.value}, nil)
 			}
 			input.SetPrepareParamKind(test.kind)
 			t.Cleanup(func() { input.Free(proc.Mp()) })
@@ -538,4 +531,20 @@ func TestInetNtoaPreparedParameterKinds(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestInetNtoaDynamicRejectsNonNullAny(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	data, err := proc.Mp().Alloc(types.VarlenaSize, false)
+	require.NoError(t, err)
+	input := vector.NewVecWithData(types.T_any.ToType(), 1, data, nil)
+	input.SetClass(vector.CONSTANT)
+	defer input.Free(proc.Mp())
+
+	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(1))
+	require.ErrorContains(t,
+		InetNtoaDynamic([]*vector.Vector{input}, result, proc, 1, nil),
+		"non-NULL ANY")
 }

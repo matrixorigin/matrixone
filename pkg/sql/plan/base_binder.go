@@ -6622,19 +6622,9 @@ func refineSubstringLiteralReturnType(args []*plan.Expr, returnType *types.Type)
 
 	binary := types.StaticStringDomain(sourceType) == types.StringDomainBinary
 	if !binary {
-		// Character SUBSTRING's two-argument form has no fixed output length;
-		// only the explicit length in the three-argument form is a sound bound.
-		if len(args) != 3 {
-			return
-		}
-		length, known := binarySubstringLengthBound(args[2].GetLit())
-		if !known {
-			return
-		}
-		if sourceBound, sourceKnown := stringExprBound(args[0], false); sourceKnown && sourceBound < length {
-			length = sourceBound
-		}
-		refineKnownStringResultType(returnType, length, false)
+		// Character SUBSTRING keeps its existing metadata contract; narrowing
+		// it from a literal bound changes the overload's declared result width
+		// and breaks consumers that rely on the text semantic family.
 		return
 	}
 
@@ -6688,11 +6678,16 @@ func refineLeftRightLiteralReturnType(args []*plan.Expr, returnType *types.Type)
 	if sourceType.Oid == types.T_blob {
 		return
 	}
+	binary := types.StaticStringDomain(sourceType) == types.StringDomainBinary
+	if !binary {
+		// LEFT/RIGHT follow the same text metadata contract as SUBSTRING.
+		// Literal character lengths are value bounds, not public result types.
+		return
+	}
 	length, known := binarySubstringLengthBound(args[1].GetLit())
 	if !known {
 		return
 	}
-	binary := types.StaticStringDomain(sourceType) == types.StringDomainBinary
 	if sourceBound, sourceKnown := stringExprBound(args[0], binary); sourceKnown && sourceBound < length {
 		length = sourceBound
 	}

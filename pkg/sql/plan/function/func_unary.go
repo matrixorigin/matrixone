@@ -8510,6 +8510,38 @@ func InetNtoa(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 	}
 }
 
+func inetNtoaPreparedText(value []byte, kind vector.PrepareParamKind) (string, error) {
+	switch kind {
+	case vector.PrepareParamFloat:
+		floating, err := strconv.ParseFloat(string(value), 64)
+		if err != nil {
+			return "", err
+		}
+		return inetNtoaReal(floating)
+	case vector.PrepareParamDecimal:
+		integer, err := roundPreparedDecimalIntegerString(string(value))
+		if err != nil {
+			return "", err
+		}
+		number, err := strconv.ParseInt(integer, 10, 64)
+		if err != nil {
+			return "", err
+		}
+		return inetNtoaSigned(number)
+	case vector.PrepareParamBoolean:
+		switch strings.ToLower(string(value)) {
+		case "true", "1":
+			return inetNtoaUnsigned(1)
+		case "false", "0":
+			return inetNtoaUnsigned(0)
+		default:
+			return inetNtoaUnsigned(0)
+		}
+	default:
+		return inetNtoaSigned(parseMySQLIntegerPrefix(value))
+	}
+}
+
 // InetNtoaDynamic owns the source families whose numeric representation is
 // decided by the value domain rather than by a fixed numeric vector. Keeping
 // this dispatch at the batch boundary preserves the allocation-free native
@@ -8541,44 +8573,16 @@ func InetNtoaDynamic(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 
 	switch param.GetType().Oid {
 	case types.T_any:
-		// Prepared markers use a varlena transport vector until their execute-time
-		// domain is known.  Honor that per-row marker kind here; treating the
-		// vector as an untyped NULL would silently discard a valid bound value.
+		// T_any is a planner-only type and has no physical storage contract. A
+		// non-NULL T_any vector must not be reinterpreted as Varlena: doing so
+		// panics under race/typecheck builds and can corrupt data otherwise.
+		for i := 0; i < length; i++ {
+			if !param.IsNull(uint64(i)) {
+				return moerr.NewInvalidInputNoCtx("INET_NTOA received a non-NULL ANY vector")
+			}
+		}
 		get = func(i uint64) (string, bool, error) {
-			if param.IsNull(i) {
-				return "", true, nil
-			}
-			value := param.GetBytesAt(int(i))
-			switch param.GetPrepareParamKindAt(int(i)) {
-			case vector.PrepareParamFloat:
-				floating, err := strconv.ParseFloat(string(value), 64)
-				if err != nil {
-					return "", true, err
-				}
-				text, err := inetNtoaReal(floating)
-				return text, err != nil, err
-			case vector.PrepareParamDecimal:
-				integer, err := roundPreparedDecimalIntegerString(string(value))
-				if err != nil {
-					return "", true, err
-				}
-				number, err := strconv.ParseInt(integer, 10, 64)
-				if err != nil {
-					return "", true, err
-				}
-				return appendSigned(number, false)
-			case vector.PrepareParamBoolean:
-				switch strings.ToLower(string(value)) {
-				case "true", "1":
-					return appendUnsigned(1, false)
-				case "false", "0":
-					return appendUnsigned(0, false)
-				default:
-					return appendUnsigned(0, false)
-				}
-			default:
-				return appendSigned(parseMySQLIntegerPrefix(value), false)
-			}
+			return "", true, nil
 		}
 	case types.T_bool:
 		p := vector.GenerateFunctionFixedTypeParameter[bool](param)
@@ -8702,6 +8706,10 @@ func InetNtoaDynamic(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 			value, null := p.GetStrValue(i)
 			if null {
 				return "", true, nil
+			}
+			if kind := param.GetPrepareParamKindAt(int(i)); kind != vector.PrepareParamNone {
+				text, err := inetNtoaPreparedText(value, kind)
+				return text, err != nil, err
 			}
 			return appendSigned(parseMySQLIntegerPrefix(value), false)
 		}

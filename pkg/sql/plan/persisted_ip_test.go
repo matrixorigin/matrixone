@@ -386,11 +386,13 @@ func TestPersistedFollowupExpressionProtocolAdmission(t *testing.T) {
 	}
 
 	metadataCases := []struct {
-		name string
-		expr *planpb.Expr
+		name     string
+		expr     *planpb.Expr
+		required int64
 	}{
 		{
-			name: "bounded character substring is v85",
+			name:     "character substring keeps the legacy protocol floor",
+			required: 0,
 			expr: func() *planpb.Expr {
 				return mustBindPersistedFollowupExpr(t, proc.Ctx, "substring", []*planpb.Expr{
 					column(types.New(types.T_varchar, 64, 0)),
@@ -400,7 +402,8 @@ func TestPersistedFollowupExpressionProtocolAdmission(t *testing.T) {
 			}(),
 		},
 		{
-			name: "fractional temporal coalesce is v85",
+			name:     "fractional temporal coalesce is v85",
+			required: defines.MORPCVersion85,
 			expr: func() *planpb.Expr {
 				return mustBindPersistedFollowupExpr(t, proc.Ctx, "coalesce", []*planpb.Expr{
 					column(types.T_time.ToTypeWithScale(0)),
@@ -413,7 +416,11 @@ func TestPersistedFollowupExpressionProtocolAdmission(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			got, err := RequiredPersistedExpressionProtocolVersion(test.expr)
 			require.NoError(t, err)
-			require.Equal(t, int64(defines.MORPCVersion85), got)
+			require.Equal(t, test.required, got)
+			if test.required == 0 {
+				require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, test.expr))
+				return
+			}
 
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion84)
 			require.ErrorContains(t,

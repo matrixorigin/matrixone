@@ -34,9 +34,9 @@ where table_schema = database() and table_name = 'contract_ctas'
 order by ordinal_position;
 ➤ column_name[12,256,0]  ¦  column_type[12,65535,0]  ¦  is_nullable[12,3,0]  𝄀
 b64  ¦  VARCHAR(174)  ¦  YES  𝄀
-sub7  ¦  VARCHAR(7)  ¦  YES  𝄀
-left7  ¦  VARCHAR(7)  ¦  YES  𝄀
-right7  ¦  VARCHAR(7)  ¦  YES  𝄀
+sub7  ¦  VARCHAR(512)  ¦  YES  𝄀
+left7  ¦  VARCHAR(512)  ¦  YES  𝄀
+right7  ¦  VARCHAR(512)  ¦  YES  𝄀
 coalesce_time  ¦  TIME(6)  ¦  YES  𝄀
 ifnull_time  ¦  TIME(6)  ¦  YES  𝄀
 if_datetime  ¦  DATETIME(6)  ¦  YES  𝄀
@@ -47,7 +47,7 @@ ip_flag  ¦  INT  ¦  YES
 select b64, sub7, left7, right7, coalesce_time, ifnull_time,
 if_datetime, case_time, nullif_time, ip_text, ip_flag
 from contract_ctas;
-➤ b64[12,174,0]  ¦  sub7[12,7,0]  ¦  left7[12,7,0]  ¦  right7[12,7,0]  ¦  coalesce_time[92,17,0]  ¦  ifnull_time[92,17,0]  ¦  if_datetime[93,26,0]  ¦  case_time[92,17,0]  ¦  nullif_time[92,10,0]  ¦  ip_text[12,31,0]  ¦  ip_flag[4,32,0]  𝄀
+➤ b64[12,174,0]  ¦  sub7[12,512,0]  ¦  left7[12,512,0]  ¦  right7[12,512,0]  ¦  coalesce_time[92,17,0]  ¦  ifnull_time[92,17,0]  ¦  if_datetime[93,26,0]  ¦  case_time[92,17,0]  ¦  nullif_time[92,10,0]  ¦  ip_text[12,31,0]  ¦  ip_flag[4,32,0]  𝄀
 YWJj  ¦  abcdefg  ¦  abcdefg  ¦  cdefghi  ¦  00:00:00  ¦  00:00:00  ¦  2024-01-02 03:04:05  ¦  00:00:00  ¦  00:00:00  ¦  0.0.0.1  ¦  0  𝄀
 eg==  ¦  short  ¦  short  ¦  short  ¦  00:00:01.654321000  ¦  00:00:01.654321000  ¦  2024-01-02 03:04:06.654321000  ¦  00:00:01.654321000  ¦  null  ¦  0.0.0.1  ¦  0
 create index idx_contract_b64 on contract_ctas (b64);
@@ -77,9 +77,9 @@ where table_schema = database() and table_name = 'contract_view'
 order by ordinal_position;
 ➤ column_name[12,256,0]  ¦  column_type[12,65535,0]  ¦  is_nullable[12,3,0]  𝄀
 b64  ¦  VARCHAR(174)  ¦  YES  𝄀
-sub7  ¦  VARCHAR(7)  ¦  YES  𝄀
-left7  ¦  VARCHAR(7)  ¦  YES  𝄀
-right7  ¦  VARCHAR(7)  ¦  YES  𝄀
+sub7  ¦  VARCHAR(512)  ¦  YES  𝄀
+left7  ¦  VARCHAR(512)  ¦  YES  𝄀
+right7  ¦  VARCHAR(512)  ¦  YES  𝄀
 coalesce_time  ¦  TIME(6)  ¦  YES  𝄀
 ifnull_time  ¦  TIME(6)  ¦  YES  𝄀
 if_datetime  ¦  DATETIME(6)  ¦  YES  𝄀
@@ -91,7 +91,7 @@ select b64, sub7, left7, right7, coalesce_time, ifnull_time,
 if_datetime, case_time, nullif_time, ip_text, ip_flag
 from contract_view
 order by if_datetime is null, if_datetime;
-➤ b64[12,174,0]  ¦  sub7[12,7,0]  ¦  left7[12,7,0]  ¦  right7[12,7,0]  ¦  coalesce_time[92,17,0]  ¦  ifnull_time[92,17,0]  ¦  if_datetime[93,26,0]  ¦  case_time[92,17,0]  ¦  nullif_time[92,10,0]  ¦  ip_text[12,31,0]  ¦  ip_flag[4,32,0]  𝄀
+➤ b64[12,174,0]  ¦  sub7[12,512,0]  ¦  left7[12,512,0]  ¦  right7[12,512,0]  ¦  coalesce_time[92,17,0]  ¦  ifnull_time[92,17,0]  ¦  if_datetime[93,26,0]  ¦  case_time[92,17,0]  ¦  nullif_time[92,10,0]  ¦  ip_text[12,31,0]  ¦  ip_flag[4,32,0]  𝄀
 YWJj  ¦  abcdefg  ¦  abcdefg  ¦  cdefghi  ¦  00:00:00  ¦  00:00:00  ¦  2024-01-02 03:04:05  ¦  00:00:00  ¦  00:00:00  ¦  0.0.0.1  ¦  0  𝄀
 eg==  ¦  short  ¦  short  ¦  short  ¦  00:00:01.654321000  ¦  00:00:01.654321000  ¦  2024-01-02 03:04:06.654321000  ¦  00:00:01.654321000  ¦  null  ¦  0.0.0.1  ¦  0
 create table ip_inputs (v varchar(32));

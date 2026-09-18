@@ -200,7 +200,7 @@ func TestRefineBinarySubstringReturnTypeConservativeCases(t *testing.T) {
 	require.Equal(t, int32(511), returnType.Width)
 }
 
-func TestRefineCharacterSubstringAndLeftRightReturnTypes(t *testing.T) {
+func TestRefineCharacterSubstringAndLeftRightKeepDeclaredReturnTypes(t *testing.T) {
 	textType := types.New(types.T_varchar, 512, 0)
 	source := func() *planpb.Expr {
 		return &planpb.Expr{
@@ -216,20 +216,38 @@ func TestRefineCharacterSubstringAndLeftRightReturnTypes(t *testing.T) {
 		&textSubstring,
 	)
 	require.Equal(t, int32(512), textSubstring.Width,
-		"two-argument character SUBSTRING has no fixed suffix length")
+		"character SUBSTRING keeps the declared result width")
 
 	textSubstring = returnType()
 	refineSubstringLiteralReturnType(
 		[]*planpb.Expr{source(), makePlan2Int64ConstExprWithType(2), makePlan2Int64ConstExprWithType(7)},
 		&textSubstring,
 	)
-	require.Equal(t, int32(7), textSubstring.Width)
+	require.Equal(t, int32(512), textSubstring.Width,
+		"character SUBSTRING literal bounds must not change result metadata")
 
 	for _, name := range []string{"left", "right"} {
 		result := returnType()
 		refineLeftRightLiteralReturnType(
 			[]*planpb.Expr{source(), makePlan2Int64ConstExprWithType(7)}, &result)
-		require.Equal(t, int32(7), result.Width, "%s must honor its literal result length", name)
+		require.Equal(t, int32(512), result.Width,
+			"character %s literal bounds must not change result metadata", name)
+	}
+
+	binaryType := types.NewWithCharset(types.T_varbinary, 512, 0, types.CharsetBinary)
+	binarySource := func() *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  makePlan2Type(&binaryType),
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}},
+		}
+	}
+	for _, name := range []string{"left", "right"} {
+		result := returnType()
+		result.Charset = types.CharsetBinary
+		refineLeftRightLiteralReturnType(
+			[]*planpb.Expr{binarySource(), makePlan2Int64ConstExprWithType(7)}, &result)
+		require.Equal(t, int32(7), result.Width,
+			"binary %s may retain literal byte bounds", name)
 	}
 }
 
@@ -293,7 +311,7 @@ func TestBindPublicFunctionResultContracts(t *testing.T) {
 		bound, err := BindFuncExprImplByPlanExpr(ctx, name, args)
 		require.NoError(t, err)
 		require.Equal(t, int32(types.T_varchar), bound.Typ.Id, name)
-		require.Equal(t, int32(7), bound.Typ.Width, name)
+		require.Equal(t, int32(512), bound.Typ.Width, name)
 	}
 
 	inetNtoa, err := BindFuncExprImplByPlanExpr(ctx, "inet_ntoa", []*planpb.Expr{

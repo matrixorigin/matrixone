@@ -1,11 +1,11 @@
 SELECT MID('Quadratically',5,6);
-➤ MID(Quadratically, 5, 6)[12,6,0]  𝄀
+➤ MID(Quadratically, 5, 6)[12,13,0]  𝄀
 ratica
 SELECT MID('Sakila', -3);
 ➤ MID(Sakila, -3)[12,6,0]  𝄀
 ila
 SELECT MID('hello', 2, -1);
-➤ MID(hello, 2, -1)[12,536870911,0]  𝄀
+➤ MID(hello, 2, -1)[12,5,0]  𝄀
 
 SELECT SUBSTRING('Quadratically',5);
 ➤ SUBSTRING(Quadratically, 5)[12,13,0]  𝄀
@@ -14,70 +14,70 @@ SELECT SUBSTRING('foobarbar' FROM 4);
 ➤ SUBSTRING(foobarbar, 4)[12,9,0]  𝄀
 barbar
 SELECT SUBSTRING('Quadratically',5,6);
-➤ SUBSTRING(Quadratically, 5, 6)[12,6,0]  𝄀
+➤ SUBSTRING(Quadratically, 5, 6)[12,13,0]  𝄀
 ratica
 SELECT SUBSTRING('Sakila', -3);
 ➤ SUBSTRING(Sakila, -3)[12,6,0]  𝄀
 ila
 SELECT SUBSTRING('Sakila', -5, 3);
-➤ SUBSTRING(Sakila, -5, 3)[12,3,0]  𝄀
+➤ SUBSTRING(Sakila, -5, 3)[12,6,0]  𝄀
 aki
 SELECT SUBSTRING('Sakila' FROM -4 FOR 2);
-➤ SUBSTRING(Sakila, -4, 2)[12,2,0]  𝄀
+➤ SUBSTRING(Sakila, -4, 2)[12,6,0]  𝄀
 ki
 SELECT SUBSTRING('monty',5,1);
-➤ SUBSTRING(monty, 5, 1)[12,1,0]  𝄀
+➤ SUBSTRING(monty, 5, 1)[12,5,0]  𝄀
 y
 SELECT SUBSTRING('a',1,2);
 ➤ SUBSTRING(a, 1, 2)[12,1,0]  𝄀
 a
 select SUBSTR('abcdefg',3,2);
-➤ SUBSTR(abcdefg, 3, 2)[12,2,0]  𝄀
+➤ SUBSTR(abcdefg, 3, 2)[12,7,0]  𝄀
 cd
 select SUBSTRING('abcdefg',3,2);
-➤ SUBSTRING(abcdefg, 3, 2)[12,2,0]  𝄀
+➤ SUBSTRING(abcdefg, 3, 2)[12,7,0]  𝄀
 cd
 select SUBSTR('abcdefg',-3,2);
-➤ SUBSTR(abcdefg, -3, 2)[12,2,0]  𝄀
+➤ SUBSTR(abcdefg, -3, 2)[12,7,0]  𝄀
 ef
 select SUBSTR('abcdefg',-1,5);
-➤ SUBSTR(abcdefg, -1, 5)[12,5,0]  𝄀
+➤ SUBSTR(abcdefg, -1, 5)[12,7,0]  𝄀
 g
 select SUBSTR('abcdefg',0,0);
-➤ SUBSTR(abcdefg, 0, 0)[12,536870911,0]  𝄀
+➤ SUBSTR(abcdefg, 0, 0)[12,7,0]  𝄀
 
 select SUBSTR('abcdefg',-1,-1);
-➤ SUBSTR(abcdefg, -1, -1)[12,536870911,0]  𝄀
+➤ SUBSTR(abcdefg, -1, -1)[12,7,0]  𝄀
 
 select SUBSTR('abcdefg',1,-1);
-➤ SUBSTR(abcdefg, 1, -1)[12,536870911,0]  𝄀
+➤ SUBSTR(abcdefg, 1, -1)[12,7,0]  𝄀
 
 select substring('hello', 2, -1);
-➤ substring(hello, 2, -1)[12,536870911,0]  𝄀
+➤ substring(hello, 2, -1)[12,5,0]  𝄀
 
 select substring('hello', -1, 1);
-➤ substring(hello, -1, 1)[12,1,0]  𝄀
+➤ substring(hello, -1, 1)[12,5,0]  𝄀
 o
 select substring('hello', -2, 1);
-➤ substring(hello, -2, 1)[12,1,0]  𝄀
+➤ substring(hello, -2, 1)[12,5,0]  𝄀
 l
 select substring('hello', -4294967295, 1);
-➤ substring(hello, -4294967295, 1)[12,1,0]  𝄀
+➤ substring(hello, -4294967295, 1)[12,5,0]  𝄀
 
 select substring('hello', 4294967295, 1);
-➤ substring(hello, 4294967295, 1)[12,1,0]  𝄀
+➤ substring(hello, 4294967295, 1)[12,5,0]  𝄀
 
 select substring('hello', -4294967296, 1);
-➤ substring(hello, -4294967296, 1)[12,1,0]  𝄀
+➤ substring(hello, -4294967296, 1)[12,5,0]  𝄀
 
 select substring('hello', 4294967296, 1);
-➤ substring(hello, 4294967296, 1)[12,1,0]  𝄀
+➤ substring(hello, 4294967296, 1)[12,5,0]  𝄀
 
 select substring('hello', -4294967297, 1);
-➤ substring(hello, -4294967297, 1)[12,1,0]  𝄀
+➤ substring(hello, -4294967297, 1)[12,5,0]  𝄀
 
 select substring('hello', 4294967297, 1);
-➤ substring(hello, 4294967297, 1)[12,1,0]  𝄀
+➤ substring(hello, 4294967297, 1)[12,5,0]  𝄀
 
 select substring('hello', -18446744073709551615, 1);
 Data truncation: data out of range: data type int64, value '-18446744073709551615'
@@ -92,22 +92,22 @@ Data truncation: data out of range: data type int64, value '-1844674407370955161
 select substring('hello', 18446744073709551617, 1);
 Data truncation: data out of range: data type int64, value '18446744073709551617'
 select substring('hello', 1, -1);
-➤ substring(hello, 1, -1)[12,536870911,0]  𝄀
+➤ substring(hello, 1, -1)[12,5,0]  𝄀
 
 select substring('hello', 1, -4294967295);
-➤ substring(hello, 1, -4294967295)[12,536870911,0]  𝄀
+➤ substring(hello, 1, -4294967295)[12,5,0]  𝄀
 
 select substring('hello', 1, 4294967295);
 ➤ substring(hello, 1, 4294967295)[12,5,0]  𝄀
 hello
 select substring('hello', 1, -4294967296);
-➤ substring(hello, 1, -4294967296)[12,536870911,0]  𝄀
+➤ substring(hello, 1, -4294967296)[12,5,0]  𝄀
 
 select substring('hello', 1, 4294967296);
 ➤ substring(hello, 1, 4294967296)[12,5,0]  𝄀
 hello
 select substring('hello', 1, -4294967297);
-➤ substring(hello, 1, -4294967297)[12,536870911,0]  𝄀
+➤ substring(hello, 1, -4294967297)[12,5,0]  𝄀
 
 select substring('hello', 1, 4294967297);
 ➤ substring(hello, 1, 4294967297)[12,5,0]  𝄀
@@ -125,22 +125,22 @@ Data truncation: data out of range: data type int64, value '-1844674407370955161
 select substring('hello', 1, 18446744073709551617);
 Data truncation: data out of range: data type int64, value '18446744073709551617'
 select substring('hello', -1, -1);
-➤ substring(hello, -1, -1)[12,536870911,0]  𝄀
+➤ substring(hello, -1, -1)[12,5,0]  𝄀
 
 select substring('hello', -4294967295, -4294967295);
-➤ substring(hello, -4294967295, -4294967295)[12,536870911,0]  𝄀
+➤ substring(hello, -4294967295, -4294967295)[12,5,0]  𝄀
 
 select substring('hello', 4294967295, 4294967295);
 ➤ substring(hello, 4294967295, 4294967295)[12,5,0]  𝄀
 
 select substring('hello', -4294967296, -4294967296);
-➤ substring(hello, -4294967296, -4294967296)[12,536870911,0]  𝄀
+➤ substring(hello, -4294967296, -4294967296)[12,5,0]  𝄀
 
 select substring('hello', 4294967296, 4294967296);
 ➤ substring(hello, 4294967296, 4294967296)[12,5,0]  𝄀
 
 select substring('hello', -4294967297, -4294967297);
-➤ substring(hello, -4294967297, -4294967297)[12,536870911,0]  𝄀
+➤ substring(hello, -4294967297, -4294967297)[12,5,0]  𝄀
 
 select substring('hello', 4294967297, 4294967297);
 ➤ substring(hello, 4294967297, 4294967297)[12,5,0]  𝄀
@@ -158,13 +158,13 @@ Data truncation: data out of range: data type int64, value '-1844674407370955161
 select substring('hello', 18446744073709551617, 18446744073709551617);
 Data truncation: data out of range: data type int64, value '18446744073709551617'
 SELECT SUBSTRING('Sakila' FROM -4 FOR 2);
-➤ SUBSTRING(Sakila, -4, 2)[12,2,0]  𝄀
+➤ SUBSTRING(Sakila, -4, 2)[12,6,0]  𝄀
 ki
 SELECT SUBSTRING('foobarbar' FROM 4);
 ➤ SUBSTRING(foobarbar, 4)[12,9,0]  𝄀
 barbar
 SELECT SUBSTR('w3resource',4,3);
-➤ SUBSTR(w3resource, 4, 3)[12,3,0]  𝄀
+➤ SUBSTR(w3resource, 4, 3)[12,10,0]  𝄀
 eso
 select substring('abc', cast(2 as unsigned int));
 ➤ substring(abc, cast(2 as int unsigned))[12,3,0]  𝄀
@@ -172,11 +172,11 @@ bc
 create table t1(f1 varchar(255));
 insert into t1 values ("123"),("456");
 select substring(f1,1,1) from t1 group by substring(f1,1,1);
-➤ substring(f1, 1, 1)[12,1,0]  𝄀
+➤ substring(f1, 1, 1)[12,255,0]  𝄀
 1  𝄀
 4
 select substring(f1,1,1) from t1 group by 1;
-➤ substring(f1, 1, 1)[12,1,0]  𝄀
+➤ substring(f1, 1, 1)[12,255,0]  𝄀
 1  𝄀
 4
 drop table t1;
@@ -187,7 +187,7 @@ SELECT SUBSTRING('1', year(FROM_UNIXTIME(-1)));
 ➤ SUBSTRING(1, year(FROM_UNIXTIME(-1)))[12,1,0]  𝄀
 null
 select reverse(substring(1,1,1));
-➤ reverse(substring(1, 1, 1))[12,1,0]  𝄀
+➤ reverse(substring(1, 1, 1))[12,20,0]  𝄀
 1
 CREATE TABLE t1(c1 CHAR(30));
 INSERT INTO t1 VALUES('111'),('222');
@@ -207,7 +207,7 @@ SELECT DISTINCT substr(c1, -2147483647, 2147483648) FROM t1;
 ➤ substr(c1, -2147483647, 2147483648)[12,30,0]  𝄀
 
 SELECT DISTINCT substr(c1, 9223372036854775807, 23) FROM t1;
-➤ substr(c1, 9223372036854775807, 23)[12,23,0]  𝄀
+➤ substr(c1, 9223372036854775807, 23)[12,30,0]  𝄀
 
 DROP TABLE t1;
 create table t1 (b varchar(5));
@@ -229,7 +229,7 @@ CREATE TABLE t1 (a varchar(2000), b varchar(10));
 INSERT INTO t1 select space(1300),'one';
 INSERT INTO t1 select space(1300),'two';
 SELECT SUBSTRING(a,1,10), LENGTH(a) FROM t1 GROUP BY a;
-➤ SUBSTRING(a, 1, 10)[12,10,0]  ¦  LENGTH(a)[-5,64,0]  𝄀
+➤ SUBSTRING(a, 1, 10)[12,2000,0]  ¦  LENGTH(a)[-5,64,0]  𝄀
             ¦  1300
 drop table t1;
 CREATE TABLE t1(a INT);
@@ -266,13 +266,13 @@ select * from t1;
 再见  𝄀
 今天
 select substring(a, 1, 1) from t1;
-➤ substring(a, 1, 1)[12,1,0]  𝄀
+➤ substring(a, 1, 1)[12,50,0]  𝄀
 你  𝄀
 再  𝄀
 今
 drop table t1;
 select substring(null, 1, 1);
-➤ substring(null, 1, 1)[12,1,0]  𝄀
+➤ substring(null, 1, 1)[12,65535,0]  𝄀
 null
 create table t1 (b varchar(5));
 insert t1 values ('ab'), ('abc'), ('abcd'), ('abcde');
@@ -334,70 +334,70 @@ SELECT MID('foobarbar' FROM 4);
 ➤ MID(foobarbar, 4)[12,9,0]  𝄀
 barbar
 SELECT MID('Quadratically',5,6);
-➤ MID(Quadratically, 5, 6)[12,6,0]  𝄀
+➤ MID(Quadratically, 5, 6)[12,13,0]  𝄀
 ratica
 SELECT MID('Sakila', -3);
 ➤ MID(Sakila, -3)[12,6,0]  𝄀
 ila
 SELECT MID('Sakila', -5, 3);
-➤ MID(Sakila, -5, 3)[12,3,0]  𝄀
+➤ MID(Sakila, -5, 3)[12,6,0]  𝄀
 aki
 SELECT MID('Sakila' FROM -4 FOR 2);
-➤ MID(Sakila, -4, 2)[12,2,0]  𝄀
+➤ MID(Sakila, -4, 2)[12,6,0]  𝄀
 ki
 SELECT MID('monty',5,1);
-➤ MID(monty, 5, 1)[12,1,0]  𝄀
+➤ MID(monty, 5, 1)[12,5,0]  𝄀
 y
 SELECT MID('a',1,2);
 ➤ MID(a, 1, 2)[12,1,0]  𝄀
 a
 select MID('abcdefg',3,2);
-➤ MID(abcdefg, 3, 2)[12,2,0]  𝄀
+➤ MID(abcdefg, 3, 2)[12,7,0]  𝄀
 cd
 select MID('abcdefg',3,2);
-➤ MID(abcdefg, 3, 2)[12,2,0]  𝄀
+➤ MID(abcdefg, 3, 2)[12,7,0]  𝄀
 cd
 select MID('abcdefg',-3,2);
-➤ MID(abcdefg, -3, 2)[12,2,0]  𝄀
+➤ MID(abcdefg, -3, 2)[12,7,0]  𝄀
 ef
 select MID('abcdefg',-1,5);
-➤ MID(abcdefg, -1, 5)[12,5,0]  𝄀
+➤ MID(abcdefg, -1, 5)[12,7,0]  𝄀
 g
 select MID('abcdefg',0,0);
-➤ MID(abcdefg, 0, 0)[12,536870911,0]  𝄀
+➤ MID(abcdefg, 0, 0)[12,7,0]  𝄀
 
 select MID('abcdefg',-1,-1);
-➤ MID(abcdefg, -1, -1)[12,536870911,0]  𝄀
+➤ MID(abcdefg, -1, -1)[12,7,0]  𝄀
 
 select MID('abcdefg',1,-1);
-➤ MID(abcdefg, 1, -1)[12,536870911,0]  𝄀
+➤ MID(abcdefg, 1, -1)[12,7,0]  𝄀
 
 select mid('hello', 2, -1);
-➤ mid(hello, 2, -1)[12,536870911,0]  𝄀
+➤ mid(hello, 2, -1)[12,5,0]  𝄀
 
 select mid('hello', -1, 1);
-➤ mid(hello, -1, 1)[12,1,0]  𝄀
+➤ mid(hello, -1, 1)[12,5,0]  𝄀
 o
 select mid('hello', -2, 1);
-➤ mid(hello, -2, 1)[12,1,0]  𝄀
+➤ mid(hello, -2, 1)[12,5,0]  𝄀
 l
 select mid('hello', -4294967295, 1);
-➤ mid(hello, -4294967295, 1)[12,1,0]  𝄀
+➤ mid(hello, -4294967295, 1)[12,5,0]  𝄀
 
 select mid('hello', 4294967295, 1);
-➤ mid(hello, 4294967295, 1)[12,1,0]  𝄀
+➤ mid(hello, 4294967295, 1)[12,5,0]  𝄀
 
 select mid('hello', -4294967296, 1);
-➤ mid(hello, -4294967296, 1)[12,1,0]  𝄀
+➤ mid(hello, -4294967296, 1)[12,5,0]  𝄀
 
 select mid('hello', 4294967296, 1);
-➤ mid(hello, 4294967296, 1)[12,1,0]  𝄀
+➤ mid(hello, 4294967296, 1)[12,5,0]  𝄀
 
 select mid('hello', -4294967297, 1);
-➤ mid(hello, -4294967297, 1)[12,1,0]  𝄀
+➤ mid(hello, -4294967297, 1)[12,5,0]  𝄀
 
 select mid('hello', 4294967297, 1);
-➤ mid(hello, 4294967297, 1)[12,1,0]  𝄀
+➤ mid(hello, 4294967297, 1)[12,5,0]  𝄀
 
 select mid('hello', -18446744073709551615, 1);
 Data truncation: data out of range: data type int64, value '-18446744073709551615'
@@ -412,22 +412,22 @@ Data truncation: data out of range: data type int64, value '-1844674407370955161
 select mid('hello', 18446744073709551617, 1);
 Data truncation: data out of range: data type int64, value '18446744073709551617'
 select mid('hello', 1, -1);
-➤ mid(hello, 1, -1)[12,536870911,0]  𝄀
+➤ mid(hello, 1, -1)[12,5,0]  𝄀
 
 select mid('hello', 1, -4294967295);
-➤ mid(hello, 1, -4294967295)[12,536870911,0]  𝄀
+➤ mid(hello, 1, -4294967295)[12,5,0]  𝄀
 
 select mid('hello', 1, 4294967295);
 ➤ mid(hello, 1, 4294967295)[12,5,0]  𝄀
 hello
 select mid('hello', 1, -4294967296);
-➤ mid(hello, 1, -4294967296)[12,536870911,0]  𝄀
+➤ mid(hello, 1, -4294967296)[12,5,0]  𝄀
 
 select mid('hello', 1, 4294967296);
 ➤ mid(hello, 1, 4294967296)[12,5,0]  𝄀
 hello
 select mid('hello', 1, -4294967297);
-➤ mid(hello, 1, -4294967297)[12,536870911,0]  𝄀
+➤ mid(hello, 1, -4294967297)[12,5,0]  𝄀
 
 select mid('hello', 1, 4294967297);
 ➤ mid(hello, 1, 4294967297)[12,5,0]  𝄀
@@ -445,22 +445,22 @@ Data truncation: data out of range: data type int64, value '-1844674407370955161
 select mid('hello', 1, 18446744073709551617);
 Data truncation: data out of range: data type int64, value '18446744073709551617'
 select mid('hello', -1, -1);
-➤ mid(hello, -1, -1)[12,536870911,0]  𝄀
+➤ mid(hello, -1, -1)[12,5,0]  𝄀
 
 select mid('hello', -4294967295, -4294967295);
-➤ mid(hello, -4294967295, -4294967295)[12,536870911,0]  𝄀
+➤ mid(hello, -4294967295, -4294967295)[12,5,0]  𝄀
 
 select mid('hello', 4294967295, 4294967295);
 ➤ mid(hello, 4294967295, 4294967295)[12,5,0]  𝄀
 
 select mid('hello', -4294967296, -4294967296);
-➤ mid(hello, -4294967296, -4294967296)[12,536870911,0]  𝄀
+➤ mid(hello, -4294967296, -4294967296)[12,5,0]  𝄀
 
 select mid('hello', 4294967296, 4294967296);
 ➤ mid(hello, 4294967296, 4294967296)[12,5,0]  𝄀
 
 select mid('hello', -4294967297, -4294967297);
-➤ mid(hello, -4294967297, -4294967297)[12,536870911,0]  𝄀
+➤ mid(hello, -4294967297, -4294967297)[12,5,0]  𝄀
 
 select mid('hello', 4294967297, 4294967297);
 ➤ mid(hello, 4294967297, 4294967297)[12,5,0]  𝄀
@@ -478,13 +478,13 @@ Data truncation: data out of range: data type int64, value '-1844674407370955161
 select mid('hello', 18446744073709551617, 18446744073709551617);
 Data truncation: data out of range: data type int64, value '18446744073709551617'
 SELECT MID('Sakila' FROM -4 FOR 2);
-➤ MID(Sakila, -4, 2)[12,2,0]  𝄀
+➤ MID(Sakila, -4, 2)[12,6,0]  𝄀
 ki
 SELECT MID('foobarbar' FROM 4);
 ➤ MID(foobarbar, 4)[12,9,0]  𝄀
 barbar
 SELECT MID('w3resource',4,3);
-➤ MID(w3resource, 4, 3)[12,3,0]  𝄀
+➤ MID(w3resource, 4, 3)[12,10,0]  𝄀
 eso
 select mid('abc', cast(2 as unsigned int));
 ➤ mid(abc, cast(2 as int unsigned))[12,3,0]  𝄀
@@ -492,11 +492,11 @@ bc
 create table t1(f1 varchar(255));
 insert into t1 values ("123"),("456");
 select mid(f1,1,1) from t1 group by mid(f1,1,1);
-➤ mid(f1, 1, 1)[12,1,0]  𝄀
+➤ mid(f1, 1, 1)[12,255,0]  𝄀
 1  𝄀
 4
 select mid(f1,1,1) from t1 group by 1;
-➤ mid(f1, 1, 1)[12,1,0]  𝄀
+➤ mid(f1, 1, 1)[12,255,0]  𝄀
 1  𝄀
 4
 drop table t1;
@@ -507,7 +507,7 @@ SELECT MID('1', year(FROM_UNIXTIME(-1)));
 ➤ MID(1, year(FROM_UNIXTIME(-1)))[12,1,0]  𝄀
 null
 select reverse(mid(1,1,1));
-➤ reverse(mid(1, 1, 1))[12,1,0]  𝄀
+➤ reverse(mid(1, 1, 1))[12,20,0]  𝄀
 1
 CREATE TABLE t1(c1 CHAR(30));
 INSERT INTO t1 VALUES('111'),('222');
@@ -527,7 +527,7 @@ SELECT DISTINCT mid(c1, -2147483647, 2147483648) FROM t1;
 ➤ mid(c1, -2147483647, 2147483648)[12,30,0]  𝄀
 
 SELECT DISTINCT mid(c1, 9223372036854775807, 23) FROM t1;
-➤ mid(c1, 9223372036854775807, 23)[12,23,0]  𝄀
+➤ mid(c1, 9223372036854775807, 23)[12,30,0]  𝄀
 
 DROP TABLE t1;
 create table t1 (b varchar(5));
@@ -549,7 +549,7 @@ CREATE TABLE t1 (a varchar(2000), b varchar(10));
 INSERT INTO t1 select space(1300),'one';
 INSERT INTO t1 select space(1300),'two';
 SELECT MID(a,1,10), LENGTH(a) FROM t1 GROUP BY a;
-➤ MID(a, 1, 10)[12,10,0]  ¦  LENGTH(a)[-5,64,0]  𝄀
+➤ MID(a, 1, 10)[12,2000,0]  ¦  LENGTH(a)[-5,64,0]  𝄀
             ¦  1300
 drop table t1;
 CREATE TABLE t1(a INT);
@@ -586,13 +586,13 @@ select * from t1;
 再见  𝄀
 今天
 select mid(a, 1, 1) from t1;
-➤ mid(a, 1, 1)[12,1,0]  𝄀
+➤ mid(a, 1, 1)[12,50,0]  𝄀
 你  𝄀
 再  𝄀
 今
 drop table t1;
 select mid(null, 1, 1);
-➤ mid(null, 1, 1)[12,1,0]  𝄀
+➤ mid(null, 1, 1)[12,65535,0]  𝄀
 null
 create table t1 (b varchar(5));
 insert t1 values ('ab'), ('abc'), ('abcd'), ('abcde');
