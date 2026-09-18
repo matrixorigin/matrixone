@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
 func TestInformationSchemaMetadataViewsHideTemporaryTables(t *testing.T) {
@@ -290,7 +291,7 @@ func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
 		})
 	}
 
-	predecessor := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion84)
+	predecessor := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion85)
 	assert.Contains(t, predecessor, InformationSchemaViewsLegacyDDL)
 	assert.NotContains(t, predecessor, InformationSchemaViewsDDL)
 	assert.NotContains(t, strings.Join(predecessor, "\n"), "mo_view_definition(")
@@ -300,7 +301,7 @@ func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
 		assertInformationSchemaInitSQLParses(t, sql)
 	}
 
-	for _, protocol := range []int64{defines.MORPCVersion58, defines.MORPCVersion84} {
+	for _, protocol := range []int64{defines.MORPCVersion58, defines.MORPCVersion85} {
 		t.Run(fmt.Sprintf("preserve-current-columns-before-views-v%d", protocol), func(t *testing.T) {
 			catalog := InitInformationSchemaSysTablesForProtocol(protocol)
 			joined := strings.Join(catalog, "\n")
@@ -315,7 +316,7 @@ func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
 		})
 	}
 
-	latest := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion85)
+	latest := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion86)
 	assert.Equal(t, InitInformationSchemaSysTables, latest)
 	assert.Contains(t, strings.Join(latest, "\n"), "WHEN 3 then 'utf8mb4'")
 }
@@ -538,6 +539,18 @@ func TestInformationSchemaViewsMetadata(t *testing.T) {
 		}
 		statement.Free()
 	}
+}
+
+func TestInitSchemaSeedsPredecessorViewsBeforeAdmission(t *testing.T) {
+	var executed []string
+	txn := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+		executed = append(executed, sql)
+		return executor.Result{}, nil
+	}, nil)
+
+	assert.NoError(t, InitSchema(context.Background(), txn))
+	assert.Contains(t, executed, InformationSchemaViewsLegacyDDL)
+	assert.NotContains(t, executed, InformationSchemaViewsDDL)
 }
 
 func TestInformationSchemaDefaultCollationsMatchCanonicalDefinitions(t *testing.T) {

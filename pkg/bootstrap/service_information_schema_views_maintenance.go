@@ -44,7 +44,7 @@ type informationSchemaViewsMaintenanceState struct {
 }
 
 // maintainInformationSchemaViews repairs only the system VIEWS definition for
-// final-version tenants that were created while v85 capability discovery was
+// final-version tenants that were created while v86 capability discovery was
 // incomplete. It processes one bounded account page per invocation and reuses
 // the guarded v4.0.7 entry for the actual transactional replacement.
 func (s *service) maintainInformationSchemaViews(ctx context.Context) error {
@@ -151,7 +151,7 @@ func informationSchemaViewsAccountGone(accountID int32, err error) bool {
 }
 
 func informationSchemaViewsProtocolReady(txn executor.TxnExecutor) (bool, error) {
-	err := versions.CheckCommonProtocolVersion(txn, defines.MORPCVersion85)
+	err := versions.CheckCommonProtocolVersion(txn, defines.MORPCVersion86)
 	if moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
 		return false, nil
 	}
