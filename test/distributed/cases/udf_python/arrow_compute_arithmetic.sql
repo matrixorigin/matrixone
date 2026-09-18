@@ -8,6 +8,8 @@ create function python_bvt_pc_multiply (x int, y int) returns int language pytho
 create function python_bvt_pc_if_else (flag bool, x int, y int) returns int language python as 'python_bvt_pc_if_else = lambda ctx, flag, left, right: __import__("pyarrow.compute", fromlist=["if_else"]).if_else(flag, left, right)' handler 'python_bvt_pc_if_else' mode vector;
 create function python_bvt_pc_fill_null (x int) returns int language python as 'python_bvt_pc_fill_null = lambda ctx, values: __import__("pyarrow.compute", fromlist=["fill_null"]).fill_null(values, __import__("pyarrow").scalar(-7, type=__import__("pyarrow").int32()))' handler 'python_bvt_pc_fill_null' mode vector;
 create function python_bvt_pc_is_null (x int) returns bool language python as 'python_bvt_pc_is_null = lambda ctx, values: __import__("pyarrow.compute", fromlist=["is_null"]).is_null(values)' handler 'python_bvt_pc_is_null' mode vector;
+create function python_bvt_pc_float_add (x float) returns float language python as 'python_bvt_pc_float_add = lambda ctx, values: __import__("pyarrow.compute", fromlist=["add"]).add(values, __import__("pyarrow").scalar(0.5, type=__import__("pyarrow").float32()))' handler 'python_bvt_pc_float_add' mode vector;
+create function python_bvt_pc_double_add (x double) returns double language python as 'python_bvt_pc_double_add = lambda ctx, values: __import__("pyarrow.compute", fromlist=["add"]).add(values, __import__("pyarrow").scalar(0.5, type=__import__("pyarrow").float64()))' handler 'python_bvt_pc_double_add' mode vector;
 
 create table arithmetic_values (id int, flag bool, left_value int, right_value int);
 insert into arithmetic_values values
@@ -26,10 +28,24 @@ select id,
        python_bvt_pc_is_null(left_value) as is_null
 from arithmetic_values order by id;
 
+create table float_values (id int, float_value float, double_value double);
+insert into float_values values
+    (1, -1.25, 1.0),
+    (2, null, -2.5),
+    (3, 3.5, null);
+
+select id,
+       python_bvt_pc_float_add(float_value) as float_added,
+       python_bvt_pc_double_add(double_value) as double_added
+from float_values order by id;
+
 drop function python_bvt_pc_add(int);
 drop function python_bvt_pc_multiply(int, int);
 drop function python_bvt_pc_if_else(bool, int, int);
 drop function python_bvt_pc_fill_null(int);
 drop function python_bvt_pc_is_null(int);
+drop function python_bvt_pc_float_add(float);
+drop function python_bvt_pc_double_add(double);
+drop table float_values;
 drop table arithmetic_values;
 drop database udf_python_arrow_compute_arithmetic_bvt;
