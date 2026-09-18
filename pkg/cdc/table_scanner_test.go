@@ -1029,6 +1029,55 @@ func Test_CollectTableInfoSQL(t *testing.T) {
 	_, err = parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
 	assert.Contains(t, sql, "lower(tbl.reldatabase) IN ('σdb')")
+
+	// SQL lower() does not preserve malformed UTF-8 bytes while the parser's
+	// mode-2 key does. Fall back to a catalog superset and let local matching
+	// apply the byte-preserving key after scan.
+	malformed := string([]byte{'1', 0xe9, 'A'})
+	sql = CollectCDCSourceCandidateSQL(1, malformed, "Orders", 2)
+	_, err = parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	assert.NotContains(t, sql, "lower(tbl.reldatabase)")
+	assert.Contains(t, sql, "lower(tbl.relname) IN ('orders')")
+
+	sql = CollectCDCSourceCandidateSQL(1, "MixedDB", malformed, 2)
+	_, err = parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	assert.Contains(t, sql, "lower(tbl.reldatabase) IN ('mixeddb')")
+	assert.NotContains(t, sql, "lower(tbl.relname)")
+}
+
+func TestTableScannerMalformedUTF8UsesCatalogSuperset(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	malformed := string([]byte{'1', 0xe9, 'A'})
+	mockSQLExecutor := mock_executor.NewMockSQLExecutor(ctrl)
+	mockSQLExecutor.EXPECT().Exec(
+		gomock.Any(),
+		CDCSQLBuilder.CollectTableInfoSQLCaseInsensitive("1", "*", "'orders'"),
+		gomock.Any(),
+	).Return(executor.Result{}, nil)
+
+	td := &TableDetector{
+		Mp:                   make(map[uint32]TblMap),
+		Callbacks:            make(map[string]TableCallback),
+		CallBackAccountId:    make(map[string]uint32),
+		CallBackDbName:       make(map[string][]string),
+		SubscribedAccountIds: make(map[uint32][]string),
+		SubscribedDbNames:    make(map[string][]string),
+		CallBackTableName:    make(map[string][]string),
+		SubscribedTableNames: make(map[string][]string),
+		exec:                 mockSQLExecutor,
+		cleanupPeriod:        time.Hour,
+		cleanupWarn:          DefaultCleanupWarnThreshold,
+	}
+	defer td.Close()
+
+	td.mu.Lock()
+	td.registerLocked("malformed", 1, []string{malformed}, []string{"Orders"}, nil)
+	td.mu.Unlock()
+	require.NoError(t, td.scanTable())
 }
 
 func TestScanAndProcess(t *testing.T) {

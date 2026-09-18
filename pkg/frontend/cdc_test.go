@@ -153,6 +153,46 @@ func TestCDCCheckPitrGranularityPrimaryKeyValidation(t *testing.T) {
 		require.Contains(t, bh.executedSQLs[0], "lower(tbl.relname) IN ('orders')")
 	})
 
+	t.Run("mode two malformed identifier filters catalog superset locally", func(t *testing.T) {
+		malformed := string([]byte{'1', 0xe9, 'A'})
+		bh := &backgroundExecTest{}
+		bh.init()
+		pts := &cdc.PatternTuples{
+			SourceCaseMode: 2,
+			Pts: []*cdc.PatternTuple{{
+				Source: cdc.PatternTable{Database: malformed, Table: "orders"},
+			}},
+		}
+		candidateSQL := cdc.CollectCDCSourceCandidateSQL(1, malformed, "orders", 2)
+		bh.sql2result[candidateSQL] = &MysqlResultSet{Columns: make([]Column, 8), Data: [][]interface{}{
+			{uint64(1), "orders", uint64(1), "unrelated", "", uint32(1), []byte{}, false},
+			{uint64(2), "orders", uint64(1), string([]byte{'1', 0xe9, 'a'}), "", uint32(1), []byte{}, true},
+		}}
+		require.NoError(t, CDCCheckPitrGranularity(ctx, bh, "acc", pts))
+		require.Len(t, bh.executedSQLs, 1)
+		require.NotContains(t, bh.executedSQLs[0], "lower(tbl.reldatabase)")
+	})
+
+	t.Run("mode two malformed wildcard ignores unrelated catalog candidates", func(t *testing.T) {
+		malformed := string([]byte{'1', 0xe9, 'A'})
+		bh := &backgroundExecTest{}
+		bh.init()
+		pts := &cdc.PatternTuples{
+			SourceCaseMode: 2,
+			Pts: []*cdc.PatternTuple{{
+				Source: cdc.PatternTable{Database: malformed, Table: cdc.CDCPitrGranularity_All},
+			}},
+		}
+		candidateSQL := cdc.CollectCDCSourceCandidateSQL(1, malformed, cdc.CDCPitrGranularity_All, 2)
+		bh.sql2result[candidateSQL] = &MysqlResultSet{Columns: make([]Column, 8), Data: [][]interface{}{
+			{uint64(1), "without_pk", uint64(1), "unrelated", "", uint32(1), []byte{}, false},
+			{uint64(2), "with_pk", uint64(1), string([]byte{'1', 0xe9, 'a'}), "", uint32(1), []byte{}, true},
+		}}
+		require.NoError(t, CDCCheckPitrGranularity(ctx, bh, "acc", pts))
+		require.Len(t, bh.executedSQLs, 1)
+		require.NotContains(t, bh.executedSQLs[0], "lower(tbl.reldatabase)")
+	})
+
 	t.Run("catalog query error is returned", func(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()

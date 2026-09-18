@@ -3190,14 +3190,7 @@ func legacyNoFullStartTS(durable types.TS, found bool, admission types.TS) types
 // names case-insensitively; legacy tasks have no marker and retain the prior
 // exact-match behavior.
 func (exec *CDCTaskExecutor) matchesSourceName(name, pattern string) bool {
-	if pattern == cdc.CDCPitrGranularity_All {
-		return true
-	}
-	if exec.tables.SourceCaseMode == 2 {
-		return cdc.CDCSourceIdentifierKey(name, exec.tables.SourceCaseMode) ==
-			cdc.CDCSourceIdentifierKey(pattern, exec.tables.SourceCaseMode)
-	}
-	return name == pattern
+	return cdc.CDCSourceNameMatches(name, pattern, exec.tables.SourceCaseMode)
 }
 
 // reader ----> sinker ----> remote db
