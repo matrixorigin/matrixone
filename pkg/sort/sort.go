@@ -107,10 +107,21 @@ func GenericLess[T types.OrderedT](a, b T) bool {
 	return a < b
 }
 
-func DateLess(a, b types.Date) bool            { return types.DateAscCompare(a, b) < 0 }
-func DateGreater(a, b types.Date) bool         { return types.DateAscCompare(a, b) > 0 }
-func DatetimeLess(a, b types.Datetime) bool    { return types.DatetimeAscCompare(a, b) < 0 }
-func DatetimeGreater(a, b types.Datetime) bool { return types.DatetimeAscCompare(a, b) > 0 }
+func DateLess(data []types.Date, i, j int64) bool {
+	return types.DateAscCompare(data[i], data[j]) < 0
+}
+
+func DateGreater(data []types.Date, i, j int64) bool {
+	return types.DateAscCompare(data[i], data[j]) > 0
+}
+
+func DatetimeLess(data []types.Datetime, i, j int64) bool {
+	return types.DatetimeAscCompare(data[i], data[j]) < 0
+}
+
+func DatetimeGreater(data []types.Datetime, i, j int64) bool {
+	return types.DatetimeAscCompare(data[i], data[j]) > 0
+}
 
 // ByteJsonPhysicalLess compares the pre-SQL-order relation used by persisted
 // JSON cluster keys. The varlena strings point into immutable vector storage;
