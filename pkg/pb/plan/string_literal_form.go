@@ -202,11 +202,21 @@ func RequiresMORPCVersion83BoundedConditionalStringDomains(owner any) (bool, err
 	return features.BoundedConditionalStringDomains, err
 }
 
+// RequiresMORPCVersion85JSONValueContract reports whether an owner contains
+// the planner-only seven-argument JSON_VALUE overload. The overload carries
+// target and response semantics that older receivers cannot dispatch.
+func RequiresMORPCVersion85JSONValueContract(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.JSONValueContract, err
+}
+
 const (
 	equalFunctionID                  int32 = 0
 	notEqualFunctionID               int32 = 1
 	nullSafeEqualFunctionID          int32 = 406
 	internalJSONComparisonFunctionID int32 = 577
+	jsonValueFunctionID              int32 = 462
+	jsonValueContractOverloadID      int32 = 2
 	planBooleanTypeID                int32 = 10
 	planJSONTypeID                   int32 = 62
 	binFunctionID                    int32 = 270
@@ -242,6 +252,7 @@ const (
 // vectors to signed INT/ BIGINT or BIGINT UNSIGNED.
 // BoundedConditionalStringDomains requires MORPC v83 because the bounded
 // BINARY/VARBINARY COALESCE overload identities are new to the registry.
+// JSONValueContract requires MORPC v85.
 type RemoteExpressionFeatures struct {
 	NumericPrefix                   bool
 	JSONComparisonParam             bool
@@ -254,12 +265,14 @@ type RemoteExpressionFeatures struct {
 	StringNumericResultContracts    bool
 	BoundedConditionalStringDomains bool
 	IPFunctionSemantics             bool
+	JSONValueContract               bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
 	return features.NumericPrefix ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
+		features.JSONValueContract ||
 		features.FormatNumericArguments ||
 		features.TypedConversionFunctions ||
 		features.ASCIIInt32Result ||
@@ -332,6 +345,11 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			if !features.JSONComparisonParam && fn != nil && fn.Func != nil &&
 				int32(fn.Func.Obj>>32) == internalJSONComparisonFunctionID {
 				features.JSONComparisonParam = true
+			}
+			if !features.JSONValueContract && fn != nil && fn.Func != nil &&
+				int32(fn.Func.Obj>>32) == jsonValueFunctionID &&
+				int32(fn.Func.Obj) == jsonValueContractOverloadID {
+				features.JSONValueContract = true
 			}
 			if !features.MixedJSONBooleanEquality && isMixedJSONBooleanEquality(fn) {
 				features.MixedJSONBooleanEquality = true

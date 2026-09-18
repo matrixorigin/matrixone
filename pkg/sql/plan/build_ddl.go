@@ -285,6 +285,9 @@ func genViewTableDef(
 	if err = ValidateUnresolvedIndexHints(ctx.GetContext(), query); err != nil {
 		return nil, err
 	}
+	if err = RequirePersistedIPFunctionProtocol(ctx.GetContext(), ctx.GetProcess(), query); err != nil {
+		return nil, err
+	}
 	// Must run on the OPTIMIZED plan, which is why it is not part of the validate hook
 	// above: that hook fires before createQuery, where every MATCH is still an unresolved
 	// function whether or not an index exists.
