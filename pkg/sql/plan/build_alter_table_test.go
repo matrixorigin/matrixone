@@ -1849,6 +1849,12 @@ func TestAlterTableCopyAddIndex(t *testing.T) {
 			parts:     []string{"c"},
 		},
 		{
+			name:      "anonymous regular index",
+			sql:       `ALTER TABLE constraint_test.t1 ADD COLUMN c BIGINT, ADD INDEX (c);`,
+			indexName: "c",
+			parts:     []string{"c"},
+		},
+		{
 			name:      "unique index on newly added stored generated column",
 			sql:       `ALTER TABLE constraint_test.t1 ADD COLUMN g BIGINT GENERATED ALWAYS AS (a + 1) STORED, ADD UNIQUE INDEX uk_g(g);`,
 			indexName: "uk_g",
@@ -1860,6 +1866,13 @@ func TestAlterTableCopyAddIndex(t *testing.T) {
 			sql:       `ALTER TABLE constraint_test.t1 ADD UNIQUE INDEX uk_g(g), ADD COLUMN g BIGINT GENERATED ALWAYS AS (a + 1) STORED;`,
 			indexName: "uk_g",
 			parts:     []string{"g"},
+			unique:    true,
+		},
+		{
+			name:      "anonymous unique index",
+			sql:       `ALTER TABLE constraint_test.t1 ADD COLUMN c BIGINT, ADD UNIQUE INDEX (c);`,
+			indexName: "c",
+			parts:     []string{"c"},
 			unique:    true,
 		},
 		{
@@ -1879,6 +1892,13 @@ func TestAlterTableCopyAddIndex(t *testing.T) {
 			name:      "fulltext index before newly added column",
 			sql:       `ALTER TABLE constraint_test.t1 ADD FULLTEXT INDEX ft_body(body), ADD COLUMN body TEXT;`,
 			indexName: "ft_body",
+			parts:     []string{"body"},
+			algo:      catalog.MOIndexFullTextAlgo.ToString(),
+		},
+		{
+			name:      "anonymous fulltext index",
+			sql:       `ALTER TABLE constraint_test.t1 ADD COLUMN body TEXT, ADD FULLTEXT INDEX (body);`,
+			indexName: "body",
 			parts:     []string{"body"},
 			algo:      catalog.MOIndexFullTextAlgo.ToString(),
 		},
@@ -1969,6 +1989,17 @@ func TestAlterTableCopyAddIndexRejectsDuplicateName(t *testing.T) {
 		`ALTER TABLE constraint_test.t1 ADD COLUMN c INT, ADD INDEX idx_c(c), ADD INDEX IDX_C(c);`)
 	require.Error(t, err)
 	require.Contains(t, strings.ToLower(err.Error()), "duplicate key")
+}
+
+func TestAlterTableCopyAddIndexRejectsUnknownColumn(t *testing.T) {
+	for _, sql := range []string{
+		`ALTER TABLE constraint_test.t1 ADD COLUMN c INT, ADD INDEX idx_missing(missing);`,
+		`ALTER TABLE constraint_test.t1 ADD COLUMN c INT, ADD UNIQUE INDEX uk_missing(missing);`,
+		`ALTER TABLE constraint_test.t1 ADD COLUMN c INT, ADD FULLTEXT INDEX ft_missing(missing);`,
+	} {
+		_, err := buildSingleStmt(NewMockOptimizer(false), t, sql)
+		require.ErrorContains(t, err, "missing")
+	}
 }
 
 func TestAlterTemporaryTablePlan(t *testing.T) {
