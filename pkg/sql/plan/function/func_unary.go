@@ -2160,8 +2160,9 @@ func geometryTypeNameFromText(wkt string) (string, error) {
 		return "", moerr.NewInvalidInputNoCtx("invalid geometry payload")
 	}
 	upper := strings.ToUpper(s)
-	if strings.HasSuffix(upper, " EMPTY") {
-		typeName := strings.TrimSpace(strings.TrimSuffix(upper, " EMPTY"))
+	fields := strings.Fields(s)
+	if len(fields) == 2 && strings.EqualFold(fields[1], "EMPTY") {
+		typeName := strings.ToUpper(fields[0])
 		switch typeName {
 		case "POINT", "LINESTRING", "POLYGON", "MULTIPOINT", "MULTILINESTRING", "MULTIPOLYGON", "GEOMETRYCOLLECTION":
 			return typeName, nil
@@ -2182,6 +2183,12 @@ func geometryTypeNameFromText(wkt string) (string, error) {
 	default:
 		return "", moerr.NewInvalidInputNoCtx("invalid geometry type")
 	}
+}
+
+func isCompleteGeometryEmptyText(wkt, typeName string) bool {
+	fields := strings.Fields(wkt)
+	return len(fields) == 2 && strings.EqualFold(fields[0], typeName) &&
+		strings.EqualFold(fields[1], "EMPTY")
 }
 
 // decodeGeometryPayload returns the WKT text of a stored geometry. The stored
@@ -2845,7 +2852,7 @@ func validateGeometryCollectionNestingDepthFromTextWithDepth(wkt string, depth i
 	// no coordinate envelope to inspect, so it must be accepted before looking
 	// for parentheses. Keep this exact match so a valid EMPTY token cannot hide
 	// trailing payload.
-	if strings.EqualFold(s, "GEOMETRYCOLLECTION EMPTY") {
+	if isCompleteGeometryEmptyText(s, typeName) {
 		return nil
 	}
 
@@ -3000,20 +3007,22 @@ func geometryIsEmpty(payload []byte) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	upper := strings.ToUpper(s)
-	if strings.HasSuffix(upper, "EMPTY") {
-		prefix := strings.TrimSpace(strings.TrimSuffix(upper, "EMPTY"))
-		switch prefix {
-		case "POINT", "LINESTRING", "POLYGON", "MULTIPOINT", "MULTILINESTRING", "MULTIPOLYGON", "GEOMETRYCOLLECTION":
-			return true, nil
-		default:
-			return false, moerr.NewInvalidInputNoCtx("invalid geometry type")
-		}
-	}
-
-	if _, err := geometryTypeNameFromPayload(payload); err != nil {
+	typeName, err := geometryTypeNameFromPayload(payload)
+	if err != nil {
 		return false, err
 	}
+	if typeName == "GEOMETRYCOLLECTION" {
+		// Empty-result short-circuiting must not hide an invalid collection
+		// envelope such as GEOMETRYCOLLECTION() trailing.
+		if err := validateGeometryCollectionNestingDepthFromText(s); err != nil {
+			return false, err
+		}
+	}
+	if isCompleteGeometryEmptyText(s, typeName) {
+		return true, nil
+	}
+
+	upper := strings.ToUpper(s)
 
 	if upper == "GEOMETRYCOLLECTION()" || upper == "MULTIPOINT()" || upper == "MULTILINESTRING()" || upper == "MULTIPOLYGON()" {
 		return true, nil
@@ -3037,7 +3046,7 @@ func geometryIsExplicitlyEmpty(payload []byte) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return strings.EqualFold(strings.TrimSpace(s), typeName+" EMPTY"), nil
+	return isCompleteGeometryEmptyText(s, typeName), nil
 }
 
 func StGeometryType(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
