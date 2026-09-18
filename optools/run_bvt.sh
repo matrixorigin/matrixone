@@ -115,13 +115,34 @@ function launch_mo() {
 function wait_system_init() {
     for num in {1..300}  
     do
+        if [[ -z "$MO_PID" ]] || ! process_is_alive "$MO_PID"; then
+            echo "MatrixOne exited before SQL readiness" >&2
+            tail -n 160 "$MO_WORKSPACE/mo-service.log" >&2 || true
+            return 1
+        fi
         if MYSQL_PWD=111 mysql --connect-timeout=2 -h 127.0.0.1 -P 6001 -u dump -e "show databases;"; then
-            echo "ok, cost $num seconds"
-            return 0
+            if process_is_alive "$MO_PID"; then
+                echo "ok, cost $num seconds"
+                return 0
+            fi
+            echo "MatrixOne exited while SQL readiness was being verified" >&2
+            tail -n 160 "$MO_WORKSPACE/mo-service.log" >&2 || true
+            return 1
         fi
         sleep 1
     done 
     return 1
+}
+
+function process_is_alive() {
+    local pid="$1"
+    local state
+    if ! kill -0 "$pid" 2>/dev/null; then
+        return 1
+    fi
+    state=$(ps -o stat= -p "$pid" 2>/dev/null || true)
+    state=${state//[[:space:]]/}
+    [[ -n "$state" && "$state" != Z* ]]
 }
 
 # MySQL readiness only proves that the CN frontend accepted connections.  The
@@ -134,7 +155,7 @@ function wait_python_udf_worker() {
     fi
     for num in {1..120}
     do
-        if [[ -n "$MO_PID" ]] && ! kill -0 "$MO_PID" 2>/dev/null; then
+        if [[ -n "$MO_PID" ]] && ! process_is_alive "$MO_PID"; then
             echo "MatrixOne exited before Python UDF worker became ready" >&2
             tail -n 160 "$MO_WORKSPACE/mo-service.log" >&2 || true
             return 1
