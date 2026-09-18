@@ -537,8 +537,9 @@ UT_HEARTBEAT_INTERVAL ?= 60
 # Build embedded test packages ahead of their execution while the issues
 # fixture is active. This is bounded cache warming: it never executes a
 # prebuilt test binary, and the authoritative go test still owns every test
-# result. Set it to 0 for the measured serial rollback/control path.
-UT_PREBUILD_EMBEDDED ?= 1
+# result. Keep it opt-in until a comparable run proves a critical-path gain
+# without consuming the runner's memory headroom.
+UT_PREBUILD_EMBEDDED ?= 0
 # Reuse released engine slots for plan while resource-heavy work finishes.
 # The heavy process budget is unchanged; set 0 for a sequential A/B baseline.
 UT_OVERLAP_PLAN ?= 1

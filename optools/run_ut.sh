@@ -49,8 +49,9 @@ UT_SHARD=${UT_SHARD:-"all"}
 # Compile embedded packages while the exclusive issues fixture is active.
 # This only warms the Go build cache; the authoritative embedded go test
 # command still compiles/executes the complete package scope and owns all
-# test results. Set UT_PREBUILD_EMBEDDED=0 for the rollback/control path.
-UT_PREBUILD_EMBEDDED=${UT_PREBUILD_EMBEDDED:-"1"}
+# test results. Keep this opt-in until a comparable run proves a critical-path
+# gain without consuming the runner's memory headroom.
+UT_PREBUILD_EMBEDDED=${UT_PREBUILD_EMBEDDED:-"0"}
 UT_OVERLAP_PLAN=${UT_OVERLAP_PLAN:-"1"}
 # Light/issues overlap is opt-in: the measured treatment regressed wall time
 # and did not meet the runner's memory-headroom gate.

@@ -29,22 +29,25 @@ without changing which packages or tests execute. A caller can set
 `UT_LIGHT_PARALLEL=6` to reproduce the former light-stage admission for a
 controlled comparison or rollback.
 
-## Follow-up critical-path treatment
+## Prebuild experiment and measured result
 
-The single-runner race path also enables the existing bounded
-`UT_PREBUILD_EMBEDDED=1` cache-warming path. During the exclusive issues
-package, up to two embedded packages are compiled with `go test -c`; no
-prebuilt binary is executed. The later authoritative embedded `go test`
-command still owns package discovery, `TestMain`, fixture admission, test
-events, exit status, timeout handling, and report publication. Set
-`UT_PREBUILD_EMBEDDED=0` to restore the serial control path.
+The runner retains an explicit `UT_PREBUILD_EMBEDDED=1` cache-warming path.
+During the exclusive issues package, up to two embedded packages are compiled
+with `go test -c`; no prebuilt binary is executed. The later authoritative
+embedded `go test` command still owns package discovery, `TestMain`, fixture
+admission, test events, exit status, timeout handling, and report publication.
 
-The prebuild records package and join checkpoints so a wall-time comparison
-can distinguish reusable compilation from fixture admission and test-body
-time. This is an experiment toward the issue's end-to-end latency target, not
-a claim that compilation time equals the whole embedded-stage duration. The
-light/issues overlap remains disabled, and embedded execution remains capped
-at two package workers until same-runner measurements prove otherwise.
+The default is `UT_PREBUILD_EMBEDDED=0`. In the same-runner comparison, the
+prebuild took about 72 seconds, but the authoritative embedded stage changed
+from 15m39s to 15m37s and the complete UT job changed from 63m47s to 64m47s.
+The treatment also reached a 16 GiB cgroup peak with only 64 KiB of headroom.
+The first observed peak was during the light stage, before prebuild started;
+this does not prove that prebuild caused the peak, and reverting the default
+does not by itself prove that memory headroom is restored. This is not evidence
+of a critical-path gain, so the experiment remains opt-in. Its package and join
+checkpoints are retained for a future controlled comparison. The light/issues
+overlap remains disabled, and embedded execution remains capped at two package
+workers until same-runner measurements prove otherwise.
 
 ## Acceptance and limits
 

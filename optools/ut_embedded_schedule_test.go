@@ -81,10 +81,10 @@ printf 'authoritative\n'
 func TestEmbeddedPrebuildAuthoritativeExecution(t *testing.T) {
 	defaultScript := `unset UT_PREBUILD_EMBEDDED
 source ./run_ut.sh UT
-[[ "$UT_PREBUILD_EMBEDDED" == 1 ]] || exit 80
+[[ "$UT_PREBUILD_EMBEDDED" == 0 ]] || exit 80
 `
 	if out, err := scheduleHarness(t, defaultScript); err != nil {
-		t.Fatalf("embedded prebuild default: %v\n%s", err, out)
+		t.Fatalf("embedded prebuild default-off control: %v\n%s", err, out)
 	}
 
 	for _, mode := range []string{"success", "reclaim", "build-failure", "no-binary", "off", "test-failure", "report-open"} {
