@@ -377,6 +377,60 @@ func TestCTASRepeatedDerivedStringDomainReferenceStaysConservative(t *testing.T)
 	require.Greater(t, visible[0].Typ.Width, int32(1))
 }
 
+func TestStringDomainSourceWitnessStaysBounded(t *testing.T) {
+	source := makePlan2VarBinaryConstExprWithType("x")
+	for i := 0; i < 64; i++ {
+		source = &planpb.Expr{
+			Typ: source.Typ,
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "derived_string"},
+				Args: []*planpb.Expr{source},
+			}},
+		}
+	}
+
+	witness := stringDomainSourceWitness(
+		source, possibleStringDomainText|possibleStringDomainBinary)
+	require.NotNil(t, witness)
+	require.Equal(t,
+		possibleStringDomainText|possibleStringDomainBinary,
+		possibleStringDomainsForExpr(witness))
+	require.Nil(t, witness.GetPreparedNumeric())
+	require.Less(t, len(witness.String()), len(source.String()))
+	textWitness := stringDomainSourceWitness(source, possibleStringDomainText)
+	require.Equal(t, types.StringDomainText,
+		types.StaticStringDomain(makeTypeByPlan2Expr(textWitness)))
+	binarySource := makePlan2StringConstExprWithType("x")
+	binaryWitness := stringDomainSourceWitness(binarySource, possibleStringDomainBinary)
+	require.Equal(t, types.StringDomainBinary,
+		types.StaticStringDomain(makeTypeByPlan2Expr(binaryWitness)))
+
+	textType := types.T_text.ToType()
+	param := func(position int32) *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  makePlan2Type(&textType),
+			Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: position}},
+		}
+	}
+	binaryType := types.T_varbinary.ToType()
+	mixed := &planpb.Expr{
+		Typ: makePlan2Type(&binaryType),
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{ObjName: "if"},
+			Args: []*planpb.Expr{param(0), param(1), param(2)},
+		}},
+	}
+	mixedWitness := stringDomainSourceWitness(
+		mixed, possibleStringDomainText|possibleStringDomainBinary)
+	require.Equal(t, []int32{1, 2}, []int32{
+		mixedWitness.GetF().Args[0].GetP().Pos,
+		mixedWitness.GetF().Args[1].GetP().Pos,
+	})
+	require.Equal(t,
+		possibleStringDomainText|possibleStringDomainBinary,
+		possibleStringDomainsForExpr(mixedWitness))
+}
+
 func TestRefineCharacterStringReturnTypesUseFormattedNumericBounds(t *testing.T) {
 	ctx := context.Background()
 	decimalType := types.New(types.T_decimal64, 5, 2)

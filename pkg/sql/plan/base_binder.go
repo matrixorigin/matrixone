@@ -4970,12 +4970,17 @@ func (b *baseBinder) markPreparedStringDomainSubquerySources(name string, args [
 // may be binary-shaped even when a selected row is text.
 func (b *baseBinder) annotateStringDomainSources(args []*Expr) {
 	visited := make(map[[2]int32]struct{})
+	memo := make(map[[2]int32]*Expr)
 	for _, arg := range args {
-		b.annotateStringDomainSource(arg, visited)
+		b.annotateStringDomainSource(arg, visited, memo)
 	}
 }
 
-func (b *baseBinder) annotateStringDomainSource(expr *Expr, visited map[[2]int32]struct{}) {
+func (b *baseBinder) annotateStringDomainSource(
+	expr *Expr,
+	visited map[[2]int32]struct{},
+	memo map[[2]int32]*Expr,
+) {
 	if expr == nil {
 		return
 	}
@@ -4992,44 +4997,68 @@ func (b *baseBinder) annotateStringDomainSource(expr *Expr, visited map[[2]int32
 			return
 		}
 		key := [2]int32{nodeID, col.ColPos}
+		if witness, ok := memo[key]; ok {
+			if witness != nil {
+				ensurePreparedNumericMetadata(expr).StringDomainSource = DeepCopyExpr(witness)
+			}
+			return
+		}
 		if _, seen := visited[key]; seen {
 			return
 		}
 		visited[key] = struct{}{}
-		// This map is a recursion stack, not a global cache. The same derived
-		// column may occur in multiple independent branches (for example, once
-		// in an IF condition and again in a selected value). Keeping the key
-		// after this source is resolved would silently skip provenance for the
-		// later occurrence.
 		defer delete(visited, key)
 		source := node.ProjectList[col.ColPos]
 		if source == nil || source == expr {
+			memo[key] = nil
 			return
 		}
-		b.annotateStringDomainSource(source, visited)
+		// Numeric and other non-string projections cannot carry a runtime string
+		// domain. Skip them before walking their lineage; this keeps ordinary
+		// derived arithmetic out of the provenance path entirely.
+		if possibleStringDomainsForExpr(source) == 0 {
+			memo[key] = nil
+			return
+		}
+		b.annotateStringDomainSource(source, visited, memo)
 		if source.GetCol() != nil &&
 			source.GetPreparedNumeric().GetStringDomainSource() == nil {
 			// A direct physical column has no runtime override to preserve. Keep
 			// its static binary domain eligible for the existing fast path.
+			memo[key] = nil
 			return
 		}
-		ensurePreparedNumericMetadata(expr).StringDomainSource = DeepCopyExpr(source)
+		domains := possibleStringDomainsForExpr(source)
+		if domains != 0 {
+			// Keep only the domain summary, not a recursively copied expression
+			// graph. Derived projections can be chained or referenced repeatedly;
+			// copying their full annotated source at every boundary makes plan
+			// metadata grow exponentially while the consumer only needs the
+			// text/binary domain set.
+			witness := stringDomainSourceWitness(source, domains)
+			memo[key] = witness
+			if witness != nil {
+				ensurePreparedNumericMetadata(expr).StringDomainSource = DeepCopyExpr(witness)
+			}
+		} else {
+			memo[key] = nil
+		}
 		return
 	}
 	if fn := expr.GetF(); fn != nil {
 		for _, arg := range fn.Args {
-			b.annotateStringDomainSource(arg, visited)
+			b.annotateStringDomainSource(arg, visited, memo)
 		}
 		return
 	}
 	if list := expr.GetList(); list != nil {
 		for _, item := range list.List {
-			b.annotateStringDomainSource(item, visited)
+			b.annotateStringDomainSource(item, visited, memo)
 		}
 		return
 	}
 	if sub := expr.GetSub(); sub != nil {
-		b.annotateStringDomainSource(sub.Child, visited)
+		b.annotateStringDomainSource(sub.Child, visited, memo)
 	}
 }
 
@@ -5085,7 +5114,12 @@ func (b *baseBinder) markPreparedStringDomainSubquerySource(
 		// scalar-subquery flattening. Retain its domain-producing expression on
 		// that reference; keeping only the ColRef would lose the source again
 		// when the query graph is copied and rebound at EXECUTE.
-		ensurePreparedNumericMetadata(expr).StringDomainSource = DeepCopyExpr(source)
+		domains := possibleStringDomainsForExpr(source)
+		if domains == 0 {
+			domains = possibleStringDomainText | possibleStringDomainBinary
+		}
+		ensurePreparedNumericMetadata(expr).StringDomainSource =
+			stringDomainSourceWitness(source, domains)
 		return true
 	}
 	sub := expr.GetSub()
@@ -5110,10 +5144,351 @@ func (b *baseBinder) markPreparedStringDomainSubquerySource(
 	if len(node.ProjectList) > 0 &&
 		b.markPreparedStringDomainSubquerySource(node.ProjectList[0], visited) {
 		metadata := ensurePreparedNumericMetadata(expr)
-		metadata.StringDomainSource = DeepCopyExpr(node.ProjectList[0])
+		domains := possibleStringDomainsForExpr(node.ProjectList[0])
+		if domains == 0 {
+			domains = possibleStringDomainText | possibleStringDomainBinary
+		}
+		metadata.StringDomainSource = stringDomainSourceWitness(node.ProjectList[0], domains)
 		return true
 	}
 	return false
+}
+
+// stringDomainSourceWitness is a compact, persisted representation of the
+// information needed by execute-time string-domain resolution. It keeps the
+// relevant parameter markers and static domain leaves, but deliberately does
+// not copy the source's derived-column graph. For source-preserving string
+// functions it retains a small function skeleton: a COALESCE summary would
+// erase the function's implicit numeric/date-to-string conversion boundary.
+// Every expression returned here is metadata only; it is never executed as a
+// query expression.
+func stringDomainSourceWitness(source *Expr, domains uint8) *Expr {
+	if source == nil || domains == 0 {
+		return nil
+	}
+	if domains == possibleStringDomainText|possibleStringDomainBinary {
+		if witness, ok := stringDomainSourceFunctionWitness(source); ok {
+			return witness
+		}
+		collector := stringDomainWitnessCollector{
+			seen: make(map[string]struct{}),
+		}
+		collector.collect(source, make(map[*Expr]struct{}))
+		args := append([]*Expr(nil), collector.args...)
+		if len(args) == 0 {
+			// A static mixed-domain source has no marker to carry. Keep both
+			// choices explicitly instead of manufacturing a one-argument
+			// COALESCE, which is not a valid function shape.
+			text := makePlan2StringConstExprWithType("")
+			text.GetLit().LiteralForm = plan.StringLiteralForm_STRING_LITERAL_TEXT
+			args = append(args, text)
+			binary := makePlan2VarBinaryConstExprWithType("")
+			binary.GetLit().LiteralForm = plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER
+			args = append(args, binary)
+		} else {
+			if collector.staticDomains&possibleStringDomainText != 0 {
+				text := makePlan2StringConstExprWithType("")
+				text.GetLit().LiteralForm = plan.StringLiteralForm_STRING_LITERAL_TEXT
+				args = append(args, text)
+			}
+			if collector.staticDomains&possibleStringDomainBinary != 0 {
+				binary := makePlan2VarBinaryConstExprWithType("")
+				binary.GetLit().LiteralForm = plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER
+				args = append(args, binary)
+			}
+		}
+		if len(args) == 1 {
+			return args[0]
+		}
+		return &Expr{
+			Typ: source.Typ,
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: "coalesce"},
+				Args: args,
+			}},
+		}
+	}
+	witness := makePlan2StringConstExprWithType("")
+	witness.Typ = stringDomainWitnessType(source, domains)
+	lit := witness.GetLit()
+	switch domains {
+	case possibleStringDomainText:
+		lit.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_TEXT
+	case possibleStringDomainBinary:
+		lit.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER
+	default:
+		witness.Typ = stringDomainWitnessType(source, possibleStringDomainBinary)
+		lit.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_TEXT
+		binary := makePlan2VarBinaryConstExprWithType("")
+		binary.GetLit().LiteralForm = plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER
+		lit.Src = binary
+	}
+	return witness
+}
+
+func stringDomainSourceFunctionWitness(source *Expr) (*Expr, bool) {
+	fn := source.GetF()
+	if fn == nil || fn.Func == nil {
+		return nil, false
+	}
+	name := strings.ToLower(fn.Func.GetObjName())
+	sourceIndex := preparedStringDomainSourceIndex(name, len(fn.Args))
+	if sourceIndex < 0 || !preparedExprStringDomainDependsOnRuntime(fn.Args[sourceIndex]) {
+		return nil, false
+	}
+
+	args := make([]*Expr, len(fn.Args))
+	for i, arg := range fn.Args {
+		if i == sourceIndex {
+			domains := possibleStringDomainsForExpr(arg)
+			if domains == 0 {
+				domains = possibleStringDomainText | possibleStringDomainBinary
+			}
+			args[i] = stringDomainSourceWitness(arg, domains)
+			continue
+		}
+		args[i] = compactStringDomainWitnessArg(arg)
+	}
+	return &Expr{
+		Typ: source.Typ,
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: fn.Func.GetObjName()},
+			Args: args,
+		}},
+	}, true
+}
+
+func preparedStringDomainSourceIndex(name string, arity int) int {
+	switch name {
+	case "substring", "substr", "mid", "substring_index", "left", "right",
+		"lower", "to_lower", "lcase", "upper", "to_upper", "ucase", "reverse",
+		"replace", "insert", "split_part", "repeat", "lpad", "rpad":
+		if arity == 0 {
+			return -1
+		}
+		return 0
+	case "trim":
+		if arity <= 2 {
+			return -1
+		}
+		return 2
+	default:
+		return -1
+	}
+}
+
+func compactStringDomainWitnessArg(arg *Expr) *Expr {
+	if arg == nil {
+		return nil
+	}
+	if preparedExprStringDomainDependsOnRuntime(arg) {
+		domains := possibleStringDomainsForExpr(arg)
+		if domains != 0 {
+			return stringDomainSourceWitness(arg, domains)
+		}
+	}
+	if arg.GetLit() != nil {
+		return DeepCopyExpr(arg)
+	}
+	// The witness is never evaluated. A typed literal is enough for function
+	// overload resolution and avoids retaining an unrelated expression graph.
+	placeholder := makePlan2Int64ConstExprWithType(0)
+	placeholder.Typ = arg.Typ
+	return placeholder
+}
+
+func stringDomainWitnessType(source *Expr, domains uint8) plan.Type {
+	typ := source.Typ
+	if domains == possibleStringDomainText &&
+		types.StaticStringDomain(makeTypeByPlan2Expr(source)) == types.StringDomainBinary {
+		typ.Id = int32(types.T_varchar)
+		typ.Charset = uint32(types.CharsetUTF8)
+	}
+	if domains == possibleStringDomainBinary &&
+		types.StaticStringDomain(makeTypeByPlan2Expr(source)) == types.StringDomainText {
+		typ.Id = int32(types.T_varbinary)
+		typ.Charset = uint32(types.CharsetBinary)
+	}
+	return typ
+}
+
+type stringDomainWitnessCollector struct {
+	args          []*Expr
+	seen          map[string]struct{}
+	staticDomains uint8
+}
+
+func (c *stringDomainWitnessCollector) addMarker(expr *Expr) {
+	if expr == nil {
+		return
+	}
+	var key string
+	var marker *Expr
+	switch {
+	case expr.GetP() != nil && expr.GetP().Pos >= 0:
+		position := expr.GetP().Pos
+		key = fmt.Sprintf("p:%d", position)
+		marker = &Expr{Typ: expr.Typ, Expr: &plan.Expr_P{
+			P: &plan.ParamRef{Pos: position},
+		}}
+	case expr.GetV() != nil:
+		variable := expr.GetV()
+		key = fmt.Sprintf("v:%s:%t:%t", variable.Name, variable.System, variable.Global)
+		marker = &Expr{Typ: expr.Typ, Expr: &plan.Expr_V{
+			V: &plan.VarRef{
+				Name: variable.Name, System: variable.System, Global: variable.Global,
+			},
+		}}
+	}
+	if marker == nil {
+		return
+	}
+	if _, ok := c.seen[key]; ok {
+		return
+	}
+	c.seen[key] = struct{}{}
+	c.args = append(c.args, marker)
+}
+
+func (c *stringDomainWitnessCollector) collect(expr *Expr, visited map[*Expr]struct{}) {
+	if expr == nil {
+		return
+	}
+	if _, ok := visited[expr]; ok {
+		return
+	}
+	visited[expr] = struct{}{}
+	if metadata := expr.GetPreparedNumeric(); metadata != nil && metadata.StringDomainSource != nil {
+		c.collect(metadata.StringDomainSource, visited)
+		return
+	}
+	if expr.GetP() != nil || expr.GetV() != nil {
+		c.addMarker(expr)
+		return
+	}
+	if lit := expr.GetLit(); lit != nil {
+		if !lit.Isnull {
+			switch lit.LiteralForm {
+			case plan.StringLiteralForm_STRING_LITERAL_TEXT:
+				c.staticDomains |= possibleStringDomainText
+
+			case plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER,
+				plan.StringLiteralForm_STRING_LITERAL_HEX,
+				plan.StringLiteralForm_STRING_LITERAL_BIT:
+				c.staticDomains |= possibleStringDomainBinary
+			default:
+				c.staticDomains |= possibleStringDomainsForType(makeTypeByPlan2Expr(expr))
+			}
+		}
+		c.collect(lit.Src, visited)
+		return
+	}
+	if sub := expr.GetSub(); sub != nil {
+		if sub.Child != nil {
+			c.collect(sub.Child, visited)
+		} else {
+			c.staticDomains |= possibleStringDomainText | possibleStringDomainBinary
+		}
+		return
+	}
+	if col := expr.GetCol(); col != nil {
+		c.staticDomains |= possibleStringDomainsForType(makeTypeByPlan2Expr(expr))
+		return
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		c.staticDomains |= possibleStringDomainsForType(makeTypeByPlan2Expr(expr))
+		return
+	}
+	name := strings.ToLower(fn.Func.GetObjName())
+	if name == "cast" {
+		if fn.GetSyntaxExplicitCast() {
+			c.staticDomains |= possibleStringDomainsForType(makeTypeByPlan2Expr(expr))
+			return
+		}
+		_, overload := function.DecodeOverloadID(fn.Func.GetObj())
+		if overload != 0 || len(fn.Args) == 0 {
+			c.staticDomains |= possibleStringDomainsForType(makeTypeByPlan2Expr(expr))
+			return
+		}
+		if possibleStringDomainsForType(makeTypeByPlan2Expr(fn.Args[0])) != 0 {
+			c.collect(fn.Args[0], visited)
+		} else {
+			c.staticDomains |= possibleStringDomainText
+		}
+		return
+	}
+	switch name {
+	case "if", "iff":
+		for _, arg := range fn.Args[1:] {
+			if preparedExprStringDomainDependsOnRuntime(arg) {
+				c.staticDomains |= possibleStringDomainText
+			}
+			c.collect(arg, visited)
+		}
+		return
+	case "case":
+		for i := 1; i < len(fn.Args); i += 2 {
+			if preparedExprStringDomainDependsOnRuntime(fn.Args[i]) {
+				c.staticDomains |= possibleStringDomainText
+			}
+			c.collect(fn.Args[i], visited)
+		}
+		if len(fn.Args)%2 == 1 {
+			if preparedExprStringDomainDependsOnRuntime(fn.Args[len(fn.Args)-1]) {
+				c.staticDomains |= possibleStringDomainText
+			}
+			c.collect(fn.Args[len(fn.Args)-1], visited)
+		}
+		return
+	case "coalesce", "ifnull", "greatest", "least":
+		for _, arg := range fn.Args {
+			if preparedExprStringDomainDependsOnRuntime(arg) {
+				c.staticDomains |= possibleStringDomainText
+			}
+			c.collect(arg, visited)
+		}
+		return
+	case "nullif":
+		if len(fn.Args) > 0 {
+			if preparedExprStringDomainDependsOnRuntime(fn.Args[0]) {
+				c.staticDomains |= possibleStringDomainText
+			}
+			c.collect(fn.Args[0], visited)
+		}
+		return
+	}
+	if stringOperands := preparedRegexpResultStringOperandCount(name, len(fn.Args)); stringOperands > 0 {
+		for i := 0; i < stringOperands; i++ {
+			if preparedExprStringDomainDependsOnRuntime(fn.Args[i]) {
+				c.staticDomains |= possibleStringDomainText
+			}
+			c.collect(fn.Args[i], visited)
+		}
+		return
+	}
+	sourceIndex := preparedStringDomainSourceIndex(name, len(fn.Args))
+	if sourceIndex >= 0 && sourceIndex < len(fn.Args) {
+		if preparedExprStringDomainDependsOnRuntime(fn.Args[sourceIndex]) {
+			// A string-producing function implicitly converts numeric runtime
+			// parameters before returning them. Keep one text leaf in the compact
+			// common-domain witness so an integer/date marker is not propagated as
+			// a numeric operand to an enclosing regexp function.
+			c.staticDomains |= possibleStringDomainText
+		}
+		c.collect(fn.Args[sourceIndex], visited)
+		return
+	}
+	if preparedFunctionStringDomainDependsOnRuntimeParam(expr) {
+		for _, arg := range fn.Args {
+			if preparedExprStringDomainDependsOnRuntime(arg) {
+				c.staticDomains |= possibleStringDomainText
+			}
+			c.collect(arg, visited)
+		}
+		return
+	}
+	c.staticDomains |= possibleStringDomainsForType(makeTypeByPlan2Expr(expr))
 }
 
 func preparedExprStringDomainDependsOnRuntime(expr *plan.Expr) bool {
@@ -6895,7 +7270,7 @@ func possibleStringDomainsForExpr(expr *plan.Expr) uint8 {
 		if len(fn.Args)%2 == 1 {
 			selected = append(selected, fn.Args[len(fn.Args)-1])
 		}
-	case "coalesce":
+	case "coalesce", "ifnull", "greatest", "least":
 		selected = fn.Args
 	}
 	if len(selected) > 0 {
@@ -6911,17 +7286,16 @@ func possibleStringDomainsForExpr(expr *plan.Expr) uint8 {
 
 	// These functions preserve the effective domain of their value source;
 	// follow that source instead of trusting their common static return type.
-	sourceIndex := -1
-	switch name {
-	case "substring", "substr", "mid", "substring_index", "left", "right",
-		"lower", "to_lower", "lcase", "upper", "to_upper", "ucase", "reverse",
-		"replace", "insert", "split_part", "repeat", "lpad", "rpad":
-		sourceIndex = 0
-	case "trim":
-		sourceIndex = 2
-	}
+	sourceIndex := preparedStringDomainSourceIndex(name, len(fn.Args))
 	if sourceIndex >= 0 && sourceIndex < len(fn.Args) {
 		return possibleStringDomainsForExpr(fn.Args[sourceIndex])
+	}
+	if preparedFunctionStringDomainDependsOnRuntimeParam(expr) {
+		// Some string-producing functions (notably REGEXP_SUBSTR/REPLACE)
+		// transfer the subject/pattern domain without being one of the simple
+		// source-preserving functions above. Keep their runtime dependency
+		// visible to the compact witness.
+		return possibleStringDomainText | possibleStringDomainBinary
 	}
 
 	if staticDomains == possibleStringDomainBinary {
