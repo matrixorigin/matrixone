@@ -990,10 +990,12 @@ Therefore these passes establish SQL/result behavior, not result metadata.
 The exact candidate was rebuilt with Go 1.26.4, CGo native libraries, and
 `make build-with-prebuilt-native`; each BVT was run twice against that binary:
 `func_string_format.test` 276/276 and `func_math_string_numeric.test` 118/118
-on both runs. The local service was stopped cleanly afterward. No remote CI,
-PR-wide coverage result, or multi-CN runtime claim is made. The BVT evidence is
-supplemental to the exact-source Go and COM_STMT validation, not a substitute
-for it.
+on both runs. An additional normal comparison without `-n` also passed for
+both cases at 276/276 and 118/118, so the checked-in result metadata was
+validated rather than only ignored. The local service was stopped cleanly
+afterward. No remote CI, PR-wide coverage result, or multi-CN runtime claim is
+made. The BVT evidence is supplemental to the exact-source Go and COM_STMT
+validation, not a substitute for it.
 
 The implementation is complete on this local candidate and does not wait for
 design approval, as requested. The approval record remains explicitly pending
@@ -1011,7 +1013,7 @@ Scope/trigger: PR reviews 5199052257, 5214666396 and comment 5687377735; >500 pr
 Reviewer identity and role: historical GPT-6 Astra review of d56711fa5b429e5e6e52f64f603d2e853478edca against base 4ff27bb9b35c43c1b0961bb9a01bf8fc0b6a2171; any exact-head review decision is tracked separately from maintainer design approval
 Review timestamp: exact final-candidate Astra Medium review is tracked separately from maintainer design approval, which remains pending
 Decision: DRAFT / AWAITING MAINTAINER APPROVAL
-Validation evidence: historical revisions 9-15 remain recorded above. Revision 16 records the clean rebase onto `d972519`, preserved integer-parameter contract, scoped compatibility fixtures, exact-source Go packages, focused planner race tests, both COM_STMT regressions, CGo-aware vet, full `pkg/tests/issues`, an exact Go 1.26.4/CGo build, and two exact-binary runs each of the 276/276 FORMAT and 118/118 numeric-string BVT comparisons with result metadata ignored via `-n`. No remote CI or PR-wide coverage pass is claimed.
+Validation evidence: historical revisions 9-15 remain recorded above. Revision 16 records the clean rebase onto `d972519`, preserved integer-parameter contract, scoped compatibility fixtures, exact-source Go packages, focused planner race tests, both COM_STMT regressions, CGo-aware vet, full `pkg/tests/issues`, an exact Go 1.26.4/CGo build, two exact-binary runs each of the 276/276 FORMAT and 118/118 numeric-string BVT comparisons with metadata ignored via `-n`, and an additional normal metadata comparison pass for both cases. No remote CI or PR-wide coverage pass is claimed.
 User-selected compatibility contract for this revision: default/empty/unset/nil is strict; only explicit MYSQL_NUMERIC_COMPATIBILITY selects MySQL numeric-prefix conversion; MATRIXONE_NATIVE is always strict and wins if both are present; the new token is absent from the existing default SQL mode. This design decision was selected by the user and implementation proceeds on that basis; it is not maintainer approval. Remaining decisions proposed for maintainer acceptance: retain strict INT64 precision controls (no general integer-prefix widening); prefer correctness over function-wide zonemap pruning; retain the bounded per-parameter source scan with its measured owner-boundary traversal cost; approve the revision-9 argument-owner boundaries and no-inherited-role fast path
 Evidence links: [PR #28523](https://github.com/matrixorigin/matrixone/pull/28523); [historical-head CI run 35197284882](https://github.com/matrixorigin/matrixone/actions/runs/35197284882); the PR/evidence ledger is the record for commit replay, review, CI, and BVT; current local post-rebase evidence is recorded above
 Implementation deviations requiring follow-up: MOD native arithmetic widening regression fixed in 8fc4d5250; strict INT64 precision acceptance, zonemap-pruning decision, and scan-cost acceptance remain pending
