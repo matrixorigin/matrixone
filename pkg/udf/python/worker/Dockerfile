@@ -27,7 +27,7 @@ WORKDIR /home/mo
 #    && apt-get update \
 #    && apt-get install -y vim
 
-COPY requirements.txt worker.py watchdog.py ./
+COPY requirements.txt worker.py watchdog.py healthcheck.py ./
 
 RUN pip install --no-cache-dir -r requirements.txt
 
