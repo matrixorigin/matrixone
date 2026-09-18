@@ -8426,7 +8426,9 @@ func inetNtoaUnsigned(value uint64) (string, error) {
 }
 
 func inetNtoaSigned(value int64) (string, error) {
-	if value < 0 || uint64(value) > maxInetNtoaValue {
+	// Keep the upper bound in the source signed domain so static analysis can
+	// prove that the narrowing conversion below cannot truncate a parsed value.
+	if value < 0 || value > int64(maxInetNtoaValue) {
 		return "", errInetNtoaOutOfRange
 	}
 	return inetNtoaString(uint32(value)), nil
