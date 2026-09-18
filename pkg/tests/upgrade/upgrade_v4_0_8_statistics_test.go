@@ -164,6 +164,120 @@ func TestV408UpgradeRefreshesStatistics(t *testing.T) {
 	})
 }
 
+func TestV408LoginRepairsTenantCreatedAfterUpgradeSnapshot(t *testing.T) {
+	embed.RunSingleCNBaseClusterTests(t, func(cluster embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+		cn, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		port := cn.GetServiceConfig().CN.Frontend.Port
+		sysDB, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer sysDB.Close()
+		sqlExecutor := testutils.GetSQLExecutor(cn)
+		catalogExec := func(ctx context.Context, statement string) error {
+			res, err := sqlExecutor.Exec(ctx, statement, executor.Options{}.
+				WithDatabase(catalog.MO_CATALOG).WithWaitCommittedLogApplied())
+			if err == nil {
+				res.Close()
+			}
+			return err
+		}
+		const (
+			accountName = "statistics_late_upgrade_28999"
+			upgradeID   = uint64(290460001)
+			dbName      = "statistics_late_upgrade_28999"
+		)
+		var lastSnapshotID int32
+		require.NoError(t, sysDB.QueryRowContext(ctx,
+			"select max(account_id) from mo_catalog.mo_account").Scan(&lastSnapshotID))
+		// Persist the bounded task before account creation. The fixture models
+		// an old writer's catalog, not a fresh account with the new view DDL.
+		require.NoError(t, sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+			return versions.AddUpgradeTenantTask(upgradeID, "4.0.8", 0, lastSnapshotID, txn)
+		}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithWaitCommittedLogApplied()))
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cleanupCancel()
+			require.NoError(t, catalogExec(cleanupCtx,
+				fmt.Sprintf("delete from mo_catalog.mo_upgrade_tenant where upgrade_id = %d", upgradeID)))
+		}()
+		_, err = sysDB.ExecContext(ctx, "create account "+accountName+" ADMIN_NAME 'root' IDENTIFIED BY '111'")
+		require.NoError(t, err)
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cleanupCancel()
+			_, err := sysDB.ExecContext(cleanupCtx, "drop account "+accountName)
+			require.NoError(t, err)
+		}()
+		var tenantID uint32
+		require.NoError(t, sysDB.QueryRowContext(ctx,
+			"select account_id from mo_catalog.mo_account where account_name = '"+accountName+"'").Scan(&tenantID))
+		require.Greater(t, int32(tenantID), lastSnapshotID)
+		legacy := strings.Replace(sysview.InformationSchemaStatisticsDDL,
+			"coalesce(nullif(`idx`.`algo`, ''), 'BTREE')", "`idx`.`algo`", 1)
+		require.NotEqual(t, sysview.InformationSchemaStatisticsDDL, legacy)
+		// Do not log into the tenant before establishing the old-writer state:
+		// the first real login must be the operation that repairs it.
+		require.NoError(t, sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+			for _, statement := range []string{
+				"create database " + dbName,
+				"create table " + dbName + ".t(id int primary key, code varchar(20), embedding vecf32(3), " +
+					"unique key uq_code(code), key idx_code(code))",
+				"create index vidx using ivfflat on " + dbName + ".t(embedding) lists = 2 op_type 'vector_l2_ops'",
+				"drop view if exists information_schema.STATISTICS",
+				legacy,
+			} {
+				res, err := txn.Exec(statement, versions.UpgradeStatementOption(tenantID))
+				if err != nil {
+					return err
+				}
+				res.Close()
+			}
+			return versions.UpgradeTenantVersion(int32(tenantID), "4.0.7", txn)
+		}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithWaitCommittedLogApplied()))
+		require.NoError(t, catalogExec(ctx,
+			fmt.Sprintf("update mo_catalog.mo_upgrade_tenant set ready = 1 where upgrade_id = %d", upgradeID)))
+		final := v4_0_8.Handler.Metadata()
+		require.NoError(t, sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+			return versions.UpdateVersionState(final.Version, final.VersionOffset, versions.StateReady, txn)
+		}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithWaitCommittedLogApplied()))
+		btreeQuery := "select index_name from information_schema.statistics where table_schema = '" +
+			dbName + "' and table_name = 't' and index_type = 'BTREE' order by index_name"
+		res, err := sqlExecutor.Exec(ctx, btreeQuery, executor.Options{}.WithAccountID(tenantID))
+		require.NoError(t, err)
+		defer res.Close()
+		require.Empty(t, res.Batches, "the late account still has the old persisted view")
+
+		// Invalid credentials must not trigger catalog changes.
+		badDB, err := sql.Open("mysql", fmt.Sprintf("%s#root#accountadmin:wrong@tcp(127.0.0.1:%d)/", accountName, port))
+		require.NoError(t, err)
+		defer badDB.Close()
+		require.Error(t, badDB.PingContext(ctx))
+		var createVersion string
+		require.NoError(t, sysDB.QueryRowContext(ctx,
+			fmt.Sprintf("select create_version from mo_catalog.mo_account where account_id = %d", tenantID)).Scan(&createVersion))
+		require.Equal(t, "4.0.7", createVersion)
+
+		db, err := sql.Open("mysql", fmt.Sprintf("%s#root#accountadmin:111@tcp(127.0.0.1:%d)/", accountName, port))
+		require.NoError(t, err)
+		defer db.Close()
+		conn, err := db.Conn(ctx) // real MySQL authentication performs compensation
+		require.NoError(t, err)
+		defer conn.Close()
+		require.ElementsMatch(t, []string{"PRIMARY", "idx_code", "uq_code"},
+			statisticsIndexNames(t, ctx, conn, btreeQuery))
+		require.NoError(t, sysDB.QueryRowContext(ctx,
+			fmt.Sprintf("select create_version from mo_catalog.mo_account where account_id = %d", tenantID)).Scan(&createVersion))
+		require.Equal(t, final.Version, createVersion)
+		var specialized string
+		require.NoError(t, conn.QueryRowContext(ctx,
+			"select index_type from information_schema.statistics where table_schema = '"+dbName+
+				"' and table_name = 't' and index_name = 'vidx'").Scan(&specialized))
+		require.Equal(t, "ivfflat", specialized)
+	})
+}
+
 type statisticsUpgradeTxn struct {
 	executor.TxnExecutor
 	creates *int

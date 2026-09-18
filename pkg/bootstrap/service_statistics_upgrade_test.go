@@ -25,11 +25,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_6"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_8"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
@@ -217,4 +219,255 @@ func TestStatisticsUpgradeOldWorkerCannotCompleteNewTask(t *testing.T) {
 			})
 		})
 	}
+}
+
+func TestStatisticsUpgradeCompensatesPostSnapshotTenantAfterRestart(t *testing.T) {
+	runtime.RunTest("", func(runtime.Runtime) {
+		const (
+			lastSnapshotID = int32(10)
+			lateTenantID   = lastSnapshotID + 1
+		)
+		final := v4_0_8.Handler.Metadata()
+		legacy := strings.Replace(sysview.InformationSchemaStatisticsDDL,
+			"coalesce(nullif(`idx`.`algo`, ''), 'BTREE')", "`idx`.`algo`", 1)
+		var snapshotCommitted, tenantCreated bool
+		var tenantVersion, definition string
+		var creates, reads, queued int
+		globalState := versions.StateUpgradingTenant
+		txnOp := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+		txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
+		txnOp.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
+		exec := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
+			switch {
+			case strings.HasPrefix(sql, "insert into mo_upgrade_tenant"):
+				require.False(t, tenantCreated)
+				require.Contains(t, sql, fmt.Sprintf("'4.0.8', 0, %d,", lastSnapshotID))
+			case strings.HasPrefix(sql, "update mo_version set state"):
+				require.True(t, snapshotCommitted)
+				require.True(t, tenantCreated)
+				globalState = versions.StateReady
+			case sql == "select version, version_offset, state from mo_version order by create_at desc limit 1":
+				return statisticsLatestVersionResult(t, final, globalState), nil
+			case strings.HasPrefix(sql, "SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables"):
+				return newBootstrapStringResult("mo_catalog"), nil
+			case strings.HasPrefix(sql, "select version from mo_version"):
+				return newBootstrapStringResult(final.Version), nil
+			case strings.HasPrefix(sql, "insert into mo_upgrade"):
+				queued++
+			case strings.Contains(sql, "from mo_upgrade") && strings.Contains(sql, "where state = 1"):
+				return executor.Result{}, nil // the finite background tasks have finished
+			case strings.HasPrefix(sql, "select create_version from mo_account"):
+				require.True(t, tenantCreated)
+				require.Contains(t, sql, fmt.Sprintf("account_id = %d", lateTenantID))
+				reads++
+				return newBootstrapStringResult(tenantVersion), nil
+			case strings.HasPrefix(sql, "SELECT tbl.rel_createsql"):
+				return newBootstrapStringResult(definition), nil
+			case sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
+				return newBootstrapStringResult(`{"method":"GETPROTOCOLVERSION","result":"old-cn:61,new-cn:61"}`), nil
+			case sql == "DROP VIEW IF EXISTS information_schema.STATISTICS;":
+				definition = ""
+			case sql == sysview.InformationSchemaStatisticsDDL:
+				definition = sql
+				creates++
+			case sql == fmt.Sprintf("update mo_account set create_version = '%s' where account_id = %d", final.Version, lateTenantID):
+				require.Equal(t, sysview.InformationSchemaStatisticsDDL, definition,
+					"publish the version only after repairing the view")
+				tenantVersion = final.Version
+			default:
+				return executor.Result{}, fmt.Errorf("unexpected SQL: %s", sql)
+			}
+			return executor.Result{AffectedRows: 1}, nil
+		}, txnOp)
+
+		// Commit a finite account snapshot, then let an old CN create an account
+		// beyond that range. No sleeps or scheduler-dependent interleaving.
+		require.NoError(t, exec.ExecTxn(t.Context(), func(txn executor.TxnExecutor) error {
+			return versions.AddUpgradeTenantTask(100, final.Version, 0, lastSnapshotID, txn)
+		}, executor.Options{}))
+		snapshotCommitted = true
+		require.True(t, snapshotCommitted)
+		tenantCreated = true
+		tenantVersion, definition = "4.0.7", legacy
+		require.NoError(t, exec.ExecTxn(t.Context(), func(txn executor.TxnExecutor) error {
+			return versions.UpdateVersionState(final.Version, final.VersionOffset, versions.StateReady, txn)
+		}, executor.Options{}))
+
+		newCN := func() *service {
+			b := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0),
+				nil, exec, func(s *service) { s.initUpgrade() })
+			t.Cleanup(b.stopper.Stop)
+			return b
+		}
+		restarted := newCN()
+		require.NoError(t, restarted.doCheckUpgrade(t.Context()))
+		require.Zero(t, queued, "ready global metadata does not queue another background upgrade")
+		hasWork, err := restarted.newTenantUpgradePass(t.Context())()
+		require.NoError(t, err)
+		require.False(t, hasWork)
+		require.Equal(t, legacy, definition, "background completion missed the late account")
+		require.False(t, restarted.upgrade.finalVersionCompleted.Load())
+
+		// Reproduce the old caller's misleading CN-version hint. The catalog
+		// still says 4.0.7 and must override it even after global ready/restart.
+		fetch := func() (int32, string, error) { return lateTenantID, final.Version, nil }
+		upgraded, err := restarted.MaybeUpgradeTenant(t.Context(), fetch, nil)
+		require.NoError(t, err)
+		require.True(t, upgraded)
+		require.Equal(t, final.Version, tenantVersion)
+		require.Equal(t, sysview.InformationSchemaStatisticsDDL, definition)
+		require.Equal(t, 1, creates)
+		require.Equal(t, 2, reads, "read the catalog and recheck under the account lock")
+		upgraded, err = restarted.MaybeUpgradeTenant(t.Context(), fetch, nil)
+		require.NoError(t, err)
+		require.False(t, upgraded)
+		require.Equal(t, 2, reads, "only a committed successful check is cached")
+
+		upgraded, err = newCN().MaybeUpgradeTenant(t.Context(), fetch, nil)
+		require.NoError(t, err)
+		require.False(t, upgraded)
+		require.Equal(t, 3, reads, "another restart verifies the persisted tenant version")
+		require.Equal(t, 1, creates)
+	})
+}
+
+func TestMaybeUpgradeTenantDoesNotCacheUncommittedOrFailedChecks(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		version        string
+		clusterVersion string
+		fail           bool
+		failUpgrade    bool
+		ownTxn         bool
+	}{
+		{name: "caller_owned_transaction", version: "4.0.8", ownTxn: true},
+		{name: "catalog_read_failure", version: "4.0.8", fail: true},
+		{name: "migration_failure", version: "4.0.7", failUpgrade: true},
+		{name: "newer_catalog_version", version: "4.0.9"},
+		{name: "different_cluster_version", version: "4.0.7", clusterVersion: "4.0.9"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runtime.RunTest("", func(runtime.Runtime) {
+				reads := 0
+				txnOp := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
+				txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
+				exec := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
+					switch {
+					case strings.HasPrefix(sql, "select create_version from mo_account"):
+						reads++
+						if test.fail {
+							return executor.Result{}, moerr.NewInternalErrorNoCtx("catalog unavailable")
+						}
+						return newBootstrapStringResult(test.version), nil
+					case strings.HasPrefix(sql, "select version, version_offset, state from mo_version"):
+						latest := v4_0_8.Handler.Metadata()
+						if test.clusterVersion != "" {
+							latest.Version = test.clusterVersion
+						}
+						return statisticsLatestVersionResult(t, latest, versions.StateReady), nil
+					case strings.HasPrefix(sql, "SELECT tbl.rel_createsql") && test.failUpgrade:
+						return executor.Result{}, moerr.NewInternalErrorNoCtx("view migration unavailable")
+					default:
+						return executor.Result{}, fmt.Errorf("unexpected SQL: %s", sql)
+					}
+				}, txnOp)
+				b := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0),
+					nil, exec, func(s *service) { s.initUpgrade() })
+				defer b.stopper.Stop()
+				for range 2 {
+					var txnOp client.TxnOperator
+					if test.ownTxn {
+						txnOp = &testTxnOperator{}
+					}
+					fetch := func() (int32, string, error) { return 11, "4.0.8", nil }
+					upgraded, err := b.MaybeUpgradeTenant(t.Context(), fetch, txnOp)
+					if test.ownTxn {
+						require.NoError(t, err)
+					} else {
+						require.Error(t, err)
+					}
+					require.False(t, upgraded)
+					require.Empty(t, b.mu.tenants)
+				}
+				if test.failUpgrade {
+					require.Equal(t, 4, reads)
+				} else {
+					require.Equal(t, 2, reads)
+				}
+			})
+		})
+	}
+}
+
+func TestMaybeUpgradeTenantRechecksVersionUnderLock(t *testing.T) {
+	runtime.RunTest("", func(runtime.Runtime) {
+		final := v4_0_8.Handler.Metadata()
+		reads := 0
+		exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			switch {
+			case sql == "select create_version from mo_account where account_id = 11":
+				reads++
+				return newBootstrapStringResult("4.0.7"), nil
+			case sql == "select create_version from mo_account where account_id = 11 for update":
+				reads++
+				return newBootstrapStringResult(final.Version), nil // another worker finished
+			case strings.HasPrefix(sql, "select version, version_offset, state from mo_version"):
+				return statisticsLatestVersionResult(t, final, versions.StateReady), nil
+			default:
+				return executor.Result{}, fmt.Errorf("unexpected SQL: %s", sql)
+			}
+		})
+		b := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0),
+			nil, exec, func(s *service) { s.initUpgrade() })
+		defer b.stopper.Stop()
+		upgraded, err := b.MaybeUpgradeTenant(t.Context(),
+			func() (int32, string, error) { return 11, final.Version, nil }, nil)
+		require.NoError(t, err)
+		require.False(t, upgraded, "do not report or rerun an upgrade another worker completed")
+		require.Equal(t, 2, reads)
+		require.True(t, b.mu.tenants[11])
+	})
+}
+
+func TestMaybeUpgradeTenantWaitHonorsCancellation(t *testing.T) {
+	runtime.RunTest("", func(runtime.Runtime) {
+		final := v4_0_8.Handler.Metadata()
+		exec := executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+			switch {
+			case sql == "select create_version from mo_account where account_id = 11":
+				return newBootstrapStringResult("4.0.7"), nil
+			case strings.HasPrefix(sql, "select version, version_offset, state from mo_version"):
+				return statisticsLatestVersionResult(t, final, versions.StateCreated), nil
+			case strings.Contains(sql, "from mo_upgrade"):
+				return buildUpgradeVersionResult(100, versions.StateCreated, "4.0.7", final.Version,
+					final.VersionOffset, 0, versions.No, versions.Yes, 1, 0), nil
+			default:
+				return executor.Result{}, fmt.Errorf("unexpected SQL: %s", sql)
+			}
+		})
+		b := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0),
+			nil, exec, func(s *service) { s.initUpgrade() })
+		defer b.stopper.Stop()
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		upgraded, err := b.MaybeUpgradeTenant(ctx,
+			func() (int32, string, error) { return 11, final.Version, nil }, nil)
+		require.ErrorIs(t, err, context.Canceled)
+		require.False(t, upgraded)
+		require.Empty(t, b.mu.tenants)
+	})
+}
+
+func statisticsLatestVersionResult(t *testing.T, version versions.Version, state int32) executor.Result {
+	t.Helper()
+	mp := mpool.MustNewZeroNoFixed()
+	t.Cleanup(func() { mpool.DeleteMPool(mp) })
+	res := executor.NewMemResult([]types.Type{
+		types.T_varchar.ToType(), types.T_uint32.ToType(), types.T_int32.ToType(),
+	}, mp)
+	res.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendStringRows(res, 0, []string{version.Version}))
+	require.NoError(t, executor.AppendFixedRows(res, 1, []uint32{version.VersionOffset}))
+	require.NoError(t, executor.AppendFixedRows(res, 2, []int32{state}))
+	return res.GetResult()
 }
