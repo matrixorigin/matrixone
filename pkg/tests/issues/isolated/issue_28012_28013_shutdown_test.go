@@ -88,16 +88,14 @@ func TestIssue28012And28013AcceptedCommitDuringStandaloneShutdown(t *testing.T) 
 	var err error
 	cluster, err = embed.StartTestCluster(embed.WithCNCount(1))
 	require.NoError(t, err)
-	sysDB := openIssue28012And28013DB(t, cluster, "dump:111")
-	dbs = append(dbs, sysDB)
+	sysDB := openIssue28012And28013DB(t, ctx, cluster, "dump:111", &dbs)
 	accountName := fmt.Sprintf("issue28012_%d", time.Now().UnixNano())
 	mustExecIssue28012And28013(t, ctx, sysDB, fmt.Sprintf(
 		"create account `%s` admin_name 'root' identified by '111'", accountName))
 	var accountID uint32
 	require.NoError(t, sysDB.QueryRowContext(ctx,
 		"select account_id from mo_catalog.mo_account where account_name = ?", accountName).Scan(&accountID))
-	db := openIssue28012And28013DB(t, cluster, accountName+"#root#accountadmin:111")
-	dbs = append(dbs, db)
+	db := openIssue28012And28013DB(t, ctx, cluster, accountName+"#root#accountadmin:111", &dbs)
 	dbName := fmt.Sprintf("issue_28012_28013_%d", time.Now().UnixNano())
 	mustExecIssue28012And28013(t, ctx, db, "create database "+dbName)
 	txn, err := db.BeginTx(ctx, nil)
@@ -180,8 +178,7 @@ func TestIssue28012And28013AcceptedCommitDuringStandaloneShutdown(t *testing.T) 
 	}
 	require.NoError(t, cluster.Start())
 
-	restartedDB := openIssue28012And28013DB(t, cluster, accountName+"#root#accountadmin:111")
-	dbs = append(dbs, restartedDB)
+	restartedDB := openIssue28012And28013DB(t, ctx, cluster, accountName+"#root#accountadmin:111", &dbs)
 	var count, total int
 	queryErr := restartedDB.QueryRowContext(ctx,
 		"select count(*), coalesce(sum(v), 0) from "+dbName+".t").Scan(&count, &total)
@@ -226,13 +223,19 @@ func waitIssue28012And28013FaultWaiters(t *testing.T, probe string, want int64, 
 	}, timeout, 10*time.Millisecond, "fault point %s did not reach %d waiters", probe, want)
 }
 
-func openIssue28012And28013DB(t *testing.T, cluster embed.Cluster, credentials string) *sql.DB {
+func openIssue28012And28013DB(
+	t *testing.T,
+	ctx context.Context,
+	cluster embed.Cluster,
+	credentials string,
+	dbs *[]*sql.DB,
+) *sql.DB {
 	t.Helper()
 	cn, err := cluster.GetCNService(0)
 	require.NoError(t, err)
 	db, err := sql.Open("mysql", fmt.Sprintf("%s@tcp(127.0.0.1:%d)/", credentials, cn.GetServiceConfig().CN.Frontend.Port))
 	require.NoError(t, err)
-	require.NoError(t, db.Ping())
+	require.NoError(t, registerAndPingIssue28012And28013DB(ctx, db, dbs))
 	return db
 }
 
