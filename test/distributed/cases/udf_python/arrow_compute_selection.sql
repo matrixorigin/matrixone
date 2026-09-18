@@ -13,7 +13,8 @@ insert into selection_values values
     (1, 30, 2),
     (2, null, 0),
     (3, 20, 1),
-    (4, 10, 3);
+    (4, 10, 3),
+    (5, 40, null);
 
 -- take uses an Arrow index array, sort_indices keeps NULL placement explicit,
 -- and cast proves that the physical Arrow type can change within the declared
