@@ -18,6 +18,12 @@ from control_values order by id;
 1  ¦  <empty>  𝄀
 2  ¦  <中😀>  𝄀
 3  ¦  <NULL>
+select id, python_bvt_add_one(value) as plus_one
+from control_values order by id;
+➤ id[4,32,0]  ¦  plus_one[4,32,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  3  𝄀
+3  ¦  null
 select id, python_bvt_zero_arg() as constant
 from control_values order by id;
 ➤ id[4,32,0]  ¦  constant[4,32,0]  𝄀
