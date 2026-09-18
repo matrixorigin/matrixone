@@ -25,7 +25,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_8"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
@@ -275,6 +277,79 @@ func TestV408LoginRepairsTenantCreatedAfterUpgradeSnapshot(t *testing.T) {
 			"select index_type from information_schema.statistics where table_schema = '"+dbName+
 				"' and table_name = 't' and index_name = 'vidx'").Scan(&specialized))
 		require.Equal(t, "ivfflat", specialized)
+	})
+}
+
+func TestV408LoginRejectsAccountDroppedAfterAuthentication(t *testing.T) {
+	embed.RunSingleCNBaseClusterTests(t, func(cluster embed.Cluster) {
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Minute)
+		defer cancel()
+		cn, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		port := cn.GetServiceConfig().CN.Frontend.Port
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
+		require.NoError(t, err)
+		defer db.Close()
+		admin, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer admin.Close()
+		const accountName = "statistics_deleted_upgrade_28999"
+		_, err = admin.ExecContext(ctx, "create account "+accountName+" ADMIN_NAME 'root' IDENTIFIED BY '111'")
+		require.NoError(t, err)
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cleanupCancel()
+			_, err := admin.ExecContext(cleanupCtx, "drop account if exists "+accountName)
+			require.NoError(t, err)
+		}()
+		var tenantID int32
+		require.NoError(t, admin.QueryRowContext(ctx,
+			"select account_id from mo_catalog.mo_account where account_name = '"+accountName+"'").Scan(&tenantID))
+		require.NoError(t, testutils.GetSQLExecutor(cn).ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+			return versions.UpgradeTenantVersion(tenantID, "4.0.7", txn)
+		}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).WithWaitCommittedLogApplied()))
+
+		// Obtain a separate real frontend session without first logging into the
+		// tenant, which would already run compensation and populate its cache.
+		authConn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer authConn.Close()
+		var connID uint32
+		require.NoError(t, authConn.QueryRowContext(ctx, "select connection_id()").Scan(&connID))
+		sessionManager := cn.RawService().(frontend.BaseService).SessionMgr()
+		var ses *frontend.Session
+		for _, candidate := range sessionManager.GetAllSessions() {
+			candidate := candidate.(*frontend.Session)
+			if candidate.GetResponser().GetU32(frontend.CONNID) == connID {
+				ses = candidate
+				break
+			}
+		}
+		require.NotNil(t, ses)
+		// Normal handshaking registers a session only after compensation. Remove
+		// the borrowed sys session before changing its authenticated tenant.
+		sessionManager.RemoveSession(ses)
+		// Exercise the actual AuthenticateUser catalog transaction, splitting the
+		// same two steps as the MySQL wrapper at their deterministic race window.
+		_, err = ses.AuthenticateUser(ctx, accountName+"#root#accountadmin", "", nil, nil,
+			func([]byte, []byte, []byte) bool { return true })
+		require.NoError(t, err)
+		require.Equal(t, "4.0.7", ses.GetCreateVersion())
+		require.Equal(t, uint32(tenantID), ses.GetTenantInfo().GetTenantID())
+		_, err = admin.ExecContext(ctx, "drop account "+accountName)
+		require.NoError(t, err)
+
+		for range 2 {
+			// Retry also proves that no successful checked-tenant cache entry was
+			// published for the failed post-authentication compensation.
+			err = ses.MaybeUpgradeTenant(ctx, ses.GetCreateVersion(), int64(tenantID))
+			var notFound *moerr.Error
+			require.ErrorAs(t, err, &notFound)
+			require.True(t, moerr.IsMoErrCode(notFound, moerr.ErrNotFound), "unexpected error: %v", err)
+		}
+		var alive int
+		require.NoError(t, admin.QueryRowContext(ctx, "select 1").Scan(&alive))
+		require.Equal(t, 1, alive, "account deletion must not terminate the CN")
 	})
 }
 

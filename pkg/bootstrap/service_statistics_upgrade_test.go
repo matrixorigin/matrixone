@@ -458,6 +458,79 @@ func TestMaybeUpgradeTenantWaitHonorsCancellation(t *testing.T) {
 	})
 }
 
+func TestMaybeUpgradeTenantRejectsConcurrentAccountDeletion(t *testing.T) {
+	for _, beforeLock := range []bool{false, true} {
+		name := "after_authentication"
+		if beforeLock {
+			name = "before_locking_recheck"
+		}
+		t.Run(name, func(t *testing.T) {
+			runtime.RunTest("", func(runtime.Runtime) {
+				final := v4_0_8.Handler.Metadata()
+				var authenticated, dropped bool
+				exec := &statisticsTransactionTracker{SQLExecutor: executor.NewMemExecutor(
+					func(sql string) (executor.Result, error) {
+						require.True(t, authenticated)
+						switch sql {
+						case "select create_version from mo_account where account_id = 11":
+							if dropped {
+								return executor.Result{}, nil
+							}
+							return newBootstrapStringResult("4.0.7"), nil
+						case "select version, version_offset, state from mo_version order by create_at desc limit 1":
+							dropped = true // DROP commits before the locking recheck
+							return statisticsLatestVersionResult(t, final, versions.StateReady), nil
+						case "select create_version from mo_account where account_id = 11 for update":
+							require.True(t, dropped)
+							return executor.Result{}, nil
+						default:
+							return executor.Result{}, fmt.Errorf("unexpected SQL: %s", sql)
+						}
+					})}
+				b := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0),
+					nil, exec, func(s *service) { s.initUpgrade() })
+				defer b.stopper.Stop()
+				fetch := func() (int32, string, error) {
+					authenticated = true
+					if !beforeLock {
+						dropped = true // authenticated account disappears before compensation
+					}
+					return 11, final.Version, nil
+				}
+				for attempt := 1; attempt <= 2; attempt++ {
+					require.NotPanics(t, func() {
+						upgraded, err := b.MaybeUpgradeTenant(t.Context(), fetch, nil)
+						require.False(t, upgraded)
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound), "unexpected error: %v", err)
+					})
+					require.False(t, exec.active, "the failed compensation transaction must end")
+					require.Equal(t, attempt, exec.failures)
+					require.Empty(t, b.mu.tenants, "a deleted account must never be cached as checked")
+				}
+			})
+		})
+	}
+}
+
+type statisticsTransactionTracker struct {
+	executor.SQLExecutor
+	active   bool
+	failures int
+}
+
+func (e *statisticsTransactionTracker) ExecTxn(
+	ctx context.Context, fn func(executor.TxnExecutor) error, opts executor.Options,
+) (err error) {
+	e.active = true
+	defer func() {
+		e.active = false
+		if err != nil {
+			e.failures++
+		}
+	}()
+	return e.SQLExecutor.ExecTxn(ctx, fn, opts)
+}
+
 func statisticsLatestVersionResult(t *testing.T, version versions.Version, state int32) executor.Result {
 	t.Helper()
 	mp := mpool.MustNewZeroNoFixed()
