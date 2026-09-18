@@ -721,9 +721,14 @@ type VectorIndexCache struct {
 	serveMu sync.Mutex
 
 	// evictInFlight tracks evictions between the moment an entry is removed from IndexMap and the
-	// moment its teardown (Destroy) finishes: key -> chan struct{} closed on completion. A concurrent
-	// evictor that finds the entry already gone waits on this instead of reporting a premature
-	// success while the old search / native handle is still alive (#28985 EvictKey race).
+	// moment its teardown (Destroy) finishes. It is keyed by the per-eviction done channel (unique per
+	// make) with the cache key as the value: doneCh -> cacheKey, closed on completion. A concurrent
+	// evictor that finds the entry already gone waits on every in-flight channel for that cache key
+	// instead of reporting a premature success while an old search / native handle is still alive.
+	// Keying by the channel (not the cache key) is deliberate: several generations of the SAME cache
+	// key can be tearing down at once (one removed-but-still-destroying while a reload was evicted
+	// under the same key), and a cacheKey->chan map would overwrite the older generation's completion
+	// signal, letting EvictKey return before it finished (#28985 EvictKey race).
 	evictInFlight sync.Map
 
 	// The residency budget and everything that decides it. Held by value so a zero
@@ -853,8 +858,21 @@ func (c *VectorIndexCache) EvictKey(key string) int64 {
 			_ = algo.awaitDestroyed(context.Background())
 		}
 	}
-	if v, ok := c.evictInFlight.Load(key); ok {
-		<-v.(chan struct{})
+	// Wait on EVERY in-flight eviction of this cache key, not just one: several generations of the
+	// same key can be tearing down concurrently (a removed-but-still-destroying generation while a
+	// reload was evicted under the same key), and each has its own completion channel. Snapshot the
+	// matching channels first, then wait outside Range (blocking inside Range would stall it).
+	var pending []chan struct{}
+	c.evictInFlight.Range(func(k, v any) bool {
+		if ks, ok := v.(string); ok && ks == key {
+			if ch, ok := k.(chan struct{}); ok {
+				pending = append(pending, ch)
+			}
+		}
+		return true
+	})
+	for _, ch := range pending {
+		<-ch
 	}
 	return 0
 }
@@ -930,7 +948,7 @@ func (c *VectorIndexCache) evictEntry(key string, expected *VectorIndexSearch, r
 	if !ok {
 		return false
 	}
-	defer c.finishEviction(key, done)
+	defer c.finishEviction(done)
 	algo.Destroy()
 	return true
 }
@@ -958,7 +976,7 @@ func (c *VectorIndexCache) evictIdleEntry(key string, expected *VectorIndexSearc
 		expected.releaseClaim()
 		return false
 	}
-	defer c.finishEviction(key, done)
+	defer c.finishEviction(done)
 	algo.destroyClaimed(reason)
 	return true
 }
@@ -979,27 +997,29 @@ func (c *VectorIndexCache) claimForEviction(key string, expected *VectorIndexSea
 	}
 	// Publish this eviction as in-flight BEFORE removing the entry from the map, so a concurrent
 	// evictor that later finds the entry already gone can wait on `done` rather than reporting a
-	// premature completion. The winning caller closes+clears it via finishEviction after Destroy.
+	// premature completion. Keyed by the unique `done` channel (value = cache key) so a second
+	// generation evicting under the same cache key cannot overwrite this generation's completion
+	// signal. The winning caller closes+clears it via finishEviction after Destroy.
 	done := make(chan struct{})
-	c.evictInFlight.Store(key, done)
+	c.evictInFlight.Store(done, key)
 	value, loaded = c.IndexMap.Load(key)
 	if !loaded || value != algo {
-		c.finishEviction(key, done)
+		c.finishEviction(done)
 		return nil, nil, false
 	}
 	algo.notifyCacheInvalidated(reason)
 	if !c.IndexMap.CompareAndDelete(key, algo) {
-		c.finishEviction(key, done)
+		c.finishEviction(done)
 		return nil, nil, false
 	}
 	return algo, done, true
 }
 
-// finishEviction publishes that the in-flight eviction of key is complete: it drops the registry
-// entry (only if it is still this eviction's channel, so a newer generation's in-flight eviction is
+// finishEviction publishes that this in-flight eviction is complete: it drops its own registry entry
+// (keyed by the done channel, so other generations' in-flight evictions of the same cache key are
 // left intact) and wakes any evictor waiting on it.
-func (c *VectorIndexCache) finishEviction(key string, done chan struct{}) {
-	c.evictInFlight.CompareAndDelete(key, done)
+func (c *VectorIndexCache) finishEviction(done chan struct{}) {
+	c.evictInFlight.Delete(done)
 	close(done)
 }
 

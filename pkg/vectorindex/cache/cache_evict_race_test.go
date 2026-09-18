@@ -79,6 +79,77 @@ func TestEvictKeyWaitsForInFlightEviction(t *testing.T) {
 
 	// The key is fully gone and no in-flight eviction remains registered.
 	require.Zero(t, c.CountKey(key))
-	_, stillInFlight := c.evictInFlight.Load(key)
-	require.False(t, stillInFlight, "the in-flight eviction registry entry must be cleared")
+	require.False(t, c.hasInFlightEviction(key), "the in-flight eviction registry entry must be cleared")
+}
+
+// hasInFlightEviction reports whether any in-flight eviction is still registered for the cache key.
+// evictInFlight is keyed by the per-eviction done channel (value = cache key), so this ranges rather
+// than a single Load.
+func (c *VectorIndexCache) hasInFlightEviction(key string) bool {
+	found := false
+	c.evictInFlight.Range(func(_, v any) bool {
+		if ks, ok := v.(string); ok && ks == key {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+// TestEvictKeyWaitsForOlderGenerationUnderSameKey proves the #28985 P2 fix: when two generations of
+// the SAME cache key are tearing down at once, the completion signal of the older generation must not
+// be overwritten by the newer one. Generation A parks in Destroy (removed from the map, still alive);
+// a reload B lands under the same key, is evicted, and parks too; B finishes first. A later EvictKey
+// must still WAIT for A -- a key->chan registry lost A's channel when B stored over it, letting
+// EvictKey return 0 while A's resources were alive.
+func TestEvictKeyWaitsForOlderGenerationUnderSameKey(t *testing.T) {
+	c := NewVectorIndexCache()
+	t.Cleanup(func() { c.Destroy() })
+
+	const key = "victim"
+
+	// Generation A: evicted first, parks inside Destroy (removed from map, done_A in-flight).
+	genA := &blockingDestroySearch{started: make(chan struct{}), release: make(chan struct{})}
+	c.IndexMap.Store(key, newVectorIndexSearch(genA))
+	aReturned := make(chan int64, 1)
+	go func() { aReturned <- c.EvictKey(key) }()
+	<-genA.started
+
+	// Generation B: a reload lands under the SAME key, is evicted, and parks too (done_B in-flight
+	// alongside done_A -- the state a key->chan registry cannot represent).
+	genB := &blockingDestroySearch{started: make(chan struct{}), release: make(chan struct{})}
+	c.IndexMap.Store(key, newVectorIndexSearch(genB))
+	bReturned := make(chan int64, 1)
+	go func() { bReturned <- c.EvictKey(key) }()
+	<-genB.started
+
+	// B completes first. This must NOT clear A's in-flight signal.
+	close(genB.release)
+	require.Equal(t, int64(1), <-bReturned, "B performed its eviction")
+
+	// A third EvictKey finds no map entry, but A is still tearing down: it MUST wait, not report 0.
+	cReturned := make(chan int64, 1)
+	go func() { cReturned <- c.EvictKey(key) }()
+	select {
+	case <-cReturned:
+		t.Fatal("EvictKey returned before generation A's teardown finished (older-generation signal overwritten, #28985)")
+	case <-aReturned:
+		t.Fatal("A's Destroy returned though it was still blocked")
+	case <-time.After(200 * time.Millisecond):
+		// correctly still blocked on A
+	}
+
+	// Release A; A's own EvictKey and the waiting third call both settle.
+	close(genA.release)
+	require.Equal(t, int64(1), <-aReturned, "A performed its eviction")
+	select {
+	case got := <-cReturned:
+		require.Equal(t, int64(0), got, "third call removed nothing, returning only after A settled")
+	case <-time.After(5 * time.Second):
+		t.Fatal("EvictKey blocked forever after generation A completed")
+	}
+
+	require.Zero(t, c.CountKey(key))
+	require.False(t, c.hasInFlightEviction(key), "no in-flight eviction may remain for the key")
 }
