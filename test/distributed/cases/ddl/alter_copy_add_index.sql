@@ -124,4 +124,53 @@ deallocate prepare ivf_count;
 select id from ivf_vectors order by l2_distance(embedding, '[1,0,0]') limit 1;
 set experimental_ivf_index = 0;
 
+-- Keep the base-table ids across DROP DATABASE so teardown can be checked
+-- before the next test entry has a chance to clean up stale resources.
+set @ordinary_id = (
+    select rel_id from mo_catalog.mo_tables
+    where reldatabase = database() and relname = 'ordinary'
+);
+set @docs_stored_id = (
+    select rel_id from mo_catalog.mo_tables
+    where reldatabase = database() and relname = 'docs_stored'
+);
+set @docs_virtual_id = (
+    select rel_id from mo_catalog.mo_tables
+    where reldatabase = database() and relname = 'docs_virtual'
+);
+set @duplicate_values_id = (
+    select rel_id from mo_catalog.mo_tables
+    where reldatabase = database() and relname = 'duplicate_values'
+);
+set @fulltext_docs_id = (
+    select rel_id from mo_catalog.mo_tables
+    where reldatabase = database() and relname = 'fulltext_docs'
+);
+set @vectors_id = (
+    select rel_id from mo_catalog.mo_tables
+    where reldatabase = database() and relname = 'vectors'
+);
+set @ivf_vectors_id = (
+    select rel_id from mo_catalog.mo_tables
+    where reldatabase = database() and relname = 'ivf_vectors'
+);
+select count(*) from mo_catalog.mo_tables
+where rel_id in (
+    @ordinary_id, @docs_stored_id, @docs_virtual_id, @duplicate_values_id,
+    @fulltext_docs_id, @vectors_id, @ivf_vectors_id
+);
+
 drop database alter_copy_add_index;
+
+select count(*) from mo_catalog.mo_tables
+where reldatabase = 'alter_copy_add_index';
+select count(*) from mo_catalog.mo_indexes
+where table_id in (
+    @ordinary_id, @docs_stored_id, @docs_virtual_id, @duplicate_values_id,
+    @fulltext_docs_id, @vectors_id, @ivf_vectors_id
+);
+select count(*) from mo_catalog.mo_iscp_log
+where table_id in (@fulltext_docs_id, @vectors_id, @ivf_vectors_id)
+  and drop_at is null;
+select count(*) from mo_catalog.mo_index_update
+where db_name = 'alter_copy_add_index';
