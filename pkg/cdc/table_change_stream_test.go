@@ -2786,9 +2786,11 @@ func TestTableChangeStreamNoFullAdmissionBoundaryLifecycle(t *testing.T) {
 	require.NotNil(t, outputs[0].insertAtmBatch)
 	require.Equal(t, 1, outputs[0].insertAtmBatch.RowCount())
 	rows := outputs[0].insertAtmBatch.GetRowIterator()
+	defer rows.Close()
 	require.True(t, rows.Next())
-	row := rows.Item()
-	require.Equal(t, int32(2), vector.MustFixedColNoTypeCheck[int32](row.Src.Vecs[0])[row.Offset])
+	row := make([]any, 2)
+	require.NoError(t, rows.Row(context.Background(), row))
+	require.Equal(t, int32(2), row[0])
 }
 
 func TestTableChangeStream_StableSnapshotStaleReadFailsClosed(t *testing.T) {
