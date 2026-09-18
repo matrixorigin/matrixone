@@ -67,4 +67,25 @@ not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX a
 select cat, max(id) as mx, max(match(body) against('alpha')) as s
 from cat_docs group by cat having s > 0 order by cat;
 not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+create table md(id int primary key, cat int, body text);
+insert into md values (1,10,'alpha'),(2,10,'beta'),(3,20,'alpha'),(4,20,'alpha');
+create fulltext index mdft on md(body);
+select cat, max(match(body) against('alpha')) a, max(match(body) against('beta')) b
+from md group by cat having a > 0 and b > 0 order by cat;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+create table wd(id int primary key, cat int, body text);
+insert into wd values (1,1,'nomatch'),(2,2,'alpha'),(3,3,'alpha');
+create fulltext index wdft on wd(body);
+select cat, score, rn from (
+select cat, max(match(body) against('alpha')) score, row_number() over (order by cat) rn
+from wd group by cat
+) q where score > 0 order by cat;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+select cat, score, rn from (
+select cat, max(match(body) against('alpha')) score, row_number() over (order by cat) rn
+from wd group by cat having max(match(body) against('alpha')) > 0
+) q order by cat;
+➤ cat[4,32,0]  ¦  score[7,23,31]  ¦  rn[-5,64,0]  𝄀
+2  ¦  0.031008132  ¦  1  𝄀
+3  ¦  0.031008132  ¦  2
 drop database ft_agg_having;

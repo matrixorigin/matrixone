@@ -52,4 +52,33 @@ from cat_docs group by cat having max(match(body) against('alpha')) > 0 order by
 select cat, max(id) as mx, max(match(body) against('alpha')) as s
 from cat_docs group by cat having s > 0 order by cat;
 
+-- #29065 P1: multiple DISTINCT aggregate MATCHes are NOT doc-level-intersection safe. Driving
+-- INNER-joins the alpha and beta streams by doc_id, demanding one document match BOTH; but the
+-- HAVING is satisfied when alpha and beta occur on DIFFERENT rows of the group. cat 10 (alpha on
+-- id 1, beta on id 2) satisfies it, yet the intersection is empty. Refused (20105) rather than
+-- silently dropping cat 10.
+create table md(id int primary key, cat int, body text);
+insert into md values (1,10,'alpha'),(2,10,'beta'),(3,20,'alpha'),(4,20,'alpha');
+create fulltext index mdft on md(body);
+select cat, max(match(body) against('alpha')) a, max(match(body) against('beta')) b
+from md group by cat having a > 0 and b > 0 order by cat;
+
+-- #29065 P1: an outer filter AFTER a WINDOW is NOT the AGG's HAVING. Harvesting `score > 0` here
+-- would drive the index below the AGG and drop the non-matching group before ROW_NUMBER() is
+-- computed, silently shifting rn. Refused (20105).
+create table wd(id int primary key, cat int, body text);
+insert into wd values (1,1,'nomatch'),(2,2,'alpha'),(3,3,'alpha');
+create fulltext index wdft on wd(body);
+select cat, score, rn from (
+  select cat, max(match(body) against('alpha')) score, row_number() over (order by cat) rn
+  from wd group by cat
+) q where score > 0 order by cat;
+
+-- Positive control: a REAL HAVING below the window still drives; ROW_NUMBER() runs over the
+-- matching groups only (group set is preserved) -> (cat 2, rn 1), (cat 3, rn 2).
+select cat, score, rn from (
+  select cat, max(match(body) against('alpha')) score, row_number() over (order by cat) rn
+  from wd group by cat having max(match(body) against('alpha')) > 0
+) q order by cat;
+
 drop database ft_agg_having;

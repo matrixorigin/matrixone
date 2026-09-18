@@ -375,6 +375,137 @@ func TestGetFullTextMatchFromAggHaving(t *testing.T) {
 	})
 }
 
+// #29065 P1: multiple DISTINCT aggregate MATCHes must NOT drive the index. applyJoinFullTextIndices
+// INNER-joins each driver's stream by doc_id, so driving `HAVING MAX(match(alpha))>0 AND
+// MAX(match(beta))>0` would demand ONE document match both patterns, silently dropping a group that
+// satisfies the HAVING with alpha on one row and beta on another. getFullTextMatchFromAggHaving must
+// collect no drivers (leaving the query at 20105) unless every aggregate candidate is the same MATCH.
+func TestFullTextAggHavingMultipleDistinctMatchesNotDriven(t *testing.T) {
+	builder, tableDef, scanTag, scanNode := aggHavingFixture(t)
+	alpha := makeFullTextMatchExpr("alpha", 0, tableDef, scanTag, []int32{2, 3})
+	beta := makeFullTextMatchExpr("beta", 0, tableDef, scanTag, []int32{2, 3})
+
+	const aggTag = 999
+	ftyp := types.T_float32.ToType()
+	aggCol := func(pos int32) *planpb.Expr {
+		return &planpb.Expr{Typ: makePlan2Type(&ftyp), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: aggTag, ColPos: pos}}}
+	}
+	cmp := func(op string, l, r *planpb.Expr) *planpb.Expr {
+		e, err := BindFuncExprImplByPlanExpr(context.Background(), op, []*planpb.Expr{l, r})
+		require.NoError(t, err)
+		return e
+	}
+	f0 := makePlan2Float64ConstExprWithType(0)
+
+	aggNode := &planpb.Node{
+		NodeType:    planpb.Node_AGG,
+		AggList:     []*planpb.Expr{ftAggFn("max", alpha), ftAggFn("max", beta)},
+		BindingTags: []int32{aggTag - 1, aggTag},
+	}
+	having := []*planpb.Expr{cmp("and", cmp(">", aggCol(0), f0), cmp(">", aggCol(1), f0))}
+
+	exprs, idxs := builder.getFullTextMatchFromAggHaving(having, aggNode, scanNode, nil)
+	require.Empty(t, exprs, "two distinct aggregate MATCHes are not doc-level-intersection safe")
+	require.Empty(t, idxs)
+
+	// A single unique MATCH repeated across aggregates/predicates still drives (one stream).
+	aggSame := &planpb.Node{
+		NodeType:    planpb.Node_AGG,
+		AggList:     []*planpb.Expr{ftAggFn("max", alpha), ftAggFn("sum", alpha)},
+		BindingTags: []int32{aggTag - 1, aggTag},
+	}
+	havingSame := []*planpb.Expr{cmp("and", cmp(">", aggCol(0), f0), cmp(">", aggCol(1), f0))}
+	exprsSame, _ := builder.getFullTextMatchFromAggHaving(havingSame, aggSame, scanNode, nil)
+	require.Len(t, exprsSame, 1, "the same MATCH across aggregates collapses to one driver")
+}
+
+// #29065 P1: a FILTER separated from the AGG by a cardinality/order/position-sensitive barrier
+// (WINDOW / FILL / PARTITION / a LIMIT node) is NOT that AGG's HAVING. resolveFullTextIndexPath must
+// not harvest it -- driving the index below the AGG from a post-window predicate would drop groups
+// before ROW_NUMBER etc. are computed and silently shift their output.
+func TestResolveFullTextIndexPathHavingBarrier(t *testing.T) {
+	newFilter := func(builder *QueryBuilder, ctx *BindContext, child int32) int32 {
+		ftyp := types.T_float32.ToType()
+		aggCol := &planpb.Expr{Typ: makePlan2Type(&ftyp), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}}}
+		pred, err := BindFuncExprImplByPlanExpr(context.Background(), ">", []*planpb.Expr{aggCol, makePlan2Float64ConstExprWithType(0)})
+		require.NoError(t, err)
+		return builder.appendNode(&planpb.Node{NodeType: planpb.Node_FILTER, Children: []int32{child}, FilterList: []*planpb.Expr{pred}}, ctx)
+	}
+	// build PROJECT over `mid(agg over scan)`, where mid() inserts the middle nodes above the AGG.
+	buildPath := func(mid func(b *QueryBuilder, c *BindContext, aggID int32) int32) *fullTextIndexPath {
+		builder := NewQueryBuilder(planpb.Query_SELECT, newFullTextJoinMockCompilerContext(), false, true)
+		ctx := NewBindContext(builder, nil)
+		tableDef := makeFullTextJoinTestTableDef("ft", true)
+		registerFullTextJoinRegularIndexTable(builder, tableDef.Indexes[0].IndexTableName)
+		scanTag := builder.genNewBindTag()
+		scanID := builder.appendNode(makeFullTextJoinTestScan(tableDef, scanTag, nil), ctx)
+		match := makeFullTextMatchExpr("hello", 0, tableDef, scanTag, []int32{2, 3})
+		groupTag := builder.genNewBindTag()
+		aggTag := builder.genNewBindTag()
+		aggID := builder.appendNode(&planpb.Node{
+			NodeType:    planpb.Node_AGG,
+			Children:    []int32{scanID},
+			AggList:     []*planpb.Expr{ftAggFn("max", match)},
+			GroupBy:     []*planpb.Expr{ftjColExpr(tableDef, scanTag, 1)},
+			BindingTags: []int32{groupTag, aggTag},
+		}, ctx)
+		top := mid(builder, ctx, aggID)
+		ftyp := types.T_float32.ToType()
+		projTag := builder.genNewBindTag()
+		projID := builder.appendNode(&planpb.Node{
+			NodeType:    planpb.Node_PROJECT,
+			Children:    []int32{top},
+			BindingTags: []int32{projTag},
+			ProjectList: []*planpb.Expr{{Typ: makePlan2Type(&ftyp), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: projTag, ColPos: 0}}}},
+		}, ctx)
+		return builder.resolveFullTextIndexPath(builder.qry.Nodes[projID])
+	}
+
+	t.Run("filter directly above agg is HAVING", func(t *testing.T) {
+		path := buildPath(func(b *QueryBuilder, c *BindContext, aggID int32) int32 { return newFilter(b, c, aggID) })
+		require.NotNil(t, path)
+		require.NotNil(t, path.havingNode, "a FILTER adjacent to the AGG is its HAVING")
+	})
+
+	t.Run("filter above WINDOW is not HAVING", func(t *testing.T) {
+		path := buildPath(func(b *QueryBuilder, c *BindContext, aggID int32) int32 {
+			win := b.appendNode(&planpb.Node{NodeType: planpb.Node_WINDOW, Children: []int32{aggID}, BindingTags: []int32{b.genNewBindTag()}}, c)
+			return newFilter(b, c, win)
+		})
+		require.NotNil(t, path)
+		require.Nil(t, path.havingNode, "a WINDOW between the FILTER and the AGG disqualifies the FILTER")
+	})
+
+	t.Run("filter above a LIMIT node is not HAVING", func(t *testing.T) {
+		path := buildPath(func(b *QueryBuilder, c *BindContext, aggID int32) int32 {
+			lim := b.appendNode(&planpb.Node{NodeType: planpb.Node_PROJECT, Children: []int32{aggID}, Limit: makePlan2Int64ConstExprWithType(5), BindingTags: []int32{b.genNewBindTag()}}, c)
+			return newFilter(b, c, lim)
+		})
+		require.NotNil(t, path)
+		require.Nil(t, path.havingNode, "a LIMIT between the FILTER and the AGG disqualifies the FILTER")
+	})
+
+	t.Run("real HAVING below a WINDOW is still found", func(t *testing.T) {
+		path := buildPath(func(b *QueryBuilder, c *BindContext, aggID int32) int32 {
+			filt := newFilter(b, c, aggID)
+			return b.appendNode(&planpb.Node{NodeType: planpb.Node_WINDOW, Children: []int32{filt}, BindingTags: []int32{b.genNewBindTag()}}, c)
+		})
+		require.NotNil(t, path)
+		require.NotNil(t, path.havingNode, "a FILTER adjacent to the AGG below a WINDOW is still the HAVING")
+	})
+}
+
+func TestIsFullTextAggHavingBarrier(t *testing.T) {
+	for _, nt := range []planpb.Node_NodeType{planpb.Node_WINDOW, planpb.Node_TIME_WINDOW, planpb.Node_FILL, planpb.Node_PARTITION} {
+		require.True(t, isFullTextAggHavingBarrier(&planpb.Node{NodeType: nt}), nt.String())
+	}
+	for _, nt := range []planpb.Node_NodeType{planpb.Node_PROJECT, planpb.Node_SORT, planpb.Node_FILTER, planpb.Node_AGG} {
+		require.False(t, isFullTextAggHavingBarrier(&planpb.Node{NodeType: nt}), nt.String())
+	}
+	require.True(t, isFullTextAggHavingBarrier(&planpb.Node{NodeType: planpb.Node_PROJECT, Limit: makePlan2Int64ConstExprWithType(5)}),
+		"any node carrying a LIMIT is a barrier")
+}
+
 func TestAggOutputInvariantToMatcherFilter(t *testing.T) {
 	builder, tableDef, scanTag, _ := aggHavingFixture(t)
 	match := makeFullTextMatchExpr("hello", 0, tableDef, scanTag, []int32{2, 3})

@@ -863,6 +863,14 @@ func (builder *QueryBuilder) resolveFullTextIndexPath(projNode *plan.Node) *full
 			havingNode = node
 			continue
 		}
+		// A cardinality/order/position-sensitive operator between a collected FILTER and the AGG
+		// means that FILTER runs AFTER the barrier and is NOT this AGG's HAVING. Driving the index
+		// below the AGG drops each group's non-matching rows before the barrier, which would
+		// silently change a window function's row numbers, a FILL, a PARTITION, or which rows a
+		// LIMIT keeps. Discard any FILTER collected above such a barrier (#29065).
+		if isFullTextAggHavingBarrier(node) {
+			havingNode = nil
+		}
 		if node.NodeType != plan.Node_AGG {
 			continue
 		}
@@ -871,6 +879,19 @@ func (builder *QueryBuilder) resolveFullTextIndexPath(projNode *plan.Node) *full
 		}
 	}
 	return nil
+}
+
+// isFullTextAggHavingBarrier reports whether a single-input node between the projection and the AGG
+// is cardinality/order/position-sensitive, so a FILTER sitting ABOVE it cannot be treated as the
+// AGG's HAVING for fulltext-index driving. Driving drops each group's non-matching rows before this
+// node, which would silently change a window function's output, a FILL, a PARTITION, or which rows a
+// LIMIT keeps.
+func isFullTextAggHavingBarrier(node *plan.Node) bool {
+	switch node.NodeType {
+	case plan.Node_WINDOW, plan.Node_TIME_WINDOW, plan.Node_FILL, plan.Node_PARTITION:
+		return true
+	}
+	return node.Limit != nil
 }
 
 func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {

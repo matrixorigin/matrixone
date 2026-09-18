@@ -2551,6 +2551,28 @@ func (builder *QueryBuilder) getFullTextMatchFromAggHaving(havingPreds []*plan.E
 		return nil, nil
 	}
 
+	// Multiple DISTINCT aggregate MATCHes are NOT result-preserving. applyJoinFullTextIndices
+	// INNER-joins each driver's index stream by doc_id, so driving would require a SINGLE document
+	// to match every pattern -- whereas `HAVING MAX(match(alpha))>0 AND MAX(match(beta))>0` only
+	// requires each pattern to occur on SOME (possibly different) row of the group. A group with
+	// one row matching alpha and another matching beta satisfies the HAVING but has an empty
+	// doc-id intersection, so the group would be silently dropped. Drive only when every aggregate
+	// candidate is the SAME MATCH; otherwise leave the query at 20105 (#29065).
+	var first *plan.Function
+	for _, cand := range candidates {
+		fn := cand.GetF()
+		if fn == nil {
+			continue
+		}
+		if first == nil {
+			first = fn
+			continue
+		}
+		if !builder.equalsFullTextMatchFunc(first, fn) {
+			return nil, nil
+		}
+	}
+
 	// Driving INNER-joins the scan to the matchers BEFORE aggregation, dropping every non-matching
 	// row from each group. That is result-preserving ONLY if no output depends on those rows: every
 	// aggregate must be a MAX/SUM of a driver match (whose value ignores an absent/0 relevance), and
