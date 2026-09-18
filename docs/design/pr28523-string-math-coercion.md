@@ -238,7 +238,10 @@ warning-aware/binary-aware casts instead of introducing new serialized string
 overload IDs. `validFunctionOverloadID` validates both function and overload
 indices, including negative and out-of-range values. This bounds check is a
 panic-safety rule, not a claim that all old and new nodes have identical
-semantics. No new protobuf or catalog format is introduced.
+semantics. Catalog format and function/overload identifiers are unchanged.
+SessionInfo adds an additive boolean protobuf field 18 to carry the explicit
+numeric-compatibility mode across process boundaries; older payloads omit it
+and therefore fail closed as strict.
 
 ## 3. Ownership and execution design
 
@@ -966,22 +969,23 @@ together. The focused prepared-owner planner race tests passed. CGo-aware
 issue-test packages. Exact durations and commands are retained in the local
 issue-to-PR evidence ledger.
 
-The focused distributed BVT
-`test/distributed/cases/function/func_math_string_numeric.test` passed twice
-at 118/118. Those two BVT runs used the existing test-built standalone service
-binary from the strict-mode implementation snapshot before the latest-main
-rebase; the runtime implementation paths were unchanged by the single
-non-overlapping main commit. A final-head `make build` was attempted but could
-not finish because the host temporary volume ran out of space (`no space left
-on device`); this is an environment limit, not a source compile diagnostic.
-Therefore no exact-final-binary build, remote CI run, PR-wide coverage result,
-or multi-CN runtime claim is made. The BVT evidence is supplemental to the
-exact-source Go and COM_STMT validation, not a substitute for it.
-
-Both BVT invocations used `-o`, which intentionally ignores result-set
-metadata. The checked-in fixture records the DECIMAL `TRUNCATE` result as
-`[3,5,1]`, value `1.0`; these runs do not establish an exact-head metadata
-comparison or a base-only metadata change, so neither is claimed.
+The latest local distributed BVT comparisons passed:
+`test/distributed/cases/function/func_string_format.test` at 276/276 and
+`test/distributed/cases/function/func_math_string_numeric.test` at 118/118.
+Both used `mo-tester -m run -n -g`; `-n` ignores result-set metadata. The
+FORMAT fixture now enables `MYSQL_NUMERIC_COMPATIBILITY` only around legacy
+numeric-prefix assertions, saves/restores the previous SQL mode, and leaves
+strict-default error cases intact. The result values were not changed.
+Therefore these passes establish SQL/result behavior, not result metadata.
+Both runs used the existing test-built standalone service binary from the
+strict-mode implementation snapshot before the latest-main rebase; the runtime
+implementation paths were unchanged by main's non-overlapping commit. A
+final-head `make build` was attempted but could not finish because the host
+temporary volume ran out of space (`no space left on device`); this is an
+environment limit, not a source compile diagnostic. Therefore no
+exact-final-binary build, remote CI run, PR-wide coverage result, or multi-CN
+runtime claim is made. The BVT evidence is supplemental to the exact-source Go
+and COM_STMT validation, not a substitute for it.
 
 The implementation is complete on this local candidate and does not wait for
 design approval, as requested. The approval record remains explicitly pending
@@ -999,7 +1003,7 @@ Scope/trigger: PR reviews 5199052257, 5214666396 and comment 5687377735; >500 pr
 Reviewer identity and role: historical GPT-6 Astra review of d56711fa5b429e5e6e52f64f603d2e853478edca against base 4ff27bb9b35c43c1b0961bb9a01bf8fc0b6a2171; any exact-head review decision is tracked separately from maintainer design approval
 Review timestamp: exact final-candidate Astra Medium review is tracked separately from maintainer design approval, which remains pending
 Decision: DRAFT / AWAITING MAINTAINER APPROVAL
-Validation evidence: historical revisions 9-14 remain recorded above. Revision 15 records clean rebase, exact-source Go packages, focused planner race tests, both COM_STMT regressions, CGo-aware vet, and two 118/118 BVT comparisons using the pre-rebase strict-mode binary. Exact-final-head build was blocked by host temporary-volume capacity; no remote CI or PR-wide coverage pass is claimed.
+Validation evidence: historical revisions 9-14 remain recorded above. Revision 15 records clean rebase, exact-source Go packages, focused planner race tests, both COM_STMT regressions, CGo-aware vet, and the latest 276/276 FORMAT plus 118/118 numeric-string BVT comparisons using the pre-rebase strict-mode binary with result metadata ignored via `-n`. Exact-final-head build was blocked by host temporary-volume capacity; no remote CI or PR-wide coverage pass is claimed.
 User-selected compatibility contract for this revision: default/empty/unset/nil is strict; only explicit MYSQL_NUMERIC_COMPATIBILITY selects MySQL numeric-prefix conversion; MATRIXONE_NATIVE is always strict and wins if both are present; the new token is absent from the existing default SQL mode. This design decision was selected by the user and implementation proceeds on that basis; it is not maintainer approval. Remaining decisions proposed for maintainer acceptance: retain strict INT64 precision controls (no general integer-prefix widening); prefer correctness over function-wide zonemap pruning; retain the bounded per-parameter source scan with its measured owner-boundary traversal cost; approve the revision-9 argument-owner boundaries and no-inherited-role fast path
 Evidence links: [PR #28523](https://github.com/matrixorigin/matrixone/pull/28523); [historical-head CI run 35197284882](https://github.com/matrixorigin/matrixone/actions/runs/35197284882); the PR/evidence ledger is the record for commit replay, review, CI, and BVT; current local post-rebase evidence is recorded above
 Implementation deviations requiring follow-up: MOD native arithmetic widening regression fixed in 8fc4d5250; strict INT64 precision acceptance, zonemap-pruning decision, and scan-cost acceptance remain pending
