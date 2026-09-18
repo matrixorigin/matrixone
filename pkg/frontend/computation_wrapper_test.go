@@ -2063,6 +2063,44 @@ func TestPreparedParamValuesPreservesTemporalScale(t *testing.T) {
 	}
 }
 
+func TestPreparedParamValuesScopesTemporalRuntimeToConsumer(t *testing.T) {
+	_, prepareStmt, cw, _ := newPreparedExecuteEnvForSQL(t, 222, "select ?, ?")
+	defer prepareStmt.Close()
+
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("2024-01-02"), false, cw.proc.Mp()))
+	require.NoError(t, vector.AppendBytes(params, []byte("2024-01-03"), false, cw.proc.Mp()))
+	cw.proc.SetPrepareParamsWithMeta(
+		params, []bool{false, false},
+		[]vector.PrepareParamKind{vector.PrepareParamNone, vector.PrepareParamNone})
+	defer func() {
+		cw.proc.SetPrepareParams(nil)
+		params.Free(cw.proc.Mp())
+	}()
+
+	values, err := preparedParamValues(
+		cw.proc,
+		[]byte{
+			byte(defines.MYSQL_TYPE_DATE), 0,
+			byte(defines.MYSQL_TYPE_DATE), 0,
+		},
+		[]int32{0}, // only parameter 0 is consumed by INET_NTOA
+		[]int32{1}, // only parameter 1 needs the temporal numeric domain
+	)
+	require.NoError(t, err)
+	require.Len(t, values, 2)
+
+	inetParam := values[0].(plan2.ParamValue)
+	require.True(t, inetParam.HasInetNtoaSourceType)
+	require.Equal(t, types.T_date.ToType(), inetParam.InetNtoaSourceType)
+	require.False(t, inetParam.HasRuntimeType)
+
+	numericParam := values[1].(plan2.ParamValue)
+	require.False(t, numericParam.HasInetNtoaSourceType)
+	require.True(t, numericParam.HasRuntimeType)
+	require.Equal(t, types.T_date.ToType(), numericParam.RuntimeType)
+}
+
 func TestCOMStmtInetNtoaPreservesTemporalScale(t *testing.T) {
 	const query = "select inet_ntoa(?)"
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(t, 217, query)

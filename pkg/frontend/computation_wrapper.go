@@ -1222,6 +1222,12 @@ func binaryProtocolPrepareParamType(
 	value []byte,
 ) (types.Type, bool) {
 	runtimeType, _, _, _, ok := binaryProtocolPrepareParamDomains(mysqlType, isUnsigned, string(value))
+	// Temporal packet types are concrete protocol domains, but they must not
+	// become a statement-wide runtime category.  Consumers such as INET_NTOA
+	// receive the concrete source through their local hint instead.
+	if binaryProtocolTemporalMysqlType(mysqlType) {
+		runtimeType = types.T_text.ToType()
+	}
 	return runtimeType, ok
 }
 
@@ -1236,8 +1242,23 @@ func binaryProtocolPrepareParamCategoryType(
 	if mysqlType == defines.MYSQL_TYPE_DECIMAL || mysqlType == defines.MYSQL_TYPE_NEWDECIMAL {
 		return types.T_decimal256.ToType(), true
 	}
+	// Category admission must retain temporal protocol domains.  The execute
+	// path uses this OID-only view to decide whether a cached expression needs
+	// rebinding (for example, a DATE packet supplied to an integer-only
+	// function).  The concrete domain is kept out of ParamValue.RuntimeType
+	// below, so it cannot leak into unrelated consumers such as INET_NTOA.
 	runtimeType, _, _, _, ok := binaryProtocolPrepareParamDomains(mysqlType, isUnsigned, "")
 	return runtimeType, ok
+}
+
+func binaryProtocolTemporalMysqlType(mysqlType defines.MysqlType) bool {
+	switch mysqlType {
+	case defines.MYSQL_TYPE_DATE, defines.MYSQL_TYPE_TIME,
+		defines.MYSQL_TYPE_DATETIME, defines.MYSQL_TYPE_TIMESTAMP:
+		return true
+	default:
+		return false
+	}
 }
 
 func binaryProtocolTemporalParamType(oid types.T, value string) types.Type {
@@ -1292,17 +1313,13 @@ func binaryProtocolPrepareParamDomains(
 		normalized, visible, canonical, valid := plan2.PreparedDecimalRuntimeDomains(value)
 		return normalized, visible, canonical, valid, valid
 	case defines.MYSQL_TYPE_DATE:
-		// Temporal wire values stay in the generic text category for the
-		// prepared plan.  A concrete temporal type is consumer-specific (for
-		// example INET_NTOA); publishing it as RuntimeType would make every
-		// other expression in the statement inherit the protocol source domain.
-		return types.T_text.ToType(), types.Type{}, "", false, true
+		return types.T_date.ToType(), types.Type{}, "", false, true
 	case defines.MYSQL_TYPE_TIME:
-		return types.T_text.ToType(), types.Type{}, "", false, true
+		return binaryProtocolTemporalParamType(types.T_time, value), types.Type{}, "", false, true
 	case defines.MYSQL_TYPE_DATETIME:
-		return types.T_text.ToType(), types.Type{}, "", false, true
+		return binaryProtocolTemporalParamType(types.T_datetime, value), types.Type{}, "", false, true
 	case defines.MYSQL_TYPE_TIMESTAMP:
-		return types.T_text.ToType(), types.Type{}, "", false, true
+		return binaryProtocolTemporalParamType(types.T_timestamp, value), types.Type{}, "", false, true
 	case defines.MYSQL_TYPE_NULL:
 		// Keep NULL on the prepared plan's original domain.  The next execute
 		// packet may carry a concrete type and will specialize it then.
@@ -1781,7 +1798,9 @@ func initExecuteStmtParamWithResolverInSession(
 			runtimeNumericPrefixCandidate || runtimeNumericOverloadCandidate || runtimeDirectResultCandidate
 		if needsRuntimeParamVals {
 			cwft.paramVals, err = preparedParamValues(
-				cwft.proc, prepareStmt.ParamTypes, prepareStmt.inetNtoaParamPositions)
+				cwft.proc, prepareStmt.ParamTypes,
+				prepareStmt.inetNtoaParamPositions,
+				prepareStmt.numericOverloadParamPositions)
 			if err != nil {
 				return nil, nil, nil, originSQL, false, err
 			}
@@ -2621,14 +2640,18 @@ func preparedDDLNeedsCatalogRefresh(stmt tree.Statement) bool {
 	}
 }
 
-func preparedParamValues(proc *process.Process, paramTypes []byte, inetNtoaPositionsArg ...[]int32) ([]any, error) {
+func preparedParamValues(proc *process.Process, paramTypes []byte, positionArgs ...[]int32) ([]any, error) {
 	params := proc.GetPrepareParams()
 	if params == nil || params.Length() == 0 {
 		return nil, nil
 	}
 	var inetNtoaPositions []int32
-	if len(inetNtoaPositionsArg) > 0 {
-		inetNtoaPositions = inetNtoaPositionsArg[0]
+	var temporalRuntimePositions []int32
+	if len(positionArgs) > 0 {
+		inetNtoaPositions = positionArgs[0]
+	}
+	if len(positionArgs) > 1 {
+		temporalRuntimePositions = positionArgs[1]
 	}
 	values := make([]any, params.Length())
 	for i := range values {
@@ -2662,7 +2685,9 @@ func preparedParamValues(proc *process.Process, paramTypes []byte, inetNtoaPosit
 		if i*2+1 < len(paramTypes) {
 			mysqlType := defines.MysqlType(paramTypes[i*2])
 			isUnsigned := paramTypes[i*2+1]&0x80 != 0
-			if _, relevant := slices.BinarySearch(inetNtoaPositions, int32(i)); relevant {
+			_, inetNtoaParam := slices.BinarySearch(inetNtoaPositions, int32(i))
+			_, temporalRuntimeParam := slices.BinarySearch(temporalRuntimePositions, int32(i))
+			if inetNtoaParam {
 				if sourceType, sourceTypeOK := binaryProtocolInetNtoaSourceType(
 					mysqlType, paramValue.Value.(string)); sourceTypeOK {
 					paramValue.InetNtoaSourceType = sourceType
@@ -2679,7 +2704,13 @@ func preparedParamValues(proc *process.Process, paramTypes []byte, inetNtoaPosit
 				paramValue.HasRuntimeType = true
 			} else if runtimeType, directResultType, materializedValue, hasDirectResultType, ok :=
 				binaryProtocolPrepareParamDomains(mysqlType, isUnsigned, paramValue.Value.(string)); ok {
-				if runtimeType.Oid != types.T_text {
+				// Temporal domains are statement-local only for consumers whose
+				// numeric contract requires the wire domain (for example the
+				// private integer cast used by SUBSTRING_INDEX). INET_NTOA gets
+				// its temporal source through the position-local hint instead;
+				// unrelated parameters keep the generic text transport domain.
+				if runtimeType.Oid != types.T_text &&
+					(!binaryProtocolTemporalMysqlType(mysqlType) || temporalRuntimeParam) {
 					paramValue.RuntimeType = runtimeType
 					paramValue.HasRuntimeType = true
 				}

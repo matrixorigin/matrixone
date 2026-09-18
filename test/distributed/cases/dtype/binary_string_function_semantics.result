@@ -238,6 +238,9 @@ hex(substring(left(if(false, X'ff', '你好'), 2), 2)) as selected_text_tail,
 hex(substring(left(if(true, X'e4bda0e5a5bd', '你好'), 2), 2, 1)) as selected_binary;
 ➤ selected_text[12,16,0]  ¦  selected_text_tail[12,16,0]  ¦  selected_binary[12,2,0]  𝄀
 E5A5BD  ¦  E5A5BD  ¦  BD
+with mixed_domain as (
+select if(false, X'ff', '你好') as value
+)
 select hex(left(value, 1)), char_length(value)
 from mixed_domain;
 ➤ hex(left(value, 1))[12,16,0]  ¦  char_length(value)[-5,64,0]  𝄀
