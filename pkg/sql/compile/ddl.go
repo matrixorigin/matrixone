@@ -7019,6 +7019,10 @@ func (c *Compile) checkPitrGranularity(
 				for i := 0; i < rows; i++ {
 					dbName := cols[3].GetStringAt(i)
 					tableName := cols[1].GetStringAt(i)
+					if !cdc.CDCSourceNameMatches(dbName, pt.Source.Database, pts.SourceCaseMode) ||
+						!cdc.CDCSourceNameMatches(tableName, pt.Source.Table, pts.SourceCaseMode) {
+						continue
+					}
 					if exclude != "" {
 						matched, matchErr := regexp.MatchString(exclude, dbName+"."+tableName)
 						if matchErr != nil {
@@ -7063,6 +7067,10 @@ func (c *Compile) checkPitrGranularity(
 		var validationErr error
 		res.ReadRows(func(rows int, cols []*vector.Vector) bool {
 			for i := 0; i < rows; i++ {
+				if !cdc.CDCSourceNameMatches(cols[3].GetStringAt(i), pt.Source.Database, pts.SourceCaseMode) ||
+					!cdc.CDCSourceNameMatches(cols[1].GetStringAt(i), pt.Source.Table, pts.SourceCaseMode) {
+					continue
+				}
 				hasForeignKey, decodeErr := cdc.TableHasForeignKeyConstraint(cols[6].GetBytesAt(i))
 				if decodeErr != nil {
 					validationErr = decodeErr

@@ -689,6 +689,13 @@ func TestNormalizeCDCSourcePatternCase(t *testing.T) {
 		CDCSourceIdentifierKey("Σdb", 2),
 		CDCSourceIdentifierKey("ςdb", 2),
 		"mode-2 identifier keys must not use Unicode simple case folding")
+
+	malformed := string([]byte{'1', 0xe9, 'A'})
+	assert.Equal(t, string([]byte{'1', 0xe9, 'a'}), CDCSourceIdentifierKey(malformed, 2))
+	assert.True(t, CDCSourceNameNeedsCatalogSuperset(malformed, 2))
+	assert.False(t, CDCSourceNameNeedsCatalogSuperset(malformed, 1))
+	assert.True(t, CDCSourceNameMatches(string([]byte{'1', 0xe9, 'a'}), malformed, 2))
+	assert.False(t, CDCSourceNameMatches("ςdb", "Σdb", 2))
 }
 
 func TestNormalizeCDCSourcePatternCaseRejectsDuplicateNormalizedSources(t *testing.T) {

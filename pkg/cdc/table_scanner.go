@@ -728,6 +728,10 @@ func (s *TableDetector) scanTable() error {
 			dbNames = "*"
 			break
 		}
+		if CDCSourceNameNeedsCatalogSuperset(dbName, 2) {
+			dbNames = "*"
+			break
+		}
 		// The detector serves tasks with different persisted case modes. Scan a
 		// case-insensitive candidate superset; each task applies its own mode in
 		// matchAnyPattern before it can create a pipeline.
@@ -739,6 +743,10 @@ func (s *TableDetector) scanTable() error {
 	tableNamesSlice := make([]string, 0, len(s.SubscribedTableNames))
 	for tableName := range s.SubscribedTableNames {
 		if tableName == "*" {
+			tableNames = "*"
+			break
+		}
+		if CDCSourceNameNeedsCatalogSuperset(tableName, 2) {
 			tableNames = "*"
 			break
 		}

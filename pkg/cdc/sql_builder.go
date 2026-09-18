@@ -1327,16 +1327,28 @@ func CollectCDCSourceCandidateSQL(accountID uint32, dbName, tableName string, so
 	dbNames := "*"
 	if dbName != CDCPitrGranularity_All {
 		if caseInsensitive {
-			dbName = CDCSourceIdentifierKey(dbName, sourceCaseMode[0])
+			if CDCSourceNameNeedsCatalogSuperset(dbName, sourceCaseMode[0]) {
+				dbName = CDCPitrGranularity_All
+			} else {
+				dbName = CDCSourceIdentifierKey(dbName, sourceCaseMode[0])
+			}
 		}
-		dbNames = AddSingleQuotesJoin([]string{dbName})
+		if dbName != CDCPitrGranularity_All {
+			dbNames = AddSingleQuotesJoin([]string{dbName})
+		}
 	}
 	tableNames := "*"
 	if tableName != CDCPitrGranularity_All {
 		if caseInsensitive {
-			tableName = CDCSourceIdentifierKey(tableName, sourceCaseMode[0])
+			if CDCSourceNameNeedsCatalogSuperset(tableName, sourceCaseMode[0]) {
+				tableName = CDCPitrGranularity_All
+			} else {
+				tableName = CDCSourceIdentifierKey(tableName, sourceCaseMode[0])
+			}
 		}
-		tableNames = AddSingleQuotesJoin([]string{tableName})
+		if tableName != CDCPitrGranularity_All {
+			tableNames = AddSingleQuotesJoin([]string{tableName})
+		}
 	}
 	return CDCSQLBuilder.collectTableInfoSQL(
 		strconv.FormatUint(uint64(accountID), 10), dbNames, tableNames, caseInsensitive)

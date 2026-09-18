@@ -193,43 +193,60 @@ func checkCDCSourcePrimaryKey(ctx context.Context, bh BackgroundExec, dbName, ta
 	if len(results) == 0 {
 		return moerr.NewInternalErrorf(ctx, "source table %s.%s has no primary key; CDC does not support tables without a user-visible primary key", dbName, tableName)
 	}
+	caseMode := int64(0)
+	if len(sourceCaseMode) > 0 {
+		caseMode = sourceCaseMode[0]
+	}
 	for _, result := range results {
-		// A concrete-table candidate query returns at most one row. Keep the
-		// result-set iteration so empty result sets are skipped without using a
-		// loop whose body always returns on its first iteration.
+		// A concrete-table candidate query normally returns one row. A malformed
+		// mode-2 identifier deliberately uses a broader catalog candidate set,
+		// so filter every returned row with the same local identifier policy.
 		if result.GetRowCount() == 0 {
 			continue
 		}
-		row := uint64(0)
-		constraintIsNull, err := result.ColumnIsNull(ctx, row, 6)
-		if err != nil {
-			return err
-		}
-		var constraintBytes []byte
-		if !constraintIsNull {
-			constraint, err := result.GetString(ctx, row, 6)
+		for row := uint64(0); row < result.GetRowCount(); row++ {
+			candidateDB, err := result.GetString(ctx, row, 3)
 			if err != nil {
 				return err
 			}
-			constraintBytes = []byte(constraint)
-		}
-		hasForeignKey, err := cdc.TableHasForeignKeyConstraint(constraintBytes)
-		if err != nil {
-			return err
-		}
-		if hasForeignKey {
-			// Concrete sources name exactly one table. TableDetector skips FK
-			// children, so admission must accept this same non-source.
+			candidateTable, err := result.GetString(ctx, row, 1)
+			if err != nil {
+				return err
+			}
+			if !cdc.CDCSourceNameMatches(candidateDB, dbName, caseMode) ||
+				!cdc.CDCSourceNameMatches(candidateTable, tableName, caseMode) {
+				continue
+			}
+			constraintIsNull, err := result.ColumnIsNull(ctx, row, 6)
+			if err != nil {
+				return err
+			}
+			var constraintBytes []byte
+			if !constraintIsNull {
+				constraint, err := result.GetString(ctx, row, 6)
+				if err != nil {
+					return err
+				}
+				constraintBytes = []byte(constraint)
+			}
+			hasForeignKey, err := cdc.TableHasForeignKeyConstraint(constraintBytes)
+			if err != nil {
+				return err
+			}
+			if hasForeignKey {
+				// Concrete sources name exactly one table. TableDetector skips FK
+				// children, so admission must accept this same non-source.
+				return nil
+			}
+			hasUserPK, err := result.GetUint64(ctx, row, 7)
+			if err != nil {
+				return err
+			}
+			if hasUserPK == 0 {
+				return moerr.NewInternalErrorf(ctx, "source table %s.%s has no primary key; CDC does not support tables without a user-visible primary key", dbName, tableName)
+			}
 			return nil
 		}
-		hasUserPK, err := result.GetUint64(ctx, row, 7)
-		if err != nil {
-			return err
-		}
-		if hasUserPK == 0 {
-			return moerr.NewInternalErrorf(ctx, "source table %s.%s has no primary key; CDC does not support tables without a user-visible primary key", dbName, tableName)
-		}
-		return nil
 	}
 	return moerr.NewInternalErrorf(ctx, "source table %s.%s has no primary key; CDC does not support tables without a user-visible primary key", dbName, tableName)
 }
@@ -287,6 +304,10 @@ var CDCCheckPitrGranularityWithExclude = func(
 						tableName, err := result.GetString(ctx, row, 1)
 						if err != nil {
 							return err
+						}
+						if !cdc.CDCSourceNameMatches(dbName, pt.Source.Database, pts.SourceCaseMode) ||
+							!cdc.CDCSourceNameMatches(tableName, pt.Source.Table, pts.SourceCaseMode) {
+							continue
 						}
 						if exclude != "" {
 							matched, err := regexp.MatchString(exclude, dbName+"."+tableName)

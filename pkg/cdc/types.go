@@ -25,6 +25,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -857,6 +858,30 @@ func NormalizeCDCSourcePatternCase(pts *PatternTuples, lowerCaseTableNames int64
 // identifier policy (for example, Greek sigma forms).
 func CDCSourceIdentifierKey(name string, lowerCaseTableNames int64) string {
 	return tree.NewCStr(name, lowerCaseTableNames).Compare()
+}
+
+// CDCSourceNameMatches applies the persisted source identifier policy to a
+// catalog name. Keep all CDC admission and scanner consumers on this helper so
+// a catalog candidate superset cannot become a source merely because it shares
+// a different Unicode case-folding relation.
+func CDCSourceNameMatches(name, pattern string, lowerCaseTableNames int64) bool {
+	if pattern == CDCPitrGranularity_All {
+		return true
+	}
+	if lowerCaseTableNames == 2 {
+		return CDCSourceIdentifierKey(name, lowerCaseTableNames) ==
+			CDCSourceIdentifierKey(pattern, lowerCaseTableNames)
+	}
+	return name == pattern
+}
+
+// CDCSourceNameNeedsCatalogSuperset reports whether SQL lower() cannot safely
+// prefilter this mode-2 identifier. The parser preserves malformed UTF-8 bytes
+// from supported single-byte client encodings, whereas SQL lower() replaces
+// those bytes. Such names must be matched locally after an unfiltered catalog
+// scan.
+func CDCSourceNameNeedsCatalogSuperset(name string, lowerCaseTableNames int64) bool {
+	return lowerCaseTableNames == 2 && !utf8.ValidString(name)
 }
 
 func (pts *PatternTuples) String() string {
