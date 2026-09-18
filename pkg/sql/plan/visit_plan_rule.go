@@ -1752,6 +1752,8 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 		rewritten, err = rule.rebindIntegerArgumentCast(e)
 	} else if _, preserve := rule.preserveRoots[e]; preserve {
 		rewritten, err = rule.applyExprPreservingRoot(e)
+	} else if _, directAssignment := directIntegerAssignmentParam(e); directAssignment {
+		rewritten, err = rule.applyExprPreservingRoot(e)
 	} else {
 		rewritten, err = rule.applyExpr(e)
 	}
@@ -1821,6 +1823,55 @@ func (rule *ResetParamRefRule) NormalizePreparedLockRows(rewritten *Expr, target
 func (rule *ResetParamRefRule) applyExprPreservingRoot(e *plan.Expr) (*plan.Expr, error) {
 	if e == nil {
 		return nil, nil
+	}
+	// The writer's integer type stays fixed, but a directly assigned numeric
+	// parameter must not be interpreted as TEXT merely because of transport.
+	// Do not reinterpret string parameters or descend through user expressions.
+	if pos, ok := directIntegerAssignmentParam(e); ok {
+		if pos < len(rule.paramValues) {
+			if param, ok := rule.paramValues[pos].(ParamValue); ok &&
+				((param.IsBinaryProtocol && (!param.HasRuntimeType || param.RuntimeType.Oid.IsMySQLString())) ||
+					(param.HasSourceType && param.SourceType.Oid.IsMySQLString())) {
+				return e, nil
+			}
+		}
+		if typ, known := rule.runtimeParamType(pos); known && typ.IsNumeric() {
+			if source, bound, err := rule.typedRuntimeParamExpr(pos); err != nil {
+				return nil, err
+			} else if bound {
+				rule.specialized = true
+				return forceAssignmentCastExprWithName(rule.ctx, source, e.Typ, e.GetF().Func.GetObjName())
+			}
+		}
+		// A textual marker remains parameterized: generic parameter replacement
+		// may infer numeric-prefix types for other consumers of the same marker.
+		return e, nil
+	}
+	// A sibling direct assignment marker must keep its runtime vector metadata
+	// (notably PrepareParamKind for BIT). Replacing it with a TEXT literal while
+	// another assignment triggers specialization changes numeric values to bytes.
+	if fn := e.GetF(); fn != nil && len(fn.Args) == 2 && !types.T(e.Typ.Id).IsInteger() {
+		switch fn.Func.GetObjName() {
+		case "cast", "cast_strict", "cast_assign", "cast_ignore":
+			if param := fn.Args[0].GetP(); param != nil {
+				position := int(param.Pos)
+				if position >= 0 && position < len(rule.paramValues) {
+					if value, ok := rule.paramValues[position].(ParamValue); ok &&
+						(value.PrepareParamKind != vector.PrepareParamNone ||
+							(value.HasSourceType && value.SourceType.IsNumeric()) ||
+							(value.HasRuntimeType && value.RuntimeType.IsNumeric())) {
+						return e, nil
+					}
+				}
+				bound, err := rule.ApplyExpr(fn.Args[0])
+				if err != nil {
+					return nil, err
+				}
+				rule.retainRuntimeParamRef(int(param.Pos), bound)
+				fn.Args[0] = bound
+				return e, nil
+			}
+		}
 	}
 	switch exprImpl := e.Expr.(type) {
 	case *plan.Expr_P:
