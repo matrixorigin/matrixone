@@ -231,6 +231,7 @@ message PreInsert {
   int32 target_row_id_col = 16;
   bool track_auto_increment_generated = 17;
   int32 auto_increment_generated_column = 18;
+  bool preserve_input = 19;
 }
 
 message PostDml {

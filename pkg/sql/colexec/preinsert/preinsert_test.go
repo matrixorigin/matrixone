@@ -171,6 +171,60 @@ func TestPreInsertExpandsConstVectorToBatchRowCount(t *testing.T) {
 	arg.Free(proc, false, nil)
 }
 
+func TestPreInsertPreserveInputKeepsRouteAfterAutoKeyAllocation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	incrService := mock_frontend.NewMockAutoIncrementService(ctrl)
+	incrService.EXPECT().InsertValues(
+		gomock.Any(), uint64(100), gomock.Any(), txnOperator, gomock.Any(), 1, int64(1),
+	).DoAndReturn(func(_ context.Context, _ uint64, _ uint32, _ client.TxnOperator, vecs []*vector.Vector, _ int, _ int64) (uint64, error) {
+		require.Len(t, vecs, 1, "PRE_INSERT must allocate only the stored fake_pk column")
+		require.NoError(t, vector.SetFixedAtNoTypeCheck(vecs[0], 0, int64(111)))
+		return 111, nil
+	})
+
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	proc.Base.TxnOperator = txnOperator
+	proc.Base.IncrService = incrService
+
+	arg := &PreInsert{
+		HasAutoCol:    true,
+		PreserveInput: true,
+		TableDef: &plan.TableDef{
+			Name:        "fulltext_index",
+			TblId:       100,
+			IsTemporary: true,
+			Cols: []*plan.ColDef{{
+				Name: catalog.FakePrimaryKeyColName,
+				Typ:  i32typ,
+			}},
+			Pkey: &plan.PrimaryKeyDef{PkeyColName: catalog.FakePrimaryKeyColName},
+		},
+		Attrs:             []string{catalog.FakePrimaryKeyColName},
+		EstimatedRowCount: 1,
+		ctr:               container{canFreeVecIdx: make(map[int]bool)},
+	}
+	arg.ctr.tblId = arg.TableDef.TblId
+
+	input := batch.NewWithSize(2)
+	input.Vecs[0] = testutil.MakeInt64Vector([]int64{0}, nil, proc.Mp())
+	input.Vecs[1] = testutil.MakeInt32Vector([]int32{1}, nil, proc.Mp())
+	input.SetRowCount(1)
+	defer input.Clean(proc.Mp())
+
+	require.NoError(t, arg.constructColBuf(proc, input, true))
+	require.Len(t, arg.ctr.buf.Vecs, 2)
+	arg.ctr.buf.SetRowCount(1)
+	require.NoError(t, genAutoIncrCol(arg.ctr.buf, proc, arg))
+	require.Equal(t, int64(111), vector.GetFixedAtNoTypeCheck[int64](arg.ctr.buf.Vecs[0], 0))
+	require.Equal(t, int32(1), vector.GetFixedAtNoTypeCheck[int32](arg.ctr.buf.Vecs[1], 0),
+		"the partition route must survive PRE_INSERT and remain outside stored columns")
+	arg.Free(proc, false, nil)
+}
+
 func TestPreInsertNullCheck(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
