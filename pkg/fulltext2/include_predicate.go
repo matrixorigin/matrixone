@@ -81,7 +81,7 @@ type compiledIncludePred struct {
 	col        int
 	kind       includeCmpKind
 	isStr      bool
-	padSpace   bool     // CHAR column: compare with SQL pad-space semantics (trailing spaces ignored)
+	charTrim   bool     // CHAR column: compare with MO's CHAR semantics (trailing ASCII spaces trimmed)
 	isUnsigned bool     // uint64/bit column: compare as uint64 (int64 wraps values above MaxInt64)
 	ints       []int64  // signed integer-column operands (all int types + uint8/16/32, which fit int64)
 	uints      []uint64 // unsigned-64 column operands
@@ -129,11 +129,12 @@ func compileIncludePredicates(specJSON []byte, includeTypes []int32, pkType int3
 		unsigned := colType == int32(types.T_uint64) || colType == int32(types.T_bit)
 		cp := compiledIncludePred{
 			col: p.Col, kind: kind, isStr: isVarlenaIncludeType(colType), isUnsigned: unsigned,
-			// A CHAR INCLUDE column compares pad-space (trailing spaces ignored), matching the base
-			// table's regular-column semantics. The primary key is EXCLUDED: MO's base pk lookup is
-			// byte-exact for CHAR (a serialized-key compare), so a CHAR pk predicate must stay
-			// byte-exact here too to return the same rows as the base table. varchar is byte-exact.
-			padSpace: colType == int32(types.T_char) && p.Col != IncludePredPkCol,
+			// A CHAR INCLUDE column compares with MO's CHAR semantics (trailing ASCII spaces
+			// trimmed), matching the base table's regular-column comparators. The primary key is
+			// EXCLUDED: MO's base pk lookup is byte-exact for CHAR (a serialized-key compare), so a
+			// CHAR pk predicate must stay byte-exact here too to return the same rows. varchar is
+			// byte-exact.
+			charTrim: colType == int32(types.T_char) && p.Col != IncludePredPkCol,
 		}
 		// Gather the op's operands from the shape-appropriate field(s).
 		var operands []any
@@ -213,35 +214,19 @@ func isVarlenaIncludeType(t int32) bool {
 	}
 }
 
-// padSpaceCompare compares a and b under SQL CHAR pad-space semantics: the shorter operand is
-// treated as if right-padded with spaces to the other's length, so trailing spaces are not
-// significant ('a' == 'a  ') and ordering pads with 0x20. Returns -1, 0, or 1 like bytes.Compare.
-// This is the exact SQL definition -- NOT rtrim-then-compare, which disagrees for trailing bytes
-// below space (e.g. a tab sorts before a space).
-func padSpaceCompare(a, b []byte) int {
-	n := len(a)
-	if len(b) > n {
-		n = len(b)
-	}
-	for i := 0; i < n; i++ {
-		ca, cb := byte(' '), byte(' ')
-		if i < len(a) {
-			ca = a[i]
-		}
-		if i < len(b) {
-			cb = b[i]
-		}
-		if ca != cb {
-			if ca < cb {
-				return -1
-			}
-			return 1
-		}
-	}
-	return 0
+// charTrimCompare compares a and b with MatrixOne's CHAR semantics: trailing ASCII spaces are
+// trimmed from each operand, then the bytes are compared. It matches the ordinary T_char comparators
+// EXACTLY -- func_compare.go and operator_between.go both do bytes.Compare(bytes.TrimRight(x, " "),
+// bytes.TrimRight(y, " ")) -- so a pushed CHAR predicate admits precisely the rows the base table
+// would. NOTE: MO trims, it does NOT virtually space-pad; a trailing byte below space (e.g. a tab)
+// therefore sorts AFTER a plain value ('a\t' > 'a'), which a padding comparator would get wrong.
+func charTrimCompare(a, b []byte) int {
+	return bytes.Compare(bytes.TrimRight(a, " "), bytes.TrimRight(b, " "))
 }
 
-func padSpaceEqual(a, b []byte) bool { return padSpaceCompare(a, b) == 0 }
+func charTrimEqual(a, b []byte) bool {
+	return bytes.Equal(bytes.TrimRight(a, " "), bytes.TrimRight(b, " "))
+}
 
 // includeOperandUint64 extracts a uint64 operand from a decoded JSON value, for uint64/bit
 // columns whose values can exceed MaxInt64 (where includeOperandInt64 would fail or saturate).
@@ -335,14 +320,14 @@ func (p *compiledIncludePred) test(v any, isNull bool) bool {
 	}
 	if p.isStr {
 		b := includeBytes(v)
-		// CHAR uses SQL pad-space comparison (operands compared as if right-padded with spaces to
-		// equal length, so trailing spaces are ignored); varchar is byte-exact. Prefix is byte
-		// HasPrefix for both -- a LIKE 'x%' prefix matches the stored value regardless of padding.
+		// CHAR compares with MO's semantics (trailing ASCII spaces trimmed from both operands, then
+		// bytes.Compare -- matching func_compare.go / operator_between.go so the pushed predicate
+		// agrees with the base table); varchar is byte-exact. Prefix is byte HasPrefix for both.
 		strEqual := bytes.Equal
 		strCompare := bytes.Compare
-		if p.padSpace {
-			strEqual = padSpaceEqual
-			strCompare = padSpaceCompare
+		if p.charTrim {
+			strEqual = charTrimEqual
+			strCompare = charTrimCompare
 		}
 		switch p.kind {
 		case incEq:

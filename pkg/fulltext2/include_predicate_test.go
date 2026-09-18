@@ -210,21 +210,26 @@ func TestResultCarriesInclude(t *testing.T) {
 	require.Nil(t, res[0].Include)
 }
 
-func TestPadSpaceCompare(t *testing.T) {
-	require.Equal(t, 0, padSpaceCompare([]byte("a"), []byte("a  ")), "trailing spaces ignored")
-	require.Equal(t, 0, padSpaceCompare([]byte("a "), []byte("a")))
-	require.Equal(t, 0, padSpaceCompare(nil, []byte("   ")), "empty vs all-spaces are equal")
-	require.Equal(t, 0, padSpaceCompare([]byte(""), []byte("")))
-	require.True(t, padSpaceCompare([]byte("a"), []byte("ab")) < 0, "'a' < 'ab' (space < 'b')")
-	require.True(t, padSpaceCompare([]byte("ab"), []byte("a")) > 0)
-	require.True(t, padSpaceCompare([]byte("a\t"), []byte("a")) < 0, "trailing tab (0x09) < padding space, NOT rtrim")
-	require.True(t, padSpaceEqual([]byte("abc"), []byte("abc")))
-	require.False(t, padSpaceEqual([]byte("abc"), []byte("abd")))
+func TestCharTrimCompare(t *testing.T) {
+	require.Equal(t, 0, charTrimCompare([]byte("a"), []byte("a  ")), "trailing spaces trimmed")
+	require.Equal(t, 0, charTrimCompare([]byte("a "), []byte("a")))
+	require.Equal(t, 0, charTrimCompare(nil, []byte("   ")), "empty vs all-spaces are equal")
+	require.Equal(t, 0, charTrimCompare([]byte(""), []byte("")))
+	require.True(t, charTrimCompare([]byte("a"), []byte("ab")) < 0, "'a' < 'ab'")
+	require.True(t, charTrimCompare([]byte("ab"), []byte("a")) > 0)
+	// Only ASCII space (0x20) is trimmed. A trailing byte below space (tab 0x09) is kept, so
+	// 'a\t' > 'a' -- matching MO's ordinary CHAR comparator (bytes.Compare after TrimRight " "),
+	// NOT the pad-space model where 'a\t' would sort below the padding space.
+	require.True(t, charTrimCompare([]byte("a\t"), []byte("a")) > 0, "trailing tab (0x09) kept: 'a\\t' > 'a'")
+	require.True(t, charTrimEqual([]byte("abc"), []byte("abc")))
+	require.False(t, charTrimEqual([]byte("abc"), []byte("abd")))
+	require.False(t, charTrimEqual([]byte("a\t"), []byte("a")), "trailing tab is significant")
 }
 
-// TestIncludePredicateCharPadSpace: a CHAR INCLUDE column (#29062) compares with SQL pad-space
-// semantics (trailing spaces ignored), while a VARCHAR column stays byte-exact.
-func TestIncludePredicateCharPadSpace(t *testing.T) {
+// TestIncludePredicateCharTrim: a CHAR INCLUDE column (#29062) compares with MO's CHAR semantics
+// (trailing ASCII spaces trimmed, then bytes.Compare -- matching func_compare.go /
+// operator_between.go), while a VARCHAR column stays byte-exact.
+func TestIncludePredicateCharTrim(t *testing.T) {
 	incTypes := []int32{int32(types.T_char), int32(types.T_varchar)} // col0 CHAR, col1 VARCHAR
 	pk := int32(types.T_int64)
 
@@ -234,7 +239,7 @@ func TestIncludePredicateCharPadSpace(t *testing.T) {
 	require.True(t, eq[0].test([]byte("a "), false), "'a ' = 'a' under CHAR")
 	require.True(t, eq[0].test([]byte("a  "), false), "'a  ' = 'a' under CHAR")
 	require.False(t, eq[0].test([]byte("ab"), false))
-	require.False(t, eq[0].test([]byte("a\t"), false), "trailing tab is significant (pad-space, not rtrim)")
+	require.False(t, eq[0].test([]byte("a\t"), false), "trailing tab is significant (only ASCII space is trimmed)")
 
 	// a trailing-space literal is likewise ignored.
 	eq2, _ := compileIncludePredicates([]byte(`[{"col":0,"op":"=","val":"a  "}]`), incTypes, pk)
@@ -245,13 +250,18 @@ func TestIncludePredicateCharPadSpace(t *testing.T) {
 	require.False(t, ne[0].test([]byte("a  "), false))
 	require.True(t, ne[0].test([]byte("abc"), false))
 
-	// ordering pads with spaces.
+	// ordering trims trailing spaces, then compares bytes.
 	lt, _ := compileIncludePredicates([]byte(`[{"col":0,"op":"<","val":"ab"}]`), incTypes, pk)
 	require.True(t, lt[0].test([]byte("a  "), false), "'a' < 'ab'")
 	require.False(t, lt[0].test([]byte("ab"), false))
 
+	// differential vs the pad-space model: a trailing byte below space (tab) is KEPT, so
+	// 'a\t' > 'a' and `ch < 'a'` is FALSE -- identical to MO's ordinary CHAR path.
+	lta, _ := compileIncludePredicates([]byte(`[{"col":0,"op":"<","val":"a"}]`), incTypes, pk)
+	require.False(t, lta[0].test([]byte("a\t"), false), "'a\\t' is not < 'a' (tab kept)")
+
 	le, _ := compileIncludePredicates([]byte(`[{"col":0,"op":"<=","val":"a"}]`), incTypes, pk)
-	require.True(t, le[0].test([]byte("a  "), false), "'a  ' <= 'a' (pad-equal)")
+	require.True(t, le[0].test([]byte("a  "), false), "'a  ' <= 'a' (trim-equal)")
 	require.False(t, le[0].test([]byte("ab"), false))
 
 	gt, _ := compileIncludePredicates([]byte(`[{"col":0,"op":">","val":"a"}]`), incTypes, pk)
@@ -267,10 +277,11 @@ func TestIncludePredicateCharPadSpace(t *testing.T) {
 	require.True(t, bw[0].test([]byte("ab"), false))
 	require.False(t, bw[0].test([]byte("c"), false))
 
-	// IN with pad-space.
+	// IN trims trailing spaces per element.
 	in, _ := compileIncludePredicates([]byte(`[{"col":0,"op":"in","vals":["a","zzz"]}]`), incTypes, pk)
 	require.True(t, in[0].test([]byte("a  "), false))
 	require.False(t, in[0].test([]byte("b"), false))
+	require.False(t, in[0].test([]byte("a\t"), false), "'a\\t' not in ('a','zzz') (tab kept)")
 
 	// VARCHAR (col1) stays byte-exact.
 	veq, _ := compileIncludePredicates([]byte(`[{"col":1,"op":"=","val":"a"}]`), incTypes, pk)
@@ -280,5 +291,5 @@ func TestIncludePredicateCharPadSpace(t *testing.T) {
 	// a CHAR PRIMARY KEY stays byte-exact (mirrors MO's base pk lookup): 'a' matches only 'a'.
 	pkeq, _ := compileIncludePredicates([]byte(`[{"col":-1,"op":"=","val":"a"}]`), incTypes, int32(types.T_char))
 	require.True(t, pkeq[0].test([]byte("a"), false))
-	require.False(t, pkeq[0].test([]byte("a  "), false), "CHAR pk is byte-exact, not pad-space")
+	require.False(t, pkeq[0].test([]byte("a  "), false), "CHAR pk is byte-exact, not trimmed")
 }
