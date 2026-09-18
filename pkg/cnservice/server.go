@@ -71,7 +71,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/trace"
 	"github.com/matrixorigin/matrixone/pkg/udf"
-	"github.com/matrixorigin/matrixone/pkg/udf/python"
 	"github.com/matrixorigin/matrixone/pkg/util/address"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -239,24 +238,14 @@ func NewService(
 		MaxSize:        pu.SV.AutoIncrCacheSize,
 	}
 
-	// init UdfService
-	var udfServices []udf.Runtime
-	// add python client to handle python udf
-	if srv.cfg.PythonUdfClient.Enabled {
-		artifactStore, storeErr := python.NewFileArtifactStore(srv.fileService, python.DefaultMaxArtifactBytes)
-		if storeErr != nil {
-			panic(storeErr)
-		}
-		var pc *python.Gateway
-		pc, err = python.NewGatewayWithArtifactStore(srv.cfg.PythonUdfClient, artifactStore)
-		if err != nil {
-			panic(err)
-		}
-		udfServices = append(udfServices, pc)
-	}
-	srv.udfService, err = udf.NewRuntime(udfServices...)
+	// init UdfService. Python is an opt-in feature and its transport or
+	// artifact dependencies must not turn an otherwise usable CN into a
+	// process-wide crash loop. buildCNRuntime keeps the language gate visible
+	// to CREATE/EXECUTE while ordinary SQL continues with the runtime in an
+	// explicit UNAVAILABLE state.
+	srv.udfService, err = buildCNRuntime(srv.cfg.PythonUdfClient, srv.fileService, srv.logger)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
 	srv.CNMemoryThrottler = rscthrottler.NewMemThrottler(
