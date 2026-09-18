@@ -410,7 +410,13 @@ func ValidCalendarDate(year int32, month, day uint8) bool {
 }
 
 func isEncodedInvalidDate(d Date) bool {
-	return d >= invalidDateEncodingBase && d <= invalidDateEncodingBase+Date(MaxDateYear*10000+MaxMonthInYear*100+31)
+	if d < invalidDateEncodingBase || d > invalidDateEncodingBase+Date(MaxDateYear*10000+MaxMonthInYear*100+31) {
+		return false
+	}
+	year, month, day := decodeInvalidDate(d)
+	return year >= MinDateYear && year <= MaxDateYear &&
+		month >= MinMonthInYear && month <= MaxMonthInYear &&
+		day > 0 && day <= 31 && !ValidDate(year, month, day)
 }
 
 func decodeInvalidDate(d Date) (year int32, month, day uint8) {

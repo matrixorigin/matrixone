@@ -301,7 +301,10 @@ func TestCalendarCompareOrdersInvalidDatesByFields(t *testing.T) {
 }
 
 func TestDateCompareDoesNotTreatRawValuesAsTaggedDates(t *testing.T) {
-	raw := []Date{Date(0x06f3a1a8), Date(0x57b5ffc5), Date(-700000)}
+	raw := []Date{
+		Date(0x06f3a1a8), Date(0x57b5ffc5), Date(0x717a6d60),
+		Date(-700000), DateFromCalendar(8_000_000, 1, 1),
+	}
 	for i := range raw {
 		for j := range raw {
 			require.Equal(t, GenericAscCompare(raw[i], raw[j]), DateAscCompare(raw[i], raw[j]))

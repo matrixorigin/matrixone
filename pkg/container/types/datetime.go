@@ -588,7 +588,15 @@ func DatetimeFromClock(year int32, month, day, hour, minute, sec uint8, msec uin
 
 func isEncodedInvalidDatetime(dt Datetime) bool {
 	maxPayload := int64(MaxDatetimeYear*10000+12*100+31)*invalidDatetimeDayMicros + invalidDatetimeDayMicros - 1
-	return int64(dt) >= invalidDatetimeEncodingBase+1 && int64(dt) <= invalidDatetimeEncodingBase+maxPayload
+	if int64(dt) < invalidDatetimeEncodingBase+1 || int64(dt) > invalidDatetimeEncodingBase+maxPayload {
+		return false
+	}
+	year, month, day, hour, minute, sec, msec := decodeInvalidDatetime(dt)
+	return year >= MinDatetimeYear && year <= MaxDatetimeYear &&
+		month >= MinMonthInYear && month <= MaxMonthInYear &&
+		day > 0 && day <= 31 && !ValidDate(year, month, day) &&
+		hour <= maxHourInDay && minute <= maxMinuteInHour &&
+		sec <= maxSecondInMinute && msec < MicroSecsPerSec
 }
 
 func encodeInvalidDatetime(year int32, month, day, hour, minute, sec uint8, msec uint32) Datetime {
