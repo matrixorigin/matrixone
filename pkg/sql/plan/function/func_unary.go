@@ -13562,12 +13562,16 @@ func SHA1Func(
 func LastDay(
 	ivecs []*vector.Vector,
 	result vector.FunctionResultWrapper,
-	_ *process.Process,
+	proc *process.Process,
 	length int,
 	selectList *FunctionSelectList,
 ) error {
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	allowInvalidDates, err := process.ResolveAllowInvalidDates(proc)
+	if err != nil {
+		return err
+	}
 
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetStrValue(i)
@@ -13581,7 +13585,11 @@ func LastDay(
 			var err error
 			var dtt types.Datetime
 			if len(day) < 14 {
-				dt, err = types.ParseDateCast(day)
+				if allowInvalidDates {
+					dt, err = types.ParseDateCastWithInvalidDates(day)
+				} else {
+					dt, err = types.ParseDateCast(day)
+				}
 				if err != nil {
 					if err := rs.AppendBytes(nil, true); err != nil {
 						return err
@@ -13589,7 +13597,11 @@ func LastDay(
 					continue
 				}
 			} else {
-				dtt, err = types.ParseDatetime(day, 6)
+				if allowInvalidDates {
+					dtt, err = types.ParseDatetimeWithInvalidDates(day, 6)
+				} else {
+					dtt, err = types.ParseDatetime(day, 6)
+				}
 				if err != nil {
 					if err := rs.AppendBytes(nil, true); err != nil {
 						return err

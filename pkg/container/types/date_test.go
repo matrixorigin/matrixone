@@ -260,6 +260,53 @@ func TestParseDateCastStrictValidation(t *testing.T) {
 	}
 }
 
+func TestParseDateCastWithInvalidDatesPreservesCalendarFields(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  string
+	}{
+		{input: "2024-02-30", want: "2024-02-30"},
+		{input: "2023-02-29", want: "2023-02-29"},
+		{input: "2024-04-31", want: "2024-04-31"},
+		{input: "20240230", want: "2024-02-30"},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			date, err := ParseDateCastWithInvalidDates(tc.input)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, date.String())
+			year, month, day, _ := date.Calendar(true)
+			require.Equal(t, int32(date.Year()), year)
+			require.Equal(t, month, date.Month())
+			require.Equal(t, day, date.Day())
+		})
+	}
+
+	for _, input := range []string{"2024-13-01", "2024-01-32", "2024-02-00"} {
+		_, err := ParseDateCastWithInvalidDates(input)
+		require.Error(t, err, input)
+	}
+
+	strict, err := ParseDateCast("2024-02-30")
+	require.Error(t, err)
+	require.Equal(t, Date(-1), strict)
+}
+
+func TestCalendarCompareOrdersInvalidDatesByFields(t *testing.T) {
+	valid, err := ParseDateCast("2024-03-01")
+	require.NoError(t, err)
+	invalid, err := ParseDateCastWithInvalidDates("2024-02-30")
+	require.NoError(t, err)
+	require.Equal(t, -1, DateAscCompare(invalid, valid))
+	require.Equal(t, 1, DateDescCompare(invalid, valid))
+}
+
+func TestInvalidDateArithmeticUsesCalendarFields(t *testing.T) {
+	invalid, err := ParseDateCastWithInvalidDates("2024-02-30")
+	require.NoError(t, err)
+	normalized := DateFromCalendar(2024, 3, 1)
+	require.Equal(t, normalized.DaysSinceUnixEpoch(), invalid.DaysSinceUnixEpoch())
+}
+
 func BenchmarkParseDateCast(b *testing.B) {
 	inputs := []struct {
 		name  string

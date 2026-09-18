@@ -10188,7 +10188,7 @@ func (c *Compile) evalAggOptimize(node *plan.Node, blk *objectio.BlockInfo, part
 						}
 					case types.T_date:
 						min := types.DecodeFixed[types.Date](zm.GetMinBuf())
-						if min < partialResults[i].(types.Date) {
+						if types.DateAscCompare(min, partialResults[i].(types.Date)) < 0 {
 							partialResults[i] = min
 						}
 					case types.T_time:
@@ -10198,7 +10198,7 @@ func (c *Compile) evalAggOptimize(node *plan.Node, blk *objectio.BlockInfo, part
 						}
 					case types.T_datetime:
 						min := types.DecodeFixed[types.Datetime](zm.GetMinBuf())
-						if min < partialResults[i].(types.Datetime) {
+						if types.DatetimeAscCompare(min, partialResults[i].(types.Datetime)) < 0 {
 							partialResults[i] = min
 						}
 					case types.T_timestamp:
@@ -10317,7 +10317,7 @@ func (c *Compile) evalAggOptimize(node *plan.Node, blk *objectio.BlockInfo, part
 						}
 					case types.T_date:
 						max := types.DecodeFixed[types.Date](zm.GetMaxBuf())
-						if max > partialResults[i].(types.Date) {
+						if types.DateAscCompare(max, partialResults[i].(types.Date)) > 0 {
 							partialResults[i] = max
 						}
 					case types.T_time:
@@ -10327,7 +10327,7 @@ func (c *Compile) evalAggOptimize(node *plan.Node, blk *objectio.BlockInfo, part
 						}
 					case types.T_datetime:
 						max := types.DecodeFixed[types.Datetime](zm.GetMaxBuf())
-						if max > partialResults[i].(types.Datetime) {
+						if types.DatetimeAscCompare(max, partialResults[i].(types.Datetime)) > 0 {
 							partialResults[i] = max
 						}
 					case types.T_timestamp:

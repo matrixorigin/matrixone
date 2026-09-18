@@ -65,7 +65,7 @@ func builtInDateDiff(parameters []*vector.Vector, result vector.FunctionResultWr
 				return err
 			}
 		} else {
-			if err := rs.Append(int64(v1-v2), false); err != nil {
+			if err := rs.Append(int64(v1.DaysSinceUnixEpoch()-v2.DaysSinceUnixEpoch()), false); err != nil {
 				return err
 			}
 		}

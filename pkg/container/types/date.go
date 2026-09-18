@@ -64,6 +64,12 @@ const (
 	MaxMonthInYear = 12
 	MinMonthInYear = 1
 	ZeroDate       = Date(-1)
+
+	// Valid dates use the compact day-offset representation below 4 million.
+	// Keep a separate, fixed-width range for ALLOW_INVALID_DATES values so the
+	// original calendar fields survive vector/storage round trips instead of
+	// being normalized by DateFromCalendar.
+	invalidDateEncodingBase = Date(100_000_000)
 )
 
 type TimeType int32
@@ -367,6 +373,23 @@ func ParseDateCast(s string) (Date, error) {
 	return -1, moerr.NewInvalidArgNoCtx("parsedate", s)
 }
 
+// ParseDateCastWithInvalidDates applies MySQL's ALLOW_INVALID_DATES rule:
+// month and day must remain in their normal field ranges, but day need not be
+// valid for the selected month. Zero components and the all-zero sentinel keep
+// the normal ParseDateCast/SQL-mode policy and are not relaxed here.
+func ParseDateCastWithInvalidDates(s string) (Date, error) {
+	date, err := ParseDateCast(s)
+	if err == nil {
+		return date, nil
+	}
+	year, month, day, isZero, componentErr := parseDateCastComponents(strings.TrimSpace(s))
+	if componentErr != nil || isZero || year < MinDateYear || year > MaxDateYear ||
+		month < MinMonthInYear || month > MaxMonthInYear || day == 0 || day > 31 {
+		return -1, err
+	}
+	return DateFromCalendarAllowInvalid(year, month, day), nil
+}
+
 // date[0001-01-01 to 9999-12-31]
 func ValidDate(year int32, month, day uint8) bool {
 	return year >= MinDateYear && ValidCalendarDate(year, month, day)
@@ -383,6 +406,30 @@ func ValidCalendarDate(year int32, month, day uint8) bool {
 		return day <= leapYearMonthDays[month-1]
 	}
 	return day <= flatYearMonthDays[month-1]
+}
+
+func isEncodedInvalidDate(d Date) bool {
+	return d >= invalidDateEncodingBase && d <= invalidDateEncodingBase+Date(MaxDateYear*10000+MaxMonthInYear*100+31)
+}
+
+func decodeInvalidDate(d Date) (year int32, month, day uint8) {
+	packed := int32(d - invalidDateEncodingBase)
+	year = packed / 10000
+	month = uint8((packed / 100) % 100)
+	day = uint8(packed % 100)
+	return
+}
+
+// DateFromCalendarAllowInvalid preserves an in-range but calendar-invalid
+// date. Valid values continue to use the legacy day-offset representation.
+func DateFromCalendarAllowInvalid(year int32, month, day uint8) Date {
+	if year < MinDateYear || year > MaxDateYear || month < MinMonthInYear || month > MaxMonthInYear || day == 0 || day > 31 {
+		return ZeroDate
+	}
+	if ValidDate(year, month, day) {
+		return DateFromCalendar(year, month, day)
+	}
+	return invalidDateEncodingBase + Date(year*10000+int32(month)*100+int32(day))
 }
 
 func (d Date) String() string {
@@ -553,6 +600,10 @@ func (d Date) Year() uint16 {
 	if d == ZeroDate {
 		return 0
 	}
+	if isEncodedInvalidDate(d) {
+		year, _, _ := decodeInvalidDate(d)
+		return uint16(year)
+	}
 	dayNum := int32(d)
 	insideDayInfoTable := dayNum >= dayNumOfTableEpoch && dayNum < dayNumOfTableEpoch+dayInfoTableSize
 	if insideDayInfoTable {
@@ -630,6 +681,13 @@ func (d Date) Quarter() uint32 {
 func (d Date) Calendar(full bool) (year int32, month, day uint8, yday uint16) {
 	if d == ZeroDate {
 		return 0, 0, 0, 0
+	}
+	if isEncodedInvalidDate(d) {
+		year, month, day = decodeInvalidDate(d)
+		if !full {
+			return year, month, day, uint16(daysBefore[month-1]) + uint16(day)
+		}
+		return year, month, day, uint16(daysBefore[month-1]) + uint16(day)
 	}
 	// Account for 400 year cycles.
 	n := d / daysPer400Years
@@ -771,12 +829,20 @@ func daysSinceEpoch(year int32) int32 {
 
 // DayOfWeek return the day of the week counting from Sunday
 func (d Date) DayOfWeek() Weekday {
+	if isEncodedInvalidDate(d) {
+		year, month, day := decodeInvalidDate(d)
+		return DayOfWeekFromCalendar(year, month, day)
+	}
 	// January 1, year 1 in Gregorian calendar, was a Monday.
 	return Weekday((d + 1) % 7)
 }
 
 // DayOfWeek2 return the day of the week counting from Monday
 func (d Date) DayOfWeek2() Weekday {
+	if isEncodedInvalidDate(d) {
+		year, month, day := decodeInvalidDate(d)
+		return Weekday(calcDaynr(int(year), int(month), int(day)) % 7)
+	}
 	// January 1, year 1 in Gregorian calendar, was a Monday.
 	return Weekday(d % 7)
 }
@@ -788,6 +854,13 @@ func (d Date) DayOfYear() uint16 {
 }
 
 func (d Date) WeekOfYear() (year int32, week uint8) {
+	if isEncodedInvalidDate(d) {
+		y, m, day := decodeInvalidDate(d)
+		return func() (int32, uint8) {
+			weekYear, week := calcWeekFromCalendar(int(y), int(m), int(day), weekMode(0))
+			return int32(weekYear), uint8(week)
+		}()
+	}
 	// According to the rule that the first calendar week of a calendar year is
 	// the week including the first Thursday of that year, and that the last one is
 	// the week immediately preceding the first calendar week of the next calendar year.
@@ -810,6 +883,11 @@ func (d Date) WeekOfYear() (year int32, week uint8) {
 }
 
 func (d Date) WeekOfYear2() uint8 {
+	if isEncodedInvalidDate(d) {
+		y, m, day := decodeInvalidDate(d)
+		_, week := calcWeekFromCalendar(int(y), int(m), int(day), weekMode(0))
+		return uint8(week)
+	}
 	// According to the rule that the first calendar week of a calendar year is
 	// the week including the first Thursday of that year, and that the last one is
 	// the week immediately preceding the first calendar week of the next calendar year.
@@ -891,6 +969,10 @@ func WeekFromCalendar(year int32, month, day uint8, mode int) int {
 
 // YearWeek returns year and week.
 func (d Date) YearWeek(mode int) (year int, week int) {
+	if isEncodedInvalidDate(d) {
+		y, m, day := decodeInvalidDate(d)
+		return calcWeekFromCalendar(int(y), int(m), int(day), weekMode(mode)|WeekYear)
+	}
 	behavior := weekMode(mode) | WeekYear
 	return calcWeek(d, behavior)
 }
@@ -986,6 +1068,10 @@ func (d Date) ToDatetime() Datetime {
 	if d == ZeroDate {
 		return ZeroDatetime
 	}
+	if isEncodedInvalidDate(d) {
+		year, month, day := decodeInvalidDate(d)
+		return DatetimeFromClockAllowInvalid(year, month, day, 0, 0, 0, 0)
+	}
 	return Datetime(int64(d) * SecsPerDay * MicroSecsPerSec)
 }
 
@@ -1020,6 +1106,10 @@ func (d Date) Day() uint8 {
 }
 
 func (d Date) DaysSinceUnixEpoch() int32 {
+	if isEncodedInvalidDate(d) {
+		year, month, day := decodeInvalidDate(d)
+		return DateFromCalendar(year, month, day).DaysSinceUnixEpoch()
+	}
 	return int32(d) - unixEpochDays
 }
 

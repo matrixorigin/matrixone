@@ -478,7 +478,7 @@ func mergeObjs(ctx context.Context, mergeHost MergeTaskHost, sortKeyPos int) err
 				mustColFunc: vector.MustFixedColNoTypeCheck[types.Date],
 				cols:        make([][]types.Date, size),
 			}
-			merger = newMerger(mergeHost, sort.GenericLess[types.Date], sortKeyPos, df)
+			merger = newMerger(mergeHost, func(a, b types.Date) bool { return types.DateAscCompare(a, b) < 0 }, sortKeyPos, df)
 		case types.T_timestamp:
 			df := &fixedDataFetcher[types.Timestamp]{
 				mustColFunc: vector.MustFixedColNoTypeCheck[types.Timestamp],
@@ -490,7 +490,7 @@ func mergeObjs(ctx context.Context, mergeHost MergeTaskHost, sortKeyPos int) err
 				mustColFunc: vector.MustFixedColNoTypeCheck[types.Datetime],
 				cols:        make([][]types.Datetime, size),
 			}
-			merger = newMerger(mergeHost, sort.GenericLess[types.Datetime], sortKeyPos, df)
+			merger = newMerger(mergeHost, func(a, b types.Datetime) bool { return types.DatetimeAscCompare(a, b) < 0 }, sortKeyPos, df)
 		case types.T_time:
 			df := &fixedDataFetcher[types.Time]{
 				mustColFunc: vector.MustFixedColNoTypeCheck[types.Time],

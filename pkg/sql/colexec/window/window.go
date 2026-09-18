@@ -2664,9 +2664,9 @@ func searchLeftWithLocation(loc *time.Location, start, end, rowIdx int, vec *vec
 		}
 	case types.T_date:
 		col := vector.MustFixedColNoTypeCheck[types.Date](vec)
-		cmpl := genericGreater[types.Date]
+		cmpl := sort.DateGreater
 		if desc {
-			cmpl = genericLess[types.Date]
+			cmpl = sort.DateLess
 		}
 		if expr == nil {
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[types.Date], cmpl)
@@ -2695,9 +2695,9 @@ func searchLeftWithLocation(loc *time.Location, start, end, rowIdx int, vec *vec
 		}
 	case types.T_datetime:
 		col := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
-		cmpl := genericGreater[types.Datetime]
+		cmpl := sort.DatetimeGreater
 		if desc {
-			cmpl = genericLess[types.Datetime]
+			cmpl = sort.DatetimeLess
 		}
 		if expr == nil {
 			left = genericSearchLeft(start, end-1, col, col[rowIdx], genericEqual[types.Datetime], cmpl)
@@ -3170,9 +3170,9 @@ func searchRightWithLocation(loc *time.Location, start, end, rowIdx int, vec *ve
 		}
 	case types.T_date:
 		col := vector.MustFixedColNoTypeCheck[types.Date](vec)
-		cmpl := genericGreater[types.Date]
+		cmpl := sort.DateGreater
 		if desc {
-			cmpl = genericLess[types.Date]
+			cmpl = sort.DateLess
 		}
 		if expr == nil {
 			right = genericSearchEqualRight(rowIdx, end-1, col, col[rowIdx], genericEqual[types.Date])
@@ -3201,9 +3201,9 @@ func searchRightWithLocation(loc *time.Location, start, end, rowIdx int, vec *ve
 		}
 	case types.T_datetime:
 		col := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
-		cmpl := genericGreater[types.Datetime]
+		cmpl := sort.DatetimeGreater
 		if desc {
-			cmpl = genericLess[types.Datetime]
+			cmpl = sort.DatetimeLess
 		}
 		i := start
 		for ; i < end; i++ {

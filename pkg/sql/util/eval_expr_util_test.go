@@ -738,6 +738,36 @@ func TestSetInsertValueRejectsZeroTemporalInStrictNoZeroDateMode(t *testing.T) {
 	}
 }
 
+func TestSetInsertValueAllowsCalendarInvalidDateMode(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		require.Equal(t, "sql_mode", name)
+		return "STRICT_TRANS_TABLES,ALLOW_INVALID_DATES", nil
+	})
+
+	dateType := types.T_date.ToType()
+	dateOK, _, date, err := SetInsertValueDate(proc,
+		tree.NewNumVal("2024-02-30", "2024-02-30", false, tree.P_char), &dateType)
+	require.True(t, dateOK)
+	require.NoError(t, err)
+	require.Equal(t, "2024-02-30", date.String())
+
+	datetimeType := types.T_datetime.ToTypeWithScale(6)
+	datetimeOK, _, datetime, err := SetInsertValueDateTime(proc,
+		tree.NewNumVal("2024-02-30 12:34:56.123456", "2024-02-30 12:34:56.123456", false, tree.P_char), &datetimeType)
+	require.True(t, datetimeOK)
+	require.NoError(t, err)
+	require.Equal(t, "2024-02-30 12:34:56.123456", datetime.String2(6))
+
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return "STRICT_TRANS_TABLES", nil
+	})
+	dateOK, _, _, err = SetInsertValueDate(proc,
+		tree.NewNumVal("2024-02-30", "2024-02-30", false, tree.P_char), &dateType)
+	require.False(t, dateOK)
+	require.Error(t, err)
+}
+
 func TestRejectZeroTemporalWritePolicy(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	cases := []struct {

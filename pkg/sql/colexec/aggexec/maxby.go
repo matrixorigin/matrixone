@@ -243,9 +243,9 @@ func compareVectorValue(a *vector.Vector, ai int, b *vector.Vector, bi int, typ 
 	case types.T_float64:
 		return compareFloat64(types.DecodeFloat64(x), types.DecodeFloat64(y))
 	case types.T_date:
-		return types.GenericAscCompare(types.DecodeDate(x), types.DecodeDate(y))
+		return types.DateAscCompare(types.DecodeDate(x), types.DecodeDate(y))
 	case types.T_datetime:
-		return types.GenericAscCompare(types.DecodeDatetime(x), types.DecodeDatetime(y))
+		return types.DatetimeAscCompare(types.DecodeDatetime(x), types.DecodeDatetime(y))
 	case types.T_timestamp:
 		return types.GenericAscCompare(types.DecodeTimestamp(x), types.DecodeTimestamp(y))
 	case types.T_time:

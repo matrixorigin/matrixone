@@ -74,6 +74,10 @@ func RejectZeroTemporalWritePolicy(proc *process.Process) (bool, error) {
 	return process.IsStrictNoZeroDateMode(mode) && !statementIgnore, nil
 }
 
+func AllowInvalidDatesWritePolicy(proc *process.Process) (bool, error) {
+	return process.ResolveAllowInvalidDates(proc)
+}
+
 func HexToInt(hex string) (uint64, error) {
 	s := hex[2:]
 	return strconv.ParseUint(s, 16, 64)
@@ -635,7 +639,15 @@ func SetInsertValueDateTime(proc *process.Process, numVal *tree.NumVal, typ *typ
 		if len(s) == 0 {
 			isnull = true
 		} else {
-			res, err = types.ParseDatetime(s, typ.Scale)
+			allowInvalid, modeErr := AllowInvalidDatesWritePolicy(proc)
+			if modeErr != nil {
+				return false, false, res, modeErr
+			}
+			if allowInvalid {
+				res, err = types.ParseDatetimeWithInvalidDates(s, typ.Scale)
+			} else {
+				res, err = types.ParseDatetime(s, typ.Scale)
+			}
 			if err == nil && res == types.ZeroDatetime {
 				if err = rejectZeroTemporalInStrictMode(proc, s, "datetime"); err != nil {
 					canInsert = false
@@ -749,7 +761,15 @@ func SetInsertValueDate(proc *process.Process, numVal *tree.NumVal, typ *types.T
 		if len(s) == 0 {
 			isnull = true
 		} else {
-			res, err = types.ParseDateCast(s)
+			allowInvalid, modeErr := AllowInvalidDatesWritePolicy(proc)
+			if modeErr != nil {
+				return false, false, res, modeErr
+			}
+			if allowInvalid {
+				res, err = types.ParseDateCastWithInvalidDates(s)
+			} else {
+				res, err = types.ParseDateCast(s)
+			}
 			if err != nil {
 				canInsert = false
 			} else if res == types.ZeroDate {
