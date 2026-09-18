@@ -83,9 +83,8 @@ function cleanup_all() {
     cleanup_mo
 }
 
-trap cleanup_all EXIT
-trap 'exit 130' INT
-trap 'exit 143' TERM
+trap 'cleanup_all; exit 130' INT
+trap 'cleanup_all; exit 143' TERM
 
 function launch_mo() {
     cd $MO_WORKSPACE
@@ -204,11 +203,28 @@ launch_mo
 if [[ "${SKIP_JSTFU:-false}" == "true" ]]; then
     echo "skip jstfu for this BVT suite"
 else
-    launch_jstfu || exit $?
+    launch_jstfu
+    status=$?
+    if [[ "$status" -ne 0 ]]; then
+        cleanup_all
+        exit "$status"
+    fi
 fi
 wait_system_init
-if [[ "$?" -ne 0 ]]; then
+status=$?
+if [[ "$status" -ne 0 ]]; then
+    cleanup_all
     exit 1
 fi
 wait_python_udf_worker
-exit $?
+status=$?
+if [[ "$status" -ne 0 ]]; then
+    cleanup_all
+    exit "$status"
+fi
+
+# This script is a launcher: its caller runs mo-tester after this command
+# returns.  Keep the services alive on a successful return; signal and startup
+# failure paths above own cleanup because no caller can use the deployment in
+# those cases.
+exit 0
