@@ -80,7 +80,7 @@ func validateIPFunctionDestination(proc *process.Process, p *pipeline.Pipeline) 
 
 func requiredExpressionContractProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
 	if features.ExpressionResultMetadataContracts || features.TOBase64ResultContracts || features.IPFunctionResultContracts {
-		return defines.MORPCVersion85
+		return defines.MORPCVersion86
 	}
 	if features.IPFunctionSemantics {
 		return defines.MORPCVersion72

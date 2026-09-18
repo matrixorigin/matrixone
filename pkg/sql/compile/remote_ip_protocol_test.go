@@ -85,6 +85,7 @@ func TestRemoteIPFunctionProtocolValidation(t *testing.T) {
 				defines.MORPCVersion72,
 				defines.MORPCVersion84,
 				defines.MORPCVersion85,
+				defines.MORPCVersion86,
 			} {
 				rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, value)
 			}
@@ -127,7 +128,7 @@ func TestRemoteIPFunctionProtocolValidation(t *testing.T) {
 		require.ErrorContains(t, err, "corrected IP function semantics require MORPC protocol version 72")
 	})
 
-	t.Run("changed result contracts require v85", func(t *testing.T) {
+	t.Run("changed result contracts require v86", func(t *testing.T) {
 		for _, tc := range []struct {
 			name       string
 			functionID int32
@@ -141,10 +142,10 @@ func TestRemoteIPFunctionProtocolValidation(t *testing.T) {
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				remotePipeline := remoteIPProtocolPipelineWithType(tc.functionID, tc.overloadID, tc.resultType)
-				rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion84)
-				err := validateRemoteExpressionPipelineProtocol(proc, remotePipeline)
-				require.ErrorContains(t, err, "expression result contracts require MORPC protocol version 85")
 				rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion85)
+				err := validateRemoteExpressionPipelineProtocol(proc, remotePipeline)
+				require.ErrorContains(t, err, "expression result contracts require MORPC protocol version 86")
+				rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion86)
 				require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
 			})
 		}
@@ -155,7 +156,7 @@ func TestRemoteIPFunctionProtocolValidation(t *testing.T) {
 		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remoteIPProtocolPipeline(function.ABS, 0)))
 	})
 
-	t.Run("metadata result contracts require v85", func(t *testing.T) {
+	t.Run("metadata result contracts require v86", func(t *testing.T) {
 		cases := []struct {
 			name       string
 			functionID int32
@@ -193,10 +194,10 @@ func TestRemoteIPFunctionProtocolValidation(t *testing.T) {
 			t.Run(tc.name, func(t *testing.T) {
 				remotePipeline := remoteExpressionResultContractPipeline(
 					tc.functionID, tc.function, tc.resultType, tc.args)
-				rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion84)
-				err := validateRemoteExpressionPipelineProtocol(proc, remotePipeline)
-				require.ErrorContains(t, err, "expression result contracts require MORPC protocol version 85")
 				rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion85)
+				err := validateRemoteExpressionPipelineProtocol(proc, remotePipeline)
+				require.ErrorContains(t, err, "expression result contracts require MORPC protocol version 86")
+				rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion86)
 				require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
 			})
 		}
@@ -253,10 +254,10 @@ func TestExpressionResultContractDestinationProtocolValidation(t *testing.T) {
 
 	remotePipeline := remoteIPProtocolPipelineWithType(function.TO_BASE64, 3, 61)
 	remotePipeline.Node = &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"}
-	client.version = defines.MORPCVersion84
-	err := validateIPFunctionDestination(c.proc, remotePipeline)
-	require.ErrorContains(t, err, "MORPC version 85")
-
 	client.version = defines.MORPCVersion85
+	err := validateIPFunctionDestination(c.proc, remotePipeline)
+	require.ErrorContains(t, err, "MORPC version 86")
+
+	client.version = defines.MORPCVersion86
 	require.NoError(t, validateIPFunctionDestination(c.proc, remotePipeline))
 }

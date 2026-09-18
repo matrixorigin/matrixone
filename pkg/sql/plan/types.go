@@ -890,6 +890,11 @@ type BindContext struct {
 	// VIEW definition. Ordinary SELECT planning must not clone its select list
 	// just to support view metadata persistence.
 	captureViewStarExpansion bool
+	// persistedExpressionProtocolRequirement is shared by the root view bind
+	// context and all nested query blocks. It records protocol-sensitive
+	// expressions immediately after function binding, before a bind-time fold
+	// can erase the function from the persisted plan.
+	persistedExpressionProtocolRequirement *int64
 	// expandedSelectLists records the expanded output for each SELECT clause
 	// participating in a view definition, including UNION branches.
 	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs

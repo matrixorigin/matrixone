@@ -203,13 +203,21 @@ func RequiresMORPCVersion83BoundedConditionalStringDomains(owner any) (bool, err
 	return features.BoundedConditionalStringDomains, err
 }
 
-// RequiresMORPCVersion85ExpressionResultContracts reports whether an owner
+// RequiresMORPCVersion86ExpressionResultContracts reports whether an owner
 // contains a follow-up expression contract that changes a result domain or
 // overload identity.
-func RequiresMORPCVersion85ExpressionResultContracts(owner any) (bool, error) {
+func RequiresMORPCVersion86ExpressionResultContracts(owner any) (bool, error) {
 	features, err := RequiredRemoteExpressionFeatures(owner)
 	return features.ExpressionResultMetadataContracts ||
 		features.TOBase64ResultContracts || features.IPFunctionResultContracts, err
+}
+
+// RequiresMORPCVersion85ExpressionResultContracts is retained for source
+// compatibility with callers introduced before MORPC v85 was reserved for
+// integer-parameter coercion. The actual admission epoch is v86.
+// Deprecated: use RequiresMORPCVersion86ExpressionResultContracts.
+func RequiresMORPCVersion85ExpressionResultContracts(owner any) (bool, error) {
+	return RequiresMORPCVersion86ExpressionResultContracts(owner)
 }
 
 const (
@@ -265,11 +273,11 @@ const (
 // vectors to signed INT/ BIGINT or BIGINT UNSIGNED.
 // BoundedConditionalStringDomains requires MORPC v83 because the bounded
 // BINARY/VARBINARY COALESCE overload identities are new to the registry.
-// TOBase64ResultContracts and IPFunctionResultContracts require MORPC v85:
+// TOBase64ResultContracts and IPFunctionResultContracts require MORPC v86:
 // the former changes a VARCHAR result bound and adds binary overloads, while
 // the latter changes IP predicate results to INT32 and adds domain-aware
 // INET_NTOA overloads.
-// ExpressionResultMetadataContracts also requires MORPC v85 because bounded
+// ExpressionResultMetadataContracts also requires MORPC v86 because bounded
 // character slicing and fractional temporal conditional results change the
 // serialized result metadata consumed by persisted views and remote workers.
 type RemoteExpressionFeatures struct {
@@ -573,7 +581,7 @@ func isChangedTemporalConditionalResultContract(expr *Expr, functionID int32, na
 // isExpressionResultMetadataContract identifies only the follow-up metadata
 // changes from the result-contract fixes. It deliberately keys off the
 // serialized function identity and result type rather than fencing every
-// conditional or string expression at v85. Legacy plans with the old
+// conditional or string expression at v86. Legacy plans with the old
 // unbounded slice metadata or zero-FSP conditional metadata remain usable.
 func isExpressionResultMetadataContract(expr *Expr) bool {
 	if expr == nil {

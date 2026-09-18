@@ -268,6 +268,10 @@ func genViewTableDef(
 	var outputColumnProvenance []OutputColumnProvenance
 	var expandedSelectLists map[*tree.SelectClause]tree.SelectExprs
 	captureColumnTypes := func(bindCtx *BindContext) {
+		if bindCtx.persistedExpressionProtocolRequirement != nil &&
+			*bindCtx.persistedExpressionProtocolRequirement > preOptimizeViewRequiredProtocol {
+			preOptimizeViewRequiredProtocol = *bindCtx.persistedExpressionProtocolRequirement
+		}
 		outputColumnProvenance = make([]OutputColumnProvenance, len(bindCtx.headings))
 		for i := range outputColumnProvenance {
 			outputColumnProvenance[i] = bindCtx.outputColumnProvenanceForProject(int32(i))

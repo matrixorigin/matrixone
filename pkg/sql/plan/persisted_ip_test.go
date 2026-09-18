@@ -335,16 +335,59 @@ func TestPersistedDynamicIPViewProtocolSurvivesConstantFolding(t *testing.T) {
 		return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}, stmt, false)
 	}
 
-	_, err := build(defines.MORPCVersion84)
-	require.ErrorContains(t, err, "protocol version 85")
+	_, err := build(defines.MORPCVersion85)
+	require.ErrorContains(t, err, "protocol version 86")
 
-	created, err := build(defines.MORPCVersion85)
+	created, err := build(defines.MORPCVersion86)
 	require.NoError(t, err)
 	var viewData ViewData
 	require.NoError(t, json.Unmarshal(
 		[]byte(created.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()), &viewData))
 	require.NotNil(t, viewData.RequiredProtocolVersion)
-	require.Equal(t, int64(defines.MORPCVersion85), *viewData.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion86), *viewData.RequiredProtocolVersion)
+}
+
+func TestPersistedViewProtocolAdmissionCapturesBindTimeBetweenFold(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	proc := ctx.GetProcess()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	oldAuthoringFloor, hadAuthoringFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor)
+	t.Cleanup(func() {
+		if hadProtocol {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+		if hadAuthoringFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, oldAuthoringFloor)
+		} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, current)
+		}
+	})
+
+	const createSQL = "create view v_dynamic_ip_between as select 1 as x where '0.0.0.1' between inet_ntoa('1.6') and '0.0.0.1'"
+	build := func(authoringFloor int64) (*Plan, error) {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, authoringFloor)
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createSQL, 1)
+		if err != nil {
+			return nil, err
+		}
+		defer stmt.Free()
+		return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}, stmt, false)
+	}
+
+	_, err := build(defines.MORPCVersion85)
+	require.ErrorContains(t, err, "protocol version 86")
+
+	created, err := build(defines.MORPCVersion86)
+	require.NoError(t, err)
+	var viewData ViewData
+	require.NoError(t, json.Unmarshal(
+		[]byte(created.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()), &viewData))
+	require.NotNil(t, viewData.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion86), *viewData.RequiredProtocolVersion)
 }
 
 func TestPersistedBoundedConditionalStringProtocolAdmission(t *testing.T) {
@@ -409,9 +452,9 @@ func TestPersistedFollowupExpressionProtocolAdmission(t *testing.T) {
 		required int64
 	}{
 		{name: "native INET_NTOA remains v72", function: "inet_ntoa", input: types.T_int64.ToType(), required: defines.MORPCVersion72},
-		{name: "dynamic INET_NTOA is v85", function: "inet_ntoa", input: types.T_varchar.ToType(), required: defines.MORPCVersion85},
-		{name: "TO_BASE64 binary result is v85", function: "to_base64", input: types.NewWithCharset(types.T_varbinary, 8, 0, types.CharsetBinary), required: defines.MORPCVersion85},
-		{name: "IP predicate INT32 result is v85", function: "is_ipv4", input: types.T_varchar.ToType(), required: defines.MORPCVersion85},
+		{name: "dynamic INET_NTOA is v86", function: "inet_ntoa", input: types.T_varchar.ToType(), required: defines.MORPCVersion86},
+		{name: "TO_BASE64 binary result is v86", function: "to_base64", input: types.NewWithCharset(types.T_varbinary, 8, 0, types.CharsetBinary), required: defines.MORPCVersion86},
+		{name: "IP predicate INT32 result is v86", function: "is_ipv4", input: types.T_varchar.ToType(), required: defines.MORPCVersion86},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -447,8 +490,8 @@ func TestPersistedFollowupExpressionProtocolAdmission(t *testing.T) {
 			}(),
 		},
 		{
-			name:     "fractional temporal coalesce is v85",
-			required: defines.MORPCVersion85,
+			name:     "fractional temporal coalesce is v86",
+			required: defines.MORPCVersion86,
 			expr: func() *planpb.Expr {
 				return mustBindPersistedFollowupExpr(t, proc.Ctx, "coalesce", []*planpb.Expr{
 					column(types.T_time.ToTypeWithScale(0)),
@@ -467,10 +510,10 @@ func TestPersistedFollowupExpressionProtocolAdmission(t *testing.T) {
 				return
 			}
 
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion84)
-			require.ErrorContains(t,
-				RequirePersistedExpressionProtocol(proc.Ctx, proc, test.expr), "protocol version 85")
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion85)
+			require.ErrorContains(t,
+				RequirePersistedExpressionProtocol(proc.Ctx, proc, test.expr), "protocol version 86")
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion86)
 			require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, test.expr))
 		})
 	}

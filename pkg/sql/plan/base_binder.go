@@ -3414,7 +3414,10 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 				return nil, err
 			}
 		}
-		bound, err := bindBoundFuncExprAndConstFold(b.GetContext(), b.builder.compCtx.GetProcess(), name, args)
+		bound, err := bindBoundFuncExprAndConstFoldWithObserver(
+			b.GetContext(), b.builder.compCtx.GetProcess(), name, args,
+			b.observePersistedExpressionProtocol,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -3439,8 +3442,9 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 				return nil, err
 			}
 		}
-		return bindBoundFuncExprAndConstFold(
+		return bindBoundFuncExprAndConstFoldWithObserver(
 			b.GetContext(), b.builder.compCtx.GetProcess(), name, args,
+			b.observePersistedExpressionProtocol,
 		)
 	}
 
@@ -3461,8 +3465,9 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 	if err != nil {
 		return nil, err
 	}
-	return bindBoundFuncExprAndConstFold(
+	return bindBoundFuncExprAndConstFoldWithObserver(
 		b.GetContext(), b.builder.compCtx.GetProcess(), name, args,
+		b.observePersistedExpressionProtocol,
 	)
 }
 
@@ -3481,8 +3486,9 @@ func (b *baseBinder) bindPreparedGetLockFuncExpr(astArgs []tree.Expr, depth int3
 		return nil, err
 	}
 	b.markPreparedNumericFallback(timeout)
-	return bindBoundFuncExprAndConstFold(
+	return bindBoundFuncExprAndConstFoldWithObserver(
 		b.GetContext(), b.builder.compCtx.GetProcess(), "get_lock", []*plan.Expr{name, timeout},
+		b.observePersistedExpressionProtocol,
 	)
 }
 
@@ -3706,7 +3712,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				// chooses its overload. Otherwise INET_NTOA(1) would take the
 				// runtime string contract even though its source is statically
 				// numeric, unnecessarily raising persisted-expression admission
-				// from v72 to v85.
+				// from v72 to v86.
 				b.suppressDefaultValueBindType = true
 				b.inetNtoaNumericLiteralContext = true
 			}
@@ -3915,10 +3921,13 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		var e *plan.Expr
 		var err error
 		if findInSetInternalArgs {
-			e, err = bindBoundFuncExprAndConstFoldWithInternalFunctionArgs(
-				b.GetContext(), b.builder.compCtx.GetProcess(), name, args)
+			e, err = bindBoundFuncExprAndConstFoldWithInternalFunctionArgsAndObserver(
+				b.GetContext(), b.builder.compCtx.GetProcess(), name, args,
+				b.observePersistedExpressionProtocol)
 		} else {
-			e, err = bindBoundFuncExprAndConstFold(b.GetContext(), b.builder.compCtx.GetProcess(), name, args)
+			e, err = bindBoundFuncExprAndConstFoldWithObserver(
+				b.GetContext(), b.builder.compCtx.GetProcess(), name, args,
+				b.observePersistedExpressionProtocol)
 		}
 		if err == nil {
 			if fn := e.GetF(); fn != nil {
@@ -4541,17 +4550,37 @@ func rewriteFindInSetSetProvenance(
 }
 
 func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name string, args []*Expr) (*plan.Expr, error) {
-	return bindFuncExprAndConstFoldInternal(ctx, proc, name, args, true, false)
+	return bindFuncExprAndConstFoldInternal(ctx, proc, name, args, true, false, nil)
 }
 
 func bindBoundFuncExprAndConstFold(ctx context.Context, proc *process.Process, name string, args []*Expr) (*plan.Expr, error) {
-	return bindFuncExprAndConstFoldInternal(ctx, proc, name, args, false, false)
+	return bindFuncExprAndConstFoldInternal(ctx, proc, name, args, false, false, nil)
+}
+
+func bindBoundFuncExprAndConstFoldWithObserver(
+	ctx context.Context,
+	proc *process.Process,
+	name string,
+	args []*Expr,
+	observer func(*plan.Expr) error,
+) (*plan.Expr, error) {
+	return bindFuncExprAndConstFoldInternal(ctx, proc, name, args, false, false, observer)
 }
 
 func bindBoundFuncExprAndConstFoldWithInternalFunctionArgs(
 	ctx context.Context, proc *process.Process, name string, args []*Expr,
 ) (*plan.Expr, error) {
-	return bindFuncExprAndConstFoldInternal(ctx, proc, name, args, false, true)
+	return bindFuncExprAndConstFoldInternal(ctx, proc, name, args, false, true, nil)
+}
+
+func bindBoundFuncExprAndConstFoldWithInternalFunctionArgsAndObserver(
+	ctx context.Context,
+	proc *process.Process,
+	name string,
+	args []*Expr,
+	observer func(*plan.Expr) error,
+) (*plan.Expr, error) {
+	return bindFuncExprAndConstFoldInternal(ctx, proc, name, args, false, true, observer)
 }
 
 func bindFuncExprAndConstFoldInternal(
@@ -4561,6 +4590,7 @@ func bindFuncExprAndConstFoldInternal(
 	args []*Expr,
 	descendFunctions bool,
 	allowInternalFunctionArgs bool,
+	observer func(*plan.Expr) error,
 ) (*plan.Expr, error) {
 	if err := foldDecimalStringComparisonConstants(ctx, proc, name, args); err != nil {
 		return nil, err
@@ -4569,6 +4599,11 @@ func bindFuncExprAndConstFoldInternal(
 		ctx, name, args, descendFunctions, nil, nil, allowInternalFunctionArgs)
 	if err != nil {
 		return nil, err
+	}
+	if observer != nil {
+		if err := observer(retExpr); err != nil {
+			return nil, err
+		}
 	}
 
 	switch retExpr.GetF().GetFunc().GetObjName() {

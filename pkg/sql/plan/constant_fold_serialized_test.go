@@ -645,7 +645,7 @@ func TestConstantFoldDynamicIPFunctionLosesFunctionNode(t *testing.T) {
 	require.NotNil(t, bound.GetF(), "the pre-optimization plan must retain the dynamic overload")
 	requiredBefore, err := RequiredPersistedExpressionProtocolVersion(bound)
 	require.NoError(t, err)
-	require.Equal(t, int64(defines.MORPCVersion85), requiredBefore)
+	require.Equal(t, int64(defines.MORPCVersion86), requiredBefore)
 
 	folded, err := ConstantFold(
 		batch.EmptyForConstFoldBatch, DeepCopyExpr(bound), ctx.GetProcess(), false, true)

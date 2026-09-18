@@ -2243,9 +2243,9 @@ func validateRemoteExpressionPipelineProtocol(
 		)
 	}
 	if features.ExpressionResultMetadataContracts || features.TOBase64ResultContracts || features.IPFunctionResultContracts {
-		if !hasProtocolVersion || protocolVersion < defines.MORPCVersion85 {
+		if !hasProtocolVersion || protocolVersion < defines.MORPCVersion86 {
 			return moerr.NewNotSupportedNoCtx(
-				"expression result contracts require MORPC protocol version 85",
+				"expression result contracts require MORPC protocol version 86",
 			)
 		}
 	}
