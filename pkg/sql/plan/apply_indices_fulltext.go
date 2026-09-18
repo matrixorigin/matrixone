@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -2531,9 +2532,20 @@ func (builder *QueryBuilder) getFullTextMatchFromAggHaving(havingPreds []*plan.E
 			if m == nil {
 				return
 			}
-			// The comparison casts the constant to the aggregate's type, so strip the
-			// order-preserving wrapper before reading the literal.
-			c, ok := nonNegativeConstValue(unwrapMonotoneScalar(constSide))
+			// The threshold may be a wrapped constant expression, e.g. FLOOR(1e-1). Reading the
+			// wrapper INPUT (unwrapMonotoneScalar) is wrong -- it is order-preserving but not
+			// value-preserving: FLOOR(1e-1) unwraps to 0.1, yet its effective value is FLOOR(0.1)=0.
+			// A `>=` with an effective threshold of 0 admits zero-score groups, so treating it as a
+			// positive threshold would insert the aggregate-preceding INNER JOIN and drop those
+			// groups (#29065). Evaluate the full constant instead. A value-preserving cast still
+			// folds to its literal; a non-constant (e.g. prepared `?`) does not fold and is left to
+			// the runtime score guard.
+			folded, ferr := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(constSide),
+				builder.compCtx.GetProcess(), false, false)
+			if ferr != nil {
+				return
+			}
+			c, ok := nonNegativeConstValue(folded)
 			if !ok {
 				return
 			}

@@ -81,4 +81,11 @@ select cat, score, rn from (
   from wd group by cat having max(match(body) against('alpha')) > 0
 ) q order by cat;
 
+-- #29065 P1: a WRAPPED constant threshold must be EVALUATED, not have its wrapper input read.
+-- floor(1e-1) evaluates to 0, so `>= floor(1e-1)` is the always-true `>= 0`: it cannot prove
+-- membership, so it is REJECTED (20105), exactly like a bare `>= 0`. Reading the wrapper input (0.1)
+-- as a positive threshold wrongly drove the index and silently dropped the zero-score groups
+-- (ids 3,5) instead of rejecting.
+select id from docs group by id, body having max(match(body) against('alpha')) >= floor(1e-1) order by id;
+
 drop database ft_agg_having;

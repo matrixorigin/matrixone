@@ -291,6 +291,13 @@ func TestGetFullTextMatchFromAggHaving(t *testing.T) {
 	}
 	f0 := makePlan2Float64ConstExprWithType(0)
 	f1 := makePlan2Float64ConstExprWithType(1)
+	// floor(v): an order-preserving-but-NOT-value-preserving wrapper around a constant. The
+	// effective threshold is floor(v), which the proof must evaluate rather than read the input v.
+	floor := func(t *testing.T, v float64) *planpb.Expr {
+		e, err := BindFuncExprImplByPlanExpr(context.Background(), "floor", []*planpb.Expr{makePlan2Float64ConstExprWithType(v)})
+		require.NoError(t, err)
+		return e
+	}
 
 	for _, tc := range []struct {
 		name     string
@@ -306,6 +313,25 @@ func TestGetFullTextMatchFromAggHaving(t *testing.T) {
 			having: func(t *testing.T, m *planpb.Expr) []*planpb.Expr { return []*planpb.Expr{cmp(t, ">=", aggCol(0), f0)} }, want: 0},
 		{name: "max>=1 accepted", aggList: func(m *planpb.Expr) []*planpb.Expr { return []*planpb.Expr{ftAggFn("max", m)} },
 			having: func(t *testing.T, m *planpb.Expr) []*planpb.Expr { return []*planpb.Expr{cmp(t, ">=", aggCol(0), f1)} }, want: 1},
+		// #29065: a wrapped constant threshold must be EVALUATED, not have its wrapper input read.
+		// `>= floor(1e-1)` has effective threshold floor(0.1)=0, so zero-score groups qualify and the
+		// query must NOT drive (reading the input 0.1 wrongly treated it as a positive threshold and
+		// dropped those groups).
+		{name: "max>=floor(0.1) effective 0 rejected", aggList: func(m *planpb.Expr) []*planpb.Expr { return []*planpb.Expr{ftAggFn("max", m)} },
+			having: func(t *testing.T, m *planpb.Expr) []*planpb.Expr {
+				return []*planpb.Expr{cmp(t, ">=", aggCol(0), floor(t, 0.1))}
+			}, want: 0},
+		// `>= floor(1.5)` has effective threshold 1 > 0, so it still drives -- the fix evaluates the
+		// constant rather than over-rejecting every wrapped threshold.
+		{name: "max>=floor(1.5) effective 1 accepted", aggList: func(m *planpb.Expr) []*planpb.Expr { return []*planpb.Expr{ftAggFn("max", m)} },
+			having: func(t *testing.T, m *planpb.Expr) []*planpb.Expr {
+				return []*planpb.Expr{cmp(t, ">=", aggCol(0), floor(t, 1.5))}
+			}, want: 1},
+		// `> floor(1e-1)` is `> 0`, which excludes zero-score groups regardless of the wrapper, so it drives.
+		{name: "max>floor(0.1) is >0 accepted", aggList: func(m *planpb.Expr) []*planpb.Expr { return []*planpb.Expr{ftAggFn("max", m)} },
+			having: func(t *testing.T, m *planpb.Expr) []*planpb.Expr {
+				return []*planpb.Expr{cmp(t, ">", aggCol(0), floor(t, 0.1))}
+			}, want: 1},
 		{name: "max<5 rejected", aggList: func(m *planpb.Expr) []*planpb.Expr { return []*planpb.Expr{ftAggFn("max", m)} },
 			having: func(t *testing.T, m *planpb.Expr) []*planpb.Expr {
 				return []*planpb.Expr{cmp(t, "<", aggCol(0), makePlan2Float64ConstExprWithType(5))}
