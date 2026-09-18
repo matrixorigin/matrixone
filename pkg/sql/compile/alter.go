@@ -2429,7 +2429,14 @@ func collectAlterCopyAddedForeignKeys(
 				addForeignKey.Fkey.Name,
 			)
 		}
-		result = append(result, plan2.DeepCopyFkey(foreignKey))
+		// The recreated relation supplies the remapped physical table/column IDs.
+		// Its SHOW-generated DDL spells out every reference action, however, so
+		// rebinding it cannot distinguish an omitted action from an explicit
+		// NO ACTION. Preserve that semantic origin from the user ALTER action.
+		collected := plan2.DeepCopyFkey(foreignKey)
+		collected.OnDeleteOrigin = addForeignKey.Fkey.OnDeleteOrigin
+		collected.OnUpdateOrigin = addForeignKey.Fkey.OnUpdateOrigin
+		result = append(result, collected)
 	}
 	return result, nil
 }

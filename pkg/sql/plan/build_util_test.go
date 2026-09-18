@@ -72,6 +72,60 @@ func Test_replaceFuncId(t *testing.T) {
 	assert.NotNil(t, case1Expr)
 }
 
+func TestForeignKeyDetectionSQLQuotesIdentifiers(t *testing.T) {
+	t.Run("external reference", func(t *testing.T) {
+		foreignKey := &plan.ForeignKeyDef{
+			Cols:        []uint64{1},
+			ForeignCols: []uint64{2},
+		}
+		sql, err := genSqlForCheckFKConstraints(
+			context.Background(),
+			foreignKey,
+			"child`db",
+			"child`table",
+			[]*plan.ColDef{{ColId: 1, Name: "child`column"}},
+			"parent`db",
+			"parent`table",
+			[]*plan.ColDef{{ColId: 2, Name: "parent`column"}},
+		)
+		require.NoError(t, err)
+		require.Contains(t, sql, "select distinct `child``table`.`child``column`")
+		require.Contains(t, sql, "from `child``db`.`child``table`")
+		require.Contains(t, sql, "where `child``table`.`child``column` is not null")
+		require.Contains(t, sql, "select distinct `parent``table`.`parent``column` from `parent``db`.`parent``table`")
+
+		statements, err := mysql.Parse(context.Background(), sql, 1)
+		require.NoError(t, err)
+		require.Len(t, statements, 1)
+	})
+
+	t.Run("self reference", func(t *testing.T) {
+		foreignKey := &plan.ForeignKeyDef{
+			Cols:        []uint64{1},
+			ForeignCols: []uint64{2},
+		}
+		sqls, err := genSqlsForCheckFKSelfRefer(
+			context.Background(),
+			"self`db",
+			"self`table",
+			[]*plan.ColDef{
+				{ColId: 1, Name: "child`column"},
+				{ColId: 2, Name: "parent`column"},
+			},
+			[]*plan.ForeignKeyDef{foreignKey},
+		)
+		require.NoError(t, err)
+		require.Len(t, sqls, 1)
+		require.Contains(t, sqls[0], "from `self``db`.`self``table`")
+		require.Contains(t, sqls[0], "select distinct `self``table`.`child``column`")
+		require.Contains(t, sqls[0], "select distinct `self``table`.`parent``column`")
+
+		statements, err := mysql.Parse(context.Background(), sqls[0], 1)
+		require.NoError(t, err)
+		require.Len(t, statements, 1)
+	})
+}
+
 // TestRewriteCountNotNullColToStarcount ensures plan-level rewrite sets both ObjName and Obj
 // so runtime uses countStarExec; regression test for count(not_null_col) performance fix.
 func TestRewriteCountNotNullColToStarcount(t *testing.T) {

@@ -26,6 +26,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -689,18 +690,18 @@ func buildAlterInsertDataSQL(
 			continue
 		}
 		if isFirst {
-			insertBuffer.WriteString("`" + key + "`")
+			insertBuffer.WriteString(sqlquote.Ident(key))
 			if value.sexprType == exprColumnName {
-				selectBuffer.WriteString("`" + value.sexprStr + "`")
+				selectBuffer.WriteString(sqlquote.Ident(value.sexprStr))
 			} else {
 				selectBuffer.WriteString(value.sexprStr)
 			}
 			isFirst = false
 		} else {
-			insertBuffer.WriteString(", " + "`" + key + "`")
+			insertBuffer.WriteString(", " + sqlquote.Ident(key))
 
 			if value.sexprType == exprColumnName {
-				selectBuffer.WriteString(", " + "`" + value.sexprStr + "`")
+				selectBuffer.WriteString(", " + sqlquote.Ident(value.sexprStr))
 			} else {
 				selectBuffer.WriteString(", " + value.sexprStr)
 			}
@@ -722,14 +723,14 @@ func buildAlterInsertDataSQL(
 		// delete from t1 where a = 2;
 		// fails, cannot find this row by join index table and the primary table.
 		//
-		str := fmt.Sprintf(", `%s`", catalog.FakePrimaryKeyColName)
+		str := ", " + sqlquote.Ident(catalog.FakePrimaryKeyColName)
 		insertBuffer.WriteString(str)
 		selectBuffer.WriteString(str)
 	}
 
-	insertSQL := fmt.Sprintf("INSERT INTO `%s`.`%s` (%s) SELECT %s FROM `%s`.`%s`",
-		formatStr(schemaName), formatStr(copyTableName), insertBuffer.String(),
-		selectBuffer.String(), formatStr(schemaName), formatStr(originTableName))
+	insertSQL := fmt.Sprintf("INSERT INTO %s (%s) SELECT %s FROM %s",
+		sqlquote.QualifiedIdent(schemaName, copyTableName), insertBuffer.String(),
+		selectBuffer.String(), sqlquote.QualifiedIdent(schemaName, originTableName))
 
 	return insertSQL, nil
 }

@@ -833,6 +833,79 @@ func TestCollectAlterCopyAddedForeignKeys(t *testing.T) {
 	require.Equal(t, []uint64{7, 0}, refChildren)
 }
 
+func TestCollectAlterCopyAddedForeignKeysPreservesActionOrigins(t *testing.T) {
+	actionForeignKeys := []*plan2.ForeignKeyDef{
+		{
+			Name:           "fk_default",
+			Cols:           []uint64{1},
+			ForeignTbl:     2,
+			ForeignCols:    []uint64{3},
+			OnDelete:       plan2.ForeignKeyDef_NO_ACTION,
+			OnUpdate:       plan2.ForeignKeyDef_NO_ACTION,
+			OnDeleteOrigin: plan2.ForeignKeyDef_ACTION_ORIGIN_DEFAULT,
+			OnUpdateOrigin: plan2.ForeignKeyDef_ACTION_ORIGIN_DEFAULT,
+		},
+		{
+			Name:           "fk_restrict",
+			Cols:           []uint64{4},
+			ForeignTbl:     5,
+			ForeignCols:    []uint64{6},
+			OnDelete:       plan2.ForeignKeyDef_RESTRICT,
+			OnUpdate:       plan2.ForeignKeyDef_RESTRICT,
+			OnDeleteOrigin: plan2.ForeignKeyDef_ACTION_ORIGIN_EXPLICIT,
+			OnUpdateOrigin: plan2.ForeignKeyDef_ACTION_ORIGIN_EXPLICIT,
+		},
+		{
+			Name:           "fk_no_action",
+			Cols:           []uint64{7},
+			ForeignTbl:     8,
+			ForeignCols:    []uint64{9},
+			OnDelete:       plan2.ForeignKeyDef_NO_ACTION,
+			OnUpdate:       plan2.ForeignKeyDef_NO_ACTION,
+			OnDeleteOrigin: plan2.ForeignKeyDef_ACTION_ORIGIN_EXPLICIT,
+			OnUpdateOrigin: plan2.ForeignKeyDef_ACTION_ORIGIN_EXPLICIT,
+		},
+	}
+	qry := &plan2.AlterTable{}
+	replacement := &plan2.TableDef{}
+	for i, actionForeignKey := range actionForeignKeys {
+		qry.Actions = append(qry.Actions, &plan2.AlterTable_Action{
+			Action: &plan2.AlterTable_Action_AddFk{AddFk: &plan2.AlterTableAddFk{
+				Fkey: actionForeignKey,
+			}},
+		})
+		replacement.Fkeys = append(replacement.Fkeys, &plan2.ForeignKeyDef{
+			Name:           actionForeignKey.Name,
+			Cols:           []uint64{uint64(101 + i)},
+			ForeignTbl:     uint64(201 + i),
+			ForeignCols:    []uint64{uint64(301 + i)},
+			OnDelete:       actionForeignKey.OnDelete,
+			OnUpdate:       actionForeignKey.OnUpdate,
+			OnDeleteOrigin: plan2.ForeignKeyDef_ACTION_ORIGIN_EXPLICIT,
+			OnUpdateOrigin: plan2.ForeignKeyDef_ACTION_ORIGIN_EXPLICIT,
+		})
+	}
+
+	foreignKeys, err := collectAlterCopyAddedForeignKeys(
+		context.Background(), qry, replacement,
+	)
+	require.NoError(t, err)
+	require.Len(t, foreignKeys, len(actionForeignKeys))
+	for i, foreignKey := range foreignKeys {
+		require.Equal(t, []uint64{uint64(101 + i)}, foreignKey.Cols)
+		require.Equal(t, uint64(201+i), foreignKey.ForeignTbl)
+		require.Equal(t, []uint64{uint64(301 + i)}, foreignKey.ForeignCols)
+		require.Equal(t, actionForeignKeys[i].OnDelete, foreignKey.OnDelete)
+		require.Equal(t, actionForeignKeys[i].OnUpdate, foreignKey.OnUpdate)
+		require.Equal(t, actionForeignKeys[i].OnDeleteOrigin, foreignKey.OnDeleteOrigin)
+		require.Equal(t, actionForeignKeys[i].OnUpdateOrigin, foreignKey.OnUpdateOrigin)
+	}
+
+	foreignKeys[0].Cols[0] = 999
+	require.Equal(t, uint64(101), replacement.Fkeys[0].Cols[0],
+		"the collected definition must not alias recreated table metadata")
+}
+
 func TestCollectAlterCopyAddedForeignKeysRejectsInconsistentPlan(t *testing.T) {
 	ctx := context.Background()
 

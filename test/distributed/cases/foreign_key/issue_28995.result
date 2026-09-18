@@ -110,6 +110,34 @@ select id, parent_a, parent_b from composite_child_t order by id;
 1  ¦  1  ¦  2
 insert into composite_child_t values (2, 1, 999);
 internal error: Cannot add or update a child row: a foreign key constraint fails
+create table `parent``t` (
+`id``key` int primary key
+);
+insert into `parent``t` values (1);
+create table escaped_external_child (
+`id``key` int primary key
+);
+insert into escaped_external_child values (1);
+alter table escaped_external_child
+add column `parent``id` int not null default 1,
+add constraint `fk``external` foreign key (`parent``id`)
+references `parent``t`(`id``key`);
+select count(*) from escaped_external_child
+where `id``key` = 1 and `parent``id` = 1;
+➤ count(*)[-5,64,0]  𝄀
+1
+create table escaped_self_child (
+`id``key` int primary key
+);
+insert into escaped_self_child values (1);
+alter table escaped_self_child
+add column `parent``id` int not null default 1,
+add constraint `fk``self` foreign key (`parent``id`)
+references escaped_self_child(`id``key`);
+select count(*) from escaped_self_child
+where `id``key` = 1 and `parent``id` = 1;
+➤ count(*)[-5,64,0]  𝄀
+1
 drop table parent_t;
 internal error: can not drop table 'parent_t' referenced by some foreign key constraint
 drop table composite_child_t;

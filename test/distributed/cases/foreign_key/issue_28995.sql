@@ -114,6 +114,34 @@ select id, parent_a, parent_b from composite_child_t order by id;
 --ERROR 1452 (23000): Cannot add or update a child row: a foreign key constraint fails
 insert into composite_child_t values (2, 1, 999);
 
+-- FK validation SQL must quote decoded database, table, and column names. Both
+-- external and self references exercise the generated post-copy detection SQL.
+create table `parent``t` (
+    `id``key` int primary key
+);
+insert into `parent``t` values (1);
+create table escaped_external_child (
+    `id``key` int primary key
+);
+insert into escaped_external_child values (1);
+alter table escaped_external_child
+    add column `parent``id` int not null default 1,
+    add constraint `fk``external` foreign key (`parent``id`)
+        references `parent``t`(`id``key`);
+select count(*) from escaped_external_child
+    where `id``key` = 1 and `parent``id` = 1;
+
+create table escaped_self_child (
+    `id``key` int primary key
+);
+insert into escaped_self_child values (1);
+alter table escaped_self_child
+    add column `parent``id` int not null default 1,
+    add constraint `fk``self` foreign key (`parent``id`)
+        references escaped_self_child(`id``key`);
+select count(*) from escaped_self_child
+    where `id``key` = 1 and `parent``id` = 1;
+
 -- Parent reverse-reference metadata is published with the new constraint.
 --ERROR 3730 (HY000): Cannot drop table 'parent_t' referenced by a foreign key constraint 'fk_child_parent' on table 'child_t'.
 drop table parent_t;
