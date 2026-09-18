@@ -139,13 +139,14 @@
     "current-diff CI and QA",
     "current PR1 tuple framing/decoder implementation and tuple fuzz",
     "PR2 tuple integration and current-source decoder evidence",
-    "live S3-compatible backend matrix (small PUT, unknown-size multipart, large parallel multipart and read)"
+    "live S3-compatible backend matrix (small PUT, unknown-size multipart, large parallel multipart and read)",
+    "SQL LIKE matcher semantics and MySQL oracle (PR3 scope)"
   ],
   "production_admission": "DISABLED_UNCHANGED",
   "source_sha256": {
     "pkg/common/collation/key.go": "26117bf38bc70f8b8b437346f1c2dd0d5f33c5f89a6b9407ddd49d868f6cb618",
     "pkg/common/collation/general_ci.go": "b9df94a5c6341b24febec13d8bacf5a2b2fa2747890b7d05cd2e93926b14ef77",
-    "pkg/common/collation/uca0900.go": "2f509910fdeb6328008167fe1fd3d6a9934abc3a7d024d40eb206a37d1b36c77",
+    "pkg/common/collation/uca0900.go": "a84236fa1b63356edbe88258b39bc96f4373a64d2ffcb62deea5a27a750320ea",
     "pkg/common/collation/freeze_test.go": "4e7580354db582d24c41e9507e32262bb28ae1abfa5c90768eb795e34778dc16",
     "pkg/common/collation/key_test.go": "4b4da3a58547af1504d83102a45267eb8be374719cb162387fc4e7821c915252",
     "pkg/common/collation/testdata/extend_oracle.py": "546f258f46af0bb87d30aa5c03de861e92a3c3155349e5cf49e84c16165f4179",
@@ -170,7 +171,8 @@
       "finite oracle corpus; not exhaustive Unicode sequence equivalence",
       "prefix decoder cannot detect corruption yielding another syntactically valid field",
       "full feature persistence/restart and consumers not certified",
-      "tuple/decoder source and fuzz results are not part of the current PR1 diff"
+      "tuple/decoder source and fuzz results are not part of the current PR1 diff",
+      "LIKE semantics are deliberately outside this PR1 evidence; PR3 must provide the matcher and oracle."
     ]
   },
   "environment_cleanup": {
@@ -178,7 +180,7 @@
     "task_colima_vm": "STOPPED"
   },
   "scope": {
-    "current_pr": "weight backend, oracle/golden fixtures, error/capacity/ownership tests and dependency closure",
+    "current_pr": "weight backend, oracle/golden fixtures, error/capacity/ownership tests and dependency closure; LIKE matcher intentionally excluded and owned by PR3",
     "next_pr": "PR2 must re-run tuple/decoder tests against its own source and commit",
     "historical_integration_evidence": "tuple framing, packer/decoder, tuple fuzz and consumer checks from the recorded integration baseline"
   },
@@ -317,5 +319,17 @@
       }
     }
   },
-  "evidence_binding": "Current PASS entries are bound by the source_sha256 map and exact commands; historical, NOT_RUN and BLOCKED_ENVIRONMENT entries are labeled separately."
+  "evidence_binding": "Current PASS entries are bound by the source_sha256 map and exact commands; historical, NOT_RUN and BLOCKED_ENVIRONMENT entries are labeled separately.",
+  "like": {
+    "status": "NOT_RUN",
+    "pr1": "No wildcard matcher is exported or called by PR1.",
+    "owner": "PR3",
+    "required": [
+      "MySQL LIKE character and escape semantics",
+      "pattern=ss/value=ß and the reverse direction",
+      "31/32/33 repetitions of %a",
+      "NULL, empty, NUL, trailing spaces, supplementary and invalid UTF-8 cases"
+    ],
+    "scope": "PR3_SCOPE"
+  }
 }

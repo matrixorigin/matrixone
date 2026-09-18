@@ -22,6 +22,10 @@ closed; durable cluster admission and end-to-end acceptance remain separate.
   There is no automatic row selection, merge or deletion.
 - This freezes an encoding, not the unfinished mechanism for propagating old
   versus new effective semantics through all SQL expressions.
+- SQL `LIKE` is intentionally outside PR1. Weight equality and ordering do not
+  prove wildcard semantics, so PR1 exports no wildcard matcher. PR3 owns the
+  character-space implementation and its MySQL oracle matrix, including `%`,
+  `_`, escapes, `ß`/`ss`, combining characters and long-pattern boundaries.
 - Neither collation ID nor semantic/format version is embedded per key. Column
   and expression metadata supplies the domain; relation/index metadata supplies
   format. Missing format remains legacy (0). The current implementation symbol
