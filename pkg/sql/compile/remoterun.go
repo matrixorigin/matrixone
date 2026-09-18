@@ -134,8 +134,8 @@ func encodeRemoteScopeWithFeatures(
 	if err = validateRemoteExpressionFeaturesProtocol(proc, features); err != nil {
 		return nil, features, err
 	}
-	if features.StatementDigestFunction {
-		if err = validateStatementDigestDestination(proc, p); err != nil {
+	if features.StatementHashFunction {
+		if err = validateStatementHashDestination(proc, p); err != nil {
 			return nil, features, err
 		}
 	}
@@ -360,12 +360,12 @@ func encodeProcessInfo(
 	sql string,
 	remoteFragmentCounts map[string]uint32,
 	remoteExecutionID uuid.UUID,
-	containsStatementDigest bool,
+	containsStatementHash bool,
 ) ([]byte, error) {
 	var v pipeline.ProcessInfo
 	var err error
-	if containsStatementDigest {
-		v, err = proc.BuildProcessInfoWithStatementDigest(sql)
+	if containsStatementHash {
+		v, err = proc.BuildProcessInfoWithStatementHash(sql)
 	} else {
 		v, err = proc.BuildProcessInfo(sql)
 	}
@@ -2227,10 +2227,10 @@ func validateRemoteExpressionFeaturesProtocol(
 			"mixed JSON/BOOL equality requires MORPC protocol version 36",
 		)
 	}
-	if features.StatementDigestFunction &&
+	if features.StatementHashFunction &&
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion86) {
 		return moerr.NewNotSupportedNoCtx(
-			"STATEMENT_DIGEST remote execution requires MORPC protocol version 86",
+			"MO_STATEMENT_HASH remote execution requires MORPC protocol version 86",
 		)
 	}
 	if features.FormatNumericArguments &&

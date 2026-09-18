@@ -17,6 +17,7 @@ package process
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -313,7 +315,7 @@ func TestResolveSQLModeResolverValueTypes(t *testing.T) {
 	}
 }
 
-func TestBuildProcessInfoStatementDigestRejectsInvalidSQLModeType(t *testing.T) {
+func TestBuildProcessInfoStatementHashRejectsInvalidSQLModeType(t *testing.T) {
 	proc, _ := newCodecTestProcess(t)
 	proc.Base.IsFrontend = true
 	proc.SetResolveVariableFunc(func(name string, _, _ bool) (any, error) {
@@ -323,14 +325,18 @@ func TestBuildProcessInfoStatementDigestRejectsInvalidSQLModeType(t *testing.T) 
 		return nil, nil
 	})
 
-	// Non-digest remote scopes retain the historical best-effort behavior.
+	// Non-hash remote scopes retain the historical best-effort behavior.
 	_, err := proc.BuildProcessInfo("select 1")
 	require.NoError(t, err)
 
-	// A digest-bearing scope must reject the malformed variable before it can
-	// be serialized and evaluated under a different SQL mode remotely.
-	_, err = proc.BuildProcessInfoWithStatementDigest("select 1")
-	require.EqualError(t, err, "internal error: unexpected sql_mode type int64")
+	// A hash-bearing remote scope carries the malformed-variable error to the
+	// worker, where an active function row will raise it.
+	info, err := proc.BuildProcessInfoWithStatementHash("select 1")
+	require.NoError(t, err)
+	require.NotEmpty(t, info.SessionInfo.StatementHashSqlModeError)
+	var captured moerr.Error
+	require.NoError(t, captured.UnmarshalBinary(info.SessionInfo.StatementHashSqlModeError))
+	require.EqualError(t, &captured, "internal error: unexpected sql_mode type int64")
 
 	// A failed resolution must not poison the process; a later retry resolves a
 	// fresh valid snapshot and succeeds.
@@ -345,9 +351,10 @@ func TestBuildProcessInfoStatementDigestRejectsInvalidSQLModeType(t *testing.T) 
 		}
 		return "STRICT_ALL_TABLES", nil
 	})
-	_, err = proc.BuildProcessInfoWithStatementDigest("select 1")
-	require.EqualError(t, err, "internal error: unexpected sql_mode type int64")
-	info, err := proc.BuildProcessInfoWithStatementDigest("select 1")
+	firstAttempt, err := proc.BuildProcessInfoWithStatementHash("select 1")
+	require.NoError(t, err)
+	require.NotEmpty(t, firstAttempt.SessionInfo.StatementHashSqlModeError)
+	info, err = proc.BuildProcessInfoWithStatementHash("select 1")
 	require.NoError(t, err)
 	require.Equal(t, "STRICT_ALL_TABLES", info.SessionInfo.SqlMode)
 	require.Equal(t, 2, calls)
@@ -377,7 +384,7 @@ func TestBuildProcessInfoPreservesBackgroundSqlModeAcrossForwards(t *testing.T) 
 	require.Equal(t, "STRICT_TRANS_TABLES", second.SessionInfo.SqlMode)
 }
 
-func TestBuildProcessInfoGenericAndStatementDigestSQLModeResolution(t *testing.T) {
+func TestBuildProcessInfoGenericAndStatementHashSQLModeResolution(t *testing.T) {
 	proc, _ := newCodecTestProcess(t)
 	proc.Base.IsFrontend = false
 	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
@@ -389,14 +396,14 @@ func TestBuildProcessInfoGenericAndStatementDigestSQLModeResolution(t *testing.T
 	require.NoError(t, err)
 	require.Equal(t, "ANSI_QUOTES", ordinary.SessionInfo.SqlMode)
 
-	// Digest-bearing encoding instead preserves the coordinator's captured
+	// Hash-bearing encoding instead preserves the coordinator's captured
 	// snapshot so the receiver parses under the same SQL mode.
-	digest, err := proc.BuildProcessInfoWithStatementDigest("select 1")
+	hashProcessInfo, err := proc.BuildProcessInfoWithStatementHash("select 1")
 	require.NoError(t, err)
-	require.Equal(t, "STRICT_TRANS_TABLES", digest.SessionInfo.SqlMode)
+	require.Equal(t, "STRICT_TRANS_TABLES", hashProcessInfo.SessionInfo.SqlMode)
 
 	svc := NewCodecService(fakeCodecTxnClient{op: fakeCodecTxnOperator{}}, nil, nil, nil, nil, nil, nil, nil)
-	decoded, err := svc.Decode(defines.AttachAccountId(context.Background(), 42), digest)
+	decoded, err := svc.Decode(defines.AttachAccountId(context.Background(), 42), hashProcessInfo)
 	require.NoError(t, err)
 	defer decoded.Free()
 	decoded.Base.IsFrontend = false
@@ -404,14 +411,18 @@ func TestBuildProcessInfoGenericAndStatementDigestSQLModeResolution(t *testing.T
 		return "ANSI_QUOTES", nil
 	})
 
-	// Even if an intermediate CN has a different resolver, a second digest
+	// Even if an intermediate CN has a different resolver, a second hash
 	// forward must retain the original snapshot.
-	second, err := decoded.BuildProcessInfoWithStatementDigest("select 1")
+	second, err := decoded.BuildProcessInfoWithStatementHash("select 1")
 	require.NoError(t, err)
 	require.Equal(t, "STRICT_TRANS_TABLES", second.SessionInfo.SqlMode)
 }
 
-func TestBuildProcessInfoStatementDigestPropagatesSQLModeResolverErrors(t *testing.T) {
+func TestBuildProcessInfoStatementHashPropagatesSQLModeResolverErrors(t *testing.T) {
+	oldBuildCommitID := version.BuildCommitID
+	version.BuildCommitID = strings.Repeat("a", 40)
+	t.Cleanup(func() { version.BuildCommitID = oldBuildCommitID })
+
 	proc, _ := newCodecTestProcess(t)
 	proc.Base.IsFrontend = true
 	proc.Base.SessionInfo.ExplicitZeroTemporalCastReturnsNull = true
@@ -424,14 +435,35 @@ func TestBuildProcessInfoStatementDigestPropagatesSQLModeResolverErrors(t *testi
 	})
 
 	// The generic codec path preserves its historical best-effort behavior and
-	// remains usable for scopes that do not contain STATEMENT_DIGEST.
+	// remains usable for scopes that do not contain MO_STATEMENT_HASH.
 	_, err := proc.BuildProcessInfo("select 1")
 	require.NoError(t, err)
 
-	// A digest-bearing remote scope must fail before serialization/dispatch
-	// rather than let the receiving CN evaluate under a different mode.
-	_, err = proc.BuildProcessInfoWithStatementDigest("select 1")
-	require.ErrorIs(t, err, resolverErr)
+	// Hash-bearing process info carries the resolver failure without surfacing
+	// it during dispatch. The remote function raises it only when a row is
+	// actually evaluated.
+	info, err := proc.BuildProcessInfoWithStatementHash("select 1")
+	require.NoError(t, err)
+	require.Equal(t, version.BuildCommitID, info.SessionInfo.StatementHashExpectedBuildCommitId)
+	require.NotEmpty(t, info.SessionInfo.StatementHashSqlModeError)
+	remoteService := NewCodecService(fakeCodecTxnClient{op: fakeCodecTxnOperator{}}, nil, nil, nil, nil, nil, nil, nil)
+	remote, err := remoteService.Decode(defines.AttachAccountId(context.Background(), 42), info)
+	require.NoError(t, err)
+	defer remote.Free()
+	remote.Base.IsFrontend = false
+	require.Equal(t, version.BuildCommitID, remote.Base.SessionInfo.StatementHashExpectedBuildCommitID)
+	remote.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return nil, moerr.NewInternalErrorNoCtx("worker-local resolver must not replace coordinator error")
+	})
+	_, err = ResolveSQLMode(remote)
+	require.EqualError(t, err, resolverErr.Error())
+	require.True(t, moerr.IsMoErrCode(err, resolverErr.ErrorCode()))
+
+	forwarded, err := remote.BuildProcessInfoWithStatementHash("select 1")
+	require.NoError(t, err)
+	require.Equal(t, version.BuildCommitID, forwarded.SessionInfo.StatementHashExpectedBuildCommitId)
+	require.Equal(t, info.SessionInfo.StatementHashSqlModeError, forwarded.SessionInfo.StatementHashSqlModeError)
+	require.Equal(t, info.SessionInfo.StatementHashSqlModeErrorDetail, forwarded.SessionInfo.StatementHashSqlModeErrorDetail)
 
 	// A transient resolver failure must not poison the process: a later retry
 	// resolves a fresh snapshot and succeeds.
@@ -448,37 +480,39 @@ func TestBuildProcessInfoStatementDigestPropagatesSQLModeResolverErrors(t *testi
 			return nil, nil
 		}
 	})
-	_, err = proc.BuildProcessInfoWithStatementDigest("select 1")
-	require.ErrorIs(t, err, resolverErr)
-	info, err := proc.BuildProcessInfoWithStatementDigest("select 1")
+	firstAttempt, err := proc.BuildProcessInfoWithStatementHash("select 1")
+	require.NoError(t, err)
+	require.NotEmpty(t, firstAttempt.SessionInfo.StatementHashSqlModeError)
+	info, err = proc.BuildProcessInfoWithStatementHash("select 1")
 	require.NoError(t, err)
 	require.Equal(t, "STRICT_TRANS_TABLES", info.SessionInfo.SqlMode)
-	require.Equal(t, 2, calls, "failed and successful digest builds")
+	require.Empty(t, info.SessionInfo.StatementHashSqlModeError)
+	require.Equal(t, 2, calls, "failed and successful hash builds")
 
 	// Once a remote process carries a non-empty snapshot, the receiving
-	// resolver is never consulted, even on the strict digest path.
+	// resolver is never consulted, even on the strict hash path.
 	proc.Base.IsFrontend = false
 	proc.Base.SessionInfo.SqlMode = EmptySqlModeSentinel
 	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
 		return nil, moerr.NewInternalErrorNoCtx("must not resolve captured sql_mode")
 	})
-	info, err = proc.BuildProcessInfoWithStatementDigest("select 1")
+	info, err = proc.BuildProcessInfoWithStatementHash("select 1")
 	require.NoError(t, err)
 	require.Equal(t, EmptySqlModeSentinel, info.SessionInfo.SqlMode)
 
-	// A false temporal flag is also a captured snapshot. The digest codec
+	// A false temporal flag is also a captured snapshot. The hash codec
 	// must derive it from the already captured sql_mode and never consult the
 	// receiving CN's resolver, or a second hop can change the local behavior.
-	remote, _ := newCodecTestProcess(t)
-	remote.Base.IsFrontend = false
-	remote.Base.SessionInfo.SqlMode = EmptySqlModeSentinel
-	remote.Base.SessionInfo.ExplicitZeroTemporalCastReturnsNull = false
+	remoteSnapshot, _ := newCodecTestProcess(t)
+	remoteSnapshot.Base.IsFrontend = false
+	remoteSnapshot.Base.SessionInfo.SqlMode = EmptySqlModeSentinel
+	remoteSnapshot.Base.SessionInfo.ExplicitZeroTemporalCastReturnsNull = false
 	resolverCalls := 0
-	remote.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+	remoteSnapshot.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
 		resolverCalls++
 		return nil, moerr.NewInternalErrorNoCtx("must not resolve captured sql_mode")
 	})
-	info, err = remote.BuildProcessInfoWithStatementDigest("select 1")
+	info, err = remoteSnapshot.BuildProcessInfoWithStatementHash("select 1")
 	require.NoError(t, err)
 	require.Equal(t, EmptySqlModeSentinel, info.SessionInfo.SqlMode)
 	require.False(t, info.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
@@ -487,11 +521,35 @@ func TestBuildProcessInfoStatementDigestPropagatesSQLModeResolverErrors(t *testi
 	// If the captured mode itself requires the temporal adjustment, derive it
 	// even when the serialized boolean was false (for example, an older peer
 	// that did not carry that field yet).
-	remote.Base.SessionInfo.SqlMode = "STRICT_TRANS_TABLES,NO_ZERO_DATE"
-	info, err = remote.BuildProcessInfoWithStatementDigest("select 1")
+	remoteSnapshot.Base.SessionInfo.SqlMode = "STRICT_TRANS_TABLES,NO_ZERO_DATE"
+	info, err = remoteSnapshot.BuildProcessInfoWithStatementHash("select 1")
 	require.NoError(t, err)
 	require.True(t, info.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
 	require.Zero(t, resolverCalls)
+}
+
+func TestResolveSQLModeRejectsCorruptCapturedStatementHashError(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	proc.Base.SessionInfo.SqlMode = "STRICT_TRANS_TABLES"
+	proc.Base.SessionInfo.StatementHashSQLModeError = []byte{0xff, 0x00}
+
+	mode, err := ResolveSQLMode(proc)
+	require.Equal(t, "STRICT_TRANS_TABLES", mode)
+	require.ErrorContains(t, err, "invalid captured sql_mode resolver error")
+}
+
+func TestEncodeStatementHashSQLModeErrorBoundsDiagnostic(t *testing.T) {
+	resolverErr := moerr.NewInternalErrorNoCtx(strings.Repeat("x", maxStatementHashResolverErrorBytes+1))
+	resolverErr.SetDetail(strings.Repeat("y", maxStatementHashResolverErrorBytes+1))
+
+	payload, detail, err := encodeStatementHashSQLModeError(resolverErr)
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(payload)+len(detail), maxStatementHashResolverErrorBytes)
+
+	var decoded moerr.Error
+	require.NoError(t, decoded.UnmarshalBinary(payload))
+	decoded.SetDetail(detail)
+	require.ErrorContains(t, &decoded, "exceeds the 4096-byte remote diagnostic limit")
 }
 
 func TestPrepareParamMetadataForRemoteCompatibility(t *testing.T) {

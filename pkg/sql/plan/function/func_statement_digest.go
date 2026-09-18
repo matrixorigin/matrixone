@@ -24,17 +24,34 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	mysqlparser "github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-func statementDigestReturnType(_ []types.Type) types.Type {
+const (
+	// Parsing a statement allocates a Go AST outside the query mpool. Keep the
+	// input bounded so the AST, its source copy, and formatted output have a
+	// bounded per-row lifetime and cannot grow with an arbitrary TEXT/BLOB value.
+	maxStatementHashInputBytes = 1 << 20
+	// The MySQL yacc parser grows its stack dynamically and AST formatting is
+	// recursive. Bound lexical complexity and delimiter nesting before parsing.
+	maxStatementHashTokenCount = 1 << 14
+	maxStatementHashNesting    = 512
+	// The formatter can add quoting and separators, but its output remains
+	// proportional to the input AST. This bounds formatted bytes, not total Go
+	// heap capacity or the AST itself.
+	maxStatementHashFormattedBytes = 4 << 20
+)
+
+func statementHashReturnType(_ []types.Type) types.Type {
 	typ := types.T_varchar.ToType()
 	typ.Width = 64
 	return typ
 }
 
-func statementDigestSQLMode(proc *process.Process) (string, error) {
+func statementHashSQLMode(proc *process.Process) (string, error) {
 	sqlMode, err := process.ResolveSQLMode(proc)
 	if err != nil {
 		return "", err
@@ -45,41 +62,58 @@ func statementDigestSQLMode(proc *process.Process) (string, error) {
 	return sqlMode, nil
 }
 
-// statementDigestDeparse returns the existing MySQL-dialect AST rendering used
-// by MatrixOne's SQL formatter. It does not claim MySQL STATEMENT_DIGEST
-// compatibility; the deparsed bytes are this build's statement-hash contract.
-func statementDigestDeparse(stmt tree.Statement) (formatted string, err error) {
+// statementHashDeparse returns the existing MySQL-dialect AST rendering used
+// by MatrixOne's SQL formatter. MO_STATEMENT_HASH is a MatrixOne-native
+// contract, distinct from MySQL's normalized-token STATEMENT_DIGEST.
+func statementHashDeparse(stmt tree.Statement) (formatted string, err error) {
 	if stmt == nil {
-		return "", moerr.NewNotSupportedNoCtx("cannot format a nil statement for STATEMENT_DIGEST")
+		return "", moerr.NewNotSupportedNoCtx("cannot format a nil statement for MO_STATEMENT_HASH")
 	}
 	defer func() {
 		if recover() != nil {
 			formatted = ""
-			err = moerr.NewInternalErrorNoCtx("AST formatter failed during STATEMENT_DIGEST")
+			err = moerr.NewInternalErrorNoCtx("AST formatter failed during MO_STATEMENT_HASH")
 		}
 	}()
 
-	formatted = tree.StringWithOpts(
-		stmt,
+	fmtCtx := tree.NewFmtCtx(
 		dialect.MYSQL,
 		tree.WithQuoteIdentifier(),
 		tree.WithSingleQuoteString(),
 		tree.WithCanonicalUserVariableNames(),
+		tree.WithMaxOutputBytes(maxStatementHashFormattedBytes),
 	)
+	stmt.Format(fmtCtx)
+	if fmtCtx.OutputLimitExceeded() {
+		return "", moerr.NewInvalidInputNoCtxf(
+			"MO_STATEMENT_HASH formatted statement exceeds the maximum of %d bytes",
+			maxStatementHashFormattedBytes,
+		)
+	}
+	formatted = fmtCtx.String()
 	if formatted == "" {
-		return "", moerr.NewNotSupportedNoCtx("AST formatter produced empty output for STATEMENT_DIGEST")
+		return "", moerr.NewNotSupportedNoCtx("AST formatter produced empty output for MO_STATEMENT_HASH")
+	}
+	if len(formatted) > maxStatementHashFormattedBytes {
+		return "", moerr.NewInvalidInputNoCtxf(
+			"MO_STATEMENT_HASH formatted statement exceeds the maximum of %d bytes",
+			maxStatementHashFormattedBytes,
+		)
 	}
 	return formatted, nil
 }
 
-func statementDigestValue(ctx context.Context, sql string, sqlMode string) ([]byte, error) {
+func statementHashValue(ctx context.Context, sql string, sqlMode string) ([]byte, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	statements, err := parsers.ParseWithSQLMode(ctx, dialect.MYSQL, sql, 0, sqlMode)
-	if err != nil {
+	if len(sql) > maxStatementHashInputBytes {
+		return nil, statementHashInputTooLargeError(len(sql))
+	}
+	if err := validateStatementHashInputComplexity(ctx, sql, sqlMode); err != nil {
 		return nil, err
 	}
+	statements, err := parsers.ParseWithSQLMode(ctx, dialect.MYSQL, sql, 0, sqlMode)
 	defer func() {
 		for _, stmt := range statements {
 			if stmt != nil {
@@ -87,18 +121,21 @@ func statementDigestValue(ctx context.Context, sql string, sqlMode string) ([]by
 			}
 		}
 	}()
+	if err != nil {
+		return nil, err
+	}
 
 	if len(statements) != 1 {
-		return nil, moerr.NewParseError(ctx, "STATEMENT_DIGEST requires exactly one statement")
+		return nil, moerr.NewParseError(ctx, "MO_STATEMENT_HASH requires exactly one statement")
 	}
 	if _, empty := statements[0].(*tree.EmptyStmt); empty {
-		return nil, moerr.NewParseError(ctx, "STATEMENT_DIGEST requires a non-empty statement")
+		return nil, moerr.NewParseError(ctx, "MO_STATEMENT_HASH requires a non-empty statement")
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
-	formatted, err := statementDigestDeparse(statements[0])
+	formatted, err := statementHashDeparse(statements[0])
 	if err != nil {
 		return nil, err
 	}
@@ -111,13 +148,67 @@ func statementDigestValue(ctx context.Context, sql string, sqlMode string) ([]by
 	return encoded, nil
 }
 
-// StatementDigest hashes the MySQL-dialect rendering of one MatrixOne-parsed
-// statement. This is a build-scoped MatrixOne statement hash, not MySQL's
+func statementHashInputTooLargeError(size int) error {
+	return moerr.NewInvalidInputNoCtxf(
+		"MO_STATEMENT_HASH input is %d bytes; maximum is %d bytes",
+		size,
+		maxStatementHashInputBytes,
+	)
+}
+
+func validateStatementHashInputComplexity(ctx context.Context, sql, sqlMode string) error {
+	scanner := mysqlparser.NewScannerWithSQLMode(
+		dialect.MYSQL,
+		sql,
+		mysqlparser.ParseSQLModeFlags(sqlMode),
+	)
+	defer mysqlparser.PutScanner(scanner)
+
+	tokenCount := 0
+	nesting := 0
+	for {
+		if tokenCount&0xff == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		token, _ := scanner.Scan()
+		if token == 0 || token == mysqlparser.LEX_ERROR {
+			// Leave lexical failures to the parser so its normal error and source
+			// location are preserved.
+			return nil
+		}
+		tokenCount++
+		if tokenCount > maxStatementHashTokenCount {
+			return moerr.NewInvalidInputNoCtxf(
+				"MO_STATEMENT_HASH statement exceeds the maximum of %d SQL tokens",
+				maxStatementHashTokenCount,
+			)
+		}
+		switch token {
+		case int('('), int('['), int('{'):
+			nesting++
+			if nesting > maxStatementHashNesting {
+				return moerr.NewInvalidInputNoCtxf(
+					"MO_STATEMENT_HASH statement exceeds the maximum nesting depth of %d",
+					maxStatementHashNesting,
+				)
+			}
+		case int(')'), int(']'), int('}'):
+			if nesting > 0 {
+				nesting--
+			}
+		}
+	}
+}
+
+// StatementHash hashes the MatrixOne MySQL-dialect rendering of one parsed
+// statement. It is a build-scoped MatrixOne-native hash, not MySQL's
 // normalized-token STATEMENT_DIGEST. Whitespace, comments, and equivalent
 // formatting and case-insensitive user-variable names normalize through the
 // AST formatter; literal values and distinct variable/identifier names remain
 // part of the hash.
-func StatementDigest(
+func StatementHash(
 	ivecs []*vector.Vector,
 	result vector.FunctionResultWrapper,
 	proc *process.Process,
@@ -148,13 +239,26 @@ func StatementDigest(
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
+		// Enforce the input budget before consulting session state or copying the
+		// bytes into a string for the parser.
+		if len(input) > maxStatementHashInputBytes {
+			return nil, statementHashInputTooLargeError(len(input))
+		}
+		if proc != nil && proc.Base != nil {
+			expectedBuild := proc.Base.SessionInfo.StatementHashExpectedBuildCommitID
+			if expectedBuild != "" && expectedBuild != version.BuildCommitID {
+				return nil, moerr.NewNotSupportedNoCtx(
+					"MO_STATEMENT_HASH worker build does not match the build selected by its coordinator",
+				)
+			}
+		}
 		if !sqlModeResolved {
-			sqlMode, sqlModeErr = statementDigestSQLMode(proc)
+			sqlMode, sqlModeErr = statementHashSQLMode(proc)
 			sqlModeResolved = true
 		}
 		if sqlModeErr != nil {
 			return nil, sqlModeErr
 		}
-		return statementDigestValue(ctx, string(input), sqlMode)
+		return statementHashValue(ctx, string(input), sqlMode)
 	}, selectList)
 }

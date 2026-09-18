@@ -787,6 +787,16 @@ message SessionInfo {
   // IANA identity preserves historical and DST rules. Empty means the legacy
   // time_zone bytes describe a fixed-offset location.
   string time_zone_name = 17;
+  // Serialized resolver error captured by MO_STATEMENT_HASH. The receiving
+  // CN returns it only when an active, non-NULL, unmasked row evaluates the
+  // function; plan serialization and unevaluated rows must remain lazy.
+  bytes statement_hash_sql_mode_error = 18;
+  // The detail field is separate because moerr's binary form intentionally
+  // omits its display detail.
+  string statement_hash_sql_mode_error_detail = 19;
+  // Exact source revision selected by the coordinator for AST formatting.
+  // The worker rechecks it immediately before evaluating MO_STATEMENT_HASH.
+  string statement_hash_expected_build_commit_id = 20;
 }
 
 message SessionLoggerInfo {

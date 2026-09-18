@@ -135,6 +135,15 @@ type SessionInfo struct {
 	// SqlMode is captured on the initiating CN and used when a remote process has
 	// no session variable resolver.
 	SqlMode string
+	// StatementHashSQLModeError carries a coordinator resolver failure to a
+	// remote MO_STATEMENT_HASH evaluation without surfacing it during pipeline
+	// serialization. It is raised only if the expression evaluates an active row.
+	StatementHashSQLModeError       []byte
+	StatementHashSQLModeErrorDetail string
+	// StatementHashExpectedBuildCommitID fences remote MO_STATEMENT_HASH
+	// evaluation against the exact coordinator build whose AST formatter was
+	// selected during remote placement.
+	StatementHashExpectedBuildCommitID string
 	// AutoIncrementIncrement and AutoIncrementOffset are captured on the
 	// initiating CN and used by remote PRE_INSERT operators.  They are
 	// statement-scoped; zero means the default value one for compatibility with

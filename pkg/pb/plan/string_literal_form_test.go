@@ -182,28 +182,28 @@ func TestRequiresMORPCVersion30NumericPrefix(t *testing.T) {
 	require.False(t, required)
 }
 
-func TestRequiredRemoteExpressionFeaturesDetectsStatementDigest(t *testing.T) {
-	const statementDigestFunctionID int32 = 581
+func TestRequiredRemoteExpressionFeaturesDetectsStatementHash(t *testing.T) {
+	const statementHashFunctionID int32 = 581
 	expr := &Expr{Expr: &Expr_F{F: &Function{
-		Func: &ObjectRef{Obj: int64(statementDigestFunctionID) << 32, ObjName: "statement_digest"},
+		Func: &ObjectRef{Obj: int64(statementHashFunctionID) << 32, ObjName: "mo_statement_hash"},
 	}}}
 	features, err := RequiredRemoteExpressionFeatures(&struct{ Expr *Expr }{Expr: expr})
 	require.NoError(t, err)
-	require.True(t, features.StatementDigestFunction)
+	require.True(t, features.StatementHashFunction)
 	require.True(t, features.Any())
 }
 
 func TestRequiredRemoteExpressionFeaturesDoesNotMisclassifyJSONStorageSize(t *testing.T) {
 	// JSON_STORAGE_SIZE occupies function ID 579 on the current main branch.
 	// Keep this negative control beside the digest positive control so a stale
-	// digest ID cannot silently classify another function as STATEMENT_DIGEST.
+	// digest ID cannot silently classify another function as MO_STATEMENT_HASH.
 	const jsonStorageSizeFunctionID int32 = 579
 	expr := &Expr{Expr: &Expr_F{F: &Function{
 		Func: &ObjectRef{Obj: int64(jsonStorageSizeFunctionID) << 32, ObjName: "json_storage_size"},
 	}}}
 	features, err := RequiredRemoteExpressionFeatures(&struct{ Expr *Expr }{Expr: expr})
 	require.NoError(t, err)
-	require.False(t, features.StatementDigestFunction)
+	require.False(t, features.StatementHashFunction)
 }
 
 func TestRequiresMORPCVersion23DynamicStringProvenance(t *testing.T) {

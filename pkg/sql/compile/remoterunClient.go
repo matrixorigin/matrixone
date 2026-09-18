@@ -260,7 +260,7 @@ func prepareRemoteRunSendingData(
 		sqlStr,
 		remoteFragmentCounts,
 		remoteExecutionID,
-		features.StatementDigestFunction,
+		features.StatementHashFunction,
 	); err != nil {
 		return nil, false, nil, false, err
 	}

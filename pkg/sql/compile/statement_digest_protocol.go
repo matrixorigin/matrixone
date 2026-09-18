@@ -18,29 +18,47 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-// validateStatementDigestDestination rechecks the actual worker selected for
+// validateStatementHashDestination rechecks the actual worker selected for
 // this serialized pipeline. The coordinator's protocol version is not enough:
 // a worker can be downgraded or replaced after compile-time placement, and an
-// older worker cannot construct the STATEMENT_DIGEST function (ID 581).
-func validateStatementDigestDestination(proc *process.Process, p *pipeline.Pipeline) error {
+// older worker cannot construct the MO_STATEMENT_HASH function (ID 581).
+func validateStatementHashDestination(proc *process.Process, p *pipeline.Pipeline) error {
 	if p == nil || p.Node == nil {
 		return moerr.NewNotSupportedNoCtx(
-			"STATEMENT_DIGEST remote execution requires a versioned remote destination",
+			"MO_STATEMENT_HASH remote execution requires a versioned remote destination",
 		)
 	}
-	supported, err := remoteWorkersSupportProtocol(proc,
-		engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion86)
+	if !isFullBuildCommitID(version.BuildCommitID) {
+		return moerr.NewNotSupportedNoCtx(
+			"MO_STATEMENT_HASH remote execution requires a full 40-character local build commit ID from a clean source tree",
+		)
+	}
+	supported, err := remoteWorkersSupportProtocolAndBuild(proc,
+		engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion87, version.BuildCommitID)
 	if err != nil {
 		return err
 	}
 	if !supported {
 		return moerr.NewNotSupportedNoCtx(
-			"remote destination does not support STATEMENT_DIGEST (MORPC version 86)",
+			"remote destination does not support MO_STATEMENT_HASH with the same build commit (MORPC version 87)",
 		)
 	}
 	return nil
+}
+
+func isFullBuildCommitID(id string) bool {
+	if len(id) != 40 {
+		return false
+	}
+	for _, ch := range id {
+		if !((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f')) {
+			return false
+		}
+	}
+	return true
 }

@@ -34,10 +34,13 @@ import (
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/udf"
+	"github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
+
+const maxStatementHashResolverErrorBytes = 4 << 10
 
 func MockProcessInfoWithPro(
 	sql string,
@@ -54,10 +57,11 @@ func (proc *Process) BuildProcessInfo(
 	return proc.buildProcessInfo(sql, false)
 }
 
-// BuildProcessInfoWithStatementDigest captures the SQL-mode snapshot strictly
-// for a remote scope that contains STATEMENT_DIGEST. The receiving CN must hash
-// the same parsed statement representation as the coordinator.
-func (proc *Process) BuildProcessInfoWithStatementDigest(
+// BuildProcessInfoWithStatementHash captures the SQL-mode snapshot, or a
+// serialized resolver error, for a remote scope that contains
+// MO_STATEMENT_HASH. Resolver errors are deferred until an active row evaluates
+// the function on the receiving CN.
+func (proc *Process) BuildProcessInfoWithStatementHash(
 	sql string,
 ) (pipeline.ProcessInfo, error) {
 	return proc.buildProcessInfo(sql, true)
@@ -65,7 +69,7 @@ func (proc *Process) BuildProcessInfoWithStatementDigest(
 
 func (proc *Process) buildProcessInfo(
 	sql string,
-	captureStatementDigest bool,
+	captureStatementHash bool,
 ) (pipeline.ProcessInfo, error) {
 	procInfo := pipeline.ProcessInfo{}
 	{
@@ -167,40 +171,53 @@ func (proc *Process) buildProcessInfo(
 		if err != nil {
 			return procInfo, err
 		}
-		var sqlMode string
-		if captureStatementDigest {
-			// STATEMENT_DIGEST is placement-invariant: a coordinator resolver
-			// failure must not turn into a successful remote evaluation with a
-			// different SQL-mode snapshot. Ordinary remote scopes retain the
-			// historical best-effort fallback above.
+		var (
+			sqlMode                            string
+			statementHashResolverErr           []byte
+			statementHashResolverErrDetail     string
+			statementHashExpectedBuildCommitID string
+		)
+		if captureStatementHash {
+			statementHashExpectedBuildCommitID = version.BuildCommitID
+			// Preserve both the originating SQL mode and any resolver failure.
+			// The error is raised only if the remote function evaluates an active
+			// row; process-info serialization itself must not make a masked or
+			// empty remote branch fail.
 			sqlMode, err = ResolveSQLMode(proc)
 			if err != nil {
-				return procInfo, err
+				statementHashResolverErr, statementHashResolverErrDetail, err =
+					encodeStatementHashSQLModeError(err)
+				if err != nil {
+					return procInfo, err
+				}
 			}
 		} else {
 			sqlMode = resolveSqlMode(proc)
 		}
 
 		procInfo.SessionInfo = pipeline.SessionInfo{
-			User:                   proc.Base.SessionInfo.GetUser(),
-			Host:                   proc.Base.SessionInfo.GetHost(),
-			Role:                   proc.Base.SessionInfo.GetRole(),
-			ConnectionId:           proc.Base.SessionInfo.GetConnectionID(),
-			Database:               proc.Base.SessionInfo.GetDatabase(),
-			Version:                proc.Base.SessionInfo.GetVersion(),
-			TimeZone:               timeBytes,
-			TimeZoneName:           TimeZoneLocationName(loc),
-			QueryId:                proc.Base.SessionInfo.QueryId,
-			LockWaitTimeout:        resolveLockWaitTimeoutSeconds(proc),
-			LockWaitTimeoutSet:     proc.Base.SessionInfo.LockWaitTimeoutSet,
-			MatrixoneNativeMode:    proc.Base.SessionInfo.MatrixOneNativeMode,
-			SqlMode:                sqlMode,
-			AutoIncrementIncrement: proc.Base.SessionInfo.AutoIncrementIncrement,
-			AutoIncrementOffset:    proc.Base.SessionInfo.AutoIncrementOffset,
+			User:                               proc.Base.SessionInfo.GetUser(),
+			Host:                               proc.Base.SessionInfo.GetHost(),
+			Role:                               proc.Base.SessionInfo.GetRole(),
+			ConnectionId:                       proc.Base.SessionInfo.GetConnectionID(),
+			Database:                           proc.Base.SessionInfo.GetDatabase(),
+			Version:                            proc.Base.SessionInfo.GetVersion(),
+			TimeZone:                           timeBytes,
+			TimeZoneName:                       TimeZoneLocationName(loc),
+			QueryId:                            proc.Base.SessionInfo.QueryId,
+			LockWaitTimeout:                    resolveLockWaitTimeoutSeconds(proc),
+			LockWaitTimeoutSet:                 proc.Base.SessionInfo.LockWaitTimeoutSet,
+			MatrixoneNativeMode:                proc.Base.SessionInfo.MatrixOneNativeMode,
+			SqlMode:                            sqlMode,
+			StatementHashSqlModeError:          statementHashResolverErr,
+			StatementHashSqlModeErrorDetail:    statementHashResolverErrDetail,
+			StatementHashExpectedBuildCommitId: statementHashExpectedBuildCommitID,
+			AutoIncrementIncrement:             proc.Base.SessionInfo.AutoIncrementIncrement,
+			AutoIncrementOffset:                proc.Base.SessionInfo.AutoIncrementOffset,
 		}
 		var nullifyZeroTemporal bool
-		if captureStatementDigest {
-			// The digest path already resolved (or restored) the SQL-mode
+		if captureStatementHash {
+			// The hash path already resolved (or restored) the SQL-mode
 			// snapshot above. Derive the temporal-cast flag from that same
 			// snapshot instead of consulting a receiving-CN resolver a second
 			// time. A false snapshot is meaningful too: it must not be
@@ -508,6 +525,9 @@ func ConvertToProcessSessionInfo(
 		MatrixOneNativeMode:                 sei.MatrixoneNativeMode,
 		ExplicitZeroTemporalCastReturnsNull: sei.ExplicitZeroTemporalCastReturnsNull,
 		SqlMode:                             sei.SqlMode,
+		StatementHashSQLModeError:           append([]byte(nil), sei.StatementHashSqlModeError...),
+		StatementHashSQLModeErrorDetail:     sei.StatementHashSqlModeErrorDetail,
+		StatementHashExpectedBuildCommitID:  sei.StatementHashExpectedBuildCommitId,
 		AutoIncrementIncrement:              sei.AutoIncrementIncrement,
 		AutoIncrementOffset:                 sei.AutoIncrementOffset,
 	}
@@ -531,13 +551,23 @@ func ConvertToProcessSessionInfo(
 	return sessionInfo, nil
 }
 
-// ResolveSQLMode returns the SQL-mode snapshot used by STATEMENT_DIGEST.
-// Resolver errors are returned so the digest-specific process codec can fail
-// before dispatch; callers that preserve the historical best-effort behavior
-// may use resolveSqlMode below.
+// ResolveSQLMode returns the SQL-mode snapshot used by MO_STATEMENT_HASH.
+// Captured remote resolver errors are reconstructed for function evaluation;
+// BuildProcessInfoWithStatementHash serializes them so inactive rows remain
+// lazy. Callers that preserve historical best-effort behavior may use
+// resolveSqlMode below.
 func ResolveSQLMode(proc *Process) (string, error) {
 	if proc == nil || proc.Base == nil {
 		return "", nil
+	}
+	if len(proc.Base.SessionInfo.StatementHashSQLModeError) > 0 {
+		var captured moerr.Error
+		if err := captured.UnmarshalBinary(proc.Base.SessionInfo.StatementHashSQLModeError); err != nil {
+			return proc.Base.SessionInfo.SqlMode,
+				moerr.NewInternalErrorNoCtxf("invalid captured sql_mode resolver error for MO_STATEMENT_HASH: %v", err)
+		}
+		captured.SetDetail(proc.Base.SessionInfo.StatementHashSQLModeErrorDetail)
+		return proc.Base.SessionInfo.SqlMode, &captured
 	}
 	// A remote/background process carries the coordinator's session snapshot.
 	// It must survive every encode/decode/forward hop unchanged; a resolver on
@@ -559,7 +589,7 @@ func ResolveSQLMode(proc *Process) (string, error) {
 		if v != nil {
 			// A non-string resolver result is a malformed session variable,
 			// not an absent value.  Preserve the captured snapshot for callers
-			// that need the last known mode while making the strict digest path
+			// that need the last known mode while making the strict hash path
 			// fail before it can be dispatched under a different mode.
 			return proc.Base.SessionInfo.SqlMode,
 				moerr.NewInternalErrorNoCtxf("unexpected sql_mode type %T", v)
@@ -571,10 +601,59 @@ func ResolveSQLMode(proc *Process) (string, error) {
 	return proc.Base.SessionInfo.SqlMode, nil
 }
 
+func encodeStatementHashSQLModeError(err error) ([]byte, string, error) {
+	var captured *moerr.Error
+	var detail string
+	if value, ok := err.(*moerr.Error); ok {
+		captured = value
+		detail = value.Detail()
+		messageOnly := *value
+		messageOnly.SetDetail("")
+		if len(messageOnly.Error())+len(detail) > maxStatementHashResolverErrorBytes {
+			captured = statementHashResolverErrorTooLarge()
+			detail = ""
+		}
+	} else {
+		message := "MO_STATEMENT_HASH sql_mode resolver failed"
+		if err != nil {
+			detail = err.Error()
+			if len(detail)+len(message) > maxStatementHashResolverErrorBytes {
+				captured = statementHashResolverErrorTooLarge()
+				detail = ""
+			} else {
+				captured = moerr.NewInternalErrorNoCtx(message)
+			}
+		} else {
+			captured = moerr.NewInternalErrorNoCtx(message)
+		}
+	}
+	encoded, marshalErr := captured.MarshalBinary()
+	if marshalErr != nil {
+		return nil, "", marshalErr
+	}
+	if len(encoded)+len(detail) > maxStatementHashResolverErrorBytes {
+		captured = statementHashResolverErrorTooLarge()
+		encoded, marshalErr = captured.MarshalBinary()
+		if marshalErr != nil {
+			return nil, "", marshalErr
+		}
+		detail = ""
+	}
+	return encoded, detail, nil
+}
+
+func statementHashResolverErrorTooLarge() *moerr.Error {
+	return moerr.NewInternalErrorNoCtxf(
+		"MO_STATEMENT_HASH sql_mode resolver error exceeds the %d-byte remote diagnostic limit",
+		maxStatementHashResolverErrorBytes,
+	)
+}
+
 func resolveSqlMode(proc *Process) string {
 	// Preserve the legacy best-effort behavior for ordinary remote scopes.
-	// STATEMENT_DIGEST uses ResolveSQLMode directly because it must preserve a
-	// captured SQL-mode snapshot and fail closed when the resolver fails.
+	// MO_STATEMENT_HASH uses ResolveSQLMode directly because it must preserve a
+	// captured SQL-mode snapshot and defer captured resolver failures to active
+	// evaluation. Ordinary scopes keep this best-effort behavior.
 	if proc == nil {
 		return ""
 	}

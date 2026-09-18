@@ -7117,9 +7117,9 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
-	// function `statement_digest`
+	// function `mo_statement_hash`
 	{
-		functionId: STATEMENT_DIGEST,
+		functionId: MO_STATEMENT_HASH,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatch,
@@ -7128,55 +7128,55 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId:      0,
 				args:            []types.T{types.T_varchar},
-				retType:         statementDigestReturnType,
+				retType:         statementHashReturnType,
 				realTimeRelated: true,
 				newOp: func() executeLogicOfOverload {
-					return StatementDigest
+					return StatementHash
 				},
 			},
 			{
 				overloadId:      1,
 				args:            []types.T{types.T_text},
-				retType:         statementDigestReturnType,
+				retType:         statementHashReturnType,
 				realTimeRelated: true,
 				newOp: func() executeLogicOfOverload {
-					return StatementDigest
+					return StatementHash
 				},
 			},
 			{
 				overloadId:      2,
 				args:            []types.T{types.T_blob},
-				retType:         statementDigestReturnType,
+				retType:         statementHashReturnType,
 				realTimeRelated: true,
 				newOp: func() executeLogicOfOverload {
-					return StatementDigest
+					return StatementHash
 				},
 			},
 			{
 				overloadId:      3,
 				args:            []types.T{types.T_char},
-				retType:         statementDigestReturnType,
+				retType:         statementHashReturnType,
 				realTimeRelated: true,
 				newOp: func() executeLogicOfOverload {
-					return StatementDigest
+					return StatementHash
 				},
 			},
 			{
 				overloadId:      4,
 				args:            []types.T{types.T_binary},
-				retType:         statementDigestReturnType,
+				retType:         statementHashReturnType,
 				realTimeRelated: true,
 				newOp: func() executeLogicOfOverload {
-					return StatementDigest
+					return StatementHash
 				},
 			},
 			{
 				overloadId:      5,
 				args:            []types.T{types.T_varbinary},
-				retType:         statementDigestReturnType,
+				retType:         statementHashReturnType,
 				realTimeRelated: true,
 				newOp: func() executeLogicOfOverload {
-					return StatementDigest
+					return StatementHash
 				},
 			},
 		},

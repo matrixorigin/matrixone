@@ -21,6 +21,10 @@ var (
 	BranchName = ""
 	// CommitID git commit id, setup by makefile
 	CommitID = ""
+	// BuildCommitID is the full source revision for builds from a clean tree.
+	// It is empty for modified/untracked source trees and is used only for
+	// feature contracts that require identical code on remote workers.
+	BuildCommitID = ""
 	// BuildTime build time, setup by makefile
 	BuildTime = ""
 	// Version version, setup by makefile
