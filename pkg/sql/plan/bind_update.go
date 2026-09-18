@@ -140,23 +140,23 @@ func (builder *QueryBuilder) makeUpdateChangedRowsPredicate(
 		if newPos < 0 || int(newPos) >= len(selectNode.ProjectList) {
 			continue
 		}
-		oldTyp := selectNode.ProjectList[newPos].Typ
+		if oldPos < 0 || int(oldPos) >= len(selectNode.ProjectList) {
+			continue
+		}
+		oldTyp := selectNode.ProjectList[oldPos].Typ
+		var err error
 		var oldExpr *plan.Expr
-		if oldPos >= 0 && int(oldPos) < len(selectNode.ProjectList) {
-			if useProjectionSlots {
-				oldExpr = &plan.Expr{
-					Typ: oldTyp,
-					Expr: &plan.Expr_Col{Col: &plan.ColRef{
-						RelPos: selectNodeTag,
-						ColPos: oldPos,
-					}},
-				}
-			} else {
-				oldExpr = DeepCopyExpr(selectNode.ProjectList[oldPos])
-				oldExpr.Typ = oldTyp
+		if useProjectionSlots {
+			oldExpr = &plan.Expr{
+				Typ: oldTyp,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: selectNodeTag,
+					ColPos: oldPos,
+				}},
 			}
 		} else {
-			continue
+			oldExpr = DeepCopyExpr(selectNode.ProjectList[oldPos])
+			oldExpr.Typ = oldTyp
 		}
 		var newExpr *plan.Expr
 		if useProjectionSlots {
@@ -169,9 +169,11 @@ func (builder *QueryBuilder) makeUpdateChangedRowsPredicate(
 			}
 		} else {
 			newExpr = DeepCopyExpr(selectNode.ProjectList[newPos])
-			newExpr.Typ = oldTyp
+			newExpr, err = builder.forceAssignmentCastExpr(newExpr, oldTyp, false)
+			if err != nil {
+				return nil, err
+			}
 		}
-		var err error
 		if oldExpr.Typ.Id == int32(types.T_char) {
 			oldExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "rtrim", []*plan.Expr{oldExpr})
 			if err != nil {
