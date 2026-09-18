@@ -5117,11 +5117,6 @@ var (
 	}
 )
 
-// makeDateFormat: Get the format string corresponding to the date according to a single format character
-func makeDateFormat(_ context.Context, t types.Datetime, b rune, buf *bytes.Buffer) (bool, error) {
-	return makeDateFormatWithLocale(nil, context.Background(), t, b, buf)
-}
-
 func makeDateFormatWithLocale(proc *process.Process, _ context.Context, t types.Datetime, b rune, buf *bytes.Buffer) (bool, error) {
 	switch b {
 	case 'b':
