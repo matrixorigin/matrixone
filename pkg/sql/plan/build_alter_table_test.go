@@ -108,6 +108,32 @@ func TestAlterTableAutoIncrementPlan(t *testing.T) {
 	}
 }
 
+func TestBuildAlterInsertDataSQLQuotesIdentifiers(t *testing.T) {
+	alterCtx := &AlterTableContext{
+		schemaName:      "db`name",
+		originTableName: "source`table",
+		copyTableName:   "copy`table",
+		alterColMap: map[string]selectExpr{
+			"target`column": {
+				sexprType: exprColumnName,
+				sexprStr:  "source`column",
+			},
+		},
+	}
+	copyTableDef := &TableDef{Cols: []*ColDef{{Name: "target`column"}}}
+
+	sql, err := buildAlterInsertDataSQL(nil, alterCtx, copyTableDef, false)
+	require.NoError(t, err)
+	require.Equal(t,
+		"INSERT INTO `db``name`.`copy``table` (`target``column`) "+
+			"SELECT `source``column` FROM `db``name`.`source``table`",
+		sql,
+	)
+	statements, err := mysql.Parse(context.Background(), sql, 1)
+	require.NoError(t, err)
+	require.Len(t, statements, 1)
+}
+
 func TestAlterTableAutoIncrementRejectsTableWithoutUserAutoColumn(t *testing.T) {
 	_, err := buildSingleStmt(NewMockOptimizer(false), t,
 		`ALTER TABLE constraint_test.t1 AUTO_INCREMENT = 100;`)
