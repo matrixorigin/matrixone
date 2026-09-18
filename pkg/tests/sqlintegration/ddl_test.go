@@ -312,6 +312,16 @@ func TestCDCCases(t *testing.T) {
 			// Validate the no_full flag via where clause
 			require.Greater(t, rows("", "select task_name from mo_catalog.mo_cdc_task where task_name='"+cdcTaskOpts1+"' and no_full=true"), 0)
 
+			// Public SQL coverage for the automatic NoFull activation boundary:
+			// omitting StartTs must persist the lossless physical-logical CREATE
+			// snapshot before the asynchronous executor is admitted.
+			cdcTaskAutoStart := "cdc_task_autostart"
+			mustExec(db, "create cdc "+cdcTaskAutoStart+" '"+conn+"' 'matrixone' '"+conn+"' '"+db+"."+table+"' {"+
+				"'Level'='table','NoFull'='true'"+
+				"} internal")
+			verifyTaskPresent(cdcTaskAutoStart, true)
+			require.Greater(t, rows("", "select task_name from mo_catalog.mo_cdc_task where task_name='"+cdcTaskAutoStart+"' and no_full=true and start_ts <> ''"), 0)
+
 			// Case 3.2: table-level with frequency in hours
 			cdcTaskOpts2 := "cdc_task_opts2"
 			mustExec(db, "create cdc "+cdcTaskOpts2+" '"+conn+"' 'matrixone' '"+conn+"' '"+db+"."+table+"' {"+
