@@ -124,7 +124,8 @@ const (
 	MORPCVersion86     int64 = 86 // extended IP overload/result and expression metadata contracts
 	MORPCVersion87     int64 = 87 // preserve grouping provenance in remote batch transport
 	MORPCVersion88     int64 = 88 // canonical vector HLL_ADD_AGG hash keys
-	MORPCLatestVersion       = MORPCVersion88
+	MORPCVersion89     int64 = 89 // route-preserving PRE_INSERT for partitioned classic FULLTEXT
+	MORPCLatestVersion       = MORPCVersion89
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
