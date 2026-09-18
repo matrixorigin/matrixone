@@ -253,16 +253,16 @@ func TestCheckPitrGranularityConcretePrimaryKeyBranches(t *testing.T) {
 	proc.Ctx = ctx
 	proc.ReplaceTopCtx(ctx)
 
-	candidateResult := func(hasPK bool) executor.Result {
+	candidateResult := func(dbName, tableName string, hasPK bool) executor.Result {
 		result := executor.NewMemResult([]types.Type{
 			types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_uint64.ToType(),
 			types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_uint32.ToType(), types.T_blob.ToType(), types.T_bool.ToType(),
 		}, proc.Mp())
 		result.NewBatchWithRowCount(1)
 		require.NoError(t, executor.AppendFixedRows(result, 0, []uint64{1}))
-		require.NoError(t, executor.AppendStringRows(result, 1, []string{"table"}))
+		require.NoError(t, executor.AppendStringRows(result, 1, []string{tableName}))
 		require.NoError(t, executor.AppendFixedRows(result, 2, []uint64{1}))
-		require.NoError(t, executor.AppendStringRows(result, 3, []string{"db"}))
+		require.NoError(t, executor.AppendStringRows(result, 3, []string{dbName}))
 		require.NoError(t, executor.AppendStringRows(result, 4, []string{""}))
 		require.NoError(t, executor.AppendFixedRows(result, 5, []uint32{7}))
 		require.NoError(t, executor.AppendBytesRows(result, 6, [][]byte{{}}))
@@ -288,7 +288,7 @@ func TestCheckPitrGranularityConcretePrimaryKeyBranches(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			exec := &recordingInternalSQLExecutor{mocker: func(sql string) (executor.Result, error) {
 				if strings.Contains(sql, catalog.MO_TABLES) {
-					return candidateResult(tc.hasPK), nil
+					return candidateResult("db", "table", tc.hasPK), nil
 				}
 				return validPitrResult(), nil
 			}}
@@ -319,7 +319,7 @@ func TestCheckPitrGranularityConcretePrimaryKeyBranches(t *testing.T) {
 			if strings.Contains(sql, catalog.MO_TABLES) {
 				require.Contains(t, sql, "lower(tbl.reldatabase) IN ('mixeddb')")
 				require.Contains(t, sql, "lower(tbl.relname) IN ('orders')")
-				return candidateResult(true), nil
+				return candidateResult("MixedDB", "Orders", true), nil
 			}
 			return validPitrResult(), nil
 		}}
