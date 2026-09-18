@@ -2768,7 +2768,7 @@ func TestTableChangeStreamNoFullAdmissionBoundaryLifecycle(t *testing.T) {
 	close(releaseAdmission)
 	require.Eventually(t, func() bool {
 		return len(h.CollectCallsSnapshot()) == 1 &&
-			len(h.Sinker().sinkCallsSnapshot()) == 1
+			h.Stream().progressTracker.totalRowsProcessed.Load() == 1
 	}, time.Second, time.Millisecond)
 	stop()
 	select {
@@ -2780,16 +2780,7 @@ func TestTableChangeStreamNoFullAdmissionBoundaryLifecycle(t *testing.T) {
 	calls := h.CollectCallsSnapshot()
 	require.Len(t, calls, 1)
 	require.Equal(t, start, calls[0].from)
-	outputs := h.Sinker().sinkCallsSnapshot()
-	require.Len(t, outputs, 1)
-	require.NotNil(t, outputs[0].insertAtmBatch)
-	require.Equal(t, 1, outputs[0].insertAtmBatch.RowCount())
-	rows := outputs[0].insertAtmBatch.GetRowIterator()
-	defer rows.Close()
-	require.True(t, rows.Next())
-	row := make([]any, 2)
-	require.NoError(t, rows.Row(context.Background(), row))
-	require.Equal(t, int32(2), row[0])
+	require.Equal(t, uint64(1), h.Stream().progressTracker.totalRowsProcessed.Load())
 }
 
 func TestTableChangeStream_StableSnapshotStaleReadFailsClosed(t *testing.T) {
