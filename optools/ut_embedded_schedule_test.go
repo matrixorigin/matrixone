@@ -69,6 +69,16 @@ printf 'authoritative\n'
 [[ "$MODE" != test-failure ]]
 `
 
+func TestEmbeddedPrebuildDefaultEnabled(t *testing.T) {
+	script := `unset UT_PREBUILD_EMBEDDED
+source ./run_ut.sh UT
+[[ "$UT_PREBUILD_EMBEDDED" == 1 ]] || exit 80
+`
+	if out, err := scheduleHarness(t, script); err != nil {
+		t.Fatalf("embedded prebuild default: %v\n%s", err, out)
+	}
+}
+
 func TestEmbeddedPrebuildAuthoritativeExecution(t *testing.T) {
 	for _, mode := range []string{"success", "reclaim", "build-failure", "no-binary", "off", "test-failure", "report-open"} {
 		t.Run(mode, func(t *testing.T) {

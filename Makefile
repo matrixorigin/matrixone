@@ -535,10 +535,10 @@ UT_HARD_TIMEOUT ?= 120m
 # Emit one bounded progress heartbeat per interval while UT is running.
 UT_HEARTBEAT_INTERVAL ?= 60
 # Build embedded test packages ahead of their execution while the issues
-# fixture is active. This is an explicit A/B knob: compile-only work still
-# consumes CPU, memory, and linker capacity, so it remains opt-in until a
-# same-resource measurement proves a critical-path gain.
-UT_PREBUILD_EMBEDDED ?= 0
+# fixture is active. This is bounded cache warming: it never executes a
+# prebuilt test binary, and the authoritative go test still owns every test
+# result. Set it to 0 for the measured serial rollback/control path.
+UT_PREBUILD_EMBEDDED ?= 1
 # Reuse released engine slots for plan while resource-heavy work finishes.
 # The heavy process budget is unchanged; set 0 for a sequential A/B baseline.
 UT_OVERLAP_PLAN ?= 1

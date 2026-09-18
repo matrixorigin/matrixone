@@ -46,7 +46,11 @@ UT_HARD_TIMEOUT=${UT_HARD_TIMEOUT:-"120m"}
 UT_PARALLEL=${UT_PARALLEL:-"1"}
 UT_LIGHT_PARALLEL=${UT_LIGHT_PARALLEL:-"3"}
 UT_SHARD=${UT_SHARD:-"all"}
-UT_PREBUILD_EMBEDDED=${UT_PREBUILD_EMBEDDED:-"0"}
+# Compile embedded packages while the exclusive issues fixture is active.
+# This only warms the Go build cache; the authoritative embedded go test
+# command still compiles/executes the complete package scope and owns all
+# test results. Set UT_PREBUILD_EMBEDDED=0 for the rollback/control path.
+UT_PREBUILD_EMBEDDED=${UT_PREBUILD_EMBEDDED:-"1"}
 UT_OVERLAP_PLAN=${UT_OVERLAP_PLAN:-"1"}
 # Light/issues overlap is opt-in: the measured treatment regressed wall time
 # and did not meet the runner's memory-headroom gate.
@@ -1661,6 +1665,8 @@ function run_embedded_prebuild(){
                 restore_ut_term_trap "${previous_term_trap}"
                 return 1
             fi
+            checkpoint_ut_event "start" "embedded-prebuild" "${package}" "" \
+                "package_index=${package_index} parallel=${package_parallel} compile_only=true"
             # TERM must not observe a spawned but unregistered process group.
             term_pending=0
             trap 'term_pending=1' TERM
@@ -1673,6 +1679,8 @@ function run_embedded_prebuild(){
             child_pids[package_index]=$!
             set +m
             restore_ut_term_trap "${wave_term_trap}"
+            checkpoint_ut_event "pid-start" "embedded-prebuild" "${package}" "" \
+                "package_index=${package_index} child_pid=${child_pids[package_index]} parallel=${package_parallel} compile_only=true"
             if (( term_pending != 0 )); then
                 cancel_embedded_wave
             fi
@@ -1690,6 +1698,8 @@ function run_embedded_prebuild(){
             child_pids[package_index]=0
             (( child_status == 0 )) || wave_status=1
             active_count=$((active_count - 1))
+            checkpoint_ut_event "finish" "embedded-prebuild" "${packages[package_index]}" "${child_status}" \
+                "package_index=${package_index} parallel=${package_parallel} compile_only=true"
             progress=1
         done
         if (( active_count > 0 && progress == 0 )); then sleep 0.05; fi
@@ -1741,8 +1751,12 @@ function finish_embedded_prebuild(){
     if [[ -z "${CLUSTER_PREBUILD_JOB_PID}" ]]; then
         return 0
     fi
+    checkpoint_ut_event "join-start" "embedded-prebuild" "compile embedded-cluster packages" "" \
+        "child_pid=${CLUSTER_PREBUILD_JOB_PID} compile_only=true"
     wait "${CLUSTER_PREBUILD_JOB_PID}" || prebuild_status=$?
     CLUSTER_PREBUILD_JOB_PID=""
+    checkpoint_ut_event "join-finish" "embedded-prebuild" "compile embedded-cluster packages" "${prebuild_status}" \
+        "compile_only=true"
     mark_ut_stage "embedded-prebuild" "compile embedded-cluster packages" finish "${prebuild_status}"
     if (( prebuild_status != 0 )); then
         # The real embedded test command remains authoritative. A prebuild can
