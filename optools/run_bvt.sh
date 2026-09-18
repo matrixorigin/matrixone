@@ -51,9 +51,11 @@ function cleanup_mo() {
             kill -KILL "$MO_PID" 2>/dev/null || true
         fi
     fi
-    for child in "${BVT_CHILD_PIDS[@]}"; do
-        kill -KILL "$child" 2>/dev/null || true
-    done
+    if ((${#BVT_CHILD_PIDS[@]} > 0)); then
+        for child in "${BVT_CHILD_PIDS[@]}"; do
+            kill -KILL "$child" 2>/dev/null || true
+        done
+    fi
     wait "$pid" 2>/dev/null || true
     MO_PID=""
 }
@@ -227,4 +229,7 @@ fi
 # returns.  Keep the services alive on a successful return; signal and startup
 # failure paths above own cleanup because no caller can use the deployment in
 # those cases.
+if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+    return 0
+fi
 exit 0
