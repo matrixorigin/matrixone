@@ -42,6 +42,16 @@ rollback;
 select id from ft_part where match(body) against('rollback') order by id;
 select id from ft_part where match(body) against('zeta') order by id;
 
+create table ft_join_src(id int);
+insert into ft_join_src values (3), (3), (999);
+delete d from ft_part d join ft_join_src s on d.id = s.id;
+select id from ft_part where match(body) against('zeta') order by id;
+select id from ft_part where match(body) against('theta') order by id;
+create table ft_join_none(id int);
+insert into ft_join_none values (999);
+delete d from ft_part d join ft_join_none s on d.id = s.id;
+select id from ft_part where match(body) against('theta') order by id;
+
 create table ft_range(id int primary key, bucket int, body text, fulltext fti_range(body))
 partition by range(bucket)(partition r0 values less than (10), partition r1 values less than maxvalue);
 insert into ft_range values (101, 1, 'range alpha alpha'), (102, 20, 'range beta');
@@ -110,10 +120,13 @@ drop table ft_compare_part;
 drop table ft_compare_plain;
 drop table ft_txn;
 drop table ft_prepared;
+drop table ft_join_src;
+drop table ft_join_none;
 delete from ft_part where id = 5;
 select id from ft_part where match(body) against('epsilon') order by id;
 delete from ft_part;
 select count(*) from ft_part;
+select id from ft_part where match(body) against('theta') order by id;
 
 drop table ft_multi;
 drop database fulltext_partition_28311;
