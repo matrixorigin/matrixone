@@ -17,17 +17,169 @@ package issues
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"math"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/stretchr/testify/require"
 )
+
+// withIssue27294PinnedConnection owns the pool checkout for the callback's scope.
+// Install Close before the callback can exit through require.FailNow.
+func withIssue27294PinnedConnection(t *testing.T, ctx context.Context, db *sql.DB, callback func(*sql.Conn)) error {
+	t.Helper()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := conn.Close(); err != nil {
+			t.Errorf("close pinned connection: %v", err)
+		}
+	}()
+
+	callback(conn)
+	return nil
+}
+
+func TestIssue27294PinnedConnectionReleasesOnGoexit(t *testing.T) {
+	const regressionTimeout = 3 * time.Second
+	const cleanupSQL = "drop database if exists issue_27294_numeric_db"
+
+	type goexitResult struct {
+		queryErr    error
+		checkoutErr error
+		inUse       int
+	}
+	tests := []struct {
+		name      string
+		failAtUse bool
+	}{
+		{name: "mode lookup failure"},
+		{name: "USE failure after mode read", failAtUse: true},
+	}
+
+	for i := range tests {
+		tc := tests[i]
+		t.Run(tc.name, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			db.SetMaxOpenConns(1)
+			dbClosed := false
+			defer func() {
+				if !dbClosed {
+					_ = db.Close()
+				}
+			}()
+
+			var wantRestoreErr error
+			var gotRestoreErr error
+			if tc.failAtUse {
+				wantRestoreErr = errors.New("server-side sql_mode restore failed")
+				mock.ExpectQuery("^select @@sql_mode$").
+					WillReturnRows(sqlmock.NewRows([]string{"@@sql_mode"}).AddRow("STRICT_TRANS_TABLES"))
+				mock.ExpectExec("^use issue_27294_numeric_db$").
+					WillReturnError(errors.New("server-side USE failed"))
+				mock.ExpectExec("^set session sql_mode = 'STRICT_TRANS_TABLES'$").
+					WillReturnError(wantRestoreErr)
+			} else {
+				mock.ExpectQuery("^select @@sql_mode$").
+					WillReturnError(errors.New("server-side sql_mode lookup failed"))
+			}
+			mock.ExpectExec("^drop database if exists issue_27294_numeric_db$").
+				WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectClose()
+
+			ctx, cancel := context.WithTimeout(context.Background(), regressionTimeout)
+			resultCh := make(chan goexitResult, 1)
+			continueToGoexit := make(chan struct{})
+			done := make(chan struct{})
+			defer func() {
+				cancel()
+				doneCtx, cancelDone := context.WithTimeout(context.Background(), regressionTimeout)
+				defer cancelDone()
+				select {
+				case <-done:
+				case <-doneCtx.Done():
+					t.Errorf("pinned-connection defers did not finish before %s", doneCtx.Err())
+				}
+			}()
+			go func() {
+				defer close(done)
+				err := withIssue27294PinnedConnection(t, ctx, db, func(conn *sql.Conn) {
+					var queryErr error
+					var originalSQLMode string
+					queryErr = conn.QueryRowContext(ctx, "select @@sql_mode").Scan(&originalSQLMode)
+					if tc.failAtUse && queryErr == nil {
+						defer func() {
+							cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), regressionTimeout)
+							defer cancelCleanup()
+							_, gotRestoreErr = conn.ExecContext(cleanupCtx, fmt.Sprintf(
+								"set session sql_mode = '%s'", strings.ReplaceAll(originalSQLMode, "'", "''")))
+						}()
+						_, queryErr = conn.ExecContext(ctx, "use issue_27294_numeric_db")
+					}
+					resultCh <- goexitResult{queryErr: queryErr, inUse: db.Stats().InUse}
+					select {
+					case <-continueToGoexit:
+					case <-ctx.Done():
+					}
+					runtime.Goexit()
+				})
+				if err != nil {
+					resultCh <- goexitResult{checkoutErr: err}
+				}
+			}()
+
+			resultCtx, cancelResult := context.WithTimeout(context.Background(), regressionTimeout)
+			defer cancelResult()
+			var result goexitResult
+			select {
+			case result = <-resultCh:
+			case <-resultCtx.Done():
+				t.Fatalf("pinned callback did not report its query result: %s", resultCtx.Err())
+			}
+			require.NoError(t, result.checkoutErr)
+			require.Error(t, result.queryErr)
+			if tc.failAtUse {
+				require.Contains(t, result.queryErr.Error(), "server-side USE failed")
+			} else {
+				require.Contains(t, result.queryErr.Error(), "server-side sql_mode lookup failed")
+			}
+			require.Equal(t, 1, result.inUse, "the checked-out connection must be in-use before callback exit")
+			close(continueToGoexit)
+
+			doneCtx, cancelDone := context.WithTimeout(context.Background(), regressionTimeout)
+			select {
+			case <-done:
+			case <-doneCtx.Done():
+				t.Fatalf("pinned-connection defers did not finish before %s", doneCtx.Err())
+			}
+			cancelDone()
+			if tc.failAtUse {
+				require.ErrorIs(t, gotRestoreErr, wantRestoreErr)
+			}
+
+			cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), regressionTimeout)
+			_, err = db.ExecContext(cleanupCtx, cleanupSQL)
+			cancelCleanup()
+			require.NoError(t, err, "database-level cleanup must reuse the sole pool connection")
+			require.Zero(t, db.Stats().InUse)
+			err = db.Close()
+			dbClosed = true
+			require.NoError(t, err)
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
 
 // TestIssue27294PreparedNumericOverloads exercises the COM_STMT_EXECUTE path.
 // The Go driver uses the binary protocol when interpolateParams is disabled;
@@ -53,7 +205,11 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 		_, err = db.ExecContext(ctx, "create database issue_27294_numeric_db")
 		require.NoError(t, err)
 		defer func() {
-			_, _ = db.ExecContext(context.Background(), "drop database if exists issue_27294_numeric_db")
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if _, err := db.ExecContext(cleanupCtx, "drop database if exists issue_27294_numeric_db"); err != nil {
+				t.Errorf("drop database issue_27294_numeric_db: %v", err)
+			}
 		}()
 		_, err = db.ExecContext(ctx, "use issue_27294_numeric_db")
 		require.NoError(t, err)
@@ -62,7 +218,11 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 		_, err = db.ExecContext(ctx, "create table issue_27294_numeric_src (v bigint)")
 		require.NoError(t, err)
 		defer func() {
-			_, _ = db.ExecContext(context.Background(), "drop table if exists issue_27294_numeric_src")
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			if _, err := db.ExecContext(cleanupCtx, "drop table if exists issue_27294_numeric_src"); err != nil {
+				t.Errorf("drop table issue_27294_numeric_src: %v", err)
+			}
 		}()
 		_, err = db.ExecContext(ctx, "insert into issue_27294_numeric_src values (-9007199254740993)")
 		require.NoError(t, err)
@@ -267,71 +427,63 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 		// Pin the connection so SET sql_mode and COM_STMT_EXECUTE use the same
 		// session, and reuse the statement across mode changes to cover plan cache
 		// invalidation as well as the runtime cast contract.
-		modeConn, err := db.Conn(ctx)
-		require.NoError(t, err)
-		var originalSQLMode string
-		require.NoError(t, modeConn.QueryRowContext(ctx, "select @@sql_mode").Scan(&originalSQLMode))
-		_, err = modeConn.ExecContext(ctx, "use issue_27294_numeric_db")
-		require.NoError(t, err)
-		modeConnClosed := false
-		defer func() {
-			if modeConnClosed {
-				return
-			}
-			_, restoreErr := modeConn.ExecContext(context.Background(), fmt.Sprintf(
-				"set session sql_mode = '%s'", strings.ReplaceAll(originalSQLMode, "'", "''")))
-			if restoreErr != nil {
-				t.Errorf("restore sql_mode: %v", restoreErr)
-			}
-			if closeErr := modeConn.Close(); closeErr != nil {
-				t.Errorf("close pinned sql_mode connection: %v", closeErr)
-			}
-		}()
-		prefixModeStmt, err := modeConn.PrepareContext(ctx, "select abs(? + 0)")
-		require.NoError(t, err)
-		defer prefixModeStmt.Close()
-		_, err = modeConn.ExecContext(ctx, "set session sql_mode = 'STRICT_TRANS_TABLES'")
-		require.NoError(t, err)
-		var literalCastResult float64
-		require.NoError(t, modeConn.QueryRowContext(ctx,
-			"select abs(cast(concat('1', '01') as char))").Scan(&literalCastResult))
-		require.Equal(t, float64(101), literalCastResult,
-			"the explicit-cast regression oracle is the ordinary literal SQL result")
-		var prefixModeResult float64
-		require.NoError(t, prefixModeStmt.QueryRowContext(ctx, "1.5tail").Scan(&prefixModeResult))
-		require.Equal(t, float64(1.5), prefixModeResult,
-			"MySQL-compatible mode consumes the numeric prefix for a string-math value")
-		func() {
-			nestedLength, err := modeConn.PrepareContext(ctx, "select length(abs(?))")
-			require.NoError(t, err)
+		err = withIssue27294PinnedConnection(t, ctx, db, func(modeConn *sql.Conn) {
+			var originalSQLMode string
+			require.NoError(t, modeConn.QueryRowContext(ctx, "select @@sql_mode").Scan(&originalSQLMode))
 			defer func() {
-				require.NoError(t, nestedLength.Close())
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				_, restoreErr := modeConn.ExecContext(cleanupCtx, fmt.Sprintf(
+					"set session sql_mode = '%s'", strings.ReplaceAll(originalSQLMode, "'", "''")))
+				if restoreErr != nil {
+					t.Errorf("restore sql_mode: %v", restoreErr)
+				}
 			}()
-			var nestedLengthResult float64
-			require.NoError(t, nestedLength.QueryRowContext(ctx, "1.5tail").Scan(&nestedLengthResult))
-			require.Equal(t, float64(3), nestedLengthResult,
-				"LENGTH must preserve the independently nested ABS owner")
-		}()
-		_, err = modeConn.ExecContext(ctx,
-			"set session sql_mode = 'STRICT_TRANS_TABLES,MATRIXONE_NATIVE'")
+
+			_, err = modeConn.ExecContext(ctx, "use issue_27294_numeric_db")
+			require.NoError(t, err)
+			prefixModeStmt, err := modeConn.PrepareContext(ctx, "select abs(? + 0)")
+			require.NoError(t, err)
+			defer prefixModeStmt.Close()
+			_, err = modeConn.ExecContext(ctx, "set session sql_mode = 'STRICT_TRANS_TABLES'")
+			require.NoError(t, err)
+			var literalCastResult float64
+			require.NoError(t, modeConn.QueryRowContext(ctx,
+				"select abs(cast(concat('1', '01') as char))").Scan(&literalCastResult))
+			require.Equal(t, float64(101), literalCastResult,
+				"the explicit-cast regression oracle is the ordinary literal SQL result")
+			var prefixModeResult float64
+			require.NoError(t, prefixModeStmt.QueryRowContext(ctx, "1.5tail").Scan(&prefixModeResult))
+			require.Equal(t, float64(1.5), prefixModeResult,
+				"MySQL-compatible mode consumes the numeric prefix for a string-math value")
+			func() {
+				nestedLength, err := modeConn.PrepareContext(ctx, "select length(abs(?))")
+				require.NoError(t, err)
+				defer func() {
+					require.NoError(t, nestedLength.Close())
+				}()
+				var nestedLengthResult float64
+				require.NoError(t, nestedLength.QueryRowContext(ctx, "1.5tail").Scan(&nestedLengthResult))
+				require.Equal(t, float64(3), nestedLengthResult,
+					"LENGTH must preserve the independently nested ABS owner")
+			}()
+			_, err = modeConn.ExecContext(ctx,
+				"set session sql_mode = 'STRICT_TRANS_TABLES,MATRIXONE_NATIVE'")
+			require.NoError(t, err)
+			err = prefixModeStmt.QueryRowContext(ctx, "1.5tail").Scan(&prefixModeResult)
+			require.Error(t, err,
+				"MATRIXONE_NATIVE must reject trailing text instead of consuming a numeric prefix")
+			err = modeConn.QueryRowContext(ctx, "select mod(2, '1.5tail')").Scan(&prefixModeResult)
+			require.Error(t, err,
+				"MATRIXONE_NATIVE must reject trailing text in MOD's right operand")
+			require.Contains(t, err.Error(), `invalid input: "1.5tail" is invalid numeric string`)
+			_, err = modeConn.ExecContext(ctx, "set session sql_mode = 'STRICT_TRANS_TABLES'")
+			require.NoError(t, err)
+			require.NoError(t, prefixModeStmt.QueryRowContext(ctx, "1.5tail").Scan(&prefixModeResult))
+			require.Equal(t, float64(1.5), prefixModeResult,
+				"returning to MySQL-compatible mode must restore prefix behavior on the cached statement")
+		})
 		require.NoError(t, err)
-		err = prefixModeStmt.QueryRowContext(ctx, "1.5tail").Scan(&prefixModeResult)
-		require.Error(t, err,
-			"MATRIXONE_NATIVE must reject trailing text instead of consuming a numeric prefix")
-		err = modeConn.QueryRowContext(ctx, "select mod(2, '1.5tail')").Scan(&prefixModeResult)
-		require.Error(t, err,
-			"MATRIXONE_NATIVE must reject trailing text in MOD's right operand")
-		require.Contains(t, err.Error(), `invalid input: "1.5tail" is invalid numeric string`)
-		_, err = modeConn.ExecContext(ctx, "set session sql_mode = 'STRICT_TRANS_TABLES'")
-		require.NoError(t, err)
-		require.NoError(t, prefixModeStmt.QueryRowContext(ctx, "1.5tail").Scan(&prefixModeResult))
-		require.Equal(t, float64(1.5), prefixModeResult,
-			"returning to MySQL-compatible mode must restore prefix behavior on the cached statement")
-		_, err = modeConn.ExecContext(ctx, fmt.Sprintf(
-			"set session sql_mode = '%s'", strings.ReplaceAll(originalSQLMode, "'", "''")))
-		require.NoError(t, err)
-		require.NoError(t, modeConn.Close())
-		modeConnClosed = true
 
 		// Numeric-prefix candidates are only an eligibility superset. An outer
 		// math owner must not rewrite text-domain arguments before LENGTH,
