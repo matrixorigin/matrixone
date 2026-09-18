@@ -972,12 +972,16 @@ func (a *AwsSDKv2) deleteMultiObj(ctx context.Context, objs []types.ObjectIdenti
 // endpoint incompatibility, fall back to individual DeleteObject calls, and
 // disable batching for later calls.
 func isS3APIMultiDeleteChecksumError(err error) bool {
-	for _, code := range []string{"MissingContentMD5", "InvalidDigest", "BadDigest", "InvalidRequest"} {
+	for _, code := range []string{"MissingContentMD5", "InvalidDigest", "BadDigest", "InvalidRequest", "BadRequest"} {
 		if isS3APIErrorCode(err, code) {
 			return true
 		}
 	}
-	return false
+	// Some S3-compatible endpoints surface the missing-header rejection as a
+	// generic BadRequest or return the detail without a structured S3 error code.
+	// Keep the fallback narrow to this compatibility signal instead of treating
+	// arbitrary 4xx responses as a reason to disable batch deletes.
+	return strings.Contains(strings.ToLower(err.Error()), "content-md5")
 }
 
 func (a *AwsSDKv2) deleteMultiObjOneByOne(ctx context.Context, objs []types.ObjectIdentifier) error {
