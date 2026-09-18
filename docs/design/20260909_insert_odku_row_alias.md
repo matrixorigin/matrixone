@@ -2,7 +2,7 @@
 
 - Status: implementation complete within the restricted correlation contract; maintainer design approval and real BVT/QA remain open
 - Tracking issue: https://github.com/matrixorigin/matrixone/issues/28160
-- Baseline for this rebase: `e66c9da813ccbb8b9d1eedbdc40b619b7ee5dff3` (current `main` fetched 2026-09-17)
+- Baseline for this rebase: `780ef933f2479aa1679faf13d08850ce6c8f7c2f` (current `main` fetched 2026-09-18)
 - Scope: MySQL-compatible `INSERT ... VALUES/SET ... AS row_alias[(column_alias, ...)]`
 - Oracle: MySQL 8.4.0 grammar and `insert_update.test`
 
