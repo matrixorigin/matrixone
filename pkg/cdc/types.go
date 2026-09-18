@@ -17,6 +17,7 @@ package cdc
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -782,6 +783,64 @@ func (info *UriInfo) String() string {
 type PatternTable struct {
 	Database string `json:"database"`
 	Table    string `json:"table"`
+}
+
+// MarshalJSON keeps invalid UTF-8 identifier bytes round-trippable. Go's
+// encoding/json replaces invalid string bytes with U+FFFD, but MatrixOne can
+// receive identifiers encoded by a supported single-byte client charset. CDC
+// persists source patterns and later uses their original bytes to match catalog
+// entries, so those bytes must not be normalized by the persistence format.
+func (table PatternTable) MarshalJSON() ([]byte, error) {
+	type encodedPatternTable struct {
+		Database      string `json:"database"`
+		Table         string `json:"table"`
+		DatabaseBytes string `json:"database_bytes,omitempty"`
+		TableBytes    string `json:"table_bytes,omitempty"`
+	}
+
+	encoded := encodedPatternTable{Database: table.Database, Table: table.Table}
+	if !utf8.ValidString(table.Database) {
+		encoded.Database = ""
+		encoded.DatabaseBytes = base64.StdEncoding.EncodeToString([]byte(table.Database))
+	}
+	if !utf8.ValidString(table.Table) {
+		encoded.Table = ""
+		encoded.TableBytes = base64.StdEncoding.EncodeToString([]byte(table.Table))
+	}
+	return json.Marshal(encoded)
+}
+
+// UnmarshalJSON accepts the historical string-only representation and restores
+// the lossless byte fields emitted by MarshalJSON when present.
+func (table *PatternTable) UnmarshalJSON(data []byte) error {
+	type encodedPatternTable struct {
+		Database      string `json:"database"`
+		Table         string `json:"table"`
+		DatabaseBytes string `json:"database_bytes,omitempty"`
+		TableBytes    string `json:"table_bytes,omitempty"`
+	}
+
+	var encoded encodedPatternTable
+	if err := json.Unmarshal(data, &encoded); err != nil {
+		return err
+	}
+	if encoded.DatabaseBytes != "" {
+		bytes, err := base64.StdEncoding.DecodeString(encoded.DatabaseBytes)
+		if err != nil {
+			return fmt.Errorf("decode CDC source database bytes: %w", err)
+		}
+		encoded.Database = string(bytes)
+	}
+	if encoded.TableBytes != "" {
+		bytes, err := base64.StdEncoding.DecodeString(encoded.TableBytes)
+		if err != nil {
+			return fmt.Errorf("decode CDC source table bytes: %w", err)
+		}
+		encoded.Table = string(bytes)
+	}
+	table.Database = encoded.Database
+	table.Table = encoded.Table
+	return nil
 }
 
 func (table PatternTable) String() string {
