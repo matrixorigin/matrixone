@@ -761,6 +761,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			proc, t.HasAutoCol, t.TrackAutoIncrementGenerated); err != nil {
 			return ctxId, nil, err
 		}
+		if err := validateRemotePartitionFulltextRouteProtocol(proc, t.PreserveInput); err != nil {
+			return ctxId, nil, err
+		}
 		if err := validateRemoteTargetAwareUpdateProtocol(proc, t.HasTargetSelector); err != nil {
 			return ctxId, nil, err
 		}
@@ -770,6 +773,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			HasAutoCol:                   t.HasAutoCol,
 			IsOldUpdate:                  t.IsOldUpdate,
 			IsNewUpdate:                  t.IsNewUpdate,
+			PreserveInput:                t.PreserveInput,
 			Attrs:                        t.Attrs,
 			EstimatedRowCount:            int64(t.EstimatedRowCount),
 			CompPkeyExpr:                 t.CompPkeyExpr,
@@ -1196,11 +1200,25 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 				FulltextIndexRef:       t.TableFunction.FulltextIndexRef,
 			}
 		}
-	case *multi_update.MultiUpdate:
+	case *multi_update.MultiUpdate, *multi_update.PartitionMultiUpdate:
+		var updateOp *multi_update.MultiUpdate
+		switch typed := op.(type) {
+		case *multi_update.MultiUpdate:
+			updateOp = typed
+		case *multi_update.PartitionMultiUpdate:
+			updateOp = typed.RawMultiUpdate()
+			if updateOp == nil {
+				return ctxId, nil, moerr.NewInternalErrorNoCtx("partition multi-update has no raw payload")
+			}
+			// The wire format is intentionally the existing MultiUpdate
+			// payload. The receiver reconstructs the partition wrapper from
+			// PartitionIndexCtx instead of needing a new protocol operator.
+			in.Op = int32(vm.MultiUpdate)
+		}
 		targetAware := false
 		changedRows := false
 		affectedRowsSelectors := false
-		for _, muCtx := range t.MultiUpdateCtx {
+		for _, muCtx := range updateOp.MultiUpdateCtx {
 			if muCtx.DedupByTargetRowID || muCtx.TargetUpdateCtxIdx != 0 {
 				targetAware = true
 			}
@@ -1218,8 +1236,8 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		if err := validateRemoteAffectedRowsSelectorsProtocol(proc, affectedRowsSelectors); err != nil {
 			return ctxId, nil, err
 		}
-		updateCtxList := make([]*plan.UpdateCtx, len(t.MultiUpdateCtx))
-		for i, muCtx := range t.MultiUpdateCtx {
+		updateCtxList := make([]*plan.UpdateCtx, len(updateOp.MultiUpdateCtx))
+		for i, muCtx := range updateOp.MultiUpdateCtx {
 			if err := validateRemoteODKUAffectedRowsProtocol(proc,
 				muCtx.AffectedRowsWeightCol != nil || muCtx.PhysicalChangedRowsCol != nil); err != nil {
 				return ctxId, nil, err
@@ -1231,7 +1249,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 				SkipInsertOnNullPk:    muCtx.SkipInsertOnNullPk,
 				InsertPkColIdx:        int32(muCtx.InsertPkColIdx),
 				IgnoreAffectedRows:    muCtx.IgnoreAffectedRows,
-				CountDeleteAffectRows: t.CountDeleteAffectRows,
+				CountDeleteAffectRows: updateOp.CountDeleteAffectRows,
 				DedupByTargetRowId:    muCtx.DedupByTargetRowID,
 				TargetUpdateCtxIdx:    int32(muCtx.TargetUpdateCtxIdx),
 				AffectedRowsCols:      make([]plan.ColRef, len(muCtx.AffectedRowsCols)),
@@ -1265,10 +1283,10 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			}
 		}
 		in.MultiUpdate = &pipeline.MultiUpdate{
-			AffectedRows:       t.GetAffectedRows(),
-			Action:             uint32(t.Action),
+			AffectedRows:       updateOp.GetAffectedRows(),
+			Action:             uint32(updateOp.Action),
 			UpdateCtxList:      updateCtxList,
-			RejectZeroTemporal: t.RejectZeroTemporal,
+			RejectZeroTemporal: updateOp.RejectZeroTemporal,
 		}
 	case *postdml.PostDml:
 		in.PostDml = &pipeline.PostDml{
@@ -1366,6 +1384,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.HasAutoCol = t.GetHasAutoCol()
 		arg.IsOldUpdate = t.GetIsOldUpdate()
 		arg.IsNewUpdate = t.GetIsNewUpdate()
+		arg.PreserveInput = t.GetPreserveInput()
 		arg.EstimatedRowCount = int64(t.GetEstimatedRowCount())
 		arg.CompPkeyExpr = t.CompPkeyExpr
 		arg.ClusterByExpr = t.ClusterByExpr
@@ -1905,7 +1924,24 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 			}
 		}
 
-		op = arg
+		partitionIndexTarget := false
+		for _, updateCtx := range arg.MultiUpdateCtx {
+			if updateCtx != nil && updateCtx.PartitionIndexCtx != nil {
+				partitionIndexTarget = true
+				break
+			}
+		}
+		if partitionIndexTarget {
+			if ctx == nil || ctx.scope == nil || ctx.scope.Proc == nil {
+				return nil, moerr.NewInvalidInputNoCtx("partition fulltext maintenance requires a remote process")
+			}
+			if !ctx.scope.Proc.GetPartitionService().Enabled() {
+				return nil, moerr.NewInvalidInput(ctx.scope.Proc.Ctx, "partition fulltext maintenance requires partition service")
+			}
+			op = multi_update.NewPartitionMultiUpdate(arg)
+		} else {
+			op = arg
+		}
 
 	case vm.PostDml:
 		t := opr.GetPostDml()
@@ -2141,6 +2177,21 @@ func validateRemoteStatementLastInsertIDProtocol(
 		return nil
 	}
 	return validateRemoteAutoIncrementSessionOptionsProtocol(proc, trackAutoIncrementGenerated || hasNonDefaultAutoIncrementSessionOptions(proc))
+}
+
+func validateRemotePartitionFulltextRouteProtocol(
+	proc *process.Process,
+	preserveInput bool,
+) error {
+	if !preserveInput {
+		return nil
+	}
+	if proc == nil || !supportsRemotePartitionFulltextRoute(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"partitioned FULLTEXT PRE_INSERT route preservation requires MORPC protocol version 85",
+		)
+	}
+	return nil
 }
 
 func hasNonDefaultAutoIncrementSessionOptions(proc *process.Process) bool {
@@ -2406,6 +2457,9 @@ func validateRemoteStatementLastInsertIDPipelineProtocol(
 		if preInsert := instruction.GetPreInsert(); preInsert != nil {
 			if err := validateRemoteStatementLastInsertIDProtocol(
 				proc, preInsert.HasAutoCol, preInsert.TrackAutoIncrementGenerated); err != nil {
+				return err
+			}
+			if err := validateRemotePartitionFulltextRouteProtocol(proc, preInsert.PreserveInput); err != nil {
 				return err
 			}
 		}

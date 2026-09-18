@@ -1064,6 +1064,29 @@ func TestRemoteAutoIncrementStatementLastInsertIDProtocolValidation(t *testing.T
 	require.True(t, instruction.PreInsert.HasAutoCol)
 	require.NoError(t,
 		validateRemoteStatementLastInsertIDPipelineProtocol(proc, autoPipeline))
+
+	routePreInsert := &preinsert.PreInsert{HasAutoCol: true, PreserveInput: true}
+	routePipeline := &pipeline.Pipeline{Children: []*pipeline.Pipeline{{
+		InstructionList: []*pipeline.Instruction{{
+			Op: int32(vm.PreInsert),
+			PreInsert: &pipeline.PreInsert{
+				HasAutoCol:    true,
+				PreserveInput: true,
+			},
+		}},
+	}}}
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion84)
+	_, _, err = convertToPipelineInstruction(routePreInsert, proc, ctx, 1)
+	require.ErrorContains(t, err, "requires MORPC protocol version 85")
+	require.ErrorContains(t,
+		validateRemoteStatementLastInsertIDPipelineProtocol(proc, routePipeline),
+		"requires MORPC protocol version 85")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion85)
+	_, instruction, err = convertToPipelineInstruction(routePreInsert, proc, ctx, 1)
+	require.NoError(t, err)
+	require.True(t, instruction.PreInsert.PreserveInput)
+	require.NoError(t,
+		validateRemoteStatementLastInsertIDPipelineProtocol(proc, routePipeline))
 }
 
 func TestChangedRowsUpdateRemoteProtocolValidation(t *testing.T) {
@@ -2598,10 +2621,12 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 	})
 
 	t.Run("MultiUpdate_PartitionCols", func(t *testing.T) {
+		ctx.scope = &Scope{Proc: proc}
+		t.Cleanup(func() { ctx.scope = nil })
 		changedRowsCol := 7
 		affectedRowsWeightCol := 11
 		physicalChangedRowsCol := 12
-		op := &multi_update.MultiUpdate{
+		raw := &multi_update.MultiUpdate{
 			MultiUpdateCtx: []*multi_update.MultiUpdateCtx{
 				{
 					ObjRef:   &plan.ObjectRef{ObjName: "t1"},
@@ -2625,29 +2650,37 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 			},
 			Action: multi_update.UpdateWriteTable,
 		}
+		op := multi_update.NewPartitionMultiUpdate(raw)
+		require.IsType(t, &multi_update.PartitionMultiUpdate{}, op,
+			"the production wrapper must be encoded, rather than a hand-built raw operator")
 		_, pipeInstr, err := convertToPipelineInstruction(op, proc, ctx, 1)
 		require.NoError(t, err)
+		require.Equal(t, int32(vm.MultiUpdate), pipeInstr.Op,
+			"partition wrapper uses the existing MultiUpdate wire operator")
 		require.Len(t, pipeInstr.MultiUpdate.UpdateCtxList[0].PartitionCols, 2)
 
 		restored, err := convertToVmOperator(pipeInstr, ctx, nil)
 		require.NoError(t, err)
-		restoredOp := restored.(*multi_update.MultiUpdate)
-		require.Equal(t, []int{5, 6}, restoredOp.MultiUpdateCtx[0].PartitionCols)
-		require.Equal(t, []int{0, 1, 2}, restoredOp.MultiUpdateCtx[0].InsertCols)
-		require.Equal(t, []int{3, 4, 8}, restoredOp.MultiUpdateCtx[0].DeleteCols)
-		require.Equal(t, 1, restoredOp.MultiUpdateCtx[0].InsertPkColIdx)
-		require.True(t, restoredOp.MultiUpdateCtx[0].DedupByTargetRowID)
-		require.Equal(t, 0, restoredOp.MultiUpdateCtx[0].TargetUpdateCtxIdx)
-		require.NotNil(t, restoredOp.MultiUpdateCtx[0].ChangedRowsCol)
-		require.Equal(t, 7, *restoredOp.MultiUpdateCtx[0].ChangedRowsCol)
-		require.Equal(t, []int{9, 10}, restoredOp.MultiUpdateCtx[0].AffectedRowsCols)
-		require.Equal(t, 11, *restoredOp.MultiUpdateCtx[0].AffectedRowsWeightCol)
-		require.Equal(t, 12, *restoredOp.MultiUpdateCtx[0].PhysicalChangedRowsCol)
-		require.NotNil(t, restoredOp.MultiUpdateCtx[0].PartitionIndexCtx)
-		require.Equal(t, int32(13), restoredOp.MultiUpdateCtx[0].PartitionIndexCtx.PartitionCol.ColPos)
-		require.Equal(t, int64(77), restoredOp.MultiUpdateCtx[0].PartitionIndexCtx.ParentRef.Obj)
-		require.True(t, restoredOp.IsRemote)
-		require.False(t, restoredOp.CountDeleteAffectRows,
+		restoredOp, ok := restored.(*multi_update.PartitionMultiUpdate)
+		require.True(t, ok, "remote receive must restore the production partition wrapper")
+		restoredRaw := restoredOp.RawMultiUpdate()
+		require.NotNil(t, restoredRaw)
+		require.Equal(t, []int{5, 6}, restoredRaw.MultiUpdateCtx[0].PartitionCols)
+		require.Equal(t, []int{0, 1, 2}, restoredRaw.MultiUpdateCtx[0].InsertCols)
+		require.Equal(t, []int{3, 4, 8}, restoredRaw.MultiUpdateCtx[0].DeleteCols)
+		require.Equal(t, 1, restoredRaw.MultiUpdateCtx[0].InsertPkColIdx)
+		require.True(t, restoredRaw.MultiUpdateCtx[0].DedupByTargetRowID)
+		require.Equal(t, 0, restoredRaw.MultiUpdateCtx[0].TargetUpdateCtxIdx)
+		require.NotNil(t, restoredRaw.MultiUpdateCtx[0].ChangedRowsCol)
+		require.Equal(t, 7, *restoredRaw.MultiUpdateCtx[0].ChangedRowsCol)
+		require.Equal(t, []int{9, 10}, restoredRaw.MultiUpdateCtx[0].AffectedRowsCols)
+		require.Equal(t, 11, *restoredRaw.MultiUpdateCtx[0].AffectedRowsWeightCol)
+		require.Equal(t, 12, *restoredRaw.MultiUpdateCtx[0].PhysicalChangedRowsCol)
+		require.NotNil(t, restoredRaw.MultiUpdateCtx[0].PartitionIndexCtx)
+		require.Equal(t, int32(13), restoredRaw.MultiUpdateCtx[0].PartitionIndexCtx.PartitionCol.ColPos)
+		require.Equal(t, int64(77), restoredRaw.MultiUpdateCtx[0].PartitionIndexCtx.ParentRef.Obj)
+		require.True(t, restoredRaw.IsRemote)
+		require.False(t, restoredRaw.CountDeleteAffectRows,
 			"CountDeleteAffectRows must stay false when the source op did not set it")
 	})
 
@@ -2709,6 +2742,7 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		op := &preinsert.PreInsert{
 			RejectZeroTemporal: true,
 			HasTargetSelector:  true,
+			PreserveInput:      true,
 			TargetRowNumberCol: 7,
 			TargetActiveCol:    8,
 			TargetRowIDCol:     9,
@@ -2717,6 +2751,7 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, pipeInstr.PreInsert.RejectZeroTemporal)
 		require.True(t, pipeInstr.PreInsert.HasTargetSelector)
+		require.True(t, pipeInstr.PreInsert.PreserveInput)
 		require.Equal(t, int32(7), pipeInstr.PreInsert.TargetRowNumberCol)
 		require.Equal(t, int32(8), pipeInstr.PreInsert.TargetActiveCol)
 		require.Equal(t, int32(9), pipeInstr.PreInsert.TargetRowIdCol)
@@ -2732,6 +2767,7 @@ func Test_DMLOperatorSerializationRoundtrip(t *testing.T) {
 		restoredPreInsert := restored.(*preinsert.PreInsert)
 		require.True(t, restoredPreInsert.RejectZeroTemporal)
 		require.True(t, restoredPreInsert.HasTargetSelector)
+		require.True(t, restoredPreInsert.PreserveInput)
 		require.Equal(t, int32(7), restoredPreInsert.TargetRowNumberCol)
 		require.Equal(t, int32(8), restoredPreInsert.TargetActiveCol)
 		require.Equal(t, int32(9), restoredPreInsert.TargetRowIDCol)

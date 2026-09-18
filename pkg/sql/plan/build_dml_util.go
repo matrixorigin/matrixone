@@ -7428,7 +7428,7 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 
 	lastNodeId := appendSinkScanNode(builder, bindCtx, sourceStep)
 	sourceTag := int32(0)
-	routePos := int32(-1)
+	sourceRoutePos := int32(-1)
 	routeTyp := plan.Type{}
 	if partitioned {
 		sourceTag = builder.genNewBindTag()
@@ -7438,7 +7438,7 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 			return routeErr
 		}
 		routeTyp = routeExpr.Typ
-		routePos = int32(len(sourceProjection))
+		sourceRoutePos = int32(len(sourceProjection))
 		sourceProjection = append(sourceProjection, routeExpr)
 		lastNodeId = builder.appendNode(&plan.Node{
 			NodeType:    plan.Node_PROJECT,
@@ -7534,7 +7534,7 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 			// the table-function output. Using sourceTag here made the route
 			// column read from the tokenizer at position len(ftcols), causing
 			// an out-of-range access on every partitioned FULLTEXT INSERT.
-			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: routePos}},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: sourceRoutePos}},
 		})
 	}
 
@@ -7561,16 +7561,9 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 			},
 		}
 	}
-	if partitioned {
-		project = append(project, &plan.Expr{
-			Typ: apply_project[len(ftcols)].Typ,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{RelPos: crossapply.BindingTags[0], ColPos: int32(len(ftcols))},
-			},
-		})
-	}
-
-	// fake primary key hidden column must be a NULL constant. See getDefaultExpr func from build_util.go
+	// PRE_INSERT owns the hidden primary key allocation. Keep the fake key
+	// adjacent to the physical index columns and carry the route after them so
+	// the execution-only column survives PRE_INSERT without being stored.
 	project = append(project, &plan.Expr{
 		Typ: plan.Type{
 			Id:          int32(types.T_uint64),
@@ -7582,6 +7575,16 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 			},
 		},
 	})
+	routePos := int32(-1)
+	if partitioned {
+		routePos = int32(len(project))
+		project = append(project, &plan.Expr{
+			Typ: routeTyp,
+			Expr: &plan.Expr_Col{
+				Col: &plan.ColRef{RelPos: crossapply.BindingTags[0], ColPos: int32(len(ftcols))},
+			},
+		})
+	}
 
 	projectNode := &plan.Node{
 		NodeType:    plan.Node_PROJECT,
@@ -7606,13 +7609,27 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 		}
 	}
 	if partitioned {
-		insertCols := make([]plan.ColRef, 0, len(ftcols)+1)
-		for i := range ftcols {
+		preInsertNode := &Node{
+			NodeType:    plan.Node_PRE_INSERT,
+			Children:    []int32{lastNodeId},
+			ProjectList: project,
+			PreInsertCtx: &plan.PreInsertCtx{
+				Ref:           indexObjRef,
+				TableDef:      DeepCopyTableDef(indexTableDef, true),
+				HasAutoCol:    true,
+				PreserveInput: true,
+			},
+		}
+		lastNodeId = builder.appendNode(preInsertNode, bindCtx)
+		if builder.preservePreInsertProjection == nil {
+			builder.preservePreInsertProjection = make(map[int32]struct{})
+		}
+		builder.preservePreInsertProjection[lastNodeId] = struct{}{}
+
+		insertCols := make([]plan.ColRef, 0, len(insertEntriesTableDef.Cols))
+		for i := range insertEntriesTableDef.Cols {
 			insertCols = append(insertCols, plan.ColRef{ColPos: int32(i)})
 		}
-		// The route column is execution-only; the fake primary key follows it
-		// in the projection and is the final index-table input column.
-		insertCols = append(insertCols, plan.ColRef{ColPos: int32(len(ftcols) + 1)})
 		multiUpdate := &plan.Node{
 			NodeType:    plan.Node_MULTI_UPDATE,
 			Children:    []int32{lastNodeId},
@@ -7625,7 +7642,7 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 				PartitionIndexCtx: &plan.PartitionIndexCtx{
 					ParentRef:    DeepCopyObjectRef(objRef),
 					ParentTable:  DeepCopyTableDef(tableDef, true),
-					PartitionCol: plan.ColRef{ColPos: int32(len(ftcols))},
+					PartitionCol: plan.ColRef{ColPos: routePos},
 				},
 			}},
 		}

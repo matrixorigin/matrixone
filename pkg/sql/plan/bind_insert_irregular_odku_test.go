@@ -235,11 +235,26 @@ func TestPartitionedFulltextMaintenanceUsesIndexOnlyMultiUpdate(t *testing.T) {
 			require.Equal(t, base.TblId, updateCtx.PartitionIndexCtx.ParentTable.TblId)
 			require.Equal(t, base.TblId, uint64(updateCtx.PartitionIndexCtx.ParentRef.Obj))
 			require.GreaterOrEqual(t, updateCtx.PartitionIndexCtx.PartitionCol.ColPos, int32(0))
-			require.Equal(t, int32(len(updateCtx.InsertCols)-1), updateCtx.PartitionIndexCtx.PartitionCol.ColPos)
+			require.Equal(t, int32(len(updateCtx.InsertCols)), updateCtx.PartitionIndexCtx.PartitionCol.ColPos,
+				"the route column must follow the complete stored-column projection, including fake_pk")
 			require.NotEqual(t, base.TblId, updateCtx.TableDef.TblId)
 		}
 	}
 	require.Equal(t, 1, maintenance, "one logical FULLTEXT index must produce one routed maintenance branch")
+
+	var preInsertWithRoute int
+	for _, node := range query.Nodes {
+		if node == nil || node.NodeType != planpb.Node_PRE_INSERT || node.PreInsertCtx == nil || !node.PreInsertCtx.PreserveInput {
+			continue
+		}
+		preInsertWithRoute++
+		require.True(t, node.PreInsertCtx.HasAutoCol,
+			"the routed hidden index still needs PRE_INSERT to allocate fake_pk")
+		require.NotNil(t, node.PreInsertCtx.TableDef)
+		require.NotEmpty(t, node.PreInsertCtx.TableDef.Cols)
+	}
+	require.Equal(t, 1, preInsertWithRoute,
+		"routed FULLTEXT maintenance must preserve one complete input layout through PRE_INSERT")
 
 	for _, node := range query.Nodes {
 		if node == nil || node.NodeType != planpb.Node_APPLY || len(node.ProjectList) == 0 {
