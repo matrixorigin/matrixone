@@ -1,5 +1,9 @@
 # Light race-UT resource budget
 
+Historical experiment: the default-three decision below is superseded by
+`UT_LIGHT_LINK_ADMISSION.md` (six task slots, three link slots, conservative
+fallback). Measurements and rejected prebuild experiments remain relevant.
+
 Related issue: [#28419](https://github.com/matrixorigin/matrixone/issues/28419)
 
 ## Problem

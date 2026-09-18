@@ -44,7 +44,10 @@ UT_RUN_ID=${UT_RUN_ID:-"${G_TS}-${TEST_TYPE}"}
 UT_TIMEOUT=${UT_TIMEOUT:-"15"}
 UT_HARD_TIMEOUT=${UT_HARD_TIMEOUT:-"120m"}
 UT_PARALLEL=${UT_PARALLEL:-"1"}
-UT_LIGHT_PARALLEL=${UT_LIGHT_PARALLEL:-"3"}
+UT_LIGHT_PARALLEL=${UT_LIGHT_PARALLEL:-"6"}
+UT_LINK_PARALLEL=${UT_LINK_PARALLEL:-"3"}
+UT_LINK_DIR=""
+LIGHT_TOOL_FLAGS=()
 UT_SHARD=${UT_SHARD:-"all"}
 # Compile embedded packages while the exclusive issues fixture is active.
 # This only warms the Go build cache; the authoritative embedded go test
@@ -108,6 +111,7 @@ CURRENT_UT_LABEL="startup"
 UT_TERMINATING=0
 UT_HEARTBEAT_INTERVAL=${UT_HEARTBEAT_INTERVAL:-"60"}
 UT_HEARTBEAT_PID=""
+UT_HEARTBEAT_STATE="${G_WKSP}/${G_TS}-active-ut-state.json"
 TAGS="matrixone_test"
 GO_MODULE_MODE="-mod=readonly"
 # Static analysis owns vet in the separate SCA job. Running it again for every
@@ -236,6 +240,64 @@ function run_ut_command(){
     finish_ut_command
 }
 
+function prepare_light_link_gate(){
+    LIGHT_TOOL_FLAGS=()
+    if ! [[ "${UT_LINK_PARALLEL}" =~ ^(0|[1-9][0-9]?)$ ]] ||
+        (( UT_LINK_PARALLEL > 64 )); then
+        logger "ERR" "UT_LINK_PARALLEL must be an integer from 0 through 64"
+        return 1
+    fi
+    (( UT_LINK_PARALLEL == 0 )) && return 0
+    local go_flags
+    go_flags=$(go env GOFLAGS) || return 1
+    if [[ "$(uname -s)" != Linux ]] || ! command -v flock >/dev/null ||
+        [[ "${go_flags}" == *-toolexec* ]]; then
+        # Do not silently replace a caller's tool wrapper or admit six heavy
+        # links on platforms without kernel-backed slot admission.
+        (( light_stage_parallel <= 3 )) || light_stage_parallel=3
+        (( light_parallel <= 3 )) || light_parallel=3
+        logger "INF" "Link gate unavailable or external toolexec configured; cap light tasks at three"
+        return 0
+    fi
+    local saved_term_trap term_pending=0 create_status=0
+    saved_term_trap=$(trap -p TERM)
+    trap 'term_pending=1' TERM
+    UT_LINK_DIR=$(mktemp -d "${G_WKSP}/ut-link-slots.XXXXXX") || create_status=$?
+    restore_ut_term_trap "${saved_term_trap}"
+    if (( term_pending != 0 )); then
+        cleanup_light_link_gate
+        handle_ut_termination
+    fi
+    (( create_status == 0 )) || return "${create_status}"
+    export UT_LINK_DIR UT_LINK_PARALLEL
+    export UT_LINK_LOG="${UT_DIAGNOSTIC_DIR}/ut-link-admission.log"
+    : > "${UT_LINK_LOG}"
+    local slot
+    for (( slot=0; slot<UT_LINK_PARALLEL; slot++ )); do
+        if ! : > "${UT_LINK_DIR}/slot-${slot}"; then
+            cleanup_light_link_gate
+            return 1
+        fi
+    done
+    # Go parses a quoted command string for -toolexec, not a shell command.
+    LIGHT_TOOL_FLAGS=(-toolexec "bash '${BUILD_WKSP}/optools/ut_link_gate.sh'")
+    checkpoint_ut_event "configured" "light-link" "Go link admission" "" \
+        "task_parallel=${light_stage_parallel} link_parallel=${UT_LINK_PARALLEL}"
+}
+
+function cleanup_light_link_gate(){
+    # Only after the light process group is drained: never unlink a live lease.
+    if [[ -n "${UT_LINK_DIR}" ]]; then
+        local slot
+        for (( slot=0; slot<UT_LINK_PARALLEL; slot++ )); do
+            rm -f "${UT_LINK_DIR}/slot-${slot}"
+        done
+        rmdir "${UT_LINK_DIR}" || true
+        UT_LINK_DIR=""
+    fi
+    LIGHT_TOOL_FLAGS=()
+}
+
 function start_light_race(){
     if (( $# != 2 )); then
         logger "ERR" "start_light_race requires package scope and parallelism"
@@ -260,7 +322,7 @@ function start_light_race(){
     env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
         CGO_CFLAGS="${CGO_CFLAGS}" \
         CGO_LDFLAGS="${CGO_LDFLAGS}" \
-        go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json \
+        go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} ${LIGHT_TOOL_FLAGS[@]+"${LIGHT_TOOL_FLAGS[@]}"} -short -v -json \
         -tags "${TAGS}" -p "${package_parallel}" -timeout "${UT_TIMEOUT}m" \
         -race ${package_scope} > "${LIGHT_RACE_REPORT}" 2>> "${UT_STDERR}" &
     LIGHT_RACE_JOB_PID=$!
@@ -315,6 +377,7 @@ function finish_light_race(){
     checkpoint_ut_event "finish" "light" "light race-test packages" "${status}"
     consume_light_race_report
     report_status=$?
+    cleanup_light_link_gate
     if (( report_status != 0 && status == 0 )); then
         status=${report_status}
     fi
@@ -412,6 +475,7 @@ function start_ut_heartbeat(){
     if [[ -n "${UT_HEARTBEAT_PID}" ]]; then
         return 0
     fi
+    rm -f "${UT_HEARTBEAT_STATE}"
 
     local saved_term_trap
     local heartbeat_term_pending=0
@@ -422,6 +486,7 @@ function start_ut_heartbeat(){
     trap 'heartbeat_term_pending=1' TERM
     (
         local heartbeat_sleep_pid=""
+        local heartbeat_scan_pid=""
         local heartbeat_stop_requested=0
         local heartbeat_sleep_status=0
         function request_heartbeat_stop(){
@@ -435,6 +500,9 @@ function start_ut_heartbeat(){
                 # the exact child so it cannot retain the runner's pipes.
                 kill -KILL "${heartbeat_sleep_pid}" 2>/dev/null || true
             fi
+            if [[ -n "${heartbeat_scan_pid}" ]]; then
+                terminate_ut_process_group "${heartbeat_scan_pid}" KILL
+            fi
         }
         function finish_heartbeat_stop(){
             # Do not restore default handling: another TERM/INT must not
@@ -445,6 +513,12 @@ function start_ut_heartbeat(){
                 wait "${heartbeat_sleep_pid}" 2>/dev/null || true
                 heartbeat_sleep_pid=""
             fi
+            if [[ -n "${heartbeat_scan_pid}" ]]; then
+                terminate_ut_process_group "${heartbeat_scan_pid}" KILL
+                wait "${heartbeat_scan_pid}" 2>/dev/null || true
+                heartbeat_scan_pid=""
+            fi
+            rm -f "${UT_HEARTBEAT_STATE}" "${UT_HEARTBEAT_STATE}.out"
             exit 0
         }
         trap request_heartbeat_stop TERM INT
@@ -473,7 +547,9 @@ function start_ut_heartbeat(){
 
             local latest stage label active_cases active_detail active_records process_count memory report
             local -a heartbeat_reports
-            latest=$(tail -n 1 "${UT_CHECKPOINT}" 2>/dev/null || true)
+            # A heartbeat can race a stage transition. Never read our own stale
+            # stage back as the source of truth on the next tick.
+            latest=$(awk '!/event=heartbeat / { latest=$0 } END { print latest }' "${UT_CHECKPOINT}" 2>/dev/null || true)
             stage=$(sed -n 's/.* stage=\([^ ]*\).*/\1/p' <<< "${latest}")
             label=$(sed -n 's/.* label=\(.*\) status=.*/\1/p' <<< "${latest}")
             [[ -n "${stage}" ]] || stage="unknown"
@@ -489,12 +565,28 @@ function start_ut_heartbeat(){
                 "${G_WKSP}/${G_TS}-plan-race-report.out"
                 "${G_WKSP}/${G_TS}-plan-race-report.out".*
             )
-            active_records=""
-            for report in "${heartbeat_reports[@]}"; do
-                if [[ -s "${report}" ]]; then
-                    active_records+=$'\n'"$(awk -f "${BUILD_WKSP}/optools/active_ut_cases.awk" "${report}" 2>/dev/null || true)"
+            # Own the finite scan as a group. A large first scan or fallback
+            # must not outlive heartbeat cancellation or keep its pipes open.
+            set -m
+            (
+                trap - TERM INT
+                if ! python3 "${BUILD_WKSP}/optools/active_ut_incremental.py" \
+                    --state "${UT_HEARTBEAT_STATE}" "${heartbeat_reports[@]}" 2>/dev/null; then
+                    # The original full-scan reader remains the recovery path.
+                    for report in "${heartbeat_reports[@]}"; do
+                        if [[ -s "${report}" ]]; then
+                            awk -f "${BUILD_WKSP}/optools/active_ut_cases.awk" "${report}" 2>/dev/null || true
+                        fi
+                    done
                 fi
-            done
+            ) > "${UT_HEARTBEAT_STATE}.out" &
+            heartbeat_scan_pid=$!
+            set +m
+            if (( heartbeat_stop_requested != 0 )); then finish_heartbeat_stop; fi
+            wait "${heartbeat_scan_pid}" || true
+            if (( heartbeat_stop_requested != 0 )); then finish_heartbeat_stop; fi
+            heartbeat_scan_pid=""
+            active_records=$(< "${UT_HEARTBEAT_STATE}.out")
             active_cases=$(grep -c '^active UT case:' <<< "${active_records}" || true)
             active_detail=$(grep '^active UT case:' <<< "${active_records}" | LC_ALL=C sort -u | head -n 3 | paste -sd ';' - || true)
             local process_snapshot
@@ -760,6 +852,15 @@ function cgroup_resource_breakdown(){
     # These counters overlap: file includes shmem, and kernel includes slab.
     # Preserve names rather than presenting their sum as total memory.
     local stat
+    # These are the visible values at this scope, not a claim that an ancestor
+    # or cpuset cannot impose a tighter effective CPU limit.
+    if [[ -r "${path}/cpu.max" ]]; then
+        printf ' cpu.visible_scope=%s' "$(cgroup_memory_log_escape "${path}")"
+        awk 'NF == 2 { printf " cpu.max.quota=%s cpu.max.period=%s", $1, $2 }' "${path}/cpu.max"
+    fi
+    if [[ -r "${path}/cpuset.cpus.effective" ]]; then
+        awk 'NF == 1 { printf " cpu.cpuset.effective=%s", $1 }' "${path}/cpuset.cpus.effective"
+    fi
     for stat in memory.stat memory.events cpu.stat memory.pressure cpu.pressure io.pressure; do
         if [[ -r "${path}/${stat}" ]]; then
             awk -v prefix="${stat}" '
@@ -1016,6 +1117,7 @@ function handle_ut_termination(){
         LIGHT_RACE_JOB_PID=""
     fi
     consume_light_race_report
+    cleanup_light_link_gate
     if [[ -n "${ENGINE_RACE_JOB_PID}" ]]; then
         wait_for_ut_process_group "${ENGINE_RACE_JOB_PID}" "${UT_HELPER_TERM_GRACE_TICKS}"
         wait "${ENGINE_RACE_JOB_PID}" 2>/dev/null || true
@@ -1815,6 +1917,7 @@ function run_tests(){
     echo "#  UT HARD TIMEOUT: $UT_HARD_TIMEOUT"
     echo "#  UT PARALLEL:     $UT_PARALLEL"
     echo "#  LIGHT PARALLEL:  $UT_LIGHT_PARALLEL"
+    echo "#  LINK PARALLEL:   $UT_LINK_PARALLEL"
     echo "#  UT SHARD:        $UT_SHARD"
     echo "#  EMBEDDED PREBUILD: $UT_PREBUILD_EMBEDDED"
     echo "#  PLAN OVERLAP:    $UT_OVERLAP_PLAN"
@@ -2111,6 +2214,12 @@ function run_tests(){
             return 0
         fi
 
+        if should_run_ut_stage light && [[ -n "${light_test_scope}" ]]; then
+            if ! prepare_light_link_gate; then
+                UT_TEST_STATUS=1
+                return 0
+            fi
+        fi
         : > "${UT_REPORT}"
         # HNSW owns native worker pools inside its test binary. It must finish
         # before another race wave starts. When the bounded light/issues
@@ -2133,14 +2242,14 @@ function run_tests(){
                 # from the authoritative suite. Fall back to the original
                 # foreground command so the package scope still executes.
                 logger "ERR" "failed to start overlapping light race-test helper; retrying in foreground"
-                run_ut_command "light" "light race-test packages" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p ${light_stage_parallel} -timeout "${UT_TIMEOUT}m" -race $light_test_scope
+                run_ut_command "light" "light race-test packages" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} ${LIGHT_TOOL_FLAGS[@]+"${LIGHT_TOOL_FLAGS[@]}"} -short -v -json -tags "${TAGS}" -p ${light_stage_parallel} -timeout "${UT_TIMEOUT}m" -race $light_test_scope
                 light_status=$?
                 overlap_light=0
             fi
         else
             if should_run_ut_stage light && [[ -n "${light_test_scope}" ]]; then
                 logger "INF" "Run light race-test packages with parallelism ${light_stage_parallel} (requested ${UT_LIGHT_PARALLEL}, global ${UT_PARALLEL})"
-                run_ut_command "light" "light race-test packages" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p ${light_stage_parallel} -timeout "${UT_TIMEOUT}m" -race $light_test_scope
+                run_ut_command "light" "light race-test packages" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} ${LIGHT_TOOL_FLAGS[@]+"${LIGHT_TOOL_FLAGS[@]}"} -short -v -json -tags "${TAGS}" -p ${light_stage_parallel} -timeout "${UT_TIMEOUT}m" -race $light_test_scope
                 light_status=$?
             fi
 
@@ -2180,6 +2289,7 @@ function run_tests(){
             light_status=$?
             report_cgroup_memory_usage "Light/issues overlap"
         fi
+        cleanup_light_link_gate
 
         # These packages link embedded clusters with substantial race-detector
         # memory. The runner-wide file-lock admission keeps complete cluster
@@ -2301,6 +2411,12 @@ function ut_summary(){
   mkdir -p "${report_path}/failed/outputs"
 
   logger "INF" "UT checkpoint artifact: ${UT_CHECKPOINT}"
+  if [[ -s "${UT_DIAGNOSTIC_DIR}/ut-link-admission.log" ]]; then
+    awk '{ for (i=1; i<=NF; i++) if ($i ~ /^wait_seconds=/) {
+        split($i, field, "="); count++; total+=field[2]; if (field[2]>max) max=field[2]
+    }} END { printf "[ut_link_admission] links=%d wait_seconds_sum=%d wait_seconds_max=%d (overlapping waits, not wall savings)\n", count, total, max }' \
+        "${UT_DIAGNOSTIC_DIR}/ut-link-admission.log"
+  fi
   if [[ -s "${UT_CHECKPOINT}" ]]; then
     tail -n 40 "${UT_CHECKPOINT}" | sed 's/^/[ut_checkpoint] /'
   fi

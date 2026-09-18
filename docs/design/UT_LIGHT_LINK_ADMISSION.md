@@ -1,4 +1,4 @@
-# Race-UT light-stage link admission (revision 1)
+# Race-UT light-stage link admission (revision 2)
 
 Issue #28419; implementation PR #29094. Supersedes the default-three decision
 in `UT_LIGHT_RESOURCE_BUDGET.md`, not its coverage or rollback requirements.
@@ -59,7 +59,10 @@ the authoritative raw reports and failure-time AWK reader unchanged. A
 heartbeat-owned state file holds each report's identity, complete-line offset
 and active cases. Reset on replacement/truncation, retry incomplete final lines
 on the next heartbeat, forget removed reports, and atomically replace state.
-No background reader, queue or unbounded event history is added. Active state
+No persistent background reader, queue or unbounded event history is added. Each
+heartbeat's finite scan runs in one owned process group; stop kills and joins
+that group before removing diagnostic state, including the full-scan fallback.
+Active state
 is bounded by the suite's active cases; report count by existing stage workers.
 Corrupt/missing state rebuilds from the raw source. JSON strings are escaped in
 diagnostics; parsing failure must not affect test status or overwrite raw data.
@@ -88,3 +91,49 @@ only while slots are busy; best-effort fairness; no asserted CI speedup before
 the next completed run. The exec boundary retains Go's error/cache semantics,
 kernel-owned leases avoid stale tokens, and cleanup follows group drain.
 Implementation deviations require an updated design review before delivery.
+
+Revision 2 design review (before reader cancellation implementation): PASS.
+The initial full scan can exceed the heartbeat's two-second stop grace on a
+large report. Explicit per-scan group ownership closes that cancellation edge;
+pending-stop replay covers spawn-to-registration, using the existing process
+group helper. This adds at most one finite scan child, never another recurring
+worker. Validate cancellation while the reader is blocked on a test barrier.
+
+## Implementation evidence and closure review
+
+Local validation on 2026-09-19 (Go 1.26.4, Darwin/arm64 unless noted):
+
+- Full `./optools` normal and race suites; host and Linux-target `go vet`;
+  incremental configured golangci-lint; shell syntax and diff checks.
+- Real Linux util-linux flock test in an isolated container, five repetitions:
+  two independent owners overlap, a third waits, version queries bypass,
+  killed waiters do not reserve capacity, SIGKILL and failed owners release
+  leases, and original linker PID/exit status are preserved.
+- Real Go race compilation through the adapter produces a byte-identical test
+  binary to plain Go (SHA256 484d8d89cf762a67d1c09cdd0c690949138c5b13fb550e91d9522f032aa2a4d9).
+  This Darwin smoke uses a no-op flock substitute; kernel behavior is covered
+  separately on Linux. The subsequent plain build reuses compilation results
+  but still links; this is not evidence of a link-cache hit.
+- A 264,241,211-byte synthetic report gives identical diagnostic output:
+  three unchanged full scans take 13.236s, incremental snapshots 0.306s after
+  the initial scan. This is a local diagnostic benchmark, not CI wall savings.
+- Reader regression tests cover cache corruption, append, truncation/regrowth,
+  replacement, missing reports, duplicate input, partial/oversized lines and
+  escaped names. A FIFO barrier proves stop kills and joins a blocked reader.
+  Bash 3 compatibility is exercised (including empty optional tool flags).
+
+Review map: Makefile budgets -> runner configuration/three light dispatch
+paths -> exec adapter/kernel lease -> normal/cancel group drain -> slot cleanup.
+Heartbeat owns scan group -> reader owns atomic diagnostic snapshot; raw test
+reports remain authoritative. Q1 ownership: kernel FD/runner directory and
+heartbeat child/state each have one owner. Q2 waits: Go's finite action DAG
+and unchanged watchdog bound link waits; heartbeat stop kills and joins its
+scan group. Q3 cleanup: errors preserve tool exit status; failed/killed owners
+release kernel locks; runner unlinks only after drain; corrupt diagnostic
+state rebuilds and reader failure falls back to AWK without altering results.
+
+No production code, package selection, race flags, assertions, or timeouts
+change in this batch. More light test executables may overlap (up to the
+existing global six-task budget); the link cap is not a total-memory cap.
+Single-runner CI must establish net wall-time and peak-memory impact. Neither
+a ten-minute reduction nor an unchanged memory peak is claimed in advance.

@@ -77,7 +77,7 @@ func scheduleHarnessWithMockTransform(t *testing.T, script, mock string, transfo
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"run_ut.sh", "utilities.sh", "ut_tools.bash", "ut_process.bash", "active_ut_cases.awk", "summarize_ut_slow_cases.py"} {
+	for _, name := range []string{"run_ut.sh", "utilities.sh", "ut_tools.bash", "ut_process.bash", "ut_link_gate.sh", "active_ut_cases.awk", "active_ut_incremental.py", "summarize_ut_slow_cases.py"} {
 		data, err := os.ReadFile(name)
 		if err != nil {
 			t.Fatal(err)
@@ -107,7 +107,7 @@ func scheduleHarnessWithMockTransform(t *testing.T, script, mock string, transfo
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = 3 * time.Second
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"), "UT_WORKDIR="+root, "CASE_DIR="+root)
+	cmd.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"), "UT_WORKDIR="+root, "CASE_DIR="+root, "UT_LINK_PARALLEL=0")
 	cmd.Env = append(cmd.Env, variables...)
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() != nil {
@@ -649,6 +649,8 @@ mkdir "$CASE_DIR/cgroup"
 printf 'anon 1024\nfile 2048\nshmem 512\nslab 256\nunrelated 999\n' > "$CASE_DIR/cgroup/memory.stat"
 printf 'max 6\noom 0\noom_kill 0\n' > "$CASE_DIR/cgroup/memory.events"
 printf 'usage_usec 100\nnr_throttled 3\nthrottled_usec 40\n' > "$CASE_DIR/cgroup/cpu.stat"
+printf '800000 100000\n' > "$CASE_DIR/cgroup/cpu.max"
+printf '0-7\n' > "$CASE_DIR/cgroup/cpuset.cpus.effective"
 printf 'some avg10=1.00 avg60=0.50 avg300=0.10 total=123\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=4\n' > "$CASE_DIR/cgroup/memory.pressure"
 cgroup_resource_breakdown "$CASE_DIR/cgroup"
 cgroup_resource_breakdown "$CASE_DIR/missing"
@@ -657,7 +659,7 @@ cgroup_resource_breakdown "$CASE_DIR/missing"
 	if err != nil {
 		t.Fatalf("resource breakdown: %v\n%s", err, out)
 	}
-	for _, field := range []string{"memory.stat.anon=1024", "memory.stat.file=2048", "memory.stat.shmem=512", "memory.events.max=6", "memory.events.oom_kill=0", "cpu.stat.nr_throttled=3", "cpu.stat.throttled_usec=40", "memory.pressure.some.total=123", "memory.pressure.full.total=4"} {
+	for _, field := range []string{"cpu.max.quota=800000", "cpu.max.period=100000", "cpu.cpuset.effective=0-7", "memory.stat.anon=1024", "memory.stat.file=2048", "memory.stat.shmem=512", "memory.events.max=6", "memory.events.oom_kill=0", "cpu.stat.nr_throttled=3", "cpu.stat.throttled_usec=40", "memory.pressure.some.total=123", "memory.pressure.full.total=4"} {
 		if !strings.Contains(string(out), field) {
 			t.Errorf("missing %s in %s", field, out)
 		}
@@ -1121,9 +1123,9 @@ exit 0
 		name, parallel, lightParallel, expectedLightParallel, overlap, overlapParallel, expectOverlap, expected, expectedStatus, forceLaunchFailure, prebuild, expectPrebuildActive string
 	}
 	cases := []lightScheduleCase{
-		{name: "default-off", parallel: "6", lightParallel: "__default__", expectedLightParallel: "3", overlap: "__default__", overlapParallel: "2", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end", expectedStatus: "0", forceLaunchFailure: "0"},
+		{name: "default-off", parallel: "6", lightParallel: "__default__", expectedLightParallel: "6", overlap: "__default__", overlapParallel: "2", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end", expectedStatus: "0", forceLaunchFailure: "0"},
 		{name: "overlap", parallel: "6", lightParallel: "__default__", expectedLightParallel: "2", overlap: "1", overlapParallel: "2", expectOverlap: "1", expected: "hnsw\nserial\nserial-end\nlight\nlight-end", expectedStatus: "0", forceLaunchFailure: "0"},
-		{name: "sequential-explicit-off", parallel: "6", lightParallel: "__default__", expectedLightParallel: "3", overlap: "0", overlapParallel: "2", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end", expectedStatus: "0", forceLaunchFailure: "0"},
+		{name: "sequential-explicit-off", parallel: "6", lightParallel: "__default__", expectedLightParallel: "6", overlap: "0", overlapParallel: "2", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end", expectedStatus: "0", forceLaunchFailure: "0"},
 		{name: "sequential-single-slot", parallel: "1", lightParallel: "6", expectedLightParallel: "1", overlap: "0", overlapParallel: "2", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end", expectedStatus: "0", forceLaunchFailure: "0"},
 		{name: "single-slot-guard", parallel: "1", lightParallel: "6", expectedLightParallel: "1", overlap: "1", overlapParallel: "2", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end", expectedStatus: "0", forceLaunchFailure: "0"},
 	}
@@ -1212,7 +1214,7 @@ fi
 			}
 
 			wrong := tc
-			wrong.expectedLightParallel = "6"
+			wrong.expectedLightParallel = "3"
 			if out, err = runCase(wrong); err == nil {
 				t.Fatalf("scheduler accepted an intentionally wrong light budget assertion\n%s", out)
 			}
