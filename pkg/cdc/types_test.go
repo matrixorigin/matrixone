@@ -16,6 +16,7 @@ package cdc
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"testing"
@@ -534,6 +535,17 @@ func TestPatternTableJSONPreservesMalformedIdentifierBytes(t *testing.T) {
 		string([]byte{'d', 0xe9, 'b'}), restored.Pts[0].Source.Database, 2))
 	require.True(t, CDCSourceNameMatches(
 		string([]byte{'t', 0xe9, 'a'}), restored.Pts[0].Source.Table, 2))
+
+	t.Run("legacy plain fields", func(t *testing.T) {
+		var legacy PatternTable
+		require.NoError(t, json.Unmarshal([]byte(`{"database":"db","table":"table"}`), &legacy))
+		require.Equal(t, PatternTable{Database: "db", Table: "table"}, legacy)
+	})
+
+	t.Run("invalid byte encoding", func(t *testing.T) {
+		var invalid PatternTable
+		require.Error(t, json.Unmarshal([]byte(`{"database":"","table":"table","database_bytes":"!"}`), &invalid))
+	})
 }
 
 func TestOutputType_String(t *testing.T) {
