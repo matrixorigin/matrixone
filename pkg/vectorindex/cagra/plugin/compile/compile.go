@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	cagraruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin/runtime"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/quantizer"
 )
 
 // insertIntoCagraIndexTableFormat is the SQL template used to populate the
@@ -253,6 +254,9 @@ func registerIdxcronUpdate(
 }
 
 func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.ReindexParamUpdate) (map[string]string, error) {
+	if err := compileplugin.RejectMerge(alter, "cagra"); err != nil {
+		return nil, err
+	}
 	// Merge first, then validate the EFFECTIVE quantization via the per-algo
 	// catalog hook (the single home shared with CREATE). The merged map is the
 	// index's actual post-reindex config: the value the reindex set, or — when
@@ -274,6 +278,11 @@ func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.Re
 	if err := (cagraruntime.CatalogHooks{}).ValidQuantization(
 		merged[catalog.Quantization], merged[catalog.IndexAlgoParamOpType]); err != nil {
 		return nil, err
+	}
+	if q, changed := compileplugin.ReindexQuantizationChange(old, alter); changed && alter.BaseVectorType != 0 {
+		if err := quantizer.CheckNoUpcast("Cagra", q, alter.BaseVectorType); err != nil {
+			return nil, err
+		}
 	}
 	return merged, nil
 }

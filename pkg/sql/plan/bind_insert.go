@@ -5473,6 +5473,9 @@ func (builder *QueryBuilder) buildValueScan(
 					}
 				} else {
 					valueBinder := binder
+					if types.T(col.Typ.Id).IsInteger() {
+						valueBinder = funcBinder
+					}
 					boundWithNumericContext := false
 					if isNumericAssignmentTarget(col.Typ) {
 						if builder.isPrepareStatement {
@@ -5490,8 +5493,9 @@ func (builder *QueryBuilder) buildValueScan(
 								return 0, nil, err
 							}
 							// A bare marker is the source value of the assignment, not a
-							// numeric expression.  In an IGNORE assignment it must remain
-							// TEXT until the outer cast_ignore runs; otherwise the prepare-time
+							// numeric expression. Integer assignments must retain that source
+							// until execute-time numeric typing; IGNORE must retain TEXT
+							// until the outer cast_ignore runs. Otherwise the prepare-time
 							// numeric context creates an ordinary cast(? AS INT/DECIMAL), and
 							// malformed values fail before the IGNORE warning/adjustment mode
 							// is reached.  Keep numeric context for compound expressions such
@@ -5500,8 +5504,9 @@ func (builder *QueryBuilder) buildValueScan(
 							if _, ok := unwrapParenExpr(r[i]).(*tree.ParamExpr); ok {
 								directPreparedParam = true
 							}
-							if scan.hasParam && !(builder.isInsertIgnore && directPreparedParam &&
-								useIgnoreConversionAssignmentCast(targetTyp.Typ)) {
+							if scan.hasParam && !(directPreparedParam &&
+								(types.T(col.Typ.Id).IsInteger() || (builder.isInsertIgnore &&
+									useIgnoreConversionAssignmentCast(targetTyp.Typ)))) {
 								switch numericBinder := funcBinder.(type) {
 								case *DefaultBinder:
 									defExpr, err = numericBinder.bindNumericExprWithContext(r[i], 0, &col.Typ)
