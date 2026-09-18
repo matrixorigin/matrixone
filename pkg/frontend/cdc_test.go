@@ -3525,6 +3525,52 @@ func TestCdcTaskCancelFinalizesWatermarks(t *testing.T) {
 	}
 }
 
+func TestCdcTaskCancelWithoutWatermarkCleanupPreservesProgress(t *testing.T) {
+	capture := &cdcCatalogStateExecutor{}
+	updater := cdc.NewCDCWatermarkUpdater(
+		t.Name(),
+		capture,
+		cdc.WithCronJobInterval(time.Hour),
+	)
+	updater.Start()
+	defer updater.Stop()
+
+	key := cdc.WatermarkKey{
+		AccountId: 1,
+		TaskId:    "task-claim-loss",
+		DBName:    "db",
+		TableName: "table",
+	}
+	watermark := types.BuildTS(10, 1)
+	require.NoError(t, updater.UpdateWatermarkOnly(context.Background(), &key, &watermark))
+	require.NoError(t, updater.ForceFlush(context.Background()))
+
+	executor := &CDCTaskExecutor{
+		activeRoutine:    cdc.NewCdcActiveRoutine(),
+		watermarkUpdater: updater,
+		cnUUID:           "test-cn",
+		runningReaders:   &sync.Map{},
+		spec: &task.CreateCdcDetails{
+			TaskId:   key.TaskId,
+			TaskName: "task-claim-loss",
+			Accounts: []*task.Account{{Id: key.AccountId}},
+		},
+		stateMachine: NewExecutorStateMachine(),
+		holdCh:       make(chan int, 1),
+	}
+	require.NoError(t, executor.stateMachine.Transition(TransitionStart))
+	require.NoError(t, executor.stateMachine.Transition(TransitionStartSuccess))
+
+	require.NoError(t, executor.CancelWithoutWatermarkCleanup())
+	require.Equal(t, StateCancelled, executor.stateMachine.State())
+	got, err := updater.GetFromCache(context.Background(), &key)
+	require.NoError(t, err)
+	require.Equal(t, watermark, got)
+	for _, sql := range capture.capturedExecSQLs() {
+		require.NotEqual(t, cdc.CDCSQLBuilder.DeleteWatermarkSQL(key.AccountId, key.TaskId), sql)
+	}
+}
+
 func TestCdcTaskCancelDrainsInFlightTableCallback(t *testing.T) {
 	executor := &CDCTaskExecutor{
 		activeRoutine:  cdc.NewCdcActiveRoutine(),
@@ -5779,6 +5825,21 @@ func TestCdcTask_addExecPipelineForTable(t *testing.T) {
 			reader.Wait()
 		}
 	}
+
+	// Legacy NoFull rows must consult durable progress before creating a reader.
+	// The test executor intentionally lacks the newer source_table_id column,
+	// so the progress probe returns an error before any pipeline is admitted.
+	legacyTask := &CDCTaskExecutor{
+		activeRoutine:    cdc.NewCdcActiveRoutine(),
+		watermarkUpdater: u,
+		runningReaders:   &sync.Map{},
+		noFull:           true,
+		additionalConfig: cdcTask.additionalConfig,
+		spec: &task.CreateCdcDetails{
+			Accounts: []*task.Account{{Id: 0}},
+		},
+	}
+	require.Error(t, legacyTask.addExecPipelineForTable(ctx, info, txnOperator, nil))
 }
 
 func TestCdcTask_checkPitr(t *testing.T) {
