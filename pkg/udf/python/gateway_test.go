@@ -643,3 +643,20 @@ func TestGatewayRejectsArrowBodyOnControlFrame(t *testing.T) {
 	)
 	require.ErrorContains(t, err, "unexpected Arrow data")
 }
+
+func TestFreezeResultFramesFreezesBothPartsAndChargesTotal(t *testing.T) {
+	header := []byte("record-header")
+	body := []byte("record-body")
+	headerSnapshot, bodySnapshot, err := freezeResultFrames(header, body, int64(len(header)+len(body)))
+	require.NoError(t, err)
+	require.NoError(t, headerSnapshot.Validate(len(header), headerSnapshot.Digest()))
+	require.NoError(t, bodySnapshot.Validate(len(body), bodySnapshot.Digest()))
+
+	header[0] = 'X'
+	body[0] = 'Y'
+	require.Equal(t, "record-header", string(headerSnapshot.TrustedBytes()))
+	require.Equal(t, "record-body", string(bodySnapshot.TrustedBytes()))
+
+	_, _, err = freezeResultFrames(header, body, int64(len(header)+len(body)-1))
+	require.ErrorContains(t, err, "exceeds")
+}

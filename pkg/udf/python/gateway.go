@@ -1540,22 +1540,19 @@ func (g *Gateway) receiveResultBatch(
 			if err := sequence.AcceptResult(control.Sequence); err != nil {
 				return 0, err
 			}
-			snapshot, err := protocol.FreezeOutput(data.DataBody, g.cfg.MaxBatchBytes)
+			headerSnapshot, bodySnapshot, err := freezeResultFrames(
+				data.DataHeader,
+				data.DataBody,
+				g.cfg.MaxBatchBytes,
+			)
 			if err != nil {
 				return 0, err
 			}
-			// FreezeOutput already stores the digest of its private copy. An
-			// empty expectedDigest still makes Validate rehash that same
-			// backing and detect any trusted-boundary mutation, without
-			// allocating the hexadecimal digest string twice on every batch.
-			if err := snapshot.Validate(len(data.DataBody), ""); err != nil {
-				return 0, err
-			}
-			// DecodeRecordBatch consumes the result header synchronously before
-			// the next Recv.  The schema header is retained across batches, but
-			// this per-batch header has no cross-call lifetime, so keep the
-			// Flight-owned slice and avoid a redundant allocation/copy.
-			decoded, err := DecodeRecordBatch(**schemaFrame, ArrowFrame{Header: data.DataHeader, Body: snapshot.TrustedBytes()}, g.cfg.MaxBatchBytes)
+			// Both Flight buffers are now private snapshots. DecodeRecordBatch
+			// consumes exactly those validated backings; no later mutation of the
+			// received FlightData can change the bytes that crossed the trusted
+			// validation/publication boundary.
+			decoded, err := DecodeRecordBatch(**schemaFrame, ArrowFrame{Header: headerSnapshot.TrustedBytes(), Body: bodySnapshot.TrustedBytes()}, g.cfg.MaxBatchBytes)
 			if err != nil {
 				return 0, fmt.Errorf("python udf: decode result: %w", err)
 			}
@@ -1626,6 +1623,36 @@ func (g *Gateway) receiveResultBatch(
 			return 0, fmt.Errorf("python udf: unexpected control %q", control.Kind)
 		}
 	}
+}
+
+// freezeResultFrames takes ownership of both IPC pieces before either one is
+// validated or decoded.  MaxBatchBytes describes the complete per-batch
+// payload, including the record message header and body; otherwise a large
+// header could bypass the body-only limit used by the old result path.
+func freezeResultFrames(header, body []byte, maxBytes int64) (*protocol.OutputSnapshot, *protocol.OutputSnapshot, error) {
+	if maxBytes <= 0 {
+		return nil, nil, fmt.Errorf("invalid Python UDF result batch limit")
+	}
+	headerBytes := int64(len(header))
+	bodyBytes := int64(len(body))
+	if headerBytes > maxBytes || bodyBytes > maxBytes-headerBytes {
+		return nil, nil, fmt.Errorf("RESOURCE_EXHAUSTED: Arrow result batch exceeds %d bytes", maxBytes)
+	}
+	headerSnapshot, err := protocol.FreezeOutput(header, maxBytes)
+	if err != nil {
+		return nil, nil, err
+	}
+	bodySnapshot, err := protocol.FreezeOutput(body, maxBytes)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := headerSnapshot.Validate(len(header), headerSnapshot.Digest()); err != nil {
+		return nil, nil, err
+	}
+	if err := bodySnapshot.Validate(len(body), bodySnapshot.Digest()); err != nil {
+		return nil, nil, err
+	}
+	return headerSnapshot, bodySnapshot, nil
 }
 
 type executionBudget struct {
