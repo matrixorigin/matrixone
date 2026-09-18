@@ -85,6 +85,26 @@ func TestMergedCTASResultColumnKindRoundTrip(t *testing.T) {
 	}
 }
 
+func TestMergedFulltextPartitionPlanFieldsRoundTrip(t *testing.T) {
+	tests := []struct {
+		name string
+		in   proto.Message
+		out  proto.Message
+	}{
+		{name: "dedup_join_context", in: &DedupJoinCtx{AuxiliaryRowIdCol: &ColRef{}}, out: &DedupJoinCtx{}},
+		{name: "update_partition_index_context", in: &UpdateCtx{PartitionIndexCtx: &PartitionIndexCtx{}}, out: &UpdateCtx{}},
+		{name: "preinsert_preserve_input", in: &PreInsertCtx{PreserveInput: true}, out: &PreInsertCtx{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			encoded, err := proto.Marshal(tt.in)
+			require.NoError(t, err)
+			require.NoError(t, proto.Unmarshal(encoded, tt.out))
+			require.Equal(t, tt.in, tt.out)
+		})
+	}
+}
+
 func TestMergedNumericAndTemporalFieldsRoundTrip(t *testing.T) {
 	// Physical OID 32 is decimal64; numeric attribute mask 3 is normalized ZEROFILL.
 	original := &Query{SelectLockReferences: []*SelectLockReference{{ObjectRef: &ObjectRef{Obj: 123, ObjName: "locked"}}}, ExecutionDependentAccess: true, Nodes: []*Node{{IndexScanInfo: IndexScanInfo{IsIndexScan: true, RequiresCapturedExecution: true}, FilterList: []*Expr{{

@@ -594,6 +594,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.Attrs = t.Attrs
 		op.IsOldUpdate = t.IsOldUpdate
 		op.IsNewUpdate = t.IsNewUpdate
+		op.PreserveInput = t.PreserveInput
 		op.HasAutoCol = t.HasAutoCol
 		op.EstimatedRowCount = t.EstimatedRowCount
 		op.CompPkeyExpr = t.CompPkeyExpr
@@ -936,6 +937,7 @@ func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, 
 	op.Attrs = attrs
 	op.IsOldUpdate = preCtx.IsOldUpdate
 	op.IsNewUpdate = preCtx.IsNewUpdate
+	op.PreserveInput = preCtx.PreserveInput
 	op.EstimatedRowCount = 0
 	if preCtx.HasAutoCol && nodes[node.Children[0]].Stats != nil {
 		op.EstimatedRowCount = plan2.EstimatedRowsInt64(nodes[node.Children[0]].Stats.Outcnt)

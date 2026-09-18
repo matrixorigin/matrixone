@@ -1709,6 +1709,10 @@ message PreInsertCtx {
   // ODKU provenance names the user-visible AUTO_INCREMENT source column.
   // Hidden fake-primary-key allocations must not be treated as the source.
   int32 odku_auto_increment_column = 17;
+  // Preserve execution-only input columns after the target table columns.
+  // Partitioned FULLTEXT maintenance uses this to carry its route ordinal
+  // through PRE_INSERT while still letting PRE_INSERT allocate hidden keys.
+  bool preserve_input = 18;
 }
 
 // RuntimeFilterKeyEncoding records the versioned producer-side closure

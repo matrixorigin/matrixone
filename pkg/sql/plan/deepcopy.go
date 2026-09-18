@@ -190,6 +190,7 @@ func DeepCopyPreInsertCtx(ctx *plan.PreInsertCtx) *plan.PreInsertCtx {
 		ClusterByExpr:                DeepCopyExpr(ctx.ClusterByExpr),
 		IsOldUpdate:                  ctx.IsOldUpdate,
 		IsNewUpdate:                  ctx.IsNewUpdate,
+		PreserveInput:                ctx.PreserveInput,
 		HasTargetSelector:            ctx.HasTargetSelector,
 		TargetRowNumberCol:           ctx.TargetRowNumberCol,
 		TargetActiveCol:              ctx.TargetActiveCol,
