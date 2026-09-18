@@ -597,7 +597,17 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 }
 
 func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+	return builder.applyIndicesForSortUsingIvfflatWithContext(nodeID, vecCtx, multiTableIndex, colRefCnt, idxColMap, nil)
+}
 
+func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
+	nodeID int32,
+	vecCtx *vectorSortContext,
+	multiTableIndex *MultiTableIndex,
+	colRefCnt map[[2]int32]int,
+	idxColMap map[[2]int32]*plan.Expr,
+	prepared *ivfIndexContext,
+) (int32, error) {
 	if !hasCompleteVectorPagination(vecCtx) || vecCtx.sortNode == nil || vecCtx.scanNode == nil {
 		return nodeID, nil
 	}
@@ -620,12 +630,16 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 		return nodeID, nil
 	}
 
-	ivfCtx, err := builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
-	if err != nil || ivfCtx == nil {
-		return nodeID, err
+	ivfCtx := prepared
+	if ivfCtx == nil {
+		var err error
+		ivfCtx, err = builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
+		if err != nil || ivfCtx == nil {
+			return nodeID, err
+		}
 	}
-	if ivfCtx.isAutoMode {
-		return builder.buildAdaptiveIvfTop(nodeID, vecCtx, multiTableIndex, colRefCnt, idxColMap)
+	if ivfCtx.isAutoMode && prepared == nil {
+		return builder.buildAdaptiveIvfTop(nodeID, vecCtx, multiTableIndex, colRefCnt, idxColMap, ivfCtx)
 	}
 
 	// Persist the inferred auto mode back to the plan nodes so downstream
@@ -1261,6 +1275,7 @@ func (builder *QueryBuilder) buildAdaptiveIvfTop(
 	multiTableIndex *MultiTableIndex,
 	colRefCnt map[[2]int32]int,
 	idxColMap map[[2]int32]*plan.Expr,
+	autoCtx *ivfIndexContext,
 ) (int32, error) {
 	ctx := builder.ctxByNode[nodeID]
 	// Replay requires an explicit positional output boundary and no external
@@ -1312,7 +1327,11 @@ func (builder *QueryBuilder) buildAdaptiveIvfTop(
 		return nodeID, moerr.NewInternalErrorNoCtx("cannot rebuild adaptive POST vector context")
 	}
 	postMap := make(map[[2]int32]*plan.Expr)
-	postRoot, err := builder.applyIndicesForSortUsingIvfflat(nodeID, postCtx, multiTableIndex, colRefCnt, postMap)
+	// Keep AUTO's adaptive nprobe and other resolved search parameters. Re-running
+	// prepare after changing RankOption to explicit POST would collapse nprobe
+	// back to the session probe_limit.
+	postRoot, err := builder.applyIndicesForSortUsingIvfflatWithContext(
+		nodeID, postCtx, multiTableIndex, colRefCnt, postMap, autoCtx)
 	if err != nil {
 		return nodeID, err
 	}

@@ -87,7 +87,7 @@ func TestAdaptiveTopUnsupportedRegionKeepsExactGraph(t *testing.T) {
 			}
 			count := len(tc.builder.qry.Nodes)
 			children := append([]int32(nil), tc.builder.qry.Nodes[root].Children...)
-			got, err := tc.builder.buildAdaptiveIvfTop(root, v, newVectorJoinIvfIndex(), nil, nil)
+			got, err := tc.builder.buildAdaptiveIvfTop(root, v, newVectorJoinIvfIndex(), nil, nil, &ivfIndexContext{})
 			require.NoError(t, err)
 			require.Equal(t, root, got)
 			require.Len(t, tc.builder.qry.Nodes, count, "must not leave partially rewritten candidates")
