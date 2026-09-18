@@ -23,6 +23,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -492,15 +493,21 @@ func TestViewDefinitionReplayPreservesEmptyBinaryAcrossSQLModes(t *testing.T) {
 
 func TestBuiltInViewDefinition(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	defer func() {
+		proc.Free()
+		mpool.DeleteMPool(proc.Mp())
+	}()
 	current := `{"Stmt":"create view v as select 0","definition":"select frozen from t"}`
 	legacy := `{"Stmt":"create /* migration view fake as */ view v as select 1"}`
 
 	t.Run("evaluates valid and invalid persisted rows", func(t *testing.T) {
 		input := vector.NewVec(types.T_varchar.ToType())
+		defer input.Free(proc.Mp())
 		require.NoError(t, vector.AppendStringList(input,
 			[]string{current, legacy, `{"Stmt":"CREATE VIEW"}`},
 			[]bool{false, false, false}, proc.Mp()))
 		result := vector.NewFunctionResultWrapper(types.T_text.ToType(), proc.Mp())
+		defer result.Free()
 		require.NoError(t, result.PreExtendAndReset(input.Length()))
 		require.NoError(t, builtInViewDefinition(
 			[]*vector.Vector{input}, result, proc, input.Length(), nil))
@@ -518,9 +525,11 @@ func TestBuiltInViewDefinition(t *testing.T) {
 
 	t.Run("preserves null inputs and selection mask", func(t *testing.T) {
 		input := vector.NewVec(types.T_varchar.ToType())
+		defer input.Free(proc.Mp())
 		require.NoError(t, vector.AppendStringList(input,
 			[]string{current, legacy}, []bool{false, false}, proc.Mp()))
 		result := vector.NewFunctionResultWrapper(types.T_text.ToType(), proc.Mp())
+		defer result.Free()
 		require.NoError(t, result.PreExtendAndReset(input.Length()))
 		require.NoError(t, builtInViewDefinition([]*vector.Vector{input}, result,
 			proc, input.Length(), &FunctionSelectList{
@@ -536,7 +545,9 @@ func TestBuiltInViewDefinition(t *testing.T) {
 		require.True(t, isNull)
 
 		nullInput := vector.NewConstNull(types.T_varchar.ToType(), 1, proc.Mp())
+		defer nullInput.Free(proc.Mp())
 		nullResult := vector.NewFunctionResultWrapper(types.T_text.ToType(), proc.Mp())
+		defer nullResult.Free()
 		require.NoError(t, nullResult.PreExtendAndReset(nullInput.Length()))
 		require.NoError(t, builtInViewDefinition(
 			[]*vector.Vector{nullInput}, nullResult, proc, nullInput.Length(), nil))
@@ -548,11 +559,17 @@ func TestBuiltInViewDefinition(t *testing.T) {
 
 func TestBuiltInViewCheckOption(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	defer func() {
+		proc.Free()
+		mpool.DeleteMPool(proc.Mp())
+	}()
 	input := vector.NewVec(types.T_varchar.ToType())
+	defer input.Free(proc.Mp())
 	require.NoError(t, vector.AppendStringList(input,
 		[]string{`{"Stmt":"CREATE VIEW v AS SELECT 1 WITH CASCADED CHECK OPTION"}`, `{"Stmt":"CREATE VIEW"}`},
 		[]bool{false, false}, proc.Mp()))
 	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(input.Length()))
 	require.NoError(t, builtInViewCheckOption(
 		[]*vector.Vector{input}, result, proc, input.Length(), nil))
