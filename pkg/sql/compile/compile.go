@@ -1438,6 +1438,9 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	if err = c.constrainStringNumericResultWorkers(qry); err != nil {
 		return nil, err
 	}
+	if err = c.constrainBoundedConditionalStringWorkers(qry); err != nil {
+		return nil, err
+	}
 	if err = c.constrainStrictWriteWorkers(); err != nil {
 		return nil, err
 	}
@@ -1954,6 +1957,12 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		ss = c.compileSort(node, ss)
 		return ss, nil
 	case plan.Node_AGG:
+		if err = preflightPercentileConfigs(node, c.proc); err != nil {
+			return nil, err
+		}
+		if err = validateAggregateConfigs(node, c.proc); err != nil {
+			return nil, err
+		}
 		childNodeID := node.Children[0]
 		childNode := nodes[childNodeID]
 		if isLocalPreAggregationGroup(node, childNode) &&
@@ -1990,6 +1999,9 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileSample(node, ss))))
 		return ss, nil
 	case plan.Node_WINDOW:
+		if err = validateAggregateConfigs(node, c.proc); err != nil {
+			return nil, err
+		}
 		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
 			return nil, err
@@ -2000,6 +2012,9 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileWin(node, ss))))
 		return ss, nil
 	case plan.Node_TIME_WINDOW:
+		if err = validateAggregateConfigs(node, c.proc); err != nil {
+			return nil, err
+		}
 		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
 			return nil, err
@@ -7633,6 +7648,7 @@ func (c *Compile) hasUnsupportedRemoteGroupWire(node *plan.Node) bool {
 		(hasHLLAggregate(node) && !c.supportsRemoteHLL()) ||
 		(hasVariableLengthGroupKey(node) && !c.supportsRemoteGroupHashString()) ||
 		(hasCanonicalDistinctKeyWire(node) && !c.supportsRemoteCanonicalDistinctKeyWire()) ||
+		(hasLegacyFloatDistinctKeyWire(node) && !c.supportsRemoteCanonicalDistinctKeyWire()) ||
 		(hasVarianceAggregate(node) && !c.supportsRemoteVarianceAggregates())
 }
 
@@ -7910,6 +7926,31 @@ func hasCanonicalDistinctKeyWire(node *plan.Node) bool {
 	return false
 }
 
+// hasLegacyFloatDistinctKeyWire identifies the fixed-width FLOAT DISTINCT
+// contract that changed with the canonical key fast path. Before MORPC v79 a
+// remote producer must keep every non-zero float bit pattern as a separate
+// key, so a new coordinator keeps this aggregation local until all remote
+// peers understand the modern contract. GROUP_CONCAT has an independent
+// ordered wire format and is intentionally excluded.
+func hasLegacyFloatDistinctKeyWire(node *plan.Node) bool {
+	if node == nil {
+		return false
+	}
+	for _, expr := range node.AggList {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil ||
+			uint64(fn.Func.Obj)&function.Distinct == 0 ||
+			fn.Func.ObjName == plan2.NameGroupConcat || len(fn.Args) != 1 {
+			continue
+		}
+		oid := types.T(fn.Args[0].Typ.Id)
+		if oid == types.T_float32 || oid == types.T_float64 {
+			return true
+		}
+	}
+	return false
+}
+
 func hasVarianceAggregate(node *plan.Node) bool {
 	for _, agg := range node.AggList {
 		if fn := agg.GetF(); fn != nil {
@@ -7994,6 +8035,16 @@ func supportsRemoteOrderedSetAggregates(service string) bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion17
+}
+
+func supportsRemoteOrderedSetExtendedTypes(service string) bool {
+	version, ok := moruntime.ServiceRuntime(service).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion84
 }
 
 func supportsRemoteApproxPercentile(service string) bool {
@@ -8334,6 +8385,7 @@ func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
 		(!hasHLLAggregate(node) || c.supportsRemoteHLL()) &&
 		(!hasVariableLengthGroupKey(node) || c.supportsRemoteGroupHashString()) &&
 		(!hasCanonicalDistinctKeyWire(node) || c.supportsRemoteCanonicalDistinctKeyWire()) &&
+		(!hasLegacyFloatDistinctKeyWire(node) || c.supportsRemoteCanonicalDistinctKeyWire()) &&
 		(!hasVarianceAggregate(node) || c.supportsRemoteVarianceAggregates()) &&
 		(!hasWidenedDecimalSum(node) || c.supportsRemoteWidenedDecimalSum())
 }

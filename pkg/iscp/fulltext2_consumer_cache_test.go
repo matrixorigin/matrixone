@@ -111,6 +111,8 @@ func (p *cacheFlushProbe) Load(*sqlexec.SqlProcess) error {
 
 func (*cacheFlushProbe) GetIndexSize() (int64, int64) { return 0, 0 }
 
+func (*cacheFlushProbe) BuildTS() int64 { return 0 }
+
 func (p *cacheFlushProbe) Destroy() { p.destroys.Add(1) }
 
 var _ veccache.VectorIndexSearchIf = (*cacheFlushProbe)(nil)

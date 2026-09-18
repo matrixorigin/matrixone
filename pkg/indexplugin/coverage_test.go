@@ -21,6 +21,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/indexplugin/coverage"
@@ -43,22 +44,26 @@ type coveringAlgo struct {
 	bareAlgo
 	covered bool
 	err     error
+	buildTS types.TS
 }
 
 type stubHooks struct {
 	covered bool
 	err     error
 	calls   *int
+	buildTS types.TS
 }
 
-func (h stubHooks) CoversSnapshot(context.Context, coverage.Request) (bool, error) {
+func (h stubHooks) CoversSnapshot(context.Context, coverage.Request) (bool, types.TS, error) {
 	if h.calls != nil {
 		*h.calls++
 	}
-	return h.covered, h.err
+	return h.covered, h.buildTS, h.err
 }
 
-func (p coveringAlgo) Coverage() coverage.Hooks { return stubHooks{covered: p.covered, err: p.err} }
+func (p coveringAlgo) Coverage() coverage.Hooks {
+	return stubHooks{covered: p.covered, err: p.err, buildTS: p.buildTS}
+}
 
 // registerForTest installs a plugin and removes it when the test ends, so the
 // process-wide registry is not left mutated.
@@ -82,22 +87,22 @@ func TestCoversSnapshotFailsClosed(t *testing.T) {
 	ctx := context.Background()
 
 	// unregistered algo: nothing to ask
-	covered, err := CoversSnapshot(ctx, "cov_missing", coverage.Request{})
+	covered, _, err := CoversSnapshot(ctx, "cov_missing", coverage.Request{})
 	require.NoError(t, err)
 	require.False(t, covered)
 
 	// registered but without the capability
-	covered, err = CoversSnapshot(ctx, "cov_bare", coverage.Request{})
+	covered, _, err = CoversSnapshot(ctx, "cov_bare", coverage.Request{})
 	require.NoError(t, err)
 	require.False(t, covered)
 
 	// the hook errored: the error is surfaced for logging, the answer is no
-	covered, err = CoversSnapshot(ctx, "cov_err", coverage.Request{})
+	covered, _, err = CoversSnapshot(ctx, "cov_err", coverage.Request{})
 	require.Error(t, err)
 	require.False(t, covered)
 
 	// the hook simply said no
-	covered, err = CoversSnapshot(ctx, "cov_no", coverage.Request{})
+	covered, _, err = CoversSnapshot(ctx, "cov_no", coverage.Request{})
 	require.NoError(t, err)
 	require.False(t, covered)
 }
@@ -108,13 +113,13 @@ func TestCoversSnapshotDelegates(t *testing.T) {
 	p := coveringAlgo{bareAlgo: bareAlgo{algo: "cov_yes"}, covered: true}
 	registerForTest(t, p)
 
-	covered, err := CoversSnapshot(context.Background(), "cov_yes", coverage.Request{TableID: 42})
+	covered, _, err := CoversSnapshot(context.Background(), "cov_yes", coverage.Request{TableID: 42})
 	require.NoError(t, err)
 	require.True(t, covered)
 
 	// and the dispatch really goes through the hook, not a shortcut
 	registerForTest(t, countingAlgo{bareAlgo: bareAlgo{algo: "cov_count"}, calls: &calls})
-	_, err = CoversSnapshot(context.Background(), "cov_count", coverage.Request{})
+	_, _, err = CoversSnapshot(context.Background(), "cov_count", coverage.Request{})
 	require.NoError(t, err)
 	require.Equal(t, 1, calls)
 }
@@ -130,3 +135,26 @@ var (
 	_ AlgoPlugin     = bareAlgo{}
 	_ CoveragePlugin = coveringAlgo{}
 )
+
+// CoversSnapshot returns the searched generation's build_ts alongside the verdict, so the planner
+// sizes a partial-plan gap without a second read. An unregistered or no-capability algo reports the
+// zero TS; a capable algo's value is passed through.
+func TestCoversSnapshotReturnsBuildTS(t *testing.T) {
+	registerForTest(t, bareAlgo{algo: "bts_bare"})
+	registerForTest(t, coveringAlgo{bareAlgo: bareAlgo{algo: "bts_yes"}, covered: true, buildTS: types.BuildTS(4242, 0)})
+
+	ctx := context.Background()
+
+	_, missing, err := CoversSnapshot(ctx, "bts_missing", coverage.Request{})
+	require.NoError(t, err)
+	require.True(t, missing.IsEmpty(), "unregistered algo")
+
+	_, bare, err := CoversSnapshot(ctx, "bts_bare", coverage.Request{})
+	require.NoError(t, err)
+	require.True(t, bare.IsEmpty(), "no coverage capability")
+
+	covered, bts, err := CoversSnapshot(ctx, "bts_yes", coverage.Request{})
+	require.NoError(t, err)
+	require.True(t, covered)
+	require.Equal(t, int64(4242), bts.Physical(), "capable algo's build_ts is passed through")
+}

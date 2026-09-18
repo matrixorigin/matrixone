@@ -19,17 +19,25 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 )
 
-// Source the real runner in a private repository layout. Its startup clears
-// diagnostics, so sourcing it in the actual checkout would corrupt another UT.
-func scheduleHarness(t *testing.T, script string, variables ...string) ([]byte, error) {
-	return scheduleHarnessWithMock(t, script, `#!/bin/bash
+func scheduleHarnessMock() string {
+	return `#!/bin/bash
 if [[ "$1" == version ]]; then exit 0; fi
+if [[ -n "${EXPECTED_HEAVY_PARALLEL:-}" ]]; then
+ case " $* " in
+  *" -p ${EXPECTED_HEAVY_PARALLEL} "*) ;;
+  *) printf 'unexpected heavy parallelism: %s\n' "$*" >&2; exit 94 ;;
+ esac
+fi
+if [[ "${EXPECT_ENGINE_BEFORE_HEAVY:-}" == 1 && "$1" == test && "$*" == *" -json "* && "$*" == *" -race "* ]]; then
+ [[ -e "$CASE_DIR/engine-joined" ]] || { printf 'heavy started before engine join\n' >&2; exit 95; }
+fi
 # The real env/go command must preserve both events around the report merge.
 printf 'heavy-start\n'
 printf started > "$CASE_DIR/heavy-started"
@@ -37,8 +45,19 @@ if [[ "$EXPECT_OVERLAP" == 1 ]]; then
  while [[ ! -e "$CASE_DIR/plan-started" ]]; do sleep 0.01; done
 fi
 printf 'heavy-end\n'
+touch "$CASE_DIR/heavy-finished"
 exit "$HEAVY_STATUS"
-`, variables...)
+`
+}
+
+// Source the real runner in a private repository layout. Its startup clears
+// diagnostics, so sourcing it in the actual checkout would corrupt another UT.
+func scheduleHarness(t *testing.T, script string, variables ...string) ([]byte, error) {
+	return scheduleHarnessWithMock(t, script, scheduleHarnessMock(), variables...)
+}
+
+func scheduleHarnessWithDefaultMockTransform(t *testing.T, script string, transform func(string) string, variables ...string) ([]byte, error) {
+	return scheduleHarnessWithMockTransform(t, script, scheduleHarnessMock(), transform, variables...)
 }
 
 func scheduleHarnessWithMock(t *testing.T, script, mock string, variables ...string) ([]byte, error) {
@@ -204,20 +223,35 @@ printf 'scope=%s limit=%s complete=%s events_hierarchical=%s boundaries=%s\n' "$
 	}
 }
 
-func TestHeavyPlanReusesReleasedEngineCapacity(t *testing.T) {
-	for _, tc := range []struct{ name, budget, overlap, engine, heavy, plan, expected string }{
-		{"default", "3", "", "0", "0", "0", "0"},
-		{"overlap", "3", "1", "0", "0", "0", "0"},
-		{"engine-failure", "3", "1", "7", "0", "0", "1"},
-		{"heavy-failure", "3", "1", "0", "8", "0", "1"},
-		{"plan-failure", "3", "1", "0", "0", "9", "1"},
-		{"sequential-baseline", "3", "0", "0", "0", "0", "0"},
-		{"one-slot", "1", "1", "0", "0", "0", "0"},
-		{"two-slots", "2", "1", "0", "0", "0", "0"},
+func TestHeavyPlanSchedulesEngineBeforeResourceWave(t *testing.T) {
+	for _, tc := range []struct{ name, budget, overlap, planParallel, engine, heavy, plan, expected string }{
+		{"default-safe", "", "1", "1", "0", "0", "0", "0"},
+		{"explicit-three", "3", "", "1", "0", "0", "0", "0"},
+		{"overlap", "3", "1", "1", "0", "0", "0", "0"},
+		{"plan-two-slots", "3", "1", "2", "0", "0", "0", "0"},
+		{"engine-failure", "3", "1", "1", "7", "0", "0", "1"},
+		{"heavy-failure", "3", "1", "1", "0", "8", "0", "1"},
+		{"plan-failure", "3", "1", "1", "0", "0", "9", "1"},
+		{"sequential-baseline", "3", "0", "1", "0", "0", "0", "0"},
+		{"one-slot", "1", "1", "1", "0", "0", "0", "0"},
+		{"two-slots", "2", "1", "1", "0", "0", "0", "0"},
+		{"one-budget-two-plan-slots", "1", "1", "2", "0", "0", "0", "0"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			expectedOverlap := "0"
-			if tc.budget == "3" && tc.overlap != "0" {
+			effectiveBudget := tc.budget
+			if effectiveBudget == "" {
+				effectiveBudget = "3"
+			}
+			budget, err := strconv.Atoi(effectiveBudget)
+			if err != nil {
+				t.Fatalf("invalid test budget %q: %v", effectiveBudget, err)
+			}
+			planParallel, err := strconv.Atoi(tc.planParallel)
+			if err != nil {
+				t.Fatalf("invalid test plan parallelism %q: %v", tc.planParallel, err)
+			}
+			if tc.overlap != "0" && budget > planParallel {
 				expectedOverlap = "1"
 			}
 			script := `source ./run_ut.sh UT
@@ -245,16 +279,17 @@ function go() {
   for package in "$@"; do echo "github.com/matrixorigin/matrixone/${package#./}"; done
  fi
 }
-function run_engine_race_shards() {
- mkdir "$CASE_DIR/engine-once" || return 90
- while [[ ! -e "$CASE_DIR/heavy-started" ]]; do sleep 0.01; done
- printf 'engine\n' > "$ENGINE_RACE_REPORT"
- touch "$CASE_DIR/engine-finished"
+	function run_engine_race_shards() {
+	 mkdir "$CASE_DIR/engine-once" || return 90
+	 [[ "${2:-}" == "${EXPECTED_ENGINE_SHARDS}" ]] || return 96
+	 printf 'engine\n' > "$ENGINE_RACE_REPORT"
+	 touch "$CASE_DIR/engine-finished"
  return "$ENGINE_STATUS"
 }
-function run_plan_race_shards() {
- mkdir "$CASE_DIR/plan-once" || return 91
- [[ -e "$CASE_DIR/engine-finished" ]] || return 92
+	function run_plan_race_shards() {
+	 mkdir "$CASE_DIR/plan-once" || return 91
+	 [[ "${PLAN_RACE_PARALLEL}" == "${EXPECTED_PLAN_PARALLEL}" ]] || return 98
+	 [[ -e "$CASE_DIR/engine-finished" ]] || return 92
  printf 'plan\n' > "$PLAN_RACE_REPORT"
  touch "$CASE_DIR/plan-started"
  return "$PLAN_STATUS"
@@ -265,16 +300,275 @@ run_tests
 [[ -z "$CURRENT_UT_PID$ENGINE_RACE_JOB_PID$PLAN_RACE_JOB_PID" ]] || exit 95
 [[ -e "$CASE_DIR/final-memory" ]] || exit 96
 printf '\nREPORT\n'
-cat "$UT_REPORT"
+	cat "$UT_REPORT"
 `
-			out, err := scheduleHarness(t, script, "HEAVY_RACE_PARALLEL="+tc.budget, "UT_OVERLAP_PLAN="+tc.overlap, "ENGINE_STATUS="+tc.engine, "HEAVY_STATUS="+tc.heavy, "PLAN_STATUS="+tc.plan, "EXPECTED_STATUS="+tc.expected, "EXPECT_OVERLAP="+expectedOverlap)
+			transform := func(text string) string {
+				const anchor = "            wait \"${ENGINE_RACE_JOB_PID}\"\n            engine_status=$?\n"
+				if got := strings.Count(text, anchor); got != 1 {
+					t.Fatalf("engine join anchor count = %d, want 1", got)
+				}
+				return strings.Replace(text, anchor, anchor+"            ut_test_after_engine_wait\n", 1)
+			}
+			script = "function ut_test_after_engine_wait() {\n touch \"$CASE_DIR/engine-joined\"\n [[ ! -e \"$CASE_DIR/heavy-started\" ]] || exit 97\n}\n" + script
+			expectedHeavyParallel := effectiveBudget
+			if expectedOverlap == "1" {
+				expectedHeavyParallel = strconv.Itoa(budget - planParallel)
+			}
+			if expectedHeavyParallel == "" {
+				expectedHeavyParallel = "3"
+			}
+			expectedEngineShards := "2"
+			if effectiveBudget == "1" {
+				expectedEngineShards = "1"
+			}
+			out, err := scheduleHarnessWithDefaultMockTransform(t, script, transform, "HEAVY_RACE_PARALLEL="+tc.budget, "UT_OVERLAP_PLAN="+tc.overlap, "PLAN_RACE_PARALLEL="+tc.planParallel, "ENGINE_STATUS="+tc.engine, "HEAVY_STATUS="+tc.heavy, "PLAN_STATUS="+tc.plan, "EXPECTED_STATUS="+tc.expected, "EXPECT_OVERLAP="+expectedOverlap, "EXPECT_ENGINE_BEFORE_HEAVY=1", "EXPECTED_ENGINE_SHARDS="+expectedEngineShards, "EXPECTED_PLAN_PARALLEL="+tc.planParallel, "EXPECTED_HEAVY_PARALLEL="+expectedHeavyParallel)
 			if err != nil {
 				t.Fatalf("schedule: %v\n%s", err, out)
 			}
-			if !strings.HasSuffix(string(out), "REPORT\nheavy-start\nheavy-end\nengine\nplan\n") {
+			if !strings.HasSuffix(string(out), "REPORT\nengine\nheavy-start\nheavy-end\nplan\n") {
 				t.Fatalf("lost or duplicated report events:\n%s", out)
 			}
 		})
+	}
+}
+
+func TestEngineLaunchRegistrationSurvivesCancellation(t *testing.T) {
+	script := `source ./run_ut.sh UT
+function logger() { :; }
+UT_HELPER_TERM_GRACE_TICKS=4
+trap handle_ut_termination TERM
+UT_REPORT="$CASE_DIR/ut-report.json"
+ENGINE_RACE_REPORT="$CASE_DIR/engine-report"
+ENGINE_RACE_REPORT_READY="$ENGINE_RACE_REPORT.ready"
+mkfifo "$CASE_DIR/engine-ready" "$CASE_DIR/engine-hold"
+exec 8<>"$CASE_DIR/engine-hold"
+exec 9<>"$CASE_DIR/engine-ready"
+function run_engine_race_shards() {
+	trap 'if grep -q "^engine$" "$UT_REPORT"; then touch "$CASE_DIR/report-consumed-early"; fi; touch "$CASE_DIR/engine-stopped"; exit 143' TERM
+	printf 'engine\n' > "$ENGINE_RACE_REPORT"
+	touch "$CASE_DIR/engine-started"
+	printf 'ready\n' >&9
+	read -r _ <&8
+}
+cleanup() {
+	status=$?
+	exec 8>&- 9>&-
+	[[ -e "$CASE_DIR/engine-started" && -e "$CASE_DIR/engine-stopped" ]] || status=90
+	[[ ! -e "$CASE_DIR/report-consumed-early" ]] || status=91
+	[[ -f "$UT_REPORT" ]] || status=92
+	if [[ -f "$UT_REPORT" ]] && [[ "$(grep -c '^engine$' "$UT_REPORT")" != 1 ]]; then status=92; fi
+	[[ -z "$ENGINE_RACE_JOB_PID" ]] || status=93
+	if [[ -s "$CASE_DIR/engine-pid" ]] && kill -0 "$(<"$CASE_DIR/engine-pid")" 2>/dev/null; then status=94; fi
+	printf 'ENGINE_CANCEL status=%s\n' "$status"
+	exit "$status"
+}
+trap cleanup EXIT
+start_engine_race example/engine 2
+`
+	transform := func(text string) string {
+		const anchor = "    run_engine_race_shards \"$1\" \"$2\" &\n    ENGINE_RACE_JOB_PID=$!\n"
+		if got := strings.Count(text, anchor); got != 1 {
+			t.Fatalf("engine launch anchor count = %d, want 1", got)
+		}
+		return strings.Replace(text, anchor, "    run_engine_race_shards \"$1\" \"$2\" &\n    ut_test_after_engine_spawn \"$!\"\n    ENGINE_RACE_JOB_PID=$!\n", 1)
+	}
+	script = "function ut_test_after_engine_spawn() {\n printf '%s\\n' \"$1\" > \"$CASE_DIR/engine-pid\"\n IFS= read -r -t 10 _ <&9 || exit 94\n kill -TERM \"$$\"\n}\n" + script
+	out, err := scheduleHarnessWithMockTransform(t, script, `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+exit 0
+`, transform)
+	exit, ok := err.(*exec.ExitError)
+	if !ok || exit.ExitCode() != 143 {
+		t.Fatalf("expected TERM exit 143: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "ENGINE_CANCEL status=143") {
+		t.Fatalf("engine cancellation ownership was not preserved: %s", out)
+	}
+}
+
+func TestEngineChildRegistrationSurvivesCancellation(t *testing.T) {
+	transform := func(text string) string {
+		const anchor = "        \"$@\" &\n        child_pid=$!\n        child_pids[slot]=${child_pid}\n"
+		if got := strings.Count(text, anchor); got != 1 {
+			t.Fatalf("engine child registration anchor count = %d, want 1", got)
+		}
+		return strings.Replace(text, anchor,
+			"        \"$@\" &\n        ut_test_after_engine_child_spawn \"$!\"\n        child_pid=$!\n        child_pids[slot]=${child_pid}\n", 1)
+	}
+	script := `source ./run_ut.sh UT
+function logger() { :; }
+ENGINE_RACE_REPORT="$CASE_DIR/engine-report"
+ENGINE_CHILD_PID_FILE="$CASE_DIR/engine-child.pid"
+cleanup() {
+    status=$?
+    if [[ -s "$ENGINE_CHILD_PID_FILE" ]]; then
+        child_pid=$(<"$ENGINE_CHILD_PID_FILE")
+        if kill -0 "$child_pid" 2>/dev/null || kill -0 -- -"$child_pid" 2>/dev/null; then
+            kill -KILL -- -"$child_pid" 2>/dev/null || kill -KILL "$child_pid" 2>/dev/null || true
+            status=90
+        fi
+    fi
+    printf 'ENGINE_CHILD_CANCEL status=%s\n' "$status"
+    exit "$status"
+}
+trap cleanup EXIT
+ut_test_after_engine_child_spawn() {
+	printf '%s\n' "$1" > "$ENGINE_CHILD_PID_FILE"
+	kill -TERM "$$"
+}
+function go() {
+    if [[ "$1" == list ]]; then
+        printf '%s\t%s\n' "$CASE_DIR" 'example/engine'
+        while :; do sleep 0.01; done
+    fi
+    return 0
+}
+run_engine_race_shards example/engine 1
+`
+	out, err := scheduleHarnessWithMockTransform(t, script, `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+exit 0
+`, transform)
+	exit, ok := err.(*exec.ExitError)
+	if !ok || exit.ExitCode() != 143 {
+		t.Fatalf("engine child cancellation: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "ENGINE_CHILD_CANCEL status=143") {
+		t.Fatalf("engine child registration was not fenced: %s", out)
+	}
+}
+
+func TestEngineRaceHelperPublishesCompleteReport(t *testing.T) {
+	script := `source ./run_ut.sh UT
+function logger() { :; }
+ENGINE_RACE_REPORT="$CASE_DIR/engine-report"
+ENGINE_RACE_REPORT_READY="$ENGINE_RACE_REPORT.ready"
+ENGINE_RACE_TEST_BINARY="$CASE_DIR/engine.test"
+function go() { command go "$@"; }
+run_engine_race_shards example/engine 2
+[[ -s "$ENGINE_RACE_REPORT" ]] || exit 90
+[[ -f "$ENGINE_RACE_REPORT.ready" ]] || exit 91
+[[ "$(grep -c '^engine-shard$' "$ENGINE_RACE_REPORT")" == 2 ]] || { cat "$ENGINE_RACE_REPORT"; exit 92; }
+`
+	mock := `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+if [[ "$1" == list ]]; then
+    printf '%s\t%s\n' "$CASE_DIR" 'example/engine'
+    exit 0
+fi
+if [[ "$1" == test && "$*" == *' -c '* ]]; then
+    [[ " $* " == *' -ldflags=-w '* ]] || exit 98
+    output=""
+    previous=""
+    for arg in "$@"; do
+        if [[ "$previous" == -o ]]; then output="$arg"; fi
+        previous="$arg"
+    done
+    printf '#!/bin/bash\nprintf "TestEngine1\\nTestEngine2\\n"\n' > "$output"
+    chmod +x "$output"
+    exit 0
+fi
+if [[ "$1" == tool ]]; then
+    printf 'engine-shard\n'
+    exit 0
+fi
+exit 99
+`
+	out, err := scheduleHarnessWithMock(t, script, mock)
+	if err != nil {
+		t.Fatalf("engine helper report: %v\n%s", err, out)
+	}
+}
+
+// Inspect the real compile commands without compiling MO again in every UT.
+// A failed build must still propagate; omitting DWARF must not bypass race,
+// tags, the bounded build parallelism, or module/vet policy.
+func TestRaceBinaryBuildPolicyAndFailure(t *testing.T) {
+	for _, tc := range []struct{ name, command string }{
+		{"engine", "run_engine_race_shards example/engine 1"},
+		{"plan", "run_plan_race_shards example/plan"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			script := `source ./run_ut.sh UT
+ENGINE_RACE_REPORT="$CASE_DIR/engine-report"
+ENGINE_RACE_TEST_BINARY="$CASE_DIR/engine.test"
+` + tc.command
+			mock := `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+if [[ "$1" == list ]]; then
+    printf '%s\t%s\n' "$CASE_DIR" example/package
+    exit 0
+fi
+if [[ "$1" == test ]]; then
+    for flag in -ldflags=-w -race -short -c -mod=readonly -vet=off; do
+        [[ " $* " == *" $flag "* ]] || exit 98
+    done
+    [[ " $* " == *' -tags matrixone_test '* && " $* " == *' -p 1 '* ]] || exit 99
+    printf 'COMPILE_POLICY_VERIFIED\n'
+    exit 42
+fi
+exit 97
+`
+			out, err := scheduleHarnessWithMock(t, script, mock)
+			exit, ok := err.(*exec.ExitError)
+			if !ok || exit.ExitCode() != 42 || !strings.Contains(string(out), "COMPILE_POLICY_VERIFIED") {
+				t.Fatalf("compile policy/failure propagation: %v\n%s", err, out)
+			}
+		})
+	}
+}
+
+func TestEngineRaceShardReportOpenFailureDrainsEarlierShard(t *testing.T) {
+	transform := func(text string) string {
+		const anchor = "        if ! exec 7>\"${shard_reports[shard]}\"; then\n"
+		if got := strings.Count(text, anchor); got != 1 {
+			t.Fatalf("shard report open anchor count = %d, want 1", got)
+		}
+		return strings.Replace(text, anchor,
+			"        if (( shard == 1 )); then while [[ ! -f \"${CASE_DIR}/engine-tool-ready\" ]]; do sleep 0.01; done; mkdir -p \"${CASE_DIR}/blocked-report\"; shard_reports[shard]=\"${CASE_DIR}/blocked-report\"; fi\n"+anchor, 1)
+	}
+	script := `source ./run_ut.sh UT
+function logger() { :; }
+ENGINE_RACE_REPORT="$CASE_DIR/engine-report"
+ENGINE_RACE_REPORT_READY="$ENGINE_RACE_REPORT.ready"
+ENGINE_RACE_TEST_BINARY="$CASE_DIR/engine.test"
+run_engine_race_shards example/engine 2
+status=$?
+[[ "$status" == 1 ]] || exit 90
+[[ -s "$CASE_DIR/engine-tool.pid" ]] || exit 91
+tool_pid=$(<"$CASE_DIR/engine-tool.pid")
+if kill -0 "$tool_pid" 2>/dev/null || kill -0 -- -"$tool_pid" 2>/dev/null; then
+    exit 92
+fi
+`
+	mock := `#!/bin/bash
+if [[ "$1" == version ]]; then exit 0; fi
+if [[ "$1" == list ]]; then
+    printf '%s\t%s\n' "$CASE_DIR" 'example/engine'
+    exit 0
+fi
+if [[ "$1" == test && "$*" == *' -c '* ]]; then
+    output=""
+    previous=""
+    for arg in "$@"; do
+        if [[ "$previous" == -o ]]; then output="$arg"; fi
+        previous="$arg"
+    done
+    printf '#!/bin/bash\nprintf "TestEngine1\\nTestEngine2\\n"\n' > "$output"
+    chmod +x "$output"
+    exit 0
+fi
+if [[ "$1" == tool ]]; then
+    printf '%s\n' "$$" > "$CASE_DIR/engine-tool.pid"
+    touch "$CASE_DIR/engine-tool-ready"
+    trap 'exit 143' TERM
+    while :; do sleep 0.01; done
+fi
+exit 99
+`
+	out, err := scheduleHarnessWithMockTransform(t, script, mock, transform)
+	if err != nil {
+		t.Fatalf("engine shard report-open failure: %v\n%s", err, out)
 	}
 }
 
@@ -343,6 +637,30 @@ exit 0
 	}
 }
 
+func TestCgroupResourceBreakdown(t *testing.T) {
+	script := `source ./run_ut.sh UT
+mkdir "$CASE_DIR/cgroup"
+printf 'anon 1024\nfile 2048\nshmem 512\nslab 256\nunrelated 999\n' > "$CASE_DIR/cgroup/memory.stat"
+printf 'max 6\noom 0\noom_kill 0\n' > "$CASE_DIR/cgroup/memory.events"
+printf 'usage_usec 100\nnr_throttled 3\nthrottled_usec 40\n' > "$CASE_DIR/cgroup/cpu.stat"
+printf 'some avg10=1.00 avg60=0.50 avg300=0.10 total=123\nfull avg10=0.00 avg60=0.00 avg300=0.00 total=4\n' > "$CASE_DIR/cgroup/memory.pressure"
+cgroup_resource_breakdown "$CASE_DIR/cgroup"
+cgroup_resource_breakdown "$CASE_DIR/missing"
+`
+	out, err := scheduleHarness(t, script)
+	if err != nil {
+		t.Fatalf("resource breakdown: %v\n%s", err, out)
+	}
+	for _, field := range []string{"memory.stat.anon=1024", "memory.stat.file=2048", "memory.stat.shmem=512", "memory.events.max=6", "memory.events.oom_kill=0", "cpu.stat.nr_throttled=3", "cpu.stat.throttled_usec=40", "memory.pressure.some.total=123", "memory.pressure.full.total=4"} {
+		if !strings.Contains(string(out), field) {
+			t.Errorf("missing %s in %s", field, out)
+		}
+	}
+	if strings.Contains(string(out), "unrelated") || strings.Contains(string(out), "avg10") {
+		t.Fatalf("unexpected fields: %s", out)
+	}
+}
+
 func TestUTHeartbeatStopsCleanly(t *testing.T) {
 	script := `source ./run_ut.sh UT
 mkfifo "$CASE_DIR/heartbeat-ready"
@@ -364,6 +682,11 @@ stop_ut_heartbeat
 ! kill -0 "$heartbeat_pid" 2>/dev/null || exit 90
 
 UT_HEARTBEAT_INTERVAL=1
+# Exercise the actual heartbeat formatting without exposing real process data.
+function ps() {
+    [[ "$*" == '-eo pid=,ppid=,rss=,comm=' ]] || return 93
+    printf '1 0 100 tiny\n2 1 200 small\n3 1 300 third\n4 1 400 fourth\n5 1 500 fifth\n6 1 600 sixth\n7 1 700 seventh\n8 1 800 eighth\n9 1 900 largest\n'
+}
 start_ut_heartbeat
 LIGHT_RACE_REPORT="$G_WKSP/${G_TS}-light-race-report.out"
 cat > "$LIGHT_RACE_REPORT" <<'EOF'
@@ -380,6 +703,10 @@ grep -q 'event=heartbeat' "$UT_CHECKPOINT"
 grep -q 'active_cases=2' "$CASE_DIR/ut.log"
 grep -q 'TestPrivate' "$CASE_DIR/ut.log"
 grep -q 'TestShard' "$CASE_DIR/ut.log"
+grep -q 'processes=9' "$CASE_DIR/ut.log"
+grep -q 'processes.top_rss=pid=9,ppid=1,rss_kib=900,comm=largest;pid=8,ppid=1,rss_kib=800,comm=eighth;' "$CASE_DIR/ut.log"
+grep -q 'pid=2,ppid=1,rss_kib=200,comm=small;' "$CASE_DIR/ut.log"
+! grep -q 'pid=1,ppid=0,rss_kib=100,comm=tiny;' "$CASE_DIR/ut.log"
 `
 	mock := `#!/bin/bash
 if [[ "$1" == version ]]; then exit 0; fi

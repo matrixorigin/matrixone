@@ -67,4 +67,25 @@ select
     cast(cast('-85070591730234615865843651857943' as decimal(65,0)) /
         cast('-170141183460469231731687303715884105728' as decimal(65,0)) as decimal(65,6)) as issue_28774_min_d128_divisor_negative_numerator;
 
+create index decimal_256_idx on decimal_256_t(d);
+insert into decimal_256_t values
+    (4, cast('7.500000000000000000000000000000' as decimal(65,30)));
+select d from decimal_256_t force index (decimal_256_idx) order by d;
 drop table decimal_256_t;
+
+drop table if exists decimal_256_unique_t;
+create table decimal_256_unique_t (
+    id int primary key,
+    d decimal(65,30),
+    k int
+);
+insert into decimal_256_unique_t values
+    (1, cast('7.500000000000000000000000000000' as decimal(65,30)), 7);
+create unique index decimal_256_unique_idx on decimal_256_unique_t(d, k);
+load data inline format='csv', data='2,8.500000000000000000000000000000,8\n'
+    into table decimal_256_unique_t fields terminated by ',';
+select id from decimal_256_unique_t
+    force index (decimal_256_unique_idx)
+    where d = cast('8.500000000000000000000000000000' as decimal(65,30)) and k = 8;
+select id, d, k from decimal_256_unique_t order by id;
+drop table decimal_256_unique_t;

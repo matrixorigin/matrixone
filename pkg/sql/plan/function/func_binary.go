@@ -935,6 +935,13 @@ func coalesceTextStringResult(overloads []overload, inputs []types.Type) (checkR
 	return newCheckResultWithFailure(failedFunctionParametersWrong), true
 }
 
+func coalesceBinaryStringReturnType(resultOID types.T, parameters []types.Type) types.Type {
+	if target, ok := binaryStringCommonType(parameters); ok {
+		return target
+	}
+	return resultOID.ToType()
+}
+
 // coalesceJSONResult must run before the generic string-numeric rule. It scans
 // every branch so a numeric argument cannot hide a bounded or binary JSON cast.
 func coalesceJSONResult(overloads []overload, inputs []types.Type) (checkResult, bool) {
@@ -991,6 +998,12 @@ func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 		if result, ok := coalesceJSONResult(overloads, inputs); ok {
 			return result
 		}
+		if result, ok := coalesceBinaryStringResult(overloads, inputs); ok {
+			return result
+		}
+		if result, ok := coalesceTextStringResult(overloads, inputs); ok {
+			return result
+		}
 		if retType, ok := mixedStringNumericToVarchar(inputs); ok {
 			castType := make([]types.Type, len(inputs))
 			for i := range castType {
@@ -1002,9 +1015,6 @@ func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 				}
 			}
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
-		}
-		if result, ok := coalesceTextStringResult(overloads, inputs); ok {
-			return result
 		}
 		if result, ok := coalesceSignedUnsignedIntegerResult(overloads, inputs); ok {
 			return result

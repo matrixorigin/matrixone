@@ -31,8 +31,9 @@ import (
 )
 
 type MockSearch struct {
-	Idxcfg vectorindex.IndexConfig
-	Tblcfg vectorindex.IndexTableConfig
+	Idxcfg  vectorindex.IndexConfig
+	Tblcfg  vectorindex.IndexTableConfig
+	BuildTs int64
 }
 
 func (m *MockSearch) Search(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
@@ -300,12 +301,25 @@ type baseAwareSearch struct {
 	MockSearch
 	empty bool
 	keys  []int64
+	// searchErr, when set, fails the search AFTER the load succeeded -- the shape of an
+	// entries scan that errors or is cancelled on a loaded generation.
+	searchErr error
 }
 
 func (m *baseAwareSearch) EmptyGeneration() bool { return m.empty }
 
 func (m *baseAwareSearch) Search(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig) (any, []float64, error) {
+	if m.searchErr != nil {
+		return nil, nil, m.searchErr
+	}
 	return m.keys, make([]float64, len(m.keys)), nil
+}
+
+func (m *baseAwareSearch) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, out *vectorindex.SearchOutput) error {
+	if m.searchErr != nil {
+		return m.searchErr
+	}
+	return nil
 }
 
 // TestCacheNotCacheEmptyReloadsBase is the deterministic #28837 closure a SQL BVT cannot prove:
@@ -345,6 +359,66 @@ func TestCacheNotCacheEmptyReloadsBase(t *testing.T) {
 	require.Equal(t, []int64{42}, k2.([]int64), "the same CN must reload and pick up the published base")
 	_, ok = Cache.IndexMap.Load(key)
 	require.True(t, ok, "a data-bearing generation must be retained")
+}
+
+// TestCacheNotCacheEmptyRetiresOnSearchError is the failure-path twin of the test above, and the
+// closure a success-only eviction misses: the loader's own query can fail AFTER Load -- an
+// IVF-FLAT entries scan that errors or is cancelled -- and the entry it loaded stays resident at
+// STATUS_LOADED. Only the loader ever retires an empty generation (a later caller finds
+// loaded==true and skips it), and IVF-FLAT has no IsStale, so a generation stranded here would
+// keep answering from the NULL-centroid placeholder -- bucket-1 routing -- for as long as traffic
+// refreshed its TTL, which is the #29011 bug reached through the error path. Both Search and
+// SearchInto must retire it.
+func TestCacheNotCacheEmptyRetiresOnSearchError(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	sqlproc := sqlexec.NewSqlProcess(proc)
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(8)}
+	idxcfg.Usearch.Metric = usearch.L2sq
+	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
+	fp32a := []float32{1, 2, 3, 4, 5, 6, 7, 8}
+	scanErr := moerr.NewInternalErrorNoCtx("entries scan failed")
+
+	Cache = NewVectorIndexCache()
+	t.Cleanup(func() { Cache.Destroy() })
+
+	// --- Search path -------------------------------------------------------------------
+	key := "retire_on_err"
+
+	// Async-build window: the load sees the placeholder (empty generation) and the query that
+	// loaded it then fails. The error propagates, and the empty generation is NOT left behind.
+	broken := &baseAwareSearch{MockSearch: MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}, empty: true, searchErr: scanErr}
+	_, _, err := Cache.Search(sqlproc, key, broken, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+	require.ErrorIs(t, err, scanErr, "the algorithm error reaches the caller unchanged")
+	_, ok := Cache.IndexMap.Load(key)
+	require.False(t, ok, "a failed query must not strand the empty generation it loaded")
+
+	// The build commits the real centroids under the SAME version, so the same key. With no
+	// RemoveIdle and no HouseKeeping in between, the next query reloads purely because the
+	// empty generation was retired. Were it retained, this would LoadOrStore-hit the broken
+	// entry and fail again with scanErr instead of returning the base.
+	base := &baseAwareSearch{MockSearch: MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}, empty: false, keys: []int64{42}}
+	k, _, err := Cache.Search(sqlproc, key, base, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+	require.Nil(t, err)
+	require.Equal(t, []int64{42}, k.([]int64), "the same CN must reload and pick up the published base")
+	_, ok = Cache.IndexMap.Load(key)
+	require.True(t, ok, "a data-bearing generation must be retained")
+
+	// --- SearchInto path ---------------------------------------------------------------
+	intoKey := "retire_on_err_into"
+	var out vectorindex.SearchOutput
+	brokenInto := &baseAwareSearch{MockSearch: MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}, empty: true, searchErr: scanErr}
+	require.ErrorIs(t, Cache.SearchInto(sqlproc, intoKey, brokenInto, fp32a, vectorindex.RuntimeConfig{Limit: 4}, &out), scanErr)
+	_, ok = Cache.IndexMap.Load(intoKey)
+	require.False(t, ok, "SearchInto must not strand the empty generation its failed query loaded")
+
+	// A NON-empty generation whose query fails is kept: the failure says nothing about the
+	// index, and evicting it would re-load a healthy index on every transient error.
+	fullKey := "keep_on_err"
+	brokenFull := &baseAwareSearch{MockSearch: MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}, empty: false, searchErr: scanErr}
+	_, _, err = Cache.Search(sqlproc, fullKey, brokenFull, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+	require.ErrorIs(t, err, scanErr)
+	_, ok = Cache.IndexMap.Load(fullKey)
+	require.True(t, ok, "a populated generation survives a failed query")
 }
 
 func TestCacheAny(t *testing.T) {
@@ -654,4 +728,36 @@ func (m *MockSearchSearchError) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vecto
 
 func (m *MockRuntimeSearch) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ *vectorindex.SearchOutput) error {
 	return nil
+}
+
+// BuildTS stubs (fulltext2 async-freshness interface method).
+func (m *MockSearch) BuildTS() int64            { return m.BuildTs }
+func (m *MockAnySearch) BuildTS() int64         { return 0 }
+func (m *MockSearchLoadError) BuildTS() int64   { return 0 }
+func (m *MockSearchSearchError) BuildTS() int64 { return 0 }
+func (m *MockRuntimeSearch) BuildTS() int64     { return 0 }
+
+func TestGetBuildTS(t *testing.T) {
+	c := &VectorIndexCache{}
+
+	// No cached entry: not found, so the freshness gate proceeds (a search loads fresh).
+	_, found := c.GetBuildTS("missing")
+	require.False(t, found)
+
+	// A loaded generation reports its own build_ts (what a probe now would search).
+	// captureSize publishes Algo.BuildTS() to the entry atomic, exactly as Load does.
+	loaded := &VectorIndexSearch{Algo: &MockSearch{BuildTs: 42}}
+	loaded.captureSize()
+	loaded.Status.Store(STATUS_LOADED)
+	c.IndexMap.Store("idx", loaded)
+	ts, found := c.GetBuildTS("idx")
+	require.True(t, found)
+	require.Equal(t, int64(42), ts)
+
+	// A not-yet-loaded entry has no meaningful build_ts: not found.
+	preloaded := &VectorIndexSearch{Algo: &MockSearch{BuildTs: 99}}
+	preloaded.Status.Store(STATUS_NOT_INIT)
+	c.IndexMap.Store("idx2", preloaded)
+	_, found = c.GetBuildTS("idx2")
+	require.False(t, found)
 }

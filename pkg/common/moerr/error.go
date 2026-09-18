@@ -1664,6 +1664,13 @@ func NewDuplicateEntry(ctx context.Context, entry string, key string) *Error {
 	return newError(ctx, ErrDuplicateEntry, entry, key)
 }
 
+// FormatDuplicateEntry returns the duplicate-entry diagnostic text without
+// constructing or reporting an error. INSERT IGNORE uses this path because a
+// rejected row is an expected warning rather than an execution error.
+func FormatDuplicateEntry(entry string, key string) string {
+	return fmt.Sprintf(errorMsgRefer[ErrDuplicateEntry].errorMsgOrFormat, entry, key)
+}
+
 func NewWrongValueCountOnRow(ctx context.Context, row int) *Error {
 	return newError(ctx, ErrWrongValueCountOnRow, row)
 }
