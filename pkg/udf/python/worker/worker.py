@@ -2519,8 +2519,13 @@ class _HandlerQuotaLease:
         with self._lock:
             if self._released:
                 return
+            # Keep ownership until the quota counter has actually been
+            # decremented.  Cleanup callers retry a failed release; marking
+            # this token first would turn a transient quota error into a
+            # permanent handler-budget leak because the retry would become a
+            # no-op.
+            self._quota._release(self._account_id, self._owner_id)
             self._released = True
-        self._quota._release(self._account_id, self._owner_id)
 
 
 class _HandlerQuota:
