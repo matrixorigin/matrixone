@@ -1,19 +1,21 @@
 # PR #28523: String Math Numeric Coercion and Prepared-Parameter Roles
 
 - Status: Draft / awaiting maintainer approval
-- Design revision: 15
+- Design revision: 16
 - Issue: [#28487](https://github.com/matrixorigin/matrixone/issues/28487)
 - Implementation PR: [#28523](https://github.com/matrixorigin/matrixone/pull/28523)
-- Candidate integration base: `480b91764a94cf9ab49d3f2b43a60cb63ce677c6`
-  (tree `c1f82a34b4dae57623c1217301ae6a2dd4a35fd3`), confirmed as current
-  `main` and integrated by a clean rebase. All 29 candidate commits replayed
-  without conflicts. Since the prior base `780ef933`, main adds one commit
-  changing `pkg/sql/plan/stats.go`, `pkg/sql/plan/stats_test.go`, and
-  `pkg/tests/issues/issue_29068_test.go`; none overlap this candidate's 46
-  changed paths. The exact post-rebase candidate is
-  implementation/test snapshot before this revision-15 documentation-only
-  update is `ee613d767e4daa269ad0f3cf7c3599118de5b076` (tree
-  `8cc85f221c73b86f46cdc32e4627755065ae3058`).
+- Candidate integration base: `d97251938429be942fa0206b18df8cb5d630d356`
+  (tree `96ae4531ac478532bc7d2629b30590913449032`), confirmed as current
+  `main` and integrated by a clean rebase. The candidate's 31 commits replayed
+  onto this base. Since the prior base `480b917`, main added the approved
+  integer-parameter binding contract (`d9609d7`) and the fileservice fix
+  (`d972519`); the former overlaps `pkg/sql/plan/utils.go` and
+  `pkg/sql/plan/visit_plan_rule.go`, so the rebase explicitly preserved both
+  the integer-source contract and this PR's prepared string-math handling.
+  The exact post-rebase implementation candidate is
+  `845a50360ac97e5f5b35dfd398eb7625f44b0f3d` (tree
+  `79c397550626ccb4f2a5808b8fc5b1ce235b7821`), including the scoped
+  compatibility-mode regression-fixture repair.
 - Published PR source head before the local SCA repair:
   `7535f9f4023cd6c7d4e9485409477beaa4dbf61b` (tree
   `7b2b0c8236b1e5111b2e970137596a762439dcfd`).
@@ -37,7 +39,8 @@
   interpretation of Fengtt's compatibility note. Revision 13 records the
   earlier SCA repair and main rebase below. Revision 14 records the
   user-selected positive SQL-mode contract. Revision 15 records the exact
-  current-main rebase and local validation; implementation proceeds without
+  current-main rebase and local validation; revision 16 records the scoped
+  compatibility fixtures and exact-head build/BVT validation. Implementation proceeds without
   waiting for formal maintainer design approval, which remains pending.
 - The initial rebase had two shared paths with main since the historical
   base, `pkg/sql/plan/base_binder.go` and `pkg/sql/plan/utils.go`; both applied
@@ -80,7 +83,7 @@ This document is the stable design revision requested before implementation
 approval. It must not be read as a maintainer approval until the approval
 record at the end is filled by an authorized reviewer.
 
-Revision 15 supersedes the revision-13 candidate mapping described in the
+Revision 16 supersedes the revision-13 candidate mapping described in the
 historical feedback records below. The user selected the explicit, opt-in
 `MYSQL_NUMERIC_COMPATIBILITY` contract documented here and asked that
 implementation proceed without waiting for maintainer design approval. This
@@ -941,7 +944,7 @@ log. This is reusable evidence for the unchanged SQL/BVT behavior, not a CI run
 on the new local head; no local BVT or post-fix remote SCA/CI run is claimed.
 Maintainer design approval remains pending.
 
-## Current strict-default implementation and latest-main verification (revision 15)
+## Current strict-default implementation and latest-main verification (revision 16)
 
 The strict-by-default contract selected by the user is implemented: default,
 empty, unset, and legacy/nil process state are strict; only the explicit
@@ -952,40 +955,45 @@ Session/process propagation, protobuf transport, prepared-plan/cache mode
 transitions, direct and prepared conversion paths, warnings, and the
 function-role boundaries are covered by the implementation and tests above.
 
-The exact implementation/test snapshot `ee613d767e4daa269ad0f3cf7c3599118de5b076` (tree
-`8cc85f221c73b86f46cdc32e4627755065ae3058`) was rebased onto current main
-`480b91764a94cf9ab49d3f2b43a60cb63ce677c6` (tree
-`c1f82a34b4dae57623c1217301ae6a2dd4a35fd3`): 29 commits replayed cleanly,
-with no overlapping paths from main's one-commit delta. This implementation/test
-snapshot is 29 commits ahead of this base; revision 15 is documentation-only.
+The pre-rebase implementation/test snapshot `ee613d767e4daa269ad0f3cf7c3599118de5b076`
+(tree `8cc85f221c73b86f46cdc32e4627755065ae3058`) was rebased onto current
+main `d97251938429be942fa0206b18df8cb5d630d356` (tree
+`96ae4531ac478532bc7d2629b30590913449032`). The two overlapping planner files
+were merged so main's integer-parameter contract and this PR's string-math
+role handling both remain present. The implementation candidate before this
+documentation-only revision is
+`845a50360ac97e5f5b35dfd398eb7625f44b0f3d` (tree
+`79c397550626ccb4f2a5808b8fc5b1ce235b7821`), 32 commits ahead of this base.
 
 On the exact rebased source, Go 1.26.4 and the repository CGo test wrapper
-passed the full parser, process, math-function, frontend, and planner packages.
+passed the parser, process, math-function, frontend, and planner packages
+with `-vet=off`; the same CGo-aware `go vet` command passed separately for all
+six affected packages.
 The two real embedded-cluster prepared-statement regressions
 `TestIssue27294PreparedNumericOverloads` and
 `TestIssue28523NumericCompatibilityOverBinaryPreparedStatement` passed
 together. The focused prepared-owner planner race tests passed. CGo-aware
 `go vet` passed for the parser, process, math-function, planner, frontend, and
-issue-test packages. Exact durations and commands are retained in the local
+issue-test packages. The full `pkg/tests/issues` package also passed after the
+fixture repair; the two PR-specific prepared-statement regressions were rerun
+in isolation. Exact durations and commands are retained in the local
 issue-to-PR evidence ledger.
 
 The latest local distributed BVT comparisons passed:
 `test/distributed/cases/function/func_string_format.test` at 276/276 and
 `test/distributed/cases/function/func_math_string_numeric.test` at 118/118.
 Both used `mo-tester -m run -n -g`; `-n` ignores result-set metadata. The
-FORMAT fixture now enables `MYSQL_NUMERIC_COMPATIBILITY` only around legacy
-numeric-prefix assertions, saves/restores the previous SQL mode, and leaves
+FORMAT and issue fixtures enable `MYSQL_NUMERIC_COMPATIBILITY` only around
+legacy numeric-prefix assertions, save/restore the prior SQL mode, and leave
 strict-default error cases intact. The result values were not changed.
 Therefore these passes establish SQL/result behavior, not result metadata.
-Both runs used the existing test-built standalone service binary from the
-strict-mode implementation snapshot before the latest-main rebase; the runtime
-implementation paths were unchanged by main's non-overlapping commit. A
-final-head `make build` was attempted but could not finish because the host
-temporary volume ran out of space (`no space left on device`); this is an
-environment limit, not a source compile diagnostic. Therefore no
-exact-final-binary build, remote CI run, PR-wide coverage result, or multi-CN
-runtime claim is made. The BVT evidence is supplemental to the exact-source Go
-and COM_STMT validation, not a substitute for it.
+The exact candidate was rebuilt with Go 1.26.4, CGo native libraries, and
+`make build-with-prebuilt-native`; each BVT was run twice against that binary:
+`func_string_format.test` 276/276 and `func_math_string_numeric.test` 118/118
+on both runs. The local service was stopped cleanly afterward. No remote CI,
+PR-wide coverage result, or multi-CN runtime claim is made. The BVT evidence is
+supplemental to the exact-source Go and COM_STMT validation, not a substitute
+for it.
 
 The implementation is complete on this local candidate and does not wait for
 design approval, as requested. The approval record remains explicitly pending
@@ -996,14 +1004,14 @@ request, push, or merge was performed in this turn.
 
 ```text
 Design path: docs/design/pr28523-string-math-coercion.md
-Design revision: 15
-Candidate source inputs: local candidate at intake c0e0ad3553b4036ca132db4a31ded544f24a16c1; strict-default implementation commit before rebase 0bdc2c625fe23c5c28294047467e2960dab3269f; final rebased candidate ee613d767e4daa269ad0f3cf7c3599118de5b076 (tree 8cc85f221c73b86f46cdc32e4627755065ae3058).
-Integration base: 480b91764a94cf9ab49d3f2b43a60cb63ce677c6 (tree c1f82a34b4dae57623c1217301ae6a2dd4a35fd3)
+Design revision: 16
+Candidate source inputs: local candidate at intake c0e0ad3553b4036ca132db4a31ded544f24a16c1; strict-default implementation commit before rebase 0bdc2c625fe23c5c28294047467e2960dab3269f; pre-rebase candidate ee613d767e4daa269ad0f3cf7c3599118de5b076; implementation/test candidate 845a50360ac97e5f5b35dfd398eb7625f44b0f3d (tree 79c397550626ccb4f2a5808b8fc5b1ce235b7821).
+Integration base: d97251938429be942fa0206b18df8cb5d630d356 (tree 96ae4531ac478532bc7d2629b30590913449032)
 Scope/trigger: PR reviews 5199052257, 5214666396 and comment 5687377735; >500 production lines and planner/plan compatibility boundary
 Reviewer identity and role: historical GPT-6 Astra review of d56711fa5b429e5e6e52f64f603d2e853478edca against base 4ff27bb9b35c43c1b0961bb9a01bf8fc0b6a2171; any exact-head review decision is tracked separately from maintainer design approval
 Review timestamp: exact final-candidate Astra Medium review is tracked separately from maintainer design approval, which remains pending
 Decision: DRAFT / AWAITING MAINTAINER APPROVAL
-Validation evidence: historical revisions 9-14 remain recorded above. Revision 15 records clean rebase, exact-source Go packages, focused planner race tests, both COM_STMT regressions, CGo-aware vet, and the latest 276/276 FORMAT plus 118/118 numeric-string BVT comparisons using the pre-rebase strict-mode binary with result metadata ignored via `-n`. Exact-final-head build was blocked by host temporary-volume capacity; no remote CI or PR-wide coverage pass is claimed.
+Validation evidence: historical revisions 9-15 remain recorded above. Revision 16 records the clean rebase onto `d972519`, preserved integer-parameter contract, scoped compatibility fixtures, exact-source Go packages, focused planner race tests, both COM_STMT regressions, CGo-aware vet, full `pkg/tests/issues`, an exact Go 1.26.4/CGo build, and two exact-binary runs each of the 276/276 FORMAT and 118/118 numeric-string BVT comparisons with result metadata ignored via `-n`. No remote CI or PR-wide coverage pass is claimed.
 User-selected compatibility contract for this revision: default/empty/unset/nil is strict; only explicit MYSQL_NUMERIC_COMPATIBILITY selects MySQL numeric-prefix conversion; MATRIXONE_NATIVE is always strict and wins if both are present; the new token is absent from the existing default SQL mode. This design decision was selected by the user and implementation proceeds on that basis; it is not maintainer approval. Remaining decisions proposed for maintainer acceptance: retain strict INT64 precision controls (no general integer-prefix widening); prefer correctness over function-wide zonemap pruning; retain the bounded per-parameter source scan with its measured owner-boundary traversal cost; approve the revision-9 argument-owner boundaries and no-inherited-role fast path
 Evidence links: [PR #28523](https://github.com/matrixorigin/matrixone/pull/28523); [historical-head CI run 35197284882](https://github.com/matrixorigin/matrixone/actions/runs/35197284882); the PR/evidence ledger is the record for commit replay, review, CI, and BVT; current local post-rebase evidence is recorded above
 Implementation deviations requiring follow-up: MOD native arithmetic widening regression fixed in 8fc4d5250; strict INT64 precision acceptance, zonemap-pruning decision, and scan-cost acceptance remain pending
