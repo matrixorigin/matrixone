@@ -55,9 +55,11 @@ The cases keep the data sets small and target contract boundaries:
   conditional, fill-null, and validity kernels while preserving NULLs and
   batch length.
 - `arrow_compute_selection.sql` checks Arrow take, sort-indices, comparison,
-  and physical cast kernels with indexed and NULL input.
-- `arrow_compute_strings.sql` checks UTF-8 uppercasing, substring matching,
-  replacement, and code-point length for empty, Unicode, and NULL values.
+  physical cast kernels with indexed and NULL input, and rejects a shortened
+  vector result.
+- `arrow_compute_strings.sql` checks UTF-8 uppercasing, case-sensitive
+  substring matching, repeated replacement, and code-point length for empty,
+  Unicode, and NULL values.
 
 The shape follows established correctness coverage from
 [DuckDB's scalar UDF tests](https://github.com/duckdb/duckdb-go/blob/main/scalar_udf_test.go)
