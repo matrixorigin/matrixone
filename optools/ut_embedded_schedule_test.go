@@ -69,17 +69,15 @@ printf 'authoritative\n'
 [[ "$MODE" != test-failure ]]
 `
 
-func TestEmbeddedPrebuildDefaultEnabled(t *testing.T) {
-	script := `unset UT_PREBUILD_EMBEDDED
+func TestEmbeddedPrebuildAuthoritativeExecution(t *testing.T) {
+	defaultScript := `unset UT_PREBUILD_EMBEDDED
 source ./run_ut.sh UT
 [[ "$UT_PREBUILD_EMBEDDED" == 1 ]] || exit 80
 `
-	if out, err := scheduleHarness(t, script); err != nil {
+	if out, err := scheduleHarness(t, defaultScript); err != nil {
 		t.Fatalf("embedded prebuild default: %v\n%s", err, out)
 	}
-}
 
-func TestEmbeddedPrebuildAuthoritativeExecution(t *testing.T) {
 	for _, mode := range []string{"success", "reclaim", "build-failure", "no-binary", "off", "test-failure", "report-open"} {
 		t.Run(mode, func(t *testing.T) {
 			script := embeddedSetup + `
@@ -103,6 +101,24 @@ if [[ "$MODE" != off && "$MODE" != report-open ]]; then
   [[ -d "$CASE_DIR/compiled-$p" ]] || exit 93
   [[ "$(grep -c "^build-$p$" "$UT_STDERR")" == 1 ]] || exit 94
  done
+fi
+if [[ "$MODE" == success || "$MODE" == build-failure ]]; then
+ for p in a b c; do
+  grep -q "event=start stage=embedded-prebuild label=example/$p status= detail=package_index=" "$UT_CHECKPOINT" || exit 97
+  grep -q "event=pid-start stage=embedded-prebuild label=example/$p status= detail=package_index=" "$UT_CHECKPOINT" || exit 98
+  grep -q "event=finish stage=embedded-prebuild label=example/$p status=" "$UT_CHECKPOINT" || exit 99
+ done
+ if [[ "$MODE" == success ]]; then
+  grep -q 'event=finish stage=embedded-prebuild label=example/a status=0 detail=package_index=' "$UT_CHECKPOINT" || exit 100
+  grep -q 'event=finish stage=embedded-prebuild label=example/b status=0 detail=package_index=' "$UT_CHECKPOINT" || exit 101
+  grep -q 'event=finish stage=embedded-prebuild label=example/c status=0 detail=package_index=' "$UT_CHECKPOINT" || exit 102
+ else
+  grep -q 'event=finish stage=embedded-prebuild label=example/b status=7 detail=package_index=' "$UT_CHECKPOINT" || exit 103
+  grep -q 'event=join-finish stage=embedded-prebuild label=compile embedded-cluster packages status=1 detail=compile_only=true' "$UT_CHECKPOINT" || exit 104
+ fi
+ join_start=$(grep -n 'event=join-start stage=embedded-prebuild label=compile embedded-cluster packages' "$UT_CHECKPOINT" | cut -d: -f1)
+ join_finish=$(grep -n 'event=join-finish stage=embedded-prebuild label=compile embedded-cluster packages' "$UT_CHECKPOINT" | cut -d: -f1)
+ [[ -n "$join_start" && -n "$join_finish" && "$join_start" -lt "$join_finish" ]] || exit 105
 fi
 [[ -z "$CLUSTER_PREBUILD_JOB_PID$CURRENT_UT_PID$CLUSTER_PREBUILD_REPORT$CLUSTER_PREBUILD_DIR" ]] || exit 95
 [[ -z "$artifact_dir" || ! -d "$artifact_dir" ]] || exit 96
@@ -175,5 +191,50 @@ kill -TERM "$$"
 				t.Fatalf("embedded cancellation %s: %v\n%s", phase, err, out)
 			}
 		})
+	}
+
+	// Exercise the parent join path with the default helper ownership still
+	// active. The injected hook delivers TERM after join-start but before the
+	// blocking wait, so cancellation must stop both the issues owner and every
+	// compiler child without falling through to authoritative execution.
+	joinCancelScript := embeddedSetup + `
+cleanup_check() {
+ status=$?
+ for p in a b; do
+  [[ -f "$CASE_DIR/stopped-$p" ]] || status=90
+  if kill -0 "$(<"$CASE_DIR/pid-$p")" 2>/dev/null; then status=91; fi
+  [[ "$(grep -c "^build-$p$" "$UT_STDERR")" == 1 ]] || status=92
+ done
+ [[ -z "$CLUSTER_PREBUILD_JOB_PID$CURRENT_UT_PID" ]] || status=93
+ [[ ! -d "$artifact_dir" ]] || status=94
+ [[ ! -d "$CASE_DIR/authoritative" ]] || status=95
+ printf 'JOIN_CANCELLED %s\n' "$status"
+ exit "$status"
+}
+trap cleanup_check EXIT
+UT_HELPER_TERM_GRACE_TICKS=4
+start_embedded_prebuild "$scope" 2
+artifact_dir=$CLUSTER_PREBUILD_DIR
+read -r _ <&8
+read -r _ <&8
+start_ut_command serial issues bash -c '
+ touch "$CASE_DIR/issues-active"
+ while :; do sleep 0.01; done
+'
+while [[ ! -e "$CASE_DIR/issues-active" ]]; do sleep 0.01; done
+finish_embedded_prebuild
+`
+	joinCancelTransform := func(text string) string {
+		const anchor = `    wait "${CLUSTER_PREBUILD_JOB_PID}" || prebuild_status=$?
+`
+		if strings.Count(text, anchor) != 1 {
+			t.Fatalf("missing unique embedded prebuild join wait")
+		}
+		return strings.Replace(text, anchor, "    kill -TERM \"$$\"\n"+anchor, 1)
+	}
+	out, err := scheduleHarnessWithMockTransform(t, joinCancelScript, embeddedGoMock, joinCancelTransform, "MODE=build-cancel", "UT_PREBUILD_EMBEDDED=0", "UT_HARD_TIMEOUT=")
+	exit, ok := err.(*exec.ExitError)
+	if !ok || exit.ExitCode() != 143 || !strings.Contains(string(out), "JOIN_CANCELLED 143") {
+		t.Fatalf("embedded prebuild join cancellation: %v\n%s", err, out)
 	}
 }

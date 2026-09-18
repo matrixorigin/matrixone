@@ -1101,12 +1101,24 @@ if [[ "$*" == *pkg/tests/issues* ]]; then
  printf 'serial-end\n'
  exit 0
 fi
-if [[ "$*" == *pkg/tests/embedded* ]]; then printf 'embedded\n'; exit 0; fi
+if [[ "$*" == *pkg/tests/embedded* ]]; then
+ if [[ "$*" == *' -c '* ]]; then
+  printf 'prebuild-start\n'
+  touch "$CASE_DIR/prebuild-started"
+  if [[ "$EXPECT_PREBUILD_ACTIVE" == 1 ]]; then
+   while [[ ! -e "$CASE_DIR/serial-started" ]]; do sleep 0.01; done
+  fi
+  printf 'prebuild-end\n'
+  exit 0
+ fi
+ printf 'embedded\n'
+ exit 0
+fi
 if [[ "$*" == *pkg/backup* ]]; then printf 'heavy\n'; exit 0; fi
 exit 0
 `
 	type lightScheduleCase struct {
-		name, parallel, lightParallel, expectedLightParallel, overlap, overlapParallel, expectOverlap, expected, expectedStatus, forceLaunchFailure string
+		name, parallel, lightParallel, expectedLightParallel, overlap, overlapParallel, expectOverlap, expected, expectedStatus, forceLaunchFailure, prebuild, expectPrebuildActive string
 	}
 	cases := []lightScheduleCase{
 		{name: "default-off", parallel: "6", lightParallel: "__default__", expectedLightParallel: "3", overlap: "__default__", overlapParallel: "2", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end", expectedStatus: "0", forceLaunchFailure: "0"},
@@ -1129,7 +1141,7 @@ UT_PARALLEL=${UT_PARALLEL_VALUE}
 if [[ "$UT_OVERLAP_VALUE" != "__default__" ]]; then UT_OVERLAP_LIGHT=${UT_OVERLAP_VALUE}; fi
 UT_OVERLAP_LIGHT_PARALLEL=${OVERLAP_PARALLEL_VALUE}
 UT_OVERLAP_PLAN=0
-UT_PREBUILD_EMBEDDED=0
+UT_PREBUILD_EMBEDDED=${PREBUILD_VALUE:-0}
 if [[ "$FORCE_LIGHT_LAUNCH_FAILURE" == 1 ]]; then
  function start_light_race() { return 1; }
 fi
@@ -1155,6 +1167,12 @@ if [[ "$EXPECTED_STATUS" != 0 ]]; then exit 0; fi
 [[ -z "$CURRENT_UT_PID$LIGHT_RACE_JOB_PID$ENGINE_RACE_JOB_PID$PLAN_RACE_JOB_PID" ]] || exit 91
 report=$(cat "$UT_REPORT")
 [[ "$report" == *"$EXPECTED_REPORT"* ]] || { printf 'REPORT=%q\n' "$report"; exit 92; }
+if [[ "$PREBUILD_VALUE" == 1 ]]; then
+ [[ -e "$CASE_DIR/prebuild-started" && -e "$CASE_DIR/serial-started" ]] || exit 93
+ [[ "$(grep -c 'event=start stage=embedded-prebuild' "$UT_CHECKPOINT")" -ge 1 ]] || exit 94
+ [[ "$(grep -c 'event=join-start stage=embedded-prebuild' "$UT_CHECKPOINT")" == 1 ]] || exit 95
+ [[ "$(grep -c 'event=join-finish stage=embedded-prebuild' "$UT_CHECKPOINT")" == 1 ]] || exit 96
+fi
 `
 			runCase := func(caseData lightScheduleCase) ([]byte, error) {
 				return scheduleHarnessWithMock(t, script, mock,
@@ -1166,7 +1184,9 @@ report=$(cat "$UT_REPORT")
 					"EXPECTED_LIGHT_PARALLEL="+caseData.expectedLightParallel,
 					"EXPECTED_STATUS="+caseData.expectedStatus,
 					"EXPECTED_REPORT="+caseData.expected,
-					"FORCE_LIGHT_LAUNCH_FAILURE="+caseData.forceLaunchFailure)
+					"FORCE_LIGHT_LAUNCH_FAILURE="+caseData.forceLaunchFailure,
+					"PREBUILD_VALUE="+caseData.prebuild,
+					"EXPECT_PREBUILD_ACTIVE="+caseData.expectPrebuildActive)
 			}
 			out, err := runCase(tc)
 			if err != nil {
@@ -1195,6 +1215,13 @@ report=$(cat "$UT_REPORT")
 			wrong.expectedLightParallel = "6"
 			if out, err = runCase(wrong); err == nil {
 				t.Fatalf("scheduler accepted an intentionally wrong light budget assertion\n%s", out)
+			}
+
+			prebuild := tc
+			prebuild.prebuild = "1"
+			prebuild.expectPrebuildActive = "1"
+			if out, err = runCase(prebuild); err != nil {
+				t.Fatalf("default prebuild dispatch: %v\n%s", err, out)
 			}
 		})
 	}
