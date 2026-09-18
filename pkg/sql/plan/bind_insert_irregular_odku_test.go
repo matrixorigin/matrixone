@@ -240,6 +240,32 @@ func TestPartitionedFulltextMaintenanceUsesIndexOnlyMultiUpdate(t *testing.T) {
 		}
 	}
 	require.Equal(t, 1, maintenance, "one logical FULLTEXT index must produce one routed maintenance branch")
+
+	for _, node := range query.Nodes {
+		if node == nil || node.NodeType != planpb.Node_APPLY || len(node.ProjectList) == 0 {
+			continue
+		}
+		isFulltextApply := false
+		for _, childID := range node.Children {
+			if childID < 0 || int(childID) >= len(query.Nodes) {
+				continue
+			}
+			child := query.Nodes[childID]
+			if child != nil && child.NodeType == planpb.Node_FUNCTION_SCAN &&
+				child.TableDef != nil && child.TableDef.TblFunc != nil &&
+				child.TableDef.TblFunc.Name == fulltext_index_tokenize_func_name {
+				isFulltextApply = true
+				break
+			}
+		}
+		if !isFulltextApply {
+			continue
+		}
+		route := node.ProjectList[len(node.ProjectList)-1].GetCol()
+		require.NotNil(t, route, "partition route must remain a column projection")
+		require.Equal(t, int32(0), route.RelPos,
+			"APPLY result projections read the left input through relation 0")
+	}
 }
 
 func TestPartitionedFulltextMaintenanceRebuildsWhenPartitionColumnChanges(t *testing.T) {
