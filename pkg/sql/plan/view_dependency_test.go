@@ -417,11 +417,28 @@ func TestPersistedBinarySliceViewProtocolAdmission(t *testing.T) {
 
 	created, err := build(defines.MORPCVersion86)
 	require.NoError(t, err)
+	createdView := created.GetDdl().GetCreateView().GetTableDef()
+	require.Len(t, createdView.GetCols(), 1)
+	createdColType := createdView.GetCols()[0].Typ
+	require.Equal(t, int32(types.T_varbinary), createdColType.Id)
+	require.Equal(t, int32(1), createdColType.Width)
 	var viewData ViewData
 	require.NoError(t, json.Unmarshal(
-		[]byte(created.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()), &viewData))
+		[]byte(createdView.GetViewSql().GetView()), &viewData))
 	require.NotNil(t, viewData.RequiredProtocolVersion)
 	require.Equal(t, int64(defines.MORPCVersion86), *viewData.RequiredProtocolVersion)
+
+	regenerated, err := RegenerateViewDefinition(ctx, createdView.GetViewSql().GetView())
+	require.NoError(t, err)
+	require.Len(t, regenerated.TableDef.Cols, 1)
+	regeneratedColType := regenerated.TableDef.Cols[0].Typ
+	require.Equal(t, int32(types.T_varbinary), regeneratedColType.Id)
+	require.Equal(t, int32(1), regeneratedColType.Width)
+	var regeneratedData ViewData
+	require.NoError(t, json.Unmarshal(
+		[]byte(regenerated.TableDef.GetViewSql().GetView()), &regeneratedData))
+	require.NotNil(t, regeneratedData.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion86), *regeneratedData.RequiredProtocolVersion)
 }
 
 func TestRegenerateViewDefinitionPersistsExpandedStar(t *testing.T) {
