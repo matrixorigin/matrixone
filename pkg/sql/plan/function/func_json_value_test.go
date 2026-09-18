@@ -15,6 +15,7 @@
 package function
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -33,4 +34,34 @@ func TestParseJSONValueDateRejectsTimeComponent(t *testing.T) {
 	got, err := parseJSONValueDate(jsonValueExtracted{text: "2024-01-02"}, types.T_date.ToType())
 	require.NoError(t, err)
 	require.Equal(t, "2024-01-02", got.String())
+}
+
+func BenchmarkJSONValueStoredAdmittedLargeDocumentSmallPath(b *testing.B) {
+	var builder strings.Builder
+	builder.WriteString(`{"keep":1,"large":[`)
+	for i := 0; i < 4096; i++ {
+		if i > 0 {
+			builder.WriteByte(',')
+		}
+		builder.WriteByte('1')
+	}
+	builder.WriteString(`]}`)
+	document, err := types.ParseStringToByteJson(builder.String())
+	if err != nil {
+		b.Fatal(err)
+	}
+	stored, err := document.Marshal()
+	if err != nil {
+		b.Fatal(err)
+	}
+	path := []byte(`$.keep`)
+	b.ReportMetric(float64(len(stored)), "bytes/document")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		extracted := jsonValueExtract(stored, path, types.T_json)
+		if extracted.state != jsonValueOneValue || extracted.text != "1" {
+			b.Fatalf("unexpected extraction state=%v text=%q", extracted.state, extracted.text)
+		}
+	}
 }

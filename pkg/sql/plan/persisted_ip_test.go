@@ -321,6 +321,96 @@ func TestPersistedBoundedConditionalStringProtocolAdmission(t *testing.T) {
 	require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, expr))
 }
 
+func TestJSONValuePersistedProtocolAdmissionAcrossOwners(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	oldReadFloor, hadReadFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor)
+	oldAuthoringFloor, hadAuthoringFloor := rt.GetGlobalVariables(
+		moruntime.PersistedExpressionProtocolAuthoringFloor)
+	t.Cleanup(func() {
+		if hadProtocol {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+		if hadReadFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, oldReadFloor)
+		} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolFloor, current)
+		}
+		if hadAuthoringFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, oldAuthoringFloor)
+		} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, current)
+		}
+	})
+
+	jsonExpr := func() *planpb.Expr {
+		return &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_varchar), Width: 512},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{Obj: int64(462)<<32 | 2, ObjName: "json_value"},
+				Args: make([]*planpb.Expr, 7),
+			}},
+		}
+	}
+
+	owners := []struct {
+		name  string
+		owner any
+	}{
+		{"default", &planpb.TableDef{Cols: []*planpb.ColDef{{
+			Default: &planpb.Default{Expr: jsonExpr()},
+		}}}},
+		{"generated", &planpb.TableDef{Cols: []*planpb.ColDef{{
+			GeneratedCol: &planpb.GeneratedCol{Expr: jsonExpr()},
+		}}}},
+		{"on-update", &planpb.TableDef{Cols: []*planpb.ColDef{{
+			OnUpdate: &planpb.OnUpdate{Expr: jsonExpr()},
+		}}}},
+		{"check", &planpb.TableDef{Checks: []*planpb.CheckDef{{Check: jsonExpr()}}}},
+		// IndexDef stores column identities; the generated index table carries
+		// the persisted expression that the compiler admits separately.
+		{"index-table", &planpb.TableDef{
+			Indexes: []*planpb.IndexDef{{IndexName: "idx_json_value", Parts: []string{"v"}}},
+			Cols:    []*planpb.ColDef{{GeneratedCol: &planpb.GeneratedCol{Expr: jsonExpr()}}},
+		}},
+		// A view's durable expression lives in its optimized query plan, not in
+		// the SQL text held by ViewDef; exercise the same owner passed by view
+		// regeneration and binding paths.
+		{"view-plan", &planpb.Query{Nodes: []*planpb.Node{{
+			ProjectList: []*planpb.Expr{jsonExpr()},
+		}}}},
+	}
+
+	for _, tc := range owners {
+		t.Run(tc.name, func(t *testing.T) {
+			required, err := RequiredPersistedExpressionProtocolVersion(tc.owner)
+			require.NoError(t, err)
+			require.Equal(t, int64(defines.MORPCVersion85), required)
+
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion84)
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion84))
+			require.ErrorContains(t,
+				RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.owner), "protocol version 85")
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion85)
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion85))
+			require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.owner))
+		})
+	}
+
+	owner := owners[0].owner
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion85)
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion85))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion84))
+	require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, owner))
+	require.ErrorContains(t,
+		RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, owner), "protocol version 85")
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion85))
+	require.NoError(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, owner))
+}
+
 func checkAdmissionResult(t *testing.T, version int64, err error) {
 	t.Helper()
 	if version < defines.MORPCVersion72 {
