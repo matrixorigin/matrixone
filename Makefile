@@ -520,6 +520,12 @@ endif
 # bvt and unit test
 ###############################################################################
 UT_PARALLEL ?= 1
+# Keep the light race wave below the global package budget. Light packages are
+# the main compile/link fan-out; a separate ceiling prevents the six-way CI
+# setting from creating six concurrent race linkers and test processes.
+# Override this independently when measuring a different runner/resource
+# budget. The complete package and test scope is unchanged.
+UT_LIGHT_PARALLEL ?= 3
 UT_SHARD ?= all
 # The outer lifecycle budget covers every sequential UT stage, not one package.
 # A cold race run can spend over an hour in light/issues/embedded before the
@@ -544,7 +550,7 @@ UT_OVERLAP_LIGHT_PARALLEL ?= 2
 # Parent cancellation waits long enough for helper-owned child process groups
 # to receive TERM and bounded KILL cleanup in sequence.
 UT_HELPER_TERM_GRACE_TICKS ?= 60
-export UT_SHARD UT_HARD_TIMEOUT UT_HEARTBEAT_INTERVAL UT_PREBUILD_EMBEDDED UT_OVERLAP_PLAN UT_OVERLAP_LIGHT UT_OVERLAP_LIGHT_PARALLEL UT_HELPER_TERM_GRACE_TICKS
+export UT_SHARD UT_HARD_TIMEOUT UT_HEARTBEAT_INTERVAL UT_PREBUILD_EMBEDDED UT_OVERLAP_PLAN UT_OVERLAP_LIGHT UT_OVERLAP_LIGHT_PARALLEL UT_LIGHT_PARALLEL UT_HELPER_TERM_GRACE_TICKS
 # Native compilation runs before Go tests, so it can use an explicit UT CPU
 # budget without increasing peak race-test memory. With the default UT value,
 # omit -j and preserve recursive make's jobserver contract: a plain make stays
