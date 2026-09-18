@@ -1,0 +1,33 @@
+set experimental_fulltext2_index = 1;
+drop database if exists ft2_teardown;
+create database ft2_teardown;
+use ft2_teardown;
+create table t(id bigint primary key, body text, ch char(4));
+insert into t values (1,'alpha document','a'),(2,'alpha document','a '),(3,'beta text','b');
+create fulltext2 index ft on t(body) include(ch);
+alter table t alter reindex ft fulltext2 force_sync;
+select id from t where match(body) against('+alpha' in boolean mode) and ch = 'a' order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2
+set @dbid = (select dat_id from mo_catalog.mo_database where datname='ft2_teardown');
+select count(*) as ft2_index_rows_before from mo_catalog.mo_indexes where database_id=@dbid and algo='fulltext2';
+➤ ft2_index_rows_before[-5,64,0]  𝄀
+2
+select count(*) as ft2_hidden_tables_before from mo_catalog.mo_tables where reldatabase='ft2_teardown' and relname like '__mo_index_secondary_%';
+➤ ft2_hidden_tables_before[-5,64,0]  𝄀
+2
+use mo_catalog;
+drop database ft2_teardown;
+select count(*) as schemata_residue from information_schema.schemata where schema_name='ft2_teardown';
+➤ schemata_residue[-5,64,0]  𝄀
+0
+select count(*) as mo_tables_residue from mo_catalog.mo_tables where reldatabase='ft2_teardown';
+➤ mo_tables_residue[-5,64,0]  𝄀
+0
+select count(*) as mo_columns_residue from mo_catalog.mo_columns where att_database='ft2_teardown';
+➤ mo_columns_residue[-5,64,0]  𝄀
+0
+select count(*) as mo_indexes_residue from mo_catalog.mo_indexes where database_id=@dbid;
+➤ mo_indexes_residue[-5,64,0]  𝄀
+0
