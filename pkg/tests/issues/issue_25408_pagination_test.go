@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -30,6 +31,85 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 )
+
+type issue28989TemporalTypeConn struct {
+	net.Conn
+
+	mu             sync.Mutex
+	rewriteType    defines.MysqlType
+	rewritePayload []byte
+	rewritten      bool
+}
+
+func (c *issue28989TemporalTypeConn) rewriteNext(mysqlType defines.MysqlType, payload []byte) {
+	c.mu.Lock()
+	c.rewriteType = mysqlType
+	c.rewritePayload = append(c.rewritePayload[:0], payload...)
+	c.rewritten = false
+	c.mu.Unlock()
+}
+
+func (c *issue28989TemporalTypeConn) wasRewritten() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.rewritten
+}
+
+func (c *issue28989TemporalTypeConn) Write(data []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	originalLen := len(data)
+	if c.rewritePayload != nil {
+		if modified, ok := issue28989RewriteStringParamAsTemporal(
+			data, c.rewriteType, c.rewritePayload); ok {
+			data = modified
+			c.rewritePayload = nil
+			c.rewritten = true
+		}
+	}
+	written, err := c.Conn.Write(data)
+	if err == nil && written == len(data) {
+		return originalLen, nil
+	}
+	return written, err
+}
+
+// issue28989RewriteStringParamAsTemporal emits one real binary temporal value,
+// rather than changing only the descriptor of text bytes.
+func issue28989RewriteStringParamAsTemporal(
+	data []byte,
+	mysqlType defines.MysqlType,
+	payload []byte,
+) ([]byte, bool) {
+	const (
+		packetHeaderSize = 4
+		stmtExecute      = 0x17
+		executeHeaderLen = 1 + 4 + 1 + 4
+	)
+	if len(data) < packetHeaderSize+executeHeaderLen+1+1+2 || data[packetHeaderSize] != stmtExecute {
+		return data, false
+	}
+	payloadLen := int(data[0]) | int(data[1])<<8 | int(data[2])<<16
+	packetEnd := packetHeaderSize + payloadLen
+	if packetEnd > len(data) {
+		return data, false
+	}
+	newTypesFlagPos := packetHeaderSize + executeHeaderLen + 1
+	typePos := newTypesFlagPos + 1
+	valuePos := typePos + 2
+	if valuePos >= packetEnd || data[newTypesFlagPos] != 1 ||
+		(data[typePos] != byte(defines.MYSQL_TYPE_VAR_STRING) && data[typePos] != byte(defines.MYSQL_TYPE_STRING)) {
+		return data, false
+	}
+	modified := append([]byte(nil), data[:valuePos]...)
+	modified[typePos] = byte(mysqlType)
+	modified = append(modified, payload...)
+	newPayloadLen := len(modified) - packetHeaderSize
+	modified[0] = byte(newPayloadLen)
+	modified[1] = byte(newPayloadLen >> 8)
+	modified[2] = byte(newPayloadLen >> 16)
+	return modified, true
+}
 
 type issue27907ODBCTypeConn struct {
 	net.Conn
@@ -121,6 +201,141 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 		execSQLRequire(t, ctx, db, "create database "+dbName)
 		execSQLRequire(t, ctx, db, "create table "+dbName+".page(id int)")
 		execSQLRequire(t, ctx, db, "insert into "+dbName+".page values (1),(2),(3)")
+
+		t.Run("integer source domains across protocols and writes", func(t *testing.T) {
+			conn, connErr := db.Conn(ctx)
+			require.NoError(t, connErr)
+			defer conn.Close()
+			_, connErr = conn.ExecContext(ctx, "create table "+dbName+".integer_sources(v varchar(20))")
+			require.NoError(t, connErr)
+			_, connErr = conn.ExecContext(ctx, "create table "+dbName+".integer_peer(pad bigint, v double)")
+			require.NoError(t, connErr)
+			_, connErr = conn.ExecContext(ctx, "insert into "+dbName+".integer_peer values (42,1.5)")
+			require.NoError(t, connErr)
+			t.Run("binary cached source domain transitions", func(t *testing.T) {
+				stmt, err := conn.PrepareContext(ctx, `select substring_index("a.b.c.d",".",coalesce(?,0e0))`)
+				require.NoError(t, err)
+				defer stmt.Close()
+				for _, value := range []struct {
+					input any
+					want  string
+				}{
+					{nil, ""}, {float64(1.5), "a.b"}, {"1.5", "a"},
+					{nil, ""}, {float64(1.5), "a.b"}, {"1.5", "a"},
+				} {
+					var got string
+					require.NoError(t, stmt.QueryRowContext(ctx, value.input).Scan(&got))
+					require.Equal(t, value.want, got)
+				}
+			})
+			for _, tc := range []struct {
+				name, source, assignment string
+				want                     any
+				args                     []any
+			}{
+				{"explicit char peer", "coalesce(?,cast(0e0 as char))", "set @integer_a=1.5e0", "a", []any{float64(1.5)}},
+				{"parenthesized char peer", "coalesce(?,(cast(0e0 as char)))", "set @integer_a=1.5e0", "a", []any{float64(1.5)}},
+				{"parenthesized char marker", "coalesce((cast(? as char)),0e0)", "set @integer_a=1.5e0", "a", []any{float64(1.5)}},
+				{"derived null fallback", "(select coalesce(?,x) from (select 1.5e0 as x) d)", "set @integer_a=NULL", "a.b", []any{nil}},
+				{"scan null fallback", "(select coalesce(?,v) from " + dbName + ".integer_peer)", "set @integer_a=NULL", "a.b", []any{nil}},
+				{"subquery peer", "coalesce(?,(select 1.5e0 where true))", "set @integer_a=NULL", "a.b", []any{nil}},
+				{"union text", "(select 0e0 where false union all select ?)", `set @integer_a="1.5"`, "a", []any{"1.5"}},
+				{"group marker", "(select ? group by 1)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
+				{"group null", "(select ? group by 1)", "set @integer_a=NULL", nil, []any{nil}},
+				{"union null", "(select ? union all select null limit 1)", "set @integer_a=NULL", nil, []any{nil}},
+				{"group coalesce null", "(select coalesce(?,null) group by 1)", "set @integer_a=NULL", nil, []any{nil}},
+				{"null peer", "coalesce(?,null)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
+				{"null peer ifnull", "ifnull(?,null)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
+				{"null peer case", "coalesce(case when true then ? else null end,null)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
+				{"null peer nullif", "coalesce(nullif(?,0),null)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
+				{"null peer text", "coalesce(?,null)", `set @integer_a="1.5"`, "a", []any{"1.5"}},
+				{"bit or text", "(select bit_or(?) from " + dbName + ".integer_peer)", `set @integer_a="1.5"`, "a", []any{"1.5"}},
+				{"bit and text", "(select bit_and(?) from " + dbName + ".integer_peer)", `set @integer_a="1.5"`, "a", []any{"1.5"}},
+				{"bit xor text", "(select bit_xor(?) from " + dbName + ".integer_peer)", `set @integer_a="1.5"`, "a", []any{"1.5"}},
+				{"bit or double", "(select bit_or(?) from " + dbName + ".integer_peer)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
+				{"bit or null peer", "(select bit_or(coalesce(?,null)) from " + dbName + ".integer_peer)", `set @integer_a="1.5"`, "a", []any{"1.5"}},
+				{"outer coalesce subquery", "coalesce((select ? where true),2.5e0)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
+				{"derived union marker", "(select 0e0 where false union all select x from (select ? x) d)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
+				{"recursive cte marker", "(with recursive r(n) as (select ? union all select n from r where false) select n from r)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
+				{"bit count integer", "bit_count(?)", "set @integer_a=2", "a", []any{int64(2)}},
+				{"bit count text", "bit_count(?)", `set @integer_a="2"`, "a.b.c", []any{"2"}},
+				{"max source", "(select max(coalesce(?,0e0)) from " + dbName + ".integer_peer)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
+				{"min source", "(select min(coalesce(?,0e0)) from " + dbName + ".integer_peer)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
+				{"window source", "(select first_value(coalesce(?,0e0)) over () from " + dbName + ".integer_peer)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
+				{"text", "coalesce(?,0e0)", `set @integer_a="1.5"`, "a", []any{"1.5"}},
+				{"text ifnull", "ifnull(?,0e0)", `set @integer_a="1.5"`, "a", []any{"1.5"}},
+				{"double", "coalesce(?,0e0)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
+				{"explicit float peer", "coalesce(?,cast(0 as double))", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
+				{"mixed", "coalesce(?,?)", `set @integer_a="1.5", @integer_b=1.5e0`, "a", []any{"1.5", float64(1.5)}},
+				{"null", "coalesce(?,?)", "set @integer_a=NULL, @integer_b=1.5e0", "a.b", []any{nil, float64(1.5)}},
+				{"project", "(select coalesce(?,0e0) where true)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
+				{"project text", "(select coalesce(?,0e0) where true)", `set @integer_a="1.5"`, "a", []any{"1.5"}},
+				{"project null", "(select coalesce(?,?) where true)", "set @integer_a=NULL, @integer_b=1.5e0", "a.b", []any{nil, float64(1.5)}},
+				{"union distinct right", "(select 0e0 where false union select ?)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
+				{"column peer", "(select coalesce(?,x) from (select 0e0 as x) d)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
+				{"scan column peer", "(select coalesce(?,v) from " + dbName + ".integer_peer)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
+				{"unfolded cast peer", "(select coalesce(?,cast(v as double)) from " + dbName + ".integer_peer)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
+				{"union right", "(select 0e0 where false union all select ?)", "set @integer_a=1.5e0", "a.b", []any{float64(1.5)}},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					expr := `substring_index("a.b.c.d",".",` + tc.source + `)`
+					for _, binary := range []bool{false, true} {
+						for _, write := range []bool{false, true} {
+							t.Run(fmt.Sprintf("binary=%v/write=%v", binary, write), func(t *testing.T) {
+								query := "select " + expr
+								if write {
+									_, err := conn.ExecContext(ctx, "delete from "+dbName+".integer_sources")
+									require.NoError(t, err)
+									query = "insert into " + dbName + ".integer_sources values (" + expr + ")"
+									if strings.Contains(tc.source, "select") {
+										// Scalar subqueries use INSERT SELECT; the VALUES
+										// planner does not support this subquery shape.
+										query = "insert into " + dbName + ".integer_sources select " + expr
+									}
+								}
+								var got sql.NullString
+								if binary {
+									stmt, err := conn.PrepareContext(ctx, query)
+									require.NoError(t, err)
+									defer stmt.Close()
+									if write {
+										_, err = stmt.ExecContext(ctx, tc.args...)
+									} else {
+										err = stmt.QueryRowContext(ctx, tc.args...).Scan(&got)
+									}
+									require.NoError(t, err)
+								} else {
+									_, err := conn.ExecContext(ctx, tc.assignment)
+									require.NoError(t, err)
+									_, err = conn.ExecContext(ctx, "prepare integer_domain from '"+query+"'")
+									require.NoError(t, err)
+									defer func() { _, err := conn.ExecContext(ctx, "deallocate prepare integer_domain"); require.NoError(t, err) }()
+									execute := "execute integer_domain using @integer_a"
+									if len(tc.args) == 2 {
+										execute += ",@integer_b"
+									}
+									if write {
+										_, err = conn.ExecContext(ctx, execute)
+									} else {
+										err = conn.QueryRowContext(ctx, execute).Scan(&got)
+									}
+									require.NoError(t, err)
+								}
+								if write {
+									require.NoError(t, conn.QueryRowContext(ctx, "select v from "+dbName+".integer_sources").Scan(&got))
+								}
+								if tc.want == nil {
+									require.False(t, got.Valid)
+								} else {
+									require.True(t, got.Valid)
+									require.Equal(t, tc.want, got.String)
+								}
+							})
+						}
+					}
+				})
+			}
+		})
 
 		type scalarObservation struct {
 			value        string
@@ -405,6 +620,174 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 			defer ctas.Close()
 			_, err = ctas.ExecContext(ctx, "1.0")
 			assertMySQLError(t, err, 1210)
+		})
+
+		t.Run("COM_STMT temporal descriptor remains temporal", func(t *testing.T) {
+			var connMu sync.Mutex
+			var wireConn *issue28989TemporalTypeConn
+			mysqlDriver.RegisterDialContext("issue28989temporal", func(ctx context.Context, addr string) (net.Conn, error) {
+				conn, dialErr := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+				if dialErr != nil {
+					return nil, dialErr
+				}
+				wrapped := &issue28989TemporalTypeConn{Conn: conn}
+				connMu.Lock()
+				wireConn = wrapped
+				connMu.Unlock()
+				return wrapped, nil
+			})
+			defer mysqlDriver.DeregisterDialContext("issue28989temporal")
+			cn, cnErr := c.GetCNService(0)
+			require.NoError(t, cnErr)
+			temporalDB, openErr := sql.Open("mysql", fmt.Sprintf(
+				"dump:111@issue28989temporal(127.0.0.1:%d)/?interpolateParams=false",
+				cn.GetServiceConfig().CN.Frontend.Port))
+			require.NoError(t, openErr)
+			temporalDB.SetMaxOpenConns(1)
+			temporalDB.SetMaxIdleConns(1)
+			defer temporalDB.Close()
+
+			stmt, prepareErr := temporalDB.PrepareContext(ctx,
+				`select substring_index("a.b.c",".",?)`)
+			require.NoError(t, prepareErr)
+			defer stmt.Close()
+			var textResult string
+			require.NoError(t, stmt.QueryRowContext(ctx, "2024-01-02").Scan(&textResult))
+			require.Equal(t, "a.b.c", textResult)
+
+			connMu.Lock()
+			capturedConn := wireConn
+			connMu.Unlock()
+			require.NotNil(t, capturedConn)
+			// Binary DATE uses a length byte followed by little-endian year,
+			// month and day.
+			capturedConn.rewriteNext(defines.MYSQL_TYPE_DATE, []byte{4, 0xe8, 0x07, 1, 2})
+			var dateResult string
+			dateErr := stmt.QueryRowContext(ctx, "2024-01-02").Scan(&dateResult)
+			require.Error(t, dateErr)
+			require.NotErrorIs(t, dateErr, net.ErrClosed)
+			require.True(t, capturedConn.wasRewritten(), "test did not emit MYSQL_TYPE_DATE")
+			// Prove the packet was valid and the cached statement remains reusable;
+			// a malformed rewrite could otherwise satisfy only the error assertion.
+			require.NoError(t, stmt.QueryRowContext(ctx, "2024-01-02").Scan(&textResult))
+			require.Equal(t, "a.b.c", textResult)
+		})
+
+		t.Run("COM_STMT temporal values preserve wire semantics", func(t *testing.T) {
+			var connMu sync.Mutex
+			var wireConn *issue28989TemporalTypeConn
+			mysqlDriver.RegisterDialContext("issue28989temporalvalues", func(ctx context.Context, addr string) (net.Conn, error) {
+				conn, dialErr := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+				if dialErr != nil {
+					return nil, dialErr
+				}
+				wrapped := &issue28989TemporalTypeConn{Conn: conn}
+				connMu.Lock()
+				wireConn = wrapped
+				connMu.Unlock()
+				return wrapped, nil
+			})
+			defer mysqlDriver.DeregisterDialContext("issue28989temporalvalues")
+			cn, cnErr := c.GetCNService(0)
+			require.NoError(t, cnErr)
+			temporalDB, openErr := sql.Open("mysql", fmt.Sprintf(
+				"dump:111@issue28989temporalvalues(127.0.0.1:%d)/issue_25408_pagination?interpolateParams=false",
+				cn.GetServiceConfig().CN.Frontend.Port))
+			require.NoError(t, openErr)
+			temporalDB.SetMaxOpenConns(1)
+			temporalDB.SetMaxIdleConns(1)
+			defer temporalDB.Close()
+
+			stmt, prepareErr := temporalDB.PrepareContext(ctx, "select cast(? as char)")
+			require.NoError(t, prepareErr)
+			defer stmt.Close()
+			for _, test := range []struct {
+				name      string
+				mysqlType defines.MysqlType
+				payload   []byte
+				want      string
+			}{
+				{name: "zero time", mysqlType: defines.MYSQL_TYPE_TIME, payload: []byte{0}, want: "00:00:00"},
+				{name: "day time", mysqlType: defines.MYSQL_TYPE_TIME, payload: []byte{8, 0, 1, 0, 0, 0, 2, 3, 4}, want: "26:03:04"},
+				{name: "negative fractional time", mysqlType: defines.MYSQL_TYPE_TIME, payload: []byte{12, 1, 0, 0, 0, 0, 11, 22, 33, 0x1f, 0xa1, 0x07, 0}, want: "-11:22:33.499999"},
+				{name: "half second time", mysqlType: defines.MYSQL_TYPE_TIME, payload: []byte{12, 0, 0, 0, 0, 0, 11, 22, 33, 0x20, 0xa1, 0x07, 0}, want: "11:22:33.500000"},
+				{name: "datetime fraction", mysqlType: defines.MYSQL_TYPE_DATETIME, payload: []byte{11, 0xe8, 0x07, 1, 2, 23, 59, 59, 0x1f, 0xa1, 0x07, 0}, want: "2024-01-02 23:59:59.499999"},
+				{name: "timestamp half second", mysqlType: defines.MYSQL_TYPE_TIMESTAMP, payload: []byte{11, 0xe8, 0x07, 1, 2, 23, 59, 59, 0x20, 0xa1, 0x07, 0}, want: "2024-01-02 23:59:59.500000"},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					connMu.Lock()
+					capturedConn := wireConn
+					connMu.Unlock()
+					require.NotNil(t, capturedConn)
+					capturedConn.rewriteNext(test.mysqlType, test.payload)
+					var got string
+					require.NoError(t, stmt.QueryRowContext(ctx, "placeholder").Scan(&got))
+					require.Equal(t, test.want, got)
+					require.True(t, capturedConn.wasRewritten())
+				})
+			}
+
+			_, err := temporalDB.ExecContext(ctx, "create table issue28989_time(v time(6))")
+			require.NoError(t, err)
+			defer temporalDB.ExecContext(ctx, "drop table issue28989_time")
+			insertStmt, prepareErr := temporalDB.PrepareContext(ctx, "insert into issue28989_time values (?)")
+			require.NoError(t, prepareErr)
+			defer insertStmt.Close()
+			for _, payload := range [][]byte{
+				{12, 0, 0, 0, 0, 0, 11, 22, 33, 0x1f, 0xa1, 0x07, 0},
+				{12, 0, 0, 0, 0, 0, 11, 22, 33, 0x20, 0xa1, 0x07, 0},
+			} {
+				wireConn.rewriteNext(defines.MYSQL_TYPE_TIME, payload)
+				_, err = insertStmt.ExecContext(ctx, "placeholder")
+				require.NoError(t, err)
+			}
+			rows, queryErr := temporalDB.QueryContext(ctx, "select cast(v as char) from issue28989_time order by v")
+			require.NoError(t, queryErr)
+			defer rows.Close()
+			var stored []string
+			for rows.Next() {
+				var value string
+				require.NoError(t, rows.Scan(&value))
+				stored = append(stored, value)
+			}
+			require.NoError(t, rows.Err())
+			require.Equal(t, []string{"11:22:33.499999", "11:22:33.500000"}, stored)
+
+			for _, test := range []struct {
+				name      string
+				mysqlType defines.MysqlType
+				column    string
+				payload   []byte
+				want      string
+			}{
+				{
+					name: "datetime", mysqlType: defines.MYSQL_TYPE_DATETIME, column: "datetime(6)",
+					payload: []byte{11, 0xe8, 0x07, 1, 2, 23, 59, 59, 0x20, 0xa1, 0x07, 0},
+					want:    "2024-01-02 23:59:59.500000",
+				},
+				{
+					name: "timestamp", mysqlType: defines.MYSQL_TYPE_TIMESTAMP, column: "timestamp(6)",
+					payload: []byte{11, 0xe8, 0x07, 1, 2, 23, 59, 59, 0x1f, 0xa1, 0x07, 0},
+					want:    "2024-01-02 23:59:59.499999",
+				},
+			} {
+				t.Run(test.name+" insert", func(t *testing.T) {
+					table := "issue28989_" + test.name
+					_, err = temporalDB.ExecContext(ctx, fmt.Sprintf("create table %s(v %s)", table, test.column))
+					require.NoError(t, err)
+					defer temporalDB.ExecContext(ctx, "drop table "+table)
+					prepared, prepareErr := temporalDB.PrepareContext(ctx, "insert into "+table+" values (?)")
+					require.NoError(t, prepareErr)
+					defer prepared.Close()
+					wireConn.rewriteNext(test.mysqlType, test.payload)
+					_, err = prepared.ExecContext(ctx, "placeholder")
+					require.NoError(t, err)
+					var got string
+					require.NoError(t, temporalDB.QueryRowContext(ctx,
+						"select cast(v as char) from "+table).Scan(&got))
+					require.Equal(t, test.want, got)
+				})
+			}
 		})
 
 		t.Run("Connector ODBC HAVING and pagination", func(t *testing.T) {
