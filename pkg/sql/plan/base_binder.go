@@ -6620,13 +6620,13 @@ func refineSubstringLiteralReturnType(args []*plan.Expr, returnType *types.Type)
 		return
 	}
 
-	binary := types.StaticStringDomain(sourceType) == types.StringDomainBinary
-	if !binary {
+	if possibleStringDomainsForExpr(args[0]) != possibleStringDomainBinary {
 		// Character SUBSTRING keeps its existing metadata contract; narrowing
 		// it from a literal bound changes the overload's declared result width
 		// and breaks consumers that rely on the text semantic family.
 		return
 	}
+	binary := true
 
 	var (
 		bound      uint64
@@ -6678,12 +6678,12 @@ func refineLeftRightLiteralReturnType(args []*plan.Expr, returnType *types.Type)
 	if sourceType.Oid == types.T_blob {
 		return
 	}
-	binary := types.StaticStringDomain(sourceType) == types.StringDomainBinary
-	if !binary {
+	if possibleStringDomainsForExpr(args[0]) != possibleStringDomainBinary {
 		// LEFT/RIGHT follow the same text metadata contract as SUBSTRING.
 		// Literal character lengths are value bounds, not public result types.
 		return
 	}
+	binary := true
 	length, known := binarySubstringLengthBound(args[1].GetLit())
 	if !known {
 		return
@@ -6692,6 +6692,145 @@ func refineLeftRightLiteralReturnType(args []*plan.Expr, returnType *types.Type)
 		length = sourceBound
 	}
 	refineKnownStringResultType(returnType, length, binary)
+}
+
+const (
+	possibleStringDomainText uint8 = 1 << iota
+	possibleStringDomainBinary
+)
+
+// possibleStringDomainsForExpr describes the domains that can reach a string
+// expression at runtime. Static binary type alone is insufficient: implicit
+// casts inserted for IF/CASE/COALESCE preserve the selected branch's runtime
+// domain, and prepared/user-variable values can change domain after binding.
+// Narrow byte metadata only when the expression is proven binary for every
+// non-NULL value.
+func possibleStringDomainsForExpr(expr *plan.Expr) uint8 {
+	if expr == nil {
+		return 0
+	}
+	staticDomains := possibleStringDomainsForType(makeTypeByPlan2Expr(expr))
+	if lit := expr.GetLit(); lit != nil {
+		if lit.Isnull {
+			return 0
+		}
+		domains := staticDomains
+		switch lit.LiteralForm {
+		case plan.StringLiteralForm_STRING_LITERAL_TEXT:
+			domains = possibleStringDomainText
+		case plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER,
+			plan.StringLiteralForm_STRING_LITERAL_HEX,
+			plan.StringLiteralForm_STRING_LITERAL_BIT:
+			domains = possibleStringDomainBinary
+		}
+		if lit.Src != nil {
+			domains |= possibleStringDomainsForExpr(lit.Src)
+		}
+		return domains
+	}
+
+	if metadata := expr.GetPreparedNumeric(); metadata != nil && metadata.StringDomainSource != nil {
+		sourceDomains := possibleStringDomainsForExpr(metadata.StringDomainSource)
+		if sourceDomains != 0 {
+			return sourceDomains
+		}
+	}
+	if expr.GetP() != nil || expr.GetV() != nil {
+		return possibleStringDomainText | possibleStringDomainBinary
+	}
+	if subquery := expr.GetSub(); subquery != nil {
+		if domains := possibleStringDomainsForExpr(subquery.Child); domains != 0 {
+			return domains
+		}
+		return possibleStringDomainText | possibleStringDomainBinary
+	}
+
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return staticDomains
+	}
+	name := strings.ToLower(fn.Func.GetObjName())
+	if name == "cast" {
+		if fn.GetSyntaxExplicitCast() {
+			return staticDomains
+		}
+		_, overload := function.DecodeOverloadID(fn.Func.GetObj())
+		if overload != 0 {
+			return staticDomains
+		}
+		if len(fn.Args) == 0 {
+			return staticDomains
+		}
+		argDomains := possibleStringDomainsForExpr(fn.Args[0])
+		if possibleStringDomainsForType(makeTypeByPlan2Expr(fn.Args[0])) != 0 {
+			return argDomains
+		}
+		if argDomains == possibleStringDomainText|possibleStringDomainBinary {
+			return argDomains
+		}
+		// An implicit cast from a scalar to a string has text semantics even
+		// when control-flow reconciliation chose a binary-shaped target type.
+		return possibleStringDomainText
+	}
+
+	var selected []*plan.Expr
+	switch name {
+	case "if", "iff":
+		if len(fn.Args) > 1 {
+			selected = fn.Args[1:]
+		}
+	case "case":
+		for i := 1; i < len(fn.Args); i += 2 {
+			selected = append(selected, fn.Args[i])
+		}
+		if len(fn.Args)%2 == 1 {
+			selected = append(selected, fn.Args[len(fn.Args)-1])
+		}
+	case "coalesce":
+		selected = fn.Args
+	}
+	if len(selected) > 0 {
+		domains := uint8(0)
+		for _, arg := range selected {
+			domains |= possibleStringDomainsForExpr(arg)
+		}
+		if domains != 0 {
+			return domains
+		}
+		return staticDomains
+	}
+
+	// These functions preserve the effective domain of their value source;
+	// follow that source instead of trusting their common static return type.
+	sourceIndex := -1
+	switch name {
+	case "substring", "substr", "mid", "substring_index", "left", "right",
+		"lower", "to_lower", "lcase", "upper", "to_upper", "ucase", "reverse",
+		"replace", "insert", "split_part", "repeat", "lpad", "rpad":
+		sourceIndex = 0
+	case "trim":
+		sourceIndex = 2
+	}
+	if sourceIndex >= 0 && sourceIndex < len(fn.Args) {
+		return possibleStringDomainsForExpr(fn.Args[sourceIndex])
+	}
+
+	if staticDomains == possibleStringDomainBinary {
+		// An unrecognized binary-returning function may attach row-level text
+		// provenance, so fail closed rather than narrowing its result.
+		return possibleStringDomainText | possibleStringDomainBinary
+	}
+	return staticDomains
+}
+
+func possibleStringDomainsForType(typ types.Type) uint8 {
+	if !typ.Oid.IsMySQLString() {
+		return 0
+	}
+	if types.StaticStringDomain(typ) == types.StringDomainBinary {
+		return possibleStringDomainBinary
+	}
+	return possibleStringDomainText
 }
 
 func binarySubstringLengthBound(lit *plan.Literal) (uint64, bool) {

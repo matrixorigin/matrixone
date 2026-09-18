@@ -1,7 +1,7 @@
 -- @suite
 
 -- @case
--- @desc: ordinary binary-string functions use byte semantics without changing static metadata
+-- @desc: binary-string functions use byte semantics and narrow only proven-binary metadata
 -- @label:bvt
 
 --- @metacmp(true)

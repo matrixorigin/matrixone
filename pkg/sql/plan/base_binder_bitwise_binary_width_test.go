@@ -251,6 +251,74 @@ func TestRefineCharacterSubstringAndLeftRightKeepDeclaredReturnTypes(t *testing.
 	}
 }
 
+func TestRefineStringSliceRequiresBinaryRuntimeDomain(t *testing.T) {
+	ctx := context.Background()
+	bind := func(t *testing.T, name string, source *planpb.Expr) *planpb.Expr {
+		t.Helper()
+		args := []*planpb.Expr{source, makePlan2Int64ConstExprWithType(1)}
+		if name == "substring" {
+			args = append(args, makePlan2Int64ConstExprWithType(2))
+		}
+		expr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+		require.NoError(t, err)
+		return expr
+	}
+
+	binaryLiteral := func(value string) *planpb.Expr {
+		return makePlan2StringConstExprWithType(value, true)
+	}
+	varbinaryType := types.NewWithCharset(types.T_varbinary, 512, 0, types.CharsetBinary)
+
+	for _, name := range []string{"left", "substring"} {
+		wantNarrowWidth := int32(1)
+		if name == "substring" {
+			wantNarrowWidth = 2
+		}
+		t.Run(name+"/direct binary literal narrows", func(t *testing.T) {
+			expr := bind(t, name, binaryLiteral("你好"))
+			require.Equal(t, wantNarrowWidth, expr.Typ.Width)
+		})
+
+		t.Run(name+"/mixed conditional stays conservative", func(t *testing.T) {
+			mixed, err := BindFuncExprImplByPlanExpr(ctx, "if", []*planpb.Expr{
+				makePlan2BoolConstExprWithType(false),
+				binaryLiteral("x"),
+				makePlan2StringConstExprWithType("你好"),
+			})
+			require.NoError(t, err)
+			expr := bind(t, name, mixed)
+			require.Greater(t, expr.Typ.Width, int32(2))
+		})
+
+		t.Run(name+"/prepared value stays conservative", func(t *testing.T) {
+			prepared := &planpb.Expr{
+				Typ:  makePlan2Type(&varbinaryType),
+				Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+			}
+			expr := bind(t, name, prepared)
+			require.Equal(t, int32(512), expr.Typ.Width)
+		})
+
+		t.Run(name+"/all binary conditional narrows", func(t *testing.T) {
+			allBinary, err := BindFuncExprImplByPlanExpr(ctx, "if", []*planpb.Expr{
+				makePlan2BoolConstExprWithType(true),
+				binaryLiteral("x"),
+				makePlan2VarBinaryConstExprWithType("你好"),
+			})
+			require.NoError(t, err)
+			expr := bind(t, name, allBinary)
+			require.Equal(t, wantNarrowWidth, expr.Typ.Width)
+		})
+	}
+
+	t.Run("text literal overrides binary-shaped type", func(t *testing.T) {
+		text := makePlan2VarBinaryConstExprWithType("你好")
+		text.GetLit().LiteralForm = planpb.StringLiteralForm_STRING_LITERAL_TEXT
+		expr := bind(t, "left", text)
+		require.Equal(t, int32(6), expr.Typ.Width)
+	})
+}
+
 func TestRefineCharacterStringReturnTypesUseFormattedNumericBounds(t *testing.T) {
 	ctx := context.Background()
 	decimalType := types.New(types.T_decimal64, 5, 2)
