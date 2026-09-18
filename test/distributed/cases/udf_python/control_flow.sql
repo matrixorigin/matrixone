@@ -21,6 +21,10 @@ insert into control_values values
 select id, python_bvt_mark_null(label) as marked
 from control_values order by id;
 
+-- A scalar handler must be invoked once per row and preserve a handler NULL.
+select id, python_bvt_add_one(value) as plus_one
+from control_values order by id;
+
 -- A zero-argument scalar still produces one result per input row.
 select id, python_bvt_zero_arg() as constant
 from control_values order by id;
