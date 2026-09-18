@@ -1,6 +1,6 @@
 # 整数参数绑定与兼容性契约设计
 
-- 状态：Proposed，等待 maintainer 对精确 revision 独立审批
+- 状态：Approved（设计 revision `0fb3d35f84c0e919ff76d10e6a1c0d1d3b4f6252`）
 - Parent issue：[matrixorigin/matrixone#28893](https://github.com/matrixorigin/matrixone/issues/28893)
 - Foundation issue：[matrixorigin/matrixone#28977](https://github.com/matrixorigin/matrixone/issues/28977)
 - Implementation PR：[matrixorigin/matrixone#28989](https://github.com/matrixorigin/matrixone/pull/28989)
@@ -348,10 +348,10 @@ BVT证明公开SQL路径；private identity、source type、protocol floor和cat
 
 ### 14.2 Approval record
 
-- 设计 revision：待本文提交后，由PR正文中的精确commit permalink锁定
-- 审批者：待maintainer
-- 决定：Pending
-- 日期：待填写
-- 实现偏差：当前implementation按本文描述实现；正式approval后仍需继续完整implementation review，本文件本身不替代代码审查
+- 设计 revision：`0fb3d35f84c0e919ff76d10e6a1c0d1d3b4f6252`
+- 审批者：fengttt
+- 决定：Approved（GitHub review `5239953805`）
+- 日期：2026-09-17
+- 实现偏差：该精确 revision 的实现按本文描述提交；后续语义变更需要重新审批
 
-本文在当前implementation PR中提交，但设计与实现审批保持两个阶段。只有maintainer对精确revision给出可追溯approval后，才将状态改为`Approved`并解除design gate。
+设计与实现在同一 PR、同一精确 revision 中交付时，maintainer 对该 revision 的 GitHub `APPROVED` 覆盖完整 diff，包括设计和实现，除非 review 明确排除设计范围。需要分阶段审批时，应使用独立 design PR/revision 或在 review 中明确限定审批范围。上述 approval 对精确 revision `0fb3d35f84c0e919ff76d10e6a1c0d1d3b4f6252` 未声明排除设计，因此解除 design gate。
