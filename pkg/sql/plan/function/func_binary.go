@@ -1526,11 +1526,10 @@ func doTimeAdd(start types.Time, diff int64, iTyp types.IntervalType) (types.Tim
 		return 0, err
 	}
 	t, success := start.AddInterval(diff, iTyp)
-	if success {
+	if success && types.IsMySQLTime(t) {
 		return t, nil
-	} else {
-		return 0, moerr.NewOutOfRangeNoCtx("time", "")
 	}
+	return 0, moerr.NewOutOfRangeNoCtx("time", "")
 }
 
 // datetimeOverflowMaxError is a special error to indicate maximum datetime overflow (should return NULL)

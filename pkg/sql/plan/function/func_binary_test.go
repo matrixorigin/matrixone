@@ -2332,6 +2332,22 @@ func initDateAddTestCase() []tcTemp {
 	}
 }
 
+func TestDoTimeAddRejectsMySQLRangeOverflow(t *testing.T) {
+	max := types.MySQLTimeMax
+
+	got, err := doTimeAdd(max, 1, types.Second)
+	require.Error(t, err)
+	require.Zero(t, got)
+
+	got, err = doTimeAdd(-max, -1, types.Second)
+	require.Error(t, err)
+	require.Zero(t, got)
+
+	got, err = doTimeAdd(max, 0, types.Second)
+	require.NoError(t, err)
+	require.Equal(t, max, got)
+}
+
 func TestDateAdd(t *testing.T) {
 	testCases := initDateAddTestCase()
 
