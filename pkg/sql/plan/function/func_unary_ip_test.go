@@ -416,7 +416,7 @@ func TestIPFunctionRegisteredExecutors(t *testing.T) {
 			require.NoError(t, err)
 			return string(encoded)
 		}
-		out = run(t, "inet_ntoa", types.T_json.ToType(), []string{encodeJSON(float64(1.6)), encodeJSON(int64(2)), encodeJSON(true), encodeJSON(false), encodeJSON("258"), encodeJSON("not-a-number"), encodeJSON("1e100"), ""}, []bool{false, false, false, false, false, false, true, true}, 8, false)
+		out = run(t, "inet_ntoa", types.T_json.ToType(), []string{encodeJSON(float64(1.6)), encodeJSON(int64(2)), encodeJSON(true), encodeJSON(false), encodeJSON("258"), encodeJSON("not-a-number"), encodeJSON("1e100"), ""}, []bool{false, false, false, false, false, false, false, true}, 8, false)
 		assertStrings(t, out, []string{"0.0.0.2", "0.0.0.2", "0.0.0.1", "0.0.0.0", "0.0.1.2", "0.0.0.0", "", ""}, []bool{false, false, false, false, false, false, true, true})
 
 		timeValues := []types.Time{

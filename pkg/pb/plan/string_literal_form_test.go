@@ -660,6 +660,12 @@ func TestRequiredRemoteExpressionFeaturesMetadataResultContracts(t *testing.T) {
 			want: true,
 		},
 		{
+			name: "bounded binary left",
+			expr: expression(leftFunctionID, Type{Id: planVarbinaryTypeID, Width: 1}, "left",
+				column(Type{Id: planVarbinaryTypeID, Width: 128}, 0), integer(1)),
+			want: true,
+		},
+		{
 			name: "legacy source-derived two-argument substring",
 			expr: expression(substringFunctionID, Type{Id: planVarcharTypeID, Width: 64}, "substring",
 				column(Type{Id: planVarcharTypeID, Width: 64}, 0), integer(1)),

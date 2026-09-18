@@ -246,6 +246,10 @@ const (
 	stringNumericInt64ResultTypeID   int32 = 23
 	stringNumericUint64ResultTypeID  int32 = 28
 	planVarcharTypeID                int32 = 61
+	planBinaryTypeID                 int32 = 64
+	planVarbinaryTypeID              int32 = 65
+	planBlobTypeID                   int32 = 70
+	planTextTypeID                   int32 = 71
 	ipInt32ResultTypeID              int32 = 22
 	planCharTypeID                   int32 = 60
 	planDateTypeID                   int32 = 50
@@ -474,22 +478,49 @@ func expressionCharacterWidth(expr *Expr) (int32, bool) {
 		!fn.GetSyntaxExplicitCast() && len(fn.Args) > 0 {
 		return expressionCharacterWidth(fn.Args[0])
 	}
-	if expr.Typ.Id == planCharTypeID || expr.Typ.Id == planVarcharTypeID ||
-		expr.Typ.Id == 71 {
-		if expr.Typ.Width > 0 && expr.Typ.Width != maxVarcharWidth {
+	if isPlanStringType(expr.Typ.Id) {
+		maxWidth := maxVarcharWidth
+		if isPlanBinaryType(expr.Typ.Id) {
+			maxWidth = maxVarbinaryWidth
+		}
+		if expr.Typ.Width > 0 && expr.Typ.Width != maxWidth {
 			return expr.Typ.Width, true
 		}
 	}
 	if lit := expr.GetLit(); lit != nil && !lit.Isnull {
 		if value, ok := lit.Value.(*Literal_Sval); ok {
+			if isPlanBinaryType(expr.Typ.Id) {
+				return int32(len(value.Sval)), true
+			}
 			return int32(utf8.RuneCountInString(value.Sval)), true
 		}
 	}
 	return 0, false
 }
 
+const maxVarbinaryWidth int32 = 65535
+
+func isPlanBinaryType(id int32) bool {
+	switch id {
+	case planBinaryTypeID, planVarbinaryTypeID, planBlobTypeID:
+		return true
+	default:
+		return false
+	}
+}
+
+func isPlanStringType(id int32) bool {
+	switch id {
+	case planCharTypeID, planVarcharTypeID, planTextTypeID,
+		planBinaryTypeID, planVarbinaryTypeID, planBlobTypeID:
+		return true
+	default:
+		return false
+	}
+}
+
 func isChangedCharacterSliceResultContract(expr *Expr, functionID int32, name string) bool {
-	if expr.Typ.Id != planCharTypeID && expr.Typ.Id != planVarcharTypeID {
+	if !isPlanStringType(expr.Typ.Id) {
 		return false
 	}
 	fn := expr.GetF()
@@ -519,6 +550,9 @@ func isChangedCharacterSliceResultContract(expr *Expr, functionID int32, name st
 	}
 	if sourceWidth, known := expressionCharacterWidth(source); known {
 		return expr.Typ.Width < sourceWidth
+	}
+	if isPlanBinaryType(expr.Typ.Id) {
+		return expr.Typ.Width != maxVarbinaryWidth
 	}
 	return expr.Typ.Width != maxVarcharWidth
 }
