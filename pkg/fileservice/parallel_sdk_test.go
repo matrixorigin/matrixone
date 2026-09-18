@@ -165,6 +165,12 @@ func newMockAWSServer(t *testing.T, failPart int32) (*httptest.Server, *awsServe
 				_, _ = w.Write([]byte(awsS3ErrorXML("MissingContentMD5", "Content-MD5 is required")))
 				return
 			}
+			if state.failDeleteMultiPlain && !state.deleteMultiHasContentMD5 {
+				w.Header().Set("Content-Type", "text/plain")
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte("Missing required header for this request: Content-MD5"))
+				return
+			}
 			w.Header().Set("Content-Type", "application/xml")
 			_, _ = w.Write([]byte(`<DeleteResult></DeleteResult>`))
 		case r.Method == http.MethodDelete && strings.Contains(r.URL.RawQuery, "uploadId"):
@@ -203,6 +209,7 @@ type awsServerState struct {
 	failDeleteMultiMalformed bool
 	failDeleteMultiInternal  bool
 	failDeleteMultiChecksum  bool
+	failDeleteMultiPlain     bool
 	deleteMultiHasContentMD5 bool
 }
 
@@ -703,6 +710,23 @@ func TestAwsDeleteMultiFallsBackToSinglesOnChecksumRejection(t *testing.T) {
 	}
 	if strings.Join(state.deleteSingleKeys, ",") != "a,b,c,d,e" {
 		t.Fatalf("expected later deletes to go directly to single-delete path, got %v", state.deleteSingleKeys)
+	}
+}
+
+func TestAwsDeleteMultiFallsBackToSinglesOnUnstructuredChecksumRejection(t *testing.T) {
+	server, state := newMockAWSServer(t, 0)
+	defer server.Close()
+	state.failDeleteMultiPlain = true
+
+	sdk := newTestAWSClient(t, server)
+	if err := sdk.Delete(context.Background(), "a", "b"); err != nil {
+		t.Fatalf("delete failed: %v", err)
+	}
+	if state.deleteMultiCount != 1 {
+		t.Fatalf("expected 1 batch delete attempt, got %d", state.deleteMultiCount)
+	}
+	if strings.Join(state.deleteSingleKeys, ",") != "a,b" {
+		t.Fatalf("expected single-delete fallback for all keys, got %v", state.deleteSingleKeys)
 	}
 }
 
