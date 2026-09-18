@@ -48,7 +48,16 @@ if [[ " $* " == *' -c '* ]]; then
   trap 'touch "$CASE_DIR/stopped-$leaf"; exit 143' TERM
   printf '%s\n' "$$" > "$CASE_DIR/pid-$leaf"
   printf 'ready\n' >&8
-  read -r _ <&9
+  if [[ "$MODE" == build-cancel && -n "${RUNNER_PID:-}" ]]; then
+   while :; do
+    if [[ -e "$CASE_DIR/join-waiting" ]]; then
+     if mkdir "$CASE_DIR/term-sent" 2>/dev/null; then kill -TERM "$RUNNER_PID"; fi
+    fi
+    read -r -t 0.01 _ <&9 || true
+   done
+  else
+   read -r _ <&9
+  fi
  fi
  if [[ "$MODE" == reclaim ]]; then
   if [[ "$leaf" == a ]]; then read -r _ <&7; fi
@@ -205,6 +214,8 @@ cleanup_check() {
   if kill -0 "$(<"$CASE_DIR/pid-$p")" 2>/dev/null; then status=91; fi
   [[ "$(grep -c "^build-$p$" "$UT_STDERR")" == 1 ]] || status=92
  done
+ [[ -f "$CASE_DIR/issues-stopped" ]] || status=96
+ if kill -0 "$issues_pid" 2>/dev/null; then status=97; fi
  [[ -z "$CLUSTER_PREBUILD_JOB_PID$CURRENT_UT_PID" ]] || status=93
  [[ ! -d "$artifact_dir" ]] || status=94
  [[ ! -d "$CASE_DIR/authoritative" ]] || status=95
@@ -213,16 +224,19 @@ cleanup_check() {
 }
 trap cleanup_check EXIT
 UT_HELPER_TERM_GRACE_TICKS=4
+export RUNNER_PID=$$
 start_embedded_prebuild "$scope" 2
 artifact_dir=$CLUSTER_PREBUILD_DIR
 read -r _ <&8
 read -r _ <&8
 start_ut_command serial issues bash -c '
+ trap '\''touch "$CASE_DIR/issues-stopped"; exit 143'\'' TERM
  touch "$CASE_DIR/issues-active"
  while :; do sleep 0.01; done
 '
+issues_pid=$CURRENT_UT_PID
 while [[ ! -e "$CASE_DIR/issues-active" ]]; do sleep 0.01; done
-finish_embedded_prebuild
+run_embedded_tests "$scope" 2
 `
 	joinCancelTransform := func(text string) string {
 		const anchor = `    wait "${CLUSTER_PREBUILD_JOB_PID}" || prebuild_status=$?
@@ -230,7 +244,7 @@ finish_embedded_prebuild
 		if strings.Count(text, anchor) != 1 {
 			t.Fatalf("missing unique embedded prebuild join wait")
 		}
-		return strings.Replace(text, anchor, "    kill -TERM \"$$\"\n"+anchor, 1)
+		return strings.Replace(text, anchor, "    : > \"$CASE_DIR/join-waiting\"\n"+anchor, 1)
 	}
 	out, err := scheduleHarnessWithMockTransform(t, joinCancelScript, embeddedGoMock, joinCancelTransform, "MODE=build-cancel", "UT_PREBUILD_EMBEDDED=0", "UT_HARD_TIMEOUT=")
 	exit, ok := err.(*exec.ExitError)
