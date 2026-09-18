@@ -151,7 +151,7 @@ func encodeRemoteScopeWithFeatures(
 	}
 	if features.IntegerParameterCoercion {
 		if err = validateIntegerArgumentDestination(proc, p); err != nil {
-			return nil, err
+			return nil, features, err
 		}
 	}
 	if features.IPFunctionSemantics {
