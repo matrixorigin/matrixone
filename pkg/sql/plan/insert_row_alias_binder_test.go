@@ -449,9 +449,9 @@ func TestInsertRowAliasUncorrelatedScalarSubqueryDoesNotAddTargetLookup(t *testi
 
 func TestInsertRowAliasTargetCorrelationThenUncorrelatedSubqueryKeepsBindings(t *testing.T) {
 	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
-		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') as n(id, name, location) "+
-			"on duplicate key update loc = (select e.ename from constraint_test.emp as e "+
-			"where e.deptno = constraint_test.dept.deptno), dname = (select max(e.ename) from constraint_test.emp as e)")
+		"insert into constraint_test.emp(empno, ename, job, sal, comm) values (999, 'Sales', 'X', 1, 2) as n(id, name, role, salary, commission) "+
+			"on duplicate key update sal = (select max(e.sal) from constraint_test.emp as e "+
+			"where e.empno = constraint_test.emp.empno), comm = (select max(e.sal) from constraint_test.emp as e)")
 	require.NoError(t, err)
 	require.NotNil(t, logicPlan)
 }
