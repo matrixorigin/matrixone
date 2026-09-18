@@ -80,6 +80,15 @@ func NewPartitionMultiUpdateFrom(
 	return NewPartitionMultiUpdate(op)
 }
 
+// RawMultiUpdate exposes the immutable plan payload for pipeline encoding.
+// Runtime state remains owned by the wrapper and is never serialized.
+func (op *PartitionMultiUpdate) RawMultiUpdate() *MultiUpdate {
+	if op == nil {
+		return nil
+	}
+	return op.raw
+}
+
 func (op *PartitionMultiUpdate) String(buf *bytes.Buffer) {
 	buf.WriteString(opName)
 	buf.WriteString(": partition_multi_update")
