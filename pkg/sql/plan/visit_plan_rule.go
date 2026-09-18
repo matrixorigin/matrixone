@@ -1699,9 +1699,10 @@ func isPreparedTemporalIntegerArithmetic(name string) bool {
 func (rule *ResetParamRefRule) coercePreparedTemporalIntegerOperand(
 	original, bound *Expr,
 	temporalPeer types.Type,
+	hasNumericValueParam bool,
 ) (*Expr, bool, error) {
 	if original == nil || bound == nil ||
-		len(preparedNumericValueParamPositions(original)) == 0 ||
+		!hasNumericValueParam ||
 		!types.T(bound.Typ.Id).IsInteger() || !temporalPeer.Oid.IsDecimal() {
 		return bound, false, nil
 	}
@@ -2571,6 +2572,11 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			}
 		}
 		functionName = strings.ToLower(functionName)
+		var temporalPeer types.Type
+		hasTemporalPeer := false
+		if isPreparedTemporalIntegerArithmetic(functionName) {
+			temporalPeer, hasTemporalPeer = preparedTemporalNumericPeerFromArgs(originalArgs)
+		}
 		// A regexp check deferred at PREPARE must run at every EXECUTE even
 		// when a nested dynamic result happens to resolve back to the same type.
 		// Type equality alone cannot prove that all current sibling domains are
@@ -2629,6 +2635,8 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			var preparedBitwiseSource *plan.Expr
 			var hasPreparedBitwiseSource bool
 			var nestedPreparedBitwiseSource *plan.Expr
+			hasPreparedNumericValue := hasTemporalPeer &&
+				len(preparedNumericValueParamPositions(originalArgs[i])) > 0
 			if hasParamPos && isPreparedBitwiseAggregate(functionName) && i == 0 &&
 				isBitwiseAggregatePrivateCast(arg) {
 				preparedBitwiseSource, hasPreparedBitwiseSource, err =
@@ -2827,22 +2835,19 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			) {
 				numericComparisonFallback = true
 			}
-			if !implicitParamCast && isPreparedTemporalIntegerArithmetic(functionName) &&
-				len(preparedNumericValueParamPositions(originalArgs[i])) > 0 {
-				if temporalPeer, ok := preparedTemporalNumericPeerFromArgs(originalArgs); ok {
-					coerced, coercedChanged, coercedErr := rule.coercePreparedTemporalIntegerOperand(
-						originalArgs[i], rewrittenArg, temporalPeer)
-					if coercedErr != nil {
-						return nil, coercedErr
-					}
-					if coercedChanged {
-						rewrittenArg = coerced
-						exprImpl.F.Args[i] = rewrittenArg
-						boundArgs[i] = rewrittenArg
-						needResetFunction = true
-						compareArgTypes = true
-						rule.specialized = true
-					}
+			if !implicitParamCast && hasPreparedNumericValue {
+				coerced, coercedChanged, coercedErr := rule.coercePreparedTemporalIntegerOperand(
+					originalArgs[i], rewrittenArg, temporalPeer, hasPreparedNumericValue)
+				if coercedErr != nil {
+					return nil, coercedErr
+				}
+				if coercedChanged {
+					rewrittenArg = coerced
+					exprImpl.F.Args[i] = rewrittenArg
+					boundArgs[i] = rewrittenArg
+					needResetFunction = true
+					compareArgTypes = true
+					rule.specialized = true
 				}
 			}
 			if rule.isNumericPrefixDependent(rewrittenArg) {
@@ -2892,17 +2897,15 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 						return nil, typedErr
 					}
 					if typedOK {
-						if isPreparedTemporalIntegerArithmetic(functionName) {
-							if temporalPeer, ok := preparedTemporalNumericPeerFromArgs(originalArgs); ok {
-								coerced, coercedChanged, coercedErr :=
-									rule.coercePreparedTemporalIntegerOperand(
-										originalArgs[i], typed, temporalPeer)
-								if coercedErr != nil {
-									return nil, coercedErr
-								}
-								if coercedChanged {
-									typed = coerced
-								}
+						if hasPreparedNumericValue {
+							coerced, coercedChanged, coercedErr :=
+								rule.coercePreparedTemporalIntegerOperand(
+									originalArgs[i], typed, temporalPeer, hasPreparedNumericValue)
+							if coercedErr != nil {
+								return nil, coercedErr
+							}
+							if coercedChanged {
+								typed = coerced
 							}
 						}
 						boundArgs[i] = typed
