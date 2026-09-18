@@ -489,7 +489,7 @@ func TestColumnSlicesGetDatetime(t *testing.T) {
 
 				return colSlices, bat, 0
 			},
-			expectedStr: "2024-01-15 10:20:30", // Should format without fractional part when MicroSec == 0
+			expectedStr: "2024-01-15 10:20:30.000000",
 			expectError: false,
 		},
 		{
@@ -577,6 +577,49 @@ func TestColumnSlicesGetDatetime(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, tc.expectedStr, dtStr)
 			}
+		})
+	}
+}
+
+func TestColumnSlicesGetDatetimePreservesDeclaredScale(t *testing.T) {
+	ctx := context.TODO()
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+
+	testCases := []struct {
+		name  string
+		scale int32
+		value string
+		want  string
+	}{
+		{name: "scale 0 zero microseconds", scale: 0, value: "2024-01-15 10:20:30", want: "2024-01-15 10:20:30"},
+		{name: "scale 1 zero microseconds", scale: 1, value: "2024-01-15 10:20:30", want: "2024-01-15 10:20:30.0"},
+		{name: "scale 3 zero microseconds", scale: 3, value: "2024-01-15 10:20:30", want: "2024-01-15 10:20:30.000"},
+		{name: "scale 6 zero microseconds", scale: 6, value: "2024-01-15 10:20:30", want: "2024-01-15 10:20:30.000000"},
+		{name: "scale 6 non-zero microseconds", scale: 6, value: "2024-01-15 10:20:30.123456", want: "2024-01-15 10:20:30.123456"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(types.New(types.T_datetime, 0, tc.scale))
+			dt, err := types.ParseDatetime(tc.value, tc.scale)
+			require.NoError(t, err)
+			require.NoError(t, vector.AppendFixed(bat.Vecs[0], dt, false, mp))
+			bat.SetRowCount(1)
+
+			colSlices := &ColumnSlices{
+				ctx:             ctx,
+				colIdx2SliceIdx: []int{0},
+				dataSet:         bat,
+				arrDatetime:     [][]types.Datetime{vector.ToSliceNoTypeCheck2[types.Datetime](bat.Vecs[0])},
+			}
+			defer bat.Clean(mp)
+			defer colSlices.Close()
+
+			got, err := colSlices.GetDatetime(0, 0)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
 		})
 	}
 }
