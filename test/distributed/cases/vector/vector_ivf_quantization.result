@@ -65,7 +65,6 @@ select a from qrange
 where l2_distance(v,'[0,0,0]') >= 0.013006371726883922
 order by l2_distance(v,'[0,0,0]') limit 10;
 ➤ a[4,32,0]  𝄀
-4  𝄀
 2  𝄀
 3
 create table q64(a int primary key, v vecf64(4));

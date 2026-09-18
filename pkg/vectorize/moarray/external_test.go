@@ -893,7 +893,9 @@ func TestL2Distance(t *testing.T) {
 		{
 			name: "Test2 - float64",
 			args: args{argLeftF64: []float64{1, 2, 3}, argRightF64: []float64{10, 20, 30}},
-			want: 33.67491648096547,
+			// Vector distances are a float32 domain (#29040 / #29050), so a float64 base rounds to the
+			// same value as float32 -- not the old exact-f64 33.67491648096547.
+			want: 33.6749153137207,
 		},
 	}
 	for _, tt := range tests {

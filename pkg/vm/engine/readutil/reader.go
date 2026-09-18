@@ -688,6 +688,10 @@ func (r *reader) SetIndexParam(param *plan.IndexReaderParam) {
 		}
 
 		if param.OrigFuncName == metric.DistFn_L2Distance {
+			// Vector distances are a float32 domain for every base type (usearch/cuvs return float32,
+			// and the scalar l2_distance matches), so the L2 bound must be widened to the next float32
+			// before squaring -- otherwise the squared f64 gate is off by ~1e-6 from the float32
+			// distance a row is actually gated on and drops a boundary row (#29040).
 			if indexTop.LowerBoundType != plan.BoundType_UNBOUNDED {
 				if indexTop.LowerBound < 0 {
 					// L2 distance is non-negative, so a negative lower bound
@@ -720,8 +724,16 @@ func (r *reader) SetExplainVectorTopStats(stats *objectio.IndexReaderTopStats) {
 
 // squareL2BoundOutward keeps the squared-distance storage gate a superset of
 // the original L2 predicate. The source-domain filter removes any boundary
-// false positives introduced by this one-ULP widening.
+// false positives introduced by this widening.
+//
+// Vector distances are a float32 domain for every base type (usearch/cuvs return
+// float32, and MO's scalar l2_distance matches), so the block distance a row is
+// gated on is float32(sqrt(sq)). The L2 bound is therefore first widened to the
+// adjacent float32 before squaring; comparing it against a squared bound nudged
+// only one float64 ULP would leave a ~1e-6 gap that drops a boundary row. The
+// exact source-domain post-filter still removes the extra candidates (#29040).
 func squareL2BoundOutward(bound, direction float64) float64 {
+	bound = float64(math.Nextafter32(float32(bound), float32(direction)))
 	return math.Nextafter(bound*bound, direction)
 }
 

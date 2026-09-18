@@ -234,18 +234,39 @@ func MaxFloat[T types.RealNumbers]() T {
 func DistanceTransformHnsw(dist float64, origMetricType MetricType, metricType usearch.Metric) float64 {
 	if origMetricType == Metric_L2Distance && metricType == usearch.L2sq {
 		// metric is l2sq but origin is l2_distance
-		return math.Sqrt(dist)
+		return RoundDistanceToElemDomain(math.Sqrt(dist))
 	}
 	if metricType == usearch.InnerProduct {
-		return dist - 1
+		return RoundDistanceToElemDomain(dist - 1)
 	}
-	return dist
+	return RoundDistanceToElemDomain(dist)
 }
 
 func DistanceTransformIvfflat(dist float64, origMetricType, metricType MetricType) float64 {
 	if origMetricType == Metric_L2Distance && metricType == Metric_L2sqDistance {
 		// metric is l2sq but origin is l2_distance
-		return math.Sqrt(dist)
+		return RoundDistanceToElemDomain(math.Sqrt(dist))
 	}
-	return dist
+	return RoundDistanceToElemDomain(dist)
+}
+
+// RoundDistanceToElemDomain rounds a distance into the float32 domain MO's vector distance functions
+// use. usearch/cuvs return distances in float32 (usearch.h: typedef float usearch_distance_t), and
+// the scalar l2_distance / l2_distance_sq / inner_product / cosine_distance likewise deliver a
+// float32-precision value for every supported base type (float32 and the narrow bf16/f16/int8/uint8,
+// computed via float32; cuvs has no float64 vectors at all). Standardizing every path on this one
+// domain keeps an index-served distance identical to the scalar one, so a projected value or a
+// pushed range predicate cannot disagree by a float32 ULP (#29040 / #29050). It is a trivial
+// float32 round-trip -- the compiler inlines it, so there is no per-row cost.
+func RoundDistanceToElemDomain(dist float64) float64 {
+	return float64(float32(dist))
+}
+
+// IsFloat64Vector reports whether the vector element type T is float64. Index distances are a
+// float32 domain (usearch_distance_t is float32; cuvs is float32-only), so only a float64 base can
+// hold a finite value whose distance the index cannot represent and saturates to +/-Inf. Callers
+// use this to fail fast on such an overflow instead of serving a saturated score (#29040 / #29050).
+func IsFloat64Vector[T types.RealNumbers]() bool {
+	_, ok := any(*new(T)).(float64)
+	return ok
 }

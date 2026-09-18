@@ -16,6 +16,7 @@ package ivfflat
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -735,6 +736,26 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	rt vectorindex.RuntimeConfig,
 	_ int64,
 ) (keys any, distances []float64, err error) {
+
+	// usearch/cuvs and the entries SQL compute distances in float32, so a float64 base can hold a
+	// finite value whose squared distance overflows float32 and saturates to +/-Inf. Serving that
+	// would silently corrupt the value, Top-K order, and any outer predicate (#29040 / #29050), so
+	// fail fast. Named returns let one deferred scan cover every return path; float32 (the common
+	// case) never registers it.
+	if metric.IsFloat64Vector[T]() {
+		defer func() {
+			if err != nil {
+				return
+			}
+			for _, d := range distances {
+				if math.IsInf(d, 0) {
+					keys, distances, err = nil, nil, moerr.NewInternalErrorNoCtx(
+						"vector distance exceeds the float32 range the vector index computes in; a float64 vector of this magnitude is unsupported -- use a smaller-magnitude/normalized column or the exact scalar path")
+					return
+				}
+			}
+		}()
+	}
 
 	if sqlproc != nil {
 		prevRuntimeFilterData := sqlproc.IvfRuntimeFilterData
