@@ -232,6 +232,7 @@ func TestPersistedIPFunctionProtocolAdmissionForCatalogBuilders(t *testing.T) {
 		return stmt.(*tree.CreateTable).Defs[index].(*tree.ColumnTableDef)
 	}
 	defaultCol := parseColumn(t, "create table t(a bigint, b varchar(32) default (inet_ntoa(a)))", 1)
+	numericDefaultCol := parseColumn(t, "create table t(a bigint, b varchar(32) default (inet_ntoa(1.6)))", 1)
 	onUpdateCol := parseColumn(t, "create table t(a bigint, b varchar(32))", 1)
 	selectStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "select inet_ntoa(1)", 1)
 	require.NoError(t, err)
@@ -255,6 +256,10 @@ func TestPersistedIPFunctionProtocolAdmissionForCatalogBuilders(t *testing.T) {
 				planpb.Type{Id: int32(types.T_varchar), Width: 32}, proc, columns)
 			checkAdmissionResult(t, version, err, defines.MORPCVersion72)
 
+			_, err = buildDefaultExprWithColumns(numericDefaultCol,
+				planpb.Type{Id: int32(types.T_varchar), Width: 32}, proc, columns)
+			checkAdmissionResult(t, version, err, defines.MORPCVersion72)
+
 			_, err = buildOnUpdate(onUpdateCol, planpb.Type{Id: int32(types.T_varchar), Width: 32}, proc)
 			checkAdmissionResult(t, version, err, defines.MORPCVersion72)
 
@@ -265,6 +270,11 @@ func TestPersistedIPFunctionProtocolAdmissionForCatalogBuilders(t *testing.T) {
 			_, err = buildCTASDefaultFromOrigin(ctx,
 				planpb.Type{Id: int32(types.T_varchar), Width: 32}, true,
 				"inet_ntoa(1)", columns...)
+			checkAdmissionResult(t, version, err, defines.MORPCVersion72)
+
+			_, err = buildCTASDefaultFromOrigin(ctx,
+				planpb.Type{Id: int32(types.T_varchar), Width: 32}, true,
+				"inet_ntoa(1.6)", columns...)
 			checkAdmissionResult(t, version, err, defines.MORPCVersion72)
 		})
 	}
