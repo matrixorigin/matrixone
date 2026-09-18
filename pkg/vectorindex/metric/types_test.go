@@ -146,3 +146,37 @@ func TestDistanceTransformIvfflat(t *testing.T) {
 	out = DistanceTransformIvfflat(in, Metric_L2Distance, Metric_InnerProduct)
 	require.Equal(t, in, out)
 }
+
+func TestRoundDistanceToElemDomain(t *testing.T) {
+	// An exact float32 value round-trips unchanged.
+	require.Equal(t, 3.0, RoundDistanceToElemDomain(3.0))
+	require.Equal(t, 0.0, RoundDistanceToElemDomain(0.0))
+	require.Equal(t, -2.5, RoundDistanceToElemDomain(-2.5))
+
+	// A float64 with more precision than float32 can hold snaps to the nearest float32.
+	in := 33.674915313720703
+	require.Equal(t, float64(float32(in)), RoundDistanceToElemDomain(in))
+	// The result must itself be representable in float32 (idempotent).
+	require.Equal(t, RoundDistanceToElemDomain(in), RoundDistanceToElemDomain(RoundDistanceToElemDomain(in)))
+
+	// float64(0.9999999999999998) rounds up to exactly 1 in the float32 domain — this
+	// subsumes the old cosine-similarity corner snap.
+	require.Equal(t, 1.0, RoundDistanceToElemDomain(0.9999999999999998))
+
+	// A magnitude beyond the float32 range saturates to +/-Inf rather than wrapping.
+	require.True(t, math.IsInf(RoundDistanceToElemDomain(1e40), 1))
+	require.True(t, math.IsInf(RoundDistanceToElemDomain(-1e40), -1))
+}
+
+func TestHasFloat64DistanceOverflow(t *testing.T) {
+	// A non-float64 base never triggers the check, even with an Inf present.
+	require.False(t, HasFloat64DistanceOverflow[float32]([]float64{1, 2, math.Inf(1)}))
+
+	// A float64 base with only finite distances is fine.
+	require.False(t, HasFloat64DistanceOverflow[float64]([]float64{1, 2, 3}))
+	require.False(t, HasFloat64DistanceOverflow[float64](nil))
+
+	// A float64 base whose distance saturated to +/-Inf must fail fast.
+	require.True(t, HasFloat64DistanceOverflow[float64]([]float64{1, math.Inf(1), 3}))
+	require.True(t, HasFloat64DistanceOverflow[float64]([]float64{math.Inf(-1)}))
+}

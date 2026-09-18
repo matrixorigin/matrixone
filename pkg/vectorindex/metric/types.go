@@ -262,11 +262,20 @@ func RoundDistanceToElemDomain(dist float64) float64 {
 	return float64(float32(dist))
 }
 
-// IsFloat64Vector reports whether the vector element type T is float64. Index distances are a
-// float32 domain (usearch_distance_t is float32; cuvs is float32-only), so only a float64 base can
-// hold a finite value whose distance the index cannot represent and saturates to +/-Inf. Callers
-// use this to fail fast on such an overflow instead of serving a saturated score (#29040 / #29050).
-func IsFloat64Vector[T types.RealNumbers]() bool {
-	_, ok := any(*new(T)).(float64)
-	return ok
+// HasFloat64DistanceOverflow reports whether an index search must fail fast because a float64 base
+// produced a distance the float32 domain cannot represent. Index distances are float32
+// (usearch_distance_t is float32; cuvs is float32-only), so only a float64 base can hold a finite
+// value whose distance overflows and saturates to +/-Inf -- serving that would silently corrupt the
+// value, Top-K order, and any outer predicate (#29040 / #29050). Returns false immediately for any
+// non-float64 base (the common path), so the Inf scan runs only for float64.
+func HasFloat64DistanceOverflow[T types.RealNumbers](distances []float64) bool {
+	if _, ok := any(*new(T)).(float64); !ok {
+		return false
+	}
+	for _, d := range distances {
+		if math.IsInf(d, 0) {
+			return true
+		}
+	}
+	return false
 }
