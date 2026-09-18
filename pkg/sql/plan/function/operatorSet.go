@@ -72,6 +72,9 @@ func conditionalTemporalCommonType(source []types.Type) (types.Type, bool) {
 	)
 	for _, typ := range source {
 		switch typ.Oid {
+		case types.T_any:
+			// Untyped NULL does not constrain the temporal domain.
+			continue
 		case types.T_date, types.T_datetime, types.T_timestamp, types.T_time:
 			hasTemporal = true
 			if typ.Oid == types.T_time {
@@ -84,7 +87,8 @@ func conditionalTemporalCommonType(source []types.Type) (types.Type, bool) {
 				continue
 			}
 			// DATE/DATETIME/TIMESTAMP share a wall-clock domain for conditional
-			// expressions. TIME must never be silently coerced into that domain.
+			// expressions. TIME mixed with a date-like branch is promoted to
+			// DATETIME while retaining the widest fractional precision.
 			if typ.Oid == types.T_datetime || result.Oid == types.T_datetime ||
 				(typ.Oid == types.T_timestamp && result.Oid == types.T_date) ||
 				(typ.Oid == types.T_date && result.Oid == types.T_timestamp) {
@@ -97,8 +101,11 @@ func conditionalTemporalCommonType(source []types.Type) (types.Type, bool) {
 			return types.Type{}, false
 		}
 	}
-	if !hasTemporal || (hasClock && hasDate) {
+	if !hasTemporal {
 		return types.Type{}, false
+	}
+	if hasClock && hasDate {
+		result.Oid = types.T_datetime
 	}
 	if result.Oid == types.T_any {
 		return types.Type{}, false

@@ -1943,11 +1943,8 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 		// invalid-input error before the statement's strict/IGNORE policy and
 		// warning sink are available.
 		if numVal.ValType == tree.P_char {
-			value := numVal.String()
-			if _, outOfRange := types.IsTimeStringOutOfInternalRange(value, colType.Scale); outOfRange {
-				expr := MakePlan2StringConstExprWithType(value)
-				return forceAssignmentCastExprWithProcess(proc.Ctx, expr, makePlan2Type(colType), isIgnore, proc)
-			}
+			expr := MakePlan2StringConstExprWithType(numVal.String())
+			return forceAssignmentCastExprWithProcess(proc.Ctx, expr, makePlan2Type(colType), isIgnore, proc)
 		}
 		canInsert, isnull, num, err := util.SetInsertValueTime(proc, numVal, colType)
 		if err != nil || !canInsert {
@@ -1968,6 +1965,10 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 
 		return MakePlan2DateConstExprWithType(int32(num)), err
 	case types.T_datetime:
+		if numVal.ValType == tree.P_char {
+			expr := MakePlan2StringConstExprWithType(numVal.String())
+			return forceAssignmentCastExprWithProcess(proc.Ctx, expr, makePlan2Type(colType), isIgnore, proc)
+		}
 		canInsert, isnull, num, err := util.SetInsertValueDateTime(proc, numVal, colType)
 		if err != nil || !canInsert {
 			return nil, err
@@ -1977,6 +1978,10 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 		}
 		return MakePlan2DateTimeConstExprWithType(int64(num)), err
 	case types.T_timestamp:
+		if numVal.ValType == tree.P_char {
+			expr := MakePlan2StringConstExprWithType(numVal.String())
+			return forceAssignmentCastExprWithProcess(proc.Ctx, expr, makePlan2Type(colType), isIgnore, proc)
+		}
 		canInsert, isnull, num, err := util.SetInsertValueTimeStamp(proc, numVal, colType)
 		if err != nil || !canInsert {
 			return nil, err

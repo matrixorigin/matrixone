@@ -630,16 +630,28 @@ func buildDefaultExpr(col *tree.ColumnTableDef, typ plan.Type, proc *process.Pro
 	return buildDefaultExprWithColumns(col, typ, proc, nil)
 }
 
-func legacyImplicitTimestampDefaults(proc *process.Process) bool {
-	if proc == nil || proc.GetResolveVariableFunc() == nil {
+func legacyImplicitTimestampDefaults(ctx CompilerContext) bool {
+	if ctx == nil {
 		return false
 	}
-	value, err := proc.GetResolveVariableFunc()("explicit_defaults_for_timestamp", true, false)
+	value, err := ctx.ResolveVariable("explicit_defaults_for_timestamp", true, false)
 	if err != nil {
 		return false
 	}
 	switch value := value.(type) {
+	case int:
+		return value == 0
+	case int8:
+		return value == 0
+	case int32:
+		return value == 0
 	case int64:
+		return value == 0
+	case uint:
+		return value == 0
+	case uint8:
+		return value == 0
+	case uint32:
 		return value == 0
 	case uint64:
 		return value == 0
@@ -653,6 +665,15 @@ func legacyImplicitTimestampDefaults(proc *process.Process) bool {
 func hasExplicitNullableAttribute(col *tree.ColumnTableDef) bool {
 	for _, attr := range col.Attributes {
 		if nullAttr, ok := attr.(*tree.AttributeNull); ok && nullAttr.Is {
+			return true
+		}
+	}
+	return false
+}
+
+func hasExplicitDefaultAttribute(col *tree.ColumnTableDef) bool {
+	for _, attr := range col.Attributes {
+		if defaultAttr, ok := attr.(*tree.AttributeDefault); ok && defaultAttr.Expr != nil {
 			return true
 		}
 	}

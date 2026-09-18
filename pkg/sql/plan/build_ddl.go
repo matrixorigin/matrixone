@@ -3283,16 +3283,12 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					OriginString: "",
 				}
 			} else {
-				defaultValue, err = buildDefaultExprWithColumns(def, colType, ctx.GetProcess(), allColDefs)
-				if err != nil {
-					return err
-				}
-				// With explicit_defaults_for_timestamp=OFF, MySQL gives the
-				// first unconstrained TIMESTAMP column an implicit current-time
-				// default and ON UPDATE expression. Keep explicit NULL columns
-				// out of this legacy rule.
-				if !legacyTimestampDefaultApplied && types.T(colType.Id) == types.T_timestamp &&
-					!hasExplicitNullableAttribute(def) && legacyImplicitTimestampDefaults(ctx.GetProcess()) {
+				legacyImplicit := !legacyTimestampDefaultApplied &&
+					types.T(colType.Id) == types.T_timestamp &&
+					!hasExplicitNullableAttribute(def) &&
+					!hasExplicitDefaultAttribute(def) &&
+					legacyImplicitTimestampDefaults(ctx)
+				if legacyImplicit {
 					defaultValue, err = buildImplicitCurrentTimestampDefault(colType, ctx.GetProcess())
 					if err != nil {
 						return err
@@ -3303,7 +3299,16 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 					}
 					onUpdateExpr = &plan.OnUpdate{Expr: implicitExpr, OriginString: "CURRENT_TIMESTAMP()"}
 					legacyTimestampDefaultApplied = true
+				} else {
+					defaultValue, err = buildDefaultExprWithColumns(def, colType, ctx.GetProcess(), allColDefs)
+					if err != nil {
+						return err
+					}
 				}
+				// With explicit_defaults_for_timestamp=OFF, MySQL gives the
+				// first unconstrained TIMESTAMP column an implicit current-time
+				// default and ON UPDATE expression. Keep explicit NULL columns
+				// out of this legacy rule.
 				if auto_incr && defaultValue.Expr != nil {
 					return moerr.NewInvalidInputf(ctx.GetContext(), "invalid default value for '%s'", colNameOrigin)
 				}
