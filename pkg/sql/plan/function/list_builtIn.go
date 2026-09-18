@@ -11976,8 +11976,9 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 
 		Overloads: []overload{
 			{
-				overloadId: 0,
-				args:       []types.T{types.T_date},
+				overloadId:      0,
+				args:            []types.T{types.T_date},
+				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint8.ToType()
 				},
@@ -11986,8 +11987,9 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId: 1,
-				args:       []types.T{types.T_datetime},
+				overloadId:      1,
+				args:            []types.T{types.T_datetime},
+				realTimeRelated: true,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint8.ToType()
 				},
