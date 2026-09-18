@@ -710,6 +710,8 @@ func TestCreateTablesInformationSchemaUsesCommonProtocolGate(t *testing.T) {
 	rt := moruntime.ServiceRuntime(service)
 	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	oldCluster, hadCluster := rt.GetGlobalVariables(moruntime.ClusterService)
+	oldAuthoringFloor, hadAuthoringFloor := rt.GetGlobalVariables(
+		moruntime.PersistedExpressionProtocolAuthoringFloor)
 	cluster := &tenantInitializationProtocolCluster{cns: []metadata.CNService{
 		{ServiceID: "cn-v86", QueryAddress: "cn-v86-query", PipelineServiceAddress: "cn-v86-pipeline"},
 		{ServiceID: "cn-v85", QueryAddress: "cn-v85-query", PipelineServiceAddress: "cn-v85-pipeline"},
@@ -719,6 +721,11 @@ func TestCreateTablesInformationSchemaUsesCommonProtocolGate(t *testing.T) {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
 		} else {
 			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion86)
+		}
+		if hadAuthoringFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, oldAuthoringFloor)
+		} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, current)
 		}
 		if hadCluster {
 			rt.SetGlobalVariables(moruntime.ClusterService, oldCluster)
@@ -739,11 +746,12 @@ func TestCreateTablesInformationSchemaUsesCommonProtocolGate(t *testing.T) {
 	}
 
 	for _, test := range []struct {
-		name       string
-		responses  map[string]int64
-		sendErrors map[string]error
-		wantLatest bool
-		wantLegacy bool
+		name           string
+		responses      map[string]int64
+		sendErrors     map[string]error
+		authoringFloor int64
+		wantLatest     bool
+		wantLegacy     bool
 	}{
 		{
 			name: "mixed versions use legacy VIEWS",
@@ -751,7 +759,8 @@ func TestCreateTablesInformationSchemaUsesCommonProtocolGate(t *testing.T) {
 				"cn-v86-query": defines.MORPCVersion86,
 				"cn-v85-query": defines.MORPCVersion85,
 			},
-			wantLegacy: true,
+			authoringFloor: defines.MORPCVersion86,
+			wantLegacy:     true,
 		},
 		{
 			name: "all CNs at v86 use current DDL",
@@ -759,14 +768,16 @@ func TestCreateTablesInformationSchemaUsesCommonProtocolGate(t *testing.T) {
 				"cn-v86-query": defines.MORPCVersion86,
 				"cn-v85-query": defines.MORPCVersion86,
 			},
-			wantLatest: true,
+			authoringFloor: defines.MORPCVersion86,
+			wantLatest:     true,
 		},
 		{
 			name: "unknown CN capability uses legacy VIEWS",
 			responses: map[string]int64{
 				"cn-v86-query": defines.MORPCVersion86,
 			},
-			wantLegacy: true,
+			authoringFloor: defines.MORPCVersion86,
+			wantLegacy:     true,
 		},
 		{
 			name: "RPC failure uses legacy VIEWS",
@@ -776,7 +787,17 @@ func TestCreateTablesInformationSchemaUsesCommonProtocolGate(t *testing.T) {
 			sendErrors: map[string]error{
 				"cn-v85-query": context.Canceled,
 			},
-			wantLegacy: true,
+			authoringFloor: defines.MORPCVersion86,
+			wantLegacy:     true,
+		},
+		{
+			name: "local authoring admission pending uses legacy VIEWS",
+			responses: map[string]int64{
+				"cn-v86-query": defines.MORPCVersion86,
+				"cn-v85-query": defines.MORPCVersion86,
+			},
+			authoringFloor: 0,
+			wantLegacy:     true,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -801,6 +822,9 @@ func TestCreateTablesInformationSchemaUsesCommonProtocolGate(t *testing.T) {
 				}).AnyTimes()
 
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion86)
+			rt.SetGlobalVariables(
+				moruntime.PersistedExpressionProtocolAuthoringFloor,
+				int64(test.authoringFloor))
 			err := createTablesInInformationSchemaOfGeneralTenant(
 				context.Background(), bh, service, proc)
 			require.NoError(t, err)
