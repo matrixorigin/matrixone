@@ -1938,6 +1938,25 @@ class WorkerContractTest(unittest.TestCase):
         third.release()
         self.assertEqual(({}, {}), quota.counts())
 
+    def test_handler_quota_release_can_retry_after_counter_failure(self):
+        quota = worker._HandlerQuota(max_account_handlers=1, max_owner_handlers=1)
+        lease = quota.acquire(1, "alice")
+        real_release = quota._release
+        attempts = 0
+
+        def fail_once(account_id, owner_id):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise RuntimeError("injected release failure")
+            return real_release(account_id, owner_id)
+
+        with mock.patch.object(quota, "_release", side_effect=fail_once):
+            with self.assertRaisesRegex(RuntimeError, "injected release failure"):
+                lease.release()
+            lease.release()
+        self.assertEqual(({}, {}), quota.counts())
+
     def test_handler_initialization_closes_partial_pipe_ownership(self):
         real_pipe = os.pipe
         for failure in ("second_pipe", "watchdog_dup"):
