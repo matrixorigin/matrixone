@@ -720,6 +720,12 @@ type VectorIndexCache struct {
 	// would be stored yet never applied, leaving this CN on the default cadence indefinitely.
 	serveMu sync.Mutex
 
+	// evictInFlight tracks evictions between the moment an entry is removed from IndexMap and the
+	// moment its teardown (Destroy) finishes: key -> chan struct{} closed on completion. A concurrent
+	// evictor that finds the entry already gone waits on this instead of reporting a premature
+	// success while the old search / native handle is still alive (#28985 EvictKey race).
+	evictInFlight sync.Map
+
 	// The residency budget and everything that decides it. Held by value so a zero
 	// VectorIndexCache is usable; gov() attaches the back-reference on first use.
 	governor     VectorIndexGovernor
@@ -825,6 +831,9 @@ func (c *VectorIndexCache) EvictKey(key string) int64 {
 	if key == "" {
 		return 0
 	}
+	// Capture the current occupant first: if we lose the claim to a concurrent evictor we can wait
+	// on THAT entry's teardown rather than returning before it finishes.
+	occupant, hadOccupant := c.IndexMap.Load(key)
 	// Report what THIS call actually removed, not a pre-read occupancy count. evictEntry claims the
 	// entry (beginEviction + CompareAndDelete) and synchronously destroys it, returning true only for
 	// the caller that won the claim. A pre-count instead let two concurrent callers both see 1 and
@@ -832,6 +841,20 @@ func (c *VectorIndexCache) EvictKey(key string) int64 {
 	// though it removed nothing. The winner's Destroy waits out any in-flight search before returning.
 	if c.evictEntry(key, nil, "ctl") {
 		return 1
+	}
+	// We did not perform the eviction: the key was absent, or a concurrent evictor (another EvictKey,
+	// a TTL/stale sweep, empty-generation, shutdown, ...) already claimed it. Do NOT report a
+	// premature success -- wait until any in-flight teardown of this key has fully completed (the
+	// in-flight search drained and the native handle freed) before returning 0, so a caller polling
+	// for "gone" cannot observe it while the old resource is still alive (#28985). Both waits are
+	// bounded: whoever removes an entry always follows with Destroy, which closes both signals.
+	if hadOccupant {
+		if algo, ok := occupant.(*VectorIndexSearch); ok {
+			_ = algo.awaitDestroyed(context.Background())
+		}
+	}
+	if v, ok := c.evictInFlight.Load(key); ok {
+		<-v.(chan struct{})
 	}
 	return 0
 }
@@ -903,10 +926,11 @@ func (c *VectorIndexCache) Once() {
 }
 
 func (c *VectorIndexCache) evictEntry(key string, expected *VectorIndexSearch, reason string) bool {
-	algo, ok := c.claimForEviction(key, expected, reason)
+	algo, done, ok := c.claimForEviction(key, expected, reason)
 	if !ok {
 		return false
 	}
+	defer c.finishEviction(key, done)
 	algo.Destroy()
 	return true
 }
@@ -929,11 +953,12 @@ func (c *VectorIndexCache) evictIdleEntry(key string, expected *VectorIndexSearc
 	if afterIdleClaim != nil {
 		afterIdleClaim(key)
 	}
-	algo, ok := c.claimForEviction(key, expected, reason)
+	algo, done, ok := c.claimForEviction(key, expected, reason)
 	if !ok {
 		expected.releaseClaim()
 		return false
 	}
+	defer c.finishEviction(key, done)
 	algo.destroyClaimed(reason)
 	return true
 }
@@ -943,24 +968,39 @@ func (c *VectorIndexCache) evictIdleEntry(key string, expected *VectorIndexSearc
 // invalidation while the old entry still occupies the key -- a replacement can only be inserted
 // after CompareAndDelete, so it cannot observe a later generation bump from the old entry's
 // blocked destroy.
-func (c *VectorIndexCache) claimForEviction(key string, expected *VectorIndexSearch, reason string) (*VectorIndexSearch, bool) {
+func (c *VectorIndexCache) claimForEviction(key string, expected *VectorIndexSearch, reason string) (*VectorIndexSearch, chan struct{}, bool) {
 	value, loaded := c.IndexMap.Load(key)
 	if !loaded {
-		return nil, false
+		return nil, nil, false
 	}
 	algo, ok := value.(*VectorIndexSearch)
 	if !ok || (expected != nil && algo != expected) || !algo.beginEviction(reason == "ttl_expired") {
-		return nil, false
+		return nil, nil, false
 	}
+	// Publish this eviction as in-flight BEFORE removing the entry from the map, so a concurrent
+	// evictor that later finds the entry already gone can wait on `done` rather than reporting a
+	// premature completion. The winning caller closes+clears it via finishEviction after Destroy.
+	done := make(chan struct{})
+	c.evictInFlight.Store(key, done)
 	value, loaded = c.IndexMap.Load(key)
 	if !loaded || value != algo {
-		return nil, false
+		c.finishEviction(key, done)
+		return nil, nil, false
 	}
 	algo.notifyCacheInvalidated(reason)
 	if !c.IndexMap.CompareAndDelete(key, algo) {
-		return nil, false
+		c.finishEviction(key, done)
+		return nil, nil, false
 	}
-	return algo, true
+	return algo, done, true
+}
+
+// finishEviction publishes that the in-flight eviction of key is complete: it drops the registry
+// entry (only if it is still this eviction's channel, so a newer generation's in-flight eviction is
+// left intact) and wakes any evictor waiting on it.
+func (c *VectorIndexCache) finishEviction(key string, done chan struct{}) {
+	c.evictInFlight.CompareAndDelete(key, done)
+	close(done)
 }
 
 func (c *VectorIndexCache) discardFailedLoad(key string, algo *VectorIndexSearch) {

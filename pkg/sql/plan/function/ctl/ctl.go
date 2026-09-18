@@ -18,9 +18,11 @@ import (
 	"context"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/util/json"
@@ -55,7 +57,31 @@ var MoCtlTNCmdSender = func(ctx context.Context, proc *process.Process, requests
 
 // mo_ctl functions are significantly different from oridinary functions and
 // deserve its own package.
+// verifyMoCtlAccess is the execution-entry authorization backstop for mo_ctl. The frontend already
+// gates every SQL mo_ctl to the sys account's moadmin role (verifyAccountCanExecMoCtrl), but that
+// gate scans the BUILT plan after binding -- an mo_ctl evaluated DURING binding (e.g. inside a
+// window frame bound, a BETWEEN/in_range fold, or a default-value fold) fires its cluster-wide side
+// effect and is then replaced by a constant before the scan can ever see it. Re-checking the same
+// policy here, at the single point every invocation is actually executed, closes that whole bypass
+// class independent of where the call is evaluated. It reads the caller's identity from the top
+// context (mirrors cmd_inspectdn) and enforces the same sys-account + moadmin-role rule by id, so it
+// only ever rejects calls the frontend would also reject.
+func verifyMoCtlAccess(proc *process.Process) error {
+	ctx := proc.GetTopContext()
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+	if accountID != catalog.System_Account || defines.GetRoleId(ctx) != catalog.System_Role {
+		return moerr.NewInternalError(proc.Ctx, "only the sys account moadmin role can execute mo_ctl")
+	}
+	return nil
+}
+
 func MoCtl(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int) error {
+	if err := verifyMoCtlAccess(proc); err != nil {
+		return err
+	}
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	args0 := vector.GenerateFunctionStrParameter(ivecs[0])
 	args1 := vector.GenerateFunctionStrParameter(ivecs[1])

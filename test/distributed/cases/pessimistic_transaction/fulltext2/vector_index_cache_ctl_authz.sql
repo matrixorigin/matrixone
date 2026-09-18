@@ -31,6 +31,13 @@ select id, row_number() over (order by mo_ctl('cn', 'EvictVectorIndexCache', 'vi
 -- the pre-fix gate did not scan -- both PREPARE and EXECUTE must be refused.
 prepare pctl from "set @v = mo_ctl('cn', 'GetVectorIndexCacheKeys', '')";
 execute pctl;
+-- window frame bound: a RANGE INTERVAL frame expression is EVALUATED during binding (before the
+-- frontend gate runs) and then replaced by a constant, so no scan of the built plan can ever see
+-- the call. It is rejected at bind time as an illegal frame bound, so the cluster-wide side effect
+-- never fires for an ordinary tenant (#28985).
+create table wf(a datetime, b int);
+insert into wf values ('2020-01-01 00:00:00', 1);
+select a, sum(b) over (order by a range interval mo_ctl('cn', 'SetVectorIndexFreshnessInterval', '1s') day preceding) from wf;
 -- @session}
 
 -- Sys account but a non-moadmin role: also refused (projection, filter, window and prepared-SET forms).
@@ -51,5 +58,15 @@ prepare pctl_ok from "set @v = mo_ctl('cn', 'GetVectorIndexCacheKeys', '')";
 execute pctl_ok;
 select @v like '%GETVECTORINDEXCACHEKEYS%' as allowed_prepared_set;
 deallocate prepare pctl_ok;
+
+-- Defense in depth: mo_ctl in a window frame bound is never a valid frame offset, so it is refused
+-- for EVERY principal -- including the authorized sys-account moadmin -- at bind time, closing the
+-- bind-time-evaluation bypass regardless of privilege (#28985).
+create database if not exists ivfcache_admindb;
+use ivfcache_admindb;
+create table wf(a datetime, b int);
+insert into wf values ('2020-01-01 00:00:00', 1);
+select a, sum(b) over (order by a range interval mo_ctl('cn', 'GetVectorIndexCacheKeys', '') day preceding) from wf;
+drop database ivfcache_admindb;
 
 drop account if exists ivfcache_tnt;

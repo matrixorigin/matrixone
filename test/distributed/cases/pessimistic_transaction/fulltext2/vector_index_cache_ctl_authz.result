@@ -20,6 +20,10 @@ prepare pctl from "set @v = mo_ctl('cn', 'GetVectorIndexCacheKeys', '')";
 internal error: do not have privilege to execute the statement
 execute pctl;
 invalid state prepared statement 'pctl' does not exist
+create table wf(a datetime, b int);
+insert into wf values ('2020-01-01 00:00:00', 1);
+select a, sum(b) over (order by a range interval mo_ctl('cn', 'SetVectorIndexFreshnessInterval', '1s') day preceding) from wf;
+not supported: mo_ctl or fault_inject is not allowed in a window frame bound
 set role public;
 select mo_ctl('cn', 'GetVectorIndexCacheKeys', '');
 internal error: do not have privilege to execute the statement
@@ -47,4 +51,11 @@ select @v like '%GETVECTORINDEXCACHEKEYS%' as allowed_prepared_set;
 ➤ allowed_prepared_set[-7,1,0]  𝄀
 1
 deallocate prepare pctl_ok;
+create database if not exists ivfcache_admindb;
+use ivfcache_admindb;
+create table wf(a datetime, b int);
+insert into wf values ('2020-01-01 00:00:00', 1);
+select a, sum(b) over (order by a range interval mo_ctl('cn', 'GetVectorIndexCacheKeys', '') day preceding) from wf;
+not supported: mo_ctl or fault_inject is not allowed in a window frame bound
+drop database ivfcache_admindb;
 drop account if exists ivfcache_tnt;
