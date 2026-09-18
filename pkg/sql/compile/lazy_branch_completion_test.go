@@ -101,6 +101,22 @@ func TestOrdinaryMergeDoesNotReinitializeSources(t *testing.T) {
 	require.NoError(t, root.initLazyPreScope(&Scope{PreScopes: []*Scope{{}}}, &Compile{}))
 }
 
+func TestUnstartedRemoteMergeCleanupPublishesTerminalWithoutTimeout(t *testing.T) {
+	parent := testutil.NewProcess(t)
+	parent.BuildPipelineContext(context.Background())
+	proc := parent.NewContextChildProc(1)
+	root := merge.NewArgument()
+	scope := &Scope{
+		Proc:                 proc,
+		RootOp:               root,
+		RemoteReceivRegInfos: []RemoteReceivRegInfo{{Idx: 0}},
+	}
+
+	start := time.Now()
+	cleanScopeTreeWithStartFail(scope, context.Canceled, false)
+	require.Less(t, time.Since(start), time.Second)
+}
+
 func TestLazyBranchCompletionWaitsForCleanup(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()

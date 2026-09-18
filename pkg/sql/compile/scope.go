@@ -789,6 +789,15 @@ func cleanScopeTreeWithStartFail(sp *Scope, fail error, isPrepare bool) {
 	for _, preScope := range sp.PreScopes {
 		cleanScopeTreeWithStartFail(preScope, fail, isPrepare)
 	}
+	// A never-submitted remote merge has no notify goroutine to publish terminal
+	// signals into its local receivers. Publish them here before Merge cleanup;
+	// otherwise cleanup waits the full timeout for a producer that never existed.
+	for i := range sp.RemoteReceivRegInfos {
+		idx := sp.RemoteReceivRegInfos[i].Idx
+		if idx >= 0 && idx < len(sp.Proc.Reg.MergeReceivers) {
+			sendRemoteNotifyCleanupTerminal(sp.Proc, sp.Proc.Reg.MergeReceivers[idx], fail)
+		}
+	}
 	cleanPipelineWitchStartFail(sp, fail, isPrepare)
 }
 
