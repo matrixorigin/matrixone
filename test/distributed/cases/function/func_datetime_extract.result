@@ -127,14 +127,22 @@ CREATE TABLE t1
 `weekday` int,
 `week` int,
 `default_week_format` int);
-INSERT INTO t1 SELECT '2000-01-01', EXTRACT(WEEK FROM '2000-01-01'), weekday('2000-01-01'), WEEK('2000-01-01'), 1;
-INSERT INTO t1 SELECT '2000-01-01', EXTRACT(WEEK FROM '2000-01-01'), weekday('2000-01-01'), WEEK('2000-01-01'), 2;
-INSERT INTO t1 SELECT '2000-01-01', EXTRACT(WEEK FROM '2000-01-01'), weekday('2000-01-01'), WEEK('2000-01-01'), 3;
-INSERT INTO t1 SELECT '2000-01-01', EXTRACT(WEEK FROM '2000-01-01'), weekday('2000-01-01'), WEEK('2000-01-01'), 4;
-INSERT INTO t1 SELECT '2000-01-01', EXTRACT(WEEK FROM '2000-01-01'), weekday('2000-01-01'), WEEK('2000-01-01'), 5;
-INSERT INTO t1 SELECT '2000-01-01', EXTRACT(WEEK FROM '2000-01-01'), weekday('2000-01-01'), WEEK('2000-01-01'), 6;
-INSERT INTO t1 SELECT '2000-01-01', EXTRACT(WEEK FROM '2000-01-01'), weekday('2000-01-01'), WEEK('2000-01-01'), 7;
-INSERT INTO t1 SELECT '2000-01-01', EXTRACT(WEEK FROM '2000-01-01'), weekday('2000-01-01'), WEEK('2000-01-01'), 0;
+set @@session.default_week_format = 1;
+INSERT INTO t1 SELECT '2000-01-01', EXTRACT(WEEK FROM '2000-01-01'), weekday('2000-01-01'), WEEK('2000-01-01'), @@session.default_week_format;
+set @@session.default_week_format = 2;
+INSERT INTO t1 SELECT '2000-01-01', EXTRACT(WEEK FROM '2000-01-01'), weekday('2000-01-01'), WEEK('2000-01-01'), @@session.default_week_format;
+set @@session.default_week_format = 3;
+INSERT INTO t1 SELECT '2000-01-01', EXTRACT(WEEK FROM '2000-01-01'), weekday('2000-01-01'), WEEK('2000-01-01'), @@session.default_week_format;
+set @@session.default_week_format = 4;
+INSERT INTO t1 SELECT '2000-01-01', EXTRACT(WEEK FROM '2000-01-01'), weekday('2000-01-01'), WEEK('2000-01-01'), @@session.default_week_format;
+set @@session.default_week_format = 5;
+INSERT INTO t1 SELECT '2000-01-01', EXTRACT(WEEK FROM '2000-01-01'), weekday('2000-01-01'), WEEK('2000-01-01'), @@session.default_week_format;
+set @@session.default_week_format = 6;
+INSERT INTO t1 SELECT '2000-01-01', EXTRACT(WEEK FROM '2000-01-01'), weekday('2000-01-01'), WEEK('2000-01-01'), @@session.default_week_format;
+set @@session.default_week_format = 7;
+INSERT INTO t1 SELECT '2000-01-01', EXTRACT(WEEK FROM '2000-01-01'), weekday('2000-01-01'), WEEK('2000-01-01'), @@session.default_week_format;
+set @@session.default_week_format = 0;
+INSERT INTO t1 SELECT '2000-01-01', EXTRACT(WEEK FROM '2000-01-01'), weekday('2000-01-01'), WEEK('2000-01-01'), @@session.default_week_format;
 SELECT * FROM t1;
 ➤ date[91,64,0]  ¦  extracted_week[4,32,0]  ¦  weekday[4,32,0]  ¦  week[4,32,0]  ¦  default_week_format[4,32,0]  𝄀
 2000-01-01  ¦  52  ¦  5  ¦  0  ¦  1  𝄀
@@ -159,6 +167,7 @@ date
 2000-01-01
 2000-01-01
 drop table t1;
+set @@session.default_week_format = 0;
 CREATE TABLE t1
 (`date` date,
 `extracted_week` int);
