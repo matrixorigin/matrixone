@@ -787,6 +787,9 @@ message SessionInfo {
   // IANA identity preserves historical and DST rules. Empty means the legacy
   // time_zone bytes describe a fixed-offset location.
   string time_zone_name = 17;
+  // Explicitly enables MySQL's permissive string-to-floating-number prefix
+  // conversion. False, including when absent in older payloads, is strict.
+  bool mysql_numeric_compatibility_mode = 18;
 }
 
 message SessionLoggerInfo {

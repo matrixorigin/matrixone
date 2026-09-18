@@ -28,6 +28,7 @@ import (
 
 func TestExactMathStringNumericPrefixExecutors(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().MySQLNumericCompatibilityMode = true
 	inputs := NewFunctionTestInput(types.T_varchar.ToType(), []string{
 		"1.5", "-1.5", " 1.5", "+1.5", "1.5tail", "abc", "",
 	}, nil)
@@ -65,6 +66,48 @@ func TestExactMathStringNumericPrefixExecutors(t *testing.T) {
 	require.True(t, ok, "NULL propagation: %s", info)
 }
 
+func TestMathStringExecutorsAreStrictWithoutExplicitCompatibility(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, test := range []struct {
+		name       string
+		fn         fEvalFn
+		resultType types.Type
+		digits     bool
+	}{
+		{name: "abs", fn: AbsStr, resultType: types.T_float64.ToType()},
+		{name: "sign", fn: SignStr, resultType: types.T_int64.ToType()},
+		{name: "ceil", fn: CeilStr, resultType: types.T_float64.ToType()},
+		{name: "floor", fn: FloorStr, resultType: types.T_float64.ToType()},
+		{name: "round", fn: RoundStr, resultType: types.T_float64.ToType()},
+		{name: "truncate", fn: TruncateStr, resultType: types.T_float64.ToType(), digits: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, input := range []string{"1.5tail", "abc", "true", "", "   ", "1eabc"} {
+				inputs := []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{input}, nil),
+				}
+				if test.digits {
+					inputs = append(inputs, NewFunctionTestConstInput(
+						types.T_int64.ToType(), []int64{0}, nil))
+				}
+				caseTest := NewFunctionTestCase(proc, inputs,
+					NewFunctionTestResult(test.resultType, true, nil, nil), test.fn)
+				ok, info := caseTest.Run()
+				require.True(t, ok, "%q: %s", input, info)
+			}
+		})
+	}
+
+	maskedInput := NewFunctionTestInput(types.T_varchar.ToType(),
+		[]string{"1.5", "1.5tail", "ignored"}, []bool{false, false, true})
+	masked := NewFunctionTestCase(proc, []FunctionTestInput{maskedInput},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{1.5, 0, 0},
+			[]bool{false, true, true}), AbsStr).
+		WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}})
+	ok, info := masked.Run()
+	require.True(t, ok, "NULL/masked invalid rows: %s", info)
+}
+
 func TestMathStringExecutorsPreserveBinaryLiteralProvenance(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	input := makeBinaryStringTestInput(t, proc, types.T_varbinary.ToType(), [][]byte{
@@ -100,21 +143,24 @@ func TestMathStringExecutorsEmitNumericCoercionWarnings(t *testing.T) {
 	session := &numericWarningSession{}
 	proc := testutil.NewProcess(t)
 	proc.Session = session
+	proc.GetSessionInfo().MySQLNumericCompatibilityMode = true
 	tc := NewFunctionTestCase(proc,
 		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(),
-			[]string{"1.5tail", "abc", "", "ignored"}, []bool{false, false, false, true})},
+			[]string{"1.5tail", "abc", "", "   ", "1eabc", "2.5e1", "ignored"},
+			[]bool{false, false, false, false, false, false, true})},
 		NewFunctionTestResult(types.T_float64.ToType(), false,
-			[]float64{1.5, 0, 0, 0}, []bool{false, false, false, true}), AbsStr)
+			[]float64{1.5, 0, 0, 0, 1, 25, 0},
+			[]bool{false, false, false, false, false, false, true}), AbsStr)
 	ok, info := tc.Run()
 	require.True(t, ok, info)
-	require.Len(t, session.warnings, 2)
+	require.Len(t, session.warnings, 3)
 	for _, warning := range session.warnings {
 		require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, warning.code)
 		require.Contains(t, warning.msg, "DOUBLE")
 	}
 }
 
-func TestDirectMathStringExecutorsHonorNativeMode(t *testing.T) {
+func TestDirectMathStringExecutorsHonorExplicitCompatibilityAndNativePrecedence(t *testing.T) {
 	values := []string{"1.5tail", "abc", ""}
 	for _, tc := range []struct {
 		name       string
@@ -135,7 +181,7 @@ func TestDirectMathStringExecutorsHonorNativeMode(t *testing.T) {
 			mysqlProc := testutil.NewProcess(t)
 			defer mysqlProc.Free()
 			mysqlProc.Session = mysqlSession
-			mysqlProc.GetSessionInfo().MatrixOneNativeMode = false
+			mysqlProc.GetSessionInfo().MySQLNumericCompatibilityMode = true
 
 			makeInputs := func(input []string) []FunctionTestInput {
 				inputs := []FunctionTestInput{
@@ -166,11 +212,22 @@ func TestDirectMathStringExecutorsHonorNativeMode(t *testing.T) {
 				require.Contains(t, warning.msg, "DOUBLE")
 			}
 
+			strictProc := testutil.NewProcess(t)
+			defer strictProc.Free()
+			strictSession := &numericWarningSession{}
+			strictProc.Session = strictSession
+			for _, input := range values {
+				ok, info = run(strictProc, []string{input}, true)
+				require.True(t, ok, "%q: %s", input, info)
+			}
+			require.Empty(t, strictSession.warnings)
+
 			nativeProc := testutil.NewProcess(t)
 			defer nativeProc.Free()
 			nativeSession := &numericWarningSession{}
 			nativeProc.Session = nativeSession
 			nativeProc.GetSessionInfo().MatrixOneNativeMode = true
+			nativeProc.GetSessionInfo().MySQLNumericCompatibilityMode = true
 			for _, input := range values {
 				ok, info = run(nativeProc, []string{input}, true)
 				require.True(t, ok, "%s: %s", input, info)
@@ -193,6 +250,7 @@ func TestHistoricalCeilFloorVarcharOverloadCompatibility(t *testing.T) {
 			session := &numericWarningSession{}
 			proc := testutil.NewProcess(t)
 			proc.Session = session
+			proc.GetSessionInfo().MySQLNumericCompatibilityMode = true
 			input := makeBinaryStringTestInput(t, proc, types.T_varchar.ToType(), [][]byte{
 				[]byte("1.5tail"), []byte("abc"), []byte(""),
 			}, nil)
@@ -213,6 +271,7 @@ func TestHistoricalCeilFloorVarcharOverloadCompatibility(t *testing.T) {
 		t.Run(tc.name+"/native_rejects_prefixes", func(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			proc.GetSessionInfo().MatrixOneNativeMode = true
+			proc.GetSessionInfo().MySQLNumericCompatibilityMode = true
 			for _, value := range []string{"1.5tail", "abc", ""} {
 				input := makeBinaryStringTestInput(t, proc, types.T_varchar.ToType(),
 					[][]byte{[]byte(value)}, nil)
@@ -252,6 +311,7 @@ func TestHistoricalCeilFloorVarcharOverloadCompatibility(t *testing.T) {
 			t.Run(tc.name+"/"+modeName+"_binary_literal", func(t *testing.T) {
 				proc := testutil.NewProcess(t)
 				proc.GetSessionInfo().MatrixOneNativeMode = native
+				proc.GetSessionInfo().MySQLNumericCompatibilityMode = true
 				session := &numericWarningSession{}
 				proc.Session = session
 				input := makeBinaryStringTestInput(t, proc, types.T_varchar.ToType(),

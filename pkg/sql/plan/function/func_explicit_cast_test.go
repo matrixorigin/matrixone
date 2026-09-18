@@ -108,6 +108,7 @@ func TestExplicitCastStringIntegerPrefix(t *testing.T) {
 
 func TestExplicitCastStringFloatPrefix(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().MySQLNumericCompatibilityMode = true
 	inputs := []FunctionTestInput{
 		NewFunctionTestInput(types.T_varchar.ToType(), []string{"  -1.5x  ", "12abc"}, nil),
 		NewFunctionTestInput(types.T_float64.ToType(), []float64{}, nil),

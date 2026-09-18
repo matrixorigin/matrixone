@@ -1442,11 +1442,16 @@ func TestPreparedMathStringValueAndPrecisionRoles(t *testing.T) {
 		isNull bool
 		value  any
 	}
-	eval := func(t *testing.T, expr *planpb.Expr, nativeMode ...bool) (evalResult, error) {
+	type executionMode struct {
+		mysqlNumericCompatibility bool
+		matrixOneNative           bool
+	}
+	eval := func(t *testing.T, expr *planpb.Expr, mode ...executionMode) (evalResult, error) {
 		t.Helper()
 		proc := testutil.NewProc(t)
-		if len(nativeMode) > 0 {
-			proc.GetSessionInfo().MatrixOneNativeMode = nativeMode[0]
+		if len(mode) > 0 {
+			proc.GetSessionInfo().MySQLNumericCompatibilityMode = mode[0].mysqlNumericCompatibility
+			proc.GetSessionInfo().MatrixOneNativeMode = mode[0].matrixOneNative
 		}
 		executor, err := colexec.NewExpressionExecutor(proc, expr)
 		require.NoError(t, err)
@@ -1525,7 +1530,7 @@ func TestPreparedMathStringValueAndPrecisionRoles(t *testing.T) {
 				require.Equal(t, int32(types.T_text), precisionCast.GetF().Args[0].Typ.Id,
 					"precision must retain the INT64 cast's text source, not a DOUBLE source")
 				require.Equal(t, precision, precisionCast.GetF().Args[0].GetLit().GetSval())
-				_, evalErr := eval(t, fn)
+				_, evalErr := eval(t, fn, executionMode{mysqlNumericCompatibility: true})
 				require.ErrorContains(t, evalErr, "invalid argument cast to int, bad value "+precision,
 					"precision=%q must keep direct/prepared INT64 error semantics", precision)
 			}
@@ -1541,7 +1546,7 @@ func TestPreparedMathStringValueAndPrecisionRoles(t *testing.T) {
 			fn := findPlanFunctionExpr(filled, name)
 			require.NotNil(t, fn)
 			require.Equal(t, int32(types.T_float64), fn.GetF().Args[0].Typ.Id, fn.String())
-			got, evalErr := eval(t, fn)
+			got, evalErr := eval(t, fn, executionMode{mysqlNumericCompatibility: true})
 			require.NoError(t, evalErr)
 			require.Equal(t, types.T_float64, got.typ)
 			require.False(t, got.isNull)
@@ -1702,7 +1707,7 @@ func TestPreparedMathStringValueAndPrecisionRoles(t *testing.T) {
 				require.Equal(t, int32(1), overload)
 				require.Equal(t, int32(types.T_float64), innerExpr.Typ.Id)
 			}
-			got, evalErr := eval(t, fn)
+			got, evalErr := eval(t, fn, executionMode{mysqlNumericCompatibility: true})
 			require.NoError(t, evalErr)
 			require.False(t, got.isNull)
 			require.Equal(t, types.T_decimal64, got.typ)
@@ -1723,7 +1728,7 @@ func TestPreparedMathStringValueAndPrecisionRoles(t *testing.T) {
 			fn := findPlanFunctionExpr(filled, "mod")
 			require.NotNil(t, fn)
 			require.Equal(t, int32(types.T_float64), fn.Typ.Id, fn.String())
-			got, evalErr := eval(t, fn)
+			got, evalErr := eval(t, fn, executionMode{mysqlNumericCompatibility: true})
 			require.NoError(t, evalErr)
 			require.Equal(t, types.T_float64, got.typ)
 			require.False(t, got.isNull)
@@ -1748,7 +1753,7 @@ func TestPreparedMathStringValueAndPrecisionRoles(t *testing.T) {
 		inner := precisionCast.GetF().Args[0]
 		require.Equal(t, "abs", inner.GetF().Func.GetObjName())
 		require.Equal(t, int32(types.T_float64), inner.Typ.Id)
-		got, evalErr := eval(t, truncate)
+		got, evalErr := eval(t, truncate, executionMode{mysqlNumericCompatibility: true})
 		require.NoError(t, evalErr)
 		require.Equal(t, types.T_decimal64, got.typ)
 		require.Equal(t, "12.34", got.value)
@@ -1776,7 +1781,7 @@ func TestPreparedMathStringValueAndPrecisionRoles(t *testing.T) {
 		require.Equal(t, int32(types.T_int64), boundPrecision.Typ.Id)
 		require.Equal(t, int32(types.T_text), boundPrecision.GetF().Args[0].Typ.Id,
 			"shared value/control plan was rebound as: %s", boundRound.String())
-		_, evalErr := eval(t, boundRound)
+		_, evalErr := eval(t, boundRound, executionMode{mysqlNumericCompatibility: true})
 		require.ErrorContains(t, evalErr, "invalid argument cast to int, bad value 1.5tail")
 	})
 	t.Run("same prepared template rechecks incomplete token after mode flip", func(t *testing.T) {
@@ -1793,12 +1798,19 @@ func TestPreparedMathStringValueAndPrecisionRoles(t *testing.T) {
 		abs := findPlanFunctionExpr(filled, "abs")
 		require.NotNil(t, abs)
 
-		mysqlValue, err := eval(t, abs, false)
+		_, err = eval(t, abs)
+		require.Error(t, err, "the unset compatibility mode must stay strict")
+		mysqlValue, err := eval(t, abs, executionMode{mysqlNumericCompatibility: true})
 		require.NoError(t, err)
 		require.Equal(t, float64(1.5), mysqlValue.value)
-		_, err = eval(t, abs, true)
-		require.Error(t, err, "native mode must reject an incomplete numeric token")
-		mysqlValue, err = eval(t, abs, false)
+		_, err = eval(t, abs)
+		require.Error(t, err, "switching back to default strict mode must not reuse the prefix result")
+		_, err = eval(t, abs, executionMode{
+			mysqlNumericCompatibility: true,
+			matrixOneNative:           true,
+		})
+		require.Error(t, err, "MATRIXONE_NATIVE must reject an incomplete numeric token")
+		mysqlValue, err = eval(t, abs, executionMode{mysqlNumericCompatibility: true})
 		require.NoError(t, err, "the same prepared template must work again in MySQL mode")
 		require.Equal(t, float64(1.5), mysqlValue.value)
 	})

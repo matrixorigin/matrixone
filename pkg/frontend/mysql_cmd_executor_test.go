@@ -4159,6 +4159,7 @@ func TestRefreshStatementScopedSessionInfo(t *testing.T) {
 	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "ANSI_QUOTES"))
 	refreshStatementScopedSessionInfo(ses, proc)
 	require.False(t, proc.Base.SessionInfo.MatrixOneNativeMode)
+	require.False(t, proc.Base.SessionInfo.MySQLNumericCompatibilityMode)
 	require.Equal(t, uint64(1), proc.Base.SessionInfo.AutoIncrementIncrement)
 	require.Equal(t, uint64(1), proc.Base.SessionInfo.AutoIncrementOffset)
 
@@ -4168,16 +4169,17 @@ func TestRefreshStatementScopedSessionInfo(t *testing.T) {
 	require.Equal(t, uint64(7), proc.Base.SessionInfo.AutoIncrementIncrement)
 	require.Equal(t, uint64(4), proc.Base.SessionInfo.AutoIncrementOffset)
 
-	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "ANSI_QUOTES,MATRIXONE_NATIVE"))
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "ANSI_QUOTES,MATRIXONE_NATIVE,MYSQL_NUMERIC_COMPATIBILITY"))
 	refreshStatementScopedSessionInfo(ses, proc)
 	require.True(t, proc.Base.SessionInfo.MatrixOneNativeMode)
+	require.True(t, proc.Base.SessionInfo.MySQLNumericCompatibilityMode)
 }
 
 func TestBackgroundSessionInheritsUpstreamSQLMode(t *testing.T) {
 	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
 	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
-	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "PIPES_AS_CONCAT,MATRIXONE_NATIVE"))
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "PIPES_AS_CONCAT,MATRIXONE_NATIVE,MYSQL_NUMERIC_COMPATIBILITY"))
 
 	backSes := &backSession{}
 	backSes.upstream = ses
@@ -4189,6 +4191,7 @@ func TestBackgroundSessionInheritsUpstreamSQLMode(t *testing.T) {
 
 	refreshBackgroundStatementScopedSessionInfo(backSes, &UserInput{}, proc)
 	require.True(t, proc.Base.SessionInfo.MatrixOneNativeMode)
+	require.True(t, proc.Base.SessionInfo.MySQLNumericCompatibilityMode)
 }
 
 func TestBackgroundExplicitSQLModeOverridesUpstream(t *testing.T) {
@@ -4206,16 +4209,33 @@ func TestBackgroundExplicitSQLModeOverridesUpstream(t *testing.T) {
 		parserSQLMode:    "ANSI_QUOTES",
 	}, proc)
 	require.False(t, proc.Base.SessionInfo.MatrixOneNativeMode)
+	require.False(t, proc.Base.SessionInfo.MySQLNumericCompatibilityMode)
 
 	refreshBackgroundStatementScopedSessionInfo(backSes, &UserInput{
 		useParserSQLMode: true,
-		parserSQLMode:    "ANSI_QUOTES,MATRIXONE_NATIVE",
+		parserSQLMode:    "ANSI_QUOTES,MATRIXONE_NATIVE,MYSQL_NUMERIC_COMPATIBILITY",
 	}, proc)
 	require.True(t, proc.Base.SessionInfo.MatrixOneNativeMode)
+	require.True(t, proc.Base.SessionInfo.MySQLNumericCompatibilityMode)
+
+	refreshBackgroundStatementScopedSessionInfo(backSes, &UserInput{
+		useParserSQLMode: true,
+		parserSQLMode:    "MYSQL_NUMERIC_COMPATIBILITY",
+	}, proc)
+	require.False(t, proc.Base.SessionInfo.MatrixOneNativeMode)
+	require.True(t, proc.Base.SessionInfo.MySQLNumericCompatibilityMode)
+
+	refreshBackgroundStatementScopedSessionInfo(backSes, &UserInput{
+		useParserSQLMode: true,
+		parserSQLMode:    "",
+	}, proc)
+	require.False(t, proc.Base.SessionInfo.MatrixOneNativeMode)
+	require.False(t, proc.Base.SessionInfo.MySQLNumericCompatibilityMode)
 
 	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", ""))
 	refreshBackgroundStatementScopedSessionInfo(backSes, &UserInput{}, proc)
 	require.False(t, proc.Base.SessionInfo.MatrixOneNativeMode)
+	require.False(t, proc.Base.SessionInfo.MySQLNumericCompatibilityMode)
 }
 
 func TestNestedBackgroundSessionInheritsEffectiveSQLMode(t *testing.T) {
@@ -4224,14 +4244,17 @@ func TestNestedBackgroundSessionInheritsEffectiveSQLMode(t *testing.T) {
 	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
 
 	tests := []struct {
-		name         string
-		sessionMode  string
-		explicitMode *string
-		wantNative   bool
+		name                          string
+		sessionMode                   string
+		explicitMode                  *string
+		wantNative                    bool
+		wantMySQLNumericCompatibility bool
 	}{
 		{name: "upstream_native", sessionMode: "MATRIXONE_NATIVE", wantNative: true},
+		{name: "upstream_mysql_numeric_compatibility", sessionMode: "MYSQL_NUMERIC_COMPATIBILITY", wantMySQLNumericCompatibility: true},
 		{name: "explicit_native", sessionMode: "", explicitMode: ptrTo("MATRIXONE_NATIVE"), wantNative: true},
-		{name: "explicit_default", sessionMode: "MATRIXONE_NATIVE", explicitMode: ptrTo(""), wantNative: false},
+		{name: "explicit_mysql_numeric_compatibility", sessionMode: "MATRIXONE_NATIVE", explicitMode: ptrTo("MYSQL_NUMERIC_COMPATIBILITY"), wantMySQLNumericCompatibility: true},
+		{name: "explicit_default", sessionMode: "MATRIXONE_NATIVE,MYSQL_NUMERIC_COMPATIBILITY", explicitMode: ptrTo(""), wantNative: false},
 	}
 
 	for _, tc := range tests {
@@ -4250,18 +4273,26 @@ func TestNestedBackgroundSessionInheritsEffectiveSQLMode(t *testing.T) {
 			parentProc := &process.Process{Base: &process.BaseProcess{}}
 			refreshBackgroundStatementScopedSessionInfo(parent, input, parentProc)
 			require.Equal(t, tc.wantNative, parentProc.Base.SessionInfo.MatrixOneNativeMode)
+			require.Equal(t, tc.wantMySQLNumericCompatibility, parentProc.Base.SessionInfo.MySQLNumericCompatibilityMode)
 
 			child := (&backSession{}).initFeSes(parent, nil, "", nil)
 			defer child.Close()
 			childProc := &process.Process{Base: &process.BaseProcess{}}
 			refreshBackgroundStatementScopedSessionInfo(child, &UserInput{}, childProc)
 			require.Equal(t, tc.wantNative, childProc.Base.SessionInfo.MatrixOneNativeMode)
+			require.Equal(t, tc.wantMySQLNumericCompatibility, childProc.Base.SessionInfo.MySQLNumericCompatibilityMode)
 
 			nextMode := "MATRIXONE_NATIVE"
 			nextNative := true
+			nextMySQLNumericCompatibility := false
 			if tc.wantNative {
 				nextMode = ""
 				nextNative = false
+			}
+			if tc.wantMySQLNumericCompatibility {
+				nextMode = "MATRIXONE_NATIVE,MYSQL_NUMERIC_COMPATIBILITY"
+				nextNative = true
+				nextMySQLNumericCompatibility = true
 			}
 			refreshBackgroundStatementScopedSessionInfo(parent, &UserInput{
 				useParserSQLMode: true,
@@ -4269,6 +4300,7 @@ func TestNestedBackgroundSessionInheritsEffectiveSQLMode(t *testing.T) {
 			}, parentProc)
 			refreshBackgroundStatementScopedSessionInfo(child, &UserInput{}, childProc)
 			require.Equal(t, nextNative, childProc.Base.SessionInfo.MatrixOneNativeMode)
+			require.Equal(t, nextMySQLNumericCompatibility, childProc.Base.SessionInfo.MySQLNumericCompatibilityMode)
 		})
 	}
 }

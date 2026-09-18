@@ -2884,23 +2884,24 @@ func createPrepareStmtInSession(
 	fixedIntegerParamPositions, hasPaginationParams, hasLagLeadParams :=
 		preparedFixedIntegerParamPositions(prepareControl.Plan)
 	prepareStmt := &PrepareStmt{
-		groupConcatMaxLenFloor: groupConcatFloor,
-		Name:                   preparePlan.GetDcl().GetPrepare().GetName(),
-		Sql:                    originSQL,
-		compile:                comp,
-		PreparePlan:            preparePlan,
-		PrepareStmt:            saveStmt,
-		NativeMode:             owner.sqlModeHasMatrixOneNative(),
-		OnlyFullGroupBy:        owner.sqlModeHasOnlyFullGroupBy(),
-		BoolSumAvg:             owner.sqlModeHasEnableBoolSumAvg(),
-		NoUnsignedSubtraction:  owner.sqlModeHasNoUnsignedSubtraction(),
-		sqlModeFlagsSet:        true,
-		remapDb:                maps.Clone(execCtx.remapDb),
-		defaultDatabase:        executionSes.GetTxnCompileCtx().GetDatabase(),
-		tempTableVersion:       owner.GetTempTableVersion(),
-		ddlVersion:             owner.getDDLVersion(),
-		cloneSQL:               cloneSQL,
-		protocolVersion:        protocolVersion,
+		groupConcatMaxLenFloor:        groupConcatFloor,
+		Name:                          preparePlan.GetDcl().GetPrepare().GetName(),
+		Sql:                           originSQL,
+		compile:                       comp,
+		PreparePlan:                   preparePlan,
+		PrepareStmt:                   saveStmt,
+		NativeMode:                    owner.sqlModeHasMatrixOneNative(),
+		MySQLNumericCompatibilityMode: owner.sqlModeHasMySQLNumericCompatibility(),
+		OnlyFullGroupBy:               owner.sqlModeHasOnlyFullGroupBy(),
+		BoolSumAvg:                    owner.sqlModeHasEnableBoolSumAvg(),
+		NoUnsignedSubtraction:         owner.sqlModeHasNoUnsignedSubtraction(),
+		sqlModeFlagsSet:               true,
+		remapDb:                       maps.Clone(execCtx.remapDb),
+		defaultDatabase:               executionSes.GetTxnCompileCtx().GetDatabase(),
+		tempTableVersion:              owner.GetTempTableVersion(),
+		ddlVersion:                    owner.getDDLVersion(),
+		cloneSQL:                      cloneSQL,
+		protocolVersion:               protocolVersion,
 		numericOverloadParamPositions: plan2.PreparedPlanNumericFallbackParamPositions(
 			prepareControl.Plan),
 		bitCountOverloadParamPositions: plan2.PreparedPlanBitCountFallbackParamPositions(
@@ -4417,14 +4418,19 @@ func resolvePositiveSessionUint64(ses FeSession, name string, previous uint64) u
 }
 
 func refreshStatementScopedSessionInfoWithSQLMode(sqlMode string, proc *process.Process) {
-	refreshStatementScopedSessionInfoWithNativeMode(mysql.HasMatrixOneNativeSQLMode(sqlMode), proc)
+	refreshStatementScopedSessionInfoWithModes(
+		mysql.HasMatrixOneNativeSQLMode(sqlMode),
+		mysql.HasMySQLNumericCompatibilitySQLMode(sqlMode),
+		proc,
+	)
 }
 
-func refreshStatementScopedSessionInfoWithNativeMode(nativeMode bool, proc *process.Process) {
+func refreshStatementScopedSessionInfoWithModes(nativeMode, mysqlNumericCompatibilityMode bool, proc *process.Process) {
 	if proc == nil || proc.Base == nil {
 		return
 	}
 	proc.Base.SessionInfo.MatrixOneNativeMode = nativeMode
+	proc.Base.SessionInfo.MySQLNumericCompatibilityMode = mysqlNumericCompatibilityMode
 }
 
 func parserLowerCaseTableNames(ses FeSession) int64 {

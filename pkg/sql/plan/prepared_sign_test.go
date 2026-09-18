@@ -149,6 +149,7 @@ func TestPreparedEltRebindsRuntimeNumericDomain(t *testing.T) {
 
 			proc := testutil.NewProc(t)
 			defer proc.Free()
+			proc.GetSessionInfo().MySQLNumericCompatibilityMode = true
 			executor, err := colexec.NewExpressionExecutor(proc, bound)
 			require.NoError(t, err)
 			defer executor.Free()
@@ -225,6 +226,7 @@ func TestPreparedEltRebindsNumericTextWithStringRuntimeMetadata(t *testing.T) {
 
 			proc := testutil.NewProc(t)
 			defer proc.Free()
+			proc.GetSessionInfo().MySQLNumericCompatibilityMode = true
 			executor, err := colexec.NewExpressionExecutor(proc, fn)
 			require.NoError(t, err)
 			defer executor.Free()

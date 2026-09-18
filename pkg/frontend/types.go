@@ -296,18 +296,18 @@ func (ec *engineColumnInfo) GetType() types.T {
 type PrepareStmt struct {
 	// Monotonic high-water mark for GROUP_CONCAT across this prepared lifetime,
 	// including executions whose AP or specialization path discards the compile.
-	groupConcatMaxLenFloor uint64
-	Name                   string
-	Sql                    string
-	PreparePlan            *plan.Plan
-	PrepareStmt            tree.Statement
-	NativeMode             bool
-	OnlyFullGroupBy        bool
-	BoolSumAvg             bool
-	NoUnsignedSubtraction  bool
-	// sqlModeFlagsSet distinguishes captured disabled modes (OnlyFullGroupBy,
-	// BoolSumAvg) from legacy or minimal in-memory fixtures that predate these
-	// plan dependencies.
+	groupConcatMaxLenFloor        uint64
+	Name                          string
+	Sql                           string
+	PreparePlan                   *plan.Plan
+	PrepareStmt                   tree.Statement
+	NativeMode                    bool
+	MySQLNumericCompatibilityMode bool
+	OnlyFullGroupBy               bool
+	BoolSumAvg                    bool
+	NoUnsignedSubtraction         bool
+	// sqlModeFlagsSet distinguishes captured disabled modes from legacy or
+	// minimal in-memory fixtures that predate these plan dependencies.
 	sqlModeFlagsSet bool
 	ParamTypes      []byte
 	ColDefData      [][]byte
@@ -1839,6 +1839,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	groupConcatMaxLenOriginalValue := val
 	groupConcatMaxLenWasTruncated := false
 	oldMatrixOneNative := false
+	oldMySQLNumericCompatibility := false
 	oldOnlyFullGroupBy := false
 	oldBoolSumAvg := false
 	oldHighNotPrecedence := false
@@ -1847,6 +1848,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	oldIgnoreSpace := false
 	if name == "sql_mode" {
 		oldMatrixOneNative = ses.sqlModeHasMatrixOneNative()
+		oldMySQLNumericCompatibility = ses.sqlModeHasMySQLNumericCompatibility()
 		oldOnlyFullGroupBy = ses.sqlModeHasOnlyFullGroupBy()
 		oldBoolSumAvg = ses.sqlModeHasEnableBoolSumAvg()
 		oldHighNotPrecedence = ses.sqlModeHasHighNotPrecedence()
@@ -1915,7 +1917,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		ses.sesSysVars.Set(canonicalName, val)
 	}
 	if err == nil && name == "sql_mode" {
-		ses.updateSqlModeCaches(oldMatrixOneNative, oldOnlyFullGroupBy, oldBoolSumAvg, oldHighNotPrecedence, oldNoUnsignedSubtraction, oldParserFlags, oldIgnoreSpace, val)
+		ses.updateSqlModeCaches(oldMatrixOneNative, oldMySQLNumericCompatibility, oldOnlyFullGroupBy, oldBoolSumAvg, oldHighNotPrecedence, oldNoUnsignedSubtraction, oldParserFlags, oldIgnoreSpace, val)
 	}
 	if err == nil && setTxnIsolation {
 		if txnHandler := ses.GetTxnHandler(); txnHandler != nil {

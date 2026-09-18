@@ -400,21 +400,54 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 			"select @@sql_mode").Scan(&defaultSQLMode))
 		t.Logf("fresh COM_STMT session default @@sql_mode: %q", defaultSQLMode)
 		defaultHasNativeMode := false
+		defaultHasNumericCompatibilityMode := false
 		for _, mode := range strings.Split(defaultSQLMode, ",") {
-			if strings.EqualFold(strings.TrimSpace(mode), "MATRIXONE_NATIVE") {
+			switch strings.ToUpper(strings.TrimSpace(mode)) {
+			case "MATRIXONE_NATIVE":
 				defaultHasNativeMode = true
-				break
+			case "MYSQL_NUMERIC_COMPATIBILITY":
+				defaultHasNumericCompatibilityMode = true
 			}
 		}
 		require.False(t, defaultHasNativeMode,
 			"server-default @@sql_mode must not contain MATRIXONE_NATIVE")
+		require.False(t, defaultHasNumericCompatibilityMode,
+			"server-default @@sql_mode must not enable numeric-prefix compatibility")
 		defaultAbs, err := defaultModeConn.PrepareContext(ctx, "select abs(?)")
 		require.NoError(t, err)
 		defer func() { require.NoError(t, defaultAbs.Close()) }()
 		var defaultPrefixResult float64
+		err = defaultAbs.QueryRowContext(ctx, "1.5tail").Scan(&defaultPrefixResult)
+		require.Error(t, err, "the default COM_STMT session must reject a numeric prefix")
+		require.Contains(t, err.Error(), "invalid numeric string")
+		warningRows, err := defaultModeConn.QueryContext(ctx, "show warnings")
+		require.NoError(t, err)
+		var hasNumericTruncationWarning bool
+		var warningScanErr error
+		for warningRows.Next() {
+			var level, message string
+			var code uint16
+			if warningScanErr = warningRows.Scan(&level, &code, &message); warningScanErr != nil {
+				break
+			}
+			if strings.EqualFold(level, "Warning") && code == 1292 &&
+				strings.Contains(message, "Truncated incorrect DOUBLE value") {
+				hasNumericTruncationWarning = true
+			}
+		}
+		warningRowsErr := warningRows.Err()
+		warningCloseErr := warningRows.Close()
+		require.NoError(t, warningScanErr)
+		require.NoError(t, warningRowsErr)
+		require.NoError(t, warningCloseErr)
+		require.False(t, hasNumericTruncationWarning,
+			"strict conversion errors must not emit MySQL numeric-truncation warnings")
+		_, err = defaultModeConn.ExecContext(ctx,
+			"set session sql_mode = 'MYSQL_NUMERIC_COMPATIBILITY'")
+		require.NoError(t, err)
 		require.NoError(t, defaultAbs.QueryRowContext(ctx, "1.5tail").Scan(&defaultPrefixResult))
 		require.Equal(t, float64(1.5), defaultPrefixResult,
-			"the default MySQL-compatible COM_STMT session must consume the numeric prefix")
+			"the explicit MySQL-compatible COM_STMT session must consume the numeric prefix")
 		var defaultWarningLevel, defaultWarningMessage string
 		var defaultWarningCode uint16
 		require.NoError(t, defaultModeConn.QueryRowContext(ctx, "show warnings").Scan(
@@ -423,7 +456,7 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 		require.Equal(t, uint16(1292), defaultWarningCode)
 		require.Contains(t, defaultWarningMessage, "Truncated incorrect DOUBLE value")
 
-		// A numeric-prefix math source is only correct in MySQL-compatible mode.
+		// A numeric-prefix math source is only correct in explicit MySQL-compatible mode.
 		// Pin the connection so SET sql_mode and COM_STMT_EXECUTE use the same
 		// session, and reuse the statement across mode changes to cover plan cache
 		// invalidation as well as the runtime cast contract.
@@ -445,7 +478,8 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 			prefixModeStmt, err := modeConn.PrepareContext(ctx, "select abs(? + 0)")
 			require.NoError(t, err)
 			defer prefixModeStmt.Close()
-			_, err = modeConn.ExecContext(ctx, "set session sql_mode = 'STRICT_TRANS_TABLES'")
+			_, err = modeConn.ExecContext(ctx,
+				"set session sql_mode = 'STRICT_TRANS_TABLES,MYSQL_NUMERIC_COMPATIBILITY'")
 			require.NoError(t, err)
 			var literalCastResult float64
 			require.NoError(t, modeConn.QueryRowContext(ctx,
@@ -468,16 +502,17 @@ func TestIssue27294PreparedNumericOverloads(t *testing.T) {
 					"LENGTH must preserve the independently nested ABS owner")
 			}()
 			_, err = modeConn.ExecContext(ctx,
-				"set session sql_mode = 'STRICT_TRANS_TABLES,MATRIXONE_NATIVE'")
+				"set session sql_mode = 'STRICT_TRANS_TABLES,MATRIXONE_NATIVE,MYSQL_NUMERIC_COMPATIBILITY'")
 			require.NoError(t, err)
 			err = prefixModeStmt.QueryRowContext(ctx, "1.5tail").Scan(&prefixModeResult)
 			require.Error(t, err,
-				"MATRIXONE_NATIVE must reject trailing text instead of consuming a numeric prefix")
+				"MATRIXONE_NATIVE must win over explicit numeric compatibility and reject trailing text")
 			err = modeConn.QueryRowContext(ctx, "select mod(2, '1.5tail')").Scan(&prefixModeResult)
 			require.Error(t, err,
-				"MATRIXONE_NATIVE must reject trailing text in MOD's right operand")
+				"MATRIXONE_NATIVE must win over explicit numeric compatibility in MOD's right operand")
 			require.Contains(t, err.Error(), `invalid input: "1.5tail" is invalid numeric string`)
-			_, err = modeConn.ExecContext(ctx, "set session sql_mode = 'STRICT_TRANS_TABLES'")
+			_, err = modeConn.ExecContext(ctx,
+				"set session sql_mode = 'STRICT_TRANS_TABLES,MYSQL_NUMERIC_COMPATIBILITY'")
 			require.NoError(t, err)
 			require.NoError(t, prefixModeStmt.QueryRowContext(ctx, "1.5tail").Scan(&prefixModeResult))
 			require.Equal(t, float64(1.5), prefixModeResult,

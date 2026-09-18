@@ -441,6 +441,9 @@ func TestFloor(t *testing.T) {
 
 func TestFloorStrSkipsNullAndMaskedRows(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	// This fixture verifies the compatibility-mode zero result for malformed
+	// unmasked text; strict-default rejection is covered separately.
+	proc.GetSessionInfo().MySQLNumericCompatibilityMode = true
 
 	for _, tc := range []struct {
 		name       string
