@@ -242,6 +242,9 @@ const (
 // vectors to signed INT/ BIGINT or BIGINT UNSIGNED.
 // BoundedConditionalStringDomains requires MORPC v83 because the bounded
 // BINARY/VARBINARY COALESCE overload identities are new to the registry.
+// CRC32JSONTextBytes requires MORPC v86 because CRC32's existing JSON
+// overload keeps its function identity while changing its input contract from
+// the internal binary representation to normalized JSON text bytes.
 type RemoteExpressionFeatures struct {
 	NumericPrefix                   bool
 	JSONComparisonParam             bool
@@ -254,6 +257,7 @@ type RemoteExpressionFeatures struct {
 	StringNumericResultContracts    bool
 	BoundedConditionalStringDomains bool
 	IPFunctionSemantics             bool
+	CRC32JSONTextBytes              bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
@@ -267,7 +271,8 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.RowDependentConvBases ||
 		features.StringNumericResultContracts ||
 		features.BoundedConditionalStringDomains ||
-		features.IPFunctionSemantics
+		features.IPFunctionSemantics ||
+		features.CRC32JSONTextBytes
 }
 
 func isBoundedConditionalStringDomain(fn *Function) bool {
@@ -361,6 +366,9 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			if !features.StringNumericResultContracts && isStringNumericResultContract(current) {
 				features.StringNumericResultContracts = true
 			}
+			if !features.CRC32JSONTextBytes && isCRC32JSONTextBytes(current) {
+				features.CRC32JSONTextBytes = true
+			}
 			if !features.BoundedConditionalStringDomains && isBoundedConditionalStringDomain(fn) {
 				features.BoundedConditionalStringDomains = true
 			}
@@ -371,6 +379,28 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 		})
 	})
 	return
+}
+
+// isCRC32JSONTextBytes identifies the existing CRC32 overload when its input
+// remains JSON at the serialized expression boundary. Plain text/binary CRC32
+// calls retain their historical bytes and are therefore still compatible with
+// pre-v86 workers.
+func isCRC32JSONTextBytes(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || int32(fn.Func.Obj>>32) != crc32FunctionID {
+		return false
+	}
+	return len(fn.Args) > 0 && fn.Args[0] != nil && fn.Args[0].Typ.Id == planJSONTypeID
+}
+
+// RequiresMORPCVersion86CRC32JSONTextBytes reports whether an owner contains
+// the normalized-JSON-text CRC32 contract introduced by the CRC32 JSON fix.
+func RequiresMORPCVersion86CRC32JSONTextBytes(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.CRC32JSONTextBytes, err
 }
 
 // isASCIIInt32Result identifies the new physical result contract of ASCII.

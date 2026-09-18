@@ -2233,6 +2233,12 @@ func validateRemoteExpressionPipelineProtocol(
 			"corrected IP function semantics require MORPC protocol version 72",
 		)
 	}
+	if features.CRC32JSONTextBytes &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion86) {
+		return moerr.NewNotSupportedNoCtx(
+			"CRC32 JSON text-byte semantics require MORPC protocol version 86",
+		)
+	}
 	return nil
 }
 

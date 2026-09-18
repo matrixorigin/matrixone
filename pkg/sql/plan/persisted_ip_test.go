@@ -321,6 +321,45 @@ func TestPersistedBoundedConditionalStringProtocolAdmission(t *testing.T) {
 	require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, expr))
 }
 
+func TestPersistedCRC32JSONProtocolAdmission(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	old, exists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if exists {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	expr := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_uint64)},
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{
+				Obj:     function.EncodeOverloadID(function.CRC32, 0),
+				ObjName: "crc32",
+			},
+			Args: []*planpb.Expr{{
+				Typ:  planpb.Type{Id: int32(types.T_json)},
+				Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
+			}},
+		}},
+	}
+	features, err := planpb.RequiredRemoteExpressionFeatures(expr)
+	require.NoError(t, err)
+	require.True(t, features.CRC32JSONTextBytes)
+	required, err := RequiredPersistedExpressionProtocolVersion(expr)
+	require.NoError(t, err)
+	require.Equal(t, int64(defines.MORPCVersion86), required)
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion85)
+	require.ErrorContains(t,
+		RequirePersistedExpressionProtocol(proc.Ctx, proc, expr), "protocol version 86")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion86)
+	require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, expr))
+}
+
 func checkAdmissionResult(t *testing.T, version int64, err error) {
 	t.Helper()
 	if version < defines.MORPCVersion72 {
