@@ -933,6 +933,7 @@ func (builder *QueryBuilder) appendPerOuterLimitOne(
 		WinSpecList: []*plan.Expr{rowNumberExpr},
 		WindowIdx:   0,
 		BindingTags: []int32{windowTag},
+		SpillMem:    builder.sortSpillMem,
 		FilterList:  []*plan.Expr{rowFilter},
 	}, ctx)
 	builder.internalTopNWindows[windowID] = struct{}{}
@@ -2480,6 +2481,7 @@ func (builder *QueryBuilder) rewriteCorrelatedPagination(
 		WinSpecList: []*plan.Expr{rowNumberExpr},
 		WindowIdx:   0,
 		BindingTags: []int32{windowTag},
+		SpillMem:    builder.sortSpillMem,
 		FilterList:  []*plan.Expr{rowFilter},
 	}, ctx), nil
 }

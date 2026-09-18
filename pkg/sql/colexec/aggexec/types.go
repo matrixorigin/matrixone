@@ -265,6 +265,32 @@ type GroupAggFuncExec interface {
 	SetPrepareParamKind(vector.PrepareParamKind)
 }
 
+// RequiresCanonicalDistinctKeyWire reports whether an aggregate's saved
+// DISTINCT argument state uses the canonical opaque-key wire grammar. Group
+// uses this to keep the marker-bearing format away from pre-compatible peers.
+func RequiresCanonicalDistinctKeyWire(agg AggFuncExec) bool {
+	if configurable, ok := agg.(interface {
+		requiresCanonicalDistinctKeyWire() bool
+	}); ok {
+		return configurable.requiresCanonicalDistinctKeyWire()
+	}
+	return false
+}
+
+// RequiresModernDistinctFloatKeyWire reports whether an aggregate was built
+// with the modern FLOAT DISTINCT membership policy. A producer must not send
+// that state to a pre-v79 peer after a capability downgrade: the legacy peer
+// compares fixed-width float bytes and the modern state may already have
+// collapsed distinct NaN payloads.
+func RequiresModernDistinctFloatKeyWire(agg AggFuncExec) bool {
+	if configurable, ok := agg.(interface {
+		requiresModernDistinctFloatKeyWire() bool
+	}); ok {
+		return configurable.requiresModernDistinctFloatKeyWire()
+	}
+	return false
+}
+
 // AllocationAccountOwner is implemented by aggregate executors whose complete
 // retained state can participate in an operator's physical allocation
 // account.  It is deliberately separate from AggFuncExec: callers that do not
@@ -313,6 +339,11 @@ type ExactCountDistinctSpillState interface {
 	BeginArgumentDrain(replacement *AllocationAccount) (DistinctArgumentDrain, error)
 	RehomeDistinctArgumentState(allocation *AllocationAccount) error
 	InsertDistinctArgument(group int, payload []byte) error
+	InsertDistinctArgumentWithRepresentative(
+		group int,
+		payload []byte,
+		representative []byte,
+	) error
 	AddDistinctCountContribution(
 		group int,
 		count uint64,
@@ -325,6 +356,9 @@ type ExactCountDistinctSpillState interface {
 // the duration of the callback.
 type DistinctArgumentDrain interface {
 	ForEach(func(group int, payload []byte) error) error
+	ForEachWithRepresentative(
+		func(group int, payload, representative []byte) error,
+	) error
 	KeyCount() uint64
 	RetainedBytes() uint64
 	Commit() error

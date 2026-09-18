@@ -1051,7 +1051,7 @@ func combinePlanConjunction(ctx context.Context, exprs []*plan.Expr) (expr *plan
 }
 
 // PreparedPlanHasDeferredNumericFunction reports whether a prepared plan has
-// an ABS or SIGN argument whose overload was deferred until execution. This is
+// a deferred numeric function argument whose overload was deferred until execution. This is
 // kept as a plan-introspection helper for tests and diagnostics; execute-time
 // eligibility is cached on PrepareStmt and must not call this walker for every
 // execution.
@@ -1060,7 +1060,7 @@ func PreparedPlanHasDeferredNumericFunction(preparePlan *Plan) bool {
 }
 
 // PreparedPlanNumericFallbackParamPositions returns the parameter positions
-// whose value supplies a deferred numeric ABS/SIGN argument or a private
+// whose value supplies a deferred numeric function argument or a private
 // integer-argument conversion. The result is
 // plan metadata, not an execute-time decision: callers can compute it once when a
 // prepared plan is built and use it to decide whether runtime values must be
@@ -1071,27 +1071,34 @@ func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
 		return nil
 	}
 	positions := make(map[int32]struct{})
-	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
-		fn := expr.GetF()
-		_ = plan.VisitExprTree(expr, func(nested *plan.Expr) error {
-			if isIntegerArgumentCast(nested) {
-				for pos := range preparedNumericValueParamPositions(nested.GetF().Args[0]) {
-					positions[pos] = struct{}{}
+	query := preparePlan.GetQuery()
+	for nodeID, node := range query.Nodes {
+		if node == nil {
+			continue
+		}
+		_ = plan.VisitExpressionsInOwner(node, func(expr *plan.Expr) error {
+			fn := expr.GetF()
+			_ = plan.VisitExprTree(expr, func(nested *plan.Expr) error {
+				if isIntegerArgumentCast(nested) {
+					collectPreparedIntegerArgumentParamPositions(
+						query, int32(nodeID), nested.GetF().Args[0], positions,
+						make(map[[2]int32]struct{}), nil)
 				}
+				return nil
+			})
+			if fn == nil || fn.Func == nil {
+				return nil
+			}
+			arg, ok := preparedNumericFallbackFunctionArg(fn)
+			if !ok {
+				return nil
+			}
+			for pos := range preparedNumericValueParamPositions(arg) {
+				positions[pos] = struct{}{}
 			}
 			return nil
 		})
-		if fn == nil || fn.Func == nil || !isPreparedNumericFallbackFunction(fn.Func.GetObjName()) || len(fn.Args) != 1 {
-			return nil
-		}
-		if !isPreparedNumericFallbackExpr(fn.Args[0]) {
-			return nil
-		}
-		for pos := range preparedNumericValueParamPositions(fn.Args[0]) {
-			positions[pos] = struct{}{}
-		}
-		return nil
-	})
+	}
 	if len(positions) == 0 {
 		return nil
 	}
@@ -1101,6 +1108,169 @@ func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
 	return result
+}
+
+// preparedNodeOutputContainsParam follows projected columns through derived
+// tables so set-operation reconciliation can see a marker hidden behind ColRef.
+func preparedNodeOutputContainsParam(
+	query *plan.Query, nodeID, colPos int32, visited map[[2]int32]struct{},
+) bool {
+	if query == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) || colPos < 0 {
+		return false
+	}
+	key := [2]int32{nodeID, colPos}
+	if _, seen := visited[key]; seen {
+		return false
+	}
+	visited[key] = struct{}{}
+	node := query.Nodes[nodeID]
+	if node == nil || int(colPos) >= len(node.ProjectList) || node.ProjectList[colPos] == nil {
+		return false
+	}
+	expr := node.ProjectList[colPos]
+	if preparedExprContainsParam(expr) {
+		return true
+	}
+	found := false
+	_ = plan.VisitExprTree(expr, func(nested *plan.Expr) error {
+		col := nested.GetCol()
+		if found || col == nil || col.ColPos < 0 {
+			return nil
+		}
+		if col.RelPos >= 0 && int(col.RelPos) < len(node.Children) &&
+			preparedNodeOutputContainsParam(query, node.Children[col.RelPos], col.ColPos, visited) {
+			found = true
+		} else if len(node.Children) == 1 &&
+			preparedNodeOutputContainsParam(query, node.Children[0], col.ColPos, visited) {
+			found = true
+		}
+		return nil
+	})
+	return found
+}
+
+// collectPreparedIntegerArgumentParamPositions follows only projected ColRef
+// lineage from the private CAST's owning node. After scalar-subquery
+// flattening, the outer CAST sees a ColRef while the contributing ParamRef
+// remains in an inner PROJECT expression. Predicate-only markers stay outside
+// this projection walk and cannot become value candidates.
+func collectPreparedIntegerArgumentParamPositions(
+	query *plan.Query,
+	nodeID int32,
+	expr *plan.Expr,
+	positions map[int32]struct{},
+	visited map[[2]int32]struct{},
+	sources map[*plan.Expr]struct{},
+) {
+	if query == nil || expr == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) {
+		return
+	}
+	for pos := range preparedNumericValueParamPositions(expr) {
+		positions[pos] = struct{}{}
+	}
+	if sources != nil {
+		// This occurrence is itself a value producer for the integer consumer,
+		// even when flattening replaced its marker with a ColRef.
+		sources[expr] = struct{}{}
+	}
+	_ = plan.VisitExprTree(expr, func(nested *plan.Expr) error {
+		if sources != nil && (nested.GetP() != nil || nested.GetF() != nil || nested.GetW() != nil) {
+			// Every expression on this selected-value path belongs to the integer
+			// source contract. Flattening may have replaced its marker with a
+			// ColRef, so marker containment is not a valid admission test here.
+			sources[nested] = struct{}{}
+		}
+		col := nested.GetCol()
+		if col == nil || col.ColPos < 0 {
+			return nil
+		}
+		node := query.Nodes[nodeID]
+		if node == nil {
+			return nil
+		}
+		// Aggregate and window outputs refer to local value producers, not
+		// ordinary child projections. Resolve those producers before walking
+		// their inputs; predicate/order-only parameters are not output values.
+		var producer *plan.Expr
+		if node.NodeType == plan.Node_AGG && col.RelPos == -2 {
+			index := col.ColPos - int32(len(node.GroupBy))
+			if index >= 0 && int(index) < len(node.AggList) {
+				producer = node.AggList[index]
+			}
+		} else if node.NodeType == plan.Node_WINDOW && col.RelPos == -1 && len(node.Children) == 1 {
+			childID := node.Children[0]
+			if childID >= 0 && int(childID) < len(query.Nodes) && query.Nodes[childID] != nil {
+				index := col.ColPos - int32(len(query.Nodes[childID].ProjectList))
+				if index >= 0 && int(index) < len(node.WinSpecList) {
+					producer = node.WinSpecList[index].GetW().GetWindowFunc()
+				}
+			}
+		}
+		if producer != nil {
+			key := [2]int32{nodeID, -col.ColPos - 1}
+			if _, seen := visited[key]; !seen {
+				visited[key] = struct{}{}
+				collectPreparedIntegerArgumentParamPositions(query, nodeID, producer, positions, visited, sources)
+			}
+			return nil
+		}
+		// AGG emits grouping columns as negative-relation ColRefs. Their value
+		// lineage is the corresponding GROUP BY expression on this node, not a
+		// child projection with the same column ordinal.
+		if col.RelPos == -1 && node.NodeType == plan.Node_AGG &&
+			int(col.ColPos) < len(node.GroupBy) && node.GroupBy[col.ColPos] != nil {
+			// Use a distinct key namespace from child projections: the same
+			// (node, column) pair was consumed to arrive at this AGG output.
+			key := [2]int32{nodeID, -col.ColPos - 1}
+			if _, ok := visited[key]; !ok {
+				visited[key] = struct{}{}
+				collectPreparedIntegerArgumentParamPositions(
+					query, nodeID, node.GroupBy[col.ColPos], positions, visited, sources)
+			}
+			return nil
+		}
+		// A set output represents the same ordinal in every branch. RelPos=0
+		// is an output encoding, not proof that only the left input contributes.
+		var children []int32
+		if isPreparedSetOperationNode(node.NodeType) {
+			children = node.Children
+		} else if col.RelPos >= 0 && int(col.RelPos) < len(node.Children) {
+			children = node.Children[col.RelPos : col.RelPos+1]
+		} else if len(node.Children) == 1 {
+			children = node.Children
+		}
+		// SINK_SCAN/recursive CTE inputs are connected by step ordinals rather
+		// than Children. Follow every producer step because each generation can
+		// supply the same output column.
+		for _, sourceStep := range node.SourceStep {
+			if sourceStep >= 0 && int(sourceStep) < len(query.Steps) {
+				children = append(children, query.Steps[sourceStep])
+			}
+		}
+		anchorOwnsDomain := node.NodeType == plan.Node_RECURSIVE_CTE && len(children) > 0
+		if sources != nil && (len(children) == 1 || anchorOwnsDomain) {
+			// A recursive CTE's anchor (the first source step) owns its output
+			// domain; recursive terms must conform to that schema.
+			metadata := ensurePreparedNumericMetadata(nested)
+			metadata.FallbackSource = true
+			metadata.FallbackSourceNodeId = children[0]
+			metadata.FallbackSourceColPos = col.ColPos
+		}
+		for _, childID := range children {
+			key := [2]int32{childID, col.ColPos}
+			if _, ok := visited[key]; ok || childID < 0 || int(childID) >= len(query.Nodes) {
+				continue
+			}
+			child := query.Nodes[childID]
+			if child == nil || int(col.ColPos) >= len(child.ProjectList) || child.ProjectList[col.ColPos] == nil {
+				continue
+			}
+			visited[key] = struct{}{}
+			collectPreparedIntegerArgumentParamPositions(
+				query, childID, child.ProjectList[col.ColPos], positions, visited, sources)
+		}
+		return nil
+	})
 }
 
 // PreparedPlanBitCountFallbackParamPositions returns unresolved BIT_COUNT
@@ -1178,11 +1348,37 @@ func preparedPlanFunctionFallbackParamPositions(preparePlan *Plan, functionName 
 
 func isPreparedNumericFallbackFunction(name string) bool {
 	switch strings.ToLower(name) {
-	case "abs", "sign":
+	case "abs", "sign", "elt":
 		return true
 	default:
 		return false
 	}
+}
+
+func isPreparedNumericFallbackFunctionCall(name string, argCount int) bool {
+	if !isPreparedNumericFallbackFunction(name) {
+		return false
+	}
+	switch strings.ToLower(name) {
+	case "elt":
+		return argCount >= 2
+	case "abs", "sign":
+		return argCount == 1
+	default:
+		return false
+	}
+}
+
+func preparedNumericFallbackFunctionArg(fn *plan.Function) (*plan.Expr, bool) {
+	if fn == nil || fn.Func == nil ||
+		!isPreparedNumericFallbackFunctionCall(fn.Func.GetObjName(), len(fn.Args)) {
+		return nil, false
+	}
+	arg := fn.Args[0]
+	if !isPreparedNumericFallbackExpr(arg) {
+		return nil, false
+	}
+	return arg, true
 }
 
 func isPreparedNumericFallbackExpr(expr *plan.Expr) bool {
@@ -4853,6 +5049,42 @@ func PreparedPlanHasPaginationParams(preparePlan *Plan) bool {
 	return len(preparedPaginationParamPositions(preparePlan)) > 0
 }
 
+// PreparedPlanHasPercentileParams reports whether an aggregate percentile is
+// supplied by a prepared marker. The value is compiled into aggregate
+// configuration rather than read as a row argument, so a plan with such a
+// marker must build a fresh physical aggregate for every EXECUTE value.
+func PreparedPlanHasPercentileParams(preparePlan *Plan) bool {
+	if preparePlan == nil {
+		return false
+	}
+	found := false
+	seen := make(map[*plan.Expr]struct{})
+	_ = plan.VisitExpressionsInOwner(preparePlan, func(root *plan.Expr) error {
+		if found {
+			return nil
+		}
+		return plan.VisitExprTree(root, func(expr *plan.Expr) error {
+			if found || expr == nil {
+				return nil
+			}
+			if _, ok := seen[expr]; ok {
+				return nil
+			}
+			seen[expr] = struct{}{}
+			fn := expr.GetF()
+			if fn == nil || fn.Func == nil || len(fn.Args) != 2 {
+				return nil
+			}
+			switch strings.ToLower(fn.Func.ObjName) {
+			case NameApproxPercentile, NamePercentileCont, NamePercentileDisc:
+				found = preparedExprContainsParam(fn.Args[1])
+			}
+			return nil
+		})
+	})
+	return found
+}
+
 // PreparedPlanHasDirectResultParams reports whether a visible SELECT result
 // column is ultimately sourced from a parameter marker.
 func PreparedPlanHasDirectResultParams(preparePlan *Plan) bool {
@@ -7093,9 +7325,16 @@ func snapshotPreparedSetOperationInputTypes(
 				if source == nil {
 					continue
 				}
+				typ := source.Typ
+				metadata := source.GetPreparedNumeric()
+				if metadata.GetProvisionalResultPeer() && metadata.GetProvisionalResultPeerTypeId() != 0 {
+					typ.Id = metadata.ProvisionalResultPeerTypeId
+					typ.Width = metadata.ProvisionalResultPeerWidth
+					typ.Scale = metadata.ProvisionalResultPeerScale
+				}
 				inputTypes[preparedSetOperationInputKey{
 					node: node, branchIdx: branchIdx, colPos: colPos,
-				}] = source.Typ
+				}] = typ
 			}
 		}
 	}
@@ -7541,6 +7780,11 @@ func reconcilePreparedSetOperationInputs(
 				sourceExpressions[branchIdx][colPos] = unwrapPreparedSetOperationCoercion(
 					query, node.Children[branchIdx], colPos, currentOutputType, projects[colPos],
 				)
+				source, err := restorePreparedResultPeer(ctx, sourceExpressions[branchIdx][colPos])
+				if err != nil {
+					return false, nil, err
+				}
+				sourceExpressions[branchIdx][colPos] = source
 			}
 			if colPos < len(node.ProjectList) && sourceExpressions[branchIdx][colPos] != nil {
 				originalType, ok := originalInputTypes[preparedSetOperationInputKey{
@@ -7613,6 +7857,13 @@ func reconcilePreparedSetOperationInputs(
 			return false, inputTypeChanged, err
 		}
 		changed = changed || wrapped
+		// A wrapper replaces this branch in node.Children. Refresh the local
+		// view before deriving the set output and before downstream ColRefs are
+		// rebound; otherwise they retain the PREPARE-time common TEXT type.
+		childID := node.Children[branchIdx]
+		if childID >= 0 && int(childID) < len(query.Nodes) && query.Nodes[childID] != nil {
+			childProjectLists[branchIdx] = query.Nodes[childID].ProjectList
+		}
 	}
 	for colPos := range node.ProjectList {
 		if !inputTypeChanged[colPos] {

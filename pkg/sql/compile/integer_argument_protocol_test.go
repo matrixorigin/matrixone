@@ -60,28 +60,142 @@ func TestIntegerArgumentProtocolBoundaries(t *testing.T) {
 			features, err := planpb.RequiredRemoteExpressionFeatures(p)
 			require.NoError(t, err)
 			require.Equal(t, id >= function.IntegerArgumentCastOverload, features.IntegerParameterCoercion)
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion75)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion84)
 			err = validateRemoteExpressionPipelineProtocol(c.proc, p)
 			if !features.IntegerParameterCoercion {
 				require.NoError(t, err)
 				return
 			}
-			require.ErrorContains(t, err, "version 76")
-			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(nil, p), "version 76")
+			require.ErrorContains(t, err, "version 85")
+			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(nil, p), "version 85")
 			data, err := p.Marshal()
 			require.NoError(t, err)
 			_, err = decodeScope(data, c.proc, true, nil)
-			require.ErrorContains(t, err, "version 76")
+			require.ErrorContains(t, err, "version 85")
 			table := &planpb.TableDef{Cols: []*planpb.ColDef{{Default: &planpb.Default{Expr: expr}}}}
-			require.ErrorContains(t, plan2.RequirePersistedExpressionProtocol(c.proc.Ctx, c.proc, table), "version 76")
+			require.ErrorContains(t, plan2.RequirePersistedExpressionProtocol(c.proc.Ctx, c.proc, table), "version 85")
 			// Existing publication hooks must cover the newly shared feature too.
-			require.ErrorContains(t, plan2.RequirePersistedIPFunctionProtocol(c.proc.Ctx, c.proc, table), "version 76")
+			require.ErrorContains(t, plan2.RequirePersistedIPFunctionProtocol(c.proc.Ctx, c.proc, table), "version 85")
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, nil)
-			require.ErrorContains(t, plan2.RequirePersistedExpressionProtocol(nil, c.proc, expr), "version 76")
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion76)
+			require.ErrorContains(t, plan2.RequirePersistedExpressionProtocol(nil, c.proc, expr), "version 85")
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion85)
 			require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 			require.NoError(t, plan2.RequirePersistedExpressionProtocol(c.proc.Ctx, c.proc, table))
 		})
+	}
+}
+
+func TestIntegerArgumentReceiverRejectsInvalidSignatures(t *testing.T) {
+	c, _ := expressionProtocolTestCompile(t)
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion85)
+
+	tests := []struct {
+		name   string
+		mutate func(*planpb.Expr)
+		want   string
+	}{
+		{
+			name: "arity",
+			mutate: func(expr *planpb.Expr) {
+				expr.GetF().Args = expr.GetF().Args[:1]
+			},
+			want: "arity",
+		},
+		{
+			name: "source allowlist",
+			mutate: func(expr *planpb.Expr) {
+				expr.GetF().Args[0].Typ.Id = int32(types.T_date)
+			},
+			want: "source type",
+		},
+		{
+			name: "int128 source",
+			mutate: func(expr *planpb.Expr) {
+				expr.GetF().Args[0].Typ.Id = int32(types.T_int128)
+			},
+			want: "source type",
+		},
+		{
+			name: "uint128 source",
+			mutate: func(expr *planpb.Expr) {
+				expr.GetF().Args[0].Typ.Id = int32(types.T_uint128)
+			},
+			want: "source type",
+		},
+		{
+			name: "target marker",
+			mutate: func(expr *planpb.Expr) {
+				expr.GetF().Args[1].Expr = &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}
+			},
+			want: "target marker",
+		},
+		{
+			name: "target type",
+			mutate: func(expr *planpb.Expr) {
+				expr.GetF().Args[1].Typ.Id = int32(types.T_uint64)
+			},
+			want: "target marker",
+		},
+		{
+			name: "result type",
+			mutate: func(expr *planpb.Expr) {
+				expr.Typ.Id = int32(types.T_date)
+			},
+			want: "result type",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			expr := integerProtocolExpr(function.IntegerArgumentCastOverload)
+			test.mutate(expr)
+			p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
+			_, err := planpb.RequiredRemoteExpressionFeatures(p)
+			require.ErrorContains(t, err, test.want)
+			data, err := p.Marshal()
+			require.NoError(t, err)
+			_, err = decodeScope(data, c.proc, true, nil)
+			require.ErrorContains(t, err, test.want)
+		})
+	}
+
+	// The temporal-only source and forced INT64 target remain valid for overload 8.
+	expr := integerProtocolExpr(function.TemporalIntegerArgumentCastOverload)
+	p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
+	data, err := p.Marshal()
+	require.NoError(t, err)
+	_, err = decodeScope(data, c.proc, true, nil)
+	require.NoError(t, err)
+}
+
+func TestIntegerArgumentAdmissionSourceAllowlistMatchesRegistry(t *testing.T) {
+	registrySupports := func(overload int32, source types.T) bool {
+		standard := source == types.T_any || source.IsInteger() || source.IsFloat() || source.IsDecimal() ||
+			source == types.T_bool || source == types.T_bit || source == types.T_year ||
+			source == types.T_enum || source.IsMySQLString()
+		switch overload {
+		case function.TextIntegerBitsCastOverload:
+			return source == types.T_any || source.IsMySQLString()
+		case function.TemporalIntegerArgumentCastOverload:
+			return standard || source == types.T_date || source == types.T_time ||
+				source == types.T_datetime || source == types.T_timestamp || source == types.T_uuid
+		default:
+			return standard
+		}
+	}
+
+	for overload := function.IntegerArgumentCastOverload; overload <= function.TemporalIntegerArgumentCastOverload; overload++ {
+		for sourceID := int32(0); sourceID <= 255; sourceID++ {
+			expr := integerProtocolExpr(overload)
+			expr.GetF().Args[0].Typ.Id = sourceID
+			p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
+			_, err := planpb.RequiredRemoteExpressionFeatures(p)
+			if registrySupports(overload, types.T(sourceID)) {
+				require.NoErrorf(t, err, "overload=%d source=%d", overload, sourceID)
+			} else {
+				require.Errorf(t, err, "overload=%d source=%d", overload, sourceID)
+			}
+		}
 	}
 }
 
@@ -99,17 +213,17 @@ func TestIntegerArgumentProtocolPlacementAndSend(t *testing.T) {
 		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 		require.NoError(t, c.constrainIntegerArgumentWorkers(qry))
 	}
-	place(defines.MORPCVersion75)
+	place(defines.MORPCVersion84)
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	_, err := encodeRemoteScope(scope, c.proc)
 	require.ErrorContains(t, err, "remote destination")
-	place(defines.MORPCVersion76)
+	place(defines.MORPCVersion85)
 	require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
 	data, err := encodeRemoteScope(scope, c.proc)
 	require.NoError(t, err)
 	require.NotEmpty(t, data)
 	// A downgrade/replacement after successful placement must fail at send time.
-	client.version = defines.MORPCVersion75
+	client.version = defines.MORPCVersion84
 	_, err = encodeRemoteScope(scope, c.proc)
 	require.ErrorContains(t, err, "remote destination")
 	require.Error(t, validateIntegerArgumentDestination(c.proc, nil))

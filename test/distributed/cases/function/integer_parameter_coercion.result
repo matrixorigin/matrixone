@@ -88,4 +88,46 @@ execute integer_source using @v,@v;
 ➤ substring_index(a.b.c.d, ., ?)[12,7,0]  ¦  substring_index(a.b.c.d, ., cast(? as double))[12,7,0]  𝄀
 a.b  ¦  a
 deallocate prepare integer_source;
+prepare nullable_source from 'select substring_index("a.b.c.d",".",(select ? group by 1)),substring_index("a.b.c.d",".",(select ? union all select null limit 1)),substring_index("a.b.c.d",".",coalesce(?,null))';
+set @v=null;
+execute nullable_source using @v,@v,@v;
+➤ substring_index(a.b.c.d, ., (select ? group by 1))[12,7,0]  ¦  substring_index(a.b.c.d, ., (select ? union all select null limit 1))[12,7,0]  ¦  substring_index(a.b.c.d, ., coalesce(?, null))[12,7,0]  𝄀
+null  ¦  null  ¦  null
+set @v=1.5e0;
+execute nullable_source using @v,@v,@v;
+➤ substring_index(a.b.c.d, ., (select ? group by 1))[12,7,0]  ¦  substring_index(a.b.c.d, ., (select ? union all select null limit 1))[12,7,0]  ¦  substring_index(a.b.c.d, ., coalesce(?, null))[12,7,0]  𝄀
+a.b  ¦  a.b  ¦  a.b
+set @v='1.5';
+execute nullable_source using @v,@v,@v;
+➤ substring_index(a.b.c.d, ., (select ? group by 1))[12,7,0]  ¦  substring_index(a.b.c.d, ., (select ? union all select null limit 1))[12,7,0]  ¦  substring_index(a.b.c.d, ., coalesce(?, null))[12,7,0]  𝄀
+a  ¦  a  ¦  a
+set @v=null;
+execute nullable_source using @v,@v,@v;
+➤ substring_index(a.b.c.d, ., (select ? group by 1))[12,7,0]  ¦  substring_index(a.b.c.d, ., (select ? union all select null limit 1))[12,7,0]  ¦  substring_index(a.b.c.d, ., coalesce(?, null))[12,7,0]  𝄀
+null  ¦  null  ¦  null
+deallocate prepare nullable_source;
+prepare bit_source from 'select substring_index("a.b.c.d",".",(select bit_or(?) from sources where id=1)),substring_index("a.b.c.d",".",(select bit_and(?) from sources where id=1)),substring_index("a.b.c.d",".",(select bit_xor(?) from sources where id=1))';
+set @v='1.5';
+execute bit_source using @v,@v,@v;
+➤ substring_index(a.b.c.d, ., (select bit_or(?) from sources where id = 1))[12,7,0]  ¦  substring_index(a.b.c.d, ., (select bit_and(?) from sources where id = 1))[12,7,0]  ¦  substring_index(a.b.c.d, ., (select bit_xor(?) from sources where id = 1))[12,7,0]  𝄀
+a  ¦  a  ¦  a
+set @v=1.5e0;
+execute bit_source using @v,@v,@v;
+➤ substring_index(a.b.c.d, ., (select bit_or(?) from sources where id = 1))[12,7,0]  ¦  substring_index(a.b.c.d, ., (select bit_and(?) from sources where id = 1))[12,7,0]  ¦  substring_index(a.b.c.d, ., (select bit_xor(?) from sources where id = 1))[12,7,0]  𝄀
+a.b  ¦  a.b  ¦  a.b
+deallocate prepare bit_source;
+prepare lineage_source from 'select substring_index("a.b.c.d",".",coalesce((select ? where true),2.5e0)),substring_index("a.b.c.d",".",(select 0e0 where false union all select x from (select ? x) d)),substring_index("a.b.c.d",".",(with recursive r(n) as (select ? union all select n from r where false) select n from r)),substring_index("a.b.c.d",".",bit_count(?))';
+set @v=1.5e0,@bits=2;
+execute lineage_source using @v,@v,@v,@bits;
+➤ substring_index(a.b.c.d, ., coalesce((select ? where true), 2.5e0))[12,7,0]  ¦  substring_index(a.b.c.d, ., (select 0e0 where false union all select x from (select ? as x) as d))[12,7,0]  ¦  substring_index(a.b.c.d, ., (with recursive r(n) as (select ? union all select n from r where false) select n from r))[12,7,0]  ¦  substring_index(a.b.c.d, ., bit_count(?))[12,7,0]  𝄀
+a.b  ¦  a.b  ¦  a.b  ¦  a
+set @v='1.5',@bits='2';
+execute lineage_source using @v,@v,@v,@bits;
+➤ substring_index(a.b.c.d, ., coalesce((select ? where true), 2.5e0))[12,7,0]  ¦  substring_index(a.b.c.d, ., (select 0e0 where false union all select x from (select ? as x) as d))[12,7,0]  ¦  substring_index(a.b.c.d, ., (with recursive r(n) as (select ? union all select n from r where false) select n from r))[12,7,0]  ¦  substring_index(a.b.c.d, ., bit_count(?))[12,7,0]  𝄀
+a  ¦  a  ¦  a  ¦  a.b.c
+set @v=null,@bits=null;
+execute lineage_source using @v,@v,@v,@bits;
+➤ substring_index(a.b.c.d, ., coalesce((select ? where true), 2.5e0))[12,7,0]  ¦  substring_index(a.b.c.d, ., (select 0e0 where false union all select x from (select ? as x) as d))[12,7,0]  ¦  substring_index(a.b.c.d, ., (with recursive r(n) as (select ? union all select n from r where false) select n from r))[12,7,0]  ¦  substring_index(a.b.c.d, ., bit_count(?))[12,7,0]  𝄀
+a.b  ¦  null  ¦  null  ¦  null
+deallocate prepare lineage_source;
 drop database integer_parameter_coercion;

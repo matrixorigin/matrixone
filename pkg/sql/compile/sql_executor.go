@@ -391,6 +391,11 @@ func (exec *txnExecutor) Exec(
 			defines.AlterCopyOpt{}, v)
 	}
 
+	if h := statementOption.OptimizerHints(); h != "" {
+		exec.ctx = context.WithValue(exec.ctx,
+			defines.OptimizerHints{}, h)
+	}
+
 	if logicalId := statementOption.KeepLogicalId(); logicalId != 0 {
 		exec.ctx = context.WithValue(exec.ctx,
 			defines.LogicalIdKey{},

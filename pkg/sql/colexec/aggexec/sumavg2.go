@@ -713,8 +713,8 @@ func (exec *sumAvgExec[T, A]) Flush() (_ []*vector.Vector, retErr error) {
 				} else {
 					sum := T(0)
 					xcnt := 0
-					err := exec.state[i].iter(uint16(j), func(k []byte) error {
-						ptr := util.UnsafeFromBytes[A](k[kAggArgPrefixSz:])
+					err := exec.state[i].iterWithValue(uint16(j), func(k, stored []byte) error {
+						ptr := util.UnsafeFromBytes[A](aggPayloadFromKeyValue(&exec.aggInfo, k, stored))
 						tmp := sum + T(*ptr)
 						if err := exec.ofCheck(sum, T(*ptr), tmp); err != nil {
 							return err
@@ -902,8 +902,8 @@ func (exec *sumAvgExec[T, A]) flushExactAvg() (_ []*vector.Vector, retErr error)
 				}
 				var sum T
 				xcnt := 0
-				err = exec.state[i].iter(uint16(j), func(k []byte) error {
-					ptr := util.UnsafeFromBytes[A](k[kAggArgPrefixSz:])
+				err = exec.state[i].iterWithValue(uint16(j), func(k, stored []byte) error {
+					ptr := util.UnsafeFromBytes[A](aggPayloadFromKeyValue(&exec.aggInfo, k, stored))
 					value := T(*ptr)
 					result := sum + value
 					if err := exec.ofCheck(sum, value, result); err != nil {
@@ -1866,8 +1866,8 @@ func (exec *sumAvgDecExec[A, S]) Flush() (_ []*vector.Vector, retErr error) {
 					var sum S
 					xcnt := 0
 
-					err = exec.state[i].iter(uint16(j), func(k []byte) error {
-						ptr := util.UnsafeFromBytes[A](k[kAggArgPrefixSz:])
+					err = exec.state[i].iterWithValue(uint16(j), func(k, stored []byte) error {
+						ptr := util.UnsafeFromBytes[A](aggPayloadFromKeyValue(&exec.aggInfo, k, stored))
 						val := decimalStateFromArg[A, S](*ptr, exec.aggInfo.argTypes[0].Scale)
 						var fnerr error
 						if sum, fnerr = decimalStateAdd[S](sum, val); fnerr != nil {

@@ -187,6 +187,21 @@ func RequiresMORPCVersion72IPFunctionSemantics(owner any) (bool, error) {
 	return features.IPFunctionSemantics, err
 }
 
+// RequiresMORPCVersion80StringNumericResultContracts reports whether an owner
+// contains one of the corrected fixed-width string numeric result contracts.
+func RequiresMORPCVersion80StringNumericResultContracts(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.StringNumericResultContracts, err
+}
+
+// RequiresMORPCVersion83BoundedConditionalStringDomains reports whether an
+// owner contains a conditional string overload introduced with the bounded
+// CHAR/VARCHAR and BINARY/VARBINARY result-domain contract.
+func RequiresMORPCVersion83BoundedConditionalStringDomains(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.BoundedConditionalStringDomains, err
+}
+
 const (
 	equalFunctionID                  int32 = 0
 	notEqualFunctionID               int32 = 1
@@ -198,6 +213,15 @@ const (
 	convFunctionID                   int32 = 367
 	asciiFunctionID                  int32 = 52
 	asciiInt32ResultTypeID           int32 = 22
+	findInSetFunctionID              int32 = 101
+	lengthUTF8FunctionID             int32 = 125
+	strCmpFunctionID                 int32 = 344
+	uncompressedLengthFunctionID     int32 = 389
+	crc32FunctionID                  int32 = 81
+	coalesceFunctionID               int32 = 74
+	stringNumericInt32ResultTypeID   int32 = 22
+	stringNumericInt64ResultTypeID   int32 = 23
+	stringNumericUint64ResultTypeID  int32 = 28
 )
 
 // RemoteExpressionFeatures is the complete set of versioned expression
@@ -213,17 +237,24 @@ const (
 // RowDependentConvBases requires MORPC v69 for nonconstant or unsigned bases.
 // IPFunctionSemantics requires MORPC v72 because the IP functions change
 // existing overload semantics and add numeric INET_NTOA overloads.
+// StringNumericResultContracts requires MORPC v80 because the listed string
+// numeric functions keep overload IDs while changing their physical result
+// vectors to signed INT/ BIGINT or BIGINT UNSIGNED.
+// BoundedConditionalStringDomains requires MORPC v83 because the bounded
+// BINARY/VARBINARY COALESCE overload identities are new to the registry.
 type RemoteExpressionFeatures struct {
-	NumericPrefix            bool
-	JSONComparisonParam      bool
-	MixedJSONBooleanEquality bool
-	FormatNumericArguments   bool
-	TypedConversionFunctions bool
-	IntegerArithmeticDomains bool
-	RowDependentConvBases    bool
-	ASCIIInt32Result         bool
-	IPFunctionSemantics      bool
-	// IntegerParameterCoercion requires v76 for private CAST 5..8.
+	NumericPrefix                   bool
+	JSONComparisonParam             bool
+	MixedJSONBooleanEquality        bool
+	FormatNumericArguments          bool
+	TypedConversionFunctions        bool
+	IntegerArithmeticDomains        bool
+	RowDependentConvBases           bool
+	ASCIIInt32Result                bool
+	StringNumericResultContracts    bool
+	BoundedConditionalStringDomains bool
+	IPFunctionSemantics             bool
+	// IntegerParameterCoercion requires v85 for private CAST 5..8.
 	IntegerParameterCoercion bool
 }
 
@@ -236,8 +267,19 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.ASCIIInt32Result ||
 		features.IntegerArithmeticDomains ||
 		features.RowDependentConvBases ||
+		features.StringNumericResultContracts ||
+		features.BoundedConditionalStringDomains ||
 		features.IPFunctionSemantics ||
 		features.IntegerParameterCoercion
+}
+
+func isBoundedConditionalStringDomain(fn *Function) bool {
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	functionID := int32(fn.Func.Obj >> 32)
+	overloadID := int32(fn.Func.Obj)
+	return functionID == coalesceFunctionID && (overloadID == 30 || overloadID == 31)
 }
 
 // These IDs are kept numeric deliberately: pkg/pb/plan cannot import the
@@ -255,6 +297,39 @@ const (
 	remoteIPIsIPv6FunctionID       int32 = 397
 	remoteIPIsIPv4CompatFunctionID int32 = 398
 )
+
+func isValidIntegerArgumentSource(id, source int32) bool {
+	standard := source == 0 || source == 10 || isPlanNumericType(source) ||
+		source == 55 || source == 66 || isPlanMySQLStringType(source)
+	if id == 7 {
+		return source == 0 || isPlanMySQLStringType(source)
+	}
+	if id == 8 {
+		return standard || (source >= 50 && source <= 53) || source == 63
+	}
+	return standard
+}
+
+func validateIntegerArgumentCast(expr *Expr, overload int32) error {
+	fn := expr.GetF()
+	if fn == nil || len(fn.Args) != 2 || fn.Args[0] == nil || fn.Args[1] == nil {
+		return moerr.NewNotSupportedNoCtx("invalid private integer parameter CAST arity")
+	}
+	target := int32(23)
+	if overload == 7 || (overload != 8 && expr.Typ.Id == 28) {
+		target = 28
+	}
+	if !isValidIntegerArgumentSource(overload, fn.Args[0].Typ.Id) {
+		return moerr.NewNotSupportedNoCtx("invalid private integer parameter CAST source type")
+	}
+	if fn.Args[1].GetT() == nil || fn.Args[1].Typ.Id != target {
+		return moerr.NewNotSupportedNoCtx("invalid private integer parameter CAST target marker")
+	}
+	if expr.Typ.Id != target {
+		return moerr.NewNotSupportedNoCtx("invalid private integer parameter CAST result type")
+	}
+	return nil
+}
 
 func isRemoteIPFunction(functionID int32) bool {
 	switch functionID {
@@ -284,6 +359,9 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				// CAST is stable function ID 21. Match execution identity, not
 				// names or source types; legacy CAST 0..4 remains executable.
 				if id == 21 && overload >= 5 && overload <= 8 {
+					if err := validateIntegerArgumentCast(current, overload); err != nil {
+						return err
+					}
 					features.IntegerParameterCoercion = true
 				}
 				// PLUS/MINUS/MULTI are stable function IDs 10/11/12.
@@ -324,6 +402,12 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			if !features.ASCIIInt32Result && isASCIIInt32Result(current) {
 				features.ASCIIInt32Result = true
 			}
+			if !features.StringNumericResultContracts && isStringNumericResultContract(current) {
+				features.StringNumericResultContracts = true
+			}
+			if !features.BoundedConditionalStringDomains && isBoundedConditionalStringDomain(fn) {
+				features.BoundedConditionalStringDomains = true
+			}
 			if !features.IPFunctionSemantics && fn != nil && fn.Func != nil {
 				features.IPFunctionSemantics = isRemoteIPFunction(int32(fn.Func.Obj >> 32))
 			}
@@ -347,6 +431,41 @@ func isASCIIInt32Result(expr *Expr) bool {
 	}
 	return int32(fn.Func.Obj>>32) == asciiFunctionID ||
 		strings.EqualFold(fn.Func.GetObjName(), "ascii")
+}
+
+// isStringNumericResultContract identifies the new physical result contracts
+// of the affected string numeric functions. Legacy serialized plans use the
+// same overload IDs with their historical result wrappers, so the result type
+// participates in the feature check just as it does for ASCII.
+func isStringNumericResultContract(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	functionID := int32(fn.Func.Obj >> 32)
+	name := strings.ToLower(fn.Func.GetObjName())
+	switch functionID {
+	case findInSetFunctionID, strCmpFunctionID:
+		return expr.Typ.Id == stringNumericInt32ResultTypeID
+	case lengthUTF8FunctionID, uncompressedLengthFunctionID:
+		return expr.Typ.Id == stringNumericInt64ResultTypeID
+	case crc32FunctionID:
+		return expr.Typ.Id == stringNumericUint64ResultTypeID
+	default:
+		switch name {
+		case "find_in_set", "findinset", "strcmp":
+			return expr.Typ.Id == stringNumericInt32ResultTypeID
+		case "char_length", "character_length", "length_utf8", "uncompressed_length":
+			return expr.Typ.Id == stringNumericInt64ResultTypeID
+		case "crc32":
+			return expr.Typ.Id == stringNumericUint64ResultTypeID
+		default:
+			return false
+		}
+	}
 }
 
 // RequiresMORPCVersion64TypedConversion reports whether an owner contains a

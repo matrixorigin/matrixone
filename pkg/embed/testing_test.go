@@ -141,9 +141,46 @@ func TestBasicClusterUsesShortStartupRetryIntervals(t *testing.T) {
 	assert.Equal(t, 500*time.Millisecond, services[0].cfg.LogService.HAKeeperBootstrapRetryInterval.Duration)
 	assert.Equal(t, 100*time.Millisecond, services[1].cfg.HAKeeperRunningRetryInterval.Duration)
 	assert.Equal(t, 100*time.Millisecond, services[2].cfg.TNShardReadyRetryInterval.Duration)
+	assert.True(t, services[2].cfg.CN.AutoIncrement.EnableAutoIDCache)
 }
 
 type panicTestReporter struct{}
+
+func TestSharedTestClusterCompletedErrorDropsOwnership(t *testing.T) {
+	for _, action := range []string{"close", "reset", "rollback", "init"} {
+		t.Run(action, func(t *testing.T) {
+			failure := errors.New("withdrawal failed")
+			svc := &completedCloseService{closeTrackingService: closeTrackingService{closeErr: failure}, complete: true}
+			op := &operator{state: started}
+			op.reset.svc = svc
+			value := &cluster{state: started, services: []*operator{op}}
+			state := SharedTestCluster{cluster: value}
+			switch action {
+			case "close":
+				require.ErrorIs(t, state.Close(), failure)
+				require.Nil(t, state.cluster)
+				require.True(t, state.closed)
+			case "reset":
+				require.ErrorIs(t, state.CloseIfActive(), failure)
+				require.Nil(t, state.cluster)
+				require.False(t, state.closed)
+			case "rollback":
+				owner, err := cleanupClusterOnError(value, failure)
+				require.Nil(t, owner)
+				require.ErrorIs(t, err, failure)
+			case "init":
+				require.Panics(t, func() {
+					state.Run(panicTestReporter{}, func() (Cluster, error) { return value, failure }, func(Cluster) { t.Fatal("failed init callback") })
+				})
+				require.Nil(t, state.cluster)
+				require.ErrorIs(t, state.err, failure)
+			}
+			require.True(t, value.CloseComplete())
+			require.NoError(t, value.Close())
+			require.Equal(t, int32(1), svc.closeCount.Load())
+		})
+	}
+}
 
 func (panicTestReporter) Helper() {}
 

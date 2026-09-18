@@ -173,8 +173,23 @@ func newCompareFor(typ types.Type, desc, nullsLast, sqlOrder bool) Compare {
 			return newCompare(types.GenericDescCompare[types.MoYear], genericCopy[types.MoYear], nullsLast)
 		}
 		return newCompare(types.GenericAscCompare[types.MoYear], genericCopy[types.MoYear], nullsLast)
+	case types.T_json:
+		if sqlOrder {
+			return &jsonCompare{
+				desc:        desc,
+				nullsLast:   nullsLast,
+				vs:          make([]*vector.Vector, 2),
+				isConstNull: make([]bool, 2),
+			}
+		}
+		return &strCompare{
+			desc:        desc,
+			nullsLast:   nullsLast,
+			vs:          make([]*vector.Vector, 2),
+			isConstNull: make([]bool, 2),
+		}
 	case types.T_char, types.T_varchar, types.T_blob,
-		types.T_binary, types.T_varbinary, types.T_json, types.T_text, types.T_datalink, types.T_geometry:
+		types.T_binary, types.T_varbinary, types.T_text, types.T_datalink, types.T_geometry:
 		return &strCompare{
 			desc:        desc,
 			nullsLast:   nullsLast,

@@ -204,11 +204,37 @@ func (rule *ResetParamRefRule) rebindIntegerArgumentCast(expr *Expr) (*Expr, err
 }
 
 func (rule *ResetParamRefRule) integerArgumentRuntimeSource(source *Expr) (*Expr, error) {
+	value, err := rule.integerArgumentLogicalSource(source)
+	if err != nil || value == nil || types.T(value.Typ.Id) != types.T_any {
+		return value, err
+	}
+	// ANY is useful while reconciling domainless NULL with its siblings, but
+	// projected/grouped values must have a concrete vector representation.
+	typ := types.T_int64.ToType()
+	if value.GetLit().GetIsnull() {
+		value = DeepCopyExpr(value)
+		value.Typ = makePlan2Type(&typ)
+		return value, nil
+	}
+	return appendCastBeforeExpr(rule.ctx, value, makePlan2Type(&typ))
+}
+
+func (rule *ResetParamRefRule) integerArgumentLogicalSource(source *Expr) (*Expr, error) {
+	if refreshed, changed, err := rule.refreshPreparedNumericSource(source); err != nil {
+		return nil, err
+	} else if changed {
+		source = refreshed
+	}
 	if isIntegerArgumentCast(source) {
 		return rule.rebindIntegerArgumentCast(source)
 	}
 	if marker := source.GetP(); marker != nil {
 		if value, ok, err := rule.preparedRuntimeSourceExpr(int(marker.Pos), true); err != nil || ok {
+			if value != nil && value.GetLit().GetIsnull() {
+				// The transport's placeholder type is not a SQL value domain.
+				typ := types.T_any.ToType()
+				value.Typ = makePlan2Type(&typ)
+			}
 			return value, err
 		}
 		if value, ok, err := rule.typedRuntimeParamExpr(int(marker.Pos)); err != nil || ok {
@@ -216,13 +242,112 @@ func (rule *ResetParamRefRule) integerArgumentRuntimeSource(source *Expr) (*Expr
 		}
 	}
 	if fn := source.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" && len(fn.Args) == 2 {
-		value, err := rule.integerArgumentRuntimeSource(fn.Args[0])
+		value, err := rule.integerArgumentLogicalSource(fn.Args[0])
 		if err != nil {
 			return nil, err
 		}
 		return rebindExplicitPreparedCast(rule.ctx, source, []*Expr{value, fn.Args[1]})
 	}
-	return rule.ApplyExpr(source)
+	// The aggregate owns CAST4. Rebuild it from the actual source domain;
+	// ordinary numeric fallback would infer DECIMAL from COM_STMT text.
+	if fn := source.GetF(); fn != nil && fn.Func != nil && isPreparedBitwiseAggregate(fn.Func.ObjName) && len(fn.Args) == 1 {
+		arg := fn.Args[0]
+		if isBitwiseAggregatePrivateCast(arg) {
+			arg = arg.GetF().Args[0]
+		}
+		value, err := rule.integerArgumentRuntimeSource(arg)
+		if err != nil {
+			return nil, err
+		}
+		bound, err := BindFuncExprImplByPlanExpr(rule.ctx, fn.Func.ObjName, []*Expr{value})
+		if err == nil {
+			preserveReboundFunctionMetadata(fn, bound.GetF())
+		}
+		return bound, err
+	}
+	// Reconstruct common-type producers from each actual source, not numeric
+	// spelling inference or an all-parameters-are-text shortcut. In particular,
+	// one numeric marker cannot turn its TEXT sibling into a numeric value.
+	if fn := source.GetF(); fn != nil && fn.Func != nil &&
+		(fn.Func.ObjName == "coalesce" || fn.Func.ObjName == "case" || fn.Func.ObjName == "if" || fn.Func.ObjName == "iff") {
+		args := make([]*Expr, len(fn.Args))
+		for i, arg := range fn.Args {
+			// This common-type producer is itself inside the private integer
+			// conversion, so its binder-owned TEXT/REAL envelope is provisional.
+			// Explicit CAST remains authoritative.
+			arg = stripIntegerSelectionReconciliation(arg)
+			if refreshed, changed, refreshErr := rule.refreshPreparedNumericSource(arg); refreshErr != nil {
+				return nil, refreshErr
+			} else if changed {
+				arg = refreshed
+			}
+			metadata := arg.GetPreparedNumeric()
+			if metadata.GetProvisionalResultPeer() {
+				var err error
+				arg, err = restorePreparedResultPeer(rule.ctx, arg)
+				if err != nil {
+					return nil, err
+				}
+			} else if metadata.GetProvisionalResultCast() && !isExplicitPreparedCast(arg) {
+				if cast := arg.GetF(); cast != nil && len(cast.Args) == 2 {
+					arg = cast.Args[0]
+				}
+			}
+			var err error
+			args[i], err = rule.integerArgumentLogicalSource(arg)
+			if err != nil {
+				return nil, err
+			}
+			// A scalar-subquery ColRef can acquire the provisional peer marker
+			// only after its producer is rebound. Restore that current occurrence
+			// as well as the original PREPARE-time argument above.
+			if args[i].GetPreparedNumeric().GetProvisionalResultPeer() {
+				args[i], err = restorePreparedResultPeer(rule.ctx, args[i])
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+		bound, err := BindFuncExprImplByPlanExpr(rule.ctx, fn.Func.ObjName, args)
+		if err == nil {
+			preserveReboundFunctionMetadata(fn, bound.GetF())
+		}
+		return bound, err
+	}
+	return rule.applyExpr(source)
+}
+
+// restorePreparedResultPeer works exclusively on the current plan occurrence.
+// Provenance records a type, never an executable pre-optimization snapshot:
+// old ColRefs and SubqueryRefs are invalid after remapping and flattening.
+func restorePreparedResultPeer(ctx context.Context, expr *Expr) (*Expr, error) {
+	metadata := expr.GetPreparedNumeric()
+	if !metadata.GetProvisionalResultPeer() {
+		return expr, nil
+	}
+	// T_any == 0 is a recorded domainless NULL, not missing provenance.
+	if metadata.GetProvisionalResultPeerTypeId() == int32(types.T_any) && expr.GetLit().GetIsnull() {
+		value := DeepCopyExpr(expr)
+		typ := types.T_any.ToType()
+		value.Typ = makePlan2Type(&typ)
+		value.PreparedNumeric = nil
+		return value, nil
+	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" &&
+		!fn.SyntaxExplicitCast && len(fn.Args) == 2 && types.T(expr.Typ.Id).IsMySQLString() {
+		_, overload := function.DecodeOverloadID(fn.Func.Obj)
+		if overload == 0 {
+			return fn.Args[0], nil
+		}
+	}
+	if !types.T(expr.Typ.Id).IsMySQLString() {
+		return expr, nil
+	}
+	typ := types.New(types.T(metadata.ProvisionalResultPeerTypeId),
+		metadata.ProvisionalResultPeerWidth, metadata.ProvisionalResultPeerScale)
+	value := DeepCopyExpr(expr)
+	value.PreparedNumeric = nil
+	return appendCastBeforeExpr(ctx, value, makePlan2Type(&typ))
 }
 
 // Only validated integer results are reconciled here. Source REAL/DECIMAL

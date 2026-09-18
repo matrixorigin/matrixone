@@ -3463,19 +3463,30 @@ func (builder *QueryBuilder) canSkipStats() bool {
 }
 
 func (builder *QueryBuilder) hintQueryType() {
-	if builder.optimizerHints != nil && builder.optimizerHints.execType != 0 {
-		for _, node := range builder.qry.GetNodes() {
-			switch builder.optimizerHints.execType {
-			case 1:
-				*node.Stats = *DefaultMinimalStats()
-			case 2:
-				*node.Stats = *DefaultBigStats()
-			case 3:
-				*node.Stats = *DefaultHugeStats()
-			default:
-				panic("wrong optimizer hints for execType!")
-			}
-		}
+	if builder.optimizerHints == nil || builder.optimizerHints.execType == 0 {
 		return
+	}
+	var estimates *plan.Stats
+	switch builder.optimizerHints.execType {
+	case 1:
+		estimates = DefaultMinimalStats()
+	case 2:
+		estimates = DefaultBigStats()
+	case 3:
+		estimates = DefaultHugeStats()
+	default:
+		panic("wrong optimizer hints for execType!")
+	}
+	for _, node := range builder.qry.GetNodes() {
+		// This override runs after runtime-filter generation and placement.
+		// Replace cost estimates only: clearing ForceOneCN can strand a scan
+		// waiting for a current-CN-only filter on a remote CN. HashmapStats
+		// likewise contains already-selected hash/shuffle execution contracts.
+		node.Stats.BlockNum = estimates.BlockNum
+		node.Stats.Cost = estimates.Cost
+		node.Stats.Outcnt = estimates.Outcnt
+		node.Stats.Rowsize = estimates.Rowsize
+		node.Stats.TableCnt = estimates.TableCnt
+		node.Stats.Selectivity = estimates.Selectivity
 	}
 }

@@ -572,15 +572,19 @@ func TestRemoteExactRetryUsesAuthoritativeOwnerSnapshot(t *testing.T) {
 			require.Equal(t, rows[:1], route.all())
 			route.unref()
 
-			waiterDone := make(chan error, len(waiterTxns))
+			type waiterResult struct {
+				txnID []byte
+				err   error
+			}
+			waiterDone := make(chan waiterResult, len(waiterTxns))
 			for idx, txnID := range waiterTxns {
 				row := rows[idx+1]
-				go func() {
+				go func(txnID, row []byte) {
 					_, lockErr := owner.Lock(
 						ctx, table, [][]byte{row}, txnID,
 						newTestRowExclusiveOptions())
-					waiterDone <- lockErr
-				}()
+					waiterDone <- waiterResult{txnID: txnID, err: lockErr}
+				}(txnID, row)
 				waitWaiters(t, owner, table, row, 1)
 			}
 
@@ -602,9 +606,10 @@ func TestRemoteExactRetryUsesAuthoritativeOwnerSnapshot(t *testing.T) {
 			}
 
 			require.NoError(t, origin.Unlock(ctx, holderTxn, timestamp.Timestamp{}))
-			for _, txnID := range waiterTxns {
-				require.NoError(t, <-waiterDone)
-				require.NoError(t, owner.Unlock(ctx, txnID, timestamp.Timestamp{}))
+			for range waiterTxns {
+				result := <-waiterDone
+				require.NoError(t, result.err)
+				require.NoError(t, owner.Unlock(ctx, result.txnID, timestamp.Timestamp{}))
 			}
 		},
 		func(c *Config) {

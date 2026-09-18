@@ -1280,6 +1280,14 @@ func binaryProtocolPrepareParamDomains(
 	case defines.MYSQL_TYPE_DECIMAL, defines.MYSQL_TYPE_NEWDECIMAL:
 		normalized, visible, canonical, valid := plan2.PreparedDecimalRuntimeDomains(value)
 		return normalized, visible, canonical, valid, valid
+	case defines.MYSQL_TYPE_DATE:
+		return types.T_date.ToType(), types.Type{}, "", false, true
+	case defines.MYSQL_TYPE_TIME:
+		return binaryProtocolTemporalType(types.T_time, value), types.Type{}, "", false, true
+	case defines.MYSQL_TYPE_DATETIME:
+		return binaryProtocolTemporalType(types.T_datetime, value), types.Type{}, "", false, true
+	case defines.MYSQL_TYPE_TIMESTAMP:
+		return binaryProtocolTemporalType(types.T_timestamp, value), types.Type{}, "", false, true
 	case defines.MYSQL_TYPE_NULL:
 		// Keep NULL on the prepared plan's original domain.  The next execute
 		// packet may carry a concrete type and will specialize it then.
@@ -1299,6 +1307,13 @@ func binaryProtocolPrepareParamDomains(
 	default:
 		return types.T_text.ToType(), types.Type{}, "", false, true
 	}
+}
+
+func binaryProtocolTemporalType(oid types.T, value string) types.Type {
+	if strings.Contains(value, ".") {
+		return oid.ToTypeWithScale(6)
+	}
+	return oid.ToType()
 }
 
 func invalidBinaryDecimalParameter(ctx context.Context, value any) error {
@@ -1849,10 +1864,22 @@ func initExecuteStmtParamWithResolverInSession(
 	runtimePlan, runtimeSpecialized, runtimePlanApplied := executionPlan, false, false
 	var cachedRuntimeCompile *compile.Compile
 	runtimeCacheKey := ""
+	// Percentile values are consumed while the physical aggregate is built.
+	// Unlike the other runtime-specialization categories, the value is not
+	// retained as a parameter vector in the resulting plan.  Do not let the
+	// one-entry runtime cache install or retrieve a compile for such a plan:
+	// a second EXECUTE with the same parameter domain but a different percentile
+	// would otherwise run the first execution's immutable aggregate config.
+	runtimeCacheEligible := shouldCachePreparedRuntimeSpecialization(preparePlan.Plan) &&
+		shouldCachePreparedRuntimeSpecialization(executionPlan)
+	if !runtimeCacheEligible {
+		prepareStmt.clearRuntimeSpecializationCache()
+	}
 	runtimeCategoryCandidate := runtimeNumericPrefixCandidate || runtimeNumericOverloadCandidate ||
 		runtimeConversionCandidate || stableRuntimeSpecializationCandidate
 	runtimeSpecializationCandidate := runtimeCategoryCandidate || runtimeDirectResultCandidate
 	cacheableRuntimeQuery := executionPlan.GetQuery() != nil && !runtimeTextComparisonSpecialization &&
+		runtimeCacheEligible &&
 		(runtimeDirectResultCandidate ||
 			(runtimeCategoryCandidate && preparedRuntimeCacheSupports(cwft.paramVals)))
 	if cacheableRuntimeQuery {
@@ -3070,6 +3097,12 @@ func shouldCachePrepareCompile(p *plan.Plan) bool {
 	if p == nil {
 		return true
 	}
+	if plan2.PreparedPlanHasPercentileParams(p) {
+		// The percentile marker is evaluated while the physical aggregate is
+		// constructed and becomes immutable executor configuration. Reusing that
+		// compile would reuse an earlier EXECUTE value for the same parameter type.
+		return false
+	}
 	query := p.GetQuery()
 	if query == nil {
 		return true
@@ -3088,13 +3121,22 @@ func shouldCachePrepareCompile(p *plan.Plan) bool {
 	return !query.GetHasForeignKeyAction()
 }
 
+// shouldCachePreparedRuntimeSpecialization is stricter than the ordinary
+// prepared Compile cache. Runtime specialization can cache a physical compile
+// keyed by parameter domains; percentile markers are value-sensitive physical
+// configuration and therefore cannot share that cache even when domains match.
+func shouldCachePreparedRuntimeSpecialization(p *plan.Plan) bool {
+	return !plan2.PreparedPlanHasPercentileParams(p)
+}
+
 func shouldRebuildPreparePlan(schemaChanged bool, p *plan.Plan) bool {
 	if schemaChanged || p == nil {
 		return schemaChanged
 	}
 	query := p.GetQuery()
 	return query != nil && (query.GetHasForeignKeyAction() ||
-		plan2.PreparedPlanDependsOnSubscriptionMetadata(p))
+		plan2.PreparedPlanDependsOnSubscriptionMetadata(p) ||
+		plan2.PreparedPlanDependsOnIndexCoverage(p))
 }
 
 func createCompile(

@@ -106,7 +106,7 @@ func NewQueryBuilder(queryType plan.Query_StatementType, ctx CompilerContext, is
 			mysqlCompatible = !onlyFullGroupBy
 			mysqlFullGroupByCompat = onlyFullGroupBy && !mysql.HasMatrixOneNativeSQLMode(modeStr)
 			boolSumAvgCompat = mysql.HasEnableBoolSumAvgSQLMode(modeStr)
-			noUnsignedSubtraction = mysql.HasSQLMode(modeStr, "NO_UNSIGNED_SUBTRACTION")
+			noUnsignedSubtraction = mysql.HasSQLMode(modeStr, mysql.SQLModeNoUnsignedSubtraction)
 		}
 	}
 
@@ -4195,20 +4195,43 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			} else {
 				targetArgType = argsCastType[0]
 			}
-			if targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_text {
-				hasChar, hasVariableString, hasPromotedChar := false, false, false
+			allCharInputs := len(tmpArgsType) > 0
+			for _, typ := range tmpArgsType {
+				if typ.Oid != types.T_char {
+					allCharInputs = false
+					break
+				}
+			}
+			if allCharInputs &&
+				(targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_text) {
+				// The common-type resolver may promote CHAR-only inputs to
+				// VARCHAR for ordinary value-selecting functions. A set operation
+				// must retain the fixed-width CHAR contract so PAD_CHAR_TO_FULL_LENGTH
+				// pads the visible representative to the common width as well as
+				// comparing the branches in the right equality domain.
+				for _, typ := range tmpArgsType {
+					if typ.Width > targetArgType.Width {
+						targetArgType.Width = typ.Width
+					}
+				}
+				targetArgType.Oid = types.T_char
+			}
+			if targetArgType.Oid == types.T_char ||
+				targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_text {
+				hasChar, hasPromotedChar := false, false
 				for _, typ := range tmpArgsType {
 					switch typ.Oid {
 					case types.T_char:
 						hasChar = true
-					case types.T_varchar, types.T_text:
-						hasVariableString = true
 					}
 				}
 				for branchIdx := range setBranchPadSpaceProvenance {
 					hasPromotedChar = hasPromotedChar || setBranchPadSpaceProvenance[branchIdx][columnIdx]
 				}
-				setOperationKeyRequired[columnIdx] = hasPromotedChar || hasChar && hasVariableString
+				// CHAR equality is PAD SPACE even when every branch remains CHAR.
+				// Keep its physical equality key separate from the visible row so
+				// legacy H8/group hashing cannot compare representation-only padding.
+				setOperationKeyRequired[columnIdx] = hasPromotedChar || hasChar
 			}
 
 			preserveGroupingBinary := distinct && groupingOrderResolve != nil &&
@@ -4231,9 +4254,19 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			}
 			targetType = makePlan2Type(&targetArgType)
 
+			preparedDeferredColumn := false
+			if builder.isPrepareStatement {
+				for _, tmpID := range nodes {
+					if preparedNodeOutputContainsParam(builder.qry, tmpID, int32(columnIdx), make(map[[2]int32]struct{})) {
+						preparedDeferredColumn = true
+						break
+					}
+				}
+			}
 			for idx, tmpID := range nodes {
 				if !argsType[idx].Eq(targetArgType) {
 					node := builder.qry.Nodes[tmpID]
+					source := node.ProjectList[columnIdx]
 					if argsType[idx].Oid == types.T_any || setBranchPureNull[idx][columnIdx] {
 						node.ProjectList[columnIdx].Typ = targetType
 					} else if targetArgType.Oid == types.T_char {
@@ -4248,6 +4281,23 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 						if err != nil {
 							return 0, err
 						}
+					}
+					if preparedDeferredColumn && targetArgType.Oid.IsMySQLString() &&
+						preparedNumericCommonOperandType(argsType[idx].Oid) {
+						attachPreparedRuntimeParamSource(node.ProjectList[columnIdx], DeepCopyExpr(source))
+						metadata := ensurePreparedNumericMetadata(node.ProjectList[columnIdx])
+						metadata.ProvisionalResultPeer = true
+						metadata.ProvisionalResultPeerTypeId = source.Typ.Id
+						metadata.ProvisionalResultPeerWidth = source.Typ.Width
+						metadata.ProvisionalResultPeerScale = source.Typ.Scale
+					}
+				}
+				if preparedDeferredColumn && preparedExprContainsParam(builder.qry.Nodes[tmpID].ProjectList[columnIdx]) {
+					metadata := ensurePreparedNumericMetadata(builder.qry.Nodes[tmpID].ProjectList[columnIdx])
+					metadata.Fallback = true
+					metadata.ParamPos = -1
+					if pos, ok := firstPlanParamPosition(builder.qry.Nodes[tmpID].ProjectList[columnIdx]); ok {
+						metadata.ParamPos = pos
 					}
 				}
 			}
@@ -10250,6 +10300,7 @@ func (builder *QueryBuilder) appendWindowNode(
 			WinSpecList: []*Expr{w},
 			WindowIdx:   int32(i),
 			BindingTags: []int32{ctx.windowTag},
+			SpillMem:    builder.sortSpillMem,
 		}, ctx)
 		builder.userWindowNodes[nodeID] = struct{}{}
 	}
@@ -11300,6 +11351,17 @@ func (builder *QueryBuilder) bindView(
 	if err != nil {
 		return 0, err
 	}
+	if viewData.RequiredProtocolVersion != nil {
+		if *viewData.RequiredProtocolVersion < 0 {
+			return 0, moerr.NewInvalidInput(
+				builder.GetContext(), "invalid persisted view protocol version")
+		}
+		if err = RequirePersistedProtocolVersion(
+			builder.GetContext(), builder.compCtx.GetProcess(),
+			*viewData.RequiredProtocolVersion); err != nil {
+			return 0, err
+		}
+	}
 
 	parserSQLMode := legacyViewParserSQLMode
 	if viewData.SQLMode != nil {
@@ -11414,8 +11476,18 @@ func (builder *QueryBuilder) bindView(
 		builder.compCtx.SetQueryingSubscription(metadataSubscription.Meta)
 		defer builder.compCtx.SetQueryingSubscription(previousSubscription)
 	}
+	viewNodeStart := len(builder.qry.Nodes)
 	nodeID, err = builder.bindSelect(viewStmt.AsSource, viewCtx, false)
 	if err != nil {
+		return
+	}
+	// Views written before the protocol marker was introduced are still
+	// rebound from SQL. Recheck the finalized plan before exposing it to the
+	// outer query; the cluster admission floor protects older CN binaries, and
+	// this local check protects a capable reader with a stale catalog marker.
+	if err = RequirePersistedIPFunctionProtocol(
+		builder.GetContext(), builder.compCtx.GetProcess(),
+		builder.qry.Nodes[viewNodeStart:]); err != nil {
 		return
 	}
 	nodeID, err = builder.appendMySQLSpecialTypeBoundary(
@@ -12458,6 +12530,15 @@ func (builder *QueryBuilder) addBinding(nodeID int32, alias tree.AliasClause, ct
 	if slices.Contains(scanNodes, node.NodeType) {
 		if (node.NodeType == plan.Node_VALUE_SCAN || node.NodeType == plan.Node_SINK_SCAN || node.NodeType == plan.Node_RECURSIVE_SCAN) && node.TableDef == nil {
 			return nil
+		}
+		if node.TableDef != nil {
+			// Defaults, generated columns, CHECK and ON UPDATE expressions are
+			// evaluated locally when a persisted TableDef is rebound. Keep this
+			// final read boundary in addition to the writer-side DDL checks.
+			if err := RequirePersistedIPFunctionProtocol(
+				builder.GetContext(), builder.compCtx.GetProcess(), node.TableDef); err != nil {
+				return err
+			}
 		}
 		if len(alias.Cols) > len(node.TableDef.Cols) {
 			return moerr.NewSyntaxErrorf(builder.GetContext(), "table %q has %d columns available but %d columns specified", alias.Alias, len(node.TableDef.Cols), len(alias.Cols))
