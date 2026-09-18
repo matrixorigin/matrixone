@@ -923,12 +923,12 @@ func TestBindViewRejectsFutureProtocolBeforePreparedBinding(t *testing.T) {
 		if hadPrevious {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion84)
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion85)
 		}
 	})
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion84)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion85)
 
-	required := defines.MORPCVersion85
+	required := defines.MORPCVersion86
 	viewJSON, err := json.Marshal(ViewData{
 		Stmt:                    "create view v as select 1",
 		DefaultDatabase:         "db",
@@ -945,7 +945,7 @@ func TestBindViewRejectsFutureProtocolBeforePreparedBinding(t *testing.T) {
 		"v",
 		nil,
 	)
-	require.ErrorContains(t, err, "protocol version 85")
+	require.ErrorContains(t, err, "protocol version 86")
 }
 
 func TestCollectPrepareViewSchemasRejectsInvalidDependencies(t *testing.T) {

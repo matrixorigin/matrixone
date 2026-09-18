@@ -78,8 +78,8 @@ func TestColumnsUpgradeProtocolGenerations(t *testing.T) {
 }
 
 func TestViewsUpgradeProtocolGenerations(t *testing.T) {
-	for _, peer := range []int64{defines.MORPCVersion84, defines.MORPCVersion85} {
-		t.Run(fmt.Sprintf("views-gate-%d-peer-%d", defines.MORPCVersion85, peer), func(t *testing.T) {
+	for _, peer := range []int64{defines.MORPCVersion85, defines.MORPCVersion86} {
+		t.Run(fmt.Sprintf("views-gate-%d-peer-%d", defines.MORPCVersion86, peer), func(t *testing.T) {
 			var executed []string
 			txn := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
 				if sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')" {
@@ -93,8 +93,8 @@ func TestViewsUpgradeProtocolGenerations(t *testing.T) {
 			entry.CheckFunc = func(executor.TxnExecutor, uint32) (bool, error) { return false, nil }
 
 			err := entry.Upgrade(txn, 0)
-			if peer < defines.MORPCVersion85 {
-				require.ErrorContains(t, err, "requires all CNs to support protocol version 85")
+			if peer < defines.MORPCVersion86 {
+				require.ErrorContains(t, err, "requires all CNs to support protocol version 86")
 				require.Empty(t, executed, "an old peer must block before DROP/DELETE or DDL")
 			} else {
 				require.NoError(t, err)
@@ -245,7 +245,7 @@ func TestUpgradeEntries(t *testing.T) {
 	for _, entry := range tenantUpgEntries {
 		ddl := entry.UpgSql + entry.PostSql
 		if entry.TableName == "VIEWS" {
-			require.Equal(t, int64(defines.MORPCVersion85), entry.RequiredProtocolVersion,
+			require.Equal(t, int64(defines.MORPCVersion86), entry.RequiredProtocolVersion,
 				"view upgrade %s must wait for mo_view_definition", entry.TableName)
 		} else if strings.Contains(ddl, "mo_subscription_tables()") ||
 			strings.Contains(ddl, "mo_subscription_columns()") {
@@ -289,7 +289,7 @@ func TestUpgradeEntries(t *testing.T) {
 		if view.name == "TABLES" || view.name == "COLUMNS" {
 			expectedProtocol = defines.MORPCVersion46
 		} else if view.name == "VIEWS" {
-			expectedProtocol = defines.MORPCVersion85
+			expectedProtocol = defines.MORPCVersion86
 		}
 		require.Equal(t, expectedProtocol, entry.RequiredProtocolVersion)
 		require.Contains(t, strings.ToLower(entry.PreSql),
