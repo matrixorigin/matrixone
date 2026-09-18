@@ -76,3 +76,53 @@ This change does not add runners, shard the required suite, weaken race or
 coverage gates, remove test-cache invalidation, change `GOMAXPROCS` or test
 internal parallelism, enable the previously rejected light/issues overlap, or
 repeat lifecycle/linker optimizations already merged in the related series.
+
+## Follow-up: remove work before changing concurrency
+
+The latest completed run, `35362550784` / job `105657722286`, took 66m33s
+overall (64m19s for the UT step). The light-to-heavy critical span was 61m27s:
+light 25m38s, HNSW 31s, issues 12m18s, embedded 16m18s, and the remaining
+engine/heavy tail 6m42s. Its 13.33 GiB peak and zero cgroup OOM events do not
+establish a wall-time improvement. All three recent measurements used light
+parallelism three, so they are not a controlled three-versus-six comparison.
+The 13m22s sum of admission waits overlaps active fixture work; removing that
+sum from elapsed time would double-count the same runner interval.
+
+This follow-up therefore changes two local test fixtures, not the scheduler:
+
+- `TestIssue25408PreparedPaginationParameters` assigns each expression/protocol
+  write an unindexed literal `case_id`. All 43 expressions, both protocols,
+  read/write modes, parameter values, NULL/value assertions, and prepared
+  statement lifetimes stay intact. Reading the case's row removes 86 unrelated
+  whole-table reset transactions. At most 86 rows survive until the existing
+  deferred database cleanup; an assertion failure still closes statements and
+  the pinned connection before dropping the database. IDs come from the table
+  index, not execution order, so filtered subtest selection remains valid.
+- `TestPartition` builds its six-element BIT vector directly, as its neighboring
+  cases already do. It no longer links process/service helpers just for one
+  vector constructor. The values, vector type, NULL mutations, and assertions
+  are unchanged; the vector is freed by its creating test on every exit.
+
+These are focused test-maintenance changes, not a new fixture framework or
+production refactor. No BVT is added because no production behavior changes;
+the existing real two-CN SQL test remains the protocol validation boundary.
+
+Local evidence (Go 1.26.4, Darwin/arm64, race, `matrixone_test`, native artifacts
+built in this worktree; baseline `2f6dc33c3c`):
+
+| Measurement | Before | After |
+|---|---:|---:|
+| Integer-domain subtest, two executions in one process | 10.11s / 10.91s | 2.42s / 2.39s |
+| Complete pagination test, same two executions | 22.37s / 11.86s | 14.00s / 3.71s |
+| Partition race binary, without DWARF | 66 MiB | 26 MiB |
+| Partition build maximum RSS, one warm-dependency-cache sample | 954,548,224 bytes | 352,534,528 bytes |
+
+The two pagination runs have identical 252-node test identity multisets per
+execution, including all 172 expression/protocol/read-write cells. The second
+execution reuses the shared cluster but recreates and cleans the database.
+The binary-size reduction is structural; the single build RSS sample is not a
+whole-job memory prediction. These local gains do not establish the requested
+ten-minute CI improvement. A same-runner completed CI result is still needed
+to measure the end-to-end gain, and the 25-minute light stage remains the
+largest unresolved target. Broad helper extraction was rejected for now:
+most consumers retain the heavy dependencies through other imports.
