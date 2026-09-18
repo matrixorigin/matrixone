@@ -7,6 +7,7 @@ create function python_bvt_pc_take (x int, index_value int) returns int language
 create function python_bvt_pc_sort_take (x int) returns int language python as 'python_bvt_pc_sort_take = lambda ctx, values: __import__("pyarrow.compute", fromlist=["take"]).take(values, __import__("pyarrow.compute", fromlist=["sort_indices"]).sort_indices(values, null_placement="at_end"))' handler 'python_bvt_pc_sort_take' mode vector;
 create function python_bvt_pc_equal (x int) returns bool language python as 'python_bvt_pc_equal = lambda ctx, values: __import__("pyarrow.compute", fromlist=["equal"]).equal(values, 20)' handler 'python_bvt_pc_equal' mode vector;
 create function python_bvt_pc_cast (x int) returns bigint language python as 'python_bvt_pc_cast = lambda ctx, values: __import__("pyarrow.compute", fromlist=["cast"]).cast(values, __import__("pyarrow").int64(), safe=True)' handler 'python_bvt_pc_cast' mode vector;
+create function python_bvt_pc_filter (x int) returns int language python as 'python_bvt_pc_filter = lambda ctx, values: __import__("pyarrow.compute", fromlist=["filter"]).filter(values, __import__("pyarrow.compute", fromlist=["greater_equal"]).greater_equal(values, 20), null_selection_behavior="drop")' handler 'python_bvt_pc_filter' mode vector;
 
 create table selection_values (id int, value int, index_value int);
 insert into selection_values values
@@ -26,9 +27,15 @@ select id,
        python_bvt_pc_cast(value) as cast_value
 from selection_values order by id;
 
+-- A filtering kernel shortens the Arrow array. The external evaluator must
+-- reject the result instead of silently misaligning rows.
+--error
+select python_bvt_pc_filter(value) from selection_values order by id;
+
 drop function python_bvt_pc_take(int, int);
 drop function python_bvt_pc_sort_take(int);
 drop function python_bvt_pc_equal(int);
 drop function python_bvt_pc_cast(int);
+drop function python_bvt_pc_filter(int);
 drop table selection_values;
 drop database udf_python_arrow_compute_selection_bvt;
