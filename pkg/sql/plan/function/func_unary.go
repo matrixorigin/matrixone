@@ -2841,10 +2841,17 @@ func validateGeometryCollectionNestingDepthFromTextWithDepth(wkt string, depth i
 	if depth >= maxGeometryCollectionNestingDepth {
 		return moerr.NewInvalidInputNoCtxf("geometry collection nesting depth exceeds %d", maxGeometryCollectionNestingDepth)
 	}
+	// GEOMETRYCOLLECTION EMPTY is a complete, valid collection member. It has
+	// no coordinate envelope to inspect, so it must be accepted before looking
+	// for parentheses. Keep this exact match so a valid EMPTY token cannot hide
+	// trailing payload.
+	if strings.EqualFold(s, "GEOMETRYCOLLECTION EMPTY") {
+		return nil
+	}
 
 	openIdx := strings.IndexByte(s, '(')
 	closeIdx := strings.LastIndexByte(s, ')')
-	if openIdx < 0 || closeIdx <= openIdx {
+	if openIdx <= 0 || closeIdx <= openIdx || closeIdx != len(s)-1 {
 		return moerr.NewInvalidInputNoCtx("invalid geometry payload")
 	}
 	content := strings.TrimSpace(s[openIdx+1 : closeIdx])

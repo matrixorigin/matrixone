@@ -9280,6 +9280,49 @@ func TestGeometryDistanceCollectionEmptyContract(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestValidateGeometryCollectionNestingDepthContract(t *testing.T) {
+	buildNestedCollection := func(depth int) string {
+		wkt := "POINT(0 0)"
+		for i := 0; i < depth; i++ {
+			wkt = "GEOMETRYCOLLECTION(" + wkt + ")"
+		}
+		return wkt
+	}
+
+	for _, tc := range []struct {
+		name    string
+		wkt     string
+		wantErr bool
+	}{
+		{name: "typed empty leaf", wkt: "GEOMETRYCOLLECTION EMPTY"},
+		{name: "nested typed empty leaf", wkt: "GEOMETRYCOLLECTION(GEOMETRYCOLLECTION EMPTY)"},
+		{name: "mixed empty members", wkt: "GEOMETRYCOLLECTION(POINT EMPTY,GEOMETRYCOLLECTION EMPTY)"},
+		{name: "empty parentheses remains valid", wkt: "GEOMETRYCOLLECTION()"},
+		{name: "nested collection", wkt: "GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(POINT(0 0)))"},
+		{name: "missing closing parenthesis", wkt: "GEOMETRYCOLLECTION(POINT(0 0)", wantErr: true},
+		{name: "trailing payload", wkt: "GEOMETRYCOLLECTION(POINT(0 0)) trailing", wantErr: true},
+		{name: "trailing parenthesized payload", wkt: "GEOMETRYCOLLECTION(POINT(0 0))(bad)", wantErr: true},
+		{name: "empty member", wkt: "GEOMETRYCOLLECTION(POINT(0 0),)", wantErr: true},
+		{name: "typed empty trailing payload", wkt: "GEOMETRYCOLLECTION EMPTY trailing", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateGeometryCollectionNestingDepthFromText(tc.wkt)
+			if tc.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+
+	require.NoError(t, validateGeometryCollectionNestingDepthFromText(
+		buildNestedCollection(maxGeometryCollectionNestingDepth)))
+	err := validateGeometryCollectionNestingDepthFromText(
+		buildNestedCollection(maxGeometryCollectionNestingDepth + 1))
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "geometry collection nesting depth exceeds")
+}
+
 func TestStDistanceWithPolygonHoles(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	inputs := []FunctionTestInput{
