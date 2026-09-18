@@ -298,6 +298,40 @@ const (
 	remoteIPIsIPv4CompatFunctionID int32 = 398
 )
 
+func isValidIntegerArgumentSource(id, source int32) bool {
+	standard := source == 0 || source == 10 || source == 11 ||
+		(source >= 20 && source <= 34) || source == 55 || source == 66 ||
+		isPlanMySQLStringType(source)
+	if id == 7 {
+		return source == 0 || isPlanMySQLStringType(source)
+	}
+	if id == 8 {
+		return standard || (source >= 50 && source <= 53) || source == 63
+	}
+	return standard
+}
+
+func validateIntegerArgumentCast(expr *Expr, overload int32) error {
+	fn := expr.GetF()
+	if fn == nil || len(fn.Args) != 2 || fn.Args[0] == nil || fn.Args[1] == nil {
+		return moerr.NewNotSupportedNoCtx("invalid private integer parameter CAST arity")
+	}
+	target := int32(23)
+	if overload == 7 || (overload != 8 && expr.Typ.Id == 28) {
+		target = 28
+	}
+	if !isValidIntegerArgumentSource(overload, fn.Args[0].Typ.Id) {
+		return moerr.NewNotSupportedNoCtx("invalid private integer parameter CAST source type")
+	}
+	if fn.Args[1].GetT() == nil || fn.Args[1].Typ.Id != target {
+		return moerr.NewNotSupportedNoCtx("invalid private integer parameter CAST target marker")
+	}
+	if expr.Typ.Id != target {
+		return moerr.NewNotSupportedNoCtx("invalid private integer parameter CAST result type")
+	}
+	return nil
+}
+
 func isRemoteIPFunction(functionID int32) bool {
 	switch functionID {
 	case remoteIPInet6AtonFunctionID,
@@ -326,6 +360,9 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				// CAST is stable function ID 21. Match execution identity, not
 				// names or source types; legacy CAST 0..4 remains executable.
 				if id == 21 && overload >= 5 && overload <= 8 {
+					if err := validateIntegerArgumentCast(current, overload); err != nil {
+						return err
+					}
 					features.IntegerParameterCoercion = true
 				}
 				// PLUS/MINUS/MULTI are stable function IDs 10/11/12.

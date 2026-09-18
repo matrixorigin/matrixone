@@ -85,6 +85,75 @@ func TestIntegerArgumentProtocolBoundaries(t *testing.T) {
 	}
 }
 
+func TestIntegerArgumentReceiverRejectsInvalidSignatures(t *testing.T) {
+	c, _ := expressionProtocolTestCompile(t)
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion85)
+
+	tests := []struct {
+		name   string
+		mutate func(*planpb.Expr)
+		want   string
+	}{
+		{
+			name: "arity",
+			mutate: func(expr *planpb.Expr) {
+				expr.GetF().Args = expr.GetF().Args[:1]
+			},
+			want: "arity",
+		},
+		{
+			name: "source allowlist",
+			mutate: func(expr *planpb.Expr) {
+				expr.GetF().Args[0].Typ.Id = int32(types.T_date)
+			},
+			want: "source type",
+		},
+		{
+			name: "target marker",
+			mutate: func(expr *planpb.Expr) {
+				expr.GetF().Args[1].Expr = &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}
+			},
+			want: "target marker",
+		},
+		{
+			name: "target type",
+			mutate: func(expr *planpb.Expr) {
+				expr.GetF().Args[1].Typ.Id = int32(types.T_uint64)
+			},
+			want: "target marker",
+		},
+		{
+			name: "result type",
+			mutate: func(expr *planpb.Expr) {
+				expr.Typ.Id = int32(types.T_date)
+			},
+			want: "result type",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			expr := integerProtocolExpr(function.IntegerArgumentCastOverload)
+			test.mutate(expr)
+			p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
+			_, err := planpb.RequiredRemoteExpressionFeatures(p)
+			require.ErrorContains(t, err, test.want)
+			data, err := p.Marshal()
+			require.NoError(t, err)
+			_, err = decodeScope(data, c.proc, true, nil)
+			require.ErrorContains(t, err, test.want)
+		})
+	}
+
+	// The temporal-only source and forced INT64 target remain valid for overload 8.
+	expr := integerProtocolExpr(function.TemporalIntegerArgumentCastOverload)
+	p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
+	data, err := p.Marshal()
+	require.NoError(t, err)
+	_, err = decodeScope(data, c.proc, true, nil)
+	require.NoError(t, err)
+}
+
 func TestIntegerArgumentProtocolPlacementAndSend(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
 	expr := integerProtocolExpr(function.IntegerArgumentCastOverload)

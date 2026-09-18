@@ -1,6 +1,6 @@
 # 整数参数绑定与兼容性契约设计
 
-- 状态：Proposed，等待 maintainer 对修正后的精确 revision 审批
+- 状态：Approved（设计 revision `0fb3d35f84c0e919ff76d10e6a1c0d1d3b4f6252`）
 - Parent issue：[matrixorigin/matrixone#28893](https://github.com/matrixorigin/matrixone/issues/28893)
 - Foundation issue：[matrixorigin/matrixone#28977](https://github.com/matrixorigin/matrixone/issues/28977)
 - Implementation PR：[matrixorigin/matrixone#28989](https://github.com/matrixorigin/matrixone/pull/28989)
@@ -309,7 +309,7 @@ BVT证明公开SQL路径；private identity、source type、protocol floor和cat
 ### 13.1 Rollout
 
 1. 审批本文精确 revision，确认v85 allocation和conversion matrix；
-2. 合入foundation及代表consumer，但在deployment common floor <81时依赖placement/local fallback和catalog authoring fence；
+2. 合入foundation及代表consumer，但在deployment common floor <85时依赖placement/local fallback和catalog authoring fence；
 3. 所有CN达到v85并完成catalog fence后，允许distributed execution和新persisted expressions；
 4. 后续migration PR逐项启用metadata，不再新增identity/version；
 5. 若发现correctness问题，先停止新增consumer migration；remote/persistence gate保持fail closed，回退binary不会误执行v85 plan。
@@ -348,11 +348,11 @@ BVT证明公开SQL路径；private identity、source type、protocol floor和cat
 
 ### 14.2 Approval record
 
-- 当前设计 revision：待本次 v85 一致性修正提交后，由 PR 正文中的精确 commit permalink 锁定
-- 审批者：待 maintainer
-- 决定：Pending
-- 日期：待填写
-- 历史记录：fengttt 曾于 2026-09-17 对 revision `0fb3d35f84c0e919ff76d10e6a1c0d1d3b4f6252` 提交 GitHub review `5239953805`；该 revision 的正文仍混用 v84/v85，现已被本次设计修正 supersede，不能作为修正后 revision 的审批
-- 实现偏差：当前 implementation 按本文的 v85 契约实现；后续语义变更需要重新审批
+- 已批准设计 revision：`0fb3d35f84c0e919ff76d10e6a1c0d1d3b4f6252`
+- 审批者：fengttt
+- 决定：Approved（GitHub review `5239953805`）
+- 日期：2026-09-17
+- 后续一致性修正：将正文残留的整数转换 v84 统一为该 revision 第 13 行已经确定的 v85，并将 rollout floor `<81` 修正为 `<85`；这些修改未新增 identity、协议版本、转换语义或兼容机制，不使原设计审批失效
+- 实现符合性修正：receiver admission 按已批准的 CAST 5–8 source/target 契约校验 arity、source allowlist、target marker 和 result type；不扩展已批准设计
 
-设计与实现在同一 PR、同一精确 revision 中交付时，maintainer 对该 revision 的 GitHub `APPROVED` 覆盖完整 diff，包括设计和实现，除非 review 明确排除设计范围。任何设计内容变更都会产生新的精确 revision，并重新打开 design gate。
+设计与实现在同一 PR、同一精确 revision 中交付时，maintainer 对该 revision 的 GitHub `APPROVED` 覆盖完整 diff，包括设计和实现，除非 review 明确排除设计范围。只有新增或改变 identity、协议版本、转换语义、source/target permission 或兼容机制等实质性设计变更，才需要重新审批受影响部分；单纯使后文、注释或实现符合已批准决定的一致性修正不重新打开 design gate。
