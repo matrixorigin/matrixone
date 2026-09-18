@@ -1567,7 +1567,14 @@ func (exec *CDCTaskExecutor) Pause() error {
 }
 
 // Cancel cdc task
-func (exec *CDCTaskExecutor) Cancel() (err error) {
+func (exec *CDCTaskExecutor) Cancel() error { return exec.cancel(true) }
+
+// CancelWithoutWatermarkCleanup stops local work after claim loss. The task may
+// already have been taken over, so deleting shared progress would destroy the
+// replacement owner's watermark.
+func (exec *CDCTaskExecutor) CancelWithoutWatermarkCleanup() error { return exec.cancel(false) }
+
+func (exec *CDCTaskExecutor) cancel(deleteWatermarks bool) (err error) {
 	exec.callbackMu.Lock()
 	// Check if running before state transition
 	stateBeforeCancel := exec.stateMachine.State()
@@ -1596,7 +1603,7 @@ func (exec *CDCTaskExecutor) Cancel() (err error) {
 	// watermark delete. Callbacks queued behind this fence observe the increment
 	// above and return without publishing work.
 	exec.cancelLifecycleContext()
-	if exec.watermarkUpdater != nil && exec.spec != nil {
+	if deleteWatermarks && exec.watermarkUpdater != nil && exec.spec != nil {
 		// The tombstone is installed before waiting for any control mutex or
 		// reader shutdown so late callbacks remain fenced on every timeout path.
 		exec.watermarkUpdater.MarkTaskDeleted(exec.spec.TaskId)
@@ -1672,7 +1679,7 @@ func (exec *CDCTaskExecutor) Cancel() (err error) {
 	// routine. Drain all earlier updater work after readers have stopped, remove
 	// the task from the shared updater caches, then perform the terminal delete.
 	// This also covers paused tasks, whose readers were stopped by Pause.
-	if exec.watermarkUpdater != nil && exec.spec != nil && len(exec.spec.Accounts) > 0 {
+	if deleteWatermarks && exec.watermarkUpdater != nil && exec.spec != nil && len(exec.spec.Accounts) > 0 {
 		cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		if err := exec.watermarkUpdater.DeleteTaskWatermarks(
@@ -2993,6 +3000,17 @@ func (exec *CDCTaskExecutor) matchesAnySourcePattern(key string) bool {
 	return false
 }
 
+// effectiveCDCStartTS returns the durable activation boundary used by the
+// reader. Legacy NoFull rows have no serialized start_ts, so a previously
+// committed watermark is the only safe boundary; passing an empty start_ts
+// would allow stale-read recovery to advance past unprocessed commits.
+func effectiveCDCStartTS(taskStart, durableProgress types.TS, legacyNoFull bool) types.TS {
+	if legacyNoFull && !durableProgress.IsEmpty() {
+		return durableProgress
+	}
+	return taskStart
+}
+
 // reader ----> sinker ----> remote db
 func (exec *CDCTaskExecutor) addExecPipelineForTable(
 	ctx context.Context,
@@ -3013,14 +3031,29 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 	// step 1. init watermarkUpdater
 	// get watermark from db
 	watermark := exec.startTs
-	if exec.noFull {
-		watermark = types.TimestampToTS(txnOp.SnapshotTS())
-	}
 	watermarkKey := cdc.WatermarkKey{
 		AccountId: uint64(exec.spec.Accounts[0].GetId()),
 		TaskId:    exec.spec.TaskId,
 		DBName:    info.SourceDbName,
 		TableName: info.SourceTblName,
+	}
+	legacyNoFull := exec.noFull && exec.startTs.IsEmpty() && !exec.stableInitialSnapshot
+	if legacyNoFull {
+		// A legacy NoFull task is safe to resume only when it already has a
+		// durable progress point. Never invent a new snapshot here: that would
+		// silently skip commits between CREATE CDC and executor admission.
+		var found bool
+		watermark, _, found, err = exec.watermarkUpdater.GetWatermarkProgressIfExists(ctx, &watermarkKey)
+		if err != nil {
+			return err
+		}
+		if !found || watermark.IsEmpty() {
+			return moerr.NewNotSupportedf(ctx, "legacy NoFull CDC task has no durable creation start; recreate after all CNs support protocol version %d", defines.MORPCVersion85)
+		}
+	} else if exec.noFull && watermark.IsEmpty() {
+		// New NoFull tasks persist the CREATE CDC snapshot in startTs. Keep the
+		// fallback for legacy task rows that have no durable start watermark.
+		watermark = types.TimestampToTS(txnOp.SnapshotTS())
 	}
 	var initialSnapshotEpoch types.TS
 	var initialSnapshotPending bool
@@ -3037,6 +3070,7 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 	); err != nil {
 		return err
 	}
+	streamStartTs := effectiveCDCStartTS(exec.startTs, watermark, legacyNoFull)
 	initialSnapshotPending = !exec.noFull && exec.startTs.IsEmpty() && watermark.IsEmpty()
 	if exec.stableInitialSnapshot {
 		if err = ownerFence.Check(ctx); err != nil {
@@ -3201,7 +3235,7 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		tableDef,
 		initSnapshotSplitTxn,
 		exec.runningReaders,
-		exec.startTs,
+		streamStartTs,
 		exec.endTs,
 		exec.noFull,
 		frequency,
@@ -3331,6 +3365,11 @@ func (exec *CDCTaskExecutor) retrieveCdcTask(ctx context.Context) error {
 	}
 
 	protocol, _ := exec.additionalConfig[cdc.CDCTaskExtraOptions_InitialSnapshotProtocol].(string)
-	exec.stableInitialSnapshot = protocol == cdc.CDCInitialSnapshotProtocolStableEpoch
+	// Lossless NoFull tasks use the same owner-fenced watermark path as stable
+	// snapshot tasks. Without this, their buffered checkpoints use the legacy
+	// unfenced updater and an obsolete executor can overwrite a replacement
+	// generation's durable progress after claim loss.
+	exec.stableInitialSnapshot = protocol == cdc.CDCInitialSnapshotProtocolStableEpoch ||
+		protocol == cdc.CDCInitialSnapshotProtocolNoFullHLC
 	return nil
 }

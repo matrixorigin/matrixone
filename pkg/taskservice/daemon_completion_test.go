@@ -223,7 +223,7 @@ func TestDaemonCompletionCleanupOwnership(t *testing.T) {
 // admission still in progress from admission that can never Attach. Exercise
 // the real dispatcher afterward: removal alone is not the recovery oracle.
 func TestDaemonPreAttachFailureRecoversControlRequests(t *testing.T) {
-	for _, code := range []task.TaskCode{task.TaskCode_InitCdc, task.TaskCode_InitCdcStableEpoch} {
+	for _, code := range []task.TaskCode{task.TaskCode_InitCdc, task.TaskCode_InitCdcStableEpoch, task.TaskCode_InitCdcLosslessStart} {
 		for _, restart := range []bool{false, true} {
 			for _, status := range []task.TaskStatus{task.TaskStatus_PauseRequested, task.TaskStatus_CancelRequested,
 				task.TaskStatus_ResumeRequested, task.TaskStatus_RestartRequested} {
