@@ -1,31 +1,31 @@
 select date_add(cast('2026-01-01 00:00:00' as datetime(6)),
-    interval 1.25000000000000000000000000000000000000 second);
+interval 1.25000000000000000000000000000000000000 second);
 ➤ date_add(cast(2026-01-01 00:00:00 as datetime(6)), INTERVAL 1.25000000000000000000000000000000000000 second)[12,-1,0]  𝄀
 2026-01-01 00:00:01.250000
 select date_sub(cast('2026-01-01 00:00:00' as datetime(6)),
-    interval 1.25000000000000000000000000000000000000 second);
+interval 1.25000000000000000000000000000000000000 second);
 ➤ date_sub(cast(2026-01-01 00:00:00 as datetime(6)), INTERVAL 1.25000000000000000000000000000000000000 second)[12,-1,0]  𝄀
 2025-12-31 23:59:58.750000
 select date_add(cast('2026-01-01 00:00:00' as datetime(6)),
-    interval 1.25000000000000000000000000000000000000 minute);
+interval 1.25000000000000000000000000000000000000 minute);
 ➤ date_add(cast(2026-01-01 00:00:00 as datetime(6)), INTERVAL 1.25000000000000000000000000000000000000 minute)[12,-1,0]  𝄀
 2026-01-01 00:01:15
 select date_add(cast('2026-01-01 00:00:00' as datetime(6)),
-    interval 1.00000050000000000000000000000000000000 second);
+interval 1.00000050000000000000000000000000000000 second);
 ➤ date_add(cast(2026-01-01 00:00:00 as datetime(6)), INTERVAL 1.00000050000000000000000000000000000000 second)[12,-1,0]  𝄀
 2026-01-01 00:00:01.000001
 select date_add(cast('2026-01-01 00:00:00' as datetime(6)),
-    interval cast(1.25e0 as decimal(40,2)) second);
+interval cast(1.25e0 as decimal(40,2)) second);
 ➤ date_add(cast(2026-01-01 00:00:00 as datetime(6)), INTERVAL cast(1.25e0 as decimal(40, 2)) second)[12,-1,0]  𝄀
 2026-01-01 00:00:01.250000
 select date_add(cast('2026-01-01 00:00:00' as datetime(6)),
-    interval cast(cast('1.25' as decimal(40,2)) as decimal(40,4)) second);
+interval cast(cast('1.25' as decimal(40,2)) as decimal(40,4)) second);
 ➤ date_add(cast(2026-01-01 00:00:00 as datetime(6)), INTERVAL cast(cast(1.25 as decimal(40, 2)) as decimal(40, 4)) second)[12,-1,0]  𝄀
 2026-01-01 00:00:01.250000
 select cast('0b10' as decimal(40,2));
 ➤ cast(0b10 as decimal(40, 2))[3,40,2]  𝄀
 2.00
 select date_add(cast('2026-01-01 00:00:00' as datetime(6)),
-    interval cast('0b10' as decimal(40,2)) second);
+interval cast('0b10' as decimal(40,2)) second);
 ➤ date_add(cast(2026-01-01 00:00:00 as datetime(6)), INTERVAL cast(0b10 as decimal(40, 2)) second)[12,-1,0]  𝄀
 2026-01-01 00:00:02
