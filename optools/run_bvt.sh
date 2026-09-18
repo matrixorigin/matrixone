@@ -236,23 +236,38 @@ launch_mo
 if [[ "${SKIP_JSTFU:-false}" == "true" ]]; then
     echo "skip jstfu for this BVT suite"
 else
-    launch_jstfu
-    status=$?
-    if [[ "$status" -ne 0 ]]; then
+    # Keep the command in an if condition.  The BVT entrypoint sources this
+    # file with `set -e`; a bare failing function call would exit before the
+    # cleanup block below can reclaim the already-started services.
+    if launch_jstfu; then
+        :
+    else
+        status=$?
         cleanup_all
+        if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+            return "$status"
+        fi
         exit "$status"
     fi
 fi
-wait_system_init
-status=$?
-if [[ "$status" -ne 0 ]]; then
+if wait_system_init; then
+    :
+else
+    status=$?
     cleanup_all
-    exit 1
+    if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+        return "$status"
+    fi
+    exit "$status"
 fi
-wait_python_udf_worker
-status=$?
-if [[ "$status" -ne 0 ]]; then
+if wait_python_udf_worker; then
+    :
+else
+    status=$?
     cleanup_all
+    if [[ "${BASH_SOURCE[0]}" != "$0" ]]; then
+        return "$status"
+    fi
     exit "$status"
 fi
 
