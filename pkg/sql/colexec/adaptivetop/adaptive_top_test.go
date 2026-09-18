@@ -178,6 +178,17 @@ func TestAdaptiveTopSelectsOnlyOneCompleteCandidate(t *testing.T) {
 	}
 }
 
+func TestAdaptiveTopReportsRetainedMemory(t *testing.T) {
+	f := newAdaptiveFixture(t, 3)
+	f.install(t, [][][]int64{{{1, 2, 3}}, {}, {}})
+	require.NoError(t, vm.Prepare(f.op, f.proc))
+	require.Equal(t, []int64{1, 2, 3}, f.read(t))
+	stats := f.op.OpAnalyzer.GetOpStats()
+	require.Positive(t, stats.MemorySize)
+	require.Zero(t, stats.SpillSize)
+	require.Zero(t, stats.SpillRows)
+}
+
 func TestAdaptiveTopRejectsCandidateErrorsWithoutPublication(t *testing.T) {
 	for _, where := range []string{"start", "after partial data", "after full data", "completion", "page overflow"} {
 		t.Run(where, func(t *testing.T) {
@@ -394,6 +405,9 @@ func TestAdaptiveTopSpillSelectionAndDiscard(t *testing.T) {
 			require.NoError(t, vm.Prepare(f.op, f.proc))
 			values := f.read(t)
 			require.Len(t, values, int(limit))
+			stats := f.op.OpAnalyzer.GetOpStats()
+			require.Positive(t, stats.SpillSize)
+			require.Positive(t, stats.SpillRows)
 			for i, value := range values {
 				want := int64(i)
 				if fallback {

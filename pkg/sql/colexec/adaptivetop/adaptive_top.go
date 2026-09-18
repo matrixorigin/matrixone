@@ -156,7 +156,13 @@ func (a *AdaptiveTop) collect(proc *process.Process) error {
 			if count > a.ctr.limit-rows {
 				return moerr.NewInternalErrorNoCtx("adaptive top candidate exceeded its final page limit")
 			}
-			if err := a.ctr.source.Append(result.Batch); err != nil {
+			stats, err := a.ctr.source.AppendWithStats(result.Batch)
+			a.OpAnalyzer.SetMemUsed(stats.RetainedBytes)
+			if stats.SpilledBytes > 0 {
+				a.OpAnalyzer.Spill(stats.SpilledBytes)
+				a.OpAnalyzer.SpillRows(stats.SpilledRows)
+			}
+			if err != nil {
 				return err
 			}
 			rows += count
