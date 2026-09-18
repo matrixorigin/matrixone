@@ -1283,11 +1283,11 @@ func binaryProtocolPrepareParamDomains(
 	case defines.MYSQL_TYPE_DATE:
 		return types.T_date.ToType(), types.Type{}, "", false, true
 	case defines.MYSQL_TYPE_TIME:
-		return types.T_time.ToType(), types.Type{}, "", false, true
+		return binaryProtocolTemporalType(types.T_time, value), types.Type{}, "", false, true
 	case defines.MYSQL_TYPE_DATETIME:
-		return types.T_datetime.ToType(), types.Type{}, "", false, true
+		return binaryProtocolTemporalType(types.T_datetime, value), types.Type{}, "", false, true
 	case defines.MYSQL_TYPE_TIMESTAMP:
-		return types.T_timestamp.ToType(), types.Type{}, "", false, true
+		return binaryProtocolTemporalType(types.T_timestamp, value), types.Type{}, "", false, true
 	case defines.MYSQL_TYPE_NULL:
 		// Keep NULL on the prepared plan's original domain.  The next execute
 		// packet may carry a concrete type and will specialize it then.
@@ -1307,6 +1307,13 @@ func binaryProtocolPrepareParamDomains(
 	default:
 		return types.T_text.ToType(), types.Type{}, "", false, true
 	}
+}
+
+func binaryProtocolTemporalType(oid types.T, value string) types.Type {
+	if strings.Contains(value, ".") {
+		return oid.ToTypeWithScale(6)
+	}
+	return oid.ToType()
 }
 
 func invalidBinaryDecimalParameter(ctx context.Context, value any) error {

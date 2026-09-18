@@ -1,6 +1,6 @@
 # 整数参数绑定与兼容性契约设计
 
-- 状态：Approved（设计 revision `0fb3d35f84c0e919ff76d10e6a1c0d1d3b4f6252`）
+- 状态：Proposed，等待 maintainer 对修正后的精确 revision 审批
 - Parent issue：[matrixorigin/matrixone#28893](https://github.com/matrixorigin/matrixone/issues/28893)
 - Foundation issue：[matrixorigin/matrixone#28977](https://github.com/matrixorigin/matrixone/issues/28977)
 - Implementation PR：[matrixorigin/matrixone#28989](https://github.com/matrixorigin/matrixone/pull/28989)
@@ -28,7 +28,7 @@ MatrixOne 中 count、offset、length、position、precision 等参数在 SQL �
 4. **语义隔离不变量**：本契约只用于 function argument coercion；不改变用户显式 `CAST`、assignment、普通 overload resolution 或 unrelated arithmetic semantics。
 5. **identity 不变量**：旧 function overload 和 CAST 0–4 的编号、含义及可执行性不变；新 binding 可以停止选择 compatibility-only overload，但不得删除、重排或复用旧 identity。
 6. **范围不变量**：转换先保留完整 signed/unsigned magnitude，再对目标 `INT64`/`UINT64` 检查；overflow 是错误，不 wrap、saturate 或仅发 warning。
-7. **分布式/持久化不变量**：任何包含 private CAST 5–8 的 plan 都要求 MORPC v84。旧 CN 不得接收、执行、发布或读取其无法解释的新 identity。
+7. **分布式/持久化不变量**：任何包含 private CAST 5–8 的 plan 都要求 MORPC v85。旧 CN 不得接收、执行、发布或读取其无法解释的新 identity。
 8. **inactive-row 不变量**：转换自身的 NULL source 或未被 select mask 选中的 row 不读取、不舍入、不解析，也不产生 overflow；输出保持 NULL。外层函数的其它参数为 NULL 不等价于该转换已被 mask：例如 `SUBSTRING_INDEX(NULL, '.', 9223372036854775808)` 的非 NULL count 仍须报范围错误。
 
 ### 1.2 可度量成功标准
@@ -36,7 +36,7 @@ MatrixOne 中 count、offset、length、position、precision 等参数在 SQL �
 - `SUBSTRING_INDEX` 新 binding 只选择 canonical INT64 count executor；旧 identities 仍可执行旧 plan。
 - source-to-target matrix 在 constants、columns、CASE/IF/NULLIF selector、SQL `EXECUTE`、COM_STMT、NULL、boundary 和 overflow 上有 typed oracle。
 - private CAST 5–8 在 local、remote、protobuf round-trip、DEFAULT/generated/CHECK catalog round-trip 和 SQL-origin rebind 上保持 identity 与行为。
-- MORPC <= v83 对新 identity fail closed；v84 sender/receiver 和持久化 floor 才允许执行。
+- MORPC <= v84 对新 identity fail closed；v85 sender/receiver 和持久化 floor 才允许执行。
 - ordinary path 不增加逐行额外副本、缓存、goroutine 或共享可变状态；每个 row 只做一次 source conversion 和 target range check。
 - 当前 foundation owning-package tests 通过；公开 SQL BVT 覆盖代表 consumer。
 
@@ -48,7 +48,7 @@ MatrixOne 中 count、offset、length、position、precision 等参数在 SQL �
 - 增加 append-only private CAST execution identities 5–8。
 - 在 AST binding、plan-expression rebinding、prepared specialization、constant folding和 expression visitor 中保留 integer context。
 - 仅把 `SUBSTRING_INDEX` count（position 2）迁移到 fixed signed INT64 contract，并将旧 FLOAT/UINT identities保留为 execution-only compatibility entries。
-- 增加 worker placement、send-time destination recheck、receiver validation 和 persisted-expression v84 admission。
+- 增加 worker placement、send-time destination recheck、receiver validation 和 persisted-expression v85 admission。
 
 ### 2.2 完整迁移 inventory
 
@@ -190,21 +190,21 @@ peer provenance 只记录源类型，不允许把优化前的可执行表达式�
 
 ### 7.1 Version allocation
 
-MORPC v76–v83 已由 `main` 中其他兼容契约占用；本设计最终分配：
+MORPC v76–v84 已由 `main` 中其他兼容契约占用；本设计最终分配：
 
 ```text
-MORPC v84 = shared integer-parameter coercion execution identities (CAST 5–8)
+MORPC v85 = shared integer-parameter coercion execution identities (CAST 5–8)
 ```
 
-任何旧 issue/PR 文本中的 v76 都由本设计和当前实现中的 v84 supersede。版本 ownership 以 `pkg/defines/const.go` 的最终 allocation 和本文批准 revision 为准。
+任何旧 issue/PR 文本中的 v76 都由本设计和当前实现中的 v85 supersede。版本 ownership 以 `pkg/defines/const.go` 的最终 allocation 和本文批准 revision 为准。
 
 ### 7.2 Feature detection
 
-`RequiredRemoteExpressionFeatures` 遍历 expression owner，以稳定 function ID 21 + overload 5–8 检测 `IntegerParameterCoercion`，不依据函数名或 source type 猜测。legacy CAST 0–4 不触发 v84。
+`RequiredRemoteExpressionFeatures` 遍历 expression owner，以稳定 function ID 21 + overload 5–8 检测 `IntegerParameterCoercion`，不依据函数名或 source type 猜测。legacy CAST 0–4 不触发 v85。
 
 ### 7.3 Placement、send 与 receive
 
-| 阶段 | v83/unknown destination | v84 destination |
+| 阶段 | v84/unknown destination | v85 destination |
 | --- | --- | --- |
 | AP MULTI-CN placement | 若 query 含 private identity，收缩到可用 ONE-CN/local placement | 可保持 MULTI-CN |
 | remote serialization | 对实际 destination 再查询；reject | encode |
@@ -214,29 +214,29 @@ Placement 不是最终安全边界：worker 可在 placement 后降级、替换�
 
 ### 7.4 升级、降级与回滚
 
-- **滚动升级**：在 common deployment floor 达到 v84 前，新 identity只在支持它的本地 CN 执行，不发往旧 worker。
-- **升级完成**：所有目标 v84 后允许 remote execution和新 persisted expression publication。
-- **worker rollback/replacement**：send-time recheck 拒绝已变成 v83 的 destination；不会发送不可解释的 identity。
+- **滚动升级**：在 common deployment floor 达到 v85 前，新 identity只在支持它的本地 CN 执行，不发往旧 worker。
+- **升级完成**：所有目标 v85 后允许 remote execution和新 persisted expression publication。
+- **worker rollback/replacement**：send-time recheck 拒绝已变成 v84 的 destination；不会发送不可解释的 identity。
 - **binary rollback**：旧 binary仍可执行 legacy plans；包含 private CAST 5–8 的 remote/persisted expression必须被 admission gate 拒绝，而不是误解释。
-- **无编号复用**：回滚后 v84 identity保留，不把 5–8 或 protocol 84 分配给其他语义。
+- **无编号复用**：回滚后 v85 identity保留，不把 5–8 或 protocol 85 分配给其他语义。
 
 本设计不修改 protobuf schema；兼容风险来自现有 function/overload identity 的新值，因此 version barrier 仍是强制条件。
 
 ## 8. Persisted expression、restart 与 restore
 
-DEFAULT、generated column、CHECK、view/其他 catalog-bound expression 可能在任一 CN 本地执行，不能仅依靠 remote sender gate。`RequiredPersistedExpressionProtocolVersion` 汇总 owner 中所有 feature 的最大 floor；private integer identity将 floor提升到 v84，并复用 deployment-managed read/authoring admission：
+DEFAULT、generated column、CHECK、view/其他 catalog-bound expression 可能在任一 CN 本地执行，不能仅依靠 remote sender gate。`RequiredPersistedExpressionProtocolVersion` 汇总 owner 中所有 feature 的最大 floor；private integer identity将 floor提升到 v85，并复用 deployment-managed read/authoring admission：
 
-- read/rebind path 要求 runtime protocol和 durable persisted-expression floor均达到 v84；
+- read/rebind path 要求 runtime protocol和 durable persisted-expression floor均达到 v85；
 - authoring path还要求 local catalog admission floor已启用并 fenced，避免 phase-one rollout提前发布 metadata；
 - publication helper在 expression fold 后及 TableDef最终发布边界检查，mixed owner取最高 requirement；
 - restore/background service 没有 `Process` 时使用 service-level floor，未知状态 fail closed。
 
 Catalog 同时保留 public origin SQL。Restart有两条独立有效路径：
 
-1. protobuf expression保留 CAST 5–8 并在 v84 admission后直接执行；
+1. protobuf expression保留 CAST 5–8 并在 v85 admission后直接执行；
 2. 从 origin SQL重新 parse/bind，按相同 metadata重新生成 private identity。
 
-恢复不能依赖 private CAST 的 SQL formatter spelling，也不能把它降级为 ordinary CAST0。旧 CN 读取 v84 catalog metadata 时必须收到 not-supported error，而不是静默执行不同舍入。
+恢复不能依赖 private CAST 的 SQL formatter spelling，也不能把它降级为 ordinary CAST0。旧 CN 读取 v85 catalog metadata 时必须收到 not-supported error，而不是静默执行不同舍入。
 
 ## 9. Ownership、失败路径、资源与性能
 
@@ -272,7 +272,7 @@ Catalog 同时保留 public origin SQL。Restart有两条独立有效路径：
 
 private identity不包含用户文本、secret或tenant identifier，不改变 authentication、authorization或tenant routing。Remote/cached plan属于内部 trust boundary，但 decoder仍须验证 function ID、overload signature、target type及protocol floor，避免 malformed plan绕过source allowlist或造成类型混淆。
 
-错误使用现有 typed `invalid input`、`out of range` 和 `not supported` classes。运维可通过 negotiated MORPC version、destination identity、persisted-expression floor及稳定的“requires protocol version 84”错误诊断；不在逐行转换路径增加日志或高基数指标。
+错误使用现有 typed `invalid input`、`out of range` 和 `not supported` classes。运维可通过 negotiated MORPC version、destination identity、persisted-expression floor及稳定的“requires protocol version 85”错误诊断；不在逐行转换路径增加日志或高基数指标。
 
 ## 11. 被拒绝方案
 
@@ -297,8 +297,8 @@ private identity不包含用户文本、secret或tenant identifier，不改变 a
 | representative consumer | `SUBSTRING_INDEX` binder/executor UT：literal、column、fractional boundary、UINT/BIT boundary、NULL和legacy identity |
 | constant fold/rewrite | typed plan UT：selected failing branch不提前报错、NULL fold、deep copy/visitor保留identity |
 | protocol feature scan | CAST 0–4 negative、5–8 positive；nested pipeline/TableDef owner |
-| placement/send/receive | v83 reject/v84 accept、unknown/nil、placement后downgrade、cancellation、client acquire/release平衡 |
-| persistence/restart | DEFAULT/generated/CHECK protobuf round-trip + origin SQL independent rebind；read/authoring floor v83 reject/v84 accept |
+| placement/send/receive | v84 reject/v85 accept、unknown/nil、placement后downgrade、cancellation、client acquire/release平衡 |
+| persistence/restart | DEFAULT/generated/CHECK protobuf round-trip + origin SQL independent rebind；read/authoring floor v84 reject/v85 accept |
 | public SQL | `integer_parameter_coercion.sql/result` normal comparison；最小rows覆盖constant/column/prepared/overflow |
 | delivery | owning package tests、incremental vet/lint、build、changed-block coverage >=75%、`git diff --check`（BVT表格格式例外需单独记录） |
 
@@ -308,11 +308,11 @@ BVT证明公开SQL路径；private identity、source type、protocol floor和cat
 
 ### 13.1 Rollout
 
-1. 审批本文精确 revision，确认v84 allocation和conversion matrix；
+1. 审批本文精确 revision，确认v85 allocation和conversion matrix；
 2. 合入foundation及代表consumer，但在deployment common floor <81时依赖placement/local fallback和catalog authoring fence；
-3. 所有CN达到v84并完成catalog fence后，允许distributed execution和新persisted expressions；
+3. 所有CN达到v85并完成catalog fence后，允许distributed execution和新persisted expressions；
 4. 后续migration PR逐项启用metadata，不再新增identity/version；
-5. 若发现correctness问题，先停止新增consumer migration；remote/persistence gate保持fail closed，回退binary不会误执行v84 plan。
+5. 若发现correctness问题，先停止新增consumer migration；remote/persistence gate保持fail closed，回退binary不会误执行v85 plan。
 
 ### 13.2 已接受权衡
 
@@ -328,7 +328,7 @@ BVT证明公开SQL路径；private identity、source type、protocol floor和cat
 - implicit FLOAT round-to-even与explicit REAL truncation的分界；
 - text-prefix或bit-pattern规则；
 - overflow error policy；
-- CAST 5–8或MORPC v84 allocation；
+- CAST 5–8或MORPC v85 allocation；
 - persisted authoring/read floor；
 - 后续consumer需要本文之外的新mode、source permission或compatibility mechanism。
 
@@ -342,16 +342,17 @@ BVT证明公开SQL路径；private identity、source type、protocol floor和cat
 - source-to-target coercion matrix和overflow policy；
 - private CAST 5–8的append-only identity；
 - prepared selector/rebind语义；
-- MORPC v84 placement/send/receive和mixed-version rollback；
+- MORPC v85 placement/send/receive和mixed-version rollback；
 - persisted expression read/authoring/restart closure；
 - 验证地图及后续migration不得扩展机制的边界。
 
 ### 14.2 Approval record
 
-- 设计 revision：`0fb3d35f84c0e919ff76d10e6a1c0d1d3b4f6252`
-- 审批者：fengttt
-- 决定：Approved（GitHub review `5239953805`）
-- 日期：2026-09-17
-- 实现偏差：该精确 revision 的实现按本文描述提交；后续语义变更需要重新审批
+- 当前设计 revision：待本次 v85 一致性修正提交后，由 PR 正文中的精确 commit permalink 锁定
+- 审批者：待 maintainer
+- 决定：Pending
+- 日期：待填写
+- 历史记录：fengttt 曾于 2026-09-17 对 revision `0fb3d35f84c0e919ff76d10e6a1c0d1d3b4f6252` 提交 GitHub review `5239953805`；该 revision 的正文仍混用 v84/v85，现已被本次设计修正 supersede，不能作为修正后 revision 的审批
+- 实现偏差：当前 implementation 按本文的 v85 契约实现；后续语义变更需要重新审批
 
-设计与实现在同一 PR、同一精确 revision 中交付时，maintainer 对该 revision 的 GitHub `APPROVED` 覆盖完整 diff，包括设计和实现，除非 review 明确排除设计范围。需要分阶段审批时，应使用独立 design PR/revision 或在 review 中明确限定审批范围。上述 approval 对精确 revision `0fb3d35f84c0e919ff76d10e6a1c0d1d3b4f6252` 未声明排除设计，因此解除 design gate。
+设计与实现在同一 PR、同一精确 revision 中交付时，maintainer 对该 revision 的 GitHub `APPROVED` 覆盖完整 diff，包括设计和实现，除非 review 明确排除设计范围。任何设计内容变更都会产生新的精确 revision，并重新打开 design gate。

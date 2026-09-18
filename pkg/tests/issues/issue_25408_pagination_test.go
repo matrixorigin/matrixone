@@ -35,14 +35,16 @@ import (
 type issue28989TemporalTypeConn struct {
 	net.Conn
 
-	mu          sync.Mutex
-	rewriteDate bool
-	rewritten   bool
+	mu             sync.Mutex
+	rewriteType    defines.MysqlType
+	rewritePayload []byte
+	rewritten      bool
 }
 
-func (c *issue28989TemporalTypeConn) rewriteNextDate() {
+func (c *issue28989TemporalTypeConn) rewriteNext(mysqlType defines.MysqlType, payload []byte) {
 	c.mu.Lock()
-	c.rewriteDate = true
+	c.rewriteType = mysqlType
+	c.rewritePayload = append(c.rewritePayload[:0], payload...)
 	c.rewritten = false
 	c.mu.Unlock()
 }
@@ -57,10 +59,11 @@ func (c *issue28989TemporalTypeConn) Write(data []byte) (int, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	originalLen := len(data)
-	if c.rewriteDate {
-		if modified, ok := issue28989RewriteStringParamAsDate(data); ok {
+	if c.rewritePayload != nil {
+		if modified, ok := issue28989RewriteStringParamAsTemporal(
+			data, c.rewriteType, c.rewritePayload); ok {
 			data = modified
-			c.rewriteDate = false
+			c.rewritePayload = nil
 			c.rewritten = true
 		}
 	}
@@ -71,9 +74,13 @@ func (c *issue28989TemporalTypeConn) Write(data []byte) (int, error) {
 	return written, err
 }
 
-// issue28989RewriteStringParamAsDate emits one real MYSQL_TYPE_DATE binary
-// value (2024-01-02), rather than changing only the descriptor of text bytes.
-func issue28989RewriteStringParamAsDate(data []byte) ([]byte, bool) {
+// issue28989RewriteStringParamAsTemporal emits one real binary temporal value,
+// rather than changing only the descriptor of text bytes.
+func issue28989RewriteStringParamAsTemporal(
+	data []byte,
+	mysqlType defines.MysqlType,
+	payload []byte,
+) ([]byte, bool) {
 	const (
 		packetHeaderSize = 4
 		stmtExecute      = 0x17
@@ -95,10 +102,8 @@ func issue28989RewriteStringParamAsDate(data []byte) ([]byte, bool) {
 		return data, false
 	}
 	modified := append([]byte(nil), data[:valuePos]...)
-	modified[typePos] = byte(defines.MYSQL_TYPE_DATE)
-	// Binary temporal values use a length byte followed by little-endian year,
-	// month and day.
-	modified = append(modified, 4, 0xe8, 0x07, 1, 2)
+	modified[typePos] = byte(mysqlType)
+	modified = append(modified, payload...)
 	newPayloadLen := len(modified) - packetHeaderSize
 	modified[0] = byte(newPayloadLen)
 	modified[1] = byte(newPayloadLen >> 8)
@@ -654,7 +659,9 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 			capturedConn := wireConn
 			connMu.Unlock()
 			require.NotNil(t, capturedConn)
-			capturedConn.rewriteNextDate()
+			// Binary DATE uses a length byte followed by little-endian year,
+			// month and day.
+			capturedConn.rewriteNext(defines.MYSQL_TYPE_DATE, []byte{4, 0xe8, 0x07, 1, 2})
 			var dateResult string
 			dateErr := stmt.QueryRowContext(ctx, "2024-01-02").Scan(&dateResult)
 			require.Error(t, dateErr)
@@ -664,6 +671,123 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 			// a malformed rewrite could otherwise satisfy only the error assertion.
 			require.NoError(t, stmt.QueryRowContext(ctx, "2024-01-02").Scan(&textResult))
 			require.Equal(t, "a.b.c", textResult)
+		})
+
+		t.Run("COM_STMT temporal values preserve wire semantics", func(t *testing.T) {
+			var connMu sync.Mutex
+			var wireConn *issue28989TemporalTypeConn
+			mysqlDriver.RegisterDialContext("issue28989temporalvalues", func(ctx context.Context, addr string) (net.Conn, error) {
+				conn, dialErr := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+				if dialErr != nil {
+					return nil, dialErr
+				}
+				wrapped := &issue28989TemporalTypeConn{Conn: conn}
+				connMu.Lock()
+				wireConn = wrapped
+				connMu.Unlock()
+				return wrapped, nil
+			})
+			defer mysqlDriver.DeregisterDialContext("issue28989temporalvalues")
+			cn, cnErr := c.GetCNService(0)
+			require.NoError(t, cnErr)
+			temporalDB, openErr := sql.Open("mysql", fmt.Sprintf(
+				"dump:111@issue28989temporalvalues(127.0.0.1:%d)/issue_25408_pagination?interpolateParams=false",
+				cn.GetServiceConfig().CN.Frontend.Port))
+			require.NoError(t, openErr)
+			temporalDB.SetMaxOpenConns(1)
+			temporalDB.SetMaxIdleConns(1)
+			defer temporalDB.Close()
+
+			stmt, prepareErr := temporalDB.PrepareContext(ctx, "select cast(? as char)")
+			require.NoError(t, prepareErr)
+			defer stmt.Close()
+			for _, test := range []struct {
+				name      string
+				mysqlType defines.MysqlType
+				payload   []byte
+				want      string
+			}{
+				{name: "zero time", mysqlType: defines.MYSQL_TYPE_TIME, payload: []byte{0}, want: "00:00:00"},
+				{name: "day time", mysqlType: defines.MYSQL_TYPE_TIME, payload: []byte{8, 0, 1, 0, 0, 0, 2, 3, 4}, want: "26:03:04"},
+				{name: "negative fractional time", mysqlType: defines.MYSQL_TYPE_TIME, payload: []byte{12, 1, 0, 0, 0, 0, 11, 22, 33, 0x1f, 0xa1, 0x07, 0}, want: "-11:22:33.499999"},
+				{name: "half second time", mysqlType: defines.MYSQL_TYPE_TIME, payload: []byte{12, 0, 0, 0, 0, 0, 11, 22, 33, 0x20, 0xa1, 0x07, 0}, want: "11:22:33.500000"},
+				{name: "datetime fraction", mysqlType: defines.MYSQL_TYPE_DATETIME, payload: []byte{11, 0xe8, 0x07, 1, 2, 23, 59, 59, 0x1f, 0xa1, 0x07, 0}, want: "2024-01-02 23:59:59.499999"},
+				{name: "timestamp half second", mysqlType: defines.MYSQL_TYPE_TIMESTAMP, payload: []byte{11, 0xe8, 0x07, 1, 2, 23, 59, 59, 0x20, 0xa1, 0x07, 0}, want: "2024-01-02 23:59:59.500000"},
+			} {
+				t.Run(test.name, func(t *testing.T) {
+					connMu.Lock()
+					capturedConn := wireConn
+					connMu.Unlock()
+					require.NotNil(t, capturedConn)
+					capturedConn.rewriteNext(test.mysqlType, test.payload)
+					var got string
+					require.NoError(t, stmt.QueryRowContext(ctx, "placeholder").Scan(&got))
+					require.Equal(t, test.want, got)
+					require.True(t, capturedConn.wasRewritten())
+				})
+			}
+
+			_, err := temporalDB.ExecContext(ctx, "create table issue28989_time(v time(6))")
+			require.NoError(t, err)
+			defer temporalDB.ExecContext(ctx, "drop table issue28989_time")
+			insertStmt, prepareErr := temporalDB.PrepareContext(ctx, "insert into issue28989_time values (?)")
+			require.NoError(t, prepareErr)
+			defer insertStmt.Close()
+			for _, payload := range [][]byte{
+				{12, 0, 0, 0, 0, 0, 11, 22, 33, 0x1f, 0xa1, 0x07, 0},
+				{12, 0, 0, 0, 0, 0, 11, 22, 33, 0x20, 0xa1, 0x07, 0},
+			} {
+				wireConn.rewriteNext(defines.MYSQL_TYPE_TIME, payload)
+				_, err = insertStmt.ExecContext(ctx, "placeholder")
+				require.NoError(t, err)
+			}
+			rows, queryErr := temporalDB.QueryContext(ctx, "select cast(v as char) from issue28989_time order by v")
+			require.NoError(t, queryErr)
+			defer rows.Close()
+			var stored []string
+			for rows.Next() {
+				var value string
+				require.NoError(t, rows.Scan(&value))
+				stored = append(stored, value)
+			}
+			require.NoError(t, rows.Err())
+			require.Equal(t, []string{"11:22:33.499999", "11:22:33.500000"}, stored)
+
+			for _, test := range []struct {
+				name      string
+				mysqlType defines.MysqlType
+				column    string
+				payload   []byte
+				want      string
+			}{
+				{
+					name: "datetime", mysqlType: defines.MYSQL_TYPE_DATETIME, column: "datetime(6)",
+					payload: []byte{11, 0xe8, 0x07, 1, 2, 23, 59, 59, 0x20, 0xa1, 0x07, 0},
+					want:    "2024-01-02 23:59:59.500000",
+				},
+				{
+					name: "timestamp", mysqlType: defines.MYSQL_TYPE_TIMESTAMP, column: "timestamp(6)",
+					payload: []byte{11, 0xe8, 0x07, 1, 2, 23, 59, 59, 0x1f, 0xa1, 0x07, 0},
+					want:    "2024-01-02 23:59:59.499999",
+				},
+			} {
+				t.Run(test.name+" insert", func(t *testing.T) {
+					table := "issue28989_" + test.name
+					_, err = temporalDB.ExecContext(ctx, fmt.Sprintf("create table %s(v %s)", table, test.column))
+					require.NoError(t, err)
+					defer temporalDB.ExecContext(ctx, "drop table "+table)
+					prepared, prepareErr := temporalDB.PrepareContext(ctx, "insert into "+table+" values (?)")
+					require.NoError(t, prepareErr)
+					defer prepared.Close()
+					wireConn.rewriteNext(test.mysqlType, test.payload)
+					_, err = prepared.ExecContext(ctx, "placeholder")
+					require.NoError(t, err)
+					var got string
+					require.NoError(t, temporalDB.QueryRowContext(ctx,
+						"select cast(v as char) from "+table).Scan(&got))
+					require.Equal(t, test.want, got)
+				})
+			}
 		})
 
 		t.Run("Connector ODBC HAVING and pagination", func(t *testing.T) {

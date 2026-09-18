@@ -5335,19 +5335,29 @@ func TestBinaryProtocolPrepareParamConcreteType(t *testing.T) {
 
 func TestBinaryProtocolPrepareParamTemporalDomains(t *testing.T) {
 	for _, test := range []struct {
+		name      string
 		mysqlType defines.MysqlType
+		value     string
 		want      types.T
+		wantScale int32
 	}{
-		{defines.MYSQL_TYPE_DATE, types.T_date},
-		{defines.MYSQL_TYPE_TIME, types.T_time},
-		{defines.MYSQL_TYPE_DATETIME, types.T_datetime},
-		{defines.MYSQL_TYPE_TIMESTAMP, types.T_timestamp},
+		{name: "date", mysqlType: defines.MYSQL_TYPE_DATE, value: "2024-01-02", want: types.T_date},
+		{name: "time", mysqlType: defines.MYSQL_TYPE_TIME, value: "11:22:33", want: types.T_time},
+		{name: "time microseconds", mysqlType: defines.MYSQL_TYPE_TIME, value: "11:22:33.500000", want: types.T_time, wantScale: 6},
+		{name: "datetime", mysqlType: defines.MYSQL_TYPE_DATETIME, value: "2024-01-02 11:22:33", want: types.T_datetime},
+		{name: "datetime microseconds", mysqlType: defines.MYSQL_TYPE_DATETIME, value: "2024-01-02 11:22:33.499999", want: types.T_datetime, wantScale: 6},
+		{name: "timestamp", mysqlType: defines.MYSQL_TYPE_TIMESTAMP, value: "2024-01-02 11:22:33", want: types.T_timestamp},
+		{name: "timestamp microseconds", mysqlType: defines.MYSQL_TYPE_TIMESTAMP, value: "2024-01-02 23:59:59.500000", want: types.T_timestamp, wantScale: 6},
 	} {
-		runtimeType, _, materialized, hasDirect, ok := binaryProtocolPrepareParamDomains(test.mysqlType, false, "")
-		require.True(t, ok)
-		require.Equal(t, test.want, runtimeType.Oid)
-		require.False(t, hasDirect)
-		require.Empty(t, materialized)
+		t.Run(test.name, func(t *testing.T) {
+			runtimeType, _, materialized, hasDirect, ok := binaryProtocolPrepareParamDomains(
+				test.mysqlType, false, test.value)
+			require.True(t, ok)
+			require.Equal(t, test.want, runtimeType.Oid)
+			require.Equal(t, test.wantScale, runtimeType.Scale)
+			require.False(t, hasDirect)
+			require.Empty(t, materialized)
+		})
 	}
 }
 
