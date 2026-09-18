@@ -233,6 +233,13 @@ insert into t_odku_row_alias values (1, 10, 0);
 insert into t_odku_row_alias values (1, 5, 0) as n(x, y, z) on duplicate key update b = (select n.y + t_odku_row_alias.a from t_odku_scope_source as n where n.x = t_odku_row_alias.id);
 select * from t_odku_row_alias order by id;
 
+-- A later uncorrelated scalar must keep using the remapped candidate row after
+-- the first assignment has consumed the private target lookup.
+delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 0);
+insert into t_odku_row_alias values (1, 5, 0) as n(x, y, z) on duplicate key update a = (select s.y + t_odku_row_alias.a from t_odku_scope_source as s where s.x = t_odku_row_alias.id), b = (select max(s.y) from t_odku_scope_source as s);
+select * from t_odku_row_alias order by id;
+
 -- A target-correlated subquery must not read a stale target snapshot after an
 -- earlier ordered assignment or across input rows that can hit the same target.
 delete from t_odku_row_alias;
