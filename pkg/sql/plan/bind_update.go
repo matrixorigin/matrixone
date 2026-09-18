@@ -105,7 +105,7 @@ func (builder *QueryBuilder) makeUpdateChangedRowsExpr(
 	if proc == nil || !proc.Base.SessionInfo.CountUpdateChangedRows {
 		return nil, nil
 	}
-	return builder.makeUpdateChangedRowsPredicate(alias, selectNode, selectNodeTag, oldColName2Idx, newColName2Idx)
+	return builder.makeUpdateChangedRowsPredicate(alias, selectNode, selectNodeTag, oldColName2Idx, newColName2Idx, true)
 }
 
 // makeUpdateChangedRowsPredicate is also used to guard automatic ON UPDATE
@@ -118,6 +118,7 @@ func (builder *QueryBuilder) makeUpdateChangedRowsPredicate(
 	selectNodeTag int32,
 	oldColName2Idx map[string]int32,
 	newColName2Idx map[string]int32,
+	useProjectionSlots bool,
 ) (*plan.Expr, error) {
 
 	updatedCols := make([]string, 0)
@@ -142,19 +143,34 @@ func (builder *QueryBuilder) makeUpdateChangedRowsPredicate(
 		oldTyp := selectNode.ProjectList[newPos].Typ
 		var oldExpr *plan.Expr
 		if oldPos >= 0 && int(oldPos) < len(selectNode.ProjectList) {
-			// Inline the OLD projection expression. Multi-target UPDATE can
-			// extend/remap the projection before this predicate is consumed, so
-			// the pre-remap slot is not a stable column reference.
-			oldExpr = replaceColRefs(DeepCopyExpr(selectNode.ProjectList[oldPos]), selectNodeTag, selectNode.ProjectList)
-			oldExpr.Typ = oldTyp
+			if useProjectionSlots {
+				oldExpr = &plan.Expr{
+					Typ: oldTyp,
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{
+						RelPos: selectNodeTag,
+						ColPos: oldPos,
+					}},
+				}
+			} else {
+				oldExpr = DeepCopyExpr(selectNode.ProjectList[oldPos])
+				oldExpr.Typ = oldTyp
+			}
 		} else {
 			continue
 		}
-		// Inline the computed assignment instead of referring to the mutable
-		// projection slot. Optimizer projection trimming may remove that slot,
-		// while the assignment's underlying scan references remain available.
-		newExpr := replaceColRefs(DeepCopyExpr(selectNode.ProjectList[newPos]), selectNodeTag, selectNode.ProjectList)
-		newExpr.Typ = oldTyp
+		var newExpr *plan.Expr
+		if useProjectionSlots {
+			newExpr = &plan.Expr{
+				Typ: oldTyp,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: selectNodeTag,
+					ColPos: newPos,
+				}},
+			}
+		} else {
+			newExpr = DeepCopyExpr(selectNode.ProjectList[newPos])
+			newExpr.Typ = oldTyp
+		}
 		var err error
 		if oldExpr.Typ.Id == int32(types.T_char) {
 			oldExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "rtrim", []*plan.Expr{oldExpr})
@@ -664,7 +680,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	changedPredicates := make(map[string]*plan.Expr)
 	for _, alias := range dmlCtx.aliases {
 		if predicate, predicateErr := builder.makeUpdateChangedRowsPredicate(
-			alias, selectNode, selectNodeTag, changedRowsOldColName2Idx, changedRowsNewColName2Idx); predicateErr != nil {
+			alias, selectNode, selectNodeTag, changedRowsOldColName2Idx, changedRowsNewColName2Idx, false); predicateErr != nil {
 			return 0, predicateErr
 		} else if predicate != nil {
 			changedPredicates[alias] = predicate
