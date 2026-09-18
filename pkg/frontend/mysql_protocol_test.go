@@ -6591,6 +6591,22 @@ func Test_readTime_advancesPastMicroseconds(t *testing.T) {
 			convey.So(pos, convey.ShouldEqual, 8)
 		})
 
+		convey.Convey("day is normalized to total hours", func() {
+			dayData := []byte{0, 1, 0, 0, 0, 2, 3, 4}
+			pos, val, ok := proto.readTime(dayData, 0, 8)
+			convey.So(ok, convey.ShouldBeTrue)
+			convey.So(val, convey.ShouldEqual, "26:03:04")
+			convey.So(pos, convey.ShouldEqual, 8)
+		})
+
+		convey.Convey("negative day and microseconds", func() {
+			negativeData := []byte{1, 1, 0, 0, 0, 2, 3, 4, 0x20, 0xa1, 0x07, 0x00}
+			pos, val, ok := proto.readTime(negativeData, 0, 12)
+			convey.So(ok, convey.ShouldBeTrue)
+			convey.So(val, convey.ShouldEqual, "-26:03:04.500000")
+			convey.So(pos, convey.ShouldEqual, 12)
+		})
+
 		convey.Convey("truncated at microsecond boundary", func() {
 			_, _, ok := proto.readTime(data[:9], 0, 12)
 			convey.So(ok, convey.ShouldBeFalse)

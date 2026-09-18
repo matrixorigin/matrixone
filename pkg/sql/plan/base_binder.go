@@ -3413,17 +3413,11 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 				return nil, err
 			}
 		}
-		bound, err := bindBoundFuncExprAndConstFold(
-			b.GetContext(), b.builder.compCtx.GetProcess(), name, args,
-		)
+		bound, err := bindBoundFuncExprAndConstFold(b.GetContext(), b.builder.compCtx.GetProcess(), name, args)
 		if err != nil {
 			return nil, err
 		}
 		if deferredIndex && bound != nil && bound.GetF() != nil && len(bound.GetF().Args) > 0 {
-			// ELT's numeric envelope can add a second implicit cast around the
-			// marker. Keep the deferred marker on the complete function argument,
-			// not only on the inner cast, so execute-time metadata discovery can
-			// select the full-arity ELT rebind path.
 			b.markPreparedNumericFallback(bound.GetF().Args[0])
 		}
 		return bound, nil
@@ -3701,7 +3695,15 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				b.numericParamType = nil
 				b.numericSubqueryTarget = nil
 			}
-			expr, err := b.impl.BindExpr(arg, depth, false)
+			var expr *Expr
+			var err error
+			if target, integerContext := function.IntegerArgumentTarget(name, idx); integerContext {
+				b.numericParamType = nil
+				b.numericSubqueryTarget = nil
+				expr, err = b.bindIntegerArgumentAst(arg, depth, target)
+			} else {
+				expr, err = b.impl.BindExpr(arg, depth, false)
+			}
 			b.numericParamType = paramType
 			b.numericSubqueryTarget = subqueryTarget
 			if err != nil {
@@ -3757,7 +3759,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			}
 			source := arg
 			fn := arg.GetF()
-			explicitCast, explicitPeerCast := astArgs[i].(*tree.CastExpr)
+			explicitCast, explicitPeerCast := unwrapParenExpr(astArgs[i]).(*tree.CastExpr)
 			if explicitPeerCast {
 				target, targetErr := getTypeFromAst(b.GetContext(), explicitCast.Type)
 				if targetErr != nil {
@@ -3775,15 +3777,17 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				}
 			}
 			if fn != nil && fn.Func != nil && strings.EqualFold(fn.Func.GetObjName(), "cast") && len(fn.Args) > 0 &&
-				(!explicitPeerCast || makeTypeByPlan2Expr(arg).Oid.IsMySQLString()) &&
+				!explicitPeerCast && !fn.GetSyntaxExplicitCast() &&
 				!preparedExprContainsParam(fn.Args[0]) &&
 				preparedNumericCommonOperandType(makeTypeByPlan2Expr(fn.Args[0]).Oid) {
 				source = fn.Args[0]
 			}
 			sourceType := makeTypeByPlan2Expr(source)
-			if preparedNumericCommonOperandType(sourceType.Oid) && !sourceType.Oid.IsFloat() {
-				// Preserve only a proven exact peer. Scientific FLOAT literals and
-				// explicit FLOAT casts remain source-less semantic FLOAT boundaries.
+			if preparedNumericCommonOperandType(sourceType.Oid) {
+				// Preserve the peer's semantic domain even when PREPARE coerces it
+				// into the marker's temporary TEXT envelope. Exact sources may be
+				// restored directly; FLOAT sources remain boundaries but mark the
+				// coerced peer so EXECUTE can cast it to a numeric runtime domain.
 				preparedPeerSources[i] = DeepCopyExpr(source)
 			}
 		}
@@ -4078,10 +4082,14 @@ func markPreparedResultCastsProvisional(
 	for i, arg := range args {
 		if i < len(peerSources) && peerSources[i] != nil {
 			attachPreparedRuntimeParamSource(arg, DeepCopyExpr(peerSources[i]))
-			ensurePreparedNumericMetadata(arg).ProvisionalResultPeer = true
+			metadata := ensurePreparedNumericMetadata(arg)
+			metadata.ProvisionalResultPeer = true
+			metadata.ProvisionalResultPeerTypeId = peerSources[i].Typ.Id
+			metadata.ProvisionalResultPeerWidth = peerSources[i].Typ.Width
+			metadata.ProvisionalResultPeerScale = peerSources[i].Typ.Scale
 		}
 		if i < len(astArgs) {
-			if explicitCast, ok := astArgs[i].(*tree.CastExpr); ok {
+			if explicitCast, ok := unwrapParenExpr(astArgs[i]).(*tree.CastExpr); ok {
 				if target, err := getTypeFromAst(ctx, explicitCast.Type); err == nil && types.T(target.Id).IsDecimal() {
 					metadata := ensurePreparedNumericMetadata(arg)
 					metadata.ProvisionalResultPeer = true
@@ -4094,7 +4102,7 @@ func markPreparedResultCastsProvisional(
 		if i >= len(astArgs) || !preparedSQLExecuteNumericResultValueArg(name, i, len(args)) {
 			continue
 		}
-		if _, explicit := astArgs[i].(*tree.CastExpr); explicit {
+		if _, explicit := unwrapParenExpr(astArgs[i]).(*tree.CastExpr); explicit {
 			continue
 		}
 		fn := arg.GetF()
@@ -5174,6 +5182,10 @@ func bindFuncExprImplByPlanExpr(
 	allowInternalFunctionArgs bool,
 ) (*plan.Expr, error) {
 	var err error
+	args, err = bindIntegerFunctionArguments(ctx, name, args)
+	if err != nil {
+		return nil, err
+	}
 	rejectIntervalArgs := rejectBoundIntervalFunctionArgs
 	if descendFunctions {
 		rejectIntervalArgs = rejectStandaloneIntervalFunctionArgs
@@ -8272,7 +8284,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 		if !typ.IsEmpty() && types.T(typ.Id).IsDecimal() {
 			return returnDecimalExpr(originString)
 		}
-		if !strings.Contains(originString, "e") {
+		if !strings.ContainsAny(originString, "eE") {
 			expr, err := returnDecimalExpr(originString)
 			if err == nil {
 				return expr, nil
@@ -9474,6 +9486,9 @@ func isDecimalLiteralCast(arg *plan.Expr) bool {
 // DefaultBinder or ReplaceValueBinder. For other binder implementations it
 // returns an empty Type so literal binding falls back to the generic path.
 func (b *baseBinder) defaultValueBindType() plan.Type {
+	if b.integerArgumentSourceContext {
+		return plan.Type{}
+	}
 	if d, ok := b.impl.(*DefaultBinder); ok {
 		return d.typ
 	}
