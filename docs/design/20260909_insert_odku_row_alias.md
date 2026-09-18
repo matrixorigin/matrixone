@@ -1,23 +1,24 @@
 # INSERT ODKU row aliases
 
-- Status: implementation complete; PR #28439 is Ready for CI/QA, issue #28160 remains open
+- Status: implementation complete within the restricted correlation contract; maintainer design approval and real BVT/QA remain open
 - Tracking issue: https://github.com/matrixorigin/matrixone/issues/28160
-- Baseline: `c51bb4ed868219af720cb5c019fb103bc1e7bcc7` (verified `main` before implementation)
+- Baseline for this rebase: `e66c9da813ccbb8b9d1eedbdc40b619b7ee5dff3` (current `main` fetched 2026-09-17)
 - Scope: MySQL-compatible `INSERT ... VALUES/SET ... AS row_alias[(column_alias, ...)]`
 - Oracle: MySQL 8.4.0 grammar and `insert_update.test`
 
 ## Decision record
 
 This document records the design and implementation boundary for #28160. The
-task owner supplied and approved the fixed semantic plan before implementation;
-the implementation is Ready for repository review, CI, and QA. Issue closure is
-outside this change.
+task owner selected the restricted-correlation design for this round. The
+implementation is ready for code review and CI, while the exact support matrix
+still requires maintainer approval. Issue closure is outside this change.
 
-**Design decision (2026-09-09): PASS for implementation scope.** The selected
+**Design decision (2026-09-17): restricted scope pending maintainer approval.** The selected
 design keeps row aliases in the INSERT AST, builds a statement-local mapping
 after target-table resolution, binds aliases only in the ODKU RHS scope, and
 lowers references to existing incoming/old-row plan columns. It adds no plan
-operator, protobuf field, catalog entry, feature flag, or persisted state.
+operator, protobuf field, catalog entry, feature flag, or persisted state. This
+round does not introduce a general correlated subquery execution framework.
 
 The decision log accepts these constraints from the approved plan:
 
@@ -33,8 +34,10 @@ The decision log accepts these constraints from the approved plan:
    reads the old target row. A bare name is ambiguous when both namespaces
    expose it. ODKU assignment targets always remain target-table columns.
 4. Subqueries resolve their local bindings first. An inner table alias may
-   shadow the outer row alias; an unresolved reference can correlate through
-   the existing parent-binder chain and retains its `CorrColRef` depth.
+   shadow the outer row alias. Direct row-alias and target references retain
+   their bound tags, but correlation is admitted only for a single-row
+   `VALUES`/`SET` source, the first ODKU assignment, and no nested subquery
+   input.
 5. `VALUES(column)` keeps its existing semantics and diagnostics. The mapping
    is planner-owned and statement-local; it never mutates catalog
    `Name2ColIndex` or stores execution parameter values.
@@ -42,12 +45,14 @@ The decision log accepts these constraints from the approved plan:
    discards the unreachable update action. Complete expression traversal
    retains every nested prepared-parameter offset without evaluating a fake
    projection.
-7. A correlated ODKU subquery is flattened only after a statement-local,
-   snapshot target lookup has been joined into the candidate subtree. Its
-   private binding tag supplies the old target row to `CorrColRef`; the later
-   DEDUP target scan remains the conflict arbiter. This reuses the existing
-   LEFT/JOIN and scalar-subquery operators and preserves the target lookup when
-   the DEDUP inputs are remapped.
+7. For the admitted single-row shape, a correlated ODKU subquery is flattened
+   only after a statement-local, snapshot target lookup has been joined into
+   the candidate subtree. Its private binding tag supplies the old target row
+   to `CorrColRef`; the later DEDUP target scan remains the conflict arbiter.
+   Multi-row sources, a correlated expression after the first assignment, and
+   any nested correlated input are rejected before lowering. The same safety
+   rejection applies to legacy ODKU without a row alias; uncorrelated
+   subqueries remain governed by the existing planner path.
 8. Generated-column `DEFAULT` trimming is applied to private statement/source
    copies. The original INSERT columns remain available for row-alias identity
    validation, while the effective legacy fallback receives matching columns
@@ -115,11 +120,12 @@ The parser tests prove AST retention, formatting round trips, rejection of
 unsupported forms, SQL PREPARE parsing, and nested expression syntax. Planner
 unit tests prove identity remapping, generated-column positions, incoming vs
 target/correlated references, target lookup reachability in a real BuildPlan,
-the generated-DEFAULT no-key fallback, ambiguity/error checks, and complete
-nested parameter-offset collection. The distributed ODKU case proves shuffled
-columns, ordered assignments, repeated keys, SET aliases, shadowing,
-correlation, CASE/NULL, repeated SQL PREPARE execution, and the generated
-column fallback's final row image.
+the generated-DEFAULT no-key fallback, ambiguity/error checks, complete
+nested parameter-offset collection, and explicit rejection of multi-row,
+late-assignment, and nested correlated inputs. The distributed ODKU case
+proves shuffled columns, ordered assignments, repeated keys, SET aliases,
+shadowing, the admitted single-row correlation, CASE/NULL, repeated SQL
+PREPARE execution, and the generated-column fallback's final row image.
 
 The final implementation report must keep the following separate:
 
@@ -128,24 +134,25 @@ The final implementation report must keep the following separate:
 - real service and binary-protocol BVT/QA evidence;
 - CI/review status on the exact pushed head.
 
-As of this revision, parser and planner package validation pass with the
-worktree's provenance-checked native CGo artifacts. A test-owned LOG/TN/CN
-instance also passes the correlated SQL, generated-column fallback, SQL
-PREPARE, and binary COM_STMT_PREPARE/EXECUTE checks. The repository's Java
-mo-tester wrapper was unavailable on this host, so the distributed runner
-remains a CI/QA gate.
+As of this revision, the focused parser/planner tests pass with the
+worktree's provenance-checked native CGo artifacts, including the direct alias
+binding, supported single-row correlation, and explicit rejection matrix. A
+fresh distributed SQL/BVT run was not available in this worktree; the runner
+and real-service binary checks remain CI/QA gates and are not claimed here.
 
 ## Compact review record
 
 ```text
-Change scope: complete #28160 VALUES/SET row-alias feature
+Change scope: #28160 VALUES/SET row-alias feature with restricted correlation
 Trigger: SQL-visible feature crossing parser, AST, planner, prepared, and BVT boundaries
-Design: this document, reviewed revision is the implementation commit; Ready pending independent CI/QA review
-Blocking findings: no design-level blocker; planner CGo/native artifacts and real-service QA remain open evidence gaps
+Design: this document; maintainer approval of the support matrix is pending
+Blocking findings: design approval, planner CGo/native artifacts, and real-service QA remain open evidence gaps
 Decision log: statement-local identity mapping; scoped binder; no new executor/wire/catalog state; explicit ROW/SELECT/REPLACE/OVERWRITE exclusions
-Decision: PASS for implementation scope; Ready for independent CI/QA review; no merge or issue-closure decision
-Implementation deviations: the approved scope is unchanged; correlated target
-references are made reachable with an existing LEFT JOIN lookup below the
-candidate pipeline before flattening, and generated-default rewrites stay on
-private statement copies so legacy fallback columns and values remain aligned
+Decision: restricted implementation is complete; maintainer approval and
+independent CI/QA review are still required; no merge or issue-closure decision
+Implementation boundary: direct row aliases and the admitted single-row,
+first-assignment, non-nested correlation use the existing LEFT JOIN lookup
+below the candidate pipeline before flattening. Multi-row, late-assignment,
+and nested correlation remain explicit non-goals and are rejected. Full
+correlated-subquery execution is deferred.
 ```

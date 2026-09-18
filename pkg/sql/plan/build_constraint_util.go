@@ -2440,12 +2440,18 @@ func buildValueScan(
 	if builder.isPrepareStatement && len(OnDuplicateUpdate) > 0 {
 		// The no-key fallback does not execute the ODKU action, but its complete
 		// expression still has to be bound so every parameter marker is retained.
-		// Row-alias expressions are checked for parameter positions only; they
-		// are not evaluated by this legacy fallback.
-		odkuBinder := NewOndupUpdateBinder(
-			builder.GetContext(), builder, bindCtx, 0, 0, tableDef,
-			tableDef.DbName, tableDef.Name, builder.compCtx.GetLowerCaseTableNames(),
-		)
+		// The fallback value scan has no FROM binding for target-table references;
+		// the row-alias path therefore records parameter offsets directly, while
+		// the legacy path uses the ODKU binder for expressions it does bind.
+		var odkuBinder *OndupUpdateBinder
+		if rowAlias == nil {
+			odkuBinder = NewOndupUpdateBinder(
+				builder.GetContext(), builder, bindCtx, 0, 0, tableDef,
+				tableDef.DbName, tableDef.Name, builder.compCtx.GetLowerCaseTableNames(),
+			)
+		}
+		textTyp := types.T_text.ToType()
+		paramExprType := makePlan2Type(&textTyp)
 		for _, update := range OnDuplicateUpdate {
 			if update == nil || len(update.Names) == 0 || update.Names[0] == nil || update.Expr == nil || !checkExprHasParamExpr([]tree.Expr{update.Expr}) {
 				continue
@@ -2457,7 +2463,7 @@ func buildValueScan(
 				}
 				for _, offset := range collectParamExprOffsets(update.Expr) {
 					onUpdateExprs = append(onUpdateExprs, &plan.Expr{
-						Typ:  constTextType,
+						Typ:  paramExprType,
 						Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(offset)}},
 					})
 				}
