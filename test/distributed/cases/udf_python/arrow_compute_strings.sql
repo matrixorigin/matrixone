@@ -13,10 +13,14 @@ insert into string_values values
     (1, ''),
     (2, 'Alpha'),
     (3, '中a😀'),
-    (4, null);
+    (4, 'banana'),
+    (5, 'A'),
+    (6, null);
 
 -- The kernels must preserve empty strings and NULL validity. utf8_length
--- counts Unicode code points, so the final non-NULL value has length three.
+-- counts Unicode code points, so the Unicode value has length three. The
+-- repeated and uppercase samples distinguish all-replacement behavior from
+-- a single replacement and case-sensitive matching from case folding.
 select id,
        python_bvt_pc_upper(value) as upper_value,
        python_bvt_pc_contains(value) as contains_a,
