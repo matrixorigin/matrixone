@@ -156,7 +156,7 @@ func markDecimalLiteralRequiresV82(expr *plan.Expr, source, canonical string, wi
 // narrow literal's result without changing its literal spelling, so the
 // source literal itself must be marked even when the comparison is retained.
 func markDecimalComparisonProtocolRequirement(expr *plan.Expr, owner any) {
-	required, err := plan.RequiresMORPCVersion87DecimalLiteralSemantics(owner)
+	required, err := plan.RequiresMORPCVersion88DecimalLiteralSemantics(owner)
 	args, hasArgs := owner.([]*plan.Expr)
 	extended := hasArgs && decimalComparisonUsesExtendedTrailingZeroSemantics(args)
 	if err != nil || (!required && !extended) {

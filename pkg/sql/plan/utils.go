@@ -2041,7 +2041,7 @@ func constantFoldWithPreparedExactSource(
 			// and visible to the remote protocol capability analysis.
 			return expr, nil
 		}
-		requiresDecimalProvenance, err := plan.RequiresMORPCVersion87DecimalLiteralSemantics(exprList)
+		requiresDecimalProvenance, err := plan.RequiresMORPCVersion88DecimalLiteralSemantics(exprList)
 		if err != nil {
 			return nil, err
 		}
@@ -2094,10 +2094,10 @@ func constantFoldWithPreparedExactSource(
 		return nil, err
 	}
 	// View admission scans the optimized plan. Do not fold away a spatial
-	// distance expression before that scan can record its MORPC v88 floor; the
+	// distance expression before that scan can record its MORPC v89 floor; the
 	// original SQL is still rebound by older readers and must not lose its
 	// changed geodetic/overload semantics.
-	if requiresSpatial, spatialErr := plan.RequiresMORPCVersion88SpatialDistanceSemantics(expr); spatialErr != nil || requiresSpatial {
+	if requiresSpatial, spatialErr := plan.RequiresMORPCVersion89SpatialDistanceSemantics(expr); spatialErr != nil || requiresSpatial {
 		return expr, nil
 	}
 	if f.CannotFold() {
@@ -2151,7 +2151,7 @@ func constantFoldWithPreparedExactSource(
 	defer free()
 
 	if isVec {
-		requiresDecimalProvenance, err := plan.RequiresMORPCVersion87DecimalLiteralSemantics(fn.Args)
+		requiresDecimalProvenance, err := plan.RequiresMORPCVersion88DecimalLiteralSemantics(fn.Args)
 		if err != nil {
 			return nil, err
 		}

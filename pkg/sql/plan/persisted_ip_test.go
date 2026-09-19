@@ -54,10 +54,10 @@ func TestPersistedDecimalLiteralUsesDedicatedEpochInMixedOwner(t *testing.T) {
 		exprs []*planpb.Expr
 		want  int64
 	}{
-		{"decimal only", []*planpb.Expr{decimalExpr}, defines.MORPCVersion87},
-		{"spatial only", []*planpb.Expr{spatialExpr}, defines.MORPCVersion88},
-		{"decimal then spatial", []*planpb.Expr{decimalExpr, spatialExpr}, defines.MORPCVersion88},
-		{"spatial then decimal", []*planpb.Expr{spatialExpr, decimalExpr}, defines.MORPCVersion88},
+		{"decimal only", []*planpb.Expr{decimalExpr}, defines.MORPCVersion88},
+		{"spatial only", []*planpb.Expr{spatialExpr}, defines.MORPCVersion89},
+		{"decimal then spatial", []*planpb.Expr{decimalExpr, spatialExpr}, defines.MORPCVersion89},
+		{"spatial then decimal", []*planpb.Expr{spatialExpr, decimalExpr}, defines.MORPCVersion89},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			owner := &planpb.TableDef{}
@@ -101,12 +101,12 @@ func TestPersistedDecimalLiteralProtocolAdmission(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, features.DecimalLiteralSemantics, expr.String())
 
-	for _, version := range []int64{defines.MORPCVersion81, defines.MORPCVersion86, defines.MORPCVersion87} {
+	for _, version := range []int64{defines.MORPCVersion81, defines.MORPCVersion86, defines.MORPCVersion88} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, version)
 		err = RequirePersistedExpressionProtocol(proc.Ctx, proc, expr)
-		if version < defines.MORPCVersion87 {
-			require.ErrorContains(t, err, "protocol version 87")
+		if version < defines.MORPCVersion88 {
+			require.ErrorContains(t, err, "protocol version 88")
 		} else {
 			require.NoError(t, err)
 		}
@@ -163,15 +163,15 @@ func TestPersistedDecimalLiteralTargetTypedDefaultAdmission(t *testing.T) {
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion81))
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion81))
 	_, err = buildDefaultExpr(col, typ, proc)
-	require.ErrorContains(t, err, "protocol version 87")
+	require.ErrorContains(t, err, "protocol version 88")
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion87))
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion87))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion88))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion88))
 	defaultExpr, err := buildDefaultExpr(col, typ, proc)
 	require.NoError(t, err)
 	require.NotNil(t, defaultExpr)
-	require.Equal(t, int64(defines.MORPCVersion87), func() int64 {
+	require.Equal(t, int64(defines.MORPCVersion88), func() int64 {
 		version, versionErr := RequiredPersistedExpressionProtocolVersion(defaultExpr)
 		require.NoError(t, versionErr)
 		return version
@@ -185,7 +185,7 @@ func TestPersistedDecimalLiteralTargetTypedDefaultAdmission(t *testing.T) {
 	require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, plain))
 	// A temporal/non-DECIMAL target keeps the original spelling for the cast,
 	// so it does not depend on the exact DECIMAL literal carrier introduced by
-	// v87 and remains admissible at the v81 floor.
+	// v88 and remains admissible at the v81 floor.
 	timeSource := "0.001"
 	timeStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
 		"create table t_time(a time(3) default ("+timeSource+"))", 1)
@@ -246,7 +246,7 @@ func TestPersistedDecimalLiteralMarkerSurvivesDeepCopyAndListFold(t *testing.T) 
 			foldedFeatures, featureErr := planpb.RequiredRemoteExpressionFeatures(folded)
 			require.NoError(t, featureErr)
 			require.True(t, foldedFeatures.DecimalLiteralSemantics)
-			require.Equal(t, int64(defines.MORPCVersion87), func() int64 {
+			require.Equal(t, int64(defines.MORPCVersion88), func() int64 {
 				version, versionErr := RequiredPersistedExpressionProtocolVersion(folded)
 				require.NoError(t, versionErr)
 				return version
@@ -758,11 +758,11 @@ func TestPersistedExpressionProtocolAdmissionForSpatialDistance(t *testing.T) {
 		{name: "distance unit", expr: spatialExpr(421, 4)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			for _, version := range []int64{defines.MORPCVersion87, defines.MORPCVersion88} {
+			for _, version := range []int64{defines.MORPCVersion88, defines.MORPCVersion89} {
 				rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 				err := RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.expr)
-				if version < defines.MORPCVersion88 {
-					require.ErrorContains(t, err, "protocol version 88")
+				if version < defines.MORPCVersion89 {
+					require.ErrorContains(t, err, "protocol version 89")
 				} else {
 					require.NoError(t, err)
 				}
@@ -771,14 +771,14 @@ func TestPersistedExpressionProtocolAdmissionForSpatialDistance(t *testing.T) {
 	}
 
 	// Mixed owners use the strongest admission requirement instead of allowing
-	// a v72 IP expression to mask a v88 spatial-distance expression.
+	// a v72 IP expression to mask a v89 spatial-distance expression.
 	mixed := &planpb.TableDef{Cols: []*planpb.ColDef{
 		{Default: &planpb.Default{Expr: spatialExpr(394, 0)}},
 		{Default: &planpb.Default{Expr: spatialExpr(421, 4)}},
 	}}
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion87)
-	require.ErrorContains(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, mixed), "protocol version 88")
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion88)
+	require.ErrorContains(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, mixed), "protocol version 89")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion89)
 	require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, mixed))
 }
 
@@ -798,7 +798,7 @@ func TestSpatialDistanceRequirementSurvivesConstantFold(t *testing.T) {
 			require.NoError(t, err)
 			required, err := RequiredPersistedExpressionProtocolVersion(expr)
 			require.NoError(t, err)
-			require.Equal(t, defines.MORPCVersion88, required)
+			require.Equal(t, defines.MORPCVersion89, required)
 
 			folded, err := ConstantFold(
 				batch.EmptyForConstFoldBatch, DeepCopyExpr(expr), proc, false, true)
@@ -807,7 +807,7 @@ func TestSpatialDistanceRequirementSurvivesConstantFold(t *testing.T) {
 				"spatial capability must remain visible after constant folding")
 			required, err = RequiredPersistedExpressionProtocolVersion(folded)
 			require.NoError(t, err)
-			require.Equal(t, defines.MORPCVersion88, required)
+			require.Equal(t, defines.MORPCVersion89, required)
 
 			node := &planpb.Node{ProjectList: []*planpb.Expr{DeepCopyExpr(expr)}}
 			planrule.NewConstantFold(false).Apply(node, nil, proc)
@@ -815,7 +815,7 @@ func TestSpatialDistanceRequirementSurvivesConstantFold(t *testing.T) {
 				"optimizer constant folding must preserve spatial provenance")
 			required, err = RequiredPersistedExpressionProtocolVersion(node.ProjectList[0])
 			require.NoError(t, err)
-			require.Equal(t, defines.MORPCVersion88, required)
+			require.Equal(t, defines.MORPCVersion89, required)
 		})
 	}
 }

@@ -172,7 +172,7 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 				// and visible to the remote protocol capability analysis.
 				return expr
 			}
-			requiresDecimalProvenance, err := plan.RequiresMORPCVersion87DecimalLiteralSemantics(exprList)
+			requiresDecimalProvenance, err := plan.RequiresMORPCVersion88DecimalLiteralSemantics(exprList)
 			if err != nil {
 				return expr
 			}
@@ -229,7 +229,7 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	// requirement; folding them to a literal would erase the only durable
 	// capability marker and let an older reader rebind the original SQL under
 	// incompatible planar semantics.
-	if requiresSpatial, err := plan.RequiresMORPCVersion88SpatialDistanceSemantics(expr); err != nil || requiresSpatial {
+	if requiresSpatial, err := plan.RequiresMORPCVersion89SpatialDistanceSemantics(expr); err != nil || requiresSpatial {
 		return expr
 	}
 	if f.CannotFold() { // function cannot be fold
@@ -276,7 +276,7 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	defer free()
 
 	if isVec {
-		requiresDecimalProvenance, err := plan.RequiresMORPCVersion87DecimalLiteralSemantics(fn.Args)
+		requiresDecimalProvenance, err := plan.RequiresMORPCVersion88DecimalLiteralSemantics(fn.Args)
 		if err != nil {
 			return expr
 		}
