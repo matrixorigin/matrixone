@@ -538,8 +538,12 @@ func TestDiskCacheCompletedOwnerCannotReleaseNextGeneration(t *testing.T) {
 
 func TestDiskCacheAsyncUpdateReturnsBeforePathAvailable(t *testing.T) {
 	cache := newLifecycleTestDiskCache(t)
+	// This test owns the scheduling gates, not the filesystem's sync latency.
+	syncStarted, unblockSync := installBlockedDiskCacheFileSync(cache)
+	t.Cleanup(unblockSync)
 	diskPath := cache.pathForIOEntry("foo", IOEntry{Offset: 0, Size: 1})
 	release := cache.startUpdate(diskPath)
+	t.Cleanup(release)
 	data := []byte("x")
 	written := make(chan IOEntry, 1)
 	ctx := OnDiskCacheWritten(context.Background(), func(_ string, entry IOEntry) {
@@ -558,8 +562,6 @@ func TestDiskCacheAsyncUpdateReturnsBeforePathAvailable(t *testing.T) {
 	case err := <-done:
 		require.NoError(t, err)
 	case <-time.After(diskCacheLifecycleTestTimeout):
-		release()
-		<-done
 		t.Fatal("async disk-cache update waited for the current path owner")
 	}
 
@@ -570,12 +572,28 @@ func TestDiskCacheAsyncUpdateReturnsBeforePathAvailable(t *testing.T) {
 	}
 	data[0] = 'y'
 	release()
+	select {
+	case <-syncStarted:
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		t.Fatal("async disk-cache update did not reach finalization after path release")
+	}
+	select {
+	case <-written:
+		t.Fatal("async callback ran before cache finalization completed")
+	default:
+	}
+	unblockSync()
 	flushCtx, cancel := context.WithTimeout(context.Background(), diskCacheLifecycleTestTimeout)
 	defer cancel()
 	cache.Flush(flushCtx)
 	require.NoError(t, flushCtx.Err())
-	writtenEntry := <-written
-	require.Equal(t, []byte("x"), writtenEntry.Data)
+	// Flush drains pending writes, but callbacks run independently afterward.
+	select {
+	case writtenEntry := <-written:
+		require.Equal(t, []byte("x"), writtenEntry.Data)
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		t.Fatal("async disk-cache update did not deliver its completion callback")
+	}
 
 	vector := &IOVector{FilePath: "foo", Entries: []IOEntry{{Offset: 0, Size: 1}}}
 	defer vector.Release()
