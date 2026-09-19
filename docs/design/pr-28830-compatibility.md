@@ -56,8 +56,13 @@ path. The epoch assignments are monotonic and cumulative:
 |---|---:|
 | existing integer-parameter coercion | 85 |
 | extended IP overload/result and expression metadata | 86 |
-| geodetic distance semantics and length-unit overloads | 87 |
-| exact DECIMAL256 literal persisted-expression semantics | 88 |
+| exact decimal literal and coercion semantics (complete D closure) | 87 |
+| geodetic distance semantics and length-unit overloads | 88 |
+
+C must include the complete finalized D87 closure before validation or rollout;
+copying only the common-coercion delta is insufficient. Main86 -> D87 -> C88
+ensures that advertising the latest version also supports every prior contract.
+Both new epochs are unmerged; earlier branch-local assignments are superseded.
 
 The protobuf additions are optional fields. Old readers can decode the message,
 but must not execute a marked expression under a different semantic contract.

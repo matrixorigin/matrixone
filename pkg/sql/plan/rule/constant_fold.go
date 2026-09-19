@@ -229,7 +229,7 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	// requirement; folding them to a literal would erase the only durable
 	// capability marker and let an older reader rebind the original SQL under
 	// incompatible planar semantics.
-	if requiresSpatial, err := plan.RequiresMORPCVersion86SpatialDistanceSemantics(expr); err != nil || requiresSpatial {
+	if requiresSpatial, err := plan.RequiresMORPCVersion88SpatialDistanceSemantics(expr); err != nil || requiresSpatial {
 		return expr
 	}
 	if f.CannotFold() { // function cannot be fold

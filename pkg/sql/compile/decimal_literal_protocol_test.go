@@ -38,7 +38,7 @@ func remoteDecimalLiteralExpr() *planpb.Expr {
 		},
 		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
 			// The field name is retained for protobuf source compatibility; the
-			// feature is admitted at MORPC v88.
+			// feature is admitted at MORPC v87.
 			DecimalLiteralRequiresV82: true,
 			Value:                     &planpb.Literal_Sval{Sval: "12345678901234567890123456789012345678.1"},
 		}},
@@ -59,8 +59,8 @@ func TestRemoteDecimalLiteralProtocolValidation(t *testing.T) {
 		if hadPrevious {
 			rt.SetGlobalVariables(runtime.MOProtocolVersion, previous)
 		} else {
+			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion86)
 			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion87)
-			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion88)
 		}
 	})
 
@@ -69,11 +69,11 @@ func TestRemoteDecimalLiteralProtocolValidation(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, features.DecimalLiteralSemantics)
 
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion87)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion86)
 	err = validateRemoteExpressionPipelineProtocol(c.proc, p)
-	require.ErrorContains(t, err, "exact DECIMAL256 literal semantics require MORPC protocol version 88")
+	require.ErrorContains(t, err, "exact DECIMAL256 literal semantics require MORPC protocol version 87")
 
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion88)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion87)
 	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 }
 
@@ -94,7 +94,7 @@ func TestRemoteDecimalLiteralPlacementAndDestinationValidation(t *testing.T) {
 		RootOp:   op,
 	}
 
-	client.version = defines.MORPCVersion87
+	client.version = defines.MORPCVersion86
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 	require.NoError(t, c.constrainDecimalLiteralWorkers(query))
@@ -102,7 +102,7 @@ func TestRemoteDecimalLiteralPlacementAndDestinationValidation(t *testing.T) {
 	_, err := encodeRemoteScope(scope, c.proc)
 	require.ErrorContains(t, err, "remote destination")
 
-	client.version = defines.MORPCVersion88
+	client.version = defines.MORPCVersion87
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 	require.NoError(t, c.constrainDecimalLiteralWorkers(query))
