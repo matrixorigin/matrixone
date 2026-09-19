@@ -99,8 +99,18 @@ were stable. Each typed database was dropped in a finally cleanup before reuse.
 
 ## BVT and review status
 
-Normal comparison of `vector_hnsw_async.sql` and `vector_hnsw_snapshot.sql`, twice
-on the same candidate cluster, is required; final outcomes are recorded below.
+Normal comparison (`method=run`, standard `nometa ignore pprof` flags) passed
+twice on the same candidate cluster, with zero failures, ignores or abnormal cases:
+
+| Case | Round 1 | Round 2 |
+| --- | --- | --- |
+| vector_hnsw_async.sql | 79/79, 55.847s | 79/79, 49.871s |
+| vector_hnsw_snapshot.sql | 27/27, 14.073s | 27/27, 7.561s |
+
+All four commands exited zero. Case-owned databases/snapshot were dropped by
+each successful case; the final catalog check found zero test databases and no
+snapshots. The same-instance second pass independently exercised clean recreation.
+
 The async case reuses its existing three-row F32/F64 fixture, warms both models,
 and polls all six unchanged INSERT/UPDATE/DELETE result oracles. The empty-index
 fixture additionally polls all three endpoint results: its first metadata model
@@ -110,6 +120,18 @@ row separator on the final row. No generated result was blindly accepted.
 
 Raw local logs, topology configs and the reusable SQL QA driver are retained in
 `/home/xupeng/mo-worktrees/issue-27632-evidence` on the validation host.
+
+GPT-6 medium final whole-change review inspected the raw logs and the complete
+committed/local diff: no production-code blockers; CPU/native/BVT closure passed.
+Final decision is **REQUEST_CHANGES solely for the unmet GPU validation gate**.
+The mo-dev CGo/GPU contract requires the whole GPU test set when shared vector
+code changes; unchanged GPU interfaces do not waive it. Push/PR is paused pending
+a suitable GPU environment or an explicit exception from the user/policy owner.
+
+Candidate processes were stopped in CN1+CN2, then TN, then LOG order. All four
+process sessions exited zero and logged shutdown completion. No test-owned service
+was left running. This supplements, rather than replaces, the deterministic
+running-shutdown/checker concurrency test.
 
 ## Remaining operational limits
 
