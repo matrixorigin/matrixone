@@ -1987,8 +1987,14 @@ func TestGroupConsumesReusableGroupingSetProjectionBatches(t *testing.T) {
 
 func TestGroupPreservesEmptyGroupingSetAcrossPartialMerge(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	t.Cleanup(func() {
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
 	child := colexec.NewMockOperator()
+	t.Cleanup(func() { child.Free(proc, false, nil) })
 	expand := projection.NewArgument()
+	t.Cleanup(func() { expand.Free(proc, false, nil) })
 	expand.ProjectList = []*plan.Expr{
 		colExpr(0, types.T_varchar), colExpr(1, types.T_int32), {
 			Typ:  plan.Type{Id: int32(types.T_bool), NotNullable: true},
@@ -2009,6 +2015,7 @@ func TestGroupPreservesEmptyGroupingSetAcrossPartialMerge(t *testing.T) {
 	}, aggs)
 	partialGroup.NeedEval = false
 	partialGroup.DynamicGrouping = true
+	t.Cleanup(func() { partialGroup.Free(proc, false, nil) })
 	partialGroup.AppendChild(expand)
 	require.NoError(t, partialGroup.Prepare(proc))
 	partialOutputs := collectBatches(t, partialGroup, proc)
@@ -2018,13 +2025,28 @@ func TestGroupPreservesEmptyGroupingSetAcrossPartialMerge(t *testing.T) {
 		cloneBatch(t, proc, partialOutputs[0]),
 		cloneBatch(t, proc, partialOutputs[0]),
 	}
-
-	partialGroup.Free(proc, false, nil)
-	expand.Free(proc, false, nil)
-	child.Free(proc, false, nil)
+	partialsOwned := true
+	t.Cleanup(func() {
+		if partialsOwned {
+			for _, partial := range partials {
+				partial.Clean(proc.Mp())
+			}
+		}
+	})
+	// Mix a local partial with a remote partial: losing the latter's grouping
+	// bitmap would split the single empty identity into two hash domains.
+	var wire bytes.Buffer
+	_, err := partials[1].MarshalBinaryForPipeline(&wire, true, true)
+	require.NoError(t, err)
+	partials[1].Clean(proc.Mp())
+	partials[1] = batch.NewOffHeapEmpty()
+	require.NoError(t, partials[1].UnmarshalBinaryForPipeline(wire.Bytes(), proc.Mp()))
 
 	mergeChild := colexec.NewMockOperator().WithBatchs(partials)
+	t.Cleanup(func() { mergeChild.Free(proc, false, nil) })
+	partialsOwned = false
 	merge := newMergeGroupOp(aggs)
+	t.Cleanup(func() { merge.Free(proc, false, nil) })
 	merge.GroupingAware = true
 	merge.EmptyGroupingSetIDs = []int64{1}
 	merge.GroupByTypes = []types.Type{
@@ -2040,10 +2062,6 @@ func TestGroupPreservesEmptyGroupingSetAcrossPartialMerge(t *testing.T) {
 	require.Equal(t, int64(0), vector.GetFixedAtNoTypeCheck[int64](outputs[0].Vecs[2], 0))
 	require.True(t, outputs[0].Vecs[3].IsNull(0))
 
-	merge.Free(proc, false, nil)
-	mergeChild.Free(proc, false, nil)
-	proc.Free()
-	require.Zero(t, proc.Mp().CurrNB())
 }
 
 func TestGroupCreatesLegacyEmptyGroupingSet(t *testing.T) {
@@ -3746,7 +3764,10 @@ func TestMergeGroupRejectsHashMetadataIncompatibleWithVectors(t *testing.T) {
 
 func TestMergeGroupAcceptsNotNullableGroupingPartial(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	defer proc.Free()
+	t.Cleanup(func() {
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
 
 	input := batch.NewWithSize(1)
 	input.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
@@ -3754,6 +3775,7 @@ func TestMergeGroupAcceptsNotNullableGroupingPartial(t *testing.T) {
 	groupBy := colExpr(0, types.T_int32)
 	groupBy.Typ.NotNullable = true
 	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	t.Cleanup(func() { child.Free(proc, false, nil) })
 	partialGroup := newGroupOp(
 		proc,
 		[]*plan.Expr{groupBy},
@@ -3761,28 +3783,47 @@ func TestMergeGroupAcceptsNotNullableGroupingPartial(t *testing.T) {
 	)
 	partialGroup.NeedEval = false
 	partialGroup.GroupingFlag = []bool{false}
+	t.Cleanup(func() { partialGroup.Free(proc, false, nil) })
 	partialGroup.AppendChild(child)
 	require.NoError(t, partialGroup.Prepare(proc))
 	require.Equal(t, int32(HStr), partialGroup.ctr.mtyp)
 	partialOutputs := collectBatches(t, partialGroup, proc)
 	require.Len(t, partialOutputs, 1)
 	partial := cloneBatch(t, proc, partialOutputs[0])
-	partialGroup.Free(proc, false, nil)
-	child.Free(proc, false, nil)
+	t.Cleanup(func() {
+		if partial != nil {
+			partial.Clean(proc.Mp())
+		}
+	})
+	// Exercise the actual cross-CN representation, including aggregate/hash
+	// metadata in ExtraBuf. Dup alone hides lost vector grouping provenance.
+	var wire bytes.Buffer
+	_, err := partial.MarshalBinaryForPipeline(&wire, true, true)
+	require.NoError(t, err)
+	remotePartial := batch.NewWithSize(0)
+	t.Cleanup(func() {
+		if remotePartial != nil {
+			remotePartial.Clean(proc.Mp())
+		}
+	})
+	require.NoError(t, remotePartial.UnmarshalBinaryForPipeline(wire.Bytes(), proc.Mp()))
+	partial.Clean(proc.Mp())
+	partial = remotePartial
+	remotePartial = nil
 	require.True(t, partial.Vecs[0].GetNulls().Contains(0))
 	require.True(t, partial.Vecs[0].GetGrouping().Contains(0))
 
 	mergeChild := colexec.NewMockOperator().WithBatchs([]*batch.Batch{partial})
+	t.Cleanup(func() { mergeChild.Free(proc, false, nil) })
+	partial = nil
 	merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{countStarAgg()})
+	t.Cleanup(func() { merge.Free(proc, false, nil) })
 	merge.AppendChild(mergeChild)
 	require.NoError(t, merge.Prepare(proc))
 	outputs := collectBatches(t, merge, proc)
 	require.Len(t, outputs, 1)
 	require.Equal(t, 1, outputs[0].RowCount())
 	require.Equal(t, int64(2), vector.GetFixedAtNoTypeCheck[int64](outputs[0].Vecs[1], 0))
-	merge.Free(proc, false, nil)
-	mergeChild.Free(proc, false, nil)
-	require.Zero(t, proc.Mp().CurrNB())
 }
 
 func TestMergeGroupH0SkipsGenericSpillAndReuses(t *testing.T) {

@@ -116,6 +116,9 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err = validateGroupingTransportDestinations(proc, p); err != nil {
+		return nil, err
+	}
 	if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
@@ -577,6 +580,14 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 	}
 
 	s = newScope(magicType(p.GetPipelineType()))
+	for parent := ctx; parent != nil; parent = parent.parent {
+		if parent.plan != nil {
+			if queryNeedsGroupingTransport(parent.plan.GetQuery()) {
+				s.Plan = parent.plan
+			}
+			break
+		}
+	}
 	s.IsEnd = p.IsEnd
 	s.IsLoad = p.IsLoad
 	s.IsRemote = isRemote
@@ -2803,7 +2814,7 @@ func convertToResultPos(relList, colList []int32) []colexec.ResultPos {
 // func decodeBatch(proc *process.Process, data []byte) (*batch.Batch, error) {
 func decodeBatch(mp *mpool.MPool, data []byte) (*batch.Batch, error) {
 	bat := batch.NewOffHeapEmpty()
-	if err := bat.UnmarshalBinaryWithPrepareParamKinds(data, mp); err != nil {
+	if err := bat.UnmarshalBinaryForPipeline(data, mp); err != nil {
 		bat.Clean(mp)
 		return nil, err
 	}
