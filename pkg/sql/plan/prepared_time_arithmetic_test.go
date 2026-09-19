@@ -17,8 +17,10 @@ package plan
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -307,6 +309,112 @@ func TestPreparedTimeArithmeticPreservesTemporalIntegerDomain(t *testing.T) {
 			require.Equal(t, ordinaryExpr.Typ.Width, preparedExpr.Typ.Width)
 			require.Equal(t, ordinaryExpr.Typ.Scale, preparedExpr.Typ.Scale)
 		})
+	}
+}
+
+func TestPreparedTimeArithmeticFallbackPreservesIntegerBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name, expression string
+	}{
+		{"add-reuse", "abs(cast('00:00:01' as time(0)) + ?)"},
+		{"subtract", "abs(cast('00:00:01' as time(0)) - ?)"},
+		{"remainder", "abs(cast('00:00:01' as time(0)) % ?)"},
+		{"mod", "abs(mod(cast('00:00:01' as time(0)), ?))"},
+		{"reverse", "abs(? + cast('00:00:01' as time(0)))"},
+		{"fractional-time", "abs(cast('03:04:05.123456' as time(6)) + ?)"},
+		{"nested-integer", "abs(cast('00:00:01' as time(0)) + (? + ?))"},
+		{"unsigned", "abs(cast('00:00:01' as time(0)) + ?)"},
+		{"decimal-parameter", "abs(cast('00:00:01' as time(0)) + ?)"},
+		{"explicit-decimal", "abs(cast(cast('00:00:01' as time(0)) as decimal(10,2)) + ?)"},
+		{"explicit-double", "abs(cast('00:00:01' as time(0)) + cast(? as double))"},
+		{"sign", "sign(cast('00:00:01' as time(0)) + ?)"},
+		{"elt", "elt(cast('00:00:01' as time(0)) + ?, 'first', 'second')"},
+	} {
+		for _, binary := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/binary=%t", tc.name, binary), func(t *testing.T) {
+				prepared, err := runOneStmt(NewMockOptimizer(false), t,
+					"prepare fallback_time from 'select "+strings.ReplaceAll(tc.expression, "'", "''")+"'")
+				require.NoError(t, err)
+				template := prepared.GetDcl().GetPrepare().Plan
+				before, err := template.Marshal()
+				require.NoError(t, err)
+				values := []string{"10", "9223372036854775807"}
+				if tc.name == "unsigned" {
+					values = []string{"10", "18446744073709551615"}
+				}
+				if tc.name == "decimal-parameter" {
+					values = []string{"1.25"}
+				}
+				if tc.name == "add-reuse" || tc.name == "nested-integer" {
+					values = []string{"10", "NULL", "10", "9223372036854775807", "10"}
+				}
+				for i, value := range values {
+					t.Run(fmt.Sprintf("%d/%s", i, value), func(t *testing.T) {
+						param := ParamValue{Value: value, PrepareParamKind: vector.PrepareParamInteger}
+						sourceType, castType := types.T_int64.ToType(), "signed"
+						if tc.name == "unsigned" {
+							sourceType, castType = types.T_uint64.ToType(), "unsigned"
+						}
+						if tc.name == "decimal-parameter" {
+							sourceType, castType = types.New(types.T_decimal128, 20, 2), "decimal(20,2)"
+							param.PrepareParamKind = vector.PrepareParamDecimal
+						}
+						if binary {
+							param.IsBinaryProtocol = true
+							param.RuntimeType, param.HasRuntimeType = sourceType, true
+						} else {
+							param.SourceType, param.HasSourceType = sourceType, true
+						}
+						if value == "NULL" {
+							param = ParamValue{Value: nil, PrepareParamKind: vector.PrepareParamNone}
+						}
+						params := make([]any, strings.Count(tc.expression, "?"))
+						for j := range params {
+							params[j] = param
+						}
+						filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), template, params)
+						require.NoError(t, err)
+						actual := filled.GetQuery().Nodes[len(filled.GetQuery().Nodes)-1].ProjectList[0]
+						proc := testutil.NewProc(t)
+						t.Cleanup(proc.Free)
+						eval := func(expr *planpb.Expr) (*vector.Vector, error) {
+							executor, err := colexec.NewExpressionExecutor(proc, expr)
+							require.NoError(t, err)
+							t.Cleanup(executor.Free)
+							return executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+						}
+						if value == "NULL" {
+							result, err := eval(actual)
+							require.NoError(t, err)
+							require.True(t, result.IsNull(0))
+							return
+						}
+						ordinary, err := runOneStmt(NewMockOptimizer(false), t, "select "+
+							strings.ReplaceAll(tc.expression, "?", "cast("+value+" as "+castType+")"))
+						require.NoError(t, err)
+						expected := ordinary.GetQuery().Nodes[len(ordinary.GetQuery().Nodes)-1].ProjectList[0]
+						require.Equal(t, expected.Typ.Id, actual.Typ.Id)
+						require.Equal(t, expected.Typ.Width, actual.Typ.Width)
+						require.Equal(t, expected.Typ.Scale, actual.Typ.Scale)
+						want, wantErr := eval(expected)
+						got, gotErr := eval(actual)
+						if wantErr != nil {
+							require.Error(t, gotErr)
+							require.Equal(t, wantErr.(*moerr.Error).ErrorCode(), gotErr.(*moerr.Error).ErrorCode())
+							return
+						}
+						require.NoError(t, gotErr)
+						require.Equal(t, want.IsNull(0), got.IsNull(0))
+						if !want.IsNull(0) {
+							require.Equal(t, want.String(), got.String())
+						}
+					})
+				}
+				after, err := template.Marshal()
+				require.NoError(t, err)
+				require.Equal(t, before, after)
+			})
+		}
 	}
 }
 

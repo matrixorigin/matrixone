@@ -17,11 +17,13 @@ package embed
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/require"
 )
 
@@ -124,6 +126,70 @@ func TestPreparedTimeArithmeticOverMySQLProtocol(t *testing.T) {
 			rows, err := conn.QueryContext(ctx, statement)
 			require.NoError(t, err, statement)
 			assertPreparedTimeResult(t, rows, want, false, 18, 0)
+		}
+		for _, temporal := range []struct {
+			literal, want string
+			scale         int64
+		}{{"00:00:01", "11", 0}, {"03:04:05.123456", "30415.123456", 6}} {
+			for _, binary := range []bool{false, true} {
+				t.Run(fmt.Sprintf("abs-boundary/time%d/binary=%t", temporal.scale, binary), func(t *testing.T) {
+					expression := fmt.Sprintf("select abs(cast('%s' as time(%d)) + ?) as result", temporal.literal, temporal.scale)
+					var query func(any) (*sql.Rows, error)
+					if binary {
+						stmt, err := conn.PrepareContext(ctx, expression)
+						require.NoError(t, err)
+						defer stmt.Close()
+						query = func(value any) (*sql.Rows, error) { return stmt.QueryContext(ctx, value) }
+					} else {
+						exec("prepare fallback_time_abs from '" + strings.ReplaceAll(expression, "'", "''") + "'")
+						defer deallocate("deallocate prepare fallback_time_abs")
+						query = func(value any) (*sql.Rows, error) {
+							assignment := "NULL"
+							if value != nil {
+								assignment = fmt.Sprintf("cast(%d as signed)", value)
+							}
+							exec("set @fallback_time_abs_value = " + assignment)
+							return conn.QueryContext(ctx, "execute fallback_time_abs using @fallback_time_abs_value")
+						}
+					}
+					// Query may expose an execution error immediately or through Rows.Err.
+					queryError := func(rows *sql.Rows, err error) error {
+						if err != nil {
+							return err
+						}
+						defer rows.Close()
+						require.False(t, rows.Next(), "overflow must not produce a row")
+						return rows.Err()
+					}
+					for _, value := range []any{int64(10), nil, int64(10), int64(9223372036854775807), int64(10)} {
+						if value == int64(9223372036854775807) {
+							wantErr := queryError(conn.QueryContext(ctx,
+								strings.ReplaceAll(expression, "?", "cast(9223372036854775807 as signed)")))
+							gotErr := queryError(query(value))
+							var wantMySQL, gotMySQL *mysql.MySQLError
+							require.True(t, errors.As(wantErr, &wantMySQL), "%v", wantErr)
+							require.True(t, errors.As(gotErr, &gotMySQL), "%v", gotErr)
+							require.Equal(t, wantMySQL.Number, gotMySQL.Number)
+							continue
+						}
+						func() {
+							rows, err := query(value)
+							require.NoError(t, err)
+							if value != nil {
+								assertPreparedTimeResult(t, rows, temporal.want, false, 18, temporal.scale)
+								return
+							}
+							defer rows.Close()
+							require.True(t, rows.Next())
+							var result sql.NullString
+							require.NoError(t, rows.Scan(&result))
+							require.False(t, result.Valid)
+							require.False(t, rows.Next())
+							require.NoError(t, rows.Err())
+						}()
+					}
+				})
+			}
 		}
 
 		// The SQL path transports values through session user variables. Reusing

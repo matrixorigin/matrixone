@@ -1511,6 +1511,22 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExprWithBound(
 			return copy.GetF().Args[0], true, nil
 		}
 		restorePreparedIntegerArithmeticOperands(name, copy.GetF().Args)
+		if isPreparedTemporalIntegerArithmetic(name) {
+			if temporalPeer, ok := preparedTemporalNumericPeerFromArgs(fn.Args); ok {
+				// Reconstruct the same TIME boundary as the main rebind path.
+				// The recursive fallback removes provisional marker casts, so
+				// coerce the completed integer operand before choosing an overload.
+				for i, original := range fn.Args {
+					coerced, _, err := rule.coercePreparedTemporalIntegerOperand(
+						original, copy.GetF().Args[i], temporalPeer,
+						len(preparedNumericValueParamPositions(original)) > 0)
+					if err != nil {
+						return nil, false, err
+					}
+					copy.GetF().Args[i] = coerced
+				}
+			}
+		}
 		bound, err := BindFuncExprImplByPlanExpr(rule.ctx, name, copy.GetF().Args)
 		if err != nil {
 			return nil, false, err
