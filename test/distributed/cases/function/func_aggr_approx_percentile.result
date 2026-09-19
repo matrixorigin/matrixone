@@ -16,7 +16,7 @@ select approx_percentile(b, 1.0) from t1;
 drop table if exists t_approx_percentile_ctas;
 create table t_approx_percentile_ctas as select approx_percentile(b, 0.5) as p from t1;
 select p from t_approx_percentile_ctas;
-➤ p[8,54,0]  𝄀
+➤ p[8,53,31]  𝄀
 5.0
 drop table t_approx_percentile_ctas;
 insert into t1 values (1, 2), (1, 4), (2, 6), (2, 8);
