@@ -190,6 +190,76 @@ func TestHashPartitionCompositeNullableKey(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestHashPartitionCompositeVariableLengthKeysAreFramed(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	varchar := types.T_varchar.ToType()
+	varchar.Width = 2
+	input := batch.New([]string{"k1", "k2", "v"})
+	input.Vecs = []*vector.Vector{
+		vector.NewVec(varchar),
+		vector.NewVec(varchar),
+		vector.NewVec(types.T_int64.ToType()),
+	}
+	key1 := [][]byte{
+		[]byte("a"), []byte("ab"),
+		[]byte("x\x00"), []byte("x"),
+		[]byte("é"), []byte("éø"),
+		[]byte("n"), []byte("n"), []byte("n"),
+		[]byte("t"), []byte("t"),
+	}
+	key2 := [][]byte{
+		[]byte("bc"), []byte("c"),
+		[]byte(""), []byte("\x00"),
+		[]byte("ø"), []byte(""),
+		[]byte(""), []byte(""), []byte(""),
+		[]byte("tail"), []byte("tail"),
+	}
+	nulls1 := []bool{false, false, false, false, false, false, false, false, false, true, true}
+	nulls2 := []bool{false, false, false, false, false, false, true, true, false, false, false}
+	ids := make([]int64, len(key1))
+	for i := range ids {
+		ids[i] = int64(i)
+	}
+	require.NoError(t, vector.AppendBytesList(input.Vecs[0], key1, nulls1, proc.Mp()))
+	require.NoError(t, vector.AppendBytesList(input.Vecs[1], key2, nulls2, proc.Mp()))
+	require.NoError(t, vector.AppendFixedList(input.Vecs[2], ids, nil, proc.Mp()))
+	input.SetRowCount(len(ids))
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	arg := &Partition{
+		Algorithm: plan.Node_PARTITION_ALGORITHM_HASH,
+		SpillMem:  1 << 30,
+		OrderBySpecs: []*plan.OrderBySpec{
+			{Expr: newExpression(0, types.T_varchar)},
+			{Expr: newExpression(1, types.T_varchar)},
+		},
+	}
+	arg.OrderBySpecs[0].Expr.Typ.Width = 2
+	arg.OrderBySpecs[1].Expr.Typ.Width = 2
+	arg.AppendChild(child)
+
+	require.NoError(t, arg.Prepare(proc))
+	require.True(t, arg.hash.isStrHash, "short varlena composites must use framed string hashing")
+	var groups [][]int64
+	for {
+		result, err := arg.Call(proc)
+		require.NoError(t, err)
+		if result.Status == vm.ExecStop {
+			break
+		}
+		require.NotNil(t, result.Batch)
+		values := vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[2])
+		groups = append(groups, append([]int64(nil), values...))
+	}
+	require.Equal(t, [][]int64{
+		{0}, {1}, {2}, {3}, {4}, {5}, {6, 7}, {8}, {9, 10},
+	}, groups)
+
+	arg.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestHashPartitionTreatsGroupingSentinelAsNull(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	input := makeHashPartitionBatch(t, proc,
@@ -496,6 +566,22 @@ func BenchmarkWindowPartitionAlgorithms(b *testing.B) {
 				}
 			}
 		}
+	}
+}
+
+func BenchmarkWindowPartitionCommentCase(b *testing.B) {
+	// This mirrors the issue benchmark: 65,536 rows, one INT32 partition key,
+	// and 64 distinct values. It compares the blocking partition prerequisite;
+	// the SQL BVT remains the independent Window-consumer correctness oracle.
+	const rows, ndv = 1 << 16, 64
+	for _, algorithm := range []string{"sort", "hash"} {
+		b.Run(algorithm, func(b *testing.B) {
+			var peak int64
+			for i := 0; i < b.N; i++ {
+				peak = max(peak, runWindowPartitionBenchmark(b, rows, ndv, 1, false, algorithm == "hash"))
+			}
+			b.ReportMetric(float64(peak), "peak-mpool-B")
+		})
 	}
 }
 

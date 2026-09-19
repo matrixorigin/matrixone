@@ -1849,6 +1849,7 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	oldNoUnsignedSubtraction := false
 	oldParserFlags := mysql.SQLModeFlags(0)
 	oldIgnoreSpace := false
+	oldWindowPartitionAlgorithm := ""
 	if name == "sql_mode" {
 		oldMatrixOneNative = ses.sqlModeHasMatrixOneNative()
 		oldOnlyFullGroupBy = ses.sqlModeHasOnlyFullGroupBy()
@@ -1857,6 +1858,10 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 		oldNoUnsignedSubtraction = ses.sqlModeHasNoUnsignedSubtraction()
 		oldParserFlags = ses.sqlModeParserFlags()
 		oldIgnoreSpace = ses.sqlModeHasIgnoreSpace()
+	} else if name == "window_partition_algorithm" {
+		if old, getErr := ses.GetSessionSysVar(name); getErr == nil {
+			oldWindowPartitionAlgorithm, _ = old.(string)
+		}
 	}
 
 	def, ok := gSysVarsDefs[name]
@@ -1920,6 +1925,12 @@ func (ses *Session) SetSessionSysVar(ctx context.Context, name string, val inter
 	}
 	if err == nil && name == "sql_mode" {
 		ses.updateSqlModeCaches(oldMatrixOneNative, oldOnlyFullGroupBy, oldBoolSumAvg, oldHighNotPrecedence, oldNoUnsignedSubtraction, oldParserFlags, oldIgnoreSpace, val)
+	}
+	if err == nil && name == "window_partition_algorithm" {
+		if newValue, ok := val.(string); ok && oldWindowPartitionAlgorithm != newValue {
+			ses.cleanCache()
+			ses.markPreparedPlansForWindowPartitionAlgorithmChange()
+		}
 	}
 	if err == nil && setTxnIsolation {
 		if txnHandler := ses.GetTxnHandler(); txnHandler != nil {
