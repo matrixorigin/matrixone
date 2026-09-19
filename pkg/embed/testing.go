@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -37,11 +38,18 @@ var (
 // return errors instead of failing the current test from inside sync.Once, so a
 // failed startup is reported consistently to every later caller.
 type SharedTestCluster struct {
-	mu                   sync.Mutex
-	once                 sync.Once
-	cluster              Cluster
-	err                  error
-	closed               bool
+	mu          sync.Mutex
+	runCondOnce sync.Once
+	runCond     *sync.Cond
+	runActive   bool
+	runScope    sharedRunScope
+	once        sync.Once
+	cluster     Cluster
+	err         error
+	closed      bool
+	// terminalClose preserves an explicit Close request while failed-test
+	// cleanup is deferred until callback-owned cleanup handlers finish.
+	terminalClose        bool
 	sealed               bool
 	cleanupTried         bool
 	generation           uint64
@@ -53,6 +61,11 @@ type sharedCleanupRegistration struct {
 	generation uint64
 	owner      uintptr
 	sequence   uint64
+}
+
+type sharedRunScope struct {
+	owner uintptr
+	name  string
 }
 
 type testReporter interface {
@@ -80,6 +93,10 @@ type testCleanupRegistrar interface {
 	Cleanup(func())
 }
 
+type testNameReporter interface {
+	Name() string
+}
+
 type testErrorReporter interface {
 	Errorf(format string, args ...any)
 }
@@ -91,87 +108,181 @@ func logTestSetup(t testReporter, format string, args ...any) {
 	}
 }
 
+func (c *SharedTestCluster) initializeRunCondition() {
+	c.runCondOnce.Do(func() {
+		c.runCond = sync.NewCond(&c.mu)
+	})
+}
+
+func sharedRunScopeFor(t testReporter) sharedRunScope {
+	scope := sharedRunScope{owner: testReporterIdentity(t)}
+	if named, ok := t.(testNameReporter); ok {
+		scope.name = named.Name()
+	}
+	return scope
+}
+
+// isNestedRunScope identifies a same-fixture re-entry from a parent test's
+// callback. A nested callback cannot acquire the serialized fixture while the
+// parent is waiting for t.Run to finish; treating it as an ordinary waiter
+// would deadlock the test. The parent callback already owns the Cluster, so a
+// nested test should use that value directly.
+func isNestedRunScope(active, next sharedRunScope) bool {
+	if active.owner != 0 && active.owner == next.owner {
+		return true
+	}
+	if active.name == "" || next.name == "" || active.name == next.name {
+		return false
+	}
+	return strings.HasPrefix(next.name, active.name+"/")
+}
+
+func (c *SharedTestCluster) releaseRunLocked() {
+	c.runActive = false
+	c.runScope = sharedRunScope{}
+	if c.runCond != nil {
+		c.runCond.Broadcast()
+	}
+}
+
+func (c *SharedTestCluster) finishRun(
+	t testReporter,
+	generation uint64,
+	callbackReturned bool,
+	failureAware testFailureReporter,
+) {
+	c.mu.Lock()
+	if !callbackReturned || (failureAware != nil && failureAware.Failed()) {
+		c.sealFailedGenerationLocked(t, generation)
+	}
+	c.releaseRunLocked()
+	c.mu.Unlock()
+}
+
 func (c *SharedTestCluster) Run(
 	t testReporter,
 	init func() (Cluster, error),
 	fn func(Cluster),
 ) {
 	t.Helper()
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.closed {
-		t.Fatalf("shared cluster is closed")
-		return
-	}
-	if c.sealed {
-		t.Fatalf("shared cluster is quarantined after a test failure")
-		return
-	}
+	c.initializeRunCondition()
+	scope := sharedRunScopeFor(t)
 
-	initialized := false
-	initStarted := time.Now()
-	c.once.Do(func() {
-		initialized = true
-		c.generation++
-		c.cluster, c.err = init()
-		if c.err == nil && c.cluster == nil {
-			c.err = moerr.NewInternalErrorNoCtx("cluster initializer returned nil without an error")
-		}
-	})
-	if initialized {
-		status := "ready"
-		if c.err != nil {
-			status = "error"
-		}
-		logTestSetup(t,
-			"MO_UT_SETUP fixture=shared-cluster phase=initialize-total duration=%s status=%s",
-			time.Since(initStarted), status)
-	}
-	if c.err != nil && c.cluster != nil {
-		cleanupStarted := time.Now()
-		cleanupErr := c.cluster.Close()
-		cleanupStatus := "ready"
-		if cleanupErr != nil {
-			cleanupStatus = "error"
-		}
-		logTestSetup(t,
-			"MO_UT_SETUP fixture=shared-cluster phase=rollback-cleanup duration=%s status=%s",
-			time.Since(cleanupStarted), cleanupStatus)
-		complete := closeComplete(c.cluster, cleanupErr)
-		c.err = errors.Join(c.err, cleanupErr)
-		if complete {
-			c.cluster = nil
-		}
-	}
-	if c.err != nil {
-		t.Fatalf("failed to initialize shared cluster: %v", c.err)
-		return
-	}
+	var (
+		fixture           Cluster
+		fixtureGeneration uint64
+		initErr           error
+		fatalMessage      string
+		activeClaimed     bool
+		setupComplete     bool
+	)
 
-	// Capture the generation before invoking the callback. The cleanup must
-	// never close a replacement fixture that was initialized after this one was
-	// discarded. The deferred seal runs while c.mu is still held, so Error,
-	// FailNow/Goexit, panic, and ordinary callback return all prevent another
-	// callback from entering a failed generation before test cleanup runs.
-	fixtureGeneration := c.generation
-	c.registerFailureCleanup(t, fixtureGeneration)
-	callbackReturned := false
-	if failureAware, ok := t.(testFailureReporter); ok {
+	// Initialization and state transitions are protected by c.mu, but the user
+	// callback is not. Keeping the callback outside c.mu lets a real child
+	// testing.T run its own Cleanup handlers while the parent waits in t.Run.
+	// Callback admission remains exclusive, so independent tests cannot mutate
+	// the shared fixture concurrently.
+	func() {
+		c.mu.Lock()
 		defer func() {
-			if !callbackReturned || failureAware.Failed() {
-				c.sealFailedGenerationLocked(t, fixtureGeneration)
+			if activeClaimed && !setupComplete {
+				c.releaseRunLocked()
 			}
+			c.mu.Unlock()
 		}()
+
+		for c.runActive {
+			if isNestedRunScope(c.runScope, scope) {
+				fatalMessage = "shared cluster cannot be reacquired from a nested test; use the inherited cluster"
+				return
+			}
+			c.runCond.Wait()
+		}
+		if c.closed || c.terminalClose {
+			fatalMessage = "shared cluster is closed"
+			return
+		}
+		if c.sealed {
+			fatalMessage = "shared cluster is quarantined after a test failure"
+			return
+		}
+
+		c.runActive = true
+		c.runScope = scope
+		activeClaimed = true
+
+		initialized := false
+		initStarted := time.Now()
+		c.once.Do(func() {
+			initialized = true
+			c.generation++
+			c.cluster, c.err = init()
+			if c.err == nil && c.cluster == nil {
+				c.err = moerr.NewInternalErrorNoCtx("cluster initializer returned nil without an error")
+			}
+		})
+		if initialized {
+			status := "ready"
+			if c.err != nil {
+				status = "error"
+			}
+			logTestSetup(t,
+				"MO_UT_SETUP fixture=shared-cluster phase=initialize-total duration=%s status=%s",
+				time.Since(initStarted), status)
+		}
+		if c.err != nil && c.cluster != nil {
+			cleanupStarted := time.Now()
+			cleanupErr := c.cluster.Close()
+			cleanupStatus := "ready"
+			if cleanupErr != nil {
+				cleanupStatus = "error"
+			}
+			logTestSetup(t,
+				"MO_UT_SETUP fixture=shared-cluster phase=rollback-cleanup duration=%s status=%s",
+				time.Since(cleanupStarted), cleanupStatus)
+			complete := closeComplete(c.cluster, cleanupErr)
+			c.err = errors.Join(c.err, cleanupErr)
+			if complete {
+				c.cluster = nil
+			}
+		}
+		if c.err != nil {
+			initErr = c.err
+			return
+		}
+
+		fixture = c.cluster
+		fixtureGeneration = c.generation
+		c.registerFailureCleanup(t, fixtureGeneration)
+		setupComplete = true
+	}()
+
+	if fatalMessage != "" {
+		t.Fatalf("%s", fatalMessage)
+		return
 	}
-	fn(c.cluster)
+	if initErr != nil {
+		t.Fatalf("failed to initialize shared cluster: %v", initErr)
+		return
+	}
+
+	callbackReturned := false
+	var failureAware testFailureReporter
+	if reporter, ok := t.(testFailureReporter); ok {
+		failureAware = reporter
+	}
+	defer func() {
+		c.finishRun(t, fixtureGeneration, callbackReturned, failureAware)
+	}()
+	fn(fixture)
 	callbackReturned = true
 }
 
 // registerFailureCleanup makes failure isolation work for callbacks that do
-// not return normally. testing.T runs Cleanup after Run's deferred unlock, so
-// the cleanup can safely acquire c.mu. A generation guard is essential: a
-// later test may already have started a replacement fixture by the time an
-// older cleanup callback is invoked.
+// not return normally. testing.T runs Cleanup after Run has released callback
+// admission, so the cleanup can safely acquire c.mu. A generation guard is
+// essential: a later test may already have started a replacement fixture by
+// the time an older cleanup callback is invoked.
 func (c *SharedTestCluster) registerFailureCleanup(t testReporter, generation uint64) {
 	failed, failureAware := t.(testFailureReporter)
 	registrar, cleanupAware := t.(testCleanupRegistrar)
@@ -249,6 +360,9 @@ func (c *SharedTestCluster) finishFailureCleanup(
 	if c.generation != registration.generation {
 		return nil
 	}
+	if _, exists := c.cleanupRegistrations[registration]; !exists {
+		return nil
+	}
 	delete(c.cleanupRegistrations, registration)
 	if c.cluster == nil {
 		return nil
@@ -292,7 +406,7 @@ func (c *SharedTestCluster) finishFailureCleanup(
 	c.cluster = nil
 	c.err = nil
 	c.once = sync.Once{}
-	c.closed = false
+	c.closed = c.terminalClose
 	c.sealed = false
 	c.cleanupTried = false
 	c.cleanupRegistrations = nil
@@ -303,14 +417,25 @@ func (c *SharedTestCluster) finishFailureCleanup(
 // initialization. Ownership is cleared only after the underlying Close has
 // completed locally, independently of any returned diagnostic.
 func (c *SharedTestCluster) Close() error {
+	c.initializeRunCondition()
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	for c.runActive {
+		c.runCond.Wait()
+	}
 	if c.cluster == nil {
+		c.closed = true
+		c.terminalClose = true
+		return nil
+	}
+	c.terminalClose = true
+	if c.sealed && !c.cleanupTried && len(c.cleanupRegistrations) > 0 {
 		c.closed = true
 		return nil
 	}
 	err := c.cluster.Close()
 	if !closeComplete(c.cluster, err) {
+		c.closed = true
 		return err
 	}
 	c.cluster = nil
@@ -322,10 +447,14 @@ func (c *SharedTestCluster) Close() error {
 // release for a later test invocation. It is useful for a test package that
 // combines a short shared-cluster suite with later scenarios that need their
 // own topology. Callers must invoke it only after Run has returned; Run holds
-// the same mutex while the scenario body is executing.
+// callback admission while the scenario body is executing.
 func (c *SharedTestCluster) CloseIfActive() error {
+	c.initializeRunCondition()
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	for c.runActive {
+		c.runCond.Wait()
+	}
 	if c.cluster == nil {
 		return nil
 	}
@@ -334,7 +463,7 @@ func (c *SharedTestCluster) CloseIfActive() error {
 	// cleanup so an outer test defer cannot close the fixture first. Once that
 	// automatic attempt has happened, this method remains the explicit retry
 	// path for incomplete cleanup.
-	if c.sealed && !c.cleanupTried {
+	if c.sealed && !c.cleanupTried && len(c.cleanupRegistrations) > 0 {
 		return nil
 	}
 	err := c.cluster.Close()
@@ -348,7 +477,7 @@ func (c *SharedTestCluster) CloseIfActive() error {
 	c.cluster = nil
 	c.err = nil
 	c.once = sync.Once{}
-	c.closed = false
+	c.closed = c.terminalClose
 	c.sealed = false
 	c.cleanupTried = false
 	c.cleanupRegistrations = nil
