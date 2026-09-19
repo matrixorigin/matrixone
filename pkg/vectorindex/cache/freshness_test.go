@@ -240,11 +240,16 @@ func TestFreshnessRunningShutdown(t *testing.T) {
 		s := residentFreshnessEntry(c, "key", m)
 		c.done = make(chan bool)
 		c.started.Store(true)
-		go c.serveTicks(nil, nil)
+		loopStopped := make(chan struct{})
+		go func() {
+			c.serveTicks(nil, nil)
+			close(loopStopped)
+		}()
 		c.startStaleCheck()
 		synctest.Wait()
 		go c.Destroy()
-		<-invalidated // Destroy has stopped the loop and claimed the checked entry.
+		<-invalidated // Destroy has claimed the checked entry.
+		<-loopStopped // The done send alone does not acknowledge the exit store.
 		require.True(t, c.exited.Load())
 		require.Zero(t, m.destroys.Load(), "shutdown must wait for the checker read lock")
 		release()
