@@ -1176,7 +1176,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 				var val string
 				switch length {
 				case 0:
-					val = "0d 00:00:00"
+					val = "00:00:00"
 				case 8, 12:
 					pos, val, ok = mp.readTime(data, pos, length)
 					if !ok {
@@ -1266,13 +1266,10 @@ func (mp *MysqlProtocolImpl) readTime(data []byte, pos int, length uint8) (int, 
 		return 0, "", false
 	}
 	pos = tmpPos
-	if day > 0 {
-		retStr += fmt.Sprintf("%dd ", day)
-	}
 	if pos+3 > len(data) { //nolint:typecheck
 		return 0, "", false
 	}
-	hour := data[pos]
+	hour := uint64(day)*24 + uint64(data[pos])
 	pos++
 	minute := data[pos]
 	pos++
