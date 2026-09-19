@@ -799,6 +799,94 @@ func TestDecimalComparisonKeepsWideZeroSuffixAndCarriesProtocolMarker(t *testing
 	}
 }
 
+func TestDecimalComparisonLegacyRemainderProtocolFence(t *testing.T) {
+	for _, tc := range []struct {
+		text             string
+		oldZero, newZero bool
+	}{
+		{"922337203685477581.0", false, true},
+		{"922337203685477581.6", true, false},
+		{"-1234567890123456789.0", false, true},
+		{"-1234567890123456789.6", true, false},
+		{"922337203685477581.1", false, false},
+		{"-1234567890123456789.1", false, false},
+		{"10.0", true, true},
+		{"1844674407370955162.0", true, true},
+	} {
+		t.Run(tc.text, func(t *testing.T) {
+			coefficient, scale, err := types.Parse128(tc.text)
+			require.NoError(t, err)
+			require.Equal(t, int32(1), scale)
+			require.Equal(t, tc.oldZero, decimal128HasTrailingZeros(int64(coefficient.B0_63), int64(coefficient.B64_127), 1))
+			for _, carrier := range []string{"string", "typed"} {
+				for _, op := range []string{"=", "<>", "<", "<=", ">", ">="} {
+					for _, reversed := range []bool{false, true} {
+						columnType := types.New(types.T_decimal128, 30, 0)
+						column := &plan.Expr{Typ: makePlan2Type(&columnType), Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "d"}}}
+						column.Typ.NotNullable = true
+						constantType := types.New(types.T_decimal128, 30, 1)
+						literal := &plan.Expr{Typ: makePlan2Type(&constantType), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Decimal128Val{Decimal128Val: &plan.Decimal128{A: int64(coefficient.B0_63), B: int64(coefficient.B64_127)}}}}}
+						if carrier == "string" {
+							literal, err = appendCastBeforeExpr(context.Background(), makePlan2StringConstExprWithType(tc.text), literal.Typ)
+							require.NoError(t, err)
+						}
+						args := []*plan.Expr{column, literal}
+						if reversed {
+							args[0], args[1] = args[1], args[0]
+						}
+						result, err := BindFuncExprImplByPlanExpr(context.Background(), op, args)
+						require.NoError(t, err)
+						marked, err := plan.RequiresMORPCVersion86DecimalLiteralSemantics(result)
+						require.NoError(t, err)
+						require.Equal(t, tc.oldZero != tc.newZero, marked, "%s %s reversed=%v: %s", carrier, op, reversed, result)
+						if op == "=" || op == "<>" {
+							if tc.newZero {
+								require.NotNil(t, result.GetF())
+							} else {
+								require.NotNil(t, result.GetLit())
+								require.Equal(t, op == "<>", result.GetLit().GetBval())
+							}
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestDecimalComparisonLegacyRemainderFenceBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name, text string
+		oid        types.T
+		scale      int32
+		want       bool
+	}{
+		{"string64", "-1.0", types.T_decimal64, 1, true},
+		{"positive64", "1.0", types.T_decimal64, 1, false},
+		{"eighteen", "-1.000000000000000000", types.T_decimal128, 18, true},
+		{"nineteen_handled_by_caller", "-1.0000000000000000000", types.T_decimal128, 19, false},
+		{"no_scale_reduction", "-1", types.T_decimal128, 0, false},
+		{"legacy_parse_overflow", "10000000000000000000000000000000000000000.0", types.T_decimal256, 1, true},
+		{"unknown_suffix", "invalid", types.T_decimal128, 1, true},
+		{"unsupported_target", "-1.0", types.T_float64, 1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			literal := makePlan2StringConstExprWithType(tc.text)
+			require.Equal(t, tc.want, decimalComparisonUsesLegacyTrailingZeroSemantics(literal, types.New(tc.oid, tc.oid.ToType().Width, tc.scale), 0))
+		})
+	}
+	decimalType := types.New(types.T_decimal128, 30, 1)
+	for _, literal := range []*plan.Expr{
+		nil,
+		{},
+		{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}},
+		{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Decimal128Val{}}}},
+		{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Decimal64Val{Decimal64Val: &plan.Decimal64{A: -10}}}}},
+	} {
+		require.False(t, decimalComparisonUsesLegacyTrailingZeroSemantics(literal, decimalType, 0))
+	}
+}
+
 func TestDecimalComparisonNegativeDecimal128ZeroSuffixCarriesProtocolMarker(t *testing.T) {
 	ctx := context.Background()
 	columnType := types.New(types.T_decimal128, 30, 2)
