@@ -243,13 +243,25 @@ func RequiresMORPCVersion82DecimalLiteralSemantics(owner any) (bool, error) {
 	return RequiresMORPCVersion87DecimalLiteralSemantics(owner)
 }
 
-// RequiresMORPCVersion86SpatialDistanceSemantics reports whether an owner
+// RequiresMORPCVersion88SpatialDistanceSemantics reports whether an owner
 // contains a spatial-distance expression whose meaning or overload contract
-// changed in MORPC v86. Constant folding must retain such an expression until
+// changed in MORPC v88. Constant folding must retain such an expression until
 // persisted-expression admission has observed this requirement.
-func RequiresMORPCVersion86SpatialDistanceSemantics(owner any) (bool, error) {
+func RequiresMORPCVersion88SpatialDistanceSemantics(owner any) (bool, error) {
 	features, err := RequiredRemoteExpressionFeatures(owner)
 	return features.SpatialDistanceSemantics, err
+}
+
+// RequiresMORPCVersion86SpatialDistanceSemantics retains the original source alias.
+// Deprecated: use RequiresMORPCVersion88SpatialDistanceSemantics; admission is v88.
+func RequiresMORPCVersion86SpatialDistanceSemantics(owner any) (bool, error) {
+	return RequiresMORPCVersion88SpatialDistanceSemantics(owner)
+}
+
+// RequiresMORPCVersion87SpatialDistanceSemantics retains the unmerged stack alias.
+// Deprecated: use RequiresMORPCVersion88SpatialDistanceSemantics; admission is v88.
+func RequiresMORPCVersion87SpatialDistanceSemantics(owner any) (bool, error) {
+	return RequiresMORPCVersion88SpatialDistanceSemantics(owner)
 }
 
 const (
@@ -842,7 +854,7 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				case remoteFrechetDistanceFunctionID, remoteHausdorffDistanceFunctionID:
 					// Overloads 0/1 are the historical planar identities. The
 					// unit overloads 2/3 and the corrected two-argument
-					// geodetic identities 4/5 are v86 contracts.
+					// geodetic identities 4/5 are v88 contracts.
 					features.SpatialDistanceSemantics = overloadID >= 2 && overloadID <= 5
 				case remoteSpatialDistanceFunctionID:
 					// ST_DISTANCE overloads 4/5 are the new length-unit forms.

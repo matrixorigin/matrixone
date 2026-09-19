@@ -2094,10 +2094,10 @@ func constantFoldWithPreparedExactSource(
 		return nil, err
 	}
 	// View admission scans the optimized plan. Do not fold away a spatial
-	// distance expression before that scan can record its MORPC v86 floor; the
+	// distance expression before that scan can record its MORPC v88 floor; the
 	// original SQL is still rebound by older readers and must not lose its
 	// changed geodetic/overload semantics.
-	if requiresSpatial, spatialErr := plan.RequiresMORPCVersion86SpatialDistanceSemantics(expr); spatialErr != nil || requiresSpatial {
+	if requiresSpatial, spatialErr := plan.RequiresMORPCVersion88SpatialDistanceSemantics(expr); spatialErr != nil || requiresSpatial {
 		return expr, nil
 	}
 	if f.CannotFold() {

@@ -49,15 +49,26 @@ func TestPersistedDecimalLiteralUsesDedicatedEpochInMixedOwner(t *testing.T) {
 			Obj: function.EncodeOverloadID(function.ST_DISTANCE, 4),
 		}}},
 	}
-	mixed := &planpb.TableDef{Cols: []*planpb.ColDef{
-		{Default: &planpb.Default{Expr: decimalExpr}},
-		{Default: &planpb.Default{Expr: spatialExpr}},
-	}}
-
-	required, err := RequiredPersistedExpressionProtocolVersion(mixed)
-	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion87, required,
-		"the dedicated decimal epoch must dominate v85/v86 features")
+	for _, tc := range []struct {
+		name  string
+		exprs []*planpb.Expr
+		want  int64
+	}{
+		{"decimal only", []*planpb.Expr{decimalExpr}, defines.MORPCVersion87},
+		{"spatial only", []*planpb.Expr{spatialExpr}, defines.MORPCVersion88},
+		{"decimal then spatial", []*planpb.Expr{decimalExpr, spatialExpr}, defines.MORPCVersion88},
+		{"spatial then decimal", []*planpb.Expr{spatialExpr, decimalExpr}, defines.MORPCVersion88},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			owner := &planpb.TableDef{}
+			for _, expr := range tc.exprs {
+				owner.Cols = append(owner.Cols, &planpb.ColDef{Default: &planpb.Default{Expr: expr}})
+			}
+			required, err := RequiredPersistedExpressionProtocolVersion(owner)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, required, "mixed contracts take the maximum independently of order")
+		})
+	}
 }
 
 func TestPersistedDecimalLiteralProtocolAdmission(t *testing.T) {
@@ -747,11 +758,11 @@ func TestPersistedExpressionProtocolAdmissionForSpatialDistance(t *testing.T) {
 		{name: "distance unit", expr: spatialExpr(421, 4)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			for _, version := range []int64{defines.MORPCVersion79, defines.MORPCVersion80} {
+			for _, version := range []int64{defines.MORPCVersion87, defines.MORPCVersion88} {
 				rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 				err := RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.expr)
-				if version < defines.MORPCVersion80 {
-					require.ErrorContains(t, err, "protocol version 80")
+				if version < defines.MORPCVersion88 {
+					require.ErrorContains(t, err, "protocol version 88")
 				} else {
 					require.NoError(t, err)
 				}
@@ -760,14 +771,14 @@ func TestPersistedExpressionProtocolAdmissionForSpatialDistance(t *testing.T) {
 	}
 
 	// Mixed owners use the strongest admission requirement instead of allowing
-	// a v72 IP expression to mask a v80 spatial-distance expression.
+	// a v72 IP expression to mask a v88 spatial-distance expression.
 	mixed := &planpb.TableDef{Cols: []*planpb.ColDef{
 		{Default: &planpb.Default{Expr: spatialExpr(394, 0)}},
 		{Default: &planpb.Default{Expr: spatialExpr(421, 4)}},
 	}}
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion79)
-	require.ErrorContains(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, mixed), "protocol version 80")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion80)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion87)
+	require.ErrorContains(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, mixed), "protocol version 88")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion88)
 	require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, mixed))
 }
 
@@ -787,7 +798,7 @@ func TestSpatialDistanceRequirementSurvivesConstantFold(t *testing.T) {
 			require.NoError(t, err)
 			required, err := RequiredPersistedExpressionProtocolVersion(expr)
 			require.NoError(t, err)
-			require.Equal(t, defines.MORPCVersion86, required)
+			require.Equal(t, defines.MORPCVersion88, required)
 
 			folded, err := ConstantFold(
 				batch.EmptyForConstFoldBatch, DeepCopyExpr(expr), proc, false, true)
@@ -796,7 +807,7 @@ func TestSpatialDistanceRequirementSurvivesConstantFold(t *testing.T) {
 				"spatial capability must remain visible after constant folding")
 			required, err = RequiredPersistedExpressionProtocolVersion(folded)
 			require.NoError(t, err)
-			require.Equal(t, defines.MORPCVersion86, required)
+			require.Equal(t, defines.MORPCVersion88, required)
 
 			node := &planpb.Node{ProjectList: []*planpb.Expr{DeepCopyExpr(expr)}}
 			planrule.NewConstantFold(false).Apply(node, nil, proc)
@@ -804,7 +815,7 @@ func TestSpatialDistanceRequirementSurvivesConstantFold(t *testing.T) {
 				"optimizer constant folding must preserve spatial provenance")
 			required, err = RequiredPersistedExpressionProtocolVersion(node.ProjectList[0])
 			require.NoError(t, err)
-			require.Equal(t, defines.MORPCVersion86, required)
+			require.Equal(t, defines.MORPCVersion88, required)
 		})
 	}
 }

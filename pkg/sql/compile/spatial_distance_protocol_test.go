@@ -56,7 +56,7 @@ func TestRemoteSpatialDistanceProtocolValidation(t *testing.T) {
 		if hadPrevious {
 			rt.SetGlobalVariables(runtime.MOProtocolVersion, previous)
 		} else {
-			for _, value := range []int64{defines.MORPCVersion79, defines.MORPCVersion80} {
+			for _, value := range []int64{defines.MORPCVersion87, defines.MORPCVersion88} {
 				rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, value)
 			}
 		}
@@ -81,16 +81,16 @@ func TestRemoteSpatialDistanceProtocolValidation(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			remotePipeline := remoteSpatialDistanceProtocolPipeline(tc.id, tc.overload)
-			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion79)
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion87)
 			err := validateRemoteExpressionPipelineProtocol(proc, remotePipeline)
 			if tc.fenced {
-				require.ErrorContains(t, err, "geodetic spatial-distance semantics require MORPC protocol version 80")
+				require.ErrorContains(t, err, "geodetic spatial-distance semantics require MORPC protocol version 88")
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 			} else {
 				require.NoError(t, err)
 			}
 
-			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion80)
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion88)
 			require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
 		})
 	}
@@ -120,7 +120,7 @@ func TestSpatialDistanceDestinationProtocolValidation(t *testing.T) {
 	c.proc.Base.QueryClient = client
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-	client.version = defines.MORPCVersion79
+	client.version = defines.MORPCVersion87
 	require.NoError(t, c.constrainSpatialDistanceWorkers(&planpb.Query{
 		Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}},
 	}))
@@ -128,7 +128,7 @@ func TestSpatialDistanceDestinationProtocolValidation(t *testing.T) {
 	_, err := encodeRemoteScope(scope, c.proc)
 	require.ErrorContains(t, err, "remote destination")
 
-	client.version = defines.MORPCVersion80
+	client.version = defines.MORPCVersion88
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 	require.NoError(t, c.constrainSpatialDistanceWorkers(&planpb.Query{
