@@ -123,10 +123,23 @@ Raw local logs, topology configs and the reusable SQL QA driver are retained in
 
 GPT-6 medium final whole-change review inspected the raw logs and the complete
 committed/local diff: no production-code blockers; CPU/native/BVT closure passed.
-Final decision is **REQUEST_CHANGES solely for the unmet GPU validation gate**.
+The initial decision was **REQUEST_CHANGES solely for the unmet GPU validation gate**.
 The mo-dev CGo/GPU contract requires the whole GPU test set when shared vector
-code changes; unchanged GPU interfaces do not waive it. Push/PR is paused pending
-a suitable GPU environment or an explicit exception from the user/policy owner.
+code changes; unchanged GPU interfaces do not waive it.
+
+On 2026-09-19 the requesting user explicitly approved the issue-specific exception:
+“没有可用环境，PR 明确标注未验证” (no environment available; explicitly mark it
+unverified in the PR). Owner: requesting user XuPeng-SH. Scope: GPU-tagged build
+and whole-GPU-set execution for this #27632 change only. Rationale: no available
+CUDA/GPU environment. This authorizes delivery with the gap disclosed, not a GPU
+pass or a general relaxation of the repository gate. Production/test inputs are
+unchanged, so existing CPU/native/BVT/static/race evidence remains valid.
+
+GPT-6 medium incremental re-review of this exception record and PR disclosure:
+**APPROVE, no remaining blockers**. The GPU gate is closed by the explicit scoped
+exception, not by a test pass. Remote main was rechecked at `e66cdea393`; the PR
+retains its tested base/merge base `bde7e0cad87c` and does not claim testing of an
+as-yet-unbuilt merge result.
 
 Candidate processes were stopped in CN1+CN2, then TN, then LOG order. All four
 process sessions exited zero and logged shutdown completion. No test-owned service
