@@ -12,6 +12,9 @@ select llm_chat(123, '', '', '', 'hello world');
 select llm_chat('', null, 'echo', '', 'hello world');
 select llm_chat('', '', null, '', 'hello world');
 
+-- orcarouter requires an api key
+select llm_chat('orcarouter', '', 'orcarouter/auto', '', '[{"role": "user", "content": "hello world"}]');
+
 select llm_chat('', '', 'echo', '', col1) from parse_jsonl_data($$["echo", [{"role":"user", "content":"foo"}]]
 ["echo", [{"role":"user", "content":"bar"}]]
 $$, 'ss'
