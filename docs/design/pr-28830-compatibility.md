@@ -134,4 +134,3 @@ Focused evidence must include:
 The design is falsified by any result change for a retained legacy identity,
 loss of a feature marker across a rewrite or protobuf round-trip, successful
 remote delivery to an older worker, or workspace that still grows with `n*m`.
-
