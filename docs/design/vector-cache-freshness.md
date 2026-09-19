@@ -37,6 +37,8 @@ Only the generic cache production implementation changes:
    evictEntry(key, expected, generation_changed). Its seal and compare/delete
    own exactly one destruction and protect replacement entries from ABA removal.
    Active readers finish before destruction; new readers retry the replacement.
+   Delete the now-redundant stale flag/mark-then-housekeeping state. TTL claims
+   still recheck expiration under ttlMu; generation eviction bypasses idle TTL.
 5. Preserve StaleChecker signatures, checksum/count fingerprints, one-minute
    metadata SQL timeouts, and (stale,error) semantics. Shutdown racing the final
    exit observation is safe through shared eviction ownership, not a new atomic
@@ -51,8 +53,9 @@ no tick backlog or asynchronous retirement list.
 
 ## Costs, limitations, alternatives and rollback
 
-Healthy checks increase approximately 20x to N/30 metadata queries per second
-per CN for N eligible indexes. A sweep is sequential. Slow metadata, many
+Healthy checks increase approximately 20x to N/30 checker calls per second
+per CN for N eligible indexes. HNSW uses one metadata SQL per call; FULLTEXT2,
+CAGRA and IVF-PQ normally use two. A sweep is sequential. Slow metadata, many
 entries, queued writers, active searches or existing synchronous housekeeping
 destruction can delay convergence beyond 30 seconds. A metadata read lock can
 delay Remove/Destroy and indirectly later readers behind a queued writer. The

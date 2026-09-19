@@ -48,6 +48,10 @@ prepare wait_t1_initial from @wait_t1_initial_sql;
 execute wait_t1_initial;
 deallocate prepare wait_t1_initial;
 
+-- Warm both typed models before publishing the delta. A changed metadata row
+-- alone does not prove that a remote CN has retired its resident generation.
+select case_name, a from (select 'f32-warm' as case_name, a from (select a from t1_f32 order by l2_distance(b, '[1,2,3]') limit 1) q union all select 'f64-warm', a from (select a from t1_f64 order by l2_distance(b, '[1,2,3]') limit 1) q) warmed order by case_name;
+
 set @capture_t1_sql = concat('select (select checksum from `', database(), '`.`', @t1_f32_meta, '` limit 1), (select checksum from `', database(), '`.`', @t1_f64_meta, '` limit 1) into @t1_f32_before, @t1_f64_before');
 prepare capture_t1 from @capture_t1_sql;
 execute capture_t1;
@@ -63,7 +67,8 @@ update t1_f64 set b = '[1000,1000,1000]' where a = 0;
 commit;
 
 -- A changed metadata generation proves the single committed delta (and thus
--- all three mutation kinds) reached each consumer before any HNSW model is read.
+-- all three mutation kinds) reached persisted metadata. The ANN oracle below
+-- independently waits for the already-warm model cache to converge.
 set @wait_t1_delta_sql = concat('select (select checksum <> @t1_f32_before from `', database(), '`.`', @t1_f32_meta, '` limit 1) as f32_ready, (select checksum <> @t1_f64_before from `', database(), '`.`', @t1_f64_meta, '` limit 1) as f64_ready');
 prepare wait_t1_delta from @wait_t1_delta_sql;
 -- @metacmp(false)
@@ -74,6 +79,7 @@ deallocate prepare wait_t1_delta;
 -- Exact INSERT/UPDATE/DELETE oracles for both types. The surviving far row
 -- makes stale DELETE and UPDATE generations fail rather than merely joining a
 -- stale pk back to the current base-table value.
+-- @wait_expect(2, 120)
 select case_name, a, b, c from ( select 'f32-update' as case_name, a, b, c from (select * from t1_f32 order by l2_distance(b, '[1000,1000,1000]') limit 1) q union all select 'f32-delete', a, b, c from (select * from t1_f32 order by l2_distance(b, '[2,3,4]') limit 1) q union all select 'f32-insert', a, b, c from (select * from t1_f32 order by l2_distance(b, '[500,500,500]') limit 1) q union all select 'f64-update', a, b, c from (select * from t1_f64 order by l2_distance(b, '[1000,1000,1000]') limit 1) q union all select 'f64-delete', a, b, c from (select * from t1_f64 order by l2_distance(b, '[2,3,4]') limit 1) q union all select 'f64-insert', a, b, c from (select * from t1_f64 order by l2_distance(b, '[500,500,500]') limit 1) q ) readiness order by case_name;
 
 drop table t1_f32;
