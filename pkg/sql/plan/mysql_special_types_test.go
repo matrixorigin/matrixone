@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
 
@@ -727,6 +728,104 @@ func mockGeometryPreparedDMLPlan(t *testing.T, sql string, srid uint32, sridDefi
 	require.NoError(t, err)
 	require.NoError(t, NormalizePrepareParamRefs(ctx.GetContext(), p))
 	return p
+}
+
+func mockInetNtoaPreparedDMLPlan(t *testing.T, sql string) *plan.Plan {
+	t.Helper()
+	ctx := NewMockCompilerContext(true)
+	table := ctx.tables["emp"]
+	for _, col := range table.Cols {
+		if col.Name == "sal" {
+			col.Typ = plan.Type{Id: int32(types.T_varchar), Width: 31}
+		}
+	}
+	ctx.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "emp")] = table
+	stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	p, err := BuildPlan(ctx, stmt, true)
+	require.NoError(t, err)
+	require.NoError(t, NormalizePrepareParamRefs(ctx.GetContext(), p))
+	return p
+}
+
+func findPlanFunctionExprInDMLWriteData(queryPlan *plan.Plan, name string) *plan.Expr {
+	var find func(*plan.Expr) *plan.Expr
+	find = func(expr *plan.Expr) *plan.Expr {
+		if expr == nil {
+			return nil
+		}
+		if fn := expr.GetF(); fn != nil {
+			if fn.Func != nil && fn.Func.GetObjName() == name {
+				return expr
+			}
+			for _, arg := range fn.Args {
+				if found := find(arg); found != nil {
+					return found
+				}
+			}
+		}
+		if list := expr.GetList(); list != nil {
+			for _, arg := range list.List {
+				if found := find(arg); found != nil {
+					return found
+				}
+			}
+		}
+		return nil
+	}
+
+	if query := queryPlan.GetQuery(); query != nil {
+		for _, node := range query.Nodes {
+			if node == nil || node.RowsetData == nil {
+				continue
+			}
+			for _, col := range node.RowsetData.Cols {
+				for _, row := range col.Data {
+					if row != nil {
+						if found := find(row.Expr); found != nil {
+							return found
+						}
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func TestPreparedInetNtoaDMLWriteRebindsWithinPreservedRoot(t *testing.T) {
+	for _, test := range []struct {
+		name           string
+		isBinary       bool
+		wantSourceType types.Type
+	}{
+		{name: "SQL EXECUTE source", wantSourceType: types.T_json.ToType()},
+		{name: "COM_STMT source", isBinary: true, wantSourceType: types.T_json.ToType()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			prepared := mockInetNtoaPreparedDMLPlan(t,
+				"insert into constraint_test.emp (sal) values (inet_ntoa(?))")
+			original := proto.Clone(prepared).(*plan.Plan)
+
+			filled, specialized, err := FillValuesOfParamsInPlanWithSpecializationPreservingDMLWrites(
+				context.Background(), prepared, []any{ParamValue{
+					Value: "1.6", IsBinaryProtocol: test.isBinary,
+					InetNtoaSourceType: test.wantSourceType, HasInetNtoaSourceType: true,
+				}})
+			require.NoError(t, err)
+			require.True(t, specialized)
+			inetNtoa := findPlanFunctionExprInDMLWriteData(filled, "inet_ntoa")
+			require.NotNil(t, inetNtoa, filled.String())
+			_, overloadID := planfunction.DecodeOverloadID(inetNtoa.GetF().GetFunc().GetObj())
+			require.Equal(t, int32(15), overloadID, inetNtoa.String())
+			require.Equal(t, types.T_json, types.T(inetNtoa.GetF().GetArgs()[0].Typ.Id))
+			require.Equal(t, types.T_varchar, types.T(inetNtoa.Typ.Id))
+			require.Equal(t, int32(31), inetNtoa.Typ.Width)
+			require.True(t, proto.Equal(original, prepared),
+				"execute-time specialization must not mutate the cached DML plan")
+		})
+	}
 }
 
 func preparedGeometryDMLWriteExpr(p *plan.Plan) *plan.Expr {

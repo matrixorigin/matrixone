@@ -120,7 +120,9 @@ const (
 	MORPCVersion82     int64 = 82 // self-completing fulltext2 json index probe (probe_tail contract)
 	MORPCVersion83     int64 = 83 // bounded COALESCE character and binary result domains
 	MORPCVersion84     int64 = 84 // extended discrete percentile input types
-	MORPCLatestVersion       = MORPCVersion84
+	MORPCVersion85     int64 = 85 // shared integer-parameter coercion execution identities
+	MORPCVersion86     int64 = 86 // extended IP overload/result and expression metadata contracts
+	MORPCLatestVersion       = MORPCVersion86
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

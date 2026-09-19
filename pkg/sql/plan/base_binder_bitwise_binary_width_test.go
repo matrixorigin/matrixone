@@ -21,6 +21,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/stretchr/testify/require"
 )
 
@@ -200,7 +202,7 @@ func TestRefineBinarySubstringReturnTypeConservativeCases(t *testing.T) {
 	require.Equal(t, int32(511), returnType.Width)
 }
 
-func TestRefineCharacterSubstringKeepsEstablishedMetadata(t *testing.T) {
+func TestRefineCharacterSubstringAndLeftRightKeepDeclaredReturnTypes(t *testing.T) {
 	textType := types.New(types.T_varchar, 512, 0)
 	source := func() *planpb.Expr {
 		return &planpb.Expr{
@@ -216,7 +218,7 @@ func TestRefineCharacterSubstringKeepsEstablishedMetadata(t *testing.T) {
 		&textSubstring,
 	)
 	require.Equal(t, int32(512), textSubstring.Width,
-		"two-argument character SUBSTRING has no fixed suffix length")
+		"character SUBSTRING keeps the declared result width")
 
 	textSubstring = returnType()
 	refineSubstringLiteralReturnType(
@@ -224,7 +226,209 @@ func TestRefineCharacterSubstringKeepsEstablishedMetadata(t *testing.T) {
 		&textSubstring,
 	)
 	require.Equal(t, int32(512), textSubstring.Width,
-		"character SUBSTRING keeps the established conservative metadata contract")
+		"character SUBSTRING literal bounds must not change result metadata")
+
+	for _, name := range []string{"left", "right"} {
+		result := returnType()
+		refineLeftRightLiteralReturnType(
+			[]*planpb.Expr{source(), makePlan2Int64ConstExprWithType(7)}, &result)
+		require.Equal(t, int32(512), result.Width,
+			"character %s literal bounds must not change result metadata", name)
+	}
+
+	binaryType := types.NewWithCharset(types.T_varbinary, 512, 0, types.CharsetBinary)
+	binarySource := func() *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  makePlan2Type(&binaryType),
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}},
+		}
+	}
+	for _, name := range []string{"left", "right"} {
+		result := returnType()
+		result.Charset = types.CharsetBinary
+		refineLeftRightLiteralReturnType(
+			[]*planpb.Expr{binarySource(), makePlan2Int64ConstExprWithType(7)}, &result)
+		require.Equal(t, int32(7), result.Width,
+			"binary %s may retain literal byte bounds", name)
+	}
+}
+
+func TestRefineStringSliceRequiresBinaryRuntimeDomain(t *testing.T) {
+	ctx := context.Background()
+	bind := func(t *testing.T, name string, source *planpb.Expr) *planpb.Expr {
+		t.Helper()
+		args := []*planpb.Expr{source, makePlan2Int64ConstExprWithType(1)}
+		if name == "substring" {
+			args = append(args, makePlan2Int64ConstExprWithType(2))
+		}
+		expr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+		require.NoError(t, err)
+		return expr
+	}
+
+	binaryLiteral := func(value string) *planpb.Expr {
+		return makePlan2StringConstExprWithType(value, true)
+	}
+	varbinaryType := types.NewWithCharset(types.T_varbinary, 512, 0, types.CharsetBinary)
+
+	for _, name := range []string{"left", "substring"} {
+		wantNarrowWidth := int32(1)
+		if name == "substring" {
+			wantNarrowWidth = 2
+		}
+		t.Run(name+"/direct binary literal narrows", func(t *testing.T) {
+			expr := bind(t, name, binaryLiteral("你好"))
+			require.Equal(t, wantNarrowWidth, expr.Typ.Width)
+		})
+
+		t.Run(name+"/mixed conditional stays conservative", func(t *testing.T) {
+			mixed, err := BindFuncExprImplByPlanExpr(ctx, "if", []*planpb.Expr{
+				makePlan2BoolConstExprWithType(false),
+				binaryLiteral("x"),
+				makePlan2StringConstExprWithType("你好"),
+			})
+			require.NoError(t, err)
+			expr := bind(t, name, mixed)
+			require.Greater(t, expr.Typ.Width, int32(2))
+		})
+
+		t.Run(name+"/prepared value stays conservative", func(t *testing.T) {
+			prepared := &planpb.Expr{
+				Typ:  makePlan2Type(&varbinaryType),
+				Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+			}
+			expr := bind(t, name, prepared)
+			require.Equal(t, int32(512), expr.Typ.Width)
+		})
+
+		t.Run(name+"/all binary conditional narrows", func(t *testing.T) {
+			allBinary, err := BindFuncExprImplByPlanExpr(ctx, "if", []*planpb.Expr{
+				makePlan2BoolConstExprWithType(true),
+				binaryLiteral("x"),
+				makePlan2VarBinaryConstExprWithType("你好"),
+			})
+			require.NoError(t, err)
+			expr := bind(t, name, allBinary)
+			require.Equal(t, wantNarrowWidth, expr.Typ.Width)
+		})
+	}
+
+	t.Run("text literal overrides binary-shaped type", func(t *testing.T) {
+		text := makePlan2VarBinaryConstExprWithType("你好")
+		text.GetLit().LiteralForm = planpb.StringLiteralForm_STRING_LITERAL_TEXT
+		expr := bind(t, "left", text)
+		require.Equal(t, int32(6), expr.Typ.Width)
+	})
+
+	t.Run("derived mixed-domain column stays conservative", func(t *testing.T) {
+		mixed, err := BindFuncExprImplByPlanExpr(ctx, "if", []*planpb.Expr{
+			makePlan2BoolConstExprWithType(false),
+			binaryLiteral("x"),
+			makePlan2StringConstExprWithType("你好"),
+		})
+		require.NoError(t, err)
+		builder := &QueryBuilder{
+			qry: &planpb.Query{Nodes: []*planpb.Node{{
+				NodeType:    planpb.Node_PROJECT,
+				BindingTags: []int32{7},
+				ProjectList: []*planpb.Expr{mixed},
+			}}},
+			tag2NodeID: map[int32]int32{7: 0},
+		}
+		binder := &baseBinder{builder: builder}
+		derived := &planpb.Expr{
+			Typ: makePlan2Type(&varbinaryType),
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+				RelPos: 7,
+				ColPos: 0,
+			}},
+		}
+		binder.annotateStringDomainSources([]*planpb.Expr{derived})
+		require.NotNil(t, derived.GetPreparedNumeric().GetStringDomainSource())
+		expr := bind(t, "left", derived)
+		require.Equal(t, int32(512), expr.Typ.Width)
+	})
+}
+
+func TestCTASRepeatedDerivedStringDomainReferenceStaysConservative(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, `
+		create table repeated_derived_string_domain as
+		select left(if(d.value is not null, d.value, _binary 'x'), 1) as sliced
+		from (
+			select if(n_nationkey > 0, X'ff', n_name) as value
+			from nation
+		) d`, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	plan, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+	require.NoError(t, err)
+	var visible []*planpb.ColDef
+	for _, col := range plan.GetDdl().GetCreateTable().GetTableDef().GetCols() {
+		if !col.Hidden {
+			visible = append(visible, col)
+		}
+	}
+	require.Len(t, visible, 1)
+	require.Equal(t, int32(types.T_varbinary), visible[0].Typ.Id)
+	// The derived value is binary-shaped but can produce text at runtime. The
+	// repeated reference in IF's condition and value branch must retain that
+	// lineage; narrowing it to VARBINARY(1) would truncate a multibyte text row.
+	require.Greater(t, visible[0].Typ.Width, int32(1))
+}
+
+func TestStringDomainSourceWitnessStaysBounded(t *testing.T) {
+	source := makePlan2VarBinaryConstExprWithType("x")
+	for i := 0; i < 64; i++ {
+		source = &planpb.Expr{
+			Typ: source.Typ,
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "derived_string"},
+				Args: []*planpb.Expr{source},
+			}},
+		}
+	}
+
+	witness := stringDomainSourceWitness(
+		source, possibleStringDomainText|possibleStringDomainBinary)
+	require.NotNil(t, witness)
+	require.Equal(t,
+		possibleStringDomainText|possibleStringDomainBinary,
+		possibleStringDomainsForExpr(witness))
+	require.Nil(t, witness.GetPreparedNumeric())
+	require.Less(t, len(witness.String()), len(source.String()))
+	textWitness := stringDomainSourceWitness(source, possibleStringDomainText)
+	require.Equal(t, types.StringDomainText,
+		types.StaticStringDomain(makeTypeByPlan2Expr(textWitness)))
+	binarySource := makePlan2StringConstExprWithType("x")
+	binaryWitness := stringDomainSourceWitness(binarySource, possibleStringDomainBinary)
+	require.Equal(t, types.StringDomainBinary,
+		types.StaticStringDomain(makeTypeByPlan2Expr(binaryWitness)))
+
+	textType := types.T_text.ToType()
+	param := func(position int32) *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  makePlan2Type(&textType),
+			Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: position}},
+		}
+	}
+	binaryType := types.T_varbinary.ToType()
+	mixed := &planpb.Expr{
+		Typ: makePlan2Type(&binaryType),
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{ObjName: "if"},
+			Args: []*planpb.Expr{param(0), param(1), param(2)},
+		}},
+	}
+	mixedWitness := stringDomainSourceWitness(
+		mixed, possibleStringDomainText|possibleStringDomainBinary)
+	require.Equal(t, []int32{1, 2}, []int32{
+		mixedWitness.GetF().Args[0].GetP().Pos,
+		mixedWitness.GetF().Args[1].GetP().Pos,
+	})
+	require.Equal(t,
+		possibleStringDomainText|possibleStringDomainBinary,
+		possibleStringDomainsForExpr(mixedWitness))
 }
 
 func TestRefineCharacterStringReturnTypesUseFormattedNumericBounds(t *testing.T) {
@@ -256,6 +460,54 @@ func TestRefineCharacterStringReturnTypesUseFormattedNumericBounds(t *testing.T)
 		})
 	}
 }
+
+func TestBindPublicFunctionResultContracts(t *testing.T) {
+	ctx := context.Background()
+	sourceExpr := func(typ types.Type) *planpb.Expr {
+		return &planpb.Expr{
+			Typ: makePlan2Type(&typ),
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+				RelPos: 0,
+				ColPos: 0,
+			}},
+		}
+	}
+	length := makePlan2Int64ConstExprWithType(7)
+
+	varbinary := types.NewWithCharset(types.T_varbinary, 128, 0, types.CharsetBinary)
+	base64Expr, err := BindFuncExprImplByPlanExpr(ctx, "to_base64", []*planpb.Expr{
+		sourceExpr(varbinary),
+	})
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_varchar), base64Expr.Typ.Id)
+	require.Equal(t, int32(174), base64Expr.Typ.Width)
+
+	varchar := types.New(types.T_varchar, 512, 0)
+	for _, name := range []string{"substring", "left", "right"} {
+		args := []*planpb.Expr{sourceExpr(varchar), length}
+		if name == "substring" {
+			args = append(args, length)
+		}
+		bound, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_varchar), bound.Typ.Id, name)
+		require.Equal(t, int32(512), bound.Typ.Width, name)
+	}
+
+	inetNtoa, err := BindFuncExprImplByPlanExpr(ctx, "inet_ntoa", []*planpb.Expr{
+		sourceExpr(varchar),
+	})
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_varchar), inetNtoa.Typ.Id)
+	require.Equal(t, int32(31), inetNtoa.Typ.Width)
+
+	isIPv4, err := BindFuncExprImplByPlanExpr(ctx, "is_ipv4", []*planpb.Expr{
+		sourceExpr(varchar),
+	})
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_int32), isIPv4.Typ.Id)
+}
+
 func TestBindBitwiseAggregateLeavesBlobSubstringInTextDomain(t *testing.T) {
 	ctx := context.Background()
 	sourceType := types.T_blob.ToType()

@@ -390,6 +390,7 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 				} else if retType.Oid.IsMySQLString() {
 					retType = commonConditionalStringType(retType, source)
 				}
+				retType = commonTemporalType(retType, source)
 				minCost = cost
 			}
 		}
@@ -397,7 +398,8 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		}
 		finalTypes := make([]types.Type, len(inputs))
-		shouldCast := needCast || retType.Oid.IsMySQLString() || needDecimalMetadataCast(source, retType)
+		shouldCast := needCast || retType.Oid.IsMySQLString() ||
+			needDecimalMetadataCast(source, retType) || needTemporalMetadataCast(source, retType)
 		for i := range finalTypes {
 			if i%2 == 0 && !(len(inputs)%2 == 1 && i == len(inputs)-1) {
 				finalTypes[i] = types.T_bool.ToType()
@@ -730,6 +732,7 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 				} else if retType.Oid.IsMySQLString() {
 					retType = commonConditionalStringType(retType, source)
 				}
+				retType = commonTemporalType(retType, source)
 				minCost = cost
 			}
 		}
@@ -738,7 +741,8 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 			return newCheckResultWithFailure(failedFunctionParametersWrong)
 		}
 		finalTypes := []types.Type{conditionType, retType, retType}
-		shouldCast := needCast || retType.Oid.IsMySQLString() || needDecimalMetadataCast(source, retType)
+		shouldCast := needCast || retType.Oid.IsMySQLString() ||
+			needDecimalMetadataCast(source, retType) || needTemporalMetadataCast(source, retType)
 		for i := range inputs {
 			if inputs[i].Oid != finalTypes[i].Oid {
 				shouldCast = true
