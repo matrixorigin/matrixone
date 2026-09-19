@@ -1316,12 +1316,7 @@ func resetWindowIntervalExpr(bindCtx context.Context, proc *process.Process, e *
 			if negative {
 				return nil, newWindowFrameIllegalError(bindCtx)
 			}
-			result, err := setWindowIntervalValue(bindCtx, e, finalValue, types.MicroSecond)
-			if err == nil {
-				result.GetList().List[0].GetLit().DecimalLiteralRequiresV82 =
-					decimalIntervalRequiresProtocol(e1)
-			}
-			return result, err
+			return setWindowIntervalValue(bindCtx, e, finalValue, types.MicroSecond)
 		}
 	}
 	isDecimalOrFloat := e1.Typ.Id == int32(types.T_decimal64) ||
@@ -1414,7 +1409,10 @@ func setWindowIntervalValue(
 		return nil, newWindowFrameIllegalError(bindCtx)
 	}
 
-	e.Expr.(*plan.Expr_List).List.List[0] = makePlan2Int64ConstExprWithType(value)
+	list := e.Expr.(*plan.Expr_List).List.List
+	valueExpr := makePlan2Int64ConstExprWithType(value)
+	valueExpr.GetLit().DecimalLiteralRequiresV82 = decimalIntervalRequiresProtocol(list[0])
+	list[0] = valueExpr
 	e.Expr.(*plan.Expr_List).List.List[1] = makePlan2Int64ConstExprWithType(int64(intervalType))
 	return e, nil
 }
