@@ -523,14 +523,16 @@ func buildBlockPKSearchFuncs(
 			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory([]uint64{types.DecodeUint64(basePKFilter.LB)})
 			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory([]uint64{types.DecodeUint64(basePKFilter.LB)}, nil)
 		case types.T_date:
-			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory([]types.Date{types.DecodeDate(basePKFilter.LB)})
-			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory([]types.Date{types.DecodeDate(basePKFilter.LB)}, nil)
+			value := types.DecodeDate(basePKFilter.LB)
+			sortedSearchFunc = vector.FixedSizedBinarySearchOffsetByValFactory([]types.Date{value}, types.DateAscCompare)
+			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory([]types.Date{value}, types.DateAscCompare)
 		case types.T_time:
 			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory([]types.Time{types.DecodeTime(basePKFilter.LB)})
 			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory([]types.Time{types.DecodeTime(basePKFilter.LB)}, nil)
 		case types.T_datetime:
-			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory([]types.Datetime{types.DecodeDatetime(basePKFilter.LB)})
-			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory([]types.Datetime{types.DecodeDatetime(basePKFilter.LB)}, nil)
+			value := types.DecodeDatetime(basePKFilter.LB)
+			sortedSearchFunc = vector.FixedSizedBinarySearchOffsetByValFactory([]types.Datetime{value}, types.DatetimeAscCompare)
+			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory([]types.Datetime{value}, types.DatetimeAscCompare)
 		case types.T_timestamp:
 			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory([]types.Timestamp{types.DecodeTimestamp(basePKFilter.LB)})
 			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory([]types.Timestamp{types.DecodeTimestamp(basePKFilter.LB)}, nil)
@@ -630,14 +632,16 @@ func buildBlockPKSearchFuncs(
 			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[float64](vec))
 			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[float64](vec), nil)
 		case types.T_date:
-			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[types.Date](vec))
-			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[types.Date](vec), nil)
+			values := vector.MustFixedColNoTypeCheck[types.Date](vec)
+			sortedSearchFunc = vector.FixedSizedBinarySearchOffsetByValFactory(values, types.DateAscCompare)
+			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(values, types.DateAscCompare)
 		case types.T_time:
 			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[types.Time](vec))
 			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[types.Time](vec), nil)
 		case types.T_datetime:
-			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[types.Datetime](vec))
-			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[types.Datetime](vec), nil)
+			values := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
+			sortedSearchFunc = vector.FixedSizedBinarySearchOffsetByValFactory(values, types.DatetimeAscCompare)
+			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(values, types.DatetimeAscCompare)
 		case types.T_timestamp:
 			sortedSearchFunc = vector.OrderedBinarySearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[types.Timestamp](vec))
 			unSortedSearchFunc = vector.OrderedLinearSearchOffsetByValFactory(vector.MustFixedColNoTypeCheck[types.Timestamp](vec), nil)
@@ -713,14 +717,16 @@ func buildBlockPKSearchFuncs(
 			sortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeUint64(basePKFilter.LB), closed, true)
 			unSortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeUint64(basePKFilter.LB), closed, false)
 		case types.T_date:
-			sortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeDate(basePKFilter.LB), closed, true)
-			unSortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeDate(basePKFilter.LB), closed, false)
+			value := types.DecodeDate(basePKFilter.LB)
+			sortedSearchFunc = vector.FixedSizeSearchOffsetsByLessTypeChecked(value, closed, true, types.DateAscCompare)
+			unSortedSearchFunc = vector.FixedSizeSearchOffsetsByLessTypeChecked(value, closed, false, types.DateAscCompare)
 		case types.T_time:
 			sortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeTime(basePKFilter.LB), closed, true)
 			unSortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeTime(basePKFilter.LB), closed, false)
 		case types.T_datetime:
-			sortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeDatetime(basePKFilter.LB), closed, true)
-			unSortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeDatetime(basePKFilter.LB), closed, false)
+			value := types.DecodeDatetime(basePKFilter.LB)
+			sortedSearchFunc = vector.FixedSizeSearchOffsetsByLessTypeChecked(value, closed, true, types.DatetimeAscCompare)
+			unSortedSearchFunc = vector.FixedSizeSearchOffsetsByLessTypeChecked(value, closed, false, types.DatetimeAscCompare)
 		case types.T_timestamp:
 			sortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeTimestamp(basePKFilter.LB), closed, true)
 			unSortedSearchFunc = vector.OrderedSearchOffsetsByLess(types.DecodeTimestamp(basePKFilter.LB), closed, false)
@@ -789,14 +795,16 @@ func buildBlockPKSearchFuncs(
 			sortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeUint64(basePKFilter.LB), closed, true)
 			unSortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeUint64(basePKFilter.LB), closed, false)
 		case types.T_date:
-			sortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeDate(basePKFilter.LB), closed, true)
-			unSortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeDate(basePKFilter.LB), closed, false)
+			value := types.DecodeDate(basePKFilter.LB)
+			sortedSearchFunc = vector.FixedSizeSearchOffsetsByGTTypeChecked(value, closed, true, types.DateAscCompare)
+			unSortedSearchFunc = vector.FixedSizeSearchOffsetsByGTTypeChecked(value, closed, false, types.DateAscCompare)
 		case types.T_time:
 			sortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeTime(basePKFilter.LB), closed, true)
 			unSortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeTime(basePKFilter.LB), closed, false)
 		case types.T_datetime:
-			sortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeDatetime(basePKFilter.LB), closed, true)
-			unSortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeDatetime(basePKFilter.LB), closed, false)
+			value := types.DecodeDatetime(basePKFilter.LB)
+			sortedSearchFunc = vector.FixedSizeSearchOffsetsByGTTypeChecked(value, closed, true, types.DatetimeAscCompare)
+			unSortedSearchFunc = vector.FixedSizeSearchOffsetsByGTTypeChecked(value, closed, false, types.DatetimeAscCompare)
 		case types.T_timestamp:
 			sortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeTimestamp(basePKFilter.LB), closed, true)
 			unSortedSearchFunc = vector.OrderedSearchOffsetsByGreat(types.DecodeTimestamp(basePKFilter.LB), closed, false)
@@ -900,8 +908,8 @@ func buildBlockPKSearchFuncs(
 		case types.T_date:
 			lb := types.DecodeDate(basePKFilter.LB)
 			ub := types.DecodeDate(basePKFilter.UB)
-			sortedSearchFunc = vector.CollectOffsetsByBetweenFactory(lb, ub, hint)
-			unSortedSearchFunc = vector.LinearCollectOffsetsByBetweenFactory(lb, ub, hint)
+			sortedSearchFunc = vector.CollectOffsetsByBetweenWithCompareAndHintFactory(lb, ub, hint, types.DateAscCompare)
+			unSortedSearchFunc = vector.FixedSizedLinearCollectOffsetsByBetweenWithHintFactory(lb, ub, hint, types.DateAscCompare)
 		case types.T_time:
 			lb := types.DecodeTime(basePKFilter.LB)
 			ub := types.DecodeTime(basePKFilter.UB)
@@ -910,8 +918,8 @@ func buildBlockPKSearchFuncs(
 		case types.T_datetime:
 			lb := types.DecodeDatetime(basePKFilter.LB)
 			ub := types.DecodeDatetime(basePKFilter.UB)
-			sortedSearchFunc = vector.CollectOffsetsByBetweenFactory(lb, ub, hint)
-			unSortedSearchFunc = vector.LinearCollectOffsetsByBetweenFactory(lb, ub, hint)
+			sortedSearchFunc = vector.CollectOffsetsByBetweenWithCompareAndHintFactory(lb, ub, hint, types.DatetimeAscCompare)
+			unSortedSearchFunc = vector.FixedSizedLinearCollectOffsetsByBetweenWithHintFactory(lb, ub, hint, types.DatetimeAscCompare)
 		case types.T_timestamp:
 			lb := types.DecodeTimestamp(basePKFilter.LB)
 			ub := types.DecodeTimestamp(basePKFilter.UB)
@@ -1128,7 +1136,7 @@ func mergeBaseFilterInKind(
 	case types.T_date:
 		a := vector.MustFixedColNoTypeCheck[types.Date](va)
 		b := vector.MustFixedColNoTypeCheck[types.Date](vb)
-		cmp := func(x, y types.Date) int { return stdcmp.Compare(x, y) }
+		cmp := types.DateAscCompare
 
 		if isOR {
 			err = vector.Union2VectorOrdered(a, b, ret.Vec, mp, cmp)
@@ -1148,7 +1156,7 @@ func mergeBaseFilterInKind(
 	case types.T_datetime:
 		a := vector.MustFixedColNoTypeCheck[types.Datetime](va)
 		b := vector.MustFixedColNoTypeCheck[types.Datetime](vb)
-		cmp := func(x, y types.Datetime) int { return stdcmp.Compare(x, y) }
+		cmp := types.DatetimeAscCompare
 
 		if isOR {
 			err = vector.Union2VectorOrdered(a, b, ret.Vec, mp, cmp)

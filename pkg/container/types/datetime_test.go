@@ -392,6 +392,72 @@ func TestParseDatetime(t *testing.T) {
 	}
 }
 
+func TestParseDatetimeWithInvalidDatesPreservesCalendarFields(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  string
+	}{
+		{input: "2024-02-30 12:34:56.123456", want: "2024-02-30 12:34:56.123456"},
+		{input: "2023-02-29 00:00:00", want: "2023-02-29 00:00:00.000000"},
+		{input: "2024-04-31 23:59:59", want: "2024-04-31 23:59:59.000000"},
+		{input: "20240230123456", want: "2024-02-30 12:34:56.000000"},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			got, err := ParseDatetimeWithInvalidDates(tc.input, 6)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got.String2(6))
+		})
+	}
+
+	for _, input := range []string{"2024-13-01 00:00:00", "2024-01-32 00:00:00", "2024-02-30 24:00:00"} {
+		_, err := ParseDatetimeWithInvalidDates(input, 6)
+		require.Error(t, err, input)
+	}
+
+	_, err := ParseDatetime("2024-02-30 12:34:56", 6)
+	require.Error(t, err)
+}
+
+func TestCalendarCompareOrdersInvalidDatetimesByFields(t *testing.T) {
+	valid, err := ParseDatetime("2024-03-01 00:00:00", 6)
+	require.NoError(t, err)
+	invalid, err := ParseDatetimeWithInvalidDates("2024-02-30 23:59:59", 6)
+	require.NoError(t, err)
+	require.Equal(t, -1, DatetimeAscCompare(invalid, valid))
+	require.Equal(t, 1, DatetimeDescCompare(invalid, valid))
+}
+
+func TestDatetimeCompareKeepsPreEpochValuesInTheLegacyEncoding(t *testing.T) {
+	preEpoch := DatetimeFromClock(1900, 1, 1, 0, 0, 0, 0)
+	invalid, err := ParseDatetimeWithInvalidDates("1900-02-30 00:00:00", 6)
+	require.NoError(t, err)
+
+	require.Equal(t, "1900-01-01 00:00:00", preEpoch.String())
+	require.Equal(t, "1900-02-30 00:00:00", invalid.String())
+	require.Less(t, DatetimeAscCompare(preEpoch, invalid), 0)
+}
+
+func TestInvalidDatetimeArithmeticUsesCalendarFields(t *testing.T) {
+	invalid, err := ParseDatetimeWithInvalidDates("2024-02-30 12:34:56", 6)
+	require.NoError(t, err)
+	added, ok := invalid.AddInterval(1, Day, DateTimeType)
+	require.True(t, ok)
+	require.Equal(t, "2024-03-02 12:34:56", added.String2(0))
+	diff, err := invalid.DateTimeDiffWithUnit("day", DatetimeFromClock(2024, 2, 29, 12, 34, 56, 0))
+	require.NoError(t, err)
+	require.Equal(t, int64(1), diff)
+}
+
+func TestInvalidDatetimeFractionRoundingKeepsFieldValidity(t *testing.T) {
+	got, err := ParseDatetimeWithInvalidDates("2024-02-30 23:59:59.9999995", 6)
+	require.NoError(t, err)
+	require.Equal(t, "2024-02-31 00:00:00.000000", got.String2(6))
+
+	got, err = ParseDatetimeWithInvalidDates("2024-02-30 23:59:59.999999", 6)
+	require.NoError(t, err)
+	require.Equal(t, "2024-02-31 00:00:00", got.TruncateToScale(0).String())
+}
+
 func TestUnix(t *testing.T) {
 	for _, timestr := range []string{"1955-08-25 09:21:34", "2012-01-25 09:21:34"} {
 		motime, _ := ParseDatetime(timestr, 6)

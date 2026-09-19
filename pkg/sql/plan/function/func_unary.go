@@ -10540,6 +10540,26 @@ func DateStringToYear(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 	}, selectList)
 }
 
+func getDefaultWeekFormatMode(proc *process.Process) (int, error) {
+	if proc == nil || proc.Base == nil || proc.GetResolveVariableFunc() == nil {
+		return 0, nil
+	}
+
+	value, err := proc.GetResolveVariableFunc()("default_week_format", true, false)
+	if err != nil {
+		return 0, err
+	}
+	if value == nil {
+		return 0, nil
+	}
+
+	mode, ok := value.(int64)
+	if !ok {
+		return 0, moerr.NewInternalError(proc.Ctx, fmt.Sprintf("session variable default_week_format has unexpected type %T", value))
+	}
+	return int(mode & 7), nil
+}
+
 func DateToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[uint8](result)
 	dates := vector.GenerateFunctionFixedTypeParameter[types.Date](ivecs[0])
@@ -10547,6 +10567,13 @@ func DateToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	// Get mode (default 0 if not provided)
 	// MySQL uses mode % 8 for out-of-range values
 	mode := 0
+	if len(ivecs) == 1 {
+		var err error
+		mode, err = getDefaultWeekFormatMode(proc)
+		if err != nil {
+			return err
+		}
+	}
 	if len(ivecs) > 1 && !ivecs[1].IsConstNull() {
 		mode = int(vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0])
 		mode = ((mode % 8) + 8) % 8
@@ -10583,6 +10610,13 @@ func DatetimeToWeek(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 	// Get mode (default 0 if not provided)
 	// MySQL uses mode % 8 for out-of-range values
 	mode := 0
+	if len(ivecs) == 1 {
+		var err error
+		mode, err = getDefaultWeekFormatMode(proc)
+		if err != nil {
+			return err
+		}
+	}
 	if len(ivecs) > 1 && !ivecs[1].IsConstNull() {
 		mode = int(vector.MustFixedColWithTypeCheck[int64](ivecs[1])[0])
 		mode = ((mode % 8) + 8) % 8
@@ -13590,12 +13624,16 @@ func SHA1Func(
 func LastDay(
 	ivecs []*vector.Vector,
 	result vector.FunctionResultWrapper,
-	_ *process.Process,
+	proc *process.Process,
 	length int,
 	selectList *FunctionSelectList,
 ) error {
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	allowInvalidDates, err := process.ResolveAllowInvalidDates(proc)
+	if err != nil {
+		return err
+	}
 
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetStrValue(i)
@@ -13609,7 +13647,11 @@ func LastDay(
 			var err error
 			var dtt types.Datetime
 			if len(day) < 14 {
-				dt, err = types.ParseDateCast(day)
+				if allowInvalidDates {
+					dt, err = types.ParseDateCastWithInvalidDates(day)
+				} else {
+					dt, err = types.ParseDateCast(day)
+				}
 				if err != nil {
 					if err := rs.AppendBytes(nil, true); err != nil {
 						return err
@@ -13617,7 +13659,11 @@ func LastDay(
 					continue
 				}
 			} else {
-				dtt, err = types.ParseDatetime(day, 6)
+				if allowInvalidDates {
+					dtt, err = types.ParseDatetimeWithInvalidDates(day, 6)
+				} else {
+					dtt, err = types.ParseDatetime(day, 6)
+				}
 				if err != nil {
 					if err := rs.AppendBytes(nil, true); err != nil {
 						return err

@@ -1546,7 +1546,7 @@ func leastFn(parameters []*vector.Vector,
 			length,
 			selectList,
 			func(v1, v2 types.Date) bool {
-				return v1 < v2
+				return types.DateAscCompare(v1, v2) < 0
 			})
 
 	case types.T_datetime:
@@ -1557,7 +1557,7 @@ func leastFn(parameters []*vector.Vector,
 			length,
 			selectList,
 			func(v1, v2 types.Datetime) bool {
-				return v1 < v2
+				return types.DatetimeAscCompare(v1, v2) < 0
 			})
 
 	case types.T_time:
@@ -1922,7 +1922,7 @@ func greatestFn(parameters []*vector.Vector,
 			length,
 			selectList,
 			func(v1, v2 types.Date) bool {
-				return v1 > v2
+				return types.DateAscCompare(v1, v2) > 0
 			})
 
 	case types.T_datetime:
@@ -1933,7 +1933,7 @@ func greatestFn(parameters []*vector.Vector,
 			length,
 			selectList,
 			func(v1, v2 types.Datetime) bool {
-				return v1 > v2
+				return types.DatetimeAscCompare(v1, v2) > 0
 			})
 
 	case types.T_time:

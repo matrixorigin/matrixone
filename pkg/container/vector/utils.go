@@ -222,6 +222,31 @@ func OrderedGetMinAndMax[T types.OrderedT](vec *Vector) (minv, maxv T) {
 	return
 }
 
+// FixedSizeGetMinAndMax returns comparison-aware bounds for fixed-width
+// values. It is needed by temporal types whose representation is not their
+// SQL ordering for calendar-invalid values.
+func FixedSizeGetMinAndMax[T types.FixedSizeTExceptStrType](vec *Vector, compare func(T, T) int) (minv, maxv T) {
+	col := MustFixedColNoTypeCheck[T](vec)
+	first := true
+	for i, value := range col {
+		if vec.IsNull(uint64(i)) {
+			continue
+		}
+		if first {
+			minv, maxv = value, value
+			first = false
+			continue
+		}
+		if compare(value, minv) < 0 {
+			minv = value
+		}
+		if compare(value, maxv) > 0 {
+			maxv = value
+		}
+	}
+	return
+}
+
 // FloatGetMinAndMax computes the comparable floating-point bounds of vec.
 // NaN is not equal to any SQL value, including itself, so it cannot widen a
 // useful min/max summary. Returning ok=false for an all-NULL/all-NaN vector

@@ -8595,6 +8595,14 @@ func strToDate(proc *process.Process,
 	var dft types.Date
 	isBinary := from.GetSourceVector().GetIsBin()
 	assignmentCast := mode == castModeStrictStringWidth || mode == castModeAssignmentIgnore
+	allowInvalidDates := false
+	if assignmentCast {
+		var err error
+		allowInvalidDates, err = process.ResolveAllowInvalidDates(proc)
+		if err != nil {
+			return err
+		}
+	}
 	modeChecked := false
 	nullifyZero := false
 	for i = 0; i < l; i++ {
@@ -8620,7 +8628,13 @@ func strToDate(proc *process.Process,
 			}
 		} else {
 			s := convertByteSliceToString(v)
-			val, err := types.ParseDateCast(s)
+			var val types.Date
+			var err error
+			if allowInvalidDates {
+				val, err = types.ParseDateCastWithInvalidDates(s)
+			} else {
+				val, err = types.ParseDateCast(s)
+			}
 			if err != nil {
 				if mode == castModeAssignmentIgnore && !isBinary && isTemporalLexicalConversionError(err) {
 					appendTemporalAssignmentConversionWarning(proc, "date", s)
@@ -8729,6 +8743,14 @@ func strToDatetime(proc *process.Process,
 	var dft types.Datetime
 	isBinary := from.GetSourceVector().GetIsBin()
 	assignmentCast := mode == castModeStrictStringWidth || mode == castModeAssignmentIgnore
+	allowInvalidDates := false
+	if assignmentCast {
+		var err error
+		allowInvalidDates, err = process.ResolveAllowInvalidDates(proc)
+		if err != nil {
+			return err
+		}
+	}
 	totype := to.GetType()
 	modeChecked := false
 	nullifyZero := false
@@ -8755,7 +8777,13 @@ func strToDatetime(proc *process.Process,
 			}
 		} else {
 			s := convertByteSliceToString(v)
-			val, err := types.ParseDatetime(s, totype.Scale)
+			var val types.Datetime
+			var err error
+			if allowInvalidDates {
+				val, err = types.ParseDatetimeWithInvalidDates(s, totype.Scale)
+			} else {
+				val, err = types.ParseDatetime(s, totype.Scale)
+			}
 			if err != nil {
 				if mode == castModeAssignmentIgnore && !isBinary && isTemporalLexicalConversionError(err) {
 					appendTemporalAssignmentConversionWarning(proc, "datetime", s)

@@ -49,6 +49,22 @@ func IsStrictNoZeroDateMode(mode any) bool {
 	return strict && noZeroDate
 }
 
+// IsAllowInvalidDatesMode reports whether DATE/DATETIME assignments may keep
+// month/day combinations whose fields are in range but do not form a valid
+// calendar date. TIMESTAMP intentionally does not use this mode.
+func IsAllowInvalidDatesMode(mode any) bool {
+	modeStr, ok := mode.(string)
+	if !ok {
+		return false
+	}
+	for token := range strings.SplitSeq(modeStr, ",") {
+		if strings.EqualFold(strings.TrimSpace(token), "ALLOW_INVALID_DATES") {
+			return true
+		}
+	}
+	return false
+}
+
 // IsStrictDivisionByZeroMode reports whether sql_mode requires division by zero
 // to error in data-changing statements without IGNORE. TRADITIONAL enables both
 // strict mode and ERROR_FOR_DIVISION_BY_ZERO.
@@ -86,6 +102,23 @@ func ResolvePadCharToFullLength(proc *Process) (bool, error) {
 		return IsPadCharToFullLengthMode(mode), nil
 	}
 	return IsPadCharToFullLengthMode(proc.GetSessionInfo().SqlMode), nil
+}
+
+// ResolveAllowInvalidDates reports the session's DATE/DATETIME calendar
+// validation policy. The resolver is used on the originating CN; the captured
+// session snapshot is used when an assignment cast runs remotely.
+func ResolveAllowInvalidDates(proc *Process) (bool, error) {
+	if proc == nil {
+		return false, nil
+	}
+	if resolveFunc := proc.GetResolveVariableFunc(); resolveFunc != nil {
+		mode, err := resolveFunc("sql_mode", true, false)
+		if err != nil {
+			return false, err
+		}
+		return IsAllowInvalidDatesMode(mode), nil
+	}
+	return IsAllowInvalidDatesMode(proc.GetSessionInfo().SqlMode), nil
 }
 
 func ResolveExplicitZeroTemporalCastReturnsNull(proc *Process) (bool, error) {

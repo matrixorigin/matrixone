@@ -439,13 +439,13 @@ func CompareValue(left, right any) int {
 	case Decimal256:
 		return lVal.Compare(right.(Decimal256))
 	case Date:
-		return cmp.Compare(lVal, right.(Date))
+		return DateAscCompare(lVal, right.(Date))
 	case Time:
 		return cmp.Compare(lVal, right.(Time))
 	case Timestamp:
 		return cmp.Compare(lVal, right.(Timestamp))
 	case Datetime:
-		return cmp.Compare(lVal, right.(Datetime))
+		return DatetimeAscCompare(lVal, right.(Datetime))
 	case MoYear:
 		return cmp.Compare(lVal, right.(MoYear))
 	case Uuid:

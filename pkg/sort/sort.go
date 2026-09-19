@@ -107,6 +107,22 @@ func GenericLess[T types.OrderedT](a, b T) bool {
 	return a < b
 }
 
+func DateLess(data []types.Date, i, j int64) bool {
+	return types.DateAscCompare(data[i], data[j]) < 0
+}
+
+func DateGreater(data []types.Date, i, j int64) bool {
+	return types.DateAscCompare(data[i], data[j]) > 0
+}
+
+func DatetimeLess(data []types.Datetime, i, j int64) bool {
+	return types.DatetimeAscCompare(data[i], data[j]) < 0
+}
+
+func DatetimeGreater(data []types.Datetime, i, j int64) bool {
+	return types.DatetimeAscCompare(data[i], data[j]) > 0
+}
+
 // ByteJsonPhysicalLess compares the pre-SQL-order relation used by persisted
 // JSON cluster keys. The varlena strings point into immutable vector storage;
 // converting them with UnsafeStringToBytes avoids a comparator allocation.
@@ -300,16 +316,16 @@ func sortByVector(
 	case types.T_date:
 		col := vector.MustFixedColNoTypeCheck[types.Date](vec)
 		if !desc {
-			genericSort(col, os, genericLess[types.Date])
+			genericSort(col, os, DateLess)
 		} else {
-			genericSort(col, os, genericGreater[types.Date])
+			genericSort(col, os, DateGreater)
 		}
 	case types.T_datetime:
 		col := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
 		if !desc {
-			genericSort(col, os, genericLess[types.Datetime])
+			genericSort(col, os, DatetimeLess)
 		} else {
-			genericSort(col, os, genericGreater[types.Datetime])
+			genericSort(col, os, DatetimeGreater)
 		}
 	case types.T_time:
 		col := vector.MustFixedColNoTypeCheck[types.Time](vec)

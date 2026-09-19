@@ -328,6 +328,38 @@ func FixedSizedLinearCollectOffsetsByBetweenFactory[
 	}
 }
 
+// FixedSizedLinearCollectOffsetsByBetweenWithHintFactory is the comparison-
+// aware counterpart of LinearCollectOffsetsByBetweenFactory. It is used for
+// fixed-width temporal values whose semantic order is not their raw integer
+// order (for example, DATE values stored with ALLOW_INVALID_DATES).
+func FixedSizedLinearCollectOffsetsByBetweenWithHintFactory[
+	T types.FixedSizeTExceptStrType](lb, ub T, hint uint8, cmp func(T, T) int) func(*Vector) []int64 {
+	return func(vector *Vector) []int64 {
+		var sels []int64
+		cols := MustFixedColNoTypeCheck[T](vector)
+		for i, value := range cols {
+			left, right := cmp(value, lb), cmp(value, ub)
+			match := false
+			switch hint {
+			case 0:
+				match = left >= 0 && right <= 0
+			case 1:
+				match = left > 0 && right <= 0
+			case 2:
+				match = left >= 0 && right < 0
+			case 3:
+				match = left > 0 && right < 0
+			default:
+				panic(hint)
+			}
+			if match {
+				sels = append(sels, int64(i))
+			}
+		}
+		return sels
+	}
+}
+
 func LinearCollectOffsetsByPrefixInFactory(rvec *Vector) func(*Vector) []int64 {
 	return func(lvec *Vector) []int64 {
 		var sels []int64
@@ -738,6 +770,38 @@ func CollectOffsetsByBetweenWithCompareFactory[T types.FixedSizeTExceptStrType](
 			return cmp(cols[i], rval) > 0
 		})
 		if start == end {
+			return nil
+		}
+		sels := make([]int64, end-start)
+		for i := start; i < end; i++ {
+			sels[i-start] = int64(i)
+		}
+		return sels
+	}
+}
+
+// CollectOffsetsByBetweenWithCompareAndHintFactory is the sorted-vector
+// variant of FixedSizedLinearCollectOffsetsByBetweenWithHintFactory.
+func CollectOffsetsByBetweenWithCompareAndHintFactory[T types.FixedSizeTExceptStrType](
+	lval, rval T, hint uint8, cmp func(T, T) int,
+) func(*Vector) []int64 {
+	return func(vec *Vector) []int64 {
+		cols := MustFixedColNoTypeCheck[T](vec)
+		start := sort.Search(len(cols), func(i int) bool {
+			bound := cmp(cols[i], lval)
+			if hint == 1 || hint == 3 {
+				return bound > 0
+			}
+			return bound >= 0
+		})
+		end := sort.Search(len(cols), func(i int) bool {
+			bound := cmp(cols[i], rval)
+			if hint == 0 || hint == 1 {
+				return bound > 0
+			}
+			return bound >= 0
+		})
+		if start >= end {
 			return nil
 		}
 		sels := make([]int64, end-start)

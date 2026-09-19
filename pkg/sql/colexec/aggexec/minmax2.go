@@ -662,9 +662,9 @@ func makeMinMaxExecWithLegacyText(
 	case types.T_float64:
 		return newGenericMinMaxExec[float64](mp, aggID, isMin, param)
 	case types.T_date:
-		return newGenericMinMaxExec[types.Date](mp, aggID, isMin, param)
+		return newTemporalMinMaxExec(mp, aggID, isMin, param, types.DateAscCompare)
 	case types.T_datetime:
-		return newGenericMinMaxExec[types.Datetime](mp, aggID, isMin, param)
+		return newTemporalMinMaxExec(mp, aggID, isMin, param, types.DatetimeAscCompare)
 	case types.T_time:
 		return newGenericMinMaxExec[types.Time](mp, aggID, isMin, param)
 	case types.T_timestamp:
@@ -729,6 +729,20 @@ func newGenericMinMaxExec[T types.OrderedT](mp *mpool.MPool, aggID int64, isMin 
 		exec.comp = types.GenericAscCompare[T]
 	} else {
 		exec.comp = types.GenericDescCompare[T]
+	}
+	setupAggInfo(&exec.aggInfo, aggID, param)
+	return &exec
+}
+
+func newTemporalMinMaxExec[T types.FixedSizeT](
+	mp *mpool.MPool, aggID int64, isMin bool, param types.Type, asc func(T, T) int,
+) AggFuncExec {
+	var exec minMaxExecFixed[T]
+	exec.mp = mp
+	if isMin {
+		exec.comp = asc
+	} else {
+		exec.comp = func(a, b T) int { return -asc(a, b) }
 	}
 	setupAggInfo(&exec.aggInfo, aggID, param)
 	return &exec

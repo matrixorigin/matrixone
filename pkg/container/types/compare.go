@@ -61,6 +61,101 @@ func GenericAscCompare[T OrderedT](x, y T) int {
 	return 1
 }
 
+// DateAscCompare compares DATE values by their calendar fields. DATE values
+// accepted by ALLOW_INVALID_DATES use a tagged representation because the
+// legacy day-offset encoding cannot represent, for example, 2024-02-30.
+func DateAscCompare(x, y Date) int {
+	if x == y {
+		return 0
+	}
+	if x == ZeroDate {
+		return -1
+	}
+	if y == ZeroDate {
+		return 1
+	}
+	if !isEncodedInvalidDate(x) && !isEncodedInvalidDate(y) {
+		return GenericAscCompare(x, y)
+	}
+	xYear, xMonth, xDay, _ := x.Calendar(true)
+	yYear, yMonth, yDay, _ := y.Calendar(true)
+	return compareDateFields(xYear, xMonth, xDay, yYear, yMonth, yDay)
+}
+
+func DateDescCompare(x, y Date) int {
+	return -DateAscCompare(x, y)
+}
+
+func compareDateFields(xYear int32, xMonth, xDay uint8, yYear int32, yMonth, yDay uint8) int {
+	if xYear != yYear {
+		if xYear < yYear {
+			return -1
+		}
+		return 1
+	}
+	if xMonth != yMonth {
+		if xMonth < yMonth {
+			return -1
+		}
+		return 1
+	}
+	if xDay < yDay {
+		return -1
+	}
+	if xDay > yDay {
+		return 1
+	}
+	return 0
+}
+
+// DatetimeAscCompare compares DATETIME values by date and clock fields,
+// including the fractional second. It mirrors DateAscCompare for the tagged
+// representation used for calendar-invalid dates.
+func DatetimeAscCompare(x, y Datetime) int {
+	if x == y {
+		return 0
+	}
+	if x == ZeroDatetime {
+		return -1
+	}
+	if y == ZeroDatetime {
+		return 1
+	}
+	if !isEncodedInvalidDatetime(x) && !isEncodedInvalidDatetime(y) {
+		return GenericAscCompare(x, y)
+	}
+	xYear, xMonth, xDay, _ := x.ToDate().Calendar(true)
+	yYear, yMonth, yDay, _ := y.ToDate().Calendar(true)
+	if ret := compareDateFields(xYear, xMonth, xDay, yYear, yMonth, yDay); ret != 0 {
+		return ret
+	}
+	xHour, xMinute, xSecond := x.Clock()
+	yHour, yMinute, ySecond := y.Clock()
+	if xHour != yHour {
+		if xHour < yHour {
+			return -1
+		}
+		return 1
+	}
+	if xMinute != yMinute {
+		if xMinute < yMinute {
+			return -1
+		}
+		return 1
+	}
+	if xSecond != ySecond {
+		if xSecond < ySecond {
+			return -1
+		}
+		return 1
+	}
+	return GenericAscCompare(x.MicroSec(), y.MicroSec())
+}
+
+func DatetimeDescCompare(x, y Datetime) int {
+	return -DatetimeAscCompare(x, y)
+}
+
 // Float32OrderAscCompare implements the SQL ORDER BY relation for FLOAT.
 // Infinities retain their numeric order. Signed zeroes and all NaN payloads
 // are peers, and NaNs sort after every numeric value.

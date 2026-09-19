@@ -10862,7 +10862,7 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		maxv = types.EncodeFloat64(&maxVal)
 
 	case types.T_date:
-		minVal, maxVal := OrderedGetMinAndMax[types.Date](v)
+		minVal, maxVal := FixedSizeGetMinAndMax(v, types.DateAscCompare)
 		minv = types.EncodeDate(&minVal)
 		maxv = types.EncodeDate(&maxVal)
 
@@ -10872,7 +10872,7 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		maxv = types.EncodeMoYear(&maxVal)
 
 	case types.T_datetime:
-		minVal, maxVal := OrderedGetMinAndMax[types.Datetime](v)
+		minVal, maxVal := FixedSizeGetMinAndMax(v, types.DatetimeAscCompare)
 		minv = types.EncodeDatetime(&minVal)
 		maxv = types.EncodeDatetime(&maxVal)
 
@@ -11206,11 +11206,11 @@ func compareVectorRows(v *Vector, left, right int) int {
 	case types.T_float64:
 		return compareOrderedRows[float64](v, left, right)
 	case types.T_date:
-		return compareOrderedRows[types.Date](v, left, right)
+		return types.DateAscCompare(GetFixedAtNoTypeCheck[types.Date](v, left), GetFixedAtNoTypeCheck[types.Date](v, right))
 	case types.T_year:
 		return compareOrderedRows[types.MoYear](v, left, right)
 	case types.T_datetime:
-		return compareOrderedRows[types.Datetime](v, left, right)
+		return types.DatetimeAscCompare(GetFixedAtNoTypeCheck[types.Datetime](v, left), GetFixedAtNoTypeCheck[types.Datetime](v, right))
 	case types.T_time:
 		return compareOrderedRows[types.Time](v, left, right)
 	case types.T_timestamp:
@@ -11599,7 +11599,7 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_date:
 		col := MustFixedColNoTypeCheck[types.Date](v)
-		slices.Sort(col)
+		slices.SortFunc(col, types.DateAscCompare)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
@@ -11619,7 +11619,7 @@ func (v *Vector) InplaceSortAndCompact() {
 
 	case types.T_datetime:
 		col := MustFixedColNoTypeCheck[types.Datetime](v)
-		slices.Sort(col)
+		slices.SortFunc(col, types.DatetimeAscCompare)
 		newCol := slices.Compact(col)
 		if len(newCol) != len(col) {
 			v.CleanOnlyData()
@@ -11925,7 +11925,7 @@ func (v *Vector) InplaceSort() {
 
 	case types.T_date:
 		col := MustFixedColNoTypeCheck[types.Date](v)
-		slices.Sort(col)
+		slices.SortFunc(col, types.DateAscCompare)
 
 	case types.T_year:
 		col := MustFixedColNoTypeCheck[types.MoYear](v)
@@ -11933,7 +11933,7 @@ func (v *Vector) InplaceSort() {
 
 	case types.T_datetime:
 		col := MustFixedColNoTypeCheck[types.Datetime](v)
-		slices.Sort(col)
+		slices.SortFunc(col, types.DatetimeAscCompare)
 
 	case types.T_time:
 		col := MustFixedColNoTypeCheck[types.Time](v)

@@ -198,13 +198,13 @@ func GetOffsetByVal(data containers.Vector, v any, skipmask *nulls.Bitmap) (offs
 		return GetOffsetOfOrdered(vs, v.(float64), skipmask)
 	case types.T_date:
 		vs := vector.MustFixedColNoTypeCheck[types.Date](vec)
-		return GetOffsetOfOrdered(vs, v.(types.Date), skipmask)
+		return GetOffsetWithFunc(vs, v.(types.Date), types.DateAscCompare, skipmask)
 	case types.T_time:
 		vs := vector.MustFixedColNoTypeCheck[types.Time](vec)
 		return GetOffsetOfOrdered(vs, v.(types.Time), skipmask)
 	case types.T_datetime:
 		vs := vector.MustFixedColNoTypeCheck[types.Datetime](vec)
-		return GetOffsetOfOrdered(vs, v.(types.Datetime), skipmask)
+		return GetOffsetWithFunc(vs, v.(types.Datetime), types.DatetimeAscCompare, skipmask)
 	case types.T_timestamp:
 		vs := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)
 		return GetOffsetOfOrdered(vs, v.(types.Timestamp), skipmask)

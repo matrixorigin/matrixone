@@ -1835,11 +1835,11 @@ func greatThanFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		}, selectList)
 	case types.T_date:
 		return opBinaryFixedFixedToFixed[types.Date, types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
-			return a > b
+			return types.DateAscCompare(a, b) > 0
 		}, selectList)
 	case types.T_datetime:
 		return opBinaryFixedFixedToFixed[types.Datetime, types.Datetime, bool](parameters, rs, proc, length, func(a, b types.Datetime) bool {
-			return a > b
+			return types.DatetimeAscCompare(a, b) > 0
 		}, selectList)
 	case types.T_time:
 		return opBinaryFixedFixedToFixed[types.Time, types.Time, bool](parameters, rs, proc, length, func(a, b types.Time) bool {
@@ -2001,11 +2001,11 @@ func greatEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrapp
 		}, selectList)
 	case types.T_date:
 		return opBinaryFixedFixedToFixed[types.Date, types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
-			return a >= b
+			return types.DateAscCompare(a, b) >= 0
 		}, selectList)
 	case types.T_datetime:
 		return opBinaryFixedFixedToFixed[types.Datetime, types.Datetime, bool](parameters, rs, proc, length, func(a, b types.Datetime) bool {
-			return a >= b
+			return types.DatetimeAscCompare(a, b) >= 0
 		}, selectList)
 	case types.T_time:
 		return opBinaryFixedFixedToFixed[types.Time, types.Time, bool](parameters, rs, proc, length, func(a, b types.Time) bool {
@@ -2339,11 +2339,11 @@ func lessThanFn(parameters []*vector.Vector, result vector.FunctionResultWrapper
 		}, selectList)
 	case types.T_date:
 		return opBinaryFixedFixedToFixed[types.Date, types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
-			return a < b
+			return types.DateAscCompare(a, b) < 0
 		}, selectList)
 	case types.T_datetime:
 		return opBinaryFixedFixedToFixed[types.Datetime, types.Datetime, bool](parameters, rs, proc, length, func(a, b types.Datetime) bool {
-			return a < b
+			return types.DatetimeAscCompare(a, b) < 0
 		}, selectList)
 	case types.T_time:
 		return opBinaryFixedFixedToFixed[types.Time, types.Time, bool](parameters, rs, proc, length, func(a, b types.Time) bool {
@@ -2505,11 +2505,11 @@ func lessEqualFn(parameters []*vector.Vector, result vector.FunctionResultWrappe
 		}, selectList)
 	case types.T_date:
 		return opBinaryFixedFixedToFixed[types.Date, types.Date, bool](parameters, rs, proc, length, func(a, b types.Date) bool {
-			return a <= b
+			return types.DateAscCompare(a, b) <= 0
 		}, selectList)
 	case types.T_datetime:
 		return opBinaryFixedFixedToFixed[types.Datetime, types.Datetime, bool](parameters, rs, proc, length, func(a, b types.Datetime) bool {
-			return a <= b
+			return types.DatetimeAscCompare(a, b) <= 0
 		}, selectList)
 	case types.T_time:
 		return opBinaryFixedFixedToFixed[types.Time, types.Time, bool](parameters, rs, proc, length, func(a, b types.Time) bool {
