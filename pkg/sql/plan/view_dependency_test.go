@@ -767,47 +767,72 @@ func TestPersistedDecimalZeroTailComparisonViewProtocolLifecycle(t *testing.T) {
 		}
 	})
 
-	const createSQL = "create view v_decimal_zero_tail as select d = 1.0000000000000000000 as matches from decimal_zero_tail_source"
-	build := func() (*Plan, error) {
-		root := &rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}
-		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createSQL, 1)
-		require.NoError(t, err)
-		defer stmt.Free()
-		return BuildPlan(root, stmt, false)
-	}
+	for _, literal := range []string{
+		"1.0000000000000000000",
+		"922337203685477581.0",
+		"922337203685477581.6",
+		"-1234567890123456789.0",
+		"-1234567890123456789.6",
+		"922337203685477581.1",
+		"-1234567890123456789.1",
+		"10.0",
+	} {
+		t.Run(literal, func(t *testing.T) {
+			compatible := literal == "922337203685477581.1" || literal == "-1234567890123456789.1" || literal == "10.0"
+			createSQL := "create view v_decimal_zero_tail as select d = " + literal + " as matches from decimal_zero_tail_source"
+			build := func() (*Plan, error) {
+				root := &rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}
+				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createSQL, 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				return BuildPlan(root, stmt, false)
+			}
 
-	for _, floor := range []int64{defines.MORPCVersion83, defines.MORPCVersion86} {
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, floor)
-		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, floor)
-		created, err := build()
-		if floor == defines.MORPCVersion83 {
-			require.ErrorContains(t, err, "protocol version 86")
-			continue
-		}
-		require.NoError(t, err)
-		persisted := created.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()
-		var data ViewData
-		require.NoError(t, json.Unmarshal([]byte(persisted), &data))
-		require.NotNil(t, data.RequiredProtocolVersion)
-		require.Equal(t, int64(defines.MORPCVersion86), *data.RequiredProtocolVersion)
+			for _, floor := range []int64{defines.MORPCVersion85, defines.MORPCVersion86} {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, floor)
+				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, floor)
+				created, err := build()
+				if compatible {
+					require.NoError(t, err)
+					var data ViewData
+					require.NoError(t, json.Unmarshal([]byte(created.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()), &data))
+					if data.RequiredProtocolVersion != nil {
+						require.LessOrEqual(t, *data.RequiredProtocolVersion, int64(defines.MORPCVersion85))
+					}
+					continue
+				}
+				if floor == defines.MORPCVersion85 {
+					require.ErrorContains(t, err, "protocol version 86")
+					continue
+				}
+				require.NoError(t, err)
+				persisted := created.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()
+				var data ViewData
+				require.NoError(t, json.Unmarshal([]byte(persisted), &data))
+				require.NotNil(t, data.RequiredProtocolVersion)
+				require.Equal(t, int64(defines.MORPCVersion86), *data.RequiredProtocolVersion)
 
-		var fields map[string]json.RawMessage
-		require.NoError(t, json.Unmarshal([]byte(persisted), &fields))
-		delete(fields, "required_protocol_version")
-		markerlessBytes, err := json.Marshal(fields)
-		require.NoError(t, err)
-		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion83))
-		_, err = RegenerateViewDefinition(ctx, string(markerlessBytes))
-		require.ErrorContains(t, err, "protocol version 86")
-		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion86))
-		regenerated, err := RegenerateViewDefinition(ctx, string(markerlessBytes))
-		require.NoError(t, err)
-		var regeneratedData ViewData
-		require.NoError(t, json.Unmarshal(
-			[]byte(regenerated.TableDef.GetViewSql().GetView()), &regeneratedData))
-		require.NotNil(t, regeneratedData.RequiredProtocolVersion)
-		require.Equal(t, int64(defines.MORPCVersion86), *regeneratedData.RequiredProtocolVersion)
+				var fields map[string]json.RawMessage
+				require.NoError(t, json.Unmarshal([]byte(persisted), &fields))
+				delete(fields, "required_protocol_version")
+				markerlessBytes, err := json.Marshal(fields)
+				require.NoError(t, err)
+				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion85))
+				_, err = RegenerateViewDefinition(ctx, persisted)
+				require.ErrorContains(t, err, "protocol version 86")
+				_, err = RegenerateViewDefinition(ctx, string(markerlessBytes))
+				require.ErrorContains(t, err, "protocol version 86")
+				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion86))
+				regenerated, err := RegenerateViewDefinition(ctx, string(markerlessBytes))
+				require.NoError(t, err)
+				var regeneratedData ViewData
+				require.NoError(t, json.Unmarshal(
+					[]byte(regenerated.TableDef.GetViewSql().GetView()), &regeneratedData))
+				require.NotNil(t, regeneratedData.RequiredProtocolVersion)
+				require.Equal(t, int64(defines.MORPCVersion86), *regeneratedData.RequiredProtocolVersion)
+			}
+		})
 	}
 }
 
