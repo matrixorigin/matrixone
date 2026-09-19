@@ -1117,6 +1117,24 @@ func TestFormatColTypeTinyText(t *testing.T) {
 	}
 }
 
+func TestFormatColTypeBlobFamily(t *testing.T) {
+	for _, tc := range []struct {
+		width int32
+		want  string
+	}{
+		{types.MaxTinyTextLen, "TINYBLOB"},
+		{types.MaxStringSize, "BLOB"},
+		{types.MaxMediumTextLen, "MEDIUMBLOB"},
+		{types.MaxLongTextLen, "LONGBLOB"},
+		{0, "BLOB"},
+	} {
+		require.Equal(t, tc.want, FormatColType(plan.Type{
+			Id:    int32(types.T_blob),
+			Width: tc.width,
+		}))
+	}
+}
+
 func TestFormatColTypeArrayMetadata(t *testing.T) {
 	require.Equal(t, "ARRAY(varchar(20))", FormatColType(plan.Type{
 		Id:         int32(types.T_json),

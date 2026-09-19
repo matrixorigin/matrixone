@@ -361,7 +361,7 @@ func TestGetTypeFromAstPreservesTextFamilyCapacity(t *testing.T) {
 		sql   string
 		width int32
 	}{
-		{name: "text", sql: "text", width: 0},
+		{name: "text", sql: "text", width: types.MaxStringSize},
 		{name: "mediumtext", sql: "mediumtext", width: types.MaxMediumTextLen},
 		{name: "longtext", sql: "longtext", width: types.MaxLongTextLen},
 	} {
@@ -374,6 +374,31 @@ func TestGetTypeFromAstPreservesTextFamilyCapacity(t *testing.T) {
 			typ, err := getTypeFromAst(context.Background(), colDef.Type)
 			require.NoError(t, err)
 			require.Equal(t, int32(types.T_text), typ.Id)
+			require.Equal(t, tc.width, typ.Width)
+		})
+	}
+}
+
+func TestGetTypeFromAstPreservesBlobFamilyCapacity(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		sql   string
+		width int32
+	}{
+		{name: "tinyblob", sql: "tinyblob", width: types.MaxTinyTextLen},
+		{name: "blob", sql: "blob", width: types.MaxStringSize},
+		{name: "mediumblob", sql: "mediumblob", width: types.MaxMediumTextLen},
+		{name: "longblob", sql: "longblob", width: types.MaxLongTextLen},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(), "create table t (value "+tc.sql+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			createTable := stmt.(*tree.CreateTable)
+			colDef := createTable.Defs[0].(*tree.ColumnTableDef)
+			typ, err := getTypeFromAst(context.Background(), colDef.Type)
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_blob), typ.Id)
 			require.Equal(t, tc.width, typ.Width)
 		})
 	}
@@ -832,7 +857,8 @@ func TestMakePlan2AssignmentCastExprUsesStrictForAssignmentTargets(t *testing.T)
 	targets := []plan.Type{
 		{Id: int32(types.T_varchar), Width: 3},
 		{Id: int32(types.T_char), Width: 3},
-		{Id: int32(types.T_text), Width: types.MaxTinyTextLen},
+		{Id: int32(types.T_text), Width: types.MaxStringSize},
+		{Id: int32(types.T_blob), Width: types.MaxStringSize},
 		{Id: int32(types.T_date), Width: 3},
 		{Id: int32(types.T_time), Scale: 6},
 		{Id: int32(types.T_datetime), Width: 3},
@@ -862,6 +888,8 @@ func TestExportedAssignmentCastUsesRuntimeSQLModeSemantics(t *testing.T) {
 
 	for _, target := range []plan.Type{
 		{Id: int32(types.T_varchar), Width: 3},
+		{Id: int32(types.T_text), Width: types.MaxStringSize},
+		{Id: int32(types.T_blob), Width: types.MaxStringSize},
 		{Id: int32(types.T_year), Width: 4},
 		{Id: int32(types.T_time), Scale: 6},
 	} {
@@ -886,7 +914,8 @@ func TestForceAssignmentCastExprUsesAssignmentSemantics(t *testing.T) {
 	targets := []plan.Type{
 		{Id: int32(types.T_varchar), Width: 3},
 		{Id: int32(types.T_char), Width: 3},
-		{Id: int32(types.T_text), Width: types.MaxTinyTextLen},
+		{Id: int32(types.T_text), Width: types.MaxStringSize},
+		{Id: int32(types.T_blob), Width: types.MaxStringSize},
 		{Id: int32(types.T_date), Width: 3},
 		{Id: int32(types.T_time), Scale: 6},
 		{Id: int32(types.T_datetime), Width: 3},
@@ -1165,6 +1194,8 @@ func TestAssignmentCastProtocolGate(t *testing.T) {
 	for _, test := range tests {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.version)
 		require.Equal(t, test.want, assignmentCastFunctionName(target, test.ignore, proc))
+		blobTarget := plan.Type{Id: int32(types.T_blob), Width: types.MaxStringSize}
+		require.Equal(t, test.want, assignmentCastFunctionName(blobTarget, test.ignore, proc))
 		require.Equal(t, test.want, assignmentCastFunctionName(
 			plan.Type{Id: int32(types.T_year), Width: 4}, test.ignore, proc,
 		))
@@ -1184,6 +1215,20 @@ func TestAssignmentCastProtocolGate(t *testing.T) {
 		)
 		require.NoError(t, err)
 		require.Equal(t, test.want, casted.GetF().GetFunc().GetObjName())
+		blobTargetType := &plan.Expr{
+			Typ:  blobTarget,
+			Expr: &plan.Expr_T{T: &plan.TargetType{}},
+		}
+		blobCasted, err := forceCastExpr2WithProcess(
+			t.Context(),
+			makePlan2Int64ConstExprWithType(1),
+			makeTypeByPlan2Type(blobTarget),
+			blobTargetType,
+			test.ignore,
+			proc,
+		)
+		require.NoError(t, err)
+		require.Equal(t, test.want, blobCasted.GetF().GetFunc().GetObjName())
 	}
 	require.Equal(t, "cast", assignmentCastFunctionName(plan.Type{Id: int32(types.T_int64)}, false, proc))
 	require.Equal(t, "cast_assign", assignmentCastFunctionName(plan.Type{
@@ -1192,7 +1237,13 @@ func TestAssignmentCastProtocolGate(t *testing.T) {
 	require.Equal(t, "cast_ignore", assignmentCastFunctionName(plan.Type{
 		Id: int32(types.T_text), Width: types.MaxTinyTextLen,
 	}, true, proc))
-	require.Equal(t, "cast", assignmentCastFunctionName(plan.Type{Id: int32(types.T_text)}, false, proc))
+	require.Equal(t, "cast_assign", assignmentCastFunctionName(plan.Type{
+		Id: int32(types.T_text), Width: types.MaxStringSize,
+	}, false, proc))
+	require.Equal(t, "cast_assign", assignmentCastFunctionName(plan.Type{
+		Id: int32(types.T_blob), Width: types.MaxStringSize,
+	}, false, proc))
+	require.Equal(t, "cast_assign", assignmentCastFunctionName(plan.Type{Id: int32(types.T_text)}, false, proc))
 }
 
 func TestIgnoreConversionAssignmentCastTargets(t *testing.T) {

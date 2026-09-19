@@ -1224,6 +1224,15 @@ func FormatColType(colType plan.Type) string {
 		case types.MaxLongTextLen:
 			ts = "LONGTEXT"
 		}
+	} else if typ.Oid == types.T_blob {
+		switch colType.Width {
+		case types.MaxTinyTextLen:
+			ts = "TINYBLOB"
+		case types.MaxMediumTextLen:
+			ts = "MEDIUMBLOB"
+		case types.MaxLongTextLen:
+			ts = "LONGBLOB"
+		}
 	}
 	// after decimal fix, remove this
 	if typ.Oid.IsDecimal() {

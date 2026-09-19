@@ -283,7 +283,7 @@ func getTypeFromAstWithoutCharset(ctx context.Context, typ tree.ResolvableTypeRe
 		case defines.MYSQL_TYPE_BOOL:
 			return plan.Type{Id: int32(types.T_bool)}, nil
 		case defines.MYSQL_TYPE_BLOB:
-			return plan.Type{Id: int32(types.T_blob)}, nil
+			return plan.Type{Id: int32(types.T_blob), Width: mysqlStringFamilyWidth(n.InternalType.FamilyString)}, nil
 		case defines.MYSQL_TYPE_TEXT:
 			//NOTE: This is an important part where datatype is assigned to the column
 			fstr := strings.ToLower(n.InternalType.FamilyString)
@@ -302,6 +302,8 @@ func getTypeFromAstWithoutCharset(ctx context.Context, typ tree.ResolvableTypeRe
 				// The protocol column-length field is a uint32, but Connector/J
 				// exposes LONGTEXT's effective signed maximum as its precision.
 				return plan.Type{Id: int32(types.T_text), Width: types.MaxLongTextLen}, nil
+			case "text":
+				return plan.Type{Id: int32(types.T_text), Width: types.MaxStringSize}, nil
 			}
 
 			return plan.Type{Id: int32(types.T_text)}, nil
@@ -343,11 +345,11 @@ func getTypeFromAstWithoutCharset(ctx context.Context, typ tree.ResolvableTypeRe
 		case defines.MYSQL_TYPE_UUID:
 			return plan.Type{Id: int32(types.T_uuid)}, nil
 		case defines.MYSQL_TYPE_TINY_BLOB:
-			return plan.Type{Id: int32(types.T_blob)}, nil
+			return plan.Type{Id: int32(types.T_blob), Width: types.MaxTinyTextLen}, nil
 		case defines.MYSQL_TYPE_MEDIUM_BLOB:
-			return plan.Type{Id: int32(types.T_blob)}, nil
+			return plan.Type{Id: int32(types.T_blob), Width: types.MaxMediumTextLen}, nil
 		case defines.MYSQL_TYPE_LONG_BLOB:
-			return plan.Type{Id: int32(types.T_blob)}, nil
+			return plan.Type{Id: int32(types.T_blob), Width: types.MaxLongTextLen}, nil
 		case defines.MYSQL_TYPE_ENUM:
 			if len(n.InternalType.EnumValues) > types.MaxEnumLen {
 				return plan.Type{}, moerr.NewNYI(ctx, "enum type out of max length")
@@ -369,6 +371,24 @@ func getTypeFromAstWithoutCharset(ctx context.Context, typ tree.ResolvableTypeRe
 		}
 	}
 	return plan.Type{}, moerr.NewInternalError(ctx, "unknown data type")
+}
+
+// mysqlStringFamilyWidth returns the byte capacity carried by a declared
+// binary string family. Width zero is reserved for computed/unknown BLOB
+// expressions; a declared ordinary BLOB is the 65535-byte family member.
+func mysqlStringFamilyWidth(family string) int32 {
+	switch strings.ToLower(family) {
+	case "tinyblob":
+		return types.MaxTinyTextLen
+	case "blob":
+		return types.MaxStringSize
+	case "mediumblob":
+		return types.MaxMediumTextLen
+	case "longblob":
+		return types.MaxLongTextLen
+	default:
+		return 0
+	}
 }
 
 // GetTypeFromAst resolves a parser SQL type into its plan representation.
