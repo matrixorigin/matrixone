@@ -202,7 +202,60 @@ func decimalComparisonUsesExtendedTrailingZeroSemantics(args []*plan.Expr) bool 
 	return colType.Oid.IsDecimal() && constType.Oid.IsDecimal() &&
 		constExpr.GetLit() != nil &&
 		(decimalComparisonSourceScaleMismatch(originalConst, constExpr, constType) ||
-			constType.Scale-colType.Scale > 18)
+			constType.Scale-colType.Scale > 18 ||
+			decimalComparisonUsesSignedTrailingZeroSemantics(
+				constExpr, constType, colType.Scale))
+}
+
+// decimalComparisonUsesSignedTrailingZeroSemantics identifies the legacy
+// Decimal128 remainder path whose result changed when trailing-zero checks
+// began normalizing signed coefficients to magnitude. The v86 fence is only
+// needed when that path would have mistaken a negative zero suffix for a
+// nonzero suffix; negative values with a genuinely nonzero suffix have the
+// same result on both sides of the change.
+func decimalComparisonUsesSignedTrailingZeroSemantics(
+	constExpr *plan.Expr, constType types.Type, columnScale int32,
+) bool {
+	trailingDigits := constType.Scale - columnScale
+	if trailingDigits <= 0 || trailingDigits > types.T_decimal256.ToType().Width {
+		return false
+	}
+	if constExpr == nil {
+		return false
+	}
+	literal := constExpr.GetLit()
+	if literal == nil || literal.Isnull {
+		return false
+	}
+	switch value := literal.Value.(type) {
+	case *plan.Literal_Sval:
+		// String-backed Decimal64/128 casts were both parsed through the old
+		// Decimal128 helper, so retain the fence for either target carrier.
+		if !strings.HasPrefix(strings.TrimSpace(value.Sval), "-") ||
+			(constType.Oid != types.T_decimal64 &&
+				constType.Oid != types.T_decimal128 &&
+				constType.Oid != types.T_decimal256) {
+			return false
+		}
+	case *plan.Literal_Decimal128Val:
+		if constType.Oid != types.T_decimal128 && constType.Oid != types.T_decimal256 {
+			return false
+		}
+		if value.Decimal128Val == nil {
+			return false
+		}
+		decimalValue := types.Decimal128{
+			B0_63:   uint64(value.Decimal128Val.A),
+			B64_127: uint64(value.Decimal128Val.B),
+		}
+		if !decimalValue.Sign() {
+			return false
+		}
+	default:
+		return false
+	}
+	trailingZeros, proven := decimalTrailingZerosStatus(constExpr, constType, columnScale)
+	return proven && trailingZeros
 }
 
 // decimalComparisonSourceScaleMismatch identifies an explicit DECIMAL cast
