@@ -128,10 +128,15 @@ SELECT COUNT(format(d3,2)) FROM format_01;
 
 
 -- Abnormal test
+-- These math calls intentionally exercise MySQL numeric-prefix compatibility
+-- for FORMAT() strings that contain grouping separators.
+SET @func_string_format_saved_sql_mode = @@sql_mode;
+SET SESSION sql_mode = CONCAT(@func_string_format_saved_sql_mode, ',MYSQL_NUMERIC_COMPATIBILITY');
 SELECT ABS(format(d3,0)) FROM format_01;
 SELECT SUM(format(id,2)) FROM format_01;
 SELECT CEIL(format(d3, 4))FROM format_01;
 SELECT ROUND(format(d4, 0)) FROM format_01;
+SET SESSION sql_mode = @func_string_format_saved_sql_mode;
 DROP TABLE format_01;
 
 
@@ -173,7 +178,11 @@ SELECT * FROM format_02 WHERE format(d2,0) NOT IN ('73', '32789');
 -- Abnormal test
 SELECT * from format_02 WHERE format(d2, 2) >= 0;
 SELECT * FROM format_02 WHERE format(d2, 0) NOT BETWEEN 0 AND 100;
+-- Preserve the legacy MySQL prefix result for this intentional MOD case only.
+SET @func_string_format_saved_sql_mode = @@sql_mode;
+SET SESSION sql_mode = CONCAT(@func_string_format_saved_sql_mode, ',MYSQL_NUMERIC_COMPATIBILITY');
 SELECT * FROM format_02 WHERE format(d2, 2) MOD 2 = 0;
+SET SESSION sql_mode = @func_string_format_saved_sql_mode;
 
 
 -- Nesting of functions related to string

@@ -6673,15 +6673,24 @@ type castNumericToken struct {
 type SQLCompatibilityMode uint8
 
 const (
-	SQLCompatibilityMySQL SQLCompatibilityMode = iota
-	SQLCompatibilityMatrixOne
+	// Zero is strict so nil, uninitialized, and older process snapshots fail
+	// closed. MySQL numeric-prefix behavior is an explicit opt-in.
+	SQLCompatibilityMatrixOne SQLCompatibilityMode = iota
+	SQLCompatibilityMySQL
 )
 
 func CompatibilityModeFromProcess(proc *process.Process) SQLCompatibilityMode {
-	if proc != nil && proc.GetSessionInfo().MatrixOneNativeMode {
+	if proc == nil || proc.Base == nil {
 		return SQLCompatibilityMatrixOne
 	}
-	return SQLCompatibilityMySQL
+	info := proc.GetSessionInfo()
+	if info.MatrixOneNativeMode {
+		return SQLCompatibilityMatrixOne
+	}
+	if info.MySQLNumericCompatibilityMode {
+		return SQLCompatibilityMySQL
+	}
+	return SQLCompatibilityMatrixOne
 }
 
 func parseCastNumericToken(s string) (castNumericToken, error) {
@@ -6743,19 +6752,40 @@ func parseStringToFloat(s string, mode SQLCompatibilityMode) (float64, error) {
 	return parseStringToFloatWithBitSize(s, 64, mode)
 }
 
-// ParsePreparedStringToFloat64 applies the same compatibility contract as an
-// implicit string-to-DOUBLE cast to a prepared parameter whose plan has
-// already stabilized in the DOUBLE result domain.
-func ParsePreparedStringToFloat64(s string, matrixOneNative bool) (float64, error) {
-	mode := SQLCompatibilityMySQL
-	if matrixOneNative {
-		mode = SQLCompatibilityMatrixOne
+// parseMathStringToFloat is the direct string-math executor counterpart of an
+// implicit string-to-DOUBLE cast. Keep binary literal provenance and warning
+// behavior intact for the historical string overloads that still call the
+// direct executor (for example CEIL/FLOOR's BOOL compatibility fallback).
+func parseMathStringToFloat(s string, isBinary bool, proc *process.Process) (float64, error) {
+	mode := CompatibilityModeFromProcess(proc)
+	value, err := parseBytesToFloat([]byte(s), isBinary, 64, mode)
+	if err != nil {
+		return 0, err
 	}
+	if !isBinary && mode == SQLCompatibilityMySQL {
+		appendNumericCoercionWarning(proc, s)
+	}
+	return value, nil
+}
+
+// ParsePreparedStringToFloat64 is retained for source compatibility. Ordinary
+// and MATRIXONE_NATIVE modes are both strict now; use
+// ParsePreparedStringToFloat64WithMode to opt in to MySQL numeric-prefix
+// conversion. The bool no longer selects an implicit permissive default.
+func ParsePreparedStringToFloat64(s string, matrixOneNative bool) (float64, error) {
+	_ = matrixOneNative
+	return ParsePreparedStringToFloat64WithMode(s, SQLCompatibilityMatrixOne)
+}
+
+// ParsePreparedStringToFloat64WithMode applies the selected conversion mode
+// to a prepared parameter whose plan has already stabilized in the DOUBLE
+// result domain.
+func ParsePreparedStringToFloat64WithMode(s string, mode SQLCompatibilityMode) (float64, error) {
 	return parseStringToFloat(s, mode)
 }
 
 func parseStringToFloatWithBitSize(s string, bitSize int, mode SQLCompatibilityMode) (float64, error) {
-	if isExtensionFloatCandidate(s) || mode == SQLCompatibilityMatrixOne {
+	if isExtensionFloatCandidate(s) || mode != SQLCompatibilityMySQL {
 		return parseStrictFloatStringWithBitSize(s, bitSize)
 	}
 

@@ -1061,11 +1061,10 @@ func PreparedPlanHasDeferredNumericFunction(preparePlan *Plan) bool {
 
 // PreparedPlanNumericFallbackParamPositions returns the parameter positions
 // whose value supplies a deferred numeric function argument or a private
-// integer-argument conversion. The result is
-// plan metadata, not an execute-time decision: callers can compute it once when a
-// prepared plan is built and use it to decide whether runtime values must be
-// decoded. In particular, this avoids scanning/deep-copying the entire plan
-// on every ordinary execution.
+// integer-argument conversion. The result is plan metadata, not an execute-time
+// decision: callers can compute it once when a prepared plan is built and use it
+// to decide whether runtime values must be decoded. In particular, this avoids
+// scanning/deep-copying the entire plan on every ordinary execution.
 func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
 	if preparePlan == nil || preparePlan.GetQuery() == nil {
 		return nil
@@ -1086,6 +1085,11 @@ func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
 				}
 				return nil
 			})
+			if isPreparedNumericFallbackExpr(expr) {
+				for pos := range preparedNumericValueParamPositions(expr) {
+					positions[pos] = struct{}{}
+				}
+			}
 			if fn == nil || fn.Func == nil {
 				return nil
 			}
@@ -4270,8 +4274,9 @@ func (rule *preparedRuntimeTextComparisonScanRule) exprHasNumericDomain(expr *pl
 	if expr.GetCol() != nil {
 		// A numeric column is a numeric comparison domain too. Keep the column
 		// expression itself unchanged; the text marker is rebound to the
-		// engine's DOUBLE conversion so numeric-prefix and warning semantics are
-		// preserved without relying on the stale prepare-time integer cast.
+		// engine's mode-aware DOUBLE conversion so numeric-prefix and warning
+		// semantics are preserved without relying on the stale prepare-time
+		// integer cast.
 		return preparedComparisonTypeIsNumeric(types.T(expr.Typ.Id))
 	}
 	if preparedComparisonTypeIsNumeric(types.T(expr.Typ.Id)) {
@@ -5553,9 +5558,10 @@ type ParamValue struct {
 	// parameter itself is unrelated to numeric-prefix specialization.
 	RetainParamRef bool
 	// EnableNumericPrefix records that the deployment-wide protocol version can
-	// execute planner-injected MySQL numeric-prefix casts.  Keep the negotiated
-	// capability on each value so execute-time plan specialization does not need
-	// to guess a service identity from context.Context.
+	// execute planner-injected mode-aware string-to-DOUBLE casts. Keep the
+	// negotiated capability on each value so execute-time plan specialization
+	// does not need to guess a service identity from context.Context; the
+	// process SQL mode still decides whether a prefix is accepted or rejected.
 	EnableNumericPrefix bool
 }
 
@@ -6231,6 +6237,32 @@ func exprContainsPreparedPosition(expr *plan.Expr, position int) bool {
 			}
 		}
 	}
+	if sub := expr.GetSub(); sub != nil && exprContainsPreparedPosition(sub.Child, position) {
+		return true
+	}
+	if window := expr.GetW(); window != nil {
+		if exprContainsPreparedPosition(window.WindowFunc, position) {
+			return true
+		}
+		for _, arg := range window.PartitionBy {
+			if exprContainsPreparedPosition(arg, position) {
+				return true
+			}
+		}
+		for _, order := range window.OrderBy {
+			if order != nil && exprContainsPreparedPosition(order.Expr, position) {
+				return true
+			}
+		}
+		if window.Frame != nil {
+			if window.Frame.Start != nil && exprContainsPreparedPosition(window.Frame.Start.Val, position) {
+				return true
+			}
+			if window.Frame.End != nil && exprContainsPreparedPosition(window.Frame.End.Val, position) {
+				return true
+			}
+		}
+	}
 	return false
 }
 
@@ -6433,21 +6465,29 @@ func preparedSQLExecuteNumericParamExpr(
 	value any,
 	isBin bool,
 	sourceType types.Type,
+	allowNonnumericPrefix bool,
 ) (*Expr, error) {
 	source, err := preparedRuntimeParamExpr(ctx, value, isBin, sourceType)
 	if err != nil {
 		return nil, err
 	}
 	if isStringBackedType(sourceType) {
-		if _, ok := function.GetNumericStringPrefix(fmt.Sprintf("%v", value)); !ok {
-			// An entirely non-numeric string must retain the existing cast/error
-			// contract of the prepared expression. The approximate arithmetic
-			// source path only owns strings with a MySQL numeric prefix.
-			return nil, nil
+		if !allowNonnumericPrefix {
+			if _, ok := function.GetNumericStringPrefix(fmt.Sprint(value)); !ok {
+				// Generic arithmetic keeps the historical strict conversion for a
+				// wholly nonnumeric SQL EXECUTE string.  Numeric-prefix functions
+				// (ABS/CEIL/FLOOR/MOD/ROUND/SIGN/TRUNCATE) opt in below so MySQL's
+				// zero-with-warning behavior is preserved there.
+				return nil, nil
+			}
 		}
-		// A SQL string user variable enters arithmetic through MySQL's
-		// approximate numeric-prefix domain. Keep that distinct from a DECIMAL
-		// user variable, even though both arrive in the frontend's text vector.
+		// A SQL string user variable enters arithmetic through a FLOAT64 source;
+		// the execution-time cast applies the effective compatibility mode. In
+		// MySQL mode a decimal prefix is consumed (a wholly non-numeric value is
+		// zero with a warning and an empty value remains zero without one); in
+		// MATRIXONE_NATIVE an incomplete token is rejected. Keep that distinct
+		// from a DECIMAL user variable, even though both arrive in the frontend's
+		// text vector.
 		return appendExplicitCastBeforeExpr(ctx, source, makeSimplePlan2Type(types.T_float64))
 	}
 	if sourceType.Oid == types.T_bool {
@@ -6460,6 +6500,138 @@ func preparedSQLExecuteNumericParamExpr(
 		return source, nil
 	}
 	return nil, nil
+}
+
+func preparedParamUsesStringMathFunction(plan0 *Plan, position int) bool {
+	if plan0 == nil {
+		return false
+	}
+	found := false
+	_ = plan.VisitExpressionsInOwner(plan0, func(expr *plan.Expr) error {
+		if found || expr == nil {
+			return nil
+		}
+		found = preparedExprUsesStringMathValueArg(expr, position)
+		return nil
+	})
+	return found
+}
+
+// preparedExprUsesStringMathValueArg finds a string-math value occurrence for
+// position. Numeric roles cross only function arguments whose domain is
+// explicitly known; a string-domain or unknown function resets the inherited
+// role while still allowing an independently nested math owner to be found.
+func preparedExprUsesStringMathValueArg(expr *plan.Expr, position int) bool {
+	return preparedExprUsesStringMathValueArgWithRole(
+		expr, position, preparedStringMathRoleNone)
+}
+
+func preparedExprUsesStringMathValueArgWithRole(
+	expr *plan.Expr,
+	position int,
+	role preparedStringMathRole,
+) bool {
+	if expr == nil {
+		return false
+	}
+	if param := expr.GetP(); param != nil {
+		return int(param.Pos) == position && role == preparedStringMathRoleValue
+	}
+	if literal := expr.GetLit(); literal != nil {
+		if preparedExprUsesStringMathValueArgWithRole(literal.Src, position, role) {
+			return true
+		}
+	}
+	if fn := expr.GetF(); fn != nil {
+		name := ""
+		if fn.Func != nil {
+			name = fn.Func.GetObjName()
+		}
+		for index, arg := range fn.Args {
+			childRole := preparedStringMathRoleNone
+			if role == preparedStringMathRoleNone {
+				// With no inherited role, ordinary wrappers cannot leak a role.
+				// Avoid running the full ownership classifier for every argument in
+				// large no-match trees; only string-math functions establish a new
+				// role at this point.
+				if isPreparedStringMathFunction(name) {
+					if preparedStringMathFunctionValueArg(name, index, len(fn.Args)) {
+						childRole = preparedStringMathRoleValue
+					} else {
+						childRole = preparedStringMathRoleControl
+					}
+				}
+			} else {
+				var ownsRole bool
+				childRole, ownsRole = preparedNumericFunctionArgRole(expr, index, role)
+				if !ownsRole {
+					// This argument is outside the current numeric function's proven
+					// value domain. Continue searching for a deeper independent
+					// string-math owner without inheriting this ancestor's role.
+					childRole = preparedStringMathRoleNone
+				}
+			}
+			if preparedExprUsesStringMathValueArgWithRole(arg, position, childRole) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			// A list is a multi-value container, not a scalar numeric-result
+			// function. Search its members for their own string-math owners, but
+			// do not lend an enclosing scalar role to a bare member.
+			if preparedExprUsesStringMathValueArgWithRole(item, position, preparedStringMathRoleNone) {
+				return true
+			}
+		}
+	}
+	// A scalar subquery's child is its single value expression, so the enclosing
+	// numeric role can reach that result. Function arguments inside the child
+	// still have to prove their own value-domain ownership above.
+	if sub := expr.GetSub(); sub != nil &&
+		preparedExprUsesStringMathValueArgWithRole(sub.Child, position, role) {
+		return true
+	}
+	if window := expr.GetW(); window != nil {
+		// Only WindowFunc contributes the window expression's scalar value.
+		// Partition/order/frame expressions are independent controls and can
+		// contain their own math owners, but never inherit the outer value role.
+		if preparedExprUsesStringMathValueArgWithRole(window.WindowFunc, position, role) {
+			return true
+		}
+		for _, arg := range window.PartitionBy {
+			if preparedExprUsesStringMathValueArgWithRole(arg, position, preparedStringMathRoleNone) {
+				return true
+			}
+		}
+		for _, order := range window.OrderBy {
+			if order != nil && preparedExprUsesStringMathValueArgWithRole(
+				order.Expr, position, preparedStringMathRoleNone) {
+				return true
+			}
+		}
+		if window.Frame != nil {
+			if window.Frame.Start != nil && preparedExprUsesStringMathValueArgWithRole(
+				window.Frame.Start.Val, position, preparedStringMathRoleNone) {
+				return true
+			}
+			if window.Frame.End != nil && preparedExprUsesStringMathValueArgWithRole(
+				window.Frame.End.Val, position, preparedStringMathRoleNone) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isPreparedStringMathFunction(name string) bool {
+	switch strings.ToLower(name) {
+	case "abs", "ceil", "ceiling", "floor", "mod", "round", "sign", "truncate":
+		return true
+	default:
+		return false
+	}
 }
 
 func preparedRuntimeParamExpr(ctx context.Context, value any, isBin bool, runtimeType types.Type) (*Expr, error) {
@@ -6708,8 +6880,13 @@ func replaceParamValsWithSelection(
 	originalSetOperationInputTypes := snapshotPreparedSetOperationInputTypes(
 		plan0.GetQuery(), originalSetOperationTypes)
 	directResultPositions := PreparedPlanDirectResultParamPositions(plan0)
+	allowNonnumericStringPrefix := make([]bool, len(paramVals))
+	for i := range paramVals {
+		allowNonnumericStringPrefix[i] = preparedParamUsesStringMathFunction(plan0, i)
+	}
 	params := make([]*Expr, len(paramVals))
 	sqlExecuteNumericParams := make([]*Expr, len(paramVals))
+	sqlExecuteStringMathParams := make([]*Expr, len(paramVals))
 	sqlExecuteStringBackedParams := make([]bool, len(paramVals))
 	var err error
 	for i, val := range paramVals {
@@ -6749,16 +6926,53 @@ func replaceParamValsWithSelection(
 				stringDomainType = types.T_varbinary.ToType()
 				hasStringDomainType = true
 			}
-			if param.HasSourceType && param.Value != nil {
-				sqlExecuteStringBackedParams[i] = isStringBackedType(param.SourceType)
+			// COM_STMT and unit-test callers can provide a runtime string type
+			// without the SQL user-variable SourceType metadata.  The execution
+			// domain is still authoritative for this invocation, so use it as the
+			// source domain when no stronger SourceType is present.  Without this
+			// fallback, nested expressions such as ABS(? + 0) retain the
+			// prepare-time integer cast and lose MySQL's numeric-prefix semantics.
+			executeSourceType := param.SourceType
+			hasExecuteSourceType := param.HasSourceType
+			if !hasExecuteSourceType && hasRuntimeType && isStringBackedType(runtimeType) {
+				executeSourceType = runtimeType
+				hasExecuteSourceType = true
+			}
+			// COM_STMT text parameters may have no decoded RuntimeType metadata.
+			// A marker used by a string-math value still needs an explicit TEXT
+			// source so the execution-time DOUBLE cast is installed; otherwise the
+			// provisional comparison cast remains in place and a value such as
+			// `1.5tail` is never given the function's numeric-prefix semantics.
+			if !hasExecuteSourceType && allowNonnumericStringPrefix[i] && param.IsBinaryProtocol &&
+				param.PrepareParamKind == vector.PrepareParamNone && param.Value != nil &&
+				!param.IsBin && !param.IsBinaryString &&
+				!PreparedNumericStringIsComplete(preparedParamValueText(param)) {
+				executeSourceType = types.T_text.ToType()
+				hasExecuteSourceType = true
+			}
+			if hasExecuteSourceType && param.Value != nil {
+				sqlExecuteStringBackedParams[i] = isStringBackedType(executeSourceType)
 				sqlExecuteNumericParams[i], err = preparedSQLExecuteNumericParamExpr(
-					ctx, param.Value, param.IsBin, param.SourceType)
+					ctx, param.Value, param.IsBin, executeSourceType, false)
 				if err != nil {
 					return false, err
 				}
+				if allowNonnumericStringPrefix[i] {
+					sqlExecuteStringMathParams[i], err = preparedSQLExecuteNumericParamExpr(
+						ctx, param.Value, param.IsBin, executeSourceType, true)
+					if err != nil {
+						return false, err
+					}
+				}
 				if sqlExecuteNumericParams[i] != nil && (numericPrefixSource || retainParamRef) {
 					attachPreparedRuntimeParamSource(sqlExecuteNumericParams[i], &plan.Expr{
-						Typ:  makePlan2Type(&param.SourceType),
+						Typ:  makePlan2Type(&executeSourceType),
+						Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(i)}},
+					})
+				}
+				if sqlExecuteStringMathParams[i] != nil && (numericPrefixSource || retainParamRef) {
+					attachPreparedRuntimeParamSource(sqlExecuteStringMathParams[i], &plan.Expr{
+						Typ:  makePlan2Type(&executeSourceType),
 						Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(i)}},
 					})
 				}
@@ -6822,12 +7036,14 @@ func replaceParamValsWithSelection(
 	for _, position := range fixedIntegerPositions {
 		if position >= 0 && int(position) < len(sqlExecuteNumericParams) {
 			sqlExecuteNumericParams[position] = nil
+			sqlExecuteStringMathParams[position] = nil
 			sqlExecuteStringBackedParams[position] = false
 		}
 	}
 
 	paramRule := NewResetParamRefRule(ctx, params)
 	paramRule.sqlExecuteNumericParams = sqlExecuteNumericParams
+	paramRule.sqlExecuteStringMathParams = sqlExecuteStringMathParams
 	paramRule.sqlExecuteStringBackedParams = sqlExecuteStringBackedParams
 	paramRule.setPreparedPlan(plan0)
 	// Keep the original execute-time values and protocol categories on the

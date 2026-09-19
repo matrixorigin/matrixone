@@ -1168,6 +1168,37 @@ func TestCapturedSystemAssignmentAfterPreparedWriteRemainsUnreplayable(t *testin
 	require.True(t, ses.hasUnreplayableMigrationSystemVars())
 }
 
+func TestSetSessionSQLModeMatrixOneNativeLiteralAndModeFlip(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+
+	for _, sql := range []string{
+		"set session sql_mode = 'MATRIXONE_NATIVE'",
+		"set @@session.sql_mode = 'MATRIXONE_NATIVE'",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", ""))
+
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			require.NoError(t, doSetVar(ses, newTestExecCtx(ctx, ctrl), stmt.(*tree.SetVar), sql, false))
+
+			value, err := ses.GetSessionSysVar("sql_mode")
+			require.NoError(t, err)
+			require.Equal(t, "MATRIXONE_NATIVE", value)
+			require.True(t, ses.sqlModeHasMatrixOneNative())
+
+			flipSQL := "set session sql_mode = 'ANSI_QUOTES'"
+			flipStmt, err := parsers.ParseOne(ctx, dialect.MYSQL, flipSQL, 1)
+			require.NoError(t, err)
+			require.NoError(t, doSetVar(ses, newTestExecCtx(ctx, ctrl), flipStmt.(*tree.SetVar), flipSQL, false))
+			require.False(t, ses.sqlModeHasMatrixOneNative())
+		})
+	}
+}
+
 func TestCapturedUserAssignmentAfterPreparedWriteRemainsUnreplayable(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

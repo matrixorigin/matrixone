@@ -69,6 +69,29 @@ func TestHasMatrixOneNativeSQLMode(t *testing.T) {
 	}
 }
 
+func TestHasMySQLNumericCompatibilitySQLMode(t *testing.T) {
+	tests := []struct {
+		name string
+		mode string
+		want bool
+	}{
+		{name: "empty", mode: "", want: false},
+		{name: "exact token", mode: "MYSQL_NUMERIC_COMPATIBILITY", want: true},
+		{name: "case insensitive with spaces", mode: " ansi_quotes , mysql_numeric_compatibility ", want: true},
+		{name: "suffix does not match", mode: "MYSQL_NUMERIC_COMPATIBILITY_EXTRA", want: false},
+		{name: "substring does not match", mode: "NO_MYSQL_NUMERIC_COMPATIBILITY", want: false},
+		{name: "other tokens only", mode: "ANSI_QUOTES,MATRIXONE_NATIVE", want: false},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := HasMySQLNumericCompatibilitySQLMode(test.mode); got != test.want {
+				t.Fatalf("HasMySQLNumericCompatibilitySQLMode(%q) = %v, want %v", test.mode, got, test.want)
+			}
+		})
+	}
+}
+
 func TestParserSQLModeCombinations(t *testing.T) {
 	modes := ParserSQLModeCombinations()
 	wantModes := 1 << len(parserSQLModeTokens)

@@ -45,7 +45,31 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 		require.NoError(t, err)
 		defer conn.Close()
 
+		enableMySQLNumericCompatibility := func(t *testing.T) func() {
+			t.Helper()
+			var originalSQLMode string
+			require.NoError(t, conn.QueryRowContext(ctx, "select @@session.sql_mode").Scan(&originalSQLMode))
+			compatibilitySQLMode := originalSQLMode
+			if compatibilitySQLMode != "" {
+				compatibilitySQLMode += ","
+			}
+			compatibilitySQLMode += "MYSQL_NUMERIC_COMPATIBILITY"
+			mustExec(t, ctx, conn, fmt.Sprintf(
+				"set session sql_mode = '%s'", strings.ReplaceAll(compatibilitySQLMode, "'", "''")))
+			return func() {
+				mustExec(t, ctx, conn, fmt.Sprintf(
+					"set session sql_mode = '%s'", strings.ReplaceAll(originalSQLMode, "'", "''")))
+			}
+		}
+
 		t.Run("issue 28484 prepared Boolean math", func(t *testing.T) {
+			// These assertions intentionally compare SQL PREPARE/EXECUTE with
+			// MySQL's legacy conversion of text boolean values in numeric
+			// functions. Keep that compatibility behavior explicit now that the
+			// default session mode rejects trailing numeric text.
+			restoreSQLMode := enableMySQLNumericCompatibility(t)
+			defer restoreSQLMode()
+
 			const query = "SELECT CAST(? AS DOUBLE), SIN(?), ACOS(?)"
 			mustExec(t, ctx, conn, "PREPARE bool_math FROM '"+query+"'")
 			defer mustExec(t, ctx, conn, "DEALLOCATE PREPARE bool_math")
@@ -552,6 +576,12 @@ func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
 		})
 
 		t.Run("SQL EXECUTE preserves numeric result consumer domains across reuse", func(t *testing.T) {
+			// The string-prefix and numeric-result cases below are MySQL
+			// compatibility scenarios. Opt in for this subtest instead of
+			// weakening the strict default used by the rest of the regression.
+			restoreSQLMode := enableMySQLNumericCompatibility(t)
+			defer restoreSQLMode()
+
 			readResult := func(query string) (string, string) {
 				rows, queryErr := conn.QueryContext(ctx, query)
 				require.NoError(t, queryErr)

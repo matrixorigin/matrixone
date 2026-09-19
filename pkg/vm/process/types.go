@@ -123,6 +123,10 @@ type SessionInfo struct {
 	LockWaitTimeout     int64
 	LockWaitTimeoutSet  bool // distinguishes an explicit zero from an unset value
 	MatrixOneNativeMode bool
+	// MySQLNumericCompatibilityMode is an explicit opt-in for MySQL's
+	// permissive string-to-floating-number prefix conversion. False is strict,
+	// including for older process payloads that omit the field.
+	MySQLNumericCompatibilityMode bool
 	// IsRestore identifies catalog DDL executed by snapshot/PITR restore. Such
 	// DDL rebuilds persisted View metadata through legacy discovery after the
 	// restore transaction, rather than running dependency hooks while catalog

@@ -1376,6 +1376,18 @@ func (ses *Session) sqlModeHasMatrixOneNative() bool {
 	return ok && has
 }
 
+func (ses *Session) sqlModeHasMySQLNumericCompatibility() bool {
+	if ses == nil {
+		return false
+	}
+	value, err := ses.GetSessionSysVar("sql_mode")
+	if err != nil {
+		return false
+	}
+	has, ok := sqlModeHasMySQLNumericCompatibilityValue(value)
+	return ok && has
+}
+
 func (ses *Session) sqlModeHasOnlyFullGroupBy() bool {
 	if ses == nil {
 		return false
@@ -1455,9 +1467,13 @@ func (ses *Session) sqlModeParserFlags() mysql.SQLModeFlags {
 // the plan or parser output changes membership. Every token the planner or
 // parser reads at bind time must be compared here: the cache is keyed by SQL
 // text alone.
-func (ses *Session) updateSqlModeCaches(oldNative, oldOnlyFullGroupBy, oldBoolSumAvg, oldHighNotPrecedence, oldNoUnsignedSubtraction bool, oldParserFlags mysql.SQLModeFlags, oldIgnoreSpace bool, val interface{}) {
+func (ses *Session) updateSqlModeCaches(oldNative, oldMySQLNumericCompatibility, oldOnlyFullGroupBy, oldBoolSumAvg, oldHighNotPrecedence, oldNoUnsignedSubtraction bool, oldParserFlags mysql.SQLModeFlags, oldIgnoreSpace bool, val interface{}) {
 	ses.updateSqlModeNoAutoValueOnZero(val)
 	newNative, ok := sqlModeHasMatrixOneNativeValue(val)
+	if !ok {
+		return
+	}
+	newMySQLNumericCompatibility, ok := sqlModeHasMySQLNumericCompatibilityValue(val)
 	if !ok {
 		return
 	}
@@ -1481,7 +1497,8 @@ func (ses *Session) updateSqlModeCaches(oldNative, oldOnlyFullGroupBy, oldBoolSu
 	if !ok {
 		return
 	}
-	if oldNative != newNative || oldOnlyFullGroupBy != newOnlyFullGroupBy ||
+	if oldNative != newNative || oldMySQLNumericCompatibility != newMySQLNumericCompatibility ||
+		oldOnlyFullGroupBy != newOnlyFullGroupBy ||
 		oldBoolSumAvg != newBoolSumAvg || oldHighNotPrecedence != newHighNotPrecedence ||
 		oldParserFlags != newParserFlags || oldIgnoreSpace != newIgnoreSpace || oldNoUnsignedSubtraction != ses.sqlModeHasNoUnsignedSubtraction() {
 		ses.cleanCache()

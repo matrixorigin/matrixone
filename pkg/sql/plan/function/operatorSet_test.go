@@ -655,6 +655,35 @@ func TestIffConditionTruthyAt(t *testing.T) {
 	}
 }
 
+func TestIffFnUsesExplicitProcessCompatibilityMode(t *testing.T) {
+	inputs := []FunctionTestInput{
+		NewFunctionTestInput(types.T_varchar.ToType(),
+			[]string{"1.5tail", "abc", ""}, nil),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{10, 11, 12}, nil),
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{20, 21, 22}, nil),
+	}
+
+	strictProc := testutil.NewProcess(t)
+	strict := NewFunctionTestCase(strictProc, inputs,
+		NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil), iffFn)
+	ok, info := strict.Run()
+	require.True(t, ok, info)
+
+	compatProc := testutil.NewProcess(t)
+	compatProc.GetSessionInfo().MySQLNumericCompatibilityMode = true
+	compat := NewFunctionTestCase(compatProc, inputs,
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{10, 21, 22}, nil), iffFn)
+	ok, info = compat.Run()
+	require.True(t, ok, info)
+
+	strictProc.GetSessionInfo().MatrixOneNativeMode = true
+	strictProc.GetSessionInfo().MySQLNumericCompatibilityMode = true
+	strictWithBothFlags := NewFunctionTestCase(strictProc, inputs,
+		NewFunctionTestResult(types.T_int64.ToType(), true, nil, nil), iffFn)
+	ok, info = strictWithBothFlags.Run()
+	require.True(t, ok, info)
+}
+
 func TestIffFn_StringCondition(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	tc := NewFunctionTestCase(proc,
