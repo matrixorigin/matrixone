@@ -71,6 +71,10 @@ var (
 
 type immediateLockTimestampWaiter struct{}
 
+type failAfterInitialTimestampWaiter struct {
+	calls int
+}
+
 type lockServiceConfigOverride struct {
 	lockservice.LockService
 	cfg lockservice.Config
@@ -90,6 +94,23 @@ func (immediateLockTimestampWaiter) GetTimestamp(
 func (immediateLockTimestampWaiter) NotifyLatestCommitTS(timestamp.Timestamp) {}
 func (immediateLockTimestampWaiter) Close()                                   {}
 func (immediateLockTimestampWaiter) LatestTS() timestamp.Timestamp {
+	return timestamp.Timestamp{}
+}
+
+func (w *failAfterInitialTimestampWaiter) GetTimestamp(
+	_ context.Context,
+	ts timestamp.Timestamp,
+) (timestamp.Timestamp, error) {
+	w.calls++
+	if w.calls > 1 {
+		return timestamp.Timestamp{}, assert.AnError
+	}
+	return ts.Next(), nil
+}
+
+func (*failAfterInitialTimestampWaiter) NotifyLatestCommitTS(timestamp.Timestamp) {}
+func (*failAfterInitialTimestampWaiter) Close()                                   {}
+func (*failAfterInitialTimestampWaiter) LatestTS() timestamp.Timestamp {
 	return timestamp.Timestamp{}
 }
 
@@ -285,12 +306,14 @@ func TestLockOpHelpers(t *testing.T) {
 		WithLockSharding(lock.Sharding_ByRow).
 		WithLockGroup(7).
 		WithLockMode(lock.LockMode_Shared).
-		WithLockTable(true, true)
+		WithLockTable(true, true).
+		WithTableSnapshotRefresh(true)
 	require.Equal(t, lock.Sharding_ByRow, opts.sharding)
 	require.Equal(t, uint32(7), opts.group)
 	require.Equal(t, lock.LockMode_Shared, opts.mode)
 	require.True(t, opts.lockTable)
 	require.True(t, opts.changeDef)
+	require.True(t, opts.refreshTableSnapshot)
 }
 
 func TestLockTableRefreshPolicy(t *testing.T) {
@@ -303,6 +326,105 @@ func TestLockTableRefreshPolicy(t *testing.T) {
 		lockTableRefreshError(true, refreshTS, false),
 		retryWithDefChangedError,
 		"a freshness barrier cannot validate a stale logical definition")
+}
+
+func TestLockTableRefreshesForNewerWholeTableCommit(t *testing.T) {
+	tests := []struct {
+		name            string
+		commitTS        func(timestamp.Timestamp) timestamp.Timestamp
+		waiter          func() client.TimestampWaiter
+		snapshotRefresh bool
+		wantAdvance     bool
+		wantErr         error
+	}{
+		{
+			name: "newer commit",
+			commitTS: func(snapshot timestamp.Timestamp) timestamp.Timestamp {
+				return snapshot.Next()
+			},
+			waiter: func() client.TimestampWaiter {
+				return immediateLockTimestampWaiter{}
+			},
+			snapshotRefresh: true,
+			wantAdvance:     true,
+		},
+		{
+			name: "commit visible at snapshot",
+			commitTS: func(snapshot timestamp.Timestamp) timestamp.Timestamp {
+				return snapshot
+			},
+			waiter: func() client.TimestampWaiter {
+				return immediateLockTimestampWaiter{}
+			},
+			snapshotRefresh: true,
+		},
+		{
+			name: "logtail wait failure",
+			commitTS: func(snapshot timestamp.Timestamp) timestamp.Timestamp {
+				return snapshot.Next()
+			},
+			waiter: func() client.TimestampWaiter {
+				return &failAfterInitialTimestampWaiter{}
+			},
+			snapshotRefresh: true,
+			wantErr:         assert.AnError,
+		},
+		{
+			name: "ordinary table lock preserves snapshot",
+			commitTS: func(snapshot timestamp.Timestamp) timestamp.Timestamp {
+				return snapshot.Next()
+			},
+			waiter: func() client.TimestampWaiter {
+				return immediateLockTimestampWaiter{}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			runLockOpTest(
+				t,
+				func(proc *process.Process) {
+					runtime.SetupServiceRuntimeTestingContext(proc.GetService())
+					testingContext := runtime.MustGetTestingContext(proc.GetService())
+					testingContext.SetBeforeLockFunc(func(_ []byte, _ uint64) {})
+					defer testingContext.SetBeforeLockFunc(nil)
+
+					snapshot := proc.GetTxnOperator().Txn().SnapshotTS
+					commitTS := test.commitTS(snapshot)
+					testingContext.SetAdjustLockResultFunc(func(
+						_ []byte,
+						_ uint64,
+						result *lock.Result,
+					) {
+						result.NewLockAdd = true
+						result.HasConflict = false
+						result.Timestamp = commitTS
+					})
+					defer testingContext.SetAdjustLockResultFunc(nil)
+
+					var err error
+					if test.snapshotRefresh {
+						err = LockTableForSnapshotRefreshWithContext(
+							proc.Ctx, nil, proc, 1, types.T_int32.ToType(), lock.LockMode_Exclusive, false)
+					} else {
+						err = LockTable(nil, proc, 1, types.T_int32.ToType(), false)
+					}
+					if test.wantErr != nil {
+						require.ErrorIs(t, err, test.wantErr)
+						return
+					}
+					require.NoError(t, err)
+					if test.wantAdvance {
+						require.False(t, proc.GetTxnOperator().Txn().SnapshotTS.Less(commitTS))
+					} else {
+						require.True(t, proc.GetTxnOperator().Txn().SnapshotTS.LessEq(snapshot))
+					}
+				},
+				client.WithTimestampWaiter(test.waiter()),
+			)
+		})
+	}
 }
 
 func TestRefreshLockWaitOptionsUsesRemainingDeadline(t *testing.T) {

@@ -55,6 +55,7 @@ type LockOptions struct {
 	group                    uint32
 	lockTable                bool
 	changeDef                bool
+	refreshTableSnapshot     bool
 	parker                   *types.Packer
 	fetchFunc                FetchLockRowsFunc
 	filter                   RowsFilter

@@ -438,7 +438,7 @@ func LockTableWithContext(
 	pkType types.Type,
 	changeDef bool) error {
 	return lockTableWithModeAndContext(
-		ctx, eng, proc, tableID, pkType, lock.LockMode_Exclusive, changeDef, true, 0)
+		ctx, eng, proc, tableID, pkType, lock.LockMode_Exclusive, changeDef, true, false, 0)
 }
 
 // LockTableWithMode locks all rows in a table with the specified lock mode.
@@ -449,14 +449,15 @@ func LockTableWithMode(
 	pkType types.Type,
 	mode lock.LockMode,
 	changeDef bool) error {
-	return lockTableWithModeAndContext(proc.Ctx, eng, proc, tableID, pkType, mode, changeDef, true, 0)
+	return lockTableWithModeAndContext(proc.Ctx, eng, proc, tableID, pkType, mode, changeDef, true, false, 0)
 }
 
-// LockTableForSnapshotRefreshWithContext acquires a table lock without turning
-// a successful wait into the ordinary snapshot-retry signal. The caller must
-// install a snapshot after its own stronger freshness barrier before reading or
-// writing the table. Definition changes remain retryable because a newer
-// snapshot cannot validate a stale logical plan.
+// LockTableForSnapshotRefreshWithContext acquires a table lock and advances an
+// RC transaction's snapshot past the latest commit on that table without
+// turning the refresh into the ordinary retry signal. Callers that need a
+// global frontier may install a stronger barrier afterward. Definition changes
+// remain retryable because a newer snapshot cannot validate a stale logical
+// plan.
 func LockTableForSnapshotRefreshWithContext(
 	ctx context.Context,
 	eng engine.Engine,
@@ -470,7 +471,7 @@ func LockTableForSnapshotRefreshWithContext(
 		deadline = value.UnixNano()
 	}
 	return lockTableWithModeAndContext(
-		ctx, eng, proc, tableID, pkType, mode, changeDef, false, deadline)
+		ctx, eng, proc, tableID, pkType, mode, changeDef, false, true, deadline)
 }
 
 func lockTableWithModeAndContext(
@@ -482,6 +483,7 @@ func lockTableWithModeAndContext(
 	mode lock.LockMode,
 	changeDef bool,
 	retryOnRefresh bool,
+	refreshTableSnapshot bool,
 	lockWaitDeadline int64) error {
 	txnOp := proc.GetTxnOperator()
 	if !txnOp.Txn().IsPessimistic() {
@@ -508,6 +510,7 @@ func lockTableWithModeAndContext(
 	opts := DefaultLockOptions(parker).
 		WithLockMode(mode).
 		WithLockTable(true, changeDef).
+		WithTableSnapshotRefresh(refreshTableSnapshot).
 		WithFetchLockRowsFunc(GetFetchRowsFunc(pkType))
 	_, defChanged, refreshTS, err := doLock(
 		ctx,
@@ -863,6 +866,29 @@ func doLock(
 			return false, false, timestamp.Timestamp{}, err
 		}
 		return true, true, newSnapshotTS, nil
+	}
+
+	// A direct table lock covers the complete keyspace and is acquired before
+	// its caller scans the table. Unlike a pipeline row lock, it has no input
+	// batch that hasNewVersionInRange can probe or invalidate. A table commit
+	// newer than the statement snapshot is therefore sufficient reason to
+	// refresh the RC snapshot in place, but not to retry work that has not run.
+	//
+	// Use a strict comparison: a commit at the snapshot is already visible and
+	// must not cause an endless retry at the same table timestamp.
+	if opts.refreshTableSnapshot && opts.lockTable && bat == nil &&
+		snapshotTS.Less(lockedTS) &&
+		txnOp.Txn().IsRCIsolation() {
+		start = time.Now()
+		newSnapshotTS, err := txnClient.WaitLogTailAppliedAt(ctx, lockedTS)
+		if err != nil {
+			return false, false, timestamp.Timestamp{}, err
+		}
+		analyzeLockWaitTime(analyzer, start)
+		if err := txnOp.UpdateSnapshot(ctx, newSnapshotTS); err != nil {
+			return false, false, timestamp.Timestamp{}, err
+		}
+		return false, false, timestamp.Timestamp{}, nil
 	}
 
 	// Normal path: NewLockAdd=true, no conflict - original check
@@ -1474,6 +1500,13 @@ func (opts LockOptions) WithLockMode(mode lock.LockMode) LockOptions {
 func (opts LockOptions) WithLockTable(lockTable, changeDef bool) LockOptions {
 	opts.lockTable = lockTable
 	opts.changeDef = changeDef
+	return opts
+}
+
+// WithTableSnapshotRefresh advances an RC snapshot to the table lock's latest
+// commit before the caller reads the locked table.
+func (opts LockOptions) WithTableSnapshotRefresh(refresh bool) LockOptions {
+	opts.refreshTableSnapshot = refresh
 	return opts
 }
 
