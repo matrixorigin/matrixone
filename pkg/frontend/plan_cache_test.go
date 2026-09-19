@@ -522,6 +522,51 @@ func TestSessionSQLModePresenceChangeClearsPlanCache(t *testing.T) {
 	require.Equal(t, 1, stmt.freed)
 }
 
+func TestSessionRollupAlgorithmChangeClearsPlanCache(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	stmt := &trackedStatement{}
+	ses.cachePlan("cached-rollup", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.True(t, ses.isCached("cached-rollup"))
+
+	// Re-setting COST does not change the physical-plan contract.
+	require.NoError(t, ses.SetSessionSysVar(ctx, "rollup_algorithm", "COST"))
+	require.True(t, ses.isCached("cached-rollup"))
+	require.Zero(t, stmt.freed)
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "rollup_algorithm", "SORT"))
+	require.False(t, ses.isCached("cached-rollup"))
+	require.Equal(t, 1, stmt.freed)
+
+	stmt = &trackedStatement{}
+	ses.cachePlan("cached-rollup", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.NoError(t, ses.SetSessionSysVar(ctx, "ROLLUP_ALGORITHM", "HASH"))
+	require.False(t, ses.isCached("cached-rollup"))
+	require.Equal(t, 1, stmt.freed)
+}
+
+func TestSessionRollupAlgorithmChangeInvalidatesPreparedPlanGeneration(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
+
+	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	prepared := &PrepareStmt{Name: "rollup-prepared"}
+	require.NoError(t, ses.SetPrepareStmt(ctx, prepared.Name, prepared))
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "rollup_algorithm", "SORT"))
+	require.True(t, prepared.needsRebuild)
+
+	prepared.needsRebuild = false
+	require.NoError(t, ses.SetSessionSysVar(ctx, "rollup_algorithm", "SORT"))
+	require.False(t, prepared.needsRebuild)
+
+	require.NoError(t, ses.SetSessionSysVar(ctx, "rollup_algorithm", "HASH"))
+	require.True(t, prepared.needsRebuild)
+	require.True(t, ses.RemovePrepareStmt(prepared.Name))
+}
+
 func TestSessionProtocolVersionChangeInvalidatesPlanCache(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))

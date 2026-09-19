@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -26,6 +27,23 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/smartystreets/goconvey/convey"
 )
+
+func TestRollupAlgorithmVariable(t *testing.T) {
+	sv, ok := gSysVarsDefs["rollup_algorithm"]
+	assert.True(t, ok)
+	assert.Equal(t, ScopeSession, sv.Scope)
+	assert.True(t, sv.Dynamic)
+	assert.False(t, sv.SetVarHintApplies)
+	assert.Equal(t, "COST", sv.Default)
+
+	for _, value := range []string{"cost", "sort", "hash"} {
+		converted, err := sv.Type.Convert(value)
+		assert.NoError(t, err)
+		assert.Equal(t, strings.ToUpper(value), converted)
+	}
+	_, err := sv.Type.Convert("invalid")
+	assert.Error(t, err)
+}
 
 func TestEventSchedulerDefaultDisabled(t *testing.T) {
 	convey.Convey("event_scheduler default should be DISABLED", t, func() {

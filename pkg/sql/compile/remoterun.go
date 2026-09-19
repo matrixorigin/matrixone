@@ -842,6 +842,10 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			}
 		}
 	case *group.Group:
+		if t.SortRollup {
+			return ctxId, nil, moerr.NewNotSupportedNoCtx(
+				"sort rollup cannot be serialized for remote execution")
+		}
 		if err := validateRemoteAggregateProtocol(proc, t.Aggs); err != nil {
 			return ctxId, nil, err
 		}
