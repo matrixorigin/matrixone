@@ -2233,7 +2233,12 @@ func unwindTupleComparison(ctx context.Context, nonEqOp, op string, leftExprs, r
 // hasTrailingZeros checks if a decimal constant has trailing zeros that can be safely truncated
 // to match the column's scale, allowing index usage
 func hasTrailingZeros(constExpr *plan.Expr, constT types.Type, columnScale int32) bool {
-	hasZeros, _ := decimalTrailingZerosStatus(constExpr, constT, columnScale)
+	hasZeros, proven := decimalTrailingZerosStatus(constExpr, constT, columnScale)
+	// Every coercion consumer (including IN and BETWEEN) must record the
+	// dependency before a cast or list fold can replace its source literal.
+	if decimalSuffixUsesExtendedSemantics(constExpr, constT, columnScale, hasZeros, proven) {
+		unwrapCast(constExpr).GetLit().DecimalLiteralRequiresV82 = true
+	}
 	return hasZeros
 }
 

@@ -6218,7 +6218,7 @@ func bindFuncExprImplByPlanExpr(
 					orExprList = append(orExprList, rightVal)
 					continue
 				}
-				if checkNoNeedCast(makeTypeByPlan2Expr(rightVal), typLeft, rightVal) || partitionIn {
+				if partitionIn || checkNoNeedCast(makeTypeByPlan2Expr(rightVal), typLeft, rightVal) {
 					inExpr := rightVal
 					// Keep the partition-IN coercion path unchanged. Ordinary IN can
 					// retain an already same-typed constant cast; casting UUID to UUID
