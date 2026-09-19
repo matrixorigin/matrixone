@@ -250,6 +250,13 @@ func TestPreparedTimeArithmeticOverMySQLProtocol(t *testing.T) {
 			rows, err = stmt.QueryContext(ctx, int64(9223372036854775807))
 			if err == nil {
 				defer rows.Close()
+				if rows.Next() {
+					var value any
+					err = rows.Scan(&value)
+				}
+				if err == nil {
+					err = rows.Err()
+				}
 			}
 			require.Error(t, err)
 		})
