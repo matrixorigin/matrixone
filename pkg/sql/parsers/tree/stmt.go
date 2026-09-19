@@ -331,6 +331,10 @@ func (e *EmptyStmt) StmtKind() StmtKind {
 	return frontendStatusTyp
 }
 
+func (c *CompatibilityNoOpStmt) StmtKind() StmtKind {
+	return frontendStatusTyp
+}
+
 func (node *prepareImpl) StmtKind() StmtKind {
 	return frontendStatusTyp
 }

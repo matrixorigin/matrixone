@@ -3982,6 +3982,37 @@ func Test_HandlePrepareVarUsesSessionSQLMode(t *testing.T) {
 	})
 }
 
+func TestHandlePrepareVarRejectsEmptySQL(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	setSessionAlloc("", NewLeakCheckAllocator())
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ec := newTestExecCtx(ctx, ctrl)
+
+	runTestHandle("handlePrepareVarRejectsEmptySQL", t, func(ses *Session) error {
+		ec.resper = ses.respr
+		for _, testCase := range []struct {
+			name  string
+			value string
+		}{
+			{name: "empty", value: ""},
+			{name: "whitespace", value: "   "},
+			{name: "comment", value: "/* comment */"},
+		} {
+			t.Run(testCase.name, func(t *testing.T) {
+				require.NoError(t, ses.SetUserDefinedVar(testCase.name, testCase.value, ""))
+				stmt := tree.NewPrepareVar(tree.Identifier("stmt_"+testCase.name),
+					tree.NewVarExpr(testCase.name, false, false, nil))
+				defer stmt.Free()
+				prepared, err := handlePrepareVar(ses, ec, stmt)
+				require.Error(t, err)
+				require.Nil(t, prepared)
+			})
+		}
+		return nil
+	})
+}
+
 func TestHandlePrepareVarWithNonStringValue(t *testing.T) {
 	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
 	setSessionAlloc("", NewLeakCheckAllocator())
@@ -5091,6 +5122,8 @@ func Test_statement_type(t *testing.T) {
 			{&tree.AnalyzeStmt{}},
 			{&tree.CheckTableStmt{}},
 			{&tree.ShowProfileStmt{}},
+			{&tree.CompatibilityNoOpStmt{}},
+			{tree.NewPrepareStmt("compat_noop", &tree.CompatibilityNoOpStmt{})},
 		}
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -5176,6 +5209,55 @@ func Test_statement_type(t *testing.T) {
 		convey.So(NeedToBeCommittedInActiveTransaction(&tree.CreateAccount{}), convey.ShouldBeTrue)
 		convey.So(NeedToBeCommittedInActiveTransaction(nil), convey.ShouldBeFalse)
 	})
+}
+
+func TestExecInFrontendCompatibilityNoOpRejectsDifferentSemantics(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	execCtx := newTestExecCtx(context.Background(), ctrl)
+	execCtx.ses = ses
+	execCtx.stmt = tree.NewCompatibilityNoOpStmt("db", "utf8mb4", "utf8mb4_general_ci")
+
+	_, err := execInFrontend(ses, execCtx)
+	require.ErrorContains(t, err, "supported only as a compatibility no-op")
+}
+
+func TestHandleCompatibilityNoOpStmtDatabaseErrors(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		database  string
+		lookupErr error
+		wantCode  uint16
+	}{
+		{
+			name:      "missing database",
+			database:  "missing_db",
+			lookupErr: moerr.GetOkExpectedEOB(),
+			wantCode:  moerr.ErrBadDB,
+		},
+		{
+			name:      "infrastructure error",
+			database:  "db",
+			lookupErr: context.Canceled,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ses := newTestSession(t, ctrl)
+			eng := mock_frontend.NewMockEngine(ctrl)
+			getPu(ses.GetService()).StorageEngine = eng
+			eng.EXPECT().Database(gomock.Any(), test.database, gomock.Any()).Return(nil, test.lookupErr)
+
+			err := handleCompatibilityNoOpStmt(ses, &ExecCtx{reqCtx: context.Background()},
+				tree.NewCompatibilityNoOpStmt(test.database, "utf8mb4", "utf8mb4_bin"))
+			if test.wantCode != 0 {
+				require.True(t, moerr.IsMoErrCode(err, test.wantCode))
+			} else {
+				require.ErrorIs(t, err, test.lookupErr)
+			}
+		})
+	}
 }
 
 func TestLockTablesSessionState(t *testing.T) {
@@ -8690,6 +8772,21 @@ func TestExecRequestStmtPrepareAcceptsExplainAndSetVariable(t *testing.T) {
 	require.NoError(t, err)
 	require.IsType(t, &tree.SetVar{}, prepared.PrepareStmt)
 	require.Len(t, prepared.PreparePlan.GetDcl().GetPrepare().GetParamTypes(), 1)
+
+	tenant := ses.GetTenantInfo()
+	ses.SetTenantInfo(nil)
+	resp, err = ExecRequest(ses, execCtx, &Request{
+		cmd:  COM_STMT_PREPARE,
+		data: []byte("alter database d character set utf8mb4 collate utf8mb4_bin"),
+	})
+	ses.SetTenantInfo(tenant)
+	require.NoError(t, err)
+	require.Nil(t, resp)
+	stmtName = getPrepareStmtName(ses.GetLastStmtId())
+	prepared, err = ses.GetPrepareStmt(ctx, stmtName)
+	require.NoError(t, err)
+	require.IsType(t, &tree.CompatibilityNoOpStmt{}, prepared.PrepareStmt)
+	require.NotNil(t, prepared.PreparePlan.GetDcl().GetPrepare().GetPlan())
 
 	resp, err = ExecRequest(ses, execCtx, &Request{
 		cmd:  COM_STMT_PREPARE,
