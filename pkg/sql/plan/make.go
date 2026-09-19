@@ -199,12 +199,21 @@ func decimalComparisonUsesExtendedTrailingZeroSemantics(args []*plan.Expr) bool 
 	}
 	colType := makeTypeByPlan2Expr(colExpr)
 	constType := makeTypeByPlan2Expr(originalConst)
-	return colType.Oid.IsDecimal() && constType.Oid.IsDecimal() &&
-		constExpr.GetLit() != nil &&
+	if !colType.Oid.IsDecimal() {
+		return false
+	}
+	hasZeros, proven := decimalTrailingZerosStatus(constExpr, constType, colType.Scale)
+	return decimalSuffixUsesExtendedSemantics(originalConst, constType, colType.Scale, hasZeros, proven)
+}
+
+func decimalSuffixUsesExtendedSemantics(originalConst *plan.Expr, constType types.Type, columnScale int32, hasZeros, proven bool) bool {
+	constExpr := unwrapCast(originalConst)
+	return constType.Oid.IsDecimal() &&
+		constExpr != nil && constExpr.GetLit() != nil && !constExpr.GetLit().Isnull &&
 		(decimalComparisonSourceScaleMismatch(originalConst, constExpr, constType) ||
-			constType.Scale-colType.Scale > 18 ||
+			constType.Scale-columnScale > 18 ||
 			decimalComparisonUsesLegacyTrailingZeroSemantics(
-				constExpr, constType, colType.Scale))
+				constExpr, constType, columnScale, hasZeros, proven))
 }
 
 // decimalComparisonUsesLegacyTrailingZeroSemantics fences either direction of
@@ -212,7 +221,7 @@ func decimalComparisonUsesExtendedTrailingZeroSemantics(args []*plan.Expr) bool 
 // a high-zero low word as signed, but negative Decimal128 values as unsigned.
 // Keep the legacy helper unchanged: it describes compatibility, not execution.
 func decimalComparisonUsesLegacyTrailingZeroSemantics(
-	constExpr *plan.Expr, constType types.Type, columnScale int32,
+	constExpr *plan.Expr, constType types.Type, columnScale int32, trailingZeros, proven bool,
 ) bool {
 	trailingDigits := constType.Scale - columnScale
 	if trailingDigits <= 0 || trailingDigits > 18 {
@@ -249,7 +258,6 @@ func decimalComparisonUsesLegacyTrailingZeroSemantics(
 	default:
 		return false
 	}
-	trailingZeros, proven := decimalTrailingZerosStatus(constExpr, constType, columnScale)
 	return !proven || legacyZeros != trailingZeros
 }
 
