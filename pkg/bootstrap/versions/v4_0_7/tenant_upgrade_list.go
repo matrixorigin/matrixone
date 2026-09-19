@@ -52,7 +52,7 @@ func upgradeInformationSchemaViews() versions.UpgradeEntry {
 		TableName:               "VIEWS",
 		UpgType:                 versions.MODIFY_VIEW,
 		UpgSql:                  sysview.InformationSchemaViewsDDL,
-		RequiredProtocolVersion: defines.MORPCVersion86,
+		RequiredProtocolVersion: defines.MORPCVersion87,
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			exists, viewDef, err := versions.CheckViewDefinition(
 				txn, accountID, sysview.InformationDBConst, "VIEWS")
