@@ -834,9 +834,10 @@ func getColSeqFromColDef(tblCol *plan.ColDef) string {
 }
 
 type fullTextIndexPath struct {
-	sortNode *plan.Node
-	aggNode  *plan.Node
-	scanNode *plan.Node
+	sortNode   *plan.Node
+	aggNode    *plan.Node
+	havingNode *plan.Node // FILTER carrying HAVING between the project and the agg, if any
+	scanNode   *plan.Node
 }
 
 // resolveFullTextIndexPath finds the fulltext rewrite boundary. Projection
@@ -854,15 +855,43 @@ func (builder *QueryBuilder) resolveFullTextIndexPath(projNode *plan.Node) *full
 		}
 	}
 
+	var havingNode *plan.Node
 	for node := projNode; node != nil && len(node.Children) == 1; node = builder.qry.Nodes[node.Children[0]] {
+		if node.NodeType == plan.Node_FILTER {
+			// The HAVING clause sits in a FILTER between the project and the agg
+			// (appendAggNode). Its predicates are what can make an aggregate MATCH a driver.
+			havingNode = node
+			continue
+		}
+		// A cardinality/order/position-sensitive operator between a collected FILTER and the AGG
+		// means that FILTER runs AFTER the barrier and is NOT this AGG's HAVING. Driving the index
+		// below the AGG drops each group's non-matching rows before the barrier, which would
+		// silently change a window function's row numbers, a FILL, a PARTITION, or which rows a
+		// LIMIT keeps. Discard any FILTER collected above such a barrier (#29065).
+		if isFullTextAggHavingBarrier(node) {
+			havingNode = nil
+		}
 		if node.NodeType != plan.Node_AGG {
 			continue
 		}
 		if scanNode := builder.resolveScanNodeWithIndex(node, 1); scanNode != nil {
-			return &fullTextIndexPath{aggNode: node, scanNode: scanNode}
+			return &fullTextIndexPath{aggNode: node, havingNode: havingNode, scanNode: scanNode}
 		}
 	}
 	return nil
+}
+
+// isFullTextAggHavingBarrier reports whether a single-input node between the projection and the AGG
+// is cardinality/order/position-sensitive, so a FILTER sitting ABOVE it cannot be treated as the
+// AGG's HAVING for fulltext-index driving. Driving drops each group's non-matching rows before this
+// node, which would silently change a window function's output, a FILL, a PARTITION, or which rows a
+// LIMIT keeps.
+func isFullTextAggHavingBarrier(node *plan.Node) bool {
+	switch node.NodeType {
+	case plan.Node_WINDOW, plan.Node_TIME_WINDOW, plan.Node_FILL, plan.Node_PARTITION:
+		return true
+	}
+	return node.Limit != nil
 }
 
 func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan.Node, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
@@ -888,6 +917,19 @@ func (builder *QueryBuilder) applyIndicesForProject(nodeID int32, projNode *plan
 			// `select count(*) from t where match(...) > 0.5` has no bare match at all.
 			wrappedFTExprs, wrappedFTIdxs := builder.getWrappedFullTextMatches(
 				nil, path.scanNode, filterids, nil)
+
+			// #29065: a grouped query whose only MATCH is an aggregate -- `MAX(match) AS score ...
+			// HAVING score > 0` / `HAVING MAX(match) > 0` -- has no scan-level driver, so the
+			// aggregate MATCH proven present by the membership-implying HAVING must drive the index.
+			var havingPreds []*plan.Expr
+			if path.havingNode != nil {
+				havingPreds = append(havingPreds, path.havingNode.FilterList...)
+			}
+			havingPreds = append(havingPreds, path.aggNode.FilterList...)
+			aggExprs, aggFTIdxs := builder.getFullTextMatchFromAggHaving(
+				havingPreds, path.aggNode, path.scanNode, fullTextDriverFuncs(path.scanNode, filterids, wrappedFTExprs))
+			wrappedFTExprs = append(wrappedFTExprs, aggExprs...)
+			wrappedFTIdxs = append(wrappedFTIdxs, aggFTIdxs...)
 
 			// apply the match indices (one unified pass handles a mix of MATCH + BM25)
 			if len(filterids) > 0 || len(wrappedFTExprs) > 0 {
