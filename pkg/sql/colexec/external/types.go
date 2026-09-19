@@ -566,5 +566,7 @@ type columnMapper struct {
 	listElemCanBeNull  bool
 	listElemNullLevel  byte
 
-	mapper func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error
+	mapper           func(mp *columnMapper, page parquet.Page, proc *process.Process, vec *vector.Vector) error
+	listValuesMapper func(mp *columnMapper, values []parquet.Value, numRows int, proc *process.Process, vec *vector.Vector) error
+	rowBuffer        *parquet.Buffer
 }
