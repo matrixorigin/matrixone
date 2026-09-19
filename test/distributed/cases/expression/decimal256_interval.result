@@ -29,3 +29,15 @@ select date_add(cast('2026-01-01 00:00:00' as datetime(6)),
 interval cast('0b10' as decimal(40,2)) second);
 ➤ date_add(cast(2026-01-01 00:00:00 as datetime(6)), INTERVAL cast(0b10 as decimal(40, 2)) second)[93,26,0]  𝄀
 2026-01-01 00:00:02
+select date_add(cast('2026-01-01 00:00:00' as datetime(6)),
+interval -1.25000000000000000000000000000000000000 second);
+➤ date_add(cast(2026-01-01 00:00:00 as datetime(6)), INTERVAL -1.25000000000000000000000000000000000000 second)[93,26,0]  𝄀
+2025-12-31 23:59:58.750000000
+select date_sub(cast('2026-01-01 00:00:00' as datetime(6)),
+interval -1.25000000000000000000000000000000000000 second);
+➤ date_sub(cast(2026-01-01 00:00:00 as datetime(6)), INTERVAL -1.25000000000000000000000000000000000000 second)[93,26,0]  𝄀
+2026-01-01 00:00:01.250000000
+select date_add(cast('2026-01-01 00:00:00' as datetime(6)),
+interval cast(cast(1.005e0 as decimal(10,2)) as decimal(40,2)) second);
+➤ date_add(cast(2026-01-01 00:00:00 as datetime(6)), INTERVAL cast(cast(1.005e0 as decimal(10, 2)) as decimal(40, 2)) second)[93,26,0]  𝄀
+2026-01-01 00:00:01

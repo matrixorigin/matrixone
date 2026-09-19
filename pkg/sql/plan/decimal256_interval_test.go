@@ -143,6 +143,64 @@ func TestDecimal256IntervalPreparedConstantKeepsMicroseconds(t *testing.T) {
 	require.True(t, root.ProjectList[0].GetLit().GetDecimalLiteralRequiresV82())
 }
 
+func TestDecimal256IntervalUnarySignPreservesFractionalSeconds(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+		want int64
+	}{
+		{
+			name: "date_add unary minus",
+			sql: "select date_add(cast('2026-01-01 00:00:00' as datetime(6)), " +
+				"interval -1.25000000000000000000000000000000000000 second)",
+			want: -1250000,
+		},
+		{
+			name: "date_sub unary minus",
+			sql: "select date_sub(cast('2026-01-01 00:00:00' as datetime(6)), " +
+				"interval -1.25000000000000000000000000000000000000 second)",
+			want: -1250000,
+		},
+		{
+			name: "nested float cast uses float rounding",
+			sql: "select date_add(cast('2026-01-01 00:00:00' as datetime(6)), " +
+				"interval cast(cast(1.005e0 as decimal(10,2)) as decimal(40,2)) second)",
+			want: 1000000,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := runOneStmt(NewMockOptimizer(false), t, tc.sql)
+			require.NoError(t, err)
+			root := stmt.GetQuery().Nodes[stmt.GetQuery().Steps[len(stmt.GetQuery().Steps)-1]]
+			require.Len(t, root.ProjectList, 1)
+			fn := root.ProjectList[0].GetF()
+			require.NotNil(t, fn, root.ProjectList[0].String())
+			require.Len(t, fn.Args, 3, root.ProjectList[0].String())
+			require.Equal(t, tc.want, extractInt64FromExpr(fn.Args[1]),
+				root.ProjectList[0].String())
+			require.Equal(t, int64(types.MicroSecond), extractInt64FromExpr(fn.Args[2]),
+				root.ProjectList[0].String())
+		})
+	}
+}
+
+func TestDecimal256IntervalUnaryMinusRejectsNegativeWindowBound(t *testing.T) {
+	proc := testutil.NewProc(t)
+	source := makeWideDecimalIntervalExpr(t, "0."+strings.Repeat("0", 38)+"1")
+	negative := &plan.Expr{
+		Typ: source.Typ,
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: "unary_minus"},
+			Args: []*plan.Expr{source},
+		}},
+	}
+
+	got, err := resetWindowIntervalExpr(context.Background(), proc,
+		makeIntervalExpr(negative, "SECOND"))
+	require.Nil(t, got)
+	require.ErrorContains(t, err, "frame start or end is negative")
+}
+
 func TestDecimalIntervalUsesCastTargetScale(t *testing.T) {
 	args, err := resetIntervalFunctionArgs(context.Background(), makeIntervalExpr(
 		makeWideDecimalCastIntervalExpr(t, "1.255", 10, 2), "SECOND"))
@@ -167,6 +225,27 @@ func TestDecimal256IntervalHandlesFloatAndNestedCasts(t *testing.T) {
 	require.Equal(t, int64(1250000), extractInt64FromExpr(args[0]))
 	require.Equal(t, int64(types.MicroSecond), extractInt64FromExpr(args[1]))
 	require.True(t, args[0].GetLit().GetDecimalLiteralRequiresV82())
+
+	for _, tc := range []struct {
+		name  string
+		id    types.T
+		width int32
+		want  int64
+	}{
+		{name: "decimal64 follows float conversion", id: types.T_decimal64, width: 10, want: 1000000},
+		{name: "decimal128 follows float conversion", id: types.T_decimal128, width: 30, want: 1000000},
+		{name: "decimal256 keeps direct float conversion", id: types.T_decimal256, width: 40, want: 1010000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			inner := makeDecimalIntervalCastExprWithType(
+				t, makeFloat64Const(1.005), tc.id, tc.width, 2, true)
+			outer := makeDecimalIntervalCastExpr(t, inner, 40, 2)
+			args, err := resetIntervalFunctionArgs(ctx, makeIntervalExpr(outer, "SECOND"))
+			require.NoError(t, err)
+			require.Equal(t, tc.want, extractInt64FromExpr(args[0]))
+			require.Equal(t, int64(types.MicroSecond), extractInt64FromExpr(args[1]))
+		})
+	}
 }
 
 func TestNarrowNormalizedDecimalIntervalPreservesProtocolMarker(t *testing.T) {
