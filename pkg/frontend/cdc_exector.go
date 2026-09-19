@@ -2614,6 +2614,26 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 	exec.stopReadersMissingFromScan(accountTbls)
 
 	for key, info := range accountTbls {
+		if exec.exclude != nil && exec.exclude.MatchString(key) {
+			continue
+		}
+		if !exec.matchAnyPattern(key, info) {
+			continue
+		}
+
+		// The scanner intentionally retains no-PK tables instead of filtering
+		// them. A new task is rejected at admission; an active wildcard task
+		// must stop and fail rather than silently losing a table after its key is
+		// dropped. Check this before the already-running fast path.
+		if info.PrimaryKeyChecked && !info.HasUserPrimaryKey {
+			if val, ok := exec.runningReaders.Load(key); ok {
+				if reader, ok := val.(cdc.ChangeReader); ok {
+					exec.stopRemovedReader(key, key, reader)
+				}
+			}
+			return exec.failTaskForPermanentTableError(ctx, info)
+		}
+
 		// already running
 		if val, ok := exec.runningReaders.Load(key); ok {
 			if reader, ok := val.(cdc.ChangeReader); ok {
@@ -2651,14 +2671,7 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 			}
 		}
 
-		if exec.exclude != nil && exec.exclude.MatchString(key) {
-			continue
-		}
-
 		newTableInfo := info.Clone()
-		if !exec.matchAnyPattern(key, newTableInfo) {
-			continue
-		}
 		hasError, err := GetTableErrMsg(ctx, accountId, exec.ie, exec.spec.TaskId, newTableInfo)
 		if err != nil {
 			logutil.Error(
@@ -2951,16 +2964,9 @@ var GetTableErrMsg = func(
 }
 
 func (exec *CDCTaskExecutor) matchAnyPattern(key string, info *cdc.DbTableInfo) bool {
-	match := func(s, p string) bool {
-		if p == cdc.CDCPitrGranularity_All {
-			return true
-		}
-		return s == p
-	}
-
 	db, table := cdc.SplitDbTblKey(key)
 	for _, pt := range exec.tables.Pts {
-		if match(db, pt.Source.Database) && match(table, pt.Source.Table) {
+		if exec.matchesSourceName(db, pt.Source.Database) && exec.matchesSourceName(table, pt.Source.Table) {
 			// complete sink info
 			info.SinkDbName = pt.Sink.Database
 			if info.SinkDbName == cdc.CDCPitrGranularity_All {
@@ -2977,20 +2983,21 @@ func (exec *CDCTaskExecutor) matchAnyPattern(key string, info *cdc.DbTableInfo) 
 }
 
 func (exec *CDCTaskExecutor) matchesAnySourcePattern(key string) bool {
-	match := func(s, p string) bool {
-		if p == cdc.CDCPitrGranularity_All {
-			return true
-		}
-		return s == p
-	}
-
 	db, table := cdc.SplitDbTblKey(key)
 	for _, pt := range exec.tables.Pts {
-		if match(db, pt.Source.Database) && match(table, pt.Source.Table) {
+		if exec.matchesSourceName(db, pt.Source.Database) && exec.matchesSourceName(table, pt.Source.Table) {
 			return true
 		}
 	}
 	return false
+}
+
+// matchesSourceName follows the source server's persisted identifier policy.
+// Mode 2 preserves the spelling supplied at CREATE CDC time but compares table
+// names case-insensitively; legacy tasks have no marker and retain the prior
+// exact-match behavior.
+func (exec *CDCTaskExecutor) matchesSourceName(name, pattern string) bool {
+	return cdc.CDCSourceNameMatches(name, pattern, exec.tables.SourceCaseMode)
 }
 
 // reader ----> sinker ----> remote db

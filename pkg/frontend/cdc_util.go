@@ -177,6 +177,80 @@ func (pc *PitrConfig) IsValid(minLength int64) bool {
 	return !(pc.Unit == "h" && pc.Length < minLength)
 }
 
+func checkCDCSourcePrimaryKey(ctx context.Context, bh BackgroundExec, dbName, tableName string, sourceCaseMode ...int64) error {
+	accountID, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return err
+	}
+	if err := bh.Exec(ctx, cdc.CollectCDCSourceCandidateSQL(accountID, dbName, tableName, sourceCaseMode...)); err != nil {
+		return err
+	}
+	results, err := getResultSet(ctx, bh)
+	bh.ClearExecResultSet()
+	if err != nil {
+		return err
+	}
+	if len(results) == 0 {
+		return moerr.NewInternalErrorf(ctx, "source table %s.%s has no primary key; CDC does not support tables without a user-visible primary key", dbName, tableName)
+	}
+	caseMode := int64(0)
+	if len(sourceCaseMode) > 0 {
+		caseMode = sourceCaseMode[0]
+	}
+	for _, result := range results {
+		// A concrete-table candidate query normally returns one row. A malformed
+		// mode-2 identifier deliberately uses a broader catalog candidate set,
+		// so filter every returned row with the same local identifier policy.
+		if result.GetRowCount() == 0 {
+			continue
+		}
+		for row := uint64(0); row < result.GetRowCount(); row++ {
+			candidateDB, err := result.GetString(ctx, row, 3)
+			if err != nil {
+				return err
+			}
+			candidateTable, err := result.GetString(ctx, row, 1)
+			if err != nil {
+				return err
+			}
+			if !cdc.CDCSourceNameMatches(candidateDB, dbName, caseMode) ||
+				!cdc.CDCSourceNameMatches(candidateTable, tableName, caseMode) {
+				continue
+			}
+			constraintIsNull, err := result.ColumnIsNull(ctx, row, 6)
+			if err != nil {
+				return err
+			}
+			var constraintBytes []byte
+			if !constraintIsNull {
+				constraint, err := result.GetString(ctx, row, 6)
+				if err != nil {
+					return err
+				}
+				constraintBytes = []byte(constraint)
+			}
+			hasForeignKey, err := cdc.TableHasForeignKeyConstraint(constraintBytes)
+			if err != nil {
+				return err
+			}
+			if hasForeignKey {
+				// Concrete sources name exactly one table. TableDetector skips FK
+				// children, so admission must accept this same non-source.
+				return nil
+			}
+			hasUserPK, err := result.GetUint64(ctx, row, 7)
+			if err != nil {
+				return err
+			}
+			if hasUserPK == 0 {
+				return moerr.NewInternalErrorf(ctx, "source table %s.%s has no primary key; CDC does not support tables without a user-visible primary key", dbName, tableName)
+			}
+			return nil
+		}
+	}
+	return moerr.NewInternalErrorf(ctx, "source table %s.%s has no primary key; CDC does not support tables without a user-visible primary key", dbName, tableName)
+}
+
 // CDCCheckPitrGranularity checks if the PITR (Point-in-Time Recovery) granularity settings
 // meet the minimum requirements for CDC tasks at different levels (cluster/account/db/table)
 // It verifies the PITR configuration in descending order of priority (cluster > account > database > table)
@@ -191,13 +265,107 @@ func (pc *PitrConfig) IsValid(minLength int64) bool {
 //
 // Returns:
 // - error: Returns an error if no PITR configuration meets the minimum requirement, otherwise nil.
-var CDCCheckPitrGranularity = func(
+var CDCCheckPitrGranularityWithExclude = func(
 	ctx context.Context,
 	bh BackgroundExec,
 	accName string,
 	pts *cdc.PatternTuples,
+	exclude string,
 	minLength ...int64,
 ) error {
+	// Validate concrete source tables before persisting the CDC task. A CDC
+	// stream needs a user-visible primary key to identify UPDATE/DELETE rows;
+	// MatrixOne's internal fake key is not a supported sink identity.
+	if bh != nil {
+		for _, pt := range pts.Pts {
+			if pt == nil {
+				continue
+			}
+			if pt.Source.Database == cdc.CDCPitrGranularity_All || pt.Source.Table == cdc.CDCPitrGranularity_All {
+				accountID, err := defines.GetAccountId(ctx)
+				if err != nil {
+					return err
+				}
+				candidateSQL := cdc.CollectCDCSourceCandidateSQL(accountID, pt.Source.Database, pt.Source.Table, pts.SourceCaseMode)
+				if err := bh.Exec(ctx, candidateSQL); err != nil {
+					return err
+				}
+				results, err := getResultSet(ctx, bh)
+				bh.ClearExecResultSet()
+				if err != nil {
+					return err
+				}
+				for _, result := range results {
+					for row := uint64(0); row < result.GetRowCount(); row++ {
+						dbName, err := result.GetString(ctx, row, 3)
+						if err != nil {
+							return err
+						}
+						tableName, err := result.GetString(ctx, row, 1)
+						if err != nil {
+							return err
+						}
+						if !cdc.CDCSourceNameMatches(dbName, pt.Source.Database, pts.SourceCaseMode) ||
+							!cdc.CDCSourceNameMatches(tableName, pt.Source.Table, pts.SourceCaseMode) {
+							continue
+						}
+						if exclude != "" {
+							matched, err := regexp.MatchString(exclude, dbName+"."+tableName)
+							if err != nil {
+								return err
+							}
+							if matched {
+								continue
+							}
+						}
+						constraintIsNull, err := result.ColumnIsNull(ctx, row, 6)
+						if err != nil {
+							return err
+						}
+						var constraintBytes []byte
+						if !constraintIsNull {
+							// ExecResult intentionally exposes only typed getters. String
+							// conversion preserves the serialized constraint bytes and works
+							// for both the real result set and the test implementation.
+							constraint, err := result.GetString(ctx, row, 6)
+							if err != nil {
+								return err
+							}
+							constraintBytes = []byte(constraint)
+						}
+						hasForeignKey, err := cdc.TableHasForeignKeyConstraint(constraintBytes)
+						if err != nil {
+							return err
+						}
+						if hasForeignKey {
+							continue
+						}
+						hasUserPK, err := result.GetUint64(ctx, row, 7)
+						if err != nil {
+							return err
+						}
+						if hasUserPK == 0 {
+							return moerr.NewInternalErrorf(ctx, "CDC source scope %s contains table %s.%s without a primary key", pt.Source, dbName, tableName)
+						}
+
+					}
+				}
+				continue
+			}
+			if exclude != "" {
+				matched, err := regexp.MatchString(exclude, pt.Source.Database+"."+pt.Source.Table)
+				if err != nil {
+					return err
+				}
+				if matched {
+					continue
+				}
+			}
+			if err := checkCDCSourcePrimaryKey(ctx, bh, pt.Source.Database, pt.Source.Table, pts.SourceCaseMode); err != nil {
+				return err
+			}
+		}
+	}
 	var minPitrLen int64 = 2
 	if len(minLength) > 1 {
 		return moerr.NewInternalErrorf(ctx, "only one length parameter allowed")
@@ -269,6 +437,19 @@ var CDCCheckPitrGranularity = func(
 			pt.OriginString, minPitrLen)
 	}
 	return nil
+}
+
+// CDCCheckPitrGranularity is kept for callers that have no Exclude option.
+// CREATE CDC uses CDCCheckPitrGranularityWithExclude so admission sees the
+// same source set as the runtime scanner.
+var CDCCheckPitrGranularity = func(
+	ctx context.Context,
+	bh BackgroundExec,
+	accName string,
+	pts *cdc.PatternTuples,
+	minLength ...int64,
+) error {
+	return CDCCheckPitrGranularityWithExclude(ctx, bh, accName, pts, "", minLength...)
 }
 
 var (

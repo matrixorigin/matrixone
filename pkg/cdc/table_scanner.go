@@ -728,7 +728,14 @@ func (s *TableDetector) scanTable() error {
 			dbNames = "*"
 			break
 		}
-		dbNamesSlice = append(dbNamesSlice, dbName)
+		if CDCSourceNameNeedsCatalogSuperset(dbName, 2) {
+			dbNames = "*"
+			break
+		}
+		// The detector serves tasks with different persisted case modes. Scan a
+		// case-insensitive candidate superset; each task applies its own mode in
+		// matchAnyPattern before it can create a pipeline.
+		dbNamesSlice = append(dbNamesSlice, CDCSourceIdentifierKey(dbName, 2))
 	}
 	if dbNames != "*" {
 		dbNames = AddSingleQuotesJoin(dbNamesSlice)
@@ -739,7 +746,11 @@ func (s *TableDetector) scanTable() error {
 			tableNames = "*"
 			break
 		}
-		tableNamesSlice = append(tableNamesSlice, tableName)
+		if CDCSourceNameNeedsCatalogSuperset(tableName, 2) {
+			tableNames = "*"
+			break
+		}
+		tableNamesSlice = append(tableNamesSlice, CDCSourceIdentifierKey(tableName, 2))
 	}
 	if tableNames != "*" {
 		tableNames = AddSingleQuotesJoin(tableNamesSlice)
@@ -748,7 +759,7 @@ func (s *TableDetector) scanTable() error {
 
 	result, err := s.exec.Exec(
 		ctx,
-		CDCSQLBuilder.CollectTableInfoSQL(accountIds, dbNames, tableNames),
+		CDCSQLBuilder.CollectTableInfoSQLCaseInsensitive(accountIds, dbNames, tableNames),
 		executor.Options{}.WithStatementOption(executor.StatementOption{}.WithDisableLog()),
 	)
 	if err != nil {
@@ -765,7 +776,15 @@ func (s *TableDetector) scanTable() error {
 			dbName := cols[3].GetStringAt(i)
 			createSql := cols[4].GetStringAt(i)
 			accountId := vector.MustFixedColWithTypeCheck[uint32](cols[5])[i]
-			hasForeignKey, decodeErr := tableHasForeignKeyConstraint(cols[6].GetBytesAt(i))
+			// Older unit fixtures may not include the appended status column. The
+			// production query always does; retain the fixture compatibility while
+			// marking only authoritative scanner metadata as checked.
+			primaryKeyChecked := len(cols) > 7
+			hasUserPrimaryKey := true
+			if primaryKeyChecked {
+				hasUserPrimaryKey = vector.MustFixedColNoTypeCheck[bool](cols[7])[i]
+			}
+			hasForeignKey, decodeErr := TableHasForeignKeyConstraint(cols[6].GetBytesAt(i))
 			if decodeErr != nil {
 				scanErr = decodeErr
 				logutil.Warn(
@@ -791,11 +810,13 @@ func (s *TableDetector) scanTable() error {
 
 			oldInfo, exists := s.Mp[accountId][key]
 			newInfo := &DbTableInfo{
-				SourceDbId:      dbId,
-				SourceDbName:    dbName,
-				SourceTblId:     tblId,
-				SourceTblName:   tblName,
-				SourceCreateSql: createSql,
+				SourceDbId:        dbId,
+				SourceDbName:      dbName,
+				SourceTblId:       tblId,
+				SourceTblName:     tblName,
+				SourceCreateSql:   createSql,
+				PrimaryKeyChecked: primaryKeyChecked,
+				HasUserPrimaryKey: hasUserPrimaryKey,
 			}
 			if !exists {
 				mp[accountId][key] = newInfo
@@ -807,6 +828,8 @@ func (s *TableDetector) scanTable() error {
 				updatedInfo.SourceTblId = tblId
 				updatedInfo.SourceTblName = tblName
 				updatedInfo.SourceCreateSql = createSql
+				updatedInfo.PrimaryKeyChecked = primaryKeyChecked
+				updatedInfo.HasUserPrimaryKey = hasUserPrimaryKey
 				updatedInfo.IdChanged = updatedInfo.IdChanged || idChanged
 				mp[accountId][key] = updatedInfo
 			}
@@ -824,7 +847,10 @@ func (s *TableDetector) scanTable() error {
 	return nil
 }
 
-func tableHasForeignKeyConstraint(data []byte) (hasForeignKey bool, err error) {
+// TableHasForeignKeyConstraint decodes the persisted constraint metadata used
+// by the runtime table scanner. CREATE CDC admission uses the same check so it
+// does not reject foreign-key children that the scanner will never consume.
+func TableHasForeignKeyConstraint(data []byte) (hasForeignKey bool, err error) {
 	if len(data) == 0 {
 		return false, nil
 	}

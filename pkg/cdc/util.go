@@ -906,7 +906,11 @@ func AddSingleQuotesJoin(s []string) string {
 	if len(s) == 0 {
 		return ""
 	}
-	return "'" + strings.Join(s, "','") + "'"
+	escaped := make([]string, len(s))
+	for i, value := range s {
+		escaped[i] = escapeSQLString(value)
+	}
+	return "'" + strings.Join(escaped, "','") + "'"
 }
 
 func GenDbTblKey(dbName, tblName string) string {

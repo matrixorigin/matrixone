@@ -12781,6 +12781,7 @@ type backgroundExecTest struct {
 	currentSql                     string
 	parserSQLMode                  string
 	sql2result                     map[string]ExecResult
+	resultSets                     []interface{}
 	sql2err                        map[string]error
 	executedSQLs                   []string
 	beforeExec                     func(string)
@@ -12936,6 +12937,9 @@ func (bt *backgroundExecTest) ExecRestore(ctx context.Context, s string, from ui
 }
 
 func (bt *backgroundExecTest) GetExecResultSet() []interface{} {
+	if bt.resultSets != nil {
+		return bt.resultSets
+	}
 	result, ok := bt.sql2result[bt.currentSql]
 	if !ok &&
 		strings.HasPrefix(bt.currentSql, "select granted_id,with_grant_option from mo_catalog.mo_role_grant where grantee_id = ") {

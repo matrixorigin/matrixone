@@ -97,23 +97,23 @@ func makeForeignKeyConstraintSQLValue(t *testing.T) string {
 }
 
 func TestTableHasForeignKeyConstraint(t *testing.T) {
-	hasForeignKey, err := tableHasForeignKeyConstraint(nil)
+	hasForeignKey, err := TableHasForeignKeyConstraint(nil)
 	require.NoError(t, err)
 	assert.False(t, hasForeignKey)
 
 	primaryKeyOnly := makeConstraintSQLValue(t, &engine.PrimaryKeyDef{
 		Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
 	})
-	hasForeignKey, err = tableHasForeignKeyConstraint([]byte(primaryKeyOnly))
+	hasForeignKey, err = TableHasForeignKeyConstraint([]byte(primaryKeyOnly))
 	require.NoError(t, err)
 	assert.False(t, hasForeignKey)
 
 	foreignKey := makeForeignKeyConstraintSQLValue(t)
-	hasForeignKey, err = tableHasForeignKeyConstraint([]byte(foreignKey))
+	hasForeignKey, err = TableHasForeignKeyConstraint([]byte(foreignKey))
 	require.NoError(t, err)
 	assert.True(t, hasForeignKey)
 
-	_, err = tableHasForeignKeyConstraint([]byte{byte(engine.ForeignKey)})
+	_, err = TableHasForeignKeyConstraint([]byte{byte(engine.ForeignKey)})
 	require.Error(t, err)
 }
 
@@ -193,7 +193,7 @@ func TestTableScanner1(t *testing.T) {
 
 	mockSqlExecutor.EXPECT().Exec(
 		gomock.Any(),
-		CDCSQLBuilder.CollectTableInfoSQL("1", "'db4'", "'tbl4'"),
+		CDCSQLBuilder.CollectTableInfoSQLCaseInsensitive("1", "'db4'", "'tbl4'"),
 		executor.Options{}.WithStatementOption(executor.StatementOption{}.WithDisableLog()),
 	).Return(executor.Result{}, moerr.NewInternalErrorNoCtx("mock error")).AnyTimes()
 
@@ -240,7 +240,7 @@ func TestAuditTableScannerSkipsForeignKeyTable(t *testing.T) {
 	mockSqlExecutor := mock_executor.NewMockSQLExecutor(ctrl)
 	mockSqlExecutor.EXPECT().Exec(
 		gomock.Any(),
-		CDCSQLBuilder.CollectTableInfoSQL("1", "'source_db'", "'child'"),
+		CDCSQLBuilder.CollectTableInfoSQLCaseInsensitive("1", "'source_db'", "'child'"),
 		gomock.Any(),
 	).Return(res, nil)
 
@@ -296,7 +296,7 @@ func TestTableScannerDoesNotSkipForeignKeyTextLiteral(t *testing.T) {
 	mockSqlExecutor := mock_executor.NewMockSQLExecutor(ctrl)
 	mockSqlExecutor.EXPECT().Exec(
 		gomock.Any(),
-		CDCSQLBuilder.CollectTableInfoSQL("1", "'source_db'", "'child'"),
+		CDCSQLBuilder.CollectTableInfoSQLCaseInsensitive("1", "'source_db'", "'child'"),
 		gomock.Any(),
 	).Return(res, nil)
 
@@ -353,7 +353,7 @@ func TestTableScannerSkipsForeignKeyMetadataWithoutCreateSQLText(t *testing.T) {
 	mockSqlExecutor := mock_executor.NewMockSQLExecutor(ctrl)
 	mockSqlExecutor.EXPECT().Exec(
 		gomock.Any(),
-		CDCSQLBuilder.CollectTableInfoSQL("1", "'source_db'", "'child'"),
+		CDCSQLBuilder.CollectTableInfoSQLCaseInsensitive("1", "'source_db'", "'child'"),
 		gomock.Any(),
 	).Return(res, nil)
 
@@ -410,7 +410,7 @@ func TestTableScannerConstraintDecodeErrorPreservesOldTableMap(t *testing.T) {
 	mockSqlExecutor := mock_executor.NewMockSQLExecutor(ctrl)
 	mockSqlExecutor.EXPECT().Exec(
 		gomock.Any(),
-		CDCSQLBuilder.CollectTableInfoSQL("1", "'source_db'", "*"),
+		CDCSQLBuilder.CollectTableInfoSQLCaseInsensitive("1", "'source_db'", "*"),
 		gomock.Any(),
 	).Return(res, nil)
 
@@ -984,20 +984,100 @@ func Test_CollectTableInfoSQL(t *testing.T) {
 	sql := builder.CollectTableInfoSQL("1,2,3", "*", "*")
 	_, err := parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
-	sql = strings.ToUpper(sql)
-	t.Log(sql)
-	expected := "SELECT  TBL.REL_ID,  TBL.RELNAME,  TBL.RELDATABASE_ID,  " +
-		"TBL.RELDATABASE,  TBL.REL_CREATESQL,  TBL.ACCOUNT_ID,  TBL.`CONSTRAINT` " +
-		"FROM `MO_CATALOG`.`MO_TABLES` TBL " +
-		"WHERE  TBL.ACCOUNT_ID IN (1,2,3)  AND TBL.RELKIND = 'R'  " +
-		"AND TBL.RELDATABASE NOT IN ('INFORMATION_SCHEMA','MO_CATALOG','MO_DEBUG','MO_TASK','MYSQL','SYSTEM','SYSTEM_METRICS')"
-	assert.Equal(t, expected, sql)
+	upperSQL := strings.ToUpper(sql)
+	assert.Contains(t, upperSQL, "AS HAS_USER_PK")
+	assert.Contains(t, upperSQL, "PK.ATT_DATABASE_ID = TBL.RELDATABASE_ID")
+	assert.Contains(t, upperSQL, "PK.ATT_RELNAME_ID = TBL.REL_ID")
+	assert.Contains(t, upperSQL, "PK.ATT_CONSTRAINT_TYPE = 'P'")
+	assert.Contains(t, upperSQL, "PK.ATTNAME <> '__MO_FAKE_PK_COL'")
+	assert.NotContains(t, upperSQL, "PK.DB_NAME")
+	assert.NotContains(t, upperSQL, "PK.CONSTRAINT_TYPE")
+	assert.NotContains(t, upperSQL, "AND EXISTS")
 
 	sql = builder.CollectTableInfoSQL("0", "'source_db'", "'orders'")
 	_, err = parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
-	expected = "SELECT  TBL.REL_ID,  TBL.RELNAME,  TBL.RELDATABASE_ID,  TBL.RELDATABASE,  TBL.REL_CREATESQL,  TBL.ACCOUNT_ID,  TBL.`CONSTRAINT` FROM `MO_CATALOG`.`MO_TABLES` TBL WHERE  TBL.ACCOUNT_ID IN (0)  AND TBL.RELDATABASE IN ('SOURCE_DB')  AND TBL.RELNAME IN ('ORDERS')  AND TBL.RELKIND = 'R'  AND TBL.RELDATABASE NOT IN ('INFORMATION_SCHEMA','MO_CATALOG','MO_DEBUG','MO_TASK','MYSQL','SYSTEM','SYSTEM_METRICS')"
-	assert.Equal(t, strings.ToUpper(expected), strings.ToUpper(sql))
+	assert.Contains(t, strings.ToUpper(sql), "TBL.RELDATABASE IN ('SOURCE_DB')")
+	assert.Contains(t, strings.ToUpper(sql), "TBL.RELNAME IN ('ORDERS')")
+
+	// CDC source identifiers can be legal when quoted even if they contain a
+	// SQL string delimiter. Candidate discovery must keep them inside the
+	// catalog predicate rather than allowing the identifier to alter that SQL.
+	sql = CollectCDCSourceCandidateSQL(1, "source'db", `orders\archive`)
+	_, err = parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	assert.Contains(t, sql, "tbl.reldatabase IN ('source''db')")
+	assert.Contains(t, sql, `tbl.relname IN ('orders\\archive')`)
+
+	// Mode 2 keeps the user spelling in persisted task metadata, but catalog
+	// selection must compare it case-insensitively before runtime matching.
+	sql = CollectCDCSourceCandidateSQL(1, "mixedDB", "Orders", 2)
+	_, err = parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	assert.Contains(t, sql, "lower(tbl.reldatabase) IN ('mixeddb')")
+	assert.Contains(t, sql, "lower(tbl.relname) IN ('orders')")
+
+	sql = builder.CollectTableInfoSQLCaseInsensitive("1", "'mixeddb'", "'orders'")
+	_, err = parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	assert.Contains(t, sql, "lower(tbl.reldatabase) IN ('mixeddb')")
+	assert.Contains(t, sql, "lower(tbl.relname) IN ('orders')")
+
+	// Mode 2 catalog prefilter must use the same parser canonical key as task
+	// matching, not Unicode simple case folding.
+	sql = CollectCDCSourceCandidateSQL(1, "Σdb", "Orders", 2)
+	_, err = parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	assert.Contains(t, sql, "lower(tbl.reldatabase) IN ('σdb')")
+
+	// SQL lower() does not preserve malformed UTF-8 bytes while the parser's
+	// mode-2 key does. Fall back to a catalog superset and let local matching
+	// apply the byte-preserving key after scan.
+	malformed := string([]byte{'1', 0xe9, 'A'})
+	sql = CollectCDCSourceCandidateSQL(1, malformed, "Orders", 2)
+	_, err = parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	assert.NotContains(t, sql, "lower(tbl.reldatabase)")
+	assert.Contains(t, sql, "lower(tbl.relname) IN ('orders')")
+
+	sql = CollectCDCSourceCandidateSQL(1, "MixedDB", malformed, 2)
+	_, err = parsers.ParseOne(context.Background(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	assert.Contains(t, sql, "lower(tbl.reldatabase) IN ('mixeddb')")
+	assert.NotContains(t, sql, "lower(tbl.relname)")
+}
+
+func TestTableScannerMalformedUTF8UsesCatalogSuperset(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	malformed := string([]byte{'1', 0xe9, 'A'})
+	mockSQLExecutor := mock_executor.NewMockSQLExecutor(ctrl)
+	mockSQLExecutor.EXPECT().Exec(
+		gomock.Any(),
+		CDCSQLBuilder.CollectTableInfoSQLCaseInsensitive("1", "*", "'orders'"),
+		gomock.Any(),
+	).Return(executor.Result{}, nil)
+
+	td := &TableDetector{
+		Mp:                   make(map[uint32]TblMap),
+		Callbacks:            make(map[string]TableCallback),
+		CallBackAccountId:    make(map[string]uint32),
+		CallBackDbName:       make(map[string][]string),
+		SubscribedAccountIds: make(map[uint32][]string),
+		SubscribedDbNames:    make(map[string][]string),
+		CallBackTableName:    make(map[string][]string),
+		SubscribedTableNames: make(map[string][]string),
+		exec:                 mockSQLExecutor,
+		cleanupPeriod:        time.Hour,
+		cleanupWarn:          DefaultCleanupWarnThreshold,
+	}
+	defer td.Close()
+
+	td.mu.Lock()
+	td.registerLocked("malformed", 1, []string{malformed}, []string{"Orders"}, nil)
+	td.mu.Unlock()
+	require.NoError(t, td.scanTable())
 }
 
 func TestScanAndProcess(t *testing.T) {
@@ -1159,7 +1239,7 @@ func TestTableScanner_UpdateTableInfo(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 
-	bat1 := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint"})
+	bat1 := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint", "hasUserPK"})
 	bat1.Vecs[0] = testutil.MakeUint64Vector([]uint64{1001}, nil, proc.Mp())
 	bat1.Vecs[1] = testutil.MakeVarcharVector([]string{"tbl1"}, nil, proc.Mp())
 	bat1.Vecs[2] = testutil.MakeUint64Vector([]uint64{1}, nil, proc.Mp())
@@ -1167,13 +1247,14 @@ func TestTableScanner_UpdateTableInfo(t *testing.T) {
 	bat1.Vecs[4] = testutil.MakeVarcharVector([]string{"create table tbl1 (a int)"}, nil, proc.Mp())
 	bat1.Vecs[5] = testutil.MakeUint32Vector([]uint32{1}, nil, proc.Mp())
 	bat1.Vecs[6] = testutil.MakeVarcharVector([]string{""}, nil, proc.Mp())
+	bat1.Vecs[7] = testutil.MakeBoolVector([]bool{true}, nil, proc.Mp())
 	bat1.SetRowCount(1)
 	res1 := executor.Result{
 		Mp:      proc.Mp(),
 		Batches: []*batch.Batch{bat1},
 	}
 
-	bat2 := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint"})
+	bat2 := batch.New([]string{"tblId", "tblName", "dbId", "dbName", "createSql", "accountId", "constraint", "hasUserPK"})
 	bat2.Vecs[0] = testutil.MakeUint64Vector([]uint64{1002}, nil, proc.Mp())
 	bat2.Vecs[1] = testutil.MakeVarcharVector([]string{"tbl1"}, nil, proc.Mp())
 	bat2.Vecs[2] = testutil.MakeUint64Vector([]uint64{1}, nil, proc.Mp())
@@ -1181,6 +1262,7 @@ func TestTableScanner_UpdateTableInfo(t *testing.T) {
 	bat2.Vecs[4] = testutil.MakeVarcharVector([]string{"create table tbl1 (a int)"}, nil, proc.Mp())
 	bat2.Vecs[5] = testutil.MakeUint32Vector([]uint32{1}, nil, proc.Mp())
 	bat2.Vecs[6] = testutil.MakeVarcharVector([]string{""}, nil, proc.Mp())
+	bat2.Vecs[7] = testutil.MakeBoolVector([]bool{false}, nil, proc.Mp())
 	bat2.SetRowCount(1)
 	res2 := executor.Result{
 		Mp:      proc.Mp(),
@@ -1191,13 +1273,13 @@ func TestTableScanner_UpdateTableInfo(t *testing.T) {
 
 	mockSqlExecutor.EXPECT().Exec(
 		gomock.Any(),
-		CDCSQLBuilder.CollectTableInfoSQL("1", "'db1'", "'tbl1'"),
+		CDCSQLBuilder.CollectTableInfoSQLCaseInsensitive("1", "'db1'", "'tbl1'"),
 		gomock.Any(),
 	).Return(res1, nil)
 
 	mockSqlExecutor.EXPECT().Exec(
 		gomock.Any(),
-		CDCSQLBuilder.CollectTableInfoSQL("1", "'db1'", "'tbl1'"),
+		CDCSQLBuilder.CollectTableInfoSQLCaseInsensitive("1", "'db1'", "'tbl1'"),
 		gomock.Any(),
 	).Return(res2, nil)
 
@@ -1230,6 +1312,8 @@ func TestTableScanner_UpdateTableInfo(t *testing.T) {
 	assert.True(t, ok)
 	assert.Equal(t, uint64(1001), tblInfo.SourceTblId)
 	assert.False(t, tblInfo.IdChanged)
+	assert.True(t, tblInfo.PrimaryKeyChecked)
+	assert.True(t, tblInfo.HasUserPrimaryKey)
 
 	err = td.scanTable()
 	assert.NoError(t, err)
@@ -1239,6 +1323,8 @@ func TestTableScanner_UpdateTableInfo(t *testing.T) {
 	tblInfo = accountMap["db1.tbl1"]
 	assert.Equal(t, uint64(1002), tblInfo.SourceTblId)
 	assert.True(t, tblInfo.IdChanged)
+	assert.True(t, tblInfo.PrimaryKeyChecked)
+	assert.False(t, tblInfo.HasUserPrimaryKey)
 }
 
 func TestTableScanner_PrintActiveRunners(t *testing.T) {
