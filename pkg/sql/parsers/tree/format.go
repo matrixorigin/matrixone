@@ -17,6 +17,7 @@ package tree
 import (
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 )
@@ -40,9 +41,12 @@ type FmtCtx struct {
 	// NO_BACKSLASH_ESCAPES.
 	modeIndependentStringLiterals bool
 	paramExprOffset               bool
+	canonicalUserVariableNames    bool
 	detectDateTimeFormat          bool
 	sawDateTimeFormat             bool
 	stringLiteralPositions        *[]StringLiteralPosition
+	maxOutputBytes                int
+	outputLimitExceeded           bool
 }
 
 // StringLiteralPosition identifies the bytes occupied by one string literal
@@ -121,6 +125,16 @@ func WithParamExprOffset() FmtCtxOption {
 	})
 }
 
+// WithCanonicalUserVariableNames lowercases user-defined variable names
+// while formatting. MatrixOne resolves those names case-insensitively; this
+// option lets semantic-key callers use the same identity without changing the
+// AST or the default SQL rendering.
+func WithCanonicalUserVariableNames() FmtCtxOption {
+	return FmtCtxOption(func(ctx *FmtCtx) {
+		ctx.canonicalUserVariableNames = true
+	})
+}
+
 // WithDateTimeFormatDetection asks the formatter to report whether the
 // expression tree contains a DATE_FORMAT or TIME_FORMAT call. Detection is
 // performed by the formatter itself, so nested expressions and subqueries use
@@ -138,6 +152,85 @@ func WithStringLiteralPositions(positions *[]StringLiteralPosition) FmtCtxOption
 	return FmtCtxOption(func(ctx *FmtCtx) {
 		ctx.stringLiteralPositions = positions
 	})
+}
+
+// WithMaxOutputBytes bounds the formatted buffer. Once the limit is reached,
+// further writes are discarded and OutputLimitExceeded reports that the
+// formatted value is incomplete. A non-positive limit leaves the buffer
+// unbounded, preserving the default formatter behavior.
+func WithMaxOutputBytes(maxBytes int) FmtCtxOption {
+	return FmtCtxOption(func(ctx *FmtCtx) {
+		ctx.maxOutputBytes = maxBytes
+	})
+}
+
+// OutputLimitExceeded reports whether a write attempted to grow the formatted
+// output beyond the configured maximum.
+func (ctx *FmtCtx) OutputLimitExceeded() bool {
+	return ctx.outputLimitExceeded
+}
+
+func (ctx *FmtCtx) limitedWriteLength(n int) int {
+	if ctx.maxOutputBytes <= 0 {
+		return n
+	}
+	remaining := ctx.maxOutputBytes - ctx.Len()
+	if remaining < 0 {
+		remaining = 0
+	}
+	if n > remaining {
+		ctx.outputLimitExceeded = true
+		return remaining
+	}
+	return n
+}
+
+// Override the promoted strings.Builder writes so callers that opt into an
+// output limit cannot allocate an arbitrarily large formatting buffer.
+func (ctx *FmtCtx) Write(p []byte) (int, error) {
+	n := ctx.limitedWriteLength(len(p))
+	return ctx.Builder.Write(p[:n])
+}
+
+func (ctx *FmtCtx) WriteString(s string) (int, error) {
+	n := ctx.limitedWriteLength(len(s))
+	return ctx.Builder.WriteString(s[:n])
+}
+
+func (ctx *FmtCtx) WriteByte(b byte) error {
+	if ctx.limitedWriteLength(1) == 0 {
+		return nil
+	}
+	return ctx.Builder.WriteByte(b)
+}
+
+func (ctx *FmtCtx) WriteRune(r rune) (int, error) {
+	width := utf8.RuneLen(r)
+	if width < 0 {
+		width = utf8.RuneLen(utf8.RuneError)
+	}
+	if ctx.limitedWriteLength(width) < width {
+		return 0, nil
+	}
+	return ctx.Builder.WriteRune(r)
+}
+
+func (ctx *FmtCtx) Grow(n int) {
+	if ctx.maxOutputBytes > 0 {
+		remaining := ctx.maxOutputBytes - ctx.Len()
+		if remaining < 0 {
+			remaining = 0
+		}
+		if n > remaining {
+			n = remaining
+		}
+	}
+	ctx.Builder.Grow(n)
+}
+
+func (ctx *FmtCtx) Reset() {
+	ctx.Builder.Reset()
+	ctx.outputLimitExceeded = false
 }
 
 // HasDateTimeFormatFunction reports whether formatting visited a

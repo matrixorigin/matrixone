@@ -66,6 +66,10 @@ GOPATH := $(shell go env GOPATH)
 GO_VERSION=$(shell go version)
 BRANCH_NAME=$(shell git rev-parse --abbrev-ref HEAD)
 LAST_COMMIT_ID=$(shell git rev-parse --short HEAD)
+# The statement-hash remote-execution fence needs the exact source revision,
+# not the abbreviated display ID. Fail closed for modified or untracked source
+# trees; otherwise two different builds from the same HEAD could look equal.
+BUILD_COMMIT_ID=$(shell if test -z "$$(git status --porcelain --untracked-files=normal 2>/dev/null)"; then git rev-parse --verify HEAD 2>/dev/null; fi)
 BUILD_TIME=$(shell date +%s)
 MO_VERSION=$(shell git symbolic-ref -q --short HEAD || git describe --tags --exact-match)
 # Resolve packages from the checksummed module graph. Generated vendor trees can
@@ -222,7 +226,7 @@ pb: generate-pb
 # build mo-service
 ###############################################################################
 
-VERSION_INFO :=-X '$(GO_MODULE)/pkg/version.GoVersion=$(GO_VERSION)' -X '$(GO_MODULE)/pkg/version.BranchName=$(BRANCH_NAME)' -X '$(GO_MODULE)/pkg/version.CommitID=$(LAST_COMMIT_ID)' -X '$(GO_MODULE)/pkg/version.BuildTime=$(BUILD_TIME)' -X '$(GO_MODULE)/pkg/version.Version=$(MO_VERSION)'
+VERSION_INFO :=-X '$(GO_MODULE)/pkg/version.GoVersion=$(GO_VERSION)' -X '$(GO_MODULE)/pkg/version.BranchName=$(BRANCH_NAME)' -X '$(GO_MODULE)/pkg/version.CommitID=$(LAST_COMMIT_ID)' -X '$(GO_MODULE)/pkg/version.BuildCommitID=$(BUILD_COMMIT_ID)' -X '$(GO_MODULE)/pkg/version.BuildTime=$(BUILD_TIME)' -X '$(GO_MODULE)/pkg/version.Version=$(MO_VERSION)'
 THIRDPARTIES_INSTALL_DIR=$(ROOT_DIR)/thirdparties/install
 CGO_DIR=$(ROOT_DIR)/cgo
 # mo-service links libmo dynamically (-L$(CGO_DIR) -lmo picks the shared

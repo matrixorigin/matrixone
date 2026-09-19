@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -91,6 +92,7 @@ import (
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
@@ -154,7 +156,7 @@ func Test_EncodeProcessInfo(t *testing.T) {
 	data, err := encodeProcessInfo(proc, "", map[string]uint32{
 		"cn-a:6001": 2,
 		"cn-b:6001": 1,
-	}, remoteExecutionID)
+	}, remoteExecutionID, false)
 	require.Nil(t, err)
 	restored := new(pipeline.ProcessInfo)
 	require.NoError(t, restored.Unmarshal(data))
@@ -1349,9 +1351,18 @@ func TestPrepareRemoteRunSendingDataRejectsPrePadSpaceProtocol(t *testing.T) {
 	}
 }
 
+func TestRemoteExpressionMemberOfDoesNotRequireStatementHash(t *testing.T) {
+	expr := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: int64(planfunction.INTERNAL_JSON_MEMBER_OF) << 32},
+	}}}
+	features, err := planpb.RequiredRemoteExpressionFeatures(expr)
+	require.NoError(t, err)
+	require.False(t, features.StatementHashFunction)
+}
+
 func TestRemoteExpressionProtocolValidation(t *testing.T) {
-	require.GreaterOrEqual(t, defines.MORPCLatestVersion, defines.MORPCVersion36,
-		"the v36 remote-expression capability must remain available after later protocol increments")
+	require.GreaterOrEqual(t, defines.MORPCLatestVersion, defines.MORPCVersion58,
+		"the v58 remote-expression capability must remain available after later protocol increments")
 
 	proc := testutil.NewProcess(t)
 	proc.Ctx = context.WithValue(proc.Ctx, defines.TenantIDKey{}, uint32(0))
@@ -1413,6 +1424,17 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 			Expr: &planpb.Expr_F{F: &planpb.Function{
 				Func: &planpb.ObjectRef{Obj: int64(functionID) << 32},
 				Args: args,
+			}},
+		}
+	}
+	statementHash := func() *planpb.Expr {
+		return &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_varchar)},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{
+					Obj:     int64(planfunction.MO_STATEMENT_HASH) << 32,
+					ObjName: "mo_statement_hash",
+				},
 			}},
 		}
 	}
@@ -1557,6 +1579,78 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion36)
 		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
+	})
+	t.Run("statement hash function requires v86", func(t *testing.T) {
+		remotePipeline := &pipeline.Pipeline{
+			InstructionList: []*pipeline.Instruction{{
+				ProjectList: []*planpb.Expr{statementHash()},
+			}},
+		}
+		for _, version := range []int64{
+			defines.MORPCVersion68,
+			defines.MORPCVersion84,
+			defines.MORPCVersion85,
+		} {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+			err := validateRemoteExpressionPipelineProtocol(proc, remotePipeline)
+			require.ErrorContains(t, err, "MO_STATEMENT_HASH remote execution requires MORPC protocol version 86")
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+		}
+
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion86)
+		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
+	})
+	t.Run("statement hash sql mode resolver errors are deferred", func(t *testing.T) {
+		c, client := expressionProtocolTestCompile(t)
+		resolverProc := c.proc
+		resolverProc.Ctx = context.WithValue(resolverProc.Ctx, defines.TenantIDKey{}, uint32(0))
+		resolverProc.Base.TxnOperator = fakeTxnOperator{}
+		resolverProc.Base.SessionInfo.TimeZone = time.UTC
+		oldBuildCommitID := version.BuildCommitID
+		version.BuildCommitID = strings.Repeat("a", 40)
+		t.Cleanup(func() { version.BuildCommitID = oldBuildCommitID })
+		client.version = defines.MORPCVersion87
+		client.buildCommitID = version.BuildCommitID
+		resolverErr := moerr.NewInternalErrorNoCtx("sql mode resolver failed")
+		resolverProc.Base.IsFrontend = true
+		resolverProc.Base.SessionInfo.SqlMode = "STRICT_TRANS_TABLES"
+		resolverProc.Base.SessionInfo.ExplicitZeroTemporalCastReturnsNull = true
+		resolverProc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+			switch name {
+			case "sql_mode":
+				return nil, resolverErr
+			default:
+				return nil, nil
+			}
+		})
+		resolverRT := moruntime.ServiceRuntime(resolverProc.GetService())
+		resolverRT.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion87)
+
+		statementScope := makeScope(statementHash())
+		statementScope.Proc = resolverProc
+		statementScope.NodeInfo = engine.Node{Id: "old-worker", Addr: "remote:6001"}
+		defer statementScope.release()
+		_, _, processData, _, err := prepareRemoteRunSendingData("", statementScope, resolverProc, nil, uuid.Nil)
+		require.NoError(t, err, "process serialization must defer the resolver error")
+		var processInfo pipeline.ProcessInfo
+		require.NoError(t, processInfo.Unmarshal(processData))
+		require.Equal(t, "STRICT_TRANS_TABLES", processInfo.SessionInfo.SqlMode)
+		require.Equal(t, version.BuildCommitID, processInfo.SessionInfo.StatementHashExpectedBuildCommitId)
+		require.NotEmpty(t, processInfo.SessionInfo.StatementHashSqlModeError)
+
+		ordinary := &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_int64)},
+			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: 1}}},
+		}
+		ordinaryScope := makeScope(ordinary)
+		ordinaryScope.Proc = resolverProc
+		ordinaryScope.NodeInfo = engine.Node{Id: "old-worker", Addr: "remote:6001"}
+		defer ordinaryScope.release()
+		_, _, ordinaryProcessData, _, err := prepareRemoteRunSendingData("", ordinaryScope, resolverProc, nil, uuid.Nil)
+		require.NoError(t, err)
+		var ordinaryProcessInfo pipeline.ProcessInfo
+		require.NoError(t, ordinaryProcessInfo.Unmarshal(ordinaryProcessData))
+		require.Empty(t, ordinaryProcessInfo.SessionInfo.StatementHashSqlModeError)
 	})
 	t.Run("typed FORMAT sender and receiver boundary", func(t *testing.T) {
 		for _, test := range []struct {

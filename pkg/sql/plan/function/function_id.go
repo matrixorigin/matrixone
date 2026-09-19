@@ -847,10 +847,11 @@ const (
 	// logical payload size and currently-supported free-space contract.
 	JSON_STORAGE_SIZE = 579
 	JSON_STORAGE_FREE = 580
+	MO_STATEMENT_HASH = 581
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 581
+	FUNCTION_END_NUMBER = 582
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1436,6 +1437,7 @@ var functionIdRegister = map[string]int32{
 	"lcase":                          LOWER,
 	"sha1":                           SHA1,
 	"sha":                            SHA1,
+	"mo_statement_hash":              MO_STATEMENT_HASH,
 
 	"summation":         SUMMATION,
 	"l1_norm":           L1_NORM,

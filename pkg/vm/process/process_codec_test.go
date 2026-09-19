@@ -17,6 +17,7 @@ package process
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -166,9 +168,21 @@ func TestProcessCodecHelpers(t *testing.T) {
 		require.Equal(t, uint64(4), info.AutoIncrementOffset)
 		require.Equal(t, "UTC", info.TimeZone.String())
 
-		info, err = ConvertToProcessSessionInfo(pipeline.SessionInfo{TimeZone: []byte("bad")})
-		require.NoError(t, err)
-		require.Nil(t, info.TimeZone)
+		for _, tc := range []struct {
+			name string
+			data []byte
+		}{
+			{"missing", nil},
+			{"empty", []byte{}},
+			{"malformed", []byte("bad")},
+			{"truncated", timeBytes[:len(timeBytes)-1]},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				info, err := ConvertToProcessSessionInfo(pipeline.SessionInfo{TimeZone: tc.data})
+				require.NoError(t, err)
+				require.Nil(t, info.TimeZone)
+			})
+		}
 	})
 
 	t.Run("lock wait timeout resolution", func(t *testing.T) {
@@ -241,6 +255,11 @@ func TestProcessCodecHelpers(t *testing.T) {
 			return nil, moerr.NewInternalErrorNoCtx("boom")
 		})
 		require.Equal(t, "STRICT_ALL_TABLES", resolveSqlMode(proc))
+		proc.Base.IsFrontend = true
+		strictMode, err := ResolveSQLMode(proc)
+		require.Equal(t, "STRICT_ALL_TABLES", strictMode)
+		require.EqualError(t, err, "internal error: boom")
+		proc.Base.IsFrontend = false
 
 		// Resolver is nil (remote CN): fall back to SessionInfo.SqlMode so a second
 		// forward preserves the upstream mode instead of defaulting to strict.
@@ -253,6 +272,96 @@ func TestProcessCodecHelpers(t *testing.T) {
 		emptyProc := &Process{Base: &BaseProcess{SessionInfo: SessionInfo{}}}
 		require.Equal(t, "", resolveSqlMode(emptyProc))
 	})
+}
+
+func TestResolveSQLModeResolverValueTypes(t *testing.T) {
+	var typedNilString *string
+	var typedNilBytes []byte
+
+	cases := []struct {
+		name     string
+		value    any
+		wantMode string
+		wantErr  bool
+	}{
+		{name: "valid string", value: "STRICT_ALL_TABLES", wantMode: "STRICT_ALL_TABLES"},
+		{name: "explicit empty string", value: "", wantMode: EmptySqlModeSentinel},
+		{name: "plain nil", value: nil, wantMode: "STRICT_TRANS_TABLES"},
+		{name: "integer", value: int64(123), wantMode: "STRICT_TRANS_TABLES", wantErr: true},
+		{name: "boolean", value: true, wantMode: "STRICT_TRANS_TABLES", wantErr: true},
+		{name: "typed nil string", value: typedNilString, wantMode: "STRICT_TRANS_TABLES", wantErr: true},
+		{name: "typed nil bytes", value: typedNilBytes, wantMode: "STRICT_TRANS_TABLES", wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := &Process{Base: &BaseProcess{
+				IsFrontend:  true,
+				SessionInfo: SessionInfo{SqlMode: "STRICT_TRANS_TABLES"},
+			}}
+			proc.SetResolveVariableFunc(func(name string, _, _ bool) (any, error) {
+				require.Equal(t, "sql_mode", name)
+				return tc.value, nil
+			})
+
+			mode, err := ResolveSQLMode(proc)
+			require.Equal(t, tc.wantMode, mode)
+			if !tc.wantErr {
+				require.NoError(t, err)
+				return
+			}
+			require.EqualError(t, err,
+				fmt.Sprintf("internal error: unexpected sql_mode type %T", tc.value))
+		})
+	}
+}
+
+func TestBuildProcessInfoStatementHashRejectsInvalidSQLModeType(t *testing.T) {
+	oldBuildCommitID := version.BuildCommitID
+	version.BuildCommitID = strings.Repeat("a", 40)
+	t.Cleanup(func() { version.BuildCommitID = oldBuildCommitID })
+
+	proc, _ := newCodecTestProcess(t)
+	proc.Base.IsFrontend = true
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (any, error) {
+		if name == "sql_mode" {
+			return int64(123), nil
+		}
+		return nil, nil
+	})
+
+	// Non-hash remote scopes retain the historical best-effort behavior.
+	_, err := proc.BuildProcessInfo("select 1")
+	require.NoError(t, err)
+
+	// A hash-bearing remote scope carries the malformed-variable error to the
+	// worker, where an active function row will raise it.
+	info, err := proc.BuildProcessInfoWithStatementHash("select 1")
+	require.NoError(t, err)
+	require.NotEmpty(t, info.SessionInfo.StatementHashSqlModeError)
+	var captured moerr.Error
+	require.NoError(t, captured.UnmarshalBinary(info.SessionInfo.StatementHashSqlModeError))
+	require.EqualError(t, &captured, "internal error: unexpected sql_mode type int64")
+
+	// A failed resolution must not poison the process; a later retry resolves a
+	// fresh valid snapshot and succeeds.
+	calls := 0
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (any, error) {
+		if name != "sql_mode" {
+			return nil, nil
+		}
+		calls++
+		if calls == 1 {
+			return int64(123), nil
+		}
+		return "STRICT_ALL_TABLES", nil
+	})
+	firstAttempt, err := proc.BuildProcessInfoWithStatementHash("select 1")
+	require.NoError(t, err)
+	require.NotEmpty(t, firstAttempt.SessionInfo.StatementHashSqlModeError)
+	info, err = proc.BuildProcessInfoWithStatementHash("select 1")
+	require.NoError(t, err)
+	require.Equal(t, "STRICT_ALL_TABLES", info.SessionInfo.SqlMode)
+	require.Equal(t, 2, calls)
 }
 
 func TestBuildProcessInfoPreservesBackgroundSqlModeAcrossForwards(t *testing.T) {
@@ -277,6 +386,300 @@ func TestBuildProcessInfoPreservesBackgroundSqlModeAcrossForwards(t *testing.T) 
 	second, err := decoded.BuildProcessInfo("select 1")
 	require.NoError(t, err)
 	require.Equal(t, "STRICT_TRANS_TABLES", second.SessionInfo.SqlMode)
+}
+
+func TestBuildProcessInfoGenericAndStatementHashSQLModeResolution(t *testing.T) {
+	oldBuildCommitID := version.BuildCommitID
+	const originBuild = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const intermediateBuild = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	version.BuildCommitID = originBuild
+	t.Cleanup(func() { version.BuildCommitID = oldBuildCommitID })
+
+	proc, _ := newCodecTestProcess(t)
+	proc.Base.IsFrontend = false
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return "ANSI_QUOTES", nil
+	})
+
+	// Ordinary process-info encoding retains its legacy resolver precedence.
+	ordinary, err := proc.BuildProcessInfo("select 1")
+	require.NoError(t, err)
+	require.Equal(t, "ANSI_QUOTES", ordinary.SessionInfo.SqlMode)
+
+	// Hash-bearing encoding instead preserves the coordinator's captured
+	// snapshot so the receiver parses under the same SQL mode.
+	hashProcessInfo, err := proc.BuildProcessInfoWithStatementHash("select 1")
+	require.NoError(t, err)
+	require.Equal(t, "STRICT_TRANS_TABLES", hashProcessInfo.SessionInfo.SqlMode)
+
+	svc := NewCodecService(fakeCodecTxnClient{op: fakeCodecTxnOperator{}}, nil, nil, nil, nil, nil, nil, nil)
+	decoded, err := svc.Decode(defines.AttachAccountId(context.Background(), 42), hashProcessInfo)
+	require.NoError(t, err)
+	defer decoded.Free()
+	require.True(t, decoded.Base.SessionInfo.statementHashProcessInfoReceived)
+	decoded.Base.IsFrontend = false
+	decoded.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return "ANSI_QUOTES", nil
+	})
+
+	// An ordinary no-hash hop preserves received provenance without applying
+	// the hash-specific same-build rejection to unrelated scopes.
+	version.BuildCommitID = intermediateBuild
+	ordinaryForward, err := decoded.BuildProcessInfo("select 1")
+	require.NoError(t, err)
+	require.Equal(t, originBuild, ordinaryForward.SessionInfo.StatementHashExpectedBuildCommitId)
+	version.BuildCommitID = originBuild
+
+	// Even if an intermediate CN has a different resolver, a second hash
+	// forward must retain the original snapshot.
+	second, err := decoded.BuildProcessInfoWithStatementHash("select 1")
+	require.NoError(t, err)
+	require.Equal(t, "STRICT_TRANS_TABLES", second.SessionInfo.SqlMode)
+	require.Equal(t, originBuild, second.SessionInfo.StatementHashExpectedBuildCommitId,
+		"an intermediate on the coordinator build must forward the immutable origin identity")
+}
+
+func TestValidateStatementHashBuildCommitIDPreservesLocalNoBuildBehavior(t *testing.T) {
+	oldBuildCommitID := version.BuildCommitID
+	const originBuild = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const replacementBuild = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	version.BuildCommitID = ""
+	t.Cleanup(func() { version.BuildCommitID = oldBuildCommitID })
+
+	local := &Process{Base: &BaseProcess{}}
+	require.NoError(t, local.ValidateStatementHashBuildCommitID(),
+		"local-only execution does not require a build identity")
+
+	receivedSession, err := ConvertToProcessSessionInfo(pipeline.SessionInfo{})
+	require.NoError(t, err)
+	received := &Process{Base: &BaseProcess{SessionInfo: receivedSession}}
+	require.True(t, received.Base.SessionInfo.statementHashProcessInfoReceived)
+	require.ErrorContains(t, received.ValidateStatementHashBuildCommitID(),
+		"missing a valid full 40-character coordinator build commit ID")
+
+	version.BuildCommitID = originBuild
+	matchedSession, err := ConvertToProcessSessionInfo(pipeline.SessionInfo{
+		StatementHashExpectedBuildCommitId: originBuild,
+	})
+	require.NoError(t, err)
+	matched := &Process{Base: &BaseProcess{SessionInfo: matchedSession}}
+	require.NoError(t, matched.ValidateStatementHashBuildCommitID())
+
+	// If the probed receiver is replaced after placement, active hash
+	// evaluation still enforces the original coordinator build.
+	version.BuildCommitID = replacementBuild
+	require.ErrorContains(t, matched.ValidateStatementHashBuildCommitID(),
+		"worker build does not match the build selected by its coordinator")
+}
+
+func TestBuildProcessInfoWithStatementHashDoesNotReseedReceivedBuildIdentity(t *testing.T) {
+	oldBuildCommitID := version.BuildCommitID
+	const originBuild = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const intermediateBuild = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	version.BuildCommitID = originBuild
+	t.Cleanup(func() { version.BuildCommitID = oldBuildCommitID })
+
+	origin, _ := newCodecTestProcess(t)
+	origin.Base.IsFrontend = true
+	wire, err := origin.BuildProcessInfoWithStatementHash("select 1")
+	require.NoError(t, err)
+
+	codec := NewCodecService(fakeCodecTxnClient{op: fakeCodecTxnOperator{}}, nil, nil, nil, nil, nil, nil, nil)
+	for _, tc := range []struct {
+		name     string
+		identity string
+	}{
+		{name: "missing identity", identity: ""},
+		{name: "malformed identity", identity: strings.Repeat("g", 40)},
+		{name: "abbreviated identity", identity: originBuild[:7]},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			version.BuildCommitID = originBuild
+			incoming := wire
+			incoming.SessionInfo.StatementHashExpectedBuildCommitId = tc.identity
+			remote, err := codec.Decode(defines.AttachAccountId(context.Background(), 42), incoming)
+			require.NoError(t, err)
+			defer remote.Free()
+			require.True(t, remote.Base.SessionInfo.statementHashProcessInfoReceived)
+
+			// A different intermediate build cannot replace a missing or
+			// malformed coordinator identity with its own local revision. An
+			// unrelated ordinary scope may forward it, but must not reseed it.
+			version.BuildCommitID = intermediateBuild
+			ordinaryForward, err := remote.BuildProcessInfo("select 1")
+			require.NoError(t, err)
+			require.Equal(t, tc.identity, ordinaryForward.SessionInfo.StatementHashExpectedBuildCommitId)
+
+			forwarded, err := remote.BuildProcessInfoWithStatementHash("select 1")
+			require.ErrorContains(t, err, "coordinator build commit ID")
+			require.Empty(t, forwarded.SessionInfo.StatementHashExpectedBuildCommitId)
+			require.Equal(t, tc.identity, remote.Base.SessionInfo.StatementHashExpectedBuildCommitID)
+		})
+	}
+}
+
+func TestBuildProcessInfoStatementHashPropagatesSQLModeResolverErrors(t *testing.T) {
+	oldBuildCommitID := version.BuildCommitID
+	version.BuildCommitID = strings.Repeat("a", 40)
+	t.Cleanup(func() { version.BuildCommitID = oldBuildCommitID })
+
+	proc, _ := newCodecTestProcess(t)
+	proc.Base.IsFrontend = true
+	proc.Base.SessionInfo.ExplicitZeroTemporalCastReturnsNull = true
+	resolverErr := moerr.NewInternalErrorNoCtx("resolve sql_mode")
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		if name == "sql_mode" {
+			return nil, resolverErr
+		}
+		return nil, nil
+	})
+
+	// The generic codec path preserves its historical best-effort behavior and
+	// remains usable for scopes that do not contain MO_STATEMENT_HASH.
+	_, err := proc.BuildProcessInfo("select 1")
+	require.NoError(t, err)
+
+	// Hash-bearing process info carries the resolver failure without surfacing
+	// it during dispatch. The remote function raises it only when a row is
+	// actually evaluated.
+	info, err := proc.BuildProcessInfoWithStatementHash("select 1")
+	require.NoError(t, err)
+	require.Equal(t, version.BuildCommitID, info.SessionInfo.StatementHashExpectedBuildCommitId)
+	require.NotEmpty(t, info.SessionInfo.StatementHashSqlModeError)
+	remoteService := NewCodecService(fakeCodecTxnClient{op: fakeCodecTxnOperator{}}, nil, nil, nil, nil, nil, nil, nil)
+	remote, err := remoteService.Decode(defines.AttachAccountId(context.Background(), 42), info)
+	require.NoError(t, err)
+	defer remote.Free()
+	remote.Base.IsFrontend = false
+	require.Equal(t, version.BuildCommitID, remote.Base.SessionInfo.StatementHashExpectedBuildCommitID)
+	remote.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return nil, moerr.NewInternalErrorNoCtx("worker-local resolver must not replace coordinator error")
+	})
+	_, err = ResolveSQLMode(remote)
+	require.EqualError(t, err, resolverErr.Error())
+	require.True(t, moerr.IsMoErrCode(err, resolverErr.ErrorCode()))
+
+	// A scope without MO_STATEMENT_HASH can still be an intermediate hop for a
+	// later hash-bearing scope. It must preserve the deferred resolver failure
+	// instead of letting the next hash hop consult its local resolver.
+	ordinaryForward, err := remote.BuildProcessInfo("select 1")
+	require.NoError(t, err)
+	require.Equal(t, info.SessionInfo.StatementHashSqlModeError,
+		ordinaryForward.SessionInfo.StatementHashSqlModeError)
+	require.Equal(t, info.SessionInfo.StatementHashSqlModeErrorDetail,
+		ordinaryForward.SessionInfo.StatementHashSqlModeErrorDetail)
+
+	ordinaryRemote, err := remoteService.Decode(defines.AttachAccountId(context.Background(), 42), ordinaryForward)
+	require.NoError(t, err)
+	defer ordinaryRemote.Free()
+	ordinaryRemote.Base.IsFrontend = false
+	ordinaryRemote.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return nil, moerr.NewInternalErrorNoCtx("second worker-local resolver must not replace coordinator error")
+	})
+	_, err = ResolveSQLMode(ordinaryRemote)
+	require.EqualError(t, err, resolverErr.Error())
+
+	forwarded, err := ordinaryRemote.BuildProcessInfoWithStatementHash("select 1")
+	require.NoError(t, err)
+	require.Equal(t, version.BuildCommitID, forwarded.SessionInfo.StatementHashExpectedBuildCommitId)
+	require.Equal(t, info.SessionInfo.StatementHashSqlModeError, forwarded.SessionInfo.StatementHashSqlModeError)
+	require.Equal(t, info.SessionInfo.StatementHashSqlModeErrorDetail, forwarded.SessionInfo.StatementHashSqlModeErrorDetail)
+
+	finalRemote, err := remoteService.Decode(defines.AttachAccountId(context.Background(), 42), forwarded)
+	require.NoError(t, err)
+	defer finalRemote.Free()
+	finalRemote.Base.IsFrontend = false
+	finalRemote.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return nil, moerr.NewInternalErrorNoCtx("final worker-local resolver must not replace coordinator error")
+	})
+	_, err = ResolveSQLMode(finalRemote)
+	require.EqualError(t, err, resolverErr.Error())
+
+	// A transient resolver failure must not poison the process: a later retry
+	// resolves a fresh snapshot and succeeds.
+	calls := 0
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		switch name {
+		case "sql_mode":
+			calls++
+			if calls == 1 {
+				return nil, resolverErr
+			}
+			return "STRICT_TRANS_TABLES", nil
+		default:
+			return nil, nil
+		}
+	})
+	firstAttempt, err := proc.BuildProcessInfoWithStatementHash("select 1")
+	require.NoError(t, err)
+	require.NotEmpty(t, firstAttempt.SessionInfo.StatementHashSqlModeError)
+	info, err = proc.BuildProcessInfoWithStatementHash("select 1")
+	require.NoError(t, err)
+	require.Equal(t, "STRICT_TRANS_TABLES", info.SessionInfo.SqlMode)
+	require.Empty(t, info.SessionInfo.StatementHashSqlModeError)
+	require.Equal(t, 2, calls, "failed and successful hash builds")
+
+	// Once a remote process carries a non-empty snapshot, the receiving
+	// resolver is never consulted, even on the strict hash path.
+	proc.Base.IsFrontend = false
+	proc.Base.SessionInfo.SqlMode = EmptySqlModeSentinel
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return nil, moerr.NewInternalErrorNoCtx("must not resolve captured sql_mode")
+	})
+	info, err = proc.BuildProcessInfoWithStatementHash("select 1")
+	require.NoError(t, err)
+	require.Equal(t, EmptySqlModeSentinel, info.SessionInfo.SqlMode)
+
+	// A false temporal flag is also a captured snapshot. The hash codec
+	// must derive it from the already captured sql_mode and never consult the
+	// receiving CN's resolver, or a second hop can change the local behavior.
+	remoteSnapshot, _ := newCodecTestProcess(t)
+	remoteSnapshot.Base.IsFrontend = false
+	remoteSnapshot.Base.SessionInfo.SqlMode = EmptySqlModeSentinel
+	remoteSnapshot.Base.SessionInfo.ExplicitZeroTemporalCastReturnsNull = false
+	resolverCalls := 0
+	remoteSnapshot.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		resolverCalls++
+		return nil, moerr.NewInternalErrorNoCtx("must not resolve captured sql_mode")
+	})
+	info, err = remoteSnapshot.BuildProcessInfoWithStatementHash("select 1")
+	require.NoError(t, err)
+	require.Equal(t, EmptySqlModeSentinel, info.SessionInfo.SqlMode)
+	require.False(t, info.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
+	require.Zero(t, resolverCalls)
+
+	// If the captured mode itself requires the temporal adjustment, derive it
+	// even when the serialized boolean was false (for example, an older peer
+	// that did not carry that field yet).
+	remoteSnapshot.Base.SessionInfo.SqlMode = "STRICT_TRANS_TABLES,NO_ZERO_DATE"
+	info, err = remoteSnapshot.BuildProcessInfoWithStatementHash("select 1")
+	require.NoError(t, err)
+	require.True(t, info.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
+	require.Zero(t, resolverCalls)
+}
+
+func TestResolveSQLModeRejectsCorruptCapturedStatementHashError(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	proc.Base.SessionInfo.SqlMode = "STRICT_TRANS_TABLES"
+	proc.Base.SessionInfo.StatementHashSQLModeError = []byte{0xff, 0x00}
+
+	mode, err := ResolveSQLMode(proc)
+	require.Equal(t, "STRICT_TRANS_TABLES", mode)
+	require.ErrorContains(t, err, "invalid captured sql_mode resolver error")
+}
+
+func TestEncodeStatementHashSQLModeErrorBoundsDiagnostic(t *testing.T) {
+	resolverErr := moerr.NewInternalErrorNoCtx(strings.Repeat("x", maxStatementHashResolverErrorBytes+1))
+	resolverErr.SetDetail(strings.Repeat("y", maxStatementHashResolverErrorBytes+1))
+
+	payload, detail, err := encodeStatementHashSQLModeError(resolverErr)
+	require.NoError(t, err)
+	require.LessOrEqual(t, len(payload)+len(detail), maxStatementHashResolverErrorBytes)
+
+	var decoded moerr.Error
+	require.NoError(t, decoded.UnmarshalBinary(payload))
+	decoded.SetDetail(detail)
+	require.ErrorContains(t, &decoded, "exceeds the 4096-byte remote diagnostic limit")
 }
 
 func TestPrepareParamMetadataForRemoteCompatibility(t *testing.T) {

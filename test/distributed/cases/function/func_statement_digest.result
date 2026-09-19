@@ -1,0 +1,60 @@
+select length(mo_statement_hash('SELECT 1')) as digest_length;
+digest_length
+64
+select if(mo_statement_hash('SELECT 1') = mo_statement_hash(' select /* ignored */ 1; '), 'true', 'false') as formatting_normalized;
+formatting_normalized
+true
+select if(mo_statement_hash('SELECT 1') <> mo_statement_hash('SELECT 2'), 'true', 'false') as literal_values_distinct;
+literal_values_distinct
+true
+select if(mo_statement_hash('SELECT a') <> mo_statement_hash('SELECT ''a'''), 'true', 'false') as identifier_and_literal_distinct;
+identifier_and_literal_distinct
+true
+select if(mo_statement_hash('SELECT @MiXeD') = mo_statement_hash('SELECT @mixed'), 'true', 'false') as user_variable_case_normalized;
+user_variable_case_normalized
+true
+select if(mo_statement_hash(NULL) is null, 'true', 'false') as null_propagates;
+null_propagates
+true
+select mo_statement_hash('SELECT FROM');
+-- @regex("parser|syntax|empty|eof", true)
+You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. syntax error at line 1 column 11 near " FROM";
+select length(mo_statement_hash('SELECT 1')) as digest_after_parse_error;
+digest_after_parse_error
+64
+select mo_statement_hash('SELECT 1; SELECT 2');
+-- @regex("parser|syntax|empty|eof", true)
+SQL parser error: MO_STATEMENT_HASH requires exactly one statement
+select mo_statement_hash('');
+-- @regex("parser|syntax|empty|eof", true)
+SQL parser error: MO_STATEMENT_HASH requires a non-empty statement
+select mo_statement_hash('/* comment only */');
+-- @regex("parser|syntax|empty|eof", true)
+SQL parser error: MO_STATEMENT_HASH requires a non-empty statement
+select if(mo_statement_hash('SELECT TRIM(BOTH ''x'' FROM ''xxx'')') is not null, 'true', 'false') as trim_formats;
+trim_formats
+true
+select if(mo_statement_hash('SELECT (SELECT 1)') is not null, 'true', 'false') as nested_query_formats;
+nested_query_formats
+true
+select if(mo_statement_hash('PREPARE p FROM ''SELECT 1''') is not null, 'true', 'false') as prepare_formats;
+prepare_formats
+true
+drop database if exists mo_statement_hash_23024;
+create database mo_statement_hash_23024;
+use mo_statement_hash_23024;
+create table mo_statement_hash_inputs_23024(sql_text text);
+insert into mo_statement_hash_inputs_23024 values
+('SELECT 1'),
+('select 2'),
+('SELECT ''中文'''),
+(NULL);
+select count(*) as rows, count(mo_statement_hash(sql_text)) as hashed_rows from mo_statement_hash_inputs_23024;
+rows	hashed_rows
+4	3
+drop database mo_statement_hash_23024;
+select count(*) as leftover_mo_statement_hash_databases
+from mo_catalog.mo_database
+where datname = 'mo_statement_hash_23024';
+leftover_mo_statement_hash_databases
+0

@@ -121,7 +121,9 @@ const (
 	MORPCVersion83     int64 = 83 // bounded COALESCE character and binary result domains
 	MORPCVersion84     int64 = 84 // extended discrete percentile input types
 	MORPCVersion85     int64 = 85 // shared integer-parameter coercion execution identities
-	MORPCLatestVersion       = MORPCVersion85
+	MORPCVersion86     int64 = 86 // MatrixOne-native MO_STATEMENT_HASH remote function execution
+	MORPCVersion87     int64 = 87 // build identity and deferred resolver-error transport for MO_STATEMENT_HASH
+	MORPCLatestVersion       = MORPCVersion87
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
