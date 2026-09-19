@@ -16,6 +16,7 @@ package queryservice
 
 import (
 	"context"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
@@ -49,6 +50,48 @@ func (s *queryService) handleSetProtocolVersion() func(ctx context.Context, req 
 		resp.SetProtocolVersion = &query.SetProtocolVersionResponse{
 			Version: req.SetProtocolVersion.Version,
 		}
+		return nil
+	}
+}
+
+// handleSetVectorIndexFreshnessInterval overrides this CN's vector/fulltext2 index cache cross-CN
+// freshness sweep cadence. IntervalNs<=0 restores the default. Sys-admin/test knob (mo_ctl),
+// process-local and not persisted.
+func (s *queryService) handleSetVectorIndexFreshnessInterval() func(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
+	return func(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
+		ns := req.SetVectorIndexFreshnessInterval.IntervalNs
+		runtime.SetVectorIndexStaleCheckInterval(time.Duration(ns))
+		resp.SetVectorIndexFreshnessInterval = query.SetVectorIndexFreshnessIntervalResponse{IntervalNs: ns}
+		return nil
+	}
+}
+
+// handleGetVectorIndexCacheInfo reports how many vector/fulltext2 index cache entries this CN holds
+// for the requested key (0 = not cached). Read-only introspection (mo_ctl GetVectorIndexCacheInfo).
+func (s *queryService) handleGetVectorIndexCacheInfo() func(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
+	return func(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
+		n, _ := runtime.VectorIndexCacheCountKey(req.GetVectorIndexCacheInfo.Key)
+		resp.GetVectorIndexCacheInfo = query.GetVectorIndexCacheInfoResponse{Count: n}
+		return nil
+	}
+}
+
+// handleEvictVectorIndexCache drops this CN's vector/fulltext2 index cache entries for the key and
+// reports how many were dropped (mo_ctl EvictVectorIndexCache).
+func (s *queryService) handleEvictVectorIndexCache() func(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
+	return func(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
+		n, _ := runtime.EvictVectorIndexCache(req.EvictVectorIndexCache.Key)
+		resp.EvictVectorIndexCache = query.EvictVectorIndexCacheResponse{Evicted: n}
+		return nil
+	}
+}
+
+// handleGetVectorIndexCacheKeys lists the exact cache keys this CN currently holds (mo_ctl
+// GetVectorIndexCacheKeys).
+func (s *queryService) handleGetVectorIndexCacheKeys() func(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
+	return func(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
+		keys, _ := runtime.VectorIndexCacheKeys()
+		resp.GetVectorIndexCacheKeys = query.GetVectorIndexCacheKeysResponse{Keys: keys}
 		return nil
 	}
 }

@@ -20,6 +20,7 @@ import (
 	"os"
 	"os/signal"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -27,15 +28,40 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
+// Register the freshness-interval override hook so the query-service handler (mo_ctl
+// SetVectorIndexFreshnessInterval) can drive the global cache without importing this package --
+// that edge would close a test import cycle through catalog/fileservice.
+func init() {
+	moruntime.RegisterVectorIndexStaleCheckIntervalSetter(func(d time.Duration) {
+		Cache.SetStaleCheckInterval(d)
+	})
+	moruntime.RegisterVectorIndexCacheKeyCounter(func(key string) int64 {
+		return Cache.CountKey(key)
+	})
+	moruntime.RegisterVectorIndexCacheEvictor(func(key string) int64 {
+		return Cache.EvictKey(key)
+	})
+	moruntime.RegisterVectorIndexCacheKeyLister(func() []string {
+		return Cache.Keys()
+	})
+}
+
 // stalenessCheckEveryNTicks runs the IsStale freshness sweep every Nth HouseKeeping tick.
 // The ticker is VectorIndexCacheTTL/2 (2.5m), so N=4 ≈ a 10-minute cross-CN freshness
 // cadence — the bound on how long a remote CN can serve a stale index before it ages out.
 const stalenessCheckEveryNTicks = 4
+
+// MinStaleCheckInterval is the safety floor for a positive freshness-sweep override
+// (SetStaleCheckInterval). A sub-second base ticker would run HouseKeeping every tick and the
+// IsStale scan every few ticks fast enough to peg a CN; 1s is small enough for tests to converge
+// in seconds yet far from a busy loop. 0 (restore default) is unaffected.
+const MinStaleCheckInterval = time.Second
 
 /*
    VectorIndexCache is the generalized cache structure for various algorithm types that share the VectorIndexSearchIf interface.
@@ -680,6 +706,31 @@ type VectorIndexCache struct {
 	staleChecking  atomic.Bool // single-flight guard for the async freshness sweep
 	capRefreshing  atomic.Bool // single-flight guard for the async cap refresh + enforcement
 
+	// staleCheckIntervalNs overrides the cross-CN freshness (IsStale) sweep's BASE ticker, in
+	// nanoseconds. 0 (the default) keeps the built-in ~10-minute cadence (VectorIndexCacheTTL/2
+	// ticker × stalenessCheckEveryNTicks). >0 shortens the ticker; the sweep still runs every
+	// stalenessCheckEveryNTicks ticks, so the effective freshness period is that × the override
+	// (e.g. 2s → ~8s). Refresh remains entirely the periodic sweep's job -- this only changes its
+	// cadence. Sys-admin-only test/ops knob (mo_ctl SetVectorIndexFreshnessInterval), never persisted.
+	staleCheckIntervalNs atomic.Int64
+
+	// serveMu serializes serve()'s ticker creation + started publication with
+	// SetStaleCheckInterval's started-check + Reset. Without it an override that lands during the
+	// first lazy serve() (after serve reads the default interval but before it publishes started)
+	// would be stored yet never applied, leaving this CN on the default cadence indefinitely.
+	serveMu sync.Mutex
+
+	// evictInFlight tracks evictions between the moment an entry is removed from IndexMap and the
+	// moment its teardown (Destroy) finishes. It is keyed by the per-eviction done channel (unique per
+	// make) with the cache key as the value: doneCh -> cacheKey, closed on completion. A concurrent
+	// evictor that finds the entry already gone waits on every in-flight channel for that cache key
+	// instead of reporting a premature success while an old search / native handle is still alive.
+	// Keying by the channel (not the cache key) is deliberate: several generations of the SAME cache
+	// key can be tearing down at once (one removed-but-still-destroying while a reload was evicted
+	// under the same key), and a cacheKey->chan map would overwrite the older generation's completion
+	// signal, letting EvictKey return before it finished (#28985 EvictKey race).
+	evictInFlight sync.Map
+
 	// The residency budget and everything that decides it. Held by value so a zero
 	// VectorIndexCache is usable; gov() attaches the back-reference on first use.
 	governor     VectorIndexGovernor
@@ -701,19 +752,163 @@ func NewVectorIndexCache() *VectorIndexCache {
 	return c
 }
 
+// staleTickerInterval is the base ticker cadence in effect: the override when set (>0), else the
+// default TickerInterval. HouseKeeping (TTL eviction) and the every-Nth-tick IsStale sweep both run
+// off this ticker, so a short override speeds up both. The IsStale sweep still runs every
+// stalenessCheckEveryNTicks ticks (never every tick), so the effective ongoing freshness period is
+// stalenessCheckEveryNTicks × this -- the same 4x relationship as the default. An immediate
+// one-shot sweep (see SetStaleCheckInterval) covers the "evict now" case so the ongoing cadence
+// does not need to be hammered every tick.
+func (c *VectorIndexCache) staleTickerInterval() time.Duration {
+	if ns := c.staleCheckIntervalNs.Load(); ns > 0 {
+		return time.Duration(ns)
+	}
+	return c.TickerInterval
+}
+
+// SetStaleCheckInterval overrides the cross-CN freshness sweep cadence live. d<=0 restores the
+// default. It re-arms the running ticker immediately (via Reset), so the shortened cadence takes
+// effect within one new interval rather than waiting out the remainder of the old (possibly
+// ~10-min) cycle. Safe before serve() starts: the value is stored and serve() arms the ticker
+// from it.
+//
+// It deliberately does NOT evict anything itself -- refresh is left entirely to the periodic
+// IsStale sweep now running at the shortened cadence. That is the whole point: this is a knob on
+// the eventual-consistency mechanism, not a manual "evict now" command, so a test that lowers it
+// and then observes a stale cross-CN entry refresh is proving the periodic sweep works.
+func (c *VectorIndexCache) SetStaleCheckInterval(d time.Duration) {
+	if d < 0 {
+		d = 0
+	} else if d > 0 && d < MinStaleCheckInterval {
+		// Floor a positive override: a sub-second ticker turns the per-tick HouseKeeping (and the
+		// every-Nth-tick stale scan) into a near busy-loop on every CN. 0 still restores the default.
+		d = MinStaleCheckInterval
+	}
+	c.staleCheckIntervalNs.Store(int64(d))
+	reset := false
+	// serveMu makes this check+Reset atomic w.r.t. serve()'s ticker-create + started publication:
+	// the store above happens-before the lock, so if serve() has not published started yet, serve()
+	// will read the new value when it creates the ticker; otherwise we Reset the live ticker here.
+	// Only re-arm a live ticker: after Destroy() the serve goroutine is gone (exited=true) but
+	// started stays true, so without the exited guard this would Reset a stopped ticker whose
+	// consumer no longer exists. The stored value above still governs if serve() runs again.
+	c.serveMu.Lock()
+	if c.started.Load() && !c.exited.Load() && c.ticker != nil {
+		c.ticker.Reset(c.staleTickerInterval())
+		reset = true
+	}
+	c.serveMu.Unlock()
+	// Debug-logged (not hot-path: only the sys-admin mo_ctl reaches here) so an operator/test can
+	// confirm the override actually applied on THIS CN -- the mo_ctl Result only echoes the request.
+	logutil.Debugf("[veccache] stale-check interval override set to %v; effective sweep ticker=%v (every %d ticks), ticker_reset=%v",
+		d, c.staleTickerInterval(), stalenessCheckEveryNTicks, reset)
+}
+
+// CountKey returns how many cached entries this cache holds under the EXACT cache key (0 or 1 on
+// one CN); key=="" counts every entry. The key is the exact cache key, which is algorithm-specific:
+// fulltext2 and hnsw key by the bare hidden index-table name, while the ivf family keys by
+// "<index-table>:<version>" (optionally "tenant=<id>:" prefixed and ":<part>/<parts>" suffixed).
+// Distinct versions and named-snapshot generations are separate keys and are counted only when
+// passed exactly -- matching EvictKey, so what GetVectorIndexCacheInfo reports is exactly what
+// EvictVectorIndexCache would remove. Read-only: it does not touch or warm any entry.
+func (c *VectorIndexCache) CountKey(key string) int64 {
+	var n int64
+	c.IndexMap.Range(func(k, _ any) bool {
+		ks, ok := k.(string)
+		if !ok {
+			return true
+		}
+		if key == "" || ks == key {
+			n++
+		}
+		return true
+	})
+	return n
+}
+
+// EvictKey drops the cache entry under the EXACT cache key (see CountKey for the per-algorithm key
+// form), returning how many it removed (0 or 1 on one CN). Synchronous force-evict (waits out any
+// in-flight search), so the next query reloads a current generation. It deliberately evicts only
+// the exact key -- not other versions or named-snapshot generations -- so the caller controls
+// precisely what is dropped. Backs the EvictVectorIndexCache mo_ctl. key=="" is a no-op returning 0
+// (refuse to flush the whole cache by accident).
+func (c *VectorIndexCache) EvictKey(key string) int64 {
+	if key == "" {
+		return 0
+	}
+	// Capture the current occupant first: if we lose the claim to a concurrent evictor we can wait
+	// on THAT entry's teardown rather than returning before it finishes.
+	occupant, hadOccupant := c.IndexMap.Load(key)
+	// Report what THIS call actually removed, not a pre-read occupancy count. evictEntry claims the
+	// entry (beginEviction + CompareAndDelete) and synchronously destroys it, returning true only for
+	// the caller that won the claim. A pre-count instead let two concurrent callers both see 1 and
+	// both report evicted=1 while only one owned the removal, and let a losing caller report success
+	// though it removed nothing. The winner's Destroy waits out any in-flight search before returning.
+	if c.evictEntry(key, nil, "ctl") {
+		return 1
+	}
+	// We did not perform the eviction: the key was absent, or a concurrent evictor (another EvictKey,
+	// a TTL/stale sweep, empty-generation, shutdown, ...) already claimed it. Do NOT report a
+	// premature success -- wait until any in-flight teardown of this key has fully completed (the
+	// in-flight search drained and the native handle freed) before returning 0, so a caller polling
+	// for "gone" cannot observe it while the old resource is still alive (#28985). Both waits are
+	// bounded: whoever removes an entry always follows with Destroy, which closes both signals.
+	if hadOccupant {
+		if algo, ok := occupant.(*VectorIndexSearch); ok {
+			_ = algo.awaitDestroyed(context.Background())
+		}
+	}
+	// Wait on EVERY in-flight eviction of this cache key, not just one: several generations of the
+	// same key can be tearing down concurrently (a removed-but-still-destroying generation while a
+	// reload was evicted under the same key), and each has its own completion channel. Snapshot the
+	// matching channels first, then wait outside Range (blocking inside Range would stall it).
+	var pending []chan struct{}
+	c.evictInFlight.Range(func(k, v any) bool {
+		if ks, ok := v.(string); ok && ks == key {
+			if ch, ok := k.(chan struct{}); ok {
+				pending = append(pending, ch)
+			}
+		}
+		return true
+	})
+	for _, ch := range pending {
+		<-ch
+	}
+	return 0
+}
+
+// Keys returns the exact cache keys this cache currently holds, sorted. Read-only introspection
+// backing the GetVectorIndexCacheKeys mo_ctl: an operator lists the keys here to learn the exact
+// key (e.g. an ivf "<index-table>:<version>") to pass to GetVectorIndexCacheInfo / EvictKey.
+func (c *VectorIndexCache) Keys() []string {
+	var keys []string
+	c.IndexMap.Range(func(k, _ any) bool {
+		if ks, ok := k.(string); ok {
+			keys = append(keys, ks)
+		}
+		return true
+	})
+	sort.Strings(keys)
+	return keys
+}
+
 func (c *VectorIndexCache) serve() {
 	if c.started.Load() {
 		return
 	}
 
 	// try clean up the temp directory. set tempdir to /tmp/hnsw
-	c.ticker = time.NewTicker(c.TickerInterval)
+	// serveMu makes ticker creation + started publication atomic w.r.t. SetStaleCheckInterval, so a
+	// freshness-interval override that lands during startup is either read here or Reset afterwards.
+	c.serveMu.Lock()
+	c.ticker = time.NewTicker(c.staleTickerInterval())
 	c.done = make(chan bool)
 	c.sigc = make(chan os.Signal, 3)
 	signal.Notify(c.sigc, syscall.SIGTERM, syscall.SIGINT, os.Interrupt)
 
 	// channel initizalized.  set started to true
 	c.started.Store(true)
+	c.serveMu.Unlock()
 
 	go func() {
 		defer c.ticker.Stop()
@@ -749,10 +944,11 @@ func (c *VectorIndexCache) Once() {
 }
 
 func (c *VectorIndexCache) evictEntry(key string, expected *VectorIndexSearch, reason string) bool {
-	algo, ok := c.claimForEviction(key, expected, reason)
+	algo, done, ok := c.claimForEviction(key, expected, reason)
 	if !ok {
 		return false
 	}
+	defer c.finishEviction(done)
 	algo.Destroy()
 	return true
 }
@@ -775,11 +971,12 @@ func (c *VectorIndexCache) evictIdleEntry(key string, expected *VectorIndexSearc
 	if afterIdleClaim != nil {
 		afterIdleClaim(key)
 	}
-	algo, ok := c.claimForEviction(key, expected, reason)
+	algo, done, ok := c.claimForEviction(key, expected, reason)
 	if !ok {
 		expected.releaseClaim()
 		return false
 	}
+	defer c.finishEviction(done)
 	algo.destroyClaimed(reason)
 	return true
 }
@@ -789,24 +986,41 @@ func (c *VectorIndexCache) evictIdleEntry(key string, expected *VectorIndexSearc
 // invalidation while the old entry still occupies the key -- a replacement can only be inserted
 // after CompareAndDelete, so it cannot observe a later generation bump from the old entry's
 // blocked destroy.
-func (c *VectorIndexCache) claimForEviction(key string, expected *VectorIndexSearch, reason string) (*VectorIndexSearch, bool) {
+func (c *VectorIndexCache) claimForEviction(key string, expected *VectorIndexSearch, reason string) (*VectorIndexSearch, chan struct{}, bool) {
 	value, loaded := c.IndexMap.Load(key)
 	if !loaded {
-		return nil, false
+		return nil, nil, false
 	}
 	algo, ok := value.(*VectorIndexSearch)
 	if !ok || (expected != nil && algo != expected) || !algo.beginEviction(reason == "ttl_expired") {
-		return nil, false
+		return nil, nil, false
 	}
+	// Publish this eviction as in-flight BEFORE removing the entry from the map, so a concurrent
+	// evictor that later finds the entry already gone can wait on `done` rather than reporting a
+	// premature completion. Keyed by the unique `done` channel (value = cache key) so a second
+	// generation evicting under the same cache key cannot overwrite this generation's completion
+	// signal. The winning caller closes+clears it via finishEviction after Destroy.
+	done := make(chan struct{})
+	c.evictInFlight.Store(done, key)
 	value, loaded = c.IndexMap.Load(key)
 	if !loaded || value != algo {
-		return nil, false
+		c.finishEviction(done)
+		return nil, nil, false
 	}
 	algo.notifyCacheInvalidated(reason)
 	if !c.IndexMap.CompareAndDelete(key, algo) {
-		return nil, false
+		c.finishEviction(done)
+		return nil, nil, false
 	}
-	return algo, true
+	return algo, done, true
+}
+
+// finishEviction publishes that this in-flight eviction is complete: it drops its own registry entry
+// (keyed by the done channel, so other generations' in-flight evictions of the same cache key are
+// left intact) and wakes any evictor waiting on it.
+func (c *VectorIndexCache) finishEviction(done chan struct{}) {
+	c.evictInFlight.Delete(done)
+	close(done)
 }
 
 func (c *VectorIndexCache) discardFailedLoad(key string, algo *VectorIndexSearch) {
@@ -870,7 +1084,7 @@ func (c *VectorIndexCache) HouseKeeping() {
 			reason = "generation_changed"
 		}
 		if c.evictEntry(entry.key, entry.algo, reason) {
-			logutil.Debugf("[veccache] evicted expired/stale index %s from cache", entry.key)
+			logutil.Debugf("[veccache] evicted index %s from cache (reason=%s)", entry.key, reason)
 		}
 	}
 	c.refreshAndEnforceCaps()
@@ -926,6 +1140,11 @@ func (c *VectorIndexCache) checkStale() {
 		}
 		return true
 	})
+	// Debug-logged every sweep so an operator/test can see the freshness sweep actually running at
+	// the configured cadence (interval override via SetVectorIndexFreshnessInterval); the per-entry
+	// "marking"/"evicted" lines below show what it found and dropped.
+	logutil.Debugf("[veccache] freshness sweep: checking %d loaded stale-checkable entries (ticker=%v)",
+		len(entries), c.staleTickerInterval())
 	for _, e := range entries {
 		// Bail promptly on shutdown so a K-entry sweep of ≤1-min SQL reads can't keep this
 		// goroutine (and any resources it pins) alive long after Destroy.

@@ -3675,6 +3675,9 @@ func getParamTypes(params []tree.Expr, ctx CompilerContext, isPrepareStmt bool) 
 
 // HasMoCtrl checks whether the expression has mo_ctrl(..,..,..)
 func HasMoCtrl(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
 		if exprImpl.F.Func.ObjName == "mo_ctl" || exprImpl.F.Func.ObjName == "fault_inject" {
@@ -3695,9 +3698,81 @@ func HasMoCtrl(expr *plan.Expr) bool {
 		}
 		return false
 
+	case *plan.Expr_W:
+		// A window entry carries its function and OVER partition/order-by as nested exprs, so a
+		// call hidden in `mo_ctl(...) OVER ()` or `MAX(mo_ctl(...)) OVER ()` must be seen too --
+		// WinSpecList holds Expr_W, not the bare Expr_F these Args recursions reach otherwise.
+		if exprImpl.W == nil {
+			return false
+		}
+		if HasMoCtrl(exprImpl.W.WindowFunc) {
+			return true
+		}
+		for _, p := range exprImpl.W.PartitionBy {
+			if HasMoCtrl(p) {
+				return true
+			}
+		}
+		for _, o := range exprImpl.W.OrderBy {
+			if o != nil && HasMoCtrl(o.Expr) {
+				return true
+			}
+		}
+		return false
+
 	default:
 		return false
 	}
+}
+
+// NodeHasMoCtrl reports whether any executable expression on the node contains mo_ctl / fault_inject.
+// The frontend privilege gate scans EVERY node with this (not just the SELECT projection), so a call
+// hidden in a WHERE/HAVING filter, a JOIN condition, GROUP BY / aggregate / window / ORDER BY /
+// LIMIT / OFFSET, a table-function argument, an ON UPDATE assignment, or an INSERT VALUES row cannot
+// bypass the sys-admin check by sitting outside ProjectList.
+func NodeHasMoCtrl(node *plan.Node) bool {
+	if node == nil {
+		return false
+	}
+	lists := [][]*plan.Expr{
+		node.ProjectList, node.FilterList, node.OnList, node.GroupBy, node.AggList,
+		node.WinSpecList, node.TblFuncExprList, node.OnUpdateExprs, node.FillVal,
+		node.TimeWindowPartitionBy, node.BlockFilterList,
+	}
+	for _, l := range lists {
+		for _, e := range l {
+			if HasMoCtrl(e) {
+				return true
+			}
+		}
+	}
+	singles := []*plan.Expr{
+		node.Limit, node.Offset, node.Interval, node.Sliding, node.Timestamp,
+		node.WEnd, node.GapFillStart, node.GapFillEnd,
+	}
+	for _, e := range singles {
+		if HasMoCtrl(e) {
+			return true
+		}
+	}
+	for _, o := range node.OrderBy {
+		if o != nil && HasMoCtrl(o.Expr) {
+			return true
+		}
+	}
+	if node.RowsetData != nil {
+		for _, col := range node.RowsetData.Cols {
+			if col == nil {
+				continue
+			}
+			for _, re := range col.Data {
+				if re != nil && HasMoCtrl(re.Expr) {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // IsFkSelfRefer checks the foreign key referencing itself
