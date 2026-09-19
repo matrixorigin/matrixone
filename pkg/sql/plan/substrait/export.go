@@ -1095,6 +1095,7 @@ func literalVectorOptions(encoded *planpb.LiteralVec, expected *planpb.Type) (op
 			return nil, notEligiblef(EligibilityExpression, "folded IN list uses unsupported type %s", values.GetType().Oid.String())
 		}
 		value.IsSerialized = encoded.IsSerialized
+		value.DecimalLiteralRequiresV82 = encoded.DecimalLiteralRequiresV82
 		typ := *expected
 		typ.NotNullable = !value.Isnull
 		options[i] = &planpb.Expr{Typ: typ, Expr: &planpb.Expr_Lit{Lit: value}}

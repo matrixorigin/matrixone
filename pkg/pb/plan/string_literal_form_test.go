@@ -859,3 +859,86 @@ func TestRequiredRemoteExpressionFeaturesMetadataResultContractsSurviveWireRound
 	require.NoError(t, err)
 	require.True(t, features.ExpressionResultMetadataContracts)
 }
+
+func TestRequiredRemoteExpressionFeaturesSpatialDistance(t *testing.T) {
+	spatial := func(functionID, overloadID int32) *Expr {
+		return &Expr{
+			Typ: Type{Id: 30},
+			Expr: &Expr_F{F: &Function{Func: &ObjectRef{
+				Obj: int64(functionID)<<32 | int64(overloadID),
+			}}},
+		}
+	}
+	for _, tc := range []struct {
+		name     string
+		id       int32
+		overload int32
+		want     bool
+	}{
+		{name: "legacy frechet geometry", id: remoteFrechetDistanceFunctionID, overload: 0},
+		{name: "legacy frechet geometry32", id: remoteFrechetDistanceFunctionID, overload: 1},
+		{name: "unit frechet geometry", id: remoteFrechetDistanceFunctionID, overload: 2, want: true},
+		{name: "unit frechet geometry32", id: remoteFrechetDistanceFunctionID, overload: 3, want: true},
+		{name: "geodetic frechet geometry", id: remoteFrechetDistanceFunctionID, overload: 4, want: true},
+		{name: "geodetic frechet geometry32", id: remoteFrechetDistanceFunctionID, overload: 5, want: true},
+		{name: "legacy hausdorff geometry", id: remoteHausdorffDistanceFunctionID, overload: 0},
+		{name: "legacy hausdorff geometry32", id: remoteHausdorffDistanceFunctionID, overload: 1},
+		{name: "unit hausdorff geometry", id: remoteHausdorffDistanceFunctionID, overload: 2, want: true},
+		{name: "unit hausdorff geometry32", id: remoteHausdorffDistanceFunctionID, overload: 3, want: true},
+		{name: "geodetic hausdorff geometry", id: remoteHausdorffDistanceFunctionID, overload: 4, want: true},
+		{name: "geodetic hausdorff geometry32", id: remoteHausdorffDistanceFunctionID, overload: 5, want: true},
+		{name: "new distance geometry unit", id: remoteSpatialDistanceFunctionID, overload: 4, want: true},
+		{name: "new distance geometry32 unit", id: remoteSpatialDistanceFunctionID, overload: 5, want: true},
+		{name: "legacy distance", id: remoteSpatialDistanceFunctionID, overload: 0, want: false},
+		{name: "explicit SRID distance", id: remoteSpatialDistanceFunctionID, overload: 1, want: false},
+		{name: "geometry32 explicit SRID distance", id: remoteSpatialDistanceFunctionID, overload: 3, want: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			features, err := RequiredRemoteExpressionFeatures(spatial(tc.id, tc.overload))
+			require.NoError(t, err)
+			require.Equal(t, tc.want, features.SpatialDistanceSemantics)
+			require.Equal(t, tc.want, features.Any())
+		})
+	}
+
+	features, err := RequiredRemoteExpressionFeatures(&struct{ Expressions []*Expr }{
+		Expressions: []*Expr{
+			spatial(remoteSpatialDistanceFunctionID, 0),
+			spatial(remoteSpatialDistanceFunctionID, 4),
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, features.SpatialDistanceSemantics,
+		"a nested/new unit overload must fence the whole owner")
+}
+
+func TestRequiredRemoteExpressionFeaturesDecimalLiteralSemantics(t *testing.T) {
+	makeLiteral := func(required bool) *Expr {
+		return &Expr{
+			Typ: Type{Id: 33, Width: 40, Scale: 1},
+			Expr: &Expr_Lit{Lit: &Literal{
+				Value:                     &Literal_Sval{Sval: "12345678901234567890123456789012345678.1"},
+				DecimalLiteralRequiresV82: required,
+			}},
+		}
+	}
+
+	original := makeLiteral(true)
+	wire, err := original.Marshal()
+	require.NoError(t, err)
+	decoded := &Expr{}
+	require.NoError(t, decoded.Unmarshal(wire))
+	require.True(t, decoded.GetLit().GetDecimalLiteralRequiresV82())
+
+	features, err := RequiredRemoteExpressionFeatures(decoded)
+	require.NoError(t, err)
+	require.True(t, features.DecimalLiteralSemantics)
+	required, err := RequiresMORPCVersion87DecimalLiteralSemantics(makeLiteral(true))
+	require.NoError(t, err)
+	require.True(t, required)
+	require.True(t, features.Any())
+
+	features, err = RequiredRemoteExpressionFeatures(makeLiteral(false))
+	require.NoError(t, err)
+	require.False(t, features.DecimalLiteralSemantics)
+}

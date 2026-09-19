@@ -1444,6 +1444,12 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	if err = c.constrainBoundedConditionalStringWorkers(qry); err != nil {
 		return nil, err
 	}
+	if err = c.constrainSpatialDistanceWorkers(qry); err != nil {
+		return nil, err
+	}
+	if err = c.constrainDecimalLiteralWorkers(qry); err != nil {
+		return nil, err
+	}
 	if err = c.constrainStrictWriteWorkers(); err != nil {
 		return nil, err
 	}

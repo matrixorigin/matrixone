@@ -607,6 +607,32 @@ func setOperationOutputType(
 	return leftType
 }
 
+// setOperationPureCharCommonType keeps a set operation made exclusively from
+// CHAR expressions in the fixed-width CHAR domain. The conditional-expression
+// resolver intentionally promotes CHAR with VARCHAR/TEXT to a variable string,
+// but that rule is not valid for set-operation row materialization: changing
+// CHAR to VARCHAR loses the common PAD SPACE representation and lets equal
+// values with different declared widths survive DISTINCT operations.
+func setOperationPureCharCommonType(source []types.Type) (types.Type, bool) {
+	if len(source) == 0 {
+		return types.Type{}, false
+	}
+	result := source[0]
+	if result.Oid != types.T_char {
+		return types.Type{}, false
+	}
+	for _, typ := range source[1:] {
+		if typ.Oid != types.T_char {
+			return types.Type{}, false
+		}
+		if result.Width < typ.Width {
+			result.Width = typ.Width
+		}
+	}
+	result.Charset = types.MergeStringCharset(source, result.Charset)
+	return result, true
+}
+
 type ColRefRemapping struct {
 	globalToLocal map[[2]int32][2]int32
 	localToGlobal [][2]int32
@@ -4169,31 +4195,35 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		}
 
 		if len(tmpArgsType) > 0 {
-			fGet, err := function.GetFunctionByName(builder.GetContext(), "coalesce", tmpArgsType)
-			if err != nil {
-				return 0, moerr.NewParseErrorf(builder.GetContext(), "the %d column cann't cast to a same type", columnIdx)
-			}
-			argsCastType, _ := fGet.ShouldDoImplicitTypeCast()
-
-			if len(argsCastType) > 0 && int(argsCastType[0].Oid) == int(types.T_datetime) {
-				for i := 0; i < len(argsCastType); i++ {
-					argsCastType[i].Scale = 0
-				}
-			}
 			var targetType plan.Type
 			var targetArgType types.Type
-			if len(argsCastType) == 0 {
-				targetArgType = tmpArgsType[0]
-				// if string union string, different length may cause error.
-				if targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_char {
-					for _, typ := range tmpArgsType {
-						if targetArgType.Width < typ.Width {
-							targetArgType.Width = typ.Width
-						}
+			if pureCharType, ok := setOperationPureCharCommonType(tmpArgsType); ok {
+				targetArgType = pureCharType
+			} else {
+				fGet, err := function.GetFunctionByName(builder.GetContext(), "coalesce", tmpArgsType)
+				if err != nil {
+					return 0, moerr.NewParseErrorf(builder.GetContext(), "the %d column cann't cast to a same type", columnIdx)
+				}
+				argsCastType, _ := fGet.ShouldDoImplicitTypeCast()
+
+				if len(argsCastType) > 0 && int(argsCastType[0].Oid) == int(types.T_datetime) {
+					for i := 0; i < len(argsCastType); i++ {
+						argsCastType[i].Scale = 0
 					}
 				}
-			} else {
-				targetArgType = argsCastType[0]
+				if len(argsCastType) == 0 {
+					targetArgType = tmpArgsType[0]
+					// if string union string, different length may cause error.
+					if targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_char {
+						for _, typ := range tmpArgsType {
+							if targetArgType.Width < typ.Width {
+								targetArgType.Width = typ.Width
+							}
+						}
+					}
+				} else {
+					targetArgType = argsCastType[0]
+				}
 			}
 			allCharInputs := len(tmpArgsType) > 0
 			for _, typ := range tmpArgsType {

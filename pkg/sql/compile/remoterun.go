@@ -157,6 +157,16 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 			return nil, err
 		}
 	}
+	if features.SpatialDistanceSemantics {
+		if err = validateSpatialDistanceDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
+	if features.DecimalLiteralSemantics {
+		if err = validateDecimalLiteralDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
 	if err = validateStrictWriteDestination(proc, p); err != nil {
 		return nil, err
 	}
@@ -2236,6 +2246,12 @@ func validateRemoteExpressionPipelineProtocol(
 			"bounded conditional string domains require MORPC protocol version 83",
 		)
 	}
+	if features.DecimalLiteralSemantics &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion87) {
+		return moerr.NewNotSupportedNoCtx(
+			"exact DECIMAL256 literal semantics require MORPC protocol version 87",
+		)
+	}
 	if features.IPFunctionSemantics &&
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion72) {
 		return moerr.NewNotSupportedNoCtx(
@@ -2248,6 +2264,12 @@ func validateRemoteExpressionPipelineProtocol(
 				"expression result contracts require MORPC protocol version 86",
 			)
 		}
+	}
+	if features.SpatialDistanceSemantics &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion88) {
+		return moerr.NewNotSupportedNoCtx(
+			"geodetic spatial-distance semantics require MORPC protocol version 88",
+		)
 	}
 	return nil
 }
