@@ -122,7 +122,8 @@ const (
 	MORPCVersion84     int64 = 84 // extended discrete percentile input types
 	MORPCVersion85     int64 = 85 // shared integer-parameter coercion execution identities
 	MORPCVersion86     int64 = 86 // extended IP overload/result and expression metadata contracts
-	MORPCLatestVersion       = MORPCVersion86
+	MORPCVersion87     int64 = 87 // exact decimal literal and coercion semantics
+	MORPCLatestVersion       = MORPCVersion87
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

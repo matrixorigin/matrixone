@@ -477,24 +477,24 @@ func TestPersistedDecimalLiteralViewProtocolLifecycle(t *testing.T) {
 	}
 
 	// A CN that can execute the current mainline v83 contract but has not
-	// passed the v85 authoring barrier
+	// passed the v86 authoring barrier
 	// must not publish a view whose literal would be rebound differently by an
 	// older planner.
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion83))
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion83))
 	_, err := parseAndBuild(createSQL)
-	require.ErrorContains(t, err, "protocol version 85")
+	require.ErrorContains(t, err, "protocol version 86")
 
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion85))
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion85))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion86))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion86))
 	created, err := parseAndBuild(createSQL)
 	require.NoError(t, err)
 	createdView := created.GetDdl().GetCreateView().GetTableDef()
 	var createdData ViewData
 	require.NoError(t, json.Unmarshal([]byte(createdView.GetViewSql().GetView()), &createdData))
 	require.NotNil(t, createdData.RequiredProtocolVersion)
-	require.Equal(t, int64(defines.MORPCVersion85), *createdData.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion86), *createdData.RequiredProtocolVersion)
 
 	// The compact IN-vector path carries the same aggregate marker. Keep this
 	// as a planner-level check so the compatibility fence does not regress into
@@ -503,18 +503,18 @@ func TestPersistedDecimalLiteralViewProtocolLifecycle(t *testing.T) {
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion83))
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion83))
 	_, err = parseAndBuild(createInSQL)
-	require.ErrorContains(t, err, "protocol version 85")
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion85))
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion85))
+	require.ErrorContains(t, err, "protocol version 86")
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion86))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion86))
 	createdIn, err := parseAndBuild(createInSQL)
 	require.NoError(t, err)
 	var createdInData ViewData
 	require.NoError(t, json.Unmarshal([]byte(createdIn.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()), &createdInData))
 	require.NotNil(t, createdInData.RequiredProtocolVersion)
-	require.Equal(t, int64(defines.MORPCVersion85), *createdInData.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion86), *createdInData.RequiredProtocolVersion)
 
 	// The same SQL without a historical marker is a legacy view. Regeneration
-	// and direct expansion both rebind it first, then discover and fence v85.
+	// and direct expansion both rebind it first, then discover and fence v86.
 	var markerlessFields map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal([]byte(createdView.GetViewSql().GetView()), &markerlessFields))
 	delete(markerlessFields, "required_protocol_version")
@@ -524,24 +524,24 @@ func TestPersistedDecimalLiteralViewProtocolLifecycle(t *testing.T) {
 
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion83))
 	_, err = RegenerateViewDefinition(ctx, markerless)
-	require.ErrorContains(t, err, "protocol version 85")
+	require.ErrorContains(t, err, "protocol version 86")
 
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion85))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion86))
 	regenerated, err := RegenerateViewDefinition(ctx, markerless)
 	require.NoError(t, err)
 	var regeneratedData ViewData
 	require.NoError(t, json.Unmarshal([]byte(regenerated.TableDef.GetViewSql().GetView()), &regeneratedData))
 	require.NotNil(t, regeneratedData.RequiredProtocolVersion)
-	require.Equal(t, int64(defines.MORPCVersion85), *regeneratedData.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion86), *regeneratedData.RequiredProtocolVersion)
 
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion83))
 	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, true, false)
 	bindCtx := NewBindContext(builder, nil)
 	viewDef := &TableDef{ViewSql: &planpb.ViewDef{View: markerless}}
 	_, err = builder.bindView(bindCtx, viewDef, nil, &ObjectRef{}, "tpch", "v_decimal_literal", nil)
-	require.ErrorContains(t, err, "protocol version 85")
+	require.ErrorContains(t, err, "protocol version 86")
 
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion85))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion86))
 	builder = NewQueryBuilder(planpb.Query_SELECT, ctx, true, false)
 	bindCtx = NewBindContext(builder, nil)
 	_, err = builder.bindView(bindCtx, viewDef, nil, &ObjectRef{}, "tpch", "v_decimal_literal", nil)
@@ -649,35 +649,35 @@ func TestPersistedDecimalComparisonViewProtocolLifecycle(t *testing.T) {
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion83))
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion83))
 	_, err := build()
-	require.ErrorContains(t, err, "protocol version 85")
+	require.ErrorContains(t, err, "protocol version 86")
 
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion85))
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion85))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion86))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion86))
 	created, err := build()
 	require.NoError(t, err)
 	var data ViewData
 	require.NoError(t, json.Unmarshal(
 		[]byte(created.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()), &data))
 	require.NotNil(t, data.RequiredProtocolVersion)
-	require.Equal(t, int64(defines.MORPCVersion85), *data.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion86), *data.RequiredProtocolVersion)
 
 	// Nullable comparisons are retained to preserve SQL NULL semantics, but
 	// the old binder would have folded them to false/true. The retained source
-	// literal therefore still needs the v85 persisted-expression fence.
+	// literal therefore still needs the v86 persisted-expression fence.
 	const nullableSQL = "create view v_decimal_nullable_compare as select d = 1.1 as eq, d <> 1.1 as ne from decimal_nullable_compare_source"
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion83))
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion83))
 	_, err = buildSQL(nullableSQL)
-	require.ErrorContains(t, err, "protocol version 85")
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion85))
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion85))
+	require.ErrorContains(t, err, "protocol version 86")
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion86))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion86))
 	nullablePlan, err := buildSQL(nullableSQL)
 	require.NoError(t, err)
 	nullablePersisted := nullablePlan.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()
 	var nullableData ViewData
 	require.NoError(t, json.Unmarshal([]byte(nullablePersisted), &nullableData))
 	require.NotNil(t, nullableData.RequiredProtocolVersion)
-	require.Equal(t, int64(defines.MORPCVersion85), *nullableData.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion86), *nullableData.RequiredProtocolVersion)
 	var nullableFields map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal([]byte(nullablePersisted), &nullableFields))
 	delete(nullableFields, "required_protocol_version")
@@ -685,8 +685,8 @@ func TestPersistedDecimalComparisonViewProtocolLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion83))
 	_, err = RegenerateViewDefinition(ctx, string(nullableMarkerless))
-	require.ErrorContains(t, err, "protocol version 85")
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion85))
+	require.ErrorContains(t, err, "protocol version 86")
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion86))
 	_, err = RegenerateViewDefinition(ctx, string(nullableMarkerless))
 	require.NoError(t, err)
 
@@ -697,16 +697,16 @@ func TestPersistedDecimalComparisonViewProtocolLifecycle(t *testing.T) {
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion83))
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion83))
 	_, err = buildSQL(castSQL)
-	require.ErrorContains(t, err, "protocol version 85")
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion85))
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion85))
+	require.ErrorContains(t, err, "protocol version 86")
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion86))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion86))
 	castPlan, err := buildSQL(castSQL)
 	require.NoError(t, err)
 	castPersisted := castPlan.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()
 	var castData ViewData
 	require.NoError(t, json.Unmarshal([]byte(castPersisted), &castData))
 	require.NotNil(t, castData.RequiredProtocolVersion)
-	require.Equal(t, int64(defines.MORPCVersion85), *castData.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion86), *castData.RequiredProtocolVersion)
 	var castFields map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal([]byte(castPersisted), &castFields))
 	delete(castFields, "required_protocol_version")
@@ -714,8 +714,8 @@ func TestPersistedDecimalComparisonViewProtocolLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion83))
 	_, err = RegenerateViewDefinition(ctx, string(castMarkerless))
-	require.ErrorContains(t, err, "protocol version 85")
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion85))
+	require.ErrorContains(t, err, "protocol version 86")
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion86))
 	_, err = RegenerateViewDefinition(ctx, string(castMarkerless))
 	require.NoError(t, err)
 }
@@ -776,13 +776,13 @@ func TestPersistedDecimalZeroTailComparisonViewProtocolLifecycle(t *testing.T) {
 		return BuildPlan(root, stmt, false)
 	}
 
-	for _, floor := range []int64{defines.MORPCVersion83, defines.MORPCVersion85} {
+	for _, floor := range []int64{defines.MORPCVersion83, defines.MORPCVersion86} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, floor)
 		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, floor)
 		created, err := build()
 		if floor == defines.MORPCVersion83 {
-			require.ErrorContains(t, err, "protocol version 85")
+			require.ErrorContains(t, err, "protocol version 86")
 			continue
 		}
 		require.NoError(t, err)
@@ -790,7 +790,7 @@ func TestPersistedDecimalZeroTailComparisonViewProtocolLifecycle(t *testing.T) {
 		var data ViewData
 		require.NoError(t, json.Unmarshal([]byte(persisted), &data))
 		require.NotNil(t, data.RequiredProtocolVersion)
-		require.Equal(t, int64(defines.MORPCVersion85), *data.RequiredProtocolVersion)
+		require.Equal(t, int64(defines.MORPCVersion86), *data.RequiredProtocolVersion)
 
 		var fields map[string]json.RawMessage
 		require.NoError(t, json.Unmarshal([]byte(persisted), &fields))
@@ -799,15 +799,15 @@ func TestPersistedDecimalZeroTailComparisonViewProtocolLifecycle(t *testing.T) {
 		require.NoError(t, err)
 		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion83))
 		_, err = RegenerateViewDefinition(ctx, string(markerlessBytes))
-		require.ErrorContains(t, err, "protocol version 85")
-		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion85))
+		require.ErrorContains(t, err, "protocol version 86")
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion86))
 		regenerated, err := RegenerateViewDefinition(ctx, string(markerlessBytes))
 		require.NoError(t, err)
 		var regeneratedData ViewData
 		require.NoError(t, json.Unmarshal(
 			[]byte(regenerated.TableDef.GetViewSql().GetView()), &regeneratedData))
 		require.NotNil(t, regeneratedData.RequiredProtocolVersion)
-		require.Equal(t, int64(defines.MORPCVersion85), *regeneratedData.RequiredProtocolVersion)
+		require.Equal(t, int64(defines.MORPCVersion86), *regeneratedData.RequiredProtocolVersion)
 	}
 }
 

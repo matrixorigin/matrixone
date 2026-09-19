@@ -2041,7 +2041,7 @@ func constantFoldWithPreparedExactSource(
 			// and visible to the remote protocol capability analysis.
 			return expr, nil
 		}
-		requiresDecimalProvenance, err := plan.RequiresMORPCVersion85DecimalLiteralSemantics(exprList)
+		requiresDecimalProvenance, err := plan.RequiresMORPCVersion86DecimalLiteralSemantics(exprList)
 		if err != nil {
 			return nil, err
 		}
@@ -2144,7 +2144,7 @@ func constantFoldWithPreparedExactSource(
 	defer free()
 
 	if isVec {
-		requiresDecimalProvenance, err := plan.RequiresMORPCVersion85DecimalLiteralSemantics(fn.Args)
+		requiresDecimalProvenance, err := plan.RequiresMORPCVersion86DecimalLiteralSemantics(fn.Args)
 		if err != nil {
 			return nil, err
 		}
