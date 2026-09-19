@@ -159,6 +159,51 @@ func TestFrechetDistance(t *testing.T) {
 	require.InDelta(t, 5.0, d2, 1e-9)
 }
 
+func TestFrechetDistanceMatchesFullMatrixOracle(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		a, b string
+	}{
+		{name: "non-square sequences", a: "LINESTRING(0 0,2 1,4 0)", b: "LINESTRING(0 1,4 1)"},
+		{name: "point and line", a: "POINT(1 2)", b: "LINESTRING(0 0,1 2,3 4,5 6)"},
+		{name: "line and point", a: "LINESTRING(0 0,1 2,3 4,5 6)", b: "POINT(1 2)"},
+		{name: "repeated vertices", a: "LINESTRING(0 0,0 0,2 0,2 0)", b: "LINESTRING(0 0,1 0,2 0)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, b := wkt(t, tc.a), wkt(t, tc.b)
+			got, ok := FrechetDistance(a, b)
+			require.True(t, ok)
+			want := fullMatrixFrechetOracle(coordsOf(a), coordsOf(b))
+			require.InDelta(t, want, got, 1e-12)
+		})
+	}
+}
+
+// fullMatrixFrechetOracle deliberately keeps the reference recurrence
+// independent from frechetDistance's rolling-row storage. The inputs stay
+// small so this is a correctness oracle, not a production implementation.
+func fullMatrixFrechetOracle(a, b []Coord) float64 {
+	ca := make([][]float64, len(a))
+	for i := range ca {
+		ca[i] = make([]float64, len(b))
+		for j := range ca[i] {
+			d := math.Hypot(a[i].X-b[j].X, a[i].Y-b[j].Y)
+			switch {
+			case i == 0 && j == 0:
+				ca[i][j] = d
+			case i == 0:
+				ca[i][j] = math.Max(ca[i][j-1], d)
+			case j == 0:
+				ca[i][j] = math.Max(ca[i-1][j], d)
+			default:
+				previous := math.Min(ca[i-1][j], math.Min(ca[i-1][j-1], ca[i][j-1]))
+				ca[i][j] = math.Max(previous, d)
+			}
+		}
+	}
+	return ca[len(a)-1][len(b)-1]
+}
+
 func TestGeodeticDiscreteDistances(t *testing.T) {
 	a := wkt(t, "LINESTRING(0 0, 1 0)")
 	b := wkt(t, "LINESTRING(0 1, 1 1)")
@@ -175,4 +220,41 @@ func TestGeodeticDiscreteDistances(t *testing.T) {
 	require.False(t, ok)
 	_, ok = GeodeticDirectedHausdorffDistance(wkt(t, "LINESTRING EMPTY"), b)
 	require.False(t, ok)
+}
+
+func TestGeodeticDiscreteDistanceAnalyticBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name                   string
+		a, b                   string
+		lon1, lat1, lon2, lat2 float64
+	}{
+		{name: "antimeridian", a: "POINT(179 0)", b: "POINT(-179 0)", lon1: 179, lat1: 0, lon2: -179, lat2: 0},
+		{name: "high latitude", a: "POINT(0 80)", b: "POINT(90 80)", lon1: 0, lat1: 80, lon2: 90, lat2: 80},
+		{name: "north pole", a: "POINT(0 90)", b: "POINT(180 90)", lon1: 0, lat1: 90, lon2: 180, lat2: 90},
+		{name: "antipodal", a: "POINT(0 0)", b: "POINT(180 0)", lon1: 0, lat1: 0, lon2: 180, lat2: 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			a, b := wkt(t, tc.a), wkt(t, tc.b)
+			want := analyticSphericalDistance(tc.lon1, tc.lat1, tc.lon2, tc.lat2)
+
+			frechet, ok := GeodeticFrechetDistance(a, b)
+			require.True(t, ok)
+			require.InDelta(t, want, frechet, 1e-5)
+
+			hausdorff, ok := GeodeticDirectedHausdorffDistance(a, b)
+			require.True(t, ok)
+			require.InDelta(t, want, hausdorff, 1e-5)
+		})
+	}
+}
+
+func analyticSphericalDistance(lon1, lat1, lon2, lat2 float64) float64 {
+	toRadians := math.Pi / 180
+	lat1 *= toRadians
+	lat2 *= toRadians
+	deltaLon := (lon2 - lon1) * toRadians
+	cosAngle := math.Sin(lat1)*math.Sin(lat2) +
+		math.Cos(lat1)*math.Cos(lat2)*math.Cos(deltaLon)
+	cosAngle = math.Max(-1, math.Min(1, cosAngle))
+	return math.Acos(cosAngle) * EarthRadiusMeters
 }
