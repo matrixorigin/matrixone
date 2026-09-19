@@ -139,4 +139,34 @@ select word, reserved from information_schema.KEYWORDS where word = 'WITHIN';
 ➤ word[12,64,0]  ¦  reserved[4,32,0]  𝄀
 WITHIN  ¦  0
 drop table t_within_identifier_bvt;
+select g, sort_key,
+percentile_cont(0.5) within group (order by v) over (partition by g) as window_cont,
+percentile_disc(0.5) within group (order by v desc) over (partition by g) as window_disc_desc
+from t_ordered_set_bvt
+order by g, sort_key;
+➤ g[4,32,0]  ¦  sort_key[4,32,0]  ¦  window_cont[8,53,31]  ¦  window_disc_desc[4,32,0]  𝄀
+1  ¦  1  ¦  20.0  ¦  20  𝄀
+1  ¦  2  ¦  20.0  ¦  20  𝄀
+1  ¦  3  ¦  20.0  ¦  20  𝄀
+1  ¦  4  ¦  20.0  ¦  20  𝄀
+1  ¦  5  ¦  20.0  ¦  20  𝄀
+2  ¦  1  ¦  4.0  ¦  4  𝄀
+2  ¦  2  ¦  4.0  ¦  4  𝄀
+2  ¦  3  ¦  4.0  ¦  4  𝄀
+3  ¦  1  ¦  null  ¦  null
+select g, sort_key,
+percentile_disc(0.5) within group (order by v)
+over (partition by g order by sort_key rows between unbounded preceding and current row) as running_disc
+from t_ordered_set_bvt
+order by g, sort_key;
+➤ g[4,32,0]  ¦  sort_key[4,32,0]  ¦  running_disc[4,32,0]  𝄀
+1  ¦  1  ¦  20  𝄀
+1  ¦  2  ¦  10  𝄀
+1  ¦  3  ¦  20  𝄀
+1  ¦  4  ¦  20  𝄀
+1  ¦  5  ¦  20  𝄀
+2  ¦  1  ¦  2  𝄀
+2  ¦  2  ¦  2  𝄀
+2  ¦  3  ¦  4  𝄀
+3  ¦  1  ¦  null
 drop table t_ordered_set_bvt;

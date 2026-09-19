@@ -1223,6 +1223,25 @@ func newTypedMaxAggExpr(t testing.TB, pos int32, typ types.Type) aggexec.AggFunc
 		e.GetEncodedOverloadID(), false, []*plan.Expr{newColExprWithType(pos, typ)}, nil)
 }
 
+func newOrderedPercentileWindowAggExpr(
+	t *testing.T,
+	name string,
+	percentile string,
+	descending bool,
+) aggexec.AggFuncExecExpression {
+	valueType := types.T_int32.ToType()
+	percentileType := types.T_float64.ToType()
+	e, err := function.GetFunctionByName(
+		context.Background(), name, []types.Type{valueType, percentileType})
+	require.NoError(t, err)
+	return aggexec.MakeAggFunctionExpression(
+		e.GetEncodedOverloadID(),
+		false,
+		[]*plan.Expr{newColExprWithType(0, valueType)},
+		aggexec.EncodeOrderedPercentileConfig([]byte(percentile), descending),
+	)
+}
+
 func newRowNumberAggExpr(t *testing.T) aggexec.AggFuncExecExpression {
 	return newOrderWindowAggExpr(t, "row_number")
 }
@@ -1301,6 +1320,153 @@ func TestWindowJsonObjectAggOutput(t *testing.T) {
 	arg.Free(proc, false, nil)
 	op.Free(proc, false, nil)
 	proc.Free()
+}
+
+func TestWindowOrderedPercentileOutput(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		function   string
+		descending bool
+		wantFloat  []float64
+		wantInt    []int32
+	}{
+		{
+			name:      "continuous ascending",
+			function:  "percentile_cont",
+			wantFloat: []float64{4, 4, 4, 4},
+		},
+		{
+			name:       "discrete descending",
+			function:   "percentile_disc",
+			descending: true,
+			wantInt:    []int32{5, 5, 5, 5},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 3, 5, 7}, nil, proc.Mp())
+			bat.SetRowCount(4)
+
+			arg := &Window{
+				WinSpecList: []*plan.Expr{makeAggWindowSpec(tc.function)},
+				Aggs: []aggexec.AggFuncExecExpression{
+					newOrderedPercentileWindowAggExpr(t, tc.function, "0.5", tc.descending),
+				},
+				OperatorBase: vm.OperatorBase{
+					OperatorInfo: vm.OperatorInfo{Idx: 0},
+				},
+			}
+			op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+			arg.AppendChild(op)
+
+			require.NoError(t, arg.Prepare(proc))
+			result, err := vm.Exec(arg, proc)
+			require.NoError(t, err)
+			require.NotNil(t, result.Batch)
+			resultVec := result.Batch.Vecs[1]
+			if tc.wantFloat != nil {
+				require.Equal(t, tc.wantFloat, vector.MustFixedColWithTypeCheck[float64](resultVec))
+			} else {
+				require.Equal(t, tc.wantInt, vector.MustFixedColWithTypeCheck[int32](resultVec))
+			}
+
+			arg.Free(proc, false, nil)
+			op.Free(proc, false, nil)
+			proc.Free()
+			require.Equal(t, int64(0), proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestWindowOrderedPercentileFullPartitionBroadcasts(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	makePartition := func(values []int32, key int32) *batch.Batch {
+		bat := batch.NewWithSize(2)
+		bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+		keys := make([]int32, len(values))
+		for i := range keys {
+			keys[i] = key
+		}
+		bat.Vecs[1] = testutil.MakeInt32Vector(keys, nil, proc.Mp())
+		bat.SetRowCount(len(values))
+		return bat
+	}
+	first := makePartition([]int32{1, 3}, 1)
+	second := makePartition([]int32{10, 20}, 2)
+
+	spec := makeAggWindowSpec("percentile_cont")
+	spec.GetW().PartitionBy = []*plan.Expr{newColExprWithType(1, types.T_int32.ToType())}
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs: []aggexec.AggFuncExecExpression{
+			newOrderedPercentileWindowAggExpr(t, "percentile_cont", "0.5", false),
+		},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{first, second})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	var got []float64
+	for {
+		result, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		if result.Batch == nil {
+			break
+		}
+		got = append(got, vector.MustFixedColWithTypeCheck[float64](result.Batch.Vecs[2])...)
+	}
+	require.Equal(t, []float64{2, 2, 15, 15}, got)
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestWindowOrderedPercentileSpills(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	const rows = 20_000
+	values := make([]int32, rows)
+	for i := range values {
+		values[i] = int32(i)
+	}
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+	bat.SetRowCount(rows)
+
+	arg := &Window{
+		WinSpecList: []*plan.Expr{makeAggWindowSpec("percentile_cont")},
+		Aggs: []aggexec.AggFuncExecExpression{
+			newOrderedPercentileWindowAggExpr(t, "percentile_cont", "0.5", false),
+		},
+		SpillThreshold: 1,
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	got := vector.MustFixedColWithTypeCheck[float64](result.Batch.Vecs[1])
+	require.NotEmpty(t, got)
+	for _, value := range got {
+		require.Equal(t, 9999.5, value)
+	}
+	require.Positive(t, arg.OpAnalyzer.GetOpStats().SpillRows)
+	require.Positive(t, arg.OpAnalyzer.GetOpStats().SpillSize)
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
 // TestWindowJsonObjectAggNullKeyNoLeak reproduces the NULL-key error exit

@@ -108,4 +108,16 @@ select within from t_within_identifier_bvt order by id;
 select word, reserved from information_schema.KEYWORDS where word = 'WITHIN';
 drop table t_within_identifier_bvt;
 
+select g, sort_key,
+       percentile_cont(0.5) within group (order by v) over (partition by g) as window_cont,
+       percentile_disc(0.5) within group (order by v desc) over (partition by g) as window_disc_desc
+from t_ordered_set_bvt
+order by g, sort_key;
+
+select g, sort_key,
+       percentile_disc(0.5) within group (order by v)
+           over (partition by g order by sort_key rows between unbounded preceding and current row) as running_disc
+from t_ordered_set_bvt
+order by g, sort_key;
+
 drop table t_ordered_set_bvt;

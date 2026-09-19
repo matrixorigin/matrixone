@@ -36,6 +36,21 @@ func findAggregateByName(query *planpb.Query, name string) *planpb.Function {
 	return nil
 }
 
+func findWindowFunctionByName(query *planpb.Query, name string) *planpb.Function {
+	for _, node := range query.Nodes {
+		for _, expr := range node.WinSpecList {
+			window := expr.GetW()
+			if window == nil {
+				continue
+			}
+			if fn := window.WindowFunc.GetF(); fn != nil && strings.EqualFold(fn.Func.GetObjName(), name) {
+				return fn
+			}
+		}
+	}
+	return nil
+}
+
 func TestBuildOrderedSetAggregates(t *testing.T) {
 	ctx := NewMockCompilerContext(true)
 	for _, tc := range []struct {
@@ -192,11 +207,6 @@ func TestBuildMedianWithinGroupRejectsInvalidShape(t *testing.T) {
 			sql:        "select median() within group (order by missing_column) from select_test.bind_select",
 			buildError: "missing_column",
 		},
-		{
-			name:       "window form",
-			sql:        "select median() within group (order by a) over () from select_test.bind_select",
-			buildError: "function-local ORDER BY in window function",
-		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
@@ -270,11 +280,6 @@ func TestBuildApproxPercentileWithinGroupRejectsInvalidShape(t *testing.T) {
 			sql:  "select approx_percentile(b) within group (order by a) from select_test.bind_select",
 			want: "percentile argument of approx_percentile must be a non-null constant",
 		},
-		{
-			name: "window form",
-			sql:  "select approx_percentile(0.5) within group (order by a) over () from select_test.bind_select",
-			want: "function-local ORDER BY in window function",
-		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
@@ -332,10 +337,114 @@ func TestBuildOrderedSetPercentileRejectsInvalidWithinGroupShape(t *testing.T) {
 	}
 }
 
-func TestBuildOrderedSetPercentileRejectsWindowForm(t *testing.T) {
-	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
-		"select percentile_cont(0.5) within group (order by a) over () from select_test.bind_select", 1)
+func TestBuildOrderedSetWindowFunctions(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	for _, tc := range []struct {
+		name      string
+		function  string
+		sql       string
+		wantArgs  int
+		direction []byte
+	}{
+		{
+			name:      "continuous partition",
+			function:  NamePercentileCont,
+			sql:       "select percentile_cont(0.5) within group (order by a) over (partition by b) from select_test.bind_select",
+			wantArgs:  2,
+			direction: []byte{0},
+		},
+		{
+			name:      "discrete descending with window order",
+			function:  NamePercentileDisc,
+			sql:       "select percentile_disc(0.75) within group (order by a desc) over (partition by b order by a) from select_test.bind_select",
+			wantArgs:  2,
+			direction: []byte{1},
+		},
+		{
+			name:      "approximate",
+			function:  NameApproxPercentile,
+			sql:       "select approx_percentile(0.25) within group (order by a) over () from select_test.bind_select",
+			wantArgs:  2,
+			direction: []byte{0},
+		},
+		{
+			name:     "median",
+			function: NameMedian,
+			sql:      "select median() within group (order by a desc) over () from select_test.bind_select",
+			wantArgs: 1,
+		},
+		{
+			name:     "ordinary approximate remains supported",
+			function: NameApproxPercentile,
+			sql:      "select approx_percentile(a, 0.25) over () from select_test.bind_select",
+			wantArgs: 2,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			queryPlan, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+
+			fn := findWindowFunctionByName(queryPlan.GetQuery(), tc.function)
+			require.NotNil(t, fn)
+			require.Len(t, fn.Args, tc.wantArgs)
+			require.Equal(t, tc.direction, fn.AggConfig)
+			require.Nil(t, findAggregateByName(queryPlan.GetQuery(), tc.function))
+		})
+	}
+}
+
+func TestBuildOrderedSetWindowRejectsInvalidShape(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	for _, tc := range []struct {
+		name string
+		sql  string
+		want string
+	}{
+		{
+			name: "missing within group",
+			sql:  "select percentile_cont(0.5) over () from select_test.bind_select",
+			want: "percentile_cont requires WITHIN GROUP",
+		},
+		{
+			name: "multiple within group order expressions",
+			sql:  "select percentile_disc(0.5) within group (order by a, b) over () from select_test.bind_select",
+			want: "percentile_disc requires exactly one WITHIN GROUP ORDER BY expression",
+		},
+		{
+			name: "ordinary arguments combined with within group",
+			sql:  "select approx_percentile(a, 0.5) within group (order by b) over () from select_test.bind_select",
+			want: "approx_percentile requires exactly one percentile argument",
+		},
+		{
+			name: "nonconstant percentile",
+			sql:  "select percentile_cont(b) within group (order by a) over () from select_test.bind_select",
+			want: "percentile argument of percentile_cont must be a non-null constant",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			_, err = BuildPlan(ctx, stmt, false)
+			require.ErrorContains(t, err, tc.want)
+		})
+	}
+}
+
+func TestBuildPreparedOrderedSetWindow(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"select percentile_disc(?) within group (order by a desc) over (partition by b) from select_test.bind_select", 1)
 	require.NoError(t, err)
-	_, err = BuildPlan(NewMockCompilerContext(true), stmt, false)
-	require.ErrorContains(t, err, "ordered-set percentile window functions")
+	t.Cleanup(stmt.Free)
+
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmt, true)
+	require.NoError(t, err)
+	fn := findWindowFunctionByName(queryPlan.GetQuery(), NamePercentileDisc)
+	require.NotNil(t, fn)
+	require.Len(t, fn.Args, 2)
+	require.True(t, preparedExprContainsParam(fn.Args[1]))
+	require.Equal(t, []byte{1}, fn.AggConfig)
 }
