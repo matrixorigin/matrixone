@@ -19,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 // stringResultBound is a planner-only payload bound. unknown is deliberately
@@ -168,6 +169,67 @@ func fixedBinaryResultType(width int32) types.Type {
 
 func fixedTextResultType(width uint64) types.Type {
 	return textStringResultType(stringResultBound{bytes: width}, types.CharsetUTF8)
+}
+
+// TextSourceCharacterBound returns a conservative character-count bound for a
+// value before a string-domain cast. Character declarations count characters;
+// fixed scalar values use the same formatted-string bound as the cast planner.
+// Binary declarations are intentionally not treated as text.
+func TextSourceCharacterBound(expr *planpb.Expr) (uint64, bool) {
+	if expr == nil {
+		return 0, false
+	}
+	if lit := expr.GetLit(); lit != nil && !lit.Isnull {
+		if value, ok := lit.GetValue().(*planpb.Literal_Sval); ok {
+			return uint64(utf8.RuneCountInString(value.Sval)), true
+		}
+	}
+
+	sourceType := types.T(expr.Typ.Id)
+	switch sourceType {
+	case types.T_char, types.T_varchar, types.T_text:
+		if expr.Typ.Width > 0 {
+			return uint64(expr.Typ.Width), true
+		}
+		return 0, false
+	case types.T_binary, types.T_varbinary, types.T_blob:
+		return 0, false
+	default:
+		bound := formattedStringByteBound(types.Type{
+			Oid:   sourceType,
+			Width: expr.Typ.Width,
+			Scale: expr.Typ.Scale,
+		})
+		if !bound.unknown {
+			return bound.bytes, true
+		}
+	}
+	return 0, false
+}
+
+// base64ResultBound mirrors encodeBase64WithLineBreaks.  The executor emits a
+// line feed after every complete 76-character output line, so the ordinary
+// four-thirds estimate is not sufficient for the persisted VARCHAR width.
+func base64ResultBound(input stringResultBound) stringResultBound {
+	if input.unknown || input.bytes > math.MaxUint64-2 {
+		return unknownStringResultBound()
+	}
+	encoded := multiplyStringResultBound(
+		stringResultBound{bytes: (input.bytes + 2) / 3}, 4)
+	if encoded.unknown || encoded.bytes == 0 {
+		return encoded
+	}
+	return addStringResultBounds(encoded, stringResultBound{bytes: (encoded.bytes - 1) / 76})
+}
+
+func base64ReturnType(parameters []types.Type) types.Type {
+	if len(parameters) == 0 {
+		return types.T_text.ToType()
+	}
+	// Base64 is ASCII.  declaredStringByteBound measures binary inputs in bytes
+	// and character declarations conservatively in their maximum UTF-8 bytes.
+	return textStringResultType(
+		base64ResultBound(declaredStringByteBound(parameters[0])), types.CharsetUTF8)
 }
 
 // compressResultBound mirrors zlib's compressBound contract, the five

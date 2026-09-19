@@ -1880,6 +1880,29 @@ func (rule *ResetParamRefRule) applyExprPreservingRoot(e *plan.Expr) (*plan.Expr
 		if exprImpl.F == nil {
 			return e, nil
 		}
+		if exprImpl.F.Func != nil && strings.EqualFold(exprImpl.F.Func.GetObjName(), "inet_ntoa") &&
+			len(exprImpl.F.Args) == 1 {
+			// INET_NTOA owns the source-domain contract for a direct marker. A
+			// matching VARCHAR assignment cast may make this function a preserved
+			// DML write root, but preserving the root must not bypass the same
+			// execute-time JSON/temporal rebinding used by SELECT. Keep the
+			// destination-facing result type stable after rebinding.
+			_, direct := preparedParamPosition(exprImpl.F.Args[0])
+			if !direct {
+				_, direct = preparedResultParamPosition(exprImpl.F.Args[0], "inet_ntoa")
+			}
+			if direct {
+				originalTyp := e.Typ
+				rewritten, err := rule.applyExpr(e)
+				if err != nil {
+					return nil, err
+				}
+				if rewritten != nil {
+					rewritten.Typ = originalTyp
+				}
+				return rewritten, nil
+			}
+		}
 		if isPreparedGeometrySRIDFunction(exprImpl.F.Func.GetObjName()) &&
 			len(exprImpl.F.Args) >= 2 {
 			if _, ok := preparedParamPosition(exprImpl.F.Args[len(exprImpl.F.Args)-1]); ok {
@@ -2267,6 +2290,15 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				e, functionName, i, len(exprImpl.F.Args)) {
 				paramPos, hasParamPos = preparedResultParamPosition(arg, functionName)
 			}
+			var preparedInetNtoaSource *plan.Expr
+			var hasPreparedInetNtoaSource bool
+			if hasParamPos && functionName == "inet_ntoa" {
+				preparedInetNtoaSource, hasPreparedInetNtoaSource, err =
+					rule.preparedInetNtoaSourceExpr(paramPos)
+				if err != nil {
+					return nil, err
+				}
+			}
 			var preparedCharSource *plan.Expr
 			var hasPreparedCharSource bool
 			if hasParamPos && strings.EqualFold(functionName, "char") {
@@ -2290,7 +2322,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			useSQLExecuteNumericSource := hasParamPos &&
 				preparedFunctionArgUsesSQLExecuteNumericSource(
 					e, functionName, i, len(exprImpl.F.Args)) &&
-				(hasPreparedBitwiseSource || hasPreparedCharSource || charStringSourceFallback || (paramPos >= 0 &&
+				(hasPreparedBitwiseSource || hasPreparedCharSource || hasPreparedInetNtoaSource || charStringSourceFallback || (paramPos >= 0 &&
 					paramPos < len(rule.sqlExecuteNumericParams) &&
 					rule.sqlExecuteNumericParams[paramPos] != nil)) &&
 				preparedSQLExecuteNumericSourceOwnsResultDomain(
@@ -2351,6 +2383,9 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				source := preparedBitwiseSource
 				if source == nil {
 					source = preparedCharSource
+				}
+				if source == nil {
+					source = preparedInetNtoaSource
 				}
 				if source == nil && paramPos >= 0 && paramPos < len(rule.sqlExecuteNumericParams) {
 					source = rule.sqlExecuteNumericParams[paramPos]
@@ -3622,7 +3657,7 @@ func windowHasNumericPrefixDependency(
 
 func preparedSQLExecuteNumericResultConsumer(name string) bool {
 	return preparedNumericResultPolymorphicFunction(name) || strings.EqualFold(name, "char") ||
-		isPreparedBitwiseAggregate(name)
+		strings.EqualFold(name, "inet_ntoa") || isPreparedBitwiseAggregate(name)
 }
 
 func preparedSQLExecuteNumericResultValueArg(name string, argIndex, argCount int) bool {
@@ -3639,6 +3674,8 @@ func preparedSQLExecuteNumericResultValueArg(name string, argIndex, argCount int
 		return argCount == 1 && argIndex == 0
 	case "first_value", "last_value", "lag", "lead", "nth_value", "max_by", "max_by_non_null":
 		return argCount > 0 && argIndex == 0
+	case "inet_ntoa":
+		return argCount == 1 && argIndex == 0
 	default: // greatest, least
 		return true
 	}
@@ -3659,7 +3696,8 @@ func preparedRuntimeResultOccurrenceType(value any, fallback plan.Type) plan.Typ
 		return fallback
 	}
 	switch source.Oid {
-	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob:
+	case types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob,
+		types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_json:
 		return makePlan2Type(&source)
 	default:
 		return fallback
@@ -3697,6 +3735,49 @@ func isPreparedBitwiseAggregate(name string) bool {
 	default:
 		return false
 	}
+}
+
+func isInetNtoaDomainSourceType(typ types.Type) bool {
+	switch typ.Oid {
+	case types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_json:
+		return true
+	default:
+		return false
+	}
+}
+
+// preparedInetNtoaSourceExpr is deliberately separate from the shared SQL
+// EXECUTE numeric-source builder.  Temporal and JSON provenance is meaningful
+// to INET_NTOA, but making it a generic numeric source would change unrelated
+// arithmetic (for example JSON 1.6 + 0) by forcing an integer-domain cast.
+func (rule *ResetParamRefRule) preparedInetNtoaSourceExpr(pos int) (*Expr, bool, error) {
+	if pos < 0 || pos >= len(rule.paramValues) {
+		return nil, false, nil
+	}
+	param, ok := rule.paramValues[pos].(ParamValue)
+	if !ok || param.Value == nil {
+		return nil, false, nil
+	}
+	sourceType := param.SourceType
+	hasSourceType := param.HasSourceType
+	if param.HasInetNtoaSourceType {
+		sourceType = param.InetNtoaSourceType
+		hasSourceType = true
+	}
+	if !hasSourceType || !isInetNtoaDomainSourceType(sourceType) {
+		return nil, false, nil
+	}
+	value := param.Value
+	if param.MaterializedValue != "" {
+		value = param.MaterializedValue
+	}
+	source, err := preparedRuntimeParamExpr(
+		rule.ctx, value, param.IsBin, sourceType)
+	if err != nil {
+		return nil, false, err
+	}
+	rule.retainRuntimeParamRef(pos, source)
+	return source, true, nil
 }
 
 // preparedCharSourceExpr keeps CHAR's two string contracts separate at

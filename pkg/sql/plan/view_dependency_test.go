@@ -354,6 +354,93 @@ func TestPersistedStringNumericViewProtocolLifecycle(t *testing.T) {
 	require.JSONEq(t, `{"keep":true}`, string(regeneratedFields["future_field"]))
 }
 
+func TestPersistedBinarySliceViewProtocolAdmission(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	table := ctx.tables["nation"]
+	name2col := make(map[string]int32, len(table.Cols)+1)
+	for pos, col := range table.Cols {
+		name2col[col.Name] = int32(pos)
+	}
+	binaryPos := int32(len(table.Cols))
+	table.Cols = append(table.Cols, &planpb.ColDef{
+		ColId:      uint64(binaryPos),
+		Name:       "n_binary",
+		OriginName: "n_binary",
+		Typ: planpb.Type{
+			Id:      int32(types.T_varbinary),
+			Width:   128,
+			Charset: uint32(types.CharsetBinary),
+		},
+	})
+	name2col["n_binary"] = binaryPos
+	table.Name2ColIndex = name2col
+
+	proc := ctx.GetProcess()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	oldReadFloor, hadReadFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor)
+	oldAuthoringFloor, hadAuthoringFloor := rt.GetGlobalVariables(
+		moruntime.PersistedExpressionProtocolAuthoringFloor)
+	t.Cleanup(func() {
+		if hadProtocol {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
+		} else {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+		if hadReadFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, oldReadFloor)
+		} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolFloor, current)
+		}
+		if hadAuthoringFloor {
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, oldAuthoringFloor)
+		} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor); ok {
+			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, current)
+		}
+	})
+
+	const createSQL = "create view v_binary_slice as select left(n_binary, 1) as x from nation"
+	build := func(floor int64) (*Plan, error) {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, floor)
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, floor)
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createSQL, 1)
+		if err != nil {
+			return nil, err
+		}
+		defer stmt.Free()
+		return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}, stmt, false)
+	}
+
+	_, err := build(defines.MORPCVersion85)
+	require.ErrorContains(t, err, "protocol version 86")
+
+	created, err := build(defines.MORPCVersion86)
+	require.NoError(t, err)
+	createdView := created.GetDdl().GetCreateView().GetTableDef()
+	require.Len(t, createdView.GetCols(), 1)
+	createdColType := createdView.GetCols()[0].Typ
+	require.Equal(t, int32(types.T_varbinary), createdColType.Id)
+	require.Equal(t, int32(1), createdColType.Width)
+	var viewData ViewData
+	require.NoError(t, json.Unmarshal(
+		[]byte(createdView.GetViewSql().GetView()), &viewData))
+	require.NotNil(t, viewData.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion86), *viewData.RequiredProtocolVersion)
+
+	regenerated, err := RegenerateViewDefinition(ctx, createdView.GetViewSql().GetView())
+	require.NoError(t, err)
+	require.Len(t, regenerated.TableDef.Cols, 1)
+	regeneratedColType := regenerated.TableDef.Cols[0].Typ
+	require.Equal(t, int32(types.T_varbinary), regeneratedColType.Id)
+	require.Equal(t, int32(1), regeneratedColType.Width)
+	var regeneratedData ViewData
+	require.NoError(t, json.Unmarshal(
+		[]byte(regenerated.TableDef.GetViewSql().GetView()), &regeneratedData))
+	require.NotNil(t, regeneratedData.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion86), *regeneratedData.RequiredProtocolVersion)
+}
+
 func TestRegenerateViewDefinitionPersistsExpandedStar(t *testing.T) {
 	for _, rootSQL := range []string{
 		"create view v as select * from nation",
