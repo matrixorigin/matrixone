@@ -9979,7 +9979,7 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 			}
 			return []*Expr{
 				dateExpr,
-				makePlan2Int64ConstExprWithType(finalValue),
+				makeDecimalIntervalValueExpr(firstExpr, finalValue),
 				// Use MicroSecond type since we've converted to microseconds
 				makePlan2Int64ConstExprWithType(int64(types.MicroSecond)),
 			}, nil
@@ -10167,7 +10167,7 @@ func resetIntervalFunctionArgs(ctx context.Context, intervalExpr *Expr) ([]*Expr
 				finalValue = int64(floatVal)
 			}
 			return []*Expr{
-				makePlan2Int64ConstExprWithType(finalValue),
+				makeDecimalIntervalValueExpr(firstExpr, finalValue),
 				// Use MicroSecond type since we've converted to microseconds
 				makePlan2Int64ConstExprWithType(int64(types.MicroSecond)),
 			}, nil
