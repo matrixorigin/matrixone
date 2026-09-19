@@ -206,7 +206,7 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 			conn, connErr := db.Conn(ctx)
 			require.NoError(t, connErr)
 			defer conn.Close()
-			_, connErr = conn.ExecContext(ctx, "create table "+dbName+".integer_sources(v varchar(20))")
+			_, connErr = conn.ExecContext(ctx, "create table "+dbName+".integer_sources(case_id int, v varchar(20))")
 			require.NoError(t, connErr)
 			_, connErr = conn.ExecContext(ctx, "create table "+dbName+".integer_peer(pad bigint, v double)")
 			require.NoError(t, connErr)
@@ -228,7 +228,7 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 					require.Equal(t, value.want, got)
 				}
 			})
-			for _, tc := range []struct {
+			for caseIndex, tc := range []struct {
 				name, source, assignment string
 				want                     any
 				args                     []any
@@ -283,14 +283,18 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 						for _, write := range []bool{false, true} {
 							t.Run(fmt.Sprintf("binary=%v/write=%v", binary, write), func(t *testing.T) {
 								query := "select " + expr
+								// Each protocol writes its own row; resetting the whole
+								// table for every cell only adds unrelated transactions.
+								caseID := 2 * caseIndex
+								if binary {
+									caseID++
+								}
 								if write {
-									_, err := conn.ExecContext(ctx, "delete from "+dbName+".integer_sources")
-									require.NoError(t, err)
-									query = "insert into " + dbName + ".integer_sources values (" + expr + ")"
+									query = fmt.Sprintf("insert into %s.integer_sources(case_id,v) values (%d,%s)", dbName, caseID, expr)
 									if strings.Contains(tc.source, "select") {
 										// Scalar subqueries use INSERT SELECT; the VALUES
 										// planner does not support this subquery shape.
-										query = "insert into " + dbName + ".integer_sources select " + expr
+										query = fmt.Sprintf("insert into %s.integer_sources(case_id,v) select %d,%s", dbName, caseID, expr)
 									}
 								}
 								var got sql.NullString
@@ -322,7 +326,8 @@ func TestIssue25408PreparedPaginationParameters(t *testing.T) {
 									require.NoError(t, err)
 								}
 								if write {
-									require.NoError(t, conn.QueryRowContext(ctx, "select v from "+dbName+".integer_sources").Scan(&got))
+									require.NoError(t, conn.QueryRowContext(ctx, fmt.Sprintf(
+										"select v from %s.integer_sources where case_id = %d", dbName, caseID)).Scan(&got))
 								}
 								if tc.want == nil {
 									require.False(t, got.Valid)
