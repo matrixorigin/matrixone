@@ -16,6 +16,7 @@ package types
 
 import (
 	"math"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -219,6 +220,62 @@ func NormalizeInterval(s string, it IntervalType) (ret int64, rettype IntervalTy
 	vals, err := parseInts(s, isxxxMicrosecondType(it), typeMaxLength(it))
 	if err != nil {
 		return
+	}
+	// Composite SECOND intervals accept a fractional seconds component even
+	// when the unit name does not include MICROSECOND. Fold that component into
+	// the seconds field before converting, avoiding a jagged conv input.
+	if !isxxxMicrosecondType(it) && strings.Contains(s, ".") {
+		maxLen := typeMaxLength(it)
+		if (it == Second || it == Minute || it == Hour || it == Day ||
+			it == Minute_Second || it == Hour_Second || it == Day_Second) && len(vals) == maxLen+1 {
+			fracText := s[strings.LastIndexByte(s, '.')+1:]
+			fracDigits := len(fracText)
+			if fracDigits > 6 {
+				fracDigits = 6
+			}
+			frac, parseErr := strconv.ParseInt(fracText[:fracDigits], 10, 64)
+			if parseErr != nil {
+				return 0, IntervalTypeInvalid, moerr.NewInvalidInputNoCtxf("invalid time interval value '%s'", s)
+			}
+			for i := fracDigits; i < 6; i++ {
+				frac *= 10
+			}
+			sign := int64(1)
+			if vals[len(vals)-2] < 0 || strings.HasPrefix(strings.TrimSpace(s), "-") {
+				sign = -1
+			}
+			whole := vals[len(vals)-2]
+			if whole < 0 {
+				if whole == math.MinInt64 {
+					return 0, IntervalTypeInvalid, moerr.NewInvalidInputNoCtxf("invalid time interval value '%s'", s)
+				}
+				whole = -whole
+			}
+			if whole > (math.MaxInt64-frac)/MicroSecsPerSec {
+				return 0, IntervalTypeInvalid, moerr.NewInvalidInputNoCtxf("invalid time interval value '%s'", s)
+			}
+			vals = vals[:len(vals)-1]
+			vals[len(vals)-1] = sign * (whole*MicroSecsPerSec + frac)
+			switch it {
+			case Second, Minute, Hour, Day:
+				multiplier := int64(1)
+				switch it {
+				case Minute:
+					multiplier = SecsPerMinute
+				case Hour:
+					multiplier = SecsPerHour
+				case Day:
+					multiplier = SecsPerDay
+				}
+				return conv([]int64{vals[len(vals)-1]}, []int64{multiplier}, MicroSecond)
+			case Minute_Second:
+				return conv(vals, []int64{60 * MicroSecsPerSec, 1}, MicroSecond)
+			case Hour_Second:
+				return conv(vals, []int64{60, 60 * MicroSecsPerSec, 1}, MicroSecond)
+			case Day_Second:
+				return conv(vals, []int64{24, 60, 60 * MicroSecsPerSec, 1}, MicroSecond)
+			}
+		}
 	}
 
 	// For composite interval types, if we have fewer values than expected,

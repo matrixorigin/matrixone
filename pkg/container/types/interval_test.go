@@ -229,3 +229,42 @@ func TestNormalizeIntervalMicrosecondMoreThanTwoValues(t *testing.T) {
 	// Expected: 0*24*60*60*1000000 + 1*60*60*1000000 + 2*60*1000000 + 3*1000000 + 400000 = 3723000000 + 400000 = 3723400000
 	require.Equal(t, int64(3723400000), val)
 }
+
+func TestNormalizeIntervalCompositeSecondsWithFraction(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		unit IntervalType
+		text string
+		want int64
+	}{
+		{"minute_second", Minute_Second, "1:02.500000", (62 * MicroSecsPerSec) + 500000},
+		{"hour_second", Hour_Second, "1:02:03.500000", (3723 * MicroSecsPerSec) + 500000},
+		{"day_second", Day_Second, "1 02:03:04.500000", (93784 * MicroSecsPerSec) + 500000},
+		{"negative_day_second", Day_Second, "-1 02:03:04.500000", -((93784 * MicroSecsPerSec) + 500000)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, typ, err := NormalizeInterval(tc.text, tc.unit)
+			require.NoError(t, err)
+			require.Equal(t, MicroSecond, typ)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
+func TestNormalizeIntervalSimpleSecondsWithFraction(t *testing.T) {
+	for _, tc := range []struct {
+		unit IntervalType
+		text string
+		want int64
+	}{
+		{Second, "1.5", 1500000},
+		{Minute, "1.5", 90000000},
+		{Hour, "1.5", 5400000000},
+		{Day, "1.5", 129600000000},
+	} {
+		got, typ, err := NormalizeInterval(tc.text, tc.unit)
+		require.NoError(t, err)
+		require.Equal(t, MicroSecond, typ)
+		require.Equal(t, tc.want, got)
+	}
+}

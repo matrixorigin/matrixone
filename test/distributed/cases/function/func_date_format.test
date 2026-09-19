@@ -52,6 +52,18 @@ select date_format(a_date,'%Y-%m-%d %H:%i:%s'),date_format(b_datetime,'%Y-%m-%d 
 select date_format(date('2004-04-03 13:11:10'),'%Y-%m-%d %H:%i:%s'),date_format(cast('2004-04-03 13:11:10' as datetime),'%Y-%m-%d %H:%i:%s') from t_dates;
 
 drop table t_dates;
+
+# Row-dependent format expressions must use the format from the current row.
+CREATE TABLE temporal_format_rows(id INT, dt DATETIME, fmt VARCHAR(32));
+INSERT INTO temporal_format_rows VALUES
+    (1, '2020-01-02 03:04:05', '%Y'),
+    (2, '2021-02-03 04:05:06', '%m'),
+    (3, '2022-03-04 05:06:07', '%Y-%m-%d'),
+    (4, '2023-04-05 06:07:08', NULL);
+SELECT id, DATE_FORMAT(dt, fmt) AS formatted
+FROM temporal_format_rows
+ORDER BY id;
+DROP TABLE temporal_format_rows;
 SELECT DATE_FORMAT('123456', '%Y-%m-%d %H:%i:%s');
 SELECT DATE_FORMAT('2023-11-08 12:00', '%Y-%m-%d %H:%i:%s');
 SELECT DATE_FORMAT('2023-11-08 15:00:00', '%Y-%m-%d %H:%i:%s');

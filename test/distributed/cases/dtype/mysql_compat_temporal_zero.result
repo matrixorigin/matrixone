@@ -165,13 +165,13 @@ extract(week from cast('0000-00-00 00:00:00' as datetime)) as zero_extract_week_
 extract(week from cast('0000-00-00 00:00:00' as timestamp)) as zero_extract_week_timestamp,
 extract(week from '0000-00-00 00:00:00') as zero_extract_week_datetime_string,
 extract(week from '0000-00-00') as zero_extract_week_date_string;
-➤ zero_extract_week_date[4,32,0]  ¦  zero_extract_week_datetime[12,-1,0]  ¦  zero_extract_week_timestamp[12,-1,0]  ¦  zero_extract_week_datetime_string[12,-1,0]  ¦  zero_extract_week_date_string[12,-1,0]  𝄀
-0  ¦  00  ¦  00  ¦  00  ¦  00
+➤ zero_extract_week_date[-5,64,0]  ¦  zero_extract_week_datetime[-5,64,0]  ¦  zero_extract_week_timestamp[-5,64,0]  ¦  zero_extract_week_datetime_string[-5,64,0]  ¦  zero_extract_week_date_string[-5,64,0]  𝄀
+0  ¦  0  ¦  0  ¦  0  ¦  0
 select extract(week from cast('0001-01-01' as date)) as minimum_extract_week_date,
 extract(week from cast('0001-01-01 00:00:00' as datetime)) as minimum_extract_week_datetime,
 extract(week from '0001-01-01') as minimum_extract_week_string;
-➤ minimum_extract_week_date[4,32,0]  ¦  minimum_extract_week_datetime[12,-1,0]  ¦  minimum_extract_week_string[12,-1,0]  𝄀
-1  ¦  01  ¦  01
+➤ minimum_extract_week_date[-5,64,0]  ¦  minimum_extract_week_datetime[-5,64,0]  ¦  minimum_extract_week_string[-5,64,0]  𝄀
+0  ¦  0  ¦  0
 select cast('0001-01-01' as date) as minimum_date,
 cast('0001-01-01 00:00:00' as datetime) as minimum_datetime,
 date_format(cast('0001-01-01 00:00:00' as datetime), '%W %M') as minimum_datetime_name_format;

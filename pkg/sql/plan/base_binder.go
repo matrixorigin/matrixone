@@ -6137,7 +6137,7 @@ func bindFuncExprImplByPlanExpr(
 		} else {
 			// Lower dynamic formats to the legacy three-argument overload. This
 			// keeps serialized plans executable by older CNs during rolling upgrades.
-			args = append(args, makePlan2DateConstNullExprWithScale(types.T_datetime, 6))
+			args = append(args, makePlan2DateConstNullExprWithScale(types.T_varchar, 6))
 		}
 	case "unix_timestamp":
 		if len(args) == 1 {
@@ -7711,7 +7711,7 @@ func preparedStrToDateArgs(original *Expr, name string, args []*Expr) bool {
 		return false
 	}
 	switch types.T(fn.Args[2].Typ.Id) {
-	case types.T_date, types.T_datetime, types.T_time:
+	case types.T_date, types.T_datetime, types.T_time, types.T_varchar:
 		return true
 	}
 	return false
@@ -9896,6 +9896,12 @@ func bindStringIntervalExpr(ctx context.Context, expr *Expr, intervalType types.
 	_, normalizedType, err := types.NormalizeInterval("0", intervalType)
 	if err != nil {
 		return nil, types.IntervalTypeInvalid, false, err
+	}
+	if normalizedType == types.Second {
+		switch intervalType {
+		case types.Minute_Second, types.Hour_Second, types.Day_Second:
+			normalizedType = types.MicroSecond
+		}
 	}
 	numberExpr, err := BindFuncExprImplByPlanExpr(ctx, "to_interval", []*Expr{
 		expr,
