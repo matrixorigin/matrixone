@@ -31,8 +31,13 @@ import (
 
 func openRetestSQLDB(t *testing.T, c embed.Cluster) *sql.DB {
 	t.Helper()
+	return openRetestSQLDBForCN(t, c, 0)
+}
 
-	cn1, err := c.GetCNService(0)
+func openRetestSQLDBForCN(t *testing.T, c embed.Cluster, index int) *sql.DB {
+	t.Helper()
+
+	cn1, err := c.GetCNService(index)
 	require.NoError(t, err)
 
 	port := cn1.GetServiceConfig().CN.Frontend.Port
