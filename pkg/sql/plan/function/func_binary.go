@@ -1039,7 +1039,7 @@ func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 				// branch's scale while carrying another branch's raw value,
 				// magnifying the result (issue #24565). Keep them as a candidate
 				// and resolve the aligned type below instead of short-circuiting.
-				if requireOid.IsDecimal() {
+				if requireOid.IsDecimal() || isTemporalFSPType(requireOid) {
 					if cos < minCost {
 						minIndex = i
 						minCost = cos
@@ -1083,6 +1083,25 @@ func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
 				castType[i] = target
 			}
 			return newCheckResultWithCast(overloadIndex, castType)
+		}
+
+		if isTemporalFSPType(minOid) {
+			target := commonTemporalType(minOid.ToType(), inputs)
+			aligned := true
+			for _, input := range inputs {
+				if input.Oid != target.Oid || input.Scale != target.Scale {
+					aligned = false
+					break
+				}
+			}
+			if aligned {
+				return newCheckResultWithSuccess(minIndex)
+			}
+			castType := make([]types.Type, len(inputs))
+			for i := range castType {
+				castType[i] = target
+			}
+			return newCheckResultWithCast(minIndex, castType)
 		}
 
 		castType := make([]types.Type, len(inputs))

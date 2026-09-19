@@ -19,6 +19,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
+	"math/big"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -3408,7 +3409,10 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 				return nil, err
 			}
 		}
-		bound, err := bindBoundFuncExprAndConstFold(b.GetContext(), b.builder.compCtx.GetProcess(), name, args)
+		bound, err := bindBoundFuncExprAndConstFoldWithObserver(
+			b.GetContext(), b.builder.compCtx.GetProcess(), name, args,
+			b.observePersistedExpressionProtocol,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -3433,8 +3437,9 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 				return nil, err
 			}
 		}
-		return bindBoundFuncExprAndConstFold(
+		return bindBoundFuncExprAndConstFoldWithObserver(
 			b.GetContext(), b.builder.compCtx.GetProcess(), name, args,
+			b.observePersistedExpressionProtocol,
 		)
 	}
 
@@ -3455,8 +3460,9 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 	if err != nil {
 		return nil, err
 	}
-	return bindBoundFuncExprAndConstFold(
+	return bindBoundFuncExprAndConstFoldWithObserver(
 		b.GetContext(), b.builder.compCtx.GetProcess(), name, args,
+		b.observePersistedExpressionProtocol,
 	)
 }
 
@@ -3475,8 +3481,9 @@ func (b *baseBinder) bindPreparedGetLockFuncExpr(astArgs []tree.Expr, depth int3
 		return nil, err
 	}
 	b.markPreparedNumericFallback(timeout)
-	return bindBoundFuncExprAndConstFold(
+	return bindBoundFuncExprAndConstFoldWithObserver(
 		b.GetContext(), b.builder.compCtx.GetProcess(), "get_lock", []*plan.Expr{name, timeout},
+		b.observePersistedExpressionProtocol,
 	)
 }
 
@@ -3692,6 +3699,18 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			}
 			var expr *Expr
 			var err error
+			previousSuppressDefaultValueBindType := b.suppressDefaultValueBindType
+			previousInetNtoaNumericLiteralContext := b.inetNtoaNumericLiteralContext
+			if strings.EqualFold(name, "inet_ntoa") && isDirectInetNtoaNumericLiteral(arg) {
+				// The destination type of a DEFAULT/CTAS expression must not turn
+				// a compile-time numeric literal into VARCHAR before INET_NTOA
+				// chooses its overload. Otherwise INET_NTOA(1) would take the
+				// runtime string contract even though its source is statically
+				// numeric, unnecessarily raising persisted-expression admission
+				// from v72 to v86.
+				b.suppressDefaultValueBindType = true
+				b.inetNtoaNumericLiteralContext = true
+			}
 			if target, integerContext := function.IntegerArgumentTarget(name, idx); integerContext {
 				b.numericParamType = nil
 				b.numericSubqueryTarget = nil
@@ -3699,6 +3718,8 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			} else {
 				expr, err = b.impl.BindExpr(arg, depth, false)
 			}
+			b.suppressDefaultValueBindType = previousSuppressDefaultValueBindType
+			b.inetNtoaNumericLiteralContext = previousInetNtoaNumericLiteralContext
 			b.numericParamType = paramType
 			b.numericSubqueryTarget = subqueryTarget
 			if err != nil {
@@ -3809,6 +3830,10 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		return nil, rewriteErr
 	}
 	args = rewrittenArgs
+	// Preserve the source expression behind derived columns before the generic
+	// plan binder loses that query-block boundary. A derived column can have a
+	// binary-shaped common type while still carrying text rows at runtime.
+	b.annotateStringDomainSources(args)
 	if b.builder != nil && b.builder.isPrepareStatement {
 		b.markPreparedStringDomainSubquerySources(name, args)
 	}
@@ -3891,10 +3916,13 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		var e *plan.Expr
 		var err error
 		if findInSetInternalArgs {
-			e, err = bindBoundFuncExprAndConstFoldWithInternalFunctionArgs(
-				b.GetContext(), b.builder.compCtx.GetProcess(), name, args)
+			e, err = bindBoundFuncExprAndConstFoldWithInternalFunctionArgsAndObserver(
+				b.GetContext(), b.builder.compCtx.GetProcess(), name, args,
+				b.observePersistedExpressionProtocol)
 		} else {
-			e, err = bindBoundFuncExprAndConstFold(b.GetContext(), b.builder.compCtx.GetProcess(), name, args)
+			e, err = bindBoundFuncExprAndConstFoldWithObserver(
+				b.GetContext(), b.builder.compCtx.GetProcess(), name, args,
+				b.observePersistedExpressionProtocol)
 		}
 		if err == nil {
 			if fn := e.GetF(); fn != nil {
@@ -4517,17 +4545,33 @@ func rewriteFindInSetSetProvenance(
 }
 
 func bindFuncExprAndConstFold(ctx context.Context, proc *process.Process, name string, args []*Expr) (*plan.Expr, error) {
-	return bindFuncExprAndConstFoldInternal(ctx, proc, name, args, true, false)
+	return bindFuncExprAndConstFoldInternal(ctx, proc, name, args, true, false, nil)
 }
 
-func bindBoundFuncExprAndConstFold(ctx context.Context, proc *process.Process, name string, args []*Expr) (*plan.Expr, error) {
-	return bindFuncExprAndConstFoldInternal(ctx, proc, name, args, false, false)
+func bindBoundFuncExprAndConstFoldWithObserver(
+	ctx context.Context,
+	proc *process.Process,
+	name string,
+	args []*Expr,
+	observer func(*plan.Expr) error,
+) (*plan.Expr, error) {
+	return bindFuncExprAndConstFoldInternal(ctx, proc, name, args, false, false, observer)
 }
 
 func bindBoundFuncExprAndConstFoldWithInternalFunctionArgs(
 	ctx context.Context, proc *process.Process, name string, args []*Expr,
 ) (*plan.Expr, error) {
-	return bindFuncExprAndConstFoldInternal(ctx, proc, name, args, false, true)
+	return bindFuncExprAndConstFoldInternal(ctx, proc, name, args, false, true, nil)
+}
+
+func bindBoundFuncExprAndConstFoldWithInternalFunctionArgsAndObserver(
+	ctx context.Context,
+	proc *process.Process,
+	name string,
+	args []*Expr,
+	observer func(*plan.Expr) error,
+) (*plan.Expr, error) {
+	return bindFuncExprAndConstFoldInternal(ctx, proc, name, args, false, true, observer)
 }
 
 func bindFuncExprAndConstFoldInternal(
@@ -4537,6 +4581,7 @@ func bindFuncExprAndConstFoldInternal(
 	args []*Expr,
 	descendFunctions bool,
 	allowInternalFunctionArgs bool,
+	observer func(*plan.Expr) error,
 ) (*plan.Expr, error) {
 	if err := foldDecimalStringComparisonConstants(ctx, proc, name, args); err != nil {
 		return nil, err
@@ -4545,6 +4590,11 @@ func bindFuncExprAndConstFoldInternal(
 		ctx, name, args, descendFunctions, nil, nil, allowInternalFunctionArgs)
 	if err != nil {
 		return nil, err
+	}
+	if observer != nil {
+		if err := observer(retExpr); err != nil {
+			return nil, err
+		}
 	}
 
 	switch retExpr.GetF().GetFunc().GetObjName() {
@@ -4904,6 +4954,105 @@ func (b *baseBinder) markPreparedStringDomainSubquerySources(name string, args [
 	}
 }
 
+// annotateStringDomainSources retains the source expression for a derived
+// column whenever that source can carry a runtime string-domain override.
+// Physical table columns remain represented by their declared type; derived
+// projections need their expression lineage because control-flow common types
+// may be binary-shaped even when a selected row is text.
+func (b *baseBinder) annotateStringDomainSources(args []*Expr) {
+	visited := make(map[[2]int32]struct{})
+	memo := make(map[[2]int32]*Expr)
+	for _, arg := range args {
+		b.annotateStringDomainSource(arg, visited, memo)
+	}
+}
+
+func (b *baseBinder) annotateStringDomainSource(
+	expr *Expr,
+	visited map[[2]int32]struct{},
+	memo map[[2]int32]*Expr,
+) {
+	if expr == nil {
+		return
+	}
+	if col := expr.GetCol(); col != nil {
+		if b.builder == nil || b.builder.qry == nil {
+			return
+		}
+		nodeID, ok := b.builder.tag2NodeID[col.RelPos]
+		if !ok || nodeID < 0 || int(nodeID) >= len(b.builder.qry.Nodes) {
+			return
+		}
+		node := b.builder.qry.Nodes[nodeID]
+		if node == nil || col.ColPos < 0 || int(col.ColPos) >= len(node.ProjectList) {
+			return
+		}
+		key := [2]int32{nodeID, col.ColPos}
+		if witness, ok := memo[key]; ok {
+			if witness != nil {
+				ensurePreparedNumericMetadata(expr).StringDomainSource = DeepCopyExpr(witness)
+			}
+			return
+		}
+		if _, seen := visited[key]; seen {
+			return
+		}
+		visited[key] = struct{}{}
+		defer delete(visited, key)
+		source := node.ProjectList[col.ColPos]
+		if source == nil || source == expr {
+			memo[key] = nil
+			return
+		}
+		// Numeric and other non-string projections cannot carry a runtime string
+		// domain. Skip them before walking their lineage; this keeps ordinary
+		// derived arithmetic out of the provenance path entirely.
+		if possibleStringDomainsForExpr(source) == 0 {
+			memo[key] = nil
+			return
+		}
+		b.annotateStringDomainSource(source, visited, memo)
+		if source.GetCol() != nil &&
+			source.GetPreparedNumeric().GetStringDomainSource() == nil {
+			// A direct physical column has no runtime override to preserve. Keep
+			// its static binary domain eligible for the existing fast path.
+			memo[key] = nil
+			return
+		}
+		domains := possibleStringDomainsForExpr(source)
+		if domains != 0 {
+			// Keep only the domain summary, not a recursively copied expression
+			// graph. Derived projections can be chained or referenced repeatedly;
+			// copying their full annotated source at every boundary makes plan
+			// metadata grow exponentially while the consumer only needs the
+			// text/binary domain set.
+			witness := stringDomainSourceWitness(source, domains)
+			memo[key] = witness
+			if witness != nil {
+				ensurePreparedNumericMetadata(expr).StringDomainSource = DeepCopyExpr(witness)
+			}
+		} else {
+			memo[key] = nil
+		}
+		return
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			b.annotateStringDomainSource(arg, visited, memo)
+		}
+		return
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			b.annotateStringDomainSource(item, visited, memo)
+		}
+		return
+	}
+	if sub := expr.GetSub(); sub != nil {
+		b.annotateStringDomainSource(sub.Child, visited, memo)
+	}
+}
+
 // markPreparedStringDomainSubquerySource records only lineage that expression
 // traversal loses when a scalar subquery with a real input is flattened to a
 // ColRef. Direct markers and ordinary nested functions retain their own
@@ -4956,7 +5105,12 @@ func (b *baseBinder) markPreparedStringDomainSubquerySource(
 		// scalar-subquery flattening. Retain its domain-producing expression on
 		// that reference; keeping only the ColRef would lose the source again
 		// when the query graph is copied and rebound at EXECUTE.
-		ensurePreparedNumericMetadata(expr).StringDomainSource = DeepCopyExpr(source)
+		domains := possibleStringDomainsForExpr(source)
+		if domains == 0 {
+			domains = possibleStringDomainText | possibleStringDomainBinary
+		}
+		ensurePreparedNumericMetadata(expr).StringDomainSource =
+			stringDomainSourceWitness(source, domains)
 		return true
 	}
 	sub := expr.GetSub()
@@ -4981,10 +5135,351 @@ func (b *baseBinder) markPreparedStringDomainSubquerySource(
 	if len(node.ProjectList) > 0 &&
 		b.markPreparedStringDomainSubquerySource(node.ProjectList[0], visited) {
 		metadata := ensurePreparedNumericMetadata(expr)
-		metadata.StringDomainSource = DeepCopyExpr(node.ProjectList[0])
+		domains := possibleStringDomainsForExpr(node.ProjectList[0])
+		if domains == 0 {
+			domains = possibleStringDomainText | possibleStringDomainBinary
+		}
+		metadata.StringDomainSource = stringDomainSourceWitness(node.ProjectList[0], domains)
 		return true
 	}
 	return false
+}
+
+// stringDomainSourceWitness is a compact, persisted representation of the
+// information needed by execute-time string-domain resolution. It keeps the
+// relevant parameter markers and static domain leaves, but deliberately does
+// not copy the source's derived-column graph. For source-preserving string
+// functions it retains a small function skeleton: a COALESCE summary would
+// erase the function's implicit numeric/date-to-string conversion boundary.
+// Every expression returned here is metadata only; it is never executed as a
+// query expression.
+func stringDomainSourceWitness(source *Expr, domains uint8) *Expr {
+	if source == nil || domains == 0 {
+		return nil
+	}
+	if domains == possibleStringDomainText|possibleStringDomainBinary {
+		if witness, ok := stringDomainSourceFunctionWitness(source); ok {
+			return witness
+		}
+		collector := stringDomainWitnessCollector{
+			seen: make(map[string]struct{}),
+		}
+		collector.collect(source, make(map[*Expr]struct{}))
+		args := append([]*Expr(nil), collector.args...)
+		if len(args) == 0 {
+			// A static mixed-domain source has no marker to carry. Keep both
+			// choices explicitly instead of manufacturing a one-argument
+			// COALESCE, which is not a valid function shape.
+			text := makePlan2StringConstExprWithType("")
+			text.GetLit().LiteralForm = plan.StringLiteralForm_STRING_LITERAL_TEXT
+			args = append(args, text)
+			binary := makePlan2VarBinaryConstExprWithType("")
+			binary.GetLit().LiteralForm = plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER
+			args = append(args, binary)
+		} else {
+			if collector.staticDomains&possibleStringDomainText != 0 {
+				text := makePlan2StringConstExprWithType("")
+				text.GetLit().LiteralForm = plan.StringLiteralForm_STRING_LITERAL_TEXT
+				args = append(args, text)
+			}
+			if collector.staticDomains&possibleStringDomainBinary != 0 {
+				binary := makePlan2VarBinaryConstExprWithType("")
+				binary.GetLit().LiteralForm = plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER
+				args = append(args, binary)
+			}
+		}
+		if len(args) == 1 {
+			return args[0]
+		}
+		return &Expr{
+			Typ: source.Typ,
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: "coalesce"},
+				Args: args,
+			}},
+		}
+	}
+	witness := makePlan2StringConstExprWithType("")
+	witness.Typ = stringDomainWitnessType(source, domains)
+	lit := witness.GetLit()
+	switch domains {
+	case possibleStringDomainText:
+		lit.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_TEXT
+	case possibleStringDomainBinary:
+		lit.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER
+	default:
+		witness.Typ = stringDomainWitnessType(source, possibleStringDomainBinary)
+		lit.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_TEXT
+		binary := makePlan2VarBinaryConstExprWithType("")
+		binary.GetLit().LiteralForm = plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER
+		lit.Src = binary
+	}
+	return witness
+}
+
+func stringDomainSourceFunctionWitness(source *Expr) (*Expr, bool) {
+	fn := source.GetF()
+	if fn == nil || fn.Func == nil {
+		return nil, false
+	}
+	name := strings.ToLower(fn.Func.GetObjName())
+	sourceIndex := preparedStringDomainSourceIndex(name, len(fn.Args))
+	if sourceIndex < 0 || !preparedExprStringDomainDependsOnRuntime(fn.Args[sourceIndex]) {
+		return nil, false
+	}
+
+	args := make([]*Expr, len(fn.Args))
+	for i, arg := range fn.Args {
+		if i == sourceIndex {
+			domains := possibleStringDomainsForExpr(arg)
+			if domains == 0 {
+				domains = possibleStringDomainText | possibleStringDomainBinary
+			}
+			args[i] = stringDomainSourceWitness(arg, domains)
+			continue
+		}
+		args[i] = compactStringDomainWitnessArg(arg)
+	}
+	return &Expr{
+		Typ: source.Typ,
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: fn.Func.GetObjName()},
+			Args: args,
+		}},
+	}, true
+}
+
+func preparedStringDomainSourceIndex(name string, arity int) int {
+	switch name {
+	case "substring", "substr", "mid", "substring_index", "left", "right",
+		"lower", "to_lower", "lcase", "upper", "to_upper", "ucase", "reverse",
+		"replace", "insert", "split_part", "repeat", "lpad", "rpad":
+		if arity == 0 {
+			return -1
+		}
+		return 0
+	case "trim":
+		if arity <= 2 {
+			return -1
+		}
+		return 2
+	default:
+		return -1
+	}
+}
+
+func compactStringDomainWitnessArg(arg *Expr) *Expr {
+	if arg == nil {
+		return nil
+	}
+	if preparedExprStringDomainDependsOnRuntime(arg) {
+		domains := possibleStringDomainsForExpr(arg)
+		if domains != 0 {
+			return stringDomainSourceWitness(arg, domains)
+		}
+	}
+	if arg.GetLit() != nil {
+		return DeepCopyExpr(arg)
+	}
+	// The witness is never evaluated. A typed literal is enough for function
+	// overload resolution and avoids retaining an unrelated expression graph.
+	placeholder := makePlan2Int64ConstExprWithType(0)
+	placeholder.Typ = arg.Typ
+	return placeholder
+}
+
+func stringDomainWitnessType(source *Expr, domains uint8) plan.Type {
+	typ := source.Typ
+	if domains == possibleStringDomainText &&
+		types.StaticStringDomain(makeTypeByPlan2Expr(source)) == types.StringDomainBinary {
+		typ.Id = int32(types.T_varchar)
+		typ.Charset = uint32(types.CharsetUTF8)
+	}
+	if domains == possibleStringDomainBinary &&
+		types.StaticStringDomain(makeTypeByPlan2Expr(source)) == types.StringDomainText {
+		typ.Id = int32(types.T_varbinary)
+		typ.Charset = uint32(types.CharsetBinary)
+	}
+	return typ
+}
+
+type stringDomainWitnessCollector struct {
+	args          []*Expr
+	seen          map[string]struct{}
+	staticDomains uint8
+}
+
+func (c *stringDomainWitnessCollector) addMarker(expr *Expr) {
+	if expr == nil {
+		return
+	}
+	var key string
+	var marker *Expr
+	switch {
+	case expr.GetP() != nil && expr.GetP().Pos >= 0:
+		position := expr.GetP().Pos
+		key = fmt.Sprintf("p:%d", position)
+		marker = &Expr{Typ: expr.Typ, Expr: &plan.Expr_P{
+			P: &plan.ParamRef{Pos: position},
+		}}
+	case expr.GetV() != nil:
+		variable := expr.GetV()
+		key = fmt.Sprintf("v:%s:%t:%t", variable.Name, variable.System, variable.Global)
+		marker = &Expr{Typ: expr.Typ, Expr: &plan.Expr_V{
+			V: &plan.VarRef{
+				Name: variable.Name, System: variable.System, Global: variable.Global,
+			},
+		}}
+	}
+	if marker == nil {
+		return
+	}
+	if _, ok := c.seen[key]; ok {
+		return
+	}
+	c.seen[key] = struct{}{}
+	c.args = append(c.args, marker)
+}
+
+func (c *stringDomainWitnessCollector) collect(expr *Expr, visited map[*Expr]struct{}) {
+	if expr == nil {
+		return
+	}
+	if _, ok := visited[expr]; ok {
+		return
+	}
+	visited[expr] = struct{}{}
+	if metadata := expr.GetPreparedNumeric(); metadata != nil && metadata.StringDomainSource != nil {
+		c.collect(metadata.StringDomainSource, visited)
+		return
+	}
+	if expr.GetP() != nil || expr.GetV() != nil {
+		c.addMarker(expr)
+		return
+	}
+	if lit := expr.GetLit(); lit != nil {
+		if !lit.Isnull {
+			switch lit.LiteralForm {
+			case plan.StringLiteralForm_STRING_LITERAL_TEXT:
+				c.staticDomains |= possibleStringDomainText
+
+			case plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER,
+				plan.StringLiteralForm_STRING_LITERAL_HEX,
+				plan.StringLiteralForm_STRING_LITERAL_BIT:
+				c.staticDomains |= possibleStringDomainBinary
+			default:
+				c.staticDomains |= possibleStringDomainsForType(makeTypeByPlan2Expr(expr))
+			}
+		}
+		c.collect(lit.Src, visited)
+		return
+	}
+	if sub := expr.GetSub(); sub != nil {
+		if sub.Child != nil {
+			c.collect(sub.Child, visited)
+		} else {
+			c.staticDomains |= possibleStringDomainText | possibleStringDomainBinary
+		}
+		return
+	}
+	if col := expr.GetCol(); col != nil {
+		c.staticDomains |= possibleStringDomainsForType(makeTypeByPlan2Expr(expr))
+		return
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		c.staticDomains |= possibleStringDomainsForType(makeTypeByPlan2Expr(expr))
+		return
+	}
+	name := strings.ToLower(fn.Func.GetObjName())
+	if name == "cast" {
+		if fn.GetSyntaxExplicitCast() {
+			c.staticDomains |= possibleStringDomainsForType(makeTypeByPlan2Expr(expr))
+			return
+		}
+		_, overload := function.DecodeOverloadID(fn.Func.GetObj())
+		if overload != 0 || len(fn.Args) == 0 {
+			c.staticDomains |= possibleStringDomainsForType(makeTypeByPlan2Expr(expr))
+			return
+		}
+		if possibleStringDomainsForType(makeTypeByPlan2Expr(fn.Args[0])) != 0 {
+			c.collect(fn.Args[0], visited)
+		} else {
+			c.staticDomains |= possibleStringDomainText
+		}
+		return
+	}
+	switch name {
+	case "if", "iff":
+		for _, arg := range fn.Args[1:] {
+			if preparedExprStringDomainDependsOnRuntime(arg) {
+				c.staticDomains |= possibleStringDomainText
+			}
+			c.collect(arg, visited)
+		}
+		return
+	case "case":
+		for i := 1; i < len(fn.Args); i += 2 {
+			if preparedExprStringDomainDependsOnRuntime(fn.Args[i]) {
+				c.staticDomains |= possibleStringDomainText
+			}
+			c.collect(fn.Args[i], visited)
+		}
+		if len(fn.Args)%2 == 1 {
+			if preparedExprStringDomainDependsOnRuntime(fn.Args[len(fn.Args)-1]) {
+				c.staticDomains |= possibleStringDomainText
+			}
+			c.collect(fn.Args[len(fn.Args)-1], visited)
+		}
+		return
+	case "coalesce", "ifnull", "greatest", "least":
+		for _, arg := range fn.Args {
+			if preparedExprStringDomainDependsOnRuntime(arg) {
+				c.staticDomains |= possibleStringDomainText
+			}
+			c.collect(arg, visited)
+		}
+		return
+	case "nullif":
+		if len(fn.Args) > 0 {
+			if preparedExprStringDomainDependsOnRuntime(fn.Args[0]) {
+				c.staticDomains |= possibleStringDomainText
+			}
+			c.collect(fn.Args[0], visited)
+		}
+		return
+	}
+	if stringOperands := preparedRegexpResultStringOperandCount(name, len(fn.Args)); stringOperands > 0 {
+		for i := 0; i < stringOperands; i++ {
+			if preparedExprStringDomainDependsOnRuntime(fn.Args[i]) {
+				c.staticDomains |= possibleStringDomainText
+			}
+			c.collect(fn.Args[i], visited)
+		}
+		return
+	}
+	sourceIndex := preparedStringDomainSourceIndex(name, len(fn.Args))
+	if sourceIndex >= 0 && sourceIndex < len(fn.Args) {
+		if preparedExprStringDomainDependsOnRuntime(fn.Args[sourceIndex]) {
+			// A string-producing function implicitly converts numeric runtime
+			// parameters before returning them. Keep one text leaf in the compact
+			// common-domain witness so an integer/date marker is not propagated as
+			// a numeric operand to an enclosing regexp function.
+			c.staticDomains |= possibleStringDomainText
+		}
+		c.collect(fn.Args[sourceIndex], visited)
+		return
+	}
+	if preparedFunctionStringDomainDependsOnRuntimeParam(expr) {
+		for _, arg := range fn.Args {
+			if preparedExprStringDomainDependsOnRuntime(arg) {
+				c.staticDomains |= possibleStringDomainText
+			}
+			c.collect(arg, visited)
+		}
+		return
+	}
+	c.staticDomains |= possibleStringDomainsForType(makeTypeByPlan2Expr(expr))
 }
 
 func preparedExprStringDomainDependsOnRuntime(expr *plan.Expr) bool {
@@ -5220,6 +5715,9 @@ func bindFuncExprImplByPlanExpr(
 	}
 	if err := normalizeTimeStringComparisonArgs(ctx, name, args); err != nil {
 		return nil, err
+	}
+	if strings.EqualFold(name, "inet_ntoa") {
+		normalizeInetNtoaBinaryPlanLiteral(args)
 	}
 	// HEX/BIT literals are stored as raw bytes in a VARCHAR-shaped plan
 	// expression. BIN and CONV treat non-empty values up to eight bytes as
@@ -6289,6 +6787,9 @@ func bindFuncExprImplByPlanExpr(
 	case "substring", "substr", "mid":
 		refineSubstringLiteralReturnType(args, &returnType)
 
+	case "left", "right":
+		refineLeftRightLiteralReturnType(args, &returnType)
+
 	case "lpad", "rpad":
 		refinePadLiteralReturnType(args, &returnType)
 
@@ -6594,14 +7095,13 @@ func refineSubstringLiteralReturnType(args []*plan.Expr, returnType *types.Type)
 		return
 	}
 
-	// This refinement exists for byte-preserving binary expressions. Text
-	// SUBSTRING keeps its existing metadata contract; narrowing it here would
-	// change the overload's declared result width and make consumers that rely
-	// on the text semantic family reject an otherwise valid expression.
-	binary := types.StaticStringDomain(sourceType) == types.StringDomainBinary
-	if !binary {
+	if possibleStringDomainsForExpr(args[0]) != possibleStringDomainBinary {
+		// Character SUBSTRING keeps its existing metadata contract; narrowing
+		// it from a literal bound changes the overload's declared result width
+		// and breaks consumers that rely on the text semantic family.
 		return
 	}
+	binary := true
 
 	var (
 		bound      uint64
@@ -6639,6 +7139,197 @@ func refineSubstringLiteralReturnType(args []*plan.Expr, returnType *types.Type)
 	// one of the other inputs is dynamic or the source declaration is wider
 	// than the aggregate limit.
 	refineKnownStringResultType(returnType, bound, binary)
+}
+
+// refineLeftRightLiteralReturnType narrows LEFT/RIGHT when the requested
+// length is a constant.  The result cannot exceed either that length or the
+// source's proven bound; an unknown length keeps the overload's conservative
+// metadata.
+func refineLeftRightLiteralReturnType(args []*plan.Expr, returnType *types.Type) {
+	if len(args) != 2 {
+		return
+	}
+	sourceType := makeTypeByPlan2Expr(args[0])
+	if sourceType.Oid == types.T_blob {
+		return
+	}
+	if possibleStringDomainsForExpr(args[0]) != possibleStringDomainBinary {
+		// LEFT/RIGHT follow the same text metadata contract as SUBSTRING.
+		// Literal character lengths are value bounds, not public result types.
+		return
+	}
+	binary := true
+	length, known := binarySubstringLengthBound(args[1].GetLit())
+	if !known {
+		return
+	}
+	if sourceBound, sourceKnown := stringExprBound(args[0], binary); sourceKnown && sourceBound < length {
+		length = sourceBound
+	}
+	refineKnownStringResultType(returnType, length, binary)
+}
+
+const (
+	possibleStringDomainText uint8 = 1 << iota
+	possibleStringDomainBinary
+)
+
+// possibleStringDomainsForExpr describes the domains that can reach a string
+// expression at runtime. Static binary type alone is insufficient: implicit
+// casts inserted for IF/CASE/COALESCE preserve the selected branch's runtime
+// domain, and prepared/user-variable values can change domain after binding.
+// Narrow byte metadata only when the expression is proven binary for every
+// non-NULL value.
+func possibleStringDomainsForExpr(expr *plan.Expr) uint8 {
+	if expr == nil {
+		return 0
+	}
+	staticDomains := possibleStringDomainsForType(makeTypeByPlan2Expr(expr))
+	if lit := expr.GetLit(); lit != nil {
+		if lit.Isnull {
+			return 0
+		}
+		domains := staticDomains
+		switch lit.LiteralForm {
+		case plan.StringLiteralForm_STRING_LITERAL_TEXT:
+			domains = possibleStringDomainText
+		case plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER,
+			plan.StringLiteralForm_STRING_LITERAL_HEX,
+			plan.StringLiteralForm_STRING_LITERAL_BIT:
+			domains = possibleStringDomainBinary
+		}
+		if lit.Src != nil {
+			domains |= possibleStringDomainsForExpr(lit.Src)
+		}
+		return domains
+	}
+
+	if metadata := expr.GetPreparedNumeric(); metadata != nil && metadata.StringDomainSource != nil {
+		sourceDomains := possibleStringDomainsForExpr(metadata.StringDomainSource)
+		if sourceDomains != 0 {
+			return sourceDomains
+		}
+	}
+	if expr.GetP() != nil || expr.GetV() != nil {
+		return possibleStringDomainText | possibleStringDomainBinary
+	}
+	if subquery := expr.GetSub(); subquery != nil {
+		if domains := possibleStringDomainsForExpr(subquery.Child); domains != 0 {
+			return domains
+		}
+		return possibleStringDomainText | possibleStringDomainBinary
+	}
+
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return staticDomains
+	}
+	name := strings.ToLower(fn.Func.GetObjName())
+	if name == "cast" {
+		if fn.GetSyntaxExplicitCast() {
+			return staticDomains
+		}
+		_, overload := function.DecodeOverloadID(fn.Func.GetObj())
+		if overload != 0 {
+			return staticDomains
+		}
+		if len(fn.Args) == 0 {
+			return staticDomains
+		}
+		argDomains := possibleStringDomainsForExpr(fn.Args[0])
+		if possibleStringDomainsForType(makeTypeByPlan2Expr(fn.Args[0])) != 0 {
+			return argDomains
+		}
+		if argDomains == possibleStringDomainText|possibleStringDomainBinary {
+			return argDomains
+		}
+		// An implicit cast from a scalar to a string has text semantics even
+		// when control-flow reconciliation chose a binary-shaped target type.
+		return possibleStringDomainText
+	}
+
+	var selected []*plan.Expr
+	switch name {
+	case "if", "iff":
+		if len(fn.Args) > 1 {
+			selected = fn.Args[1:]
+			// A constant condition makes the other branch unreachable.  Keep
+			// its string domain out of the result proof so a byte-preserving
+			// function outside IF can narrow metadata for the selected binary
+			// value.  Unknown and non-boolean conditions remain conservative.
+			if selectedBranch, ok := constantIfBranch(fn.Args); ok {
+				selected = []*plan.Expr{selectedBranch}
+			}
+		}
+	case "case":
+		for i := 1; i < len(fn.Args); i += 2 {
+			selected = append(selected, fn.Args[i])
+		}
+		if len(fn.Args)%2 == 1 {
+			selected = append(selected, fn.Args[len(fn.Args)-1])
+		}
+	case "coalesce", "ifnull", "greatest", "least":
+		selected = fn.Args
+	}
+	if len(selected) > 0 {
+		domains := uint8(0)
+		for _, arg := range selected {
+			domains |= possibleStringDomainsForExpr(arg)
+		}
+		if domains != 0 {
+			return domains
+		}
+		return staticDomains
+	}
+
+	// These functions preserve the effective domain of their value source;
+	// follow that source instead of trusting their common static return type.
+	sourceIndex := preparedStringDomainSourceIndex(name, len(fn.Args))
+	if sourceIndex >= 0 && sourceIndex < len(fn.Args) {
+		return possibleStringDomainsForExpr(fn.Args[sourceIndex])
+	}
+	if preparedFunctionStringDomainDependsOnRuntimeParam(expr) {
+		// Some string-producing functions (notably REGEXP_SUBSTR/REPLACE)
+		// transfer the subject/pattern domain without being one of the simple
+		// source-preserving functions above. Keep their runtime dependency
+		// visible to the compact witness.
+		return possibleStringDomainText | possibleStringDomainBinary
+	}
+
+	if staticDomains == possibleStringDomainBinary {
+		// An unrecognized binary-returning function may attach row-level text
+		// provenance, so fail closed rather than narrowing its result.
+		return possibleStringDomainText | possibleStringDomainBinary
+	}
+	return staticDomains
+}
+
+func constantIfBranch(args []*plan.Expr) (*plan.Expr, bool) {
+	if len(args) < 3 {
+		return nil, false
+	}
+	lit := args[0].GetLit()
+	if lit == nil || lit.Isnull {
+		return nil, false
+	}
+	condition, ok := lit.Value.(*plan.Literal_Bval)
+	if !ok {
+		return nil, false
+	}
+	if condition.Bval {
+		return args[1], true
+	}
+	return args[2], true
+}
+
+func possibleStringDomainsForType(typ types.Type) uint8 {
+	if !typ.Oid.IsMySQLString() {
+		return 0
+	}
+	if types.StaticStringDomain(typ) == types.StringDomainBinary {
+		return possibleStringDomainBinary
+	}
+	return possibleStringDomainText
 }
 
 func binarySubstringLengthBound(lit *plan.Literal) (uint64, bool) {
@@ -6756,15 +7447,7 @@ func stringExprBound(expr *plan.Expr, binary bool) (uint64, bool) {
 	if binary {
 		return binaryExprByteBound(expr)
 	}
-	if lit := expr.GetLit(); lit != nil && !lit.Isnull {
-		if value, ok := lit.GetValue().(*plan.Literal_Sval); ok {
-			return uint64(utf8.RuneCountInString(value.Sval)), true
-		}
-	}
-	if expr.Typ.Width > 0 && types.T(expr.Typ.Id) != types.T_text {
-		return uint64(expr.Typ.Width), true
-	}
-	return 0, false
+	return function.TextSourceCharacterBound(expr)
 }
 
 func binaryExprByteBound(expr *plan.Expr) (uint64, bool) {
@@ -7055,6 +7738,8 @@ func adjustControlFlowMetadata(name string, args []*Expr, argTypes []types.Type,
 		changed = adjustControlFlowBinaryMetadata(args, argTypes, valueIndexes, returnType)
 	case returnType.Oid.IsDecimal():
 		changed = adjustControlFlowDecimalLiteralMetadata(args, argTypes, valueIndexes, returnType)
+	case returnType.Oid == types.T_datetime || returnType.Oid == types.T_timestamp || returnType.Oid == types.T_time:
+		changed = adjustControlFlowTemporalMetadata(argTypes, valueIndexes, returnType)
 	}
 
 	if !changed || len(argsCastType) != len(args) {
@@ -7082,7 +7767,45 @@ func adjustControlFlowMetadata(name string, args []*Expr, argTypes []types.Type,
 		for _, idx := range valueIndexes {
 			argsCastType[idx] = *returnType
 		}
+		return
 	}
+	if returnType.Oid == types.T_datetime || returnType.Oid == types.T_timestamp || returnType.Oid == types.T_time {
+		for _, idx := range valueIndexes {
+			argsCastType[idx] = *returnType
+		}
+	}
+}
+
+func adjustControlFlowTemporalMetadata(argTypes []types.Type, valueIndexes []int, returnType *types.Type) bool {
+	maxScale := returnType.Scale
+	for _, idx := range valueIndexes {
+		if idx >= len(argTypes) {
+			return false
+		}
+		switch argTypes[idx].Oid {
+		case types.T_time, types.T_datetime, types.T_timestamp:
+			if argTypes[idx].Scale > maxScale {
+				maxScale = argTypes[idx].Scale
+			}
+		}
+	}
+	if maxScale < 0 {
+		maxScale = 0
+	}
+	changed := maxScale != returnType.Scale
+	if maxScale > 0 && returnType.Width != maxScale {
+		changed = true
+	}
+	if !changed {
+		return false
+	}
+	returnType.Scale = maxScale
+	if maxScale > 0 {
+		// Width is the plan's persisted temporal precision marker. Keep it in
+		// lockstep with Scale so CTAS/view metadata cannot regress to FSP 0.
+		returnType.Width = maxScale
+	}
+	return true
 }
 
 // adjustDateFormatMetadata starts with MySQL's format-dependent result length
@@ -8130,6 +8853,12 @@ func lagLeadOffsetIsNullLiteral(expr *Expr) bool {
 }
 
 func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
+	if b.inetNtoaNumericLiteralContext {
+		switch astExpr.ValType {
+		case tree.P_hexnum, tree.P_bit:
+			return b.bindInetNtoaBinaryLiteral(astExpr, typ)
+		}
+	}
 	// over_int64_err := moerr.NewInternalError(b.GetContext(), "", "Constants over int64 will support in future version.")
 	// rewrite the hexnum process logic
 	// for float64, if the number is over 1<<53-1,it will lost, so if typ is float64,
@@ -8322,6 +9051,70 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 	default:
 		return nil, moerr.NewInvalidInputf(b.GetContext(), "unsupport value '%s'", astExpr.String())
 	}
+}
+
+// isDirectInetNtoaNumericLiteral limits the INET_NTOA literal override to the
+// literal expression that is its argument. Applying the context to an entire
+// argument subtree would silently change nested function semantics, e.g.
+// INET_NTOA(CONCAT(X'31')) would make CONCAT see a number instead of its normal
+// binary string. Unary +/- remain part of the direct numeric-literal form.
+func isDirectInetNtoaNumericLiteral(expr tree.Expr) bool {
+	expr = stripNameConstParens(expr)
+	switch value := expr.(type) {
+	case *tree.NumVal:
+		switch value.ValType {
+		case tree.P_hexnum, tree.P_bit,
+			tree.P_int64, tree.P_uint64, tree.P_decimal, tree.P_float64:
+			return true
+		default:
+			return false
+		}
+	case *tree.UnaryExpr:
+		if value.Op != tree.UNARY_PLUS && value.Op != tree.UNARY_MINUS {
+			return false
+		}
+		return isDirectInetNtoaNumericLiteral(value.Expr)
+	default:
+		return false
+	}
+}
+
+// bindInetNtoaBinaryLiteral retains MySQL's numeric interpretation of HEX/BIT
+// literals for INET_NTOA. The generic literal binder intentionally represents
+// the same syntax as a binary string for functions where byte semantics are
+// required, so this conversion is kept local to INET_NTOA.
+func (b *baseBinder) bindInetNtoaBinaryLiteral(astExpr *tree.NumVal, typ Type) (*Expr, error) {
+	digits := strings.TrimSpace(astExpr.String())
+	base := 16
+	switch astExpr.ValType {
+	case tree.P_bit:
+		base = 2
+	}
+	if len(digits) >= 2 && digits[0] == '0' &&
+		((base == 16 && (digits[1] == 'x' || digits[1] == 'X')) ||
+			(base == 2 && (digits[1] == 'b' || digits[1] == 'B'))) {
+		digits = digits[2:]
+	}
+	if digits == "" {
+		return makePlan2Uint64ConstExprWithType(0), nil
+	}
+	value, ok := new(big.Int).SetString(digits, base)
+	if !ok {
+		return nil, moerr.NewInvalidInputf(b.GetContext(), "invalid binary numeric literal '%s'", astExpr.String())
+	}
+	var expr *Expr
+	if value.BitLen() > 64 {
+		// Any value wider than UINT64 is outside INET_NTOA's valid IPv4
+		// range. A typed maximum keeps the error-to-NULL behavior in the
+		// existing numeric executor without introducing a new wide vector.
+		expr = makePlan2Uint64ConstExprWithType(math.MaxUint64)
+	} else {
+		expr = makePlan2Uint64ConstExprWithType(value.Uint64())
+	}
+	if !typ.IsEmpty() {
+		return appendCastBeforeExpr(b.GetContext(), expr, typ)
+	}
+	return expr, nil
 }
 
 func (b *baseBinder) GetContext() context.Context { return b.sysCtx }
@@ -9445,6 +10238,29 @@ func isBinaryNumericLiteral(expr *Expr) bool {
 	}
 }
 
+// normalizeInetNtoaBinaryPlanLiteral mirrors the AST-side HEX/BIT handling for
+// callers that already own a plan expression. The literal payload is big
+// endian for both forms, so SetBytes preserves the numeric value even when the
+// value has leading zero bytes. Binary introducer strings are deliberately not
+// included: unlike HEX/BIT literals, they retain ordinary string-prefix
+// semantics in INET_NTOA.
+func normalizeInetNtoaBinaryPlanLiteral(args []*Expr) {
+	if len(args) != 1 || !isBinaryNumericLiteral(args[0]) {
+		return
+	}
+	literal := args[0].GetLit()
+	payload := []byte(literal.GetSval())
+	if len(payload) == 0 {
+		return
+	}
+	value := new(big.Int).SetBytes(payload)
+	if value.BitLen() > 64 {
+		args[0] = makePlan2Uint64ConstExprWithType(math.MaxUint64)
+		return
+	}
+	args[0] = makePlan2Uint64ConstExprWithType(value.Uint64())
+}
+
 func stripNameConstParens(expr tree.Expr) tree.Expr {
 	for {
 		paren, ok := expr.(*tree.ParenExpr)
@@ -9481,7 +10297,7 @@ func isDecimalLiteralCast(arg *plan.Expr) bool {
 // DefaultBinder or ReplaceValueBinder. For other binder implementations it
 // returns an empty Type so literal binding falls back to the generic path.
 func (b *baseBinder) defaultValueBindType() plan.Type {
-	if b.integerArgumentSourceContext {
+	if b.integerArgumentSourceContext || b.suppressDefaultValueBindType {
 		return plan.Type{}
 	}
 	if d, ok := b.impl.(*DefaultBinder); ok {

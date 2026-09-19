@@ -121,7 +121,8 @@ const (
 	MORPCVersion83     int64 = 83 // bounded COALESCE character and binary result domains
 	MORPCVersion84     int64 = 84 // extended discrete percentile input types
 	MORPCVersion85     int64 = 85 // shared integer-parameter coercion execution identities
-	MORPCLatestVersion       = MORPCVersion85
+	MORPCVersion86     int64 = 86 // extended IP overload/result and expression metadata contracts
+	MORPCLatestVersion       = MORPCVersion86
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

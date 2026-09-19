@@ -141,7 +141,8 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 			return nil, err
 		}
 	}
-	if features.IPFunctionSemantics {
+	if features.IPFunctionSemantics || features.TOBase64ResultContracts || features.IPFunctionResultContracts ||
+		features.ExpressionResultMetadataContracts {
 		if err = validateIPFunctionDestination(proc, p); err != nil {
 			return nil, err
 		}
@@ -2240,6 +2241,13 @@ func validateRemoteExpressionPipelineProtocol(
 		return moerr.NewNotSupportedNoCtx(
 			"corrected IP function semantics require MORPC protocol version 72",
 		)
+	}
+	if features.ExpressionResultMetadataContracts || features.TOBase64ResultContracts || features.IPFunctionResultContracts {
+		if !hasProtocolVersion || protocolVersion < defines.MORPCVersion86 {
+			return moerr.NewNotSupportedNoCtx(
+				"expression result contracts require MORPC protocol version 86",
+			)
+		}
 	}
 	return nil
 }

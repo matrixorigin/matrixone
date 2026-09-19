@@ -2841,7 +2841,7 @@ var supportedOperators = []FuncNew{
 				overloadId: 13,
 				args:       []types.T{types.T_datetime},
 				retType: func(parameters []types.Type) types.Type {
-					return parameters[0]
+					return coalesceTemporalReturnType(types.T_datetime, parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return CoalesceGeneral[types.Datetime]
@@ -2851,9 +2851,7 @@ var supportedOperators = []FuncNew{
 				overloadId: 14,
 				args:       []types.T{types.T_timestamp},
 				retType: func(parameters []types.Type) types.Type {
-					ret := types.T_timestamp.ToType()
-					setMaxScaleFromSource(&ret, parameters)
-					return ret
+					return coalesceTemporalReturnType(types.T_timestamp, parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return CoalesceGeneral[types.Timestamp]
@@ -2913,7 +2911,7 @@ var supportedOperators = []FuncNew{
 				overloadId: 19,
 				args:       []types.T{types.T_time},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_time.ToType()
+					return coalesceTemporalReturnType(types.T_time, parameters)
 				},
 				newOp: func() executeLogicOfOverload {
 					return CoalesceGeneral[types.Time]
