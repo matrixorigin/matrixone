@@ -197,6 +197,200 @@ func (r *loggingTestReporter) Logf(format string, args ...any) {
 	r.logs = append(r.logs, fmt.Sprintf(format, args...))
 }
 
+type syntheticFailureReporter struct {
+	panicTestReporter
+	failed   bool
+	cleanups []func()
+	errors   []string
+}
+
+func (r *syntheticFailureReporter) Failed() bool { return r.failed }
+
+func (r *syntheticFailureReporter) Cleanup(fn func()) {
+	r.cleanups = append(r.cleanups, fn)
+}
+
+func (r *syntheticFailureReporter) Errorf(format string, args ...any) {
+	r.errors = append(r.errors, fmt.Sprintf(format, args...))
+}
+
+func TestSharedTestClusterFailureCleanupCannotCloseReplacement(t *testing.T) {
+	state := SharedTestCluster{}
+	first := &cluster{}
+	firstReporter := &syntheticFailureReporter{failed: true}
+	dependentCleanupSawFixture := false
+
+	state.Run(firstReporter, func() (Cluster, error) {
+		return first, nil
+	}, func(Cluster) {
+		// This cleanup is registered after SharedTestCluster's fallback cleanup;
+		// the actual testing.T LIFO order runs it first while the fixture is
+		// still available.
+		firstReporter.Cleanup(func() {
+			dependentCleanupSawFixture = state.cluster == first
+		})
+	})
+	require.Same(t, first, state.cluster, "failure must seal before cleanup, not close before it")
+	require.True(t, state.sealed)
+	require.Len(t, firstReporter.cleanups, 2)
+	oldCleanup := firstReporter.cleanups[0]
+	require.NoError(t, state.CloseIfActive(), "an outer defer must not close before callback cleanup")
+	require.Same(t, first, state.cluster)
+	for index := len(firstReporter.cleanups) - 1; index >= 0; index-- {
+		firstReporter.cleanups[index]()
+	}
+	require.True(t, dependentCleanupSawFixture)
+	require.Nil(t, state.cluster)
+
+	second := &cluster{}
+	secondReporter := &syntheticFailureReporter{}
+	state.Run(secondReporter, func() (Cluster, error) {
+		return second, nil
+	}, func(Cluster) {})
+	require.Same(t, second, state.cluster)
+
+	// Simulate a delayed duplicate Cleanup callback from generation one. It must not
+	// close or invalidate generation two after the shared state was reset.
+	oldCleanup()
+	require.Same(t, second, state.cluster)
+	require.NoError(t, state.CloseIfActive())
+}
+
+func TestSharedTestClusterRegistersOneFailureCleanupPerTest(t *testing.T) {
+	state := SharedTestCluster{}
+	reporter := &syntheticFailureReporter{}
+	fixture := &cluster{}
+	cleanupSawFixture := make([]bool, 0, 2)
+
+	state.Run(reporter, func() (Cluster, error) {
+		return fixture, nil
+	}, func(Cluster) {
+		reporter.Cleanup(func() { cleanupSawFixture = append(cleanupSawFixture, state.cluster == fixture) })
+	})
+
+	reporter.failed = true
+	state.Run(reporter, func() (Cluster, error) {
+		return fixture, nil
+	}, func(Cluster) {
+		reporter.Cleanup(func() { cleanupSawFixture = append(cleanupSawFixture, state.cluster == fixture) })
+	})
+
+	// One shared finalizer is registered before both callback-owned cleanups.
+	// LIFO cleanup therefore lets both callbacks use the live fixture before it
+	// is closed.
+	require.Len(t, reporter.cleanups, 3)
+	for index := len(reporter.cleanups) - 1; index >= 0; index-- {
+		reporter.cleanups[index]()
+	}
+	require.Equal(t, []bool{true, true}, cleanupSawFixture)
+	require.Nil(t, state.cluster)
+}
+
+func TestSharedTestClusterTracksParentAndChildCleanupScopes(t *testing.T) {
+	state := SharedTestCluster{}
+	parentReporter := &syntheticFailureReporter{}
+	childReporter := &syntheticFailureReporter{}
+	fixture := &cluster{}
+	cleanupSawFixture := make([]bool, 0, 2)
+
+	state.Run(parentReporter, func() (Cluster, error) {
+		return fixture, nil
+	}, func(Cluster) {
+		parentReporter.Cleanup(func() { cleanupSawFixture = append(cleanupSawFixture, state.cluster == fixture) })
+	})
+	state.Run(childReporter, func() (Cluster, error) {
+		return fixture, nil
+	}, func(Cluster) {})
+	for index := len(childReporter.cleanups) - 1; index >= 0; index-- {
+		childReporter.cleanups[index]()
+	}
+
+	parentReporter.failed = true
+	state.Run(parentReporter, func() (Cluster, error) {
+		return fixture, nil
+	}, func(Cluster) {
+		parentReporter.Cleanup(func() { cleanupSawFixture = append(cleanupSawFixture, state.cluster == fixture) })
+	})
+
+	// The child scope has already released its registration. The parent owns
+	// one finalizer for both parent callbacks, so both dependent cleanups run
+	// before destruction.
+	require.Len(t, parentReporter.cleanups, 3)
+	for index := len(parentReporter.cleanups) - 1; index >= 0; index-- {
+		parentReporter.cleanups[index]()
+	}
+	require.Equal(t, []bool{true, true}, cleanupSawFixture)
+	require.Nil(t, state.cluster)
+}
+
+func TestSharedTestClusterSealsOnCallbackPanic(t *testing.T) {
+	state := SharedTestCluster{}
+	reporter := &syntheticFailureReporter{}
+	fixture := &cluster{}
+
+	require.Panics(t, func() {
+		state.Run(reporter, func() (Cluster, error) {
+			return fixture, nil
+		}, func(Cluster) {
+			panic("synthetic callback failure")
+		})
+	})
+	require.True(t, state.sealed, "a non-normal callback exit must seal the generation")
+	require.Same(t, fixture, state.cluster)
+
+	reporter.failed = true
+	require.Len(t, reporter.cleanups, 1)
+	reporter.cleanups[0]()
+	require.Nil(t, state.cluster)
+}
+
+func TestSharedTestClusterFailedCleanupAttemptsCloseOnce(t *testing.T) {
+	closeErr := errors.New("cleanup still in progress")
+	service := &closeTrackingService{closeErr: closeErr}
+	op := &operator{state: started}
+	op.reset.svc = service
+	fixture := &cluster{state: started, services: []*operator{op}}
+	state := SharedTestCluster{}
+	reporter := &syntheticFailureReporter{failed: true}
+
+	state.Run(reporter, func() (Cluster, error) {
+		return fixture, nil
+	}, func(Cluster) {})
+	require.Len(t, reporter.cleanups, 1)
+	reporter.cleanups[0]()
+	reporter.cleanups[0]()
+
+	require.EqualValues(t, 1, service.closeCount.Load(), "automatic failure cleanup must not retry itself")
+	require.True(t, state.closed)
+	require.Same(t, fixture, state.cluster)
+	require.Len(t, reporter.errors, 1)
+
+	service.closeErr = nil
+	require.NoError(t, state.CloseIfActive(), "an explicit retry may complete retained cleanup")
+	require.False(t, state.closed)
+}
+
+func TestSharedTestClusterSuccessfulCallbackKeepsFixture(t *testing.T) {
+	state := SharedTestCluster{}
+	reporter := &syntheticFailureReporter{}
+	fixture := &cluster{}
+	initCalls := 0
+	init := func() (Cluster, error) {
+		initCalls++
+		return fixture, nil
+	}
+
+	state.Run(reporter, init, func(Cluster) {})
+	state.Run(reporter, init, func(Cluster) {})
+	for _, cleanup := range reporter.cleanups {
+		cleanup()
+	}
+
+	require.Equal(t, 1, initCalls, "a successful shared fixture remains reusable")
+	require.Same(t, fixture, state.cluster, "successful cleanup callbacks must not close the fixture")
+	require.NoError(t, state.CloseIfActive())
+}
+
 func TestSharedTestClusterLogsInitializationOnce(t *testing.T) {
 	state := SharedTestCluster{}
 	reporter := &loggingTestReporter{}

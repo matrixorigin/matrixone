@@ -17,6 +17,7 @@ package embed
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sync"
 	"time"
 
@@ -36,11 +37,22 @@ var (
 // return errors instead of failing the current test from inside sync.Once, so a
 // failed startup is reported consistently to every later caller.
 type SharedTestCluster struct {
-	mu      sync.Mutex
-	once    sync.Once
-	cluster Cluster
-	err     error
-	closed  bool
+	mu                   sync.Mutex
+	once                 sync.Once
+	cluster              Cluster
+	err                  error
+	closed               bool
+	sealed               bool
+	cleanupTried         bool
+	generation           uint64
+	cleanupSequence      uint64
+	cleanupRegistrations map[sharedCleanupRegistration]struct{}
+}
+
+type sharedCleanupRegistration struct {
+	generation uint64
+	owner      uintptr
+	sequence   uint64
 }
 
 type testReporter interface {
@@ -54,6 +66,22 @@ type testReporter interface {
 // coupling the lifecycle code to testing.T.
 type testLogger interface {
 	Logf(format string, args ...any)
+}
+
+// testFailureReporter and testCleanupRegistrar are optional extensions of
+// testReporter. Keeping them optional preserves the small reporter contract
+// used by the lifecycle unit tests while allowing *testing.T to quarantine a
+// failed shared fixture even when FailNow/Goexit prevents Run from returning.
+type testFailureReporter interface {
+	Failed() bool
+}
+
+type testCleanupRegistrar interface {
+	Cleanup(func())
+}
+
+type testErrorReporter interface {
+	Errorf(format string, args ...any)
 }
 
 func logTestSetup(t testReporter, format string, args ...any) {
@@ -75,11 +103,16 @@ func (c *SharedTestCluster) Run(
 		t.Fatalf("shared cluster is closed")
 		return
 	}
+	if c.sealed {
+		t.Fatalf("shared cluster is quarantined after a test failure")
+		return
+	}
 
 	initialized := false
 	initStarted := time.Now()
 	c.once.Do(func() {
 		initialized = true
+		c.generation++
 		c.cluster, c.err = init()
 		if c.err == nil && c.cluster == nil {
 			c.err = moerr.NewInternalErrorNoCtx("cluster initializer returned nil without an error")
@@ -114,7 +147,156 @@ func (c *SharedTestCluster) Run(
 		t.Fatalf("failed to initialize shared cluster: %v", c.err)
 		return
 	}
+
+	// Capture the generation before invoking the callback. The cleanup must
+	// never close a replacement fixture that was initialized after this one was
+	// discarded. The deferred seal runs while c.mu is still held, so Error,
+	// FailNow/Goexit, panic, and ordinary callback return all prevent another
+	// callback from entering a failed generation before test cleanup runs.
+	fixtureGeneration := c.generation
+	c.registerFailureCleanup(t, fixtureGeneration)
+	callbackReturned := false
+	if failureAware, ok := t.(testFailureReporter); ok {
+		defer func() {
+			if !callbackReturned || failureAware.Failed() {
+				c.sealFailedGenerationLocked(t, fixtureGeneration)
+			}
+		}()
+	}
 	fn(c.cluster)
+	callbackReturned = true
+}
+
+// registerFailureCleanup makes failure isolation work for callbacks that do
+// not return normally. testing.T runs Cleanup after Run's deferred unlock, so
+// the cleanup can safely acquire c.mu. A generation guard is essential: a
+// later test may already have started a replacement fixture by the time an
+// older cleanup callback is invoked.
+func (c *SharedTestCluster) registerFailureCleanup(t testReporter, generation uint64) {
+	failed, failureAware := t.(testFailureReporter)
+	registrar, cleanupAware := t.(testCleanupRegistrar)
+	if !failureAware || !cleanupAware {
+		return
+	}
+	owner := testReporterIdentity(t)
+	if c.cleanupRegistrations == nil {
+		c.cleanupRegistrations = make(map[sharedCleanupRegistration]struct{})
+	}
+	registration := sharedCleanupRegistration{generation: generation, owner: owner}
+	if owner == 0 {
+		c.cleanupSequence++
+		registration.sequence = c.cleanupSequence
+	}
+	if _, exists := c.cleanupRegistrations[registration]; exists {
+		return
+	}
+	c.cleanupRegistrations[registration] = struct{}{}
+	registrar.Cleanup(func() {
+		if err := c.finishFailureCleanup(t, failed, registration); err != nil {
+			reportFailureQuarantineError(t, generation, err)
+		}
+	})
+}
+
+// testing.T is a pointer-backed test scope. Use its identity to register one
+// finalizer for all Run calls made by the same test and generation; otherwise
+// a later Run's finalizer could close the fixture before an earlier callback's
+// cleanup. A non-pointer test reporter keeps the conservative legacy behavior.
+func testReporterIdentity(t testReporter) uintptr {
+	v := reflect.ValueOf(t)
+	if v.IsValid() && v.Kind() == reflect.Pointer {
+		return v.Pointer()
+	}
+	return 0
+}
+
+func reportFailureQuarantineError(t testReporter, generation uint64, err error) {
+	if reporter, ok := t.(testErrorReporter); ok {
+		reporter.Errorf("failed to quarantine shared cluster generation %d: %v", generation, err)
+		return
+	}
+	logTestSetup(t,
+		"MO_UT_SETUP fixture=shared-cluster phase=failed-test-quarantine generation=%d status=error error=%v",
+		generation, err)
+}
+
+// sealFailedGenerationLocked is deliberately separate from destruction. The
+// callback's own defers and t.Cleanup handlers may still need the cluster for
+// database/connection cleanup. Sealing is enough to prevent another callback
+// from reusing the generation while those handlers finish.
+func (c *SharedTestCluster) sealFailedGenerationLocked(t testReporter, generation uint64) {
+	if c.cluster == nil || c.generation != generation || c.sealed {
+		return
+	}
+	c.sealed = true
+	logTestSetup(t,
+		"MO_UT_SETUP fixture=shared-cluster phase=failed-test-seal generation=%d status=ready",
+		generation)
+}
+
+// finishFailureCleanup releases one test-scope cleanup registration. The
+// generation is destroyed only after every registered scope has finished; this
+// preserves callback-owned cleanup when a parent and child both call Run.
+// Exactly one automatic close attempt is made after the final registration;
+// incomplete cleanup retains ownership until an explicit CloseIfActive retry.
+func (c *SharedTestCluster) finishFailureCleanup(
+	t testReporter,
+	failed testFailureReporter,
+	registration sharedCleanupRegistration,
+) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.generation != registration.generation {
+		return nil
+	}
+	delete(c.cleanupRegistrations, registration)
+	if c.cluster == nil {
+		return nil
+	}
+	if !failed.Failed() && !c.sealed {
+		return nil
+	}
+	if !c.sealed {
+		c.sealFailedGenerationLocked(t, registration.generation)
+	}
+	for outstanding := range c.cleanupRegistrations {
+		if outstanding.generation == registration.generation {
+			return nil
+		}
+	}
+	if c.cleanupTried {
+		return nil
+	}
+	c.cleanupTried = true
+
+	started := time.Now()
+	fixture := c.cluster
+	err := fixture.Close()
+	complete := closeComplete(fixture, err)
+	status := "ready"
+	if !complete || err != nil {
+		status = "error"
+	}
+	logTestSetup(t,
+		"MO_UT_SETUP fixture=shared-cluster phase=failed-test-quarantine generation=%d duration=%s status=%s complete=%t",
+		registration.generation, time.Since(started), status, complete)
+
+	if !complete {
+		c.closed = true
+		return errors.Join(err, moerr.NewInvalidStateNoCtx("failed shared cluster cleanup is incomplete"))
+	}
+
+	// The old generation has released all resources, including admission and
+	// ports. Reset only after CloseComplete; a later Run can safely initialize a
+	// new generation without paying this cost on successful tests.
+	c.cluster = nil
+	c.err = nil
+	c.once = sync.Once{}
+	c.closed = false
+	c.sealed = false
+	c.cleanupTried = false
+	c.cleanupRegistrations = nil
+	return err
 }
 
 // Close releases the shared cluster or retries cleanup retained from a failed
@@ -147,6 +329,14 @@ func (c *SharedTestCluster) CloseIfActive() error {
 	if c.cluster == nil {
 		return nil
 	}
+	// A failed callback seals the generation before its callback-owned
+	// t.Cleanup handlers run. Defer destruction to the registered failure
+	// cleanup so an outer test defer cannot close the fixture first. Once that
+	// automatic attempt has happened, this method remains the explicit retry
+	// path for incomplete cleanup.
+	if c.sealed && !c.cleanupTried {
+		return nil
+	}
 	err := c.cluster.Close()
 	if !closeComplete(c.cluster, err) {
 		// A failed close leaves ownership with this state, but prevents a later
@@ -159,6 +349,9 @@ func (c *SharedTestCluster) CloseIfActive() error {
 	c.err = nil
 	c.once = sync.Once{}
 	c.closed = false
+	c.sealed = false
+	c.cleanupTried = false
+	c.cleanupRegistrations = nil
 	return err
 }
 
