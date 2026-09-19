@@ -2875,6 +2875,26 @@ var supportedStringBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `json_depth`
+	{
+		functionId: JSON_DEPTH,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    jsonDepthCheckFn,
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_int64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return JsonDepth
+				},
+			},
+		},
+	},
+
 	// function `least`
 	{
 		functionId: LEAST,
