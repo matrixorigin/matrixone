@@ -156,6 +156,13 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.CalendarIntervalNormalization {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion115)
 	}
+	viewDefinitionVersion, err := requiredViewDefinitionFunctionProtocolVersion(owner)
+	if err != nil {
+		return 0, err
+	}
+	if viewDefinitionVersion > requiredVersion {
+		requiredVersion = viewDefinitionVersion
+	}
 	return requiredVersion, nil
 }
 
