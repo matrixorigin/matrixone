@@ -321,6 +321,131 @@ func (builder *QueryBuilder) applyIndicesForAggUsingFullTextIndex(nodeID int32, 
 	return nodeID, nil
 }
 
+// resolveScanNodeUnderWindow finds the base TABLE_SCAN carrying the WHERE-clause MATCH beneath a
+// WINDOW node. OVER(PARTITION BY ...) makes the binder insert a Node_PARTITION between the window
+// and the scan (appendWindowNode), and a single-input PROJECT may also sit in between; both are
+// passthroughs to descend. A WINDOW child that is itself a WINDOW is NOT descended: stacked
+// windows are rewritten innermost-first by post-order recursion.
+func (builder *QueryBuilder) resolveScanNodeUnderWindow(node *plan.Node) *plan.Node {
+	for node != nil {
+		switch {
+		case node.NodeType == plan.Node_TABLE_SCAN:
+			if node.TableDef != nil && node.TableDef.Indexes != nil {
+				return node
+			}
+			return nil
+		case (node.NodeType == plan.Node_PARTITION || node.NodeType == plan.Node_PROJECT) && len(node.Children) == 1:
+			node = builder.qry.Nodes[node.Children[0]]
+		default:
+			return nil
+		}
+	}
+	return nil
+}
+
+// rewriteWindowMatchesFromServed replaces a fulltext_match inside a WINDOW's own spec (a
+// window-function argument or its OVER clause in WinSpecList), inside the WINDOW's post-evaluation
+// FilterList (a predicate that survives predicate-pushdown onto the window because it also
+// references a window column, e.g. `rn = 1 OR score > 0` -- Node_WINDOW runs compileRestrict on it
+// AFTER compileWin), and inside the PARTITION node the binder places under it for
+// OVER(PARTITION BY ...), with the score column of an index scan already served
+// (builder.ftJoinServed). servedFullTextScoreSameTable is binding-tag-aware, so a MATCH no served
+// scan answers is left intact and still raises 20105.
+func (builder *QueryBuilder) rewriteWindowMatchesFromServed(windowNode *plan.Node) {
+	if windowNode == nil || len(builder.ftJoinServed) == 0 {
+		return
+	}
+	rewriter := func(fn *plan.Function) *plan.Expr {
+		return builder.servedFullTextScoreSameTable(fn, builder.ftJoinServed)
+	}
+	for i := range windowNode.WinSpecList {
+		if exprCallsFunc(windowNode.WinSpecList[i], "fulltext_match") {
+			windowNode.WinSpecList[i] = replaceScoreFnInExprBy(windowNode.WinSpecList[i], rewriter)
+		}
+	}
+	builder.rewriteServedMatchesInFilterList(windowNode)
+	if len(windowNode.Children) == 1 {
+		if child := builder.qry.Nodes[windowNode.Children[0]]; child != nil && child.NodeType == plan.Node_PARTITION {
+			for _, ob := range child.OrderBy {
+				if ob != nil && exprCallsFunc(ob.Expr, "fulltext_match") {
+					ob.Expr = replaceScoreFnInExprBy(ob.Expr, rewriter)
+				}
+			}
+		}
+	}
+}
+
+// rewriteServedMatchesInFilterList rewrites every served fulltext_match in a node's FilterList to the
+// score column of the index scan that answers it (builder.ftJoinServed), binding-tag-aware. It backs
+// two post-window predicates: the WINDOW's own FilterList (a predicate kept on the window because it
+// also references a window column, e.g. `rn = 1 OR score > 0`) and the independent Node_FILTER that
+// predicate pushdown may leave ABOVE a WINDOW -- a `score > 0` it cannot move below the window because
+// it neither references a window column nor pushes onto the partition keys. The node keeps its place,
+// so evaluation stays post-window. A MATCH no served scan answers is left intact and still raises
+// 20105 (#28974 P2).
+func (builder *QueryBuilder) rewriteServedMatchesInFilterList(node *plan.Node) {
+	if node == nil || len(builder.ftJoinServed) == 0 {
+		return
+	}
+	rewriter := func(fn *plan.Function) *plan.Expr {
+		return builder.servedFullTextScoreSameTable(fn, builder.ftJoinServed)
+	}
+	for i := range node.FilterList {
+		if exprCallsFunc(node.FilterList[i], "fulltext_match") {
+			node.FilterList[i] = replaceScoreFnInExprBy(node.FilterList[i], rewriter)
+		}
+	}
+}
+
+// applyIndicesForWindowUsingFullTextIndex rewrites a WINDOW -> [PARTITION ->] SCAN(MATCH) shape
+// (#28974). The scan carries the WHERE-clause fulltext_match; build the index-scan join for those
+// MATCHes and reparent the scan's immediate parent onto it, mirroring the aggregate path.
+func (builder *QueryBuilder) applyIndicesForWindowUsingFullTextIndex(nodeID int32, windowNode *plan.Node, scanNode *plan.Node,
+	filterids []int32, filterIndexDefs []*plan.IndexDef,
+	wrappedExprs []*plan.Expr, wrappedIndexDefs []*plan.IndexDef,
+	colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+	var err error
+
+	projids := make([]int32, 0)
+	projIndexDefs := make([]*plan.IndexDef, 0)
+	eqmap := make(map[int32]int32)
+
+	idxID, _, _, served, err := builder.applyJoinFullTextIndices(nodeID, nil, scanNode,
+		scanNode.Limit, scanNode.Offset, filterids, filterIndexDefs, projids, projIndexDefs,
+		wrappedExprs, wrappedIndexDefs, eqmap, colRefCnt, idxColMap)
+	if err != nil {
+		return -1, err
+	}
+	joinNode := builder.qry.Nodes[idxID]
+	joinNode.Limit = DeepCopyExpr(scanNode.Limit)
+	joinNode.Offset = DeepCopyExpr(scanNode.Offset)
+	scanNode.Limit = nil
+	scanNode.Offset = nil
+
+	// Reparent the scan's immediate parent onto the index-scan join. With OVER(PARTITION BY ...) a
+	// Node_PARTITION (and any single-input PROJECT) sits between the window and the scan, so the
+	// join must attach below it -- hardcoding windowNode.Children[0] would drop the partition.
+	for parent := windowNode; parent != nil; {
+		childID := parent.Children[0]
+		if childID == scanNode.NodeId {
+			parent.Children[0] = idxID
+			break
+		}
+		parent = builder.qry.Nodes[childID]
+	}
+
+	// Publish the served scores so the PROJECT/SORT above the window (resolveProjectMatchesOverJoin)
+	// and any stacked outer window resolve a MATCH they carry to the score column instead of leaving
+	// a raw fulltext_match that reaches execution as 20105.
+	builder.ftJoinServed = append(builder.ftJoinServed, served...)
+
+	// This window's own spec, and the partition node between it and the scan, may reference the
+	// MATCHes just served.
+	builder.rewriteWindowMatchesFromServed(windowNode)
+
+	return nodeID, nil
+}
+
 func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *plan.Node, scanNode *plan.Node,
 	paginationLimit, paginationOffset *plan.Expr,
 	filterids []int32, filter_indexDefs []*plan.IndexDef,
@@ -1434,27 +1559,36 @@ func (builder *QueryBuilder) applyFullTextFiltersForJoinChildren(nodeID int32, j
 	// fulltext-index result on the pk/doc_id. Fulltext search yields one row per matching
 	// doc, so that join is 1:1 and ROW-EQUIVALENT to the filter it replaces.
 	//
-	// A child is eligible iff rewriting it cannot change the enclosing join's
-	// row-preservation:
+	// A fulltext_match on a scan's FilterList is a pure filter on that input's own columns, so
+	// re-expressing it as the 1-row-per-pk semi-join is ROW-EQUIVALENT to the WHERE that placed it
+	// there -- on EITHER side of a join, whether the input is null-extending or row-preserved:
 	//   - INNER/SEMI: neither input is row-preserving, so both are eligible.
-	//   - outer joins (LEFT/RIGHT/SINGLE/OUTER): only the NULL-EXTENDING (non-preserved)
-	//     child. That is where a scalar subquery's match lands -- correlated
-	//     `select (select count(*) ... where match(...))` decorrelates to AGG over
-	//     `outer LEFT/SINGLE JOIN docs(match)` with docs as the non-preserved child (#27962).
+	//   - LEFT/RIGHT/SINGLE: both children are eligible.
+	//       * the NULL-EXTENDING child carries a decorrelated subquery's own filter -- correlated
+	//         `select (select count(*) ... where match(...))` decorrelates to AGG over
+	//         `outer LEFT/SINGLE JOIN docs(match)` with docs as the non-preserved child (#27962);
+	//       * the ROW-PRESERVED child carries the outer query's WHERE MATCH, which filters the
+	//         preserved input BEFORE the outer join exactly as the WHERE did. `A LEFT JOIN B WHERE
+	//         match(A.x)` becomes `(A INNER JOIN A_ft) LEFT JOIN B`: A's matchers, null-extending B
+	//         where B is absent -- the row-preserving matcher with no partner is kept, not dropped.
+	//         This shape was unsupported and failed with 20105 (#20687).
+	//   - all other join types keep the conservative null-extending-only gate: ANTI/MARK/DEDUP
+	//     (filtering the anti/mark input is not a pure filter) and ASOF/ASOF_LEFT (filtering the
+	//     nearest-match input would change which row is "nearest") stay as before. FULL OUTER does
+	//     not exist in MO (its filters never reach a child scan), so it is not listed.
 	//
-	// Critically, applyIndices runs AFTER determineBuildAndProbeSide + swapJoinChildren, which
-	// can physically swap the children and convert LEFT->RIGHT (IsRightJoin) based on input-size
-	// statistics. So the non-preserved child is NOT a fixed index -- it is whatever
-	// nodeNullExtendsChild reports for the POST-SWAP shape (RIGHT -> child 0; right-swapped
-	// SINGLE -> child 0). Hard-coding child 1 made the fix stats-dependent: a swapped plan left
-	// the match unrewritten and failed with 20105 (#27952). The preserved child is never
-	// null-extending, so it stays untouched (TestFullTextJoinRewriteSkipsOuterJoins).
+	// Because both children of these outer joins are eligible, the rewrite is robust to
+	// determineBuildAndProbeSide + swapJoinChildren, which run BEFORE applyIndices and can physically
+	// swap the children and convert LEFT->RIGHT (IsRightJoin) by input-size stats: whichever physical
+	// index the match lands on is served (the earlier child-1 hard-coding was stats-dependent, #27952).
+	// The loop only rewrites a child that actually carries a fulltext filter (ok=false otherwise).
 	if joinNode == nil {
 		return false, nil
 	}
 	eligible := func(i int) bool {
 		switch joinNode.JoinType {
-		case plan.Node_INNER, plan.Node_SEMI:
+		case plan.Node_INNER, plan.Node_SEMI,
+			plan.Node_LEFT, plan.Node_RIGHT, plan.Node_SINGLE:
 			return true
 		default:
 			return nodeNullExtendsChild(joinNode, i)
