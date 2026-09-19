@@ -412,7 +412,6 @@ func TestVectorIndexCacheEvictEntrySkipsRenewedTTLAfterHousekeepingCheck(t *test
 	stale.Cond = sync.NewCond(stale.Mutex.RLocker())
 	stale.Status.Store(STATUS_LOADED)
 	stale.ExpireAt.Store(time.Now().Add(time.Minute).UnixMicro())
-	stale.markStale()
 	c.IndexMap.Store("stale", stale)
 	require.True(t, c.evictEntry("stale", stale, "generation_changed"))
 

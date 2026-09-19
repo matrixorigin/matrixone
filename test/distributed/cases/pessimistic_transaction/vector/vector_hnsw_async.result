@@ -36,6 +36,10 @@ execute wait_t1_initial;
 f32_ready	f64_ready
 1	1
 deallocate prepare wait_t1_initial;
+select case_name, a from (select 'f32-warm' as case_name, a from (select a from t1_f32 order by l2_distance(b, '[1,2,3]') limit 1) q union all select 'f64-warm', a from (select a from t1_f64 order by l2_distance(b, '[1,2,3]') limit 1) q) warmed order by case_name;
+➤ case_name[12,8,0]  ¦  a[-5,64,0]  𝄀
+f32-warm  ¦  0  𝄀
+f64-warm  ¦  0
 set @capture_t1_sql = concat('select (select checksum from `', database(), '`.`', @t1_f32_meta, '` limit 1), (select checksum from `', database(), '`.`', @t1_f64_meta, '` limit 1) into @t1_f32_before, @t1_f64_before');
 prepare capture_t1 from @capture_t1_sql;
 execute capture_t1;

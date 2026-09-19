@@ -99,7 +99,7 @@ func TestSnapshotBoundSameTSSharesOneLoad(t *testing.T) {
 	require.NoError(t, searchAt(c, key, shared), "a resident generation is never refused")
 }
 
-// checkStale skips snapshot entries and still marks current-generation ones.
+// checkStale skips snapshot entries and immediately evicts stale current ones.
 func TestStaleSweepSkipsSnapshotGenerations(t *testing.T) {
 	c := newBoundCache(t)
 
@@ -111,15 +111,13 @@ func TestStaleSweepSkipsSnapshotGenerations(t *testing.T) {
 
 	c.checkStale()
 
-	curEntry, ok := c.IndexMap.Load(boundIdxTable)
-	require.True(t, ok)
-	require.True(t, curEntry.(*VectorIndexSearch).stale.Load(),
-		"a stale CURRENT generation must still be marked -- the exemption must not disable the sweep")
+	_, ok := c.IndexMap.Load(boundIdxTable)
+	require.False(t, ok, "a stale current generation must be evicted without waiting for housekeeping")
 
 	histEntry, ok := c.IndexMap.Load(histKey)
 	require.True(t, ok)
-	require.False(t, histEntry.(*VectorIndexSearch).stale.Load(),
-		"a snapshot generation is immutable and must never be marked stale")
+	require.Same(t, historical, histEntry.(*VectorIndexSearch).Algo,
+		"a snapshot generation is immutable and must retain its original model")
 
 	houseKeepingSync(t, c)
 	_, ok = c.IndexMap.Load(histKey)

@@ -26,6 +26,9 @@ prepare wait_t0 from @wait_t0_sql;
 execute wait_t0;
 deallocate prepare wait_t0;
 
+-- A first published model can precede the last CDC transaction. Require all
+-- three exact endpoints, including the final INSERT, before dropping the table.
+-- @wait_expect(2, 120)
 select case_name, a, b from ( select 'f64-empty-update' as case_name, a, b from (select * from t0_f64 order by l2_distance(b, '[4,5,6]') limit 1) q union all select 'f64-empty-delete', a, b from (select * from t0_f64 order by l2_distance(b, '[2,3,4]') limit 1) q union all select 'f64-empty-insert', a, b from (select * from t0_f64 order by l2_distance(b, '[100,100,100]') limit 1) q ) readiness order by case_name;
 drop table t0_f64;
 
@@ -48,6 +51,10 @@ prepare wait_t1_initial from @wait_t1_initial_sql;
 execute wait_t1_initial;
 deallocate prepare wait_t1_initial;
 
+-- Warm both typed models before publishing the delta. A changed metadata row
+-- alone does not prove that a remote CN has retired its resident generation.
+select case_name, a from (select 'f32-warm' as case_name, a from (select a from t1_f32 order by l2_distance(b, '[1,2,3]') limit 1) q union all select 'f64-warm', a from (select a from t1_f64 order by l2_distance(b, '[1,2,3]') limit 1) q) warmed order by case_name;
+
 set @capture_t1_sql = concat('select (select checksum from `', database(), '`.`', @t1_f32_meta, '` limit 1), (select checksum from `', database(), '`.`', @t1_f64_meta, '` limit 1) into @t1_f32_before, @t1_f64_before');
 prepare capture_t1 from @capture_t1_sql;
 execute capture_t1;
@@ -63,7 +70,8 @@ update t1_f64 set b = '[1000,1000,1000]' where a = 0;
 commit;
 
 -- A changed metadata generation proves the single committed delta (and thus
--- all three mutation kinds) reached each consumer before any HNSW model is read.
+-- all three mutation kinds) reached persisted metadata. The ANN oracle below
+-- independently waits for the already-warm model cache to converge.
 set @wait_t1_delta_sql = concat('select (select checksum <> @t1_f32_before from `', database(), '`.`', @t1_f32_meta, '` limit 1) as f32_ready, (select checksum <> @t1_f64_before from `', database(), '`.`', @t1_f64_meta, '` limit 1) as f64_ready');
 prepare wait_t1_delta from @wait_t1_delta_sql;
 -- @metacmp(false)
@@ -74,6 +82,7 @@ deallocate prepare wait_t1_delta;
 -- Exact INSERT/UPDATE/DELETE oracles for both types. The surviving far row
 -- makes stale DELETE and UPDATE generations fail rather than merely joining a
 -- stale pk back to the current base-table value.
+-- @wait_expect(2, 120)
 select case_name, a, b, c from ( select 'f32-update' as case_name, a, b, c from (select * from t1_f32 order by l2_distance(b, '[1000,1000,1000]') limit 1) q union all select 'f32-delete', a, b, c from (select * from t1_f32 order by l2_distance(b, '[2,3,4]') limit 1) q union all select 'f32-insert', a, b, c from (select * from t1_f32 order by l2_distance(b, '[500,500,500]') limit 1) q union all select 'f64-update', a, b, c from (select * from t1_f64 order by l2_distance(b, '[1000,1000,1000]') limit 1) q union all select 'f64-delete', a, b, c from (select * from t1_f64 order by l2_distance(b, '[2,3,4]') limit 1) q union all select 'f64-insert', a, b, c from (select * from t1_f64 order by l2_distance(b, '[500,500,500]') limit 1) q ) readiness order by case_name;
 
 drop table t1_f32;
@@ -106,10 +115,9 @@ prepare wait_t2_build from @wait_t2_build_sql;
 execute wait_t2_build;
 deallocate prepare wait_t2_build;
 
--- Query the independent f64 model now, but keep the f32 model cache cold until
--- its CDC delta is complete. In multi-CN runs, the delta can be built on a
--- different CN and an already loaded HNSW model is not invalidated there.
--- The final f32 probes below cover both the retained base endpoints and delta.
+-- Query the independent f64 model now. Keep bulk f32 cold to retain coverage of
+-- first loading a model after fragmented CDC; the small t1 fixture above covers
+-- warm-cache convergence. The final f32 probes cover retained base and delta.
 select case_name, a, b from ( select 'f64-last' as case_name, a, b from (select * from t2_f64 order by l2_distance(b, "[14, 2, 0, 0, 0, 2, 42, 55, 9, 1, 0, 0, 18, 100, 77, 32, 89, 1, 0, 0, 19, 85, 15, 68, 52, 4, 0, 0, 0, 0, 2, 28, 34, 13, 5, 12, 49, 40, 39, 37, 24, 2, 0, 0, 34, 83, 88, 28, 119, 20, 0, 0, 41, 39, 13, 62, 119, 16, 2, 0, 0, 0, 10, 42, 9, 46, 82, 79, 64, 19, 2, 5, 10, 35, 26, 53, 84, 32, 34, 9, 119, 119, 21, 3, 3, 11, 17, 14, 119, 25, 8, 5, 0, 0, 11, 22, 23, 17, 42, 49, 17, 12, 5, 5, 12, 78, 119, 90, 27, 0, 4, 2, 48, 92, 112, 85, 15, 0, 2, 7, 50, 36, 15, 11, 1, 0, 0, 7]") limit 1) q union all select 'f64-first', a, b from (select * from t2_f64 order by l2_distance(b, "[0, 16, 35, 5, 32, 31, 14, 10, 11, 78, 55, 10, 45, 83, 11, 6, 14, 57, 102, 75, 20, 8, 3, 5, 67, 17, 19, 26, 5, 0, 1, 22, 60, 26, 7, 1, 18, 22, 84, 53, 85, 119, 119, 4, 24, 18, 7, 7, 1, 81, 106, 102, 72, 30, 6, 0, 9, 1, 9, 119, 72, 1, 4, 33, 119, 29, 6, 1, 0, 1, 14, 52, 119, 30, 3, 0, 0, 55, 92, 111, 2, 5, 4, 9, 22, 89, 96, 14, 1, 0, 1, 82, 59, 16, 20, 5, 25, 14, 11, 4, 0, 0, 1, 26, 47, 23, 4, 0, 0, 4, 38, 83, 30, 14, 9, 4, 9, 17, 23, 41, 0, 0, 2, 8, 19, 25, 23, 1]") limit 1) q ) readiness order by case_name;
 
 -- Regression for async-update issues #22794 and #27629: update a materialized f32 model
