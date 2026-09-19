@@ -464,6 +464,9 @@ func PreserveFoldedDecimalLiteralSemantics(expr *plan.Expr, literal *plan.Litera
 		if source := current.GetLit(); source != nil && source.DecimalLiteralRequiresV82 {
 			literal.DecimalLiteralRequiresV82 = true
 		}
+		if source := current.GetVec(); source != nil && source.DecimalLiteralRequiresV82 {
+			literal.DecimalLiteralRequiresV82 = true
+		}
 		return nil
 	})
 }

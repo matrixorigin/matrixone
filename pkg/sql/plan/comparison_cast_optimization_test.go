@@ -854,6 +854,35 @@ func TestDecimalComparisonLegacyRemainderProtocolFence(t *testing.T) {
 	}
 }
 
+func TestDecimalSuffixCoercionRecordsProtocolDependency(t *testing.T) {
+	for _, tc := range []struct {
+		text                 string
+		wantSafe, wantMarker bool
+	}{
+		{"922337203685477581.0", true, true},
+		{"922337203685477581.6", false, true},
+		{"-1234567890123456789.0", true, true},
+		{"-1234567890123456789.6", false, true},
+		{"10.0", true, false},
+		{"-1234567890123456789.1", false, false},
+	} {
+		t.Run(tc.text, func(t *testing.T) {
+			coefficient, scale, err := types.Parse128(tc.text)
+			require.NoError(t, err)
+			constantType := types.New(types.T_decimal128, 30, scale)
+			literal := &plan.Expr{
+				Typ: makePlan2Type(&constantType),
+				Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Decimal128Val{
+					Decimal128Val: &plan.Decimal128{A: int64(coefficient.B0_63), B: int64(coefficient.B64_127)},
+				}}},
+			}
+			require.Equal(t, tc.wantSafe, checkNoNeedCast(constantType, types.New(types.T_decimal128, 30, 0), literal))
+			require.Equal(t, tc.wantMarker, literal.GetLit().DecimalLiteralRequiresV82,
+				"record the dependency at the coercion decision, even when coercion is rejected")
+		})
+	}
+}
+
 func TestDecimalComparisonLegacyRemainderFenceBoundaries(t *testing.T) {
 	for _, tc := range []struct {
 		name, text string
@@ -872,7 +901,9 @@ func TestDecimalComparisonLegacyRemainderFenceBoundaries(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			literal := makePlan2StringConstExprWithType(tc.text)
-			require.Equal(t, tc.want, decimalComparisonUsesLegacyTrailingZeroSemantics(literal, types.New(tc.oid, tc.oid.ToType().Width, tc.scale), 0))
+			constantType := types.New(tc.oid, tc.oid.ToType().Width, tc.scale)
+			hasZeros, proven := decimalTrailingZerosStatus(literal, constantType, 0)
+			require.Equal(t, tc.want, decimalComparisonUsesLegacyTrailingZeroSemantics(literal, constantType, 0, hasZeros, proven))
 		})
 	}
 	decimalType := types.New(types.T_decimal128, 30, 1)
@@ -883,7 +914,7 @@ func TestDecimalComparisonLegacyRemainderFenceBoundaries(t *testing.T) {
 		{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Decimal128Val{}}}},
 		{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Decimal64Val{Decimal64Val: &plan.Decimal64{A: -10}}}}},
 	} {
-		require.False(t, decimalComparisonUsesLegacyTrailingZeroSemantics(literal, decimalType, 0))
+		require.False(t, decimalComparisonUsesLegacyTrailingZeroSemantics(literal, decimalType, 0, false, false))
 	}
 }
 
