@@ -153,7 +153,8 @@ func TestPreparedTimeArithmeticOverMySQLProtocol(t *testing.T) {
 						}
 					}
 					// Query may expose an execution error immediately or through Rows.Err.
-					queryError := func(rows *sql.Rows, err error) error {
+					queryError := func(query func() (*sql.Rows, error)) error {
+						rows, err := query()
 						if err != nil {
 							return err
 						}
@@ -163,9 +164,11 @@ func TestPreparedTimeArithmeticOverMySQLProtocol(t *testing.T) {
 					}
 					for _, value := range []any{int64(10), nil, int64(10), int64(9223372036854775807), int64(10)} {
 						if value == int64(9223372036854775807) {
-							wantErr := queryError(conn.QueryContext(ctx,
-								strings.ReplaceAll(expression, "?", "cast(9223372036854775807 as signed)")))
-							gotErr := queryError(query(value))
+							wantErr := queryError(func() (*sql.Rows, error) {
+								return conn.QueryContext(ctx,
+									strings.ReplaceAll(expression, "?", "cast(9223372036854775807 as signed)"))
+							})
+							gotErr := queryError(func() (*sql.Rows, error) { return query(value) })
 							var wantMySQL, gotMySQL *mysql.MySQLError
 							require.True(t, errors.As(wantErr, &wantMySQL), "%v", wantErr)
 							require.True(t, errors.As(gotErr, &gotMySQL), "%v", gotErr)
