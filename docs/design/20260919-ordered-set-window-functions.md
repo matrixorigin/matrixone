@@ -3,10 +3,13 @@
 ## Status
 
 Proposed for review for the ordered-set aggregates already supported by
-MatrixOne. Merge of the implementation is gated on explicit maintainer approval
-of this design in PR #29106; a code review without that explicit decision is not
-treated as design approval. This is a follow-up to issues #25110 and #25144 and
-to the scalar aggregate designs in `median_within_group.md`,
+MatrixOne. The decision state is **pending explicit approval**. `daviszhen` owns
+the proposal and implementation; the SQL planner/window-execution maintainers
+reviewing PR #29106 own the approval decision (the current blocking design
+review is assigned to `XuPeng-SH`). The approval or rejection must be recorded
+in that PR before merge; ordinary code-review completion is not treated as
+design approval. This is a follow-up to issues #25110 and #25144 and to the
+scalar aggregate designs in `median_within_group.md`,
 `approx_percentile_within_group.md`, and
 `20260910-prepared-and-discrete-percentiles.md`.
 
@@ -126,14 +129,20 @@ The existing type restrictions still apply. In particular,
 ## Validation
 
 Planner tests cover all four ordered-set forms, independent ordered-set and
-window directions, invalid shapes, nonconstant percentiles, and prepared
-percentile markers. Window operator tests cover continuous and descending
-discrete results, full-partition broadcasting across more than one output
-chunk, exactly-once spill input accounting, cancellation during finalization,
-early-stop cleanup, and reuse boundaries. Aggregate-level spill tests cover
-cancelled tail writes, compaction, rank selection, file closure, and subsequent
-reuse. The distributed ordered-set case covers partition-wide and explicitly
-framed window results.
+window directions, invalid shapes, nonconstant percentiles, prepared percentile
+markers, and persisted-plan round trips. Window operator tests cover continuous
+and descending discrete results, a partition crossing the 8192-row output
+boundary, exactly-once spill input accounting, deterministic cancellation from
+inside spilled-rank merging, spill-file closure, early-stop cleanup, and
+successful reuse after cancellation. A compiler placement test proves that the
+window remains above the coordinator merge and that remote subtrees contain no
+window operator, so the feature adds no remote operator wire field.
+Aggregate-level spill tests cover cancelled tail writes,
+compaction, rank selection, file closure, and subsequent reuse. The distributed
+ordered-set case covers MEDIAN and APPROX_PERCENTILE windows, partition-wide and
+empty/explicit frames, supported type boundaries, and one public prepared SQL
+statement executed with two valid percentiles, an invalid percentile, and a
+final valid percentile to verify recovery and execution-state isolation.
 
 Acceptance requires:
 

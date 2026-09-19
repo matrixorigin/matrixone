@@ -19,6 +19,9 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"os"
+	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -27,6 +30,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -64,6 +69,94 @@ type cancelOnErrContext struct {
 	context.Context
 	done chan struct{}
 	once sync.Once
+}
+
+// cancelInFunctionContext deterministically injects cancellation only after
+// execution has entered target. It avoids timing-based tests while proving
+// that a long-running inner loop observes the query context itself.
+type cancelInFunctionContext struct {
+	context.Context
+	target    string
+	remaining atomic.Int32
+	done      chan struct{}
+	once      sync.Once
+}
+
+func newCancelInFunctionContext(target string, checks int32) *cancelInFunctionContext {
+	ctx := &cancelInFunctionContext{
+		Context: context.Background(),
+		target:  target,
+		done:    make(chan struct{}),
+	}
+	ctx.remaining.Store(checks)
+	return ctx
+}
+
+func (c *cancelInFunctionContext) Done() <-chan struct{} {
+	return c.done
+}
+
+func (c *cancelInFunctionContext) Err() error {
+	pcs := make([]uintptr, 32)
+	n := runtime.Callers(2, pcs)
+	frames := runtime.CallersFrames(pcs[:n])
+	for {
+		frame, more := frames.Next()
+		if strings.Contains(frame.Function, c.target) && c.remaining.Add(-1) == 0 {
+			c.once.Do(func() { close(c.done) })
+			return context.Canceled
+		}
+		if !more {
+			break
+		}
+	}
+	select {
+	case <-c.done:
+		return context.Canceled
+	default:
+		return nil
+	}
+}
+
+type trackingMutableFileService struct {
+	fileservice.MutableFileService
+	mu    sync.Mutex
+	files []*os.File
+}
+
+func (s *trackingMutableFileService) CreateAndRemoveFile(
+	ctx context.Context, filePath string,
+) (*os.File, error) {
+	file, err := s.MutableFileService.CreateAndRemoveFile(ctx, filePath)
+	if err == nil {
+		s.mu.Lock()
+		s.files = append(s.files, file)
+		s.mu.Unlock()
+	}
+	return file, err
+}
+
+func (s *trackingMutableFileService) openedFiles() []*os.File {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]*os.File(nil), s.files...)
+}
+
+func installTrackingSpillFileService(t *testing.T, proc *process.Process) *trackingMutableFileService {
+	t.Helper()
+	local, err := fileservice.Get[fileservice.MutableFileService](
+		proc.Base.FileService, defines.LocalFileServiceName)
+	require.NoError(t, err)
+	shared, err := fileservice.Get[fileservice.FileService](
+		proc.Base.FileService, defines.SharedFileServiceName)
+	require.NoError(t, err)
+	etl, err := fileservice.Get[fileservice.FileService](
+		proc.Base.FileService, defines.ETLFileServiceName)
+	require.NoError(t, err)
+	tracking := &trackingMutableFileService{MutableFileService: local}
+	proc.Base.FileService, err = fileservice.NewFileServices("", tracking, shared, etl)
+	require.NoError(t, err)
+	return tracking
 }
 
 func newCancelOnErrContext(parent context.Context) *cancelOnErrContext {
@@ -1532,6 +1625,127 @@ func TestWindowOrderedPercentileFinalizationHonorsCancellation(t *testing.T) {
 
 	arg.Free(proc, true, err)
 	child.Free(proc, true, err)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestWindowOrderedPercentileSpilledMergeCancellationClosesAndReuses(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	trackingFS := installTrackingSpillFileService(t, proc)
+	const rows = 20_000
+	values := make([]int32, rows)
+	for i := range values {
+		values[i] = int32(i)
+	}
+	bat := makeInt32Batch(proc.Mp(), values)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{makeAggWindowSpec("percentile_cont")},
+		Aggs: []aggexec.AggFuncExecExpression{
+			newOrderedPercentileWindowAggExpr(t, "percentile_cont", "0.5", false),
+		},
+		SpillThreshold: 1,
+	}
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+
+	// Wait until the second rank-selection poll before cancelling. The first
+	// poll proves that finalization entered the real spilled-run merge and made
+	// progress; this is not cancellation at finalizer entry.
+	originalCtx := proc.Ctx
+	proc.Ctx = newCancelInFunctionContext("selectSpilledValues", 2)
+	result, err := vm.Exec(arg, proc)
+	require.Nil(t, result.Batch)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Positive(t, arg.OpAnalyzer.GetOpStats().SpillRows)
+	require.Nil(t, arg.ctr.orderedSetPartitionResults)
+	require.Nil(t, arg.ctr.batAggs)
+	spilledFiles := trackingFS.openedFiles()
+	require.NotEmpty(t, spilledFiles)
+	for _, file := range spilledFiles {
+		_, statErr := file.Stat()
+		require.Error(t, statErr, "failed window finalization must close its spill file")
+	}
+
+	// Reset after the failed execution and prove that neither the canceled
+	// context nor aggregate/spill state contaminates a subsequent execution.
+	proc.Ctx = originalCtx
+	arg.Reset(proc, true, err)
+	child.Free(proc, true, err)
+	secondBatch := makeInt32Batch(proc.Mp(), []int32{10, 20, 30})
+	secondChild := colexec.NewMockOperator().WithBatchs([]*batch.Batch{secondBatch})
+	arg.Children = nil
+	arg.AppendChild(secondChild)
+	require.NoError(t, arg.Prepare(proc))
+	result, err = vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, []float64{20, 20, 20},
+		vector.MustFixedColWithTypeCheck[float64](result.Batch.Vecs[1]))
+	require.Nil(t, arg.ctr.orderedSetPartitionResults)
+
+	arg.Free(proc, false, nil)
+	secondChild.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestWindowOrderedPercentilePartitionCrossesOutputChunk(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	const (
+		firstPartitionRows = colexec.DefaultBatchSize + 8
+		rows               = firstPartitionRows + 1800
+	)
+	values := make([]int32, rows)
+	for i := range values {
+		if i < firstPartitionRows {
+			values[i] = 10
+		} else {
+			values[i] = 20
+		}
+	}
+	bat := makeInt32Batch(proc.Mp(), values)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{makeAggWindowSpec("percentile_disc")},
+		Aggs: []aggexec.AggFuncExecExpression{
+			newOrderedPercentileWindowAggExpr(t, "percentile_disc", "0.5", false),
+		},
+	}
+	arg.OpAnalyzer = process.NewAnalyzer(0, false, false, "window")
+	ctr := &container{
+		bat:     bat,
+		ps:      []int64{0, firstPartitionRows},
+		aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+	}
+
+	first, err := ctr.processAggregateFuncRange(
+		0, arg, proc, 0, colexec.DefaultBatchSize)
+	require.NoError(t, err)
+	wantFirst := make([]int32, colexec.DefaultBatchSize)
+	for i := range wantFirst {
+		wantFirst[i] = 10
+	}
+	require.Equal(t, wantFirst,
+		vector.MustFixedColWithTypeCheck[int32](first))
+	require.NotNil(t, ctr.orderedSetPartitionResults)
+	first.Free(proc.Mp())
+
+	second, err := ctr.processAggregateFuncRange(
+		0, arg, proc, colexec.DefaultBatchSize, rows)
+	require.NoError(t, err)
+	want := make([]int32, rows-colexec.DefaultBatchSize)
+	for i := range want {
+		if i < 8 {
+			want[i] = 10
+		} else {
+			want[i] = 20
+		}
+	}
+	require.Equal(t, want, vector.MustFixedColWithTypeCheck[int32](second))
+	require.Nil(t, ctr.orderedSetPartitionResults)
+	second.Free(proc.Mp())
+
+	bat.Clean(proc.Mp())
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
 }

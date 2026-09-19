@@ -51,6 +51,21 @@ func findWindowFunctionByName(query *planpb.Query, name string) *planpb.Function
 	return nil
 }
 
+func findWindowSpecByName(query *planpb.Query, name string) *planpb.WindowSpec {
+	for _, node := range query.Nodes {
+		for _, expr := range node.WinSpecList {
+			window := expr.GetW()
+			if window == nil {
+				continue
+			}
+			if fn := window.WindowFunc.GetF(); fn != nil && strings.EqualFold(fn.Func.GetObjName(), name) {
+				return window
+			}
+		}
+	}
+	return nil
+}
+
 func TestBuildOrderedSetAggregates(t *testing.T) {
 	ctx := NewMockCompilerContext(true)
 	for _, tc := range []struct {
@@ -447,4 +462,32 @@ func TestBuildPreparedOrderedSetWindow(t *testing.T) {
 	require.Len(t, fn.Args, 2)
 	require.True(t, preparedExprContainsParam(fn.Args[1]))
 	require.Equal(t, []byte{1}, fn.AggConfig)
+}
+
+func TestPreparedOrderedSetWindowPlanRoundTrip(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"select percentile_disc(?) within group (order by a desc) "+
+			"over (partition by b order by a rows between unbounded preceding and current row) "+
+			"from select_test.bind_select", 1)
+	require.NoError(t, err)
+	t.Cleanup(stmt.Free)
+
+	queryPlan, err := BuildPlan(NewMockCompilerContext(true), stmt, true)
+	require.NoError(t, err)
+	original := queryPlan.GetQuery()
+	wire, err := original.Marshal()
+	require.NoError(t, err)
+	var restored planpb.Query
+	require.NoError(t, restored.Unmarshal(wire))
+
+	originalWindow := findWindowSpecByName(original, NamePercentileDisc)
+	restoredWindow := findWindowSpecByName(&restored, NamePercentileDisc)
+	require.NotNil(t, originalWindow)
+	require.NotNil(t, restoredWindow)
+	require.Equal(t, originalWindow, restoredWindow,
+		"persisted plan must retain the prepared marker, aggregate direction, partition, order, and frame")
+	restoredFn := restoredWindow.WindowFunc.GetF()
+	require.Len(t, restoredFn.Args, 2)
+	require.True(t, preparedExprContainsParam(restoredFn.Args[1]))
+	require.Equal(t, []byte{1}, restoredFn.AggConfig)
 }

@@ -127,6 +127,17 @@ percentile_disc(0.5) within group (order by d256) as p50_decimal256
 from t_ordered_set_types_bvt;
 ➤ p50_string[12,20,0]  ¦  p50_date[91,64,0]  ¦  p50_decimal256[3,65,2]  𝄀
 beta  ¦  2026-01-02  ¦  2.00
+select s,
+percentile_disc(0.5) within group (order by s) over () as window_string,
+percentile_disc(0.5) within group (order by d) over () as window_date,
+percentile_disc(0.5) within group (order by d256) over () as window_decimal256
+from t_ordered_set_types_bvt
+order by s is null, s;
+➤ s[12,20,0]  ¦  window_string[12,20,0]  ¦  window_date[91,64,0]  ¦  window_decimal256[3,65,2]  𝄀
+alpha  ¦  beta  ¦  2026-01-02  ¦  2.00  𝄀
+beta  ¦  beta  ¦  2026-01-02  ¦  2.00  𝄀
+gamma  ¦  beta  ¦  2026-01-02  ¦  2.00  𝄀
+null  ¦  beta  ¦  2026-01-02  ¦  2.00
 drop table t_ordered_set_types_bvt;
 drop table if exists t_within_identifier_bvt;
 create table t_within_identifier_bvt (id int, within int);
@@ -169,4 +180,63 @@ order by g, sort_key;
 2  ¦  2  ¦  2  𝄀
 2  ¦  3  ¦  4  𝄀
 3  ¦  1  ¦  null
+select g, sort_key,
+median() within group (order by v) over (partition by g) as window_median,
+approx_percentile(0.5) within group (order by v) over (partition by g) as window_approx
+from t_ordered_set_bvt
+order by g, sort_key;
+➤ g[4,32,0]  ¦  sort_key[4,32,0]  ¦  window_median[8,54,0]  ¦  window_approx[8,53,31]  𝄀
+1  ¦  1  ¦  20.0  ¦  20.0  𝄀
+1  ¦  2  ¦  20.0  ¦  20.0  𝄀
+1  ¦  3  ¦  20.0  ¦  20.0  𝄀
+1  ¦  4  ¦  20.0  ¦  20.0  𝄀
+1  ¦  5  ¦  20.0  ¦  20.0  𝄀
+2  ¦  1  ¦  4.0  ¦  4.0  𝄀
+2  ¦  2  ¦  4.0  ¦  4.0  𝄀
+2  ¦  3  ¦  4.0  ¦  4.0  𝄀
+3  ¦  1  ¦  null  ¦  null
+select g, sort_key,
+percentile_disc(0.5) within group (order by v)
+over (partition by g order by sort_key rows between 1 preceding and 1 preceding) as preceding_disc
+from t_ordered_set_bvt
+order by g, sort_key;
+➤ g[4,32,0]  ¦  sort_key[4,32,0]  ¦  preceding_disc[4,32,0]  𝄀
+1  ¦  1  ¦  null  𝄀
+1  ¦  2  ¦  20  𝄀
+1  ¦  3  ¦  10  𝄀
+1  ¦  4  ¦  30  𝄀
+1  ¦  5  ¦  null  𝄀
+2  ¦  1  ¦  null  𝄀
+2  ¦  2  ¦  2  𝄀
+2  ¦  3  ¦  4  𝄀
+3  ¦  1  ¦  null
+select percentile_cont(0.5) within group (order by cast(v as decimal(38,0))) over () as window_cont_dec38
+from t_ordered_set_bvt limit 1;
+invalid argument aggregate function percentile_cont, bad value [DECIMAL128 DECIMAL64]
+prepare ordered_percentile_window_p from
+'select sort_key,
+percentile_disc(?) within group (order by v) over (partition by g) as prepared_window_p
+from t_ordered_set_bvt where g = 2 order by sort_key';
+set @ordered_window_p = 0.25;
+execute ordered_percentile_window_p using @ordered_window_p;
+➤ sort_key[4,32,0]  ¦  prepared_window_p[4,32,0]  𝄀
+1  ¦  2  𝄀
+2  ¦  2  𝄀
+3  ¦  2
+set @ordered_window_p = 0.75;
+execute ordered_percentile_window_p using @ordered_window_p;
+➤ sort_key[4,32,0]  ¦  prepared_window_p[4,32,0]  𝄀
+1  ¦  8  𝄀
+2  ¦  8  𝄀
+3  ¦  8
+set @ordered_window_p = 1.5;
+execute ordered_percentile_window_p using @ordered_window_p;
+invalid input: percentile argument of percentile_disc must be finite and in [0,1], got 1.5
+set @ordered_window_p = 0.5;
+execute ordered_percentile_window_p using @ordered_window_p;
+➤ sort_key[4,32,0]  ¦  prepared_window_p[4,32,0]  𝄀
+1  ¦  4  𝄀
+2  ¦  4  𝄀
+3  ¦  4
+deallocate prepare ordered_percentile_window_p;
 drop table t_ordered_set_bvt;
