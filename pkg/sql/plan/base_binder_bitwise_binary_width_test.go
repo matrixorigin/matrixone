@@ -202,7 +202,7 @@ func TestRefineBinarySubstringReturnTypeConservativeCases(t *testing.T) {
 	require.Equal(t, int32(511), returnType.Width)
 }
 
-func TestRefineCharacterSubstringAndLeftRightKeepDeclaredReturnTypes(t *testing.T) {
+func TestRefineCharacterSubstringAndLeftRightBoundedWidths(t *testing.T) {
 	textType := types.New(types.T_varchar, 512, 0)
 	source := func() *planpb.Expr {
 		return &planpb.Expr{
@@ -225,15 +225,13 @@ func TestRefineCharacterSubstringAndLeftRightKeepDeclaredReturnTypes(t *testing.
 		[]*planpb.Expr{source(), makePlan2Int64ConstExprWithType(2), makePlan2Int64ConstExprWithType(7)},
 		&textSubstring,
 	)
-	require.Equal(t, int32(512), textSubstring.Width,
-		"character SUBSTRING literal bounds must not change result metadata")
+	require.Equal(t, int32(7), textSubstring.Width)
 
 	for _, name := range []string{"left", "right"} {
 		result := returnType()
 		refineLeftRightLiteralReturnType(
 			[]*planpb.Expr{source(), makePlan2Int64ConstExprWithType(7)}, &result)
-		require.Equal(t, int32(512), result.Width,
-			"character %s literal bounds must not change result metadata", name)
+		require.Equal(t, int32(7), result.Width, name)
 	}
 
 	binaryType := types.NewWithCharset(types.T_varbinary, 512, 0, types.CharsetBinary)
@@ -250,6 +248,46 @@ func TestRefineCharacterSubstringAndLeftRightKeepDeclaredReturnTypes(t *testing.
 			[]*planpb.Expr{binarySource(), makePlan2Int64ConstExprWithType(7)}, &result)
 		require.Equal(t, int32(7), result.Width,
 			"binary %s may retain literal byte bounds", name)
+	}
+}
+
+func TestRefineCharacterSlicePreservesFamilyAndBounds(t *testing.T) {
+	for _, oid := range []types.T{types.T_char, types.T_varchar} {
+		for _, tc := range []struct {
+			name   string
+			length *planpb.Expr
+			want   int32
+		}{
+			{"short", makePlan2Int64ConstExprWithType(3), 3},
+			{"zero", makePlan2Int64ConstExprWithType(0), 0},
+			{"negative", makePlan2Int64ConstExprWithType(-1), 0},
+			{"source bound", makePlan2Int64ConstExprWithType(6000), 512},
+			{"unsigned maximum", makePlan2Uint64ConstExprWithType(^uint64(0)), 512},
+			{"dynamic", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}, 512},
+			{"null", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}}}, 512},
+		} {
+			t.Run(oid.String()+"/"+tc.name, func(t *testing.T) {
+				sourceType := types.NewWithCharset(oid, 512, 0, types.CharsetUTF8)
+				source := &planpb.Expr{Typ: makePlan2Type(&sourceType), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+				for _, name := range []string{"left", "right", "substring"} {
+					args := []*planpb.Expr{source, tc.length}
+					if name == "substring" {
+						// A dynamic start cannot invalidate the explicit length bound.
+						args = []*planpb.Expr{source, {Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}}, tc.length}
+					}
+					expr, err := BindFuncExprImplByPlanExpr(context.Background(), name, args)
+					require.NoError(t, err, name)
+					baselineArgs := append([]*planpb.Expr(nil), args...)
+					baselineArgs[len(baselineArgs)-1] = &planpb.Expr{Typ: tc.length.Typ, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+					baseline, err := BindFuncExprImplByPlanExpr(context.Background(), name, baselineArgs)
+					require.NoError(t, err, name)
+					require.Equal(t, baseline.Typ.Id, expr.Typ.Id, name)
+					require.Equal(t, baseline.GetF().Func.Obj, expr.GetF().Func.Obj, name)
+					require.Equal(t, uint32(types.CharsetUTF8), expr.Typ.Charset, name)
+					require.Equal(t, tc.want, expr.Typ.Width, name)
+				}
+			})
+		}
 	}
 }
 
@@ -491,7 +529,7 @@ func TestBindPublicFunctionResultContracts(t *testing.T) {
 		bound, err := BindFuncExprImplByPlanExpr(ctx, name, args)
 		require.NoError(t, err)
 		require.Equal(t, int32(types.T_varchar), bound.Typ.Id, name)
-		require.Equal(t, int32(512), bound.Typ.Width, name)
+		require.Equal(t, int32(7), bound.Typ.Width, name)
 	}
 
 	inetNtoa, err := BindFuncExprImplByPlanExpr(ctx, "inet_ntoa", []*planpb.Expr{
