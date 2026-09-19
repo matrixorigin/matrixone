@@ -93,27 +93,30 @@ func frechetDistance(pa, pb []Coord, distance func(Coord, Coord) float64) (float
 	if n == 0 || m == 0 {
 		return 0, false
 	}
-	ca := make([][]float64, n)
-	for i := range ca {
-		ca[i] = make([]float64, m)
-	}
+	// The recurrence only reads the previous row and the already-computed
+	// predecessor in the current row. Retain those two rows instead of the
+	// complete n*m matrix; large geometries otherwise turn a bounded query into
+	// an avoidable quadratic allocation while keeping the same O(n*m) work.
+	previous := make([]float64, m)
+	current := make([]float64, m)
 	for i := 0; i < n; i++ {
 		for j := 0; j < m; j++ {
 			d := distance(pa[i], pb[j])
 			switch {
 			case i == 0 && j == 0:
-				ca[i][j] = d
+				current[j] = d
 			case i == 0:
-				ca[i][j] = math.Max(ca[0][j-1], d)
+				current[j] = math.Max(current[j-1], d)
 			case j == 0:
-				ca[i][j] = math.Max(ca[i-1][0], d)
+				current[j] = math.Max(previous[j], d)
 			default:
-				prev := math.Min(ca[i-1][j], math.Min(ca[i-1][j-1], ca[i][j-1]))
-				ca[i][j] = math.Max(prev, d)
+				prev := math.Min(previous[j], math.Min(previous[j-1], current[j-1]))
+				current[j] = math.Max(prev, d)
 			}
 		}
+		previous, current = current, previous
 	}
-	return ca[n-1][m-1], true
+	return previous[m-1], true
 }
 
 func planarCoordDistance(a, b Coord) float64 {

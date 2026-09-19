@@ -165,6 +165,11 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 			return nil, err
 		}
 	}
+	if features.DecimalLiteralSemantics {
+		if err = validateDecimalLiteralDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
 	if err = validateStrictWriteDestination(proc, p); err != nil {
 		return nil, err
 	}
@@ -2258,6 +2263,12 @@ func validateRemoteExpressionPipelineProtocol(
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion83) {
 		return moerr.NewNotSupportedNoCtx(
 			"bounded conditional string domains require MORPC protocol version 83",
+		)
+	}
+	if features.DecimalLiteralSemantics &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion88) {
+		return moerr.NewNotSupportedNoCtx(
+			"exact DECIMAL256 literal semantics require MORPC protocol version 88",
 		)
 	}
 	if features.IPFunctionSemantics &&
