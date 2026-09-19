@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
@@ -796,6 +797,59 @@ func TestDecimalComparisonKeepsWideZeroSuffixAndCarriesProtocolMarker(t *testing
 			})
 		}
 	}
+}
+
+func TestDecimalComparisonNegativeDecimal128ZeroSuffixCarriesProtocolMarker(t *testing.T) {
+	ctx := context.Background()
+	columnType := types.New(types.T_decimal128, 30, 2)
+	column := &plan.Expr{
+		Typ:  makePlan2Type(&columnType),
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "d"}},
+	}
+	column.Typ.NotNullable = true
+
+	casted, err := appendCastBeforeExpr(ctx, makePlan2StringConstExprWithType("-50.500000"), plan.Type{
+		Id:          int32(types.T_decimal128),
+		Width:       30,
+		Scale:       6,
+		NotNullable: true,
+	})
+	require.NoError(t, err)
+	result, err := BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{column, casted})
+	require.NoError(t, err)
+	require.NotNil(t, result.GetF(), "negative zero suffix must remain an executable comparison")
+	requires, err := plan.RequiresMORPCVersion86DecimalLiteralSemantics(result)
+	require.NoError(t, err)
+	require.True(t, requires, result.String())
+	requiredVersion, err := RequiredPersistedExpressionProtocolVersion(result)
+	require.NoError(t, err)
+	require.Equal(t, int64(defines.MORPCVersion86), requiredVersion)
+
+	positive, err := appendCastBeforeExpr(ctx, makePlan2StringConstExprWithType("50.500000"), plan.Type{
+		Id:          int32(types.T_decimal128),
+		Width:       30,
+		Scale:       6,
+		NotNullable: true,
+	})
+	require.NoError(t, err)
+	positiveResult, err := BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{column, positive})
+	require.NoError(t, err)
+	positiveRequires, err := plan.RequiresMORPCVersion86DecimalLiteralSemantics(positiveResult)
+	require.NoError(t, err)
+	require.False(t, positiveRequires, positiveResult.String())
+
+	nonzero, err := appendCastBeforeExpr(ctx, makePlan2StringConstExprWithType("-50.500001"), plan.Type{
+		Id:          int32(types.T_decimal128),
+		Width:       30,
+		Scale:       6,
+		NotNullable: true,
+	})
+	require.NoError(t, err)
+	nonzeroResult, err := BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{column, nonzero})
+	require.NoError(t, err)
+	nonzeroRequires, err := plan.RequiresMORPCVersion86DecimalLiteralSemantics(nonzeroResult)
+	require.NoError(t, err)
+	require.False(t, nonzeroRequires, nonzeroResult.String())
 }
 
 func TestDecimalComparisonPreservesNullableColumnSemantics(t *testing.T) {

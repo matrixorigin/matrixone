@@ -15,8 +15,10 @@
 package plan
 
 import (
+	"math"
 	"math/big"
 	"strconv"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -107,8 +109,29 @@ func decimalIntervalText(expr *Expr) (string, bool, error) {
 	}
 
 	fn := expr.GetF()
-	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 {
+	if fn == nil || fn.Func == nil || len(fn.Args) == 0 {
 		return "", false, nil
+	}
+	name := fn.Func.GetObjName()
+	if name == "unary_plus" || name == "unary_minus" {
+		if len(fn.Args) != 1 {
+			return "", false, nil
+		}
+		text, ok, err := decimalIntervalText(fn.Args[0])
+		if err != nil || !ok {
+			return "", false, err
+		}
+		if name == "unary_minus" {
+			text = negateDecimalIntervalText(text)
+		}
+		return text, true, nil
+	}
+	if name != "cast" {
+		return "", false, nil
+	}
+	explicit := decimalIntervalCastIsExplicit(fn)
+	if floatText, handled, err := decimalIntervalFloatCastText(fn.Args[0], expr.Typ, explicit); handled || err != nil {
+		return floatText, handled, err
 	}
 	text, ok, err := decimalIntervalText(fn.Args[0])
 	if err != nil || !ok {
@@ -117,9 +140,113 @@ func decimalIntervalText(expr *Expr) (string, bool, error) {
 	return decimalIntervalCastText(
 		text,
 		expr.Typ,
-		decimalIntervalCastIsExplicit(fn),
+		explicit,
 		decimalIntervalSourceIsBinary(fn.Args[0]),
 	)
+}
+
+func negateDecimalIntervalText(text string) string {
+	text = strings.TrimSpace(text)
+	if strings.HasPrefix(text, "-") {
+		return text[1:]
+	}
+	if strings.HasPrefix(text, "+") {
+		return "-" + text[1:]
+	}
+	return "-" + text
+}
+
+// decimalIntervalFloatCastText keeps the source float's conversion semantics
+// at the first decimal CAST. Converting the float to text first would route
+// Decimal64/128 through decimal parsing and can disagree at binary-float
+// rounding boundaries such as 1.005 -> DECIMAL(*, 2).
+func decimalIntervalFloatCastText(
+	source *Expr, typ planpb.Type, explicit bool,
+) (string, bool, error) {
+	value, ok := decimalIntervalFloatSourceValue(source)
+	if !ok {
+		return "", false, nil
+	}
+	scale := typ.Scale
+	if scale < 0 {
+		scale = 0
+	}
+	width := typ.Width
+	if width <= 0 {
+		switch types.T(typ.Id) {
+		case types.T_decimal64:
+			width = types.T_decimal64.ToType().Width
+		case types.T_decimal128:
+			width = types.T_decimal128.ToType().Width
+		case types.T_decimal256:
+			width = types.T_decimal256.ToType().Width
+		default:
+			return "", false, nil
+		}
+	}
+
+	format := strconv.FormatFloat(value, 'g', -1, 64)
+	switch types.T(typ.Id) {
+	case types.T_decimal64:
+		result, err := types.Decimal64FromFloat64(value, width, scale)
+		if err != nil && explicit && !math.IsNaN(value) && !math.IsInf(value, 0) {
+			result, err = planfunction.ParseExplicitDecimal64CastString(format, width, scale)
+		}
+		if err != nil {
+			return "", false, err
+		}
+		return result.Format(scale), true, nil
+	case types.T_decimal128:
+		result, err := types.Decimal128FromFloat64(value, width, scale)
+		if err != nil && explicit && !math.IsNaN(value) && !math.IsInf(value, 0) {
+			result, err = planfunction.ParseExplicitDecimal128CastString(format, width, scale)
+		}
+		if err != nil {
+			return "", false, err
+		}
+		return result.Format(scale), true, nil
+	case types.T_decimal256:
+		result, err := types.Decimal256FromFloat64(value, width, scale)
+		if err != nil && explicit && !math.IsNaN(value) && !math.IsInf(value, 0) {
+			result, err = planfunction.ParseExplicitDecimal256CastString(format, width, scale)
+		}
+		if err != nil {
+			return "", false, err
+		}
+		return result.Format(scale), true, nil
+	default:
+		return "", false, nil
+	}
+}
+
+func decimalIntervalFloatSourceValue(expr *Expr) (float64, bool) {
+	if expr == nil || (types.T(expr.Typ.Id) != types.T_float32 && types.T(expr.Typ.Id) != types.T_float64) {
+		return 0, false
+	}
+	if lit := expr.GetLit(); lit != nil && !lit.Isnull {
+		switch value := lit.Value.(type) {
+		case *planpb.Literal_Dval:
+			return value.Dval, true
+		case *planpb.Literal_Fval:
+			return float64(value.Fval), true
+		}
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) != 1 {
+		return 0, false
+	}
+	value, ok := decimalIntervalFloatSourceValue(fn.Args[0])
+	if !ok {
+		return 0, false
+	}
+	switch fn.Func.GetObjName() {
+	case "unary_plus":
+		return value, true
+	case "unary_minus":
+		return -value, true
+	default:
+		return 0, false
+	}
 }
 
 func decimalIntervalCastText(
