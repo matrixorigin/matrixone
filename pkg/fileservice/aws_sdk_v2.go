@@ -100,6 +100,14 @@ func NewAwsSDKv2(
 	// options for loading configs
 	loadConfigOptions := []func(*config.LoadOptions) error{
 		config.WithLogger(logutil.GetS3Logger()),
+		// Keep the pre-v1.99 S3 behavior for existing object-storage
+		// deployments. Newer AWS SDKs default to calculating and validating
+		// checksums whenever an operation supports them, which changes the
+		// wire contract for S3-compatible services. Required checksums remain
+		// enabled while optional checksums stay disabled until each backend has
+		// an explicit compatibility test.
+		config.WithRequestChecksumCalculation(aws.RequestChecksumCalculationWhenRequired),
+		config.WithResponseChecksumValidation(aws.ResponseChecksumValidationWhenRequired),
 		config.WithClientLogMode(
 			aws.LogSigning |
 				aws.LogRetries |
@@ -929,10 +937,10 @@ func (a *AwsSDKv2) deleteMultiObj(ctx context.Context, objs []types.ObjectIdenti
 	})
 	// delete api failed
 	if err != nil {
-		if isS3APIErrorCode(err, "MalformedXML") {
+		if isS3APIErrorCode(err, "MalformedXML") || isS3APIMultiDeleteChecksumError(err) {
 			a.disableMultiDelete.Store(true)
 			logutil.Warn(
-				"s3 delete objects returned MalformedXML, disabling multi-delete and falling back to single deletes",
+				"s3 delete objects is incompatible with this endpoint, disabling multi-delete and falling back to single deletes",
 				zap.String("fs", a.name),
 				zap.String("bucket", a.bucket),
 				zap.Int("count", len(objs)),
@@ -956,6 +964,24 @@ func (a *AwsSDKv2) deleteMultiObj(ctx context.Context, objs []types.ObjectIdenti
 		return moerr.NewInternalErrorNoCtxf("S3 Delete failed: %s", message.String())
 	}
 	return nil
+}
+
+// Newer AWS SDK v2 releases use CRC32 for the required DeleteObjects checksum,
+// while older SDKs sent Content-MD5. Some S3-compatible endpoints reject the
+// newer request with one of these request-level errors. Treat that response as
+// endpoint incompatibility, fall back to individual DeleteObject calls, and
+// disable batching for later calls.
+func isS3APIMultiDeleteChecksumError(err error) bool {
+	for _, code := range []string{"MissingContentMD5", "InvalidDigest", "BadDigest", "InvalidRequest", "BadRequest"} {
+		if isS3APIErrorCode(err, code) {
+			return true
+		}
+	}
+	// Some S3-compatible endpoints surface the missing-header rejection as a
+	// generic BadRequest or return the detail without a structured S3 error code.
+	// Keep the fallback narrow to this compatibility signal instead of treating
+	// arbitrary 4xx responses as a reason to disable batch deletes.
+	return strings.Contains(strings.ToLower(err.Error()), "content-md5")
 }
 
 func (a *AwsSDKv2) deleteMultiObjOneByOne(ctx context.Context, objs []types.ObjectIdentifier) error {

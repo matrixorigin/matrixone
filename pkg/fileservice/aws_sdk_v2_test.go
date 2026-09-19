@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -131,6 +132,22 @@ func Test_NewAwsSDKv2(t *testing.T) {
 
 	_, err = NewAwsSDKv2(ctx, args, nil)
 	require.Error(t, err)
+}
+
+func TestNewAwsSDKv2UsesCompatibilityChecksumPolicy(t *testing.T) {
+	sdk, err := NewAwsSDKv2(context.Background(), ObjectStorageArguments{
+		Bucket:             "bucket",
+		Endpoint:           "http://127.0.0.1:1",
+		Region:             "us-east-1",
+		KeyID:              "id",
+		KeySecret:          "secret",
+		NoBucketValidation: true,
+	}, nil)
+	require.NoError(t, err)
+	require.Equal(t, aws.RequestChecksumCalculationWhenRequired,
+		sdk.client.Options().RequestChecksumCalculation)
+	require.Equal(t, aws.ResponseChecksumValidationWhenRequired,
+		sdk.client.Options().ResponseChecksumValidation)
 }
 
 func TestAwsSDKv2BasicObjectOperations(t *testing.T) {
