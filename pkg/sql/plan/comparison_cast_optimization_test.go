@@ -819,8 +819,8 @@ func TestDecimalComparisonPreservesNullableColumnSemantics(t *testing.T) {
 				"comparison result must preserve SQL NULL semantics")
 			requires, err := plan.RequiresMORPCVersion86DecimalLiteralSemantics(result)
 			require.NoError(t, err)
-				require.True(t, requires,
-					"retained nullable comparison must preserve the v86 fence")
+			require.True(t, requires,
+				"retained nullable comparison must preserve the v86 fence")
 		})
 	}
 }
