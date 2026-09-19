@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -314,6 +315,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 
 		affectedCols             = make([]string, 0, len(tableDef.Cols))
 		affectedIndexes          = make([]string, 0, len(tableDef.Indexes))
+		pendingAddIndexes        = make([]tree.TableDef, 0)
 		generatedDependencySeeds = make(map[string]struct{})
 		unsupportedErrorFmt      = "unsupported alter option in copy mode: %s"
 		copyFakePKCol            = catalog.IsFakePkName(tableDef.Pkey.PkeyColName)
@@ -339,9 +341,14 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			case *tree.PrimaryKeyIndex:
 				err = AddPrimaryKey(cctx, alterTablePlan, optionAdd, alterTableCtx)
 				affectedAllIdxCols()
+			case *tree.UniqueIndex, *tree.FullTextIndex, *tree.Index:
+				// Bind secondary indexes only after every COPY schema mutation has
+				// been applied. MySQL resolves an ADD INDEX against the final table
+				// shape, so an earlier index clause may reference a later ADD COLUMN.
+				pendingAddIndexes = append(pendingAddIndexes, optionAdd)
 			default:
 				// column adding is handled in *tree.AlterAddCol
-				// various indexes\fks adding are handled in inplace mode.
+				// Foreign keys remain an in-place-only operation.
 				return nil, moerr.NewInvalidInputf(ctx,
 					unsupportedErrorFmt, formatTreeNode(option))
 			}
@@ -466,6 +473,36 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		}
 	}
 
+	// Secondary indexes are bound against the final COPY schema. Keep newly
+	// added plugin-index identities separate from affected column/index names:
+	// plugin index names and column names share a string namespace otherwise,
+	// which can spuriously rebuild an unrelated existing plugin index.
+	currentIndexNames := make(map[string]bool, len(copyTableDef.Indexes)+len(pendingAddIndexes))
+	for _, indexDef := range copyTableDef.Indexes {
+		currentIndexNames[indexNameKey(indexDef.IndexName)] = true
+	}
+	newPluginIndexes := make(map[string]bool)
+	for _, definition := range pendingAddIndexes {
+		addIndex, pluginIndexName, buildErr := buildAlterCopyAddIndex(
+			cctx,
+			copyTableDef,
+			currentIndexNames,
+			schemaName,
+			tableName,
+			definition,
+		)
+		if buildErr != nil {
+			return nil, buildErr
+		}
+		copyTableDef.Indexes = append(copyTableDef.Indexes, addIndex.IndexInfo.TableDef.Indexes...)
+		alterTablePlan.Actions = append(alterTablePlan.Actions, &plan.AlterTable_Action{
+			Action: &plan.AlterTable_Action_AddIndex{AddIndex: addIndex},
+		})
+		if pluginIndexName != "" {
+			newPluginIndexes[pluginIndexName] = true
+		}
+	}
+
 	createTmpDdl, _, err := constructCreateTableSQL(
 		cctx, copyTableDef, snapshot, true, nil, true, nil,
 	)
@@ -480,6 +517,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		SkipPkDedup:        skipPkDedup(tableDef, copyTableDef, alterTableCtx.alterColMap),
 		TargetTableName:    copyTableDef.Name,
 		SkipUniqueIdxDedup: skipUniqueIdxDedup(tableDef, copyTableDef, alterTableCtx.alterColMap),
+		NewPluginIndexes:   newPluginIndexes,
 	}
 
 	opt.SkipIndexesCopy = make(map[string]bool)
@@ -523,6 +561,114 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			},
 		},
 	}, nil
+}
+
+// buildAlterCopyAddIndex applies the same index-definition builders used by
+// CREATE/INPLACE ALTER to the final COPY schema. The replacement table is
+// created with these definitions before data is inserted, so regular and
+// UNIQUE hidden tables are populated atomically by that INSERT; plugin indexes
+// are populated exactly once by the post-copy rebuild.
+func buildAlterCopyAddIndex(
+	ctx CompilerContext,
+	copyTableDef *TableDef,
+	currentIndexNames map[string]bool,
+	databaseName string,
+	tableName string,
+	definition tree.TableDef,
+) (*plan.AlterTableAddIndex, string, error) {
+	if err := checkCreateIndexTableType(ctx.GetContext(), copyTableDef); err != nil {
+		return nil, "", err
+	}
+
+	colMap := make(map[string]*ColDef, len(copyTableDef.Cols)+1)
+	for _, col := range copyTableDef.Cols {
+		colMap[col.Name] = col
+	}
+	if copyTableDef.Pkey != nil && copyTableDef.Pkey.CompPkeyCol != nil {
+		colMap[copyTableDef.Pkey.CompPkeyCol.Name] = copyTableDef.Pkey.CompPkeyCol
+	}
+
+	primaryKeyName := getTablePriKeyName(copyTableDef.Pkey)
+	indexInfo := &plan.CreateTable{TableDef: &TableDef{}}
+	var indexName string
+
+	switch index := definition.(type) {
+	case *tree.UniqueIndex:
+		if err := checkIndexKeypartSupportability(ctx.GetContext(), index.KeyParts); err != nil {
+			return nil, "", err
+		}
+		indexName = index.GetIndexName()
+		if err := checkDuplicateConstraint(currentIndexNames, indexName, false, ctx.GetContext()); err != nil {
+			return nil, "", err
+		}
+		if indexName == "" {
+			setEmptyUniqueIndexName(currentIndexNames, index)
+			indexName = index.GetIndexName()
+		}
+		if err := buildUniqueIndexTable(
+			indexInfo, []*tree.UniqueIndex{index}, colMap, primaryKeyName, ctx,
+		); err != nil {
+			return nil, "", err
+		}
+
+	case *tree.FullTextIndex:
+		if err := checkIndexKeypartSupportability(ctx.GetContext(), index.KeyParts); err != nil {
+			return nil, "", err
+		}
+		indexName = index.Name
+		if err := checkDuplicateConstraint(currentIndexNames, indexName, false, ctx.GetContext()); err != nil {
+			return nil, "", err
+		}
+		if indexName == "" {
+			setEmptyFullTextIndexName(currentIndexNames, index)
+			indexName = index.Name
+		}
+		if err := buildFullTextIndexTable(
+			indexInfo, []*tree.FullTextIndex{index}, colMap,
+			copyTableDef.Indexes, primaryKeyName, ctx,
+		); err != nil {
+			return nil, "", err
+		}
+
+	case *tree.Index:
+		if err := checkIndexKeypartSupportability(ctx.GetContext(), index.KeyParts); err != nil {
+			return nil, "", err
+		}
+		indexName = index.Name
+		if err := checkDuplicateConstraint(currentIndexNames, indexName, false, ctx.GetContext()); err != nil {
+			return nil, "", err
+		}
+		if indexName == "" {
+			setEmptyIndexName(currentIndexNames, index)
+			indexName = index.Name
+		}
+		if err := buildSecondaryIndexDef(
+			indexInfo, []*tree.Index{index}, colMap,
+			copyTableDef.Indexes, primaryKeyName, ctx,
+		); err != nil {
+			return nil, "", err
+		}
+
+	default:
+		return nil, "", moerr.NewInternalErrorf(
+			ctx.GetContext(), "invalid COPY ALTER index definition: %s", formatTreeNode(definition),
+		)
+	}
+
+	pluginIndexName := ""
+	if slices.ContainsFunc(indexInfo.TableDef.Indexes, func(indexDef *plan.IndexDef) bool {
+		return indexDef != nil && indexplugin.IsPluginAlgo(indexDef.IndexAlgo)
+	}) {
+		pluginIndexName = indexName
+	}
+
+	return &plan.AlterTableAddIndex{
+		DbName:                databaseName,
+		TableName:             tableName,
+		OriginTablePrimaryKey: primaryKeyName,
+		IndexInfo:             indexInfo,
+		IndexTableExist:       true,
+	}, pluginIndexName, nil
 }
 
 func appendAffectedAlterColumnNames(affectedCols []string, oldColName, newColName string) []string {

@@ -785,6 +785,15 @@ func isAlterAffectedPluginIndex(indexDef *plan.IndexDef, affected []string) bool
 	return false
 }
 
+func isAlterRebuiltPluginIndex(
+	indexDef *plan.IndexDef,
+	affected []string,
+	newPluginIndexes map[string]bool,
+) bool {
+	return indexDef != nil &&
+		(newPluginIndexes[indexDef.IndexName] || isAlterAffectedPluginIndex(indexDef, affected))
+}
+
 func isAlterAffectedColumnName(affected []string, name string) bool {
 	if slices.Contains(affected, name) {
 		return true
@@ -796,7 +805,7 @@ func isAlterAffectedColumnName(affected []string, name string) bool {
 func alterCopyStatementOption(alterOpt *plan.AlterCopyOpt) executor.StatementOption {
 	opt := executor.StatementOption{}
 	if alterOpt != nil &&
-		(alterOpt.SkipPkDedup || len(alterOpt.SkipUniqueIdxDedup) > 0) {
+		(alterOpt.SkipPkDedup || len(alterOpt.SkipUniqueIdxDedup) > 0 || len(alterOpt.NewPluginIndexes) > 0) {
 		opt = opt.WithAlterCopyOpt(alterOpt)
 	}
 	return opt
@@ -1005,6 +1014,12 @@ func cloneAlterCopyOpt(opt *plan.AlterCopyOpt) *plan.AlterCopyOpt {
 		clone.SkipIndexesCopy = make(map[string]bool, len(opt.SkipIndexesCopy))
 		for k, v := range opt.SkipIndexesCopy {
 			clone.SkipIndexesCopy[k] = v
+		}
+	}
+	if opt.NewPluginIndexes != nil {
+		clone.NewPluginIndexes = make(map[string]bool, len(opt.NewPluginIndexes))
+		for k, v := range opt.NewPluginIndexes {
+			clone.NewPluginIndexes[k] = v
 		}
 	}
 	return &clone
@@ -1527,16 +1542,16 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		var idxcronCctx *pluginCompileCtx
 		for _, indexDef := range newTableDef.Indexes {
 
-			// DO NOT check SkipIndexesCopy here.  SkipIndexesCopy only valids for the unique/master/regular index.
-			// Fulltext/HNSW/Ivfflat indexes are always "unaffected" in skipIndexesCopy
-			// check affectedCols to see it is affected or not.  If affected is true, it means the secondary index
-			// are cloned in cloneUnaffectedIndexes().  Otherwise, build the index again.
+			// Do not use SkipIndexesCopy to choose the plugin path here. It is
+			// computed from source indexes for regular/unique clone decisions.
+			// Existing plugin indexes rebuild when their indexed columns changed;
+			// newly added plugin indexes rebuild by explicit logical identity.
 
 			if !indexDef.Unique && indexplugin.IsPluginAlgo(indexDef.IndexAlgo) {
 				// vector (ivf/hnsw/cagra/ivfpq) or fulltext index
 
-				if !isAlterAffectedPluginIndex(indexDef, qry.AffectedCols) {
-					// column not affected means index already cloned in cloneUnaffectedIndexes()
+				if !isAlterRebuiltPluginIndex(indexDef, qry.AffectedCols, qry.Options.NewPluginIndexes) {
+					// An unchanged source index was cloned by cloneUnaffectedIndexes.
 
 					if unaffectedIndexProcessed[indexDef.IndexName] {
 						// unaffectedIndex already processed.

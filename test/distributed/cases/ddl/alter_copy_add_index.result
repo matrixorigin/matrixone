@@ -1,0 +1,210 @@
+drop database if exists alter_copy_add_index;
+create database alter_copy_add_index;
+use alter_copy_add_index;
+create table ordinary(id bigint primary key, payload int);
+insert into ordinary values (1, 10), (2, 20);
+alter table ordinary add index idx_category(category), add column category int default 7;
+select id, category from ordinary force index(idx_category) where category = 7 order by id;
+➤ id[-5,64,0]  ¦  category[4,32,0]  𝄀
+1  ¦  7  𝄀
+2  ¦  7
+update ordinary set category = 8 where id = 2;
+select id, category from ordinary force index(idx_category) where category = 8;
+➤ id[-5,64,0]  ¦  category[4,32,0]  𝄀
+2  ¦  8
+alter table ordinary algorithm=copy, add index idx_payload(payload);
+select id, payload from ordinary force index(idx_payload) where payload = 10;
+➤ id[-5,64,0]  ¦  payload[4,32,0]  𝄀
+1  ¦  10
+create table docs_stored(id bigint primary key, doc json);
+insert into docs_stored values
+(1, '{"kind":"alpha"}'),
+(2, '{"kind":"beta"}');
+alter table docs_stored
+add column kind varchar(20) generated always as (doc ->> '$.kind') stored,
+add index idx_kind(kind);
+select id, kind from docs_stored force index(idx_kind) where kind = 'alpha';
+➤ id[-5,64,0]  ¦  kind[12,20,0]  𝄀
+1  ¦  alpha
+update docs_stored set doc = '{"kind":"gamma"}' where id = 2;
+select id, kind from docs_stored force index(idx_kind) where kind = 'gamma';
+➤ id[-5,64,0]  ¦  kind[12,20,0]  𝄀
+2  ¦  gamma
+create table docs_virtual(id bigint primary key, doc json);
+insert into docs_virtual values
+(1, '{"kind":"left"}'),
+(2, '{"kind":"right"}');
+alter table docs_virtual
+add column kind varchar(20) generated always as (doc ->> '$.kind') virtual,
+add index idx_kind(kind);
+select id, kind from docs_virtual force index(idx_kind) where kind = 'right';
+➤ id[-5,64,0]  ¦  kind[12,20,0]  𝄀
+2  ¦  right
+update docs_virtual set doc = '{"kind":"updated"}' where id = 1;
+select id, kind from docs_virtual force index(idx_kind) where kind = 'updated';
+➤ id[-5,64,0]  ¦  kind[12,20,0]  𝄀
+1  ¦  updated
+create table duplicate_values(id bigint primary key, value_col int);
+insert into duplicate_values values (1, 1), (2, 1);
+alter table duplicate_values add column note int, add unique index uk_value(value_col);
+Duplicate entry '1' for key 'value_col'
+select count(*) from information_schema.columns
+where table_schema = 'alter_copy_add_index'
+and table_name = 'duplicate_values'
+and column_name = 'note';
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from information_schema.statistics
+where table_schema = 'alter_copy_add_index'
+and table_name = 'duplicate_values'
+and index_name = 'uk_value';
+➤ count(*)[-5,64,0]  𝄀
+0
+create table fulltext_docs(id bigint primary key, body text);
+insert into fulltext_docs values (1, 'alpha beta'), (2, 'beta gamma');
+alter table fulltext_docs add column note int, add fulltext index ft_body(body);
+set @ft_table = (
+select index_table_name
+from mo_catalog.mo_indexes
+where table_id = (
+select rel_id from mo_catalog.mo_tables
+where reldatabase = database() and relname = 'fulltext_docs'
+)
+and name = 'ft_body'
+limit 1
+);
+set @ft_count_sql = concat('select count(*) from `', database(), '`.`', @ft_table, '`');
+prepare ft_count from @ft_count_sql;
+execute ft_count;
+➤ count(*)[-5,64,0]  𝄀
+6
+deallocate prepare ft_count;
+select id from fulltext_docs where match(body) against('alpha') order by id;
+➤ id[-5,64,0]  𝄀
+1
+update fulltext_docs set body = 'alpha updated' where id = 2;
+select id from fulltext_docs where match(body) against('alpha') order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2
+set experimental_hnsw_index = 1;
+create table vectors(id bigint primary key, embedding vecf32(3));
+insert into vectors values (1, '[1,0,0]'), (2, '[0,1,0]'), (3, '[0,0,1]');
+alter table vectors
+add column note int,
+add index h_embedding using hnsw(embedding) op_type 'vector_l2_ops';
+select algo, algo_table_type
+from mo_catalog.mo_indexes
+where table_id = (
+select rel_id from mo_catalog.mo_tables
+where reldatabase = 'alter_copy_add_index' and relname = 'vectors'
+)
+and algo = 'hnsw'
+order by algo_table_type;
+➤ algo[12,11,0]  ¦  algo_table_type[12,11,0]  𝄀
+hnsw  ¦  hnsw_index  𝄀
+hnsw  ¦  hnsw_meta
+select id from vectors order by l2_distance(embedding, '[1,0,0]') limit 1;
+➤ id[-5,64,0]  𝄀
+1
+explain select id from vectors order by l2_distance(embedding, '[1,0,0]') limit 1;
+-- @regex("hnsw_search", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_hnsw_alias_0.score INTERNAL  𝄀
+        Limit: 1  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (vectors.id = mo_hnsw_alias_0.pkid)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on alter_copy_add_index.vectors  𝄀
+                    Runtime Filter Probe: vectors.id  𝄀
+              ->  Table Function on hnsw_search  𝄀
+                    Index Reader Param:  Limit: 1  𝄀
+                    Limit: 1
+set experimental_hnsw_index = 0;
+set experimental_ivf_index = 1;
+create table ivf_vectors(id bigint primary key, embedding vecf32(3));
+insert into ivf_vectors values (1, '[1,0,0]'), (2, '[0,1,0]'), (3, '[0,0,1]');
+alter table ivf_vectors
+add column note int,
+add index i_embedding using ivfflat(embedding)
+lists=1 op_type 'vector_l2_ops' kmeans_train_percent 100 kmeans_max_iteration 20;
+set @ivf_entries = (
+select index_table_name
+from mo_catalog.mo_indexes
+where table_id = (
+select rel_id from mo_catalog.mo_tables
+where reldatabase = database() and relname = 'ivf_vectors'
+)
+and name = 'i_embedding'
+and algo_table_type = 'entries'
+limit 1
+);
+set @ivf_count_sql = concat('select count(*) from `', database(), '`.`', @ivf_entries, '`');
+prepare ivf_count from @ivf_count_sql;
+execute ivf_count;
+➤ count(*)[-5,64,0]  𝄀
+3
+deallocate prepare ivf_count;
+select id from ivf_vectors order by l2_distance(embedding, '[1,0,0]') limit 1;
+➤ id[-5,64,0]  𝄀
+1
+set experimental_ivf_index = 0;
+set @ordinary_id = (
+select rel_id from mo_catalog.mo_tables
+where reldatabase = database() and relname = 'ordinary'
+);
+set @docs_stored_id = (
+select rel_id from mo_catalog.mo_tables
+where reldatabase = database() and relname = 'docs_stored'
+);
+set @docs_virtual_id = (
+select rel_id from mo_catalog.mo_tables
+where reldatabase = database() and relname = 'docs_virtual'
+);
+set @duplicate_values_id = (
+select rel_id from mo_catalog.mo_tables
+where reldatabase = database() and relname = 'duplicate_values'
+);
+set @fulltext_docs_id = (
+select rel_id from mo_catalog.mo_tables
+where reldatabase = database() and relname = 'fulltext_docs'
+);
+set @vectors_id = (
+select rel_id from mo_catalog.mo_tables
+where reldatabase = database() and relname = 'vectors'
+);
+set @ivf_vectors_id = (
+select rel_id from mo_catalog.mo_tables
+where reldatabase = database() and relname = 'ivf_vectors'
+);
+select count(*) from mo_catalog.mo_tables
+where rel_id in (
+@ordinary_id, @docs_stored_id, @docs_virtual_id, @duplicate_values_id,
+@fulltext_docs_id, @vectors_id, @ivf_vectors_id
+);
+➤ count(*)[-5,64,0]  𝄀
+7
+drop database alter_copy_add_index;
+select count(*) from mo_catalog.mo_tables
+where reldatabase = 'alter_copy_add_index';
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from mo_catalog.mo_indexes
+where table_id in (
+@ordinary_id, @docs_stored_id, @docs_virtual_id, @duplicate_values_id,
+@fulltext_docs_id, @vectors_id, @ivf_vectors_id
+);
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from mo_catalog.mo_iscp_log
+where table_id in (@fulltext_docs_id, @vectors_id, @ivf_vectors_id)
+and drop_at is null;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from mo_catalog.mo_index_update
+where db_name = 'alter_copy_add_index';
+➤ count(*)[-5,64,0]  𝄀
+0

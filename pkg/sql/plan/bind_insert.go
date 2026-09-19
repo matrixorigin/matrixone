@@ -930,10 +930,10 @@ func (builder *QueryBuilder) buildIrregularIndexInsertMaintenance(
 
 	// During a copy-based ALTER TABLE, an irregular index whose columns are not
 	// affected by the change is shallow-cloned into the new table (see
-	// cloneUnaffectedIndexes in compile/alter.go) rather than rebuilt. The data
-	// copy runs as a normal INSERT, so skip sync maintenance for such indexes here
-	// — exactly as the regular-index path skips them via SkipIndexesCopy — to avoid
-	// inserting every row's entries twice (cloned + rebuilt).
+	// cloneUnaffectedIndexes in compile/alter.go) rather than rebuilt. A newly
+	// added plugin index is rebuilt after the base-table copy. The data copy runs
+	// as a normal INSERT, so skip synchronous maintenance in both cases to avoid
+	// populating the hidden index table twice.
 	var alterCopyOpt *plan.AlterCopyOpt
 	if v := builder.compCtx.GetContext().Value(defines.AlterCopyOpt{}); v != nil {
 		if opt, ok := v.(*plan.AlterCopyOpt); ok && opt.TargetTableName == tableDef.Name {
@@ -951,9 +951,15 @@ func (builder *QueryBuilder) buildIrregularIndexInsertMaintenance(
 		if !indexdef.TableExist {
 			continue
 		}
-		if alterCopyOpt != nil && alterCopyOpt.SkipIndexesCopy[indexdef.IndexName] {
-			// cloned by the ALTER, not rebuilt by this copy insert
-			continue
+		if alterCopyOpt != nil {
+			if alterCopyOpt.SkipIndexesCopy[indexdef.IndexName] {
+				// cloned by the ALTER, not rebuilt by this copy insert
+				continue
+			}
+			if alterCopyOpt.NewPluginIndexes[indexdef.IndexName] {
+				// rebuilt after the replacement table contains all source rows
+				continue
+			}
 		}
 		indexSourceStep := builder.irregularMaintenanceSourceStep(indexdef, sourceStep)
 		switch {
