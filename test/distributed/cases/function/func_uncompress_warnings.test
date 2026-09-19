@@ -37,3 +37,17 @@ SHOW WARNINGS;
 DROP DATABASE uncompress_warnings_28458;
 SELECT COUNT(*) AS leftover_tables FROM information_schema.tables
 WHERE table_schema = 'uncompress_warnings_28458';
+
+-- UNCOMPRESSED_LENGTH keeps returning zero for short invalid inputs, but now
+-- exposes one MySQL-compatible warning for each evaluated non-empty value.
+SELECT UNCOMPRESSED_LENGTH(x'00') AS one_byte,
+       UNCOMPRESSED_LENGTH(x'000000') AS three_bytes,
+       UNCOMPRESSED_LENGTH(x'01000000') AS four_bytes;
+SHOW COUNT(*) WARNINGS;
+SHOW WARNINGS;
+
+-- Empty, NULL, and valid compressed values remain warning-free.
+SELECT UNCOMPRESSED_LENGTH(x'') AS empty_input,
+       UNCOMPRESSED_LENGTH(NULL) AS null_input,
+       UNCOMPRESSED_LENGTH(COMPRESS('abc')) AS valid_input;
+SHOW COUNT(*) WARNINGS;
