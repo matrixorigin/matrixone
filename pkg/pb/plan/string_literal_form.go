@@ -203,6 +203,14 @@ func RequiresMORPCVersion83BoundedConditionalStringDomains(owner any) (bool, err
 	return features.BoundedConditionalStringDomains, err
 }
 
+// RequiresMORPCVersion87DecimalLiteralSemantics reports whether an owner
+// contains a plain decimal literal whose exact normalized binding must not be
+// replayed by a pre-v87 binder.
+func RequiresMORPCVersion87DecimalLiteralSemantics(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.DecimalLiteralSemantics, err
+}
+
 // RequiresMORPCVersion86ExpressionResultContracts reports whether an owner
 // contains a follow-up expression contract that changes a result domain or
 // overload identity.
@@ -218,6 +226,32 @@ func RequiresMORPCVersion86ExpressionResultContracts(owner any) (bool, error) {
 // Deprecated: use RequiresMORPCVersion86ExpressionResultContracts.
 func RequiresMORPCVersion85ExpressionResultContracts(owner any) (bool, error) {
 	return RequiresMORPCVersion86ExpressionResultContracts(owner)
+}
+
+// RequiresMORPCVersion85DecimalLiteralSemantics is retained as a source-level
+// compatibility alias for callers written before mainline assigned v85 to
+// integer-parameter coercion. Decimal literal semantics are fenced at v87.
+func RequiresMORPCVersion85DecimalLiteralSemantics(owner any) (bool, error) {
+	return RequiresMORPCVersion87DecimalLiteralSemantics(owner)
+}
+
+// RequiresMORPCVersion86DecimalLiteralSemantics retains the pre-rebase API.
+// Deprecated: use RequiresMORPCVersion87DecimalLiteralSemantics.
+func RequiresMORPCVersion86DecimalLiteralSemantics(owner any) (bool, error) {
+	return RequiresMORPCVersion87DecimalLiteralSemantics(owner)
+}
+
+// RequiresMORPCVersion84DecimalLiteralSemantics is retained as a source-level
+// compatibility alias for the short-lived pre-rebase API.
+func RequiresMORPCVersion84DecimalLiteralSemantics(owner any) (bool, error) {
+	return RequiresMORPCVersion85DecimalLiteralSemantics(owner)
+}
+
+// RequiresMORPCVersion82DecimalLiteralSemantics is retained as a source-level
+// compatibility alias for callers introduced before the decimal protocol
+// contract was assigned its final version.
+func RequiresMORPCVersion82DecimalLiteralSemantics(owner any) (bool, error) {
+	return RequiresMORPCVersion85DecimalLiteralSemantics(owner)
 }
 
 const (
@@ -285,6 +319,10 @@ const (
 // ExpressionResultMetadataContracts also requires MORPC v86 because bounded
 // character slicing and fractional temporal conditional results change the
 // serialized result metadata consumed by persisted views and remote workers.
+// DecimalLiteralSemantics requires MORPC v87 because plain DECIMAL256
+// literals are normalized and kept exact by the new planner, while older
+// binders can round or reject the same persisted SQL at the Decimal128
+// boundary.
 type RemoteExpressionFeatures struct {
 	NumericPrefix                   bool
 	JSONComparisonParam             bool
@@ -302,6 +340,7 @@ type RemoteExpressionFeatures struct {
 	TOBase64ResultContracts           bool
 	IPFunctionResultContracts         bool
 	ExpressionResultMetadataContracts bool
+	DecimalLiteralSemantics           bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
@@ -319,7 +358,8 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.IntegerParameterCoercion ||
 		features.TOBase64ResultContracts ||
 		features.IPFunctionResultContracts ||
-		features.ExpressionResultMetadataContracts
+		features.ExpressionResultMetadataContracts ||
+		features.DecimalLiteralSemantics
 }
 
 func isBoundedConditionalStringDomain(fn *Function) bool {
@@ -714,6 +754,14 @@ func isExpressionResultMetadataContract(expr *Expr) bool {
 func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatures, err error) {
 	err = walkExpressionsInOwner(owner, func(expr *Expr) error {
 		return VisitExprTree(expr, func(current *Expr) error {
+			if !features.DecimalLiteralSemantics {
+				if literal := current.GetLit(); literal != nil {
+					features.DecimalLiteralSemantics = literal.DecimalLiteralRequiresV82
+				}
+				if literalVec := current.GetVec(); literalVec != nil {
+					features.DecimalLiteralSemantics = literalVec.DecimalLiteralRequiresV82
+				}
+			}
 			fn := current.GetF()
 			if fn != nil && fn.Func != nil {
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
