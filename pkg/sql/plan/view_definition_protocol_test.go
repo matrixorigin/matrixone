@@ -137,3 +137,88 @@ func TestViewDefinitionFunctionsPersistAndEnforceProtocol(t *testing.T) {
 		})
 	}
 }
+
+func TestViewDefinitionProtocolSurvivesConstantFolding(t *testing.T) {
+	runtime := moruntime.ServiceRuntime("")
+	oldProtocol, hadProtocol := runtime.GetGlobalVariables(moruntime.MOProtocolVersion)
+	oldReadFloor, hadReadFloor := runtime.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor)
+	oldAuthoringFloor, hadAuthoringFloor := runtime.GetGlobalVariables(
+		moruntime.PersistedExpressionProtocolAuthoringFloor)
+	t.Cleanup(func() {
+		if hadProtocol {
+			runtime.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
+		} else if current, ok := runtime.GetGlobalVariables(moruntime.MOProtocolVersion); ok {
+			runtime.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, current)
+		}
+		if hadReadFloor {
+			runtime.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, oldReadFloor)
+		} else if current, ok := runtime.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor); ok {
+			runtime.CompareAndDeleteGlobalVariables(
+				moruntime.PersistedExpressionProtocolFloor, current)
+		}
+		if hadAuthoringFloor {
+			runtime.SetGlobalVariables(
+				moruntime.PersistedExpressionProtocolAuthoringFloor, oldAuthoringFloor)
+		} else if current, ok := runtime.GetGlobalVariables(
+			moruntime.PersistedExpressionProtocolAuthoringFloor); ok {
+			runtime.CompareAndDeleteGlobalVariables(
+				moruntime.PersistedExpressionProtocolAuthoringFloor, current)
+		}
+	})
+
+	buildView := func(rootSQL string, authoringFloor int64) (*TableDef, error) {
+		runtime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion87)
+		runtime.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor,
+			int64(defines.MORPCVersion87))
+		runtime.SetGlobalVariables(
+			moruntime.PersistedExpressionProtocolAuthoringFloor, authoringFloor)
+		ctx := &rootSQLCompilerContext{
+			MockCompilerContext: NewMockCompilerContext(false),
+			rootSQL:             rootSQL,
+		}
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, rootSQL, 1)
+		if err != nil {
+			return nil, err
+		}
+		defer stmt.Free()
+		built, err := BuildPlan(ctx, stmt, false)
+		if err != nil {
+			return nil, err
+		}
+		return built.GetDdl().GetCreateView().GetTableDef(), nil
+	}
+
+	cases := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "between",
+			sql:  `create view v_view_definition_between as select 5 between length(mo_view_check_option('{"Stmt":"CREATE VIEW old AS SELECT 1"}')) and 10 as folded`,
+		},
+		{
+			name: "arithmetic",
+			sql:  `create view v_view_definition_arithmetic as select length(mo_view_check_option('{"Stmt":"CREATE VIEW old AS SELECT 1"}')) + 1 as folded`,
+		},
+		{
+			name: "cast",
+			sql:  `create view v_view_definition_cast as select cast(mo_view_check_option('{"Stmt":"CREATE VIEW old AS SELECT 1"}') as char) as folded`,
+		},
+	}
+
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			for _, authoringFloor := range []int64{0, defines.MORPCVersion86} {
+				_, err := buildView(test.sql, authoringFloor)
+				require.ErrorContains(t, err, "protocol version 87")
+			}
+
+			created, err := buildView(test.sql, defines.MORPCVersion87)
+			require.NoError(t, err)
+			var data ViewData
+			require.NoError(t, json.Unmarshal([]byte(created.GetViewSql().GetView()), &data))
+			require.NotNil(t, data.RequiredProtocolVersion)
+			require.Equal(t, int64(defines.MORPCVersion87), *data.RequiredProtocolVersion)
+		})
+	}
+}
