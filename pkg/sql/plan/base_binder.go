@@ -7096,9 +7096,9 @@ func refineSubstringLiteralReturnType(args []*plan.Expr, returnType *types.Type)
 	}
 
 	if possibleStringDomainsForExpr(args[0]) != possibleStringDomainBinary {
-		// Character SUBSTRING keeps its existing metadata contract; narrowing
-		// it from a literal bound changes the overload's declared result width
-		// and breaks consumers that rely on the text semantic family.
+		if len(args) == 3 {
+			refineCharacterSliceLiteralWidth(args[0], args[2], returnType)
+		}
 		return
 	}
 	binary := true
@@ -7154,8 +7154,7 @@ func refineLeftRightLiteralReturnType(args []*plan.Expr, returnType *types.Type)
 		return
 	}
 	if possibleStringDomainsForExpr(args[0]) != possibleStringDomainBinary {
-		// LEFT/RIGHT follow the same text metadata contract as SUBSTRING.
-		// Literal character lengths are value bounds, not public result types.
+		refineCharacterSliceLiteralWidth(args[0], args[1], returnType)
 		return
 	}
 	binary := true
@@ -7167,6 +7166,18 @@ func refineLeftRightLiteralReturnType(args []*plan.Expr, returnType *types.Type)
 		length = sourceBound
 	}
 	refineKnownStringResultType(returnType, length, binary)
+}
+
+// Character slices count runes, not bytes. Refine only a proven bounded text
+// domain, preserving the overload's result family and charset. In particular,
+// mixed-domain and unresolved prepared sources must remain conservative.
+func refineCharacterSliceLiteralWidth(source, length *plan.Expr, returnType *types.Type) {
+	if possibleStringDomainsForExpr(source) != possibleStringDomainText {
+		return
+	}
+	if width, narrowed := function.CharacterSliceLiteralWidth(source, length.GetLit(), *returnType); narrowed {
+		returnType.Width = width
+	}
 }
 
 const (

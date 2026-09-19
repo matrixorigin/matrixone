@@ -173,6 +173,47 @@ func TestBase64ResultBoundIncludesLineBreaks(t *testing.T) {
 	require.Equal(t, types.CharsetUTF8, result.Charset)
 }
 
+func TestCharacterSliceLiteralWidth(t *testing.T) {
+	source := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar), Width: 15}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}
+	unicode := &planpb.Expr{Typ: source.Typ, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "甲乙丙"}}}}
+	unknown := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar)}}
+	binary := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varbinary), Width: 15}}
+	selected := types.NewWithCharset(types.T_varchar, 15, 0, types.CharsetUTF8)
+	signed := func(n int64) *planpb.Literal { return &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: n}} }
+	for _, tc := range []struct {
+		name     string
+		source   *planpb.Expr
+		length   *planpb.Literal
+		selected types.Type
+		width    int32
+		narrowed bool
+	}{
+		{"short", source, signed(2), selected, 2, true},
+		{"zero", source, signed(0), selected, 0, true},
+		{"negative", source, signed(math.MinInt64), selected, 0, true},
+		{"runes", unicode, signed(10), selected, 3, true},
+		{"empty literal", &planpb.Expr{Typ: source.Typ, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{}}}}, signed(10), selected, 0, true},
+		{"unsigned max", source, &planpb.Literal{Value: &planpb.Literal_U64Val{U64Val: math.MaxUint64}}, types.New(types.T_varchar, 20, 0), 15, true},
+		{"no widening", source, signed(10), types.New(types.T_varchar, 2, 0), 0, false},
+		{"unknown source", unknown, signed(2), selected, 0, false},
+		{"nil source", nil, signed(2), selected, 0, false},
+		{"nil length", source, nil, selected, 0, false},
+		{"null length", source, &planpb.Literal{Isnull: true}, selected, 0, false},
+		{"noninteger", source, &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "2"}}, selected, 0, false},
+		{"binary source", binary, signed(2), selected, 0, false},
+		{"binary result", source, signed(2), types.New(types.T_varbinary, 15, 0), 0, false},
+		{"unknown result", source, signed(2), types.New(types.T_varchar, -1, 0), 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			original := tc.selected
+			width, narrowed := CharacterSliceLiteralWidth(tc.source, tc.length, tc.selected)
+			require.Equal(t, tc.width, width)
+			require.Equal(t, tc.narrowed, narrowed)
+			require.Equal(t, original, tc.selected)
+		})
+	}
+}
+
 func TestTextSourceCharacterBound(t *testing.T) {
 	column := func(oid types.T, width, scale int32) *planpb.Expr {
 		return &planpb.Expr{Typ: planpb.Type{Id: int32(oid), Width: width, Scale: scale},
