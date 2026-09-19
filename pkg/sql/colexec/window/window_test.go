@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -53,6 +54,29 @@ type cancelAfterDoneChecksContext struct {
 	context.Context
 	done      chan struct{}
 	remaining atomic.Int32
+}
+
+// cancelOnErrContext remains live for the operator's polling checks and
+// cancels when a context-aware finalizer asks for the cancellation cause. It
+// distinguishes window's FlushWithContext path from the legacy Flush path,
+// which silently replaced the query context with context.Background().
+type cancelOnErrContext struct {
+	context.Context
+	done chan struct{}
+	once sync.Once
+}
+
+func newCancelOnErrContext(parent context.Context) *cancelOnErrContext {
+	return &cancelOnErrContext{Context: parent, done: make(chan struct{})}
+}
+
+func (c *cancelOnErrContext) Done() <-chan struct{} {
+	return c.done
+}
+
+func (c *cancelOnErrContext) Err() error {
+	c.once.Do(func() { close(c.done) })
+	return context.Canceled
 }
 
 func newCancelAfterDoneChecksContext(parent context.Context, checks int32) *cancelAfterDoneChecksContext {
@@ -1452,14 +1476,31 @@ func TestWindowOrderedPercentileSpills(t *testing.T) {
 	arg.AppendChild(op)
 
 	require.NoError(t, arg.Prepare(proc))
-	result, err := vm.Exec(arg, proc)
-	require.NoError(t, err)
-	require.NotNil(t, result.Batch)
-	got := vector.MustFixedColWithTypeCheck[float64](result.Batch.Vecs[1])
-	require.NotEmpty(t, got)
-	for _, value := range got {
-		require.Equal(t, 9999.5, value)
+	var outputRows, outputChunks int
+	for {
+		result, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		if result.Batch == nil {
+			break
+		}
+		outputChunks++
+		got := vector.MustFixedColWithTypeCheck[float64](result.Batch.Vecs[1])
+		require.NotEmpty(t, got)
+		for _, value := range got {
+			require.Equal(t, 9999.5, value)
+		}
+		outputRows += len(got)
+		if outputRows < rows {
+			require.NotNil(t, arg.ctr.orderedSetPartitionResults,
+				"partition result must survive until the final output chunk")
+		}
 	}
+	require.Equal(t, rows, outputRows)
+	require.Equal(t, 3, outputChunks)
+	require.Nil(t, arg.ctr.orderedSetPartitionResults)
+	// With a one-byte spill threshold every source row is reported once. A
+	// per-output-chunk recomputation would report 60,000 rows for this input.
+	require.Equal(t, int64(rows), arg.OpAnalyzer.GetOpStats().SpillRows)
 	require.Positive(t, arg.OpAnalyzer.GetOpStats().SpillRows)
 	require.Positive(t, arg.OpAnalyzer.GetOpStats().SpillSize)
 
@@ -1467,6 +1508,80 @@ func TestWindowOrderedPercentileSpills(t *testing.T) {
 	op.Free(proc, false, nil)
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestWindowOrderedPercentileFinalizationHonorsCancellation(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := makeInt32Batch(proc.Mp(), []int32{1, 3, 5, 7})
+	arg := &Window{
+		WinSpecList: []*plan.Expr{makeAggWindowSpec("percentile_cont")},
+		Aggs: []aggexec.AggFuncExecExpression{
+			newOrderedPercentileWindowAggExpr(t, "percentile_cont", "0.5", false),
+		},
+	}
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(child)
+
+	require.NoError(t, arg.Prepare(proc))
+	proc.Ctx = newCancelOnErrContext(proc.Ctx)
+	result, err := vm.Exec(arg, proc)
+	require.Nil(t, result.Batch)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, arg.ctr.orderedSetPartitionResults)
+	require.Nil(t, arg.ctr.batAggs)
+
+	arg.Free(proc, true, err)
+	child.Free(proc, true, err)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestWindowOrderedPercentileCacheReleasesOnReset(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	values := make([]int32, colexec.DefaultBatchSize+1)
+	for i := range values {
+		values[i] = int32(i)
+	}
+	bat := makeInt32Batch(proc.Mp(), values)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{makeAggWindowSpec("percentile_cont")},
+		Aggs: []aggexec.AggFuncExecExpression{
+			newOrderedPercentileWindowAggExpr(t, "percentile_cont", "0.5", false),
+		},
+	}
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(child)
+
+	require.NoError(t, arg.Prepare(proc))
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.NotNil(t, arg.ctr.orderedSetPartitionResults)
+
+	// Model a LIMIT consumer that stops before the cached partition's final
+	// chunk, then reuse the operator generation.
+	arg.Reset(proc, false, nil)
+	require.Nil(t, arg.ctr.orderedSetPartitionResults)
+	require.Zero(t, arg.ctr.orderedSetNextRow)
+	require.Zero(t, arg.ctr.orderedSetPartition)
+	child.Free(proc, false, nil)
+
+	secondBatch := makeInt32Batch(proc.Mp(), []int32{10, 20, 30})
+	secondChild := colexec.NewMockOperator().WithBatchs([]*batch.Batch{secondBatch})
+	arg.Children = nil
+	arg.AppendChild(secondChild)
+	require.NoError(t, arg.Prepare(proc))
+	result, err = vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, []float64{20, 20, 20},
+		vector.MustFixedColWithTypeCheck[float64](result.Batch.Vecs[1]))
+	require.Nil(t, arg.ctr.orderedSetPartitionResults)
+
+	arg.Free(proc, false, nil)
+	secondChild.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
 }
 
 // TestWindowJsonObjectAggNullKeyNoLeak reproduces the NULL-key error exit
