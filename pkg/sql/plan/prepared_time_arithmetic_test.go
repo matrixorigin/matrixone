@@ -261,6 +261,76 @@ func TestPreparedTimeArithmeticPreservesTemporalIntegerDomain(t *testing.T) {
 	}
 }
 
+func TestPreparedTimeArithmeticPreservesFractionalTemporalIntegerDomain(t *testing.T) {
+	const timeLiteral = "03:04:05.123456"
+
+	evaluate := func(t *testing.T, expr *planpb.Expr) (types.Type, string, error) {
+		t.Helper()
+		proc := testutil.NewProc(t)
+		defer proc.Free()
+		executor, err := colexec.NewExpressionExecutor(proc, expr)
+		if err != nil {
+			return types.Type{}, "", err
+		}
+		defer executor.Free()
+		result, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+		if err != nil {
+			return types.Type{}, "", err
+		}
+		if result.IsNull(0) {
+			return *result.GetType(), "NULL", nil
+		}
+		return *result.GetType(), formatDecimalResult(result), nil
+	}
+
+	for _, op := range []string{"+", "-", "%"} {
+		t.Run(op, func(t *testing.T) {
+			ordinary, err := runOneStmt(NewMockOptimizer(false), t, fmt.Sprintf(
+				"select cast('%s' as time(6)) %s 10", timeLiteral, op))
+			require.NoError(t, err)
+			prepared, err := runOneStmt(NewMockOptimizer(false), t, fmt.Sprintf(
+				"prepare stmt_fractional_time from 'select cast(''%s'' as time(6)) %s ?'",
+				timeLiteral, op))
+			require.NoError(t, err)
+			filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(),
+				prepared.GetDcl().GetPrepare().Plan, []any{
+					ParamValue{Value: "10", PrepareParamKind: vector.PrepareParamInteger},
+				})
+			require.NoError(t, err)
+
+			ordinaryExpr := ordinary.GetQuery().Nodes[len(ordinary.GetQuery().Nodes)-1].ProjectList[0]
+			preparedExpr := filled.GetQuery().Nodes[len(filled.GetQuery().Nodes)-1].ProjectList[0]
+			ordinaryType, ordinaryValue, ordinaryErr := evaluate(t, ordinaryExpr)
+			preparedType, preparedValue, preparedErr := evaluate(t, preparedExpr)
+			require.NoError(t, ordinaryErr)
+			require.NoError(t, preparedErr)
+			require.Equal(t, ordinaryType, preparedType)
+			require.Equal(t, types.T_decimal64, ordinaryType.Oid)
+			require.Equal(t, int32(18), ordinaryType.Width)
+			require.Equal(t, int32(6), ordinaryType.Scale)
+			require.Equal(t, ordinaryValue, preparedValue)
+		})
+	}
+
+	ordinaryMax, err := runOneStmt(NewMockOptimizer(false), t,
+		"select cast('03:04:05.123456' as time(6)) + 9223372036854775807")
+	require.NoError(t, err)
+	preparedMax, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt_fractional_time_max from 'select cast(''03:04:05.123456'' as time(6)) + ?'")
+	require.NoError(t, err)
+	filledMax, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(),
+		preparedMax.GetDcl().GetPrepare().Plan, []any{
+			ParamValue{Value: "9223372036854775807", PrepareParamKind: vector.PrepareParamInteger},
+		})
+	require.NoError(t, err)
+	_, _, ordinaryErr := evaluate(t,
+		ordinaryMax.GetQuery().Nodes[len(ordinaryMax.GetQuery().Nodes)-1].ProjectList[0])
+	_, _, preparedErr := evaluate(t,
+		filledMax.GetQuery().Nodes[len(filledMax.GetQuery().Nodes)-1].ProjectList[0])
+	require.Error(t, ordinaryErr)
+	require.Error(t, preparedErr)
+}
+
 func TestPreparedTimeArithmeticCoercesNestedIntegerAtBoundary(t *testing.T) {
 	const ordinarySQL = "select cast('00:00:01.000000' as time(6)) + (10000000000000 - 9999999999999)"
 	ordinary, err := runOneStmt(NewMockOptimizer(false), t, ordinarySQL)
