@@ -237,6 +237,23 @@ func TestPreparedTimeArithmeticOverMySQLProtocol(t *testing.T) {
 			})
 		}
 
+		t.Run("binary/fractional-time-add", func(t *testing.T) {
+			stmt, err := conn.PrepareContext(ctx,
+				"select cast('03:04:05.123456' as time(6)) + ? as result")
+			require.NoError(t, err)
+			defer stmt.Close()
+
+			rows, err := stmt.QueryContext(ctx, int64(10))
+			require.NoError(t, err)
+			assertPreparedTimeResult(t, rows, "30415.123456", false, 18, 6)
+
+			rows, err = stmt.QueryContext(ctx, int64(9223372036854775807))
+			if err == nil {
+				defer rows.Close()
+			}
+			require.Error(t, err)
+		})
+
 		for _, tc := range []struct {
 			name          string
 			op            string
