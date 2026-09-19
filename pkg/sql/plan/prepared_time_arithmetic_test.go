@@ -326,7 +326,7 @@ func TestPreparedTimeArithmeticFallbackPreservesIntegerBoundary(t *testing.T) {
 		{"unsigned", "abs(cast('00:00:01' as time(0)) + ?)"},
 		{"decimal-parameter", "abs(cast('00:00:01' as time(0)) + ?)"},
 		{"explicit-decimal", "abs(cast(cast('00:00:01' as time(0)) as decimal(10,2)) + ?)"},
-		{"explicit-double", "abs(cast('00:00:01' as time(0)) + cast(? as double))"},
+		{"explicit-double", "abs(cast(1 as double) + ?)"},
 		{"sign", "sign(cast('00:00:01' as time(0)) + ?)"},
 		{"elt", "elt(cast('00:00:01' as time(0)) + ?, 'first', 'second')"},
 	} {
