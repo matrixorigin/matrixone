@@ -80,17 +80,17 @@ select substring('hello', 4294967297, 1);
 ➤ substring(hello, 4294967297, 1)[12,5,0]  𝄀
 
 select substring('hello', -18446744073709551615, 1);
-Data truncation: data out of range: data type int64, value '-18446744073709551615'
+Data truncation: data out of range: data type int64, integer argument
 select substring('hello', 18446744073709551615, 1);
-Data truncation: data out of range: data type int64, value '18446744073709551615'
+Data truncation: data out of range: data type int64, integer argument
 select substring('hello', -18446744073709551616, 1);
-Data truncation: data out of range: data type int64, value '-18446744073709551616'
+Data truncation: data out of range: data type int64, integer argument
 select substring('hello', 18446744073709551616, 1);
-Data truncation: data out of range: data type int64, value '18446744073709551616'
+Data truncation: data out of range: data type int64, integer argument
 select substring('hello', -18446744073709551617, 1);
-Data truncation: data out of range: data type int64, value '-18446744073709551617'
+Data truncation: data out of range: data type int64, integer argument
 select substring('hello', 18446744073709551617, 1);
-Data truncation: data out of range: data type int64, value '18446744073709551617'
+Data truncation: data out of range: data type int64, integer argument
 select substring('hello', 1, -1);
 ➤ substring(hello, 1, -1)[12,5,0]  𝄀
 
@@ -113,17 +113,17 @@ select substring('hello', 1, 4294967297);
 ➤ substring(hello, 1, 4294967297)[12,5,0]  𝄀
 hello
 select substring('hello', 1, -18446744073709551615);
-Data truncation: data out of range: data type int64, value '-18446744073709551615'
+Data truncation: data out of range: data type int64, integer argument
 select substring('hello', 1, 18446744073709551615);
-Data truncation: data out of range: data type int64, value '18446744073709551615'
+Data truncation: data out of range: data type int64, integer argument
 select substring('hello', 1, -18446744073709551616);
-Data truncation: data out of range: data type int64, value '-18446744073709551616'
+Data truncation: data out of range: data type int64, integer argument
 select substring('hello', 1, 18446744073709551616);
-Data truncation: data out of range: data type int64, value '18446744073709551616'
+Data truncation: data out of range: data type int64, integer argument
 select substring('hello', 1, -18446744073709551617);
-Data truncation: data out of range: data type int64, value '-18446744073709551617'
+Data truncation: data out of range: data type int64, integer argument
 select substring('hello', 1, 18446744073709551617);
-Data truncation: data out of range: data type int64, value '18446744073709551617'
+Data truncation: data out of range: data type int64, integer argument
 select substring('hello', -1, -1);
 ➤ substring(hello, -1, -1)[12,5,0]  𝄀
 
@@ -146,17 +146,17 @@ select substring('hello', 4294967297, 4294967297);
 ➤ substring(hello, 4294967297, 4294967297)[12,5,0]  𝄀
 
 select substring('hello', -18446744073709551615, -18446744073709551615);
-Data truncation: data out of range: data type int64, value '-18446744073709551615'
+Data truncation: data out of range: data type int64, integer argument
 select substring('hello', 18446744073709551615, 18446744073709551615);
-Data truncation: data out of range: data type int64, value '18446744073709551615'
+Data truncation: data out of range: data type int64, integer argument
 select substring('hello', -18446744073709551616, -18446744073709551616);
-Data truncation: data out of range: data type int64, value '-18446744073709551616'
+Data truncation: data out of range: data type int64, integer argument
 select substring('hello', 18446744073709551616, 18446744073709551616);
-Data truncation: data out of range: data type int64, value '18446744073709551616'
+Data truncation: data out of range: data type int64, integer argument
 select substring('hello', -18446744073709551617, -18446744073709551617);
-Data truncation: data out of range: data type int64, value '-18446744073709551617'
+Data truncation: data out of range: data type int64, integer argument
 select substring('hello', 18446744073709551617, 18446744073709551617);
-Data truncation: data out of range: data type int64, value '18446744073709551617'
+Data truncation: data out of range: data type int64, integer argument
 SELECT SUBSTRING('Sakila' FROM -4 FOR 2);
 ➤ SUBSTRING(Sakila, -4, 2)[12,6,0]  𝄀
 ki
@@ -400,17 +400,17 @@ select mid('hello', 4294967297, 1);
 ➤ mid(hello, 4294967297, 1)[12,5,0]  𝄀
 
 select mid('hello', -18446744073709551615, 1);
-Data truncation: data out of range: data type int64, value '-18446744073709551615'
+Data truncation: data out of range: data type int64, integer argument
 select mid('hello', 18446744073709551615, 1);
-Data truncation: data out of range: data type int64, value '18446744073709551615'
+Data truncation: data out of range: data type int64, integer argument
 select mid('hello', -18446744073709551616, 1);
-Data truncation: data out of range: data type int64, value '-18446744073709551616'
+Data truncation: data out of range: data type int64, integer argument
 select mid('hello', 18446744073709551616, 1);
-Data truncation: data out of range: data type int64, value '18446744073709551616'
+Data truncation: data out of range: data type int64, integer argument
 select mid('hello', -18446744073709551617, 1);
-Data truncation: data out of range: data type int64, value '-18446744073709551617'
+Data truncation: data out of range: data type int64, integer argument
 select mid('hello', 18446744073709551617, 1);
-Data truncation: data out of range: data type int64, value '18446744073709551617'
+Data truncation: data out of range: data type int64, integer argument
 select mid('hello', 1, -1);
 ➤ mid(hello, 1, -1)[12,5,0]  𝄀
 
@@ -433,17 +433,17 @@ select mid('hello', 1, 4294967297);
 ➤ mid(hello, 1, 4294967297)[12,5,0]  𝄀
 hello
 select mid('hello', 1, -18446744073709551615);
-Data truncation: data out of range: data type int64, value '-18446744073709551615'
+Data truncation: data out of range: data type int64, integer argument
 select mid('hello', 1, 18446744073709551615);
-Data truncation: data out of range: data type int64, value '18446744073709551615'
+Data truncation: data out of range: data type int64, integer argument
 select mid('hello', 1, -18446744073709551616);
-Data truncation: data out of range: data type int64, value '-18446744073709551616'
+Data truncation: data out of range: data type int64, integer argument
 select mid('hello', 1, 18446744073709551616);
-Data truncation: data out of range: data type int64, value '18446744073709551616'
+Data truncation: data out of range: data type int64, integer argument
 select mid('hello', 1, -18446744073709551617);
-Data truncation: data out of range: data type int64, value '-18446744073709551617'
+Data truncation: data out of range: data type int64, integer argument
 select mid('hello', 1, 18446744073709551617);
-Data truncation: data out of range: data type int64, value '18446744073709551617'
+Data truncation: data out of range: data type int64, integer argument
 select mid('hello', -1, -1);
 ➤ mid(hello, -1, -1)[12,5,0]  𝄀
 
@@ -466,17 +466,17 @@ select mid('hello', 4294967297, 4294967297);
 ➤ mid(hello, 4294967297, 4294967297)[12,5,0]  𝄀
 
 select mid('hello', -18446744073709551615, -18446744073709551615);
-Data truncation: data out of range: data type int64, value '-18446744073709551615'
+Data truncation: data out of range: data type int64, integer argument
 select mid('hello', 18446744073709551615, 18446744073709551615);
-Data truncation: data out of range: data type int64, value '18446744073709551615'
+Data truncation: data out of range: data type int64, integer argument
 select mid('hello', -18446744073709551616, -18446744073709551616);
-Data truncation: data out of range: data type int64, value '-18446744073709551616'
+Data truncation: data out of range: data type int64, integer argument
 select mid('hello', 18446744073709551616, 18446744073709551616);
-Data truncation: data out of range: data type int64, value '18446744073709551616'
+Data truncation: data out of range: data type int64, integer argument
 select mid('hello', -18446744073709551617, -18446744073709551617);
-Data truncation: data out of range: data type int64, value '-18446744073709551617'
+Data truncation: data out of range: data type int64, integer argument
 select mid('hello', 18446744073709551617, 18446744073709551617);
-Data truncation: data out of range: data type int64, value '18446744073709551617'
+Data truncation: data out of range: data type int64, integer argument
 SELECT MID('Sakila' FROM -4 FOR 2);
 ➤ MID(Sakila, -4, 2)[12,6,0]  𝄀
 ki
