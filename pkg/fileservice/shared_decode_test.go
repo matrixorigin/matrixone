@@ -759,7 +759,7 @@ func TestS3FSSharedDecodeDiskFillMemoryEligibility(t *testing.T) {
 				SetMemoryCachePressureTargetPercentByOwner(owner, 50, time.Now().Add(time.Minute))
 			}
 			m.capacityMu.Lock()
-			reserved := m.reservedBytes.Load()
+			reserved := m.reservedBytes
 			m.capacityMu.Unlock()
 			used := m.cache.Used()
 			if kind == "reserved" {
@@ -787,7 +787,7 @@ func TestS3FSSharedDecodeDiskFillMemoryEligibility(t *testing.T) {
 				require.Nil(t, ticket)
 			}
 			m.capacityMu.Lock()
-			afterReserved := m.reservedBytes.Load()
+			afterReserved := m.reservedBytes
 			m.capacityMu.Unlock()
 			require.Equal(t, reserved, afterReserved, "the hint must not reserve capacity")
 			require.Equal(t, used, m.cache.Used(), "the hint must not evict data")

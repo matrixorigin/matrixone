@@ -50,9 +50,6 @@ type DataOwnership interface {
 // commits the reservation; Release handles the uninserted path.
 type DataCacheReservation interface {
 	Data
-	// CommitCacheReservation runs after FIFO usage is charged, under the
-	// admission accounting guard. It must be bounded, non-blocking, and must
-	// not re-enter the cache or invoke user callbacks.
 	CommitCacheReservation()
 }
 

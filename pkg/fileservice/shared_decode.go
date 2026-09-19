@@ -454,7 +454,7 @@ func (r *decodedReadRegistry) decode(ctx context.Context, key decodedReadKey, by
 func sharedDecodeFillMayStart(m *MemCache, decodedSize int64) bool {
 	m.capacityMu.Lock()
 	capacity := m.cache.Capacity()
-	available := capacity - m.reservedBytes.Load()
+	available := capacity - m.reservedBytes
 	m.capacityMu.Unlock()
 	if decodedSize > available || int64(m.BackingSize(int(decodedSize))) > available {
 		return false

@@ -20,9 +20,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
 )
@@ -166,61 +164,6 @@ func TestDataCacheSetUsesCapacityWithoutExposingBytes(t *testing.T) {
 	}
 	if got := cache.Used(); got != 7 {
 		t.Fatalf("cache used bytes = %d, want physical capacity 7", got)
-	}
-}
-
-func TestDataCacheSetWithoutReservationDoesNotTakeAccountingGuard(t *testing.T) {
-	ctx := context.Background()
-	cache := NewDataCache(fscache.ConstCapacity(8), nil, nil, nil)
-	guard := new(sync.Mutex)
-	cache.SetAccountingGuard(guard)
-
-	guard.Lock()
-	guardHeld := true
-	defer func() {
-		if guardHeld {
-			guard.Unlock()
-		}
-		cache.Flush(ctx)
-	}()
-
-	type setResult struct {
-		inserted bool
-		err      error
-	}
-	resultCh := make(chan setResult, 1)
-	done := make(chan struct{})
-	go func() {
-		inserted, err := cache.Set(
-			ctx,
-			fscache.CacheKey{Path: "plain"},
-			testBytes(make([]byte, 3, 8)),
-		)
-		resultCh <- setResult{inserted: inserted, err: err}
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		guard.Unlock()
-		guardHeld = false
-		select {
-		case <-done:
-		case <-time.After(2 * time.Second):
-			t.Fatal("timed out waiting for non-reservation DataCache.Set cleanup")
-		}
-		t.Fatal("non-reservation DataCache.Set acquired the accounting guard")
-	}
-
-	guard.Unlock()
-	guardHeld = false
-	result := <-resultCh
-	if result.err != nil || !result.inserted {
-		t.Fatalf("plain DataCache.Set = (inserted=%v, err=%v), want inserted", result.inserted, result.err)
-	}
-	if got := cache.Used(); got != 8 {
-		t.Fatalf("plain DataCache.Set used bytes = %d, want 8", got)
 	}
 }
 

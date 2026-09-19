@@ -18,7 +18,6 @@ import (
 	"context"
 	"hash/maphash"
 	"math"
-	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/fileservice/fscache"
@@ -84,27 +83,6 @@ func NewDataCacheWithPrepareSet(
 
 func (d *DataCache) SetAdmissionTarget(admissionTarget func(capacity int64) (int64, bool)) {
 	d.fifo.SetAdmissionTarget(admissionTarget)
-}
-
-func commitDataCacheReservation(value dataCacheValue) {
-	if reservation, ok := value.data.(fscache.DataCacheReservation); ok {
-		reservation.CommitCacheReservation()
-	}
-}
-
-func hasDataCacheReservation(value dataCacheValue) bool {
-	_, ok := value.data.(fscache.DataCacheReservation)
-	return ok
-}
-
-// SetAccountingGuard installs the initialization-only guard used to transfer
-// a MemCache allocation reservation into FIFO usage atomically. The reservation
-// commit callback is bounded, non-blocking, and cannot re-enter the cache.
-func (d *DataCache) SetAccountingGuard(guard sync.Locker) {
-	d.fifo.setAccountingGuard(guard, commitDataCacheReservation)
-	// Values without a reservation have no budget to transfer. Keep their
-	// existing concurrent enqueue path free of the accounting lock.
-	d.fifo.accountingRequired = hasDataCacheReservation
 }
 
 var seed = maphash.MakeSeed()
