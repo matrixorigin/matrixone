@@ -1016,6 +1016,304 @@ func (c *rootSQLCompilerContext) GetRootSql() string {
 	return c.rootSQL
 }
 
+func TestBuildCreateViewPersistsParserDerivedInformationSchemaMetadata(t *testing.T) {
+	tests := []struct {
+		name        string
+		sql         string
+		contains    string
+		checkOption string
+		replay      bool
+		replayCols  []string
+	}{
+		{
+			name:     "dollar quoted definer cannot supply structural view tokens",
+			sql:      "CREATE DEFINER=$q$ view fake as select 0$q$ VIEW v AS SELECT 1;",
+			contains: "select 1",
+		},
+		{
+			name:     "executable comment preserves dollar quoted terminator text",
+			sql:      "/*!50001 CREATE VIEW v AS SELECT $q$x*/y$q$ AS s */;",
+			contains: "*/y",
+		},
+		{
+			name:     "executable comment preserves escaped double quoted terminator text",
+			sql:      "/*!50001 CREATE VIEW v AS SELECT \"x\\\"*/y\" AS s */;",
+			contains: "*/y",
+		},
+		{
+			name:     "double minus remains an arithmetic operator",
+			sql:      "/*!50001 CREATE VIEW v AS SELECT 1--2 AS x */;",
+			contains: "select",
+		},
+		{
+			name:        "check option is separate from the select definition",
+			sql:         "CREATE VIEW v AS SELECT 1 WITH CASCADED CHECK OPTION;",
+			contains:    "select 1",
+			checkOption: "CASCADED",
+		},
+		{
+			name:     "bound column references are normalized with the definition",
+			sql:      "CREATE VIEW v AS SELECT n_name FROM nation;",
+			contains: "select `nation`.`n_name` from `nation`",
+		},
+		{
+			name:       "explicit view columns preserve public names without changing inner aliases",
+			sql:        "CREATE VIEW v (view_name) AS SELECT n_name FROM nation;",
+			contains:   "as `__mo_view_definition`(`view_name`)",
+			replay:     true,
+			replayCols: []string{"view_name"},
+		},
+		{
+			name:       "explicit view columns preserve aliases used by order by",
+			sql:        "CREATE VIEW v (view_name) AS SELECT 1 AS source_name ORDER BY source_name;",
+			contains:   "source_name",
+			replay:     true,
+			replayCols: []string{"view_name"},
+		},
+		{
+			name:       "explicit view columns preserve aliases used by having",
+			sql:        "CREATE VIEW v (view_name) AS SELECT 1 AS source_name HAVING source_name = 1;",
+			contains:   "having `source_name` = 1",
+			replay:     true,
+			replayCols: []string{"view_name"},
+		},
+		{
+			name:       "explicit view columns cover parenthesized union output",
+			sql:        "CREATE VIEW v (view_name, region_name) AS (SELECT n_name, n_regionkey FROM nation UNION SELECT n_name, n_regionkey FROM nation);",
+			contains:   "as `__mo_view_definition`(`view_name`, `region_name`)",
+			replay:     true,
+			replayCols: []string{"view_name", "region_name"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			ctx := &rootSQLCompilerContext{
+				MockCompilerContext: NewMockCompilerContext(false),
+				rootSQL:             test.sql,
+			}
+			built, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			var data ViewData
+			require.NoError(t, json.Unmarshal([]byte(built.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()), &data))
+			require.NotEmpty(t, data.Definition)
+			assert.Contains(t, strings.ToLower(data.Definition), test.contains)
+			assert.NotContains(t, strings.ToLower(data.Definition), "create")
+			assert.NotContains(t, strings.ToLower(data.Definition), "check option")
+			expectedCheckOption := test.checkOption
+			if expectedCheckOption == "" {
+				expectedCheckOption = "NONE"
+			}
+			assert.Equal(t, expectedCheckOption, data.CheckOption)
+
+			definitions, err := parsers.Parse(t.Context(), dialect.MYSQL, data.Definition, 1)
+			require.NoError(t, err)
+			require.Len(t, definitions, 1)
+			_, ok := definitions[0].(*tree.Select)
+			assert.True(t, ok)
+			definitions[0].Free()
+
+			if test.replay {
+				replaySQL := "CREATE VIEW replayed AS " + data.Definition
+				replayStmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, replaySQL, 1)
+				require.NoError(t, err)
+				defer replayStmt.Free()
+				replayCtx := &rootSQLCompilerContext{
+					MockCompilerContext: NewMockCompilerContext(false),
+					rootSQL:             replaySQL,
+				}
+				replayed, err := BuildPlan(replayCtx, replayStmt, false)
+				require.NoError(t, err)
+				replayCols := replayed.GetDdl().GetCreateView().GetTableDef().GetCols()
+				require.Len(t, replayCols, len(test.replayCols))
+				for i, name := range test.replayCols {
+					require.Equal(t, name, replayCols[i].Name)
+				}
+			}
+		})
+	}
+}
+
+func TestBuildCreateViewDefinitionReplaysStringValuesAcrossSQLModes(t *testing.T) {
+	const rootSQL = "CREATE VIEW v AS SELECT 'a''b' AS value"
+	modes := []string{
+		"",
+		"ANSI_QUOTES",
+		"NO_BACKSLASH_ESCAPES",
+		"ANSI_QUOTES,NO_BACKSLASH_ESCAPES",
+	}
+
+	for _, mode := range modes {
+		t.Run(strings.ReplaceAll(mode, ",", "_"), func(t *testing.T) {
+			stmt, err := parsers.ParseOneWithSQLMode(
+				t.Context(), dialect.MYSQL, rootSQL, 1, mode)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			ctx := &rootSQLCompilerContext{
+				MockCompilerContext: NewMockCompilerContext(false),
+				rootSQL:             rootSQL,
+			}
+			ctx.SetSqlModeOverride(mode)
+			built, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+
+			var data ViewData
+			require.NoError(t, json.Unmarshal([]byte(
+				built.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()), &data))
+			require.Contains(t, data.Definition, "'a''b'")
+			require.NotContains(t, data.Definition, `"a'b"`)
+
+			statements, err := parsers.ParseWithSQLMode(
+				t.Context(), dialect.MYSQL, data.Definition, 1, mode)
+			require.NoError(t, err)
+			require.Len(t, statements, 1)
+			defer func() {
+				for _, statement := range statements {
+					statement.Free()
+				}
+			}()
+
+			selectStmt, ok := statements[0].(*tree.Select)
+			require.True(t, ok)
+			selectClause, ok := selectStmt.Select.(*tree.SelectClause)
+			require.True(t, ok)
+			literal, ok := selectClause.Exprs[0].Expr.(*tree.NumVal)
+			require.True(t, ok)
+			require.Equal(t, "a'b", literal.String())
+		})
+	}
+}
+
+func TestBuildCreateViewDefinitionReplaysExpressionHeading(t *testing.T) {
+	const rootSQL = "CREATE VIEW v AS SELECT n_nationkey + 1 FROM nation"
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		rootSQL:             rootSQL,
+	}
+
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+
+	tableDef := built.GetDdl().GetCreateView().GetTableDef()
+	require.Len(t, tableDef.GetCols(), 1)
+	require.Equal(t, "n_nationkey + 1", tableDef.GetCols()[0].Name)
+
+	var data ViewData
+	require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &data))
+	require.Contains(t, data.Definition, "as `n_nationkey + 1`")
+
+	replaySQL := "CREATE VIEW replayed AS " + data.Definition
+	replayStmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, replaySQL, 1)
+	require.NoError(t, err)
+	defer replayStmt.Free()
+	replayCtx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		rootSQL:             replaySQL,
+	}
+	replayed, err := BuildPlan(replayCtx, replayStmt, false)
+	require.NoError(t, err)
+	replayCols := replayed.GetDdl().GetCreateView().GetTableDef().GetCols()
+	require.Len(t, replayCols, 1)
+	require.Equal(t, tableDef.GetCols()[0].Name, replayCols[0].Name)
+}
+
+func TestBuildCreateViewDefinitionReplaysUnaliasedBinaryHeading(t *testing.T) {
+	const rootSQL = "CREATE VIEW v AS SELECT _binary 'ab'"
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		rootSQL:             rootSQL,
+	}
+
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+
+	tableDef := built.GetDdl().GetCreateView().GetTableDef()
+	require.Len(t, tableDef.GetCols(), 1)
+	require.Equal(t, "ab", tableDef.GetCols()[0].Name)
+
+	var data ViewData
+	require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &data))
+	require.Contains(t, data.Definition, "_binary 0x6162")
+	require.Contains(t, data.Definition, "as ")
+
+	replaySQL := "CREATE VIEW replayed AS " + data.Definition
+	replayStmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, replaySQL, 1)
+	require.NoError(t, err)
+	defer replayStmt.Free()
+	replayCtx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		rootSQL:             replaySQL,
+	}
+	replayed, err := BuildPlan(replayCtx, replayStmt, false)
+	require.NoError(t, err)
+	replayCols := replayed.GetDdl().GetCreateView().GetTableDef().GetCols()
+	require.Len(t, replayCols, 1)
+	require.Equal(t, tableDef.GetCols()[0].Name, replayCols[0].Name)
+}
+
+func TestBuildCreateViewDefinitionReplaysEmptyBinaryAcrossSQLModes(t *testing.T) {
+	const rootSQL = "CREATE VIEW v AS SELECT _binary '' AS value"
+	modes := []string{
+		"",
+		"ANSI_QUOTES",
+		"NO_BACKSLASH_ESCAPES",
+		"ANSI_QUOTES,NO_BACKSLASH_ESCAPES",
+	}
+
+	for _, mode := range modes {
+		t.Run(strings.ReplaceAll(mode, ",", "_"), func(t *testing.T) {
+			stmt, err := parsers.ParseOneWithSQLMode(
+				t.Context(), dialect.MYSQL, rootSQL, 1, mode)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			ctx := &rootSQLCompilerContext{
+				MockCompilerContext: NewMockCompilerContext(false),
+				rootSQL:             rootSQL,
+			}
+			ctx.SetSqlModeOverride(mode)
+			built, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+
+			var data ViewData
+			require.NoError(t, json.Unmarshal([]byte(
+				built.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()), &data))
+			require.Contains(t, data.Definition, "_binary ''")
+			require.NotContains(t, data.Definition, "_binary 0x")
+
+			statements, err := parsers.ParseWithSQLMode(
+				t.Context(), dialect.MYSQL, data.Definition, 1, mode)
+			require.NoError(t, err)
+			require.Len(t, statements, 1)
+			defer func() {
+				for _, statement := range statements {
+					statement.Free()
+				}
+			}()
+
+			selectStmt, ok := statements[0].(*tree.Select)
+			require.True(t, ok)
+			selectClause, ok := selectStmt.Select.(*tree.SelectClause)
+			require.True(t, ok)
+			literal, ok := selectClause.Exprs[0].Expr.(*tree.NumVal)
+			require.True(t, ok)
+			require.Equal(t, tree.P_ScoreBinary, literal.ValType)
+			require.Empty(t, literal.String())
+		})
+	}
+}
+
 func TestBuildCreateOrReplaceViewRejectsRecursiveDefinition(t *testing.T) {
 	recentTimestamp := time.Now().UTC().Add(-time.Minute).Format("2006-01-02 15:04:05.999999999")
 	aheadOfWallClock := time.Now().Add(time.Minute)
@@ -1478,7 +1776,9 @@ func TestGenViewTableDefPersistsExpandedStarSelectList(t *testing.T) {
 	var viewData ViewData
 	require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &viewData))
 	require.NotContains(t, viewData.Stmt, "*")
+	require.NotContains(t, viewData.Definition, "*")
 	require.Contains(t, viewData.Stmt, "`nation`.`n_nationkey`")
+	require.Contains(t, viewData.Definition, "`nation`.`n_nationkey`")
 	require.Contains(t, viewData.Stmt, "`nation`.`n_name`")
 	require.Contains(t, viewData.Stmt, "`nation`.`n_regionkey`")
 	require.Contains(t, viewData.Stmt, "`nation`.`n_comment`")

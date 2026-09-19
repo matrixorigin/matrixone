@@ -1,0 +1,294 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package function
+
+import (
+	"context"
+	"encoding/json"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+)
+
+// legacyViewDefinitionSQLMode is the parser compatibility default used for
+// persisted View definitions that predate recording SQLMode in ViewData.
+const legacyViewDefinitionSQLMode = "PIPES_AS_CONCAT"
+
+type persistedViewDefinitionData struct {
+	Stmt                string
+	Definition          string  `json:"definition,omitempty"`
+	CheckOption         string  `json:"check_option,omitempty"`
+	SQLMode             *string `json:"sql_mode,omitempty"`
+	LowerCaseTableNames *int64  `json:"lower_case_table_names,omitempty"`
+}
+
+type persistedViewMetadata struct {
+	definition  string
+	checkOption string
+}
+
+// builtInViewDefinition returns the frozen parser-derived definition for a
+// current View and supplies a parser-aware compatibility read for legacy rows.
+// It deliberately does not write catalog data: metadata reads must remain
+// bounded, side-effect-free, and independent of the inactive refresh lifecycle.
+func builtInViewDefinition(
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+) error {
+	definitions := vector.GenerateFunctionStrParameter(parameters[0])
+	results := vector.MustFunctionResult[types.Varlena](result)
+
+	for row := uint64(0); row < uint64(length); row++ {
+		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(row) {
+			if err := results.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		persisted, isNull := definitions.GetStrValue(row)
+		if isNull {
+			if err := results.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		metadata, ok := viewMetadataFromPersistedData(proc.Ctx, string(persisted))
+		if !ok {
+			if err := results.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := results.AppendBytes([]byte(metadata.definition), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func builtInViewCheckOption(
+	parameters []*vector.Vector,
+	result vector.FunctionResultWrapper,
+	proc *process.Process,
+	length int,
+	selectList *FunctionSelectList,
+) error {
+	definitions := vector.GenerateFunctionStrParameter(parameters[0])
+	results := vector.MustFunctionResult[types.Varlena](result)
+
+	for row := uint64(0); row < uint64(length); row++ {
+		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(row) {
+			if err := results.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		persisted, isNull := definitions.GetStrValue(row)
+		if isNull {
+			if err := results.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		metadata, ok := viewMetadataFromPersistedData(proc.Ctx, string(persisted))
+		if !ok {
+			if err := results.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := results.AppendBytes([]byte(metadata.checkOption), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func viewDefinitionFromPersistedData(ctx context.Context, persisted string) (string, bool) {
+	metadata, ok := viewMetadataFromPersistedData(ctx, persisted)
+	return metadata.definition, ok
+}
+
+func viewMetadataFromPersistedData(ctx context.Context, persisted string) (persistedViewMetadata, bool) {
+	var data persistedViewDefinitionData
+	if err := json.Unmarshal([]byte(persisted), &data); err != nil {
+		return persistedViewMetadata{}, false
+	}
+	if data.Definition != "" {
+		return persistedViewMetadata{definition: data.Definition, checkOption: checkOptionOrNone(data.CheckOption)}, true
+	}
+	if data.Stmt == "" {
+		return persistedViewMetadata{}, false
+	}
+
+	lowerCaseTableNames := int64(0)
+	if data.LowerCaseTableNames != nil {
+		lowerCaseTableNames = *data.LowerCaseTableNames
+	}
+	parserSQLMode := legacyViewDefinitionSQLMode
+	if data.SQLMode != nil {
+		parserSQLMode = *data.SQLMode
+	}
+	statements, err := parsers.ParseWithSQLMode(
+		ctx, dialect.MYSQL, data.Stmt, lowerCaseTableNames, parserSQLMode)
+	defer func() {
+		for _, statement := range statements {
+			statement.Free()
+		}
+	}()
+	if err != nil || len(statements) == 0 {
+		return persistedViewMetadata{}, false
+	}
+
+	// Legacy ViewData.Stmt can be the entire COM_QUERY text. View binding uses
+	// its first parsed statement, so metadata must retain that compatibility.
+	var selectStmt *tree.Select
+	var columnNames tree.IdentifierList
+	checkOption := "NONE"
+	switch statement := statements[0].(type) {
+	case *tree.CreateView:
+		selectStmt = statement.AsSource
+		columnNames = statement.ColNames
+		checkOption = checkOptionOrNone(statement.CheckOption)
+	case *tree.AlterView:
+		selectStmt = statement.AsSource
+		columnNames = statement.ColNames
+	default:
+		return persistedViewMetadata{}, false
+	}
+	if selectStmt == nil {
+		return persistedViewMetadata{}, false
+	}
+	if len(columnNames) == 0 {
+		selectStmt = legacyViewSelectWithStableOutputHeadings(selectStmt)
+	}
+	selectStmt = tree.WithViewColumnNames(selectStmt, columnNames)
+	return persistedViewMetadata{definition: tree.StringWithOpts(
+		selectStmt, dialect.MYSQL, tree.WithSingleQuoteString(),
+		tree.WithQuoteIdentifier(), tree.WithModeIndependentStringLiterals()), checkOption: checkOption}, true
+}
+
+// legacyViewSelectWithStableOutputHeadings preserves implicit output headings
+// while formatting a legacy Stmt-only row. The parser derives `_binary 'ab'`
+// as the public name `ab`, whereas the mode-independent formatter renders its
+// value as `_binary 0x6162`; the same mismatch can occur inside a compound
+// expression. Compare the parser-derived heading with the persisted rendering
+// and add an alias only when serialization changes it.
+func legacyViewSelectWithStableOutputHeadings(stmt *tree.Select) *tree.Select {
+	if stmt == nil {
+		return stmt
+	}
+	clause := legacyViewTopLevelSelectClause(stmt.Select)
+	if clause == nil {
+		return stmt
+	}
+	for i := range clause.Exprs {
+		selectExpr := &clause.Exprs[i]
+		if selectExpr.As != nil && !selectExpr.As.Empty() {
+			continue
+		}
+		heading, ok := legacyViewOutputHeading(selectExpr.Expr)
+		if !ok || heading == "" || legacyViewIsUnresolvedName(selectExpr.Expr) {
+			continue
+		}
+		persistedExpr := tree.StringWithOpts(
+			selectExpr.Expr,
+			dialect.MYSQL,
+			tree.WithSingleQuoteString(),
+			tree.WithQuoteIdentifier(),
+			tree.WithModeIndependentStringLiterals(),
+		)
+		if persistedExpr != heading {
+			selectExpr.As = tree.NewCStr(heading, 1)
+		}
+	}
+	return stmt
+}
+
+func legacyViewTopLevelSelectClause(stmt tree.SelectStatement) *tree.SelectClause {
+	switch selectStmt := stmt.(type) {
+	case *tree.SelectClause:
+		return selectStmt
+	case *tree.Select:
+		return legacyViewTopLevelSelectClause(selectStmt.Select)
+	case *tree.ParenSelect:
+		if selectStmt.Select == nil {
+			return nil
+		}
+		return legacyViewTopLevelSelectClause(selectStmt.Select)
+	case *tree.UnionClause:
+		return legacyViewTopLevelSelectClause(selectStmt.Left)
+	default:
+		return nil
+	}
+}
+
+func legacyViewOutputHeading(expr tree.Expr) (string, bool) {
+	if expr == nil {
+		return "", false
+	}
+	for {
+		paren, ok := expr.(*tree.ParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.Expr
+	}
+	detectCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithDateTimeFormatDetection())
+	expr.Format(detectCtx)
+	heading := detectCtx.String()
+	if !detectCtx.HasDateTimeFormatFunction() {
+		return heading, heading != ""
+	}
+
+	var positions []tree.StringLiteralPosition
+	formattedCtx := tree.NewFmtCtx(
+		dialect.MYSQL,
+		tree.WithSingleQuoteString(),
+		tree.WithStringLiteralPositions(&positions),
+	)
+	expr.Format(formattedCtx)
+	if len(positions) == 0 {
+		return heading, heading != ""
+	}
+	formatted := formattedCtx.String()
+	return formatted, formatted != ""
+}
+
+func legacyViewIsUnresolvedName(expr tree.Expr) bool {
+	for {
+		paren, ok := expr.(*tree.ParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.Expr
+	}
+	_, ok := expr.(*tree.UnresolvedName)
+	return ok
+}
+
+func checkOptionOrNone(checkOption string) string {
+	if checkOption == "" {
+		return "NONE"
+	}
+	return checkOption
+}

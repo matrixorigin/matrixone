@@ -76,7 +76,7 @@ var (
 )
 
 func InitInformationSchemaSysTablesForProtocol(protocol int64) []string {
-	if protocol >= defines.MORPCVersion58 {
+	if protocol >= defines.MORPCVersion87 {
 		return InitInformationSchemaSysTables
 	}
 
@@ -90,11 +90,16 @@ func InitInformationSchemaSysTablesForProtocol(protocol int64) []string {
 				sql = InformationSchemaTablesV41DDL
 			}
 		case InformationSchemaColumnsDDL:
-			if protocol >= defines.MORPCVersion46 {
+			if protocol >= defines.MORPCVersion58 {
+				// Keep the current COLUMNS contract while VIEWS waits for its
+				// separate parser-derived function capability.
+			} else if protocol >= defines.MORPCVersion46 {
 				sql = InformationSchemaColumnsV46DDL
 			} else {
 				sql = InformationSchemaColumnsV41DDL
 			}
+		case InformationSchemaViewsDDL:
+			sql = InformationSchemaViewsLegacyDDL
 		}
 		if !includeCheckConstraints {
 			switch sql {
@@ -170,7 +175,11 @@ func initInformationSchemaTables(ctx context.Context, txn executor.TxnExecutor) 
 	}()
 
 	begin := time.Now()
-	for _, sql := range InitInformationSchemaSysTables {
+	// Bootstrap runs before the HAKeeper admission barrier can publish the
+	// authoring floor. Seed the immediate-predecessor VIEWS definition here;
+	// the guarded v4.0.7 upgrade and reconciliation pass publish the
+	// parser-derived definition after all CNs and the catalog fence are ready.
+	for _, sql := range InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion86) {
 		if _, err = txn.Exec(sql, executor.StatementOption{}); err != nil {
 			return moerr.NewInternalError(ctx, fmt.Sprintf("[information_schema] init information_schema tables error: %v, sql: %s", err, sql))
 		}

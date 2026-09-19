@@ -109,6 +109,13 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 		requiredVersion < defines.MORPCVersion86 {
 		requiredVersion = defines.MORPCVersion86
 	}
+	viewDefinitionVersion, err := requiredViewDefinitionFunctionProtocolVersion(owner)
+	if err != nil {
+		return 0, err
+	}
+	if viewDefinitionVersion > requiredVersion {
+		requiredVersion = viewDefinitionVersion
+	}
 	return requiredVersion, nil
 }
 

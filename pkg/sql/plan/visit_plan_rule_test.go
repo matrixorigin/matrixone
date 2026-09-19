@@ -21,9 +21,11 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -910,6 +912,40 @@ func TestBindViewRecordsCompleteTableSnapshot(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Zero(t, nodeID)
+}
+
+func TestBindViewRejectsFutureProtocolBeforePreparedBinding(t *testing.T) {
+	ctx := NewMockCompilerContext(false)
+	proc := ctx.GetProcess()
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, hadPrevious := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadPrevious {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion85)
+		}
+	})
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion85)
+
+	required := defines.MORPCVersion86
+	viewJSON, err := json.Marshal(ViewData{
+		Stmt:                    "create view v as select 1",
+		DefaultDatabase:         "db",
+		RequiredProtocolVersion: &required,
+	})
+	require.NoError(t, err)
+	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, true, false)
+	_, err = builder.bindView(
+		NewBindContext(builder, nil),
+		&TableDef{ViewSql: &planpb.ViewDef{View: string(viewJSON)}},
+		nil,
+		&ObjectRef{SchemaName: "db", ObjName: "v"},
+		"db",
+		"v",
+		nil,
+	)
+	require.ErrorContains(t, err, "protocol version 86")
 }
 
 func TestCollectPrepareViewSchemasRejectsInvalidDependencies(t *testing.T) {

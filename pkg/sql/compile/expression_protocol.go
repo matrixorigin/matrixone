@@ -16,9 +16,9 @@ package compile
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
@@ -29,10 +29,22 @@ import (
 // Probe the selected workers as well as the coordinator's rollout gate.
 // Capabilities are not cached across executions or sender checks.
 func remoteWorkersSupportProtocol(proc *process.Process, workers engine.Nodes, minimum int64) (bool, error) {
+	var parent context.Context
+	if proc != nil {
+		parent = proc.Ctx
+	}
+	return remoteWorkersSupportProtocolWithContext(parent, proc, workers, minimum)
+}
+
+func remoteWorkersSupportProtocolWithContext(
+	parent context.Context,
+	proc *process.Process,
+	workers engine.Nodes,
+	minimum int64,
+) (bool, error) {
 	if proc == nil {
 		return false, nil
 	}
-	parent := proc.Ctx
 	if parent == nil {
 		parent = context.Background()
 	}
@@ -97,4 +109,66 @@ func remoteWorkersSupportProtocol(proc *process.Process, workers engine.Nodes, m
 		}
 	}
 	return true, nil
+}
+
+// AllCNsSupportProtocol verifies a protocol capability against the current
+// coordinator and every CN in the cluster inventory. It is used for catalog
+// definitions that become visible to any CN, where checking only the local
+// runtime would publish a function ID that an older peer cannot bind.
+// An incomplete or unavailable inventory is deliberately reported as
+// unsupported so callers can keep using the predecessor definition.
+func AllCNsSupportProtocol(proc *process.Process, minimum int64) (bool, error) {
+	var parent context.Context
+	if proc != nil {
+		parent = proc.Ctx
+	}
+	return AllCNsSupportProtocolWithContext(parent, proc, minimum)
+}
+
+// AllCNsSupportProtocolWithContext is the context-aware form used by callers
+// whose process is an internal execution pipeline. Such a process can finish
+// or cancel its own pipeline before the caller has finished the control-plane
+// operation that needs to probe peer capabilities.
+func AllCNsSupportProtocolWithContext(
+	parent context.Context,
+	proc *process.Process,
+	minimum int64,
+) (bool, error) {
+	if proc == nil {
+		return false, nil
+	}
+	if parent == nil {
+		parent = context.Background()
+	}
+	if err := parent.Err(); err != nil {
+		return false, err
+	}
+	version, known := remoteMORPCProtocolVersion(proc.GetService())
+	if !known || version < minimum {
+		return false, nil
+	}
+
+	cluster, err := clusterservice.GetMOClusterWithContext(parent, proc.GetService())
+	if err != nil {
+		return false, err
+	}
+	workers := make(engine.Nodes, 0)
+	err = clusterservice.GetCNServiceRawWithContext(
+		parent,
+		cluster,
+		clusterservice.NewSelector(),
+		func(cn metadata.CNService) bool {
+			workers = append(workers, engine.Node{
+				Id:   cn.ServiceID,
+				Addr: cn.PipelineServiceAddress,
+			})
+			return true
+		})
+	if err != nil {
+		return false, err
+	}
+	if len(workers) == 0 {
+		return false, nil
+	}
+	return remoteWorkersSupportProtocolWithContext(parent, proc, workers, minimum)
 }

@@ -72,6 +72,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type TenantInfo struct {
@@ -10574,6 +10575,7 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 			return rtnErr
 		}
 
+		var protocolVersion int64
 		if exists {
 			if !ca.IfNotExists { // do nothing
 				return moerr.NewInternalErrorf(ctx, "the tenant %s exists", ca.Name)
@@ -10643,7 +10645,20 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 		if rtnErr != nil {
 			return rtnErr
 		}
-		rtnErr = createTablesInInformationSchemaOfGeneralTenant(newTenantCtx, bh, ses.GetService())
+		// Resolve the VIEWS DDL capability as late as possible in the account
+		// creation transaction. Cluster service discovery may still be
+		// converging while the catalog, tenant tables, and system databases are
+		// being created. The check remains before the information_schema DDL is
+		// published, so a mixed or unknown cluster still receives the safe
+		// predecessor definition and can be repaired by maintenance later.
+		protocolVersion, rtnErr = protocolVersionForTenantInitializationWithContext(
+			ctx,
+			ses.GetService(), ses.GetProc())
+		if rtnErr != nil {
+			return rtnErr
+		}
+		rtnErr = createTablesInInformationSchemaOfGeneralTenantWithProtocol(
+			newTenantCtx, bh, protocolVersion)
 		if rtnErr != nil {
 			return rtnErr
 		}
@@ -10997,7 +11012,24 @@ func createTablesInSystemOfGeneralTenant(ctx context.Context, bh BackgroundExec,
 }
 
 // createTablesInInformationSchemaOfGeneralTenant creates the database information_schema and the views or tables.
-func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh BackgroundExec, service string) error {
+func createTablesInInformationSchemaOfGeneralTenant(
+	ctx context.Context,
+	bh BackgroundExec,
+	service string,
+	proc *process.Process,
+) error {
+	protocolVersion, err := protocolVersionForTenantInitializationWithContext(ctx, service, proc)
+	if err != nil {
+		return err
+	}
+	return createTablesInInformationSchemaOfGeneralTenantWithProtocol(ctx, bh, protocolVersion)
+}
+
+func createTablesInInformationSchemaOfGeneralTenantWithProtocol(
+	ctx context.Context,
+	bh BackgroundExec,
+	protocolVersion int64,
+) error {
 	start := time.Now()
 	defer func() {
 		v2.CreateTablesInInfoSchemaDurationHistogram.Observe(time.Since(start).Seconds())
@@ -11007,8 +11039,8 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 	// with new tenant
 	// TODO: when we have the auto_increment column, we need new strategy.
 
+	informationSchemaTables := sysview.InitInformationSchemaSysTablesForProtocol(protocolVersion)
 	var err error
-	informationSchemaTables := sysview.InitInformationSchemaSysTablesForProtocol(protocolVersionForTenantInitialization(service))
 	sqls := make([]string, 0, len(informationSchemaTables)+len(sysview.InitMysqlSysTables)+4)
 
 	sqls = append(sqls, "use information_schema;")
@@ -11026,20 +11058,70 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 	return err
 }
 
-func protocolVersionForTenantInitialization(service string) int64 {
+func protocolVersionForTenantInitialization(service string, proc *process.Process) (int64, error) {
+	return protocolVersionForTenantInitializationWithContext(context.Background(), service, proc)
+}
+
+func protocolVersionForTenantInitializationWithContext(
+	ctx context.Context,
+	service string,
+	proc *process.Process,
+) (int64, error) {
+	// Account creation must remain available while the cluster is rolling out
+	// the parser-derived VIEWS functions. The v86 predecessor definition is safe
+	// on every CN and the final-version account row is revisited by bootstrap
+	// maintenance once the capability becomes available.
+	legacyVersion := defines.MORPCVersion86
 	rt := moruntime.ServiceRuntime(service)
 	if rt == nil {
-		return defines.MORPCMinVersion
+		return legacyVersion, nil
 	}
 	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	if !ok {
-		return defines.MORPCMinVersion
+		return legacyVersion, nil
 	}
 	version, ok := value.(int64)
 	if !ok {
-		return defines.MORPCMinVersion
+		return legacyVersion, nil
 	}
-	return version
+	if version < defines.MORPCVersion87 {
+		// Preserve every pre-existing protocol-specific information_schema
+		// contract. Only the new VIEWS function needs the v86 predecessor
+		// fallback; promoting an older known protocol would also install newer
+		// TABLES/COLUMNS and role-closure definitions.
+		return version, nil
+	}
+	// The local protocol version and the authoring floor advance at different
+	// points during admission. The former only says that this CN can decode
+	// v87; the latter says that the local catalog fence has completed and new
+	// v87 metadata may be published. Keep account creation on the predecessor
+	// until that write-side fence is ready. A missing key preserves the
+	// standalone/unit-test behavior used by runtimes created before admission.
+	if floorValue, present := rt.GetGlobalVariables(
+		moruntime.PersistedExpressionProtocolAuthoringFloor); present {
+		floor, valid := floorValue.(int64)
+		if !valid || floor < defines.MORPCVersion87 {
+			if err := ctx.Err(); err != nil {
+				return 0, err
+			}
+			return legacyVersion, nil
+		}
+	}
+	supported, err := compile.AllCNsSupportProtocolWithContext(ctx, proc, defines.MORPCVersion87)
+	if err != nil {
+		// Capability discovery is deliberately best-effort for account
+		// creation. Do not turn a temporary inventory/RPC failure into a
+		// failed CREATE ACCOUNT, but preserve cancellation of the owning
+		// process so shutdown and request cancellation still propagate.
+		if ctx.Err() != nil {
+			return 0, ctx.Err()
+		}
+		return legacyVersion, nil
+	}
+	if !supported {
+		return legacyVersion, nil
+	}
+	return version, nil
 }
 
 // createSubscription insert records into mo_subs of To-All-Publications
