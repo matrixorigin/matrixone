@@ -22,6 +22,8 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -84,6 +86,8 @@ func TestBoundedBuiltinReturnTypes(t *testing.T) {
 	}
 
 	assertType(t, "inet_ntoa", []types.Type{types.T_uint64.ToType()}, types.T_varchar, 31, types.CharsetUTF8)
+	assertType(t, "to_base64", []types.Type{varbinary(128)}, types.T_varchar, 174, types.CharsetUTF8)
+	assertType(t, "to_base64", []types.Type{varchar(128)}, types.T_varchar, 692, types.CharsetUTF8)
 	assertType(t, "inet6_ntoa", []types.Type{varbinary(16)}, types.T_varchar, 39, types.CharsetUTF8)
 	assertType(t, "inet6_aton", []types.Type{varchar(39)}, types.T_varbinary, 16, types.CharsetBinary)
 
@@ -138,6 +142,143 @@ func TestBoundedBuiltinReturnTypes(t *testing.T) {
 
 	for _, fn := range []string{"uncompressed_length"} {
 		assertType(t, fn, []types.Type{types.T_blob.ToType()}, types.T_int64, 0, types.CharsetLegacy)
+	}
+}
+
+func TestBase64ResultBoundIncludesLineBreaks(t *testing.T) {
+	for _, test := range []struct {
+		input uint64
+		want  uint64
+	}{
+		{input: 0, want: 0},
+		{input: 1, want: 4},
+		{input: 57, want: 76},
+		{input: 58, want: 81},
+		{input: 128, want: 174},
+	} {
+		t.Run(strconv.FormatUint(test.input, 10), func(t *testing.T) {
+			got := base64ResultBound(stringResultBound{bytes: test.input})
+			require.False(t, got.unknown)
+			require.Equal(t, test.want, got.bytes)
+		})
+	}
+	for _, input := range []stringResultBound{
+		unknownStringResultBound(), {bytes: math.MaxUint64}, {bytes: math.MaxUint64 - 2},
+	} {
+		require.True(t, base64ResultBound(input).unknown, "overflow must not become a small known width")
+	}
+	result := base64ReturnType(nil)
+	require.Equal(t, types.T_text, result.Oid)
+	require.Zero(t, result.Width)
+	require.Equal(t, types.CharsetUTF8, result.Charset)
+}
+
+func TestTextSourceCharacterBound(t *testing.T) {
+	column := func(oid types.T, width, scale int32) *planpb.Expr {
+		return &planpb.Expr{Typ: planpb.Type{Id: int32(oid), Width: width, Scale: scale},
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}
+	}
+	literal := func(value string, isNull bool) *planpb.Expr {
+		return &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar), Width: 7},
+			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: isNull, Value: &planpb.Literal_Sval{Sval: value}}}}
+	}
+	for _, tc := range []struct {
+		name  string
+		expr  *planpb.Expr
+		want  uint64
+		known bool
+	}{
+		{"nil", nil, 0, false},
+		{"empty literal", literal("", false), 0, true},
+		{"unicode characters not bytes", literal("é😀", false), 2, true},
+		{"typed null ignores literal payload", literal("é😀", true), 7, true},
+		{"signed scalar", column(types.T_int64, 0, 0), 20, true},
+		{"fractional decimal", column(types.T_decimal128, 2, 2), 5, true},
+		{"any", column(types.T_any, 0, 0), 0, false},
+		{"json", column(types.T_json, 0, 0), 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, known := TextSourceCharacterBound(tc.expr)
+			require.Equal(t, tc.known, known)
+			require.Equal(t, tc.want, got)
+		})
+	}
+	for _, oid := range []types.T{types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob} {
+		for _, width := range []int32{-1, 0, 7} {
+			t.Run(oid.String()+"/"+strconv.Itoa(int(width)), func(t *testing.T) {
+				got, known := TextSourceCharacterBound(column(oid, width, 0))
+				wantKnown := width > 0 && (oid == types.T_char || oid == types.T_varchar || oid == types.T_text)
+				require.Equal(t, wantKnown, known)
+				if wantKnown {
+					require.Equal(t, uint64(7), got)
+				} else {
+					require.Zero(t, got)
+				}
+			})
+		}
+	}
+}
+
+func TestToBase64RegisteredBinaryExecutors(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		oid      types.T
+		overload int32
+		result   types.T
+		width    int32
+	}{
+		{types.T_binary, 3, types.T_varchar, 4},
+		{types.T_varbinary, 4, types.T_varchar, 4},
+		{types.T_blob, 5, types.T_text, 0},
+	} {
+		t.Run(tc.oid.String(), func(t *testing.T) {
+			typ := types.NewWithCharset(tc.oid, 1, 0, types.CharsetBinary)
+			if tc.oid == types.T_blob {
+				typ.Width = 0
+			}
+			resolved, err := GetFunctionByName(proc.Ctx, "to_base64", []types.Type{typ})
+			require.NoError(t, err)
+			id, overload := DecodeOverloadID(resolved.GetEncodedOverloadID())
+			require.Equal(t, int32(TO_BASE64), id)
+			require.Equal(t, tc.overload, overload)
+			require.Equal(t, tc.result, resolved.GetReturnType().Oid)
+			require.Equal(t, tc.width, resolved.GetReturnType().Width)
+			require.Equal(t, types.CharsetUTF8, resolved.GetReturnType().Charset)
+			input := vector.NewVec(typ)
+			defer input.Free(proc.Mp())
+			require.NoError(t, vector.AppendBytes(input, []byte("f"), false, proc.Mp()))
+			require.NoError(t, vector.AppendBytes(input, nil, true, proc.Mp()))
+			out, err := RunFunctionDirectly(proc, resolved.GetEncodedOverloadID(), []*vector.Vector{input}, 2)
+			require.NoError(t, err)
+			defer out.Free(proc.Mp())
+			require.Equal(t, 2, out.Length())
+			require.False(t, out.IsNull(0))
+			require.Equal(t, "Zg==", out.GetStringAt(0))
+			require.True(t, out.IsNull(1))
+		})
+	}
+}
+
+func TestToBase64ResolverKeepsWireOverloadIDs(t *testing.T) {
+	ctx := context.Background()
+	for _, test := range []struct {
+		name      string
+		input     types.Type
+		overload  int32
+		resultOID types.T
+	}{
+		{name: "character", input: types.New(types.T_varchar, 128, 0), overload: 0, resultOID: types.T_varchar},
+		{name: "binary", input: types.NewWithCharset(types.T_varbinary, 128, 0, types.CharsetBinary), overload: 4, resultOID: types.T_varchar},
+		{name: "array float32", input: types.T_array_float32.ToType(), overload: 1, resultOID: types.T_text},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(ctx, "to_base64", []types.Type{test.input})
+			require.NoError(t, err)
+			functionID, overloadID := DecodeOverloadID(resolved.GetEncodedOverloadID())
+			require.Equal(t, int32(TO_BASE64), functionID)
+			require.Equal(t, test.overload, overloadID)
+			require.Equal(t, test.resultOID, resolved.GetReturnType().Oid)
+		})
 	}
 }
 

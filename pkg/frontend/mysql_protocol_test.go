@@ -3365,6 +3365,57 @@ func buildStringExecutePacket(proto *MysqlProtocolImpl, tp defines.MysqlType, pa
 	return data[:pos]
 }
 
+func buildStringExecutePacketForParams(
+	proto *MysqlProtocolImpl,
+	types []defines.MysqlType,
+	payloads []string,
+) []byte {
+	if len(types) != len(payloads) {
+		panic("parameter type and payload counts differ")
+	}
+	dataLen := 7 + len(types)*2
+	for _, payload := range payloads {
+		dataLen += 9 + len(payload)
+	}
+	data := make([]byte, dataLen)
+	copy(data, []byte{0, 1, 0, 0, 0, 0, 1})
+	pos := 7
+	for _, tp := range types {
+		data[pos] = byte(tp)
+		pos++
+		data[pos] = 0
+		pos++
+	}
+	for _, payload := range payloads {
+		pos = proto.writeStringLenEnc(data, pos, payload)
+	}
+	return data[:pos]
+}
+
+func buildDateExecutePacketForParams(
+	types []defines.MysqlType,
+	year uint16,
+	month, day byte,
+) []byte {
+	data := make([]byte, 7+len(types)*2+len(types)*5)
+	copy(data, []byte{0, 1, 0, 0, 0, 0, 1})
+	pos := 7
+	for _, tp := range types {
+		data[pos] = byte(tp)
+		pos++
+		data[pos] = 0
+		pos++
+	}
+	for range types {
+		data[pos] = 4
+		binary.LittleEndian.PutUint16(data[pos+1:pos+3], year)
+		data[pos+3] = month
+		data[pos+4] = day
+		pos += 5
+	}
+	return data[:pos]
+}
+
 func buildFloat32ExecutePacket(value float32) []byte {
 	data := make([]byte, 13)
 	// flag, iteration-count=1, null bitmap, new-params-bound, type, value
