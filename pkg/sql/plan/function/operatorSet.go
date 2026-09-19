@@ -59,6 +59,63 @@ func mixedStringNumericToVarchar(source []types.Type) (types.Type, bool) {
 	return types.Type{}, false
 }
 
+// conditionalTemporalCommonType keeps the widest temporal precision when a
+// CASE/IF branch is coerced. Reconstructing a type from only its OID loses the
+// source FSP and causes the cast inserted by the binder to round away
+// fractional seconds.
+func conditionalTemporalCommonType(source []types.Type) (types.Type, bool) {
+	var (
+		hasTemporal bool
+		result      types.Type
+		hasClock    bool
+		hasDate     bool
+	)
+	for _, typ := range source {
+		switch typ.Oid {
+		case types.T_any:
+			// Untyped NULL does not constrain the temporal domain.
+			continue
+		case types.T_date, types.T_datetime, types.T_timestamp, types.T_time:
+			hasTemporal = true
+			if typ.Oid == types.T_time {
+				hasClock = true
+			} else {
+				hasDate = true
+			}
+			if result.Oid == types.T_any {
+				result = typ
+				continue
+			}
+			// DATE/DATETIME/TIMESTAMP share a wall-clock domain for conditional
+			// expressions. TIME mixed with a date-like branch is promoted to
+			// DATETIME while retaining the widest fractional precision.
+			if typ.Oid == types.T_datetime || result.Oid == types.T_datetime ||
+				(typ.Oid == types.T_timestamp && result.Oid == types.T_date) ||
+				(typ.Oid == types.T_date && result.Oid == types.T_timestamp) {
+				result.Oid = types.T_datetime
+			}
+			if typ.Scale > result.Scale {
+				result.Scale = typ.Scale
+			}
+		default:
+			return types.Type{}, false
+		}
+	}
+	if !hasTemporal {
+		return types.Type{}, false
+	}
+	if hasClock && hasDate {
+		result.Oid = types.T_datetime
+	}
+	if result.Oid == types.T_any {
+		return types.Type{}, false
+	}
+	if result.Oid == types.T_time || result.Oid == types.T_datetime || result.Oid == types.T_timestamp {
+		result.Width = result.Scale
+	}
+	return result, true
+}
+
 func signedUnsignedIntegerCommonType(source []types.Type) (types.Type, bool) {
 	hasSigned := false
 	hasUnsigned := false
@@ -310,6 +367,27 @@ func caseCheck(_ []overload, inputs []types.Type) checkResult {
 		}
 		if l%2 == 1 {
 			source = append(source, inputs[l-1])
+		}
+
+		if retType, ok := conditionalTemporalCommonType(source); ok {
+			finalTypes := make([]types.Type, len(inputs))
+			for i := range finalTypes {
+				if i%2 == 0 && !(len(inputs)%2 == 1 && i == len(inputs)-1) {
+					finalTypes[i] = types.T_bool.ToType()
+				} else {
+					finalTypes[i] = retType
+				}
+			}
+			shouldCast := needCast
+			for i := range inputs {
+				if inputs[i].Oid != finalTypes[i].Oid || inputs[i].Scale != finalTypes[i].Scale {
+					shouldCast = true
+				}
+			}
+			if !shouldCast {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithCast(0, finalTypes)
 		}
 
 		if retType, ok := binaryStringCommonType(source); ok {
@@ -625,6 +703,19 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 		}
 
 		source := []types.Type{inputs[1], inputs[2]}
+		if retType, ok := conditionalTemporalCommonType(source); ok {
+			finalTypes := []types.Type{conditionType, retType, retType}
+			shouldCast := needCast
+			for i := range inputs {
+				if inputs[i].Oid != finalTypes[i].Oid || inputs[i].Scale != finalTypes[i].Scale {
+					shouldCast = true
+				}
+			}
+			if !shouldCast {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithCast(0, finalTypes)
+		}
 		sameCollatedText := false
 		switch source[0].Oid {
 		case types.T_char, types.T_varchar, types.T_text:

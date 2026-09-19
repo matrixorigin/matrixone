@@ -7565,11 +7565,17 @@ func preparedSetOperationCommonType(
 	targetType := argTypes[0]
 	if len(castTypes) > 0 {
 		targetType = castTypes[0]
-		if targetType.Oid == types.T_datetime {
-			for i := range castTypes {
-				castTypes[i].Scale = 0
+		if targetType.Oid == types.T_datetime || targetType.Oid == types.T_time || targetType.Oid == types.T_timestamp {
+			for _, typ := range argTypes {
+				if typ.Scale > targetType.Scale {
+					targetType.Scale = typ.Scale
+				}
 			}
-			targetType = castTypes[0]
+			targetType.Width = targetType.Scale
+			for i := range castTypes {
+				castTypes[i].Scale = targetType.Scale
+				castTypes[i].Width = targetType.Width
+			}
 		}
 	} else if targetType.Oid == types.T_varchar || targetType.Oid == types.T_char {
 		for _, typ := range argTypes {

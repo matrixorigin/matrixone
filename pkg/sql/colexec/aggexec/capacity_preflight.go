@@ -3342,7 +3342,7 @@ func accountedJSONValueSize(
 	if err != nil {
 		return 0, err
 	}
-	return jsonAggregateValueSize(vec, uint64(row))
+	return jsonAggregateValueSize(vec, uint64(row), nil)
 }
 
 func accountedJSONArrayValueSize(

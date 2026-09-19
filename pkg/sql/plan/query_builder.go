@@ -4175,9 +4175,20 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			}
 			argsCastType, _ := fGet.ShouldDoImplicitTypeCast()
 
-			if len(argsCastType) > 0 && int(argsCastType[0].Oid) == int(types.T_datetime) {
-				for i := 0; i < len(argsCastType); i++ {
-					argsCastType[i].Scale = 0
+			// Preserve the common temporal FSP selected by the coalesce type
+			// checker. Dropping it here makes UNION/CTAS values round to seconds
+			// while the expression metadata still claims fractional precision.
+			if len(argsCastType) > 0 && (argsCastType[0].Oid == types.T_datetime ||
+				argsCastType[0].Oid == types.T_time || argsCastType[0].Oid == types.T_timestamp) {
+				for i := 1; i < len(tmpArgsType); i++ {
+					if tmpArgsType[i].Scale > argsCastType[0].Scale {
+						argsCastType[0].Scale = tmpArgsType[i].Scale
+					}
+				}
+				argsCastType[0].Width = argsCastType[0].Scale
+				for i := range argsCastType {
+					argsCastType[i].Scale = argsCastType[0].Scale
+					argsCastType[i].Width = argsCastType[0].Width
 				}
 			}
 			var targetType plan.Type
