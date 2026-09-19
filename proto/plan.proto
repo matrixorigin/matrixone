@@ -328,7 +328,7 @@ message LiteralVec {
   // zero is Expression so legacy and runtime-produced payloads stay ordinary.
   uint32 string_source = 4;
   // True when at least one element came from a plain decimal literal whose
-  // exact normalized binding requires MORPC v85. The aggregate bit preserves
+  // exact normalized binding requires the decimal protocol fence. This bit preserves
   // the compatibility fence without disabling the compact vector encoding.
   bool decimal_literal_requires_v82 = 5;
 }

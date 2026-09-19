@@ -5875,7 +5875,7 @@ func bindFuncExprImplByPlanExpr(
 				if alwaysFalse && !columnNotNullable {
 					// The legacy binder would fold this comparison, but SQL NULL
 					// semantics require retaining it for a nullable column. Preserve
-					// the v85 fence on the source literal for persisted views.
+					// the decimal fence on the source literal for persisted views.
 					markDecimalComparisonLiteralRequirement(args)
 				}
 				if name == "=" && columnNotNullable && alwaysFalse {
