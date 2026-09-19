@@ -203,6 +203,14 @@ func RequiresMORPCVersion83BoundedConditionalStringDomains(owner any) (bool, err
 	return features.BoundedConditionalStringDomains, err
 }
 
+// RequiresMORPCVersion87DecimalLiteralSemantics reports whether an owner
+// contains a plain decimal literal whose exact normalized binding must not be
+// replayed by a pre-v87 binder.
+func RequiresMORPCVersion87DecimalLiteralSemantics(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.DecimalLiteralSemantics, err
+}
+
 // RequiresMORPCVersion86ExpressionResultContracts reports whether an owner
 // contains a follow-up expression contract that changes a result domain or
 // overload identity.
@@ -220,27 +228,30 @@ func RequiresMORPCVersion85ExpressionResultContracts(owner any) (bool, error) {
 	return RequiresMORPCVersion86ExpressionResultContracts(owner)
 }
 
-// RequiresMORPCVersion87DecimalLiteralSemantics reports whether an owner
-// contains a plain decimal literal whose exact normalized binding must not be
-// replayed by a pre-v87 binder.
-func RequiresMORPCVersion87DecimalLiteralSemantics(owner any) (bool, error) {
-	features, err := RequiredRemoteExpressionFeatures(owner)
-	return features.DecimalLiteralSemantics, err
+// RequiresMORPCVersion85DecimalLiteralSemantics is retained as a source-level
+// compatibility alias for callers written before mainline assigned v85 to
+// integer-parameter coercion. Decimal literal semantics are fenced at v87.
+func RequiresMORPCVersion85DecimalLiteralSemantics(owner any) (bool, error) {
+	return RequiresMORPCVersion87DecimalLiteralSemantics(owner)
+}
+
+// RequiresMORPCVersion86DecimalLiteralSemantics retains the pre-rebase API.
+// Deprecated: use RequiresMORPCVersion87DecimalLiteralSemantics.
+func RequiresMORPCVersion86DecimalLiteralSemantics(owner any) (bool, error) {
+	return RequiresMORPCVersion87DecimalLiteralSemantics(owner)
 }
 
 // RequiresMORPCVersion84DecimalLiteralSemantics is retained as a source-level
-// compatibility alias. Decimal literal admission moved to v87 because v84 is
-// already owned by the extended discrete percentile contract on main.
-// Deprecated: use RequiresMORPCVersion87DecimalLiteralSemantics.
+// compatibility alias for the short-lived pre-rebase API.
 func RequiresMORPCVersion84DecimalLiteralSemantics(owner any) (bool, error) {
-	return RequiresMORPCVersion87DecimalLiteralSemantics(owner)
+	return RequiresMORPCVersion85DecimalLiteralSemantics(owner)
 }
 
 // RequiresMORPCVersion82DecimalLiteralSemantics is retained as a source-level
-// compatibility alias for callers introduced with the original decimal marker.
-// Deprecated: use RequiresMORPCVersion87DecimalLiteralSemantics.
+// compatibility alias for callers introduced before the decimal protocol
+// contract was assigned its final version.
 func RequiresMORPCVersion82DecimalLiteralSemantics(owner any) (bool, error) {
-	return RequiresMORPCVersion87DecimalLiteralSemantics(owner)
+	return RequiresMORPCVersion85DecimalLiteralSemantics(owner)
 }
 
 // RequiresMORPCVersion88SpatialDistanceSemantics reports whether an owner
@@ -322,10 +333,6 @@ const (
 // vectors to signed INT/ BIGINT or BIGINT UNSIGNED.
 // BoundedConditionalStringDomains requires MORPC v83 because the bounded
 // BINARY/VARBINARY COALESCE overload identities are new to the registry.
-// DecimalLiteralSemantics requires MORPC v87 because plain DECIMAL256
-// literals are normalized and kept exact by the new planner, while older
-// binders can round or reject the same persisted SQL at the Decimal128
-// boundary.
 // TOBase64ResultContracts and IPFunctionResultContracts require MORPC v86:
 // the former changes a VARCHAR result bound and adds binary overloads, while
 // the latter changes IP predicate results to INT32 and adds domain-aware
@@ -333,6 +340,10 @@ const (
 // ExpressionResultMetadataContracts also requires MORPC v86 because bounded
 // character slicing and fractional temporal conditional results change the
 // serialized result metadata consumed by persisted views and remote workers.
+// DecimalLiteralSemantics requires MORPC v87 because plain DECIMAL256
+// literals are normalized and kept exact by the new planner, while older
+// binders can round or reject the same persisted SQL at the Decimal128
+// boundary.
 // SpatialDistanceSemantics requires MORPC v88 because geodetic
 // ST_FRECHETDISTANCE/ST_HAUSDORFFDISTANCE change the meaning of existing
 // overloads and the distance family adds length-unit overloads.

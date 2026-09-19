@@ -64,6 +64,13 @@ copying only the common-coercion delta is insufficient. Main86 -> D87 -> C88
 ensures that advertising the latest version also supports every prior contract.
 Both new epochs are unmerged; earlier branch-local assignments are superseded.
 
+Integration baseline: the complete D87 branch ending at
+`19269e68b2b96f8ee0354603bf09783e8ef7233a` is merged, including its arithmetic,
+common coercion decisions, scalar/vector fold provenance, interval/fulltext
+prerequisites, and regressions. C retains spatial88 and maximum-feature
+admission alongside that closure. Post-integration validation and actual
+mixed-binary acceptance remain separate pending gates.
+
 The protobuf additions are optional fields. Old readers can decode the message,
 but must not execute a marked expression under a different semantic contract.
 Therefore placement, send-time destination checks, receiver checks, and

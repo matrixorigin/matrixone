@@ -225,7 +225,7 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 		return expr
 	}
 	// The persisted-expression admission pass runs after optimization. Keep
-	// spatial-distance functions visible until that pass has observed the v86
+	// spatial-distance functions visible until that pass has observed the v88
 	// requirement; folding them to a literal would erase the only durable
 	// capability marker and let an older reader rebind the original SQL under
 	// incompatible planar semantics.
@@ -462,6 +462,9 @@ func PreserveFoldedDecimalLiteralSemantics(expr *plan.Expr, literal *plan.Litera
 	}
 	_ = plan.VisitExprTree(expr, func(current *plan.Expr) error {
 		if source := current.GetLit(); source != nil && source.DecimalLiteralRequiresV82 {
+			literal.DecimalLiteralRequiresV82 = true
+		}
+		if source := current.GetVec(); source != nil && source.DecimalLiteralRequiresV82 {
 			literal.DecimalLiteralRequiresV82 = true
 		}
 		return nil
