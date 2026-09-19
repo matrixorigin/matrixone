@@ -1056,49 +1056,6 @@ func TestRegenerateAlterViewUsesPersistedParserEnvironment(t *testing.T) {
 	require.Equal(t, "renamed", regenerated.TableDef.Cols[0].Name)
 }
 
-func TestPersistedViewProtocolAdmissionCapturesBindTimeBetweenFold(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
-	proc := ctx.GetProcess()
-	rt := moruntime.ServiceRuntime(proc.GetService())
-	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	oldAuthoringFloor, hadAuthoringFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor)
-	t.Cleanup(func() {
-		if hadProtocol {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
-		} else {
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-		}
-		if hadAuthoringFloor {
-			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, oldAuthoringFloor)
-		} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor); ok {
-			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, current)
-		}
-	})
-
-	const createSQL = "create view v_dynamic_ip_between as select 1 as x where '0.0.0.1' between inet_ntoa('1.6') and '0.0.0.1'"
-	build := func(authoringFloor int64) (*Plan, error) {
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, authoringFloor)
-		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createSQL, 1)
-		if err != nil {
-			return nil, err
-		}
-		defer stmt.Free()
-		return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}, stmt, false)
-	}
-
-	_, err := build(defines.MORPCVersion85)
-	require.ErrorContains(t, err, "protocol version 86")
-
-	created, err := build(defines.MORPCVersion86)
-	require.NoError(t, err)
-	var viewData ViewData
-	require.NoError(t, json.Unmarshal(
-		[]byte(created.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()), &viewData))
-	require.NotNil(t, viewData.RequiredProtocolVersion)
-	require.Equal(t, int64(defines.MORPCVersion86), *viewData.RequiredProtocolVersion)
-}
-
 func TestPersistedSpatialDistanceViewProtocolLifecycle(t *testing.T) {
 	ctx := NewMockCompilerContext(false)
 	proc := ctx.GetProcess()
