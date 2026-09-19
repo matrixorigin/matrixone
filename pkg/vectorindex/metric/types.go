@@ -234,18 +234,48 @@ func MaxFloat[T types.RealNumbers]() T {
 func DistanceTransformHnsw(dist float64, origMetricType MetricType, metricType usearch.Metric) float64 {
 	if origMetricType == Metric_L2Distance && metricType == usearch.L2sq {
 		// metric is l2sq but origin is l2_distance
-		return math.Sqrt(dist)
+		return RoundDistanceToElemDomain(math.Sqrt(dist))
 	}
 	if metricType == usearch.InnerProduct {
-		return dist - 1
+		return RoundDistanceToElemDomain(dist - 1)
 	}
-	return dist
+	return RoundDistanceToElemDomain(dist)
 }
 
 func DistanceTransformIvfflat(dist float64, origMetricType, metricType MetricType) float64 {
 	if origMetricType == Metric_L2Distance && metricType == Metric_L2sqDistance {
 		// metric is l2sq but origin is l2_distance
-		return math.Sqrt(dist)
+		return RoundDistanceToElemDomain(math.Sqrt(dist))
 	}
-	return dist
+	return RoundDistanceToElemDomain(dist)
+}
+
+// RoundDistanceToElemDomain rounds a distance into the float32 domain MO's vector distance functions
+// use. usearch/cuvs return distances in float32 (usearch.h: typedef float usearch_distance_t), and
+// the scalar l2_distance / l2_distance_sq / inner_product / cosine_distance likewise deliver a
+// float32-precision value for every supported base type (float32 and the narrow bf16/f16/int8/uint8,
+// computed via float32; cuvs has no float64 vectors at all). Standardizing every path on this one
+// domain keeps an index-served distance identical to the scalar one, so a projected value or a
+// pushed range predicate cannot disagree by a float32 ULP (#29040 / #29050). It is a trivial
+// float32 round-trip -- the compiler inlines it, so there is no per-row cost.
+func RoundDistanceToElemDomain(dist float64) float64 {
+	return float64(float32(dist))
+}
+
+// HasFloat64DistanceOverflow reports whether an index search must fail fast because a float64 base
+// produced a distance the float32 domain cannot represent. Index distances are float32
+// (usearch_distance_t is float32; cuvs is float32-only), so only a float64 base can hold a finite
+// value whose distance overflows and saturates to +/-Inf -- serving that would silently corrupt the
+// value, Top-K order, and any outer predicate (#29040 / #29050). Returns false immediately for any
+// non-float64 base (the common path), so the Inf scan runs only for float64.
+func HasFloat64DistanceOverflow[T types.RealNumbers](distances []float64) bool {
+	if _, ok := any(*new(T)).(float64); !ok {
+		return false
+	}
+	for _, d := range distances {
+		if math.IsInf(d, 0) {
+			return true
+		}
+	}
+	return false
 }

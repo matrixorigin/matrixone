@@ -893,7 +893,9 @@ func TestL2Distance(t *testing.T) {
 		{
 			name: "Test2 - float64",
 			args: args{argLeftF64: []float64{1, 2, 3}, argRightF64: []float64{10, 20, 30}},
-			want: 33.67491648096547,
+			// Vector distances are a float32 domain (#29040 / #29050), so a float64 base rounds to the
+			// same value as float32 -- not the old exact-f64 33.67491648096547.
+			want: 33.6749153137207,
 		},
 	}
 	for _, tt := range tests {
@@ -912,6 +914,24 @@ func TestL2Distance(t *testing.T) {
 
 		})
 	}
+}
+
+func TestL2DistanceSq(t *testing.T) {
+	// diffs 9,18,27 -> 81+324+729 = 1134 (exact in float32).
+	gotF32, err := L2DistanceSq[float32]([]float32{1, 2, 3}, []float32{10, 20, 30})
+	require.NoError(t, err)
+	require.Equal(t, 1134.0, gotF32)
+
+	// A float64 base returns the same float32-domain value (#29040 / #29050), and the
+	// result is itself representable in float32 (proves it was rounded, not left exact-f64).
+	gotF64, err := L2DistanceSq[float64]([]float64{1, 2, 3}, []float64{10, 20, 30})
+	require.NoError(t, err)
+	require.Equal(t, 1134.0, gotF64)
+	require.Equal(t, float64(float32(gotF64)), gotF64)
+
+	// Dimension mismatch is rejected.
+	_, err = L2DistanceSq[float32]([]float32{1, 2}, []float32{1, 2, 3})
+	require.Error(t, err)
 }
 
 func TestCosineDistance(t *testing.T) {

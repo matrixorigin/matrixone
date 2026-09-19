@@ -185,6 +185,15 @@ func (s *HnswSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vec
 		resdistances[i] = sr.Distance
 	}
 
+	// usearch returns the distance as float32 (usearch_distance_t), so a float64 base whose distance
+	// overflows float32 saturates to +/-Inf while the exact scalar stays finite -- silently
+	// corrupting the value, Top-K order, and any outer predicate (the derived-table row-loss,
+	// #29040 / #29050). Vector distances are a float32 domain, so fail fast rather than serve it.
+	if metric.HasFloat64DistanceOverflow[T](resdistances) {
+		return nil, nil, moerr.NewInternalError(sqlproc.GetContext(),
+			"vector distance exceeds the float32 range the vector index computes in; a float64 vector of this magnitude is unsupported -- use a smaller-magnitude/normalized column or the exact scalar path")
+	}
+
 	return reskeys, resdistances, nil
 }
 

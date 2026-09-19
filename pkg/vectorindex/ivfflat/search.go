@@ -736,6 +736,18 @@ func (idx *IvfflatSearchIndex[T]) Search(
 	_ int64,
 ) (keys any, distances []float64, err error) {
 
+	// usearch/cuvs and the entries SQL compute distances in float32, so a float64 base can hold a
+	// finite value whose distance overflows float32 and saturates to +/-Inf. Serving that would
+	// silently corrupt the value, Top-K order, and any outer predicate (#29040 / #29050), so fail
+	// fast. Named returns let one deferred check cover every return path; HasFloat64DistanceOverflow
+	// fast-returns for a non-float64 base.
+	defer func() {
+		if err == nil && metric.HasFloat64DistanceOverflow[T](distances) {
+			keys, distances, err = nil, nil, moerr.NewInternalErrorNoCtx(
+				"vector distance exceeds the float32 range the vector index computes in; a float64 vector of this magnitude is unsupported -- use a smaller-magnitude/normalized column or the exact scalar path")
+		}
+	}()
+
 	if sqlproc != nil {
 		prevRuntimeFilterData := sqlproc.IvfRuntimeFilterData
 		prevMembershipFilter := sqlproc.IvfMembershipFilter

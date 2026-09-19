@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -137,6 +138,40 @@ func TestHnswSearchFloat32(t *testing.T) {
 	for i := range dists64 {
 		require.InDelta(t, dists64[i], float64(outDists[i]), 1e-5)
 	}
+}
+
+func TestHnswSearchFloat64Overflow(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
+	idxcfg.Usearch.Metric = usearch.L2sq
+	idxcfg.Usearch.Quantization = usearch.F64
+	tblcfg := vectorindex.IndexTableConfig{}
+
+	s := NewHnswSearch[float64](idxcfg, tblcfg)
+
+	idx, err := usearch.NewIndex(idxcfg.Usearch)
+	require.NoError(t, err)
+	defer idx.Destroy()
+	require.NoError(t, idx.Reserve(1))
+
+	model := &HnswModel[float64]{Id: "abc-0", Index: idx}
+	require.NoError(t, model.Add(0, []float64{0, 0, 0}))
+	s.Indexes = []*HnswModel[float64]{model}
+
+	// A finite float64 query whose squared L2 distance (1e40) overflows float32; usearch
+	// returns the distance as float32 (+Inf), so Search must fail fast rather than serve the
+	// saturated score (#29040 / #29050).
+	rt := vectorindex.RuntimeConfig{Limit: 4, OrigFuncName: metric.DistFn_L2Distance}
+	_, _, err = s.Search(sqlproc, []float64{1e20, 0, 0}, rt)
+	require.Error(t, err)
+
+	// A small-magnitude float64 query stays finite -- no false reject.
+	_, dists, err := s.Search(sqlproc, []float64{1, 0, 0}, rt)
+	require.NoError(t, err)
+	require.NotEmpty(t, dists)
 }
 
 func TestHnswSearchFloat32_BadQueryType(t *testing.T) {

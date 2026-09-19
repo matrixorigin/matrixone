@@ -11513,11 +11513,14 @@ func TestL1DistanceArrayConstQuery(t *testing.T) {
 // whether the batched path runs, so it must not decide the VALUE. 16777217 is the first
 // integer float32 cannot hold; a result rounded through float32 answers 16777216. On a
 // vecf64 column that silently collapses distinct distances and can reorder an ORDER BY.
-func TestL1DistanceArrayConstQueryF64Precision(t *testing.T) {
+func TestL1DistanceArrayConstQueryF64Domain(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	const beyondF32 = 16777217.0
 	tc := tcTemp{
-		info: "l1_distance(vecf64 column, const) must keep float64 precision",
+		// Vector distances are a float32 domain for every base type (#29040 / #29050): a float64
+		// column's l1_distance is rounded to float32, so a value beyond float32's integer range
+		// (16777217) reads as 16777216, matching what a vector index would return.
+		info: "l1_distance(vecf64 column, const) is a float32 distance domain",
 		inputs: []FunctionTestInput{
 			NewFunctionTestInput(types.T_array_float64.ToType(),
 				[][]float64{{0}, {1}}, []bool{false, false}),
@@ -11525,7 +11528,7 @@ func TestL1DistanceArrayConstQueryF64Precision(t *testing.T) {
 				[][]float64{{beyondF32}}, []bool{false}),
 		},
 		expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-			[]float64{beyondF32, beyondF32 - 1}, []bool{false, false}),
+			[]float64{float64(float32(beyondF32)), float64(float32(beyondF32 - 1))}, []bool{false, false}),
 	}
 	fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, L1DistanceArray[float64])
 	s, info := fcTC.Run()
@@ -11591,6 +11594,8 @@ func initL2DistanceArrayTestCase() []tcTemp {
 				[]bool{false, false}),
 		},
 		{
+			// Vector distances are a float32 domain (#29040 / #29050), so a float64 base rounds to
+			// float32 -- not the old exact-f64 33.67491648096547 / 78.9746794865291.
 			info: "test L2Distance float64 array",
 			typ:  types.T_array_float64,
 			inputs: []FunctionTestInput{
@@ -11598,7 +11603,7 @@ func initL2DistanceArrayTestCase() []tcTemp {
 				NewFunctionTestInput(types.T_array_float64.ToType(), [][]float64{{10, 20, 30}, {40, 50, 60}}, []bool{false, false}),
 			},
 			expect: NewFunctionTestResult(types.T_float64.ToType(), false,
-				[]float64{33.67491648096547, 78.9746794865291},
+				[]float64{float64(float32(33.67491648096547)), float64(float32(78.9746794865291))},
 				[]bool{false, false}),
 		},
 	}

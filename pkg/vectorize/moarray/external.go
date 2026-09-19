@@ -175,7 +175,11 @@ func InnerProduct[T types.RealNumbers](v1, v2 []T) (float64, error) {
 		return 0, err
 	}
 
-	return float64(ret), err
+	// Vector distances are a float32 domain (usearch/cuvs return float32, and this is the
+	// per-row scalar twin of that index metric), so round a float64 base's result to float32
+	// too -- otherwise the scalar and the index disagree by a float32 ULP (#29040 / #29050).
+	// No-op for a float32 base.
+	return metric.RoundDistanceToElemDomain(float64(ret)), err
 }
 
 // L1Distance returns the Manhattan distance sum|a-b|. Like its L2 siblings it checks the
@@ -188,7 +192,9 @@ func L1Distance[T types.RealNumbers](v1, v2 []T) (float64, error) {
 	}
 
 	ret, err := metric.L1Distance[T](v1, v2)
-	return float64(ret), err
+	// Round a float64 base into the float32 distance domain so every vector distance is uniform
+	// (see InnerProduct); no-op for a float32 base (#29040 / #29050).
+	return metric.RoundDistanceToElemDomain(float64(ret)), err
 }
 
 func L2Distance[T types.RealNumbers](v1, v2 []T) (float64, error) {
@@ -197,7 +203,9 @@ func L2Distance[T types.RealNumbers](v1, v2 []T) (float64, error) {
 	}
 
 	ret, err := metric.L2Distance[T](v1, v2)
-	return float64(ret), err
+	// Round a float64 base into the float32 distance domain so the scalar and index agree
+	// (see InnerProduct); no-op for a float32 base (#29040 / #29050).
+	return metric.RoundDistanceToElemDomain(float64(ret)), err
 }
 
 // L2DistanceSq returns the squared L2 distance between two vectors.
@@ -208,7 +216,9 @@ func L2DistanceSq[T types.RealNumbers](v1, v2 []T) (float64, error) {
 	}
 
 	ret, err := metric.L2DistanceSq[T](v1, v2)
-	return float64(ret), err
+	// Round a float64 base into the float32 distance domain so the scalar and index agree
+	// (see InnerProduct); no-op for a float32 base (#29040 / #29050).
+	return metric.RoundDistanceToElemDomain(float64(ret)), err
 }
 
 func CosineDistance[T types.RealNumbers](v1, v2 []T) (float64, error) {
@@ -217,7 +227,9 @@ func CosineDistance[T types.RealNumbers](v1, v2 []T) (float64, error) {
 	}
 
 	ret, err := metric.CosineDistance[T](v1, v2)
-	return float64(ret), err
+	// Round a float64 base into the float32 distance domain so the scalar and index agree
+	// (see InnerProduct); no-op for a float32 base (#29040 / #29050).
+	return metric.RoundDistanceToElemDomain(float64(ret)), err
 }
 
 func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (float64, error) {
@@ -229,47 +241,12 @@ func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (float64, error) {
 	if err != nil {
 		return 0, err
 	}
-	cosine := float64(ret)
 
-	// NOTE: Downcast the float64 cosine_similarity to float32 and check if it is
-	// 1.0 or -1.0 to avoid precision issue.
-	//
-	//  Example for corner case:
-	// - cosine_similarity(a,a) = 1:
-	// - Without downcasting check, we get the following results:
-	//   cosine_similarity( [0.46323407, 23.498016, 563.923, 56.076736, 8732.958] ,
-	//					    [0.46323407, 23.498016, 563.923, 56.076736, 8732.958] ) =   0.9999999999999998
-	// - With downcasting, we get the following results:
-	//   cosine_similarity( [0.46323407, 23.498016, 563.923, 56.076736, 8732.958] ,
-	//					    [0.46323407, 23.498016, 563.923, 56.076736, 8732.958] ) =   1
-	//
-	//  Reason:
-	// The reason for this check is
-	// 1. gonums mat.Dot, mat.Norm returns float64. In other databases, we mostly do float32 operations.
-	// 2. float64 operations are not exact.
-	// mysql> select 76586261.65813679/(8751.35770370157 *8751.35770370157);
-	//+-----------------------------------------------------------+
-	//| 76586261.65813679 / (8751.35770370157 * 8751.35770370157) |
-	//+-----------------------------------------------------------+
-	//|                                            1.000000000000 |
-	//+-----------------------------------------------------------+
-	//mysql> select cast(76586261.65813679 as double)/(8751.35770370157 * 8751.35770370157);
-	//+---------------------------------------------------------------------------+
-	//| cast(76586261.65813679 as double) / (8751.35770370157 * 8751.35770370157) |
-	//+---------------------------------------------------------------------------+
-	//|                                                        0.9999999999999996 |
-	//+---------------------------------------------------------------------------+
-	// 3. We only need to handle the case for 1.0 and -1.0 with float32 precision.
-	//    Rest of the cases can have float64 precision.
-
-	cosinef32 := float32(cosine)
-	if cosinef32 == 1 {
-		cosine = 1
-	} else if cosinef32 == -1 {
-		cosine = -1
-	}
-
-	return cosine, nil
+	// Vector metrics are a float32 domain (see InnerProduct), so round the float64 cosine to
+	// float32. This also subsumes the historical 1.0/-1.0 corner-case snap: gonum's f64 mat.Dot /
+	// mat.Norm make cosine_similarity(a,a) read as 0.9999999999999998, but float32(that) == 1, so an
+	// identical-vector similarity is exactly 1 without a special case. No-op for a float32 base.
+	return metric.RoundDistanceToElemDomain(float64(ret)), nil
 }
 
 func NormalizeL2[T types.RealNumbers](v1 []T, normalized []T) error {

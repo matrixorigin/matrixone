@@ -537,7 +537,9 @@ func TestReaderSetIndexParamDoesNotPreallocateDistHeap(t *testing.T) {
 	require.Equal(t, limit, r.orderByLimit.Limit)
 	require.Equal(t, plan.BoundType_UNBOUNDED, r.orderByLimit.LowerBoundType)
 	require.Equal(t, plan.BoundType_INCLUSIVE, r.orderByLimit.UpperBoundType)
-	require.Equal(t, math.Nextafter(float64(4), math.Inf(1)), r.orderByLimit.UpperBound)
+	// The L2 upper bound (2) is widened to the next float32 before squaring so the squared-domain
+	// gate stays a superset of the float32 distance a row is gated on (#29040), not just 1 f64 ULP.
+	require.Equal(t, squareL2BoundOutward(2, math.Inf(1)), r.orderByLimit.UpperBound)
 	require.Zero(t, len(r.orderByLimit.DistHeap))
 	require.Zero(t, cap(r.orderByLimit.DistHeap))
 }
