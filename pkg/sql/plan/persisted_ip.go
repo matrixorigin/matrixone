@@ -115,6 +115,13 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.SpatialDistanceSemantics && requiredVersion < defines.MORPCVersion90 {
 		requiredVersion = defines.MORPCVersion90
 	}
+	viewDefinitionVersion, err := requiredViewDefinitionFunctionProtocolVersion(owner)
+	if err != nil {
+		return 0, err
+	}
+	if viewDefinitionVersion > requiredVersion {
+		requiredVersion = viewDefinitionVersion
+	}
 	return requiredVersion, nil
 }
 
