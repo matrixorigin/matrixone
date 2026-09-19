@@ -3718,6 +3718,11 @@ func parquetValueToFloat64(ctx context.Context, st parquet.Type, v parquet.Value
 		return types.Decimal256ToFloat64(dec, parquetDecimalScale(st)), nil
 	}
 	switch st.Kind() {
+	case parquet.Boolean:
+		if v.Boolean() {
+			return 1, nil
+		}
+		return 0, nil
 	case parquet.Int32, parquet.Int64:
 		if lt := st.LogicalType(); lt != nil && lt.Integer != nil && !lt.Integer.IsSigned {
 			val, err := parquetValueToUint64(ctx, st, v)

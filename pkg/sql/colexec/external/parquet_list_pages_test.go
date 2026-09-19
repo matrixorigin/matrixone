@@ -122,15 +122,17 @@ func TestParquetListVectorAcrossV1Pages(t *testing.T) {
 
 func TestParquetListVectorRowModePreservesSiblingMappers(t *testing.T) {
 	schema := parquet.NewSchema("mixed", parquet.Group{
-		"amount":     parquet.Decimal(2, 12, parquet.Int64Type),
-		"emb":        parquet.List(parquet.Leaf(parquet.DoubleType)),
-		"event_date": parquet.Optional(parquet.Date()),
-		"number":     parquet.String(),
-		"payload":    parquet.JSON(),
-		"text_vec":   parquet.String(),
+		"amount":      parquet.Decimal(2, 12, parquet.Int64Type),
+		"emb":         parquet.List(parquet.Leaf(parquet.DoubleType)),
+		"event_date":  parquet.Optional(parquet.Date()),
+		"flag_double": parquet.Leaf(parquet.BooleanType),
+		"flag_float":  parquet.Leaf(parquet.BooleanType),
+		"number":      parquet.String(),
+		"payload":     parquet.JSON(),
+		"text_vec":    parquet.String(),
 	})
 	makeRow := func(row int) parquet.Row {
-		values := make(parquet.Row, 0, 7)
+		values := make(parquet.Row, 0, 9)
 		for column, path := range schema.Columns() {
 			switch path[0] {
 			case "amount":
@@ -146,6 +148,8 @@ func TestParquetListVectorRowModePreservesSiblingMappers(t *testing.T) {
 				} else {
 					values = append(values, parquet.NullValue().Level(0, 0, column))
 				}
+			case "flag_double", "flag_float":
+				values = append(values, parquet.BooleanValue(row == 0).Level(0, 0, column))
 			case "number":
 				values = append(values, parquet.ByteArrayValue([]byte(fmt.Sprint(41+row))).Level(0, 0, column))
 			case "payload":
@@ -170,14 +174,18 @@ func TestParquetListVectorRowModePreservesSiblingMappers(t *testing.T) {
 				{ColName: "amount", ColIndex: 0},
 				{ColName: "emb", ColIndex: 1},
 				{ColName: "event_date", ColIndex: 2},
-				{ColName: "number", ColIndex: 3},
-				{ColName: "payload", ColIndex: 4},
-				{ColName: "text_vec", ColIndex: 5},
+				{ColName: "flag_double", ColIndex: 3},
+				{ColName: "flag_float", ColIndex: 4},
+				{ColName: "number", ColIndex: 5},
+				{ColName: "payload", ColIndex: 6},
+				{ColName: "text_vec", ColIndex: 7},
 			},
 			Cols: []*plan.ColDef{
 				{Name: "amount", Typ: plan.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 2, NotNullable: true}, NotNull: true},
 				{Name: "emb", Typ: plan.Type{Id: int32(types.T_array_float32), Width: 2, NotNullable: true}, NotNull: true},
 				{Name: "event_date", Typ: plan.Type{Id: int32(types.T_date)}},
+				{Name: "flag_double", Typ: plan.Type{Id: int32(types.T_float64), NotNullable: true}, NotNull: true},
+				{Name: "flag_float", Typ: plan.Type{Id: int32(types.T_float32), NotNullable: true}, NotNull: true},
 				{Name: "number", Typ: plan.Type{Id: int32(types.T_int32), NotNullable: true}, NotNull: true},
 				{Name: "payload", Typ: plan.Type{Id: int32(types.T_json), NotNullable: true}, NotNull: true},
 				{Name: "text_vec", Typ: plan.Type{Id: int32(types.T_array_float32), Width: 2, NotNullable: true}, NotNull: true},
@@ -202,6 +210,8 @@ func TestParquetListVectorRowModePreservesSiblingMappers(t *testing.T) {
 		types.New(types.T_decimal64, 12, 2),
 		types.New(types.T_array_float32, 2, 0),
 		types.T_date.ToType(),
+		types.T_float64.ToType(),
+		types.T_float32.ToType(),
 		types.T_int32.ToType(),
 		types.T_json.ToType(),
 		types.New(types.T_array_float32, 2, 0),
@@ -215,10 +225,12 @@ func TestParquetListVectorRowModePreservesSiblingMappers(t *testing.T) {
 	require.Equal(t, [][]float32{{1, 2}, {11, 12}}, vector.MustArrayCol[float32](bat.Vecs[1]))
 	require.Equal(t, types.DaysFromUnixEpochToDate(1), vector.MustFixedColWithTypeCheck[types.Date](bat.Vecs[2])[0])
 	require.True(t, bat.Vecs[2].GetNulls().Contains(1))
-	require.Equal(t, []int32{41, 42}, vector.MustFixedColWithTypeCheck[int32](bat.Vecs[3]))
-	require.Equal(t, `{"row": 0}`, types.DecodeJson(bat.Vecs[4].GetBytesAt(0)).String())
-	require.Equal(t, `{"row": 1}`, types.DecodeJson(bat.Vecs[4].GetBytesAt(1)).String())
-	require.Equal(t, [][]float32{{3, 4}, {4, 5}}, vector.MustArrayCol[float32](bat.Vecs[5]))
+	require.Equal(t, []float64{1, 0}, vector.MustFixedColWithTypeCheck[float64](bat.Vecs[3]))
+	require.Equal(t, []float32{1, 0}, vector.MustFixedColWithTypeCheck[float32](bat.Vecs[4]))
+	require.Equal(t, []int32{41, 42}, vector.MustFixedColWithTypeCheck[int32](bat.Vecs[5]))
+	require.Equal(t, `{"row": 0}`, types.DecodeJson(bat.Vecs[6].GetBytesAt(0)).String())
+	require.Equal(t, `{"row": 1}`, types.DecodeJson(bat.Vecs[6].GetBytesAt(1)).String())
+	require.Equal(t, [][]float32{{3, 4}, {4, 5}}, vector.MustArrayCol[float32](bat.Vecs[7]))
 }
 
 func TestParquetListVectorRowModeRollsBackWholeRow(t *testing.T) {
