@@ -139,11 +139,14 @@ func TestCatalogLegacyZombieRetirementAndReadmission(t *testing.T) {
 	s := catalogRuntimeFixture(t)
 	command := unhappyCommand(pb.KillZombie, 99, "new-log")
 	command.UUID = "new-log"
-	unhappyQueue(t, s, command)
 	hb := pb.LogStoreHeartbeat{UUID: "new-log", StoreIncarnation: "inc",
 		CatalogMetadataCapabilities: &pb.CatalogMetadataCapabilities{HAKeeperBarrierProtocol: 1},
 		Replicas:                    []pb.LogReplicaInfo{{LogShardInfo: s.state.LogState.Shards[DefaultHAKeeperShardID], ReplicaID: 99}},
 	}
+	// The checker can only produce KillZombie after the local replica has been
+	// observed. Admission uses that same replicated observation.
+	require.Empty(t, unhappyHeartbeat(t, s, hb).Commands)
+	unhappyQueue(t, s, command)
 	batch := unhappyHeartbeat(t, s, hb)
 	require.Len(t, batch.Commands, 1)
 	permit := *batch.Commands[0].CatalogMetadataStart

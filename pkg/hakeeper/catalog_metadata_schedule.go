@@ -75,10 +75,11 @@ func (s *stateMachine) catalogScheduleObsolete(cmd pb.ScheduleCommand) bool {
 		return a.Reservation == nil || m.Token != a.Reservation.Token
 	}
 	cfg := cmd.ConfigChange
-	if cmd.ServiceType == pb.LogService && cfg != nil && cfg.Replica.ShardID == DefaultHAKeeperShardID &&
-		cfg.Replica.Epoch < a.ConfirmedConfigChangeIndex {
-		switch cfg.ChangeType {
-		case pb.AddReplica, pb.AddNonVotingReplica, pb.RemoveReplica, pb.RemoveNonVotingReplica:
+	if cmd.ServiceType == pb.LogService && cfg != nil && cfg.Replica.ShardID == DefaultHAKeeperShardID {
+		if cfg.Replica.Epoch != 0 && cfg.Replica.Epoch < a.ConfirmedConfigChangeIndex {
+			return true
+		}
+		if cmd.CatalogMetadataStart == nil && catalogTokenlessExecutionObsolete(a, s.state.LogState.Stores[cfg.Replica.UUID], cfg) {
 			return true
 		}
 	}
@@ -91,6 +92,43 @@ func (s *stateMachine) catalogScheduleObsolete(cmd pb.ScheduleCommand) bool {
 		return true
 	}
 	return false
+}
+
+func catalogTokenlessExecutionObsolete(a *pb.CatalogMetadataArbitration, store pb.LogStoreInfo, cfg *pb.ConfigChange) bool {
+	if cfg == nil || cfg.Replica.ReplicaID == 0 {
+		return false
+	}
+	replica := cfg.Replica
+	member, admitted := a.Members[replica.ReplicaID]
+	switch cfg.ChangeType {
+	case pb.StartReplica, pb.StartNonVotingReplica:
+		nonVoting := cfg.ChangeType == pb.StartNonVotingReplica
+		return !admitted || member.Revoked || member.UUID != replica.UUID || member.NonVoting != nonVoting
+	case pb.StopReplica, pb.StopNonVotingReplica, pb.KillZombie:
+		roleMatches := func(nonVoting bool) bool {
+			return cfg.ChangeType == pb.KillZombie || nonVoting == (cfg.ChangeType == pb.StopNonVotingReplica)
+		}
+		for _, permit := range a.StartPermits {
+			if permit.ReplicaID == replica.ReplicaID && permit.UUID == replica.UUID && roleMatches(permit.NonVoting) {
+				return false
+			}
+		}
+		if admitted {
+			// KillZombie is never valid for an admitted member. A regular stop can
+			// create its revoke permit only for the current, non-revoked role.
+			return cfg.ChangeType == pb.KillZombie || member.Revoked || member.UUID != replica.UUID || !roleMatches(member.NonVoting)
+		}
+		// A pre-cutover zombie has no admitted identity or permit. Keep its stop
+		// only while the target store still reports that exact local replica.
+		for _, local := range store.Replicas {
+			if local.ShardID == DefaultHAKeeperShardID && local.ReplicaID == replica.ReplicaID && roleMatches(local.IsNonVoting) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
 }
 
 func sameCatalogStartIdentity(a, b pb.CatalogMetadataStartPermit) bool {
