@@ -1113,14 +1113,17 @@ if [[ "$*" == *pkg/tests/embedded* ]]; then
   printf 'prebuild-end\n'
   exit 0
  fi
+ # Cluster admission does not bound a waiting binary's memory or linking.
+ # Check the real run_tests -> run_embedded_tests command boundary.
+ [[ " $* " == *' -p 1 '* ]] || { printf 'unexpected embedded parallelism: %s\n' "$*" >&2; exit 97; }
  printf 'embedded\n'
- exit 0
+ exit "${EMBEDDED_STATUS:-0}"
 fi
 if [[ "$*" == *pkg/backup* ]]; then printf 'heavy\n'; exit 0; fi
 exit 0
 `
 	type lightScheduleCase struct {
-		name, parallel, lightParallel, expectedLightParallel, overlap, overlapParallel, expectOverlap, expected, expectedStatus, forceLaunchFailure, prebuild, expectPrebuildActive string
+		name, parallel, lightParallel, expectedLightParallel, overlap, overlapParallel, expectOverlap, expected, expectedStatus, forceLaunchFailure, prebuild, expectPrebuildActive, embeddedStatus string
 	}
 	cases := []lightScheduleCase{
 		{name: "default-off", parallel: "6", lightParallel: "__default__", expectedLightParallel: "6", overlap: "__default__", overlapParallel: "2", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end", expectedStatus: "0", forceLaunchFailure: "0"},
@@ -1128,6 +1131,7 @@ exit 0
 		{name: "sequential-explicit-off", parallel: "6", lightParallel: "__default__", expectedLightParallel: "6", overlap: "0", overlapParallel: "2", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end", expectedStatus: "0", forceLaunchFailure: "0"},
 		{name: "sequential-single-slot", parallel: "1", lightParallel: "6", expectedLightParallel: "1", overlap: "0", overlapParallel: "2", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end", expectedStatus: "0", forceLaunchFailure: "0"},
 		{name: "single-slot-guard", parallel: "1", lightParallel: "6", expectedLightParallel: "1", overlap: "1", overlapParallel: "2", expectOverlap: "0", expected: "light\nlight-end\nhnsw\nserial\nserial-end", expectedStatus: "0", forceLaunchFailure: "0"},
+		{name: "embedded-failure", parallel: "6", lightParallel: "6", expectedLightParallel: "6", overlap: "0", overlapParallel: "2", expectOverlap: "0", expectedStatus: "1", forceLaunchFailure: "0", embeddedStatus: "7"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1164,7 +1168,11 @@ function run_engine_race_shards() { printf 'engine\n' > "$ENGINE_RACE_REPORT"; r
 function run_plan_race_shards() { return 0; }
 trap handle_ut_termination TERM
 run_tests
-[[ "$UT_TEST_STATUS" == "$EXPECTED_STATUS" ]] || exit 90
+[[ "$UT_TEST_STATUS" == "$EXPECTED_STATUS" ]] || { cat "$UT_REPORT" "$UT_STDERR"; exit 90; }
+if [[ -n "$EMBEDDED_STATUS" ]]; then
+ [[ "$(grep -c '^embedded$' "$UT_REPORT")" == 1 ]] || exit 97
+ grep -q "event=finish stage=embedded label=embedded-cluster race-test packages status=${EMBEDDED_STATUS}" "$UT_CHECKPOINT" || exit 98
+fi
 if [[ "$EXPECTED_STATUS" != 0 ]]; then exit 0; fi
 [[ -z "$CURRENT_UT_PID$LIGHT_RACE_JOB_PID$ENGINE_RACE_JOB_PID$PLAN_RACE_JOB_PID" ]] || exit 91
 report=$(cat "$UT_REPORT")
@@ -1188,7 +1196,8 @@ fi
 					"EXPECTED_REPORT="+caseData.expected,
 					"FORCE_LIGHT_LAUNCH_FAILURE="+caseData.forceLaunchFailure,
 					"PREBUILD_VALUE="+caseData.prebuild,
-					"EXPECT_PREBUILD_ACTIVE="+caseData.expectPrebuildActive)
+					"EXPECT_PREBUILD_ACTIVE="+caseData.expectPrebuildActive,
+					"EMBEDDED_STATUS="+caseData.embeddedStatus)
 			}
 			out, err := runCase(tc)
 			if err != nil {
