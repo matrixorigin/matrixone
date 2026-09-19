@@ -564,6 +564,59 @@ func TestInsertExpressionDefaultReadsMaterializedVolatileDependency(t *testing.T
 		"b's row expression must read the appended a input, not inline rand()")
 }
 
+func TestLegacyInsertMaterializesVolatileGeneratedDependency(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	const (
+		tableName = "expression_default_legacy_dml"
+		tableID   = uint64(29003)
+	)
+	stmt, err := mysql.ParseOne(context.Background(),
+		"create table expression_default_legacy_dml (id int, a double default (rand()), g double generated always as (a) stored)", 1)
+	require.NoError(t, err)
+	createPlan, err := BuildPlan(mock.CurrentContext(), stmt, false)
+	require.NoError(t, err)
+	stmt.Free()
+	tableDef := createPlan.GetDdl().GetCreateTable().GetTableDef()
+	tableDef.Name = tableName
+	tableDef.TblId = tableID
+	qualifiedName := mockQualifiedTableName("tpch", tableName)
+	objRef := &planpb.ObjectRef{SchemaName: "tpch", ObjName: tableName, Obj: int64(tableID)}
+	mock.ctxt.tables[tableName] = tableDef
+	mock.ctxt.objects[tableName] = objRef
+	mock.ctxt.tablesByQualifiedName[qualifiedName] = tableDef
+	mock.ctxt.objectsByQualifiedName[qualifiedName] = objRef
+	mock.ctxt.legacyTableOwners[tableName] = qualifiedName
+	mock.ctxt.legacyObjectOwners[tableName] = qualifiedName
+	mock.ctxt.id2name[tableID] = qualifiedName
+
+	logicPlan, err := runOneStmt(mock, t,
+		"insert into expression_default_legacy_dml(id) values (1) on duplicate key update id = values(id)")
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	require.NotNil(t, query)
+
+	generatedPos := -1
+	for i, col := range tableDef.Cols {
+		if col.Name == "g" {
+			generatedPos = i
+			break
+		}
+	}
+	require.GreaterOrEqual(t, generatedPos, 0)
+	hasMaterializedGenerated := false
+	for _, node := range query.Nodes {
+		if node.NodeType != planpb.Node_PROJECT || generatedPos >= len(node.ProjectList) {
+			continue
+		}
+		if exprHasLocalColumnRef(node.ProjectList[generatedPos]) {
+			hasMaterializedGenerated = true
+			break
+		}
+	}
+	require.True(t, hasMaterializedGenerated,
+		"legacy INSERT must stage a generated column that depends on volatile DEFAULT(rand())")
+}
+
 func TestSequentialUpdateDefaultReadsCurrentRowImage(t *testing.T) {
 	builder := NewQueryBuilder(planpb.Query_UPDATE, NewMockCompilerContext(true), false, true)
 	nodeCtx := NewBindContext(builder, nil)

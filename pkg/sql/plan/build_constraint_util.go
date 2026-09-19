@@ -699,6 +699,31 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	info.tblInfo.oldColPosMap = append(info.tblInfo.oldColPosMap, oldColPosMap)
 	info.tblInfo.newColPosMap = append(info.tblInfo.newColPosMap, oldColPosMap)
 
+	// Generated-column DEFAULT values are removed from the executable source by
+	// the same local rewrite used by the modern INSERT builder. Never mutate the
+	// statement AST: an unsupported modern ODKU route retries this exact AST in
+	// the legacy fallback, and its source columns and value rows must remain
+	// aligned for that retry.
+	effectiveRows := stmt.Rows
+	effectiveColumns := stmt.Columns
+	if stmt.Columns != nil {
+		effectiveRows = cloneInsertRowsForGeneratedRewrite(stmt.Rows)
+		if effectiveColumns, effectiveRows, err = builder.stripGeneratedDefaultCols(stmt.Columns, effectiveRows, tableDef); err != nil {
+			return false, nil, nil, err
+		}
+	} else if values, ok := stmt.Rows.Select.(*tree.ValuesClause); ok {
+		implicitColumns, _, hasGenerated := implicitInsertValueColumns(tableDef)
+		if hasGenerated && len(values.Rows) > 0 && values.Rows[0] != nil {
+			// Keep the implicit VALUES positions long enough to validate and strip
+			// generated-column DEFAULTs. The legacy fallback otherwise compares the
+			// original tuple with only the writable columns and rejects a valid row.
+			effectiveRows = cloneInsertRowsForGeneratedRewrite(stmt.Rows)
+			if effectiveColumns, effectiveRows, err = builder.stripGeneratedDefaultCols(implicitColumns, effectiveRows, tableDef); err != nil {
+				return false, nil, nil, err
+			}
+		}
+	}
+
 	// dbName := string(stmt.Table.(*tree.TableName).SchemaName)
 	// if dbName == "" {
 	// 	dbName = builder.compCtx.DefaultDatabase()
@@ -708,15 +733,72 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 
 	insertWithoutUniqueKeyMap := make(map[string]bool)
 	var ifInsertFromUniqueColMap map[string]bool
-	if insertColumns, err = getInsertColsFromStmt(builder.GetContext(), stmt, tableDef); err != nil {
-		return false, nil, nil, err
+	var aliasInsertColumns []string
+	if stmt.RowAlias != nil {
+		// The row-alias namespace is defined by the legal INSERT source columns.
+		// The legacy helper predates this contract and includes non-user-visible
+		// hidden columns for an implicit column list, so use the same filtered
+		// identity resolver as the modern path before building the fallback scan.
+		if aliasInsertColumns, err = builder.getInsertColsForRowAlias(stmt.Columns, tableDef); err != nil {
+			return false, nil, nil, err
+		}
+		insertColumns = aliasInsertColumns
+		if effectiveColumns != nil {
+			effectiveStmt := *stmt
+			effectiveStmt.Columns = effectiveColumns
+			effectiveStmt.Rows = effectiveRows
+			if insertColumns, err = getInsertColsFromStmt(builder.GetContext(), &effectiveStmt, tableDef); err != nil {
+				return false, nil, nil, err
+			}
+		}
+	} else {
+		effectiveStmt := *stmt
+		effectiveStmt.Columns = effectiveColumns
+		effectiveStmt.Rows = effectiveRows
+		if insertColumns, err = getInsertColsFromStmt(builder.GetContext(), &effectiveStmt, tableDef); err != nil {
+			return false, nil, nil, err
+		}
+	}
+	if stmt.RowAlias != nil {
+		if effectiveRows == nil {
+			return false, nil, nil, moerr.NewInvalidInput(builder.GetContext(), "INSERT row alias has no input rows")
+		}
+		values, ok := effectiveRows.Select.(*tree.ValuesClause)
+		if !ok {
+			return false, nil, nil, moerr.NewInvalidInput(builder.GetContext(),
+				"INSERT row aliases are supported only for VALUES or SET")
+		}
+		if values.HasRowWord {
+			return false, nil, nil, moerr.NewInvalidInput(builder.GetContext(),
+				"VALUES ROW(...) does not support an INSERT row alias")
+		}
+		targetDBName := string(stmt.TargetDatabaseName)
+		if targetDBName == "" {
+			targetDBName = tableObjRef.SchemaName
+		}
+		targetTableName := string(stmt.TargetTableName)
+		if targetTableName == "" {
+			targetTableName = tableDef.Name
+		}
+		if _, err = validateInsertRowAlias(
+			builder.GetContext(), stmt.RowAlias, aliasInsertColumns, tableDef,
+			targetDBName, targetTableName, builder.compCtx.GetLowerCaseTableNames(),
+		); err != nil {
+			return false, nil, nil, err
+		}
+		if err = validateOndupUpdateTargets(
+			builder.GetContext(), stmt.OnDuplicateUpdate, tableDef,
+			targetDBName, targetTableName, builder.compCtx.GetLowerCaseTableNames(),
+		); err != nil {
+			return false, nil, nil, err
+		}
 	}
 	if stmt.Columns != nil {
 		syntaxHasColumnNames = true
 	}
 
 	var astSlt *tree.Select
-	switch slt := stmt.Rows.Select.(type) {
+	switch slt := effectiveRows.Select.(type) {
 	// rewrite 'insert into tbl values (1,1)' to 'insert into tbl select * from (values row(1,1))'
 	case *tree.ValuesClause:
 		isAllDefault := false
@@ -745,7 +827,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			return false, nil, nil, moerr.NewInvalidInput(builder.GetContext(), "insert values does not match the number of columns")
 		}
 		var valueScanColumns []string
-		valueScanColumns, err = buildValueScan(isAllDefault, info, builder, bindCtx, tableDef, slt, insertColumns, colToIdx, stmt.OnDuplicateUpdate)
+		valueScanColumns, err = buildValueScan(isAllDefault, info, builder, bindCtx, tableDef, slt, insertColumns, colToIdx, stmt.OnDuplicateUpdate, stmt.RowAlias)
 		if err != nil {
 			return false, nil, nil, err
 		}
@@ -909,6 +991,8 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	// rewrite 'insert into t1(b) values (1)' to
 	// select 'select 0, _t.column_0 from (select * from values (1)) _t(column_0)
 	projectList := make([]*Expr, 0, len(tableDef.Cols))
+	colIdxToProjPos := make(map[int32]int32, len(tableDef.Cols))
+	generatedColIdxs := make([]int, 0)
 	pkCols := make(map[string]struct{})
 	// External tables have no primary key (not even a fake hidden one).
 	if tableDef.Pkey != nil {
@@ -919,8 +1003,10 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	columnExprs := make(map[int32]*plan.Expr, len(tableDef.Cols))
 	materializeCols := make(map[int32]bool, len(tableDef.Cols))
 	materializeOrder := make([]int32, 0, len(tableDef.Cols))
-	for colIdx, col := range tableDef.Cols {
+	for tableIdx, col := range tableDef.Cols {
+		colIdx := int32(len(projectList))
 		if oldExpr, exists := insertColToExpr[col.Name]; exists {
+			colIdxToProjPos[int32(tableIdx)] = colIdx
 			projectList = append(projectList, oldExpr)
 			columnExprs[int32(colIdx)] = oldExpr
 			if exprHasLocalColumnRef(oldExpr) {
@@ -938,6 +1024,13 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			// 	}
 			// }
 			// }
+		} else if col.GeneratedCol != nil {
+			// Generated columns are omitted from the source value scan, including
+			// the no-key ODKU fallback. Materialize them here from the complete
+			// target projection so the legacy writer receives the same final row
+			// image as the modern INSERT path.
+			generatedColIdxs = append(generatedColIdxs, tableIdx)
+			projectList = append(projectList, nil)
 		} else {
 			defExpr, err := getDefaultExpr(builder.GetContext(), col)
 			if err != nil {
@@ -950,6 +1043,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				}
 			}
 
+			colIdxToProjPos[int32(tableIdx)] = colIdx
 			projectList = append(projectList, defExpr)
 			columnExprs[int32(colIdx)] = defExpr
 			if exprHasLocalColumnRef(defExpr) {
@@ -957,6 +1051,22 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				materializeOrder = append(materializeOrder, int32(colIdx))
 			}
 		}
+	}
+	for _, projectPos := range generatedColIdxs {
+		col := tableDef.Cols[projectPos]
+		genExpr := builder.applyGeneratedColumnAssignmentCast(
+			DeepCopyExpr(col.GeneratedCol.Expr), builder.isInsertIgnore)
+		// Keep the raw generated expression for the materialization helper. The
+		// projected copy is inlined for the legacy row image, but replacing the
+		// raw expression itself would hide volatile default dependencies.
+		columnExprs[int32(projectPos)] = genExpr
+		projectExpr := DeepCopyExpr(genExpr)
+		inlineGeneratedColExpr(projectExpr, colIdxToProjPos, projectList)
+		projectList[projectPos] = projectExpr
+		// Publish the generated column only after its expression is materialized.
+		// This preserves the order for chained generated columns and avoids
+		// inlining a placeholder nil expression into a later generated column.
+		colIdxToProjPos[int32(projectPos)] = int32(projectPos)
 	}
 
 	// append ProjectNode
@@ -1001,7 +1111,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	// rewrite to : select _t.*, t1.a, t1.b，t1.c, t1.row_id from
 	//				(select * from values (1,1,3),(2,2,3)) _t(a,b,c) left join t1 on _t.a=t1.a or _t.b=t1.b
 	onDuplicateUpdate := stmt.GetOnDuplicateUpdate()
-	if len(onDuplicateUpdate) > 0 {
+	if stmt.RowAlias == nil && len(onDuplicateUpdate) > 0 {
 
 		rightTableDef := CloneTableDefForPlan(tableDef, true)
 		rightObjRef := DeepCopyObjectRef(tableObjRef)
@@ -2018,6 +2128,7 @@ func buildValueScan(
 	updateColumns []string,
 	colToIdx map[string]int,
 	OnDuplicateUpdate tree.UpdateExprs,
+	rowAlias *tree.AliasClause,
 ) ([]string, error) {
 	var err error
 	effectiveColumns := append([]string(nil), updateColumns...)
@@ -2217,14 +2328,33 @@ func buildValueScan(
 	if builder.isPrepareStatement && len(OnDuplicateUpdate) > 0 {
 		// The no-key fallback does not execute the ODKU action, but its complete
 		// expression still has to be bound so every parameter marker is retained.
-		// Use the ODKU binder here because the fallback value scan has no FROM
-		// binding for target-table column references such as `id + ?`.
-		odkuBinder := NewOndupUpdateBinder(
-			builder.GetContext(), builder, bindCtx, 0, 0, tableDef,
-			tableDef.DbName, tableDef.Name, builder.compCtx.GetLowerCaseTableNames(),
-		)
+		// The fallback value scan has no FROM binding for target-table references;
+		// the row-alias path therefore records parameter offsets directly, while
+		// the legacy path uses the ODKU binder for expressions it does bind.
+		var odkuBinder *OndupUpdateBinder
+		if rowAlias == nil {
+			odkuBinder = NewOndupUpdateBinder(
+				builder.GetContext(), builder, bindCtx, 0, 0, tableDef,
+				tableDef.DbName, tableDef.Name, builder.compCtx.GetLowerCaseTableNames(),
+			)
+		}
+		textTyp := types.T_text.ToType()
+		paramExprType := makePlan2Type(&textTyp)
 		for _, update := range OnDuplicateUpdate {
 			if update == nil || len(update.Names) == 0 || update.Names[0] == nil || update.Expr == nil || !checkExprHasParamExpr([]tree.Expr{update.Expr}) {
+				continue
+			}
+			if rowAlias != nil {
+				if _, ok := colToIdx[update.Names[0].ColName()]; !ok {
+					return nil, moerr.NewBadFieldErrorf(builder.GetContext(),
+						"invalid input: column '%s' does not exist", update.Names[0].ColNameOrigin())
+				}
+				for _, offset := range collectParamExprOffsets(update.Expr) {
+					onUpdateExprs = append(onUpdateExprs, &plan.Expr{
+						Typ:  paramExprType,
+						Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(offset)}},
+					})
+				}
 				continue
 			}
 			col := tableDef.Cols[colToIdx[update.Names[0].ColName()]]
