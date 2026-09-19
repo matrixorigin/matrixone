@@ -139,3 +139,27 @@ Focused evidence must include:
 The design is falsified by any result change for a retained legacy identity,
 loss of a feature marker across a rewrite or protobuf round-trip, successful
 remote delivery to an older worker, or workspace that still grows with `n*m`.
+
+### Runtime acceptance boundary: scheduling versus wire compatibility
+
+The existing `disttae.Engine.QueryCandidates` policy admits only workers whose
+`CommitID` equals the producer's build commit. Actual D87 and C88 builds therefore
+cannot form a cross-commit public SQL worker set, independently of the expression
+epoch checks. Keeping only the other build Working must fail closed; changing
+reported commit IDs or protocol versions is not an acceptable test workaround.
+This change does not relax that scheduling policy.
+
+Consequently the mixed-binary acceptance evidence has separate obligations:
+
+- Public SQL: retain compatible local execution, reject unavailable placement,
+  and prove prepared reuse and persisted authoring/reload/restart/rollback gates.
+- Old-produced wire compatibility: a probe built from the actual D87 source must
+  use D's scope encoder and transport to execute a non-NULL legacy expression on
+  the actual C88 receiver, with an independently known exact result. This is not
+  an old-to-new public SQL scheduling claim.
+- New sender and receiver boundaries: probe real destination UUID/address/version
+  tuples at serialization, replace and restore the destination, and exercise
+  valid positive envelopes before interpreting old-receiver rejection.
+
+All three require recorded actual binary/source identities. Unit mocks, skipped
+upgrade jobs and malformed-envelope errors cannot substitute for these results.
