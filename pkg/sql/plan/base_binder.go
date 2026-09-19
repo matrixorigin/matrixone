@@ -3851,7 +3851,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 			}
 			source := arg
 			fn := arg.GetF()
-			explicitCast, explicitPeerCast := astArgs[i].(*tree.CastExpr)
+			explicitCast, explicitPeerCast := unwrapParenExpr(astArgs[i]).(*tree.CastExpr)
 			if explicitPeerCast {
 				target, targetErr := getTypeFromAst(b.GetContext(), explicitCast.Type)
 				if targetErr != nil {
@@ -3869,15 +3869,17 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				}
 			}
 			if fn != nil && fn.Func != nil && strings.EqualFold(fn.Func.GetObjName(), "cast") && len(fn.Args) > 0 &&
-				(!explicitPeerCast || makeTypeByPlan2Expr(arg).Oid.IsMySQLString()) &&
+				!explicitPeerCast && !fn.GetSyntaxExplicitCast() &&
 				!preparedExprContainsParam(fn.Args[0]) &&
 				preparedNumericCommonOperandType(makeTypeByPlan2Expr(fn.Args[0]).Oid) {
 				source = fn.Args[0]
 			}
 			sourceType := makeTypeByPlan2Expr(source)
-			if preparedNumericCommonOperandType(sourceType.Oid) && !sourceType.Oid.IsFloat() {
-				// Preserve only a proven exact peer. Scientific FLOAT literals and
-				// explicit FLOAT casts remain source-less semantic FLOAT boundaries.
+			if preparedNumericCommonOperandType(sourceType.Oid) {
+				// Preserve the peer's semantic domain even when PREPARE coerces it
+				// into the marker's temporary TEXT envelope. Exact sources may be
+				// restored directly; FLOAT sources remain boundaries but mark the
+				// coerced peer so EXECUTE can cast it to a numeric runtime domain.
 				preparedPeerSources[i] = DeepCopyExpr(source)
 			}
 		}
@@ -5773,6 +5775,10 @@ func bindFuncExprImplByPlanExpr(
 	allowInternalFunctionArgs bool,
 ) (*plan.Expr, error) {
 	var err error
+	args, err = bindIntegerFunctionArguments(ctx, name, args)
+	if err != nil {
+		return nil, err
+	}
 	rejectIntervalArgs := rejectBoundIntervalFunctionArgs
 	if descendFunctions {
 		rejectIntervalArgs = rejectStandaloneIntervalFunctionArgs
@@ -9105,7 +9111,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 		if !typ.IsEmpty() && types.T(typ.Id).IsDecimal() {
 			return returnDecimalExpr(originString)
 		}
-		if !strings.Contains(originString, "e") {
+		if !strings.ContainsAny(originString, "eE") {
 			expr, err := returnDecimalExpr(originString)
 			if err == nil {
 				return expr, nil

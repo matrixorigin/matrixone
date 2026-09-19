@@ -181,6 +181,55 @@ func TestPreparedTimeArithmeticFillsAndExecutes(t *testing.T) {
 	}
 }
 
+func TestPreparedTimeArithmeticAsIntegerArgument(t *testing.T) {
+	for _, tc := range []struct {
+		name, source, want string
+	}{
+		{"decimal result rounds", "cast(''00:00:01.5'' as time(6)) + ?", "a.b"},
+		{"explicit double truncates", "cast(cast(''00:00:01.5'' as time(6)) + ? as double)", "a"},
+		{"explicit text uses prefix", "cast(cast(''00:00:01.5'' as time(6)) + ? as char)", "a"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+				"prepare time_integer_consumer from 'select substring_index(''a.b.c.d'',''.'',"+tc.source+")'")
+			require.NoError(t, err)
+			cached := prepared.GetDcl().GetPrepare().Plan
+			before, err := cached.Marshal()
+			require.NoError(t, err)
+			for _, input := range []struct {
+				name  string
+				param ParamValue
+				null  bool
+			}{
+				{"integer", ParamValue{Value: "0", PrepareParamKind: vector.PrepareParamInteger}, false},
+				{"null", ParamValue{Value: nil, PrepareParamKind: vector.PrepareParamNone}, true},
+				{"integer after null", ParamValue{Value: "0", PrepareParamKind: vector.PrepareParamInteger}, false},
+			} {
+				t.Run(input.name, func(t *testing.T) {
+					filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), cached, []any{input.param})
+					require.NoError(t, err)
+					proc := testutil.NewProc(t)
+					defer proc.Free()
+					query := filled.GetQuery()
+					expr := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList[0]
+					executor, err := colexec.NewExpressionExecutor(proc, expr)
+					require.NoError(t, err)
+					defer executor.Free()
+					result, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+					require.NoError(t, err)
+					require.Equal(t, input.null, result.IsNull(0))
+					if !input.null {
+						require.Equal(t, tc.want, result.GetStringAt(0))
+					}
+					after, err := cached.Marshal()
+					require.NoError(t, err)
+					require.Equal(t, before, after, "integer consumers must not mutate the cached TIME plan")
+				})
+			}
+		})
+	}
+}
+
 func TestPreparedTimeArithmeticPreservesTemporalIntegerDomain(t *testing.T) {
 	for _, op := range []string{"+", "-", "%"} {
 		t.Run(op, func(t *testing.T) {
