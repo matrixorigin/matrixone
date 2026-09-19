@@ -1202,9 +1202,10 @@ func (b *baseBinder) bindNumericExprWithCurrentContext(astExpr tree.Expr, depth 
 }
 
 type numericAstTypeScan struct {
-	strong       []Type
-	weakDecimals []Type
-	hasParam     bool
+	strong        []Type
+	temporalHints []Type
+	weakDecimals  []Type
+	hasParam      bool
 	// hasParamRef identifies an actual prepared marker in the scanned
 	// expression. hasParam is broader: scalar subqueries use it to preserve
 	// deferred numeric-context propagation even when their result type cannot
@@ -1218,6 +1219,7 @@ type numericAstTypeScan struct {
 
 func (s numericAstTypeScan) merge(other numericAstTypeScan) numericAstTypeScan {
 	s.strong = append(s.strong, other.strong...)
+	s.temporalHints = append(s.temporalHints, other.temporalHints...)
 	s.weakDecimals = append(s.weakDecimals, other.weakDecimals...)
 	s.hasParam = s.hasParam || other.hasParam
 	s.hasParamRef = s.hasParamRef || other.hasParamRef
@@ -1232,6 +1234,16 @@ func numericAstTypedOperand(typ Type) numericAstTypeScan {
 	if oid == types.T_any {
 		return numericAstTypeScan{}
 	}
+	// TIME participates in numeric arithmetic through the existing decimal
+	// coercion rules, even though it is not a numeric type to IsNumeric(). Keep
+	// the TIME expression itself typed as TIME; this hint is only used while
+	// inferring the type of a prepared marker or user variable in the same
+	// arithmetic subtree.
+	if oid == types.T_time {
+		hint := types.T_decimal64.ToType()
+		hint.Scale = typ.Scale
+		return numericAstTypeScan{temporalHints: []Type{makePlan2Type(&hint)}}
+	}
 	if !makeTypeByPlan2Type(typ).IsNumeric() {
 		return numericAstTypeScan{incompatible: true}
 	}
@@ -1245,6 +1257,62 @@ func shouldActivateWeakDecimal(strong []types.Type, outer *types.Type) bool {
 		}
 	}
 	return outer != nil && (outer.Oid.IsInteger() || outer.Oid.IsDecimal() || outer.Oid == types.T_bit)
+}
+
+func numericAstScanHasKnownType(scan numericAstTypeScan) bool {
+	// Weak decimal literals are deliberately not static types here. Their
+	// activation depends on the surrounding numeric context; treating one as
+	// known would bypass the deferred context propagation for expressions such
+	// as ? + 0.5.
+	return len(scan.strong) > 0 || len(scan.temporalHints) > 0
+}
+
+func numericAstScanSingleType(scan numericAstTypeScan) (Type, bool) {
+	if len(scan.weakDecimals) != 0 || len(scan.strong)+len(scan.temporalHints) != 1 {
+		return Type{}, false
+	}
+	if len(scan.strong) == 1 {
+		return scan.strong[0], true
+	}
+	return scan.temporalHints[0], true
+}
+
+func shouldIncludeTemporalHints(scan numericAstTypeScan, outer *types.Type) bool {
+	if len(scan.temporalHints) == 0 {
+		return false
+	}
+	// A TIME operand supplies the numeric context when no genuine numeric
+	// operand is available. In that case the hint must remain visible so a
+	// direct TIME + ? expression still selects DECIMAL64.
+	if len(scan.strong) == 0 {
+		return true
+	}
+	// Do not let a provisional TIME decimal widen an independently integral
+	// subtree. The completed integer result is coerced at the outer TIME
+	// boundary by the normal arithmetic binder.
+	integralOnly := true
+	for _, typ := range scan.strong {
+		oid := types.T(typ.Id)
+		if !oid.IsInteger() && oid != types.T_bit {
+			integralOnly = false
+			break
+		}
+	}
+	if !integralOnly {
+		return true
+	}
+	if len(scan.weakDecimals) > 0 && shouldActivateWeakDecimal(scanTypes(scan.strong), outer) {
+		return true
+	}
+	return outer != nil && (outer.Oid.IsDecimal() || outer.Oid.IsFloat())
+}
+
+func scanTypes(planTypes []Type) []types.Type {
+	typesKnown := make([]types.Type, 0, len(planTypes))
+	for _, typ := range planTypes {
+		typesKnown = append(typesKnown, makeTypeByPlan2Type(typ))
+	}
+	return typesKnown
 }
 
 func (b *baseBinder) numericAstTypesWithHint(
@@ -1508,7 +1576,7 @@ func (b *baseBinder) numericAstStaticType(
 		}
 		scan, err := b.numericAstTypesInternal(expr, depth, resolveColumn)
 		if err != nil || scan.incompatible || scan.hasUnknown ||
-			(scan.hasParam && len(scan.strong) == 0) {
+			(scan.hasParam && !numericAstScanHasKnownType(scan)) {
 			return Type{}, false, err
 		}
 		typ, ok := numericTypeFromAstScan(scan, nil)
@@ -1519,7 +1587,7 @@ func (b *baseBinder) numericAstStaticType(
 		}
 		scan, err := b.numericAstTypesInternal(expr, depth, resolveColumn)
 		if err != nil || scan.incompatible || scan.hasUnknown ||
-			(scan.hasParam && len(scan.strong) == 0) {
+			(scan.hasParam && !numericAstScanHasKnownType(scan)) {
 			return Type{}, false, err
 		}
 		typ, ok := numericTypeFromAstScan(scan, nil)
@@ -1529,19 +1597,21 @@ func (b *baseBinder) numericAstStaticType(
 			return Type{}, false, nil
 		}
 		scan, ok := resolveColumn(expr)
-		if !ok || scan.incompatible || scan.hasParam || len(scan.strong) != 1 || len(scan.weakDecimals) != 0 {
+		if !ok || scan.incompatible || scan.hasParam {
 			return Type{}, false, nil
 		}
-		return scan.strong[0], true, nil
+		typ, known := numericAstScanSingleType(scan)
+		return typ, known, nil
 	case *tree.Subquery:
 		if expr.Exists {
 			return Type{}, false, nil
 		}
 		scan, err := b.numericScalarSubqueryAstTypes(expr, depth)
-		if err != nil || scan.incompatible || scan.hasParam || len(scan.strong) != 1 || len(scan.weakDecimals) != 0 {
+		if err != nil || scan.incompatible || scan.hasParam {
 			return Type{}, false, err
 		}
-		return scan.strong[0], true, nil
+		typ, known := numericAstScanSingleType(scan)
+		return typ, known, nil
 	case *tree.FuncExpr:
 		name := numericAstFunctionName(expr)
 		if name == "" {
@@ -1567,14 +1637,16 @@ func (b *baseBinder) numericAstStaticType(
 }
 
 func numericTypeFromAstScan(scan numericAstTypeScan, outer *Type) (Type, bool) {
-	typesKnown := make([]types.Type, 0, len(scan.strong)+len(scan.weakDecimals))
-	for i := range scan.strong {
-		typesKnown = append(typesKnown, makeTypeByPlan2Type(scan.strong[i]))
-	}
+	typesKnown := scanTypes(scan.strong)
 	var outerType *types.Type
 	if outer != nil {
 		typ := makeTypeByPlan2Type(*outer)
 		outerType = &typ
+	}
+	if shouldIncludeTemporalHints(scan, outerType) {
+		for i := range scan.temporalHints {
+			typesKnown = append(typesKnown, makeTypeByPlan2Type(scan.temporalHints[i]))
+		}
 	}
 	if len(scan.weakDecimals) > 0 && shouldActivateWeakDecimal(typesKnown, outerType) {
 		for i := range scan.weakDecimals {
@@ -3417,6 +3489,10 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 			return nil, err
 		}
 		if deferredIndex && bound != nil && bound.GetF() != nil && len(bound.GetF().Args) > 0 {
+			// ELT's numeric envelope can add a second implicit cast around the
+			// marker. Keep the deferred marker on the complete function argument,
+			// not only on the inner cast, so execute-time metadata discovery can
+			// select the full-arity ELT rebind path.
 			b.markPreparedNumericFallback(bound.GetF().Args[0])
 		}
 		return bound, nil
@@ -4113,12 +4189,17 @@ func markPreparedResultCastsProvisional(
 		}
 		if i < len(astArgs) {
 			if explicitCast, ok := unwrapParenExpr(astArgs[i]).(*tree.CastExpr); ok {
-				if target, err := getTypeFromAst(ctx, explicitCast.Type); err == nil && types.T(target.Id).IsDecimal() {
-					metadata := ensurePreparedNumericMetadata(arg)
-					metadata.ProvisionalResultPeer = true
-					metadata.ProvisionalResultPeerTypeId = target.Id
-					metadata.ProvisionalResultPeerWidth = target.Width
-					metadata.ProvisionalResultPeerScale = target.Scale
+				if target, err := getTypeFromAst(ctx, explicitCast.Type); err == nil {
+					if types.T(target.Id) == types.T_time && i < len(args) && args[i] != nil {
+						markPreparedTemporalNumericPeer(arg, target)
+					}
+					if types.T(target.Id).IsDecimal() {
+						metadata := ensurePreparedNumericMetadata(arg)
+						metadata.ProvisionalResultPeer = true
+						metadata.ProvisionalResultPeerTypeId = target.Id
+						metadata.ProvisionalResultPeerWidth = target.Width
+						metadata.ProvisionalResultPeerScale = target.Scale
+					}
 				}
 			}
 		}
@@ -4138,6 +4219,28 @@ func markPreparedResultCastsProvisional(
 		// can be identical to a user-authored CAST, which remains authoritative.
 		fn.SyntaxExplicitCast = false
 		ensurePreparedNumericMetadata(arg).ProvisionalResultCast = true
+	}
+}
+
+// markPreparedTemporalNumericPeer keeps the original TIME provenance on the
+// decimal peer introduced while a prepared numeric marker is still TEXT. The
+// executable expression uses the decimal envelope, but execute-time rebinding
+// must not reinterpret an integer marker as DECIMAL128 merely because this
+// envelope has replaced the TIME operand.
+func markPreparedTemporalNumericPeer(expr *Expr, temporal Type) {
+	if expr == nil {
+		return
+	}
+	metadata := ensurePreparedNumericMetadata(expr)
+	metadata.ProvisionalResultPeer = true
+	metadata.ProvisionalResultPeerTypeId = temporal.Id
+	metadata.ProvisionalResultPeerWidth = temporal.Width
+	metadata.ProvisionalResultPeerScale = temporal.Scale
+	if literal := expr.GetLit(); literal != nil {
+		literal.Src = &Expr{
+			Typ:  temporal,
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}},
+		}
 	}
 }
 
