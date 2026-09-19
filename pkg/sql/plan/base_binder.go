@@ -2926,11 +2926,6 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 			return b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
 		})
 	}
-	if (strings.EqualFold(funcName, NamePercentileCont) || strings.EqualFold(funcName, NamePercentileDisc)) &&
-		astExpr.WindowSpec != nil {
-		return nil, moerr.NewNotSupported(b.GetContext(),
-			"ordered-set percentile window functions")
-	}
 	// Resolve ambiguous scalar numeric overloads while the statement is being
 	// prepared. The parameter itself remains a ParamRef under the selected
 	// numeric cast. ABS and SIGN record this fallback so execution can rebind
