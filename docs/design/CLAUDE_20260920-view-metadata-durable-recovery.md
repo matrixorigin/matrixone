@@ -132,6 +132,7 @@ scoped pending/fence 与 restore 修改在同一事务可见。不要为了在�
 - 命名 snapshot/时间戳 binding 遵守历史数据与租户语义，snapshot 参数不能无解释地被忽略。
 - cache 仅记录成功的查询（包括已确认不存在）；查询失败不得写入负缓存。每次 rebind 私有 cache，退出即释放。
 - INVALID 与 temporarily unavailable 区分。INVALID 不是正常 CURRENT；“本代扫描终结”与“所有 metadata 可用”不等价。
+- 首次恢复可能在生成新 metadata 前因缺列而 INVALID。此时必须把原 ViewData 中最后已知依赖写入持久图（先验证当前物理目标身份），否则以后仅恢复源表的窄 scope 没有反向入口。成功恢复再用新绑定结果替换这些边；旧格式ViewData没有依赖快照时不得反向删除已有durable边。
 
 **已批准决策 B2（保留原比较）**：completion 是否允许存在已分类 INVALID View？建议允许“恢复工作已收敛”但不允许该 View admission；这要求 #29006 按目标验证状态。若 barrier completion 定义是所有 View 可用，则 INVALID 必须阻止 C=R。应由系列合同明确选定，不能按测试方便决定。
 
@@ -196,6 +197,7 @@ scoped pending/fence 与 restore 修改在同一事务可见。不要为了在�
 - 仅在 frontier 完成后刷新目标；coordinator context 禁止旧路径在一个 refresh 事务内再次展开整个 fanout。CURRENT 必须 V 已完成；INVALID 可以使工作收敛，但 `IsCurrent` 必须返回 false。缺失表、订阅/RPC 暂时不可用保持重试；已有源表缺失绑定列的明确 ErrBadFieldError 属于本代无效定义。
 - `IsCurrent` 仅提供 catalog 证据，不替代 HAKeeper authority/response fence。所有公开 admission 开关依旧返回 false；不注册后台 goroutine、public producer 或自动 protocol advertisement。
 - 历史订阅读取借用完整 snapshot transaction（包含 logical timestamp），结构化缓存键包含租户、数据库、历史标志与完整时间戳，避免名字与拼接后缀碰撞；不能用只有 physical timestamp 的 SQL hint 代替。恢复对象重新绑定使用目标租户上下文，订阅边同时保留 publisher 物理身份和 subscriber 绑定命名空间。
+- COMPLETE 的 mutation 检查与 authority apply 在 lifecycle gates + coordinator row lock 的同一临界区完成；DDL/restore mutation 必须先取得同一锁再递增 clock，因此不能插入 clean-check 与 apply 之间。transport 使用30秒上界且不得同步重入 coordinator。若 apply 已接受而 catalog commit/response丢失，固定receipt可重放并由exact proof回收。
 - Receipt 只能来自已提交 outbox。恢复后续租不改变逻辑 receipt digest；digest 包含 mutation revision。网络失败保留槽，丢失响应可重放；线性一致的接受或退休证据才允许回收。已被新 DDL 弄脏的 completion 不再提交，只允许可信只读 readback 回收旧证据。
 - 4.0.8 独立 additive migration 与 fresh bootstrap 注册两张表；系统 restore 排除控制表，不能将控制真相回滚到业务快照。4.0.6/4.0.7 已执行的迁移不修改。
 - 真实验证使用一个必要的私有双 CN fixture：本包旧用例保留单 CN shared fixture，不能同时启动另一种 shared base；显式并存预算避免隐式破坏其资源 owner。数据量为跨越 32 行边界的最小 33 个同级 View，加两级反向依赖及同名不同租户对照。最终验证状态记录于本地证据文档，不将尚未跑完的检查写成通过。

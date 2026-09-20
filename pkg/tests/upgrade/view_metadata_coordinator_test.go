@@ -38,20 +38,24 @@ type catalogReceiptTestTransport struct {
 }
 
 func (t *catalogReceiptTestTransport) ApplyCatalogReceipt(ctx context.Context, r *pb.CatalogMetadataReceipt) (*pb.CatalogMetadataBarrierState, error) {
-	// Read through another transaction: an uncommitted marker/outbox must never
-	// be offered to this transport. This is the trusted RSM readback test seam.
-	s, err := t.coordinator.Read(ctx)
-	if err != nil {
-		return nil, err
-	}
-	present := false
-	for _, entry := range s.Outbox {
-		if entry != nil && entry.Action == r.Action && entry.RequiredGeneration == r.RequiredGeneration {
-			present = true
+	// Required/started receipts are sent outside the catalog transaction and can
+	// prove committed visibility through another CN. COMPLETE is deliberately
+	// submitted while holding the coordinator lock, so another catalog read
+	// would deadlock instead of strengthening its publication fence.
+	if r.Action != pb.CATALOG_ACTION_COMPLETE {
+		s, err := t.coordinator.Read(ctx)
+		if err != nil {
+			return nil, err
 		}
-	}
-	if !present {
-		return nil, fmt.Errorf("outbox was not committed")
+		present := false
+		for _, entry := range s.Outbox {
+			if entry != nil && entry.Action == r.Action && entry.RequiredGeneration == r.RequiredGeneration {
+				present = true
+			}
+		}
+		if !present {
+			return nil, fmt.Errorf("outbox was not committed")
+		}
 	}
 	t.calls++
 	a := &pb.CatalogMetadataArbitration{ClaimID: r.ClaimID}
@@ -271,7 +275,10 @@ func TestViewMetadataCoordinatorDurableRecovery(t *testing.T) {
 		// INVALID is terminal recovery work, not evidence that its View is usable.
 		exec("alter table recovery_sources.source_t add column y int")
 		exec("alter table recovery_sources.source_t drop column x")
-		require.NoError(t, first.Require(ctx, 4, 4, compile.ViewRecoveryScope{Database: "recovery_sources", Relation: "source_t"}))
+		// Model the first metadata recovery after default-off DDL: no durable
+		// dependency graph exists yet, only the dependency snapshot in ViewData.
+		control("delete from mo_catalog.mo_view_dependencies where account_id=0 and target_database_name in ('recovery_sources','recovery_consumers')")
+		require.NoError(t, first.Require(ctx, 4, 4, compile.ViewRecoveryScope{}))
 		publish(first)
 		invalid, err := second.Claim(ctx, 4, 4, 44, "cn-b-invalid")
 		require.NoError(t, err)
@@ -289,12 +296,25 @@ func TestViewMetadataCoordinatorDurableRecovery(t *testing.T) {
 		ok, err = first.IsCurrent(ctx, 4, 4, tenantAccount, tenantRelation)
 		require.NoError(t, err)
 		require.True(t, ok)
+		var retainedInvalidEdges int
+		require.NoError(t, db.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_view_dependencies where account_id=0 and target_database_name in ('recovery_sources','recovery_consumers') and source_database_name='recovery_sources' and source_relation_name='source_t'").Scan(&retainedInvalidEdges))
+		require.Equal(t, 1, retainedInvalidEdges, "the first INVALID pass must retain its direct reverse-discovery edge")
+		exec("alter table recovery_sources.source_t add column x bigint")
+		require.NoError(t, first.Require(ctx, 5, 5, compile.ViewRecoveryScope{Database: "recovery_sources", Relation: "source_t"}))
+		publish(first)
+		repaired, err := second.Claim(ctx, 5, 5, 55, "cn-b-invalid-repair")
+		require.NoError(t, err)
+		run(second, repaired)
+		publish(second)
+		ok, err = first.IsCurrent(ctx, 5, 5, 0, target)
+		require.NoError(t, err)
+		require.True(t, ok, "repairing only the source table must rediscover the previously INVALID View")
 		// The lowest-ID View now has a temporarily unavailable dependency. Its
 		// durable backoff must not starve the healthy Views on the next page.
 		exec("drop table recovery_sources.source_t")
-		require.NoError(t, first.Require(ctx, 5, 5, compile.ViewRecoveryScope{}))
+		require.NoError(t, first.Require(ctx, 6, 6, compile.ViewRecoveryScope{}))
 		publish(first)
-		waiting, err := first.Claim(ctx, 5, 5, 55, "cn-a-backoff")
+		waiting, err := first.Claim(ctx, 6, 6, 66, "cn-a-backoff")
 		require.NoError(t, err)
 		idle := false
 		for i := 0; i < 180; i++ {
@@ -313,35 +333,35 @@ func TestViewMetadataCoordinatorDurableRecovery(t *testing.T) {
 		require.NoError(t, db.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_view_refresh where account_id=0 and target_database_name in ('recovery_sources','recovery_consumers') and status='DISCOVERING' and failure_code=2 and next_retry_at>now()").Scan(&retrying))
 		require.Equal(t, 3, retrying)
 		publish(first)
-		require.Error(t, first.Require(ctx, 6, 6, compile.ViewRecoveryScope{Database: "recovery_sources", Relation: "source_t"}), "supersession cannot discard unfinished account work")
+		require.Error(t, first.Require(ctx, 7, 7, compile.ViewRecoveryScope{Database: "recovery_sources", Relation: "source_t"}), "supersession cannot discard unfinished account work")
 		exec("create table recovery_sources.source_t(x bigint)")
 		_, err = first.Page(ctx, waiting)
 		require.Error(t, err, "old mutation snapshot cannot continue")
-		require.NoError(t, first.Require(ctx, 6, 6, compile.ViewRecoveryScope{}))
+		require.NoError(t, first.Require(ctx, 7, 7, compile.ViewRecoveryScope{}))
 		publish(first)
-		resumed, err := second.Claim(ctx, 6, 6, 66, "cn-b-resumed")
+		resumed, err := second.Claim(ctx, 7, 7, 77, "cn-b-resumed")
 		require.NoError(t, err)
 		run(second, resumed)
 		publish(second)
 		var beforeViewRestore uint64
 		require.NoError(t, db.QueryRowContext(ctx, "select target_generation from mo_catalog.mo_view_refresh where account_id=0 and target_database_name='recovery_sources' and target_relation_name='v1'").Scan(&beforeViewRestore))
 		exec("restore table recovery_sources.v0{snapshot='recovery_snapshot'}")
-		ok, err = first.IsCurrent(ctx, 6, 6, 0, target)
+		ok, err = first.IsCurrent(ctx, 7, 7, 0, target)
 		require.NoError(t, err)
 		require.False(t, ok)
 		var restoredViewID uint64
 		require.NoError(t, db.QueryRowContext(ctx, "select rel_id from mo_catalog.mo_tables where account_id=0 and reldatabase='recovery_sources' and relname='v0'").Scan(&restoredViewID))
 		require.NotEqual(t, target, restoredViewID)
-		require.NoError(t, first.Require(ctx, 7, 7, compile.ViewRecoveryScope{Database: "recovery_sources", Relation: "v0"}))
+		require.NoError(t, first.Require(ctx, 8, 8, compile.ViewRecoveryScope{Database: "recovery_sources", Relation: "v0"}))
 		publish(first)
-		viewClaim, err := second.Claim(ctx, 7, 7, 77, "cn-b-view-restore")
+		viewClaim, err := second.Claim(ctx, 8, 8, 88, "cn-b-view-restore")
 		require.NoError(t, err)
 		run(second, viewClaim)
 		publish(second)
-		ok, err = first.IsCurrent(ctx, 7, 7, 0, restoredViewID)
+		ok, err = first.IsCurrent(ctx, 8, 8, 0, restoredViewID)
 		require.NoError(t, err)
 		require.True(t, ok)
-		ok, err = first.IsCurrent(ctx, 7, 7, 0, target)
+		ok, err = first.IsCurrent(ctx, 8, 8, 0, target)
 		require.NoError(t, err)
 		require.False(t, ok)
 		var orphanRows int
@@ -361,7 +381,7 @@ func TestViewMetadataCoordinatorDurableRecovery(t *testing.T) {
 		final, err := first.Read(ctx)
 		require.NoError(t, err)
 		require.Zero(t, final.WorkRows)
-		require.Equal(t, uint64(7), final.Completed)
+		require.Equal(t, uint64(8), final.Completed)
 		require.False(t, compile.ViewMetadataRefreshEnabled(cn0.ServiceID()))
 	}(cluster)
 }

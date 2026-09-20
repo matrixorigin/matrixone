@@ -1059,6 +1059,14 @@ func recoverPendingViewMetadataTarget(
 	failure := classifyViewRefreshFailure(refreshErr)
 	switch failure.disposition {
 	case viewRefreshMarkInvalid:
+		if failure.code == viewRefreshFailurePermanentlyInvalid || failure.code == viewRefreshFailurePlannerIncompatible {
+			// Regeneration can fail before it produces replacement dependencies.
+			// Keep the last dependency snapshot embedded in ViewData so a later
+			// narrow source restore still has a reverse edge to this INVALID View.
+			if err = persistInvalidViewDependencies(proc, pending); err != nil {
+				return 0, err
+			}
+		}
 		if err = updateViewRefreshFailure(proc, sqlExecutor, opts, pending,
 			viewRefreshStatusInvalid, failure.code, false); err != nil {
 			return 0, err
@@ -1275,6 +1283,53 @@ func nextLegacyViewScanCursor(
 	cursor.databaseName = last.databaseName
 	cursor.relationName = last.relationName
 	return cursor, true
+}
+
+func persistInvalidViewDependencies(proc *process.Process, pending *pendingViewRefresh) error {
+	engineValue := proc.GetSessionInfo().StorageEngine
+	if engineValue == nil {
+		return moerr.NewInternalError(proc.Ctx, "storage engine is unavailable")
+	}
+	originalTopContext := proc.GetTopContext()
+	targetContext := defines.AttachAccountId(originalTopContext, pending.accountID)
+	proc.ReplaceTopCtx(targetContext)
+	defer proc.ReplaceTopCtx(originalTopContext)
+
+	database, err := engineValue.Database(targetContext, pending.databaseName, proc.GetTxnOperator())
+	if err != nil {
+		return err
+	}
+	relation, err := database.Relation(targetContext, pending.relationName, nil)
+	if err != nil {
+		return err
+	}
+	if relation.GetTableID(targetContext) != pending.relationID {
+		return moerr.NewTxnNeedRetryWithDefChanged(targetContext)
+	}
+	currentDef := relation.CopyTableDef(targetContext)
+	if currentDef == nil || currentDef.ViewSql == nil {
+		return moerr.NewTxnNeedRetryWithDefChanged(targetContext)
+	}
+	var persisted plan2.ViewData
+	if err = json.Unmarshal([]byte(currentDef.ViewSql.View), &persisted); err != nil {
+		return err
+	}
+	if len(persisted.Dependencies) == 0 {
+		// Legacy ViewData has no recoverable snapshot. Do not erase any older
+		// durable edges merely because regeneration failed before recapturing it.
+		return nil
+	}
+	runner := &Compile{proc: proc, e: engineValue, pn: &planpb.Plan{}}
+	target, err := runner.persistViewDependencyEdgesWithContext(
+		targetContext, database, pending.databaseName, currentDef, pending.generation)
+	if err != nil {
+		return err
+	}
+	if target.accountID != pending.accountID || target.relationID != pending.relationID ||
+		target.databaseID != pending.databaseID {
+		return moerr.NewTxnNeedRetryWithDefChanged(targetContext)
+	}
+	return nil
 }
 
 func refreshPendingView(proc *process.Process, pending *pendingViewRefresh) (bool, error) {

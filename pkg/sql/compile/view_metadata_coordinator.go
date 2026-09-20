@@ -79,7 +79,10 @@ type ViewMetadataCoordinator struct{ SQL executor.SQLExecutor }
 // CatalogReceiptTransport belongs to the authenticated control plane. The
 // response must be a linearizable read of committed RSM state, never an enqueue
 // ack, heartbeat snapshot, timeout or an unverified caller-supplied boolean.
-// No public transport/activation endpoint is installed by this lifecycle layer.
+// COMPLETE is applied while the coordinator transaction holds its mutation
+// fence; implementations must not synchronously re-enter this coordinator.
+// The call inherits the bounded coordinator context. No public transport or
+// activation endpoint is installed by this lifecycle layer.
 type CatalogReceiptTransport interface {
 	ApplyCatalogReceipt(context.Context, *pb.CatalogMetadataReceipt) (*pb.CatalogMetadataBarrierState, error)
 }
@@ -467,6 +470,21 @@ func (c ViewMetadataCoordinator) IsCurrent(ctx context.Context, epoch, generatio
 	return current, err
 }
 
+func cloneViewRecoveryReceipt(receipt *pb.CatalogMetadataReceipt) *pb.CatalogMetadataReceipt {
+	if receipt == nil {
+		return nil
+	}
+	cloned := *receipt
+	cloned.Digest = append([]byte(nil), receipt.Digest...)
+	return &cloned
+}
+
+func sameViewRecoveryReceipt(left, right *pb.CatalogMetadataReceipt) bool {
+	return left != nil && right != nil && left.MembershipEpoch == right.MembershipEpoch &&
+		left.RequiredGeneration == right.RequiredGeneration && left.ClaimID == right.ClaimID &&
+		left.Action == right.Action && bytes.Equal(left.Digest, right.Digest)
+}
+
 func viewRecoveryReceiptProven(receipt *pb.CatalogMetadataReceipt, state *pb.CatalogMetadataBarrierState) bool {
 	if state == nil || !state.EvidenceInitialized || state.Arbitration == nil {
 		return false
@@ -515,18 +533,46 @@ func (c ViewMetadataCoordinator) Publish(ctx context.Context, transport CatalogR
 		return false, nil
 	}
 	receipt := s.Outbox[slot]
+	if receipt.Action == pb.CATALOG_ACTION_COMPLETE {
+		// Re-read and submit COMPLETE while holding the lifecycle gates and the
+		// coordinator row lock. Every DDL/restore mutation takes these locks
+		// before incrementing mutation_revision, so no mutation can commit in
+		// the clean-check -> authority-apply interval.
+		published := false
+		err = c.transaction(ctx, func(_ executor.TxnExecutor, current *ViewRecoveryState, _ bool) (bool, error) {
+			r := current.Outbox[slot]
+			if r == nil {
+				return false, nil
+			}
+			if !sameViewRecoveryReceipt(r, receipt) {
+				return false, moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+			}
+			proofReceipt := cloneViewRecoveryReceipt(r)
+			var observed *pb.CatalogMetadataBarrierState
+			if current.MutationRevision != current.catalogMutation {
+				reader, ok := transport.(CatalogReceiptReader)
+				if !ok {
+					return false, moerr.NewInvalidStateNoCtx("dirty View recovery completion requires committed readback")
+				}
+				observed, err = reader.ReadCatalogBarrier(ctx)
+			} else {
+				observed, err = transport.ApplyCatalogReceipt(ctx, proofReceipt)
+			}
+			if err != nil {
+				return false, err
+			}
+			if !viewRecoveryReceiptProven(proofReceipt, observed) {
+				return false, moerr.NewInvalidStateNoCtx("View recovery receipt lacks committed acceptance or retirement proof")
+			}
+			current.Outbox[slot] = nil
+			published = true
+			return false, nil
+		})
+		return published && err == nil, err
+	}
 	callCtx, cancel := context.WithTimeout(ctx, viewMetadataRecoveryCallTimeout)
 	defer cancel()
-	var observed *pb.CatalogMetadataBarrierState
-	if receipt.Action == pb.CATALOG_ACTION_COMPLETE && s.MutationRevision != s.catalogMutation {
-		reader, ok := transport.(CatalogReceiptReader)
-		if !ok {
-			return false, moerr.NewInvalidStateNoCtx("dirty View recovery completion requires committed readback")
-		}
-		observed, err = reader.ReadCatalogBarrier(callCtx)
-	} else {
-		observed, err = transport.ApplyCatalogReceipt(callCtx, receipt)
-	}
+	observed, err := transport.ApplyCatalogReceipt(callCtx, cloneViewRecoveryReceipt(receipt))
 	if err != nil {
 		return false, err
 	}
@@ -538,7 +584,7 @@ func (c ViewMetadataCoordinator) Publish(ctx context.Context, transport CatalogR
 		if r == nil {
 			return false, nil
 		}
-		if r.MembershipEpoch != receipt.MembershipEpoch || r.RequiredGeneration != receipt.RequiredGeneration || r.ClaimID != receipt.ClaimID || !bytes.Equal(r.Digest, receipt.Digest) {
+		if !sameViewRecoveryReceipt(r, receipt) {
 			return false, moerr.NewTxnNeedRetryWithDefChangedNoCtx()
 		}
 		current.Outbox[slot] = nil
