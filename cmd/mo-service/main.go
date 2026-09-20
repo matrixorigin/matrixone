@@ -782,7 +782,7 @@ func startPythonUdfWorker(cfg *Config, stopper *stopper.Stopper) error {
 				if workerErr == nil {
 					workerErr = errors.New("process exited without an error")
 				}
-				closeErr = fmt.Errorf("Python UDF worker exited unexpectedly: %w", workerErr)
+				closeErr = fmt.Errorf("python UDF worker exited unexpectedly: %w", workerErr)
 				serviceLifecycle.notifyFatal(closeErr)
 			}
 		}

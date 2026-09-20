@@ -2221,13 +2221,21 @@ function run_tests(){
     fi
     mark_ut_stage "routing" "validate shard and package partition" finish 0
 
-    mark_ut_stage "prepare" "prepare Python UDF dependencies" start
-    prepare_python_udf_dependencies
-    local python_udf_dependency_status=$?
-    mark_ut_stage "prepare" "prepare Python UDF dependencies" finish "${python_udf_dependency_status}"
-    if (( python_udf_dependency_status != 0 )); then
-        UT_TEST_STATUS=1
-        return 0
+    # The Python UDF package belongs to the light stage. Split shards execute
+    # only their selected stage groups; preparing a repository-relative
+    # requirements file in a synthetic heavy-plan harness is both unnecessary
+    # and invalid because that harness intentionally contains no pkg tree.
+    if should_run_ut_stage light; then
+        mark_ut_stage "prepare" "prepare Python UDF dependencies" start
+        prepare_python_udf_dependencies
+        local python_udf_dependency_status=$?
+        mark_ut_stage "prepare" "prepare Python UDF dependencies" finish "${python_udf_dependency_status}"
+        if (( python_udf_dependency_status != 0 )); then
+            UT_TEST_STATUS=1
+            return 0
+        fi
+    else
+        logger "INF" "Skip Python UDF dependency preparation for UT_SHARD=${UT_SHARD}"
     fi
 
     mark_ut_stage "prepare" "clean go test cache" start
