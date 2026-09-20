@@ -193,4 +193,51 @@ execute string_source using @v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v;
 ➤ left(abcdef, ?)[12,6,0]  ¦  right(abcdef, ?)[12,6,0]  ¦  substring(abcdef, ?)[12,6,0]  ¦  substr(abcdef, 1, ?)[12,6,0]  ¦  mid(abcdef, 1, ?)[12,6,0]  ¦  lpad(x, ?, .)[-1,16383,0]  ¦  rpad(x, ?, .)[-1,16383,0]  ¦  insert(abcdef, ?, 1, X)[12,7,0]  ¦  insert(abcdef, 1, ?, X)[12,7,0]  ¦  locate(a, baaa, ?)[-5,64,0]  ¦  repeat(x, ?)[-1,16383,0]  ¦  length(space(?))[-5,64,0]  ¦  elt(?, a, b, c)[12,1,0]  𝄀
 ab  ¦  ef  ¦  bcdef  ¦  ab  ¦  ab  ¦  .x  ¦  x.  ¦  aXcdef  ¦  Xcdef  ¦  2  ¦  xx  ¦  2  ¦  b
 deallocate prepare string_source;
+select period_add(202401,d),period_diff(202402+d,202401) from sources order by id;
+➤ period_add(202401, d)[-5,64,0]  ¦  period_diff(202402 + d, 202401)[-5,64,0]  𝄀
+202404  ¦  4  𝄀
+202403  ¦  3  𝄀
+null  ¦  null
+select ceil(12.345,2.5),floor(12.345,2.5),round(12.345,2.5),truncate(12.345,2.5);
+➤ ceil(12.345, 2.5)[3,5,3]  ¦  floor(12.345, 2.5)[3,5,3]  ¦  round(12.345, 2.5)[3,5,3]  ¦  truncate(12.345, 2.5)[3,5,3]  𝄀
+12.345  ¦  12.345  ¦  12.345  ¦  12.345
+select from_days(d),week(cast('2026-09-20' as date),d),yearweek(cast('2026-09-20' as date),d),timestampadd(day,d,cast('2026-09-20' as date)) from sources order by id;
+➤ from_days(d)[91,10,0]  ¦  week(cast(2026-09-20 as date), d)[-6,8,0]  ¦  yearweek(cast(2026-09-20 as date), d)[-5,64,0]  ¦  timestampadd(day, d, cast(2026-09-20 as date))[91,10,0]  𝄀
+null  ¦  38  ¦  202638  ¦  2026-09-23  𝄀
+null  ¦  38  ¦  202638  ¦  2026-09-22  𝄀
+null  ¦  38  ¦  202638  ¦  null
+select subvector(cast('[1,2,3,4]' as vecf32(4)),d),subvector(cast('[1,2,3,4]' as vecf32(4)),1,d) from sources order by id;
+➤ subvector(cast([1,2,3,4] as vecf32(4)), d)[12,65535,0]  ¦  subvector(cast([1,2,3,4] as vecf32(4)), 1, d)[12,65535,0]  𝄀
+[3, 4]  ¦  [1, 2, 3]  𝄀
+[2, 3, 4]  ¦  [1, 2]  𝄀
+null  ¦  null
+select split_part('a.b.c','.',d),sha2('matrixone',d),regexp_instr('abcabc','b',d),regexp_replace('abcabc','b','X',d,d),regexp_substr('abcabc','b',d,d) from sources order by id;
+➤ split_part(a.b.c, ., d)[12,5,0]  ¦  sha2(matrixone, d)[12,128,0]  ¦  regexp_instr(abcabc, b, d)[-5,64,0]  ¦  regexp_replace(abcabc, b, X, d, d)[12,13,0]  ¦  regexp_substr(abcabc, b, d, d)[12,6,0]  𝄀
+c  ¦  null  ¦  5  ¦  abcabc  ¦  null  𝄀
+b  ¦  null  ¦  2  ¦  abcaXc  ¦  b  𝄀
+null  ¦  null  ¦  null  ¦  null  ¦  null
+select length(random_bytes(2.5));
+➤ length(random_bytes(2.5))[-5,64,0]  𝄀
+3
+select last_query_id(-1) is not null;
+➤ last_query_id(-1) is not null[-7,1,0]  𝄀
+1
+select split_part('a.b.c','.',cast('4294967296' as decimal(20,0)));
+invalid input: split_part: field contains out-of-range integer
+select sha2('matrixone',cast('9223372036854775807.5' as decimal(38,1)));
+Data truncation: data out of range: data type int64, integer argument
+prepare utility_source from 'select period_add(202401,?),round(12.345,?),from_days(?),week(cast("2026-09-20" as date),?),timestampadd(day,?,cast("2026-09-20" as date)),split_part("a.b.c",".",?),sha2("matrixone",?),regexp_instr("abcabc","b",?)';
+set @v=1.5;
+execute utility_source using @v,@v,@v,@v,@v,@v,@v,@v;
+➤ period_add(202401, ?)[-5,64,0]  ¦  round(12.345, ?)[3,5,3]  ¦  from_days(?)[91,10,0]  ¦  week(cast(2026-09-20 as date), ?)[-6,8,0]  ¦  timestampadd(day, ?, cast(2026-09-20 as date))[91,10,0]  ¦  split_part(a.b.c, ., ?)[12,5,0]  ¦  sha2(matrixone, ?)[12,128,0]  ¦  regexp_instr(abcabc, b, ?)[-5,64,0]  𝄀
+202403  ¦  12.350  ¦  null  ¦  38  ¦  2026-09-22  ¦  b  ¦  null  ¦  2
+set @v='2.5tail';
+execute utility_source using @v,@v,@v,@v,@v,@v,@v,@v;
+➤ period_add(202401, ?)[-5,64,0]  ¦  round(12.345, ?)[3,5,3]  ¦  from_days(?)[91,10,0]  ¦  week(cast(2026-09-20 as date), ?)[-6,8,0]  ¦  timestampadd(day, ?, cast(2026-09-20 as date))[91,10,0]  ¦  split_part(a.b.c, ., ?)[12,5,0]  ¦  sha2(matrixone, ?)[12,128,0]  ¦  regexp_instr(abcabc, b, ?)[-5,64,0]  𝄀
+202403  ¦  12.350  ¦  null  ¦  38  ¦  2026-09-22  ¦  b  ¦  null  ¦  2
+set @v=null;
+execute utility_source using @v,@v,@v,@v,@v,@v,@v,@v;
+➤ period_add(202401, ?)[-5,64,0]  ¦  round(12.345, ?)[3,5,3]  ¦  from_days(?)[91,10,0]  ¦  week(cast(2026-09-20 as date), ?)[-6,8,0]  ¦  timestampadd(day, ?, cast(2026-09-20 as date))[91,10,0]  ¦  split_part(a.b.c, ., ?)[12,5,0]  ¦  sha2(matrixone, ?)[12,128,0]  ¦  regexp_instr(abcabc, b, ?)[-5,64,0]  𝄀
+null  ¦  null  ¦  null  ¦  38  ¦  null  ¦  null  ¦  null  ¦  null
+deallocate prepare utility_source;
 drop database integer_parameter_coercion;

@@ -12484,6 +12484,30 @@ func TestSplitPart(t *testing.T) {
 	}
 }
 
+func TestSplitPartInt64(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		name      string
+		field     int64
+		want      string
+		wantError bool
+	}{
+		{name: "canonical", field: 2, want: "b"},
+		{name: "non-positive", field: -1, wantError: true},
+		{name: "legacy-bound", field: int64(math.MaxUint32) + 1, wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ft := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"a,b,c"}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{","}, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{tc.field}, nil),
+			}, NewFunctionTestResult(types.T_varchar.ToType(), tc.wantError, []string{tc.want}, nil), SplitPartInt64)
+			ok, info := ft.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
 func Test_castBinaryArrayToInt(t *testing.T) {
 	testCases := []struct {
 		name   string

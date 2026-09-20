@@ -10574,10 +10574,18 @@ func trimTrailing(src, cuts string) string {
 
 // SPLIT PART
 
-func SplitPart(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func SplitPart(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return splitPart[uint32](ivecs, result, proc, length, selectList)
+}
+
+func SplitPartInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return splitPart[int64](ivecs, result, proc, length, selectList)
+}
+
+func splitPart[T int64 | uint32](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	p1 := vector.GenerateFunctionStrParameter(ivecs[0])
 	p2 := vector.GenerateFunctionStrParameter(ivecs[1])
-	p3 := vector.GenerateFunctionFixedTypeParameter[uint32](ivecs[2])
+	p3 := vector.GenerateFunctionFixedTypeParameter[T](ivecs[2])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 
 	for i := uint64(0); i < uint64(length); i++ {
@@ -10596,10 +10604,13 @@ func SplitPart(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			}
 			continue
 		}
-		if v3 == 0 {
+		if v3 <= 0 {
 			return moerr.NewInvalidInput(proc.Ctx, "split_part: field contains non-positive integer")
 		}
-		res, isNull := SplitSingle(string(v1), string(v2), v3)
+		if uint64(v3) > math.MaxUint32 {
+			return moerr.NewInvalidInput(proc.Ctx, "split_part: field contains out-of-range integer")
+		}
+		res, isNull := SplitSingle(string(v1), string(v2), uint32(v3))
 		if err = rs.AppendBytes([]byte(res), isNull); err != nil {
 			return err
 		}

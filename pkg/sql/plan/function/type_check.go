@@ -437,22 +437,6 @@ func hexTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 	return stringDomainFixedTypeMatch(overloads, inputs)
 }
 
-// sha2TypeMatch defers an unknown hash-length operand to SHA2's string
-// overload. A parameter marker is represented as T_any during prepare, but a
-// later execution may bind a character value such as "256tail". Resolving it
-// to the BIGINT overload at prepare time would perform a strict cast before
-// SHA2 can apply MySQL's prefix conversion.
-func sha2TypeMatch(overloads []overload, inputs []types.Type) checkResult {
-	if len(inputs) == 2 && inputs[1].Oid == types.T_any {
-		for i, ov := range overloads {
-			if len(ov.args) == 2 && ov.args[0] == types.T_varchar && ov.args[1] == types.T_varchar {
-				return stringDomainMatchSingleOverload(overloads, inputs, i)
-			}
-		}
-	}
-	return stringDomainFixedTypeMatch(overloads, inputs)
-}
-
 func stringDomainMatchSingleOverload(overloads []overload, inputs []types.Type, index int) checkResult {
 	if index < 0 || index >= len(overloads) || len(overloads[index].args) != len(inputs) {
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
