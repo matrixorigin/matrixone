@@ -27,7 +27,7 @@ import (
 func TestViewsUpgradeIsScheduledForCompletedV406Tenants(t *testing.T) {
 	require.Equal(t, "4.0.7", Handler.Metadata().Version)
 	require.Equal(t, "4.0.6", Handler.Metadata().MinUpgradeVersion)
-	require.Equal(t, int64(defines.MORPCVersion89), Handler.Metadata().RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion91), Handler.Metadata().RequiredProtocolVersion)
 	require.Len(t, tenantUpgEntries, 1)
 
 	entry := tenantUpgEntries[0]
@@ -35,11 +35,11 @@ func TestViewsUpgradeIsScheduledForCompletedV406Tenants(t *testing.T) {
 	require.Equal(t, "VIEWS", entry.TableName)
 	require.Equal(t, versions.MODIFY_VIEW, entry.UpgType)
 	require.Equal(t, sysview.InformationSchemaViewsDDL, entry.UpgSql)
-	require.Equal(t, int64(defines.MORPCVersion89), entry.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion91), entry.RequiredProtocolVersion)
 }
 
 func TestViewsUpgradeBlocksBeforeDropOnOldCN(t *testing.T) {
-	for _, peer := range []int64{defines.MORPCVersion88, defines.MORPCVersion89} {
+	for _, peer := range []int64{defines.MORPCVersion90, defines.MORPCVersion91} {
 		t.Run(fmt.Sprintf("peer-%d", peer), func(t *testing.T) {
 			var executed []string
 			txn := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
@@ -56,8 +56,8 @@ func TestViewsUpgradeBlocksBeforeDropOnOldCN(t *testing.T) {
 				return false, nil
 			}
 			err := entry.Upgrade(txn, 0)
-			if peer < defines.MORPCVersion89 {
-				require.ErrorContains(t, err, "requires all CNs to support protocol version 89")
+			if peer < defines.MORPCVersion91 {
+				require.ErrorContains(t, err, "requires all CNs to support protocol version 91")
 				require.Empty(t, executed)
 			} else {
 				require.NoError(t, err)
