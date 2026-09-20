@@ -2599,6 +2599,19 @@ class _HandlerQuota:
             return dict(self._account_counts), dict(self._owner_counts)
 
 
+class _HandlerCleanupPending(Exception):
+    """Transfer a session whose cleanup failed, preserving the primary error.
+
+    Callers must retain ``session`` until close succeeds. Exchanges hand it to
+    their bounded cleanup owner; standalone helper callers own the retry.
+    """
+
+    def __init__(self, error: BaseException, session):
+        super().__init__(str(error))
+        self.error = error
+        self.session = session
+
+
 class _HandlerProcessSession:
     """One handler child reused only inside a bounded invocation burst."""
 
@@ -2704,7 +2717,7 @@ class _HandlerProcessSession:
             os.set_blocking(stdin_fd, False)
             os.set_blocking(response_read_fd, False)
             self._selector.register(response_read_fd, selectors.EVENT_READ, "response")
-        except Exception:
+        except Exception as error:
             for fd in (
                 locals().get("response_write_fd", -1),
                 locals().get("parent_watch_read_fd", -1),
@@ -2715,13 +2728,12 @@ class _HandlerProcessSession:
                         os.close(fd)
                     except OSError:
                         pass
-            # Preserve the construction failure.  Cleanup is best effort and
-            # must not hide the contract error that caused session creation
-            # to fail.
             try:
                 self.close()
             except Exception:
-                pass
+                # __init__ never returns on this path, so the assignment in
+                # the caller cannot publish us. Transfer ownership explicitly.
+                raise _HandlerCleanupPending(error, self) from error
             raise
 
     @property
@@ -2991,20 +3003,26 @@ def _run_handler_process(
     context, request: Dict[str, Any], timeout_seconds: float,
     execution_slots: Optional[threading.BoundedSemaphore] = None,
 ) -> bytes:
+    # Construction failures already transfer their pending session in
+    # _HandlerCleanupPending. This standalone helper has no server reaper;
+    # its caller must retain that exception and retry session.close().
     session = _HandlerProcessSession(execution_slots)
     try:
         result = session.run(context, request, timeout_seconds)
-    except BaseException:
+    except BaseException as error:
         # Preserve the handler/transport failure as the primary diagnosis.
         # Cleanup is still mandatory, but a close failure must not replace a
         # deadline, user-code, or protocol error and hide the actual cause.
         try:
             session.close()
         except Exception:
-            logging.exception("Python UDF handler cleanup failed after an execution error")
+            raise _HandlerCleanupPending(error, session) from error
         raise
     else:
-        session.close()
+        try:
+            session.close()
+        except Exception as error:
+            raise _HandlerCleanupPending(error, session) from error
         return result
 
 
@@ -3812,12 +3830,16 @@ class RoutineFlightServer(_FlightServerBase):
                         # admission and all input validation still happen
                         # before a handler slot is acquired.
                         owner_id = _handler_quota_owner(payload)
-                        handler_session = _HandlerProcessSession(
-                            self._handler_slots,
-                            handler_quota=self._handler_quota,
-                            account_id=key[0],
-                            owner_id=owner_id,
-                        )
+                        try:
+                            handler_session = _HandlerProcessSession(
+                                self._handler_slots,
+                                handler_quota=self._handler_quota,
+                                account_id=key[0],
+                                owner_id=owner_id,
+                            )
+                        except _HandlerCleanupPending as pending:
+                            handler_session = pending.session
+                            raise pending.error from None
                     execution_request = {
                         "source": source,
                         "handler": handler_name,

@@ -5076,7 +5076,11 @@ func doDropFunction(ctx context.Context, ses *Session, df *tree.DropFunction, rm
 				// overloads would be indistinguishable and DROP could remove the
 				// wrong immutable identity.  A non-current body is left on the
 				// logical path so an old demo can still be explicitly removed.
-				if !pythonDropSignatureMatches(df.Args, argstr) {
+				body, err := erArray[0].GetString(ctx, i, 2)
+				if err != nil {
+					return err
+				}
+				if !pythonDropSignatureMatches(df.Args, body) {
 					continue
 				}
 				handleArgMatch := func() (rtnErr error) {

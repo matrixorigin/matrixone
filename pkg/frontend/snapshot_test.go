@@ -1814,7 +1814,7 @@ func TestRecreateUserDefinedFunctionCatalogPreservesCurrentSchema(t *testing.T) 
 		bh := &backgroundExecTest{}
 		bh.init()
 		ctx := defines.AttachAccountId(t.Context(), sourceAccount)
-		require.NoError(t, recreateTable(ctx, "", bh, snapshotName, currentUDFTable, sourceAccount, snapshotTS))
+		require.NoError(t, recreateTable(ctx, "", bh, snapshotName, currentUDFTable, sourceAccount, snapshotTS, false))
 		require.Contains(t, bh.executedSQLs[len(bh.executedSQLs)-1],
 			" select "+userDefinedFunctionCatalogSourceColumns+" from ")
 	})
@@ -1912,7 +1912,7 @@ func TestRecreatePythonFunctionRevisionCatalogPreservesCurrentSchema(t *testing.
 		bh.init()
 		bh.sql2result[validationSQL] = &MysqlResultSet{}
 		ctx := defines.AttachAccountId(t.Context(), sourceAccount)
-		require.NoError(t, recreateTable(ctx, "", bh, snapshotName, currentTable, sourceAccount, snapshotTS))
+		require.NoError(t, recreateTable(ctx, "", bh, snapshotName, currentTable, sourceAccount, snapshotTS, false))
 		require.Equal(t, []string{
 			dropTableIfExistsSQL(moCatalog, currentTable.tblName),
 			MoCatalogMoFunctionRevisionDDL,
@@ -1925,7 +1925,7 @@ func TestRecreatePythonFunctionRevisionCatalogPreservesCurrentSchema(t *testing.
 		bh := &backgroundExecTest{}
 		bh.init()
 		ctx := defines.AttachAccountId(t.Context(), sourceAccount)
-		require.NoError(t, recreateTable(ctx, "", bh, snapshotName, legacyTable, sourceAccount, snapshotTS))
+		require.NoError(t, recreateTable(ctx, "", bh, snapshotName, legacyTable, sourceAccount, snapshotTS, false))
 		require.Equal(t, []string{
 			dropTableIfExistsSQL(moCatalog, legacyTable.tblName),
 			MoCatalogMoFunctionRevisionDDL,
@@ -1938,7 +1938,7 @@ func TestRecreatePythonFunctionRevisionCatalogPreservesCurrentSchema(t *testing.
 		bh.init()
 		bh.sql2result[validationSQL] = &MysqlResultSet{}
 		ctx := defines.AttachAccountId(t.Context(), sourceAccount)
-		require.NoError(t, recreateTable(ctx, "", bh, snapshotName, currentTable, targetAccount, snapshotTS))
+		require.NoError(t, recreateTable(ctx, "", bh, snapshotName, currentTable, targetAccount, snapshotTS, false))
 		require.Equal(t, []string{
 			dropTableIfExistsSQL(moCatalog, currentTable.tblName),
 			MoCatalogMoFunctionRevisionDDL,
