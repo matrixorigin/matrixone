@@ -30,6 +30,9 @@ x-mo-common: &mo-common
 
 x-python-udf-worker: &python-udf-worker
     image: matrixorigin/mo-python-udf-worker:latest
+    # The image is built by python-udf-worker-image in this Compose project.
+    # Do not race that local build with an unauthenticated registry pull.
+    pull_policy: never
     restart: on-failure
     profiles:
       - launch
