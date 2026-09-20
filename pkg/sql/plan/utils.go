@@ -4125,20 +4125,31 @@ func PreparedLagLeadParamPositions(preparePlan *Plan) []int32 {
 // for predicates and expressions whose overload depends on the parameter
 // domain (for example, `? = ?` in an UPDATE filter).
 func PreparedPlanNeedsRuntimeSpecialization(preparePlan *Plan) bool {
+	needs, integerAssignments := PreparedPlanRuntimeSpecializationRequirements(preparePlan)
+	return needs || len(integerAssignments) != 0
+}
+
+// PreparedPlanRuntimeSpecializationRequirements separates general specialization
+// from direct integer assignments. When needs is false, integerAssignments lists
+// the only markers that may still need source-domain restoration. A caller with
+// current protocol types can keep ordinary integer values on the original plan;
+// callers without that evidence must use PreparedPlanNeedsRuntimeSpecialization.
+// When needs is true, specialization is required regardless of those markers.
+func PreparedPlanRuntimeSpecializationRequirements(preparePlan *Plan) (needs bool, integerAssignments []int32) {
 	if preparePlan == nil {
-		return false
+		return false, nil
 	}
 
 	scanPlan := DeepCopyPlan(preparePlan)
 	if scanPlan == nil {
-		return true
+		return true, nil
 	}
 	query := scanPlan.GetQuery()
 	if query == nil && scanPlan.GetDdl() != nil {
 		query = scanPlan.GetDdl().GetQuery()
 	}
 	if query == nil {
-		return false
+		return false, nil
 	}
 	if scanPlan.GetQuery() == nil {
 		scanPlan = &Plan{Plan: &plan.Plan_Query{Query: query}}
@@ -4158,9 +4169,10 @@ func PreparedPlanNeedsRuntimeSpecialization(preparePlan *Plan) bool {
 	if err := NewVisitPlan(scanPlan, []VisitPlanRule{rule}).Visit(context.Background()); err != nil {
 		// The scan is an optimization only. Preserve correctness if a newly
 		// added plan field cannot be visited here.
-		return true
+		return true, nil
 	}
-	return rule.needs
+	slices.Sort(rule.integerAssignments)
+	return rule.needs, slices.Compact(rule.integerAssignments)
 }
 
 // PreparedPlanNeedsRuntimeTextComparisonSpecialization reports whether the
@@ -4316,10 +4328,11 @@ func preparedDMLWriteExpressions(query *plan.Query) map[*plan.Expr]struct{} {
 }
 
 type preparedRuntimeSpecializationScanRule struct {
-	directResult bool
-	needs        bool
-	skipExprs    map[*plan.Expr]struct{}
-	seen         map[*plan.Expr]struct{}
+	directResult       bool
+	needs              bool
+	integerAssignments []int32
+	skipExprs          map[*plan.Expr]struct{}
+	seen               map[*plan.Expr]struct{}
 }
 
 type preparedRuntimeTextComparisonScanRule struct {
@@ -4555,14 +4568,14 @@ func (rule *preparedRuntimeSpecializationScanRule) scanExpr(expr *plan.Expr, roo
 	if expr == nil || rule.needs {
 		return
 	}
-	if _, ok := directIntegerAssignmentParam(expr); ok {
-		rule.needs = true
-		return
-	}
 	if _, ok := rule.seen[expr]; ok {
 		return
 	}
 	rule.seen[expr] = struct{}{}
+	if pos, ok := directIntegerAssignmentParam(expr); ok {
+		rule.integerAssignments = append(rule.integerAssignments, int32(pos))
+		return
+	}
 
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_P:
