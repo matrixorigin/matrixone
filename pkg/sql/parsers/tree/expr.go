@@ -1022,6 +1022,7 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 	}
 	isConvertUsing := !node.IsGeneric && strings.EqualFold(funcName, "convert") && len(node.Exprs) == 2
 	isExtract := !node.IsGeneric && strings.EqualFold(funcName, "extract") && len(node.Exprs) == 2
+	isListAgg := !node.IsGeneric && strings.EqualFold(funcName, "listagg")
 	isGroupConcat := !node.IsGeneric && (strings.EqualFold(funcName, "group_concat") ||
 		strings.EqualFold(node.Func.FunctionReference.(*UnresolvedName).ColName(), "group_concat"))
 	if isConvertUsing {
@@ -1035,6 +1036,10 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 	} else if isExtract {
 		node.Exprs[0].Format(ctx)
 		ctx.WriteString(" from ")
+		node.Exprs[1].Format(ctx)
+	} else if isListAgg && len(node.Exprs) == 2 {
+		node.Exprs[0].Format(ctx)
+		ctx.WriteString(", ")
 		node.Exprs[1].Format(ctx)
 	} else if isGroupConcat && len(node.Exprs) > 0 {
 		// The parser stores GROUP_CONCAT's separator as the final expression so
