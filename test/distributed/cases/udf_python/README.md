@@ -49,6 +49,11 @@ The cases keep the data sets small and target contract boundaries:
   SELECT, and DELETE atomically without publishing partial changes.
 - `revision_lifecycle.sql` checks create, immutable-revision replacement,
   prepared-plan invalidation, drop, and recreate on the same SQL signature.
+- `overload_namespace.sql` checks cross-session overload changes invalidate
+  prepared/cache plans and DROP distinguishes exact decimal scales.
+- `snapshot_restore.sql` restores revision A into a different account after
+  replacing the source with revision B, checking exact catalog bytes, execution,
+  account-scoped artifact publication, a SQL UDF control and teardown.
 - `vector_mode.sql` checks Arrow VECTOR handlers, zero-argument batch shape,
   NULL policies, and handler validation during create and replace.
 - `arrow_compute_arithmetic.sql` checks `pyarrow.compute` arithmetic,
