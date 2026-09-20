@@ -382,10 +382,16 @@ func genViewTableDef(
 	}
 	persistedCreateSQL := rootSQL
 	definitionStmt := cloneTreeSelect(stmt)
-	if stableViewSQL, stableSelect, rewritten := stableViewSQLWithExpandedStarsAndSelect(ctx, stmt, viewSql, expandedSelectLists); rewritten {
-		viewSql = stableViewSQL
-		persistedCreateSQL = stableViewSQL
+	if stableViewSQL, stableSelect, rewritten := stableViewSQLWithExpandedStarsAndSelect(ctx, stmt, viewSql, expandedSelectLists); stableSelect != nil {
+		// Keep the bound, expanded SELECT for the parser-derived definition even
+		// when rootSQL contains additional statements and cannot be rewritten as a
+		// single CREATE VIEW statement. The legacy Stmt field still retains the
+		// original request for compatibility and first-statement parsing.
 		definitionStmt = stableSelect
+		if rewritten {
+			viewSql = stableViewSQL
+			persistedCreateSQL = stableViewSQL
+		}
 	}
 	if len(colNames) == 0 {
 		definitionStmt = viewSelectWithStableOutputHeadings(definitionStmt, query.Headings)
@@ -472,7 +478,7 @@ func stableViewSQLWithExpandedStarsAndSelect(
 	}
 	stmts, err := mysql.ParseWithSQLMode(ctx.GetContext(), viewSql, ctx.GetLowerCaseTableNames(), parserSQLMode)
 	if err != nil {
-		return viewSql, nil, false
+		return viewSql, stableSelect, false
 	}
 	defer func() {
 		for _, statement := range stmts {
@@ -480,7 +486,7 @@ func stableViewSQLWithExpandedStarsAndSelect(
 		}
 	}()
 	if len(stmts) != 1 {
-		return viewSql, nil, false
+		return viewSql, stableSelect, false
 	}
 
 	switch viewStmt := stmts[0].(type) {
