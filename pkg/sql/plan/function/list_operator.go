@@ -2950,9 +2950,7 @@ var supportedOperators = []FuncNew{
 			{
 				overloadId: 23,
 				args:       []types.T{types.T_array_float32},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_array_float32.ToType()
-				},
+				retType:    coalesceVectorReturnType,
 				newOp: func() executeLogicOfOverload {
 					return CoalesceStr
 				},
@@ -2960,9 +2958,7 @@ var supportedOperators = []FuncNew{
 			{
 				overloadId: 24,
 				args:       []types.T{types.T_array_float64},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_array_float64.ToType()
-				},
+				retType:    coalesceVectorReturnType,
 				newOp: func() executeLogicOfOverload {
 					return CoalesceStr
 				},
@@ -2970,9 +2966,7 @@ var supportedOperators = []FuncNew{
 			{
 				overloadId: 25,
 				args:       []types.T{types.T_array_bf16},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_array_bf16.ToType()
-				},
+				retType:    coalesceVectorReturnType,
 				newOp: func() executeLogicOfOverload {
 					return CoalesceStr
 				},
@@ -2980,9 +2974,7 @@ var supportedOperators = []FuncNew{
 			{
 				overloadId: 26,
 				args:       []types.T{types.T_array_float16},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_array_float16.ToType()
-				},
+				retType:    coalesceVectorReturnType,
 				newOp: func() executeLogicOfOverload {
 					return CoalesceStr
 				},
@@ -2990,9 +2982,7 @@ var supportedOperators = []FuncNew{
 			{
 				overloadId: 27,
 				args:       []types.T{types.T_array_int8},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_array_int8.ToType()
-				},
+				retType:    coalesceVectorReturnType,
 				newOp: func() executeLogicOfOverload {
 					return CoalesceStr
 				},
@@ -3000,9 +2990,7 @@ var supportedOperators = []FuncNew{
 			{
 				overloadId: 28,
 				args:       []types.T{types.T_array_uint8},
-				retType: func(parameters []types.Type) types.Type {
-					return types.T_array_uint8.ToType()
-				},
+				retType:    coalesceVectorReturnType,
 				newOp: func() executeLogicOfOverload {
 					return CoalesceStr
 				},

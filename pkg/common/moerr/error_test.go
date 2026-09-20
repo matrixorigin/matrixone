@@ -122,6 +122,12 @@ func TestNew_MyErrorCode(t *testing.T) {
 	err = NewOutOfRange(context.TODO(), "int8", "1111")
 	require.Equal(t, ER_DATA_OUT_OF_RANGE, err.MySQLCode())
 
+	err = NewCannotConvertString(context.TODO(), "A\\xffB", "binary", "utf8mb4")
+	require.Equal(t, ErrCannotConvertString, err.ErrorCode())
+	require.Equal(t, ER_CANNOT_CONVERT_STRING, err.MySQLCode())
+	require.Equal(t, MySQLDefaultSqlState, err.SqlState())
+	require.Equal(t, "Cannot convert string 'A\\xffB' from binary to utf8mb4", err.Error())
+
 	err = NewPreparedParamOutOfRange(context.TODO(), "unsigned integer", "EXECUTE")
 	require.Equal(t, ErrPreparedParamOutOfRange, err.ErrorCode())
 	require.Equal(t, ER_DATA_OUT_OF_RANGE, err.MySQLCode())

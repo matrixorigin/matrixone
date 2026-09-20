@@ -437,38 +437,33 @@ func hexTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 	return stringDomainFixedTypeMatch(overloads, inputs)
 }
 
-func stringDomainMatchSingleOverload(overloads []overload, inputs []types.Type, index int) checkResult {
-	if index < 0 || index >= len(overloads) || len(overloads[index].args) != len(inputs) {
-		return newCheckResultWithFailure(failedFunctionParametersWrong)
-	}
-
-	ov := overloads[index]
-	targets := make([]types.Type, len(inputs))
-	needsCast := false
-	for i, expected := range ov.args {
-		if expected.IsMySQLString() && inputs[i].Oid.IsMySQLString() {
-			targets[i] = inputs[i]
-			continue
-		}
-		status, _ := tryToMatch([]types.Type{inputs[i]}, []types.T{expected})
-		if status == matchFailed {
-			return newCheckResultWithFailure(failedFunctionParametersWrong)
-		}
-		if status == matchByCast {
-			needsCast = true
-			targets[i] = expected.ToType()
-			if expected == types.T_varchar && !inputs[i].Oid.IsMySQLString() {
-				targets[i] = formattedScalarStringType(inputs[i])
+// spatialDistanceTypeMatch keeps the historical integer third argument for
+// ST_DISTANCE while making a statically string-backed third argument select
+// the MySQL length-unit overload. fixedTypeMatch treats both conversions as
+// equally valid and then lets registration order choose the SRID overload,
+// which makes a TEXT column containing "kilometre" fail at execution time.
+// T_any remains ambiguous and intentionally follows the legacy SRID overload;
+// the prepared execution rebinder can select the unit overload once the value
+// domain is known.
+func spatialDistanceTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	// The two-argument Fréchet/Hausdorff contracts were corrected to use
+	// geodetic meters for SRID 4326. Keep overloads 0/1 as the historical
+	// planar identities for old serialized plans, and select the new 4/5
+	// identities for newly bound SQL. ST_DISTANCE has no such two-argument
+	// replacement, so the shape check below leaves it on the ordinary matcher.
+	if len(inputs) == 2 {
+		for i := 4; i < len(overloads); i++ {
+			if len(overloads[i].args) == 2 &&
+				overloads[i].args[0] == inputs[0].Oid &&
+				overloads[i].args[1] == inputs[1].Oid {
+				return newCheckResultWithSuccess(i)
 			}
-			SetTargetScaleFromSource(&inputs[i], &targets[i])
-		} else {
-			targets[i] = inputs[i]
 		}
 	}
-	if needsCast {
-		return newCheckResultWithCast(index, targets)
+	if len(inputs) == 3 && inputs[2].Oid.IsMySQLString() {
+		return stringDomainFixedTypeMatch(overloads, inputs)
 	}
-	return newCheckResultWithSuccess(index)
+	return fixedTypeMatch(overloads, inputs)
 }
 
 // crc32TypeMatch retains CRC32's historical acceptance of every varlen type
