@@ -122,7 +122,7 @@ func isGroupConcatAggregateExpr(astExpr tree.Expr) bool {
 		return false
 	}
 	name := funcExpr.FuncName.Compare()
-	return strings.EqualFold(name, NameGroupConcat)
+	return strings.EqualFold(name, NameGroupConcat) || strings.EqualFold(name, "listagg")
 }
 
 func semanticNodeKey(node tree.NodeFormatter) string {
@@ -1279,6 +1279,7 @@ func makeWindowFrameConstValue(
 		return nil, err
 	}
 	c := rule.GetConstantValue(vec, false, 0)
+	rule.PreserveFoldedDecimalLiteralSemantics(e, c)
 
 	return &plan.Expr{
 		Typ:  *typ,
@@ -1309,6 +1310,16 @@ func resetWindowIntervalExpr(bindCtx context.Context, proc *process.Process, e *
 
 	isTimeUnit := intervalType == types.Second || intervalType == types.Minute ||
 		intervalType == types.Hour || intervalType == types.Day
+	if isTimeUnit {
+		if finalValue, negative, handled, err := normalizeDecimalIntervalValue(e1, intervalType); err != nil {
+			return nil, err
+		} else if handled {
+			if negative {
+				return nil, newWindowFrameIllegalError(bindCtx)
+			}
+			return setWindowIntervalValue(bindCtx, e, finalValue, types.MicroSecond)
+		}
+	}
 	isDecimalOrFloat := e1.Typ.Id == int32(types.T_decimal64) ||
 		e1.Typ.Id == int32(types.T_decimal128) || e1.Typ.Id == int32(types.T_float32) ||
 		e1.Typ.Id == int32(types.T_float64)
@@ -1399,7 +1410,10 @@ func setWindowIntervalValue(
 		return nil, newWindowFrameIllegalError(bindCtx)
 	}
 
-	e.Expr.(*plan.Expr_List).List.List[0] = makePlan2Int64ConstExprWithType(value)
+	list := e.Expr.(*plan.Expr_List).List.List
+	valueExpr := makePlan2Int64ConstExprWithType(value)
+	valueExpr.GetLit().DecimalLiteralRequiresV82 = decimalIntervalRequiresProtocol(list[0])
+	list[0] = valueExpr
 	e.Expr.(*plan.Expr_List).List.List[1] = makePlan2Int64ConstExprWithType(int64(intervalType))
 	return e, nil
 }

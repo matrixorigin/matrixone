@@ -98,6 +98,15 @@ func (s *HnswSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vec
 	if !ok {
 		return nil, nil, moerr.NewInternalErrorNoCtx("query is not []float32")
 	}
+	if s.Idxcfg.Usearch.Metric == metric.MetricTypeToUsearchMetric[metric.Metric_CosineDistance] {
+		// Do not expose usearch's raw cosine score to a direct/old HNSW caller. It is
+		// not the SQL cosine_distance contract for zero and subnormal vectors, and the
+		// search heap has already discarded candidates before any output transform.
+		// New SQL plans avoid this path in prepareHnswIndexContext; this guard protects
+		// direct callers and mixed-version plans until all nodes use the planner gate.
+		return nil, nil, moerr.NewInternalErrorNoCtx(
+			"hnsw cosine search is disabled because usearch scores are not SQL-compatible at the zero-vector boundary")
+	}
 
 	limit := rt.Limit
 

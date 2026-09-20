@@ -1654,14 +1654,16 @@ func initExecuteStmtParamWithResolverInSession(
 	// domain-sensitive predicates/expressions to be rebound for each binary
 	// execution.
 	if prepareStmt.runtimeSpecializationPlan != prepareStmt.PreparePlan {
-		prepareStmt.runtimeSpecializationNeeded = plan2.PreparedPlanNeedsRuntimeSpecialization(preparePlan.Plan)
+		prepareStmt.runtimeSpecializationNeeded, prepareStmt.runtimeIntegerAssignmentParams =
+			plan2.PreparedPlanRuntimeSpecializationRequirements(preparePlan.Plan)
 		prepareStmt.runtimeSpecializationPlan = prepareStmt.PreparePlan
 	}
+	binaryExecute := execCtx.input != nil && execCtx.input.isBinaryProtExecute
 	needsRuntimeSpecialization := prepareStmt.runtimeSpecializationNeeded ||
+		(!binaryExecute && len(prepareStmt.runtimeIntegerAssignmentParams) != 0) ||
 		(executionPlan != nil && executionPlan.GetDdl() != nil)
 	numParams := len(preparePlan.ParamTypes)
 	prepareStmt.refreshNumericPrefixConsumer(executionPlan, numParams)
-	binaryExecute := execCtx.input != nil && execCtx.input.isBinaryProtExecute
 	binaryLiteralPlan := binaryExecute &&
 		(executionPlan.GetDdl() != nil || executionPlan.GetDcl().GetSetVariables() != nil)
 	preparedExplain := false
@@ -1681,6 +1683,7 @@ func initExecuteStmtParamWithResolverInSession(
 	runtimeNumericOverloadCandidate := deferredNumericOverloadCandidate &&
 		executionPlan.GetQuery() != nil
 	runtimeDirectResultCandidate := false
+	runtimeIntegerAssignmentCandidate := false
 	runtimeTextComparisonSpecialization := false
 	directResultPositions := prepareStmt.directResultParamPositions
 	runtimeDirectResultPositions := make([]int32, 0, len(directResultPositions))
@@ -1699,6 +1702,13 @@ func initExecuteStmtParamWithResolverInSession(
 			return nil, nil, nil, originSQL, false, err
 		}
 		runtimeParamTypes := binaryProtocolRuntimeParamTypes(prepareStmt.ParamTypes, prepareStmt.params)
+		// EXPLAIN retains its value-driven plan, and SEND_LONG_DATA bypasses the
+		// integer packet decoder, so its text is not a canonical integer witness.
+		runtimeIntegerAssignmentCandidate = len(prepareStmt.runtimeIntegerAssignmentParams) != 0 &&
+			(preparedExplain || len(prepareStmt.getFromSendLongData) != 0 ||
+				preparedIntegerAssignmentsNeedSpecialization(
+					prepareStmt.runtimeIntegerAssignmentParams, runtimeParamTypes, prepareStmt.params))
+		needsRuntimeSpecialization = needsRuntimeSpecialization || runtimeIntegerAssignmentCandidate
 		// A text-comparison rewrite is impossible when every current packet has a
 		// numeric (or NULL) domain. Guard the plan walk before invoking it: TPCC
 		// binds only numeric parameters and executes this path for every statement.
@@ -1892,7 +1902,8 @@ func initExecuteStmtParamWithResolverInSession(
 	// the current Process vector instead of retaining the first execution's value.
 	// Pagination, window offsets, and EXPLAIN remain value-driven per execution.
 	stableRuntimeSpecializationCandidate := binaryExecute &&
-		prepareStmt.runtimeSpecializationNeeded && !runtimeTextComparisonSpecialization &&
+		(prepareStmt.runtimeSpecializationNeeded || runtimeIntegerAssignmentCandidate) &&
+		!runtimeTextComparisonSpecialization &&
 		!prepareStmt.hasPaginationParams && !prepareStmt.hasLagLeadParams && !preparedExplain
 	if runtimeNumericOverloadCandidate || runtimeNumericPrefixCandidate || runtimeConversionCandidate ||
 		stableRuntimeSpecializationCandidate {
@@ -1926,14 +1937,18 @@ func initExecuteStmtParamWithResolverInSession(
 	// one-entry runtime cache install or retrieve a compile for such a plan:
 	// a second EXECUTE with the same parameter domain but a different percentile
 	// would otherwise run the first execution's immutable aggregate config.
-	runtimeCacheEligible := shouldCachePreparedRuntimeSpecialization(preparePlan.Plan) &&
-		shouldCachePreparedRuntimeSpecialization(executionPlan)
-	if !runtimeCacheEligible {
-		prepareStmt.clearRuntimeSpecializationCache()
-	}
 	runtimeCategoryCandidate := runtimeNumericPrefixCandidate || runtimeNumericOverloadCandidate ||
 		runtimeConversionCandidate || stableRuntimeSpecializationCandidate
 	runtimeSpecializationCandidate := runtimeCategoryCandidate || runtimeDirectResultCandidate
+	// Cache eligibility walks the plan. Without a runtime candidate this cache
+	// cannot be read or installed, so leave its bounded previous category dormant
+	// instead of scanning an ordinary prepared DML on every EXECUTE.
+	runtimeCacheEligible := !runtimeSpecializationCandidate ||
+		(shouldCachePreparedRuntimeSpecialization(preparePlan.Plan) &&
+			shouldCachePreparedRuntimeSpecialization(executionPlan))
+	if !runtimeCacheEligible {
+		prepareStmt.clearRuntimeSpecializationCache()
+	}
 	cacheableRuntimeQuery := executionPlan.GetQuery() != nil && !runtimeTextComparisonSpecialization &&
 		runtimeCacheEligible &&
 		(runtimeDirectResultCandidate ||
@@ -2882,6 +2897,28 @@ func binaryProtocolRuntimeParamTypes(paramTypes []byte, params *vector.Vector) [
 		}
 	}
 	return runtimeTypes
+}
+
+// Direct integer assignments do not need a typed plan for canonical nonnegative
+// integer packets: the original assignment cast parses them exactly. Retain the
+// source-domain path for all other categories, including negative integers whose
+// assignment to an unsigned target must report a numeric range error rather than
+// a text syntax error. Only assignment markers matter; an unrelated NULL or
+// fractional sibling must not force the entire INSERT through specialization.
+func preparedIntegerAssignmentsNeedSpecialization(
+	positions []int32, runtimeTypes []types.Type, params *vector.Vector,
+) bool {
+	for _, pos := range positions {
+		if pos < 0 || int(pos) >= len(runtimeTypes) || !runtimeTypes[pos].Oid.IsInteger() ||
+			params == nil || int(pos) >= params.Length() {
+			return true
+		}
+		raw := params.GetRawBytesAt(int(pos))
+		if len(raw) == 0 || raw[0] == '-' {
+			return true
+		}
+	}
+	return false
 }
 
 func runtimeParamTypesContainText(runtimeTypes []types.Type) bool {
