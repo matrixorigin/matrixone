@@ -5012,14 +5012,16 @@ func isPreparedPercentileExpr(expr *Expr) bool {
 	return false
 }
 
-// normalizePercentileParam gives a prepared marker expression the numeric type
-// used by percentile overloads. Parameter markers have a TEXT transport type
-// while a statement is prepared, and composite arithmetic can otherwise infer
-// an unsupported exact-numeric result. The whole execution-invariant p
-// expression is therefore converted to float64 before overload selection.
+// normalizePercentileParam gives an untyped prepared marker expression a
+// numeric type accepted by the target percentile overload. Preserve supported
+// numeric expression types so exact DECIMAL configuration reaches range
+// validation and the rational percentile codec without FLOAT64 rounding.
 func normalizePercentileParam(ctx context.Context, name string, args []*Expr) error {
 	if (name != NameApproxPercentile && name != NamePercentileCont && name != NamePercentileDisc) ||
 		len(args) != 2 || !isPreparedPercentileExpr(args[1]) || rule.IsConstant(args[1], false) {
+		return nil
+	}
+	if percentileParamTypeSupported(name, makeTypeByPlan2Expr(args[1])) {
 		return nil
 	}
 
@@ -5030,6 +5032,19 @@ func normalizePercentileParam(ctx context.Context, name string, args []*Expr) er
 	}
 	args[1] = percentile
 	return nil
+}
+
+func percentileParamTypeSupported(name string, typ types.Type) bool {
+	if name == NameApproxPercentile {
+		switch typ.Oid {
+		case types.T_int32, types.T_int64, types.T_float32, types.T_float64,
+			types.T_decimal64, types.T_decimal128:
+			return true
+		default:
+			return false
+		}
+	}
+	return typ.IsNumeric() && typ.Oid != types.T_decimal256
 }
 
 // bindMixedInListComparison preserves the scalar comparison domain for a
