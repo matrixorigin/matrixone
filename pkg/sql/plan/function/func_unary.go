@@ -9776,6 +9776,7 @@ func UncompressedLength(parameters []*vector.Vector, result vector.FunctionResul
 func uncompressedLengthResult[Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, toResult func(uint32) Tr) error {
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[Tr](result)
+	var warnings process.WarningAccumulator
 
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
@@ -9795,6 +9796,9 @@ func uncompressedLengthResult[Tr types.FixedSizeTExceptStrType](parameters []*ve
 		}
 
 		if len(data) <= 4 {
+			if len(data) > 0 {
+				warnings.Add(moerr.ER_ZLIB_Z_DATA_ERROR, uncompressDataWarning)
+			}
 			if err := rs.Append(toResult(0), false); err != nil {
 				return err
 			}
@@ -9805,6 +9809,9 @@ func uncompressedLengthResult[Tr types.FixedSizeTExceptStrType](parameters []*ve
 		if err := rs.Append(toResult(originalLen), false); err != nil {
 			return err
 		}
+	}
+	if warnings.Total > 0 {
+		warnings.Flush(proc)
 	}
 
 	return nil
