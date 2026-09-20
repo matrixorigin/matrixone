@@ -6129,8 +6129,6 @@ func bindFuncExprImplByPlanExpr(
 						}
 					}
 				} else {
-					// TIMESTAMPADD(TIMESTAMP) is a DATETIME result in MySQL.
-					returnType.Oid = types.T_datetime
 					returnType.Scale = inputType.Scale
 					if unit == types.MicroSecond && returnType.Scale < 6 {
 						returnType.Scale = 6
@@ -6145,11 +6143,6 @@ func bindFuncExprImplByPlanExpr(
 			switch inputType.Oid {
 			case types.T_datetime, types.T_timestamp, types.T_time:
 				returnType.Oid, returnType.Scale, returnType.Width = inputType.Oid, inputType.Scale, inputType.Width
-				if inputType.Oid == types.T_timestamp {
-					// DATE_ADD/DATE_SUB(TIMESTAMP) also produce a wall-clock
-					// DATETIME rather than another timezone-aware TIMESTAMP.
-					returnType.Oid = types.T_datetime
-				}
 				if unit, known := dateFunctionUnitFromPlanExpr(args[2]); !known || unit == types.MicroSecond {
 					if returnType.Scale < 6 {
 						returnType.Scale = 6

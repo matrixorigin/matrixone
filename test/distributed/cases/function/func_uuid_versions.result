@@ -117,7 +117,7 @@ create table uuid_extract_ctas as select uuid_extract_version(cast('00000000-000
 desc uuid_extract_ctas;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 v  ¦  SMALLINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-ts  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+ts  ¦  TIMESTAMP(6)  ¦  YES  ¦    ¦  null  ¦    ¦
 select v is null, ts is null from uuid_extract_ctas;
 ➤ v is null[-7,1,0]  ¦  ts is null[-7,1,0]  𝄀
 1  ¦  1
@@ -126,7 +126,7 @@ create view uuid_extract_view as select uuid_extract_version(uuid_v4()) v, uuid_
 desc uuid_extract_view;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 v  ¦  SMALLINT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-ts  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+ts  ¦  TIMESTAMP(6)  ¦  YES  ¦    ¦  null  ¦    ¦
 drop view uuid_extract_view;
 select uuid_extract_timestamp(uuid_v7('2026-01-01')) = cast('2026-01-01' as timestamp);
 ➤ uuid_extract_timestamp(uuid_v7(2026-01-01)) = cast(2026-01-01 as timestamp)[-7,1,0]  𝄀

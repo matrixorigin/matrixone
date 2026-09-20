@@ -155,7 +155,7 @@ func (builder *QueryBuilder) makeUpdateChangedRowsPredicate(
 				}},
 			}
 		} else {
-			oldExpr = DeepCopyExpr(selectNode.ProjectList[oldPos])
+			oldExpr = replaceColRefs(DeepCopyExpr(selectNode.ProjectList[oldPos]), selectNodeTag, selectNode.ProjectList)
 			oldExpr.Typ = oldTyp
 		}
 		var newExpr *plan.Expr
@@ -168,7 +168,7 @@ func (builder *QueryBuilder) makeUpdateChangedRowsPredicate(
 				}},
 			}
 		} else {
-			newExpr = DeepCopyExpr(selectNode.ProjectList[newPos])
+			newExpr = replaceColRefs(DeepCopyExpr(selectNode.ProjectList[newPos]), selectNodeTag, selectNode.ProjectList)
 			newExpr, err = builder.forceAssignmentCastExpr(newExpr, oldTyp, false)
 			if err != nil {
 				return nil, err
@@ -2124,6 +2124,37 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			alias, selectNode, selectNodeTag, changedRowsOldColName2Idx, changedRowsNewColName2Idx)
 		if err != nil {
 			return 0, err
+		}
+		// Several aliases can update the same physical table. Only the physical
+		// owner has an UpdateCtx, so its changed-row marker must represent every
+		// logical alias assigned to that table. Otherwise an alias whose update
+		// survives IGNORE while the owner's update is rejected is reported as a
+		// zero-row update.
+		if isMultiTargetUpdate && physicalTargetOwner[i] == i {
+			for targetIdx, owner := range physicalTargetOwner {
+				if targetIdx == i || owner != i || len(dmlCtx.updateCol2Expr[targetIdx]) == 0 {
+					continue
+				}
+				aliasChanged, aliasErr := builder.makeUpdateChangedRowsExpr(
+					dmlCtx.aliases[targetIdx], selectNode, selectNodeTag,
+					changedRowsOldColName2Idx, changedRowsNewColName2Idx)
+				if aliasErr != nil {
+					return 0, aliasErr
+				}
+				if aliasChanged == nil {
+					continue
+				}
+				if changedRowsExpr == nil {
+					changedRowsExpr = aliasChanged
+				} else {
+					changedRowsExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "or", []*plan.Expr{
+						changedRowsExpr, aliasChanged,
+					})
+					if err != nil {
+						return 0, err
+					}
+				}
+			}
 		}
 
 		updateCtx := &plan.UpdateCtx{

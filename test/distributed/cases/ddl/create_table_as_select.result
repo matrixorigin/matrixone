@@ -827,9 +827,9 @@ drop table time06;
 drop table if exists time07;
 create table time07 as select timediff("22:22:22", col4) as timedifferent from time01;
 show create table time07;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,6,0]  ¦  Create Table[12,64,0]  𝄀
 time07  ¦  CREATE TABLE `time07` (
-  `timedifferent` time DEFAULT NULL
+  `timedifferent` time(6) DEFAULT NULL
 )
 select * from time07;
 ➤ timedifferent[92,64,0]  𝄀

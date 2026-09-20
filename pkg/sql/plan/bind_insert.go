@@ -2715,7 +2715,11 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				// missing input column.
 				replaceColRefTag(updateExpr, 0, scanTag)
 			} else {
-				updateExpr, err = binder.BindAssignmentExpr(astExpr, colDef.Typ)
+				if isNullAstExpr(astExpr) && isLegacyImplicitTimestampColumn(colDef) {
+					updateExpr, err = getDefaultExpr(builder.GetContext(), colDef)
+				} else {
+					updateExpr, err = binder.BindAssignmentExpr(astExpr, colDef.Typ)
+				}
 				if err != nil {
 					return 0, err
 				}
@@ -4710,6 +4714,10 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 // the projection the column came from, used to recognize display-value
 // projections of MySQL special types.
 func (builder *QueryBuilder) castInsertSourceColumn(projExpr, sourceExpr *plan.Expr, colDef *plan.ColDef) (*plan.Expr, error) {
+	if sourceExpr != nil && sourceExpr.GetLit() != nil && sourceExpr.GetLit().Isnull &&
+		isLegacyImplicitTimestampColumn(colDef) {
+		return getDefaultExpr(builder.GetContext(), colDef)
+	}
 	typ := colDef.Typ
 	switch {
 	case isEnumPlanType(&typ):

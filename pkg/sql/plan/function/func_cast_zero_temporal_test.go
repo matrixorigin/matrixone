@@ -620,21 +620,21 @@ func TestUnixTimestampTypedTimestampDecimalNulls(t *testing.T) {
 	require.True(t, succeed, info)
 }
 
-func TestUnixTimestampNoArgReturnsCurrentSecond(t *testing.T) {
+func TestUnixTimestampNoArgReturnsCurrentMicrosecond(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+	proc.Base.UnixTime = 1704067200123456000
+	result := vector.NewFunctionResultWrapper(types.New(types.T_decimal128, 38, 6), proc.Mp())
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(1))
 
-	before := time.Now().Unix()
 	require.NoError(t, builtInUnixTimestamp(nil, result, proc, 1, nil))
-	after := time.Now().Unix()
 
 	vec := result.GetResultVector()
 	require.False(t, vec.IsNull(0))
-	got := vector.MustFixedColNoTypeCheck[int64](vec)[0]
-	require.GreaterOrEqual(t, got, before)
-	require.LessOrEqual(t, got, after)
+	got := vector.MustFixedColNoTypeCheck[types.Decimal128](vec)[0]
+	want, err := types.ParseDecimal128("1704067200.123456", 38, 6)
+	require.NoError(t, err)
+	require.Equal(t, want, got)
 }
 
 func TestZeroTemporalIntervalAndDayNumberFunctionsReturnNull(t *testing.T) {
