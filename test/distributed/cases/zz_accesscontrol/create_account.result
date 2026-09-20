@@ -170,6 +170,7 @@ mo_configurations
 mo_database
 mo_database_defaults
 mo_foreign_keys
+mo_function_revisions
 mo_iceberg_catalogs
 mo_iceberg_maintenance_jobs
 mo_iceberg_orphan_files
