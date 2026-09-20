@@ -4897,23 +4897,16 @@ func TestRemoteCanonicalHLLAddStateGate(t *testing.T) {
 	}
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion87)
-	arg := &plan.Expr{Typ: plan.Type{
-		Id:    int32(types.T_char),
-		Width: 4,
-	}}
-	group := newGroupOp(proc, nil, []aggexec.AggFuncExecExpression{
-		aggexec.MakeAggFunctionExpression(
-			aggexec.AggIdOfHllAdd, false, []*plan.Expr{arg}, nil),
-	})
+	// The aggregate expression is exercised above with real input vectors. Keep
+	// this lifecycle check expression-free: a synthetic CHAR argument without a
+	// column reference cannot be prepared by the expression executor.
+	group := newGroupOp(proc, nil, nil)
 	require.NoError(t, group.Prepare(proc))
 	require.True(t, group.ctr.legacyCanonicalHLLAddState,
 		"Group.Prepare must apply the pre-v88 HLL_ADD compatibility mode")
 	group.Free(proc, false, nil)
 
-	merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{
-		aggexec.MakeAggFunctionExpression(
-			aggexec.AggIdOfHllAdd, false, []*plan.Expr{arg}, nil),
-	})
+	merge := newMergeGroupOp(nil)
 	require.NoError(t, merge.Prepare(proc))
 	require.True(t, merge.ctr.legacyCanonicalHLLAddState,
 		"MergeGroup.Prepare must apply the pre-v88 HLL_ADD compatibility mode")
