@@ -12484,7 +12484,7 @@ func TestSplitPart(t *testing.T) {
 	}
 }
 
-func TestSplitPartInt64(t *testing.T) {
+func TestSplitPartCanonicalInt64(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, tc := range []struct {
 		name      string
@@ -12501,7 +12501,7 @@ func TestSplitPartInt64(t *testing.T) {
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{"a,b,c"}, nil),
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{","}, nil),
 				NewFunctionTestInput(types.T_int64.ToType(), []int64{tc.field}, nil),
-			}, NewFunctionTestResult(types.T_varchar.ToType(), tc.wantError, []string{tc.want}, nil), SplitPartInt64)
+			}, NewFunctionTestResult(types.T_varchar.ToType(), tc.wantError, []string{tc.want}, nil), SplitPart)
 			ok, info := ft.Run()
 			require.True(t, ok, info)
 		})

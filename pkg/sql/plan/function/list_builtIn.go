@@ -3761,9 +3761,8 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId:        SPLIT_PART,
 		class:             plan.Function_STRICT,
 		integerParameters: []integerParameter{{position: 2, target: types.T_int64}},
-		bindingOverloads:  []int{1},
 		layout:            STANDARD_FUNCTION,
-		checkFn:           stringDomainFixedTypeMatch,
+		checkFn:           splitPartTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -3774,16 +3773,6 @@ var supportedStringBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return SplitPart
-				},
-			},
-			{
-				overloadId: 1,
-				args:       []types.T{types.T_varchar, types.T_varchar, types.T_int64},
-				retType: func(parameters []types.Type) types.Type {
-					return derivedStringReturnType(parameters, 0, types.T_varchar)
-				},
-				newOp: func() executeLogicOfOverload {
-					return SplitPartInt64
 				},
 			},
 		},

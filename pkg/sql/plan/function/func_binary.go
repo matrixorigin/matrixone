@@ -10575,11 +10575,14 @@ func trimTrailing(src, cuts string) string {
 // SPLIT PART
 
 func SplitPart(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return splitPart[uint32](ivecs, result, proc, length, selectList)
-}
-
-func SplitPartInt64(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return splitPart[int64](ivecs, result, proc, length, selectList)
+	switch ivecs[2].GetType().Oid {
+	case types.T_uint32:
+		return splitPart[uint32](ivecs, result, proc, length, selectList)
+	case types.T_int64:
+		return splitPart[int64](ivecs, result, proc, length, selectList)
+	default:
+		return moerr.NewInvalidArg(proc.Ctx, "split_part field type", ivecs[2].GetType().Oid)
+	}
 }
 
 func splitPart[T int64 | uint32](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {

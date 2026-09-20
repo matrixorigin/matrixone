@@ -437,6 +437,19 @@ func hexTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 	return stringDomainFixedTypeMatch(overloads, inputs)
 }
 
+// splitPartTypeMatch keeps the historical overload identity while allowing the
+// parameter-owned binder to pass its canonical INT64 argument to the executor.
+// Legacy serialized plans still carry UINT32 and execute through the same ID.
+func splitPartTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(overloads) != 1 || len(inputs) != 3 || inputs[2].Oid != types.T_int64 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	canonical := overloads[0]
+	canonical.args = append([]types.T(nil), canonical.args...)
+	canonical.args[2] = types.T_int64
+	return stringDomainFixedTypeMatch([]overload{canonical}, inputs)
+}
+
 func stringDomainMatchSingleOverload(overloads []overload, inputs []types.Type, index int) checkResult {
 	if index < 0 || index >= len(overloads) || len(overloads[index].args) != len(inputs) {
 		return newCheckResultWithFailure(failedFunctionParametersWrong)

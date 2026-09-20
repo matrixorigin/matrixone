@@ -73,6 +73,30 @@ func TestIntegerArgumentCanonicalBinding(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestSplitPartReusesLegacyExecutionIdentity(t *testing.T) {
+	for _, source := range []types.T{types.T_int64, types.T_uint64, types.T_float64, types.T_decimal128, types.T_varchar, types.T_any} {
+		resolved, err := GetFunctionByName(context.Background(), "split_part", []types.Type{
+			types.T_varchar.ToType(), types.T_varchar.ToType(), source.ToType(),
+		})
+		require.NoError(t, err, source)
+		_, overload := DecodeOverloadID(resolved.GetEncodedOverloadID())
+		require.Equal(t, int32(0), overload, source)
+		targets, cast := resolved.ShouldDoImplicitTypeCast()
+		if source == types.T_int64 {
+			require.False(t, cast)
+		} else {
+			require.True(t, cast)
+			require.Equal(t, types.T_int64, targets[2].Oid)
+		}
+	}
+
+	// Persisted plans created before integer-parameter migration retain UINT32.
+	_, err := GetFunctionByNameWithOverload(context.Background(), "split_part", []types.Type{
+		types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_uint32.ToType(),
+	}, 0)
+	require.NoError(t, err)
+}
+
 func TestIntegerArgumentAdditionalSignatures(t *testing.T) {
 	for _, name := range []string{"period_add", "period_diff", "ceil", "ceiling", "floor", "round", "truncate", "from_days", "week", "yearweek", "timestampadd", "subvector", "last_query_id", "random_bytes", "sha2", "split_part", "regexp_instr", "regexp_replace", "regexp_substr"} {
 		id, ok := getFunctionIdByNameWithoutErr(name)
@@ -105,7 +129,11 @@ func TestIntegerArgumentAdditionalSignatures(t *testing.T) {
 						}
 						for _, param := range fn.integerParameters {
 							if param.position < len(inputs) {
-								require.Equal(t, ov.args[param.position], targets[param.position].Oid, "retain physical narrow adapters without changing the logical integer context")
+								expected := ov.args[param.position]
+								if name == "split_part" {
+									expected = param.target
+								}
+								require.Equal(t, expected, targets[param.position].Oid, "retain physical narrow adapters without changing the logical integer context")
 							}
 						}
 					}
