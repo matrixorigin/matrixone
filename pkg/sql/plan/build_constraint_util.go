@@ -1492,6 +1492,18 @@ func forceAssignmentCastExprWithProcess(
 }
 
 func assignmentCastFunctionNameForSource(expr *Expr, targetType Type, isIgnore bool, proc *process.Process) string {
+	// Numeric-to-temporal conversions are not SQL-mode-sensitive temporal
+	// assignments. Keep their historical strict conversion path; the runtime
+	// assignment cast is needed for strings and already-typed temporal values,
+	// where ALLOW_INVALID_DATES and permissive assignment semantics apply.
+	if targetType.Id == int32(types.T_date) ||
+		targetType.Id == int32(types.T_datetime) ||
+		targetType.Id == int32(types.T_timestamp) {
+		sourceType := types.T(expr.Typ.Id)
+		if !sourceType.IsDateRelate() && !sourceType.IsMySQLString() {
+			return "cast_strict"
+		}
+	}
 	name := assignmentCastFunctionName(targetType, isIgnore, proc)
 	if types.T(targetType.Id).IsInteger() &&
 		(types.T(expr.Typ.Id).IsFloat() ||
@@ -1846,8 +1858,7 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 	if numVal.ValType == tree.P_char && numVal.String() != "" {
 		targetType := makePlan2Type(colType)
 		if targetType.Id == int32(types.T_date) ||
-			targetType.Id == int32(types.T_datetime) ||
-			targetType.Id == int32(types.T_timestamp) {
+			targetType.Id == int32(types.T_datetime) {
 			expr := MakePlan2StringConstExprWithType(numVal.String())
 			return forceAssignmentCastExprWithProcess(proc.Ctx, expr, targetType, isIgnore, proc)
 		}

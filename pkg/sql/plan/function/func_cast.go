@@ -8682,9 +8682,9 @@ func strToDate(proc *process.Process,
 	var l = uint64(length)
 	var dft types.Date
 	isBinary := from.GetSourceVector().GetIsBin()
-	assignmentCast := mode == castModeStrictStringWidth || mode == castModeAssignmentIgnore
+	assignmentCast := mode.isAssignment()
 	allowInvalidDates := false
-	if assignmentCast {
+	if assignmentCast || mode == castModeExplicit {
 		var err error
 		allowInvalidDates, err = process.ResolveAllowInvalidDates(proc)
 		if err != nil {
@@ -8830,9 +8830,9 @@ func strToDatetime(proc *process.Process,
 	var l = uint64(length)
 	var dft types.Datetime
 	isBinary := from.GetSourceVector().GetIsBin()
-	assignmentCast := mode == castModeStrictStringWidth || mode == castModeAssignmentIgnore
+	assignmentCast := mode.isAssignment()
 	allowInvalidDates := false
-	if assignmentCast {
+	if assignmentCast || mode == castModeExplicit {
 		var err error
 		allowInvalidDates, err = process.ResolveAllowInvalidDates(proc)
 		if err != nil {
@@ -8913,7 +8913,7 @@ func strToTimestamp(proc *process.Process,
 	var l = uint64(length)
 	var dft types.Timestamp
 	isBinary := from.GetSourceVector().GetIsBin()
-	assignmentCast := mode == castModeStrictStringWidth || mode == castModeAssignmentIgnore
+	assignmentCast := mode.isAssignment()
 	totype := to.GetType()
 	modeChecked := false
 	nullifyZero := false
