@@ -300,6 +300,32 @@ func TestCalendarCompareOrdersInvalidDatesByFields(t *testing.T) {
 	require.Equal(t, 1, DateDescCompare(invalid, valid))
 }
 
+func TestCalendarCompareInvalidDatesCoversAllCalendarFields(t *testing.T) {
+	cases := []struct {
+		name  string
+		left  string
+		right string
+		want  int
+	}{
+		{name: "year ascending", left: "2023-02-30", right: "2024-02-30", want: -1},
+		{name: "year descending", left: "2024-02-30", right: "2023-02-30", want: 1},
+		{name: "month ascending", left: "2024-02-30", right: "2024-04-31", want: -1},
+		{name: "month descending", left: "2024-04-31", right: "2024-02-30", want: 1},
+		{name: "day ascending", left: "2024-02-28", right: "2024-02-30", want: -1},
+		{name: "day descending", left: "2024-02-30", right: "2024-02-28", want: 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			left, err := ParseDateCastWithInvalidDates(tc.left)
+			require.NoError(t, err)
+			right, err := ParseDateCastWithInvalidDates(tc.right)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, DateAscCompare(left, right))
+			require.Equal(t, -tc.want, DateDescCompare(left, right))
+		})
+	}
+}
+
 func TestDateCompareDoesNotTreatRawValuesAsTaggedDates(t *testing.T) {
 	raw := []Date{
 		Date(0x06f3a1a8), Date(0x57b5ffc5), Date(0x717a6d60),

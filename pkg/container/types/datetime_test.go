@@ -427,6 +427,34 @@ func TestCalendarCompareOrdersInvalidDatetimesByFields(t *testing.T) {
 	require.Equal(t, 1, DatetimeDescCompare(invalid, valid))
 }
 
+func TestCalendarCompareInvalidDatetimesCoversAllClockFields(t *testing.T) {
+	cases := []struct {
+		name  string
+		left  string
+		right string
+		want  int
+	}{
+		{name: "hour ascending", left: "2024-02-30 01:00:00.000000", right: "2024-02-30 02:00:00.000000", want: -1},
+		{name: "hour descending", left: "2024-02-30 02:00:00.000000", right: "2024-02-30 01:00:00.000000", want: 1},
+		{name: "minute ascending", left: "2024-02-30 01:01:00.000000", right: "2024-02-30 01:02:00.000000", want: -1},
+		{name: "minute descending", left: "2024-02-30 01:02:00.000000", right: "2024-02-30 01:01:00.000000", want: 1},
+		{name: "second ascending", left: "2024-02-30 01:01:01.000000", right: "2024-02-30 01:01:02.000000", want: -1},
+		{name: "second descending", left: "2024-02-30 01:01:02.000000", right: "2024-02-30 01:01:01.000000", want: 1},
+		{name: "fraction ascending", left: "2024-02-30 01:01:01.000001", right: "2024-02-30 01:01:01.000002", want: -1},
+		{name: "fraction descending", left: "2024-02-30 01:01:01.000002", right: "2024-02-30 01:01:01.000001", want: 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			left, err := ParseDatetimeWithInvalidDates(tc.left, 6)
+			require.NoError(t, err)
+			right, err := ParseDatetimeWithInvalidDates(tc.right, 6)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, DatetimeAscCompare(left, right))
+			require.Equal(t, -tc.want, DatetimeDescCompare(left, right))
+		})
+	}
+}
+
 func TestDatetimeCompareKeepsPreEpochValuesInTheLegacyEncoding(t *testing.T) {
 	preEpoch := DatetimeFromClock(1900, 1, 1, 0, 0, 0, 0)
 	invalid, err := ParseDatetimeWithInvalidDates("1900-02-30 00:00:00", 6)
