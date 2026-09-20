@@ -18,7 +18,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 )
 
 // definitionFingerprintBody is the canonical executable contract.  Source is
@@ -55,15 +56,15 @@ func DefinitionFingerprint(
 		mode == "" || nullPolicy == "" || abiContract == "" ||
 		adapterVersion == "" || sdkVersion == "" || artifactDigest == "" ||
 		environmentDigest == "" {
-		return "", fmt.Errorf("python definition fingerprint has incomplete metadata")
+		return "", moerr.NewInternalErrorNoCtxf("python definition fingerprint has incomplete metadata")
 	}
 	for index, descriptor := range args {
 		if err := descriptor.Validate(); err != nil {
-			return "", fmt.Errorf("argument descriptor %d: %w", index, err)
+			return "", errutil.Wrapf(err, "argument descriptor %d", index)
 		}
 	}
 	if err := returnType.Validate(); err != nil {
-		return "", fmt.Errorf("return descriptor: %w", err)
+		return "", errutil.Wrapf(err, "return descriptor")
 	}
 	body := definitionFingerprintBody{
 		DefinitionSchemaVersion: definitionSchemaVersion,
@@ -80,7 +81,7 @@ func DefinitionFingerprint(
 	}
 	canonical, err := json.Marshal(body)
 	if err != nil {
-		return "", fmt.Errorf("marshal definition fingerprint: %w", err)
+		return "", errutil.Wrapf(err, "marshal definition fingerprint")
 	}
 	digest := sha256.Sum256(canonical)
 	return hex.EncodeToString(digest[:]), nil

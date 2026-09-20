@@ -16,7 +16,7 @@ package udf
 
 import (
 	"bufio"
-	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"os"
 	"strings"
 )
@@ -52,5 +52,5 @@ func TimezoneDatabaseVersion() (string, error) {
 			}
 		}
 	}
-	return "", fmt.Errorf("python udf: IANA timezone database version is unavailable")
+	return "", moerr.NewInternalErrorNoCtxf("python udf: IANA timezone database version is unavailable")
 }

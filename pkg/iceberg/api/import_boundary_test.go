@@ -23,13 +23,42 @@ import (
 	"testing"
 )
 
-func TestIcebergAdapterImportBoundary(t *testing.T) {
+type importBoundaryPolicy struct {
+	name               string
+	importPrefixes     []string
+	allowedDirectories []string
+	allowedFiles       []string
+}
+
+var importBoundaryPolicies = []importBoundaryPolicy{
+	{
+		name:           "Iceberg",
+		importPrefixes: []string{"github.com/apache/iceberg-go"},
+		allowedDirectories: []string{
+			"pkg/iceberg/adapter/iceberggo",
+		},
+	},
+	{
+		name: "Arrow",
+		importPrefixes: []string{
+			"github.com/apache/arrow-go",
+			"github.com/apache/arrow/go",
+		},
+		allowedDirectories: []string{
+			"pkg/iceberg/adapter/iceberggo",
+			"pkg/container/arrowbridge",
+			"pkg/sql/colexec/external/arrowio",
+			"pkg/udf/python",
+		},
+		allowedFiles: []string{
+			"pkg/sql/colexec/external/reader_arrow.go",
+			"pkg/sql/compile/compile.go",
+		},
+	},
+}
+
+func TestIcebergAndArrowImportBoundaries(t *testing.T) {
 	root := findRepoRoot(t)
-	forbidden := []string{
-		"github.com/apache/iceberg-go",
-		"github.com/apache/arrow-go",
-		"github.com/apache/arrow/go",
-	}
 	err := filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -52,20 +81,18 @@ func TestIcebergAdapterImportBoundary(t *testing.T) {
 		if parseErr != nil {
 			return parseErr
 		}
-		slashPath := filepath.ToSlash(path)
-		// Arrow has two approved MatrixOne-owned boundaries: the Iceberg
-		// adapter and the static-file ingestion bridge. Everywhere else remains
-		// forbidden so an implementation detail cannot leak into SQL layers.
-		arrowAllowed := strings.Contains(slashPath, "/pkg/iceberg/adapter/iceberggo/") ||
-			strings.Contains(slashPath, "/pkg/container/arrowbridge/") ||
-			strings.Contains(slashPath, "/pkg/sql/colexec/external/arrowio/") ||
-			strings.HasSuffix(slashPath, "/pkg/sql/colexec/external/reader_arrow.go") ||
-			strings.HasSuffix(slashPath, "/pkg/sql/compile/compile.go")
+		relativePath, relErr := filepath.Rel(root, path)
+		if relErr != nil {
+			return relErr
+		}
+		slashPath := filepath.ToSlash(relativePath)
 		for _, imp := range file.Imports {
 			importPath := strings.Trim(imp.Path.Value, `"`)
-			for _, prefix := range forbidden {
-				if strings.HasPrefix(importPath, prefix) && !arrowAllowed {
-					t.Fatalf("forbidden Iceberg/Arrow import outside adapter: %s imports %s", slashPath, importPath)
+			for _, policy := range importBoundaryPolicies {
+				if importMatchesPrefix(importPath, policy.importPrefixes) &&
+					!policy.allows(slashPath) {
+					t.Fatalf("forbidden %s import outside an approved owner: %s imports %s",
+						policy.name, slashPath, importPath)
 				}
 			}
 		}
@@ -73,6 +100,77 @@ func TestIcebergAdapterImportBoundary(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("scan imports: %v", err)
+	}
+}
+
+func (p importBoundaryPolicy) allows(relativePath string) bool {
+	for _, directory := range p.allowedDirectories {
+		if relativePath == directory || strings.HasPrefix(relativePath, directory+"/") {
+			return true
+		}
+	}
+	for _, file := range p.allowedFiles {
+		if relativePath == file {
+			return true
+		}
+	}
+	return false
+}
+
+func importMatchesPrefix(importPath string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if importPath == prefix || strings.HasPrefix(importPath, prefix+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+func TestImportBoundaryPolicies(t *testing.T) {
+	tests := []struct {
+		name         string
+		policy       importBoundaryPolicy
+		relativePath string
+		importPath   string
+		allowed      bool
+	}{
+		{
+			name:         "UDF owns Arrow but not Iceberg",
+			policy:       importBoundaryPolicies[1],
+			relativePath: "pkg/udf/python/gateway.go",
+			importPath:   "github.com/apache/arrow-go/v18/arrow/flight/gen/flight",
+			allowed:      true,
+		},
+		{
+			name:         "UDF cannot own Iceberg",
+			policy:       importBoundaryPolicies[0],
+			relativePath: "pkg/udf/python/gateway.go",
+			importPath:   "github.com/apache/iceberg-go/io",
+			allowed:      false,
+		},
+		{
+			name:         "Iceberg adapter owns Iceberg",
+			policy:       importBoundaryPolicies[0],
+			relativePath: "pkg/iceberg/adapter/iceberggo/io.go",
+			importPath:   "github.com/apache/iceberg-go/io",
+			allowed:      true,
+		},
+		{
+			name:         "sibling package is not an Arrow owner",
+			policy:       importBoundaryPolicies[1],
+			relativePath: "pkg/udf/pythonish/gateway.go",
+			importPath:   "github.com/apache/arrow-go/v18/arrow",
+			allowed:      false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			matches := importMatchesPrefix(tt.importPath, tt.policy.importPrefixes)
+			if matches && tt.policy.allows(tt.relativePath) != tt.allowed {
+				t.Fatalf("policy allowed=%v for %s importing %s, want %v",
+					tt.policy.allows(tt.relativePath), tt.relativePath, tt.importPath, tt.allowed)
+			}
+		})
 	}
 }
 
