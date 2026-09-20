@@ -153,6 +153,9 @@ func (h *ParquetHandler) getDataByRow(bat *batch.Batch, param *ExternalParam, pr
 	batchBoundary := false
 	checkpoints := make([]vector.AppendCheckpoint, len(bat.Vecs))
 	for rowsRead < batchLimit && !h.parquetBatchAtByteBudget(bat, rowsRead, param) {
+		if err := context.Cause(proc.Ctx); err != nil {
+			return err
+		}
 		toRead := nextParquetBatchRows(rowsRead, min(len(rowBuf), batchLimit-rowsRead), h.estimatedBatchSize(bat, rowsRead, param), param.maxBatchSize)
 		n, err := h.rowReader.ReadRows(rowBuf[:toRead])
 		if err != nil && !errors.Is(err, io.EOF) {
@@ -167,12 +170,20 @@ func (h *ParquetHandler) getDataByRow(bat *batch.Batch, param *ExternalParam, pr
 			eof = true
 		}
 		for _, row := range rowBuf[:n] {
+			if err := context.Cause(proc.Ctx); err != nil {
+				return err
+			}
 			for colIdx, vec := range bat.Vecs {
 				if vec != nil {
 					checkpoints[colIdx] = vec.MakeAppendCheckpoint()
 				}
 			}
 			if err := h.processRow(row, bat, param, proc); err != nil {
+				for colIdx, vec := range bat.Vecs {
+					if vec != nil {
+						vec.RollbackAppend(checkpoints[colIdx], 1)
+					}
+				}
 				return err
 			}
 			if h.parquetBatchAtByteBudget(bat, rowsRead+1, param) {
@@ -220,6 +231,12 @@ func (h *ParquetHandler) cleanup() {
 		h.rowReader.Close()
 		h.rowReader = nil
 	}
+	for _, mapper := range h.mappers {
+		if mapper != nil && mapper.rowBuffer != nil {
+			mapper.rowBuffer.Reset()
+			mapper.rowBuffer = nil
+		}
+	}
 }
 
 // processRow processes a single row
@@ -232,11 +249,11 @@ func (h *ParquetHandler) processRow(row parquet.Row, bat *batch.Batch, param *Ex
 		def := param.Cols[colIdx]
 
 		if !col.Leaf() {
-			if err := h.processNestedValue(row, col, vec, def, proc); err != nil {
+			if err := h.processNestedValue(row, col, h.mappers[colIdx], vec, def, proc); err != nil {
 				return err
 			}
 		} else {
-			if err := h.processLeafValue(row, col, vec, def, proc); err != nil {
+			if err := h.processLeafValue(row, col, vec, def, proc, h.mappers[colIdx]); err != nil {
 				return err
 			}
 		}
@@ -251,6 +268,7 @@ func (h *ParquetHandler) processLeafValue(
 	vec *vector.Vector,
 	def *plan.ColDef,
 	proc *process.Process,
+	mapper ...*columnMapper,
 ) error {
 	colIndex := col.Index()
 	var value parquet.Value
@@ -274,7 +292,73 @@ func (h *ParquetHandler) processLeafValue(
 		return appendNull(vec, def, proc)
 	}
 
+	if !canAppendParquetRowLeafDirectly(types.T(def.Typ.Id), col.Type()) {
+		if len(mapper) == 0 || mapper[0] == nil || mapper[0].mapper == nil {
+			return moerr.NewNYIf(proc.Ctx, "row mode convert to %s", types.T(def.Typ.Id).String())
+		}
+		return mapParquetRowLeafWithPageMapper(value, col, mapper[0], vec, proc)
+	}
 	return appendLeafValue(value, col, vec, def, proc)
+}
+
+func canAppendParquetRowLeafDirectly(targetType types.T, sourceType parquet.Type) bool {
+	sourceKind := sourceType.Kind()
+	simpleScalar := sourceKind == parquet.Boolean ||
+		sourceKind == parquet.Int32 ||
+		sourceKind == parquet.Int64 ||
+		sourceKind == parquet.Float ||
+		sourceKind == parquet.Double
+	switch targetType {
+	case types.T_bool,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64:
+		return simpleScalar
+	case types.T_char, types.T_varchar, types.T_text, types.T_blob,
+		types.T_binary, types.T_varbinary:
+		return isPlainStringLikeType(sourceType)
+	default:
+		return false
+	}
+}
+
+func mapParquetRowLeafWithPageMapper(
+	value parquet.Value,
+	col *parquet.Column,
+	mapper *columnMapper,
+	vec *vector.Vector,
+	proc *process.Process,
+) error {
+	if mapper.rowBuffer == nil {
+		schema := parquet.NewSchema("row", parquet.Group{col.Name(): col})
+		mapper.rowBuffer = parquet.NewBuffer(schema)
+	} else {
+		mapper.rowBuffer.Reset()
+	}
+	localValue := value.Level(0, value.DefinitionLevel(), 0)
+	if _, err := mapper.rowBuffer.WriteRows([]parquet.Row{{localValue}}); err != nil {
+		return moerr.ConvertGoError(proc.Ctx, err)
+	}
+	chunks := mapper.rowBuffer.ColumnChunks()
+	if len(chunks) != 1 {
+		return moerr.NewInternalErrorf(proc.Ctx,
+			"row mode leaf projection for %s produced %d chunks", col.Name(), len(chunks))
+	}
+	pages := chunks[0].Pages()
+	page, err := pages.ReadPage()
+	if err != nil {
+		_ = pages.Close()
+		return moerr.ConvertGoError(proc.Ctx, err)
+	}
+	mapErr := mapper.mapping(page, proc, vec)
+	closeErr := pages.Close()
+	if mapErr != nil {
+		return mapErr
+	}
+	if closeErr != nil {
+		return moerr.ConvertGoError(proc.Ctx, closeErr)
+	}
+	return nil
 }
 
 func validateParquetLeafValue(ctx context.Context, col *parquet.Column, value parquet.Value) (bool, error) {
@@ -424,6 +508,7 @@ func parquetRowValueToUint64(ctx context.Context, st parquet.Type, v parquet.Val
 func (h *ParquetHandler) processNestedValue(
 	row parquet.Row,
 	col *parquet.Column,
+	mapper *columnMapper,
 	vec *vector.Vector,
 	def *plan.ColDef,
 	proc *process.Process,
@@ -433,6 +518,9 @@ func (h *ParquetHandler) processNestedValue(
 		return err
 	}
 
+	if mapper != nil && mapper.listValuesMapper != nil {
+		return mapper.listValuesMapper(mapper, colValues, 1, proc, vec)
+	}
 	if isNestedColumnNull(colValues, col) {
 		return appendNull(vec, def, proc)
 	}

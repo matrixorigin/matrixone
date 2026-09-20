@@ -782,4 +782,33 @@ select id, a, g, payload from t45_implicit_values where id = 7;
 ➤ id[4,32,0]  ¦  a[4,32,0]  ¦  g[4,32,0]  ¦  payload[5,64,0]  𝄀
 7  ¦  70  ¦  71  ¦  700
 drop table t45_implicit_values;
+create table t46_partition_generated (
+id int, company_id int, amount decimal(10,2), tax_rate decimal(5,2),
+amount_with_tax decimal(10,2) as (amount * (1 + tax_rate)), created_date date
+) partition by range (year(created_date)) (
+partition p2022 values less than (2023),
+partition p2023 values less than (2024),
+partition pmax values less than maxvalue
+);
+insert into t46_partition_generated (id, company_id, amount, tax_rate, created_date) values
+(1,10,100.00,0.10,'2022-06-01'),
+(2,20,50.00,0.20,'2023-06-01'),
+(3,30,80.00,0.25,'2024-06-01');
+select id, company_id, amount, tax_rate, amount_with_tax, created_date
+from t46_partition_generated order by id;
+➤ id[4,32,0]  ¦  company_id[4,32,0]  ¦  amount[3,10,2]  ¦  tax_rate[3,5,2]  ¦  amount_with_tax[3,10,2]  ¦  created_date[91,64,0]  𝄀
+1  ¦  10  ¦  100.00  ¦  0.10  ¦  110.00  ¦  2022-06-01  𝄀
+2  ¦  20  ¦  50.00  ¦  0.20  ¦  60.00  ¦  2023-06-01  𝄀
+3  ¦  30  ¦  80.00  ¦  0.25  ¦  100.00  ¦  2024-06-01
+update t46_partition_generated set amount = 120.00 where id = 1;
+select id, amount, amount_with_tax from t46_partition_generated where id = 1;
+➤ id[4,32,0]  ¦  amount[3,10,2]  ¦  amount_with_tax[3,10,2]  𝄀
+1  ¦  120.00  ¦  132.00
+update t46_partition_generated set amount = null where id = 3;
+select id, amount, amount_with_tax from t46_partition_generated where id = 3;
+➤ id[4,32,0]  ¦  amount[3,10,2]  ¦  amount_with_tax[3,10,2]  𝄀
+3  ¦  null  ¦  null
+select id, amount_with_tax from t46_partition_generated where created_date < '2020-01-01' order by id;
+➤ id[4,32,0]  ¦  amount_with_tax[3,10,2]  𝄀
+drop table t46_partition_generated;
 drop database test_generated_col;

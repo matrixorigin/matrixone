@@ -155,6 +155,11 @@ func TestNewServiceClosesStoreOnReplicaStartFailure(t *testing.T) {
 	var cfg Config
 	generate := func() Config {
 		cfg = genCfg()
+		// This fixture tests duplicate-replica startup cleanup, not remote
+		// membership discovery. An unrelated service at the default 32001
+		// address could classify the injected replica as a zombie and bypass
+		// the intended StartReplica failure. Self is excluded from that probe.
+		cfg.HAKeeperClientConfig.ServiceAddresses = []string{cfg.LogServiceServiceAddr()}
 		return cfg
 	}
 	defer vfs.ReportLeakedFD(fs, t)
@@ -176,6 +181,10 @@ func TestNewServiceClosesStoreOnReplicaStartFailure(t *testing.T) {
 	require.NoError(t, createMetadataFile(cfg.DataDir, logMetadataFilename, &md, cfg.FS))
 
 	service, err = NewServiceWithRetry(generate, newFS(), nil)
+	if service != nil {
+		unexpected := service
+		t.Cleanup(func() { require.NoError(t, unexpected.Close()) })
+	}
 	require.Nil(t, service)
 	require.ErrorIs(t, err, dragonboat.ErrShardAlreadyExist)
 

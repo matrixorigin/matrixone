@@ -686,9 +686,9 @@ drop table string08;
 drop table if exists string09;
 create table string09 as select substring(col1, 3, 4), reverse(col2) from string01;
 show create table string09;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,8,0]  ¦  Create Table[12,120,0]  𝄀
 string09  ¦  CREATE TABLE `string09` (
-  `substring(col1, 3, 4)` varchar(40) DEFAULT NULL,
+  `substring(col1, 3, 4)` varchar(4) DEFAULT NULL,
   `reverse(col2)` varchar(1) DEFAULT NULL
 )
 select * from string09;
