@@ -1898,12 +1898,11 @@ function cleanup_embedded_prebuild(){
 
 function run_embedded_tests(){
     local package_scope=$1
-    local package_parallel=$2
     finish_embedded_prebuild
     run_ut_command embedded "embedded-cluster race-test packages" \
         env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" \
         go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" \
-        -p "${package_parallel}" -timeout "${UT_TIMEOUT}m" -race ${package_scope}
+        -p 1 -timeout "${UT_TIMEOUT}m" -race ${package_scope}
 }
 
 function run_tests(){
@@ -2062,7 +2061,7 @@ function run_tests(){
         local resource_heavy_test_scope
         local light_test_scope
         local package
-        local cluster_package_parallel=2
+        local cluster_prebuild_parallel=2
         local package_status=0
         local light_status=0
         local hnsw_status=0
@@ -2110,8 +2109,8 @@ function run_tests(){
             UT_TEST_STATUS=1
             return 0
         fi
-        if (( HEAVY_RACE_PARALLEL < cluster_package_parallel )); then
-            cluster_package_parallel=${HEAVY_RACE_PARALLEL}
+        if (( HEAVY_RACE_PARALLEL < cluster_prebuild_parallel )); then
+            cluster_prebuild_parallel=${HEAVY_RACE_PARALLEL}
         fi
 
         if ! plan_package=$(go list ${GO_MODULE_MODE} ./pkg/sql/plan); then
@@ -2268,7 +2267,7 @@ function run_tests(){
             (( overlap_light == 0 )) &&
             should_run_ut_stage serial && should_run_ut_stage embedded &&
             [[ -n "${cluster_test_scope}" ]]; then
-            start_embedded_prebuild "${cluster_test_scope}" "${cluster_package_parallel}"
+            start_embedded_prebuild "${cluster_test_scope}" "${cluster_prebuild_parallel}"
         fi
 
         if should_run_ut_stage serial; then
@@ -2291,14 +2290,14 @@ function run_tests(){
         fi
         cleanup_light_link_gate
 
-        # These packages link embedded clusters with substantial race-detector
-        # memory. The runner-wide file-lock admission keeps complete cluster
-        # lifecycles serialized across test binaries. Allow one additional
-        # package process to overlap linking, setup, and non-cluster work without
-        # returning to the six-way contention that starved HAKeeper.
+        # Cluster admission serializes service lifecycles, not whole test
+        # processes: a waiting race binary still retains memory, and linking or
+        # non-cluster work can contend with the admitted cluster. Serialize the
+        # complete package commands as well so HAKeeper and transactions do not
+        # compete with another embedded package's work on constrained runners.
         if should_run_ut_stage embedded; then
-            logger "INF" "Run embedded-cluster race-test packages with package parallelism ${cluster_package_parallel} and serialized cluster lifecycle admission"
-            run_embedded_tests "${cluster_test_scope}" "${cluster_package_parallel}"
+            logger "INF" "Run embedded-cluster race-test packages with package parallelism 1 and serialized cluster lifecycle admission"
+            run_embedded_tests "${cluster_test_scope}"
             cluster_status=$?
         fi
 

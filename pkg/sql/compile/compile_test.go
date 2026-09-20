@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	offsetop "github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 
@@ -452,6 +453,30 @@ func TestSQLSelectLimitResolverFailureReleasesCompileStepsTree(t *testing.T) {
 	for _, owner := range owners {
 		require.True(t, owner.released)
 	}
+}
+
+func TestCompileStepsDoesNotGiveOutputAdaptiveRetryOwnership(t *testing.T) {
+	c := NewMockCompile(t)
+	c.anal = &AnalyzeModule{}
+	input := newScope(Normal)
+	input.NodeInfo.Mcpu = 1
+	input.Proc = c.proc.NewNoContextChildProc(0)
+	input.setRootOperator(projection.NewArgument())
+	qry := &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*plan.Node{{
+			NodeId:     0,
+			NodeType:   plan.Node_SORT,
+			RankOption: &plan.RankOption{Mode: "auto"},
+		}},
+	}
+	compiled, err := c.compileSteps(qry, []*Scope{input}, 0)
+	require.NoError(t, err)
+	require.Len(t, compiled, 1)
+	out, ok := compiled[0].RootOp.(*output.Output)
+	require.True(t, ok)
+	require.False(t, out.IsAdaptive)
 }
 
 func TestCompileStepsKeepsOutputOnCurrentCNForSingleRemoteScope(t *testing.T) {
