@@ -2084,13 +2084,16 @@ func (builder *QueryBuilder) applyGeneratedColumnAssignmentCast(expr *plan.Expr,
 		}
 		return forceAssignmentCastExprWithName(builder.GetContext(), expr, expr.Typ, "cast")
 	}
-	if f == nil || f.Func == nil ||
-		(f.Func.ObjName != "cast_assign" && f.Func.ObjName != "cast_strict") ||
-		len(f.Args) == 0 {
-		return expr, nil
+	if f != nil && f.Func != nil &&
+		(f.Func.ObjName == "cast_assign" || f.Func.ObjName == "cast_strict" || f.Func.ObjName == "cast_ignore") &&
+		len(f.Args) > 0 {
+		funcName := assignmentCastFunctionName(expr.Typ, isIgnore, builder.compCtx.GetProcess())
+		return forceAssignmentCastExprWithName(builder.GetContext(), f.Args[0], expr.Typ, funcName)
 	}
-	funcName := assignmentCastFunctionName(expr.Typ, isIgnore, builder.compCtx.GetProcess())
-	return forceAssignmentCastExprWithName(builder.GetContext(), f.Args[0], expr.Typ, funcName)
+	if expr.Typ.Id == int32(types.T_blob) || expr.Typ.Id == int32(types.T_text) {
+		return builder.forceAssignmentCastExpr(expr, expr.Typ, isIgnore)
+	}
+	return expr, nil
 }
 
 // substituteColRefsInExpr replaces ColRef(0, colIdx) in a generated column expression

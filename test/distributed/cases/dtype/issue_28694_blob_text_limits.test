@@ -54,7 +54,27 @@ select count(*) as strict_ctas_tables
 from information_schema.tables
 where table_schema = database() and table_name = 'ctas_tiny';
 
+create table generated_limits (
+    source_value longtext,
+    stored_value text generated always as (cast(source_value as text)) stored
+);
+-- @regex("(?i)data truncation:.*to TEXT type.*src length 65536.*dest length 65535", true)
+insert into generated_limits (source_value) values (repeat('g', 65536));
+select count(*) as strict_generated_rows from generated_limits;
+
+create table load_limits (id int primary key, value tinytext);
+-- @regex("(?i)data truncation:.*to TEXT type.*src length 256.*dest length 255", true)
+load data inline format='csv', data='1,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' into table load_limits fields terminated by ',';
+select count(*) as strict_load_rows from load_limits;
+
 set session sql_mode = '';
+insert into generated_limits (source_value) values (repeat('g', 65536));
+select @@warning_count;
+select octet_length(source_value), octet_length(stored_value) from generated_limits;
+load data inline format='csv', data='2,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' into table load_limits fields terminated by ',';
+select @@warning_count;
+select id, octet_length(value) from load_limits;
+
 insert into limits values (11, repeat('a', 256), repeat('b', 65536), repeat('c', 65536));
 select @@warning_count;
 select id, octet_length(tinyblob_col), octet_length(text_col), octet_length(blob_col)
@@ -96,6 +116,11 @@ select
     sum(case when lower(data_type) = 'blob' and lower(column_type) = 'blob' and character_maximum_length = 65535 and character_octet_length = 65535 then 1 else 0 end) as blob_metadata
 from information_schema.columns
 where table_schema = database() and table_name = 'limits';
+
+set session sql_mode = 'STRICT_TRANS_TABLES';
+load data inline format='csv', data='3,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' ignore into table load_limits fields terminated by ',';
+select @@warning_count;
+select id, octet_length(value) from load_limits order by id;
 
 set session sql_mode = @issue_28694_old_sql_mode;
 drop database issue_28694_blob_text_limits;

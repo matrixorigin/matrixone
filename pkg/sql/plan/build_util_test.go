@@ -1160,17 +1160,36 @@ func TestApplyGeneratedColumnAssignmentCastCompatibility(t *testing.T) {
 	unchanged, err := builder.applyGeneratedColumnAssignmentCast(nil, false)
 	require.NoError(t, err)
 	require.Nil(t, unchanged)
-	unchanged, err = builder.applyGeneratedColumnAssignmentCast(source, false)
+	plain := &Expr{Typ: plan.Type{Id: int32(types.T_int32)}}
+	unchanged, err = builder.applyGeneratedColumnAssignmentCast(plain, false)
 	require.NoError(t, err)
-	require.Same(t, source, unchanged)
+	require.Same(t, plain, unchanged)
+
+	tinyText := plan.Type{Id: int32(types.T_text), Width: types.MaxTinyTextLen}
+	missingAssignment := &Expr{Typ: tinyText, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}}
+	normal, err := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(missingAssignment), false)
+	require.NoError(t, err)
+	require.Equal(t, "cast_assign", normal.GetF().GetFunc().GetObjName())
+	require.Equal(t, tinyText, normal.Typ)
+	ignore, err := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(missingAssignment), true)
+	require.NoError(t, err)
+	require.Equal(t, "cast_ignore", ignore.GetF().GetFunc().GetObjName())
+
+	explicit, err := forceCastExprWithName(context.Background(),
+		&Expr{Typ: plan.Type{Id: int32(types.T_varchar), Width: 1024}}, tinyText, "cast")
+	require.NoError(t, err)
+	preserved, err := builder.applyGeneratedColumnAssignmentCast(explicit, false)
+	require.NoError(t, err)
+	require.Equal(t, "cast_assign", preserved.GetF().GetFunc().GetObjName())
+	require.Equal(t, "cast", preserved.GetF().GetArgs()[0].GetF().GetFunc().GetObjName())
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion4)
 	stored, err := forceCastExprWithName(context.Background(), DeepCopyExpr(source), target, "cast_assign")
 	require.NoError(t, err)
-	normal, err := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(stored), false)
+	normal, err = builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(stored), false)
 	require.NoError(t, err)
 	require.Equal(t, "cast_strict", normal.GetF().GetFunc().GetObjName())
-	ignore, err := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(stored), true)
+	ignore, err = builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(stored), true)
 	require.NoError(t, err)
 	require.Equal(t, "cast", ignore.GetF().GetFunc().GetObjName())
 }

@@ -51,7 +51,36 @@ from information_schema.tables
 where table_schema = database() and table_name = 'ctas_tiny';
 strict_ctas_tables
 0
+create table generated_limits (
+source_value longtext,
+stored_value text generated always as (cast(source_value as text)) stored
+);
+insert into generated_limits (source_value) values (repeat('g', 65536));
+invalid input: data too long
+select count(*) as strict_generated_rows from generated_limits;
+strict_generated_rows
+0
+create table load_limits (id int primary key, value tinytext);
+load data inline format='csv', data='1,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' into table load_limits fields terminated by ',';
+invalid input: data too long
+select count(*) as strict_load_rows from load_limits;
+strict_load_rows
+0
 set session sql_mode = '';
+insert into generated_limits (source_value) values (repeat('g', 65536));
+select @@warning_count;
+@@warning_count
+1
+select octet_length(source_value), octet_length(stored_value) from generated_limits;
+octet_length(source_value)    octet_length(stored_value)
+65536    65535
+load data inline format='csv', data='2,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' into table load_limits fields terminated by ',';
+select @@warning_count;
+@@warning_count
+1
+select id, octet_length(value) from load_limits;
+id    octet_length(value)
+2    255
 insert into limits values (11, repeat('a', 256), repeat('b', 65536), repeat('c', 65536));
 select @@warning_count;
 @@warning_count
@@ -109,5 +138,14 @@ from information_schema.columns
 where table_schema = database() and table_name = 'limits';
 tinyblob_metadata    text_metadata    blob_metadata
 1    1    1
+set session sql_mode = 'STRICT_TRANS_TABLES';
+load data inline format='csv', data='3,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' ignore into table load_limits fields terminated by ',';
+select @@warning_count;
+@@warning_count
+1
+select id, octet_length(value) from load_limits order by id;
+id    octet_length(value)
+2    255
+3    255
 set session sql_mode = @issue_28694_old_sql_mode;
 drop database issue_28694_blob_text_limits;
