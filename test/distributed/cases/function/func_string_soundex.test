@@ -69,3 +69,26 @@ CREATE TABLE t_soundex_ctas_65536 AS SELECT SOUNDEX(CAST(REPEAT('BC', 32768) AS 
 SELECT LENGTH(code) AS code_len FROM t_soundex_ctas_65536;
 DROP TABLE t_soundex_ctas_65536;
 DROP TABLE t_soundex_long;
+
+# VARBINARY input preserves SOUNDEX's binary result domain.
+DROP TABLE IF EXISTS soundex_binary_domain;
+CREATE TABLE soundex_binary_domain(id INT PRIMARY KEY, b VARBINARY(64));
+INSERT INTO soundex_binary_domain VALUES
+(1, CAST('Ashcraft' AS VARBINARY(64))),
+(2, UNHEX('41FF42')),
+(3, X''),
+(4, NULL);
+SELECT id, COALESCE(NULLIF(HEX(SOUNDEX(b)), ''), '<empty>') AS code_hex,
+SOUNDEX(b) IS NULL AS is_null
+FROM soundex_binary_domain ORDER BY id;
+CREATE VIEW soundex_binary_view AS SELECT SOUNDEX(b) AS s FROM soundex_binary_domain;
+CREATE TABLE soundex_binary_ctas AS SELECT SOUNDEX(b) AS s FROM soundex_binary_domain;
+SELECT table_name, column_name, data_type, character_maximum_length,
+character_set_name, collation_name
+FROM information_schema.columns
+WHERE table_schema = DATABASE()
+AND table_name IN ('soundex_binary_view', 'soundex_binary_ctas')
+ORDER BY table_name;
+DROP TABLE soundex_binary_ctas;
+DROP VIEW soundex_binary_view;
+DROP TABLE soundex_binary_domain;

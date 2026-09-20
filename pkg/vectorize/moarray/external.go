@@ -21,8 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/momath"
-	"gonum.org/v1/gonum/blas/blas32"
-	"gonum.org/v1/gonum/blas/blas64"
 )
 
 // These functions are exposed externally via SQL API.
@@ -169,13 +167,7 @@ func Divide[T types.RealNumbers](p, q []T) ([]T, error) {
 /* ------------ [START] Performance critical functions. ------- */
 
 func InnerProduct[T types.RealNumbers](v1, v2 []T) (float64, error) {
-
-	ret, err := metric.InnerProduct(v1, v2)
-	if err != nil {
-		return 0, err
-	}
-
-	return float64(ret), err
+	return metric.StableInnerProduct(v1, v2)
 }
 
 // L1Distance returns the Manhattan distance sum|a-b|. Like its L2 siblings it checks the
@@ -187,8 +179,7 @@ func L1Distance[T types.RealNumbers](v1, v2 []T) (float64, error) {
 		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 
-	ret, err := metric.L1Distance[T](v1, v2)
-	return float64(ret), err
+	return metric.StableL1Distance(v1, v2)
 }
 
 func L2Distance[T types.RealNumbers](v1, v2 []T) (float64, error) {
@@ -196,8 +187,7 @@ func L2Distance[T types.RealNumbers](v1, v2 []T) (float64, error) {
 		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 
-	ret, err := metric.L2Distance[T](v1, v2)
-	return float64(ret), err
+	return metric.StableL2Distance(v1, v2)
 }
 
 // L2DistanceSq returns the squared L2 distance between two vectors.
@@ -207,8 +197,7 @@ func L2DistanceSq[T types.RealNumbers](v1, v2 []T) (float64, error) {
 		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 
-	ret, err := metric.L2DistanceSq[T](v1, v2)
-	return float64(ret), err
+	return metric.StableL2DistanceSq(v1, v2)
 }
 
 func CosineDistance[T types.RealNumbers](v1, v2 []T) (float64, error) {
@@ -216,8 +205,7 @@ func CosineDistance[T types.RealNumbers](v1, v2 []T) (float64, error) {
 		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 
-	ret, err := metric.CosineDistance[T](v1, v2)
-	return float64(ret), err
+	return metric.StableCosineDistance(v1, v2)
 }
 
 func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (float64, error) {
@@ -225,11 +213,10 @@ func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (float64, error) {
 		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 
-	ret, err := metric.CosineSimilarity[T](v1, v2)
+	cosine, err := metric.StableCosineSimilarity(v1, v2)
 	if err != nil {
 		return 0, err
 	}
-	cosine := float64(ret)
 
 	// NOTE: Downcast the float64 cosine_similarity to float32 and check if it is
 	// 1.0 or -1.0 to avoid precision issue.
@@ -273,56 +260,17 @@ func CosineSimilarity[T types.RealNumbers](v1, v2 []T) (float64, error) {
 }
 
 func NormalizeL2[T types.RealNumbers](v1 []T, normalized []T) error {
-
-	if len(v1) == 0 {
-		return moerr.NewInternalErrorNoCtx("cannot normalize empty vector")
-	}
-
-	// Compute the norm of the vector
-	var sumSquares float64
-	for _, val := range v1 {
-		sumSquares += float64(val) * float64(val)
-	}
-	norm := math.Sqrt(sumSquares)
-	if norm == 0 {
-		copy(normalized, v1)
-		return nil
-	}
-
-	// Divide each element by the norm
-	for i, val := range v1 {
-		normalized[i] = T(float64(val) / norm)
-	}
-
-	return nil
+	return metric.StableNormalizeL2(v1, normalized)
 }
 
 // L1Norm returns l1 distance to origin.
 func L1Norm[T types.RealNumbers](v []T) (float64, error) {
-	switch any(v).(type) {
-	case []float32:
-		_v := blas32.Vector{N: len(v), Inc: 1, Data: any(v).([]float32)}
-		return float64(blas32.Asum(_v)), nil
-	case []float64:
-		_v := blas64.Vector{N: len(v), Inc: 1, Data: any(v).([]float64)}
-		return blas64.Asum(_v), nil
-	default:
-		return 0, moerr.NewInternalErrorNoCtx("L1Norm type not supported")
-	}
+	return metric.StableL1Norm(v)
 }
 
 // L2Norm returns l2 distance to origin.
 func L2Norm[T types.RealNumbers](v []T) (float64, error) {
-	switch any(v).(type) {
-	case []float32:
-		_v := blas32.Vector{N: len(v), Inc: 1, Data: any(v).([]float32)}
-		return float64(blas32.Nrm2(_v)), nil
-	case []float64:
-		_v := blas64.Vector{N: len(v), Inc: 1, Data: any(v).([]float64)}
-		return blas64.Nrm2(_v), nil
-	default:
-		return 0, moerr.NewInternalErrorNoCtx("L2Norm type not supported")
-	}
+	return metric.StableL2Norm(v)
 }
 
 func ScalarOp[T types.RealNumbers](v []T, operation string, scalar float64) ([]T, error) {
@@ -397,12 +345,7 @@ func Sqrt[T types.RealNumbers](v []T) (res []float64, err error) {
 }
 
 func Summation[T types.RealNumbers](v []T) (float64, error) {
-	n := len(v)
-	var sum float64 = 0
-	for i := 0; i < n; i++ {
-		sum += float64(v[i])
-	}
-	return sum, nil
+	return metric.StableSummation(v)
 }
 
 func Cast[I types.RealNumbers, O types.RealNumbers](in []I) (out []O, err error) {
