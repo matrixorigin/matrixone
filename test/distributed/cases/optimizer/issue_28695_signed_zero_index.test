@@ -5,22 +5,22 @@
 
 drop table if exists issue_28695_signed_zero_index;
 create table issue_28695_signed_zero_index(
-    id int primary key,
-    bucket int,
-    v double,
-    f float,
-    key idx_v(v),
-    key idx_v_id(v, id),
-    key idx_f(f),
-    key idx_bucket_v(bucket, v)
+id int primary key,
+bucket int,
+v double,
+f float,
+key idx_v(v),
+key idx_v_id(v, id),
+key idx_f(f),
+key idx_bucket_v(bucket, v)
 );
 insert into issue_28695_signed_zero_index values
-    (1, 1, cast('-0.0' as double), cast('-0.0' as float)),
-    (2, 1, cast('0.0' as double), cast('0.0' as float)),
-    (3, 2, -1.0, -1.0),
-    (4, 2, 1.0, 1.0),
-    (5, 3, null, null),
-    (6, 1, 2.0, 2.0);
+(1, 1, cast('-0.0' as double), cast('-0.0' as float)),
+(2, 1, cast('0.0' as double), cast('0.0' as float)),
+(3, 2, -1.0, -1.0),
+(4, 2, 1.0, 1.0),
+(5, 3, null, null),
+(6, 1, 2.0, 2.0);
 
 select count(*) as force_eq, sum(id) as force_eq_sum
 from issue_28695_signed_zero_index force index(idx_v)
@@ -55,7 +55,7 @@ from issue_28695_signed_zero_index force index(idx_bucket_v)
 where bucket = 1 and v = cast('-0.0' as double);
 
 prepare issue_28695_zero from
-    'select count(*) as prepared_eq from issue_28695_signed_zero_index where v = ?';
+'select count(*) as prepared_eq from issue_28695_signed_zero_index where v = ?';
 set @issue_28695_zero = cast('-0.0' as double);
 execute issue_28695_zero using @issue_28695_zero;
 deallocate prepare issue_28695_zero;
@@ -64,14 +64,14 @@ drop table issue_28695_signed_zero_index;
 
 drop table if exists issue_28695_signed_zero_unique;
 create table issue_28695_signed_zero_unique(
-    id int primary key,
-    v double,
-    unique key uk_v(v)
+id int primary key,
+v double,
+unique key uk_v(v)
 );
 insert into issue_28695_signed_zero_unique values
-    (1, cast('-0.0' as double));
+(1, cast('-0.0' as double));
 -- @regex("Duplicate entry", true)
 insert into issue_28695_signed_zero_unique values
-    (2, cast('0.0' as double));
+(2, cast('0.0' as double));
 select count(*) as unique_rows from issue_28695_signed_zero_unique;
 drop table issue_28695_signed_zero_unique;
