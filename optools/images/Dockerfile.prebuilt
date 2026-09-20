@@ -13,9 +13,9 @@ ARG RUNTIME_IMAGE=matrixorigin/ubuntu:22.04
 
 FROM ${RUNTIME_IMAGE}
 
-# Keep the prebuilt runtime image's timezone database in sync with the
-# Python UDF worker image. The Go and Python capability contracts compare the
-# tzdata release, so omitting it makes the CN advertise an empty version.
+# Python UDF admission compares the system IANA database with the worker.
+# Keep every runtime assembly path aligned with optools/images/Dockerfile
+# and pkg/udf/python/worker/Dockerfile, including shared-build artifacts.
 RUN apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends tzdata \
     && rm -rf /var/lib/apt/lists/*
