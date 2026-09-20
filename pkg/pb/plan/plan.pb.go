@@ -17944,10 +17944,13 @@ type RoutineCall struct {
 	// These fields are the common semantic contract. They must survive SQL
 	// lowering and expression/plan cloning; the optimizer may only move a
 	// routine call when the attached contract permits it.
-	CallsiteId           string   `protobuf:"bytes,11,opt,name=callsite_id,json=callsiteId,proto3" json:"callsite_id,omitempty"`
-	MayError             bool     `protobuf:"varint,12,opt,name=may_error,json=mayError,proto3" json:"may_error,omitempty"`
-	SecurityMode         string   `protobuf:"bytes,13,opt,name=security_mode,json=securityMode,proto3" json:"security_mode,omitempty"`
-	Leakproof            bool     `protobuf:"varint,14,opt,name=leakproof,proto3" json:"leakproof,omitempty"`
+	CallsiteId   string `protobuf:"bytes,11,opt,name=callsite_id,json=callsiteId,proto3" json:"callsite_id,omitempty"`
+	MayError     bool   `protobuf:"varint,12,opt,name=may_error,json=mayError,proto3" json:"may_error,omitempty"`
+	SecurityMode string `protobuf:"bytes,13,opt,name=security_mode,json=securityMode,proto3" json:"security_mode,omitempty"`
+	Leakproof    bool   `protobuf:"varint,14,opt,name=leakproof,proto3" json:"leakproof,omitempty"`
+	// State fingerprint of the complete overload namespace at binding snapshot.
+	// Separate from the selected immutable FunctionRef; missing means no reuse.
+	NamespaceFingerprint string   `protobuf:"bytes,15,opt,name=namespace_fingerprint,json=namespaceFingerprint,proto3" json:"namespace_fingerprint,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
 	XXX_unrecognized     []byte   `json:"-"`
 	XXX_sizecache        int32    `json:"-"`
@@ -18108,6 +18111,13 @@ func (m *RoutineCall) GetLeakproof() bool {
 	return false
 }
 
+func (m *RoutineCall) GetNamespaceFingerprint() string {
+	if m != nil {
+		return m.NamespaceFingerprint
+	}
+	return ""
+}
+
 // XXX_OneofWrappers is for the internal use of the proto package.
 func (*RoutineCall) XXX_OneofWrappers() []interface{} {
 	return []interface{}{
@@ -18132,6 +18142,7 @@ type RoutinePlanDependency struct {
 	MayError              bool         `protobuf:"varint,9,opt,name=may_error,json=mayError,proto3" json:"may_error,omitempty"`
 	SecurityMode          string       `protobuf:"bytes,10,opt,name=security_mode,json=securityMode,proto3" json:"security_mode,omitempty"`
 	Leakproof             bool         `protobuf:"varint,11,opt,name=leakproof,proto3" json:"leakproof,omitempty"`
+	NamespaceFingerprint  string       `protobuf:"bytes,12,opt,name=namespace_fingerprint,json=namespaceFingerprint,proto3" json:"namespace_fingerprint,omitempty"`
 	XXX_NoUnkeyedLiteral  struct{}     `json:"-"`
 	XXX_unrecognized      []byte       `json:"-"`
 	XXX_sizecache         int32        `json:"-"`
@@ -18245,6 +18256,13 @@ func (m *RoutinePlanDependency) GetLeakproof() bool {
 		return m.Leakproof
 	}
 	return false
+}
+
+func (m *RoutinePlanDependency) GetNamespaceFingerprint() string {
+	if m != nil {
+		return m.NamespaceFingerprint
+	}
+	return ""
 }
 
 // A zero version represents a legacy database without a persisted default.
@@ -35164,6 +35182,13 @@ func (m *RoutineCall) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
 	}
+	if len(m.NamespaceFingerprint) > 0 {
+		i -= len(m.NamespaceFingerprint)
+		copy(dAtA[i:], m.NamespaceFingerprint)
+		i = encodeVarintPlan(dAtA, i, uint64(len(m.NamespaceFingerprint)))
+		i--
+		dAtA[i] = 0x7a
+	}
 	if m.Leakproof {
 		i--
 		if m.Leakproof {
@@ -35356,6 +35381,13 @@ func (m *RoutinePlanDependency) MarshalToSizedBuffer(dAtA []byte) (int, error) {
 	if m.XXX_unrecognized != nil {
 		i -= len(m.XXX_unrecognized)
 		copy(dAtA[i:], m.XXX_unrecognized)
+	}
+	if len(m.NamespaceFingerprint) > 0 {
+		i -= len(m.NamespaceFingerprint)
+		copy(dAtA[i:], m.NamespaceFingerprint)
+		i = encodeVarintPlan(dAtA, i, uint64(len(m.NamespaceFingerprint)))
+		i--
+		dAtA[i] = 0x62
 	}
 	if m.Leakproof {
 		i--
@@ -42428,6 +42460,10 @@ func (m *RoutineCall) ProtoSize() (n int) {
 	if m.Leakproof {
 		n += 2
 	}
+	l = len(m.NamespaceFingerprint)
+	if l > 0 {
+		n += 1 + l + sovPlan(uint64(l))
+	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
 	}
@@ -42504,6 +42540,10 @@ func (m *RoutinePlanDependency) ProtoSize() (n int) {
 	}
 	if m.Leakproof {
 		n += 2
+	}
+	l = len(m.NamespaceFingerprint)
+	if l > 0 {
+		n += 1 + l + sovPlan(uint64(l))
 	}
 	if m.XXX_unrecognized != nil {
 		n += len(m.XXX_unrecognized)
@@ -82881,6 +82921,38 @@ func (m *RoutineCall) Unmarshal(dAtA []byte) error {
 				}
 			}
 			m.Leakproof = bool(v != 0)
+		case 15:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field NamespaceFingerprint", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthPlan
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.NamespaceFingerprint = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := skipPlan(dAtA[iNdEx:])
@@ -83251,6 +83323,38 @@ func (m *RoutinePlanDependency) Unmarshal(dAtA []byte) error {
 				}
 			}
 			m.Leakproof = bool(v != 0)
+		case 12:
+			if wireType != 2 {
+				return fmt.Errorf("proto: wrong wireType = %d for field NamespaceFingerprint", wireType)
+			}
+			var stringLen uint64
+			for shift := uint(0); ; shift += 7 {
+				if shift >= 64 {
+					return ErrIntOverflowPlan
+				}
+				if iNdEx >= l {
+					return io.ErrUnexpectedEOF
+				}
+				b := dAtA[iNdEx]
+				iNdEx++
+				stringLen |= uint64(b&0x7F) << shift
+				if b < 0x80 {
+					break
+				}
+			}
+			intStringLen := int(stringLen)
+			if intStringLen < 0 {
+				return ErrInvalidLengthPlan
+			}
+			postIndex := iNdEx + intStringLen
+			if postIndex < 0 {
+				return ErrInvalidLengthPlan
+			}
+			if postIndex > l {
+				return io.ErrUnexpectedEOF
+			}
+			m.NamespaceFingerprint = string(dAtA[iNdEx:postIndex])
+			iNdEx = postIndex
 		default:
 			iNdEx = preIndex
 			skippy, err := skipPlan(dAtA[iNdEx:])
