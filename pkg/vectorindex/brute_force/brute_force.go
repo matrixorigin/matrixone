@@ -287,6 +287,9 @@ func (idx *UsearchBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries 
 	if limit > idx.Count {
 		limit = idx.Count
 	}
+	if idx.MoMetric == metric.Metric_CosineDistance {
+		return idx.searchCosine(proc, flatten, nQueries, limit, rt)
+	}
 
 	keys_ui64, distances_f32, err := usearch.ExactSearchUnsafe(
 		util.UnsafePointer(&((*idx.Dataset)[0])),
@@ -328,6 +331,110 @@ func (idx *UsearchBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries 
 	runtime.KeepAlive(flatten)
 	runtime.KeepAlive(idx.Dataset)
 	return
+}
+
+// searchCosine computes the SQL cosine_distance directly instead of asking usearch to
+// score the vectors. usearch's cosine implementation can underflow on zero/subnormal
+// values, while this path must preserve the scalar metric contract (zero denominator
+// returns distance 1 and boundary values use the scalar implementation). It is used
+// only for the exact brute-force cosine fallback; non-cosine metrics retain the usearch
+// fast path.
+func (idx *UsearchBruteForceIndex[T]) searchCosine(
+	proc *sqlexec.SqlProcess,
+	flatten []T,
+	nQueries int,
+	limit uint,
+	rt vectorindex.RuntimeConfig,
+) (any, []float64, error) {
+	if limit == 0 || nQueries == 0 || idx.Count == 0 {
+		return []int64{}, []float64{}, nil
+	}
+	if idx.Dataset == nil {
+		return nil, nil, moerr.NewInternalErrorNoCtx("brute force dataset is nil")
+	}
+
+	limitInt := int(limit)
+	retKeys := make([]int64, nQueries*limitInt)
+	retDistances := make([]float64, nQueries*limitInt)
+	dimension := int(idx.Dimension)
+	dataset := *idx.Dataset
+
+	exec := concurrent.NewThreadPoolExecutor(int(rt.NThreads))
+	err := exec.Execute(
+		proc.GetContext(),
+		nQueries,
+		func(ctx context.Context, _, start, end int) error {
+			var heapKeysBuf []int64
+			var heapDistBuf []T
+			if limitInt > 1 {
+				heapKeysBuf = make([]int64, limitInt)
+				heapDistBuf = make([]T, limitInt)
+			}
+
+			for queryIndex := start; queryIndex < end; queryIndex++ {
+				if err := ctx.Err(); err != nil {
+					return err
+				}
+				queryStart := queryIndex * dimension
+				query := flatten[queryStart : queryStart+dimension]
+
+				if limitInt == 1 {
+					bestDistance := metric.MaxFloat[T]()
+					bestKey := -1
+					for row := 0; row < int(idx.Count); row++ {
+						if row%100 == 0 {
+							if err := ctx.Err(); err != nil {
+								return err
+							}
+						}
+						dataStart := row * dimension
+						distance, err := metric.CosineDistance(query, dataset[dataStart:dataStart+dimension])
+						if err != nil {
+							return err
+						}
+						if distance < bestDistance {
+							bestDistance = distance
+							bestKey = row
+						}
+					}
+					retKeys[queryIndex] = int64(bestKey)
+					retDistances[queryIndex] = float64(bestDistance)
+					continue
+				}
+
+				h := vectorindex.NewFastMaxHeap[T, int64](limitInt, heapKeysBuf, heapDistBuf)
+				for row := 0; row < int(idx.Count); row++ {
+					if row%100 == 0 {
+						if err := ctx.Err(); err != nil {
+							return err
+						}
+					}
+					dataStart := row * dimension
+					distance, err := metric.CosineDistance(query, dataset[dataStart:dataStart+dimension])
+					if err != nil {
+						return err
+					}
+					h.Push(int64(row), distance)
+				}
+
+				offset := queryIndex * limitInt
+				for resultIndex := limitInt - 1; resultIndex >= 0; resultIndex-- {
+					key, distance, ok := h.Pop()
+					if !ok {
+						retKeys[offset+resultIndex] = -1
+						retDistances[offset+resultIndex] = 0
+						continue
+					}
+					retKeys[offset+resultIndex] = key
+					retDistances[offset+resultIndex] = float64(distance)
+				}
+			}
+			return nil
+		})
+	if err != nil {
+		return nil, nil, err
+	}
+	return retKeys, retDistances, nil
 }
 
 func (idx *UsearchBruteForceIndex[T]) Destroy() {
