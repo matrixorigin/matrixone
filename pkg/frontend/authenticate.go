@@ -953,6 +953,8 @@ var (
 		catalog.MO_BRANCH_METADATA:    0,
 		catalog.MO_FEATURE_LIMIT:      0,
 		catalog.MO_FEATURE_REGISTRY:   0,
+		catalog.MO_VIEW_RECOVERY:      0,
+		catalog.MO_VIEW_RECOVERY_WORK: 0,
 	}
 	sysAccountTables = map[string]struct{}{
 		catalog.MOVersionTable:       {},
@@ -1003,6 +1005,8 @@ var (
 		catalog.MO_BRANCH_METADATA:      0,
 		catalog.MO_FEATURE_LIMIT:        0,
 		catalog.MO_FEATURE_REGISTRY:     0,
+		catalog.MO_VIEW_RECOVERY:        0,
+		catalog.MO_VIEW_RECOVERY_WORK:   0,
 		catalog.MO_ROLE_RULE:            0,
 		icebergsql.TableCatalogs:        0,
 		icebergsql.TablePrincipalMap:    0,
@@ -1041,6 +1045,9 @@ var (
 		MoCatalogMoSubsDDL,
 		MoCatalogMoViewDependenciesDDL,
 		MoCatalogMoViewRefreshDDL,
+		catalog.MoViewRecoveryDDL,
+		catalog.MoViewRecoveryWorkDDL,
+		catalog.MoViewRecoveryInitSQL,
 		MoCatalogMoStoredProcedureDDL,
 		MoCatalogMoStagesDDL,
 		MoCatalogMoSessionsDDL,
@@ -10859,7 +10866,8 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 			return true
 		}
 
-		if strings.Contains(sql, fmt.Sprintf("mo_catalog.%s", catalog.MO_FEATURE_REGISTRY)) {
+		if strings.Contains(sql, fmt.Sprintf("mo_catalog.%s", catalog.MO_FEATURE_REGISTRY)) ||
+			strings.Contains(sql, "mo_catalog."+catalog.MO_VIEW_RECOVERY) {
 			return true
 		}
 

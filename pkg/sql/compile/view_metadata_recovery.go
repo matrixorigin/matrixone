@@ -80,6 +80,9 @@ func viewMetadataRequireRevalidationSQL() []string {
 			catalog.ViewRefreshStatusRevalidateRequired,
 			catalog.ViewRefreshStatusLegacyScan, catalog.ViewRefreshStatusRevalidateScan,
 			catalog.ViewRefreshStatusActivated),
+		// This independent clock also fences a completed coordinator when an
+		// older/default-disabled lifecycle path modifies catalog objects.
+		"update mo_catalog.mo_view_recovery set mutation_revision=mutation_revision+1 where id=1",
 	}
 }
 
@@ -487,10 +490,13 @@ func init() {
 }
 
 func recoverViewMetadataCommand(proc *process.Process, parameter string) (int, error) {
-	if !viewMetadataRefreshEnabled(proc.GetService()) {
+	if !viewMetadataRecoveryAuthorized(proc) {
 		return 0, nil
 	}
 	if err := lockViewMetadataLifecycleGate(proc); err != nil {
+		return 0, err
+	}
+	if err := checkViewRecoveryContext(proc); err != nil {
 		return 0, err
 	}
 	var command viewMetadataRecoveryCommand
@@ -527,8 +533,13 @@ func beginViewMetadataRevalidation(proc *process.Process) (int, error) {
 	return int(result.AffectedRows), nil
 }
 
+func viewMetadataRecoveryAuthorized(proc *process.Process) bool {
+	_, internal := proc.Ctx.Value(viewRecoveryContextKey{}).(ViewRecoveryClaim)
+	return internal || viewMetadataRefreshEnabled(proc.GetService())
+}
+
 func lockViewMetadataLifecycleGate(proc *process.Process) error {
-	if !viewMetadataRefreshEnabled(proc.GetService()) {
+	if !viewMetadataRecoveryAuthorized(proc) {
 		return nil
 	}
 	v, ok := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
@@ -726,11 +737,22 @@ func (c *recoveryCompilerContext) Resolve(
 
 func (c *recoveryCompilerContext) GetSubscriptionMeta(
 	databaseName string,
-	_ *plan2.Snapshot,
+	snapshot *plan2.Snapshot,
 ) (*planpb.SubscriptionMeta, error) {
+	accountID, err := c.GetAccountId()
+	if err != nil {
+		return nil, err
+	}
+	catalogTable := catalog.MO_CATALOG + ".mo_subs"
 	key := databaseName
 	if c.compilerContext.lower != 0 {
 		key = strings.ToLower(databaseName)
+	}
+	if plan2.IsSnapshotValid(snapshot) {
+		if snapshot.Tenant != nil {
+			accountID = snapshot.Tenant.TenantID
+		}
+		key += fmt.Sprintf("@%d/%d/%d", accountID, snapshot.TS.PhysicalTime, snapshot.TS.LogicalTime)
 	}
 	if _, ok := c.legacySubscriptionLooked[key]; ok {
 		return c.legacySubscriptions[key], nil
@@ -741,14 +763,10 @@ func (c *recoveryCompilerContext) GetSubscriptionMeta(
 	if c.legacySubscriptions == nil {
 		c.legacySubscriptions = make(map[string]*planpb.SubscriptionMeta)
 	}
-	accountID, err := c.GetAccountId()
-	if err != nil {
-		return nil, err
-	}
 	result, err := c.execCatalogQuery(fmt.Sprintf(
 		"select pub_account_id,pub_account_name,pub_name,pub_database,pub_tables "+
-			"from %s.mo_subs where sub_account_id=%d and sub_name='%s' and status=0 limit 1",
-		catalog.MO_CATALOG, accountID, sqlquote.EscapeString(databaseName)), catalog.System_Account)
+			"from %s where sub_account_id=%d and sub_name='%s' and status=0 limit 1",
+		catalogTable, accountID, sqlquote.EscapeString(databaseName)), catalog.System_Account, snapshot)
 	if err != nil {
 		return nil, err
 	}
@@ -875,13 +893,25 @@ func (c *recoveryCompilerContext) CheckTimeStampValid(ts int64) (bool, error) {
 func (c *recoveryCompilerContext) execCatalogQuery(
 	query string,
 	accountID uint32,
+	snapshots ...*plan2.Snapshot,
 ) (executor.Result, error) {
 	v, ok := moruntime.ServiceRuntime(c.proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
 		return executor.Result{}, moerr.NewInternalError(c.GetContext(), "internal SQL executor is unavailable")
 	}
+	txn := c.proc.GetTxnOperator()
+	if len(snapshots) != 0 && plan2.IsSnapshotValid(snapshots[0]) {
+		if txn == nil {
+			return executor.Result{}, moerr.NewInvalidStateNoCtx("historical View recovery requires a transaction")
+		}
+		if snapshots[0].TS.Less(txn.Txn().SnapshotTS) {
+			// Preserve the logical component too; a physical-only MO_TS hint can
+			// select the wrong subscription binding at the same clock instant.
+			txn = txn.CloneSnapshotOp(*snapshots[0].TS)
+		}
+	}
 	return v.(executor.SQLExecutor).Exec(c.GetContext(), query,
-		executor.Options{}.WithDisableIncrStatement().WithTxn(c.proc.GetTxnOperator()).
+		executor.Options{}.WithDisableIncrStatement().WithTxn(txn).
 			WithAccountID(accountID))
 }
 
@@ -935,8 +965,8 @@ func recoverPendingViewMetadataTarget(
 	result, err := sqlExecutor.Exec(proc.Ctx, fmt.Sprintf(
 		"select account_id,target_database_id,target_relation_id,target_logical_id,"+
 			"target_database_name,target_relation_name,target_generation,lease_epoch,status "+
-			"from %s.%s where status in ('%s','%s') and (next_retry_at is null or next_retry_at<=now()) "+
-			"%s order by next_retry_at,attempts,account_id,target_relation_id limit 1",
+			"from %s.%s where ((status in ('%s','%s') and (next_retry_at is null or next_retry_at<=now())) "+
+			"or (status='RUNNING' and lease_expires_at<=now())) %s order by next_retry_at,attempts,account_id,target_relation_id limit 1",
 		catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH,
 		viewRefreshStatusPending, viewRefreshStatusDiscovering, targetPredicate), opts)
 	if err != nil {
@@ -960,7 +990,7 @@ func recoverPendingViewMetadataTarget(
 				relationName: columns[5].GetStringAt(0),
 				generation:   vector.MustFixedColNoTypeCheck[uint64](columns[6])[0],
 			},
-			leaseEpoch:      vector.MustFixedColNoTypeCheck[uint64](columns[7])[0] + 1,
+			leaseEpoch:      vector.MustFixedColNoTypeCheck[uint64](columns[7])[0],
 			legacyDiscovery: status == viewRefreshStatusDiscovering,
 			originalStatus:  status,
 		}
@@ -969,6 +999,10 @@ func recoverPendingViewMetadataTarget(
 	if pending == nil {
 		return 0, nil
 	}
+	if pending.leaseEpoch == ^uint64(0) {
+		return 0, moerr.NewInvalidStateNoCtx("View refresh lease epoch exhausted")
+	}
+	pending.leaseEpoch++
 
 	engineValue := proc.GetSessionInfo().StorageEngine
 	if engineValue == nil {
@@ -979,15 +1013,19 @@ func recoverPendingViewMetadataTarget(
 		return 0, err
 	}
 	pending.leaseOwner = workerID
+	expiryPredicate := ""
+	if pending.originalStatus == viewRefreshStatusRunning {
+		expiryPredicate = " and lease_expires_at<=now()"
+	}
 	workerID = "'" + sqlquote.EscapeString(workerID) + "'"
 	claim, err := sqlExecutor.Exec(proc.Ctx, fmt.Sprintf(
 		"update %s.%s set status='%s',lease_owner=%s,lease_epoch=%d,"+
 			"lease_expires_at=date_add(now(),interval 60 second),attempts=attempts+1 "+
 			"where account_id=%d and target_relation_id=%d and target_generation=%d "+
-			"and lease_epoch=%d and status='%s'",
+			"and lease_epoch=%d and status='%s'%s",
 		catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH, viewRefreshStatusRunning, workerID,
 		pending.leaseEpoch, pending.accountID, pending.relationID, pending.generation,
-		pending.leaseEpoch-1, pending.originalStatus), opts)
+		pending.leaseEpoch-1, pending.originalStatus, expiryPredicate), opts)
 	if err != nil {
 		return 0, err
 	}
@@ -1318,6 +1356,11 @@ func regenerateViewUsingPersistedEnvironment(
 }
 
 func (c *Compile) enqueueCurrentDependentViews(mutation viewRelationMutation) error {
+	if _, internal := c.proc.Ctx.Value(viewRecoveryContextKey{}).(ViewRecoveryClaim); internal {
+		// The coordinator expanded the complete durable frontier before starting
+		// replacement. Do not re-expand an unbounded fanout inside this transaction.
+		return nil
+	}
 	return c.runSqlWithSystemTenant(fmt.Sprintf(
 		"replace into %s.%s (%s) select distinct d.account_id,d.target_database_id,d.target_relation_id,"+
 			"d.target_logical_id,d.target_database_name,d.target_relation_name,"+

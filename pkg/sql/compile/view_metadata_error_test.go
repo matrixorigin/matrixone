@@ -34,6 +34,7 @@ func TestClassifyViewRefreshFailureUsesTypedErrors(t *testing.T) {
 		{"parser incompatible", moerr.NewParseErrorNoCtx("bad persisted SQL"), viewRefreshFailurePlannerIncompatible, viewRefreshMarkInvalid},
 		{"invalid View", moerr.NewBadView(context.Background(), "db", "v"), viewRefreshFailurePermanentlyInvalid, viewRefreshMarkInvalid},
 		{"invalid bound column", moerr.NewInvalidInputNoCtx("column does not exist"), viewRefreshFailurePermanentlyInvalid, viewRefreshMarkInvalid},
+		{"missing bound column", moerr.NewBadFieldError(context.Background(), "x", "source"), viewRefreshFailurePermanentlyInvalid, viewRefreshMarkInvalid},
 		{"txn conflict", moerr.NewTxnNeedRetryNoCtx(), viewRefreshFailureTxnConflict, viewRefreshRetry},
 		{"canceled", context.Canceled, viewRefreshFailureCanceled, viewRefreshRetry},
 		{"deadline", context.DeadlineExceeded, viewRefreshFailureCanceled, viewRefreshRetry},

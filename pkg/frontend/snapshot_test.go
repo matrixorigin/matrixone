@@ -488,6 +488,17 @@ func TestViewMetadataTablesAreRebuiltDuringRestore(t *testing.T) {
 	}
 }
 
+func TestViewRecoveryControlStateIsNeverRestored(t *testing.T) {
+	for _, name := range []string{catalog.MO_VIEW_RECOVERY, catalog.MO_VIEW_RECOVERY_WORK} {
+		require.Equal(t, systemCatalogRestoreSkip, systemCatalogRestorePolicies[name])
+		require.True(t, needSkipTable(sysAccountID, moCatalog, name))
+		require.Contains(t, sysWantedTables, name)
+	}
+	require.Contains(t, createSqls, catalog.MoViewRecoveryDDL)
+	require.Contains(t, createSqls, catalog.MoViewRecoveryWorkDDL)
+	require.Contains(t, createSqls, catalog.MoViewRecoveryInitSQL)
+}
+
 func TestScopedViewMetadataRestoreReconciliation(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
@@ -544,8 +555,8 @@ func TestInvalidateAccountViewMetadataUsesSystemContextAndPropagatesErrors(t *te
 		bh.init()
 		require.NoError(t, invalidateAccountViewMetadata(context.Background(), ses, bh, 42))
 		require.Equal(t, compile.ViewMetadataRequireRevalidationSQL(), bh.executedSQLs)
-		require.Equal(t, []uint32{0, 0, 0, 0}, bh.executionAccountIDs)
-		require.Equal(t, []bool{true, true, true, true}, bh.systemCTELimits)
+		require.Equal(t, []uint32{0, 0, 0, 0, 0}, bh.executionAccountIDs)
+		require.Equal(t, []bool{true, true, true, true, true}, bh.systemCTELimits)
 		require.Contains(t, bh.executedSQLs[2], "REVALIDATE_REQUIRED")
 	})
 

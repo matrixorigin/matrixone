@@ -1388,7 +1388,7 @@ func TestViewMetadataCleanupLocksLifecycleGateBeforeRows(t *testing.T) {
 			exec := &viewMetadataCleanupRecordingExecutor{}
 			installViewMetadataTestExecutor(t, proc, exec)
 			require.NoError(t, tc.run(&Compile{proc: proc, pn: &planpb.Plan{}}))
-			require.Len(t, exec.sqls, 4)
+			require.Len(t, exec.sqls, 5)
 			require.Equal(t, []string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL}, exec.sqls[:2])
 			require.Equal(t, viewMetadataRequireRevalidationSQL(), exec.sqls)
 			require.Contains(t, exec.sqls[3], "source_relation_kind='REVALIDATE_REQUIRED'")
@@ -1853,11 +1853,11 @@ func TestViewMetadataRevalidationActivationIsPersistedAndIdempotent(t *testing.T
 		return result.GetResult()
 	}
 	exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{
-		{}, viewMetadataLifecycleGateTestResult(), {}, {}, {}, markerResult(), {}, {}, markerResult(), {},
+		{}, viewMetadataLifecycleGateTestResult(), {}, {}, {}, {}, markerResult(), {}, {}, markerResult(), {},
 	}}
 	require.NoError(t, RequireViewMetadataRevalidation(context.Background(), exec))
 	require.NoError(t, StartViewMetadataRevalidation(context.Background(), exec, "worker"))
-	require.Len(t, exec.sqls, 10)
+	require.Len(t, exec.sqls, 11)
 	require.Equal(t, []string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL}, exec.sqls[:2])
 	require.Contains(t, exec.sqls[2], "select source_account_id")
 	require.Contains(t, exec.sqls[3],
@@ -1869,16 +1869,17 @@ func TestViewMetadataRevalidationActivationIsPersistedAndIdempotent(t *testing.T
 	require.Contains(t, exec.sqls[4],
 		"source_relation_kind in ('LEGACY_SCAN','REVALIDATE_SCAN','ACTIVATED')")
 	require.Contains(t, exec.sqls[4], "where account_id=0")
-	require.Contains(t, exec.sqls[5], "select source_account_id")
-	require.Equal(t, []string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL}, exec.sqls[6:8])
-	require.Contains(t, exec.sqls[8], "select source_account_id")
-	require.Contains(t, exec.sqls[9],
+	require.Contains(t, exec.sqls[5], "mutation_revision=mutation_revision+1")
+	require.Contains(t, exec.sqls[6], "select source_account_id")
+	require.Equal(t, []string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL}, exec.sqls[7:9])
+	require.Contains(t, exec.sqls[9], "select source_account_id")
+	require.Contains(t, exec.sqls[10],
 		"source_relation_kind='REVALIDATE_SCAN'")
-	require.Contains(t, exec.sqls[9],
+	require.Contains(t, exec.sqls[10],
 		"source_relation_kind='REVALIDATE_REQUIRED'")
-	require.Contains(t, exec.sqls[9], "source_account_id=0")
-	require.NotContains(t, exec.sqls[9], "where account_id=0")
-	require.Contains(t, exec.sqls[9], "where target_relation_id=0")
+	require.Contains(t, exec.sqls[10], "source_account_id=0")
+	require.NotContains(t, exec.sqls[10], "where account_id=0")
+	require.Contains(t, exec.sqls[10], "where target_relation_id=0")
 	for _, sql := range exec.sqls {
 		statements, err := mysql.Parse(context.Background(), sql, 1)
 		require.NoError(t, err, sql)
