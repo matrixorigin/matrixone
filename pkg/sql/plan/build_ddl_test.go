@@ -1809,6 +1809,33 @@ func TestGenViewTableDefPersistsExpandedStarSelectList(t *testing.T) {
 	require.ErrorContains(t, err, "column n_extra does not exist")
 }
 
+func TestGenViewTableDefPersistsExpandedStarForMultiStatementRootSQL(t *testing.T) {
+	const rootSQL = "create view v_star_multi as select * from nation; select 1"
+	ctx := &rootSQLCompilerContext{
+		MockCompilerContext: NewMockCompilerContext(false),
+		rootSQL:             rootSQL,
+	}
+	statements, err := parsers.Parse(context.Background(), dialect.MYSQL, rootSQL, 1)
+	require.NoError(t, err)
+	require.Len(t, statements, 2)
+	defer func() {
+		for _, statement := range statements {
+			statement.Free()
+		}
+	}()
+
+	p, err := BuildPlan(ctx, statements[0], false)
+	require.NoError(t, err)
+	tableDef := p.GetDdl().GetCreateView().GetTableDef()
+	require.NotNil(t, tableDef)
+
+	var viewData ViewData
+	require.NoError(t, json.Unmarshal([]byte(tableDef.GetViewSql().GetView()), &viewData))
+	require.Contains(t, viewData.Stmt, "; select 1")
+	require.NotContains(t, viewData.Definition, "*")
+	require.Contains(t, viewData.Definition, "`nation`.`n_nationkey`")
+}
+
 func TestGenViewTableDefExpandedStarFromDerivedAggregateCanRebind(t *testing.T) {
 	const rootSQL = "create view v_star_agg as select * from (select id,min(ti) from (select * from t1) t1 group by id) sub"
 	ctx := &rootSQLCompilerContext{
