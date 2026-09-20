@@ -19,4 +19,28 @@ a
 select a from dst order by l2_distance(v, '[8,8,8]') asc limit 1;
 a
 4
+alter table dst rename index ix to renamed_ix;
+show create table dst;
+Table    Create Table
+dst    CREATE TABLE `dst` (\n  `a` bigint NOT NULL,\n  `v` vecf32(3) DEFAULT NULL,\n  PRIMARY KEY (`a`),\n  KEY `renamed_ix` USING hnsw (`v`) op_type 'vector_l2_ops'  max_index_capacity = 1000000 \n)
+select a from dst order by l2_distance(v, '[1,1,1]') asc limit 2;
+➤ a[-5,64,0]  𝄀
+1  𝄀
+2
+insert into dst values(5,'[12,12,12]');
+update dst set v='[14,14,14]' where a=5;
+delete from dst where a=4;
+alter table dst alter reindex renamed_ix hnsw;
+select a from dst order by l2_distance(v, '[14,14,14]') asc limit 1;
+➤ a[-5,64,0]  𝄀
+5
+alter table dst alter reindex ix hnsw;
+internal error: Can't REINDEX 'ix'; check that column/key exists
+select a from dst order by a;
+➤ a[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+5
 drop database hnsw_clone_sync;
+set experimental_hnsw_index=0;

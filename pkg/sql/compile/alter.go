@@ -1066,12 +1066,14 @@ func (c *Compile) precheckAlterCopyPkDedup(dbName, tblName string, qry *plan.Alt
 
 // alterCopyCreateOptions builds the statement options for the ALTER ... COPY replica create.
 //
-// Both carried values exist because the replica is created from regenerated DDL, which cannot
+// These carried values exist because the replica is created from regenerated DDL, which cannot
 // express them: KeepLogicalId preserves the table's logical id, and KeepRelKind preserves its
 // relkind. Without the latter buildCreateTable derives a kind from the replica's temporary
 // name -- and for a hidden index table that kind is the only thing keeping it out of the
 // relkind-keyed restore/CLONE filters, so losing it silently promotes the table to an
 // ordinary one.
+// The final copied index definitions also retain stored session variables that
+// regenerated CREATE syntax cannot express.
 //
 // Split out so the carried values are assertable without an executor.
 func alterCopyCreateOptions(qry *plan.AlterTable) executor.StatementOption {
@@ -1082,7 +1084,7 @@ func alterCopyCreateOptions(qry *plan.AlterTable) executor.StatementOption {
 	if oldLogicalId := qry.GetTableDef().GetLogicalId(); oldLogicalId != 0 {
 		opts = opts.WithKeepLogicalId(oldLogicalId)
 	}
-	return opts.WithKeepRelKind(qry.GetTableDef().GetTableType())
+	return opts.WithKeepRelKind(qry.GetTableDef().GetTableType()).WithAlterCopySourceTable(qry.GetCopyTableDef())
 }
 
 func (s *Scope) AlterTableCopy(c *Compile) (err error) {
@@ -1093,6 +1095,10 @@ func (s *Scope) AlterTableCopy(c *Compile) (err error) {
 
 func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetCleanup) error {
 	qry := s.Plan.GetDdl().GetAlterTable()
+	indexRenames, err := plan2.AlterCopyIndexRenames(qry.TableDef, qry.CopyTableDef)
+	if err != nil {
+		return err
+	}
 	dbName := qry.Database
 
 	if dbName == "" {
@@ -1511,6 +1517,11 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 				return err
 			}
 		}
+		if sql := alterCopyIndexRenameCatalogSQL(dbName, qry.TableDef.Name, indexRenames); sql != "" {
+			if err = c.runSql(sql); err != nil {
+				return err
+			}
+		}
 	}
 
 	newTableDef := newRel.CopyTableDef(c.proc.Ctx)
@@ -1674,6 +1685,7 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		qry.ChangeTblColIdMap,
 		originRel.GetTableID(c.proc.Ctx),
 		newRel.GetTableID(c.proc.Ctx),
+		indexRenames,
 	); err != nil {
 		c.proc.Error(c.proc.Ctx, "restore and reconcile foreign keys for alter table copy",
 			zap.String("origin tableName", qry.GetTableDef().Name),
@@ -2176,6 +2188,7 @@ func reconcileAlterCopyChildForeignKeyReferences(
 	childTblIDs []uint64,
 	oldParentTblId uint64,
 	newParentTblId uint64,
+	indexRenames map[string]string,
 ) error {
 	for _, childTblID := range uniqueNonZeroTableIDs(childTblIDs) {
 		if err := updateTableForeignKeyColId(
@@ -2184,6 +2197,7 @@ func reconcileAlterCopyChildForeignKeyReferences(
 			childTblID,
 			oldParentTblId,
 			newParentTblId,
+			indexRenames,
 		); err != nil {
 			return err
 		}
@@ -2344,6 +2358,7 @@ func applyAlterCopyForeignKeyState(
 	changeColDefMap map[uint64]*plan.ColDef,
 	oldTableID uint64,
 	newTableID uint64,
+	indexRenames map[string]string,
 ) error {
 	replacementForeignKeys, replacementRefChildTbls, err := remapAlterCopyForeignKeyState(
 		c.proc.Ctx,
@@ -2351,6 +2366,7 @@ func applyAlterCopyForeignKeyState(
 		sourceRefChildTbls,
 		changeColDefMap,
 		oldTableID,
+		indexRenames,
 	)
 	if err != nil {
 		return err
@@ -2365,7 +2381,7 @@ func applyAlterCopyForeignKeyState(
 		return err
 	}
 	if err = reconcileAlterCopyChildForeignKeyReferences(
-		c, changeColDefMap, replacementRefChildTbls, oldTableID, newTableID,
+		c, changeColDefMap, replacementRefChildTbls, oldTableID, newTableID, indexRenames,
 	); err != nil {
 		return err
 	}
@@ -2380,6 +2396,7 @@ func remapAlterCopyForeignKeyState(
 	sourceRefChildTbls []uint64,
 	changeColDefMap map[uint64]*plan.ColDef,
 	oldTableID uint64,
+	indexRenames map[string]string,
 ) ([]*plan.ForeignKeyDef, []uint64, error) {
 	result := make([]*plan.ForeignKeyDef, len(sourceForeignKeys))
 	hasSelfReference := false
@@ -2401,6 +2418,7 @@ func remapAlterCopyForeignKeyState(
 		selfReference := foreignKey.ForeignTbl == 0 || foreignKey.ForeignTbl == oldTableID
 		if selfReference {
 			hasSelfReference = true
+			foreignKey.ReferencedIndexName = alterCopyReferencedIndexName(foreignKey.ReferencedIndexName, indexRenames)
 			for j, oldColumnID := range foreignKey.ForeignCols {
 				newColumn, ok := changeColDefMap[oldColumnID]
 				if !ok {
@@ -2464,6 +2482,7 @@ func updateTableForeignKeyColId(
 	childTblID uint64,
 	oldParentTblId uint64,
 	newParentTblId uint64,
+	indexRenames map[string]string,
 ) error {
 	_, _, childRel, err := c.e.GetRelationById(c.proc.Ctx, c.proc.GetTxnOperator(), childTblID)
 	if err != nil {
@@ -2479,6 +2498,7 @@ func updateTableForeignKeyColId(
 		changeColDefMap,
 		oldParentTblId,
 		newParentTblId,
+		indexRenames,
 	)
 	if err != nil {
 		return err
@@ -2495,6 +2515,7 @@ func rewriteForeignKeyReferencesForAlterCopy(
 	changeColDefMap map[uint64]*plan.ColDef,
 	oldParentTblID uint64,
 	newParentTblID uint64,
+	indexRenames map[string]string,
 ) (bool, error) {
 	changed := false
 	for _, ct := range constraintDef.Cts {
@@ -2505,6 +2526,10 @@ func rewriteForeignKeyReferencesForAlterCopy(
 				}
 				if fkey.ForeignTbl != oldParentTblID {
 					continue
+				}
+				if name := alterCopyReferencedIndexName(fkey.ReferencedIndexName, indexRenames); name != fkey.ReferencedIndexName {
+					fkey.ReferencedIndexName = name
+					changed = true
 				}
 				for j, foreignColID := range fkey.ForeignCols {
 					if newColDef, ok := changeColDefMap[foreignColID]; ok && foreignColID != newColDef.ColId {
