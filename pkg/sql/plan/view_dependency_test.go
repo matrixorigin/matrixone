@@ -399,7 +399,7 @@ func TestPersistedBinarySliceViewProtocolAdmission(t *testing.T) {
 		}
 	})
 
-	const createSQL = "create view v_binary_slice as select left(n_binary, 1) as x from nation"
+	const createSQL = "create view v_binary_slice as select left(n_binary, 1) as x, substring(n_name, 1, 3) as txt from nation"
 	build := func(floor int64) (*Plan, error) {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, floor)
@@ -418,10 +418,12 @@ func TestPersistedBinarySliceViewProtocolAdmission(t *testing.T) {
 	created, err := build(defines.MORPCVersion86)
 	require.NoError(t, err)
 	createdView := created.GetDdl().GetCreateView().GetTableDef()
-	require.Len(t, createdView.GetCols(), 1)
+	require.Len(t, createdView.GetCols(), 2)
 	createdColType := createdView.GetCols()[0].Typ
 	require.Equal(t, int32(types.T_varbinary), createdColType.Id)
 	require.Equal(t, int32(1), createdColType.Width)
+	require.Equal(t, int32(types.T_varchar), createdView.Cols[1].Typ.Id)
+	require.Equal(t, int32(3), createdView.Cols[1].Typ.Width)
 	var viewData ViewData
 	require.NoError(t, json.Unmarshal(
 		[]byte(createdView.GetViewSql().GetView()), &viewData))
@@ -430,10 +432,12 @@ func TestPersistedBinarySliceViewProtocolAdmission(t *testing.T) {
 
 	regenerated, err := RegenerateViewDefinition(ctx, createdView.GetViewSql().GetView())
 	require.NoError(t, err)
-	require.Len(t, regenerated.TableDef.Cols, 1)
+	require.Len(t, regenerated.TableDef.Cols, 2)
 	regeneratedColType := regenerated.TableDef.Cols[0].Typ
 	require.Equal(t, int32(types.T_varbinary), regeneratedColType.Id)
 	require.Equal(t, int32(1), regeneratedColType.Width)
+	require.Equal(t, int32(types.T_varchar), regenerated.TableDef.Cols[1].Typ.Id)
+	require.Equal(t, int32(3), regenerated.TableDef.Cols[1].Typ.Width)
 	var regeneratedData ViewData
 	require.NoError(t, json.Unmarshal(
 		[]byte(regenerated.TableDef.GetViewSql().GetView()), &regeneratedData))
