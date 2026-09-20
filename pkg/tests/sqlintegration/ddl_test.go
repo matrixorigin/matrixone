@@ -19,6 +19,9 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -27,7 +30,9 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
@@ -312,6 +317,16 @@ func TestCDCCases(t *testing.T) {
 			// Validate the no_full flag via where clause
 			require.Greater(t, rows("", "select task_name from mo_catalog.mo_cdc_task where task_name='"+cdcTaskOpts1+"' and no_full=true"), 0)
 
+			// Public SQL coverage for the automatic NoFull activation boundary:
+			// omitting StartTs must persist the lossless physical-logical CREATE
+			// snapshot before the asynchronous executor is admitted.
+			cdcTaskAutoStart := "cdc_task_autostart"
+			mustExec(db, "create cdc "+cdcTaskAutoStart+" '"+conn+"' 'matrixone' '"+conn+"' '"+db+"."+table+"' {"+
+				"'Level'='table','NoFull'='true'"+
+				"} internal")
+			verifyTaskPresent(cdcTaskAutoStart, true)
+			require.Greater(t, rows("", "select task_name from mo_catalog.mo_cdc_task where task_name='"+cdcTaskAutoStart+"' and no_full=true and start_ts <> ''"), 0)
+
 			// Case 3.2: table-level with frequency in hours
 			cdcTaskOpts2 := "cdc_task_opts2"
 			mustExec(db, "create cdc "+cdcTaskOpts2+" '"+conn+"' 'matrixone' '"+conn+"' '"+db+"."+table+"' {"+
@@ -420,6 +435,253 @@ func TestCDCCases(t *testing.T) {
 
 			// cleanup PITR
 			mustExec(db, "drop pitr pitr_db internal")
+		},
+	)
+}
+
+// TestCDCNoFullPublicLifecycle proves the public SQL lifecycle at the
+// activation boundary.  Unlike TestCDCCases, this case has no external MySQL
+// dependency and therefore remains enabled in GitHub Actions.
+func TestCDCNoFullPublicLifecycle(t *testing.T) {
+	runSQLIntegration(t,
+		func(c embed.Cluster) {
+			ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+			defer cancel()
+			// Do not race CREATE CDC with CN task-service startup.  The public
+			// lifecycle assertion below is about admission ordering, so make the
+			// scheduler ready before creating the task.
+			if w, ok := any(c).(interface {
+				WaitCNStoreTaskServiceCreatedIndexed(ctx context.Context, index int)
+			}); ok {
+				ctxWait, cancelWait := context.WithTimeout(ctx, 60*time.Second)
+				w.WaitCNStoreTaskServiceCreatedIndexed(ctxWait, 0)
+				cancelWait()
+			}
+
+			firstEntered := make(chan struct{})
+			firstRelease := make(chan struct{})
+			secondEntered := make(chan struct{})
+			secondRelease := make(chan struct{})
+			var phase atomic.Int32
+			var firstOnce, secondOnce, firstReleaseOnce, secondReleaseOnce sync.Once
+			releaseFirst := func() { firstReleaseOnce.Do(func() { close(firstRelease) }) }
+			releaseSecond := func() { secondReleaseOnce.Do(func() { close(secondRelease) }) }
+			defer func() {
+				releaseFirst()
+				releaseSecond()
+			}()
+			restoreAdmission := frontend.SetCDCTestAdmissionHookForTest(func() {
+				switch phase.Load() {
+				case 0:
+					firstOnce.Do(func() { close(firstEntered) })
+					<-firstRelease
+					phase.Store(1)
+				case 2:
+					secondOnce.Do(func() { close(secondEntered) })
+					<-secondRelease
+					phase.Store(3)
+				}
+			})
+			defer restoreAdmission()
+
+			cn, err := c.GetCNService(0)
+			require.NoError(t, err)
+			cdc.ResetTableDetectorForTest(cn.ServiceID())
+			exec := testutils.GetSQLExecutor(cn)
+			// Catalog CDC matching compares the persisted database identifier in
+			// the scanner query. Keep this integration fixture lowercase so the
+			// identifier has identical semantics across MySQL and catalog paths.
+			dbName := strings.ToLower(testutils.GetDatabaseName(t))
+			sinkDBName := dbName + "_sink"
+			tableName := "cdc_boundary_source"
+			sinkTableName := tableName
+			taskName := "cdc_boundary_lifecycle"
+			defer cleanupSQLIntegration(t, cn,
+				"drop cdc task "+taskName+" internal",
+				"drop pitr pitr_boundary internal",
+				"drop pitr pitr_boundary_db internal",
+				"drop database if exists "+sinkDBName,
+				"drop database if exists "+dbName)
+			// Cleanup can itself need the CDC task goroutine to make progress.  If
+			// the test fails while a generation is blocked at admission, release
+			// both barriers before cleanup runs (this defer is intentionally later
+			// than cleanupSQLIntegration and therefore executes first).
+			defer func() {
+				releaseFirst()
+				releaseSecond()
+			}()
+
+			mustExec := func(database, statement string) {
+				res, execErr := exec.Exec(ctx, statement, executor.Options{}.WithDatabase(database))
+				require.NoError(t, execErr, statement)
+				res.Close()
+			}
+			taskPresent := func() bool {
+				present := false
+				res, queryErr := exec.Exec(ctx,
+					"select task_name from mo_catalog.mo_cdc_task where task_name='"+taskName+"'",
+					executor.Options{})
+				if queryErr == nil {
+					for _, batch := range res.Batches {
+						present = present || batch.RowCount() > 0
+					}
+					res.Close()
+				}
+				return present
+			}
+			mustExec("", "create database "+dbName)
+			mustExec(dbName, "create table "+tableName+" (id int primary key, value varchar(32))")
+			mustExec(dbName, "insert into "+tableName+" values (1, 'before_create')")
+			// CDC sinks into an existing target namespace; create it before
+			// admission so a missing target cannot mask the lifecycle assertion.
+			mustExec("", "create database "+sinkDBName)
+			mustExec(dbName, "create pitr pitr_boundary for table "+dbName+" "+tableName+" range 3 'h' internal")
+			mustExec(dbName, "create pitr pitr_boundary_db for database "+dbName+" range 3 'h' internal")
+
+			port := fmt.Sprintf("%d", cn.GetServiceConfig().CN.Frontend.Port)
+			uri := "mysql://sys#dump:111@127.0.0.1:" + port
+			mustExec(dbName, "create cdc "+taskName+" '"+uri+"' 'matrixone' '"+uri+"' '"+dbName+":"+sinkDBName+"' {'Level'='database','NoFull'='true'} internal")
+			require.Eventually(t, taskPresent, 30*time.Second, 200*time.Millisecond,
+				"CREATE CDC did not persist the task row")
+			// Keep the task state/error in the failure evidence.  A task can be
+			// persisted successfully and still be rejected by the daemon before
+			// it reaches the admission hook (for example, an executor capability
+			// mismatch); the public regression must expose that rather than timing
+			// out with no diagnosis.
+			res, stateErr := exec.Exec(ctx,
+				"select cast(account_id as varchar), tables, state, err_msg, start_ts, checkpoint_str from mo_catalog.mo_cdc_task where task_name='"+taskName+"'",
+				executor.Options{})
+			if stateErr == nil {
+				res.ReadRows(func(_ int, cols []*vector.Vector) bool {
+					values := make([]string, 0, len(cols))
+					for _, col := range cols {
+						values = append(values, executor.GetStringRows(col)...)
+					}
+					t.Logf("CDC public lifecycle task state=%v", values)
+					return false
+				})
+				res.Close()
+			}
+
+			// CREATE has returned.  Place the post-boundary commit before the
+			// executor finishes admission; the hook is held after detector
+			// registration.  Drive one real detector scan synchronously in a
+			// goroutine so polling cadence cannot change the ordering.
+			mustExec(dbName, "insert into "+tableName+" values (2, 'after_create')")
+			var firstScanDone chan error
+			firstScanAttempts := 0
+			for {
+				firstScanAttempts++
+				firstScanDone = make(chan error, 1)
+				go func(done chan error) { done <- cdc.RunTableDetectorScanForTest(cn.ServiceID()) }(firstScanDone)
+				select {
+				case <-firstEntered:
+					goto firstAdmissionEntered
+				case err := <-firstScanDone:
+					// CREATE returns before taskservice necessarily registers the
+					// executor. Retry empty detector snapshots until registration is
+					// visible; a real scan error is handled the same way and will
+					// surface as an admission timeout if it persists.
+					if err != nil && firstScanAttempts%10 == 0 {
+						t.Logf("CDC public lifecycle detector scan retry %d: %v", firstScanAttempts, err)
+					}
+					select {
+					case <-ctx.Done():
+						t.Fatal("executor did not reach the first admission barrier")
+					case <-time.After(100 * time.Millisecond):
+					}
+				}
+			}
+		firstAdmissionEntered:
+			releaseFirst()
+			require.NoError(t, <-firstScanDone)
+
+			countRows := func(statement string) int {
+				count := 0
+				res, queryErr := exec.Exec(ctx, statement, executor.Options{})
+				if queryErr == nil {
+					count = testutils.ReadCount(res)
+					res.Close()
+				} else {
+					t.Logf("CDC public lifecycle target query failed: %s: %v", statement, queryErr)
+				}
+				return count
+			}
+			waitTarget := func(id int) bool {
+				return countRows(fmt.Sprintf("select count(*) from %s.%s where id=%d", sinkDBName, sinkTableName, id)) > 0
+			}
+			require.Eventually(t, func() bool { return waitTarget(2) }, 120*time.Second, 200*time.Millisecond,
+				"CDC did not deliver row 2 after admission")
+			require.Equal(t, 0, countRows("select count(*) from "+sinkDBName+"."+sinkTableName+" where id=1"),
+				"pre-CREATE row was delivered")
+
+			// Wait for persisted progress before forcing a restart.
+			deadline := time.NewTimer(30 * time.Second)
+			defer deadline.Stop()
+			for {
+				var watermark string
+				res, queryErr := exec.Exec(ctx,
+					"select watermark from mo_catalog.mo_cdc_watermark where task_id = (select task_id from mo_catalog.mo_cdc_task where task_name='"+taskName+"') and db_name='"+dbName+"' and table_name='"+tableName+"'",
+					executor.Options{})
+				if queryErr == nil {
+					for _, batch := range res.Batches {
+						if batch.RowCount() > 0 {
+							watermark = "present"
+						}
+					}
+					res.Close()
+				}
+				if watermark != "" {
+					break
+				}
+				select {
+				case <-deadline.C:
+					t.Fatal("CDC watermark was not persisted after row 2 delivery")
+				case <-time.After(100 * time.Millisecond):
+				}
+			}
+
+			// Restart the real CN service. This tears down and recreates the CDC
+			// executor while retaining the catalog task and watermark, and avoids
+			// making the assertion depend on the asynchronous SQL control-plane
+			// response. The source/target setup and all boundary assertions remain
+			// public SQL operations.
+			phase.Store(2)
+			require.NoError(t, cn.Close())
+			require.NoError(t, cn.Start())
+			cdc.ResetTableDetectorForTest(cn.ServiceID())
+			exec = testutils.GetSQLExecutor(cn)
+			var secondScanDone chan error
+			secondScanAttempts := 0
+			for {
+				secondScanAttempts++
+				secondScanDone = make(chan error, 1)
+				go func(done chan error) { done <- cdc.RunTableDetectorScanForTest(cn.ServiceID()) }(secondScanDone)
+				select {
+				case <-secondEntered:
+					goto secondAdmissionEntered
+				case err := <-secondScanDone:
+					if err != nil && secondScanAttempts%10 == 0 {
+						t.Logf("CDC public lifecycle replacement scan retry %d: %v", secondScanAttempts, err)
+					}
+					select {
+					case <-ctx.Done():
+						t.Fatal("replacement executor did not reach the second admission barrier")
+					case <-time.After(100 * time.Millisecond):
+					}
+				}
+			}
+		secondAdmissionEntered:
+			mustExec(dbName, "insert into "+tableName+" values (3, 'after_restart')")
+			releaseSecond()
+			require.NoError(t, <-secondScanDone)
+
+			require.Eventually(t, func() bool { return waitTarget(3) }, 120*time.Second, 200*time.Millisecond,
+				"CDC did not deliver row 3 after restart")
+			require.Equal(t, 1, countRows("select count(*) from "+sinkDBName+"."+sinkTableName+" where id=2"),
+				"row 2 was replayed across restart")
+			require.Equal(t, 0, countRows("select count(*) from "+sinkDBName+"."+sinkTableName+" where id=1"),
+				"pre-CREATE row was delivered after restart")
 		},
 	)
 }

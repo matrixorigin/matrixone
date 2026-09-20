@@ -15,10 +15,37 @@
 package task
 
 import (
+	"bytes"
+	"compress/gzip"
+	"io"
 	"testing"
 
+	"github.com/gogo/protobuf/proto"
+	"github.com/gogo/protobuf/protoc-gen-gogo/descriptor"
 	"github.com/stretchr/testify/require"
 )
+
+func TestTaskDescriptorIncludesLosslessCDCCode(t *testing.T) {
+	zr, err := gzip.NewReader(bytes.NewReader(proto.FileDescriptor("task.proto")))
+	require.NoError(t, err)
+	raw, err := io.ReadAll(zr)
+	require.NoError(t, err)
+	require.NoError(t, zr.Close())
+	var fd descriptor.FileDescriptorProto
+	require.NoError(t, proto.Unmarshal(raw, &fd))
+	for _, enum := range fd.EnumType {
+		if enum.GetName() != "TaskCode" {
+			continue
+		}
+		for _, value := range enum.Value {
+			if value.GetName() == "InitCdcLosslessStart" {
+				require.Equal(t, int32(15), value.GetNumber())
+				return
+			}
+		}
+	}
+	t.Fatal("task descriptor is missing InitCdcLosslessStart=15")
+}
 
 func TestDetailsType(t *testing.T) {
 	tests := []struct {

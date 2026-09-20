@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -739,6 +740,14 @@ func TestValidateStableInitialSnapshotProtocol(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 }
 
+func TestValidateLosslessNoFullStartProtocolBoundary(t *testing.T) {
+	err := validateLosslessNoFullStartProtocol(
+		context.Background(), defines.MORPCVersion91)
+	require.ErrorContains(t, err, "protocol version 92")
+	require.NoError(t, validateLosslessNoFullStartProtocol(
+		context.Background(), defines.MORPCVersion92))
+}
+
 func (ts *testTaskService) TruncateCompletedTasks(ctx context.Context) error {
 	//TODO implement me
 	panic("implement me")
@@ -1266,6 +1275,37 @@ func TestCDCCreateTaskMetadataUsesCapabilityFence(t *testing.T) {
 		TaskId: "no-full", NoFull: true, ExtraOpts: stableOpts,
 	}).BuildTaskMetadata()
 	require.Equal(t, task.TaskCode_InitCdc, noFull.Executor)
+	lossless := (&CDCCreateTaskOptions{
+		TaskId: "no-full-hlc", NoFull: true,
+		ExtraOpts: fmt.Sprintf(`{"%s":"%s"}`, cdc.CDCTaskExtraOptions_InitialSnapshotProtocol, cdc.CDCInitialSnapshotProtocolNoFullHLC),
+	}).BuildTaskMetadata()
+	require.Equal(t, task.TaskCode_InitCdcLosslessStart, lossless.Executor)
+}
+
+func TestCDCCreateTaskOptionsSetNoFullStartTS(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	snapshot := timestamp.Timestamp{PhysicalTime: time.Date(2026, 9, 9, 1, 2, 3, 456789000, time.UTC).UnixNano()}
+
+	opts := &CDCCreateTaskOptions{NoFull: true}
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().SnapshotTS().Return(snapshot)
+	opts.setNoFullStartTS(txnOp)
+	require.Equal(t, snapshot.DebugString(), opts.StartTs)
+
+	// An explicit StartTs remains the caller's activation boundary.
+	opts.StartTs = "2026-09-01T00:00:00Z"
+	opts.setNoFullStartTS(txnOp)
+	require.Equal(t, "2026-09-01T00:00:00Z", opts.StartTs)
+
+	noSnapshot := &CDCCreateTaskOptions{NoFull: true}
+	noSnapshot.setNoFullStartTS(nil)
+	require.Empty(t, noSnapshot.StartTs)
+
+	zeroTxnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	zeroTxnOp.EXPECT().SnapshotTS().Return(timestamp.Timestamp{})
+	noSnapshot.setNoFullStartTS(zeroTxnOp)
+	require.Empty(t, noSnapshot.StartTs)
 }
 
 func TestRegisterCdcExecutor(t *testing.T) {
@@ -1340,13 +1380,14 @@ func TestRegisterCdcExecutor(t *testing.T) {
 		pwd,
 		tables,
 		filters,
-		"",
+		"2026-09-16T00:00:00Z",
 		"",
 		true,
-		fmt.Sprintf("{\"%s\":%v,\"%s\":\"%s\",\"%s\":%v}",
+		fmt.Sprintf("{\"%s\":%v,\"%s\":\"%s\",\"%s\":%v,\"%s\":\"%s\"}",
 			cdc.CDCTaskExtraOptions_InitSnapshotSplitTxn, cdc.CDCDefaultTaskExtra_InitSnapshotSplitTxn,
 			cdc.CDCTaskExtraOptions_SendSqlTimeout, cdc.CDCDefaultSendSqlTimeout,
 			cdc.CDCTaskExtraOptions_MaxSqlLength, cdc.CDCDefaultTaskExtra_MaxSQLLen,
+			cdc.CDCTaskExtraOptions_InitialSnapshotProtocol, cdc.CDCInitialSnapshotProtocolNoFullHLC,
 		),
 	))
 
@@ -3183,6 +3224,122 @@ type cdcCatalogStateExecutor struct {
 	tableErrorsCleared bool
 }
 
+// claimLossWatermarkCatalog is a tiny durable catalog model for the takeover
+// regression below. It understands only the owner-claim/checkpoint statements
+// emitted by CDCWatermarkUpdater, but unlike the older cancellation test it
+// keeps owner_generation and watermark in one shared row across executors.
+type claimLossWatermarkCatalog struct {
+	mu              sync.Mutex
+	ownerGeneration uint64
+	watermark       string
+	deleted         bool
+}
+
+var (
+	claimOwnerNumberRE = regexp.MustCompile(`owner_generation\s*=\s*GREATEST\(owner_generation,\s*([0-9]+)\)`)
+	claimWatermarkRE   = regexp.MustCompile(`'([0-9]+-[0-9]+)'`)
+	claimCheckpointRE  = regexp.MustCompile(`,\s*([0-9]+)\s+AS owner_generation`)
+)
+
+func (c *claimLossWatermarkCatalog) Exec(_ context.Context, sql string, _ ie.SessionOverrideOptions) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if strings.Contains(sql, "DELETE FROM `mo_catalog`.`mo_cdc_watermark`") {
+		c.deleted = true
+		c.watermark = ""
+		return nil
+	}
+	if match := claimOwnerNumberRE.FindStringSubmatch(sql); len(match) == 2 {
+		owner, err := strconv.ParseUint(match[1], 10, 64)
+		if err != nil {
+			return err
+		}
+		if owner > c.ownerGeneration {
+			c.ownerGeneration = owner
+		}
+		if c.watermark == "" {
+			c.watermark = "0-0"
+		}
+		c.deleted = false
+		return nil
+	}
+	if strings.Contains(sql, "mo_cdc_watermark") {
+		watermark := claimWatermarkRE.FindStringSubmatch(sql)
+		owner := claimCheckpointRE.FindStringSubmatch(sql)
+		if len(watermark) == 2 && len(owner) == 2 {
+			candidate, err := strconv.ParseUint(owner[1], 10, 64)
+			if err != nil {
+				return err
+			}
+			// The real guarded UPDATE applies the same owner predicate. Keep the
+			// model strict so an old executor's delayed checkpoint would be
+			// observable if it ever ran after takeover.
+			if candidate == c.ownerGeneration {
+				c.watermark = watermark[1]
+				c.deleted = false
+			}
+		}
+	}
+	return nil
+}
+
+func (c *claimLossWatermarkCatalog) Query(_ context.Context, sql string, _ ie.SessionOverrideOptions) ie.InternalExecResult {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if strings.HasPrefix(sql, "SELECT owner_generation, watermark, source_table_id") {
+		if c.deleted {
+			return &claimLossWatermarkResult{}
+		}
+		watermark := c.watermark
+		if watermark == "" {
+			watermark = "0-0"
+		}
+		return &claimLossWatermarkResult{rows: [][]string{{
+			strconv.FormatUint(c.ownerGeneration, 10), watermark, "1",
+		}}}
+	}
+	if strings.HasPrefix(sql, "SELECT watermark, source_table_id") {
+		if c.deleted || c.watermark == "" {
+			return &claimLossWatermarkResult{}
+		}
+		return &claimLossWatermarkResult{rows: [][]string{{c.watermark, "1"}}}
+	}
+	return &claimLossWatermarkResult{err: errors.New("unexpected watermark catalog query")}
+}
+
+func (*claimLossWatermarkCatalog) ApplySessionOverride(ie.SessionOverrideOptions) {}
+
+type claimLossWatermarkResult struct {
+	rows [][]string
+	err  error
+}
+
+func (r *claimLossWatermarkResult) Error() error      { return r.err }
+func (*claimLossWatermarkResult) ColumnCount() uint64 { return 0 }
+func (*claimLossWatermarkResult) Column(context.Context, uint64) (string, uint8, bool, error) {
+	return "", 0, false, nil
+}
+func (r *claimLossWatermarkResult) RowCount() uint64 { return uint64(len(r.rows)) }
+func (r *claimLossWatermarkResult) Row(_ context.Context, i uint64) ([]interface{}, error) {
+	row := make([]interface{}, len(r.rows[i]))
+	for j, value := range r.rows[i] {
+		row[j] = value
+	}
+	return row, nil
+}
+func (*claimLossWatermarkResult) Value(context.Context, uint64, uint64) (interface{}, error) {
+	return nil, nil
+}
+func (r *claimLossWatermarkResult) GetUint64(_ context.Context, i, j uint64) (uint64, error) {
+	return strconv.ParseUint(r.rows[i][j], 10, 64)
+}
+func (*claimLossWatermarkResult) GetFloat64(context.Context, uint64, uint64) (float64, error) {
+	return 0, nil
+}
+func (r *claimLossWatermarkResult) GetString(_ context.Context, i, j uint64) (string, error) {
+	return r.rows[i][j], nil
+}
+
 func (e *cdcCatalogStateExecutor) Exec(ctx context.Context, sql string, options ie.SessionOverrideOptions) error {
 	_, err := e.ExecWithStatus(ctx, sql, options)
 	return err
@@ -3483,6 +3640,135 @@ func TestCdcTaskCancelFinalizesWatermarks(t *testing.T) {
 			require.Equal(t, cdc.CDCSQLBuilder.DeleteWatermarkSQL(key.AccountId, key.TaskId), sqls[len(sqls)-1])
 		})
 	}
+}
+
+func TestCdcTaskCancelWithoutWatermarkCleanupPreservesProgress(t *testing.T) {
+	capture := &cdcCatalogStateExecutor{}
+	updater := cdc.NewCDCWatermarkUpdater(
+		t.Name(),
+		capture,
+		cdc.WithCronJobInterval(time.Hour),
+	)
+	updater.Start()
+	defer updater.Stop()
+
+	key := cdc.WatermarkKey{
+		AccountId: 1,
+		TaskId:    "task-claim-loss",
+		DBName:    "db",
+		TableName: "table",
+	}
+	watermark := types.BuildTS(10, 1)
+	require.NoError(t, updater.UpdateWatermarkOnly(context.Background(), &key, &watermark))
+	require.NoError(t, updater.ForceFlush(context.Background()))
+
+	executor := &CDCTaskExecutor{
+		activeRoutine:    cdc.NewCdcActiveRoutine(),
+		watermarkUpdater: updater,
+		cnUUID:           "test-cn",
+		runningReaders:   &sync.Map{},
+		spec: &task.CreateCdcDetails{
+			TaskId:   key.TaskId,
+			TaskName: "task-claim-loss",
+			Accounts: []*task.Account{{Id: key.AccountId}},
+		},
+		stateMachine: NewExecutorStateMachine(),
+		holdCh:       make(chan int, 1),
+	}
+	require.NoError(t, executor.stateMachine.Transition(TransitionStart))
+	require.NoError(t, executor.stateMachine.Transition(TransitionStartSuccess))
+
+	require.NoError(t, executor.CancelWithoutWatermarkCleanup())
+	require.Equal(t, StateCancelled, executor.stateMachine.State())
+	got, err := updater.GetFromCache(context.Background(), &key)
+	require.NoError(t, err)
+	require.Equal(t, watermark, got)
+	for _, sql := range capture.capturedExecSQLs() {
+		require.NotEqual(t, cdc.CDCSQLBuilder.DeleteWatermarkSQL(key.AccountId, key.TaskId), sql)
+	}
+}
+
+func TestCdcTaskClaimLossDelayedCancelPreservesReplacementWatermark(t *testing.T) {
+	catalog := &claimLossWatermarkCatalog{}
+	updater := cdc.NewCDCWatermarkUpdater(
+		t.Name(), catalog,
+		cdc.WithCronJobInterval(time.Hour),
+	)
+	updater.Start()
+	defer updater.Stop()
+
+	key := &cdc.WatermarkKey{
+		AccountId: 1,
+		TaskId:    "task-claim-takeover",
+		DBName:    "db",
+		TableName: "table",
+	}
+	start := types.BuildTS(10, 1)
+	replacement := types.BuildTS(20, 2)
+	ownerA := cdc.NewOwnerFenceForGeneration(time.UnixMicro(100), func(context.Context) error { return nil })
+	ownerB := cdc.NewOwnerFenceForGeneration(time.UnixMicro(200), func(context.Context) error { return nil })
+	ownerC := cdc.NewOwnerFenceForGeneration(time.UnixMicro(300), func(context.Context) error { return nil })
+
+	claimed, _, err := updater.ClaimWatermarkOwner(context.Background(), key, ownerA)
+	require.NoError(t, err)
+	require.Equal(t, types.BuildTS(0, 0), claimed)
+	ownerCtx := cdc.WithWatermarkOwnerFence(context.Background(), ownerA, 1)
+	require.NoError(t, updater.UpdateWatermarkOnly(ownerCtx, key, &start))
+	require.NoError(t, updater.ForceFlush(context.Background()))
+
+	claimed, _, err = updater.ClaimWatermarkOwner(context.Background(), key, ownerB)
+	require.NoError(t, err)
+	require.Equal(t, start, claimed)
+	ownerCtx = cdc.WithWatermarkOwnerFence(context.Background(), ownerB, 1)
+	require.NoError(t, updater.UpdateWatermarkOnly(ownerCtx, key, &replacement))
+	require.NoError(t, updater.ForceFlush(context.Background()))
+
+	newExecutor := func(taskID string, fence *cdc.OwnerFence) *CDCTaskExecutor {
+		exec := &CDCTaskExecutor{
+			activeRoutine:    cdc.NewCdcActiveRoutine(),
+			watermarkUpdater: updater,
+			cnUUID:           "test-cn-" + taskID,
+			claimFence:       fence,
+			runningReaders:   &sync.Map{},
+			spec: &task.CreateCdcDetails{
+				TaskId:   key.TaskId,
+				TaskName: taskID,
+				Accounts: []*task.Account{{Id: key.AccountId}},
+			},
+			stateMachine: NewExecutorStateMachine(),
+			holdCh:       make(chan int, 1),
+		}
+		require.NoError(t, exec.stateMachine.Transition(TransitionStart))
+		require.NoError(t, exec.stateMachine.Transition(TransitionStartSuccess))
+		return exec
+	}
+
+	// CN A loses the claim but shuts down late, after CN B has committed its
+	// replacement checkpoint. Claim-loss cancellation must not run terminal
+	// watermark deletion against B's live task.
+	executorA := newExecutor("executor-a", ownerA)
+	clientExecutor := newExecutor("executor-b", ownerB)
+	require.NoError(t, executorA.CancelWithoutWatermarkCleanup())
+	require.Equal(t, StateCancelled, executorA.stateMachine.State())
+	require.Equal(t, StateRunning, clientExecutor.stateMachine.State())
+
+	got, generation, err := updater.GetWatermarkProgress(context.Background(), key)
+	require.NoError(t, err)
+	require.Equal(t, replacement, got)
+	require.Equal(t, uint64(1), generation)
+	catalog.mu.Lock()
+	require.Equal(t, ownerB.GenerationToken(), catalog.ownerGeneration)
+	require.False(t, catalog.deleted)
+	catalog.mu.Unlock()
+
+	// A fresh executor (CN C) must resume from B's durable progress rather than
+	// falling back to the original NoFull creation boundary.
+	executorC := newExecutor("executor-c", ownerC)
+	resumed, _, err := updater.ClaimWatermarkOwner(context.Background(), key, ownerC)
+	require.NoError(t, err)
+	require.Equal(t, replacement, resumed)
+	executorC.startTs = resumed
+	require.Equal(t, replacement, executorC.startTs)
 }
 
 func TestCdcTaskCancelDrainsInFlightTableCallback(t *testing.T) {
@@ -4887,6 +5173,7 @@ func TestCdcTask_RestartClearsPermanentTableErrorAndRecovers(t *testing.T) {
 		activeRoutine:    cdc.NewCdcActiveRoutine(),
 		holdCh:           make(chan int, 1),
 		watermarkUpdater: u,
+		startTs:          types.BuildTS(200, 3),
 		noFull:           true,
 		additionalConfig: map[string]interface{}{
 			cdc.CDCTaskExtraOptions_MaxSqlLength:         float64(cdc.CDCDefaultTaskExtra_MaxSQLLen),
@@ -5636,6 +5923,7 @@ func TestCdcTask_addExecPipelineForTable(t *testing.T) {
 	cdcTask := &CDCTaskExecutor{
 		activeRoutine:    cdc.NewCdcActiveRoutine(), // Required for reader.Run()
 		watermarkUpdater: u,
+		startTs:          types.BuildTS(100, 1),
 		runningReaders:   &sync.Map{},
 		noFull:           true,
 		additionalConfig: map[string]interface{}{
@@ -5737,6 +6025,29 @@ func TestCdcTask_addExecPipelineForTable(t *testing.T) {
 			reader.Wait()
 		}
 	}
+
+	// Legacy NoFull rows must consult durable progress before creating a reader.
+	// The test executor intentionally lacks the newer source_table_id column,
+	// so the progress probe returns an error before any pipeline is admitted.
+	legacyTask := &CDCTaskExecutor{
+		activeRoutine:    cdc.NewCdcActiveRoutine(),
+		watermarkUpdater: u,
+		runningReaders:   &sync.Map{},
+		noFull:           true,
+		additionalConfig: cdcTask.additionalConfig,
+		spec: &task.CreateCdcDetails{
+			Accounts: []*task.Account{{Id: 0}},
+		},
+	}
+	require.Error(t, legacyTask.addExecPipelineForTable(ctx, info, txnOperator, nil))
+}
+
+func TestEffectiveCDCStartTSUsesLegacyDurableProgress(t *testing.T) {
+	durableProgress := types.BuildTS(100, 5)
+
+	assert.Equal(t, durableProgress, effectiveCDCStartTS(types.TS{}, durableProgress, true))
+	assert.Equal(t, types.BuildTS(200, 1), effectiveCDCStartTS(types.BuildTS(200, 1), durableProgress, false))
+	assert.Equal(t, types.TS{}, effectiveCDCStartTS(types.TS{}, types.TS{}, true))
 }
 
 func TestCdcTask_checkPitr(t *testing.T) {
@@ -5797,6 +6108,19 @@ func Test_parseTimestamp(t *testing.T) {
 
 	_, err = CDCStrToTime("2006-01-02T15:04:05-07:00", nil)
 	assert.NoError(t, err)
+}
+
+func TestCDCStrToTSRoundTripPreservesLogicalTime(t *testing.T) {
+	want := types.BuildTS(1710000000000000000, 3)
+	got, err := CDCStrToTS(want.ToString())
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+
+	// Existing wall-clock task rows and explicit user timestamps retain the
+	// historical logical-zero interpretation.
+	legacy, err := CDCStrToTS("2026-09-09T01:02:03.456789Z")
+	require.NoError(t, err)
+	require.Equal(t, int64(0), int64(legacy.Logical()))
 }
 
 func TestCDCParseGranularityTuple(t *testing.T) {
