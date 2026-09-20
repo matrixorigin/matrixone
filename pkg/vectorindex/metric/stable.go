@@ -37,16 +37,12 @@ func StableL2DistanceSq[T types.RealNumbers](p, q []T) (float64, error) {
 		return 0, moerr.NewInternalErrorNoCtx("vector dimension not matched")
 	}
 
-	scale := 0.0
-	for i := range p {
-		d := float64(p[i]) - float64(q[i])
-		ad := math.Abs(d)
-		if math.IsInf(ad, 0) {
-			return math.Inf(1), nil
-		}
-		if ad > scale {
-			scale = ad
-		}
+	scale, hasNaN, hasInf := stableDifferenceScale(p, q)
+	if hasNaN {
+		return math.NaN(), nil
+	}
+	if hasInf {
+		return math.Inf(1), nil
 	}
 	if scale == 0 {
 		return 0, nil
@@ -68,16 +64,12 @@ func StableL2Distance[T types.RealNumbers](p, q []T) (float64, error) {
 		return 0, moerr.NewInternalErrorNoCtx("vector dimension not matched")
 	}
 
-	scale := 0.0
-	for i := range p {
-		d := float64(p[i]) - float64(q[i])
-		ad := math.Abs(d)
-		if math.IsInf(ad, 0) {
-			return math.Inf(1), nil
-		}
-		if ad > scale {
-			scale = ad
-		}
+	scale, hasNaN, hasInf := stableDifferenceScale(p, q)
+	if hasNaN {
+		return math.NaN(), nil
+	}
+	if hasInf {
+		return math.Inf(1), nil
 	}
 	if scale == 0 {
 		return 0, nil
@@ -99,15 +91,12 @@ func StableL1Distance[T types.RealNumbers](p, q []T) (float64, error) {
 		return 0, moerr.NewInternalErrorNoCtx("vector dimension not matched")
 	}
 
-	scale := 0.0
-	for i := range p {
-		d := math.Abs(float64(p[i]) - float64(q[i]))
-		if math.IsInf(d, 0) {
-			return math.Inf(1), nil
-		}
-		if d > scale {
-			scale = d
-		}
+	scale, hasNaN, hasInf := stableDifferenceScale(p, q)
+	if hasNaN {
+		return math.NaN(), nil
+	}
+	if hasInf {
+		return math.Inf(1), nil
 	}
 	if scale == 0 {
 		return 0, nil
@@ -132,11 +121,29 @@ func StableInnerProduct[T types.RealNumbers](p, q []T) (float64, error) {
 
 	maxTerm := 0.0
 	needsExact := false
+	hasPosInf, hasNegInf := false, false
 	for i := range p {
 		a := float64(p[i])
 		b := float64(q[i])
-		if math.IsNaN(a) || math.IsNaN(b) {
+		term := a * b
+		if math.IsNaN(a) || math.IsNaN(b) || math.IsNaN(term) {
 			return math.NaN(), nil
+		}
+		if math.IsInf(term, 1) {
+			if math.IsInf(a, 0) || math.IsInf(b, 0) {
+				hasPosInf = true
+			} else {
+				needsExact = true
+			}
+			continue
+		}
+		if math.IsInf(term, -1) {
+			if math.IsInf(a, 0) || math.IsInf(b, 0) {
+				hasNegInf = true
+			} else {
+				needsExact = true
+			}
+			continue
 		}
 		if a == 0 || b == 0 {
 			continue
@@ -147,14 +154,23 @@ func StableInnerProduct[T types.RealNumbers](p, q []T) (float64, error) {
 			needsExact = true
 			continue
 		}
-		term := math.Abs(a * b)
-		if term == 0 || term < math.SmallestNonzeroFloat64*(1<<52) {
+		absTerm := math.Abs(term)
+		if absTerm == 0 || absTerm < math.SmallestNonzeroFloat64*(1<<52) {
 			needsExact = true
 			continue
 		}
-		if term > maxTerm {
-			maxTerm = term
+		if absTerm > maxTerm {
+			maxTerm = absTerm
 		}
+	}
+	if hasPosInf || hasNegInf {
+		if hasPosInf && hasNegInf {
+			return math.NaN(), nil
+		}
+		if hasPosInf {
+			return math.Inf(-1), nil
+		}
+		return math.Inf(1), nil
 	}
 	if maxTerm > math.MaxFloat64/float64(maxInt(1, len(p))) {
 		needsExact = true
@@ -222,8 +238,14 @@ func StableCosineSimilarity[T types.RealNumbers](p, q []T) (float64, error) {
 }
 
 func stableCosineSimilarity[T types.RealNumbers](p, q []T) (float64, bool, error) {
-	scaleP := stableMaxAbs(p)
-	scaleQ := stableMaxAbs(q)
+	summaryP := summarizeStableValues(p)
+	summaryQ := summarizeStableValues(q)
+	if summaryP.hasNaN || summaryP.hasPosInf || summaryP.hasNegInf ||
+		summaryQ.hasNaN || summaryQ.hasPosInf || summaryQ.hasNegInf {
+		return math.NaN(), false, nil
+	}
+	scaleP := summaryP.maxAbs
+	scaleQ := summaryQ.maxAbs
 	if scaleP == 0 || scaleQ == 0 {
 		return 0, true, nil
 	}
@@ -283,7 +305,14 @@ func StableSphericalDistance[T types.RealNumbers](p, q []T) (float64, error) {
 }
 
 func StableL1Norm[T types.RealNumbers](v []T) (float64, error) {
-	scale := stableMaxAbs(v)
+	summary := summarizeStableValues(v)
+	if summary.hasNaN {
+		return math.NaN(), nil
+	}
+	if summary.hasPosInf || summary.hasNegInf {
+		return math.Inf(1), nil
+	}
+	scale := summary.maxAbs
 	if scale == 0 {
 		return 0, nil
 	}
@@ -295,7 +324,14 @@ func StableL1Norm[T types.RealNumbers](v []T) (float64, error) {
 }
 
 func StableL2Norm[T types.RealNumbers](v []T) (float64, error) {
-	scale := stableMaxAbs(v)
+	summary := summarizeStableValues(v)
+	if summary.hasNaN {
+		return math.NaN(), nil
+	}
+	if summary.hasPosInf || summary.hasNegInf {
+		return math.Inf(1), nil
+	}
+	scale := summary.maxAbs
 	if scale == 0 {
 		return 0, nil
 	}
@@ -308,7 +344,17 @@ func StableL2Norm[T types.RealNumbers](v []T) (float64, error) {
 }
 
 func StableSummation[T types.RealNumbers](v []T) (float64, error) {
-	maxAbs := stableMaxAbs(v)
+	summary := summarizeStableValues(v)
+	if summary.hasNaN || (summary.hasPosInf && summary.hasNegInf) {
+		return math.NaN(), nil
+	}
+	if summary.hasPosInf {
+		return math.Inf(1), nil
+	}
+	if summary.hasNegInf {
+		return math.Inf(-1), nil
+	}
+	maxAbs := summary.maxAbs
 	if maxAbs == 0 {
 		return 0, nil
 	}
@@ -341,7 +387,17 @@ func StableSummation[T types.RealNumbers](v []T) (float64, error) {
 // while the accumulator is still a big.Float so a finite mean is not lost when
 // the unscaled sum itself is outside float64.
 func StableMean[T types.RealNumbers](v []T) (float64, error) {
-	maxAbs := stableMaxAbs(v)
+	summary := summarizeStableValues(v)
+	if summary.hasNaN || (summary.hasPosInf && summary.hasNegInf) {
+		return math.NaN(), nil
+	}
+	if summary.hasPosInf {
+		return math.Inf(1), nil
+	}
+	if summary.hasNegInf {
+		return math.Inf(-1), nil
+	}
+	maxAbs := summary.maxAbs
 	if maxAbs == 0 {
 		return 0, nil
 	}
@@ -409,7 +465,18 @@ func StableNormalizeL2[T types.RealNumbers](v, normalized []T) error {
 	if len(v) == 0 {
 		return moerr.NewInternalErrorNoCtx("cannot normalize empty vector")
 	}
-	scale := stableMaxAbs(v)
+	summary := summarizeStableValues(v)
+	if summary.hasNaN || summary.hasPosInf || summary.hasNegInf {
+		norm := math.NaN()
+		if !summary.hasNaN {
+			norm = math.Inf(1)
+		}
+		for i, value := range v {
+			normalized[i] = T(float64(value) / norm)
+		}
+		return nil
+	}
+	scale := summary.maxAbs
 	if scale == 0 {
 		copy(normalized, v)
 		return nil
@@ -427,15 +494,50 @@ func StableNormalizeL2[T types.RealNumbers](v, normalized []T) error {
 	return nil
 }
 
-func stableMaxAbs[T types.RealNumbers](v []T) float64 {
-	maxAbs := 0.0
+type stableValueSummary struct {
+	maxAbs    float64
+	hasNaN    bool
+	hasPosInf bool
+	hasNegInf bool
+}
+
+func summarizeStableValues[T types.RealNumbers](v []T) stableValueSummary {
+	summary := stableValueSummary{}
 	for _, value := range v {
-		abs := math.Abs(float64(value))
-		if abs > maxAbs {
-			maxAbs = abs
+		x := float64(value)
+		switch {
+		case math.IsNaN(x):
+			summary.hasNaN = true
+		case math.IsInf(x, 1):
+			summary.hasPosInf = true
+			summary.maxAbs = math.Inf(1)
+		case math.IsInf(x, -1):
+			summary.hasNegInf = true
+			summary.maxAbs = math.Inf(1)
+		default:
+			if abs := math.Abs(x); abs > summary.maxAbs {
+				summary.maxAbs = abs
+			}
 		}
 	}
-	return maxAbs
+	return summary
+}
+
+func stableDifferenceScale[T types.RealNumbers](p, q []T) (scale float64, hasNaN, hasInf bool) {
+	for i := range p {
+		d := float64(p[i]) - float64(q[i])
+		switch {
+		case math.IsNaN(d):
+			hasNaN = true
+		case math.IsInf(d, 0):
+			hasInf = true
+		default:
+			if ad := math.Abs(d); ad > scale {
+				scale = ad
+			}
+		}
+	}
+	return scale, hasNaN, hasInf
 }
 
 func scaleTimes(scale, value float64, power int) float64 {

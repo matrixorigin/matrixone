@@ -18,6 +18,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
 
@@ -58,6 +59,110 @@ func TestStableFloat64ResultsForFloat32Input(t *testing.T) {
 	wide, err := wideFn(input, zero)
 	require.NoError(t, err)
 	require.InEpsilon(t, sq, wide, 1e-14)
+}
+
+func TestStableDistancesPreserveNonFiniteValues(t *testing.T) {
+	assertStableDistanceNonFinite[float32](t)
+	assertStableDistanceNonFinite[float64](t)
+
+	wide, err := ResolveDistanceFn[float32, float64](Metric_L2sqDistance)
+	require.NoError(t, err)
+	distance, err := wide([]float32{float32(math.NaN()), 0}, []float32{0, 0})
+	require.NoError(t, err)
+	require.True(t, math.IsNaN(distance))
+}
+
+func assertStableDistanceNonFinite[T types.RealNumbers](t *testing.T) {
+	t.Helper()
+	zero := []T{0, 0}
+	functions := []struct {
+		name string
+		fn   func([]T, []T) (float64, error)
+	}{
+		{"l1", StableL1Distance[T]},
+		{"l2", StableL2Distance[T]},
+		{"l2 squared", StableL2DistanceSq[T]},
+	}
+	cases := []struct {
+		name    string
+		left    []T
+		right   []T
+		wantNaN bool
+	}{
+		{"nan", []T{T(math.NaN()), 0}, zero, true},
+		{"inf", []T{T(math.Inf(1)), 0}, zero, false},
+		{"nan after inf", []T{T(math.Inf(1)), T(math.NaN())}, zero, true},
+		{"inf minus inf", []T{T(math.Inf(1)), 0}, []T{T(math.Inf(1)), 0}, true},
+	}
+	for _, tc := range cases {
+		for _, distanceFn := range functions {
+			t.Run(tc.name+"/"+distanceFn.name, func(t *testing.T) {
+				got, err := distanceFn.fn(tc.left, tc.right)
+				require.NoError(t, err)
+				if tc.wantNaN {
+					require.True(t, math.IsNaN(got))
+				} else {
+					require.True(t, math.IsInf(got, 1))
+				}
+			})
+		}
+	}
+}
+
+func TestStableReductionsPreserveNonFiniteValues(t *testing.T) {
+	sum, err := StableSummation([]float64{math.NaN(), 0})
+	require.NoError(t, err)
+	require.True(t, math.IsNaN(sum))
+
+	sum, err = StableSummation([]float64{math.Inf(1), math.Inf(-1)})
+	require.NoError(t, err)
+	require.True(t, math.IsNaN(sum))
+
+	sum, err = StableSummation([]float64{math.Inf(1), 1})
+	require.NoError(t, err)
+	require.True(t, math.IsInf(sum, 1))
+
+	mean, err := StableMean([]float64{math.NaN(), 0})
+	require.NoError(t, err)
+	require.True(t, math.IsNaN(mean))
+	mean, err = StableMean([]float64{math.Inf(-1), 1})
+	require.NoError(t, err)
+	require.True(t, math.IsInf(mean, -1))
+
+	l1Norm, err := StableL1Norm([]float64{math.NaN(), 0})
+	require.NoError(t, err)
+	require.True(t, math.IsNaN(l1Norm))
+	l1Norm, err = StableL1Norm([]float64{math.Inf(1), 0})
+	require.NoError(t, err)
+	require.True(t, math.IsInf(l1Norm, 1))
+
+	l2Norm, err := StableL2Norm([]float64{math.NaN(), 0})
+	require.NoError(t, err)
+	require.True(t, math.IsNaN(l2Norm))
+	l2Norm, err = StableL2Norm([]float64{math.Inf(-1), 0})
+	require.NoError(t, err)
+	require.True(t, math.IsInf(l2Norm, 1))
+
+	inner, err := StableInnerProduct([]float64{math.Inf(1), 0}, []float64{0, 1})
+	require.NoError(t, err)
+	require.True(t, math.IsNaN(inner))
+	inner, err = StableInnerProduct([]float64{math.Inf(1), 1}, []float64{1, 0})
+	require.NoError(t, err)
+	require.True(t, math.IsInf(inner, -1))
+
+	cosine, err := StableCosineDistance([]float64{math.NaN(), 0}, []float64{0, 0})
+	require.NoError(t, err)
+	require.True(t, math.IsNaN(cosine))
+	_, err = StableCosineSimilarity([]float64{math.Inf(1), 0}, []float64{0, 0})
+	require.NoError(t, err)
+
+	normalized := make([]float64, 2)
+	require.NoError(t, StableNormalizeL2([]float64{math.NaN(), 0}, normalized))
+	require.True(t, math.IsNaN(normalized[0]))
+	require.True(t, math.IsNaN(normalized[1]))
+	require.NoError(t, StableNormalizeL2([]float64{math.Inf(1), 1}, normalized))
+	require.True(t, math.IsNaN(normalized[0]))
+	require.Equal(t, float64(0), normalized[1])
 }
 
 func TestStableReductionsPreserveCancellation(t *testing.T) {
