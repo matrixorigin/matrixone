@@ -19,6 +19,7 @@ mo_database    r
 mo_feature_limit    r
 mo_feature_registry    r
 mo_foreign_keys    r
+mo_function_revisions    r
 mo_iceberg_catalogs    r
 mo_iceberg_maintenance_jobs    r
 mo_iceberg_orphan_files    r
