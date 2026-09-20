@@ -4738,11 +4738,12 @@ func TestRemoteHLLStateRetainsCompatibilityAcrossProtocolVersions(t *testing.T) 
 	vectorArg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_array_float32)}}
 	makeVersion := func(aggID int64, arg *plan.Expr) byte {
 		ctr := &container{
-			mp:                   proc.Mp(),
-			mtyp:                 H0,
-			legacyHLLState:       useLegacyHLLStateForRemote(proc),
-			floatZeroHLLState:    useFloatZeroHLLStateForRemote(proc),
-			legacyVectorHLLState: useLegacyVectorHLLStateForRemote(proc),
+			mp:                    proc.Mp(),
+			mtyp:                  H0,
+			legacyHLLState:        useLegacyHLLStateForRemote(proc),
+			floatZeroHLLState:     useFloatZeroHLLStateForRemote(proc),
+			legacyVectorHLLState:  useLegacyVectorHLLStateForRemote(proc),
+			legacyTextHLLAddState: useLegacyTextHLLAddStateForRemote(proc),
 		}
 		aggs, err := ctr.makeAggList([]aggexec.AggFuncExecExpression{
 			aggexec.MakeAggFunctionExpression(
@@ -4863,8 +4864,9 @@ func TestRemoteCanonicalHLLAddStateGate(t *testing.T) {
 				protocol int64
 				wire     byte
 			}{
-				{protocol: defines.MORPCVersion87, wire: 2},
-				{protocol: defines.MORPCVersion88, wire: 4},
+				{protocol: defines.MORPCVersion88, wire: 2},
+				{protocol: defines.MORPCVersion90, wire: 2},
+				{protocol: defines.MORPCVersion91, wire: 4},
 			} {
 				rt.SetGlobalVariables(moruntime.MOProtocolVersion, version.protocol)
 				arg := &plan.Expr{Typ: plan.Type{
@@ -4873,9 +4875,9 @@ func TestRemoteCanonicalHLLAddStateGate(t *testing.T) {
 					Scale: tc.typ.Scale,
 				}}
 				ctr := &container{
-					mp:                         proc.Mp(),
-					mtyp:                       H0,
-					legacyCanonicalHLLAddState: useLegacyCanonicalHLLAddStateForRemote(proc),
+					mp:                    proc.Mp(),
+					mtyp:                  H0,
+					legacyTextHLLAddState: useLegacyTextHLLAddStateForRemote(proc),
 				}
 				aggs, err := ctr.makeAggList([]aggexec.AggFuncExecExpression{
 					aggexec.MakeAggFunctionExpression(
@@ -4896,31 +4898,33 @@ func TestRemoteCanonicalHLLAddStateGate(t *testing.T) {
 		})
 	}
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion87)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion90)
 	// The aggregate expression is exercised above with real input vectors. Keep
 	// this lifecycle check expression-free: a synthetic CHAR argument without a
 	// column reference cannot be prepared by the expression executor.
 	group := newGroupOp(proc, nil, nil)
 	require.NoError(t, group.Prepare(proc))
-	require.True(t, group.ctr.legacyCanonicalHLLAddState,
-		"Group.Prepare must apply the pre-v88 HLL_ADD compatibility mode")
+	require.True(t, group.ctr.legacyTextHLLAddState,
+		"Group.Prepare must apply the pre-v91 CHAR/JSON HLL_ADD compatibility mode")
 	group.Free(proc, false, nil)
 
 	merge := newMergeGroupOp(nil)
 	require.NoError(t, merge.Prepare(proc))
-	require.True(t, merge.ctr.legacyCanonicalHLLAddState,
-		"MergeGroup.Prepare must apply the pre-v88 HLL_ADD compatibility mode")
+	require.True(t, merge.ctr.legacyTextHLLAddState,
+		"MergeGroup.Prepare must apply the pre-v91 CHAR/JSON HLL_ADD compatibility mode")
 	merge.Free(proc, false, nil)
 }
 
 func TestLegacyHLLStateRequiresRemoteProcess(t *testing.T) {
 	require.False(t, useLegacyHLLStateForRemote(nil))
 	require.False(t, useLegacyVectorHLLStateForRemote(nil))
+	require.False(t, useLegacyTextHLLAddStateForRemote(nil))
 	require.False(t, useLegacyApproxPercentileStateForRemote(nil))
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	require.False(t, useLegacyHLLStateForRemote(proc))
 	require.False(t, useLegacyVectorHLLStateForRemote(proc))
+	require.False(t, useLegacyTextHLLAddStateForRemote(proc))
 }
 
 func TestGroupConcatSourceRowProtocolGates(t *testing.T) {

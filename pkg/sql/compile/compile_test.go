@@ -2480,6 +2480,12 @@ func TestCompileShuffleGroupGatesCanonicalHLLAddByProtocolVersion(t *testing.T) 
 
 			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion88)
 			require.True(t, c.supportsRemoteCanonicalHLLAdd())
+			require.Equal(t, !tc.canonical, c.canCompileShuffleGroup(aggNode))
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion90)
+			require.False(t, c.supportsRemoteCanonicalTextHLLAdd())
+			require.Equal(t, !tc.canonical, c.canCompileShuffleGroup(aggNode))
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion91)
+			require.True(t, c.supportsRemoteCanonicalTextHLLAdd())
 			require.True(t, c.canCompileShuffleGroup(aggNode))
 		})
 	}

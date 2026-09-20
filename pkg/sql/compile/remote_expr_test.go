@@ -750,11 +750,18 @@ func TestCanonicalHLLAddRemoteProtocolValidation(t *testing.T) {
 			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion87)
 			if tc.canonical {
 				require.ErrorContains(t, validateRemoteAggregateProtocol(proc, aggs),
-					"canonical JSON/CHAR HLL_ADD_AGG remote execution requires MORPC protocol version 88")
+					"canonical JSON/CHAR HLL_ADD_AGG remote execution requires MORPC protocol version 91")
 			} else {
 				require.NoError(t, validateRemoteAggregateProtocol(proc, aggs))
 			}
-			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion88)
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion90)
+			if tc.canonical {
+				require.ErrorContains(t, validateRemoteAggregateProtocol(proc, aggs),
+					"canonical JSON/CHAR HLL_ADD_AGG remote execution requires MORPC protocol version 91")
+			} else {
+				require.NoError(t, validateRemoteAggregateProtocol(proc, aggs))
+			}
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion91)
 			require.NoError(t, validateRemoteAggregateProtocol(proc, aggs))
 		})
 	}
