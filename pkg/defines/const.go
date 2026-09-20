@@ -126,7 +126,8 @@ const (
 	MORPCVersion88     int64 = 88 // canonical vector HLL_ADD_AGG hash keys
 	MORPCVersion89     int64 = 89 // exact decimal literal and coercion semantics
 	MORPCVersion90     int64 = 90 // geodetic distance semantics and length-unit overloads
-	MORPCLatestVersion       = MORPCVersion90
+	MORPCVersion91     int64 = 91 // canonical CHAR and JSON HLL_ADD_AGG hash keys
+	MORPCLatestVersion       = MORPCVersion91
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

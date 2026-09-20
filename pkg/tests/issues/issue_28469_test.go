@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -114,6 +115,54 @@ func TestIssue28469IntegerAssignment(t *testing.T) {
 			var got int64
 			require.NoError(t, conn.QueryRowContext(ctx, "select v from dst").Scan(&got))
 			require.Equal(t, int64(-2), got)
+		})
+		t.Run("binary_integer_assignment_reuse", func(t *testing.T) {
+			mustExec(t, ctx, conn, "create table integer_reuse(id int primary key,v tinyint,u bigint unsigned)")
+			stmt, err := conn.PrepareContext(ctx, "insert into integer_reuse values (1,?,?)")
+			require.NoError(t, err)
+			defer stmt.Close()
+			for _, tc := range []struct {
+				name      string
+				v, u      any
+				wantV     int64
+				wantU     uint64
+				wantNull  bool
+				wantError bool
+			}{
+				{name: "integer", v: int64(1), u: uint64(math.MaxUint64), wantV: 1, wantU: math.MaxUint64},
+				{name: "signed_min", v: int64(-128), u: uint64(0), wantV: -128},
+				{name: "float_domain", v: float64(2.5), u: uint64(7), wantV: 2, wantU: 7},
+				{name: "integer_again", v: int64(127), u: uint64(math.MaxUint64), wantV: 127, wantU: math.MaxUint64},
+				{name: "null", wantNull: true},
+				{name: "string", v: "7", u: "8", wantV: 7, wantU: 8},
+				{name: "string_fraction", v: "2.5", u: int64(9), wantError: true},
+				{name: "signed_overflow", v: int64(128), u: uint64(0), wantError: true},
+				{name: "unsigned_underflow", v: int64(1), u: int64(-1), wantError: true},
+				{name: "recover", v: int64(9), u: uint64(9), wantV: 9, wantU: 9},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					mustExec(t, ctx, conn, "delete from integer_reuse where id=1")
+					_, err := stmt.ExecContext(ctx, tc.v, tc.u)
+					if tc.wantError {
+						require.Error(t, err)
+						if tc.name == "signed_overflow" || tc.name == "unsigned_underflow" {
+							require.ErrorContains(t, err, "out of range")
+						}
+						var changed int
+						require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from integer_reuse").Scan(&changed))
+						require.Zero(t, changed)
+						return
+					}
+					require.NoError(t, err)
+					var v sql.NullInt64
+					var u sql.Null[uint64]
+					require.NoError(t, conn.QueryRowContext(ctx, "select v,u from integer_reuse where id=1").Scan(&v, &u))
+					require.Equal(t, !tc.wantNull, v.Valid)
+					require.Equal(t, !tc.wantNull, u.Valid)
+					require.Equal(t, tc.wantV, v.Int64)
+					require.Equal(t, tc.wantU, u.V)
+				})
+			}
 		})
 		t.Run("decimal_unsigned_assignment", func(t *testing.T) {
 			mustExec(t, ctx, conn, "create table unsigned_dst(v bigint unsigned)")
