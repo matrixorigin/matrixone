@@ -30,6 +30,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/cdc"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
@@ -615,31 +616,55 @@ func TestCDCNoFullPublicLifecycle(t *testing.T) {
 			require.Equal(t, 0, countRows("select count(*) from "+sinkDBName+"."+sinkTableName+" where id=1"),
 				"pre-CREATE row was delivered")
 
-			// Wait for persisted progress before forcing a restart.
+			// A watermark row also exists at initialization. Require durable
+			// progress through a snapshot that actually contains row 2.
+			var boundary types.TS
+			require.NoError(t, exec.ExecTxn(ctx, func(tx executor.TxnExecutor) error {
+				res, err := tx.Exec("select count(*) from "+tableName+" where id=2", executor.StatementOption{})
+				if err != nil {
+					return err
+				}
+				defer res.Close()
+				if testutils.ReadCount(res) != 1 {
+					return fmt.Errorf("boundary snapshot does not contain source row 2")
+				}
+				boundary = types.TimestampToTS(tx.Txn().SnapshotTS())
+				return nil
+			}, executor.Options{}.WithDatabase(dbName)))
+			require.False(t, boundary.IsEmpty())
+			var checkpointBeforeRestart types.TS
 			deadline := time.NewTimer(30 * time.Second)
 			defer deadline.Stop()
 			for {
-				var watermark string
+				var watermarks []string
 				res, queryErr := exec.Exec(ctx,
 					"select watermark from mo_catalog.mo_cdc_watermark where task_id = (select task_id from mo_catalog.mo_cdc_task where task_name='"+taskName+"') and db_name='"+dbName+"' and table_name='"+tableName+"'",
 					executor.Options{})
 				if queryErr == nil {
-					for _, batch := range res.Batches {
-						if batch.RowCount() > 0 {
-							watermark = "present"
-						}
-					}
+					res.ReadRows(func(_ int, cols []*vector.Vector) bool {
+						watermarks = append(watermarks, executor.GetStringRows(cols[0])...)
+						return true
+					})
 					res.Close()
 				}
-				if watermark != "" {
-					break
+				require.LessOrEqual(t, len(watermarks), 1, "duplicate table watermarks")
+				if len(watermarks) == 1 {
+					persisted, parseErr := frontend.CDCStrToTS(watermarks[0])
+					require.NoError(t, parseErr)
+					if persisted.GE(&boundary) {
+						checkpointBeforeRestart = persisted
+						break
+					}
 				}
 				select {
+				case <-ctx.Done():
+					t.Fatalf("waiting for durable CDC progress: %v", ctx.Err())
 				case <-deadline.C:
-					t.Fatal("CDC watermark was not persisted after row 2 delivery")
+					t.Fatalf("CDC progress did not reach %s: watermarks=%v query error=%v", boundary.ToString(), watermarks, queryErr)
 				case <-time.After(100 * time.Millisecond):
 				}
 			}
+			t.Logf("CDC durable checkpoint before restart: %s", checkpointBeforeRestart.ToString())
 
 			// Restart the real CN service. This tears down and recreates the CDC
 			// executor while retaining the catalog task and watermark, and avoids
@@ -679,7 +704,7 @@ func TestCDCNoFullPublicLifecycle(t *testing.T) {
 			require.Eventually(t, func() bool { return waitTarget(3) }, 120*time.Second, 200*time.Millisecond,
 				"CDC did not deliver row 3 after restart")
 			require.Equal(t, 1, countRows("select count(*) from "+sinkDBName+"."+sinkTableName+" where id=2"),
-				"row 2 was replayed across restart")
+				"row 2 missing or duplicated after restart")
 			require.Equal(t, 0, countRows("select count(*) from "+sinkDBName+"."+sinkTableName+" where id=1"),
 				"pre-CREATE row was delivered after restart")
 		},
