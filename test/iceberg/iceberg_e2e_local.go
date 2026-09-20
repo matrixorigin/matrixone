@@ -127,6 +127,21 @@ func main() {
 		_ = writeRunSummary(cfg.ReportDir, summary)
 		fatal(err)
 	}
+	// Keep the successful seed in the report as well. The E2E artifact contract
+	// requires one complete report directory for every case, including the setup
+	// phase that supplies the catalog tables for the SQL scenarios below.
+	seedResult := passedCase(
+		"ICE-CI-E2E-000",
+		"rest-seed",
+		[]string{"seed Iceberg REST catalog tables"},
+		[]string{"seed completed"},
+		[]string{"seed completed"},
+		nil,
+	)
+	summary.Cases = append(summary.Cases, seedResult)
+	if err := writeCaseReport(cfg.ReportDir, seedResult); err != nil {
+		fatal(fmt.Errorf("write REST seed report: %w", err))
+	}
 
 	db, err := sql.Open("mysql", cfg.DSN)
 	if err != nil {
