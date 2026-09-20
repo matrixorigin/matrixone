@@ -15,6 +15,12 @@ RUN apt-get update \
 
 FROM python:3.12-slim-bookworm
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends tini \
+    && rm -rf /var/lib/apt/lists/* /usr/share/zoneinfo
+
+# Replace the complete database: Debian's posix symlinks cannot be overlaid
+# safely with Ubuntu's directory layout, nor may stale zones be retained.
 COPY --from=matrixone-tzdata /usr/share/zoneinfo/ /usr/share/zoneinfo/
 
 RUN useradd -m -s /bin/bash mo
@@ -40,4 +46,7 @@ USER mo
 
 EXPOSE 50051
 
+# The worker waits for its direct children; init owns orphaned descendants
+# after a handler leader exits. Keep that owner outside Python/Popen.
+ENTRYPOINT [ "/usr/bin/tini", "--" ]
 CMD [ "python", "-u", "worker.py", "--address=grpc://0.0.0.0:50051" ]
