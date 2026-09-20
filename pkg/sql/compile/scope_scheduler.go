@@ -33,16 +33,14 @@ var (
 
 // scopeTaskScheduler is the query-local admission point for execution tasks.
 //
-// Root scopes are put on a ready queue serviced by workers owned by one
-// Compile.  Pipeline dependencies are deliberately run on an overflow lane.
-// MergeRun currently waits synchronously for those dependencies; putting a
-// dependency behind the same finite queue would deadlock when a parent holds
-// the last worker.  Keeping this boundary explicit lets the scheduler become
-// fully cooperative later without reintroducing the process-wide ants pool.
+// Root scopes are admitted through a ready queue serviced by workers owned by
+// one Compile. Scope orchestration uses event tasks whose completion is
+// detached from the ready worker. Blocking VM islands still use the
+// query-owned dependency lane until every operator exposes a resumable step.
 type scopeTaskScheduler struct {
 	id       uint64
 	ctx      context.Context
-	ready    chan func()
+	ready    chan scopeScheduledTask
 	workers  sync.WaitGroup
 	mu       sync.Mutex
 	taskCond *sync.Cond
@@ -51,6 +49,16 @@ type scopeTaskScheduler struct {
 	waitOnce sync.Once
 
 	onPanic func(any)
+}
+
+// scopeScheduledTask distinguishes a regular task, whose completion is tied
+// to the worker call, from an event task.  Event tasks start a continuation
+// and complete only when that continuation calls done.  This keeps the ready
+// worker available while MergeRun waits for child/remote events.
+type scopeScheduledTask struct {
+	run          func()
+	asynchronous bool
+	done         func()
 }
 
 func newScopeTaskScheduler(
@@ -68,7 +76,7 @@ func newScopeTaskScheduler(
 	s := &scopeTaskScheduler{
 		id:      scopeTaskSchedulerID.Add(1),
 		ctx:     ctx,
-		ready:   make(chan func(), workerCount),
+		ready:   make(chan scopeScheduledTask, workerCount),
 		onPanic: onPanic,
 	}
 	s.taskCond = sync.NewCond(&s.mu)
@@ -88,7 +96,23 @@ func (s *scopeTaskScheduler) worker() {
 	}
 }
 
-func (s *scopeTaskScheduler) runTask(task func()) {
+func (s *scopeTaskScheduler) runTask(task scopeScheduledTask) {
+	if task.asynchronous {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				if task.done != nil {
+					task.done()
+				}
+				logutil.Errorf("[scope-scheduler] event task panic id=%d value=%v", s.id, recovered)
+				if s.onPanic != nil {
+					s.onPanic(recovered)
+				}
+			}
+		}()
+		task.run()
+		return
+	}
+
 	defer s.finishTask()
 	defer func() {
 		if recovered := recover(); recovered != nil {
@@ -98,7 +122,7 @@ func (s *scopeTaskScheduler) runTask(task func()) {
 			}
 		}
 	}()
-	task()
+	task.run()
 }
 
 func (s *scopeTaskScheduler) finishTask() {
@@ -131,10 +155,10 @@ func (s *scopeTaskScheduler) submitRoot(name string, task func()) error {
 	}
 
 	select {
-	case s.ready <- func() {
+	case s.ready <- scopeScheduledTask{run: func() {
 		logutil.Debugf("[scope-scheduler] start id=%d lane=ready name=%s", s.id, name)
 		task()
-	}:
+	}}:
 		return nil
 	case <-s.ctx.Done():
 		s.finishTask()
@@ -142,11 +166,52 @@ func (s *scopeTaskScheduler) submitRoot(name string, task func()) error {
 	}
 }
 
-// submitDependency uses a query-owned overflow goroutine for now.  This is
-// intentional: a MergeRun parent waits for its child and therefore cannot
-// yield a finite ready-queue worker yet.  It still removes dependency work
-// from the global ants pool and makes the eventual cooperative transition a
-// local scheduler change.
+// submitRootAsync admits an event task to the ready queue.  The ready worker
+// only starts the task; the task owns completion and must invoke done exactly
+// once when its event-driven continuation reaches a terminal state.
+func (s *scopeTaskScheduler) submitRootAsync(name string, start func(done func())) error {
+	if start == nil {
+		return errors.New("nil scope event task")
+	}
+
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return errScopeTaskSchedulerClosed
+	}
+	s.pending++
+	s.mu.Unlock()
+
+	var once sync.Once
+	done := func() {
+		once.Do(s.finishTask)
+	}
+	select {
+	case <-s.ctx.Done():
+		done()
+		return context.Cause(s.ctx)
+	default:
+	}
+
+	select {
+	case s.ready <- scopeScheduledTask{
+		asynchronous: true,
+		done:         done,
+		run: func() {
+			logutil.Debugf("[scope-scheduler] start id=%d lane=event name=%s", s.id, name)
+			start(done)
+		},
+	}:
+		return nil
+	case <-s.ctx.Done():
+		done()
+		return context.Cause(s.ctx)
+	}
+}
+
+// submitDependency is the compatibility lane for blocking VM and network
+// operations. Event tasks use the ready queue for orchestration and keep this
+// lane only for work that cannot yet yield a resumable continuation.
 func (s *scopeTaskScheduler) submitDependency(name string, task func()) error {
 	if task == nil {
 		return errors.New("nil scope task")
@@ -160,7 +225,9 @@ func (s *scopeTaskScheduler) submitDependency(name string, task func()) error {
 	select {
 	case <-s.ctx.Done():
 		s.mu.Unlock()
-		return context.Cause(s.ctx)
+		err := context.Cause(s.ctx)
+		logutil.Debugf("[scope-scheduler] reject dependency id=%d name=%s ctx=%v", s.id, name, err)
+		return err
 	default:
 	}
 	s.pending++
@@ -168,7 +235,7 @@ func (s *scopeTaskScheduler) submitDependency(name string, task func()) error {
 
 	go func() {
 		logutil.Debugf("[scope-scheduler] start id=%d lane=dependency name=%s", s.id, name)
-		s.runTask(task)
+		s.runTask(scopeScheduledTask{run: task})
 	}()
 	return nil
 }

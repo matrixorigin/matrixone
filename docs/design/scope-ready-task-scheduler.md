@@ -1,6 +1,7 @@
 # Query-local ready-task scheduler for Scope execution
 
-Status: implemented as a first, compatibility-preserving phase in this PR.
+Status: implemented as a compatibility-preserving event-orchestration phase in
+this PR. The VM operator yield contract remains a follow-up boundary.
 
 ## Motivation
 
@@ -17,36 +18,38 @@ or a way to reason about a query's ready work. Replacing it with a small fixed
 pool directly is unsafe: a parent MergeRun can occupy the last worker while
 waiting for a child, producing a deadlock.
 
-## Phase-one model
+## Event-orchestration model
 
 Each `Compile` owns one `scopeTaskScheduler` for its execution generation.
 The scheduler has:
 
 1. a ready queue and workers for root scopes;
-2. a query-owned dependency lane for child scopes and remote notifications;
-3. a task wait barrier used before Scope/Process release; and
-4. cancellation and panic propagation back to the query Process.
+2. event tasks whose completion is delivered by a continuation;
+3. a query-owned dependency lane for blocking VM/remote operations;
+4. a task wait barrier used before Scope/Process release; and
+5. cancellation and panic propagation back to the query Process.
 
-Root work is submitted with a label and runs on workers owned by the Compile.
-The root worker count is the number of compiled roots (at least one), which
-preserves the existing root-level concurrency while removing those tasks from
-the global pool. Every accepted task is counted, and `Compile.clear` waits for
-the count to reach zero before releasing operators or the Process.
+Root work is submitted with a label and runs as either a short ready task or an
+event task. An event task starts a continuation and returns its ready worker;
+the continuation calls `done` only after the corresponding scope state reaches
+a terminal event. Every accepted task is counted, and `Compile.clear` waits
+for the count to reach zero before releasing operators or the Process.
 
-The dependency lane intentionally starts a query-owned goroutine per accepted
-dependency. Current MergeRun is synchronous: its parent waits for child and
-remote results. Scheduling that child on the same finite ready queue would
-deadlock when the parent owns the last worker. The separate lane is therefore
-the safe event boundary for this phase, not an accidental second global pool.
-It can be changed to cooperative ready-queue admission after MergeRun/VM
-operators gain a yield/resume contract.
+`MergeRun` now has an event state for ordinary, lazy UNION ALL, and
+ordering-sensitive TP merge topologies. Child scope, parent pipeline, and
+remote-notify completion are events; the state advances from short ready tasks
+without occupying a ready worker while waiting. The public synchronous
+`MergeRun` entry point remains for nested/compatibility callers whose parent
+operator still invokes a child merge inline. The dependency lane still starts
+a query-owned goroutine for blocking VM and network operations. It is a
+deliberate blocking-island boundary, not the final fixed-worker VM scheduler.
 
 ## Event and ownership contract
 
 | Event | Owner | Required action |
 | --- | --- | --- |
-| Root accepted | Compile scheduler | enqueue one labeled ready task |
-| Child/remote dependency accepted | Compile scheduler | account it and run it on the dependency lane |
+| Root accepted | Compile scheduler | enqueue one labeled ready/event task |
+| Child/remote dependency accepted | Merge event state | account it and publish a completion event |
 | First execution error | Scope/Process | cancel sibling Scope trees; scheduler continues cleanup |
 | Task panic | scheduler | log the task and cancel the Process with a converted error |
 | Compile return/release | Compile | wait for all accepted tasks, close ready workers, then release Scope/Process |
@@ -55,24 +58,25 @@ operators gain a yield/resume contract.
 No scheduler task outlives its Compile-owned Process. This is especially
 important for startup SQL: a failed bootstrap statement is reported through the
 normal `runOnce` result channel, while debug logs identify the query, scheduler
-ID, lane, root, and error. It is not silently detached into a process-wide
-worker.
+ID, lane, root, merge event, and error. It is not silently detached into a
+process-wide worker.
 
-## Why this is not yet a fixed worker pool for all operators
+## Remaining blocking boundary
 
 The VM currently executes parent and child operators in a blocking call chain.
-`MergeRun` also waits on child/remote completion channels. A strict bounded
-worker pool would require one of these changes first:
+The event state removes the scheduler-worker wait, but the actual pipeline
+island can still block on `vm.Exec`, pipeline backpressure, or remote I/O. A
+strict bounded worker pool for those operations requires one of these changes:
 
 * every blocking operator yields a continuation/event and returns its worker;
 * dependency readiness is represented as a state machine and re-enqueued; or
 * orchestration workers and blocking I/O workers are separate pools with an
   explicit admission policy.
 
-Until then, a finite queue for dependencies is incorrect. This PR isolates the
-ownership and ready queue without changing the VM's blocking semantics. The
-next phase can replace only `submitDependency` after the continuation contract
-exists.
+Until then, moving those operations into the finite ready queue is incorrect.
+This PR isolates ownership, makes MergeRun orchestration event-driven, and
+keeps the blocking boundary explicit. The next phase can replace
+`submitDependency` after the continuation contract exists.
 
 ## Cancellation and failure behavior
 
@@ -91,10 +95,14 @@ and remote pipeline handlers that enter `MergeRun` directly.
 `scope_scheduler_test.go` covers:
 
 * ready-root and dependency execution;
+* event-task completion barriers;
 * a single-worker parent/child case that would deadlock with one shared finite
   queue;
 * panic-to-cancellation reporting; and
 * rejection after scheduler retirement and context cancellation.
+
+`pkg/sql/compile` tests also cover ordinary MergeRun, lazy UNION ALL, and
+remote-notify compatibility paths after the event state was introduced.
 
 The Docker smoke test starts a single MatrixOne instance from this branch,
 waits for the SQL port, executes bootstrap-style DDL/DML and aggregation/CTAS

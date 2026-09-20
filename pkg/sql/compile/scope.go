@@ -537,7 +537,11 @@ func installSequentialBranchStarter(root vm.Operator, start, wait func(int) erro
 	return target.ClearBranchStarter, false, nil
 }
 
-func (s *Scope) MergeRun(c *Compile) (err error) {
+// mergeRunBlocking is the historical synchronous implementation. The root
+// execution path uses mergeRunAsync for all scheduler-owned merge topologies;
+// nested and compatibility paths keep this implementation until their
+// operator contract can expose a resumable continuation.
+func (s *Scope) mergeRunBlocking(c *Compile) (err error) {
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
 	}
@@ -1658,6 +1662,31 @@ func (s *Scope) sendNotifyMessageWithFactoryAndWait(
 	waitRetry notifyMessageRetryWait,
 	schedulers ...*scopeTaskScheduler,
 ) {
+	s.sendNotifyMessageWithFactoryAndCallback(
+		wg,
+		func(result notifyMessageResult) {
+			resultChan <- result
+		},
+		newSender,
+		waitRetry,
+		schedulers...,
+	)
+}
+
+// sendNotifyMessageWithFactoryAndCallback is the event-oriented form of the
+// remote registration helper. The legacy channel API above remains for tests
+// and compatibility callers, while MergeRun can publish a completion event
+// directly without a goroutine that waits on a result channel.
+func (s *Scope) sendNotifyMessageWithFactoryAndCallback(
+	wg *sync.WaitGroup,
+	onResult func(notifyMessageResult),
+	newSender notifyMessageSenderFactory,
+	waitRetry notifyMessageRetryWait,
+	schedulers ...*scopeTaskScheduler,
+) {
+	if onResult == nil {
+		return
+	}
 	// if context has done, it means the user or other part of the pipeline stops this query.
 	closeWithError := func(err error, reg *process.WaitRegister, sender *messageSenderOnClient) {
 		err, _ = normalizeScopeRunError(
@@ -1667,7 +1696,7 @@ func (s *Scope) sendNotifyMessageWithFactoryAndWait(
 		)
 		s.cancelMergeSiblingsOnError(err)
 		sendRemoteNotifyCleanupTerminal(s.Proc, reg, err)
-		resultChan <- notifyMessageResult{err: err, sender: sender}
+		onResult(notifyMessageResult{err: err, sender: sender})
 		wg.Done()
 	}
 

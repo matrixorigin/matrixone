@@ -28,6 +28,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/apache/arrow-go/v18/arrow"
@@ -691,6 +692,38 @@ func (c *Compile) run(s *Scope) error {
 	return nil
 }
 
+// runAsync admits scope execution as a continuation.  The scheduler worker
+// performs only admission; the blocking VM island reports completion through
+// done, which lets the ready queue continue handling unrelated scope events.
+func (c *Compile) runAsync(s *Scope, done func(error)) error {
+	if done == nil {
+		return moerr.NewInternalErrorNoCtx("nil scope completion")
+	}
+	if s == nil {
+		done(nil)
+		return nil
+	}
+
+	if s.Magic == Merge || s.Magic == MergeInsert || s.Magic == MergeDelete {
+		return s.mergeRunAsync(c, func(err error) {
+			if err == nil {
+				c.addAffectedRows(s.affectedRows())
+				if s.Magic == MergeDelete {
+					mergeArg := s.RootOp.(*mergedelete.MergeDelete)
+					if mergeArg.AddAffectedRows {
+						c.addAffectedRows(mergeArg.GetAffectedRows())
+					}
+				}
+			}
+			done(err)
+		})
+	}
+
+	return c.submitScopeDependency("scope-execution", func() {
+		done(c.run(s))
+	})
+}
+
 // isRetryErr if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry t
 // he statement
 func (c *Compile) isRetryErr(err error) bool {
@@ -1095,65 +1128,67 @@ func (c *Compile) runOnce() (err error) {
 	logutil.Debugf("[scope-scheduler] query start id=%d sql=%s roots=%d tp=%v",
 		scheduler.id, commonutil.Abbreviate(c.sql, 500), len(c.scopes), c.IsTpQuery())
 
-	if c.IsTpQuery() && len(c.scopes) == 1 {
-		if err = c.run(c.scopes[0]); err != nil {
-			return err
-		}
-	} else {
-		errC := make(chan scopeRunResult, len(c.scopes))
-		for i := range c.scopes {
-			scope := c.scopes[i]
-			rootName := "root-scope-" + strconv.Itoa(i)
-			errSubmit := scheduler.submitRoot(rootName, func() {
-				defer func() {
-					if e := recover(); e != nil {
-						err := moerr.ConvertPanicError(c.proc.Ctx, e)
-						c.proc.Error(c.proc.Ctx, "panic in run",
-							zap.String("sql", commonutil.Abbreviate(c.sql, 500)),
-							zap.String("error", err.Error()))
-						errC <- newScopeRunResult(err, scope)
-					}
-				}()
-				runErr := c.run(scope)
-				logutil.Debugf("[scope-scheduler] root complete id=%d name=%s err=%v", scheduler.id, rootName, runErr)
-				errC <- newScopeRunResult(runErr, scope)
-			})
-			if errSubmit != nil {
-				c.proc.Errorf(c.proc.Ctx, "query-local scope scheduler rejected %s: %v", rootName, errSubmit)
-				errC <- newScopeRunResult(errSubmit, scope)
+	errC := make(chan scopeRunResult, len(c.scopes))
+	for i := range c.scopes {
+		scope := c.scopes[i]
+		rootName := "root-scope-" + strconv.Itoa(i)
+		errSubmit := scheduler.submitRootAsync(rootName, func(finish func()) {
+			var once sync.Once
+			complete := func(runErr error) {
+				once.Do(func() {
+					logutil.Debugf("[scope-scheduler] root complete id=%d name=%s err=%v", scheduler.id, rootName, runErr)
+					errC <- newScopeRunResult(runErr, scope)
+					finish()
+				})
 			}
+			defer func() {
+				if e := recover(); e != nil {
+					err := moerr.ConvertPanicError(c.proc.Ctx, e)
+					c.proc.Error(c.proc.Ctx, "panic in run",
+						zap.String("sql", commonutil.Abbreviate(c.sql, 500)),
+						zap.String("error", err.Error()))
+					complete(err)
+				}
+			}()
+			if err := c.runAsync(scope, complete); err != nil {
+				complete(err)
+			}
+		})
+		if errSubmit != nil {
+			c.proc.Errorf(c.proc.Ctx, "query-local scope scheduler rejected %s: %v", rootName, errSubmit)
+			errC <- newScopeRunResult(errSubmit, scope)
 		}
+	}
 
-		var resultToThrowOut scopeRunResult
-		for i := 0; i < cap(errC); i++ {
-			result := <-errC
-			result, _ = result.resolveCancelCause()
-			e := result.err
+	var resultToThrowOut scopeRunResult
+	for i := 0; i < cap(errC); i++ {
+		result := <-errC
+		result, _ = result.resolveCancelCause()
+		e := result.err
 
-			// cancel this query if the first error occurs.
-			if e != nil && resultToThrowOut.err == nil {
+		// cancel this query if the first error occurs.
+		if e != nil && resultToThrowOut.err == nil {
 
-				// cancel all scope tree.
-				for j := range c.scopes {
-					if c.scopes[j].Proc != nil {
-						c.scopes[j].Proc.Cancel(e)
-					}
+			// cancel all scope tree.
+			for j := range c.scopes {
+				if c.scopes[j].Proc != nil {
+					c.scopes[j].Proc.Cancel(e)
 				}
 			}
-			resultToThrowOut = preferPrimaryScopeResult(resultToThrowOut, result)
-
-			// if any error already return is retryable, we should throw this one
-			// to make sure query will retry.
-			if e != nil && c.isRetryErr(e) {
-				resultToThrowOut = result
-			}
 		}
-		close(errC)
+		resultToThrowOut = preferPrimaryScopeResult(resultToThrowOut, result)
 
-		resultToThrowOut, _ = resultToThrowOut.resolveCancelCause()
-		if resultToThrowOut.err != nil {
-			return resultToThrowOut.err
+		// if any error already return is retryable, we should throw this one
+		// to make sure query will retry.
+		if e != nil && c.isRetryErr(e) {
+			resultToThrowOut = result
 		}
+	}
+	close(errC)
+
+	resultToThrowOut, _ = resultToThrowOut.resolveCancelCause()
+	if resultToThrowOut.err != nil {
+		return resultToThrowOut.err
 	}
 
 	for _, sql := range c.proc.Base.PostDmlSqlList.Values() {

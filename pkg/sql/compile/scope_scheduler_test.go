@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestScopeTaskSchedulerRunsReadyAndDependencyTasks(t *testing.T) {
@@ -112,4 +113,49 @@ func TestScopeTaskSchedulerRejectsRootOnCanceledContext(t *testing.T) {
 		t.Fatalf("expected context cancellation, got %v", err)
 	}
 	scheduler.wait()
+}
+
+func TestScopeTaskSchedulerEventTaskWaitsForCompletion(t *testing.T) {
+	scheduler := newScopeTaskScheduler(context.Background(), 1, nil)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	if err := scheduler.submitRootAsync("event", func(done func()) {
+		close(started)
+		go func() {
+			<-release
+			done()
+		}()
+	}); err != nil {
+		t.Fatalf("submit event task: %v", err)
+	}
+	<-started
+	ready := make(chan struct{})
+	if err := scheduler.submitRoot("ready-after-event", func() {
+		close(ready)
+	}); err != nil {
+		t.Fatalf("submit ready task: %v", err)
+	}
+	select {
+	case <-ready:
+	case <-time.After(time.Second):
+		t.Fatal("ready worker remained occupied by event task")
+	}
+
+	waitDone := make(chan struct{})
+	go func() {
+		scheduler.wait()
+		close(waitDone)
+	}()
+	select {
+	case <-waitDone:
+		t.Fatal("scheduler retired before event completion")
+	default:
+	}
+
+	close(release)
+	select {
+	case <-waitDone:
+	case <-time.After(time.Second):
+		t.Fatal("scheduler did not retire after event completion")
+	}
 }
