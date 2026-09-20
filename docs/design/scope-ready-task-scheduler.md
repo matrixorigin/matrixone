@@ -1,7 +1,8 @@
 # Query-local ready-task scheduler for Scope execution
 
 Status: implemented as a compatibility-preserving event-orchestration phase in
-this PR. The VM operator yield contract remains a follow-up boundary.
+this PR. The VM operator yield contract is now defined, but production
+operators still use the blocking compatibility lane.
 
 ## Motivation
 
@@ -44,6 +45,22 @@ operator still invokes a child merge inline. The dependency lane still starts
 a query-owned goroutine for blocking VM and network operations. It is a
 deliberate blocking-island boundary, not the final fixed-worker VM scheduler.
 
+The VM pipeline now exposes `pipeline.Continuation`. `Prepare` and output
+metadata setup are performed once, and each `Step` executes one `vm.Exec`
+quantum. The historical `Pipeline.Run` API is an adapter over this interface,
+so callers keep their behavior while the scheduler migration can be staged.
+`StepWaiting` is intentionally not emitted by existing operators yet: their
+`Call` implementations can still block internally. The next operator
+migration must turn those waits into readiness events before a continuation can
+run directly on the finite ready queue.
+
+The scheduler also exposes a guarded `submitContinuation` entry point for that
+next phase. A waiting step must provide an `OnReady` registration callback; the
+scheduler worker is released immediately and the callback re-admits the
+continuation when the external event fires. A continuation that reports
+`StepWaiting` without a registration fails closed. No existing blocking
+operator is routed through this entry point yet.
+
 ## Event and ownership contract
 
 | Event | Owner | Required action |
@@ -75,8 +92,10 @@ strict bounded worker pool for those operations requires one of these changes:
 
 Until then, moving those operations into the finite ready queue is incorrect.
 This PR isolates ownership, makes MergeRun orchestration event-driven, and
-keeps the blocking boundary explicit. The next phase can replace
-`submitDependency` after the continuation contract exists.
+keeps the blocking boundary explicit. `submitDependency` remains the
+compatibility lane until each operator has a stateful continuation and a
+readiness callback; replacing it with a finite blocking worker pool would
+deadlock parent/child MergeRun topologies.
 
 ## Cancellation and failure behavior
 

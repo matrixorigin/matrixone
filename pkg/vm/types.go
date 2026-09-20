@@ -385,6 +385,9 @@ func Exec(op Operator, proc *process.Process) (CallResult, error) {
 	if err != nil {
 		return result, err
 	}
+	if result.Status == ExecWaiting {
+		return result, nil
+	}
 	result.Batch, err = op.ExecProjection(proc, result.Batch)
 	analyzer.Output(result.Batch)
 	return result, err
@@ -394,7 +397,7 @@ func ChildrenCall(op Operator, proc *process.Process, anal process.Analyzer) (Ca
 	beforeChildrenCall := time.Now()
 	defer anal.ChildrenCallStop(beforeChildrenCall)
 	result, err := Exec(op, proc)
-	if err == nil {
+	if err == nil && result.Status != ExecWaiting {
 		anal.Input(result.Batch)
 	}
 	return result, err
@@ -406,6 +409,11 @@ const (
 	ExecStop ExecStatus = iota
 	ExecNext
 	ExecHasMore
+	// ExecWaiting means the operator yielded before producing a batch. The
+	// readiness callback in CallResult re-admits the pipeline continuation.
+	// Existing operators never return this status yet; it is the opt-in bridge
+	// for stateful non-blocking operators.
+	ExecWaiting
 )
 
 type CtrState int
@@ -420,6 +428,10 @@ const (
 type CallResult struct {
 	Status ExecStatus
 	Batch  *batch.Batch
+	// OnReady is required when Status is ExecWaiting. It registers a callback
+	// that the operator invokes after its external dependency is ready. The
+	// callback must be non-blocking and called at most once.
+	OnReady func(func()) error
 }
 
 func NewCallResult() CallResult {

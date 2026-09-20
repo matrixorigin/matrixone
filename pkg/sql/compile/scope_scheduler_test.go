@@ -19,7 +19,29 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 )
+
+type testPipelineContinuation struct {
+	statuses   []pipeline.StepStatus
+	step       int
+	registered chan func()
+	noRegister bool
+}
+
+func (c *testPipelineContinuation) Step() (pipeline.StepResult, error) {
+	status := c.statuses[c.step]
+	c.step++
+	result := pipeline.StepResult{Status: status}
+	if status == pipeline.StepWaiting && !c.noRegister {
+		result.OnReady = func(ready func()) error {
+			c.registered <- ready
+			return nil
+		}
+	}
+	return result, nil
+}
 
 func TestScopeTaskSchedulerRunsReadyAndDependencyTasks(t *testing.T) {
 	scheduler := newScopeTaskScheduler(context.Background(), 2, nil)
@@ -157,5 +179,83 @@ func TestScopeTaskSchedulerEventTaskWaitsForCompletion(t *testing.T) {
 	case <-waitDone:
 	case <-time.After(time.Second):
 		t.Fatal("scheduler did not retire after event completion")
+	}
+}
+
+func TestScopeTaskSchedulerContinuationReturnsReadyWorkerWhileWaiting(t *testing.T) {
+	scheduler := newScopeTaskScheduler(context.Background(), 1, nil)
+	continuation := &testPipelineContinuation{
+		statuses:   []pipeline.StepStatus{pipeline.StepWaiting, pipeline.StepReady, pipeline.StepDone},
+		registered: make(chan func(), 1),
+	}
+	done := make(chan error, 1)
+	if err := scheduler.submitContinuation("continuation", continuation, func(err error) {
+		done <- err
+	}); err != nil {
+		t.Fatalf("submit continuation: %v", err)
+	}
+	var ready func()
+	select {
+	case ready = <-continuation.registered:
+	case <-time.After(time.Second):
+		t.Fatal("continuation did not register its readiness callback")
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("continuation completed before readiness event: %v", err)
+	default:
+	}
+	ready()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("continuation failed: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("continuation did not complete after readiness event")
+	}
+	scheduler.wait()
+}
+
+func TestScopeTaskSchedulerContinuationRequiresReadinessRegistration(t *testing.T) {
+	scheduler := newScopeTaskScheduler(context.Background(), 1, nil)
+	continuation := &testPipelineContinuation{
+		statuses:   []pipeline.StepStatus{pipeline.StepWaiting},
+		noRegister: true,
+	}
+	done := make(chan error, 1)
+	if err := scheduler.submitContinuation("missing-registration", continuation, func(err error) {
+		done <- err
+	}); err != nil {
+		t.Fatalf("submit continuation: %v", err)
+	}
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected missing readiness registration error")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("continuation did not fail closed")
+	}
+	scheduler.wait()
+}
+
+func TestScopeTaskSchedulerReentrantReadySubmissionDoesNotBlock(t *testing.T) {
+	scheduler := newScopeTaskScheduler(context.Background(), 1, nil)
+	completed := make(chan struct{}, 3)
+	if err := scheduler.submitRoot("reentrant-parent", func() {
+		for i := 0; i < 3; i++ {
+			if err := scheduler.submitRoot("reentrant-child", func() {
+				completed <- struct{}{}
+			}); err != nil {
+				t.Errorf("submit child: %v", err)
+			}
+		}
+	}); err != nil {
+		t.Fatalf("submit parent: %v", err)
+	}
+	scheduler.wait()
+	if got := len(completed); got != 3 {
+		t.Fatalf("completed children: got %d, want 3", got)
 	}
 }
