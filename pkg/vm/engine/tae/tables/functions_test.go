@@ -141,6 +141,79 @@ func TestPersistedAppendableDedupSkipsAbortedRow(t *testing.T) {
 	}
 }
 
+func TestPersistedDedupUsesCalendarOrderingForInvalidTemporalKeys(t *testing.T) {
+	tests := []struct {
+		name       string
+		typ        types.Type
+		values     func(t *testing.T) (containers.Vector, containers.Vector)
+		wantOffset uint32
+	}{
+		{
+			name: "date",
+			typ:  types.T_date.ToType(),
+			values: func(t *testing.T) (containers.Vector, containers.Vector) {
+				data := containers.MakeVector(types.T_date.ToType(), common.DefaultAllocator)
+				keys := containers.MakeVector(types.T_date.ToType(), common.DefaultAllocator)
+				for _, value := range []string{"2024-02-28", "2024-02-30", "2024-03-01"} {
+					date, err := types.ParseDateCastWithInvalidDates(value)
+					require.NoError(t, err)
+					data.Append(date, false)
+				}
+				key, err := types.ParseDateCastWithInvalidDates("2024-02-30")
+				require.NoError(t, err)
+				keys.Append(key, false)
+				return data, keys
+			},
+			wantOffset: 1,
+		},
+		{
+			name: "datetime",
+			typ:  types.T_datetime.ToType(),
+			values: func(t *testing.T) (containers.Vector, containers.Vector) {
+				data := containers.MakeVector(types.T_datetime.ToType(), common.DefaultAllocator)
+				keys := containers.MakeVector(types.T_datetime.ToType(), common.DefaultAllocator)
+				for _, value := range []string{
+					"2024-02-28 00:00:00",
+					"2024-02-30 00:00:00",
+					"2024-03-01 00:00:00",
+				} {
+					datetime, err := types.ParseDatetimeWithInvalidDates(value, 6)
+					require.NoError(t, err)
+					data.Append(datetime, false)
+				}
+				key, err := types.ParseDatetimeWithInvalidDates("2024-02-30 00:00:00", 6)
+				require.NoError(t, err)
+				keys.Append(key, false)
+				return data, keys
+			},
+			wantOffset: 1,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			data, keys := test.values(t)
+			defer data.Close()
+			defer keys.Close()
+
+			rowIDs := containers.MakeVector(types.T_Rowid.ToType(), common.DefaultAllocator)
+			defer rowIDs.Close()
+			rowIDs.Append(nil, true)
+			op := containers.MakeForeachVectorOp(
+				test.typ.Oid,
+				getDuplicatedRowIDNABlkFunctions,
+				data,
+				rowIDs,
+				types.Blockid{},
+			)
+			require.NoError(t, containers.ForeachVector(keys, op, nil))
+			require.False(t, rowIDs.IsNull(0))
+			rowID := rowIDs.Get(0).(types.Rowid)
+			require.Equal(t, test.wantOffset, rowID.GetRowOffset())
+		})
+	}
+}
+
 func TestPersistedTombstoneContainsSkipsAbortedMatches(t *testing.T) {
 	var blk types.Blockid
 	target := types.NewRowid(&blk, 7)

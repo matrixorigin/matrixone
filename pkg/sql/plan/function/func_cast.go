@@ -1131,10 +1131,10 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		err = decimal256ToOthersWithProc(execProc, s, *toType, result, length, selectList, mode, strictStringWidth, reportDataTooLong)
 	case types.T_date:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Date](from)
-		err = dateToOthers(execProc, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
+		err = dateToOthers(execProc, s, *toType, result, length, selectList, mode, strictStringWidth, reportDataTooLong)
 	case types.T_datetime:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Datetime](from)
-		err = datetimeToOthers(execProc, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
+		err = datetimeToOthers(execProc, s, *toType, result, length, selectList, mode, strictStringWidth, reportDataTooLong)
 	case types.T_time:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Time](from)
 		err = timeToOthers(execProc, s, *toType, result, length, selectList, mode, strictStringWidth, reportDataTooLong)
@@ -2116,7 +2116,8 @@ func float64ToOthers(proc *process.Process,
 
 func dateToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[types.Date],
-	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList,
+	mode castMode, strictStringWidth ...bool) error {
 	switch toType.Oid {
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
@@ -2142,7 +2143,7 @@ func dateToOthers(proc *process.Process,
 			zone = proc.GetSessionInfo().TimeZone
 		}
 		rs := vector.MustFunctionResult[types.Timestamp](result)
-		return dateToTimestamp(source, rs, length, zone)
+		return dateToTimestamp(proc, source, rs, length, zone, mode)
 	case types.T_datetime:
 		rs := vector.MustFunctionResult[types.Datetime](result)
 		return dateToDatetime(source, rs, length, selectList)
@@ -2159,7 +2160,8 @@ func dateToOthers(proc *process.Process,
 
 func datetimeToOthers(proc *process.Process,
 	source vector.FunctionParameterWrapper[types.Datetime],
-	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, strictStringWidth ...bool) error {
+	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList,
+	mode castMode, strictStringWidth ...bool) error {
 	switch toType.Oid {
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
@@ -2173,10 +2175,10 @@ func datetimeToOthers(proc *process.Process,
 			zone = proc.GetSessionInfo().TimeZone
 		}
 		rs := vector.MustFunctionResult[types.Timestamp](result)
-		return datetimeToTimestamp(source, rs, length, zone, toType.Scale)
+		return datetimeToTimestamp(proc, source, rs, length, zone, toType.Scale, mode)
 	case types.T_date:
 		rs := vector.MustFunctionResult[types.Date](result)
-		return datetimeToDate(source, rs, length, selectList)
+		return datetimeToDate(proc, source, rs, length, selectList, mode)
 	case types.T_datetime:
 		rs := vector.MustFunctionResult[types.Datetime](result)
 		return datetimeToDatetime(proc.Ctx, source, rs, length, toType.Scale)
@@ -4426,9 +4428,10 @@ func timestampToSessionClockTime(v types.Timestamp, zone *time.Location, scale i
 }
 
 func dateToTimestamp(
+	proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Date],
 	to *vector.FunctionResult[types.Timestamp], length int,
-	zone *time.Location) error {
+	zone *time.Location, mode castMode) error {
 	var i uint64
 	l := uint64(length)
 	for i = 0; i < l; i++ {
@@ -4438,6 +4441,18 @@ func dateToTimestamp(
 				return err
 			}
 		} else {
+			if invalidCalendarDate(v) {
+				invalid, err := rejectInvalidTemporalAssignment(proc, mode, "timestamp", v.String())
+				if err != nil {
+					return err
+				}
+				if invalid {
+					if err := to.Append(types.ZeroTimestamp, false); err != nil {
+						return err
+					}
+					continue
+				}
+			}
 			if err := to.Append(v.ToTimestamp(zone), false); err != nil {
 				return err
 			}
@@ -4545,10 +4560,11 @@ func datetimeToDecimal128(
 }
 
 func datetimeToTimestamp(
+	proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Datetime],
 	to *vector.FunctionResult[types.Timestamp], length int,
 	zone *time.Location,
-	targetScale int32) error {
+	targetScale int32, mode castMode) error {
 	var i uint64
 	l := uint64(length)
 	for i = 0; i < l; i++ {
@@ -4558,6 +4574,18 @@ func datetimeToTimestamp(
 				return err
 			}
 		} else {
+			if invalidCalendarDatetime(v) {
+				invalid, err := rejectInvalidTemporalAssignment(proc, mode, "timestamp", v.String())
+				if err != nil {
+					return err
+				}
+				if invalid {
+					if err := to.Append(types.ZeroTimestamp, false); err != nil {
+						return err
+					}
+					continue
+				}
+			}
 			result := v.ToTimestamp(zone)
 			// Truncate to target scale if needed
 			if targetScale < 6 {
@@ -4787,8 +4815,9 @@ func timeToDatetime(
 }
 
 func datetimeToDate(
+	proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Datetime],
-	to *vector.FunctionResult[types.Date], length int, selectList *FunctionSelectList) error {
+	to *vector.FunctionResult[types.Date], length int, selectList *FunctionSelectList, mode castMode) error {
 	var i uint64
 	l := uint64(length)
 	for i = 0; i < l; i++ {
@@ -4798,6 +4827,24 @@ func datetimeToDate(
 				return err
 			}
 		} else {
+			allowInvalidDates, err := process.ResolveAllowInvalidDates(proc)
+			if err != nil {
+				return err
+			}
+			if !allowInvalidDates {
+				if invalidCalendarDatetime(v) {
+					invalid, err := rejectInvalidTemporalAssignment(proc, mode, "date", v.String())
+					if err != nil {
+						return err
+					}
+					if invalid {
+						if err := to.Append(types.ZeroDate, false); err != nil {
+							return err
+						}
+						continue
+					}
+				}
+			}
 			if err := to.Append(v.ToDate(), false); err != nil {
 				return err
 			}
@@ -6834,6 +6881,46 @@ func appendTemporalAssignmentConversionWarning(proc *process.Process, targetType
 		moerr.ER_WARN_DATA_OUT_OF_RANGE,
 		fmt.Sprintf("Out of range value for %s: '%-.128s'", targetType, value),
 	)
+}
+
+func invalidCalendarDate(value types.Date) bool {
+	if value == types.ZeroDate {
+		return false
+	}
+	year, month, day, _ := value.Calendar(true)
+	return !types.ValidDate(year, month, day)
+}
+
+func invalidCalendarDatetime(value types.Datetime) bool {
+	if value == types.ZeroDatetime {
+		return false
+	}
+	return invalidCalendarDate(value.ToDate())
+}
+
+// rejectInvalidTemporalAssignment applies DML assignment semantics to a
+// calendar-invalid typed temporal value. TIMESTAMP never accepts invalid
+// calendar dates; DATE accepts them only when ALLOW_INVALID_DATES was honored
+// before this conversion. Non-strict assignment keeps the historical zero
+// result but must expose the same warning as textual temporal conversion.
+func rejectInvalidTemporalAssignment(
+	proc *process.Process,
+	mode castMode,
+	targetType string,
+	value string,
+) (bool, error) {
+	if !mode.isAssignment() {
+		return false, nil
+	}
+	if mode.strictStringWidth() {
+		ctx := context.Background()
+		if proc != nil && proc.Ctx != nil {
+			ctx = proc.Ctx
+		}
+		return true, moerr.NewTruncatedWrongValue(ctx, targetType, value)
+	}
+	appendTemporalAssignmentConversionWarning(proc, targetType, value)
+	return true, nil
 }
 
 // assignmentIntegerPrefix returns the exact decimal prefix rounded to an

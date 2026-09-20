@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
@@ -123,6 +124,100 @@ func TestCastTemporalNumericUsesMysqlPackedValue(t *testing.T) {
 			fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, NewCast)
 			succeed, info := fcTC.Run()
 			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestInvalidTemporalAssignmentDoesNotNormalizeCalendarFields(t *testing.T) {
+	invalidDate, err := types.ParseDateCastWithInvalidDates("2024-02-30")
+	require.NoError(t, err)
+	invalidDatetime, err := types.ParseDatetimeWithInvalidDates("2024-02-30 12:34:56", 6)
+	require.NoError(t, err)
+
+	type assignmentCase struct {
+		name      string
+		input     FunctionTestInput
+		target    types.Type
+		sqlMode   string
+		cast      fEvalFn
+		want      any
+		wantError bool
+	}
+	cases := []assignmentCase{
+		{
+			name:      "date to timestamp strict",
+			input:     NewFunctionTestInput(types.T_date.ToType(), []types.Date{invalidDate}, nil),
+			target:    types.T_timestamp.ToType(),
+			sqlMode:   "STRICT_TRANS_TABLES,ALLOW_INVALID_DATES",
+			cast:      NewAssignCast,
+			wantError: true,
+		},
+		{
+			name:    "date to timestamp nonstrict",
+			input:   NewFunctionTestInput(types.T_date.ToType(), []types.Date{invalidDate}, nil),
+			target:  types.T_timestamp.ToType(),
+			sqlMode: "ALLOW_INVALID_DATES",
+			cast:    NewAssignCast,
+			want:    []types.Timestamp{types.ZeroTimestamp},
+		},
+		{
+			name:    "datetime to timestamp ignore",
+			input:   NewFunctionTestInput(types.T_datetime.ToTypeWithScale(6), []types.Datetime{invalidDatetime}, nil),
+			target:  types.T_timestamp.ToTypeWithScale(6),
+			sqlMode: "STRICT_TRANS_TABLES,ALLOW_INVALID_DATES",
+			cast:    NewAssignIgnoreCast,
+			want:    []types.Timestamp{types.ZeroTimestamp},
+		},
+		{
+			name:      "datetime to date strict",
+			input:     NewFunctionTestInput(types.T_datetime.ToTypeWithScale(6), []types.Datetime{invalidDatetime}, nil),
+			target:    types.T_date.ToType(),
+			sqlMode:   "STRICT_TRANS_TABLES",
+			cast:      NewAssignCast,
+			wantError: true,
+		},
+		{
+			name:    "datetime to date nonstrict",
+			input:   NewFunctionTestInput(types.T_datetime.ToTypeWithScale(6), []types.Datetime{invalidDatetime}, nil),
+			target:  types.T_date.ToType(),
+			sqlMode: "",
+			cast:    NewAssignCast,
+			want:    []types.Date{types.ZeroDate},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			warnings := &numericWarningSession{}
+			proc.WarningSink = warnings
+			proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+				require.Equal(t, "sql_mode", name)
+				return tc.sqlMode, nil
+			})
+			want := NewFunctionTestResult(tc.target, false, tc.want, nil)
+			var targetValues any
+			switch tc.target.Oid {
+			case types.T_date:
+				targetValues = []types.Date{}
+			case types.T_timestamp:
+				targetValues = []types.Timestamp{}
+			default:
+				t.Fatalf("unsupported target type %s", tc.target)
+			}
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{
+				tc.input,
+				NewFunctionTestInput(tc.target, targetValues, nil),
+			}, want, tc.cast)
+			if tc.wantError {
+				_, runErr := fc.DebugRun()
+				require.Error(t, runErr)
+				return
+			}
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+			require.Len(t, warnings.warnings, 1)
+			require.Equal(t, moerr.ER_WARN_DATA_OUT_OF_RANGE, warnings.warnings[0].code)
 		})
 	}
 }

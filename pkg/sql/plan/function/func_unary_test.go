@@ -9064,6 +9064,19 @@ func TestDateToWeekUsesSessionDefaultAtExecution(t *testing.T) {
 	require.Equal(t, 2, lookups)
 }
 
+func TestDateToWeekUsesSerializedSessionDefaultWithoutResolver(t *testing.T) {
+	date, err := types.ParseDateCast("2016-01-01")
+	require.NoError(t, err)
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().DefaultWeekFormat = 3
+	tc := NewFunctionTestCase(proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_date.ToType(), []types.Date{date}, []bool{false})},
+		NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{uint8(date.Week(3))}, []bool{false}),
+		DateToWeek)
+	ok, info := tc.Run()
+	require.True(t, ok, info)
+}
+
 func TestDateToWeekExplicitModeDoesNotReadSessionDefault(t *testing.T) {
 	date, err := types.ParseDateCast("2026-05-07")
 	require.NoError(t, err)
@@ -9100,6 +9113,14 @@ func TestWeekOneArgumentOverloadsAreSessionSensitive(t *testing.T) {
 		overload, err := GetFunctionById(context.Background(), EncodeOverloadID(WEEK, overloadID))
 		require.NoError(t, err)
 		require.Equal(t, overloadID < 2, overload.IsRealTimeRelated())
+	}
+}
+
+func TestLastDayOverloadsAreNotFoldable(t *testing.T) {
+	for overloadID := int32(0); overloadID < 2; overloadID++ {
+		overload, err := GetFunctionById(context.Background(), EncodeOverloadID(LAST_DAY, overloadID))
+		require.NoError(t, err)
+		require.True(t, overload.CannotFold())
 	}
 }
 

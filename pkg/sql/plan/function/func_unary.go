@@ -10513,8 +10513,11 @@ func DateStringToYear(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 }
 
 func getDefaultWeekFormatMode(proc *process.Process) (int, error) {
-	if proc == nil || proc.Base == nil || proc.GetResolveVariableFunc() == nil {
+	if proc == nil || proc.Base == nil {
 		return 0, nil
+	}
+	if proc.GetResolveVariableFunc() == nil {
+		return int(proc.GetSessionInfo().DefaultWeekFormat & 7), nil
 	}
 
 	value, err := proc.GetResolveVariableFunc()("default_week_format", true, false)
@@ -10522,7 +10525,7 @@ func getDefaultWeekFormatMode(proc *process.Process) (int, error) {
 		return 0, err
 	}
 	if value == nil {
-		return 0, nil
+		return int(proc.GetSessionInfo().DefaultWeekFormat & 7), nil
 	}
 
 	mode, ok := value.(int64)

@@ -95,6 +95,7 @@ func newCodecTestProcess(t *testing.T) (*Process, client.TxnOperator) {
 		SessionId:                           uuid.MustParse("11111111-2222-3333-4444-555555555555"),
 		ExplicitZeroTemporalCastReturnsNull: true,
 		SqlMode:                             "STRICT_TRANS_TABLES",
+		DefaultWeekFormat:                   3,
 		AutoIncrementIncrement:              7,
 		AutoIncrementOffset:                 4,
 	}
@@ -604,6 +605,7 @@ func TestBuildProcessInfoAndMockProcessInfoWithPro(t *testing.T) {
 	require.True(t, info.SessionInfo.MatrixoneNativeMode)
 	require.True(t, info.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
 	require.Equal(t, "STRICT_TRANS_TABLES", info.SessionInfo.SqlMode)
+	require.Equal(t, int64(3), info.SessionInfo.DefaultWeekFormat)
 	require.True(t, info.SessionInfo.LockWaitTimeoutSet)
 	require.Equal(t, uint64(7), info.SessionInfo.AutoIncrementIncrement)
 	require.Equal(t, uint64(4), info.SessionInfo.AutoIncrementOffset)
@@ -753,6 +755,7 @@ func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	require.Equal(t, info.SessionInfo.MatrixoneNativeMode, decodedProc.Base.SessionInfo.MatrixOneNativeMode)
 	require.True(t, decodedProc.Base.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
 	require.Equal(t, info.SessionInfo.SqlMode, decodedProc.Base.SessionInfo.SqlMode)
+	require.Equal(t, info.SessionInfo.DefaultWeekFormat, decodedProc.Base.SessionInfo.DefaultWeekFormat)
 	require.Equal(t, info.SessionInfo.LockWaitTimeoutSet, decodedProc.Base.SessionInfo.LockWaitTimeoutSet)
 	require.Equal(t, info.SessionInfo.AutoIncrementIncrement, decodedProc.Base.SessionInfo.AutoIncrementIncrement)
 	require.Equal(t, info.SessionInfo.AutoIncrementOffset, decodedProc.Base.SessionInfo.AutoIncrementOffset)
