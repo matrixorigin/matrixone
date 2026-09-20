@@ -127,6 +127,37 @@ func TestCollectRemoteFragmentCountsCarriesExecutionAddress(t *testing.T) {
 	))
 }
 
+func TestCollectRemoteFragmentCountsExcludesLazyOwnedCandidates(t *testing.T) {
+	ordinary := &Scope{Magic: Remote, NodeInfo: engine.Node{Addr: "cn-b:6001"}}
+	post := &Scope{PreScopes: []*Scope{{Magic: Remote, NodeInfo: engine.Node{Addr: "cn-b:6001"}}}}
+	pre := &Scope{PreScopes: []*Scope{{Magic: Remote, NodeInfo: engine.Node{Addr: "cn-c:6001"}}}}
+	lazy := &Scope{LazyPreScopes: true, PreScopes: []*Scope{post, pre}}
+
+	counts := collectRemoteFragmentCounts([]*Scope{ordinary, lazy}, "cn-a:6001")
+	require.Equal(t, map[string]uint32{"cn-b:6001": 1}, counts)
+
+	board := message.NewMessageBoard()
+	executionID := newRemoteExecutionID()
+	key := remoteAllocationStatementGroupKey(executionID, "cn-b:6001")
+	participant, err := acquireRemoteAllocationStatementParticipant(key, board, counts["cn-b:6001"], nil)
+	require.NoError(t, err)
+	terminal, err := participant.finish(nil)
+	require.NoError(t, err)
+	require.True(t, terminal.complete)
+	require.False(t, remoteAllocationStatementGroupRegistered(board))
+	remoteAllocationStatementGroups.Lock()
+	require.Nil(t, remoteAllocationStatementGroups.tombstones[key])
+	remoteAllocationStatementGroups.Unlock()
+
+	assignLazyRemoteGeneration(post, "cn-a:6001")
+	postRemote := post.PreScopes[0]
+	require.Equal(t, map[string]uint32{"cn-b:6001": 1}, postRemote.lazyRemoteFragmentCounts)
+	assignLazyRemoteGeneration(pre, "cn-a:6001")
+	preRemote := pre.PreScopes[0]
+	require.Equal(t, map[string]uint32{"cn-c:6001": 1}, preRemote.lazyRemoteFragmentCounts)
+	require.NotEqual(t, postRemote.lazyRemoteExecutionID, preRemote.lazyRemoteExecutionID)
+}
+
 func TestLazyRemoteCandidatesUseIndependentExactGenerations(t *testing.T) {
 	postRemote := &Scope{Magic: Remote, NodeInfo: engine.Node{Addr: "cn-b:6001"}}
 	post := &Scope{PreScopes: []*Scope{postRemote}}
