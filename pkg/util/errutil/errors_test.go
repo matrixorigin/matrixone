@@ -16,10 +16,13 @@ package errutil
 
 import (
 	"context"
-	"github.com/stretchr/testify/require"
+	"errors"
+	"os"
 	"reflect"
 	"sync/atomic"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func mockReportError(_ context.Context, err error, depth int) {}
@@ -186,6 +189,16 @@ func TestWrapfCauseFirst(t *testing.T) {
 	err := WrapfCauseFirst(cause, "detail %d", 7)
 	require.Equal(t, "context canceled: detail 7", err.Error())
 	require.ErrorIs(t, err, cause)
+	require.Nil(t, WrapfCauseFirst(nil, "ignored"))
+	require.EqualError(t, WrapfCauseFirst(cause, ""), cause.Error())
+	first, second := errors.New("same"), errors.New("same")
+	require.NotErrorIs(t, WrapfCauseFirst(first, "detail"), second)
+	typed := &os.PathError{Op: "read", Path: "artifact", Err: first}
+	nested := Wrap(WrapfCauseFirst(typed, "detail"), "gateway")
+	var target *os.PathError
+	require.ErrorAs(t, nested, &target)
+	require.Same(t, typed, target)
+	require.ErrorIs(t, nested, first)
 }
 
 func Test_noopReportError(t *testing.T) {
