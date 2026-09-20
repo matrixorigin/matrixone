@@ -166,6 +166,61 @@ func TestBatchArrayDistanceSync_InnerProduct(t *testing.T) {
 	}
 }
 
+func TestCosineDistanceArrayScaleInvariance(t *testing.T) {
+	t.Run("float32", func(t *testing.T) {
+		testCosineArrayScaleInvariance[float32](t, types.T_array_float32.ToType(), 1e-20, 1e20, true)
+	})
+	t.Run("float64", func(t *testing.T) {
+		testCosineArrayScaleInvariance[float64](t, types.T_array_float64.ToType(), 1e-300, 1e300, false)
+	})
+}
+
+func testCosineArrayScaleInvariance[T types.RealNumbers](t *testing.T, typ types.Type, tiny, large T, batchEligible bool) {
+	t.Helper()
+	for _, scale := range []struct {
+		name string
+		a, b T
+	}{{"ordinary", 1, 1}, {"tiny_left", tiny, 1}, {"tiny_right", 1, tiny}, {"mixed_extremes", tiny, large}} {
+		for _, shape := range []string{"const_column", "column_const", "column_column"} {
+			t.Run(scale.name+"/"+shape, func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				defer mpool.DeleteMPool(mp)
+				query := []T{scale.a, scale.a, scale.a}
+				rows := [][]T{{2 * scale.b, scale.b, scale.b}, {-2 * scale.b, -scale.b, -scale.b}, {0, 0, 0}}
+				constVec, err := vector.NewConstBytes(typ, types.ArrayToBytes(query), len(rows), mp)
+				require.NoError(t, err)
+				defer constVec.Free(mp)
+				colVec := makeColArrayVec(t, mp, typ, rows)
+				defer colVec.Free(mp)
+				inputs := []*vector.Vector{constVec, colVec}
+				if shape == "column_const" {
+					inputs = []*vector.Vector{colVec, constVec}
+				} else if shape == "column_column" {
+					queryCol := makeColArrayVec(t, mp, typ, [][]T{query, query, query})
+					defer queryCol.Free(mp)
+					inputs = []*vector.Vector{queryCol, colVec}
+				}
+				_, ok, err := batchArrayDistanceSync[T](inputs, len(rows), metric.Metric_CosineDistance, nil, nil)
+				require.NoError(t, err)
+				require.Equal(t, batchEligible && shape != "column_column", ok)
+				result := vector.NewFunctionResultWrapper(types.T_float64.ToType(), mp)
+				defer result.Free()
+				require.NoError(t, result.PreExtendAndReset(len(rows)))
+				require.NoError(t, CosineDistanceArray[T](inputs, result, nil, len(rows), nil))
+				out := result.GetResultVector()
+				require.Equal(t, len(rows), out.Length())
+				require.Equal(t, types.T_float64, out.GetType().Oid)
+				require.False(t, out.GetNulls().Any())
+				// Independent angle oracle; agreement between two wrong paths is insufficient.
+				want := []float64{1 - 4/math.Sqrt(18), 1 + 4/math.Sqrt(18), 1}
+				for i, d := range vector.MustFixedColNoTypeCheck[float64](out) {
+					require.InDelta(t, want[i], d, 1e-14)
+				}
+			})
+		}
+	}
+}
+
 // TestBatchArrayDistanceSync_CosineDistance verifies Metric_CosineDistance.
 func TestBatchArrayDistanceSync_CosineDistance(t *testing.T) {
 	mp := mpool.MustNewZero()
