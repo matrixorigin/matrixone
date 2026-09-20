@@ -973,6 +973,86 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 	}
 
 	switch node.NodeType {
+	case plan.Node_ADAPTIVE_TOP:
+		if len(node.Children) < 2 || len(node.BindingTags) > 1 {
+			return nil, moerr.NewInternalError(builder.GetContext(), "invalid adaptive top remapping topology")
+		}
+		needed := make([]int, 0, len(node.ProjectList))
+		if len(node.BindingTags) == 1 {
+			outputTag := node.BindingTags[0]
+			for i := range node.ProjectList {
+				if colRefCnt[[2]int32{outputTag, int32(i)}] > 0 {
+					needed = append(needed, i)
+				}
+			}
+		} else {
+			// A SORT-anchored region has no output binding tag. Preserve its complete
+			// positional schema; ancestors reference the underlying project tags.
+			for i := range node.ProjectList {
+				needed = append(needed, i)
+			}
+		}
+		if len(needed) == 0 && len(node.ProjectList) > 0 {
+			needed = append(needed, 0)
+		}
+		var first *ColRefRemapping
+		for _, childID := range node.Children {
+			for _, pos := range needed {
+				increaseRefCnt(node.ProjectList[pos], 1, colRefCnt)
+			}
+			// SORT-anchored candidates expose constants only positionally; those
+			// expressions have no ColRef for increaseRefCnt to retain. Pin the
+			// corresponding output project columns explicitly.
+			for outputID := childID; outputID >= 0 && int(outputID) < len(builder.qry.Nodes); {
+				output := builder.qry.Nodes[outputID]
+				if output.NodeType == plan.Node_PROJECT && len(output.BindingTags) == 1 &&
+					len(output.ProjectList) >= len(node.ProjectList) {
+					for _, pos := range needed {
+						colRefCnt[[2]int32{output.BindingTags[0], int32(pos)}]++
+					}
+					break
+				}
+				if len(output.Children) != 1 {
+					break
+				}
+				outputID = output.Children[0]
+			}
+			childRemapping, err := builder.remapAllColRefs(childID, step, colRefCnt, colRefBool, sinkColRef)
+			if err != nil {
+				return nil, err
+			}
+			if first == nil {
+				first = childRemapping
+			} else if len(first.localToGlobal) != len(childRemapping.localToGlobal) {
+				return nil, moerr.NewInternalError(builder.GetContext(), "adaptive top candidate width changed during remapping")
+			}
+		}
+		if len(node.BindingTags) == 0 {
+			if first == nil {
+				return nil, moerr.NewInternalError(builder.GetContext(), "adaptive top has no candidate remapping")
+			}
+			node.ProjectList = make([]*plan.Expr, len(first.localToGlobal))
+			for i, globalRef := range first.localToGlobal {
+				node.ProjectList[i] = &plan.Expr{
+					Typ:  builder.qry.Nodes[node.Children[0]].ProjectList[i].Typ,
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: int32(i)}},
+				}
+				remapping.addColRef(globalRef)
+			}
+			break
+		}
+		outputTag := node.BindingTags[0]
+		newProjectList := make([]*plan.Expr, 0, len(needed))
+		for _, pos := range needed {
+			globalRef := [2]int32{outputTag, int32(pos)}
+			remapping.addColRef(globalRef)
+			newProjectList = append(newProjectList, &plan.Expr{
+				Typ:  node.ProjectList[pos].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: int32(len(newProjectList))}},
+			})
+		}
+		node.ProjectList = newProjectList
+
 	case plan.Node_FUNCTION_SCAN, plan.Node_VECTOR_INDEX_SCAN:
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, 1, colRefCnt)
@@ -3813,6 +3893,11 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		// passes. Build only those paths here; regular/fulltext index rewrites keep
 		// their established late placement below.
 		builder.prepareSpecialIndexGuards(rootID)
+		// Multiple adaptive regions can be mutually dependent through a JOIN or
+		// set-operation consumer. Until candidate scopes carry independent runtime
+		// filter/message generations, execute those regions exactly once with the
+		// existing FORCE path rather than replaying either side.
+		builder.forceMultipleAdaptiveVectorRegions(rootID)
 		earlyIndexColMap := make(map[[2]int32]*plan.Expr)
 		rootID, err = builder.applyVectorIndicesEarly(rootID, colRefCnt, earlyIndexColMap)
 		builder.resetSpecialIndexGuards()
@@ -4254,9 +4339,19 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			}
 			targetType = makePlan2Type(&targetArgType)
 
+			preparedDeferredColumn := false
+			if builder.isPrepareStatement {
+				for _, tmpID := range nodes {
+					if preparedNodeOutputContainsParam(builder.qry, tmpID, int32(columnIdx), make(map[[2]int32]struct{})) {
+						preparedDeferredColumn = true
+						break
+					}
+				}
+			}
 			for idx, tmpID := range nodes {
 				if !argsType[idx].Eq(targetArgType) {
 					node := builder.qry.Nodes[tmpID]
+					source := node.ProjectList[columnIdx]
 					if argsType[idx].Oid == types.T_any || setBranchPureNull[idx][columnIdx] {
 						node.ProjectList[columnIdx].Typ = targetType
 					} else if targetArgType.Oid == types.T_char {
@@ -4271,6 +4366,23 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 						if err != nil {
 							return 0, err
 						}
+					}
+					if preparedDeferredColumn && targetArgType.Oid.IsMySQLString() &&
+						preparedNumericCommonOperandType(argsType[idx].Oid) {
+						attachPreparedRuntimeParamSource(node.ProjectList[columnIdx], DeepCopyExpr(source))
+						metadata := ensurePreparedNumericMetadata(node.ProjectList[columnIdx])
+						metadata.ProvisionalResultPeer = true
+						metadata.ProvisionalResultPeerTypeId = source.Typ.Id
+						metadata.ProvisionalResultPeerWidth = source.Typ.Width
+						metadata.ProvisionalResultPeerScale = source.Typ.Scale
+					}
+				}
+				if preparedDeferredColumn && preparedExprContainsParam(builder.qry.Nodes[tmpID].ProjectList[columnIdx]) {
+					metadata := ensurePreparedNumericMetadata(builder.qry.Nodes[tmpID].ProjectList[columnIdx])
+					metadata.Fallback = true
+					metadata.ParamPos = -1
+					if pos, ok := firstPlanParamPosition(builder.qry.Nodes[tmpID].ProjectList[columnIdx]); ok {
+						metadata.ParamPos = pos
 					}
 				}
 			}

@@ -1987,8 +1987,14 @@ func TestGroupConsumesReusableGroupingSetProjectionBatches(t *testing.T) {
 
 func TestGroupPreservesEmptyGroupingSetAcrossPartialMerge(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	t.Cleanup(func() {
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
 	child := colexec.NewMockOperator()
+	t.Cleanup(func() { child.Free(proc, false, nil) })
 	expand := projection.NewArgument()
+	t.Cleanup(func() { expand.Free(proc, false, nil) })
 	expand.ProjectList = []*plan.Expr{
 		colExpr(0, types.T_varchar), colExpr(1, types.T_int32), {
 			Typ:  plan.Type{Id: int32(types.T_bool), NotNullable: true},
@@ -2009,6 +2015,7 @@ func TestGroupPreservesEmptyGroupingSetAcrossPartialMerge(t *testing.T) {
 	}, aggs)
 	partialGroup.NeedEval = false
 	partialGroup.DynamicGrouping = true
+	t.Cleanup(func() { partialGroup.Free(proc, false, nil) })
 	partialGroup.AppendChild(expand)
 	require.NoError(t, partialGroup.Prepare(proc))
 	partialOutputs := collectBatches(t, partialGroup, proc)
@@ -2018,13 +2025,28 @@ func TestGroupPreservesEmptyGroupingSetAcrossPartialMerge(t *testing.T) {
 		cloneBatch(t, proc, partialOutputs[0]),
 		cloneBatch(t, proc, partialOutputs[0]),
 	}
-
-	partialGroup.Free(proc, false, nil)
-	expand.Free(proc, false, nil)
-	child.Free(proc, false, nil)
+	partialsOwned := true
+	t.Cleanup(func() {
+		if partialsOwned {
+			for _, partial := range partials {
+				partial.Clean(proc.Mp())
+			}
+		}
+	})
+	// Mix a local partial with a remote partial: losing the latter's grouping
+	// bitmap would split the single empty identity into two hash domains.
+	var wire bytes.Buffer
+	_, err := partials[1].MarshalBinaryForPipeline(&wire, true, true)
+	require.NoError(t, err)
+	partials[1].Clean(proc.Mp())
+	partials[1] = batch.NewOffHeapEmpty()
+	require.NoError(t, partials[1].UnmarshalBinaryForPipeline(wire.Bytes(), proc.Mp()))
 
 	mergeChild := colexec.NewMockOperator().WithBatchs(partials)
+	t.Cleanup(func() { mergeChild.Free(proc, false, nil) })
+	partialsOwned = false
 	merge := newMergeGroupOp(aggs)
+	t.Cleanup(func() { merge.Free(proc, false, nil) })
 	merge.GroupingAware = true
 	merge.EmptyGroupingSetIDs = []int64{1}
 	merge.GroupByTypes = []types.Type{
@@ -2040,10 +2062,6 @@ func TestGroupPreservesEmptyGroupingSetAcrossPartialMerge(t *testing.T) {
 	require.Equal(t, int64(0), vector.GetFixedAtNoTypeCheck[int64](outputs[0].Vecs[2], 0))
 	require.True(t, outputs[0].Vecs[3].IsNull(0))
 
-	merge.Free(proc, false, nil)
-	mergeChild.Free(proc, false, nil)
-	proc.Free()
-	require.Zero(t, proc.Mp().CurrNB())
 }
 
 func TestGroupCreatesLegacyEmptyGroupingSet(t *testing.T) {
@@ -3746,7 +3764,10 @@ func TestMergeGroupRejectsHashMetadataIncompatibleWithVectors(t *testing.T) {
 
 func TestMergeGroupAcceptsNotNullableGroupingPartial(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	defer proc.Free()
+	t.Cleanup(func() {
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
 
 	input := batch.NewWithSize(1)
 	input.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 2}, nil, proc.Mp())
@@ -3754,6 +3775,7 @@ func TestMergeGroupAcceptsNotNullableGroupingPartial(t *testing.T) {
 	groupBy := colExpr(0, types.T_int32)
 	groupBy.Typ.NotNullable = true
 	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	t.Cleanup(func() { child.Free(proc, false, nil) })
 	partialGroup := newGroupOp(
 		proc,
 		[]*plan.Expr{groupBy},
@@ -3761,28 +3783,47 @@ func TestMergeGroupAcceptsNotNullableGroupingPartial(t *testing.T) {
 	)
 	partialGroup.NeedEval = false
 	partialGroup.GroupingFlag = []bool{false}
+	t.Cleanup(func() { partialGroup.Free(proc, false, nil) })
 	partialGroup.AppendChild(child)
 	require.NoError(t, partialGroup.Prepare(proc))
 	require.Equal(t, int32(HStr), partialGroup.ctr.mtyp)
 	partialOutputs := collectBatches(t, partialGroup, proc)
 	require.Len(t, partialOutputs, 1)
 	partial := cloneBatch(t, proc, partialOutputs[0])
-	partialGroup.Free(proc, false, nil)
-	child.Free(proc, false, nil)
+	t.Cleanup(func() {
+		if partial != nil {
+			partial.Clean(proc.Mp())
+		}
+	})
+	// Exercise the actual cross-CN representation, including aggregate/hash
+	// metadata in ExtraBuf. Dup alone hides lost vector grouping provenance.
+	var wire bytes.Buffer
+	_, err := partial.MarshalBinaryForPipeline(&wire, true, true)
+	require.NoError(t, err)
+	remotePartial := batch.NewWithSize(0)
+	t.Cleanup(func() {
+		if remotePartial != nil {
+			remotePartial.Clean(proc.Mp())
+		}
+	})
+	require.NoError(t, remotePartial.UnmarshalBinaryForPipeline(wire.Bytes(), proc.Mp()))
+	partial.Clean(proc.Mp())
+	partial = remotePartial
+	remotePartial = nil
 	require.True(t, partial.Vecs[0].GetNulls().Contains(0))
 	require.True(t, partial.Vecs[0].GetGrouping().Contains(0))
 
 	mergeChild := colexec.NewMockOperator().WithBatchs([]*batch.Batch{partial})
+	t.Cleanup(func() { mergeChild.Free(proc, false, nil) })
+	partial = nil
 	merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{countStarAgg()})
+	t.Cleanup(func() { merge.Free(proc, false, nil) })
 	merge.AppendChild(mergeChild)
 	require.NoError(t, merge.Prepare(proc))
 	outputs := collectBatches(t, merge, proc)
 	require.Len(t, outputs, 1)
 	require.Equal(t, 1, outputs[0].RowCount())
 	require.Equal(t, int64(2), vector.GetFixedAtNoTypeCheck[int64](outputs[0].Vecs[1], 0))
-	merge.Free(proc, false, nil)
-	mergeChild.Free(proc, false, nil)
-	require.Zero(t, proc.Mp().CurrNB())
 }
 
 func TestMergeGroupH0SkipsGenericSpillAndReuses(t *testing.T) {
@@ -4693,22 +4734,30 @@ func TestRemoteHLLStateRetainsCompatibilityAcrossProtocolVersions(t *testing.T) 
 	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-	arg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_float32)}}
-	makeVersion := func(aggID int64) byte {
+	scalarArg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_float32)}}
+	vectorArg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_array_float32)}}
+	makeVersion := func(aggID int64, arg *plan.Expr) byte {
 		ctr := &container{
-			mp:                proc.Mp(),
-			mtyp:              H0,
-			legacyHLLState:    useLegacyHLLStateForRemote(proc),
-			floatZeroHLLState: useFloatZeroHLLStateForRemote(proc),
+			mp:                   proc.Mp(),
+			mtyp:                 H0,
+			legacyHLLState:       useLegacyHLLStateForRemote(proc),
+			floatZeroHLLState:    useFloatZeroHLLStateForRemote(proc),
+			legacyVectorHLLState: useLegacyVectorHLLStateForRemote(proc),
 		}
 		aggs, err := ctr.makeAggList([]aggexec.AggFuncExecExpression{
 			aggexec.MakeAggFunctionExpression(
 				aggID, false, []*plan.Expr{arg}, nil),
 		})
 		require.NoError(t, err)
-		values := vector.NewVec(types.T_float32.ToType())
-		require.NoError(t, vector.AppendFixed(
-			values, float32(math.Copysign(0, -1)), false, proc.Mp()))
+		values := vector.NewVec(types.T(arg.Typ.Id).ToType())
+		if types.T(arg.Typ.Id) == types.T_array_float32 {
+			require.NoError(t, vector.AppendBytes(values,
+				types.ArrayToBytes([]float32{1, float32(math.Copysign(0, -1)), 3}),
+				false, proc.Mp()))
+		} else {
+			require.NoError(t, vector.AppendFixed(
+				values, float32(math.Copysign(0, -1)), false, proc.Mp()))
+		}
 		require.NoError(t, aggs[0].BulkFill(0, []*vector.Vector{values}))
 		var intermediate bytes.Buffer
 		require.NoError(t, aggs[0].SaveIntermediateResultOfChunk(0, &intermediate))
@@ -4724,52 +4773,80 @@ func TestRemoteHLLStateRetainsCompatibilityAcrossProtocolVersions(t *testing.T) 
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion70)
 	require.True(t, useLegacyHLLStateForRemote(proc))
+	require.True(t, useLegacyVectorHLLStateForRemote(proc))
 	require.False(t, useFloatZeroHLLStateForRemote(proc))
-	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd),
+	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, scalarArg),
 		"pre-v76 peers must receive the raw-value v2 HLL state")
+	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, vectorArg),
+		"pre-v88 peers must receive the raw-value vector HLL state")
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion73)
 	require.True(t, useLegacyHLLStateForRemote(proc),
 		"v73 peers must receive a compatibility HLL state")
+	require.True(t, useLegacyVectorHLLStateForRemote(proc))
 	require.False(t, useFloatZeroHLLStateForRemote(proc))
-	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd),
+	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, scalarArg),
 		"v73 peers must keep persisted HLL_ADD_AGG on the raw-value v2 state")
+	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, vectorArg),
+		"v73 peers must keep vector HLL_ADD_AGG on the raw-value v2 state")
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion74)
 	require.True(t, useLegacyHLLStateForRemote(proc),
 		"v74 peers must receive a compatibility HLL state")
+	require.True(t, useLegacyVectorHLLStateForRemote(proc))
 	require.False(t, useFloatZeroHLLStateForRemote(proc))
-	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfApproxCount),
+	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfApproxCount, scalarArg),
 		"v74 peers must receive the base-compatible v2 APPROX_COUNT state")
-	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd),
+	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, scalarArg),
 		"v74 peers must keep persisted HLL_ADD_AGG on the raw-value v2 state")
+	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, vectorArg),
+		"v74 peers must keep vector HLL_ADD_AGG on the raw-value v2 state")
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion75)
 	require.True(t, useLegacyHLLStateForRemote(proc))
+	require.True(t, useLegacyVectorHLLStateForRemote(proc))
 	require.False(t, useFloatZeroHLLStateForRemote(proc))
-	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfApproxCount),
+	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfApproxCount, scalarArg),
 		"v75 peers must receive the raw-value v2 APPROX_COUNT state")
-	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd),
+	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, scalarArg),
 		"v75 peers must keep persisted HLL_ADD_AGG on the raw-value v2 state")
+	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, vectorArg),
+		"v75 peers must keep vector HLL_ADD_AGG on the raw-value v2 state")
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion76)
 	require.True(t, useLegacyHLLStateForRemote(proc))
+	require.True(t, useLegacyVectorHLLStateForRemote(proc))
 	require.True(t, useFloatZeroHLLStateForRemote(proc))
-	require.Equal(t, byte(3), makeVersion(aggexec.AggIdOfApproxCount),
+	require.Equal(t, byte(3), makeVersion(aggexec.AggIdOfApproxCount, scalarArg),
 		"v76 peers must receive the signed-zero-compatible APPROX_COUNT state")
-	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd),
+	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, scalarArg),
 		"v76 peers must keep persisted HLL_ADD_AGG on the raw-value v2 state")
+	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, vectorArg),
+		"v76 peers must keep vector HLL_ADD_AGG on the raw-value v2 state")
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion77)
 	require.False(t, useLegacyHLLStateForRemote(proc))
+	require.True(t, useLegacyVectorHLLStateForRemote(proc))
 	require.False(t, useFloatZeroHLLStateForRemote(proc))
-	require.Equal(t, byte(4), makeVersion(aggexec.AggIdOfApproxCount),
+	require.Equal(t, byte(4), makeVersion(aggexec.AggIdOfApproxCount, scalarArg),
 		"v77 peers may receive the typed-key v4 APPROX_COUNT state")
-	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd),
+	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, scalarArg),
 		"persisted HLL_ADD_AGG must retain the raw-value v2 state")
+	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, vectorArg),
+		"v77 peers must keep vector HLL_ADD_AGG on the raw-value v2 state")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion87)
+	require.True(t, useLegacyVectorHLLStateForRemote(proc))
+	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, vectorArg),
+		"v87 peers must keep vector HLL_ADD_AGG on the raw-value v2 state")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion88)
+	require.False(t, useLegacyVectorHLLStateForRemote(proc))
+	require.Equal(t, byte(4), makeVersion(aggexec.AggIdOfHllAdd, vectorArg),
+		"v88 peers may receive the canonical vector HLL state")
 }
 
 func TestLegacyHLLStateRequiresRemoteProcess(t *testing.T) {
 	require.False(t, useLegacyHLLStateForRemote(nil))
+	require.False(t, useLegacyVectorHLLStateForRemote(nil))
 	require.False(t, useLegacyApproxPercentileStateForRemote(nil))
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	require.False(t, useLegacyHLLStateForRemote(proc))
+	require.False(t, useLegacyVectorHLLStateForRemote(proc))
 }
 
 func TestGroupConcatSourceRowProtocolGates(t *testing.T) {

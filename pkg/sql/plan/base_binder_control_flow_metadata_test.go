@@ -28,6 +28,45 @@ import (
 func TestBindControlFlowMetadata(t *testing.T) {
 	ctx := context.Background()
 
+	t.Run("constant IF exposes only the selected string domain to byte slicing", func(t *testing.T) {
+		for _, test := range []struct {
+			name       string
+			condition  bool
+			wantDomain uint8
+		}{
+			{name: "selected binary", condition: true, wantDomain: possibleStringDomainBinary},
+			{name: "selected text", condition: false, wantDomain: possibleStringDomainText},
+		} {
+			t.Run(test.name, func(t *testing.T) {
+				selected, err := BindFuncExprImplByPlanExpr(ctx, "if", []*planpb.Expr{
+					makePlan2BoolConstExprWithType(test.condition),
+					makePlan2VarBinaryConstExprWithType("e4bda0e5a5bd"),
+					makePlan2StringConstExprWithType("你好"),
+				})
+				require.NoError(t, err)
+				require.Equal(t, test.wantDomain, possibleStringDomainsForExpr(selected))
+
+				left, err := BindFuncExprImplByPlanExpr(ctx, "left", []*planpb.Expr{
+					selected, makePlan2Int64ConstExprWithType(2),
+				})
+				require.NoError(t, err)
+				substring, err := BindFuncExprImplByPlanExpr(ctx, "substring", []*planpb.Expr{
+					left, makePlan2Int64ConstExprWithType(2), makePlan2Int64ConstExprWithType(1),
+				})
+				require.NoError(t, err)
+
+				hex, err := BindFuncExprImplByPlanExpr(ctx, "hex", []*planpb.Expr{substring})
+				require.NoError(t, err)
+				require.Equal(t, int32(types.T_varchar), hex.Typ.Id)
+				if test.condition {
+					require.Equal(t, int32(2), hex.Typ.Width)
+				} else {
+					require.Greater(t, hex.Typ.Width, int32(2))
+				}
+			})
+		}
+	})
+
 	t.Run("if mixed string numeric keeps bounded varchar", func(t *testing.T) {
 		expr, err := BindFuncExprImplByPlanExpr(ctx, "if", []*planpb.Expr{
 			makePlan2BoolConstExprWithType(true),
@@ -431,6 +470,133 @@ func TestBindControlFlowMetadata(t *testing.T) {
 		require.Equal(t, int32(types.T_varbinary), expr.Typ.Id)
 		require.Equal(t, int32(8), expr.Typ.Width)
 	})
+}
+
+func TestBuildControlFlowTemporalFSPMetadata(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		sql   string
+		oid   types.T
+		scale int32
+		width int32
+	}{
+		{
+			name: "coalesce time",
+			sql: `select coalesce(
+				cast('12:34:56.123456' as time(6)),
+				cast('12:34:56.123' as time(3)))`,
+			oid: types.T_time, scale: 6, width: 6,
+		},
+		{
+			name: "coalesce datetime",
+			sql: `select coalesce(
+				cast('2024-01-02 12:34:56.123456' as datetime(6)),
+				cast('2024-01-02 12:34:56.123' as datetime(3)))`,
+			oid: types.T_datetime, scale: 6, width: 6,
+		},
+		{
+			name: "if timestamp and datetime",
+			sql: `select if(true,
+				cast('2024-01-02 12:34:56.123456' as timestamp(6)),
+				cast('2024-01-02 12:34:56.123' as datetime(3)))`,
+			oid: types.T_datetime, scale: 6, width: 6,
+		},
+		{
+			name: "case timestamp and datetime",
+			sql: `select case when true then
+				cast('2024-01-02 12:34:56.123456' as timestamp(6)) else
+				cast('2024-01-02 12:34:56.123' as datetime(3)) end`,
+			oid: types.T_datetime, scale: 6, width: 6,
+		},
+		{
+			name: "nullif time",
+			sql: `select nullif(
+				cast('12:34:56.123456' as time(6)),
+				cast('12:34:56.123' as time(3)))`,
+			oid: types.T_time, scale: 6, width: 6,
+		},
+		{
+			name: "nullif datetime",
+			sql: `select nullif(
+				cast('2024-01-02 12:34:56.123456' as datetime(6)),
+				cast('2024-01-02 12:34:56.123' as datetime(3)))`,
+			oid: types.T_datetime, scale: 6, width: 6,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			pl, err := BuildPlan(NewMockCompilerContext(true), stmt, false)
+			require.NoError(t, err)
+			query := pl.GetQuery()
+			projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
+			require.Len(t, projectList, 1)
+			require.Equal(t, int32(test.oid), projectList[0].Typ.Id)
+			require.Equal(t, test.scale, projectList[0].Typ.Scale)
+			require.Equal(t, test.width, projectList[0].Typ.Width)
+		})
+	}
+}
+
+func TestBindControlFlowTemporalFSPMetadataProtocolFence(t *testing.T) {
+	ctx := context.Background()
+	condition := func(pos int32) *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_bool)},
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: pos}},
+		}
+	}
+	timestamp := func() *planpb.Expr {
+		expr := makePlan2TimestampConstExprWithType(0)
+		expr.Typ.Scale = 6
+		return expr
+	}
+	datetime := func() *planpb.Expr {
+		expr := makePlan2DateTimeConstExprWithType(0)
+		expr.Typ.Scale = 3
+		return expr
+	}
+
+	for _, test := range []struct {
+		name     string
+		function string
+		args     func() []*planpb.Expr
+		valuePos []int
+	}{
+		{
+			name:     "if mixed temporal branches",
+			function: "if",
+			args:     func() []*planpb.Expr { return []*planpb.Expr{condition(0), timestamp(), datetime()} },
+			valuePos: []int{1, 2},
+		},
+		{
+			name:     "case mixed temporal branches with else",
+			function: "case",
+			args: func() []*planpb.Expr {
+				return []*planpb.Expr{condition(0), timestamp(), condition(1), datetime(), datetime()}
+			},
+			valuePos: []int{1, 3, 4},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			expr, err := BindFuncExprImplByPlanExpr(ctx, test.function, test.args())
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_datetime), expr.Typ.Id)
+			require.Equal(t, int32(6), expr.Typ.Scale)
+			require.Equal(t, int32(6), expr.Typ.Width)
+			features, err := planpb.RequiredRemoteExpressionFeatures(expr)
+			require.NoError(t, err)
+			require.True(t, features.ExpressionResultMetadataContracts)
+
+			for _, pos := range test.valuePos {
+				value := expr.GetF().Args[pos]
+				require.Equal(t, int32(types.T_datetime), value.Typ.Id)
+				require.Equal(t, int32(6), value.Typ.Scale)
+			}
+		})
+	}
 }
 
 func TestBindControlFlowBinaryCharacterCharsetWidth(t *testing.T) {

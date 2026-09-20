@@ -1404,8 +1404,9 @@ func forceCastExpr2WithProcess(
 
 	targetType.Typ.NotNullable = expr.Typ.NotNullable
 	// SQL-mode-sensitive assignments use the protocol-gated runtime assignment
-	// cast; the remaining conversions continue to use the generic cast.
-	funcName := assignmentCastFunctionName(targetType.Typ, isIgnore, proc)
+	// cast. Other temporal assignments retain cast_strict behavior, while the
+	// remaining conversions continue to use the generic cast.
+	funcName := assignmentCastFunctionNameForSource(expr, targetType.Typ, isIgnore, proc)
 	fGet, err := function.GetFunctionByName(ctx, funcName, []types.Type{t1, t2})
 	if err != nil {
 		return nil, err
@@ -1486,7 +1487,22 @@ func forceAssignmentCastExprWithProcess(
 	isIgnore bool,
 	proc *process.Process,
 ) (*Expr, error) {
-	return forceAssignmentCastExprWithName(ctx, expr, targetType, assignmentCastFunctionName(targetType, isIgnore, proc))
+	return forceAssignmentCastExprWithName(ctx, expr, targetType,
+		assignmentCastFunctionNameForSource(expr, targetType, isIgnore, proc))
+}
+
+func assignmentCastFunctionNameForSource(expr *Expr, targetType Type, isIgnore bool, proc *process.Process) string {
+	name := assignmentCastFunctionName(targetType, isIgnore, proc)
+	if types.T(targetType.Id).IsInteger() &&
+		(types.T(expr.Typ.Id).IsFloat() ||
+			(types.T(targetType.Id).IsUnsignedInt() && makeTypeByPlan2Expr(expr).IsDecimal()) ||
+			expr.GetP() != nil) && assignmentCastProtocolSupported(proc) {
+		name = "cast_assign"
+		if isIgnore {
+			name = "cast_ignore"
+		}
+	}
+	return name
 }
 
 func (builder *QueryBuilder) forceAssignmentCastExpr(expr *Expr, targetType Type, isIgnore bool) (*Expr, error) {
@@ -1836,6 +1852,16 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 			return forceAssignmentCastExprWithProcess(proc.Ctx, expr, targetType, isIgnore, proc)
 		}
 	}
+	// Integer assignment must consume the literal's source type, not parse its
+	// spelling as an integer or truncate it in the VALUES fast path.
+	if colType.Oid.IsInteger() && (numVal.ValType == tree.P_decimal || numVal.ValType == tree.P_float64) {
+		binder := NewDefaultBinder(proc.Ctx, nil, nil, plan.Type{}, nil)
+		source, err := binder.BindExpr(numVal, 0, true)
+		if err != nil {
+			return nil, err
+		}
+		return forceAssignmentCastExprWithProcess(proc.Ctx, source, makePlan2Type(colType), isIgnore, proc)
+	}
 	switch colType.Oid {
 	case types.T_bool:
 		canInsert, num, err := util.SetInsertValueBool(proc, numVal)
@@ -2068,7 +2094,11 @@ func buildValueScan(
 				}
 			}
 		} else {
-			binder := NewDefaultBinder(builder.GetContext(), nil, nil, col.Typ, nil)
+			sourceType := col.Typ
+			if types.T(col.Typ.Id).IsInteger() {
+				sourceType = plan.Type{}
+			}
+			binder := NewDefaultBinder(builder.GetContext(), nil, nil, sourceType, nil)
 			binder.builder = builder
 			for _, r := range slt.Rows {
 				if nv, ok := r[i].(*tree.NumVal); ok && builder.isInsertIgnore {

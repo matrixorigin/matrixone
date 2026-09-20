@@ -1603,6 +1603,40 @@ func Test_convertRowsIntoBatch(t *testing.T) {
 	}
 }
 
+func TestGetValueFromVectorPreservesTemporalScale(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
+	clock, err := types.ParseTime("00:00:02.654321", 6)
+	require.NoError(t, err)
+	datetime, err := types.ParseDatetime("2024-01-02 03:04:05.654321", 6)
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name  string
+		typ   types.Type
+		value any
+		want  string
+	}{
+		{name: "time", typ: types.T_time.ToTypeWithScale(6), value: clock, want: clock.String2(6)},
+		{name: "datetime", typ: types.New(types.T_datetime, 0, 6), value: datetime, want: datetime.String2(6)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vec := vector.NewVec(tc.typ)
+			t.Cleanup(func() { vec.Free(mp) })
+			switch value := tc.value.(type) {
+			case types.Time:
+				require.NoError(t, vector.AppendFixed[types.Time](vec, value, false, mp))
+			case types.Datetime:
+				require.NoError(t, vector.AppendFixed[types.Datetime](vec, value, false, mp))
+			}
+			got, err := getValueFromVector(context.Background(), vec, nil, nil)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
 func Test_convertRowsIntoBatchDecimal(t *testing.T) {
 	cases := []struct {
 		name      string

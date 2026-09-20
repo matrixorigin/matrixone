@@ -26,6 +26,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestPreparedNumericContextKeepsExplicitDecimalThroughWeakLiteral(t *testing.T) {
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt_decimal_weak_literal from 'select cast(abs(? + 0.5) as decimal(20,2))'")
+	require.NoError(t, err)
+
+	paramTypes := collectUniquePlanParamTypes(t, prepared.GetDcl().GetPrepare().Plan)
+	require.Len(t, paramTypes, 1)
+	for _, typ := range paramTypes {
+		require.Equal(t, int32(types.T_decimal128), typ.Id)
+		require.Equal(t, int32(20), typ.Width)
+		require.Equal(t, int32(2), typ.Scale)
+	}
+
+	doublePrepared, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt_double_weak_literal from 'select cast(abs(? + 0.5) as double)'")
+	require.NoError(t, err)
+	doubleParamTypes := collectUniquePlanParamTypes(t, doublePrepared.GetDcl().GetPrepare().Plan)
+	require.Len(t, doubleParamTypes, 1)
+	for _, typ := range doubleParamTypes {
+		require.Equal(t, int32(types.T_float64), typ.Id)
+	}
+}
+
 func TestPreparedNumericContextUsesInsertValuesTarget(t *testing.T) {
 	tests := []struct {
 		name       string

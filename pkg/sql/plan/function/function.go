@@ -216,12 +216,9 @@ func getFunctionByName(
 		return r, moerr.NewNYIf(ctx, "should implement the function %s", name)
 	}
 
-	check := f.checkFn(f.Overloads, args)
+	check := f.checkArgumentTypes(args, stringDomainModes)
 	if r.fid == MINUS && signedUnsignedSubtraction(ctx, args) {
 		check = newCheckResultWithCast(3, integerDomainOperands(args))
-	}
-	if f.stringDomainCheckFn != nil && len(stringDomainModes) > 0 {
-		check = f.stringDomainCheckFn(f.Overloads, args, stringDomainModes)
 	}
 	switch check.status {
 	case succeedMatched:
@@ -276,7 +273,7 @@ func GetFunctionByNameWithoutError(name string, args []types.Type) (r FuncGetRes
 		return FuncGetResult{}, false
 	}
 
-	check := f.checkFn(f.Overloads, args)
+	check := f.checkArgumentTypes(args, nil)
 	switch check.status {
 	case succeedMatched:
 		r.overloadId = int32(check.idx)
@@ -303,6 +300,12 @@ func GetFunctionByNameWithoutError(name string, args []types.Type) (r FuncGetRes
 func GetFunctionByNameWithOverload(
 	ctx context.Context, name string, args []types.Type, overloadID int32,
 ) (r FuncGetResult, err error) {
+	if name == "cast" && IsIntegerArgumentCastOverload(overloadID) {
+		if !integerArgumentCastSignature(overloadID, args) {
+			return FuncGetResult{}, moerr.NewInvalidInputf(ctx, "invalid integer argument cast signature %v", args)
+		}
+		return FuncGetResult{fid: CAST, overloadId: overloadID, retType: args[1]}, nil
+	}
 	r, err = GetFunctionByName(ctx, name, args)
 	if err != nil {
 		return r, err
@@ -311,7 +314,13 @@ func GetFunctionByNameWithOverload(
 	if overloadID < 0 || int(overloadID) >= len(f.Overloads) {
 		return FuncGetResult{}, moerr.NewInvalidInputf(ctx, "function overload %s.%d not found", name, overloadID)
 	}
+	if !f.bindsOverload(int(overloadID)) {
+		return FuncGetResult{}, moerr.NewInvalidInputf(ctx, "function overload %s.%d is legacy execution only", name, overloadID)
+	}
 	r.overloadId = overloadID
+	if r.needCast {
+		args = r.targetTypes
+	}
 	r.retType = f.Overloads[overloadID].retType(args)
 	r.cannotRunInParallel = f.Overloads[overloadID].cannotParallel
 	return r, nil
@@ -597,8 +606,13 @@ type FuncNew struct {
 	// materializes this function's result as a table column.
 	hasExecutableCTASTypeDefault bool
 
-	// All overloads of the function.
+	// All execution overloads, including identities retained for old plans.
 	Overloads []overload
+
+	// Integer contexts and canonical binding identities are independent of the
+	// source numeric type. An empty bindingOverloads list keeps legacy binding.
+	integerParameters []integerParameter
+	bindingOverloads  []int
 
 	// checkFn was used to check whether the input type can match the requirement of the function.
 	// if matched, return the corresponding id of overload. If type conversion was required,

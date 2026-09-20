@@ -1187,6 +1187,10 @@ func (receiver *messageReceiverOnServer) sendBatch(
 			version, _ = value.(int64)
 		}
 	}
+	if b.HasGrouping() && version < defines.MORPCVersion87 {
+		return moerr.NewInvalidStateNoCtx(
+			"grouping provenance requires MORPCVersion87 for remote results")
+	}
 	if b.HasBinaryStringMetadata() && version < defines.MORPCVersion18 {
 		return moerr.NewInvalidStateNoCtx(
 			"binary-string provenance requires MORPCVersion18 for remote results")
@@ -1200,7 +1204,7 @@ func (receiver *messageReceiverOnServer) sendBatch(
 			"prepared parameter provenance requires MORPCVersion12 for remote results")
 	}
 	var transport bytes.Buffer
-	data, err := b.MarshalBinaryWithPrepareParamKindsForProtocol(
+	data, err := b.MarshalBinaryForPipeline(
 		&transport, false, version >= defines.MORPCVersion37)
 	if err != nil {
 		return err

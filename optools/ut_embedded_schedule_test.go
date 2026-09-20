@@ -48,7 +48,16 @@ if [[ " $* " == *' -c '* ]]; then
   trap 'touch "$CASE_DIR/stopped-$leaf"; exit 143' TERM
   printf '%s\n' "$$" > "$CASE_DIR/pid-$leaf"
   printf 'ready\n' >&8
-  read -r _ <&9
+  if [[ "$MODE" == build-cancel && -n "${RUNNER_PID:-}" ]]; then
+   while :; do
+    if [[ -e "$CASE_DIR/join-waiting" ]]; then
+     if mkdir "$CASE_DIR/term-sent" 2>/dev/null; then kill -TERM "$RUNNER_PID"; fi
+    fi
+    read -r -t 0.01 _ <&9 || true
+   done
+  else
+   read -r _ <&9
+  fi
  fi
  if [[ "$MODE" == reclaim ]]; then
   if [[ "$leaf" == a ]]; then read -r _ <&7; fi
@@ -62,14 +71,22 @@ if [[ " $* " == *' -c '* ]]; then
  exit 0
 fi
 [[ " $* " != *' -ldflags=-w '* ]] || exit 88
-[[ " $* " == *' -p 2 '* && " $* " == *' -json '* && " $* " == *' -v '* && " $* " == *' example/a example/b example/c '* ]] || exit 85
+[[ " $* " == *' -p 1 '* && " $* " == *' -json '* && " $* " == *' -v '* && " $* " == *' example/a example/b example/c '* ]] || exit 85
 [[ "$PWD" -ef "$CASE_DIR" ]] || exit 86
 mkdir "$CASE_DIR/authoritative" || exit 87
 printf 'authoritative\n'
-[[ "$MODE" != test-failure ]]
+[[ "$MODE" != test-failure ]] || exit 7
 `
 
 func TestEmbeddedPrebuildAuthoritativeExecution(t *testing.T) {
+	defaultScript := `unset UT_PREBUILD_EMBEDDED
+source ./run_ut.sh UT
+[[ "$UT_PREBUILD_EMBEDDED" == 0 ]] || exit 80
+`
+	if out, err := scheduleHarness(t, defaultScript); err != nil {
+		t.Fatalf("embedded prebuild default-off control: %v\n%s", err, out)
+	}
+
 	for _, mode := range []string{"success", "reclaim", "build-failure", "no-binary", "off", "test-failure", "report-open"} {
 		t.Run(mode, func(t *testing.T) {
 			script := embeddedSetup + `
@@ -80,10 +97,10 @@ function ut_test_open_embedded_report() {
 if [[ "$MODE" != off ]]; then start_embedded_prebuild "$scope" 2; fi
 artifact_dir=$CLUSTER_PREBUILD_DIR
 status=0
-run_embedded_tests "$scope" 2 || status=$?
+run_embedded_tests "$scope" || status=$?
 if (( status != 0 )); then printf 'authoritative status=%s\n' "$status"; cat "$UT_REPORT" "$UT_STDERR"; fi
 if [[ "$MODE" == test-failure ]]; then
- [[ "$status" != 0 ]] || exit 90
+ [[ "$status" == 7 ]] || exit 90
 else
  [[ "$status" == 0 ]] || exit 91
 fi
@@ -93,6 +110,24 @@ if [[ "$MODE" != off && "$MODE" != report-open ]]; then
   [[ -d "$CASE_DIR/compiled-$p" ]] || exit 93
   [[ "$(grep -c "^build-$p$" "$UT_STDERR")" == 1 ]] || exit 94
  done
+fi
+if [[ "$MODE" == success || "$MODE" == build-failure ]]; then
+ for p in a b c; do
+  grep -q "event=start stage=embedded-prebuild label=example/$p status= detail=package_index=" "$UT_CHECKPOINT" || exit 97
+  grep -q "event=pid-start stage=embedded-prebuild label=example/$p status= detail=package_index=" "$UT_CHECKPOINT" || exit 98
+  grep -q "event=finish stage=embedded-prebuild label=example/$p status=" "$UT_CHECKPOINT" || exit 99
+ done
+ if [[ "$MODE" == success ]]; then
+  grep -q 'event=finish stage=embedded-prebuild label=example/a status=0 detail=package_index=' "$UT_CHECKPOINT" || exit 100
+  grep -q 'event=finish stage=embedded-prebuild label=example/b status=0 detail=package_index=' "$UT_CHECKPOINT" || exit 101
+  grep -q 'event=finish stage=embedded-prebuild label=example/c status=0 detail=package_index=' "$UT_CHECKPOINT" || exit 102
+ else
+  grep -q 'event=finish stage=embedded-prebuild label=example/b status=7 detail=package_index=' "$UT_CHECKPOINT" || exit 103
+  grep -q 'event=join-finish stage=embedded-prebuild label=compile embedded-cluster packages status=1 detail=compile_only=true' "$UT_CHECKPOINT" || exit 104
+ fi
+ join_start=$(grep -n 'event=join-start stage=embedded-prebuild label=compile embedded-cluster packages' "$UT_CHECKPOINT" | cut -d: -f1)
+ join_finish=$(grep -n 'event=join-finish stage=embedded-prebuild label=compile embedded-cluster packages' "$UT_CHECKPOINT" | cut -d: -f1)
+ [[ -n "$join_start" && -n "$join_finish" && "$join_start" -lt "$join_finish" ]] || exit 105
 fi
 [[ -z "$CLUSTER_PREBUILD_JOB_PID$CURRENT_UT_PID$CLUSTER_PREBUILD_REPORT$CLUSTER_PREBUILD_DIR" ]] || exit 95
 [[ -z "$artifact_dir" || ! -d "$artifact_dir" ]] || exit 96
@@ -165,5 +200,55 @@ kill -TERM "$$"
 				t.Fatalf("embedded cancellation %s: %v\n%s", phase, err, out)
 			}
 		})
+	}
+
+	// Exercise the parent join path with the default helper ownership still
+	// active. The injected hook delivers TERM after join-start but before the
+	// blocking wait, so cancellation must stop both the issues owner and every
+	// compiler child without falling through to authoritative execution.
+	joinCancelScript := embeddedSetup + `
+cleanup_check() {
+ status=$?
+ for p in a b; do
+  [[ -f "$CASE_DIR/stopped-$p" ]] || status=90
+  if kill -0 "$(<"$CASE_DIR/pid-$p")" 2>/dev/null; then status=91; fi
+  [[ "$(grep -c "^build-$p$" "$UT_STDERR")" == 1 ]] || status=92
+ done
+ [[ -f "$CASE_DIR/issues-stopped" ]] || status=96
+ if kill -0 "$issues_pid" 2>/dev/null; then status=97; fi
+ [[ -z "$CLUSTER_PREBUILD_JOB_PID$CURRENT_UT_PID" ]] || status=93
+ [[ ! -d "$artifact_dir" ]] || status=94
+ [[ ! -d "$CASE_DIR/authoritative" ]] || status=95
+ printf 'JOIN_CANCELLED %s\n' "$status"
+ exit "$status"
+}
+trap cleanup_check EXIT
+UT_HELPER_TERM_GRACE_TICKS=4
+export RUNNER_PID=$$
+start_embedded_prebuild "$scope" 2
+artifact_dir=$CLUSTER_PREBUILD_DIR
+read -r _ <&8
+read -r _ <&8
+start_ut_command serial issues bash -c '
+ trap '\''touch "$CASE_DIR/issues-stopped"; exit 143'\'' TERM
+ touch "$CASE_DIR/issues-active"
+ while :; do sleep 0.01; done
+'
+issues_pid=$CURRENT_UT_PID
+while [[ ! -e "$CASE_DIR/issues-active" ]]; do sleep 0.01; done
+run_embedded_tests "$scope"
+`
+	joinCancelTransform := func(text string) string {
+		const anchor = `    wait "${CLUSTER_PREBUILD_JOB_PID}" || prebuild_status=$?
+`
+		if strings.Count(text, anchor) != 1 {
+			t.Fatalf("missing unique embedded prebuild join wait")
+		}
+		return strings.Replace(text, anchor, "    : > \"$CASE_DIR/join-waiting\"\n"+anchor, 1)
+	}
+	out, err := scheduleHarnessWithMockTransform(t, joinCancelScript, embeddedGoMock, joinCancelTransform, "MODE=build-cancel", "UT_PREBUILD_EMBEDDED=0", "UT_HARD_TIMEOUT=")
+	exit, ok := err.(*exec.ExitError)
+	if !ok || exit.ExitCode() != 143 || !strings.Contains(string(out), "JOIN_CANCELLED 143") {
+		t.Fatalf("embedded prebuild join cancellation: %v\n%s", err, out)
 	}
 }

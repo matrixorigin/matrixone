@@ -5225,8 +5225,10 @@ func TestSpaceDecimalUsesMySQLRounding(t *testing.T) {
 	resolved, err := GetFunctionByName(context.Background(), "space", []types.Type{decimalType})
 	require.NoError(t, err)
 	targets, shouldCast := resolved.ShouldDoImplicitTypeCast()
-	require.False(t, shouldCast)
-	require.Empty(t, targets)
+	require.True(t, shouldCast)
+	require.Equal(t, []types.Type{types.T_int64.ToType()}, targets)
+	_, overload := DecodeOverloadID(resolved.GetEncodedOverloadID())
+	require.Equal(t, int32(1), overload)
 }
 
 func initToTimeCase() []tcTemp {

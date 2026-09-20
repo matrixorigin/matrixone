@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -116,6 +117,60 @@ func TestRemoteNumericCastWarningAppearsAtExecution(t *testing.T) {
 	require.Len(t, session.warnings, 2)
 	require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, session.warnings[0].code)
 	require.Contains(t, session.warnings[0].msg, "12abc")
+}
+
+func TestMixedTemporalConditionalPreservesFractionalValues(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.TimeZone = time.UTC
+	condition := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_bool)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+	}
+	timestamp, err := types.ParseTimestamp(time.UTC, "2024-01-02 12:34:56.123456", 6)
+	require.NoError(t, err)
+	datetime, err := types.ParseDatetime("2024-01-02 12:34:56.654", 3)
+	require.NoError(t, err)
+	value := func(oid types.T, value int64, scale int32) *plan.Expr {
+		result := &plan.Expr{
+			Typ:  plan.Type{Id: int32(oid), Width: scale, Scale: scale},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{}},
+		}
+		switch oid {
+		case types.T_timestamp:
+			result.GetLit().Value = &plan.Literal_Timestampval{Timestampval: value}
+		case types.T_datetime:
+			result.GetLit().Value = &plan.Literal_Datetimeval{Datetimeval: value}
+		}
+		return result
+	}
+	expr, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "if", []*plan.Expr{
+		condition,
+		value(types.T_timestamp, int64(timestamp), 6),
+		value(types.T_datetime, int64(datetime), 3),
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.T_datetime, types.T(expr.Typ.Id))
+	require.Equal(t, int32(6), expr.Typ.Scale)
+
+	executor, err := colexec.NewExpressionExecutor(proc, expr)
+	require.NoError(t, err)
+	defer executor.Free()
+	input := batch.NewWithSize(1)
+	conditions := vector.NewVec(types.T_bool.ToType())
+	require.NoError(t, vector.AppendFixed(conditions, true, false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(conditions, false, false, proc.Mp()))
+	input.Vecs[0] = conditions
+	input.SetRowCount(2)
+	defer conditions.Free(proc.Mp())
+
+	result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.Equal(t, types.T_datetime, result.GetType().Oid)
+	require.Equal(t, int32(6), result.GetType().Scale)
+	require.Equal(t, "2024-01-02 12:34:56.123456",
+		types.Datetime(vector.GetFixedAtNoTypeCheck[types.Datetime](result, 0)).String2(6))
+	require.Equal(t, "2024-01-02 12:34:56.654000",
+		types.Datetime(vector.GetFixedAtNoTypeCheck[types.Datetime](result, 1)).String2(6))
 }
 
 func TestRemoteSecToTimeConversionWarningsRemainBounded(t *testing.T) {
@@ -661,6 +716,15 @@ func TestHLLRemoteProtocolValidation(t *testing.T) {
 		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion77)
 		require.NoError(t, validateRemoteAggregateProtocol(proc, agg))
 	}
+	vectorArg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_array_float32)}}
+	vectorAgg := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfHllAdd, false, []*plan.Expr{vectorArg}, nil,
+	)}
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion87)
+	require.ErrorContains(t, validateRemoteAggregateProtocol(proc, vectorAgg),
+		"canonical vector HLL_ADD_AGG remote execution requires MORPC protocol version 88")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion88)
+	require.NoError(t, validateRemoteAggregateProtocol(proc, vectorAgg))
 }
 
 func TestTextMinMaxRemoteProtocolValidation(t *testing.T) {

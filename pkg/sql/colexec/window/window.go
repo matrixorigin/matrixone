@@ -17,10 +17,14 @@ package window
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"math"
+	"os"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
@@ -304,6 +308,7 @@ func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
 			// Normally the previous generation is released after its last chunk;
 			// this also closes reuse after an interrupted or failed generation.
 			ctr.freeRunningAgg()
+			ctr.freeOrderedSetPartitionResults(proc.Mp())
 			if err = ctr.evalAggVector(ctr.bat, proc); err != nil {
 				return result, err
 			}
@@ -497,6 +502,27 @@ func (ctr *container) newAggregateExecutor(
 			return nil, err
 		}
 	}
+	aggexec.ConfigureOrderedPercentileSpill(
+		exec,
+		colexec.ResolveSpillThreshold(ap.SpillThreshold),
+		proc.Ctx,
+		func() (*os.File, error) {
+			spillFS, spillErr := proc.GetSpillFileService()
+			if spillErr != nil {
+				return nil, spillErr
+			}
+			id, _ := uuid.NewV7()
+			return spillFS.CreateAndRemoveFile(
+				proc.Ctx,
+				fmt.Sprintf("window_ordered_percentile_run_%s", id.String()),
+			)
+		},
+		func(bytes, rows, retainedMemory int64) {
+			ap.OpAnalyzer.Spill(bytes)
+			ap.OpAnalyzer.SpillRows(rows)
+			ap.OpAnalyzer.SetMemUsed(retainedMemory)
+		},
+	)
 	if err = exec.GroupGrow(groupCount); err != nil {
 		return nil, err
 	}
@@ -511,13 +537,18 @@ func (ctr *container) processAggregateFuncRange(
 	outputStart int,
 	outputEnd int,
 ) (*vector.Vector, error) {
+	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
+	frame := ctr.frameAt(idx, w.Frame)
+	if orderedSetWindowAggregate(w.Name) && fullPartitionWindowFrame(frame) {
+		return ctr.processOrderedSetFullPartitionRange(
+			idx, ap, proc, outputStart, outputEnd)
+	}
+
 	if err := ctr.makeAggregateExecutor(idx, ap, proc, outputEnd-outputStart); err != nil {
 		return nil, err
 	}
 	defer ctr.freeAggFun()
 
-	w := ap.WinSpecList[idx].Expr.(*plan.Expr_W).W
-	frame := ctr.frameAt(idx, w.Frame)
 	if cumulativeRowsFrame(frame, ctr.ps, ctr.bat.RowCount()) &&
 		aggexec.MergePreservesSource(ctr.batAggs[idx]) {
 		return ctr.processCumulativeAggregateFuncRange(idx, ap, proc, outputStart, outputEnd)
@@ -576,7 +607,7 @@ func (ctr *container) processAggregateFuncRange(
 		}
 	}
 
-	vecs, err := ctr.batAggs[idx].Flush()
+	vecs, err := aggexec.FlushWithContext(proc.Ctx, ctr.batAggs[idx])
 	if err != nil {
 		return nil, err
 	}
@@ -592,6 +623,122 @@ func (ctr *container) processAggregateFuncRange(
 	// logical-row nulls so downstream HasNull checks do not see an unused tail.
 	nulls.RemoveRange(vec.GetNulls(), uint64(vec.Length()), math.MaxUint64)
 	return vec, nil
+}
+
+func orderedSetWindowAggregate(name string) bool {
+	return strings.EqualFold(name, "median") ||
+		strings.EqualFold(name, "approx_percentile") ||
+		strings.EqualFold(name, "percentile_cont") ||
+		strings.EqualFold(name, "percentile_disc")
+}
+
+func fullPartitionWindowFrame(frame *plan.FrameClause) bool {
+	return frame != nil && frame.Start != nil && frame.End != nil &&
+		frame.Start.Type == plan.FrameBound_PRECEDING && frame.Start.UnBounded &&
+		frame.End.Type == plan.FrameBound_FOLLOWING && frame.End.UnBounded
+}
+
+// processOrderedSetFullPartitionRange evaluates one aggregate state per
+// partition and broadcasts its result to the output rows in that partition.
+// The compact result vector is retained across bounded output chunks and is
+// released after the final chunk (or by Reset/Free on early termination). The
+// ordinary frame evaluator allocates one state per output row; for exact
+// percentiles over a full partition that would retain the same ordered values
+// repeatedly and turn a linear input into quadratic resident state.
+func (ctr *container) processOrderedSetFullPartitionRange(
+	idx int,
+	ap *Window,
+	proc *process.Process,
+	outputStart int,
+	outputEnd int,
+) (_ *vector.Vector, retErr error) {
+	n := ctr.bat.RowCount()
+	if outputStart != ctr.orderedSetNextRow {
+		ctr.freeOrderedSetPartitionResults(proc.Mp())
+		return nil, moerr.NewInternalErrorNoCtx("ordered-set window output is not sequential")
+	}
+	defer func() {
+		if retErr != nil {
+			ctr.freeOrderedSetPartitionResults(proc.Mp())
+		}
+	}()
+
+	if ctr.orderedSetPartitionResults == nil {
+		partitionCount := 1
+		if len(ctr.ps) > 0 {
+			partitionCount = len(ctr.ps)
+		}
+		if err := ctr.makeAggregateExecutor(idx, ap, proc, partitionCount); err != nil {
+			return nil, err
+		}
+		defer ctr.freeAggFun()
+
+		for group := 0; group < partitionCount; group++ {
+			start := 0
+			if len(ctr.ps) > 0 {
+				start = int(ctr.ps[group])
+			}
+			end := partitionEnd(ctr.ps, group, n)
+			if start < 0 || end <= start || end > n {
+				return nil, moerr.NewInternalErrorNoCtx("invalid full-partition window interval")
+			}
+			for row := start; row < end; row++ {
+				if err := checkCanceled(proc, row-start); err != nil {
+					return nil, err
+				}
+				if err := ctr.batAggs[idx].Fill(group, row, ctr.aggVecs[idx].Vec); err != nil {
+					return nil, err
+				}
+			}
+		}
+
+		vecs, err := aggexec.FlushWithContext(proc.Ctx, ctr.batAggs[idx])
+		if err != nil {
+			return nil, err
+		}
+		ctr.orderedSetPartitionResults, err = aggexec.MergeSplitResult(vecs, proc.Mp())
+		if err != nil {
+			return nil, err
+		}
+		if ctr.orderedSetPartitionResults.Length() != partitionCount {
+			return nil, moerr.NewInternalErrorNoCtx("ordered-set partition result count mismatch")
+		}
+	}
+
+	result := vector.NewVec(*ctr.orderedSetPartitionResults.GetType())
+	defer func() {
+		if retErr != nil {
+			result.Free(proc.Mp())
+		}
+	}()
+	for row := outputStart; row < outputEnd; {
+		group := ctr.orderedSetPartition
+		start := 0
+		if len(ctr.ps) > 0 {
+			if group >= len(ctr.ps) {
+				return nil, moerr.NewInternalErrorNoCtx("ordered-set partition cache exhausted")
+			}
+			start = int(ctr.ps[group])
+		}
+		end := partitionEnd(ctr.ps, group, n)
+		if row < start || row >= end {
+			return nil, moerr.NewInternalErrorNoCtx("invalid ordered-set partition cache position")
+		}
+		visibleEnd := min(end, outputEnd)
+		if err := result.UnionMulti(
+			ctr.orderedSetPartitionResults, int64(group), visibleEnd-row, proc.Mp()); err != nil {
+			return nil, err
+		}
+		row = visibleEnd
+		if row == end {
+			ctr.orderedSetPartition++
+		}
+	}
+	ctr.orderedSetNextRow = outputEnd
+	if outputEnd == n {
+		ctr.freeOrderedSetPartitionResults(proc.Mp())
+	}
+	return result, nil
 }
 
 // cumulativeRowsFrame reports whether every frame in the materialized batch
@@ -803,7 +950,7 @@ func (ctr *container) processCumulativeAggregateFuncRange(
 		ctr.runningNextRow = j + 1
 	}
 
-	vecs, err := ctr.batAggs[idx].Flush()
+	vecs, err := aggexec.FlushWithContext(proc.Ctx, ctr.batAggs[idx])
 	if err != nil {
 		return nil, err
 	}
@@ -921,7 +1068,7 @@ func (ctr *container) processSlidingAggregateFuncRange(
 		ctr.runningNextRow = j + 1
 	}
 
-	vecs, err := ctr.batAggs[idx].Flush()
+	vecs, err := aggexec.FlushWithContext(proc.Ctx, ctr.batAggs[idx])
 	if err != nil {
 		return nil, err
 	}

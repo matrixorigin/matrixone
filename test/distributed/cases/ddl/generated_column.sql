@@ -733,6 +733,30 @@ select id, a, g, payload from t45_implicit_values where id = 7;
 drop table t45_implicit_values;
 
 -- ============================================================
--- 48. Cleanup
+-- 48. #29098: generated expressions across range partitions
+-- ============================================================
+create table t46_partition_generated (
+    id int, company_id int, amount decimal(10,2), tax_rate decimal(5,2),
+    amount_with_tax decimal(10,2) as (amount * (1 + tax_rate)), created_date date
+) partition by range (year(created_date)) (
+    partition p2022 values less than (2023),
+    partition p2023 values less than (2024),
+    partition pmax values less than maxvalue
+);
+insert into t46_partition_generated (id, company_id, amount, tax_rate, created_date) values
+    (1,10,100.00,0.10,'2022-06-01'),
+    (2,20,50.00,0.20,'2023-06-01'),
+    (3,30,80.00,0.25,'2024-06-01');
+select id, company_id, amount, tax_rate, amount_with_tax, created_date
+from t46_partition_generated order by id;
+update t46_partition_generated set amount = 120.00 where id = 1;
+select id, amount, amount_with_tax from t46_partition_generated where id = 1;
+update t46_partition_generated set amount = null where id = 3;
+select id, amount, amount_with_tax from t46_partition_generated where id = 3;
+select id, amount_with_tax from t46_partition_generated where created_date < '2020-01-01' order by id;
+drop table t46_partition_generated;
+
+-- ============================================================
+-- 49. Cleanup
 -- ============================================================
 drop database test_generated_col;
