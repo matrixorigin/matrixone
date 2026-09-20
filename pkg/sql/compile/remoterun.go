@@ -2009,6 +2009,14 @@ func validateRemoteAggregateProtocol(
 				"HLL remote execution requires MORPC protocol version 77",
 			)
 		}
+		if agg.GetAggID() == aggexec.AggIdOfHllAdd &&
+			len(agg.GetArgExpressions()) > 0 &&
+			isCanonicalHLLVectorType(types.T(agg.GetArgExpressions()[0].Typ.Id)) &&
+			(proc == nil || !supportsRemoteCanonicalHLLAdd(proc.GetService())) {
+			return moerr.NewNotSupportedNoCtx(
+				"canonical vector HLL_ADD_AGG remote execution requires MORPC protocol version 88",
+			)
+		}
 		if agg.GetConfigType() == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
 			if proc == nil || !supportsRemoteOrderedAggregates(proc.GetService()) {
 				return moerr.NewNotSupportedNoCtx(

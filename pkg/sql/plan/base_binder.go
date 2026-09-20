@@ -3017,8 +3017,7 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 		}
 		if target, ok := preparedNumericFunctionTarget(funcName, len(astExpr.Exprs)); ok && target != nil &&
 			(strings.EqualFold(funcName, "abs") || strings.EqualFold(funcName, "sign") ||
-				strings.EqualFold(funcName, "sleep") || strings.EqualFold(funcName, "char") ||
-				strings.EqualFold(funcName, "elt")) {
+				strings.EqualFold(funcName, "sleep") || strings.EqualFold(funcName, "char")) {
 			hasPreparedParam, err := b.hasPreparedNumericParamExprs(astExpr.Exprs, depth)
 			if err != nil {
 				return nil, err
@@ -3134,8 +3133,7 @@ func isPreparedNumericAggregate(name string, argCount int) bool {
 }
 
 func preparedNumericFunctionTarget(name string, argCount int) (*Type, bool) {
-	// ABS, SIGN, SLEEP, and ELT's index all have integer and floating-point
-	// overloads. A bare
+	// ABS, SIGN, and SLEEP have numeric overloads. A bare
 	// prepared parameter has TEXT transport type at PREPARE time, so letting
 	// generic overload resolver choose an integer cast makes valid executions
 	// such as ABS(-1.5), SIGN(-0.1), and SLEEP(0.01) fail before the function
@@ -3145,11 +3143,6 @@ func preparedNumericFunctionTarget(name string, argCount int) (*Type, bool) {
 	// DOUBLE casts remain ordinary DOUBLE expressions.
 	if argCount == 1 && (strings.EqualFold(name, "abs") || strings.EqualFold(name, "sign") ||
 		strings.EqualFold(name, "sleep")) {
-		typ := types.T_float64.ToType()
-		target := makePlan2Type(&typ)
-		return &target, true
-	}
-	if argCount >= 2 && strings.EqualFold(name, "elt") {
 		typ := types.T_float64.ToType()
 		target := makePlan2Type(&typ)
 		return &target, true
@@ -3440,8 +3433,7 @@ func containsExplicitFloatCastInSelect(stmt tree.SelectStatement) bool {
 // bindPreparedNumericFuncExpr gives prepared numeric function arguments the
 // same static context as prepared arithmetic. SUM/AVG use the inferred numeric
 // domain, NTILE requires an integer domain, CHAR uses an integer domain only
-// for arguments that contain a prepared marker, and ELT uses a deferred
-// numeric domain only for its index argument. ParamRef remains TEXT for
+// for arguments that contain a prepared marker. ParamRef remains TEXT for
 // transport and an explicit cast materializes the computation type.
 // Non-parameter expressions stay on their original binding path, so ordinary
 // string inputs continue to use their function-specific string semantics.
@@ -3453,49 +3445,6 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 	target, ok := preparedNumericFunctionTarget(name, len(astArgs))
 	if b.builder == nil || !b.builder.isPrepareStatement || !ok {
 		return b.bindFuncExprImplByAstExpr(name, astArgs, depth)
-	}
-	if strings.EqualFold(name, "elt") {
-		args := make([]*plan.Expr, len(astArgs))
-		deferredIndex := false
-		for i, astArg := range astArgs {
-			if i == 0 {
-				hasPreparedParam, err := b.hasPreparedNumericParamExprs([]tree.Expr{astArg}, depth)
-				if err != nil {
-					return nil, err
-				}
-				if hasPreparedParam {
-					args[i], err = b.bindNumericExprWithContext(astArg, depth, target)
-					if err != nil {
-						return nil, err
-					}
-					if !isDirectExplicitNumericCast(astArg) {
-						b.markPreparedNumericFallback(args[i])
-						deferredIndex = true
-					}
-					continue
-				}
-			}
-			var err error
-			args[i], err = b.impl.BindExpr(astArg, depth, false)
-			if err != nil {
-				return nil, err
-			}
-		}
-		bound, err := bindBoundFuncExprAndConstFoldWithObserver(
-			b.GetContext(), b.builder.compCtx.GetProcess(), name, args,
-			b.observePersistedExpressionProtocol,
-		)
-		if err != nil {
-			return nil, err
-		}
-		if deferredIndex && bound != nil && bound.GetF() != nil && len(bound.GetF().Args) > 0 {
-			// ELT's numeric envelope can add a second implicit cast around the
-			// marker. Keep the deferred marker on the complete function argument,
-			// not only on the inner cast, so execute-time metadata discovery can
-			// select the full-arity ELT rebind path.
-			b.markPreparedNumericFallback(bound.GetF().Args[0])
-		}
-		return bound, nil
 	}
 	if strings.EqualFold(name, "char") {
 		args := make([]*plan.Expr, len(astArgs))
@@ -4940,7 +4889,7 @@ func validateApproxPercentileArgs(ctx context.Context, args []*Expr) error {
 	}
 	percentile := args[1]
 	if percentile == nil || isNullExpr(percentile) ||
-		(!rule.IsConstant(percentile, false) && !isDirectDynamicParam(percentile)) {
+		!IsPercentileConfigExpr(percentile) {
 		return moerr.NewInvalidInput(ctx,
 			"percentile argument of approx_percentile must be a non-null constant or parameter")
 	}
@@ -4957,20 +4906,71 @@ func validateOrderedPercentileArgs(ctx context.Context, name string, args []*Exp
 	}
 	percentile := args[1]
 	if percentile == nil || isNullExpr(percentile) ||
-		(!rule.IsConstant(percentile, false) && !isDirectDynamicParam(percentile)) {
+		!IsPercentileConfigExpr(percentile) {
 		return moerr.NewInvalidInputf(ctx,
 			"percentile argument of %s must be a non-null constant or parameter", name)
 	}
 	return nil
 }
 
-// normalizePercentileParam gives a bare prepared marker the numeric type used
-// by percentile overloads. Parameter markers have a TEXT transport type while
-// a statement is prepared, but p is numeric configuration that is evaluated
-// once for each EXECUTE.
+// IsPercentileConfigExpr reports whether expr can be evaluated without an
+// input row and is safe to use as execution-invariant percentile
+// configuration. Existing foldable constants remain supported. Prepared
+// expressions deliberately admit only numeric literals, markers, arithmetic,
+// and numeric casts; this excludes columns, variables, subqueries, and
+// unrelated or volatile functions from aggregate configuration.
+func IsPercentileConfigExpr(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if rule.IsConstant(expr, false) {
+		return true
+	}
+	return isPreparedPercentileExpr(expr)
+}
+
+func isPreparedPercentileExpr(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch value := expr.Expr.(type) {
+	case *plan.Expr_P:
+		return true
+	case *plan.Expr_Lit:
+		return !value.Lit.GetIsnull() && makeTypeByPlan2Expr(expr).IsNumeric()
+	case *plan.Expr_F:
+		if value.F == nil || value.F.Func == nil || !makeTypeByPlan2Expr(expr).IsNumeric() {
+			return false
+		}
+		functionID, _ := function.DecodeOverloadID(value.F.Func.GetObj())
+		switch functionID {
+		case function.CAST:
+			return len(value.F.Args) == 2 && isPreparedPercentileExpr(value.F.Args[0]) &&
+				value.F.Args[1].GetT() != nil
+		case function.UNARY_PLUS, function.UNARY_MINUS:
+			return len(value.F.Args) == 1 && isPreparedPercentileExpr(value.F.Args[0])
+		case function.PLUS, function.MINUS, function.MULTI, function.DIV,
+			function.INTEGER_DIV, function.MOD:
+			if len(value.F.Args) != 2 {
+				return false
+			}
+			return isPreparedPercentileExpr(value.F.Args[0]) &&
+				isPreparedPercentileExpr(value.F.Args[1])
+		}
+	}
+	return false
+}
+
+// normalizePercentileParam gives an untyped prepared marker expression a
+// numeric type accepted by the target percentile overload. Preserve supported
+// numeric expression types so exact DECIMAL configuration reaches range
+// validation and the rational percentile codec without FLOAT64 rounding.
 func normalizePercentileParam(ctx context.Context, name string, args []*Expr) error {
 	if (name != NameApproxPercentile && name != NamePercentileCont && name != NamePercentileDisc) ||
-		len(args) != 2 || !isDirectDynamicParam(args[1]) {
+		len(args) != 2 || !isPreparedPercentileExpr(args[1]) || rule.IsConstant(args[1], false) {
+		return nil
+	}
+	if percentileParamTypeSupported(name, makeTypeByPlan2Expr(args[1])) {
 		return nil
 	}
 
@@ -4981,6 +4981,19 @@ func normalizePercentileParam(ctx context.Context, name string, args []*Expr) er
 	}
 	args[1] = percentile
 	return nil
+}
+
+func percentileParamTypeSupported(name string, typ types.Type) bool {
+	if name == NameApproxPercentile {
+		switch typ.Oid {
+		case types.T_int32, types.T_int64, types.T_float32, types.T_float64,
+			types.T_decimal64, types.T_decimal128:
+			return true
+		default:
+			return false
+		}
+	}
+	return typ.IsNumeric() && typ.Oid != types.T_decimal256
 }
 
 // bindMixedInListComparison preserves the scalar comparison domain for a
