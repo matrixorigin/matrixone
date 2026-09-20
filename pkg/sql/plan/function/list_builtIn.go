@@ -432,7 +432,9 @@ func quoteReturnType(parameters []types.Type) types.Type {
 		bound.bytes = 4
 	}
 	if binary {
-		return binaryStringResultType(bound)
+		// QUOTE always returns a character string. Binary input changes the byte
+		// bound, but not the result domain exposed to callers.
+		return textStringResultType(bound, types.CharsetUTF8)
 	}
 	return textStringResultType(bound, parameters[0].Charset)
 }
@@ -4270,6 +4272,7 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 0,
 				args:       []types.T{types.T_blob},
+				volatile:   true,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_int64.ToType()
 				},
@@ -4280,6 +4283,7 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 1,
 				args:       []types.T{types.T_varchar},
+				volatile:   true,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_int64.ToType()
 				},
@@ -4290,6 +4294,7 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 2,
 				args:       []types.T{types.T_char},
+				volatile:   true,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_int64.ToType()
 				},
@@ -4300,6 +4305,7 @@ var supportedStringBuiltIns = []FuncNew{
 			{
 				overloadId: 3,
 				args:       []types.T{types.T_text},
+				volatile:   true,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_int64.ToType()
 				},
@@ -5826,7 +5832,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: ST_FRECHETDISTANCE,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    spatialDistanceTypeMatch,
 		Overloads: []overload{
 			{overloadId: 0, args: []types.T{types.T_geometry, types.T_geometry},
 				retType: func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
@@ -5834,13 +5840,25 @@ var supportedStringBuiltIns = []FuncNew{
 			{overloadId: 1, args: []types.T{types.T_geometry32, types.T_geometry32},
 				retType: func(parameters []types.Type) types.Type { return types.T_float32.ToType() },
 				newOp:   func() executeLogicOfOverload { return StFrechetDistance32 }},
+			{overloadId: 2, args: []types.T{types.T_geometry, types.T_geometry, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:   func() executeLogicOfOverload { return StFrechetDistanceWithUnit }},
+			{overloadId: 3, args: []types.T{types.T_geometry32, types.T_geometry32, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type { return types.T_float32.ToType() },
+				newOp:   func() executeLogicOfOverload { return StFrechetDistanceWithUnit32 }},
+			{overloadId: 4, args: []types.T{types.T_geometry, types.T_geometry},
+				retType: func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:   func() executeLogicOfOverload { return StFrechetDistanceGeodetic }},
+			{overloadId: 5, args: []types.T{types.T_geometry32, types.T_geometry32},
+				retType: func(parameters []types.Type) types.Type { return types.T_float32.ToType() },
+				newOp:   func() executeLogicOfOverload { return StFrechetDistanceGeodetic32 }},
 		},
 	},
 	{
 		functionId: ST_HAUSDORFFDISTANCE,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    spatialDistanceTypeMatch,
 		Overloads: []overload{
 			{overloadId: 0, args: []types.T{types.T_geometry, types.T_geometry},
 				retType: func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
@@ -5848,6 +5866,18 @@ var supportedStringBuiltIns = []FuncNew{
 			{overloadId: 1, args: []types.T{types.T_geometry32, types.T_geometry32},
 				retType: func(parameters []types.Type) types.Type { return types.T_float32.ToType() },
 				newOp:   func() executeLogicOfOverload { return StHausdorffDistance32 }},
+			{overloadId: 2, args: []types.T{types.T_geometry, types.T_geometry, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:   func() executeLogicOfOverload { return StHausdorffDistanceWithUnit }},
+			{overloadId: 3, args: []types.T{types.T_geometry32, types.T_geometry32, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type { return types.T_float32.ToType() },
+				newOp:   func() executeLogicOfOverload { return StHausdorffDistanceWithUnit32 }},
+			{overloadId: 4, args: []types.T{types.T_geometry, types.T_geometry},
+				retType: func(parameters []types.Type) types.Type { return types.T_float64.ToType() },
+				newOp:   func() executeLogicOfOverload { return StHausdorffDistanceGeodetic }},
+			{overloadId: 5, args: []types.T{types.T_geometry32, types.T_geometry32},
+				retType: func(parameters []types.Type) types.Type { return types.T_float32.ToType() },
+				newOp:   func() executeLogicOfOverload { return StHausdorffDistanceGeodetic32 }},
 		},
 	},
 
@@ -6159,7 +6189,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: ST_DISTANCE,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    spatialDistanceTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -6200,6 +6230,26 @@ var supportedStringBuiltIns = []FuncNew{
 				},
 				newOp: func() executeLogicOfOverload {
 					return StDistanceWithSRID32
+				},
+			},
+			{
+				overloadId: 4,
+				args:       []types.T{types.T_geometry, types.T_geometry, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float64.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StDistanceWithUnit
+				},
+			},
+			{
+				overloadId: 5,
+				args:       []types.T{types.T_geometry32, types.T_geometry32, types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_float32.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return StDistanceWithUnit32
 				},
 			},
 		},
@@ -7096,7 +7146,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: SOUNDEX,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -7931,7 +7981,7 @@ var supportedMathBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_array_float32},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_array_float64.ToType()
+					return types.New(types.T_array_float64, parameters[0].Width, 0)
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInSqrtArray[float32]
@@ -7941,7 +7991,7 @@ var supportedMathBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_array_float64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_array_float64.ToType()
+					return types.New(types.T_array_float64, parameters[0].Width, 0)
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInSqrtArray[float64]

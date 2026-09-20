@@ -220,6 +220,77 @@ func RequiresMORPCVersion85ExpressionResultContracts(owner any) (bool, error) {
 	return RequiresMORPCVersion86ExpressionResultContracts(owner)
 }
 
+// RequiresMORPCVersion89DecimalLiteralSemantics reports whether an owner
+// contains a plain decimal literal whose exact normalized binding must not be
+// replayed by a pre-v89 binder.
+func RequiresMORPCVersion89DecimalLiteralSemantics(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.DecimalLiteralSemantics, err
+}
+
+// RequiresMORPCVersion88DecimalLiteralSemantics is retained as a source-level
+// compatibility alias. MORPC v88 is owned by canonical vector HLL keys.
+// Deprecated: use RequiresMORPCVersion89DecimalLiteralSemantics.
+func RequiresMORPCVersion88DecimalLiteralSemantics(owner any) (bool, error) {
+	return RequiresMORPCVersion89DecimalLiteralSemantics(owner)
+}
+
+// RequiresMORPCVersion87DecimalLiteralSemantics is retained as a source-level
+// compatibility alias. Decimal literal admission moved to v89 because v87 and
+// v88 are owned by grouping provenance and canonical vector HLL keys.
+// Deprecated: use RequiresMORPCVersion89DecimalLiteralSemantics.
+func RequiresMORPCVersion87DecimalLiteralSemantics(owner any) (bool, error) {
+	return RequiresMORPCVersion89DecimalLiteralSemantics(owner)
+}
+
+// RequiresMORPCVersion84DecimalLiteralSemantics is retained as a source-level
+// compatibility alias. Decimal literal admission moved to v89 because v84 is
+// already owned by the extended discrete percentile contract on main.
+// Deprecated: use RequiresMORPCVersion89DecimalLiteralSemantics.
+func RequiresMORPCVersion84DecimalLiteralSemantics(owner any) (bool, error) {
+	return RequiresMORPCVersion89DecimalLiteralSemantics(owner)
+}
+
+// RequiresMORPCVersion82DecimalLiteralSemantics is retained as a source-level
+// compatibility alias for callers introduced with the original decimal marker.
+// Deprecated: use RequiresMORPCVersion89DecimalLiteralSemantics.
+func RequiresMORPCVersion82DecimalLiteralSemantics(owner any) (bool, error) {
+	return RequiresMORPCVersion89DecimalLiteralSemantics(owner)
+}
+
+// RequiresMORPCVersion90SpatialDistanceSemantics reports whether an owner
+// contains a spatial-distance expression whose meaning or overload contract
+// changed in MORPC v90. Constant folding must retain such an expression until
+// persisted-expression admission has observed this requirement.
+func RequiresMORPCVersion90SpatialDistanceSemantics(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.SpatialDistanceSemantics, err
+}
+
+// RequiresMORPCVersion89SpatialDistanceSemantics retains the pre-main source alias.
+// Deprecated: use RequiresMORPCVersion90SpatialDistanceSemantics; admission is v90.
+func RequiresMORPCVersion89SpatialDistanceSemantics(owner any) (bool, error) {
+	return RequiresMORPCVersion90SpatialDistanceSemantics(owner)
+}
+
+// RequiresMORPCVersion86SpatialDistanceSemantics retains the original source alias.
+// Deprecated: use RequiresMORPCVersion90SpatialDistanceSemantics; admission is v90.
+func RequiresMORPCVersion86SpatialDistanceSemantics(owner any) (bool, error) {
+	return RequiresMORPCVersion90SpatialDistanceSemantics(owner)
+}
+
+// RequiresMORPCVersion87SpatialDistanceSemantics retains the unmerged stack alias.
+// Deprecated: use RequiresMORPCVersion90SpatialDistanceSemantics; admission is v90.
+func RequiresMORPCVersion87SpatialDistanceSemantics(owner any) (bool, error) {
+	return RequiresMORPCVersion90SpatialDistanceSemantics(owner)
+}
+
+// RequiresMORPCVersion88SpatialDistanceSemantics retains the pre-main source alias.
+// Deprecated: use RequiresMORPCVersion90SpatialDistanceSemantics; admission is v90.
+func RequiresMORPCVersion88SpatialDistanceSemantics(owner any) (bool, error) {
+	return RequiresMORPCVersion90SpatialDistanceSemantics(owner)
+}
+
 const (
 	equalFunctionID                  int32 = 0
 	notEqualFunctionID               int32 = 1
@@ -278,6 +349,10 @@ const (
 // vectors to signed INT/ BIGINT or BIGINT UNSIGNED.
 // BoundedConditionalStringDomains requires MORPC v83 because the bounded
 // BINARY/VARBINARY COALESCE overload identities are new to the registry.
+// DecimalLiteralSemantics requires MORPC v89 because plain DECIMAL256
+// literals are normalized and kept exact by the new planner, while older
+// binders can round or reject the same persisted SQL at the Decimal128
+// boundary.
 // TOBase64ResultContracts and IPFunctionResultContracts require MORPC v86:
 // the former changes a VARCHAR result bound and adds binary overloads, while
 // the latter changes IP predicate results to INT32 and adds domain-aware
@@ -285,6 +360,9 @@ const (
 // ExpressionResultMetadataContracts also requires MORPC v86 because bounded
 // character slicing and fractional temporal conditional results change the
 // serialized result metadata consumed by persisted views and remote workers.
+// SpatialDistanceSemantics requires MORPC v90 because geodetic
+// ST_FRECHETDISTANCE/ST_HAUSDORFFDISTANCE change the meaning of existing
+// overloads and the distance family adds length-unit overloads.
 type RemoteExpressionFeatures struct {
 	NumericPrefix                   bool
 	JSONComparisonParam             bool
@@ -302,6 +380,8 @@ type RemoteExpressionFeatures struct {
 	TOBase64ResultContracts           bool
 	IPFunctionResultContracts         bool
 	ExpressionResultMetadataContracts bool
+	DecimalLiteralSemantics           bool
+	SpatialDistanceSemantics          bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
@@ -319,7 +399,9 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.IntegerParameterCoercion ||
 		features.TOBase64ResultContracts ||
 		features.IPFunctionResultContracts ||
-		features.ExpressionResultMetadataContracts
+		features.ExpressionResultMetadataContracts ||
+		features.DecimalLiteralSemantics ||
+		features.SpatialDistanceSemantics
 }
 
 func isBoundedConditionalStringDomain(fn *Function) bool {
@@ -338,16 +420,19 @@ func isBoundedConditionalStringDomain(fn *Function) bool {
 // therefore based on function identity, not on the operand types selected by a
 // particular planner invocation.
 const (
-	remoteIPInet6AtonFunctionID    int32 = 392
-	remoteIPInet6NtoaFunctionID    int32 = 393
-	remoteIPInetAtonFunctionID     int32 = 394
-	remoteIPInetNtoaFunctionID     int32 = 395
-	remoteIPIsIPv4FunctionID       int32 = 396
-	remoteIPIsIPv6FunctionID       int32 = 397
-	remoteIPIsIPv4CompatFunctionID int32 = 398
-	remoteIPIsIPv4MappedFunctionID int32 = 399
-	remoteTOBase64FunctionID       int32 = 213
-	remoteINETNTOAFunctionID       int32 = 395
+	remoteIPInet6AtonFunctionID       int32 = 392
+	remoteIPInet6NtoaFunctionID       int32 = 393
+	remoteIPInetAtonFunctionID        int32 = 394
+	remoteIPInetNtoaFunctionID        int32 = 395
+	remoteIPIsIPv4FunctionID          int32 = 396
+	remoteIPIsIPv6FunctionID          int32 = 397
+	remoteIPIsIPv4CompatFunctionID    int32 = 398
+	remoteIPIsIPv4MappedFunctionID    int32 = 399
+	remoteTOBase64FunctionID          int32 = 213
+	remoteINETNTOAFunctionID          int32 = 395
+	remoteSpatialDistanceFunctionID   int32 = 421
+	remoteFrechetDistanceFunctionID   int32 = 506
+	remoteHausdorffDistanceFunctionID int32 = 507
 )
 
 func isValidIntegerArgumentSource(id, source int32) bool {
@@ -714,6 +799,14 @@ func isExpressionResultMetadataContract(expr *Expr) bool {
 func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatures, err error) {
 	err = walkExpressionsInOwner(owner, func(expr *Expr) error {
 		return VisitExprTree(expr, func(current *Expr) error {
+			if !features.DecimalLiteralSemantics {
+				if literal := current.GetLit(); literal != nil {
+					features.DecimalLiteralSemantics = literal.DecimalLiteralRequiresV82
+				}
+				if literalVec := current.GetVec(); literalVec != nil {
+					features.DecimalLiteralSemantics = literalVec.DecimalLiteralRequiresV82
+				}
+			}
 			fn := current.GetF()
 			if fn != nil && fn.Func != nil {
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
@@ -780,6 +873,22 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			}
 			if !features.IPFunctionSemantics && fn != nil && fn.Func != nil {
 				features.IPFunctionSemantics = isRemoteIPFunction(int32(fn.Func.Obj >> 32))
+			}
+			if !features.SpatialDistanceSemantics && fn != nil && fn.Func != nil {
+				functionID := int32(fn.Func.Obj >> 32)
+				overloadID := int32(fn.Func.Obj)
+				switch functionID {
+				case remoteFrechetDistanceFunctionID, remoteHausdorffDistanceFunctionID:
+					// Overloads 0/1 are the historical planar identities. The
+					// unit overloads 2/3 and the corrected two-argument
+					// geodetic identities 4/5 are v90 contracts.
+					features.SpatialDistanceSemantics = overloadID >= 2 && overloadID <= 5
+				case remoteSpatialDistanceFunctionID:
+					// ST_DISTANCE overloads 4/5 are the new length-unit forms.
+					// Legacy two-argument and explicit-SRID forms retain their
+					// historical wire contract.
+					features.SpatialDistanceSemantics = overloadID == 4 || overloadID == 5
+				}
 			}
 			return nil
 		})
