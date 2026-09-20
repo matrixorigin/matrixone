@@ -1342,13 +1342,14 @@ func assignmentCastProtocolSupported(proc *process.Process) bool {
 	return ok && valid && protocolVersion >= defines.MORPCVersion5
 }
 
-// needsSameTypeAssignmentCast reports whether values with the same planner
-// type still need to cross an assignment cast. Legacy TINYTEXT columns and
-// MatrixOne's extended internal TIME representation can both carry values that
-// are invalid at a MySQL-compatible column boundary.
+// needsSameTypeAssignmentCast 判断相同规划器类型是否仍需要赋值检查。
+// TINYTEXT 和扩展 TIME 可能携带超出目标列范围的值。
+// 固定维度向量的实际载荷长度也可能不符合其声明宽度。
+// 这些类型都不能仅根据元数据相等省略赋值检查。
 func needsSameTypeAssignmentCast(targetType Type) bool {
 	return (targetType.Id == int32(types.T_text) && targetType.Width == types.MaxTinyTextLen) ||
-		targetType.Id == int32(types.T_time)
+		targetType.Id == int32(types.T_time) ||
+		(types.T(targetType.Id).IsArrayRelate() && targetType.Width > 0 && targetType.Width != types.MaxArrayDimension)
 }
 
 func forceCastExpr2(ctx context.Context, expr *Expr, t2 types.Type, targetType *plan.Expr) (*Expr, error) {

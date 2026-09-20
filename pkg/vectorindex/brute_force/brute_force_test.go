@@ -18,6 +18,7 @@ package brute_force
 
 import (
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"sort"
 	"testing"
@@ -297,6 +298,173 @@ func TestUsearchBruteForceDistanceConvention(t *testing.T) {
 	_, flatDists, err := flatIdx.Search(sqlproc, query, rt)
 	require.NoError(t, err)
 	require.InDelta(t, 5.0, flatDists[0], 1e-5)
+}
+
+func TestUsearchBruteForceCosineBoundaryUsesScalarContract(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	t.Run("float32", func(t *testing.T) {
+		const dim, elemsz = uint(3), uint(4)
+		dataset := [][]float32{
+			{0, 0, 0},
+			{1e-20, 1e-20, 1e-20},
+			{1, 1, 1},
+		}
+		queries := [][]float32{
+			{0, 0, 0},
+			{1e-20, 1e-20, 1e-20},
+		}
+		idx, err := NewUsearchBruteForceIndex[float32](dataset, dim, metric.Metric_CosineDistance, elemsz)
+		require.NoError(t, err)
+		defer idx.(*UsearchBruteForceIndex[float32]).Destroy()
+
+		keysAny, got, err := idx.Search(sqlproc, queries, vectorindex.RuntimeConfig{Limit: 3, NThreads: 1})
+		require.NoError(t, err)
+		keys := keysAny.([]int64)
+		require.Len(t, got, len(queries)*len(dataset))
+		for queryIndex, query := range queries {
+			for resultIndex := 0; resultIndex < len(dataset); resultIndex++ {
+				rowIndex := keys[queryIndex*len(dataset)+resultIndex]
+				want, err := metric.CosineDistance(query, dataset[rowIndex])
+				require.NoError(t, err)
+				gotDistance := got[queryIndex*len(dataset)+resultIndex]
+				require.Equal(t, float64(want), gotDistance,
+					"query=%d result=%d row=%d", queryIndex, resultIndex, rowIndex)
+				require.False(t, math.IsNaN(gotDistance) || math.IsInf(gotDistance, 0))
+			}
+		}
+	})
+
+	t.Run("top-k-and-negative-components", func(t *testing.T) {
+		const dim, elemsz = uint(3), uint(4)
+		dataset := [][]float32{
+			{1, 0, 0},
+			{1, 1, 0},
+			{0, 1, 0},
+			{-1, 0, 0},
+		}
+		query := [][]float32{{1, 0, 0}}
+		idx, err := NewUsearchBruteForceIndex[float32](dataset, dim, metric.Metric_CosineDistance, elemsz)
+		require.NoError(t, err)
+		defer idx.(*UsearchBruteForceIndex[float32]).Destroy()
+
+		keysAny, got, err := idx.Search(sqlproc, query, vectorindex.RuntimeConfig{Limit: 2, NThreads: 2})
+		require.NoError(t, err)
+		require.Equal(t, []int64{0, 1}, keysAny)
+		require.InDelta(t, 0, got[0], 1e-6)
+		require.InDelta(t, 1-float64(1/math.Sqrt(2)), got[1], 1e-6)
+
+		keysAny, got, err = idx.Search(sqlproc, query, vectorindex.RuntimeConfig{Limit: 1, NThreads: 1})
+		require.NoError(t, err)
+		require.Equal(t, []int64{0}, keysAny)
+		require.InDelta(t, 0, got[0], 1e-6)
+
+		keysAny, got, err = idx.Search(sqlproc, query, vectorindex.RuntimeConfig{Limit: 4, NThreads: 2})
+		require.NoError(t, err)
+		require.Equal(t, []int64{0, 1, 2, 3}, keysAny)
+		require.InDelta(t, 2, got[3], 1e-6)
+	})
+
+	t.Run("float64", func(t *testing.T) {
+		const dim, elemsz = uint(3), uint(8)
+		dataset := [][]float64{
+			{0, 0, 0},
+			{1e-150, 1e-150, 1e-150},
+			{1, 1, 1},
+		}
+		queries := [][]float64{{1e-150, 1e-150, 1e-150}}
+		idx, err := NewUsearchBruteForceIndex[float64](dataset, dim, metric.Metric_CosineDistance, elemsz)
+		require.NoError(t, err)
+		defer idx.(*UsearchBruteForceIndex[float64]).Destroy()
+
+		keysAny, got, err := idx.Search(sqlproc, queries, vectorindex.RuntimeConfig{Limit: 3, NThreads: 1})
+		require.NoError(t, err)
+		keys := keysAny.([]int64)
+		require.Len(t, got, len(dataset))
+		for resultIndex, rowIndex := range keys {
+			want, err := metric.CosineDistance(queries[0], dataset[rowIndex])
+			require.NoError(t, err)
+			gotDistance := got[resultIndex]
+			require.Equal(t, float64(want), gotDistance, "result=%d row=%d", resultIndex, rowIndex)
+			require.False(t, math.IsNaN(gotDistance) || math.IsInf(gotDistance, 0))
+		}
+	})
+}
+
+func TestUsearchBruteForceCosineNaNOrdering(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	t.Run("overflow-all-nan-limit-one-keeps-row", func(t *testing.T) {
+		idx, err := NewUsearchBruteForceIndex[float64](
+			[][]float64{{1e200}}, 1, metric.Metric_CosineDistance, 8)
+		require.NoError(t, err)
+		defer idx.(*UsearchBruteForceIndex[float64]).Destroy()
+
+		keysAny, distances, err := idx.Search(
+			sqlproc,
+			[][]float64{{1e200}},
+			vectorindex.RuntimeConfig{Limit: 1, NThreads: 1})
+		require.NoError(t, err)
+		require.Equal(t, []int64{0}, keysAny)
+		require.Len(t, distances, 1)
+		require.True(t, math.IsNaN(distances[0]))
+	})
+
+	t.Run("mixed-nan-does-not-pollute-heap", func(t *testing.T) {
+		halfSqrt3 := math.Sqrt(3) / 2
+		idx, err := NewUsearchBruteForceIndex[float64](
+			[][]float64{{math.NaN(), 0}, {1, 0}, {0.5, halfSqrt3}, {-1, 0}},
+			2, metric.Metric_CosineDistance, 8)
+		require.NoError(t, err)
+		defer idx.(*UsearchBruteForceIndex[float64]).Destroy()
+
+		keysAny, distances, err := idx.Search(
+			sqlproc,
+			[][]float64{{1, 0}, {0.5, halfSqrt3}},
+			vectorindex.RuntimeConfig{Limit: 3, NThreads: 2})
+		require.NoError(t, err)
+		require.Equal(t, []int64{1, 2, 3, 2, 1, 3}, keysAny)
+		require.InDeltaSlice(t, []float64{0, 0.5, 2, 0, 0.5, 1.5}, distances, 1e-12)
+	})
+
+	t.Run("overflow-nan-fills-after-finite", func(t *testing.T) {
+		idx, err := NewUsearchBruteForceIndex[float64](
+			[][]float64{{1e200}, {1}},
+			1, metric.Metric_CosineDistance, 8)
+		require.NoError(t, err)
+		defer idx.(*UsearchBruteForceIndex[float64]).Destroy()
+
+		keysAny, distances, err := idx.Search(
+			sqlproc,
+			[][]float64{{1e200}},
+			vectorindex.RuntimeConfig{Limit: 2, NThreads: 1})
+		require.NoError(t, err)
+		require.Equal(t, []int64{1, 0}, keysAny)
+		require.Equal(t, float64(1), distances[0])
+		require.True(t, math.IsNaN(distances[1]))
+	})
+
+	t.Run("all-nan-top-k-keeps-real-rows", func(t *testing.T) {
+		idx, err := NewUsearchBruteForceIndex[float64](
+			[][]float64{{math.NaN(), 0}, {math.NaN(), 1}},
+			2, metric.Metric_CosineDistance, 8)
+		require.NoError(t, err)
+		defer idx.(*UsearchBruteForceIndex[float64]).Destroy()
+
+		keysAny, distances, err := idx.Search(
+			sqlproc,
+			[][]float64{{1, 0}},
+			vectorindex.RuntimeConfig{Limit: 2, NThreads: 1})
+		require.NoError(t, err)
+		require.ElementsMatch(t, []int64{0, 1}, keysAny)
+		require.Len(t, distances, 2)
+		require.True(t, math.IsNaN(distances[0]))
+		require.True(t, math.IsNaN(distances[1]))
+	})
 }
 
 func TestNewBruteForceIndexHelpers(t *testing.T) {
