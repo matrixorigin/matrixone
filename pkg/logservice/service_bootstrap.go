@@ -48,6 +48,11 @@ func waitHAKeeperBootstrapRetry(ctx context.Context, interval time.Duration) err
 }
 
 func (s *Service) BootstrapHAKeeper(ctx context.Context, cfg Config) error {
+	// Maintenance resumes only durable admitted replicas in startReplicas.
+	// Bootstrap must neither replay initial membership nor restore cluster data.
+	if s.store.catalogExecutor.enabled {
+		return nil
+	}
 	replicaID, bootstrapping := cfg.Bootstrapping()
 	if !bootstrapping {
 		return nil

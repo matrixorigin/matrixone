@@ -8,7 +8,7 @@ ord('你a'), ord(X'e4bda061');
 select hex(left('你a', 1)), hex(left(X'e4bda061', 1)),
 hex(right('a你', 1)), hex(right(X'61e4bda0', 1)),
 hex(substring('你好', 2, 1)), hex(substring(X'e4bda0e5a5bd', 2, 1));
-➤ hex(left(你a, 1))[12,16,0]  ¦  hex(left(0xe4bda061, 1))[12,2,0]  ¦  hex(right(a你, 1))[12,16,0]  ¦  hex(right(0x61e4bda0, 1))[12,2,0]  ¦  hex(substring(你好, 2, 1))[12,16,0]  ¦  hex(substring(0xe4bda0e5a5bd, 2, 1))[12,2,0]  𝄀
+➤ hex(left(你a, 1))[12,8,0]  ¦  hex(left(0xe4bda061, 1))[12,2,0]  ¦  hex(right(a你, 1))[12,8,0]  ¦  hex(right(0x61e4bda0, 1))[12,2,0]  ¦  hex(substring(你好, 2, 1))[12,8,0]  ¦  hex(substring(0xe4bda0e5a5bd, 2, 1))[12,2,0]  𝄀
 E4BDA0  ¦  E4  ¦  E4BDA0  ¦  A0  ¦  E5A5BD  ¦  BD
 select hex(reverse('你a')), hex(reverse(X'e4bda061')),
 hex(lower('ÄA')), hex(lower(X'c38441')),

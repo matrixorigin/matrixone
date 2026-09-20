@@ -1709,12 +1709,19 @@ func hasTPCHSemanticCapability(kind semanticCapabilityKind, name string, ref *pl
 		}
 		return semanticNotNullable(ref.Obj, args) == out.NotNullable, nil
 	}
+	characterSubstring := kind == semanticScalar && name == "substring" && functionID == function.SUBSTRING && len(args) == 3
 	inputs := make([]types.Type, len(args))
 	for i, argument := range args {
 		if argument == nil {
 			return false, nil
 		}
 		inputs[i] = types.Type{Oid: types.T(argument.Typ.Id), Width: argument.Typ.Width, Scale: argument.Typ.Scale}
+		if characterSubstring {
+			if argument.Typ.Charset > math.MaxUint8 {
+				return false, nil
+			}
+			inputs[i].Charset = uint8(argument.Typ.Charset)
+		}
 	}
 	resolved, err := function.GetFunctionByName(context.Background(), ref.ObjName, inputs)
 	if err != nil {
@@ -1724,7 +1731,17 @@ func hasTPCHSemanticCapability(kind semanticCapabilityKind, name string, ref *pl
 		return false, nil
 	}
 	result := resolved.GetReturnType()
-	if int32(result.Oid) != out.Id || result.Width != out.Width || result.Scale != out.Scale {
+	widthMatches := result.Width == out.Width
+	if characterSubstring {
+		if out.Charset != uint32(result.Charset) {
+			return false, nil
+		}
+		if !widthMatches && tpchCharacterSliceSourceIsText(args[0]) {
+			width, narrowed := function.CharacterSliceLiteralWidth(args[0], args[2].GetLit(), result)
+			widthMatches = narrowed && width == out.Width
+		}
+	}
+	if int32(result.Oid) != out.Id || !widthMatches || result.Scale != out.Scale {
 		return false, nil
 	}
 	notNullable := semanticNotNullable(resolved.GetEncodedOverloadID(), args)
@@ -1732,6 +1749,66 @@ func hasTPCHSemanticCapability(kind semanticCapabilityKind, name string, ref *pl
 		return true, nil
 	}
 	return notNullable == out.NotNullable, nil
+}
+
+// Only prove the text subset supported by this exporter. Static VARCHAR alone
+// cannot erase retained binary/mixed provenance. Child eligibility is still
+// checked independently by the recursive expression exporter.
+func tpchCharacterSliceSourceIsText(expr *planpb.Expr) bool {
+	if expr == nil || !isTPCHStringType(types.T(expr.Typ.Id)) {
+		return false
+	}
+	switch expr.Typ.Charset {
+	case 0, uint32(types.CharsetUTF8MB4Bin), uint32(types.CharsetUTF8):
+	default:
+		return false
+	}
+	if metadata := expr.GetPreparedNumeric(); metadata != nil && metadata.StringDomainSource != nil &&
+		!tpchCharacterSliceSourceIsText(metadata.StringDomainSource) {
+		return false
+	}
+	if lit := expr.GetLit(); lit != nil {
+		if lit.Isnull || (lit.LiteralForm != planpb.StringLiteralForm_STRING_LITERAL_NONE &&
+			lit.LiteralForm != planpb.StringLiteralForm_STRING_LITERAL_TEXT) {
+			return false
+		}
+		if _, text := lit.Value.(*planpb.Literal_Sval); !text {
+			return false
+		}
+		return lit.Src == nil || tpchCharacterSliceSourceIsText(lit.Src)
+	}
+	if expr.GetCol() != nil {
+		return true
+	}
+	f := expr.GetF()
+	if f == nil || f.Func == nil {
+		return false
+	}
+	id, _ := function.DecodeOverloadID(f.Func.Obj)
+	switch id {
+	case function.CAST:
+		return len(f.Args) == 2 && tpchCharacterSliceSourceIsText(f.Args[0])
+	case function.SUBSTRING:
+		return len(f.Args) == 3 && tpchCharacterSliceSourceIsText(f.Args[0])
+	case function.CASE:
+		if len(f.Args) < 3 || len(f.Args)%2 != 1 {
+			return false
+		}
+		textArm := false
+		for i := 1; i <= len(f.Args); i += 2 {
+			arm := f.Args[min(i, len(f.Args)-1)]
+			if lit := arm.GetLit(); lit != nil && lit.Isnull {
+				continue
+			}
+			if !tpchCharacterSliceSourceIsText(arm) {
+				return false
+			}
+			textArm = true
+		}
+		return textArm
+	default:
+		return false
+	}
 }
 
 func isDecimalType(value types.T) bool {

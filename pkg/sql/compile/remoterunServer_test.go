@@ -1000,6 +1000,39 @@ func TestMessageReceiverSendBatchPreservesMetadataAndRejectsOldProtocol(t *testi
 	require.Equal(t, types.StringSourceSQLPrepare, decodedWithSources.Vecs[0].GetStringSourceAt(1))
 }
 
+func TestMessageReceiverSendBatchPreservesGrouping(t *testing.T) {
+	runtime := rt.ServiceRuntime("")
+	original, _ := runtime.GetGlobalVariables(rt.MOProtocolVersion)
+	t.Cleanup(func() { runtime.SetGlobalVariables(rt.MOProtocolVersion, original) })
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+	bat := batch.NewWithSize(1)
+	t.Cleanup(func() { bat.Clean(mp) })
+	bat.Vecs[0] = vector.NewRollupConst(types.T_int32.ToType(), 2, mp)
+	bat.SetRowCount(2)
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	receiver := &messageReceiverOnServer{
+		messageCtx: context.Background(), connectionCtx: context.Background(),
+		clientSession: session, messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
+		maxMessageSize: 1 << 20,
+	}
+	for _, version := range []any{nil, "unknown", int64(86)} {
+		runtime.SetGlobalVariables(rt.MOProtocolVersion, version)
+		require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion87")
+	}
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, message any) error {
+			decoded, err := decodeBatch(mp, message.(*pipeline.Message).Data)
+			require.NoError(t, err)
+			defer decoded.Clean(mp)
+			require.Equal(t, 2, decoded.Vecs[0].GetGrouping().Count())
+			return nil
+		})
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, int64(87))
+	require.NoError(t, receiver.sendBatch(bat))
+}
+
 func TestMessageReceiverSendFragmentedBatchRollsBackCreditOnWriteFailure(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	session := mock_morpc.NewMockClientSession(ctrl)
