@@ -833,8 +833,8 @@ func TestRecoveryCompilerContextCatalogAndBindingAdapters(t *testing.T) {
 		storage.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(nil, expected)
 		ctx := &recoveryCompilerContext{
 			compilerContext:          &compilerContext{ctx: proc.Ctx, proc: proc, engine: storage},
-			legacySubscriptionLooked: map[string]struct{}{"db": {}},
-			legacySubscriptions:      map[string]*planpb.SubscriptionMeta{},
+			legacySubscriptionLooked: map[viewSubscriptionCacheKey]struct{}{{database: "db", account: 7}: {}},
+			legacySubscriptions:      map[viewSubscriptionCacheKey]*planpb.SubscriptionMeta{},
 		}
 		originalTop := proc.GetTopContext()
 		require.False(t, ctx.DatabaseExists("db", nil))
@@ -856,9 +856,9 @@ func TestRecoveryCompilerContextCatalogAndBindingAdapters(t *testing.T) {
 				AccountID: 11, DatabaseName: "published_db", RelationName: "table",
 				SubscriptionName: "sub", RelationID: 13,
 			}},
-			legacySubscriptionLooked: map[string]struct{}{"sub": {}},
-			legacySubscriptions: map[string]*planpb.SubscriptionMeta{
-				"sub": {AccountId: 99, DbName: "published_db", SubName: "sub", Tables: "table"},
+			legacySubscriptionLooked: map[viewSubscriptionCacheKey]struct{}{{database: "sub", account: 7}: {}},
+			legacySubscriptions: map[viewSubscriptionCacheKey]*planpb.SubscriptionMeta{
+				{database: "sub", account: 7}: {AccountId: 99, DbName: "published_db", SubName: "sub", Tables: "table"},
 			},
 		}
 		_, _, err := ctx.Resolve("sub", "table", nil)

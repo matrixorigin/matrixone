@@ -199,11 +199,15 @@ func TestRecoverySubscriptionSnapshotDoesNotAliasCurrentCache(t *testing.T) {
 	snapshot.TS.PhysicalTime = 456
 	_, err = ctx.GetSubscriptionMeta("sub", snapshot)
 	require.NoError(t, err)
-	require.Len(t, exec.sqls, 3)
+	_, err = ctx.GetSubscriptionMeta("sub@9/123/7", nil)
+	require.NoError(t, err)
+	require.Len(t, exec.sqls, 4)
 	require.NotContains(t, exec.sqls[0], "MO_TS")
 	require.NotContains(t, exec.sqls[1], "MO_TS")
 	require.Contains(t, exec.sqls[1], "sub_account_id=9")
 	require.Same(t, current, exec.txns[0])
 	require.Same(t, first, exec.txns[1])
 	require.Same(t, second, exec.txns[2])
+	require.Same(t, current, exec.txns[3])
+	require.Contains(t, exec.sqls[3], "sub@9/123/7")
 }

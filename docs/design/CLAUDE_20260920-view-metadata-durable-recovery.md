@@ -188,13 +188,14 @@ scoped pending/fence 与 restore 修改在同一事务可见。不要为了在�
 
 - `mo_view_recovery` 是系统私有控制表：唯一行、格式版本 1 的 JSON、revision CAS、独立 mutation revision、SQL lease deadline。JSON 保留 E/R/C、K/L/owner、不可变 scope、work 配额和固定三槽 receipt。JSON 总长度限制 16 KiB；它不是按事件无限追加的日志。
 - `mo_view_recovery_work` 是同一 owner 管理的持久 work/visited set。四个初始任务负责源反向边、范围内 View 扫描、refresh 孤儿、孤立 dependency 边；节点任务扩展反向闭包。使用 `(account_id,relation_id)` keyset，每页 32，按 visits 轮转；整个存储至多 65,536 行。已完成节点保留至本代结束，以消除环和菱形重复。
-- 初次恢复必须完整发现 catalog。尚未完成的旧代不能被更小或不相交的 scope 覆盖；新代必须包含其未完成范围。旧代与完成代的 work 逐页回收；不会通过一次无界 DELETE 清空。
+- 初次恢复必须完整发现 catalog。尚未完成的旧代不能被更小或不相交的 scope 覆盖；新代必须包含其未完成范围。旧代与完成代的 work 逐页回收；不会通过一次无界 DELETE 清空。队列达到上限时，新代安装在同一事务先回收一页旧代 work，避免因没有初始任务名额而无法替换旧代。
 - `RequireViewMetadataRecoveryInTxn` 必须在对象修改后、同一事务提交前调用。调用者取得权威 E/R，并负责 scope 覆盖本次已封闭的变更。单独的 Require 用于先前已由 durable mutation clock 拦截的默认关闭路径。没有 SQL/heartbeat 公开调用入口。
 - 默认关闭时的已有 DDL/restore 失效路径同时递增独立 mutation revision。Require 记录当前值；后续 claim/page/complete/current 比较该值。恢复之外的对象修改使旧代失效，不回退 C，也不能沿用旧 CURRENT。实际 table restore 在第二个 CN 上验证这一行为。
+- 每次 Claim acquisition 都递增物理 L，包括重启后复用相同 owner 名称；同一逻辑 K 的 receipt 不改变。已有 token 的续租由 Page 完成，不能把重复 acquisition 当成允许旧 worker 继续运行的心跳。
 - 协调事务锁序保持 lifecycle gate → coordinator → 目标；最终 CAS 再检查原 lease deadline，不能在页执行期间过期后续租或完成。错误与取消由 SQL 事务回滚；冲突退避使用另一个完整 token 与目标 V 双重 fencing 的事务。
 - 仅在 frontier 完成后刷新目标；coordinator context 禁止旧路径在一个 refresh 事务内再次展开整个 fanout。CURRENT 必须 V 已完成；INVALID 可以使工作收敛，但 `IsCurrent` 必须返回 false。缺失表、订阅/RPC 暂时不可用保持重试；已有源表缺失绑定列的明确 ErrBadFieldError 属于本代无效定义。
 - `IsCurrent` 仅提供 catalog 证据，不替代 HAKeeper authority/response fence。所有公开 admission 开关依旧返回 false；不注册后台 goroutine、public producer 或自动 protocol advertisement。
+- 历史订阅读取借用完整 snapshot transaction（包含 logical timestamp），结构化缓存键包含租户、数据库、历史标志与完整时间戳，避免名字与拼接后缀碰撞；不能用只有 physical timestamp 的 SQL hint 代替。恢复对象重新绑定使用目标租户上下文，订阅边同时保留 publisher 物理身份和 subscriber 绑定命名空间。
 - Receipt 只能来自已提交 outbox。恢复后续租不改变逻辑 receipt digest；digest 包含 mutation revision。网络失败保留槽，丢失响应可重放；线性一致的接受或退休证据才允许回收。已被新 DDL 弄脏的 completion 不再提交，只允许可信只读 readback 回收旧证据。
 - 4.0.8 独立 additive migration 与 fresh bootstrap 注册两张表；系统 restore 排除控制表，不能将控制真相回滚到业务快照。4.0.6/4.0.7 已执行的迁移不修改。
 - 真实验证使用一个必要的私有双 CN fixture：本包旧用例保留单 CN shared fixture，不能同时启动另一种 shared base；显式并存预算避免隐式破坏其资源 owner。数据量为跨越 32 行边界的最小 33 个同级 View，加两级反向依赖及同名不同租户对照。最终验证状态记录于本地证据文档，不将尚未跑完的检查写成通过。
-

@@ -304,6 +304,13 @@ func requireViewRecovery(epoch, generation uint64, scope ViewRecoveryScope) func
 		if err := s.validate(); err != nil {
 			return false, err
 		}
+		if s.WorkRows > viewRecoveryMaxWork-4 {
+			// Retire a bounded old-generation page in this same transaction so
+			// a full queue cannot prevent installing its replacement generation.
+			if _, err := cleanupViewRecoveryWork(txn, s); err != nil {
+				return false, err
+			}
+		}
 		for _, kind := range []string{"roots", "scan", "orphan", "edges"} {
 			if err := enqueueViewRecoveryWork(txn, s, viewRecoveryWork{kind: kind}); err != nil {
 				return false, err
@@ -341,12 +348,13 @@ func (c ViewMetadataCoordinator) Claim(ctx context.Context, epoch, generation, c
 		if s.Owner != "" && s.Owner != owner && !expired {
 			return false, moerr.NewTxnNeedRetryWithDefChangedNoCtx()
 		}
-		if s.Owner != owner || expired {
-			if s.LeaseEpoch == math.MaxUint64 {
-				return false, moerr.NewInvalidStateNoCtx("View recovery lease exhausted")
-			}
-			s.LeaseEpoch++
+		// Acquisition, including a restart reusing the same CN/worker name,
+		// always creates a new physical fence. Page renews an existing token;
+		// an acquisition retry must never authorize an older in-flight worker.
+		if s.LeaseEpoch == math.MaxUint64 {
+			return false, moerr.NewInvalidStateNoCtx("View recovery lease exhausted")
 		}
+		s.LeaseEpoch++
 		first := s.ClaimID == 0
 		s.ClaimID = claimID
 		s.Owner = owner

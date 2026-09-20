@@ -603,11 +603,19 @@ type legacyViewCandidate struct {
 	refreshStatus string
 }
 
+type viewSubscriptionCacheKey struct {
+	database   string
+	account    uint32
+	historical bool
+	physical   int64
+	logical    uint32
+}
+
 type recoveryCompilerContext struct {
 	*compilerContext
 	dependencies             []plan2.ViewDependency
-	legacySubscriptions      map[string]*planpb.SubscriptionMeta
-	legacySubscriptionLooked map[string]struct{}
+	legacySubscriptions      map[viewSubscriptionCacheKey]*planpb.SubscriptionMeta
+	legacySubscriptionLooked map[viewSubscriptionCacheKey]struct{}
 	legacySnapshots          map[string]*plan2.Snapshot
 }
 
@@ -744,24 +752,27 @@ func (c *recoveryCompilerContext) GetSubscriptionMeta(
 		return nil, err
 	}
 	catalogTable := catalog.MO_CATALOG + ".mo_subs"
-	key := databaseName
+	key := viewSubscriptionCacheKey{database: databaseName, account: accountID}
 	if c.compilerContext.lower != 0 {
-		key = strings.ToLower(databaseName)
+		key.database = strings.ToLower(databaseName)
 	}
 	if plan2.IsSnapshotValid(snapshot) {
 		if snapshot.Tenant != nil {
 			accountID = snapshot.Tenant.TenantID
 		}
-		key += fmt.Sprintf("@%d/%d/%d", accountID, snapshot.TS.PhysicalTime, snapshot.TS.LogicalTime)
+		key.account = accountID
+		key.historical = true
+		key.physical = snapshot.TS.PhysicalTime
+		key.logical = snapshot.TS.LogicalTime
 	}
 	if _, ok := c.legacySubscriptionLooked[key]; ok {
 		return c.legacySubscriptions[key], nil
 	}
 	if c.legacySubscriptionLooked == nil {
-		c.legacySubscriptionLooked = make(map[string]struct{})
+		c.legacySubscriptionLooked = make(map[viewSubscriptionCacheKey]struct{})
 	}
 	if c.legacySubscriptions == nil {
-		c.legacySubscriptions = make(map[string]*planpb.SubscriptionMeta)
+		c.legacySubscriptions = make(map[viewSubscriptionCacheKey]*planpb.SubscriptionMeta)
 	}
 	result, err := c.execCatalogQuery(fmt.Sprintf(
 		"select pub_account_id,pub_account_name,pub_name,pub_database,pub_tables "+

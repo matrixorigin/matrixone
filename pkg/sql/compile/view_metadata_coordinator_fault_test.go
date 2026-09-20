@@ -121,6 +121,10 @@ func TestCoordinatorClaimAndMutationFences(t *testing.T) {
 	require.Error(t, err)
 	_, err = c.Claim(context.Background(), 1, 1, 7, "")
 	require.Error(t, err)
+	sameOwner, _ := recoveryCoordinatorFaultFixture(t, base, 0, false, "")
+	claimedAgain, err := sameOwner.Claim(context.Background(), 1, 1, 7, "old")
+	require.NoError(t, err)
+	require.Greater(t, claimedAgain.LeaseEpoch, base.LeaseEpoch)
 	dirty := base
 	dirty.catalogMutation = 1
 	c, _ = recoveryCoordinatorFaultFixture(t, dirty, 0, false, "")
@@ -130,6 +134,27 @@ func TestCoordinatorClaimAndMutationFences(t *testing.T) {
 	require.False(t, ok)
 	_, err = c.Page(context.Background(), base.ViewRecoveryClaim)
 	require.Error(t, err)
+}
+
+func TestFullRecoveryQueueCanInstallReplacementGeneration(t *testing.T) {
+	state := ViewRecoveryState{Version: 1, ViewRecoveryClaim: ViewRecoveryClaim{Epoch: 1, Generation: 1}, Scope: ViewRecoveryScope{All: true}, WorkRows: viewRecoveryMaxWork}
+	c, statements := recoveryCoordinatorFaultFixture(t, state, 0, false, "")
+	underlying := c.SQL
+	proc := testutil.NewProcess(t)
+	c.SQL = executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		if strings.Contains(sql, "from mo_catalog.mo_view_recovery_work where generation<2") {
+			r := executor.NewMemResult([]types.Type{types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()}, proc.Mp())
+			r.NewBatchWithRowCount(4)
+			for column, values := range [][]string{{"1", "1", "1", "1"}, {"node", "node", "node", "node"}, {"0", "0", "0", "0"}, {"10", "11", "12", "13"}} {
+				require.NoError(t, executor.AppendStringRows(r, column, values))
+			}
+			return r.GetResult(), nil
+		}
+		return underlying.Exec(context.Background(), sql, executor.Options{})
+	})
+	require.NoError(t, c.Require(context.Background(), 2, 2, ViewRecoveryScope{All: true}))
+	require.Contains(t, (*statements)[len(*statements)-1], `"generation":2`)
+	require.Contains(t, (*statements)[len(*statements)-1], `"work_rows":65536`)
 }
 
 func TestCoordinatorOutboxReplayAndRetirement(t *testing.T) {
