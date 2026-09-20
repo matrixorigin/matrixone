@@ -21,7 +21,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"io"
 	"strconv"
 	"strings"
@@ -59,7 +60,7 @@ const (
 	statusOK                         = "OK"
 )
 
-var errGatewayClosed = errors.New("python udf gateway is closed")
+var errGatewayClosed = moerr.NewInternalErrorNoCtx("python udf gateway is closed")
 
 var _ udf.RuntimeDefinitionValidator = (*Gateway)(nil)
 var _ udf.RuntimeStatusProvider = (*Gateway)(nil)
@@ -110,7 +111,7 @@ func NewGateway(cfg ClientConfig) (*Gateway, error) {
 // rejected at this boundary.
 func NewGatewayWithArtifactStore(cfg ClientConfig, resolver ArtifactResolver) (*Gateway, error) {
 	if resolver == nil {
-		return nil, fmt.Errorf("RESOURCE_UNAVAILABLE: Python artifact resolver is not configured")
+		return nil, moerr.NewInternalErrorNoCtxf("RESOURCE_UNAVAILABLE: Python artifact resolver is not configured")
 	}
 	return newGateway(cfg, resolver, false)
 }
@@ -174,13 +175,13 @@ func (g *Gateway) CheckLanguageReady(ctx context.Context, language string) error
 		ctx = context.Background()
 	}
 	if language != udf.LanguagePython {
-		return fmt.Errorf("python udf: unsupported readiness language %q", language)
+		return moerr.NewInternalErrorNoCtxf("python udf: unsupported readiness language %q", language)
 	}
 	if !g.cfg.Enabled {
-		return fmt.Errorf("RESOURCE_UNAVAILABLE: Python UDF runtime is disabled")
+		return moerr.NewInternalErrorNoCtxf("RESOURCE_UNAVAILABLE: Python UDF runtime is disabled")
 	}
 	if !g.cfg.AllowUnisolated {
-		return fmt.Errorf("RESOURCE_UNAVAILABLE: Python UDF runtime requires explicit unisolated opt-in")
+		return moerr.NewInternalErrorNoCtxf("RESOURCE_UNAVAILABLE: Python UDF runtime requires explicit unisolated opt-in")
 	}
 	requestCtx, release := g.withLifecycleContext(ctx)
 	defer release()
@@ -303,10 +304,10 @@ func (g *Gateway) ValidateDefinition(ctx context.Context, definition *udf.Routin
 		return errGatewayClosed
 	}
 	if !g.cfg.Enabled {
-		return fmt.Errorf("RESOURCE_UNAVAILABLE: Python UDF runtime is disabled")
+		return moerr.NewInternalErrorNoCtxf("RESOURCE_UNAVAILABLE: Python UDF runtime is disabled")
 	}
 	if !g.cfg.AllowUnisolated {
-		return fmt.Errorf("RESOURCE_UNAVAILABLE: Python UDF runtime requires explicit unisolated opt-in")
+		return moerr.NewInternalErrorNoCtxf("RESOURCE_UNAVAILABLE: Python UDF runtime requires explicit unisolated opt-in")
 	}
 	requestCtx, release := g.withLifecycleContext(ctx)
 	defer release()
@@ -316,49 +317,49 @@ func (g *Gateway) ValidateDefinition(ctx context.Context, definition *udf.Routin
 		defer cancel()
 	}
 	if definition == nil {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: nil Python routine definition")
+		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: nil Python routine definition")
 	}
 	if definition.Language != udf.LanguagePython {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: unsupported UDF language %q", definition.Language)
+		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: unsupported UDF language %q", definition.Language)
 	}
 	if strings.TrimSpace(definition.Handler) == "" {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python handler is required")
+		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python handler is required")
 	}
 	if strings.Contains(definition.Handler, ":") {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python external handler import requires the immutable artifact catalog")
+		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python external handler import requires the immutable artifact catalog")
 	}
 	if definition.DefinitionSchemaVersion != udf.PythonDefinitionSchemaVersion ||
 		definition.ABIContract != udf.PythonABIContract ||
 		definition.AdapterVersion != udf.PythonAdapterVersion ||
 		definition.SDKVersion != udf.PythonSDKVersion {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python definition contract is not supported")
+		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python definition contract is not supported")
 	}
 	if definition.Mode != ModeScalar && definition.Mode != ModeVector {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: unsupported Python mode %q", definition.Mode)
+		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: unsupported Python mode %q", definition.Mode)
 	}
 	if definition.NullPolicy != NullCallHandler && definition.NullPolicy != NullReturnNull {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: unsupported Python NULL policy %q", definition.NullPolicy)
+		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: unsupported Python NULL policy %q", definition.NullPolicy)
 	}
 	if !udf.IsSHA256Digest(definition.ArtifactDigest) || !udf.IsSHA256Digest(definition.EnvironmentDigest) {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python definition digest is invalid")
+		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python definition digest is invalid")
 	}
 	currentEnvironment, err := udf.PythonEnvironmentDigest()
 	if err != nil || currentEnvironment != definition.EnvironmentDigest {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python environment digest does not match the current contract")
+		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python environment digest does not match the current contract")
 	}
 	if !udf.IsSHA256Digest(definition.DefinitionFingerprint) {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python definition fingerprint is invalid")
+		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python definition fingerprint is invalid")
 	}
 	args := make([]TypeDescriptor, len(definition.Args))
 	for index, typ := range definition.Args {
 		args[index], err = NewTypeDescriptor(typ)
 		if err != nil {
-			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python argument descriptor %d: %w", index, err)
+			return errutil.Wrapf(err, "UNSUPPORTED_ROUTINE_VERSION: Python argument descriptor %d", index)
 		}
 	}
 	returnDescriptor, err := NewTypeDescriptor(definition.ReturnType)
 	if err != nil {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python return descriptor: %w", err)
+		return errutil.Wrapf(err, "UNSUPPORTED_ROUTINE_VERSION: Python return descriptor")
 	}
 	expectedFingerprint, err := DefinitionFingerprint(
 		definition.DefinitionSchemaVersion,
@@ -368,10 +369,10 @@ func (g *Gateway) ValidateDefinition(ctx context.Context, definition *udf.Routin
 		args, returnDescriptor,
 	)
 	if err != nil {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python definition fingerprint cannot be computed: %w", err)
+		return errutil.Wrapf(err, "UNSUPPORTED_ROUTINE_VERSION: Python definition fingerprint cannot be computed")
 	}
 	if definition.DefinitionFingerprint != expectedFingerprint {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python definition fingerprint does not match the typed definition")
+		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python definition fingerprint does not match the typed definition")
 	}
 
 	source := definition.Source
@@ -383,20 +384,20 @@ func (g *Gateway) ValidateDefinition(ctx context.Context, definition *udf.Routin
 			return resolveErr
 		}
 		if source != "" && source != resolved {
-			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python artifact source does not match the immutable artifact")
+			return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python artifact source does not match the immutable artifact")
 		}
 		source = resolved
 	} else if !g.allowInlineSource {
-		return fmt.Errorf("RESOURCE_UNAVAILABLE: Python artifact resolver is not configured")
+		return moerr.NewInternalErrorNoCtxf("RESOURCE_UNAVAILABLE: Python artifact resolver is not configured")
 	}
 	if source == "" || !utf8.ValidString(source) {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python artifact source is empty or not valid UTF-8")
+		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python artifact source is empty or not valid UTF-8")
 	}
 	if int64(len([]byte(source))) > DefaultMaxArtifactBytes {
-		return fmt.Errorf("RESOURCE_EXHAUSTED: Python artifact exceeds %d bytes", DefaultMaxArtifactBytes)
+		return moerr.NewInternalErrorNoCtxf("RESOURCE_EXHAUSTED: Python artifact exceeds %d bytes", DefaultMaxArtifactBytes)
 	}
 	if udf.PythonInlineArtifactDigest(definition.Handler, source) != definition.ArtifactDigest {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python artifact digest does not match the immutable source")
+		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python artifact digest does not match the immutable source")
 	}
 
 	client, err := g.flightClient()
@@ -428,7 +429,7 @@ func (g *Gateway) ValidateDefinition(ctx context.Context, definition *udf.Routin
 		Return:                  returnDescriptor,
 	})
 	if err != nil {
-		return fmt.Errorf("python udf: encode definition validation: %w", err)
+		return errutil.Wrapf(err, "python udf: encode definition validation")
 	}
 	actionCtx := requestCtx
 	var actionCancel context.CancelFunc
@@ -439,53 +440,53 @@ func (g *Gateway) ValidateDefinition(ctx context.Context, definition *udf.Routin
 	stream, err := client.DoAction(actionCtx, &flight.Action{Type: "ValidatePythonDefinition", Body: payload})
 	if err != nil {
 		g.invalidateCapabilities(capability.generation)
-		return fmt.Errorf("python udf: definition validation action: %w", err)
+		return errutil.Wrapf(err, "python udf: definition validation action")
 	}
 	result, err := stream.Recv()
 	if err != nil {
 		g.invalidateCapabilities(capability.generation)
-		return fmt.Errorf("python udf: definition validation response: %w", err)
+		return errutil.Wrapf(err, "python udf: definition validation response")
 	}
 	if result == nil {
 		g.invalidateCapabilities(capability.generation)
-		return fmt.Errorf("python udf: empty definition validation response")
+		return moerr.NewInternalErrorNoCtxf("python udf: empty definition validation response")
 	}
 	var response definitionValidationResponse
 	decoder := json.NewDecoder(bytes.NewReader(result.Body))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&response); err != nil {
 		g.invalidateCapabilities(capability.generation)
-		return fmt.Errorf("python udf: decode definition validation response: %w", err)
+		return errutil.Wrapf(err, "python udf: decode definition validation response")
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		g.invalidateCapabilities(capability.generation)
-		return fmt.Errorf("python udf: definition validation response has trailing JSON")
+		return moerr.NewInternalErrorNoCtxf("python udf: definition validation response has trailing JSON")
 	}
 	if response.Status == "ERROR" {
 		if _, err := stream.Recv(); err != io.EOF {
 			g.invalidateCapabilities(capability.generation)
 			if err == nil {
-				return fmt.Errorf("python udf: definition validation returned multiple results")
+				return moerr.NewInternalErrorNoCtxf("python udf: definition validation returned multiple results")
 			}
-			return fmt.Errorf("python udf: definition validation stream: %w", err)
+			return errutil.Wrapf(err, "python udf: definition validation stream")
 		}
 		if response.Reason == "" {
-			return fmt.Errorf("USER_CODE: Python definition validation failed")
+			return moerr.NewInternalErrorNoCtxf("USER_CODE: Python definition validation failed")
 		}
-		return errors.New(response.Reason)
+		return moerr.NewInternalErrorNoCtx(response.Reason)
 	}
 	if response.Status != statusOK || response.ArtifactDigest != definition.ArtifactDigest ||
 		response.DefinitionFingerprint != definition.DefinitionFingerprint {
 		g.invalidateCapabilities(capability.generation)
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python definition validation returned an invalid result")
+		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python definition validation returned an invalid result")
 	}
 	if _, err := stream.Recv(); err != io.EOF {
 		g.invalidateCapabilities(capability.generation)
 		if err == nil {
-			return fmt.Errorf("python udf: definition validation returned multiple results")
+			return moerr.NewInternalErrorNoCtxf("python udf: definition validation returned multiple results")
 		}
-		return fmt.Errorf("python udf: definition validation stream: %w", err)
+		return errutil.Wrapf(err, "python udf: definition validation stream")
 	}
 	return nil
 }
@@ -615,22 +616,22 @@ func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, resul
 		return errGatewayClosed
 	}
 	if !g.cfg.Enabled {
-		return fmt.Errorf("RESOURCE_UNAVAILABLE: Python UDF runtime is disabled")
+		return moerr.NewInternalErrorNoCtxf("RESOURCE_UNAVAILABLE: Python UDF runtime is disabled")
 	}
 	if !g.cfg.AllowUnisolated {
-		return fmt.Errorf("RESOURCE_UNAVAILABLE: Python UDF runtime requires explicit unisolated opt-in")
+		return moerr.NewInternalErrorNoCtxf("RESOURCE_UNAVAILABLE: Python UDF runtime requires explicit unisolated opt-in")
 	}
 	requestCtx, release := g.withLifecycleContext(ctx)
 	defer release()
 	streamCtx, cancel := context.WithTimeout(requestCtx, g.cfg.RequestTimeout)
 	defer cancel()
 	if invocation == nil || result == nil || mp == nil {
-		return fmt.Errorf("python udf: nil invocation, result, or memory pool")
+		return moerr.NewInternalErrorNoCtxf("python udf: nil invocation, result, or memory pool")
 	}
 	execution := *invocation
 	if g.artifactResolver != nil {
 		if execution.Source != "" {
-			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: typed Python invocation contains source; use its immutable artifact digest")
+			return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: typed Python invocation contains source; use its immutable artifact digest")
 		}
 		// Validate the identity, semantic contract, descriptors, and resource
 		// shape before resolving an account-scoped artifact.  Resolution is a
@@ -650,7 +651,7 @@ func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, resul
 			return err
 		}
 	} else if !g.allowInlineSource && execution.Source == "" {
-		return fmt.Errorf("RESOURCE_UNAVAILABLE: Python artifact resolver is not configured")
+		return moerr.NewInternalErrorNoCtxf("RESOURCE_UNAVAILABLE: Python artifact resolver is not configured")
 	}
 	if err := validateInvocation(&execution); err != nil {
 		return err
@@ -712,7 +713,7 @@ func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, resul
 	// invalidation below forces a fresh handshake on the next call.
 	workerLeaseEpoch := capability.response.LeaseEpoch
 	if workerLeaseEpoch == 0 {
-		return fmt.Errorf("python udf: capability handshake did not return a worker lease epoch")
+		return moerr.NewInternalErrorNoCtxf("python udf: capability handshake did not return a worker lease epoch")
 	}
 	execution.Tuple.LeaseEpoch = workerLeaseEpoch
 	if err := validateInvocation(&execution); err != nil {
@@ -739,7 +740,7 @@ func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, resul
 		HandlerTimeoutSeconds: g.cfg.RequestTimeout.Seconds(),
 	})
 	if err != nil {
-		return fmt.Errorf("python udf: encode open payload: %w", err)
+		return errutil.Wrapf(err, "python udf: encode open payload")
 	}
 	open, err := protocol.MarshalControl(protocol.Control{Kind: "OpenInvocation", Tuple: execution.Tuple, Payload: openBody})
 	if err != nil {
@@ -765,7 +766,7 @@ func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, resul
 
 	stream, err := client.DoExchange(streamCtx)
 	if err != nil {
-		return fmt.Errorf("python udf: open Arrow Flight exchange: %w", err)
+		return errutil.Wrapf(err, "python udf: open Arrow Flight exchange")
 	}
 	// Flight carries the invocation command in the descriptor.  The descriptor
 	// is delivered to the server separately from the Arrow IPC reader; putting
@@ -797,7 +798,7 @@ func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, resul
 			return err
 		}
 		if len(batch.Frames) != 2 {
-			return fmt.Errorf("python udf: input batch contains %d Arrow frames", len(batch.Frames))
+			return moerr.NewInternalErrorNoCtxf("python udf: input batch contains %d Arrow frames", len(batch.Frames))
 		}
 		if batchIndex == 0 {
 			inputSchema = append([]byte(nil), batch.Frames[0].Header...)
@@ -805,7 +806,7 @@ func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, resul
 				return err
 			}
 		} else if !bytes.Equal(inputSchema, batch.Frames[0].Header) {
-			return fmt.Errorf("python udf: input batches do not share one Arrow schema")
+			return moerr.NewInternalErrorNoCtxf("python udf: input batches do not share one Arrow schema")
 		}
 		sequenceNumber := batchIndex + 1
 		if err := sequence.AcceptInput(sequenceNumber); err != nil {
@@ -851,7 +852,7 @@ func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, resul
 		}
 	}
 	if !inputEnded || lastSequence != batchIndex {
-		return fmt.Errorf("python udf: input stream did not reach EndInput")
+		return moerr.NewInternalErrorNoCtxf("python udf: input stream did not reach EndInput")
 	}
 	// Close the local Arrow writer before accepting the worker's terminal
 	// Finish.  If finalizing the local input owner fails, the admission cleanup
@@ -886,7 +887,7 @@ type invocationAdmission struct {
 
 func (g *Gateway) admitInvocation(invocation *udf.Invocation) (*invocationAdmission, error) {
 	if invocation == nil {
-		return nil, fmt.Errorf("python udf: cannot admit a nil invocation")
+		return nil, moerr.NewInternalErrorNoCtxf("python udf: cannot admit a nil invocation")
 	}
 	if err := invocation.Tuple.Validate(); err != nil {
 		return nil, err
@@ -923,7 +924,7 @@ func (g *Gateway) admitInvocation(invocation *udf.Invocation) (*invocationAdmiss
 	if ledger == nil || active == nil {
 		g.releaseGroupClaim(groupKey, invocation.Tuple.GroupEpoch)
 		g.mu.Unlock()
-		return nil, fmt.Errorf("python udf: admission state is not initialized")
+		return nil, moerr.NewInternalErrorNoCtxf("python udf: admission state is not initialized")
 	}
 	// Expire is intentionally limited to tombstones by TerminalLedger. An
 	// active invocation can leave this path only through finish/abandon.
@@ -936,7 +937,7 @@ func (g *Gateway) admitInvocation(invocation *udf.Invocation) (*invocationAdmiss
 	if err != nil {
 		g.releaseGroupClaim(groupKey, invocation.Tuple.GroupEpoch)
 		g.mu.Unlock()
-		return nil, fmt.Errorf("RESOURCE_EXHAUSTED: Python UDF terminal ledger: %w", err)
+		return nil, errutil.Wrapf(err, "RESOURCE_EXHAUSTED: Python UDF terminal ledger")
 	}
 	if err := credit.Add(key, entryBytes, time.Now().Add(ttl)); err != nil {
 		credit.ReleaseUnused()
@@ -954,7 +955,7 @@ func (g *Gateway) admitInvocation(invocation *udf.Invocation) (*invocationAdmiss
 		credit.ReleaseUnused()
 		g.releaseGroupClaim(groupKey, invocation.Tuple.GroupEpoch)
 		g.mu.Unlock()
-		return nil, fmt.Errorf("RESOURCE_EXHAUSTED: Python UDF active invocation slots are full")
+		return nil, moerr.NewInternalErrorNoCtxf("RESOURCE_EXHAUSTED: Python UDF active invocation slots are full")
 	}
 
 	var releaseOnce sync.Once
@@ -1055,10 +1056,10 @@ func (g *Gateway) ensureAdmissionState() error {
 
 func (g *Gateway) claimGroupLocked(groupID string, groupEpoch uint64) error {
 	if closedEpoch, ok := g.closedGroups[groupID]; ok && groupEpoch <= closedEpoch {
-		return fmt.Errorf("%w: execution group %q epoch %d is already closed", protocol.ErrDuplicate, groupID, groupEpoch)
+		return errutil.WrapfCauseFirst(protocol.ErrDuplicate, "execution group %q epoch %d is already closed", groupID, groupEpoch)
 	}
 	if admittedEpoch, ok := g.admittedGroups[groupID]; ok {
-		return fmt.Errorf("%w: execution group %q epoch %d is already admitted", protocol.ErrDuplicate, groupID, admittedEpoch)
+		return errutil.WrapfCauseFirst(protocol.ErrDuplicate, "execution group %q epoch %d is already admitted", groupID, admittedEpoch)
 	}
 	if _, exists := g.closedGroups[groupID]; !exists {
 		// Reserve the future tombstone while the group is active. Checking only
@@ -1067,7 +1068,7 @@ func (g *Gateway) claimGroupLocked(groupID string, groupEpoch uint64) error {
 		// drain together.
 		if len(g.closedGroups)+len(g.admittedGroups) >= g.closedGroupLimit ||
 			g.closedGroupBytes+g.reservedGroupBytes+int64(len(groupID)+8) > g.closedGroupByteLimit {
-			return fmt.Errorf("%w: Python UDF closed-group fence is full", protocol.ErrLedgerFull)
+			return errutil.WrapfCauseFirst(protocol.ErrLedgerFull, "Python UDF closed-group fence is full")
 		}
 		g.reservedGroupBytes += int64(len(groupID) + 8)
 	}
@@ -1120,7 +1121,7 @@ func scopedGroupKey(accountID uint64, groupID string) string {
 func invocationLedgerKey(tuple protocol.FencingTuple) (string, error) {
 	wire, err := json.Marshal(tuple)
 	if err != nil {
-		return "", fmt.Errorf("python udf: encode invocation identity: %w", err)
+		return "", errutil.Wrapf(err, "python udf: encode invocation identity")
 	}
 	digest := sha256.Sum256(wire)
 	return hex.EncodeToString(digest[:]), nil
@@ -1308,7 +1309,7 @@ func (g *Gateway) ensureCapabilitySnapshot(ctx context.Context, client flight.Fl
 	if g.closed {
 		err = errGatewayClosed
 	} else if p.generation != g.capabilityGeneration {
-		err = errors.New("python udf: capability probe invalidated")
+		err = moerr.NewInternalErrorNoCtx("python udf: capability probe invalidated")
 	} else if ctx.Err() != nil {
 		err = ctx.Err()
 	}
@@ -1331,33 +1332,33 @@ func readCapabilities(ctx context.Context, client flight.FlightServiceClient) (*
 	}
 	stream, err := client.DoAction(ctx, &flight.Action{Type: "GetPythonCapabilities", Body: request})
 	if err != nil {
-		return nil, fmt.Errorf("python udf: capability handshake: %w", err)
+		return nil, errutil.Wrapf(err, "python udf: capability handshake")
 	}
 	result, err := stream.Recv()
 	if err != nil {
-		return nil, fmt.Errorf("python udf: capability handshake response: %w", err)
+		return nil, errutil.Wrapf(err, "python udf: capability handshake response")
 	}
 	if result == nil {
-		return nil, fmt.Errorf("python udf: empty capability handshake response")
+		return nil, moerr.NewInternalErrorNoCtxf("python udf: empty capability handshake response")
 	}
 	var response capabilityResponse
 	decoder := json.NewDecoder(bytes.NewReader(result.Body))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&response); err != nil {
-		return nil, fmt.Errorf("python udf: decode capability handshake: %w", err)
+		return nil, errutil.Wrapf(err, "python udf: decode capability handshake")
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
-		return nil, fmt.Errorf("python udf: capability handshake has trailing JSON")
+		return nil, moerr.NewInternalErrorNoCtxf("python udf: capability handshake has trailing JSON")
 	}
 	if err := validateCapabilities(response); err != nil {
 		return nil, err
 	}
 	if _, err := stream.Recv(); err != io.EOF {
 		if err == nil {
-			return nil, fmt.Errorf("python udf: capability handshake returned multiple results")
+			return nil, moerr.NewInternalErrorNoCtxf("python udf: capability handshake returned multiple results")
 		}
-		return nil, fmt.Errorf("python udf: capability handshake stream: %w", err)
+		return nil, errutil.Wrapf(err, "python udf: capability handshake stream")
 	}
 	return &response, nil
 }
@@ -1398,11 +1399,11 @@ func validateCapabilities(response capabilityResponse) error {
 		response.MaxAccountHandlerProcesses != DefaultWorkerMaxAccountHandlers ||
 		response.MaxOwnerHandlerProcesses != DefaultWorkerMaxOwnerHandlers ||
 		response.LeaseEpoch == 0 {
-		return fmt.Errorf("python udf: worker capability contract does not match the current contract")
+		return moerr.NewInternalErrorNoCtxf("python udf: worker capability contract does not match the current contract")
 	}
 	if !sameStrings(response.Modes, []string{ModeScalar, ModeVector}) ||
 		!sameStrings(response.NullPolicies, []string{NullCallHandler, NullReturnNull}) {
-		return fmt.Errorf("python udf: worker capability set does not match the current contract")
+		return moerr.NewInternalErrorNoCtxf("python udf: worker capability set does not match the current contract")
 	}
 	return nil
 }
@@ -1437,10 +1438,10 @@ func encodeInputBatch(inputs []*vector.Vector, args []types.Type, start, remaini
 
 func encodeInputBatchWithEncoder(encoder *inputBatchEncoder, start, remaining, maxBytes, maxRows int64) (encodedRecordBatch, error) {
 	if start < 0 || remaining <= 0 {
-		return encodedRecordBatch{}, fmt.Errorf("invalid Python UDF input batch range")
+		return encodedRecordBatch{}, moerr.NewInternalErrorNoCtxf("invalid Python UDF input batch range")
 	}
 	if maxRows <= 0 {
-		return encodedRecordBatch{}, fmt.Errorf("invalid Python UDF max batch rows")
+		return encodedRecordBatch{}, moerr.NewInternalErrorNoCtxf("invalid Python UDF max batch rows")
 	}
 	if remaining > maxRows {
 		remaining = maxRows
@@ -1451,7 +1452,7 @@ func encodeInputBatchWithEncoder(encoder *inputBatchEncoder, start, remaining, m
 	// slice keeps the same backing buffers, and every candidate is still encoded
 	// and checked against maxBytes before publication.
 	if encoder == nil {
-		return encodedRecordBatch{}, fmt.Errorf("invalid Python UDF input encoder")
+		return encodedRecordBatch{}, moerr.NewInternalErrorNoCtxf("invalid Python UDF input encoder")
 	}
 	if encoder.fixedWidth {
 		record, _, err := encoder.build(int(start), int(remaining))
@@ -1537,7 +1538,7 @@ func chooseInputBatchWithFullCandidate(remaining, maxBytes int64, tryEncode func
 		high = middle - 1
 	}
 	if best == 0 {
-		return encodedRecordBatch{}, fmt.Errorf("%w: one Arrow row exceeds %d bytes", errArrowBatchTooLarge, maxBytes)
+		return encodedRecordBatch{}, errutil.WrapfCauseFirst(errArrowBatchTooLarge, "one Arrow row exceeds %d bytes", maxBytes)
 	}
 	return encodedRecordBatch{Frames: bestFrames, Rows: best}, nil
 }
@@ -1561,17 +1562,17 @@ func (g *Gateway) receiveResultBatch(
 		data, err := stream.Recv()
 		if err != nil {
 			if err == io.EOF {
-				return 0, fmt.Errorf("python udf: exchange ended before result sequence %d", sequenceNumber)
+				return 0, moerr.NewInternalErrorNoCtxf("python udf: exchange ended before result sequence %d", sequenceNumber)
 			}
-			return 0, fmt.Errorf("python udf: receive result: %w", err)
+			return 0, errutil.Wrapf(err, "python udf: receive result")
 		}
 		if data == nil || (len(data.AppMetadata) == 0 && len(data.DataHeader) == 0) {
-			return 0, fmt.Errorf("python udf: empty Flight result")
+			return 0, moerr.NewInternalErrorNoCtxf("python udf: empty Flight result")
 		}
 		if len(data.DataHeader) > 0 {
 			if *schemaFrame == nil {
 				if len(data.DataBody) != 0 {
-					return 0, fmt.Errorf("python udf: result schema contains a body")
+					return 0, moerr.NewInternalErrorNoCtxf("python udf: result schema contains a body")
 				}
 				*schemaFrame = &ArrowFrame{Header: append([]byte(nil), data.DataHeader...)}
 				if len(data.AppMetadata) != 0 {
@@ -1583,17 +1584,17 @@ func (g *Gateway) receiveResultBatch(
 				continue
 			}
 			if !*schemaReady {
-				return 0, fmt.Errorf("python udf: result schema metadata was not received")
+				return 0, moerr.NewInternalErrorNoCtxf("python udf: result schema metadata was not received")
 			}
 			control, err := protocol.UnmarshalControl(data.AppMetadata)
 			if err != nil {
 				return 0, err
 			}
 			if control.Tuple != tuple || control.Kind != "ResultBatch" || control.Sequence != sequenceNumber {
-				return 0, fmt.Errorf("python udf: unexpected result sequence %d", control.Sequence)
+				return 0, moerr.NewInternalErrorNoCtxf("python udf: unexpected result sequence %d", control.Sequence)
 			}
 			if !inputConsumed {
-				return 0, fmt.Errorf("python udf: result sequence %d arrived before InputConsumed", sequenceNumber)
+				return 0, moerr.NewInternalErrorNoCtxf("python udf: result sequence %d arrived before InputConsumed", sequenceNumber)
 			}
 			if err := sequence.AcceptResult(control.Sequence); err != nil {
 				return 0, err
@@ -1612,16 +1613,16 @@ func (g *Gateway) receiveResultBatch(
 			// validation/publication boundary.
 			decoded, err := DecodeRecordBatch(**schemaFrame, ArrowFrame{Header: headerSnapshot.TrustedBytes(), Body: bodySnapshot.TrustedBytes()}, g.cfg.MaxBatchBytes)
 			if err != nil {
-				return 0, fmt.Errorf("python udf: decode result: %w", err)
+				return 0, errutil.Wrapf(err, "python udf: decode result")
 			}
 			decodedRows := decoded.NumRows()
 			if decoded.NumCols() != 1 || decodedRows <= 0 || decodedRows != expectedRows {
 				decoded.Release()
-				return 0, fmt.Errorf("python udf: result batch row count %d, expected %d", decodedRows, expectedRows)
+				return 0, moerr.NewInternalErrorNoCtxf("python udf: result batch row count %d, expected %d", decodedRows, expectedRows)
 			}
 			if decoded.Schema().Field(0).Name != "result" {
 				decoded.Release()
-				return 0, fmt.Errorf("python udf: result field has unexpected name %q", decoded.Schema().Field(0).Name)
+				return 0, moerr.NewInternalErrorNoCtxf("python udf: result field has unexpected name %q", decoded.Schema().Field(0).Name)
 			}
 			if err := returnDescriptor.ValidateField(decoded.Schema().Field(0)); err != nil {
 				decoded.Release()
@@ -1633,7 +1634,7 @@ func (g *Gateway) receiveResultBatch(
 			}
 			if limit := g.cfg.MaxInvocationResultBytes; limit > 0 && result.GetResultVector() != nil && int64(result.GetResultVector().Size()) > limit {
 				decoded.Release()
-				return 0, fmt.Errorf("RESOURCE_EXHAUSTED: Python UDF invocation result exceeds %d bytes", limit)
+				return 0, moerr.NewInternalErrorNoCtxf("RESOURCE_EXHAUSTED: Python UDF invocation result exceeds %d bytes", limit)
 			}
 			decoded.Release()
 			if err := g.action(ctx, client, "AcknowledgeResults", protocol.Control{Kind: "AcknowledgeResults", Tuple: tuple, AckSequence: control.Sequence}); err != nil {
@@ -1645,40 +1646,40 @@ func (g *Gateway) receiveResultBatch(
 			return int(expectedRows), nil
 		}
 		if len(data.DataBody) != 0 {
-			return 0, fmt.Errorf("python udf: control frame contains an Arrow body")
+			return 0, moerr.NewInternalErrorNoCtxf("python udf: control frame contains an Arrow body")
 		}
 		control, err := protocol.UnmarshalControl(data.AppMetadata)
 		if err != nil {
 			return 0, err
 		}
 		if control.Tuple != tuple {
-			return 0, fmt.Errorf("python udf: result tuple changed")
+			return 0, moerr.NewInternalErrorNoCtxf("python udf: result tuple changed")
 		}
 		switch control.Kind {
 		case "ResultSchema":
 			if *schemaFrame == nil || *schemaReady {
-				return 0, fmt.Errorf("python udf: invalid result schema metadata")
+				return 0, moerr.NewInternalErrorNoCtxf("python udf: invalid result schema metadata")
 			}
 			*schemaReady = true
 			continue
 		case "InputConsumed":
 			if control.Sequence != sequenceNumber {
-				return 0, fmt.Errorf("python udf: input sequence %d was consumed while waiting for result %d", control.Sequence, sequenceNumber)
+				return 0, moerr.NewInternalErrorNoCtxf("python udf: input sequence %d was consumed while waiting for result %d", control.Sequence, sequenceNumber)
 			}
 			if control.ReleasedBatches != 1 || control.ReleasedBytes <= 0 || control.ReleasedBytes > g.cfg.MaxBatchBytes {
-				return 0, fmt.Errorf("python udf: input sequence %d released invalid bytes/batches (%d/%d)", sequenceNumber, control.ReleasedBytes, control.ReleasedBatches)
+				return 0, moerr.NewInternalErrorNoCtxf("python udf: input sequence %d released invalid bytes/batches (%d/%d)", sequenceNumber, control.ReleasedBytes, control.ReleasedBatches)
 			}
 			if inputConsumed {
-				return 0, fmt.Errorf("python udf: input sequence %d was consumed more than once", sequenceNumber)
+				return 0, moerr.NewInternalErrorNoCtxf("python udf: input sequence %d was consumed more than once", sequenceNumber)
 			}
 			inputConsumed = true
 			continue
 		case "Error":
-			return 0, fmt.Errorf("python udf: worker error: %s", control.Reason)
+			return 0, moerr.NewInternalErrorNoCtxf("python udf: worker error: %s", control.Reason)
 		case "Finish":
-			return 0, fmt.Errorf("python udf: Finish arrived before result sequence %d", sequenceNumber)
+			return 0, moerr.NewInternalErrorNoCtxf("python udf: Finish arrived before result sequence %d", sequenceNumber)
 		default:
-			return 0, fmt.Errorf("python udf: unexpected control %q", control.Kind)
+			return 0, moerr.NewInternalErrorNoCtxf("python udf: unexpected control %q", control.Kind)
 		}
 	}
 }
@@ -1689,12 +1690,12 @@ func (g *Gateway) receiveResultBatch(
 // header could bypass the body-only limit used by the old result path.
 func freezeResultFrames(header, body []byte, maxBytes int64) (*protocol.OutputSnapshot, *protocol.OutputSnapshot, error) {
 	if maxBytes <= 0 {
-		return nil, nil, fmt.Errorf("invalid Python UDF result batch limit")
+		return nil, nil, moerr.NewInternalErrorNoCtxf("invalid Python UDF result batch limit")
 	}
 	headerBytes := int64(len(header))
 	bodyBytes := int64(len(body))
 	if headerBytes > maxBytes || bodyBytes > maxBytes-headerBytes {
-		return nil, nil, fmt.Errorf("RESOURCE_EXHAUSTED: Arrow result batch exceeds %d bytes", maxBytes)
+		return nil, nil, moerr.NewInternalErrorNoCtxf("RESOURCE_EXHAUSTED: Arrow result batch exceeds %d bytes", maxBytes)
 	}
 	headerSnapshot, err := protocol.FreezeOutput(header, maxBytes)
 	if err != nil {
@@ -1722,10 +1723,10 @@ type executionBudget struct {
 
 func validateInvocationBudget(budget executionBudget) error {
 	if budget.rows < 0 {
-		return fmt.Errorf("python udf: invocation row count is negative")
+		return moerr.NewInternalErrorNoCtxf("python udf: invocation row count is negative")
 	}
 	if budget.maxRows > 0 && budget.rows > budget.maxRows {
-		return fmt.Errorf("RESOURCE_EXHAUSTED: Python UDF invocation has %d rows, limit is %d", budget.rows, budget.maxRows)
+		return moerr.NewInternalErrorNoCtxf("RESOURCE_EXHAUSTED: Python UDF invocation has %d rows, limit is %d", budget.rows, budget.maxRows)
 	}
 	if budget.maxResultBytes <= 0 || budget.rows == 0 {
 		return nil
@@ -1736,11 +1737,11 @@ func validateInvocationBudget(budget executionBudget) error {
 	// each validated append because their area size depends on user values.
 	validityBytes := (budget.rows-1)/8 + 1
 	if validityBytes >= budget.maxResultBytes {
-		return fmt.Errorf("RESOURCE_EXHAUSTED: Python UDF invocation result reservation exceeds %d bytes", budget.maxResultBytes)
+		return moerr.NewInternalErrorNoCtxf("RESOURCE_EXHAUSTED: Python UDF invocation result reservation exceeds %d bytes", budget.maxResultBytes)
 	}
 	perRow := int64(budget.returnType.TypeSize())
 	if perRow > 0 && budget.rows > (budget.maxResultBytes-validityBytes)/perRow {
-		return fmt.Errorf("RESOURCE_EXHAUSTED: Python UDF invocation result reservation exceeds %d bytes", budget.maxResultBytes)
+		return moerr.NewInternalErrorNoCtxf("RESOURCE_EXHAUSTED: Python UDF invocation result reservation exceeds %d bytes", budget.maxResultBytes)
 	}
 	return nil
 }
@@ -1748,7 +1749,7 @@ func validateInvocationBudget(budget executionBudget) error {
 func validateResultSchemaMetadata(metadata []byte, tuple protocol.FencingTuple) error {
 	control, err := protocol.UnmarshalControl(metadata)
 	if err != nil || control.Tuple != tuple || control.Kind != "ResultSchema" {
-		return fmt.Errorf("python udf: invalid result schema metadata")
+		return moerr.NewInternalErrorNoCtxf("python udf: invalid result schema metadata")
 	}
 	return nil
 }
@@ -1765,33 +1766,33 @@ func (g *Gateway) receiveFinish(
 		data, err := stream.Recv()
 		if err != nil {
 			if err == io.EOF {
-				return fmt.Errorf("python udf: exchange ended before Finish")
+				return moerr.NewInternalErrorNoCtxf("python udf: exchange ended before Finish")
 			}
-			return fmt.Errorf("python udf: receive Finish: %w", err)
+			return errutil.Wrapf(err, "python udf: receive Finish")
 		}
 		if data == nil || len(data.DataHeader) > 0 || len(data.DataBody) > 0 {
-			return fmt.Errorf("python udf: unexpected Arrow data while finishing")
+			return moerr.NewInternalErrorNoCtxf("python udf: unexpected Arrow data while finishing")
 		}
 		control, err := protocol.UnmarshalControl(data.AppMetadata)
 		if err != nil {
 			return err
 		}
 		if control.Tuple != tuple {
-			return fmt.Errorf("python udf: Finish tuple changed")
+			return moerr.NewInternalErrorNoCtxf("python udf: Finish tuple changed")
 		}
 		switch control.Kind {
 		case "InputConsumed", "ResultSchema":
-			return fmt.Errorf("python udf: %s arrived after result stream was drained", control.Kind)
+			return moerr.NewInternalErrorNoCtxf("python udf: %s arrived after result stream was drained", control.Kind)
 		case "Error":
-			return fmt.Errorf("python udf: worker error: %s", control.Reason)
+			return moerr.NewInternalErrorNoCtxf("python udf: worker error: %s", control.Reason)
 		case "Finish":
 			lastInput, lastResult, acked, inputEnded := sequence.State()
 			if control.Status != statusOK || control.FinishID == "" || rows != expectedRows ||
 				!inputEnded || control.LastSequence != lastInput || lastResult != lastInput || acked != lastInput || !sequence.ReadyToFinish() {
-				return fmt.Errorf("python udf: invalid Finish status=%q rows=%d", control.Status, rows)
+				return moerr.NewInternalErrorNoCtxf("python udf: invalid Finish status=%q rows=%d", control.Status, rows)
 			}
 			if control.LastResultSequence != lastResult {
-				return fmt.Errorf("python udf: invalid Finish result sequence %d, expected %d", control.LastResultSequence, lastResult)
+				return moerr.NewInternalErrorNoCtxf("python udf: invalid Finish result sequence %d, expected %d", control.LastResultSequence, lastResult)
 			}
 			if err := g.acknowledgeFinish(ctx, client, "AcknowledgeFinish", protocol.Control{Kind: "AcknowledgeFinish", Tuple: tuple, FinishID: control.FinishID}); err != nil {
 				return err
@@ -1804,7 +1805,7 @@ func (g *Gateway) receiveFinish(
 			// has returned and its cleanup owner has completed.
 			return g.waitExchangeEOF(ctx, stream)
 		default:
-			return fmt.Errorf("python udf: unexpected control %q", control.Kind)
+			return moerr.NewInternalErrorNoCtxf("python udf: unexpected control %q", control.Kind)
 		}
 	}
 }
@@ -1816,10 +1817,10 @@ func (g *Gateway) waitExchangeEOF(ctx context.Context, stream flight.FlightServi
 			return nil
 		}
 		if err != nil {
-			return fmt.Errorf("python udf: wait for exchange completion: %w", err)
+			return errutil.Wrapf(err, "python udf: wait for exchange completion")
 		}
 		if data == nil || len(data.DataHeader) != 0 || len(data.DataBody) != 0 || len(data.AppMetadata) != 0 {
-			return fmt.Errorf("python udf: exchange returned data after Finish ACK")
+			return moerr.NewInternalErrorNoCtxf("python udf: exchange returned data after Finish ACK")
 		}
 	}
 }
@@ -1830,19 +1831,19 @@ func (g *Gateway) waitExchangeEOF(ctx context.Context, stream flight.FlightServi
 // between an accepted terminal result and a locally unconfirmed Finish.
 func (g *Gateway) acknowledgeFinish(ctx context.Context, client flight.FlightServiceClient, kind string, finish protocol.Control) error {
 	if client == nil {
-		return fmt.Errorf("FINISH_UNCONFIRMED: finish ACK client is unavailable")
+		return moerr.NewInternalErrorNoCtxf("FINISH_UNCONFIRMED: finish ACK client is unavailable")
 	}
 	firstErr := g.action(ctx, client, kind, finish)
 	if firstErr == nil {
 		return nil
 	}
 	if ctx != nil && ctx.Err() != nil {
-		return fmt.Errorf("FINISH_UNCONFIRMED: finish ACK budget expired: %w", firstErr)
+		return errutil.Wrapf(firstErr, "FINISH_UNCONFIRMED: finish ACK budget expired")
 	}
 	if retryErr := g.action(ctx, client, kind, finish); retryErr == nil {
 		return nil
 	} else {
-		return fmt.Errorf("FINISH_UNCONFIRMED: finish ACK was not confirmed after idempotent retry: %v; retry: %w", firstErr, retryErr)
+		return errutil.Wrapf(retryErr, "FINISH_UNCONFIRMED: finish ACK was not confirmed after idempotent retry: %v; retry", firstErr)
 	}
 }
 
@@ -1851,7 +1852,7 @@ func validateInvocation(invocation *udf.Invocation) error {
 		return err
 	}
 	if invocation.Source == "" {
-		return fmt.Errorf("python udf: handler and source are required")
+		return moerr.NewInternalErrorNoCtxf("python udf: handler and source are required")
 	}
 	// ArtifactResolver is an execution boundary, so the Gateway must enforce
 	// the same immutable source contract even when a custom resolver does not
@@ -1859,13 +1860,13 @@ func validateInvocation(invocation *udf.Invocation) error {
 	// otherwise an oversized or invalid source can consume a large temporary
 	// allocation and only fail at the Flight control-size boundary.
 	if !utf8.ValidString(invocation.Source) {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python artifact source is not valid UTF-8")
+		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python artifact source is not valid UTF-8")
 	}
 	if int64(len([]byte(invocation.Source))) > DefaultMaxArtifactBytes {
-		return fmt.Errorf("RESOURCE_EXHAUSTED: Python artifact exceeds %d bytes", DefaultMaxArtifactBytes)
+		return moerr.NewInternalErrorNoCtxf("RESOURCE_EXHAUSTED: Python artifact exceeds %d bytes", DefaultMaxArtifactBytes)
 	}
 	if invocation.ArtifactDigest != udf.PythonInlineArtifactDigest(invocation.Handler, invocation.Source) {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python artifact digest does not match the immutable source")
+		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python artifact digest does not match the immutable source")
 	}
 	return nil
 }
@@ -1877,80 +1878,80 @@ func validateInvocation(invocation *udf.Invocation) error {
 // be valid.
 func validateInvocationHeader(invocation *udf.Invocation) error {
 	if invocation == nil {
-		return fmt.Errorf("python udf: nil invocation")
+		return moerr.NewInternalErrorNoCtxf("python udf: nil invocation")
 	}
 	if invocation.Language != udf.LanguagePython {
-		return fmt.Errorf("python udf: unsupported language %q", invocation.Language)
+		return moerr.NewInternalErrorNoCtxf("python udf: unsupported language %q", invocation.Language)
 	}
 	if invocation.Handler == "" {
-		return fmt.Errorf("python udf: handler is required")
+		return moerr.NewInternalErrorNoCtxf("python udf: handler is required")
 	}
 	if strings.Contains(invocation.Handler, ":") {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python external handler import requires an immutable artifact catalog")
+		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python external handler import requires an immutable artifact catalog")
 	}
 	if invocation.Length < 0 || len(invocation.Args) != len(invocation.Inputs) {
-		return fmt.Errorf("python udf: invalid input shape")
+		return moerr.NewInternalErrorNoCtxf("python udf: invalid input shape")
 	}
 	if invocation.Mode != ModeScalar && invocation.Mode != ModeVector {
-		return fmt.Errorf("python udf: unsupported mode %q", invocation.Mode)
+		return moerr.NewInternalErrorNoCtxf("python udf: unsupported mode %q", invocation.Mode)
 	}
 	if invocation.CallsiteID == "" || len(invocation.CallsiteID) > 256 || strings.ContainsAny(invocation.CallsiteID, "\r\n") {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python invocation has no valid callsite id")
+		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python invocation has no valid callsite id")
 	}
 	if !invocation.MayError || invocation.SecurityMode != "INVOKER" || invocation.Leakproof {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python invocation semantic contract is not supported")
+		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python invocation semantic contract is not supported")
 	}
 	if invocation.StatementContext == nil {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python invocation has no statement context")
+		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python invocation has no statement context")
 	}
 	if err := invocation.StatementContext.Validate(); err != nil {
 		return err
 	}
 	if invocation.SecurityFrame == nil {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python invocation has no security frame")
+		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python invocation has no security frame")
 	}
 	if err := invocation.SecurityFrame.Validate(); err != nil {
 		return err
 	}
 	if invocation.SecurityFrame.Mode != invocation.SecurityMode {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python invocation security mode does not match its frame")
+		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python invocation security mode does not match its frame")
 	}
 	if invocation.NullPolicy != NullCallHandler && invocation.NullPolicy != NullReturnNull {
-		return fmt.Errorf("python udf: unsupported NULL policy %q", invocation.NullPolicy)
+		return moerr.NewInternalErrorNoCtxf("python udf: unsupported NULL policy %q", invocation.NullPolicy)
 	}
 	if invocation.ABIContract != udf.PythonABIContract || invocation.AdapterVersion != udf.PythonAdapterVersion {
-		return fmt.Errorf("python udf: unsupported Python ABI contract %q/%q", invocation.ABIContract, invocation.AdapterVersion)
+		return moerr.NewInternalErrorNoCtxf("python udf: unsupported Python ABI contract %q/%q", invocation.ABIContract, invocation.AdapterVersion)
 	}
 	if invocation.SDKVersion != udf.PythonSDKVersion {
-		return fmt.Errorf("python udf: unsupported Python SDK %q", invocation.SDKVersion)
+		return moerr.NewInternalErrorNoCtxf("python udf: unsupported Python SDK %q", invocation.SDKVersion)
 	}
 	if invocation.DefinitionSchemaVersion != udf.PythonDefinitionSchemaVersion {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: unsupported Python definition schema %d", invocation.DefinitionSchemaVersion)
+		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: unsupported Python definition schema %d", invocation.DefinitionSchemaVersion)
 	}
 	if !udf.IsSHA256Digest(invocation.ArtifactDigest) {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python artifact digest does not match the immutable source")
+		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python artifact digest does not match the immutable source")
 	}
 	environmentDigest, err := udf.PythonEnvironmentDigest()
 	if err != nil {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python environment digest is unavailable: %w", err)
+		return errutil.Wrapf(err, "UNSUPPORTED_ROUTINE_VERSION: Python environment digest is unavailable")
 	}
 	if invocation.EnvironmentDigest != environmentDigest {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python environment digest does not match the current worker contract")
+		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python environment digest does not match the current worker contract")
 	}
 	if !udf.IsSHA256Digest(invocation.DefinitionFingerprint) {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python definition fingerprint is invalid")
+		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python definition fingerprint is invalid")
 	}
 	args := make([]TypeDescriptor, len(invocation.Args))
 	for index, typ := range invocation.Args {
 		descriptor, err := NewTypeDescriptor(typ)
 		if err != nil {
-			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python argument descriptor %d: %w", index, err)
+			return errutil.Wrapf(err, "UNSUPPORTED_ROUTINE_VERSION: Python argument descriptor %d", index)
 		}
 		args[index] = descriptor
 	}
 	returnDescriptor, err := NewTypeDescriptor(invocation.ReturnType)
 	if err != nil {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python return descriptor: %w", err)
+		return errutil.Wrapf(err, "UNSUPPORTED_ROUTINE_VERSION: Python return descriptor")
 	}
 	if err := validateInvocationInputs(invocation, args); err != nil {
 		return err
@@ -1963,23 +1964,23 @@ func validateInvocationHeader(invocation *udf.Invocation) error {
 		args, returnDescriptor,
 	)
 	if err != nil {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python definition fingerprint cannot be computed: %w", err)
+		return errutil.Wrapf(err, "UNSUPPORTED_ROUTINE_VERSION: Python definition fingerprint cannot be computed")
 	}
 	if invocation.DefinitionFingerprint != expectedFingerprint {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python definition fingerprint does not match the typed definition")
+		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python definition fingerprint does not match the typed definition")
 	}
 	if err := invocation.FunctionRef.Validate(); err != nil {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: %w", err)
+		return errutil.Wrapf(err, "UNSUPPORTED_ROUTINE_VERSION")
 	}
 	if invocation.FunctionRef.AccountID != invocation.Tuple.AccountID {
-		return fmt.Errorf("python udf: FunctionRef account does not match the fencing tuple")
+		return moerr.NewInternalErrorNoCtxf("python udf: FunctionRef account does not match the fencing tuple")
 	}
 	return invocation.Tuple.Validate()
 }
 
 func validateInvocationInputs(invocation *udf.Invocation, args []TypeDescriptor) error {
 	if invocation == nil || len(invocation.Inputs) != len(args) {
-		return fmt.Errorf("python udf: invalid input shape")
+		return moerr.NewInternalErrorNoCtxf("python udf: invalid input shape")
 	}
 	// An empty physical selection has no input backing to inspect.  Nil inputs
 	// are valid in this case, but a vector supplied by a caller still has to
@@ -1991,33 +1992,20 @@ func validateInvocationInputs(invocation *udf.Invocation, args []TypeDescriptor)
 				continue
 			}
 			if input.GetType() == nil || !input.GetType().Eq(invocation.Args[index]) {
-				return fmt.Errorf(
-					"python udf: input column %d type does not match the frozen argument type",
-					index,
-				)
+				return moerr.NewInternalErrorNoCtxf("python udf: input column %d type does not match the frozen argument type", index)
 			}
 		}
 		return nil
 	}
 	for index, input := range invocation.Inputs {
 		if input == nil || input.GetType() == nil || input.Length() == 0 {
-			return fmt.Errorf("python udf: input column %d has no backing vector", index)
+			return moerr.NewInternalErrorNoCtxf("python udf: input column %d has no backing vector", index)
 		}
 		if !input.GetType().Eq(invocation.Args[index]) {
-			return fmt.Errorf(
-				"python udf: input column %d type %s does not match the frozen argument type %s",
-				index,
-				input.GetType().DescString(),
-				invocation.Args[index].DescString(),
-			)
+			return moerr.NewInternalErrorNoCtxf("python udf: input column %d type %s does not match the frozen argument type %s", index, input.GetType().DescString(), invocation.Args[index].DescString())
 		}
 		if !input.IsConst() && input.Length() < invocation.Length {
-			return fmt.Errorf(
-				"python udf: input column %d has %d rows, expected at least %d",
-				index,
-				input.Length(),
-				invocation.Length,
-			)
+			return moerr.NewInternalErrorNoCtxf("python udf: input column %d has %d rows, expected at least %d", index, input.Length(), invocation.Length)
 		}
 	}
 	return nil
@@ -2032,14 +2020,14 @@ func (g *Gateway) action(ctx context.Context, client flight.FlightServiceClient,
 	defer cancel()
 	stream, err := client.DoAction(actionCtx, &flight.Action{Type: kind, Body: body})
 	if err != nil {
-		return fmt.Errorf("python udf: %s: %w", kind, err)
+		return errutil.Wrapf(err, "python udf: %s", kind)
 	}
 	result, err := stream.Recv()
 	if err != nil {
 		return err
 	}
 	if result == nil {
-		return fmt.Errorf("python udf: empty %s response", kind)
+		return moerr.NewInternalErrorNoCtxf("python udf: empty %s response", kind)
 	}
 	ack, err := protocol.UnmarshalControl(result.Body)
 	if err != nil {
@@ -2049,11 +2037,11 @@ func (g *Gateway) action(ctx context.Context, client flight.FlightServiceClient,
 		return err
 	}
 	if ack.Status != statusOK {
-		return fmt.Errorf("python udf: %s rejected: %s", kind, ack.Reason)
+		return moerr.NewInternalErrorNoCtxf("python udf: %s rejected: %s", kind, ack.Reason)
 	}
 	if _, err := stream.Recv(); err != io.EOF {
 		if err == nil {
-			return fmt.Errorf("python udf: %s returned multiple results", kind)
+			return moerr.NewInternalErrorNoCtxf("python udf: %s returned multiple results", kind)
 		}
 		return err
 	}
@@ -2062,19 +2050,19 @@ func (g *Gateway) action(ctx context.Context, client flight.FlightServiceClient,
 
 func validateActionAck(kind string, request, ack protocol.Control) error {
 	if ack.Tuple != request.Tuple || ack.Kind != "Ack" {
-		return fmt.Errorf("python udf: %s returned an invalid ACK", kind)
+		return moerr.NewInternalErrorNoCtxf("python udf: %s returned an invalid ACK", kind)
 	}
 	switch kind {
 	case "AcknowledgeResults":
 		if ack.AckSequence != request.AckSequence {
-			return fmt.Errorf("python udf: %s ACK sequence %d, expected %d", kind, ack.AckSequence, request.AckSequence)
+			return moerr.NewInternalErrorNoCtxf("python udf: %s ACK sequence %d, expected %d", kind, ack.AckSequence, request.AckSequence)
 		}
 	case "AcknowledgeFinish":
 		if ack.FinishID != request.FinishID {
-			return fmt.Errorf("python udf: %s ACK finish ID does not match the request", kind)
+			return moerr.NewInternalErrorNoCtxf("python udf: %s ACK finish ID does not match the request", kind)
 		}
 	default:
-		return fmt.Errorf("python udf: unsupported action %q", kind)
+		return moerr.NewInternalErrorNoCtxf("python udf: unsupported action %q", kind)
 	}
 	return nil
 }

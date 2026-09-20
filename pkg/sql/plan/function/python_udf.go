@@ -15,7 +15,8 @@
 package function
 
 import (
-	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"strconv"
 
 	"github.com/google/uuid"
@@ -175,42 +176,42 @@ func pythonUdfRetType(parameters []types.Type) types.Type {
 // historical overload id. Long-term execution enters through the typed
 // RoutineCall field and ExternalRoutineEval.
 func rejectPythonJSONPlan(_ []*vector.Vector, _ vector.FunctionResultWrapper, _ *process.Process, _ int, _ *FunctionSelectList) error {
-	return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python JSON plan execution is not supported; reprepare the statement")
+	return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python JSON plan execution is not supported; reprepare the statement")
 }
 
 func validatePythonRoutineDescriptor(descriptor *vector.Vector) error {
 	if descriptor == nil {
-		return fmt.Errorf("python udf: missing routine descriptor")
+		return moerr.NewInternalErrorNoCtxf("python udf: missing routine descriptor")
 	}
 	if !descriptor.IsConst() {
-		return fmt.Errorf("python udf: routine descriptor must be constant")
+		return moerr.NewInternalErrorNoCtxf("python udf: routine descriptor must be constant")
 	}
 	if descriptor.Length() == 0 {
-		return fmt.Errorf("python udf: routine descriptor is empty")
+		return moerr.NewInternalErrorNoCtxf("python udf: routine descriptor is empty")
 	}
 	return nil
 }
 
 func validatePythonInputVectors(inputs []*vector.Vector, args []types.Type, length int) error {
 	if len(inputs) != len(args) {
-		return fmt.Errorf("python udf: input column count %d does not match routine argument count %d", len(inputs), len(args))
+		return moerr.NewInternalErrorNoCtxf("python udf: input column count %d does not match routine argument count %d", len(inputs), len(args))
 	}
 	for index, input := range inputs {
 		if input == nil {
-			return fmt.Errorf("python udf: input vector %d is nil", index)
+			return moerr.NewInternalErrorNoCtxf("python udf: input vector %d is nil", index)
 		}
 		if input.Length() == 0 {
-			return fmt.Errorf("python udf: input vector %d is empty", index)
+			return moerr.NewInternalErrorNoCtxf("python udf: input vector %d is empty", index)
 		}
 		if !input.IsConst() && input.Length() < length {
-			return fmt.Errorf("python udf: input vector %d is shorter than invocation length", index)
+			return moerr.NewInternalErrorNoCtxf("python udf: input vector %d is shorter than invocation length", index)
 		}
 		if input.GetType() == nil || !pythonTypesEqual(*input.GetType(), args[index]) {
 			actual := "<nil>"
 			if input.GetType() != nil {
 				actual = input.GetType().String()
 			}
-			return fmt.Errorf("python udf: input vector %d type %s does not match %s", index, actual, args[index].String())
+			return moerr.NewInternalErrorNoCtxf("python udf: input vector %d type %s does not match %s", index, actual, args[index].String())
 		}
 	}
 	return nil
@@ -233,13 +234,13 @@ func invocationTuple(context map[string]string, queryID string, accountID uint32
 	if statementID == "" {
 		id, err := uuid.NewV7()
 		if err != nil {
-			return protocol.FencingTuple{}, fmt.Errorf("python udf: create statement fence: %w", err)
+			return protocol.FencingTuple{}, errutil.Wrapf(err, "python udf: create statement fence")
 		}
 		statementID = id.String()
 	}
 	invocationID, err := uuid.NewV7()
 	if err != nil {
-		return protocol.FencingTuple{}, fmt.Errorf("python udf: create invocation fence: %w", err)
+		return protocol.FencingTuple{}, errutil.Wrapf(err, "python udf: create invocation fence")
 	}
 	groupID := context["group_id"]
 	if groupID == "" {
@@ -249,7 +250,7 @@ func invocationTuple(context map[string]string, queryID string, accountID uint32
 		// explicit epoch when it is introduced.
 		groupID = statementID + "/python/" + invocationID.String()
 	} else if context["group_epoch"] == "" {
-		return protocol.FencingTuple{}, fmt.Errorf("python udf: explicit group_id requires group_epoch")
+		return protocol.FencingTuple{}, moerr.NewInternalErrorNoCtxf("python udf: explicit group_id requires group_epoch")
 	}
 	groupEpoch, err := positiveContextUint(context, "group_epoch", 1)
 	if err != nil {
@@ -283,7 +284,7 @@ func positiveContextUint(context map[string]string, key string, fallback uint64)
 	}
 	parsed, err := strconv.ParseUint(value, 10, 64)
 	if err != nil || parsed == 0 {
-		return 0, fmt.Errorf("python udf: invalid %s %q", key, value)
+		return 0, moerr.NewInternalErrorNoCtxf("python udf: invalid %s %q", key, value)
 	}
 	return parsed, nil
 }

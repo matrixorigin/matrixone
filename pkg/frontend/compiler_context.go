@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"slices"
 	"strconv"
 	"strings"
@@ -844,7 +845,7 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 		return nil, err
 	}
 	if len(erArray) > 1 || (len(erArray) == 1 && erArray[0] == nil) {
-		return nil, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: UDF %s lookup returned %d result sets, expected one or an empty candidate result", name, len(erArray))
+		return nil, moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: UDF %s lookup returned %d result sets, expected one or an empty candidate result", name, len(erArray))
 	}
 
 	if execResultArrayHasData(erArray) {
@@ -1013,7 +1014,7 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 			if strings.EqualFold(matchedList[0].Udf.Language, string(tree.PYTHON)) {
 				matchedList[0].Udf.ArgsType = function.PythonUdfArgTypeCast(fromList, matchedList[0].Udf.GetArgsType())
 				if len(matchedList[0].Udf.ArgsType) != len(fromList) {
-					return nil, fmt.Errorf("python udf: argument descriptor count changed during resolution")
+					return nil, moerr.NewInternalErrorNoCtxf("python udf: argument descriptor count changed during resolution")
 				}
 			} else {
 				matchedList[0].Udf.ArgsType = function.UdfArgTypeCast(fromList, matchedList[0].TypeList)
@@ -1026,7 +1027,7 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 				accountID = routineCatalogAccountID(accountID, tcc.GetSnapshot())
 				databaseID, databaseErr := routineCatalogDatabaseID(queryCtx, bh, matchedList[0].Udf.Db, accountID, tcc.GetSnapshot())
 				if databaseErr != nil {
-					return nil, fmt.Errorf("python routine database identity: %w", databaseErr)
+					return nil, errutil.Wrapf(databaseErr, "python routine database identity")
 				}
 				matchedList[0].Udf.AccountID = uint64(accountID)
 				matchedList[0].Udf.DatabaseID = databaseID
@@ -1036,7 +1037,7 @@ func (tcc *TxnCompilerContext) ResolveUdf(name string, args []*plan.Expr) (udf *
 				}
 				matchedList[0].Udf.NamespaceFingerprint = namespaces[uint64(matchedList[0].Udf.FunctionID)]
 				if namespaceErr == nil && matchedList[0].Udf.NamespaceFingerprint == "" {
-					return nil, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: missing routine namespace")
+					return nil, moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: missing routine namespace")
 				}
 
 			}
@@ -1083,7 +1084,7 @@ func udfCatalogLookup(
 // catalog corruption from the planner/cache validator.
 func exactlyOneCatalogResultSet(ctx context.Context, rows []ExecResult, label string) (ExecResult, error) {
 	if len(rows) != 1 || rows[0] == nil {
-		return nil, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: %s returned %d result sets, expected exactly one", label, len(rows))
+		return nil, moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: %s returned %d result sets, expected exactly one", label, len(rows))
 	}
 	return rows[0], nil
 }
@@ -1111,7 +1112,7 @@ func exactlyOneCatalogRow(ctx context.Context, rows []ExecResult, label string) 
 	}
 	rowCount := result.GetRowCount()
 	if rowCount != 1 {
-		return nil, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: %s returned %d rows, expected exactly one", label, rowCount)
+		return nil, moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: %s returned %d rows, expected exactly one", label, rowCount)
 	}
 	return result, nil
 }
@@ -1182,7 +1183,7 @@ func readSQLRevision(
 		if isMissingCatalogObjectError(err) {
 			return sqlRevisionCatalogRow{}, false, nil
 		}
-		return sqlRevisionCatalogRow{}, false, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: SQL function %d revision head is unavailable: %w", functionID, err)
+		return sqlRevisionCatalogRow{}, false, errutil.Wrapf(err, "UNSUPPORTED_ROUTINE_VERSION: SQL function %d revision head is unavailable", functionID)
 	}
 	rows, err := getResultSet(ctx, bh)
 	if err != nil {
@@ -1208,7 +1209,7 @@ func readSQLRevision(
 		return sqlRevisionCatalogRow{}, false, nil
 	}
 	if activeRevision <= 0 || namespaceVersion <= 0 {
-		return sqlRevisionCatalogRow{}, false, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: SQL function %d has an invalid revision head", functionID)
+		return sqlRevisionCatalogRow{}, false, moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: SQL function %d has an invalid revision head", functionID)
 	}
 
 	bh.ClearExecResultSet()
@@ -1219,9 +1220,9 @@ func readSQLRevision(
 		revisionTable, functionID, activeRevision, namespaceVersion,
 	)); err != nil {
 		if isMissingCatalogObjectError(err) {
-			return sqlRevisionCatalogRow{}, false, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: SQL function %d revision table is unavailable: %w", functionID, err)
+			return sqlRevisionCatalogRow{}, false, errutil.Wrapf(err, "UNSUPPORTED_ROUTINE_VERSION: SQL function %d revision table is unavailable", functionID)
 		}
-		return sqlRevisionCatalogRow{}, false, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: SQL function %d revision is unavailable: %w", functionID, err)
+		return sqlRevisionCatalogRow{}, false, errutil.Wrapf(err, "UNSUPPORTED_ROUTINE_VERSION: SQL function %d revision is unavailable", functionID)
 	}
 	rows, err = getResultSet(ctx, bh)
 	if err != nil {
@@ -1282,15 +1283,15 @@ func readSQLRevision(
 		volatility != "VOLATILE" || nullPolicy != udf.NullCallHandler ||
 		!strings.EqualFold(securityType, "DEFINER") ||
 		!strings.EqualFold(baseSecurityType, securityType) {
-		return sqlRevisionCatalogRow{}, false, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: SQL function %d revision contract is not supported", functionID)
+		return sqlRevisionCatalogRow{}, false, moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: SQL function %d revision contract is not supported", functionID)
 	}
 	logicalArgTypes, err := userDefinedFunctionArgumentTypesFromJSON(args)
 	if err != nil || logicalArgTypes != argTypes {
-		return sqlRevisionCatalogRow{}, false, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: SQL function %d revision argument metadata is invalid", functionID)
+		return sqlRevisionCatalogRow{}, false, moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: SQL function %d revision argument metadata is invalid", functionID)
 	}
 	expectedFingerprint, err := function.SQLRoutineFingerprint(body, argTypes, retType)
 	if err != nil || fingerprint == "" || fingerprint != expectedFingerprint {
-		return sqlRevisionCatalogRow{}, false, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: SQL function %d revision fingerprint mismatch", functionID)
+		return sqlRevisionCatalogRow{}, false, moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: SQL function %d revision fingerprint mismatch", functionID)
 	}
 	return sqlRevisionCatalogRow{
 		Args: args, ArgTypes: argTypes, Body: body, Language: language, RetType: retType,
@@ -1304,7 +1305,7 @@ func readPythonRevision(ctx context.Context, bh BackgroundExec, functionID int64
 	bh.ClearExecResultSet()
 	query := pythonRevisionCatalogSQL(snapshot, functionID)
 	if err := bh.Exec(ctx, query); err != nil {
-		return pythonRevisionCatalogRow{}, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python catalog revision is unavailable: %w", err)
+		return pythonRevisionCatalogRow{}, errutil.Wrapf(err, "UNSUPPORTED_ROUTINE_VERSION: Python catalog revision is unavailable")
 	}
 	rows, err := getResultSet(ctx, bh)
 	if err != nil {
@@ -1327,7 +1328,7 @@ func readPythonRevision(ctx context.Context, bh BackgroundExec, functionID int64
 		return pythonRevisionCatalogRow{}, err
 	}
 	if activeRevision <= 0 || namespaceVersion <= 0 || revision != activeRevision {
-		return pythonRevisionCatalogRow{}, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python function %d has an invalid revision head", functionID)
+		return pythonRevisionCatalogRow{}, moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python function %d has an invalid revision head", functionID)
 	}
 	getString := func(column uint64) (string, error) { return row.GetString(ctx, 0, column) }
 	canonicalInput, err := getString(3)
@@ -1411,32 +1412,32 @@ func readPythonRevision(ctx context.Context, bh BackgroundExec, functionID int64
 		return pythonRevisionCatalogRow{}, err
 	}
 	if language != string(tree.PYTHON) || definitionSchema != udf.PythonDefinitionSchemaVersion || abi != udf.PythonABIContract || adapter != udf.PythonAdapterVersion || sdk != udf.PythonSDKVersion || volatility != "VOLATILE" || !strings.EqualFold(securityType, "INVOKER") || !strings.EqualFold(baseSecurityType, securityType) {
-		return pythonRevisionCatalogRow{}, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python function %d revision contract is not supported", functionID)
+		return pythonRevisionCatalogRow{}, moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python function %d revision contract is not supported", functionID)
 	}
 	bodyDefinition, err := function.DecodePythonRoutineBody(body)
 	if err != nil {
-		return pythonRevisionCatalogRow{}, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python function %d revision body is invalid: %w", functionID, err)
+		return pythonRevisionCatalogRow{}, errutil.Wrapf(err, "UNSUPPORTED_ROUTINE_VERSION: Python function %d revision body is invalid", functionID)
 	}
 	if bodyDefinition.ABIContract != abi || bodyDefinition.AdapterVersion != adapter || bodyDefinition.SDKVersion != sdk || bodyDefinition.NullPolicy != nullPolicy || bodyDefinition.ArtifactDigest != artifact || bodyDefinition.EnvironmentDigest != environment {
-		return pythonRevisionCatalogRow{}, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python function %d revision metadata does not match its definition", functionID)
+		return pythonRevisionCatalogRow{}, moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python function %d revision metadata does not match its definition", functionID)
 	}
 	actualFingerprint, err := function.PythonRoutineFingerprint(body)
 	if err != nil {
-		return pythonRevisionCatalogRow{}, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python function %d revision fingerprint cannot be computed: %w", functionID, err)
+		return pythonRevisionCatalogRow{}, errutil.Wrapf(err, "UNSUPPORTED_ROUTINE_VERSION: Python function %d revision fingerprint cannot be computed", functionID)
 	}
 	if fingerprint == "" || fingerprint != actualFingerprint {
-		return pythonRevisionCatalogRow{}, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python function %d revision fingerprint mismatch", functionID)
+		return pythonRevisionCatalogRow{}, moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python function %d revision fingerprint mismatch", functionID)
 	}
 	expectedInput, expectedReturn, expectedSignature, err := function.PythonSignatureMetadata(bodyDefinition.ArgTypes, bodyDefinition.ReturnType)
 	if err != nil {
-		return pythonRevisionCatalogRow{}, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python function %d signature cannot be computed: %w", functionID, err)
+		return pythonRevisionCatalogRow{}, errutil.Wrapf(err, "UNSUPPORTED_ROUTINE_VERSION: Python function %d signature cannot be computed", functionID)
 	}
 	if signatureKeySchemaVersion != udf.PythonSignatureKeySchemaVersion ||
 		canonicalInput != expectedInput || returnDescriptor != expectedReturn || signatureFingerprint != expectedSignature {
-		return pythonRevisionCatalogRow{}, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python function %d identity descriptor metadata mismatch", functionID)
+		return pythonRevisionCatalogRow{}, moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python function %d identity descriptor metadata mismatch", functionID)
 	}
 	if argTypes != expectedInput {
-		return pythonRevisionCatalogRow{}, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python function %d revision argument descriptor mismatch", functionID)
+		return pythonRevisionCatalogRow{}, moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python function %d revision argument descriptor mismatch", functionID)
 	}
 	return pythonRevisionCatalogRow{
 		Args: args, ArgTypes: argTypes, Body: body, Language: language, RetType: retType,

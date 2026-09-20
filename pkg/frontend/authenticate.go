@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"io"
 	"math"
 	"math/bits"
@@ -12488,7 +12489,7 @@ func readPythonRevisionBody(ctx context.Context, bh BackgroundExec, functionID i
 		"select body from mo_catalog.mo_function_revisions where function_id = %d and revision = %d and namespace_version = %d;",
 		functionID, revision, namespace,
 	)); err != nil {
-		return "", fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python revision %d is unavailable: %w", revision, err)
+		return "", errutil.Wrapf(err, "UNSUPPORTED_ROUTINE_VERSION: Python revision %d is unavailable", revision)
 	}
 	rows, err := getResultSet(ctx, bh)
 	if err != nil {
