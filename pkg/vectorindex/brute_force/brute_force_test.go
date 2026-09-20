@@ -318,6 +318,7 @@ func TestUsearchBruteForceCosineBoundaryUsesScalarContract(t *testing.T) {
 		}
 		idx, err := NewUsearchBruteForceIndex[float32](dataset, dim, metric.Metric_CosineDistance, elemsz)
 		require.NoError(t, err)
+		defer idx.(*UsearchBruteForceIndex[float32]).Destroy()
 
 		keysAny, got, err := idx.Search(sqlproc, queries, vectorindex.RuntimeConfig{Limit: 3, NThreads: 1})
 		require.NoError(t, err)
@@ -347,6 +348,7 @@ func TestUsearchBruteForceCosineBoundaryUsesScalarContract(t *testing.T) {
 		query := [][]float32{{1, 0, 0}}
 		idx, err := NewUsearchBruteForceIndex[float32](dataset, dim, metric.Metric_CosineDistance, elemsz)
 		require.NoError(t, err)
+		defer idx.(*UsearchBruteForceIndex[float32]).Destroy()
 
 		keysAny, got, err := idx.Search(sqlproc, query, vectorindex.RuntimeConfig{Limit: 2, NThreads: 2})
 		require.NoError(t, err)
@@ -375,6 +377,7 @@ func TestUsearchBruteForceCosineBoundaryUsesScalarContract(t *testing.T) {
 		queries := [][]float64{{1e-150, 1e-150, 1e-150}}
 		idx, err := NewUsearchBruteForceIndex[float64](dataset, dim, metric.Metric_CosineDistance, elemsz)
 		require.NoError(t, err)
+		defer idx.(*UsearchBruteForceIndex[float64]).Destroy()
 
 		keysAny, got, err := idx.Search(sqlproc, queries, vectorindex.RuntimeConfig{Limit: 3, NThreads: 1})
 		require.NoError(t, err)
