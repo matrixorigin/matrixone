@@ -1150,7 +1150,7 @@ col1new    col2
 show columns from primary01;
 Field    Type    Null    Key    Default    Extra    Comment
 col1New    FLOAT(0)    NO    PRI    null        
-col2    TEXT(0)    YES        null        
+col2    TEXT    YES        null        
 update primary01 set col2 = 'whuihedjwqncew' where col1 = 1;
 invalid input: column col1 does not exist
 update primary01 set col2 = 'whuihedjwqncew' where col1New = 1;

@@ -482,7 +482,7 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 					ret = "MEDIUMTEXT"
 				case types.MaxLongTextLen:
 					ret = "LONGTEXT"
-				case types.MaxStringSize:
+				case 0, types.MaxStringSize:
 					ret = "TEXT"
 				default:
 					ret = fmt.Sprintf("%s(%d)", ts, typ.Width)

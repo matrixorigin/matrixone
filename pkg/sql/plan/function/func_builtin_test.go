@@ -1229,6 +1229,8 @@ func Test_BuiltIn_MoShowVisibleBinTextFamilyWithLen(t *testing.T) {
 		typ  types.Type
 		want string
 	}{
+		{name: "legacy text", typ: types.New(types.T_text, 0, 0), want: "TEXT"},
+		{name: "text", typ: types.New(types.T_text, types.MaxStringSize, 0), want: "TEXT"},
 		{name: "tinytext", typ: types.New(types.T_text, types.MaxTinyTextLen, 0), want: "TINYTEXT"},
 		{name: "mediumtext", typ: types.New(types.T_text, types.MaxMediumTextLen, 0), want: "MEDIUMTEXT"},
 		{name: "longtext", typ: types.New(types.T_text, types.MaxLongTextLen, 0), want: "LONGTEXT"},

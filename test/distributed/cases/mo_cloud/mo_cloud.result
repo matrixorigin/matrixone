@@ -184,7 +184,7 @@ max_updates  ¦  INT UNSIGNED(32)  ¦  null  ¦  null  𝄀
 max_connections  ¦  INT UNSIGNED(32)  ¦  null  ¦  null  𝄀
 max_user_connections  ¦  INT UNSIGNED(32)  ¦  null  ¦  null  𝄀
 plugin  ¦  CHAR(64)  ¦  null  ¦  null  𝄀
-authentication_string  ¦  TEXT(0)  ¦  null  ¦  null  𝄀
+authentication_string  ¦  TEXT  ¦  null  ¦  null  𝄀
 password_expired  ¦  VARCHAR(10)  ¦  null  ¦  null  𝄀
 password_last_changed  ¦  TIMESTAMP(0)  ¦  null  ¦  null  𝄀
 password_lifetime  ¦  SMALLINT UNSIGNED(16)  ¦  null  ¦  null  𝄀
@@ -668,7 +668,7 @@ max_updates  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
 max_connections  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
 max_user_connections  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
 plugin  ¦  CHAR(64)  ¦  NO  ¦    ¦  caching_sha2_password  ¦    ¦    𝄀
-authentication_string  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+authentication_string  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 password_expired  ¦  VARCHAR(10)  ¦  NO  ¦    ¦  N  ¦    ¦    𝄀
 password_last_changed  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 password_lifetime  ¦  SMALLINT UNSIGNED(16)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀

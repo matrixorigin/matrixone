@@ -192,7 +192,7 @@ desc table06;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 col10  ¦  BINARY(1)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col2  ¦  CHAR(1)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-col4  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col4  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col6  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col8  ¦  FLOAT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col9  ¦  DOUBLE(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
@@ -1067,7 +1067,7 @@ col3  ¦  DECIMAL(10,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 newcolumn  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col5  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col6  ¦  ENUM('apple','banana','orange')  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-col7  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col7  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col8  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col9  ¦  BLOB  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col10  ¦  CHAR(1)  ¦  YES  ¦    ¦  null  ¦    ¦  

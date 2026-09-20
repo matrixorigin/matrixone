@@ -946,7 +946,7 @@ func TestJSONBlobAssignmentWidthWarning(t *testing.T) {
 		}
 		got, null := vector.GenerateFunctionStrParameter(result.GetResultVector()).GetStrValue(0)
 		require.False(t, null)
-		return got, session, nil
+		return bytes.Clone(got), session, nil
 	}
 
 	_, _, err := run(t, "STRICT_TRANS_TABLES", NewAssignCast)
