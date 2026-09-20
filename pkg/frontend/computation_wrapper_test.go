@@ -1510,6 +1510,104 @@ func TestInitExecuteStmtParamDirectResultSpecializationUsesBoundedCache(t *testi
 		"an untyped NULL execution may leave the bounded numeric cache dormant")
 }
 
+func TestPreparedInetNtoaReusesDecimalRuntimePlan(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
+		t, 28892, "select inet_ntoa(?)")
+	t.Cleanup(func() {
+		cw.releaseRuntimeCacheRetiredCompiles()
+		cw.proc.SetPrepareParams(nil)
+		if prepareStmt.params != nil {
+			prepareStmt.params.Free(cw.proc.Mp())
+		}
+		prepareStmt.Close()
+	})
+
+	preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
+	findInetNtoa := func(queryPlan *plan.Plan) *plan.Expr {
+		t.Helper()
+		var found *plan.Expr
+		require.NoError(t, plan.VisitExpressionsInOwner(queryPlan, func(expr *plan.Expr) error {
+			if found == nil && expr.GetF() != nil &&
+				expr.GetF().GetFunc().GetObjName() == "inet_ntoa" {
+				found = expr
+			}
+			return nil
+		}))
+		return found
+	}
+
+	install := func(value string) {
+		t.Helper()
+		if prepareStmt.params != nil {
+			if cw.proc.GetPrepareParams() == prepareStmt.params {
+				cw.proc.SetPrepareParams(nil)
+			}
+			prepareStmt.params.Free(cw.proc.Mp())
+		}
+		prepareStmt.params = vector.NewVec(types.T_text.ToType())
+		require.NoError(t, vector.AppendBytes(
+			prepareStmt.params, []byte(value), false, cw.proc.Mp()))
+		prepareStmt.ParamTypes = []byte{byte(defines.MYSQL_TYPE_NEWDECIMAL), 0}
+	}
+
+	execute := func(value string) (*compile.Compile, *plan.Plan) {
+		t.Helper()
+		install(value)
+		retComp, runtimePlan, _, _, _, err := initExecuteStmtParam(
+			execCtx, ses, cw, nil, prepareStmt.Name)
+		require.NoError(t, err)
+		return retComp, runtimePlan
+	}
+
+	evaluate := func(runtimePlan *plan.Plan) string {
+		t.Helper()
+		inetNtoa := findInetNtoa(runtimePlan)
+		require.NotNil(t, inetNtoa)
+		require.Equal(t, int32(types.T_decimal64), inetNtoa.GetF().GetArgs()[0].Typ.Id,
+			inetNtoa.String())
+		executor, err := colexec.NewExpressionExecutor(cw.proc, inetNtoa)
+		require.NoError(t, err)
+		defer executor.Free()
+		input := batch.New(nil)
+		input.SetRowCount(1)
+		defer input.Clean(cw.proc.Mp())
+		result, err := executor.Eval(cw.proc, []*batch.Batch{input}, nil)
+		require.NoError(t, err)
+		require.False(t, result.IsNull(0), inetNtoa.String())
+		got := string(result.GetBytesAt(0))
+		result.Free(cw.proc.Mp())
+		return got
+	}
+
+	firstCompile, firstPlan := execute("2.5")
+	require.Nil(t, firstCompile)
+	require.NotSame(t, preparePlan, firstPlan)
+	require.Equal(t, "0.0.0.3", evaluate(firstPlan))
+	require.Same(t, firstPlan, cw.runtimeCachePlan)
+
+	runtimeCompile := compile.NewCompile(
+		"", "", prepareStmt.Sql, "", "", nil,
+		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+	require.True(t, cw.installRuntimeCacheCandidate(runtimeCompile))
+	require.Same(t, firstPlan, prepareStmt.runtimePlan)
+
+	retComp, reusedPlan := execute("3.5")
+	require.Same(t, runtimeCompile, retComp)
+	require.Same(t, firstPlan, reusedPlan,
+		"same DECIMAL source domain must reuse the restored runtime plan")
+	require.Equal(t, "0.0.0.4", evaluate(reusedPlan))
+
+	retComp, reusedPlan = execute("2.5")
+	require.Same(t, runtimeCompile, retComp)
+	require.Same(t, firstPlan, reusedPlan)
+	require.Equal(t, "0.0.0.3", evaluate(reusedPlan),
+		"reusing the cached plan must read the current DECIMAL value")
+
+	inetNtoa := findInetNtoa(preparePlan)
+	require.NotNil(t, inetNtoa)
+	require.Equal(t, int32(types.T_varchar), inetNtoa.GetTyp().Id)
+}
+
 func TestInitExecuteStmtParamDirectTextIgnoresNestedNumericMarker(t *testing.T) {
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQL(
 		t, 213, "select ? as direct_value, abs(?) as nested_value")
