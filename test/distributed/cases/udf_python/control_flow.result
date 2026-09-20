@@ -18,7 +18,7 @@ from control_values order by id;
 1  ¦  <empty>  𝄀
 2  ¦  <中😀>  𝄀
 3  ¦  <NULL>
-select id, python_bvt_add_one(value) as plus_one
+select id, python_bvt_add_one(case when id = 3 then null else value end) as plus_one
 from control_values order by id;
 ➤ id[4,32,0]  ¦  plus_one[4,32,0]  𝄀
 1  ¦  2  𝄀
