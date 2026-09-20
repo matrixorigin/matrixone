@@ -181,6 +181,13 @@ func TestWrapf(t *testing.T) {
 	}
 }
 
+func TestWrapfCauseFirst(t *testing.T) {
+	cause := context.Canceled
+	err := WrapfCauseFirst(cause, "detail %d", 7)
+	require.Equal(t, "context canceled: detail 7", err.Error())
+	require.ErrorIs(t, err, cause)
+}
+
 func Test_noopReportError(t *testing.T) {
 	type args struct {
 		in0 context.Context
