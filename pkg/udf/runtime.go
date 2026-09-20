@@ -22,12 +22,14 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/udf/udferr"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -91,41 +93,41 @@ type StatementContext struct {
 
 func (c StatementContext) Validate() error {
 	if c.ContractVersion != StatementContextContractVersion {
-		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: unsupported statement context contract %d", c.ContractVersion)
+		return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: unsupported statement context contract %d", c.ContractVersion)
 	}
 	if c.StatementTimestampUTC < minStatementTimestampUTC || c.StatementTimestampUTC > maxStatementTimestampUTC {
-		return moerr.NewInternalErrorNoCtxf("python udf: statement timestamp is outside the Python datetime range")
+		return udferr.Newf("python udf: statement timestamp is outside the Python datetime range")
 	}
 	if c.CurrentUser == "" || c.ConnectionCollation == "" {
-		return moerr.NewInternalErrorNoCtxf("python udf: statement context has no authenticated user or collation")
+		return udferr.Newf("python udf: statement context has no authenticated user or collation")
 	}
 	if c.TimezoneKind == "IANA" {
 		if c.TimezoneName == "" || c.TimezoneDatabaseVersion == "" || c.TimezoneOffsetMinutes != 0 {
-			return moerr.NewInternalErrorNoCtxf("python udf: IANA statement timezone is incomplete")
+			return udferr.Newf("python udf: IANA statement timezone is incomplete")
 		}
 		if _, err := time.LoadLocation(c.TimezoneName); err != nil {
 			return errutil.Wrapf(err, "python udf: IANA statement timezone is not present in the local tzdb")
 		}
 	} else if c.TimezoneKind == "FIXED_OFFSET" {
 		if c.TimezoneName != "" || c.TimezoneDatabaseVersion != "" || c.TimezoneOffsetMinutes < -839 || c.TimezoneOffsetMinutes > 840 {
-			return moerr.NewInternalErrorNoCtxf("python udf: fixed statement timezone is invalid")
+			return udferr.Newf("python udf: fixed statement timezone is invalid")
 		}
 	} else {
-		return moerr.NewInternalErrorNoCtxf("python udf: unsupported statement timezone kind %q", c.TimezoneKind)
+		return udferr.Newf("python udf: unsupported statement timezone kind %q", c.TimezoneKind)
 	}
 	mode := append([]string(nil), c.SQLMode...)
 	sort.Strings(mode)
 	for i := range mode {
 		if mode[i] == "" || (i > 0 && mode[i] == mode[i-1]) {
-			return moerr.NewInternalErrorNoCtxf("python udf: statement sql_mode is not canonical")
+			return udferr.Newf("python udf: statement sql_mode is not canonical")
 		}
 	}
 	if len(mode) != len(c.SQLMode) {
-		return moerr.NewInternalErrorNoCtxf("python udf: statement sql_mode is not canonical")
+		return udferr.Newf("python udf: statement sql_mode is not canonical")
 	}
 	for i := range mode {
 		if mode[i] != c.SQLMode[i] {
-			return moerr.NewInternalErrorNoCtxf("python udf: statement sql_mode is not sorted")
+			return udferr.Newf("python udf: statement sql_mode is not sorted")
 		}
 	}
 	return nil
@@ -170,7 +172,7 @@ func StatementContextFromMap(values map[string]string) (*StatementContext, error
 		// Reject it at the trusted CN adapter instead of carrying a malformed
 		// snapshot into the Flight request.
 		if mode == nil {
-			return nil, moerr.NewInternalErrorNoCtxf("python udf: invalid statement sql_mode: expected a JSON array")
+			return nil, udferr.Newf("python udf: invalid statement sql_mode: expected a JSON array")
 		}
 	}
 	context := &StatementContext{
@@ -213,10 +215,10 @@ type SecurityFrame struct {
 
 func (f SecurityFrame) Validate() error {
 	if f.ContractVersion != SecurityFrameContractVersion || f.Mode != "INVOKER" {
-		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: unsupported Python security frame")
+		return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: unsupported Python security frame")
 	}
 	if f.InvokerUserID != f.EffectiveUserID || f.InvokerRoleID != f.EffectiveRoleID {
-		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python invoker security frame changed effective principal")
+		return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: Python invoker security frame changed effective principal")
 	}
 	return nil
 }
