@@ -3209,6 +3209,50 @@ func CalcQueryDOP(p *plan.Plan, ncpu int32, lencn int, typ ExecType) {
 	}
 }
 
+func adaptiveDeferredOnlyNodes(qry *plan.Query) map[int32]struct{} {
+	deferred := make(map[int32]struct{})
+	if qry == nil || len(qry.Steps) == 0 {
+		return deferred
+	}
+	active := make(map[int32]struct{})
+	var walk func(int32, map[int32]struct{}, bool)
+	walk = func(id int32, seen map[int32]struct{}, firstCandidateOnly bool) {
+		if id < 0 || int(id) >= len(qry.Nodes) {
+			return
+		}
+		if _, ok := seen[id]; ok {
+			return
+		}
+		seen[id] = struct{}{}
+		node := qry.Nodes[id]
+		if node == nil {
+			return
+		}
+		children := node.Children
+		if firstCandidateOnly && node.NodeType == plan.Node_ADAPTIVE_TOP && len(children) > 0 {
+			children = children[:1]
+		}
+		for _, child := range children {
+			walk(child, seen, firstCandidateOnly)
+		}
+	}
+	for _, node := range qry.Nodes {
+		if node == nil || node.NodeType != plan.Node_ADAPTIVE_TOP || len(node.Children) < 2 {
+			continue
+		}
+		for _, child := range node.Children[1:] {
+			walk(child, deferred, false)
+		}
+	}
+	for _, step := range qry.Steps {
+		walk(step, active, true)
+	}
+	for id := range active {
+		delete(deferred, id)
+	}
+	return deferred
+}
+
 func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 	if GetForceScanOnMultiCN() {
 		return ExecTypeAP_MULTICN
@@ -3219,8 +3263,12 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 	// the equi-join condition is a function expression (not a plain column ref), it's expr-based.
 	hasExprBasedShuffle := false
 	hasForceOneCN := false
-	for _, node := range qry.GetNodes() {
+	deferredOnly := adaptiveDeferredOnlyNodes(qry)
+	for id, node := range qry.GetNodes() {
 		if node == nil {
+			continue
+		}
+		if _, deferred := deferredOnly[int32(id)]; deferred {
 			continue
 		}
 		if node.GetStats().GetForceOneCN() {
@@ -3253,8 +3301,11 @@ func GetExecType(qry *plan.Query, txnHaveDDL bool, isPrepare bool) ExecType {
 	}
 	canUseMultiCN := !txnHaveDDL && !hasExprBasedShuffle && !hasForceOneCN
 	ret := ExecTypeTP
-	for _, node := range qry.GetNodes() {
+	for id, node := range qry.GetNodes() {
 		if node == nil {
+			continue
+		}
+		if _, deferred := deferredOnly[int32(id)]; deferred {
 			continue
 		}
 		switch node.NodeType {
