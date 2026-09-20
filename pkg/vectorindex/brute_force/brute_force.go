@@ -17,6 +17,7 @@ package brute_force
 import (
 	"context"
 	"fmt"
+	"math"
 	"runtime"
 
 	"github.com/matrixorigin/matrixone/pkg/common/concurrent"
@@ -339,6 +340,12 @@ func (idx *UsearchBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries 
 // returns distance 1 and boundary values use the scalar implementation). It is used
 // only for the exact brute-force cosine fallback; non-cosine metrics retain the usearch
 // fast path.
+func cosineDistanceLess[T types.RealNumbers](candidate, current T) bool {
+	candidateNaN := math.IsNaN(float64(candidate))
+	currentNaN := math.IsNaN(float64(current))
+	return !candidateNaN && (currentNaN || candidate < current)
+}
+
 func (idx *UsearchBruteForceIndex[T]) searchCosine(
 	proc *sqlexec.SqlProcess,
 	flatten []T,
@@ -379,7 +386,7 @@ func (idx *UsearchBruteForceIndex[T]) searchCosine(
 				query := flatten[queryStart : queryStart+dimension]
 
 				if limitInt == 1 {
-					bestDistance := metric.MaxFloat[T]()
+					var bestDistance T
 					bestKey := -1
 					for row := 0; row < int(idx.Count); row++ {
 						if row%100 == 0 {
@@ -392,7 +399,9 @@ func (idx *UsearchBruteForceIndex[T]) searchCosine(
 						if err != nil {
 							return err
 						}
-						if distance < bestDistance {
+						// SQL ORDER BY places NaN after numeric values. Initialize from the
+						// first real row so an all-NaN dataset never fabricates key -1.
+						if bestKey < 0 || cosineDistanceLess(distance, bestDistance) {
 							bestDistance = distance
 							bestKey = row
 						}
@@ -403,6 +412,7 @@ func (idx *UsearchBruteForceIndex[T]) searchCosine(
 				}
 
 				h := vectorindex.NewFastMaxHeap[T, int64](limitInt, heapKeysBuf, heapDistBuf)
+				var nanKeys []int64
 				for row := 0; row < int(idx.Count); row++ {
 					if row%100 == 0 {
 						if err := ctx.Err(); err != nil {
@@ -414,11 +424,21 @@ func (idx *UsearchBruteForceIndex[T]) searchCosine(
 					if err != nil {
 						return err
 					}
+					if math.IsNaN(float64(distance)) {
+						// FastMaxHeap uses ordinary float comparisons, which cannot order
+						// NaN. Keep the real row identity and append these peers after all
+						// finite distances when the result is assembled.
+						if len(nanKeys) < limitInt {
+							nanKeys = append(nanKeys, int64(row))
+						}
+						continue
+					}
 					h.Push(int64(row), distance)
 				}
 
 				offset := queryIndex * limitInt
-				for resultIndex := limitInt - 1; resultIndex >= 0; resultIndex-- {
+				finiteCount := h.Len()
+				for resultIndex := finiteCount - 1; resultIndex >= 0; resultIndex-- {
 					key, distance, ok := h.Pop()
 					if !ok {
 						retKeys[offset+resultIndex] = -1
@@ -427,6 +447,14 @@ func (idx *UsearchBruteForceIndex[T]) searchCosine(
 					}
 					retKeys[offset+resultIndex] = key
 					retDistances[offset+resultIndex] = float64(distance)
+				}
+				for nanIndex, key := range nanKeys {
+					resultIndex := finiteCount + nanIndex
+					if resultIndex >= limitInt {
+						break
+					}
+					retKeys[offset+resultIndex] = key
+					retDistances[offset+resultIndex] = math.NaN()
 				}
 			}
 			return nil
