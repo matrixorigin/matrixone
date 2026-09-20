@@ -602,6 +602,7 @@ func TestRewriteForeignKeyReferencesForAlterCopy(t *testing.T) {
 		map[uint64]*plan2.ColDef{1: {ColId: 101}, 3: {ColId: 103}},
 		10,
 		11,
+		nil,
 	)
 	require.NoError(t, err)
 	require.True(t, changed)
@@ -614,13 +615,13 @@ func TestRewriteForeignKeyReferencesForAlterCopy(t *testing.T) {
 	require.Equal(t, uint64(20), fkeys[2].ForeignTbl)
 	require.Equal(t, []uint64{1}, fkeys[2].ForeignCols)
 
-	changed, err = rewriteForeignKeyReferencesForAlterCopy(context.Background(), constraintDef, nil, 10, 11)
+	changed, err = rewriteForeignKeyReferencesForAlterCopy(context.Background(), constraintDef, nil, 10, 11, nil)
 	require.NoError(t, err)
 	require.False(t, changed)
 
 	_, err = rewriteForeignKeyReferencesForAlterCopy(context.Background(), &engine.ConstraintDef{Cts: []engine.Constraint{
 		&engine.ForeignKeyDef{Fkeys: []*plan2.ForeignKeyDef{nil}},
-	}}, nil, 10, 11)
+	}}, nil, 10, 11, nil)
 	require.ErrorContains(t, err, "nil foreign key definition")
 }
 
@@ -636,6 +637,7 @@ func TestRemapAlterCopyForeignKeyState(t *testing.T) {
 		[]uint64{30, 10, 0, 30},
 		map[uint64]*plan2.ColDef{1: {ColId: 101}, 2: {ColId: 102}},
 		10,
+		nil,
 	)
 	require.NoError(t, err)
 	require.Equal(t, []uint64{101}, remapped[0].Cols)
@@ -655,7 +657,7 @@ func TestRemapAlterCopyForeignKeyState(t *testing.T) {
 	require.Equal(t, uint64(10), source[2].ForeignTbl)
 
 	_, _, err = remapAlterCopyForeignKeyState(
-		context.Background(), source[:1], nil, map[uint64]*plan2.ColDef{}, 10,
+		context.Background(), source[:1], nil, map[uint64]*plan2.ColDef{}, 10, nil,
 	)
 	require.ErrorContains(t, err, "was not retained")
 }
@@ -780,6 +782,7 @@ func TestApplyAlterCopyForeignKeyStateCanonicalizesLegacySelfReference(t *testin
 				map[uint64]*plan2.ColDef{1: {ColId: 101}},
 				10,
 				11,
+				nil,
 			))
 			require.Equal(t, uint64(10), sourceForeignKey.ForeignTbl)
 		})
@@ -854,7 +857,7 @@ func TestReconcileAlterCopyForeignKeyReferencesOncePerRelation(t *testing.T) {
 	defer getConstraintDef.Reset()
 
 	c := NewCompile("test", "test", "alter table child", "", "", eng, proc, nil, false, nil, time.Now())
-	require.NoError(t, reconcileAlterCopyChildForeignKeyReferences(c, nil, []uint64{10, 10, 0, 20}, 1, 2))
+	require.NoError(t, reconcileAlterCopyChildForeignKeyReferences(c, nil, []uint64{10, 10, 0, 20}, 1, 2, nil))
 	require.NoError(t, reconcileAlterCopyParentForeignKeyReferences(c, []*plan2.ForeignKeyDef{
 		{ForeignTbl: 30},
 		{ForeignTbl: 30},

@@ -4313,6 +4313,10 @@ alter_option:
         opt := tree.NewAlterTableChangeColumnClause(typ, oldColumnName, newColumn, position)
     	$$ = tree.AlterTableOption(opt)
     }
+|  RENAME key_or_index ident TO ident
+    {
+        $$ = tree.NewAlterTableRenameIndexClause($3.Origin(), $5.Origin())
+    }
 |  RENAME COLUMN column_name TO column_name
     {
         var typ = tree.AlterTableRenameColumn

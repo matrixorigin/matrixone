@@ -1,6 +1,6 @@
 # RENAME INDEX through COPY ALTER
 
-Owner: issue #23392. Status: accepted design, implementation pending.
+Owner: issue #23392. Status: implemented and locally validated.
 Reviewed base: bc523def3b55de2b305c14ee9fafb61dfec24126.
 Independent design approval: GPT-6 Astra, medium, session
 01a0bfe5-b28a-7943-9f28-18f37b5b6bf0 (DESIGN PASS).

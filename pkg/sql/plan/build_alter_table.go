@@ -239,6 +239,10 @@ func autoIncrementValueToOffset(value uint64) uint64 {
 
 func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, error) {
 	ctx := cctx.GetContext()
+	renameIndexes, err := validateAlterIndexRenameOptions(ctx, stmt.Options)
+	if err != nil {
+		return nil, err
+	}
 	// 1. get origin table name and Schema name
 	schemaName, tableName := string(stmt.Table.Schema()), string(stmt.Table.Name())
 	if schemaName == "" {
@@ -279,6 +283,14 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 	// the ALTER actions and serializing the temporary CREATE TABLE statement.
 	if err := reconcileIndexVisibility(cctx, tableDef.TblId, copyTableDef, nil); err != nil {
 		return nil, err
+	}
+	if renameIndexes {
+		// Carry identical authoritative descriptors on both sides of lineage
+		// validation without mutating the resolver's cached source definition.
+		tableDef = DeepCopyTableDef(tableDef, true)
+		for i, idx := range copyTableDef.Indexes {
+			tableDef.Indexes[i] = DeepCopyIndexDef(idx)
+		}
 	}
 	// The copied definition contains the source allocator's cached offset. It
 	// is not a user request and can be far ahead of the actual rows. The copy
@@ -334,6 +346,8 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 
 	for _, spec := range validAlterSpecs {
 		switch option := spec.(type) {
+		case *tree.AlterTableRenameIndexClause:
+			err = renameCopyIndex(ctx, copyTableDef, option)
 		case *tree.AlterOptionAdd:
 			switch optionAdd := option.Def.(type) {
 			case *tree.PrimaryKeyIndex:
@@ -466,6 +480,17 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		}
 	}
 
+	if renameIndexes {
+		if _, err := AlterCopyIndexRenames(tableDef, copyTableDef); err != nil {
+			return nil, err
+		}
+		affectedCols = nil
+		for _, idx := range copyTableDef.Indexes {
+			if !slices.Contains(affectedCols, idx.IndexName) {
+				affectedCols = append(affectedCols, idx.IndexName)
+			}
+		}
+	}
 	createTmpDdl, _, err := constructCreateTableSQL(
 		cctx, copyTableDef, snapshot, true, nil, true, nil,
 	)
@@ -484,6 +509,9 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 
 	opt.SkipIndexesCopy = make(map[string]bool)
 	for _, idxCol := range tableDef.Indexes {
+		if renameIndexes {
+			continue // Rebuild every index, including unchanged and self-renamed groups.
+		}
 		if len(affectedIndexes) > 0 {
 			// the only way to has non-empty affectedIndexes is by calling affectedAllIdxCols()
 			// AffectedCols has all Columns and AffectedIndexes has all indexes
@@ -498,6 +526,9 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		}
 	}
 
+	if renameIndexes {
+		opt.SkipUniqueIdxDedup = nil
+	}
 	alterTablePlan.Options = opt
 	logutil.Info("alter copy option",
 		zap.Any("originPk", tableDef.Pkey),
@@ -1104,6 +1135,10 @@ func validateAlterTableIdentifierDestinations(ctx context.Context, options []tre
 			if err := validateIdentifier(ctx, option.NewColumnName.ColNameOrigin()); err != nil {
 				return err
 			}
+		case *tree.AlterTableRenameIndexClause:
+			if err := validateIdentifier(ctx, option.NewName); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -1134,6 +1169,7 @@ func allowTempTableAlter(stmt *tree.AlterTable) bool {
 				return false
 			}
 		case *tree.AlterAddCol, *tree.AlterTableModifyColumnClause,
+			*tree.AlterTableRenameIndexClause,
 			*tree.AlterTableRenameColumnClause,
 			*tree.AlterOptionTableName:
 			// supported column and name changes
@@ -1150,11 +1186,16 @@ func ResolveAlterTableAlgorithm(
 	tableDef *TableDef,
 ) (algorithm plan.AlterTable_AlgorithmType, err error) {
 	algorithm = plan.AlterTable_COPY
+	if _, err = validateAlterIndexRenameOptions(ctx, validAlterSpecs); err != nil {
+		return algorithm, err
+	}
 
 	// First pass: resolve algorithm based on operations, skipping ALGORITHM/LOCK hints.
 Loop:
 	for _, spec := range validAlterSpecs {
 		switch option := spec.(type) {
+		case *tree.AlterTableRenameIndexClause:
+			algorithm = plan.AlterTable_COPY
 		case *tree.AlterOptionAlgorithm, *tree.AlterOptionLock:
 			continue
 		case *tree.AlterOptionAdd:

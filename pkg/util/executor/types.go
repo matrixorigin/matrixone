@@ -101,6 +101,7 @@ type StatementOption struct {
 	params                   []string
 	paramNulls               []bool
 	alterCopyOpt             *plan.AlterCopyOpt
+	alterCopySourceTable     *plan.TableDef
 	disableDropAutoIncrement bool
 	skipDataBranchReclaim    bool
 	keepAutoIncrement        uint64

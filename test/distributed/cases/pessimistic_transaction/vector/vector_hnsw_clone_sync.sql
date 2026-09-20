@@ -30,4 +30,17 @@ show create table dst;
 select a from dst order by l2_distance(v, '[1,1,1]') asc limit 2;
 select a from dst order by l2_distance(v, '[8,8,8]') asc limit 1;
 
+-- #23392: renaming a multi-table HNSW group preserves search and REINDEX.
+alter table dst rename index ix to renamed_ix;
+show create table dst;
+select a from dst order by l2_distance(v, '[1,1,1]') asc limit 2;
+insert into dst values(5,'[12,12,12]');
+update dst set v='[14,14,14]' where a=5;
+delete from dst where a=4;
+alter table dst alter reindex renamed_ix hnsw;
+select a from dst order by l2_distance(v, '[14,14,14]') asc limit 1;
+alter table dst alter reindex ix hnsw;
+select a from dst order by a;
+
 drop database hnsw_clone_sync;
+set experimental_hnsw_index=0;

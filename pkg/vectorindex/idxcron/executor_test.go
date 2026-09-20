@@ -426,6 +426,52 @@ func TestIvfflatReindex(t *testing.T) {
 	}
 }
 
+func TestIvfflatReindexRejectsStaleTableIdentity(t *testing.T) {
+	txnStub := stubIdxcronTxnRunner()
+	defer txnStub.Reset()
+
+	// COPY can replace a table while a previously enumerated task still carries
+	// its old physical ID. Reusing the table and index names must not let that
+	// stale task rebuild the replacement index.
+	info := IndexUpdateTaskInfo{
+		DbName: "test", TableName: "test_orig_tbl", IndexName: "ivf_idx",
+		Action: Action_Ivfflat_Reindex, AccountId: catalog.System_Account, TableId: 1,
+	}
+	lookupCalls := 0
+	tableStub := gostub.Stub(&getTableDef, func(_ *sqlexec.SqlProcess, _ engine.Engine, dbname, tablename string) (*plan.TableDef, error) {
+		lookupCalls++
+		require.Equal(t, info.DbName, dbname)
+		require.Equal(t, info.TableName, tablename)
+		replacement := newTestIvfTableDef("a", types.T_int64, "b", types.T_array_float32, 3)
+		replacement.TblId = 2
+		return replacement, nil
+	})
+	defer tableStub.Reset()
+	countCalls, rebuildCalls := 0, 0
+	countStub := gostub.Stub(&ivfflatidxcron.RunGetCountSql, func(*sqlexec.SqlProcess, string) (executor.Result, error) {
+		countCalls++
+		return executor.Result{}, moerr.NewInternalErrorNoCtx("unexpected stale-task count")
+	})
+	defer countStub.Reset()
+	rebuildStub := gostub.Stub(&runReindexSql, func(*sqlexec.SqlProcess, string) (executor.Result, error) {
+		rebuildCalls++
+		return executor.Result{}, nil
+	})
+	defer rebuildStub.Reset()
+
+	updated, _, err := runReindex(context.Background(), nil, nil, "a-b-c-d", &info, 3,
+		&mockReindexAlgoPlugin{
+			algo:    "ivfflat",
+			desc:    catalogplugin.SyncDescriptor{IdxcronAlgoToken: "IVFFLAT", IdxcronListsAware: true},
+			idxcron: ivfflatidxcron.Hooks{},
+		})
+	require.ErrorContains(t, err, "table id mimstach")
+	require.False(t, updated)
+	require.Equal(t, 1, lookupCalls)
+	require.Zero(t, countCalls)
+	require.Zero(t, rebuildCalls)
+}
+
 func TestIvfflatReindexAutoUpdateOff(t *testing.T) {
 
 	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, catalog.System_Account)

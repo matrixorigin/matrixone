@@ -16,11 +16,17 @@ package tree
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 )
 
 func init() {
+	reuse.CreatePool[AlterTableRenameIndexClause](
+		func() *AlterTableRenameIndexClause { return &AlterTableRenameIndexClause{} },
+		func(a *AlterTableRenameIndexClause) { *a = AlterTableRenameIndexClause{} },
+		reuse.DefaultOptions[AlterTableRenameIndexClause](),
+	)
 	reuse.CreatePool[AlterUser](
 		func() *AlterUser { return &AlterUser{} },
 		func(a *AlterUser) { a.reset() },
@@ -699,6 +705,8 @@ func (node *AlterTable) reset() {
 			case *AlterTableAddColumnClause:
 				opt.Free()
 			case *AlterTableRenameColumnClause:
+				opt.Free()
+			case *AlterTableRenameIndexClause:
 				opt.Free()
 			case *AlterTableAlterColumnClause:
 				opt.Free()
@@ -1557,6 +1565,25 @@ func (node *AlterTableAddColumnClause) reset() {
 		node.Position.Free()
 	}
 	*node = AlterTableAddColumnClause{}
+}
+
+// AlterTableRenameIndexClause represents both RENAME INDEX and RENAME KEY.
+type AlterTableRenameIndexClause struct {
+	alterOptionImpl
+	OldName string
+	NewName string
+}
+
+func NewAlterTableRenameIndexClause(oldName, newName string) *AlterTableRenameIndexClause {
+	a := reuse.Alloc[AlterTableRenameIndexClause](nil)
+	a.OldName, a.NewName = oldName, newName
+	return a
+}
+
+func (node *AlterTableRenameIndexClause) Free()           { reuse.Free[AlterTableRenameIndexClause](node, nil) }
+func (node AlterTableRenameIndexClause) TypeName() string { return "tree.AlterTableRenameIndexClause" }
+func (node *AlterTableRenameIndexClause) Format(ctx *FmtCtx) {
+	ctx.WriteString("rename index `" + strings.ReplaceAll(node.OldName, "`", "``") + "` to `" + strings.ReplaceAll(node.NewName, "`", "``") + "`")
 }
 
 type AlterTableRenameColumnClause struct {

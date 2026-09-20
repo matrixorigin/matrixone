@@ -178,6 +178,17 @@ func (opts StatementOption) AlterCopyDedupOpt() *plan.AlterCopyOpt {
 	return opts.alterCopyOpt
 }
 
+// WithAlterCopySourceTable supplies the final COPY index definitions to the
+// internal CREATE planner. The caller retains ownership; planning only reads it.
+func (opts StatementOption) WithAlterCopySourceTable(table *plan.TableDef) StatementOption {
+	opts.alterCopySourceTable = table
+	return opts
+}
+
+func (opts StatementOption) AlterCopySourceTable() *plan.TableDef {
+	return opts.alterCopySourceTable
+}
+
 func (opts StatementOption) AccountID() uint32 {
 	return opts.accountId
 }

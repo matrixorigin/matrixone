@@ -2162,7 +2162,7 @@ func buildCreateSequence(stmt *tree.CreateSequence, ctx CompilerContext) (*Plan,
 }
 
 // preserveIndexSessionVars re-attaches algo_params.session_vars from the source
-// table def onto a freshly-built CLONE/LIKE plan's matching index defs.
+// table def onto a freshly-built CLONE/LIKE/COPY plan's matching index defs.
 // ConstructCreateTableSQL rebuilds each index from its flat options only and
 // drops session_vars (it isn't an index option), so without this the clone (the
 // restore mechanism) loses the captured build-time vars — e.g.
@@ -2188,9 +2188,12 @@ func preserveIndexSessionVars(p *Plan, src *plan.TableDef) error {
 			if len(sv) == 0 {
 				break // source carries no session_vars — nothing to preserve
 			}
-			flat, err := catalog.IndexParamsStringToMap(ni.IndexAlgoParams)
-			if err != nil {
-				return err
+			var flat map[string]string
+			if ni.IndexAlgoParams != "" {
+				flat, err = catalog.IndexParamsStringToMap(ni.IndexAlgoParams)
+				if err != nil {
+					return err
+				}
 			}
 			merged, err := catalog.IndexParamsMapToJsonStringWithSessionVars(flat, sv)
 			if err != nil {
@@ -2900,7 +2903,7 @@ func buildCreateTable(
 		}
 	}
 
-	return &Plan{
+	p := &Plan{
 		Plan: &plan.Plan_Ddl{
 			Ddl: &plan.DataDefinition{
 				DdlType: plan.DataDefinition_CREATE_TABLE,
@@ -2910,7 +2913,16 @@ func buildCreateTable(
 				},
 			},
 		},
-	}, nil
+	}
+	// COPY's regenerated SQL cannot express captured index session variables.
+	// Restore them before execution publishes metadata or invokes plugin hooks;
+	// only logical name/type match, so freshly allocated physical IDs survive.
+	if src, ok := ctx.GetContext().Value(defines.AlterCopySourceTableKey{}).(*plan.TableDef); ok {
+		if err := preserveIndexSessionVars(p, src); err != nil {
+			return nil, err
+		}
+	}
+	return p, nil
 }
 
 func validateIdentifier(ctx context.Context, name string) error {

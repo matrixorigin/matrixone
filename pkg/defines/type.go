@@ -257,6 +257,10 @@ type LogicalIdKey struct{}
 // replica keeps the original table's kind.
 type RelKindKey struct{}
 
+// AlterCopySourceTableKey carries a read-only *plan.TableDef for the internal
+// COPY CREATE planner to preserve stored index session variables by final name.
+type AlterCopySourceTableKey struct{}
+
 // CarryOnCtxKeys defines keys needed to be serialized when pass context through net
 var CarryOnCtxKeys = []any{TenantIDKey{}, UserIDKey{}, RoleIDKey{}}
 

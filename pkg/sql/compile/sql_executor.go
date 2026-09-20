@@ -391,6 +391,8 @@ func (exec *txnExecutor) Exec(
 			defines.AlterCopyOpt{}, v)
 	}
 
+	exec.ctx = withAlterCopySourceTable(exec.ctx, statementOption)
+
 	if h := statementOption.OptimizerHints(); h != "" {
 		exec.ctx = context.WithValue(exec.ctx,
 			defines.OptimizerHints{}, h)
