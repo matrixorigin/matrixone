@@ -4889,7 +4889,7 @@ func validateApproxPercentileArgs(ctx context.Context, args []*Expr) error {
 	}
 	percentile := args[1]
 	if percentile == nil || isNullExpr(percentile) ||
-		(!rule.IsConstant(percentile, false) && !isDirectDynamicParam(percentile)) {
+		!IsPercentileConfigExpr(percentile) {
 		return moerr.NewInvalidInput(ctx,
 			"percentile argument of approx_percentile must be a non-null constant or parameter")
 	}
@@ -4906,20 +4906,71 @@ func validateOrderedPercentileArgs(ctx context.Context, name string, args []*Exp
 	}
 	percentile := args[1]
 	if percentile == nil || isNullExpr(percentile) ||
-		(!rule.IsConstant(percentile, false) && !isDirectDynamicParam(percentile)) {
+		!IsPercentileConfigExpr(percentile) {
 		return moerr.NewInvalidInputf(ctx,
 			"percentile argument of %s must be a non-null constant or parameter", name)
 	}
 	return nil
 }
 
-// normalizePercentileParam gives a bare prepared marker the numeric type used
-// by percentile overloads. Parameter markers have a TEXT transport type while
-// a statement is prepared, but p is numeric configuration that is evaluated
-// once for each EXECUTE.
+// IsPercentileConfigExpr reports whether expr can be evaluated without an
+// input row and is safe to use as execution-invariant percentile
+// configuration. Existing foldable constants remain supported. Prepared
+// expressions deliberately admit only numeric literals, markers, arithmetic,
+// and numeric casts; this excludes columns, variables, subqueries, and
+// unrelated or volatile functions from aggregate configuration.
+func IsPercentileConfigExpr(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if rule.IsConstant(expr, false) {
+		return true
+	}
+	return isPreparedPercentileExpr(expr)
+}
+
+func isPreparedPercentileExpr(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch value := expr.Expr.(type) {
+	case *plan.Expr_P:
+		return true
+	case *plan.Expr_Lit:
+		return !value.Lit.GetIsnull() && makeTypeByPlan2Expr(expr).IsNumeric()
+	case *plan.Expr_F:
+		if value.F == nil || value.F.Func == nil || !makeTypeByPlan2Expr(expr).IsNumeric() {
+			return false
+		}
+		functionID, _ := function.DecodeOverloadID(value.F.Func.GetObj())
+		switch functionID {
+		case function.CAST:
+			return len(value.F.Args) == 2 && isPreparedPercentileExpr(value.F.Args[0]) &&
+				value.F.Args[1].GetT() != nil
+		case function.UNARY_PLUS, function.UNARY_MINUS:
+			return len(value.F.Args) == 1 && isPreparedPercentileExpr(value.F.Args[0])
+		case function.PLUS, function.MINUS, function.MULTI, function.DIV,
+			function.INTEGER_DIV, function.MOD:
+			if len(value.F.Args) != 2 {
+				return false
+			}
+			return isPreparedPercentileExpr(value.F.Args[0]) &&
+				isPreparedPercentileExpr(value.F.Args[1])
+		}
+	}
+	return false
+}
+
+// normalizePercentileParam gives an untyped prepared marker expression a
+// numeric type accepted by the target percentile overload. Preserve supported
+// numeric expression types so exact DECIMAL configuration reaches range
+// validation and the rational percentile codec without FLOAT64 rounding.
 func normalizePercentileParam(ctx context.Context, name string, args []*Expr) error {
 	if (name != NameApproxPercentile && name != NamePercentileCont && name != NamePercentileDisc) ||
-		len(args) != 2 || !isDirectDynamicParam(args[1]) {
+		len(args) != 2 || !isPreparedPercentileExpr(args[1]) || rule.IsConstant(args[1], false) {
+		return nil
+	}
+	if percentileParamTypeSupported(name, makeTypeByPlan2Expr(args[1])) {
 		return nil
 	}
 
@@ -4930,6 +4981,19 @@ func normalizePercentileParam(ctx context.Context, name string, args []*Expr) er
 	}
 	args[1] = percentile
 	return nil
+}
+
+func percentileParamTypeSupported(name string, typ types.Type) bool {
+	if name == NameApproxPercentile {
+		switch typ.Oid {
+		case types.T_int32, types.T_int64, types.T_float32, types.T_float64,
+			types.T_decimal64, types.T_decimal128:
+			return true
+		default:
+			return false
+		}
+	}
+	return typ.IsNumeric() && typ.Oid != types.T_decimal256
 }
 
 // bindMixedInListComparison preserves the scalar comparison domain for a

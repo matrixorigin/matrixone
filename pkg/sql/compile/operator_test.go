@@ -437,6 +437,149 @@ func TestConstructAggregateConfigPreparedPercentile(t *testing.T) {
 	}
 }
 
+func TestConstructAggregateConfigPreparedPercentileExpression(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}}
+	parameter := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_text)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+	}
+	percent := plan2.MakePlan2Float64ConstExprWithType(100)
+	configExpr, err := plan2.BindFuncExprImplByPlanExpr(
+		context.Background(), "/", []*plan.Expr{parameter, percent})
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name string
+		want []byte
+	}{
+		{name: plan2.NameApproxPercentile, want: []byte("0.5")},
+		{name: plan2.NamePercentileCont, want: aggexec.EncodeOrderedPercentileConfig([]byte("0.5"), false)},
+		{name: plan2.NamePercentileDisc, want: aggexec.EncodeOrderedPercentileConfig([]byte("0.5"), false)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bound, bindErr := plan2.BindFuncExprImplByPlanExpr(
+				context.Background(), tc.name, []*plan.Expr{value, plan2.DeepCopyExpr(configExpr)})
+			require.NoError(t, bindErr)
+			original := plan2.DeepCopyExpr(bound.GetF().Args[1])
+
+			check := func(param []byte, isNull bool) ([]byte, error) {
+				params := vector.NewVec(types.T_text.ToType())
+				require.NoError(t, vector.AppendBytes(params, param, isNull, proc.Mp()))
+				proc.SetPrepareParams(params)
+				baseline := proc.Mp().CurrNB()
+				_, config, configErr := constructAggregateConfigWithError(bound.GetF(), proc)
+				require.Equal(t, baseline, proc.Mp().CurrNB())
+				proc.SetPrepareParams(nil)
+				params.Free(proc.Mp())
+				return config, configErr
+			}
+
+			config, configErr := check([]byte("50"), false)
+			require.NoError(t, configErr)
+			require.Equal(t, tc.want, config)
+
+			_, configErr = check([]byte("150"), false)
+			require.ErrorContains(t, configErr, "must be finite and in [0,1]")
+			_, configErr = check(nil, true)
+			require.ErrorContains(t, configErr, "cannot be NULL")
+			_, configErr = check([]byte("NaN"), false)
+			require.ErrorContains(t, configErr, "must be finite and in [0,1]")
+
+			config, configErr = check([]byte("50"), false)
+			require.NoError(t, configErr)
+			require.Equal(t, tc.want, config)
+			require.Equal(t, original, bound.GetF().Args[1],
+				"prepared execution must not mutate the cached expression")
+		})
+	}
+}
+
+func TestConstructAggregateConfigPreparedPercentileExpressionDivisionByZero(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("50"), false, proc.Mp()))
+	defer params.Free(proc.Mp())
+	proc.SetPrepareParams(params)
+
+	parameter := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_text)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+	}
+	configExpr, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "/", []*plan.Expr{
+		parameter,
+		plan2.MakePlan2Float64ConstExprWithType(0),
+	})
+	require.NoError(t, err)
+	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}}
+	bound, err := plan2.BindFuncExprImplByPlanExpr(
+		context.Background(), plan2.NamePercentileCont, []*plan.Expr{value, configExpr})
+	require.NoError(t, err)
+
+	_, _, err = constructAggregateConfigWithError(bound.GetF(), proc)
+	require.Error(t, err)
+}
+
+func TestConstructAggregateConfigPreparedDecimalPercentilePreservesPrecision(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	parameter := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_text)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+	}
+	decimalType := types.New(types.T_decimal128, 19, 18)
+	configExpr, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "cast", []*plan.Expr{
+		parameter,
+		{
+			Typ:  plan2.MakePlan2Type(&decimalType),
+			Expr: &plan.Expr_T{T: &plan.TargetType{}},
+		},
+	})
+	require.NoError(t, err)
+	configExpr.GetF().SyntaxExplicitCast = true
+	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}}
+
+	for _, tc := range []struct {
+		name string
+		want []byte
+	}{
+		{name: plan2.NameApproxPercentile, want: []byte("0.500000000000000001")},
+		{name: plan2.NamePercentileCont, want: aggexec.EncodeOrderedPercentileConfig([]byte("0.500000000000000001"), false)},
+		{name: plan2.NamePercentileDisc, want: aggexec.EncodeOrderedPercentileConfig([]byte("0.500000000000000001"), false)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bound, bindErr := plan2.BindFuncExprImplByPlanExpr(
+				context.Background(), tc.name, []*plan.Expr{value, plan2.DeepCopyExpr(configExpr)})
+			require.NoError(t, bindErr)
+			require.Equal(t, int32(types.T_decimal128), bound.GetF().Args[1].Typ.Id)
+
+			check := func(param string) ([]byte, error) {
+				params := vector.NewVec(types.T_text.ToType())
+				require.NoError(t, vector.AppendBytes(params, []byte(param), false, proc.Mp()))
+				proc.SetPrepareParams(params)
+				baseline := proc.Mp().CurrNB()
+				_, config, configErr := constructAggregateConfigWithError(bound.GetF(), proc)
+				require.Equal(t, baseline, proc.Mp().CurrNB())
+				proc.SetPrepareParams(nil)
+				params.Free(proc.Mp())
+				return config, configErr
+			}
+
+			config, configErr := check("0.500000000000000001")
+			require.NoError(t, configErr)
+			require.Equal(t, tc.want, config)
+
+			_, configErr = check("1.000000000000000001")
+			require.ErrorContains(t, configErr,
+				"must be in [0,1], got 1.000000000000000001")
+		})
+	}
+}
+
 func TestPreflightPercentileConfigsReturnsPreparedValueError(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()

@@ -2659,7 +2659,7 @@ func TestDirectCorrelatedScalarProjectionCasePreservesType(t *testing.T) {
 		{name: "integer", typ: plan.Type{Id: int32(types.T_int32), Width: 32, Scale: -1}, want: true},
 		{name: "enum coerces to ordinal", typ: plan.Type{Id: int32(types.T_enum), Enumvalues: "small,large"}},
 		{name: "rowid unsupported", typ: plan.Type{Id: int32(types.T_Rowid)}},
-		{name: "vector unsupported", typ: plan.Type{Id: int32(types.T_array_float32), Width: 3}},
+		{name: "vector", typ: plan.Type{Id: int32(types.T_array_float32), Width: 3}, want: true},
 		{name: "bit width changes", typ: plan.Type{Id: int32(types.T_bit), Width: 8}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
