@@ -59,23 +59,24 @@ var _ udf.RuntimeDefinitionValidator = (*Gateway)(nil)
 var _ udf.RuntimeStatusProvider = (*Gateway)(nil)
 
 type Gateway struct {
-	cfg               ClientConfig
-	artifactResolver  ArtifactResolver
-	allowInlineSource bool
-	conn              *grpc.ClientConn
-	flight            flight.FlightServiceClient
-	mu                sync.Mutex
-	lifecycleCtx      context.Context
-	lifecycleCancel   context.CancelFunc
-	capabilityMu      sync.Mutex
-	admissionMu       sync.Mutex
-	capabilityReady   bool
-	workerLeaseEpoch  uint64
-	capability        *capabilityResponse
-	closed            bool
-	active            chan struct{}
-	ledger            *protocol.TerminalLedger
-	ledgerTTL         time.Duration
+	cfg                  ClientConfig
+	artifactResolver     ArtifactResolver
+	allowInlineSource    bool
+	conn                 *grpc.ClientConn
+	flight               flight.FlightServiceClient
+	mu                   sync.Mutex
+	lifecycleCtx         context.Context
+	lifecycleCancel      context.CancelFunc
+	capabilityGeneration uint64
+	capabilityProbe      *capabilityProbe
+	admissionMu          sync.Mutex
+	capabilityReady      bool
+	workerLeaseEpoch     uint64
+	capability           *capabilityResponse
+	closed               bool
+	active               chan struct{}
+	ledger               *protocol.TerminalLedger
+	ledgerTTL            time.Duration
 	// admittedGroups and closedGroups are the Gateway's ownership fence for
 	// the current one-member adapter. A group epoch may be admitted only once;
 	// a terminal tombstone is reclaimable only after its exact group epoch has
@@ -400,7 +401,8 @@ func (g *Gateway) ValidateDefinition(ctx context.Context, definition *udf.Routin
 	// lease in its request. It must perform its own worker-instance handshake;
 	// relying on a cached readiness result could validate against a replacement
 	// worker with a different contract.
-	if err := g.ensureCapabilities(requestCtx, client, true); err != nil {
+	capability, err := g.ensureCapabilitySnapshot(requestCtx, client, true)
+	if err != nil {
 		return err
 	}
 	payload, err := json.Marshal(definitionValidationPayload{
@@ -430,33 +432,33 @@ func (g *Gateway) ValidateDefinition(ctx context.Context, definition *udf.Routin
 	}
 	stream, err := client.DoAction(actionCtx, &flight.Action{Type: "ValidatePythonDefinition", Body: payload})
 	if err != nil {
-		g.invalidateCapabilities()
+		g.invalidateCapabilities(capability.generation)
 		return fmt.Errorf("python udf: definition validation action: %w", err)
 	}
 	result, err := stream.Recv()
 	if err != nil {
-		g.invalidateCapabilities()
+		g.invalidateCapabilities(capability.generation)
 		return fmt.Errorf("python udf: definition validation response: %w", err)
 	}
 	if result == nil {
-		g.invalidateCapabilities()
+		g.invalidateCapabilities(capability.generation)
 		return fmt.Errorf("python udf: empty definition validation response")
 	}
 	var response definitionValidationResponse
 	decoder := json.NewDecoder(bytes.NewReader(result.Body))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&response); err != nil {
-		g.invalidateCapabilities()
+		g.invalidateCapabilities(capability.generation)
 		return fmt.Errorf("python udf: decode definition validation response: %w", err)
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
-		g.invalidateCapabilities()
+		g.invalidateCapabilities(capability.generation)
 		return fmt.Errorf("python udf: definition validation response has trailing JSON")
 	}
 	if response.Status == "ERROR" {
 		if _, err := stream.Recv(); err != io.EOF {
-			g.invalidateCapabilities()
+			g.invalidateCapabilities(capability.generation)
 			if err == nil {
 				return fmt.Errorf("python udf: definition validation returned multiple results")
 			}
@@ -469,11 +471,11 @@ func (g *Gateway) ValidateDefinition(ctx context.Context, definition *udf.Routin
 	}
 	if response.Status != statusOK || response.ArtifactDigest != definition.ArtifactDigest ||
 		response.DefinitionFingerprint != definition.DefinitionFingerprint {
-		g.invalidateCapabilities()
+		g.invalidateCapabilities(capability.generation)
 		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python definition validation returned an invalid result")
 	}
 	if _, err := stream.Recv(); err != io.EOF {
-		g.invalidateCapabilities()
+		g.invalidateCapabilities(capability.generation)
 		if err == nil {
 			return fmt.Errorf("python udf: definition validation returned multiple results")
 		}
@@ -524,10 +526,19 @@ func (g *Gateway) Close() error {
 	// released, no caller can pass the admission check after Close returns.
 	g.admissionMu.Lock()
 	g.closed = true
+	g.capabilityGeneration++
+	g.capabilityReady, g.workerLeaseEpoch, g.capability = false, 0, nil
+	var probeCancel context.CancelFunc
+	if g.capabilityProbe != nil {
+		probeCancel = g.capabilityProbe.cancel
+	}
 	conn := g.conn
 	g.conn = nil
 	g.admissionMu.Unlock()
 	g.mu.Unlock()
+	if probeCancel != nil {
+		probeCancel()
+	}
 	if conn == nil {
 		return nil
 	}
@@ -684,7 +695,8 @@ func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, resul
 	if err != nil {
 		return err
 	}
-	if err := g.ensureCapabilities(streamCtx, client, false); err != nil {
+	capability, err := g.ensureCapabilitySnapshot(streamCtx, client, false)
+	if err != nil {
 		return err
 	}
 	// The worker instance owns the lease epoch. Copy the invocation before
@@ -692,9 +704,7 @@ func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, resul
 	// another worker process. If the worker was restarted after the cached
 	// handshake, the exchange fails with STALE_LEASE_EPOCH and the deferred
 	// invalidation below forces a fresh handshake on the next call.
-	g.mu.Lock()
-	workerLeaseEpoch := g.workerLeaseEpoch
-	g.mu.Unlock()
+	workerLeaseEpoch := capability.response.LeaseEpoch
 	if workerLeaseEpoch == 0 {
 		return fmt.Errorf("python udf: capability handshake did not return a worker lease epoch")
 	}
@@ -704,7 +714,7 @@ func (g *Gateway) Execute(ctx context.Context, invocation *udf.Invocation, resul
 	}
 	defer func() {
 		if err != nil {
-			g.invalidateCapabilities()
+			g.invalidateCapabilities(capability.generation)
 		}
 	}()
 	openBody, err := json.Marshal(openPayload{
@@ -1232,97 +1242,139 @@ type capabilityResponse struct {
 // Gateway connection before OpenInvocation, and it caches only a successful
 // match. A worker with an unknown or different contract therefore cannot run
 // user code, while ordinary SQL remains independent of this client.
+type capabilitySnapshot struct {
+	generation uint64
+	response   capabilityResponse
+}
+
+type capabilityProbe struct {
+	generation uint64
+	done       chan struct{}
+	cancel     context.CancelFunc
+	snapshot   capabilitySnapshot
+	err        error
+}
+
 func (g *Gateway) ensureCapabilities(ctx context.Context, client flight.FlightServiceClient, forceRefresh bool) error {
-	g.capabilityMu.Lock()
-	defer g.capabilityMu.Unlock()
+	_, err := g.ensureCapabilitySnapshot(ctx, client, forceRefresh)
+	return err
+}
+
+// One caller owns the RPC. Joiners wait with their own deadline and cancellation;
+// no network operation or wait holds mu. The owner alone retires the probe.
+func (g *Gateway) ensureCapabilitySnapshot(ctx context.Context, client flight.FlightServiceClient, forceRefresh bool) (capabilitySnapshot, error) {
+	ctx, release := g.withLifecycleContext(ctx)
+	defer release()
+	ctx, cancel := context.WithTimeout(ctx, g.cfg.RequestTimeout)
+	defer cancel()
+	if err := ctx.Err(); err != nil {
+		return capabilitySnapshot{}, err
+	}
 	g.mu.Lock()
-	if forceRefresh {
-		// Clear the old lease before probing. If the probe fails, callers must
-		// observe the worker as unavailable rather than retaining a stale
-		// success that could authorize a lease-less Flight Action.
-		g.capabilityReady = false
-		g.workerLeaseEpoch = 0
-		g.capability = nil
-	}
-	ready := g.capabilityReady
-	closed := g.closed
-	g.mu.Unlock()
-	if closed {
-		return errGatewayClosed
-	}
-	if ready {
-		g.mu.Lock()
-		leaseEpoch := g.workerLeaseEpoch
+	if g.closed {
 		g.mu.Unlock()
-		if leaseEpoch != 0 {
-			return nil
-		}
-		// A partially initialized Gateway must not treat readiness as a valid
-		// worker contract. Fall through and establish the complete capability
-		// record again.
+		return capabilitySnapshot{}, errGatewayClosed
 	}
+	if !forceRefresh && g.capabilityReady && g.capability != nil && g.workerLeaseEpoch != 0 {
+		snapshot := capabilitySnapshot{g.capabilityGeneration, *g.capability}
+		g.mu.Unlock()
+		return snapshot, ctx.Err()
+	}
+	if p := g.capabilityProbe; p != nil {
+		g.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return capabilitySnapshot{}, ctx.Err()
+		case <-p.done:
+			if err := ctx.Err(); err != nil {
+				return capabilitySnapshot{}, err
+			}
+			return p.snapshot, p.err
+		}
+	}
+	g.capabilityGeneration++
+	g.capabilityReady, g.workerLeaseEpoch, g.capability = false, 0, nil
+	p := &capabilityProbe{generation: g.capabilityGeneration, done: make(chan struct{}), cancel: cancel}
+	g.capabilityProbe = p
+	g.mu.Unlock()
+	response, err := readCapabilities(ctx, client)
+	g.mu.Lock()
+	if g.closed {
+		err = errGatewayClosed
+	} else if p.generation != g.capabilityGeneration {
+		err = errors.New("python udf: capability probe invalidated")
+	} else if ctx.Err() != nil {
+		err = ctx.Err()
+	}
+	if err == nil {
+		// response is immutable after publication, including its decoded slices.
+		g.capabilityReady, g.workerLeaseEpoch, g.capability = true, response.LeaseEpoch, response
+		p.snapshot = capabilitySnapshot{p.generation, *response}
+	}
+	p.err = err
+	g.capabilityProbe = nil
+	close(p.done)
+	g.mu.Unlock()
+	return p.snapshot, p.err
+}
+
+func readCapabilities(ctx context.Context, client flight.FlightServiceClient) (*capabilityResponse, error) {
 	request, err := json.Marshal(capabilityRequest{ProtocolVersion: protocol.Version})
 	if err != nil {
-		return err
+		return nil, err
 	}
-	actionCtx, cancel := context.WithTimeout(ctx, g.cfg.RequestTimeout)
-	defer cancel()
-	stream, err := client.DoAction(actionCtx, &flight.Action{Type: "GetPythonCapabilities", Body: request})
+	stream, err := client.DoAction(ctx, &flight.Action{Type: "GetPythonCapabilities", Body: request})
 	if err != nil {
-		return fmt.Errorf("python udf: capability handshake: %w", err)
+		return nil, fmt.Errorf("python udf: capability handshake: %w", err)
 	}
 	result, err := stream.Recv()
 	if err != nil {
-		return fmt.Errorf("python udf: capability handshake response: %w", err)
+		return nil, fmt.Errorf("python udf: capability handshake response: %w", err)
 	}
 	if result == nil {
-		return fmt.Errorf("python udf: empty capability handshake response")
+		return nil, fmt.Errorf("python udf: empty capability handshake response")
 	}
 	var response capabilityResponse
 	decoder := json.NewDecoder(bytes.NewReader(result.Body))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&response); err != nil {
-		return fmt.Errorf("python udf: decode capability handshake: %w", err)
+		return nil, fmt.Errorf("python udf: decode capability handshake: %w", err)
 	}
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
-		return fmt.Errorf("python udf: capability handshake has trailing JSON")
+		return nil, fmt.Errorf("python udf: capability handshake has trailing JSON")
 	}
 	if err := validateCapabilities(response); err != nil {
-		return err
+		return nil, err
 	}
 	if _, err := stream.Recv(); err != io.EOF {
 		if err == nil {
-			return fmt.Errorf("python udf: capability handshake returned multiple results")
+			return nil, fmt.Errorf("python udf: capability handshake returned multiple results")
 		}
-		return fmt.Errorf("python udf: capability handshake stream: %w", err)
+		return nil, fmt.Errorf("python udf: capability handshake stream: %w", err)
 	}
-	g.mu.Lock()
-	if !g.closed {
-		g.capabilityReady = true
-		g.workerLeaseEpoch = response.LeaseEpoch
-		capability := response
-		capability.Modes = append([]string(nil), response.Modes...)
-		capability.NullPolicies = append([]string(nil), response.NullPolicies...)
-		g.capability = &capability
-	}
-	g.mu.Unlock()
-	return nil
+	return &response, nil
 }
 
-// invalidateCapabilities is called after a post-handshake execution error.
-// In particular, a restarted worker keeps the same endpoint but advertises a
-// new instance lease epoch; clearing the cached record makes the next
-// invocation perform the handshake again. This never retries the failed
-// invocation or changes its terminal outcome.
-func (g *Gateway) invalidateCapabilities() {
-	g.capabilityMu.Lock()
-	defer g.capabilityMu.Unlock()
+// Invalidating an old execution must not evict a newer worker handshake. Keep a
+// cancelled probe in its physical slot until its owner exits, bounding RPCs even
+// if the transport is slow to acknowledge cancellation.
+func (g *Gateway) invalidateCapabilities(expected ...uint64) {
 	g.mu.Lock()
-	g.capabilityReady = false
-	g.workerLeaseEpoch = 0
-	g.capability = nil
+	if len(expected) != 0 && expected[0] != g.capabilityGeneration {
+		g.mu.Unlock()
+		return
+	}
+	g.capabilityGeneration++
+	g.capabilityReady, g.workerLeaseEpoch, g.capability = false, 0, nil
+	var cancel context.CancelFunc
+	if g.capabilityProbe != nil {
+		cancel = g.capabilityProbe.cancel
+	}
 	g.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 }
 
 func validateCapabilities(response capabilityResponse) error {
