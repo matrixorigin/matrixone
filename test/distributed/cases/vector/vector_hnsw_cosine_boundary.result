@@ -33,7 +33,7 @@ limit 3;
 ➤ id[-5,64,0]  ¦  d[8,53,31]  𝄀
 2  ¦  0.0  𝄀
 3  ¦  0.0  𝄀
-4  ¦  0.057188
+4  ¦  0.057191
 select id, cosine_distance(v, '[1e-20,1e-20,1e-20]') as raw_d
 from h_src
 order by cosine_distance(v, '[1e-20,1e-20,1e-20]')
@@ -41,7 +41,7 @@ limit 3;
 ➤ id[-5,64,0]  ¦  raw_d[8,53,31]  𝄀
 2  ¦  0.0  𝄀
 3  ¦  0.0  𝄀
-4  ¦  0.05718844756484032
+4  ¦  0.05719095841793653
 select id, cosine_distance(v, '[0,0,0]') as zero_query_d
 from h_src order by id;
 ➤ id[-5,64,0]  ¦  zero_query_d[8,53,31]  𝄀
@@ -64,7 +64,7 @@ from h_src order by id;
 1  ¦  1.0  𝄀
 2  ¦  0.0  𝄀
 3  ¦  0.0  𝄀
-4  ¦  0.057188  𝄀
+4  ¦  0.057191  𝄀
 5  ¦  2.0
 with ranked as (
 select id, cosine_distance(v, '[1e-20,1e-20,1e-20]') as d
@@ -86,7 +86,7 @@ limit 3
 select min(d) as min_score, max(d) as max_score
 from ranked q;
 ➤ min_score[8,53,31]  ¦  max_score[8,53,31]  𝄀
-0.0  ¦  0.05718844756484032
+0.0  ¦  0.05719095841793653
 with ranked as (
 select id, cosine_distance(v, '[1e-20,1e-20,1e-20]') as d
 from h_src
@@ -96,7 +96,7 @@ limit 4
 select id, round(d, 6) as d from ranked order by d, id limit 2 offset 1;
 ➤ id[-5,64,0]  ¦  d[8,53,31]  𝄀
 3  ¦  0.0  𝄀
-4  ¦  0.057188
+4  ¦  0.057191
 with ranked as (
 select id, cosine_distance(v, '[1e-20,1e-20,1e-20]') as d
 from h_src
@@ -109,6 +109,6 @@ order by r.d, r.id;
 ➤ id[-5,64,0]  ¦  d[8,53,31]  ¦  name[12,20,0]  𝄀
 2  ¦  0.0  ¦  tiny  𝄀
 3  ¦  0.0  ¦  unit  𝄀
-4  ¦  0.057188  ¦  skew
+4  ¦  0.057191  ¦  skew
 set experimental_hnsw_index = 0;
 drop database hnsw_cosine_boundary;

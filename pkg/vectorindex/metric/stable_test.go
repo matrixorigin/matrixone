@@ -248,6 +248,41 @@ func TestStableReductionsRecoverFromBoundaryAccumulatorOverflow(t *testing.T) {
 	require.Equal(t, -math.MaxFloat64, inner)
 }
 
+func TestStableCosineScaleInvariance(t *testing.T) {
+	t.Run("float32", func(t *testing.T) { testCosineScaleInvariance[float32](t, 1e-20, 1e20) })
+	t.Run("float64", func(t *testing.T) { testCosineScaleInvariance[float64](t, 1e-300, 1e300) })
+}
+
+func testCosineScaleInvariance[T types.RealNumbers](t *testing.T, tiny, large T) {
+	t.Helper()
+	// Directions (1,1,1) and (2,1,1) have dot=4 and squared norms 3 and 6.
+	// Derive the oracle independently of both numerical implementations.
+	want := 1 - 4/math.Sqrt(18)
+	control, err := StableCosineDistance([]T{1, 1, 1}, []T{2, 1, 1})
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name string
+		a, b T
+	}{{"ordinary", 1, 1}, {"tiny_left", tiny, 1}, {"tiny_right", 1, tiny}, {"mixed_extremes", tiny, large}} {
+		t.Run(tc.name, func(t *testing.T) {
+			p, q := []T{tc.a, tc.a, tc.a}, []T{2 * tc.b, tc.b, tc.b}
+			d, err := StableCosineDistance(p, q)
+			require.NoError(t, err)
+			require.False(t, math.IsNaN(d) || math.IsInf(d, 0))
+			require.GreaterOrEqual(t, d, float64(0))
+			require.LessOrEqual(t, d, float64(2))
+			require.InDelta(t, want, d, 1e-14)
+			require.InDelta(t, control, d, 1e-14)
+			negative, err := StableCosineDistance([]T{-tc.a, -tc.a, -tc.a}, q)
+			require.NoError(t, err)
+			require.InDelta(t, 1+4/math.Sqrt(18), negative, 1e-14)
+			zero, err := StableCosineDistance([]T{0, 0, 0}, q)
+			require.NoError(t, err)
+			require.Equal(t, float64(1), zero)
+		})
+	}
+}
+
 func TestStableCosineExtremeFiniteValues(t *testing.T) {
 	large := []float64{1e300, 1e300}
 	tiny := []float64{1e-300, 1e-300}
