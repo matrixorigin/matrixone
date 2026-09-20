@@ -994,6 +994,27 @@ func coalesceJSONResult(overloads []overload, inputs []types.Type) (checkResult,
 }
 
 func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
+	if target, hasVector, ok := conditionalVectorType(inputs); hasVector {
+		if !ok {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+		for i, over := range overloads {
+			if over.args[0] != target.Oid {
+				continue
+			}
+			castTypes := make([]types.Type, len(inputs))
+			aligned := true
+			for j, input := range inputs {
+				castTypes[j] = target
+				aligned = aligned && input.Eq(target)
+			}
+			if aligned {
+				return newCheckResultWithSuccess(i)
+			}
+			return newCheckResultWithCast(i, castTypes)
+		}
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
 	if len(inputs) > 0 {
 		if result, ok := coalesceJSONResult(overloads, inputs); ok {
 			return result
