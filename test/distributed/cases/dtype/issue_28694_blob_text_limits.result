@@ -10,13 +10,10 @@ blob_col blob
 );
 set session sql_mode = 'STRICT_TRANS_TABLES';
 insert into limits (id, tinyblob_col) values (1, repeat('a', 256));
--- @regex("(?i)(data too long|data out of range)", true)
 invalid input: data too long
 insert into limits (id, text_col) values (2, repeat('b', 65536));
--- @regex("(?i)(data too long|data out of range)", true)
 invalid input: data too long
 insert into limits (id, blob_col) values (3, repeat('c', 65536));
--- @regex("(?i)(data too long|data out of range)", true)
 invalid input: data too long
 select count(*) as strict_rows from limits;
 strict_rows
@@ -25,13 +22,11 @@ insert into limits values (20, 'ok', 'ok', 'ok');
 update limits
 set tinyblob_col = repeat('d', 256), text_col = repeat('e', 65536), blob_col = repeat('f', 65536)
 where id = 20;
--- @regex("(?i)(data too long|data out of range)", true)
 invalid input: data too long
 insert into limits (id, tinyblob_col, text_col, blob_col)
 values (20, 'ok', 'ok', 'ok')
 on duplicate key update
 tinyblob_col = repeat('g', 256), text_col = repeat('h', 65536), blob_col = repeat('i', 65536);
--- @regex("(?i)(data too long|data out of range)", true)
 invalid input: data too long
 select id, octet_length(tinyblob_col), octet_length(text_col), octet_length(blob_col)
 from limits where id = 20;
@@ -43,7 +38,6 @@ set @issue_28694_text = repeat('k', 65536);
 set @issue_28694_blob = repeat('l', 65536);
 prepare issue_28694_strict_insert from 'insert into limits values (?, ?, ?, ?)';
 execute issue_28694_strict_insert using @issue_28694_id, @issue_28694_tinyblob, @issue_28694_text, @issue_28694_blob;
--- @regex("(?i)(data too long|data out of range)", true)
 invalid input: data too long
 select count(*) as strict_prepared_rows from limits where id = 21;
 strict_prepared_rows
@@ -51,7 +45,6 @@ strict_prepared_rows
 deallocate prepare issue_28694_strict_insert;
 create table ctas_tiny (id int, value tinyblob) as
 select id, repeat('m', 256) as value from limits where id = 20;
--- @regex("(?i)(data too long|data out of range)", true)
 invalid input: data too long
 select count(*) as strict_ctas_tables
 from information_schema.tables
@@ -109,9 +102,9 @@ id    octet_length(tinyblob_col)    octet_length(text_col)    octet_length(blob_
 11    255    65535    65535
 14    255    65535    65535
 select
-sum(lower(data_type) = 'tinyblob' and lower(column_type) = 'tinyblob' and character_maximum_length = 255 and character_octet_length = 255) as tinyblob_metadata,
-sum(lower(data_type) = 'text' and lower(column_type) = 'text' and character_maximum_length = 65535 and character_octet_length = 65535) as text_metadata,
-sum(lower(data_type) = 'blob' and lower(column_type) = 'blob' and character_maximum_length = 65535 and character_octet_length = 65535) as blob_metadata
+sum(case when lower(data_type) = 'tinyblob' and lower(column_type) = 'tinyblob' and character_maximum_length = 255 and character_octet_length = 255 then 1 else 0 end) as tinyblob_metadata,
+sum(case when lower(data_type) = 'text' and lower(column_type) = 'text' and character_maximum_length = 65535 and character_octet_length = 65535 then 1 else 0 end) as text_metadata,
+sum(case when lower(data_type) = 'blob' and lower(column_type) = 'blob' and character_maximum_length = 65535 and character_octet_length = 65535 then 1 else 0 end) as blob_metadata
 from information_schema.columns
 where table_schema = database() and table_name = 'limits';
 tinyblob_metadata    text_metadata    blob_metadata

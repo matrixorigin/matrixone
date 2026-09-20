@@ -58,7 +58,7 @@ ORDER BY c.ordinal_position;
 data_type    character_set_name    character_maximum_length    character_octet_length    maxlen
 char    utf8mb4    8    32    4
 varchar    utf8mb4    128    512    4
-text    utf8mb4    255    255    4
+tinytext    utf8mb4    255    255    4
 text    utf8mb4    65535    65535    4
 DROP TABLE charset_metadata_repro;
 DROP DATABASE IF EXISTS charset_test_utf8;

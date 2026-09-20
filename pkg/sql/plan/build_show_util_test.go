@@ -1123,10 +1123,14 @@ func TestFormatColTypeBlobFamily(t *testing.T) {
 		want  string
 	}{
 		{types.MaxTinyTextLen, "TINYBLOB"},
+		{1, "TINYBLOB"},
+		{types.MaxTinyTextLen + 1, "BLOB"},
 		{types.MaxStringSize, "BLOB"},
+		{types.MaxStringSize + 1, "MEDIUMBLOB"},
 		{types.MaxMediumTextLen, "MEDIUMBLOB"},
+		{types.MaxMediumTextLen + 1, "LONGBLOB"},
 		{types.MaxLongTextLen, "LONGBLOB"},
-		{0, "BLOB"},
+		{0, "LONGBLOB"},
 	} {
 		require.Equal(t, tc.want, FormatColType(plan.Type{
 			Id:    int32(types.T_blob),

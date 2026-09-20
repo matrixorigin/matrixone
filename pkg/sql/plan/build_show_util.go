@@ -1225,12 +1225,16 @@ func FormatColType(colType plan.Type) string {
 			ts = "LONGTEXT"
 		}
 	} else if typ.Oid == types.T_blob {
-		switch colType.Width {
-		case types.MaxTinyTextLen:
+		switch {
+		case colType.Width == 0:
+			// Legacy catalog BLOBs used width zero to mean unbounded. Emit the
+			// widest SQL family so recreation and dump/restore cannot narrow them.
+			ts = "LONGBLOB"
+		case colType.Width > 0 && colType.Width <= types.MaxTinyTextLen:
 			ts = "TINYBLOB"
-		case types.MaxMediumTextLen:
+		case colType.Width > types.MaxStringSize && colType.Width <= types.MaxMediumTextLen:
 			ts = "MEDIUMBLOB"
-		case types.MaxLongTextLen:
+		case colType.Width > types.MaxMediumTextLen:
 			ts = "LONGBLOB"
 		}
 	}
