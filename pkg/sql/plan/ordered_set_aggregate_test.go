@@ -80,6 +80,7 @@ func TestBuildOrderedSetAggregates(t *testing.T) {
 		{name: "approximate", function: NameApproxPercentile, sql: "select approx_percentile(0.5) within group (order by a) from select_test.bind_select"},
 		{name: "approximate descending", function: NameApproxPercentile, sql: "select approx_percentile(0.5) within group (order by a desc) from select_test.bind_select", desc: 1},
 		{name: "group concat within group", function: NameGroupConcat, sql: "select group_concat(a) within group (order by b desc) from select_test.bind_select", wantOrder: true},
+		{name: "listagg compatibility", function: NameGroupConcat, sql: "select listagg(a, '|') within group (order by b desc) from select_test.bind_select", wantOrder: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)
@@ -96,6 +97,35 @@ func TestBuildOrderedSetAggregates(t *testing.T) {
 			}
 			require.Len(t, fn.Args, 2)
 			require.Equal(t, tc.desc, fn.AggConfig[0])
+		})
+	}
+}
+
+func TestBuildArrayAggCompatibility(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	for _, tc := range []struct {
+		name       string
+		sql        string
+		wantWindow bool
+	}{
+		{name: "aggregate", sql: "select array_agg(a) from select_test.bind_select"},
+		{name: "distinct aggregate", sql: "select array_agg(distinct a) from select_test.bind_select"},
+		{name: "window", sql: "select array_agg(a) over (partition by b order by a) from select_test.bind_select", wantWindow: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			queryPlan, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+
+			var fn *planpb.Function
+			if tc.wantWindow {
+				fn = findWindowFunctionByName(queryPlan.GetQuery(), "json_arrayagg")
+			} else {
+				fn = findAggregateByName(queryPlan.GetQuery(), "json_arrayagg")
+			}
+			require.NotNil(t, fn)
 		})
 	}
 }

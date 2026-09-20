@@ -21,8 +21,10 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -1677,6 +1679,58 @@ func TestWindowFrameConstValueHelpers(t *testing.T) {
 		)
 		require.NoError(t, err)
 		require.Equal(t, int64(11), got.GetLit().Value.(*planpb.Literal_I64Val).I64Val)
+	})
+
+	t.Run("numeric range bounds preserve decimal protocol provenance", func(t *testing.T) {
+		rt := moruntime.ServiceRuntime(proc.GetService())
+		oldFloor, hadFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor)
+		t.Cleanup(func() {
+			if hadFloor {
+				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, oldFloor)
+			} else if current, ok := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolFloor); ok {
+				rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolFloor, current)
+			}
+		})
+
+		for _, bound := range []string{"start", "end"} {
+			t.Run(bound, func(t *testing.T) {
+				source := makePlan2Int64ConstExprWithType(11)
+				source.GetLit().DecimalLiteralRequiresV82 = true
+				got, err := makeWindowFrameConstValue(
+					func(tree.Expr, int32, bool) (*Expr, error) { return source, nil },
+					proc,
+					context.Background(),
+					testNumVal(11),
+					&planpb.Type{Id: int32(types.T_int64)},
+				)
+				require.NoError(t, err)
+				require.True(t, got.GetLit().DecimalLiteralRequiresV82)
+
+				required, err := RequiredPersistedExpressionProtocolVersion(got)
+				require.NoError(t, err)
+				require.Equal(t, int64(defines.MORPCVersion89), required)
+
+				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion88))
+				require.ErrorContains(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, got), "protocol version 89")
+				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion89))
+				require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, got))
+			})
+		}
+
+		unmarked, err := makeWindowFrameConstValue(
+			func(tree.Expr, int32, bool) (*Expr, error) {
+				return makePlan2Int64ConstExprWithType(11), nil
+			},
+			proc,
+			context.Background(),
+			testNumVal(11),
+			&planpb.Type{Id: int32(types.T_int64)},
+		)
+		require.NoError(t, err)
+		require.False(t, unmarked.GetLit().DecimalLiteralRequiresV82)
+		required, err := RequiredPersistedExpressionProtocolVersion(unmarked)
+		require.NoError(t, err)
+		require.Zero(t, required)
 	})
 
 	t.Run("interval expr is normalized through helper", func(t *testing.T) {

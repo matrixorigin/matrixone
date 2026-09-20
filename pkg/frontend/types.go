@@ -422,6 +422,9 @@ type PrepareStmt struct {
 	// EXECUTE.
 	runtimeSpecializationPlan   *plan.Plan
 	runtimeSpecializationNeeded bool
+	// runtimeIntegerAssignmentParams belongs to the same plan generation. These
+	// markers alone do not force specialization for ordinary integer packets.
+	runtimeIntegerAssignmentParams []int32
 }
 
 // preparedStmtCursor is the server-side result retained between

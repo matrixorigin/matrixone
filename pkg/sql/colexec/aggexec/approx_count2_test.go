@@ -478,6 +478,147 @@ func TestHllV4UsesCanonicalTypedValues(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestHllAddUsesCanonicalTypedStateForCharAndJSON(t *testing.T) {
+	tests := []struct {
+		name  string
+		typ   types.Type
+		left  []byte
+		right []byte
+	}{
+		{
+			name:  "char-pad-space",
+			typ:   types.New(types.T_char, 4, 0),
+			left:  []byte("a"),
+			right: []byte("a "),
+		},
+		{
+			name:  "json-numeric-encoding",
+			typ:   types.T_json.ToType(),
+			left:  mustHLLJSON(t, "[1,{\"n\":2.0}]"),
+			right: mustHLLJSON(t, "[1.0,{\"n\":2}]"),
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			run := func(valuesBytes ...[]byte) []byte {
+				exec := makeHllAdd(mp, 1, tc.typ).(*hllAddExec)
+				require.False(t, exec.legacyWireState)
+				require.NoError(t, exec.GroupGrow(1))
+				values := vector.NewVec(tc.typ)
+				for _, value := range valuesBytes {
+					require.NoError(t, vector.AppendBytes(values, value, false, mp))
+				}
+				require.NoError(t, exec.BulkFill(0, []*vector.Vector{values}))
+				result, err := exec.Flush()
+				require.NoError(t, err)
+				encoded := bytes.Clone(result[0].GetBytesAt(0))
+				require.Equal(t, hllVersion, encoded[0])
+				result[0].Free(mp)
+				values.Free(mp)
+				exec.Free()
+				return encoded
+			}
+
+			leftOnly := run(tc.left)
+			rightOnly := run(tc.right)
+			both := run(tc.left, tc.right)
+			require.Equal(t, leftOnly, rightOnly)
+			require.Equal(t, leftOnly, both)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+
+	// VARCHAR is the control: trailing spaces are significant in its SQL
+	// equality domain and must not be folded by HLL_ADD_AGG.
+	mp := mpool.MustNewZero()
+	typ := types.New(types.T_varchar, 4, 0)
+	run := func(value []byte) []byte {
+		exec := makeHllAdd(mp, 1, typ).(*hllAddExec)
+		require.True(t, exec.legacyWireState)
+		require.NoError(t, exec.GroupGrow(1))
+		values := vector.NewVec(typ)
+		require.NoError(t, vector.AppendBytes(values, value, false, mp))
+		require.NoError(t, exec.BulkFill(0, []*vector.Vector{values}))
+		result, err := exec.Flush()
+		require.NoError(t, err)
+		encoded := bytes.Clone(result[0].GetBytesAt(0))
+		result[0].Free(mp)
+		values.Free(mp)
+		exec.Free()
+		return encoded
+	}
+	require.NotEqual(t, run([]byte("a")), run([]byte("a ")))
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestHllAddRestoredLegacyStateKeepsRawHashDomain(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		typ   types.Type
+		left  []byte
+		right []byte
+	}{
+		{
+			name:  "char",
+			typ:   types.New(types.T_char, 4, 0),
+			left:  []byte("a"),
+			right: []byte("a "),
+		},
+		{
+			name:  "json",
+			typ:   types.T_json.ToType(),
+			left:  mustHLLJSON(t, "1"),
+			right: mustHLLJSON(t, "1.0"),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			source := makeHllAdd(mp, 1, tc.typ).(*hllAddExec)
+			ConfigureHLLLegacyState(source)
+			require.NoError(t, source.GroupGrow(1))
+			left := vector.NewVec(tc.typ)
+			require.NoError(t, vector.AppendBytes(left, tc.left, false, mp))
+			require.NoError(t, source.BulkFill(0, []*vector.Vector{left}))
+			var intermediate bytes.Buffer
+			require.NoError(t, source.SaveIntermediateResult(
+				1, [][]uint8{{1}}, &intermediate))
+
+			restored := makeHllAdd(mp, 1, tc.typ).(*hllAddExec)
+			require.NoError(t, restored.UnmarshalFromReader(
+				bytes.NewReader(intermediate.Bytes()), mp))
+			right := vector.NewVec(tc.typ)
+			require.NoError(t, vector.AppendBytes(right, tc.right, false, mp))
+			require.NoError(t, restored.BulkFill(0, []*vector.Vector{right}))
+			result, err := restored.Flush()
+			require.NoError(t, err)
+			require.Equal(t, hllLegacyVersion, result[0].GetBytesAt(0)[0])
+
+			expected := makeHllAdd(mp, 1, tc.typ).(*hllAddExec)
+			ConfigureHLLLegacyState(expected)
+			require.NoError(t, expected.GroupGrow(1))
+			both := vector.NewVec(tc.typ)
+			require.NoError(t, vector.AppendBytes(both, tc.left, false, mp))
+			require.NoError(t, vector.AppendBytes(both, tc.right, false, mp))
+			require.NoError(t, expected.BulkFill(0, []*vector.Vector{both}))
+			expectedResult, err := expected.Flush()
+			require.NoError(t, err)
+			require.Equal(t, expectedResult[0].GetBytesAt(0),
+				result[0].GetBytesAt(0))
+
+			expectedResult[0].Free(mp)
+			both.Free(mp)
+			expected.Free()
+			result[0].Free(mp)
+			right.Free(mp)
+			restored.Free()
+			left.Free(mp)
+			source.Free()
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
 func mustHLLJSON(t *testing.T, text string) []byte {
 	t.Helper()
 	value, err := types.ParseStringToByteJson(text)
