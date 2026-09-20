@@ -16,14 +16,15 @@ package colexec
 
 import (
 	"encoding/json"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/udf/udferr"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -73,13 +74,13 @@ func newExternalRoutineEval(
 	allocation *vector.AllocationAccountSelection,
 ) (*ExternalRoutineEval, error) {
 	if proc == nil || proc.Base == nil {
-		return nil, moerr.NewInternalErrorNoCtxf("python udf: evaluator has no process")
+		return nil, udferr.Newf("python udf: evaluator has no process")
 	}
 	if err := validateRoutineCall(call); err != nil {
 		return nil, err
 	}
 	if len(call.ArgumentTypes) != len(parameters) {
-		return nil, moerr.NewInternalErrorNoCtxf("python udf: typed routine has %d argument descriptors but %d bound arguments", len(call.ArgumentTypes), len(parameters))
+		return nil, udferr.Newf("python udf: typed routine has %d argument descriptors but %d bound arguments", len(call.ArgumentTypes), len(parameters))
 	}
 	resultType := planTypeToSQL(call.ReturnType)
 	result, err := vector.NewFunctionResultWrapperWithAllocation(resultType, proc.Mp(), allocation)
@@ -100,59 +101,59 @@ func newExternalRoutineEval(
 func validateRoutineCall(call *planpb.RoutineCall) error {
 	if call == nil || call.FunctionRef == nil || call.FunctionRef.FunctionId == 0 ||
 		call.FunctionRef.DatabaseId == 0 || call.FunctionRef.Revision == 0 || call.FunctionRef.NamespaceVersion == 0 {
-		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: typed routine call has no exact FunctionRef")
+		return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: typed routine call has no exact FunctionRef")
 	}
 	if call.ReturnType.Id == int32(types.T_any) {
-		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: typed routine call has no return descriptor")
+		return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: typed routine call has no return descriptor")
 	}
 	if call.ContractVersion != udf.PythonPlanContractVersion || call.Language != udf.LanguagePython {
-		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: unsupported typed routine call contract")
+		return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: unsupported typed routine call contract")
 	}
 	if call.Volatility != "VOLATILE" {
-		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python routine must be VOLATILE")
+		return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: Python routine must be VOLATILE")
 	}
-	if call.MayError != true || call.SecurityMode != "INVOKER" || call.Leakproof {
-		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python routine semantic contract is not supported")
+	if !call.MayError || call.SecurityMode != "INVOKER" || call.Leakproof {
+		return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: Python routine semantic contract is not supported")
 	}
 	if call.CallsiteId == "" || len(call.CallsiteId) > 256 || strings.ContainsAny(call.CallsiteId, "\r\n") {
-		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: typed routine call has no valid callsite id")
+		return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: typed routine call has no valid callsite id")
 	}
 	if len(call.Context) != 0 {
-		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: typed routine call contains execution context")
+		return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: typed routine call contains execution context")
 	}
 	python := call.GetPython()
 	if python == nil {
-		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: typed routine call has no Python implementation")
+		return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: typed routine call has no Python implementation")
 	}
 	if python.Source != "" {
-		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: typed Python plan contains source; rebind from the current artifact contract")
+		return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: typed Python plan contains source; rebind from the current artifact contract")
 	}
 	if python.Handler == "" ||
 		python.AbiContract != udf.PythonABIContract ||
 		python.AdapterVersion != udf.PythonAdapterVersion ||
 		python.SdkVersion != udf.PythonSDKVersion ||
 		python.DefinitionSchemaVersion != udf.PythonDefinitionSchemaVersion {
-		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: typed Python implementation contract is not supported")
+		return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: typed Python implementation contract is not supported")
 	}
 	if python.Mode != "SCALAR" && python.Mode != "VECTOR" {
-		return moerr.NewInternalErrorNoCtxf("python udf: unsupported typed call mode %q", python.Mode)
+		return udferr.Newf("python udf: unsupported typed call mode %q", python.Mode)
 	}
 	if python.NullPolicy != udf.NullCallHandler && python.NullPolicy != udf.NullReturnNull {
-		return moerr.NewInternalErrorNoCtxf("python udf: unsupported typed NULL policy %q", python.NullPolicy)
+		return udferr.Newf("python udf: unsupported typed NULL policy %q", python.NullPolicy)
 	}
 	if call.NullPolicy != python.NullPolicy {
-		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: typed call NULL policy does not match its implementation")
+		return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: typed call NULL policy does not match its implementation")
 	}
 	if !udf.IsSHA256Digest(python.ArtifactDigest) || !udf.IsSHA256Digest(python.EnvironmentDigest) {
-		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: typed Python implementation has invalid artifact/environment digest")
+		return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: typed Python implementation has invalid artifact/environment digest")
 	}
 	if !udf.IsSHA256Digest(python.DefinitionFingerprint) {
-		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: typed Python implementation has invalid definition fingerprint")
+		return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: typed Python implementation has invalid definition fingerprint")
 	}
 	arguments := make([]pythonudf.TypeDescriptor, len(call.ArgumentTypes))
 	for i, argumentType := range call.ArgumentTypes {
 		if argumentType == nil {
-			return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: typed Python argument %d is nil", i)
+			return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: typed Python argument %d is nil", i)
 		}
 		descriptor, err := function.NewPythonTypeDescriptor(planTypeToSQL(*argumentType))
 		if err != nil {
@@ -173,7 +174,7 @@ func validateRoutineCall(call *planpb.RoutineCall) error {
 		return errutil.Wrapf(err, "UNSUPPORTED_ROUTINE_VERSION: invalid typed Python definition")
 	}
 	if fingerprint != python.DefinitionFingerprint {
-		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: typed Python definition fingerprint mismatch")
+		return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: typed Python definition fingerprint mismatch")
 	}
 
 	return nil
@@ -185,12 +186,12 @@ func (e *ExternalRoutineEval) Eval(proc *process.Process, batches []*batch.Batch
 
 func (e *ExternalRoutineEval) eval(proc *process.Process, batches []*batch.Batch, selectList []bool, transfer bool) (output *vector.Vector, evalErr error) {
 	if e == nil || proc == nil || proc.Base == nil {
-		return nil, moerr.NewInternalErrorNoCtxf("python udf: evaluator has no process")
+		return nil, udferr.Newf("python udf: evaluator has no process")
 	}
 	e.executionMu.Lock()
 	defer e.executionMu.Unlock()
 	if e.freed {
-		return nil, moerr.NewInternalErrorNoCtxf("python udf: evaluator is freed")
+		return nil, udferr.Newf("python udf: evaluator is freed")
 	}
 	// Transfer under executionMu, before a concurrent Eval/Free can reuse the
 	// backing. The wrapper retains its allocation policy for the next result.
@@ -208,7 +209,7 @@ func (e *ExternalRoutineEval) eval(proc *process.Process, batches []*batch.Batch
 		return nil, err
 	}
 	if uint64(accountID) != e.call.FunctionRef.AccountId {
-		return nil, moerr.NewInternalErrorNoCtxf("python udf: FunctionRef account does not match the execution account")
+		return nil, udferr.Newf("python udf: FunctionRef account does not match the execution account")
 	}
 	python := e.call.GetPython()
 	rowCount, err := externalRoutineRowCount(python.Mode, batches)
@@ -219,7 +220,7 @@ func (e *ExternalRoutineEval) eval(proc *process.Process, batches []*batch.Batch
 	// early before this check would let a stale selection mask cross the
 	// physical boundary and hide a relation-position bug in the caller.
 	if selectList != nil && len(selectList) != rowCount {
-		return nil, moerr.NewInternalErrorNoCtxf("external routine selection has %d rows, expected %d", len(selectList), rowCount)
+		return nil, udferr.Newf("external routine selection has %d rows, expected %d", len(selectList), rowCount)
 	}
 	if rowCount == 0 {
 		if err := e.result.PreExtendAndReset(0); err != nil {
@@ -338,16 +339,16 @@ func (e *ExternalRoutineEval) eval(proc *process.Process, batches []*batch.Batch
 		Tuple: tuple,
 	}
 	if proc.Base.UdfService == nil {
-		return nil, moerr.NewInternalErrorNoCtxf("RESOURCE_UNAVAILABLE: Python UDF runtime is not enabled")
+		return nil, udferr.Newf("RESOURCE_UNAVAILABLE: Python UDF runtime is not enabled")
 	}
 	if err := proc.Base.UdfService.Execute(proc.Ctx, invocation, selectedResult, proc.Mp()); err != nil {
 		return nil, err
 	}
 	if selectedResult.ResultLength() != len(e.selectedRows) {
-		return nil, moerr.NewInternalErrorNoCtxf("python udf: runtime produced %d result rows, expected %d", selectedResult.ResultLength(), len(e.selectedRows))
+		return nil, udferr.Newf("python udf: runtime produced %d result rows, expected %d", selectedResult.ResultLength(), len(e.selectedRows))
 	}
 	if selectedResult.GetResultVector() == nil {
-		return nil, moerr.NewInternalErrorNoCtxf("python udf: runtime returned no result vector")
+		return nil, udferr.Newf("python udf: runtime returned no result vector")
 	}
 	if len(e.selectedRows) == rowCount {
 		return e.result.GetResultVector(), nil
@@ -364,7 +365,7 @@ func (e *ExternalRoutineEval) eval(proc *process.Process, batches []*batch.Batch
 // that two calls belong to the same statement.
 func (e *ExternalRoutineEval) attachInvocationGroup(context map[string]string, queryID string) error {
 	if context == nil {
-		return moerr.NewInternalErrorNoCtxf("python udf: invocation context is unavailable")
+		return udferr.Newf("python udf: invocation context is unavailable")
 	}
 	e.groupMu.Lock()
 	defer e.groupMu.Unlock()
@@ -387,7 +388,7 @@ func (e *ExternalRoutineEval) attachInvocationGroup(context map[string]string, q
 		e.groupEpoch = 0
 	}
 	if e.groupEpoch == ^uint64(0) {
-		return moerr.NewInternalErrorNoCtxf("RESOURCE_EXHAUSTED: Python UDF execution group epoch overflow")
+		return udferr.Newf("RESOURCE_EXHAUSTED: Python UDF execution group epoch overflow")
 	}
 	e.groupEpoch++
 	context["group_id"] = e.groupID
@@ -409,7 +410,7 @@ func (e *ExternalRoutineEval) compactParameters(proc *process.Process, rowCount 
 	e.selectedParameters = e.selectedParameters[:0]
 	for i, input := range e.parameterResults {
 		if input == nil {
-			return nil, moerr.NewInternalErrorNoCtxf("external routine parameter %d is nil", i)
+			return nil, udferr.Newf("external routine parameter %d is nil", i)
 		}
 		if input.IsConst() || len(e.selectedRows) == rowCount {
 			e.selectedParameters = append(e.selectedParameters, input)
@@ -432,14 +433,14 @@ func (e *ExternalRoutineEval) compactParameters(proc *process.Process, rowCount 
 
 func validateExternalRoutineInputs(inputs []*vector.Vector, call *planpb.RoutineCall, rowCount int) error {
 	if len(inputs) != len(call.ArgumentTypes) {
-		return moerr.NewInternalErrorNoCtxf("python udf: evaluated input count %d does not match routine argument count %d", len(inputs), len(call.ArgumentTypes))
+		return udferr.Newf("python udf: evaluated input count %d does not match routine argument count %d", len(inputs), len(call.ArgumentTypes))
 	}
 	for index, input := range inputs {
 		if input == nil || input.GetType() == nil {
-			return moerr.NewInternalErrorNoCtxf("python udf: evaluated input vector %d has no type", index)
+			return udferr.Newf("python udf: evaluated input vector %d has no type", index)
 		}
 		if input.Length() == 0 || (!input.IsConst() && input.Length() < rowCount) {
-			return moerr.NewInternalErrorNoCtxf("python udf: evaluated input vector %d has %d rows, expected at least %d", index, input.Length(), rowCount)
+			return udferr.Newf("python udf: evaluated input vector %d has %d rows, expected at least %d", index, input.Length(), rowCount)
 		}
 		expected, err := function.NewPythonTypeDescriptor(planTypeToSQL(*call.ArgumentTypes[index]))
 		if err != nil {
@@ -458,7 +459,7 @@ func validateExternalRoutineInputs(inputs []*vector.Vector, call *planpb.Routine
 			return err
 		}
 		if expectedFingerprint != actualFingerprint {
-			return moerr.NewInternalErrorNoCtxf("python udf: evaluated input vector %d type %s does not match the frozen descriptor", index, input.GetType().DescString())
+			return udferr.Newf("python udf: evaluated input vector %d type %s does not match the frozen descriptor", index, input.GetType().DescString())
 		}
 	}
 	return nil
@@ -588,20 +589,20 @@ func externalRoutineRowCount(mode string, batches []*batch.Batch) (int, error) {
 		rowCount := -1
 		for index, input := range batches {
 			if input == nil {
-				return 0, moerr.NewInternalErrorNoCtxf("external routine input batch %d is nil", index)
+				return 0, udferr.Newf("external routine input batch %d is nil", index)
 			}
 			if rowCount < 0 {
 				rowCount = input.RowCount()
 				continue
 			}
 			if input.RowCount() != rowCount {
-				return 0, moerr.NewInternalErrorNoCtxf("python udf: external routine input batch %d has %d rows, expected %d for the logical row domain", index, input.RowCount(), rowCount)
+				return 0, udferr.Newf("python udf: external routine input batch %d has %d rows, expected %d for the logical row domain", index, input.RowCount(), rowCount)
 			}
 		}
 		return rowCount, nil
 	}
 	if mode == "VECTOR" {
-		return 0, moerr.NewInternalErrorNoCtxf("python udf: zero-argument VECTOR requires an input batch with num_rows")
+		return 0, udferr.Newf("python udf: zero-argument VECTOR requires an input batch with num_rows")
 	}
 	return 1, nil
 }
@@ -612,7 +613,7 @@ func externalRoutineRowCount(mode string, batches []*batch.Batch) (int, error) {
 // prepared plan can outlive both.
 func buildRoutineContext(proc *process.Process) (map[string]string, error) {
 	if proc == nil || proc.Base == nil {
-		return nil, moerr.NewInternalErrorNoCtxf("python udf: process is unavailable for statement context")
+		return nil, udferr.Newf("python udf: process is unavailable for statement context")
 	}
 	context := make(map[string]string)
 	// The current query id is stable for the statement and changes for every
@@ -630,7 +631,7 @@ func buildRoutineContext(proc *process.Process) (map[string]string, error) {
 		// the lifetime of that process; a real frontend statement always uses
 		// its query start above.
 		if proc.Base.UnixTime == 0 {
-			return nil, moerr.NewInternalErrorNoCtxf("python udf: statement timestamp is unavailable")
+			return nil, udferr.Newf("python udf: statement timestamp is unavailable")
 		}
 		queryStart = time.Unix(0, proc.Base.UnixTime)
 	}
@@ -638,12 +639,12 @@ func buildRoutineContext(proc *process.Process) (map[string]string, error) {
 
 	location := proc.GetSessionInfo().TimeZone
 	if location == nil {
-		return nil, moerr.NewInternalErrorNoCtxf("python udf: session timezone is unavailable")
+		return nil, udferr.Newf("python udf: session timezone is unavailable")
 	}
 	zoneName := location.String()
 	var timezoneErr error
 	if zoneName == "" || zoneName == "SYSTEM" {
-		return nil, moerr.NewInternalErrorNoCtxf("python udf: session timezone is not a stable IANA identity")
+		return nil, udferr.Newf("python udf: session timezone is not a stable IANA identity")
 	}
 	if zoneName == "Local" {
 		zoneName, location, timezoneErr = resolveSystemTimezone()
@@ -654,7 +655,7 @@ func buildRoutineContext(proc *process.Process) (map[string]string, error) {
 	if zoneName == "FixedZone" {
 		_, offset := queryStart.In(location).Zone()
 		if offset%60 != 0 {
-			return nil, moerr.NewInternalErrorNoCtxf("python udf: fixed session timezone offset must be a whole number of minutes")
+			return nil, udferr.Newf("python udf: fixed session timezone offset must be a whole number of minutes")
 		}
 		context["session_timezone_kind"] = "FIXED_OFFSET"
 		context["session_timezone_offset_minutes"] = formatTimezoneOffsetMinutes(offset / 60)
@@ -720,7 +721,7 @@ func resolveSystemTimezone() (string, *time.Location, error) {
 			return candidate, location, nil
 		}
 	}
-	return "", nil, moerr.NewInternalErrorNoCtxf("python udf: SYSTEM timezone has no stable IANA identity")
+	return "", nil, udferr.Newf("python udf: SYSTEM timezone has no stable IANA identity")
 }
 
 func formatTimezoneOffsetMinutes(offset int) string {

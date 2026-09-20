@@ -166,7 +166,10 @@ func TestImportBoundaryPolicies(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			matches := importMatchesPrefix(tt.importPath, tt.policy.importPrefixes)
-			if matches && tt.policy.allows(tt.relativePath) != tt.allowed {
+			if !matches {
+				t.Fatal("expected policy to match the protected module")
+			}
+			if tt.policy.allows(tt.relativePath) != tt.allowed {
 				t.Fatalf("policy allowed=%v for %s importing %s, want %v",
 					tt.policy.allows(tt.relativePath), tt.relativePath, tt.importPath, tt.allowed)
 			}
@@ -222,5 +225,27 @@ func findRepoRoot(t *testing.T) string {
 			t.Fatalf("go.mod not found from %s", dir)
 		}
 		dir = parent
+	}
+}
+
+func TestImportBoundaryModuleNames(t *testing.T) {
+	for _, tc := range []struct {
+		path string
+		want bool
+	}{
+		{"github.com/apache/arrow-go/v18/arrow", true},
+		{"github.com/apache/arrow/go/v12/arrow", true},
+		{"github.com/apache/arrow-gopher/arrow", false},
+		{"github.com/apache/arrow/golang", false},
+		{"example.com/arrow", false},
+	} {
+		if got := importMatchesPrefix(tc.path, importBoundaryPolicies[1].importPrefixes); got != tc.want {
+			t.Errorf("%s: got %v, want %v", tc.path, got, tc.want)
+		}
+	}
+	for _, path := range []string{"pkg/container/arrowbridge/reader.go", "pkg/sql/plan/binder.go"} {
+		if importBoundaryPolicies[0].allows(path) {
+			t.Errorf("Iceberg unexpectedly allowed in %s", path)
+		}
 	}
 }

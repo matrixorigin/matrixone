@@ -743,6 +743,8 @@ func startRealWorker(t testing.TB, python, workerPath string, port int) *exec.Cm
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	}
 	require.NoError(t, cmd.Start())
+	// Own cleanup before readiness can fail; Fatal also runs test cleanups.
+	t.Cleanup(func() { stopRealWorker(cmd) })
 	waitForWorkerPort(t, port)
 	return cmd
 }
@@ -756,7 +758,7 @@ func stopRealWorker(cmd *exec.Cmd) {
 	} else {
 		_ = cmd.Process.Kill()
 	}
-	_, _ = cmd.Process.Wait()
+	_ = cmd.Wait()
 }
 
 func integrationInput(t testing.TB, values []int64) (*vector.Vector, *mpool.MPool) {
@@ -867,4 +869,17 @@ func routineDefinitionForIntegration(invocation *udf.Invocation) *udf.RoutineDef
 		EnvironmentDigest:       invocation.EnvironmentDigest,
 		DefinitionFingerprint:   invocation.DefinitionFingerprint,
 	}
+}
+
+func TestRealWorkerStopRecordsCompletion(t *testing.T) {
+	python, err := exec.LookPath("python3")
+	require.NoError(t, err)
+	cmd := startRealWorker(t, python, realWorkerPath(t), freeTCPPort(t))
+	stopRealWorker(cmd)
+	// Process.Wait alone does not publish this state on Cmd, so delayed cleanup
+	// could send a second signal to a process group whose ID has been reused.
+	require.NotNil(t, cmd.ProcessState)
+	completed := cmd.ProcessState
+	stopRealWorker(cmd)
+	require.Same(t, completed, cmd.ProcessState)
 }
