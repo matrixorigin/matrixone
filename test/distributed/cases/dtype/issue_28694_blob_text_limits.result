@@ -191,7 +191,7 @@ select octet_length(stored_value) from default_limits where id = 7;
 octet_length(stored_value)
 65535
 create table fk_limits (id int primary key, value tinyblob, assigned_length int default (octet_length(value)));
-create table fk_child (id int primary key, parent_id int, foreign key (parent_id) references fk_limits(id));
+create table fk_child (id int primary key, parent_id int, value tinyblob, foreign key (parent_id) references fk_limits(id));
 set session sql_mode = 'STRICT_TRANS_TABLES';
 load data inline format='csv', data='1,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' into table fk_limits fields terminated by ',' (id, value);
 Data truncation: Can't cast column from BLOB type to BLOB type because of one or more values in that column. Src length 256 is larger than Dest length 255
@@ -220,6 +220,28 @@ select id, octet_length(value), assigned_length from fk_limits order by id;
 id    octet_length(value)    assigned_length
 2    255    255
 3    255    255
+load data inline format='csv', data='1,2,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' into table fk_child fields terminated by ',';
+Data truncation: Can't cast column from BLOB type to BLOB type because of one or more values in that column. Src length 256 is larger than Dest length 255
+select count(*) as strict_child_rows from fk_child;
+strict_child_rows
+0
+set session sql_mode = '';
+load data inline format='csv', data='2,2,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' into table fk_child fields terminated by ',';
+select @@warning_count;
+@@warning_count
+1
+select id, parent_id, octet_length(value) from fk_child order by id;
+id    parent_id    octet_length(value)
+2    2    255
+set session sql_mode = 'STRICT_TRANS_TABLES';
+load data inline format='csv', data='3,2,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' ignore into table fk_child fields terminated by ',';
+select @@warning_count;
+@@warning_count
+1
+select id, parent_id, octet_length(value) from fk_child order by id;
+id    parent_id    octet_length(value)
+2    2    255
+3    2    255
 create table fk_default (id int primary key, source_value longtext,
 stored_value text default (cast(source_value as text)));
 create table fk_default_child (id int primary key, parent_id int, foreign key (parent_id) references fk_default(id));

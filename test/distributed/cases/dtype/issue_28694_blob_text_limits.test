@@ -148,7 +148,7 @@ select octet_length(stored_value) from default_limits where id = 7;
 
 -- An FK relationship selects legacy LOAD/INSERT. Assignment precedes dependent defaults.
 create table fk_limits (id int primary key, value tinyblob, assigned_length int default (octet_length(value)));
-create table fk_child (id int primary key, parent_id int, foreign key (parent_id) references fk_limits(id));
+create table fk_child (id int primary key, parent_id int, value tinyblob, foreign key (parent_id) references fk_limits(id));
 set session sql_mode = 'STRICT_TRANS_TABLES';
 -- @regex("(?i)data truncation:.*to BLOB type.*src length 256.*dest length 255", true)
 load data inline format='csv', data='1,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' into table fk_limits fields terminated by ',' (id, value);
@@ -164,6 +164,18 @@ select id, octet_length(value), assigned_length from fk_limits order by id;
 -- @regex("(?i)data truncation:.*to BLOB type.*src length 256.*dest length 255", true)
 load data inline format='csv', data='4,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' into table fk_limits fields terminated by ',' (id, value) parallel 'true';
 select id, octet_length(value), assigned_length from fk_limits order by id;
+-- A child target selects the same fallback through Fkeys rather than RefChildTbls.
+-- @regex("(?i)data truncation:.*to BLOB type.*src length 256.*dest length 255", true)
+load data inline format='csv', data='1,2,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' into table fk_child fields terminated by ',';
+select count(*) as strict_child_rows from fk_child;
+set session sql_mode = '';
+load data inline format='csv', data='2,2,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' into table fk_child fields terminated by ',';
+select @@warning_count;
+select id, parent_id, octet_length(value) from fk_child order by id;
+set session sql_mode = 'STRICT_TRANS_TABLES';
+load data inline format='csv', data='3,2,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' ignore into table fk_child fields terminated by ',';
+select @@warning_count;
+select id, parent_id, octet_length(value) from fk_child order by id;
 -- Legacy INSERT also normalizes expression defaults after FK fallback.
 create table fk_default (id int primary key, source_value longtext,
     stored_value text default (cast(source_value as text)));
