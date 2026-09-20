@@ -2,6 +2,7 @@
 
 import datetime
 import decimal
+import errno
 import io
 import importlib.util
 import json
@@ -2137,13 +2138,172 @@ class WorkerContractTest(unittest.TestCase):
             if session._slot_acquired:
                 slots.release()
 
+    def test_exchange_construction_failure_retains_cleanup_owner(self):
+        server = worker.RoutineFlightServer("grpc://127.0.0.1:0")
+        self.addCleanup(server.shutdown)
+        slots = server._handler_slots = threading.BoundedSemaphore(1)
+        quota = server._handler_quota = worker._HandlerQuota(1, 1)
+        allow_kill = threading.Event()
+        process = mock.Mock(pid=1234, stdin=mock.Mock())
+        watchdog = mock.Mock()
+        construction_error = OSError(errno.EMFILE, "selector exhausted")
+        descriptor = {"type_id": worker.INT64, "offset_width": 32}
+        payload = complete_open_payload({
+            "function_ref": {"account_id": 1, "database_id": 2, "function_id": 3,
+                             "revision": 1, "namespace_version": 1},
+            "source": "def f(ctx, x): return x + 1", "handler": "f",
+            "mode": worker.MODE_SCALAR, "null_policy": worker.NULL_CALL,
+            "abi_contract": worker.ABI_CONTRACT,
+            "adapter_version": worker.ADAPTER_VERSION, "sdk_version": worker.SDK_VERSION,
+            "args": [descriptor], "return": descriptor,
+            "max_batch_bytes": 1 << 20, "max_batch_rows": 8,
+            "handler_timeout_seconds": 10,
+        })
+        fence = {"account_id": 1, "statement_id": "construction",
+                 "group_id": "construction", "group_epoch": 1,
+                 "invocation_id": "failed", "lease_epoch": 1}
+        batch = pa.RecordBatch.from_arrays(
+            [pa.array([7], type=pa.int64())],
+            schema=pa.schema([worker._field("arg_0", descriptor)]),
+        )
+        controls, results = [], []
+
+        def exchange():
+            key = worker._tuple_key(fence)
+
+            def control(kind, **fields):
+                return worker._encode_control({"kind": kind, "tuple": fence, **fields})
+
+            chunks = iter([
+                types.SimpleNamespace(data=batch, app_metadata=control("InputBatch", sequence=1)),
+                types.SimpleNamespace(data=None, app_metadata=control("EndInput", last_sequence=1)),
+            ])
+
+            def metadata(data):
+                value = worker._decode_control(data)
+                controls.append(value)
+                if value["kind"] == "Finish":
+                    server._active[key].ack_finish(value["finish_id"])
+
+            def output(record, data):
+                results.append(record.column(0).to_pylist())
+                server._active[key].ack_result(worker._decode_control(data)["sequence"])
+
+            server.do_exchange(
+                None, types.SimpleNamespace(command=control("OpenInvocation", payload=payload)),
+                types.SimpleNamespace(schema=batch.schema, read_chunk=lambda: next(chunks)),
+                types.SimpleNamespace(begin=lambda schema: None,
+                                      write_metadata=metadata, write_with_metadata=output),
+            )
+
+        def kill(child):
+            self.assertIs(child, process)
+            if not allow_kill.is_set():
+                raise OSError("kill blocked")
+
+        key = worker._tuple_key(fence)
+        owner = worker._handler_quota_owner(payload)
+        with mock.patch.object(worker.subprocess, "Popen", side_effect=[process, watchdog]), \
+                mock.patch.object(worker.selectors, "DefaultSelector", side_effect=construction_error), \
+                mock.patch.object(worker, "_kill_execution_process", side_effect=kill), \
+                mock.patch.object(slots, "release", wraps=slots.release) as release_slot, \
+                mock.patch.object(quota, "_release", wraps=quota._release) as release_quota:
+            try:
+                with self.assertRaises(OSError) as raised:
+                    exchange()
+                self.assertIs(construction_error, raised.exception)
+                self.assertEqual("Error", controls[-1]["kind"])
+                self.assertEqual([], results)
+                with server._pending_cleanup_condition:
+                    self.assertEqual([key], list(server._pending_cleanups))
+                    session = server._pending_cleanups[key].handler_session
+                self.assertIs(process, session._process)
+                self.assertIn(key, server._active)
+                self.assertNotIn(key, server._terminal)
+                self.assertFalse(slots.acquire(blocking=False))
+                self.assertEqual(({1: 1}, {(1, owner): 1}), quota.counts())
+                release_slot.assert_not_called()
+                release_quota.assert_not_called()
+                with self.assertRaisesRegex(ValueError, "account handler budget is full"):
+                    quota.acquire(1, owner)
+
+                allow_kill.set()
+                with server._pending_cleanup_condition:
+                    self.assertTrue(server._pending_cleanup_condition.wait_for(
+                        lambda: not server._pending_cleanups, timeout=3
+                    ), "pending cleanup did not complete")
+                self.assertNotIn(key, server._active)
+                self.assertIn(key, server._terminal)
+                self.assertEqual(({}, {}), quota.counts())
+                session.close()
+                release_slot.assert_called_once_with()
+                release_quota.assert_called_once_with(1, owner)
+                process.stdin.close.assert_called_once_with()
+                self.assertTrue(slots.acquire(blocking=False))
+                slots.release()
+            finally:
+                allow_kill.set()
+                # Drain while the process doubles and kill hook remain installed,
+                # including after an early assertion failure.
+                with server._pending_cleanup_condition:
+                    self.assertTrue(server._pending_cleanup_condition.wait_for(
+                        lambda: not server._pending_cleanups, timeout=3
+                    ), "test cleanup did not drain")
+
+        # A later actual exchange can acquire the returned budgets and execute.
+        fence.update(group_epoch=2, invocation_id="next")
+        exchange()
+        self.assertEqual([[8]], results)
+        self.assertEqual("Finish", controls[-1]["kind"])
+        self.assertFalse(server._active)
+        self.assertEqual(({}, {}), quota.counts())
+        self.assertTrue(slots.acquire(blocking=False))
+        slots.release()
+
+    def test_helper_construction_failure_transfers_cleanup_owner(self):
+        slots = threading.BoundedSemaphore(1)
+        process = mock.Mock(pid=1234, stdin=mock.Mock())
+        error = OSError(errno.EMFILE, "selector exhausted")
+        with mock.patch.object(worker.subprocess, "Popen", return_value=process), \
+                mock.patch.object(worker.selectors, "DefaultSelector", side_effect=error), \
+                mock.patch.object(worker, "_kill_execution_process", side_effect=OSError("kill blocked")) as kill:
+            with self.assertRaises(worker._HandlerCleanupPending) as raised:
+                worker._run_handler_process(None, {}, 1, slots)
+            pending = raised.exception
+            try:
+                self.assertIs(error, pending.error)
+                self.assertIs(error, pending.__cause__)
+                self.assertIs(process, pending.session._process)
+                self.assertFalse(slots.acquire(blocking=False))
+                self.assertEqual(2, kill.call_count)
+            finally:
+                kill.side_effect = None
+                pending.session.close()
+            pending.session.close()
+            self.assertTrue(slots.acquire(blocking=False))
+            slots.release()
+            process.stdin.close.assert_called_once_with()
+
     def test_handler_cleanup_does_not_mask_execution_error(self):
         session = mock.Mock()
         session.run.side_effect = ValueError("USER_CODE: handler failed")
         session.close.side_effect = RuntimeError("close failed")
         with mock.patch.object(worker, "_HandlerProcessSession", return_value=session):
-            with self.assertRaisesRegex(ValueError, "handler failed"):
+            with self.assertRaises(worker._HandlerCleanupPending) as raised:
                 worker._run_handler_process(None, {}, 1)
+        self.assertIs(session.run.side_effect, raised.exception.error)
+        self.assertIs(session.run.side_effect, raised.exception.__cause__)
+        self.assertIs(session, raised.exception.session)
+        session.close.assert_called_once_with()
+
+    def test_helper_success_with_failed_cleanup_transfers_owner(self):
+        session = mock.Mock()
+        session.close.side_effect = OSError("kill blocked")
+        with mock.patch.object(worker, "_HandlerProcessSession", return_value=session):
+            with self.assertRaises(worker._HandlerCleanupPending) as raised:
+                worker._run_handler_process(None, {}, 1)
+        self.assertIs(session.close.side_effect, raised.exception.error)
+        self.assertIs(session, raised.exception.session)
         session.close.assert_called_once_with()
 
     def test_real_flight_half_close_delivers_delayed_float_result_and_finish(self):
@@ -3319,11 +3479,19 @@ except Exception:
                 with self.assertRaisesRegex(ValueError, "handler process"):
                     worker._run_handler_process(None, request, 2)
                 observed = json.loads(witness.read_text())
-                try:
-                    survived = os.getpgid(observed["pid"]) == observed["pgid"]
-                except ProcessLookupError:
-                    survived = False
-                self.assertFalse(survived)
+                # SIGKILL is synchronous as a request, but orphan adoption
+                # and init's waitpid are asynchronous. Require disappearance
+                # of the owned identity, including zombies, within a bound.
+                deadline = time.monotonic() + 2
+                while True:
+                    try:
+                        survived = os.getpgid(observed["pid"]) == observed["pgid"]
+                    except ProcessLookupError:
+                        survived = False
+                    if not survived or time.monotonic() >= deadline:
+                        break
+                    time.sleep(0.005)
+                self.assertFalse(survived, "init did not reap the owned descendant")
             finally:
                 if witness.exists():
                     owned = json.loads(witness.read_text())
