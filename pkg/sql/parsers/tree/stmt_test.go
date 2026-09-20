@@ -18,7 +18,21 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 )
+
+func TestCompatibilityNoOpStmt(t *testing.T) {
+	stmt := &CompatibilityNoOpStmt{}
+	require.Empty(t, stmt.String())
+	ctx := NewFmtCtx(dialect.MYSQL)
+	stmt.Format(ctx)
+	require.Empty(t, ctx.String())
+	require.Equal(t, "Compatibility No-Op", stmt.GetStatementType())
+	require.Equal(t, QueryTypeOth, stmt.GetQueryType())
+	require.Equal(t, frontendStatusTyp, stmt.StmtKind())
+	stmt.Free()
+}
 
 func TestQueryType(t *testing.T) {
 	type fields struct {

@@ -6962,6 +6962,12 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 	case *tree.EmptyStmt:
 		objType = objectTypeNone
 		kind = privilegeKindNone
+	case *tree.CompatibilityNoOpStmt:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeAlterObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		writeDatabaseAndTableDirectly = true
+		dbName = st.Database
+		writeDatabaseTargets = append(writeDatabaseTargets, st.Database)
 	case *tree.CreateCDC, *tree.ShowCDC, *tree.PauseCDC, *tree.DropCDC, *tree.ResumeCDC, *tree.RestartCDC:
 		objType = objectTypeNone
 		kind = privilegeKindSpecial

@@ -4622,7 +4622,13 @@ alter_account_stmt:
     }
 
 alter_database_config_stmt:
-    ALTER DATABASE db_name SET MYSQL_COMPATIBILITY_MODE '=' STRING
+    ALTER DATABASE db_name CHARACTER SET charset_name COLLATE collate_name
+    {
+        // Compatibility-only syntax accepted by applications such as Gitea.
+        // MatrixOne does not mutate database charset/collation metadata here.
+        $$ = tree.NewCompatibilityNoOpStmt($3, $6, $8)
+    }
+|   ALTER DATABASE db_name SET MYSQL_COMPATIBILITY_MODE '=' STRING
     {
         var accountName = ""
         var dbName = $3
