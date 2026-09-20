@@ -2979,10 +2979,15 @@ func TestCDCTaskExecutorMatchesModeTwoSourcePatterns(t *testing.T) {
 		}},
 	}}
 	info := &cdc.DbTableInfo{}
-	require.True(t, exec.matchAnyPattern("sourcedb.orders", info))
+	localInfo := info.Clone()
+	require.True(t, exec.matchAnyPattern("sourcedb.orders", localInfo))
 	require.True(t, exec.matchesAnySourcePattern("SOURCEDB.ORDERS"))
-	require.Equal(t, "sink", info.SinkDbName)
-	require.Equal(t, "target", info.SinkTblName)
+	require.Equal(t, "sink", localInfo.SinkDbName)
+	require.Equal(t, "target", localInfo.SinkTblName)
+	// Detector metadata is shared with scanner callbacks and must remain
+	// untouched; sink routing belongs only to the task-local clone.
+	require.Empty(t, info.SinkDbName)
+	require.Empty(t, info.SinkTblName)
 
 	exec.tables.SourceCaseMode = 0
 	require.False(t, exec.matchAnyPattern("sourcedb.orders", &cdc.DbTableInfo{}))

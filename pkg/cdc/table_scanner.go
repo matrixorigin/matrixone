@@ -386,6 +386,29 @@ func (s *TableDetector) IsTaskRegistered(id string) bool {
 	return exists
 }
 
+// ClearTableIdChanged clears the one-shot generation transition marker after a
+// pipeline has consumed it. The detector publishes table metadata snapshots to
+// callbacks, so replace the stored descriptor under the detector lock rather
+// than mutating a callback-owned pointer concurrently with the next scan.
+func (s *TableDetector) ClearTableIdChanged(accountID uint32, key string, sourceTableID uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	clear := func(mp map[uint32]TblMap) {
+		if mp == nil || mp[accountID] == nil {
+			return
+		}
+		info, ok := mp[accountID][key]
+		if !ok || info == nil || info.SourceTblId != sourceTableID || !info.IdChanged {
+			return
+		}
+		updated := info.Clone()
+		updated.IdChanged = false
+		mp[accountID][key] = updated
+	}
+	clear(s.Mp)
+	clear(s.lastMp)
+}
+
 func (s *TableDetector) UnRegister(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -471,7 +471,7 @@ func TestCDCCreateTaskOptionsSourcePatternCode(t *testing.T) {
 	noFullPattern := (&CDCCreateTaskOptions{
 		TaskId: "no-full-pattern", NoFull: true, ExtraOpts: patternOpts,
 	}).BuildTaskMetadata()
-	require.Equal(t, task.TaskCode_InitCdcStableEpoch, noFullPattern.Executor)
+	require.Equal(t, task.TaskCode_InitCdcSourcePatternV1, noFullPattern.Executor)
 }
 
 func TestValidateStableInitialSnapshotCompileProtocol(t *testing.T) {

@@ -2792,7 +2792,14 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 		if exec.exclude != nil && exec.exclude.MatchString(key) {
 			continue
 		}
-		if !exec.matchAnyPattern(key, info) {
+		// Filter against the detector-owned metadata without mutating it. Sink
+		// routing and pipeline setup may update table info, so keep those writes
+		// on a task-local clone to avoid racing scanner ticks and other callbacks.
+		if !exec.matchesAnySourcePattern(key) {
+			continue
+		}
+		newTableInfo := info.Clone()
+		if !exec.matchAnyPattern(key, newTableInfo) {
 			continue
 		}
 
@@ -2800,13 +2807,13 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 		// them. A new task is rejected at admission; an active wildcard task
 		// must stop and fail rather than silently losing a table after its key is
 		// dropped. Check this before the already-running fast path.
-		if info.PrimaryKeyChecked && !info.HasUserPrimaryKey {
+		if newTableInfo.PrimaryKeyChecked && !newTableInfo.HasUserPrimaryKey {
 			if val, ok := exec.runningReaders.Load(key); ok {
 				if reader, ok := val.(cdc.ChangeReader); ok {
 					exec.stopRemovedReader(key, key, reader)
 				}
 			}
-			return exec.failTaskForPermanentTableError(ctx, info)
+			return exec.failTaskForPermanentTableError(ctx, newTableInfo)
 		}
 
 		// already running
@@ -2814,13 +2821,13 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 			if reader, ok := val.(cdc.ChangeReader); ok {
 				readerInfo := reader.GetTableInfo()
 				// wait the old reader to stop
-				if info.OnlyDiffinTblId(readerInfo) {
+				if newTableInfo.OnlyDiffinTblId(readerInfo) {
 					if exec.removedReaderShutdownInProgress(key, reader) {
 						logutil.Info(
 							"cdc.frontend.task.skip_wait_removed_reader_shutdown",
 							zap.String("table", key),
 							zap.Uint64("old-table-id", readerInfo.SourceTblId),
-							zap.Uint64("new-table-id", info.SourceTblId),
+							zap.Uint64("new-table-id", newTableInfo.SourceTblId),
 						)
 						continue
 					}
@@ -2828,7 +2835,7 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 						"cdc.frontend.task.wait_old_reader",
 						zap.String("table", key),
 						zap.Uint64("old-table-id", readerInfo.SourceTblId),
-						zap.Uint64("new-table-id", info.SourceTblId),
+						zap.Uint64("new-table-id", newTableInfo.SourceTblId),
 					)
 					waitChan := make(chan struct{})
 					go func() {
@@ -2846,7 +2853,6 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 			}
 		}
 
-		newTableInfo := info.Clone()
 		hasError, err := GetTableErrMsg(ctx, accountId, exec.ie, exec.spec.TaskId, newTableInfo)
 		if err != nil {
 			logutil.Error(
@@ -2937,7 +2943,13 @@ func (exec *CDCTaskExecutor) handleNewTablesForGeneration(
 			continue
 		}
 
-		info.IdChanged = newTableInfo.IdChanged
+		// IdChanged is a one-shot marker owned by the detector. Clear it by
+		// replacing the published descriptor under the detector lock; never write
+		// through the callback snapshot while a scanner can clone it.
+		if detector := cdc.GetTableDetector(exec.cnUUID); detector != nil {
+			detector.ClearTableIdChanged(
+				uint32(exec.spec.Accounts[0].GetId()), key, newTableInfo.SourceTblId)
+		}
 		successCount++
 		logutil.Info(
 			"cdc.frontend.task.add_exec_pipeline_success",
