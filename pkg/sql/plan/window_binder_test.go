@@ -1651,6 +1651,30 @@ func TestBindWindowFuncExprValidationAndHelpers(t *testing.T) {
 
 func TestWindowFrameConstValueHelpers(t *testing.T) {
 	proc := testutil.NewProc(t)
+	t.Run("decimal256 singleton retains value and provenance", func(t *testing.T) {
+		source := makePlan2Int64ConstExprWithType(11)
+		source.GetLit().DecimalLiteralRequiresV82 = true
+		got, err := makeWindowFrameConstValue(
+			func(tree.Expr, int32, bool) (*Expr, error) { return source, nil },
+			proc, t.Context(), testNumVal(11),
+			&planpb.Type{Id: int32(types.T_decimal256), Width: 65, Scale: 2},
+		)
+		require.NoError(t, err)
+		require.NotNil(t, got.GetVec())
+		require.Equal(t, int32(1), got.GetVec().Len)
+		var decoded vector.Vector
+		require.NoError(t, decoded.UnmarshalBinary(got.GetVec().Data))
+		require.Equal(t, types.Decimal256FromInt64(1100), vector.GetFixedAtNoTypeCheck[types.Decimal256](&decoded, 0))
+		wire, err := got.Marshal()
+		require.NoError(t, err)
+		var restored planpb.Expr
+		require.NoError(t, restored.Unmarshal(wire))
+		for _, copy := range []*planpb.Expr{got, DeepCopyExpr(got), &restored} {
+			required, err := RequiredPersistedExpressionProtocolVersion(copy)
+			require.NoError(t, err)
+			require.Equal(t, int64(defines.MORPCVersion89), required)
+		}
+	})
 
 	t.Run("typ nil returns bound expr directly", func(t *testing.T) {
 		expected := makePlan2Int64ConstExprWithType(7)

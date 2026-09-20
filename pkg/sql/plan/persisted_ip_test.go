@@ -103,7 +103,11 @@ func TestPersistedDecimalLiteralProtocolAdmission(t *testing.T) {
 
 	for _, version := range []int64{
 		defines.MORPCVersion81,
+		defines.MORPCVersion83,
+		defines.MORPCVersion84,
+		defines.MORPCVersion85,
 		defines.MORPCVersion86,
+		defines.MORPCVersion87,
 		defines.MORPCVersion88,
 		defines.MORPCVersion89,
 	} {
@@ -154,7 +158,7 @@ func TestPersistedDecimalLiteralTargetTypedDefaultAdmission(t *testing.T) {
 
 	// This spelling is numerically just 1.25, but a target-typed default is
 	// bound through the destination DECIMAL type rather than the untyped path.
-	// The provenance marker must still fence the persisted default from v81
+	// The provenance marker must still fence the persisted default from pre-v89
 	// readers and writers.
 	source := strings.Repeat("0", 100) + "1.25"
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
@@ -165,10 +169,12 @@ func TestPersistedDecimalLiteralTargetTypedDefaultAdmission(t *testing.T) {
 	typ := planpb.Type{Id: int32(types.T_decimal64), Width: 10, Scale: 2}
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion81))
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion81))
-	_, err = buildDefaultExpr(col, typ, proc)
-	require.ErrorContains(t, err, "protocol version 89")
+	for _, floor := range []int64{defines.MORPCVersion81, defines.MORPCVersion83} {
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, floor)
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, floor)
+		_, err = buildDefaultExpr(col, typ, proc)
+		require.ErrorContains(t, err, "protocol version 89")
+	}
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion89))
