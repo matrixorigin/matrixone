@@ -39,6 +39,7 @@ func testRoutinePlanDependency() *planpb.RoutinePlanDependency {
 		},
 		Language:              udf.LanguagePython,
 		ContractVersion:       udf.PythonPlanContractVersion,
+		NamespaceFingerprint:  strings.Repeat("d", 64),
 		DefinitionFingerprint: strings.Repeat("a", 64),
 		ArtifactDigest:        strings.Repeat("b", 64),
 		EnvironmentDigest:     strings.Repeat("c", 64),
@@ -52,17 +53,18 @@ func testRoutinePlanDependency() *planpb.RoutinePlanDependency {
 
 func testRoutinePlanState() routinePlanCatalogState {
 	return routinePlanCatalogState{
-		activeRevision:    7,
-		namespaceVersion:  12,
-		databaseID:        8,
-		revision:          7,
-		language:          udf.LanguagePython,
-		volatility:        "VOLATILE",
-		nullPolicy:        udf.NullCallHandler,
-		fingerprint:       strings.Repeat("a", 64),
-		artifactDigest:    strings.Repeat("b", 64),
-		environmentDigest: strings.Repeat("c", 64),
-		securityType:      "INVOKER",
+		namespaceFingerprint: strings.Repeat("d", 64),
+		activeRevision:       7,
+		namespaceVersion:     12,
+		databaseID:           8,
+		revision:             7,
+		language:             udf.LanguagePython,
+		volatility:           "VOLATILE",
+		nullPolicy:           udf.NullCallHandler,
+		fingerprint:          strings.Repeat("a", 64),
+		artifactDigest:       strings.Repeat("b", 64),
+		environmentDigest:    strings.Repeat("c", 64),
+		securityType:         "INVOKER",
 	}
 }
 
