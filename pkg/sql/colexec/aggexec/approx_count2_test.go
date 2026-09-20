@@ -538,6 +538,167 @@ func TestHllLegacyWireStateCoversEmptyAndFloatingPointWidths(t *testing.T) {
 	}
 }
 
+func TestHllAddVectorCanonicalizesWithVersionedWireState(t *testing.T) {
+	tests := []struct {
+		name  string
+		typ   types.Type
+		left  []byte
+		right []byte
+	}{
+		{
+			name:  "float32",
+			typ:   types.T_array_float32.ToType(),
+			left:  types.ArrayToBytes([]float32{1, 0, 3}),
+			right: types.ArrayToBytes([]float32{1, float32(math.Copysign(0, -1)), 3}),
+		},
+		{
+			name:  "float64",
+			typ:   types.T_array_float64.ToType(),
+			left:  types.ArrayToBytes([]float64{1, 0, 3}),
+			right: types.ArrayToBytes([]float64{1, math.Copysign(0, -1), 3}),
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			exec := makeHllAdd(mp, 1, tc.typ).(*hllAddExec)
+			require.False(t, exec.legacyWireState)
+			require.NoError(t, exec.GroupGrow(1))
+			runOne := func(value []byte) []byte {
+				one := makeHllAdd(mp, 1, tc.typ).(*hllAddExec)
+				require.NoError(t, one.GroupGrow(1))
+				input := vector.NewVec(tc.typ)
+				require.NoError(t, vector.AppendBytes(input, value, false, mp))
+				require.NoError(t, one.BulkFill(0, []*vector.Vector{input}))
+				oneResult, err := one.Flush()
+				require.NoError(t, err)
+				data := bytes.Clone(oneResult[0].GetBytesAt(0))
+				oneResult[0].Free(mp)
+				input.Free(mp)
+				one.Free()
+				return data
+			}
+			leftOnly := runOne(tc.left)
+			rightOnly := runOne(tc.right)
+			require.Equal(t, leftOnly, rightOnly)
+
+			partialLeft := makeHllAdd(mp, 1, tc.typ).(*hllAddExec)
+			partialRight := makeHllAdd(mp, 1, tc.typ).(*hllAddExec)
+			require.NoError(t, partialLeft.GroupGrow(1))
+			require.NoError(t, partialRight.GroupGrow(1))
+			leftValues := vector.NewVec(tc.typ)
+			rightValues := vector.NewVec(tc.typ)
+			require.NoError(t, vector.AppendBytes(leftValues, tc.left, false, mp))
+			require.NoError(t, vector.AppendBytes(rightValues, tc.right, false, mp))
+			require.NoError(t, partialLeft.BulkFill(0, []*vector.Vector{leftValues}))
+			require.NoError(t, partialRight.BulkFill(0, []*vector.Vector{rightValues}))
+			require.NoError(t, partialLeft.BatchMerge(
+				partialRight, 0, []uint64{1}))
+			partialResult, err := partialLeft.Flush()
+			require.NoError(t, err)
+			require.Equal(t, leftOnly, partialResult[0].GetBytesAt(0))
+			partialResult[0].Free(mp)
+			leftValues.Free(mp)
+			rightValues.Free(mp)
+			partialLeft.Free()
+			partialRight.Free()
+
+			values := vector.NewVec(tc.typ)
+			require.NoError(t, vector.AppendBytes(values, tc.left, false, mp))
+			require.NoError(t, vector.AppendBytes(values, tc.right, false, mp))
+			require.NoError(t, exec.BulkFill(0, []*vector.Vector{values}))
+			result, err := exec.Flush()
+			require.NoError(t, err)
+			encoded := result[0].GetBytesAt(0)
+			require.Equal(t, hllVersion, encoded[0])
+
+			require.Equal(t, leftOnly, encoded)
+
+			// Canonicalization is scratch-only; the input vector must retain the
+			// original representative bytes for downstream consumers.
+			require.Equal(t, tc.left, values.GetBytesAt(0))
+			require.Equal(t, tc.right, values.GetBytesAt(1))
+
+			result[0].Free(mp)
+			values.Free(mp)
+			exec.Free()
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
+func TestHllAddVectorRestoresVersionedHashDomain(t *testing.T) {
+	mp := mpool.MustNewZero()
+	typ := types.T_array_float32.ToType()
+	legacy := makeHllAdd(mp, 1, typ).(*hllAddExec)
+	ConfigureHLLLegacyState(legacy)
+	require.NoError(t, legacy.GroupGrow(1))
+	oldValue := vector.NewVec(typ)
+	require.NoError(t, vector.AppendBytes(oldValue,
+		types.ArrayToBytes([]float32{1, float32(math.Copysign(0, -1)), 3}), false, mp))
+	require.NoError(t, legacy.BulkFill(0, []*vector.Vector{oldValue}))
+	var intermediate bytes.Buffer
+	require.NoError(t, legacy.SaveIntermediateResult(
+		1, [][]uint8{{1}}, &intermediate))
+	newValue := vector.NewVec(typ)
+	require.NoError(t, vector.AppendBytes(newValue,
+		types.ArrayToBytes([]float32{1, 0, 3}), false, mp))
+	// The legacy producer remains the reference for an old v2 state: appending
+	// +0 hashes it as a distinct raw value from the existing -0.
+	require.NoError(t, legacy.BulkFill(0, []*vector.Vector{newValue}))
+	legacyResult, err := legacy.Flush()
+	require.NoError(t, err)
+	expected := bytes.Clone(legacyResult[0].GetBytesAt(0))
+	require.Equal(t, hllLegacyVersion, expected[0])
+	legacyResult[0].Free(mp)
+
+	restored := makeHllAdd(mp, 1, typ).(*hllAddExec)
+	require.NoError(t, restored.UnmarshalFromReader(
+		bytes.NewReader(intermediate.Bytes()), mp))
+	// Unmarshalling preserves the v2 marker. The upgraded executor therefore
+	// keeps raw hashing for this old state instead of silently switching it to
+	// the new v4 vector domain.
+	require.NoError(t, restored.BulkFill(0, []*vector.Vector{newValue}))
+	result, err := restored.Flush()
+	require.NoError(t, err)
+	require.Equal(t, hllLegacyVersion, result[0].GetBytesAt(0)[0])
+	require.Equal(t, expected, result[0].GetBytesAt(0))
+
+	result[0].Free(mp)
+	newValue.Free(mp)
+	oldValue.Free(mp)
+	restored.Free()
+	legacy.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestAccountedHllAddVectorReservesCanonicalScratch(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, account, allocation := newTestAggregateAllocation(t)
+	exec := makeHllAdd(mp, 1, types.T_array_float32.ToType()).(*hllAddExec)
+	owner := any(exec).(AllocationAccountOwner)
+	require.NoError(t, owner.SetAllocationAccount(allocation))
+	require.NoError(t, exec.GroupGrow(1))
+
+	values := vector.NewVec(types.T_array_float32.ToType())
+	require.NoError(t, vector.AppendBytes(values,
+		types.ArrayToBytes([]float32{1, float32(math.Copysign(0, -1)), 3}), false, mp))
+	require.NoError(t, exec.PreflightBatchFill(
+		0, []uint64{1}, []*vector.Vector{values}))
+	require.NotNil(t, exec.state[0].argScratch)
+	require.NoError(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{values}))
+
+	result, err := exec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, hllVersion, result[0].GetBytesAt(0)[0])
+	result[0].Free(mp)
+	values.Free(mp)
+	exec.Free()
+	require.NoError(t, owner.ClearAllocationAccount(allocation))
+	finishTestAggregateAllocation(t, registry, account)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestHllLegacyWireStateUsesPreflightAndRoundTripsIntermediate(t *testing.T) {
 	for _, tc := range []struct {
 		name string

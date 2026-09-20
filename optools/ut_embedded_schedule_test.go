@@ -71,11 +71,11 @@ if [[ " $* " == *' -c '* ]]; then
  exit 0
 fi
 [[ " $* " != *' -ldflags=-w '* ]] || exit 88
-[[ " $* " == *' -p 2 '* && " $* " == *' -json '* && " $* " == *' -v '* && " $* " == *' example/a example/b example/c '* ]] || exit 85
+[[ " $* " == *' -p 1 '* && " $* " == *' -json '* && " $* " == *' -v '* && " $* " == *' example/a example/b example/c '* ]] || exit 85
 [[ "$PWD" -ef "$CASE_DIR" ]] || exit 86
 mkdir "$CASE_DIR/authoritative" || exit 87
 printf 'authoritative\n'
-[[ "$MODE" != test-failure ]]
+[[ "$MODE" != test-failure ]] || exit 7
 `
 
 func TestEmbeddedPrebuildAuthoritativeExecution(t *testing.T) {
@@ -97,10 +97,10 @@ function ut_test_open_embedded_report() {
 if [[ "$MODE" != off ]]; then start_embedded_prebuild "$scope" 2; fi
 artifact_dir=$CLUSTER_PREBUILD_DIR
 status=0
-run_embedded_tests "$scope" 2 || status=$?
+run_embedded_tests "$scope" || status=$?
 if (( status != 0 )); then printf 'authoritative status=%s\n' "$status"; cat "$UT_REPORT" "$UT_STDERR"; fi
 if [[ "$MODE" == test-failure ]]; then
- [[ "$status" != 0 ]] || exit 90
+ [[ "$status" == 7 ]] || exit 90
 else
  [[ "$status" == 0 ]] || exit 91
 fi
@@ -236,7 +236,7 @@ start_ut_command serial issues bash -c '
 '
 issues_pid=$CURRENT_UT_PID
 while [[ ! -e "$CASE_DIR/issues-active" ]]; do sleep 0.01; done
-run_embedded_tests "$scope" 2
+run_embedded_tests "$scope"
 `
 	joinCancelTransform := func(text string) string {
 		const anchor = `    wait "${CLUSTER_PREBUILD_JOB_PID}" || prebuild_status=$?

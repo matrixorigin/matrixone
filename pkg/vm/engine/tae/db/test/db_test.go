@@ -12967,8 +12967,7 @@ func TestMergeBlocksWithCNRewrittenTombstoneInsideTransferRange(t *testing.T) {
 }
 
 func TestMergeBlocksWithCNRewriteAcrossTransferPhases(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	ctx := context.Background()
 
 	opts := config.WithLongScanAndCKPOpts(nil)
 	tae := testutil.NewTestEngine(ctx, ModuleName, t, opts)
@@ -13028,13 +13027,18 @@ func TestMergeBlocksWithCNRewriteAcrossTransferPhases(t *testing.T) {
 
 	require.True(t, fault.Enable())
 	defer fault.Disable()
+
+	// Bound the phase-controlled operation itself. Engine setup and fixture I/O
+	// must not consume the budget that guards the merge from hanging.
+	mergeCtx, cancelMerge := context.WithTimeout(ctx, 30*time.Second)
+	defer cancelMerge()
 	require.NoError(t, fault.AddFaultPoint(
-		ctx, objectio.FJ_DataMergeAfterCollectTS, ":::", "wait", 0, "", false,
+		mergeCtx, objectio.FJ_DataMergeAfterCollectTS, ":::", "wait", 0, "", false,
 	))
 	defer fault.RemoveFaultPoint(context.Background(), objectio.FJ_DataMergeAfterCollectTS)
 	waiterProbe := t.Name() + "/data-merge-waiters"
 	require.NoError(t, fault.AddFaultPoint(
-		ctx, waiterProbe, ":::", "getwaiters", 0,
+		mergeCtx, waiterProbe, ":::", "getwaiters", 0,
 		objectio.FJ_DataMergeAfterCollectTS, false,
 	))
 	defer fault.RemoveFaultPoint(context.Background(), waiterProbe)
@@ -13042,13 +13046,14 @@ func TestMergeBlocksWithCNRewriteAcrossTransferPhases(t *testing.T) {
 	dataErrC := make(chan error, 1)
 	dataDone := false
 	go func() {
-		dataErrC <- dataTask.OnExec(ctx)
+		dataErrC <- dataTask.OnExec(mergeCtx)
 	}()
 	defer func() {
 		if dataDone {
 			return
 		}
 		_, _ = fault.RemoveFaultPoint(context.Background(), objectio.FJ_DataMergeAfterCollectTS)
+		cancelMerge()
 		select {
 		case <-dataErrC:
 		case <-time.After(10 * time.Second):
@@ -13077,14 +13082,14 @@ func TestMergeBlocksWithCNRewriteAcrossTransferPhases(t *testing.T) {
 	require.True(t, ok)
 	require.NoError(t, rewriteTxn.Commit(ctx))
 
-	removed, err := fault.RemoveFaultPoint(ctx, objectio.FJ_DataMergeAfterCollectTS)
+	removed, err := fault.RemoveFaultPoint(mergeCtx, objectio.FJ_DataMergeAfterCollectTS)
 	require.NoError(t, err)
 	require.True(t, removed)
 	select {
 	case err := <-dataErrC:
 		dataDone = true
 		require.NoError(t, err)
-	case <-ctx.Done():
+	case <-mergeCtx.Done():
 		t.Fatal("data merge did not finish")
 	}
 	require.NoError(t, dataTxn.Commit(ctx))

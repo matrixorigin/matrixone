@@ -92,6 +92,12 @@ func collectRemoteFragmentCounts(
 			counts[target]++
 			executionAddress = target
 		}
+		// Lazy branches own independent remote generations assigned at activation.
+		// Counting them in the enclosing statement generation leaves ordinary
+		// siblings waiting for RPCs that are intentionally never submitted.
+		if scope.LazyPreScopes {
+			return
+		}
 		for _, pre := range scope.PreScopes {
 			visit(pre, executionAddress)
 		}
