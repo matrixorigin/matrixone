@@ -31,6 +31,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestGetExecTypeAdaptiveTopIgnoresDeferredForceOneCN(t *testing.T) {
+	large := &planpb.Stats{BlockNum: int32(BlockThresholdForOneCN + 1), Cost: costThresholdForOneCN + 1}
+	qry := &planpb.Query{
+		Steps: []int32{3},
+		Nodes: []*planpb.Node{
+			{NodeId: 0, NodeType: planpb.Node_VECTOR_INDEX_SCAN, Stats: DeepCopyStats(large)},
+			{NodeId: 1, NodeType: planpb.Node_VECTOR_INDEX_SCAN, Stats: &planpb.Stats{ForceOneCN: true}},
+			{NodeId: 2, NodeType: planpb.Node_TABLE_SCAN, Stats: &planpb.Stats{}},
+			{NodeId: 3, NodeType: planpb.Node_ADAPTIVE_TOP, Children: []int32{0, 1, 2}, Stats: DeepCopyStats(large)},
+		},
+	}
+	require.Equal(t, ExecTypeAP_MULTICN, GetExecType(qry, false, false))
+	require.True(t, qry.Nodes[1].Stats.ForceOneCN, "PRE keeps its activation-time local constraint")
+
+	qry.Steps = []int32{1}
+	require.Equal(t, ExecTypeAP_ONECN, GetExecType(qry, false, false), "an active ForceOneCN scan remains local")
+	qry.Steps = nil
+	require.Equal(t, ExecTypeAP_ONECN, GetExecType(qry, false, false), "an incomplete graph must remain conservative")
+}
+
 func TestHintQueryTypePreservesExecutionContracts(t *testing.T) {
 	for _, tc := range []struct {
 		name string

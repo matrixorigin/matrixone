@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -199,6 +200,10 @@ type Scope struct {
 	// branch receiver is exhausted, so an outer LIMIT can leave later branches
 	// completely unstarted.
 	LazyPreScopes bool
+	// lazyRemote* pins one activated lazy branch to its own remote allocation
+	// generation. Deferred branches must not register or inflate this topology.
+	lazyRemoteFragmentCounts map[string]uint32
+	lazyRemoteExecutionID    uuid.UUID
 	// ConcurrentPreScopes forces producer/consumer concurrency for runtime
 	// scope trees whose bounded receiver channels would deadlock under the TP
 	// query's sequential fast path.
@@ -385,6 +390,9 @@ type Compile struct {
 	loadUniqueIndexPromotion      *loadUniqueIndexPromotionState
 	loadUniqueIndexPromotionOwner bool
 
+	// Lazy scopes may register folds while another scope evaluates block filters.
+	// Protect both the registry and its mutable executors for the whole operation.
+	filterExprMu   sync.Mutex
 	filterExprExes []colexec.ExpressionExecutor
 
 	// compiledLocalRuntimeFilterNodes records SINGLE nodes with current-CN
