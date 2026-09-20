@@ -26,9 +26,9 @@ jobs:
   canary:
     if: github.repository == 'matrixorigin/matrixone' && github.ref == 'refs/heads/main'
     # CI #456: update these two immutable pins together.
-    uses: matrixorigin/CI/.github/workflows/race-seed-canary.yaml@20a53a824c4526942ca5e570fb4f0c865f8c6492
+    uses: matrixorigin/CI/.github/workflows/race-seed-canary.yaml@c76c48c66de9e4684696a02510835a21d4a0aad9
     with:
-      ci_sha: '20a53a824c4526942ca5e570fb4f0c865f8c6492'
+      ci_sha: 'c76c48c66de9e4684696a02510835a21d4a0aad9'
       matrixone_sha: ${{ inputs.matrixone_sha }}
       image: ${{ inputs.image }}
       repetitions: ${{ inputs.repetitions }}
