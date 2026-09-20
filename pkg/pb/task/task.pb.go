@@ -124,6 +124,8 @@ const (
 	// a distinct code prevents older CNs from claiming protocol-marked tasks.
 	TaskCode_InitCdcStableEpoch   TaskCode = 14
 	TaskCode_InitCdcLosslessStart TaskCode = 15
+	// CDC source patterns with lossless identifier encoding.
+	TaskCode_InitCdcSourcePatternV1 TaskCode = 16
 )
 
 var TaskCode_name = map[int32]string{
@@ -141,6 +143,7 @@ var TaskCode_name = map[int32]string{
 	13: "DataBranchLineageGC",
 	14: "InitCdcStableEpoch",
 	15: "InitCdcLosslessStart",
+	16: "InitCdcSourcePatternV1",
 }
 
 var TaskCode_value = map[string]int32{
@@ -158,6 +161,7 @@ var TaskCode_value = map[string]int32{
 	"DataBranchLineageGC":     13,
 	"InitCdcStableEpoch":      14,
 	"InitCdcLosslessStart":    15,
+	"InitCdcSourcePatternV1":  16,
 }
 
 func (x TaskCode) String() string {

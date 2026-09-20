@@ -6609,10 +6609,11 @@ const (
 func (opts *CDCCreateTaskOptions) BuildTaskMetadata() task.TaskMetadata {
 	executor := task.TaskCode_InitCdc
 	switch {
+	case cdc.UsesSourcePatternProtocol(opts.ExtraOpts):
+		executor = task.TaskCode_InitCdcSourcePatternV1
 	case opts.NoFull && cdc.UsesLosslessNoFullStart(opts.ExtraOpts):
 		executor = task.TaskCode_InitCdcLosslessStart
-	case cdc.UsesSourcePatternProtocol(opts.ExtraOpts) ||
-		(!opts.NoFull && cdc.UsesStableEpochInitialSnapshot(opts.ExtraOpts)):
+	case !opts.NoFull && cdc.UsesStableEpochInitialSnapshot(opts.ExtraOpts):
 		executor = task.TaskCode_InitCdcStableEpoch
 	}
 	return task.TaskMetadata{
@@ -7183,15 +7184,6 @@ func (c *Compile) checkPitrGranularity(
 		if pt == nil {
 			continue
 		}
-		if exclude != "" && pt.Source.Database != cdc.CDCPitrGranularity_All && pt.Source.Table != cdc.CDCPitrGranularity_All {
-			matched, err := regexp.MatchString(exclude, pt.Source.Database+"."+pt.Source.Table)
-			if err != nil {
-				return err
-			}
-			if matched {
-				continue
-			}
-		}
 		if pt.Source.Database == cdc.CDCPitrGranularity_All || pt.Source.Table == cdc.CDCPitrGranularity_All {
 			// Use the runtime scanner's catalog predicate, then apply Exclude and
 			// the foreign-key rule to real names. In particular, do not match a
@@ -7258,6 +7250,19 @@ func (c *Compile) checkPitrGranularity(
 				if !cdc.CDCSourceNameMatches(cols[3].GetStringAt(i), pt.Source.Database, pts.SourceCaseMode) ||
 					!cdc.CDCSourceNameMatches(cols[1].GetStringAt(i), pt.Source.Table, pts.SourceCaseMode) {
 					continue
+				}
+				dbName := cols[3].GetStringAt(i)
+				tableName := cols[1].GetStringAt(i)
+				if exclude != "" {
+					matched, matchErr := regexp.MatchString(exclude, dbName+"."+tableName)
+					if matchErr != nil {
+						validationErr = matchErr
+						return false
+					}
+					if matched {
+						valid = true
+						continue
+					}
 				}
 				hasForeignKey, decodeErr := cdc.TableHasForeignKeyConstraint(cols[6].GetBytesAt(i))
 				if decodeErr != nil {

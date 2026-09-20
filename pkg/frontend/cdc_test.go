@@ -218,6 +218,20 @@ func TestCDCCheckPitrGranularityPrimaryKeyValidation(t *testing.T) {
 	})
 }
 
+func TestCheckCDCSourcePrimaryKeyExcludeUsesCatalogSpelling(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), 1)
+	valid := &MysqlResultSet{Columns: make([]Column, 8), Data: [][]interface{}{{
+		uint64(1), "Orders", uint64(1), "Db", "", uint32(1), []byte{}, true,
+	}}}
+	bh := &backgroundExecTest{resultSets: []interface{}{valid}}
+	bh.init()
+	bh.resultSets = []interface{}{valid}
+	// Mode 2 matches the catalog spelling case-insensitively. Exclude must be
+	// evaluated against that same resolved spelling, as runtime discovery does.
+	require.NoError(t, checkCDCSourcePrimaryKeyWithExclude(
+		ctx, bh, "db", "orders", `^db[.]orders$`, int64(2)))
+}
+
 func TestCheckCDCSourcePrimaryKeySkipsEmptyResultSets(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), 1)
 	query := cdc.CollectCDCSourceCandidateSQL(1, "db", "table")
@@ -1533,7 +1547,7 @@ func TestCDCCreateTaskOptionsSourcePatternCode(t *testing.T) {
 	noFullPattern := (&CDCCreateTaskOptions{
 		TaskId: "no-full-pattern", NoFull: true, ExtraOpts: patternOpts,
 	}).BuildTaskMetadata()
-	require.Equal(t, task.TaskCode_InitCdcStableEpoch, noFullPattern.Executor)
+	require.Equal(t, task.TaskCode_InitCdcSourcePatternV1, noFullPattern.Executor)
 }
 
 func TestRegisterCdcExecutor(t *testing.T) {
