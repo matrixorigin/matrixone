@@ -1,14 +1,14 @@
 # #29005：View metadata 持久恢复设计与缺口审查
 
 - 修订：v2，2026-09-20；保留已批准合同，补充具体存储与默认关闭期间的失效约束。
-- 状态：用户已通过第二次 `go ahead` 批准推荐设计方向与三项合同决策；开始实现。本文不声明实现或验证完成。
+- 状态：用户已批准推荐设计方向与三项合同决策；catalog 侧完整实现已落地，具体约束见第10–11节。验证证据与明确边界由 PR #29139 汇总，不把内部 transport seam 描述为生产 activation。
 - Owning issue：#29005，父任务 #26227；实现 PR #29139。
-- 基线：`d8ddce92b1c5c172111b50aefe6b6b200b2589cb`。
+- 设计时基线：`d8ddce92b1c5c172111b50aefe6b6b200b2589cb`；交付前通过 merge 合入 `mo/main` 的 `f9a6eb363b`。
 - 前置合同：[wire/snapshot](CLAUDE_20260916-catalog-metadata-barrier.md)、[RSM 修订](CLAUDE_20260917-catalog-barrier-review-resolution.md)。
 - 前置审批：#29049 revision `2d7420cdfc2835adec7cbe20e2351420c478c3e6`，XuPeng-SH review 5233521645；文件头仍标 Draft，但 GitHub 审批已核实。#29060 已合并 #29004 runtime。
 - 风险：R3；catalog 格式、跨事务恢复、跨 CN 竞争、restore、租户上下文。必须通过设计门禁后实施。
 
-## 1. 事实与缺口
+## 1. 设计时事实与缺口（由后文实现闭合）
 
 | 已核对的 owner/路径 | 已有事实 | 本任务缺口或必须验证的条件 |
 |---|---|---|
@@ -118,7 +118,7 @@ scoped pending/fence 与 restore 修改在同一事务可见。不要为了在�
 
 现有每条 SQL limit 16 不限制整个反向闭包。拟将后台 discovery/cleanup/refresh 限制为每页最多 32、单 tick 至多 32 项、30 秒截止；单个 View 的 rebind 成本受其定义/依赖规模约束，不声称常数。
 
-**设计待决 B1**：源 DDL/restore 的完整反向闭包若跨多页，选择：
+**已批准决策 B1（保留原比较）**：源 DDL/restore 的完整反向闭包若跨多页，选择：
 
 - A：同一事务同步失效完整闭包，保持现有语义，但不能满足“事务总工作固定有界”；只能承诺 recovery tick 有界。
 - B：事务先发布 durable scoped invalidation intent，后台持久 frontier 分页扩展闭包；在该 intent 未闭合时，后续 authority 层必须把潜在受影响目标判为不可读 current。表恢复只扩展其受影响图，不重置整个 account。
@@ -133,9 +133,9 @@ scoped pending/fence 与 restore 修改在同一事务可见。不要为了在�
 - cache 仅记录成功的查询（包括已确认不存在）；查询失败不得写入负缓存。每次 rebind 私有 cache，退出即释放。
 - INVALID 与 temporarily unavailable 区分。INVALID 不是正常 CURRENT；“本代扫描终结”与“所有 metadata 可用”不等价。
 
-**设计待决 B2**：completion 是否允许存在已分类 INVALID View？建议允许“恢复工作已收敛”但不允许该 View admission；这要求 #29006 按目标验证状态。若 barrier completion 定义是所有 View 可用，则 INVALID 必须阻止 C=R。应由系列合同明确选定，不能按测试方便决定。
+**已批准决策 B2（保留原比较）**：completion 是否允许存在已分类 INVALID View？建议允许“恢复工作已收敛”但不允许该 View admission；这要求 #29006 按目标验证状态。若 barrier completion 定义是所有 View 可用，则 INVALID 必须阻止 C=R。应由系列合同明确选定，不能按测试方便决定。
 
-**设计待决 B3**：提交后 evidence 的可信生产入口。当前未发现可直接供 CN coordinator 调用的已认证 catalog receipt RPC。建议首先实现不自动启用的内部 coordinator/dispatcher API，用真实 catalog + 受控 RSM transport 测试证明事务边界；不能新增普通 SQL/heartbeat 可伪造 completion 的入口。正式跨进程入口需要明确现有服务认证机制或专用控制面 owner，完成前不广告 RecoveryProtocol=1、不声称生产端到端闭环完成。
+**已批准决策 B3（保留原比较）**：提交后 evidence 的可信生产入口。当前未发现可直接供 CN coordinator 调用的已认证 catalog receipt RPC。建议首先实现不自动启用的内部 coordinator/dispatcher API，用真实 catalog + 受控 RSM transport 测试证明事务边界；不能新增普通 SQL/heartbeat 可伪造 completion 的入口。正式跨进程入口需要明确现有服务认证机制或专用控制面 owner，完成前不广告 RecoveryProtocol=1、不声称生产端到端闭环完成。
 
 ## 7. 兼容、部署与可观察性
 
