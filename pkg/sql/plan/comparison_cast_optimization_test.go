@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
@@ -741,6 +742,327 @@ func TestDecimalEarlyFalseDetection(t *testing.T) {
 	}
 }
 
+func TestDecimalComparisonKeepsWideZeroSuffixAndCarriesProtocolMarker(t *testing.T) {
+	ctx := context.Background()
+	columnType := types.New(types.T_decimal128, 38, 0)
+	column := &plan.Expr{
+		Typ:  makePlan2Type(&columnType),
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "d"}},
+	}
+	column.Typ.NotNullable = true
+
+	for _, operator := range []string{"=", "<>"} {
+		for _, tc := range []struct {
+			name       string
+			literal    string
+			wantFunc   bool
+			wantMarker bool
+		}{
+			{
+				name:       "18 digit zero suffix",
+				literal:    "12345678901234567890.000000000000000000",
+				wantFunc:   true,
+				wantMarker: false,
+			},
+			{
+				name:       "19 digit zero suffix",
+				literal:    "12345678901234567890.0000000000000000000",
+				wantFunc:   true,
+				wantMarker: true,
+			},
+			{
+				name:       "wide zero suffix",
+				literal:    "1234567890123456789012345678901234567890.000000000000000000000000000000",
+				wantFunc:   true,
+				wantMarker: true,
+			},
+			{
+				name:       "19 digit nonzero suffix",
+				literal:    "12345678901234567890.0000000000000000001",
+				wantFunc:   false,
+				wantMarker: true,
+			},
+		} {
+			t.Run(operator+"/"+tc.name, func(t *testing.T) {
+				literal, err := makePlan2DecimalExprWithType(ctx, tc.literal)
+				require.NoError(t, err)
+				result, err := BindFuncExprImplByPlanExpr(ctx, operator,
+					[]*plan.Expr{DeepCopyExpr(column), literal})
+				require.NoError(t, err)
+				require.Equal(t, tc.wantFunc, result.GetF() != nil,
+					"wide decimal comparison was folded unexpectedly")
+				requires, err := plan.RequiresMORPCVersion89DecimalLiteralSemantics(result)
+				require.NoError(t, err)
+				require.Equal(t, tc.wantMarker, requires)
+			})
+		}
+	}
+}
+
+func TestDecimalComparisonLegacyRemainderProtocolFence(t *testing.T) {
+	for _, tc := range []struct {
+		text             string
+		oldZero, newZero bool
+	}{
+		{"922337203685477581.0", false, true},
+		{"922337203685477581.6", true, false},
+		{"-1234567890123456789.0", false, true},
+		{"-1234567890123456789.6", true, false},
+		{"922337203685477581.1", false, false},
+		{"-1234567890123456789.1", false, false},
+		{"10.0", true, true},
+		{"1844674407370955162.0", true, true},
+	} {
+		t.Run(tc.text, func(t *testing.T) {
+			coefficient, scale, err := types.Parse128(tc.text)
+			require.NoError(t, err)
+			require.Equal(t, int32(1), scale)
+			require.Equal(t, tc.oldZero, decimal128HasTrailingZeros(int64(coefficient.B0_63), int64(coefficient.B64_127), 1))
+			for _, carrier := range []string{"string", "typed"} {
+				for _, op := range []string{"=", "<>", "<", "<=", ">", ">="} {
+					for _, reversed := range []bool{false, true} {
+						columnType := types.New(types.T_decimal128, 30, 0)
+						column := &plan.Expr{Typ: makePlan2Type(&columnType), Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "d"}}}
+						column.Typ.NotNullable = true
+						constantType := types.New(types.T_decimal128, 30, 1)
+						literal := &plan.Expr{Typ: makePlan2Type(&constantType), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Decimal128Val{Decimal128Val: &plan.Decimal128{A: int64(coefficient.B0_63), B: int64(coefficient.B64_127)}}}}}
+						if carrier == "string" {
+							literal, err = appendCastBeforeExpr(context.Background(), makePlan2StringConstExprWithType(tc.text), literal.Typ)
+							require.NoError(t, err)
+						}
+						args := []*plan.Expr{column, literal}
+						if reversed {
+							args[0], args[1] = args[1], args[0]
+						}
+						result, err := BindFuncExprImplByPlanExpr(context.Background(), op, args)
+						require.NoError(t, err)
+						marked, err := plan.RequiresMORPCVersion89DecimalLiteralSemantics(result)
+						require.NoError(t, err)
+						require.Equal(t, tc.oldZero != tc.newZero, marked, "%s %s reversed=%v: %s", carrier, op, reversed, result)
+						if op == "=" || op == "<>" {
+							if tc.newZero {
+								require.NotNil(t, result.GetF())
+							} else {
+								require.NotNil(t, result.GetLit())
+								require.Equal(t, op == "<>", result.GetLit().GetBval())
+							}
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestDecimalSuffixCoercionRecordsProtocolDependency(t *testing.T) {
+	for _, tc := range []struct {
+		text                 string
+		wantSafe, wantMarker bool
+	}{
+		{"922337203685477581.0", true, true},
+		{"922337203685477581.6", false, true},
+		{"-1234567890123456789.0", true, true},
+		{"-1234567890123456789.6", false, true},
+		{"10.0", true, false},
+		{"-1234567890123456789.1", false, false},
+	} {
+		t.Run(tc.text, func(t *testing.T) {
+			coefficient, scale, err := types.Parse128(tc.text)
+			require.NoError(t, err)
+			constantType := types.New(types.T_decimal128, 30, scale)
+			literal := &plan.Expr{
+				Typ: makePlan2Type(&constantType),
+				Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Decimal128Val{
+					Decimal128Val: &plan.Decimal128{A: int64(coefficient.B0_63), B: int64(coefficient.B64_127)},
+				}}},
+			}
+			require.Equal(t, tc.wantSafe, checkNoNeedCast(constantType, types.New(types.T_decimal128, 30, 0), literal))
+			require.Equal(t, tc.wantMarker, literal.GetLit().DecimalLiteralRequiresV82,
+				"record the dependency at the coercion decision, even when coercion is rejected")
+		})
+	}
+}
+
+func TestDecimalComparisonLegacyRemainderFenceBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name, text string
+		oid        types.T
+		scale      int32
+		want       bool
+	}{
+		{"string64", "-1.0", types.T_decimal64, 1, true},
+		{"positive64", "1.0", types.T_decimal64, 1, false},
+		{"eighteen", "-1.000000000000000000", types.T_decimal128, 18, true},
+		{"nineteen_handled_by_caller", "-1.0000000000000000000", types.T_decimal128, 19, false},
+		{"no_scale_reduction", "-1", types.T_decimal128, 0, false},
+		{"legacy_parse_overflow", "10000000000000000000000000000000000000000.0", types.T_decimal256, 1, true},
+		{"unknown_suffix", "invalid", types.T_decimal128, 1, true},
+		{"unsupported_target", "-1.0", types.T_float64, 1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			literal := makePlan2StringConstExprWithType(tc.text)
+			constantType := types.New(tc.oid, tc.oid.ToType().Width, tc.scale)
+			hasZeros, proven := decimalTrailingZerosStatus(literal, constantType, 0)
+			require.Equal(t, tc.want, decimalComparisonUsesLegacyTrailingZeroSemantics(literal, constantType, 0, hasZeros, proven))
+		})
+	}
+	decimalType := types.New(types.T_decimal128, 30, 1)
+	for _, literal := range []*plan.Expr{
+		nil,
+		{},
+		{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}},
+		{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Decimal128Val{}}}},
+		{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Decimal64Val{Decimal64Val: &plan.Decimal64{A: -10}}}}},
+	} {
+		require.False(t, decimalComparisonUsesLegacyTrailingZeroSemantics(literal, decimalType, 0, false, false))
+	}
+}
+
+func TestDecimalComparisonNegativeDecimal128ZeroSuffixCarriesProtocolMarker(t *testing.T) {
+	ctx := context.Background()
+	columnType := types.New(types.T_decimal128, 30, 2)
+	column := &plan.Expr{
+		Typ:  makePlan2Type(&columnType),
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "d"}},
+	}
+	column.Typ.NotNullable = true
+
+	casted, err := appendCastBeforeExpr(ctx, makePlan2StringConstExprWithType("-50.500000"), plan.Type{
+		Id:          int32(types.T_decimal128),
+		Width:       30,
+		Scale:       6,
+		NotNullable: true,
+	})
+	require.NoError(t, err)
+	result, err := BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{column, casted})
+	require.NoError(t, err)
+	require.NotNil(t, result.GetF(), "negative zero suffix must remain an executable comparison")
+	requires, err := plan.RequiresMORPCVersion89DecimalLiteralSemantics(result)
+	require.NoError(t, err)
+	require.True(t, requires, result.String())
+	requiredVersion, err := RequiredPersistedExpressionProtocolVersion(result)
+	require.NoError(t, err)
+	require.Equal(t, int64(defines.MORPCVersion89), requiredVersion)
+
+	positive, err := appendCastBeforeExpr(ctx, makePlan2StringConstExprWithType("50.500000"), plan.Type{
+		Id:          int32(types.T_decimal128),
+		Width:       30,
+		Scale:       6,
+		NotNullable: true,
+	})
+	require.NoError(t, err)
+	positiveResult, err := BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{column, positive})
+	require.NoError(t, err)
+	positiveRequires, err := plan.RequiresMORPCVersion89DecimalLiteralSemantics(positiveResult)
+	require.NoError(t, err)
+	require.False(t, positiveRequires, positiveResult.String())
+
+	nonzero, err := appendCastBeforeExpr(ctx, makePlan2StringConstExprWithType("-50.500001"), plan.Type{
+		Id:          int32(types.T_decimal128),
+		Width:       30,
+		Scale:       6,
+		NotNullable: true,
+	})
+	require.NoError(t, err)
+	nonzeroResult, err := BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{column, nonzero})
+	require.NoError(t, err)
+	nonzeroRequires, err := plan.RequiresMORPCVersion89DecimalLiteralSemantics(nonzeroResult)
+	require.NoError(t, err)
+	require.False(t, nonzeroRequires, nonzeroResult.String())
+}
+
+func TestDecimalComparisonPreservesNullableColumnSemantics(t *testing.T) {
+	ctx := context.Background()
+	columnType := types.New(types.T_decimal128, 38, 0)
+	column := &plan.Expr{
+		Typ:  makePlan2Type(&columnType),
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "d"}},
+	}
+	literalText := "12345678901234567890123456789012345678.1"
+
+	for _, operator := range []string{"=", "<>"} {
+		t.Run(operator, func(t *testing.T) {
+			literal, err := makePlan2DecimalExprWithType(ctx, literalText)
+			require.NoError(t, err)
+			result, err := BindFuncExprImplByPlanExpr(ctx, operator,
+				[]*plan.Expr{DeepCopyExpr(column), literal})
+			require.NoError(t, err)
+			require.NotNil(t, result.GetF(), "nullable comparison must not fold to a constant")
+			require.False(t, result.Typ.NotNullable,
+				"comparison result must preserve SQL NULL semantics")
+			requires, err := plan.RequiresMORPCVersion89DecimalLiteralSemantics(result)
+			require.NoError(t, err)
+			require.True(t, requires,
+				"retained nullable comparison must preserve the v87 fence")
+		})
+	}
+}
+
+func TestDecimalComparisonDoesNotNarrowExplicitCastWithDifferentSourceScale(t *testing.T) {
+	ctx := context.Background()
+	columnType := types.New(types.T_decimal128, 18, 1)
+	column := &plan.Expr{
+		Typ:  makePlan2Type(&columnType),
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "d"}},
+	}
+	column.Typ.NotNullable = true
+
+	for _, operator := range []string{"=", "<>"} {
+		t.Run(operator, func(t *testing.T) {
+			source := makePlan2StringConstExprWithType("1.010000000000000000000")
+			casted, err := appendCastBeforeExpr(ctx, source, plan.Type{
+				Id:          int32(types.T_decimal128),
+				Width:       21,
+				Scale:       20,
+				NotNullable: true,
+			})
+			require.NoError(t, err)
+			result, err := BindFuncExprImplByPlanExpr(ctx, operator,
+				[]*plan.Expr{DeepCopyExpr(column), casted})
+			require.NoError(t, err)
+			require.NotNil(t, result.GetF(),
+				"a cast whose source scale differs must not be narrowed by tail analysis")
+		})
+	}
+}
+
+func TestDecimalComparisonFencesSmallExplicitCastSourceScaleMismatch(t *testing.T) {
+	ctx := context.Background()
+	columnType := types.New(types.T_decimal64, 10, 0)
+	column := &plan.Expr{
+		Typ:  makePlan2Type(&columnType),
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{Name: "d"}},
+	}
+	column.Typ.NotNullable = true
+
+	for _, operator := range []string{"=", "<>", "<", "<=", ">", ">="} {
+		for _, reversed := range []bool{false, true} {
+			t.Run(operator+"/reversed="+strconv.FormatBool(reversed), func(t *testing.T) {
+				source := makePlan2StringConstExprWithType("1.01")
+				casted, err := appendCastBeforeExpr(ctx, source, plan.Type{
+					Id:          int32(types.T_decimal64),
+					Width:       10,
+					Scale:       1,
+					NotNullable: true,
+				})
+				require.NoError(t, err)
+				args := []*plan.Expr{DeepCopyExpr(column), casted}
+				if reversed {
+					args[0], args[1] = args[1], args[0]
+				}
+				result, err := BindFuncExprImplByPlanExpr(ctx, operator, args)
+				require.NoError(t, err)
+				require.NotNil(t, result.GetF(),
+					"source-scale mismatch must retain the executable comparison")
+				requires, err := plan.RequiresMORPCVersion89DecimalLiteralSemantics(result)
+				require.NoError(t, err)
+				require.True(t, requires,
+					"source-scale mismatch must carry the v87 persisted-expression fence")
+			})
+		}
+	}
+}
+
 // TestUnwrapCast tests the unwrapCast helper function
 func TestUnwrapCast(t *testing.T) {
 	tests := []struct {
@@ -1043,9 +1365,10 @@ func TestDecimalNotEqualAlwaysTrue(t *testing.T) {
 			// Create column expression
 			colExpr := &plan.Expr{
 				Typ: plan.Type{
-					Id:    int32(types.T_decimal64),
-					Width: 10,
-					Scale: tt.colScale,
+					Id:          int32(types.T_decimal64),
+					Width:       10,
+					Scale:       tt.colScale,
+					NotNullable: true,
 				},
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{

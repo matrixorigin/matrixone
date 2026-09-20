@@ -9287,9 +9287,15 @@ func blobToArray[T types.ArrayElement](
 				return err
 			}
 		} else {
-			arr := types.BytesToArray[T](v)
-			if int(toType.Width) != len(arr) {
-				return moerr.NewArrayDefMismatchNoCtx(int(toType.Width), len(arr))
+			size := toType.GetArrayElementSize()
+			if len(v)%size != 0 {
+				return moerr.NewInvalidInputNoCtx("vector payload is not aligned to its element size")
+			}
+			if len(v)/size > types.MaxArrayDimension {
+				return moerr.NewInvalidInputNoCtx("vector dimension exceeds maximum dimension")
+			}
+			if n := len(v) / size; toType.Width != types.MaxArrayDimension && int(toType.Width) != n {
+				return moerr.NewArrayDefMismatchNoCtx(int(toType.Width), n)
 			}
 
 			if err := to.AppendBytes(v, false); err != nil {
@@ -9324,8 +9330,15 @@ func arrayToArray[I types.ArrayElement, O types.ArrayElement](
 		// from-type width. An UNSIZED target (Width == MaxArrayDimension, the sentinel an arithmetic
 		// result such as b/b or b+sqrt(b) carries) declares no dimension, so skip it -- only a real
 		// declared dimension is enforced.
+		size := from.GetType().GetArrayElementSize()
+		if len(v)%size != 0 {
+			return moerr.NewInvalidInputNoCtx("vector payload is not aligned to its element size")
+		}
+		if len(v)/size > types.MaxArrayDimension {
+			return moerr.NewInvalidInputNoCtx("vector dimension exceeds maximum dimension")
+		}
 		if w := int(to.GetType().Width); w > 0 && w != types.MaxArrayDimension {
-			if n := len(types.BytesToArray[I](v)); n != w {
+			if n := len(v) / size; n != w {
 				return moerr.NewArrayDefMismatchNoCtx(w, n)
 			}
 		}

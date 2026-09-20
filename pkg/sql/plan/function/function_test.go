@@ -1482,6 +1482,20 @@ func TestUserLevelLockBuiltinRegistration(t *testing.T) {
 	}
 }
 
+func TestUncompressedLengthOverloadsAreVolatile(t *testing.T) {
+	for i := range supportedStringBuiltIns {
+		if supportedStringBuiltIns[i].functionId != UNCOMPRESSED_LENGTH {
+			continue
+		}
+		require.Len(t, supportedStringBuiltIns[i].Overloads, 4)
+		for _, overload := range supportedStringBuiltIns[i].Overloads {
+			require.True(t, overload.volatile)
+		}
+		return
+	}
+	require.Fail(t, "UNCOMPRESSED_LENGTH registration not found")
+}
+
 func TestRunPositionCharFunctionDirectly(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	inputs := []*vector.Vector{
