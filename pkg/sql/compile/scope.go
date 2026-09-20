@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"maps"
 	"net"
 	"slices"
 	"strconv"
@@ -599,6 +600,9 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 		}
 		claimedPreScopes[i] = true
 		startedPreScopeCount++
+		if s.LazyPreScopes {
+			assignLazyRemoteGeneration(scope, c.addr)
+		}
 		// Ordinary branches were initialized serially by Compile.Run. Repeating
 		// initialization here would rebuild DOP clones' filters concurrently.
 		if initErr := s.initLazyPreScope(scope, c); initErr != nil {
@@ -770,6 +774,28 @@ func (s *Scope) cancelMergeSiblingsOnError(err error) error {
 		s.Proc.Cancel(err)
 	}
 	return err
+}
+
+func assignLazyRemoteGeneration(scope *Scope, rootAddress string) {
+	counts := collectRemoteFragmentCounts([]*Scope{scope}, rootAddress)
+	executionID := uuid.Nil
+	if len(counts) > 0 {
+		executionID = newRemoteExecutionID()
+	}
+	var assign func(*Scope)
+	assign = func(current *Scope) {
+		if current == nil {
+			return
+		}
+		if current.Magic == Remote {
+			current.lazyRemoteFragmentCounts = maps.Clone(counts)
+			current.lazyRemoteExecutionID = executionID
+		}
+		for _, pre := range current.PreScopes {
+			assign(pre)
+		}
+	}
+	assign(scope)
 }
 
 // cleanPipelineWitchStartFail is used to clean up the pipelines that has failed to start due to a certain reasons.

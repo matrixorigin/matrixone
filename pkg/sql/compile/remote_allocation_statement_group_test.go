@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -124,6 +125,72 @@ func TestCollectRemoteFragmentCountsCarriesExecutionAddress(t *testing.T) {
 		[]*Scope{firstB, nil, secondB, local},
 		"cn-a:6001",
 	))
+}
+
+func TestLazyRemoteCandidatesUseIndependentExactGenerations(t *testing.T) {
+	postRemote := &Scope{Magic: Remote, NodeInfo: engine.Node{Addr: "cn-b:6001"}}
+	post := &Scope{PreScopes: []*Scope{postRemote}}
+	preRemoteB := &Scope{Magic: Remote, NodeInfo: engine.Node{Addr: "cn-b:6001"}}
+	preRemoteC := &Scope{Magic: Remote, NodeInfo: engine.Node{Addr: "cn-c:6001"}}
+	pre := &Scope{PreScopes: []*Scope{preRemoteB, preRemoteC}}
+
+	assignLazyRemoteGeneration(post, "cn-a:6001")
+	postID := postRemote.lazyRemoteExecutionID
+	require.NotEqual(t, uuid.Nil, postID)
+	require.Equal(t, map[string]uint32{"cn-b:6001": 1}, postRemote.lazyRemoteFragmentCounts)
+	counts, executionID := remoteExecutionTopology(&Compile{}, postRemote)
+	require.Equal(t, postRemote.lazyRemoteFragmentCounts, counts)
+	require.Equal(t, postID, executionID)
+	require.Equal(t, uuid.Nil, preRemoteB.lazyRemoteExecutionID, "deferred candidates must not own a generation")
+	ordinaryID := newRemoteExecutionID()
+	ordinaryCounts := map[string]uint32{"cn-z:6001": 2}
+	counts, executionID = remoteExecutionTopology(&Compile{
+		remoteFragmentCounts: ordinaryCounts,
+		remoteExecutionID:    ordinaryID,
+	}, &Scope{})
+	require.Equal(t, ordinaryCounts, counts)
+	require.Equal(t, ordinaryID, executionID)
+
+	postBoard := message.NewMessageBoard()
+	postParticipant, err := acquireRemoteAllocationStatementParticipant(
+		remoteAllocationStatementGroupKey(postID, "cn-b:6001"), postBoard, 1, nil)
+	require.NoError(t, err)
+	terminal, err := postParticipant.finish(nil)
+	require.NoError(t, err)
+	require.True(t, terminal.complete)
+	require.False(t, remoteAllocationStatementGroupRegistered(postBoard))
+
+	assignLazyRemoteGeneration(pre, "cn-a:6001")
+	preID := preRemoteB.lazyRemoteExecutionID
+	require.NotEqual(t, postID, preID)
+	require.Equal(t, preID, preRemoteC.lazyRemoteExecutionID)
+	require.Equal(t, map[string]uint32{"cn-b:6001": 1, "cn-c:6001": 1}, preRemoteB.lazyRemoteFragmentCounts)
+
+	for _, tc := range []struct {
+		address string
+		cancel  error
+	}{
+		{address: "cn-b:6001"},
+		{address: "cn-c:6001", cancel: context.Canceled},
+	} {
+		board := message.NewMessageBoard()
+		key := remoteAllocationStatementGroupKey(preID, tc.address)
+		participant, acquireErr := acquireRemoteAllocationStatementParticipant(key, board, 1, nil)
+		require.NoError(t, acquireErr)
+		_, finishErr := participant.finish(tc.cancel)
+		if tc.cancel == nil {
+			require.NoError(t, finishErr)
+		} else {
+			require.ErrorIs(t, finishErr, tc.cancel)
+		}
+		require.False(t, remoteAllocationStatementGroupRegistered(board))
+		remoteAllocationStatementGroups.Lock()
+		require.Nil(t, remoteAllocationStatementGroups.tombstones[key])
+		remoteAllocationStatementGroups.Unlock()
+	}
+
+	assignLazyRemoteGeneration(post, "cn-a:6001")
+	require.NotEqual(t, postID, postRemote.lazyRemoteExecutionID, "reuse must allocate a new physical generation")
 }
 
 func TestRemoteExecutionIDSeparatesRetryMessageBoards(t *testing.T) {

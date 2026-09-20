@@ -59,6 +59,13 @@ var (
 // first, Message with error information.
 // second, Message with EndFlag and Analysis Information.
 // third, Message with batch data.
+func remoteExecutionTopology(c *Compile, s *Scope) (map[string]uint32, uuid.UUID) {
+	if s != nil && s.lazyRemoteExecutionID != uuid.Nil {
+		return s.lazyRemoteFragmentCounts, s.lazyRemoteExecutionID
+	}
+	return c.remoteFragmentCounts, c.remoteExecutionID
+}
+
 func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error) {
 	// a defer for safety.
 	defer func() {
@@ -74,12 +81,13 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	// encode structures which need to send.
 	var scopeEncodeData, processEncodeData []byte
 	var withoutOutput, folded bool
+	remoteFragmentCounts, remoteExecutionID := remoteExecutionTopology(c, s)
 	scopeEncodeData, withoutOutput, processEncodeData, folded, err = prepareRemoteRunSendingData(
 		c.sql,
 		s,
 		c.proc,
-		c.remoteFragmentCounts,
-		c.remoteExecutionID,
+		remoteFragmentCounts,
+		remoteExecutionID,
 	)
 	if err != nil {
 		return nil, err
