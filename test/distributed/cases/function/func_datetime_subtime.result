@@ -8,8 +8,8 @@ SELECT TIME(SUBTIME('15:30:45', '00:00:00')) AS time_sub_zero;
 ➤ time_sub_zero[92,64,0]  𝄀
 15:30:45
 SELECT TIME(SUBTIME('00:00:00', '00:00:01')) AS zero_sub_second;
-➤ zero_sub_second[92,64,0]  𝄀
-23:59:59
+➤ zero_sub_second[92,10,0]  𝄀
+00:00:01
 SELECT CAST(SUBTIME('2007-12-31 23:59:59.999999', '1 1:1:1.000002') AS CHAR) AS datetime_sub_time;
 ➤ datetime_sub_time[12,65535,0]  𝄀
 2007-12-30 22:58:58.999997
@@ -29,8 +29,8 @@ SELECT TIME(SUBTIME('15:30:45', '01:15:30')) AS string_time;
 ➤ string_time[92,64,0]  𝄀
 14:15:15
 SELECT TIME(SUBTIME('01:00:00', '02:00:00')) AS negative_result;
-➤ negative_result[92,64,0]  𝄀
-23:00:00
+➤ negative_result[92,10,0]  𝄀
+-1:00:00
 SELECT SUBTIME('2007-12-31 00:00:00', '1 0:0:0') AS negative_datetime;
 ➤ negative_datetime[93,64,0]  𝄀
 2007-12-30 00:00:00
@@ -38,8 +38,8 @@ SELECT CAST(SUBTIME('2007-12-31 23:59:59.999999', '0 0:0:0.000001') AS CHAR) AS 
 ➤ with_microseconds[12,65535,0]  𝄀
 2007-12-31 23:59:59.999998
 SELECT TIME(SUBTIME('15:30:45.500000', '00:00:00.200000')) AS time_with_microseconds;
-➤ time_with_microseconds[92,64,0]  𝄀
-15:30:45.300000000
+➤ time_with_microseconds[92,10,0]  𝄀
+15:30:45
 SELECT SUBTIME(NULL, '01:00:00') AS null_expr1;
 ➤ null_expr1[92,64,0]  𝄀
 null
