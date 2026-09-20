@@ -98,7 +98,7 @@ ORDER BY table_name;
 table_name    column_name    data_type    character_maximum_length    character_set_name    collation_name
 quote_binary_ctas    q    varchar    130    utf8mb4    utf8mb4_general_ci
 quote_binary_view    q    varchar    130    utf8mb4    utf8mb4_general_ci
--- @regex("Cannot convert string.*from binary to utf8mb4", true)
+SELECT QUOTE(b) FROM quote_binary_domain WHERE id = 4;
 Cannot convert string 'A�B' from binary to utf8mb4
 DROP TABLE quote_binary_ctas;
 DROP VIEW quote_binary_view;
