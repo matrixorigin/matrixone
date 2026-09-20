@@ -346,6 +346,22 @@ func TestCheckPitrGranularityConcretePrimaryKeyBranches(t *testing.T) {
 	})
 
 	t.Run("invalid concrete exclude is returned", func(t *testing.T) {
+		exec := &recordingInternalSQLExecutor{mocker: func(sql string) (executor.Result, error) {
+			if strings.Contains(sql, catalog.MO_TABLES) {
+				return candidateResult("db", "table", true), nil
+			}
+			return validPitrResult(), nil
+		}}
+		rt := moruntime.ServiceRuntime(proc.GetService())
+		previous, hadPrevious := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
+		rt.SetGlobalVariables(moruntime.InternalSQLExecutor, exec)
+		t.Cleanup(func() {
+			if hadPrevious {
+				rt.SetGlobalVariables(moruntime.InternalSQLExecutor, previous)
+			} else {
+				rt.CompareAndDeleteGlobalVariables(moruntime.InternalSQLExecutor, exec)
+			}
+		})
 		c := NewCompile("", "", "create cdc", "", "", nil, proc, nil, false, nil, time.Now())
 		defer c.Release()
 		pts := &cdc.PatternTuples{Pts: []*cdc.PatternTuple{{Source: cdc.PatternTable{Database: "db", Table: "table"}}}}
