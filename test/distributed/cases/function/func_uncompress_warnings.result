@@ -69,3 +69,43 @@ UNCOMPRESSED_LENGTH(COMPRESS('abc')) AS valid_input;
 SHOW COUNT(*) WARNINGS;
 ➤ @@session.warning_count[-5,64,0]  𝄀
 0
+SET @short_compressed = x'00';
+PREPARE short_length FROM 'SELECT UNCOMPRESSED_LENGTH(?) AS n';
+EXECUTE short_length USING @short_compressed;
+➤ n[-5,64,0]  𝄀
+0
+SHOW COUNT(*) WARNINGS;
+➤ @@session.warning_count[-5,64,0]  𝄀
+1
+EXECUTE short_length USING @short_compressed;
+➤ n[-5,64,0]  𝄀
+0
+SHOW COUNT(*) WARNINGS;
+➤ @@session.warning_count[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE short_length;
+DROP DATABASE IF EXISTS uncompress_length_warning_rows;
+CREATE DATABASE uncompress_length_warning_rows;
+CREATE TABLE uncompress_length_warning_rows.warning_rows(id INT PRIMARY KEY);
+INSERT INTO uncompress_length_warning_rows.warning_rows VALUES (1), (2), (3);
+PREPARE row_lengths FROM 'SELECT id, UNCOMPRESSED_LENGTH(?) AS n FROM uncompress_length_warning_rows.warning_rows ORDER BY id';
+EXECUTE row_lengths USING @short_compressed;
+➤ id[4,32,0]  ¦  n[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  0  𝄀
+3  ¦  0
+SHOW COUNT(*) WARNINGS;
+➤ @@session.warning_count[-5,64,0]  𝄀
+3
+DEALLOCATE PREPARE row_lengths;
+DROP DATABASE uncompress_length_warning_rows;
+SELECT COUNT(*) AS leftover_tables FROM information_schema.tables
+WHERE table_schema = 'uncompress_length_warning_rows';
+➤ leftover_tables[-5,64,0]  𝄀
+0
+SELECT IF(FALSE, UNCOMPRESSED_LENGTH(x'00'), 7) AS chosen;
+➤ chosen[-5,64,0]  𝄀
+7
+SHOW COUNT(*) WARNINGS;
+➤ @@session.warning_count[-5,64,0]  𝄀
+0
