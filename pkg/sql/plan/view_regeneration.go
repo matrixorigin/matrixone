@@ -67,12 +67,17 @@ type viewRegenerationContext struct {
 	defaultDatabase     string
 	rootSQL             string
 	lowerCaseTableNames int64
+	partialDependencies []ViewDependency
 }
 
 func (c *viewRegenerationContext) DefaultDatabase() string { return c.defaultDatabase }
 func (c *viewRegenerationContext) GetRootSql() string      { return c.rootSQL }
 func (c *viewRegenerationContext) GetLowerCaseTableNames() int64 {
 	return c.lowerCaseTableNames
+}
+
+func (c *viewRegenerationContext) capturePartialViewDependencies(dependencies []ViewDependency) {
+	c.partialDependencies = append([]ViewDependency(nil), dependencies...)
 }
 
 func (c *viewRegenerationContext) ResolveViewDependencyAccount(
@@ -102,20 +107,31 @@ func RegenerateViewDefinition(
 	ctx CompilerContext,
 	persistedViewData string,
 ) (*RegeneratedViewDefinition, error) {
+	regenerated, _, err := RegenerateViewDefinitionWithPartialDependencies(ctx, persistedViewData)
+	return regenerated, err
+}
+
+// RegenerateViewDefinitionWithPartialDependencies returns catalog objects that
+// were resolved before binding failed. Recovery uses them only to retain reverse
+// discovery for an INVALID legacy View; they are never usable schema metadata.
+func RegenerateViewDefinitionWithPartialDependencies(
+	ctx CompilerContext,
+	persistedViewData string,
+) (*RegeneratedViewDefinition, []ViewDependency, error) {
 	var viewData ViewData
 	if err := json.Unmarshal([]byte(persistedViewData), &viewData); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if viewData.RequiredProtocolVersion != nil {
 		if *viewData.RequiredProtocolVersion < 0 {
-			return nil, moerr.NewInvalidInputf(
+			return nil, nil, moerr.NewInvalidInputf(
 				ctx.GetContext(),
 				"persisted view protocol version must not be negative: %d",
 				*viewData.RequiredProtocolVersion)
 		}
 		if err := RequirePersistedProtocolVersion(
 			ctx.GetContext(), ctx.GetProcess(), *viewData.RequiredProtocolVersion); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 	parserSQLMode := legacyViewParserSQLMode
@@ -129,7 +145,7 @@ func RegenerateViewDefinition(
 	statements, err := parsers.ParseWithSQLMode(
 		ctx.GetContext(), dialect.MYSQL, viewData.Stmt, lowerCaseTableNames, parserSQLMode)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer func() {
 		for _, statement := range statements {
@@ -137,7 +153,7 @@ func RegenerateViewDefinition(
 		}
 	}()
 	if len(statements) != 1 {
-		return nil, moerr.NewParseError(ctx.GetContext(), "persisted View must contain one statement")
+		return nil, nil, moerr.NewParseError(ctx.GetContext(), "persisted View must contain one statement")
 	}
 
 	var selectStmt *tree.Select
@@ -151,7 +167,7 @@ func RegenerateViewDefinition(
 		selectStmt, columnNames = statement.AsSource, statement.ColNames
 		viewDatabase, viewName = string(statement.Name.SchemaName), string(statement.Name.ObjectName)
 	default:
-		return nil, moerr.NewParseError(ctx.GetContext(), "persisted View statement is not CREATE/ALTER VIEW")
+		return nil, nil, moerr.NewParseError(ctx.GetContext(), "persisted View statement is not CREATE/ALTER VIEW")
 	}
 	if viewDatabase == "" {
 		viewDatabase = viewData.DefaultDatabase
@@ -166,11 +182,11 @@ func RegenerateViewDefinition(
 	tableDef, err := genViewTableDef(
 		regenerationCtx, selectStmt, columnNames, viewDatabase, viewName, false)
 	if err != nil {
-		return nil, err
+		return nil, regenerationCtx.partialDependencies, err
 	}
 	var generatedData ViewData
 	if err = json.Unmarshal([]byte(tableDef.ViewSql.View), &generatedData); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	updatedViewData, err := patchPersistedViewMetadata(
@@ -178,13 +194,13 @@ func RegenerateViewDefinition(
 		lowerCaseTableNames, maxPersistedProtocolVersion(
 			viewData.RequiredProtocolVersion, generatedData.RequiredProtocolVersion))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	tableDef.ViewSql.View = updatedViewData
 	return &RegeneratedViewDefinition{
 		TableDef:     tableDef,
 		Dependencies: generatedData.Dependencies,
-	}, nil
+	}, generatedData.Dependencies, nil
 }
 
 func patchPersistedViewMetadata(

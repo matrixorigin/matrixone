@@ -23,6 +23,7 @@ const MoViewRecoveryDDL = `create table mo_catalog.mo_view_recovery (
  id int unsigned not null primary key,
  revision bigint unsigned not null,
  mutation_revision bigint unsigned not null default 0,
+ completion_fence bool not null default false,
  state text not null,
  lease_expires_at timestamp null
 )`

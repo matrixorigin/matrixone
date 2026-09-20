@@ -493,7 +493,7 @@ func TestPersistViewDependenciesRejectsStaleOrMalformedCatalogState(t *testing.T
 		expected := errors.New("relation unavailable")
 		database.EXPECT().Relation(gomock.Any(), "view", gomock.Any()).Return(nil, expected)
 		_, err := (&Compile{proc: proc, pn: &planpb.Plan{}}).persistViewDependencyEdgesWithContext(
-			proc.Ctx, database, "db", &planpb.TableDef{Name: "view", ViewSql: &planpb.ViewDef{}}, 1)
+			proc.Ctx, database, "db", &planpb.TableDef{Name: "view", ViewSql: &planpb.ViewDef{View: `{}`}}, 1)
 		require.ErrorIs(t, err, expected)
 	})
 
@@ -508,7 +508,7 @@ func TestPersistViewDependenciesRejectsStaleOrMalformedCatalogState(t *testing.T
 		relation.EXPECT().GetTableDef(gomock.Any()).Return(&planpb.TableDef{})
 		database.EXPECT().GetDatabaseId(gomock.Any()).Return("invalid")
 		_, err := (&Compile{proc: proc, pn: &planpb.Plan{}}).persistViewDependencyEdgesWithContext(
-			proc.Ctx, database, "db", &planpb.TableDef{Name: "view", ViewSql: &planpb.ViewDef{}}, 1)
+			proc.Ctx, database, "db", &planpb.TableDef{Name: "view", ViewSql: &planpb.ViewDef{View: `{}`}}, 1)
 		require.Error(t, err)
 	})
 
@@ -517,11 +517,6 @@ func TestPersistViewDependenciesRejectsStaleOrMalformedCatalogState(t *testing.T
 		proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
 		ctrl := gomock.NewController(t)
 		database := mock_frontend.NewMockDatabase(ctrl)
-		relation := mock_frontend.NewMockRelation(ctrl)
-		database.EXPECT().Relation(gomock.Any(), "view", gomock.Any()).Return(relation, nil)
-		relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(13))
-		relation.EXPECT().GetTableDef(gomock.Any()).Return(&planpb.TableDef{LogicalId: 17})
-		database.EXPECT().GetDatabaseId(gomock.Any()).Return("11")
 		_, err := (&Compile{proc: proc, pn: &planpb.Plan{}}).persistViewDependencyEdgesWithContext(
 			proc.Ctx, database, "db", &planpb.TableDef{
 				Name: "view", ViewSql: &planpb.ViewDef{View: "{"},
@@ -1022,7 +1017,7 @@ func TestRefreshOneViewRejectsStaleCatalogTargetsBeforeReplacement(t *testing.T)
 func TestRegenerateViewRejectsMalformedPersistedEnvironment(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	originalTop := proc.GetTopContext()
-	_, err := regenerateViewUsingPersistedEnvironment(proc, nil,
+	_, _, err := regenerateViewUsingPersistedEnvironment(proc, nil,
 		defines.AttachAccountId(proc.Ctx, 7), &planpb.TableDef{ViewSql: &planpb.ViewDef{View: "{"}})
 	require.Error(t, err)
 	require.Equal(t, originalTop, proc.GetTopContext())
@@ -1031,7 +1026,7 @@ func TestRegenerateViewRejectsMalformedPersistedEnvironment(t *testing.T) {
 func TestRegenerateConstantViewUsingPersistedEnvironment(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	targetContext := defines.AttachAccountId(proc.Ctx, 7)
-	regenerated, err := regenerateViewUsingPersistedEnvironment(proc, nil, targetContext,
+	regenerated, _, err := regenerateViewUsingPersistedEnvironment(proc, nil, targetContext,
 		&planpb.TableDef{ViewSql: &planpb.ViewDef{
 			View: `{"Stmt":"create view view as select 1","DefaultDatabase":"db"}`,
 		}})
@@ -1869,7 +1864,7 @@ func TestViewMetadataRevalidationActivationIsPersistedAndIdempotent(t *testing.T
 	require.Contains(t, exec.sqls[4],
 		"source_relation_kind in ('LEGACY_SCAN','REVALIDATE_SCAN','ACTIVATED')")
 	require.Contains(t, exec.sqls[4], "where account_id=0")
-	require.Contains(t, exec.sqls[5], "mutation_revision=mutation_revision+1")
+	require.Contains(t, exec.sqls[5], "mutation_revision=mutation_revision+assert(not completion_fence")
 	require.Contains(t, exec.sqls[6], "select source_account_id")
 	require.Equal(t, []string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL}, exec.sqls[7:9])
 	require.Contains(t, exec.sqls[9], "select source_account_id")

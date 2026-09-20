@@ -232,7 +232,15 @@ func genViewTableDef(
 	forAuthoring bool,
 ) (*plan.TableDef, error) {
 	var tableDef plan.TableDef
+	originalContext := ctx
 	dependencyCapture := newViewDependencyCaptureContext(ctx)
+	defer func() {
+		if observer, ok := originalContext.(interface {
+			capturePartialViewDependencies([]ViewDependency)
+		}); ok {
+			observer.capturePartialViewDependencies(dependencyCapture.dependencies())
+		}
+	}()
 	ctx = dependencyCapture
 	// The optimizer may constant-fold a protocol-sensitive function out of a
 	// persisted view. Keep the requirement observed on the bound plan so the

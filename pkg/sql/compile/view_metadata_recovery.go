@@ -80,9 +80,10 @@ func viewMetadataRequireRevalidationSQL() []string {
 			catalog.ViewRefreshStatusRevalidateRequired,
 			catalog.ViewRefreshStatusLegacyScan, catalog.ViewRefreshStatusRevalidateScan,
 			catalog.ViewRefreshStatusActivated),
-		// This independent clock also fences a completed coordinator when an
-		// older/default-disabled lifecycle path modifies catalog objects.
-		"update mo_catalog.mo_view_recovery set mutation_revision=mutation_revision+1 where id=1",
+		// A queued COMPLETE can commit after its caller times out. The DML expression
+		// fails atomically while that proposal fence is armed; otherwise the same
+		// statement advances the independent mutation clock.
+		"update mo_catalog.mo_view_recovery set mutation_revision=mutation_revision+assert(not completion_fence,'View recovery completion is unresolved') where id=1",
 	}
 }
 
@@ -1371,9 +1372,19 @@ func refreshPendingView(proc *process.Process, pending *pendingViewRefresh) (boo
 	if err != nil {
 		return false, err
 	}
-	regenerated, err := regenerateViewUsingPersistedEnvironment(
+	regenerated, partialDependencies, err := regenerateViewUsingPersistedEnvironment(
 		proc, engineValue, targetContext, currentDef)
 	if err != nil {
+		failure := classifyViewRefreshFailure(err)
+		if (failure.code == viewRefreshFailurePermanentlyInvalid ||
+			failure.code == viewRefreshFailurePlannerIncompatible) && len(partialDependencies) > 0 {
+			runner := &Compile{proc: proc, e: engineValue, pn: &planpb.Plan{}}
+			if _, persistErr := runner.persistViewDependencyListWithContext(
+				targetContext, database, pending.databaseName, currentDef,
+				partialDependencies, pending.generation); persistErr != nil {
+				return true, persistErr
+			}
+		}
 		return false, err
 	}
 	replacement := plan2.DeepCopyTableDef(currentDef, true)
@@ -1399,14 +1410,14 @@ func regenerateViewUsingPersistedEnvironment(
 	engineValue engine.Engine,
 	targetContext context.Context,
 	currentDef *planpb.TableDef,
-) (*plan2.RegeneratedViewDefinition, error) {
+) (*plan2.RegeneratedViewDefinition, []plan2.ViewDependency, error) {
 	originalTopContext := proc.GetTopContext()
 	proc.ReplaceTopCtx(targetContext)
 	defer proc.ReplaceTopCtx(originalTopContext)
 	lower := int64(0)
 	var persistedData plan2.ViewData
 	if err := json.Unmarshal([]byte(currentDef.ViewSql.View), &persistedData); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if persistedData.LowerCaseTableNames != nil {
 		lower = *persistedData.LowerCaseTableNames
@@ -1418,7 +1429,7 @@ func regenerateViewUsingPersistedEnvironment(
 		},
 		dependencies: persistedData.Dependencies,
 	}
-	return plan2.RegenerateViewDefinition(compilerCtx, currentDef.ViewSql.View)
+	return plan2.RegenerateViewDefinitionWithPartialDependencies(compilerCtx, currentDef.ViewSql.View)
 }
 
 func (c *Compile) enqueueCurrentDependentViews(mutation viewRelationMutation) error {

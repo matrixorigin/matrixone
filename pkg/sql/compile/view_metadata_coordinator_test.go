@@ -111,9 +111,9 @@ func TestViewRecoveryReceiptRequiresDurableProof(t *testing.T) {
 func TestViewRecoveryCatalogStateDecode(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, data := range []string{`{"version":1}`, `{"version":2}`, `{"version":1,"unknown":1}`, `{"version":1} {}`, strings.Repeat(" ", viewRecoveryMaxStateBytes+1), `broken`} {
-		result := executor.NewMemResult([]types.Type{types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()}, proc.Mp())
+		result := executor.NewMemResult([]types.Type{types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()}, proc.Mp())
 		result.NewBatchWithRowCount(1)
-		for i, value := range []string{data, "7", "1", "0"} {
+		for i, value := range []string{data, "7", "1", "0", "0"} {
 			require.NoError(t, executor.AppendStringRows(result, i, []string{value}))
 		}
 		txn := executor.NewMemTxnExecutor(func(string) (executor.Result, error) { return result.GetResult(), nil }, nil)

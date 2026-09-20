@@ -21,7 +21,6 @@ import (
 	"math"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -42,16 +41,28 @@ func recoveryCoordinatorFaultFixture(t *testing.T, s ViewRecoveryState, revision
 		if fail != "" && strings.Contains(q, fail) {
 			return executor.Result{}, errors.New("injected catalog fault")
 		}
+		if strings.HasPrefix(q, "update mo_catalog.mo_view_recovery set completion_fence=") {
+			value := strings.Contains(q, "set completion_fence=true")
+			if s.completionFence == value {
+				return executor.Result{}, nil
+			}
+			s.completionFence = value
+			return executor.Result{AffectedRows: 1}, nil
+		}
 		if strings.HasPrefix(q, "select state,") {
 			data, err := json.Marshal(s)
 			require.NoError(t, err)
-			r := executor.NewMemResult([]types.Type{types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()}, proc.Mp())
+			r := executor.NewMemResult([]types.Type{types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()}, proc.Mp())
 			r.NewBatchWithRowCount(1)
 			deadline := "0"
 			if expired {
 				deadline = "1"
 			}
-			for i, v := range []string{string(data), strconv.FormatUint(revision, 10), deadline, strconv.FormatUint(s.catalogMutation, 10)} {
+			fence := "0"
+			if s.completionFence {
+				fence = "1"
+			}
+			for i, v := range []string{string(data), strconv.FormatUint(revision, 10), deadline, strconv.FormatUint(s.catalogMutation, 10), fence} {
 				require.NoError(t, executor.AppendStringRows(r, i, []string{v}))
 			}
 			return r.GetResult(), nil
@@ -74,42 +85,6 @@ func (r *recoveryFaultTransport) ApplyCatalogReceipt(context.Context, *pb.Catalo
 func (r *recoveryFaultTransport) ReadCatalogBarrier(context.Context) (*pb.CatalogMetadataBarrierState, error) {
 	r.reads++
 	return r.proof, r.err
-}
-
-type serialRecoverySQL struct {
-	inner   executor.SQLExecutor
-	mu      sync.Mutex
-	attempt chan struct{}
-}
-
-func (s *serialRecoverySQL) Exec(ctx context.Context, sql string, opts executor.Options) (executor.Result, error) {
-	return s.inner.Exec(ctx, sql, opts)
-}
-
-func (s *serialRecoverySQL) ExecTxn(ctx context.Context, fn func(executor.TxnExecutor) error, opts executor.Options) error {
-	if s.attempt != nil {
-		close(s.attempt)
-		s.attempt = nil
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.inner.ExecTxn(ctx, fn, opts)
-}
-
-type blockingCompletionTransport struct {
-	entered chan struct{}
-	release chan struct{}
-	proof   *pb.CatalogMetadataBarrierState
-}
-
-func (t *blockingCompletionTransport) ApplyCatalogReceipt(ctx context.Context, _ *pb.CatalogMetadataReceipt) (*pb.CatalogMetadataBarrierState, error) {
-	close(t.entered)
-	select {
-	case <-t.release:
-		return t.proof, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
 }
 
 func TestRecoveryScopeCannotDiscardUnfinishedWork(t *testing.T) {
@@ -209,9 +184,9 @@ func TestCompletionPublishRechecksMutationAfterRead(t *testing.T) {
 			if loads > 1 {
 				mutation = "1"
 			}
-			r := executor.NewMemResult([]types.Type{types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()}, proc.Mp())
+			r := executor.NewMemResult([]types.Type{types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()}, proc.Mp())
 			r.NewBatchWithRowCount(1)
-			for i, value := range []string{string(data), "0", "0", mutation} {
+			for i, value := range []string{string(data), "0", "0", mutation, "0"} {
 				require.NoError(t, executor.AppendStringRows(r, i, []string{value}))
 			}
 			return r.GetResult(), nil
@@ -227,50 +202,18 @@ func TestCompletionPublishRechecksMutationAfterRead(t *testing.T) {
 	require.Equal(t, 1, transport.reads)
 }
 
-func TestCompletionPublishSerializesCatalogMutation(t *testing.T) {
-	s := ViewRecoveryState{Version: 1, ViewRecoveryClaim: ViewRecoveryClaim{Epoch: 2, Generation: 3, ClaimID: 7, LeaseEpoch: 1, Owner: "worker"}, Completed: 3}
-	s.evidence(2)
-	accepted := &pb.CatalogMetadataBarrierState{MembershipEpoch: 2, RequiredGeneration: 3, EvidenceInitialized: true, Arbitration: &pb.CatalogMetadataArbitration{ClaimID: 7, CompletedReceipt: cloneViewRecoveryReceipt(s.Outbox[2])}}
-	coordinator, _ := recoveryCoordinatorFaultFixture(t, s, 0, false, "")
-	serial := &serialRecoverySQL{inner: coordinator.SQL}
-	coordinator.SQL = serial
-	transport := &blockingCompletionTransport{entered: make(chan struct{}), release: make(chan struct{}), proof: accepted}
-	publishDone := make(chan error, 1)
-	go func() {
-		_, err := coordinator.Publish(context.Background(), transport)
-		publishDone <- err
-	}()
-	<-transport.entered
-
-	// Require models the catalog mutation boundary: it announces its transaction
-	// attempt before waiting for the same serialized transaction owner.
-	attempt := make(chan struct{})
-	serial.attempt = attempt
-	mutationDone := make(chan error, 1)
-	go func() { mutationDone <- coordinator.Require(context.Background(), 3, 4, ViewRecoveryScope{All: true}) }()
-	<-attempt
-	select {
-	case err := <-mutationDone:
-		require.FailNow(t, "catalog mutation crossed the COMPLETE publication fence", "error: %v", err)
-	default:
-	}
-	close(transport.release)
-	require.NoError(t, <-publishDone)
-	// The fixture intentionally does not persist its first transaction's JSON;
-	// only completion ordering is the oracle for the competing transaction.
-	<-mutationDone
-}
-
 func TestCoordinatorOutboxReplayAndRetirement(t *testing.T) {
 	s := ViewRecoveryState{Version: 1, ViewRecoveryClaim: ViewRecoveryClaim{Epoch: 2, Generation: 3, ClaimID: 7, LeaseEpoch: 1, Owner: "worker"}, Completed: 3}
 	s.evidence(2)
 	accepted := &pb.CatalogMetadataBarrierState{MembershipEpoch: 2, RequiredGeneration: 3, EvidenceInitialized: true, Arbitration: &pb.CatalogMetadataArbitration{ClaimID: 7, CompletedReceipt: s.Outbox[2]}}
 	ctx := context.Background()
-	c, _ := recoveryCoordinatorFaultFixture(t, s, 0, false, "")
+	c, statements := recoveryCoordinatorFaultFixture(t, s, 0, false, "")
 	lost := &recoveryFaultTransport{err: errors.New("lost receipt response")}
 	progress, err := c.Publish(ctx, lost)
 	require.Error(t, err)
 	require.False(t, progress)
+	require.Contains(t, strings.Join(*statements, "\n"), "set completion_fence=true")
+	require.NotContains(t, strings.Join(*statements, "\n"), "set completion_fence=false")
 	missing := &recoveryFaultTransport{}
 	_, err = c.Publish(ctx, missing)
 	require.Error(t, err)
@@ -279,8 +222,9 @@ func TestCoordinatorOutboxReplayAndRetirement(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, progress)
 	require.Equal(t, 1, replay.applies)
+	require.Contains(t, strings.Join(*statements, "\n"), "set completion_fence=false")
 	s.catalogMutation = 1
-	c, statements := recoveryCoordinatorFaultFixture(t, s, 0, false, "")
+	c, statements = recoveryCoordinatorFaultFixture(t, s, 0, false, "")
 	proof := &recoveryFaultTransport{proof: accepted}
 	progress, err = c.Publish(ctx, proof)
 	require.NoError(t, err)

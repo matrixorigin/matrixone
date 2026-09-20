@@ -70,6 +70,19 @@ func (t *catalogReceiptTestTransport) ApplyCatalogReceipt(ctx context.Context, r
 	return &pb.CatalogMetadataBarrierState{MembershipEpoch: r.MembershipEpoch, RequiredGeneration: r.RequiredGeneration, EvidenceInitialized: true, Arbitration: a}, nil
 }
 
+type lateCompletionTransport struct {
+	receipt  *pb.CatalogMetadataReceipt
+	accepted bool
+}
+
+func (t *lateCompletionTransport) ApplyCatalogReceipt(_ context.Context, receipt *pb.CatalogMetadataReceipt) (*pb.CatalogMetadataBarrierState, error) {
+	t.receipt = receipt
+	if !t.accepted {
+		return nil, context.DeadlineExceeded
+	}
+	return &pb.CatalogMetadataBarrierState{MembershipEpoch: receipt.MembershipEpoch, RequiredGeneration: receipt.RequiredGeneration, EvidenceInitialized: true, Arbitration: &pb.CatalogMetadataArbitration{ClaimID: receipt.ClaimID, CompletedReceipt: receipt}}, nil
+}
+
 func TestViewMetadataCoordinatorDurableRecovery(t *testing.T) {
 	// This fixture needs two independent CNs. The package's reusable base is
 	// single-CN and remains alive between cases; explicitly budget this private
@@ -275,8 +288,8 @@ func TestViewMetadataCoordinatorDurableRecovery(t *testing.T) {
 		// INVALID is terminal recovery work, not evidence that its View is usable.
 		exec("alter table recovery_sources.source_t add column y int")
 		exec("alter table recovery_sources.source_t drop column x")
-		// Model the first metadata recovery after default-off DDL: no durable
-		// dependency graph exists yet, only the dependency snapshot in ViewData.
+		// Model first recovery with no durable graph. The planner-level legacy
+		// fixture separately removes dependencies from ViewData itself.
 		control("delete from mo_catalog.mo_view_dependencies where account_id=0 and target_database_name in ('recovery_sources','recovery_consumers')")
 		require.NoError(t, first.Require(ctx, 4, 4, compile.ViewRecoveryScope{}))
 		publish(first)
@@ -305,10 +318,30 @@ func TestViewMetadataCoordinatorDurableRecovery(t *testing.T) {
 		repaired, err := second.Claim(ctx, 5, 5, 55, "cn-b-invalid-repair")
 		require.NoError(t, err)
 		run(second, repaired)
-		publish(second)
+		progress, err := second.Publish(ctx, transport) // committed RECOVERY_STARTED
+		require.NoError(t, err)
+		require.True(t, progress)
+		late := &lateCompletionTransport{}
+		progress, err = second.Publish(ctx, late)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.False(t, progress)
+		require.NotNil(t, late.receipt)
+		mutationSQL := compile.ViewMetadataRequireRevalidationSQL()
+		_, err = first.SQL.Exec(ctx, mutationSQL[len(mutationSQL)-1], executor.Options{}.WithAccountID(catalog.System_Account))
+		require.Error(t, err, "an unresolved COMPLETE proposal must fail catalog mutation closed")
+		late.accepted = true // the timed-out Dragonboat proposal commits after its caller returned
+		progress, err = second.Publish(ctx, late)
+		require.NoError(t, err)
+		require.True(t, progress)
 		ok, err = first.IsCurrent(ctx, 5, 5, 0, target)
 		require.NoError(t, err)
 		require.True(t, ok, "repairing only the source table must rediscover the previously INVALID View")
+		mutationResult, err := first.SQL.Exec(ctx, mutationSQL[len(mutationSQL)-1], executor.Options{}.WithAccountID(catalog.System_Account))
+		require.NoError(t, err)
+		mutationResult.Close()
+		ok, err = first.IsCurrent(ctx, 5, 5, 0, target)
+		require.NoError(t, err)
+		require.False(t, ok, "the first mutation after resolving COMPLETE must invalidate its proof")
 		// The lowest-ID View now has a temporarily unavailable dependency. Its
 		// durable backoff must not starve the healthy Views on the next page.
 		exec("drop table recovery_sources.source_t")

@@ -61,6 +61,7 @@ type ViewRecoveryState struct {
 	Version          uint32 `json:"version"`
 	MutationRevision uint64 `json:"mutation,omitempty"`
 	catalogMutation  uint64
+	completionFence  bool
 	ViewRecoveryClaim
 	Completed uint64                        `json:"completed,omitempty"`
 	Scope     ViewRecoveryScope             `json:"scope"`
@@ -125,11 +126,11 @@ func viewRecoveryStrings(result executor.Result, count int) ([][]string, error) 
 
 func loadViewRecovery(txn executor.TxnExecutor) (ViewRecoveryState, uint64, bool, error) {
 	var state ViewRecoveryState
-	result, err := txn.Exec("select state,cast(revision as char),case when lease_expires_at is null or lease_expires_at<=now() then '1' else '0' end,cast(mutation_revision as char) from mo_catalog.mo_view_recovery where id=1 for update", executor.StatementOption{})
+	result, err := txn.Exec("select state,cast(revision as char),case when lease_expires_at is null or lease_expires_at<=now() then '1' else '0' end,cast(mutation_revision as char),cast(completion_fence as char) from mo_catalog.mo_view_recovery where id=1 for update", executor.StatementOption{})
 	if err != nil {
 		return state, 0, false, err
 	}
-	rows, err := viewRecoveryStrings(result, 4)
+	rows, err := viewRecoveryStrings(result, 5)
 	if err != nil {
 		return state, 0, false, err
 	}
@@ -154,6 +155,10 @@ func loadViewRecovery(txn executor.TxnExecutor) (ViewRecoveryState, uint64, bool
 	if err != nil {
 		return state, 0, false, err
 	}
+	if rows[0][4] != "0" && rows[0][4] != "1" {
+		return state, 0, false, moerr.NewInvalidStateNoCtx("invalid View recovery completion fence")
+	}
+	state.completionFence = rows[0][4] == "1"
 	revision, err := viewRecoveryUint(rows[0][1])
 	return state, revision, rows[0][2] == "1", err
 }
@@ -470,6 +475,20 @@ func (c ViewMetadataCoordinator) IsCurrent(ctx context.Context, epoch, generatio
 	return current, err
 }
 
+func setViewRecoveryCompletionFence(txn executor.TxnExecutor, state *ViewRecoveryState, value bool) error {
+	affected, err := viewRecoveryExec(txn, fmt.Sprintf(
+		"update mo_catalog.mo_view_recovery set completion_fence=%t where id=1 and completion_fence=%t",
+		value, !value))
+	if err != nil {
+		return err
+	}
+	if affected != 1 {
+		return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
+	}
+	state.completionFence = value
+	return nil
+}
+
 func cloneViewRecoveryReceipt(receipt *pb.CatalogMetadataReceipt) *pb.CatalogMetadataReceipt {
 	if receipt == nil {
 		return nil
@@ -534,12 +553,12 @@ func (c ViewMetadataCoordinator) Publish(ctx context.Context, transport CatalogR
 	}
 	receipt := s.Outbox[slot]
 	if receipt.Action == pb.CATALOG_ACTION_COMPLETE {
-		// Re-read and submit COMPLETE while holding the lifecycle gates and the
-		// coordinator row lock. Every DDL/restore mutation takes these locks
-		// before incrementing mutation_revision, so no mutation can commit in
-		// the clean-check -> authority-apply interval.
-		published := false
-		err = c.transaction(ctx, func(_ executor.TxnExecutor, current *ViewRecoveryState, _ bool) (bool, error) {
+		// Arm a durable fence before the proposal can enter Dragonboat. A caller
+		// timeout cannot retract an already queued proposal, so every error leaves
+		// this fence set and lifecycle mutations fail closed. Replaying the exact
+		// receipt is idempotent; only committed acceptance/retirement clears it.
+		submit, published := false, false
+		err = c.transaction(ctx, func(txn executor.TxnExecutor, current *ViewRecoveryState, _ bool) (bool, error) {
 			r := current.Outbox[slot]
 			if r == nil {
 				return false, nil
@@ -547,26 +566,56 @@ func (c ViewMetadataCoordinator) Publish(ctx context.Context, transport CatalogR
 			if !sameViewRecoveryReceipt(r, receipt) {
 				return false, moerr.NewTxnNeedRetryWithDefChangedNoCtx()
 			}
-			proofReceipt := cloneViewRecoveryReceipt(r)
-			var observed *pb.CatalogMetadataBarrierState
 			if current.MutationRevision != current.catalogMutation {
 				reader, ok := transport.(CatalogReceiptReader)
 				if !ok {
 					return false, moerr.NewInvalidStateNoCtx("dirty View recovery completion requires committed readback")
 				}
-				observed, err = reader.ReadCatalogBarrier(ctx)
-			} else {
-				observed, err = transport.ApplyCatalogReceipt(ctx, proofReceipt)
+				observed, readErr := reader.ReadCatalogBarrier(ctx)
+				if readErr != nil {
+					return false, readErr
+				}
+				if !viewRecoveryReceiptProven(r, observed) {
+					return false, moerr.NewInvalidStateNoCtx("View recovery receipt lacks committed acceptance or retirement proof")
+				}
+				current.Outbox[slot] = nil
+				published = true
+				if current.completionFence {
+					return false, setViewRecoveryCompletionFence(txn, current, false)
+				}
+				return false, nil
 			}
-			if err != nil {
-				return false, err
+			if !current.completionFence {
+				if fenceErr := setViewRecoveryCompletionFence(txn, current, true); fenceErr != nil {
+					return false, fenceErr
+				}
 			}
-			if !viewRecoveryReceiptProven(proofReceipt, observed) {
-				return false, moerr.NewInvalidStateNoCtx("View recovery receipt lacks committed acceptance or retirement proof")
+			submit = true
+			return false, nil
+		})
+		if err != nil || published || !submit {
+			return published && err == nil, err
+		}
+		proofReceipt := cloneViewRecoveryReceipt(receipt)
+		observed, applyErr := transport.ApplyCatalogReceipt(ctx, proofReceipt)
+		if applyErr != nil {
+			return false, applyErr
+		}
+		if !viewRecoveryReceiptProven(proofReceipt, observed) {
+			return false, moerr.NewInvalidStateNoCtx("View recovery receipt lacks committed acceptance or retirement proof")
+		}
+		err = c.transaction(ctx, func(txn executor.TxnExecutor, current *ViewRecoveryState, _ bool) (bool, error) {
+			r := current.Outbox[slot]
+			if r == nil {
+				return false, nil
+			}
+			if !sameViewRecoveryReceipt(r, proofReceipt) || !current.completionFence ||
+				current.MutationRevision != current.catalogMutation {
+				return false, moerr.NewTxnNeedRetryWithDefChangedNoCtx()
 			}
 			current.Outbox[slot] = nil
 			published = true
-			return false, nil
+			return false, setViewRecoveryCompletionFence(txn, current, false)
 		})
 		return published && err == nil, err
 	}

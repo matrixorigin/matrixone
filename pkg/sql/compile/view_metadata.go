@@ -220,6 +220,25 @@ func (c *Compile) persistViewDependencyEdgesWithContext(
 	if viewDef == nil || viewDef.ViewSql == nil {
 		return persistedViewTarget{}, moerr.NewInternalError(ctx, "missing persisted View definition")
 	}
+	var data plan2.ViewData
+	if err := json.Unmarshal([]byte(viewDef.ViewSql.View), &data); err != nil {
+		return persistedViewTarget{}, err
+	}
+	return c.persistViewDependencyListWithContext(
+		ctx, database, databaseName, viewDef, data.Dependencies, generation)
+}
+
+func (c *Compile) persistViewDependencyListWithContext(
+	ctx context.Context,
+	database engine.Database,
+	databaseName string,
+	viewDef *planpb.TableDef,
+	dependencies []plan2.ViewDependency,
+	generation uint64,
+) (persistedViewTarget, error) {
+	if viewDef == nil || viewDef.ViewSql == nil {
+		return persistedViewTarget{}, moerr.NewInternalError(ctx, "missing persisted View definition")
+	}
 	accountID, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return persistedViewTarget{}, err
@@ -243,10 +262,6 @@ func (c *Compile) persistViewDependencyEdgesWithContext(
 		relationID: targetRelationID, logicalID: targetLogicalID,
 	}
 
-	var data plan2.ViewData
-	if err = json.Unmarshal([]byte(viewDef.ViewSql.View), &data); err != nil {
-		return persistedViewTarget{}, err
-	}
 	escape := sqlquote.EscapeString
 	if err = c.runSqlWithSystemTenant(fmt.Sprintf(
 		"delete from %s.%s where account_id = %d and target_database_name = '%s' and target_relation_name = '%s'",
@@ -255,7 +270,7 @@ func (c *Compile) persistViewDependencyEdgesWithContext(
 	)); err != nil {
 		return persistedViewTarget{}, err
 	}
-	for ordinal, dependency := range data.Dependencies {
+	for ordinal, dependency := range dependencies {
 		if err = ctx.Err(); err != nil {
 			return persistedViewTarget{}, err
 		}
@@ -912,7 +927,7 @@ func (c *Compile) refreshOneView(
 	if err != nil {
 		return err
 	}
-	regenerated, err := regenerateViewUsingPersistedEnvironment(
+	regenerated, _, err := regenerateViewUsingPersistedEnvironment(
 		c.proc, c.e, targetContext, currentDef)
 	if err != nil {
 		return err
