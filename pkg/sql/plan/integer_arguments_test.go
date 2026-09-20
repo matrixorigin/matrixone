@@ -37,6 +37,7 @@ func TestIntegerArgumentMySQLSourceEvaluation(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	for _, tc := range []struct{ input, want string }{
 		{"1.5e0", "a.b"}, {"2.5e0", "a.b"}, {"1.5", "a.b"}, {"2.5", "a.b.c"},
+		{"2.5E0", "a.b"},
 		{"-2.5e0", "c.d"}, {"-2.5", "b.c.d"},
 		{"cast(1.5 as double)", "a"}, {"cast(-1.5 as double)", "d"},
 		{"cast(1.5 as double)+0e0", "a.b"}, {"abs(cast(1.5 as double))", "a.b"},

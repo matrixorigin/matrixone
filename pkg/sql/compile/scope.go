@@ -1226,7 +1226,9 @@ func (s *Scope) getRelData(c *Compile, blockExprList []*plan.Expr) error {
 
 	if err == nil {
 		tombstones := s.NodeInfo.Data.GetTombstones()
-		commited.AttachTombstones(tombstones)
+		if err = commited.AttachTombstones(tombstones); err != nil {
+			return err
+		}
 		s.NodeInfo.Data = commited
 	}
 
