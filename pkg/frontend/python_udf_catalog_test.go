@@ -13,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/config"
@@ -26,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/udf"
 	pythonudf "github.com/matrixorigin/matrixone/pkg/udf/python"
+	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 )
 
@@ -1140,4 +1142,25 @@ func TestPythonDropSignatureUsesExactDescriptor(t *testing.T) {
 
 	require.True(t, pythonDropSignatureMatches(drop.Args, makeBody(decimal2)))
 	require.False(t, pythonDropSignatureMatches(drop.Args, makeBody(decimal6)))
+
+	// Exercise the catalog projection wiring, not only the descriptor helper.
+	ctrl := gomock.NewController(t)
+	ses := newSes(nil, ctrl)
+	ctx := ses.GetTxnHandler().GetTxnCtx()
+	bh := &backgroundExecTest{}
+	bh.init()
+	stub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer stub.Reset()
+	checkDB, err := getSqlForCheckDatabaseByAccount(ctx, "db")
+	require.NoError(t, err)
+	bh.sql2result[checkDB] = newMrsForCheckDatabase([][]interface{}{{int64(1)}})
+	bh.sql2result[fmt.Sprintf(checkUdfArgs, "f", "db")] = newMrsForCheckUdfArgs([][]interface{}{
+		{`[{"name":"value","type":"decimal"}]`, int64(101), makeBody(decimal2)},
+		{`[{"name":"value","type":"decimal"}]`, int64(102), makeBody(decimal6)},
+	})
+	require.NoError(t, doDropFunction(ctx, ses, drop, nil))
+	require.Contains(t, bh.executedSQLs, fmt.Sprintf(deleteUserDefinedFunctionFormat, 101))
+	require.Contains(t, bh.executedSQLs, fmt.Sprintf(deleteUserDefinedFunctionRevisionsFormat, 101))
+	require.NotContains(t, bh.executedSQLs, fmt.Sprintf(deleteUserDefinedFunctionFormat, 102))
+	require.NotContains(t, bh.executedSQLs, fmt.Sprintf(deleteUserDefinedFunctionRevisionsFormat, 102))
 }
