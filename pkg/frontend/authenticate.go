@@ -32,6 +32,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+
 	"github.com/tidwall/btree"
 	"golang.org/x/sync/errgroup"
 
@@ -12714,10 +12716,6 @@ func activateFunctionRevision(ctx context.Context, bh BackgroundExec, functionID
 		"update mo_catalog.mo_user_defined_function set active_revision = %d, namespace_version = %d where function_id = %d;",
 		revision, namespace, functionID,
 	))
-}
-
-func activatePythonRevision(ctx context.Context, bh BackgroundExec, functionID int64, revision, namespace uint64) error {
-	return activateFunctionRevision(ctx, bh, functionID, revision, namespace)
 }
 
 // storedProcedureDefinition is the procedure metadata kept outside mo_tables.

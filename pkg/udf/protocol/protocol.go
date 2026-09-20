@@ -23,12 +23,13 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"io"
 	"sync"
 	"time"
 	"unicode/utf8"
+
+	"github.com/matrixorigin/matrixone/pkg/udf/udferr"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 )
 
 const (
@@ -52,12 +53,12 @@ const (
 )
 
 var (
-	ErrProtocol        = moerr.NewInternalErrorNoCtx("python udf protocol violation")
-	ErrSequence        = moerr.NewInternalErrorNoCtx("python udf sequence violation")
-	ErrGroupClosed     = moerr.NewInternalErrorNoCtx("python udf execution group is closed")
-	ErrDuplicate       = moerr.NewInternalErrorNoCtx("python udf identity is already present")
-	ErrLedgerFull      = moerr.NewInternalErrorNoCtx("python udf terminal ledger is full")
-	ErrUnknownIdentity = moerr.NewInternalErrorNoCtx("python udf identity is unknown")
+	ErrProtocol        = udferr.New("python udf protocol violation")
+	ErrSequence        = udferr.New("python udf sequence violation")
+	ErrGroupClosed     = udferr.New("python udf execution group is closed")
+	ErrDuplicate       = udferr.New("python udf identity is already present")
+	ErrLedgerFull      = udferr.New("python udf terminal ledger is full")
+	ErrUnknownIdentity = udferr.New("python udf identity is unknown")
 )
 
 // FencingTuple is carried by every invocation control and data-plane
@@ -368,9 +369,9 @@ func rejectDuplicateJSONKeys(data []byte) error {
 	var trailing any
 	if err := decoder.Decode(&trailing); err != io.EOF {
 		if err == nil {
-			return moerr.NewInternalErrorNoCtx("control contains trailing JSON")
+			return udferr.New("control contains trailing JSON")
 		}
-		return moerr.NewInternalErrorNoCtxf("decode trailing control data: %v", err)
+		return udferr.Newf("decode trailing control data: %v", err)
 	}
 	return nil
 }
@@ -382,14 +383,14 @@ func walkJSONValue(decoder *json.Decoder) error {
 func walkJSONValueAtDepth(decoder *json.Decoder, depth int) error {
 	token, err := decoder.Token()
 	if err != nil {
-		return moerr.NewInternalErrorNoCtxf("decode control JSON: %v", err)
+		return udferr.Newf("decode control JSON: %v", err)
 	}
 	delim, ok := token.(json.Delim)
 	if !ok {
 		return nil
 	}
 	if depth >= MaxJSONNesting {
-		return moerr.NewInternalErrorNoCtxf("control JSON nesting exceeds %d levels", MaxJSONNesting)
+		return udferr.Newf("control JSON nesting exceeds %d levels", MaxJSONNesting)
 	}
 	switch delim {
 	case '{':
@@ -397,14 +398,14 @@ func walkJSONValueAtDepth(decoder *json.Decoder, depth int) error {
 		for decoder.More() {
 			keyToken, err := decoder.Token()
 			if err != nil {
-				return moerr.NewInternalErrorNoCtxf("decode control object key: %v", err)
+				return udferr.Newf("decode control object key: %v", err)
 			}
 			key, ok := keyToken.(string)
 			if !ok {
-				return moerr.NewInternalErrorNoCtx("control object key is not a string")
+				return udferr.New("control object key is not a string")
 			}
 			if _, exists := seen[key]; exists {
-				return moerr.NewInternalErrorNoCtxf("duplicate control JSON field %q", key)
+				return udferr.Newf("duplicate control JSON field %q", key)
 			}
 			seen[key] = struct{}{}
 			if err := walkJSONValueAtDepth(decoder, depth+1); err != nil {
@@ -422,7 +423,7 @@ func walkJSONValueAtDepth(decoder *json.Decoder, depth int) error {
 		_, err = decoder.Token()
 		return err
 	default:
-		return moerr.NewInternalErrorNoCtxf("unexpected control JSON delimiter %q", delim)
+		return udferr.Newf("unexpected control JSON delimiter %q", delim)
 	}
 }
 
@@ -786,10 +787,6 @@ func (g *ExecutionGroup) MemberTerminal(memberID string) error {
 		return g.releaseIfReady()
 	}
 	return nil
-}
-
-func (g *ExecutionGroup) canReleaseLocked() bool {
-	return g.shouldReleaseLocked() && !g.releaseBusy
 }
 
 func (g *ExecutionGroup) shouldReleaseLocked() bool {

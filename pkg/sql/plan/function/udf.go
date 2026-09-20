@@ -18,12 +18,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"io"
 	"reflect"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/matrixorigin/matrixone/pkg/udf/udferr"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -101,7 +102,7 @@ func PythonSignatureMetadata(
 	returnType *PythonTypeDescriptor,
 ) (canonicalInput, canonicalReturn, fingerprint string, err error) {
 	if returnType == nil {
-		return "", "", "", moerr.NewInternalErrorNoCtxf("python routine is missing return descriptor")
+		return "", "", "", udferr.Newf("python routine is missing return descriptor")
 	}
 	if args == nil {
 		args = []PythonTypeDescriptor{}
@@ -123,7 +124,7 @@ func PythonSignatureMetadata(
 		return "", "", "", errutil.Wrapf(err, "marshal Python return descriptor")
 	}
 	if len(inputBytes) > types.MaxStringSize || len(returnBytes) > types.MaxStringSize {
-		return "", "", "", moerr.NewInternalErrorNoCtxf("python signature descriptor exceeds the %d-byte catalog limit", types.MaxStringSize)
+		return "", "", "", udferr.Newf("python signature descriptor exceeds the %d-byte catalog limit", types.MaxStringSize)
 	}
 	keyBytes, err := json.Marshal(struct {
 		SchemaVersion int                    `json:"schema_version"`
@@ -157,7 +158,7 @@ func DecodePythonRoutineBody(raw string) (PythonRoutineBody, error) {
 	var extra json.RawMessage
 	if err := decoder.Decode(&extra); err != io.EOF {
 		if err == nil {
-			return PythonRoutineBody{}, moerr.NewInternalErrorNoCtxf("python routine body contains multiple JSON values")
+			return PythonRoutineBody{}, udferr.Newf("python routine body contains multiple JSON values")
 		}
 		return PythonRoutineBody{}, err
 	}
@@ -200,7 +201,7 @@ func PythonRoutineBodyFingerprint(body PythonRoutineBody) (string, error) {
 // independently hashing source text.
 func SQLRoutineFingerprint(body, argTypes, returnType string) (string, error) {
 	if body == "" || returnType == "" {
-		return "", moerr.NewInternalErrorNoCtxf("SQL routine definition is incomplete")
+		return "", udferr.Newf("SQL routine definition is incomplete")
 	}
 	encoded, err := json.Marshal(struct {
 		SchemaVersion int    `json:"schema_version"`
@@ -228,7 +229,7 @@ func SQLRoutineFingerprint(body, argTypes, returnType string) (string, error) {
 // catalog contract instead of decoding and dispatching this payload.
 func DecodeUdfWithContext(raw []byte) (UdfWithContext, error) {
 	_ = raw
-	return UdfWithContext{}, moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python JSON plan is not executable; rebind the statement from the current typed catalog contract")
+	return UdfWithContext{}, udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: Python JSON plan is not executable; rebind the statement from the current typed catalog contract")
 }
 
 // Validate checks fields that are independent of the catalog argument list.
@@ -236,47 +237,47 @@ func DecodeUdfWithContext(raw []byte) (UdfWithContext, error) {
 // legacy catalog args column has been decoded.
 func (body PythonRoutineBody) Validate() error {
 	if body.DefinitionSchemaVersion != udf.PythonDefinitionSchemaVersion {
-		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: python definition schema %d is not supported", body.DefinitionSchemaVersion)
+		return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: python definition schema %d is not supported", body.DefinitionSchemaVersion)
 	}
 	if body.Handler == "" || body.Source == "" {
-		return moerr.NewInternalErrorNoCtxf("python routine handler and source are required")
+		return udferr.Newf("python routine handler and source are required")
 	}
 	if !utf8.ValidString(body.Source) {
-		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python source is not valid UTF-8")
+		return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: Python source is not valid UTF-8")
 	}
 	if int64(len([]byte(body.Source))) > pythonudf.DefaultMaxArtifactBytes {
-		return moerr.NewInternalErrorNoCtxf("RESOURCE_EXHAUSTED: Python source exceeds %d bytes", pythonudf.DefaultMaxArtifactBytes)
+		return udferr.Newf("RESOURCE_EXHAUSTED: Python source exceeds %d bytes", pythonudf.DefaultMaxArtifactBytes)
 	}
 	if strings.Contains(body.Handler, ":") {
-		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python external handler import requires an immutable artifact catalog")
+		return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: Python external handler import requires an immutable artifact catalog")
 	}
 	if body.Mode != "SCALAR" && body.Mode != "VECTOR" {
-		return moerr.NewInternalErrorNoCtxf("python routine has unsupported mode %q", body.Mode)
+		return udferr.Newf("python routine has unsupported mode %q", body.Mode)
 	}
 	if body.NullPolicy != udf.NullCallHandler && body.NullPolicy != udf.NullReturnNull {
-		return moerr.NewInternalErrorNoCtxf("python routine has unsupported NULL policy %q", body.NullPolicy)
+		return udferr.Newf("python routine has unsupported NULL policy %q", body.NullPolicy)
 	}
 	if body.ABIContract != udf.PythonABIContract || body.AdapterVersion != udf.PythonAdapterVersion {
-		return moerr.NewInternalErrorNoCtxf("python routine has unsupported ABI contract %q/%q", body.ABIContract, body.AdapterVersion)
+		return udferr.Newf("python routine has unsupported ABI contract %q/%q", body.ABIContract, body.AdapterVersion)
 	}
 	if body.SDKVersion != udf.PythonSDKVersion {
-		return moerr.NewInternalErrorNoCtxf("python routine has unsupported SDK %q", body.SDKVersion)
+		return udferr.Newf("python routine has unsupported SDK %q", body.SDKVersion)
 	}
 	if !udf.IsSHA256Digest(body.ArtifactDigest) || body.EnvironmentDigest == "" {
-		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python definition has no immutable artifact/environment digest; use DROP and CREATE")
+		return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: Python definition has no immutable artifact/environment digest; use DROP and CREATE")
 	}
 	if body.ArtifactDigest != udf.PythonInlineArtifactDigest(body.Handler, body.Source) {
-		return moerr.NewInternalErrorNoCtxf("python routine artifact digest does not match its source")
+		return udferr.Newf("python routine artifact digest does not match its source")
 	}
 	environmentDigest, err := udf.PythonEnvironmentDigest()
 	if err != nil {
 		return errutil.Wrapf(err, "python routine environment digest is unavailable")
 	}
 	if body.EnvironmentDigest != environmentDigest {
-		return moerr.NewInternalErrorNoCtxf("python routine environment digest does not match the current contract")
+		return udferr.Newf("python routine environment digest does not match the current contract")
 	}
 	if body.ReturnType == nil {
-		return moerr.NewInternalErrorNoCtxf("python routine is missing return descriptor")
+		return udferr.Newf("python routine is missing return descriptor")
 	}
 	for i, descriptor := range body.ArgTypes {
 		if err := validatePythonTypeDescriptor(descriptor); err != nil {
@@ -310,16 +311,16 @@ type Arg struct {
 // process at execution time.
 func (u *Udf) GetRoutineCall() (*plan.RoutineCall, error) {
 	if u == nil {
-		return nil, moerr.NewInternalErrorNoCtxf("routine call requires a non-nil routine")
+		return nil, udferr.Newf("routine call requires a non-nil routine")
 	}
 	if u.Language == udf.LanguageSQL {
 		return u.getSQLRoutineCall()
 	}
 	if u.Language != udf.LanguagePython {
-		return nil, moerr.NewInternalErrorNoCtxf("routine call has unsupported language %q", u.Language)
+		return nil, udferr.Newf("routine call has unsupported language %q", u.Language)
 	}
 	if u.FunctionID <= 0 || u.DatabaseID == 0 || u.Revision == 0 || u.NamespaceVersion == 0 {
-		return nil, moerr.NewInternalErrorNoCtxf("python routine has no stable catalog identity or revision")
+		return nil, udferr.Newf("python routine has no stable catalog identity or revision")
 	}
 	body, err := DecodePythonRoutineBody(u.Body)
 	if err != nil {
@@ -381,10 +382,10 @@ func (u *Udf) GetRoutineCall() (*plan.RoutineCall, error) {
 // plan dependency so replace/drop cannot silently reuse the old definition.
 func (u *Udf) getSQLRoutineCall() (*plan.RoutineCall, error) {
 	if u.FunctionID <= 0 || u.DatabaseID == 0 || u.Revision == 0 || u.NamespaceVersion == 0 {
-		return nil, moerr.NewInternalErrorNoCtxf("SQL routine has no stable catalog identity or revision")
+		return nil, udferr.Newf("SQL routine has no stable catalog identity or revision")
 	}
 	if u.SemanticDefinitionSchemaVersion != udf.SQLDefinitionSchemaVersion || !udf.IsSHA256Digest(u.DefinitionFingerprint) {
-		return nil, moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: SQL routine has no supported semantic definition")
+		return nil, udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: SQL routine has no supported semantic definition")
 	}
 	argTypes := u.GetArgsType()
 	arguments := make([]*plan.Type, len(argTypes))
@@ -471,7 +472,7 @@ func (u *Udf) LoadPythonTypeContract() error {
 		return nil
 	}
 	if u.Language != udf.LanguagePython {
-		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: unsupported routine language %q", u.Language)
+		return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: unsupported routine language %q", u.Language)
 	}
 	u.PythonArgTypes = nil
 	u.PythonReturnType = nil
@@ -494,13 +495,13 @@ func (u *Udf) ValidatePythonTypeContract() error {
 		return nil
 	}
 	if u.Language != udf.LanguagePython {
-		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: unsupported routine language %q", u.Language)
+		return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: unsupported routine language %q", u.Language)
 	}
 	if u.PythonReturnType == nil {
-		return moerr.NewInternalErrorNoCtxf("python routine is missing return descriptor")
+		return udferr.Newf("python routine is missing return descriptor")
 	}
 	if len(u.PythonArgTypes) != len(u.Args) {
-		return moerr.NewInternalErrorNoCtxf("python routine has %d descriptors for %d arguments", len(u.PythonArgTypes), len(u.Args))
+		return udferr.Newf("python routine has %d descriptors for %d arguments", len(u.PythonArgTypes), len(u.Args))
 	}
 	for i, descriptor := range u.PythonArgTypes {
 		if err := validatePythonTypeDescriptor(descriptor); err != nil {
@@ -521,10 +522,10 @@ func (u *Udf) ValidatePythonCatalogSignature() error {
 		return nil
 	}
 	if u.Language != udf.LanguagePython {
-		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: unsupported routine language %q", u.Language)
+		return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: unsupported routine language %q", u.Language)
 	}
 	if len(u.Args) != len(u.PythonArgTypes) || u.PythonReturnType == nil {
-		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python catalog signature is incomplete")
+		return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: Python catalog signature is incomplete")
 	}
 	for index, argument := range u.Args {
 		if argument == nil || !pythonCatalogTypeNameMatches(argument.Type, u.PythonArgTypes[index].Type().Oid) {
@@ -532,11 +533,11 @@ func (u *Udf) ValidatePythonCatalogSignature() error {
 			if argument != nil {
 				name = argument.Type
 			}
-			return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python catalog argument %d type %q does not match its descriptor", index+1, name)
+			return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: Python catalog argument %d type %q does not match its descriptor", index+1, name)
 		}
 	}
 	if !pythonCatalogTypeNameMatches(u.RetType, u.PythonReturnType.Type().Oid) {
-		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python catalog return type %q does not match its descriptor", u.RetType)
+		return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: Python catalog return type %q does not match its descriptor", u.RetType)
 	}
 	return nil
 }
@@ -565,7 +566,7 @@ func validatePythonTypeDescriptor(descriptor PythonTypeDescriptor) error {
 		return err
 	}
 	if !reflect.DeepEqual(canonical, descriptor) {
-		return moerr.NewInternalErrorNoCtxf("descriptor is not canonical for %s", typ.String())
+		return udferr.Newf("descriptor is not canonical for %s", typ.String())
 	}
 	if _, err := descriptor.Fingerprint(); err != nil {
 		return errutil.Wrapf(err, "descriptor has no valid Arrow physical type")
