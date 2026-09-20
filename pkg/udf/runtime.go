@@ -22,7 +22,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"sort"
 	"strconv"
 	"strings"
@@ -91,41 +91,41 @@ type StatementContext struct {
 
 func (c StatementContext) Validate() error {
 	if c.ContractVersion != StatementContextContractVersion {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: unsupported statement context contract %d", c.ContractVersion)
+		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: unsupported statement context contract %d", c.ContractVersion)
 	}
 	if c.StatementTimestampUTC < minStatementTimestampUTC || c.StatementTimestampUTC > maxStatementTimestampUTC {
-		return fmt.Errorf("python udf: statement timestamp is outside the Python datetime range")
+		return moerr.NewInternalErrorNoCtxf("python udf: statement timestamp is outside the Python datetime range")
 	}
 	if c.CurrentUser == "" || c.ConnectionCollation == "" {
-		return fmt.Errorf("python udf: statement context has no authenticated user or collation")
+		return moerr.NewInternalErrorNoCtxf("python udf: statement context has no authenticated user or collation")
 	}
 	if c.TimezoneKind == "IANA" {
 		if c.TimezoneName == "" || c.TimezoneDatabaseVersion == "" || c.TimezoneOffsetMinutes != 0 {
-			return fmt.Errorf("python udf: IANA statement timezone is incomplete")
+			return moerr.NewInternalErrorNoCtxf("python udf: IANA statement timezone is incomplete")
 		}
 		if _, err := time.LoadLocation(c.TimezoneName); err != nil {
-			return fmt.Errorf("python udf: IANA statement timezone is not present in the local tzdb: %w", err)
+			return errutil.Wrapf(err, "python udf: IANA statement timezone is not present in the local tzdb")
 		}
 	} else if c.TimezoneKind == "FIXED_OFFSET" {
 		if c.TimezoneName != "" || c.TimezoneDatabaseVersion != "" || c.TimezoneOffsetMinutes < -839 || c.TimezoneOffsetMinutes > 840 {
-			return fmt.Errorf("python udf: fixed statement timezone is invalid")
+			return moerr.NewInternalErrorNoCtxf("python udf: fixed statement timezone is invalid")
 		}
 	} else {
-		return fmt.Errorf("python udf: unsupported statement timezone kind %q", c.TimezoneKind)
+		return moerr.NewInternalErrorNoCtxf("python udf: unsupported statement timezone kind %q", c.TimezoneKind)
 	}
 	mode := append([]string(nil), c.SQLMode...)
 	sort.Strings(mode)
 	for i := range mode {
 		if mode[i] == "" || (i > 0 && mode[i] == mode[i-1]) {
-			return fmt.Errorf("python udf: statement sql_mode is not canonical")
+			return moerr.NewInternalErrorNoCtxf("python udf: statement sql_mode is not canonical")
 		}
 	}
 	if len(mode) != len(c.SQLMode) {
-		return fmt.Errorf("python udf: statement sql_mode is not canonical")
+		return moerr.NewInternalErrorNoCtxf("python udf: statement sql_mode is not canonical")
 	}
 	for i := range mode {
 		if mode[i] != c.SQLMode[i] {
-			return fmt.Errorf("python udf: statement sql_mode is not sorted")
+			return moerr.NewInternalErrorNoCtxf("python udf: statement sql_mode is not sorted")
 		}
 	}
 	return nil
@@ -157,12 +157,12 @@ func StatementContextFromMap(values map[string]string) (*StatementContext, error
 	}
 	timestamp, err := strconv.ParseInt(values["statement_timestamp_utc"], 10, 64)
 	if err != nil {
-		return nil, fmt.Errorf("python udf: invalid statement timestamp: %w", err)
+		return nil, errutil.Wrapf(err, "python udf: invalid statement timestamp")
 	}
 	mode := make([]string, 0)
 	if raw := values["sql_mode"]; raw != "" {
 		if err := json.Unmarshal([]byte(raw), &mode); err != nil {
-			return nil, fmt.Errorf("python udf: invalid statement sql_mode: %w", err)
+			return nil, errutil.Wrapf(err, "python udf: invalid statement sql_mode")
 		}
 		// The wire contract is a JSON array, including when it is empty.  A
 		// JSON null decodes successfully into a nil Go slice, but would be
@@ -170,7 +170,7 @@ func StatementContextFromMap(values map[string]string) (*StatementContext, error
 		// Reject it at the trusted CN adapter instead of carrying a malformed
 		// snapshot into the Flight request.
 		if mode == nil {
-			return nil, fmt.Errorf("python udf: invalid statement sql_mode: expected a JSON array")
+			return nil, moerr.NewInternalErrorNoCtxf("python udf: invalid statement sql_mode: expected a JSON array")
 		}
 	}
 	context := &StatementContext{
@@ -188,7 +188,7 @@ func StatementContextFromMap(values map[string]string) (*StatementContext, error
 	if raw := values["session_timezone_offset_minutes"]; raw != "" {
 		offset, parseErr := strconv.ParseInt(raw, 10, 32)
 		if parseErr != nil {
-			return nil, fmt.Errorf("python udf: invalid fixed timezone offset: %w", parseErr)
+			return nil, errutil.Wrapf(parseErr, "python udf: invalid fixed timezone offset")
 		}
 		context.TimezoneOffsetMinutes = int32(offset)
 	}
@@ -213,10 +213,10 @@ type SecurityFrame struct {
 
 func (f SecurityFrame) Validate() error {
 	if f.ContractVersion != SecurityFrameContractVersion || f.Mode != "INVOKER" {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: unsupported Python security frame")
+		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: unsupported Python security frame")
 	}
 	if f.InvokerUserID != f.EffectiveUserID || f.InvokerRoleID != f.EffectiveRoleID {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python invoker security frame changed effective principal")
+		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python invoker security frame changed effective principal")
 	}
 	return nil
 }
