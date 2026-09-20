@@ -3688,6 +3688,180 @@ func BenchmarkInitExecuteStmtParamRepeatedTPCCArithmeticUpdate(b *testing.B) {
 	}
 }
 
+func TestPreparedIntegerAssignmentsNeedSpecialization(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		name      string
+		positions []int32
+		types     []types.Type
+		value     string
+		noParams  bool
+		want      bool
+	}{
+		{name: "no_assignments"},
+		{name: "integer", positions: []int32{0}, types: []types.Type{types.T_int64.ToType()}, value: "7"},
+		{name: "zero", positions: []int32{0}, types: []types.Type{types.T_int8.ToType()}, value: "0"},
+		{name: "unsigned_max", positions: []int32{0}, types: []types.Type{types.T_uint64.ToType()}, value: "18446744073709551615"},
+		{name: "negative", positions: []int32{0}, types: []types.Type{types.T_int64.ToType()}, value: "-1", want: true},
+		{name: "float", positions: []int32{0}, types: []types.Type{types.T_float64.ToType()}, value: "2.5", want: true},
+		{name: "decimal", positions: []int32{0}, types: []types.Type{types.T_decimal64.ToType()}, value: "2.5", want: true},
+		{name: "text", positions: []int32{0}, types: []types.Type{types.T_text.ToType()}, value: "7", want: true},
+		{name: "unknown_or_null", positions: []int32{0}, types: []types.Type{{}}, want: true},
+		{name: "empty", positions: []int32{0}, types: []types.Type{types.T_int64.ToType()}, want: true},
+		{name: "negative_position", positions: []int32{-1}, want: true},
+		{name: "missing_type", positions: []int32{1}, types: []types.Type{types.T_int64.ToType()}, want: true},
+		{name: "missing_params", positions: []int32{0}, types: []types.Type{types.T_int64.ToType()}, noParams: true, want: true},
+		{name: "missing_value", positions: []int32{1}, types: []types.Type{types.T_int64.ToType(), types.T_int64.ToType()}, want: true},
+		{name: "unrelated_null", positions: []int32{0}, types: []types.Type{types.T_int64.ToType(), {}}, value: "7"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var params *vector.Vector
+			if !tc.noParams {
+				params = vector.NewVec(types.T_text.ToType())
+				defer params.Free(proc.Mp())
+				require.NoError(t, vector.AppendBytes(params, []byte(tc.value), false, proc.Mp()))
+			}
+			require.Equal(t, tc.want, preparedIntegerAssignmentsNeedSpecialization(tc.positions, tc.types, params))
+		})
+	}
+}
+
+func TestPreparedIntegerAssignmentReusesOriginalCompile(t *testing.T) {
+	for _, query := range []struct {
+		sql         string
+		assignment  bool
+		nullSibling bool
+		longData    bool
+	}{
+		{"update nation set n_regionkey = ? where n_nationkey = ?", false, false, false},
+		{"insert into nation(n_regionkey,n_nationkey,n_name,n_comment) values (?,?,'','')", true, false, false},
+		{"insert ignore into nation(n_regionkey,n_nationkey,n_name,n_comment) values (?,?,'','')", true, false, false},
+		{"insert into nation(n_regionkey,n_nationkey,n_name,n_comment) values (?,?,'',?)", true, true, false},
+		{"insert into nation(n_regionkey,n_nationkey,n_name,n_comment) values (?,?,'','')", true, false, true},
+	} {
+		t.Run(fmt.Sprintf("%s/long_data=%t", query.sql, query.longData), func(t *testing.T) {
+			optimizer := plan2.NewMockOptimizer(false)
+			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(
+				t, 222, query.sql, optimizer.CurrentContext())
+			defer func() {
+				cw.proc.SetPrepareParams(nil)
+				prepareStmt.Close()
+			}()
+			preparePlan := prepareStmt.PreparePlan.GetDcl().GetPrepare().Plan
+			cachedCompile := compile.NewCompile(
+				"", "", prepareStmt.Sql, "", "", nil,
+				cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+			prepareStmt.compile = cachedCompile
+			if query.longData {
+				prepareStmt.getFromSendLongData[0] = struct{}{}
+			}
+			for _, tc := range []struct {
+				value     string
+				mysqlType defines.MysqlType
+				fast      bool
+			}{
+				{"1", defines.MYSQL_TYPE_LONGLONG, true},
+				{"2", defines.MYSQL_TYPE_LONG, true},
+				{"2.5", defines.MYSQL_TYPE_DOUBLE, false},
+				{"3.5", defines.MYSQL_TYPE_DOUBLE, false},
+				{"7", defines.MYSQL_TYPE_LONGLONG, true},
+				{"2.5", defines.MYSQL_TYPE_NEWDECIMAL, false},
+				{"-1", defines.MYSQL_TYPE_LONGLONG, false},
+				{"8", defines.MYSQL_TYPE_LONGLONG, true},
+			} {
+				if (!query.assignment || query.longData) && !tc.fast {
+					continue
+				}
+				if old := prepareStmt.params; old != nil {
+					cw.proc.SetPrepareParams(nil)
+					old.Free(cw.proc.Mp())
+				}
+				prepareStmt.params = vector.NewVec(types.T_text.ToType())
+				require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte(tc.value), false, cw.proc.Mp()))
+				require.NoError(t, vector.AppendBytes(prepareStmt.params, []byte("7"), false, cw.proc.Mp()))
+				prepareStmt.ParamTypes = []byte{byte(tc.mysqlType), 0, byte(defines.MYSQL_TYPE_LONGLONG), 0}
+				if query.nullSibling {
+					require.NoError(t, vector.AppendBytes(prepareStmt.params, nil, true, cw.proc.Mp()))
+					prepareStmt.ParamTypes = append(prepareStmt.ParamTypes, byte(defines.MYSQL_TYPE_NULL), 0)
+				}
+				comp, currentPlan, stmt, _, owned, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+				if owned && stmt != nil {
+					stmt.Free()
+				}
+				require.NoError(t, err)
+				if tc.fast && !query.longData {
+					require.Equal(t, tc.value, cw.proc.GetPrepareParams().GetStringAt(0))
+					require.Same(t, cachedCompile, comp)
+					require.Same(t, preparePlan, currentPlan)
+					require.Empty(t, cw.paramVals, "integer-only assignments must not materialize runtime values")
+					require.Nil(t, cw.runtimeCachePlan)
+				} else {
+					require.NotSame(t, preparePlan, currentPlan, "noncanonical sources must retain runtime specialization")
+					if cw.runtimeCachePlan != nil {
+						candidate := compile.NewCompile(
+							"", "", prepareStmt.Sql, "", "", nil,
+							cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+						require.True(t, cw.installRuntimeCacheCandidate(candidate))
+					} else {
+						require.Same(t, prepareStmt.runtimeCompile, comp)
+					}
+				}
+			}
+		})
+	}
+}
+
+func BenchmarkInitExecuteStmtParamRepeatedIntegerAssignment(b *testing.B) {
+	for _, tc := range []struct {
+		name, sql string
+		values    []string
+	}{
+		{"update", "update nation set n_regionkey = ? where n_nationkey = ?", []string{"1", "7"}},
+		{"insert", "insert into nation(n_nationkey,n_name,n_regionkey,n_comment) values (?,'',?,'')", []string{"7", "1"}},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			optimizer := plan2.NewMockOptimizer(false)
+			ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(
+				b, 221, tc.sql, optimizer.CurrentContext())
+			defer func() {
+				cw.proc.SetPrepareParams(nil)
+				prepareStmt.Close()
+			}()
+			prepareStmt.params = vector.NewVec(types.T_text.ToType())
+			for _, value := range tc.values {
+				require.NoError(b, vector.AppendBytes(prepareStmt.params, []byte(value), false, cw.proc.Mp()))
+				prepareStmt.ParamTypes = append(prepareStmt.ParamTypes, byte(defines.MYSQL_TYPE_LONGLONG), 0)
+			}
+			prepareStmt.compile = compile.NewCompile(
+				"", "", prepareStmt.Sql, "", "", nil,
+				cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+			_, firstPlan, stmt, _, owned, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+			require.NoError(b, err)
+			if owned && stmt != nil {
+				stmt.Free()
+			}
+			cachedCompile := prepareStmt.compile
+			if cw.runtimeCachePlan != nil {
+				cachedCompile = compile.NewCompile(
+					"", "", prepareStmt.Sql, "", "", nil,
+					cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
+				require.True(b, cw.installRuntimeCacheCandidate(cachedCompile))
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				comp, currentPlan, stmt, _, owned, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+				if err != nil || comp != cachedCompile || currentPlan != firstPlan {
+					b.Fatalf("unexpected prepared cache miss: %v", err)
+				}
+				if owned && stmt != nil {
+					stmt.Free()
+				}
+			}
+		})
+	}
+}
+
 func BenchmarkInitExecuteStmtParamRepeatedNonConsumerDecimal(b *testing.B) {
 	optimizer := plan2.NewMockOptimizer(false)
 	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnvForSQLWithCompilerContext(
