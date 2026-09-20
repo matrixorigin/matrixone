@@ -64,7 +64,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/panjf2000/ants/v2"
 	"go.uber.org/zap"
 )
 
@@ -548,28 +547,28 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 		startedPreScopeCount++
 		wg.Add(1)
 
-		submitPreScope := ants.Submit(
-			func() {
-				defer wg.Done()
+		submitPreScope := c.submitScopeDependency("pre-scope", func() {
+			defer wg.Done()
 
-				var err error
-				switch scope.Magic {
-				case Normal:
-					err = scope.Run(c)
-				case Merge, MergeInsert:
-					err = scope.MergeRun(c)
-				case Remote:
-					err = scope.RemoteRun(c)
-				default:
-					err = moerr.NewInternalErrorf(c.proc.Ctx, "unexpected scope Magic %d", scope.Magic)
-					cleanScopeTreeWithStartFail(scope, err, c.isPrepare)
-				}
-				s.cancelMergeSiblingsOnError(err)
-				preScopeResultReceiveChan <- newScopeRunResult(err, scope)
-			})
+			var err error
+			switch scope.Magic {
+			case Normal:
+				err = scope.Run(c)
+			case Merge, MergeInsert:
+				err = scope.MergeRun(c)
+			case Remote:
+				err = scope.RemoteRun(c)
+			default:
+				err = moerr.NewInternalErrorf(c.proc.Ctx, "unexpected scope Magic %d", scope.Magic)
+				cleanScopeTreeWithStartFail(scope, err, c.isPrepare)
+			}
+			s.cancelMergeSiblingsOnError(err)
+			preScopeResultReceiveChan <- newScopeRunResult(err, scope)
+		})
 
 		// build routine failed.
 		if submitPreScope != nil {
+			c.proc.Errorf(c.proc.Ctx, "query-local scope scheduler rejected pre-scope: %v", submitPreScope)
 			wg.Done() // this is necessary, because the submitPreScope may panic.
 			cleanScopeTreeWithStartFail(scope, submitPreScope, c.isPrepare)
 			s.cancelMergeSiblingsOnError(submitPreScope)
@@ -616,7 +615,13 @@ func (s *Scope) MergeRun(c *Compile) (err error) {
 	var notifyMessageResultReceiveChan chan notifyMessageResult
 	if len(s.RemoteReceivRegInfos) > 0 {
 		notifyMessageResultReceiveChan = make(chan notifyMessageResult, len(s.RemoteReceivRegInfos))
-		s.sendNotifyMessage(&wg, notifyMessageResultReceiveChan)
+		s.sendNotifyMessageWithFactoryAndWait(
+			&wg,
+			notifyMessageResultReceiveChan,
+			newMessageSenderOnClient,
+			waitRemoteDispatchRetry,
+			c.ensureScopeTaskScheduler(1),
+		)
 	}
 
 	// step 3.
@@ -1551,6 +1556,7 @@ func (s *Scope) sendNotifyMessageWithFactoryAndWait(
 	resultChan chan notifyMessageResult,
 	newSender notifyMessageSenderFactory,
 	waitRetry notifyMessageRetryWait,
+	schedulers ...*scopeTaskScheduler,
 ) {
 	// if context has done, it means the user or other part of the pipeline stops this query.
 	closeWithError := func(err error, reg *process.WaitRegister, sender *messageSenderOnClient) {
@@ -1578,7 +1584,17 @@ func (s *Scope) sendNotifyMessageWithFactoryAndWait(
 		receiverIdx := op.Idx
 		uuid := op.Uuid[:]
 
-		errSubmit := ants.Submit(
+		submit := func(task func()) error {
+			if len(schedulers) > 0 && schedulers[0] != nil {
+				return schedulers[0].submitDependency("remote-notify", task)
+			}
+			// Unit tests call this helper without a Compile. Keep that isolated
+			// path query-local as well instead of reaching for the global pool.
+			go task()
+			return nil
+		}
+
+		errSubmit := submit(
 			func() {
 				attempt := 0
 				for {
@@ -1628,6 +1644,7 @@ func (s *Scope) sendNotifyMessageWithFactoryAndWait(
 		)
 
 		if errSubmit != nil {
+			s.Proc.Errorf(s.Proc.Ctx, "query-local scope scheduler rejected remote-notify: %v", errSubmit)
 			closeWithError(errSubmit, s.Proc.Reg.MergeReceivers[receiverIdx], nil)
 		}
 	}

@@ -106,7 +106,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/panjf2000/ants/v2"
 	"go.uber.org/zap"
 )
 
@@ -185,6 +184,10 @@ func (c *Compile) Release() {
 	if c == nil {
 		return
 	}
+	// Quiesce query-local Scope tasks before resetting the Process context. A
+	// remote MergeRun may still be draining a result while Release is entered
+	// from the frontend error path; resetting first would invalidate its owner.
+	c.waitScopeTaskScheduler()
 	if c.siriusRead != nil {
 		if err := c.siriusRead.finish(context.Background(), false); err != nil && c.proc != nil {
 			c.proc.Error(context.Background(), "failed to quiesce Sirius read during compile release", zap.Error(err))
@@ -203,7 +206,7 @@ func (c *Compile) Release() {
 	doCompileRelease(c)
 }
 
-func (c Compile) TypeName() string {
+func (c *Compile) TypeName() string {
 	return "compile.Compile"
 }
 
@@ -280,6 +283,9 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	if !c.IsTpQuery() {
 		return cantCompileForPrepareErr
 	}
+	// A prepared Compile can be reused only after the previous query-local
+	// scheduler has retired all tasks that might still reference its Scope tree.
+	c.waitScopeTaskScheduler()
 	if c.siriusRead != nil {
 		if err := c.siriusRead.finish(context.Background(), false); err != nil {
 			return err
@@ -456,6 +462,10 @@ func UpdateScopeTxnOffset(scope *Scope, txnOffset int) {
 }
 
 func (c *Compile) clear() {
+	// Scope tasks must be quiescent before their Scope/Process owners are
+	// released. This is also the safety net for remote pipeline handlers that
+	// enter MergeRun without going through runOnce.
+	c.waitScopeTaskScheduler()
 	if c.anal != nil {
 		c.anal.release()
 	}
@@ -1079,6 +1089,11 @@ func (c *Compile) runOnce() (err error) {
 	}
 	defer registrations.cleanup()
 
+	scheduler := c.ensureScopeTaskScheduler(max(1, len(c.scopes)))
+	defer c.waitScopeTaskScheduler()
+	logutil.Debugf("[scope-scheduler] query start id=%d sql=%s roots=%d tp=%v",
+		scheduler.id, commonutil.Abbreviate(c.sql, 500), len(c.scopes), c.IsTpQuery())
+
 	if c.IsTpQuery() && len(c.scopes) == 1 {
 		if err = c.run(c.scopes[0]); err != nil {
 			return err
@@ -1087,7 +1102,8 @@ func (c *Compile) runOnce() (err error) {
 		errC := make(chan scopeRunResult, len(c.scopes))
 		for i := range c.scopes {
 			scope := c.scopes[i]
-			errSubmit := ants.Submit(func() {
+			rootName := "root-scope-" + strconv.Itoa(i)
+			errSubmit := scheduler.submitRoot(rootName, func() {
 				defer func() {
 					if e := recover(); e != nil {
 						err := moerr.ConvertPanicError(c.proc.Ctx, e)
@@ -1097,9 +1113,12 @@ func (c *Compile) runOnce() (err error) {
 						errC <- newScopeRunResult(err, scope)
 					}
 				}()
-				errC <- newScopeRunResult(c.run(scope), scope)
+				runErr := c.run(scope)
+				logutil.Debugf("[scope-scheduler] root complete id=%d name=%s err=%v", scheduler.id, rootName, runErr)
+				errC <- newScopeRunResult(runErr, scope)
 			})
 			if errSubmit != nil {
+				c.proc.Errorf(c.proc.Ctx, "query-local scope scheduler rejected %s: %v", rootName, errSubmit)
 				errC <- newScopeRunResult(errSubmit, scope)
 			}
 		}

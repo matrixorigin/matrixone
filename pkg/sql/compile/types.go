@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -277,6 +278,10 @@ type scopeContext struct {
 // Compile contains all the information needed for compilation.
 type Compile struct {
 	scopes []*Scope
+	// scopeScheduler owns query-local ready-task admission. It is intentionally
+	// separate from process-wide RPC/lockservice worker pools.
+	scopeSchedulerMu sync.Mutex
+	scopeScheduler   *scopeTaskScheduler
 	// siriusRead is the single terminal owner for a hinted offload. It remains
 	// nil for every native statement.
 	siriusRead *siriusReadOwner
