@@ -716,6 +716,15 @@ func TestHLLRemoteProtocolValidation(t *testing.T) {
 		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion77)
 		require.NoError(t, validateRemoteAggregateProtocol(proc, agg))
 	}
+	vectorArg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_array_float32)}}
+	vectorAgg := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfHllAdd, false, []*plan.Expr{vectorArg}, nil,
+	)}
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion87)
+	require.ErrorContains(t, validateRemoteAggregateProtocol(proc, vectorAgg),
+		"canonical vector HLL_ADD_AGG remote execution requires MORPC protocol version 88")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion88)
+	require.NoError(t, validateRemoteAggregateProtocol(proc, vectorAgg))
 }
 
 func TestTextMinMaxRemoteProtocolValidation(t *testing.T) {
