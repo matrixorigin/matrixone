@@ -9099,13 +9099,15 @@ func TestDateToWeekExplicitModeDoesNotReadSessionDefault(t *testing.T) {
 	require.Zero(t, lookups)
 }
 
-func TestDefaultWeekFormatModeErrorsOnUnexpectedResolverValue(t *testing.T) {
+func TestDefaultWeekFormatModeFallsBackOnUnexpectedResolverValue(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().DefaultWeekFormat = 5
 	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
 		return "1", nil
 	})
-	_, err := getDefaultWeekFormatMode(proc)
-	require.Error(t, err)
+	mode, err := getDefaultWeekFormatMode(proc)
+	require.NoError(t, err)
+	require.Equal(t, 5, mode)
 }
 
 func TestWeekOneArgumentOverloadsAreSessionSensitive(t *testing.T) {
