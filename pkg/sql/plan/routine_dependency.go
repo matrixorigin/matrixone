@@ -16,6 +16,7 @@ package plan
 
 import (
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"strings"
 
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -36,16 +37,16 @@ func (builder *QueryBuilder) assignRoutineCallsite(call *planpb.RoutineCall) err
 		return nil
 	}
 	if call.Language != udf.LanguageSQL && call.Language != udf.LanguagePython {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: routine call language %q is not canonical", call.Language)
+		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: routine call language %q is not canonical", call.Language)
 	}
 	if call.CallsiteId != "" {
 		if len(call.CallsiteId) > 256 || strings.ContainsAny(call.CallsiteId, "\r\n") {
-			return fmt.Errorf("PROGRAM_LIMIT_EXCEEDED: routine callsite id is too large or invalid")
+			return moerr.NewInternalErrorNoCtxf("PROGRAM_LIMIT_EXCEEDED: routine callsite id is too large or invalid")
 		}
 		return nil
 	}
 	if builder.nextRoutineCallID == ^uint64(0) {
-		return fmt.Errorf("PROGRAM_LIMIT_EXCEEDED: routine callsite id exhausted")
+		return moerr.NewInternalErrorNoCtxf("PROGRAM_LIMIT_EXCEEDED: routine callsite id exhausted")
 	}
 	builder.nextRoutineCallID++
 	call.CallsiteId = fmt.Sprintf("%s/%d", strings.ToLower(call.Language), builder.nextRoutineCallID)
@@ -57,7 +58,7 @@ func (builder *QueryBuilder) recordRoutinePlanDependency(call *planpb.RoutineCal
 		return nil
 	}
 	if call.Language != udf.LanguageSQL && call.Language != udf.LanguagePython {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: routine call language %q is not canonical", call.Language)
+		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: routine call language %q is not canonical", call.Language)
 	}
 	ref := call.FunctionRef
 	dependency := &planpb.RoutinePlanDependency{
@@ -94,7 +95,7 @@ func (builder *QueryBuilder) recordRoutinePlanDependency(call *planpb.RoutineCal
 		}
 	}
 	if len(builder.qry.RoutineDependencies) >= maxRoutinePlanDependencies {
-		return fmt.Errorf("PROGRAM_LIMIT_EXCEEDED: routine dependency count exceeds %d", maxRoutinePlanDependencies)
+		return moerr.NewInternalErrorNoCtxf("PROGRAM_LIMIT_EXCEEDED: routine dependency count exceeds %d", maxRoutinePlanDependencies)
 	}
 	builder.qry.RoutineDependencies = append(builder.qry.RoutineDependencies, dependency)
 	return nil
