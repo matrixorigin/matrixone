@@ -816,10 +816,10 @@ func getValueFromVector(ctx context.Context, vec *vector.Vector, feSes FeSession
 		return val.String(), nil
 	case types.T_time:
 		val := vector.MustFixedColNoTypeCheck[types.Time](vec)[0]
-		return val.String(), nil
+		return val.String2(vec.GetType().Scale), nil
 	case types.T_datetime:
 		val := vector.MustFixedColNoTypeCheck[types.Datetime](vec)[0]
-		return val.String(), nil
+		return val.String2(vec.GetType().Scale), nil
 	case types.T_timestamp:
 		val := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)[0]
 		return val.String2(feSes.GetTimeZone(), vec.GetType().Scale), nil

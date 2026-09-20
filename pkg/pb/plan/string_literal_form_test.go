@@ -564,3 +564,298 @@ func TestRequiredRemoteExpressionFeaturesBoundedConditionalStringDomains(t *test
 	require.False(t, features.BoundedConditionalStringDomains,
 		"the existing character overload remains wire-compatible")
 }
+
+func TestRequiredRemoteExpressionFeaturesFollowupResultContracts(t *testing.T) {
+	expression := func(functionID, overloadID, resultType int32) *Expr {
+		return &Expr{
+			Typ: Type{Id: resultType},
+			Expr: &Expr_F{F: &Function{Func: &ObjectRef{
+				Obj:     int64(functionID)<<32 | int64(overloadID),
+				ObjName: "contract-test",
+			}}},
+		}
+	}
+
+	for _, test := range []struct {
+		name     string
+		expr     *Expr
+		wantTO64 bool
+		wantIP   bool
+	}{
+		{
+			name: "legacy character TO_BASE64",
+			expr: expression(remoteTOBase64FunctionID, 0, 71), // TEXT
+		},
+		{
+			name:     "bounded character TO_BASE64",
+			expr:     expression(remoteTOBase64FunctionID, 0, planVarcharTypeID),
+			wantTO64: true,
+		},
+		{
+			name:     "binary TO_BASE64 overload",
+			expr:     expression(remoteTOBase64FunctionID, 3, planVarcharTypeID),
+			wantTO64: true,
+		},
+		{
+			name:   "native INET_NTOA overload",
+			expr:   expression(remoteINETNTOAFunctionID, 8, planVarcharTypeID),
+			wantIP: false,
+		},
+		{
+			name:   "dynamic INET_NTOA overload",
+			expr:   expression(remoteINETNTOAFunctionID, 9, planVarcharTypeID),
+			wantIP: true,
+		},
+		{
+			name:   "legacy INT64 IP predicate",
+			expr:   expression(remoteIPIsIPv4FunctionID, 0, 23), // INT64
+			wantIP: false,
+		},
+		{
+			name:   "corrected INT32 IP predicate",
+			expr:   expression(remoteIPIsIPv4FunctionID, 0, ipInt32ResultTypeID),
+			wantIP: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			features, err := RequiredRemoteExpressionFeatures(test.expr)
+			require.NoError(t, err)
+			require.Equal(t, test.wantTO64, features.TOBase64ResultContracts)
+			require.Equal(t, test.wantIP, features.IPFunctionResultContracts)
+			required, err := RequiresMORPCVersion85ExpressionResultContracts(test.expr)
+			require.NoError(t, err)
+			require.Equal(t, test.wantTO64 || test.wantIP, required)
+		})
+	}
+}
+
+func TestRequiredRemoteExpressionFeaturesMetadataResultContracts(t *testing.T) {
+	column := func(typ Type, pos int32) *Expr {
+		return &Expr{Typ: typ, Expr: &Expr_Col{Col: &ColRef{ColPos: pos}}}
+	}
+	integer := func(value int64) *Expr {
+		return &Expr{Typ: Type{Id: 23}, Expr: &Expr_Lit{Lit: &Literal{
+			Value: &Literal_I64Val{I64Val: value},
+		}}}
+	}
+	expression := func(functionID int32, result Type, name string, args ...*Expr) *Expr {
+		return &Expr{
+			Typ: result,
+			Expr: &Expr_F{F: &Function{
+				Func: &ObjectRef{Obj: int64(functionID) << 32, ObjName: name},
+				Args: args,
+			}},
+		}
+	}
+	implicitCast := func(source *Expr, result Type) *Expr {
+		return expression(0, result, "cast", source)
+	}
+	explicitCast := func(source *Expr, result Type) *Expr {
+		cast := implicitCast(source, result)
+		cast.GetF().SyntaxExplicitCast = true
+		return cast
+	}
+	temporal := func(id int32, scale int32, pos int32) *Expr {
+		return column(Type{Id: id, Width: scale, Scale: scale}, pos)
+	}
+	boolCondition := column(Type{Id: planBooleanTypeID}, 0)
+
+	tests := []struct {
+		name string
+		expr *Expr
+		want bool
+	}{
+		{
+			name: "bounded character substring",
+			expr: expression(substringFunctionID, Type{Id: planVarcharTypeID, Width: 7}, "substring",
+				column(Type{Id: planVarcharTypeID, Width: 64}, 0), integer(1), integer(7)),
+			want: true,
+		},
+		{
+			name: "bounded binary left",
+			expr: expression(leftFunctionID, Type{Id: planVarbinaryTypeID, Width: 1}, "left",
+				column(Type{Id: planVarbinaryTypeID, Width: 128}, 0), integer(1)),
+			want: true,
+		},
+		{
+			name: "legacy source-derived two-argument substring",
+			expr: expression(substringFunctionID, Type{Id: planVarcharTypeID, Width: 64}, "substring",
+				column(Type{Id: planVarcharTypeID, Width: 64}, 0), integer(1)),
+		},
+		{
+			name: "legacy source-derived explicit substring",
+			expr: expression(substringFunctionID, Type{Id: planVarcharTypeID, Width: 64}, "substring",
+				column(Type{Id: planVarcharTypeID, Width: 64}, 0), integer(1), integer(7)),
+		},
+		{
+			name: "fractional coalesce time",
+			expr: expression(coalesceFunctionID, Type{Id: planTimeTypeID, Width: 6, Scale: 6}, "coalesce",
+				column(Type{Id: planTimeTypeID, Width: 0, Scale: 0}, 0),
+				column(Type{Id: planTimeTypeID, Width: 6, Scale: 6}, 1)),
+			want: true,
+		},
+		{
+			name: "fractional case datetime",
+			expr: expression(caseFunctionID, Type{Id: planDatetimeTypeID, Width: 6, Scale: 6}, "case",
+				column(Type{Id: planBooleanTypeID}, 0),
+				column(Type{Id: planDatetimeTypeID, Width: 0, Scale: 0}, 1),
+				column(Type{Id: planDatetimeTypeID, Width: 6, Scale: 6}, 2)),
+			want: true,
+		},
+		{
+			name: "legacy fractional coalesce datetime",
+			expr: expression(coalesceFunctionID, Type{Id: planDatetimeTypeID, Width: 6, Scale: 6}, "coalesce",
+				column(Type{Id: planDatetimeTypeID, Width: 6, Scale: 6}, 0),
+				column(Type{Id: planDatetimeTypeID, Width: 3, Scale: 3}, 1)),
+		},
+		{
+			name: "legacy fractional coalesce timestamp",
+			expr: expression(coalesceFunctionID, Type{Id: planTimestampTypeID, Width: 6, Scale: 6}, "coalesce",
+				column(Type{Id: planTimestampTypeID, Width: 0, Scale: 0}, 0),
+				column(Type{Id: planTimestampTypeID, Width: 6, Scale: 6}, 1)),
+		},
+		{
+			name: "legacy fractional case first branch already precise",
+			expr: expression(caseFunctionID, Type{Id: planDatetimeTypeID, Width: 6, Scale: 6}, "case",
+				column(Type{Id: planBooleanTypeID}, 0),
+				column(Type{Id: planDatetimeTypeID, Width: 6, Scale: 6}, 1),
+				column(Type{Id: planDatetimeTypeID, Width: 3, Scale: 3}, 2)),
+		},
+		{
+			name: "mixed temporal case first branch already precise",
+			expr: expression(caseFunctionID, Type{Id: planDatetimeTypeID, Width: 6, Scale: 6}, "case",
+				boolCondition,
+				temporal(planTimestampTypeID, 6, 1),
+				temporal(planDatetimeTypeID, 3, 2)),
+			want: true,
+		},
+		{
+			name: "mixed temporal case reverse branch order",
+			expr: expression(caseFunctionID, Type{Id: planDatetimeTypeID, Width: 6, Scale: 6}, "case",
+				boolCondition,
+				temporal(planDatetimeTypeID, 6, 1),
+				temporal(planTimestampTypeID, 3, 2)),
+			want: true,
+		},
+		{
+			name: "mixed temporal if first branch already precise",
+			expr: expression(iffFunctionID, Type{Id: planDatetimeTypeID, Width: 6, Scale: 6}, "if",
+				boolCondition,
+				temporal(planTimestampTypeID, 6, 1),
+				temporal(planDatetimeTypeID, 3, 2)),
+			want: true,
+		},
+		{
+			name: "mixed temporal if reverse branch order",
+			expr: expression(iffFunctionID, Type{Id: planDatetimeTypeID, Width: 6, Scale: 6}, "if",
+				boolCondition,
+				temporal(planDatetimeTypeID, 6, 1),
+				temporal(planTimestampTypeID, 3, 2)),
+			want: true,
+		},
+		{
+			name: "case omitted else is fenced",
+			expr: expression(caseFunctionID, Type{Id: planDatetimeTypeID, Width: 6, Scale: 6}, "case",
+				boolCondition,
+				temporal(planDatetimeTypeID, 6, 1)),
+			want: true,
+		},
+		{
+			name: "case untyped null value is fenced",
+			expr: expression(caseFunctionID, Type{Id: planDatetimeTypeID, Width: 6, Scale: 6}, "case",
+				boolCondition,
+				temporal(planDatetimeTypeID, 6, 1),
+				column(Type{Id: planAnyTypeID}, 2)),
+			want: true,
+		},
+		{
+			name: "case condition coercion is fenced",
+			expr: expression(caseFunctionID, Type{Id: planDatetimeTypeID, Width: 6, Scale: 6}, "case",
+				boolCondition,
+				temporal(planDatetimeTypeID, 6, 1),
+				column(Type{Id: 23}, 2),
+				temporal(planDatetimeTypeID, 3, 3),
+				temporal(planDatetimeTypeID, 6, 4)),
+			want: true,
+		},
+		{
+			name: "if ANY condition is fenced",
+			expr: expression(iffFunctionID, Type{Id: planDatetimeTypeID, Width: 6, Scale: 6}, "if",
+				column(Type{Id: planAnyTypeID}, 0),
+				temporal(planDatetimeTypeID, 6, 1),
+				temporal(planDatetimeTypeID, 3, 2)),
+			want: true,
+		},
+		{
+			name: "if numeric condition remains legacy compatible",
+			expr: expression(iffFunctionID, Type{Id: planDatetimeTypeID, Width: 6, Scale: 6}, "if",
+				column(Type{Id: 23}, 0),
+				temporal(planDatetimeTypeID, 6, 1),
+				temporal(planDatetimeTypeID, 3, 2)),
+		},
+		{
+			name: "if string condition remains legacy compatible",
+			expr: expression(iffFunctionID, Type{Id: planDatetimeTypeID, Width: 6, Scale: 6}, "if",
+				column(Type{Id: planVarcharTypeID}, 0),
+				temporal(planDatetimeTypeID, 6, 1),
+				temporal(planDatetimeTypeID, 3, 2)),
+		},
+		{
+			name: "if untyped null value is fenced",
+			expr: expression(iffFunctionID, Type{Id: planDatetimeTypeID, Width: 6, Scale: 6}, "if",
+				boolCondition,
+				temporal(planDatetimeTypeID, 6, 1),
+				column(Type{Id: planAnyTypeID}, 2)),
+			want: true,
+		},
+		{
+			name: "explicit cast remains a semantic boundary",
+			expr: expression(iffFunctionID, Type{Id: planDatetimeTypeID, Width: 6, Scale: 6}, "if",
+				boolCondition,
+				explicitCast(temporal(planTimestampTypeID, 6, 1), Type{Id: planDatetimeTypeID, Width: 6, Scale: 6}),
+				temporal(planDatetimeTypeID, 3, 2)),
+		},
+		{
+			name: "zero precision conditional",
+			expr: expression(iffFunctionID, Type{Id: planTimeTypeID, Width: 0, Scale: 0}, "iff",
+				column(Type{Id: planBooleanTypeID}, 0),
+				column(Type{Id: planTimeTypeID, Width: 0, Scale: 0}, 1),
+				column(Type{Id: planTimeTypeID, Width: 0, Scale: 0}, 2)),
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			features, err := RequiredRemoteExpressionFeatures(test.expr)
+			require.NoError(t, err)
+			require.Equal(t, test.want, features.ExpressionResultMetadataContracts)
+			required, err := RequiresMORPCVersion85ExpressionResultContracts(test.expr)
+			require.NoError(t, err)
+			require.Equal(t, test.want, required)
+		})
+	}
+}
+
+func TestRequiredRemoteExpressionFeaturesMetadataResultContractsSurviveWireRoundTrip(t *testing.T) {
+	expr := &Expr{
+		Typ: Type{Id: planDatetimeTypeID, Width: 6, Scale: 6},
+		Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{Obj: int64(iffFunctionID) << 32, ObjName: "if"},
+			Args: []*Expr{
+				{Typ: Type{Id: planBooleanTypeID}, Expr: &Expr_Col{Col: &ColRef{ColPos: 0}}},
+				{Typ: Type{Id: planTimestampTypeID, Width: 6, Scale: 6}, Expr: &Expr_Col{Col: &ColRef{ColPos: 1}}},
+				{Typ: Type{Id: planDatetimeTypeID, Width: 3, Scale: 3}, Expr: &Expr_Col{Col: &ColRef{ColPos: 2}}},
+			},
+		}},
+	}
+	features, err := RequiredRemoteExpressionFeatures(expr)
+	require.NoError(t, err)
+	require.True(t, features.ExpressionResultMetadataContracts)
+
+	encoded, err := expr.Marshal()
+	require.NoError(t, err)
+	decoded := &Expr{}
+	require.NoError(t, decoded.Unmarshal(encoded))
+	features, err = RequiredRemoteExpressionFeatures(decoded)
+	require.NoError(t, err)
+	require.True(t, features.ExpressionResultMetadataContracts)
+}
