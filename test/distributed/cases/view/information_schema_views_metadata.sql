@@ -34,8 +34,8 @@ CREATE DEFINER=$q$ view fake as select 0$q$ VIEW dollar_quoted_definer_v AS sele
 /*!50001 CREATE VIEW executable_double_minus_v AS select 1--2 as x */;
 CREATE VIEW check_option_v AS select a from t WITH CASCADED CHECK OPTION;
 
--- New tenants may expose the v87-compatible VIEWS definition until the
--- post-upgrade v88 reconciliation publishes the parser-derived definition.
+-- New tenants may expose the v90-compatible VIEWS definition until the
+-- post-upgrade v91 reconciliation publishes the parser-derived definition.
 -- Poll the actual public contract before comparing the metadata result.
 -- @wait_expect(1, 120)
 select table_name, view_definition, is_updatable
