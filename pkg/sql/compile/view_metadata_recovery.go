@@ -567,6 +567,7 @@ func discoverLegacyViewMetadata(proc *process.Process) (int, error) {
 type pendingViewRefresh struct {
 	viewRefreshTarget
 	leaseEpoch      uint64
+	leaseOwner      string
 	legacyDiscovery bool
 	originalStatus  string
 }
@@ -737,7 +738,6 @@ func (c *recoveryCompilerContext) GetSubscriptionMeta(
 	if c.legacySubscriptionLooked == nil {
 		c.legacySubscriptionLooked = make(map[string]struct{})
 	}
-	c.legacySubscriptionLooked[key] = struct{}{}
 	if c.legacySubscriptions == nil {
 		c.legacySubscriptions = make(map[string]*planpb.SubscriptionMeta)
 	}
@@ -764,6 +764,9 @@ func (c *recoveryCompilerContext) GetSubscriptionMeta(
 		}
 		return false
 	})
+	// Cache only a completed lookup. A transient catalog error must not turn
+	// a subsequent attempt into an authoritative "subscription absent" result.
+	c.legacySubscriptionLooked[key] = struct{}{}
 	return c.legacySubscriptions[key], nil
 }
 
@@ -975,6 +978,7 @@ func recoverPendingViewMetadataTarget(
 	if err = runner.lockViewRefreshTarget(pending.viewRefreshTarget); err != nil {
 		return 0, err
 	}
+	pending.leaseOwner = workerID
 	workerID = "'" + sqlquote.EscapeString(workerID) + "'"
 	claim, err := sqlExecutor.Exec(proc.Ctx, fmt.Sprintf(
 		"update %s.%s set status='%s',lease_owner=%s,lease_epoch=%d,"+
@@ -1280,7 +1284,7 @@ func refreshPendingView(proc *process.Process, pending *pendingViewRefresh) (boo
 	}
 
 	if err = runner.persistViewDependenciesWithContext(
-		targetContext, database, pending.databaseName, replacement, pending.generation, false); err != nil {
+		targetContext, database, pending.databaseName, replacement, pending.generation, false, pending); err != nil {
 		return true, err
 	}
 	return true, nil
@@ -1350,6 +1354,13 @@ func (c *Compile) enqueueViewsAfterDatabaseRemoval(
 		"d.source_account_id=%d and d.source_database_id=%d", accountID, databaseID), generation)
 }
 
+// viewRefreshClaimPredicate is shared by success and failure publication. The
+// row update and all definition/edge writes must use the same transaction.
+func viewRefreshClaimPredicate(pending *pendingViewRefresh) string {
+	return fmt.Sprintf(" and lease_epoch=%d and lease_owner='%s' and status='%s' and lease_expires_at>now()",
+		pending.leaseEpoch, sqlquote.EscapeString(pending.leaseOwner), viewRefreshStatusRunning)
+}
+
 func updateViewRefreshFailure(
 	proc *process.Process,
 	sqlExecutor executor.SQLExecutor,
@@ -1367,11 +1378,15 @@ func updateViewRefreshFailure(
 	result, err := sqlExecutor.Exec(proc.Ctx, fmt.Sprintf(
 		"update %s.%s set status='%s',failure_code=%d,next_retry_at=%s,"+
 			"lease_owner='',lease_expires_at=null where account_id=%d and target_relation_id=%d "+
-			"and target_generation=%d and lease_epoch=%d",
+			"and target_generation=%d%s",
 		catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH, status, code, nextRetry,
-		pending.accountID, pending.relationID, pending.generation, pending.leaseEpoch), opts)
-	if err == nil {
-		result.Close()
+		pending.accountID, pending.relationID, pending.generation, viewRefreshClaimPredicate(pending)), opts)
+	if err != nil {
+		return err
 	}
-	return err
+	defer result.Close()
+	if result.AffectedRows != 1 {
+		return moerr.NewTxnNeedRetryWithDefChanged(proc.Ctx)
+	}
+	return nil
 }

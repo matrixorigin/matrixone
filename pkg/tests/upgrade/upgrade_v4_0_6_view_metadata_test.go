@@ -16,11 +16,14 @@ package upgrade
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
@@ -98,6 +101,13 @@ func TestV406UpgradeCreatesViewMetadataCatalogTables(t *testing.T) {
 		service := cn.RawService().(cnservice.Service)
 		sqlExecutor := testutils.GetSQLExecutor(cn)
 		require.NotNil(t, sqlExecutor)
+
+		t.Run("scoped restore reconciliation is transactional", func(t *testing.T) {
+			db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, db.Close()) })
+			testScopedViewMetadataReconciliation(t, ctx, sqlExecutor, db)
+		})
 
 		states := []struct {
 			name string
@@ -344,6 +354,103 @@ func viewMetadataCatalogUpgradeEntries() []versions.UpgradeEntry {
 		})
 	}
 	return entries
+}
+
+// Reuse the catalog-upgrade fixture: three constant Views distinguish target,
+// same-database sibling and other-database controls without creating a cluster.
+func testScopedViewMetadataReconciliation(t *testing.T, ctx context.Context, sqlExecutor executor.SQLExecutor, db *sql.DB) {
+	opts := viewMetadataUpgradeExecutorOptions()
+	execDDL := func(statement string) error {
+		_, err := db.ExecContext(ctx, statement)
+		return err
+	}
+	exec := func(sql string) error {
+		result, err := sqlExecutor.Exec(ctx, sql, opts)
+		if err == nil {
+			result.Close()
+		}
+		return err
+	}
+	for _, db := range []string{"view_reconcile_a", "view_reconcile_b"} {
+		require.NoError(t, execDDL("create database "+db))
+		t.Cleanup(func() {
+			require.NoError(t, execDDL("drop database "+db))
+			for _, table := range []string{catalog.MO_VIEW_REFRESH, catalog.MO_VIEW_DEPENDENCIES} {
+				require.NoError(t, exec("delete from mo_catalog."+table+" where account_id=0 and target_database_name='"+db+"'"))
+			}
+		})
+	}
+	for _, name := range []string{"view_reconcile_a.v", "view_reconcile_a.sibling", "view_reconcile_b.v"} {
+		require.NoError(t, execDDL("create view "+name+" as select 1 as x"))
+	}
+	// Exercise both public restore entry points while admission stays disabled.
+	// A single row distinguishes the restored definition/data from the live one.
+	require.NoError(t, execDDL("create table view_reconcile_a.source(x int)"))
+	require.NoError(t, execDDL("insert into view_reconcile_a.source values(1)"))
+	require.NoError(t, execDDL("create snapshot view_reconcile_snapshot for database view_reconcile_a"))
+	t.Cleanup(func() { require.NoError(t, execDDL("drop snapshot view_reconcile_snapshot")) })
+	for _, scope := range []string{"table view_reconcile_a.source", "database view_reconcile_a"} {
+		require.NoError(t, execDDL("update view_reconcile_a.source set x=2"))
+		require.NoError(t, execDDL("restore "+scope+"{snapshot='view_reconcile_snapshot'}"))
+		var value int
+		require.NoError(t, db.QueryRowContext(ctx, "select x from view_reconcile_a.source").Scan(&value))
+		require.Equal(t, 1, value)
+	}
+	require.False(t, compile.ViewMetadataRefreshEnabled(""))
+	readState := func() []string {
+		rows, err := db.QueryContext(ctx, "select concat(target_database_name,'.',target_relation_name,':',status) "+
+			"from mo_catalog.mo_view_refresh where account_id=0 and target_database_name in "+
+			"('view_reconcile_a','view_reconcile_b') order by target_database_name,target_relation_name")
+		require.NoError(t, err)
+		defer rows.Close()
+		var state []string
+		for rows.Next() {
+			var value string
+			require.NoError(t, rows.Scan(&value))
+			state = append(state, value)
+		}
+		require.NoError(t, rows.Err())
+		return state
+	}
+	reconcile := func(database, relation string, abort bool) error {
+		statements, err := compile.ReconcileScopedViewMetadataSQL(0, database, relation, 77)
+		if err != nil {
+			return err
+		}
+		return sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+			run := func(sql string) error {
+				result, err := txn.Exec(sql, executor.StatementOption{})
+				if err == nil {
+					result.Close()
+				}
+				return err
+			}
+			if err := catalog.LockViewMetadataLifecycle(run); err != nil {
+				return err
+			}
+			for _, sql := range statements {
+				if err := run(sql); err != nil {
+					return err
+				}
+			}
+			if abort {
+				return errInjectedViewMetadataUpgrade
+			}
+			return nil
+		}, opts)
+	}
+	require.Empty(t, readState())
+	require.ErrorIs(t, reconcile("view_reconcile_a", "v", true), errInjectedViewMetadataUpgrade)
+	require.Empty(t, readState(), "rolled-back seeding must not publish recovery progress")
+	require.NoError(t, reconcile("view_reconcile_a", "v", false))
+	require.Equal(t, []string{"view_reconcile_a.v:DISCOVERING"}, readState())
+	require.NoError(t, reconcile("view_reconcile_a", "v", false))
+	require.Equal(t, []string{"view_reconcile_a.v:DISCOVERING"}, readState(), "repeated reconciliation is idempotent")
+	require.NoError(t, reconcile("view_reconcile_a", "", false))
+	require.Equal(t, []string{"view_reconcile_a.sibling:DISCOVERING", "view_reconcile_a.v:DISCOVERING"}, readState())
+	require.NoError(t, execDDL("drop view view_reconcile_a.v"))
+	require.NoError(t, reconcile("view_reconcile_a", "v", false))
+	require.Equal(t, []string{"view_reconcile_a.sibling:DISCOVERING"}, readState(), "scoped orphan cleanup preserves its sibling")
 }
 
 func viewMetadataUpgradeExecutorOptions() executor.Options {

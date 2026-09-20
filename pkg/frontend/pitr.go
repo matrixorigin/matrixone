@@ -1239,6 +1239,15 @@ func doRestorePitr(ctx context.Context, ses *Session, stmt *tree.RestorePitr) (s
 			return
 		}
 	}
+	if restoreLevel == tree.RESTORELEVELDATABASE || restoreLevel == tree.RESTORELEVELTABLE {
+		restoredTable := ""
+		if restoreLevel == tree.RESTORELEVELTABLE {
+			restoredTable = tblName
+		}
+		if err = reconcileScopedViewMetadata(ctx, ses, bh, tenantInfo.GetTenantID(), dbName, restoredTable); err != nil {
+			return
+		}
+	}
 
 	if err != nil {
 		return

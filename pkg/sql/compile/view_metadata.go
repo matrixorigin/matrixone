@@ -148,6 +148,7 @@ func (c *Compile) persistViewDependencies(
 		viewDef,
 		uint64(c.proc.GetTxnOperator().SnapshotTS().PhysicalTime),
 		true,
+		nil,
 	)
 }
 
@@ -158,6 +159,7 @@ func (c *Compile) persistViewDependenciesWithContext(
 	viewDef *planpb.TableDef,
 	generation uint64,
 	createState bool,
+	claim *pendingViewRefresh,
 ) error {
 	target, err := c.persistViewDependencyEdgesWithContext(
 		ctx, database, databaseName, viewDef, generation)
@@ -182,14 +184,21 @@ func (c *Compile) persistViewDependenciesWithContext(
 			escape(databaseName), escape(viewDef.Name), generation, generation, viewRefreshStatusCurrent,
 		))
 	}
+	claimPredicate := ""
+	if claim != nil {
+		if target.accountID != claim.accountID || target.relationID != claim.relationID || generation != claim.generation {
+			return moerr.NewTxnNeedRetryWithDefChanged(ctx)
+		}
+		claimPredicate = viewRefreshClaimPredicate(claim)
+	}
 	result, err := c.runSqlWithResult(fmt.Sprintf(
 		"update %s.%s set target_database_id=%d,target_logical_id=%d,target_database_name='%s',"+
 			"target_relation_name='%s',completed_generation=%d,status='%s',failure_code=0,"+
 			"next_retry_at=null,lease_owner='',lease_expires_at=null where account_id=%d "+
-			"and target_relation_id=%d and target_generation=%d",
+			"and target_relation_id=%d and target_generation=%d%s",
 		catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH,
 		target.databaseID, target.logicalID, escape(databaseName), escape(viewDef.Name), generation,
-		viewRefreshStatusCurrent, target.accountID, target.relationID, generation,
+		viewRefreshStatusCurrent, target.accountID, target.relationID, generation, claimPredicate,
 	), int32(catalog.System_Account))
 	if err != nil {
 		return err
@@ -819,24 +828,59 @@ func SeedMissingViewMetadataSQL(generation uint64) string {
 // longer exists after an account restore, then seeds restored Views that have
 // no refresh row. Sentinel rows are intentionally preserved.
 func ReconcileAccountViewMetadataSQL(accountID uint32, generation uint64) []string {
+	return reconcileViewMetadataSQL(accountID, "", "", generation)
+}
+
+// ReconcileScopedViewMetadataSQL reconciles only the restored database or
+// relation. Names deliberately survive physical ID replacement during restore.
+// Empty scopes are rejected rather than silently widening to the whole account.
+func ReconcileScopedViewMetadataSQL(
+	accountID uint32,
+	databaseName string,
+	relationName string,
+	generation uint64,
+) ([]string, error) {
+	if databaseName == "" {
+		return nil, moerr.NewInvalidInputNoCtx("View metadata restore scope requires a database")
+	}
+	return reconcileViewMetadataSQL(accountID, databaseName, relationName, generation), nil
+}
+
+func reconcileViewMetadataSQL(
+	accountID uint32,
+	databaseName string,
+	relationName string,
+	generation uint64,
+) []string {
+	targetScope, catalogScope := "", ""
+	if databaseName != "" {
+		name := sqlquote.EscapeString(databaseName)
+		targetScope = fmt.Sprintf(" and target_database_name='%s'", name)
+		catalogScope = fmt.Sprintf(" and t.reldatabase='%s'", name)
+	}
+	if relationName != "" {
+		name := sqlquote.EscapeString(relationName)
+		targetScope += fmt.Sprintf(" and target_relation_name='%s'", name)
+		catalogScope += fmt.Sprintf(" and t.relname='%s'", name)
+	}
 	existingView := fmt.Sprintf(
 		"select 1 from %s.%s t where t.account_id=%d and t.rel_id=target_relation_id and t.relkind='%s'",
 		catalog.MO_CATALOG, catalog.MO_TABLES, accountID, catalog.SystemViewRel)
 	return []string{
-		fmt.Sprintf("delete from %s.%s where account_id=%d and target_relation_id<>0 and not exists (%s)",
-			catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, accountID, existingView),
-		fmt.Sprintf("delete from %s.%s where account_id=%d and target_relation_id<>0 and not exists (%s)",
-			catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH, accountID, existingView),
+		fmt.Sprintf("delete from %s.%s where account_id=%d%s and target_relation_id<>0 and not exists (%s)",
+			catalog.MO_CATALOG, catalog.MO_VIEW_DEPENDENCIES, accountID, targetScope, existingView),
+		fmt.Sprintf("delete from %s.%s where account_id=%d%s and target_relation_id<>0 and not exists (%s)",
+			catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH, accountID, targetScope, existingView),
 		fmt.Sprintf(
 			"insert into %s.%s (%s) select t.account_id,t.reldatabase_id,t.rel_id,"+
 				"coalesce(nullif(t.rel_logical_id,0),t.rel_id),t.reldatabase,t.relname,%d,0,'%s',"+
 				"0,null,'',0,null,0 from %s.%s t left join %s.%s r on "+
-				"t.account_id=r.account_id and t.rel_id=r.target_relation_id where t.account_id=%d "+
+				"t.account_id=r.account_id and t.rel_id=r.target_relation_id where t.account_id=%d%s "+
 				"and t.relkind='%s' and t.reldatabase not in ('%s') and r.target_relation_id is null",
 			catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH, catalog.MoViewRefreshColumns,
 			generation, catalog.ViewRefreshStatusDiscovering,
 			catalog.MO_CATALOG, catalog.MO_TABLES, catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH,
-			accountID, catalog.SystemViewRel, strings.Join(catalog.SystemDatabases, "','")),
+			accountID, catalogScope, catalog.SystemViewRel, strings.Join(catalog.SystemDatabases, "','")),
 	}
 }
 
@@ -912,7 +956,7 @@ func (c *Compile) refreshOneView(
 		return err
 	}
 	return c.persistViewDependenciesWithContext(
-		targetContext, database, target.databaseName, replacement, target.generation, false)
+		targetContext, database, target.databaseName, replacement, target.generation, false, nil)
 }
 
 func (c *Compile) loadViewCatalogOwnership(
