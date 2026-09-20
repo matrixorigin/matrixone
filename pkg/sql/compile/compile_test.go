@@ -42,6 +42,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	offsetop "github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 
@@ -452,6 +453,30 @@ func TestSQLSelectLimitResolverFailureReleasesCompileStepsTree(t *testing.T) {
 	for _, owner := range owners {
 		require.True(t, owner.released)
 	}
+}
+
+func TestCompileStepsDoesNotGiveOutputAdaptiveRetryOwnership(t *testing.T) {
+	c := NewMockCompile(t)
+	c.anal = &AnalyzeModule{}
+	input := newScope(Normal)
+	input.NodeInfo.Mcpu = 1
+	input.Proc = c.proc.NewNoContextChildProc(0)
+	input.setRootOperator(projection.NewArgument())
+	qry := &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*plan.Node{{
+			NodeId:     0,
+			NodeType:   plan.Node_SORT,
+			RankOption: &plan.RankOption{Mode: "auto"},
+		}},
+	}
+	compiled, err := c.compileSteps(qry, []*Scope{input}, 0)
+	require.NoError(t, err)
+	require.Len(t, compiled, 1)
+	out, ok := compiled[0].RootOp.(*output.Output)
+	require.True(t, ok)
+	require.False(t, out.IsAdaptive)
 }
 
 func TestCompileStepsKeepsOutputOnCurrentCNForSingleRemoteScope(t *testing.T) {
@@ -2393,6 +2418,21 @@ func TestCompileShuffleGroupGatesHLLByProtocolVersion(t *testing.T) {
 	require.False(t, c.canCompileShuffleGroup(aggNode))
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion77)
 	require.True(t, c.supportsRemoteHLL())
+	require.True(t, c.canCompileShuffleGroup(aggNode))
+
+	vectorHLL := &plan.Expr{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: "hll_add_agg"},
+			Args: []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_array_float32)}}},
+		}},
+	}
+	aggNode.AggList = []*plan.Expr{vectorHLL}
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion87)
+	require.False(t, c.supportsRemoteCanonicalHLLAdd())
+	require.False(t, c.canCompileShuffleGroup(aggNode),
+		"vector HLL_ADD_AGG must stay local before MORPC v88")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion88)
+	require.True(t, c.supportsRemoteCanonicalHLLAdd())
 	require.True(t, c.canCompileShuffleGroup(aggNode))
 }
 
