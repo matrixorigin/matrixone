@@ -972,7 +972,7 @@ func (a *AwsSDKv2) deleteMultiObj(ctx context.Context, objs []types.ObjectIdenti
 // endpoint incompatibility, fall back to individual DeleteObject calls, and
 // disable batching for later calls.
 func isS3APIMultiDeleteChecksumError(err error) bool {
-	for _, code := range []string{"MissingContentMD5", "InvalidDigest", "BadDigest", "InvalidRequest", "BadRequest"} {
+	for _, code := range []string{"MissingContentMD5", "MissingArgument", "InvalidDigest", "BadDigest", "InvalidRequest", "BadRequest"} {
 		if isS3APIErrorCode(err, code) {
 			return true
 		}

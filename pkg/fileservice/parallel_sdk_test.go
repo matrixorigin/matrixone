@@ -165,6 +165,12 @@ func newMockAWSServer(t *testing.T, failPart int32) (*httptest.Server, *awsServe
 				_, _ = w.Write([]byte(awsS3ErrorXML("MissingContentMD5", "Content-MD5 is required")))
 				return
 			}
+			if state.failDeleteMultiMissing && !state.deleteMultiHasContentMD5 {
+				w.WriteHeader(http.StatusBadRequest)
+				w.Header().Set("Content-Type", "application/xml")
+				_, _ = w.Write([]byte(awsS3ErrorXML("MissingArgument", "Missing Some Required Arguments")))
+				return
+			}
 			if state.failDeleteMultiPlain && !state.deleteMultiHasContentMD5 {
 				w.Header().Set("Content-Type", "text/plain")
 				w.WriteHeader(http.StatusBadRequest)
@@ -209,6 +215,7 @@ type awsServerState struct {
 	failDeleteMultiMalformed bool
 	failDeleteMultiInternal  bool
 	failDeleteMultiChecksum  bool
+	failDeleteMultiMissing   bool
 	failDeleteMultiPlain     bool
 	deleteMultiHasContentMD5 bool
 }
@@ -709,6 +716,33 @@ func TestAwsDeleteMultiFallsBackToSinglesOnChecksumRejection(t *testing.T) {
 		t.Fatalf("expected later deletes to skip batch after checksum rejection, got %d batch attempts", state.deleteMultiCount)
 	}
 	if strings.Join(state.deleteSingleKeys, ",") != "a,b,c,d,e" {
+		t.Fatalf("expected later deletes to go directly to single-delete path, got %v", state.deleteSingleKeys)
+	}
+}
+
+func TestAwsDeleteMultiFallsBackToSinglesOnMissingArgument(t *testing.T) {
+	server, state := newMockAWSServer(t, 0)
+	defer server.Close()
+	state.failDeleteMultiMissing = true
+
+	sdk := newTestAWSClient(t, server)
+	if err := sdk.Delete(context.Background(), "a", "b"); err != nil {
+		t.Fatalf("delete failed: %v", err)
+	}
+	if state.deleteMultiCount != 1 {
+		t.Fatalf("expected 1 batch delete attempt, got %d", state.deleteMultiCount)
+	}
+	if strings.Join(state.deleteSingleKeys, ",") != "a,b" {
+		t.Fatalf("expected single-delete fallback for all keys, got %v", state.deleteSingleKeys)
+	}
+
+	if err := sdk.Delete(context.Background(), "c", "d"); err != nil {
+		t.Fatalf("second delete failed: %v", err)
+	}
+	if state.deleteMultiCount != 1 {
+		t.Fatalf("expected later deletes to skip batch after missing-argument rejection, got %d batch attempts", state.deleteMultiCount)
+	}
+	if strings.Join(state.deleteSingleKeys, ",") != "a,b,c,d" {
 		t.Fatalf("expected later deletes to go directly to single-delete path, got %v", state.deleteSingleKeys)
 	}
 }
