@@ -149,7 +149,7 @@ select id,left('abcdef',if(id=1,d,v)),substring('abcdef',1,case when id=1 then d
 2  ¦  ab  ¦  ab  ¦  b  𝄀
 3  ¦  null  ¦  null  ¦  null
 select left('abc',-1),right('abc',0),substring('abc',-2),substring('abc',1,0),lpad('x',0,'.'),rpad('x',0,'.'),insert('abc',0,1,'X'),locate('a','abc',0),repeat('x',-1),length(space(-1)),elt(0,'a','b');
-➤ left(abc, -1)[12,3,0]  ¦  right(abc, 0)[12,3,0]  ¦  substring(abc, -2)[12,3,0]  ¦  substring(abc, 1, 0)[12,3,0]  ¦  lpad(x, 0, .)[12,536870911,0]  ¦  rpad(x, 0, .)[12,536870911,0]  ¦  insert(abc, 0, 1, X)[12,4,0]  ¦  locate(a, abc, 0)[-5,64,0]  ¦  repeat(x, -1)[-1,16383,0]  ¦  length(space(-1))[-5,64,0]  ¦  elt(0, a, b)[12,1,0]  𝄀
+➤ left(abc, -1)[12,536870911,0]  ¦  right(abc, 0)[12,536870911,0]  ¦  substring(abc, -2)[12,3,0]  ¦  substring(abc, 1, 0)[12,536870911,0]  ¦  lpad(x, 0, .)[12,536870911,0]  ¦  rpad(x, 0, .)[12,536870911,0]  ¦  insert(abc, 0, 1, X)[12,4,0]  ¦  locate(a, abc, 0)[-5,64,0]  ¦  repeat(x, -1)[-1,16383,0]  ¦  length(space(-1))[-5,64,0]  ¦  elt(0, a, b)[12,1,0]  𝄀
   ¦    ¦  bc  ¦    ¦    ¦    ¦  abc  ¦  0  ¦    ¦  0  ¦  null
 select locate('a','baaa'),substring('abcdef',2),substr('abcdef',2),mid('abcdef',2);
 ➤ locate(a, baaa)[-5,64,0]  ¦  substring(abcdef, 2)[12,6,0]  ¦  substr(abcdef, 2)[12,6,0]  ¦  mid(abcdef, 2)[12,6,0]  𝄀

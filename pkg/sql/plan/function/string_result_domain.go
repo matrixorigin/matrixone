@@ -171,6 +171,53 @@ func fixedTextResultType(width uint64) types.Type {
 	return textStringResultType(stringResultBound{bytes: width}, types.CharsetUTF8)
 }
 
+// CharacterSliceLiteralWidth refines only the width of a selected character
+// result. The caller must establish an exclusively text runtime domain; this
+// pure helper does not infer provenance or change the selected type family.
+func CharacterSliceLiteralWidth(source *planpb.Expr, length *planpb.Literal, selected types.Type) (int32, bool) {
+	if source == nil || length == nil || length.Isnull ||
+		(selected.Oid != types.T_char && selected.Oid != types.T_varchar) || selected.Width < 0 {
+		return 0, false
+	}
+	if oid := types.T(source.Typ.Id); oid != types.T_char && oid != types.T_varchar {
+		return 0, false
+	}
+	var requested uint64
+	var signed int64
+	switch value := length.Value.(type) {
+	case *planpb.Literal_I8Val:
+		signed = int64(value.I8Val)
+	case *planpb.Literal_I16Val:
+		signed = int64(value.I16Val)
+	case *planpb.Literal_I32Val:
+		signed = int64(value.I32Val)
+	case *planpb.Literal_I64Val:
+		signed = value.I64Val
+	case *planpb.Literal_U8Val:
+		requested = uint64(value.U8Val)
+	case *planpb.Literal_U16Val:
+		requested = uint64(value.U16Val)
+	case *planpb.Literal_U32Val:
+		requested = uint64(value.U32Val)
+	case *planpb.Literal_U64Val:
+		requested = value.U64Val
+	default:
+		return 0, false
+	}
+	if signed > 0 {
+		requested = uint64(signed)
+	}
+	sourceBound, known := TextSourceCharacterBound(source)
+	if !known {
+		return 0, false
+	}
+	bound := min(sourceBound, requested)
+	if bound <= uint64(types.MaxVarcharLen) && bound < uint64(selected.Width) {
+		return int32(bound), true
+	}
+	return 0, false
+}
+
 // TextSourceCharacterBound returns a conservative character-count bound for a
 // value before a string-domain cast. Character declarations count characters;
 // fixed scalar values use the same formatted-string bound as the cast planner.
