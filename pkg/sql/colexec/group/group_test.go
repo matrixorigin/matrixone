@@ -4734,22 +4734,30 @@ func TestRemoteHLLStateRetainsCompatibilityAcrossProtocolVersions(t *testing.T) 
 	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
-	arg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_float32)}}
-	makeVersion := func(aggID int64) byte {
+	scalarArg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_float32)}}
+	vectorArg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_array_float32)}}
+	makeVersion := func(aggID int64, arg *plan.Expr) byte {
 		ctr := &container{
-			mp:                proc.Mp(),
-			mtyp:              H0,
-			legacyHLLState:    useLegacyHLLStateForRemote(proc),
-			floatZeroHLLState: useFloatZeroHLLStateForRemote(proc),
+			mp:                   proc.Mp(),
+			mtyp:                 H0,
+			legacyHLLState:       useLegacyHLLStateForRemote(proc),
+			floatZeroHLLState:    useFloatZeroHLLStateForRemote(proc),
+			legacyVectorHLLState: useLegacyVectorHLLStateForRemote(proc),
 		}
 		aggs, err := ctr.makeAggList([]aggexec.AggFuncExecExpression{
 			aggexec.MakeAggFunctionExpression(
 				aggID, false, []*plan.Expr{arg}, nil),
 		})
 		require.NoError(t, err)
-		values := vector.NewVec(types.T_float32.ToType())
-		require.NoError(t, vector.AppendFixed(
-			values, float32(math.Copysign(0, -1)), false, proc.Mp()))
+		values := vector.NewVec(types.T(arg.Typ.Id).ToType())
+		if types.T(arg.Typ.Id) == types.T_array_float32 {
+			require.NoError(t, vector.AppendBytes(values,
+				types.ArrayToBytes([]float32{1, float32(math.Copysign(0, -1)), 3}),
+				false, proc.Mp()))
+		} else {
+			require.NoError(t, vector.AppendFixed(
+				values, float32(math.Copysign(0, -1)), false, proc.Mp()))
+		}
 		require.NoError(t, aggs[0].BulkFill(0, []*vector.Vector{values}))
 		var intermediate bytes.Buffer
 		require.NoError(t, aggs[0].SaveIntermediateResultOfChunk(0, &intermediate))
@@ -4765,52 +4773,80 @@ func TestRemoteHLLStateRetainsCompatibilityAcrossProtocolVersions(t *testing.T) 
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion70)
 	require.True(t, useLegacyHLLStateForRemote(proc))
+	require.True(t, useLegacyVectorHLLStateForRemote(proc))
 	require.False(t, useFloatZeroHLLStateForRemote(proc))
-	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd),
+	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, scalarArg),
 		"pre-v76 peers must receive the raw-value v2 HLL state")
+	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, vectorArg),
+		"pre-v88 peers must receive the raw-value vector HLL state")
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion73)
 	require.True(t, useLegacyHLLStateForRemote(proc),
 		"v73 peers must receive a compatibility HLL state")
+	require.True(t, useLegacyVectorHLLStateForRemote(proc))
 	require.False(t, useFloatZeroHLLStateForRemote(proc))
-	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd),
+	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, scalarArg),
 		"v73 peers must keep persisted HLL_ADD_AGG on the raw-value v2 state")
+	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, vectorArg),
+		"v73 peers must keep vector HLL_ADD_AGG on the raw-value v2 state")
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion74)
 	require.True(t, useLegacyHLLStateForRemote(proc),
 		"v74 peers must receive a compatibility HLL state")
+	require.True(t, useLegacyVectorHLLStateForRemote(proc))
 	require.False(t, useFloatZeroHLLStateForRemote(proc))
-	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfApproxCount),
+	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfApproxCount, scalarArg),
 		"v74 peers must receive the base-compatible v2 APPROX_COUNT state")
-	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd),
+	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, scalarArg),
 		"v74 peers must keep persisted HLL_ADD_AGG on the raw-value v2 state")
+	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, vectorArg),
+		"v74 peers must keep vector HLL_ADD_AGG on the raw-value v2 state")
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion75)
 	require.True(t, useLegacyHLLStateForRemote(proc))
+	require.True(t, useLegacyVectorHLLStateForRemote(proc))
 	require.False(t, useFloatZeroHLLStateForRemote(proc))
-	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfApproxCount),
+	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfApproxCount, scalarArg),
 		"v75 peers must receive the raw-value v2 APPROX_COUNT state")
-	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd),
+	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, scalarArg),
 		"v75 peers must keep persisted HLL_ADD_AGG on the raw-value v2 state")
+	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, vectorArg),
+		"v75 peers must keep vector HLL_ADD_AGG on the raw-value v2 state")
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion76)
 	require.True(t, useLegacyHLLStateForRemote(proc))
+	require.True(t, useLegacyVectorHLLStateForRemote(proc))
 	require.True(t, useFloatZeroHLLStateForRemote(proc))
-	require.Equal(t, byte(3), makeVersion(aggexec.AggIdOfApproxCount),
+	require.Equal(t, byte(3), makeVersion(aggexec.AggIdOfApproxCount, scalarArg),
 		"v76 peers must receive the signed-zero-compatible APPROX_COUNT state")
-	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd),
+	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, scalarArg),
 		"v76 peers must keep persisted HLL_ADD_AGG on the raw-value v2 state")
+	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, vectorArg),
+		"v76 peers must keep vector HLL_ADD_AGG on the raw-value v2 state")
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion77)
 	require.False(t, useLegacyHLLStateForRemote(proc))
+	require.True(t, useLegacyVectorHLLStateForRemote(proc))
 	require.False(t, useFloatZeroHLLStateForRemote(proc))
-	require.Equal(t, byte(4), makeVersion(aggexec.AggIdOfApproxCount),
+	require.Equal(t, byte(4), makeVersion(aggexec.AggIdOfApproxCount, scalarArg),
 		"v77 peers may receive the typed-key v4 APPROX_COUNT state")
-	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd),
+	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, scalarArg),
 		"persisted HLL_ADD_AGG must retain the raw-value v2 state")
+	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, vectorArg),
+		"v77 peers must keep vector HLL_ADD_AGG on the raw-value v2 state")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion87)
+	require.True(t, useLegacyVectorHLLStateForRemote(proc))
+	require.Equal(t, byte(2), makeVersion(aggexec.AggIdOfHllAdd, vectorArg),
+		"v87 peers must keep vector HLL_ADD_AGG on the raw-value v2 state")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion88)
+	require.False(t, useLegacyVectorHLLStateForRemote(proc))
+	require.Equal(t, byte(4), makeVersion(aggexec.AggIdOfHllAdd, vectorArg),
+		"v88 peers may receive the canonical vector HLL state")
 }
 
 func TestLegacyHLLStateRequiresRemoteProcess(t *testing.T) {
 	require.False(t, useLegacyHLLStateForRemote(nil))
+	require.False(t, useLegacyVectorHLLStateForRemote(nil))
 	require.False(t, useLegacyApproxPercentileStateForRemote(nil))
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
 	require.False(t, useLegacyHLLStateForRemote(proc))
+	require.False(t, useLegacyVectorHLLStateForRemote(proc))
 }
 
 func TestGroupConcatSourceRowProtocolGates(t *testing.T) {

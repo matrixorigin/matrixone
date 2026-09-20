@@ -123,7 +123,8 @@ const (
 	MORPCVersion85     int64 = 85 // shared integer-parameter coercion execution identities
 	MORPCVersion86     int64 = 86 // extended IP overload/result and expression metadata contracts
 	MORPCVersion87     int64 = 87 // preserve grouping provenance in remote batch transport
-	MORPCLatestVersion       = MORPCVersion87
+	MORPCVersion88     int64 = 88 // canonical vector HLL_ADD_AGG hash keys
+	MORPCLatestVersion       = MORPCVersion88
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
