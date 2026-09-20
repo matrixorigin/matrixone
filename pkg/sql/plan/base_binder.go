@@ -4566,6 +4566,13 @@ func rewriteFindInSetSetProvenance(
 	if !isSetPlanType(storageType) {
 		return args, false, nil
 	}
+	if bindCtx.mysqlSpecialCanonicalTypeForExpr(args[1]) != nil {
+		bitmap, err := makeCanonicalSetValue(ctx, args[1], storageType)
+		if err != nil {
+			return nil, false, err
+		}
+		return []*Expr{args[0], bitmap, makePlan2StringConstExprWithType(storageType.Enumvalues)}, true, nil
+	}
 	if builder != nil && setTypeHasEmptyMember(storageType) {
 		if bitmap, ok := builder.materializeProjectedSetBitmap(args[1], nil); ok {
 			rewritten := make([]*Expr, 0, 3)
@@ -9617,6 +9624,11 @@ func useStoredMySQLSpecialTypesForNumericContract(ctx context.Context, name stri
 	}
 	if !hasSpecialArg {
 		return args
+	}
+	// SUM/AVG have a numeric operand contract even though their VARCHAR
+	// overload is deliberately rejected. Resolve storage before that lookup.
+	if (name == "sum" || name == "avg") && len(args) == 1 {
+		return rawArgs
 	}
 
 	// The display-bound operands describe the contract selected for this SQL
