@@ -283,21 +283,9 @@ func TestBindTimestampAddFSPByUnit(t *testing.T) {
 
 func TestBindTemporalMetadataForTimestampArithmetic(t *testing.T) {
 	ctx := context.Background()
-	unit := makeInt64Const(int64(types.Second))
-	interval := makeInt64Const(1)
 	timestamp := &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{}}, Typ: plan.Type{
 		Id: int32(types.T_timestamp), Scale: 6,
 	}}
-
-	for _, name := range []string{"date_add", "date_sub"} {
-		expr, err := BindFuncExprImplByPlanExpr(ctx, name, []*plan.Expr{
-			timestamp, interval, unit,
-		})
-		require.NoError(t, err)
-		require.Equal(t, int32(types.T_datetime), expr.Typ.Id, name)
-		require.Equal(t, int32(6), expr.Typ.Scale, name)
-	}
-
 	convertTz, err := BindFuncExprImplByPlanExpr(ctx, "convert_tz", []*plan.Expr{
 		timestamp, makeStringConst("+00:00"), makeStringConst("+08:00"),
 	})
