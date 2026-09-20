@@ -1,0 +1,52 @@
+[
+  {
+    "Class": "",
+    "Reason": "CapabilityHandshakeReady",
+    "Wire": "CAcQKdoBAOoBAPIBAPoBAIICAIoCAJICAKICAMoCANICAOICMQoEY24tMRIGcHl0aG9uGAEgASgBOhhDYXBhYmlsaXR5SGFuZHNoYWtlUmVhZHmwASo="
+  },
+  {
+    "Class": "DISABLED",
+    "Reason": "RuntimeDisabled",
+    "Wire": "CAcQKdoBAOoBAPIBAPoBAIICAIoCAJICAKICAMoCANICAOICLgoEY24tMRIGcHl0aG9uIAEyCERJU0FCTEVEOg9SdW50aW1lRGlzYWJsZWSwASo="
+  },
+  {
+    "Class": "NOT_ALLOWED",
+    "Reason": "UnisolatedExecutionNotAllowed",
+    "Wire": "CAcQKdoBAOoBAPIBAPoBAIICAIoCAJICAKICAMoCANICAOICPwoEY24tMRIGcHl0aG9uGAEyC05PVF9BTExPV0VEOh1Vbmlzb2xhdGVkRXhlY3V0aW9uTm90QWxsb3dlZLABKg=="
+  },
+  {
+    "Class": "UNAVAILABLE",
+    "Reason": "WorkerUnavailable",
+    "Wire": "CAcQKdoBAOoBAPIBAPoBAIICAIoCAJICAKICAMoCANICAOICNQoEY24tMRIGcHl0aG9uGAEgATILVU5BVkFJTEFCTEU6EVdvcmtlclVuYXZhaWxhYmxlsAEq"
+  },
+  {
+    "Class": "UNAVAILABLE",
+    "Reason": "RuntimeStatusUnavailable",
+    "Wire": "CAcQKdoBAOoBAPIBAPoBAIICAIoCAJICAKICAMoCANICAOICPAoEY24tMRIGcHl0aG9uGAEgATILVU5BVkFJTEFCTEU6GFJ1bnRpbWVTdGF0dXNVbmF2YWlsYWJsZbABKg=="
+  },
+  {
+    "Class": "CONTRACT_MISMATCH",
+    "Reason": "CapabilityContractMismatch",
+    "Wire": "CAcQKdoBAOoBAPIBAPoBAIICAIoCAJICAKICAMoCANICAOICRAoEY24tMRIGcHl0aG9uGAEgATIRQ09OVFJBQ1RfTUlTTUFUQ0g6GkNhcGFiaWxpdHlDb250cmFjdE1pc21hdGNosAEq"
+  },
+  {
+    "Class": "TIMEOUT",
+    "Reason": "CapabilityRequestTimeout",
+    "Wire": "CAcQKdoBAOoBAPIBAPoBAIICAIoCAJICAKICAMoCANICAOICOAoEY24tMRIGcHl0aG9uGAEgATIHVElNRU9VVDoYQ2FwYWJpbGl0eVJlcXVlc3RUaW1lb3V0sAEq"
+  },
+  {
+    "Class": "CLOSED",
+    "Reason": "RuntimeClosed",
+    "Wire": "CAcQKdoBAOoBAPIBAPoBAIICAIoCAJICAKICAMoCANICAOICLAoEY24tMRIGcHl0aG9uGAEgATIGQ0xPU0VEOg1SdW50aW1lQ2xvc2VksAEq"
+  },
+  {
+    "Class": "INVALID",
+    "Reason": "InvalidLanguage",
+    "Wire": "CAcQKdoBAOoBAPIBAPoBAIICAIoCAJICAKICAMoCANICAOICLwoEY24tMRIGcHl0aG9uGAEgATIHSU5WQUxJRDoPSW52YWxpZExhbmd1YWdlsAEq"
+  },
+  {
+    "Class": "INTERNAL",
+    "Reason": "RuntimeError",
+    "Wire": "CAcQKdoBAOoBAPIBAPoBAIICAIoCAJICAKICAMoCANICAOICLQoEY24tMRIGcHl0aG9uGAEgATIISU5URVJOQUw6DFJ1bnRpbWVFcnJvcrABKg=="
+  }
+]
