@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -417,6 +418,47 @@ func TestScopeSerialization(t *testing.T) {
 		require.Equal(t, sourceScope.NodeInfo.Id, targetScope.NodeInfo.Id)
 	}
 
+}
+
+func TestOrderedSetWindowStaysOffRemotePipelineWire(t *testing.T) {
+	rt := runtime.ServiceRuntime("")
+	originalVersion, hadVersion := rt.GetGlobalVariables(runtime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadVersion {
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, originalVersion)
+		} else {
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+	// Version 16 predates remote ordered-set aggregate support. The window can
+	// still be planned because its aggregate executor never leaves this CN.
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion16)
+	source := generateScopeCases(t, []string{
+		"select percentile_disc(0.5) within group (order by n_nationkey desc) " +
+			"over (partition by n_regionkey) from nation",
+	})[0]
+	foundWindow := false
+	require.NoError(t, vm.HandleAllOp(source.RootOp, func(_ vm.Operator, op vm.Operator) error {
+		if _, ok := op.(*window.Window); ok {
+			foundWindow = true
+		}
+		return nil
+	}))
+	require.True(t, foundWindow, "the window must execute above the coordinator merge")
+	require.NotEmpty(t, source.PreScopes)
+
+	// Window has no pipeline protobuf representation. Rolling-version safety
+	// relies on compileWin retaining it on the coordinator while only the
+	// existing scan/merge inputs cross the wire.
+	for _, remoteInput := range source.PreScopes {
+		remoteInput.Proc.Base.TxnOperator = fakeTxnOperator{}
+		require.NoError(t, vm.HandleAllOp(remoteInput.RootOp, func(_ vm.Operator, op vm.Operator) error {
+			_, isWindow := op.(*window.Window)
+			require.False(t, isWindow, "window operators must not enter the remote pipeline wire")
+			return nil
+		}))
+		require.True(t, checkPipelineStandaloneExecutableAtRemote(remoteInput))
+	}
 }
 
 func TestCompileOrderByLimitOffsetUsesTopCandidateBudget(t *testing.T) {

@@ -1450,6 +1450,9 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	if err = c.constrainGroupConcatTimeZoneWorkers(qry); err != nil {
 		return nil, err
 	}
+	if err = c.validateGroupingTransportPlacement(qry); err != nil {
+		return nil, err
+	}
 
 	if c.isPrepare && !c.IsTpQuery() {
 		return nil, cantCompileForPrepareErr
@@ -1497,6 +1500,9 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	}
 	if err = validateLocalRuntimeFilterTopology(qry, c.compiledLocalRuntimeFilterNodes, steps); err != nil {
 		return nil, err
+	}
+	if queryNeedsGroupingTransport(qry) {
+		attachGroupingTransportPlan(steps, &plan.Plan{Plan: &plan.Plan_Query{Query: qry}})
 	}
 
 	return steps, err
