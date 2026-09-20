@@ -900,6 +900,7 @@ func (tcc *TxnCompilerContext) resolveUdfInDatabase(name string, args []*plan.Ex
 		}
 	}
 
+	defer pinRoutineCatalogReads(bh)()
 	snapshot := tcc.GetSnapshot()
 	if sub := tcc.GetQueryingSubscription(); sub != nil && snapshot != nil {
 		// The subscriber owns the snapshot name; publisher UDFs live in the
@@ -1098,12 +1099,22 @@ func (tcc *TxnCompilerContext) resolveUdfInDatabase(name string, args []*plan.Ex
 				if accountErr != nil {
 					return nil, accountErr
 				}
-				databaseID, databaseErr := tcc.GetDatabaseId(matchedList[0].Udf.Db, tcc.GetSnapshot())
+				accountID = routineCatalogAccountID(accountID, tcc.GetSnapshot())
+				databaseID, databaseErr := routineCatalogDatabaseID(queryCtx, bh, matchedList[0].Udf.Db, accountID, tcc.GetSnapshot())
 				if databaseErr != nil {
 					return nil, fmt.Errorf("python routine database identity: %w", databaseErr)
 				}
 				matchedList[0].Udf.AccountID = uint64(accountID)
 				matchedList[0].Udf.DatabaseID = databaseID
+				namespaces, namespaceErr := readRoutineNamespaces(queryCtx, bh, []uint64{uint64(matchedList[0].Udf.FunctionID)}, tcc.GetSnapshot())
+				if namespaceErr != nil && !errors.Is(namespaceErr, errRoutineNamespaceBudget) {
+					return nil, namespaceErr
+				}
+				matchedList[0].Udf.NamespaceFingerprint = namespaces[uint64(matchedList[0].Udf.FunctionID)]
+				if namespaceErr == nil && matchedList[0].Udf.NamespaceFingerprint == "" {
+					return nil, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: missing routine namespace")
+				}
+
 			}
 			return matchedList[0].Udf, err
 		}

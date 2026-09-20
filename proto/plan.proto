@@ -2501,6 +2501,9 @@ message RoutineCall {
   bool may_error = 12;
   string security_mode = 13;
   bool leakproof = 14;
+  // State fingerprint of the complete overload namespace at binding snapshot.
+  // Separate from the selected immutable FunctionRef; missing means no reuse.
+  string namespace_fingerprint = 15;
 }
 
 // RoutinePlanDependency is the shared cache/prepared-plan validation envelope
@@ -2519,4 +2522,5 @@ message RoutinePlanDependency {
   bool may_error = 9;
   string security_mode = 10;
   bool leakproof = 11;
+  string namespace_fingerprint = 12;
 }

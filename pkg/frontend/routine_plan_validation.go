@@ -7,6 +7,7 @@ package frontend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -30,19 +31,20 @@ const (
 )
 
 type routinePlanCatalogState struct {
-	activeRevision    uint64
-	namespaceVersion  uint64
-	databaseID        uint64
-	revision          uint64
-	language          string
-	volatility        string
-	nullPolicy        string
-	fingerprint       string
-	artifactDigest    string
-	environmentDigest string
-	securityType      string
-	identityChecked   bool
-	identityValid     bool
+	namespaceFingerprint string
+	activeRevision       uint64
+	namespaceVersion     uint64
+	databaseID           uint64
+	revision             uint64
+	language             string
+	volatility           string
+	nullPolicy           string
+	fingerprint          string
+	artifactDigest       string
+	environmentDigest    string
+	securityType         string
+	identityChecked      bool
+	identityValid        bool
 }
 
 func cachedRoutinePlanDependenciesCurrent(ses *Session, cached *cachedPlan) bool {
@@ -165,10 +167,17 @@ func validateRoutinePlanDependencies(ctx context.Context, ses FeSession, p *plan
 	if ses == nil {
 		return false, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: routine dependency validation has no session")
 	}
-	accountID := ses.GetAccountId()
+	var snapshot *planpb.Snapshot
+	if tcc := ses.GetTxnCompileCtx(); tcc != nil {
+		snapshot = tcc.GetSnapshot()
+	}
+	accountID := routineCatalogAccountID(ses.GetAccountId(), snapshot)
 	ids := make([]uint64, 0, len(dependencies))
 	seen := make(map[uint64]struct{}, len(dependencies))
 	for _, dependency := range dependencies {
+		if dependency != nil && dependency.NamespaceFingerprint == "" {
+			return true, nil
+		}
 		if err := validateRoutinePlanDependencyShape(dependency, accountID); err != nil {
 			return false, err
 		}
@@ -191,15 +200,31 @@ func validateRoutinePlanDependencies(ctx context.Context, ses FeSession, p *plan
 	// implemented for both client and background sessions; rejecting the latter
 	// here would make a valid typed routine fail only when a statement is
 	// executed through a nested frontend pipeline.
-	bh := ses.GetBackgroundExec(ctx)
-	defer bh.Close()
-	if err = bh.Exec(ctx, "begin;"); err != nil {
-		return false, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: routine dependency validation could not start: %w", err)
-	}
-	defer func() { err = finishTxn(ctx, bh, err) }()
 
+	useCallerTxn := resolvesUdfInCallerTxn(ctx)
+	var bh BackgroundExec
+	if useCallerTxn {
+		bh = ses.GetShareTxnBackgroundExec(ctx, false)
+	} else {
+		bh = ses.GetBackgroundExec(ctx)
+	}
+	defer bh.Close()
+	if !useCallerTxn {
+		if err = bh.Exec(ctx, "begin;"); err != nil {
+			return false, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: routine dependency validation could not start: %w", err)
+		}
+		defer func() { err = finishTxn(ctx, bh, err) }()
+	}
+
+	defer pinRoutineCatalogReads(bh)()
 	bh.ClearExecResultSet()
 	query := routinePlanCatalogSQL(ids, accountID)
+	if snapshot != nil && snapshot.TS != nil {
+		for _, table := range []string{"mo_user_defined_function", "mo_database", "mo_function_revisions"} {
+			name := "mo_catalog." + table
+			query = strings.ReplaceAll(query, name+" ", fmt.Sprintf("%s {MO_TS = %d} ", name, snapshot.TS.PhysicalTime))
+		}
+	}
 	if err = bh.Exec(ctx, query); err != nil {
 		return false, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: routine dependency validation failed: %w", err)
 	}
@@ -207,9 +232,12 @@ func validateRoutinePlanDependencies(ctx context.Context, ses FeSession, p *plan
 	if err != nil {
 		return false, err
 	}
-	catalogResult, err := exactlyOneCatalogResultSet(ctx, rows, "routine dependency catalog")
+	catalogResult, err := candidateCatalogResultSet(rows, "routine dependency catalog")
 	if err != nil {
 		return false, err
+	}
+	if catalogResult == nil {
+		return true, nil
 	}
 	states := make(map[uint64]routinePlanCatalogState, len(rows))
 	if catalogResult.GetRowCount() != 0 {
@@ -339,6 +367,17 @@ func validateRoutinePlanDependencies(ctx context.Context, ses FeSession, p *plan
 			}
 		}
 	}
+	namespaces, namespaceErr := readRoutineNamespaces(ctx, bh, ids, snapshot)
+	if errors.Is(namespaceErr, errRoutineNamespaceBudget) {
+		return true, nil
+	}
+	if namespaceErr != nil {
+		return false, namespaceErr
+	}
+	for id, state := range states {
+		state.namespaceFingerprint = namespaces[id]
+		states[id] = state
+	}
 	return routinePlanDependenciesChanged(dependencies, states), nil
 }
 
@@ -450,7 +489,7 @@ func validateRoutinePlanDependencyShape(dependency *planpb.RoutinePlanDependency
 		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: routine plan dependency has an invalid catalog identity")
 	}
 	if dependency.ContractVersion != udf.RoutinePlanContractVersion ||
-		!udf.IsSHA256Digest(dependency.DefinitionFingerprint) {
+		!udf.IsSHA256Digest(dependency.DefinitionFingerprint) || !udf.IsSHA256Digest(dependency.NamespaceFingerprint) {
 		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: routine plan dependency contract is incomplete")
 	}
 	if dependency.Volatility == "" || dependency.NullPolicy == "" || !dependency.MayError || dependency.Leakproof {
@@ -497,7 +536,8 @@ func routinePlanDependenciesChanged(
 		if expectedSecurityMode == "" {
 			return true
 		}
-		if state.activeRevision != ref.Revision || state.revision != ref.Revision ||
+		if state.namespaceFingerprint != dependency.NamespaceFingerprint || !udf.IsSHA256Digest(dependency.NamespaceFingerprint) ||
+			state.activeRevision != ref.Revision || state.revision != ref.Revision ||
 			state.databaseID != ref.DatabaseId ||
 			state.namespaceVersion != ref.NamespaceVersion ||
 			state.volatility != dependency.Volatility ||

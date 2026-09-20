@@ -34,11 +34,12 @@ type Udf struct {
 	// FunctionID and Revision are resolved from the shared catalog. They are
 	// part of the executable identity; the planner must never re-resolve a
 	// Python routine by name or latest revision at execution time.
-	FunctionID       int64  `json:"function_id,omitempty"`
-	AccountID        uint64 `json:"account_id,omitempty"`
-	DatabaseID       uint64 `json:"database_id,omitempty"`
-	Revision         uint64 `json:"revision,omitempty"`
-	NamespaceVersion uint64 `json:"namespace_version,omitempty"`
+	FunctionID           int64  `json:"function_id,omitempty"`
+	AccountID            uint64 `json:"account_id,omitempty"`
+	DatabaseID           uint64 `json:"database_id,omitempty"`
+	Revision             uint64 `json:"revision,omitempty"`
+	NamespaceFingerprint string `json:"namespace_fingerprint,omitempty"`
+	NamespaceVersion     uint64 `json:"namespace_version,omitempty"`
 	// SQL revisions use the same immutable identity envelope as Python. These
 	// fields are empty for legacy SQL rows, which intentionally remain on the
 	// historical text-expansion path until they are explicitly replaced.
@@ -335,7 +336,8 @@ func (u *Udf) GetRoutineCall() (*plan.RoutineCall, error) {
 	}
 	returnType := type2PlanType(body.ReturnType.Type())
 	return &plan.RoutineCall{
-		ContractVersion: udf.PythonPlanContractVersion,
+		ContractVersion:      udf.PythonPlanContractVersion,
+		NamespaceFingerprint: u.NamespaceFingerprint,
 		FunctionRef: &plan.FunctionRef{
 			FunctionId:       uint64(u.FunctionID),
 			Revision:         u.Revision,
@@ -392,7 +394,8 @@ func (u *Udf) getSQLRoutineCall() (*plan.RoutineCall, error) {
 		nullPolicy = udf.NullCallHandler
 	}
 	return &plan.RoutineCall{
-		ContractVersion: udf.RoutinePlanContractVersion,
+		ContractVersion:      udf.RoutinePlanContractVersion,
+		NamespaceFingerprint: u.NamespaceFingerprint,
 		FunctionRef: &plan.FunctionRef{
 			FunctionId:       uint64(u.FunctionID),
 			Revision:         u.Revision,
