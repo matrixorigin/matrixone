@@ -17,6 +17,7 @@ package python
 import (
 	"context"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"strings"
 	"unicode/utf8"
 
@@ -68,20 +69,17 @@ var _ ArtifactStore = (*FileArtifactStore)(nil)
 
 func NewFileArtifactStore(fs fileservice.FileService, maxSize int64) (*FileArtifactStore, error) {
 	if fs == nil {
-		return nil, fmt.Errorf("RESOURCE_UNAVAILABLE: Python artifact store has no FileService")
+		return nil, moerr.NewInternalErrorNoCtxf("RESOURCE_UNAVAILABLE: Python artifact store has no FileService")
 	}
 	shared, err := fileservice.Get[fileservice.FileService](fs, defines.SharedFileServiceName)
 	if err != nil {
-		return nil, fmt.Errorf("RESOURCE_UNAVAILABLE: Python artifact store has no shared FileService: %w", err)
+		return nil, errutil.Wrapf(err, "RESOURCE_UNAVAILABLE: Python artifact store has no shared FileService")
 	}
 	if maxSize <= 0 {
 		maxSize = DefaultMaxArtifactBytes
 	}
 	if maxSize > DefaultMaxArtifactBytes {
-		return nil, fmt.Errorf(
-			"UNSUPPORTED_ROUTINE_VERSION: Python artifact limit %d exceeds the current contract limit %d",
-			maxSize, DefaultMaxArtifactBytes,
-		)
+		return nil, moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python artifact limit %d exceeds the current contract limit %d", maxSize, DefaultMaxArtifactBytes)
 	}
 	return &FileArtifactStore{fs: shared, maxSize: maxSize}, nil
 }
@@ -111,17 +109,17 @@ func (s *FileArtifactStore) Publish(ctx context.Context, accountID uint64, handl
 		return digest, nil
 	}
 	if !moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists) {
-		return "", fmt.Errorf("python artifact publish %s: %w", digest, err)
+		return "", errutil.Wrapf(err, "python artifact publish %s", digest)
 	}
 	// A concurrent or retrying publisher is successful only after reading and
 	// validating the existing object. This closes the write-once collision
 	// boundary instead of treating path existence as proof of content identity.
 	existing, resolveErr := s.Resolve(ctx, accountID, handler, digest)
 	if resolveErr != nil {
-		return "", fmt.Errorf("python artifact publish %s found an invalid existing object: %w", digest, resolveErr)
+		return "", errutil.Wrapf(resolveErr, "python artifact publish %s found an invalid existing object", digest)
 	}
 	if existing != source {
-		return "", fmt.Errorf("python artifact publish %s encountered a digest collision", digest)
+		return "", moerr.NewInternalErrorNoCtxf("python artifact publish %s encountered a digest collision", digest)
 	}
 	return digest, nil
 }
@@ -134,18 +132,18 @@ func (s *FileArtifactStore) Resolve(ctx context.Context, accountID uint64, handl
 		ctx = context.Background()
 	}
 	if strings.TrimSpace(handler) == "" {
-		return "", fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python artifact has no handler")
+		return "", moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python artifact has no handler")
 	}
 	if !udf.IsSHA256Digest(digest) {
-		return "", fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python artifact digest is invalid")
+		return "", moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python artifact digest is invalid")
 	}
 	path := artifactPath(accountID, digest)
 	entry, err := s.fs.StatFile(ctx, path)
 	if err != nil {
-		return "", fmt.Errorf("RESOURCE_UNAVAILABLE: Python artifact %s is unavailable: %w", digest, err)
+		return "", errutil.Wrapf(err, "RESOURCE_UNAVAILABLE: Python artifact %s is unavailable", digest)
 	}
 	if entry == nil || entry.IsDir || entry.Size <= 0 || entry.Size > s.maxSize {
-		return "", fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python artifact %s has invalid size", digest)
+		return "", moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python artifact %s has invalid size", digest)
 	}
 	data := make([]byte, entry.Size)
 	readVector := &fileservice.IOVector{
@@ -153,46 +151,46 @@ func (s *FileArtifactStore) Resolve(ctx context.Context, accountID uint64, handl
 		Entries:  []fileservice.IOEntry{{Offset: 0, Size: entry.Size, Data: data}},
 	}
 	if err := s.fs.Read(ctx, readVector); err != nil {
-		return "", fmt.Errorf("RESOURCE_UNAVAILABLE: Python artifact %s cannot be read: %w", digest, err)
+		return "", errutil.Wrapf(err, "RESOURCE_UNAVAILABLE: Python artifact %s cannot be read", digest)
 	}
 	if len(readVector.Entries) != 1 || int64(len(readVector.Entries[0].Data)) != entry.Size {
-		return "", fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python artifact %s changed size while reading", digest)
+		return "", moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python artifact %s changed size while reading", digest)
 	}
 	source := string(readVector.Entries[0].Data)
 	if !utf8.ValidString(source) {
-		return "", fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python artifact %s is not valid UTF-8", digest)
+		return "", moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python artifact %s is not valid UTF-8", digest)
 	}
 	if udf.PythonInlineArtifactDigest(handler, source) != digest {
-		return "", fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python artifact %s content digest mismatch", digest)
+		return "", moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python artifact %s content digest mismatch", digest)
 	}
 	return source, nil
 }
 
 func validateArtifactInput(accountID uint64, handler, source string, maxSize int64) (string, error) {
 	if maxSize <= 0 {
-		return "", fmt.Errorf("RESOURCE_UNAVAILABLE: Python artifact store has an invalid size limit")
+		return "", moerr.NewInternalErrorNoCtxf("RESOURCE_UNAVAILABLE: Python artifact store has an invalid size limit")
 	}
 	if strings.TrimSpace(handler) == "" {
-		return "", fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python artifact has no handler")
+		return "", moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python artifact has no handler")
 	}
 	if source == "" {
-		return "", fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python artifact source is empty")
+		return "", moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python artifact source is empty")
 	}
 	if !utf8.ValidString(source) {
-		return "", fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python artifact source is not valid UTF-8")
+		return "", moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python artifact source is not valid UTF-8")
 	}
 	if int64(len([]byte(source))) > maxSize {
-		return "", fmt.Errorf("RESOURCE_EXHAUSTED: Python artifact exceeds %d bytes", maxSize)
+		return "", moerr.NewInternalErrorNoCtxf("RESOURCE_EXHAUSTED: Python artifact exceeds %d bytes", maxSize)
 	}
 	return udf.PythonInlineArtifactDigest(handler, source), nil
 }
 
 func (s *FileArtifactStore) validate() error {
 	if s == nil || s.fs == nil {
-		return fmt.Errorf("RESOURCE_UNAVAILABLE: Python artifact store has no FileService")
+		return moerr.NewInternalErrorNoCtxf("RESOURCE_UNAVAILABLE: Python artifact store has no FileService")
 	}
 	if s.maxSize <= 0 {
-		return fmt.Errorf("RESOURCE_UNAVAILABLE: Python artifact store has an invalid size limit")
+		return moerr.NewInternalErrorNoCtxf("RESOURCE_UNAVAILABLE: Python artifact store has an invalid size limit")
 	}
 	return nil
 }

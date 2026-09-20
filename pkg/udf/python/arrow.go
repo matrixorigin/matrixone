@@ -21,8 +21,9 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"io"
 	"math"
 	"reflect"
@@ -104,11 +105,11 @@ func NewTypeDescriptor(typ types.Type) (TypeDescriptor, error) {
 		types.T_binary, types.T_varbinary, types.T_blob,
 		types.T_array_float32, types.T_array_float64:
 	default:
-		return TypeDescriptor{}, fmt.Errorf("python udf does not support MatrixOne type %s", typ.String())
+		return TypeDescriptor{}, moerr.NewInternalErrorNoCtxf("python udf does not support MatrixOne type %s", typ.String())
 	}
 	if typ.Oid == types.T_array_float32 || typ.Oid == types.T_array_float64 {
 		if typ.Width <= 0 {
-			return TypeDescriptor{}, fmt.Errorf("python udf requires a positive vector dimension for %s", typ.String())
+			return TypeDescriptor{}, moerr.NewInternalErrorNoCtxf("python udf requires a positive vector dimension for %s", typ.String())
 		}
 		d.OffsetWidth = 0
 	}
@@ -156,29 +157,29 @@ func (d TypeDescriptor) Fingerprint() (string, error) {
 func (d TypeDescriptor) Validate() error {
 	oid := types.T(d.TypeID)
 	if d.Width < 0 {
-		return fmt.Errorf("TYPE_CONTRACT: descriptor width must be non-negative")
+		return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: descriptor width must be non-negative")
 	}
 	if d.Scale < 0 {
-		return fmt.Errorf("TYPE_CONTRACT: descriptor scale must be non-negative")
+		return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: descriptor scale must be non-negative")
 	}
 	expectedOffsetWidth := int32(32)
 	if oid == types.T_uuid || oid == types.T_array_float32 || oid == types.T_array_float64 {
 		expectedOffsetWidth = 0
 	}
 	if d.OffsetWidth != expectedOffsetWidth {
-		return fmt.Errorf("TYPE_CONTRACT: descriptor offset_width must be %d for %s", expectedOffsetWidth, oid.String())
+		return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: descriptor offset_width must be %d for %s", expectedOffsetWidth, oid.String())
 	}
 	if d.JSONEncoding != "" && (oid != types.T_json || d.JSONEncoding != "canonical_text") {
-		return fmt.Errorf("TYPE_CONTRACT: unsupported JSON encoding")
+		return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: unsupported JSON encoding")
 	}
 	if oid == types.T_json && d.JSONEncoding != "canonical_text" {
-		return fmt.Errorf("TYPE_CONTRACT: JSON descriptor must use canonical_text encoding")
+		return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: JSON descriptor must use canonical_text encoding")
 	}
 	if d.TemporalEncoding != "" && (oid != types.T_date && oid != types.T_datetime && oid != types.T_timestamp || d.TemporalEncoding != "sql_zero_struct") {
-		return fmt.Errorf("TYPE_CONTRACT: unsupported temporal encoding")
+		return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: unsupported temporal encoding")
 	}
 	if (oid == types.T_date || oid == types.T_datetime || oid == types.T_timestamp) && d.TemporalEncoding != "sql_zero_struct" {
-		return fmt.Errorf("TYPE_CONTRACT: temporal descriptor must use sql_zero_struct encoding")
+		return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: temporal descriptor must use sql_zero_struct encoding")
 	}
 
 	switch oid {
@@ -186,7 +187,7 @@ func (d TypeDescriptor) Validate() error {
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64, types.T_json:
 		if d.Width != 0 || d.Scale != 0 || d.Charset != types.CharsetLegacy {
-			return fmt.Errorf("TYPE_CONTRACT: descriptor carries unused fields for %s", oid.String())
+			return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: descriptor carries unused fields for %s", oid.String())
 		}
 	case types.T_decimal64, types.T_decimal128:
 		maxPrecision := int32(38)
@@ -194,45 +195,45 @@ func (d TypeDescriptor) Validate() error {
 			maxPrecision = 18
 		}
 		if d.Width < 1 || d.Width > maxPrecision {
-			return fmt.Errorf("TYPE_CONTRACT: decimal precision %d is outside %s range", d.Width, oid.String())
+			return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: decimal precision %d is outside %s range", d.Width, oid.String())
 		}
 		if d.Scale > d.Width {
-			return fmt.Errorf("TYPE_CONTRACT: decimal scale %d exceeds precision %d", d.Scale, d.Width)
+			return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: decimal scale %d exceeds precision %d", d.Scale, d.Width)
 		}
 		if d.Charset != types.CharsetLegacy {
-			return fmt.Errorf("TYPE_CONTRACT: decimal descriptor carries a charset")
+			return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: decimal descriptor carries a charset")
 		}
 	case types.T_date:
 		if d.Width != 0 || d.Scale != 0 || d.Charset != types.CharsetLegacy {
-			return fmt.Errorf("TYPE_CONTRACT: DATE descriptor has unused or invalid fields")
+			return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: DATE descriptor has unused or invalid fields")
 		}
 	case types.T_time, types.T_datetime, types.T_timestamp:
 		if d.Width != 0 || d.Scale > 6 || d.Charset != types.CharsetLegacy {
-			return fmt.Errorf("TYPE_CONTRACT: temporal scale or charset is outside the supported range")
+			return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: temporal scale or charset is outside the supported range")
 		}
 	case types.T_char, types.T_varchar, types.T_text:
 		if d.Scale != 0 {
-			return fmt.Errorf("TYPE_CONTRACT: text descriptor carries an unused scale")
+			return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: text descriptor carries an unused scale")
 		}
 		switch d.Charset {
 		case types.CharsetLegacy, types.CharsetUTF8MB4Bin, types.CharsetUTF8:
 		default:
-			return fmt.Errorf("TYPE_CONTRACT: unsupported text charset %d", d.Charset)
+			return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: unsupported text charset %d", d.Charset)
 		}
 	case types.T_binary, types.T_varbinary, types.T_blob:
 		if d.Scale != 0 || d.Charset != types.CharsetBinary {
-			return fmt.Errorf("TYPE_CONTRACT: binary descriptor must use the binary charset")
+			return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: binary descriptor must use the binary charset")
 		}
 	case types.T_uuid:
 		if d.Width != 0 || d.Scale != 0 || d.Charset != types.CharsetLegacy {
-			return fmt.Errorf("TYPE_CONTRACT: UUID descriptor carries unused fields")
+			return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: UUID descriptor carries unused fields")
 		}
 	case types.T_array_float32, types.T_array_float64:
 		if d.Width < 1 || d.Width > types.MaxArrayDimension || d.Scale != 0 || d.Charset != types.CharsetLegacy {
-			return fmt.Errorf("TYPE_CONTRACT: vector dimension or metadata is outside the supported range")
+			return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: vector dimension or metadata is outside the supported range")
 		}
 	default:
-		return fmt.Errorf("TYPE_CONTRACT: unsupported MatrixOne type id %d", d.TypeID)
+		return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: unsupported MatrixOne type id %d", d.TypeID)
 	}
 	return nil
 }
@@ -270,7 +271,7 @@ func (d TypeDescriptor) arrowType() (arrow.DataType, error) {
 			}
 		}
 		if precision < 1 || precision > decimal128.MaxPrecision {
-			return nil, fmt.Errorf("decimal precision %d is outside Arrow's supported range", precision)
+			return nil, moerr.NewInternalErrorNoCtxf("decimal precision %d is outside Arrow's supported range", precision)
 		}
 		return &arrow.Decimal128Type{Precision: precision, Scale: d.Scale}, nil
 	case types.T_char, types.T_varchar, types.T_text, types.T_json:
@@ -289,12 +290,12 @@ func (d TypeDescriptor) arrowType() (arrow.DataType, error) {
 		return &arrow.DurationType{Unit: arrow.Microsecond}, nil
 	case types.T_array_float32:
 		if d.Width <= 0 {
-			return nil, fmt.Errorf("invalid vecf32 dimension %d", d.Width)
+			return nil, moerr.NewInternalErrorNoCtxf("invalid vecf32 dimension %d", d.Width)
 		}
 		return arrow.FixedSizeListOf(d.Width, arrow.PrimitiveTypes.Float32), nil
 	case types.T_array_float64:
 		if d.Width <= 0 {
-			return nil, fmt.Errorf("invalid vecf64 dimension %d", d.Width)
+			return nil, moerr.NewInternalErrorNoCtxf("invalid vecf64 dimension %d", d.Width)
 		}
 		return arrow.FixedSizeListOf(d.Width, arrow.PrimitiveTypes.Float64), nil
 	case types.T_date:
@@ -304,7 +305,7 @@ func (d TypeDescriptor) arrowType() (arrow.DataType, error) {
 	case types.T_timestamp:
 		return sqlTemporalType(&arrow.TimestampType{Unit: arrow.Microsecond, TimeZone: "UTC"}), nil
 	default:
-		return nil, fmt.Errorf("unsupported MatrixOne type id %d", d.TypeID)
+		return nil, moerr.NewInternalErrorNoCtxf("unsupported MatrixOne type id %d", d.TypeID)
 	}
 }
 func sqlTemporalType(value arrow.DataType) *arrow.StructType {
@@ -331,10 +332,10 @@ func (d TypeDescriptor) ValidateField(field arrow.Field) error {
 		return err
 	}
 	if field.Type == nil || !sameArrowType(field.Type, want.Type) || field.Nullable != want.Nullable {
-		return fmt.Errorf("TYPE_CONTRACT: Arrow type %s does not match %s", field.Type, want.Type)
+		return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: Arrow type %s does not match %s", field.Type, want.Type)
 	}
 	if !field.Metadata.Equal(want.Metadata) {
-		return fmt.Errorf("TYPE_CONTRACT: Arrow logical metadata does not match the frozen descriptor")
+		return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: Arrow logical metadata does not match the frozen descriptor")
 	}
 	return nil
 }
@@ -361,22 +362,22 @@ type encodedRecordBatch struct {
 	Rows   int64
 }
 
-var errArrowBatchTooLarge = errors.New("Arrow record batch exceeds the configured limit")
+var errArrowBatchTooLarge = moerr.NewInternalErrorNoCtx("Arrow record batch exceeds the configured limit")
 
 func EncodeRecordBatch(record arrow.RecordBatch, maxBytes int64) ([]ArrowFrame, error) {
 	if record == nil || record.Schema() == nil || maxBytes <= 0 {
-		return nil, fmt.Errorf("invalid Arrow record batch")
+		return nil, moerr.NewInternalErrorNoCtxf("invalid Arrow record batch")
 	}
 	collector := &flightFrameCollector{maxBytes: maxBytes}
 	writer := flight.NewRecordWriter(collector, ipc.WithSchema(record.Schema()), ipc.WithAllocator(memory.NewGoAllocator()))
 	if err := writer.Write(record); err != nil {
-		return nil, fmt.Errorf("encode Arrow record batch: %w", err)
+		return nil, errutil.Wrapf(err, "encode Arrow record batch")
 	}
 	if err := writer.Close(); err != nil {
-		return nil, fmt.Errorf("close Arrow record batch: %w", err)
+		return nil, errutil.Wrapf(err, "close Arrow record batch")
 	}
 	if len(collector.frames) < 2 {
-		return nil, fmt.Errorf("Arrow stream did not contain schema and record batch")
+		return nil, moerr.NewInternalErrorNoCtxf("Arrow stream did not contain schema and record batch")
 	}
 	return collector.frames, nil
 }
@@ -402,16 +403,16 @@ func (c *flightFrameCollector) reset(maxBytes, retainedBytes int64) {
 
 func (c *flightFrameCollector) Send(data *flight.FlightData) error {
 	if data == nil || len(data.DataHeader) == 0 {
-		return fmt.Errorf("invalid Arrow Flight frame")
+		return moerr.NewInternalErrorNoCtxf("invalid Arrow Flight frame")
 	}
 	if data.FlightDescriptor != nil || len(data.AppMetadata) != 0 {
-		return fmt.Errorf("unexpected metadata on Arrow payload frame")
+		return moerr.NewInternalErrorNoCtxf("unexpected metadata on Arrow payload frame")
 	}
 	header := append([]byte(nil), data.DataHeader...)
 	body := append([]byte(nil), data.DataBody...)
 	c.total += int64(len(header) + len(body))
 	if c.total > c.maxBytes {
-		return fmt.Errorf("%w: stream is %d bytes, limit is %d", errArrowBatchTooLarge, c.total, c.maxBytes)
+		return errutil.WrapfCauseFirst(errArrowBatchTooLarge, "stream is %d bytes, limit is %d", c.total, c.maxBytes)
 	}
 	c.frames = append(c.frames, ArrowFrame{Header: header, Body: body})
 	return nil
@@ -434,10 +435,10 @@ type inputBatchWireEncoder struct {
 
 func (e *inputBatchWireEncoder) encode(record arrow.RecordBatch, maxBytes int64) ([]ArrowFrame, error) {
 	if e == nil || e.closed || record == nil || maxBytes <= 0 {
-		return nil, fmt.Errorf("invalid Arrow record batch encoder")
+		return nil, moerr.NewInternalErrorNoCtxf("invalid Arrow record batch encoder")
 	}
 	if e.schema == nil || !record.Schema().Equal(e.schema) {
-		return nil, fmt.Errorf("Arrow record batch schema does not match the invocation schema")
+		return nil, moerr.NewInternalErrorNoCtxf("Arrow record batch schema does not match the invocation schema")
 	}
 	if e.writer == nil {
 		e.collector = &flightFrameCollector{}
@@ -451,17 +452,17 @@ func (e *inputBatchWireEncoder) encode(record arrow.RecordBatch, maxBytes int64)
 	e.collector.reset(maxBytes, e.schemaBytes)
 	if err := e.writer.Write(record); err != nil {
 		e.captureSchema()
-		return nil, fmt.Errorf("encode Arrow record batch: %w", err)
+		return nil, errutil.Wrapf(err, "encode Arrow record batch")
 	}
 	e.captureSchema()
 	if writerHadSchema {
 		if len(e.collector.frames) != 1 {
-			return nil, fmt.Errorf("Arrow writer did not emit one record frame")
+			return nil, moerr.NewInternalErrorNoCtxf("Arrow writer did not emit one record frame")
 		}
 		return []ArrowFrame{e.schemaFrame, e.collector.frames[0]}, nil
 	}
 	if len(e.collector.frames) != 2 || !e.schemaReady {
-		return nil, fmt.Errorf("Arrow stream did not contain schema and record batch")
+		return nil, moerr.NewInternalErrorNoCtxf("Arrow stream did not contain schema and record batch")
 	}
 	return append([]ArrowFrame(nil), e.collector.frames...), nil
 }
@@ -488,7 +489,7 @@ func (e *inputBatchWireEncoder) close() error {
 		return nil
 	}
 	if err := e.writer.Close(); err != nil {
-		return fmt.Errorf("close Arrow record batch encoder: %w", err)
+		return errutil.Wrapf(err, "close Arrow record batch encoder")
 	}
 	// Commit the closed state only after the writer has released its resources.
 	// A failed close remains retryable for the owning invocation cleanup path.
@@ -525,7 +526,7 @@ type inputBatchEncoder struct {
 
 func newInputBatchEncoder(inputs []*vector.Vector, args []types.Type) (*inputBatchEncoder, error) {
 	if len(inputs) != len(args) {
-		return nil, fmt.Errorf("invalid Python UDF input shape")
+		return nil, moerr.NewInternalErrorNoCtxf("invalid Python UDF input shape")
 	}
 	fields := make([]arrow.Field, len(args))
 	descriptors := make([]TypeDescriptor, len(args))
@@ -545,19 +546,14 @@ func newInputBatchEncoder(inputs []*vector.Vector, args []types.Type) (*inputBat
 			fixedWidth = false
 		}
 		if inputs[i] == nil {
-			return nil, fmt.Errorf("input column %d is missing", i)
+			return nil, moerr.NewInternalErrorNoCtxf("input column %d is missing", i)
 		}
 		actualType := inputs[i].GetType()
 		if actualType == nil {
-			return nil, fmt.Errorf("input column %d has no type", i)
+			return nil, moerr.NewInternalErrorNoCtxf("input column %d has no type", i)
 		}
 		if !actualType.Eq(typ) {
-			return nil, fmt.Errorf(
-				"input column %d type %s does not match the frozen argument type %s",
-				i,
-				actualType.DescString(),
-				typ.DescString(),
-			)
+			return nil, moerr.NewInternalErrorNoCtxf("input column %d type %s does not match the frozen argument type %s", i, actualType.DescString(), typ.DescString())
 		}
 		if inputs[i].Length() > 0 && isVarlenaInputType(typ.Oid) {
 			varlenaParameters[i] = vector.GenerateFunctionStrParameter(inputs[i])
@@ -576,7 +572,7 @@ func newInputBatchEncoder(inputs []*vector.Vector, args []types.Type) (*inputBat
 
 func (e *inputBatchEncoder) encode(record arrow.RecordBatch, maxBytes int64) ([]ArrowFrame, error) {
 	if e == nil {
-		return nil, fmt.Errorf("invalid Python UDF input encoder")
+		return nil, moerr.NewInternalErrorNoCtxf("invalid Python UDF input encoder")
 	}
 	if e.wire == nil {
 		e.wire = &inputBatchWireEncoder{schema: e.schema}
@@ -593,11 +589,11 @@ func (e *inputBatchEncoder) close() error {
 
 func (e *inputBatchEncoder) build(start, length int) (arrow.RecordBatch, *arrow.Schema, error) {
 	if e == nil || start < 0 || length <= 0 {
-		return nil, nil, fmt.Errorf("invalid Python UDF input shape")
+		return nil, nil, moerr.NewInternalErrorNoCtxf("invalid Python UDF input shape")
 	}
 	for i, input := range e.inputs {
 		if input.Length() == 0 || (!input.IsConst() && input.Length() < start+length) {
-			return nil, nil, fmt.Errorf("input column %d is shorter than batch range", i)
+			return nil, nil, moerr.NewInternalErrorNoCtxf("input column %d is shorter than batch range", i)
 		}
 	}
 	if len(e.args) == 0 {
@@ -610,7 +606,7 @@ func (e *inputBatchEncoder) build(start, length int) (arrow.RecordBatch, *arrow.
 			builder.Field(column), e.inputs[column], typ, start, length,
 		)
 		if err != nil {
-			return nil, nil, fmt.Errorf("input column %d: %w", column, err)
+			return nil, nil, errutil.Wrapf(err, "input column %d", column)
 		}
 		if bulk {
 			continue
@@ -620,7 +616,7 @@ func (e *inputBatchEncoder) build(start, length int) (arrow.RecordBatch, *arrow.
 				builder.Field(column), e.inputs[column], typ, start, row,
 				e.varlenaParameters[column],
 			); err != nil {
-				return nil, nil, fmt.Errorf("input column %d row %d: %w", column, row, err)
+				return nil, nil, errutil.Wrapf(err, "input column %d row %d", column, row)
 			}
 		}
 	}
@@ -653,7 +649,7 @@ func appendBulkFixedInputValue(
 		return valid
 	}
 	if builder == nil || v == nil {
-		return false, fmt.Errorf("input column is missing")
+		return false, moerr.NewInternalErrorNoCtxf("input column is missing")
 	}
 
 	switch typ.Oid {
@@ -739,7 +735,7 @@ func bulkFixedInputWindow[T any](v *vector.Vector, start, length int) ([]T, erro
 	values := vector.MustFixedColNoTypeCheck[T](v)
 	if v.IsConst() {
 		if len(values) == 0 {
-			return nil, fmt.Errorf("constant input column has no value")
+			return nil, moerr.NewInternalErrorNoCtxf("constant input column has no value")
 		}
 		expanded := make([]T, length)
 		for row := range expanded {
@@ -748,7 +744,7 @@ func bulkFixedInputWindow[T any](v *vector.Vector, start, length int) ([]T, erro
 		return expanded, nil
 	}
 	if start < 0 || length <= 0 || start > len(values) || length > len(values)-start {
-		return nil, fmt.Errorf("input column is shorter than batch range")
+		return nil, moerr.NewInternalErrorNoCtxf("input column is shorter than batch range")
 	}
 	return values[start : start+length], nil
 }
@@ -877,7 +873,7 @@ func appendInputValue(
 	index := sourceRow(v, start, row)
 	null := v.IsNull(uint64(index))
 	if !null && isVarlenaInputType(typ.Oid) && varlenaParameter == nil {
-		return fmt.Errorf("missing cached varlena input parameter")
+		return moerr.NewInternalErrorNoCtxf("missing cached varlena input parameter")
 	}
 	if typ.Oid == types.T_date || typ.Oid == types.T_datetime || typ.Oid == types.T_timestamp {
 		return appendTemporalInput(builder.(*array.StructBuilder), v, typ, index, null)
@@ -1032,7 +1028,7 @@ func appendInputValue(
 			b.ValueBuilder().(*array.Float64Builder).AppendValues(vector.GetArrayAt[float64](v, index), nil)
 		}
 	default:
-		return fmt.Errorf("unsupported input type %s", typ.String())
+		return moerr.NewInternalErrorNoCtxf("unsupported input type %s", typ.String())
 	}
 	return nil
 }
@@ -1046,7 +1042,7 @@ func canonicalJSONInput(value []byte) ([]byte, error) {
 	text := []byte(types.DecodeJson(value).String())
 	canonical, err := canonicalJSONTextBytes(text)
 	if err != nil {
-		return nil, fmt.Errorf("TYPE_CONTRACT: invalid JSON input: %w", err)
+		return nil, errutil.Wrapf(err, "TYPE_CONTRACT: invalid JSON input")
 	}
 	return canonical, nil
 }
@@ -1105,7 +1101,7 @@ func appendTemporalInput(builder *array.StructBuilder, v *vector.Vector, typ typ
 		builder.FieldBuilder(0).(*array.BooleanBuilder).Append(zero)
 		builder.FieldBuilder(1).(*array.TimestampBuilder).Append(arrow.Timestamp(raw))
 	default:
-		return fmt.Errorf("unsupported temporal type %s", typ.String())
+		return moerr.NewInternalErrorNoCtxf("unsupported temporal type %s", typ.String())
 	}
 	return nil
 }
@@ -1118,24 +1114,24 @@ func decimal64ToArrow(value types.Decimal64) decimal128.Num {
 
 func DecodeRecordBatch(schemaFrame, batchFrame ArrowFrame, maxBytes int64) (arrow.RecordBatch, error) {
 	if len(schemaFrame.Header) == 0 || len(batchFrame.Header) == 0 || maxBytes <= 0 {
-		return nil, fmt.Errorf("invalid Arrow output frames")
+		return nil, moerr.NewInternalErrorNoCtxf("invalid Arrow output frames")
 	}
 	if len(schemaFrame.Body) != 0 {
-		return nil, fmt.Errorf("invalid Arrow schema frame body")
+		return nil, moerr.NewInternalErrorNoCtxf("invalid Arrow schema frame body")
 	}
 	schemaInfo, err := arrowipc.InspectMessage(context.Background(), schemaFrame.Header, arrowipc.ValidationOptions{MaxMetadataBytes: arrowipc.DefaultMaxMetadataBytes, MaxBodyBytes: 0, BodyEnvelopeBytes: 0, MaxDecodedRecordBytes: 1})
 	if err != nil {
 		return nil, err
 	}
 	if schemaInfo.HeaderType != arrowipc.MessageHeaderSchema {
-		return nil, fmt.Errorf("invalid Arrow schema frame header %d", schemaInfo.HeaderType)
+		return nil, moerr.NewInternalErrorNoCtxf("invalid Arrow schema frame header %d", schemaInfo.HeaderType)
 	}
 	batchInfo, err := arrowipc.InspectMessage(context.Background(), batchFrame.Header, arrowipc.ValidationOptions{MaxMetadataBytes: arrowipc.DefaultMaxMetadataBytes, MaxBodyBytes: maxBytes, BodyEnvelopeBytes: int64(len(batchFrame.Body)), Body: batchFrame.Body, ValidateBody: true, MaxDecodedRecordBytes: maxBytes})
 	if err != nil {
 		return nil, err
 	}
 	if batchInfo.HeaderType != arrowipc.MessageHeaderRecordBatch {
-		return nil, fmt.Errorf("invalid Arrow record frame header %d", batchInfo.HeaderType)
+		return nil, moerr.NewInternalErrorNoCtxf("invalid Arrow record frame header %d", batchInfo.HeaderType)
 	}
 	// The snapshot is already the immutable validation/publication backing.
 	// Feed that backing directly to Arrow's stream reader instead of assembling
@@ -1145,15 +1141,15 @@ func DecodeRecordBatch(schemaFrame, batchFrame ArrowFrame, maxBytes int64) (arro
 	stream := newIPCStreamReader(schemaFrame, batchFrame)
 	reader, err := ipc.NewReader(stream, ipc.WithAllocator(memory.NewGoAllocator()))
 	if err != nil {
-		return nil, fmt.Errorf("decode Arrow output: %w", err)
+		return nil, errutil.Wrapf(err, "decode Arrow output")
 	}
 	defer reader.Release()
 	if !reader.Next() {
-		return nil, fmt.Errorf("decode Arrow output: %v", reader.Err())
+		return nil, moerr.NewInternalErrorNoCtxf("decode Arrow output: %v", reader.Err())
 	}
 	record := reader.RecordBatch()
 	if record == nil {
-		return nil, fmt.Errorf("decode Arrow output: missing record batch")
+		return nil, moerr.NewInternalErrorNoCtxf("decode Arrow output: missing record batch")
 	}
 	record.Retain()
 	return record, nil
@@ -1244,10 +1240,10 @@ func (r *ipcStreamReader) Read(dst []byte) (int, error) {
 
 func AppendArrowResult(descriptor TypeDescriptor, input arrow.Array, result vector.FunctionResultWrapper, mp *mpool.MPool) error {
 	if input == nil {
-		return fmt.Errorf("TYPE_CONTRACT: missing Arrow result")
+		return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: missing Arrow result")
 	}
 	if result == nil {
-		return fmt.Errorf("python udf: missing result wrapper")
+		return moerr.NewInternalErrorNoCtxf("python udf: missing result wrapper")
 	}
 	// AppendArrowResult is also the public adapter boundary used by runtimes
 	// other than the Flight Gateway. Do not let an invalid manually-built
@@ -1266,7 +1262,7 @@ func AppendArrowResult(descriptor TypeDescriptor, input arrow.Array, result vect
 		return nil
 	}
 	if mp == nil {
-		return fmt.Errorf("python udf: missing memory pool for Arrow result")
+		return moerr.NewInternalErrorNoCtxf("python udf: missing memory pool for Arrow result")
 	}
 	result.GetResultVector().SetTypeScale(descriptor.Scale)
 	typ := types.T(descriptor.TypeID)
@@ -1352,7 +1348,7 @@ func AppendArrowResult(descriptor TypeDescriptor, input arrow.Array, result vect
 				return err
 			}
 		default:
-			return fmt.Errorf("unsupported output type %s", typ.String())
+			return moerr.NewInternalErrorNoCtxf("unsupported output type %s", typ.String())
 		}
 	}
 	return nil
@@ -1384,7 +1380,7 @@ func appendJSONArrowResult(input *array.String, result vector.FunctionResultWrap
 		}
 		encoded, err := bytejson.ParseJsonByteFromString(input.Value(i))
 		if err != nil {
-			return fmt.Errorf("TYPE_CONTRACT: invalid JSON result: %w", err)
+			return errutil.Wrapf(err, "TYPE_CONTRACT: invalid JSON result")
 		}
 		if err = output.AppendBytes(encoded, false); err != nil {
 			return err
@@ -1453,7 +1449,7 @@ func appendFloat32ArrayResult(input *array.FixedSizeList, row int, null bool, re
 	items := make([]float32, end-start)
 	for i := start; i < end; i++ {
 		if values.IsNull(int(i)) {
-			return fmt.Errorf("TYPE_CONTRACT: vector child at row %d is null", row)
+			return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: vector child at row %d is null", row)
 		}
 		items[i-start] = values.Value(int(i))
 	}
@@ -1469,7 +1465,7 @@ func appendFloat64ArrayResult(input *array.FixedSizeList, row int, null bool, re
 	items := make([]float64, end-start)
 	for i := start; i < end; i++ {
 		if values.IsNull(int(i)) {
-			return fmt.Errorf("TYPE_CONTRACT: vector child at row %d is null", row)
+			return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: vector child at row %d is null", row)
 		}
 		items[i-start] = values.Value(int(i))
 	}
@@ -1481,14 +1477,14 @@ func validateArrayType(descriptor TypeDescriptor, input arrow.Array) error {
 		return err
 	}
 	if !sameArrowType(input.DataType(), want) {
-		return fmt.Errorf("TYPE_CONTRACT: output Arrow type %s does not match %s", input.DataType(), want)
+		return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: output Arrow type %s does not match %s", input.DataType(), want)
 	}
 	return nil
 }
 
 func validateArrowValueDomain(descriptor TypeDescriptor, input arrow.Array) error {
 	if input == nil {
-		return fmt.Errorf("TYPE_CONTRACT: missing Arrow result")
+		return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: missing Arrow result")
 	}
 	for row := 0; row < input.Len(); row++ {
 		if input.IsNull(row) {
@@ -1497,25 +1493,25 @@ func validateArrowValueDomain(descriptor TypeDescriptor, input arrow.Array) erro
 		switch types.T(descriptor.TypeID) {
 		case types.T_char, types.T_varchar, types.T_text:
 			if descriptor.Width > 0 && int32(utf8.RuneCountInString(input.(*array.String).Value(row))) > descriptor.Width {
-				return fmt.Errorf("TYPE_CONTRACT: string row %d exceeds width %d", row, descriptor.Width)
+				return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: string row %d exceeds width %d", row, descriptor.Width)
 			}
 		case types.T_json:
 			value := input.(*array.String).Value(row)
 			canonical, err := canonicalJSONText(value)
 			if err != nil {
-				return fmt.Errorf("TYPE_CONTRACT: JSON row %d is not valid canonical text: %w", row, err)
+				return errutil.Wrapf(err, "TYPE_CONTRACT: JSON row %d is not valid canonical text", row)
 			}
 			if canonical != value {
-				return fmt.Errorf("TYPE_CONTRACT: JSON row %d is not canonical text", row)
+				return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: JSON row %d is not canonical text", row)
 			}
 		case types.T_binary, types.T_varbinary, types.T_blob:
 			if descriptor.Width > 0 && int32(len(input.(*array.Binary).Value(row))) > descriptor.Width {
-				return fmt.Errorf("TYPE_CONTRACT: binary row %d exceeds width %d", row, descriptor.Width)
+				return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: binary row %d exceeds width %d", row, descriptor.Width)
 			}
 		case types.T_time:
 			value := types.Time(input.(*array.Duration).Value(row))
 			if !types.IsMySQLTime(value) || !hasExactMicrosecondScale(int64(value), descriptor.Scale) {
-				return fmt.Errorf("TYPE_CONTRACT: TIME row %d is outside the declared SQL domain", row)
+				return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: TIME row %d is outside the declared SQL domain", row)
 			}
 		case types.T_decimal64, types.T_decimal128:
 			precision := descriptor.Width
@@ -1526,7 +1522,7 @@ func validateArrowValueDomain(descriptor TypeDescriptor, input arrow.Array) erro
 				}
 			}
 			if !input.(*array.Decimal128).Value(row).FitsInPrecision(precision) {
-				return fmt.Errorf("TYPE_CONTRACT: decimal row %d exceeds precision %d", row, precision)
+				return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: decimal row %d exceeds precision %d", row, precision)
 			}
 		case types.T_array_float32:
 			list := input.(*array.FixedSizeList)
@@ -1534,7 +1530,7 @@ func validateArrowValueDomain(descriptor TypeDescriptor, input arrow.Array) erro
 			start, end := list.ValueOffsets(row)
 			for child := start; child < end; child++ {
 				if values.IsNull(int(child)) {
-					return fmt.Errorf("TYPE_CONTRACT: vector child at row %d is null", row)
+					return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: vector child at row %d is null", row)
 				}
 			}
 		case types.T_array_float64:
@@ -1543,54 +1539,54 @@ func validateArrowValueDomain(descriptor TypeDescriptor, input arrow.Array) erro
 			start, end := list.ValueOffsets(row)
 			for child := start; child < end; child++ {
 				if values.IsNull(int(child)) {
-					return fmt.Errorf("TYPE_CONTRACT: vector child at row %d is null", row)
+					return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: vector child at row %d is null", row)
 				}
 			}
 		case types.T_date, types.T_datetime, types.T_timestamp:
 			structValue := input.(*array.Struct)
 			zeroField, valueField := structValue.Field(0), structValue.Field(1)
 			if zeroField.IsNull(row) || valueField.IsNull(row) {
-				return fmt.Errorf("TYPE_CONTRACT: temporal row %d has a null child", row)
+				return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: temporal row %d has a null child", row)
 			}
 			zero := zeroField.(*array.Boolean).Value(row)
 			switch types.T(descriptor.TypeID) {
 			case types.T_date:
 				value := valueField.(*array.Date32).Value(row)
 				if zero && value != 0 {
-					return fmt.Errorf("TYPE_CONTRACT: DATE zero row %d has a non-zero placeholder", row)
+					return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: DATE zero row %d has a non-zero placeholder", row)
 				}
 				if !zero {
 					date := types.DaysFromUnixEpochToDate(int32(value))
 					year, month, day, _ := date.Calendar(true)
 					if !types.ValidDate(year, month, day) {
-						return fmt.Errorf("TYPE_CONTRACT: DATE row %d is outside the SQL domain", row)
+						return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: DATE row %d is outside the SQL domain", row)
 					}
 				}
 			case types.T_datetime:
 				value := valueField.(*array.Timestamp).Value(row)
 				if zero && value != 0 {
-					return fmt.Errorf("TYPE_CONTRACT: DATETIME zero row %d has a non-zero placeholder", row)
+					return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: DATETIME zero row %d has a non-zero placeholder", row)
 				}
 				if !zero {
 					absolute, ok := addUnixEpoch(int64(value))
 					if !ok || !hasExactMicrosecondScale(absolute, descriptor.Scale) {
-						return fmt.Errorf("TYPE_CONTRACT: DATETIME row %d is outside the declared SQL domain", row)
+						return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: DATETIME row %d is outside the declared SQL domain", row)
 					}
 					datetime := types.Datetime(absolute)
 					year, month, day, _ := datetime.ToDate().Calendar(true)
 					if !types.ValidDatetime(year, month, day) {
-						return fmt.Errorf("TYPE_CONTRACT: DATETIME row %d is outside the SQL domain", row)
+						return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: DATETIME row %d is outside the SQL domain", row)
 					}
 				}
 			case types.T_timestamp:
 				value := valueField.(*array.Timestamp).Value(row)
 				if zero && value != 0 {
-					return fmt.Errorf("TYPE_CONTRACT: TIMESTAMP zero row %d has a non-zero placeholder", row)
+					return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: TIMESTAMP zero row %d has a non-zero placeholder", row)
 				}
 				if !zero {
 					absolute, ok := addUnixEpoch(int64(value))
 					if !ok || absolute < int64(types.TimestampMinValue) || absolute > int64(types.TimestampMaxValue) || !hasExactMicrosecondScale(absolute, descriptor.Scale) {
-						return fmt.Errorf("TYPE_CONTRACT: TIMESTAMP row %d is outside the declared SQL domain", row)
+						return moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: TIMESTAMP row %d is outside the declared SQL domain", row)
 					}
 				}
 			}
@@ -1620,7 +1616,7 @@ func hasExactMicrosecondScale(value int64, scale int32) bool {
 func decimalFromArray(value decimal128.Num, narrow bool) (any, error) {
 	high, low := uint64(value.HighBits()), value.LowBits()
 	if narrow && !decimal128FitsDecimal64(high, low) {
-		return nil, fmt.Errorf("TYPE_CONTRACT: Decimal128 result does not fit Decimal64")
+		return nil, moerr.NewInternalErrorNoCtxf("TYPE_CONTRACT: Decimal128 result does not fit Decimal64")
 	}
 	if narrow {
 		return types.Decimal64(low), nil

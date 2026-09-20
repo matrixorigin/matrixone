@@ -19,8 +19,9 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"sort"
 	"strconv"
 	"strings"
@@ -28,7 +29,7 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-var errRoutineNamespaceBudget = errors.New("routine namespace cache budget exceeded")
+var errRoutineNamespaceBudget = moerr.NewInternalErrorNoCtx("routine namespace cache budget exceeded")
 
 const maxRoutineNamespaceRows = 65536
 const maxRoutineNamespaceBytes = 64 << 20
@@ -80,7 +81,7 @@ func routineNamespacesSQL(ids []uint64, snapshot *planpb.Snapshot) string {
 
 func decodeRoutineNamespaces(ctx context.Context, rows ExecResult) (map[uint64]string, error) {
 	if rows.GetRowCount() > maxRoutineNamespaceRows {
-		return nil, fmt.Errorf("%w: namespace rows exceed %d", errRoutineNamespaceBudget, maxRoutineNamespaceRows)
+		return nil, errutil.WrapfCauseFirst(errRoutineNamespaceBudget, "namespace rows exceed %d", maxRoutineNamespaceRows)
 	}
 	groups := make(map[uint64]map[uint64]string)
 	remaining := maxRoutineNamespaceBytes
@@ -100,7 +101,7 @@ func decodeRoutineNamespaces(ctx context.Context, rows ExecResult) (map[uint64]s
 				return nil, err
 			}
 			if len(value) > remaining {
-				return nil, fmt.Errorf("%w: namespace bytes exceed %d", errRoutineNamespaceBudget, maxRoutineNamespaceBytes)
+				return nil, errutil.WrapfCauseFirst(errRoutineNamespaceBudget, "namespace bytes exceed %d", maxRoutineNamespaceBytes)
 			}
 			remaining -= len(value)
 			fields[col] = value
@@ -120,7 +121,7 @@ func decodeRoutineNamespaces(ctx context.Context, rows ExecResult) (map[uint64]s
 			groups[numbers[0]] = make(map[uint64]string)
 		}
 		if _, duplicate := groups[numbers[0]][numbers[1]]; duplicate {
-			return nil, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: duplicate routine namespace member")
+			return nil, moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: duplicate routine namespace member")
 		}
 		groups[numbers[0]][numbers[1]] = hex.EncodeToString(digest[:])
 	}
