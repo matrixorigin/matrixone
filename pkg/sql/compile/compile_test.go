@@ -2394,6 +2394,21 @@ func TestCompileShuffleGroupGatesHLLByProtocolVersion(t *testing.T) {
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion77)
 	require.True(t, c.supportsRemoteHLL())
 	require.True(t, c.canCompileShuffleGroup(aggNode))
+
+	vectorHLL := &plan.Expr{
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: "hll_add_agg"},
+			Args: []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_array_float32)}}},
+		}},
+	}
+	aggNode.AggList = []*plan.Expr{vectorHLL}
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion87)
+	require.False(t, c.supportsRemoteCanonicalHLLAdd())
+	require.False(t, c.canCompileShuffleGroup(aggNode),
+		"vector HLL_ADD_AGG must stay local before MORPC v88")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion88)
+	require.True(t, c.supportsRemoteCanonicalHLLAdd())
+	require.True(t, c.canCompileShuffleGroup(aggNode))
 }
 
 func TestCompileShuffleGroupGatesAggregateWireByProtocolVersion(t *testing.T) {
