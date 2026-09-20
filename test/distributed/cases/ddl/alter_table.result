@@ -357,7 +357,7 @@ n  ¦  DATETIME(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 o  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 p  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 q  ¦  DECIMAL(5,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-r  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+r  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦  
 alter table t5 drop column b, drop column c, drop column d, drop column e, drop column f, drop column g, drop column h;
 show columns from t5;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
@@ -371,14 +371,14 @@ n  ¦  DATETIME(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 o  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 p  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 q  ¦  DECIMAL(5,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-r  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+r  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦  
 alter table t5 drop column i, drop column j, drop column k, drop column l, drop column m, drop column n, drop column o;
 show columns from t5;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 a  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 p  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 q  ¦  DECIMAL(5,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-r  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
+r  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦  
 alter table t5 drop column p, drop column q, drop column r;
 show columns from t5;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀

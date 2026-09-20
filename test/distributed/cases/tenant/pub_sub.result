@@ -186,7 +186,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 a    INT(32)    NO    PRI    null        
 desc sys_tbl_2;
 Field    Type    Null    Key    Default    Extra    Comment
-b    TEXT(0)    YES        null        
+b    TEXT    YES        null        
 select * from sys_tbl_1;
 a
 1
@@ -208,7 +208,7 @@ Tables_in_sub2
 acc2_tbl_1
 desc acc2_tbl_1;
 Field    Type    Null    Key    Default    Extra    Comment
-q    TEXT(0)    YES        null        
+q    TEXT    YES        null        
 c    INT(32)    NO    PRI    null    auto_increment    
 select * from acc2_tbl_1;
 q    c
@@ -224,7 +224,7 @@ acc2_pub_1    acc2    acc2_db_1    *        2024-08-03 15:44:51    sub2    2024-
 sys_pub_1    sys    sys_db_1    *        2024-08-03 15:44:51    sub1    2024-08-03 15:44:51    0
 desc acc2_tbl_1;
 Field    Type    Null    Key    Default    Extra    Comment
-q    TEXT(0)    YES        null        
+q    TEXT    YES        null        
 c    INT(32)    NO    PRI    null    auto_increment    
 select * from acc2_tbl_1;
 q    c
@@ -248,7 +248,7 @@ acc2_tbl_1
 acc2_tbl_2
 desc acc2_tbl_2;
 Field    Type    Null    Key    Default    Extra    Comment
-c    TEXT(0)    YES        null        
+c    TEXT    YES        null        
 select * from sub2.acc2_tbl_2;
 c
 drop database acc2_db_1;
