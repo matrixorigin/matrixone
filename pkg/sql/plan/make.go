@@ -972,6 +972,10 @@ func makePlan2CastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr,
 // preservation. DDL-specific error mapping is applied by the DDL validation
 // layer rather than changing cast_strict's execution contract.
 func makePlan2AssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
+	if types.T(targetType.Id).IsArrayRelate() {
+		// 生成列即使类型元数据相同，也必须校验实际载荷的维度。
+		return forceAssignmentCastExprWithName(ctx, expr, targetType, "cast")
+	}
 	funcName := "cast"
 	if useAssignmentStrictCast(targetType) {
 		funcName = "cast_strict"

@@ -243,8 +243,9 @@ insert into t1 values(60,"[6, 0, 8, 10,129]",2,5,3.26,4.89,1.26);
 insert into t1 values(20,"[ 9, 18, 1, 4, 132]",6,1,9.36,6.9,5.6);
 select c2+c3 from t1;
 
--- Except
+-- Except: mixed F32/F64 columns use the same F64 common type in both branch orders.
 select * from t8 except select * from t9;
+select * from t9 except select * from t8;
 
 -- infinity scenario
 select cast("[76875768584509877574546435800000005,8955885757767774774774774456466]" as vecf32(2)) *623585864455;

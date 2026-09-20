@@ -156,6 +156,22 @@ func TestHnswSearchFloat32_BadQueryType(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestHnswSearchCosineRejected(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
+	idxcfg.Usearch.Metric = usearch.Cosine
+	s := NewHnswSearch[float32](idxcfg, vectorindex.IndexTableConfig{})
+
+	_, _, err := s.Search(sqlproc, []float32{1e-20, 1e-20, 1e-20}, vectorindex.RuntimeConfig{
+		Limit:        1,
+		OrigFuncName: "cosine_distance",
+	})
+	require.ErrorContains(t, err, "hnsw cosine search is disabled")
+}
+
 func TestBoundedHnswSearchLimits(t *testing.T) {
 	// requested >= every file: each file returns its full cardinality, result = total.
 	perIndex, resultLimit := boundedHnswSearchLimits([]uint{3, 7}, ^uint(0))

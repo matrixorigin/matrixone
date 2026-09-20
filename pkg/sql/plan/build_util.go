@@ -2053,22 +2053,26 @@ func remapGeneratedColExprPositions(expr *plan.Expr, positions map[int32]int32) 
 // wrappers to cast_assign and uses cast_ignore for INSERT/UPDATE IGNORE. This
 // keeps generated-column assignment semantics compatible across catalog
 // versions without rewriting catalog rows.
-func (builder *QueryBuilder) applyGeneratedColumnAssignmentCast(expr *plan.Expr, isIgnore bool) *plan.Expr {
+func (builder *QueryBuilder) applyGeneratedColumnAssignmentCast(expr *plan.Expr, isIgnore bool) (*plan.Expr, error) {
 	if expr == nil {
-		return expr
+		return expr, nil
 	}
 	f := expr.GetF()
+	if types.T(expr.Typ.Id).IsArrayRelate() && needsSameTypeAssignmentCast(expr.Typ) {
+		// 旧目录中的生成列表达式可能没有赋值 CAST；执行新 DML 时补齐，
+		// 已有的根 CAST 则继续复用，避免重复复制每个向量。
+		if f != nil && f.Func != nil && f.Func.ObjName == "cast" {
+			return expr, nil
+		}
+		return forceAssignmentCastExprWithName(builder.GetContext(), expr, expr.Typ, "cast")
+	}
 	if f == nil || f.Func == nil ||
 		(f.Func.ObjName != "cast_assign" && f.Func.ObjName != "cast_strict") ||
 		len(f.Args) == 0 {
-		return expr
+		return expr, nil
 	}
 	funcName := assignmentCastFunctionName(expr.Typ, isIgnore, builder.compCtx.GetProcess())
-	assignmentCast, err := forceAssignmentCastExprWithName(builder.GetContext(), f.Args[0], expr.Typ, funcName)
-	if err != nil {
-		return expr
-	}
-	return assignmentCast
+	return forceAssignmentCastExprWithName(builder.GetContext(), f.Args[0], expr.Typ, funcName)
 }
 
 // substituteColRefsInExpr replaces ColRef(0, colIdx) in a generated column expression
