@@ -533,8 +533,8 @@ func TestPersistedFollowupExpressionProtocolAdmission(t *testing.T) {
 		required int64
 	}{
 		{
-			name:     "character substring keeps the legacy protocol floor",
-			required: 0,
+			name:     "bounded character substring is v86",
+			required: defines.MORPCVersion86,
 			expr: func() *planpb.Expr {
 				return mustBindPersistedFollowupExpr(t, proc.Ctx, "substring", []*planpb.Expr{
 					column(types.New(types.T_varchar, 64, 0)),
