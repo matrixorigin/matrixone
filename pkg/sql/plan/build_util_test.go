@@ -1119,22 +1119,30 @@ func TestApplyGeneratedColumnAssignmentCastCompatibility(t *testing.T) {
 		stored, err := forceCastExprWithName(context.Background(), DeepCopyExpr(source), target, storedName)
 		require.NoError(t, err)
 
-		normal := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(stored), false)
+		normal, err := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(stored), false)
+		require.NoError(t, err)
 		require.Equal(t, "cast_assign", normal.GetF().GetFunc().GetObjName())
 
-		ignore := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(stored), true)
+		ignore, err := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(stored), true)
+		require.NoError(t, err)
 		require.Equal(t, "cast_ignore", ignore.GetF().GetFunc().GetObjName())
 	}
 
-	require.Nil(t, builder.applyGeneratedColumnAssignmentCast(nil, false))
-	require.Same(t, source, builder.applyGeneratedColumnAssignmentCast(source, false))
+	unchanged, err := builder.applyGeneratedColumnAssignmentCast(nil, false)
+	require.NoError(t, err)
+	require.Nil(t, unchanged)
+	unchanged, err = builder.applyGeneratedColumnAssignmentCast(source, false)
+	require.NoError(t, err)
+	require.Same(t, source, unchanged)
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion4)
 	stored, err := forceCastExprWithName(context.Background(), DeepCopyExpr(source), target, "cast_assign")
 	require.NoError(t, err)
-	normal := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(stored), false)
+	normal, err := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(stored), false)
+	require.NoError(t, err)
 	require.Equal(t, "cast_strict", normal.GetF().GetFunc().GetObjName())
-	ignore := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(stored), true)
+	ignore, err := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(stored), true)
+	require.NoError(t, err)
 	require.Equal(t, "cast", ignore.GetF().GetFunc().GetObjName())
 }
 

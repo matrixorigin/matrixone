@@ -2805,10 +2805,13 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			if col.GeneratedCol == nil {
 				continue
 			}
-			genExpr := builder.applyGeneratedColumnAssignmentCast(
+			genExpr, err := builder.applyGeneratedColumnAssignmentCast(
 				DeepCopyExpr(col.GeneratedCol.Expr),
 				builder.isInsertIgnore,
 			)
+			if err != nil {
+				return 0, err
+			}
 			replaceColRefTag(genExpr, 0, scanTag)
 			updateExprs[col.Name] = genExpr
 			updateColIdxList = append(updateColIdxList, int32(i))
@@ -5151,10 +5154,13 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 
 	for _, i := range generatedColIdxs {
 		col := tableDef.Cols[i]
-		genExpr := builder.applyGeneratedColumnAssignmentCast(
+		genExpr, err := builder.applyGeneratedColumnAssignmentCast(
 			DeepCopyExpr(col.GeneratedCol.Expr),
 			builder.isInsertIgnore,
 		)
+		if err != nil {
+			return 0, nil, nil, -1, err
+		}
 		proj1Pos := genColIdxToProj1Pos[i]
 		columnExprs[int32(i)] = genExpr
 		colIdxToProjPos[int32(i)] = int32(proj1Pos)
