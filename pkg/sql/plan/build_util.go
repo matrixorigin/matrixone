@@ -302,8 +302,6 @@ func getTypeFromAstWithoutCharset(ctx context.Context, typ tree.ResolvableTypeRe
 				// The protocol column-length field is a uint32, but Connector/J
 				// exposes LONGTEXT's effective signed maximum as its precision.
 				return plan.Type{Id: int32(types.T_text), Width: types.MaxLongTextLen}, nil
-			case "text":
-				return plan.Type{Id: int32(types.T_text), Width: types.MaxStringSize}, nil
 			}
 
 			return plan.Type{Id: int32(types.T_text)}, nil

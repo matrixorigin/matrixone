@@ -2063,6 +2063,17 @@ func setMysqlBinaryBlobColumnMetadata(col *MysqlColumn, length uint32) {
 	col.SetFlag(col.Flag() | uint16(defines.BLOB_FLAG|defines.BINARY_FLAG))
 }
 
+// setMysqlOpaqueBinaryBlobColumnMetadata describes an internal binary payload
+// whose chunk size is not a MySQL BLOB family declaration. Keep it as generic
+// BLOB metadata instead of deriving TINY/MEDIUM/LONG_BLOB from the transport
+// limit.
+func setMysqlOpaqueBinaryBlobColumnMetadata(col *MysqlColumn, length uint32) {
+	col.SetColumnType(defines.MYSQL_TYPE_BLOB)
+	col.SetCharset(charsetBinary)
+	col.SetLength(length)
+	col.SetFlag(col.Flag() | uint16(defines.BLOB_FLAG|defines.BINARY_FLAG))
+}
+
 const mysqlDecimalNotSpecified = 0x1f
 
 func setMysqlColumnTypeMetadata(col *MysqlColumn, typ types.Type) {

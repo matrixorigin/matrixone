@@ -499,7 +499,7 @@ func TestTextBlobFamilyAssignmentWidthUsesBytes(t *testing.T) {
 		}
 		got, null := vector.GenerateFunctionStrParameter(result.GetResultVector()).GetStrValue(0)
 		require.False(t, null)
-		return got, session.warnings, nil
+		return bytes.Clone(got), session.warnings, nil
 	}
 
 	for _, tc := range []struct {
@@ -744,6 +744,10 @@ func TestGeometryToTextAssignmentWidthFallback(t *testing.T) {
 	require.Error(t, err, "cast_strict must enforce TEXT-family byte width")
 
 	nonstrictProc := testutil.NewProcess(t)
+	nonstrictProc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		require.Equal(t, "sql_mode", name)
+		return "", nil
+	})
 	warnings := &numericWarningSession{}
 	nonstrictProc.Session = warnings
 	got, err := castGeometryToString(t, nonstrictProc, wkt, types.T_geometry, targetType, targetWidth, false, NewAssignCast)

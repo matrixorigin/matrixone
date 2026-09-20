@@ -1086,8 +1086,10 @@ func TestJSONSourceCastsAreNotSkipped(t *testing.T) {
 	require.Equal(t, int32(types.T_text), expr.Typ.Id)
 	require.Equal(t, "cast", expr.GetF().Func.ObjName)
 
-	_, err = makePlan2CastExpr(ctx, DeepCopyExpr(jsonExpr), plan.Type{Id: int32(types.T_blob)})
-	require.Error(t, err)
+	blobExpr, err := makePlan2CastExpr(ctx, DeepCopyExpr(jsonExpr), plan.Type{Id: int32(types.T_blob)})
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_blob), blobExpr.Typ.Id)
+	require.Equal(t, "cast", blobExpr.GetF().Func.ObjName)
 }
 
 func TestJSONComparisonsCastBothOperandsToCommonType(t *testing.T) {

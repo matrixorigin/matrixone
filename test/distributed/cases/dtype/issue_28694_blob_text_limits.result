@@ -1,14 +1,12 @@
---- @metacmp(false)
-
 drop database if exists issue_28694_blob_text_limits;
 create database issue_28694_blob_text_limits;
 use issue_28694_blob_text_limits;
 set @issue_28694_old_sql_mode = @@session.sql_mode;
 create table limits (
-    id int primary key,
-    tinyblob_col tinyblob,
-    text_col text,
-    blob_col blob
+id int primary key,
+tinyblob_col tinyblob,
+text_col text,
+blob_col blob
 );
 set session sql_mode = 'STRICT_TRANS_TABLES';
 insert into limits (id, tinyblob_col) values (1, repeat('a', 256));
@@ -32,7 +30,7 @@ invalid input: data too long
 insert into limits (id, tinyblob_col, text_col, blob_col)
 values (20, 'ok', 'ok', 'ok')
 on duplicate key update
-    tinyblob_col = repeat('g', 256), text_col = repeat('h', 65536), blob_col = repeat('i', 65536);
+tinyblob_col = repeat('g', 256), text_col = repeat('h', 65536), blob_col = repeat('i', 65536);
 -- @regex("(?i)(data too long|data out of range)", true)
 invalid input: data too long
 select id, octet_length(tinyblob_col), octet_length(text_col), octet_length(blob_col)
@@ -82,7 +80,7 @@ id    octet_length(tinyblob_col)    octet_length(text_col)    octet_length(blob_
 insert into limits (id, tinyblob_col, text_col, blob_col)
 values (11, 'ok', 'ok', 'ok')
 on duplicate key update
-    tinyblob_col = repeat('g', 256), text_col = repeat('h', 65536), blob_col = repeat('i', 65536);
+tinyblob_col = repeat('g', 256), text_col = repeat('h', 65536), blob_col = repeat('i', 65536);
 select @@warning_count;
 @@warning_count
 3
@@ -111,9 +109,9 @@ id    octet_length(tinyblob_col)    octet_length(text_col)    octet_length(blob_
 11    255    65535    65535
 14    255    65535    65535
 select
-    sum(lower(data_type) = 'tinyblob' and lower(column_type) = 'tinyblob' and character_maximum_length = 255 and character_octet_length = 255) as tinyblob_metadata,
-    sum(lower(data_type) = 'text' and lower(column_type) = 'text' and character_maximum_length = 65535 and character_octet_length = 65535) as text_metadata,
-    sum(lower(data_type) = 'blob' and lower(column_type) = 'blob' and character_maximum_length = 65535 and character_octet_length = 65535) as blob_metadata
+sum(lower(data_type) = 'tinyblob' and lower(column_type) = 'tinyblob' and character_maximum_length = 255 and character_octet_length = 255) as tinyblob_metadata,
+sum(lower(data_type) = 'text' and lower(column_type) = 'text' and character_maximum_length = 65535 and character_octet_length = 65535) as text_metadata,
+sum(lower(data_type) = 'blob' and lower(column_type) = 'blob' and character_maximum_length = 65535 and character_octet_length = 65535) as blob_metadata
 from information_schema.columns
 where table_schema = database() and table_name = 'limits';
 tinyblob_metadata    text_metadata    blob_metadata

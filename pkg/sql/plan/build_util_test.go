@@ -361,7 +361,7 @@ func TestGetTypeFromAstPreservesTextFamilyCapacity(t *testing.T) {
 		sql   string
 		width int32
 	}{
-		{name: "text", sql: "text", width: types.MaxStringSize},
+		{name: "text", sql: "text", width: 0},
 		{name: "mediumtext", sql: "mediumtext", width: types.MaxMediumTextLen},
 		{name: "longtext", sql: "longtext", width: types.MaxLongTextLen},
 	} {
