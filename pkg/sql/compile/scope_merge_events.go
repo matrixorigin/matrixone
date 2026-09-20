@@ -289,11 +289,18 @@ func (m *mergeRunEventState) startParent() {
 	// a ready worker while its children or remote receivers are active.
 	m.addTask()
 	if err := m.scheduler.submitDependency("merge-parent", func() {
-		err := m.runParentTask()
-		m.enqueueEvent(mergeRunEvent{
-			kind:   mergeRunParentDone,
-			result: newScopeRunResult(err, m.s),
+		err := m.runParentTaskAsync(func(runErr error) {
+			m.enqueueEvent(mergeRunEvent{
+				kind:   mergeRunParentDone,
+				result: newScopeRunResult(runErr, m.s),
+			})
 		})
+		if err != nil {
+			m.enqueueEvent(mergeRunEvent{
+				kind:   mergeRunParentDone,
+				result: newScopeRunResult(err, m.s),
+			})
+		}
 	}); err != nil {
 		m.enqueueEvent(mergeRunEvent{
 			kind:   mergeRunParentDone,
@@ -302,9 +309,9 @@ func (m *mergeRunEventState) startParent() {
 	}
 }
 
-func (m *mergeRunEventState) runParentTask() error {
+func (m *mergeRunEventState) runParentTaskAsync(done func(error)) error {
 	if !m.s.LazyPreScopes {
-		return m.runParent()
+		return m.s.parallelRunAsync(m.c, done)
 	}
 
 	clearStarter, deferFirst, err := installSequentialBranchStarter(
@@ -315,8 +322,8 @@ func (m *mergeRunEventState) runParentTask() error {
 	if err != nil {
 		return err
 	}
-	defer clearStarter()
-	defer func() {
+	finish := func(runErr error) {
+		clearStarter()
 		cause := context.Cause(m.context())
 		if cause == nil {
 			cause = context.Canceled
@@ -327,13 +334,19 @@ func (m *mergeRunEventState) runParentTask() error {
 			}
 			m.claimUnstartedBranch(i, cause)
 		}
-	}()
+		done(runErr)
+	}
 	if !deferFirst {
 		if err := m.activatePreScope(0); err != nil {
-			return err
+			finish(err)
+			return nil
 		}
 	}
-	return m.runParent()
+	if err := m.s.parallelRunAsync(m.c, finish); err != nil {
+		finish(err)
+		return nil
+	}
+	return nil
 }
 
 func (m *mergeRunEventState) waitPreScope(i int) error {
@@ -417,15 +430,6 @@ func (m *mergeRunEventState) activatePreScope(i int) error {
 		})
 	}
 	return nil
-}
-
-func (m *mergeRunEventState) runParent() (err error) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			err = moerr.ConvertPanicError(m.context(), recovered)
-		}
-	}()
-	return m.s.ParallelRun(m.c)
 }
 
 func (m *mergeRunEventState) runPreScope(scope *Scope) (err error) {

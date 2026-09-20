@@ -41,9 +41,12 @@ ordering-sensitive TP merge topologies. Child scope, parent pipeline, and
 remote-notify completion are events; the state advances from short ready tasks
 without occupying a ready worker while waiting. The public synchronous
 `MergeRun` entry point remains for nested/compatibility callers whose parent
-operator still invokes a child merge inline. The dependency lane still starts
-a query-owned goroutine for blocking VM and network operations. It is a
-deliberate blocking-island boundary, not the final fixed-worker VM scheduler.
+operator still invokes a child merge inline. The event parent path now admits
+parallel-scope construction and nested MergeRun completion asynchronously;
+remaining child operators may still use the synchronous compatibility path.
+The dependency lane still starts a query-owned goroutine for blocking VM and
+network operations. It is a deliberate blocking-island boundary, not the
+final fixed-worker VM scheduler.
 
 The VM pipeline now exposes `pipeline.Continuation`. `Prepare` and output
 metadata setup are performed once, and each `Step` executes one `vm.Exec`

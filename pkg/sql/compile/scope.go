@@ -1076,6 +1076,76 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 	return err
 }
 
+// parallelRunAsync separates parallel-scope construction from the completion
+// event of the resulting pipeline. It is used by the event-driven MergeRun
+// parent state: when reader expansion creates a child Merge scope, admission
+// returns immediately and that child publishes the parent completion later.
+// The synchronous ParallelRun API remains the compatibility adapter for
+// callers that still need a blocking error return.
+func (s *Scope) parallelRunAsync(c *Compile, done func(error)) (err error) {
+	if s == nil {
+		if done != nil {
+			done(nil)
+		}
+		return nil
+	}
+	if c == nil {
+		return moerr.NewInternalErrorNoCtx("nil compile for async ParallelRun")
+	}
+	if done == nil {
+		return moerr.NewInternalErrorNoCtx("nil async ParallelRun completion")
+	}
+
+	var parallelScope *Scope
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = moerr.ConvertPanicError(s.Proc.Ctx, recovered)
+		}
+		if err != nil && parallelScope == nil {
+			queryCtx := scopeRunQueryContext(s.Proc)
+			normalizedErr, normalized := normalizeScopeRunError(err, s.Proc.Ctx, queryCtx)
+			if isScopeCancellationError(err) {
+				reportParallelScopeBuildCancellation(s, err, normalizedErr, normalized, queryCtx)
+			}
+			pipeline.NewMerge(s.RootOp).Cleanup(s.Proc, normalizedErr != nil, c.isPrepare, normalizedErr)
+		}
+	}()
+
+	switch {
+	case s.IsLoad:
+		parallelScope, err = buildLoadParallelRun(s, c)
+	case s.isTableScan():
+		parallelScope, err = buildScanParallelRun(s, c)
+	case s.IsTbFunc:
+		parallelScope, err = buildLoadParallelRun(s, c)
+	default:
+		parallelScope = s
+	}
+	if err != nil {
+		return err
+	}
+
+	if parallelScope == s {
+		// Keep the blocking VM island off the ready queue. Its completion is
+		// still delivered as an event to the caller.
+		return c.submitScopeDependency("parallel-scope-run", func() {
+			runErr := func() (runErr error) {
+				defer func() {
+					if recovered := recover(); recovered != nil {
+						runErr = moerr.ConvertPanicError(s.Proc.Ctx, recovered)
+					}
+				}()
+				return parallelScope.Run(c)
+			}()
+			done(runErr)
+		})
+	}
+
+	s.ScopeAnalyzer.Stop()
+	setContextForParallelScope(parallelScope, s.Proc.Ctx, s.Proc.Cancel)
+	return parallelScope.mergeRunAsync(c, done)
+}
+
 // buildLoadParallelRun deal one case of scope.ParallelRun.
 // this function will create a pipeline to load in parallel.
 func buildLoadParallelRun(s *Scope, c *Compile) (*Scope, error) {
