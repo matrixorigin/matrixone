@@ -2896,6 +2896,37 @@ except Exception:
             )
         self.assertEqual([False], result.column(0).to_pylist())
 
+    def test_handler_preserves_runtime_pythonpath(self):
+        descriptor = {"type_id": worker.BOOL, "offset_width": 32}
+        batch = pa.RecordBatch.from_arrays(
+            [pa.array([True], type=pa.bool_())], ["arg_0"]
+        )
+        request = {
+            "source": (
+                "import os\n"
+                "def f(ctx, x):\n"
+                "    return os.environ.get('PYTHONPATH', '').startswith('matrixone-test-pythonpath')"
+            ),
+            "handler": "f",
+            "mode": worker.MODE_SCALAR,
+            "null_policy": worker.NULL_CALL,
+            "sdk_version": worker.SDK_VERSION,
+            "context": None,
+            "args": [descriptor],
+            "return": descriptor,
+            "max_batch_bytes": 1 << 20,
+            "input": worker._serialize_record_batch(batch),
+        }
+        inherited = os.environ.get("PYTHONPATH", "")
+        runtime_path = "matrixone-test-pythonpath"
+        if inherited:
+            runtime_path += os.pathsep + inherited
+        with mock.patch.dict(os.environ, {"PYTHONPATH": runtime_path}, clear=False):
+            result = worker._deserialize_record_batch(
+                worker._run_handler_process(None, request, 3)
+            )
+        self.assertEqual([True], result.column(0).to_pylist())
+
     def test_handler_cannot_forge_completion_on_stdout(self):
         descriptor = {"type_id": worker.INT64, "offset_width": 32}
         batch = pa.RecordBatch.from_arrays([pa.array([77], type=pa.int64())], ["arg_0"])
