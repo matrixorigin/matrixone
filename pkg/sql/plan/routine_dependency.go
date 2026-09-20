@@ -60,6 +60,7 @@ func (builder *QueryBuilder) recordRoutinePlanDependency(call *planpb.RoutineCal
 			DatabaseId:       ref.DatabaseId,
 		},
 		Language:              call.Language,
+		NamespaceFingerprint:  call.NamespaceFingerprint,
 		ContractVersion:       call.ContractVersion,
 		DefinitionFingerprint: "",
 		Volatility:            call.Volatility,
@@ -94,7 +95,8 @@ func routinePlanDependenciesEqual(left, right *planpb.RoutinePlanDependency) boo
 	if left == nil || right == nil || left.FunctionRef == nil || right.FunctionRef == nil {
 		return left == right
 	}
-	return left.Language == right.Language &&
+	return left.NamespaceFingerprint == right.NamespaceFingerprint &&
+		left.Language == right.Language &&
 		left.ContractVersion == right.ContractVersion &&
 		left.DefinitionFingerprint == right.DefinitionFingerprint &&
 		left.ArtifactDigest == right.ArtifactDigest &&

@@ -1,0 +1,57 @@
+drop database if exists udf_python_namespace_bvt;
+create database udf_python_namespace_bvt;
+use udf_python_namespace_bvt;
+create table namespace_values(x smallint);
+insert into namespace_values values (1),(2);
+create function overload(x bigint) returns bigint language python as 'def overload(ctx,x): return x + 100' handler 'overload';
+select overload(x) as result from namespace_values order by x;
+➤ result[-5,64,0]  𝄀
+101  𝄀
+102
+prepare namespace_plan from 'select overload(x) as result from namespace_values order by x';
+execute namespace_plan;
+➤ result[-5,64,0]  𝄀
+101  𝄀
+102
+use udf_python_namespace_bvt;
+create function overload(x smallint) returns bigint language python as 'def overload(ctx,x): return x + 200' handler 'overload';
+execute namespace_plan;
+➤ result[-5,64,0]  𝄀
+201  𝄀
+202
+select overload(x) as result from namespace_values order by x;
+➤ result[-5,64,0]  𝄀
+201  𝄀
+202
+use udf_python_namespace_bvt;
+create or replace function overload(x smallint) returns bigint language python as 'def overload(ctx,x): return x + 300' handler 'overload';
+execute namespace_plan;
+➤ result[-5,64,0]  𝄀
+301  𝄀
+302
+select overload(x) as result from namespace_values order by x;
+➤ result[-5,64,0]  𝄀
+301  𝄀
+302
+use udf_python_namespace_bvt;
+drop function overload(smallint);
+execute namespace_plan;
+➤ result[-5,64,0]  𝄀
+101  𝄀
+102
+select overload(x) as result from namespace_values order by x;
+➤ result[-5,64,0]  𝄀
+101  𝄀
+102
+use udf_python_namespace_bvt;
+create function overload(x smallint) returns bigint language python as 'def overload(ctx,x): return x + 400' handler 'overload';
+execute namespace_plan;
+➤ result[-5,64,0]  𝄀
+401  𝄀
+402
+select overload(x) as result from namespace_values order by x;
+➤ result[-5,64,0]  𝄀
+401  𝄀
+402
+deallocate prepare namespace_plan;
+drop database udf_python_namespace_bvt;
