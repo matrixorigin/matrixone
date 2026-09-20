@@ -876,7 +876,35 @@ func TestExportedAssignmentCastUsesRuntimeSQLModeSemantics(t *testing.T) {
 		plan.Type{Id: int32(types.T_date)},
 	)
 	require.NoError(t, err)
-	require.Equal(t, "cast_strict", dateExpr.GetF().GetFunc().GetObjName())
+	require.Equal(t, "cast_assign", dateExpr.GetF().GetFunc().GetObjName())
+}
+
+func TestTemporalStringAssignmentIsDeferredToExecution(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion5)
+
+	for _, target := range []struct {
+		name string
+		typ  types.Type
+	}{
+		{name: "date", typ: types.T_date.ToType()},
+		{name: "datetime", typ: types.T_datetime.ToTypeWithScale(6)},
+		{name: "timestamp", typ: types.T_timestamp.ToTypeWithScale(6)},
+	} {
+		t.Run(target.name, func(t *testing.T) {
+			expr, err := MakeInsertValueConstExpr(
+				proc,
+				tree.NewNumVal("2024-02-30", "2024-02-30", false, tree.P_char),
+				&target.typ,
+				false,
+			)
+			require.NoError(t, err)
+			require.Equal(t, "cast_assign", expr.GetF().GetFunc().GetObjName())
+			require.Equal(t, int32(types.T_varchar), expr.GetF().GetArgs()[0].Typ.Id)
+		})
+	}
 }
 
 func TestForceAssignmentCastExprUsesAssignmentSemantics(t *testing.T) {

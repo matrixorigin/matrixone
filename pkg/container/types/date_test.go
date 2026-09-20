@@ -291,6 +291,17 @@ func TestParseDateCastWithInvalidDatesPreservesCalendarFields(t *testing.T) {
 	require.Equal(t, Date(-1), strict)
 }
 
+func TestInvalidDateCalendarCalculationsNormalizeOverflowFields(t *testing.T) {
+	february30 := DateFromCalendarAllowInvalid(2024, 2, 30)
+	april31 := DateFromCalendarAllowInvalid(2024, 4, 31)
+
+	// Calendar functions use the same overflow semantics as time.Date while
+	// String/Calendar(true) continue to preserve the tagged input fields.
+	require.Equal(t, Weekday(4), february30.DayOfWeek2()) // 2024-03-01
+	require.Equal(t, uint8(18), april31.WeekOfYear2())    // 2024-05-01
+	require.Equal(t, uint16(122), april31.DayOfYear())    // 2024-05-01
+}
+
 func TestCalendarCompareOrdersInvalidDatesByFields(t *testing.T) {
 	valid, err := ParseDateCast("2024-03-01")
 	require.NoError(t, err)

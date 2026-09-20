@@ -945,8 +945,9 @@ func NewStrictCast(parameters []*vector.Vector, result vector.FunctionResultWrap
 
 // NewAssignCast is used by DML assignment paths (INSERT/UPDATE projection) for
 // SQL-mode-sensitive targets. It applies strict/non-strict behavior at runtime
-// for width-constrained strings, YEAR values, and TIME column boundaries. For
-// CHAR/VARCHAR only, excess trailing spaces are accepted in strict mode too.
+// for temporal values, width-constrained strings, YEAR values, and TIME column
+// boundaries. For CHAR/VARCHAR only, excess trailing spaces are accepted in
+// strict mode too.
 func NewAssignCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	mode := castModeAssignment
 	if isStrictSqlMode(proc) {

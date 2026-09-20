@@ -419,6 +419,19 @@ func isEncodedInvalidDate(d Date) bool {
 		day > 0 && day <= 31 && !ValidDate(year, month, day)
 }
 
+// normalizedDateForCalculation converts an ALLOW_INVALID_DATES tag to the
+// calendar date that Go/MySQL date arithmetic uses for its overflow fields.
+// The stored Date still preserves the original fields for formatting and
+// validation; only calendar calculations should use this value.
+func (d Date) normalizedDateForCalculation() Date {
+	if !isEncodedInvalidDate(d) {
+		return d
+	}
+	year, month, day := decodeInvalidDate(d)
+	t := time.Date(int(year), time.Month(month), int(day), 0, 0, 0, 0, time.UTC)
+	return DateFromCalendar(int32(t.Year()), uint8(t.Month()), uint8(t.Day()))
+}
+
 func decodeInvalidDate(d Date) (year int32, month, day uint8) {
 	packed := int32(d - invalidDateEncodingBase)
 	year = packed / 10000
@@ -837,8 +850,7 @@ func daysSinceEpoch(year int32) int32 {
 // DayOfWeek return the day of the week counting from Sunday
 func (d Date) DayOfWeek() Weekday {
 	if isEncodedInvalidDate(d) {
-		year, month, day := decodeInvalidDate(d)
-		return DayOfWeekFromCalendar(year, month, day)
+		return d.normalizedDateForCalculation().DayOfWeek()
 	}
 	// January 1, year 1 in Gregorian calendar, was a Monday.
 	return Weekday((d + 1) % 7)
@@ -847,8 +859,7 @@ func (d Date) DayOfWeek() Weekday {
 // DayOfWeek2 return the day of the week counting from Monday
 func (d Date) DayOfWeek2() Weekday {
 	if isEncodedInvalidDate(d) {
-		year, month, day := decodeInvalidDate(d)
-		return Weekday(calcDaynr(int(year), int(month), int(day)) % 7)
+		return d.normalizedDateForCalculation().DayOfWeek2()
 	}
 	// January 1, year 1 in Gregorian calendar, was a Monday.
 	return Weekday(d % 7)
@@ -856,17 +867,16 @@ func (d Date) DayOfWeek2() Weekday {
 
 // DayOfYear return day of year (001..366)
 func (d Date) DayOfYear() uint16 {
+	if isEncodedInvalidDate(d) {
+		return d.normalizedDateForCalculation().DayOfYear()
+	}
 	_, _, _, yday := d.Calendar(false)
 	return yday
 }
 
 func (d Date) WeekOfYear() (year int32, week uint8) {
 	if isEncodedInvalidDate(d) {
-		y, m, day := decodeInvalidDate(d)
-		return func() (int32, uint8) {
-			weekYear, week := calcWeekFromCalendar(int(y), int(m), int(day), weekMode(0))
-			return int32(weekYear), uint8(week)
-		}()
+		return d.normalizedDateForCalculation().WeekOfYear()
 	}
 	// According to the rule that the first calendar week of a calendar year is
 	// the week including the first Thursday of that year, and that the last one is
@@ -891,9 +901,7 @@ func (d Date) WeekOfYear() (year int32, week uint8) {
 
 func (d Date) WeekOfYear2() uint8 {
 	if isEncodedInvalidDate(d) {
-		y, m, day := decodeInvalidDate(d)
-		_, week := calcWeekFromCalendar(int(y), int(m), int(day), weekMode(0))
-		return uint8(week)
+		return d.normalizedDateForCalculation().WeekOfYear2()
 	}
 	// According to the rule that the first calendar week of a calendar year is
 	// the week including the first Thursday of that year, and that the last one is
@@ -953,6 +961,9 @@ func weekMode(mode int) WeekBehaviour {
 // Week (00..53), where Sunday is the first day of the week; WEEK() mode 0
 // Week (00..53), where Monday is the first day of the week; WEEK() mode 1
 func (d Date) Week(mode int) int {
+	if isEncodedInvalidDate(d) {
+		return d.normalizedDateForCalculation().Week(mode)
+	}
 	if d.Month() == 0 || d.Day() == 0 {
 		return 0
 	}
@@ -977,8 +988,7 @@ func WeekFromCalendar(year int32, month, day uint8, mode int) int {
 // YearWeek returns year and week.
 func (d Date) YearWeek(mode int) (year int, week int) {
 	if isEncodedInvalidDate(d) {
-		y, m, day := decodeInvalidDate(d)
-		return calcWeekFromCalendar(int(y), int(m), int(day), weekMode(mode)|WeekYear)
+		return d.normalizedDateForCalculation().YearWeek(mode)
 	}
 	behavior := weekMode(mode) | WeekYear
 	return calcWeek(d, behavior)

@@ -1153,6 +1153,7 @@ func parseDateExtractParts(value string) (dateExtractParts, bool) {
 		return parts, true
 	}
 	if types.ValidCalendarDate(year, month, day) {
+		parts.date = types.DateFromCalendarAllowInvalid(year, month, day)
 		parts.valid = true
 		return parts, true
 	}
