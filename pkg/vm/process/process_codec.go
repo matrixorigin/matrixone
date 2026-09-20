@@ -16,7 +16,6 @@ package process
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"time"
 
@@ -547,7 +546,10 @@ func resolveDefaultWeekFormat(proc *Process) (int64, error) {
 		}
 		mode, ok := value.(int64)
 		if !ok {
-			return 0, moerr.NewInternalError(proc.Ctx, fmt.Sprintf("session variable default_week_format has unexpected type %T", value))
+			// Some background resolvers answer unknown variables with their
+			// compiled string default. Preserve the coordinator snapshot in
+			// that case; only a real int64 value is an execution-time override.
+			return proc.Base.SessionInfo.DefaultWeekFormat & 7, nil
 		}
 		return mode & 7, nil
 	}

@@ -10530,7 +10530,9 @@ func getDefaultWeekFormatMode(proc *process.Process) (int, error) {
 
 	mode, ok := value.(int64)
 	if !ok {
-		return 0, moerr.NewInternalError(proc.Ctx, fmt.Sprintf("session variable default_week_format has unexpected type %T", value))
+		// A background resolver may return a compiled string default for an
+		// unknown variable. Use the serialized session snapshot in that case.
+		return int(proc.GetSessionInfo().DefaultWeekFormat & 7), nil
 	}
 	return int(mode & 7), nil
 }
