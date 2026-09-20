@@ -25,7 +25,7 @@ import (
 )
 
 // constrainSpatialDistanceWorkers keeps changed spatial-distance expressions
-// on one CN while a rolling cluster still contains workers below MORPC v89.
+// on one CN while a rolling cluster still contains workers below MORPC v90.
 // The capability probe is performed once per compile and has no per-row cost.
 func (c *Compile) constrainSpatialDistanceWorkers(qry *plan.Query) error {
 	if c.execType != plan2.ExecTypeAP_MULTICN {
@@ -35,7 +35,7 @@ func (c *Compile) constrainSpatialDistanceWorkers(qry *plan.Query) error {
 	if err != nil || !features.SpatialDistanceSemantics {
 		return err
 	}
-	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion89)
+	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion90)
 	if err != nil {
 		return err
 	}
@@ -57,13 +57,13 @@ func validateSpatialDistanceDestination(proc *process.Process, p *pipeline.Pipel
 		)
 	}
 	supported, err := remoteWorkersSupportProtocol(proc,
-		engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion89)
+		engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion90)
 	if err != nil {
 		return err
 	}
 	if !supported {
 		return moerr.NewNotSupportedNoCtx(
-			"remote destination does not support geodetic spatial-distance semantics (MORPC version 89)",
+			"remote destination does not support geodetic spatial-distance semantics (MORPC version 90)",
 		)
 	}
 	return nil

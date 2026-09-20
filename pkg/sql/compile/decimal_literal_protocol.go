@@ -25,7 +25,7 @@ import (
 )
 
 // constrainDecimalLiteralWorkers keeps exact DECIMAL256 literal plans local
-// while a rolling cluster still contains workers below MORPC v88. The marker
+// while a rolling cluster still contains workers below MORPC v89. The marker
 // is execution-inert on this CN, but an older worker may rebind the persisted
 // spelling with a different decimal carrier.
 func (c *Compile) constrainDecimalLiteralWorkers(qry *plan.Query) error {
@@ -36,7 +36,7 @@ func (c *Compile) constrainDecimalLiteralWorkers(qry *plan.Query) error {
 	if err != nil || !features.DecimalLiteralSemantics {
 		return err
 	}
-	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion88)
+	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion89)
 	if err != nil {
 		return err
 	}
@@ -60,14 +60,14 @@ func validateDecimalLiteralDestination(proc *process.Process, p *pipeline.Pipeli
 	supported, err := remoteWorkersSupportProtocol(
 		proc,
 		engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}},
-		defines.MORPCVersion88,
+		defines.MORPCVersion89,
 	)
 	if err != nil {
 		return err
 	}
 	if !supported {
 		return moerr.NewNotSupportedNoCtx(
-			"remote destination does not support exact DECIMAL256 literal semantics (MORPC protocol version 88)",
+			"remote destination does not support exact DECIMAL256 literal semantics (MORPC protocol version 89)",
 		)
 	}
 	return nil

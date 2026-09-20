@@ -56,11 +56,13 @@ path. The epoch assignments are monotonic and cumulative:
 |---|---:|
 | existing integer-parameter coercion | 85 |
 | extended IP overload/result and expression metadata | 86 |
-| exact decimal literal and coercion semantics (complete D closure) | 87 |
-| geodetic distance semantics and length-unit overloads | 88 |
+| grouping provenance in remote batch transport | 87 |
+| canonical vector HLL keys | 88 |
+| exact decimal literal and coercion semantics (complete D closure) | 89 |
+| geodetic distance semantics and length-unit overloads | 90 |
 
-C must include the complete finalized D87 closure before validation or rollout;
-copying only the common-coercion delta is insufficient. Main86 -> D87 -> C88
+C must include the complete finalized D89 closure before validation or rollout;
+copying only the common-coercion delta is insufficient. Main88 -> D89 -> C90
 ensures that advertising the latest version also supports every prior contract.
 Both new epochs are unmerged; earlier branch-local assignments are superseded.
 
@@ -129,9 +131,9 @@ Focused evidence must include:
   float32/float64, masks/NULLs, malformed payloads, and prepared reuse.
 - `pkg/pb/plan` and `pkg/sql/plan`: feature identity, copy/fold/protobuf
   provenance, persisted floor, and view/default lifecycle.
-- `pkg/sql/compile`: remote placement and send-time checks for v86/v87/v88,
-  including the DECIMAL256 marker; old spatial/IP identities are negative
-  controls.
+- `pkg/sql/compile`: remote placement and send-time checks for v86/v88/v89/v90,
+  including the canonical-HLL, DECIMAL256, and spatial markers; old spatial/IP
+  identities are negative controls.
 - Distributed geo and decimal cases: normal result comparison through the
   public SQL path. Upgrade/compatibility jobs are an external mixed-binary
   acceptance gate and must not be described as passed when skipped.
@@ -143,19 +145,23 @@ remote delivery to an older worker, or workspace that still grows with `n*m`.
 ### Runtime acceptance boundary: scheduling versus wire compatibility
 
 The existing `disttae.Engine.QueryCandidates` policy admits only workers whose
-`CommitID` equals the producer's build commit. Actual D87 and C88 builds therefore
+`CommitID` equals the producer's build commit. Actual D89 and C90 builds therefore
 cannot form a cross-commit public SQL worker set, independently of the expression
 epoch checks. Keeping only the other build Working must fail closed; changing
 reported commit IDs or protocol versions is not an acceptable test workaround.
 This change does not relax that scheduling policy.
 
+Earlier D87/C88 mixed-binary results are historical evidence for the transport
+shape only. They do not validate the current epoch allocation and must not be
+reported as D89/C90 acceptance.
+
 Consequently the mixed-binary acceptance evidence has separate obligations:
 
 - Public SQL: retain compatible local execution, reject unavailable placement,
   and prove prepared reuse and persisted authoring/reload/restart/rollback gates.
-- Old-produced wire compatibility: a probe built from the actual D87 source must
+- Old-produced wire compatibility: a probe built from the actual D89 source must
   use D's scope encoder and transport to execute a non-NULL legacy expression on
-  the actual C88 receiver, with an independently known exact result. This is not
+  the actual C90 receiver, with an independently known exact result. This is not
   an old-to-new public SQL scheduling claim.
 - New sender and receiver boundaries: probe real destination UUID/address/version
   tuples at serialization, replace and restore the destination, and exercise

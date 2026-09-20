@@ -1279,6 +1279,7 @@ func makeWindowFrameConstValue(
 		return nil, err
 	}
 	c := rule.GetConstantValue(vec, false, 0)
+	rule.PreserveFoldedDecimalLiteralSemantics(e, c)
 
 	return &plan.Expr{
 		Typ:  *typ,

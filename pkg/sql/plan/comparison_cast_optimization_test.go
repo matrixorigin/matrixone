@@ -791,7 +791,7 @@ func TestDecimalComparisonKeepsWideZeroSuffixAndCarriesProtocolMarker(t *testing
 				require.NoError(t, err)
 				require.Equal(t, tc.wantFunc, result.GetF() != nil,
 					"wide decimal comparison was folded unexpectedly")
-				requires, err := plan.RequiresMORPCVersion88DecimalLiteralSemantics(result)
+				requires, err := plan.RequiresMORPCVersion89DecimalLiteralSemantics(result)
 				require.NoError(t, err)
 				require.Equal(t, tc.wantMarker, requires)
 			})
@@ -836,7 +836,7 @@ func TestDecimalComparisonLegacyRemainderProtocolFence(t *testing.T) {
 						}
 						result, err := BindFuncExprImplByPlanExpr(context.Background(), op, args)
 						require.NoError(t, err)
-						marked, err := plan.RequiresMORPCVersion88DecimalLiteralSemantics(result)
+						marked, err := plan.RequiresMORPCVersion89DecimalLiteralSemantics(result)
 						require.NoError(t, err)
 						require.Equal(t, tc.oldZero != tc.newZero, marked, "%s %s reversed=%v: %s", carrier, op, reversed, result)
 						if op == "=" || op == "<>" {
@@ -937,12 +937,12 @@ func TestDecimalComparisonNegativeDecimal128ZeroSuffixCarriesProtocolMarker(t *t
 	result, err := BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{column, casted})
 	require.NoError(t, err)
 	require.NotNil(t, result.GetF(), "negative zero suffix must remain an executable comparison")
-	requires, err := plan.RequiresMORPCVersion88DecimalLiteralSemantics(result)
+	requires, err := plan.RequiresMORPCVersion89DecimalLiteralSemantics(result)
 	require.NoError(t, err)
 	require.True(t, requires, result.String())
 	requiredVersion, err := RequiredPersistedExpressionProtocolVersion(result)
 	require.NoError(t, err)
-	require.Equal(t, int64(defines.MORPCVersion88), requiredVersion)
+	require.Equal(t, int64(defines.MORPCVersion89), requiredVersion)
 
 	positive, err := appendCastBeforeExpr(ctx, makePlan2StringConstExprWithType("50.500000"), plan.Type{
 		Id:          int32(types.T_decimal128),
@@ -953,7 +953,7 @@ func TestDecimalComparisonNegativeDecimal128ZeroSuffixCarriesProtocolMarker(t *t
 	require.NoError(t, err)
 	positiveResult, err := BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{column, positive})
 	require.NoError(t, err)
-	positiveRequires, err := plan.RequiresMORPCVersion88DecimalLiteralSemantics(positiveResult)
+	positiveRequires, err := plan.RequiresMORPCVersion89DecimalLiteralSemantics(positiveResult)
 	require.NoError(t, err)
 	require.False(t, positiveRequires, positiveResult.String())
 
@@ -966,7 +966,7 @@ func TestDecimalComparisonNegativeDecimal128ZeroSuffixCarriesProtocolMarker(t *t
 	require.NoError(t, err)
 	nonzeroResult, err := BindFuncExprImplByPlanExpr(ctx, "=", []*plan.Expr{column, nonzero})
 	require.NoError(t, err)
-	nonzeroRequires, err := plan.RequiresMORPCVersion88DecimalLiteralSemantics(nonzeroResult)
+	nonzeroRequires, err := plan.RequiresMORPCVersion89DecimalLiteralSemantics(nonzeroResult)
 	require.NoError(t, err)
 	require.False(t, nonzeroRequires, nonzeroResult.String())
 }
@@ -990,7 +990,7 @@ func TestDecimalComparisonPreservesNullableColumnSemantics(t *testing.T) {
 			require.NotNil(t, result.GetF(), "nullable comparison must not fold to a constant")
 			require.False(t, result.Typ.NotNullable,
 				"comparison result must preserve SQL NULL semantics")
-			requires, err := plan.RequiresMORPCVersion88DecimalLiteralSemantics(result)
+			requires, err := plan.RequiresMORPCVersion89DecimalLiteralSemantics(result)
 			require.NoError(t, err)
 			require.True(t, requires,
 				"retained nullable comparison must preserve the v87 fence")
@@ -1054,7 +1054,7 @@ func TestDecimalComparisonFencesSmallExplicitCastSourceScaleMismatch(t *testing.
 				require.NoError(t, err)
 				require.NotNil(t, result.GetF(),
 					"source-scale mismatch must retain the executable comparison")
-				requires, err := plan.RequiresMORPCVersion88DecimalLiteralSemantics(result)
+				requires, err := plan.RequiresMORPCVersion89DecimalLiteralSemantics(result)
 				require.NoError(t, err)
 				require.True(t, requires,
 					"source-scale mismatch must carry the v87 persisted-expression fence")

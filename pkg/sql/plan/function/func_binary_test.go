@@ -7796,7 +7796,7 @@ func TestGeodeticDiscreteDistanceDispatchAndUnits(t *testing.T) {
 	}
 
 	// Legacy planar identities preserve the historical same-SRID behavior for
-	// projected coordinate systems too. The v88 geodetic identities are the
+	// projected coordinate systems too. The v90 geodetic identities are the
 	// ones that reject unsupported computation SRIDs.
 	geom3857 := types.T_geometry.ToType()
 	geom3857.Width = 3858 // SRID 3857

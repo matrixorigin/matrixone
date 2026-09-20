@@ -11010,14 +11010,14 @@ func StFrechetDistance32(ivecs []*vector.Vector, result vector.FunctionResultWra
 	return stFrechetDistance[float32]("ST_FRECHETDISTANCE", ivecs, result, proc, length, selectList)
 }
 
-// StFrechetDistanceGeodetic is the v88 two-argument geodetic identity. It is
+// StFrechetDistanceGeodetic is the v90 two-argument geodetic identity. It is
 // deliberately distinct from StFrechetDistance so a new worker cannot apply
 // the new SRID-4326 meaning to an old producer's overload 0.
 func StFrechetDistanceGeodetic(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return stFrechetDistanceGeodetic[float64]("ST_FRECHETDISTANCE", ivecs, result, proc, length, selectList)
 }
 
-// StFrechetDistanceGeodetic32 is the GEOMETRY32 v88 geodetic identity.
+// StFrechetDistanceGeodetic32 is the GEOMETRY32 v90 geodetic identity.
 func StFrechetDistanceGeodetic32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return stFrechetDistanceGeodetic[float32]("ST_FRECHETDISTANCE", ivecs, result, proc, length, selectList)
 }
@@ -11074,12 +11074,12 @@ func StHausdorffDistance32(ivecs []*vector.Vector, result vector.FunctionResultW
 	return stHausdorffDistance[float32]("ST_HAUSDORFFDISTANCE", ivecs, result, proc, length, selectList)
 }
 
-// StHausdorffDistanceGeodetic is the v88 two-argument geodetic identity.
+// StHausdorffDistanceGeodetic is the v90 two-argument geodetic identity.
 func StHausdorffDistanceGeodetic(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return stHausdorffDistanceGeodetic[float64]("ST_HAUSDORFFDISTANCE", ivecs, result, proc, length, selectList)
 }
 
-// StHausdorffDistanceGeodetic32 is the GEOMETRY32 v88 geodetic identity.
+// StHausdorffDistanceGeodetic32 is the GEOMETRY32 v90 geodetic identity.
 func StHausdorffDistanceGeodetic32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return stHausdorffDistanceGeodetic[float32]("ST_HAUSDORFFDISTANCE", ivecs, result, proc, length, selectList)
 }

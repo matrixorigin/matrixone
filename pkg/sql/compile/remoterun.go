@@ -2266,9 +2266,9 @@ func validateRemoteExpressionPipelineProtocol(
 		)
 	}
 	if features.DecimalLiteralSemantics &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion88) {
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion89) {
 		return moerr.NewNotSupportedNoCtx(
-			"exact DECIMAL256 literal semantics require MORPC protocol version 88",
+			"exact DECIMAL256 literal semantics require MORPC protocol version 89",
 		)
 	}
 	if features.IPFunctionSemantics &&
@@ -2285,9 +2285,9 @@ func validateRemoteExpressionPipelineProtocol(
 		}
 	}
 	if features.SpatialDistanceSemantics &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion89) {
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion90) {
 		return moerr.NewNotSupportedNoCtx(
-			"geodetic spatial-distance semantics require MORPC protocol version 89",
+			"geodetic spatial-distance semantics require MORPC protocol version 90",
 		)
 	}
 	return nil

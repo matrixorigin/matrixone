@@ -933,7 +933,7 @@ func TestRequiredRemoteExpressionFeaturesDecimalLiteralSemantics(t *testing.T) {
 	features, err := RequiredRemoteExpressionFeatures(decoded)
 	require.NoError(t, err)
 	require.True(t, features.DecimalLiteralSemantics)
-	required, err := RequiresMORPCVersion88DecimalLiteralSemantics(makeLiteral(true))
+	required, err := RequiresMORPCVersion89DecimalLiteralSemantics(makeLiteral(true))
 	require.NoError(t, err)
 	require.True(t, required)
 	require.True(t, features.Any())
