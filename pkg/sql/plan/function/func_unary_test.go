@@ -1049,6 +1049,46 @@ func TestQuoteHonorsSelectList(t *testing.T) {
 	}
 }
 
+func TestQuoteRejectsInvalidUTF8FromBinaryInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	inputType := types.New(types.T_varbinary, 64, 0)
+	input := testutil.NewVector(
+		1, inputType, proc.Mp(), false,
+		[]string{string([]byte{'A', 0xff, 'B'})},
+	)
+	defer input.Free(proc.Mp())
+	result := vector.NewFunctionResultWrapper(
+		types.NewWithCharset(types.T_varchar, 130, 0, types.CharsetUTF8), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(1))
+
+	err := Quote([]*vector.Vector{input}, result, proc, 1, nil)
+	var conversionErr *moerr.Error
+	require.ErrorAs(t, err, &conversionErr)
+	require.Equal(t, moerr.ER_CANNOT_CONVERT_STRING, conversionErr.MySQLCode())
+	require.Contains(t, conversionErr.Error(), "from binary to utf8mb4")
+}
+
+func TestSoundexBinaryInputPreservesBinaryResultDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	inputType := types.New(types.T_varbinary, 64, 0)
+	fcTC := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(inputType, []string{"Ashcraft", string([]byte{'A', 0xff, 'B'})}, []bool{false, false}),
+		},
+		NewFunctionTestResult(inputType, false, []string{"A2613", "A100"}, []bool{false, false}),
+		Soundex,
+	)
+	ok, info := fcTC.Run()
+	require.True(t, ok, info)
+	require.Equal(t, types.CharsetBinary, fcTC.result.GetResultVector().GetType().Charset)
+}
+
 // SOUNDEX
 func initSoundexTestCase() []tcTemp {
 	lateGrowthInput := strings.Repeat("BEB", 4096) + strings.Repeat("BC", 64)
