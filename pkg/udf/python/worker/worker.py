@@ -240,7 +240,10 @@ _HANDLER_REQUEST_FULL = "full"
 _HANDLER_REQUEST_BATCH = "batch"
 _HANDLER_RESPONSE_FD_ENV = "MATRIXONE_HANDLER_RESPONSE_FD"
 _HANDLER_PARENT_WATCH_FD_ENV = "MATRIXONE_HANDLER_PARENT_WATCH_FD"
-_HANDLER_ENV_ALLOWLIST = frozenset({"PATH"})
+# UT may install the checked-out worker requirements into a temporary target
+# and expose it through PYTHONPATH. Preserve only that runtime path in handler
+# children; the rest of the parent environment remains excluded.
+_HANDLER_ENV_ALLOWLIST = frozenset({"PATH", "PYTHONPATH"})
 _MICROS_PER_SECOND = 1_000_000
 _MAX_TIME_MICROS = (838 * 60 * 60 + 59 * 60 + 59) * _MICROS_PER_SECOND
 _MIN_TIMESTAMP = _datetime.datetime(1970, 1, 1, 0, 0, 1, tzinfo=_datetime.timezone.utc)
