@@ -16,17 +16,18 @@ package python
 
 import (
 	"errors"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/udf/udferr"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
-var errSupervisorClosing = moerr.NewInternalErrorNoCtx("python udf worker is shutting down")
+var errSupervisorClosing = udferr.New("python udf worker is shutting down")
 
 type Supervisor struct {
 	cfg     Config
