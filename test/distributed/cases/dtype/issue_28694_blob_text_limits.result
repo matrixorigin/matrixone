@@ -147,5 +147,93 @@ select id, octet_length(value) from load_limits order by id;
 id    octet_length(value)
 2    255
 3    255
+create table default_limits (id int primary key, source_value longtext,
+stored_value text default (cast(source_value as text)));
+insert into default_limits (id, source_value) values (1, repeat('d', 65536));
+Data truncation: Can't cast column from TEXT type to TEXT type because of one or more values in that column. Src length 65536 is larger than Dest length 65535
+select count(*) as strict_default_rows from default_limits;
+strict_default_rows
+0
+insert into default_limits (id, source_value) values (2, repeat('b', 65535)), (3, null);
+select id, octet_length(stored_value) from default_limits order by id;
+id    octet_length(stored_value)
+2    65535
+3    null
+set session sql_mode = '';
+insert into default_limits (id, source_value) values (4, repeat('d', 65536));
+select @@warning_count;
+@@warning_count
+1
+set session sql_mode = 'STRICT_TRANS_TABLES';
+insert ignore into default_limits (id, source_value) values (5, repeat('i', 65536));
+select @@warning_count;
+@@warning_count
+1
+insert ignore into default_limits values (6, repeat('e', 65536), default);
+select @@warning_count;
+@@warning_count
+1
+select id, octet_length(stored_value) from default_limits order by id;
+id    octet_length(stored_value)
+2    65535
+3    null
+4    65535
+5    65535
+6    65535
+prepare default_policy_insert from 'insert into default_limits (id, source_value) values (7, repeat("p", 65536))';
+set session sql_mode = '';
+execute default_policy_insert;
+select @@warning_count;
+@@warning_count
+1
+deallocate prepare default_policy_insert;
+select octet_length(stored_value) from default_limits where id = 7;
+octet_length(stored_value)
+65535
+create table fk_limits (id int primary key, value tinyblob, assigned_length int default (octet_length(value)));
+create table fk_child (id int primary key, parent_id int, foreign key (parent_id) references fk_limits(id));
+set session sql_mode = 'STRICT_TRANS_TABLES';
+load data inline format='csv', data='1,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' into table fk_limits fields terminated by ',' (id, value);
+Data truncation: Can't cast column from BLOB type to BLOB type because of one or more values in that column. Src length 256 is larger than Dest length 255
+select id, octet_length(value), assigned_length from fk_limits order by id;
+id    octet_length(value)    assigned_length
+set session sql_mode = '';
+load data inline format='csv', data='2,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' into table fk_limits fields terminated by ',' (id, value);
+select @@warning_count;
+@@warning_count
+1
+select id, octet_length(value), assigned_length from fk_limits order by id;
+id    octet_length(value)    assigned_length
+2    255    255
+set session sql_mode = 'STRICT_TRANS_TABLES';
+load data inline format='csv', data='3,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' ignore into table fk_limits fields terminated by ',' (id, value);
+select @@warning_count;
+@@warning_count
+1
+select id, octet_length(value), assigned_length from fk_limits order by id;
+id    octet_length(value)    assigned_length
+2    255    255
+3    255    255
+load data inline format='csv', data='4,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx' into table fk_limits fields terminated by ',' (id, value) parallel 'true';
+Data truncation: Can't cast column from BLOB type to BLOB type because of one or more values in that column. Src length 256 is larger than Dest length 255
+select id, octet_length(value), assigned_length from fk_limits order by id;
+id    octet_length(value)    assigned_length
+2    255    255
+3    255    255
+create table fk_default (id int primary key, source_value longtext,
+stored_value text default (cast(source_value as text)));
+create table fk_default_child (id int primary key, parent_id int, foreign key (parent_id) references fk_default(id));
+insert into fk_default (id, source_value) values (1, repeat('f', 65536));
+Data truncation: Can't cast column from TEXT type to TEXT type because of one or more values in that column. Src length 65536 is larger than Dest length 65535
+select count(*) from fk_default;
+count(*)
+0
+insert ignore into fk_default (id, source_value) values (2, repeat('f', 65536));
+select @@warning_count;
+@@warning_count
+1
+select id, octet_length(stored_value) from fk_default;
+id    octet_length(stored_value)
+2    65535
 set session sql_mode = @issue_28694_old_sql_mode;
 drop database issue_28694_blob_text_limits;

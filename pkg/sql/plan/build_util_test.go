@@ -1336,3 +1336,50 @@ func TestSubstituteColRefsInExprPreservesAggregateConfig(t *testing.T) {
 	rewritten.GetF().AggConfig[0] = 9
 	require.Equal(t, byte(1), source.GetF().AggConfig[0])
 }
+
+func TestDefaultBlobTextAssignmentPolicy(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	proc := builder.compCtx.GetProcess()
+	for _, oid := range []types.T{types.T_blob, types.T_text} {
+		target := plan.Type{Id: int32(oid), Width: types.MaxTinyTextLen}
+		source := &Expr{Typ: plan.Type{Id: int32(oid), Width: types.MaxStringSize},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}}
+		for _, root := range []string{"unwrapped", "cast", "cast_strict", "cast_assign", "cast_ignore"} {
+			t.Run(fmt.Sprintf("%s/%s", oid, root), func(t *testing.T) {
+				stored := DeepCopyExpr(source)
+				if root != "unwrapped" {
+					var err error
+					stored, err = forceAssignmentCastExprWithName(proc.Ctx, stored, target, root)
+					require.NoError(t, err)
+				}
+				col := &plan.ColDef{Typ: target, Default: &plan.Default{Expr: stored}}
+				before := DeepCopyExpr(stored)
+				for _, ignore := range []bool{false, true} {
+					got, err := getDefaultExprForAssignment(proc.Ctx, col, proc, ignore)
+					require.NoError(t, err)
+					want := "cast_assign"
+					if ignore {
+						want = "cast_ignore"
+					}
+					require.Equal(t, want, got.GetF().GetFunc().GetObjName())
+					require.Equal(t, target, got.Typ)
+					inner := got.GetF().Args[0]
+					if root == "cast" {
+						require.Equal(t, "cast", inner.GetF().GetFunc().GetObjName())
+						inner = inner.GetF().Args[0]
+					}
+					require.Equal(t, int32(1), inner.GetCol().GetColPos())
+					require.Equal(t, before, stored, "catalog default must remain immutable")
+				}
+			})
+		}
+		sameType := DeepCopyExpr(source)
+		sameType.Typ = target
+		ddl, err := makePlan2AssignmentCastExpr(proc.Ctx, sameType, target)
+		require.NoError(t, err)
+		require.Equal(t, "cast_strict", ddl.GetF().GetFunc().GetObjName())
+		null, err := getDefaultExprForAssignment(proc.Ctx, &plan.ColDef{Typ: target}, proc, true)
+		require.NoError(t, err)
+		require.True(t, null.GetLit().GetIsnull())
+	}
+}

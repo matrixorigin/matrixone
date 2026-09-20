@@ -2284,6 +2284,29 @@ func getFunctionObjRef(funcID int64, name string) *ObjectRef {
 // 	}, nil
 // }
 
+// getDefaultExprForAssignment restores a catalog default under the current
+// statement policy. The column owns the byte limit, including for legacy
+// expressions that lack an assignment wrapper or carry stale type widths.
+func getDefaultExprForAssignment(ctx context.Context, col *plan.ColDef, proc *process.Process, ignore bool) (*Expr, error) {
+	expr, err := getDefaultExpr(ctx, col)
+	if err != nil {
+		return nil, err
+	}
+	if col.Typ.Id != int32(types.T_blob) && col.Typ.Id != int32(types.T_text) {
+		return expr, nil
+	}
+	if lit := expr.GetLit(); lit != nil && lit.Isnull {
+		return expr, nil
+	}
+	if f := expr.GetF(); f != nil && f.Func != nil && len(f.Args) > 0 &&
+		(f.Func.ObjName == "cast_strict" || f.Func.ObjName == "cast_assign" || f.Func.ObjName == "cast_ignore") {
+		// Replace only the persisted assignment boundary; ordinary explicit
+		// CAST expressions inside the default retain their own semantics.
+		expr = f.Args[0]
+	}
+	return forceAssignmentCastExprWithProcess(ctx, expr, col.Typ, ignore, proc)
+}
+
 func getDefaultExpr(ctx context.Context, d *plan.ColDef) (*Expr, error) {
 	if d == nil {
 		return nil, moerr.NewInvalidInput(ctx, "cannot resolve default value for a missing column definition")
