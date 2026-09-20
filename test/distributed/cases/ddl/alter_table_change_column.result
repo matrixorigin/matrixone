@@ -1908,18 +1908,17 @@ col1    col2
 alter table abnormal04 change col1 col1NewCOl float;
 invalid argument operator cast, bad value [JSON -> FLOAT]
 alter table abnormal04 change col2 col2NewCOL int;
-invalid argument cast to int, bad value a
 select * from abnormal04;
-col1    col2
-{"x": "red"}    a
-{"x": [3, 5, 7]}    b
+col1    col2newcol
+{"x": "red"}    1
+{"x": [3, 5, 7]}    2
 show create table abnormal04;
 Table    Create Table
-abnormal04    CREATE TABLE `abnormal04` (\n  `col1` json DEFAULT NULL,\n  `col2` enum('a','b') DEFAULT NULL\n)
+abnormal04    CREATE TABLE `abnormal04` (\n  `col1` json DEFAULT NULL,\n  `col2NewCOL` int DEFAULT NULL\n)
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'abnormal04' and COLUMN_NAME not like '__mo%';
 table_name    COLUMN_NAME    data_type    is_nullable
 abnormal04    col1    json    YES
-abnormal04    col2    enum    YES
+abnormal04    col2NewCOL    int    YES
 drop table abnormal04;
 drop table if exists abnormal05;
 create temporary table abnormal05 (col1 datetime, col2 blob);
