@@ -975,6 +975,8 @@ message Node {
     MULTI_UPDATE = 54;
     POSTDML = 55;
     TABLE_CLONE = 56;
+    // Coordinator-local selector for bounded POST -> PRE -> FORCE Top-K candidates.
+    ADAPTIVE_TOP = 57;
   }
 
   enum JoinType {
