@@ -10,11 +10,25 @@ worker-enabled manifest for this ordinary BVT entry point; starting
 `etc/launch/launch.toml` directly leaves Python disabled.
 
 ```bash
-python3 -m pip install -r pkg/udf/python/worker/requirements.txt
+python3.12 -m venv /path/to/python-udf-test-venv
+source /path/to/python-udf-test-venv/bin/activate
+python3 -m pip install --only-binary=:all: -r pkg/udf/python/worker/requirements.txt
 ./optools/run_bvt.sh . launch
 cd /path/to/mo-tester
 ./run.sh -n -g -o -p /path/to/matrixone/test/distributed/cases
 ```
+
+The Go UDF package tests also start real Flight workers. Keep the same venv on
+`PATH` when running them: installing PyArrow into another interpreter will not
+satisfy `exec.LookPath("python3")`. The shared CI UT and coverage setup uses
+Python 3.12 and the checked-out requirements file; this is a test environment
+choice, not an exact-minor production compatibility rule.
+
+For fresh local data, the worker-enabled CN and its TN both use the same
+`DISK-V2` FileService directories. Do not mix that configuration with an
+existing `DISK` data directory. Container BVT also requires CN and worker
+images with the same IANA database; both full-build and prebuilt runtime image
+recipes install tzdata before the strict capability handshake.
 
 To create or refresh a result file after reviewing the expected output, keep
 the normal worker-enabled launch running and use `mo-tester`'s `genrs` mode:
