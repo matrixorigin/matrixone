@@ -62,6 +62,38 @@ func TestPreparedPercentileParameters(t *testing.T) {
 	require.ErrorContains(t, err, "non-null constant or parameter")
 }
 
+func TestPreparedPercentileParameterExpressions(t *testing.T) {
+	for _, sql := range []string{
+		"select approx_percentile(n_nationkey, ? / 100.0) from nation",
+		"select approx_percentile((? + 5) / 100.0) within group (order by n_nationkey desc) from nation",
+		"select percentile_cont(cast(? as double) / 100.0) within group (order by n_nationkey) from nation",
+		"select percentile_disc((? + ?) / 100.0) within group (order by n_name) from nation",
+		"select percentile_disc(-(-? / 100.0)) within group (order by n_name) over () from nation",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			prepare := buildPreparedAggregatePlan(t, sql)
+			require.NotEmpty(t, preparedParamPositions(prepare))
+			require.True(t, PreparedPlanHasPercentileParams(prepare.Plan))
+		})
+	}
+}
+
+func TestPreparedPercentileParameterExpressionsRejectRowDependentOrArbitraryFunctions(t *testing.T) {
+	for _, sql := range []string{
+		"prepare stmt_col from 'select percentile_cont((? + n_regionkey) / 100.0) within group (order by n_nationkey) from nation'",
+		"prepare stmt_subquery from 'select percentile_cont((? + (select 1)) / 100.0) within group (order by n_nationkey) from nation'",
+		"prepare stmt_function from 'select percentile_cont(abs(?) / 100.0) within group (order by n_nationkey) from nation'",
+		"prepare stmt_volatile from 'select percentile_cont((? + rand()) / 100.0) within group (order by n_nationkey) from nation'",
+		"prepare stmt_variable from 'select percentile_cont((? + @percentile_offset) / 100.0) within group (order by n_nationkey) from nation'",
+		"prepare stmt_string_cast from 'select percentile_cont(cast(? as char) / 100.0) within group (order by n_nationkey) from nation'",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, err := runOneStmt(NewMockOptimizer(false), t, sql)
+			require.ErrorContains(t, err, "non-null constant or parameter")
+		})
+	}
+}
+
 func collectParamPositions(expr *planpb.Expr, positions map[int32]struct{}) {
 	if expr == nil {
 		return
