@@ -49,8 +49,8 @@ WHERE table_schema = 'uncompress_warnings_28458';
 ➤ leftover_tables[-5,64,0]  𝄀
 0
 SELECT UNCOMPRESSED_LENGTH(x'00') AS one_byte,
-       UNCOMPRESSED_LENGTH(x'000000') AS three_bytes,
-       UNCOMPRESSED_LENGTH(x'01000000') AS four_bytes;
+UNCOMPRESSED_LENGTH(x'000000') AS three_bytes,
+UNCOMPRESSED_LENGTH(x'01000000') AS four_bytes;
 ➤ one_byte[-5,64,0]  ¦  three_bytes[-5,64,0]  ¦  four_bytes[-5,64,0]  𝄀
 0  ¦  0  ¦  0
 SHOW COUNT(*) WARNINGS;
@@ -62,8 +62,8 @@ Warning  ¦  1259  ¦  ZLIB: Input data corrupted  𝄀
 Warning  ¦  1259  ¦  ZLIB: Input data corrupted  𝄀
 Warning  ¦  1259  ¦  ZLIB: Input data corrupted
 SELECT UNCOMPRESSED_LENGTH(x'') AS empty_input,
-       UNCOMPRESSED_LENGTH(NULL) AS null_input,
-       UNCOMPRESSED_LENGTH(COMPRESS('abc')) AS valid_input;
+UNCOMPRESSED_LENGTH(NULL) AS null_input,
+UNCOMPRESSED_LENGTH(COMPRESS('abc')) AS valid_input;
 ➤ empty_input[-5,64,0]  ¦  null_input[-5,64,0]  ¦  valid_input[-5,64,0]  𝄀
 0  ¦  null  ¦  3
 SHOW COUNT(*) WARNINGS;
