@@ -71,17 +71,18 @@ func GetUsearchQuantizationFromType(v any) (usearch.Quantization, error) {
 
 // NewCpuBruteForceIndex builds a pure-Go brute-force index for any ArrayElement.
 // It dispatches by concrete element type and picks the distance result type R:
-// float64 only for float64 input, float32 for everything else (f32 + the narrow
-// quantizations bf16/f16/int8/uint8 — whose kernels the resolver casts to float32).
+// float64 for native float input, so nearest-centroid comparisons retain the
+// range of stable float64 reductions; float32 for narrow quantizations bf16/f16/
+// int8/uint8, whose native kernels compute in float32.
 func NewCpuBruteForceIndex[T types.ArrayElement](dataset [][]T,
 	dimension uint,
 	m metric.MetricType,
 	elemsz uint) (cache.VectorIndexSearchIf, error) {
 
-	// R = element type for f32/f64; float32 for the narrow quantizations.
+	// R = float64 for native float input; float32 for the narrow quantizations.
 	switch ds := any(dataset).(type) {
 	case [][]float32:
-		return newGoBruteForce[float32, float32](ds, dimension, m), nil
+		return newGoBruteForce[float32, float64](ds, dimension, m), nil
 	case [][]float64:
 		return newGoBruteForce[float64, float64](ds, dimension, m), nil
 	case [][]types.BF16:

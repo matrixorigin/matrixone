@@ -90,6 +90,16 @@ endif
 %.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
+# The stable XCall reductions deliberately divide by a runtime scale. Keep
+# fast-math from rewriting that division into an unsafe reciprocal operation or
+# enabling the compiler's non-IEEE infinity assumptions for this translation
+# unit. CUDA must forward the host-only option through nvcc.
+ifeq ($(MO_CL_CUDA),1)
+xcall.o: CFLAGS += -Xcompiler=-fno-fast-math
+else
+xcall.o: CFLAGS += -fno-fast-math
+endif
+
 test: $(TARGET_LIB)
 	$(MAKE) -C test
 

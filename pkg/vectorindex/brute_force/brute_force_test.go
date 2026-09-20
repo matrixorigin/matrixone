@@ -18,6 +18,7 @@ package brute_force
 
 import (
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"sort"
 	"testing"
@@ -325,6 +326,22 @@ func TestNewBruteForceIndexHelpers(t *testing.T) {
 	idx4, err := NewCpuBruteForceIndex[float32](dataset, dimension, metric.Metric_L2sqDistance, elemsz)
 	require.NoError(t, err)
 	require.NotNil(t, idx4)
+}
+
+func TestCpuBruteForceIndexWideFloat32CentroidAssignment(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	centroids := [][]float32{{2e38, 2e38}, {3e38, 3e38}}
+	idx, err := NewCpuBruteForceIndex[float32](centroids, 2, metric.Metric_L2sqDistance, 4)
+	require.NoError(t, err)
+
+	keys, distances, err := idx.Search(sqlproc, [][]float32{{1e38, 1e38}}, vectorindex.RuntimeConfig{Limit: 1, NThreads: 1})
+	require.NoError(t, err)
+	require.Equal(t, []int64{0}, keys)
+	require.Len(t, distances, 1)
+	require.False(t, math.IsInf(distances[0], 0))
 }
 
 func TestGetUsearchQuantizationFromType(t *testing.T) {

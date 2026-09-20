@@ -19,6 +19,62 @@
 #include "xcall.h"
 #include "bitmap.h"
 
+static double xcall_scale_result(double scale, double value, bool square) {
+    int exponent;
+    double mantissa = frexp(scale, &exponent);
+    if (square) {
+        return ldexp(value * mantissa * mantissa, 2 * exponent);
+    }
+    return ldexp(value * mantissa, exponent);
+}
+
+static double xcall_l2_result_f32(float *left, float *right, int dim, bool square) {
+    double scale = 0;
+    for (int j = 0; j < dim; j++) {
+        double diff = (double) left[j] - (double) right[j];
+        double abs_diff = fabs(diff);
+        if (isinf(abs_diff)) {
+            return __builtin_huge_val();
+        }
+        if (abs_diff > scale) {
+            scale = abs_diff;
+        }
+    }
+    if (scale == 0) {
+        return 0;
+    }
+
+    double sum = 0;
+    for (int j = 0; j < dim; j++) {
+        double scaled = ((double) left[j] - (double) right[j]) / scale;
+        sum += scaled * scaled;
+    }
+    return xcall_scale_result(scale, square ? sum : sqrt(sum), square);
+}
+
+static double xcall_l2_result_f64(double *left, double *right, int dim, bool square) {
+    double scale = 0;
+    for (int j = 0; j < dim; j++) {
+        double diff = left[j] - right[j];
+        double abs_diff = fabs(diff);
+        if (isinf(abs_diff)) {
+            return __builtin_huge_val();
+        }
+        if (abs_diff > scale) {
+            scale = abs_diff;
+        }
+    }
+    if (scale == 0) {
+        return 0;
+    }
+
+    double sum = 0;
+    for (int j = 0; j < dim; j++) {
+        double scaled = (left[j] - right[j]) / scale;
+        sum += scaled * scaled;
+    }
+    return xcall_scale_result(scale, square ? sum : sqrt(sum), square);
+}
 
 int32_t xcall_l2distance_f32(int64_t rtid, uint8_t *errBuf, uint64_t *args, uint64_t len, bool sq) {
     /* 
@@ -61,16 +117,9 @@ int32_t xcall_l2distance_f32(int64_t rtid, uint8_t *errBuf, uint64_t *args, uint
             if (!c2const) {
                 varlena_get_ptrlen(p2+i, pargs[2].parea, &c2);
             }
-            pres[i] = 0;
             float *c1val = (float *) c1.ptr;
             float *c2val = (float *) c2.ptr;
-            for (int j = 0; j < dim; j++) {
-                float diff = c1val[j] - c2val[j];
-                pres[i] += (double)(diff * diff);
-            }
-            if (!sq) {
-                pres[i] = sqrt(pres[i]);
-            }
+            pres[i] = xcall_l2_result_f32(c1val, c2val, dim, sq);
         }
     }
     return 0;
@@ -118,18 +167,10 @@ int32_t xcall_l2distance_f64(int64_t rtid, uint8_t *errBuf, uint64_t *args, uint
             if (!c2const) {
                 varlena_get_ptrlen(p2+i, pargs[2].parea, &c2);
             }
-            pres[i] = 0;
             double *c1val = (double *) c1.ptr;
             double *c2val = (double *) c2.ptr;
-            for (int j = 0; j < dim; j++) {
-                double diff = c1val[j] - c2val[j];
-                pres[i] += diff * diff;
-            }
-            if (!sq) {
-                pres[i] = sqrt(pres[i]);
-            }
+            pres[i] = xcall_l2_result_f64(c1val, c2val, dim, sq);
         }
     }
     return 0;
 }
-
