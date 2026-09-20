@@ -60,10 +60,10 @@ FROM quote_binary_domain WHERE id <> 4 ORDER BY id;
 CREATE VIEW quote_binary_view AS SELECT QUOTE(b) AS q FROM quote_binary_domain WHERE id <> 4;
 CREATE TABLE quote_binary_ctas AS SELECT QUOTE(b) AS q FROM quote_binary_domain WHERE id <> 4;
 SELECT table_name, column_name, data_type, character_maximum_length,
-       character_set_name, collation_name
+character_set_name, collation_name
 FROM information_schema.columns
 WHERE table_schema = DATABASE()
-  AND table_name IN ('quote_binary_view', 'quote_binary_ctas')
+AND table_name IN ('quote_binary_view', 'quote_binary_ctas')
 ORDER BY table_name;
 -- @regex("Cannot convert string.*from binary to utf8mb4", true)
 SELECT QUOTE(b) FROM quote_binary_domain WHERE id = 4;
