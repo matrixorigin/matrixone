@@ -639,31 +639,9 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 			}
 			return newCheckResultWithSuccess(0)
 		}
-		if source[0].Oid.IsArrayRelate() || source[1].Oid.IsArrayRelate() {
-			vectorIdx := 0
-			if !source[0].Oid.IsArrayRelate() {
-				vectorIdx = 1
-			}
-			otherIdx := 1 - vectorIdx
-			if !source[otherIdx].Oid.IsArrayRelate() &&
-				source[otherIdx].Oid != types.T_any &&
-				!source[otherIdx].Oid.IsMySQLString() {
+		if retType, hasVector, ok := conditionalVectorType(source); hasVector {
+			if !ok {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
-			}
-			retType := source[vectorIdx]
-			if source[otherIdx].Oid.IsArrayRelate() {
-				if source[0].Width != source[1].Width {
-					return newCheckResultWithFailure(failedFunctionParametersWrong)
-				}
-				switch {
-				case source[0].Oid == source[1].Oid:
-					retType = source[0]
-				case source[0].Oid == types.T_array_float32 && source[1].Oid == types.T_array_float64,
-					source[0].Oid == types.T_array_float64 && source[1].Oid == types.T_array_float32:
-					retType = types.New(types.T_array_float64, source[0].Width, 0)
-				default:
-					return newCheckResultWithFailure(failedFunctionParametersWrong)
-				}
 			}
 			finalTypes := []types.Type{conditionType, retType, retType}
 			if needCast || source[0] != retType || source[1] != retType {

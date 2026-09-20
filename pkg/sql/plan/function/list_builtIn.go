@@ -7920,7 +7920,7 @@ var supportedMathBuiltIns = []FuncNew{
 				overloadId: 1,
 				args:       []types.T{types.T_array_float32},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_array_float64.ToType()
+					return types.New(types.T_array_float64, parameters[0].Width, 0)
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInSqrtArray[float32]
@@ -7930,7 +7930,7 @@ var supportedMathBuiltIns = []FuncNew{
 				overloadId: 2,
 				args:       []types.T{types.T_array_float64},
 				retType: func(parameters []types.Type) types.Type {
-					return types.T_array_float64.ToType()
+					return types.New(types.T_array_float64, parameters[0].Width, 0)
 				},
 				newOp: func() executeLogicOfOverload {
 					return builtInSqrtArray[float64]
