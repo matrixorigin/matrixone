@@ -568,6 +568,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.Attrs = t.Attrs
 		op.IsOldUpdate = t.IsOldUpdate
 		op.IsNewUpdate = t.IsNewUpdate
+		op.PreserveInput = t.PreserveInput
 		op.HasAutoCol = t.HasAutoCol
 		op.EstimatedRowCount = t.EstimatedRowCount
 		op.CompPkeyExpr = t.CompPkeyExpr
@@ -905,6 +906,7 @@ func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, 
 	op.Attrs = attrs
 	op.IsOldUpdate = preCtx.IsOldUpdate
 	op.IsNewUpdate = preCtx.IsNewUpdate
+	op.PreserveInput = preCtx.PreserveInput
 	op.EstimatedRowCount = int64(nodes[node.Children[0]].Stats.Outcnt)
 	op.CompPkeyExpr = preCtx.CompPkeyExpr
 	op.ClusterByExpr = preCtx.ClusterByExpr
@@ -1008,6 +1010,7 @@ func constructMultiUpdate(
 		arg.MultiUpdateCtx[i] = &multi_update.MultiUpdateCtx{
 			ObjRef:             updateCtx.ObjRef,
 			TableDef:           updateCtx.TableDef,
+			PartitionIndexCtx:  updateCtx.PartitionIndexCtx,
 			InsertCols:         insertCols,
 			DeleteCols:         deleteCols,
 			PartitionCols:      partitionCols,
@@ -1036,6 +1039,9 @@ func constructMultiUpdate(
 
 	ps := proc.GetPartitionService()
 	if !ps.Enabled() {
+		if hasPartitionIndexTarget(node.UpdateCtxList) {
+			return nil, moerr.NewInvalidInput(proc.Ctx, "partition fulltext maintenance requires partition service")
+		}
 		return arg, nil
 	}
 	if !hasPartitionedUpdateTarget(node.UpdateCtxList) {
@@ -1047,8 +1053,20 @@ func constructMultiUpdate(
 
 func hasPartitionedUpdateTarget(contexts []*plan.UpdateCtx) bool {
 	for _, updateCtx := range contexts {
+		if updateCtx.PartitionIndexCtx != nil {
+			return true
+		}
 		if !features.IsIndexTable(updateCtx.TableDef.FeatureFlag) &&
 			features.IsPartitioned(updateCtx.TableDef.FeatureFlag) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasPartitionIndexTarget(contexts []*plan.UpdateCtx) bool {
+	for _, updateCtx := range contexts {
+		if updateCtx != nil && updateCtx.PartitionIndexCtx != nil {
 			return true
 		}
 	}

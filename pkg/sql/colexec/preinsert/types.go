@@ -47,8 +47,12 @@ type PreInsert struct {
 	HasAutoCol  bool
 	IsOldUpdate bool
 	IsNewUpdate bool
-	SchemaName  string
-	TableDef    *plan.TableDef
+	// PreserveInput keeps execution-only columns after the target table
+	// columns.  Partitioned FULLTEXT uses this for its route ordinal while
+	// PRE_INSERT still owns hidden auto-increment allocation.
+	PreserveInput bool
+	SchemaName    string
+	TableDef      *plan.TableDef
 	// letter case: origin
 	Attrs []string
 
