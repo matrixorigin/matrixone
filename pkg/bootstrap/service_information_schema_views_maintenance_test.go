@@ -64,7 +64,7 @@ func TestMaintainInformationSchemaViewsRetriesFailedReplacement(t *testing.T) {
 	service := newInformationSchemaViewsMaintenanceTestService(t, func(sql string) (executor.Result, error) {
 		switch {
 		case sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
-			return newBootstrapStringResult(`{"method":"GETPROTOCOLVERSION","result":"cn-a:87"}`), nil
+			return newBootstrapStringResult(`{"method":"GETPROTOCOLVERSION","result":"cn-a:88"}`), nil
 		case strings.HasPrefix(sql, "select account_id from mo_catalog.mo_account"):
 			accountLookups++
 			require.Contains(t, sql, "limit 32")
@@ -164,9 +164,9 @@ func TestMaintainInformationSchemaViewsRollsBackOnMidPageProtocolLoss(t *testing
 		definition: sysview.InformationSchemaViewsLegacyDDL,
 		accountIDs: []int32{10, 20},
 		protocolResponses: []string{
+			`{"method":"GETPROTOCOLVERSION","result":"cn-a:88"}`,
+			`{"method":"GETPROTOCOLVERSION","result":"cn-a:88"}`,
 			`{"method":"GETPROTOCOLVERSION","result":"cn-a:87"}`,
-			`{"method":"GETPROTOCOLVERSION","result":"cn-a:87"}`,
-			`{"method":"GETPROTOCOLVERSION","result":"cn-a:86"}`,
 		},
 	}
 
@@ -193,13 +193,38 @@ func TestMaintainInformationSchemaViewsRollsBackOnMidPageProtocolLoss(t *testing
 		"a mid-page gate miss must roll back the staged replacement")
 	require.Zero(t, service.upgrade.informationSchemaViewsMaintenanceState.accountCursor)
 
-	// The gate miss is retryable. The next page attempt sees v87 and commits
+	// The gate miss is retryable. The next page attempt sees v88 and commits
 	// both tenants, while the first failed attempt left no persisted progress.
 	require.NoError(t, service.maintainInformationSchemaViews(t.Context()))
 	require.Equal(t, int32(6), state.protocolCalls.Load())
 	require.Equal(t, int32(3), state.replacementCalls.Load())
 	require.Equal(t, sysview.InformationSchemaViewsDDL, state.definition)
 	require.Equal(t, int32(21), service.upgrade.informationSchemaViewsMaintenanceState.accountCursor)
+}
+
+func TestMaintainInformationSchemaViewsCancellationRollsBackStagedReplacement(t *testing.T) {
+	const accountID = int32(10)
+	state := &transactionalInformationSchemaViewsState{
+		definition: sysview.InformationSchemaViewsLegacyDDL,
+	}
+	installTransactionalInformationSchemaViewsCheck(t, state, accountID)
+
+	ctx, cancel := context.WithCancel(t.Context())
+	state.cancelAfterDrop = cancel
+	service := newTransactionalInformationSchemaViewsMaintenanceTestService(t, state)
+	err := service.maintainInformationSchemaViews(ctx)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, sysview.InformationSchemaViewsLegacyDDL, state.definition,
+		"cancellation after staging the replacement must keep the legacy marker")
+	require.Zero(t, service.upgrade.informationSchemaViewsMaintenanceState.accountCursor,
+		"cancellation must not publish page progress")
+
+	// The failed generation releases the maintenance guard. A fresh invocation
+	// can retry the same durable legacy marker and publish only after commit.
+	require.NoError(t, service.maintainInformationSchemaViews(t.Context()))
+	require.Equal(t, sysview.InformationSchemaViewsDDL, state.definition)
+	require.Equal(t, int32(accountID+1),
+		service.upgrade.informationSchemaViewsMaintenanceState.accountCursor)
 }
 
 func TestMaintainInformationSchemaViewsRetriesCommitFailureAfterRestart(t *testing.T) {
@@ -336,9 +361,9 @@ func TestMaintainInformationSchemaViewsTransitionsLegacyDefinitionForPublicConsu
 		definition: sysview.InformationSchemaViewsLegacyDDL,
 		protocolResponses: []string{
 			`{"method":"GETPROTOCOLVERSION","result":"cn-a:74"}`,
-			`{"method":"GETPROTOCOLVERSION","result":"cn-a:87"}`,
-			`{"method":"GETPROTOCOLVERSION","result":"cn-a:87"}`,
-			`{"method":"GETPROTOCOLVERSION","result":"cn-a:87"}`,
+			`{"method":"GETPROTOCOLVERSION","result":"cn-a:88"}`,
+			`{"method":"GETPROTOCOLVERSION","result":"cn-a:88"}`,
+			`{"method":"GETPROTOCOLVERSION","result":"cn-a:88"}`,
 		},
 	}
 	installTransactionalInformationSchemaViewsCheck(t, state, accountID)
@@ -410,7 +435,7 @@ func TestMaintainInformationSchemaViewsSkipsAccountDroppedDuringScan(t *testing.
 	service := newInformationSchemaViewsMaintenanceTestService(t, func(sql string) (executor.Result, error) {
 		switch {
 		case sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
-			return newBootstrapStringResult(`{"method":"GETPROTOCOLVERSION","result":"cn-a:87"}`), nil
+			return newBootstrapStringResult(`{"method":"GETPROTOCOLVERSION","result":"cn-a:88"}`), nil
 		case strings.HasPrefix(sql, "select account_id from mo_catalog.mo_account"):
 			require.Contains(t, sql, "account_id >= 0")
 			return buildInformationSchemaViewsMaintenanceAccountRows(droppedAccountID, survivingAccountID), nil
@@ -453,7 +478,7 @@ func TestMaintainInformationSchemaViewsFindsLateAccountAfterWrap(t *testing.T) {
 	service := newInformationSchemaViewsMaintenanceTestService(t, func(sql string) (executor.Result, error) {
 		switch {
 		case sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
-			return newBootstrapStringResult(`{"method":"GETPROTOCOLVERSION","result":"cn-a:87"}`), nil
+			return newBootstrapStringResult(`{"method":"GETPROTOCOLVERSION","result":"cn-a:88"}`), nil
 		case strings.HasPrefix(sql, "select account_id from mo_catalog.mo_account"):
 			accountLookups++
 			switch accountLookups {
@@ -559,6 +584,7 @@ type transactionalInformationSchemaViewsState struct {
 	protocolRelease   chan struct{}
 	protocolOnce      sync.Once
 	execTxnCalls      atomic.Int32
+	cancelAfterDrop   context.CancelFunc
 }
 
 type transactionalInformationSchemaViewsExecutor struct {
@@ -596,17 +622,23 @@ func (e *transactionalInformationSchemaViewsExecutor) Exec(
 }
 
 func (e *transactionalInformationSchemaViewsExecutor) ExecTxn(
-	_ context.Context,
+	ctx context.Context,
 	execFunc func(executor.TxnExecutor) error,
 	_ executor.Options,
 ) error {
 	e.state.execTxnCalls.Add(1)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	txn := &transactionalInformationSchemaViewsTxn{
 		state:       e.state,
 		definition:  e.state.definition,
 		txnOperator: e.txnOperator,
 	}
 	if err := execFunc(txn); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if e.state.commitErr != nil {
@@ -646,7 +678,7 @@ func (txn *transactionalInformationSchemaViewsTxn) Exec(
 			txn.state.protocolOnce.Do(func() { close(txn.state.protocolEntered) })
 			<-txn.state.protocolRelease
 		}
-		response := `{"method":"GETPROTOCOLVERSION","result":"cn-a:87"}`
+		response := `{"method":"GETPROTOCOLVERSION","result":"cn-a:88"}`
 		call := int(txn.state.protocolCalls.Add(1)) - 1
 		if call < len(txn.state.protocolResponses) {
 			response = txn.state.protocolResponses[call]
@@ -660,6 +692,11 @@ func (txn *transactionalInformationSchemaViewsTxn) Exec(
 		return buildInformationSchemaViewsMaintenanceAccountRows(accountIDs...), nil
 	case strings.HasPrefix(sql, "DROP VIEW IF EXISTS information_schema.VIEWS"):
 		txn.definition = ""
+		if txn.state.cancelAfterDrop != nil {
+			cancel := txn.state.cancelAfterDrop
+			txn.state.cancelAfterDrop = nil
+			cancel()
+		}
 		return executor.Result{}, nil
 	case sql == sysview.InformationSchemaViewsDDL:
 		txn.state.replacementCalls.Add(1)
