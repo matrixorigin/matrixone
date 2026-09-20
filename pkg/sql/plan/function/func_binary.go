@@ -1546,7 +1546,7 @@ func doTimeAdd(start types.Time, diff int64, iTyp types.IntervalType) (types.Tim
 		return 0, err
 	}
 	t, success := start.AddInterval(diff, iTyp)
-	if success {
+	if success && types.IsMySQLTime(t) {
 		return t, nil
 	}
 	return 0, moerr.NewOutOfRangeNoCtx("time", "")
