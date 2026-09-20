@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
-	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
@@ -117,17 +116,6 @@ var _ veccache.VectorIndexSearchIf = (*Fulltext2Search)(nil)
 // the first Search.
 func NewFulltext2Search(cfg TableConfig) *Fulltext2Search {
 	return &Fulltext2Search{cfg: cfg}
-}
-
-// EvictIdleCache drops the live cached index for indexTable IF no search is in
-// flight, so the next query reloads the just-appended cdc_tail generation. A busy
-// entry is left warm (RemoveIdle returns false) and refreshes at a later idle
-// moment or via the IsStale sweep. Called after a CDC tail flush commits, this
-// bounds the stale-empty window an index created empty (copy-alter / create on an
-// empty table, no tag=0 base) would otherwise show until the housekeeping sweep,
-// without the reader thrash a forced evict on every flush would cause.
-func EvictIdleCache(indexTable string) bool {
-	return veccache.Cache.RemoveIdle(indexTable, "cdc")
 }
 
 // Load reads the index from the chunk store: the tag=0 base sub-indexes plus the
