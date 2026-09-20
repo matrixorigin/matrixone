@@ -34,7 +34,7 @@ static void set_inline_vector(varlena_t *value, const void *data, int bytes) {
     memcpy(value->bs + 1, data, (size_t)bytes);
 }
 
-static double run_f32(const float *left, const float *right, int dim) {
+static double run_f32(const float *left, const float *right, int dim, bool sq) {
     varlena_t leftValue, rightValue;
     double result = 0;
     xcall_args_t args[3] = {0};
@@ -46,12 +46,12 @@ static double run_f32(const float *left, const float *right, int dim) {
     args[1].dataSz = VARLENA_SZ;
     args[2].pdata = (uint8_t *)&rightValue;
     args[2].dataSz = VARLENA_SZ;
-    CHECK(xcall_l2distance_f32(RUNTIME_C, NULL, (uint64_t *)args, 1, false) == 0,
+    CHECK(xcall_l2distance_f32(RUNTIME_C, NULL, (uint64_t *)args, 1, sq) == 0,
           "f32 xcall returned an error");
     return result;
 }
 
-static double run_f64(const double *left, const double *right, int dim) {
+static double run_f64(const double *left, const double *right, int dim, bool sq) {
     varlena_t leftValue, rightValue;
     double result = 0;
     xcall_args_t args[3] = {0};
@@ -63,7 +63,7 @@ static double run_f64(const double *left, const double *right, int dim) {
     args[1].dataSz = VARLENA_SZ;
     args[2].pdata = (uint8_t *)&rightValue;
     args[2].dataSz = VARLENA_SZ;
-    CHECK(xcall_l2distance_f64(RUNTIME_C, NULL, (uint64_t *)args, 1, false) == 0,
+    CHECK(xcall_l2distance_f64(RUNTIME_C, NULL, (uint64_t *)args, 1, sq) == 0,
           "f64 xcall returned an error");
     return result;
 }
@@ -71,7 +71,7 @@ static double run_f64(const double *left, const double *right, int dim) {
 int main(void) {
     const float f32Large[] = {3e38f, 3e38f};
     const float f32Zero[] = {0, 0};
-    const double f32Distance = run_f32(f32Large, f32Zero, 2);
+    const double f32Distance = run_f32(f32Large, f32Zero, 2, false);
     const double f32Expected = (double)f32Large[0] * sqrt(2.0);
     CHECK(isfinite(f32Distance), "finite f32 values must not overflow L2");
     CHECK(fabs(f32Distance / f32Expected - 1.0) < 1e-12,
@@ -79,7 +79,7 @@ int main(void) {
 
     const double f64Tiny[] = {1e-310, 1e-310};
     const double f64Zero[] = {0, 0};
-    const double f64Distance = run_f64(f64Tiny, f64Zero, 2);
+    const double f64Distance = run_f64(f64Tiny, f64Zero, 2, false);
     const double f64Expected = 1e-310 * sqrt(2.0);
     CHECK(f64Distance > 0, "tiny finite f64 values must not underflow to zero");
     CHECK(fabs(f64Distance / f64Expected - 1.0) < 1e-12,
@@ -87,8 +87,40 @@ int main(void) {
 
     const double f64Max[] = {DBL_MAX, DBL_MAX};
     const double f64Min[] = {-DBL_MAX, -DBL_MAX};
-    CHECK(isinf(run_f64(f64Max, f64Min, 2)),
+    CHECK(isinf(run_f64(f64Max, f64Min, 2, false)),
           "unrepresentable f64 L2 result must be positive infinity");
+
+    const float f32NaN[] = {NAN, 0};
+    const float f32Inf[] = {INFINITY, 0};
+    const float f32InfNaN[] = {INFINITY, NAN};
+    CHECK(isnan(run_f32(f32NaN, f32Zero, 2, false)) &&
+              isnan(run_f32(f32NaN, f32Zero, 2, true)),
+          "f32 XCall must preserve NaN in both L2 modes");
+    CHECK(isnan(run_f32(f32Inf, f32Inf, 2, false)) &&
+              isnan(run_f32(f32Inf, f32Inf, 2, true)),
+          "f32 XCall must preserve Inf-Inf as NaN");
+    CHECK(isnan(run_f32(f32InfNaN, f32Zero, 2, false)) &&
+              isnan(run_f32(f32InfNaN, f32Zero, 2, true)),
+          "f32 XCall must scan past infinity for NaN");
+    CHECK(isinf(run_f32(f32Inf, f32Zero, 2, false)) &&
+              isinf(run_f32(f32Inf, f32Zero, 2, true)),
+          "f32 XCall must preserve infinity in both L2 modes");
+
+    const double f64NaN[] = {NAN, 0};
+    const double f64Inf[] = {INFINITY, 0};
+    const double f64InfNaN[] = {INFINITY, NAN};
+    CHECK(isnan(run_f64(f64NaN, f64Zero, 2, false)) &&
+              isnan(run_f64(f64NaN, f64Zero, 2, true)),
+          "f64 XCall must preserve NaN in both L2 modes");
+    CHECK(isnan(run_f64(f64Inf, f64Inf, 2, false)) &&
+              isnan(run_f64(f64Inf, f64Inf, 2, true)),
+          "f64 XCall must preserve Inf-Inf as NaN");
+    CHECK(isnan(run_f64(f64InfNaN, f64Zero, 2, false)) &&
+              isnan(run_f64(f64InfNaN, f64Zero, 2, true)),
+          "f64 XCall must scan past infinity for NaN");
+    CHECK(isinf(run_f64(f64Inf, f64Zero, 2, false)) &&
+              isinf(run_f64(f64Inf, f64Zero, 2, true)),
+          "f64 XCall must preserve infinity in both L2 modes");
 
     puts("xcall stable L2 tests passed");
     return 0;

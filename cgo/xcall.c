@@ -30,15 +30,28 @@ static double xcall_scale_result(double scale, double value, bool square) {
 
 static double xcall_l2_result_f32(float *left, float *right, int dim, bool square) {
     double scale = 0;
+    bool has_nan = false;
+    bool has_inf = false;
     for (int j = 0; j < dim; j++) {
         double diff = (double) left[j] - (double) right[j];
         double abs_diff = fabs(diff);
+        if (isnan(diff)) {
+            has_nan = true;
+            continue;
+        }
         if (isinf(abs_diff)) {
-            return __builtin_huge_val();
+            has_inf = true;
+            continue;
         }
         if (abs_diff > scale) {
             scale = abs_diff;
         }
+    }
+    if (has_nan) {
+        return NAN;
+    }
+    if (has_inf) {
+        return __builtin_huge_val();
     }
     if (scale == 0) {
         return 0;
@@ -54,15 +67,28 @@ static double xcall_l2_result_f32(float *left, float *right, int dim, bool squar
 
 static double xcall_l2_result_f64(double *left, double *right, int dim, bool square) {
     double scale = 0;
+    bool has_nan = false;
+    bool has_inf = false;
     for (int j = 0; j < dim; j++) {
         double diff = left[j] - right[j];
         double abs_diff = fabs(diff);
+        if (isnan(diff)) {
+            has_nan = true;
+            continue;
+        }
         if (isinf(abs_diff)) {
-            return __builtin_huge_val();
+            has_inf = true;
+            continue;
         }
         if (abs_diff > scale) {
             scale = abs_diff;
         }
+    }
+    if (has_nan) {
+        return NAN;
+    }
+    if (has_inf) {
+        return __builtin_huge_val();
     }
     if (scale == 0) {
         return 0;

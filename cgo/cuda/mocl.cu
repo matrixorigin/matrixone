@@ -10,6 +10,10 @@ __device__ double xcall_scale_result(double scale, double value, bool square) {
     return ldexp(value * mantissa, exponent);
 }
 
+__device__ double xcall_nonfinite_result(bool hasNaN) {
+    return hasNaN ? NAN : __builtin_huge_val();
+}
+
 // Device code
 extern "C" __global__ void l2distance_f32(
         double *res, int n, int vecsz, bool sq,
@@ -23,16 +27,26 @@ extern "C" __global__ void l2distance_f32(
         float *astart = (float *)(A + offA);
         float *bstart = (float *)(B + offB); 
         double scale = 0;
+        bool hasNaN = false;
+        bool hasInf = false;
         for (int j = 0; j < loop; j++) {
             double diff = (double)astart[j] - (double)bstart[j];
             double absDiff = fabs(diff);
+            if (isnan(diff)) {
+                hasNaN = true;
+                continue;
+            }
             if (isinf(absDiff)) {
-                res[i] = absDiff;
-                return;
+                hasInf = true;
+                continue;
             }
             if (absDiff > scale) {
                 scale = absDiff;
             }
+        }
+        if (hasNaN || hasInf) {
+            res[i] = xcall_nonfinite_result(hasNaN);
+            return;
         }
         if (scale == 0) {
             res[i] = 0;
@@ -57,16 +71,26 @@ extern "C" __global__ void l2distance_f32_const(
         uint32_t offA = offlenA[i * 6 + 1];
         float *astart = (float *)(A + offA);
         double scale = 0;
+        bool hasNaN = false;
+        bool hasInf = false;
         for (int j = 0; j < loop; j++) {
             double diff = (double)astart[j] - (double)B[j];
             double absDiff = fabs(diff);
+            if (isnan(diff)) {
+                hasNaN = true;
+                continue;
+            }
             if (isinf(absDiff)) {
-                res[i] = absDiff;
-                return;
+                hasInf = true;
+                continue;
             }
             if (absDiff > scale) {
                 scale = absDiff;
             }
+        }
+        if (hasNaN || hasInf) {
+            res[i] = xcall_nonfinite_result(hasNaN);
+            return;
         }
         if (scale == 0) {
             res[i] = 0;
@@ -93,16 +117,26 @@ extern "C" __global__ void l2distance_f64(
         double *astart = (double *)(A + offA);
         double *bstart = (double *)(B + offB); 
         double scale = 0;
+        bool hasNaN = false;
+        bool hasInf = false;
         for (int j = 0; j < loop; j++) {
             double diff = astart[j] - bstart[j];
             double absDiff = fabs(diff);
+            if (isnan(diff)) {
+                hasNaN = true;
+                continue;
+            }
             if (isinf(absDiff)) {
-                res[i] = absDiff;
-                return;
+                hasInf = true;
+                continue;
             }
             if (absDiff > scale) {
                 scale = absDiff;
             }
+        }
+        if (hasNaN || hasInf) {
+            res[i] = xcall_nonfinite_result(hasNaN);
+            return;
         }
         if (scale == 0) {
             res[i] = 0;
@@ -127,16 +161,26 @@ extern "C" __global__ void l2distance_f64_const(
         uint32_t offA = offlenA[i * 6 + 1];
         double *astart = (double *)(A + offA);
         double scale = 0;
+        bool hasNaN = false;
+        bool hasInf = false;
         for (int j = 0; j < loop; j++) {
             double diff = astart[j] - B[j];
             double absDiff = fabs(diff);
+            if (isnan(diff)) {
+                hasNaN = true;
+                continue;
+            }
             if (isinf(absDiff)) {
-                res[i] = absDiff;
-                return;
+                hasInf = true;
+                continue;
             }
             if (absDiff > scale) {
                 scale = absDiff;
             }
+        }
+        if (hasNaN || hasInf) {
+            res[i] = xcall_nonfinite_result(hasNaN);
+            return;
         }
         if (scale == 0) {
             res[i] = 0;
