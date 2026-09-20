@@ -133,6 +133,27 @@ func TestIntegerArgumentBoundSources(t *testing.T) {
 	}
 }
 
+func TestSplitPartKeepsLegacyPhysicalContract(t *testing.T) {
+	ctx := context.Background()
+	for _, source := range []types.T{types.T_int64, types.T_decimal128} {
+		column := &planpb.Expr{Typ: planpb.Type{Id: int32(source), Scale: 1}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+		bound, err := BindFuncExprImplByPlanExpr(ctx, "split_part", []*Expr{
+			makePlan2StringConstExprWithType("a.b.c"), makePlan2StringConstExprWithType("."), column,
+		})
+		require.NoError(t, err)
+		_, overload := function.DecodeOverloadID(bound.GetF().Func.Obj)
+		require.Equal(t, int32(0), overload)
+
+		physical := bound.GetF().Args[2]
+		require.Equal(t, int32(types.T_uint32), physical.Typ.Id)
+		require.Equal(t, "cast_strict", physical.GetF().Func.ObjName)
+		require.Equal(t, int32(types.T_int64), physical.GetF().Args[0].Typ.Id)
+		if source == types.T_decimal128 {
+			require.True(t, isIntegerArgumentCast(physical.GetF().Args[0]))
+		}
+	}
+}
+
 func TestIntegerArgumentBoundSelection(t *testing.T) {
 	ctx := context.Background()
 	proc := testutil.NewProcess(t)

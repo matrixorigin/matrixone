@@ -82,12 +82,8 @@ func TestSplitPartReusesLegacyExecutionIdentity(t *testing.T) {
 		_, overload := DecodeOverloadID(resolved.GetEncodedOverloadID())
 		require.Equal(t, int32(0), overload, source)
 		targets, cast := resolved.ShouldDoImplicitTypeCast()
-		if source == types.T_int64 {
-			require.False(t, cast)
-		} else {
-			require.True(t, cast)
-			require.Equal(t, types.T_int64, targets[2].Oid)
-		}
+		require.True(t, cast)
+		require.Equal(t, types.T_uint32, targets[2].Oid)
 	}
 
 	// Persisted plans created before integer-parameter migration retain UINT32.
@@ -129,11 +125,7 @@ func TestIntegerArgumentAdditionalSignatures(t *testing.T) {
 						}
 						for _, param := range fn.integerParameters {
 							if param.position < len(inputs) {
-								expected := ov.args[param.position]
-								if name == "split_part" {
-									expected = param.target
-								}
-								require.Equal(t, expected, targets[param.position].Oid, "retain physical narrow adapters without changing the logical integer context")
+								require.Equal(t, ov.args[param.position], targets[param.position].Oid, "retain physical narrow adapters without changing the logical integer context")
 							}
 						}
 					}

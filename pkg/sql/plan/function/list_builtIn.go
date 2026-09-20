@@ -3760,9 +3760,9 @@ var supportedStringBuiltIns = []FuncNew{
 	{
 		functionId:        SPLIT_PART,
 		class:             plan.Function_STRICT,
-		integerParameters: []integerParameter{{position: 2, target: types.T_int64}},
+		integerParameters: []integerParameter{{position: 2, target: types.T_int64, physicalTarget: types.T_uint32}},
 		layout:            STANDARD_FUNCTION,
-		checkFn:           splitPartTypeMatch,
+		checkFn:           stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{

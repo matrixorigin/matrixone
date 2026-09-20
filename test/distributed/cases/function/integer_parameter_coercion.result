@@ -223,7 +223,7 @@ select last_query_id(-1) is not null;
 ➤ last_query_id(-1) is not null[-7,1,0]  𝄀
 1
 select split_part('a.b.c','.',cast('4294967296' as decimal(20,0)));
-invalid input: split_part: field contains out-of-range integer
+Data truncation: data out of range: data type uint32, value '4294967296'
 select sha2('matrixone',cast('9223372036854775807.5' as decimal(38,1)));
 Data truncation: data out of range: data type int64, integer argument
 prepare utility_source from 'select period_add(202401,?),round(12.345,?),from_days(?),week(cast("2026-09-20" as date),?),timestampadd(day,?,cast("2026-09-20" as date)),split_part("a.b.c",".",?),sha2("matrixone",?),regexp_instr("abcabc","b",?)';
