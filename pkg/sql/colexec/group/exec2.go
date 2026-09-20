@@ -119,6 +119,7 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	group.ctr.legacyHLLState = useLegacyHLLStateForRemote(proc)
 	group.ctr.floatZeroHLLState = useFloatZeroHLLStateForRemote(proc)
 	group.ctr.legacyVectorHLLState = useLegacyVectorHLLStateForRemote(proc)
+	group.ctr.legacyTextHLLAddState = useLegacyTextHLLAddStateForRemote(proc)
 	// Freeze the FLOAT DISTINCT key policy before makeAggList creates any
 	// states. A pre-v79 remote producer keeps every legacy float key (including
 	// distinct NaN payloads); local and v79+ execution uses canonical keys.

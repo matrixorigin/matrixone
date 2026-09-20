@@ -49,12 +49,18 @@ UT_LINK_PARALLEL=${UT_LINK_PARALLEL:-"3"}
 UT_LINK_DIR=""
 LIGHT_TOOL_FLAGS=()
 UT_SHARD=${UT_SHARD:-"all"}
-# Compile embedded packages while the exclusive issues fixture is active.
-# This only warms the Go build cache; the authoritative embedded go test
-# command still compiles/executes the complete package scope and owns all
-# test results. Keep this opt-in until a comparable run proves a critical-path
-# gain without consuming the runner's memory headroom.
-UT_PREBUILD_EMBEDDED=${UT_PREBUILD_EMBEDDED:-"0"}
+# Compile embedded packages while the exclusive issues fixture is active, then
+# execute those exact binaries after issues releases the cluster admission
+# lock. This removes their compile/link work from the serial critical path
+# without admitting a second cluster process. A failed prebuild falls back to
+# the complete-scope go test before any prebuilt binary is executed.
+UT_PREBUILD_EMBEDDED=${UT_PREBUILD_EMBEDDED:-"1"}
+# Nine race binaries currently occupy several GiB. Preserve enough workspace
+# headroom for Go's build cache, reports, and the running issues fixture.
+UT_PREBUILD_MIN_FREE_KB=${UT_PREBUILD_MIN_FREE_KB:-"6291456"}
+# Zero derives a package execution boundary from UT_TIMEOUT plus two minutes
+# for TestMain cleanup and output drain. Tests may set a short explicit value.
+UT_EMBEDDED_HARD_TIMEOUT_SECONDS=${UT_EMBEDDED_HARD_TIMEOUT_SECONDS:-"0"}
 UT_OVERLAP_PLAN=${UT_OVERLAP_PLAN:-"1"}
 # Light/issues overlap is opt-in: the measured treatment regressed wall time
 # and did not meet the runner's memory-headroom gate.
@@ -1107,7 +1113,16 @@ function handle_ut_termination(){
         logger "ERR" "UT cancellation: stopping ${CURRENT_UT_LABEL} child ${CURRENT_UT_PID}"
         # Leave the outer timeout's kill-after budget for descendants that do
         # not honour TERM; do not block the diagnostic path indefinitely.
-        wait_for_ut_process_group "${CURRENT_UT_PID}" 20
+        local current_grace_ticks=20
+        # The prebuilt embedded helper owns an active test group and a
+        # watchdog group. Its handler gives the active group five seconds to
+        # stop before KILL, so the parent must not kill the helper on the same
+        # deadline and orphan that independently admitted group.
+        if [[ "${CURRENT_UT_COMMAND_STAGE}" == embedded &&
+            "${CURRENT_UT_COMMAND_LABEL}" == "prebuilt embedded-cluster race-test packages" ]]; then
+            current_grace_ticks=${UT_HELPER_TERM_GRACE_TICKS}
+        fi
+        wait_for_ut_process_group "${CURRENT_UT_PID}" "${current_grace_ticks}"
         wait "${CURRENT_UT_PID}" 2>/dev/null || true
         CURRENT_UT_PID=""
     fi
@@ -1716,8 +1731,9 @@ function remove_packages_from_scope(){
     printf '%s\n' "${scope}"
 }
 
-# Build-only optimization. The original complete-scope go test remains the sole
-# executor, retaining its external timeout, TestMain and output-drain semantics.
+# Build the exact binaries that the embedded stage can execute after the
+# exclusive issues fixture exits. Every artifact is indexed by the immutable
+# package order so package names containing path separators never become paths.
 function run_embedded_prebuild(){
     local package_scope=$1
     local package_parallel=$2
@@ -1826,8 +1842,13 @@ function start_embedded_prebuild(){
     # Disk exhaustion must only disable this optional optimization.
     local available_kb
     available_kb=$(df -Pk "${G_WKSP}" | awk 'END {print $4}')
-    if ! [[ "${available_kb}" =~ ^[0-9]+$ ]] || (( available_kb == 0 )); then
-        logger "WRN" "embedded prebuild has no verified available disk; use go test"
+    if ! [[ "${UT_PREBUILD_MIN_FREE_KB}" =~ ^[1-9][0-9]*$ ]]; then
+        logger "WRN" "invalid UT_PREBUILD_MIN_FREE_KB=${UT_PREBUILD_MIN_FREE_KB}; use go test"
+        return 0
+    fi
+    if ! [[ "${available_kb}" =~ ^[0-9]+$ ]] ||
+        (( available_kb < UT_PREBUILD_MIN_FREE_KB )); then
+        logger "WRN" "embedded prebuild requires ${UT_PREBUILD_MIN_FREE_KB} KiB free (available ${available_kb:-unknown}); use go test"
         return 0
     fi
     CLUSTER_PREBUILD_DIR=$(mktemp -d "${G_WKSP}/${G_TS}-embedded.XXXXXX") || return 0
@@ -1861,13 +1882,7 @@ function finish_embedded_prebuild(){
     checkpoint_ut_event "join-finish" "embedded-prebuild" "compile embedded-cluster packages" "${prebuild_status}" \
         "compile_only=true"
     mark_ut_stage "embedded-prebuild" "compile embedded-cluster packages" finish "${prebuild_status}"
-    if (( prebuild_status != 0 )); then
-        # The real embedded test command remains authoritative. A prebuild can
-        # fail because of an environment-only test invocation; retain its
-        # output for diagnosis but do not turn a later passing test red.
-        logger "WRN" "embedded prebuild failed with status ${prebuild_status}; continuing with the authoritative test run"
-    fi
-    cleanup_embedded_prebuild
+    return "${prebuild_status}"
 }
 
 function cleanup_embedded_prebuild(){
@@ -1896,9 +1911,176 @@ function cleanup_embedded_prebuild(){
     if (( term_pending != 0 && UT_TERMINATING == 0 )); then handle_ut_termination; fi
 }
 
+function run_prebuilt_embedded_tests(){
+    local package_scope=$1
+    local report_base=$2
+    local hard_timeout_seconds=$3
+    local package=""
+    local package_dir=""
+    local package_import=""
+    local binary=""
+    local metadata=""
+    local package_index=0
+    local package_status=0
+    local suite_status=0
+    local active_pid=""
+    local watchdog_pid=""
+    local previous_term_trap=""
+    local execution_term_trap=""
+    local term_pending=0
+
+    previous_term_trap=$(trap -p TERM)
+    function cancel_prebuilt_embedded_execution(){
+        trap '' TERM
+        if [[ -n "${active_pid}" ]]; then
+            terminate_ut_process_group "${active_pid}" TERM
+        fi
+        if [[ -n "${watchdog_pid}" ]]; then
+            terminate_ut_process_group "${watchdog_pid}" TERM
+        fi
+        [[ -n "${active_pid}" ]] && wait_for_ut_process_group "${active_pid}" 20 >&2
+        [[ -n "${watchdog_pid}" ]] && wait_for_ut_process_group "${watchdog_pid}" 20 >&2
+        wait 2>/dev/null || true
+        exit 143
+    }
+    trap cancel_prebuilt_embedded_execution TERM
+    execution_term_trap=$(trap -p TERM)
+
+    while IFS= read -r package; do
+        [[ -n "${package}" ]] || continue
+        binary="${report_base}.package.${package_index}.test"
+        metadata="${report_base}.package.${package_index}.meta"
+        checkpoint_ut_event "start" "embedded" "${package}" "" \
+            "package_index=${package_index} prebuilt=true"
+        if [[ ! -x "${binary}" ]]; then
+            logger "ERR" "missing prebuilt embedded test binary for ${package}" >&2
+            checkpoint_ut_event "finish" "embedded" "${package}" "1" \
+                "package_index=${package_index} phase=artifact prebuilt=true"
+            suite_status=1
+            package_index=$((package_index + 1))
+            continue
+        fi
+        if ! IFS=$'\t' read -r package_dir package_import < "${metadata}" ||
+            [[ -z "${package_dir}" || -z "${package_import}" ]]; then
+            logger "ERR" "invalid prevalidated metadata for prebuilt embedded package ${package}" >&2
+            checkpoint_ut_event "finish" "embedded" "${package}" "1" \
+                "package_index=${package_index} phase=discover prebuilt=true"
+            suite_status=1
+            package_index=$((package_index + 1))
+            continue
+        fi
+
+        package_status=0
+        term_pending=0
+        trap 'term_pending=1' TERM
+        set -m
+        (
+            cd "${package_dir}" || exit 2
+            LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" go tool test2json -t -p "${package_import}" \
+                "${binary}" -test.short=true -test.v=test2json \
+                -test.paniconexit0=true -test.count=1 -test.timeout="${UT_TIMEOUT}m"
+        ) &
+        active_pid=$!
+        set +m
+        restore_ut_term_trap "${execution_term_trap}"
+        if (( term_pending != 0 )); then cancel_prebuilt_embedded_execution; fi
+
+        term_pending=0
+        trap 'term_pending=1' TERM
+        set -m
+        (
+            sleep "${hard_timeout_seconds}"
+            if kill -0 "${active_pid}" 2>/dev/null; then
+                logger "ERR" "prebuilt embedded package ${package} exceeded ${hard_timeout_seconds}s hard timeout" >&2
+                terminate_ut_process_group "${active_pid}" TERM
+                wait_for_ut_process_group "${active_pid}" 20
+            fi
+        ) >&2 &
+        watchdog_pid=$!
+        set +m
+        restore_ut_term_trap "${execution_term_trap}"
+        if (( term_pending != 0 )); then cancel_prebuilt_embedded_execution; fi
+        wait "${active_pid}" || package_status=$?
+        # test2json can exit after TERM while a descendant still owns its
+        # stdout pipe or ignores TERM. Do not stop the watchdog or release the
+        # artifact until the entire package process group is gone.
+        wait_for_ut_process_group "${active_pid}" 20 >&2
+        active_pid=""
+        terminate_ut_process_group "${watchdog_pid}" TERM
+        wait_for_ut_process_group "${watchdog_pid}" 20
+        wait "${watchdog_pid}" 2>/dev/null || true
+        watchdog_pid=""
+        checkpoint_ut_event "finish" "embedded" "${package}" "${package_status}" \
+            "package_index=${package_index} phase=execute prebuilt=true"
+        if (( package_status != 0 )); then
+            suite_status=1
+            logger "ERR" "prebuilt embedded package ${package} failed with status ${package_status}" >&2
+        fi
+        package_index=$((package_index + 1))
+    done <<< "${package_scope}"
+    restore_ut_term_trap "${previous_term_trap}"
+    return "${suite_status}"
+}
+
 function run_embedded_tests(){
     local package_scope=$1
-    finish_embedded_prebuild
+    local prebuild_status=1
+    local test_status=0
+    local report_base="${CLUSTER_PREBUILD_REPORT}"
+    local hard_timeout_seconds=0
+    local package_dir=""
+    local package_import=""
+
+    if [[ -n "${CLUSTER_PREBUILD_JOB_PID}" ]]; then
+        finish_embedded_prebuild
+        prebuild_status=$?
+    fi
+    if (( prebuild_status == 0 )) && [[ -n "${report_base}" ]]; then
+        local package=""
+        local package_index=0
+        if ! [[ "${UT_TIMEOUT}" =~ ^[1-9][0-9]*$ ]] ||
+            ! [[ "${UT_EMBEDDED_HARD_TIMEOUT_SECONDS}" =~ ^[0-9]+$ ]]; then
+            logger "WRN" "invalid embedded timeout configuration; use the authoritative complete-scope go test"
+            prebuild_status=1
+        elif (( UT_EMBEDDED_HARD_TIMEOUT_SECONDS > 0 )); then
+            hard_timeout_seconds=${UT_EMBEDDED_HARD_TIMEOUT_SECONDS}
+        else
+            hard_timeout_seconds=$((10#${UT_TIMEOUT} * 60 + 120))
+        fi
+        while IFS= read -r package; do
+            (( prebuild_status == 0 )) || break
+            [[ -n "${package}" ]] || continue
+            if [[ ! -x "${report_base}.package.${package_index}.test" ]]; then
+                logger "WRN" "embedded prebuild did not publish a binary for ${package}"
+                prebuild_status=1
+                break
+            fi
+            if ! go list ${GO_MODULE_MODE} -race -tags "${TAGS}" \
+                -f '{{.Dir}}{{"\t"}}{{.ImportPath}}' "${package}" \
+                > "${report_base}.package.${package_index}.meta" ||
+                ! IFS=$'\t' read -r package_dir package_import \
+                < "${report_base}.package.${package_index}.meta" ||
+                [[ -z "${package_dir}" || -z "${package_import}" ]]; then
+                logger "WRN" "embedded prebuild metadata validation failed for ${package}; use go test"
+                prebuild_status=1
+                break
+            fi
+            package_index=$((package_index + 1))
+        done <<< "${package_scope}"
+    fi
+    if (( prebuild_status == 0 )) && [[ -n "${report_base}" ]]; then
+        logger "INF" "Run embedded-cluster race-test packages from binaries compiled during the issues stage"
+        run_ut_command embedded "prebuilt embedded-cluster race-test packages" \
+            run_prebuilt_embedded_tests "${package_scope}" "${report_base}" "${hard_timeout_seconds}"
+        test_status=$?
+        cleanup_embedded_prebuild || return 1
+        return "${test_status}"
+    fi
+
+    if [[ -n "${report_base}" ]]; then
+        logger "WRN" "embedded prebuild failed with status ${prebuild_status}; use the authoritative complete-scope go test"
+        cleanup_embedded_prebuild || return 1
+    fi
     run_ut_command embedded "embedded-cluster race-test packages" \
         env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" \
         go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" \
@@ -2061,7 +2243,6 @@ function run_tests(){
         local resource_heavy_test_scope
         local light_test_scope
         local package
-        local cluster_prebuild_parallel=2
         local package_status=0
         local light_status=0
         local hnsw_status=0
@@ -2109,10 +2290,6 @@ function run_tests(){
             UT_TEST_STATUS=1
             return 0
         fi
-        if (( HEAVY_RACE_PARALLEL < cluster_prebuild_parallel )); then
-            cluster_prebuild_parallel=${HEAVY_RACE_PARALLEL}
-        fi
-
         if ! plan_package=$(go list ${GO_MODULE_MODE} ./pkg/sql/plan); then
             logger "ERR" "Failed to resolve ./pkg/sql/plan"
             UT_TEST_STATUS=1
@@ -2267,7 +2444,10 @@ function run_tests(){
             (( overlap_light == 0 )) &&
             should_run_ut_stage serial && should_run_ut_stage embedded &&
             [[ -n "${cluster_test_scope}" ]]; then
-            start_embedded_prebuild "${cluster_test_scope}" "${cluster_prebuild_parallel}"
+            # One compiler is the bounded companion to the running issues test
+            # process. More compiler groups increase memory/CPU pressure and
+            # make the overlap slower on the eight-core CI runner.
+            start_embedded_prebuild "${cluster_test_scope}" 1
         fi
 
         if should_run_ut_stage serial; then

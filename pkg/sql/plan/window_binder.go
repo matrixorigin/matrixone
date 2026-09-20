@@ -122,7 +122,7 @@ func isGroupConcatAggregateExpr(astExpr tree.Expr) bool {
 		return false
 	}
 	name := funcExpr.FuncName.Compare()
-	return strings.EqualFold(name, NameGroupConcat)
+	return strings.EqualFold(name, NameGroupConcat) || strings.EqualFold(name, "listagg")
 }
 
 func semanticNodeKey(node tree.NodeFormatter) string {
