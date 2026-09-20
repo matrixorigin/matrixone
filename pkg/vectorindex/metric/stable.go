@@ -184,14 +184,30 @@ func StableInnerProduct[T types.RealNumbers](p, q []T) (float64, error) {
 		for i := range p {
 			term := float64(p[i]) * float64(q[i])
 			t := dot + term
+			if !isFiniteStableFloat(t) {
+				needsExact = true
+				break
+			}
 			if math.Abs(dot) >= math.Abs(term) {
 				correction += (dot - t) + term
 			} else {
 				correction += (term - t) + dot
 			}
+			if !isFiniteStableFloat(correction) {
+				needsExact = true
+				break
+			}
 			dot = t
 		}
-		dot += correction
+		if !needsExact {
+			dot += correction
+			if !isFiniteStableFloat(dot) {
+				needsExact = true
+			}
+		}
+		if needsExact {
+			dot = exactInnerProduct(p, q)
+		}
 	}
 	return -dot, nil
 }
@@ -372,14 +388,24 @@ func StableSummation[T types.RealNumbers](v []T) (float64, error) {
 	for _, value := range v {
 		x := float64(value)
 		t := sum + x
+		if !isFiniteStableFloat(t) {
+			return exactSummation(stableFloat64Values(v)), nil
+		}
 		if math.Abs(sum) >= math.Abs(x) {
 			correction += (sum - t) + x
 		} else {
 			correction += (x - t) + sum
 		}
+		if !isFiniteStableFloat(correction) {
+			return exactSummation(stableFloat64Values(v)), nil
+		}
 		sum = t
 	}
-	return sum + correction, nil
+	result := sum + correction
+	if !isFiniteStableFloat(result) {
+		return exactSummation(stableFloat64Values(v)), nil
+	}
+	return result, nil
 }
 
 // StableMean returns the arithmetic mean in float64. Like StableSummation it
@@ -414,14 +440,24 @@ func StableMean[T types.RealNumbers](v []T) (float64, error) {
 	for _, value := range v {
 		x := float64(value)
 		t := sum + x
+		if !isFiniteStableFloat(t) {
+			return exactMean(stableFloat64Values(v)), nil
+		}
 		if math.Abs(sum) >= math.Abs(x) {
 			correction += (sum - t) + x
 		} else {
 			correction += (x - t) + sum
 		}
+		if !isFiniteStableFloat(correction) {
+			return exactMean(stableFloat64Values(v)), nil
+		}
 		sum = t
 	}
-	return (sum + correction) / float64(len(v)), nil
+	result := (sum + correction) / float64(len(v))
+	if !isFiniteStableFloat(result) {
+		return exactMean(stableFloat64Values(v)), nil
+	}
+	return result, nil
 }
 
 // StableDistanceFn returns a float64-result metric function for SQL and wide
@@ -556,6 +592,18 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func isFiniteStableFloat(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0)
+}
+
+func stableFloat64Values[T types.RealNumbers](v []T) []float64 {
+	values := make([]float64, len(v))
+	for i, value := range v {
+		values[i] = float64(value)
+	}
+	return values
 }
 
 func exactSummation(values []float64) float64 {

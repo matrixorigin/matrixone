@@ -220,6 +220,34 @@ func TestStableMeanWideAccumulator(t *testing.T) {
 	require.InEpsilon(t, 1e-300/3, mean, 1e-12)
 }
 
+func TestStableReductionsRecoverFromBoundaryAccumulatorOverflow(t *testing.T) {
+	value := math.MaxFloat64 / 11
+	values := make([]float64, 11)
+	for i := range values {
+		values[i] = value
+	}
+
+	sum, err := StableSummation(values)
+	require.NoError(t, err)
+	require.Equal(t, math.MaxFloat64, sum)
+
+	mean, err := StableMean(values)
+	require.NoError(t, err)
+	require.Equal(t, value, mean)
+
+	inner, err := StableInnerProduct(values, make([]float64, len(values)))
+	require.NoError(t, err)
+	require.Equal(t, float64(0), inner)
+
+	ones := make([]float64, len(values))
+	for i := range ones {
+		ones[i] = 1
+	}
+	inner, err = StableInnerProduct(values, ones)
+	require.NoError(t, err)
+	require.Equal(t, -math.MaxFloat64, inner)
+}
+
 func TestStableCosineExtremeFiniteValues(t *testing.T) {
 	large := []float64{1e300, 1e300}
 	tiny := []float64{1e-300, 1e-300}
