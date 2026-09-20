@@ -539,7 +539,9 @@ func resolveDefaultWeekFormat(proc *Process) (int64, error) {
 	if f := proc.GetResolveVariableFunc(); f != nil {
 		value, err := f("default_week_format", true, false)
 		if err != nil {
-			return 0, err
+			// Older/background resolvers may not know this variable yet. The
+			// coordinator snapshot is authoritative for remote forwarding.
+			return proc.Base.SessionInfo.DefaultWeekFormat & 7, nil
 		}
 		if value == nil {
 			return proc.Base.SessionInfo.DefaultWeekFormat & 7, nil

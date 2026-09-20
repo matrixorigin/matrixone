@@ -10522,7 +10522,9 @@ func getDefaultWeekFormatMode(proc *process.Process) (int, error) {
 
 	value, err := proc.GetResolveVariableFunc()("default_week_format", true, false)
 	if err != nil {
-		return 0, err
+		// A remote/background resolver can predate this variable. Use the
+		// execution-time session snapshot carried by the process instead.
+		return int(proc.GetSessionInfo().DefaultWeekFormat & 7), nil
 	}
 	if value == nil {
 		return int(proc.GetSessionInfo().DefaultWeekFormat & 7), nil
