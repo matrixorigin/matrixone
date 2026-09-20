@@ -62,7 +62,7 @@ length(g)
 insert into t_gen(id, t) values (2, 'ab');
 Data truncation: Can't cast column from TEXT type to VARCHAR type because of one or more values in that column. Src length 2 is larger than Dest length 1
 update t_gen set t = 'cd' where id = 1;
-Data truncation: Can't cast 'cd' to VARCHAR type. Src length 2 is larger than Dest length 1
+Data truncation: Can't cast column from TEXT type to VARCHAR type because of one or more values in that column. Src length 2 is larger than Dest length 1
 replace into t_gen(id, t) values (1, 'ef');
 Data truncation: Can't cast column from TEXT type to VARCHAR type because of one or more values in that column. Src length 2 is larger than Dest length 1
 select length(g) from t_gen order by id;

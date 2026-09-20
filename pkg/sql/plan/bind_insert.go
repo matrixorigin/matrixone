@@ -2721,7 +2721,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 					return 0, moerr.NewUnsupportedDML(builder.compCtx.GetContext(), "auto_increment default value")
 				}
 
-				updateExpr, err = getDefaultExpr(builder.GetContext(), colDef)
+				updateExpr, err = getDefaultExprForAssignment(builder.GetContext(), colDef, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 				if err != nil {
 					return 0, err
 				}
@@ -4782,7 +4782,7 @@ func (builder *QueryBuilder) appendInsertReplaceSourceCasts(bindCtx *BindContext
 		lastNodeID, colName2Idx, skipUniqueIdx, err := builder.appendNodesForReplaceStmt(bindCtx, lastNodeID, tableDef, objRef, insertColToExpr)
 		return lastNodeID, colName2Idx, skipUniqueIdx, -1, err
 	} else {
-		return builder.appendNodesForInsertStmt(bindCtx, lastNodeID, tableDef, objRef, insertColToExpr)
+		return builder.appendNodesForInsertStmt(bindCtx, lastNodeID, tableDef, objRef, insertColToExpr, builder.isInsertIgnore)
 	}
 }
 
@@ -5019,6 +5019,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 	tableDef *TableDef,
 	objRef *ObjectRef,
 	insertColToExpr map[string]*Expr,
+	assignmentIgnore bool,
 ) (int32, map[string]int32, []bool, int32, error) {
 	colName2Idx := make(map[string]int32)
 	hasAutoCol := false
@@ -5119,7 +5120,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 			projList2 = append(projList2, nil)
 			colName2Idx[tableDef.Name+"."+col.Name] = int32(len(projList2) - 1)
 		} else {
-			defExpr, err := getDefaultExpr(builder.GetContext(), col)
+			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), assignmentIgnore)
 			if err != nil {
 				return 0, nil, nil, -1, err
 			}
@@ -5156,7 +5157,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 		col := tableDef.Cols[i]
 		genExpr, err := builder.applyGeneratedColumnAssignmentCast(
 			DeepCopyExpr(col.GeneratedCol.Expr),
-			builder.isInsertIgnore,
+			assignmentIgnore,
 		)
 		if err != nil {
 			return 0, nil, nil, -1, err
@@ -5415,7 +5416,7 @@ func (builder *QueryBuilder) buildValueScan(
 		}
 		var defExpr *plan.Expr
 		if isAllDefault {
-			defExpr, err := getDefaultExpr(builder.GetContext(), col)
+			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 			if err != nil {
 				return 0, nil, err
 			}
@@ -5473,7 +5474,7 @@ func (builder *QueryBuilder) buildValueScan(
 				}
 
 				if _, ok := r[i].(*tree.DefaultVal); ok {
-					defExpr, err = getDefaultExpr(builder.GetContext(), col)
+					defExpr, err = getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 					if err != nil {
 						return 0, nil, err
 					}
@@ -5637,7 +5638,7 @@ func (builder *QueryBuilder) buildValueScan(
 			col := tableDef.Cols[colIdx]
 			colTyp := makeTypeByPlan2Type(col.Typ)
 			targetTyp := &plan.Expr{Typ: col.Typ, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
-			defExpr, err := getDefaultExpr(builder.GetContext(), col)
+			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 			if err != nil {
 				return 0, nil, err
 			}

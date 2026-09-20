@@ -190,7 +190,7 @@ enum01    CREATE TABLE `enum01` (\n  `col1` enum('red','blue','green') DEFAULT N
 desc enum01;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    ENUM('red','blue','green')    YES        null
-col2    BLOB(0)    YES        null
+col2    BLOB    YES        null
 col3    JSON(0)    YES        null
 drop snapshot sp03;
 drop database db03;

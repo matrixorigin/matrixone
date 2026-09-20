@@ -17,10 +17,12 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"io"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/parquet-go/parquet-go"
 	"github.com/prashantv/gostub"
 	"github.com/smartystreets/goconvey/convey"
 
@@ -1235,4 +1237,60 @@ func Test_shouldSplitParquetFile(t *testing.T) {
 			convey.So(result, convey.ShouldBeTrue)
 		})
 	})
+}
+
+func TestParquetBlobFamilySchemaAndBytes(t *testing.T) {
+	for _, mysqlType := range []defines.MysqlType{defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_BLOB, defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB} {
+		for _, binary := range []bool{false, true} {
+			flag := uint16(0)
+			if binary {
+				flag = uint16(defines.BINARY_FLAG)
+			}
+			node := buildParquetNode(mysqlType, flag)
+			require.Equal(t, parquet.ByteArray, node.Type().Kind())
+			require.True(t, node.Optional())
+			if binary {
+				require.Nil(t, node.Type().LogicalType())
+			} else {
+				require.NotNil(t, node.Type().LogicalType().UTF8)
+			}
+		}
+	}
+	for _, width := range []int32{types.MaxTinyTextLen, types.MaxStringSize, types.MaxMediumTextLen, types.MaxLongTextLen} {
+		mp := mpool.MustNewZero()
+		typ := types.T_blob.ToType()
+		typ.Width = width
+		col := new(MysqlColumn)
+		col.SetName("payload")
+		require.NoError(t, setMysqlColumnTypeInfo(context.Background(), typ, col))
+		mrs := &MysqlResultSet{}
+		mrs.AddColumn(col)
+		writer, err := NewParquetWriter(context.Background(), mrs)
+		require.NoError(t, err)
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(typ)
+		require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte{0xff, 0x00}, false, mp))
+		require.NoError(t, vector.AppendBytes(bat.Vecs[0], nil, true, mp))
+		bat.SetRowCount(2)
+		require.NoError(t, writer.WriteBatch(bat, mp, time.UTC))
+		bat.Clean(mp)
+		data, err := writer.Close()
+		require.NoError(t, err)
+		file, err := parquet.OpenFile(bytes.NewReader(data), int64(len(data)))
+		require.NoError(t, err)
+		require.Nil(t, file.Schema().Fields()[0].Type().LogicalType())
+		reader := parquet.NewGenericReader[struct {
+			Payload []byte `parquet:"payload,optional"`
+		}](bytes.NewReader(data))
+		rows := make([]struct {
+			Payload []byte `parquet:"payload,optional"`
+		}, 2)
+		n, err := reader.Read(rows)
+		require.ErrorIs(t, err, io.EOF)
+		require.Equal(t, 2, n)
+		require.Equal(t, []byte{0xff, 0x00}, rows[0].Payload)
+		require.Nil(t, rows[1].Payload)
+		require.NoError(t, reader.Close())
+		require.Zero(t, mp.CurrNB())
+	}
 }
