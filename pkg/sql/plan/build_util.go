@@ -708,8 +708,8 @@ func buildImplicitCurrentTimestampDefault(typ plan.Type, proc *process.Process) 
 // the first TIMESTAMP column when explicit_defaults_for_timestamp is OFF.
 // MySQL treats an explicit NULL assignment to this legacy column as a request
 // for its implicit current-timestamp value.
-func isLegacyImplicitTimestampColumn(col *plan.ColDef) bool {
-	return col != nil &&
+func isLegacyImplicitTimestampColumn(ctx CompilerContext, col *plan.ColDef) bool {
+	return legacyImplicitTimestampDefaults(ctx) && col != nil &&
 		types.T(col.Typ.Id) == types.T_timestamp &&
 		col.Default != nil && col.Default.Expr != nil &&
 		col.Default.OriginString == "CURRENT_TIMESTAMP()" &&

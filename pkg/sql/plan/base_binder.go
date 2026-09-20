@@ -5802,6 +5802,14 @@ func bindFuncExprImplByPlanExpr(
 	if name == "convert" {
 		returnType = function.ConvertReturnTypeForBinder(argsType)
 	}
+	if name == "convert_tz" && len(argsType) > 0 {
+		// CONVERT_TZ preserves the source temporal precision.  The overload
+		// lookup may use the implicit DATETIME cast target (whose default scale
+		// is zero), so restore the source scale for view/CTAS metadata.
+		returnType.Oid = types.T_datetime
+		returnType.Scale = argsType[0].Scale
+		returnType.Width = argsType[0].Width
+	}
 	adjustControlFlowMetadata(name, args, argsType, &returnType, argsCastType)
 	adjustDateFormatMetadata(name, args, &returnType)
 
@@ -6129,6 +6137,7 @@ func bindFuncExprImplByPlanExpr(
 						}
 					}
 				} else {
+					returnType.Oid = types.T_datetime
 					returnType.Scale = inputType.Scale
 					if unit == types.MicroSecond && returnType.Scale < 6 {
 						returnType.Scale = 6
@@ -6143,6 +6152,9 @@ func bindFuncExprImplByPlanExpr(
 			switch inputType.Oid {
 			case types.T_datetime, types.T_timestamp, types.T_time:
 				returnType.Oid, returnType.Scale, returnType.Width = inputType.Oid, inputType.Scale, inputType.Width
+				if inputType.Oid == types.T_timestamp {
+					returnType.Oid = types.T_datetime
+				}
 				if unit, known := dateFunctionUnitFromPlanExpr(args[2]); !known || unit == types.MicroSecond {
 					if returnType.Scale < 6 {
 						returnType.Scale = 6

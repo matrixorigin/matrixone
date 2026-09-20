@@ -2715,7 +2715,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				// missing input column.
 				replaceColRefTag(updateExpr, 0, scanTag)
 			} else {
-				if isNullAstExpr(astExpr) && isLegacyImplicitTimestampColumn(colDef) {
+				if isNullAstExpr(astExpr) && isLegacyImplicitTimestampColumn(builder.compCtx, colDef) {
 					updateExpr, err = getDefaultExpr(builder.GetContext(), colDef)
 				} else {
 					updateExpr, err = binder.BindAssignmentExpr(astExpr, colDef.Typ)
@@ -4715,7 +4715,7 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 // projections of MySQL special types.
 func (builder *QueryBuilder) castInsertSourceColumn(projExpr, sourceExpr *plan.Expr, colDef *plan.ColDef) (*plan.Expr, error) {
 	if sourceExpr != nil && sourceExpr.GetLit() != nil && sourceExpr.GetLit().Isnull &&
-		isLegacyImplicitTimestampColumn(colDef) {
+		isLegacyImplicitTimestampColumn(builder.compCtx, colDef) {
 		return getDefaultExpr(builder.GetContext(), colDef)
 	}
 	typ := colDef.Typ
@@ -5457,6 +5457,15 @@ func (builder *QueryBuilder) buildValueScan(
 				}
 
 				if _, ok := r[i].(*tree.DefaultVal); ok {
+					defExpr, err = getDefaultExpr(builder.GetContext(), col)
+					if err != nil {
+						return 0, nil, err
+					}
+				} else if isNullAstExpr(r[i]) && isLegacyImplicitTimestampColumn(builder.compCtx, col) {
+					// With explicit_defaults_for_timestamp=OFF, an explicit NULL
+					// assignment to the legacy implicit TIMESTAMP column has the same
+					// semantics as DEFAULT: evaluate CURRENT_TIMESTAMP rather than
+					// letting the NOT NULL assignment cast reject it.
 					defExpr, err = getDefaultExpr(builder.GetContext(), col)
 					if err != nil {
 						return 0, nil, err

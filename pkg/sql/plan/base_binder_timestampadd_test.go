@@ -257,11 +257,11 @@ func TestBindTimestampAddFSPByUnit(t *testing.T) {
 		{"datetime6_second", "SECOND", types.T_datetime, 6, types.T_datetime, 6},
 		{"datetime0_microsecond", "MICROSECOND", types.T_datetime, 0, types.T_datetime, 6},
 		{"datetime3_microsecond", "MICROSECOND", types.T_datetime, 3, types.T_datetime, 6},
-		{"timestamp0_second", "SECOND", types.T_timestamp, 0, types.T_timestamp, 0},
-		{"timestamp3_second", "SECOND", types.T_timestamp, 3, types.T_timestamp, 3},
-		{"timestamp6_second", "SECOND", types.T_timestamp, 6, types.T_timestamp, 6},
-		{"timestamp0_microsecond", "MICROSECOND", types.T_timestamp, 0, types.T_timestamp, 6},
-		{"timestamp3_microsecond", "MICROSECOND", types.T_timestamp, 3, types.T_timestamp, 6},
+		{"timestamp0_second", "SECOND", types.T_timestamp, 0, types.T_datetime, 0},
+		{"timestamp3_second", "SECOND", types.T_timestamp, 3, types.T_datetime, 3},
+		{"timestamp6_second", "SECOND", types.T_timestamp, 6, types.T_datetime, 6},
+		{"timestamp0_microsecond", "MICROSECOND", types.T_timestamp, 0, types.T_datetime, 6},
+		{"timestamp3_microsecond", "MICROSECOND", types.T_timestamp, 3, types.T_datetime, 6},
 		{"date_second", "SECOND", types.T_date, 0, types.T_datetime, 0},
 		{"date_microsecond", "MICROSECOND", types.T_date, 0, types.T_datetime, 6},
 		{"date_day", "DAY", types.T_date, 0, types.T_date, 0},
@@ -279,4 +279,29 @@ func TestBindTimestampAddFSPByUnit(t *testing.T) {
 			require.Equal(t, tc.resultFSP, expr.Typ.Scale)
 		})
 	}
+}
+
+func TestBindTemporalMetadataForTimestampArithmetic(t *testing.T) {
+	ctx := context.Background()
+	unit := makeInt64Const(int64(types.Second))
+	interval := makeInt64Const(1)
+	timestamp := &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{}}, Typ: plan.Type{
+		Id: int32(types.T_timestamp), Scale: 6,
+	}}
+
+	for _, name := range []string{"date_add", "date_sub"} {
+		expr, err := BindFuncExprImplByPlanExpr(ctx, name, []*plan.Expr{
+			timestamp, interval, unit,
+		})
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_datetime), expr.Typ.Id, name)
+		require.Equal(t, int32(6), expr.Typ.Scale, name)
+	}
+
+	convertTz, err := BindFuncExprImplByPlanExpr(ctx, "convert_tz", []*plan.Expr{
+		timestamp, makeStringConst("+00:00"), makeStringConst("+08:00"),
+	})
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_datetime), convertTz.Typ.Id)
+	require.Equal(t, int32(6), convertTz.Typ.Scale)
 }
