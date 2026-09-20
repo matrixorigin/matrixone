@@ -1881,6 +1881,11 @@ func (ctr *container) makeAggListWithAllocation(
 			} else {
 				aggexec.ConfigureHLLLegacyState(aggList[i])
 			}
+		} else if ctr.legacyVectorHLLState && hllVectorStateSupported(agExpr) {
+			// v77-v87 coordinators do not know the v88 vector HLL hash
+			// contract. Keep the worker's vector HLL_ADD producer on v2 so
+			// old and new workers cannot emit mixed hash domains.
+			aggexec.ConfigureHLLLegacyState(aggList[i])
 		}
 		if ctr.legacyDistinctFloatKeys {
 			if err := aggexec.ConfigureLegacyDistinctFloatKeys(aggList[i], true); err != nil {
@@ -1918,6 +1923,25 @@ func (ctr *container) makeAggListWithAllocation(
 func hllFloatZeroStateSupported(aggID int64) bool {
 	return aggID == aggexec.AggIdOfApproxCount ||
 		aggID == aggexec.AggIdOfApproxCountDistinct
+}
+
+func hllVectorStateSupported(
+	agg aggexec.AggFuncExecExpression,
+) bool {
+	if agg.GetAggID() != aggexec.AggIdOfHllAdd {
+		return false
+	}
+	args := agg.GetArgExpressions()
+	if len(args) == 0 || args[0] == nil {
+		return false
+	}
+	switch types.T(args[0].Typ.Id) {
+	case types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16:
+		return true
+	default:
+		return false
+	}
 }
 
 func useLegacyTextMinMaxForRemote(proc *process.Process) bool {
@@ -2004,6 +2028,20 @@ func useLegacyHLLStateForRemote(proc *process.Process) bool {
 		GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
 	return !ok || !valid || version < defines.MORPCVersion77
+}
+
+func useLegacyVectorHLLStateForRemote(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return false
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return false
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return !ok || !valid || version < defines.MORPCVersion88
 }
 
 func useFloatZeroHLLStateForRemote(proc *process.Process) bool {
