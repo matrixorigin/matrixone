@@ -2044,15 +2044,6 @@ func validateRemoteAggregateProtocol(
 	return nil
 }
 
-func isCanonicalHLLAddType(typ types.T) bool {
-	switch typ {
-	case types.T_char, types.T_json:
-		return true
-	default:
-		return false
-	}
-}
-
 // orderedSetPercentileDiscUsesExtendedType identifies the input family added
 // by the generic discrete-percentile executor. MORPC v17 only guarantees the
 // historical numeric implementation; an older worker would accept the
