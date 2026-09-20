@@ -16,7 +16,8 @@ package cnservice
 
 import (
 	"context"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+
+	"github.com/matrixorigin/matrixone/pkg/udf/udferr"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"go.uber.org/zap"
 
@@ -73,7 +74,7 @@ func (r *unavailablePythonRuntime) Language() string { return udf.LanguagePython
 
 func (r *unavailablePythonRuntime) unavailableError() error {
 	if r == nil || r.cause == nil {
-		return moerr.NewInternalErrorNoCtxf("RESOURCE_UNAVAILABLE: Python UDF runtime initialization failed")
+		return udferr.Newf("RESOURCE_UNAVAILABLE: Python UDF runtime initialization failed")
 	}
 	return errutil.Wrapf(r.cause, "RESOURCE_UNAVAILABLE: Python UDF runtime initialization failed")
 }
@@ -84,7 +85,7 @@ func (r *unavailablePythonRuntime) Execute(context.Context, *udf.Invocation, vec
 
 func (r *unavailablePythonRuntime) CheckLanguageReady(ctx context.Context, language string) error {
 	if language != udf.LanguagePython {
-		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: unsupported readiness language %q", language)
+		return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: unsupported readiness language %q", language)
 	}
 	if ctx != nil {
 		select {
@@ -98,7 +99,7 @@ func (r *unavailablePythonRuntime) CheckLanguageReady(ctx context.Context, langu
 
 func (r *unavailablePythonRuntime) ValidateDefinition(ctx context.Context, definition *udf.RoutineDefinition) error {
 	if definition == nil || definition.Language != udf.LanguagePython {
-		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: invalid Python definition")
+		return udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: invalid Python definition")
 	}
 	return r.CheckLanguageReady(ctx, udf.LanguagePython)
 }

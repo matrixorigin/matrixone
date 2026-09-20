@@ -18,7 +18,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+
+	"github.com/matrixorigin/matrixone/pkg/udf/udferr"
 	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 )
 
@@ -56,7 +57,7 @@ func DefinitionFingerprint(
 		mode == "" || nullPolicy == "" || abiContract == "" ||
 		adapterVersion == "" || sdkVersion == "" || artifactDigest == "" ||
 		environmentDigest == "" {
-		return "", moerr.NewInternalErrorNoCtxf("python definition fingerprint has incomplete metadata")
+		return "", udferr.Newf("python definition fingerprint has incomplete metadata")
 	}
 	for index, descriptor := range args {
 		if err := descriptor.Validate(); err != nil {
