@@ -79,6 +79,43 @@ func TestIndexOnlyScanGuard_RandomRangesScenario(t *testing.T) {
 	assert.True(t, oomRejectNew, "new guard should also reject non-selective scan (selectivity >= 0.3)")
 }
 
+func TestCheckIndexFilterRejectsSignedZeroFloatColumns(t *testing.T) {
+	floatTypes := []types.T{types.T_float32, types.T_float64}
+	for _, typ := range floatTypes {
+		t.Run(typ.String(), func(t *testing.T) {
+			planType := planpb.Type{Id: int32(typ)}
+			orFilter := makeOrFilterExpr(
+				makeParamRangeFilterExpr(0, 1, ">=", 0),
+				makeParamRangeFilterExpr(0, 1, "<", 1),
+			)
+			setIndexFilterArgumentType(orFilter.GetF().Args[0], planType)
+			setIndexFilterArgumentType(orFilter.GetF().Args[1], planType)
+			filters := []*planpb.Expr{
+				makeEqFilterExpr(1),
+				makeParamInFilterExpr(0, 1, 2),
+				makeParamBetweenFilterExpr(0, 1, 0, 1),
+				makeParamRangeFilterExpr(0, 1, ">=", 0),
+				orFilter,
+			}
+			inRange := makeParamBetweenFilterExpr(0, 1, 0, 1)
+			inRange.GetF().Func.ObjName = "in_range"
+			filters = append(filters, inRange)
+
+			for _, filter := range filters {
+				setIndexFilterArgumentType(filter, planType)
+				filterType, col := checkIndexFilter(filter.GetF())
+				require.Equal(t, UnsupportedIndexCondition, filterType)
+				require.Nil(t, col)
+			}
+		})
+	}
+
+	intFilter := makeEqFilterExpr(1)
+	filterType, col := checkIndexFilter(intFilter.GetF())
+	require.Equal(t, EqualIndexCondition, filterType)
+	require.NotNil(t, col)
+}
+
 func TestIndexHintNonExecutingConsumers(t *testing.T) {
 	for _, prefix := range []string{"explain ", "create view v as ", "create table ctas as "} {
 		t.Run(prefix, func(t *testing.T) {

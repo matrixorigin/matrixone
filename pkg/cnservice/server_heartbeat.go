@@ -212,6 +212,11 @@ func (s *service) newCNStoreHeartbeat() logservicepb.CNStoreHeartbeat {
 		ViewMetadataCatalogFencedEpoch:     s.viewMetadataCatalogFencedEpoch.Load(),
 		ViewMetadataIngressReady:           s.viewMetadataIngressReady.Load(),
 		PersistedExpressionProtocolVersion: uint64(defines.MORPCLatestVersion),
+		CatalogMetadataCapabilities: &logservicepb.CatalogMetadataCapabilities{
+			PersistedExpressionProtocol: uint64(defines.MORPCLatestVersion),
+			BarrierParticipantProtocol:  1,
+		},
+		CatalogMetadataAck: s.catalogMetadataParticipant.Ack(s.viewMetadataAdmissionGeneration),
 	}
 	if s.viewMetadataEpochFence != nil {
 		hb.ViewMetadataObservedEpoch = s.viewMetadataEpochFence.Epoch()
@@ -288,6 +293,7 @@ func (s *service) heartbeat(ctx context.Context) {
 		s.notifyCommandPoll()
 		return
 	}
+	s.catalogMetadataParticipant.Observe(s.viewMetadataAdmissionGeneration, cb.CatalogMetadataBarrier)
 	admissionErr := s.applyViewMetadataAdmission(ctx, cb.ViewMetadataAdmission)
 	s.commandPollNeeded.Store(false)
 	s.notifyCommandPoll()

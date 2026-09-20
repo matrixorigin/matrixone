@@ -1052,16 +1052,41 @@ func bindWindowFuncExpr(b windowFuncExprBinder, ctx *BindContext, funcName strin
 	if err := validateWindowFuncNoNested(b.GetContext(), &resolvedAstExpr); err != nil {
 		return nil, err
 	}
-	if len(astExpr.OrderBy) > 0 {
+	orderedSetSpec, orderedSet := orderedSetAggregateSpecFor(funcName, astExpr.WithinGroup)
+	if len(astExpr.OrderBy) > 0 && !orderedSet {
 		return nil, moerr.NewNYI(b.GetContext(), "function-local ORDER BY in window function")
 	}
 
 	astStr := windowExprAstKey(&resolvedAstExpr)
 
+	// Ordered-set aggregates use the same executor overload as their scalar
+	// aggregate form. Lower the WITHIN GROUP expression to the first function
+	// argument while keeping OVER's PARTITION BY / ORDER BY / frame in the
+	// WindowSpec below.
+	windowArgs := astExpr.Exprs
+	var err error
+	var orderedSetOrder *tree.Order
+	if orderedSet {
+		orderedSetOrder, err = validateOrderedSetAggregateShape(
+			b.GetContext(), funcName, astExpr, orderedSetSpec)
+		if err != nil {
+			return nil, err
+		}
+		windowArgs = make([]tree.Expr, 0, 1+len(astExpr.Exprs))
+		windowArgs = append(windowArgs, orderedSetOrder.Expr)
+		windowArgs = append(windowArgs, astExpr.Exprs...)
+	}
+
 	// window function
-	windowFunc, err := b.bindPreparedNumericFuncExpr(funcName, astExpr.Exprs, depth)
+	windowFunc, err := b.bindPreparedNumericFuncExpr(funcName, windowArgs, depth)
 	if err != nil {
 		return nil, err
+	}
+	if orderedSet {
+		if err = applyOrderedSetAggregateDirection(
+			b.GetContext(), windowFunc, orderedSetSpec, orderedSetOrder); err != nil {
+			return nil, err
+		}
 	}
 	if err = rejectWindowResultDependency(b.GetContext(), windowFunc, ctx.windowTag); err != nil {
 		return nil, err

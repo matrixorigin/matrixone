@@ -520,6 +520,10 @@ endif
 # bvt and unit test
 ###############################################################################
 UT_PARALLEL ?= 1
+# Compile/test task and heavy-link budgets are independent. The runner falls
+# back to three tasks if kernel link admission is unavailable.
+UT_LIGHT_PARALLEL ?= 6
+UT_LINK_PARALLEL ?= 3
 UT_SHARD ?= all
 # The outer lifecycle budget covers every sequential UT stage, not one package.
 # A cold race run can spend over an hour in light/issues/embedded before the
@@ -529,9 +533,10 @@ UT_HARD_TIMEOUT ?= 120m
 # Emit one bounded progress heartbeat per interval while UT is running.
 UT_HEARTBEAT_INTERVAL ?= 60
 # Build embedded test packages ahead of their execution while the issues
-# fixture is active. This is an explicit A/B knob: compile-only work still
-# consumes CPU, memory, and linker capacity, so it remains opt-in until a
-# same-resource measurement proves a critical-path gain.
+# fixture is active. This is bounded cache warming: it never executes a
+# prebuilt test binary, and the authoritative go test still owns every test
+# result. Keep it opt-in until a comparable run proves a critical-path gain
+# without consuming the runner's memory headroom.
 UT_PREBUILD_EMBEDDED ?= 0
 # Reuse released engine slots for plan while resource-heavy work finishes.
 # The heavy process budget is unchanged; set 0 for a sequential A/B baseline.
@@ -544,7 +549,7 @@ UT_OVERLAP_LIGHT_PARALLEL ?= 2
 # Parent cancellation waits long enough for helper-owned child process groups
 # to receive TERM and bounded KILL cleanup in sequence.
 UT_HELPER_TERM_GRACE_TICKS ?= 60
-export UT_SHARD UT_HARD_TIMEOUT UT_HEARTBEAT_INTERVAL UT_PREBUILD_EMBEDDED UT_OVERLAP_PLAN UT_OVERLAP_LIGHT UT_OVERLAP_LIGHT_PARALLEL UT_HELPER_TERM_GRACE_TICKS
+export UT_SHARD UT_HARD_TIMEOUT UT_HEARTBEAT_INTERVAL UT_PREBUILD_EMBEDDED UT_OVERLAP_PLAN UT_OVERLAP_LIGHT UT_OVERLAP_LIGHT_PARALLEL UT_LIGHT_PARALLEL UT_LINK_PARALLEL UT_HELPER_TERM_GRACE_TICKS
 # Native compilation runs before Go tests, so it can use an explicit UT CPU
 # budget without increasing peak race-test memory. With the default UT value,
 # omit -j and preserve recursive make's jobserver contract: a plain make stays

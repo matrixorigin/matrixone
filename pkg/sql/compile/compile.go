@@ -55,6 +55,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/adaptivetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
@@ -203,7 +204,7 @@ func (c *Compile) Release() {
 	doCompileRelease(c)
 }
 
-func (c Compile) TypeName() string {
+func (c *Compile) TypeName() string {
 	return "compile.Compile"
 }
 
@@ -1450,6 +1451,9 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	if err = c.constrainGroupConcatTimeZoneWorkers(qry); err != nil {
 		return nil, err
 	}
+	if err = c.validateGroupingTransportPlacement(qry); err != nil {
+		return nil, err
+	}
 
 	if c.isPrepare && !c.IsTpQuery() {
 		return nil, cantCompileForPrepareErr
@@ -1497,6 +1501,9 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	}
 	if err = validateLocalRuntimeFilterTopology(qry, c.compiledLocalRuntimeFilterNodes, steps); err != nil {
 		return nil, err
+	}
+	if queryNeedsGroupingTransport(qry) {
+		attachGroupingTransportPlan(steps, &plan.Plan{Plan: &plan.Plan_Query{Query: qry}})
 	}
 
 	return steps, err
@@ -1601,21 +1608,6 @@ func (c *Compile) isMaterializedCTEStep(qry *plan.Query, step int32) bool {
 		sink.ExtraOptions == materialized.CTESinkOption
 }
 
-func (c *Compile) isAdaptiveVectorSearch(qry *plan.Query) bool {
-	if qry == nil {
-		return false
-	}
-
-	for _, node := range qry.Nodes {
-		// Check for vector search in auto mode
-		if node.RankOption != nil && node.RankOption.Mode == "auto" {
-			return true
-		}
-	}
-
-	return false
-}
-
 func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Scope, error) {
 	if qry.Nodes[step].NodeType == plan.Node_SINK {
 		return ss, nil
@@ -1678,13 +1670,14 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Sco
 			}
 		}
 
-		isAdaptive := c.isAdaptiveVectorSearch(qry)
-
+		// IVF AUTO fallback is owned by the local ADAPTIVE_TOP region. Unmatched
+		// AUTO shapes execute their exact plan once; enabling Output retry here
+		// would replay the whole statement and can loop when AST rewriting cannot
+		// reach a nested SELECT.
 		rs.setRootOperator(
 			output.NewArgument().
 				WithFunc(c.resultWriter()).
-				WithBlock(c.needBlock).
-				WithAdaptive(isAdaptive),
+				WithBlock(c.needBlock),
 		)
 		return []*Scope{rs}, nil
 	}
@@ -2110,6 +2103,22 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileSort(node, ss)
 		return ss, nil
+	case plan.Node_ADAPTIVE_TOP:
+		if len(node.Children) < 2 || len(node.Children) > 3 || node.Limit == nil {
+			return nil, moerr.NewInternalErrorNoCtx("invalid adaptive top plan")
+		}
+		branches := make([][]*Scope, len(node.Children))
+		for i, childID := range node.Children {
+			branches[i], err = c.compilePlanScope(step, childID, nodes)
+			if err != nil {
+				for j := 0; j < i; j++ {
+					ReleaseScopes(branches[j])
+				}
+				return nil, err
+			}
+		}
+		c.setAnalyzeCurrent(nil, int(curNodeIdx))
+		return c.compileAdaptiveTop(node, branches), nil
 	case plan.Node_UNION_ALL:
 		lazy := streamingUnionAllDemand(node, outerUnionAllDemand)
 		if !lazy && c.pn != nil {
@@ -5540,6 +5549,8 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	}
 	tblDef = s.DataSource.Rel.GetTableDef(ctx)
 
+	c.filterExprMu.Lock()
+	defer c.filterExprMu.Unlock()
 	storageFilters := filterScanStorageExprs(node.FilterList)
 	filters, executors, rebuilt, err := prepareFoldedFilterExprs(
 		c.proc, storageFilters, s.DataSource.FilterList, c.filterExprExes, true)
@@ -6126,6 +6137,37 @@ func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right
 	}
 	c.anal.isFirst = false
 	return rs
+}
+
+func (c *Compile) compileAdaptiveTop(node *plan.Node, candidates [][]*Scope) []*Scope {
+	branches := make([]*Scope, len(candidates))
+	for i := range candidates {
+		branches[i] = c.newMergeScope(candidates[i])
+	}
+	rs := c.newMergeScope(branches)
+	rs.LazyPreScopes = true
+	mergeOp, ok := rs.RootOp.(*merge.Merge)
+	if !ok {
+		panic("adaptive top scope has no merge input")
+	}
+	mergeOp.WithPartial(0, 0)
+	op := adaptivetop.NewArgument()
+	op.LimitExpr = plan2.DeepCopyExpr(node.Limit)
+	op.Branches = len(branches)
+	op.SpillConfig = materialized.SpillConfig{
+		FileFactory: func(name string) (*os.File, error) {
+			spillFS, err := c.proc.GetSpillFileService()
+			if err != nil {
+				return nil, err
+			}
+			return spillFS.CreateAndRemoveFile(c.proc.Ctx, name)
+		},
+		Budget: newMaterializedSpillBudget(c.proc),
+	}
+	op.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
+	rs.setRootOperator(op)
+	c.anal.isFirst = false
+	return []*Scope{rs}
 }
 
 func (c *Compile) compileUnionAll(
@@ -7649,6 +7691,7 @@ func (c *Compile) compileGroupWithoutShuffle(
 func (c *Compile) hasUnsupportedRemoteGroupWire(node *plan.Node) bool {
 	return (hasApproxPercentile(node) && !c.supportsRemoteApproxPercentile()) ||
 		(hasHLLAggregate(node) && !c.supportsRemoteHLL()) ||
+		(hasCanonicalHLLAddAggregate(node) && !c.supportsRemoteCanonicalHLLAdd()) ||
 		(hasVariableLengthGroupKey(node) && !c.supportsRemoteGroupHashString()) ||
 		(hasCanonicalDistinctKeyWire(node) && !c.supportsRemoteCanonicalDistinctKeyWire()) ||
 		(hasLegacyFloatDistinctKeyWire(node) && !c.supportsRemoteCanonicalDistinctKeyWire()) ||
@@ -7861,6 +7904,33 @@ func hasHLLAggregate(node *plan.Node) bool {
 	return false
 }
 
+func hasCanonicalHLLAddAggregate(node *plan.Node) bool {
+	if node == nil {
+		return false
+	}
+	for _, agg := range node.AggList {
+		fn := agg.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.ObjName != "hll_add_agg" ||
+			len(fn.Args) == 0 || fn.Args[0] == nil {
+			continue
+		}
+		if isCanonicalHLLVectorType(types.T(fn.Args[0].Typ.Id)) {
+			return true
+		}
+	}
+	return false
+}
+
+func isCanonicalHLLVectorType(typ types.T) bool {
+	switch typ {
+	case types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16:
+		return true
+	default:
+		return false
+	}
+}
+
 // hasVariableLengthGroupKey mirrors Group.prepareGroupAndAggArg's v78 fence
 // for a short variable-length physical key. Long variable-length keys already
 // used the historical HStr partial grammar, so they remain remotely usable
@@ -8009,6 +8079,10 @@ func (c *Compile) supportsRemoteHLL() bool {
 	return supportsRemoteHLL(c.proc.GetService())
 }
 
+func (c *Compile) supportsRemoteCanonicalHLLAdd() bool {
+	return supportsRemoteCanonicalHLLAdd(c.proc.GetService())
+}
+
 func (c *Compile) supportsRemoteGroupHashString() bool {
 	return supportsRemoteGroupHashString(c.proc.GetService())
 }
@@ -8068,6 +8142,16 @@ func supportsRemoteHLL(service string) bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion77
+}
+
+func supportsRemoteCanonicalHLLAdd(service string) bool {
+	version, ok := moruntime.ServiceRuntime(service).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion88
 }
 
 func supportsRemoteGroupHashString(service string) bool {
@@ -8386,6 +8470,7 @@ func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
 		(!hasOrderedSetPercentile(node) || c.supportsRemoteOrderedSetAggregates()) &&
 		(!hasApproxPercentile(node) || c.supportsRemoteApproxPercentile()) &&
 		(!hasHLLAggregate(node) || c.supportsRemoteHLL()) &&
+		(!hasCanonicalHLLAddAggregate(node) || c.supportsRemoteCanonicalHLLAdd()) &&
 		(!hasVariableLengthGroupKey(node) || c.supportsRemoteGroupHashString()) &&
 		(!hasCanonicalDistinctKeyWire(node) || c.supportsRemoteCanonicalDistinctKeyWire()) &&
 		(!hasLegacyFloatDistinctKeyWire(node) || c.supportsRemoteCanonicalDistinctKeyWire()) &&

@@ -187,6 +187,29 @@ func fixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 	return fixedTypeMatchExcept(overloads, inputs, -1)
 }
 
+// inetNtoaTypeMatch keeps native numeric inputs on their existing, allocation-
+// free executors while routing value-domain inputs through INET_NTOA's local
+// dynamic executor. This is deliberately a function-local matcher: adding
+// BOOL/temporal/string conversions to the global implicit-cast lattice would
+// silently change unrelated overload resolution.
+func inetNtoaTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) != 1 {
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
+	prefer := inputs[0].Oid
+	switch prefer {
+	case types.T_any, types.T_bool, types.T_date, types.T_datetime, types.T_timestamp,
+		types.T_time, types.T_year, types.T_json, types.T_char, types.T_varchar, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_blob:
+		for i, over := range overloads {
+			if len(over.args) == 1 && over.args[0] == prefer {
+				return newCheckResultWithSuccess(i)
+			}
+		}
+	}
+	return fixedTypeMatch(overloads, inputs)
+}
+
 // fixedTypeMatchExcept is the fixed matcher with one overload omitted. Keeping
 // the original overload slice avoids planner-time allocations for matchers
 // that need to reserve a dedicated string overload.
@@ -900,6 +923,50 @@ func SetTargetScaleFromSource(source, target *types.Type) {
 		}
 		return
 	}
+}
+
+func isTemporalFSPType(oid types.T) bool {
+	return oid == types.T_time || oid == types.T_datetime || oid == types.T_timestamp
+}
+
+// commonTemporalType makes the FSP part of conditional-type resolution rather
+// than leaving it to whichever branch happens to win overload ordering. A
+// temporal value with a larger FSP must not be cast through a scale-zero
+// target, otherwise the executor loses fractional digits before CASE/IF or
+// COALESCE can select the branch.
+func commonTemporalType(result types.Type, source []types.Type) types.Type {
+	if !isTemporalFSPType(result.Oid) {
+		return result
+	}
+	maxScale := result.Scale
+	if maxScale < 0 {
+		maxScale = 0
+	}
+	for _, typ := range source {
+		if isTemporalFSPType(typ.Oid) && typ.Scale > maxScale {
+			maxScale = typ.Scale
+		}
+	}
+	result.Scale = maxScale
+	// Plan temporal widths are the display/FSP marker. A default overload type
+	// has width zero; materialize the selected precision there, while retaining
+	// a caller-provided physical/test width when it is already meaningful.
+	if maxScale > 0 && result.Width <= 0 {
+		result.Width = maxScale
+	}
+	return result
+}
+
+func needTemporalMetadataCast(source []types.Type, target types.Type) bool {
+	if !isTemporalFSPType(target.Oid) {
+		return false
+	}
+	for _, typ := range source {
+		if typ.Oid != target.Oid || typ.Scale != target.Scale {
+			return true
+		}
+	}
+	return false
 }
 
 func setMaxScaleFromSource(t *types.Type, source []types.Type) {
