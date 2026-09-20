@@ -1154,7 +1154,7 @@ func TestViewDefinitionRemoteProtocolValidationAtPrepareSendAndReceiveBoundaries
 		if hadPrevious {
 			rt.SetGlobalVariables(runtime.MOProtocolVersion, previous)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion89)
+			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion91)
 		}
 	})
 
@@ -1189,8 +1189,8 @@ func TestViewDefinitionRemoteProtocolValidationAtPrepareSendAndReceiveBoundaries
 		ProjectList: []*plan.Expr{viewCheckOption},
 	}}}
 
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion89)
-	client.version = defines.MORPCVersion89
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion91)
+	client.version = defines.MORPCVersion91
 	require.NoError(t, validateRemoteViewDefinitionPipelineProtocol(proc, pipelineWithFunction))
 	require.NoError(t, validateRemoteViewDefinitionPipelineProtocol(proc, pipelineWithCheckOption))
 
@@ -1205,37 +1205,37 @@ func TestViewDefinitionRemoteProtocolValidationAtPrepareSendAndReceiveBoundaries
 	_, err = encodeScope(prepared)
 	require.NoError(t, err)
 
-	// The coordinator can remain on v89 while a selected worker is rolled
-	// back or replaced by a v88 CN. The sender must probe that destination
+	// The coordinator can remain on v91 while a selected worker is rolled
+	// back or replaced by a v90 CN. The sender must probe that destination
 	// before serializing a pipeline containing either new function ID.
-	client.version = defines.MORPCVersion88
+	client.version = defines.MORPCVersion90
 	_, err = encodeRemoteScope(prepared, proc)
 	require.ErrorContains(t, err, "remote destination does not support view metadata functions")
-	client.version = defines.MORPCVersion89
+	client.version = defines.MORPCVersion91
 	_, err = encodeRemoteScope(prepared, proc)
 	require.NoError(t, err)
 
-	// v88 is the immediate predecessor after the main-branch rebase; it
-	// supports the main contracts through v88 but not these new function IDs.
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion88)
+	// v90 is the immediate predecessor after the main-branch rebase; it
+	// supports the main contracts through v90 but not these new function IDs.
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion90)
 	require.NoError(t, validateRemoteViewDefinitionPipelineProtocol(proc, &pipeline.Pipeline{}))
 	require.ErrorContains(t, validateRemoteViewDefinitionPipelineProtocol(proc, pipelineWithFunction),
-		"requires MORPC protocol version 89")
+		"requires MORPC protocol version 91")
 	require.ErrorContains(t, validateRemoteViewDefinitionPipelineProtocol(proc, pipelineWithCheckOption),
-		"requires MORPC protocol version 89")
+		"requires MORPC protocol version 91")
 	_, err = encodeRemoteScope(prepared, proc)
-	require.ErrorContains(t, err, "requires MORPC protocol version 89")
+	require.ErrorContains(t, err, "requires MORPC protocol version 91")
 	_, err = encodeScope(prepared)
-	require.ErrorContains(t, err, "requires MORPC protocol version 89")
+	require.ErrorContains(t, err, "requires MORPC protocol version 91")
 	_, err = decodeScope(data, proc, true, nil)
-	require.ErrorContains(t, err, "requires MORPC protocol version 89")
+	require.ErrorContains(t, err, "requires MORPC protocol version 91")
 }
 
-func TestViewDefinitionRemoteProtocolValidationV89FastPathIsAllocationFree(t *testing.T) {
+func TestViewDefinitionRemoteProtocolValidationV91FastPathIsAllocationFree(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	rt := runtime.ServiceRuntime(proc.GetService())
 	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion89)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion91)
 
 	// A large ordinary pipeline makes an accidental reflective traversal visible.
 	ordinary := &pipeline.Pipeline{InstructionList: make([]*pipeline.Instruction, 1_000)}

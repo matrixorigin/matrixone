@@ -12,7 +12,7 @@
 not the original CREATE statement. New views persist a parser-derived definition
 and legacy rows are read through parser-aware metadata functions. The functions
 are new distributed plan functions (IDs 581 and 582), so the catalog contract is fenced by MORPC
-v89.
+v91.
 
 ## Problem and invariant
 
@@ -44,13 +44,13 @@ This bounded, side-effect-free fallback avoids a second SQL regexp lexer and
 does not depend on background recovery.
 
 When either function identity occurs in a persisted view expression, the
-planner writes `required_protocol_version: 89` into `ViewData`, including when
+planner writes `required_protocol_version: 91` into `ViewData`, including when
 the call is nested under another expression. The real view bind/Prepare path
 reapplies that marker. It uses the existing two-floor admission lifecycle:
-HAKeeper publishes the durable read floor during the v89 decoder barrier, while
+HAKeeper publishes the durable read floor during the v91 decoder barrier, while
 the authoring floor remains closed until the all-CN admission and catalog fence
-complete. Therefore an authoring or read floor of 0 or v88 fails closed, an
-all-v89 fenced CN can create the VIEWS definition, and an ordinary view without
+complete. Therefore an authoring or read floor of 0 or v90 fails closed, an
+all-v91 fenced CN can create the VIEWS definition, and an ordinary view without
 either function remains unmarked.
 
 The fallback cannot infer metadata that is absent from a legacy row. In
@@ -60,37 +60,37 @@ by CREATE/ALTER or by the bounded regeneration path. Adding a historical column
 snapshot to the legacy catalog format would be a separate compatibility
 migration and is outside this PR.
 
-MORPC v89 is allocated as `MORPCLatestVersion + 1` from official main v88 at
-`6ad0c48b0567eda5db6c3daf843bf1823c388f93`, which already owns v70 through v88;
-v88 is the canonical vector HLL_ADD_AGG capability. The two function IDs
+MORPC v91 is allocated as `MORPCLatestVersion + 1` from official main v90 at
+`5e1e93ae35efc6eea54ae2935f68154493d6e95c`, which already owns v70 through v90;
+v90 is the geodetic distance semantics capability. The two function IDs
 are the next available IDs after main's exclusive function bound 581, and the
 bound advances to 583.
 The capability is specific to these functions and the persisted VIEWS definition.
 A sender probes the selected destination CN as well as its local runtime before
 encoding a pipeline containing either function ID; an unknown or unavailable
 destination capability fails closed. The v4.0.6 VIEWS upgrade waits for common
-v89. New tenant initialization installs the new VIEWS DDL only after the local
-coordinator and every CN in the current inventory have positively confirmed v89;
+v91. New tenant initialization installs the new VIEWS DDL only after the local
+coordinator and every CN in the current inventory have positively confirmed v91;
 a mixed, unknown, RPC-failing, or incomplete capability probe records the
 predecessor VIEWS definition while still committing the final-version tenant
-row. A bounded post-upgrade reconciliation pass later rechecks common v89 and
+row. A bounded post-upgrade reconciliation pass later rechecks common v91 and
 reuses the guarded transactional entry to replace only that predecessor
-definition. Any cluster with a CN below v89, including the immediate predecessor
-v88, preserves all existing metadata definitions, including the v58 COLUMNS
+definition. Any cluster with a CN below v91, including the immediate predecessor
+v90, preserves all existing metadata definitions, including the v58 COLUMNS
 contract. Pipeline preparation, remote marshal, and
 remote unmarshal reject a
-pipeline containing either function ID below v89. The receiver check protects
-stale prepared work as well as normal sender dispatch. Before the v89 HAKeeper
+pipeline containing either function ID below v91. The receiver check protects
+stale prepared work as well as normal sender dispatch. Before the v91 HAKeeper
 protocol-floor activation is durably committed, a cancelled rollout may stop
-the v89 upgrade, keep or restore `InformationSchemaViewsLegacyDDL`
+the v91 upgrade, keep or restore `InformationSchemaViewsLegacyDDL`
 transactionally, wait for catalog and in-flight work to converge, and admit
-v88 only after verifying that no v89 maintenance worker can re-install the
-new definition. After the v89 floor is committed, the floor is monotonic and
-v88 binaries must not be admitted: restoring the view text alone cannot undo
-the decoder barrier. The supported recovery is forward recovery with v89-
+v90 only after verifying that no v91 maintenance worker can re-install the
+new definition. After the v91 floor is committed, the floor is monotonic and
+v90 binaries must not be admitted: restoring the view text alone cannot undo
+the decoder barrier. The supported recovery is forward recovery with v91-
 compatible log/CN services, or a coordinated restoration of cluster state from
 before the activation barrier; an ordinary in-place downgrade is unsupported.
-Merely draining below-v89 requests is not sufficient because the new persisted
+Merely draining below-v91 requests is not sufficient because the new persisted
 view text references the functions. The new JSON fields are additive and old
 binaries keep treating them as unknown.
 
@@ -100,7 +100,7 @@ Keeping raw SQL regexp extraction was rejected because it repeatedly diverged
 from the SQL lexer for comments and quoted strings. Eagerly rewriting every
 legacy row was rejected because the existing recovery lifecycle is deliberately
 inactive and a metadata read must not perform unbounded catalog writes. Allowing
-the DDL before v89 was rejected because an old CN cannot bind the metadata functions.
+the DDL before v91 was rejected because an old CN cannot bind the metadata functions.
 
 ## Bounds, security, and operations
 
@@ -119,25 +119,25 @@ Focused parser/function tests cover current and legacy definitions, quoted and
 commented inputs, malformed rows, frozen wildcard expansion, the documented
 legacy raw-wildcard boundary, explicit derived-table column lists with inner
 alias preservation, and CHECK OPTION.
-Protocol tests cover the v88 predecessor
-rejection and v89 acceptance at prepare, sender, and receiver boundaries,
+Protocol tests cover the v90 predecessor
+rejection and v91 acceptance at prepare, sender, and receiver boundaries,
 including a mixed-version destination probe and the all-CN capability fence.
 Generated ViewData tests cover both function IDs, nested detection, the
-authoring/read floor values 0, v88, and v89, and binding the exact generated
+authoring/read floor values 0, v90, and v91, and binding the exact generated
 metadata at the immediate predecessor and current protocol.
 System-view tests prove mixed, unknown, and RPC-failing CN capability probes
-fall back to the predecessor VIEWS DDL, while an all-v89 inventory uses the
+fall back to the predecessor VIEWS DDL, while an all-v91 inventory uses the
 parser-derived DDL. Tenant initialization keeps the final account version but
 records the predecessor VIEWS definition when capability discovery is
 incomplete. The post-upgrade bounded reconciliation pass rediscovers that
-durable definition marker, retries only after a positive all-CN v89 check, and
+durable definition marker, retries only after a positive all-CN v91 check, and
 uses the same guarded transactional entry to publish the parser-derived
 definition once it is safe. Upgrade tests prove both the v4.0.7 handler and
-its VIEWS entry require v89. The predecessor-init test proves that the
+its VIEWS entry require v91. The predecessor-init test proves that the
 restoration target has no function reference before an older CN is admitted;
 the cancellation-after-staging test additionally proves that a cancelled
 transaction preserves the legacy marker and page cursor, and that a later
-generation can retry and publish only after a committed v89 gate.
+generation can retry and publish only after a committed v91 gate.
 
 ## Unresolved questions
 

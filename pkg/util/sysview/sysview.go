@@ -76,7 +76,7 @@ var (
 )
 
 func InitInformationSchemaSysTablesForProtocol(protocol int64) []string {
-	if protocol >= defines.MORPCVersion89 {
+	if protocol >= defines.MORPCVersion91 {
 		return InitInformationSchemaSysTables
 	}
 
@@ -179,7 +179,7 @@ func initInformationSchemaTables(ctx context.Context, txn executor.TxnExecutor) 
 	// authoring floor. Seed the immediate-predecessor VIEWS definition here;
 	// the guarded v4.0.7 upgrade and reconciliation pass publish the
 	// parser-derived definition after all CNs and the catalog fence are ready.
-	for _, sql := range InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion88) {
+	for _, sql := range InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion90) {
 		if _, err = txn.Exec(sql, executor.StatementOption{}); err != nil {
 			return moerr.NewInternalError(ctx, fmt.Sprintf("[information_schema] init information_schema tables error: %v, sql: %s", err, sql))
 		}
