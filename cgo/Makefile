@@ -95,10 +95,13 @@ endif
 # enabling the compiler's non-IEEE infinity assumptions for this translation
 # unit. CUDA must forward the host-only option through nvcc.
 ifeq ($(MO_CL_CUDA),1)
-xcall.o: CFLAGS += -Xcompiler=-fno-fast-math
+XCALL_CFLAGS := -Xcompiler=-fno-fast-math
 else
-xcall.o: CFLAGS += -fno-fast-math
+XCALL_CFLAGS := -fno-fast-math
 endif
+
+xcall.o: xcall.c
+	$(CC) $(CFLAGS) $(XCALL_CFLAGS) -c $< -o $@
 
 test: $(TARGET_LIB)
 	$(MAKE) -C test
