@@ -17,6 +17,7 @@ package errutil
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync/atomic"
 
 	pkgErr "github.com/pkg/errors"
@@ -40,6 +41,31 @@ func Wrap(err error, message string) error {
 
 func Wrapf(err error, format string, args ...any) error {
 	return pkgErr.Wrapf(err, format, args...)
+}
+
+type causeFirstError struct {
+	cause   error
+	message string
+}
+
+func (e *causeFirstError) Error() string {
+	if e.message == "" {
+		return e.cause.Error()
+	}
+	return e.cause.Error() + ": " + e.message
+}
+
+func (e *causeFirstError) Unwrap() error {
+	return e.cause
+}
+
+// WrapfCauseFirst preserves cause-first wrapped-error message order while
+// retaining errors.Is/errors.As identity.
+func WrapfCauseFirst(err error, format string, args ...any) error {
+	if err == nil {
+		return nil
+	}
+	return &causeFirstError{cause: err, message: fmt.Sprintf(format, args...)}
 }
 
 // WalkDeep does a depth-first traversal of all errors.

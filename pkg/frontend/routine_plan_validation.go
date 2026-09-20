@@ -18,6 +18,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"sort"
 	"strconv"
 	"strings"
@@ -114,7 +116,7 @@ func routinePlanDependencies(p *planpb.Plan) ([]*planpb.RoutinePlanDependency, e
 		if frame.next == 0 {
 			frameDependencies := frame.query.GetRoutineDependencies()
 			if len(dependencies)+len(frameDependencies) > maxRoutinePlanDependencies {
-				return nil, fmt.Errorf("PROGRAM_LIMIT_EXCEEDED: routine dependency count exceeds %d", maxRoutinePlanDependencies)
+				return nil, moerr.NewInternalErrorNoCtxf("PROGRAM_LIMIT_EXCEEDED: routine dependency count exceeds %d", maxRoutinePlanDependencies)
 			}
 			for _, dependency := range frameDependencies {
 				dependencySize := 1
@@ -122,7 +124,7 @@ func routinePlanDependencies(p *planpb.Plan) ([]*planpb.RoutinePlanDependency, e
 					dependencySize = dependency.ProtoSize()
 				}
 				if dependencySize > maxRoutinePlanDependencyBytes-dependencyBytes {
-					return nil, fmt.Errorf("PROGRAM_LIMIT_EXCEEDED: routine dependency bytes exceed %d", maxRoutinePlanDependencyBytes)
+					return nil, moerr.NewInternalErrorNoCtxf("PROGRAM_LIMIT_EXCEEDED: routine dependency bytes exceed %d", maxRoutinePlanDependencyBytes)
 				}
 				dependencyBytes += dependencySize
 			}
@@ -141,10 +143,10 @@ func routinePlanDependencies(p *planpb.Plan) ([]*planpb.RoutinePlanDependency, e
 			continue
 		}
 		if frame.depth+1 > maxRoutinePlanQueryDepth {
-			return nil, fmt.Errorf("PROGRAM_LIMIT_EXCEEDED: routine dependency query nesting exceeds %d", maxRoutinePlanQueryDepth)
+			return nil, moerr.NewInternalErrorNoCtxf("PROGRAM_LIMIT_EXCEEDED: routine dependency query nesting exceeds %d", maxRoutinePlanQueryDepth)
 		}
 		if _, exists := active[background]; exists {
-			return nil, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: routine dependency query graph contains a cycle")
+			return nil, moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: routine dependency query graph contains a cycle")
 		}
 		// Shared background queries contribute their immutable dependencies
 		// once. Re-expanding a DAG as a tree can turn a small plan into
@@ -171,10 +173,10 @@ func validateRoutinePlanDependencies(ctx context.Context, ses FeSession, p *plan
 		return false, nil
 	}
 	if len(dependencies) > maxRoutinePlanDependencies {
-		return false, fmt.Errorf("PROGRAM_LIMIT_EXCEEDED: routine dependency count exceeds %d", maxRoutinePlanDependencies)
+		return false, moerr.NewInternalErrorNoCtxf("PROGRAM_LIMIT_EXCEEDED: routine dependency count exceeds %d", maxRoutinePlanDependencies)
 	}
 	if ses == nil {
-		return false, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: routine dependency validation has no session")
+		return false, moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: routine dependency validation has no session")
 	}
 	var snapshot *planpb.Snapshot
 	if tcc := ses.GetTxnCompileCtx(); tcc != nil {
@@ -220,7 +222,7 @@ func validateRoutinePlanDependencies(ctx context.Context, ses FeSession, p *plan
 	defer bh.Close()
 	if !useCallerTxn {
 		if err = bh.Exec(ctx, "begin;"); err != nil {
-			return false, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: routine dependency validation could not start: %w", err)
+			return false, errutil.Wrapf(err, "UNSUPPORTED_ROUTINE_VERSION: routine dependency validation could not start")
 		}
 		defer func() { err = finishTxn(ctx, bh, err) }()
 	}
@@ -235,7 +237,7 @@ func validateRoutinePlanDependencies(ctx context.Context, ses FeSession, p *plan
 		}
 	}
 	if err = bh.Exec(ctx, query); err != nil {
-		return false, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: routine dependency validation failed: %w", err)
+		return false, errutil.Wrapf(err, "UNSUPPORTED_ROUTINE_VERSION: routine dependency validation failed")
 	}
 	rows, err := getResultSet(ctx, bh)
 	if err != nil {
@@ -348,13 +350,13 @@ func validateRoutinePlanDependencies(ctx context.Context, ses FeSession, p *plan
 				return false, getErr
 			}
 			if !strings.EqualFold(revisionSecurityType, baseSecurityType) {
-				return false, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: routine %d has inconsistent revision and identity security contracts", id)
+				return false, moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: routine %d has inconsistent revision and identity security contracts", id)
 			}
 			if language == udf.LanguagePython && !strings.EqualFold(revisionSecurityType, "INVOKER") {
-				return false, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python routine catalog security type is not INVOKER")
+				return false, moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python routine catalog security type is not INVOKER")
 			}
 			if language == udf.LanguageSQL && !strings.EqualFold(revisionSecurityType, "DEFINER") {
-				return false, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: SQL routine catalog security type is not DEFINER")
+				return false, moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: SQL routine catalog security type is not DEFINER")
 			}
 			identityValid := routinePlanCatalogIdentityValidForLanguage(
 				language,
@@ -364,7 +366,7 @@ func validateRoutinePlanDependencies(ctx context.Context, ses FeSession, p *plan
 				revisionSDK, revisionNullPolicy,
 			)
 			if _, duplicate := states[id]; duplicate {
-				return false, fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: routine catalog returned duplicate state for function %d", id)
+				return false, moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: routine catalog returned duplicate state for function %d", id)
 			}
 			states[id] = routinePlanCatalogState{
 				activeRevision: activeRevision, namespaceVersion: namespaceVersion,
@@ -490,37 +492,37 @@ func routineRevisionReturnTypeMatches(rettype string, oid types.T) bool {
 
 func validateRoutinePlanDependencyShape(dependency *planpb.RoutinePlanDependency, accountID uint32) error {
 	if dependency == nil || dependency.FunctionRef == nil {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: routine plan dependency has no FunctionRef")
+		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: routine plan dependency has no FunctionRef")
 	}
 	ref := dependency.FunctionRef
 	if ref.FunctionId == 0 || ref.Revision == 0 || ref.NamespaceVersion == 0 ||
 		ref.AccountId != uint64(accountID) || ref.DatabaseId == 0 {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: routine plan dependency has an invalid catalog identity")
+		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: routine plan dependency has an invalid catalog identity")
 	}
 	if dependency.ContractVersion != udf.RoutinePlanContractVersion ||
 		!udf.IsSHA256Digest(dependency.DefinitionFingerprint) || !udf.IsSHA256Digest(dependency.NamespaceFingerprint) {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: routine plan dependency contract is incomplete")
+		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: routine plan dependency contract is incomplete")
 	}
 	if dependency.Volatility == "" || dependency.NullPolicy == "" || !dependency.MayError || dependency.Leakproof {
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: routine plan dependency semantic contract is incomplete")
+		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: routine plan dependency semantic contract is incomplete")
 	}
 	switch dependency.Language {
 	case udf.LanguagePython:
 		if dependency.SecurityMode != "INVOKER" {
-			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python routine plan dependency must use INVOKER security")
+			return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python routine plan dependency must use INVOKER security")
 		}
 		if !udf.IsSHA256Digest(dependency.ArtifactDigest) || !udf.IsSHA256Digest(dependency.EnvironmentDigest) {
-			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: Python routine plan dependency integrity is incomplete")
+			return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: Python routine plan dependency integrity is incomplete")
 		}
 	case udf.LanguageSQL:
 		if dependency.SecurityMode == "" {
-			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: SQL routine plan dependency has no security mode")
+			return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: SQL routine plan dependency has no security mode")
 		}
 		if dependency.ArtifactDigest != "" || dependency.EnvironmentDigest != "" {
-			return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: SQL routine plan dependency has external integrity fields")
+			return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: SQL routine plan dependency has external integrity fields")
 		}
 	default:
-		return fmt.Errorf("UNSUPPORTED_ROUTINE_VERSION: routine plan dependency language %q is unsupported", dependency.Language)
+		return moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: routine plan dependency language %q is unsupported", dependency.Language)
 	}
 	return nil
 }

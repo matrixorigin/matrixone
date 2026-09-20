@@ -16,7 +16,8 @@ package python
 
 import (
 	"errors"
-	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
 
-var errSupervisorClosing = errors.New("python udf worker is shutting down")
+var errSupervisorClosing = moerr.NewInternalErrorNoCtx("python udf worker is shutting down")
 
 type Supervisor struct {
 	cfg     Config
@@ -144,7 +145,7 @@ func (s *Supervisor) Close() error {
 	var closeErr error
 	if cmd != nil {
 		if err := killSupervisorProcess(cmd); err != nil && !errors.Is(err, os.ErrProcessDone) {
-			closeErr = fmt.Errorf("stop Python UDF worker: %w", err)
+			closeErr = errutil.Wrapf(err, "stop Python UDF worker")
 		}
 	}
 	if done != nil {
