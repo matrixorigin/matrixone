@@ -7920,16 +7920,17 @@ func hasCanonicalHLLAddAggregate(node *plan.Node) bool {
 			len(fn.Args) == 0 || fn.Args[0] == nil {
 			continue
 		}
-		if isCanonicalHLLVectorType(types.T(fn.Args[0].Typ.Id)) {
+		if isCanonicalHLLAddType(types.T(fn.Args[0].Typ.Id)) {
 			return true
 		}
 	}
 	return false
 }
 
-func isCanonicalHLLVectorType(typ types.T) bool {
+func isCanonicalHLLAddType(typ types.T) bool {
 	switch typ {
-	case types.T_array_float32, types.T_array_float64,
+	case types.T_char, types.T_json,
+		types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16:
 		return true
 	default:

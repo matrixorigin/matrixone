@@ -2021,10 +2021,10 @@ func validateRemoteAggregateProtocol(
 		}
 		if agg.GetAggID() == aggexec.AggIdOfHllAdd &&
 			len(agg.GetArgExpressions()) > 0 &&
-			isCanonicalHLLVectorType(types.T(agg.GetArgExpressions()[0].Typ.Id)) &&
+			isCanonicalHLLAddType(types.T(agg.GetArgExpressions()[0].Typ.Id)) &&
 			(proc == nil || !supportsRemoteCanonicalHLLAdd(proc.GetService())) {
 			return moerr.NewNotSupportedNoCtx(
-				"canonical vector HLL_ADD_AGG remote execution requires MORPC protocol version 88",
+				"canonical typed HLL_ADD_AGG remote execution requires MORPC protocol version 88",
 			)
 		}
 		if agg.GetConfigType() == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
@@ -2042,6 +2042,15 @@ func validateRemoteAggregateProtocol(
 		}
 	}
 	return nil
+}
+
+func isCanonicalHLLAddType(typ types.T) bool {
+	switch typ {
+	case types.T_char, types.T_json:
+		return true
+	default:
+		return false
+	}
 }
 
 // orderedSetPercentileDiscUsesExtendedType identifies the input family added

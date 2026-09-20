@@ -4839,6 +4839,87 @@ func TestRemoteHLLStateRetainsCompatibilityAcrossProtocolVersions(t *testing.T) 
 		"v88 peers may receive the canonical vector HLL state")
 }
 
+func TestRemoteCanonicalHLLAddStateGate(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.Ctx = context.WithValue(proc.Ctx, defines.RemoteRunContext{}, true)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	jsonValue, err := types.ParseStringToByteJson("1.0")
+	require.NoError(t, err)
+	jsonBytes, err := types.EncodeJson(jsonValue)
+	require.NoError(t, err)
+	for _, tc := range []struct {
+		name  string
+		typ   types.Type
+		value []byte
+	}{
+		{name: "char", typ: types.New(types.T_char, 4, 0), value: []byte("a ")},
+		{name: "json", typ: types.T_json.ToType(), value: jsonBytes},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			for _, version := range []struct {
+				protocol int64
+				wire     byte
+			}{
+				{protocol: defines.MORPCVersion87, wire: 2},
+				{protocol: defines.MORPCVersion88, wire: 4},
+			} {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, version.protocol)
+				arg := &plan.Expr{Typ: plan.Type{
+					Id:    int32(tc.typ.Oid),
+					Width: tc.typ.Width,
+					Scale: tc.typ.Scale,
+				}}
+				ctr := &container{
+					mp:                         proc.Mp(),
+					mtyp:                       H0,
+					legacyCanonicalHLLAddState: useLegacyCanonicalHLLAddStateForRemote(proc),
+				}
+				aggs, err := ctr.makeAggList([]aggexec.AggFuncExecExpression{
+					aggexec.MakeAggFunctionExpression(
+						aggexec.AggIdOfHllAdd, false, []*plan.Expr{arg}, nil),
+				})
+				require.NoError(t, err)
+				values := vector.NewVec(tc.typ)
+				require.NoError(t, vector.AppendBytes(values, tc.value, false, proc.Mp()))
+				require.NoError(t, aggs[0].BulkFill(0, []*vector.Vector{values}))
+				var intermediate bytes.Buffer
+				require.NoError(t, aggs[0].SaveIntermediateResultOfChunk(0, &intermediate))
+				wireData := intermediate.Bytes()
+				require.GreaterOrEqual(t, len(wireData), 21)
+				require.Equal(t, version.wire, wireData[20])
+				values.Free(proc.Mp())
+				freeAggList(aggs)
+			}
+		})
+	}
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion87)
+	arg := &plan.Expr{Typ: plan.Type{
+		Id:    int32(types.T_char),
+		Width: 4,
+	}}
+	group := newGroupOp(proc, nil, []aggexec.AggFuncExecExpression{
+		aggexec.MakeAggFunctionExpression(
+			aggexec.AggIdOfHllAdd, false, []*plan.Expr{arg}, nil),
+	})
+	require.NoError(t, group.Prepare(proc))
+	require.True(t, group.ctr.legacyCanonicalHLLAddState,
+		"Group.Prepare must apply the pre-v88 HLL_ADD compatibility mode")
+	group.Free(proc, false, nil)
+
+	merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{
+		aggexec.MakeAggFunctionExpression(
+			aggexec.AggIdOfHllAdd, false, []*plan.Expr{arg}, nil),
+	})
+	require.NoError(t, merge.Prepare(proc))
+	require.True(t, merge.ctr.legacyCanonicalHLLAddState,
+		"MergeGroup.Prepare must apply the pre-v88 HLL_ADD compatibility mode")
+	merge.Free(proc, false, nil)
+}
+
 func TestLegacyHLLStateRequiresRemoteProcess(t *testing.T) {
 	require.False(t, useLegacyHLLStateForRemote(nil))
 	require.False(t, useLegacyVectorHLLStateForRemote(nil))

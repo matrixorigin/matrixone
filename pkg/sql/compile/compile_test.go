@@ -2436,6 +2436,55 @@ func TestCompileShuffleGroupGatesHLLByProtocolVersion(t *testing.T) {
 	require.True(t, c.canCompileShuffleGroup(aggNode))
 }
 
+func TestCompileShuffleGroupGatesCanonicalHLLAddByProtocolVersion(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	aggNode, nodes := newShuffleGroupTestNodes(16)
+	rt := runtime.ServiceRuntime(c.proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	for _, tc := range []struct {
+		name      string
+		typ       types.Type
+		canonical bool
+	}{
+		{name: "char", typ: types.New(types.T_char, 4, 0), canonical: true},
+		{name: "json", typ: types.T_json.ToType(), canonical: true},
+		{name: "varchar-control", typ: types.New(types.T_varchar, 4, 0)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			arg := &plan.Expr{Typ: plan.Type{
+				Id:    int32(tc.typ.Oid),
+				Width: tc.typ.Width,
+				Scale: tc.typ.Scale,
+			}}
+			aggNode.AggList = []*plan.Expr{{
+				Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: "hll_add_agg"},
+					Args: []*plan.Expr{arg},
+				}},
+			}}
+
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion87)
+			require.Equal(t, tc.canonical, hasCanonicalHLLAddAggregate(aggNode))
+			require.Equal(t, !tc.canonical, c.canCompileShuffleGroup(aggNode))
+			if tc.canonical {
+				local := c.compileGroupWithoutShuffle(
+					aggNode,
+					[]*Scope{newShuffleGroupInputScope(t, 1)},
+					nodes,
+					false,
+				)
+				require.Len(t, local, 1)
+				require.True(t, local[0].RootOp.(*group.Group).NeedEval)
+			}
+
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion88)
+			require.True(t, c.supportsRemoteCanonicalHLLAdd())
+			require.True(t, c.canCompileShuffleGroup(aggNode))
+		})
+	}
+}
+
 func TestCompileShuffleGroupGatesAggregateWireByProtocolVersion(t *testing.T) {
 	c := newCompileForShuffleGroupTest(t)
 	aggNode, _ := newShuffleGroupTestNodes(16)

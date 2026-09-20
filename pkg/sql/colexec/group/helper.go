@@ -1881,10 +1881,9 @@ func (ctr *container) makeAggListWithAllocation(
 			} else {
 				aggexec.ConfigureHLLLegacyState(aggList[i])
 			}
-		} else if ctr.legacyVectorHLLState && hllVectorStateSupported(agExpr) {
-			// v77-v87 coordinators do not know the v88 vector HLL hash
-			// contract. Keep the worker's vector HLL_ADD producer on v2 so
-			// old and new workers cannot emit mixed hash domains.
+		} else if ctr.legacyCanonicalHLLAddState && hllCanonicalAddStateSupported(agExpr) {
+			// v77-v87 peers do not understand canonical typed HLL_ADD_AGG.
+			// Keep the producer on v2 until every peer has the v88 contract.
 			aggexec.ConfigureHLLLegacyState(aggList[i])
 		}
 		if ctr.legacyDistinctFloatKeys {
@@ -1925,7 +1924,7 @@ func hllFloatZeroStateSupported(aggID int64) bool {
 		aggID == aggexec.AggIdOfApproxCountDistinct
 }
 
-func hllVectorStateSupported(
+func hllCanonicalAddStateSupported(
 	agg aggexec.AggFuncExecExpression,
 ) bool {
 	if agg.GetAggID() != aggexec.AggIdOfHllAdd {
@@ -1936,7 +1935,8 @@ func hllVectorStateSupported(
 		return false
 	}
 	switch types.T(args[0].Typ.Id) {
-	case types.T_array_float32, types.T_array_float64,
+	case types.T_char, types.T_json,
+		types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16:
 		return true
 	default:
@@ -2030,7 +2030,7 @@ func useLegacyHLLStateForRemote(proc *process.Process) bool {
 	return !ok || !valid || version < defines.MORPCVersion77
 }
 
-func useLegacyVectorHLLStateForRemote(proc *process.Process) bool {
+func useLegacyCanonicalHLLAddStateForRemote(proc *process.Process) bool {
 	if proc == nil || proc.Ctx == nil {
 		return false
 	}
