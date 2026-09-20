@@ -1,0 +1,87 @@
+drop table if exists issue_28695_signed_zero_index;
+create table issue_28695_signed_zero_index(
+    id int primary key,
+    bucket int,
+    v double,
+    f float,
+    key idx_v(v),
+    key idx_v_id(v, id),
+    key idx_f(f),
+    key idx_bucket_v(bucket, v)
+);
+insert into issue_28695_signed_zero_index values
+    (1, 1, cast('-0.0' as double), cast('-0.0' as float)),
+    (2, 1, cast('0.0' as double), cast('0.0' as float)),
+    (3, 2, -1.0, -1.0),
+    (4, 2, 1.0, 1.0),
+    (5, 3, null, null),
+    (6, 1, 2.0, 2.0);
+select count(*) as force_eq, sum(id) as force_eq_sum
+from issue_28695_signed_zero_index force index(idx_v)
+where v = cast('-0.0' as double);
+➤ force_eq[-5,64,0]  ¦  force_eq_sum[-5,64,0]  𝄀
+2  ¦  3
+select count(*) as ignore_eq, sum(id) as ignore_eq_sum
+from issue_28695_signed_zero_index ignore index(idx_v)
+where v = cast('-0.0' as double);
+➤ ignore_eq[-5,64,0]  ¦  ignore_eq_sum[-5,64,0]  𝄀
+2  ¦  3
+select count(*) as force_in, sum(id) as force_in_sum
+from issue_28695_signed_zero_index force index(idx_v_id)
+where v in (cast('-0.0' as double), cast('0.0' as double));
+➤ force_in[-5,64,0]  ¦  force_in_sum[-5,64,0]  𝄀
+2  ¦  3
+select count(*) as ignore_in, sum(id) as ignore_in_sum
+from issue_28695_signed_zero_index ignore index(idx_v, idx_v_id)
+where v in (cast('-0.0' as double), cast('0.0' as double));
+➤ ignore_in[-5,64,0]  ¦  ignore_in_sum[-5,64,0]  𝄀
+2  ¦  3
+select count(*) as force_range, sum(id) as force_range_sum
+from issue_28695_signed_zero_index force index(idx_v)
+where v >= cast('-0.0' as double) and v <= cast('0.0' as double);
+➤ force_range[-5,64,0]  ¦  force_range_sum[-5,64,0]  𝄀
+2  ¦  3
+select count(*) as ignore_range, sum(id) as ignore_range_sum
+from issue_28695_signed_zero_index ignore index(idx_v)
+where v >= cast('-0.0' as double) and v <= cast('0.0' as double);
+➤ ignore_range[-5,64,0]  ¦  ignore_range_sum[-5,64,0]  𝄀
+2  ¦  3
+select count(*) as force_float_eq, sum(id) as force_float_eq_sum
+from issue_28695_signed_zero_index force index(idx_f)
+where f = cast('-0.0' as float);
+➤ force_float_eq[-5,64,0]  ¦  force_float_eq_sum[-5,64,0]  𝄀
+2  ¦  3
+select count(*) as ignore_float_eq, sum(id) as ignore_float_eq_sum
+from issue_28695_signed_zero_index ignore index(idx_f)
+where f = cast('-0.0' as float);
+➤ ignore_float_eq[-5,64,0]  ¦  ignore_float_eq_sum[-5,64,0]  𝄀
+2  ¦  3
+select count(*) as prefix_residual, sum(id) as prefix_residual_sum
+from issue_28695_signed_zero_index force index(idx_bucket_v)
+where bucket = 1 and v = cast('-0.0' as double);
+➤ prefix_residual[-5,64,0]  ¦  prefix_residual_sum[-5,64,0]  𝄀
+2  ¦  3
+prepare issue_28695_zero from
+    'select count(*) as prepared_eq from issue_28695_signed_zero_index where v = ?';
+set @issue_28695_zero = cast('-0.0' as double);
+execute issue_28695_zero using @issue_28695_zero;
+➤ prepared_eq[-5,64,0]  𝄀
+2
+deallocate prepare issue_28695_zero;
+drop table issue_28695_signed_zero_index;
+drop table if exists issue_28695_signed_zero_unique;
+create table issue_28695_signed_zero_unique(
+    id int primary key,
+    v double,
+    unique key uk_v(v)
+);
+insert into issue_28695_signed_zero_unique values
+    (1, cast('-0.0' as double));
+-- @regex("Duplicate entry", true)
+insert into issue_28695_signed_zero_unique values
+    (2, cast('0.0' as double));
+Duplicate entry '0' for key 'uk_v'
+select count(*) as unique_rows from issue_28695_signed_zero_unique;
+➤ unique_rows[-5,64,0]  𝄀
+1
+drop table issue_28695_signed_zero_unique;
