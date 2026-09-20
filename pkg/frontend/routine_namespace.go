@@ -20,16 +20,17 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/util/errutil"
 	"sort"
 	"strconv"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/udf/udferr"
+	"github.com/matrixorigin/matrixone/pkg/util/errutil"
+
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-var errRoutineNamespaceBudget = moerr.NewInternalErrorNoCtx("routine namespace cache budget exceeded")
+var errRoutineNamespaceBudget = udferr.New("routine namespace cache budget exceeded")
 
 const maxRoutineNamespaceRows = 65536
 const maxRoutineNamespaceBytes = 64 << 20
@@ -121,7 +122,7 @@ func decodeRoutineNamespaces(ctx context.Context, rows ExecResult) (map[uint64]s
 			groups[numbers[0]] = make(map[uint64]string)
 		}
 		if _, duplicate := groups[numbers[0]][numbers[1]]; duplicate {
-			return nil, moerr.NewInternalErrorNoCtxf("UNSUPPORTED_ROUTINE_VERSION: duplicate routine namespace member")
+			return nil, udferr.Newf("UNSUPPORTED_ROUTINE_VERSION: duplicate routine namespace member")
 		}
 		groups[numbers[0]][numbers[1]] = hex.EncodeToString(digest[:])
 	}
