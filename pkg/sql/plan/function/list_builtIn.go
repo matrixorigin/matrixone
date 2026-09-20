@@ -432,7 +432,9 @@ func quoteReturnType(parameters []types.Type) types.Type {
 		bound.bytes = 4
 	}
 	if binary {
-		return binaryStringResultType(bound)
+		// QUOTE always returns a character string. Binary input changes the byte
+		// bound, but not the result domain exposed to callers.
+		return textStringResultType(bound, types.CharsetUTF8)
 	}
 	return textStringResultType(bound, parameters[0].Charset)
 }
@@ -7144,7 +7146,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: SOUNDEX,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{

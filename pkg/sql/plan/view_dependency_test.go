@@ -934,7 +934,7 @@ func TestPersistedDecimalZeroTailComparisonViewProtocolLifecycle(t *testing.T) {
 				return BuildPlan(root, stmt, false)
 			}
 
-			for _, floor := range []int64{defines.MORPCVersion85, defines.MORPCVersion86, defines.MORPCVersion89} {
+			for _, floor := range []int64{defines.MORPCVersion85, defines.MORPCVersion86, defines.MORPCVersion87, defines.MORPCVersion88, defines.MORPCVersion89} {
 				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, floor)
 				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, floor)

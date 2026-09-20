@@ -1353,7 +1353,7 @@ func QuoteString(str string) string {
 	return string(result)
 }
 
-func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	parameter := vector.GenerateFunctionStrParameter(ivecs[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	for row := uint64(0); row < uint64(length); row++ {
@@ -1370,6 +1370,9 @@ func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proce
 				return err
 			}
 			continue
+		}
+		if ivecs[0].GetIsBinaryStringAt(int(row)) && !utf8.Valid(value) {
+			return moerr.NewCannotConvertString(proc.Ctx, string(value), "binary", "utf8mb4")
 		}
 		resultBytes := quotedBytesLength(value)
 		if int64(resultBytes) > maxStringFunctionResultLength(result) {

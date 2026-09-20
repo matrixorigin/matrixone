@@ -993,7 +993,7 @@ func TestDecimalComparisonPreservesNullableColumnSemantics(t *testing.T) {
 			requires, err := plan.RequiresMORPCVersion89DecimalLiteralSemantics(result)
 			require.NoError(t, err)
 			require.True(t, requires,
-				"retained nullable comparison must preserve the v87 fence")
+				"retained nullable comparison must preserve the v89 fence")
 		})
 	}
 }
@@ -1057,7 +1057,7 @@ func TestDecimalComparisonFencesSmallExplicitCastSourceScaleMismatch(t *testing.
 				requires, err := plan.RequiresMORPCVersion89DecimalLiteralSemantics(result)
 				require.NoError(t, err)
 				require.True(t, requires,
-					"source-scale mismatch must carry the v87 persisted-expression fence")
+					"source-scale mismatch must carry the v89 persisted-expression fence")
 			})
 		}
 	}

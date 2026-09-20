@@ -27,6 +27,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestOrderedCollectionCompatibilityAliases(t *testing.T) {
+	listAgg, err := GetFunctionByName(
+		t.Context(), "listagg", []types.Type{types.T_varchar.ToType()})
+	require.NoError(t, err)
+	listAggID, _ := DecodeOverloadID(listAgg.GetEncodedOverloadID())
+	require.Equal(t, int32(GROUP_CONCAT), listAggID)
+	require.Equal(t, types.T_text, listAgg.GetReturnType().Oid)
+
+	arrayAgg, err := GetFunctionByName(
+		t.Context(), "array_agg", []types.Type{types.T_varchar.ToType()})
+	require.NoError(t, err)
+	arrayAggID, _ := DecodeOverloadID(arrayAgg.GetEncodedOverloadID())
+	require.Equal(t, int32(JSON_ARRAYAGG), arrayAggID)
+	require.Equal(t, types.T_json, arrayAgg.GetReturnType().Oid)
+}
+
 func TestJSONObjectAggNumericKeyResolution(t *testing.T) {
 	ctx := context.Background()
 	valueType := types.T_varchar.ToType()

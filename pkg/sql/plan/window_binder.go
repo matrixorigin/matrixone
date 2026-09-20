@@ -122,7 +122,7 @@ func isGroupConcatAggregateExpr(astExpr tree.Expr) bool {
 		return false
 	}
 	name := funcExpr.FuncName.Compare()
-	return strings.EqualFold(name, NameGroupConcat)
+	return strings.EqualFold(name, NameGroupConcat) || strings.EqualFold(name, "listagg")
 }
 
 func semanticNodeKey(node tree.NodeFormatter) string {
@@ -1277,6 +1277,22 @@ func makeWindowFrameConstValue(
 	vec, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 	if err != nil {
 		return nil, err
+	}
+	if vec.GetType().Oid == types.T_decimal256 {
+		// Literal has no Decimal256 scalar variant. Keep the exact coefficient
+		// in the existing vector-literal representation, owned independently of
+		// the expression executor, rather than publishing a nil scalar literal.
+		data, err := vec.MarshalBinary()
+		if err != nil {
+			return nil, err
+		}
+		requiresDecimal, err := plan.RequiresMORPCVersion89DecimalLiteralSemantics(e)
+		if err != nil {
+			return nil, err
+		}
+		return &plan.Expr{Typ: *typ, Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{
+			Len: int32(vec.Length()), Data: data, DecimalLiteralRequiresV82: requiresDecimal,
+		}}}, nil
 	}
 	c := rule.GetConstantValue(vec, false, 0)
 	rule.PreserveFoldedDecimalLiteralSemantics(e, c)
