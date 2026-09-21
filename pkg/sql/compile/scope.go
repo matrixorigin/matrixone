@@ -446,6 +446,15 @@ func (s *Scope) runEventAsync(c *Compile, done func(error)) (err error) {
 		p = pipeline.New(id, s.DataSource.Attributes, s.RootOp)
 	}
 	scheduler := c.ensureScopeTaskScheduler(max(1, len(c.scopes)))
+	scheduleCleanup := func(runErr error, completion func(error)) error {
+		if err := scheduler.submitTeardown("scope-cleanup", func() {
+			cleaned := cleanup(runErr)
+			completion(cleaned)
+		}); err != nil {
+			return err
+		}
+		return nil
+	}
 	startContinuation := func() error {
 		if s.DataSource != nil && !s.DataSource.isConst {
 			var tag int32
@@ -457,9 +466,11 @@ func (s *Scope) runEventAsync(c *Compile, done func(error)) (err error) {
 		stopAnalyzer()
 		continuation, continuationErr := p.NewContinuation(s.Proc)
 		if continuationErr != nil {
-			cleanupErr := fail(continuationErr)
-			done(cleanupErr)
-			return continuationErr
+			if err := scheduleCleanup(continuationErr, done); err != nil {
+				done(err)
+				return err
+			}
+			return nil
 		}
 		return scheduler.submitContinuation("scope-vm", continuation, func(runErr error) {
 			// Cleanup may wait for producer terminals after a consumer stops early
@@ -504,8 +515,9 @@ func (s *Scope) runEventAsync(c *Compile, done func(error)) (err error) {
 			}
 			if err := scheduler.submitRoot("scope-reader-ready", func() {
 				if buildErr != nil {
-					cleanupErr := fail(buildErr)
-					done(cleanupErr)
+					if cleanupErr := scheduleCleanup(buildErr, done); cleanupErr != nil {
+						done(cleanupErr)
+					}
 					return
 				}
 				if startErr := startContinuation(); startErr != nil {
