@@ -84,11 +84,14 @@ The mapping-count rule is fixed before generated/default rewriting:
   width must agree. A generated column counts as one slot when it is listed
   with `DEFAULT`; it is removed only from the executable projection after the
   alias identity has been recorded.
-- With an implicit `VALUES` list, the effective source list is the table's
-  non-hidden columns in table order, including generated columns. The source
-  tuple and an optional alias column list use that full width. A generated
-  `DEFAULT` slot is then stripped from the executable projection without
-  changing the already-recorded alias mapping.
+- With an implicit `VALUES` list, the effective alias-mapping list is the
+  table's non-hidden columns in table order, including generated columns. For
+  a non-empty tuple, the tuple width and an optional alias column-list width
+  must equal that effective width. `VALUES()` is the explicit all-default
+  exception: its input tuple width is zero, while an optional alias column list
+  still has the full effective width and maps names to every target identity.
+  The default projection is materialized after that mapping is recorded, so an
+  empty tuple does not become a zero-column alias mapping.
 - Hidden columns never enter either effective list and cannot be named by an
   alias. A generated slot with any non-`DEFAULT` source expression, or an
   ODKU assignment other than `generated_col = DEFAULT`, is an invalid write and
@@ -106,6 +109,22 @@ INSERT INTO t(a, g) VALUES (1, DEFAULT) AS n(x, y)
 The corresponding implicit form keeps `g` in the source/alias width until the
 `DEFAULT` rewrite, and `n.g` reads the materialized value. Replacing either
 `DEFAULT` with an explicit value is a generated-column write and is rejected.
+
+An empty tuple uses the same full-width alias mapping while supplying defaults
+for every source column:
+
+```sql
+CREATE TABLE t(id INT PRIMARY KEY DEFAULT 1, b INT DEFAULT 7);
+INSERT INTO t VALUES (1, 99);
+INSERT INTO t VALUES () AS n(k, v)
+  ON DUPLICATE KEY UPDATE b = n.v;
+```
+
+The candidate is `(1, 7)`, so the duplicate update stores `b = 7`. The input
+tuple has width zero; `n(k, v)` still has two mapped identities. The same
+exception applies when the full-width mapping includes a generated column;
+the generated value is materialized from its default dependency before it is
+read through the alias.
 
 The row-alias subquery rejection is deliberate. For example:
 
@@ -127,9 +146,11 @@ safe.
 
 The ordering is explicit. Parser syntax errors and structural row-alias
 declaration errors (unknown, duplicate, hidden, or count-mismatched columns)
-are reported first. Generated-column legality is then checked against the
-source/assignment expression: `DEFAULT` is accepted, while a non-`DEFAULT`
-write is rejected before execution. Next, an AST-only walk records subquery
+are reported first, except that `VALUES()` is allowed to have input width zero
+when its optional alias list has the full effective mapping width. Generated-
+column legality is then checked against the source/assignment expression:
+`DEFAULT` is accepted, while a non-`DEFAULT` write is rejected before
+execution. Next, an AST-only walk records subquery
 nodes, scope-local names, and prepared-marker offsets without catalog lookup,
 type lowering, flattening, or evaluation. For a new row-alias RHS, finding any
 subquery returns the row-alias rejection before recursive binding and before
@@ -222,13 +243,14 @@ leave Draft, it must provide:
    the pre-fallback subquery gate, and complete parameter traversal.
 3. BVT controls for an empty keyed target, a duplicate keyed target, a no-key
    direct fallback, a no-key row-alias subquery rejection, direct aliases,
-   explicit and implicit generated-column slots, reading the materialized
-   generated value, `generated_col = DEFAULT`, rejection of non-`DEFAULT`
-   generated writes, invalid casts, multi-row and nested subqueries, prepared
-   repeated execution, legacy correlated rejection, legacy uncorrelated
-   baseline parity, and every rejected grammar shape. Each rejection must
-   assert code, SQLSTATE, exact text, unchanged table state, and a successful
-   follow-up statement.
+   explicit and implicit generated-column slots, `VALUES()` all-default input
+   with an ordinary default column and with a generated column, reading the
+   materialized generated value, `generated_col = DEFAULT`, rejection of
+   non-`DEFAULT` generated writes, invalid casts, multi-row and nested
+   subqueries, prepared repeated execution of the empty-tuple form, legacy
+   correlated rejection, legacy uncorrelated baseline parity, and every
+   rejected grammar shape. Each rejection must assert code, SQLSTATE, exact
+   text, unchanged table state, and a successful follow-up statement.
 4. A defect-control run at the exact implementation head
    `dd2b0b38f056ac56671a5d78c9de33b68b06ef07` showing the eager-build failure
    or premature subquery evaluation for the counterexample above. The current
