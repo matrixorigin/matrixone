@@ -2160,3 +2160,420 @@ func TestColRefsWithin_NestedFunction(t *testing.T) {
 	result := colRefsWithin(expr, 10)
 	assert.True(t, result)
 }
+
+func TestGetResultColumnsFromPlanMapsVectorIndexSourceSlots(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Name:         "source_alias",
+		OriginalName: "source_table",
+		DbName:       "source_db",
+		Pkey:         &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		Cols: []*plan.ColDef{
+			{Name: "embedding", Typ: plan.Type{Id: int32(types.T_array_float32)}},
+			{Name: "payload", Typ: plan.Type{Id: int32(types.T_varchar), Width: 64}},
+			{
+				Name:    "id",
+				Primary: true,
+				Typ: plan.Type{
+					Id:          int32(types.T_int64),
+					NotNullable: true,
+					AutoIncr:    true,
+				},
+			},
+			{Name: "category", NotNull: true, Typ: plan.Type{Id: int32(types.T_varchar), Width: 32}},
+			{Name: "unused", Typ: plan.Type{Id: int32(types.T_int32)}},
+		},
+		Name2ColIndex: map[string]int32{
+			"embedding": 0,
+			"payload":   1,
+			"id":        2,
+			"category":  3,
+			"unused":    4,
+		},
+		Indexes: []*plan.IndexDef{{Parts: []string{"category"}, Unique: true}},
+	}
+	vectorScan := &plan.VectorIndexScan{
+		SourceTable:    &plan.ObjectRef{SchemaName: "source_db", ObjName: "source_table"},
+		SourceTableDef: tableDef,
+		Index:          &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()},
+		IncludedColumns: []string{
+			"category",
+			"payload",
+		},
+	}
+	scoreType := plan.Type{Id: int32(types.T_float64), Width: 8}
+	vectorNodeProjectList := []*plan.Expr{
+		// The scan projection is deliberately reordered. ColPos remains the
+		// synthetic vector output slot, so lineage must follow the reference
+		// instead of the projection-list index.
+		{Typ: scoreType, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 10, ColPos: 1, Name: "score"}}},
+		{Typ: tableDef.Cols[3].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 10, ColPos: 2, Name: "category"}}},
+		{Typ: tableDef.Cols[2].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 10, ColPos: 0, Name: "pkid"}}},
+		{Typ: tableDef.Cols[1].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 10, ColPos: 3, Name: "payload"}}},
+	}
+	projectList := []*plan.Expr{
+		{Typ: tableDef.Cols[2].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 10, ColPos: 0, Name: "pkid"}}},
+		{Typ: tableDef.Cols[3].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 10, ColPos: 2, Name: "category"}}},
+		{Typ: scoreType, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 10, ColPos: 1, Name: "score"}}},
+		{Typ: tableDef.Cols[1].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 10, ColPos: 3, Name: "payload"}}},
+	}
+
+	got := GetResultColumnsFromPlan(&plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{1},
+		Nodes: []*plan.Node{
+			{
+				NodeId:      0,
+				NodeType:    plan.Node_VECTOR_INDEX_SCAN,
+				BindingTags: []int32{10},
+				TableDef: &plan.TableDef{Cols: []*plan.ColDef{
+					{Name: "pkid", Typ: tableDef.Cols[2].Typ},
+					{Name: "score", Typ: scoreType},
+					{Name: "__mo_index_include_category", Typ: tableDef.Cols[3].Typ},
+					{Name: "__mo_index_include_payload", Typ: tableDef.Cols[1].Typ},
+				}},
+				ProjectList:     vectorNodeProjectList,
+				VectorIndexScan: vectorScan,
+			},
+			{NodeId: 1, NodeType: plan.Node_PROJECT, Children: []int32{0}, ProjectList: projectList},
+		},
+		Headings: []string{"id", "category", "score", "payload"},
+	}}})
+
+	require.Len(t, got, 4)
+	require.Equal(t, "source_db", got[0].DbName)
+	require.Equal(t, "source_table", got[0].TblName)
+	require.Equal(t, "source_table", got[0].OriginTblName)
+	require.Equal(t, "id", got[0].OriginName)
+	require.True(t, got[0].Primary)
+	require.True(t, got[0].NotNull)
+	require.True(t, got[0].Typ.NotNullable)
+	require.True(t, got[0].Typ.AutoIncr)
+
+	// The distance score is synthetic and must not inherit source metadata.
+	require.Empty(t, got[2].DbName)
+	require.Empty(t, got[2].TblName)
+	require.Empty(t, got[2].OriginTblName)
+	require.Empty(t, got[2].OriginName)
+	require.False(t, got[2].Primary)
+	require.False(t, got[2].Unique)
+
+	require.Equal(t, "category", got[1].OriginName)
+	require.Equal(t, "source_table", got[1].OriginTblName)
+	require.True(t, got[1].Unique)
+	require.True(t, got[1].NotNull)
+	require.False(t, got[3].Unique)
+	require.False(t, got[3].NotNull)
+	require.Equal(t, "payload", got[3].OriginName)
+}
+
+func TestGetResultColumnsFromPlanMapsPrunedVectorIndexSlotsByName(t *testing.T) {
+	sourceTable := &plan.TableDef{
+		Name:   "source_table",
+		DbName: "source_db",
+		Pkey:   &plan.PrimaryKeyDef{PkeyColName: "id"},
+		Cols: []*plan.ColDef{
+			{Name: "embedding", Typ: plan.Type{Id: int32(types.T_array_float32)}},
+			{Name: "payload", Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{Name: "id", Primary: true, Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}},
+			{Name: "category", NotNull: true, Typ: plan.Type{Id: int32(types.T_varchar)}},
+		},
+		Name2ColIndex: map[string]int32{"embedding": 0, "payload": 1, "id": 2, "category": 3},
+		Indexes:       []*plan.IndexDef{{Parts: []string{"category"}, Unique: true}},
+	}
+	vectorSpec := &plan.VectorIndexScan{
+		SourceTable:    &plan.ObjectRef{SchemaName: "source_db", ObjName: "source_table"},
+		SourceTableDef: sourceTable,
+		Index:          &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()},
+		IncludedColumns: []string{
+			"category",
+			"payload",
+		},
+	}
+	makePlan := func(vectorCols, resultCols []*plan.ColDef, headings []string) *plan.Plan {
+		projectList := make([]*plan.Expr, len(vectorCols))
+		for i, col := range vectorCols {
+			projectList[i] = &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: int32(i),
+					Name:   col.Name,
+				}},
+			}
+		}
+		resultProjectList := make([]*plan.Expr, len(resultCols))
+		for i, col := range resultCols {
+			resultProjectList[i] = &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: int32(i),
+					Name:   col.Name,
+				}},
+			}
+		}
+		return &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+			StmtType: plan.Query_SELECT,
+			Steps:    []int32{1},
+			Nodes: []*plan.Node{
+				{
+					NodeId:      0,
+					NodeType:    plan.Node_VECTOR_INDEX_SCAN,
+					TableDef:    &plan.TableDef{Cols: vectorCols},
+					ProjectList: projectList,
+					VectorIndexScan: &plan.VectorIndexScan{
+						SourceTable:     vectorSpec.SourceTable,
+						SourceTableDef:  vectorSpec.SourceTableDef,
+						Index:           vectorSpec.Index,
+						IncludedColumns: vectorSpec.IncludedColumns,
+					},
+				},
+				{NodeId: 1, NodeType: plan.Node_PROJECT, Children: []int32{0}, ProjectList: resultProjectList},
+			},
+			Headings: headings,
+		}}}
+	}
+
+	// Column pruning can leave score and an included column at local positions
+	// zero and one even though pkid was slot zero in the original schema.
+	prunedScoreAndInclude := makePlan(
+		[]*plan.ColDef{
+			{Name: "score", Typ: plan.Type{Id: int32(types.T_float64)}},
+			{Name: "__mo_index_include_category", Typ: sourceTable.Cols[3].Typ},
+		},
+		[]*plan.ColDef{
+			{Name: "score", Typ: plan.Type{Id: int32(types.T_float64)}},
+			{Name: "category", Typ: sourceTable.Cols[3].Typ},
+		},
+		[]string{"score", "category"},
+	)
+	got := GetResultColumnsFromPlan(prunedScoreAndInclude)
+	require.Len(t, got, 2)
+	require.Empty(t, got[0].OriginName)
+	require.Equal(t, "category", got[1].OriginName)
+	require.True(t, got[1].Unique)
+	require.True(t, got[1].NotNull)
+
+	// A different pruning pass can keep pkid and an included column while
+	// removing score; pkid must still resolve to the nonzero source position.
+	prunedPkAndInclude := makePlan(
+		[]*plan.ColDef{
+			{Name: "pkid", Typ: sourceTable.Cols[2].Typ},
+			{Name: "__mo_index_include_category", Typ: sourceTable.Cols[3].Typ},
+		},
+		[]*plan.ColDef{
+			{Name: "pkid", Typ: sourceTable.Cols[2].Typ},
+			{Name: "category", Typ: sourceTable.Cols[3].Typ},
+		},
+		[]string{"id", "category"},
+	)
+	got = GetResultColumnsFromPlan(prunedPkAndInclude)
+	require.Len(t, got, 2)
+	require.Equal(t, "id", got[0].OriginName)
+	require.True(t, got[0].Primary)
+	require.True(t, got[0].NotNull)
+	require.Equal(t, "category", got[1].OriginName)
+
+	// Sort nodes can expose a compact local output list while retaining the
+	// child scan's original source positions. The lineage walker must bridge
+	// that local position before resolving the vector slot by name. Keeping two
+	// included columns catches collisions where a local slot equals another
+	// child's source position.
+	sortPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{2},
+		Nodes: []*plan.Node{
+			{
+				NodeId: 0, NodeType: plan.Node_VECTOR_INDEX_SCAN,
+				TableDef: &plan.TableDef{Cols: []*plan.ColDef{
+					{Name: "pkid", Typ: sourceTable.Cols[2].Typ},
+					{Name: "score", Typ: plan.Type{Id: int32(types.T_float64)}},
+					{Name: "__mo_index_include_category", Typ: sourceTable.Cols[3].Typ},
+					{Name: "__mo_index_include_payload", Typ: sourceTable.Cols[1].Typ},
+				}},
+				ProjectList: []*plan.Expr{
+					{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0, Name: "pkid"}}},
+					{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1, Name: "score"}}},
+					{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 2, Name: "__mo_index_include_category"}}},
+					{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 3, Name: "__mo_index_include_payload"}}},
+				},
+				VectorIndexScan: vectorSpec,
+			},
+			{NodeId: 1, NodeType: plan.Node_SORT, Children: []int32{0}, ProjectList: []*plan.Expr{
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}},
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 2}}},
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 3}}},
+			}},
+			{NodeId: 2, NodeType: plan.Node_PROJECT, Children: []int32{1}, ProjectList: []*plan.Expr{
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}},
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1}}},
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 2}}},
+			}},
+		},
+		Headings: []string{"id", "category", "payload"},
+	}}}
+	got = GetResultColumnsFromPlan(sortPlan)
+	require.Len(t, got, 3)
+	require.Equal(t, "id", got[0].OriginName)
+	require.Equal(t, "category", got[1].OriginName)
+	require.Equal(t, "payload", got[2].OriginName)
+
+	// JOIN resolves its selected child slot before descending. That reference
+	// is already a source position, so a compact SORT child must not interpret
+	// it as a second local slot (SORT outputs [0, 2, 3] here).
+	joinTable := &plan.TableDef{
+		Name:   "join_table",
+		DbName: "source_db",
+		Pkey:   &plan.PrimaryKeyDef{PkeyColName: "id"},
+		Cols: []*plan.ColDef{
+			{Name: "id", Primary: true, Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}},
+			{Name: "payload", Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{Name: "category", NotNull: true, Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{Name: "extra", Typ: plan.Type{Id: int32(types.T_int32)}},
+		},
+		Name2ColIndex: map[string]int32{"id": 0, "payload": 1, "category": 2, "extra": 3},
+		Indexes:       []*plan.IndexDef{{Parts: []string{"category"}, Unique: true}},
+	}
+	leftScanProjects := make([]*plan.Expr, len(joinTable.Cols))
+	for i, col := range joinTable.Cols {
+		leftScanProjects[i] = &plan.Expr{Typ: col.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: 7, ColPos: int32(i), Name: col.Name,
+		}}}
+	}
+	rightScanProjects := []*plan.Expr{{Typ: joinTable.Cols[0].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+		RelPos: 8, ColPos: 0, Name: "id",
+	}}}}
+	joinPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{4},
+		Nodes: []*plan.Node{
+			{NodeId: 0, NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{7}, TableDef: joinTable, ProjectList: leftScanProjects},
+			{NodeId: 1, NodeType: plan.Node_SORT, Children: []int32{0}, ProjectList: []*plan.Expr{
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 7, ColPos: 0}}},
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 7, ColPos: 2}}},
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 7, ColPos: 3}}},
+			}},
+			{NodeId: 2, NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{8}, TableDef: joinTable, ProjectList: rightScanProjects},
+			{NodeId: 3, NodeType: plan.Node_JOIN, Children: []int32{1, 2}, ProjectList: []*plan.Expr{
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1}}},
+			}},
+			{NodeId: 4, NodeType: plan.Node_PROJECT, Children: []int32{3}, ProjectList: []*plan.Expr{
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1}}},
+			}},
+		},
+		Headings: []string{"category"},
+	}}}
+	got = GetResultColumnsFromPlan(joinPlan)
+	require.Len(t, got, 1)
+	require.Equal(t, "category", got[0].OriginName)
+
+	// When a transparent node is itself the result step, its expressions are
+	// already source references. The entry point must not reinterpret ColPos as
+	// a local output index.
+	sortResultPlan := *sortPlan
+	sortResultQuery := *sortPlan.GetQuery()
+	sortResultQuery.Steps = []int32{1}
+	sortResultQuery.Headings = []string{"id", "category", "payload"}
+	sortResultPlan.Plan = &plan.Plan_Query{Query: &sortResultQuery}
+	got = GetResultColumnsFromPlan(&sortResultPlan)
+	require.Len(t, got, 3)
+	require.Equal(t, "id", got[0].OriginName)
+	require.Equal(t, "category", got[1].OriginName)
+	require.Equal(t, "payload", got[2].OriginName)
+}
+
+func TestGetResultColumnsFromPlanFailsClosedForInvalidVectorIndexSource(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
+		Cols: []*plan.ColDef{{Name: "id", Primary: true}, {Name: "category"}},
+	}
+	vectorScan := &plan.VectorIndexScan{
+		SourceTableDef:  tableDef,
+		Index:           &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()},
+		IncludedColumns: []string{"missing"},
+	}
+	// The vector scan node's synthetic result schema (as the ivfflat emitter always sets it):
+	// pkid, score, and an include column naming a source column that does not exist.
+	vectorTableDef := &plan.TableDef{Cols: []*plan.ColDef{
+		{Name: "pkid"},
+		{Name: "score"},
+		{Name: catalog.SystemSI_IVFFLAT_IncludeColPrefix + "missing"},
+	}}
+	projectList := []*plan.Expr{
+		{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
+		{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}},
+		{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 2}}},
+		{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 4}}},
+	}
+
+	got := GetResultColumnsFromPlan(&plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{1},
+		Nodes: []*plan.Node{
+			{NodeId: 0, NodeType: plan.Node_VECTOR_INDEX_SCAN, TableDef: vectorTableDef, VectorIndexScan: vectorScan},
+			{NodeId: 1, NodeType: plan.Node_PROJECT, Children: []int32{0}, ProjectList: projectList},
+		},
+		Headings: []string{"id", "score", "missing", "invalid"},
+	}}})
+
+	require.Len(t, got, 4)
+	require.Equal(t, "id", got[0].OriginName) // pkid -> source primary key
+	require.Empty(t, got[1].OriginName)       // score -> no source column
+	require.Empty(t, got[2].OriginName)       // include names a column absent from the source
+	require.Empty(t, got[3].OriginName)       // ColPos out of the synthetic schema
+
+	// A vector spec without its source primary-key definition cannot safely
+	// claim key metadata from the synthetic pkid slot.
+	vectorScan.SourceTableDef.Pkey = nil
+	got = GetResultColumnsFromPlan(&plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{1},
+		Nodes: []*plan.Node{
+			{NodeId: 0, NodeType: plan.Node_VECTOR_INDEX_SCAN, TableDef: vectorTableDef, VectorIndexScan: vectorScan},
+			{NodeId: 1, NodeType: plan.Node_PROJECT, Children: []int32{0}, ProjectList: projectList},
+		},
+		Headings: []string{"id", "score", "missing", "invalid"},
+	}}})
+	require.Len(t, got, 4)
+	require.Empty(t, got[0].OriginName)
+}
+
+// TestResultColumnSourceFromVectorIndexScanFailsClosedForNonIvfflat pins #29212: the IVFFlat
+// synthetic-schema resolver (pkid/score/__mo_index_include_*) must only be applied to an IVFFlat
+// VECTOR_INDEX_SCAN. The same node resolves under the IVFFlat algo but yields no source metadata
+// for any other algo (or a missing Index), so a future non-IVFFlat VECTOR_INDEX_SCAN cannot inherit
+// IVFFlat's schema by accident. Guards the resolver relocated from build.go (PR #28833).
+func TestResultColumnSourceFromVectorIndexScanFailsClosedForNonIvfflat(t *testing.T) {
+	sourceTable := &plan.TableDef{
+		Name:          "source_table",
+		DbName:        "source_db",
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		Cols:          []*plan.ColDef{{Name: "id", Primary: true}, {Name: "payload"}},
+		Name2ColIndex: map[string]int32{"id": 0, "payload": 1},
+	}
+	vectorTableDef := &plan.TableDef{Cols: []*plan.ColDef{{Name: "pkid"}, {Name: "score"}}}
+	sourceRef := &plan.ObjectRef{SchemaName: "source_db", ObjName: "source_table"}
+
+	// IVFFlat resolves the pkid slot to the source primary key.
+	ivf := &plan.VectorIndexScan{
+		SourceTable:    sourceRef,
+		SourceTableDef: sourceTable,
+		Index:          &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()},
+	}
+	got := resultColumnSourceFromVectorIndexScan(ivf, vectorTableDef, 0)
+	require.NotNil(t, got)
+	require.Equal(t, "id", got.columnName)
+	require.True(t, got.primary)
+
+	// A non-IVFFlat algorithm fails closed -- no source metadata.
+	nonIvf := &plan.VectorIndexScan{
+		SourceTable:    sourceRef,
+		SourceTableDef: sourceTable,
+		Index:          &plan.IndexDef{IndexAlgo: "hnsw"},
+	}
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(nonIvf, vectorTableDef, 0))
+
+	// A missing Index also fails closed (GetIndexAlgo is nil-safe).
+	missingIndex := &plan.VectorIndexScan{SourceTable: sourceRef, SourceTableDef: sourceTable}
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(missingIndex, vectorTableDef, 0))
+}
