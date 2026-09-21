@@ -212,6 +212,30 @@ func TestScopeTaskSchedulerErrorEventCancellationReleasesRegistration(t *testing
 	scheduler.wait()
 }
 
+func TestScopeTaskSchedulerTeardownChannelSurvivesContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	scheduler := newScopeTaskScheduler(ctx, 1, nil)
+	messages := make(chan morpc.Message, 1)
+	done := make(chan struct{})
+	if _, err := scheduler.submitChannelEventCancelable(
+		"teardown-channel",
+		messages,
+		func(morpc.Message, bool) { close(done) },
+		func(error) { t.Fatal("teardown channel must not be rejected") },
+		true,
+	); err != nil {
+		t.Fatalf("submit teardown channel: %v", err)
+	}
+	cancel()
+	messages <- nil
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("teardown channel was lost after context cancellation")
+	}
+	scheduler.wait()
+}
+
 func TestScopeTaskSchedulerTimerDoesNotOccupyEventWorker(t *testing.T) {
 	scheduler := newScopeTaskScheduler(context.Background(), 1, nil)
 	timerDone := make(chan struct{})

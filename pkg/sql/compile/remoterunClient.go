@@ -546,6 +546,11 @@ type messageSenderOnClient struct {
 	reportingRequestStarted bool
 	stateMu                 sync.Mutex
 	closeOnce               sync.Once
+	asyncCloseMu            sync.Mutex
+	asyncCloseStarted       bool
+	asyncCloseFinished      bool
+	asyncCloseErr           error
+	asyncCloseWaiters       []func(error)
 	requestFinishAck        bool
 	pendingBatchAck         uint64
 	// allowCleanupCancellation is set after successful local cleanup. Pipeline
@@ -983,6 +988,15 @@ func (sender *messageSenderOnClient) acknowledgeRemoteBatchAsync(
 	name string,
 	done func(error),
 ) error {
+	return sender.acknowledgeRemoteBatchAsyncWithContext(scheduler, name, done, false)
+}
+
+func (sender *messageSenderOnClient) acknowledgeRemoteBatchAsyncWithContext(
+	scheduler *scopeTaskScheduler,
+	name string,
+	done func(error),
+	allowCanceled bool,
+) error {
 	if scheduler == nil {
 		return moerr.NewInternalErrorNoCtx("nil scheduler for remote batch acknowledgement")
 	}
@@ -999,12 +1013,12 @@ func (sender *messageSenderOnClient) acknowledgeRemoteBatchAsync(
 	message.SetMessageType(pipeline.Method_PipelineBatchAck)
 	message.SetSid(pipeline.Status_Last)
 	message.BatchAckSequence = sequence
-	return scheduler.submitStreamSend(name, sender.streamSender, sender.ctx, message, func(err error) {
+	return scheduler.submitStreamSendWithContext(name, sender.streamSender, sender.ctx, message, func(err error) {
 		if err == nil {
 			sender.pendingBatchAck = 0
 		}
 		done(err)
-	})
+	}, allowCanceled)
 }
 
 func (sender *messageSenderOnClient) contextDoneError() error {
@@ -1120,6 +1134,145 @@ func (sender *messageSenderOnClient) waitingTheStopResponse() error {
 	}
 }
 
+// stopSendingAsync performs the cancellation handshake without parking a
+// scheduler worker on either the MORPC writer or the receive channel. The
+// caller must keep the scheduler alive until done is invoked.
+func (sender *messageSenderOnClient) stopSendingAsync(
+	scheduler *scopeTaskScheduler,
+	done func(error),
+) error {
+	if scheduler == nil {
+		return moerr.NewInternalErrorNoCtx("nil scheduler for asynchronous stop")
+	}
+	if done == nil {
+		return moerr.NewInternalErrorNoCtx("nil callback for asynchronous stop")
+	}
+
+	sender.stateMu.Lock()
+	if sender.receiveClosed || sender.safeToClose || sender.stopResponseTried {
+		sender.stateMu.Unlock()
+		done(nil)
+		return nil
+	}
+	sender.stopResponseTried = true
+	sender.stateMu.Unlock()
+
+	maxWaitingTime, cancel := context.WithTimeoutCause(
+		context.Background(), pipelineStopSendingClientTimeout, moerr.CauseWaitingTheStopResponse)
+	var once sync.Once
+	var receiveCancelMu sync.Mutex
+	var receiveCancel func()
+	setReceiveCancel := func(cancel func()) {
+		if cancel == nil {
+			return
+		}
+		receiveCancelMu.Lock()
+		old := receiveCancel
+		receiveCancel = cancel
+		receiveCancelMu.Unlock()
+		if old != nil {
+			old()
+		}
+	}
+	finish := func(err error) {
+		once.Do(func() {
+			receiveCancelMu.Lock()
+			cancelReceive := receiveCancel
+			receiveCancel = nil
+			receiveCancelMu.Unlock()
+			if cancelReceive != nil {
+				cancelReceive()
+			}
+			cancel()
+			done(err)
+		})
+	}
+
+	timerCancel, err := scheduler.submitTimerWithContext(
+		"remote-stop-timeout",
+		pipelineStopSendingClientTimeout,
+		func() { finish(moerr.NewRPCTimeout(maxWaitingTime)) },
+		true,
+	)
+	if err != nil {
+		cancel()
+		return err
+	}
+	finishWithTimer := func(err error) {
+		if timerCancel != nil {
+			timerCancel()
+		}
+		finish(err)
+	}
+
+	var receive func()
+	receive = func() {
+		cancelReceive, err := scheduler.submitChannelEventCancelable(
+			"remote-stop-receive",
+			sender.receiveCh,
+			func(value morpc.Message, ok bool) {
+				if !ok || value == nil {
+					sender.markReceiveClosed()
+					finishWithTimer(moerr.NewStreamClosedNoCtx())
+					return
+				}
+				message, ok := value.(*pipeline.Message)
+				if !ok || message == nil {
+					finishWithTimer(moerr.NewInternalErrorNoCtx("remote stop response has unexpected message type"))
+					return
+				}
+				if !message.IsEndMessage() && len(message.GetErr()) == 0 {
+					receive()
+					return
+				}
+				_ = sender.dealRemoteTerminal(message.GetAnalyse())
+				if terminalErr, terminal := message.TryToGetMoErr(); terminal {
+					sender.markTerminal(message, false)
+					finishWithTimer(terminalErr)
+					return
+				}
+				sender.markTerminal(message, true)
+				finishWithTimer(nil)
+			},
+			func(err error) { finishWithTimer(err) },
+			true,
+		)
+		setReceiveCancel(cancelReceive)
+		if err != nil {
+			finishWithTimer(err)
+		}
+	}
+	message := generateStopSendingMessage(sender.streamSender.ID())
+	if err := scheduler.submitStreamSendWithContext(
+		"remote-stop-send",
+		sender.streamSender,
+		maxWaitingTime,
+		message,
+		func(sendErr error) {
+			if sendErr != nil {
+				if maxWaitingTime.Err() != nil {
+					finishWithTimer(moerr.NewRPCTimeout(maxWaitingTime))
+					return
+				}
+				if isScopeCancellationError(sendErr) {
+					finishWithTimer(moerr.NewStreamClosedNoCtx())
+					return
+				}
+				finishWithTimer(sendErr)
+				return
+			}
+			if maxWaitingTime.Err() != nil {
+				return
+			}
+			receive()
+		},
+		true,
+	); err != nil {
+		finishWithTimer(err)
+	}
+	return nil
+}
+
 func generatePipelineStreamFinishMessage(streamID uint64) *pipeline.Message {
 	message := cnclient.AcquireMessage()
 	message.SetMessageType(pipeline.Method_PipelineStreamFinish)
@@ -1166,6 +1319,132 @@ func (sender *messageSenderOnClient) finishStreamForReuse() bool {
 	case <-senderDone:
 		return false
 	}
+}
+
+// finishStreamForReuseAsync sends FIN and waits for FIN-ACK through scheduler
+// events. It preserves the synchronous method for legacy callers that do not
+// own a query scheduler.
+func (sender *messageSenderOnClient) finishStreamForReuseAsync(
+	scheduler *scopeTaskScheduler,
+	done func(bool),
+) error {
+	if scheduler == nil {
+		return moerr.NewInternalErrorNoCtx("nil scheduler for asynchronous stream finish")
+	}
+	if done == nil {
+		return moerr.NewInternalErrorNoCtx("nil callback for asynchronous stream finish")
+	}
+	sender.stateMu.Lock()
+	allowCleanupCancellation := sender.allowCleanupCancellation
+	receiveClosed := sender.receiveClosed
+	reuseEligible := sender.reuseEligible
+	sender.stateMu.Unlock()
+	if receiveClosed || !reuseEligible {
+		sender.finalizeClose(false)
+		done(false)
+		return nil
+	}
+	if !allowCleanupCancellation && sender.ctx != nil && sender.ctx.Err() != nil {
+		sender.finalizeClose(false)
+		done(false)
+		return nil
+	}
+
+	finishCtx, cancel := context.WithTimeout(context.Background(), pipelineStreamFinishClientTimeout)
+	var once sync.Once
+	var receiveCancelMu sync.Mutex
+	var receiveCancel func()
+	setReceiveCancel := func(cancel func()) {
+		if cancel == nil {
+			return
+		}
+		receiveCancelMu.Lock()
+		old := receiveCancel
+		receiveCancel = cancel
+		receiveCancelMu.Unlock()
+		if old != nil {
+			old()
+		}
+	}
+	finish := func(reused bool) {
+		once.Do(func() {
+			receiveCancelMu.Lock()
+			cancelReceive := receiveCancel
+			receiveCancel = nil
+			receiveCancelMu.Unlock()
+			if cancelReceive != nil {
+				cancelReceive()
+			}
+			cancel()
+			sender.finalizeClose(reused)
+			done(reused)
+		})
+	}
+	timerCancel, err := scheduler.submitTimerWithContext(
+		"remote-finish-timeout",
+		pipelineStreamFinishClientTimeout,
+		func() { finish(false) },
+		true,
+	)
+	if err != nil {
+		cancel()
+		return err
+	}
+	finishWithTimer := func(reused bool) {
+		if timerCancel != nil {
+			timerCancel()
+		}
+		finish(reused)
+	}
+	streamID := sender.streamSender.ID()
+	message := generatePipelineStreamFinishMessage(streamID)
+	if err := scheduler.submitStreamSendWithContext(
+		"remote-finish-send",
+		sender.streamSender,
+		finishCtx,
+		message,
+		func(sendErr error) {
+			if sendErr != nil {
+				finishWithTimer(false)
+				return
+			}
+			if finishCtx.Err() != nil {
+				return
+			}
+			cancelReceive, err := scheduler.submitChannelEventCancelable(
+				"remote-finish-receive",
+				sender.receiveCh,
+				func(value morpc.Message, ok bool) {
+					if !ok || value == nil {
+						sender.markReceiveClosed()
+						finishWithTimer(false)
+						return
+					}
+					response, ok := value.(*pipeline.Message)
+					if !ok || response == nil || response.GetID() != streamID ||
+						response.GetCmd() != pipeline.Method_PipelineStreamFinishAck ||
+						response.GetSid() != pipeline.Status_MessageEnd ||
+						len(response.GetErr()) != 0 ||
+						response.GetAcceptedTeardownMode() != pipeline.StreamTeardownMode_FinishAck {
+						sender.markReceiveClosed()
+						finishWithTimer(false)
+						return
+					}
+					finishWithTimer(true)
+				},
+				func(error) { finishWithTimer(false) },
+				true,
+			)
+			setReceiveCancel(cancelReceive)
+			if err != nil {
+				finishWithTimer(false)
+			}
+		},
+		true,
+	); err != nil {
+		finishWithTimer(false)
+	}
+	return nil
 }
 
 func generateStopSendingMessage(streamID uint64) *pipeline.Message {
@@ -1284,6 +1563,101 @@ func (sender *messageSenderOnClient) close() {
 		}
 		_ = sender.streamSender.Close(true)
 	})
+}
+
+func (sender *messageSenderOnClient) finalizeClose(reuse bool) {
+	sender.closeOnce.Do(func() {
+		defer sender.gaugeDecOnce.Do(func() { v2.PipelineMessageSenderGauge.Dec() })
+		if sender.ctxCancel != nil {
+			sender.ctxCancel()
+		}
+		if reuse {
+			v2.PipelineStreamTeardownCounter.WithLabelValues("client_reuse").Inc()
+			if err := sender.streamSender.Close(false); err != nil {
+				_ = sender.streamSender.Close(true)
+			}
+			return
+		}
+		v2.PipelineStreamTeardownCounter.WithLabelValues("client_async_close").Inc()
+		_ = sender.streamSender.Close(true)
+	})
+}
+
+// closeAsync is the transport teardown state machine used by event-driven
+// Scope execution. It never waits on MORPC Send or Receive. The callback is
+// invoked after STOP/FIN negotiation and local stream close are complete.
+func (sender *messageSenderOnClient) closeAsync(
+	scheduler *scopeTaskScheduler,
+	done func(error),
+) error {
+	if scheduler == nil {
+		return moerr.NewInternalErrorNoCtx("nil scheduler for asynchronous close")
+	}
+	if done == nil {
+		return moerr.NewInternalErrorNoCtx("nil callback for asynchronous close")
+	}
+	sender.asyncCloseMu.Lock()
+	if sender.asyncCloseStarted {
+		if sender.asyncCloseFinished {
+			err := sender.asyncCloseErr
+			sender.asyncCloseMu.Unlock()
+			done(err)
+			return nil
+		}
+		sender.asyncCloseWaiters = append(sender.asyncCloseWaiters, done)
+		sender.asyncCloseMu.Unlock()
+		return nil
+	}
+	sender.asyncCloseStarted = true
+	sender.asyncCloseWaiters = append(sender.asyncCloseWaiters, done)
+	sender.asyncCloseMu.Unlock()
+
+	complete := func(err error) {
+		sender.asyncCloseMu.Lock()
+		sender.asyncCloseFinished = true
+		sender.asyncCloseErr = err
+		waiters := append([]func(error){nil}, sender.asyncCloseWaiters...)
+		sender.asyncCloseWaiters = nil
+		sender.asyncCloseMu.Unlock()
+		for _, waiter := range waiters {
+			if waiter != nil {
+				waiter(err)
+			}
+		}
+	}
+	finishOrClose := func() {
+		sender.stateMu.Lock()
+		receiveClosed, reuseEligible := sender.receiveClosed, sender.reuseEligible
+		sender.stateMu.Unlock()
+		if !receiveClosed && reuseEligible {
+			if err := sender.finishStreamForReuseAsync(scheduler, func(bool) { complete(nil) }); err != nil {
+				sender.finalizeClose(false)
+				complete(err)
+			}
+			return
+		}
+		sender.finalizeClose(false)
+		complete(nil)
+	}
+	sender.stateMu.Lock()
+	needsStop := !sender.receiveClosed && !sender.safeToClose && !sender.stopResponseTried
+	sender.stateMu.Unlock()
+	if needsStop {
+		if err := sender.stopSendingAsync(scheduler, func(err error) {
+			if err != nil {
+				sender.finalizeClose(false)
+				complete(err)
+				return
+			}
+			finishOrClose()
+		}); err != nil {
+			sender.finalizeClose(false)
+			complete(err)
+		}
+		return nil
+	}
+	finishOrClose()
+	return nil
 }
 
 func (sender *messageSenderOnClient) markMissingGroupConcatTerminal() {

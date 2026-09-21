@@ -370,7 +370,6 @@ func (r *remoteRunEventState) cleanup(err error) {
 	if r.pending != nil {
 		r.pending.Clean(r.s.Proc.Mp())
 		r.pending = nil
-		_ = r.sender.acknowledgeRemoteBatch()
 	}
 	if r.dispatchBat != nil {
 		// A dispatch continuation may still be waiting on downstream capacity.
@@ -382,7 +381,6 @@ func (r *remoteRunEventState) cleanup(err error) {
 		}
 		r.dispatchBat.Clean(r.s.Proc.Mp())
 		r.dispatchBat = nil
-		_ = r.sender.acknowledgeRemoteBatch()
 	}
 	if r.runner != nil {
 		if arg, ok := r.s.RootOp.(*dispatch.Dispatch); ok {
@@ -399,33 +397,57 @@ func (r *remoteRunEventState) cleanup(err error) {
 	}
 
 	queryCtx := scopeRunQueryContext(r.s.Proc)
-	terminalErr := error(nil)
-	if r.sender != nil && isScopeCancellationError(err) {
-		terminalErr = r.sender.waitingTheStopResponse()
-	}
-	runErr, _ := normalizeScopeRunError(err, r.s.Proc.Ctx, queryCtx)
-	if runErr == nil && terminalErr != nil {
-		runErr, _ = normalizeScopeRunError(terminalErr, r.s.Proc.Ctx, queryCtx)
-	}
 	p := vmpipeline.New(0, nil, r.s.RootOp)
-	p.CleanRootOperator(r.s.Proc, runErr != nil, r.c.isPrepare, runErr)
-	if runErr != nil && r.s.Proc.Cancel != nil {
-		r.s.Proc.Cancel(runErr)
-	}
-	if r.sender != nil {
-		if runErr == nil {
-			r.sender.prepareForLocalCleanup()
+	finish := func(terminalErr error) {
+		runErr, _ := normalizeScopeRunError(err, r.s.Proc.Ctx, queryCtx)
+		if runErr == nil && terminalErr != nil {
+			runErr, _ = normalizeScopeRunError(terminalErr, r.s.Proc.Ctx, queryCtx)
 		}
-		r.sender.close()
+		p.CleanRootOperator(r.s.Proc, runErr != nil, r.c.isPrepare, runErr)
+		if runErr != nil && r.s.Proc.Cancel != nil {
+			r.s.Proc.Cancel(runErr)
+		}
+		// remoteRunAsync owns the analyzer for the whole remote state machine.
+		// Stop it only after transport and retained operator state have reached a
+		// terminal cleanup point; the synchronous compatibility wrapper no longer
+		// has a separate defer covering this lifecycle.
+		if r.s != nil && r.s.ScopeAnalyzer != nil {
+			r.s.ScopeAnalyzer.Stop()
+		}
+		if r.done != nil {
+			r.done(runErr)
+		}
 	}
-	// remoteRunAsync owns the analyzer for the whole remote state machine.
-	// Stop it only after transport and retained operator state have reached a
-	// terminal cleanup point; the synchronous compatibility wrapper no longer
-	// has a separate defer covering this lifecycle.
-	if r.s != nil && r.s.ScopeAnalyzer != nil {
-		r.s.ScopeAnalyzer.Stop()
+
+	closeSender := func() {
+		if r.sender == nil {
+			finish(nil)
+			return
+		}
+		if err := r.sender.closeAsync(r.scheduler, finish); err != nil {
+			r.sender.finalizeClose(false)
+			finish(err)
+		}
 	}
-	if r.done != nil {
-		r.done(runErr)
+	// A retained batch may still hold one credit. Publish that ACK as an event
+	// before closing the stream; the close state machine then owns all remaining
+	// STOP/FIN traffic without blocking the teardown worker.
+	if r.sender != nil && r.sender.pendingBatchAck != 0 {
+		if ackErr := r.sender.acknowledgeRemoteBatchAsyncWithContext(
+			r.scheduler,
+			"remote-cleanup-ack",
+			func(ackErr error) {
+				if ackErr != nil && err == nil {
+					err = ackErr
+				}
+				closeSender()
+			},
+			true,
+		); ackErr != nil {
+			err = ackErr
+			closeSender()
+		}
+		return
 	}
+	closeSender()
 }

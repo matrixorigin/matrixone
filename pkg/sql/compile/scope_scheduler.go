@@ -93,6 +93,7 @@ type scopeChannelEvent struct {
 	name     string
 	ch       <-chan morpc.Message
 	errCh    <-chan error
+	teardown bool
 	ready    func(morpc.Message, bool)
 	errReady func(error, bool)
 	reject   func(error)
@@ -188,6 +189,7 @@ func (s *scopeTaskScheduler) eventWorker() {
 
 func (s *scopeTaskScheduler) channelEventWorker() {
 	defer s.channelWorker.Done()
+	contextDone := false
 	for {
 		s.channelMu.Lock()
 		if s.channelClosed && len(s.channelEvents) == 0 {
@@ -201,7 +203,7 @@ func (s *scopeTaskScheduler) channelEventWorker() {
 			Chan: reflect.ValueOf(s.channelWake),
 		})
 		contextCase := -1
-		if s.ctx != nil && s.ctx.Done() != nil {
+		if !contextDone && s.ctx != nil && s.ctx.Done() != nil {
 			contextCase = len(cases)
 			cases = append(cases, reflect.SelectCase{
 				Dir:  reflect.SelectRecv,
@@ -228,6 +230,7 @@ func (s *scopeTaskScheduler) channelEventWorker() {
 		}
 		if chosen == contextCase {
 			s.rejectChannelEvents(context.Cause(s.ctx))
+			contextDone = true
 			continue
 		}
 		index := chosen - 1
@@ -247,7 +250,7 @@ func (s *scopeTaskScheduler) channelEventWorker() {
 		if !exists {
 			continue
 		}
-		if err := s.submitRoot(event.name, func() {
+		if err := s.submitRootWithContext(event.name, func() {
 			if event.errReady != nil {
 				var sendErr error
 				if ok && value.IsValid() && value.CanInterface() {
@@ -266,7 +269,7 @@ func (s *scopeTaskScheduler) channelEventWorker() {
 				message, _ = value.Interface().(morpc.Message)
 			}
 			event.ready(message, ok)
-		}); err != nil {
+		}, event.teardown); err != nil {
 			event.reject(err)
 		}
 		// Keep the registration pending until the ready callback has either
@@ -283,16 +286,17 @@ func (s *scopeTaskScheduler) rejectChannelEvents(err error) {
 	}
 	s.channelMu.Lock()
 	if len(s.channelEvents) == 0 {
-		s.channelClosed = true
 		s.channelMu.Unlock()
 		return
 	}
 	events := make([]scopeChannelEvent, 0, len(s.channelEvents))
 	for id, event := range s.channelEvents {
+		if event.teardown {
+			continue
+		}
 		delete(s.channelEvents, id)
 		events = append(events, event)
 	}
-	s.channelClosed = true
 	s.channelMu.Unlock()
 	for i := range events {
 		s.finishTask()
@@ -341,6 +345,10 @@ func (s *scopeTaskScheduler) finishTask() {
 }
 
 func (s *scopeTaskScheduler) submitRoot(name string, task func()) error {
+	return s.submitRootWithContext(name, task, false)
+}
+
+func (s *scopeTaskScheduler) submitRootWithContext(name string, task func(), allowCanceled bool) error {
 	if task == nil {
 		return errors.New("nil scope task")
 	}
@@ -353,11 +361,13 @@ func (s *scopeTaskScheduler) submitRoot(name string, task func()) error {
 	s.pending++
 	s.mu.Unlock()
 
-	select {
-	case <-s.ctx.Done():
-		s.finishTask()
-		return context.Cause(s.ctx)
-	default:
+	if !allowCanceled {
+		select {
+		case <-s.ctx.Done():
+			s.finishTask()
+			return context.Cause(s.ctx)
+		default:
+		}
 	}
 
 	s.readyMu.Lock()
@@ -524,23 +534,48 @@ func (s *scopeTaskScheduler) submitChannelEvent(
 	ready func(morpc.Message, bool),
 	reject func(error),
 ) error {
+	_, err := s.submitChannelEventCancelable(name, ch, ready, reject, false)
+	return err
+}
+
+func (s *scopeTaskScheduler) submitChannelEventWithContext(
+	name string,
+	ch <-chan morpc.Message,
+	ready func(morpc.Message, bool),
+	reject func(error),
+	allowCanceled bool,
+) error {
+	_, err := s.submitChannelEventCancelable(name, ch, ready, reject, allowCanceled)
+	return err
+}
+
+// submitChannelEventCancelable is the ownership form used by teardown state
+// machines. Removing a pending registration releases its scheduler task when
+// a timeout wins before the transport channel produces a value.
+func (s *scopeTaskScheduler) submitChannelEventCancelable(
+	name string,
+	ch <-chan morpc.Message,
+	ready func(morpc.Message, bool),
+	reject func(error),
+	allowCanceled bool,
+) (func(), error) {
 	if ch == nil {
-		return errors.New("nil scope channel event")
+		return nil, errors.New("nil scope channel event")
 	}
 	if ready == nil {
-		return errors.New("nil scope channel callback")
+		return nil, errors.New("nil scope channel callback")
 	}
 
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
-		return errScopeTaskSchedulerClosed
+		return nil, errScopeTaskSchedulerClosed
 	}
-	if s.ctx != nil {
+	if !allowCanceled && s.ctx != nil {
 		select {
 		case <-s.ctx.Done():
 			s.mu.Unlock()
-			return context.Cause(s.ctx)
+			return nil, context.Cause(s.ctx)
 		default:
 		}
 	}
@@ -551,23 +586,41 @@ func (s *scopeTaskScheduler) submitChannelEvent(
 	if s.channelClosed {
 		s.channelMu.Unlock()
 		s.finishTask()
-		return errScopeTaskSchedulerClosed
+		return nil, errScopeTaskSchedulerClosed
 	}
 	s.channelNext++
 	id := s.channelNext
 	s.channelEvents[id] = scopeChannelEvent{
-		id:     id,
-		name:   name,
-		ch:     ch,
-		ready:  ready,
-		reject: reject,
+		id:       id,
+		name:     name,
+		ch:       ch,
+		teardown: allowCanceled,
+		ready:    ready,
+		reject:   reject,
 	}
 	s.channelMu.Unlock()
 	select {
 	case s.channelWake <- struct{}{}:
 	default:
 	}
-	return nil
+	var cancelOnce sync.Once
+	return func() {
+		cancelOnce.Do(func() {
+			s.channelMu.Lock()
+			_, exists := s.channelEvents[id]
+			if exists {
+				delete(s.channelEvents, id)
+			}
+			s.channelMu.Unlock()
+			if exists {
+				s.finishTask()
+				select {
+				case s.channelWake <- struct{}{}:
+				default:
+				}
+			}
+		})
+	}, nil
 }
 
 // submitErrorEvent registers a one-shot completion channel from an external
@@ -690,8 +743,21 @@ func (s *scopeTaskScheduler) submitStreamSendWithContext(
 // worker. The timer keeps one scheduler task pending until it either enqueues
 // the event or is canceled with the scheduler context.
 func (s *scopeTaskScheduler) submitTimer(name string, delay time.Duration, task func()) error {
+	_, err := s.submitTimerWithContext(name, delay, task, false)
+	return err
+}
+
+// submitTimerWithContext admits a delayed event and returns a cancellation
+// hook. Teardown timers are allowed to outlive the query context so a remote
+// FIN/STOP handshake can still publish its terminal close event.
+func (s *scopeTaskScheduler) submitTimerWithContext(
+	name string,
+	delay time.Duration,
+	task func(),
+	allowCanceled bool,
+) (func(), error) {
 	if task == nil {
-		return errors.New("nil scope timer task")
+		return nil, errors.New("nil scope timer task")
 	}
 	if delay < 0 {
 		delay = 0
@@ -700,13 +766,15 @@ func (s *scopeTaskScheduler) submitTimer(name string, delay time.Duration, task 
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
-		return errScopeTaskSchedulerClosed
+		return nil, errScopeTaskSchedulerClosed
 	}
-	select {
-	case <-s.ctx.Done():
-		s.mu.Unlock()
-		return context.Cause(s.ctx)
-	default:
+	if !allowCanceled {
+		select {
+		case <-s.ctx.Done():
+			s.mu.Unlock()
+			return nil, context.Cause(s.ctx)
+		default:
+		}
 	}
 	s.pending++
 	s.mu.Unlock()
@@ -728,13 +796,19 @@ func (s *scopeTaskScheduler) submitTimer(name string, delay time.Duration, task 
 		s.eventMu.Unlock()
 	})
 	if s.ctx != nil {
-		context.AfterFunc(s.ctx, func() {
-			if timer.Stop() {
-				finishTimer()
-			}
-		})
+		if !allowCanceled {
+			context.AfterFunc(s.ctx, func() {
+				if timer.Stop() {
+					finishTimer()
+				}
+			})
+		}
 	}
-	return nil
+	return func() {
+		if timer.Stop() {
+			finishTimer()
+		}
+	}, nil
 }
 
 // submitTeardown admits cleanup after the pipeline context has been canceled.
