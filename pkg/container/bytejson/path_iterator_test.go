@@ -17,6 +17,7 @@ package bytejson
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"sort"
 	"strconv"
@@ -424,6 +425,22 @@ func TestPathIteratorRejectsInvalidDocumentPathAndDefault(t *testing.T) {
 	}())
 	defer malformed.Close()
 	_, matched, err = malformed.Next()
+	require.Error(t, err)
+	require.False(t, matched)
+}
+
+func TestPathIteratorRejectsSelfReferentialContainer(t *testing.T) {
+	data := make([]byte, headerSize+valEntrySize)
+	binary.LittleEndian.PutUint32(data, 1)
+	binary.LittleEndian.PutUint32(data[docSizeOff:], uint32(len(data)))
+	data[headerSize] = byte(TpCodeArray)
+	binary.LittleEndian.PutUint32(data[headerSize+valTypeSize:], 0)
+
+	path, err := ParseJsonPath(`$**.a`)
+	require.NoError(t, err)
+	iterator := NewPathIterator(ByteJson{Type: TpCodeArray, Data: data}, &path)
+	defer iterator.Close()
+	_, matched, err := iterator.Next()
 	require.Error(t, err)
 	require.False(t, matched)
 }

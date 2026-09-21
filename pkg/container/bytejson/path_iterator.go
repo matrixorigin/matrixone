@@ -97,6 +97,10 @@ func (it *PathIterator) Reset(root ByteJson, path *Path) {
 		it.initErr = moerr.NewInvalidInputNoCtx("JSON path iterator requires a path")
 		return
 	}
+	if !IsValidByteJson(root) {
+		it.initErr = moerr.NewInvalidInputNoCtx("invalid JSON document")
+		return
+	}
 	it.stack = append(it.stack, pathMatchFrame{value: root, path: *path})
 }
 

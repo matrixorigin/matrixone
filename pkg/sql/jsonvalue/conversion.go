@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/big"
 	"strconv"
 	"strings"
 	"time"
@@ -195,19 +196,19 @@ func ConvertScalarWithContext(ctx context.Context, value bytejson.ByteJson, targ
 		if err != nil {
 			return Result{Status: decimalFailureStatus(text), Err: err}
 		}
-		return Result{Value: v, Status: StatusSuccess}
+		return decimalResult(v, text, target)
 	case types.T_decimal128:
 		v, err := types.ParseDecimal128(text, target.Width, target.Scale)
 		if err != nil {
 			return Result{Status: decimalFailureStatus(text), Err: err}
 		}
-		return Result{Value: v, Status: StatusSuccess}
+		return decimalResult(v, text, target)
 	case types.T_decimal256:
 		v, err := types.ParseDecimal256(text, target.Width, target.Scale)
 		if err != nil {
 			return Result{Status: decimalFailureStatus(text), Err: err}
 		}
-		return Result{Value: v, Status: StatusSuccess}
+		return decimalResult(v, text, target)
 	case types.T_date:
 		v, err := types.ParseDateCast(text)
 		if err != nil {
@@ -623,6 +624,35 @@ func decimalFailureStatus(text string) ConversionStatus {
 		return StatusRangeError
 	}
 	return StatusConversionError
+}
+
+func decimalResult(value any, text string, target types.Type) Result {
+	result := Result{Value: value, Status: StatusSuccess}
+	if decimalInputLosesScale(text, target.Scale) {
+		result.Status = StatusTruncated
+		result.Warning = &WarningDescriptor{
+			Code:    moerr.WARN_DATA_TRUNCATED,
+			Message: fmt.Sprintf("JSON_TABLE decimal value truncated for %s", target.DescString()),
+		}
+	}
+	return result
+}
+
+func decimalInputLosesScale(text string, scale int32) bool {
+	if scale < 0 {
+		return false
+	}
+	normalized := strings.TrimSpace(text)
+	if strings.HasPrefix(normalized, "+") {
+		normalized = normalized[1:]
+	}
+	value, ok := new(big.Rat).SetString(normalized)
+	if !ok {
+		return false
+	}
+	factor := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scale)), nil)
+	scaled := new(big.Rat).Mul(value, new(big.Rat).SetInt(factor))
+	return scaled.Denom().Cmp(big.NewInt(1)) != 0
 }
 
 func textLooksNumeric(text string) bool {

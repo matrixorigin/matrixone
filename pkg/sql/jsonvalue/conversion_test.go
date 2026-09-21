@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -165,6 +166,31 @@ func TestConvertScalarTruncationAndTimestampLocation(t *testing.T) {
 	invalidDate := ConvertScalar(parseConversionValue(t, `"2024-99-99"`), types.T_date.ToType())
 	require.Equal(t, StatusConversionError, invalidDate.Status)
 	require.Error(t, invalidDate.Err)
+}
+
+func TestConvertScalarDecimalTruncationPreservesValueAndWarning(t *testing.T) {
+	cases := []struct {
+		name   string
+		target types.Type
+		want   any
+	}{
+		{name: "decimal64", target: types.New(types.T_decimal64, 10, 2), want: types.Decimal64(1235)},
+		{name: "decimal128", target: types.New(types.T_decimal128, 20, 2), want: types.Decimal128{B0_63: 1235}},
+		{name: "decimal256", target: types.New(types.T_decimal256, 40, 2), want: types.Decimal256{B0_63: 1235}},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			result := ConvertScalar(parseConversionValue(t, `"12.345"`), test.target)
+			require.Equal(t, StatusTruncated, result.Status)
+			require.Equal(t, test.want, result.Value)
+			require.NotNil(t, result.Warning)
+			require.Equal(t, moerr.WARN_DATA_TRUNCATED, result.Warning.Code)
+
+			exact := ConvertScalar(parseConversionValue(t, `"12.340"`), test.target)
+			require.Equal(t, StatusSuccess, exact.Status)
+			require.Nil(t, exact.Warning)
+		})
+	}
 }
 
 func TestConvertScalarMalformedByteJsonFailsClosed(t *testing.T) {
