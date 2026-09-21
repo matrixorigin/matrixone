@@ -25,7 +25,7 @@ import (
 // validateStatementHashDestination rechecks the actual worker selected for
 // this serialized pipeline. The coordinator's protocol version is not enough:
 // a worker can be downgraded or replaced after compile-time placement, and an
-// older worker cannot construct the MO_STATEMENT_HASH function (ID 583).
+// older worker cannot construct the MO_STATEMENT_HASH function (ID 584).
 func validateStatementHashDestination(proc *process.Process, p *pipeline.Pipeline) error {
 	if p == nil || p.Node == nil {
 		return moerr.NewNotSupportedNoCtx(

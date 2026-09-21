@@ -165,11 +165,13 @@ Remote execution is supported only when both conditions hold:
 The coordinator's original build identity and SQL-mode snapshot are immutable
 provenance: intermediate remote hops must forward them unchanged, never
 substitute their own local defaults. The destination is checked when selected
-and the receiving process validates the build fence when the function is
-evaluated. A missing/invalid identity, unsupported protocol, failed
-capability probe, or build mismatch is an error. This function-specific path
-does not silently fall back to coordinator evaluation or compute a mixed-build
-hash. Local-only execution does not require a remote build identity.
+and the receiving process validates the build fence when the hash scope is
+admitted, before operators can observe rows; the function entry point repeats
+the check as a defensive local boundary. A missing/invalid identity,
+unsupported protocol, failed capability probe, or build mismatch is an error.
+This function-specific path does not silently fall back to coordinator
+evaluation or compute a mixed-build hash. Local-only execution does not require
+a remote build identity.
 
 The destination capability/build check is a remote-scope dispatch gate, not a
 per-row expression error. It can reject a remote scope containing this function

@@ -183,7 +183,7 @@ func TestRequiresMORPCVersion30NumericPrefix(t *testing.T) {
 }
 
 func TestRequiredRemoteExpressionFeaturesDetectsStatementHash(t *testing.T) {
-	const statementHashFunctionID int32 = 583
+	const statementHashFunctionID int32 = 584
 	expr := &Expr{Expr: &Expr_F{F: &Function{
 		Func: &ObjectRef{Obj: int64(statementHashFunctionID) << 32, ObjName: "mo_statement_hash"},
 	}}}

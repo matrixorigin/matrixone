@@ -91,9 +91,11 @@ func (proc *Process) StatementHashBuildCommitIDForRemote() (string, error) {
 	return version.BuildCommitID, nil
 }
 
-// ValidateStatementHashBuildCommitID checks the build fence when a hash
-// expression is actually evaluated. Local-only execution remains usable in a
-// build without an identity; received remote work must carry a valid identity.
+// ValidateStatementHashBuildCommitID checks the build fence for a received
+// statement-hash scope and is also safe to call from the expression entry
+// point. Local-only execution remains usable in a build without an identity;
+// received remote work must carry a valid identity before dispatch or
+// evaluation.
 func (proc *Process) ValidateStatementHashBuildCommitID() error {
 	if proc == nil || proc.Base == nil {
 		return nil
