@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -2478,15 +2479,7 @@ func makeSelectList(table string, strs []string) string {
 		if i > 0 {
 			bb.WriteByte(',')
 		}
-		//table
-		bb.WriteByte('`')
-		bb.WriteString(table)
-		bb.WriteByte('`')
-		bb.WriteByte('.')
-		//column
-		bb.WriteByte('`')
-		bb.WriteString(str)
-		bb.WriteByte('`')
+		bb.WriteString(sqlquote.QualifiedIdent(table, str))
 	}
 	return bb.String()
 }
@@ -2498,15 +2491,7 @@ func makeWhere(table string, strs []string) string {
 		if i > 0 {
 			bb.WriteString(" and ")
 		}
-		//table
-		bb.WriteByte('`')
-		bb.WriteString(table)
-		bb.WriteByte('`')
-		bb.WriteByte('.')
-		//column
-		bb.WriteByte('`')
-		bb.WriteString(str)
-		bb.WriteByte('`')
+		bb.WriteString(sqlquote.QualifiedIdent(table, str))
 		//is not null
 		bb.WriteString(" is not null")
 	}
@@ -2567,8 +2552,8 @@ func genSqlForCheckFKConstraints(ctx context.Context,
 		return "", err
 	}
 
-	childTableClause := fmt.Sprintf("`%s`.`%s`", childDbName, childTblName)
-	parentTableClause := fmt.Sprintf("`%s`.`%s`", parentDbName, parentTblName)
+	childTableClause := sqlquote.QualifiedIdent(childDbName, childTblName)
+	parentTableClause := sqlquote.QualifiedIdent(parentDbName, parentTblName)
 	where := fmt.Sprintf("where %s", makeWhere(childTblName, fkCols))
 	except := fmt.Sprintf("select distinct %s from %s %s except select distinct %s from %s",
 		makeSelectList(childTblName, fkCols),
