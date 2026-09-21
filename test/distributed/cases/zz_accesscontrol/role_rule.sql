@@ -92,7 +92,20 @@ set enable_remap_hint = 0;
 select * from db1.v_t1;
 -- @session
 
--- 11. SET SECONDARY ROLE ALL merges select * rewrite rules from all active roles
+-- 11. Table renames are rejected while role rewrite metadata exists
+alter table db1.t1 rename to db1.t1_renamed;
+rename table db1.t1 to db1.t1_renamed;
+-- @session:id=10&user=sys:test_rule_user:test_rule_role&password=123456
+set enable_remap_hint = 1;
+select * from db1.t1;
+-- @session
+
+create table db1.t_rename_chain_guard(a int);
+insert into db1.t_rename_chain_guard values (7);
+rename table db1.t1 to db1.t1_renamed, db1.t_rename_chain_guard to db1.t_rename_chain_guard_after;
+select * from db1.t_rename_chain_guard;
+
+-- 12. SET SECONDARY ROLE ALL merges select * rewrite rules from all active roles
 create database db2;
 create table db2.t2(a int, age int);
 insert into db2.t2 values (10,10),(20,35),(200,60);

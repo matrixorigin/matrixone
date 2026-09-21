@@ -85,6 +85,21 @@ set enable_remap_hint = 0;
 select * from db1.v_t1;
 ➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
 100  ¦  30
+alter table db1.t1 rename to db1.t1_renamed;
+not supported: renaming a table while role rewrite rules exist is not supported; drop the rules first
+rename table db1.t1 to db1.t1_renamed;
+not supported: renaming a table while role rewrite rules exist is not supported; drop the rules first
+set enable_remap_hint = 1;
+select * from db1.t1;
+➤ a[4,32,0]  ¦  age[4,32,0]  𝄀
+100  ¦  30
+create table db1.t_rename_chain_guard(a int);
+insert into db1.t_rename_chain_guard values (7);
+rename table db1.t1 to db1.t1_renamed, db1.t_rename_chain_guard to db1.t_rename_chain_guard_after;
+not supported: renaming a table while role rewrite rules exist is not supported; drop the rules first
+select * from db1.t_rename_chain_guard;
+➤ a[4,32,0]
+7
 create database db2;
 create table db2.t2(a int, age int);
 insert into db2.t2 values (10,10),(20,35),(200,60);
