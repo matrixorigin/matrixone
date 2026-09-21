@@ -1764,9 +1764,9 @@ func handleSetTransaction(ses *Session, execCtx *ExecCtx, stmt *tree.SetTransact
 		}
 	}
 
+	var accessMode string
+	var readOnly int64
 	if accessCharacteristic != nil {
-		var accessMode string
-		var readOnly int64
 		switch accessCharacteristic.Access {
 		case tree.ACCESS_MODE_READ_ONLY:
 			accessMode = "READ ONLY"
@@ -1781,6 +1781,30 @@ func handleSetTransaction(ses *Session, execCtx *ExecCtx, stmt *tree.SetTransact
 			return moerr.NewNotSupported(execCtx.reqCtx,
 				"transaction access mode "+accessMode+" is only supported for SESSION scope")
 		}
+	}
+
+	var value string
+	var isolation pbtxn.TxnIsolation
+	if isolationCharacteristic != nil {
+		switch isolationCharacteristic.Isolation {
+		case tree.ISOLATION_LEVEL_REPEATABLE_READ:
+			value = "REPEATABLE-READ"
+			isolation = pbtxn.TxnIsolation_SI
+		case tree.ISOLATION_LEVEL_READ_COMMITTED:
+			value = "READ-COMMITTED"
+			isolation = pbtxn.TxnIsolation_RC
+		case tree.ISOLATION_LEVEL_READ_UNCOMMITTED:
+			return moerr.NewNotSupported(execCtx.reqCtx,
+				"transaction isolation level READ-UNCOMMITTED is not supported")
+		case tree.ISOLATION_LEVEL_SERIALIZABLE:
+			return moerr.NewNotSupported(execCtx.reqCtx,
+				"transaction isolation level SERIALIZABLE is not supported")
+		default:
+			return moerr.NewInvalidInputf(execCtx.reqCtx, "unsupported transaction isolation level %d", isolationCharacteristic.Isolation)
+		}
+	}
+
+	if accessCharacteristic != nil {
 		// Connector/J uses SET SESSION TRANSACTION READ ONLY/READ WRITE for
 		// Connection.setReadOnly. Keep both MySQL spellings synchronized so
 		// frameworks that inspect either variable observe the negotiated mode.
@@ -1797,25 +1821,6 @@ func handleSetTransaction(ses *Session, execCtx *ExecCtx, stmt *tree.SetTransact
 				"transaction characteristic list must not be empty")
 		}
 		return nil
-	}
-
-	var value string
-	var isolation pbtxn.TxnIsolation
-	switch isolationCharacteristic.Isolation {
-	case tree.ISOLATION_LEVEL_REPEATABLE_READ:
-		value = "REPEATABLE-READ"
-		isolation = pbtxn.TxnIsolation_SI
-	case tree.ISOLATION_LEVEL_READ_COMMITTED:
-		value = "READ-COMMITTED"
-		isolation = pbtxn.TxnIsolation_RC
-	case tree.ISOLATION_LEVEL_READ_UNCOMMITTED:
-		return moerr.NewNotSupported(execCtx.reqCtx,
-			"transaction isolation level READ-UNCOMMITTED is not supported")
-	case tree.ISOLATION_LEVEL_SERIALIZABLE:
-		return moerr.NewNotSupported(execCtx.reqCtx,
-			"transaction isolation level SERIALIZABLE is not supported")
-	default:
-		return moerr.NewInvalidInputf(execCtx.reqCtx, "unsupported transaction isolation level %d", isolationCharacteristic.Isolation)
 	}
 
 	switch stmt.Scope {

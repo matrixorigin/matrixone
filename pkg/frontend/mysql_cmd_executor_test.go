@@ -585,6 +585,50 @@ func TestHandleSetTransaction(t *testing.T) {
 		require.NoError(t, ses.SetSessionSysVar(ctx, "transaction_isolation", "REPEATABLE-READ"))
 	})
 
+	t.Run("unsupported isolation does not update access mode", func(t *testing.T) {
+		for _, test := range []struct {
+			sql             string
+			initialReadOnly int64
+		}{
+			{
+				sql:             "set session transaction isolation level read uncommitted, read only",
+				initialReadOnly: 0,
+			},
+			{
+				sql:             "set session transaction read only, isolation level read uncommitted",
+				initialReadOnly: 0,
+			},
+			{
+				sql:             "set session transaction isolation level serializable, read write",
+				initialReadOnly: 1,
+			},
+			{
+				sql:             "set session transaction read write, isolation level serializable",
+				initialReadOnly: 1,
+			},
+		} {
+			t.Run(test.sql, func(t *testing.T) {
+				for _, name := range []string{"transaction_read_only", "tx_read_only"} {
+					require.NoError(t, ses.SetSessionSysVar(ctx, name, test.initialReadOnly))
+				}
+
+				stmt, err := mysql.ParseOne(ctx, test.sql, 1)
+				require.NoError(t, err)
+
+				_, err = execInFrontend(ses, &ExecCtx{reqCtx: ctx, stmt: stmt})
+				require.ErrorContains(t, err, "is not supported")
+				for _, name := range []string{"transaction_read_only", "tx_read_only"} {
+					got, getErr := ses.GetSessionSysVar(name)
+					require.NoError(t, getErr)
+					require.Equal(t, test.initialReadOnly, got)
+				}
+				got, getErr := ses.GetSessionSysVar("transaction_isolation")
+				require.NoError(t, getErr)
+				require.Equal(t, "REPEATABLE-READ", got)
+			})
+		}
+	})
+
 	for _, test := range []struct {
 		name string
 		sql  string
