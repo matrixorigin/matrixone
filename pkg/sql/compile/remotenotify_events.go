@@ -234,10 +234,19 @@ func (r *remoteNotifyEventState) retry() {
 		r.sender.close()
 		r.sender = nil
 	}
-	if err := r.scheduler.submitEventSource("remote-notify-retry-wait", func() {
-		if r.waitRetry == nil {
-			r.waitRetry = waitRemoteDispatchRetry
+	if r.waitRetry == nil {
+		attempt := r.attempt
+		r.attempt++
+		if err := r.scheduler.submitTimer(
+			"remote-notify-retry-timer",
+			notifyMessageRetryDelay(attempt, r.uuid),
+			r.open,
+		); err != nil {
+			r.finish(err)
 		}
+		return
+	}
+	if err := r.scheduler.submitEventSource("remote-notify-retry-wait", func() {
 		err := r.waitRetry(r.s.Proc.Ctx, r.attempt, r.uuid)
 		r.attempt++
 		if submitErr := r.scheduler.submitRoot("remote-notify-retry-ready", func() {

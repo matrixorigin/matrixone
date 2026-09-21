@@ -383,7 +383,7 @@ func (m *mergeRunEventState) addTaskForRemoteNotifications() {
 		&notifyWG,
 		m.enqueueNotifyEvent,
 		newMessageSenderOnClient,
-		waitRemoteDispatchRetry,
+		nil,
 		m.scheduler,
 	)
 }

@@ -122,6 +122,60 @@ func TestScopeTaskSchedulerEventSourceDoesNotDeadlockSingleWorker(t *testing.T) 
 	}
 }
 
+func TestScopeTaskSchedulerTimerDoesNotOccupyEventWorker(t *testing.T) {
+	scheduler := newScopeTaskScheduler(context.Background(), 1, nil)
+	timerDone := make(chan struct{})
+	if err := scheduler.submitTimer("delayed-event", 50*time.Millisecond, func() {
+		close(timerDone)
+	}); err != nil {
+		t.Fatalf("submit timer: %v", err)
+	}
+	readyDone := make(chan struct{})
+	if err := scheduler.submitRoot("ready-while-delayed", func() {
+		close(readyDone)
+	}); err != nil {
+		t.Fatalf("submit ready task: %v", err)
+	}
+	select {
+	case <-readyDone:
+	case <-time.After(time.Second):
+		t.Fatal("ready worker was blocked by delayed event")
+	}
+	select {
+	case <-timerDone:
+	case <-time.After(time.Second):
+		t.Fatal("delayed event did not run")
+	}
+	scheduler.wait()
+}
+
+func TestScopeTaskSchedulerTimerCancellationDrainsPending(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	scheduler := newScopeTaskScheduler(ctx, 1, nil)
+	timerRan := make(chan struct{}, 1)
+	if err := scheduler.submitTimer("canceled-event", time.Hour, func() {
+		timerRan <- struct{}{}
+	}); err != nil {
+		t.Fatalf("submit timer: %v", err)
+	}
+	cancel()
+	done := make(chan struct{})
+	go func() {
+		scheduler.wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("scheduler did not drain a canceled timer")
+	}
+	select {
+	case <-timerRan:
+		t.Fatal("canceled timer ran")
+	default:
+	}
+}
+
 func TestScopeTaskSchedulerReportsPanic(t *testing.T) {
 	panicSeen := make(chan any, 1)
 	scheduler := newScopeTaskScheduler(context.Background(), 1, func(value any) {

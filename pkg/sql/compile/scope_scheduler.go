@@ -370,6 +370,57 @@ func (s *scopeTaskScheduler) submitEventSource(name string, task func()) error {
 	return s.submitEventSourceWithContext(name, task, false)
 }
 
+// submitTimer admits a delayed external event without parking an event
+// worker. The timer keeps one scheduler task pending until it either enqueues
+// the event or is canceled with the scheduler context.
+func (s *scopeTaskScheduler) submitTimer(name string, delay time.Duration, task func()) error {
+	if task == nil {
+		return errors.New("nil scope timer task")
+	}
+	if delay < 0 {
+		delay = 0
+	}
+
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return errScopeTaskSchedulerClosed
+	}
+	select {
+	case <-s.ctx.Done():
+		s.mu.Unlock()
+		return context.Cause(s.ctx)
+	default:
+	}
+	s.pending++
+	s.mu.Unlock()
+
+	var timer *time.Timer
+	var timerOnce sync.Once
+	finishTimer := func() {
+		timerOnce.Do(s.finishTask)
+	}
+	timer = time.AfterFunc(delay, func() {
+		s.eventMu.Lock()
+		if s.eventClosed {
+			s.eventMu.Unlock()
+			finishTimer()
+			return
+		}
+		s.eventQueue = append(s.eventQueue, scopeEventTask{name: name, run: task})
+		s.eventCond.Signal()
+		s.eventMu.Unlock()
+	})
+	if s.ctx != nil {
+		context.AfterFunc(s.ctx, func() {
+			if timer.Stop() {
+				finishTimer()
+			}
+		})
+	}
+	return nil
+}
+
 // submitTeardown admits cleanup after the pipeline context has been canceled.
 // Teardown is a terminal ownership event, not new query work, so rejecting it
 // on ctx.Done would leak receiver state and mask the execution error.
