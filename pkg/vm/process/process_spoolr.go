@@ -570,7 +570,7 @@ func (receiver *PipelineSignalReceiver) TryGetNextBatch(
 					return content, info, true
 				}
 				madeProgress = true
-				break
+				break scanSources
 			default:
 			}
 		}
