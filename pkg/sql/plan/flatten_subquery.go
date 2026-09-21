@@ -590,14 +590,6 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	if err != nil {
 		return 0, nil, err
 	}
-	// The ODKU target lookup is a LEFT join below this subquery. Its NULL
-	// extended key identifies a non-conflicting insert, where the UPDATE arm
-	// must not evaluate a scalar subquery at all. Keep that action guard on the
-	// scalar/SINGLE join so a multi-row unused subquery cannot fail the INSERT.
-	if builder.odkuTargetCorrelationGuard != nil {
-		preds = append(preds, DeepCopyExpr(builder.odkuTargetCorrelationGuard))
-	}
-
 	wrappedAggregate := subquery.Typ == plan.SubqueryRef_SCALAR && crossedAggregate &&
 		(aggregateSpineCandidate || preserveAggregateSpine || len(subCtx.aggregates) == 0 && aggregateSuppression == aggregateSpineUnsuppressed)
 	_, equalityPartition := correlatedPaginationPartitionKeys(preds)

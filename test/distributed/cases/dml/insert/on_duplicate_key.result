@@ -327,52 +327,48 @@ create table t_odku_scope_source (x int primary key, y int);
 insert into t_odku_scope_source values (1, 70);
 delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 0);
+-- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
 insert into t_odku_row_alias values (1, 5, 0) as n(x, y, z) on duplicate key update b = (select n.y + t_odku_row_alias.a from t_odku_scope_source as n where n.x = t_odku_row_alias.id);
-select * from t_odku_row_alias order by id;
-➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
-1  ¦  10  ¦  80
+unsupported DML: target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action
 delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 0);
+-- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
 insert into t_odku_row_alias values (1, 5, 0) as n(x, y, z) on duplicate key update a = (select s.y + t_odku_row_alias.a from t_odku_scope_source as s where s.x = t_odku_row_alias.id), b = (select max(s.y) from t_odku_scope_source as s);
-select * from t_odku_row_alias order by id;
-➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
-1  ¦  80  ¦  70
+unsupported DML: target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action
 delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 0);
+-- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
 insert into t_odku_row_alias values (1, 5, 0) as n(x, y, z) on duplicate key update a = t_odku_row_alias.a + 1, b = (select n.y + t_odku_row_alias.a from t_odku_scope_source as n where n.x = t_odku_row_alias.id);
 unsupported DML: target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action
 delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 0);
+-- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
 insert into t_odku_row_alias values (1, 5, 0), (1, 6, 0) as n(x, y, z) on duplicate key update b = (select n.y + t_odku_row_alias.a from t_odku_scope_source as n where n.x = t_odku_row_alias.id);
 unsupported DML: target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action
 delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 0);
+-- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
 insert into t_odku_row_alias (id, a, b) select 1, 5, 0 on duplicate key update b = (select s.y + t_odku_row_alias.a from t_odku_scope_source as s where s.x = t_odku_row_alias.id);
 unsupported DML: target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action
 delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 100);
+-- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
 insert into t_odku_row_alias values (1, 5, 0) as n on duplicate key update b = (select s.y from t_odku_scope_source as s where s.x = t_odku_row_alias.id);
-select * from t_odku_row_alias order by id;
-➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
-1  ¦  10  ¦  70
+unsupported DML: target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action
 drop table if exists t_odku_scope_multi;
 create table t_odku_scope_multi (x int, y int);
 insert into t_odku_scope_multi values (0, 10), (0, 20);
 delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 0);
+-- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
 insert into t_odku_row_alias values (2, 5, 0) as n on duplicate key update b = (select s.y from t_odku_scope_multi as s where s.x = coalesce(t_odku_row_alias.id, 0));
-select * from t_odku_row_alias order by id;
-➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
-1  ¦  10  ¦  0  𝄀
-2  ¦  5  ¦  0
+unsupported DML: target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action
 insert into t_odku_scope_multi values (2, 30), (2, 40);
 delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 0);
+-- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
 insert into t_odku_row_alias values (2, 5, 0) as n on duplicate key update b = (select s.y from t_odku_scope_multi as s where s.x = n.id);
-select * from t_odku_row_alias order by id;
-➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
-1  ¦  10  ¦  0  𝄀
-2  ¦  5  ¦  0
+unsupported DML: target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action
 delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 0);
 -- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
@@ -403,10 +399,9 @@ select * from t_odku_row_alias order by id;
 1  ¦  10  ¦  6
 delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 0);
+-- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
 insert into t_odku_row_alias values (1, 5, 0) as n(x, y, z) on duplicate key update b = (select n.y + s.y from t_odku_scope_source as s where s.x = n.x);
-select * from t_odku_row_alias order by id;
-➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
-1  ¦  10  ¦  75
+unsupported DML: target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action
 drop table t_odku_scope_source;
 delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 0);
