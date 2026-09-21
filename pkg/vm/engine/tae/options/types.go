@@ -30,6 +30,37 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/driver/logservicedriver"
 )
 
+// GCReadProtector is the narrow snapshot-protection boundary exposed to a TAE
+// pre-GC bootstrap hook. The concrete value is gc.SidecarReadProtector; keeping
+// this interface here avoids making the low-level options package own a lease
+// manager or planner dependency.
+type GCReadProtector interface {
+	Begin(context.Context) (
+		register func(context.Context, []byte, []string, time.Time) error,
+		rollback func(context.Context, []byte) error,
+		close func(),
+		err error,
+	)
+	Unregister(context.Context, []byte) error
+}
+
+// PreGCBootstrapContext identifies the exact TAE shard whose GC protection is
+// being bootstrapped. SharedFileService is the same durable object service used
+// by the TAE storage. The hook runs after SyncProtectionManager construction
+// and before checkpoint replay or DiskCleaner.Start.
+type PreGCBootstrapContext struct {
+	SharedFileService fileservice.FileService
+	Shard             metadata.TNShard
+	Protector         GCReadProtector
+	// StorageGeneration lazily obtains the identity of the locked, persistent
+	// local directory. Only an explicitly opted-in recovery hook may call it,
+	// synchronously during bootstrap. It is nil for a replay-only DB. Generic
+	// bootstrap hooks do not create generation files or require host identity.
+	StorageGeneration func() ([]byte, error)
+}
+
+type PreGCBootstrapHook func(context.Context, PreGCBootstrapContext) error
+
 const (
 	DefaultBulkTomestoneTxnThreshold = 10000 // rows
 	DefaultLockMergePruneInterval    = time.Minute
@@ -89,4 +120,5 @@ type Options struct {
 	Clock             clock.Clock                              `toml:"-"`
 	TaskServiceGetter taskservice.Getter                       `toml:"-"`
 	SID               string                                   `toml:"-"`
+	PreGCBootstrap    PreGCBootstrapHook                       `toml:"-"`
 }

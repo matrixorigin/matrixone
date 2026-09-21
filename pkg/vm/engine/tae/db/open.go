@@ -16,8 +16,10 @@ package db
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -68,11 +70,13 @@ func Open(
 	logutil.Info(Phase_Open+"-start", zap.String("dirname", dirname))
 
 	defer func() {
+		defer func() {
+			if dbLocker != nil {
+				err = errors.Join(err, dbLocker.Close())
+			}
+		}()
 		if err == nil && dbLocker != nil {
 			db.DBLocker, dbLocker = dbLocker, nil
-		}
-		if dbLocker != nil {
-			dbLocker.Close()
 		}
 		if err != nil {
 			if err2 := rollbackSteps.Apply("open-tae", true, 1); err2 != nil {
@@ -101,6 +105,11 @@ func Open(
 	if db.IsWriteMode() {
 		if dbLocker, err = createDBLock(dirname); err != nil {
 			return
+		}
+		if opts.PreGCBootstrap != nil {
+			db.storageGeneration = sync.OnceValues(func() ([]byte, error) {
+				return loadOrCreateStorageGeneration(dirname)
+			})
 		}
 	}
 

@@ -35,6 +35,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 )
 
+const (
+	// The initial embedded scheduler admits one active query and a query has at
+	// most sixteen direct-TAE reads. Waiting queries own no leases.
+	DefaultSiriusReadLeaseCapacity = 16
+	MaxSiriusReadLeaseCapacity     = 16
+)
+
 var (
 	defaultListenAddress         = "0.0.0.0:22000"
 	defaultServiceAddress        = "127.0.0.1:22000"
@@ -179,6 +186,10 @@ type Config struct {
 			dataDir string `toml:"-"`
 			// Backend txn storage backend implementation. [TAE|MEMKV], default TAE.
 			Backend StorageType `toml:"backend"`
+			// SiriusReadLeaseCapacity bounds durable direct-TAE reads for the
+			// co-located embedded Sirius runtime. The default is one admitted
+			// query times the maximum sixteen reads in a query.
+			SiriusReadLeaseCapacity int `toml:"sirius-read-lease-capacity"`
 		}
 	}
 
@@ -232,6 +243,16 @@ func (c *Config) Validate() error {
 	}
 	if _, ok := supportTxnStorageBackends[c.Txn.Storage.Backend]; !ok {
 		return moerr.NewInternalErrorf(context.Background(), "%s txn storage backend not support", c.Txn.Storage)
+	}
+	if c.Txn.Storage.SiriusReadLeaseCapacity == 0 {
+		c.Txn.Storage.SiriusReadLeaseCapacity = DefaultSiriusReadLeaseCapacity
+	}
+	if c.Txn.Storage.SiriusReadLeaseCapacity < 0 ||
+		c.Txn.Storage.SiriusReadLeaseCapacity > MaxSiriusReadLeaseCapacity {
+		return moerr.NewBadConfigNoCtxf(
+			"sirius read lease capacity must be between 1 and %d",
+			MaxSiriusReadLeaseCapacity,
+		)
 	}
 	if c.Txn.ZombieTimeout.Duration == 0 {
 		c.Txn.ZombieTimeout.Duration = defaultZombieTimeout
@@ -363,6 +384,9 @@ func (c *Config) SetDefaultValue() {
 	}
 	if c.Txn.Storage.Backend == "" {
 		c.Txn.Storage.Backend = StorageTAE
+	}
+	if c.Txn.Storage.SiriusReadLeaseCapacity == 0 {
+		c.Txn.Storage.SiriusReadLeaseCapacity = DefaultSiriusReadLeaseCapacity
 	}
 
 	if c.Txn.ZombieTimeout.Duration == 0 {

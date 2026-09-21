@@ -143,7 +143,8 @@ type DB struct {
 
 	ReplayCtl *replayCtl
 
-	DBLocker io.Closer
+	DBLocker          io.Closer
+	storageGeneration func() ([]byte, error)
 
 	Closed *atomic.Value
 }

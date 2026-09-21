@@ -41,6 +41,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/shardservice"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/substrait"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/txn/service"
@@ -114,6 +115,19 @@ func WithConfigData(data map[string]*logservicepb.ConfigItem) Option {
 	}
 }
 
+// WithSiriusLeaseManagerBroker installs the one-process ownership handoff used
+// by explicitly owned, co-located TAE recovery. Passing nil leaves ordinary
+// storage unchanged. This process-local option does not establish exclusive
+// ownership of a shared journal namespace. Production activation must supply
+// that ownership before any TN can open it; no launcher enables this option yet.
+func WithSiriusLeaseManagerBroker(broker *substrait.LeaseManagerBroker) Option {
+	return func(s *store) {
+		if broker != nil {
+			s.options.siriusLeaseBroker = broker
+		}
+	}
+}
+
 type store struct {
 	cfg                 *Config
 	rt                  runtime.Runtime
@@ -149,6 +163,7 @@ type store struct {
 		hakeekerClientFactory   func() (logservice.TNHAKeeperClient, error)
 		backendFilter           func(msg morpc.Message, backendAddr string) bool
 		adjustConfigFunc        func(c *Config)
+		siriusLeaseBroker       *substrait.LeaseManagerBroker
 	}
 
 	mu struct {

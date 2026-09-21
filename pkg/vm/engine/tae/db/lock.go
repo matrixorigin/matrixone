@@ -15,8 +15,10 @@
 package db
 
 import (
+	"errors"
 	"io"
 	"os"
+	"sync"
 	"syscall"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -27,6 +29,21 @@ const (
 	LockName string = "TAE"
 )
 
+type dbDirectoryLock struct {
+	legacy *os.File
+	owner  *os.File
+	once   sync.Once
+	err    error
+}
+
+func (l *dbDirectoryLock) Close() error {
+	l.once.Do(func() {
+		// Keep flock ownership until the legacy process-scoped lock is gone.
+		l.err = errors.Join(l.legacy.Close(), l.owner.Close())
+	})
+	return l.err
+}
+
 // createDBLock creates a file lock on TAE's working directory.
 func createDBLock(dir string) (io.Closer, error) {
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
@@ -36,9 +53,21 @@ func createDBLock(dir string) (io.Closer, error) {
 		}
 	}
 	fname := dbutils.MakeLockFileName(dir, LockName)
-	f, err := os.Create(fname)
+	// POSIX record locks are process-owned: another open in this process can
+	// reacquire them, and closing either descriptor releases the first lock.
+	// Lock a separate inode before even opening the legacy inode. flock is
+	// descriptor-owned and therefore rejects same-process duplicate opens too.
+	// Never unlink either lock file: that would permit owners of two inodes.
+	owner, err := os.OpenFile(fname+".owner", os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
+	}
+	if err := syscall.Flock(int(owner.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		return nil, errors.Join(err, owner.Close())
+	}
+	f, err := os.Create(fname)
+	if err != nil {
+		return nil, errors.Join(err, owner.Close())
 	}
 	flockT := syscall.Flock_t{
 		Type:   syscall.F_WRLCK,
@@ -49,8 +78,7 @@ func createDBLock(dir string) (io.Closer, error) {
 	}
 	if err := syscall.FcntlFlock(f.Fd(), syscall.F_SETLK, &flockT); err != nil {
 		logutil.Errorf("error locking file: %s", err)
-		f.Close()
-		return nil, err
+		return nil, errors.Join(err, f.Close(), owner.Close())
 	}
-	return f, nil
+	return &dbDirectoryLock{legacy: f, owner: owner}, nil
 }

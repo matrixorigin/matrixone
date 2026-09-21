@@ -16,6 +16,7 @@ package tnservice
 
 import (
 	"context"
+	"errors"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -180,7 +181,14 @@ func (s *store) newTAEStorage(
 		TaskServiceGetter: s.GetTaskService,
 		SID:               s.cfg.UUID,
 	}
-	return taestorage.NewTAEStorage(
+	leaseBootstrap, err := s.newSiriusTAELeaseBootstrap(shard)
+	if err != nil {
+		return nil, err
+	}
+	if leaseBootstrap != nil {
+		opt.PreGCBootstrap = leaseBootstrap.bootstrap
+	}
+	result, err := taestorage.NewTAEStorage(
 		ctx,
 		s.cfg.Txn.Storage.dataDir,
 		opt,
@@ -191,4 +199,15 @@ func (s *store) newTAEStorage(
 		txnServer,
 		s.queryClient,
 	)
+	if leaseBootstrap != nil {
+		if finishErr := leaseBootstrap.finish(err); finishErr != nil {
+			if result != nil {
+				finishErr = errors.Join(finishErr, result.Close(ctx))
+			}
+			return nil, finishErr
+		}
+	} else if err != nil {
+		return nil, err
+	}
+	return result, nil
 }

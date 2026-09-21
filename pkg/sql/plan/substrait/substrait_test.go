@@ -2265,7 +2265,9 @@ func TestFileServiceLeaseJournalRejectsNonCanonicalName(t *testing.T) {
 	require.NoError(t, err)
 	lease := testDurableLease(t, 0xab, uint64(time.Now().Add(time.Minute).UnixMilli()))
 	storeJournalLease(t, journal, lease)
-	data, err := journal.read(ctx, journal.activePath(lease.Read.ReadRef))
+	entry, err := fs.StatFile(ctx, journal.activePath(lease.Read.ReadRef))
+	require.NoError(t, err)
+	data, err := journal.read(ctx, journal.activePath(lease.Read.ReadRef), entry.Size)
 	require.NoError(t, err)
 	require.NoError(t, journal.Delete(ctx, lease.Read.ReadRef))
 	upper := strings.ToUpper(hex.EncodeToString(lease.Read.ReadRef)) + ".json"

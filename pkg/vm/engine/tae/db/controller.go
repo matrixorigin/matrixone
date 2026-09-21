@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logstore/sm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tasks"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnimpl"
@@ -757,6 +758,23 @@ func (c *Controller) AssembleDB(ctx context.Context) (err error) {
 
 	db.DiskCleaner = gc2.NewDiskCleaner(cleaner, db.IsWriteMode())
 	db.Runtime.UnpublishedObjectCleaner = db.DiskCleaner
+
+	// Durable direct-TAE read protection must be restored before checkpoint
+	// replay can expose obsolete objects to the cleaner and before the cleaner's
+	// first queued GC opportunity. A bootstrap error aborts Open; the deferred
+	// AssembleDB rollback stops every component started above.
+	if hook := db.Opts.PreGCBootstrap; hook != nil {
+		if err = hook(ctx, options.PreGCBootstrapContext{
+			SharedFileService: db.Opts.Fs,
+			Shard:             db.Opts.Shard,
+			StorageGeneration: db.storageGeneration,
+			Protector: gc2.SidecarReadProtector{
+				Manager: cleaner.GetSyncProtectionManager(),
+			},
+		}); err != nil {
+			return
+		}
+	}
 
 	// Set sync protection validator for TN commit validation (CCPR transactions)
 	db.Runtime.SyncProtectionValidator = func(jobID string, prepareTS int64) error {
