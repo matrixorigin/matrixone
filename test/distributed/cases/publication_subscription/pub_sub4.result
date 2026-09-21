@@ -112,17 +112,17 @@ create database idx_meta_local;
 create table idx_meta_local.local_t(id int primary key, v int, key idx_local(v));
 show index from idx_meta_sub_db.visible_t;
 ➤ Table[12,9,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,64,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,256,0]  ¦  Collation[12,1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,4,0]  ¦  Packed[12,4,0]  ¦  Null[12,3,0]  ¦  Index_type[12,11,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,2048,0]  ¦  Index_params[12,2048,0]  ¦  Visible[12,3,0]  ¦  Expression[12,256,0]  𝄀
-visible_t  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
-visible_t  ¦  0  ¦  uk_u  ¦  1  ¦  u  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  u  𝄀
-visible_t  ¦  1  ¦  idx_v  ¦  1  ¦  v  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦    ¦    ¦    ¦    ¦  YES  ¦  v
+visible_t  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  id  𝄀
+visible_t  ¦  0  ¦  uk_u  ¦  1  ¦  u  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  u  𝄀
+visible_t  ¦  1  ¦  idx_v  ¦  1  ¦  v  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦  YES  ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  v
 select table_schema, table_name, non_unique, index_name, seq_in_index, column_name, index_type, is_visible
 from information_schema.statistics
 where table_schema = 'idx_meta_sub_db' and table_name = 'visible_t'
 order by non_unique, index_name, seq_in_index;
 ➤ table_schema[12,5000,0]  ¦  table_name[12,5000,0]  ¦  non_unique[-5,64,0]  ¦  index_name[12,64,0]  ¦  seq_in_index[4,32,0]  ¦  column_name[12,256,0]  ¦  index_type[12,11,0]  ¦  is_visible[12,3,0]  𝄀
-idx_meta_sub_db  ¦  visible_t  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦    ¦  YES  𝄀
-idx_meta_sub_db  ¦  visible_t  ¦  0  ¦  uk_u  ¦  1  ¦  u  ¦    ¦  YES  𝄀
-idx_meta_sub_db  ¦  visible_t  ¦  1  ¦  idx_v  ¦  1  ¦  v  ¦    ¦  YES
+idx_meta_sub_db  ¦  visible_t  ¦  0  ¦  PRIMARY  ¦  1  ¦  id  ¦  BTREE  ¦  YES  𝄀
+idx_meta_sub_db  ¦  visible_t  ¦  0  ¦  uk_u  ¦  1  ¦  u  ¦  BTREE  ¦  YES  𝄀
+idx_meta_sub_db  ¦  visible_t  ¦  1  ¦  idx_v  ¦  1  ¦  v  ¦  BTREE  ¦  YES
 select count(*) as unpublished_index_count
 from information_schema.statistics
 where table_schema = 'idx_meta_sub_db' and table_name = 'unpublished_t';

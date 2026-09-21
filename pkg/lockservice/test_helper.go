@@ -86,16 +86,16 @@ func RunLockServicesForTest(
 	cleanup.clusterCloser = cluster.Close
 
 	var removeDisconnectDuration time.Duration
-	for _, cfg := range configs {
+	for idx := range configs {
+		cfg := &configs[idx]
 		if adjustConfig != nil {
-			adjustConfig(&cfg)
+			adjustConfig(cfg)
 			removeDisconnectDuration = cfg.removeDisconnectDuration
 		}
-		lockService := NewLockService(cfg, opts...)
-		services = append(services, lockService)
-		cleanup.serviceClosers = append(cleanup.serviceClosers, lockService.Close)
 	}
 
+	// Service keepers start during construction and may immediately contact the
+	// allocator. Publish its listener first so initial RPCs cannot race startup.
 	allocator := NewLockTableAllocator(
 		"",
 		testSockets,
@@ -106,6 +106,11 @@ func RunLockServicesForTest(
 		},
 	)
 	cleanup.allocatorCloser = allocator.Close
+	for _, cfg := range configs {
+		lockService := NewLockService(cfg, opts...)
+		services = append(services, lockService)
+		cleanup.serviceClosers = append(cleanup.serviceClosers, lockService.Close)
+	}
 	fn(allocator.(*lockTableAllocator), services)
 }
 

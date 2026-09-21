@@ -121,7 +121,13 @@ const (
 	MORPCVersion83     int64 = 83 // bounded COALESCE character and binary result domains
 	MORPCVersion84     int64 = 84 // extended discrete percentile input types
 	MORPCVersion85     int64 = 85 // shared integer-parameter coercion execution identities
-	MORPCLatestVersion       = MORPCVersion85
+	MORPCVersion86     int64 = 86 // extended IP overload/result and expression metadata contracts
+	MORPCVersion87     int64 = 87 // preserve grouping provenance in remote batch transport
+	MORPCVersion88     int64 = 88 // canonical vector HLL_ADD_AGG hash keys
+	MORPCVersion89     int64 = 89 // exact decimal literal and coercion semantics
+	MORPCVersion90     int64 = 90 // geodetic distance semantics and length-unit overloads
+	MORPCVersion91     int64 = 91 // canonical CHAR and JSON HLL_ADD_AGG hash keys
+	MORPCLatestVersion       = MORPCVersion91
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

@@ -7,7 +7,8 @@
 --                        chosen from the QUERY's function, not the op_type)
 --   vector_l1_ops     -> l1_distance          (ivfflat only; usearch has no L1)
 --   vector_ip_ops     -> inner_product
---   vector_cosine_ops -> cosine_distance
+--   vector_cosine_ops -> cosine_distance (HNSW currently falls back to the
+--                        exact SQL path at the zero/subnormal boundary)
 --
 -- Each block asserts three things: the served function reaches the index
 -- (VECTOR_INDEX_SCAN / hnsw_search in the plan), a non-served function does not, and
@@ -198,7 +199,8 @@ alter table h drop index h_l2sq;
 
 create index h_cos using hnsw on hc(v) op_type 'vector_cosine_ops';
 -- @separator:table
--- @regex("hnsw_search", true)
+-- HNSW cosine deliberately stays on the exact SQL path for #29082.
+-- @regex("hnsw_search", false)
 explain select a from hc order by cosine_distance(v,'[1,0,0,0]') limit 3;
 
 -- round(d,4): row a=1 IS the query vector, so its cosine distance is the degenerate 0.

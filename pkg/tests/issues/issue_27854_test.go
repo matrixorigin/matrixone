@@ -63,6 +63,40 @@ func TestIssue27854RequiredVectorDomainStaysCoordinatorLocal(t *testing.T) {
 		execSQLRequire(t, ctx, db,
 			"create index filtered_idx using ivfflat on filtered_t(v) lists=1 op_type 'vector_l2_ops'")
 
+		// AUTO must preserve computed output values even when POST fills K.
+		t.Run("side effect executes once", func(t *testing.T) {
+			execSQLRequire(t, ctx, db, "create sequence adaptive_seq as bigint maxvalue 3 start with 1 no cycle")
+			q := fmt.Sprintf("select nextval('adaptive_seq') from filtered_t where id <= 3 order by l2_distance(v,'%s') limit 10 by rank with option 'mode=auto'", vec(0))
+			require.Equal(t, []string{"1", "2", "3"}, querySingleStringColumn(t, ctx, db, q))
+		})
+		t.Run("small exact auto is terminal", func(t *testing.T) {
+			execSQLRequire(t, ctx, db, "create table adaptive_small(id int primary key, v vecf32(32))")
+			execSQLRequire(t, ctx, db, fmt.Sprintf("insert into adaptive_small values (1,'%s'),(2,'%s'),(3,'%s')", vec(1), vec(2), vec(3)))
+			execSQLRequire(t, ctx, db, "create index adaptive_small_idx using ivfflat on adaptive_small(v) lists=1 op_type 'vector_l2_ops'")
+			q := fmt.Sprintf("select id from (select id from adaptive_small where id > 10 order by l2_distance(v,'%s') limit 10 by rank with option 'mode=auto') q", vec(0))
+			require.Empty(t, queryInt64Rows(t, ctx, db, q))
+		})
+		t.Run("unmatched multi-key auto is terminal", func(t *testing.T) {
+			q := fmt.Sprintf("select id from (select id from filtered_t where id < 0 order by l2_distance(v,'%s'), id limit 10 by rank with option 'mode=auto') q", vec(0))
+			planText := strings.Join(querySingleStringColumn(t, ctx, db, "explain "+q), "\n")
+			require.NotContains(t, planText, "Adaptive Top")
+			require.Empty(t, queryInt64Rows(t, ctx, db, q))
+		})
+		t.Run("adaptive output boundary", func(t *testing.T) {
+			q := fmt.Sprintf("select id + 100 from filtered_t where file_id = 'file1' order by l2_distance(v,'%s') limit 1 by rank with option 'mode=auto'", vec(0))
+			text := strings.Join(querySingleStringColumn(t, ctx, db, "explain "+q), "\n")
+			require.Contains(t, text, "Adaptive Top", "the result oracle must exercise adaptive selection")
+			require.Equal(t, []int64{101}, queryInt64Rows(t, ctx, db, q))
+		})
+		t.Run("sort anchored layout", func(t *testing.T) {
+			q := fmt.Sprintf("select id from (select id, l2_distance(v,'%s') as distance from filtered_t where file_id = 'file1' order by distance limit 2 by rank with option 'mode=auto') q order by distance", vec(0))
+			require.Equal(t, []int64{1, 2}, queryInt64Rows(t, ctx, db, q))
+		})
+		t.Run("membership auto", func(t *testing.T) {
+			q := fmt.Sprintf("select id from filtered_t where id in (select result from generate_series(1,3) g) order by l2_distance(v,'%s') limit 2 by rank with option 'mode=auto'", vec(0))
+			require.Equal(t, []int64{1, 2}, queryInt64Rows(t, ctx, db, q))
+		})
+
 		query := fmt.Sprintf("select id from filtered_t where file_id = 'file1' and "+
 			"l2_distance(v,'%s') <= 3 order by l2_distance(v,'%s') "+
 			"limit 10 by rank with option 'mode=pre'", vec(0), vec(0))

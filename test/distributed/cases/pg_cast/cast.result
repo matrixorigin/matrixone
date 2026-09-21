@@ -223,9 +223,9 @@ cast(12:00:00 as time)
 drop table if exists t1;
 create table t1 (a int, b varchar(20), c decimal(10,2));
 insert into t1 values (123.45::int, 456::varchar, '789.12'::decimal(10,2));
-invalid argument cast to int, bad value 123.45
 select * from t1;
 a	b	c
+123	456	789.12
 drop table t1;
 drop table if exists t1;
 create table t1 (a int, b varchar(20));

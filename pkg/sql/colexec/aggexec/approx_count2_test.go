@@ -478,6 +478,147 @@ func TestHllV4UsesCanonicalTypedValues(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestHllAddUsesCanonicalTypedStateForCharAndJSON(t *testing.T) {
+	tests := []struct {
+		name  string
+		typ   types.Type
+		left  []byte
+		right []byte
+	}{
+		{
+			name:  "char-pad-space",
+			typ:   types.New(types.T_char, 4, 0),
+			left:  []byte("a"),
+			right: []byte("a "),
+		},
+		{
+			name:  "json-numeric-encoding",
+			typ:   types.T_json.ToType(),
+			left:  mustHLLJSON(t, "[1,{\"n\":2.0}]"),
+			right: mustHLLJSON(t, "[1.0,{\"n\":2}]"),
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			run := func(valuesBytes ...[]byte) []byte {
+				exec := makeHllAdd(mp, 1, tc.typ).(*hllAddExec)
+				require.False(t, exec.legacyWireState)
+				require.NoError(t, exec.GroupGrow(1))
+				values := vector.NewVec(tc.typ)
+				for _, value := range valuesBytes {
+					require.NoError(t, vector.AppendBytes(values, value, false, mp))
+				}
+				require.NoError(t, exec.BulkFill(0, []*vector.Vector{values}))
+				result, err := exec.Flush()
+				require.NoError(t, err)
+				encoded := bytes.Clone(result[0].GetBytesAt(0))
+				require.Equal(t, hllVersion, encoded[0])
+				result[0].Free(mp)
+				values.Free(mp)
+				exec.Free()
+				return encoded
+			}
+
+			leftOnly := run(tc.left)
+			rightOnly := run(tc.right)
+			both := run(tc.left, tc.right)
+			require.Equal(t, leftOnly, rightOnly)
+			require.Equal(t, leftOnly, both)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+
+	// VARCHAR is the control: trailing spaces are significant in its SQL
+	// equality domain and must not be folded by HLL_ADD_AGG.
+	mp := mpool.MustNewZero()
+	typ := types.New(types.T_varchar, 4, 0)
+	run := func(value []byte) []byte {
+		exec := makeHllAdd(mp, 1, typ).(*hllAddExec)
+		require.True(t, exec.legacyWireState)
+		require.NoError(t, exec.GroupGrow(1))
+		values := vector.NewVec(typ)
+		require.NoError(t, vector.AppendBytes(values, value, false, mp))
+		require.NoError(t, exec.BulkFill(0, []*vector.Vector{values}))
+		result, err := exec.Flush()
+		require.NoError(t, err)
+		encoded := bytes.Clone(result[0].GetBytesAt(0))
+		result[0].Free(mp)
+		values.Free(mp)
+		exec.Free()
+		return encoded
+	}
+	require.NotEqual(t, run([]byte("a")), run([]byte("a ")))
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestHllAddRestoredLegacyStateKeepsRawHashDomain(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		typ   types.Type
+		left  []byte
+		right []byte
+	}{
+		{
+			name:  "char",
+			typ:   types.New(types.T_char, 4, 0),
+			left:  []byte("a"),
+			right: []byte("a "),
+		},
+		{
+			name:  "json",
+			typ:   types.T_json.ToType(),
+			left:  mustHLLJSON(t, "1"),
+			right: mustHLLJSON(t, "1.0"),
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			source := makeHllAdd(mp, 1, tc.typ).(*hllAddExec)
+			ConfigureHLLLegacyState(source)
+			require.NoError(t, source.GroupGrow(1))
+			left := vector.NewVec(tc.typ)
+			require.NoError(t, vector.AppendBytes(left, tc.left, false, mp))
+			require.NoError(t, source.BulkFill(0, []*vector.Vector{left}))
+			var intermediate bytes.Buffer
+			require.NoError(t, source.SaveIntermediateResult(
+				1, [][]uint8{{1}}, &intermediate))
+
+			restored := makeHllAdd(mp, 1, tc.typ).(*hllAddExec)
+			require.NoError(t, restored.UnmarshalFromReader(
+				bytes.NewReader(intermediate.Bytes()), mp))
+			right := vector.NewVec(tc.typ)
+			require.NoError(t, vector.AppendBytes(right, tc.right, false, mp))
+			require.NoError(t, restored.BulkFill(0, []*vector.Vector{right}))
+			result, err := restored.Flush()
+			require.NoError(t, err)
+			require.Equal(t, hllLegacyVersion, result[0].GetBytesAt(0)[0])
+
+			expected := makeHllAdd(mp, 1, tc.typ).(*hllAddExec)
+			ConfigureHLLLegacyState(expected)
+			require.NoError(t, expected.GroupGrow(1))
+			both := vector.NewVec(tc.typ)
+			require.NoError(t, vector.AppendBytes(both, tc.left, false, mp))
+			require.NoError(t, vector.AppendBytes(both, tc.right, false, mp))
+			require.NoError(t, expected.BulkFill(0, []*vector.Vector{both}))
+			expectedResult, err := expected.Flush()
+			require.NoError(t, err)
+			require.Equal(t, expectedResult[0].GetBytesAt(0),
+				result[0].GetBytesAt(0))
+
+			expectedResult[0].Free(mp)
+			both.Free(mp)
+			expected.Free()
+			result[0].Free(mp)
+			right.Free(mp)
+			restored.Free()
+			left.Free(mp)
+			source.Free()
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
 func mustHLLJSON(t *testing.T, text string) []byte {
 	t.Helper()
 	value, err := types.ParseStringToByteJson(text)
@@ -536,6 +677,167 @@ func TestHllLegacyWireStateCoversEmptyAndFloatingPointWidths(t *testing.T) {
 			require.Zero(t, mp.CurrNB())
 		})
 	}
+}
+
+func TestHllAddVectorCanonicalizesWithVersionedWireState(t *testing.T) {
+	tests := []struct {
+		name  string
+		typ   types.Type
+		left  []byte
+		right []byte
+	}{
+		{
+			name:  "float32",
+			typ:   types.T_array_float32.ToType(),
+			left:  types.ArrayToBytes([]float32{1, 0, 3}),
+			right: types.ArrayToBytes([]float32{1, float32(math.Copysign(0, -1)), 3}),
+		},
+		{
+			name:  "float64",
+			typ:   types.T_array_float64.ToType(),
+			left:  types.ArrayToBytes([]float64{1, 0, 3}),
+			right: types.ArrayToBytes([]float64{1, math.Copysign(0, -1), 3}),
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			exec := makeHllAdd(mp, 1, tc.typ).(*hllAddExec)
+			require.False(t, exec.legacyWireState)
+			require.NoError(t, exec.GroupGrow(1))
+			runOne := func(value []byte) []byte {
+				one := makeHllAdd(mp, 1, tc.typ).(*hllAddExec)
+				require.NoError(t, one.GroupGrow(1))
+				input := vector.NewVec(tc.typ)
+				require.NoError(t, vector.AppendBytes(input, value, false, mp))
+				require.NoError(t, one.BulkFill(0, []*vector.Vector{input}))
+				oneResult, err := one.Flush()
+				require.NoError(t, err)
+				data := bytes.Clone(oneResult[0].GetBytesAt(0))
+				oneResult[0].Free(mp)
+				input.Free(mp)
+				one.Free()
+				return data
+			}
+			leftOnly := runOne(tc.left)
+			rightOnly := runOne(tc.right)
+			require.Equal(t, leftOnly, rightOnly)
+
+			partialLeft := makeHllAdd(mp, 1, tc.typ).(*hllAddExec)
+			partialRight := makeHllAdd(mp, 1, tc.typ).(*hllAddExec)
+			require.NoError(t, partialLeft.GroupGrow(1))
+			require.NoError(t, partialRight.GroupGrow(1))
+			leftValues := vector.NewVec(tc.typ)
+			rightValues := vector.NewVec(tc.typ)
+			require.NoError(t, vector.AppendBytes(leftValues, tc.left, false, mp))
+			require.NoError(t, vector.AppendBytes(rightValues, tc.right, false, mp))
+			require.NoError(t, partialLeft.BulkFill(0, []*vector.Vector{leftValues}))
+			require.NoError(t, partialRight.BulkFill(0, []*vector.Vector{rightValues}))
+			require.NoError(t, partialLeft.BatchMerge(
+				partialRight, 0, []uint64{1}))
+			partialResult, err := partialLeft.Flush()
+			require.NoError(t, err)
+			require.Equal(t, leftOnly, partialResult[0].GetBytesAt(0))
+			partialResult[0].Free(mp)
+			leftValues.Free(mp)
+			rightValues.Free(mp)
+			partialLeft.Free()
+			partialRight.Free()
+
+			values := vector.NewVec(tc.typ)
+			require.NoError(t, vector.AppendBytes(values, tc.left, false, mp))
+			require.NoError(t, vector.AppendBytes(values, tc.right, false, mp))
+			require.NoError(t, exec.BulkFill(0, []*vector.Vector{values}))
+			result, err := exec.Flush()
+			require.NoError(t, err)
+			encoded := result[0].GetBytesAt(0)
+			require.Equal(t, hllVersion, encoded[0])
+
+			require.Equal(t, leftOnly, encoded)
+
+			// Canonicalization is scratch-only; the input vector must retain the
+			// original representative bytes for downstream consumers.
+			require.Equal(t, tc.left, values.GetBytesAt(0))
+			require.Equal(t, tc.right, values.GetBytesAt(1))
+
+			result[0].Free(mp)
+			values.Free(mp)
+			exec.Free()
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
+func TestHllAddVectorRestoresVersionedHashDomain(t *testing.T) {
+	mp := mpool.MustNewZero()
+	typ := types.T_array_float32.ToType()
+	legacy := makeHllAdd(mp, 1, typ).(*hllAddExec)
+	ConfigureHLLLegacyState(legacy)
+	require.NoError(t, legacy.GroupGrow(1))
+	oldValue := vector.NewVec(typ)
+	require.NoError(t, vector.AppendBytes(oldValue,
+		types.ArrayToBytes([]float32{1, float32(math.Copysign(0, -1)), 3}), false, mp))
+	require.NoError(t, legacy.BulkFill(0, []*vector.Vector{oldValue}))
+	var intermediate bytes.Buffer
+	require.NoError(t, legacy.SaveIntermediateResult(
+		1, [][]uint8{{1}}, &intermediate))
+	newValue := vector.NewVec(typ)
+	require.NoError(t, vector.AppendBytes(newValue,
+		types.ArrayToBytes([]float32{1, 0, 3}), false, mp))
+	// The legacy producer remains the reference for an old v2 state: appending
+	// +0 hashes it as a distinct raw value from the existing -0.
+	require.NoError(t, legacy.BulkFill(0, []*vector.Vector{newValue}))
+	legacyResult, err := legacy.Flush()
+	require.NoError(t, err)
+	expected := bytes.Clone(legacyResult[0].GetBytesAt(0))
+	require.Equal(t, hllLegacyVersion, expected[0])
+	legacyResult[0].Free(mp)
+
+	restored := makeHllAdd(mp, 1, typ).(*hllAddExec)
+	require.NoError(t, restored.UnmarshalFromReader(
+		bytes.NewReader(intermediate.Bytes()), mp))
+	// Unmarshalling preserves the v2 marker. The upgraded executor therefore
+	// keeps raw hashing for this old state instead of silently switching it to
+	// the new v4 vector domain.
+	require.NoError(t, restored.BulkFill(0, []*vector.Vector{newValue}))
+	result, err := restored.Flush()
+	require.NoError(t, err)
+	require.Equal(t, hllLegacyVersion, result[0].GetBytesAt(0)[0])
+	require.Equal(t, expected, result[0].GetBytesAt(0))
+
+	result[0].Free(mp)
+	newValue.Free(mp)
+	oldValue.Free(mp)
+	restored.Free()
+	legacy.Free()
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestAccountedHllAddVectorReservesCanonicalScratch(t *testing.T) {
+	mp := mpool.MustNewZero()
+	registry, account, allocation := newTestAggregateAllocation(t)
+	exec := makeHllAdd(mp, 1, types.T_array_float32.ToType()).(*hllAddExec)
+	owner := any(exec).(AllocationAccountOwner)
+	require.NoError(t, owner.SetAllocationAccount(allocation))
+	require.NoError(t, exec.GroupGrow(1))
+
+	values := vector.NewVec(types.T_array_float32.ToType())
+	require.NoError(t, vector.AppendBytes(values,
+		types.ArrayToBytes([]float32{1, float32(math.Copysign(0, -1)), 3}), false, mp))
+	require.NoError(t, exec.PreflightBatchFill(
+		0, []uint64{1}, []*vector.Vector{values}))
+	require.NotNil(t, exec.state[0].argScratch)
+	require.NoError(t, exec.BatchFill(0, []uint64{1}, []*vector.Vector{values}))
+
+	result, err := exec.Flush()
+	require.NoError(t, err)
+	require.Equal(t, hllVersion, result[0].GetBytesAt(0)[0])
+	result[0].Free(mp)
+	values.Free(mp)
+	exec.Free()
+	require.NoError(t, owner.ClearAllocationAccount(allocation))
+	finishTestAggregateAllocation(t, registry, account)
+	require.Zero(t, mp.CurrNB())
 }
 
 func TestHllLegacyWireStateUsesPreflightAndRoundTripsIntermediate(t *testing.T) {

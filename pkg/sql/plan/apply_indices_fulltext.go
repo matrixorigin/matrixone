@@ -1674,6 +1674,66 @@ func (builder *QueryBuilder) fullTextRewriteContextNodeID(preferredNodeID int32,
 	return preferredNodeID
 }
 
+// fullTextColumnName normalizes the display name carried by a ColRef. The same
+// bound column can appear as `title` in a scan predicate and as `ft.title` in
+// an expression copied through a projection. The binding/position is the
+// authoritative identity; the display name is only the fallback used by the
+// lightweight fulltext expression matcher.
+func fullTextColumnName(name string) string {
+	name = strings.TrimSpace(name)
+	if dot := strings.LastIndexByte(name, '.'); dot >= 0 {
+		name = name[dot+1:]
+	}
+	return strings.ToLower(strings.Trim(name, "`"))
+}
+
+func fullTextColumnRefsEqual(left, right *plan.ColRef) bool {
+	if left == nil || right == nil {
+		return false
+	}
+	// Within one scan binding, a different column position is authoritative.
+	// This guard prevents a real column named `a.body` from being conflated with
+	// the column `body` merely because the display-name fallback strips a
+	// qualifier. Positions may legitimately be remapped across projection
+	// boundaries, so the name fallback remains available when the bindings
+	// differ.
+	if left.GetRelPos() == right.GetRelPos() && left.GetColPos() != right.GetColPos() {
+		return false
+	}
+	leftName, rightName := fullTextColumnName(left.GetName()), fullTextColumnName(right.GetName())
+	if leftName != "" && rightName != "" {
+		return leftName == rightName
+	}
+	return left.GetColPos() == right.GetColPos()
+}
+
+// fullTextMatchArgEqual compares MATCH's pattern and mode as execution
+// expressions, excluding decimal provenance metadata. A decimal comparison
+// may annotate every literal in its expression tree for protocol negotiation;
+// that annotation does not change the pattern or mode of a nested MATCH.
+func fullTextMatchArgEqual(left, right *plan.Expr) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	left = DeepCopyExpr(left)
+	right = DeepCopyExpr(right)
+	clearFullTextMatchArgProvenance(left)
+	clearFullTextMatchArgProvenance(right)
+	return exprStructuralEqual(left, right)
+}
+
+func clearFullTextMatchArgProvenance(expr *plan.Expr) {
+	_ = plan.VisitExprTree(expr, func(current *plan.Expr) error {
+		if literal := current.GetLit(); literal != nil {
+			literal.DecimalLiteralRequiresV82 = false
+		}
+		if vector := current.GetVec(); vector != nil {
+			vector.DecimalLiteralRequiresV82 = false
+		}
+		return nil
+	})
+}
+
 func (builder *QueryBuilder) equalsFullTextMatchFunc(fn1 *plan.Function, fn2 *plan.Function) bool {
 
 	nargs1 := len(fn1.Args)
@@ -1685,13 +1745,13 @@ func (builder *QueryBuilder) equalsFullTextMatchFunc(fn1 *plan.Function, fn2 *pl
 
 	// Pattern arguments may be bound parameters, so compare the bound
 	// expression tree instead of dereferencing literal strings.
-	if !exprStructuralEqual(fn1.Args[0], fn2.Args[0]) || !exprStructuralEqual(fn1.Args[1], fn2.Args[1]) {
+	if !fullTextMatchArgEqual(fn1.Args[0], fn2.Args[0]) || !fullTextMatchArgEqual(fn1.Args[1], fn2.Args[1]) {
 		return false
 	}
 
 	// check index parts
 	for i := 2; i < nargs1; i++ {
-		if !strings.EqualFold(fn1.Args[i].GetCol().GetName(), fn2.Args[i].GetCol().GetName()) {
+		if !fullTextColumnRefsEqual(fn1.Args[i].GetCol(), fn2.Args[i].GetCol()) {
 			return false
 		}
 	}
@@ -1718,12 +1778,13 @@ type fulltextServedMatch struct {
 // This asks only about the match, not about its scan node, so it is usable before the build
 // loop has created them.
 //
-// Index parts are compared by column NAME, so two tables with an identically named column
-// would look equal. Sound here because both sides always belong to the SAME scan node: the
-// served set is built from that scan's filters and projections, and the callers sweep only
-// expressions of the project sitting directly over it. (A MATCH on the other side of a join
-// never reaches this code -- the join path passes no project node, and such a query raises
-// 20105 today.) equalsFullTextMatchFunc carries the same assumption for eqmap.
+// Index parts are compared by normalized column display name, with the same-binding column
+// position taking precedence. That keeps qualified/unqualified copies stable across projection
+// remaps while not aliasing two columns with different positions in one scan. Two tables with
+// an identically named column would still look equal here, but both sides belong to the SAME
+// scan node: the served set is built from that scan's filters and projections, and callers sweep
+// only expressions of the project sitting directly over it. The join path uses the
+// binding-aware equalsFullTextMatchFuncSameTable variant instead.
 func (builder *QueryBuilder) isServedFullTextMatch(fn *plan.Function, served []fulltextServedMatch) bool {
 	if fn == nil || fn.Func == nil || fn.Func.ObjName != "fulltext_match" || len(fn.Args) < 2 {
 		return false
@@ -1739,8 +1800,9 @@ func (builder *QueryBuilder) isServedFullTextMatch(fn *plan.Function, served []f
 // equalsFullTextMatchFuncSameTable is equalsFullTextMatchFunc plus the requirement that the
 // index-part columns come from the SAME binding, i.e. the same table instance.
 //
-// equalsFullTextMatchFunc compares index parts by column NAME, which is sound while both sides
-// belong to one scan. Resolving a MATCH across the children of a JOIN breaks that assumption:
+// equalsFullTextMatchFunc compares index parts by normalized display name with a same-binding
+// position guard, which is sound while both sides belong to one scan. Resolving a MATCH across
+// the children of a JOIN breaks that assumption:
 // `match(a.body) against('hello')` and `match(b.body) against('hello')` differ only in the
 // binding tag of their column argument, so by name alone they look like the same question and
 // one table's relevance would be reported for the other's.
