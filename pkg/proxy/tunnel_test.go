@@ -1325,9 +1325,25 @@ func TestFinalFetchKeepsTransferBlockedUntilTerminator(t *testing.T) {
 	}
 }
 
-// Exercise the actual packet pipes and backend replacement. In particular, a
-// row that resembles an OK packet must reach the client before the pending
-// migration can replace the backend carrying the rest of the FETCH response.
+type finalFetchTransferClientConn struct {
+	ClientConn
+	replacement ServerConn
+	buildCalls  atomic.Int32
+	buildCalled chan struct{}
+}
+
+func (c *finalFetchTransferClientConn) BuildConnWithServer(context.Context, string) (ServerConn, error) {
+	c.buildCalls.Add(1)
+	select {
+	case c.buildCalled <- struct{}{}:
+	default:
+	}
+	return c.replacement, nil
+}
+
+// Exercise the real pending-transfer path while FETCH packets pass through
+// both pipes. A binary row that resembles OK must not admit transfer; only
+// the forwarded terminator may cause handleTransferIntent to replace the CN.
 func TestFinalFetchForwardingBeforeBackendReplacement(t *testing.T) {
 	for _, tc := range []struct {
 		name           string
@@ -1350,9 +1366,37 @@ func TestFinalFetchForwardingBeforeBackendReplacement(t *testing.T) {
 			runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
 			tun := newTunnel(ctx, runtime.DefaultRuntime().Logger(), newCounterSet())
 			defer func() { require.NoError(t, tun.Close()) }()
-			cc := newMockClientConn(clientProxy, "fetch", clientInfo{}, nil, tun)
-			require.NoError(t, tun.run(cc, newMockServerConn(oldProxy)))
+			cc := &finalFetchTransferClientConn{
+				ClientConn:  newMockClientConn(clientProxy, "fetch", clientInfo{}, nil, tun),
+				replacement: newMockServerConn(newProxy),
+				buildCalled: make(chan struct{}, 1),
+			}
+			tun.cc = cc
+			tun.mu.sc = newMockServerConn(oldProxy)
+			tun.mu.clientConn = newMySQLConn(connClientName, clientProxy, 0, tun.reqC, tun.respC, false, 1)
+			tun.mu.serverConn = newMySQLConn(connServerName, oldProxy, 0, tun.reqC, tun.respC, false, 2)
+			tun.mu.csp = tun.newPipe(pipeClientToServer, tun.mu.clientConn, tun.mu.serverConn)
+			tun.mu.scp = tun.newPipe(pipeServerToClient, tun.mu.serverConn, tun.mu.clientConn)
 			tun.clientDeprecatesEOF = tc.deprecatesEOF
+			tun.mu.started = true
+			firstAttemptDone := make(chan struct{})
+			secondAttemptDone := make(chan struct{})
+			releaseTerminator := make(chan struct{})
+			var releaseOnce sync.Once
+			defer releaseOnce.Do(func() { close(releaseTerminator) })
+			var responseIndex atomic.Int32
+			tun.mu.scp.testHelper.beforeSend = func() {
+				switch responseIndex.Add(1) {
+				case 2:
+					// Reaching the second packet means the first row's
+					// handleTransferIntent attempt has completed.
+					close(firstAttemptDone)
+				case 3:
+					close(secondAttemptDone)
+					<-releaseTerminator
+				}
+			}
+			require.NoError(t, tun.kickoff())
 			for _, conn := range []net.Conn{client, oldBackend, newBackend} {
 				require.NoError(t, conn.SetDeadline(time.Now().Add(10*time.Second)))
 			}
@@ -1379,27 +1423,48 @@ func TestFinalFetchForwardingBeforeBackendReplacement(t *testing.T) {
 			}
 
 			forwardRequest(oldBackend, makeStmtCommandPacket(frontend.COM_STMT_FETCH, 41, 2, 0, 0, 0))
+			tun.setTransferIntent(true)
+			defer tun.setTransferIntent(false)
 			firstRow := makeBinaryBigIntRow(528384)
 			for _, row := range [][]byte{firstRow, makeBinaryBigIntRow(1)} {
 				forwardResponse(oldBackend, row)
 				require.True(t, tun.hasInFlightClientRequest())
-				_, admitted := tun.admitTransfer(false)
-				require.False(t, admitted, "migration must not cut off FETCH rows")
 			}
+			select {
+			case <-firstAttemptDone:
+			case <-ctx.Done():
+				t.Fatal("the first row did not reach pending-transfer admission")
+			}
+			require.Zero(t, cc.buildCalls.Load(), "binary rows must not replace the backend")
 			terminalStatus := frontend.SERVER_QUERY_WAS_SLOW |
 				frontend.SERVER_STATUS_NO_GOOD_INDEX_USED | frontend.SERVER_STATUS_LAST_ROW_SENT
-			forwardResponse(oldBackend, tc.makeTerminator(terminalStatus))
+			terminator := tc.makeTerminator(terminalStatus)
+			writeDone := make(chan error, 1)
+			go func() { _, err := oldBackend.Write(terminator); writeDone <- err }()
+			select {
+			case <-secondAttemptDone:
+			case <-ctx.Done():
+				t.Fatal("the second row did not reach pending-transfer admission")
+			}
+			require.Zero(t, cc.buildCalls.Load(), "migration must wait for the FETCH terminator")
+			releaseOnce.Do(func() { close(releaseTerminator) })
+			gotTerminator := make([]byte, len(terminator))
+			_, err := io.ReadFull(client, gotTerminator)
+			require.NoError(t, err)
+			require.Equal(t, terminator, gotTerminator)
+			require.NoError(t, <-writeDone)
+			select {
+			case <-cc.buildCalled:
+			case <-ctx.Done():
+				t.Fatal("pending transfer did not run after the forwarded terminator")
+			}
+			require.Eventually(t, func() bool {
+				tun.mu.Lock()
+				defer tun.mu.Unlock()
+				return tun.mu.serverConn.Conn == newProxy
+			}, time.Second, time.Millisecond)
+			require.EqualValues(t, 1, cc.buildCalls.Load())
 			require.False(t, tun.hasInFlightClientRequest())
-
-			csp, admitted := tun.admitTransfer(false)
-			require.True(t, admitted, "migration must become possible after the forwarded terminator")
-			_, scp := tun.getPipes()
-			require.NoError(t, csp.pause(ctx))
-			require.NoError(t, scp.pause(ctx))
-			newSC := newMockServerConn(newProxy)
-			newConn := newMySQLConn(connServerName, newProxy, 0, nil, nil, false, 3)
-			require.NoError(t, tun.replaceServerConn(newConn, newSC, false))
-			require.NoError(t, tun.kickoff())
 
 			ping := makeSimplePacket("ping")
 			ping[4] = byte(frontend.COM_PING)
