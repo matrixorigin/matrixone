@@ -971,6 +971,12 @@ func (mp *MysqlProtocolImpl) ParseSendLongData(ctx context.Context, proc *proces
 
 func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
 	var err error
+	// The fixed part after the statement id contains the cursor flag and the
+	// four-byte iteration count. Check it before changing statement state; a
+	// zero-parameter EXECUTE has no later reads to catch a truncated count.
+	if pos < 0 || pos > len(data) || len(data)-pos < 5 {
+		return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
+	}
 	stmt.proc = proc
 	dcPrepare, ok := stmt.PreparePlan.GetDcl().Control.(*planPb.DataControl_Prepare)
 	if !ok {
@@ -1008,6 +1014,8 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 	pos += 4
 
 	if numParams > 0 {
+		paramTypes := stmt.ParamTypes
+		newParamTypes := false
 		var nullBitmaps []byte
 		nullBitmapLen := (numParams + 7) >> 3
 		nullBitmaps, pos, ok = mp.readCountOfBytes(data, pos, nullBitmapLen)
@@ -1021,15 +1029,15 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 		if !ok {
 			return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 		}
-		if newParamBoundFlag == 1 {
-
-			// Just the first StmtExecute packet contain parameters type,
-			// we need save it for further use.
-			stmt.ParamTypes, pos, ok = mp.readCountOfBytes(data, pos, numParams<<1)
-
+		if newParamBoundFlag != 0 {
+			// MySQL treats every nonzero flag as a new type vector. Decode into
+			// local state first so a malformed packet cannot discard the types
+			// saved by the previous successful EXECUTE.
+			paramTypes, pos, ok = mp.readCountOfBytes(data, pos, numParams<<1)
 			if !ok {
 				return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 			}
+			newParamTypes = true
 		}
 
 		// get paramters and set value to session variables
@@ -1048,12 +1056,12 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 				continue
 			}
 
-			if (i<<1)+1 >= len(stmt.ParamTypes) {
+			if (i<<1)+1 >= len(paramTypes) {
 				return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 
 			}
-			tp := stmt.ParamTypes[i<<1]
-			isUnsigned := (stmt.ParamTypes[(i<<1)+1] & 0x80) > 0
+			tp := paramTypes[i<<1]
+			isUnsigned := (paramTypes[(i<<1)+1] & 0x80) > 0
 
 			switch defines.MysqlType(tp) {
 			case defines.MYSQL_TYPE_NULL:
@@ -1236,6 +1244,9 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 			if err != nil {
 				return err
 			}
+		}
+		if newParamTypes {
+			stmt.ParamTypes = bytes.Clone(paramTypes)
 		}
 	}
 
