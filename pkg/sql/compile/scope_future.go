@@ -65,7 +65,7 @@ func submitBlockingFuture[T any](
 	op func() (T, error),
 ) (*scopeFuture[T], error) {
 	if op == nil {
-		return nil, errors.New("nil blocking future operation")
+		return nil, moerr.NewInternalErrorNoCtx("nil blocking future operation")
 	}
 	future := newScopeFuture[T](s, name+"-ready")
 	err := s.submitBlockingEventWithContext(name, func() {
@@ -115,10 +115,10 @@ func (f *scopeFuture[T]) complete(value T, err error) {
 // boundary rather than invoking user code on the caller or blocking worker.
 func (f *scopeFuture[T]) OnComplete(callback func(T, error)) error {
 	if f == nil {
-		return errors.New("nil scope future")
+		return moerr.NewInternalErrorNoCtx("nil scope future")
 	}
 	if callback == nil {
-		return errors.New("nil scope future callback")
+		return moerr.NewInternalErrorNoCtx("nil scope future callback")
 	}
 
 	f.mu.Lock()
@@ -156,7 +156,7 @@ func (f *scopeFuture[T]) dispatch(callback func(T, error), value T, err error) e
 func (f *scopeFuture[T]) Await(ctx context.Context) (T, error) {
 	var zero T
 	if f == nil {
-		return zero, errors.New("nil scope future")
+		return zero, moerr.NewInternalErrorNoCtx("nil scope future")
 	}
 	if ctx == nil {
 		ctx = context.Background()
@@ -193,7 +193,7 @@ func newScopeExecutionFuture(
 		return nil, moerr.NewInternalErrorNoCtx("nil compile for scope future")
 	}
 	if start == nil {
-		return nil, errors.New("nil scope future starter")
+		return nil, moerr.NewInternalErrorNoCtx("nil scope future starter")
 	}
 	scheduler := c.ensureScopeTaskScheduler(max(1, len(c.scopes)))
 	future := newScopeFuture[struct{}](scheduler, name+"-complete")
