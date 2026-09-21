@@ -97,6 +97,7 @@ func TestIssue28012And28013AcceptedCommitDuringStandaloneShutdown(t *testing.T) 
 	// Start the SQL deadline only after this test owns a running cluster.
 	faultEnabledHere = fault.Enable()
 	ctx, cancel = context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
 	sysDB := openIssue28012And28013DB(t, ctx, cluster, "dump:111", &dbs)
 	accountName := fmt.Sprintf("issue28012_%d", time.Now().UnixNano())
 	mustExecIssue28012And28013(t, ctx, sysDB, fmt.Sprintf(
