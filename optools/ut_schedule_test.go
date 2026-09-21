@@ -101,6 +101,27 @@ func scheduleHarnessWithMockTransform(t *testing.T, script, mock string, transfo
 	if err := os.WriteFile(filepath.Join(dir, "go"), []byte(mock), 0755); err != nil {
 		t.Fatal(err)
 	}
+	// The scheduler fixture has no repository package tree, so it cannot run
+	// the real dependency bootstrap. Simulate only the already-prepared
+	// pyarrow probe and pass every other Python invocation to the host
+	// interpreter so the existing report/heartbeat helpers keep their coverage.
+	python3, err := exec.LookPath("python3")
+	if err != nil {
+		python3 = ""
+	}
+	pythonStub := `#!/bin/bash
+if [[ "$#" == 2 && "$1" == -c && "$2" == "import pyarrow" ]]; then
+  exit 0
+fi
+if [[ -n "${MATRIXONE_TEST_REAL_PYTHON3:-}" ]]; then
+  exec "${MATRIXONE_TEST_REAL_PYTHON3}" "$@"
+fi
+echo "python3 is unavailable in the scheduler harness" >&2
+exit 127
+`
+	if err := os.WriteFile(filepath.Join(dir, "python3"), []byte(pythonStub), 0755); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "bash", "-c", script)
@@ -108,6 +129,9 @@ func scheduleHarnessWithMockTransform(t *testing.T, script, mock string, transfo
 	cmd.WaitDelay = 3 * time.Second
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "PATH="+dir+string(os.PathListSeparator)+os.Getenv("PATH"), "UT_WORKDIR="+root, "CASE_DIR="+root, "UT_LINK_PARALLEL=0")
+	if python3 != "" {
+		cmd.Env = append(cmd.Env, "MATRIXONE_TEST_REAL_PYTHON3="+python3)
+	}
 	cmd.Env = append(cmd.Env, variables...)
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() != nil {
