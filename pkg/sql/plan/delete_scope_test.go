@@ -86,6 +86,21 @@ func TestNormalizeDeleteOldValueExprPreservesStoredSpecialValue(t *testing.T) {
 	require.Equal(t, moSetCastIndexValueToIndexFun, normalized.GetF().GetFunc().GetObjName())
 	require.Equal(t, setRaw.GetCol(), normalized.GetF().GetArgs()[1].GetCol())
 	require.Empty(t, normalized.GetF().GetArgs()[1].Typ.Enumvalues)
+
+	emptySetType := planpb.Type{Id: int32(types.T_uint64), Enumvalues: ",a,b"}
+	emptySetRaw := &planpb.Expr{
+		Typ:  emptySetType,
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1, ColPos: 4}},
+	}
+	emptySetDisplay, err := makeEnumOrSetDisplayValue(ctx, emptySetRaw)
+	require.NoError(t, err)
+
+	normalized, err = normalizeDeleteOldValueExpr(ctx, emptySetDisplay, emptySetType)
+	require.NoError(t, err)
+	require.Equal(t, emptySetType, normalized.Typ)
+	require.Equal(t, moSetCastIndexValueToIndexFun, normalized.GetF().GetFunc().GetObjName())
+	require.Equal(t, emptySetRaw.GetCol(), normalized.GetF().GetArgs()[1].GetCol())
+	require.Empty(t, normalized.GetF().GetArgs()[1].Typ.Enumvalues)
 }
 
 func TestNormalizeDeleteOldValueExprUsesFallbackCast(t *testing.T) {
@@ -155,6 +170,157 @@ func TestNormalizeDeleteOldValueProjectionFollowsOrderProjection(t *testing.T) {
 	require.Equal(t, enumType, builder.qry.Nodes[0].ProjectList[0].Typ)
 	require.Equal(t, raw.GetCol(), builder.qry.Nodes[0].ProjectList[0].GetCol())
 	require.Equal(t, enumType, builder.qry.Nodes[2].ProjectList[0].Typ)
+}
+
+func TestNormalizeDeleteOldValueProjectionRejectsInvalidMapping(t *testing.T) {
+	enumType := planpb.Type{Id: int32(types.T_enum), Enumvalues: "a,b"}
+	tableDef := &planpb.TableDef{Cols: []*planpb.ColDef{{Name: "status", Typ: enumType}}}
+	tests := []struct {
+		name        string
+		nodes       []*planpb.Node
+		nodeID      int32
+		tableDefs   []*planpb.TableDef
+		colName2Idx []map[string]int32
+		want        string
+	}{
+		{
+			name:   "invalid root node",
+			nodeID: 0,
+			want:   "projection is nil",
+		},
+		{
+			name:        "missing table mapping",
+			nodes:       []*planpb.Node{{NodeType: planpb.Node_TABLE_SCAN}},
+			tableDefs:   []*planpb.TableDef{tableDef},
+			colName2Idx: nil,
+			want:        "invalid table mapping",
+		},
+		{
+			name:        "nil table definition",
+			nodes:       []*planpb.Node{{NodeType: planpb.Node_TABLE_SCAN}},
+			tableDefs:   []*planpb.TableDef{nil},
+			colName2Idx: []map[string]int32{{}},
+			want:        "invalid table mapping",
+		},
+		{
+			name:        "missing special column",
+			nodes:       []*planpb.Node{{NodeType: planpb.Node_TABLE_SCAN}},
+			tableDefs:   []*planpb.TableDef{tableDef},
+			colName2Idx: []map[string]int32{{}},
+			want:        "cannot locate column status",
+		},
+		{
+			name:        "negative special column position",
+			nodes:       []*planpb.Node{{NodeType: planpb.Node_TABLE_SCAN}},
+			tableDefs:   []*planpb.TableDef{tableDef},
+			colName2Idx: []map[string]int32{{"status": -1}},
+			want:        "cannot locate column status",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := newMySQLSpecialOrderMock()
+			builder := NewQueryBuilder(planpb.Query_DELETE, &mock.ctxt, false, true)
+			builder.qry.Nodes = test.nodes
+
+			err := builder.normalizeDeleteOldValueProjection(
+				test.nodeID, test.tableDefs, test.colName2Idx,
+			)
+			require.ErrorContains(t, err, test.want)
+		})
+	}
+}
+
+func TestNormalizeDeleteOldValueProjectionRejectsInvalidChain(t *testing.T) {
+	enumType := planpb.Type{Id: int32(types.T_enum), Enumvalues: "a,b"}
+	forward := GetColExpr(enumType, 1, 0)
+	tests := []struct {
+		name   string
+		nodes  []*planpb.Node
+		colPos int32
+		want   string
+	}{
+		{
+			name: "project column out of range",
+			nodes: []*planpb.Node{{
+				NodeType:    planpb.Node_PROJECT,
+				ProjectList: []*planpb.Expr{forward},
+			}},
+			colPos: 1,
+			want:   "column is out of range",
+		},
+		{
+			name: "forward reference without child",
+			nodes: []*planpb.Node{{
+				NodeType:    planpb.Node_PROJECT,
+				ProjectList: []*planpb.Expr{forward},
+			}},
+			want: "reference is invalid",
+		},
+		{
+			name: "forward reference to invalid child",
+			nodes: []*planpb.Node{{
+				NodeType:    planpb.Node_PROJECT,
+				ProjectList: []*planpb.Expr{forward},
+				Children:    []int32{2},
+			}},
+			want: "chain is invalid",
+		},
+		{
+			name: "nil projected expression",
+			nodes: []*planpb.Node{{
+				NodeType:    planpb.Node_PROJECT,
+				ProjectList: []*planpb.Expr{nil},
+			}},
+			want: "projection is nil",
+		},
+		{
+			name: "non unary node",
+			nodes: []*planpb.Node{{
+				NodeType: planpb.Node_FILTER,
+				Children: []int32{0, 1},
+			}},
+			want: "chain is not unary",
+		},
+		{
+			name: "cyclic node chain",
+			nodes: []*planpb.Node{{
+				NodeType: planpb.Node_SORT,
+				Children: []int32{0},
+			}},
+			want: "chain is cyclic",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := newMySQLSpecialOrderMock()
+			builder := NewQueryBuilder(planpb.Query_DELETE, &mock.ctxt, false, true)
+			builder.qry.Nodes = test.nodes
+			visiting := make(map[int32]bool)
+
+			err := builder.normalizeDeleteOldValueProjectionAtNode(
+				0, test.colPos, enumType, visiting,
+			)
+			require.ErrorContains(t, err, test.want)
+			require.Empty(t, visiting, "failed traversal must release its recursion state")
+		})
+	}
+}
+
+func TestNormalizeDeleteOldValueProjectionAcceptsRawScan(t *testing.T) {
+	enumType := planpb.Type{Id: int32(types.T_enum), Enumvalues: "a,b"}
+	mock := newMySQLSpecialOrderMock()
+	builder := NewQueryBuilder(planpb.Query_DELETE, &mock.ctxt, false, true)
+	builder.qry.Nodes = []*planpb.Node{{NodeType: planpb.Node_TABLE_SCAN}}
+
+	err := builder.normalizeDeleteOldValueProjection(
+		0,
+		[]*planpb.TableDef{{Cols: []*planpb.ColDef{{Name: "status", Typ: enumType}}}},
+		[]map[string]int32{{"status": 0}},
+	)
+	require.NoError(t, err)
 }
 
 func TestIrregularIndexDeleteJoinIsRowScoped(t *testing.T) {
