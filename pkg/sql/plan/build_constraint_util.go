@@ -1054,8 +1054,11 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	}
 	for _, projectPos := range generatedColIdxs {
 		col := tableDef.Cols[projectPos]
-		genExpr := builder.applyGeneratedColumnAssignmentCast(
+		genExpr, err := builder.applyGeneratedColumnAssignmentCast(
 			DeepCopyExpr(col.GeneratedCol.Expr), builder.isInsertIgnore)
+		if err != nil {
+			return false, nil, nil, err
+		}
 		// Keep the raw generated expression for the materialization helper. The
 		// projected copy is inlined for the legacy row image, but replacing the
 		// raw expression itself would hide volatile default dependencies.

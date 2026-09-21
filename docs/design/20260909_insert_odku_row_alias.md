@@ -1,6 +1,6 @@
 # INSERT ODKU row aliases
 
-- Status: implementation complete within the restricted correlation contract; maintainer design approval and real BVT/QA remain open
+- Status: implementation complete with correlated ODKU subqueries fail-closed; maintainer design approval and real BVT/QA remain open
 - Tracking issue: https://github.com/matrixorigin/matrixone/issues/28160
 - Baseline for this rebase: `780ef933f2479aa1679faf13d08850ce6c8f7c2f` (current `main` fetched 2026-09-18)
 - Scope: MySQL-compatible `INSERT ... VALUES/SET ... AS row_alias[(column_alias, ...)]`
@@ -35,9 +35,10 @@ The decision log accepts these constraints from the approved plan:
    expose it. ODKU assignment targets always remain target-table columns.
 4. Subqueries resolve their local bindings first. An inner table alias may
    shadow the outer row alias. Direct row-alias and target references retain
-   their bound tags, but correlation is admitted only for a single-row
-   `VALUES`/`SET` source, the first ODKU assignment, and no nested subquery
-   input.
+   their bound tags, but target- or candidate-correlated ODKU subqueries are
+   rejected. The current join executor materializes a subquery build side
+   before the duplicate-key action is selected, so an ON predicate cannot
+   safely defer the complete UPDATE-only subtree.
 5. `VALUES(column)` keeps its existing semantics and diagnostics. The mapping
    is planner-owned and statement-local; it never mutates catalog
    `Name2ColIndex` or stores execution parameter values.
@@ -45,13 +46,11 @@ The decision log accepts these constraints from the approved plan:
    discards the unreachable update action. Complete expression traversal
    retains every nested prepared-parameter offset without evaluating a fake
    projection.
-7. For the admitted single-row shape, a correlated ODKU subquery is flattened
-   only after a statement-local, snapshot target lookup has been joined into
-   the candidate subtree. Its private binding tag supplies the old target row
-   to `CorrColRef`; the later DEDUP target scan remains the conflict arbiter.
-   Multi-row sources, a correlated expression after the first assignment, and
-   any nested correlated input are rejected before lowering. The same safety
-   rejection applies to legacy ODKU without a row alias; uncorrelated
+7. Target- or candidate-correlated ODKU subqueries are rejected before
+   lowering, including single-row `VALUES`/`SET`, multi-row sources,
+   `INSERT ... SELECT`, and later assignments. This is a deliberate
+   fail-closed boundary: the executor must first gain lazy evaluation for the
+   entire UPDATE-only subtree before this syntax can be admitted. Uncorrelated
    subqueries remain governed by the existing planner path.
 8. Generated-column `DEFAULT` trimming is applied to private statement/source
    copies. The original INSERT columns remain available for row-alias identity
@@ -119,13 +118,14 @@ wrong qualifier, leak an alias into another statement, or drop a parameter.
 The parser tests prove AST retention, formatting round trips, rejection of
 unsupported forms, SQL PREPARE parsing, and nested expression syntax. Planner
 unit tests prove identity remapping, generated-column positions, incoming vs
-target/correlated references, target lookup reachability in a real BuildPlan,
-the generated-DEFAULT no-key fallback, ambiguity/error checks, complete
-nested parameter-offset collection, and explicit rejection of multi-row,
-late-assignment, and nested correlated inputs. The distributed ODKU case
-proves shuffled columns, ordered assignments, repeated keys, SET aliases,
-shadowing, the admitted single-row correlation, CASE/NULL, repeated SQL
-PREPARE execution, and the generated-column fallback's final row image.
+target/correlated references, fail-closed rejection of every
+target/candidate-correlated subquery before lowering, the generated-DEFAULT
+no-key fallback, ambiguity/error checks, and complete nested
+parameter-offset collection. The distributed ODKU case proves shuffled
+columns, ordered assignments, repeated keys, SET aliases, shadowing,
+uncorrelated-subquery behavior, CASE/NULL, repeated SQL PREPARE execution,
+and the generated-column fallback's final row image; correlated subquery
+cases are expected to be rejected with the safety diagnostic.
 
 The final implementation report must keep the following separate:
 
@@ -150,9 +150,9 @@ Blocking findings: design approval, planner CGo/native artifacts, and real-servi
 Decision log: statement-local identity mapping; scoped binder; no new executor/wire/catalog state; explicit ROW/SELECT/REPLACE/OVERWRITE exclusions
 Decision: restricted implementation is complete; maintainer approval and
 independent CI/QA review are still required; no merge or issue-closure decision
-Implementation boundary: direct row aliases and the admitted single-row,
-first-assignment, non-nested correlation use the existing LEFT JOIN lookup
-below the candidate pipeline before flattening. Multi-row, late-assignment,
-and nested correlation remain explicit non-goals and are rejected. Full
-correlated-subquery execution is deferred.
+Implementation boundary: direct row aliases and uncorrelated subqueries use
+the existing planner path. Every target/candidate-correlated ODKU subquery is
+an explicit non-goal and is rejected before flattening. Full
+correlated-subquery execution is deferred until the executor can make the
+entire UPDATE-only subtree lazy.
 ```

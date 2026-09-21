@@ -41,8 +41,6 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	// INSERT ... SELECT.  Reset it before binding so a QueryBuilder cannot leak
 	// the proof into a later DML path (for example LOAD or REPLACE).
 	builder.insertInputKeysUnique = false
-	builder.insertInputSingleRow = false
-	builder.odkuTargetCorrelationGuard = nil
 	// INSERT IGNORE is independent from the duplicate-key action.  In
 	// particular, a non-empty ODKU list still selects UPDATE while its input and
 	// assignment conversions use the IGNORE policy.
@@ -2656,11 +2654,6 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	autoIncrementGeneratedColumn int32,
 	rowAliases ...*insertRowAliasBinding,
 ) (int32, error) {
-	previousTargetCorrelationGuard := builder.odkuTargetCorrelationGuard
-	defer func() {
-		builder.odkuTargetCorrelationGuard = previousTargetCorrelationGuard
-	}()
-
 	var rowAlias *insertRowAliasBinding
 	if len(rowAliases) > 0 {
 		rowAlias = rowAliases[0]
@@ -2714,10 +2707,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	selectNode := builder.qry.Nodes[lastNodeID]
 	selectTag := selectNode.BindingTags[0]
 	scanTag := builder.genNewBindTag()
-	// Correlated ODKU subqueries need the target row on the same input subtree
-	// that owns the candidate row. Bind depth-one target references to this
-	// private tag first; when such a reference is present, a target lookup join
-	// is added immediately before subquery flattening below.
+	// Bind depth-one target references to a private tag so the safety validator
+	// can distinguish target/candidate correlations from ordinary ODKU column
+	// references before any subquery is flattened.
 	targetCorrelationTag := builder.genNewBindTag()
 	updateExprs := make(map[string]*plan.Expr)
 	// Keep the executable assignment stream separate from updateExprs. SQL
@@ -3456,90 +3448,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			pkRoleIdxPos = firstUniqueIdxPos
 		}
 
-		// A correlated ODKU subquery is evaluated by an expression executor whose
-		// input is the DEDUP join pair. The target scan below is the DEDUP build
-		// sibling, so it cannot satisfy a depth-one correlation while the
-		// candidate-side subquery is flattened. Make a snapshot lookup of the
-		// resolved target row part of the candidate subtree first. The lookup is
-		// only needed for expressions with an actual target/candidate correlation;
-		// ordinary and uncorrelated ODKU expressions keep their existing two-input
-		// plan and cost.
-		var targetCorrelationGuard *plan.Expr
-		needsTargetCorrelationGuard := false
-		for _, updateExpr := range updateColExprList {
-			hasTargetCorrelation, hasCandidateCorrelation, _ :=
-				builder.analyzeOdkuCorrelatedSubquery(updateExpr, targetCorrelationTag, selectTag)
-			if hasTargetCorrelation || hasCandidateCorrelation {
-				needsTargetCorrelationGuard = true
-				break
-			}
-		}
-		if needsTargetCorrelationGuard {
-			lookupKeyPos := targetPkPos
-			if lookupKeyPos < 0 {
-				var ok bool
-				lookupKeyPos, ok = colName2Idx[tableDef.Name+"."+pkName]
-				if !ok {
-					return 0, moerr.NewInternalErrorf(builder.GetContext(),
-						"correlated ODKU subquery cannot locate target key projection %s", pkName)
-				}
-			}
-			lookupPkPos, ok := tableDef.Name2ColIndex[pkName]
-			if !ok || lookupPkPos < 0 || int(lookupPkPos) >= len(tableDef.Cols) {
-				return 0, moerr.NewInternalErrorf(builder.GetContext(),
-					"correlated ODKU subquery cannot locate target key column %s", pkName)
-			}
-			lookupTag := targetCorrelationTag
-			builder.addNameByColRef(lookupTag, tableDef)
-			lookupScanID := builder.appendNode(&plan.Node{
-				NodeType:     plan.Node_TABLE_SCAN,
-				TableDef:     tableDef,
-				ObjRef:       objRef,
-				BindingTags:  []int32{lookupTag},
-				ScanSnapshot: bindCtx.snapshot,
-			}, bindCtx)
-			pkTyp := tableDef.Cols[lookupPkPos].Typ
-			incomingPK := &plan.Expr{Typ: pkTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{
-				RelPos: selectTag, ColPos: lookupKeyPos,
-			}}}
-			lookupPK := &plan.Expr{Typ: pkTyp, Expr: &plan.Expr_Col{Col: &plan.ColRef{
-				RelPos: lookupTag, ColPos: lookupPkPos,
-			}}}
-			incomingPK, err = bindPrimaryKeyIdentityExpr(builder, incomingPK, pkTyp)
-			if err != nil {
-				return 0, err
-			}
-			lookupPK, err = bindPrimaryKeyIdentityExpr(builder, lookupPK, pkTyp)
-			if err != nil {
-				return 0, err
-			}
-			targetCorrelationGuard, err = BindFuncExprImplByPlanExpr(
-				builder.GetContext(), "isnotnull", []*plan.Expr{DeepCopyExpr(lookupPK)})
-			if err != nil {
-				return 0, err
-			}
-			lookupCond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
-				lookupPK, incomingPK,
-			})
-			if err != nil {
-				return 0, err
-			}
-			lastNodeID = builder.appendNode(&plan.Node{
-				NodeType: plan.Node_JOIN,
-				Children: []int32{lastNodeID, lookupScanID},
-				JoinType: plan.Node_LEFT,
-				OnList:   []*plan.Expr{lookupCond},
-			}, bindCtx)
-		}
-
 		for i, updateExpr := range updateColExprList {
-			builder.odkuTargetCorrelationGuard = nil
-			needsTargetProjection := targetCorrelationGuard != nil &&
-				(builder.exprHasTargetCorrelatedSubquery(updateExpr, targetCorrelationTag) ||
-					builder.exprHasCandidateCorrelatedSubquery(updateExpr, selectTag))
-			if needsTargetProjection {
-				builder.odkuTargetCorrelationGuard = targetCorrelationGuard
-			}
 			previousNodeID := lastNodeID
 			lastNodeID, updateExpr, err = builder.flattenSubqueries(lastNodeID, updateExpr, bindCtx)
 			if err != nil {
@@ -3549,23 +3458,13 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			updateExprs[tableDef.Cols[updateColIdxList[i]].Name] = updateExpr
 			if lastNodeID != previousNodeID {
 				oldSelectTag := selectTag
-				canonicalTargetTag := int32(0)
-				// Carry the private target lookup only while the expression being
-				// flattened actually needs it. Once a correlated assignment has
-				// been canonicalized, its target columns already live in the
-				// protected candidate row image. Re-reading targetCorrelationTag
-				// for a later uncorrelated assignment would point the new PROJECT
-				// at a tag that its child no longer exposes.
-				if needsTargetProjection {
-					canonicalTargetTag = targetCorrelationTag
-				}
 				lastNodeID, selectTag, selectNode, err = builder.canonicalizeInsertSubqueryInput(
 					bindCtx,
 					lastNodeID,
 					selectNode,
 					selectTag,
 					scanTag,
-					canonicalTargetTag,
+					0,
 					tableDef,
 					updateColExprList,
 				)
@@ -3585,7 +3484,6 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				}
 			}
 		}
-		builder.odkuTargetCorrelationGuard = nil
 
 		if !skipPkDedup && (!isFakePK || pkRoleIdxPos >= 0 || useTargetPk) {
 			builder.addNameByColRef(scanTag, tableDef)
@@ -4654,21 +4552,19 @@ func isOnDupIncomingColumn(expr *plan.Expr, selectTag, colPos int32) bool {
 	return col != nil && col.RelPos == selectTag && col.ColPos == colPos
 }
 
-// validateOndupCorrelatedSubqueries rejects correlated ODKU expressions whose
-// inputs cannot be gated by the duplicate-key action. A target or candidate
-// correlation is safe only for a single-row, first-assignment expression with
-// no nested subquery input.
+// validateOndupCorrelatedSubqueries rejects every target- or candidate-
+// correlated ODKU subquery. The flattened subquery input is materialized by
+// the join build side before duplicate-key arbitration; an ON predicate cannot
+// defer that work. Keep the feature fail-closed until the executor can make
+// the entire UPDATE-only subtree lazy.
 func (builder *QueryBuilder) validateOndupCorrelatedSubqueries(exprs []*plan.Expr, targetTag, candidateTag int32) error {
-	for i, expr := range exprs {
-		hasTargetCorrelation, hasCandidateCorrelation, hasNestedSubquery :=
+	for _, expr := range exprs {
+		hasTargetCorrelation, hasCandidateCorrelation, _ :=
 			builder.analyzeOdkuCorrelatedSubquery(expr, targetTag, candidateTag)
 		if !hasTargetCorrelation && !hasCandidateCorrelation {
 			continue
 		}
-		if i > 0 || !builder.insertInputSingleRow ||
-			hasNestedSubquery {
-			return moerr.NewUnsupportedDML(builder.GetContext(), odkuTargetCorrelatedSubqueryCause)
-		}
+		return moerr.NewUnsupportedDML(builder.GetContext(), odkuTargetCorrelatedSubqueryCause)
 	}
 	return nil
 }
@@ -5464,7 +5360,6 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 		err        error
 	)
 	builder.insertInputKeysUnique = false
-	builder.insertInputSingleRow = false
 
 	// var uniqueCheckOnAutoIncr string
 	var insertColumns []string
@@ -5515,7 +5410,6 @@ func (builder *QueryBuilder) initInsertReplaceStmt(bindCtx *BindContext, astRows
 	switch selectImpl := effectiveRows.Select.(type) {
 	// rewrite 'insert into tbl values (1,1)' to 'insert into tbl select * from (values row(1,1))'
 	case *tree.ValuesClause:
-		builder.insertInputSingleRow = len(selectImpl.Rows) == 1
 		isAllDefault := false
 		if selectImpl.Rows[0] == nil {
 			isAllDefault = true

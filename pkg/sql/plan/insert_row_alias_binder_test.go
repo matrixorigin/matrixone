@@ -134,67 +134,28 @@ func TestInsertRowAliasBinderUsesVisibleTargetForCorrelation(t *testing.T) {
 	require.Equal(t, int32(1), expr.GetCorr().ColPos)
 }
 
-func TestInsertRowAliasCorrelatedFromBuildPlanKeepsTargetLookupReachable(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+func TestInsertRowAliasCorrelatedSubqueryIsRejectedBeforeBuild(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(true), t,
 		"insert into constraint_test.dept(deptno, dname, loc) values (1, 'Sales', 'NY') as n(id, name, location) "+
-			"on duplicate key update loc = (select e.ename from constraint_test.emp as e "+
+			"on duplicate key update loc = (select cast(e.ename as json) from constraint_test.emp as e "+
 			"where e.deptno = constraint_test.dept.deptno)")
-	require.NoError(t, err)
-
-	targetScans := 0
-	for _, node := range logicPlan.GetQuery().Nodes {
-		if node.NodeType == planpb.Node_TABLE_SCAN && node.TableDef != nil && node.TableDef.Name == "dept" {
-			targetScans++
-		}
-	}
-	// The target arbitration and DEDUP scans are siblings.  A third target
-	// scan proves the correlated lookup was attached below the candidate side
-	// before flattening the scalar subquery.
-	require.GreaterOrEqual(t, targetScans, 3)
+	require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause)
 }
 
-func TestInsertRowAliasCorrelatedScalarJoinGuardsNonConflict(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+func TestInsertRowAliasTargetCorrelatedSubqueryIsRejectedBeforeBuild(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(true), t,
 		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') as n(id, name, location) "+
 			"on duplicate key update loc = (select e.ename from constraint_test.emp as e "+
 			"where e.deptno = coalesce(constraint_test.dept.deptno, 0))")
-	require.NoError(t, err)
-
-	guardedScalarJoin := false
-	for _, node := range logicPlan.GetQuery().Nodes {
-		if node.NodeType != planpb.Node_JOIN || node.JoinType != planpb.Node_SINGLE {
-			continue
-		}
-		for _, predicate := range node.OnList {
-			if exprContainsFunc(predicate, "isnotnull") {
-				guardedScalarJoin = true
-			}
-		}
-	}
-	require.True(t, guardedScalarJoin,
-		"target-correlated scalar ODKU subquery must be gated by the target lookup match")
+	require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause)
 }
 
-func TestInsertRowAliasCandidateCorrelatedScalarJoinGuardsNonConflict(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+func TestInsertRowAliasCandidateCorrelatedSubqueryIsRejectedBeforeBuild(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(true), t,
 		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') as n(id, name, location) "+
 			"on duplicate key update loc = (select e.ename from constraint_test.emp as e "+
 			"where e.deptno = n.id)")
-	require.NoError(t, err)
-
-	guardedScalarJoin := false
-	for _, node := range logicPlan.GetQuery().Nodes {
-		if node.NodeType != planpb.Node_JOIN || node.JoinType != planpb.Node_SINGLE {
-			continue
-		}
-		for _, predicate := range node.OnList {
-			if exprContainsFunc(predicate, "isnotnull") {
-				guardedScalarJoin = true
-			}
-		}
-	}
-	require.True(t, guardedScalarJoin,
-		"candidate-correlated scalar ODKU subquery must be gated by the target lookup match")
+	require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause)
 }
 
 func TestInsertRowAliasCandidateCorrelatedRejectsMultiRowInput(t *testing.T) {
@@ -238,44 +199,20 @@ func TestInsertRowAliasCorrelatedRejectsMultiRowInput(t *testing.T) {
 	require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause)
 }
 
-func TestInsertRowAliasCorrelatedFromBuildPlanWithUniqueConflict(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+func TestInsertRowAliasTargetCorrelatedSubqueryWithUniqueConflictIsRejected(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(true), t,
 		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') as n(id, name, location) "+
 			"on duplicate key update loc = (select e.ename from constraint_test.emp as e "+
 			"where e.deptno = constraint_test.dept.deptno)")
-	require.NoError(t, err)
-
-	var targetArbiter, targetLookup bool
-	for _, node := range logicPlan.GetQuery().Nodes {
-		if node.NodeType == planpb.Node_PRE_INSERT_UK && node.PreInsertUkCtx.GetOdkuTargetArbitration() {
-			targetArbiter = true
-		}
-		if node.NodeType == planpb.Node_TABLE_SCAN && node.TableDef != nil && node.TableDef.Name == "dept" {
-			targetLookup = true
-		}
-	}
-	require.True(t, targetArbiter)
-	require.True(t, targetLookup)
+	require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause)
 }
 
-func TestInsertRowAliasCorrelatedFromBuildPlanSupportsFakePrimaryTarget(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+func TestInsertRowAliasTargetCorrelatedSubqueryWithFakePrimaryIsRejected(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(true), t,
 		"insert into constraint_test.fake_pk_t(a, b) values (1, 'x') as n(k, v) "+
 			"on duplicate key update b = (select e.ename from constraint_test.emp as e "+
 			"where e.deptno = constraint_test.fake_pk_t.a)")
-	require.NoError(t, err)
-
-	var targetArbiter, targetLookup bool
-	for _, node := range logicPlan.GetQuery().Nodes {
-		if node.NodeType == planpb.Node_PRE_INSERT_UK && node.PreInsertUkCtx.GetOdkuTargetArbitration() {
-			targetArbiter = true
-		}
-		if node.NodeType == planpb.Node_TABLE_SCAN && node.TableDef != nil && node.TableDef.Name == "fake_pk_t" {
-			targetLookup = true
-		}
-	}
-	require.True(t, targetArbiter)
-	require.True(t, targetLookup)
+	require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause)
 }
 
 func TestInsertRowAliasNestedCorrelationIsRejected(t *testing.T) {
@@ -448,12 +385,11 @@ func TestInsertRowAliasUncorrelatedScalarSubqueryDoesNotAddTargetLookup(t *testi
 }
 
 func TestInsertRowAliasTargetCorrelationThenUncorrelatedSubqueryKeepsBindings(t *testing.T) {
-	logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+	_, err := runOneStmt(NewMockOptimizer(true), t,
 		"insert into constraint_test.emp(empno, ename, job, sal, comm) values (999, 'Sales', 'X', 1, 2) as n(id, name, role, salary, commission) "+
 			"on duplicate key update sal = (select max(e.sal) from constraint_test.emp as e "+
 			"where e.empno = constraint_test.emp.empno), comm = (select max(e.sal) from constraint_test.emp as e)")
-	require.NoError(t, err)
-	require.NotNil(t, logicPlan)
+	require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause)
 }
 
 func TestInsertRowAliasBinderRejectsAmbiguousAndInvalidNames(t *testing.T) {

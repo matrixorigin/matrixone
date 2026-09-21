@@ -230,54 +230,59 @@ create table t_odku_scope_source (x int primary key, y int);
 insert into t_odku_scope_source values (1, 70);
 delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 0);
+-- Correlated ODKU subqueries are fail-closed until the UPDATE-only subtree can
+-- be evaluated lazily after duplicate-key arbitration.
+-- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
 insert into t_odku_row_alias values (1, 5, 0) as n(x, y, z) on duplicate key update b = (select n.y + t_odku_row_alias.a from t_odku_scope_source as n where n.x = t_odku_row_alias.id);
-select * from t_odku_row_alias order by id;
 
--- A later uncorrelated scalar must keep using the remapped candidate row after
--- the first assignment has consumed the private target lookup.
+-- A correlated assignment followed by an uncorrelated scalar is rejected as a
+-- whole statement; no earlier assignment may make the unsafe subtree visible.
 delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 0);
+-- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
 insert into t_odku_row_alias values (1, 5, 0) as n(x, y, z) on duplicate key update a = (select s.y + t_odku_row_alias.a from t_odku_scope_source as s where s.x = t_odku_row_alias.id), b = (select max(s.y) from t_odku_scope_source as s);
-select * from t_odku_row_alias order by id;
 
--- A target-correlated subquery must not read a stale target snapshot after an
--- earlier ordered assignment or across input rows that can hit the same target.
+-- Target-correlated subqueries are rejected before they can read a stale
+-- target snapshot after an earlier ordered assignment.
 delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 0);
+-- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
 insert into t_odku_row_alias values (1, 5, 0) as n(x, y, z) on duplicate key update a = t_odku_row_alias.a + 1, b = (select n.y + t_odku_row_alias.a from t_odku_scope_source as n where n.x = t_odku_row_alias.id);
 
 delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 0);
+-- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
 insert into t_odku_row_alias values (1, 5, 0), (1, 6, 0) as n(x, y, z) on duplicate key update b = (select n.y + t_odku_row_alias.a from t_odku_scope_source as n where n.x = t_odku_row_alias.id);
 
 delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 0);
+-- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
 insert into t_odku_row_alias (id, a, b) select 1, 5, 0 on duplicate key update b = (select s.y + t_odku_row_alias.a from t_odku_scope_source as s where s.x = t_odku_row_alias.id);
 
--- The target row must be available to a correlated subquery below the
--- candidate pipeline, even when the source alias does not shadow the row alias.
+-- A target-correlated subquery is rejected even when the source alias does not
+-- shadow the row alias; the whole UPDATE-only subtree must remain unevaluated.
 delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 100);
+-- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
 insert into t_odku_row_alias values (1, 5, 0) as n on duplicate key update b = (select s.y from t_odku_scope_source as s where s.x = t_odku_row_alias.id);
-select * from t_odku_row_alias order by id;
 
--- A scalar UPDATE expression must not run for a non-conflicting insert. The
--- target lookup is NULL, so this otherwise multi-row scalar result is unused.
+-- A scalar UPDATE expression must not run for a non-conflicting insert. Since
+-- the current executor cannot defer the whole RHS subtree, reject it before
+-- planning rather than relying on a target-match predicate.
 drop table if exists t_odku_scope_multi;
 create table t_odku_scope_multi (x int, y int);
 insert into t_odku_scope_multi values (0, 10), (0, 20);
 delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 0);
+-- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
 insert into t_odku_row_alias values (2, 5, 0) as n on duplicate key update b = (select s.y from t_odku_scope_multi as s where s.x = coalesce(t_odku_row_alias.id, 0));
-select * from t_odku_row_alias order by id;
 
--- Candidate-row correlation must also be protected from pre-DEDUP scalar
--- evaluation when the candidate row does not conflict.
+-- Candidate-row correlation is rejected for the same pre-DEDUP safety reason.
 insert into t_odku_scope_multi values (2, 30), (2, 40);
 delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 0);
+-- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
 insert into t_odku_row_alias values (2, 5, 0) as n on duplicate key update b = (select s.y from t_odku_scope_multi as s where s.x = n.id);
-select * from t_odku_row_alias order by id;
 
 -- A candidate-correlated scalar cannot be evaluated safely for a multi-row
 -- candidate input before DEDUP selects each row's duplicate-key action.
@@ -316,8 +321,8 @@ select * from t_odku_row_alias order by id;
 
 delete from t_odku_row_alias;
 insert into t_odku_row_alias values (1, 10, 0);
+-- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
 insert into t_odku_row_alias values (1, 5, 0) as n(x, y, z) on duplicate key update b = (select n.y + s.y from t_odku_scope_source as s where s.x = n.x);
-select * from t_odku_row_alias order by id;
 drop table t_odku_scope_source;
 
 delete from t_odku_row_alias;
