@@ -399,6 +399,13 @@ func soundexReturnType(parameters []types.Type) types.Type {
 	}
 
 	source := parameters[0]
+	if types.StaticStringDomain(source) == types.StringDomainBinary {
+		bound := declaredStringByteBound(source)
+		if !bound.unknown && bound.bytes < 4 {
+			bound.bytes = 4
+		}
+		return binaryStringResultType(bound)
+	}
 	if (source.Oid != types.T_char && source.Oid != types.T_varchar && source.Oid != types.T_text) || source.Width <= 0 {
 		return types.NewWithCharset(types.T_text, types.MaxLongTextLen, 0, types.CharsetUTF8)
 	}

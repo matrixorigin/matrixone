@@ -707,17 +707,18 @@ func (s *service) SessionMgr() *queryservice.SessionManager {
 	return s.sessionMgr
 }
 
-func (s *service) CheckTenantUpgrade(_ context.Context, tenantID int64) error {
+func (s *service) CheckTenantUpgrade(ctx context.Context, tenantID int64) error {
 	s.bootstrapMu.RLock()
 	defer s.bootstrapMu.RUnlock()
 	if s.bootstrapService == nil {
 		return moerr.NewInvalidStateNoCtx("bootstrap service is closed")
 	}
-	finalVersion := s.bootstrapService.GetFinalVersion()
 	tenantFetchFunc := func() (int32, string, error) {
-		return int32(tenantID), finalVersion, nil
+		// Bootstrap reads the account's persisted version. The CN's final
+		// version does not describe accounts created by another, older CN.
+		return int32(tenantID), "", nil
 	}
-	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*30, moerr.CauseCheckTenantUpgrade)
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Second*30, moerr.CauseCheckTenantUpgrade)
 	defer cancel()
 	if _, err := s.bootstrapService.MaybeUpgradeTenant(ctx, tenantFetchFunc, nil); err != nil {
 		return moerr.AttachCause(ctx, err)

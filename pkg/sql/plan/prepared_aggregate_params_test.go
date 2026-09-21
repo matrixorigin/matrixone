@@ -62,6 +62,90 @@ func TestPreparedPercentileParameters(t *testing.T) {
 	require.ErrorContains(t, err, "non-null constant or parameter")
 }
 
+func TestPreparedPercentileParameterExpressions(t *testing.T) {
+	for _, sql := range []string{
+		"select approx_percentile(n_nationkey, ? / 100.0) from nation",
+		"select approx_percentile((? + 5) / 100.0) within group (order by n_nationkey desc) from nation",
+		"select percentile_cont(cast(? as double) / 100.0) within group (order by n_nationkey) from nation",
+		"select percentile_disc((? + ?) / 100.0) within group (order by n_name) from nation",
+		"select percentile_disc(-(-? / 100.0)) within group (order by n_name) over () from nation",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			prepare := buildPreparedAggregatePlan(t, sql)
+			require.NotEmpty(t, preparedParamPositions(prepare))
+			require.True(t, PreparedPlanHasPercentileParams(prepare.Plan))
+		})
+	}
+}
+
+func TestPreparedPercentilePreservesSupportedDecimalConfigType(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: NameApproxPercentile,
+			sql:  "select approx_percentile(n_nationkey, cast(? as decimal(19,18))) from nation",
+		},
+		{
+			name: NameApproxPercentile,
+			sql:  "select approx_percentile(null, cast(? as decimal(19,18)))",
+		},
+		{
+			name: NamePercentileCont,
+			sql:  "select percentile_cont(cast(? as decimal(19,18))) within group (order by n_nationkey) from nation",
+		},
+		{
+			name: NamePercentileDisc,
+			sql:  "select percentile_disc(cast(? as decimal(19,18))) within group (order by n_nationkey) from nation",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			prepare := buildPreparedAggregatePlan(t, tc.sql)
+			fn := findAggregateByName(prepare.Plan.GetQuery(), tc.name)
+			require.NotNil(t, fn)
+			require.Len(t, fn.Args, 2)
+			percentile := fn.Args[1]
+			require.Equal(t, int32(types.T_decimal128), percentile.Typ.Id)
+			require.Equal(t, int32(19), percentile.Typ.Width)
+			require.Equal(t, int32(18), percentile.Typ.Scale)
+			require.Equal(t, "cast", percentile.GetF().GetFunc().GetObjName())
+
+			filled, err := FillValuesOfParamsInPlan(
+				context.Background(), prepare.Plan, []any{"0.500000000000000001"})
+			require.NoError(t, err)
+			filledFn := findPlanFunctionExpr(filled, tc.name)
+			require.NotNil(t, filledFn)
+			filledPercentile := filledFn.GetF().Args[1]
+			require.Equal(t, int32(types.T_decimal128), filledPercentile.Typ.Id)
+			require.Equal(t, int32(19), filledPercentile.Typ.Width)
+			require.Equal(t, int32(18), filledPercentile.Typ.Scale)
+			require.Equal(t, "cast", filledPercentile.GetF().GetFunc().GetObjName())
+			require.Equal(t, int32(types.T_text), filledPercentile.GetF().Args[0].Typ.Id)
+
+			originalFn := findAggregateByName(prepare.Plan.GetQuery(), tc.name)
+			require.Equal(t, percentile, originalFn.Args[1],
+				"filling one execution must not mutate the cached plan")
+		})
+	}
+}
+
+func TestPreparedPercentileParameterExpressionsRejectRowDependentOrArbitraryFunctions(t *testing.T) {
+	for _, sql := range []string{
+		"prepare stmt_col from 'select percentile_cont((? + n_regionkey) / 100.0) within group (order by n_nationkey) from nation'",
+		"prepare stmt_subquery from 'select percentile_cont((? + (select 1)) / 100.0) within group (order by n_nationkey) from nation'",
+		"prepare stmt_function from 'select percentile_cont(abs(?) / 100.0) within group (order by n_nationkey) from nation'",
+		"prepare stmt_volatile from 'select percentile_cont((? + rand()) / 100.0) within group (order by n_nationkey) from nation'",
+		"prepare stmt_variable from 'select percentile_cont((? + @percentile_offset) / 100.0) within group (order by n_nationkey) from nation'",
+		"prepare stmt_string_cast from 'select percentile_cont(cast(? as char) / 100.0) within group (order by n_nationkey) from nation'",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			_, err := runOneStmt(NewMockOptimizer(false), t, sql)
+			require.ErrorContains(t, err, "non-null constant or parameter")
+		})
+	}
+}
+
 func collectParamPositions(expr *planpb.Expr, positions map[int32]struct{}) {
 	if expr == nil {
 		return

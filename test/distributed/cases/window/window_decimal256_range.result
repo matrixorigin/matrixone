@@ -1,0 +1,90 @@
+drop database if exists window_decimal256_range;
+create database window_decimal256_range;
+use window_decimal256_range;
+select count(*) over (order by 1.25 range between 1 preceding and current row) as n;
+➤ n[-5,64,0]  𝄀
+1
+select count(*) over (order by 1.25000000000000000000000000000000000000 range between 1 preceding and current row) as n;
+➤ n[-5,64,0]  𝄀
+1
+create table t(id int primary key, k decimal(65,2), v int);
+insert into t values (1,0,10),(2,1.25,20),(3,1.25,30),(4,3,40),(5,null,50),(6,null,60);
+select id,
+count(*) over (order by 1.25000000000000000000000000000000000000 range between 1 following and 2 following) as empty_n,
+count(*) over (partition by id order by 1.25000000000000000000000000000000000000 range between 1 preceding and 0 following) as singleton_n
+from t order by id;
+➤ id[4,32,0]  ¦  empty_n[-5,64,0]  ¦  singleton_n[-5,64,0]  𝄀
+1  ¦  0  ¦  1  𝄀
+2  ¦  0  ¦  1  𝄀
+3  ¦  0  ¦  1  𝄀
+4  ¦  0  ¦  1  𝄀
+5  ¦  0  ¦  1  𝄀
+6  ¦  0  ¦  1
+select id,
+count(*) over (order by k range between 1.25 preceding and current row) as n,
+sum(v) over (order by k range between 1.25 preceding and current row) as s,
+cast(first_value(k) over (order by k range between 1.25 preceding and current row) as decimal(10,2)) as first_k
+from t order by id;
+➤ id[4,32,0]  ¦  n[-5,64,0]  ¦  s[3,38,0]  ¦  first_k[3,10,2]  𝄀
+1  ¦  1  ¦  10  ¦  0.00  𝄀
+2  ¦  3  ¦  60  ¦  0.00  𝄀
+3  ¦  3  ¦  60  ¦  0.00  𝄀
+4  ¦  1  ¦  40  ¦  3.00  𝄀
+5  ¦  2  ¦  110  ¦  null  𝄀
+6  ¦  2  ¦  110  ¦  null
+select id,
+count(*) over (order by k desc range between 1.75 preceding and current row) as n,
+sum(v) over (order by k desc range between 1.75 preceding and current row) as s
+from t order by id;
+➤ id[4,32,0]  ¦  n[-5,64,0]  ¦  s[3,38,0]  𝄀
+1  ¦  3  ¦  60  𝄀
+2  ¦  3  ¦  90  𝄀
+3  ¦  3  ¦  90  𝄀
+4  ¦  1  ¦  40  𝄀
+5  ¦  2  ¦  110  𝄀
+6  ¦  2  ¦  110
+select id, count(*) over (order by k range between 0 preceding and 0 following) as peers
+from t order by id;
+➤ id[4,32,0]  ¦  peers[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  2  𝄀
+3  ¦  2  𝄀
+4  ¦  1  𝄀
+5  ¦  2  𝄀
+6  ¦  2
+prepare decimal_range from 'select id, sum(v) over (order by k range between ? preceding and current row) as s from t order by id';
+set @decimal_offset = 1.25;
+execute decimal_range using @decimal_offset;
+➤ id[4,32,0]  ¦  s[3,38,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  60  𝄀
+3  ¦  60  𝄀
+4  ¦  40  𝄀
+5  ¦  110  𝄀
+6  ¦  110
+set @decimal_offset = -1;
+execute decimal_range using @decimal_offset;
+invalid input: window RANGE frame bound must be a finite non-negative numeric value
+set @decimal_offset = null;
+execute decimal_range using @decimal_offset;
+invalid input: window frame bound cannot be NULL
+set @decimal_offset = 0;
+execute decimal_range using @decimal_offset;
+➤ id[4,32,0]  ¦  s[3,38,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  50  𝄀
+3  ¦  50  𝄀
+4  ¦  40  𝄀
+5  ¦  110  𝄀
+6  ¦  110
+set @decimal_offset = 3;
+execute decimal_range using @decimal_offset;
+➤ id[4,32,0]  ¦  s[3,38,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  60  𝄀
+3  ¦  60  𝄀
+4  ¦  100  𝄀
+5  ¦  110  𝄀
+6  ¦  110
+deallocate prepare decimal_range;
+drop database window_decimal256_range;

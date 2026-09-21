@@ -671,10 +671,10 @@ from
 information_schema.statistics where table_schema = 'db6' and table_name = 't13'
 order by index_name, seq_in_index;
 index_name    column_name    index_type
-PRIMARY    a    <empty>
+PRIMARY    a    BTREE
 ftidx    b    fulltext
 ftidx    c    fulltext
-idx_b    b    <empty>
-uk_d    d    <empty>
+idx_b    b    BTREE
+uk_d    d    BTREE
 drop table t13;
 drop database db6;

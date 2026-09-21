@@ -4409,6 +4409,13 @@ func TestCastJsonToJsonOverloadResolution(t *testing.T) {
 	require.NoError(t, err)
 }
 
+func TestCastJsonToBlobOverloadResolution(t *testing.T) {
+	require.True(t, IfTypeCastSupported(types.T_json, types.T_blob))
+
+	_, err := GetFunctionByName(context.Background(), "cast", []types.Type{types.T_json.ToType(), types.T_blob.ToType()})
+	require.NoError(t, err)
+}
+
 func TestCastToJSONSupportedTypes(t *testing.T) {
 	for _, source := range []types.T{
 		types.T_any,

@@ -39,6 +39,7 @@ type windowFuncExprBinder interface {
 	bindPreparedNumericFuncExpr(string, []tree.Expr, int32) (*plan.Expr, error)
 	bindPreparedWindowFrameBound(tree.Expr, *plan.Type) (*plan.Expr, error)
 	makeFrameConstValue(tree.Expr, *plan.Type) (*plan.Expr, error)
+	mysqlSpecialOrderKey(*plan.Expr, *plan.Type) (*plan.Expr, error)
 	GetContext() context.Context
 }
 
@@ -122,7 +123,7 @@ func isGroupConcatAggregateExpr(astExpr tree.Expr) bool {
 		return false
 	}
 	name := funcExpr.FuncName.Compare()
-	return strings.EqualFold(name, NameGroupConcat)
+	return strings.EqualFold(name, NameGroupConcat) || strings.EqualFold(name, "listagg")
 }
 
 func semanticNodeKey(node tree.NodeFormatter) string {
@@ -908,7 +909,7 @@ func bindWindowSpec(
 					expr = fn.Args[1]
 				}
 			} else if storageType := ctx.mysqlSpecialOrderTypeForExpr(expr); storageType != nil {
-				expr, err = makeMySQLSpecialOrderKey(b.GetContext(), expr, storageType)
+				expr, err = b.mysqlSpecialOrderKey(expr, storageType)
 				if err != nil {
 					return nil, err
 				}
@@ -1278,7 +1279,24 @@ func makeWindowFrameConstValue(
 	if err != nil {
 		return nil, err
 	}
+	if vec.GetType().Oid == types.T_decimal256 {
+		// Literal has no Decimal256 scalar variant. Keep the exact coefficient
+		// in the existing vector-literal representation, owned independently of
+		// the expression executor, rather than publishing a nil scalar literal.
+		data, err := vec.MarshalBinary()
+		if err != nil {
+			return nil, err
+		}
+		requiresDecimal, err := plan.RequiresMORPCVersion89DecimalLiteralSemantics(e)
+		if err != nil {
+			return nil, err
+		}
+		return &plan.Expr{Typ: *typ, Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{
+			Len: int32(vec.Length()), Data: data, DecimalLiteralRequiresV82: requiresDecimal,
+		}}}, nil
+	}
 	c := rule.GetConstantValue(vec, false, 0)
+	rule.PreserveFoldedDecimalLiteralSemantics(e, c)
 
 	return &plan.Expr{
 		Typ:  *typ,
@@ -1309,6 +1327,16 @@ func resetWindowIntervalExpr(bindCtx context.Context, proc *process.Process, e *
 
 	isTimeUnit := intervalType == types.Second || intervalType == types.Minute ||
 		intervalType == types.Hour || intervalType == types.Day
+	if isTimeUnit {
+		if finalValue, negative, handled, err := normalizeDecimalIntervalValue(e1, intervalType); err != nil {
+			return nil, err
+		} else if handled {
+			if negative {
+				return nil, newWindowFrameIllegalError(bindCtx)
+			}
+			return setWindowIntervalValue(bindCtx, e, finalValue, types.MicroSecond)
+		}
+	}
 	isDecimalOrFloat := e1.Typ.Id == int32(types.T_decimal64) ||
 		e1.Typ.Id == int32(types.T_decimal128) || e1.Typ.Id == int32(types.T_float32) ||
 		e1.Typ.Id == int32(types.T_float64)
@@ -1399,7 +1427,10 @@ func setWindowIntervalValue(
 		return nil, newWindowFrameIllegalError(bindCtx)
 	}
 
-	e.Expr.(*plan.Expr_List).List.List[0] = makePlan2Int64ConstExprWithType(value)
+	list := e.Expr.(*plan.Expr_List).List.List
+	valueExpr := makePlan2Int64ConstExprWithType(value)
+	valueExpr.GetLit().DecimalLiteralRequiresV82 = decimalIntervalRequiresProtocol(list[0])
+	list[0] = valueExpr
 	e.Expr.(*plan.Expr_List).List.List[1] = makePlan2Int64ConstExprWithType(int64(intervalType))
 	return e, nil
 }
