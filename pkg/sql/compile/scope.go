@@ -30,7 +30,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -993,77 +992,23 @@ func reportParallelScopeBuildCancellation(
 
 // ParallelRun run a pipeline in parallel.
 func (s *Scope) ParallelRun(c *Compile) (err error) {
-	var parallelScope *Scope
-
-	// Warning: It is possible that an error occurs before the pipeline has executed prepare, triggering
-	// defer `pipeline.Cleanup()`, and execute `reset()` and `free()`. If the operator analyzer is not
-	// instantiated and there is a statistical operation in reset, a null pointer will occur
-	defer func() {
-		if e := recover(); e != nil {
-			err = moerr.ConvertPanicError(s.Proc.Ctx, e)
-			c.proc.Error(c.proc.Ctx, "panic in scope run",
-				zap.String("sql", commonutil.Abbreviate(c.sql, 500)),
-				zap.String("error", err.Error()))
-		}
-
-		// if codes run here, it means some error happens during build the parallel scope.
-		// we should do clean work for source-scope to avoid receiver hung.
-		if parallelScope == nil {
-			// ParallelRun owns the source operator until construction publishes a
-			// parallel scope. StopSending can cancel the pipeline while reader
-			// construction is still in flight, so classify that cancellation at
-			// this boundary before cleanup chooses EventEnd versus EventError.
-			rawErr := err
-			queryCtx := scopeRunQueryContext(s.Proc)
-			var normalized bool
-			err, normalized = normalizeScopeRunError(
-				err,
-				s.Proc.Ctx,
-				queryCtx,
-			)
-			if isScopeCancellationError(rawErr) {
-				reportParallelScopeBuildCancellation(s, rawErr, err, normalized, queryCtx)
-			}
-			pipeline.NewMerge(s.RootOp).Cleanup(s.Proc, err != nil, c.isPrepare, err)
-		}
-	}()
-
-	switch {
-	// probability 1: it's a JOIN pipeline.
-	//case s.IsJoin:
-	//parallelScope, err = buildJoinParallelRun(s, c)
-	//fmt.Println(DebugShowScopes([]*Scope{parallelScope}))
-
-	// probability 2: it's a LOAD pipeline.
-	case s.IsLoad:
-		parallelScope, err = buildLoadParallelRun(s, c)
-
-	// probability 3: it's a SCAN pipeline.
-	case s.isTableScan():
-		parallelScope, err = buildScanParallelRun(s, c)
-		//fmt.Println("after scan parallel run", DebugShowScopes([]*Scope{parallelScope}, OldLevel))
-
-	// probability 3: src op is tablefunction
-	case s.IsTbFunc:
-		parallelScope, err = buildLoadParallelRun(s, c)
-
-	// others.
-	default:
-		parallelScope, err = s, nil
+	if s == nil {
+		return nil
+	}
+	if c == nil {
+		return moerr.NewInternalErrorNoCtx("nil compile for ParallelRun")
 	}
 
-	if err != nil {
+	// Keep this exported synchronous API as a compatibility boundary only. The
+	// actual execution is delegated to the same asynchronous construction and
+	// continuation path used by MergeRun; no second blocking VM implementation
+	// is allowed to grow here.
+	result := make(chan error, 1)
+	if err := s.parallelRunAsync(c, func(runErr error) { result <- runErr }); err != nil {
 		return err
 	}
-
-	if parallelScope == s {
-		//s.ScopeAnalyzer.Stop()
-		return parallelScope.Run(c)
-	}
-
-	s.ScopeAnalyzer.Stop()
-	setContextForParallelScope(parallelScope, s.Proc.Ctx, s.Proc.Cancel)
-	err = parallelScope.MergeRun(c)
+	err = <-result
+	c.waitScopeTaskScheduler()
 	return err
 }
 
@@ -1098,7 +1043,18 @@ func (s *Scope) parallelRunAsync(c *Compile, done func(error)) (err error) {
 			if isScopeCancellationError(err) {
 				reportParallelScopeBuildCancellation(s, err, normalizedErr, normalized, queryCtx)
 			}
+			// Preserve the historical ParallelRun boundary contract: internal
+			// StopSending cancellation is a graceful terminal event, while query
+			// cancellation remains an error. The asynchronous path must expose
+			// that normalized result to its completion callback as well.
+			err = normalizedErr
 			pipeline.NewMerge(s.RootOp).Cleanup(s.Proc, normalizedErr != nil, c.isPrepare, normalizedErr)
+			// Reader/parallel-scope construction failed before a child pipeline
+			// existed. Publish that terminal result through the same callback used
+			// by the normal continuation path, then consume the named return so
+			// callers do not publish a second completion event.
+			done(err)
+			err = nil
 		}
 	}()
 
