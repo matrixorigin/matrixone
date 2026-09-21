@@ -379,6 +379,31 @@ func TestGetTypeFromAstPreservesTextFamilyCapacity(t *testing.T) {
 	}
 }
 
+func TestGetTypeFromAstPreservesBlobFamilyCapacity(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		sql   string
+		width int32
+	}{
+		{name: "tinyblob", sql: "tinyblob", width: types.MaxTinyTextLen},
+		{name: "blob", sql: "blob", width: types.MaxStringSize},
+		{name: "mediumblob", sql: "mediumblob", width: types.MaxMediumTextLen},
+		{name: "longblob", sql: "longblob", width: types.MaxLongTextLen},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(context.Background(), "create table t (value "+tc.sql+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			createTable := stmt.(*tree.CreateTable)
+			colDef := createTable.Defs[0].(*tree.ColumnTableDef)
+			typ, err := getTypeFromAst(context.Background(), colDef.Type)
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_blob), typ.Id)
+			require.Equal(t, tc.width, typ.Width)
+		})
+	}
+}
+
 func TestGetTypeFromAstArrayValidatesElementType(t *testing.T) {
 	stmt, err := mysql.ParseOne(context.Background(), "create table t (tags array(varchar(16777217)))", 1)
 	require.NoError(t, err)
@@ -832,7 +857,8 @@ func TestMakePlan2AssignmentCastExprUsesStrictForAssignmentTargets(t *testing.T)
 	targets := []plan.Type{
 		{Id: int32(types.T_varchar), Width: 3},
 		{Id: int32(types.T_char), Width: 3},
-		{Id: int32(types.T_text), Width: types.MaxTinyTextLen},
+		{Id: int32(types.T_text), Width: types.MaxStringSize},
+		{Id: int32(types.T_blob), Width: types.MaxStringSize},
 		{Id: int32(types.T_date), Width: 3},
 		{Id: int32(types.T_time), Scale: 6},
 		{Id: int32(types.T_datetime), Width: 3},
@@ -862,6 +888,8 @@ func TestExportedAssignmentCastUsesRuntimeSQLModeSemantics(t *testing.T) {
 
 	for _, target := range []plan.Type{
 		{Id: int32(types.T_varchar), Width: 3},
+		{Id: int32(types.T_text), Width: types.MaxStringSize},
+		{Id: int32(types.T_blob), Width: types.MaxStringSize},
 		{Id: int32(types.T_year), Width: 4},
 		{Id: int32(types.T_time), Scale: 6},
 	} {
@@ -914,7 +942,8 @@ func TestForceAssignmentCastExprUsesAssignmentSemantics(t *testing.T) {
 	targets := []plan.Type{
 		{Id: int32(types.T_varchar), Width: 3},
 		{Id: int32(types.T_char), Width: 3},
-		{Id: int32(types.T_text), Width: types.MaxTinyTextLen},
+		{Id: int32(types.T_text), Width: types.MaxStringSize},
+		{Id: int32(types.T_blob), Width: types.MaxStringSize},
 		{Id: int32(types.T_date), Width: 3},
 		{Id: int32(types.T_time), Scale: 6},
 		{Id: int32(types.T_datetime), Width: 3},
@@ -1147,22 +1176,49 @@ func TestApplyGeneratedColumnAssignmentCastCompatibility(t *testing.T) {
 		stored, err := forceCastExprWithName(context.Background(), DeepCopyExpr(source), target, storedName)
 		require.NoError(t, err)
 
-		normal := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(stored), false)
+		normal, err := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(stored), false)
+		require.NoError(t, err)
 		require.Equal(t, "cast_assign", normal.GetF().GetFunc().GetObjName())
 
-		ignore := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(stored), true)
+		ignore, err := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(stored), true)
+		require.NoError(t, err)
 		require.Equal(t, "cast_ignore", ignore.GetF().GetFunc().GetObjName())
 	}
 
-	require.Nil(t, builder.applyGeneratedColumnAssignmentCast(nil, false))
-	require.Same(t, source, builder.applyGeneratedColumnAssignmentCast(source, false))
+	unchanged, err := builder.applyGeneratedColumnAssignmentCast(nil, false)
+	require.NoError(t, err)
+	require.Nil(t, unchanged)
+	plain := &Expr{Typ: plan.Type{Id: int32(types.T_int32)}}
+	unchanged, err = builder.applyGeneratedColumnAssignmentCast(plain, false)
+	require.NoError(t, err)
+	require.Same(t, plain, unchanged)
+
+	tinyText := plan.Type{Id: int32(types.T_text), Width: types.MaxTinyTextLen}
+	missingAssignment := &Expr{Typ: tinyText, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}}
+	normal, err := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(missingAssignment), false)
+	require.NoError(t, err)
+	require.Equal(t, "cast_assign", normal.GetF().GetFunc().GetObjName())
+	require.Equal(t, tinyText, normal.Typ)
+	ignore, err := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(missingAssignment), true)
+	require.NoError(t, err)
+	require.Equal(t, "cast_ignore", ignore.GetF().GetFunc().GetObjName())
+
+	explicit, err := forceCastExprWithName(context.Background(),
+		&Expr{Typ: plan.Type{Id: int32(types.T_varchar), Width: 1024}}, tinyText, "cast")
+	require.NoError(t, err)
+	preserved, err := builder.applyGeneratedColumnAssignmentCast(explicit, false)
+	require.NoError(t, err)
+	require.Equal(t, "cast_assign", preserved.GetF().GetFunc().GetObjName())
+	require.Equal(t, "cast", preserved.GetF().GetArgs()[0].GetF().GetFunc().GetObjName())
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion4)
 	stored, err := forceCastExprWithName(context.Background(), DeepCopyExpr(source), target, "cast_assign")
 	require.NoError(t, err)
-	normal := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(stored), false)
+	normal, err = builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(stored), false)
+	require.NoError(t, err)
 	require.Equal(t, "cast_strict", normal.GetF().GetFunc().GetObjName())
-	ignore := builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(stored), true)
+	ignore, err = builder.applyGeneratedColumnAssignmentCast(DeepCopyExpr(stored), true)
+	require.NoError(t, err)
 	require.Equal(t, "cast", ignore.GetF().GetFunc().GetObjName())
 }
 
@@ -1185,6 +1241,8 @@ func TestAssignmentCastProtocolGate(t *testing.T) {
 	for _, test := range tests {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.version)
 		require.Equal(t, test.want, assignmentCastFunctionName(target, test.ignore, proc))
+		blobTarget := plan.Type{Id: int32(types.T_blob), Width: types.MaxStringSize}
+		require.Equal(t, test.want, assignmentCastFunctionName(blobTarget, test.ignore, proc))
 		require.Equal(t, test.want, assignmentCastFunctionName(
 			plan.Type{Id: int32(types.T_year), Width: 4}, test.ignore, proc,
 		))
@@ -1204,6 +1262,20 @@ func TestAssignmentCastProtocolGate(t *testing.T) {
 		)
 		require.NoError(t, err)
 		require.Equal(t, test.want, casted.GetF().GetFunc().GetObjName())
+		blobTargetType := &plan.Expr{
+			Typ:  blobTarget,
+			Expr: &plan.Expr_T{T: &plan.TargetType{}},
+		}
+		blobCasted, err := forceCastExpr2WithProcess(
+			t.Context(),
+			makePlan2Int64ConstExprWithType(1),
+			makeTypeByPlan2Type(blobTarget),
+			blobTargetType,
+			test.ignore,
+			proc,
+		)
+		require.NoError(t, err)
+		require.Equal(t, test.want, blobCasted.GetF().GetFunc().GetObjName())
 	}
 	require.Equal(t, "cast", assignmentCastFunctionName(plan.Type{Id: int32(types.T_int64)}, false, proc))
 	require.Equal(t, "cast_assign", assignmentCastFunctionName(plan.Type{
@@ -1212,7 +1284,13 @@ func TestAssignmentCastProtocolGate(t *testing.T) {
 	require.Equal(t, "cast_ignore", assignmentCastFunctionName(plan.Type{
 		Id: int32(types.T_text), Width: types.MaxTinyTextLen,
 	}, true, proc))
-	require.Equal(t, "cast", assignmentCastFunctionName(plan.Type{Id: int32(types.T_text)}, false, proc))
+	require.Equal(t, "cast_assign", assignmentCastFunctionName(plan.Type{
+		Id: int32(types.T_text), Width: types.MaxStringSize,
+	}, false, proc))
+	require.Equal(t, "cast_assign", assignmentCastFunctionName(plan.Type{
+		Id: int32(types.T_blob), Width: types.MaxStringSize,
+	}, false, proc))
+	require.Equal(t, "cast_assign", assignmentCastFunctionName(plan.Type{Id: int32(types.T_text)}, false, proc))
 }
 
 func TestIgnoreConversionAssignmentCastTargets(t *testing.T) {
@@ -1285,4 +1363,51 @@ func TestSubstituteColRefsInExprPreservesAggregateConfig(t *testing.T) {
 
 	rewritten.GetF().AggConfig[0] = 9
 	require.Equal(t, byte(1), source.GetF().AggConfig[0])
+}
+
+func TestDefaultBlobTextAssignmentPolicy(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	proc := builder.compCtx.GetProcess()
+	for _, oid := range []types.T{types.T_blob, types.T_text} {
+		target := plan.Type{Id: int32(oid), Width: types.MaxTinyTextLen}
+		source := &Expr{Typ: plan.Type{Id: int32(oid), Width: types.MaxStringSize},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}}
+		for _, root := range []string{"unwrapped", "cast", "cast_strict", "cast_assign", "cast_ignore"} {
+			t.Run(fmt.Sprintf("%s/%s", oid, root), func(t *testing.T) {
+				stored := DeepCopyExpr(source)
+				if root != "unwrapped" {
+					var err error
+					stored, err = forceAssignmentCastExprWithName(proc.Ctx, stored, target, root)
+					require.NoError(t, err)
+				}
+				col := &plan.ColDef{Typ: target, Default: &plan.Default{Expr: stored}}
+				before := DeepCopyExpr(stored)
+				for _, ignore := range []bool{false, true} {
+					got, err := getDefaultExprForAssignment(proc.Ctx, col, proc, ignore)
+					require.NoError(t, err)
+					want := "cast_assign"
+					if ignore {
+						want = "cast_ignore"
+					}
+					require.Equal(t, want, got.GetF().GetFunc().GetObjName())
+					require.Equal(t, target, got.Typ)
+					inner := got.GetF().Args[0]
+					if root == "cast" {
+						require.Equal(t, "cast", inner.GetF().GetFunc().GetObjName())
+						inner = inner.GetF().Args[0]
+					}
+					require.Equal(t, int32(1), inner.GetCol().GetColPos())
+					require.Equal(t, before, stored, "catalog default must remain immutable")
+				}
+			})
+		}
+		sameType := DeepCopyExpr(source)
+		sameType.Typ = target
+		ddl, err := makePlan2AssignmentCastExpr(proc.Ctx, sameType, target)
+		require.NoError(t, err)
+		require.Equal(t, "cast_strict", ddl.GetF().GetFunc().GetObjName())
+		null, err := getDefaultExprForAssignment(proc.Ctx, &plan.ColDef{Typ: target}, proc, true)
+		require.NoError(t, err)
+		require.True(t, null.GetLit().GetIsnull())
+	}
 }

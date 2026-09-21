@@ -164,6 +164,10 @@ func materializeWindowBound(
 	if frameType == plan.FrameClause_RANGE && planned.Val.GetList() != nil {
 		return runtimeBound, nil
 	}
+	if frameType == plan.FrameClause_RANGE && planned.Val.GetVec() != nil {
+		_, err := decimal256RangeOffset(planned.Val, planned.Val.Typ)
+		return runtimeBound, err
+	}
 	if proc == nil || proc.GetPrepareParams() == nil {
 		return nil, moerr.NewInvalidInputNoCtx("window frame bound parameter is missing")
 	}
@@ -196,6 +200,16 @@ func materializeWindowBound(
 			return nil, err
 		}
 	}
+	if vec.GetType().Oid == types.T_decimal256 {
+		data, err := vec.MarshalBinary()
+		if err != nil {
+			return nil, err
+		}
+		runtimeBound.Val = &plan.Expr{Typ: planned.Val.Typ, Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{
+			Len: 1, Data: data,
+		}}}
+		return runtimeBound, nil
+	}
 
 	runtimeBound.Val = &plan.Expr{
 		Typ:  planned.Val.Typ,
@@ -226,6 +240,8 @@ func validateRangeFrameBound(ctx context.Context, vec *vector.Vector) error {
 		valid = !vector.MustFixedColWithTypeCheck[types.Decimal64](vec)[0].Sign()
 	case types.T_decimal128:
 		valid = !vector.MustFixedColWithTypeCheck[types.Decimal128](vec)[0].Sign()
+	case types.T_decimal256:
+		valid = !vector.MustFixedColWithTypeCheck[types.Decimal256](vec)[0].Sign()
 	default:
 		return moerr.NewInvalidInputf(
 			ctx,
@@ -244,6 +260,36 @@ func (ctr *container) frameAt(idx int, planned *plan.FrameClause) *plan.FrameCla
 		return ctr.runtimeFrames[idx]
 	}
 	return planned
+}
+
+// decimal256RangeOffset borrows a bounded singleton encoding and returns its
+// coefficient by value. It neither retains the vector nor allocates in the
+// row-search path. The payload is owned by the immutable plan/runtime frame.
+func decimal256RangeOffset(expr *plan.Expr, orderType plan.Type) (types.Decimal256, error) {
+	var zero types.Decimal256
+	literal := expr.GetVec()
+	// Non-NULL fixed singleton: type, class, length, three length prefixes,
+	// 32 coefficient bytes and sorted flag. Reject unbounded bitmap/area data
+	// before unmarshalling on every row.
+	if literal == nil || literal.Len != 1 || len(literal.Data) != types.TSize+50 ||
+		expr.Typ.Id != int32(types.T_decimal256) || orderType.Id != int32(types.T_decimal256) || expr.Typ.Scale != orderType.Scale ||
+		expr.Typ.Width != orderType.Width {
+		return zero, moerr.NewInvalidInputNoCtx("invalid Decimal256 window RANGE bound")
+	}
+	var value vector.Vector
+	if err := value.UnmarshalBinary(literal.Data); err != nil {
+		return zero, err
+	}
+	typ := value.GetType()
+	if typ.Oid != types.T_decimal256 || typ.Width != orderType.Width || typ.Scale != orderType.Scale ||
+		value.Length() != 1 || value.IsNull(0) || len(value.GetData()) != 32 || len(value.GetArea()) != 0 {
+		return zero, moerr.NewInvalidInputNoCtx("invalid Decimal256 window RANGE bound")
+	}
+	offset := vector.GetFixedAtNoTypeCheck[types.Decimal256](&value, 0)
+	if offset.Sign() {
+		return zero, moerr.NewInvalidInputNoCtx("window RANGE frame bound must be a finite non-negative numeric value")
+	}
+	return offset, nil
 }
 
 func (window *Window) Call(proc *process.Process) (vm.CallResult, error) {
@@ -2549,6 +2595,12 @@ func searchLeft(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plu
 }
 
 func searchLeftWithLocation(loc *time.Location, start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, plus bool, desc bool) (int, error) {
+	if start >= end {
+		return start, nil
+	}
+	if vec.IsConstNull() {
+		return start, nil
+	}
 	if vec.GetNulls().Contains(uint64(rowIdx)) {
 		// NULL order-key rows are peers; find the start of the NULL peer group
 		left := rowIdx
@@ -2570,7 +2622,7 @@ func searchLeftWithLocation(loc *time.Location, start, end, rowIdx int, vec *vec
 	// A const vector stores one physical value, while the search bounds are
 	// logical rows. Evaluate the one physical row and project its boundary back
 	// to this logical interval instead of indexing the scalar column by mid.
-	if vec.IsConst() && end-start > 1 {
+	if vec.IsConst() && (start != 0 || end != 1 || rowIdx != 0) {
 		boundary, err := searchLeftWithLocation(loc, 0, 1, 0, vec, expr, plus, desc)
 		if err != nil || boundary == 0 {
 			return start, err
@@ -2581,6 +2633,9 @@ func searchLeftWithLocation(loc *time.Location, start, end, rowIdx int, vec *vec
 	// For DESC, swap the arithmetic direction.
 	if desc {
 		plus = !plus
+	}
+	if vec.GetType().Oid == types.T_decimal256 {
+		return searchDecimal256Range(start, end, rowIdx, vec, expr, plus, desc, false)
 	}
 
 	var left int
@@ -3056,6 +3111,12 @@ func searchRight(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, su
 }
 
 func searchRightWithLocation(loc *time.Location, start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, sub bool, desc bool) (int, error) {
+	if start >= end {
+		return start, nil
+	}
+	if vec.IsConstNull() {
+		return end, nil
+	}
 	if vec.GetNulls().Contains(uint64(rowIdx)) {
 		// NULL order-key rows are peers; find the end of the NULL peer group (exclusive)
 		right := rowIdx + 1
@@ -3076,7 +3137,7 @@ func searchRightWithLocation(loc *time.Location, start, end, rowIdx int, vec *ve
 	}
 	// See searchLeftWithLocation: resolve scalar storage against one physical
 	// row, then preserve the result's logical interval boundary.
-	if vec.IsConst() && end-start > 1 {
+	if vec.IsConst() && (start != 0 || end != 1 || rowIdx != 0) {
 		boundary, err := searchRightWithLocation(loc, 0, 1, 0, vec, expr, sub, desc)
 		if err != nil || boundary == 0 {
 			return start, err
@@ -3087,6 +3148,9 @@ func searchRightWithLocation(loc *time.Location, start, end, rowIdx int, vec *ve
 	// For DESC, swap the arithmetic direction.
 	if desc {
 		sub = !sub
+	}
+	if vec.GetType().Oid == types.T_decimal256 {
+		return searchDecimal256Range(start, end, rowIdx, vec, expr, !sub, desc, true)
 	}
 
 	var right int
@@ -3813,6 +3877,45 @@ func decimal64Greater(a, b types.Decimal64) bool {
 func decimal64Less(a, b types.Decimal64) bool {
 	return a.Compare(b) == -1
 }
+
+// searchDecimal256Range returns an insertion boundary in [start,end]. Arithmetic
+// overflow is outside the physical coefficient domain, not a wrapped search key.
+func searchDecimal256Range(start, end, rowIdx int, vec *vector.Vector, expr *plan.Expr, add, desc, right bool) (int, error) {
+	col := vector.MustFixedColNoTypeCheck[types.Decimal256](vec)
+	boundary := col[rowIdx]
+	if expr != nil {
+		typ := vec.GetType()
+		offset, err := decimal256RangeOffset(expr, plan.Type{
+			Id: int32(typ.Oid), Width: typ.Width, Scale: typ.Scale,
+		})
+		if err != nil {
+			return 0, err
+		}
+		if add {
+			boundary, err = boundary.Add256(offset)
+		} else {
+			boundary, err = boundary.Sub256(offset)
+		}
+		if err != nil {
+			return outOfDomainRangeBoundary(start, end, add, desc), nil
+		}
+	}
+	greater := decimal256Greater
+	if desc {
+		greater = decimal256Less
+	}
+	if right {
+		if expr == nil {
+			return genericSearchEqualRight(rowIdx, end-1, col, boundary, decimal256Equal) + 1, nil
+		}
+		return genericSearchRight(start, end-1, col, boundary, decimal256Equal, greater) + 1, nil
+	}
+	return genericSearchLeft(start, end-1, col, boundary, decimal256Equal, greater), nil
+}
+
+func decimal256Equal(a, b types.Decimal256) bool   { return a.Compare(b) == 0 }
+func decimal256Greater(a, b types.Decimal256) bool { return a.Compare(b) > 0 }
+func decimal256Less(a, b types.Decimal256) bool    { return a.Compare(b) < 0 }
 
 func decimal128Equal(a, b types.Decimal128) bool {
 	return a.Compare(b) == 0

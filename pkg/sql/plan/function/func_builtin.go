@@ -350,6 +350,35 @@ const (
 // helpers mirror that rendering for information_schema.COLUMNS / desc, matching
 // what SHOW CREATE TABLE produces via plan.FormatColType.
 
+func mysqlVisibleStringFamilyName(typ *types.Type) string {
+	switch typ.Oid {
+	case types.T_text:
+		switch typ.Width {
+		case types.MaxTinyTextLen:
+			return "TINYTEXT"
+		case types.MaxMediumTextLen:
+			return "MEDIUMTEXT"
+		case types.MaxLongTextLen:
+			return "LONGTEXT"
+		default:
+			return "TEXT"
+		}
+	case types.T_blob:
+		switch typ.Width {
+		case types.MaxTinyTextLen:
+			return "TINYBLOB"
+		case types.MaxMediumTextLen:
+			return "MEDIUMBLOB"
+		case types.MaxLongTextLen:
+			return "LONGBLOB"
+		default:
+			return "BLOB"
+		}
+	default:
+		return typ.String()
+	}
+}
+
 // geometryShowDataType renders the DATA_TYPE of a geometry column: the subtype
 // name (POINT, LINESTRING, ...) or the base family when the subtype is generic.
 func geometryShowDataType(typ *types.Type) string {
@@ -418,7 +447,7 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			if err != nil {
 				return nil, err
 			}
-			ts := typ.String()
+			ts := mysqlVisibleStringFamilyName(typ)
 			// after decimal fix, remove this
 			if typ.Oid.IsDecimal() {
 				ts = "DECIMAL"
@@ -453,6 +482,21 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 					ret = "MEDIUMTEXT"
 				case types.MaxLongTextLen:
 					ret = "LONGTEXT"
+				case 0, types.MaxStringSize:
+					ret = "TEXT"
+				default:
+					ret = fmt.Sprintf("%s(%d)", ts, typ.Width)
+				}
+			} else if typ.Oid == types.T_blob {
+				switch typ.Width {
+				case types.MaxTinyTextLen:
+					ret = "TINYBLOB"
+				case types.MaxMediumTextLen:
+					ret = "MEDIUMBLOB"
+				case types.MaxLongTextLen:
+					ret = "LONGBLOB"
+				case types.MaxStringSize:
+					ret = "BLOB"
 				default:
 					ret = fmt.Sprintf("%s(%d)", ts, typ.Width)
 				}

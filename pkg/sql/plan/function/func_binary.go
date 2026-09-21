@@ -18,8 +18,6 @@ import (
 	"bytes"
 	"cmp"
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/hex"
@@ -47,7 +45,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	fj "github.com/matrixorigin/matrixone/pkg/sql/plan/function/fault"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
-	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/floor"
 	"github.com/matrixorigin/matrixone/pkg/vectorize/format"
@@ -994,6 +991,27 @@ func coalesceJSONResult(overloads []overload, inputs []types.Type) (checkResult,
 }
 
 func coalesceCheck(overloads []overload, inputs []types.Type) checkResult {
+	if target, hasVector, ok := conditionalVectorType(inputs); hasVector {
+		if !ok {
+			return newCheckResultWithFailure(failedFunctionParametersWrong)
+		}
+		for i, over := range overloads {
+			if over.args[0] != target.Oid {
+				continue
+			}
+			castTypes := make([]types.Type, len(inputs))
+			aligned := true
+			for j, input := range inputs {
+				castTypes[j] = target
+				aligned = aligned && input.Eq(target)
+			}
+			if aligned {
+				return newCheckResultWithSuccess(i)
+			}
+			return newCheckResultWithCast(i, castTypes)
+		}
+		return newCheckResultWithFailure(failedFunctionParametersWrong)
+	}
 	if len(inputs) > 0 {
 		if result, ok := coalesceJSONResult(overloads, inputs); ok {
 			return result
@@ -10617,29 +10635,25 @@ func SplitSingle(str, sep string, cnt uint32) (string, bool) {
 }
 
 // batchArrayDistanceSync computes a 1×N pairwise distance when exactly one input vector is
-// constant (the typical "ORDER BY distance(col, query)" SQL pattern).
-// Uses GPU for float32 workloads above GPUThresholdSync; falls back to CPU pairwise for
-// float64 or small batches. Returns (dist, true, nil) on success, or (nil, false, nil) when
-// neither (or both) inputs are const, or when null propagation requires per-row handling.
+// constant (the typical "ORDER BY distance(col, query)" SQL pattern).  The SQL result type is
+// DOUBLE, so this path uses the stable float64-result kernels directly.  The older pairwise
+// Launch/Wait interface materializes float32 and therefore cannot preserve the range promised
+// by SQL vector functions. This intentionally trades the old GPU fast path for a CPU reduction
+// whose result is identical to the scalar SQL path; preserving the DOUBLE contract is more
+// important than returning a faster, rounded answer. Returns (dist, true, nil) on success, or
+// (nil, false, nil) when neither (or both) inputs are const, or when null propagation requires
+// per-row handling.
 func batchArrayDistanceSync[T types.RealNumbers](
 	ivecs []*vector.Vector,
 	length int,
 	m metric.MetricType,
 	proc *process.Process,
 	selectList *FunctionSelectList,
-) ([]float32, bool, error) {
+) ([]float64, bool, error) {
 	// Whether a value is constant must not change the value SQL returns, so this path may
-	// only run where it is exactly equivalent to the per-row kernel.
-	//
-	// Precision: the result is materialized as []float32 (metric.PairwiseDistance* is
-	// float32-out by construction). For float32 elements that is precisely what the scalar
-	// path computes -- ResolveDistanceFn[float32, float32] hands back the SAME kernel
-	// moarray calls, with no cast -- so the two agree bit for bit. For float64 the resolver
-	// wraps the kernel in a float64->float32 cast: `l1_distance(vecf64_col, '[16777217]')`
-	// against [0] answers 16777216 where the scalar path answers 16777217. Distinct
-	// distances can collapse and reorder an ORDER BY, so float64 stays on the scalar path.
-	// Nothing is given up: cuVS pairwise accepts float32/float16 only, so a float64 batch
-	// was never more than a CPU loop.
+	// only run where it is exactly equivalent to the per-row kernel.  The stable resolver
+	// returns the same float64 value the scalar moarray wrapper uses, including values outside
+	// float32 range and L2 results whose square is not representable.
 	if _, isFloat32 := any(*new(T)).(float32); !isFloat32 {
 		return nil, false, nil
 	}
@@ -10689,22 +10703,17 @@ func batchArrayDistanceSync[T types.RealNumbers](
 		y[i] = types.BytesToArray[T](rowBytes)
 	}
 
-	dist := make([]float32, length)
-	// proc is non-nil under SQL execution; the nil branch keeps unit
-	// tests (which don't synthesize a process) compiling and lets
-	// EffectiveGpuMode fall back to the build-tag default.
-	var resolver func(string, bool, bool) (any, error)
-	if proc != nil {
-		resolver = proc.GetResolveVariableFunc()
-	}
-	gpuMode := gpumode.EffectiveGpuMode(resolver)
-	handle, err := metric.PairwiseDistanceLaunch(x, y, m, dist, metric.GPUThresholdSQL, gpuMode)
+	dist := make([]float64, length)
+	distFn, err := metric.StableDistanceFn[T](m)
 	if err != nil {
 		return nil, false, err
 	}
-	dist, err = metric.PairwiseDistanceWait(handle, m)
-	if err != nil {
-		return nil, false, err
+	for i := range y {
+		d, err := distFn(x[0], y[i])
+		if err != nil {
+			return nil, false, err
+		}
+		dist[i] = d
 	}
 	return dist, true, nil
 }
@@ -10728,17 +10737,9 @@ func InnerProductArray[T types.RealNumbers](ivecs []*vector.Vector, result vecto
 }
 
 func CosineSimilarityArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	// Use Metric_CosineDistance and convert: similarity = 1 - distance.
-	if dist, ok, err := batchArrayDistanceSync[T](ivecs, length, metric.Metric_CosineDistance, proc, selectList); err != nil {
-		return err
-	} else if ok {
-		rs := vector.MustFunctionResult[float64](result)
-		rss := vector.MustFixedColNoTypeCheck[float64](rs.GetResultVector())
-		for i, d := range dist {
-			rss[i] = 1.0 - float64(d)
-		}
-		return nil
-	}
+	// Keep similarity on the scalar stable helper: converting distance back to
+	// similarity would turn the distance's zero-vector convention (1, no error)
+	// into a different similarity contract (zero vector is an error).
 	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (out float64, err error) {
 		_v1 := types.BytesToArray[T](v1)
 		_v2 := types.BytesToArray[T](v2)
@@ -10998,18 +10999,41 @@ func StSymDifference(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 	return overlayBinary("ST_SYMDIFFERENCE", geo.OpXOR)(ivecs, result, proc, length, selectList)
 }
 
-// StFrechetDistance returns the discrete Fréchet distance (planar) between two
-// geometries' vertex sequences.
+// StFrechetDistance is the legacy planar Fréchet-distance identity. Its
+// overload is retained for already-serialized plans; newly bound SQL uses the
+// separate geodetic identity below.
 func StFrechetDistance(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return stFrechetDistance[float64]("ST_FRECHETDISTANCE", ivecs, result, proc, length, selectList)
 }
 
-// StFrechetDistance32 is the GEOMETRY32 overload of ST_FrechetDistance.
+// StFrechetDistance32 is the legacy planar GEOMETRY32 identity.
 func StFrechetDistance32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return stFrechetDistance[float32]("ST_FRECHETDISTANCE", ivecs, result, proc, length, selectList)
 }
 
+// StFrechetDistanceGeodetic is the v90 two-argument geodetic identity. It is
+// deliberately distinct from StFrechetDistance so a new worker cannot apply
+// the new SRID-4326 meaning to an old producer's overload 0.
+func StFrechetDistanceGeodetic(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFrechetDistanceGeodetic[float64]("ST_FRECHETDISTANCE", ivecs, result, proc, length, selectList)
+}
+
+// StFrechetDistanceGeodetic32 is the GEOMETRY32 v90 geodetic identity.
+func StFrechetDistanceGeodetic32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFrechetDistanceGeodetic[float32]("ST_FRECHETDISTANCE", ivecs, result, proc, length, selectList)
+}
+
 func stFrechetDistance[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFrechetDistanceWithKernel[T](functionName, ivecs, result, proc, length, selectList,
+		discreteFrechetDistancePlanar)
+}
+
+func stFrechetDistanceGeodetic[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFrechetDistanceWithKernel[T](functionName, ivecs, result, proc, length, selectList,
+		discreteFrechetDistanceBySRID)
+}
+
+func stFrechetDistanceWithKernel[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, distanceFn discreteDistanceBySRID) error {
 	emptyBatch, err := checkBinaryGeometryTypeSRID(functionName, ivecs, length, selectList)
 	if err != nil {
 		return err
@@ -11017,35 +11041,61 @@ func stFrechetDistance[T float32 | float64](functionName string, ivecs []*vector
 	if emptyBatch {
 		return nil
 	}
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(v1, v2 []byte) (T, error) {
-		a, err := decodeGeoGeometry(v1)
-		if err != nil {
-			return 0, err
-		}
-		b, err := decodeGeoGeometry(v2)
-		if err != nil {
-			return 0, err
-		}
-		d, ok := geo.FrechetDistance(a, b)
-		if !ok {
-			return 0, moerr.NewInvalidInputNoCtx("ST_FrechetDistance: empty geometry")
-		}
-		return T(d), nil
+		d, err := distanceFn(v1, v2, srid)
+		return T(d), err
 	}, selectList)
 }
 
-// StHausdorffDistance returns the discrete directed Hausdorff distance (planar)
-// from the first geometry's vertex set to the second geometry's vertex set.
+// StFrechetDistanceWithUnit is the geographic ST_FrechetDistance overload
+// whose third argument requests the output length unit.
+func StFrechetDistanceWithUnit(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFrechetDistanceWithUnit[float64](ivecs, result, proc, length, selectList)
+}
+
+// StFrechetDistanceWithUnit32 is the GEOMETRY32 geographic overload.
+func StFrechetDistanceWithUnit32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stFrechetDistanceWithUnit[float32](ivecs, result, proc, length, selectList)
+}
+
+func stFrechetDistanceWithUnit[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	return stDiscreteDistanceWithUnit[T]("ST_FrechetDistance", ivecs, result, length, selectList,
+		discreteFrechetDistanceBySRID, geometryDistancePayloadEmpty)
+}
+
+// StHausdorffDistance is the legacy planar directed Hausdorff-distance
+// identity retained for already-serialized plans.
 func StHausdorffDistance(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return stHausdorffDistance[float64]("ST_HAUSDORFFDISTANCE", ivecs, result, proc, length, selectList)
 }
 
-// StHausdorffDistance32 is the GEOMETRY32 overload of ST_HausdorffDistance.
+// StHausdorffDistance32 is the legacy planar GEOMETRY32 identity.
 func StHausdorffDistance32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return stHausdorffDistance[float32]("ST_HAUSDORFFDISTANCE", ivecs, result, proc, length, selectList)
 }
 
+// StHausdorffDistanceGeodetic is the v90 two-argument geodetic identity.
+func StHausdorffDistanceGeodetic(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stHausdorffDistanceGeodetic[float64]("ST_HAUSDORFFDISTANCE", ivecs, result, proc, length, selectList)
+}
+
+// StHausdorffDistanceGeodetic32 is the GEOMETRY32 v90 geodetic identity.
+func StHausdorffDistanceGeodetic32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stHausdorffDistanceGeodetic[float32]("ST_HAUSDORFFDISTANCE", ivecs, result, proc, length, selectList)
+}
+
 func stHausdorffDistance[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stHausdorffDistanceWithKernel[T](functionName, ivecs, result, proc, length, selectList,
+		discreteHausdorffDistancePlanar)
+}
+
+func stHausdorffDistanceGeodetic[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stHausdorffDistanceWithKernel[T](functionName, ivecs, result, proc, length, selectList,
+		discreteHausdorffDistanceBySRID)
+}
+
+func stHausdorffDistanceWithKernel[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, distanceFn discreteDistanceBySRID) error {
 	emptyBatch, err := checkBinaryGeometryTypeSRID(functionName, ivecs, length, selectList)
 	if err != nil {
 		return err
@@ -11053,21 +11103,199 @@ func stHausdorffDistance[T float32 | float64](functionName string, ivecs []*vect
 	if emptyBatch {
 		return nil
 	}
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
 	return opBinaryBytesBytesToFixedWithErrorCheck[T](ivecs, result, proc, length, func(v1, v2 []byte) (T, error) {
-		a, err := decodeGeoGeometry(v1)
-		if err != nil {
-			return 0, err
-		}
-		b, err := decodeGeoGeometry(v2)
-		if err != nil {
-			return 0, err
-		}
-		d, ok := geo.DirectedHausdorffDistance(a, b)
-		if !ok {
-			return 0, moerr.NewInvalidInputNoCtx("ST_HausdorffDistance: empty geometry")
-		}
-		return T(d), nil
+		d, err := distanceFn(v1, v2, srid)
+		return T(d), err
 	}, selectList)
+}
+
+// StHausdorffDistanceWithUnit is the geographic ST_HausdorffDistance overload
+// whose third argument requests the output length unit.
+func StHausdorffDistanceWithUnit(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stHausdorffDistanceWithUnit[float64](ivecs, result, proc, length, selectList)
+}
+
+// StHausdorffDistanceWithUnit32 is the GEOMETRY32 geographic overload.
+func StHausdorffDistanceWithUnit32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stHausdorffDistanceWithUnit[float32](ivecs, result, proc, length, selectList)
+}
+
+func stHausdorffDistanceWithUnit[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	return stDiscreteDistanceWithUnit[T]("ST_HausdorffDistance", ivecs, result, length, selectList,
+		discreteHausdorffDistanceBySRID, geometryDistancePayloadEmpty)
+}
+
+type discreteDistanceBySRID func(left, right []byte, srid uint32) (float64, error)
+type distancePayloadEmpty func(payload []byte) (bool, error)
+
+func stDiscreteDistanceWithUnit[T float32 | float64](functionName string, ivecs []*vector.Vector, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList, distanceFn discreteDistanceBySRID, emptyFn distancePayloadEmpty) error {
+	emptyBatch, err := checkBinaryGeometryTypeSRIDWithUnit(functionName, ivecs, length, selectList)
+	if err != nil {
+		return err
+	}
+	if emptyBatch {
+		return nil
+	}
+	left := vector.GenerateFunctionStrParameter(ivecs[0])
+	right := vector.GenerateFunctionStrParameter(ivecs[1])
+	units := vector.GenerateFunctionStrParameter(ivecs[2])
+	rs := vector.MustFunctionResult[T](result)
+	srid := sridFromTypeWidth(ivecs[0].GetType().Width)
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		v1, n1 := left.GetStrValue(i)
+		v2, n2 := right.GetStrValue(i)
+		unit, n3 := units.GetStrValue(i)
+		if n1 || n2 || n3 {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		scale, err := geographicDistanceUnitScale(functionName, srid, functionUtil.QuickBytesToStr(unit))
+		if err != nil {
+			return err
+		}
+		if emptyFn != nil {
+			leftEmpty, err := emptyFn(v1)
+			if err != nil {
+				return err
+			}
+			rightEmpty, err := emptyFn(v2)
+			if err != nil {
+				return err
+			}
+			if leftEmpty || rightEmpty {
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
+			}
+		}
+		d, err := distanceFn(v1, v2, srid)
+		if err != nil {
+			return err
+		}
+		if err := rs.Append(T(d/scale), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func discreteFrechetDistancePlanar(left, right []byte, _ uint32) (float64, error) {
+	a, err := decodeGeoGeometry(left)
+	if err != nil {
+		return 0, err
+	}
+	b, err := decodeGeoGeometry(right)
+	if err != nil {
+		return 0, err
+	}
+	d, ok := geo.FrechetDistance(a, b)
+	if !ok {
+		return 0, moerr.NewInvalidInputNoCtx("ST_FrechetDistance: empty geometry")
+	}
+	return d, nil
+}
+
+func discreteFrechetDistanceBySRID(left, right []byte, srid uint32) (float64, error) {
+	if err := validateComputationSRID(srid); err != nil {
+		return 0, err
+	}
+	a, err := decodeGeoGeometry(left)
+	if err != nil {
+		return 0, err
+	}
+	b, err := decodeGeoGeometry(right)
+	if err != nil {
+		return 0, err
+	}
+	if srid == geo.SRIDWGS84 {
+		if err := geo.ValidateGeodeticCoordinates(a); err != nil {
+			return 0, err
+		}
+		if err := geo.ValidateGeodeticCoordinates(b); err != nil {
+			return 0, err
+		}
+	}
+	var d float64
+	var ok bool
+	if srid == geo.SRIDWGS84 {
+		d, ok = geo.GeodeticFrechetDistance(a, b)
+	} else {
+		d, ok = geo.FrechetDistance(a, b)
+	}
+	if !ok {
+		return 0, moerr.NewInvalidInputNoCtx("ST_FrechetDistance: empty geometry")
+	}
+	return d, nil
+}
+
+func discreteHausdorffDistancePlanar(left, right []byte, _ uint32) (float64, error) {
+	a, err := decodeGeoGeometry(left)
+	if err != nil {
+		return 0, err
+	}
+	b, err := decodeGeoGeometry(right)
+	if err != nil {
+		return 0, err
+	}
+	d, ok := geo.DirectedHausdorffDistance(a, b)
+	if !ok {
+		return 0, moerr.NewInvalidInputNoCtx("ST_HausdorffDistance: empty geometry")
+	}
+	return d, nil
+}
+
+func discreteHausdorffDistanceBySRID(left, right []byte, srid uint32) (float64, error) {
+	if err := validateComputationSRID(srid); err != nil {
+		return 0, err
+	}
+	a, err := decodeGeoGeometry(left)
+	if err != nil {
+		return 0, err
+	}
+	b, err := decodeGeoGeometry(right)
+	if err != nil {
+		return 0, err
+	}
+	if srid == geo.SRIDWGS84 {
+		if err := geo.ValidateGeodeticCoordinates(a); err != nil {
+			return 0, err
+		}
+		if err := geo.ValidateGeodeticCoordinates(b); err != nil {
+			return 0, err
+		}
+	}
+	var d float64
+	var ok bool
+	if srid == geo.SRIDWGS84 {
+		d, ok = geo.GeodeticDirectedHausdorffDistance(a, b)
+	} else {
+		d, ok = geo.DirectedHausdorffDistance(a, b)
+	}
+	if !ok {
+		return 0, moerr.NewInvalidInputNoCtx("ST_HausdorffDistance: empty geometry")
+	}
+	return d, nil
+}
+
+func geographicDistanceUnitScale(functionName string, srid uint32, unit string) (float64, error) {
+	if srid != geo.SRIDWGS84 {
+		return 0, moerr.NewInvalidInputNoCtxf("%s length units require SRID %d", functionName, geo.SRIDWGS84)
+	}
+	scale, ok := geo.DistanceUnitScale(unit)
+	if !ok {
+		return 0, moerr.NewInvalidInputNoCtxf("unknown length unit %q", unit)
+	}
+	return scale, nil
 }
 
 // requireLineString decodes a geometry payload and asserts it is a LINESTRING.
@@ -11496,6 +11724,19 @@ func StDistance(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 // StDistance32 is the GEOMETRY32 overload of ST_Distance (returns float32).
 func StDistance32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return stDistance[float32](ivecs, result, proc, length, selectList)
+}
+
+// StDistanceWithUnit is the geographic ST_Distance overload whose third
+// argument requests the output length unit.
+func StDistanceWithUnit(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stDiscreteDistanceWithUnit[float64]("ST_DISTANCE", ivecs, result, length, selectList,
+		geometryDistanceBySRID, geometryDistancePayloadEmpty)
+}
+
+// StDistanceWithUnit32 is the GEOMETRY32 geographic overload.
+func StDistanceWithUnit32(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	return stDiscreteDistanceWithUnit[float32]("ST_DISTANCE", ivecs, result, length, selectList,
+		geometryDistanceBySRID, geometryDistancePayloadEmpty)
 }
 
 func stDistance[T float32 | float64](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -11965,6 +12206,32 @@ func geometryPredicateBySRID(
 		return false, err
 	}
 	return predicate(geo.WriteWKB(leftGeometry), geo.WriteWKB(rightGeometry))
+}
+
+// checkBinaryGeometryTypeSRIDWithUnit is the SRID guard for the three-argument
+// length-unit overloads. A NULL unit makes the whole row NULL, so it must be
+// considered alongside the two geometry operands before reporting a mismatch.
+// The ordinary two-argument guard remains unchanged for all other functions.
+func checkBinaryGeometryTypeSRIDWithUnit(functionName string, ivecs []*vector.Vector, length int, selectList *FunctionSelectList) (emptyBatch bool, err error) {
+	if length == 0 {
+		return true, nil
+	}
+	if len(ivecs) < 3 || (selectList != nil && selectList.IgnoreAllRow()) {
+		return false, nil
+	}
+	leftSRID := sridFromTypeWidth(ivecs[0].GetType().Width)
+	rightSRID := sridFromTypeWidth(ivecs[1].GetType().Width)
+	if leftSRID == rightSRID {
+		return false, nil
+	}
+	for row := uint64(0); row < uint64(length); row++ {
+		if functionRowSkipped(selectList, row) || ivecs[0].IsNull(row) ||
+			ivecs[1].IsNull(row) || ivecs[2].IsNull(row) {
+			continue
+		}
+		return false, moerr.NewInvalidInputNoCtxf(differentGeometrySRIDsErrorTemplate, functionName, leftSRID, rightSRID)
+	}
+	return false, nil
 }
 
 func geometryDistance(left, right []byte) (float64, error) {
@@ -15018,300 +15285,6 @@ func castBinaryArrayToInt(array []uint8) int64 {
 		result += int64(value) << uint(8*(len(array)-i-1))
 	}
 	return result
-}
-
-// generateAESKey generates an AES key using MySQL-style XOR folding.
-func generateAESKey(key []byte, keyLen int) ([]byte, error) {
-	if keyLen != 16 && keyLen != 32 {
-		return nil, moerr.NewInvalidInputNoCtx("unsupported aes key length")
-	}
-	out := make([]byte, keyLen)
-	for i, b := range key {
-		out[i%keyLen] ^= b
-	}
-	return out, nil
-}
-
-// pkcs7Padding adds PKCS7 padding to the data
-func pkcs7Padding(data []byte, blockSize int) []byte {
-	padding := blockSize - len(data)%blockSize
-	padtext := make([]byte, padding)
-	for i := range padtext {
-		padtext[i] = byte(padding)
-	}
-	return append(data, padtext...)
-}
-
-// pkcs7Unpadding removes PKCS7 padding from the data
-func pkcs7Unpadding(data []byte) ([]byte, error) {
-	if len(data) == 0 {
-		return nil, moerr.NewInvalidInputNoCtx("invalid padding")
-	}
-	padding := int(data[len(data)-1])
-	if padding > len(data) || padding == 0 {
-		return nil, moerr.NewInvalidInputNoCtx("invalid padding")
-	}
-	// Verify padding
-	for i := len(data) - padding; i < len(data); i++ {
-		if data[i] != byte(padding) {
-			return nil, moerr.NewInvalidInputNoCtx("invalid padding")
-		}
-	}
-	return data[:len(data)-padding], nil
-}
-
-// encryptECB encrypts data using AES-128-ECB mode
-func encryptECB(plaintext, key []byte) ([]byte, error) {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-
-	// Add PKCS7 padding
-	padded := pkcs7Padding(plaintext, aes.BlockSize)
-
-	// Encrypt each block independently (ECB mode)
-	ciphertext := make([]byte, len(padded))
-	for i := 0; i < len(padded); i += aes.BlockSize {
-		block.Encrypt(ciphertext[i:i+aes.BlockSize], padded[i:i+aes.BlockSize])
-	}
-
-	return ciphertext, nil
-}
-
-// decryptECB decrypts data using AES-128-ECB mode
-func decryptECB(ciphertext, key []byte) ([]byte, error) {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-
-	// Check that ciphertext length is a multiple of block size
-	if len(ciphertext)%aes.BlockSize != 0 {
-		return nil, moerr.NewInvalidInputNoCtx("invalid ciphertext length")
-	}
-
-	// Decrypt each block independently (ECB mode)
-	plaintext := make([]byte, len(ciphertext))
-	for i := 0; i < len(ciphertext); i += aes.BlockSize {
-		block.Decrypt(plaintext[i:i+aes.BlockSize], ciphertext[i:i+aes.BlockSize])
-	}
-
-	// Remove PKCS7 padding
-	return pkcs7Unpadding(plaintext)
-}
-
-// encryptCBC encrypts data using AES-CBC mode
-func encryptCBC(plaintext, key, iv []byte) ([]byte, error) {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	if len(iv) < aes.BlockSize {
-		return nil, moerr.NewInvalidInputNoCtx("invalid iv length")
-	}
-	padded := pkcs7Padding(plaintext, aes.BlockSize)
-	ciphertext := make([]byte, len(padded))
-	mode := cipher.NewCBCEncrypter(block, iv[:aes.BlockSize])
-	mode.CryptBlocks(ciphertext, padded)
-	return ciphertext, nil
-}
-
-// decryptCBC decrypts data using AES-CBC mode
-func decryptCBC(ciphertext, key, iv []byte) ([]byte, error) {
-	block, err := aes.NewCipher(key)
-	if err != nil {
-		return nil, err
-	}
-	if len(iv) < aes.BlockSize {
-		return nil, moerr.NewInvalidInputNoCtx("invalid iv length")
-	}
-	if len(ciphertext)%aes.BlockSize != 0 {
-		return nil, moerr.NewInvalidInputNoCtx("invalid ciphertext length")
-	}
-	plaintext := make([]byte, len(ciphertext))
-	mode := cipher.NewCBCDecrypter(block, iv[:aes.BlockSize])
-	mode.CryptBlocks(plaintext, ciphertext)
-	return pkcs7Unpadding(plaintext)
-}
-
-type aesModeInfo struct {
-	keyLen  int
-	needsIV bool
-	useCBC  bool
-}
-
-func validateAESIV(functionName string, modeInfo aesModeInfo, hasIV, nullIV bool, iv []byte) error {
-	if !modeInfo.needsIV {
-		return nil
-	}
-	if !hasIV {
-		return moerr.NewWrongParamCountToNativeFctNoCtx(functionName)
-	}
-	if nullIV || len(iv) < aes.BlockSize {
-		return moerr.NewAESInvalidIVNoCtx(functionName, aes.BlockSize)
-	}
-	return nil
-}
-
-func getAESMode(proc *process.Process) (aesModeInfo, error) {
-	mode := "aes-128-ecb"
-	if proc != nil && proc.GetResolveVariableFunc() != nil {
-		if v, err := proc.GetResolveVariableFunc()("block_encryption_mode", true, false); err == nil && v != nil {
-			if s, ok := v.(string); ok && s != "" {
-				mode = s
-			}
-		}
-	}
-	mode = strings.ToLower(mode)
-	switch mode {
-	case "aes-128-ecb":
-		return aesModeInfo{keyLen: 16, needsIV: false, useCBC: false}, nil
-	case "aes-256-cbc":
-		return aesModeInfo{keyLen: 32, needsIV: true, useCBC: true}, nil
-	default:
-		return aesModeInfo{}, moerr.NewInvalidInputNoCtx("unsupported block_encryption_mode")
-	}
-}
-
-// AESEncrypt: AES_ENCRYPT(str, key_str) - Encrypts a string using AES encryption
-func AESEncrypt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	rs := vector.MustFunctionResult[types.Varlena](result)
-	strParam := vector.GenerateFunctionStrParameter(ivecs[0])
-	keyParam := vector.GenerateFunctionStrParameter(ivecs[1])
-	var ivParam vector.FunctionParameterWrapper[types.Varlena]
-	hasIV := len(ivecs) >= 3
-	if hasIV {
-		ivParam = vector.GenerateFunctionStrParameter(ivecs[2])
-	}
-
-	modeInfo, modeErr := getAESMode(proc)
-
-	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.Contains(i) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		str, nullStr := strParam.GetStrValue(i)
-		key, nullKey := keyParam.GetStrValue(i)
-		var iv []byte
-		var nullIV bool
-		if hasIV {
-			iv, nullIV = ivParam.GetStrValue(i)
-		}
-
-		if nullStr || nullKey || modeErr != nil {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := validateAESIV("aes_encrypt", modeInfo, hasIV, nullIV, iv); err != nil {
-			return err
-		}
-
-		aesKey, keyErr := generateAESKey(key, modeInfo.keyLen)
-		if keyErr != nil {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		var ciphertext []byte
-		var encErr error
-		if modeInfo.useCBC {
-			ciphertext, encErr = encryptCBC(str, aesKey, iv)
-		} else {
-			ciphertext, encErr = encryptECB(str, aesKey)
-		}
-		if encErr != nil {
-			// On error, return NULL (MySQL behavior)
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		if err := rs.AppendBytes(ciphertext, false); err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// AESDecrypt: AES_DECRYPT(crypt_str, key_str) - Decrypts an encrypted string using AES decryption
-func AESDecrypt(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	rs := vector.MustFunctionResult[types.Varlena](result)
-	cryptParam := vector.GenerateFunctionStrParameter(ivecs[0])
-	keyParam := vector.GenerateFunctionStrParameter(ivecs[1])
-	var ivParam vector.FunctionParameterWrapper[types.Varlena]
-	hasIV := len(ivecs) >= 3
-	if hasIV {
-		ivParam = vector.GenerateFunctionStrParameter(ivecs[2])
-	}
-
-	modeInfo, modeErr := getAESMode(proc)
-
-	for i := uint64(0); i < uint64(length); i++ {
-		if selectList != nil && selectList.Contains(i) {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		crypt, nullCrypt := cryptParam.GetStrValue(i)
-		key, nullKey := keyParam.GetStrValue(i)
-		var iv []byte
-		var nullIV bool
-		if hasIV {
-			iv, nullIV = ivParam.GetStrValue(i)
-		}
-
-		if nullCrypt || nullKey || modeErr != nil {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := validateAESIV("aes_decrypt", modeInfo, hasIV, nullIV, iv); err != nil {
-			return err
-		}
-
-		aesKey, keyErr := generateAESKey(key, modeInfo.keyLen)
-		if keyErr != nil {
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		var plaintext []byte
-		var decErr error
-		if modeInfo.useCBC {
-			plaintext, decErr = decryptCBC(crypt, aesKey, iv)
-		} else {
-			plaintext, decErr = decryptECB(crypt, aesKey)
-		}
-		if decErr != nil {
-			// On error, return NULL (MySQL behavior)
-			if err := rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		if err := rs.AppendBytes(plaintext, false); err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
 
 // StPoint builds a POINT geometry from numeric (x, y) coordinates, where x is

@@ -695,6 +695,18 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	if stmt.Param.Parallel && noCompress && stmt.Param.Format != tree.PARQUET && stmt.Param.Format != tree.ARROW {
 		projectNode.ProjectList = makeCastExpr(stmt, fileName, originTableDef, projectNode, colToIndex)
 	}
+	// Parallel CSV staging converts file columns first. Enforce byte limits
+	// before defaults can read those assigned values, including the FK fallback.
+	for i, col := range originTableDef.Cols {
+		if _, supplied := colToIndex[col.Name]; !supplied ||
+			(col.Typ.Id != int32(types.T_blob) && col.Typ.Id != int32(types.T_text)) {
+			continue
+		}
+		projectNode.ProjectList[i], err = builder.forceAssignmentCastExpr(projectNode.ProjectList[i], col.Typ, loadAssignmentIgnore(stmt))
+		if err != nil {
+			return nil, err
+		}
+	}
 	lastNodeId, err = builder.appendLoadDefaultProjections(bindCtx, projectNode, originTableDef, colToIndex)
 	if err != nil {
 		return nil, err
@@ -910,7 +922,7 @@ func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, table
 			continue
 		}
 
-		defExpr, err := getDefaultExpr(ctx.GetContext(), tableDef.Cols[i])
+		defExpr, err := getDefaultExprForAssignment(ctx.GetContext(), tableDef.Cols[i], ctx.GetProcess(), loadAssignmentIgnore(stmt))
 		if err != nil {
 			return false, err
 		}
@@ -1082,6 +1094,13 @@ func makeCastExpr(stmt *tree.Load, fileName string, tableDef *TableDef, node *pl
 			Expr: expr,
 		}
 
+		if typ.Id == int32(types.T_blob) || typ.Id == int32(types.T_text) {
+			// The following assignment projection owns both conversion and
+			// width enforcement. An ordinary TINYTEXT cast here would silently
+			// truncate before strict/IGNORE assignment can inspect the payload.
+			ret = append(ret, planExpr)
+			continue
+		}
 		planExpr, _ = makePlan2CastExpr(stmt.Param.Ctx, planExpr, typ)
 		ret = append(ret, planExpr)
 	}

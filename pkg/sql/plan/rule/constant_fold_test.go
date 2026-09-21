@@ -28,6 +28,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
+func TestFoldedDecimalDependencySurvivesPackedVector(t *testing.T) {
+	for _, marked := range []bool{false, true} {
+		for _, null := range []bool{false, true} {
+			source := &plan.Expr{Expr: &plan.Expr_Vec{Vec: &plan.LiteralVec{DecimalLiteralRequiresV82: marked}}}
+			result := &plan.Literal{Isnull: null, Value: &plan.Literal_Bval{Bval: true}}
+			PreserveFoldedDecimalLiteralSemantics(source, result)
+			require.Equal(t, marked, result.DecimalLiteralRequiresV82)
+			require.Equal(t, null, result.Isnull)
+			require.True(t, result.GetBval())
+		}
+	}
+}
+
 func TestGetConstantValue2AppendsEnumLiteralWithEnumWidth(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	vec := vector.NewVec(types.T_enum.ToType())

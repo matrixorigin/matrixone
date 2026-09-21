@@ -238,7 +238,7 @@ desc src;
 Field    Type    Null    Key    Default    Extra    Comment
 id    BIGINT(64)    NO    PRI    null        
 body    VARCHAR(65535)    YES    MUL    null        
-title    TEXT(0)    YES        null        
+title    TEXT    YES        null        
 show create table src;
 Table    Create Table
 src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `body` varchar(65535) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT `ftidx`(`body`,`title`),\n FULLTEXT `ftidx2`(`body`)\n)
@@ -320,7 +320,7 @@ id    json1    json2
 desc src;
 Field    Type    Null    Key    Default    Extra    Comment
 id    BIGINT(64)    NO    PRI    null        
-json1    TEXT(0)    YES    MUL    null        
+json1    TEXT    YES    MUL    null        
 json2    VARCHAR(65535)    YES        null        
 show create table src;
 Table    Create Table
@@ -435,7 +435,7 @@ desc src;
 Field    Type    Null    Key    Default    Extra    Comment
 id    BIGINT(64)    NO    PRI    null        
 body    VARCHAR(65535)    YES        null        
-title    TEXT(0)    YES    MUL    null        
+title    TEXT    YES    MUL    null        
 show create table src;
 Table    Create Table
 src    CREATE TABLE `src` (\n  `id` bigint NOT NULL,\n  `body` varchar(65535) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT (`title`,`body`)\n)
@@ -462,7 +462,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 id1    VARCHAR(65535)    NO    PRI    null        
 id2    BIGINT(64)    NO    PRI    null        
 body    CHAR(128)    YES    MUL    null        
-title    TEXT(0)    YES        null        
+title    TEXT    YES        null        
 show create table src2;
 Table    Create Table
 src2    CREATE TABLE `src2` (\n  `id1` varchar(65535) NOT NULL,\n  `id2` bigint NOT NULL,\n  `body` char(128) DEFAULT NULL,\n  `title` text DEFAULT NULL,\n  PRIMARY KEY (`id1`,`id2`),\n FULLTEXT (`body`,`title`)\n)
@@ -520,7 +520,7 @@ id    json1    json2
 desc src;
 Field    Type    Null    Key    Default    Extra    Comment
 id    BIGINT(64)    NO    PRI    null        
-json1    TEXT(0)    YES    MUL    null        
+json1    TEXT    YES    MUL    null        
 json2    VARCHAR(65535)    YES        null        
 show create table src;
 Table    Create Table

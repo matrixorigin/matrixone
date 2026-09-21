@@ -1354,7 +1354,7 @@ func QuoteString(str string) string {
 	return string(result)
 }
 
-func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	parameter := vector.GenerateFunctionStrParameter(ivecs[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	for row := uint64(0); row < uint64(length); row++ {
@@ -1371,6 +1371,9 @@ func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *proce
 				return err
 			}
 			continue
+		}
+		if ivecs[0].GetIsBinaryStringAt(int(row)) && !utf8.Valid(value) {
+			return moerr.NewCannotConvertString(proc.Ctx, string(value), "binary", "utf8mb4")
 		}
 		resultBytes := quotedBytesLength(value)
 		if int64(resultBytes) > maxStringFunctionResultLength(result) {
@@ -2161,8 +2164,9 @@ func geometryTypeNameFromText(wkt string) (string, error) {
 		return "", moerr.NewInvalidInputNoCtx("invalid geometry payload")
 	}
 	upper := strings.ToUpper(s)
-	if strings.HasSuffix(upper, " EMPTY") {
-		typeName := strings.TrimSpace(strings.TrimSuffix(upper, " EMPTY"))
+	fields := strings.Fields(s)
+	if len(fields) == 2 && strings.EqualFold(fields[1], "EMPTY") {
+		typeName := strings.ToUpper(fields[0])
 		switch typeName {
 		case "POINT", "LINESTRING", "POLYGON", "MULTIPOINT", "MULTILINESTRING", "MULTIPOLYGON", "GEOMETRYCOLLECTION":
 			return typeName, nil
@@ -2183,6 +2187,12 @@ func geometryTypeNameFromText(wkt string) (string, error) {
 	default:
 		return "", moerr.NewInvalidInputNoCtx("invalid geometry type")
 	}
+}
+
+func isCompleteGeometryEmptyText(wkt, typeName string) bool {
+	fields := strings.Fields(wkt)
+	return len(fields) == 2 && strings.EqualFold(fields[0], typeName) &&
+		strings.EqualFold(fields[1], "EMPTY")
 }
 
 // decodeGeometryPayload returns the WKT text of a stored geometry. The stored
@@ -2842,10 +2852,17 @@ func validateGeometryCollectionNestingDepthFromTextWithDepth(wkt string, depth i
 	if depth >= maxGeometryCollectionNestingDepth {
 		return moerr.NewInvalidInputNoCtxf("geometry collection nesting depth exceeds %d", maxGeometryCollectionNestingDepth)
 	}
+	// GEOMETRYCOLLECTION EMPTY is a complete, valid collection member. It has
+	// no coordinate envelope to inspect, so it must be accepted before looking
+	// for parentheses. Keep this exact match so a valid EMPTY token cannot hide
+	// trailing payload.
+	if isCompleteGeometryEmptyText(s, typeName) {
+		return nil
+	}
 
 	openIdx := strings.IndexByte(s, '(')
 	closeIdx := strings.LastIndexByte(s, ')')
-	if openIdx < 0 || closeIdx <= openIdx {
+	if openIdx <= 0 || closeIdx <= openIdx || closeIdx != len(s)-1 {
 		return moerr.NewInvalidInputNoCtx("invalid geometry payload")
 	}
 	content := strings.TrimSpace(s[openIdx+1 : closeIdx])
@@ -2994,20 +3011,22 @@ func geometryIsEmpty(payload []byte) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	upper := strings.ToUpper(s)
-	if strings.HasSuffix(upper, "EMPTY") {
-		prefix := strings.TrimSpace(strings.TrimSuffix(upper, "EMPTY"))
-		switch prefix {
-		case "POINT", "LINESTRING", "POLYGON", "MULTIPOINT", "MULTILINESTRING", "MULTIPOLYGON", "GEOMETRYCOLLECTION":
-			return true, nil
-		default:
-			return false, moerr.NewInvalidInputNoCtx("invalid geometry type")
-		}
-	}
-
-	if _, err := geometryTypeNameFromPayload(payload); err != nil {
+	typeName, err := geometryTypeNameFromPayload(payload)
+	if err != nil {
 		return false, err
 	}
+	if typeName == "GEOMETRYCOLLECTION" {
+		// Empty-result short-circuiting must not hide an invalid collection
+		// envelope such as GEOMETRYCOLLECTION() trailing.
+		if err := validateGeometryCollectionNestingDepthFromText(s); err != nil {
+			return false, err
+		}
+	}
+	if isCompleteGeometryEmptyText(s, typeName) {
+		return true, nil
+	}
+
+	upper := strings.ToUpper(s)
 
 	if upper == "GEOMETRYCOLLECTION()" || upper == "MULTIPOINT()" || upper == "MULTILINESTRING()" || upper == "MULTIPOLYGON()" {
 		return true, nil
@@ -3031,7 +3050,7 @@ func geometryIsExplicitlyEmpty(payload []byte) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return strings.EqualFold(strings.TrimSpace(s), typeName+" EMPTY"), nil
+	return isCompleteGeometryEmptyText(s, typeName), nil
 }
 
 func StGeometryType(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -9777,6 +9796,7 @@ func UncompressedLength(parameters []*vector.Vector, result vector.FunctionResul
 func uncompressedLengthResult[Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, toResult func(uint32) Tr) error {
 	source := vector.GenerateFunctionStrParameter(parameters[0])
 	rs := vector.MustFunctionResult[Tr](result)
+	var warnings process.WarningAccumulator
 
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
@@ -9796,6 +9816,9 @@ func uncompressedLengthResult[Tr types.FixedSizeTExceptStrType](parameters []*ve
 		}
 
 		if len(data) <= 4 {
+			if len(data) > 0 {
+				warnings.Add(moerr.ER_ZLIB_Z_DATA_ERROR, uncompressDataWarning)
+			}
 			if err := rs.Append(toResult(0), false); err != nil {
 				return err
 			}
@@ -9806,6 +9829,9 @@ func uncompressedLengthResult[Tr types.FixedSizeTExceptStrType](parameters []*ve
 		if err := rs.Append(toResult(originalLen), false); err != nil {
 			return err
 		}
+	}
+	if warnings.Total > 0 {
+		warnings.Flush(proc)
 	}
 
 	return nil

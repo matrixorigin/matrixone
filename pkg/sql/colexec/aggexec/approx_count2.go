@@ -777,8 +777,8 @@ func ConfigureHLLLegacyState(aggregate AggFuncExec) {
 
 // ConfigureHLLFloatZeroState makes an APPROX_COUNT_DISTINCT executor emit the
 // version-3 hash semantics used by protocol v76: only scalar floating-point
-// signed zero is canonicalized. Scalar HLL_ADD_AGG and HLL_MERGE_AGG remain
-// persisted v2 states and are not changed by this remote compatibility knob.
+// signed zero is canonicalized. Non-canonical HLL_ADD_AGG and HLL_MERGE_AGG
+// remain persisted v2 states and are not changed by this remote knob.
 func ConfigureHLLFloatZeroState(aggregate AggFuncExec) {
 	if configurable, ok := aggregate.(interface{ setFloatZeroHLLState() }); ok {
 		configurable.setFloatZeroHLLState()
@@ -940,11 +940,12 @@ type hllAddExec struct {
 }
 
 func makeHllAdd(mp *mpool.MPool, id int64, arg types.Type) AggFuncExec {
-	// HLL_ADD_AGG output is persisted and consumed by HLL_MERGE_AGG. Keep the
-	// legacy v2 state for scalar inputs. New vector states use the versioned v4
-	// typed-key domain so restored v2 states remain distinguishable and keep
-	// their raw hash semantics instead of silently mixing hash domains.
-	if hllAddUsesCanonicalVector(arg) {
+	// HLL_ADD_AGG output is persisted and consumed by HLL_MERGE_AGG. New vector,
+	// JSON, and CHAR states use the typed v4 equivalence domain; other scalar
+	// inputs retain the historical v2 state until an explicit migration.
+	// Restored v2 states keep their serialized version and therefore continue
+	// hashing appended values in the old domain.
+	if hllAddUsesCanonicalTypedKey(arg) {
 		return &hllAddExec{hllStateExec: hllStateExec{
 			family: hllStateFamilyAdd,
 			aggExec: aggExec{
@@ -963,9 +964,10 @@ func makeHllAdd(mp *mpool.MPool, id int64, arg types.Type) AggFuncExec {
 	}}
 }
 
-func hllAddUsesCanonicalVector(arg types.Type) bool {
+func hllAddUsesCanonicalTypedKey(arg types.Type) bool {
 	switch arg.Oid {
-	case types.T_array_float32, types.T_array_float64,
+	case types.T_char, types.T_json,
+		types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16:
 		return true
 	default:
