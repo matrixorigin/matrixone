@@ -323,7 +323,7 @@ func TestPreparedConstantFoldKeepsSqlModeDependentTemporalCast(t *testing.T) {
 		types.New(types.T_timestamp, 0, 6),
 	} {
 		t.Run(targetType.Oid.String(), func(t *testing.T) {
-			expr := makeConstantCastExpr(t, "cast", stringType, targetType, "2024-01-02 03:04:05")
+			expr := makeConstantCastExpr(t, "cast", stringType, targetType, "2024-02-30 03:04:05")
 			folded := NewConstantFold(true).constantFold(expr, proc)
 			require.NotNil(t, folded.GetF())
 		})
@@ -335,7 +335,10 @@ func TestConstantFoldStillFoldsUnaffectedCasts(t *testing.T) {
 	stringType := types.New(types.T_varchar, 32, 0)
 
 	nonPreparedTemporal := makeConstantCastExpr(t, "cast", stringType, types.T_date.ToType(), "2024-01-02")
-	require.NotNil(t, NewConstantFold(false).constantFold(nonPreparedTemporal, proc).GetF())
+	require.NotNil(t, NewConstantFold(false).constantFold(nonPreparedTemporal, proc).GetLit())
+
+	nonPreparedInvalidTemporal := makeConstantCastExpr(t, "cast", stringType, types.T_date.ToType(), "2024-02-30")
+	require.NotNil(t, NewConstantFold(false).constantFold(nonPreparedInvalidTemporal, proc).GetF())
 
 	preparedNumeric := makeConstantCastExpr(t, "cast", stringType, types.T_int64.ToType(), "42")
 	require.NotNil(t, NewConstantFold(true).constantFold(preparedNumeric, proc).GetLit())

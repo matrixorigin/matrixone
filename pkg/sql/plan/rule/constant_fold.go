@@ -900,9 +900,11 @@ func ContainsSerializedLiteral(exprs []*plan.Expr) bool {
 	return false
 }
 
-// IsSqlModeDependentTemporalCast identifies explicit string-to-temporal casts
-// whose result depends on the execution session's SQL mode. Such expressions
-// must remain executable until the current session is available.
+// IsSqlModeDependentTemporalCast identifies string-to-temporal casts whose
+// result can depend on the execution session's SQL mode. Valid calendar
+// literals have the same value in every mode and remain foldable; invalid or
+// zero-component literals must remain executable until the current session is
+// available.
 func IsSqlModeDependentTemporalCast(fn *plan.Function) bool {
 	functionID, _ := function.DecodeOverloadID(fn.Func.GetObj())
 	if functionID != function.CAST || len(fn.Args) != 2 {
@@ -916,12 +918,30 @@ func IsSqlModeDependentTemporalCast(fn *plan.Function) bool {
 		return false
 	}
 
+	literal := fn.Args[0].GetLit()
+	if literal == nil {
+		return false
+	}
+	value, ok := literal.Value.(*plan.Literal_Sval)
+	if !ok {
+		return false
+	}
+
 	switch types.T(fn.Args[1].Typ.Id) {
-	case types.T_date, types.T_datetime, types.T_timestamp:
-		return true
+	case types.T_date:
+		if _, err := types.ParseDateCast(value.Sval); err != nil {
+			return true
+		}
+	case types.T_datetime, types.T_timestamp:
+		if _, err := types.ParseDatetime(value.Sval, fn.Args[1].Typ.Scale); err != nil {
+			return true
+		}
 	default:
 		return false
 	}
+
+	year, month, day, err := types.ParseDateCastComponents(value.Sval)
+	return err == nil && (year == 0 || month == 0 || day == 0)
 }
 
 // IsLegacyTimeAssignmentOutsideInternalRange identifies a CAST_STRICT literal

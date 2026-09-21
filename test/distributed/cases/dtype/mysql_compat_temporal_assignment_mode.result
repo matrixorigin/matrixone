@@ -34,19 +34,24 @@ prepare prepared_date from 'insert into target_temporal (d) values (''2024-02-30
 prepare prepared_datetime from 'insert into target_temporal (dt) values (''2024-04-31 12:34:56'')';
 set session sql_mode = '';
 execute prepared_date;
+-- @regex("parsedate",true)
 invalid argument parsedate, bad value 2024-02-30
 execute prepared_datetime;
+-- @regex("invalid datetime value",true)
 invalid input: invalid datetime value 2024-04-31 12:34:56
 set session sql_mode = 'ALLOW_INVALID_DATES';
 execute prepared_date;
 execute prepared_datetime;
 set session sql_mode = '';
 execute prepared_date;
+-- @regex("parsedate",true)
 invalid argument parsedate, bad value 2024-02-30
 execute prepared_datetime;
+-- @regex("invalid datetime value",true)
 invalid input: invalid datetime value 2024-04-31 12:34:56
 deallocate prepare prepared_date;
 deallocate prepare prepared_datetime;
+set session sql_mode = 'ALLOW_INVALID_DATES';
 select count(*) as prepared_rows from target_temporal;
 prepared_rows
 4
