@@ -60,6 +60,36 @@ by CREATE/ALTER or by the bounded regeneration path. Adding a historical column
 snapshot to the legacy catalog format would be a separate compatibility
 migration and is outside this PR.
 
+The post-upgrade reconciliation uses the exact current
+`InformationSchemaViewsDDL` as its idempotence marker. After the common v92 gate
+is available, a bounded page may repair any tenant whose
+`information_schema.VIEWS` is missing or whose definition is not exactly that
+current DDL. This includes the v92 predecessor definition and older
+metadata-view definitions; it does not modify user views, user data, or any
+information-schema object other than `VIEWS`. The broader convergence rule is
+intentional: a tenant can have been created while capability discovery was
+incomplete, can have stopped between a drop and create, or can be carrying an
+older view definition from a prior upgrade. Treating only one literal
+predecessor as repairable would leave those states permanently stale.
+
+The reconciliation transaction owns one account page (32 accounts by default)
+and publishes its process-local account cursor only after commit. A replacement
+failure, cancellation, or mid-page protocol loss rolls back the complete page
+and leaves the durable VIEWS definition and cursor as the retry marker. If an
+account disappears after page enumeration, its account-local objects are
+already gone; the transaction intentionally skips that account and may commit
+the remaining repairs and cursor. This is the only account-disappearance
+exception to page-wide rollback. The periodic upgrade owner retries the same
+page on its next 10-second maintenance tick; a successful empty-page scan wraps
+the cursor so late-created accounts remain discoverable. The final-version pass
+intentionally invokes VIEWS reconciliation before orphan-privilege maintenance
+and returns a visible error when reconciliation fails. Consequently,
+orphan-privilege maintenance is skipped on every failed VIEWS pass, including
+repeated failures; once VIEWS succeeds, that same pass proceeds to orphan
+cleanup. This serial ordering keeps a pass that failed to establish the v92
+public catalog contract from being reported as fully successful, while the
+bounded VIEWS page remains independently rollback-safe.
+
 MORPC v92 is allocated as `MORPCLatestVersion + 1` from official main v91 at
 `a873bcf555aad2bf5eab0d1754f935454ba3043e`, which already owns v70 through v91;
 v91 is the canonical CHAR and JSON HLL_ADD_AGG capability. The two function IDs
@@ -74,8 +104,8 @@ coordinator and every CN in the current inventory have positively confirmed v92;
 a mixed, unknown, RPC-failing, or incomplete capability probe records the
 predecessor VIEWS definition while still committing the final-version tenant
 row. A bounded post-upgrade reconciliation pass later rechecks common v92 and
-reuses the guarded transactional entry to replace only that predecessor
-definition. Any cluster with a CN below v92, including the immediate predecessor
+reuses the guarded transactional entry to converge missing or stale VIEWS
+definitions to the current contract. Any cluster with a CN below v92, including the immediate predecessor
 v91, preserves all existing metadata definitions, including the v58 COLUMNS
 contract. Pipeline preparation, remote marshal, and
 remote unmarshal reject a
@@ -138,6 +168,21 @@ restoration target has no function reference before an older CN is admitted;
 the cancellation-after-staging test additionally proves that a cancelled
 transaction preserves the legacy marker and page cursor, and that a later
 generation can retry and publish only after a committed v92 gate.
+
+Maintenance acceptance additionally covers the broader convergence rule: a
+missing VIEWS object and a stale/non-current VIEWS definition are both repair
+candidates, while an exact current definition is an idempotent no-op. The
+retry, mid-page protocol-loss, cancellation, commit-failure-after-restart, and
+late-account tests prove that a failed page publishes neither a partial
+replacement nor its cursor; the persisted predecessor definition remains the
+recovery marker. Account disappearance is deliberately skipped so that other
+accounts in the bounded page can still commit, while replacement and
+transaction failures retain page-wide rollback. The service-level ordering is
+intentionally visible in logs and return status: a failed VIEWS page is retried
+by the periodic owner before the same pass is considered complete, and
+orphan-privilege cleanup is skipped on every failed VIEWS pass rather than used
+to hide that failure. Once VIEWS succeeds, the same pass proceeds to orphan
+cleanup.
 
 ## Unresolved questions
 
