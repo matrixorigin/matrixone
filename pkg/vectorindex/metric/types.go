@@ -264,6 +264,26 @@ func RoundDistanceToElemDomain(dist float64) float64 {
 	return float64(float32(dist))
 }
 
+// smallestNormalFloat32 is the smallest positive normal (non-subnormal) float32. Below it, usearch's
+// float32 cosine norm underflows and the score leaves MO's cosine_distance contract.
+const smallestNormalFloat32 = 1.1754943508222875e-38
+
+// CosineVectorL2Norm returns the exact float64 L2 norm of a cosine vector and whether it is usable on
+// the HNSW/usearch cosine index. ok is false when the squared norm underflows the float32 domain
+// usearch computes cosine in -- a zero or subnormal-magnitude vector -- which usearch cannot score to
+// MO's cosine_distance, and HNSW ranks candidates before any output transform. HNSW cosine assumes
+// caller-normalized vectors, so the caller rejects an unusable vector fail-fast (it does NOT modify
+// the vector); the returned norm is for the diagnostic message. Computed once per search on the query
+// vector, not per row (#29082).
+func CosineVectorL2Norm[T types.RealNumbers](v []T) (norm float64, ok bool) {
+	var sumSq float64
+	for _, x := range v {
+		d := float64(x)
+		sumSq += d * d
+	}
+	return math.Sqrt(sumSq), float32(sumSq) >= smallestNormalFloat32
+}
+
 // HasFloat64DistanceOverflow reports whether an index search must fail fast because a float64 base
 // produced a distance the float32 domain cannot represent. Index distances are float32
 // (usearch_distance_t is float32; cuvs is float32-only), so only a float64 base can hold a finite

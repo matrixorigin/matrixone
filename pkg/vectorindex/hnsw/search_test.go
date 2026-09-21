@@ -200,11 +200,29 @@ func TestHnswSearchCosineRejected(t *testing.T) {
 	idxcfg.Usearch.Metric = usearch.Cosine
 	s := NewHnswSearch[float32](idxcfg, vectorindex.IndexTableConfig{})
 
-	_, _, err := s.Search(sqlproc, []float32{1e-20, 1e-20, 1e-20}, vectorindex.RuntimeConfig{
+	// A zero or subnormal (float32-squared-norm-underflowing) cosine query cannot be scored on the
+	// index to the SQL contract; it is rejected fail-fast, not silently rewritten (#29082).
+	_, _, err := s.Search(sqlproc, []float32{0, 0, 0}, vectorindex.RuntimeConfig{
 		Limit:        1,
 		OrigFuncName: "cosine_distance",
 	})
-	require.ErrorContains(t, err, "hnsw cosine search is disabled")
+	require.ErrorContains(t, err, "normalized")
+
+	_, _, err = s.Search(sqlproc, []float32{1e-20, 1e-20, 1e-20}, vectorindex.RuntimeConfig{
+		Limit:        1,
+		OrigFuncName: "cosine_distance",
+	})
+	require.ErrorContains(t, err, "normalized")
+
+	// A normalized cosine query is NOT rejected: it proceeds to the index; with no loaded index
+	// files it simply returns an empty result.
+	keys, dists, err := s.Search(sqlproc, []float32{1, 0, 0}, vectorindex.RuntimeConfig{
+		Limit:        1,
+		OrigFuncName: "cosine_distance",
+	})
+	require.NoError(t, err)
+	require.Empty(t, keys)
+	require.Empty(t, dists)
 }
 
 func TestBoundedHnswSearchLimits(t *testing.T) {

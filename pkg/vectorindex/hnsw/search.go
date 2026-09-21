@@ -99,13 +99,15 @@ func (s *HnswSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vec
 		return nil, nil, moerr.NewInternalErrorNoCtx("query is not []float32")
 	}
 	if s.Idxcfg.Usearch.Metric == metric.MetricTypeToUsearchMetric[metric.Metric_CosineDistance] {
-		// Do not expose usearch's raw cosine score to a direct/old HNSW caller. It is
-		// not the SQL cosine_distance contract for zero and subnormal vectors, and the
-		// search heap has already discarded candidates before any output transform.
-		// New SQL plans avoid this path in prepareHnswIndexContext; this guard protects
-		// direct callers and mixed-version plans until all nodes use the planner gate.
-		return nil, nil, moerr.NewInternalErrorNoCtx(
-			"hnsw cosine search is disabled because usearch scores are not SQL-compatible at the zero-vector boundary")
+		// HNSW cosine assumes caller-normalized query vectors. A zero/subnormal query makes usearch's
+		// float32 cosine norm underflow, so it cannot be scored to MO's cosine_distance and the search
+		// heap discards candidates before any transform. Reject it fail-fast -- do NOT modify the
+		// vector (rewriting it would silently disagree with the stored index). A normalized query uses
+		// native cosine ANN (#29082).
+		if norm, ok := metric.CosineVectorL2Norm(query); !ok {
+			return nil, nil, moerr.NewInternalErrorNoCtx(fmt.Sprintf(
+				"hnsw cosine search requires a normalized (non-zero, non-subnormal) query vector; its L2 norm %g underflows the float32 domain the index computes in", norm))
+		}
 	}
 
 	limit := rt.Limit

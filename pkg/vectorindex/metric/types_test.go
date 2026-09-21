@@ -180,3 +180,37 @@ func TestHasFloat64DistanceOverflow(t *testing.T) {
 	require.True(t, HasFloat64DistanceOverflow[float64]([]float64{1, math.Inf(1), 3}))
 	require.True(t, HasFloat64DistanceOverflow[float64]([]float64{math.Inf(-1)}))
 }
+
+func TestCosineVectorL2Norm(t *testing.T) {
+	// Zero and subnormal-magnitude vectors underflow the float32 cosine norm: ok=false, the caller
+	// errors out. The norm is still returned (for the diagnostic message).
+	norm, ok := CosineVectorL2Norm([]float32{0, 0, 0})
+	require.False(t, ok)
+	require.Equal(t, 0.0, norm)
+	_, ok = CosineVectorL2Norm([]float64{0, 0, 0})
+	require.False(t, ok)
+	norm, ok = CosineVectorL2Norm([]float32{1e-20, 1e-20, 1e-20}) // sumSq 3e-40 underflows float32
+	require.False(t, ok)
+	require.InEpsilon(t, math.Sqrt(3e-40), norm, 1e-6) // norm itself is still computed
+	_, ok = CosineVectorL2Norm([]float64{1e-20, 1e-20, 1e-20})
+	require.False(t, ok)
+
+	// Normal / normalized vectors are usable and the returned norm is exact.
+	norm, ok = CosineVectorL2Norm([]float32{1, 0, 0})
+	require.True(t, ok)
+	require.InEpsilon(t, 1.0, norm, 1e-6)
+
+	norm, ok = CosineVectorL2Norm([]float32{0.5773503, 0.5773503, 0.5773503}) // unit
+	require.True(t, ok)
+	require.InEpsilon(t, 1.0, norm, 1e-6)
+
+	norm, ok = CosineVectorL2Norm([]float64{3, 4}) // norm 5
+	require.True(t, ok)
+	require.InEpsilon(t, 5.0, norm, 1e-9)
+
+	// Boundary: sumSq just above the float32 smallest-normal is ok; just below underflows.
+	_, ok = CosineVectorL2Norm([]float32{2e-19}) // sumSq 4e-38 > 1.18e-38 normal
+	require.True(t, ok)
+	_, ok = CosineVectorL2Norm([]float32{1e-19}) // sumSq 1e-38 < 1.18e-38 normal
+	require.False(t, ok)
+}
