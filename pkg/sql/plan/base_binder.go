@@ -5795,6 +5795,11 @@ func bindFuncExprImplByPlanExpr(
 	allowInternalFunctionArgs bool,
 ) (*plan.Expr, error) {
 	var err error
+	if (strings.EqualFold(name, "extractvalue") || strings.EqualFold(name, "updatexml")) && len(args) >= 2 {
+		if !isXMLXPathConstant(args[1]) {
+			return nil, moerr.NewInvalidInput(ctx, "Only constant XPATH queries are supported")
+		}
+	}
 	args, err = bindIntegerFunctionArguments(ctx, name, args)
 	if err != nil {
 		return nil, err
@@ -7042,6 +7047,35 @@ func bindFuncExprImplByPlanExpr(
 		},
 		Typ: Typ,
 	}, nil
+}
+
+// XPath configuration is execution-invariant, not merely constant within one
+// vector batch. Prepared markers are rebound on every execution; columns and
+// session variables must not become admissible because a batch has one row.
+func isXMLXPathConstant(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if expr.GetP() != nil {
+		return true
+	}
+	if rule.IsConstant(expr, false) {
+		return true
+	}
+	f := expr.GetF()
+	if f == nil || f.Func == nil {
+		return false
+	}
+	ov, ok := function.GetFunctionByIdWithoutError(f.Func.Obj)
+	if !ok || ov.CannotFold() || ov.IsRealTimeRelated() {
+		return false
+	}
+	for _, arg := range f.Args {
+		if !isXMLXPathConstant(arg) {
+			return false
+		}
+	}
+	return true
 }
 
 func sameFunctionArgumentTypes(left, right []types.Type) bool {
