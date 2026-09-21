@@ -356,7 +356,16 @@ func (s *remoteWarningCollector) appendWarningBatchLocked(
 			if candidateBytes > process.WarningDiagnosticMaxMessageBytes {
 				candidateBytes = process.WarningDiagnosticMaxMessageBytes
 			}
-			available := s.warningBudget.Limit() - s.warningBudget.Used()
+			used := s.warningBudget.Used()
+			available := uint64(0)
+			if limit := s.warningBudget.Limit(); used <= limit {
+				available = limit - used
+			}
+			if replacement != nil && *replacement > 0 && *replacement <= used {
+				// The replacement charge is already included in Used(). It will
+				// be atomically exchanged by Reconcile below.
+				available += *replacement
+			}
 			if uint64(candidateBytes)+process.WarningDiagnosticRecordOverhead > available {
 				s.warningRetentionSealed = true
 				continue

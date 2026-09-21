@@ -1723,7 +1723,17 @@ func (e *errInfo) pushStoredWithReplacement(
 		if candidateBytes > process.WarningDiagnosticMaxMessageBytes {
 			candidateBytes = process.WarningDiagnosticMaxMessageBytes
 		}
-		available := budget.Limit() - budget.Used()
+		used := budget.Used()
+		available := uint64(0)
+		if limit := budget.Limit(); used <= limit {
+			available = limit - used
+		}
+		if replacement != nil && *replacement > 0 && *replacement <= used {
+			// The replacement charge is already included in Used(). It will be
+			// atomically exchanged by Reconcile below, so make that capacity
+			// visible to the admission check first.
+			available += *replacement
+		}
 		if uint64(candidateBytes)+process.WarningDiagnosticRecordOverhead > available {
 			e.warningRetentionSealed = true
 			return
