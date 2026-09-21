@@ -15,10 +15,11 @@
 package function
 
 import (
+	"bytes"
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -27,7 +28,7 @@ import (
 // validate the public SQL contract; this test keeps the changed execution
 // branches covered by the unit-test coverage gate as well.
 func TestTemporalCompatibilityExecutionMatrix(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc := newTmpProcess(t)
 
 	t.Run("dynamic str_to_date domains", func(t *testing.T) {
 		input := NewFunctionTestInput(types.T_varchar.ToType(), []string{
@@ -78,6 +79,31 @@ func TestTemporalCompatibilityExecutionMatrix(t *testing.T) {
 		}
 	})
 
+	t.Run("datetime arithmetic and invalid operands", func(t *testing.T) {
+		dt, err := types.ParseDatetime("2024-02-29 12:34:56.123456", 6)
+		require.NoError(t, err)
+		left := NewFunctionTestInput(types.T_datetime.ToTypeWithScale(6), []types.Datetime{dt, types.ZeroDatetime}, []bool{false, false})
+		right := NewFunctionTestInput(types.T_varchar.ToType(), []string{"01:02:03.100000", "bad"}, []bool{false, false})
+		want, err := types.ParseDatetime("2024-02-29 13:36:59.223456", 6)
+		require.NoError(t, err)
+		for _, tc := range []struct {
+			name string
+			fn   fEvalFn
+			vals []types.Datetime
+			null []bool
+		}{
+			{"add", AddTime, []types.Datetime{want, 0}, []bool{false, true}},
+			{"sub", SubTime, []types.Datetime{dt - types.Datetime(3723100000), 0}, []bool{false, true}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				caseDef := NewFunctionTestCase(proc, []FunctionTestInput{left, right},
+					NewFunctionTestResult(types.T_datetime.ToTypeWithScale(6), false, tc.vals, tc.null), tc.fn)
+				ok, info := caseDef.Run()
+				require.True(t, ok, info)
+			})
+		}
+	})
+
 	t.Run("format and extract domains", func(t *testing.T) {
 		dt, err := types.ParseDatetime("2024-02-29 12:34:56.123456", 6)
 		require.NoError(t, err)
@@ -104,4 +130,131 @@ func TestTemporalCompatibilityExecutionMatrix(t *testing.T) {
 			})
 		}
 	})
+}
+
+func TestTemporalCompatibilityHelperDomains(t *testing.T) {
+	for _, tc := range []struct {
+		format         string
+		isTime, isDate bool
+		scale          int
+	}{
+		{"%H:%i:%s.%f", true, false, 6},
+		{"%Y-%m-%d", false, true, 0},
+		{"%Y-%m-%d %H:%i:%s.%f", true, true, 6},
+		{"%W, %M %d, %Y", false, true, 0},
+		{"%r", true, false, 0},
+	} {
+		t.Run(tc.format, func(t *testing.T) {
+			isTime, isDate, scale := dynamicStrToDateFormatType(tc.format)
+			require.Equal(t, tc.isTime, isTime)
+			require.Equal(t, tc.isDate, isDate)
+			require.Equal(t, tc.scale, scale)
+		})
+	}
+
+	dt, err := types.ParseDatetime("2024-02-29 12:34:56.123456", 6)
+	require.NoError(t, err)
+	tm := types.TimeFromClock(false, 12, 34, 56, 123456)
+	for _, unit := range []string{
+		"microsecond", "second", "minute", "hour", "day", "week", "month", "quarter", "year",
+		"second_microsecond", "minute_microsecond", "minute_second", "hour_microsecond", "hour_second", "hour_minute",
+	} {
+		t.Run("datetime/"+unit, func(t *testing.T) {
+			value, err := extractFromDatetime(unit, dt)
+			require.NoError(t, err)
+			require.NotEmpty(t, value)
+		})
+		if unit == "day" || unit == "week" || unit == "month" || unit == "quarter" || unit == "year" {
+			continue
+		}
+		t.Run("time/"+unit, func(t *testing.T) {
+			value, err := extractFromTime(unit, tm)
+			require.NoError(t, err)
+			require.NotEmpty(t, value)
+		})
+	}
+
+	for _, format := range []string{"%d/%m/%Y", "%Y%m%d", "%Y", "%Y-%m-%d", "%Y-%m-%d %H:%i:%s", "%Y/%m/%d", "%Y/%m/%d %H:%i:%s"} {
+		t.Run("date-format/"+format, func(t *testing.T) {
+			var buf bytes.Buffer
+			operator := dateFormatOperator(format)
+			isNull, err := operator(context.Background(), dt, format, &buf)
+			require.NoError(t, err)
+			require.False(t, isNull)
+			require.NotEmpty(t, buf.String())
+		})
+	}
+
+	for _, unit := range []string{"microsecond", "second", "minute", "hour", "day", "week", "month", "quarter", "year"} {
+		require.Equal(t, unit == "microsecond" || unit == "second" || unit == "minute" || unit == "hour", extractUnitPrefersTime(unit))
+	}
+	_, err = doTimeAdd(tm, 1, types.Second)
+	require.NoError(t, err)
+	_, err = doTimeAdd(tm, int64(types.MaxHourInTime+1), types.Hour)
+	require.Error(t, err)
+}
+
+func TestTemporalCompatibilityPeriodAndUnixDomains(t *testing.T) {
+	proc := newTmpProcess(t)
+	format := NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%Y-%m-%d %H:%i:%s"}, nil)
+	for _, tc := range []struct {
+		name  string
+		in    FunctionTestInput
+		fn    fEvalFn
+		want  []string
+		nulls []bool
+	}{
+		{"unix-int", NewFunctionTestInput(types.T_int64.ToType(), []int64{0, 1, -1}, []bool{false, false, true}), FromUnixTimeInt64Format, []string{"1970-01-01 00:00:00", "1970-01-01 00:00:01", ""}, []bool{false, false, true}},
+		{"unix-uint", NewFunctionTestInput(types.T_uint64.ToType(), []uint64{0, 1}, nil), FromUnixTimeUint64Format, []string{"1970-01-01 00:00:00", "1970-01-01 00:00:01"}, nil},
+		{"unix-float", NewFunctionTestInput(types.T_float64.ToType(), []float64{0, 1.5}, nil), FromUnixTimeFloat64Format, []string{"1970-01-01 00:00:00", "1970-01-01 00:00:01"}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := NewFunctionTestResult(types.T_varchar.ToType(), false, tc.want, tc.nulls)
+			caseDef := NewFunctionTestCase(proc, []FunctionTestInput{tc.in, format}, result, tc.fn)
+			ok, info := caseDef.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	for _, tc := range []struct {
+		name string
+		fn   fEvalFn
+	}{
+		{"period-add-signed", PeriodAdd},
+		{"period-add-unsigned", PeriodAdd},
+		{"period-add-float", PeriodAdd},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var period FunctionTestInput
+			var months FunctionTestInput
+			switch tc.name {
+			case "period-add-signed":
+				period = NewFunctionTestInput(types.T_int64.ToType(), []int64{200801, 9912}, nil)
+				months = NewFunctionTestInput(types.T_int64.ToType(), []int64{2, 1}, nil)
+			case "period-add-unsigned":
+				period = NewFunctionTestInput(types.T_uint64.ToType(), []uint64{200801}, nil)
+				months = NewFunctionTestInput(types.T_uint64.ToType(), []uint64{2}, nil)
+			default:
+				period = NewFunctionTestInput(types.T_int64.ToType(), []int64{200801}, nil)
+				months = NewFunctionTestInput(types.T_float64.ToType(), []float64{2.9}, nil)
+			}
+			want := []int64{200803}
+			if tc.name == "period-add-signed" {
+				want = []int64{200803, 200001}
+			}
+			caseDef := NewFunctionTestCase(proc, []FunctionTestInput{period, months},
+				NewFunctionTestResult(types.T_int64.ToType(), false, want, nil), tc.fn)
+			ok, info := caseDef.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	periodDiff := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{200802, 200801}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{200703, 200801}, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{11, 0}, nil), PeriodDiff)
+	ok, info := periodDiff.Run()
+	require.True(t, ok, info)
 }
