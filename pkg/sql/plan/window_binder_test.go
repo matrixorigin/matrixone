@@ -60,6 +60,10 @@ func (b *stubWindowBinder) makeFrameConstValue(expr tree.Expr, typ *planpb.Type)
 	return b.makeFrameValueFunc(expr, typ)
 }
 
+func (b *stubWindowBinder) mysqlSpecialOrderKey(expr *planpb.Expr, typ *planpb.Type) (*planpb.Expr, error) {
+	return makeMySQLSpecialOrderKey(b.GetContext(), expr, typ)
+}
+
 func (b *stubWindowBinder) GetContext() context.Context {
 	return context.Background()
 }
