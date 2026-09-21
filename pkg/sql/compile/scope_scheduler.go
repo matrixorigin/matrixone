@@ -37,21 +37,26 @@ var (
 // Root scopes are admitted through a ready queue serviced by workers owned by
 // one Compile. Scope orchestration uses event tasks whose completion is
 // detached from the ready worker. VM execution is driven exclusively by
-// pipeline continuations; event-source goroutines are reserved for external
-// blocking I/O and teardown, and always re-admit completion to this queue.
+// pipeline continuations; a bounded event-worker lane owns external blocking
+// I/O and teardown, and always re-admits completion to this queue.
 type scopeTaskScheduler struct {
-	id          uint64
-	ctx         context.Context
-	readyMu     sync.Mutex
-	readyCond   *sync.Cond
-	readyQueue  []scopeScheduledTask
-	readyClosed bool
-	workers     sync.WaitGroup
-	mu          sync.Mutex
-	taskCond    *sync.Cond
-	pending     int
-	closed      bool
-	waitOnce    sync.Once
+	id           uint64
+	ctx          context.Context
+	readyMu      sync.Mutex
+	readyCond    *sync.Cond
+	readyQueue   []scopeScheduledTask
+	readyClosed  bool
+	workers      sync.WaitGroup
+	eventMu      sync.Mutex
+	eventCond    *sync.Cond
+	eventQueue   []scopeEventTask
+	eventClosed  bool
+	eventWorkers sync.WaitGroup
+	mu           sync.Mutex
+	taskCond     *sync.Cond
+	pending      int
+	closed       bool
+	waitOnce     sync.Once
 
 	onPanic func(any)
 }
@@ -64,6 +69,11 @@ type scopeScheduledTask struct {
 	run          func()
 	asynchronous bool
 	done         func()
+}
+
+type scopeEventTask struct {
+	name string
+	run  func()
 }
 
 func newScopeTaskScheduler(
@@ -85,10 +95,13 @@ func newScopeTaskScheduler(
 	}
 	s.taskCond = sync.NewCond(&s.mu)
 	s.readyCond = sync.NewCond(&s.readyMu)
+	s.eventCond = sync.NewCond(&s.eventMu)
 
 	for i := 0; i < workerCount; i++ {
 		s.workers.Add(1)
 		go s.worker()
+		s.eventWorkers.Add(1)
+		go s.eventWorker()
 	}
 	logutil.Debugf("[scope-scheduler] create id=%d workers=%d", s.id, workerCount)
 	return s
@@ -111,6 +124,39 @@ func (s *scopeTaskScheduler) worker() {
 		s.readyQueue = s.readyQueue[:len(s.readyQueue)-1]
 		s.readyMu.Unlock()
 		s.runTask(task)
+	}
+}
+
+func (s *scopeTaskScheduler) eventWorker() {
+	defer s.eventWorkers.Done()
+	for {
+		s.eventMu.Lock()
+		for len(s.eventQueue) == 0 && !s.eventClosed {
+			s.eventCond.Wait()
+		}
+		if len(s.eventQueue) == 0 && s.eventClosed {
+			s.eventMu.Unlock()
+			return
+		}
+		task := s.eventQueue[0]
+		copy(s.eventQueue, s.eventQueue[1:])
+		s.eventQueue[len(s.eventQueue)-1] = scopeEventTask{}
+		s.eventQueue = s.eventQueue[:len(s.eventQueue)-1]
+		s.eventMu.Unlock()
+
+		func() {
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					logutil.Errorf("[scope-scheduler] event source panic id=%d name=%s value=%v", s.id, task.name, recovered)
+					if s.onPanic != nil {
+						s.onPanic(recovered)
+					}
+				}
+				s.finishTask()
+			}()
+			logutil.Debugf("[scope-scheduler] start id=%d lane=event-source name=%s", s.id, task.name)
+			task.run()
+		}()
 	}
 }
 
@@ -316,9 +362,10 @@ func (s *scopeTaskScheduler) submitContinuation(
 
 // submitEventSource registers an external I/O source. The source owns its
 // blocking transport wait and publishes completion back into the ready queue;
-// scheduler workers are never used as parking points for that wait. It is not
-// a VM execution lane: every operator continuation returns to submitRoot when
-// it needs another quantum.
+// ready workers are never used as parking points for that wait. Event sources
+// run on the scheduler's bounded event-worker lane rather than allocating one
+// goroutine per event. It is not a VM execution lane: every operator
+// continuation returns to submitRoot when it needs another quantum.
 func (s *scopeTaskScheduler) submitEventSource(name string, task func()) error {
 	return s.submitEventSourceWithContext(name, task, false)
 }
@@ -353,19 +400,15 @@ func (s *scopeTaskScheduler) submitEventSourceWithContext(name string, task func
 	s.pending++
 	s.mu.Unlock()
 
-	go func() {
-		defer s.finishTask()
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				logutil.Errorf("[scope-scheduler] event source panic id=%d name=%s value=%v", s.id, name, recovered)
-				if s.onPanic != nil {
-					s.onPanic(recovered)
-				}
-			}
-		}()
-		logutil.Debugf("[scope-scheduler] start id=%d lane=event-source name=%s", s.id, name)
-		task()
-	}()
+	s.eventMu.Lock()
+	if s.eventClosed {
+		s.eventMu.Unlock()
+		s.finishTask()
+		return errScopeTaskSchedulerClosed
+	}
+	s.eventQueue = append(s.eventQueue, scopeEventTask{name: name, run: task})
+	s.eventCond.Signal()
+	s.eventMu.Unlock()
 	return nil
 }
 
@@ -388,7 +431,12 @@ func (s *scopeTaskScheduler) wait() {
 		s.readyClosed = true
 		s.readyCond.Broadcast()
 		s.readyMu.Unlock()
+		s.eventMu.Lock()
+		s.eventClosed = true
+		s.eventCond.Broadcast()
+		s.eventMu.Unlock()
 		s.workers.Wait()
+		s.eventWorkers.Wait()
 		logutil.Debugf("[scope-scheduler] close id=%d duration=%s", s.id, time.Since(started))
 	})
 }
