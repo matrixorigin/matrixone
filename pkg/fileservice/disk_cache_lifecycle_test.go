@@ -25,6 +25,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	promtestutil "github.com/prometheus/client_golang/prometheus/testutil"
@@ -216,31 +217,37 @@ func TestDiskCacheReadSharesWaitBudgetAcrossEntries(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			cache := newLifecycleTestDiskCache(t)
-			entries := make([]IOEntry, 64)
-			for i := range entries {
-				entries[i] = IOEntry{Offset: int64(i), Size: 1}
-			}
-
-			var releases []func()
-			for _, path := range tc.holdPaths(cache, entries) {
-				releases = append(releases, cache.startUpdate(path))
-			}
-			releaseAll := sync.OnceFunc(func() {
-				for _, release := range releases {
-					release()
+			// Measure the shared timer budget, not scheduler or filesystem delay
+			// on a loaded race runner. Keep all path wait channels in this bubble.
+			synctest.Test(t, func(t *testing.T) {
+				cache := newLifecycleTestDiskCache(t)
+				entries := make([]IOEntry, 64)
+				for i := range entries {
+					entries[i] = IOEntry{Offset: int64(i), Size: 1}
 				}
-			})
-			t.Cleanup(releaseAll)
 
-			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-			defer cancel()
-			require.NoError(t, cache.Read(ctx, &IOVector{
-				FilePath: "foo",
-				Entries:  entries,
-			}))
-			require.NoError(t, ctx.Err(), "one Read exhausted a per-entry wait budget")
-			releaseAll()
+				var releases []func()
+				for _, path := range tc.holdPaths(cache, entries) {
+					releases = append(releases, cache.startUpdate(path))
+				}
+				releaseAll := sync.OnceFunc(func() {
+					for _, release := range releases {
+						release()
+					}
+				})
+				t.Cleanup(releaseAll)
+
+				ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+				defer cancel()
+				started := time.Now()
+				require.NoError(t, cache.Read(ctx, &IOVector{
+					FilePath: "foo",
+					Entries:  entries,
+				}))
+				require.NoError(t, ctx.Err(), "one Read exhausted a per-entry wait budget")
+				require.Equal(t, shortIOWaitDuration, time.Since(started), "all contended paths share one timer budget")
+				releaseAll()
+			})
 		})
 	}
 }
@@ -531,8 +538,12 @@ func TestDiskCacheCompletedOwnerCannotReleaseNextGeneration(t *testing.T) {
 
 func TestDiskCacheAsyncUpdateReturnsBeforePathAvailable(t *testing.T) {
 	cache := newLifecycleTestDiskCache(t)
+	// This test owns the scheduling gates, not the filesystem's sync latency.
+	syncStarted, unblockSync := installBlockedDiskCacheFileSync(cache)
+	t.Cleanup(unblockSync)
 	diskPath := cache.pathForIOEntry("foo", IOEntry{Offset: 0, Size: 1})
 	release := cache.startUpdate(diskPath)
+	t.Cleanup(release)
 	data := []byte("x")
 	written := make(chan IOEntry, 1)
 	ctx := OnDiskCacheWritten(context.Background(), func(_ string, entry IOEntry) {
@@ -551,8 +562,6 @@ func TestDiskCacheAsyncUpdateReturnsBeforePathAvailable(t *testing.T) {
 	case err := <-done:
 		require.NoError(t, err)
 	case <-time.After(diskCacheLifecycleTestTimeout):
-		release()
-		<-done
 		t.Fatal("async disk-cache update waited for the current path owner")
 	}
 
@@ -563,12 +572,28 @@ func TestDiskCacheAsyncUpdateReturnsBeforePathAvailable(t *testing.T) {
 	}
 	data[0] = 'y'
 	release()
+	select {
+	case <-syncStarted:
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		t.Fatal("async disk-cache update did not reach finalization after path release")
+	}
+	select {
+	case <-written:
+		t.Fatal("async callback ran before cache finalization completed")
+	default:
+	}
+	unblockSync()
 	flushCtx, cancel := context.WithTimeout(context.Background(), diskCacheLifecycleTestTimeout)
 	defer cancel()
 	cache.Flush(flushCtx)
 	require.NoError(t, flushCtx.Err())
-	writtenEntry := <-written
-	require.Equal(t, []byte("x"), writtenEntry.Data)
+	// Flush drains pending writes, but callbacks run independently afterward.
+	select {
+	case writtenEntry := <-written:
+		require.Equal(t, []byte("x"), writtenEntry.Data)
+	case <-time.After(diskCacheLifecycleTestTimeout):
+		t.Fatal("async disk-cache update did not deliver its completion callback")
+	}
 
 	vector := &IOVector{FilePath: "foo", Entries: []IOEntry{{Offset: 0, Size: 1}}}
 	defer vector.Release()
@@ -1169,24 +1194,61 @@ func TestDiskCacheCloseWinsAtFilePublicationBoundary(t *testing.T) {
 
 func TestDiskCachePublicationClaimWinsBeforeClose(t *testing.T) {
 	cache := newLifecycleTestDiskCache(t)
+	// This test owns the publication/Close linearization boundary. Keep the
+	// unrelated persistence syscall out of that ownership contract; the real
+	// file.Sync path is covered by the dedicated error and finalize tests.
+	cache.fileSync = func(*os.File) error { return nil }
 	diskPath := cache.pathForFile("claimed")
 	require.True(t, cache.tryReserveAsyncFileFinalize(diskPath))
+	var releaseReservationOnce sync.Once
+	releaseReservation := func() {
+		releaseReservationOnce.Do(func() {
+			cache.releaseAsyncFileFinalizeReservation(diskPath)
+		})
+	}
+	// Own the reservation immediately. The worker below takes this ownership
+	// over only after all setup succeeds, and the once keeps failure cleanup
+	// from racing with worker cleanup.
+	t.Cleanup(releaseReservation)
 	doneUpdate, ok := cache.tryStartUpdateWithCleanup(
 		diskPath,
 		func() error { return cache.removeUnindexedFile(diskPath) },
 	)
 	require.True(t, ok)
+	var doneUpdateOnce sync.Once
+	var doneUpdateErr error
+	finishUpdate := func() error {
+		doneUpdateOnce.Do(func() {
+			doneUpdateErr = doneUpdate()
+		})
+		return doneUpdateErr
+	}
+	// Register ownership cleanup in reservation -> update -> temp order.
+	// Cleanup runs in reverse registration order, so every failure path releases
+	// resources in temp -> update -> reservation order, matching the successful
+	// finalizer path.
+	t.Cleanup(func() { _ = finishUpdate() })
 	tempFile, err := os.CreateTemp(cache.path, "claimed-*"+cacheFileTempSuffix)
 	require.NoError(t, err)
+	var cleanupTempOnce sync.Once
+	var cleanupTempErr error
+	cleanupTemp := func() error {
+		cleanupTempOnce.Do(func() {
+			cleanupTempErr = cleanupDiskCacheTempFile(tempFile)
+		})
+		return cleanupTempErr
+	}
+	t.Cleanup(func() { _ = cleanupTemp() })
 	_, err = tempFile.WriteString("payload")
 	require.NoError(t, err)
 
 	claimReached := make(chan struct{})
 	releaseClaim := make(chan struct{})
 	unblock := sync.OnceFunc(func() { close(releaseClaim) })
-	t.Cleanup(unblock)
 	finalizeDone := make(chan error, 1)
+	workerDone := make(chan struct{})
 	go func() {
+		defer close(workerDone)
 		finalizeErr := cache.finalizeFile(
 			cache.async.ctx,
 			diskPath,
@@ -1198,17 +1260,51 @@ func TestDiskCachePublicationClaimWinsBeforeClose(t *testing.T) {
 				return claimed
 			},
 		)
-		cleanupErr := errors.Join(
-			cleanupDiskCacheTempFile(tempFile),
-			doneUpdate(),
-		)
-		cache.releaseAsyncFileFinalizeReservation(diskPath)
+		cleanupErr := errors.Join(cleanupTemp(), finishUpdate())
+		releaseReservation()
 		finalizeDone <- errors.Join(finalizeErr, cleanupErr)
 	}()
+	// Always release the barrier before waiting for the worker. If the test
+	// fails before the normal release, this cleanup still lets the worker finish
+	// before the fallback temp/update/reservation cleanups run.
+	t.Cleanup(func() {
+		unblock()
+		select {
+		case <-workerDone:
+		case <-time.After(diskCacheLifecycleTestTimeout):
+			t.Fatal("publication finalizer did not finish during test cleanup")
+		}
+	})
+	claimObserved := false
+	claimWaitTimedOut := false
 	select {
 	case <-claimReached:
+		claimObserved = true
+	case err := <-finalizeDone:
+		require.NoError(t, err, "publication finalizer exited before the claim barrier")
+		select {
+		case <-claimReached:
+			claimObserved = true
+		default:
+		}
 	case <-time.After(diskCacheLifecycleTestTimeout):
-		t.Fatal("async finalizer did not claim the publication generation")
+		claimWaitTimedOut = true
+		unblock()
+		select {
+		case err := <-finalizeDone:
+			require.NoError(t, err)
+			select {
+			case <-claimReached:
+				claimObserved = true
+			default:
+			}
+		case <-time.After(diskCacheLifecycleTestTimeout):
+			t.Fatal("async finalizer did not claim the publication generation")
+		}
+	}
+	require.True(t, claimObserved, "async finalizer did not claim the publication generation")
+	if claimWaitTimedOut {
+		t.Fatal("async finalizer did not claim the publication generation within the guard")
 	}
 
 	closeCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)

@@ -330,6 +330,16 @@ func TestCompressFunctionsNullsSelectListAndLengthMask(t *testing.T) {
 	require.False(t, lengthVector.IsNull(1))
 	require.True(t, lengthVector.IsNull(4))
 
+	wideLengthResult := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+	require.NoError(t, wideLengthResult.PreExtendAndReset(5))
+	require.NoError(t, UncompressedLength([]*vector.Vector{lengthInput}, wideLengthResult, proc, 5, nil))
+	wideLengthVector := wideLengthResult.GetResultVector()
+	require.Equal(t, []int64{0, 0, int64(mysqlCompressedLengthMask), 561409641, 0}, vector.MustFixedColNoTypeCheck[int64](wideLengthVector))
+	require.False(t, wideLengthVector.IsNull(0))
+	require.False(t, wideLengthVector.IsNull(1))
+	require.True(t, wideLengthVector.IsNull(4))
+
+	wideLengthResult.Free()
 	lengthResult.Free()
 	invalidResult.Free()
 	uncompressedResult.Free()
@@ -338,6 +348,68 @@ func TestCompressFunctionsNullsSelectListAndLengthMask(t *testing.T) {
 	invalidInput.Free(proc.Mp())
 	input.Free(proc.Mp())
 	proc.Free()
+}
+
+func TestUncompressedLengthEmitsWarningForShortNonEmptyInput(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	warnings := &uncompressWarningSink{}
+	proc.WarningSink = warnings
+
+	input := testutil.NewVectorWithNulls(
+		6,
+		types.T_blob.ToType(),
+		proc.Mp(),
+		false,
+		[]bool{false, false, false, false, false, true},
+		[]string{
+			"",
+			string([]byte{0}),
+			string([]byte{0, 0, 0}),
+			string([]byte{0, 0, 0, 0}),
+			string([]byte{0, 0, 0, 0, 0x78}),
+			"ignored NULL",
+		},
+	)
+	defer input.Free(proc.Mp())
+	result := vector.NewFunctionResultWrapper(types.T_int32.ToType(), proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(6))
+	require.NoError(t, UncompressedLength([]*vector.Vector{input}, result, proc, 6, nil))
+
+	lengths := vector.MustFixedColNoTypeCheck[int32](result.GetResultVector())
+	require.Equal(t, []int32{0, 0, 0, 0, 0, 0}, lengths)
+	require.False(t, result.GetResultVector().IsNull(0))
+	require.True(t, result.GetResultVector().IsNull(5))
+	require.Equal(t, uint64(3), warnings.total)
+	require.Equal(t, []uncompressWarningRecord{
+		{code: moerr.ER_ZLIB_Z_DATA_ERROR, message: uncompressDataWarning},
+		{code: moerr.ER_ZLIB_Z_DATA_ERROR, message: uncompressDataWarning},
+		{code: moerr.ER_ZLIB_Z_DATA_ERROR, message: uncompressDataWarning},
+	}, warnings.records)
+
+	maskedResult := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+	defer maskedResult.Free()
+	require.NoError(t, maskedResult.PreExtendAndReset(6))
+	require.NoError(t, UncompressedLength(
+		[]*vector.Vector{input}, maskedResult, proc, 6,
+		&FunctionSelectList{
+			AnyNull:    true,
+			SelectList: []bool{true, false, true, false, false, true},
+		},
+	))
+	masked := maskedResult.GetResultVector()
+	require.False(t, masked.IsNull(0))
+	require.True(t, masked.IsNull(1))
+	require.False(t, masked.IsNull(2))
+	require.True(t, masked.IsNull(3))
+	require.True(t, masked.IsNull(4))
+	require.True(t, masked.IsNull(5))
+	require.Equal(t, uint64(4), warnings.total)
+	require.Equal(t, uncompressWarningRecord{
+		code:    moerr.ER_ZLIB_Z_DATA_ERROR,
+		message: uncompressDataWarning,
+	}, warnings.records[3])
 }
 
 type uncompressWarningRecord struct {

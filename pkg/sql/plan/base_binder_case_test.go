@@ -468,6 +468,131 @@ func TestPreparedRegexpScalarSubqueryPropagatesDerivedColumnRuntimeDomain(t *tes
 	require.Equal(t, int32(types.T_varbinary), regexpInstr.GetF().Args[1].Typ.Id)
 }
 
+func TestPreparedRegexpDerivedScalarPreservesResultBranchParams(t *testing.T) {
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt_regexp_multi_derived_domain from 'select regexp_instr("+
+			"(select d.subject from (select if(?, ?, ?) as subject) d), "+
+			"?, 2)'")
+	require.NoError(t, err)
+	preparedRegexp := findPlanFunctionExpr(
+		prepared.GetDcl().GetPrepare().Plan, "regexp_instr")
+	require.NotNil(t, preparedRegexp)
+	witness := preparedRegexp.GetF().Args[0].GetPreparedNumeric().GetStringDomainSource()
+	require.NotNil(t, witness)
+	require.Equal(t, "coalesce", witness.GetF().GetFunc().GetObjName())
+	require.Equal(t, []int32{1, 2}, []int32{
+		witness.GetF().Args[0].GetP().Pos,
+		witness.GetF().Args[1].GetP().Pos,
+	})
+
+	ctx := context.Background()
+	preparedPlan := prepared.GetDcl().GetPrepare().Plan
+	cached := proto.Clone(preparedPlan).(*planpb.Plan)
+	textPlan, _, err := FillValuesOfParamsInPlanWithSpecialization(ctx, preparedPlan, []any{
+		ParamValue{Value: true, RuntimeType: types.T_bool.ToType(), HasRuntimeType: true},
+		ParamValue{Value: int64(7), RuntimeType: types.T_int64.ToType(), HasRuntimeType: true},
+		ParamValue{Value: int64(8), RuntimeType: types.T_int64.ToType(), HasRuntimeType: true},
+		ParamValue{Value: "x", IsBinaryProtocol: true, RuntimeType: types.T_text.ToType(), HasRuntimeType: true},
+	})
+	require.NoError(t, err)
+	regexpInstr := findPlanFunctionExpr(textPlan, "regexp_instr")
+	require.NotNil(t, regexpInstr)
+	require.Equal(t, types.StringDomainText,
+		types.StaticStringDomain(makeTypeByPlan2Expr(regexpInstr.GetF().Args[0])))
+
+	binaryPlan, _, err := FillValuesOfParamsInPlanWithSpecialization(ctx, preparedPlan, []any{
+		ParamValue{Value: true, RuntimeType: types.T_bool.ToType(), HasRuntimeType: true},
+		ParamValue{Value: "7", IsBin: true, IsBinaryProtocol: true,
+			RuntimeType: types.T_varbinary.ToType(), HasRuntimeType: true},
+		ParamValue{Value: "8", IsBin: true, IsBinaryProtocol: true,
+			RuntimeType: types.T_varbinary.ToType(), HasRuntimeType: true},
+		ParamValue{Value: "x", IsBin: true, IsBinaryProtocol: true,
+			RuntimeType: types.T_varbinary.ToType(), HasRuntimeType: true},
+	})
+	require.NoError(t, err)
+	regexpInstr = findPlanFunctionExpr(binaryPlan, "regexp_instr")
+	require.NotNil(t, regexpInstr)
+	require.Equal(t, int32(types.T_varbinary), regexpInstr.GetF().Args[0].Typ.Id)
+	require.True(t, proto.Equal(cached, preparedPlan),
+		"multi-branch runtime-domain specialization must not mutate the cached plan")
+}
+
+func TestStringDomainWitnessKeepsImplicitTextConversion(t *testing.T) {
+	textType := types.T_text.ToType()
+	param := &planpb.Expr{
+		Typ:  makePlan2Type(&textType),
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+	}
+	source := &planpb.Expr{
+		Typ: makePlan2Type(&textType),
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{ObjName: "substring"},
+			Args: []*planpb.Expr{param, makePlan2Int64ConstExprWithType(1)},
+		}},
+	}
+	domains := possibleStringDomainsForExpr(source)
+	require.Equal(t, possibleStringDomainText|possibleStringDomainBinary, domains)
+	witness := stringDomainSourceWitness(source, domains)
+	require.Equal(t, "substring", witness.GetF().GetFunc().GetObjName())
+
+	rule := NewResetParamRefRule(context.Background(), nil)
+	rule.SetParamValues([]any{ParamValue{
+		Value:          int64(7),
+		RuntimeType:    types.T_int64.ToType(),
+		HasRuntimeType: true,
+	}})
+	got, dynamic, domainless, err := rule.preparedExecutionExprType(witness)
+	require.NoError(t, err)
+	require.True(t, dynamic)
+	require.False(t, domainless)
+	require.Equal(t, types.StringDomainText, types.StaticStringDomain(got))
+
+	rule.SetParamValues([]any{ParamValue{
+		Value:            "7",
+		IsBin:            true,
+		IsBinaryProtocol: true,
+		RuntimeType:      types.T_varbinary.ToType(),
+		HasRuntimeType:   true,
+	}})
+	got, dynamic, domainless, err = rule.preparedExecutionExprType(witness)
+	require.NoError(t, err)
+	require.True(t, dynamic)
+	require.False(t, domainless)
+	require.Equal(t, types.StringDomainBinary, types.StaticStringDomain(got))
+
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt_regexp_substring_domain from 'select regexp_instr("+
+			"substring(?, 1), ?, 2)'")
+	require.NoError(t, err)
+	preparedPlan := prepared.GetDcl().GetPrepare().Plan
+	cached := proto.Clone(preparedPlan).(*planpb.Plan)
+
+	textPlan, _, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(), preparedPlan, []any{
+			ParamValue{Value: int64(7), RuntimeType: types.T_int64.ToType(), HasRuntimeType: true},
+			ParamValue{Value: "x", IsBinaryProtocol: true, RuntimeType: types.T_text.ToType(), HasRuntimeType: true},
+		})
+	require.NoError(t, err)
+	regexpInstr := findPlanFunctionExpr(textPlan, "regexp_instr")
+	require.NotNil(t, regexpInstr)
+	require.Equal(t, types.StringDomainText,
+		types.StaticStringDomain(makeTypeByPlan2Expr(regexpInstr.GetF().Args[0])))
+
+	binaryPlan, _, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(), preparedPlan, []any{
+			ParamValue{Value: "7", IsBin: true, IsBinaryProtocol: true,
+				RuntimeType: types.T_varbinary.ToType(), HasRuntimeType: true},
+			ParamValue{Value: "x", IsBin: true, IsBinaryProtocol: true,
+				RuntimeType: types.T_varbinary.ToType(), HasRuntimeType: true},
+		})
+	require.NoError(t, err)
+	regexpInstr = findPlanFunctionExpr(binaryPlan, "regexp_instr")
+	require.NotNil(t, regexpInstr)
+	require.Equal(t, int32(types.T_varbinary), regexpInstr.GetF().Args[0].Typ.Id)
+	require.True(t, proto.Equal(cached, preparedPlan),
+		"substring runtime-domain specialization must not mutate the cached plan")
+}
+
 func TestPreparedNumericMetadataIsSparse(t *testing.T) {
 	require.Nil(t, (&planpb.Expr{}).GetPreparedNumeric())
 	// Five resident scalar fields made Expr 184 bytes. One optional pointer

@@ -69,19 +69,29 @@ func (oomExactAllocator) BackingSize(size uint64) (uint64, error) {
 	return size, nil
 }
 
-type blockingCacheDataReservation struct {
-	cacheDataReservation
-	committed chan struct{}
-	unblock   chan struct{}
-	once      sync.Once
+// memCacheSetReturnGate pauses after the delegated DataCache.Set returns.
+// It observes the real Set-return boundary without blocking the reservation
+// commit callback inside the accounting guard.
+type memCacheSetReturnGate struct {
+	fscache.DataCache
+	key       fscache.CacheKey
+	entered   chan struct{}
+	release   chan struct{}
+	enterOnce sync.Once
+	openOnce  sync.Once
 }
 
-func (r *blockingCacheDataReservation) commit() {
-	r.cacheDataReservation.commit()
-	r.once.Do(func() {
-		close(r.committed)
-	})
-	<-r.unblock
+func (g *memCacheSetReturnGate) Set(ctx context.Context, key fscache.CacheKey, data fscache.Data) (bool, error) {
+	inserted, err := g.DataCache.Set(ctx, key, data)
+	if key == g.key {
+		g.enterOnce.Do(func() { close(g.entered) })
+		<-g.release
+	}
+	return inserted, err
+}
+
+func (g *memCacheSetReturnGate) unblock() {
+	g.openOnce.Do(func() { close(g.release) })
 }
 
 func TestMemCacheLeak(t *testing.T) {
@@ -250,10 +260,10 @@ func TestMemCacheRehomeReservesCapacityBeforeCopy(t *testing.T) {
 	stats, err := cache.arenaAllocator.Stats()
 	require.NoError(t, err)
 	require.LessOrEqual(t, stats.Allocated, uint64(capacity))
-	require.Equal(t, int64(backing), cache.reservedBytes)
+	require.Equal(t, int64(backing), cache.reservedBytes.Load())
 
 	rehomed.Release()
-	require.Equal(t, int64(0), cache.reservedBytes)
+	require.Equal(t, int64(0), cache.reservedBytes.Load())
 }
 
 func TestMemCacheCapacityReservationBypassesPendingAllocation(t *testing.T) {
@@ -270,10 +280,10 @@ func TestMemCacheCapacityReservationBypassesPendingAllocation(t *testing.T) {
 	admission, ok := second.(fscache.DataCacheAdmission)
 	require.True(t, ok)
 	require.False(t, admission.CacheAdmissionAllowed(cache.allocator.owner))
-	require.Equal(t, int64(backing), cache.reservedBytes)
+	require.Equal(t, int64(backing), cache.reservedBytes.Load())
 	second.Release()
 	first.release()
-	require.Equal(t, int64(0), cache.reservedBytes)
+	require.Equal(t, int64(0), cache.reservedBytes.Load())
 }
 
 func TestMemCacheAllocationFailureReleasesCapacityReservation(t *testing.T) {
@@ -287,12 +297,12 @@ func TestMemCacheAllocationFailureReleasesCapacityReservation(t *testing.T) {
 	require.Panics(t, func() {
 		cache.AllocateCacheData(ctx, capacity)
 	})
-	require.Zero(t, cache.reservedBytes)
+	require.Zero(t, cache.reservedBytes.Load())
 
 	reservation := cache.reserveCacheData(ctx, capacity)
 	require.NotNil(t, reservation)
 	reservation.release()
-	require.Zero(t, cache.reservedBytes)
+	require.Zero(t, cache.reservedBytes.Load())
 }
 
 func TestMemCacheCloseRetiresDedicatedAllocator(t *testing.T) {
@@ -316,11 +326,11 @@ func TestMemCacheReusesSmallPendingAllocation(t *testing.T) {
 
 	first := cache.AllocateCacheData(ctx, request).(*Bytes)
 	first.Release()
-	require.Equal(t, int64(backing), cache.reservedBytes)
+	require.Equal(t, int64(backing), cache.reservedBytes.Load())
 
 	second := cache.AllocateCacheData(ctx, request).(*Bytes)
 	require.Same(t, first, second)
-	require.Equal(t, int64(backing), cache.reservedBytes)
+	require.Equal(t, int64(backing), cache.reservedBytes.Load())
 	second.Release()
 
 	allocations := testing.AllocsPerRun(1000, func() {
@@ -366,11 +376,11 @@ func TestMemCacheCapacityPressureDrainsIdlePendingAllocation(t *testing.T) {
 
 	first := cache.AllocateCacheData(ctx, firstRequest).(*Bytes)
 	first.Release()
-	require.Equal(t, int64(firstBacking), cache.reservedBytes)
+	require.Equal(t, int64(firstBacking), cache.reservedBytes.Load())
 
 	second := cache.AllocateCacheData(ctx, secondRequest).(*Bytes)
 	require.Same(t, cache.allocator.owner, second.CacheDataOwner())
-	require.Equal(t, int64(secondBacking), cache.reservedBytes)
+	require.Equal(t, int64(secondBacking), cache.reservedBytes.Load())
 	second.Release()
 }
 
@@ -384,10 +394,10 @@ func TestMemCacheFlushReleasesIdlePendingAllocation(t *testing.T) {
 
 	first := cache.AllocateCacheData(ctx, request).(*Bytes)
 	first.Release()
-	require.Equal(t, int64(backing), cache.reservedBytes)
+	require.Equal(t, int64(backing), cache.reservedBytes.Load())
 
 	cache.Flush(ctx)
-	require.Zero(t, cache.reservedBytes)
+	require.Zero(t, cache.reservedBytes.Load())
 
 	stats, err := cache.arenaAllocator.Stats()
 	require.NoError(t, err)
@@ -408,12 +418,12 @@ func TestMemCacheForcedEvictionReleasesIdlePendingAllocation(t *testing.T) {
 
 	data := cache.AllocateCacheData(ctx, request)
 	data.Release()
-	require.Equal(t, int64(backing), cache.reservedBytes)
+	require.Equal(t, int64(backing), cache.reservedBytes.Load())
 
 	done := make(chan int64, 1)
 	cache.Evict(ctx, done)
 	<-done
-	require.Zero(t, cache.reservedBytes)
+	require.Zero(t, cache.reservedBytes.Load())
 }
 
 func TestMemCacheForcedEvictionReclaimsFIFOAllocation(t *testing.T) {
@@ -440,70 +450,93 @@ func TestMemCacheForcedEvictionReclaimsFIFOAllocation(t *testing.T) {
 	require.Equal(t, int64(1), tracking.reclaims.Load())
 }
 
-func TestMemCacheCommitsReservationAfterFIFOUsageIsCharged(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func TestMemCacheReservationHandoffFitsAtSetReturn(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	const capacity = 1 << 20
-	const request = 700 << 10
+	const request = 1 << 20
+	unit := int64(DefaultCacheDataAllocator().BackingSize(request))
+	capacity := 4 * unit
 
 	cache := NewMemCache(fscache.ConstCapacity(capacity), nil, nil, "")
 	defer cache.Close(context.Background())
 	backing := cache.BackingSize(request)
-	require.LessOrEqual(t, backing, capacity)
+	require.Equal(t, unit, int64(backing))
 
-	first := cache.AllocateCacheDataWithHint(ctx, request, malloc.NoClear).(*Bytes)
-	require.NotNil(t, first.reservation)
-	reservation := &blockingCacheDataReservation{
-		cacheDataReservation: first.reservation,
-		committed:            make(chan struct{}),
-		unblock:              make(chan struct{}),
+	makeVector := func(offset int64, marker byte) *IOVector {
+		data := cache.AllocateCacheDataWithHint(ctx, request, malloc.NoClear).(*Bytes)
+		data.Bytes()[0] = marker
+		return &IOVector{
+			FilePath: "shared:/reservation-handoff",
+			Entries:  []IOEntry{{Offset: offset, Size: request, CachedData: data}},
+		}
 	}
-	first.reservation = reservation
-
-	vector := &IOVector{
-		FilePath: "shared:/reservation-handoff",
-		Entries: []IOEntry{{
-			Size:       request,
-			CachedData: first,
-		}},
+	key := func(offset int64) fscache.CacheKey {
+		return fscache.CacheKey{Path: "reservation-handoff", Offset: offset, Sz: int64(request)}
 	}
-	defer vector.Release()
 
+	for offset := int64(0); offset < 2; offset++ {
+		vector := makeVector(offset, byte('A'+offset))
+		require.NoError(t, cache.Update(ctx, vector, false))
+		vector.Release()
+	}
+	require.Equal(t, 2*unit, cache.cache.Used())
+	require.Zero(t, cache.reservedBytes.Load())
+
+	cVector := makeVector(2, 'C')
+	defer cVector.Release()
+
+	gate := &memCacheSetReturnGate{
+		DataCache: cache.cache,
+		key:       key(2),
+		entered:   make(chan struct{}),
+		release:   make(chan struct{}),
+	}
+	cache.cache = gate
 	updateDone := make(chan error, 1)
-	go func() {
-		updateDone <- cache.Update(ctx, vector, false)
-	}()
-
-	var unblockOnce sync.Once
-	unblock := func() {
-		unblockOnce.Do(func() {
-			close(reservation.unblock)
-		})
-	}
+	go func() { updateDone <- cache.Update(ctx, cVector, false) }()
+	updateFinished := false
 	defer func() {
-		unblock()
-		require.NoError(t, <-updateDone)
+		gate.unblock()
+		if !updateFinished {
+			select {
+			case err := <-updateDone:
+				require.NoError(t, err)
+			case <-time.After(5 * time.Second):
+				t.Error("timed out waiting for gated MemCache.Update cleanup")
+			}
+		}
 	}()
 
 	select {
-	case <-reservation.committed:
+	case <-gate.entered:
 	case <-ctx.Done():
-		t.Fatal("cache reservation was not committed")
+		t.Fatal("timed out waiting for the production Set-return boundary")
+	}
+	require.Equal(t, 3*unit, cache.cache.Used())
+	require.Zero(t, cache.reservedBytes.Load())
+
+	// D must fit while C's caller remains paused after Set. A stale outer
+	// reservation commit would make the allocator evict a resident entry here.
+	dVector := makeVector(3, 'D')
+	defer dVector.Release()
+	require.NoError(t, cache.Update(ctx, dVector, false))
+	require.Equal(t, 4*unit, cache.cache.Used())
+	require.Zero(t, cache.reservedBytes.Load())
+	for offset, want := range map[int64]byte{0: 'A', 1: 'B', 2: 'C', 3: 'D'} {
+		func() {
+			data, ok := cache.cache.Get(ctx, key(offset))
+			require.True(t, ok, "resident key offset=%d", offset)
+			defer data.Release()
+			require.NotEmpty(t, data.Bytes())
+			require.Equal(t, want, data.Bytes()[0], "resident marker offset=%d", offset)
+		}()
 	}
 
-	// The reservation hook runs after the FIFO has charged either used or
-	// pending bytes. Cancel the second allocation context to prevent this test
-	// from evicting the first item while checking the handoff boundary.
-	require.Equal(t, int64(backing), cache.cache.Used())
-	require.Equal(t, int64(0), cache.reservedBytes)
-	secondCtx, cancelSecond := context.WithCancel(ctx)
-	cancelSecond()
-	second := cache.AllocateCacheDataWithHint(secondCtx, request, malloc.NoClear)
-	defer second.Release()
-	admission, ok := second.(fscache.DataCacheAdmission)
-	require.True(t, ok)
-	require.False(t, admission.CacheAdmissionAllowed(cache.allocator.owner))
+	gate.unblock()
+	updateErr := <-updateDone
+	updateFinished = true
+	require.NoError(t, updateErr)
 
 	stats, err := cache.arenaAllocator.Stats()
 	require.NoError(t, err)
@@ -532,7 +565,7 @@ func TestMemCacheOversizedDataBypassesAdmission(t *testing.T) {
 
 	require.NoError(t, cache.Update(ctx, vector, false))
 	require.Equal(t, int64(0), cache.cache.Used())
-	require.Equal(t, int64(0), cache.reservedBytes)
+	require.Equal(t, int64(0), cache.reservedBytes.Load())
 	vector.Release()
 }
 
@@ -554,7 +587,7 @@ func TestMemCacheDuplicateSetKeepsReservationUntilDataRelease(t *testing.T) {
 	}
 	require.NoError(t, cache.Update(ctx, first, false))
 	first.Release()
-	require.Equal(t, int64(0), cache.reservedBytes)
+	require.Equal(t, int64(0), cache.reservedBytes.Load())
 
 	duplicate := &IOVector{
 		FilePath: "shared:/same-key",
@@ -563,12 +596,12 @@ func TestMemCacheDuplicateSetKeepsReservationUntilDataRelease(t *testing.T) {
 			CachedData: cache.CopyToCacheData(ctx, make([]byte, request)),
 		}},
 	}
-	require.Equal(t, int64(backing), cache.reservedBytes)
+	require.Equal(t, int64(backing), cache.reservedBytes.Load())
 	require.NoError(t, cache.Update(ctx, duplicate, false))
-	require.Equal(t, int64(backing), cache.reservedBytes)
+	require.Equal(t, int64(backing), cache.reservedBytes.Load())
 
 	duplicate.Release()
-	require.Equal(t, int64(0), cache.reservedBytes)
+	require.Equal(t, int64(0), cache.reservedBytes.Load())
 }
 
 func TestMemCacheAllocatorMetricsRefreshAfterBurst(t *testing.T) {
@@ -1265,7 +1298,7 @@ func TestMemoryCacheReservationReleaseDoesNotAllocate(t *testing.T) {
 
 	allocations := testing.AllocsPerRun(1000, func() {
 		cache.capacityMu.Lock()
-		cache.reservedBytes = 1
+		cache.reservedBytes.Store(1)
 		cache.capacityMu.Unlock()
 		cache.releaseReservedBytes(1)
 	})

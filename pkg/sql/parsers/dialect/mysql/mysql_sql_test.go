@@ -413,6 +413,65 @@ func TestQualifiedInsertColumnsDoNotExpandSharedConsumers(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestInsertIgnoreAndOnDuplicateUpdateAreIndependent(t *testing.T) {
+	tests := []struct {
+		name       string
+		sql        string
+		wantIgnore bool
+		wantUpdate int
+	}{
+		{
+			name:       "plain ignore",
+			sql:        "insert ignore into t values (1)",
+			wantIgnore: true,
+		},
+		{
+			name:       "ignore with update",
+			sql:        "insert ignore into t (id, v) values (1, 2) on duplicate key update v = values(v), v = v + 1",
+			wantIgnore: true,
+			wantUpdate: 2,
+		},
+		{
+			name:       "legacy duplicate ignore",
+			sql:        "insert into t values (1) on duplicate key ignore",
+			wantIgnore: true,
+		},
+		{
+			name:       "combined duplicate ignore",
+			sql:        "insert ignore into t values (1) on duplicate key ignore",
+			wantIgnore: true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			insert, ok := stmt.(*tree.Insert)
+			require.True(t, ok)
+			require.Equal(t, test.wantIgnore, insert.IsIgnore())
+			require.Len(t, insert.GetOnDuplicateUpdate(), test.wantUpdate)
+			if test.wantUpdate > 0 {
+				// Keep duplicate assignment targets as an ordered stream.
+				require.Equal(t, "v", insert.GetOnDuplicateUpdate()[0].Names[0].ColName())
+				require.Equal(t, "v", insert.GetOnDuplicateUpdate()[1].Names[0].ColName())
+			}
+
+			formatted := tree.String(stmt, dialect.MYSQL)
+			roundTripped, err := ParseOne(context.Background(), formatted, 1)
+			require.NoError(t, err)
+			defer roundTripped.Free()
+			roundTripInsert, ok := roundTripped.(*tree.Insert)
+			require.True(t, ok)
+			require.Equal(t, insert.IsIgnore(), roundTripInsert.IsIgnore())
+			require.Len(t, roundTripInsert.GetOnDuplicateUpdate(), test.wantUpdate)
+			require.Equal(t, formatted, tree.String(roundTripped, dialect.MYSQL))
+		})
+	}
+}
+
 func TestQuantifiedTableSubqueryParse(t *testing.T) {
 	tests := []struct {
 		sql  string
@@ -5448,6 +5507,8 @@ func TestOrderedSetAggregateDeparseRoundTrip(t *testing.T) {
 	for _, sql := range []string{
 		"select group_concat(v) within group (order by k desc) from t",
 		"select group_concat(v) within /* ordered-set */ group (order by k desc) from t",
+		"select listagg(v, '|') within group (order by k desc) from t",
+		"select listagg(distinct v) within group (order by k) from t",
 		"select percentile_cont(0.95) within group (order by v) from t",
 		"select percentile_cont(0.95) within /* ordered-set */ group (order by v) from t",
 		"select percentile_disc(1) within group (order by v desc) from t",
@@ -5469,10 +5530,48 @@ func TestOrderedSetAggregateDeparseRoundTrip(t *testing.T) {
 	}
 }
 
+func TestArrayAggCompatibilityDeparseRoundTrip(t *testing.T) {
+	for _, sql := range []string{
+		"select array_agg(v) from t",
+		"select array_agg(distinct v) from t",
+		"select array_agg(v) over (partition by g order by k) from t",
+	} {
+		ast, err := ParseOne(t.Context(), sql, 1)
+		require.NoError(t, err, sql)
+
+		formatted := tree.String(ast, dialect.MYSQL)
+		require.Contains(t, strings.ToLower(formatted), "array_agg(")
+		roundTripped, err := ParseOne(t.Context(), formatted, 1)
+		require.NoError(t, err, formatted)
+		require.Equal(t, formatted, tree.String(roundTripped, dialect.MYSQL))
+	}
+}
+
+func TestOrderedCollectionCompatibilityNamesRemainIdentifiers(t *testing.T) {
+	for _, sql := range []string{
+		"select listagg from t",
+		"select array_agg from t",
+	} {
+		_, err := ParseOne(t.Context(), sql, 1)
+		require.NoError(t, err, sql)
+	}
+}
+
 func TestGroupConcatRejectsDoubleOrderBy(t *testing.T) {
 	_, err := ParseOne(context.Background(),
 		"select group_concat(v order by v) within group (order by k) from t", 1)
 	require.ErrorContains(t, err, "group_concat cannot use both ORDER BY and WITHIN GROUP ORDER BY")
+}
+
+func TestListAggRejectsInvalidShape(t *testing.T) {
+	for _, sql := range []string{
+		"select listagg() from t",
+		"select listagg(a, '|', '!') from t",
+		"select listagg(a, lower('|')) from t",
+	} {
+		_, err := ParseOne(t.Context(), sql, 1)
+		require.Error(t, err, sql)
+	}
 }
 
 func TestWithinRemainsIdentifierCompatible(t *testing.T) {
@@ -6105,6 +6204,18 @@ var (
 	invalidSQL = []struct {
 		input string
 	}{
+		{
+			input: "alter table t1 alter reindex idx1 ivfflat lists = 2, alter reindex idx1 ivfflat quantization 'float16'",
+		},
+		{
+			input: "alter table t1 alter reindex idx1 ivfflat lists = 2, alter reindex idx2 ivfflat lists = 4",
+		},
+		{
+			input: "alter table t1 alter reindex idx1 ivfflat lists = 2, add column c int",
+		},
+		{
+			input: "alter table t1 add column c int, alter reindex idx1 ivfflat lists = 2",
+		},
 		{
 			input: "alter table t1 add constraint index (col3, col4)",
 		},

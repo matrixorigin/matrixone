@@ -17,6 +17,7 @@ package aggexec
 import (
 	"math"
 	"slices"
+	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -57,7 +58,24 @@ func dec256ToF(d types.Decimal256, scale int32) float64 {
 }
 
 func fToDec128(f float64, scale int32) (types.Decimal128, error) {
-	return types.Decimal128FromFloat64(f, 38, scale)
+	if math.IsInf(f, 0) || math.IsNaN(f) || scale < 0 || scale > 38 {
+		return types.Decimal128FromFloat64(f, 38, scale)
+	}
+
+	// Decimal variance is accumulated in float64, but materializing its binary
+	// ULP tail as decimal digits makes large otherwise-stable results diverge
+	// from MySQL. Parse the shortest round-trip decimal representation instead.
+	// Parse the magnitude first so positive and negative precision bounds remain
+	// symmetric, then restore the sign.
+	result, err := types.ParseDecimal128(
+		strconv.FormatFloat(math.Abs(f), 'g', -1, 64), 38, scale)
+	if err != nil {
+		return types.Decimal128{}, err
+	}
+	if math.Signbit(f) {
+		result = result.Minus()
+	}
+	return result, nil
 }
 
 func VarStdDevReturnType(typs []types.Type) types.Type {
@@ -688,8 +706,8 @@ func (exec *varStdDevExec[T, A]) Flush() (_ []*vector.Vector, retErr error) {
 					seen := int64(0)
 					var origin A
 					hasExactOrigin := hasExactVarianceOrigin(exec.aggInfo.argTypes[0].Oid)
-					err := exec.state[i].iter(uint16(j), func(k []byte) error {
-						ptr := util.UnsafeFromBytes[A](k[kAggArgPrefixSz:])
+					err := exec.state[i].iterWithValue(uint16(j), func(k, stored []byte) error {
+						ptr := util.UnsafeFromBytes[A](aggPayloadFromKeyValue(&exec.aggInfo, k, stored))
 						var fv float64
 						if hasExactOrigin {
 							if seen == 0 {
@@ -807,8 +825,8 @@ func (exec *varStdDevExec[T, A]) flushLegacy() (_ []*vector.Vector, retErr error
 			}
 			sum, sumsq := 0.0, 0.0
 			if exec.IsDistinct() {
-				err := exec.state[i].iter(uint16(j), func(k []byte) error {
-					value := exec.a2f(*util.UnsafeFromBytes[A](k[kAggArgPrefixSz:]), exec.aggInfo.argTypes[0].Scale)
+				err := exec.state[i].iterWithValue(uint16(j), func(k, stored []byte) error {
+					value := exec.a2f(*util.UnsafeFromBytes[A](aggPayloadFromKeyValue(&exec.aggInfo, k, stored)), exec.aggInfo.argTypes[0].Scale)
 					sum += value
 					sumsq += value * value
 					return nil

@@ -725,6 +725,7 @@ func DeepCopyTableDef(table *plan.TableDef, withCols bool) *plan.TableDef {
 		IsTemporary:    table.IsTemporary,
 		AutoIncrOffset: table.AutoIncrOffset,
 		AutoIncrEpoch:  table.AutoIncrEpoch,
+		AutoIdCache:    table.AutoIdCache,
 		DefaultCharset: table.DefaultCharset,
 		DbName:         table.DbName,
 		DbId:           table.DbId,
@@ -1168,12 +1169,13 @@ func DeepCopyExpr(expr *Expr) *Expr {
 	switch item := expr.Expr.(type) {
 	case *plan.Expr_Lit:
 		pc := &plan.Literal{
-			Isnull:       item.Lit.GetIsnull(),
-			IsBin:        item.Lit.GetIsBin(),
-			Src:          DeepCopyExpr(item.Lit.Src),
-			IsSerialized: item.Lit.GetIsSerialized(),
-			LiteralForm:  item.Lit.GetLiteralForm(),
-			StringSource: item.Lit.GetStringSource(),
+			Isnull:                    item.Lit.GetIsnull(),
+			IsBin:                     item.Lit.GetIsBin(),
+			Src:                       DeepCopyExpr(item.Lit.Src),
+			IsSerialized:              item.Lit.GetIsSerialized(),
+			LiteralForm:               item.Lit.GetLiteralForm(),
+			StringSource:              item.Lit.GetStringSource(),
+			DecimalLiteralRequiresV82: item.Lit.GetDecimalLiteralRequiresV82(),
 		}
 
 		switch c := item.Lit.Value.(type) {
@@ -1335,10 +1337,11 @@ func DeepCopyExpr(expr *Expr) *Expr {
 	case *plan.Expr_Vec:
 		newExpr.Expr = &plan.Expr_Vec{
 			Vec: &plan.LiteralVec{
-				Len:          item.Vec.Len,
-				Data:         bytes.Clone(item.Vec.Data),
-				IsSerialized: item.Vec.IsSerialized,
-				StringSource: item.Vec.StringSource,
+				Len:                       item.Vec.Len,
+				Data:                      bytes.Clone(item.Vec.Data),
+				IsSerialized:              item.Vec.IsSerialized,
+				StringSource:              item.Vec.StringSource,
+				DecimalLiteralRequiresV82: item.Vec.DecimalLiteralRequiresV82,
 			},
 		}
 

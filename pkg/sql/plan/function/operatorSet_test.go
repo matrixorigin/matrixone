@@ -15,6 +15,7 @@
 package function
 
 import (
+	"context"
 	"fmt"
 	"testing"
 	"unicode/utf8"
@@ -503,6 +504,174 @@ func TestIffCheck_PreservesVectorResultTypes(t *testing.T) {
 			require.Equal(t, succeedMatched, result.status)
 		})
 	}
+}
+
+func TestCaseCheckVectorResultTypes(t *testing.T) {
+	vectorTypes := []types.Type{
+		types.New(types.T_array_float32, 3, 0),
+		types.New(types.T_array_float64, 3, 0),
+		types.New(types.T_array_bf16, 3, 0),
+		types.New(types.T_array_float16, 3, 0),
+		types.New(types.T_array_int8, 3, 0),
+		types.New(types.T_array_uint8, 3, 0),
+	}
+
+	for _, typ := range vectorTypes {
+		t.Run(typ.Oid.String(), func(t *testing.T) {
+			inputs := []types.Type{types.T_bool.ToType(), typ, typ}
+			result := caseCheck(nil, inputs)
+			require.Equal(t, succeedMatched, result.status)
+			require.Equal(t, typ, caseReturnType(inputs))
+
+			resolved, err := GetFunctionByName(context.Background(), "case", inputs)
+			require.NoError(t, err)
+			require.Equal(t, typ, resolved.GetReturnType())
+
+			withNull := []types.Type{types.T_bool.ToType(), types.T_any.ToType(), typ}
+			result = caseCheck(nil, withNull)
+			require.Equal(t, succeedWithCast, result.status)
+			require.Equal(t, typ, result.finalType[1])
+			require.Equal(t, typ, result.finalType[2])
+
+			resolved, err = GetFunctionByName(context.Background(), "case", withNull)
+			require.NoError(t, err)
+			require.Equal(t, typ, resolved.GetReturnType())
+
+			withoutElse := []types.Type{types.T_bool.ToType(), typ}
+			resolved, err = GetFunctionByName(context.Background(), "case", withoutElse)
+			require.NoError(t, err)
+			require.Equal(t, typ, resolved.GetReturnType())
+		})
+	}
+
+	unsized := types.New(types.T_array_float32, types.MaxArrayDimension, 0)
+	result := caseCheck(nil, []types.Type{types.T_bool.ToType(), unsized, unsized})
+	require.Equal(t, succeedMatched, result.status)
+
+	invalidInputs := []struct {
+		name   string
+		inputs []types.Type
+	}{
+		{
+			name: "different dimension",
+			inputs: []types.Type{types.T_bool.ToType(),
+				types.New(types.T_array_float32, 2, 0),
+				types.New(types.T_array_float32, 3, 0)},
+		},
+		{
+			name: "different vector oid",
+			inputs: []types.Type{types.T_bool.ToType(),
+				types.New(types.T_array_float32, 2, 0),
+				types.New(types.T_array_float64, 2, 0)},
+		},
+		{
+			name: "vector and string",
+			inputs: []types.Type{types.T_bool.ToType(),
+				types.New(types.T_array_float32, 2, 0), types.T_varchar.ToType()},
+		},
+		{
+			name: "vector and numeric",
+			inputs: []types.Type{types.T_bool.ToType(),
+				types.New(types.T_array_float32, 2, 0), types.T_int64.ToType()},
+		},
+		{
+			name: "later when mismatch",
+			inputs: []types.Type{types.T_bool.ToType(),
+				types.New(types.T_array_float32, 2, 0),
+				types.T_bool.ToType(), types.New(types.T_array_float64, 2, 0),
+				types.New(types.T_array_float32, 2, 0)},
+		},
+	}
+	for _, tt := range invalidInputs {
+		t.Run(tt.name, func(t *testing.T) {
+			result := caseCheck(nil, tt.inputs)
+			require.Equal(t, failedFunctionParametersWrong, result.status)
+			_, err := GetFunctionByName(context.Background(), "case", tt.inputs)
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestCaseFnVectorResults(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	tests := []struct {
+		name        string
+		typ         types.Type
+		trueValues  any
+		falseValues any
+		want        any
+	}{
+		{
+			name:        "vecf32",
+			typ:         types.New(types.T_array_float32, 3, 0),
+			trueValues:  [][]float32{{1, -0, 3.5}, {4, 5, 6}, {7, 8, 9}, {10, 11, 12}},
+			falseValues: [][]float32{{13, 14, 15}, {16, 17, 18}, {19, 20, 21}, {22, 23, 24}},
+			want:        [][]float32{{1, -0, 3.5}, {16, 17, 18}, {19, 20, 21}, {10, 11, 12}},
+		},
+		{
+			name:        "vecf64",
+			typ:         types.New(types.T_array_float64, 3, 0),
+			trueValues:  [][]float64{{1, -0, 3.5}, {4, 5, 6}, {7, 8, 9}, {10, 11, 12}},
+			falseValues: [][]float64{{13, 14, 15}, {16, 17, 18}, {19, 20, 21}, {22, 23, 24}},
+			want:        [][]float64{{1, -0, 3.5}, {16, 17, 18}, {19, 20, 21}, {10, 11, 12}},
+		},
+		{
+			name:        "vecbf16",
+			typ:         types.New(types.T_array_bf16, 3, 0),
+			trueValues:  [][]types.BF16{{1, 2, 3}, {4, 5, 6}, {7, 8, 9}, {10, 11, 12}},
+			falseValues: [][]types.BF16{{13, 14, 15}, {16, 17, 18}, {19, 20, 21}, {22, 23, 24}},
+			want:        [][]types.BF16{{1, 2, 3}, {16, 17, 18}, {19, 20, 21}, {10, 11, 12}},
+		},
+		{
+			name:        "vecf16",
+			typ:         types.New(types.T_array_float16, 3, 0),
+			trueValues:  [][]types.Float16{{1, 2, 3}, {4, 5, 6}, {7, 8, 9}, {10, 11, 12}},
+			falseValues: [][]types.Float16{{13, 14, 15}, {16, 17, 18}, {19, 20, 21}, {22, 23, 24}},
+			want:        [][]types.Float16{{1, 2, 3}, {16, 17, 18}, {19, 20, 21}, {10, 11, 12}},
+		},
+		{
+			name:        "vecint8",
+			typ:         types.New(types.T_array_int8, 3, 0),
+			trueValues:  [][]int8{{-128, 0, 127}, {4, 5, 6}, {7, 8, 9}, {10, 11, 12}},
+			falseValues: [][]int8{{13, 14, 15}, {16, 17, 18}, {19, 20, 21}, {22, 23, 24}},
+			want:        [][]int8{{-128, 0, 127}, {16, 17, 18}, {19, 20, 21}, {10, 11, 12}},
+		},
+		{
+			name:        "vecuint8",
+			typ:         types.New(types.T_array_uint8, 3, 0),
+			trueValues:  [][]uint8{{0, 2, 255}, {4, 5, 6}, {7, 8, 9}, {10, 11, 12}},
+			falseValues: [][]uint8{{13, 14, 15}, {16, 17, 18}, {19, 20, 21}, {22, 23, 24}},
+			want:        [][]uint8{{0, 2, 255}, {16, 17, 18}, {19, 20, 21}, {10, 11, 12}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false, false, true}, []bool{false, false, true, false}),
+					NewFunctionTestInput(tt.typ, tt.trueValues, []bool{false, false, false, true}),
+					NewFunctionTestInput(tt.typ, tt.falseValues, nil),
+				},
+				NewFunctionTestResult(tt.typ, false, tt.want, []bool{false, false, false, true}),
+				caseFn,
+			)
+			succeed, info := tc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+
+	typ := types.New(types.T_array_float32, 2, 0)
+	withoutElse := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_bool.ToType(), []bool{true, false}, nil),
+			NewFunctionTestInput(typ, [][]float32{{1, 2}, {3, 4}}, nil),
+		},
+		NewFunctionTestResult(typ, false, [][]float32{{1, 2}, nil}, []bool{false, true}),
+		caseFn,
+	)
+	succeed, info := withoutElse.Run()
+	require.True(t, succeed, info)
 }
 
 func TestIffCheck_PreservesBinaryResultTypes(t *testing.T) {
@@ -1611,6 +1780,54 @@ func Test_CoalesceCheck_TextStringBranchesStayText(t *testing.T) {
 	for _, typ := range result.finalType {
 		require.Equal(t, types.T_text, typ.Oid)
 		require.Zero(t, typ.Width)
+	}
+}
+
+func TestCoalesceBoundedStringBranchesKeepTheirDomain(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, test := range []struct {
+		name   string
+		inputs []types.Type
+		oid    types.T
+		width  int32
+		cs     uint8
+	}{
+		{
+			name:   "char and varchar",
+			inputs: []types.Type{types.New(types.T_char, 4, 0), types.New(types.T_varchar, 12, 0)},
+			oid:    types.T_varchar,
+			width:  12,
+			cs:     types.CharsetUTF8,
+		},
+		{
+			name:   "varchar and char",
+			inputs: []types.Type{types.New(types.T_varchar, 12, 0), types.New(types.T_char, 4, 0)},
+			oid:    types.T_varchar,
+			width:  12,
+			cs:     types.CharsetUTF8,
+		},
+		{
+			name:   "binary and varbinary",
+			inputs: []types.Type{types.New(types.T_binary, 4, 0), types.New(types.T_varbinary, 12, 0)},
+			oid:    types.T_varbinary,
+			width:  12,
+			cs:     types.CharsetBinary,
+		},
+		{
+			name:   "varbinary and binary",
+			inputs: []types.Type{types.New(types.T_varbinary, 12, 0), types.New(types.T_binary, 4, 0)},
+			oid:    types.T_varbinary,
+			width:  12,
+			cs:     types.CharsetBinary,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(proc.Ctx, "coalesce", test.inputs)
+			require.NoError(t, err)
+			require.Equal(t, test.oid, resolved.GetReturnType().Oid)
+			require.Equal(t, test.width, resolved.GetReturnType().Width)
+			require.Equal(t, test.cs, resolved.GetReturnType().Charset)
+		})
 	}
 }
 

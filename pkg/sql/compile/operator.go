@@ -357,6 +357,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.Fs = t.Fs
 		op.Aggs = t.Aggs
 		op.PartitionTopN = t.PartitionTopN
+		op.SpillThreshold = t.SpillThreshold
 		op.SetInfo(&info)
 		return op
 	case vm.MergeTop:
@@ -856,6 +857,9 @@ func constructFuzzyFilter(node, tableScan, sinkScan *plan.Node) *fuzzyfilter.Fuz
 
 func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, proc *process.Process) (*preinsert.PreInsert, error) {
 	preCtx := node.PreInsertCtx
+	if err := incrservice.CheckAutoIDCache(proc.Ctx, proc.GetService(), preCtx.TableDef.GetAutoIdCache()); err != nil {
+		return nil, err
+	}
 	schemaName := preCtx.Ref.SchemaName
 	var err error
 
@@ -1866,6 +1870,7 @@ func constructWindow(_ context.Context, node *plan.Node, proc *process.Process) 
 	arg := window.NewArgument()
 	arg.Aggs = aggregationExpressions
 	arg.WinSpecList = node.WinSpecList
+	arg.SpillThreshold = node.SpillMem
 	return arg
 }
 
@@ -1922,86 +1927,218 @@ func constructGroup(_ context.Context, node, childNode *plan.Node, needEval bool
 	return arg
 }
 
+// preflightPercentileConfigs evaluates runtime percentile arguments
+// before the aggregate's child scopes are compiled. constructGroup follows the
+// operator-construction convention of panicking on errors; using that path for
+// a user-supplied prepared-statement value both decorates the client error with
+// a panic stack and strands the scopes that were already constructed.
+func preflightPercentileConfigs(node *plan.Node, proc *process.Process) error {
+	for _, expr := range node.AggList {
+		f := expr.GetF()
+		if f == nil {
+			continue
+		}
+		switch f.Func.ObjName {
+		case plan2.NameApproxPercentile:
+			if len(f.Args) <= 1 || !expressionContainsParam(f.Args[len(f.Args)-1]) {
+				continue
+			}
+			if _, _, err := constructApproxPercentileConfig(f, proc); err != nil {
+				return err
+			}
+		case plan2.NamePercentileCont, plan2.NamePercentileDisc:
+			if len(f.Args) != 2 || !expressionContainsParam(f.Args[1]) {
+				continue
+			}
+			if _, _, err := constructOrderedPercentileConfig(f, proc); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func expressionContainsParam(expr *plan.Expr) bool {
+	found := false
+	_ = plan.VisitExprTree(expr, func(current *plan.Expr) error {
+		if current.GetP() != nil {
+			found = true
+		}
+		return nil
+	})
+	return found
+}
+
 func constructAggregateConfig(f *plan.Function, proc *process.Process) ([]*plan.Expr, []byte) {
+	args, config, err := constructAggregateConfigWithError(f, proc)
+	if err != nil {
+		panic(err)
+	}
+	return args, config
+}
+
+// constructAggregateConfigWithError is the error-bearing configuration
+// boundary used by SQL compilation. Invalid user configuration is expected
+// input, so it must leave the compile path as an error instead of entering
+// Compile's panic recovery (which adds internal stack frames and source
+// paths). The legacy wrapper above remains for callers that have no error
+// channel, but the query compiler validates before constructing operators.
+func constructAggregateConfigWithError(
+	f *plan.Function,
+	proc *process.Process,
+) ([]*plan.Expr, []byte, error) {
+	if f == nil || f.Func == nil {
+		return nil, nil, moerr.NewInternalErrorNoCtx(
+			"aggregate function configuration is nil")
+	}
 	args := f.Args
 	switch f.Func.ObjName {
 	case plan2.NameGroupConcat:
 		value, err := resolveVariableOrDefault(proc, "group_concat_max_len", true, false)
 		if err != nil {
-			panic(err)
+			return nil, nil, err
 		}
 		maxLen, ok := groupConcatMaxLenAsUint64(value)
 		if !ok {
-			panic(moerr.NewInternalErrorNoCtxf(
-				"group_concat_max_len has invalid value %v", value))
+			return nil, nil, moerr.NewInternalErrorNoCtxf(
+				"group_concat_max_len has invalid value %v", value)
 		}
 		if f.AggConfigType == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
-			return args, aggexec.EncodeGroupConcatOrderedConfig(f.AggConfig, maxLen)
+			return args, aggexec.EncodeGroupConcatOrderedConfig(f.AggConfig, maxLen), nil
 		}
 		separator := ","
 		if len(args) > 1 {
-			separator = evaluateAggregateConfigString(proc, args[len(args)-1])
+			var err error
+			separator, err = evaluateAggregateConfigString(proc, args[len(args)-1])
+			if err != nil {
+				return nil, nil, err
+			}
 			args = args[:len(args)-1]
 		}
-		return args, aggexec.EncodeGroupConcatConfig(separator, maxLen)
+		return args, aggexec.EncodeGroupConcatConfig(separator, maxLen), nil
 
 	case plan2.NameClusterCenters:
 		if len(args) > 1 {
-			config := evaluateAggregateConfigString(proc, args[len(args)-1])
-			return args[:len(args)-1], []byte(config)
+			config, err := evaluateAggregateConfigString(proc, args[len(args)-1])
+			if err != nil {
+				return nil, nil, err
+			}
+			return args[:len(args)-1], []byte(config), nil
 		}
 
 	case plan2.NameApproxPercentile:
 		if len(args) > 1 {
-			configExpr := args[len(args)-1]
-			if err := validateApproxPercentileExpr(configExpr); err != nil {
-				panic(err)
-			}
-			vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, configExpr)
+			args, config, err := constructApproxPercentileConfig(f, proc)
 			if err != nil {
-				panic(err)
+				return nil, nil, err
 			}
-			defer free()
-			config, err := getPercentileConfig(vec)
-			if err != nil {
-				panic(err)
-			}
-			// The existing approximate-percentile executor always ranks values in
-			// ascending order. An ordered-set DESC call has the same result as the
-			// ascending complementary percentile, so preserve the executor and its
-			// wire-compatible text configuration by translating p to 1-p here.
-			if len(f.AggConfig) > 0 && f.AggConfig[0] != 0 {
-				config, err = complementPercentileConfig(config)
-				if err != nil {
-					panic(err)
-				}
-			}
-			return args[:len(args)-1], config
+			return args, config, nil
 		}
 
 	case plan2.NamePercentileCont, plan2.NamePercentileDisc:
-		if len(args) != 2 {
-			panic(moerr.NewInvalidInputNoCtxf(
-				"%s requires a value and percentile argument", f.Func.ObjName))
-		}
-		configExpr := args[1]
-		if err := validateOrderedPercentileExpr(configExpr, f.Func.ObjName); err != nil {
-			panic(err)
-		}
-		configExpr = normalizeAggregateConfigExpr(proc, configExpr)
-		vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, configExpr)
+		args, config, err := constructOrderedPercentileConfig(f, proc)
 		if err != nil {
-			panic(err)
+			return nil, nil, err
 		}
-		defer free()
-		percentile, err := getPercentileConfigNamed(vec, f.Func.ObjName)
-		if err != nil {
-			panic(err)
-		}
-		descending := len(f.AggConfig) > 0 && f.AggConfig[0] != 0
-		return args[:1], aggexec.EncodeOrderedPercentileConfig(percentile, descending)
+		return args, config, nil
 	}
-	return args, nil
+	return args, nil, nil
+}
+
+// validateAggregateConfigs checks only operator nodes whose aggregate
+// configuration is consumed during physical construction. It intentionally
+// runs before the child scopes are built so an invalid percentile cannot leave
+// partially constructed pipelines behind before returning its user error.
+func validateAggregateConfigs(node *plan.Node, proc *process.Process) error {
+	if node == nil {
+		return nil
+	}
+	validate := func(expr *plan.Expr) error {
+		if expr == nil {
+			return nil
+		}
+		f, ok := expr.Expr.(*plan.Expr_F)
+		if !ok || f.F == nil || f.F.Func == nil {
+			return nil
+		}
+		_, _, err := constructAggregateConfigWithError(f.F, proc)
+		return err
+	}
+	for _, expr := range node.AggList {
+		if err := validate(expr); err != nil {
+			return err
+		}
+	}
+	for _, expr := range node.WinSpecList {
+		w, ok := expr.Expr.(*plan.Expr_W)
+		if !ok || w.W == nil || w.W.WindowFunc == nil {
+			continue
+		}
+		if err := validate(w.W.WindowFunc); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func constructApproxPercentileConfig(
+	f *plan.Function, proc *process.Process,
+) ([]*plan.Expr, []byte, error) {
+	args := f.Args
+	if len(args) != 2 {
+		return nil, nil, moerr.NewInvalidInputNoCtx(
+			"approx_percentile requires a value and percentile argument")
+	}
+	configExpr := args[1]
+	if err := validateApproxPercentileExpr(configExpr); err != nil {
+		return nil, nil, err
+	}
+	configExpr, err := normalizeAggregateConfigExpr(proc, configExpr)
+	if err != nil {
+		return nil, nil, err
+	}
+	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, configExpr)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer free()
+	config, err := getEvaluatedPercentileConfigNamed(vec, f.Func.ObjName)
+	if err != nil {
+		return nil, nil, err
+	}
+	// Preserve the v76 executor's explicit direction, including SQL NaN ordering,
+	// while evaluating a prepared percentile exactly once for this execution.
+	descending := len(f.AggConfig) > 0 && f.AggConfig[0] != 0
+	return args[:1], aggexec.EncodeApproxPercentileConfig(config, descending), nil
+}
+
+func constructOrderedPercentileConfig(
+	f *plan.Function, proc *process.Process,
+) ([]*plan.Expr, []byte, error) {
+	args := f.Args
+	if len(args) != 2 {
+		return nil, nil, moerr.NewInvalidInputNoCtxf(
+			"%s requires a value and percentile argument", f.Func.ObjName)
+	}
+	configExpr := args[1]
+	if err := validateOrderedPercentileExpr(configExpr, f.Func.ObjName); err != nil {
+		return nil, nil, err
+	}
+	configExpr, err := normalizeAggregateConfigExpr(proc, configExpr)
+	if err != nil {
+		return nil, nil, err
+	}
+	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, configExpr)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer free()
+	percentile, err := getEvaluatedPercentileConfigNamed(vec, f.Func.ObjName)
+	if err != nil {
+		return nil, nil, err
+	}
+	descending := len(f.AggConfig) > 0 && f.AggConfig[0] != 0
+	return args[:1], aggexec.EncodeOrderedPercentileConfig(percentile, descending), nil
 }
 
 // normalizeAggregateConfigExpr materializes a semantically constant function
@@ -2011,9 +2148,9 @@ func constructAggregateConfig(f *plan.Function, proc *process.Process) ([]*plan.
 // return a one-row flat vector for a constant cast, although the plan still
 // satisfies rule.IsConstant.  Fold a private copy here so the configuration
 // boundary does not depend on which planner path produced the expression.
-func normalizeAggregateConfigExpr(proc *process.Process, expr *plan.Expr) *plan.Expr {
+func normalizeAggregateConfigExpr(proc *process.Process, expr *plan.Expr) (*plan.Expr, error) {
 	if expr == nil || expr.GetF() == nil {
-		return expr
+		return expr, nil
 	}
 	folded, err := plan2.ConstantFold(
 		batch.EmptyForConstFoldBatch,
@@ -2023,18 +2160,18 @@ func normalizeAggregateConfigExpr(proc *process.Process, expr *plan.Expr) *plan.
 		true,
 	)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	return folded
+	return folded, nil
 }
 
-func evaluateAggregateConfigString(proc *process.Process, expr *plan.Expr) string {
+func evaluateAggregateConfigString(proc *process.Process, expr *plan.Expr) (string, error) {
 	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, expr)
 	if err != nil {
-		panic(err)
+		return "", err
 	}
 	defer free()
-	return vec.GetStringAt(0)
+	return vec.GetStringAt(0), nil
 }
 
 func constructDispatchLocal(all bool, isSink, rec bool, recCTE bool, regs []*process.WaitRegister) *dispatch.Dispatch {
@@ -2973,19 +3110,23 @@ func constructTableClone(
 }
 
 func validateApproxPercentileExpr(expr *plan.Expr) error {
-	if expr == nil || !rule.IsConstant(expr, false) {
+	if !isPercentileConfigExpr(expr) {
 		return moerr.NewInvalidInputNoCtx(
-			"percentile argument of approx_percentile must be a constant")
+			"percentile argument of approx_percentile must be a constant or parameter")
 	}
 	return nil
 }
 
 func validateOrderedPercentileExpr(expr *plan.Expr, name string) error {
-	if expr == nil || !rule.IsConstant(expr, false) {
+	if !isPercentileConfigExpr(expr) {
 		return moerr.NewInvalidInputNoCtxf(
-			"percentile argument of %s must be a constant", name)
+			"percentile argument of %s must be a constant or parameter", name)
 	}
 	return nil
+}
+
+func isPercentileConfigExpr(expr *plan.Expr) bool {
+	return plan2.IsPercentileConfigExpr(expr)
 }
 
 // getPercentileConfig extracts the percentile value from a vector for
@@ -2995,27 +3136,20 @@ func getPercentileConfig(vec *vector.Vector) ([]byte, error) {
 	return getPercentileConfigNamed(vec, "approx_percentile")
 }
 
-func complementPercentileConfig(config []byte) ([]byte, error) {
-	text := string(config)
-	percentile, ok := new(big.Rat).SetString(text)
-	if !ok || percentile.Sign() < 0 || percentile.Cmp(big.NewRat(1, 1)) > 0 {
-		return nil, moerr.NewInvalidInputNoCtxf(
-			"invalid percentile configuration %q", text)
-	}
-	scale := 0
-	if point := strings.IndexByte(text, '.'); point >= 0 {
-		scale = len(text) - point - 1
-	}
-	complement := new(big.Rat).Sub(big.NewRat(1, 1), percentile)
-	return []byte(complement.FloatString(scale)), nil
+func getEvaluatedPercentileConfigNamed(vec *vector.Vector, functionName string) ([]byte, error) {
+	return getPercentileConfigValue(vec, functionName, true)
 }
 
 func getPercentileConfigNamed(vec *vector.Vector, functionName string) ([]byte, error) {
-	if vec == nil || !vec.IsConst() {
+	return getPercentileConfigValue(vec, functionName, false)
+}
+
+func getPercentileConfigValue(vec *vector.Vector, functionName string, allowSingleton bool) ([]byte, error) {
+	if vec == nil || (!vec.IsConst() && !(allowSingleton && vec.Length() == 1)) {
 		return nil, moerr.NewInvalidInputNoCtxf(
 			"percentile argument of %s must be a constant", functionName)
 	}
-	if vec.Length() == 0 || vec.IsConstNull() {
+	if vec.Length() == 0 || vec.IsConstNull() || vec.IsNull(0) {
 		return nil, moerr.NewInvalidInputNoCtxf(
 			"percentile argument of %s cannot be NULL", functionName)
 	}

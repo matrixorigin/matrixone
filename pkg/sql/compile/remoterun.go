@@ -102,6 +102,9 @@ func encodeScope(s *Scope) ([]byte, error) {
 	if err = validateOctStringProtocol(s.Proc, p); err != nil {
 		return nil, err
 	}
+	if err = validateHexMySQLNumericProtocol(s.Proc, p); err != nil {
+		return nil, err
+	}
 	if err = validateRemoteIgnoreCheckPipelineProtocol(s.Proc, p); err != nil {
 		return nil, err
 	}
@@ -111,6 +114,9 @@ func encodeScope(s *Scope) ([]byte, error) {
 func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	p, err := fillPipeline(s)
 	if err != nil {
+		return nil, err
+	}
+	if err = validateGroupingTransportDestinations(proc, p); err != nil {
 		return nil, err
 	}
 	if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
@@ -133,8 +139,34 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 			return nil, err
 		}
 	}
-	if features.IPFunctionSemantics {
+	if features.IntegerParameterCoercion {
+		if err = validateIntegerArgumentDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
+	if features.IPFunctionSemantics || features.TOBase64ResultContracts || features.IPFunctionResultContracts ||
+		features.ExpressionResultMetadataContracts {
 		if err = validateIPFunctionDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
+	if features.StringNumericResultContracts {
+		if err = validateStringNumericResultDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
+	if features.BoundedConditionalStringDomains {
+		if err = validateBoundedConditionalStringDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
+	if features.SpatialDistanceSemantics {
+		if err = validateSpatialDistanceDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
+	if features.DecimalLiteralSemantics {
+		if err = validateDecimalLiteralDestination(proc, p); err != nil {
 			return nil, err
 		}
 	}
@@ -159,6 +191,9 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 	if err = validateOctStringProtocol(proc, p); err != nil {
 		return nil, err
 	}
+	if err = validateHexMySQLNumericProtocol(proc, p); err != nil {
+		return nil, err
+	}
 	if err = validateRemoteIgnoreCheckPipelineProtocol(proc, p); err != nil {
 		return nil, err
 	}
@@ -175,6 +210,12 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 		return nil, err
 	}
 	if err = validateRemoteArrowLoadPipelineProtocol(proc, p); err != nil {
+		return nil, err
+	}
+	if err = validateRemoteAutoIDCachePipelineProtocol(proc, p); err != nil {
+		return nil, err
+	}
+	if err = validateFulltext2ProbeTailDestination(proc, p); err != nil {
 		return nil, err
 	}
 	return p.Marshal()
@@ -274,6 +315,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		if err = validateOctStringProtocol(proc, p); err != nil {
 			return nil, err
 		}
+		if err = validateHexMySQLNumericProtocol(proc, p); err != nil {
+			return nil, err
+		}
 		if err = validateRemoteGroupingSetPipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
@@ -284,6 +328,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 			return nil, err
 		}
 		if err = validateRemoteArrowLoadPipelineProtocol(proc, p); err != nil {
+			return nil, err
+		}
+		if err = validateRemoteAutoIDCachePipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
 	} else if err = plan.ValidateStringLiteralFormsInOwner(p); err != nil {
@@ -543,6 +590,14 @@ func generateScope(proc *process.Process, p *pipeline.Pipeline, ctx *scopeContex
 	}
 
 	s = newScope(magicType(p.GetPipelineType()))
+	for parent := ctx; parent != nil; parent = parent.parent {
+		if parent.plan != nil {
+			if queryNeedsGroupingTransport(parent.plan.GetQuery()) {
+				s.Plan = parent.plan
+			}
+			break
+		}
+	}
 	s.IsEnd = p.IsEnd
 	s.IsLoad = p.IsLoad
 	s.IsRemote = isRemote
@@ -703,6 +758,15 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			RuntimeFilterSpec:  t.RuntimeFilterSpec,
 		}
 	case *preinsert.PreInsert:
+		if size := t.TableDef.GetAutoIdCache(); size != 0 {
+			if proc == nil {
+				return ctxId, nil, moerr.NewNotSupportedNoCtx("AUTO_ID_CACHE remote execution requires a process")
+			}
+			if err := incrservice.CheckAutoIDCache(proc.Ctx, proc.GetService(), size); err != nil {
+				return ctxId, nil, err
+			}
+			in.Op = int32(vm.PreInsertAutoIDCache)
+		}
 		if err := validateRemoteStatementLastInsertIDProtocol(
 			proc, t.HasAutoCol, t.TrackAutoIncrementGenerated); err != nil {
 			return ctxId, nil, err
@@ -1299,8 +1363,11 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 			Engine:          eng,
 		}
 		op = arg
-	case vm.PreInsert:
+	case vm.PreInsert, vm.PreInsertAutoIDCache:
 		t := opr.GetPreInsert()
+		if t == nil || (opr.Op == int32(vm.PreInsertAutoIDCache)) != (t.GetTableDef().GetAutoIdCache() != 0) {
+			return nil, moerr.NewNotSupportedNoCtx("AUTO_ID_CACHE PRE_INSERT wire marker does not match the table policy")
+		}
 		arg := preinsert.NewArgument()
 		arg.SchemaName = t.GetSchemaName()
 		arg.TableDef = t.GetTableDef()
@@ -1929,6 +1996,41 @@ func validateRemoteAggregateProtocol(
 					"ordered-set percentile remote execution requires MORPC protocol version 17",
 				)
 			}
+			if agg.GetAggID() == aggexec.AggIdOfPercentileDisc &&
+				orderedSetPercentileDiscUsesExtendedType(agg) &&
+				!supportsRemoteOrderedSetExtendedTypes(proc.GetService()) {
+				return moerr.NewNotSupportedNoCtx(
+					"extended discrete percentile input types require MORPC protocol version 84",
+				)
+			}
+		}
+		if agg.GetAggID() == aggexec.AggIdOfApproxPercentile &&
+			(proc == nil || !supportsRemoteApproxPercentile(proc.GetService())) {
+			return moerr.NewNotSupportedNoCtx(
+				"approx_percentile remote execution requires MORPC protocol version 76",
+			)
+		}
+		if (agg.GetAggID() == aggexec.AggIdOfApproxCount ||
+			agg.GetAggID() == aggexec.AggIdOfApproxCountDistinct ||
+			agg.GetAggID() == aggexec.AggIdOfHllAdd ||
+			agg.GetAggID() == aggexec.AggIdOfHllMerge) &&
+			(proc == nil || !supportsRemoteHLL(proc.GetService())) {
+			return moerr.NewNotSupportedNoCtx(
+				"HLL remote execution requires MORPC protocol version 77",
+			)
+		}
+		if agg.GetAggID() == aggexec.AggIdOfHllAdd && len(agg.GetArgExpressions()) > 0 {
+			typ := types.T(agg.GetArgExpressions()[0].Typ.Id)
+			if isCanonicalVectorHLLAddType(typ) &&
+				(proc == nil || !supportsRemoteCanonicalHLLAdd(proc.GetService())) {
+				return moerr.NewNotSupportedNoCtx(
+					"canonical vector HLL_ADD_AGG remote execution requires MORPC protocol version 88")
+			}
+			if isCanonicalTextHLLAddType(typ) &&
+				(proc == nil || !supportsRemoteCanonicalTextHLLAdd(proc.GetService())) {
+				return moerr.NewNotSupportedNoCtx(
+					"canonical JSON/CHAR HLL_ADD_AGG remote execution requires MORPC protocol version 91")
+			}
 		}
 		if agg.GetConfigType() == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
 			if proc == nil || !supportsRemoteOrderedAggregates(proc.GetService()) {
@@ -1945,6 +2047,30 @@ func validateRemoteAggregateProtocol(
 		}
 	}
 	return nil
+}
+
+// orderedSetPercentileDiscUsesExtendedType identifies the input family added
+// by the generic discrete-percentile executor. MORPC v17 only guarantees the
+// historical numeric implementation; an older worker would accept the
+// aggregate ID but fail when it tries to instantiate VARCHAR, DATE, UUID,
+// DECIMAL256, or another newly sortable type.
+func orderedSetPercentileDiscUsesExtendedType(
+	agg aggexec.AggFuncExecExpression,
+) bool {
+	args := agg.GetArgExpressions()
+	if len(args) == 0 || args[0] == nil {
+		return false
+	}
+	switch types.T(args[0].Typ.Id) {
+	case types.T_bit,
+		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128:
+		return false
+	default:
+		return true
+	}
 }
 
 func isVarianceAggregate(agg aggexec.AggFuncExecExpression) bool {
@@ -2087,6 +2213,9 @@ func validateRemoteExpressionPipelineProtocol(
 	if proc != nil {
 		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
 	}
+	if features.IntegerParameterCoercion && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion85) {
+		return moerr.NewNotSupportedNoCtx("integer parameter coercion requires MORPC protocol version 85")
+	}
 	if features.NumericPrefix &&
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion30) {
 		return moerr.NewNotSupportedNoCtx(
@@ -2129,10 +2258,41 @@ func validateRemoteExpressionPipelineProtocol(
 			"signed INT ASCII results require MORPC protocol version 65",
 		)
 	}
+	if features.StringNumericResultContracts &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion80) {
+		return moerr.NewNotSupportedNoCtx(
+			"corrected string numeric result contracts require MORPC protocol version 80",
+		)
+	}
+	if features.BoundedConditionalStringDomains &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion83) {
+		return moerr.NewNotSupportedNoCtx(
+			"bounded conditional string domains require MORPC protocol version 83",
+		)
+	}
+	if features.DecimalLiteralSemantics &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion89) {
+		return moerr.NewNotSupportedNoCtx(
+			"exact DECIMAL256 literal semantics require MORPC protocol version 89",
+		)
+	}
 	if features.IPFunctionSemantics &&
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion72) {
 		return moerr.NewNotSupportedNoCtx(
 			"corrected IP function semantics require MORPC protocol version 72",
+		)
+	}
+	if features.ExpressionResultMetadataContracts || features.TOBase64ResultContracts || features.IPFunctionResultContracts {
+		if !hasProtocolVersion || protocolVersion < defines.MORPCVersion86 {
+			return moerr.NewNotSupportedNoCtx(
+				"expression result contracts require MORPC protocol version 86",
+			)
+		}
+	}
+	if features.SpatialDistanceSemantics &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion90) {
+		return moerr.NewNotSupportedNoCtx(
+			"geodetic spatial-distance semantics require MORPC protocol version 90",
 		)
 	}
 	return nil
@@ -2569,6 +2729,37 @@ func validateRemoteGroupingSetPipelineProtocol(
 	return nil
 }
 
+// validateRemoteAutoIDCachePipelineProtocol runs before receiver scope/operator
+// construction. The appended opcode makes old decoders reject the payload; this
+// check also rejects disabled new receivers and malformed/stripped markers.
+func validateRemoteAutoIDCachePipelineProtocol(proc *process.Process, p *pipeline.Pipeline) error {
+	if p == nil {
+		return nil
+	}
+	for _, instruction := range p.InstructionList {
+		size := instruction.GetPreInsert().GetTableDef().GetAutoIdCache()
+		marked := instruction.GetOp() == int32(vm.PreInsertAutoIDCache)
+		if size == 0 && !marked {
+			continue
+		}
+		if !marked || size == 0 {
+			return moerr.NewNotSupportedNoCtx("AUTO_ID_CACHE PRE_INSERT wire marker does not match the table policy")
+		}
+		if proc == nil {
+			return moerr.NewNotSupportedNoCtx("AUTO_ID_CACHE remote execution requires a process")
+		}
+		if err := incrservice.CheckAutoIDCache(proc.Ctx, proc.GetService(), size); err != nil {
+			return err
+		}
+	}
+	for _, child := range p.Children {
+		if err := validateRemoteAutoIDCachePipelineProtocol(proc, child); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // validateRemoteArrowLoadPipelineProtocol prevents receivers from silently
 // ignoring Arrow-specific ExternalScan fields during a mixed-version rollout.
 func validateRemoteArrowLoadPipelineProtocol(proc *process.Process, p *pipeline.Pipeline) error {
@@ -2658,7 +2849,7 @@ func convertToResultPos(relList, colList []int32) []colexec.ResultPos {
 // func decodeBatch(proc *process.Process, data []byte) (*batch.Batch, error) {
 func decodeBatch(mp *mpool.MPool, data []byte) (*batch.Batch, error) {
 	bat := batch.NewOffHeapEmpty()
-	if err := bat.UnmarshalBinaryWithPrepareParamKinds(data, mp); err != nil {
+	if err := bat.UnmarshalBinaryForPipeline(data, mp); err != nil {
 		bat.Clean(mp)
 		return nil, err
 	}

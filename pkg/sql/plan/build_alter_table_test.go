@@ -108,6 +108,32 @@ func TestAlterTableAutoIncrementPlan(t *testing.T) {
 	}
 }
 
+func TestBuildAlterInsertDataSQLQuotesIdentifiers(t *testing.T) {
+	alterCtx := &AlterTableContext{
+		schemaName:      "db`name",
+		originTableName: "source`table",
+		copyTableName:   "copy`table",
+		alterColMap: map[string]selectExpr{
+			"target`column": {
+				sexprType: exprColumnName,
+				sexprStr:  "source`column",
+			},
+		},
+	}
+	copyTableDef := &TableDef{Cols: []*ColDef{{Name: "target`column"}}}
+
+	sql, err := buildAlterInsertDataSQL(nil, alterCtx, copyTableDef, false)
+	require.NoError(t, err)
+	require.Equal(t,
+		"INSERT INTO `db``name`.`copy``table` (`target``column`) "+
+			"SELECT `source``column` FROM `db``name`.`source``table`",
+		sql,
+	)
+	statements, err := mysql.Parse(context.Background(), sql, 1)
+	require.NoError(t, err)
+	require.Len(t, statements, 1)
+}
+
 func TestAlterTableAutoIncrementRejectsTableWithoutUserAutoColumn(t *testing.T) {
 	_, err := buildSingleStmt(NewMockOptimizer(false), t,
 		`ALTER TABLE constraint_test.t1 AUTO_INCREMENT = 100;`)
@@ -279,6 +305,80 @@ func TestAlterTableAddColumns(t *testing.T) {
 		//`ALTER TABLE t2 ADD c INT PRIMARY KEY PRIMARY KEY PRIMARY KEY;`,
 	}
 	runTestShouldPass(mock, t, sqls, false, false)
+}
+
+func TestAlterTableCopySupportsForeignKeyOnAddedColumn(t *testing.T) {
+	for _, sql := range []string{
+		`ALTER TABLE t1 ADD COLUMN parent_id BIGINT, ADD CONSTRAINT fk_t1_parent FOREIGN KEY (parent_id) REFERENCES t1(a)`,
+		`ALTER TABLE t1 ADD CONSTRAINT fk_t1_parent FOREIGN KEY (parent_id) REFERENCES t1(a), ADD COLUMN parent_id BIGINT`,
+	} {
+		t.Run(sql, func(t *testing.T) {
+			logicPlan, err := buildSingleStmt(NewMockOptimizer(false), t, sql)
+			require.NoError(t, err)
+
+			alter := logicPlan.GetDdl().GetAlterTable()
+			require.Equal(t, plan.AlterTable_COPY, alter.AlgorithmType)
+			require.Len(t, alter.CopyTableDef.Fkeys, 1)
+			require.Len(t, alter.Actions, 1)
+			require.NotNil(t, alter.Actions[0].GetAddFk())
+			require.NotEmpty(t, alter.DetectSqls)
+			require.NotEmpty(t, alter.UpdateFkSqls)
+
+			fk := alter.CopyTableDef.Fkeys[0]
+			require.Equal(t, "fk_t1_parent", fk.Name)
+			require.Equal(t, uint64(0), fk.ForeignTbl)
+			require.Equal(t, "parent_id", FindColumn(alter.CopyTableDef.Cols, "parent_id").Name)
+			require.Contains(t, alter.CreateTmpTableSql, "CONSTRAINT `fk_t1_parent`")
+			require.Contains(t, alter.CreateTmpTableSql, "FOREIGN KEY (`parent_id`)")
+
+			copied := DeepCopyPlan(logicPlan).GetDdl().GetAlterTable()
+			require.Equal(t, "fk_t1_parent", copied.Actions[0].GetAddFk().GetFkey().GetName())
+		})
+	}
+}
+
+func TestAlterTableCopySupportsExternalForeignKeyOnAddedColumn(t *testing.T) {
+	logicPlan, err := buildSingleStmt(NewMockOptimizer(false), t, `
+		ALTER TABLE constraint_test.t1
+		ADD COLUMN parent_id INT,
+		ADD CONSTRAINT fk_t1_external FOREIGN KEY (parent_id)
+			REFERENCES constraint_test.replace_fk_p(id)`)
+	require.NoError(t, err)
+
+	alter := logicPlan.GetDdl().GetAlterTable()
+	require.Equal(t, plan.AlterTable_COPY, alter.AlgorithmType)
+	require.Len(t, alter.CopyTableDef.Fkeys, 1)
+	require.Len(t, alter.Actions, 1)
+	require.Len(t, alter.DetectSqls, 1)
+	require.Len(t, alter.UpdateFkSqls, 1)
+
+	addFk := alter.Actions[0].GetAddFk()
+	require.NotNil(t, addFk)
+	require.Equal(t, "constraint_test", addFk.DbName)
+	require.Equal(t, "replace_fk_p", addFk.TableName)
+	require.Equal(t, []string{"parent_id"}, addFk.Cols)
+	require.Equal(t, uint64(77001), addFk.Fkey.ForeignTbl)
+	require.Contains(t, alter.CreateTmpTableSql, "CONSTRAINT `fk_t1_external`")
+	require.Contains(t, alter.DetectSqls[0], "`constraint_test`.`replace_fk_p`")
+}
+
+func TestAlterTableCopyRejectsDuplicateForeignKeyName(t *testing.T) {
+	mock := NewMockOptimizer(false)
+	tableDef := mock.ctxt.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "t1")]
+	tableDef.Fkeys = []*plan.ForeignKeyDef{{Name: "FK_T1_PARENT"}}
+
+	_, err := buildSingleStmt(mock, t, `
+		ALTER TABLE constraint_test.t1
+		ADD COLUMN parent_id BIGINT,
+		ADD CONSTRAINT fk_t1_parent FOREIGN KEY (parent_id)
+			REFERENCES constraint_test.t1(a)`)
+	require.ErrorContains(t, err, "Duplicate foreign key constraint name 'fk_t1_parent'")
+}
+
+func TestNextAlterCopyColumnIDIsUnique(t *testing.T) {
+	const unknownColumnID = ^uint64(0)
+	cols := []*ColDef{{ColId: 1}, {ColId: unknownColumnID}}
+	require.Equal(t, unknownColumnID-1, nextAlterCopyColumnID(cols))
 }
 
 func TestAlterTableAddColumnInheritsTableDefaultCharset(t *testing.T) {
@@ -1896,4 +1996,37 @@ func TestAlterTemporaryTableRenameDestination(t *testing.T) {
 			}
 		})
 	}
+}
+
+// #28917: ALTER ... MODIFY/CHANGE copies rows without re-encoding vectors, so changing a vector
+// column's declared dimension would leave a mixed-dimension column. checkChangeTypeCompatible must
+// reject a dimension change (same element type, different Width) while leaving same-dimension and
+// non-vector width changes alone.
+func TestCheckChangeTypeCompatibleVectorDimension(t *testing.T) {
+	ctx := context.Background()
+	vec := func(id types.T, w int32) *plan.Type { return &plan.Type{Id: int32(id), Width: w} }
+
+	// Every width-bearing vector type is covered, not just VECF32 (#28917 review).
+	for _, id := range []types.T{
+		types.T_array_float32, types.T_array_float64, types.T_array_bf16,
+		types.T_array_float16, types.T_array_int8, types.T_array_uint8,
+	} {
+		require.Error(t, checkChangeTypeCompatible(ctx, vec(id, 3), vec(id, 4)),
+			"growing the dimension of %s must be rejected", id.String())
+		require.Error(t, checkChangeTypeCompatible(ctx, vec(id, 4), vec(id, 3)),
+			"shrinking the dimension of %s must be rejected", id.String())
+		require.NoError(t, checkChangeTypeCompatible(ctx, vec(id, 3), vec(id, 3)),
+			"same dimension for %s is allowed (nullability/default change)", id.String())
+	}
+
+	// A dimension change across element types is rejected at validation too (not left to the
+	// per-row cast to fail mid-copy).
+	require.Error(t, checkChangeTypeCompatible(ctx, vec(types.T_array_float32, 3), vec(types.T_array_float64, 4)),
+		"vecf32(3)->vecf64(4) (element + dimension change) must be rejected")
+	// An element-type change that KEEPS the dimension is allowed: the array cast re-encodes rows.
+	require.NoError(t, checkChangeTypeCompatible(ctx, vec(types.T_array_float32, 3), vec(types.T_array_float64, 3)),
+		"vecf32(3)->vecf64(3) (element change, same dimension) is allowed")
+
+	require.NoError(t, checkChangeTypeCompatible(ctx, vec(types.T_varchar, 10), vec(types.T_varchar, 20)),
+		"a non-vector same-type width change is unaffected")
 }

@@ -192,6 +192,7 @@ func TestDMLReturningRejectsV1NonGoals(t *testing.T) {
 		feature string
 	}{
 		{"insert ignore into nation values (1, 'n', 2, 'c') returning *", "INSERT IGNORE"},
+		{"insert ignore into nation values (1, 'n', 2, 'c') on duplicate key update n_name = values(n_name) returning *", "INSERT ON DUPLICATE KEY UPDATE"},
 		{"insert overwrite into nation values (1, 'n', 2, 'c') returning *", "INSERT OVERWRITE"},
 		{"insert into nation values (1, 'n', 2, 'c') on duplicate key update n_name = values(n_name) returning *", "INSERT ON DUPLICATE KEY UPDATE"},
 		{"update ignore nation set n_name = 'x' returning n_name", "UPDATE IGNORE"},

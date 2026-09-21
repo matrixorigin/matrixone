@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
+	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -1303,9 +1304,10 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		return err
 	}
 	if !isTemp && !plan2.IsFkBannedDatabase(dbName) {
-		// COPY recomputes values while its temporary relation has no foreign
-		// keys. Validate every potentially changed endpoint before creating that
-		// relation; planner metadata may predate a recently committed FK.
+		// Validate every potentially changed preexisting endpoint before creating
+		// the replacement; planner metadata may predate a recently committed FK.
+		// Constraints introduced by this statement are enforced while rows are
+		// inserted into the replacement relation.
 		if err = checkAlterCopyForeignKeyColumns(
 			c, qry, originRel.CopyTableDef(c.proc.Ctx), sourceForeignKeys,
 			sourceRefChildTbls, oldId, dbName, tblName,
@@ -1314,8 +1316,9 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		}
 	}
 
-	// 3. create temporary replica table which doesn't have foreign key constraints
-	// Get logicalId from tableDef and pass it when creating the temporary table
+	// 3. Create the temporary replica. Ignore parent back-reference publication;
+	// those relationships are reconciled after the source relation is replaced.
+	// Get logicalId from tableDef and pass it when creating the temporary table.
 	createTmpOpts := alterCopyCreateOptions(qry)
 	err = c.runSqlWithOptions(qry.CreateTmpTableSql, createTmpOpts)
 	if err != nil {
@@ -1521,8 +1524,8 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		extra := newRel.GetExtraInfo()
 		id := newRel.GetTableID(c.proc.Ctx)
 
-		// cctx for the idxcron re-registration arm below — lazy-init,
-		// reused across loop iterations.
+		// Shared plugin CompileContext for the ISCP (AlterCopyInitSQL) and idxcron
+		// re-registration arms below — lazy-init, reused across loop iterations.
 		var idxcronCctx *pluginCompileCtx
 		for _, indexDef := range newTableDef.Indexes {
 
@@ -1550,11 +1553,27 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 						}
 
 						if valid {
-							// index table may not be fully sync'd with source table via ISCP during alter table
-							// clone index table (with ISCP) may not be a complete clone
-							// so register ISCP job with startFromNow = false
+							// The replacement table's hidden index tables may be empty: cloneUnaffectedIndexes
+							// SKIPS the clone for a SkipWholeIndex async index and the CDC is registered from
+							// ts=0. Ask the plugin how to seed it: an algo whose consumer rebuilds the whole
+							// index from the ts=0 replay returns (false, "") — hnsw via RunHnsw, ivfflat
+							// entries, classic row-based fulltext. An algo whose consumer only appends an event
+							// tail returns a REINDEX FORCE_SYNC InitSQL, run post-commit by the CDC's first
+							// iteration: fulltext2 (#28837), and cagra/ivfpq (#29011), whose RunCuvs sync writes
+							// tag=1 chunks only and never a tag=0 sub-index. Mirrors RestoreTable's
+							// plugin-InitSQL dispatch.
+							startFromNow, initSQL := false, ""
+							if p, ok := indexplugin.Get(indexDef.IndexAlgo); ok {
+								if idxcronCctx == nil {
+									idxcronCctx = newPluginCompileCtx(s, c, id, extra, dbSource, qry.Database, newTableDef, nil)
+								}
+								startFromNow, initSQL, err = alterCopyCdcSeed(p.Compile(), idxcronCctx, indexDef.IndexName, newTableDef.Indexes)
+								if err != nil {
+									return err
+								}
+							}
 							sinker_type := getSinkerTypeFromAlgo(indexDef.IndexAlgo)
-							err = CreateIndexCdcTask(c, dbName, newTableDef.Name, newTableDef.TblId, indexDef.IndexName, sinker_type, false, "", newTableDef)
+							err = CreateIndexCdcTask(c, dbName, newTableDef.Name, newTableDef.TblId, indexDef.IndexName, sinker_type, startFromNow, initSQL, newTableDef)
 							if err != nil {
 								return err
 							}
@@ -1566,8 +1585,8 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 					{
 						// idxcron — register the algorithm's scheduled
 						// maintenance task via the plugin. Plugins
-						// without IdxcronAction (HNSW / CAGRA / IVF-PQ
-						// today) are skipped.
+						// without IdxcronAction (HNSW and classic
+						// fulltext today) are skipped.
 						if p, ok := indexplugin.Get(indexDef.IndexAlgo); ok {
 							d := p.Catalog().SyncDescriptor()
 							if d.IdxcronAction != "" {
@@ -1648,11 +1667,18 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 			zap.Error(err))
 		return err
 	}
+	addedForeignKeys, err := collectAlterCopyAddedForeignKeys(
+		c.proc.Ctx, qry, newTableDef,
+	)
+	if err != nil {
+		return err
+	}
 
 	if err = applyAlterCopyForeignKeyState(
 		c,
 		newRel,
 		sourceForeignKeys,
+		addedForeignKeys,
 		sourceRefChildTbls,
 		qry.ChangeTblColIdMap,
 		originRel.GetTableID(c.proc.Ctx),
@@ -1678,6 +1704,28 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		return err
 	}
 	return nil
+}
+
+// alterCopyCdcSeed asks the plugin how to seed the CDC job of a copy-alter replacement
+// index whose hidden tables were skipped by cloneUnaffectedIndexes: it collects the
+// index's hidden-table defs, calls AlterCopyInitSQL, and applies the no-rebuild guard.
+// An empty InitSQL means the consumer rebuilds from the ts=0 replay, so the tail MUST NOT
+// arm from now (which would drop every pre-existing row). Mirrors RestoreInitSQL (ddl.go).
+func alterCopyCdcSeed(hooks compileplugin.Hooks, cctx compileplugin.CompileContext, indexName string, indexes []*plan.IndexDef) (startFromNow bool, initSQL string, err error) {
+	idxDefs := make(map[string]*plan.IndexDef)
+	for _, d := range indexes {
+		if d.IndexName == indexName {
+			idxDefs[d.IndexAlgoTableType] = d
+		}
+	}
+	startFromNow, initSQL, err = hooks.AlterCopyInitSQL(cctx, idxDefs)
+	if err != nil {
+		return false, "", err
+	}
+	if initSQL == "" {
+		startFromNow = false
+	}
+	return startFromNow, initSQL, nil
 }
 
 func hasAlterAutoIncrementReset(actions []*plan.AlterTable_Action) bool {
@@ -1833,7 +1881,7 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 			return err
 		}
 		if err := svc.SetOffset(
-			c.proc.Ctx,
+			incrservice.WithAutoIDCachePolicy(c.proc.Ctx, createdDef.TblId, createdDef.AutoIdCache),
 			tableID,
 			col.ColIndex,
 			col.ColName,
@@ -2301,6 +2349,7 @@ func applyAlterCopyForeignKeyState(
 	c *Compile,
 	replacementRel engine.Relation,
 	sourceForeignKeys []*plan.ForeignKeyDef,
+	addedForeignKeys []*plan.ForeignKeyDef,
 	sourceRefChildTbls []uint64,
 	changeColDefMap map[uint64]*plan.ColDef,
 	oldTableID uint64,
@@ -2316,10 +2365,20 @@ func applyAlterCopyForeignKeyState(
 	if err != nil {
 		return err
 	}
+	replacementForeignKeys, replacementRefChildTbls, err = mergeAlterCopyAddedForeignKeys(
+		c.proc.Ctx,
+		replacementForeignKeys,
+		replacementRefChildTbls,
+		addedForeignKeys,
+	)
+	if err != nil {
+		return err
+	}
 
-	// The live source relation is authoritative even when either set is empty.
-	// Replace both constraints together so a stale planned temporary definition
-	// cannot resurrect one side of the relationship.
+	// The live source relation is authoritative for preexisting relationships;
+	// merge only the constraints introduced by this statement. Replace both
+	// constraint sets together so the planned temporary definition cannot
+	// resurrect stale state.
 	if err = restoreAlterCopyForeignKeyState(
 		c.proc.Ctx, replacementRel, replacementForeignKeys, replacementRefChildTbls,
 	); err != nil {
@@ -2333,6 +2392,92 @@ func applyAlterCopyForeignKeyState(
 	return reconcileAlterCopyParentForeignKeyReferences(
 		c, replacementForeignKeys, oldTableID, newTableID,
 	)
+}
+
+func collectAlterCopyAddedForeignKeys(
+	ctx context.Context,
+	qry *plan.AlterTable,
+	replacementTableDef *plan.TableDef,
+) ([]*plan.ForeignKeyDef, error) {
+	if qry == nil || replacementTableDef == nil {
+		return nil, nil
+	}
+
+	replacementForeignKeys := make(map[string]*plan.ForeignKeyDef, len(replacementTableDef.Fkeys))
+	for _, foreignKey := range replacementTableDef.Fkeys {
+		if foreignKey == nil {
+			return nil, moerr.NewInternalError(ctx,
+				"nil foreign key definition in ALTER COPY replacement")
+		}
+		replacementForeignKeys[strings.ToLower(foreignKey.Name)] = foreignKey
+	}
+
+	result := make([]*plan.ForeignKeyDef, 0, len(qry.Actions))
+	for _, action := range qry.Actions {
+		if action == nil || action.GetAddFk() == nil {
+			continue
+		}
+		addForeignKey := action.GetAddFk()
+		if addForeignKey.Fkey == nil {
+			return nil, moerr.NewInternalError(ctx,
+				"nil foreign key definition in ALTER COPY action")
+		}
+		foreignKey, exists := replacementForeignKeys[strings.ToLower(addForeignKey.Fkey.Name)]
+		if !exists {
+			return nil, moerr.NewInternalErrorf(ctx,
+				"foreign key %s was not created by ALTER COPY",
+				addForeignKey.Fkey.Name,
+			)
+		}
+		// The recreated relation supplies the remapped physical table/column IDs.
+		// Its SHOW-generated DDL spells out every reference action, however, so
+		// rebinding it cannot distinguish an omitted action from an explicit
+		// NO ACTION. Preserve that semantic origin from the user ALTER action.
+		collected := plan2.DeepCopyFkey(foreignKey)
+		collected.OnDeleteOrigin = addForeignKey.Fkey.OnDeleteOrigin
+		collected.OnUpdateOrigin = addForeignKey.Fkey.OnUpdateOrigin
+		result = append(result, collected)
+	}
+	return result, nil
+}
+
+func mergeAlterCopyAddedForeignKeys(
+	ctx context.Context,
+	sourceForeignKeys []*plan.ForeignKeyDef,
+	sourceRefChildTbls []uint64,
+	addedForeignKeys []*plan.ForeignKeyDef,
+) ([]*plan.ForeignKeyDef, []uint64, error) {
+	foreignKeys := make([]*plan.ForeignKeyDef, 0, len(sourceForeignKeys)+len(addedForeignKeys))
+	foreignKeys = append(foreignKeys, sourceForeignKeys...)
+	seenNames := make(map[string]struct{}, len(foreignKeys)+len(addedForeignKeys))
+	for _, foreignKey := range foreignKeys {
+		if foreignKey == nil {
+			return nil, nil, moerr.NewInternalError(ctx,
+				"nil foreign key definition in ALTER COPY")
+		}
+		seenNames[strings.ToLower(foreignKey.Name)] = struct{}{}
+	}
+	addedSelfReference := false
+	for _, foreignKey := range addedForeignKeys {
+		if foreignKey == nil {
+			return nil, nil, moerr.NewInternalError(ctx,
+				"nil added foreign key definition in ALTER COPY")
+		}
+		nameKey := strings.ToLower(foreignKey.Name)
+		if _, exists := seenNames[nameKey]; exists {
+			return nil, nil, moerr.NewInternalErrorf(ctx,
+				"duplicate foreign key %s in ALTER COPY", foreignKey.Name)
+		}
+		seenNames[nameKey] = struct{}{}
+		addedSelfReference = addedSelfReference || foreignKey.ForeignTbl == 0
+		foreignKeys = append(foreignKeys, plan2.DeepCopyFkey(foreignKey))
+	}
+
+	refChildTbls := slices.Clone(sourceRefChildTbls)
+	if addedSelfReference && !slices.Contains(refChildTbls, uint64(0)) {
+		refChildTbls = append(refChildTbls, 0)
+	}
+	return foreignKeys, refChildTbls, nil
 }
 
 func remapAlterCopyForeignKeyState(
@@ -2717,9 +2862,11 @@ func cloneUnaffectedIndexes(
 		// Per-algo clone semantics live entirely on the plugin's
 		// AlterTableCloneBehavior, which declares two mutually exclusive
 		// policies:
-		//   - SkipWholeIndex: skip the entire index when async. Algorithms that
-		//     leave every hidden table empty at CREATE and rebuild all of them
-		//     via CDC from ts=0 (HNSW / CAGRA / IVF-PQ / fulltext).
+		//   - SkipWholeIndex: skip the entire index when async. Algorithms whose
+		//     replacement hidden tables are repopulated after the copy rather than
+		//     cloned (HNSW / CAGRA / IVF-PQ / fulltext) -- from the ts=0 CDC replay
+		//     alone, or from the REINDEX their AlterCopyInitSQL seeds when their
+		//     consumer cannot write the base (see alterCopyCdcSeed).
 		//   - DeleteBeforeClone + SkipWhenAsync (per hidden table): IVF-FLAT is
 		//     the only case today. All three hidden tables get DELETE'd (the
 		//     CREATE on the temp table already seeded them), entries are

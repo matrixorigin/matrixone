@@ -1176,7 +1176,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 				var val string
 				switch length {
 				case 0:
-					val = "0d 00:00:00"
+					val = "00:00:00"
 				case 8, 12:
 					pos, val, ok = mp.readTime(data, pos, length)
 					if !ok {
@@ -1266,13 +1266,10 @@ func (mp *MysqlProtocolImpl) readTime(data []byte, pos int, length uint8) (int, 
 		return 0, "", false
 	}
 	pos = tmpPos
-	if day > 0 {
-		retStr += fmt.Sprintf("%dd ", day)
-	}
 	if pos+3 > len(data) { //nolint:typecheck
 		return 0, "", false
 	}
-	hour := data[pos]
+	hour := uint64(day)*24 + uint64(data[pos])
 	pos++
 	minute := data[pos]
 	pos++
@@ -1680,6 +1677,15 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 		//TO Check password
 		if CheckPassword(psw, mp.GetSalt(), authResponse) {
 			ses.Debugf(ctx, "check password succeeded")
+			// AuthenticateUser has finished its catalog transaction. Repair
+			// accounts missed by a rolling upgrade's finite account snapshot
+			// before allowing queries on this CN. Bootstrap special users have
+			// no catalog create_version and must not enter the upgrade path.
+			if createVersion := ses.GetCreateVersion(); createVersion != "" {
+				if err = ses.MaybeUpgradeTenant(ctx, createVersion, int64(ses.GetTenantInfo().GetTenantID())); err != nil {
+					return err
+				}
+			}
 			bh := ses.GetBackgroundExec(ctx)
 			defer bh.Close()
 			if err = ses.InitSystemVariables(ctx, bh); err != nil {
