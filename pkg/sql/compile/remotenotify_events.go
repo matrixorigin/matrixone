@@ -79,7 +79,7 @@ func newRemoteNotifyEventState(
 }
 
 func (r *remoteNotifyEventState) start() error {
-	return r.scheduler.submitEventSource("remote-notify-open", r.open)
+	return r.scheduler.submitBlockingEvent("remote-notify-open", r.open)
 }
 
 func (r *remoteNotifyEventState) open() {
@@ -301,7 +301,7 @@ func (r *remoteNotifyEventState) retry() {
 		}
 		return
 	}
-	if err := r.scheduler.submitEventSource("remote-notify-retry-wait", func() {
+	if err := r.scheduler.submitBlockingEvent("remote-notify-retry-wait", func() {
 		err := r.waitRetry(r.s.Proc.Ctx, r.attempt, r.uuid)
 		r.attempt++
 		if submitErr := r.scheduler.submitRoot("remote-notify-retry-ready", func() {
@@ -309,7 +309,7 @@ func (r *remoteNotifyEventState) retry() {
 				r.finish(err)
 				return
 			}
-			if startErr := r.scheduler.submitEventSource("remote-notify-open", r.open); startErr != nil {
+			if startErr := r.scheduler.submitBlockingEvent("remote-notify-open", r.open); startErr != nil {
 				r.finish(startErr)
 			}
 		}); submitErr != nil {

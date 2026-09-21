@@ -836,7 +836,7 @@ func (sender *messageSenderOnClient) sendPipelineAsync(
 	// boundary: even an already-expired query must be admitted far enough to
 	// publish the remote terminal cleanup signal. The MORPC send itself still
 	// observes the expired context and reports its result asynchronously.
-	return scheduler.submitEventSourceWithContext("remote-pipeline-send-start", sendNext, true)
+	return scheduler.submitRootWithContext("remote-pipeline-send-start", sendNext, true)
 }
 
 func (sender *messageSenderOnClient) markStreamActive(method pipeline.Method) {

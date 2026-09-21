@@ -487,7 +487,7 @@ func (s *Scope) runEventAsync(c *Compile, done func(error)) (err error) {
 		// Reader construction can perform storage metadata and remote I/O. Keep
 		// it out of the ready worker; the completion event admits the VM only
 		// after the reader is fully bound to this pipeline generation.
-		return scheduler.submitEventSource("scope-reader", func() {
+		return scheduler.submitBlockingEvent("scope-reader", func() {
 			var readers []engine.Reader
 			var buildErr error
 			func() {
@@ -836,7 +836,7 @@ func (s *Scope) remoteRunAsync(c *Compile, done func(error)) error {
 	// event at admission would skip that cleanup and leave the remote receiver
 	// without a terminal signal.  The state machine still observes cancellation
 	// before admitting any VM work.
-	err := scheduler.submitEventSourceWithContext("remote-start", func() {
+	err := scheduler.submitBlockingEventWithContext("remote-start", func() {
 		sender, withoutOutput, scopeData, procData, debugMsg, prepareErr := s.prepareRemoteRunData(c)
 		if prepareErr != nil {
 			if sender != nil {
@@ -1037,7 +1037,7 @@ func (s *Scope) parallelRunAsync(c *Compile, done func(error)) (err error) {
 	// metadata, or storage I/O. Keep that work off the ready queue; only the
 	// resulting scope admission is returned to the event-driven VM path.
 	scheduler := c.ensureScopeTaskScheduler(max(1, len(c.scopes)))
-	return scheduler.submitEventSource("parallel-scope-build", func() {
+	return scheduler.submitBlockingEvent("parallel-scope-build", func() {
 		var parallelScope *Scope
 		var buildErr error
 		defer func() {

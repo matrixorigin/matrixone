@@ -123,6 +123,43 @@ func TestScopeTaskSchedulerEventSourceDoesNotDeadlockSingleWorker(t *testing.T) 
 	}
 }
 
+func TestScopeTaskSchedulerBlockingEventDoesNotOccupyEventWorker(t *testing.T) {
+	scheduler := newScopeTaskScheduler(context.Background(), 1, nil)
+	blockingStarted := make(chan struct{})
+	releaseBlocking := make(chan struct{})
+	blockingDone := make(chan struct{})
+	if err := scheduler.submitBlockingEvent("blocking-reader", func() {
+		close(blockingStarted)
+		<-releaseBlocking
+		close(blockingDone)
+	}); err != nil {
+		t.Fatalf("submit blocking event: %v", err)
+	}
+	select {
+	case <-blockingStarted:
+	case <-time.After(time.Second):
+		t.Fatal("blocking worker did not start")
+	}
+	eventDone := make(chan struct{})
+	if err := scheduler.submitEventSource("event-while-reader-blocks", func() {
+		close(eventDone)
+	}); err != nil {
+		t.Fatalf("submit event source: %v", err)
+	}
+	select {
+	case <-eventDone:
+	case <-time.After(time.Second):
+		t.Fatal("event worker was blocked by reader construction")
+	}
+	close(releaseBlocking)
+	select {
+	case <-blockingDone:
+	case <-time.After(time.Second):
+		t.Fatal("blocking event did not finish")
+	}
+	scheduler.wait()
+}
+
 func TestScopeTaskSchedulerChannelEventDoesNotOccupyEventWorker(t *testing.T) {
 	scheduler := newScopeTaskScheduler(context.Background(), 1, nil)
 	messages := make(chan morpc.Message, 1)

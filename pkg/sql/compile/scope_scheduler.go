@@ -39,32 +39,38 @@ var (
 // Root scopes are admitted through a ready queue serviced by workers owned by
 // one Compile. Scope orchestration uses event tasks whose completion is
 // detached from the ready worker. VM execution is driven exclusively by
-// pipeline continuations; a bounded event-worker lane owns external blocking
-// I/O and teardown, and always re-admits completion to this queue.
+// pipeline continuations; external synchronous compatibility calls use a
+// bounded blocking lane, while transport/timer completions use event channels
+// and always re-admit completion to this queue.
 type scopeTaskScheduler struct {
-	id            uint64
-	ctx           context.Context
-	readyMu       sync.Mutex
-	readyCond     *sync.Cond
-	readyQueue    []scopeScheduledTask
-	readyClosed   bool
-	workers       sync.WaitGroup
-	eventMu       sync.Mutex
-	eventCond     *sync.Cond
-	eventQueue    []scopeEventTask
-	eventClosed   bool
-	eventWorkers  sync.WaitGroup
-	channelMu     sync.Mutex
-	channelWake   chan struct{}
-	channelNext   uint64
-	channelEvents map[uint64]scopeChannelEvent
-	channelClosed bool
-	channelWorker sync.WaitGroup
-	mu            sync.Mutex
-	taskCond      *sync.Cond
-	pending       int
-	closed        bool
-	waitOnce      sync.Once
+	id              uint64
+	ctx             context.Context
+	readyMu         sync.Mutex
+	readyCond       *sync.Cond
+	readyQueue      []scopeScheduledTask
+	readyClosed     bool
+	workers         sync.WaitGroup
+	eventMu         sync.Mutex
+	eventCond       *sync.Cond
+	eventQueue      []scopeEventTask
+	eventClosed     bool
+	eventWorkers    sync.WaitGroup
+	blockingMu      sync.Mutex
+	blockingCond    *sync.Cond
+	blockingQueue   []scopeEventTask
+	blockingClosed  bool
+	blockingWorkers sync.WaitGroup
+	channelMu       sync.Mutex
+	channelWake     chan struct{}
+	channelNext     uint64
+	channelEvents   map[uint64]scopeChannelEvent
+	channelClosed   bool
+	channelWorker   sync.WaitGroup
+	mu              sync.Mutex
+	taskCond        *sync.Cond
+	pending         int
+	closed          bool
+	waitOnce        sync.Once
 
 	onPanic func(any)
 }
@@ -119,6 +125,7 @@ func newScopeTaskScheduler(
 	s.taskCond = sync.NewCond(&s.mu)
 	s.readyCond = sync.NewCond(&s.readyMu)
 	s.eventCond = sync.NewCond(&s.eventMu)
+	s.blockingCond = sync.NewCond(&s.blockingMu)
 	s.channelWake = make(chan struct{}, 1)
 	s.channelEvents = make(map[uint64]scopeChannelEvent)
 
@@ -128,9 +135,17 @@ func newScopeTaskScheduler(
 		s.eventWorkers.Add(1)
 		go s.eventWorker()
 	}
+	blockingCount := workerCount
+	if blockingCount > 4 {
+		blockingCount = 4
+	}
+	for i := 0; i < blockingCount; i++ {
+		s.blockingWorkers.Add(1)
+		go s.blockingWorker()
+	}
 	s.channelWorker.Add(1)
 	go s.channelEventWorker()
-	logutil.Debugf("[scope-scheduler] create id=%d workers=%d", s.id, workerCount)
+	logutil.Debugf("[scope-scheduler] create id=%d workers=%d blocking-workers=%d", s.id, workerCount, blockingCount)
 	return s
 }
 
@@ -182,6 +197,45 @@ func (s *scopeTaskScheduler) eventWorker() {
 				}
 			}()
 			logutil.Debugf("[scope-scheduler] start id=%d lane=event-source name=%s", s.id, task.name)
+			task.run()
+		}()
+	}
+}
+
+// blockingWorker owns compatibility APIs that still perform synchronous
+// catalog/storage/DDL work. It is deliberately separate from the event lane:
+// one slow reader build must not occupy the worker that admits channel and
+// timer completions. The operation still publishes its continuation through
+// the normal ready/event callbacks, so Scope execution remains event-driven at
+// the scheduler boundary while engine APIs migrate to native Futures.
+func (s *scopeTaskScheduler) blockingWorker() {
+	defer s.blockingWorkers.Done()
+	for {
+		s.blockingMu.Lock()
+		for len(s.blockingQueue) == 0 && !s.blockingClosed {
+			s.blockingCond.Wait()
+		}
+		if len(s.blockingQueue) == 0 && s.blockingClosed {
+			s.blockingMu.Unlock()
+			return
+		}
+		task := s.blockingQueue[0]
+		copy(s.blockingQueue, s.blockingQueue[1:])
+		s.blockingQueue[len(s.blockingQueue)-1] = scopeEventTask{}
+		s.blockingQueue = s.blockingQueue[:len(s.blockingQueue)-1]
+		s.blockingMu.Unlock()
+
+		func() {
+			defer s.finishTask()
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					logutil.Errorf("[scope-scheduler] blocking event panic id=%d name=%s value=%v", s.id, task.name, recovered)
+					if s.onPanic != nil {
+						s.onPanic(recovered)
+					}
+				}
+			}()
+			logutil.Debugf("[scope-scheduler] start id=%d lane=blocking name=%s", s.id, task.name)
 			task.run()
 		}()
 	}
@@ -522,6 +576,46 @@ func (s *scopeTaskScheduler) submitEventSource(name string, task func()) error {
 	return s.submitEventSourceWithContext(name, task, false)
 }
 
+// submitBlockingEvent admits a synchronous external operation to the fixed
+// blocking lane. It is transitional: once the underlying subsystem exposes a
+// Future/callback, that operation should use submitChannelEvent or
+// submitErrorEvent directly and no longer occupy this lane.
+func (s *scopeTaskScheduler) submitBlockingEvent(name string, task func()) error {
+	return s.submitBlockingEventWithContext(name, task, false)
+}
+
+func (s *scopeTaskScheduler) submitBlockingEventWithContext(name string, task func(), allowCanceled bool) error {
+	if task == nil {
+		return errors.New("nil blocking scope task")
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return errScopeTaskSchedulerClosed
+	}
+	if !allowCanceled {
+		select {
+		case <-s.ctx.Done():
+			s.mu.Unlock()
+			return context.Cause(s.ctx)
+		default:
+		}
+	}
+	s.pending++
+	s.mu.Unlock()
+
+	s.blockingMu.Lock()
+	if s.blockingClosed {
+		s.blockingMu.Unlock()
+		s.finishTask()
+		return errScopeTaskSchedulerClosed
+	}
+	s.blockingQueue = append(s.blockingQueue, scopeEventTask{name: name, run: task})
+	s.blockingCond.Signal()
+	s.blockingMu.Unlock()
+	return nil
+}
+
 // submitChannelEvent registers one receive from an externally-fed MORPC
 // channel.  The channel dispatcher removes the registration as soon as one
 // message (or close) is observed, then admits the callback as a ready task.
@@ -734,7 +828,7 @@ func (s *scopeTaskScheduler) submitStreamSendWithContext(
 		}
 		return nil
 	}
-	return s.submitEventSourceWithContext(name, func() {
+	return s.submitBlockingEventWithContext(name, func() {
 		ready(stream.Send(ctx, message))
 	}, allowCanceled)
 }
@@ -815,7 +909,7 @@ func (s *scopeTaskScheduler) submitTimerWithContext(
 // Teardown is a terminal ownership event, not new query work, so rejecting it
 // on ctx.Done would leak receiver state and mask the execution error.
 func (s *scopeTaskScheduler) submitTeardown(name string, task func()) error {
-	return s.submitEventSourceWithContext(name, task, true)
+	return s.submitBlockingEventWithContext(name, task, true)
 }
 
 func (s *scopeTaskScheduler) submitEventSourceWithContext(name string, task func(), teardown bool) error {
@@ -876,6 +970,10 @@ func (s *scopeTaskScheduler) wait() {
 		s.eventClosed = true
 		s.eventCond.Broadcast()
 		s.eventMu.Unlock()
+		s.blockingMu.Lock()
+		s.blockingClosed = true
+		s.blockingCond.Broadcast()
+		s.blockingMu.Unlock()
 		s.channelMu.Lock()
 		s.channelClosed = true
 		s.channelMu.Unlock()
@@ -885,6 +983,7 @@ func (s *scopeTaskScheduler) wait() {
 		}
 		s.workers.Wait()
 		s.eventWorkers.Wait()
+		s.blockingWorkers.Wait()
 		s.channelWorker.Wait()
 		logutil.Debugf("[scope-scheduler] close id=%d duration=%s", s.id, time.Since(started))
 	})
