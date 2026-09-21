@@ -435,11 +435,6 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 			return nil, err
 		}
 	}
-	if err = addAlterCopyForeignKeys(
-		cctx, alterTablePlan, alterTableCtx, pendingForeignKeys,
-	); err != nil {
-		return nil, err
-	}
 	// Normalize the final COPY definition, after all ALTER clauses. Keeping a
 	// table cache policy without a visible auto column would make its internal
 	// CREATE invalid; normal SHOW must still faithfully report stored metadata.
@@ -511,6 +506,14 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		if pluginIndexName != "" {
 			newPluginIndexes[pluginIndexName] = true
 		}
+	}
+	// Foreign keys bind to the final index set. Materialize every pending index
+	// first so a self-reference can use a UNIQUE index added by the same ALTER,
+	// independent of the SQL clause order.
+	if err = addAlterCopyForeignKeys(
+		cctx, alterTablePlan, alterTableCtx, pendingForeignKeys,
+	); err != nil {
+		return nil, err
 	}
 
 	createTmpDdl, _, err := constructCreateTableSQL(

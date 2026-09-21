@@ -337,6 +337,39 @@ func TestAlterTableCopySupportsForeignKeyOnAddedColumn(t *testing.T) {
 	}
 }
 
+func TestAlterTableCopyForeignKeyUsesAddedUniqueIndex(t *testing.T) {
+	for _, sql := range []string{
+		`ALTER TABLE constraint_test.t1
+			ADD COLUMN parent_code BIGINT,
+			ADD COLUMN ref_code BIGINT,
+			ADD UNIQUE INDEX uk_parent(parent_code),
+			ADD CONSTRAINT fk_self FOREIGN KEY (ref_code)
+				REFERENCES constraint_test.t1(parent_code)`,
+		`ALTER TABLE constraint_test.t1
+			ADD COLUMN parent_code BIGINT,
+			ADD COLUMN ref_code BIGINT,
+			ADD CONSTRAINT fk_self FOREIGN KEY (ref_code)
+				REFERENCES constraint_test.t1(parent_code),
+			ADD UNIQUE INDEX uk_parent(parent_code)`,
+	} {
+		t.Run(sql, func(t *testing.T) {
+			logicPlan, err := buildSingleStmt(NewMockOptimizer(false), t, sql)
+			require.NoError(t, err)
+
+			alter := logicPlan.GetDdl().GetAlterTable()
+			require.Equal(t, plan.AlterTable_COPY, alter.AlgorithmType)
+			require.Len(t, alter.CopyTableDef.Fkeys, 1)
+			require.Equal(t, "uk_parent", alter.CopyTableDef.Fkeys[0].ReferencedIndexName)
+			require.Contains(t, alter.CreateTmpTableSql, "UNIQUE KEY `uk_parent` (`parent_code`)")
+			require.Contains(t, alter.CreateTmpTableSql, "CONSTRAINT `fk_self`")
+
+			require.Len(t, alter.Actions, 2)
+			require.NotNil(t, alter.Actions[0].GetAddIndex())
+			require.Equal(t, "uk_parent", alter.Actions[1].GetAddFk().GetFkey().GetReferencedIndexName())
+		})
+	}
+}
+
 func TestAlterTableCopySupportsExternalForeignKeyOnAddedColumn(t *testing.T) {
 	logicPlan, err := buildSingleStmt(NewMockOptimizer(false), t, `
 		ALTER TABLE constraint_test.t1

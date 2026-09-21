@@ -60,6 +60,28 @@ and table_name = 'duplicate_values'
 and index_name = 'uk_value';
 ➤ count(*)[-5,64,0]  𝄀
 0
+create table self_fk_added_unique(
+id bigint primary key,
+parent_code bigint,
+ref_code bigint
+);
+insert into self_fk_added_unique values (1, 10, null), (2, 20, 10);
+alter table self_fk_added_unique
+add column note int,
+add unique index uk_parent(parent_code),
+add constraint fk_self foreign key(ref_code)
+references self_fk_added_unique(parent_code);
+insert into self_fk_added_unique(id, parent_code, ref_code, note)
+values (3, 30, 20, 1);
+insert into self_fk_added_unique(id, parent_code, ref_code, note)
+values (4, 40, 999, 1);
+Cannot add or update a child row: a foreign key constraint fails
+select id, parent_code, ref_code, note
+from self_fk_added_unique order by id;
+➤ id[-5,64,0]  ¦  parent_code[-5,64,0]  ¦  ref_code[-5,64,0]  ¦  note[4,32,0]  𝄀
+1  ¦  10  ¦  null  ¦  null  𝄀
+2  ¦  20  ¦  10  ¦  null  𝄀
+3  ¦  30  ¦  20  ¦  1
 create table fulltext_docs(id bigint primary key, body text);
 insert into fulltext_docs values (1, 'alpha beta'), (2, 'beta gamma');
 alter table fulltext_docs add column note int, add fulltext index ft_body(body);
@@ -168,6 +190,10 @@ set @duplicate_values_id = (
 select rel_id from mo_catalog.mo_tables
 where reldatabase = database() and relname = 'duplicate_values'
 );
+set @self_fk_added_unique_id = (
+select rel_id from mo_catalog.mo_tables
+where reldatabase = database() and relname = 'self_fk_added_unique'
+);
 set @fulltext_docs_id = (
 select rel_id from mo_catalog.mo_tables
 where reldatabase = database() and relname = 'fulltext_docs'
@@ -183,10 +209,10 @@ where reldatabase = database() and relname = 'ivf_vectors'
 select count(*) from mo_catalog.mo_tables
 where rel_id in (
 @ordinary_id, @docs_stored_id, @docs_virtual_id, @duplicate_values_id,
-@fulltext_docs_id, @vectors_id, @ivf_vectors_id
+@self_fk_added_unique_id, @fulltext_docs_id, @vectors_id, @ivf_vectors_id
 );
 ➤ count(*)[-5,64,0]  𝄀
-7
+8
 drop database alter_copy_add_index;
 select count(*) from mo_catalog.mo_tables
 where reldatabase = 'alter_copy_add_index';
@@ -195,7 +221,7 @@ where reldatabase = 'alter_copy_add_index';
 select count(*) from mo_catalog.mo_indexes
 where table_id in (
 @ordinary_id, @docs_stored_id, @docs_virtual_id, @duplicate_values_id,
-@fulltext_docs_id, @vectors_id, @ivf_vectors_id
+@self_fk_added_unique_id, @fulltext_docs_id, @vectors_id, @ivf_vectors_id
 );
 ➤ count(*)[-5,64,0]  𝄀
 0

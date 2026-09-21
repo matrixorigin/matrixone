@@ -55,6 +55,27 @@ where table_schema = 'alter_copy_add_index'
   and table_name = 'duplicate_values'
   and index_name = 'uk_value';
 
+-- A self-referencing FK can bind to a UNIQUE index added by the same COPY
+-- ALTER, and the resulting constraint is enforced after the table swap.
+create table self_fk_added_unique(
+    id bigint primary key,
+    parent_code bigint,
+    ref_code bigint
+);
+insert into self_fk_added_unique values (1, 10, null), (2, 20, 10);
+alter table self_fk_added_unique
+    add column note int,
+    add unique index uk_parent(parent_code),
+    add constraint fk_self foreign key(ref_code)
+        references self_fk_added_unique(parent_code);
+insert into self_fk_added_unique(id, parent_code, ref_code, note)
+values (3, 30, 20, 1);
+--ERROR 1452 (23000): Cannot add or update a child row: a foreign key constraint fails
+insert into self_fk_added_unique(id, parent_code, ref_code, note)
+values (4, 40, 999, 1);
+select id, parent_code, ref_code, note
+from self_fk_added_unique order by id;
+
 -- A new plugin index on an existing column has no source hidden table to clone;
 -- COPY must rebuild it even though the added column is unrelated.
 create table fulltext_docs(id bigint primary key, body text);
@@ -142,6 +163,10 @@ set @duplicate_values_id = (
     select rel_id from mo_catalog.mo_tables
     where reldatabase = database() and relname = 'duplicate_values'
 );
+set @self_fk_added_unique_id = (
+    select rel_id from mo_catalog.mo_tables
+    where reldatabase = database() and relname = 'self_fk_added_unique'
+);
 set @fulltext_docs_id = (
     select rel_id from mo_catalog.mo_tables
     where reldatabase = database() and relname = 'fulltext_docs'
@@ -157,7 +182,7 @@ set @ivf_vectors_id = (
 select count(*) from mo_catalog.mo_tables
 where rel_id in (
     @ordinary_id, @docs_stored_id, @docs_virtual_id, @duplicate_values_id,
-    @fulltext_docs_id, @vectors_id, @ivf_vectors_id
+    @self_fk_added_unique_id, @fulltext_docs_id, @vectors_id, @ivf_vectors_id
 );
 
 drop database alter_copy_add_index;
@@ -167,7 +192,7 @@ where reldatabase = 'alter_copy_add_index';
 select count(*) from mo_catalog.mo_indexes
 where table_id in (
     @ordinary_id, @docs_stored_id, @docs_virtual_id, @duplicate_values_id,
-    @fulltext_docs_id, @vectors_id, @ivf_vectors_id
+    @self_fk_added_unique_id, @fulltext_docs_id, @vectors_id, @ivf_vectors_id
 );
 select count(*) from mo_catalog.mo_iscp_log
 where table_id in (@fulltext_docs_id, @vectors_id, @ivf_vectors_id)
