@@ -306,6 +306,23 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		if err = validateRemoteExpressionPipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
+		features, featureErr := plan.RequiredRemoteExpressionFeatures(p)
+		if featureErr != nil {
+			return nil, featureErr
+		}
+		if features.StatementHashFunction {
+			// The build identity is a scope admission gate. Validate it before
+			// operators are constructed so a zero-row or fully masked scope
+			// cannot bypass the mixed-build fence.
+			if proc == nil {
+				return nil, moerr.NewNotSupportedNoCtx(
+					"MO_STATEMENT_HASH remote execution requires a process build identity",
+				)
+			}
+			if err = proc.ValidateStatementHashBuildCommitID(); err != nil {
+				return nil, err
+			}
+		}
 		if err = validateRemoteMongoUserQueryPipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}

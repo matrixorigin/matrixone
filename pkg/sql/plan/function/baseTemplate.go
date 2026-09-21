@@ -3412,6 +3412,21 @@ func opUnaryBytesToBytesWithErrorCheck(
 		}
 		if !selectList.ShouldEvalAllRow() {
 			rsAnyNull = true
+			activeRow := false
+			for row := 0; row < length; row++ {
+				if !selectList.Contains(uint64(row)) {
+					activeRow = true
+					break
+				}
+			}
+			// A selection mask can ignore every row without setting AllNull.
+			// Do not invoke resultFn for a constant input in that case: parsing,
+			// resolver errors, and other expression failures belong only to active
+			// rows.
+			if !activeRow {
+				rs.SetNullResult(uint64(length))
+				return nil
+			}
 			for i := range selectList.SelectList {
 				if selectList.Contains(uint64(i)) {
 					rsNull.Add(uint64(i))
@@ -3429,7 +3444,12 @@ func opUnaryBytesToBytesWithErrorCheck(
 				return err
 			}
 
-			if err = appendRepeatedBytesResult(rs, r, length); err != nil {
+			if selectList == nil {
+				err = appendRepeatedBytesResult(rs, r, length)
+			} else {
+				err = appendRepeatedBytesResultWithSelection(rs, r, length, selectList)
+			}
+			if err != nil {
 				return err
 			}
 		}
