@@ -532,12 +532,32 @@ func TestHandleSetTransaction(t *testing.T) {
 		})
 	}
 
+	for _, test := range []struct {
+		sql      string
+		readOnly int64
+	}{
+		{sql: "set session transaction read only", readOnly: 1},
+		{sql: "set session transaction read write", readOnly: 0},
+	} {
+		t.Run(test.sql, func(t *testing.T) {
+			stmt, err := mysql.ParseOne(ctx, test.sql, 1)
+			require.NoError(t, err)
+
+			_, err = execInFrontend(ses, &ExecCtx{reqCtx: ctx, stmt: stmt})
+			require.NoError(t, err)
+			for _, name := range []string{"transaction_read_only", "tx_read_only"} {
+				got, getErr := ses.GetSessionSysVar(name)
+				require.NoError(t, getErr)
+				require.Equal(t, test.readOnly, got)
+			}
+		})
+	}
+
 	for _, sql := range []string{
 		"set transaction read only",
-		"set session transaction read only",
 		"set global transaction read write",
 	} {
-		t.Run(sql+" fails closed", func(t *testing.T) {
+		t.Run(sql+" remains unsupported", func(t *testing.T) {
 			stmt, err := mysql.ParseOne(ctx, sql, 1)
 			require.NoError(t, err)
 
@@ -545,30 +565,24 @@ func TestHandleSetTransaction(t *testing.T) {
 			require.Error(t, err)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 			require.ErrorContains(t, err, "transaction access mode")
-
-			got, getErr := ses.GetSessionSysVar("transaction_isolation")
-			require.NoError(t, getErr)
-			require.Equal(t, "REPEATABLE-READ", got)
-			handler := ses.GetTxnHandler()
-			handler.mu.Lock()
-			hasNextIsolation := handler.hasNextTxnIsolation
-			handler.mu.Unlock()
-			require.False(t, hasNextIsolation)
 		})
 	}
 
-	t.Run("access mode prevents partial isolation update", func(t *testing.T) {
+	t.Run("access mode and isolation update together", func(t *testing.T) {
 		stmt, err := mysql.ParseOne(ctx,
 			"set session transaction isolation level read committed, read only", 1)
 		require.NoError(t, err)
 
 		_, err = execInFrontend(ses, &ExecCtx{reqCtx: ctx, stmt: stmt})
-		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+		require.NoError(t, err)
 
 		got, getErr := ses.GetSessionSysVar("transaction_isolation")
 		require.NoError(t, getErr)
-		require.Equal(t, "REPEATABLE-READ", got)
+		require.Equal(t, "READ-COMMITTED", got)
+		readOnly, getErr := ses.GetSessionSysVar("transaction_read_only")
+		require.NoError(t, getErr)
+		require.Equal(t, int64(1), readOnly)
+		require.NoError(t, ses.SetSessionSysVar(ctx, "transaction_isolation", "REPEATABLE-READ"))
 	})
 
 	for _, test := range []struct {
@@ -827,16 +841,16 @@ func TestSetTransactionDoesNotFinishExistingTransaction(t *testing.T) {
 			"",
 		)
 	})
-	t.Run("unsupported access mode preserves prior work", func(t *testing.T) {
+	t.Run("session access mode preserves prior work", func(t *testing.T) {
 		run(t,
 			"set session transaction read only",
-			"transaction access mode READ ONLY is not supported",
+			"",
 		)
 	})
-	t.Run("unsupported next access mode preserves prior work", func(t *testing.T) {
+	t.Run("next access mode remains unsupported", func(t *testing.T) {
 		run(t,
 			"set transaction read only",
-			"transaction access mode READ ONLY is not supported",
+			"transaction access mode READ ONLY is only supported for SESSION scope",
 		)
 	})
 

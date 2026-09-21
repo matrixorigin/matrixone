@@ -1766,21 +1766,37 @@ func handleSetTransaction(ses *Session, execCtx *ExecCtx, stmt *tree.SetTransact
 
 	if accessCharacteristic != nil {
 		var accessMode string
+		var readOnly int64
 		switch accessCharacteristic.Access {
 		case tree.ACCESS_MODE_READ_ONLY:
 			accessMode = "READ ONLY"
+			readOnly = 1
 		case tree.ACCESS_MODE_READ_WRITE:
 			accessMode = "READ WRITE"
 		default:
 			return moerr.NewInvalidInputf(execCtx.reqCtx,
 				"unsupported transaction access mode %d", accessCharacteristic.Access)
 		}
-		return moerr.NewNotSupported(execCtx.reqCtx,
-			"transaction access mode "+accessMode+" is not supported")
+		if stmt.Scope != tree.TransactionScopeSession {
+			return moerr.NewNotSupported(execCtx.reqCtx,
+				"transaction access mode "+accessMode+" is only supported for SESSION scope")
+		}
+		// Connector/J uses SET SESSION TRANSACTION READ ONLY/READ WRITE for
+		// Connection.setReadOnly. Keep both MySQL spellings synchronized so
+		// frameworks that inspect either variable observe the negotiated mode.
+		if err := ses.SetSessionSysVar(execCtx.reqCtx, "transaction_read_only", readOnly); err != nil {
+			return err
+		}
+		if err := ses.SetSessionSysVar(execCtx.reqCtx, "tx_read_only", readOnly); err != nil {
+			return err
+		}
 	}
 	if isolationCharacteristic == nil {
-		return moerr.NewInvalidInput(execCtx.reqCtx,
-			"transaction characteristic list must not be empty")
+		if accessCharacteristic == nil {
+			return moerr.NewInvalidInput(execCtx.reqCtx,
+				"transaction characteristic list must not be empty")
+		}
+		return nil
 	}
 
 	var value string
