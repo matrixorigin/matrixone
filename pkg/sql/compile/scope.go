@@ -1032,53 +1032,60 @@ func (s *Scope) parallelRunAsync(c *Compile, done func(error)) (err error) {
 		return moerr.NewInternalErrorNoCtx("nil async ParallelRun completion")
 	}
 
-	var parallelScope *Scope
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			err = moerr.ConvertPanicError(s.Proc.Ctx, recovered)
-		}
-		if err != nil && parallelScope == nil {
-			queryCtx := scopeRunQueryContext(s.Proc)
-			normalizedErr, normalized := normalizeScopeRunError(err, s.Proc.Ctx, queryCtx)
-			if isScopeCancellationError(err) {
-				reportParallelScopeBuildCancellation(s, err, normalizedErr, normalized, queryCtx)
+	var completeOnce sync.Once
+	complete := func(runErr error) {
+		completeOnce.Do(func() { done(runErr) })
+	}
+
+	// Reader expansion and parallel-scope construction can block on catalog,
+	// metadata, or storage I/O. Keep that work off the ready queue; only the
+	// resulting scope admission is returned to the event-driven VM path.
+	scheduler := c.ensureScopeTaskScheduler(max(1, len(c.scopes)))
+	return scheduler.submitEventSource("parallel-scope-build", func() {
+		var parallelScope *Scope
+		var buildErr error
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				buildErr = moerr.ConvertPanicError(s.Proc.Ctx, recovered)
 			}
-			// Preserve the historical ParallelRun boundary contract: internal
-			// StopSending cancellation is a graceful terminal event, while query
-			// cancellation remains an error. The asynchronous path must expose
-			// that normalized result to its completion callback as well.
-			err = normalizedErr
-			pipeline.NewMerge(s.RootOp).Cleanup(s.Proc, normalizedErr != nil, c.isPrepare, normalizedErr)
-			// Reader/parallel-scope construction failed before a child pipeline
-			// existed. Publish that terminal result through the same callback used
-			// by the normal continuation path, then consume the named return so
-			// callers do not publish a second completion event.
-			done(err)
-			err = nil
+			if buildErr != nil {
+				queryCtx := scopeRunQueryContext(s.Proc)
+				normalizedErr, normalized := normalizeScopeRunError(buildErr, s.Proc.Ctx, queryCtx)
+				if isScopeCancellationError(buildErr) {
+					reportParallelScopeBuildCancellation(s, buildErr, normalizedErr, normalized, queryCtx)
+				}
+				pipeline.NewMerge(s.RootOp).Cleanup(s.Proc, normalizedErr != nil, c.isPrepare, normalizedErr)
+				complete(normalizedErr)
+				return
+			}
+
+			if parallelScope == s {
+				if runErr := parallelScope.runEventAsync(c, complete); runErr != nil {
+					complete(runErr)
+				}
+				return
+			}
+
+			if s.ScopeAnalyzer != nil {
+				s.ScopeAnalyzer.Stop()
+			}
+			setContextForParallelScope(parallelScope, s.Proc.Ctx, s.Proc.Cancel)
+			if runErr := parallelScope.mergeRunAsync(c, complete); runErr != nil {
+				complete(runErr)
+			}
+		}()
+
+		switch {
+		case s.IsLoad:
+			parallelScope, buildErr = buildLoadParallelRun(s, c)
+		case s.isTableScan():
+			parallelScope, buildErr = buildScanParallelRun(s, c)
+		case s.IsTbFunc:
+			parallelScope, buildErr = buildLoadParallelRun(s, c)
+		default:
+			parallelScope = s
 		}
-	}()
-
-	switch {
-	case s.IsLoad:
-		parallelScope, err = buildLoadParallelRun(s, c)
-	case s.isTableScan():
-		parallelScope, err = buildScanParallelRun(s, c)
-	case s.IsTbFunc:
-		parallelScope, err = buildLoadParallelRun(s, c)
-	default:
-		parallelScope = s
-	}
-	if err != nil {
-		return err
-	}
-
-	if parallelScope == s {
-		return parallelScope.runEventAsync(c, done)
-	}
-
-	s.ScopeAnalyzer.Stop()
-	setContextForParallelScope(parallelScope, s.Proc.Ctx, s.Proc.Cancel)
-	return parallelScope.mergeRunAsync(c, done)
+	})
 }
 
 // buildLoadParallelRun deal one case of scope.ParallelRun.
