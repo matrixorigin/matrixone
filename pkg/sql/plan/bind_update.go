@@ -227,7 +227,7 @@ func (builder *QueryBuilder) appendSequentialSingleTableUpdateAssignments(
 
 		column := tableDef.Cols[columnIndex]
 		if isDefaultValExpr(rhs) {
-			rhs, err = getDefaultExpr(builder.GetContext(), column)
+			rhs, err = getDefaultExprForAssignment(builder.GetContext(), column, builder.compCtx.GetProcess(), ignore)
 			if err != nil {
 				return 0, nil, 0, err
 			}
@@ -639,7 +639,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			if colPos, ok := newColName2Idx[alias+"."+col.Name]; ok {
 				updateExpr := selectNode.ProjectList[colPos]
 				if isDefaultValExpr(updateExpr) { // set col = default
-					updateExpr, err = getDefaultExpr(builder.GetContext(), col)
+					updateExpr, err = getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), stmt.Ignore)
 					if err != nil {
 						return 0, err
 					}

@@ -939,7 +939,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			// }
 			// }
 		} else {
-			defExpr, err := getDefaultExpr(builder.GetContext(), col)
+			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 			if err != nil {
 				return false, nil, nil, err
 			}
@@ -1053,7 +1053,7 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 				idxs[i] = info.idx
 				if updateExpr, exists := updateCols[col.Name]; exists {
 					if _, ok := updateExpr.(*tree.DefaultVal); ok {
-						defExpr, err = getDefaultExpr(builder.GetContext(), col)
+						defExpr, err = getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 						if err != nil {
 							return false, nil, nil, err
 						}
@@ -1292,8 +1292,8 @@ func useAssignmentStrictCast(targetType Type) bool {
 	switch targetType.Id {
 	case int32(types.T_char), int32(types.T_varchar), int32(types.T_date), int32(types.T_time), int32(types.T_datetime), int32(types.T_timestamp), int32(types.T_year):
 		return true
-	case int32(types.T_text):
-		return targetType.Width == types.MaxTinyTextLen
+	case int32(types.T_blob), int32(types.T_text):
+		return true
 	default:
 		return false
 	}
@@ -1302,7 +1302,8 @@ func useAssignmentStrictCast(targetType Type) bool {
 func useSqlModeStringAssignmentCast(targetType Type) bool {
 	return targetType.Id == int32(types.T_char) ||
 		targetType.Id == int32(types.T_varchar) ||
-		(targetType.Id == int32(types.T_text) && targetType.Width == types.MaxTinyTextLen)
+		targetType.Id == int32(types.T_blob) ||
+		targetType.Id == int32(types.T_text)
 }
 
 func useSqlModeAssignmentCast(targetType Type) bool {
@@ -1343,11 +1344,12 @@ func assignmentCastProtocolSupported(proc *process.Process) bool {
 }
 
 // needsSameTypeAssignmentCast 判断相同规划器类型是否仍需要赋值检查。
-// TINYTEXT 和扩展 TIME 可能携带超出目标列范围的值。
+// BLOB/TEXT 和扩展 TIME 可能携带超出目标列范围的值。
 // 固定维度向量的实际载荷长度也可能不符合其声明宽度。
 // 这些类型都不能仅根据元数据相等省略赋值检查。
 func needsSameTypeAssignmentCast(targetType Type) bool {
-	return (targetType.Id == int32(types.T_text) && targetType.Width == types.MaxTinyTextLen) ||
+	return targetType.Id == int32(types.T_blob) ||
+		targetType.Id == int32(types.T_text) ||
 		targetType.Id == int32(types.T_time) ||
 		(types.T(targetType.Id).IsArrayRelate() && targetType.Width > 0 && targetType.Width != types.MaxArrayDimension)
 }
@@ -1511,12 +1513,33 @@ func (builder *QueryBuilder) forceProjectedAssignmentCastExpr(
 	if err != nil || rewritten {
 		return expr, err
 	}
+	if types.T(targetType.Id).IsInteger() && preparedExprContainsParam(sourceExpr) &&
+		makeTypeByPlan2Expr(expr).Eq(makeTypeByPlan2Type(targetType)) {
+		return forceCastExprWithNameAndAssignment(
+			builder.GetContext(), expr, targetType,
+			assignmentCastFunctionName(targetType, isIgnore, builder.compCtx.GetProcess()), true, true)
+	}
 	return builder.forceAssignmentCastExpr(expr, targetType, isIgnore)
 }
 
 func (builder *QueryBuilder) rewriteProjectedMySQLSpecialTypeDisplayCast(expr, sourceExpr *Expr, targetType Type) (*Expr, bool, error) {
 	if builder == nil || expr == nil || sourceExpr == nil {
 		return expr, false, nil
+	}
+	if makeTypeByPlan2Type(targetType).IsNumeric() && !isSetPlanType(&targetType) {
+		if col := expr.GetCol(); col != nil {
+			if nodeID, ok := builder.tag2NodeID[col.RelPos]; ok && nodeID >= 0 && int(nodeID) < len(builder.ctxByNode) {
+				if owner := builder.ctxByNode[nodeID]; owner != nil {
+					if typ := owner.mysqlSpecialCanonicalTypeForExpr(expr); isSetPlanType(typ) {
+						value, err := makeCanonicalSetValue(builder.GetContext(), expr, typ)
+						return value, false, err
+					}
+				}
+			}
+		}
+		if raw, ok := builder.materializeTransparentMySQLSpecialValue(expr); ok {
+			return raw, false, nil
+		}
 	}
 	if types.T(targetType.Id).IsInteger() && !isSetPlanType(&targetType) &&
 		builder.isProjectedDisplayValueExpr(expr, isSetDisplayValueExpr, true, nil) {
@@ -1656,6 +1679,93 @@ func (builder *QueryBuilder) isProjectedNullValueAtNode(
 	return builder.isProjectedNullValueAtNode(childNodeID, col.ColPos, visited)
 }
 
+// materializeTransparentMySQLSpecialValue carries storage identity only through
+// row-preserving projections. Prove the relational path before changing any
+// projection: following tags alone can jump below an untagged DISTINCT or LIMIT.
+func (builder *QueryBuilder) materializeTransparentMySQLSpecialValue(expr *Expr) (*Expr, bool) {
+	if !builder.proveTransparentMySQLSpecialValue(expr, make(map[[2]int32]bool)) {
+		return nil, false
+	}
+	return builder.materializeTransparentMySQLSpecialValueImpl(expr), true
+}
+
+func (builder *QueryBuilder) proveTransparentMySQLSpecialValue(expr *Expr, visiting map[[2]int32]bool) bool {
+	if expr == nil {
+		return false
+	}
+	if _, ok := storedMySQLSpecialTypeExpr(expr); ok {
+		return true
+	}
+	col := expr.GetCol()
+	if col == nil {
+		return false
+	}
+	nodeID, ok := builder.tag2NodeID[col.RelPos]
+	if !ok || nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) {
+		return false
+	}
+	node := builder.qry.Nodes[nodeID]
+	key := [2]int32{nodeID, col.ColPos}
+	if visiting[key] || node.NodeType != plan.Node_PROJECT || col.ColPos < 0 || int(col.ColPos) >= len(node.ProjectList) {
+		return false
+	}
+	if int(nodeID) < len(builder.ctxByNode) {
+		owner := builder.ctxByNode[nodeID]
+		if owner != nil && (owner.isDistinct || len(owner.groups) != 0 || len(owner.aggregates) != 0) {
+			return false
+		}
+	}
+	if !builder.mysqlSpecialRowPreservingInput(nodeID, make(map[int32]bool)) {
+		return false
+	}
+	visiting[key] = true
+	defer delete(visiting, key)
+	return builder.proveTransparentMySQLSpecialValue(node.ProjectList[col.ColPos], visiting)
+}
+
+func (builder *QueryBuilder) mysqlSpecialRowPreservingInput(nodeID int32, visiting map[int32]bool) bool {
+	if nodeID < 0 || int(nodeID) >= len(builder.qry.Nodes) || visiting[nodeID] {
+		return false
+	}
+	node := builder.qry.Nodes[nodeID]
+	if node.Limit != nil || node.Offset != nil {
+		return false
+	}
+	switch node.NodeType {
+	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_VALUE_SCAN:
+		return true
+	case plan.Node_PROJECT, plan.Node_FILTER, plan.Node_SORT:
+		if len(node.Children) != 1 {
+			return false
+		}
+		visiting[nodeID] = true
+		defer delete(visiting, nodeID)
+		return builder.mysqlSpecialRowPreservingInput(node.Children[0], visiting)
+	default:
+		return false
+	}
+}
+
+func (builder *QueryBuilder) materializeTransparentMySQLSpecialValueImpl(expr *Expr) *Expr {
+	if raw, ok := storedMySQLSpecialTypeExpr(expr); ok {
+		return raw
+	}
+	col := expr.GetCol()
+	nodeID := builder.tag2NodeID[col.RelPos]
+	node := builder.qry.Nodes[nodeID]
+	key := [2]int32{nodeID, col.ColPos}
+	// Share SET slots already carried for casts/FIND_IN_SET. ENUM slots use the
+	// same position cache, retaining their type until the numeric consumer casts.
+	if pos, ok := builder.setBitmapByDisplayNode[key]; ok {
+		return GetColExpr(node.ProjectList[pos].Typ, col.RelPos, pos)
+	}
+	raw := builder.materializeTransparentMySQLSpecialValueImpl(node.ProjectList[col.ColPos])
+	pos := int32(len(node.ProjectList))
+	node.ProjectList = append(node.ProjectList, raw)
+	builder.setBitmapByDisplayNode[key] = pos
+	return GetColExpr(raw.Typ, col.RelPos, pos)
+}
+
 // materializeProjectedSetBitmap carries a proven SET bitmap through projection
 // boundaries. Set-operation inputs are materialized at the same hidden position
 // so the node can expose one physical uint64 output. The proof phase above runs
@@ -1757,11 +1867,11 @@ func (builder *QueryBuilder) materializeProjectedSetBitmapAtNode(
 }
 
 func forceCastExprWithName(ctx context.Context, expr *Expr, targetType Type, funcName string) (*Expr, error) {
-	return forceCastExprWithNameAndAssignment(ctx, expr, targetType, funcName, false)
+	return forceCastExprWithNameAndAssignment(ctx, expr, targetType, funcName, false, false)
 }
 
 func forceAssignmentCastExprWithName(ctx context.Context, expr *Expr, targetType Type, funcName string) (*Expr, error) {
-	return forceCastExprWithNameAndAssignment(ctx, expr, targetType, funcName, true)
+	return forceCastExprWithNameAndAssignment(ctx, expr, targetType, funcName, true, false)
 }
 
 func forceCastExprWithNameAndAssignment(
@@ -1770,6 +1880,7 @@ func forceCastExprWithNameAndAssignment(
 	targetType Type,
 	funcName string,
 	isAssignment bool,
+	forceSameType bool,
 ) (*Expr, error) {
 	if targetType.Id == 0 {
 		return expr, nil
@@ -1787,7 +1898,7 @@ func forceCastExprWithNameAndAssignment(
 		return funcCastForTypedArrayType(ctx, expr, targetType)
 	}
 	t1, t2 := makeTypeByPlan2Expr(expr), makeTypeByPlan2Type(targetType)
-	if t1.Eq(t2) && !(isAssignment && needsSameTypeAssignmentCast(targetType)) {
+	if t1.Eq(t2) && !forceSameType && !(isAssignment && needsSameTypeAssignmentCast(targetType)) {
 		return expr, nil
 	}
 
@@ -2051,7 +2162,7 @@ func buildValueScan(
 		}
 		var defExpr *Expr
 		if isAllDefault {
-			defExpr, err := getDefaultExpr(builder.GetContext(), col)
+			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 			if err != nil {
 				return nil, err
 			}
@@ -2100,7 +2211,7 @@ func buildValueScan(
 				}
 
 				if _, ok := r[i].(*tree.DefaultVal); ok {
-					defExpr, err = getDefaultExpr(builder.GetContext(), col)
+					defExpr, err = getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 					if err != nil {
 						return nil, err
 					}
@@ -2181,7 +2292,7 @@ func buildValueScan(
 			col := tableDef.Cols[colIdx]
 			colTyp := makeTypeByPlan2Type(col.Typ)
 			targetTyp := &plan.Expr{Typ: col.Typ, Expr: &plan.Expr_T{T: &plan.TargetType{}}}
-			defExpr, err := getDefaultExpr(builder.GetContext(), col)
+			defExpr, err := getDefaultExprForAssignment(builder.GetContext(), col, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 			if err != nil {
 				return nil, err
 			}

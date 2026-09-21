@@ -836,7 +836,7 @@ func (b *HavingBinder) groupConcatOrderKey(expr *plan.Expr) (*plan.Expr, error) 
 		}
 	}
 	if storageType := b.ctx.mysqlSpecialOrderTypeForExpr(expr); storageType != nil {
-		return makeMySQLSpecialOrderKey(b.GetContext(), expr, storageType)
+		return b.builder.mysqlSpecialOrderKey(b.ctx, expr, storageType)
 	}
 	return expr, nil
 }

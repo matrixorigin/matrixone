@@ -782,7 +782,7 @@ var supportedTypeCast = map[types.T][]types.T{
 
 	types.T_json: {
 		types.T_json,
-		types.T_char, types.T_varchar, types.T_text,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_bool,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
@@ -946,7 +946,8 @@ func NewStrictCast(parameters []*vector.Vector, result vector.FunctionResultWrap
 // NewAssignCast is used by DML assignment paths (INSERT/UPDATE projection) for
 // SQL-mode-sensitive targets. It applies strict/non-strict behavior at runtime
 // for width-constrained strings, YEAR values, and TIME column boundaries. For
-// CHAR/VARCHAR only, excess trailing spaces are accepted in strict mode too.
+// CHAR/VARCHAR only, excess trailing spaces are accepted in strict mode too;
+// TEXT/BLOB family limits count every assigned byte, including spaces.
 func NewAssignCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	mode := castModeAssignment
 	if isStrictSqlMode(proc) {
@@ -1185,8 +1186,8 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		err = blockidToOthers(proc.Ctx, s, *toType, result, length, selectList)
 	case types.T_json:
 		s := vector.GenerateFunctionStrParameter(from)
-		err = jsonToOthers(execProc.Ctx, s, *toType, result, length, selectList,
-			strictStringWidth, allowTrailingSpaceTrim, reportDataTooLong)
+		err = jsonToOthers(execProc, execProc.Ctx, s, *toType, result, length, selectList,
+			strictStringWidth, allowTrailingSpaceTrim, mode.isAssignment(), reportDataTooLong)
 	case types.T_enum:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Enum](from)
 		err = enumToOthers(execProc.Ctx, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
@@ -2560,6 +2561,7 @@ func decimal256ToOthersWithContext(
 // geometryToTextCast renders a GEOMETRY/GEOMETRY32 value as WKT for casts to a
 // textual type, matching ST_AsText.
 func geometryToTextCast(
+	proc *process.Process,
 	ctx context.Context,
 	source vector.FunctionParameterWrapper[types.Varlena],
 	result vector.FunctionResultWrapper,
@@ -2567,6 +2569,7 @@ func geometryToTextCast(
 	toType types.Type,
 	strictStringWidth bool,
 	allowTrailingSpaceTrim bool,
+	assignment bool,
 	reportDataTooLong bool,
 ) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
@@ -2582,15 +2585,38 @@ func geometryToTextCast(
 		if err != nil {
 			return err
 		}
+		byteWidth, hasByteWidth := stringFamilyByteWidth(toType)
+		assignmentByteWidth := assignment && hasByteWidth
 		overWidth := false
-		if isTinyTextType(toType) {
+		if assignmentByteWidth {
+			overWidth = len(wkt) > byteWidth
+		} else if isTinyTextType(toType) {
 			overWidth = len(wkt) > int(toType.Width)
 		} else if toType.Oid == types.T_char || toType.Oid == types.T_varchar {
 			overWidth = toType.Width >= 0 && utf8.RuneCountInString(wkt) > int(toType.Width)
 		}
 		if overWidth {
 			destLen := int(toType.Width)
-			if isTinyTextType(toType) && !strictStringWidth {
+			if assignmentByteWidth && !strictStringWidth {
+				appendStringAssignmentTruncationWarning(proc, toType, i, false)
+				wkt = string(truncateStringFamilyByBytes([]byte(wkt), toType, byteWidth))
+			} else if assignmentByteWidth {
+				sourceLen := len(wkt)
+				destLen = byteWidth
+				extraInfo := fmt.Sprintf(
+					"Src length %v is larger than Dest length %v",
+					sourceLen,
+					destLen,
+				)
+				return formatGeometryWidthError(
+					ctx,
+					source.GetSourceVector(),
+					wkt,
+					toType,
+					extraInfo,
+					reportDataTooLong,
+				)
+			} else if isTinyTextType(toType) && !strictStringWidth {
 				wkt = string(truncateTextByBytes([]byte(wkt), destLen))
 			} else if !isTinyTextType(toType) &&
 				((allowTrailingSpaceTrim && overLenIsAllTrailingSpaces(wkt, destLen)) || !strictStringWidth) {
@@ -2663,6 +2689,7 @@ func strTypeToOthers(proc *process.Process,
 		switch toType.Oid {
 		case types.T_char, types.T_varchar, types.T_text:
 			return geometryToTextCast(
+				proc,
 				ctx,
 				source,
 				result,
@@ -2670,6 +2697,7 @@ func strTypeToOthers(proc *process.Process,
 				toType,
 				strictStringWidth,
 				allowTrailingSpaceTrim,
+				mode.isAssignment(),
 				reportDataTooLong,
 			)
 		}
@@ -2902,10 +2930,10 @@ func blockidToOthers(ctx context.Context,
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from blockid to %s", toType))
 }
 
-func jsonToOthers(ctx context.Context,
+func jsonToOthers(proc *process.Process, ctx context.Context,
 	source vector.FunctionParameterWrapper[types.Varlena],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList,
-	strictStringWidth bool, allowTrailingSpaceTrim bool, reportDataTooLong bool) error {
+	strictStringWidth bool, allowTrailingSpaceTrim bool, assignment bool, reportDataTooLong bool) error {
 	switch toType.Oid {
 	case types.T_json:
 		rs := vector.MustFunctionResult[types.Varlena](result)
@@ -2916,10 +2944,10 @@ func jsonToOthers(ctx context.Context,
 			}
 		}
 		return nil
-	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return jsonToStr(ctx, source, rs, length, selectList,
-			strictStringWidth, allowTrailingSpaceTrim, reportDataTooLong)
+		return jsonToStr(proc, ctx, source, rs, length, selectList,
+			strictStringWidth, allowTrailingSpaceTrim, assignment, reportDataTooLong)
 	case types.T_bool:
 		return jsonToBool(ctx, source, result, length)
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
@@ -8974,8 +9002,10 @@ func strToStr(
 		return nil
 	}
 
-	if (totype.Oid != types.T_text || isTinyTextType(totype)) &&
-		(destLen != 0 || totype.Oid == types.T_char || totype.Oid == types.T_varchar) {
+	byteWidth, hasByteWidth := stringFamilyByteWidth(toType)
+	enforceByteWidth := mode.isAssignment() && hasByteWidth
+	if (totype.Oid != types.T_text || isTinyTextType(totype) || enforceByteWidth) &&
+		(destLen != 0 || totype.Oid == types.T_char || totype.Oid == types.T_varchar || enforceByteWidth) {
 		for i = 0; i < l; i++ {
 			v, null := from.GetStrValue(i)
 			if null {
@@ -9020,6 +9050,16 @@ func strToStr(
 						destLen,
 					))
 				}
+			} else if enforceByteWidth && len(v) > byteWidth {
+				if !strictStringWidth {
+					if mode.reportsStringTruncationWarning() {
+						appendStringAssignmentTruncationWarning(proc, toType, i, false)
+					}
+					v = truncateStringFamilyByBytes(v, toType, byteWidth)
+				} else {
+					return formatDataTruncationError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(
+						"Src length %v is larger than Dest length %v", len(v), byteWidth), reportDataTooLong)
+				}
 			} else if isTinyTextType(toType) && len(v) > destLen {
 				if !strictStringWidth {
 					if mode.reportsStringTruncationWarning() {
@@ -9030,7 +9070,7 @@ func strToStr(
 					return formatDataTruncationError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(
 						"Src length %v is larger than Dest length %v", len(v), destLen), reportDataTooLong)
 				}
-			} else if utf8.RuneCountInString(s) > destLen {
+			} else if toType.Oid != types.T_text && toType.Oid != types.T_blob && utf8.RuneCountInString(s) > destLen {
 				return formatDataTruncationError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(
 					"Src length %v is larger than Dest length %v", len(s), destLen))
 			}
@@ -9491,10 +9531,11 @@ func tsToInt64(
 }
 
 func jsonToStr(
+	proc *process.Process,
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
-	strictStringWidth bool, allowTrailingSpaceTrim bool, reportDataTooLong bool) error {
+	strictStringWidth bool, allowTrailingSpaceTrim bool, assignment bool, reportDataTooLong bool) error {
 	var i uint64
 	toType := to.GetType()
 	for i = 0; i < uint64(length); i++ {
@@ -9520,9 +9561,11 @@ func jsonToStr(
 				str = string(bs)
 			}
 			val := []byte(str)
-			// CHAR/VARCHAR widths count runes; TINYTEXT's limit counts bytes.
-			// Both paths preserve valid UTF-8 while applying sql_mode at runtime.
+			// CHAR/VARCHAR widths count runes; TEXT/BLOB family limits count
+			// bytes. Apply the latter only at an assignment boundary so ordinary
+			// expression casts keep their existing behavior.
 			destLen := int(toType.Width)
+			byteWidth, hasByteWidth := stringFamilyByteWidth(toType)
 			if toType.Oid == types.T_char || toType.Oid == types.T_varchar {
 				runeCount := utf8.RuneCountInString(str)
 				if runeCount > destLen {
@@ -9543,6 +9586,14 @@ func jsonToStr(
 						return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 							"Src length %v is larger than Dest length %v", runeCount, destLen))
 					}
+				}
+			} else if assignment && hasByteWidth && len(val) > byteWidth {
+				if !strictStringWidth {
+					appendStringAssignmentTruncationWarning(proc, toType, i, false)
+					val = truncateStringFamilyByBytes(val, toType, byteWidth)
+				} else {
+					return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
+						"Src length %v is larger than Dest length %v", len(val), byteWidth), reportDataTooLong)
 				}
 			} else if isTinyTextType(toType) && len(val) > destLen {
 				if !strictStringWidth {
@@ -10034,6 +10085,42 @@ func isTinyTextType(typ types.Type) bool {
 	return typ.Oid == types.T_text && typ.Width == types.MaxTinyTextLen
 }
 
+// stringFamilyByteWidth returns the declared byte capacity for a TEXT/BLOB
+// assignment target. Width zero is the legacy representation of ordinary TEXT
+// columns, so it keeps the ordinary TEXT limit. A width-zero BLOB is
+// intentionally left unbounded: old catalogs persisted TINYBLOB/BLOB/
+// MEDIUMBLOB/LONGBLOB with the same zero width and cannot be safely classified
+// after the fact. Newly declared BLOB columns carry a non-zero family width.
+func stringFamilyByteWidth(typ types.Type) (int, bool) {
+	if typ.Width < 0 {
+		return 0, false
+	}
+	switch typ.Oid {
+	case types.T_text:
+		if typ.Width == 0 {
+			return types.MaxStringSize, true
+		}
+		return int(typ.Width), true
+	case types.T_blob:
+		if typ.Width == 0 {
+			return 0, false
+		}
+		return int(typ.Width), true
+	default:
+		return 0, false
+	}
+}
+
+func truncateStringFamilyByBytes(value []byte, typ types.Type, maxBytes int) []byte {
+	if maxBytes < 0 || len(value) <= maxBytes {
+		return value
+	}
+	if typ.Oid == types.T_text {
+		return truncateTextByBytes(value, maxBytes)
+	}
+	return value[:maxBytes]
+}
+
 func castResultExceedsByteWidth(result []byte, toType types.Type) bool {
 	if toType.Width < 0 || toType.Oid == types.T_blob || toType.Oid == types.T_datalink {
 		return false
@@ -10119,7 +10206,8 @@ func formatDataTruncationError(
 	assignment ...bool,
 ) error {
 	if len(assignment) == 0 || !assignment[0] ||
-		(typ.Oid != types.T_char && typ.Oid != types.T_varchar && !isTinyTextType(typ)) {
+		(typ.Oid != types.T_char && typ.Oid != types.T_varchar &&
+			typ.Oid != types.T_blob && typ.Oid != types.T_text) {
 		return formatCastError(ctx, vec, typ, extraInfo)
 	}
 	var errStr string
