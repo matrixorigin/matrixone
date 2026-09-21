@@ -222,27 +222,37 @@ func (r *remoteNotifyEventState) forwardPending() {
 	}
 	if r.forwardReg.TrySendDataDirect(r.pending, r.s.Proc.Mp()) {
 		r.pending = nil
-		if err := r.sender.acknowledgeRemoteBatch(); err != nil {
-			r.finish(err)
-			return
-		}
-		r.receiveNext()
+		r.acknowledge(func(err error) {
+			if err != nil {
+				r.finish(err)
+				return
+			}
+			r.receiveNext()
+		})
 		return
 	}
 	if done := r.forwardReg.Done(); done != nil {
 		select {
 		case <-done:
 			r.cleanPending()
-			if err := r.sender.acknowledgeRemoteBatch(); err != nil {
-				r.finish(err)
-				return
-			}
-			r.finish(nil)
+			r.acknowledge(func(err error) {
+				if err != nil {
+					r.finish(err)
+					return
+				}
+				r.finish(nil)
+			})
 			return
 		default:
 		}
 	}
 	if err := r.registerReady(r.forwardReg.RegisterCapacityReady, r.forwardPending); err != nil {
+		r.finish(err)
+	}
+}
+
+func (r *remoteNotifyEventState) acknowledge(done func(error)) {
+	if err := r.sender.acknowledgeRemoteBatchAsync(r.scheduler, "remote-notify-ack", done); err != nil {
 		r.finish(err)
 	}
 }

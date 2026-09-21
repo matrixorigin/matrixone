@@ -837,7 +837,7 @@ func (s *Scope) remoteRunAsync(c *Compile, done func(error)) error {
 	// without a terminal signal.  The state machine still observes cancellation
 	// before admitting any VM work.
 	err := scheduler.submitEventSourceWithContext("remote-start", func() {
-		sender, withoutOutput, prepareErr := s.prepareRemoteRun(c)
+		sender, withoutOutput, scopeData, procData, debugMsg, prepareErr := s.prepareRemoteRunData(c)
 		if prepareErr != nil {
 			if sender != nil {
 				sender.close()
@@ -851,15 +851,41 @@ func (s *Scope) remoteRunAsync(c *Compile, done func(error)) error {
 			}
 			return
 		}
-		state := newRemoteRunEventState(s, c, scheduler, sender, withoutOutput, done)
-		if err := scheduler.submitRoot("remote-start-ready", func() {
-			_ = state.start()
-		}); err != nil {
-			// The state owns the sender from this point onward. Finish it
-			// through the same teardown event used by receive failures so the
-			// retained local root publishes its terminal before completion.
-			s.ScopeAnalyzer.Stop()
-			state.finish(err)
+		sendDone := func(sendErr error) {
+			if sendErr != nil {
+				sender.close()
+				failErr := s.failRemoteRunBeforeStart(c, sendErr)
+				s.ScopeAnalyzer.Stop()
+				if err := scheduler.submitRoot("remote-start-send-failed", func() {
+					done(failErr)
+				}); err != nil {
+					done(err)
+				}
+				return
+			}
+			state := newRemoteRunEventState(s, c, scheduler, sender, withoutOutput, done)
+			if err := scheduler.submitRoot("remote-start-ready", func() {
+				if startErr := state.start(); startErr != nil {
+					state.finish(startErr)
+				}
+			}); err != nil {
+				// The state owns the sender from this point onward. Finish it
+				// through the same teardown event used by receive failures so the
+				// retained local root publishes its terminal before completion.
+				s.ScopeAnalyzer.Stop()
+				state.finish(err)
+			}
+		}
+		if err := sender.sendPipelineAsync(
+			scheduler,
+			scopeData,
+			procData,
+			withoutOutput,
+			maxMessageSizeToMoRpc,
+			debugMsg,
+			sendDone,
+		); err != nil {
+			sendDone(err)
 		}
 	}, true)
 	if err != nil {

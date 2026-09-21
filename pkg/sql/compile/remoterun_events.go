@@ -143,13 +143,15 @@ func (r *remoteRunEventState) handleReceived(bat *batch.Batch, end bool, receive
 
 	if r.withoutOut {
 		bat.Clean(r.s.Proc.Mp())
-		if err := r.sender.acknowledgeRemoteBatch(); err != nil {
-			r.finish(err)
-			return
-		}
-		if err := r.receiveNext(); err != nil {
-			r.finish(err)
-		}
+		r.acknowledge("remote-ack", func(err error) {
+			if err != nil {
+				r.finish(err)
+				return
+			}
+			if err := r.receiveNext(); err != nil {
+				r.finish(err)
+			}
+		})
 		return
 	}
 
@@ -184,13 +186,15 @@ func (r *remoteRunEventState) forwardConnectorBatch() {
 	}
 	if nextReg.TrySendDataDirect(bat, r.s.Proc.Mp()) {
 		r.pending = nil
-		if err := r.sender.acknowledgeRemoteBatch(); err != nil {
-			r.finish(err)
-			return
-		}
-		if err := r.receiveNext(); err != nil {
-			r.finish(err)
-		}
+		r.acknowledge("remote-ack", func(err error) {
+			if err != nil {
+				r.finish(err)
+				return
+			}
+			if err := r.receiveNext(); err != nil {
+				r.finish(err)
+			}
+		})
 		return
 	}
 	if nextReg.Done() != nil {
@@ -198,11 +202,13 @@ func (r *remoteRunEventState) forwardConnectorBatch() {
 		case <-nextReg.Done():
 			bat.Clean(r.s.Proc.Mp())
 			r.pending = nil
-			if err := r.sender.acknowledgeRemoteBatch(); err != nil {
-				r.finish(err)
-				return
-			}
-			r.finish(nil)
+			r.acknowledge("remote-ack", func(err error) {
+				if err != nil {
+					r.finish(err)
+					return
+				}
+				r.finish(nil)
+			})
 			return
 		default:
 		}
@@ -288,19 +294,31 @@ func (r *remoteRunEventState) runDispatchBatch() {
 		bat.Clean(r.s.Proc.Mp())
 		r.fake.Batchs[len(r.fake.Batchs)-1] = nil
 		r.dispatchBat = nil
-		if err := r.sender.acknowledgeRemoteBatch(); err != nil {
-			r.finish(err)
-			return
-		}
-		if step.Status == vmpipeline.StepDone {
-			r.finish(nil)
-			return
-		}
-		if err := r.receiveNext(); err != nil {
-			r.finish(err)
-		}
+		r.acknowledge("remote-ack", func(err error) {
+			if err != nil {
+				r.finish(err)
+				return
+			}
+			if step.Status == vmpipeline.StepDone {
+				r.finish(nil)
+				return
+			}
+			if receiveErr := r.receiveNext(); receiveErr != nil {
+				r.finish(receiveErr)
+			}
+		})
 	default:
 		r.finish(moerr.NewInternalErrorNoCtx("remote dispatch continuation returned unknown status"))
+	}
+}
+
+func (r *remoteRunEventState) acknowledge(name string, next func(error)) {
+	if err := r.sender.acknowledgeRemoteBatchAsync(r.scheduler, name, func(err error) {
+		if next != nil {
+			next(err)
+		}
+	}); err != nil {
+		r.finish(err)
 	}
 }
 

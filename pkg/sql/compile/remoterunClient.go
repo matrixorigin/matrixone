@@ -93,9 +93,30 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 // receives result batches. The event-driven remote state machine uses this
 // same boundary and schedules one transport receive at a time afterward.
 func (s *Scope) prepareRemoteRun(c *Compile) (sender *messageSenderOnClient, withoutOutput bool, err error) {
+	sender, withoutOutput, scopeEncodeData, processEncodeData, debugMsg, err := s.prepareRemoteRunData(c)
+	if err != nil {
+		return sender, withoutOutput, err
+	}
+	if err = sender.sendPipeline(scopeEncodeData, processEncodeData, withoutOutput, maxMessageSizeToMoRpc, debugMsg); err != nil {
+		return sender, withoutOutput, err
+	}
+	return sender, withoutOutput, nil
+}
+
+// prepareRemoteRunData performs encoding and stream creation but deliberately
+// does not wait for the initial MORPC writer admission. The event-driven
+// remote path feeds the returned payload into sendPipelineAsync; the legacy
+// remoteRun wrapper continues to call sendPipeline synchronously.
+func (s *Scope) prepareRemoteRunData(c *Compile) (
+	sender *messageSenderOnClient,
+	withoutOutput bool,
+	scopeEncodeData []byte,
+	processEncodeData []byte,
+	debugMsg string,
+	err error,
+) {
 	s.ScopeAnalyzer.Stop()
 
-	var scopeEncodeData, processEncodeData []byte
 	var folded bool
 	remoteFragmentCounts, remoteExecutionID := remoteExecutionTopology(c, s)
 	scopeEncodeData, withoutOutput, processEncodeData, folded, err = prepareRemoteRunSendingData(
@@ -106,7 +127,7 @@ func (s *Scope) prepareRemoteRun(c *Compile) (sender *messageSenderOnClient, wit
 		remoteExecutionID,
 	)
 	if err != nil {
-		return nil, false, err
+		return nil, false, nil, nil, "", err
 	}
 	if folded {
 		getLogger(s.Proc.GetService()).
@@ -125,7 +146,7 @@ func (s *Scope) prepareRemoteRun(c *Compile) (sender *messageSenderOnClient, wit
 	if err != nil {
 		c.proc.Errorf(s.Proc.Ctx, "Failed to newMessageSenderOnClient sql=%s, txnID=%s, err=%v",
 			c.sql, c.proc.GetTxnOperator().Txn().DebugString(), err)
-		return nil, false, err
+		return nil, false, nil, nil, "", err
 	}
 	sender.proc = s.Proc
 	// Capture the execution-attempt sink, rather than looking it up from proc
@@ -134,15 +155,11 @@ func (s *Scope) prepareRemoteRun(c *Compile) (sender *messageSenderOnClient, wit
 	// that stale callback instead of publishing it into the new attempt.
 	sender.warningSink = s.Proc.GetWarningSink()
 
-	debugMsg := ""
 	_, subSQL, exist := fault.TriggerFault("inject_send_pipeline")
 	if exist && strings.Contains(c.sql, subSQL) {
 		debugMsg = fmt.Sprintf("inject_send_pipeline: client2server,compile = %p", c)
 	}
-	if err = sender.sendPipeline(scopeEncodeData, processEncodeData, withoutOutput, maxMessageSizeToMoRpc, debugMsg); err != nil {
-		return sender, withoutOutput, err
-	}
-	return sender, withoutOutput, nil
+	return sender, withoutOutput, scopeEncodeData, processEncodeData, debugMsg, nil
 }
 
 // checkPipelineStandaloneExecutableAtRemote is responsible for checking the standalone excitability of the pipeline
@@ -712,6 +729,27 @@ func (sender *messageSenderOnClient) requestStreamProtocols(message *pipeline.Me
 func (sender *messageSenderOnClient) sendPipeline(
 	scopeData, procData []byte, noDataBack bool, eachMessageSizeLimitation int, debugMsg string) error {
 	sender.markReportingRequestStarted()
+	for _, message := range sender.pipelineMessages(
+		scopeData,
+		procData,
+		noDataBack,
+		eachMessageSizeLimitation,
+		debugMsg,
+	) {
+		if err := sender.streamSender.Send(sender.ctx, message); err != nil {
+			return err
+		}
+	}
+	sender.markStreamActive(pipeline.Method_PipelineMessage)
+	return nil
+}
+
+func (sender *messageSenderOnClient) pipelineMessages(
+	scopeData, procData []byte,
+	noDataBack bool,
+	eachMessageSizeLimitation int,
+	debugMsg string,
+) []*pipeline.Message {
 	sdLen := len(scopeData)
 	if sdLen <= eachMessageSizeLimitation {
 		message := cnclient.AcquireMessage()
@@ -723,17 +761,12 @@ func (sender *messageSenderOnClient) sendPipeline(
 		message.SetSid(pipeline.Status_Last)
 		sender.requestStreamProtocols(message)
 		message.NeedNotReply = noDataBack
-		if err := sender.streamSender.Send(sender.ctx, message); err != nil {
-			return err
-		}
-		sender.markStreamActive(pipeline.Method_PipelineMessage)
-		return nil
+		return []*pipeline.Message{message}
 	}
 
-	start := 0
-	for start < sdLen {
+	messages := make([]*pipeline.Message, 0, (sdLen+eachMessageSizeLimitation-1)/eachMessageSizeLimitation)
+	for start := 0; start < sdLen; start += eachMessageSizeLimitation {
 		end := start + eachMessageSizeLimitation
-
 		message := cnclient.AcquireMessage()
 		message.SetDebugMsg(debugMsg)
 		message.SetID(sender.streamSender.ID())
@@ -748,14 +781,57 @@ func (sender *messageSenderOnClient) sendPipeline(
 		}
 		message.NeedNotReply = noDataBack
 		sender.requestStreamProtocols(message)
-
-		if err := sender.streamSender.Send(sender.ctx, message); err != nil {
-			return err
-		}
-		start = end
+		messages = append(messages, message)
 	}
-	sender.markStreamActive(pipeline.Method_PipelineMessage)
-	return nil
+	return messages
+}
+
+// sendPipelineAsync sends one pipeline fragment per scheduler event. The
+// continuation advances only after MORPC writer admission, so an output queue
+// that is full becomes a channel event rather than a blocked scheduler lane.
+func (sender *messageSenderOnClient) sendPipelineAsync(
+	scheduler *scopeTaskScheduler,
+	scopeData, procData []byte,
+	noDataBack bool,
+	eachMessageSizeLimitation int,
+	debugMsg string,
+	done func(error),
+) error {
+	if scheduler == nil {
+		return moerr.NewInternalErrorNoCtx("nil scheduler for remote pipeline send")
+	}
+	if done == nil {
+		return moerr.NewInternalErrorNoCtx("nil callback for remote pipeline send")
+	}
+	sender.markReportingRequestStarted()
+	messages := sender.pipelineMessages(scopeData, procData, noDataBack, eachMessageSizeLimitation, debugMsg)
+	var once sync.Once
+	finish := func(err error) { once.Do(func() { done(err) }) }
+	index := 0
+	var sendNext func()
+	sendNext = func() {
+		if index >= len(messages) {
+			sender.markStreamActive(pipeline.Method_PipelineMessage)
+			finish(nil)
+			return
+		}
+		message := messages[index]
+		index++
+		if err := scheduler.submitStreamSendWithContext("remote-pipeline-send", sender.streamSender, sender.ctx, message, func(err error) {
+			if err != nil {
+				finish(err)
+				return
+			}
+			sendNext()
+		}, true); err != nil {
+			finish(err)
+		}
+	}
+	// The initial pipeline message is also the cancellation/stop handshake
+	// boundary: even an already-expired query must be admitted far enough to
+	// publish the remote terminal cleanup signal. The MORPC send itself still
+	// observes the expired context and reports its result asynchronously.
+	return scheduler.submitEventSourceWithContext("remote-pipeline-send-start", sendNext, true)
 }
 
 func (sender *messageSenderOnClient) markStreamActive(method pipeline.Method) {
@@ -896,6 +972,39 @@ func (sender *messageSenderOnClient) acknowledgeRemoteBatch() error {
 	}
 	sender.pendingBatchAck = 0
 	return nil
+}
+
+// acknowledgeRemoteBatchAsync publishes the batch credit through the query
+// scheduler. Normal remote state-machine paths must not wait in a ready task
+// for MORPC writer-queue admission; the synchronous helper above remains for
+// legacy blocking receive loops and terminal compatibility cleanup.
+func (sender *messageSenderOnClient) acknowledgeRemoteBatchAsync(
+	scheduler *scopeTaskScheduler,
+	name string,
+	done func(error),
+) error {
+	if scheduler == nil {
+		return moerr.NewInternalErrorNoCtx("nil scheduler for remote batch acknowledgement")
+	}
+	if done == nil {
+		return moerr.NewInternalErrorNoCtx("nil callback for remote batch acknowledgement")
+	}
+	sequence := sender.pendingBatchAck
+	if sequence == 0 {
+		done(nil)
+		return nil
+	}
+	message := cnclient.AcquireMessage()
+	message.SetID(sender.streamSender.ID())
+	message.SetMessageType(pipeline.Method_PipelineBatchAck)
+	message.SetSid(pipeline.Status_Last)
+	message.BatchAckSequence = sequence
+	return scheduler.submitStreamSend(name, sender.streamSender, sender.ctx, message, func(err error) {
+		if err == nil {
+			sender.pendingBatchAck = 0
+		}
+		done(err)
+	})
 }
 
 func (sender *messageSenderOnClient) contextDoneError() error {

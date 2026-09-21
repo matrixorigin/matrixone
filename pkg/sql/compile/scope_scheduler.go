@@ -579,6 +579,15 @@ func (s *scopeTaskScheduler) submitErrorEvent(
 	ch <-chan error,
 	ready func(error),
 ) error {
+	return s.submitErrorEventWithContext(name, ch, ready, false)
+}
+
+func (s *scopeTaskScheduler) submitErrorEventWithContext(
+	name string,
+	ch <-chan error,
+	ready func(error),
+	allowCanceled bool,
+) error {
 	if ch == nil {
 		return errors.New("nil scope error event")
 	}
@@ -591,7 +600,7 @@ func (s *scopeTaskScheduler) submitErrorEvent(
 		s.mu.Unlock()
 		return errScopeTaskSchedulerClosed
 	}
-	if s.ctx != nil {
+	if !allowCanceled && s.ctx != nil {
 		select {
 		case <-s.ctx.Done():
 			s.mu.Unlock()
@@ -641,6 +650,17 @@ func (s *scopeTaskScheduler) submitStreamSend(
 	message morpc.Message,
 	ready func(error),
 ) error {
+	return s.submitStreamSendWithContext(name, stream, ctx, message, ready, false)
+}
+
+func (s *scopeTaskScheduler) submitStreamSendWithContext(
+	name string,
+	stream morpc.Stream,
+	ctx context.Context,
+	message morpc.Message,
+	ready func(error),
+	allowCanceled bool,
+) error {
 	if stream == nil {
 		return errors.New("nil stream")
 	}
@@ -652,18 +672,18 @@ func (s *scopeTaskScheduler) submitStreamSend(
 		if err != nil {
 			return err
 		}
-		if err = s.submitErrorEvent(name, future.SendDone(), func(sendErr error) {
+		if err = s.submitErrorEventWithContext(name, future.SendDone(), func(sendErr error) {
 			future.Close()
 			ready(sendErr)
-		}); err != nil {
+		}, allowCanceled); err != nil {
 			future.Close()
 			return err
 		}
 		return nil
 	}
-	return s.submitEventSource(name, func() {
+	return s.submitEventSourceWithContext(name, func() {
 		ready(stream.Send(ctx, message))
-	})
+	}, allowCanceled)
 }
 
 // submitTimer admits a delayed external event without parking an event
