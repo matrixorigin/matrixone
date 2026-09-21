@@ -1708,6 +1708,29 @@ func (s *Scope) sendNotifyMessageWithFactoryAndCallback(
 	if onResult == nil {
 		return
 	}
+	// The production MergeRun path owns a query-local scheduler. Use the
+	// event state machine there so a remote notify stream contributes only one
+	// MORPC receive event at a time; the legacy channel helper below remains for
+	// tests and callers that intentionally do not provide a scheduler.
+	if len(schedulers) > 0 && schedulers[0] != nil {
+		scheduler := schedulers[0]
+		for i := range s.RemoteReceivRegInfos {
+			wg.Add(1)
+			state := newRemoteNotifyEventState(
+				s,
+				scheduler,
+				&s.RemoteReceivRegInfos[i],
+				newSender,
+				waitRetry,
+				onResult,
+				wg,
+			)
+			if err := state.start(); err != nil {
+				state.finish(err)
+			}
+		}
+		return
+	}
 	// if context has done, it means the user or other part of the pipeline stops this query.
 	closeWithError := func(err error, reg *process.WaitRegister, sender *messageSenderOnClient) {
 		err, _ = normalizeScopeRunError(
