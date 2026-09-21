@@ -66,3 +66,62 @@ drop table set_idx02;
 
 -- update set column with single-column unique index (SET not allowed in unique key, verify error)
 -- create table set_idx03 (id int primary key, opts set('a','b','c'), unique key uk_opts(opts));
+
+-- delete enum values from a regular secondary index
+drop table if exists enum_delete_idx01;
+create table enum_delete_idx01 (id int primary key, status enum('new','paid','shipped'), key idx_status(status));
+insert into enum_delete_idx01 values (1,'new'),(2,'paid'),(3,null);
+delete from enum_delete_idx01 where id=2;
+select row_count();
+select id, status from enum_delete_idx01 order by id;
+delete from enum_delete_idx01 where id=2;
+select row_count();
+drop table enum_delete_idx01;
+
+-- delete an enum primary-key row
+drop table if exists enum_delete_pk01;
+create table enum_delete_pk01 (status enum('new','paid','shipped') primary key, note varchar(20));
+insert into enum_delete_pk01 values ('new','n1'),('paid','n2'),('shipped','n3');
+delete from enum_delete_pk01 where status='paid';
+select row_count();
+select status, note from enum_delete_pk01 order by status;
+drop table enum_delete_pk01;
+
+-- delete an enum unique-key row and reuse the removed key
+drop table if exists enum_delete_uk01;
+create table enum_delete_uk01 (id int primary key, status enum('new','paid','shipped'), unique key uk_status(status));
+insert into enum_delete_uk01 values (1,'new'),(2,'paid');
+delete from enum_delete_uk01 where id=1;
+select row_count();
+insert into enum_delete_uk01 values (3,'new');
+select id, status from enum_delete_uk01 order by id;
+drop table enum_delete_uk01;
+
+-- delete a SET bitmap from a regular secondary index
+drop table if exists set_delete_idx01;
+create table set_delete_idx01 (id int primary key, opts set('a','b','c'), key idx_opts(opts));
+insert into set_delete_idx01 values (1,'a,c'),(2,'b'),(3,null);
+delete from set_delete_idx01 where id=1;
+select row_count();
+select id, opts from set_delete_idx01 order by id;
+delete from set_delete_idx01 where id=1;
+select row_count();
+drop table set_delete_idx01;
+
+-- delete a composite secondary key containing an ENUM value
+drop table if exists enum_delete_idx02;
+create table enum_delete_idx02 (id int primary key, status enum('new','paid','shipped'), note varchar(20), key idx_note_status(note, status));
+insert into enum_delete_idx02 values (1,'new','n1'),(2,'paid','n2');
+delete from enum_delete_idx02 where id=1;
+select row_count();
+select id, status, note from enum_delete_idx02 order by id;
+drop table enum_delete_idx02;
+
+-- ordered DELETE must preserve a SET empty-member bitmap through the result projection
+drop table if exists set_delete_order01;
+create table set_delete_order01 (id int primary key, opts set('', 'a'), key idx_opts(opts));
+insert into set_delete_order01 values (1,1),(2,2);
+delete from set_delete_order01 where id=1 order by id limit 1;
+select row_count();
+select id, opts from set_delete_order01 order by id;
+drop table set_delete_order01;

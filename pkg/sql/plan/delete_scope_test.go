@@ -15,9 +15,11 @@
 package plan
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -53,6 +55,106 @@ func TestIsUnrestrictedDelete(t *testing.T) {
 	}
 
 	require.False(t, isUnrestrictedDelete(nil, 1))
+}
+
+func TestNormalizeDeleteOldValueExprPreservesStoredSpecialValue(t *testing.T) {
+	ctx := context.Background()
+	enumType := planpb.Type{Id: int32(types.T_enum), Enumvalues: "a,b,"}
+	enumRaw := &planpb.Expr{
+		Typ:  enumType,
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1, ColPos: 2}},
+	}
+	enumDisplay, err := makeEnumOrSetDisplayValue(ctx, enumRaw)
+	require.NoError(t, err)
+
+	normalized, err := normalizeDeleteOldValueExpr(ctx, enumDisplay, enumType)
+	require.NoError(t, err)
+	require.Equal(t, enumType, normalized.Typ)
+	require.Equal(t, enumRaw.GetCol(), normalized.GetCol(), "ENUM deletion must retain the stored ordinal expression")
+
+	setType := planpb.Type{Id: int32(types.T_uint64), Enumvalues: "a,b,c"}
+	setRaw := &planpb.Expr{
+		Typ:  setType,
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1, ColPos: 3}},
+	}
+	setDisplay, err := makeEnumOrSetDisplayValue(ctx, setRaw)
+	require.NoError(t, err)
+
+	normalized, err = normalizeDeleteOldValueExpr(ctx, setDisplay, setType)
+	require.NoError(t, err)
+	require.Equal(t, setType, normalized.Typ)
+	require.Equal(t, moSetCastIndexValueToIndexFun, normalized.GetF().GetFunc().GetObjName())
+	require.Equal(t, setRaw.GetCol(), normalized.GetF().GetArgs()[1].GetCol())
+	require.Empty(t, normalized.GetF().GetArgs()[1].Typ.Enumvalues)
+}
+
+func TestNormalizeDeleteOldValueExprUsesFallbackCast(t *testing.T) {
+	ctx := context.Background()
+	plain := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_varchar)},
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1, ColPos: 0}},
+	}
+
+	enum, err := normalizeDeleteOldValueExpr(ctx, plain, planpb.Type{
+		Id: int32(types.T_enum), Enumvalues: "a,b",
+	})
+	require.NoError(t, err)
+	require.Equal(t, moEnumCastValueToIndexFun, enum.GetF().GetFunc().GetObjName())
+
+	set, err := normalizeDeleteOldValueExpr(ctx, plain, planpb.Type{
+		Id: int32(types.T_uint64), Enumvalues: "a,b",
+	})
+	require.NoError(t, err)
+	require.Equal(t, moSetCastValueToIndexFun, set.GetF().GetFunc().GetObjName())
+
+	ordinary := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}}
+	got, err := normalizeDeleteOldValueExpr(ctx, ordinary, ordinary.Typ)
+	require.NoError(t, err)
+	require.Same(t, ordinary, got)
+
+	_, err = normalizeDeleteOldValueExpr(ctx, nil, planpb.Type{
+		Id: int32(types.T_enum), Enumvalues: "a,b",
+	})
+	require.Error(t, err)
+}
+
+func TestNormalizeDeleteOldValueProjectionFollowsOrderProjection(t *testing.T) {
+	enumType := planpb.Type{Id: int32(types.T_enum), Enumvalues: "a,b"}
+	raw := &planpb.Expr{
+		Typ:  enumType,
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 10, ColPos: 0}},
+	}
+	display, err := makeEnumOrSetDisplayValue(context.Background(), raw)
+	require.NoError(t, err)
+
+	mock := newMySQLSpecialOrderMock()
+	builder := NewQueryBuilder(planpb.Query_DELETE, &mock.ctxt, false, true)
+	builder.qry.Nodes = []*planpb.Node{
+		{
+			NodeType:    planpb.Node_PROJECT,
+			ProjectList: []*planpb.Expr{display},
+			Children:    []int32{3},
+			BindingTags: []int32{10},
+		},
+		{NodeType: planpb.Node_SORT, Children: []int32{0}},
+		{
+			NodeType:    planpb.Node_PROJECT,
+			ProjectList: []*planpb.Expr{GetColExpr(display.Typ, 10, 0)},
+			Children:    []int32{1},
+			BindingTags: []int32{11},
+		},
+		{NodeType: planpb.Node_TABLE_SCAN},
+	}
+
+	err = builder.normalizeDeleteOldValueProjection(
+		2,
+		[]*planpb.TableDef{{Cols: []*planpb.ColDef{{Name: "status", Typ: enumType}}}},
+		[]map[string]int32{{"status": 0}},
+	)
+	require.NoError(t, err)
+	require.Equal(t, enumType, builder.qry.Nodes[0].ProjectList[0].Typ)
+	require.Equal(t, raw.GetCol(), builder.qry.Nodes[0].ProjectList[0].GetCol())
+	require.Equal(t, enumType, builder.qry.Nodes[2].ProjectList[0].Typ)
 }
 
 func TestIrregularIndexDeleteJoinIsRowScoped(t *testing.T) {
