@@ -391,6 +391,31 @@ func TestMaintainInformationSchemaViewsTransitionsLegacyDefinitionForPublicConsu
 	require.Equal(t, int32(1), state.replacementCalls.Load())
 }
 
+func TestMaintainInformationSchemaViewsRepairsMissingAndStaleDefinitions(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		definition string
+	}{
+		{name: "missing", definition: ""},
+		{name: "stale", definition: "CREATE VIEW information_schema.VIEWS AS SELECT 1"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			const accountID = int32(10)
+			state := &transactionalInformationSchemaViewsState{
+				definition: test.definition,
+			}
+			installTransactionalInformationSchemaViewsCheck(t, state, accountID)
+			service := newTransactionalInformationSchemaViewsMaintenanceTestService(t, state)
+
+			require.NoError(t, service.maintainInformationSchemaViews(t.Context()))
+			require.Equal(t, sysview.InformationSchemaViewsDDL, state.definition)
+			require.Equal(t, int32(1), state.replacementCalls.Load())
+			require.Equal(t, int32(accountID+1),
+				service.upgrade.informationSchemaViewsMaintenanceState.accountCursor)
+		})
+	}
+}
+
 func TestInformationSchemaViewsProtocolGateClassifier(t *testing.T) {
 	rollbackErr := errors.New("transaction rollback failed")
 	for _, test := range []struct {
