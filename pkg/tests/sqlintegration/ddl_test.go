@@ -200,6 +200,14 @@ func TestPitrCases(t *testing.T) {
 // source without a user-visible primary key must be rejected before a task is
 // persisted or any sink connection is attempted.
 func TestCDCNoPrimaryKeyRejected(t *testing.T) {
+	stubOpenDbConn := gostub.Stub(&cdc.OpenDbConn, func(_ context.Context, _, _, _ string, _ int, _ string) (*sql.DB, error) {
+		db, mock, err := sqlmock.New()
+		require.NoError(t, err)
+		mock.ExpectClose()
+		return db, nil
+	})
+	defer stubOpenDbConn.Reset()
+
 	runSQLIntegration(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
@@ -220,12 +228,49 @@ func TestCDCNoPrimaryKeyRejected(t *testing.T) {
 			res.Close()
 		}
 		execSQL("create pitr if not exists cdc_pitr for database " + db + " range 3 'h' internal")
-		execSQL("create table no_pk (value int)")
+		execSQL("create table with_pk (id int primary key, value int)")
+		execSQL("create table composite_pk (id1 int, id2 int, value int, primary key (id1, id2))")
 
 		conn := "mysql://user:password@127.0.0.1:1"
+		verifyTask := func(name string, want bool) {
+			res, queryErr := exec.Exec(ctx,
+				"select count(*) from mo_catalog.mo_cdc_task where task_name='"+name+"'",
+				executor.Options{}.WithDatabase(db))
+			require.NoError(t, queryErr)
+			defer res.Close()
+			require.Equal(t, want, testutils.ReadCount(res) > 0)
+		}
+
 		_, err = exec.Exec(ctx,
-			"create cdc rejected_no_pk '"+conn+"' 'matrixone' '"+conn+"' '"+db+".no_pk' {'Level'='table'} internal",
+			"create cdc accepted_table '"+conn+"' 'matrixone' '"+conn+"' '"+db+".with_pk' {'Level'='table'} internal",
 			executor.Options{}.WithDatabase(db))
+		require.NoError(t, err)
+		verifyTask("accepted_table", true)
+		_, err = exec.Exec(ctx,
+			"create cdc accepted_composite '"+conn+"' 'matrixone' '"+conn+"' '"+db+".composite_pk' {'Level'='table'} internal",
+			executor.Options{}.WithDatabase(db))
+		require.NoError(t, err)
+		verifyTask("accepted_composite", true)
+		_, err = exec.Exec(ctx,
+			"create cdc accepted_database '"+conn+"' 'matrixone' '"+conn+"' '"+db+"' {'Level'='database'} internal",
+			executor.Options{}.WithDatabase(db))
+		require.NoError(t, err)
+		verifyTask("accepted_database", true)
+
+		badDB := db + "_bad"
+		res, err := exec.Exec(ctx, "create database "+badDB, executor.Options{})
+		require.NoError(t, err)
+		res.Close()
+		defer cleanupSQLIntegration(t, cn, "drop database if exists "+badDB)
+		res, err = exec.Exec(ctx, "create pitr if not exists cdc_pitr_bad for database "+badDB+" range 3 'h' internal", executor.Options{}.WithDatabase(badDB))
+		require.NoError(t, err)
+		res.Close()
+		res, err = exec.Exec(ctx, "create table no_pk (value int)", executor.Options{}.WithDatabase(badDB))
+		require.NoError(t, err)
+		res.Close()
+		_, err = exec.Exec(ctx,
+			"create cdc rejected_no_pk '"+conn+"' 'matrixone' '"+conn+"' '"+badDB+"' {'Level'='database'} internal",
+			executor.Options{}.WithDatabase(badDB))
 		require.Error(t, err)
 
 		res, err := exec.Exec(ctx,
@@ -234,6 +279,9 @@ func TestCDCNoPrimaryKeyRejected(t *testing.T) {
 		require.NoError(t, err)
 		defer res.Close()
 		require.Equal(t, 0, testutils.ReadCount(res))
+		res, err = exec.Exec(ctx, "drop cdc all internal", executor.Options{})
+		require.NoError(t, err)
+		res.Close()
 	})
 }
 
