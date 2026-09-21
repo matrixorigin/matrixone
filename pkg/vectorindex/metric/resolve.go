@@ -117,8 +117,10 @@ func resolveRealKernel[T types.RealNumbers](metric MetricType) (DistanceFunction
 // centroid (CENTROIDX JOIN / ProductL2), brute force, pairwise and topn. It
 // works for any storage element type T (types.ArrayElement) and returns the
 // distance in a caller-chosen result type R (types.RealNumbers): pass
-// R=float32 for the common path and R=float64 only where f64 precision is
-// needed (f64 input, topn ordering values). f32/f64 use the metric kernels;
+// R=float32 for the common typed path and R=float64 for wide SQL/topn
+// results. Native float input with R=float64 uses the stable float64 kernels
+// before any result narrowing; merely casting a float32 kernel is not a wide
+// computation.
 // bf16/f16/int8/uint8 use the native narrow kernels (which compute in
 // float32/int64 and are cast to R — casting their float64 down to float32 is
 // bit-identical to a native-float32 kernel, since the intermediate is exact).
@@ -136,6 +138,19 @@ func ResolveDistanceFn[T types.ArrayElement, R types.RealNumbers](metric MetricT
 	// do we add a thin casting wrapper.
 	switch any(*new(T)).(type) {
 	case float32:
+		if _, wide := any(*new(R)).(float64); wide {
+			var fn func([]float32, []float32) (float64, error)
+			var err error
+			if metric == Metric_L2Distance {
+				fn = StableL2DistanceSq[float32]
+			} else {
+				fn, err = StableDistanceFn[float32](metric)
+				if err != nil {
+					return nil, err
+				}
+			}
+			return any(fn).(func(a, b []T) (R, error)), nil
+		}
 		fn, err := resolveRealKernel[float32](metric)
 		if err != nil {
 			return nil, err
@@ -146,6 +161,19 @@ func ResolveDistanceFn[T types.ArrayElement, R types.RealNumbers](metric MetricT
 		w := func(a, b []float32) (R, error) { d, e := fn(a, b); return R(d), e }
 		return any(w).(func(a, b []T) (R, error)), nil
 	case float64:
+		if _, wide := any(*new(R)).(float64); wide {
+			var fn func([]float64, []float64) (float64, error)
+			var err error
+			if metric == Metric_L2Distance {
+				fn = StableL2DistanceSq[float64]
+			} else {
+				fn, err = StableDistanceFn[float64](metric)
+				if err != nil {
+					return nil, err
+				}
+			}
+			return any(fn).(func(a, b []T) (R, error)), nil
+		}
 		fn, err := resolveRealKernel[float64](metric)
 		if err != nil {
 			return nil, err

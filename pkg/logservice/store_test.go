@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/google/uuid"
 	"github.com/lni/dragonboat/v4"
 	"github.com/lni/goutils/leaktest"
@@ -751,33 +752,87 @@ func TestAddHeartbeat(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
 		peers := make(map[uint64]dragonboat.Target)
 		peers[1] = store.id()
-		assert.NoError(t, store.startHAKeeperReplica(1, peers, false))
+		require.NoError(t, store.startHAKeeperReplica(1, peers, false))
+		// Startup is asynchronous. Establish applied readiness separately from
+		// the independent one-second budget for each heartbeat below.
+		func() {
+			ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
+			defer cancel()
+			ready, err := store.waitHAKeeperLeaderReady(ctx, testIOTimeout)
+			require.NoError(t, err)
+			require.True(t, ready)
+			_, err = store.getCheckerStateWithContext(ctx)
+			require.NoError(t, err)
+		}()
 
 		m := store.getHeartbeatMessage()
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		_, err := store.addLogStoreHeartbeat(ctx, m)
-		assert.NoError(t, err)
+		func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_, err := store.addLogStoreHeartbeat(ctx, m)
+			require.NoError(t, err)
+		}()
 
 		cnMsg := pb.CNStoreHeartbeat{
-			UUID: store.id(),
+			UUID:           store.id(),
+			ServiceAddress: "cn-service",
 		}
-		_, err = store.addCNStoreHeartbeat(ctx, cnMsg)
-		assert.NoError(t, err)
+		func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_, err := store.addCNStoreHeartbeat(ctx, cnMsg)
+			require.NoError(t, err)
+		}()
 
 		tnMsg := pb.TNStoreHeartbeat{
 			UUID:   store.id(),
 			Shards: make([]pb.TNShardInfo, 0),
 		}
 		tnMsg.Shards = append(tnMsg.Shards, pb.TNShardInfo{ShardID: 2, ReplicaID: 3})
-		_, err = store.addTNStoreHeartbeat(ctx, tnMsg)
-		assert.NoError(t, err)
+		func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_, err := store.addTNStoreHeartbeat(ctx, tnMsg)
+			require.NoError(t, err)
+		}()
 
 		proxyMsg := pb.ProxyHeartbeat{
-			UUID: store.id(),
+			UUID:          store.id(),
+			ListenAddress: "proxy-listen",
 		}
-		_, err = store.addProxyHeartbeat(ctx, proxyMsg)
-		assert.NoError(t, err)
+		func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_, err := store.addProxyHeartbeat(ctx, proxyMsg)
+			require.NoError(t, err)
+		}()
+
+		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
+		defer cancel()
+		state, err := store.getCheckerStateWithContext(ctx)
+		require.NoError(t, err)
+		logInfo, ok := state.LogState.Stores[m.UUID]
+		require.True(t, ok)
+		assert.Equal(t, m.ServiceAddress, logInfo.ServiceAddress)
+		assert.Equal(t, m.RaftAddress, logInfo.RaftAddress)
+		assert.Equal(t, m.GossipAddress, logInfo.GossipAddress)
+		assert.Equal(t, m.StoreIncarnation, logInfo.StoreIncarnation)
+		require.Len(t, logInfo.Replicas, len(m.Replicas))
+		for i := range m.Replicas {
+			// Protobuf round trips normalize empty maps to nil.
+			assert.True(t, proto.Equal(&m.Replicas[i], &logInfo.Replicas[i]), "replica %d", i)
+		}
+		cnInfo, ok := state.CNState.Stores[cnMsg.UUID]
+		require.True(t, ok)
+		assert.Equal(t, cnMsg.ServiceAddress, cnInfo.ServiceAddress)
+		assert.Equal(t, metadata.WorkState_Working, cnInfo.WorkState)
+		tnInfo, ok := state.TNState.Stores[tnMsg.UUID]
+		require.True(t, ok)
+		assert.Equal(t, tnMsg.Shards, tnInfo.Shards)
+		proxyInfo, ok := state.ProxyState.Stores[proxyMsg.UUID]
+		require.True(t, ok)
+		assert.Equal(t, proxyMsg.UUID, proxyInfo.UUID)
+		assert.Equal(t, proxyMsg.ListenAddress, proxyInfo.ListenAddress)
 	}
 	runStoreTest(t, fn)
 }

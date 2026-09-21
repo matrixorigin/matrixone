@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -283,7 +284,7 @@ func getTypeFromAstWithoutCharset(ctx context.Context, typ tree.ResolvableTypeRe
 		case defines.MYSQL_TYPE_BOOL:
 			return plan.Type{Id: int32(types.T_bool)}, nil
 		case defines.MYSQL_TYPE_BLOB:
-			return plan.Type{Id: int32(types.T_blob)}, nil
+			return plan.Type{Id: int32(types.T_blob), Width: mysqlStringFamilyWidth(n.InternalType.FamilyString)}, nil
 		case defines.MYSQL_TYPE_TEXT:
 			//NOTE: This is an important part where datatype is assigned to the column
 			fstr := strings.ToLower(n.InternalType.FamilyString)
@@ -343,11 +344,11 @@ func getTypeFromAstWithoutCharset(ctx context.Context, typ tree.ResolvableTypeRe
 		case defines.MYSQL_TYPE_UUID:
 			return plan.Type{Id: int32(types.T_uuid)}, nil
 		case defines.MYSQL_TYPE_TINY_BLOB:
-			return plan.Type{Id: int32(types.T_blob)}, nil
+			return plan.Type{Id: int32(types.T_blob), Width: types.MaxTinyTextLen}, nil
 		case defines.MYSQL_TYPE_MEDIUM_BLOB:
-			return plan.Type{Id: int32(types.T_blob)}, nil
+			return plan.Type{Id: int32(types.T_blob), Width: types.MaxMediumTextLen}, nil
 		case defines.MYSQL_TYPE_LONG_BLOB:
-			return plan.Type{Id: int32(types.T_blob)}, nil
+			return plan.Type{Id: int32(types.T_blob), Width: types.MaxLongTextLen}, nil
 		case defines.MYSQL_TYPE_ENUM:
 			if len(n.InternalType.EnumValues) > types.MaxEnumLen {
 				return plan.Type{}, moerr.NewNYI(ctx, "enum type out of max length")
@@ -369,6 +370,24 @@ func getTypeFromAstWithoutCharset(ctx context.Context, typ tree.ResolvableTypeRe
 		}
 	}
 	return plan.Type{}, moerr.NewInternalError(ctx, "unknown data type")
+}
+
+// mysqlStringFamilyWidth returns the byte capacity carried by a declared
+// binary string family. Width zero is reserved for computed/unknown BLOB
+// expressions; a declared ordinary BLOB is the 65535-byte family member.
+func mysqlStringFamilyWidth(family string) int32 {
+	switch strings.ToLower(family) {
+	case "tinyblob":
+		return types.MaxTinyTextLen
+	case "blob":
+		return types.MaxStringSize
+	case "mediumblob":
+		return types.MaxMediumTextLen
+	case "longblob":
+		return types.MaxLongTextLen
+	default:
+		return 0
+	}
 }
 
 // GetTypeFromAst resolves a parser SQL type into its plan representation.
@@ -2066,13 +2085,16 @@ func (builder *QueryBuilder) applyGeneratedColumnAssignmentCast(expr *plan.Expr,
 		}
 		return forceAssignmentCastExprWithName(builder.GetContext(), expr, expr.Typ, "cast")
 	}
-	if f == nil || f.Func == nil ||
-		(f.Func.ObjName != "cast_assign" && f.Func.ObjName != "cast_strict") ||
-		len(f.Args) == 0 {
-		return expr, nil
+	if f != nil && f.Func != nil &&
+		(f.Func.ObjName == "cast_assign" || f.Func.ObjName == "cast_strict" || f.Func.ObjName == "cast_ignore") &&
+		len(f.Args) > 0 {
+		funcName := assignmentCastFunctionName(expr.Typ, isIgnore, builder.compCtx.GetProcess())
+		return forceAssignmentCastExprWithName(builder.GetContext(), f.Args[0], expr.Typ, funcName)
 	}
-	funcName := assignmentCastFunctionName(expr.Typ, isIgnore, builder.compCtx.GetProcess())
-	return forceAssignmentCastExprWithName(builder.GetContext(), f.Args[0], expr.Typ, funcName)
+	if expr.Typ.Id == int32(types.T_blob) || expr.Typ.Id == int32(types.T_text) {
+		return builder.forceAssignmentCastExpr(expr, expr.Typ, isIgnore)
+	}
+	return expr, nil
 }
 
 // substituteColRefsInExpr replaces ColRef(0, colIdx) in a generated column expression
@@ -2263,6 +2285,29 @@ func getFunctionObjRef(funcID int64, name string) *ObjectRef {
 // 	}, nil
 // }
 
+// getDefaultExprForAssignment restores a catalog default under the current
+// statement policy. The column owns the byte limit, including for legacy
+// expressions that lack an assignment wrapper or carry stale type widths.
+func getDefaultExprForAssignment(ctx context.Context, col *plan.ColDef, proc *process.Process, ignore bool) (*Expr, error) {
+	expr, err := getDefaultExpr(ctx, col)
+	if err != nil {
+		return nil, err
+	}
+	if col.Typ.Id != int32(types.T_blob) && col.Typ.Id != int32(types.T_text) {
+		return expr, nil
+	}
+	if lit := expr.GetLit(); lit != nil && lit.Isnull {
+		return expr, nil
+	}
+	if f := expr.GetF(); f != nil && f.Func != nil && len(f.Args) > 0 &&
+		(f.Func.ObjName == "cast_strict" || f.Func.ObjName == "cast_assign" || f.Func.ObjName == "cast_ignore") {
+		// Replace only the persisted assignment boundary; ordinary explicit
+		// CAST expressions inside the default retain their own semantics.
+		expr = f.Args[0]
+	}
+	return forceAssignmentCastExprWithProcess(ctx, expr, col.Typ, ignore, proc)
+}
+
 func getDefaultExpr(ctx context.Context, d *plan.ColDef) (*Expr, error) {
 	if d == nil {
 		return nil, moerr.NewInvalidInput(ctx, "cannot resolve default value for a missing column definition")
@@ -2434,15 +2479,7 @@ func makeSelectList(table string, strs []string) string {
 		if i > 0 {
 			bb.WriteByte(',')
 		}
-		//table
-		bb.WriteByte('`')
-		bb.WriteString(table)
-		bb.WriteByte('`')
-		bb.WriteByte('.')
-		//column
-		bb.WriteByte('`')
-		bb.WriteString(str)
-		bb.WriteByte('`')
+		bb.WriteString(sqlquote.QualifiedIdent(table, str))
 	}
 	return bb.String()
 }
@@ -2454,15 +2491,7 @@ func makeWhere(table string, strs []string) string {
 		if i > 0 {
 			bb.WriteString(" and ")
 		}
-		//table
-		bb.WriteByte('`')
-		bb.WriteString(table)
-		bb.WriteByte('`')
-		bb.WriteByte('.')
-		//column
-		bb.WriteByte('`')
-		bb.WriteString(str)
-		bb.WriteByte('`')
+		bb.WriteString(sqlquote.QualifiedIdent(table, str))
 		//is not null
 		bb.WriteString(" is not null")
 	}
@@ -2523,8 +2552,8 @@ func genSqlForCheckFKConstraints(ctx context.Context,
 		return "", err
 	}
 
-	childTableClause := fmt.Sprintf("`%s`.`%s`", childDbName, childTblName)
-	parentTableClause := fmt.Sprintf("`%s`.`%s`", parentDbName, parentTblName)
+	childTableClause := sqlquote.QualifiedIdent(childDbName, childTblName)
+	parentTableClause := sqlquote.QualifiedIdent(parentDbName, parentTblName)
 	where := fmt.Sprintf("where %s", makeWhere(childTblName, fkCols))
 	except := fmt.Sprintf("select distinct %s from %s %s except select distinct %s from %s",
 		makeSelectList(childTblName, fkCols),

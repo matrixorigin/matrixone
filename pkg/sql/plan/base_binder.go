@@ -4566,6 +4566,13 @@ func rewriteFindInSetSetProvenance(
 	if !isSetPlanType(storageType) {
 		return args, false, nil
 	}
+	if bindCtx.mysqlSpecialCanonicalTypeForExpr(args[1]) != nil {
+		bitmap, err := makeCanonicalSetValue(ctx, args[1], storageType)
+		if err != nil {
+			return nil, false, err
+		}
+		return []*Expr{args[0], bitmap, makePlan2StringConstExprWithType(storageType.Enumvalues)}, true, nil
+	}
 	if builder != nil && setTypeHasEmptyMember(storageType) {
 		if bitmap, ok := builder.materializeProjectedSetBitmap(args[1], nil); ok {
 			rewritten := make([]*Expr, 0, 3)
@@ -5928,15 +5935,32 @@ func bindFuncExprImplByPlanExpr(
 			return nil, err
 		}
 
-		// Early detection for decimal comparisons
-		if len(args) == 2 {
-			if name == "=" && isDecimalComparisonAlwaysFalse(ctx, args[0], args[1]) {
-				// Equality with incompatible precision is always false
-				return makePlan2BoolConstExprWithType(false), nil
-			}
-			if name == "<>" && isDecimalComparisonAlwaysFalse(ctx, args[0], args[1]) {
-				// Inequality with incompatible precision is always true
-				return makePlan2BoolConstExprWithType(true), nil
+		// A source-scale mismatch can change ordered comparisons as well as
+		// equality. Mark every affected comparison before any narrowing; retain
+		// the legacy constant-folding optimization only for = and <>.
+		if len(args) == 2 && name != "<=>" {
+			markDecimalComparisonProtocolRequirement(nil, args)
+			if name == "=" || name == "<>" {
+				alwaysFalse := isDecimalComparisonAlwaysFalse(ctx, args[0], args[1])
+				columnNotNullable := decimalComparisonColumnIsNotNullable(args)
+				if alwaysFalse && !columnNotNullable {
+					// The legacy binder would fold this comparison, but SQL NULL
+					// semantics require retaining it for a nullable column. Preserve
+					// the decimal fence on the source literal for persisted views.
+					markDecimalComparisonLiteralRequirement(args)
+				}
+				if name == "=" && columnNotNullable && alwaysFalse {
+					// Equality with incompatible precision is always false
+					result := makePlan2BoolConstExprWithType(false)
+					markDecimalComparisonProtocolRequirement(result, args)
+					return result, nil
+				}
+				if name == "<>" && columnNotNullable && alwaysFalse {
+					// Inequality with incompatible precision is always true
+					result := makePlan2BoolConstExprWithType(true)
+					markDecimalComparisonProtocolRequirement(result, args)
+					return result, nil
+				}
 			}
 		}
 	case "date_add", "date_sub":
@@ -6317,7 +6341,7 @@ func bindFuncExprImplByPlanExpr(
 					orExprList = append(orExprList, rightVal)
 					continue
 				}
-				if checkNoNeedCast(makeTypeByPlan2Expr(rightVal), typLeft, rightVal) || partitionIn {
+				if partitionIn || checkNoNeedCast(makeTypeByPlan2Expr(rightVal), typLeft, rightVal) {
 					inExpr := rightVal
 					// Keep the partition-IN coercion path unchanged. Ordinary IN can
 					// retain an already same-typed constant cast; casting UUID to UUID
@@ -8991,8 +9015,21 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 	// for float64, if the number is over 1<<53-1,it will lost, so if typ is float64,
 	// don't cast 0xXXXX as float64, use the uint64
 	returnDecimalExpr := func(val string) (*Expr, error) {
+		canonical := val
+		var normalizedWidth int32
+		if normalized, width, _, ok := normalizePlainDecimalLiteral(val); ok {
+			canonical = normalized
+			normalizedWidth = width
+		}
 		if !typ.IsEmpty() {
-			return appendCastBeforeExpr(b.GetContext(), makePlan2StringConstExprWithType(val), typ)
+			source := canonical
+			isDecimalTarget := types.T(typ.Id).IsDecimal()
+			if !isDecimalTarget {
+				source = val
+			}
+			return appendCastBeforeExpr(b.GetContext(),
+				makePlan2DecimalSourceExpr(source,
+					isDecimalTarget && decimalLiteralRequiresV82(val, canonical, normalizedWidth)), typ)
 		}
 		return makePlan2DecimalExprWithType(b.GetContext(), val)
 	}
@@ -9040,13 +9077,20 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 		}
 		return makePlan2Uint64ConstExprWithType(val), nil
 	case tree.P_decimal:
+		sourceLiteral := astExpr.String()
+		literal := sourceLiteral
+		var normalizedWidth int32
+		if canonical, width, _, ok := normalizePlainDecimalLiteral(sourceLiteral); ok {
+			literal = canonical
+			normalizedWidth = width
+		}
 		if !typ.IsEmpty() {
 			if typ.Id == int32(types.T_decimal64) {
-				d64, err := types.ParseDecimal64(astExpr.String(), typ.Width, typ.Scale)
+				d64, err := types.ParseDecimal64(literal, typ.Width, typ.Scale)
 				if err != nil {
 					return nil, err
 				}
-				return &Expr{
+				expr := &Expr{
 					Expr: &plan.Expr_Lit{
 						Lit: &Const{
 							Isnull: false,
@@ -9056,16 +9100,18 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 						},
 					},
 					Typ: typ,
-				}, nil
+				}
+				markDecimalLiteralRequiresV82(expr, sourceLiteral, literal, normalizedWidth)
+				return expr, nil
 			}
 			if typ.Id == int32(types.T_decimal128) {
-				d128, err := types.ParseDecimal128(astExpr.String(), typ.Width, typ.Scale)
+				d128, err := types.ParseDecimal128(literal, typ.Width, typ.Scale)
 				if err != nil {
 					return nil, err
 				}
 				a := int64(d128.B0_63)
 				b := int64(d128.B64_127)
-				return &Expr{
+				expr := &Expr{
 					Expr: &plan.Expr_Lit{
 						Lit: &Const{
 							Isnull: false,
@@ -9075,15 +9121,28 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 						},
 					},
 					Typ: typ,
-				}, nil
+				}
+				markDecimalLiteralRequiresV82(expr, sourceLiteral, literal, normalizedWidth)
+				return expr, nil
 			}
-			return appendCastBeforeExpr(b.GetContext(), makePlan2StringConstExprWithType(astExpr.String()), typ)
+			source := literal
+			isDecimalTarget := types.T(typ.Id).IsDecimal()
+			if !isDecimalTarget {
+				source = sourceLiteral
+			}
+			return appendCastBeforeExpr(b.GetContext(),
+				makePlan2DecimalSourceExpr(source,
+					isDecimalTarget && decimalLiteralRequiresV82(sourceLiteral, literal, normalizedWidth)), typ)
 		}
 		// Smart type selection for untyped decimal literals
 		// Choose decimal64 if value fits, otherwise decimal128
-		d128, scale, err := types.Parse128(astExpr.String())
+		if isPlainDecimalLiteral(literal) &&
+			decimalLiteralPrecision(literal) > types.T_decimal128.ToType().Width {
+			return makePlan2DecimalExprWithType(b.GetContext(), sourceLiteral)
+		}
+		d128, scale, err := types.Parse128(literal)
 		if err != nil {
-			return makePlan2DecimalExprWithType(b.GetContext(), astExpr.String())
+			return makePlan2DecimalExprWithType(b.GetContext(), sourceLiteral)
 		}
 
 		// Check if value fits in decimal64 (18 digits precision)
@@ -9093,7 +9152,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 
 		if useDecimal64 {
 			d64 := types.Decimal64(d128.B0_63)
-			return &Expr{
+			expr := &Expr{
 				Expr: &plan.Expr_Lit{
 					Lit: &Const{
 						Isnull: false,
@@ -9108,13 +9167,15 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 					Scale:       scale,
 					NotNullable: true,
 				},
-			}, nil
+			}
+			markDecimalLiteralRequiresV82(expr, sourceLiteral, literal, normalizedWidth)
+			return expr, nil
 		}
 
 		// Use decimal128 for higher precision
 		a := int64(d128.B0_63)
 		b := int64(d128.B64_127)
-		return &Expr{
+		expr := &Expr{
 			Expr: &plan.Expr_Lit{
 				Lit: &Const{
 					Isnull: false,
@@ -9129,17 +9190,21 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 				Scale:       scale,
 				NotNullable: true,
 			},
-		}, nil
+		}
+		markDecimalLiteralRequiresV82(expr, sourceLiteral, literal, normalizedWidth)
+		return expr, nil
 	case tree.P_float64:
 		originString := astExpr.String()
 		if !typ.IsEmpty() && types.T(typ.Id).IsDecimal() {
 			return returnDecimalExpr(originString)
 		}
-		if !strings.ContainsAny(originString, "eE") {
-			expr, err := returnDecimalExpr(originString)
-			if err == nil {
-				return expr, nil
-			}
+		// A plain decimal is exact SQL numeric syntax. Keep the decimal error
+		// visible when it cannot be represented, instead of silently changing
+		// the value to an approximate float64. Scientific notation retains its
+		// existing float path because its effective decimal precision depends on
+		// the exponent.
+		if isPlainDecimalLiteral(originString) {
+			return returnDecimalExpr(originString)
 		}
 		floatValue, ok := astExpr.Float64()
 		if !ok {
@@ -9560,6 +9625,11 @@ func useStoredMySQLSpecialTypesForNumericContract(ctx context.Context, name stri
 	if !hasSpecialArg {
 		return args
 	}
+	// SUM/AVG have a numeric operand contract even though their VARCHAR
+	// overload is deliberately rejected. Resolve storage before that lookup.
+	if (name == "sum" || name == "avg") && len(args) == 1 {
+		return rawArgs
+	}
 
 	// The display-bound operands describe the contract selected for this SQL
 	// expression.  In particular, resolving a raw ENUM against a string can
@@ -9894,6 +9964,17 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 	// by converting them to microseconds. Check if firstExpr is a literal with decimal/float type.
 	isTimeUnit := intervalType == types.Second || intervalType == types.Minute ||
 		intervalType == types.Hour || intervalType == types.Day
+	if isTimeUnit {
+		if finalValue, _, handled, err := normalizeDecimalIntervalValue(firstExpr, intervalType); err != nil {
+			return nil, err
+		} else if handled {
+			return []*Expr{
+				dateExpr,
+				makeDecimalIntervalValueExpr(firstExpr, finalValue),
+				makePlan2Int64ConstExprWithType(int64(types.MicroSecond)),
+			}, nil
+		}
+	}
 	isDecimalOrFloat := firstExpr.Typ.Id == int32(types.T_decimal64) ||
 		firstExpr.Typ.Id == int32(types.T_decimal128) ||
 		firstExpr.Typ.Id == int32(types.T_float32) ||
@@ -9901,7 +9982,7 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 
 	// Try to get literal value, either directly or from a cast function
 	var lit *plan.Literal
-	var innerExpr *plan.Expr // The inner expression (for getting scale from cast target type)
+	var innerExpr *plan.Expr
 	if firstExpr.GetLit() != nil {
 		lit = firstExpr.GetLit()
 		innerExpr = firstExpr
@@ -9910,7 +9991,7 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 		// Check if it's a cast function with a literal argument
 		if len(funcExpr.F.Args) > 0 && funcExpr.F.Args[0].GetLit() != nil {
 			lit = funcExpr.F.Args[0].GetLit()
-			innerExpr = firstExpr // Use firstExpr to get the scale from the cast target type
+			innerExpr = firstExpr
 		}
 	}
 
@@ -9927,7 +10008,6 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 				floatVal = float64(fval.Fval)
 				hasValue = true
 			} else if d64val, ok := lit.Value.(*plan.Literal_Decimal64Val); ok {
-				// Convert decimal64 to float64
 				d64 := types.Decimal64(d64val.Decimal64Val.A)
 				scale := innerExpr.Typ.Scale
 				if scale < 0 {
@@ -9936,7 +10016,6 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 				floatVal = types.Decimal64ToFloat64(d64, scale)
 				hasValue = true
 			} else if d128val, ok := lit.Value.(*plan.Literal_Decimal128Val); ok {
-				// Convert decimal128 to float64
 				d128 := types.Decimal128{B0_63: uint64(d128val.Decimal128Val.A), B64_127: uint64(d128val.Decimal128Val.B)}
 				scale := innerExpr.Typ.Scale
 				if scale < 0 {
@@ -9976,7 +10055,7 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 			}
 			return []*Expr{
 				dateExpr,
-				makePlan2Int64ConstExprWithType(finalValue),
+				makeDecimalIntervalValueExpr(firstExpr, finalValue),
 				// Use MicroSecond type since we've converted to microseconds
 				makePlan2Int64ConstExprWithType(int64(types.MicroSecond)),
 			}, nil
@@ -10097,6 +10176,16 @@ func resetIntervalFunctionArgs(ctx context.Context, intervalExpr *Expr) ([]*Expr
 	// by converting them to microseconds. Check if firstExpr is a literal with decimal/float type.
 	isTimeUnit := intervalType == types.Second || intervalType == types.Minute ||
 		intervalType == types.Hour || intervalType == types.Day
+	if isTimeUnit {
+		if finalValue, _, handled, err := normalizeDecimalIntervalValue(firstExpr, intervalType); err != nil {
+			return nil, err
+		} else if handled {
+			return []*Expr{
+				makeDecimalIntervalValueExpr(firstExpr, finalValue),
+				makePlan2Int64ConstExprWithType(int64(types.MicroSecond)),
+			}, nil
+		}
+	}
 	isDecimalOrFloat := firstExpr.Typ.Id == int32(types.T_decimal64) ||
 		firstExpr.Typ.Id == int32(types.T_decimal128) ||
 		firstExpr.Typ.Id == int32(types.T_float32) ||
@@ -10116,7 +10205,6 @@ func resetIntervalFunctionArgs(ctx context.Context, intervalExpr *Expr) ([]*Expr
 				floatVal = float64(fval.Fval)
 				hasValue = true
 			} else if d64val, ok := lit.Value.(*plan.Literal_Decimal64Val); ok {
-				// Convert decimal64 to float64
 				d64 := types.Decimal64(d64val.Decimal64Val.A)
 				scale := firstExpr.Typ.Scale
 				if scale < 0 {
@@ -10125,7 +10213,6 @@ func resetIntervalFunctionArgs(ctx context.Context, intervalExpr *Expr) ([]*Expr
 				floatVal = types.Decimal64ToFloat64(d64, scale)
 				hasValue = true
 			} else if d128val, ok := lit.Value.(*plan.Literal_Decimal128Val); ok {
-				// Convert decimal128 to float64
 				d128 := types.Decimal128{B0_63: uint64(d128val.Decimal128Val.A), B64_127: uint64(d128val.Decimal128Val.B)}
 				scale := firstExpr.Typ.Scale
 				if scale < 0 {
@@ -10156,7 +10243,7 @@ func resetIntervalFunctionArgs(ctx context.Context, intervalExpr *Expr) ([]*Expr
 				finalValue = int64(floatVal)
 			}
 			return []*Expr{
-				makePlan2Int64ConstExprWithType(finalValue),
+				makeDecimalIntervalValueExpr(firstExpr, finalValue),
 				// Use MicroSecond type since we've converted to microseconds
 				makePlan2Int64ConstExprWithType(int64(types.MicroSecond)),
 			}, nil
