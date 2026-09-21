@@ -2577,3 +2577,127 @@ func TestResultColumnSourceFromVectorIndexScanFailsClosedForNonIvfflat(t *testin
 	missingIndex := &plan.VectorIndexScan{SourceTable: sourceRef, SourceTableDef: sourceTable}
 	require.Nil(t, resultColumnSourceFromVectorIndexScan(missingIndex, vectorTableDef, 0))
 }
+
+// TestResultColumnSourceFromVectorIndexScanFailClosedBranches exercises every fail-closed
+// branch of the IVFFlat synthetic-schema resolver so a malformed/pruned VECTOR_INDEX_SCAN
+// can never mis-resolve a source column (#29212).
+func TestResultColumnSourceFromVectorIndexScanFailClosedBranches(t *testing.T) {
+	sourceTable := &plan.TableDef{
+		Name:          "source_table",
+		DbName:        "source_db",
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		Cols:          []*plan.ColDef{{Name: "id", Primary: true}, {Name: "payload"}},
+		Name2ColIndex: map[string]int32{"id": 0, "payload": 1},
+	}
+	ivfIndex := &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()}
+	newScan := func() *plan.VectorIndexScan {
+		return &plan.VectorIndexScan{SourceTableDef: sourceTable, Index: ivfIndex}
+	}
+	includeCol := catalog.SystemSI_IVFFLAT_IncludeColPrefix + "payload"
+	vecCols := func(names ...string) *plan.TableDef {
+		cols := make([]*plan.ColDef, len(names))
+		for i, n := range names {
+			cols[i] = &plan.ColDef{Name: n}
+		}
+		return &plan.TableDef{Cols: cols}
+	}
+
+	// nil-guard branch (scan/SourceTableDef/vectorTableDef nil, negative colPos).
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(nil, vecCols("pkid"), 0))
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(&plan.VectorIndexScan{Index: ivfIndex}, vecCols("pkid"), 0))
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(newScan(), nil, 0))
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(newScan(), vecCols("pkid"), -1))
+
+	// colPos past the synthetic schema.
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(newScan(), vecCols("pkid"), 5))
+
+	// nil column slot.
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(newScan(), &plan.TableDef{Cols: []*plan.ColDef{nil}}, 0))
+
+	// score slot never maps to a source column.
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(newScan(), vecCols("score"), 0))
+
+	// include prefix with an empty include name.
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(newScan(), vecCols(catalog.SystemSI_IVFFLAT_IncludeColPrefix), 0))
+
+	// include name not listed in IncludedColumns.
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(newScan(), vecCols(includeCol), 0))
+
+	// include name listed but absent from the source table.
+	missingScan := newScan()
+	missingScan.IncludedColumns = []string{"payload"}
+	missingScan.SourceTableDef = &plan.TableDef{
+		Name:          "source_table",
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		Cols:          []*plan.ColDef{{Name: "id", Primary: true}},
+		Name2ColIndex: map[string]int32{"id": 0},
+	}
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(missingScan, vecCols(includeCol), 0))
+
+	// unknown synthetic column name (default branch).
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(newScan(), vecCols("mystery"), 0))
+
+	// pkid slot but the source primary key is unresolvable (position not found).
+	noPkScan := newScan()
+	noPkScan.SourceTableDef = &plan.TableDef{
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		Cols:          []*plan.ColDef{{Name: "payload"}},
+		Name2ColIndex: map[string]int32{"payload": 0},
+	}
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(noPkScan, vecCols("pkid"), 0))
+}
+
+// TestResultColumnSourceFromVectorIndexScanCompletesNamesFromObjectRef covers the ObjectRef
+// name-completion branch: when SourceTableDef leaves db/table names empty, the resolved source
+// is completed from the scan's authoritative ObjectRef (DbName, then SchemaName, then ObjName).
+func TestResultColumnSourceFromVectorIndexScanCompletesNamesFromObjectRef(t *testing.T) {
+	// SourceTableDef with no db/table names so the resolved source starts blank.
+	sourceTable := &plan.TableDef{
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		Cols:          []*plan.ColDef{{Name: "id", Primary: true}},
+		Name2ColIndex: map[string]int32{"id": 0},
+	}
+	vectorTableDef := &plan.TableDef{Cols: []*plan.ColDef{{Name: "pkid"}}}
+
+	// DbName present on the ObjectRef fills the db name; ObjName fills the table name.
+	byDbName := &plan.VectorIndexScan{
+		SourceTable:    &plan.ObjectRef{DbName: "db1", ObjName: "tbl1"},
+		SourceTableDef: sourceTable,
+		Index:          &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()},
+	}
+	got := resultColumnSourceFromVectorIndexScan(byDbName, vectorTableDef, 0)
+	require.NotNil(t, got)
+	require.Equal(t, "db1", got.dbName)
+	require.Equal(t, "tbl1", got.tableName)
+
+	// With an empty DbName the SchemaName is used as the fallback.
+	bySchema := &plan.VectorIndexScan{
+		SourceTable:    &plan.ObjectRef{SchemaName: "schema1", ObjName: "tbl2"},
+		SourceTableDef: sourceTable,
+		Index:          &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()},
+	}
+	got = resultColumnSourceFromVectorIndexScan(bySchema, vectorTableDef, 0)
+	require.NotNil(t, got)
+	require.Equal(t, "schema1", got.dbName)
+	require.Equal(t, "tbl2", got.tableName)
+}
+
+// TestResultColumnPositionByNameGuards covers the nil/empty guards of the by-name lookup helper.
+func TestResultColumnPositionByNameGuards(t *testing.T) {
+	pos, ok := resultColumnPositionByName(nil, "id")
+	require.False(t, ok)
+	require.Equal(t, int32(-1), pos)
+
+	pos, ok = resultColumnPositionByName(&plan.TableDef{}, "")
+	require.False(t, ok)
+	require.Equal(t, int32(-1), pos)
+}
+
+// TestResultColumnPrimaryKeyPositionUnresolvable covers the branch where the declared primary
+// key column name is not present among the table columns.
+func TestResultColumnPrimaryKeyPositionUnresolvable(t *testing.T) {
+	require.Equal(t, int32(-1), resultColumnPrimaryKeyPosition(&plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
+		Cols: []*plan.ColDef{{Name: "payload"}},
+	}))
+}
