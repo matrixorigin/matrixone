@@ -159,13 +159,29 @@ func TestMaterializedSinkScanConcurrentProductionReaders(t *testing.T) {
 	}
 
 	errCh := make(chan error, len(readers))
+	readOne := func(reader *merge.Merge) (vm.CallResult, error) {
+		for {
+			result, err := reader.Call(proc)
+			if err != nil || result.Status != vm.ExecWaiting {
+				return result, err
+			}
+			if result.OnReady == nil {
+				return result, moerr.NewInternalErrorNoCtx("materialized reader returned ExecWaiting without callback")
+			}
+			ready := make(chan struct{}, 1)
+			if err := result.OnReady(func() { ready <- struct{}{} }); err != nil {
+				return result, err
+			}
+			<-ready
+		}
+	}
 	var wg sync.WaitGroup
 	for _, reader := range readers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			for i := range inputs {
-				result, err := reader.Call(proc)
+				result, err := readOne(reader)
 				if err != nil {
 					errCh <- err
 					return
@@ -177,7 +193,7 @@ func TestMaterializedSinkScanConcurrentProductionReaders(t *testing.T) {
 					return
 				}
 			}
-			result, err := reader.Call(proc)
+			result, err := readOne(reader)
 			if err != nil {
 				errCh <- err
 				return

@@ -143,10 +143,7 @@ func (f *adaptiveFixture) read(t *testing.T) (values []int64) {
 		result, err := vm.Exec(f.op, f.proc)
 		require.NoError(t, err)
 		if result.Status == vm.ExecWaiting {
-			require.NotNil(t, result.OnReady)
-			ready := make(chan struct{}, 1)
-			require.NoError(t, result.OnReady(func() { ready <- struct{}{} }))
-			<-ready
+			waitAdaptiveResult(t, result)
 			continue
 		}
 		if result.Batch != nil {
@@ -155,6 +152,48 @@ func (f *adaptiveFixture) read(t *testing.T) (values []int64) {
 		if result.Status == vm.ExecStop {
 			return values
 		}
+	}
+}
+
+// waitAdaptiveResult drives the readiness callback exposed by the event-driven
+// VM boundary. Tests that assert a terminal error must continue through every
+// intermediate quantum; a single vm.Exec call is no longer guaranteed to
+// consume a whole child stream.
+func waitAdaptiveResult(t *testing.T, result vm.CallResult) {
+	t.Helper()
+	require.Equal(t, vm.ExecWaiting, result.Status)
+	require.NotNil(t, result.OnReady)
+	ready := make(chan struct{}, 1)
+	require.NoError(t, result.OnReady(func() { ready <- struct{}{} }))
+	<-ready
+}
+
+func runAdaptiveUntilTerminal(t *testing.T, f *adaptiveFixture) (vm.CallResult, error) {
+	t.Helper()
+	for {
+		result, err := vm.Exec(f.op, f.proc)
+		if err != nil || result.Status == vm.ExecStop {
+			return result, err
+		}
+		if result.Status == vm.ExecWaiting {
+			waitAdaptiveResult(t, result)
+		}
+	}
+}
+
+func readAdaptiveBatch(t *testing.T, f *adaptiveFixture) vm.CallResult {
+	t.Helper()
+	for {
+		result, err := vm.Exec(f.op, f.proc)
+		require.NoError(t, err)
+		if result.Status == vm.ExecWaiting {
+			waitAdaptiveResult(t, result)
+			continue
+		}
+		if result.Batch != nil {
+			return result
+		}
+		require.NotEqual(t, vm.ExecStop, result.Status, "adaptive top stopped before producing a batch")
 	}
 }
 
@@ -227,7 +266,7 @@ func TestAdaptiveTopRejectsCandidateErrorsWithoutPublication(t *testing.T) {
 			})
 			f.op.SetBranchWaiter(func(branch int, _ func(error)) error { waits++; return wantErr })
 			require.NoError(t, vm.Prepare(f.op, f.proc))
-			result, err := vm.Exec(f.op, f.proc)
+			result, err := runAdaptiveUntilTerminal(t, f)
 			if where == "page overflow" {
 				require.ErrorContains(t, err, "exceeded its final page limit")
 			} else {
@@ -260,15 +299,21 @@ func TestAdaptiveTopCancellationBeforePublish(t *testing.T) {
 			}
 			require.NoError(t, vm.Prepare(f.op, f.proc))
 			if phase == "during replay" {
-				result, err := vm.Exec(f.op, f.proc)
-				require.NoError(t, err)
+				result := readAdaptiveBatch(t, f)
 				require.Equal(t, 1, result.Batch.RowCount())
 				cancel(wantErr)
 			} else if phase == "before start" {
 				cancel(wantErr)
 			}
-			// 直接覆盖算子的取消入口；vm.Exec 自身会先返回 ctx.Err。
-			result, err := f.op.Call(f.proc)
+			// 直接覆盖算子的取消入口；完成回调可能先返回一个等待量子，
+			// 因此通过 VM 驱动它直到取消被观察到。
+			var result vm.CallResult
+			var err error
+			if phase == "after completion" {
+				result, err = runAdaptiveUntilTerminal(t, f)
+			} else {
+				result, err = f.op.Call(f.proc)
+			}
 			require.ErrorIs(t, err, wantErr)
 			require.Nil(t, result.Batch)
 			require.Zero(t, f.account.Snapshot().Used)
@@ -355,7 +400,7 @@ func TestAdaptiveTopRetainedBatchBoundFailsClosed(t *testing.T) {
 		return nil
 	})
 	require.NoError(t, vm.Prepare(f.op, f.proc))
-	result, err := vm.Exec(f.op, f.proc)
+	result, err := runAdaptiveUntilTerminal(t, f)
 	require.ErrorContains(t, err, "spill is unavailable")
 	require.Nil(t, result.Batch)
 	require.Zero(t, f.account.Snapshot().Used)
@@ -443,11 +488,10 @@ func TestAdaptiveTopPipelineCleanupAfterVMCancellation(t *testing.T) {
 	f.proc.Ctx = ctx
 	f.install(t, [][][]int64{{{1}, {2}}, {}, {}})
 	require.NoError(t, vm.Prepare(f.op, f.proc))
-	result, err := vm.Exec(f.op, f.proc)
-	require.NoError(t, err)
+	result := readAdaptiveBatch(t, f)
 	require.NotNil(t, result.Batch)
 	cancel()
-	_, err = vm.Exec(f.op, f.proc)
+	_, err := runAdaptiveUntilTerminal(t, f)
 	require.ErrorIs(t, err, context.Canceled)
 	// VM 在 Call 前取消，spool 由 pipeline 的常规 Reset 释放。
 	f.child.Reset(f.proc, true, err)

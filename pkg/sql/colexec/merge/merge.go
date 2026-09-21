@@ -58,24 +58,38 @@ func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 	analyzer := merge.OpAnalyzer
 	if merge.MaterializedSource != nil {
 		merge.cleanMaterializedBatch(proc)
-		bat, end, err := merge.MaterializedSource.Next(proc.Ctx, merge.MaterializedReaderID, merge.ctr.materializedPosition)
-		if err != nil {
-			return vm.CancelResult, err
-		}
-		result := vm.NewCallResult()
-		if end {
-			result.Status = vm.ExecStop
-			return result, nil
-		}
-		merge.ctr.materializedPosition++
-		merge.ctr.materializedBatch = bat
-		result.Batch = bat
-		return result, nil
 	}
 
 	var info error
 	result := vm.NewCallResult()
 	for {
+		if merge.MaterializedSource != nil {
+			bat, end, err, ready := merge.MaterializedSource.TryNext(
+				merge.MaterializedReaderID, merge.ctr.materializedPosition)
+			if !ready {
+				result.Status = vm.ExecWaiting
+				result.OnReady = func(callback func()) error {
+					return merge.MaterializedSource.RegisterReady(
+						merge.MaterializedReaderID,
+						merge.ctr.materializedPosition,
+						callback,
+					)
+				}
+				return result, nil
+			}
+			if err != nil {
+				return vm.CancelResult, err
+			}
+			if end {
+				result.Status = vm.ExecStop
+				return result, nil
+			}
+			merge.ctr.materializedPosition++
+			merge.ctr.materializedBatch = bat
+			result.Batch = bat
+			return result, nil
+		}
+
 		var progressed bool
 		result.Batch, info, progressed = merge.ctr.receiver.TryGetNextBatch(analyzer)
 		if info != nil {

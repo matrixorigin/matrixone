@@ -381,6 +381,13 @@ func (s *Scope) runEventAsync(c *Compile, done func(error)) (err error) {
 		done(nil)
 		return nil
 	}
+	// Parallel/remote scope construction can introduce operators after the
+	// statement-level allocation owner walk has run. Reconcile this scope at
+	// the execution boundary so every event-driven continuation observes the
+	// same account before vm.Prepare allocates join/hash state.
+	if err := c.attachRuntimeAllocationOwners([]*Scope{s}); err != nil {
+		return err
+	}
 	// Some compile-time helper scopes are built with NewNoContextChildProc and
 	// are not reachable from the top-level context walk.  A continuation must
 	// always own a live pipeline context: otherwise cancellation cannot wake a

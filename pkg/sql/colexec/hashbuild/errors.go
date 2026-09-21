@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -50,6 +51,12 @@ func terminalBudgetError(
 	err error,
 ) error {
 	if err == nil {
+		return err
+	}
+	// YieldError is scheduler control flow, not an execution failure. Keep it
+	// discoverable by the pipeline continuation even when an operator reaches
+	// this resource-error boundary while waiting on a child or mailbox.
+	if _, ok := vm.AsYieldError(err); ok {
 		return err
 	}
 	// A joined lifecycle/accounting failure is not a capacity rejection. Keep

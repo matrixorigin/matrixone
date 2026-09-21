@@ -105,6 +105,11 @@ type container struct {
 	diagnosticsLogged bool
 	hashmapBuilder    HashmapBuilder
 	spilledFds        []*os.File // anonymous build-side spill fds (ownership transferred to JoinMap)
+	// spillFiles/spillMode retain an in-progress spill across a resumable child
+	// wait. HashBuild.Call may be re-entered after a YieldError, so spill state
+	// cannot live only in the build method's stack frame.
+	spillFiles []*os.File
+	spillMode  bool
 	// spillBundle keeps the resource reservations associated with spilledFds.
 	// Build owns the bundle until the JoinMap publication wins; after that the
 	// JoinMap/SpillEngine handoff owns it and invokes release exactly once.
@@ -718,6 +723,14 @@ func (hashBuild *HashBuild) publishBuildError(proc *process.Process, err error) 
 }
 
 func (hashBuild *HashBuild) cleanupSpillFiles(proc *process.Process) {
+	for i, fd := range hashBuild.ctr.spillFiles {
+		if fd != nil {
+			fd.Close()
+			hashBuild.ctr.spillFiles[i] = nil
+		}
+	}
+	hashBuild.ctr.spillFiles = nil
+	hashBuild.ctr.spillMode = false
 	for i, fd := range hashBuild.ctr.spilledFds {
 		if fd != nil {
 			fd.Close()

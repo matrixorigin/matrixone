@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -125,6 +126,12 @@ func TestTerminalBudgetError(t *testing.T) {
 			require.Same(t, joined, TerminalBudgetError(context.Background(), joined))
 		})
 	}
+
+	t.Run("scheduler yield passes through", func(t *testing.T) {
+		yield := vm.NewYieldError(func(func()) error { return nil })
+		require.Same(t, yield, TerminalBudgetError(context.Background(), yield))
+		require.Same(t, yield, TerminalBudgetErrorForOperator(context.Background(), "hash build", yield))
+	})
 }
 
 func TestTerminalBudgetErrorForOperator(t *testing.T) {

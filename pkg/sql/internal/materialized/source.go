@@ -43,8 +43,9 @@ import (
 type Source struct {
 	mu sync.Mutex
 
-	notify chan struct{}
-	mp     *mpool.MPool
+	notify         chan struct{}
+	mp             *mpool.MPool
+	readyCallbacks []sourceReadyCallback
 
 	batches            []*batch.Batch
 	bytes              int64
@@ -69,6 +70,12 @@ type Source struct {
 
 	readerReleased   []bool
 	producerReleased bool
+}
+
+type sourceReadyCallback struct {
+	readerID int
+	position int
+	fn       func()
 }
 
 // MaxSourceRetainedBytes is the per-source in-memory retention bound before
@@ -177,6 +184,7 @@ func (s *Source) Begin(mp *mpool.MPool, spillConfig ...SpillConfig) error {
 	s.cleanLocked()
 	s.generation++
 	s.notify = make(chan struct{})
+	s.readyCallbacks = nil
 	s.mp = mp
 	s.spillConfig = SpillConfig{}
 	s.allocation = nil
@@ -214,6 +222,99 @@ func (s *Source) Begin(mp *mpool.MPool, spillConfig ...SpillConfig) error {
 	clear(s.spillReadOffsets)
 	clear(s.spillReadPositions)
 	clear(s.spillReadersActive)
+	return nil
+}
+
+// TryNext performs one non-blocking materialized-source read. The ready return
+// value is false only when the requested position is not published yet and the
+// producer has not finished. Callers that receive ready=false must register
+// RegisterReady before yielding; the registration closes the check/register
+// race against Append and Finish.
+func (s *Source) TryNext(readerID, position int) (bat *batch.Batch, end bool, err error, ready bool) {
+	if s == nil {
+		return nil, true, moerr.NewInternalErrorNoCtx("nil materialized sink source"), true
+	}
+	s.mu.Lock()
+	if readerID < 0 || readerID >= len(s.readerReleased) || s.readerReleased[readerID] {
+		s.mu.Unlock()
+		return nil, true, moerr.NewInternalErrorNoCtx("invalid materialized sink reader"), true
+	}
+	if position >= 0 && position < len(s.batches) {
+		bat, err = s.batches[position].Dup(s.mp)
+		s.mu.Unlock()
+		return bat, false, err, true
+	}
+	if position >= s.spillStartPosition && position < s.spillStartPosition+s.spillBatchCount {
+		if s.spillReadersActive[readerID] || position != s.spillStartPosition+s.spillReadPositions[readerID] {
+			s.mu.Unlock()
+			return nil, true, moerr.NewInternalErrorNoCtx("materialized sink reader position is not sequential"), true
+		}
+		s.spillReadersActive[readerID] = true
+		file := s.spillFile
+		offset := s.spillReadOffsets[readerID]
+		availableBytes := s.spillBytes
+		generation := s.generation
+		mp := s.mp
+		budget := s.spillConfig.Budget
+		allocation := s.allocation
+		s.mu.Unlock()
+
+		decoded, nextOffset, readErr := readSpilledBatch(
+			file, offset, availableBytes, mp, budget, allocation,
+		)
+
+		s.mu.Lock()
+		if s.generation == generation && readerID < len(s.spillReadersActive) {
+			s.spillReadersActive[readerID] = false
+		}
+		if readErr != nil {
+			s.mu.Unlock()
+			return nil, true, readErr, true
+		}
+		if s.generation != generation || !s.active || s.readerReleased[readerID] {
+			s.mu.Unlock()
+			decoded.Clean(mp)
+			return nil, true, moerr.NewInternalErrorNoCtx("materialized sink source stopped while reading spill data"), true
+		}
+		s.spillReadOffsets[readerID] = nextOffset
+		s.spillReadPositions[readerID]++
+		s.mu.Unlock()
+		return decoded, false, nil, true
+	}
+	if s.done {
+		err = s.err
+		s.mu.Unlock()
+		return nil, true, err, true
+	}
+	s.mu.Unlock()
+	return nil, false, nil, false
+}
+
+// RegisterReady arms a one-shot callback for a reader position that is not
+// available yet. Source publication wakes only callbacks whose requested
+// position became readable (or whose source reached a terminal state), so a
+// reader cannot spin when another reader advances the source.
+func (s *Source) RegisterReady(readerID, position int, callback func()) error {
+	if callback == nil {
+		return moerr.NewInvalidInputNoCtx("nil materialized source readiness callback")
+	}
+	if s == nil {
+		callback()
+		return nil
+	}
+	s.mu.Lock()
+	ready := s.readyForLocked(readerID, position)
+	if !ready {
+		s.readyCallbacks = append(s.readyCallbacks, sourceReadyCallback{
+			readerID: readerID,
+			position: position,
+			fn:       callback,
+		})
+	}
+	s.mu.Unlock()
+	if ready {
+		callback()
+	}
 	return nil
 }
 
@@ -895,6 +996,34 @@ func (s *Source) unreleasedReaderIDsLocked() []int {
 func (s *Source) wakeLocked() {
 	close(s.notify)
 	s.notify = make(chan struct{})
+	if len(s.readyCallbacks) == 0 {
+		return
+	}
+	remaining := s.readyCallbacks[:0]
+	for _, callback := range s.readyCallbacks {
+		if s.readyForLocked(callback.readerID, callback.position) {
+			// Publication callbacks only re-admit a continuation. They do not
+			// execute a source read inline, so invoking them while the source
+			// mutex is held cannot re-enter Source.Next/TryNext.
+			callback.fn()
+		} else {
+			remaining = append(remaining, callback)
+		}
+	}
+	s.readyCallbacks = remaining
+}
+
+func (s *Source) readyForLocked(readerID, position int) bool {
+	if readerID < 0 || readerID >= len(s.readerReleased) || s.readerReleased[readerID] {
+		return true
+	}
+	if position >= 0 && position < len(s.batches) {
+		return true
+	}
+	if position >= s.spillStartPosition && position < s.spillStartPosition+s.spillBatchCount {
+		return true
+	}
+	return s.done || !s.active
 }
 
 func (s *Source) failLocked(err error) {

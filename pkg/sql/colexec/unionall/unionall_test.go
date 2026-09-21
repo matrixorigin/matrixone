@@ -226,7 +226,10 @@ func TestSequentialUnionAllCancellationDoesNotActivateNextReceiver(t *testing.T)
 		return nil
 	})
 
-	result, err := arg.Call(proc)
+	// Drive the operator through the VM entry point. A direct Call may expose
+	// the event-driven child wait as YieldError before the cancellation-aware
+	// continuation gets a chance to observe the canceled context.
+	result, err := vm.Exec(arg, proc)
 	require.ErrorIs(t, err, context.Canceled)
 	require.Equal(t, vm.ExecStop, result.Status)
 	require.Equal(t, int32(2), cancelCtx.calls.Load())

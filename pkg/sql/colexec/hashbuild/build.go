@@ -120,6 +120,13 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 		case BuildHashMap:
 			if err := hashBuild.build(proc, analyzer); err != nil {
 				err = TerminalBudgetError(proc.Ctx, err)
+				if _, ok := vm.AsYieldError(err); ok {
+					// A child input wait is resumable control flow. Do not publish
+					// it as a terminal build failure: JoinMapBuildError snapshots
+					// non-moerr errors as internal errors and would lose the ready
+					// callback across the dependency boundary.
+					return result, err
+				}
 				hashBuild.finalizeBuildFailure(proc, err)
 				return result, err
 			}
@@ -129,6 +136,9 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 		case HandleRuntimeFilter:
 			if err := hashBuild.handleRuntimeFilter(proc); err != nil {
 				err = TerminalBudgetError(proc.Ctx, err)
+				if _, ok := vm.AsYieldError(err); ok {
+					return result, err
+				}
 				hashBuild.finalizeBuildFailure(proc, err)
 				return result, err
 			}
@@ -243,8 +253,8 @@ func (hashBuild *HashBuild) build(
 ) (retErr error) {
 	ctr := &hashBuild.ctr
 	ctr.spillConditions = hashBuild.Conditions
-	spillMode := false
-	var spillFiles []*os.File
+	spillMode := ctr.spillMode
+	spillFiles := ctr.spillFiles
 	bundleTransferred := false
 
 	ensureRecovery := func(projection recoveryBatchProjection) error {
@@ -260,12 +270,25 @@ func (hashBuild *HashBuild) build(
 	}
 
 	defer func() {
+		// A child wait is a resumable continuation, not a terminal build. Keep
+		// expression executors, retained vectors, and in-progress spill state
+		// alive across the next Call; the local build loop is re-entered after
+		// the child publishes readiness. Cleaning them here would make the
+		// resumed build evaluate with empty executor state and report a bogus
+		// invalid allocation account.
+		if _, yielded := vm.AsYieldError(retErr); yielded {
+			ctr.spillMode = spillMode
+			ctr.spillFiles = spillFiles
+			return
+		}
 		observeExecutionResourceBudget(analyzer, ctr.hashmapBuilder.budget)
 		for _, f := range spillFiles {
 			if f != nil {
 				f.Close()
 			}
 		}
+		ctr.spillFiles = nil
+		ctr.spillMode = false
 		if !bundleTransferred && ctr.spillBundle != nil {
 			ctr.spillBundle.release()
 			ctr.spillBundle = nil
@@ -308,6 +331,8 @@ func (hashBuild *HashBuild) build(
 			spillFiles = make([]*os.File, spillNumBuckets)
 		}
 		spillMode = true
+		ctr.spillMode = true
+		ctr.spillFiles = spillFiles
 		analyzer.GetOpStats().AddExtraStat("HashBuildSpillStarts", 1)
 		// Drain retained copies oldest-first.  Each successful partition is
 		// followed immediately by reservation and mpool release, so the source
@@ -564,6 +589,8 @@ func (hashBuild *HashBuild) build(
 			}
 		}
 		ctr.spilledFds = spillFiles
+		ctr.spillFiles = nil
+		ctr.spillMode = false
 		spillFiles = nil
 		bundleTransferred = true
 	}

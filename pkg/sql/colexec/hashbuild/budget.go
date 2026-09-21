@@ -110,11 +110,12 @@ func (hb *HashmapBuilder) copyBuildBatch(
 	if hb.batchAllocation == nil {
 		return mpool.ErrAllocationAccountInvalid
 	}
-	return hb.Batches.CopyIntoBatchesWithAllocation(
+	err := hb.Batches.CopyIntoBatchesWithAllocation(
 		src,
 		proc,
 		hb.batchAllocation,
 	)
+	return err
 }
 
 // CopyBuildBatch is the exported boundary used by spill and integration tests.
