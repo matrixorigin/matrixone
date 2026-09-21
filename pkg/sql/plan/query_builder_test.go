@@ -6139,6 +6139,110 @@ func TestQueryBuilder_bindValues(t *testing.T) {
 	assert.Equal(t, 1, len(selectList))
 }
 
+func TestQueryBuilderBindValuesUsesColumnCommonType(t *testing.T) {
+	bindValues := func(t *testing.T, rows string) *plan.Node {
+		t.Helper()
+		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+		bindCtx := NewBindContext(builder, nil)
+
+		stmts, err := parsers.Parse(
+			context.TODO(), dialect.MYSQL,
+			"select score from (values "+rows+") as tmp(score)", 1)
+		require.NoError(t, err)
+		tables := stmts[0].(*tree.Select).Select.(*tree.SelectClause).From.Tables
+		joinTable := tables[0].(*tree.JoinTableExpr)
+		aliasedTable := joinTable.Left.(*tree.AliasedTableExpr)
+		parenTable := aliasedTable.Expr.(*tree.ParenTableExpr)
+		valuesClause := parenTable.Expr.(*tree.Select).Select.(*tree.ValuesClause)
+
+		nodeID, _, err := builder.bindValues(bindCtx, valuesClause)
+		require.NoError(t, err)
+		return builder.qry.Nodes[nodeID]
+	}
+
+	for _, test := range []struct {
+		name        string
+		rows        string
+		oid         types.T
+		width       int32
+		scale       int32
+		notNullable bool
+	}{
+		{
+			name:        "decimal scale grows",
+			rows:        "row(26.27946), row(15.2667265)",
+			oid:         types.T_decimal64,
+			width:       9,
+			scale:       7,
+			notNullable: true,
+		},
+		{
+			name:        "decimal scale is order independent",
+			rows:        "row(15.2667265), row(26.27946)",
+			oid:         types.T_decimal64,
+			width:       9,
+			scale:       7,
+			notNullable: true,
+		},
+		{
+			name:  "bare null before decimal",
+			rows:  "row(null), row(26.27946)",
+			oid:   types.T_decimal64,
+			width: 7,
+			scale: 5,
+		},
+		{
+			name:  "bare null after decimal",
+			rows:  "row(26.27946), row(null)",
+			oid:   types.T_decimal64,
+			width: 7,
+			scale: 5,
+		},
+		{
+			name:  "all bare null",
+			rows:  "row(null), row(null)",
+			oid:   types.T_text,
+			width: 0,
+			scale: 0,
+		},
+		{
+			name:        "integer literal joins decimal precision",
+			rows:        "row(1), row(2.50)",
+			oid:         types.T_decimal64,
+			width:       3,
+			scale:       2,
+			notNullable: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			node := bindValues(t, test.rows)
+			require.Len(t, node.TableDef.Cols, 1)
+			columnType := node.TableDef.Cols[0].Typ
+			require.Equal(t, int32(test.oid), columnType.Id)
+			require.Equal(t, test.width, columnType.Width)
+			require.Equal(t, test.scale, columnType.Scale)
+			require.Equal(t, test.notNullable, columnType.NotNullable)
+
+			require.Len(t, node.RowsetData.Cols, 1)
+			for _, row := range node.RowsetData.Cols[0].Data {
+				require.Equal(t, columnType.Id, row.Expr.Typ.Id)
+				require.Equal(t, columnType.Width, row.Expr.Typ.Width)
+				require.Equal(t, columnType.Scale, row.Expr.Typ.Scale)
+			}
+		})
+	}
+
+	t.Run("vector remains vector", func(t *testing.T) {
+		node := bindValues(t, "row(cast('[1,2,3]' as vecf32(3)))")
+		columnType := node.TableDef.Cols[0].Typ
+		require.Equal(t, int32(types.T_array_float32), columnType.Id)
+		require.Equal(t, int32(3), columnType.Width)
+		require.Len(t, node.RowsetData.Cols[0].Data, 1)
+		require.Equal(t, columnType.Id, node.RowsetData.Cols[0].Data[0].Expr.Typ.Id)
+		require.Equal(t, columnType.Width, node.RowsetData.Cols[0].Data[0].Expr.Typ.Width)
+	})
+}
+
 func TestQueryBuilderBuildValuesAndTableSubqueries(t *testing.T) {
 	for _, sql := range []string{
 		"select (values row(1))",

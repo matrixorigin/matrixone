@@ -28,3 +28,23 @@ column_1
 select column_2 from (values row(0, 1, cast('[3, 4, 5]' as vecf32(3)))) as v;
 column_2
 [3, 4, 5]
+select ord, score from (values row(1, 26.27946), row(2, 15.2667265)) as v(ord, score) order by ord;
+ord    score
+1    26.2794600
+2    15.2667265
+select ord, score from (values row(1, 15.2667265), row(2, 26.27946)) as v(ord, score) order by ord;
+ord    score
+1    15.2667265
+2    26.2794600
+select ord, score from (values row(1, null), row(2, 26.27946)) as v(ord, score) order by ord;
+ord    score
+1    NULL
+2    26.27946
+select ord, score from (values row(1, 26.27946), row(2, null)) as v(ord, score) order by ord;
+ord    score
+1    26.27946
+2    NULL
+select score from (values row(null), row(null)) as v(score);
+score
+NULL
+NULL
