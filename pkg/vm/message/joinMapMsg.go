@@ -646,6 +646,87 @@ func ReceiveJoinMap(tag int32, isShuffle bool, shuffleIdx int32, mb *MessageBoar
 	return result.JoinMap(), nil
 }
 
+// JoinMapReceiver is the resumable form of ReceiveJoinMapResult. It owns one
+// MessageReceiver offset and never blocks: TryReceive either consumes the
+// finalized dependency, or reports that the caller must wait for RegisterReady.
+type JoinMapReceiver struct {
+	receiver   *MessageReceiver
+	tag        int32
+	board      *MessageBoard
+	isShuffle  bool
+	shuffleIdx int32
+}
+
+func NewJoinMapReceiver(tag int32, isShuffle bool, shuffleIdx int32, mb *MessageBoard) *JoinMapReceiver {
+	return &JoinMapReceiver{
+		receiver:   NewMessageReceiver([]int32{tag}, AddrBroadCastOnCurrentCN(), mb),
+		tag:        tag,
+		board:      mb,
+		isShuffle:  isShuffle,
+		shuffleIdx: shuffleIdx,
+	}
+}
+
+// TryReceive returns ready=false only when no finalized matching dependency is
+// currently available. A closed board is terminal and is returned as an error.
+func (receiver *JoinMapReceiver) TryReceive() (result JoinMapResult, ready bool, err error) {
+	if receiver == nil || receiver.receiver == nil {
+		return JoinMapResult{}, true, moerr.NewInternalErrorNoCtx("nil join map receiver")
+	}
+	msgs, closed := receiver.receiver.receiveMessageNonBlock()
+	for i := range msgs {
+		msg, ok := msgs[i].(JoinMapMsg)
+		if !ok {
+			return JoinMapResult{}, true, moerr.NewInternalErrorNoCtx("expect join map message, receive unknown message")
+		}
+		if receiver.isShuffle || msg.IsShuffle {
+			if receiver.shuffleIdx != msg.ShuffleIdx {
+				continue
+			}
+		}
+		if !msg.Result.Finalized() {
+			continue
+		}
+		if buildErr := msg.Result.BuildError(); buildErr != nil {
+			return msg.Result, true, nil
+		}
+		if jm := msg.Result.JoinMap(); jm != nil && !jm.IsValid() {
+			return JoinMapResult{}, true, moerr.NewInternalErrorNoCtx("join receive a joinmap which has been freed")
+		}
+		return msg.Result, true, nil
+	}
+	if closed {
+		return JoinMapResult{}, true, moerr.NewInternalErrorNoCtx("message board is closed")
+	}
+	return JoinMapResult{}, false, nil
+}
+
+func (receiver *JoinMapReceiver) RegisterReady(callback func()) error {
+	if receiver == nil || receiver.receiver == nil {
+		if callback != nil {
+			callback()
+		}
+		return nil
+	}
+	return receiver.receiver.RegisterReady(callback)
+}
+
+// Receive is the synchronous boundary for direct VM callers that do not run
+// under a query scheduler. Production Scope continuations use TryReceive and
+// RegisterReady instead, so no scheduler worker waits on the message board.
+func (receiver *JoinMapReceiver) Receive(ctx context.Context) (JoinMapResult, error) {
+	if receiver == nil {
+		return JoinMapResult{}, moerr.NewInternalErrorNoCtx("nil join map receiver")
+	}
+	return ReceiveJoinMapResult(
+		receiver.tag,
+		receiver.isShuffle,
+		receiver.shuffleIdx,
+		receiver.board,
+		ctx,
+	)
+}
+
 // ReceiveJoinMapResult waits for the immutable terminal dependency result.
 // Every receiver has its own MessageReceiver offset, but receives the same
 // JoinMapResult and (for failures) the same JoinMapBuildError pointer.

@@ -112,6 +112,16 @@ func TestHashMarkJoinWaitForBuildHonorsCancellation(t *testing.T) {
 	tc.proc.BuildPipelineContext(ctx)
 	started := time.Now()
 	result, err := vm.Exec(tc.arg, tc.proc)
+	if err == nil && result.Status == vm.ExecWaiting {
+		ready := make(chan struct{}, 1)
+		require.NoError(t, result.OnReady(func() { ready <- struct{}{} }))
+		select {
+		case <-ready:
+			result, err = vm.Exec(tc.arg, tc.proc)
+		case <-ctx.Done():
+			result, err = vm.Exec(tc.arg, tc.proc)
+		}
+	}
 	elapsed := time.Since(started)
 	require.ErrorIs(t, err, context.DeadlineExceeded)
 	require.Nil(t, result.Batch)

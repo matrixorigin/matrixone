@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -31,7 +32,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
-	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -217,6 +217,34 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
+			if hashJoin.ctr.joinMapReceiver == nil {
+				hashJoin.ctr.joinMapReceiver = message.NewJoinMapReceiver(
+					hashJoin.JoinMapTag,
+					hashJoin.IsShuffle,
+					hashJoin.ShuffleIdx,
+					proc.GetMessageBoard(),
+				)
+			}
+			if hashJoin.ctr.pendingJoinMap == nil {
+				dep, ready, waitErr := hashJoin.ctr.joinMapReceiver.TryReceive()
+				if waitErr != nil {
+					return result, waitErr
+				}
+				if !ready {
+					if !proc.HasEventSubmitter() {
+						dep, receiveErr := hashJoin.ctr.joinMapReceiver.Receive(proc.Ctx)
+						if receiveErr != nil {
+							return result, receiveErr
+						}
+						hashJoin.ctr.pendingJoinMap = &dep
+						continue
+					}
+					result.Status = vm.ExecWaiting
+					result.OnReady = hashJoin.ctr.joinMapReceiver.RegisterReady
+					return result, nil
+				}
+				hashJoin.ctr.pendingJoinMap = &dep
+			}
 			err = hashJoin.build(analyzer, proc)
 			if err != nil {
 				return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
@@ -334,6 +362,11 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 		case SyncBitmap:
 			err := ctr.syncBitmap(hashJoin, proc)
 			if err != nil {
+				if yielded, ok := vm.AsYieldError(err); ok {
+					result.Status = vm.ExecWaiting
+					result.OnReady = yielded.OnReady
+					return result, nil
+				}
 				return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 			}
 
@@ -437,12 +470,12 @@ func (ctr *container) probeMatchCountOnly(
 
 func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process) (err error) {
 	ctr := &hashJoin.ctr
-	dep, err := process.MeasureWait(analyzer, resource.WaitOther, func() (message.JoinMapResult, error) {
-		return message.ReceiveJoinMapResult(hashJoin.JoinMapTag, hashJoin.IsShuffle, hashJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
-	})
-	if err != nil {
-		return err
+	var dep message.JoinMapResult
+	if ctr.pendingJoinMap == nil {
+		return moerr.NewInternalErrorNoCtx("hash join resumed without a ready join map")
 	}
+	dep = *ctr.pendingJoinMap
+	ctr.pendingJoinMap = nil
 	if buildErr := dep.BuildError(); buildErr != nil {
 		// A terminal BuildError is a failed dependency, never an empty build.
 		// Return before consuming probe input so no successful rows can escape.
@@ -1578,21 +1611,38 @@ func (ctr *container) syncBitmap(hashJoin *HashJoin, proc *process.Process) erro
 		} else {
 			matchedCnt := ctr.rightRowsMatched.Count()
 
-			for cnt := 1; cnt < int(hashJoin.NumCPU); cnt++ {
-				v, received := hashJoin.Mailbox.Receive(proc.Ctx)
+			for ctr.bitmapMessages < int(hashJoin.NumCPU)-1 {
+				var v *bitmap.Bitmap
+				var received, sealed bool
+				if proc.HasEventSubmitter() {
+					v, received, sealed = hashJoin.Mailbox.TryReceive()
+					if !received {
+						if sealed {
+							// A worker was torn down before syncing. The mailbox owns
+							// already-published values; late publishers retain theirs.
+							hashJoin.Mailbox.SealAndDrain(proc.Mp())
+							return nil
+						}
+						return vm.NewYieldError(hashJoin.Mailbox.RegisterReady)
+					}
+				} else {
+					v, received = hashJoin.Mailbox.Receive(proc.Ctx)
+				}
 				if !received || v == nil {
 					// A worker was torn down before syncing (its Reset sends
 					// nil) or the context was canceled. Sealing transfers all
 					// already-published values to cleanup and makes late
-					// publishers retain their own value. Bail out without initializing the
-					// iterator — Call routes to End and nothing is finalized.
+					// publishers retain their own value. Bail out without
+					// initializing the iterator — Call routes to End.
 					hashJoin.Mailbox.SealAndDrain(proc.Mp())
 					return nil
 				}
 				matchedCnt += v.Count()
 				ctr.rightRowsMatched.Or(v)
 				colexec.FreeAccountedBitmap(v, proc.Mp())
+				ctr.bitmapMessages++
 			}
+			ctr.bitmapMessages = 0
 
 			if ctr.probeSingle && matchedCnt > ctr.rightRowsMatched.Count() {
 				return moerr.NewErrSubqueryNo1Row(proc.Ctx)

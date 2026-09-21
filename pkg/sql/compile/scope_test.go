@@ -3039,6 +3039,42 @@ func TestRuntimeFilterResultKeepsItsOriginatingSpec(t *testing.T) {
 	}
 }
 
+func TestOptionalRuntimeFilterDoesNotBlockReaderAdmission(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	board := message.NewMessageBoard()
+	defer board.Reset()
+	proc.SetMessageBoard(board)
+
+	scope := &Scope{
+		Proc: proc,
+		DataSource: &Source{RuntimeFilterSpecs: []*plan.RuntimeFilterSpec{{
+			Tag: 113,
+		}}},
+	}
+	result := make(chan struct {
+		filters []receivedRuntimeFilter
+		empty   bool
+		err     error
+	}, 1)
+	go func() {
+		filters, empty, err := scope.waitForRuntimeFilters(&Compile{proc: proc})
+		result <- struct {
+			filters []receivedRuntimeFilter
+			empty   bool
+			err     error
+		}{filters: filters, empty: empty, err: err}
+	}()
+
+	select {
+	case got := <-result:
+		require.NoError(t, got.err)
+		require.False(t, got.empty)
+		require.Empty(t, got.filters)
+	case <-time.After(time.Second):
+		t.Fatal("optional runtime filter blocked reader admission")
+	}
+}
+
 func TestWaitForRuntimeFiltersPreservesUniqueJoinKeyPayloadForVectorScan(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	board := message.NewMessageBoard()

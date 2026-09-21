@@ -30,6 +30,30 @@ type testPipelineContinuation struct {
 	noRegister bool
 }
 
+type cancelAwarePipelineContinuation struct {
+	ctx        context.Context
+	registered chan func()
+	step       int
+}
+
+func (c *cancelAwarePipelineContinuation) Context() context.Context {
+	return c.ctx
+}
+
+func (c *cancelAwarePipelineContinuation) Step() (pipeline.StepResult, error) {
+	if c.step == 0 {
+		c.step++
+		return pipeline.StepResult{
+			Status: pipeline.StepWaiting,
+			OnReady: func(ready func()) error {
+				c.registered <- ready
+				return nil
+			},
+		}, nil
+	}
+	return pipeline.StepResult{Status: pipeline.StepDone}, nil
+}
+
 func (c *testPipelineContinuation) Step() (pipeline.StepResult, error) {
 	status := c.statuses[c.step]
 	c.step++
@@ -43,7 +67,7 @@ func (c *testPipelineContinuation) Step() (pipeline.StepResult, error) {
 	return result, nil
 }
 
-func TestScopeTaskSchedulerRunsReadyAndDependencyTasks(t *testing.T) {
+func TestScopeTaskSchedulerRunsReadyAndEventSources(t *testing.T) {
 	scheduler := newScopeTaskScheduler(context.Background(), 2, nil)
 	readyDone := make(chan struct{})
 	dependencyDone := make(chan struct{})
@@ -51,7 +75,7 @@ func TestScopeTaskSchedulerRunsReadyAndDependencyTasks(t *testing.T) {
 
 	if err := scheduler.submitRoot("test-root", func() {
 		close(readyDone)
-		submitErr <- scheduler.submitDependency("test-dependency", func() {
+		submitErr <- scheduler.submitEventSource("test-event-source", func() {
 			close(dependencyDone)
 		})
 	}); err != nil {
@@ -74,13 +98,13 @@ func TestScopeTaskSchedulerRunsReadyAndDependencyTasks(t *testing.T) {
 	}
 }
 
-func TestScopeTaskSchedulerDependencyDoesNotDeadlockSingleWorker(t *testing.T) {
+func TestScopeTaskSchedulerEventSourceDoesNotDeadlockSingleWorker(t *testing.T) {
 	scheduler := newScopeTaskScheduler(context.Background(), 1, nil)
 	dependencyDone := make(chan struct{})
 	submitErr := make(chan error, 1)
 
 	if err := scheduler.submitRoot("blocking-parent", func() {
-		if err := scheduler.submitDependency("blocking-child", func() {
+		if err := scheduler.submitEventSource("event-source", func() {
 			close(dependencyDone)
 		}); err != nil {
 			submitErr <- err
@@ -122,7 +146,7 @@ func TestScopeTaskSchedulerReportsPanic(t *testing.T) {
 func TestScopeTaskSchedulerRejectsTasksAfterWait(t *testing.T) {
 	scheduler := newScopeTaskScheduler(context.Background(), 1, nil)
 	scheduler.wait()
-	if err := scheduler.submitDependency("late", func() {}); !errors.Is(err, errScopeTaskSchedulerClosed) {
+	if err := scheduler.submitEventSource("late", func() {}); !errors.Is(err, errScopeTaskSchedulerClosed) {
 		t.Fatalf("expected closed scheduler error, got %v", err)
 	}
 }
@@ -236,6 +260,36 @@ func TestScopeTaskSchedulerContinuationRequiresReadinessRegistration(t *testing.
 		}
 	case <-time.After(time.Second):
 		t.Fatal("continuation did not fail closed")
+	}
+	scheduler.wait()
+}
+
+func TestScopeTaskSchedulerContinuationWakesOnPipelineCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	scheduler := newScopeTaskScheduler(context.Background(), 1, nil)
+	continuation := &cancelAwarePipelineContinuation{
+		ctx:        ctx,
+		registered: make(chan func(), 1),
+	}
+	done := make(chan error, 1)
+	if err := scheduler.submitContinuation("cancel-aware", continuation, func(err error) {
+		done <- err
+	}); err != nil {
+		t.Fatalf("submit continuation: %v", err)
+	}
+	select {
+	case <-continuation.registered:
+	case <-time.After(time.Second):
+		t.Fatal("continuation did not enter waiting state")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("continuation failed after cancellation: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("pipeline cancellation did not wake continuation")
 	}
 	scheduler.wait()
 }

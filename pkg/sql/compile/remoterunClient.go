@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	vmpipeline "github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
@@ -77,11 +78,25 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 				zap.String("error", err.Error()))
 		}
 	}()
+	var withoutOutput bool
+	sender, withoutOutput, err = s.prepareRemoteRun(c)
+	if err != nil {
+		return sender, err
+	}
+
+	err = receiveMessageFromCnServer(s, withoutOutput, sender)
+	return sender, err
+}
+
+// prepareRemoteRun owns the synchronous part of remote admission: scope and
+// process encoding, stream creation, and the initial pipeline send. It never
+// receives result batches. The event-driven remote state machine uses this
+// same boundary and schedules one transport receive at a time afterward.
+func (s *Scope) prepareRemoteRun(c *Compile) (sender *messageSenderOnClient, withoutOutput bool, err error) {
 	s.ScopeAnalyzer.Stop()
 
-	// encode structures which need to send.
 	var scopeEncodeData, processEncodeData []byte
-	var withoutOutput, folded bool
+	var folded bool
 	remoteFragmentCounts, remoteExecutionID := remoteExecutionTopology(c, s)
 	scopeEncodeData, withoutOutput, processEncodeData, folded, err = prepareRemoteRunSendingData(
 		c.sql,
@@ -91,7 +106,7 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 		remoteExecutionID,
 	)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if folded {
 		getLogger(s.Proc.GetService()).
@@ -100,7 +115,6 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 				zap.String("remote-address", s.NodeInfo.Addr))
 	}
 
-	// generate a new sender to do send work.
 	sender, err = newMessageSenderOnClient(
 		s.Proc.Ctx,
 		s.Proc.GetService(),
@@ -111,8 +125,7 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	if err != nil {
 		c.proc.Errorf(s.Proc.Ctx, "Failed to newMessageSenderOnClient sql=%s, txnID=%s, err=%v",
 			c.sql, c.proc.GetTxnOperator().Txn().DebugString(), err)
-
-		return nil, err
+		return nil, false, err
 	}
 	sender.proc = s.Proc
 	// Capture the execution-attempt sink, rather than looking it up from proc
@@ -122,18 +135,14 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	sender.warningSink = s.Proc.GetWarningSink()
 
 	debugMsg := ""
-	_, sub_sql, exist := fault.TriggerFault("inject_send_pipeline")
-	if exist {
-		if strings.Contains(c.sql, sub_sql) {
-			debugMsg = fmt.Sprintf("inject_send_pipeline: client2server,compile = %p", c)
-		}
+	_, subSQL, exist := fault.TriggerFault("inject_send_pipeline")
+	if exist && strings.Contains(c.sql, subSQL) {
+		debugMsg = fmt.Sprintf("inject_send_pipeline: client2server,compile = %p", c)
 	}
 	if err = sender.sendPipeline(scopeEncodeData, processEncodeData, withoutOutput, maxMessageSizeToMoRpc, debugMsg); err != nil {
-		return sender, err
+		return sender, withoutOutput, err
 	}
-
-	err = receiveMessageFromCnServer(s, withoutOutput, sender)
-	return sender, err
+	return sender, withoutOutput, nil
 }
 
 // checkPipelineStandaloneExecutableAtRemote is responsible for checking the standalone excitability of the pipeline
@@ -372,9 +381,6 @@ func receiveMessageFromCnServerIfDispatch(s *Scope, sender *messageSenderOnClien
 
 	arg := s.RootOp.(*dispatch.Dispatch)
 	fakeValueScanOperator := value_scan.NewArgument()
-	if err = fakeValueScanOperator.Prepare(s.Proc); err != nil {
-		return err
-	}
 	dispatchRunner := buildRemoteDispatchReceiverRoot(arg, fakeValueScanOperator)
 	dispatchRunner.AdoptCleanupState(arg)
 	defer func() {
@@ -385,11 +391,10 @@ func receiveMessageFromCnServerIfDispatch(s *Scope, sender *messageSenderOnClien
 		fakeValueScanOperator.Release()
 	}()
 
-	if err = dispatchRunner.Prepare(s.Proc); err != nil {
+	dispatchPipeline, err := vmpipeline.New(0, nil, dispatchRunner).NewContinuation(s.Proc)
+	if err != nil {
 		return err
 	}
-	dispatchAnalyze := dispatchRunner.GetOperatorBase().OpAnalyzer
-
 	mp := s.Proc.Mp()
 	for {
 		bat, end, err = sender.receiveBatch()
@@ -397,20 +402,49 @@ func receiveMessageFromCnServerIfDispatch(s *Scope, sender *messageSenderOnClien
 			return err
 		}
 
-		dispatchAnalyze.Network(bat)
+		if dispatchAnalyze := dispatchRunner.GetOperatorBase().OpAnalyzer; dispatchAnalyze != nil {
+			dispatchAnalyze.Network(bat)
+		}
 		fakeValueScanOperator.Batchs = append(fakeValueScanOperator.Batchs, bat)
 
-		result, errCall := vm.Exec(dispatchRunner, s.Proc)
-		bat.Clean(mp)
-		if errCall != nil {
-			return errCall
+		var result vmpipeline.StepResult
+		for {
+			result, err = dispatchPipeline.Step()
+			if err != nil {
+				bat.Clean(mp)
+				return err
+			}
+			if result.Status != vmpipeline.StepWaiting {
+				break
+			}
+			if result.OnReady == nil {
+				bat.Clean(mp)
+				return moerr.NewInternalErrorNoCtx("remote dispatch continuation waited without readiness")
+			}
+			ready := make(chan struct{}, 1)
+			if err = result.OnReady(func() {
+				select {
+				case ready <- struct{}{}:
+				default:
+				}
+			}); err != nil {
+				bat.Clean(mp)
+				return err
+			}
+			select {
+			case <-ready:
+			case <-s.Proc.Ctx.Done():
+				bat.Clean(mp)
+				return s.Proc.Ctx.Err()
+			}
 		}
+		bat.Clean(mp)
 		// ExecStop can mean that every receiver has already stopped. Release the
 		// decoded batch's remote credit before ending the receive loop.
 		if err = sender.acknowledgeRemoteBatch(); err != nil {
 			return err
 		}
-		if result.Status == vm.ExecStop {
+		if result.Status == vmpipeline.StepDone {
 			return nil
 		}
 	}

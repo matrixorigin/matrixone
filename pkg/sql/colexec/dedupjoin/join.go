@@ -31,7 +31,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
-	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -279,6 +278,30 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
+			if ctr.joinMapReceiver == nil {
+				ctr.joinMapReceiver = message.NewJoinMapReceiver(
+					dedupJoin.JoinMapTag, dedupJoin.IsShuffle, dedupJoin.ShuffleIdx, proc.GetMessageBoard())
+			}
+			if ctr.pendingJoinMap == nil {
+				dep, ready, waitErr := ctr.joinMapReceiver.TryReceive()
+				if waitErr != nil {
+					return result, waitErr
+				}
+				if !ready {
+					if !proc.HasEventSubmitter() {
+						dep, receiveErr := ctr.joinMapReceiver.Receive(proc.Ctx)
+						if receiveErr != nil {
+							return result, receiveErr
+						}
+						ctr.pendingJoinMap = &dep
+						continue
+					}
+					result.Status = vm.ExecWaiting
+					result.OnReady = ctr.joinMapReceiver.RegisterReady
+					return result, nil
+				}
+				ctr.pendingJoinMap = &dep
+			}
 			err = dedupJoin.build(analyzer, proc)
 			if err != nil {
 				return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
@@ -336,6 +359,11 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				dedupJoin.ctr.lastPos = 0
 				err := ctr.finalize(dedupJoin, proc)
 				if err != nil {
+					if yielded, ok := vm.AsYieldError(err); ok {
+						result.Status = vm.ExecWaiting
+						result.OnReady = yielded.OnReady
+						return result, nil
+					}
 					return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 				}
 				if ctr.state == End {
@@ -409,12 +437,15 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 
 func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Process) (err error) {
 	ctr := &dedupJoin.ctr
-	ctr.mp, err = process.MeasureWait(analyzer, resource.WaitOther, func() (*message.JoinMap, error) {
-		return message.ReceiveJoinMap(dedupJoin.JoinMapTag, dedupJoin.IsShuffle, dedupJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
-	})
-	if err != nil {
-		return
+	if ctr.pendingJoinMap == nil {
+		return moerr.NewInternalErrorNoCtx("dedup join resumed without a ready join map")
 	}
+	dep := *ctr.pendingJoinMap
+	ctr.pendingJoinMap = nil
+	if buildErr := dep.BuildError(); buildErr != nil {
+		return buildErr.AsError()
+	}
+	ctr.mp = dep.JoinMap()
 	if ctr.mp != nil {
 		ctr.maxAllocSize = max(ctr.maxAllocSize, ctr.mp.Size())
 		if ctr.mp.IsSpilled() {
@@ -752,6 +783,36 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 			if ap.Mailbox == nil {
 				return moerr.NewInternalErrorNoCtx("dedup join worker mailbox is not initialized")
 			}
+			if ctr.roundStatusPublished {
+				if err := context.Cause(proc.Ctx); err != nil {
+					return err
+				}
+				if ctr.roundDone == nil {
+					return moerr.NewInternalErrorNoCtx("dedup join worker round barrier is missing")
+				}
+				select {
+				case <-ctr.roundDone:
+					ctr.roundStatusPublished = false
+					ctr.roundDone = nil
+					ctr.finalizeDone = true
+					return nil
+				default:
+					if proc.HasEventSubmitter() {
+						return vm.NewYieldError(func(ready func()) error {
+							return ap.Mailbox.RegisterRoundReady(ctr.roundDone, ready)
+						})
+					}
+					select {
+					case <-ctr.roundDone:
+						ctr.roundStatusPublished = false
+						ctr.roundDone = nil
+						ctr.finalizeDone = true
+						return nil
+					case <-proc.Ctx.Done():
+						return context.Cause(proc.Ctx)
+					}
+				}
+			}
 			msg := &WorkerJoinMsg{matched: ctr.matched}
 			if len(ap.OldColCapturePlaceholderIdxList) > 0 {
 				msg.captured = ctr.captured
@@ -781,24 +842,39 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 			// for this round. Mark it before waiting so concurrent cancellation
 			// cannot make Reset enqueue a duplicate abort status.
 			ctr.roundStatusPublished = true
+			ctr.roundDone = roundDone
+			if proc.HasEventSubmitter() {
+				return vm.NewYieldError(func(ready func()) error {
+					return ap.Mailbox.RegisterRoundReady(ctr.roundDone, ready)
+				})
+			}
 			select {
-			case <-roundDone:
-				// completeRound closes this acknowledgement and installs the
-				// next round under the same mailbox lock, before any later
-				// trySend can enter. From this point Reset must publish an
-				// abort for that next round: the merger may advance before this
-				// worker resumes execution.
+			case <-ctr.roundDone:
 				ctr.roundStatusPublished = false
+				ctr.roundDone = nil
+				ctr.finalizeDone = true
+				return nil
 			case <-proc.Ctx.Done():
 				return context.Cause(proc.Ctx)
 			}
-			ctr.finalizeDone = true
-			return nil
 		}
 
-		for cnt := 1; cnt < int(ap.NumCPU); cnt++ {
-			msg, err := receiveWorkerMsg(proc.Ctx, ap.Mailbox)
+		for ctr.finalizeMessages < int(ap.NumCPU)-1 {
+			var msg *WorkerJoinMsg
+			var err error
+			if proc.HasEventSubmitter() {
+				var ready bool
+				msg, ready, err = ap.Mailbox.tryReceive()
+				if err == nil && !ready {
+					err = vm.NewYieldError(ap.Mailbox.RegisterMessageReady)
+				}
+			} else {
+				msg, err = receiveWorkerMsg(proc.Ctx, ap.Mailbox)
+			}
 			if err != nil {
+				if yielded, ok := vm.AsYieldError(err); ok {
+					return yielded
+				}
 				freeWorkerJoinMsg(msg, proc)
 				ap.Mailbox.stopAndDrain(proc)
 				return err
@@ -830,6 +906,7 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 				ap.Mailbox.stopAndDrain(proc)
 				return mergeErr
 			}
+			ctr.finalizeMessages++
 		}
 		if err := context.Cause(proc.Ctx); err != nil {
 			ap.Mailbox.stopAndDrain(proc)
@@ -838,6 +915,7 @@ func (ctr *container) finalize(ap *DedupJoin, proc *process.Process) error {
 		// Do not release a fast worker into the next spill bucket until every
 		// worker's status for this bucket has been collected.
 		ap.Mailbox.completeRound()
+		ctr.finalizeMessages = 0
 	}
 	if ap.EmitActionRows {
 		// Probe and build batches can have different schemas. The probe replay

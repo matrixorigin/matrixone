@@ -16,6 +16,7 @@ package vm
 
 import (
 	"bytes"
+	"errors"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -266,6 +267,33 @@ type Operator interface {
 	ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error)
 }
 
+// YieldError is the internal control-flow result used when a child operator
+// has registered an external readiness event. It is not an execution failure:
+// parent operators propagate it through their existing error returns, and the
+// pipeline continuation turns it back into StepWaiting.
+type YieldError struct {
+	OnReady func(func()) error
+}
+
+func (e *YieldError) Error() string {
+	return "vm operator yielded"
+}
+
+func NewYieldError(onReady func(func()) error) error {
+	if onReady == nil {
+		return errors.New("vm operator yielded without readiness registration")
+	}
+	return &YieldError{OnReady: onReady}
+}
+
+func AsYieldError(err error) (*YieldError, bool) {
+	var yielded *YieldError
+	if errors.As(err, &yielded) {
+		return yielded, yielded != nil && yielded.OnReady != nil
+	}
+	return nil, false
+}
+
 type OperatorBase struct {
 	OperatorInfo
 	OpAnalyzer process.Analyzer
@@ -397,7 +425,10 @@ func ChildrenCall(op Operator, proc *process.Process, anal process.Analyzer) (Ca
 	beforeChildrenCall := time.Now()
 	defer anal.ChildrenCallStop(beforeChildrenCall)
 	result, err := Exec(op, proc)
-	if err == nil && result.Status != ExecWaiting {
+	if err == nil && result.Status == ExecWaiting {
+		return result, NewYieldError(result.OnReady)
+	}
+	if err == nil {
 		anal.Input(result.Batch)
 	}
 	return result, err

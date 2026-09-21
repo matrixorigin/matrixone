@@ -17,11 +17,11 @@ package product
 import (
 	"bytes"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
-	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -80,8 +80,32 @@ func (product *Product) Call(proc *process.Process) (vm.CallResult, error) {
 					continue
 				}
 			}
+			if ctr.joinMapReceiver == nil {
+				ctr.joinMapReceiver = message.NewJoinMapReceiver(
+					product.JoinMapTag, false, 0, proc.GetMessageBoard())
+			}
+			if ctr.pendingJoinMap == nil {
+				dep, ready, waitErr := ctr.joinMapReceiver.TryReceive()
+				if waitErr != nil {
+					return result, waitErr
+				}
+				if !ready {
+					if !proc.HasEventSubmitter() {
+						dep, receiveErr := ctr.joinMapReceiver.Receive(proc.Ctx)
+						if receiveErr != nil {
+							return result, receiveErr
+						}
+						ctr.pendingJoinMap = &dep
+						continue
+					}
+					result.Status = vm.ExecWaiting
+					result.OnReady = ctr.joinMapReceiver.RegisterReady
+					return result, nil
+				}
+				ctr.pendingJoinMap = &dep
+			}
 
-			if err = product.build(proc, analyzer); err != nil {
+			if err = product.build(proc); err != nil {
 				return result, err
 			}
 			ctr.state = Probe
@@ -148,18 +172,17 @@ func (product *Product) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (product *Product) build(proc *process.Process, analyzer process.Analyzer) error {
+func (product *Product) build(proc *process.Process) error {
 	ctr := &product.ctr
-	mp, err := process.MeasureWait(analyzer, resource.WaitOther, func() (*message.JoinMap, error) {
-		return message.ReceiveJoinMap(product.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
-	})
-	if err != nil {
-		return err
+	if ctr.pendingJoinMap == nil {
+		return moerr.NewInternalErrorNoCtx("product build resumed without a ready join map")
 	}
-	if mp == nil {
-		return nil
+	dep := *ctr.pendingJoinMap
+	ctr.pendingJoinMap = nil
+	if buildErr := dep.BuildError(); buildErr != nil {
+		return buildErr.AsError()
 	}
-	ctr.mp = mp
+	ctr.mp = dep.JoinMap()
 	return nil
 }
 

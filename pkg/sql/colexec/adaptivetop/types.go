@@ -38,7 +38,7 @@ type AdaptiveTop struct {
 	SpillConfig materialized.SpillConfig
 
 	startBranch func(int) error
-	waitBranch  func(int) error
+	waitBranch  func(int, func(error)) error
 	account     *mpool.AllocationAccount
 	ctr         container
 	vm.OperatorBase
@@ -52,6 +52,13 @@ type container struct {
 	position      int
 	selected      bool
 	done          bool
+	branch        int
+	branchRows    uint64
+	branchStarted bool
+	branchWaiting bool
+	branchDone    bool
+	branchErr     error
+	branchWake    func()
 }
 
 func NewArgument() *AdaptiveTop { return reuse.Alloc[AdaptiveTop](nil) }
@@ -66,8 +73,10 @@ func init() {
 
 func (a *AdaptiveTop) SetBranchStarter(start func(int) error) { a.startBranch = start }
 func (a *AdaptiveTop) ClearBranchStarter()                    { a.startBranch = nil }
-func (a *AdaptiveTop) SetBranchWaiter(wait func(int) error)   { a.waitBranch = wait }
-func (a *AdaptiveTop) ClearBranchWaiter()                     { a.waitBranch = nil }
+func (a *AdaptiveTop) SetBranchWaiter(wait func(int, func(error)) error) {
+	a.waitBranch = wait
+}
+func (a *AdaptiveTop) ClearBranchWaiter() { a.waitBranch = nil }
 
 // 第一候选由 Call 启动，使动态 LIMIT 0 也不打开候选的数据源。
 func (a *AdaptiveTop) DeferFirstBranch() bool { return true }

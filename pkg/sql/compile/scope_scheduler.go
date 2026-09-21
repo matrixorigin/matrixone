@@ -36,8 +36,9 @@ var (
 //
 // Root scopes are admitted through a ready queue serviced by workers owned by
 // one Compile. Scope orchestration uses event tasks whose completion is
-// detached from the ready worker. Blocking VM islands still use the
-// query-owned dependency lane until every operator exposes a resumable step.
+// detached from the ready worker. VM execution is driven exclusively by
+// pipeline continuations; event-source goroutines are reserved for external
+// blocking I/O and teardown, and always re-admit completion to this queue.
 type scopeTaskScheduler struct {
 	id          uint64
 	ctx         context.Context
@@ -236,11 +237,12 @@ func (s *scopeTaskScheduler) submitRootAsync(name string, start func(done func()
 // queue. A continuation must return StepWaiting with an OnReady registration
 // before it can use this API; registering a callback is the hand-off from an
 // external event back to the scheduler and does not park a scheduler worker.
-// Existing operators still use submitDependency because their Call methods
-// can block internally. Keeping this gate explicit prevents a blocking VM from
-// accidentally occupying the finite ready queue.
 type pipelineContinuation interface {
 	Step() (pipeline.StepResult, error)
+}
+
+type pipelineContinuationContext interface {
+	Context() context.Context
 }
 
 func (s *scopeTaskScheduler) submitContinuation(
@@ -279,8 +281,24 @@ func (s *scopeTaskScheduler) submitContinuation(
 					return
 				}
 				var readyOnce sync.Once
-				onReady := func() { readyOnce.Do(schedule) }
+				var stopContext func() bool
+				onReady := func() {
+					readyOnce.Do(func() {
+						if stopContext != nil {
+							stopContext()
+						}
+						schedule()
+					})
+				}
+				if contextual, ok := continuation.(pipelineContinuationContext); ok {
+					if ctx := contextual.Context(); ctx != nil {
+						stopContext = context.AfterFunc(ctx, onReady)
+					}
+				}
 				if err := result.OnReady(onReady); err != nil {
+					if stopContext != nil {
+						stopContext()
+					}
 					finish(err)
 				}
 			default:
@@ -296,10 +314,23 @@ func (s *scopeTaskScheduler) submitContinuation(
 	return nil
 }
 
-// submitDependency is the compatibility lane for blocking VM and network
-// operations. Event tasks use the ready queue for orchestration and keep this
-// lane only for work that cannot yet yield a resumable continuation.
-func (s *scopeTaskScheduler) submitDependency(name string, task func()) error {
+// submitEventSource registers an external I/O source. The source owns its
+// blocking transport wait and publishes completion back into the ready queue;
+// scheduler workers are never used as parking points for that wait. It is not
+// a VM execution lane: every operator continuation returns to submitRoot when
+// it needs another quantum.
+func (s *scopeTaskScheduler) submitEventSource(name string, task func()) error {
+	return s.submitEventSourceWithContext(name, task, false)
+}
+
+// submitTeardown admits cleanup after the pipeline context has been canceled.
+// Teardown is a terminal ownership event, not new query work, so rejecting it
+// on ctx.Done would leak receiver state and mask the execution error.
+func (s *scopeTaskScheduler) submitTeardown(name string, task func()) error {
+	return s.submitEventSourceWithContext(name, task, true)
+}
+
+func (s *scopeTaskScheduler) submitEventSourceWithContext(name string, task func(), teardown bool) error {
 	if task == nil {
 		return errors.New("nil scope task")
 	}
@@ -309,20 +340,31 @@ func (s *scopeTaskScheduler) submitDependency(name string, task func()) error {
 		s.mu.Unlock()
 		return errScopeTaskSchedulerClosed
 	}
-	select {
-	case <-s.ctx.Done():
-		s.mu.Unlock()
-		err := context.Cause(s.ctx)
-		logutil.Debugf("[scope-scheduler] reject dependency id=%d name=%s ctx=%v", s.id, name, err)
-		return err
-	default:
+	if !teardown {
+		select {
+		case <-s.ctx.Done():
+			s.mu.Unlock()
+			err := context.Cause(s.ctx)
+			logutil.Debugf("[scope-scheduler] reject event source id=%d name=%s ctx=%v", s.id, name, err)
+			return err
+		default:
+		}
 	}
 	s.pending++
 	s.mu.Unlock()
 
 	go func() {
-		logutil.Debugf("[scope-scheduler] start id=%d lane=dependency name=%s", s.id, name)
-		s.runTask(scopeScheduledTask{run: task})
+		defer s.finishTask()
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				logutil.Errorf("[scope-scheduler] event source panic id=%d name=%s value=%v", s.id, name, recovered)
+				if s.onPanic != nil {
+					s.onPanic(recovered)
+				}
+			}
+		}()
+		logutil.Debugf("[scope-scheduler] start id=%d lane=event-source name=%s", s.id, name)
+		task()
 	}()
 	return nil
 }
@@ -363,15 +405,11 @@ func (c *Compile) ensureScopeTaskScheduler(workerCount int) *scopeTaskScheduler 
 		ctx = c.proc.Ctx
 	}
 	c.scopeScheduler = newScopeTaskScheduler(ctx, workerCount, c.handleScopeTaskPanic)
-	return c.scopeScheduler
-}
-
-func (c *Compile) submitScopeDependency(name string, task func()) error {
-	if c == nil {
-		return errScopeTaskSchedulerClosed
+	if c.proc != nil {
+		c.proc.SetEventSubmitter(c.scopeScheduler.submitEventSource)
+		c.proc.SetReadySubmitter(c.scopeScheduler.submitRoot)
 	}
-	scheduler := c.ensureScopeTaskScheduler(1)
-	return scheduler.submitDependency(name, task)
+	return c.scopeScheduler
 }
 
 func (c *Compile) waitScopeTaskScheduler() {
@@ -385,6 +423,10 @@ func (c *Compile) waitScopeTaskScheduler() {
 		return
 	}
 	scheduler.wait()
+	if c.proc != nil {
+		c.proc.SetEventSubmitter(nil)
+		c.proc.SetReadySubmitter(nil)
+	}
 	c.scopeSchedulerMu.Lock()
 	if c.scopeScheduler == scheduler {
 		c.scopeScheduler = nil

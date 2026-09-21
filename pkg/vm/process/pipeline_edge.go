@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
@@ -56,6 +57,14 @@ type PipelineEdge struct {
 
 	terminalMu  sync.Mutex
 	terminalErr error
+
+	// readyMu protects one-shot continuation callbacks. A receiver registers a
+	// callback when it observes no data; the next data/terminal publication
+	// drains it without parking an execution goroutine. Capacity callbacks are
+	// the dual signal used by producers under backpressure.
+	readyMu           sync.Mutex
+	readyCallbacks    []func()
+	capacityCallbacks []func()
 
 	fatalSignal    PipelineSignal
 	fatalTerminal  bool
@@ -180,6 +189,10 @@ func (e *PipelineEdge) resetTerminalStateLocked() {
 	e.endRecorded = 0
 	e.doneClosed = false
 	e.abortClosed = false
+	e.readyMu.Lock()
+	e.readyCallbacks = nil
+	e.capacityCallbacks = nil
+	e.readyMu.Unlock()
 }
 
 // NewPipelineEdgeFromReg returns the same edge object behind a WaitRegister name.
@@ -257,12 +270,32 @@ func (e *PipelineEdge) SendData(ctx context.Context, spool *pSpool.PipelineSpool
 	return e.sendSignal(ctx, NewPipelineSignalToGetFromSpool(spool, idx))
 }
 
+// TrySendData publishes a queued spool reference without waiting for edge
+// capacity. The spool slot remains queued until this signal is delivered, so
+// callers can safely yield and retry the same edge.
+func (e *PipelineEdge) TrySendData(spool *pSpool.PipelineSpool, idx int) bool {
+	if e == nil || e.Ch2 == nil {
+		return false
+	}
+	return e.trySend(NewPipelineSignalToGetFromSpool(spool, idx))
+}
+
 // SendDataDirect sends a batch directly (not via spool) through the edge.
 func (e *PipelineEdge) SendDataDirect(ctx context.Context, bat *batch.Batch, mp *mpool.MPool) bool {
 	if e == nil || e.Ch2 == nil {
 		return false
 	}
 	return e.sendSignal(ctx, NewPipelineSignalToDirectly(bat, nil, mp))
+}
+
+// TrySendDataDirect publishes a directly-owned batch without waiting for edge
+// capacity. The caller retains ownership when it returns false and may retry
+// after RegisterCapacityReady fires.
+func (e *PipelineEdge) TrySendDataDirect(bat *batch.Batch, mp *mpool.MPool) bool {
+	if e == nil || e.Ch2 == nil {
+		return false
+	}
+	return e.trySend(NewPipelineSignalToDirectly(bat, nil, mp))
 }
 
 // SendEnd records one sender's End signal. It also enqueues the signal when
@@ -372,10 +405,9 @@ func (e *PipelineEdge) trySendTerminal(signal PipelineSignal) bool {
 	e.initTerminalState()
 
 	e.terminalMu.Lock()
-	defer e.terminalMu.Unlock()
-
 	if signal.EventType == EventEnd {
 		if !e.canDeliverEndLocked() {
+			e.terminalMu.Unlock()
 			return false
 		}
 		// End is a durable edge state, not merely a best-effort channel
@@ -387,25 +419,40 @@ func (e *PipelineEdge) trySendTerminal(signal PipelineSignal) bool {
 		default:
 		}
 		e.recordEndLocked()
+		e.terminalMu.Unlock()
+		e.notifyReady()
+		e.notifyCapacity()
 		return true
 	}
 
 	if e.doneClosed && !e.fatalTerminal {
+		e.terminalMu.Unlock()
 		return false
 	}
 	signal = e.recordFatalTerminalLocked(signal)
 	if e.fatalDelivered >= e.fatalRemaining {
+		e.terminalMu.Unlock()
+		e.notifyReady()
+		e.notifyCapacity()
 		return false
 	}
+	delivered := true
 	for e.fatalDelivered < e.fatalRemaining {
 		select {
 		case e.Ch2 <- signal:
 			e.fatalDelivered++
 		default:
-			return false
+			delivered = false
+			break
+		}
+		if !delivered {
+			break
 		}
 	}
-	return true
+	e.terminalMu.Unlock()
+	e.notifyReady()
+	e.notifyCapacity()
+	return delivered
 }
 
 func (e *PipelineEdge) sendTerminalWithContext(ctx context.Context, signal PipelineSignal) bool {
@@ -421,10 +468,9 @@ func (e *PipelineEdge) sendTerminalWithContext(ctx context.Context, signal Pipel
 	e.initTerminalState()
 
 	e.terminalMu.Lock()
-	defer e.terminalMu.Unlock()
-
 	if signal.EventType == EventEnd {
 		if !e.canDeliverEndLocked() {
+			e.terminalMu.Unlock()
 			return false
 		}
 		// Terminal progress must not depend on spare data-channel capacity.
@@ -435,29 +481,44 @@ func (e *PipelineEdge) sendTerminalWithContext(ctx context.Context, signal Pipel
 		default:
 		}
 		e.recordEndLocked()
+		e.terminalMu.Unlock()
+		e.notifyReady()
+		e.notifyCapacity()
 		return true
 	}
 
 	if e.doneClosed && !e.fatalTerminal {
+		e.terminalMu.Unlock()
 		return false
 	}
 	signal = e.recordFatalTerminalLocked(signal)
 	if e.fatalDelivered >= e.fatalRemaining {
+		e.terminalMu.Unlock()
+		e.notifyReady()
+		e.notifyCapacity()
 		return false
 	}
 	// Fatal state is durable and wakes PipelineSignalReceiver through Done.
 	// Never make this control path wait behind the data channel it terminates;
 	// enqueue as many fatal signals as fit and let the receiver synthesize any
 	// missing remainder from the recorded state.
+	delivered := true
 	for e.fatalDelivered < e.fatalRemaining {
 		select {
 		case e.Ch2 <- signal:
 			e.fatalDelivered++
 		default:
-			return false
+			delivered = false
+			break
+		}
+		if !delivered {
+			break
 		}
 	}
-	return true
+	e.terminalMu.Unlock()
+	e.notifyReady()
+	e.notifyCapacity()
+	return delivered
 }
 
 func (e *PipelineEdge) sendSignal(ctx context.Context, signal PipelineSignal) bool {
@@ -482,6 +543,7 @@ func (e *PipelineEdge) sendSignal(ctx context.Context, signal PipelineSignal) bo
 	}
 	select {
 	case e.Ch2 <- signal:
+		e.notifyReady()
 		return true
 	case <-ctx.Done():
 	case <-e.abrt:
@@ -512,7 +574,92 @@ func (e *PipelineEdge) trySend(signal PipelineSignal) bool {
 		delivered = true
 	default:
 	}
+	if delivered {
+		e.notifyReady()
+	}
 	return delivered
+}
+
+// RegisterReady arms a one-shot callback for the next readable signal or
+// terminal transition. It never blocks and invokes the callback outside the
+// edge lock. The immediate check closes the check/register race.
+func (e *PipelineEdge) RegisterReady(callback func()) error {
+	if callback == nil {
+		return moerr.NewInvalidInputNoCtx("nil pipeline readiness callback")
+	}
+	if e == nil || e.Ch2 == nil {
+		callback()
+		return nil
+	}
+	e.terminalMu.Lock()
+	ready := e.doneClosed || e.fatalTerminal || len(e.Ch2) > 0
+	e.readyMu.Lock()
+	if !ready {
+		e.readyCallbacks = append(e.readyCallbacks, callback)
+	}
+	e.readyMu.Unlock()
+	e.terminalMu.Unlock()
+	if ready {
+		callback()
+	}
+	return nil
+}
+
+// RegisterCapacityReady arms a one-shot callback for downstream channel
+// capacity. It is the non-blocking replacement for polling
+// WaitPipelineSignalCapacity.
+func (e *PipelineEdge) RegisterCapacityReady(callback func()) error {
+	if callback == nil {
+		return moerr.NewInvalidInputNoCtx("nil pipeline capacity callback")
+	}
+	if e == nil || e.Ch2 == nil || cap(e.Ch2) == 0 {
+		callback()
+		return nil
+	}
+	e.terminalMu.Lock()
+	ready := e.doneClosed || e.fatalTerminal || len(e.Ch2) < cap(e.Ch2)
+	e.readyMu.Lock()
+	if !ready {
+		e.capacityCallbacks = append(e.capacityCallbacks, callback)
+	}
+	e.readyMu.Unlock()
+	e.terminalMu.Unlock()
+	if ready {
+		callback()
+	}
+	return nil
+}
+
+func (e *PipelineEdge) notifyReady() {
+	if e == nil {
+		return
+	}
+	e.readyMu.Lock()
+	callbacks := e.readyCallbacks
+	e.readyCallbacks = nil
+	e.readyMu.Unlock()
+	for _, callback := range callbacks {
+		callback()
+	}
+}
+
+func (e *PipelineEdge) notifyCapacity() {
+	if e == nil {
+		return
+	}
+	e.readyMu.Lock()
+	callbacks := e.capacityCallbacks
+	e.capacityCallbacks = nil
+	e.readyMu.Unlock()
+	for _, callback := range callbacks {
+		callback()
+	}
+}
+
+// notifyCapacityOnReceive publishes the capacity transition caused by a
+// receiver consuming one queued signal.
+func (e *PipelineEdge) notifyCapacityOnReceive() {
+	e.notifyCapacity()
 }
 
 // --- send helpers ---

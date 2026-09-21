@@ -137,7 +137,10 @@ func (lockOp *LockOp) Prepare(proc *process.Process) error {
 func (lockOp *LockOp) Call(proc *process.Process) (vm.CallResult, error) {
 	txnOp := proc.GetTxnOperator()
 	if !txnOp.Txn().IsPessimistic() {
-		return vm.Exec(lockOp.GetChildren(0), proc)
+		// Preserve child readiness instead of bypassing the continuation
+		// protocol.  A non-pessimistic lock is transparent, but its child may
+		// still be waiting on a scan, connector, or remote edge.
+		return vm.ChildrenCall(lockOp.GetChildren(0), proc, lockOp.OpAnalyzer)
 	}
 
 	// for the case like `select for update`, need to lock whole batches before send it to next operator

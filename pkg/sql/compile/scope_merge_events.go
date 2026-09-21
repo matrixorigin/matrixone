@@ -38,8 +38,8 @@ type mergeRunEvent struct {
 // mergeRunEventState is a continuation state machine for one MergeRun. It
 // never waits on a completion channel itself. A child, parent, or remote
 // notifier publishes one short ready task, and that task advances this state
-// machine. The only goroutines that may block are the dependency-lane
-// goroutines running the existing VM/network islands.
+// machine. Blocking is confined to external reader/transport event sources;
+// VM work always runs as a resumable pipeline continuation.
 type mergeRunEventState struct {
 	s    *Scope
 	c    *Compile
@@ -87,15 +87,25 @@ func newMergeRunEventState(s *Scope, c *Compile, done func(error)) *mergeRunEven
 	return state
 }
 
-// MergeRun is the public synchronous compatibility boundary. The root
-// execution path uses mergeRunAsync below; direct callers retain the
-// historical blocking contract so planner/unit-test helpers do not need a
-// scheduler-owned completion channel.
+// MergeRun drives the same event-driven state machine used by production
+// execution and waits only at the API boundary for callers that need an error
+// result. It does not contain a second execution implementation.
 func (s *Scope) MergeRun(c *Compile) error {
 	if s == nil {
 		return nil
 	}
-	return s.mergeRunBlocking(c)
+	if c == nil {
+		return moerr.NewInternalErrorNoCtx("nil compile for MergeRun")
+	}
+	result := make(chan error, 1)
+	if err := s.mergeRunAsync(c, func(err error) { result <- err }); err != nil {
+		return err
+	}
+	select {
+	case err := <-result:
+		c.waitScopeTaskScheduler()
+		return err
+	}
 }
 
 // mergeRunAsync starts MergeRun and returns after its continuation has been
@@ -212,9 +222,8 @@ func (m *mergeRunEventState) start(rootFinish func()) {
 	m.maybeFinish()
 }
 
-// enqueueEvent admits a short ready task. A blocking child/parent never waits
-// for this task; it only publishes its terminal event and returns to the
-// dependency lane.
+// enqueueEvent admits a short ready task. A child or parent publishes its
+// terminal event and returns; the ready worker performs only state reduction.
 func (m *mergeRunEventState) enqueueEvent(event mergeRunEvent) {
 	if err := m.scheduler.submitRoot("merge-event", func() {
 		m.handleEvent(event)
@@ -284,23 +293,14 @@ func (m *mergeRunEventState) startParent() {
 	m.parentStarted = true
 	m.mu.Unlock()
 
-	// The parent pipeline is itself a blocking VM island today, but its
-	// completion is an event. It runs on the dependency lane and does not hold
-	// a ready worker while its children or remote receivers are active.
+	// Parent execution is admitted directly as a continuation. It never owns a
+	// worker while waiting for a child edge or a remote response.
 	m.addTask()
-	if err := m.scheduler.submitDependency("merge-parent", func() {
-		err := m.runParentTaskAsync(func(runErr error) {
-			m.enqueueEvent(mergeRunEvent{
-				kind:   mergeRunParentDone,
-				result: newScopeRunResult(runErr, m.s),
-			})
+	if err := m.runParentTaskAsync(func(runErr error) {
+		m.enqueueEvent(mergeRunEvent{
+			kind:   mergeRunParentDone,
+			result: newScopeRunResult(runErr, m.s),
 		})
-		if err != nil {
-			m.enqueueEvent(mergeRunEvent{
-				kind:   mergeRunParentDone,
-				result: newScopeRunResult(err, m.s),
-			})
-		}
 	}); err != nil {
 		m.enqueueEvent(mergeRunEvent{
 			kind:   mergeRunParentDone,
@@ -317,7 +317,7 @@ func (m *mergeRunEventState) runParentTaskAsync(done func(error)) error {
 	clearStarter, deferFirst, err := installSequentialBranchStarter(
 		m.s.RootOp,
 		m.activatePreScope,
-		m.waitPreScope,
+		m.registerPreScopeWait,
 	)
 	if err != nil {
 		return err
@@ -349,11 +349,11 @@ func (m *mergeRunEventState) runParentTaskAsync(done func(error)) error {
 	return nil
 }
 
-func (m *mergeRunEventState) waitPreScope(i int) error {
+func (m *mergeRunEventState) registerPreScopeWait(i int, ready func(error)) error {
 	if i < 0 || i >= len(m.completions) || !m.isClaimed(i) {
 		return moerr.NewInternalErrorNoCtx("invalid lazy branch completion wait")
 	}
-	return m.completions[i].wait(m.context())
+	return m.completions[i].register(ready)
 }
 
 func (m *mergeRunEventState) isClaimed(i int) bool {
@@ -413,8 +413,7 @@ func (m *mergeRunEventState) activatePreScope(i int) error {
 		return nil
 	}
 
-	err := m.scheduler.submitDependency("merge-pre-scope", func() {
-		runErr := m.runPreScope(scope)
+	err := m.runPreScopeAsync(scope, func(runErr error) {
 		m.enqueueEvent(mergeRunEvent{
 			kind:   mergeRunPreScopeDone,
 			index:  i,
@@ -432,13 +431,7 @@ func (m *mergeRunEventState) activatePreScope(i int) error {
 	return nil
 }
 
-func (m *mergeRunEventState) runPreScope(scope *Scope) (err error) {
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			err = moerr.ConvertPanicError(m.context(), recovered)
-		}
-	}()
-
+func (m *mergeRunEventState) runPreScopeAsync(scope *Scope, done func(error)) (err error) {
 	if m.s.LazyPreScopes {
 		assignLazyRemoteGeneration(scope, m.c.addr)
 		if err = m.s.initLazyPreScope(scope, m.c); err != nil {
@@ -447,20 +440,21 @@ func (m *mergeRunEventState) runPreScope(scope *Scope) (err error) {
 		}
 	}
 	if m.sequential {
-		return scope.mergeRunBlocking(m.c)
+		return scope.mergeRunAsync(m.c, done)
 	}
 
 	switch scope.Magic {
 	case Normal:
-		return scope.Run(m.c)
+		return scope.runEventAsync(m.c, done)
 	case Merge, MergeInsert, MergeDelete:
-		return scope.mergeRunBlocking(m.c)
+		return scope.mergeRunAsync(m.c, done)
 	case Remote:
-		return scope.RemoteRun(m.c)
+		return scope.remoteRunAsync(m.c, done)
 	default:
-		err = moerr.NewInternalErrorf(m.c.proc.Ctx, "unexpected scope Magic %d", scope.Magic)
-		cleanScopeTreeWithStartFail(scope, err, m.c.isPrepare)
-		return err
+		// Control/DDL scopes have no VM root.  Route their blocking catalog
+		// operation through the scheduler's event-source lane, just like a
+		// top-level control scope admitted by Compile.runAsync.
+		return m.c.runControlScopeAsync(scope, done)
 	}
 }
 

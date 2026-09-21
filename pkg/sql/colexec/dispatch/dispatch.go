@@ -20,6 +20,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
@@ -49,6 +50,11 @@ func (dispatch *Dispatch) Prepare(proc *process.Process) error {
 	ctr.localRegsCnt = len(dispatch.LocalRegs)
 	ctr.remoteRegsCnt = len(dispatch.RemoteRegs)
 	ctr.aliveRegCnt = ctr.localRegsCnt + ctr.remoteRegsCnt
+	ctr.pendingBatch = nil
+	ctr.pendingSpoolSent = false
+	ctr.pendingRemoteBatch = nil
+	ctr.remoteTask = nil
+	ctr.pendingSignals = make([]bool, ctr.localRegsCnt)
 	if dispatch.MaterializedSource != nil {
 		if dispatch.FuncId != SendToAllLocalFunc || ctr.remoteRegsCnt != 0 {
 			return moerr.NewInternalError(proc.Ctx, "materialized dispatch must be local send-to-all")
@@ -134,9 +140,19 @@ func printShuffleResult(dispatch *Dispatch) {
 func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 	analyzer := dispatch.OpAnalyzer
 
-	result, err := vm.ChildrenCall(dispatch.GetChildren(0), proc, analyzer)
-	if err != nil {
-		return result, err
+	result := vm.NewCallResult()
+	var err error
+	if dispatch.ctr.remoteTask != nil {
+		return dispatch.completeRemoteTask(result)
+	}
+
+	if dispatch.ctr.pendingBatch != nil {
+		result.Batch = dispatch.ctr.pendingBatch
+	} else {
+		result, err = vm.ChildrenCall(dispatch.GetChildren(0), proc, analyzer)
+		if err != nil {
+			return result, err
+		}
 	}
 
 	whichToSend := result.Batch
@@ -146,9 +162,15 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 		// outlive this pipeline: cleanup removes the registration before the
 		// client's next retry, which then waits until query cancellation.
 		if dispatch.ctr.isRemote && !dispatch.ctr.prepared {
-			if _, err = dispatch.waitRemoteRegsReady(proc); err != nil {
+			if err = dispatch.startRemoteTask(proc, nil); err != nil {
 				return result, err
 			}
+			if !proc.HasEventSubmitter() {
+				return dispatch.completeRemoteTask(result)
+			}
+			result.Status = vm.ExecWaiting
+			result.OnReady = dispatch.ctr.remoteTask.RegisterReady
+			return result, nil
 		}
 		result.Status = vm.ExecStop
 		printShuffleResult(dispatch)
@@ -184,12 +206,115 @@ func (dispatch *Dispatch) Call(proc *process.Process) (vm.CallResult, error) {
 		return result, err
 	}
 
+	if dispatch.ctr.pendingBatch == nil &&
+		(dispatch.FuncId == SendToAllLocalFunc || dispatch.FuncId == SendToAnyLocalFunc) {
+		dispatch.ctr.pendingBatch = whichToSend
+		dispatch.ctr.pendingSpoolSent = false
+		for i := range dispatch.ctr.pendingSignals {
+			dispatch.ctr.pendingSignals[i] = false
+		}
+	}
+
+	if dispatch.FuncId == SendToAllLocalFunc || dispatch.FuncId == SendToAnyLocalFunc {
+		done, onReady, sendErr := dispatch.sendLocalPending(proc)
+		if sendErr != nil {
+			return result, sendErr
+		}
+		if onReady != nil {
+			result.Status = vm.ExecWaiting
+			result.OnReady = onReady
+			return result, nil
+		}
+		if done {
+			result.Status = vm.ExecStop
+		}
+		return result, nil
+	}
+
 	// sending.
+	if dispatch.ctr.isRemote || dispatch.FuncId == ShuffleToAllFunc {
+		dispatch.ctr.pendingRemoteBatch = whichToSend
+		if err = dispatch.startRemoteTask(proc, whichToSend); err != nil {
+			dispatch.ctr.pendingRemoteBatch = nil
+			return result, err
+		}
+		// Direct operator callers (unit tests and small embedded execution
+		// helpers) do not install a query scheduler.  startRemoteTask executes
+		// synchronously at that boundary, so consume the completed task now;
+		// production continuations always take the readiness path below.
+		if !proc.HasEventSubmitter() {
+			return dispatch.completeRemoteTask(result)
+		}
+		result.Status = vm.ExecWaiting
+		result.OnReady = dispatch.ctr.remoteTask.RegisterReady
+		return result, nil
+	}
 	ok, err := dispatch.ctr.sendFunc(whichToSend, dispatch, proc)
 	if ok {
 		result.Status = vm.ExecStop
 	}
 	return result, err
+}
+
+func (dispatch *Dispatch) completeRemoteTask(result vm.CallResult) (vm.CallResult, error) {
+	done, end, taskErr := dispatch.ctr.remoteTask.result()
+	if !done {
+		result.Status = vm.ExecWaiting
+		result.OnReady = dispatch.ctr.remoteTask.RegisterReady
+		return result, nil
+	}
+	dispatch.ctr.remoteTask = nil
+	if taskErr != nil {
+		dispatch.ctr.pendingRemoteBatch = nil
+		return result, taskErr
+	}
+	if dispatch.ctr.pendingRemoteBatch == nil {
+		// The task only attached remote registrations for an empty child.
+		// The child has already reached its terminal batch, so do not call it
+		// a second time merely to observe the registration result.
+		result.Status = vm.ExecStop
+		return result, nil
+	}
+	result.Batch = dispatch.ctr.pendingRemoteBatch
+	dispatch.ctr.pendingRemoteBatch = nil
+	if end {
+		result.Status = vm.ExecStop
+	}
+	return result, nil
+}
+
+func (dispatch *Dispatch) startRemoteTask(proc *process.Process, bat *batch.Batch) error {
+	if dispatch == nil || dispatch.ctr == nil || dispatch.ctr.sendFunc == nil {
+		return moerr.NewInternalErrorNoCtx("dispatch task requested before send function setup")
+	}
+	if dispatch.ctr.remoteTask != nil {
+		return moerr.NewInternalErrorNoCtx("remote dispatch task already pending")
+	}
+	task := &remoteDispatchTask{}
+	dispatch.ctr.remoteTask = task
+	taskFn := func() {
+		var end bool
+		var err error
+		if bat == nil {
+			if !dispatch.ctr.isRemote {
+				task.complete(true, moerr.NewInternalErrorNoCtx("local dispatch cannot wait for remote registration"))
+				return
+			}
+			_, err = dispatch.waitRemoteRegsReady(proc)
+		} else {
+			end, err = dispatch.ctr.sendFunc(bat, dispatch, proc)
+		}
+		task.complete(end, err)
+	}
+	if !proc.HasEventSubmitter() {
+		taskFn()
+		return nil
+	}
+	if err := proc.SubmitEvent("dispatch-remote-send", taskFn); err != nil {
+		dispatch.ctr.remoteTask = nil
+		return err
+	}
+	return nil
 }
 
 func (dispatch *Dispatch) waitRemoteRegsReady(proc *process.Process) (bool, error) {
@@ -214,6 +339,91 @@ func (dispatch *Dispatch) waitRemoteRegsReady(proc *process.Process) (bool, erro
 	}
 	dispatch.ctr.prepared = true
 	return false, nil
+}
+
+// sendLocalPending is the resumable local dispatch state machine. It copies a
+// batch into the spool once, then publishes each receiver signal as capacity
+// becomes available. No polling or channel send can park a VM worker.
+func (dispatch *Dispatch) sendLocalPending(proc *process.Process) (bool, func(func()) error, error) {
+	if dispatch.ctr.pendingBatch == nil {
+		return false, nil, nil
+	}
+	receiverID := pSpool.SendToAllLocal
+	if dispatch.FuncId == SendToAnyLocalFunc {
+		if dispatch.ctr.localRegsCnt == 0 {
+			return true, nil, nil
+		}
+		receiverID = dispatch.ctr.sendCnt % dispatch.ctr.localRegsCnt
+		if localReceiverTerminal(dispatch.LocalRegs[receiverID]) {
+			dispatch.ctr.pendingBatch = nil
+			return true, nil, nil
+		}
+	} else {
+		// A terminal receiver is a completed local dispatch, not a full
+		// downstream edge.  Check before copying the batch into the spool so
+		// an aborted remote receiver cannot leave an un-signalled spool slot
+		// that repeatedly re-arms the continuation.
+		for _, reg := range dispatch.LocalRegs {
+			if localReceiverTerminal(reg) {
+				dispatch.ctr.pendingBatch = nil
+				return true, nil, nil
+			}
+		}
+	}
+	if !dispatch.ctr.pendingSpoolSent {
+		queryDone, sent, err := dispatch.ctr.sp.TrySendBatch(
+			receiverID, dispatch.ctr.pendingBatch, nil)
+		if err != nil {
+			return false, nil, err
+		}
+		if queryDone {
+			dispatch.ctr.pendingBatch = nil
+			return true, nil, nil
+		}
+		if !sent {
+			return false, dispatch.ctr.sp.RegisterSendReady, nil
+		}
+		dispatch.ctr.pendingSpoolSent = true
+	}
+
+	if dispatch.FuncId == SendToAnyLocalFunc {
+		if !dispatch.ctr.pendingSignals[receiverID] {
+			reg := dispatch.LocalRegs[receiverID]
+			if !reg.TrySendData(dispatch.ctr.sp, receiverID) {
+				return false, reg.RegisterCapacityReady, nil
+			}
+			dispatch.ctr.pendingSignals[receiverID] = true
+		}
+		dispatch.ctr.sendCnt++
+	} else {
+		for i, reg := range dispatch.LocalRegs {
+			if dispatch.ctr.pendingSignals[i] {
+				continue
+			}
+			if !reg.TrySendData(dispatch.ctr.sp, i) {
+				return false, reg.RegisterCapacityReady, nil
+			}
+			dispatch.ctr.pendingSignals[i] = true
+		}
+	}
+	dispatch.ctr.pendingBatch = nil
+	dispatch.ctr.pendingSpoolSent = false
+	for i := range dispatch.ctr.pendingSignals {
+		dispatch.ctr.pendingSignals[i] = false
+	}
+	return false, nil, nil
+}
+
+func localReceiverTerminal(reg *process.WaitRegister) bool {
+	if reg == nil {
+		return true
+	}
+	select {
+	case <-reg.Done():
+		return true
+	default:
+		return false
+	}
 }
 
 func remoteRegistrationCancelCause(ctx context.Context) error {

@@ -46,6 +46,14 @@ type waitingContinuationTestOperator struct {
 	steps int
 }
 
+type childYieldParentOperator struct {
+	*colexec.MockOperator
+}
+
+func (op *childYieldParentOperator) Call(proc *process.Process) (vm.CallResult, error) {
+	return vm.ChildrenCall(op.GetChildren(0), proc, op.OpAnalyzer)
+}
+
 func (op *waitingContinuationTestOperator) Call(proc *process.Process) (vm.CallResult, error) {
 	op.steps++
 	if op.steps == 1 {
@@ -170,6 +178,46 @@ func TestContinuationStepPropagatesOperatorReadiness(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("readiness callback was not delivered")
 	}
+	step, err = continuation.Step()
+	require.NoError(t, err)
+	require.Equal(t, StepDone, step.Status)
+	require.True(t, continuation.Done())
+}
+
+func TestContinuationPropagatesChildYieldThroughParent(t *testing.T) {
+	proc := process.NewTopProcess(
+		context.Background(),
+		mpool.MustNewZeroNoFixed(),
+		nil, nil, nil, nil, nil, nil, nil, nil, nil,
+	)
+	proc.BuildPipelineContext(context.Background())
+	t.Cleanup(func() { proc.Free() })
+
+	child := &waitingContinuationTestOperator{
+		MockOperator: colexec.NewMockOperator(),
+		ready:        make(chan func(), 1),
+	}
+	parent := &childYieldParentOperator{MockOperator: colexec.NewMockOperator()}
+	parent.AppendChild(child)
+	continuation, err := NewMerge(parent).NewContinuation(proc)
+	require.NoError(t, err)
+
+	step, err := continuation.Step()
+	require.NoError(t, err)
+	require.Equal(t, StepWaiting, step.Status)
+	require.NotNil(t, step.OnReady)
+	require.False(t, continuation.Done())
+
+	called := make(chan struct{})
+	require.NoError(t, step.OnReady(func() { close(called) }))
+	ready := <-child.ready
+	ready()
+	select {
+	case <-called:
+	case <-time.After(time.Second):
+		t.Fatal("child readiness did not reach parent continuation")
+	}
+
 	step, err = continuation.Step()
 	require.NoError(t, err)
 	require.Equal(t, StepDone, step.Status)

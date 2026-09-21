@@ -93,6 +93,8 @@ type WorkerJoinMailbox struct {
 	participants int
 	resetCount   int
 	stopped      bool
+	messageReady []func()
+	roundReady   []func()
 }
 
 func NewWorkerJoinMailbox(participants int) *WorkerJoinMailbox {
@@ -111,16 +113,97 @@ func (m *WorkerJoinMailbox) trySend(msg *WorkerJoinMsg) (sent, stopped bool, rou
 		return false, false, nil
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.stopped {
+		m.mu.Unlock()
 		return false, true, nil
 	}
 	select {
 	case m.ch <- msg:
-		return true, false, m.roundDone
+		callbacks := m.messageReady
+		m.messageReady = nil
+		roundDone = m.roundDone
+		m.mu.Unlock()
+		for _, callback := range callbacks {
+			callback()
+		}
+		return true, false, roundDone
 	default:
+		m.mu.Unlock()
 		return false, false, nil
 	}
+}
+
+func (m *WorkerJoinMailbox) tryReceive() (*WorkerJoinMsg, bool, error) {
+	if m == nil {
+		return nil, false, moerr.NewInternalErrorNoCtx("dedup join worker mailbox is not initialized")
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	select {
+	case msg, ok := <-m.ch:
+		if !ok || msg == nil {
+			return nil, false, moerr.NewInternalErrorNoCtx("dedup join worker returned an empty finalize status")
+		}
+		return msg, true, nil
+	default:
+		if m.stopped {
+			return nil, false, moerr.NewInternalErrorNoCtx(
+				"dedup join worker mailbox is stopped before all workers finalized")
+		}
+		return nil, false, nil
+	}
+}
+
+// RegisterMessageReady arms a one-shot callback for a worker status. It is
+// paired with tryReceive so a merger continuation never parks a scheduler
+// worker on the mailbox channel.
+func (m *WorkerJoinMailbox) RegisterMessageReady(callback func()) error {
+	if callback == nil {
+		return moerr.NewInvalidInputNoCtx("nil dedup join mailbox callback")
+	}
+	if m == nil {
+		callback()
+		return nil
+	}
+	m.mu.Lock()
+	ready := len(m.ch) > 0 || m.stopped
+	if !ready {
+		m.messageReady = append(m.messageReady, callback)
+	}
+	m.mu.Unlock()
+	if ready {
+		callback()
+	}
+	return nil
+}
+
+// RegisterRoundReady arms a one-shot callback for the round barrier that a
+// non-merger worker must observe after publishing its status.
+func (m *WorkerJoinMailbox) RegisterRoundReady(roundDone <-chan struct{}, callback func()) error {
+	if callback == nil {
+		return moerr.NewInvalidInputNoCtx("nil dedup join round callback")
+	}
+	if m == nil || roundDone == nil {
+		callback()
+		return nil
+	}
+	m.mu.Lock()
+	ready := m.roundDone != roundDone || m.stopped
+	if !ready {
+		select {
+		case <-roundDone:
+			ready = true
+		default:
+		}
+	}
+	if !ready {
+		m.roundReady = append(m.roundReady, callback)
+	}
+	m.mu.Unlock()
+	if ready {
+		callback()
+	}
+	return nil
 }
 
 func (m *WorkerJoinMailbox) receiveState() (roundDone <-chan struct{}, stopped bool) {
@@ -141,12 +224,18 @@ func (m *WorkerJoinMailbox) completeRound() {
 		return
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.stopped {
+		m.mu.Unlock()
 		return
 	}
+	callbacks := m.roundReady
+	m.roundReady = nil
 	close(m.roundDone)
 	m.roundDone = make(chan struct{})
+	m.mu.Unlock()
+	for _, callback := range callbacks {
+		callback()
+	}
 }
 
 func (m *WorkerJoinMailbox) stopAndDrain(proc *process.Process) {
@@ -154,13 +243,21 @@ func (m *WorkerJoinMailbox) stopAndDrain(proc *process.Process) {
 		return
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	var roundCallbacks, messageCallbacks []func()
 	if !m.stopped {
 		m.stopped = true
+		roundCallbacks = m.roundReady
+		messageCallbacks = m.messageReady
+		m.roundReady = nil
+		m.messageReady = nil
 		close(m.roundDone)
 		m.roundDone = nil
 	}
 	m.drainLocked(proc)
+	m.mu.Unlock()
+	for _, callback := range append(roundCallbacks, messageCallbacks...) {
+		callback()
+	}
 }
 
 func (m *WorkerJoinMailbox) drain(proc *process.Process) {
@@ -203,6 +300,8 @@ func (m *WorkerJoinMailbox) resetParticipant(proc *process.Process) {
 	m.resetCount = 0
 	m.stopped = false
 	m.roundDone = make(chan struct{})
+	m.messageReady = nil
+	m.roundReady = nil
 }
 
 // freeCapturedVecs releases vectors owned by a WorkerJoinMsg. Intended to be
@@ -281,8 +380,10 @@ type container struct {
 	evecs []evalVector
 	vecs  []*vector.Vector
 
-	mp        *message.JoinMap
-	cachedItr hashmap.Iterator
+	mp              *message.JoinMap
+	joinMapReceiver *message.JoinMapReceiver
+	pendingJoinMap  *message.JoinMapResult
+	cachedItr       hashmap.Iterator
 
 	matched *bitmap.Bitmap
 	// roundStatusPublished is true only while this worker's status for the
@@ -291,6 +392,8 @@ type container struct {
 	// merger that already advanced to the next spill bucket cannot wait
 	// forever after a normal worker early-stop.
 	roundStatusPublished bool
+	roundDone            <-chan struct{}
+	finalizeMessages     int
 
 	// Capture buffers for the REPLACE INTO merged main-table scan. When
 	// OldColCapturePlaceholderIdxList is non-empty, each entry i in the list
@@ -508,7 +611,11 @@ func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, er
 	}
 	ctr.cleanEvalVectors()
 	ctr.roundStatusPublished = false
+	ctr.roundDone = nil
+	ctr.finalizeMessages = 0
 	ctr.state = Build
+	ctr.joinMapReceiver = nil
+	ctr.pendingJoinMap = nil
 	ctr.lastPos = 0
 }
 

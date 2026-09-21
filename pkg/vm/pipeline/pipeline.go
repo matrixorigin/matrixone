@@ -40,6 +40,21 @@ func NewMerge(op vm.Operator) *Pipeline {
 	}
 }
 
+// BindReader installs scan metadata before a continuation is admitted. Reader
+// binding is part of pipeline construction, not execution, so Step never
+// performs reader setup itself.
+func (p *Pipeline) BindReader(r engine.Reader, topValueMsgTag int32) {
+	if p == nil || r == nil {
+		return
+	}
+	if tableScanOperator, ok := vm.GetLeafOp(p.rootOp).(*table_scan.TableScan); ok {
+		tableScanOperator.Reader = r
+		tableScanOperator.TopValueMsgTag = topValueMsgTag
+		tableScanOperator.Attrs = p.attrs
+		tableScanOperator.TableID = p.tableID
+	}
+}
+
 func (p *Pipeline) String() string {
 	var buf bytes.Buffer
 
@@ -99,10 +114,9 @@ func (p *Pipeline) Run(proc *process.Process) (end bool, err error) {
 }
 
 // StepStatus is the scheduler-visible state of a pipeline continuation.
-// Ready means that the continuation may be stepped again. Waiting is reserved
-// for operators that will publish an external readiness event once their
-// non-blocking wait contract is implemented. The current VM operators return
-// Ready while preserving the historical blocking behavior inside Call.
+// Ready means that the continuation may be stepped again. Waiting means the
+// operator has registered a concrete edge, spool, message, or cancellation
+// event and must not be called again until that event fires.
 type StepStatus uint8
 
 const (
@@ -122,9 +136,8 @@ type StepResult struct {
 
 // Continuation owns one Pipeline execution generation. Prepare and output
 // metadata setup happen once; each Step executes at most one vm.Exec quantum.
-// Run above is intentionally a compatibility adapter around this API so the
-// scheduler can migrate scope execution incrementally without changing
-// existing pipeline callers.
+// Run above is a synchronous boundary for callers outside query execution; the
+// production Scope scheduler drives this state machine directly.
 type Continuation struct {
 	p        *Pipeline
 	proc     *process.Process
@@ -142,8 +155,33 @@ func (p *Pipeline) NewContinuation(proc *process.Process) (*Continuation, error)
 	return &Continuation{p: p, proc: proc}, nil
 }
 
+// NewPreparedContinuation creates a continuation for an operator subtree that
+// was already prepared by its owning parent pipeline. Operators such as the
+// local Shuffle producer execute a child subtree on a separate process after
+// the parent VM preparation walk; preparing that subtree a second time would
+// duplicate holder/resource admission.
+func (p *Pipeline) NewPreparedContinuation(proc *process.Process) (*Continuation, error) {
+	continuation, err := p.NewContinuation(proc)
+	if err != nil {
+		return nil, err
+	}
+	continuation.prepared = true
+	return continuation, nil
+}
+
 func (c *Continuation) Done() bool {
 	return c == nil || c.done
+}
+
+// Context exposes the pipeline cancellation boundary to the query scheduler.
+// A continuation may be waiting on a data edge when its owning scope is
+// canceled by an early consumer; cancellation is itself a readiness event and
+// must re-admit the continuation so it can observe the terminal cause.
+func (c *Continuation) Context() context.Context {
+	if c == nil || c.proc == nil {
+		return nil
+	}
+	return c.proc.Ctx
 }
 
 func (c *Continuation) Step() (result StepResult, err error) {
@@ -172,6 +210,15 @@ func (c *Continuation) Step() (result StepResult, err error) {
 
 	callResult, callErr := vm.Exec(c.p.rootOp, c.proc)
 	if callErr != nil {
+		if yielded, ok := vm.AsYieldError(callErr); ok {
+			// A parent operator may have called ChildrenCall and propagated the
+			// child's readiness through its error return. Preserve the continuation
+			// as live: the dependency is external readiness, not execution failure.
+			result.Result = callResult
+			result.Status = StepWaiting
+			result.OnReady = yielded.OnReady
+			return result, nil
+		}
 		c.done = true
 		return StepResult{Status: StepDone, Result: callResult}, callErr
 	}
@@ -186,7 +233,16 @@ func (c *Continuation) Step() (result StepResult, err error) {
 		result.OnReady = callResult.OnReady
 		return result, nil
 	}
-	if callResult.Status == vm.ExecStop || callResult.Batch == nil {
+	if callResult.Status == vm.ExecStop {
+		c.done = true
+		result.Status = StepDone
+		return result, nil
+	}
+	// ExecHasMore is an internal continuation quantum.  Operators use it when
+	// they advanced their state without producing a downstream batch (for
+	// example, an adaptive branch transition).  It must not terminate the
+	// pipeline merely because Batch is nil.
+	if callResult.Batch == nil && callResult.Status != vm.ExecHasMore {
 		c.done = true
 		result.Status = StepDone
 		return result, nil

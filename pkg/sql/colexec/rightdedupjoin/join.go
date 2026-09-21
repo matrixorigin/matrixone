@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillutil"
-	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -106,6 +105,30 @@ func (rightDedupJoin *RightDedupJoin) Call(proc *process.Process) (vm.CallResult
 	for {
 		switch ctr.state {
 		case Build:
+			if ctr.joinMapReceiver == nil {
+				ctr.joinMapReceiver = message.NewJoinMapReceiver(
+					rightDedupJoin.JoinMapTag, rightDedupJoin.IsShuffle, rightDedupJoin.ShuffleIdx, proc.GetMessageBoard())
+			}
+			if ctr.pendingJoinMap == nil {
+				dep, ready, waitErr := ctr.joinMapReceiver.TryReceive()
+				if waitErr != nil {
+					return result, waitErr
+				}
+				if !ready {
+					if !proc.HasEventSubmitter() {
+						dep, receiveErr := ctr.joinMapReceiver.Receive(proc.Ctx)
+						if receiveErr != nil {
+							return result, receiveErr
+						}
+						ctr.pendingJoinMap = &dep
+						continue
+					}
+					result.Status = vm.ExecWaiting
+					result.OnReady = ctr.joinMapReceiver.RegisterReady
+					return result, nil
+				}
+				ctr.pendingJoinMap = &dep
+			}
 			err = rightDedupJoin.build(analyzer, proc)
 			if err != nil {
 				return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
@@ -208,12 +231,15 @@ func (rightDedupJoin *RightDedupJoin) Call(proc *process.Process) (vm.CallResult
 
 func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *process.Process) (err error) {
 	ctr := &rightDedupJoin.ctr
-	ctr.mp, err = process.MeasureWait(analyzer, resource.WaitOther, func() (*message.JoinMap, error) {
-		return message.ReceiveJoinMap(rightDedupJoin.JoinMapTag, rightDedupJoin.IsShuffle, rightDedupJoin.ShuffleIdx, proc.GetMessageBoard(), proc.Ctx)
-	})
-	if err != nil {
-		return
+	if ctr.pendingJoinMap == nil {
+		return moerr.NewInternalErrorNoCtx("right dedup join resumed without a ready join map")
 	}
+	dep := *ctr.pendingJoinMap
+	ctr.pendingJoinMap = nil
+	if buildErr := dep.BuildError(); buildErr != nil {
+		return buildErr.AsError()
+	}
+	ctr.mp = dep.JoinMap()
 
 	if ctr.mp == nil {
 		ctr.mp, err = rightDedupJoin.newEmptyJoinMap(proc)

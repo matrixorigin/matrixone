@@ -474,13 +474,26 @@ type BaseProcess struct {
 	UdfService                          udf.Service
 	WaitPolicy                          lock.WaitPolicy
 	messageBoard                        *message.MessageBoard
-	executionResourceBudgetMu           sync.Mutex
-	executionResourceBudget             *ExecutionResourceGeneration
-	cteMemoryBudgetMu                   sync.Mutex
-	cteMemoryBudget                     *CTEMemoryBudget
-	logger                              *log.MOLogger
-	TxnOperator                         client.TxnOperator
-	CloneTxnOperator                    client.TxnOperator
+	// eventSubmitter is installed by the query scope scheduler. Operators use
+	// it to move blocking external work (remote transport, reader setup, and
+	// similar sources) off the ready worker and publish one completion event.
+	// It is shared by all child processes through BaseProcess and is never part
+	// of the wire/process codec.
+	eventSubmitterMu sync.RWMutex
+	eventSubmitter   func(string, func()) error
+	// readySubmitter admits one non-blocking VM quantum back to the query
+	// scheduler's ready queue. It is deliberately separate from
+	// eventSubmitter: an event source may wait on transport/capacity, while a
+	// producer continuation must run as ordinary ready work once that event
+	// fires.
+	readySubmitter            func(string, func()) error
+	executionResourceBudgetMu sync.Mutex
+	executionResourceBudget   *ExecutionResourceGeneration
+	cteMemoryBudgetMu         sync.Mutex
+	cteMemoryBudget           *CTEMemoryBudget
+	logger                    *log.MOLogger
+	TxnOperator               client.TxnOperator
+	CloneTxnOperator          client.TxnOperator
 	// userLevelLockIdentity is session-scoped rather than statement-scoped.
 	// SessionInfo is rebuilt before every statement, so keeping this identity
 	// there would lose the synthetic transaction owner while locks are held.
@@ -630,6 +643,86 @@ func (proc *Process) GetMessageBoard() *message.MessageBoard {
 
 func (proc *Process) SetMessageBoard(mb *message.MessageBoard) {
 	proc.Base.messageBoard = mb
+}
+
+// SetEventSubmitter installs the query scheduler's external-event admission
+// hook. A nil submitter disables event-source admission after query teardown.
+func (proc *Process) SetEventSubmitter(submit func(string, func()) error) {
+	if proc == nil || proc.Base == nil {
+		return
+	}
+	proc.Base.eventSubmitterMu.Lock()
+	proc.Base.eventSubmitter = submit
+	proc.Base.eventSubmitterMu.Unlock()
+}
+
+// SubmitEvent moves blocking external work out of an operator's ready step.
+// The scheduler owns the event source and invokes task exactly once. A nil
+// submitter is an invalid execution topology rather than permission to fall
+// back to a blocking operator call.
+func (proc *Process) SubmitEvent(name string, task func()) error {
+	if proc == nil || proc.Base == nil {
+		return moerr.NewInternalErrorNoCtx("event source requires a process")
+	}
+	proc.Base.eventSubmitterMu.RLock()
+	submit := proc.Base.eventSubmitter
+	proc.Base.eventSubmitterMu.RUnlock()
+	if submit == nil {
+		return moerr.NewInternalErrorNoCtxf("event source %q has no query scheduler", name)
+	}
+	return submit(name, task)
+}
+
+// SetReadySubmitter installs the query scheduler's ready-queue admission hook.
+// Child processes share BaseProcess, so one installation covers every local
+// pipeline continuation in the scope tree.
+func (proc *Process) SetReadySubmitter(submit func(string, func()) error) {
+	if proc == nil || proc.Base == nil {
+		return
+	}
+	proc.Base.eventSubmitterMu.Lock()
+	proc.Base.readySubmitter = submit
+	proc.Base.eventSubmitterMu.Unlock()
+}
+
+// SubmitReady re-admits a non-blocking continuation quantum to the query
+// scheduler. Unlike SubmitEvent it must never execute the task on an event
+// source goroutine.
+func (proc *Process) SubmitReady(name string, task func()) error {
+	if proc == nil || proc.Base == nil {
+		return moerr.NewInternalErrorNoCtx("ready task requires a process")
+	}
+	proc.Base.eventSubmitterMu.RLock()
+	submit := proc.Base.readySubmitter
+	proc.Base.eventSubmitterMu.RUnlock()
+	if submit == nil {
+		return moerr.NewInternalErrorNoCtxf("ready task %q has no query scheduler", name)
+	}
+	return submit(name, task)
+}
+
+// HasReadySubmitter reports whether this process belongs to a query scheduler
+// with a ready queue. Direct VM unit callers do not install one.
+func (proc *Process) HasReadySubmitter() bool {
+	if proc == nil || proc.Base == nil {
+		return false
+	}
+	proc.Base.eventSubmitterMu.RLock()
+	defer proc.Base.eventSubmitterMu.RUnlock()
+	return proc.Base.readySubmitter != nil
+}
+
+// HasEventSubmitter reports whether the process belongs to a query scheduler.
+// Direct VM unit callers do not install one and use the synchronous operator
+// boundary; production Scope continuations always install the event source
+// hook before admitting operators.
+func (proc *Process) HasEventSubmitter() bool {
+	if proc == nil || proc.Base == nil {
+		return false
+	}
+	proc.Base.eventSubmitterMu.RLock()
+	defer proc.Base.eventSubmitterMu.RUnlock()
+	return proc.Base.eventSubmitter != nil
 }
 
 func (proc *Process) SetStmtProfile(sp *StmtProfile) {

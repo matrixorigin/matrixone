@@ -62,7 +62,9 @@ type container struct {
 	evecs []evalVector
 	vecs  []*vector.Vector
 
-	mp *message.JoinMap
+	mp              *message.JoinMap
+	joinMapReceiver *message.JoinMapReceiver
+	pendingJoinMap  *message.JoinMapResult
 
 	matched *bitmap.Bitmap
 
@@ -208,6 +210,8 @@ func (rightDedupJoin *RightDedupJoin) Reset(proc *process.Process, pipelineFaile
 	}
 	ctr.cleanEvalVectors()
 	ctr.state = Build
+	ctr.joinMapReceiver = nil
+	ctr.pendingJoinMap = nil
 }
 
 func (rightDedupJoin *RightDedupJoin) Free(proc *process.Process, pipelineFailed bool, err error) {

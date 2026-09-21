@@ -17,10 +17,12 @@ package dispatch
 import (
 	"bytes"
 	"context"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -74,6 +76,72 @@ type container struct {
 	rowCnt   []int
 
 	marshalBuf bytes.Buffer
+
+	// pendingBatch is retained across VM quanta while a local spool slot or
+	// receiver edge is full. The batch is copied exactly once; signal progress
+	// is tracked per receiver so retry never duplicates data.
+	pendingBatch     *batch.Batch
+	pendingSpoolSent bool
+	pendingSignals   []bool
+
+	// pendingRemoteBatch is retained while an external remote send is running.
+	// remoteTask publishes exactly one completion event; the VM continuation
+	// then resumes with the original batch without re-reading its child.
+	pendingRemoteBatch *batch.Batch
+	remoteTask         *remoteDispatchTask
+}
+
+type remoteDispatchTask struct {
+	mu        sync.Mutex
+	done      bool
+	end       bool
+	err       error
+	callbacks []func()
+}
+
+func (t *remoteDispatchTask) complete(end bool, err error) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	if t.done {
+		t.mu.Unlock()
+		return
+	}
+	t.done = true
+	t.end = end
+	t.err = err
+	callbacks := append([]func(){}, t.callbacks...)
+	t.callbacks = nil
+	t.mu.Unlock()
+	for _, callback := range callbacks {
+		callback()
+	}
+}
+
+func (t *remoteDispatchTask) result() (done, end bool, err error) {
+	if t == nil {
+		return true, true, moerr.NewInternalErrorNoCtx("nil remote dispatch task")
+	}
+	t.mu.Lock()
+	done, end, err = t.done, t.end, t.err
+	t.mu.Unlock()
+	return
+}
+
+func (t *remoteDispatchTask) RegisterReady(callback func()) error {
+	if callback == nil {
+		return moerr.NewInvalidInputNoCtx("nil remote dispatch readiness callback")
+	}
+	t.mu.Lock()
+	if t.done {
+		t.mu.Unlock()
+		callback()
+		return nil
+	}
+	t.callbacks = append(t.callbacks, callback)
+	t.mu.Unlock()
+	return nil
 }
 
 type Dispatch struct {

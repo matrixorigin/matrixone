@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"sync"
 
 	moerr "github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -28,6 +29,7 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
+	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -98,7 +100,14 @@ func (shuffle *Shuffle) Prepare(proc *process.Process) error {
 	shuffle.ctr.stableStringHash = proc.UsesCompleteStringShuffleHash()
 	if !shuffle.DrainAllBuckets {
 		shuffle.ctr.producerDone = make(chan struct{})
-		shuffle.ctr.directBatches = make(chan directHandoff)
+		shuffle.ctr.producerFinishOnce = sync.Once{}
+		// Keep the handoff buffered so the producer can publish a batch and
+		// signal readiness without making the scheduler worker part of the
+		// producer/consumer rendezvous. The acknowledgement still controls
+		// batch ownership and backpressure.
+		shuffle.ctr.directBatches = make(chan directHandoff, 1)
+		shuffle.ctr.directReady = make(chan struct{}, 1)
+		shuffle.ctr.directSpace = make(chan struct{}, 1)
 		shuffle.ctr.consumerDone = make(chan struct{})
 	}
 	return nil
@@ -123,8 +132,6 @@ func (shuffle *Shuffle) callSynchronous(proc *process.Process) (vm.CallResult, e
 
 	getFull := shuffle.ctr.shufflePool.getAnyFullBatch
 	getLast := shuffle.ctr.shufflePool.getAnyLastBatch
-	wait := func() { shuffle.ctr.shufflePool.waitAnyBatchOrEnd(proc) }
-
 	for {
 		result := vm.NewCallResult()
 		tmpBat := getFull()
@@ -154,13 +161,16 @@ func (shuffle *Shuffle) callSynchronous(proc *process.Process) (vm.CallResult, e
 				result.Batch = tmpBat
 				return result, nil
 			}
-			select {
-			case <-spaceWaiter:
-			case <-shuffle.ctr.shufflePool.endingWaiter:
-			case <-proc.Ctx.Done():
-				return vm.CancelResult, nil
+			if !proc.HasEventSubmitter() {
+				waitForShuffleSpace(spaceWaiter, shuffle.ctr.shufflePool.endingWaiter, proc)
+				continue
 			}
-			continue
+			return vm.CallResult{
+				Status: vm.ExecWaiting,
+				OnReady: shuffle.registerReady(proc, "shuffle-space", func() {
+					waitForShuffleSpace(spaceWaiter, shuffle.ctr.shufflePool.endingWaiter, proc)
+				}),
+			}, nil
 		}
 
 		if shuffle.ctr.shufflePool.allStop() {
@@ -178,9 +188,17 @@ func (shuffle *Shuffle) callSynchronous(proc *process.Process) (vm.CallResult, e
 		}
 
 		if shuffle.ctr.ending {
-			wait()
-			result.Batch = batch.EmptyBatch
-			return result, nil
+			if !proc.HasEventSubmitter() {
+				shuffle.ctr.shufflePool.waitAnyBatchOrEnd(proc)
+				result.Batch = batch.EmptyBatch
+				return result, nil
+			}
+			return vm.CallResult{
+				Status: vm.ExecWaiting,
+				OnReady: shuffle.registerReady(proc, "shuffle-ending", func() {
+					shuffle.ctr.shufflePool.waitAnyBatchOrEnd(proc)
+				}),
+			}, nil
 		}
 
 		// do input
@@ -229,6 +247,15 @@ func (shuffle *Shuffle) callLocal(proc *process.Process) (vm.CallResult, error) 
 	shuffle.startLocalProducer(proc)
 
 	for {
+		if err := proc.Ctx.Err(); err != nil {
+			return vm.CancelResult, err
+		}
+		select {
+		case handoff := <-shuffle.ctr.directBatches:
+			shuffle.ctr.directAck = handoff.ack
+			return shuffle.returnLocalBatch(proc, handoff.bat, false)
+		default:
+		}
 		if bat := shuffle.ctr.shufflePool.getFullBatch(shuffle.CurrentShuffleIdx); bat != nil {
 			return shuffle.returnLocalBatch(proc, bat, true)
 		}
@@ -243,17 +270,66 @@ func (shuffle *Shuffle) callLocal(proc *process.Process) (vm.CallResult, error) 
 			return vm.CancelResult, nil
 		}
 
-		select {
-		case handoff := <-shuffle.ctr.directBatches:
-			shuffle.ctr.directAck = handoff.ack
-			return shuffle.returnLocalBatch(proc, handoff.bat, false)
-		case <-shuffle.ctr.shufflePool.batchWaiters[shuffle.CurrentShuffleIdx]:
-		case <-shuffle.ctr.shufflePool.endingWaiters[shuffle.CurrentShuffleIdx]:
-		case <-shuffle.ctr.consumerDone:
-			return vm.CancelResult, nil
-		case <-proc.Ctx.Done():
-			return vm.CancelResult, context.Cause(proc.Ctx)
+		if !proc.HasEventSubmitter() {
+			waitForShuffleBucket(
+				shuffle.ctr.directReady,
+				shuffle.ctr.shufflePool.batchWaiters[shuffle.CurrentShuffleIdx],
+				shuffle.ctr.shufflePool.endingWaiters[shuffle.CurrentShuffleIdx],
+				shuffle.ctr.consumerDone,
+				proc,
+			)
+			continue
 		}
+		return vm.CallResult{
+			Status: vm.ExecWaiting,
+			OnReady: shuffle.registerReady(proc, "shuffle-bucket", func() {
+				waitForShuffleBucket(
+					shuffle.ctr.directReady,
+					shuffle.ctr.shufflePool.batchWaiters[shuffle.CurrentShuffleIdx],
+					shuffle.ctr.shufflePool.endingWaiters[shuffle.CurrentShuffleIdx],
+					shuffle.ctr.consumerDone,
+					proc,
+				)
+			}),
+		}, nil
+	}
+}
+
+// registerReady moves channel waits out of the scheduler's ready worker. The
+// wait itself is an external pool/hand-off event; the callback only re-admits
+// this operator's continuation after the event has fired.
+func (shuffle *Shuffle) registerReady(proc *process.Process, name string, wait func()) func(func()) error {
+	return func(ready func()) error {
+		if ready == nil {
+			return moerr.NewInvalidInputNoCtx("nil shuffle readiness callback")
+		}
+		return proc.SubmitEvent(name, func() {
+			wait()
+			ready()
+		})
+	}
+}
+
+func waitForShuffleSpace(space, ending <-chan struct{}, proc *process.Process) {
+	select {
+	case <-space:
+	case <-ending:
+	case <-proc.Ctx.Done():
+	}
+}
+
+func waitForShuffleBucket(
+	direct <-chan struct{},
+	batchReady, ending <-chan bool,
+	consumerDone <-chan struct{},
+	proc *process.Process,
+) {
+	select {
+	case <-direct:
+	case <-batchReady:
+	case <-ending:
+	case <-consumerDone:
+	case <-proc.Ctx.Done():
 	}
 }
 
@@ -289,6 +365,18 @@ func (shuffle *Shuffle) ackDirectBatch() {
 	if shuffle.ctr.directAck != nil {
 		close(shuffle.ctr.directAck)
 		shuffle.ctr.directAck = nil
+		if shuffle.ctr.directSpace != nil {
+			select {
+			case shuffle.ctr.directSpace <- struct{}{}:
+			default:
+			}
+		}
+	}
+	if shuffle.ctr.directReady != nil {
+		select {
+		case <-shuffle.ctr.directReady:
+		default:
+		}
 	}
 }
 
@@ -297,18 +385,310 @@ func (shuffle *Shuffle) startLocalProducer(proc *process.Process) {
 		producerProc := shuffle.PrepareChildrenProcess(proc)
 		shuffle.ctr.producerStarted = true
 		shuffle.ctr.shufflePool.registerProducer(shuffle.CurrentShuffleIdx, producerProc.Cancel)
+		if proc.HasReadySubmitter() {
+			producerPipeline := pipeline.New(0, nil, shuffle.GetChildren(0))
+			continuation, err := producerPipeline.NewPreparedContinuation(producerProc)
+			if err != nil {
+				shuffle.failLocalProducer(producerProc, err)
+				shuffle.finishLocalProducer()
+				return
+			}
+			shuffle.ctr.producerCont = continuation
+			if err := shuffle.scheduleProducer(producerProc); err != nil {
+				shuffle.failLocalProducer(producerProc, err)
+				shuffle.finishLocalProducer()
+			}
+			return
+		}
+		// Direct operator callers do not have a query scheduler. Keep the
+		// synchronous API boundary usable for unit tests and embedded helpers;
+		// production Scope execution always takes the ready-continuation path.
 		go shuffle.runLocalProducer(producerProc)
 	})
 }
 
+// scheduleProducer admits exactly one non-blocking local-shuffle producer
+// quantum to the query ready queue. It is intentionally not an event source:
+// the producer continuation only performs VM work and bounded in-memory
+// transformations once its input/capacity event has fired.
+func (shuffle *Shuffle) scheduleProducer(proc *process.Process) error {
+	return proc.SubmitReady("shuffle-producer", func() {
+		shuffle.runLocalProducerStep(proc)
+	})
+}
+
+func (shuffle *Shuffle) finishLocalProducer() {
+	if shuffle.ctr.held && !shuffle.ctr.writingStopped {
+		shuffle.stopWritingOnce()
+	}
+	if shuffle.ctr.producerDone != nil {
+		shuffle.ctr.producerFinishOnce.Do(func() {
+			close(shuffle.ctr.producerDone)
+		})
+	}
+}
+
+// registerProducerEvent waits for a pool/direct-handoff event off the ready
+// queue and re-admits the producer continuation when it fires. The event
+// source is allowed to block on the channel; it never executes VM code.
+func (shuffle *Shuffle) registerProducerEvent(
+	proc *process.Process,
+	name string,
+	wait func(),
+) error {
+	var once sync.Once
+	var stop func() bool
+	ready := func() {
+		once.Do(func() {
+			if stop != nil {
+				stop()
+			}
+			if err := shuffle.scheduleProducer(proc); err != nil {
+				shuffle.failLocalProducer(proc, err)
+				shuffle.finishLocalProducer()
+			}
+		})
+	}
+	if proc.Ctx != nil {
+		stop = context.AfterFunc(proc.Ctx, ready)
+	}
+	err := proc.SubmitEvent(name, func() {
+		wait()
+		ready()
+	})
+	if err != nil && stop != nil {
+		stop()
+	}
+	return err
+}
+
+func (shuffle *Shuffle) registerProducerContinuationReady(
+	proc *process.Process,
+	register func(func()) error,
+) error {
+	var once sync.Once
+	var stop func() bool
+	ready := func() {
+		once.Do(func() {
+			if stop != nil {
+				stop()
+			}
+			if err := shuffle.scheduleProducer(proc); err != nil {
+				shuffle.failLocalProducer(proc, err)
+				shuffle.finishLocalProducer()
+			}
+		})
+	}
+	if proc.Ctx != nil {
+		stop = context.AfterFunc(proc.Ctx, ready)
+	}
+	if err := register(ready); err != nil {
+		if stop != nil {
+			stop()
+		}
+		return err
+	}
+	return nil
+}
+
+// runLocalProducerStep is the event-driven producer state machine for a
+// fixed-bucket local exchange. Every invocation performs at most one child VM
+// quantum and never waits on pool capacity or consumer acknowledgement.
+func (shuffle *Shuffle) runLocalProducerStep(proc *process.Process) {
+	if err := proc.Ctx.Err(); err != nil {
+		shuffle.finishLocalProducer()
+		return
+	}
+	if shuffle.ctr.producerPending != nil {
+		pending := shuffle.ctr.producerPending
+		select {
+		case <-pending.ack:
+			shuffle.ctr.producerPending = nil
+			if err := shuffle.scheduleProducer(proc); err != nil {
+				shuffle.failLocalProducer(proc, err)
+				shuffle.finishLocalProducer()
+			}
+			return
+		case <-shuffle.ctr.consumerDone:
+			shuffle.ctr.producerPending = nil
+			shuffle.finishLocalProducer()
+			return
+		case <-shuffle.ctr.shufflePool.endingWaiter:
+			shuffle.ctr.producerPending = nil
+			shuffle.finishLocalProducer()
+			return
+		case <-proc.Ctx.Done():
+			shuffle.finishLocalProducer()
+			return
+		default:
+			if err := shuffle.registerProducerEvent(proc, "shuffle-direct-ack", func() {
+				select {
+				case <-pending.ack:
+				case <-shuffle.ctr.consumerDone:
+				case <-shuffle.ctr.shufflePool.endingWaiter:
+				case <-proc.Ctx.Done():
+				}
+			}); err != nil {
+				shuffle.failLocalProducer(proc, err)
+				shuffle.finishLocalProducer()
+			}
+			return
+		}
+	}
+
+	if shuffle.ctr.pendingBat != nil {
+		done, waiter, err := shuffle.flushPending(proc)
+		if err != nil {
+			shuffle.failLocalProducer(proc, err)
+			shuffle.finishLocalProducer()
+			return
+		}
+		if !done {
+			if err := shuffle.registerProducerEvent(proc, "shuffle-producer-space", func() {
+				select {
+				case <-waiter:
+				case <-shuffle.ctr.shufflePool.endingWaiter:
+				case <-proc.Ctx.Done():
+				}
+			}); err != nil {
+				shuffle.failLocalProducer(proc, err)
+				shuffle.finishLocalProducer()
+			}
+			return
+		}
+	}
+
+	step, err := shuffle.ctr.producerCont.Step()
+	if err != nil {
+		shuffle.failLocalProducer(proc, err)
+		shuffle.finishLocalProducer()
+		return
+	}
+	switch step.Status {
+	case pipeline.StepWaiting:
+		if step.OnReady == nil {
+			shuffle.failLocalProducer(proc, moerr.NewInternalErrorNoCtx(
+				"shuffle producer continuation waited without readiness"))
+			shuffle.finishLocalProducer()
+			return
+		}
+		if err := shuffle.registerProducerContinuationReady(proc, step.OnReady); err != nil {
+			shuffle.failLocalProducer(proc, err)
+			shuffle.finishLocalProducer()
+		}
+		return
+	case pipeline.StepDone:
+		shuffle.finishLocalProducer()
+		return
+	case pipeline.StepReady:
+		// ExecHasMore can advance a child without producing a batch. Re-admit
+		// another quantum immediately; normal child output is handled below.
+		bat := step.Result.Batch
+		if bat == nil {
+			if err := shuffle.scheduleProducer(proc); err != nil {
+				shuffle.failLocalProducer(proc, err)
+				shuffle.finishLocalProducer()
+			}
+			return
+		}
+		shuffle.ctr.producerRows += int64(bat.RowCount())
+		shuffle.ctr.producerSize += int64(bat.Size())
+		if bat.Last() {
+			if !shuffle.publishProducerDirect(proc, bat) {
+				return
+			}
+			if err := shuffle.scheduleProducer(proc); err != nil {
+				shuffle.failLocalProducer(proc, err)
+				shuffle.finishLocalProducer()
+			}
+			return
+		}
+		if bat.IsEmpty() {
+			if err := shuffle.scheduleProducer(proc); err != nil {
+				shuffle.failLocalProducer(proc, err)
+				shuffle.finishLocalProducer()
+			}
+			return
+		}
+		if shuffle.ctr.exprExec != nil {
+			bat, err = shuffle.evalAndShuffle(bat, proc)
+		} else if shuffle.ShuffleType == int32(plan.ShuffleType_Hash) {
+			bat, err = hashShuffle(shuffle, bat, proc)
+		} else if shuffle.ShuffleType == int32(plan.ShuffleType_Range) {
+			bat, err = rangeShuffle(shuffle, bat, proc)
+		}
+		if err != nil {
+			shuffle.failLocalProducer(proc, err)
+			shuffle.finishLocalProducer()
+			return
+		}
+		if bat != nil {
+			if !shuffle.publishProducerDirect(proc, bat) {
+				return
+			}
+		}
+		if err := shuffle.scheduleProducer(proc); err != nil {
+			shuffle.failLocalProducer(proc, err)
+			shuffle.finishLocalProducer()
+		}
+	default:
+		shuffle.failLocalProducer(proc, moerr.NewInternalErrorNoCtx(
+			"shuffle producer returned unknown continuation status"))
+		shuffle.finishLocalProducer()
+	}
+}
+
+func (shuffle *Shuffle) publishProducerDirect(proc *process.Process, bat *batch.Batch) bool {
+	ack := make(chan struct{})
+	pending := &directHandoff{bat: bat, ack: ack}
+	select {
+	case shuffle.ctr.directBatches <- *pending:
+		shuffle.ctr.producerPending = pending
+		select {
+		case shuffle.ctr.directReady <- struct{}{}:
+		default:
+		}
+		return true
+	case <-shuffle.ctr.consumerDone:
+		return false
+	case <-shuffle.ctr.shufflePool.endingWaiter:
+		return false
+	case <-proc.Ctx.Done():
+		return false
+	default:
+		if err := shuffle.registerProducerEvent(proc, "shuffle-direct-space", func() {
+			select {
+			case <-shuffle.ctr.directSpace:
+			case <-shuffle.ctr.consumerDone:
+			case <-shuffle.ctr.shufflePool.endingWaiter:
+			case <-proc.Ctx.Done():
+			}
+		}); err != nil {
+			shuffle.failLocalProducer(proc, err)
+			shuffle.finishLocalProducer()
+		}
+		return false
+	}
+}
+
 func (shuffle *Shuffle) runLocalProducer(proc *process.Process) {
+	producerPipeline := pipeline.New(0, nil, shuffle.GetChildren(0))
+	continuation, err := producerPipeline.NewPreparedContinuation(proc)
+	if err != nil {
+		shuffle.failLocalProducer(proc, err)
+		shuffle.finishLocalProducer()
+		return
+	}
+	producerDone := shuffle.ctr.producerDone
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			err := moerr.ConvertPanicError(proc.Ctx, recovered)
 			shuffle.ctr.shufflePool.abortWithError(proc.Mp(), err)
 		}
 		shuffle.stopWritingOnce()
-		close(shuffle.ctr.producerDone)
+		if producerDone != nil {
+			close(producerDone)
+		}
 	}()
 
 	for {
@@ -330,14 +710,42 @@ func (shuffle *Shuffle) runLocalProducer(proc *process.Process) {
 			}
 		}
 
-		result, err := vm.Exec(shuffle.GetChildren(0), proc)
+		step, err := continuation.Step()
 		if err != nil {
 			if proc.Ctx.Err() == nil {
 				shuffle.failLocalProducer(proc, err)
 			}
 			return
 		}
-		bat := result.Batch
+		if step.Status == pipeline.StepWaiting {
+			if step.OnReady == nil {
+				shuffle.failLocalProducer(proc, moerr.NewInternalErrorNoCtx(
+					"shuffle producer child returned ExecWaiting without readiness"))
+				return
+			}
+			ready := make(chan struct{}, 1)
+			if waitErr := step.OnReady(func() {
+				select {
+				case ready <- struct{}{}:
+				default:
+				}
+			}); waitErr != nil {
+				if proc.Ctx.Err() == nil {
+					shuffle.failLocalProducer(proc, waitErr)
+				}
+				return
+			}
+			select {
+			case <-ready:
+				continue
+			case <-proc.Ctx.Done():
+				return
+			}
+		}
+		if step.Status == pipeline.StepDone {
+			return
+		}
+		bat := step.Result.Batch
 		if bat == nil {
 			return
 		}
@@ -375,6 +783,10 @@ func (shuffle *Shuffle) sendDirectBatch(proc *process.Process, bat *batch.Batch)
 	handoff := directHandoff{bat: bat, ack: ack}
 	select {
 	case shuffle.ctr.directBatches <- handoff:
+		select {
+		case shuffle.ctr.directReady <- struct{}{}:
+		default:
+		}
 	case <-shuffle.ctr.consumerDone:
 		return true
 	case <-shuffle.ctr.shufflePool.endingWaiter:

@@ -34,12 +34,14 @@ const (
 )
 
 type container struct {
-	state       int
-	buildBatIdx int
-	buildRowIdx int
-	rbat        *batch.Batch
-	inBat       *batch.Batch
-	mp          *message.JoinMap
+	state           int
+	buildBatIdx     int
+	buildRowIdx     int
+	rbat            *batch.Batch
+	inBat           *batch.Batch
+	mp              *message.JoinMap
+	joinMapReceiver *message.JoinMapReceiver
+	pendingJoinMap  *message.JoinMapResult
 }
 
 const (
@@ -141,6 +143,8 @@ func (product *Product) Release() {
 func (product *Product) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	product.ctr.cleanBatch(proc.Mp())
 	product.ctr.state = Build
+	product.ctr.joinMapReceiver = nil
+	product.ctr.pendingJoinMap = nil
 }
 
 func (product *Product) Free(proc *process.Process, pipelineFailed bool, err error) {
