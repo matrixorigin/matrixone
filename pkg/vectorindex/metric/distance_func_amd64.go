@@ -641,25 +641,6 @@ func SphericalDistance[T types.RealNumbers](p, q []T) (T, error) {
 	return 0, moerr.NewInternalErrorNoCtx("vector type not supported")
 }
 
-func NormalizeL2[T types.RealNumbers](v1 []T, normalized []T) error {
-	if len(v1) == 0 {
-		return moerr.NewInternalErrorNoCtx("cannot normalize empty vector")
-	}
-	var sumSquares float64
-	for _, val := range v1 {
-		sumSquares += float64(val) * float64(val)
-	}
-	norm := math.Sqrt(sumSquares)
-	if norm == 0 {
-		copy(normalized, v1)
-		return nil
-	}
-	for i, val := range v1 {
-		normalized[i] = T(float64(val) / norm)
-	}
-	return nil
-}
-
 func ScaleInPlace[T types.RealNumbers](v []T, scale T) {
 	for i := range v {
 		v[i] *= scale
