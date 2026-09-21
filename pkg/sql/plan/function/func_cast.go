@@ -8712,7 +8712,7 @@ func strToDate(proc *process.Process,
 	isBinary := from.GetSourceVector().GetIsBin()
 	assignmentCast := mode.isAssignment()
 	allowInvalidDates := false
-	if assignmentCast || mode == castModeExplicit || mode == castModeNormal {
+	if assignmentCast || mode == castModeExplicit {
 		var err error
 		allowInvalidDates, err = process.ResolveAllowInvalidDates(proc)
 		if err != nil {
@@ -8860,7 +8860,7 @@ func strToDatetime(proc *process.Process,
 	isBinary := from.GetSourceVector().GetIsBin()
 	assignmentCast := mode.isAssignment()
 	allowInvalidDates := false
-	if assignmentCast || mode == castModeExplicit || mode == castModeNormal {
+	if assignmentCast || mode == castModeExplicit {
 		var err error
 		allowInvalidDates, err = process.ResolveAllowInvalidDates(proc)
 		if err != nil {
