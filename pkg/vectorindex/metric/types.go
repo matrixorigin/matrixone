@@ -218,9 +218,10 @@ func MaxFloat[T types.RealNumbers]() T {
 }
 
 // DistanceTransformHnsw converts a raw usearch distance to the value MO's SQL distance
-// function named by the QUERY returns, so an index-served score and a brute-force score
-// are the same number. Every conversion is monotonic and the caller applies it after the
-// result heap is ordered, so ranking is unaffected.
+// function named by the QUERY returns, so an index-served score and the scalar distance
+// agree in the float32 domain both live in (see RoundDistanceToElemDomain for why that is
+// float32-domain agreement, not bitwise equality). Every conversion is monotonic and the
+// caller applies it after the result heap is ordered, so ranking is unaffected.
 //
 // usearch is the only backend needing this HERE: the Go CPU kernels already return MO's
 // convention (InnerProduct returns -a·b), and cuVS output is negated inside cgo/cuvs
@@ -257,9 +258,18 @@ func DistanceTransformIvfflat(dist float64, origMetricType, metricType MetricTyp
 // the scalar l2_distance / l2_distance_sq / inner_product / cosine_distance likewise deliver a
 // float32-precision value for every supported base type (float32 and the narrow bf16/f16/int8/uint8,
 // computed via float32; cuvs has no float64 vectors at all). Standardizing every path on this one
-// domain keeps an index-served distance identical to the scalar one, so a projected value or a
-// pushed range predicate cannot disagree by a float32 ULP (#29040 / #29050). It is a trivial
-// float32 round-trip -- the compiler inlines it, so there is no per-row cost.
+// domain brings an index-served distance and the scalar one into the same precision, so they agree
+// in the float32 domain and neither a projected value nor a pushed range predicate carries a
+// float64 tail the other lacks (#29040 / #29050). It is a trivial float32 round-trip -- the
+// compiler inlines it, so there is no per-row cost.
+//
+// This is float32-domain agreement, NOT bitwise equality. The two paths can still differ by up to
+// one float32 ULP at an exact boundary: usearch accumulates in float32 SIMD whose order varies by
+// CPU/kernel (see vector_index_optype_matrix's round() note), and for a float64 base usearch returns
+// the squared distance already rounded to float32 -- so the index rounds the square before this sqrt
+// while the scalar rounds after. Guaranteeing bitwise equality would require recomputing the served
+// distance from the source vectors (ANN for candidate selection + exact scalar re-rank), which this
+// does not do.
 func RoundDistanceToElemDomain(dist float64) float64 {
 	return float64(float32(dist))
 }

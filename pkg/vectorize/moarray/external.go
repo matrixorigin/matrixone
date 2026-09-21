@@ -176,9 +176,10 @@ func InnerProduct[T types.RealNumbers](v1, v2 []T) (float64, error) {
 	}
 
 	// Vector distances are a float32 domain (usearch/cuvs return float32, and this is the
-	// per-row scalar twin of that index metric), so round a float64 base's result to float32
-	// too -- otherwise the scalar and the index disagree by a float32 ULP (#29040 / #29050).
-	// No-op for a float32 base.
+	// per-row scalar twin of that index metric), so round a float64 base's result into that
+	// domain too, keeping the scalar and the index in the same precision (#29040 / #29050).
+	// This is float32-domain agreement, not bitwise equality -- see metric.RoundDistanceToElemDomain
+	// for the residual float32-ULP boundary case. No-op for a float32 base.
 	return metric.RoundDistanceToElemDomain(float64(ret)), err
 }
 
@@ -203,8 +204,9 @@ func L2Distance[T types.RealNumbers](v1, v2 []T) (float64, error) {
 	}
 
 	ret, err := metric.L2Distance[T](v1, v2)
-	// Round a float64 base into the float32 distance domain so the scalar and index agree
-	// (see InnerProduct); no-op for a float32 base (#29040 / #29050).
+	// Round a float64 base into the float32 distance domain so the scalar and index agree in
+	// that domain -- float32-domain agreement, not bitwise (see InnerProduct and
+	// metric.RoundDistanceToElemDomain); no-op for a float32 base (#29040 / #29050).
 	return metric.RoundDistanceToElemDomain(float64(ret)), err
 }
 
@@ -233,8 +235,9 @@ func CosineDistance[T types.RealNumbers](v1, v2 []T) (float64, error) {
 	}
 
 	ret, err := metric.CosineDistance[T](v1, v2)
-	// Round a float64 base into the float32 distance domain so the scalar and index agree
-	// (see InnerProduct); no-op for a float32 base (#29040 / #29050).
+	// Round a float64 base into the float32 distance domain so the scalar and index agree in
+	// that domain -- float32-domain agreement, not bitwise (see InnerProduct and
+	// metric.RoundDistanceToElemDomain); no-op for a float32 base (#29040 / #29050).
 	return metric.RoundDistanceToElemDomain(float64(ret)), err
 }
 
