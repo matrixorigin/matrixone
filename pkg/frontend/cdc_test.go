@@ -3274,7 +3274,10 @@ func (c *claimLossWatermarkCatalog) Exec(_ context.Context, sql string, _ ie.Ses
 			// The real guarded UPDATE applies the same owner predicate. Keep the
 			// model strict so an old executor's delayed checkpoint would be
 			// observable if it ever ran after takeover.
-			if candidate == c.ownerGeneration {
+			// Checkpoint UPDATE is not an upsert in the real catalog. A delayed
+			// write after terminal cleanup must not recreate a missing watermark
+			// row and make this model more permissive than production storage.
+			if candidate == c.ownerGeneration && !c.deleted && c.watermark != "" {
 				c.watermark = watermark[1]
 				c.deleted = false
 			}

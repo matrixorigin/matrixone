@@ -464,6 +464,17 @@ func TestCDCNoFullPublicLifecycle(t *testing.T) {
 			secondEntered := make(chan struct{})
 			secondRelease := make(chan struct{})
 			var phase atomic.Int32
+			var captureReplacementBoundary atomic.Bool
+			replacementBoundary := make(chan types.TS, 1)
+			restoreCollectBoundary := cdc.SetCDCCollectBoundaryHookForTest(func(from, _ types.TS) {
+				if captureReplacementBoundary.Load() {
+					select {
+					case replacementBoundary <- from:
+					default:
+					}
+				}
+			})
+			defer restoreCollectBoundary()
 			var firstOnce, secondOnce, firstReleaseOnce, secondReleaseOnce sync.Once
 			releaseFirst := func() { firstReleaseOnce.Do(func() { close(firstRelease) }) }
 			releaseSecond := func() { secondReleaseOnce.Do(func() { close(secondRelease) }) }
@@ -704,17 +715,25 @@ func TestCDCNoFullPublicLifecycle(t *testing.T) {
 			}
 		secondAdmissionEntered:
 			// Admission is still blocked, so the replacement reader has not had a
-			// chance to publish a new checkpoint.  This exact equality is the
-			// recovery oracle: a reader that fell back to the CREATE boundary would
-			// not resume from the durable progress observed above.
+			// chance to collect changes. The durable row is only a setup check; the
+			// discriminating oracle below observes the first actual CollectChanges
+			// boundary after the replacement is released.
 			persistedAfterRestart, found, err := readWatermark()
 			require.NoError(t, err)
 			require.True(t, found, "replacement reader must observe the durable watermark")
 			require.Equal(t, checkpointBeforeRestart, persistedAfterRestart,
 				"replacement reader must start from the persisted pre-restart checkpoint")
 			mustExec(dbName, "insert into "+tableName+" values (3, 'after_restart')")
+			captureReplacementBoundary.Store(true)
 			releaseSecond()
 			require.NoError(t, <-secondScanDone)
+			select {
+			case actualStart := <-replacementBoundary:
+				require.Equal(t, checkpointBeforeRestart, actualStart,
+					"replacement reader must collect from the durable checkpoint")
+			case <-ctx.Done():
+				t.Fatal("replacement reader did not reach CollectChanges")
+			}
 
 			require.Eventually(t, func() bool { return waitTarget(3) }, 120*time.Second, 200*time.Millisecond,
 				"CDC did not deliver row 3 after restart")
