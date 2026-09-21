@@ -89,11 +89,13 @@ type scopeEventTask struct {
 // channels with one fixed goroutine; it never parks a scheduler event worker
 // on a network receive.
 type scopeChannelEvent struct {
-	id     uint64
-	name   string
-	ch     <-chan morpc.Message
-	ready  func(morpc.Message, bool)
-	reject func(error)
+	id       uint64
+	name     string
+	ch       <-chan morpc.Message
+	errCh    <-chan error
+	ready    func(morpc.Message, bool)
+	errReady func(error, bool)
+	reject   func(error)
 }
 
 func newScopeTaskScheduler(
@@ -209,9 +211,13 @@ func (s *scopeTaskScheduler) channelEventWorker() {
 		ids := make([]uint64, 0, len(s.channelEvents))
 		for id, event := range s.channelEvents {
 			ids = append(ids, id)
+			selectCh := reflect.ValueOf(event.ch)
+			if event.ch == nil {
+				selectCh = reflect.ValueOf(event.errCh)
+			}
 			cases = append(cases, reflect.SelectCase{
 				Dir:  reflect.SelectRecv,
-				Chan: reflect.ValueOf(event.ch),
+				Chan: selectCh,
 			})
 		}
 		s.channelMu.Unlock()
@@ -241,11 +247,24 @@ func (s *scopeTaskScheduler) channelEventWorker() {
 		if !exists {
 			continue
 		}
-		var message morpc.Message
-		if value.IsValid() && value.CanInterface() {
-			message, _ = value.Interface().(morpc.Message)
-		}
 		if err := s.submitRoot(event.name, func() {
+			if event.errReady != nil {
+				var sendErr error
+				if ok && value.IsValid() && value.CanInterface() {
+					// A successful send publishes a nil error through the
+					// interface-typed channel. Reflect represents that as a
+					// nil interface value, not as a concrete error.
+					if value.Kind() != reflect.Interface || !value.IsNil() {
+						sendErr, _ = value.Interface().(error)
+					}
+				}
+				event.errReady(sendErr, ok)
+				return
+			}
+			var message morpc.Message
+			if value.IsValid() && value.CanInterface() {
+				message, _ = value.Interface().(morpc.Message)
+			}
 			event.ready(message, ok)
 		}); err != nil {
 			event.reject(err)
@@ -549,6 +568,102 @@ func (s *scopeTaskScheduler) submitChannelEvent(
 	default:
 	}
 	return nil
+}
+
+// submitErrorEvent registers a one-shot completion channel from an external
+// writer or transport. It shares the fixed channel dispatcher with MORPC
+// receive events, so a ready worker is never parked waiting for an async send
+// to reach the backend writer.
+func (s *scopeTaskScheduler) submitErrorEvent(
+	name string,
+	ch <-chan error,
+	ready func(error),
+) error {
+	if ch == nil {
+		return errors.New("nil scope error event")
+	}
+	if ready == nil {
+		return errors.New("nil scope error callback")
+	}
+
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return errScopeTaskSchedulerClosed
+	}
+	if s.ctx != nil {
+		select {
+		case <-s.ctx.Done():
+			s.mu.Unlock()
+			return context.Cause(s.ctx)
+		default:
+		}
+	}
+	s.pending++
+	s.mu.Unlock()
+
+	s.channelMu.Lock()
+	if s.channelClosed {
+		s.channelMu.Unlock()
+		s.finishTask()
+		return errScopeTaskSchedulerClosed
+	}
+	s.channelNext++
+	id := s.channelNext
+	s.channelEvents[id] = scopeChannelEvent{
+		id:    id,
+		name:  name,
+		errCh: ch,
+		errReady: func(err error, ok bool) {
+			if !ok {
+				err = errors.New("scope error event channel closed")
+			}
+			ready(err)
+		},
+		reject: ready,
+	}
+	s.channelMu.Unlock()
+	select {
+	case s.channelWake <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+// submitStreamSend adapts MORPC's optional asynchronous stream writer to the
+// query scheduler. Production MORPC streams use AsyncStream, so the event
+// worker is released immediately after queue admission; compatibility stream
+// implementations fall back to the bounded external-I/O lane.
+func (s *scopeTaskScheduler) submitStreamSend(
+	name string,
+	stream morpc.Stream,
+	ctx context.Context,
+	message morpc.Message,
+	ready func(error),
+) error {
+	if stream == nil {
+		return errors.New("nil stream")
+	}
+	if ready == nil {
+		return errors.New("nil stream send callback")
+	}
+	if async, ok := stream.(morpc.AsyncStream); ok {
+		future, err := async.SendAsync(ctx, message)
+		if err != nil {
+			return err
+		}
+		if err = s.submitErrorEvent(name, future.SendDone(), func(sendErr error) {
+			future.Close()
+			ready(sendErr)
+		}); err != nil {
+			future.Close()
+			return err
+		}
+		return nil
+	}
+	return s.submitEventSource(name, func() {
+		ready(stream.Send(ctx, message))
+	})
 }
 
 // submitTimer admits a delayed external event without parking an event

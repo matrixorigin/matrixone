@@ -271,6 +271,18 @@ type Stream interface {
 	Close(closeConn bool) error
 }
 
+// AsyncStream is the optional non-blocking send surface for a Stream.
+// SendAsync admits the request to the MORPC writer and returns a Future whose
+// SendDone channel publishes the writer admission result.  The caller owns
+// the Future and must close it after consuming SendDone.  Keeping this as an
+// optional extension preserves the Stream compatibility surface for test and
+// embedding implementations while allowing event-driven callers to avoid
+// parking an execution worker on writer-queue backpressure.
+type AsyncStream interface {
+	Stream
+	SendAsync(ctx context.Context, request Message) (*Future, error)
+}
+
 // ClientOption client options for create client
 type ClientOption func(*client)
 

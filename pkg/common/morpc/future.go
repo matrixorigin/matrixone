@@ -198,6 +198,13 @@ func (f *Future) waitSendCompleted() error {
 	}
 }
 
+// SendDone returns the one-shot channel that publishes the stream writer
+// admission result.  It is intended for AsyncStream callers that register the
+// result with their own event loop instead of waiting synchronously.
+func (f *Future) SendDone() <-chan error {
+	return f.writtenC
+}
+
 func (f *Future) messageSent(err error) {
 	if !f.oneWay && f.waiting.CompareAndSwap(false, true) {
 		if err != nil {

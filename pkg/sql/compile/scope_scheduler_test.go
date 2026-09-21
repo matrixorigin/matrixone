@@ -157,6 +157,61 @@ func TestScopeTaskSchedulerChannelEventDoesNotOccupyEventWorker(t *testing.T) {
 	scheduler.wait()
 }
 
+func TestScopeTaskSchedulerErrorEventDoesNotOccupyEventWorker(t *testing.T) {
+	scheduler := newScopeTaskScheduler(context.Background(), 1, nil)
+	results := make(chan error, 1)
+	readyDone := make(chan struct{})
+
+	if err := scheduler.submitErrorEvent("send-event", results, func(err error) {
+		if err != nil {
+			results <- err
+			return
+		}
+		close(readyDone)
+	}); err != nil {
+		t.Fatalf("submit error event: %v", err)
+	}
+	workerDone := make(chan struct{})
+	if err := scheduler.submitRoot("ready-while-send-waits", func() {
+		close(workerDone)
+	}); err != nil {
+		t.Fatalf("submit ready task: %v", err)
+	}
+	select {
+	case <-workerDone:
+	case <-time.After(time.Second):
+		t.Fatal("ready worker was blocked by error event")
+	}
+	results <- nil
+	select {
+	case <-readyDone:
+	case <-time.After(time.Second):
+		t.Fatal("error event did not run")
+	}
+	scheduler.wait()
+}
+
+func TestScopeTaskSchedulerErrorEventCancellationReleasesRegistration(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	scheduler := newScopeTaskScheduler(ctx, 1, nil)
+	result := make(chan error, 1)
+	if err := scheduler.submitErrorEvent("canceled-send", make(chan error), func(err error) {
+		result <- err
+	}); err != nil {
+		t.Fatalf("submit error event: %v", err)
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("expected context cancellation, got %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("canceled error event was not rejected")
+	}
+	scheduler.wait()
+}
+
 func TestScopeTaskSchedulerTimerDoesNotOccupyEventWorker(t *testing.T) {
 	scheduler := newScopeTaskScheduler(context.Background(), 1, nil)
 	timerDone := make(chan struct{})

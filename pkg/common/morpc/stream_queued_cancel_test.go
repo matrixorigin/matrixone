@@ -83,3 +83,42 @@ func TestQueuedStreamCancellationPreservesWireSequence(t *testing.T) {
 		}),
 	)
 }
+
+// Async stream sends publish writer admission through the Future instead of
+// making the caller wait in Stream.Send. This is the contract used by query
+// schedulers when a full MORPC write queue must become an external event.
+func TestAsyncStreamSendPublishesWriterResult(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	wire := make(chan uint64, 1)
+	testBackendSend(t,
+		func(_ goetty.IOSession, value interface{}, _ uint64) error {
+			message := value.(RPCMessage)
+			wire <- message.Message.GetID()
+			return nil
+		},
+		func(b *remoteBackend) {
+			stream, err := b.NewStream(false)
+			require.NoError(t, err)
+			defer func() { require.NoError(t, stream.Close(false)) }()
+
+			async, ok := stream.(AsyncStream)
+			require.True(t, ok)
+			future, err := async.SendAsync(ctx, newTestMessage(stream.ID()))
+			require.NoError(t, err)
+			select {
+			case sendErr := <-future.SendDone():
+				require.NoError(t, sendErr)
+			case <-ctx.Done():
+				t.Fatal("async stream send did not publish writer result")
+			}
+			future.Close()
+			select {
+			case id := <-wire:
+				require.Equal(t, stream.ID(), id)
+			case <-ctx.Done():
+				t.Fatal("async stream message was not written")
+			}
+		},
+	)
+}

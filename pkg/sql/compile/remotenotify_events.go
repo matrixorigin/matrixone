@@ -107,13 +107,22 @@ func (r *remoteNotifyEventState) open() {
 	message.NeedNotReply = false
 	message.Uuid = r.uuid[:]
 	sender.markReportingRequestStarted()
-	if err = sender.streamSender.Send(sender.ctx, message); err != nil {
-		r.finish(err)
-		return
-	}
-	sender.markStreamActive(pbpipeline.Method_PrepareDoneNotifyMessage)
-
-	if err = r.scheduler.submitRoot("remote-notify-receive-start", r.receiveNext); err != nil {
+	if err = r.scheduler.submitStreamSend(
+		"remote-notify-send",
+		sender.streamSender,
+		sender.ctx,
+		message,
+		func(sendErr error) {
+			if sendErr != nil {
+				r.finish(sendErr)
+				return
+			}
+			sender.markStreamActive(pbpipeline.Method_PrepareDoneNotifyMessage)
+			if receiveErr := r.scheduler.submitRoot("remote-notify-receive-start", r.receiveNext); receiveErr != nil {
+				r.finish(receiveErr)
+			}
+		},
+	); err != nil {
 		r.finish(err)
 	}
 }
