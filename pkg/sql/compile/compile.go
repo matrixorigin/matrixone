@@ -6160,6 +6160,7 @@ func (c *Compile) compileAdaptiveTop(node *plan.Node, candidates [][]*Scope) []*
 	op := adaptivetop.NewArgument()
 	op.LimitExpr = plan2.DeepCopyExpr(node.Limit)
 	op.Branches = len(branches)
+	op.FallbackOnEmpty = node.GetAdaptiveTopFallbackOnEmpty()
 	op.SpillConfig = materialized.SpillConfig{
 		FileFactory: func(name string) (*os.File, error) {
 			spillFS, err := c.proc.GetSpillFileService()
