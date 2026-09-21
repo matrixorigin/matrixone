@@ -184,14 +184,16 @@ func (c *Candidate) Build(readValues map[int32][]byte) ([]byte, error) {
 }
 
 type exporter struct {
-	query        *planpb.Query
-	readValues   map[int32][]byte
-	reads        []Read
-	functions    map[string]uint32
-	validateOnly bool
-	visiting     map[int32]bool
-	readSeen     map[int32]bool
-	stepOrdinal  int32
+	query            *planpb.Query
+	readValues       map[int32][]byte
+	embeddedBindings map[int32]EmbeddedReadBinding
+	reads            []Read
+	functions        map[string]uint32
+	validateOnly     bool
+	visiting         map[int32]bool
+	readSeen         map[int32]bool
+	embeddedReadSeen map[int32]bool
+	stepOrdinal      int32
 }
 
 func (e *exporter) node(id int32) (*spb.Rel, error) {
@@ -218,6 +220,9 @@ func (e *exporter) node(id int32) (*spb.Rel, error) {
 	switch n.NodeType {
 	case planpb.Node_TABLE_SCAN:
 		rel, err = e.read(n)
+		if err == nil && e.embeddedBindings != nil && e.embeddedBindings[n.NodeId].Source == EmbeddedReadMO {
+			return rel, nil
+		}
 	case planpb.Node_FILTER:
 		rel, err = e.unary(n)
 		if err == nil {
@@ -610,6 +615,33 @@ func (e *exporter) read(n *planpb.Node) (*spb.Rel, error) {
 				Schema:        schemaBytes,
 			})
 		}
+	}
+	if e.embeddedBindings != nil {
+		if e.embeddedReadSeen == nil {
+			e.embeddedReadSeen = make(map[int32]bool)
+		}
+		if e.embeddedReadSeen[n.NodeId] {
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: embedded read node %d is replayed", n.NodeId)
+		}
+		e.embeddedReadSeen[n.NodeId] = true
+		binding, ok := e.embeddedBindings[n.NodeId]
+		if !ok {
+			return nil, moerr.NewInternalErrorNoCtxf("substrait: missing embedded binding for node %d", n.NodeId)
+		}
+		if binding.Source == EmbeddedReadMO {
+			_, outputSchema, embeddedErr := embeddedMORead(n)
+			if embeddedErr != nil {
+				return nil, embeddedErr
+			}
+			return embeddedNamedRead(binding, outputSchema), nil
+		}
+		rel := embeddedNamedRead(binding, schema)
+		width := len(schema.Struct.Types)
+		rel, err = e.applyFilter(rel, n.FilterList, []int{width})
+		if err != nil {
+			return nil, err
+		}
+		return e.applyProject(rel, width, n.ProjectList, []int{width})
 	}
 	value := e.readValues[n.NodeId]
 	if !e.validateOnly && len(value) == 0 {
