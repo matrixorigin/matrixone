@@ -667,6 +667,21 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
 	if err != nil {
 		return 0, err
 	}
+	// An explicit POST query normally keeps its approximate, single-round
+	// behavior. When its predicate is covered by an INCLUDE column, however,
+	// an empty first-round page is ambiguous: the matching row may be in a
+	// later centroid. Build a subtree-local exact fallback for that narrow
+	// case. The prepared context prevents the POST candidate from recursively
+	// rebuilding the fallback while it is being materialized.
+	coveredFilters, _ := splitFiltersByVectorIndexCoverage(
+		newFilterList, scanNode, includeColumns, ivfCtx.partPos)
+	if prepared == nil && len(includeColumns) > 0 && vecCtx.rankOption != nil &&
+		vecCtx.rankOption.Mode == "post" && len(coveredFilters) > 0 &&
+		hasVectorIndexIncludedColumnFilter(coveredFilters, scanNode, includeColumns) &&
+		builder.adaptiveIvfTopSupported(nodeID, vecCtx, true) {
+		return builder.buildAdaptiveIvfTopWithPolicy(
+			nodeID, vecCtx, multiTableIndex, colRefCnt, idxColMap, ivfCtx, true)
+	}
 	includeAwareColumns := includeColumns
 	// The local POST candidate is annotated as explicit POST to prevent nested
 	// adaptive construction, but it still owns the AUTO resolution semantics.
@@ -1274,6 +1289,13 @@ func (builder *QueryBuilder) adaptiveIvfReplaySafe(root int32) bool {
 	return safe(root)
 }
 
+func (builder *QueryBuilder) adaptiveIvfTopSupported(nodeID int32, vecCtx *vectorSortContext, allowMultiColumn bool) bool {
+	return vecCtx != nil && vecCtx.projNode != nil && len(vecCtx.projNode.ProjectList) > 0 &&
+		(allowMultiColumn || len(vecCtx.projNode.ProjectList) == 1) &&
+		!vecCtx.hasMembership && vecCtx.providerNodeID < 0 &&
+		builder.adaptiveIvfReplaySafe(nodeID)
+}
+
 func (builder *QueryBuilder) buildAdaptiveIvfTop(
 	nodeID int32,
 	vecCtx *vectorSortContext,
@@ -1282,18 +1304,32 @@ func (builder *QueryBuilder) buildAdaptiveIvfTop(
 	idxColMap map[[2]int32]*plan.Expr,
 	autoCtx *ivfIndexContext,
 ) (int32, error) {
+	return builder.buildAdaptiveIvfTopWithPolicy(
+		nodeID, vecCtx, multiTableIndex, colRefCnt, idxColMap, autoCtx, false)
+}
+
+func (builder *QueryBuilder) buildAdaptiveIvfTopWithPolicy(
+	nodeID int32,
+	vecCtx *vectorSortContext,
+	multiTableIndex *MultiTableIndex,
+	colRefCnt map[[2]int32]int,
+	idxColMap map[[2]int32]*plan.Expr,
+	autoCtx *ivfIndexContext,
+	fallbackOnEmpty bool,
+) (int32, error) {
 	ctx := builder.ctxByNode[nodeID]
 	// Replay requires an explicit positional output boundary and no external
 	// membership/provider dependency. A SORT alone has no output schema before
 	// remapping; copying its empty ProjectList cannot define candidate layouts.
 	// Keep unsupported regions intact and exact, before cloning or rewriting tags.
-	if vecCtx.projNode == nil || len(vecCtx.projNode.ProjectList) != 1 ||
-		vecCtx.hasMembership || vecCtx.providerNodeID >= 0 ||
-		!builder.adaptiveIvfReplaySafe(nodeID) {
+	if !builder.adaptiveIvfTopSupported(nodeID, vecCtx, fallbackOnEmpty) {
 		builder.forceAdaptiveVectorRegion(vecCtx)
 		return nodeID, nil
 	}
-	preRoot := builder.copyNode(ctx, nodeID)
+	var preRoot int32
+	if !fallbackOnEmpty {
+		preRoot = builder.copyNode(ctx, nodeID)
+	}
 	forceRoot := builder.copyNode(ctx, nodeID)
 
 	setVectorMode := func(root int32, mode string) {
@@ -1342,14 +1378,16 @@ func (builder *QueryBuilder) buildAdaptiveIvfTop(
 	}
 
 	setVectorMode(forceRoot, "force")
-	setVectorMode(preRoot, "pre")
-	preCtx := contextFor(preRoot)
-	if preCtx == nil {
-		return nodeID, moerr.NewInternalErrorNoCtx("cannot rebuild adaptive PRE vector context")
-	}
-	preRoot, err = builder.applyIndicesForSortUsingIvfflat(preRoot, preCtx, multiTableIndex, colRefCnt, make(map[[2]int32]*plan.Expr))
-	if err != nil {
-		return nodeID, err
+	if !fallbackOnEmpty {
+		setVectorMode(preRoot, "pre")
+		preCtx := contextFor(preRoot)
+		if preCtx == nil {
+			return nodeID, moerr.NewInternalErrorNoCtx("cannot rebuild adaptive PRE vector context")
+		}
+		preRoot, err = builder.applyIndicesForSortUsingIvfflat(preRoot, preCtx, multiTableIndex, colRefCnt, make(map[[2]int32]*plan.Expr))
+		if err != nil {
+			return nodeID, err
+		}
 	}
 	for key, expr := range postMap {
 		idxColMap[key] = expr
@@ -1361,12 +1399,16 @@ func (builder *QueryBuilder) buildAdaptiveIvfTop(
 	}
 	postNode := builder.qry.Nodes[postRoot]
 	adaptive := &plan.Node{
-		NodeType:    plan.Node_ADAPTIVE_TOP,
-		Children:    []int32{postRoot, preRoot, forceRoot},
-		Limit:       DeepCopyExpr(resultLimit),
-		ProjectList: DeepCopyExprList(postNode.ProjectList),
-		BindingTags: append([]int32(nil), postNode.BindingTags...),
-		Stats:       DeepCopyStats(postNode.Stats),
+		NodeType:                   plan.Node_ADAPTIVE_TOP,
+		Children:                   []int32{postRoot, forceRoot},
+		Limit:                      DeepCopyExpr(resultLimit),
+		ProjectList:                DeepCopyExprList(postNode.ProjectList),
+		BindingTags:                append([]int32(nil), postNode.BindingTags...),
+		Stats:                      DeepCopyStats(postNode.Stats),
+		AdaptiveTopFallbackOnEmpty: fallbackOnEmpty,
+	}
+	if !fallbackOnEmpty {
+		adaptive.Children = []int32{postRoot, preRoot, forceRoot}
 	}
 	if adaptive.Stats != nil && resultLimit.GetLit() != nil {
 		limit := resultLimit.GetLit().GetU64Val()
