@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -37,6 +39,10 @@ type readerPathCaptureEngine struct {
 	engine.Engine
 	database               engine.Database
 	buildBlockReadersCalls int
+	readerRelData          engine.RelData
+	readerTimestamp        timestamp.Timestamp
+	readerContext          context.Context
+	readerHint             engine.FilterHint
 }
 
 func (e *readerPathCaptureEngine) Database(
@@ -48,18 +54,31 @@ func (e *readerPathCaptureEngine) Database(
 }
 
 func (e *readerPathCaptureEngine) BuildBlockReaders(
-	context.Context,
-	any,
-	timestamp.Timestamp,
-	*plan.Expr,
-	*plan.TableDef,
-	engine.RelData,
-	int,
-	...engine.FilterHint,
+	ctx context.Context,
+	_ any,
+	ts timestamp.Timestamp,
+	_ *plan.Expr,
+	_ *plan.TableDef,
+	data engine.RelData,
+	_ int,
+	hints ...engine.FilterHint,
 ) ([]engine.Reader, error) {
 	e.buildBlockReadersCalls++
+	e.readerRelData = data
+	e.readerTimestamp = ts
+	e.readerContext = ctx
+	if len(hints) > 0 {
+		e.readerHint = hints[0]
+	}
 	return []engine.Reader{new(readutil.EmptyReader)}, nil
 }
+
+type readerPathAttachFailure struct {
+	engine.RelData
+	err error
+}
+
+func (r *readerPathAttachFailure) AttachTombstones(engine.Tombstoner) error { return r.err }
 
 type readerPathCaptureDatabase struct {
 	engine.Database
@@ -79,16 +98,18 @@ type readerPathCaptureRelation struct {
 	buildReadersCalls int
 	rangesCalls       int
 	rangesData        engine.RelData
+	rangesParam       engine.RangesParam
 	readerRelData     engine.RelData
 	ctx               context.Context
 	hint              engine.FilterHint
 }
 
 func (r *readerPathCaptureRelation) Ranges(
-	context.Context,
-	engine.RangesParam,
+	_ context.Context,
+	param engine.RangesParam,
 ) (engine.RelData, error) {
 	r.rangesCalls++
+	r.rangesParam = param
 	return r.rangesData, nil
 }
 
@@ -163,7 +184,7 @@ func TestBuildReadersChoosesOwnerByScanPlacement(t *testing.T) {
 	}
 }
 
-func TestDecodedSingleRemoteScopeBuildsRelationReader(t *testing.T) {
+func TestDecodedRemoteScopePreservesReaderContract(t *testing.T) {
 	tests := []struct {
 		name                 string
 		tableName            string
@@ -172,6 +193,8 @@ func TestDecodedSingleRemoteScopeBuildsRelationReader(t *testing.T) {
 		membershipFilter     []byte
 		wantReaderAccount    uint32
 		wantMembershipFilter []byte
+		partitionedMultiCN   bool
+		attachError          error
 	}{
 		{
 			name:                 "published fulltext table",
@@ -188,6 +211,18 @@ func TestDecodedSingleRemoteScopeBuildsRelationReader(t *testing.T) {
 			tableType:         catalog.SystemClusterRel,
 			wantReaderAccount: catalog.System_Account,
 		},
+		{
+			name:               "distributed partitioned table",
+			tableName:          "partitioned_generated",
+			wantReaderAccount:  99,
+			partitionedMultiCN: true,
+		},
+		{
+			name:               "distributed tombstone attachment failure",
+			tableName:          "partitioned_generated",
+			partitionedMultiCN: true,
+			attachError:        errors.New("attach shipped tombstones"),
+		},
 	}
 
 	for _, test := range tests {
@@ -202,13 +237,20 @@ func TestDecodedSingleRemoteScopeBuildsRelationReader(t *testing.T) {
 				},
 				TableDef: tableDef,
 			}
-			memoryRanges := readutil.NewBlockListRelationData(1)
+			var memoryRanges engine.RelData = readutil.NewBlockListRelationData(1)
+			if test.partitionedMultiCN {
+				memoryRanges = &disttae.CombinedRelData{}
+			}
+			if test.attachError != nil {
+				memoryRanges = &readerPathAttachFailure{RelData: readutil.NewBlockListRelationData(1), err: test.attachError}
+			}
 			captureRelation := &readerPathCaptureRelation{rangesData: memoryRanges}
 			captureEngine := &readerPathCaptureEngine{
 				database: &readerPathCaptureDatabase{relation: captureRelation},
 			}
 
 			senderProc := testutil.NewProcess(t)
+			t.Cleanup(senderProc.Free)
 			if len(test.membershipFilter) > 0 {
 				senderProc.Ctx = context.WithValue(
 					senderProc.Ctx,
@@ -225,8 +267,14 @@ func TestDecodedSingleRemoteScopeBuildsRelationReader(t *testing.T) {
 					TableDef:     tableDef,
 					SchemaName:   node.ObjRef.SchemaName,
 					RelationName: tableDef.Name,
+					Timestamp:    timestamp.Timestamp{PhysicalTime: 42},
 				},
 				NodeInfo: engine.Node{Mcpu: 1, CNCNT: 1},
+			}
+			if test.partitionedMultiCN {
+				senderScope.NodeInfo.CNCNT = 2
+				senderScope.NodeInfo.CNIDX = 1
+				senderScope.NodeInfo.Data = readutil.BuildEmptyRelData()
 			}
 			encodeCtx := &scopeContext{regs: make(map[*process.WaitRegister]int32)}
 			encodeCtx.root = encodeCtx
@@ -234,6 +282,7 @@ func TestDecodedSingleRemoteScopeBuildsRelationReader(t *testing.T) {
 			require.NoError(t, err)
 
 			remoteProc := testutil.NewProcess(t)
+			t.Cleanup(remoteProc.Free)
 			remoteProc.Ctx = defines.AttachAccountId(remoteProc.Ctx, 99)
 			txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 			txnOperator.EXPECT().GetWorkspace().Return(&Ws{}).AnyTimes()
@@ -242,21 +291,51 @@ func TestDecodedSingleRemoteScopeBuildsRelationReader(t *testing.T) {
 			decodeCtx.root = decodeCtx
 			decoded, err := generateScope(remoteProc, encoded, decodeCtx, true)
 			require.NoError(t, err)
+			t.Cleanup(func() { ReleaseScopes([]*Scope{decoded}) })
 			require.Nil(t, decoded.DataSource.Rel,
 				"relation handles are local execution state and are not serialized")
 
 			compile := &Compile{proc: remoteProc, e: captureEngine}
+			originalData := decoded.NodeInfo.Data
 			readers, err := decoded.buildReaders(compile)
+			t.Cleanup(func() {
+				for _, reader := range readers {
+					require.NoError(t, reader.Close())
+				}
+			})
+			if test.attachError != nil {
+				require.ErrorIs(t, err, test.attachError)
+				require.Empty(t, readers)
+				require.Zero(t, captureEngine.buildBlockReadersCalls)
+				require.Zero(t, captureRelation.buildReadersCalls)
+				require.Same(t, originalData, decoded.NodeInfo.Data, "failed attachment must not publish partial ranges")
+				return
+			}
 			require.NoError(t, err)
 			require.Len(t, readers, 1)
 			require.Equal(t, 1, captureRelation.rangesCalls)
-			require.Equal(t, 1, captureRelation.buildReadersCalls)
-			require.Zero(t, captureEngine.buildBlockReadersCalls)
-			require.Same(t, memoryRanges, captureRelation.readerRelData)
-			firstBlock := captureRelation.readerRelData.GetBlockInfo(0)
-			require.True(t, firstBlock.IsMemBlk())
-			require.Equal(t, test.wantMembershipFilter, captureRelation.hint.MembershipFilterBytes)
-			accountID, err := defines.GetAccountId(captureRelation.ctx)
+			readerContext := captureRelation.ctx
+			readerHint := captureRelation.hint
+			if test.partitionedMultiCN {
+				require.Equal(t, 1, captureEngine.buildBlockReadersCalls)
+				require.Zero(t, captureRelation.buildReadersCalls)
+				require.Same(t, memoryRanges, captureEngine.readerRelData)
+				require.Equal(t, senderScope.DataSource.Timestamp, captureEngine.readerTimestamp)
+				readerContext = captureEngine.readerContext
+				readerHint = captureEngine.readerHint
+				require.Equal(t, engine.DataCollectPolicy(engine.Policy_CollectCommittedPersistedData), captureRelation.rangesParam.Policy)
+				require.False(t, captureRelation.rangesParam.Rsp.IsLocalCN)
+				require.Equal(t, int32(2), captureRelation.rangesParam.Rsp.CNCNT)
+				require.Equal(t, int32(1), captureRelation.rangesParam.Rsp.CNIDX)
+			} else {
+				require.Equal(t, 1, captureRelation.buildReadersCalls)
+				require.Zero(t, captureEngine.buildBlockReadersCalls)
+				require.Same(t, memoryRanges, captureRelation.readerRelData)
+				firstBlock := captureRelation.readerRelData.GetBlockInfo(0)
+				require.True(t, firstBlock.IsMemBlk())
+			}
+			require.Equal(t, test.wantMembershipFilter, readerHint.MembershipFilterBytes)
+			accountID, err := defines.GetAccountId(readerContext)
 			require.NoError(t, err)
 			require.Equal(t, test.wantReaderAccount, accountID)
 		})

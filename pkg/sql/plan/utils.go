@@ -1317,6 +1317,42 @@ func PreparedPlanConversionParamPositions(preparePlan *Plan) []int32 {
 	return result
 }
 
+// PreparedPlanInetNtoaParamPositions returns marker positions whose direct
+// value is consumed by INET_NTOA. SQL EXECUTE uses this bounded plan metadata
+// to carry temporal/JSON source provenance only to that function; the same
+// marker can still retain the ordinary text transport contract elsewhere in
+// the statement.
+func PreparedPlanInetNtoaParamPositions(preparePlan *Plan) []int32 {
+	if preparePlan == nil {
+		return nil
+	}
+	positions := make(map[int32]struct{})
+	_ = plan.VisitExpressionsInOwner(preparePlan, func(expr *plan.Expr) error {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil ||
+			!strings.EqualFold(fn.Func.GetObjName(), "inet_ntoa") || len(fn.Args) != 1 {
+			return nil
+		}
+		if position, ok := preparedParamPosition(fn.Args[0]); ok {
+			positions[int32(position)] = struct{}{}
+			return nil
+		}
+		if position, ok := preparedResultParamPosition(fn.Args[0], "inet_ntoa"); ok {
+			positions[int32(position)] = struct{}{}
+		}
+		return nil
+	})
+	if len(positions) == 0 {
+		return nil
+	}
+	result := make([]int32, 0, len(positions))
+	for position := range positions {
+		result = append(result, position)
+	}
+	slices.Sort(result)
+	return result
+}
+
 func preparedPlanFunctionFallbackParamPositions(preparePlan *Plan, functionName string) []int32 {
 	if preparePlan == nil || preparePlan.GetQuery() == nil {
 		return nil
@@ -2005,6 +2041,10 @@ func constantFoldWithPreparedExactSource(
 			// and visible to the remote protocol capability analysis.
 			return expr, nil
 		}
+		requiresDecimalProvenance, err := plan.RequiresMORPCVersion89DecimalLiteralSemantics(exprList)
+		if err != nil {
+			return nil, err
+		}
 		isSerialized := rule.ContainsSerializedLiteral(exprList)
 
 		vec, err := colexec.GenerateConstListExpressionExecutor(proc, exprList)
@@ -2029,10 +2069,11 @@ func constantFoldWithPreparedExactSource(
 			Typ: expr.Typ,
 			Expr: &plan.Expr_Vec{
 				Vec: &plan.LiteralVec{
-					Len:          int32(vec.Length()),
-					Data:         data,
-					IsSerialized: isSerialized,
-					StringSource: uint32(vec.GetStringSource()),
+					Len:                       int32(vec.Length()),
+					Data:                      data,
+					IsSerialized:              isSerialized,
+					StringSource:              uint32(vec.GetStringSource()),
+					DecimalLiteralRequiresV82: requiresDecimalProvenance,
 				},
 			},
 		}, nil
@@ -2051,6 +2092,13 @@ func constantFoldWithPreparedExactSource(
 	f, err := function.GetFunctionById(proc.Ctx, overloadID)
 	if err != nil {
 		return nil, err
+	}
+	// View admission scans the optimized plan. Do not fold away a spatial
+	// distance expression before that scan can record its MORPC v90 floor; the
+	// original SQL is still rebound by older readers and must not lose its
+	// changed geodetic/overload semantics.
+	if requiresSpatial, spatialErr := plan.RequiresMORPCVersion90SpatialDistanceSemantics(expr); spatialErr != nil || requiresSpatial {
+		return expr, nil
 	}
 	if f.CannotFold() {
 		return expr, nil
@@ -2103,6 +2151,10 @@ func constantFoldWithPreparedExactSource(
 	defer free()
 
 	if isVec {
+		requiresDecimalProvenance, err := plan.RequiresMORPCVersion89DecimalLiteralSemantics(fn.Args)
+		if err != nil {
+			return nil, err
+		}
 		if vec.GetStringSources() != nil {
 			return expr, nil
 		}
@@ -2120,9 +2172,10 @@ func constantFoldWithPreparedExactSource(
 			},
 			Expr: &plan.Expr_Vec{
 				Vec: &plan.LiteralVec{
-					Len:          int32(vec.Length()),
-					Data:         data,
-					StringSource: uint32(vec.GetStringSource()),
+					Len:                       int32(vec.Length()),
+					Data:                      data,
+					StringSource:              uint32(vec.GetStringSource()),
+					DecimalLiteralRequiresV82: requiresDecimalProvenance,
 				},
 			},
 		}, nil
@@ -2132,6 +2185,7 @@ func constantFoldWithPreparedExactSource(
 		return expr, nil
 	}
 	rule.PreserveFoldedLiteralStringDomain(expr, c)
+	rule.PreserveFoldedDecimalLiteralSemantics(expr, c)
 	if source := vec.GetStringSource(); source != types.StringSourceLiteral {
 		c.StringSource = uint32(source) + 1
 	}
@@ -2186,8 +2240,22 @@ func unwindTupleComparison(ctx context.Context, nonEqOp, op string, leftExprs, r
 // hasTrailingZeros checks if a decimal constant has trailing zeros that can be safely truncated
 // to match the column's scale, allowing index usage
 func hasTrailingZeros(constExpr *plan.Expr, constT types.Type, columnScale int32) bool {
+	hasZeros, proven := decimalTrailingZerosStatus(constExpr, constT, columnScale)
+	// Every coercion consumer (including IN and BETWEEN) must record the
+	// dependency before a cast or list fold can replace its source literal.
+	if decimalSuffixUsesExtendedSemantics(constExpr, constT, columnScale, hasZeros, proven) {
+		unwrapCast(constExpr).GetLit().DecimalLiteralRequiresV82 = true
+	}
+	return hasZeros
+}
+
+// decimalTrailingZerosStatus returns whether the removable suffix is zero and
+// whether that answer was proven from the literal representation. The second
+// result keeps an arithmetic/parsing limitation from being mistaken for a
+// proven non-zero suffix by the early-comparison simplifier.
+func decimalTrailingZerosStatus(constExpr *plan.Expr, constT types.Type, columnScale int32) (bool, bool) {
 	if constT.Scale <= columnScale {
-		return false
+		return false, true
 	}
 
 	// Try to get the literal value
@@ -2206,35 +2274,55 @@ func hasTrailingZeros(constExpr *plan.Expr, constT types.Type, columnScale int32
 	}
 
 	if lit == nil || lit.Isnull {
-		return false
+		return false, false
 	}
 
 	// Calculate how many trailing digits we need to check
 	trailingDigits := constT.Scale - columnScale
-	if trailingDigits <= 0 || trailingDigits > 18 {
-		return false
-	}
-
-	// Get the decimal value and check trailing zeros
-	// Try DECIMAL64, DECIMAL128, and string literals
-	divisor := int64(types.Pow10[trailingDigits])
-
+	// Convert all fixed-width decimal carriers to Decimal256 so the suffix
+	// check does not silently narrow a wide value or stop at Decimal128's
+	// 18-digit divisor boundary.
 	if val, ok := lit.Value.(*plan.Literal_Decimal64Val); ok {
-		return val.Decimal64Val.A%divisor == 0
-	} else if val, ok := lit.Value.(*plan.Literal_Decimal128Val); ok {
-		// For Decimal128, we need to check if the trailing digits are all zeros
-		// using 128-bit arithmetic
-		return decimal128HasTrailingZeros(val.Decimal128Val.A, val.Decimal128Val.B, trailingDigits)
-	} else if sval, ok := lit.Value.(*plan.Literal_Sval); ok {
-		// The literal is a string, parse it as decimal
-		dec, _, err := types.Parse128(sval.Sval)
-		if err != nil {
-			return false
+		if constExpr.Typ.Id == int32(types.T_decimal64) ||
+			constExpr.Typ.Id == int32(types.T_decimal128) ||
+			constExpr.Typ.Id == int32(types.T_decimal256) {
+			if constExpr.Typ.Scale != constT.Scale {
+				return false, false
+			}
 		}
-		return decimal128HasTrailingZeros(int64(dec.B0_63), int64(dec.B64_127), trailingDigits)
+		return decimal256TrailingZerosStatus(
+			types.Decimal256FromInt64(val.Decimal64Val.A), trailingDigits)
+	} else if val, ok := lit.Value.(*plan.Literal_Decimal128Val); ok {
+		if constExpr.Typ.Id == int32(types.T_decimal64) ||
+			constExpr.Typ.Id == int32(types.T_decimal128) ||
+			constExpr.Typ.Id == int32(types.T_decimal256) {
+			if constExpr.Typ.Scale != constT.Scale {
+				return false, false
+			}
+		}
+		return decimal256TrailingZerosStatus(
+			types.Decimal256FromDecimal128(types.Decimal128{
+				B0_63:   uint64(val.Decimal128Val.A),
+				B64_127: uint64(val.Decimal128Val.B),
+			}), trailingDigits)
+	} else if sval, ok := lit.Value.(*plan.Literal_Sval); ok {
+		// The literal is a string. It may be an exact DECIMAL256 source, so
+		// parsing through Decimal128 can round the coefficient before we inspect
+		// the removable suffix and incorrectly report a non-zero tail.
+		dec, sourceScale, err := types.Parse256(sval.Sval)
+		if err != nil {
+			return false, false
+		}
+		if sourceScale != constT.Scale {
+			// An explicit cast may have rescaled the source literal. The
+			// source coefficient cannot be checked against the target scale
+			// without reproducing cast rounding, so do not claim a safe tail.
+			return false, false
+		}
+		return decimal256TrailingZerosStatus(dec, trailingDigits)
 	}
 
-	return false
+	return false, false
 }
 
 // decimal128HasTrailingZeros checks if a 128-bit decimal value has trailing zeros
@@ -2266,6 +2354,62 @@ func decimal128HasTrailingZeros(low, high int64, trailingDigits int32) bool {
 	return remainder.B0_63 == 0 && remainder.B64_127 == 0
 }
 
+func decimal256TrailingZerosStatus(value types.Decimal256, trailingDigits int32) (bool, bool) {
+	if trailingDigits <= 0 {
+		return false, true
+	}
+	if trailingDigits > types.T_decimal256.ToType().Width {
+		// A Decimal256 coefficient has at most 76 decimal digits. Only zero is
+		// divisible by a larger power of ten, so this remains a proven answer.
+		return decimal256IsZero(value), true
+	}
+	divisor, ok := decimal256PowerOfTen(trailingDigits)
+	if !ok {
+		return false, false
+	}
+	// Divisibility by a positive power of ten is independent of the sign.
+	// Mod256 operates on magnitudes, so normalize signed decimal coefficients
+	// before using it as the trailing-zero oracle.
+	if value.Sign() {
+		value = value.Minus()
+	}
+	remainder, err := value.Mod256(divisor)
+	if err != nil {
+		return false, false
+	}
+	return decimal256IsZero(remainder), true
+}
+
+func decimal256PowerOfTen(power int32) (types.Decimal256, bool) {
+	if power < 0 || power > types.T_decimal256.ToType().Width {
+		return types.Decimal256{}, false
+	}
+	result := types.Decimal256{B0_63: 1}
+	for power >= 19 {
+		next, err := result.Mul256(types.Decimal256{B0_63: types.Pow10[19]})
+		if err != nil {
+			return types.Decimal256{}, false
+		}
+		result = next
+		power -= 19
+	}
+	if power > 0 {
+		next, err := result.Mul256(types.Decimal256{B0_63: types.Pow10[power]})
+		if err != nil {
+			return types.Decimal256{}, false
+		}
+		result = next
+	}
+	return result, true
+}
+
+func decimal256IsZero(value types.Decimal256) bool {
+	return value.B0_63 == 0 &&
+		value.B64_127 == 0 &&
+		value.B128_191 == 0 &&
+		value.B192_255 == 0
+}
+
 // isDecimalComparisonAlwaysFalseCore checks if a decimal comparison is always false
 // This happens when the constant has non-zero digits beyond the column's scale
 func isDecimalComparisonAlwaysFalseCore(constExpr *plan.Expr, constT types.Type, columnScale int32) bool {
@@ -2273,8 +2417,14 @@ func isDecimalComparisonAlwaysFalseCore(constExpr *plan.Expr, constT types.Type,
 		return false
 	}
 
-	// If it has trailing zeros, it's not always false (can be optimized instead)
-	if hasTrailingZeros(constExpr, constT, columnScale) {
+	// If it has trailing zeros, it's not always false (can be optimized instead).
+	// If the exact suffix cannot be proven, retain the comparison rather than
+	// replacing a potentially matching predicate with a constant.
+	hasZeros, proven := decimalTrailingZerosStatus(constExpr, constT, columnScale)
+	if !proven {
+		return false
+	}
+	if hasZeros {
 		return false
 	}
 
@@ -3975,20 +4125,31 @@ func PreparedLagLeadParamPositions(preparePlan *Plan) []int32 {
 // for predicates and expressions whose overload depends on the parameter
 // domain (for example, `? = ?` in an UPDATE filter).
 func PreparedPlanNeedsRuntimeSpecialization(preparePlan *Plan) bool {
+	needs, integerAssignments := PreparedPlanRuntimeSpecializationRequirements(preparePlan)
+	return needs || len(integerAssignments) != 0
+}
+
+// PreparedPlanRuntimeSpecializationRequirements separates general specialization
+// from direct integer assignments. When needs is false, integerAssignments lists
+// the only markers that may still need source-domain restoration. A caller with
+// current protocol types can keep ordinary integer values on the original plan;
+// callers without that evidence must use PreparedPlanNeedsRuntimeSpecialization.
+// When needs is true, specialization is required regardless of those markers.
+func PreparedPlanRuntimeSpecializationRequirements(preparePlan *Plan) (needs bool, integerAssignments []int32) {
 	if preparePlan == nil {
-		return false
+		return false, nil
 	}
 
 	scanPlan := DeepCopyPlan(preparePlan)
 	if scanPlan == nil {
-		return true
+		return true, nil
 	}
 	query := scanPlan.GetQuery()
 	if query == nil && scanPlan.GetDdl() != nil {
 		query = scanPlan.GetDdl().GetQuery()
 	}
 	if query == nil {
-		return false
+		return false, nil
 	}
 	if scanPlan.GetQuery() == nil {
 		scanPlan = &Plan{Plan: &plan.Plan_Query{Query: query}}
@@ -4008,9 +4169,10 @@ func PreparedPlanNeedsRuntimeSpecialization(preparePlan *Plan) bool {
 	if err := NewVisitPlan(scanPlan, []VisitPlanRule{rule}).Visit(context.Background()); err != nil {
 		// The scan is an optimization only. Preserve correctness if a newly
 		// added plan field cannot be visited here.
-		return true
+		return true, nil
 	}
-	return rule.needs
+	slices.Sort(rule.integerAssignments)
+	return rule.needs, slices.Compact(rule.integerAssignments)
 }
 
 // PreparedPlanNeedsRuntimeTextComparisonSpecialization reports whether the
@@ -4166,10 +4328,11 @@ func preparedDMLWriteExpressions(query *plan.Query) map[*plan.Expr]struct{} {
 }
 
 type preparedRuntimeSpecializationScanRule struct {
-	directResult bool
-	needs        bool
-	skipExprs    map[*plan.Expr]struct{}
-	seen         map[*plan.Expr]struct{}
+	directResult       bool
+	needs              bool
+	integerAssignments []int32
+	skipExprs          map[*plan.Expr]struct{}
+	seen               map[*plan.Expr]struct{}
 }
 
 type preparedRuntimeTextComparisonScanRule struct {
@@ -4405,14 +4568,14 @@ func (rule *preparedRuntimeSpecializationScanRule) scanExpr(expr *plan.Expr, roo
 	if expr == nil || rule.needs {
 		return
 	}
-	if _, ok := directIntegerAssignmentParam(expr); ok {
-		rule.needs = true
-		return
-	}
 	if _, ok := rule.seen[expr]; ok {
 		return
 	}
 	rule.seen[expr] = struct{}{}
+	if pos, ok := directIntegerAssignmentParam(expr); ok {
+		rule.integerAssignments = append(rule.integerAssignments, int32(pos))
+		return
+	}
 
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_P:
@@ -5537,6 +5700,12 @@ type ParamValue struct {
 	// the cached plan.
 	RuntimeType    types.Type
 	HasRuntimeType bool
+	// InetNtoaSourceType carries a SQL EXECUTE user's assignment-time domain
+	// only for INET_NTOA. It must not participate in generic parameter
+	// coercion: a DATE/TIME/JSON user variable is still a text transport value
+	// for unrelated arithmetic and comparisons.
+	InetNtoaSourceType    types.Type
+	HasInetNtoaSourceType bool
 	// DirectResultType is the wire-visible DECIMAL domain parsed from the same
 	// binary-protocol lexeme as RuntimeType. RuntimeType keeps the normalized
 	// numeric-prefix domain used by common-type consumers; a direct result keeps
@@ -7498,6 +7667,9 @@ func preparedSetOperationCommonType(
 	if len(argTypes) == 0 {
 		return types.Type{}, false, nil
 	}
+	if pureCharType, ok := setOperationPureCharCommonType(argTypes); ok {
+		return pureCharType, true, nil
+	}
 	preserveGroupingBinary :=
 		(types.T(currentOutputType.Id) == types.T_binary || types.T(currentOutputType.Id) == types.T_varbinary) &&
 			(argTypes[0].Oid == types.T_binary || argTypes[0].Oid == types.T_varbinary)
@@ -7559,6 +7731,19 @@ func preparedSetOperationOutputType(
 	branchExprs []*plan.Expr,
 ) plan.Type {
 	outputType := setOperationOutputType(nodeType, leftType, rightType)
+	if len(branchExprs) > 0 {
+		sourceTypes := make([]types.Type, 0, len(branchExprs))
+		for _, expr := range branchExprs {
+			if expr != nil {
+				sourceTypes = append(sourceTypes, makeTypeByPlan2Expr(expr))
+			}
+		}
+		if pureCharType, ok := setOperationPureCharCommonType(sourceTypes); ok {
+			pureCharPlanType := makePlan2Type(&pureCharType)
+			pureCharPlanType.NotNullable = outputType.NotNullable
+			return pureCharPlanType
+		}
+	}
 	if types.T(outputType.Id) != types.T_varchar && types.T(outputType.Id) != types.T_text {
 		return outputType
 	}
@@ -7907,6 +8092,11 @@ func reconcilePreparedSetOperationInputs(
 			outputType = setOperationOutputType(
 				node.NodeType, outputType, childProjectLists[branchIdx][colPos].Typ,
 			)
+		}
+		if targetValid[colPos] {
+			resolved := makePlan2Type(&targetTypes[colPos])
+			resolved.NotNullable = outputType.NotNullable
+			outputType = resolved
 		}
 		branchExprs := make([]*plan.Expr, len(childProjectLists))
 		for branchIdx, projects := range childProjectLists {

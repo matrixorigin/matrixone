@@ -162,7 +162,7 @@ primary key(a)
 );
 show indexes from t;
 ➤ Table[12,1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,64,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,256,0]  ¦  Collation[12,1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,4,0]  ¦  Packed[12,4,0]  ¦  Null[12,3,0]  ¦  Index_type[12,11,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,2048,0]  ¦  Index_params[12,2048,0]  ¦  Visible[12,3,0]  ¦  Expression[12,256,0]  𝄀
-t  ¦  0  ¦  PRIMARY  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  a
+t  ¦  0  ¦  PRIMARY  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  a
 create account acc_idx ADMIN_NAME 'root' IDENTIFIED BY '123456';
 create database db1;
 use db1;
@@ -175,7 +175,7 @@ primary key(a)
 );
 show indexes from t;
 ➤ Table[12,1,0]  ¦  Non_unique[-5,64,0]  ¦  Key_name[12,64,0]  ¦  Seq_in_index[4,32,0]  ¦  Column_name[12,256,0]  ¦  Collation[12,1,0]  ¦  Cardinality[-5,64,0]  ¦  Sub_part[12,4,0]  ¦  Packed[12,4,0]  ¦  Null[12,3,0]  ¦  Index_type[12,11,0]  ¦  Comment[1,0,0]  ¦  Index_comment[12,2048,0]  ¦  Index_params[12,2048,0]  ¦  Visible[12,3,0]  ¦  Expression[12,256,0]  𝄀
-t  ¦  0  ¦  PRIMARY  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦    ¦    ¦    ¦    ¦  YES  ¦  a
+t  ¦  0  ¦  PRIMARY  ¦  1  ¦  a  ¦  A  ¦  0  ¦  NULL  ¦  NULL  ¦    ¦  BTREE  ¦    ¦    ¦    ¦  YES  ¦  a
 drop database db1;
 drop account acc_idx;
 use information_schema;
@@ -259,7 +259,7 @@ desc views;
 table_catalog  ¦  VARCHAR(3)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 table_schema  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 table_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-view_definition  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+view_definition  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 check_option  ¦  VARCHAR(9)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 is_updatable  ¦  VARCHAR(3)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 definer  ¦  VARCHAR(401)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀

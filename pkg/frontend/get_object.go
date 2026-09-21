@@ -311,7 +311,7 @@ func handleGetObject(
 func newGetObjectResultColumns() []*MysqlColumn {
 	colData := new(MysqlColumn)
 	colData.SetName("data")
-	setMysqlBinaryBlobColumnMetadata(colData, uint32(getObjectChunkSize))
+	setMysqlOpaqueBinaryBlobColumnMetadata(colData, uint32(getObjectChunkSize))
 
 	colTotalSize := new(MysqlColumn)
 	colTotalSize.SetName("total_size")

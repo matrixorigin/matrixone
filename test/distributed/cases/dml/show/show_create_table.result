@@ -144,7 +144,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 id    INT(32)    NO    PRI    null        
 i    INT(32)    YES        null        
 j    INT(32)    YES        null        
-t    TEXT(0)    YES        null        
+t    TEXT    YES        null        
 show create table t3;
 Table    Create Table
 t3    CREATE TABLE `t3` (\n  `id` int NOT NULL,\n  `i` int DEFAULT NULL,\n  `j` int DEFAULT NULL,\n  `t` text DEFAULT NULL,\n  PRIMARY KEY (`id`)\n)
@@ -162,7 +162,7 @@ Field    Type    Null    Key    Default    Extra    Comment
 id    INT(32)    NO    PRI    null        
 i    INT(32)    YES        null        
 j    INT(32)    YES        null        
-t    TEXT(0)    YES        null        
+t    TEXT    YES        null        
 e    ENUM('Y','N')    NO        Y
 show create table t3;
 Table    Create Table

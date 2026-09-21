@@ -35,7 +35,7 @@ type BalancedKMeans[T types.RealNumbers] struct {
 	vectorList    [][]T
 	clusterCnt    int
 	maxIterations int
-	distFn        metric.DistanceFunction[T]
+	distFn        func(v1, v2 []T) (float64, error)
 	normalize     bool
 	nworker       int
 
@@ -48,6 +48,7 @@ type BalancedKMeans[T types.RealNumbers] struct {
 	c2          []T
 	diffs       []pointDiff
 	localAssign []int
+	meanValues  []float64
 
 	deallocators []malloc.Deallocator
 }
@@ -71,7 +72,7 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 	numVectors := len(vectors)
 	logutil.Infof("kmeans summary: clusterCnt=%d, vectorCnt=%d, dim=%d, maxIterations=%d", clusterCnt, numVectors, dim, maxIterations)
 
-	distanceFunction, normalize, err := metric.ResolveKmeansDistanceFn[T](distanceType, spherical)
+	distanceFunction, normalize, err := metric.StableKmeansDistanceFn[T](distanceType, spherical)
 	if err != nil {
 		logutil.Errorf("kmeans ResolveKmeansDistanceFn error: %v", err)
 		return nil, err
@@ -155,6 +156,7 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 		return nil, err
 	}
 	localAssign := util.UnsafeSliceCastToLength[int](localAssignBytes, numVectors)
+	meanValues := make([]float64, numVectors)
 
 	return &BalancedKMeans[T]{
 		vectorList:    vectors,
@@ -170,6 +172,7 @@ func NewKMeans[T types.RealNumbers](vectors [][]T, clusterCnt,
 		c2:            c2,
 		diffs:         diffs,
 		localAssign:   localAssign,
+		meanValues:    meanValues,
 		deallocators:  deallocators,
 	}, nil
 }
@@ -278,7 +281,7 @@ func (km *BalancedKMeans[T]) bisectBalanced(
 	rnd *rand.Rand,
 ) error {
 	if k == 1 {
-		computeMeanFromIndicesInPlace(km.vectorList, indices, km.centroids[clusterStart])
+		computeMeanFromIndicesInPlace(km.vectorList, indices, km.centroids[clusterStart], km.meanValues)
 		if km.normalize {
 			metric.NormalizeL2(km.centroids[clusterStart], km.centroids[clusterStart])
 		}
@@ -334,7 +337,7 @@ func (km *BalancedKMeans[T]) bisectBalanced(
 				return err2
 			}
 			// diff < 0 means closer to c1
-			curDiffs[i] = pointDiff{index: i, diff: float64(d1) - float64(d2)}
+			curDiffs[i] = pointDiff{index: i, diff: d1 - d2}
 		}
 		return nil
 	}
@@ -375,8 +378,8 @@ func (km *BalancedKMeans[T]) bisectBalanced(
 			break
 		}
 
-		computeMeanFromIndicesAndAssignInPlace(km.vectorList, indices, curAssign, 0, c1)
-		computeMeanFromIndicesAndAssignInPlace(km.vectorList, indices, curAssign, 1, c2)
+		computeMeanFromIndicesAndAssignInPlace(km.vectorList, indices, curAssign, 0, c1, km.meanValues)
+		computeMeanFromIndicesAndAssignInPlace(km.vectorList, indices, curAssign, 1, c2, km.meanValues)
 		if km.normalize {
 			metric.NormalizeL2(c1, c1)
 			metric.NormalizeL2(c2, c2)
@@ -414,7 +417,7 @@ func (km *BalancedKMeans[T]) bisectBalanced(
 	return nil
 }
 
-func computeMeanFromIndicesAndAssignInPlace[T types.RealNumbers](data [][]T, indices []int, assignments []int, target int, out []T) {
+func computeMeanFromIndicesAndAssignInPlace[T types.RealNumbers](data [][]T, indices []int, assignments []int, target int, out []T, values []float64) {
 	dim := len(out)
 	for j := 0; j < dim; j++ {
 		out[j] = 0
@@ -426,43 +429,48 @@ func computeMeanFromIndicesAndAssignInPlace[T types.RealNumbers](data [][]T, ind
 			if firstIdx == -1 {
 				firstIdx = indices[i]
 			}
-			vIdx := indices[i]
-			for j := 0; j < dim; j++ {
-				out[j] += data[vIdx][j]
-			}
 			count++
 		}
 	}
-	if count > 0 {
-		isZero := true
-		for j := 0; j < dim; j++ {
-			out[j] /= T(count)
-			if out[j] != 0 {
-				isZero = false
+	if count == 0 {
+		return
+	}
+
+	isZero := true
+	for j := 0; j < dim; j++ {
+		valueCount := 0
+		for i, a := range assignments {
+			if a != target {
+				continue
 			}
+			values[valueCount] = float64(data[indices[i]][j])
+			valueCount++
 		}
-		if isZero && firstIdx != -1 {
-			copy(out, data[firstIdx])
+		mean, _ := metric.StableMean(values[:valueCount])
+		out[j] = T(mean)
+		if out[j] != 0 {
+			isZero = false
 		}
+	}
+	if isZero && firstIdx != -1 {
+		copy(out, data[firstIdx])
 	}
 }
 
-func computeMeanFromIndicesInPlace[T types.RealNumbers](data [][]T, indices []int, out []T) {
+func computeMeanFromIndicesInPlace[T types.RealNumbers](data [][]T, indices []int, out []T, values []float64) {
 	if len(indices) == 0 {
 		return
 	}
 	dim := len(out)
 	for j := 0; j < dim; j++ {
-		out[j] = 0
-	}
-	for _, vIdx := range indices {
-		for j := 0; j < dim; j++ {
-			out[j] += data[vIdx][j]
+		for i, vIdx := range indices {
+			values[i] = float64(data[vIdx][j])
 		}
+		mean, _ := metric.StableMean(values[:len(indices)])
+		out[j] = T(mean)
 	}
 	isZero := true
 	for j := 0; j < dim; j++ {
-		out[j] /= T(len(indices))
 		if out[j] != 0 {
 			isZero = false
 		}
