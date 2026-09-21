@@ -665,6 +665,10 @@ func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]T
 		return
 	}
 	s.handling = true
+	// Snapshot under the detector lock. ClearTableIdChanged replaces entries
+	// in the published map under the same lock; cloning outside it would race
+	// with that map write even though each subscriber receives its own copy.
+	tablesSnapshot := cloneTableSnapshot(tables)
 	callbacks := make([]TableCallback, 0, len(s.Callbacks))
 	for _, cb := range s.Callbacks {
 		callbacks = append(callbacks, cb)
@@ -700,7 +704,7 @@ func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]T
 	}()
 
 	for _, cb := range callbacks {
-		if cbErr := cb(cloneTableSnapshot(tables)); cbErr != nil {
+		if cbErr := cb(cloneTableSnapshot(tablesSnapshot)); cbErr != nil {
 			err = cbErr
 		}
 	}
