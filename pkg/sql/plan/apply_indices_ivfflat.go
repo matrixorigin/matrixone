@@ -17,6 +17,7 @@ package plan
 import (
 	"fmt"
 	"math"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -1697,4 +1698,122 @@ func refsColumn(expr *plan.Expr, tag int32, colPos int32) bool {
 		}
 	}
 	return false
+}
+
+// -----------------------------------------------------------------------------
+// IVFFlat result-column source resolution.
+//
+// These functions resolve a VECTOR_INDEX_SCAN result column (pkid / score /
+// __mo_index_include_<name>) back to its source-table column metadata. They live
+// here, in the ivfflat plan layer, rather than in build.go's generic result-column
+// resolver, because the synthetic schema they decode is IVFFlat-specific.
+// build.go dispatches into resultColumnSourceFromVectorIndexScan for a
+// VECTOR_INDEX_SCAN node; the function fails closed (returns nil) for any node
+// whose index algorithm is not IVFFlat, so a VECTOR_INDEX_SCAN emitted by another
+// algorithm never inherits IVFFlat's schema by accident (#29212). Relocated from
+// build.go where it was introduced by PR #28833 (fixes #28719).
+// -----------------------------------------------------------------------------
+
+func resultColumnSourceFromVectorIndexScan(scan *plan.VectorIndexScan, vectorTableDef *plan.TableDef, colPos int32) *resultColumnSource {
+	if scan == nil || scan.SourceTableDef == nil || vectorTableDef == nil || colPos < 0 {
+		return nil
+	}
+
+	// Only IVFFlat's synthetic schema (pkid, score, __mo_index_include_<name>) is
+	// understood here. Any other algorithm's VECTOR_INDEX_SCAN has a different
+	// schema, so fail closed rather than mis-resolve it as IVFFlat (#29212).
+	// GetIndexAlgo is nil-safe, so a missing Index also fails closed.
+	if !catalog.IsIvfIndexAlgo(scan.Index.GetIndexAlgo()) {
+		return nil
+	}
+
+	// remapAllColRefs compacts VECTOR_INDEX_SCAN.TableDef.Cols to only the
+	// slots still referenced by consumers and rewrites their ColPos values to
+	// local positions. Resolve the synthetic column name (not the slot index),
+	// so a pruned [score, include] schema cannot be mistaken for the original
+	// [pkid, score, include...] layout.
+	if int(colPos) >= len(vectorTableDef.Cols) {
+		return nil
+	}
+	col := vectorTableDef.Cols[colPos]
+	if col == nil {
+		return nil
+	}
+	var sourceColPos int32
+	switch {
+	case strings.EqualFold(col.Name, "pkid"):
+		sourceColPos = resultColumnPrimaryKeyPosition(scan.SourceTableDef)
+		if sourceColPos < 0 {
+			return nil
+		}
+	case strings.EqualFold(col.Name, "score"):
+		return nil
+	case strings.HasPrefix(col.Name, catalog.SystemSI_IVFFLAT_IncludeColPrefix):
+		includeName := strings.TrimPrefix(col.Name, catalog.SystemSI_IVFFLAT_IncludeColPrefix)
+		if includeName == "" || !resultColumnNameInList(scan.IncludedColumns, includeName) {
+			return nil
+		}
+		var found bool
+		sourceColPos, found = resultColumnPositionByName(scan.SourceTableDef, includeName)
+		if !found {
+			return nil
+		}
+	default:
+		return nil
+	}
+
+	source := resultColumnSourceFromTableDef(scan.SourceTableDef, sourceColPos)
+	if source == nil {
+		return nil
+	}
+	// ObjectRef is the authoritative resolved object identity for vector
+	// scans.  Older plans may leave the corresponding names empty on
+	// SourceTableDef, so use it only to complete missing/physical names.
+	if scan.SourceTable != nil {
+		if source.dbName == "" {
+			source.dbName = scan.SourceTable.DbName
+			if source.dbName == "" {
+				source.dbName = scan.SourceTable.SchemaName
+			}
+		}
+		if source.tableName == "" {
+			source.tableName = scan.SourceTable.ObjName
+		}
+	}
+	return source
+}
+
+func resultColumnPrimaryKeyPosition(tableDef *plan.TableDef) int32 {
+	if tableDef == nil || tableDef.Pkey == nil || tableDef.Pkey.PkeyColName == "" {
+		return -1
+	}
+	if pos, ok := resultColumnPositionByName(tableDef, tableDef.Pkey.PkeyColName); ok {
+		return pos
+	}
+	return -1
+}
+
+func resultColumnPositionByName(tableDef *plan.TableDef, name string) (int32, bool) {
+	if tableDef == nil || name == "" {
+		return -1, false
+	}
+	if tableDef.Name2ColIndex != nil {
+		if pos, ok := tableDef.Name2ColIndex[strings.ToLower(name)]; ok &&
+			pos >= 0 && int(pos) < len(tableDef.Cols) && tableDef.Cols[pos] != nil &&
+			strings.EqualFold(tableDef.Cols[pos].GetOriginCaseName(), name) {
+			return pos, true
+		}
+	}
+
+	var found int32 = -1
+	for pos, col := range tableDef.Cols {
+		if col == nil || !strings.EqualFold(col.GetOriginCaseName(), name) {
+			continue
+		}
+		if found >= 0 {
+			return -1, false
+		}
+		found = int32(pos)
+	}
+	return found, found >= 0
 }
