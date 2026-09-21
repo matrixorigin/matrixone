@@ -5032,7 +5032,15 @@ func TestCdcTask_handleNewTables_addpipeline(t *testing.T) {
 			"db1.tb2": &cdc.DbTableInfo{IdChanged: true},
 		},
 	}
-	detector.Mp = mp
+	// The detector publishes immutable callback snapshots. Keep its owned
+	// descriptors separate from the callback map so clearing IdChanged cannot
+	// mutate the snapshot passed to handleNewTables.
+	detector.Mp = map[uint32]cdc.TblMap{
+		0: {
+			"db1.tb1": &cdc.DbTableInfo{},
+			"db1.tb2": &cdc.DbTableInfo{IdChanged: true},
+		},
+	}
 
 	fault.Enable()
 	objectio.SimpleInject(objectio.FJ_CDCAddExecErr)
