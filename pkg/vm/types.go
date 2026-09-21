@@ -19,6 +19,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -281,7 +282,7 @@ func (e *YieldError) Error() string {
 
 func NewYieldError(onReady func(func()) error) error {
 	if onReady == nil {
-		return errors.New("vm operator yielded without readiness registration")
+		return moerr.NewInternalErrorNoCtx("vm operator yielded without readiness registration")
 	}
 	return &YieldError{OnReady: onReady}
 }
