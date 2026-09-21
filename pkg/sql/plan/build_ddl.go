@@ -307,6 +307,17 @@ func genViewTableDef(
 				typ = sourceType
 			}
 		}
+		// Temporal expression types use Scale for their SQL FSP. View columns
+		// are persisted directly from the projection metadata, so keep Width in
+		// sync for the SHOW/DESC path just as CTAS does below.
+		if typ.Scale > 0 {
+			switch types.T(typ.Id) {
+			case types.T_time, types.T_datetime, types.T_timestamp:
+				if typ.Width < typ.Scale {
+					typ.Width = typ.Scale
+				}
+			}
+		}
 		defaultDef := &plan.Default{NullAbility: !expr.Typ.NotNullable}
 		if idx < len(outputColumnProvenance) {
 			provenance := outputColumnProvenance[idx]
