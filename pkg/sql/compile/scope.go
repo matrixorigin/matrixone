@@ -351,6 +351,9 @@ func (s *Scope) Run(c *Compile) (err error) {
 		return s.runEventAsync(c, done)
 	})
 	if err != nil {
+		if ownsScheduler {
+			c.waitScopeTaskScheduler()
+		}
 		normalized, _ := normalizeScopeRunError(
 			err,
 			s.Proc.Ctx,
@@ -797,6 +800,9 @@ func (s *Scope) RemoteRun(c *Compile) error {
 		return s.remoteRunAsync(c, done)
 	})
 	if err != nil {
+		if ownsScheduler {
+			c.waitScopeTaskScheduler()
+		}
 		return err
 	}
 	_, err = future.Await(context.Background())
@@ -1030,6 +1036,9 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 		return s.parallelRunAsync(c, done)
 	})
 	if err != nil {
+		if ownsScheduler {
+			c.waitScopeTaskScheduler()
+		}
 		return err
 	}
 	_, err = future.Await(context.Background())

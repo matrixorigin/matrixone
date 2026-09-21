@@ -101,6 +101,9 @@ func (s *Scope) MergeRun(c *Compile) error {
 		return s.mergeRunAsync(c, done)
 	})
 	if err != nil {
+		if ownsScheduler {
+			c.waitScopeTaskScheduler()
+		}
 		return err
 	}
 	_, err = future.Await(context.Background())
