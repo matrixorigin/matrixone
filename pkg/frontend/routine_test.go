@@ -843,6 +843,60 @@ func TestMigrateConnectionFromRejectsActivePreparedCursors(t *testing.T) {
 	require.Len(t, resp.PrepareStmts, 2)
 }
 
+func TestMigrateConnectionFromWaitsForCursorCloseRequest(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	const cursorBytes = 128
+	require.True(t, ses.tryReservePreparedCursorBytes(cursorBytes, cursorBytes))
+	stmt := &PrepareStmt{
+		Name: GetPrepareStmtName(41),
+		Sql:  "select 1",
+		cursor: &preparedStmtCursor{
+			result: &MysqlResultSet{Data: [][]interface{}{{int64(1)}}},
+			owner:  ses,
+			bytes:  cursorBytes,
+		},
+	}
+	require.NoError(t, ses.SetPrepareStmt(context.Background(), stmt.Name, stmt))
+	rt := &Routine{mc: newMigrateController()}
+	rt.setSession(ses)
+
+	// A FETCH or CLOSE owns the routine until it has released the cursor.
+	// Export must not inspect that mutable state before request completion.
+	require.True(t, rt.mc.tryBeginRequest())
+	var finishRequest sync.Once
+	defer finishRequest.Do(rt.mc.endRequest)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	started := make(chan struct{})
+	done := make(chan error, 1)
+	resp := &query.MigrateConnFromResponse{}
+	go func() {
+		close(started)
+		done <- rt.migrateConnectionFromActionWithContext(
+			ctx, query.MigrateConnFromAction_MigrateConnFromExport, resp)
+	}()
+	<-started
+	select {
+	case err := <-done:
+		t.Fatalf("export finished while the cursor-close request owned the routine: %v", err)
+	default:
+	}
+	stmt.closeCursor()
+	stmt.closeCursor() // Repeated cleanup must not release the reservation twice.
+	releasedBytes := ses.preparedCursorBytes.Load()
+	finishRequest.Do(rt.mc.endRequest)
+	require.Zero(t, releasedBytes)
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-ctx.Done():
+		t.Fatal("export did not resume after cursor cleanup")
+	}
+	require.True(t, resp.PreparedStmtCursorsChecked)
+	require.Len(t, resp.PrepareStmts, 1)
+}
+
 func TestMigrateConnectionFromExportsEvaluatedUserVariables(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

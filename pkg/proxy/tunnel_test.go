@@ -1325,6 +1325,91 @@ func TestFinalFetchKeepsTransferBlockedUntilTerminator(t *testing.T) {
 	}
 }
 
+// Exercise the actual packet pipes and backend replacement. In particular, a
+// row that resembles an OK packet must reach the client before the pending
+// migration can replace the backend carrying the rest of the FETCH response.
+func TestFinalFetchForwardingBeforeBackendReplacement(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		deprecatesEOF  bool
+		makeTerminator func(uint16) []byte
+	}{
+		{"legacy EOF", false, makeLegacyEOFPacket},
+		{"deprecated EOF", true, makeDeprecatedEOFPacket},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			clientProxy, client := net.Pipe()
+			oldProxy, oldBackend := net.Pipe()
+			newProxy, newBackend := net.Pipe()
+			defer client.Close()
+			defer oldBackend.Close()
+			defer newBackend.Close()
+
+			runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+			tun := newTunnel(ctx, runtime.DefaultRuntime().Logger(), newCounterSet())
+			defer func() { require.NoError(t, tun.Close()) }()
+			cc := newMockClientConn(clientProxy, "fetch", clientInfo{}, nil, tun)
+			require.NoError(t, tun.run(cc, newMockServerConn(oldProxy)))
+			tun.clientDeprecatesEOF = tc.deprecatesEOF
+			for _, conn := range []net.Conn{client, oldBackend, newBackend} {
+				require.NoError(t, conn.SetDeadline(time.Now().Add(10*time.Second)))
+			}
+
+			forwardRequest := func(backend net.Conn, packet []byte) {
+				t.Helper()
+				writeDone := make(chan error, 1)
+				go func() { _, err := client.Write(packet); writeDone <- err }()
+				got := make([]byte, len(packet))
+				_, err := io.ReadFull(backend, got)
+				require.NoError(t, err)
+				require.Equal(t, packet, got)
+				require.NoError(t, <-writeDone)
+			}
+			forwardResponse := func(backend net.Conn, packet []byte) {
+				t.Helper()
+				writeDone := make(chan error, 1)
+				go func() { _, err := backend.Write(packet); writeDone <- err }()
+				got := make([]byte, len(packet))
+				_, err := io.ReadFull(client, got)
+				require.NoError(t, err)
+				require.Equal(t, packet, got, "client must receive every response packet in order")
+				require.NoError(t, <-writeDone)
+			}
+
+			forwardRequest(oldBackend, makeStmtCommandPacket(frontend.COM_STMT_FETCH, 41, 2, 0, 0, 0))
+			firstRow := makeBinaryBigIntRow(528384)
+			for _, row := range [][]byte{firstRow, makeBinaryBigIntRow(1)} {
+				forwardResponse(oldBackend, row)
+				require.True(t, tun.hasInFlightClientRequest())
+				_, admitted := tun.admitTransfer(false)
+				require.False(t, admitted, "migration must not cut off FETCH rows")
+			}
+			terminalStatus := frontend.SERVER_QUERY_WAS_SLOW |
+				frontend.SERVER_STATUS_NO_GOOD_INDEX_USED | frontend.SERVER_STATUS_LAST_ROW_SENT
+			forwardResponse(oldBackend, tc.makeTerminator(terminalStatus))
+			require.False(t, tun.hasInFlightClientRequest())
+
+			csp, admitted := tun.admitTransfer(false)
+			require.True(t, admitted, "migration must become possible after the forwarded terminator")
+			_, scp := tun.getPipes()
+			require.NoError(t, csp.pause(ctx))
+			require.NoError(t, scp.pause(ctx))
+			newSC := newMockServerConn(newProxy)
+			newConn := newMySQLConn(connServerName, newProxy, 0, nil, nil, false, 3)
+			require.NoError(t, tun.replaceServerConn(newConn, newSC, false))
+			require.NoError(t, tun.kickoff())
+
+			ping := makeSimplePacket("ping")
+			ping[4] = byte(frontend.COM_PING)
+			forwardRequest(newBackend, ping)
+			forwardResponse(newBackend, makeOKPacket(8))
+			require.False(t, tun.hasInFlightClientRequest())
+		})
+	}
+}
+
 func TestTunnelRequestBoundaryTracker(t *testing.T) {
 	t.Run("nil and quit packets", func(t *testing.T) {
 		var nilTunnel *tunnel
