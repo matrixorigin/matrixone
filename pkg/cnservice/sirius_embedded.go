@@ -54,7 +54,13 @@ func validateSiriusEmbeddedConfig(c *SiriusConfig) error {
 	return (siriusbridge.Config{ConfigPath: c.NativeConfigPath, GPUStreams: c.GPUStreams, MaxWaiting: c.MaxWaitingQueries, CleanupTimeout: c.CleanupTimeout.Duration}).Validate()
 }
 
-type embeddedBackend struct{ native *siriusbridge.Runtime }
+type embeddedRuntime interface {
+	Accepting() bool
+	Close(context.Context) error
+	Prepare(context.Context, siriusbridge.Request) (*siriusbridge.Query, error)
+}
+
+type embeddedBackend struct{ native embeddedRuntime }
 
 func (b *embeddedBackend) Accepting() bool { return b.native.Accepting() }
 
