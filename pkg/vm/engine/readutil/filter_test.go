@@ -3588,6 +3588,25 @@ func TestConstructBlockPKFilterBloomFailOpen(t *testing.T) {
 		require.Equal(t, []int64{0, 1, 2}, result)
 		require.Equal(t, 1, bf.calls)
 	})
+
+	t.Run("invalid varlen base filter does not become an empty equality", func(t *testing.T) {
+		bf := &testMembershipFilter{hits: []uint8{1, 0, 1}}
+		filter, err := ConstructBlockPKFilter(false, BasePKFilter{Oid: types.T_varchar}, bf)
+		require.NoError(t, err)
+
+		keys := vector.NewVec(types.T_varchar.ToType())
+		defer keys.Free(mp)
+		for _, key := range [][]byte{
+			{0x3b, 0x14, 0x3b, 0x14, 0x15, 0x01},
+			{0x3b, 0x14, 0x3b, 0x14, 0x15, 0x02},
+			{0x3b, 0x14, 0x3b, 0x15, 0x01, 0x01},
+		} {
+			require.NoError(t, vector.AppendBytes(keys, key, false, mp))
+		}
+
+		require.Equal(t, []int64{0, 2}, filter.UnSortedSearchFunc(containers.Vectors{*keys}))
+		require.Equal(t, 1, bf.calls)
+	})
 }
 
 func TestConstructBlockPKFilterMarksOnlyExactMembership(t *testing.T) {
