@@ -1,0 +1,114 @@
+drop database if exists hnsw_cosine_boundary;
+create database hnsw_cosine_boundary;
+use hnsw_cosine_boundary;
+set experimental_hnsw_index = 1;
+create table h_src(id bigint primary key, v vecf32(3), label varchar(20));
+insert into h_src values
+(1, '[0,0,0]', 'zero'),
+(2, '[1e-20,1e-20,1e-20]', 'tiny'),
+(3, '[1,1,1]', 'unit'),
+(4, '[2,1,1]', 'skew'),
+(5, '[-1,-1,-1]', 'opposite');
+create index h_cos using hnsw on h_src(v) op_type 'vector_cosine_ops';
+alter table h_src alter reindex h_cos hnsw force_sync;
+create table h_labels(id bigint primary key, name varchar(20));
+insert into h_labels values
+(1, 'zero'), (2, 'tiny'), (3, 'unit'), (4, 'skew'), (5, 'opposite');
+explain select id, cosine_distance(v, '[1e-20,1e-20,1e-20]') as d
+from h_src
+order by cosine_distance(v, '[1e-20,1e-20,1e-20]')
+limit 3;
+-- @regex("hnsw_search", false)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: cosine_distance(h_src.v, [1e-20,1e-20,1e-20]) INTERNAL, #[0,2] INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Project  𝄀
+              ->  Table Scan on hnsw_cosine_boundary.h_src
+select id, round(cosine_distance(v, '[1e-20,1e-20,1e-20]'), 6) as d
+from h_src
+order by cosine_distance(v, '[1e-20,1e-20,1e-20]')
+limit 3;
+➤ id[-5,64,0]  ¦  d[8,53,31]  𝄀
+2  ¦  0.0  𝄀
+3  ¦  0.0  𝄀
+4  ¦  0.057191
+select id, cosine_distance(v, '[1e-20,1e-20,1e-20]') as raw_d
+from h_src
+order by cosine_distance(v, '[1e-20,1e-20,1e-20]')
+limit 3;
+➤ id[-5,64,0]  ¦  raw_d[8,53,31]  𝄀
+2  ¦  0.0  𝄀
+3  ¦  0.0  𝄀
+4  ¦  0.05719095841793653
+select id, cosine_distance(v, '[0,0,0]') as zero_query_d
+from h_src order by id;
+➤ id[-5,64,0]  ¦  zero_query_d[8,53,31]  𝄀
+1  ¦  1.0  𝄀
+2  ¦  1.0  𝄀
+3  ¦  1.0  𝄀
+4  ¦  1.0  𝄀
+5  ¦  1.0
+select id, cosine_distance(v, '[0,0,0]') as zero_query_d
+from h_src
+order by cosine_distance(v, '[0,0,0]'), id
+limit 3;
+➤ id[-5,64,0]  ¦  zero_query_d[8,53,31]  𝄀
+1  ¦  1.0  𝄀
+2  ¦  1.0  𝄀
+3  ¦  1.0
+select id, round(cosine_distance(v, '[1e-20,1e-20,1e-20]'), 6) as tiny_query_d
+from h_src order by id;
+➤ id[-5,64,0]  ¦  tiny_query_d[8,53,31]  𝄀
+1  ¦  1.0  𝄀
+2  ¦  0.0  𝄀
+3  ¦  0.0  𝄀
+4  ¦  0.057191  𝄀
+5  ¦  2.0
+with ranked as (
+select id, cosine_distance(v, '[1e-20,1e-20,1e-20]') as d
+from h_src
+order by cosine_distance(v, '[1e-20,1e-20,1e-20]'), id
+limit 3
+)
+select count(*) as negative_scores
+from ranked q
+where d < 0;
+➤ negative_scores[-5,64,0]  𝄀
+0
+with ranked as (
+select id, cosine_distance(v, '[1e-20,1e-20,1e-20]') as d
+from h_src
+order by cosine_distance(v, '[1e-20,1e-20,1e-20]'), id
+limit 3
+)
+select min(d) as min_score, max(d) as max_score
+from ranked q;
+➤ min_score[8,53,31]  ¦  max_score[8,53,31]  𝄀
+0.0  ¦  0.05719095841793653
+with ranked as (
+select id, cosine_distance(v, '[1e-20,1e-20,1e-20]') as d
+from h_src
+order by cosine_distance(v, '[1e-20,1e-20,1e-20]'), id
+limit 4
+)
+select id, round(d, 6) as d from ranked order by d, id limit 2 offset 1;
+➤ id[-5,64,0]  ¦  d[8,53,31]  𝄀
+3  ¦  0.0  𝄀
+4  ¦  0.057191
+with ranked as (
+select id, cosine_distance(v, '[1e-20,1e-20,1e-20]') as d
+from h_src
+order by cosine_distance(v, '[1e-20,1e-20,1e-20]'), id
+limit 3
+)
+select r.id, round(r.d, 6) as d, l.name
+from ranked r join h_labels l on r.id = l.id
+order by r.d, r.id;
+➤ id[-5,64,0]  ¦  d[8,53,31]  ¦  name[12,20,0]  𝄀
+2  ¦  0.0  ¦  tiny  𝄀
+3  ¦  0.0  ¦  unit  𝄀
+4  ¦  0.057191  ¦  skew
+set experimental_hnsw_index = 0;
+drop database hnsw_cosine_boundary;

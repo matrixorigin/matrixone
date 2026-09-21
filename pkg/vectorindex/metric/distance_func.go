@@ -35,12 +35,7 @@ func L2Distance[T types.RealNumbers](v1, v2 []T) (T, error) {
 */
 
 func L2Distance[T types.RealNumbers](v1, v2 []T) (T, error) {
-	dist, err := L2DistanceSq(v1, v2)
-	if err != nil {
-		return dist, err
-	}
-
-	return T(math.Sqrt(float64(dist))), nil
+	return l2DistanceF64(v1, v2)
 }
 
 /*

@@ -487,8 +487,10 @@ func inRHSValues(expr *plan.Expr, expectedType plan.Type) (values []*plan.Expr, 
 		}
 		// LiteralVec provenance is container-level. Conservatively restore it
 		// on every materialized value so subsequent composite-key rewrites
-		// cannot expose an encoded member after vector-to-literal conversion.
+		// cannot expose an encoded member or lose a protocol requirement after
+		// vector-to-literal conversion.
 		lit.IsSerialized = expr.GetVec().IsSerialized
+		lit.DecimalLiteralRequiresV82 = expr.GetVec().DecimalLiteralRequiresV82
 		literalTyp := typ
 		literalTyp.NotNullable = !lit.Isnull
 		values[i] = &plan.Expr{

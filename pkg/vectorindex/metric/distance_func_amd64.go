@@ -140,12 +140,8 @@ func InnerProductFloat32(a, b []float32) (float32, error) {
 }
 
 func L2Distance[T types.RealNumbers](v1, v2 []T) (T, error) {
-	if pf32, ok := any(v1).([]float32); ok {
-		dist, err := L2DistanceSqFloat32(pf32, any(v2).([]float32))
-		if err != nil {
-			return 0, err
-		}
-		return T(math.Sqrt(float64(dist))), nil
+	if _, ok := any(v1).([]float32); ok {
+		return l2DistanceF64(v1, v2)
 	}
 	if pf64, ok := any(v1).([]float64); ok {
 		dist, err := L2DistanceSqFloat64(pf64, any(v2).([]float64))

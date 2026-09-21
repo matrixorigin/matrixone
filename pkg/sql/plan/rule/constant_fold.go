@@ -172,6 +172,10 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 				// and visible to the remote protocol capability analysis.
 				return expr
 			}
+			requiresDecimalProvenance, err := plan.RequiresMORPCVersion89DecimalLiteralSemantics(exprList)
+			if err != nil {
+				return expr
+			}
 			isSerialized := ContainsSerializedLiteral(exprList)
 
 			vec, err := colexec.GenerateConstListExpressionExecutor(proc, exprList)
@@ -199,10 +203,11 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 				Typ: expr.Typ,
 				Expr: &plan.Expr_Vec{
 					Vec: &plan.LiteralVec{
-						Len:          int32(vec.Length()),
-						Data:         data,
-						IsSerialized: isSerialized,
-						StringSource: uint32(vec.GetStringSource()),
+						Len:                       int32(vec.Length()),
+						Data:                      data,
+						IsSerialized:              isSerialized,
+						StringSource:              uint32(vec.GetStringSource()),
+						DecimalLiteralRequiresV82: requiresDecimalProvenance,
 					},
 				},
 			}
@@ -217,6 +222,14 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	f, exists := function.GetFunctionByIdWithoutError(overloadID)
 
 	if !exists {
+		return expr
+	}
+	// The persisted-expression admission pass runs after optimization. Keep
+	// spatial-distance functions visible until that pass has observed the v86
+	// requirement; folding them to a literal would erase the only durable
+	// capability marker and let an older reader rebind the original SQL under
+	// incompatible planar semantics.
+	if requiresSpatial, err := plan.RequiresMORPCVersion90SpatialDistanceSemantics(expr); err != nil || requiresSpatial {
 		return expr
 	}
 	if f.CannotFold() { // function cannot be fold
@@ -263,6 +276,10 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	defer free()
 
 	if isVec {
+		requiresDecimalProvenance, err := plan.RequiresMORPCVersion89DecimalLiteralSemantics(fn.Args)
+		if err != nil {
+			return expr
+		}
 		if vec.GetStringSources() != nil {
 			return expr
 		}
@@ -275,9 +292,10 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 			Typ: expr.Typ,
 			Expr: &plan.Expr_Vec{
 				Vec: &plan.LiteralVec{
-					Len:          int32(vec.Length()),
-					Data:         data,
-					StringSource: uint32(vec.GetStringSource()),
+					Len:                       int32(vec.Length()),
+					Data:                      data,
+					StringSource:              uint32(vec.GetStringSource()),
+					DecimalLiteralRequiresV82: requiresDecimalProvenance,
 				},
 			},
 		}
@@ -288,6 +306,7 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 		return expr
 	}
 	PreserveFoldedLiteralStringDomain(expr, c)
+	PreserveFoldedDecimalLiteralSemantics(expr, c)
 
 	MarkFoldedLiteralSerialized(overloadID, fn.Args, c)
 
@@ -431,6 +450,25 @@ func PreserveFoldedLiteralStringDomain(expr *plan.Expr, literal *plan.Literal) {
 	} else {
 		literal.LiteralForm = plan.StringLiteralForm_STRING_LITERAL_TEXT
 	}
+}
+
+// PreserveFoldedDecimalLiteralSemantics carries the planner provenance bit
+// through constant folding. A folded CAST or arithmetic expression may replace
+// the source literal with a new Literal, but an old CN would still rebind the
+// persisted SQL using its pre-Decimal256 rules.
+func PreserveFoldedDecimalLiteralSemantics(expr *plan.Expr, literal *plan.Literal) {
+	if expr == nil || literal == nil || literal.DecimalLiteralRequiresV82 {
+		return
+	}
+	_ = plan.VisitExprTree(expr, func(current *plan.Expr) error {
+		if source := current.GetLit(); source != nil && source.DecimalLiteralRequiresV82 {
+			literal.DecimalLiteralRequiresV82 = true
+		}
+		if source := current.GetVec(); source != nil && source.DecimalLiteralRequiresV82 {
+			literal.DecimalLiteralRequiresV82 = true
+		}
+		return nil
+	})
 }
 
 func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) (literal *plan.Literal) {

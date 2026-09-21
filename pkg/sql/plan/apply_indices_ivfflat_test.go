@@ -711,8 +711,9 @@ func TestCalculateAdaptiveNprobe(t *testing.T) {
 	}
 }
 
-// TestPrepareIvfIndexContext_AdaptiveNprobe tests the adaptive nprobe logic in prepareIvfIndexContext
-func TestPrepareIvfIndexContext_AdaptiveNprobe(t *testing.T) {
+// TestPrepareIvfIndexContext_AdaptiveNprobeAndFinalPostCandidate verifies that
+// the resolved AUTO parameters and INCLUDE coverage reach the final POST scan.
+func TestPrepareIvfIndexContext_AdaptiveNprobeAndFinalPostCandidate(t *testing.T) {
 	baseMockCtx := NewMockCompilerContext(true)
 	mockCtx := &customMockCompilerContext{
 		MockCompilerContext: baseMockCtx,
@@ -759,6 +760,10 @@ func TestPrepareIvfIndexContext_AdaptiveNprobe(t *testing.T) {
 			Selectivity: 0.25, // Compensation factor = sqrt(1/0.25) = 2
 		},
 	}
+	scanNode.TableDef.Name2ColIndex["a"] = 2
+	scanNode.TableDef.Cols = append(scanNode.TableDef.Cols, &plan.ColDef{
+		Name: "a", Typ: plan.Type{Id: int32(types.T_varchar)},
+	})
 
 	vecCtx := &vectorSortContext{
 		distFnExpr: &plan.Function{
@@ -785,14 +790,21 @@ func TestPrepareIvfIndexContext_AdaptiveNprobe(t *testing.T) {
 		scanNode:   scanNode,
 		rankOption: &plan.RankOption{Mode: "auto"}, // Enable auto mode
 	}
+	vecCtx.distFnExpr.Args[1].Expr = &plan.Expr_Lit{Lit: &plan.Literal{
+		Value: &plan.Literal_VecVal{VecVal: string(types.ArrayToBytes([]float32{1, 1, 1}))},
+	}}
 
 	// 1. Adaptive nprobe enabled (auto mode, selectivity 0.25, totalLists 100)
-	idxAlgoParams := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `", "lists": 100}`
+	idxAlgoParams := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `", "lists": 100, "included_columns":"a"}`
 	multiTableIndex := makeConsistentIvfMultiTableIndexForTest(
 		"idx_ivf_auto_adaptive",
 		idxAlgoParams,
 		[]string{"vec_col"},
 	)
+	for _, def := range multiTableIndex.IndexDefs {
+		def.IncludedColumns = []string{"a"}
+		scanNode.TableDef.Indexes = append(scanNode.TableDef.Indexes, def)
+	}
 
 	// Case 1: Adaptive mode enabled, compensation applied
 	result, err := builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
@@ -801,6 +813,73 @@ func TestPrepareIvfIndexContext_AdaptiveNprobe(t *testing.T) {
 	// baseNprobe is 10 (from probe_limit), compensation is 2, expected nProbe = 20
 	assert.Equal(t, int64(20), result.nProbe)
 
+	// Verify the resolved AUTO context reaches the final POST candidate. Merely
+	// testing prepare is insufficient: rebuilding POST as an explicit mode used
+	// to reset InitialProbeCount to the session probe_limit (10).
+	bindCtx := NewBindContext(builder, nil)
+	scanTag := builder.genNewBindTag()
+	scanNode.NodeType = plan.Node_TABLE_SCAN
+	scanNode.ObjRef = &plan.ObjectRef{SchemaName: "db", ObjName: "test_table"}
+	scanNode.BindingTags = []int32{scanTag}
+	scanNode.NodeId = builder.appendNode(scanNode, bindCtx)
+	vecCtx.distFnExpr.Args[0].GetCol().RelPos = scanTag
+	sortID := builder.appendNode(&plan.Node{
+		NodeType:   plan.Node_SORT,
+		Children:   []int32{scanNode.NodeId},
+		OrderBy:    []*plan.OrderBySpec{{Expr: &plan.Expr{Typ: plan.Type{Id: int32(types.T_float64)}, Expr: &plan.Expr_F{F: vecCtx.distFnExpr}}}},
+		Limit:      makePlan2Uint64ConstExprWithType(10),
+		RankOption: &plan.RankOption{Mode: "auto"},
+	}, bindCtx)
+	projectID := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_PROJECT,
+		Children: []int32{sortID},
+		ProjectList: []*plan.Expr{{
+			Typ:  plan.Type{Id: int32(types.T_varchar)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: 2, Name: "a"}},
+		}},
+	}, bindCtx)
+	vecCtx.projNode = builder.qry.Nodes[projectID]
+	vecCtx.sortNode = builder.qry.Nodes[sortID]
+	vecCtx.providerNodeID = -1
+	vecCtx.membershipNodeID = -1
+	vecCtx.orderExpr = builder.qry.Nodes[sortID].OrderBy[0].Expr
+	vecCtx.limit = builder.qry.Nodes[sortID].Limit
+	vecCtx.resultLimit = vecCtx.limit
+	inc, incErr := getVectorIndexIncludedColumns(multiTableIndex)
+	require.NoError(t, incErr)
+	require.Equal(t, []string{"a"}, inc)
+	boundaryProj, boundaryChild := ivfIndexOnlyBoundary(vecCtx.projNode, vecCtx.childNode)
+	require.NotNil(t, boundaryProj)
+	required := collectRequiredColumns(boundaryProj, boundaryChild, scanNode, vecCtx.orderExpr, result.partPos, result.origFuncName, result.vecLitArg)
+	projected := collectProjectedColumns(boundaryProj, boundaryChild, scanNode, result.partPos, result.origFuncName, result.vecLitArg)
+	require.True(t, canDoIndexOnlyScan(required, scanNode.TableDef, inc), "required=%v", required)
+	require.Contains(t, projected, "a")
+	root, err := builder.buildAdaptiveIvfTop(projectID, vecCtx, multiTableIndex, nil, nil, result)
+	require.NoError(t, err)
+	adaptive := builder.qry.Nodes[root]
+	require.Equal(t, plan.Node_ADAPTIVE_TOP, adaptive.NodeType)
+	var postScan *plan.Node
+	postHasBaseScan := false
+	var findPostScan func(int32)
+	findPostScan = func(id int32) {
+		n := builder.qry.Nodes[id]
+		if n.NodeType == plan.Node_VECTOR_INDEX_SCAN && postScan == nil {
+			postScan = n
+		}
+		if n.NodeType == plan.Node_TABLE_SCAN {
+			postHasBaseScan = true
+		}
+		for _, child := range n.Children {
+			findPostScan(child)
+		}
+	}
+	findPostScan(adaptive.Children[0])
+	require.NotNil(t, postScan)
+	require.NotNil(t, postScan.VectorIndexScan)
+	require.Equal(t, uint32(20), postScan.VectorIndexScan.InitialProbeCount)
+	require.Equal(t, []string{"a"}, postScan.VectorIndexScan.IncludedColumns)
+	require.False(t, postHasBaseScan, "AUTO POST must remain index-only when INCLUDE covers the projection")
+
 	// The persisted representation is quoted, while older metadata can contain
 	// a JSON number. Both forms must produce the same adaptive nprobe.
 	quotedLists := makeConsistentIvfMultiTableIndexForTest(
@@ -808,6 +887,8 @@ func TestPrepareIvfIndexContext_AdaptiveNprobe(t *testing.T) {
 		`{"op_type":"`+metric.DistFuncOpTypes["l2_distance"]+`","lists":"100"}`,
 		[]string{"vec_col"},
 	)
+	vecCtx.rankOption = &plan.RankOption{Mode: "auto"}
+	vecCtx.scanNode.Stats = &plan.Stats{Selectivity: 0.25}
 	quotedResult, err := builder.prepareIvfIndexContext(vecCtx, quotedLists)
 	require.NoError(t, err)
 	require.NotNil(t, quotedResult)

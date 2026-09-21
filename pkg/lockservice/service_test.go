@@ -5565,29 +5565,104 @@ func TestHandleBindChangedConcurrently(t *testing.T) {
 			holder := &bindChangeCountingTxnHolder{activeTxnHolder: s.activeTxnHolder}
 			s.activeTxnHolder = holder
 
+			ctx, cancel := context.WithCancel(ctx)
+			release := make(chan struct{})
+			startCallbacks := make(chan struct{})
+			var releaseOnce, startOnce sync.Once
+			releaseTransactions := func() { releaseOnce.Do(func() { close(release) }) }
+			runCallbacks := func() { startOnce.Do(func() { close(startCallbacks) }) }
 			var wg sync.WaitGroup
-			for i := 0; i < 20; i++ {
+			// Join before the enclosing fixture closes, including on FailNow.
+			defer func() {
+				cancel()
+				releaseTransactions()
+				runCallbacks()
+				wg.Wait()
+			}()
+
+			type workerResult struct {
+				txn       []byte
+				lockErr   error
+				unlockErr error
+			}
+			held := make(chan error, 2)
+			results := make(chan workerResult, 2)
+			for i := byte(1); i <= 2; i++ {
+				txn := newTestTxnID(i)
 				wg.Add(1)
-				go func(i int) {
+				go func() {
 					defer wg.Done()
-					option := newTestRowSharedOptions()
-					rows := newTestRows(1)
-					txn := newTestTxnID(byte(i))
-					for i := 0; i < 1000; i++ {
-						_, err := s.Lock(ctx, table, rows, txn, option)
-						require.NoError(t, err)
-						require.NoError(t, s.Unlock(ctx, txn, timestamp.Timestamp{}))
+					result := workerResult{txn: txn}
+					// Even a failed Lock can leave transaction state to release.
+					defer func() {
+						result.unlockErr = s.Unlock(ctx, txn, timestamp.Timestamp{})
+						results <- result
+					}()
+					_, result.lockErr = s.Lock(ctx, table, newTestRows(1), txn, newTestRowSharedOptions())
+					held <- result.lockErr
+					if result.lockErr != nil {
+						return
 					}
-				}(i)
+					select {
+					case <-release:
+					case <-ctx.Done():
+						result.lockErr = ctx.Err()
+						return
+					}
+					// Duplicate callbacks must leave the existing transaction usable.
+					_, result.lockErr = s.Lock(ctx, table, newTestRows(2), txn, newTestRowSharedOptions())
+				}()
 			}
-			for i := 0; i < 1000; i++ {
-				s.handleBindChanged(bind)
+			for i := 0; i < 2; i++ {
+				select {
+				case err := <-held:
+					require.NoError(t, err)
+				case <-ctx.Done():
+					t.Fatal("transactions did not acquire their initial shared locks", ctx.Err())
+				}
 			}
+
+			// Competing duplicate callbacks run while both transactions own locks.
+			callbacksDone := make(chan struct{}, 2)
+			for i := 0; i < 2; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					defer func() { callbacksDone <- struct{}{} }()
+					select {
+					case <-startCallbacks:
+					case <-ctx.Done():
+						return
+					}
+					s.handleBindChanged(bind)
+					s.handleBindChanged(bind)
+				}()
+			}
+			runCallbacks()
+			for i := 0; i < 2; i++ {
+				select {
+				case <-callbacksDone:
+				case <-ctx.Done():
+					t.Fatal("duplicate bind callbacks did not complete", ctx.Err())
+				}
+			}
+			checkUnchanged := func() {
+				t.Helper()
+				assert.Same(t, lt, s.tableGroups.get(bind.Group, bind.Table))
+				assert.Zero(t, logs.FilterMessage("bind created").Len())
+				assert.Zero(t, logs.FilterMessage("bind closed").Len())
+				assert.Zero(t, holder.fenceCalls.Load())
+			}
+			checkUnchanged()
+			releaseTransactions()
 			wg.Wait()
-			require.Same(t, lt, s.tableGroups.get(bind.Group, bind.Table))
-			assert.Zero(t, logs.FilterMessage("bind created").Len())
-			assert.Zero(t, logs.FilterMessage("bind closed").Len())
-			assert.Zero(t, holder.fenceCalls.Load())
+			for i := 0; i < 2; i++ {
+				result := <-results
+				assert.NoError(t, result.lockErr, "transaction %x", result.txn)
+				assert.NoError(t, result.unlockErr, "transaction %x cleanup", result.txn)
+				assert.Nil(t, s.activeTxnHolder.getActiveTxn(result.txn, false, ""))
+			}
+			checkUnchanged()
 		},
 	)
 }

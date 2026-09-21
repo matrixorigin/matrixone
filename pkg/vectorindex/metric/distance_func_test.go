@@ -769,3 +769,26 @@ func Test_AngularDistance(t *testing.T) {
 		})
 	}
 }
+
+// Test_L2Distance_Float32SquaredOverflow covers #29083: a float32 vector pair whose
+// per-element squared difference overflows float32 (diff*diff > MaxFloat32) but whose L2
+// distance is representable in float32. The float32 squared sum (L2DistanceSq) overflows to
+// +Inf, but L2Distance accumulates the squared sum in float64 and returns a finite distance.
+func Test_L2Distance_Float32SquaredOverflow(t *testing.T) {
+	// diff = 3e19 per element; diff*diff = 9e38 > MaxFloat32 (~3.4e38) -> squared sum overflows.
+	v1 := []float32{3e19, 3e19}
+	v2 := []float32{0, 0}
+
+	sq, err := L2DistanceSq(v1, v2)
+	require.Nil(t, err)
+	require.True(t, math.IsInf(float64(sq), 1), "precondition: float32 squared sum must overflow to +Inf")
+
+	got, err := L2Distance(v1, v2)
+	require.Nil(t, err)
+	require.False(t, math.IsInf(float64(got), 0), "L2Distance must not return Inf when the distance is representable")
+	require.False(t, math.IsNaN(float64(got)), "L2Distance must not return NaN")
+
+	// true distance = sqrt(9e38 + 9e38) = sqrt(1.8e39) ~= 4.2426e19, finite in float32.
+	want := float32(math.Sqrt(1.8e39))
+	require.InEpsilon(t, want, got, 1e-6)
+}

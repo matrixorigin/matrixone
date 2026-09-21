@@ -20,7 +20,7 @@ reldatabase_id  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 relpersistence  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 relkind  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 rel_comment  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-rel_createsql  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+rel_createsql  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 creator  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 owner  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -81,7 +81,7 @@ status  ¦  VARCHAR(8)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 expired_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 password_last_changed  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  utc_timestamp()  ¦    ¦    𝄀
-password_history  ¦  TEXT(0)  ¦  YES  ¦    ¦  []  ¦    ¦    𝄀
+password_history  ¦  TEXT  ¦  YES  ¦    ¦  []  ¦    ¦    𝄀
 login_attempts  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  0  ¦    ¦    𝄀
 lock_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  utc_timestamp()  ¦    ¦    𝄀
 login_type  ¦  VARCHAR(16)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -95,7 +95,7 @@ role_name  ¦  VARCHAR(300)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦    𝄀
 creator  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 owner  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-comments  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
+comments  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_user_grant              ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 role_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
@@ -129,7 +129,7 @@ name  ¦  VARCHAR(100)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦    𝄀
 owner  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 args  ¦  JSON(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 retType  ¦  VARCHAR(20)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-body  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+body  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 language  ¦  VARCHAR(20)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 db  ¦  VARCHAR(100)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 definer  ¦  VARCHAR(50)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -147,9 +147,9 @@ desc	mo_catalog.mo_stored_procedure        ;
 proc_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
 name  ¦  VARCHAR(100)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 creator  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-args  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-lang  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-body  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+args  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lang  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+body  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 sql_mode  ¦  VARCHAR(1024)  ¦  NO  ¦    ¦  PIPES_AS_CONCAT  ¦    ¦    𝄀
 db  ¦  VARCHAR(100)  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
 definer  ¦  VARCHAR(50)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -192,9 +192,9 @@ hidden  ¦  TINYINT(8)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 comment  ¦  VARCHAR(2048)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 column_name  ¦  VARCHAR(256)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 ordinal_position  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-options  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+options  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 index_table_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-included_columns  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
+included_columns  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_table_partitions        ;
 [unknown result because it is related to issue#16438]
 desc	mo_catalog.mo_pubs                    ;
@@ -205,22 +205,22 @@ pub_name  ¦  VARCHAR(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 database_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 database_id  ¦  BIGINT UNSIGNED(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 all_table  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-table_list  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-account_list  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+table_list  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+account_list  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 update_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 owner  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 creator  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-comment  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
+comment  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_stages                  ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 stage_id  ¦  INT UNSIGNED(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
 stage_name  ¦  VARCHAR(64)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦    𝄀
-url  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-stage_credentials  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+url  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+stage_credentials  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 stage_status  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-comment  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
+comment  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_sessions                ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 node_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -345,7 +345,7 @@ reldatabase_id  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 relpersistence  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 relkind  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 rel_comment  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-rel_createsql  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+rel_createsql  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 creator  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 owner  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -406,7 +406,7 @@ status  ¦  VARCHAR(8)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 expired_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 password_last_changed  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  utc_timestamp()  ¦    ¦    𝄀
-password_history  ¦  TEXT(0)  ¦  YES  ¦    ¦  []  ¦    ¦    𝄀
+password_history  ¦  TEXT  ¦  YES  ¦    ¦  []  ¦    ¦    𝄀
 login_attempts  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  0  ¦    ¦    𝄀
 lock_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  utc_timestamp()  ¦    ¦    𝄀
 login_type  ¦  VARCHAR(16)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -420,7 +420,7 @@ role_name  ¦  VARCHAR(300)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦    𝄀
 creator  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 owner  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-comments  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
+comments  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_user_grant              ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 role_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
@@ -454,7 +454,7 @@ name  ¦  VARCHAR(100)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦    𝄀
 owner  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 args  ¦  JSON(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 retType  ¦  VARCHAR(20)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-body  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+body  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 language  ¦  VARCHAR(20)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 db  ¦  VARCHAR(100)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 definer  ¦  VARCHAR(50)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -472,9 +472,9 @@ show columns from	mo_catalog.mo_stored_procedure        ;
 proc_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
 name  ¦  VARCHAR(100)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 creator  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-args  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-lang  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-body  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+args  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lang  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+body  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 sql_mode  ¦  VARCHAR(1024)  ¦  NO  ¦    ¦  PIPES_AS_CONCAT  ¦    ¦    𝄀
 db  ¦  VARCHAR(100)  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
 definer  ¦  VARCHAR(50)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -517,9 +517,9 @@ hidden  ¦  TINYINT(8)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 comment  ¦  VARCHAR(2048)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 column_name  ¦  VARCHAR(256)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 ordinal_position  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-options  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+options  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 index_table_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-included_columns  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
+included_columns  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_table_partitions        ;
 [unknown result because it is related to issue#16438]
 show columns from	mo_catalog.mo_pubs                    ;
@@ -530,22 +530,22 @@ pub_name  ¦  VARCHAR(64)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 database_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 database_id  ¦  BIGINT UNSIGNED(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 all_table  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-table_list  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-account_list  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+table_list  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+account_list  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 update_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 owner  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 creator  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-comment  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
+comment  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_stages                  ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 stage_id  ¦  INT UNSIGNED(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
 stage_name  ¦  VARCHAR(64)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦    𝄀
-url  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-stage_credentials  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+url  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+stage_credentials  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 stage_status  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-comment  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
+comment  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_sessions                ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 node_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -670,7 +670,7 @@ reldatabase_id  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 relpersistence  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 relkind  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 rel_comment  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-rel_createsql  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+rel_createsql  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 creator  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 owner  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -722,7 +722,7 @@ status  ¦  VARCHAR(8)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 expired_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 password_last_changed  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  utc_timestamp()  ¦    ¦    𝄀
-password_history  ¦  TEXT(0)  ¦  YES  ¦    ¦  []  ¦    ¦    𝄀
+password_history  ¦  TEXT  ¦  YES  ¦    ¦  []  ¦    ¦    𝄀
 login_attempts  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  0  ¦    ¦    𝄀
 lock_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  utc_timestamp()  ¦    ¦    𝄀
 login_type  ¦  VARCHAR(16)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -736,7 +736,7 @@ role_name  ¦  VARCHAR(300)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦    𝄀
 creator  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 owner  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-comments  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
+comments  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_user_grant              ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 role_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
@@ -770,7 +770,7 @@ name  ¦  VARCHAR(100)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦    𝄀
 owner  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 args  ¦  JSON(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 retType  ¦  VARCHAR(20)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-body  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+body  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 language  ¦  VARCHAR(20)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 db  ¦  VARCHAR(100)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 definer  ¦  VARCHAR(50)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -788,9 +788,9 @@ desc	mo_catalog.mo_stored_procedure        ;
 proc_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
 name  ¦  VARCHAR(100)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 creator  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-args  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-lang  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-body  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+args  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lang  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+body  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 sql_mode  ¦  VARCHAR(1024)  ¦  NO  ¦    ¦  PIPES_AS_CONCAT  ¦    ¦    𝄀
 db  ¦  VARCHAR(100)  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
 definer  ¦  VARCHAR(50)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -833,9 +833,9 @@ hidden  ¦  TINYINT(8)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 comment  ¦  VARCHAR(2048)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 column_name  ¦  VARCHAR(256)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 ordinal_position  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-options  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+options  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 index_table_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-included_columns  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
+included_columns  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_table_partitions        ;
 [unknown result because it is related to issue#16438]
 desc	mo_catalog.mo_pubs                    ;
@@ -844,11 +844,11 @@ desc	mo_catalog.mo_stages                  ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 stage_id  ¦  INT UNSIGNED(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
 stage_name  ¦  VARCHAR(64)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦    𝄀
-url  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-stage_credentials  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+url  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+stage_credentials  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 stage_status  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-comment  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
+comment  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦
 desc	mo_catalog.mo_sessions                ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 node_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -973,7 +973,7 @@ reldatabase_id  ¦  BIGINT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 relpersistence  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 relkind  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 rel_comment  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-rel_createsql  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+rel_createsql  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 creator  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 owner  ¦  INT UNSIGNED  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -1025,7 +1025,7 @@ status  ¦  VARCHAR(8)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 expired_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 password_last_changed  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  utc_timestamp()  ¦    ¦    𝄀
-password_history  ¦  TEXT(0)  ¦  YES  ¦    ¦  []  ¦    ¦    𝄀
+password_history  ¦  TEXT  ¦  YES  ¦    ¦  []  ¦    ¦    𝄀
 login_attempts  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  0  ¦    ¦    𝄀
 lock_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  utc_timestamp()  ¦    ¦    𝄀
 login_type  ¦  VARCHAR(16)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -1039,7 +1039,7 @@ role_name  ¦  VARCHAR(300)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦    𝄀
 creator  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 owner  ¦  INT(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-comments  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
+comments  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_user_grant              ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 role_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
@@ -1073,7 +1073,7 @@ name  ¦  VARCHAR(100)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦    𝄀
 owner  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 args  ¦  JSON(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 retType  ¦  VARCHAR(20)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-body  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+body  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 language  ¦  VARCHAR(20)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 db  ¦  VARCHAR(100)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 definer  ¦  VARCHAR(50)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -1091,9 +1091,9 @@ show columns from	mo_catalog.mo_stored_procedure        ;
 proc_id  ¦  INT(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
 name  ¦  VARCHAR(100)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 creator  ¦  INT UNSIGNED(32)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-args  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-lang  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-body  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+args  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lang  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+body  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 sql_mode  ¦  VARCHAR(1024)  ¦  NO  ¦    ¦  PIPES_AS_CONCAT  ¦    ¦    𝄀
 db  ¦  VARCHAR(100)  ¦  YES  ¦  MUL  ¦  null  ¦    ¦    𝄀
 definer  ¦  VARCHAR(50)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
@@ -1136,9 +1136,9 @@ hidden  ¦  TINYINT(8)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 comment  ¦  VARCHAR(2048)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 column_name  ¦  VARCHAR(256)  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
 ordinal_position  ¦  INT UNSIGNED(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-options  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+options  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 index_table_name  ¦  VARCHAR(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-included_columns  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
+included_columns  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_table_partitions        ;
 [unknown result because it is related to issue#16438]
 show columns from	mo_catalog.mo_pubs                    ;
@@ -1147,11 +1147,11 @@ show columns from	mo_catalog.mo_stages                  ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 stage_id  ¦  INT UNSIGNED(32)  ¦  NO  ¦  PRI  ¦  null  ¦  auto_increment  ¦    𝄀
 stage_name  ¦  VARCHAR(64)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦    𝄀
-url  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-stage_credentials  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+url  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+stage_credentials  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 stage_status  ¦  VARCHAR(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 created_time  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-comment  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦
+comment  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦
 show columns from	mo_catalog.mo_sessions                ;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 node_id  ¦  VARCHAR(65535)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
