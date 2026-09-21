@@ -1727,7 +1727,9 @@ func (s *Scope) sendNotifyMessageWithFactoryAndCallback(
 	if len(schedulers) > 0 && schedulers[0] != nil {
 		scheduler := schedulers[0]
 		for i := range s.RemoteReceivRegInfos {
-			wg.Add(1)
+			if wg != nil {
+				wg.Add(1)
+			}
 			state := newRemoteNotifyEventState(
 				s,
 				scheduler,

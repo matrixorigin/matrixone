@@ -378,9 +378,8 @@ func (m *mergeRunEventState) addTaskForRemoteNotifications() {
 	for range m.s.RemoteReceivRegInfos {
 		m.addTask()
 	}
-	var notifyWG sync.WaitGroup
 	m.s.sendNotifyMessageWithFactoryAndCallback(
-		&notifyWG,
+		nil,
 		m.enqueueNotifyEvent,
 		newMessageSenderOnClient,
 		nil,
