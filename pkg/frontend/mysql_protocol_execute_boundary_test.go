@@ -49,13 +49,28 @@ func TestMySQLWireMalformedExecuteKeepsPreparedTypesAndConnection(t *testing.T) 
 	setRtMgr("", rm)
 
 	clientConn, serverConn := net.Pipe()
+	serverDone := make(chan struct{})
 	t.Cleanup(func() {
 		_ = clientConn.Close()
 		_ = serverConn.Close()
+		select {
+		case <-serverDone:
+		case <-time.After(10 * time.Second):
+			t.Fatal("MySQL wire server did not stop after the pipe closed")
+		}
+		rm.mu.RLock()
+		remainingClients := len(rm.clients)
+		remainingIDs := len(rm.routinesByConnID)
+		rm.mu.RUnlock()
+		require.Zero(t, remainingClients, "connection cleanup must remove the client")
+		require.Zero(t, remainingIDs, "connection cleanup must remove the connection ID")
 		rm.cancelCtx()
 		serverVarsMap.Store("", previousServerVars)
 	})
-	go startInnerServer(serverConn)
+	go func() {
+		defer close(serverDone)
+		startInnerServer(serverConn)
+	}()
 	require.NoError(t, clientConn.SetDeadline(time.Now().Add(30*time.Second)))
 	_, handshake := readWirePacket(t, clientConn)
 	versionEnd := 1
