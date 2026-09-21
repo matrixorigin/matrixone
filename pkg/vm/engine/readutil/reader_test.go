@@ -544,6 +544,50 @@ func TestReaderSetIndexParamDoesNotPreallocateDistHeap(t *testing.T) {
 	require.Zero(t, cap(r.orderByLimit.DistHeap))
 }
 
+// TestReaderSetIndexParamL2LowerBoundZeroBecomesUnbounded pins the #29040 boundary fix: an inclusive
+// L2 lower bound of exactly 0 (`l2_distance(...) >= 0`) must convert to UNBOUNDED, not to a squared
+// gate. squareL2BoundOutward widens 0 toward -Inf to -smallestFloat32, but squaring that turns it
+// POSITIVE (~1.96e-90), so the squared storage gate would reject an exact-zero distance (0 >= 1.96e-90
+// is false) even though `>= 0` must include it.
+func TestReaderSetIndexParamL2LowerBoundZeroBecomesUnbounded(t *testing.T) {
+	// The hazard the fix guards against: 0 widened+squared is strictly positive.
+	require.Positive(t, squareL2BoundOutward(0, math.Inf(-1)),
+		"squaring a 0 bound widened toward -Inf is positive, which would exclude an exact-zero distance")
+
+	r := &reader{}
+	vectorCol := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_array_float32), Width: 2},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 3}},
+	}
+	vectorLit := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_array_float32), Width: 2, NotNullable: true},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: string(types.ArrayToBytes[float32]([]float32{0, 0}))}}},
+	}
+	orderExpr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_float64), NotNullable: true},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: metric.DistFn_L2Distance},
+			Args: []*plan.Expr{vectorCol, vectorLit},
+		}},
+	}
+	param := &plan.IndexReaderParam{
+		OrderBy:      []*plan.OrderBySpec{{Expr: orderExpr}},
+		Limit:        plan2.MakePlan2Uint64ConstExprWithType(10),
+		OrigFuncName: metric.DistFn_L2Distance,
+		DistRange: &plan.DistRange{
+			LowerBoundType: plan.BoundType_INCLUSIVE,
+			LowerBound: &plan.Expr{
+				Typ:  plan.Type{Id: int32(types.T_float64)},
+				Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Dval{Dval: 0}}},
+			},
+		},
+	}
+	require.NotPanics(t, func() { r.SetIndexParam(param) })
+	require.NotNil(t, r.orderByLimit)
+	require.Equal(t, plan.BoundType_UNBOUNDED, r.orderByLimit.LowerBoundType,
+		"an L2 lower bound of 0 must be unbounded so the squared gate keeps exact-zero-distance rows (#29040)")
+}
+
 func TestReaderSetIndexParamConservativelyConvertsL2UpperBounds(t *testing.T) {
 	vectorCol := &plan.Expr{
 		Typ: plan.Type{Id: int32(types.T_array_float32), Width: 3},

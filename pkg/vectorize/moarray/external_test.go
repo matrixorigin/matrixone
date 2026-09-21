@@ -15,6 +15,7 @@
 package moarray
 
 import (
+	"math"
 	"reflect"
 	"testing"
 
@@ -922,12 +923,19 @@ func TestL2DistanceSq(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 1134.0, gotF32)
 
-	// A float64 base returns the same float32-domain value (#29040 / #29050), and the
-	// result is itself representable in float32 (proves it was rounded, not left exact-f64).
-	gotF64, err := L2DistanceSq[float64]([]float64{1, 2, 3}, []float64{10, 20, 30})
+	// #29040: L2DistanceSq returns the RAW float64 square and must NOT round into the float32 domain.
+	// IVF uses it as its internal squared intermediate and then does sqrt + round ONCE. Rounding the
+	// square here would make IVF compute float32(sqrt(float32(sq))) while the scalar l2_distance is
+	// float32(sqrt(sq)) -- a boundary mismatch. Use [1.00000006,0,0] vs 0: the raw square is not
+	// float32-representable, and IVF's L2 (sqrt+round of the raw square) must equal the scalar L2.
+	v1, v2 := []float64{1.00000006, 0, 0}, []float64{0, 0, 0}
+	sq, err := L2DistanceSq[float64](v1, v2)
 	require.NoError(t, err)
-	require.Equal(t, 1134.0, gotF64)
-	require.Equal(t, float64(float32(gotF64)), gotF64)
+	require.NotEqual(t, float64(float32(sq)), sq, "the squared distance must be raw float64, not float32-rounded")
+	scalarL2, err := L2Distance[float64](v1, v2)
+	require.NoError(t, err)
+	require.Equal(t, scalarL2, float64(float32(math.Sqrt(sq))),
+		"IVF path float32(sqrt(rawSq)) must equal the scalar l2_distance (no double-rounding)")
 
 	// Dimension mismatch is rejected.
 	_, err = L2DistanceSq[float32]([]float32{1, 2}, []float32{1, 2, 3})

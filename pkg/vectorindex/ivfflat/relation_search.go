@@ -551,16 +551,13 @@ func (idx *IvfflatSearchIndex[T]) filterEntryDistanceRange(
 	if !hasLower && !hasUpper {
 		return nil
 	}
-	// scoreFromQuantized returns the distance in the float32 domain (usearch/cuvs and the scalar
-	// l2_distance all deliver float32), so round the bounds into the same domain before comparing --
-	// otherwise an f32 distance vs an f64 bound disagree at an exact boundary and drop a row a `>=`
-	// / `<=` should keep (#29040 / #29050).
-	if hasLower {
-		lower = metric.RoundDistanceToElemDomain(lower)
-	}
-	if hasUpper {
-		upper = metric.RoundDistanceToElemDomain(upper)
-	}
+	// This is the EXACT source-domain post-filter: the planner peeled the original distance predicate,
+	// so there is no later correction. scoreFromQuantized already returns the distance in the float32
+	// domain the scalar l2_distance exposes, so compare it against the RAW float64 bound -- exactly the
+	// SQL predicate `float32(distance) <op> bound`. Rounding the bound instead would change the
+	// predicate: for a returned distance of 1, `1 < 1.00000001` is true, but rounding the bound to 1
+	// makes `1 < 1` false and drops the row (#29040). Conservative float32 widening belongs only in the
+	// storage/candidate gate (squareL2BoundOutward), never here.
 
 	for _, bat := range res.Batches {
 		if bat == nil || bat.RowCount() == 0 || len(bat.Vecs) == 0 {

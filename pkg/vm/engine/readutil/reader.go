@@ -693,9 +693,13 @@ func (r *reader) SetIndexParam(param *plan.IndexReaderParam) {
 			// before squaring -- otherwise the squared f64 gate is off by ~1e-6 from the float32
 			// distance a row is actually gated on and drops a boundary row (#29040).
 			if indexTop.LowerBoundType != plan.BoundType_UNBOUNDED {
-				if indexTop.LowerBound < 0 {
-					// L2 distance is non-negative, so a negative lower bound
-					// cannot exclude any row.
+				if indexTop.LowerBound <= 0 {
+					// L2 distance is non-negative, so a lower bound of 0 or below cannot exclude any
+					// candidate in the squared superset gate (every squared distance is >= 0). It must
+					// be treated as unbounded: widening a 0 bound outward and squaring it turns it
+					// POSITIVE (~1.96e-90), which would then reject an exact-zero distance even though
+					// `l2_distance(...) >= 0` must include it (#29040). The exact source-domain
+					// post-filter still enforces a `> 0` exclusive lower bound.
 					indexTop.LowerBoundType = plan.BoundType_UNBOUNDED
 					indexTop.LowerBound = 0
 				} else {

@@ -209,16 +209,22 @@ func L2Distance[T types.RealNumbers](v1, v2 []T) (float64, error) {
 }
 
 // L2DistanceSq returns the squared L2 distance between two vectors.
-// It is an optimized version of L2Distance used in Index Scan
+// It is an optimized version of L2Distance used in Index Scan.
+//
+// Unlike the other scalar distances this returns the RAW float64 square and does NOT round into the
+// float32 domain. IVF's entries query uses l2_distance_sq as its internal squared intermediate and
+// then takes sqrt + rounds once in scoreFromQuantized (DistanceTransformIvfflat). Rounding the square
+// here would make IVF compute float32(sqrt(float32(sq))) while the scalar l2_distance computes
+// float32(sqrt(sq)) -- a boundary mismatch (e.g. [1.00000006,0,0] vs 0: 1.0 vs 1.0000001192092896)
+// that changes projected values, predicates, and ordering. The final exposed L2 value is rounded by
+// L2Distance / DistanceTransform* after the sqrt (#29040 / #29050).
 func L2DistanceSq[T types.RealNumbers](v1, v2 []T) (float64, error) {
 	if len(v1) != len(v2) {
 		return 0, moerr.NewArrayInvalidOpNoCtx(len(v1), len(v2))
 	}
 
 	ret, err := metric.L2DistanceSq[T](v1, v2)
-	// Round a float64 base into the float32 distance domain so the scalar and index agree
-	// (see InnerProduct); no-op for a float32 base (#29040 / #29050).
-	return metric.RoundDistanceToElemDomain(float64(ret)), err
+	return float64(ret), err
 }
 
 func CosineDistance[T types.RealNumbers](v1, v2 []T) (float64, error) {
