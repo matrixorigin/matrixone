@@ -186,9 +186,13 @@ func TestStatisticsUpgradeOldWorkerCannotCompleteNewTask(t *testing.T) {
 					return executor.Result{AffectedRows: 1}, nil
 				}, txnOp)
 
+				// Model the pre-PR 4.0.7 binary explicitly. Its handler had no
+				// tenant entries, so it could complete the offset-only task without
+				// running the current Python catalog migrations.
+				legacy407 := newTestVersionHandler("4.0.7", "4.0.6", versions.Yes, versions.Yes, 0)
 				old := newServiceForTest("", &memLocker{},
 					clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec,
-					func(s *service) { s.handles = append(s.handles, v4_0_7.Handler) })
+					func(s *service) { s.handles = append(s.handles, legacy407) })
 				defer old.stopper.Stop()
 				// Both the worker admission code and this restored 4.0.7 handler are
 				// unchanged from the old binary; no new-worker-only offset check is used.
@@ -197,6 +201,11 @@ func TestStatisticsUpgradeOldWorkerCannotCompleteNewTask(t *testing.T) {
 				require.Equal(t, test.oldCanClaim, hasWork)
 				require.Equal(t, test.oldCanClaim, claimed)
 				require.Equal(t, test.oldCanClaim, ready)
+				wantLegacyCalls := uint64(0)
+				if test.oldCanClaim {
+					wantLegacyCalls = 1
+				}
+				require.Equal(t, wantLegacyCalls, legacy407.callHandleTenantUpgrade.Load())
 				require.Equal(t, legacy, definition)
 				require.Zero(t, creates)
 
