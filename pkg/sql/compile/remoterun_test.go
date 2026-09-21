@@ -3973,6 +3973,69 @@ func TestSendNotifyMessageRetriesUntilRemoteDispatchRegistered(t *testing.T) {
 	require.Equal(t, 2, attempts)
 }
 
+func TestSendNotifyMessageSchedulerUsesEventState(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.BuildPipelineContext(context.Background())
+	scopeProc := proc.NewContextChildProc(1)
+	uid := uuid.Must(uuid.NewV7())
+	s := &Scope{
+		Proc: scopeProc,
+		RemoteReceivRegInfos: []RemoteReceivRegInfo{
+			{Idx: 0, Uuid: uid, FromAddr: "remote-cn"},
+		},
+	}
+
+	factory := func(
+		ctx context.Context,
+		sid string,
+		toAddr string,
+		mp *mpool.MPool,
+		analyzeModule *AnalyzeModule,
+	) (*messageSenderOnClient, error) {
+		receiveCh := make(chan morpc.Message, 2)
+		receiveCh <- makeRemoteBatchMessage(t, batch.NewWithSize(0))
+		receiveCh <- &pipeline.Message{Sid: pipeline.Status_MessageEnd}
+		return &messageSenderOnClient{
+			ctx:          ctx,
+			mp:           mp,
+			streamSender: &fakeStreamSender{},
+			receiveCh:    receiveCh,
+			safeToClose:  true,
+		}, nil
+	}
+
+	scheduler := newScopeTaskScheduler(scopeProc.Ctx, 1, nil)
+	var wg sync.WaitGroup
+	resultCh := make(chan notifyMessageResult, 1)
+	s.sendNotifyMessageWithFactoryAndCallback(
+		&wg,
+		func(result notifyMessageResult) { resultCh <- result },
+		factory,
+		waitRemoteDispatchRetry,
+		scheduler,
+	)
+
+	select {
+	case result := <-resultCh:
+		result.clean(scopeProc)
+		require.NoError(t, result.err)
+	case <-time.After(time.Second):
+		t.Fatal("scheduler-backed remote notify did not finish")
+	}
+	wg.Wait()
+	scheduler.wait()
+
+	select {
+	case signal := <-scopeProc.Reg.MergeReceivers[0].Ch2:
+		bat, err := signal.Action()
+		require.NoError(t, err)
+		require.NotNil(t, bat)
+		bat.Clean(scopeProc.Mp())
+	case <-time.After(time.Second):
+		t.Fatal("scheduler-backed remote notify did not forward its batch")
+	}
+}
+
 func TestNotifyMessageRetryDelayIsBoundedAndDeterministic(t *testing.T) {
 	uid := uuid.UUID{
 		0x01, 0x02, 0x03, 0x04,

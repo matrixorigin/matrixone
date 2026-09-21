@@ -174,8 +174,15 @@ func (mergeTop *MergeTop) callStream(
 	}
 	if !ctr.primed {
 		for i := range ctr.streams {
-			if err := ctr.loadNextBatch(proc, analyzer, i); err != nil {
+			waiting, err := ctr.loadNextBatch(proc, analyzer, i)
+			if err != nil {
 				return vm.CancelResult, err
+			}
+			if waiting {
+				return vm.CallResult{
+					Status:  vm.ExecWaiting,
+					OnReady: ctr.streams[i].receiver.RegisterReady,
+				}, nil
 			}
 			if !ctr.streams[i].ended {
 				ctr.heap.items = append(ctr.heap.items, i)
@@ -183,6 +190,35 @@ func (mergeTop *MergeTop) callStream(
 		}
 		heap.Init(&ctr.heap)
 		ctr.primed = true
+	}
+	// A stream can be exhausted while the output batch still contains rows.
+	// Refill it only when the next VM quantum is admitted; never block the
+	// scheduler worker behind the receiver.
+	for i := range ctr.streams {
+		stream := &ctr.streams[i]
+		if stream.ended || stream.bat == nil || stream.row < int64(stream.bat.RowCount()) {
+			continue
+		}
+		waiting, err := ctr.loadNextBatch(proc, analyzer, i)
+		if err != nil {
+			return vm.CancelResult, err
+		}
+		if waiting {
+			return vm.CallResult{
+				Status:  vm.ExecWaiting,
+				OnReady: stream.receiver.RegisterReady,
+			}, nil
+		}
+		if stream.ended {
+			for pos, item := range ctr.heap.items {
+				if item == i {
+					heap.Remove(&ctr.heap, pos)
+					break
+				}
+			}
+		} else {
+			heap.Fix(&ctr.heap, 0)
+		}
 	}
 	if ctr.heap.Len() == 0 {
 		ctr.done = true
@@ -219,17 +255,24 @@ func (mergeTop *MergeTop) callStream(
 		rows += chunk
 		ctr.emitted += uint64(chunk)
 		stream.row += int64(chunk)
-		if stream.row >= int64(stream.bat.RowCount()) {
-			if err = ctr.loadNextBatch(proc, analyzer, winner); err != nil {
-				return vm.CancelResult, err
+		if stream.row < int64(stream.bat.RowCount()) {
+			heap.Fix(&ctr.heap, 0)
+		} else {
+			waiting, loadErr := ctr.loadNextBatch(proc, analyzer, winner)
+			if loadErr != nil {
+				return vm.CancelResult, loadErr
+			}
+			if waiting {
+				// The next batch is an external event. Return the rows
+				// accumulated so far and let the next continuation quantum
+				// refill the exhausted stream without blocking this worker.
+				break
 			}
 			if stream.ended {
 				heap.Pop(&ctr.heap)
 			} else {
 				heap.Fix(&ctr.heap, 0)
 			}
-		} else {
-			heap.Fix(&ctr.heap, 0)
 		}
 		if ctr.output.Size() >= ctr.outputBytesLimit() {
 			break
@@ -341,21 +384,27 @@ func (ctr *streamContainer) loadNextBatch(
 	proc *process.Process,
 	analyzer process.Analyzer,
 	idx int,
-) error {
+) (bool, error) {
 	stream := &ctr.streams[idx]
+	if stream.bat != nil && !stream.ended && stream.row < int64(stream.bat.RowCount()) {
+		return false, nil
+	}
 	ctr.freeOrderCols(proc, stream)
 	for {
-		bat, err := stream.receiver.GetNextBatch(analyzer)
+		bat, err, progressed := stream.receiver.TryGetNextBatch(analyzer)
 		if err != nil {
-			return err
+			return false, err
+		}
+		if !progressed {
+			return true, nil
 		}
 		if bat == nil {
 			if cancelErr, canceled := vm.CancelCheck(proc); canceled {
-				return cancelErr
+				return false, cancelErr
 			}
 			stream.bat = nil
 			stream.ended = true
-			return nil
+			return false, nil
 		}
 		if bat.IsEmpty() {
 			continue
@@ -369,7 +418,7 @@ func (ctr *streamContainer) loadNextBatch(
 			if executor.IsColumnExpr() {
 				col := executor.(*colexec.ColumnExpressionExecutor).GetColIndex()
 				if col < 0 || col >= len(bat.Vecs) {
-					return moerr.NewInternalErrorf(proc.Ctx,
+					return false, moerr.NewInternalErrorf(proc.Ctx,
 						"merge top ordered stream column %d out of range [0,%d)",
 						col, len(bat.Vecs))
 				}
@@ -380,12 +429,12 @@ func (ctr *streamContainer) loadNextBatch(
 				proc, []*batch.Batch{bat}, nil)
 			if evalErr != nil {
 				ctr.freeOrderCols(proc, stream)
-				return evalErr
+				return false, evalErr
 			}
 			stream.orderCols[i] = vec
 			stream.ownedCols[i] = true
 		}
-		return nil
+		return false, nil
 	}
 }
 

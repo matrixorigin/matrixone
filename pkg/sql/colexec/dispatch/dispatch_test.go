@@ -522,6 +522,10 @@ func TestWaitRemoteRegsReadyPropagatesCancelCause(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	ctx, cancel := context.WithCancelCause(context.Background())
 	proc.Ctx = ctx
+	proc.SetEventSubmitter(func(_ string, task func()) error {
+		go task()
+		return nil
+	})
 	proc.Cancel = cancel
 
 	uid, err := uuid.NewV7()
@@ -668,6 +672,10 @@ func TestDispatchEmptyInputWaitsForRemoteReceiver(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	proc.Ctx = ctx
+	proc.SetEventSubmitter(func(_ string, task func()) error {
+		go task()
+		return nil
+	})
 
 	uid, err := uuid.NewV7()
 	require.NoError(t, err)
@@ -708,6 +716,16 @@ func TestDispatchEmptyInputWaitsForRemoteReceiver(t *testing.T) {
 
 	result, err := d.Call(proc)
 	require.NoError(t, err)
+	require.Equal(t, vm.ExecWaiting, result.Status)
+	ready := make(chan struct{})
+	require.NoError(t, result.OnReady(func() { close(ready) }))
+	select {
+	case <-ready:
+	case <-ctx.Done():
+		t.Fatal("remote registration readiness was not delivered")
+	}
+	result, err = d.Call(proc)
+	require.NoError(t, err)
 	require.Equal(t, vm.ExecStop, result.Status)
 	require.True(t, d.ctr.prepared)
 	require.Len(t, d.ctr.remoteReceivers, 1)
@@ -720,6 +738,10 @@ func TestDispatchEmptyInputRemoteWaitPropagatesCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	proc.Ctx = ctx
 	proc.Cancel = cancel
+	proc.SetEventSubmitter(func(_ string, task func()) error {
+		go task()
+		return nil
+	})
 
 	uid, err := uuid.NewV7()
 	require.NoError(t, err)
@@ -749,6 +771,16 @@ func TestDispatchEmptyInputRemoteWaitPropagatesCancellation(t *testing.T) {
 	}()
 
 	result, err := d.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecWaiting, result.Status)
+	ready := make(chan struct{})
+	require.NoError(t, result.OnReady(func() { close(ready) }))
+	select {
+	case <-ready:
+	case <-time.After(time.Second):
+		t.Fatal("remote cancellation readiness was not delivered")
+	}
+	result, err = d.Call(proc)
 	require.ErrorIs(t, err, want)
 	require.Nil(t, result.Batch)
 	require.True(t, d.ctr.prepared)

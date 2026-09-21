@@ -71,6 +71,9 @@ type PipelineSpool struct {
 	// release must free directly instead of putting memory back into a cache that
 	// will not be cleaned again.
 	cleanupDone bool
+
+	readyMu        sync.Mutex
+	readyCallbacks []func()
 }
 
 // pipelineSpoolMessage is the element of PipelineSpool.
@@ -119,6 +122,92 @@ func (ps *PipelineSpool) SendBatch(
 		ps.sendToIdx(messageIdx, receiverID)
 	}
 	return false, nil
+}
+
+// TrySendBatch is the non-blocking producer path. A false sent result means
+// the spool has no free slot and the caller must yield and register
+// RegisterSendReady before retrying.
+func (ps *PipelineSpool) TrySendBatch(
+	receiverID int, data *batch.Batch, info error) (queryDone, sent bool, err error) {
+	if receiverID == SendToAnyLocal {
+		panic("do not support SendToAnyLocal for pipeline spool now.")
+	}
+	if ps == nil {
+		return true, false, ErrPipelineSpoolAborted
+	}
+	select {
+	case <-ps.abortDone:
+		return true, false, ps.abortErr
+	default:
+	}
+	var messageIdx uint32
+	select {
+	case messageIdx = <-ps.freeShardPool:
+	default:
+		return false, false, nil
+	}
+
+	ps.mu.RLock()
+	if ps.aborted {
+		err = ps.abortErr
+		ps.mu.RUnlock()
+		ps.freeShardPool <- messageIdx
+		return true, false, err
+	}
+	dst, useCache, cacheID, copyErr := ps.cache.GetCopiedBatch(data)
+	if copyErr != nil {
+		ps.mu.RUnlock()
+		ps.freeShardPool <- messageIdx
+		return false, false, copyErr
+	}
+	ps.updateSpoolMessage(messageIdx, dst, info, useCache, cacheID)
+	if receiverID == SendToAllLocal {
+		ps.sendToAll(messageIdx)
+	} else {
+		ps.sendToIdx(messageIdx, receiverID)
+	}
+	ps.mu.RUnlock()
+	return false, true, nil
+}
+
+// RegisterSendReady arms a one-shot callback for a producer slot becoming
+// available. It never waits on the spool's free-slot channel.
+func (ps *PipelineSpool) RegisterSendReady(callback func()) error {
+	if callback == nil {
+		return moerr.NewInvalidInputNoCtx("nil pipeline spool readiness callback")
+	}
+	if ps == nil {
+		callback()
+		return nil
+	}
+	ps.readyMu.Lock()
+	ready := len(ps.freeShardPool) > 0
+	select {
+	case <-ps.abortDone:
+		ready = true
+	default:
+	}
+	if !ready {
+		ps.readyCallbacks = append(ps.readyCallbacks, callback)
+	}
+	ps.readyMu.Unlock()
+	if ready {
+		callback()
+	}
+	return nil
+}
+
+func (ps *PipelineSpool) notifySendReady() {
+	if ps == nil {
+		return
+	}
+	ps.readyMu.Lock()
+	callbacks := ps.readyCallbacks
+	ps.readyCallbacks = nil
+	ps.readyMu.Unlock()
+	for _, callback := range callbacks {
+		callback()
+	}
 }
 
 // ReleaseCurrent force to release the last received one.
@@ -311,6 +400,7 @@ func (ps *PipelineSpool) Abort(cause error) {
 		ps.abortErr = cause
 		close(ps.abortDone)
 		ps.abortLocked()
+		ps.notifySendReady()
 	})
 }
 
@@ -385,6 +475,7 @@ func (ps *PipelineSpool) releaseCurrentLocked(idx int) {
 				ps.clearSlotLocked(last)
 				ps.cache.CacheBatch(useCache, cacheID, data)
 				ps.freeShardPool <- last
+				ps.notifySendReady()
 			}
 		}
 		ps.rs[idx].flagLastPopRelease()

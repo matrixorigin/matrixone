@@ -128,10 +128,11 @@ func (f *adaptiveFixture) install(t *testing.T, candidates [][][]int64) {
 		f.terminal(t, branch, nil)
 		return nil
 	})
-	f.op.SetBranchWaiter(func(branch int) error {
+	f.op.SetBranchWaiter(func(branch int, done func(error)) error {
 		require.Len(t, f.starts, branch+1)
 		require.Nil(t, f.op.ctr.output)
 		f.waits = append(f.waits, branch)
+		done(nil)
 		return nil
 	})
 }
@@ -141,6 +142,13 @@ func (f *adaptiveFixture) read(t *testing.T) (values []int64) {
 	for {
 		result, err := vm.Exec(f.op, f.proc)
 		require.NoError(t, err)
+		if result.Status == vm.ExecWaiting {
+			require.NotNil(t, result.OnReady)
+			ready := make(chan struct{}, 1)
+			require.NoError(t, result.OnReady(func() { ready <- struct{}{} }))
+			<-ready
+			continue
+		}
 		if result.Batch != nil {
 			values = append(values, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0])...)
 		}
@@ -217,7 +225,7 @@ func TestAdaptiveTopRejectsCandidateErrorsWithoutPublication(t *testing.T) {
 				}
 				return nil
 			})
-			f.op.SetBranchWaiter(func(branch int) error { waits++; return wantErr })
+			f.op.SetBranchWaiter(func(branch int, _ func(error)) error { waits++; return wantErr })
 			require.NoError(t, vm.Prepare(f.op, f.proc))
 			result, err := vm.Exec(f.op, f.proc)
 			if where == "page overflow" {
@@ -248,7 +256,7 @@ func TestAdaptiveTopCancellationBeforePublish(t *testing.T) {
 			f.install(t, [][][]int64{{{1}, {2}}, {}, {}})
 			wantErr := errors.New("client canceled")
 			if phase == "after completion" {
-				f.op.SetBranchWaiter(func(int) error { cancel(wantErr); return nil })
+				f.op.SetBranchWaiter(func(_ int, done func(error)) error { cancel(wantErr); done(nil); return nil })
 			}
 			require.NoError(t, vm.Prepare(f.op, f.proc))
 			if phase == "during replay" {
@@ -341,7 +349,11 @@ func TestAdaptiveTopRetainedBatchBoundFailsClosed(t *testing.T) {
 		f.terminal(t, branch, nil)
 		return nil
 	})
-	f.op.SetBranchWaiter(func(int) error { t.Error("不应发布缺少 spill 配置的候选"); return nil })
+	f.op.SetBranchWaiter(func(_ int, done func(error)) error {
+		t.Error("不应发布缺少 spill 配置的候选")
+		done(nil)
+		return nil
+	})
 	require.NoError(t, vm.Prepare(f.op, f.proc))
 	result, err := vm.Exec(f.op, f.proc)
 	require.ErrorContains(t, err, "spill is unavailable")
@@ -395,11 +407,12 @@ func TestAdaptiveTopSpillSelectionAndDiscard(t *testing.T) {
 				f.terminal(t, branch, nil)
 				return nil
 			})
-			f.op.SetBranchWaiter(func(branch int) error {
+			f.op.SetBranchWaiter(func(branch int, done func(error)) error {
 				if branch == 0 {
 					require.Positive(t, budget.SpillDiskUsed(), "必须真实跨过 batch 保留上限")
 					require.EqualValues(t, 1, budget.SpillFDUsed())
 				}
+				done(nil)
 				return nil
 			})
 			require.NoError(t, vm.Prepare(f.op, f.proc))

@@ -269,7 +269,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.status {
 		case interval:
-			result, err := vm.Exec(timeWin.GetChildren(0), proc)
+			result, err := vm.ChildrenCall(timeWin.GetChildren(0), proc, timeWin.OpAnalyzer)
 			if err != nil {
 				return result, err
 			}
@@ -294,7 +294,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 			result.Batch = ctr.bat
 			return result, nil
 		case receive:
-			result, err := vm.Exec(timeWin.GetChildren(0), proc)
+			result, err := vm.ChildrenCall(timeWin.GetChildren(0), proc, timeWin.OpAnalyzer)
 			if err != nil {
 				return result, err
 			}
@@ -401,7 +401,7 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 				break
 			}
 
-			result, err := vm.Exec(timeWin.GetChildren(0), proc)
+			result, err := vm.ChildrenCall(timeWin.GetChildren(0), proc, timeWin.OpAnalyzer)
 			if err != nil {
 				return result, err
 			}

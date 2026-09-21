@@ -28,6 +28,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/apache/arrow-go/v18/arrow"
@@ -107,7 +108,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"github.com/panjf2000/ants/v2"
 	"go.uber.org/zap"
 )
 
@@ -186,6 +186,10 @@ func (c *Compile) Release() {
 	if c == nil {
 		return
 	}
+	// Quiesce query-local Scope tasks before resetting the Process context. A
+	// remote MergeRun may still be draining a result while Release is entered
+	// from the frontend error path; resetting first would invalidate its owner.
+	c.waitScopeTaskScheduler()
 	if c.siriusRead != nil {
 		if err := c.siriusRead.finish(context.Background(), false); err != nil && c.proc != nil {
 			c.proc.Error(context.Background(), "failed to quiesce Sirius read during compile release", zap.Error(err))
@@ -281,6 +285,9 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	if !c.IsTpQuery() {
 		return cantCompileForPrepareErr
 	}
+	// A prepared Compile can be reused only after the previous query-local
+	// scheduler has retired all tasks that might still reference its Scope tree.
+	c.waitScopeTaskScheduler()
 	if c.siriusRead != nil {
 		if err := c.siriusRead.finish(context.Background(), false); err != nil {
 			return err
@@ -457,6 +464,10 @@ func UpdateScopeTxnOffset(scope *Scope, txnOffset int) {
 }
 
 func (c *Compile) clear() {
+	// Scope tasks must be quiescent before their Scope/Process owners are
+	// released. This is also the safety net for remote pipeline handlers that
+	// enter MergeRun without going through runOnce.
+	c.waitScopeTaskScheduler()
 	if c.anal != nil {
 		c.anal.release()
 	}
@@ -681,6 +692,88 @@ func (c *Compile) run(s *Scope) error {
 	return nil
 }
 
+// runControlScopeAsync admits a non-VM scope (DDL/control) as an external
+// event.  Such scopes have no operator continuation, but their catalog work
+// can block and must not occupy a ready worker.  The event source owns that
+// wait and reports one terminal result to the enclosing scope state machine.
+func (c *Compile) runControlScopeAsync(s *Scope, done func(error)) error {
+	if c == nil || s == nil || done == nil {
+		return moerr.NewInternalErrorNoCtx("invalid control scope execution")
+	}
+	scheduler := c.ensureScopeTaskScheduler(1)
+	future, err := submitBlockingFuture(scheduler, "scope-control", false,
+		func() (struct{}, error) {
+			return struct{}{}, c.run(s)
+		})
+	if err != nil {
+		return err
+	}
+	return future.OnComplete(func(_ struct{}, runErr error) {
+		done(runErr)
+	})
+}
+
+// runAsync admits scope execution as a continuation. The scheduler worker
+// performs only admission; the continuation reports completion through done,
+// which lets the ready queue continue handling unrelated scope events.
+func (c *Compile) runAsync(s *Scope, done func(error)) error {
+	if done == nil {
+		return moerr.NewInternalErrorNoCtx("nil scope completion")
+	}
+	if s == nil {
+		done(nil)
+		return nil
+	}
+
+	// A Normal scope can still be a dependency-tree root (for example the
+	// primary-key dedup probe below a MultiUpdate).  Its PreScopes are producers
+	// rather than optional metadata, so it must enter the same merge state
+	// machine as an explicitly tagged Merge scope.  Running only the Normal VM
+	// would leave those producers undispatched and the parent waiting forever.
+	if s.Magic == Merge || s.Magic == MergeInsert || s.Magic == MergeDelete || len(s.PreScopes) > 0 {
+		return s.mergeRunAsync(c, func(err error) {
+			if err == nil {
+				c.addAffectedRows(s.affectedRows())
+				if s.Magic == MergeDelete {
+					mergeArg := s.RootOp.(*mergedelete.MergeDelete)
+					if mergeArg.AddAffectedRows {
+						c.addAffectedRows(mergeArg.GetAffectedRows())
+					}
+				}
+			}
+			done(err)
+		})
+	}
+	if s.Magic == Remote {
+		return s.remoteRunAsync(c, func(err error) {
+			if err == nil {
+				if _, ok := s.RootOp.(*multi_update.MultiUpdate); ok {
+					for _, ps := range s.PreScopes {
+						c.addAllAffectedRows(ps)
+					}
+				}
+				c.addAffectedRows(s.affectedRows())
+			}
+			done(err)
+		})
+	}
+	// DDL and other control scopes do not own a VM root.  They are still
+	// admitted through the same query-local event scheduler; the event source
+	// performs the blocking catalog/metadata operation and publishes exactly
+	// one terminal completion.  Leaving these scopes to runEventAsync would
+	// construct an empty pipeline and silently skip the operation.
+	if s.Magic != Normal && s.Magic != Remote {
+		return c.runControlScopeAsync(s, done)
+	}
+
+	return s.runEventAsync(c, func(runErr error) {
+		if runErr == nil {
+			c.addAffectedRows(s.affectedRows())
+		}
+		done(runErr)
+	})
+}
+
 // isRetryErr if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry t
 // he statement
 func (c *Compile) isRetryErr(err error) bool {
@@ -765,7 +858,23 @@ func normalizeScopeRunError(
 	pipelineCtx context.Context,
 	queryCtx context.Context,
 ) (error, bool) {
-	if err == nil || !isScopeCancellationError(err) ||
+	if err == nil {
+		return err, false
+	}
+	// Admission can fail before a VM continuation is created.  In that case
+	// the scheduler returns context.Cause(queryCtx), which is deliberately a
+	// diagnostic cause (for example internal-executor-exec) rather than the
+	// public cancellation class.  Preserve the query deadline classification
+	// at this boundary just as we do for a continuation that observed the same
+	// cancellation after it started.
+	if queryCtx != nil {
+		if queryErr := queryCtx.Err(); errors.Is(queryErr, context.DeadlineExceeded) {
+			if cause := context.Cause(queryCtx); cause != nil && errors.Is(err, cause) {
+				return queryErr, true
+			}
+		}
+	}
+	if !isScopeCancellationError(err) ||
 		pipelineCtx == nil || pipelineCtx.Err() == nil {
 		return err, false
 	}
@@ -1080,61 +1189,72 @@ func (c *Compile) runOnce() (err error) {
 	}
 	defer registrations.cleanup()
 
-	if c.IsTpQuery() && len(c.scopes) == 1 {
-		if err = c.run(c.scopes[0]); err != nil {
-			return err
-		}
-	} else {
-		errC := make(chan scopeRunResult, len(c.scopes))
-		for i := range c.scopes {
-			scope := c.scopes[i]
-			errSubmit := ants.Submit(func() {
-				defer func() {
-					if e := recover(); e != nil {
-						err := moerr.ConvertPanicError(c.proc.Ctx, e)
-						c.proc.Error(c.proc.Ctx, "panic in run",
-							zap.String("sql", commonutil.Abbreviate(c.sql, 500)),
-							zap.String("error", err.Error()))
-						errC <- newScopeRunResult(err, scope)
-					}
-				}()
-				errC <- newScopeRunResult(c.run(scope), scope)
-			})
-			if errSubmit != nil {
-				errC <- newScopeRunResult(errSubmit, scope)
+	scheduler := c.ensureScopeTaskScheduler(max(1, len(c.scopes)))
+	defer c.waitScopeTaskScheduler()
+	logutil.Debugf("[scope-scheduler] query start id=%d sql=%s roots=%d tp=%v",
+		scheduler.id, commonutil.Abbreviate(c.sql, 500), len(c.scopes), c.IsTpQuery())
+
+	errC := make(chan scopeRunResult, len(c.scopes))
+	for i := range c.scopes {
+		scope := c.scopes[i]
+		rootName := "root-scope-" + strconv.Itoa(i)
+		errSubmit := scheduler.submitRootAsync(rootName, func(finish func()) {
+			var once sync.Once
+			complete := func(runErr error) {
+				once.Do(func() {
+					logutil.Debugf("[scope-scheduler] root complete id=%d name=%s err=%v", scheduler.id, rootName, runErr)
+					errC <- newScopeRunResult(runErr, scope)
+					finish()
+				})
 			}
+			defer func() {
+				if e := recover(); e != nil {
+					err := moerr.ConvertPanicError(c.proc.Ctx, e)
+					c.proc.Error(c.proc.Ctx, "panic in run",
+						zap.String("sql", commonutil.Abbreviate(c.sql, 500)),
+						zap.String("error", err.Error()))
+					complete(err)
+				}
+			}()
+			if err := c.runAsync(scope, complete); err != nil {
+				complete(err)
+			}
+		})
+		if errSubmit != nil {
+			c.proc.Errorf(c.proc.Ctx, "query-local scope scheduler rejected %s: %v", rootName, errSubmit)
+			errC <- newScopeRunResult(errSubmit, scope)
 		}
+	}
 
-		var resultToThrowOut scopeRunResult
-		for i := 0; i < cap(errC); i++ {
-			result := <-errC
-			result, _ = result.resolveCancelCause()
-			e := result.err
+	var resultToThrowOut scopeRunResult
+	for i := 0; i < cap(errC); i++ {
+		result := <-errC
+		result, _ = result.resolveCancelCause()
+		e := result.err
 
-			// cancel this query if the first error occurs.
-			if e != nil && resultToThrowOut.err == nil {
+		// cancel this query if the first error occurs.
+		if e != nil && resultToThrowOut.err == nil {
 
-				// cancel all scope tree.
-				for j := range c.scopes {
-					if c.scopes[j].Proc != nil {
-						c.scopes[j].Proc.Cancel(e)
-					}
+			// cancel all scope tree.
+			for j := range c.scopes {
+				if c.scopes[j].Proc != nil {
+					c.scopes[j].Proc.Cancel(e)
 				}
 			}
-			resultToThrowOut = preferPrimaryScopeResult(resultToThrowOut, result)
-
-			// if any error already return is retryable, we should throw this one
-			// to make sure query will retry.
-			if e != nil && c.isRetryErr(e) {
-				resultToThrowOut = result
-			}
 		}
-		close(errC)
+		resultToThrowOut = preferPrimaryScopeResult(resultToThrowOut, result)
 
-		resultToThrowOut, _ = resultToThrowOut.resolveCancelCause()
-		if resultToThrowOut.err != nil {
-			return resultToThrowOut.err
+		// if any error already return is retryable, we should throw this one
+		// to make sure query will retry.
+		if e != nil && c.isRetryErr(e) {
+			resultToThrowOut = result
 		}
+	}
+	close(errC)
+
+	resultToThrowOut, _ = resultToThrowOut.resolveCancelCause()
+	if resultToThrowOut.err != nil {
+		return resultToThrowOut.err
 	}
 
 	for _, sql := range c.proc.Base.PostDmlSqlList.Values() {

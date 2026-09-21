@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -97,14 +98,19 @@ type container struct {
 	held                 bool
 	writingStopped       bool
 
-	producerOnce    sync.Once
-	producerStarted bool
-	producerProc    *process.Process
-	producerDone    chan struct{}
-	producerRows    int64
-	producerSize    int64
+	producerOnce       sync.Once
+	producerStarted    bool
+	producerProc       *process.Process
+	producerDone       chan struct{}
+	producerCont       *pipeline.Continuation
+	producerPending    *directHandoff
+	producerFinishOnce sync.Once
+	producerRows       int64
+	producerSize       int64
 
 	directBatches chan directHandoff
+	directReady   chan struct{}
+	directSpace   chan struct{}
 	directAck     chan struct{}
 	consumerDone  chan struct{}
 	consumerOnce  sync.Once
@@ -189,9 +195,13 @@ func (shuffle *Shuffle) Reset(proc *process.Process, pipelineFailed bool, err er
 	shuffle.ctr.producerStarted = false
 	shuffle.ctr.producerProc = nil
 	shuffle.ctr.producerDone = nil
+	shuffle.ctr.producerCont = nil
+	shuffle.ctr.producerPending = nil
 	shuffle.ctr.producerRows = 0
 	shuffle.ctr.producerSize = 0
 	shuffle.ctr.directBatches = nil
+	shuffle.ctr.directReady = nil
+	shuffle.ctr.directSpace = nil
 	shuffle.ctr.directAck = nil
 	shuffle.ctr.consumerDone = nil
 	shuffle.ctr.consumerOnce = sync.Once{}

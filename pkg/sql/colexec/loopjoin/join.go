@@ -17,6 +17,7 @@ package loopjoin
 import (
 	"bytes"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -24,7 +25,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
-	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -104,7 +104,31 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
-			if err = loopJoin.build(proc, analyzer); err != nil {
+			if ctr.joinMapReceiver == nil {
+				ctr.joinMapReceiver = message.NewJoinMapReceiver(
+					loopJoin.JoinMapTag, false, 0, proc.GetMessageBoard())
+			}
+			if ctr.pendingJoinMap == nil {
+				dep, ready, waitErr := ctr.joinMapReceiver.TryReceive()
+				if waitErr != nil {
+					return result, waitErr
+				}
+				if !ready {
+					if !proc.HasEventSubmitter() {
+						dep, receiveErr := ctr.joinMapReceiver.Receive(proc.Ctx)
+						if receiveErr != nil {
+							return result, receiveErr
+						}
+						ctr.pendingJoinMap = &dep
+						continue
+					}
+					result.Status = vm.ExecWaiting
+					result.OnReady = ctr.joinMapReceiver.RegisterReady
+					return result, nil
+				}
+				ctr.pendingJoinMap = &dep
+			}
+			if err = loopJoin.build(proc); err != nil {
 				return result, err
 			}
 			if ctr.mp == nil && (loopJoin.JoinType == plan.Node_INNER || loopJoin.JoinType == plan.Node_SEMI) && !loopJoin.recursiveProbe {
@@ -187,11 +211,18 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (loopJoin *LoopJoin) build(proc *process.Process, analyzer process.Analyzer) (err error) {
-	loopJoin.ctr.mp, err = process.MeasureWait(analyzer, resource.WaitOther, func() (*message.JoinMap, error) {
-		return message.ReceiveJoinMap(loopJoin.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
-	})
-	return err
+func (loopJoin *LoopJoin) build(proc *process.Process) (err error) {
+	ctr := &loopJoin.ctr
+	if ctr.pendingJoinMap == nil {
+		return moerr.NewInternalErrorNoCtx("loop join resumed without a ready join map")
+	}
+	dep := *ctr.pendingJoinMap
+	ctr.pendingJoinMap = nil
+	if buildErr := dep.BuildError(); buildErr != nil {
+		return buildErr.AsError()
+	}
+	ctr.mp = dep.JoinMap()
+	return nil
 }
 
 func (ctr *container) emptyProbe(ap *LoopJoin, proc *process.Process, result *vm.CallResult) error {

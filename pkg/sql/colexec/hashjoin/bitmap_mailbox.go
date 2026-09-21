@@ -19,6 +19,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 )
@@ -27,9 +28,10 @@ import (
 // bitmap exchange. A successful Send transfers ownership to the mailbox. Once
 // sealed, late senders retain ownership and normal operator cleanup frees it.
 type BitmapMailbox struct {
-	mu     sync.Mutex
-	sealed bool
-	ch     chan *bitmap.Bitmap
+	mu            sync.Mutex
+	sealed        bool
+	ch            chan *bitmap.Bitmap
+	readyCallback []func()
 }
 
 func NewBitmapMailbox(workers int) *BitmapMailbox {
@@ -44,14 +46,54 @@ func (m *BitmapMailbox) Send(value *bitmap.Bitmap) bool {
 		return false
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.sealed {
+		m.mu.Unlock()
 		return false
 	}
 	// Every non-merger publishes at most once and the mailbox capacity equals
 	// the worker count, so publication cannot block while holding mu.
 	m.ch <- value
+	callbacks := m.readyCallback
+	m.readyCallback = nil
+	m.mu.Unlock()
+	for _, callback := range callbacks {
+		callback()
+	}
 	return true
+}
+
+func (m *BitmapMailbox) TryReceive() (*bitmap.Bitmap, bool, bool) {
+	if m == nil {
+		return nil, false, true
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	select {
+	case value := <-m.ch:
+		return value, true, false
+	default:
+		return nil, false, m.sealed
+	}
+}
+
+func (m *BitmapMailbox) RegisterReady(callback func()) error {
+	if callback == nil {
+		return moerr.NewInvalidInputNoCtx("nil bitmap mailbox callback")
+	}
+	if m == nil {
+		callback()
+		return nil
+	}
+	m.mu.Lock()
+	ready := len(m.ch) > 0 || m.sealed
+	if !ready {
+		m.readyCallback = append(m.readyCallback, callback)
+	}
+	m.mu.Unlock()
+	if ready {
+		callback()
+	}
+	return nil
 }
 
 func (m *BitmapMailbox) Receive(
@@ -77,12 +119,17 @@ func (m *BitmapMailbox) SealAndDrain(mp *mpool.MPool) {
 	}
 	m.mu.Lock()
 	m.sealed = true
+	callbacks := m.readyCallback
+	m.readyCallback = nil
 	for {
 		select {
 		case value := <-m.ch:
 			colexec.FreeAccountedBitmap(value, mp)
 		default:
 			m.mu.Unlock()
+			for _, callback := range callbacks {
+				callback()
+			}
 			return
 		}
 	}

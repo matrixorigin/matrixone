@@ -114,6 +114,8 @@ type container struct {
 	expr            colexec.ExpressionExecutor
 	cfs             []func(*vector.Vector, *vector.Vector, int64, int) error
 	mp              *message.JoinMap
+	joinMapReceiver *message.JoinMapReceiver
+	pendingJoinMap  *message.JoinMapResult
 
 	// FULL OUTER JOIN bookkeeping. rightRowsMatched is a flat bitmap over
 	// all build rows; bit i is set when build row i matched at least one
@@ -252,6 +254,8 @@ func (loopJoin *LoopJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 		ctr.resBat = nil
 	}
 	ctr.state = Build
+	ctr.joinMapReceiver = nil
+	ctr.pendingJoinMap = nil
 	ctr.inBat = nil
 	ctr.probeIdx = 0
 	ctr.batIdx = 0

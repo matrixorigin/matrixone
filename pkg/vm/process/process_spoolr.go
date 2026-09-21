@@ -19,6 +19,7 @@ import (
 	"errors"
 	"reflect"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -382,7 +383,13 @@ type PipelineSignalReceiver struct {
 	nbs []int
 
 	// currentSignal is the current signal this receiver was using.
-	currentSignal *PipelineSignal
+	currentSignal  *PipelineSignal
+	readyMu        sync.Mutex
+	readyCallbacks []*receiverReadyCallback
+}
+
+type receiverReadyCallback struct {
+	fn func()
 }
 
 type PipelineSignalReceiverState struct {
@@ -528,6 +535,148 @@ func (receiver *PipelineSignalReceiver) GetNextBatch(
 	}
 }
 
+// TryGetNextBatch consumes one currently available signal without waiting. The
+// third return value is true when the receiver made progress or reached a
+// terminal state, and false when every live edge is presently empty. Callers
+// that receive false must register RegisterReady before yielding; the edge
+// registration closes the check/register race.
+func (receiver *PipelineSignalReceiver) TryGetNextBatch(
+	analyzer Analyzer) (content *batch.Batch, info error, progressed bool) {
+	if receiver == nil {
+		return nil, nil, true
+	}
+	receiver.releaseCurrent()
+	for receiver.alive > 0 {
+		madeProgress := false
+		for i, reg := range receiver.srcReg {
+			if reg == nil {
+				continue
+			}
+			if msg, ok := tryReceivePipelineSignal(reg.Ch2); ok {
+				reg.notifyCapacityOnReceive()
+				content, info, progressed = receiver.consumeReadySignal(i+1, msg, analyzer)
+				if progressed {
+					return content, info, true
+				}
+				madeProgress = true
+				break
+			}
+			select {
+			case <-reg.Done():
+				chosen, msg := receiver.receiveSignalOrTerminal(i)
+				content, info, progressed = receiver.consumeReadySignal(chosen, msg, analyzer)
+				if progressed {
+					return content, info, true
+				}
+				madeProgress = true
+				break
+			default:
+			}
+		}
+		if madeProgress {
+			continue
+		}
+		return nil, nil, false
+	}
+	return nil, nil, true
+}
+
+// consumeReadySignal applies the same terminal/data protocol as
+// GetNextBatch, but never waits for another signal.
+func (receiver *PipelineSignalReceiver) consumeReadySignal(
+	chosen int,
+	msg PipelineSignal,
+	analyzer Analyzer,
+) (*batch.Batch, error, bool) {
+	if chosen <= 0 {
+		return nil, receiver.contextDoneError(), true
+	}
+	if msg.EventType.IsTerminal() {
+		receiver.removeIdxReceiver(chosen)
+		if msg.EventType == EventEnd {
+			return nil, nil, false
+		}
+		return nil, receiver.resolveTerminalError(msg.terminalErr), true
+	}
+	content, info := msg.Action()
+	if content == nil {
+		receiver.removeIdxReceiver(chosen)
+		if info != nil {
+			return nil, receiver.resolveTerminalError(info), true
+		}
+		return nil, nil, false
+	}
+	receiver.setCurrent(&msg)
+	if analyzer != nil {
+		analyzer.Input(content)
+	}
+	return content, info, true
+}
+
+// RegisterReady arms a one-shot callback for the next data or terminal event
+// on any live input edge. It is safe to call after TryGetNextBatch returned
+// false; registration on an already-ready edge invokes the callback inline.
+func (receiver *PipelineSignalReceiver) RegisterReady(callback func()) error {
+	if callback == nil {
+		return errors.New("nil pipeline receiver readiness callback")
+	}
+	if receiver == nil {
+		callback()
+		return nil
+	}
+	var once sync.Once
+	entry := &receiverReadyCallback{}
+	var wake func()
+	wake = func() {
+		once.Do(func() {
+			receiver.removeReadyCallback(entry)
+			callback()
+		})
+	}
+	entry.fn = wake
+	receiver.readyMu.Lock()
+	if receiver.alive == 0 {
+		receiver.readyMu.Unlock()
+		wake()
+		return nil
+	}
+	receiver.readyCallbacks = append(receiver.readyCallbacks, entry)
+	receiver.readyMu.Unlock()
+	for _, reg := range receiver.srcReg {
+		if reg != nil {
+			if err := reg.RegisterReady(wake); err != nil {
+				receiver.removeReadyCallback(entry)
+				return err
+			}
+		}
+	}
+	if receiver.usrCtx != nil {
+		context.AfterFunc(receiver.usrCtx, wake)
+	}
+	return nil
+}
+
+func (receiver *PipelineSignalReceiver) removeReadyCallback(entry *receiverReadyCallback) {
+	receiver.readyMu.Lock()
+	for i := range receiver.readyCallbacks {
+		if receiver.readyCallbacks[i] == entry {
+			receiver.readyCallbacks = append(receiver.readyCallbacks[:i], receiver.readyCallbacks[i+1:]...)
+			break
+		}
+	}
+	receiver.readyMu.Unlock()
+}
+
+func (receiver *PipelineSignalReceiver) notifyReady() {
+	receiver.readyMu.Lock()
+	callbacks := receiver.readyCallbacks
+	receiver.readyCallbacks = nil
+	receiver.readyMu.Unlock()
+	for _, callback := range callbacks {
+		callback.fn()
+	}
+}
+
 // contextDoneError resolves a canceled receiver against both sources of
 // terminal truth: its process CancelCause and the durable state of its input
 // edges. The latter closes the race where a sibling cancellation wakes the
@@ -595,6 +744,9 @@ func (receiver *PipelineSignalReceiver) removeIdxReceiver(chosen int) {
 			receiver.regs = append(receiver.regs[:caseIdx], receiver.regs[caseIdx+2:]...)
 		}
 		receiver.alive--
+		if receiver.alive == 0 {
+			receiver.notifyReady()
+		}
 	}
 }
 
@@ -617,6 +769,20 @@ func (receiver *PipelineSignalReceiver) State() PipelineSignalReceiverState {
 		state.ChannelCap[i] = cap(reg.Ch2)
 	}
 	return state
+}
+
+// Abort releases a receiver's local ownership without waiting for producers.
+// Scope teardown already owns the producer completion barrier, so waiting here
+// would park a scheduler event source and can deadlock an early consumer (for
+// example LIMIT over a lazy UNION branch). Producers still observe the
+// canceled process context and finish through their own continuations.
+func (receiver *PipelineSignalReceiver) Abort() {
+	if receiver == nil {
+		return
+	}
+	receiver.releaseCurrent()
+	receiver.alive = 0
+	receiver.notifyReady()
 }
 
 func (receiver *PipelineSignalReceiver) listenToAll() (int, PipelineSignal) {

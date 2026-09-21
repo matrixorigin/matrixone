@@ -38,7 +38,9 @@ type Connector struct {
 }
 
 type container struct {
-	sp *pSpool.PipelineSpool
+	sp           *pSpool.PipelineSpool
+	pendingBatch *batch.Batch
+	spoolSent    bool
 }
 
 func (connector *Connector) GetOperatorBase() *vm.OperatorBase {

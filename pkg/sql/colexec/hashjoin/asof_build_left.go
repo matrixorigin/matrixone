@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -47,6 +48,34 @@ func (hashJoin *HashJoin) callAsofBuildLeft(proc *process.Process) (vm.CallResul
 	for {
 		switch ctr.state {
 		case Build:
+			if ctr.joinMapReceiver == nil {
+				ctr.joinMapReceiver = message.NewJoinMapReceiver(
+					hashJoin.JoinMapTag,
+					hashJoin.IsShuffle,
+					hashJoin.ShuffleIdx,
+					proc.GetMessageBoard(),
+				)
+			}
+			if ctr.pendingJoinMap == nil {
+				dep, ready, waitErr := ctr.joinMapReceiver.TryReceive()
+				if waitErr != nil {
+					return result, waitErr
+				}
+				if !ready {
+					if !proc.HasEventSubmitter() {
+						dep, receiveErr := ctr.joinMapReceiver.Receive(proc.Ctx)
+						if receiveErr != nil {
+							return result, receiveErr
+						}
+						ctr.pendingJoinMap = &dep
+						continue
+					}
+					result.Status = vm.ExecWaiting
+					result.OnReady = ctr.joinMapReceiver.RegisterReady
+					return result, nil
+				}
+				ctr.pendingJoinMap = &dep
+			}
 			if err := hashJoin.build(analyzer, proc); err != nil {
 				return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 			}

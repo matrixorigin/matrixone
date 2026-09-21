@@ -1860,6 +1860,18 @@ func (s *stream) destroy() {
 }
 
 func (s *stream) Send(ctx context.Context, request Message) error {
+	f, err := s.SendAsync(ctx, request)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	return f.waitSendCompleted()
+}
+
+// SendAsync admits a stream message without waiting for the backend writer to
+// flush it.  The returned Future publishes that result on SendDone and keeps
+// the request ownership alive until the caller closes the Future.
+func (s *stream) SendAsync(ctx context.Context, request Message) (*Future, error) {
 	if s.id != request.GetID() {
 		panic("request.id != stream.id")
 	}
@@ -1870,11 +1882,10 @@ func (s *stream) Send(ctx context.Context, request Message) error {
 	if s.mu.closed || s.mu.terminal {
 		s.mu.RUnlock()
 		s.rb.logger.Warn("stream is closed on send", append(s.rb.logFields(), zap.Uint64("stream-id", s.id))...)
-		return moerr.NewStreamClosedNoCtx()
+		return nil, moerr.NewStreamClosedNoCtx()
 	}
 
 	f := s.newFutureFunc()
-	defer f.Close()
 	err := s.doSendLocked(ctx, f, request)
 	// unlock before future.close to avoid deadlock with future.Close
 	// 1. current goroutine:        stream.RLock
@@ -1884,11 +1895,11 @@ func (s *stream) Send(ctx context.Context, request Message) error {
 	s.mu.RUnlock()
 
 	if err != nil {
-		return err
+		f.Close()
+		return nil, err
 	}
 	s.activeFunc()
-	// stream only wait send completed
-	return f.waitSendCompleted()
+	return f, nil
 }
 
 func (s *stream) doSendLocked(

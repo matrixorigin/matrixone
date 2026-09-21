@@ -16,9 +16,9 @@ package connector
 
 import (
 	"bytes"
-	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -44,33 +44,54 @@ func (connector *Connector) Prepare(proc *process.Process) error {
 }
 
 func (connector *Connector) Call(proc *process.Process) (vm.CallResult, error) {
-	if !process.WaitPipelineSignalCapacity(proc.Ctx, connector.Reg) {
-		return vm.CancelResult, nil
+	result := vm.NewCallResult()
+	if connector.ctr.pendingBatch == nil {
+		if connector.Reg != nil && len(connector.Reg.Ch2) >= cap(connector.Reg.Ch2) {
+			result.Status = vm.ExecWaiting
+			result.OnReady = connector.Reg.RegisterCapacityReady
+			return result, nil
+		}
+		childResult, err := vm.ChildrenCall(connector.GetChildren(0), proc, connector.OpAnalyzer)
+		if err != nil {
+			return childResult, err
+		}
+		if childResult.Batch == nil {
+			childResult.Status = vm.ExecStop
+			return childResult, nil
+		}
+		if childResult.Batch.IsEmpty() {
+			childResult.Batch = batch.EmptyBatch
+			return childResult, nil
+		}
+		connector.ctr.pendingBatch = childResult.Batch
+		connector.ctr.spoolSent = false
+		result = childResult
+	} else {
+		result.Batch = connector.ctr.pendingBatch
 	}
 
-	result, err := vm.ChildrenCall(connector.GetChildren(0), proc, connector.OpAnalyzer)
-	if err != nil {
-		return result, err
+	if !connector.ctr.spoolSent {
+		queryDone, sent, err := connector.ctr.sp.TrySendBatch(0, connector.ctr.pendingBatch, nil)
+		if err != nil {
+			return result, err
+		}
+		if queryDone {
+			result.Status = vm.ExecStop
+			return result, nil
+		}
+		if !sent {
+			result.Status = vm.ExecWaiting
+			result.OnReady = connector.ctr.sp.RegisterSendReady
+			return result, nil
+		}
+		connector.ctr.spoolSent = true
 	}
-
-	// pipeline ends normally.
-	if result.Batch == nil {
-		result.Status = vm.ExecStop
+	if !connector.Reg.TrySendData(connector.ctr.sp, 0) {
+		result.Status = vm.ExecWaiting
+		result.OnReady = connector.Reg.RegisterCapacityReady
 		return result, nil
 	}
-	// batch with no data, no need to send.
-	if result.Batch.IsEmpty() {
-		result.Batch = batch.EmptyBatch
-		return result, nil
-	}
-
-	var queryDone bool
-	queryDone, err = connector.ctr.sp.SendBatch(proc.Ctx, 0, result.Batch, nil)
-	if queryDone || err != nil {
-		return result, err
-	}
-	if !connector.Reg.SendData(proc.Ctx, connector.ctr.sp, 0) {
-		return result, nil
-	}
+	connector.ctr.pendingBatch = nil
+	connector.ctr.spoolSent = false
 	return result, nil
 }

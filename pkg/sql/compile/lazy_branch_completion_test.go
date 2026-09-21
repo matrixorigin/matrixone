@@ -172,7 +172,7 @@ func TestLazyBranchCompletionCancellationDoesNotRetireProducer(t *testing.T) {
 func TestInstallLazyBranchLifecycle(t *testing.T) {
 	a := adaptivetop.NewArgument()
 	defer a.Release()
-	clear, deferFirst, err := installSequentialBranchStarter(a, func(int) error { return nil }, func(int) error { return nil })
+	clear, deferFirst, err := installSequentialBranchStarter(a, func(int) error { return nil }, func(_ int, done func(error)) error { done(nil); return nil })
 	require.NoError(t, err)
 	require.True(t, deferFirst)
 	clear()

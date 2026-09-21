@@ -162,6 +162,7 @@ type container struct {
 	rightRowsMatched *bitmap.Bitmap
 	rightMatchedIter bitmap.Iterator
 	bitmapSynced     bool
+	bitmapMessages   int
 
 	maxAllocSize int64
 
@@ -169,6 +170,8 @@ type container struct {
 	spillEngine       *spillutil.SpillEngine
 	spillThreshold    int64
 	probeBucketActive bool // true while reading probe batches from a bucket
+	joinMapReceiver   *message.JoinMapReceiver
+	pendingJoinMap    *message.JoinMapResult
 }
 
 type asofIndexOrder uint8
@@ -417,12 +420,15 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.rightMatchedIter = nil
 	ctr.skipProbe = false
 	ctr.bitmapSynced = false
+	ctr.bitmapMessages = 0
 	ctr.probeMark = false
 	ctr.buildHasNullKey = false
 	ctr.asofLeftCol = -1
 	ctr.asofStrict = false
 	ctr.globalBuildRowCnt = 0
 	ctr.state = Build
+	ctr.joinMapReceiver = nil
+	ctr.pendingJoinMap = nil
 	ctr.probeState = psNextBatch
 	ctr.lastIdx = 0
 	if hashJoin.OpAnalyzer != nil {

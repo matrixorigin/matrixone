@@ -82,6 +82,7 @@ type MessageBoard struct {
 	messageCenter *MessageCenter
 	messages      []*Message
 	waiters       []chan bool
+	readyWaiters  []func()
 	rwMutex       *sync.RWMutex
 }
 
@@ -212,8 +213,8 @@ func (m *MessageBoard) close(drain bool) bool {
 	}
 
 	m.rwMutex.Lock()
-	defer m.rwMutex.Unlock()
 	firstClose := !m.closed
+	var readyWaiters []func()
 	if firstClose {
 		m.closed = true
 		m.reset = true
@@ -226,15 +227,26 @@ func (m *MessageBoard) close(drain bool) bool {
 			default:
 			}
 		}
+		readyWaiters = append(readyWaiters, m.readyWaiters...)
+		m.readyWaiters = nil
 	}
 	if !drain {
+		m.rwMutex.Unlock()
+		for _, ready := range readyWaiters {
+			ready()
+		}
 		return firstClose
 	}
 	if m.drained {
+		m.rwMutex.Unlock()
 		return false
 	}
 	m.drained = true
 	m.cleanupQueuedMessagesLocked()
+	m.rwMutex.Unlock()
+	for _, ready := range readyWaiters {
+		ready()
+	}
 	return true
 }
 
@@ -258,6 +270,7 @@ func (m *MessageBoard) cleanupQueuedMessagesLocked() {
 	}
 	m.messages = m.messages[:0]
 	m.waiters = m.waiters[:0]
+	m.readyWaiters = nil
 }
 
 type MessageReceiver struct {
@@ -287,6 +300,8 @@ func SendMessage(m Message, mb *MessageBoard) {
 			return
 		}
 		mb.messages = append(mb.messages, &m)
+		readyWaiters := append([]func(){}, mb.readyWaiters...)
+		mb.readyWaiters = nil
 		if m.NeedBlock() {
 			// broadcast for block message
 			for _, ch := range mb.waiters {
@@ -296,6 +311,9 @@ func SendMessage(m Message, mb *MessageBoard) {
 			}
 		}
 		mb.rwMutex.Unlock()
+		for _, ready := range readyWaiters {
+			ready()
+		}
 	} else {
 		//todo: send message to other CN, need to lookup cnlist
 		panic("unsupported message yet!")
@@ -324,6 +342,46 @@ func (mr *MessageReceiver) receiveMessageNonBlock() ([]Message, bool) {
 		}
 	}
 	return result, mr.mb.closed
+}
+
+// RegisterReady arms a one-shot publication callback for this receiver. The
+// immediate check and the second check under the board lock close the
+// check/register race without parking an execution worker.
+func (mr *MessageReceiver) RegisterReady(callback func()) error {
+	if callback == nil {
+		return moerr.NewInvalidInputNoCtx("nil message receiver readiness callback")
+	}
+	if mr == nil || mr.mb == nil {
+		callback()
+		return nil
+	}
+	mr.mb.rwMutex.Lock()
+	if mr.mb.closed || mr.hasMatchingMessageLocked() {
+		mr.mb.rwMutex.Unlock()
+		callback()
+		return nil
+	}
+	mr.mb.readyWaiters = append(mr.mb.readyWaiters, callback)
+	mr.mb.rwMutex.Unlock()
+	return nil
+}
+
+func (mr *MessageReceiver) hasMatchingMessageLocked() bool {
+	for i := mr.offset; i < int32(len(mr.mb.messages)); i++ {
+		if mr.mb.messages[i] == nil {
+			continue
+		}
+		msg := *mr.mb.messages[i]
+		if !MatchAddress(msg, mr.addr) {
+			continue
+		}
+		for _, tag := range mr.tags {
+			if tag == msg.GetMsgTag() {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (mr *MessageReceiver) ReceiveMessage(needBlock bool, ctx context.Context) ([]Message, bool, error) {

@@ -20,7 +20,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"sync"
 )
 
 type Pipeline struct {
@@ -215,22 +214,18 @@ func (p *Pipeline) cleanupSenderReceiverPipeline(
 	// (Connector/Dispatch) does not read child operator state. It only sends
 	// terminal signals to unblock the leaf Merge, then the remaining children
 	// are reset in their original post-order.
-	var wg sync.WaitGroup
-	wg.Add(1)
-
-	go func() {
-		defer wg.Done()
-		mergeOperator.Reset(proc, pipelineFailed, err)
-		if !isPrepare {
-			mergeOperator.Free(proc, pipelineFailed, err)
-		}
-	}()
+	// Merge.Reset aborts its input receiver without waiting. Reset it before
+	// the terminal sender so cleanup no longer needs an ad-hoc goroutine and
+	// WaitGroup while preserving the receiver-unblock ordering.
+	mergeOperator.Reset(proc, pipelineFailed, err)
 
 	p.rootOp.Reset(proc, pipelineFailed, err)
 	if !isPrepare {
 		p.rootOp.Free(proc, pipelineFailed, err)
 	}
-	wg.Wait()
+	if !isPrepare {
+		mergeOperator.Free(proc, pipelineFailed, err)
+	}
 	cleanupDeferredSpool(p.rootOp)
 
 	p.cleanupChildrenExceptMerge(proc, pipelineFailed, isPrepare, err, mergeOperator, resetDone)
@@ -284,23 +279,18 @@ func (p *Pipeline) cleanupLoopPipeline(
 		mergeOperator = root.(*merge.Merge)
 	}
 
-	// listen to Dispatch and Merge at the same time.
-	var wg sync.WaitGroup
-	wg.Add(1)
-
-	go func() {
-		defer wg.Done()
-		mergeOperator.Reset(proc, pipelineFailed, err)
-		if !isPrepare {
-			mergeOperator.Free(proc, pipelineFailed, err)
-		}
-	}()
+	// Merge.Reset aborts its input receiver without waiting. Reset it before
+	// Dispatch so the loop teardown remains entirely in the owning cleanup
+	// event and does not create a per-pipeline goroutine.
+	mergeOperator.Reset(proc, pipelineFailed, err)
 
 	dispatchOperator.Reset(proc, pipelineFailed, err)
 	if !isPrepare {
 		dispatchOperator.Free(proc, pipelineFailed, err)
 	}
-	wg.Wait()
+	if !isPrepare {
+		mergeOperator.Free(proc, pipelineFailed, err)
+	}
 	cleanupDeferredSpool(dispatchOperator)
 
 	// from first to last to clean up the left operators.

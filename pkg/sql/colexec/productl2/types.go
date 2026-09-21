@@ -24,6 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -43,7 +44,9 @@ type container struct {
 	metrictype  metric.MetricType
 	brute_force cache.VectorIndexSearchIf // brute_force.BruteForceIndex
 
-	sqlproc *sqlexec.SqlProcess
+	sqlproc         *sqlexec.SqlProcess
+	joinMapReceiver *message.JoinMapReceiver
+	pendingJoinMap  *message.JoinMapResult
 
 	centersF32 *[][]float32
 	centersF64 *[][]float64
@@ -102,6 +105,8 @@ func (productl2 *Productl2) Reset(proc *process.Process, pipelineFailed bool, er
 	productl2.ctr.release()
 	productl2.ctr.inBat = nil
 	productl2.ctr.state = Build
+	productl2.ctr.joinMapReceiver = nil
+	productl2.ctr.pendingJoinMap = nil
 }
 
 func (productl2 *Productl2) Free(proc *process.Process, pipelineFailed bool, err error) {

@@ -76,9 +76,15 @@ func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 	var info error
 	result := vm.NewCallResult()
 	for {
-		result.Batch, info = merge.ctr.receiver.GetNextBatch(analyzer)
+		var progressed bool
+		result.Batch, info, progressed = merge.ctr.receiver.TryGetNextBatch(analyzer)
 		if info != nil {
 			return vm.CancelResult, info
+		}
+		if !progressed {
+			result.Status = vm.ExecWaiting
+			result.OnReady = merge.ctr.receiver.RegisterReady
+			return result, nil
 		}
 
 		if result.Batch == nil {

@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	vmpipeline "github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
@@ -77,11 +78,46 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 				zap.String("error", err.Error()))
 		}
 	}()
+	var withoutOutput bool
+	sender, withoutOutput, err = s.prepareRemoteRun(c)
+	if err != nil {
+		return sender, err
+	}
+
+	err = receiveMessageFromCnServer(s, withoutOutput, sender)
+	return sender, err
+}
+
+// prepareRemoteRun owns the synchronous part of remote admission: scope and
+// process encoding, stream creation, and the initial pipeline send. It never
+// receives result batches. The event-driven remote state machine uses this
+// same boundary and schedules one transport receive at a time afterward.
+func (s *Scope) prepareRemoteRun(c *Compile) (sender *messageSenderOnClient, withoutOutput bool, err error) {
+	sender, withoutOutput, scopeEncodeData, processEncodeData, debugMsg, err := s.prepareRemoteRunData(c)
+	if err != nil {
+		return sender, withoutOutput, err
+	}
+	if err = sender.sendPipeline(scopeEncodeData, processEncodeData, withoutOutput, maxMessageSizeToMoRpc, debugMsg); err != nil {
+		return sender, withoutOutput, err
+	}
+	return sender, withoutOutput, nil
+}
+
+// prepareRemoteRunData performs encoding and stream creation but deliberately
+// does not wait for the initial MORPC writer admission. The event-driven
+// remote path feeds the returned payload into sendPipelineAsync; the legacy
+// remoteRun wrapper continues to call sendPipeline synchronously.
+func (s *Scope) prepareRemoteRunData(c *Compile) (
+	sender *messageSenderOnClient,
+	withoutOutput bool,
+	scopeEncodeData []byte,
+	processEncodeData []byte,
+	debugMsg string,
+	err error,
+) {
 	s.ScopeAnalyzer.Stop()
 
-	// encode structures which need to send.
-	var scopeEncodeData, processEncodeData []byte
-	var withoutOutput, folded bool
+	var folded bool
 	remoteFragmentCounts, remoteExecutionID := remoteExecutionTopology(c, s)
 	scopeEncodeData, withoutOutput, processEncodeData, folded, err = prepareRemoteRunSendingData(
 		c.sql,
@@ -91,7 +127,7 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 		remoteExecutionID,
 	)
 	if err != nil {
-		return nil, err
+		return nil, false, nil, nil, "", err
 	}
 	if folded {
 		getLogger(s.Proc.GetService()).
@@ -100,7 +136,6 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 				zap.String("remote-address", s.NodeInfo.Addr))
 	}
 
-	// generate a new sender to do send work.
 	sender, err = newMessageSenderOnClient(
 		s.Proc.Ctx,
 		s.Proc.GetService(),
@@ -111,8 +146,7 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	if err != nil {
 		c.proc.Errorf(s.Proc.Ctx, "Failed to newMessageSenderOnClient sql=%s, txnID=%s, err=%v",
 			c.sql, c.proc.GetTxnOperator().Txn().DebugString(), err)
-
-		return nil, err
+		return nil, false, nil, nil, "", err
 	}
 	sender.proc = s.Proc
 	// Capture the execution-attempt sink, rather than looking it up from proc
@@ -121,19 +155,11 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	// that stale callback instead of publishing it into the new attempt.
 	sender.warningSink = s.Proc.GetWarningSink()
 
-	debugMsg := ""
-	_, sub_sql, exist := fault.TriggerFault("inject_send_pipeline")
-	if exist {
-		if strings.Contains(c.sql, sub_sql) {
-			debugMsg = fmt.Sprintf("inject_send_pipeline: client2server,compile = %p", c)
-		}
+	_, subSQL, exist := fault.TriggerFault("inject_send_pipeline")
+	if exist && strings.Contains(c.sql, subSQL) {
+		debugMsg = fmt.Sprintf("inject_send_pipeline: client2server,compile = %p", c)
 	}
-	if err = sender.sendPipeline(scopeEncodeData, processEncodeData, withoutOutput, maxMessageSizeToMoRpc, debugMsg); err != nil {
-		return sender, err
-	}
-
-	err = receiveMessageFromCnServer(s, withoutOutput, sender)
-	return sender, err
+	return sender, withoutOutput, scopeEncodeData, processEncodeData, debugMsg, nil
 }
 
 // checkPipelineStandaloneExecutableAtRemote is responsible for checking the standalone excitability of the pipeline
@@ -372,9 +398,6 @@ func receiveMessageFromCnServerIfDispatch(s *Scope, sender *messageSenderOnClien
 
 	arg := s.RootOp.(*dispatch.Dispatch)
 	fakeValueScanOperator := value_scan.NewArgument()
-	if err = fakeValueScanOperator.Prepare(s.Proc); err != nil {
-		return err
-	}
 	dispatchRunner := buildRemoteDispatchReceiverRoot(arg, fakeValueScanOperator)
 	dispatchRunner.AdoptCleanupState(arg)
 	defer func() {
@@ -385,11 +408,10 @@ func receiveMessageFromCnServerIfDispatch(s *Scope, sender *messageSenderOnClien
 		fakeValueScanOperator.Release()
 	}()
 
-	if err = dispatchRunner.Prepare(s.Proc); err != nil {
+	dispatchPipeline, err := vmpipeline.New(0, nil, dispatchRunner).NewContinuation(s.Proc)
+	if err != nil {
 		return err
 	}
-	dispatchAnalyze := dispatchRunner.GetOperatorBase().OpAnalyzer
-
 	mp := s.Proc.Mp()
 	for {
 		bat, end, err = sender.receiveBatch()
@@ -397,20 +419,49 @@ func receiveMessageFromCnServerIfDispatch(s *Scope, sender *messageSenderOnClien
 			return err
 		}
 
-		dispatchAnalyze.Network(bat)
+		if dispatchAnalyze := dispatchRunner.GetOperatorBase().OpAnalyzer; dispatchAnalyze != nil {
+			dispatchAnalyze.Network(bat)
+		}
 		fakeValueScanOperator.Batchs = append(fakeValueScanOperator.Batchs, bat)
 
-		result, errCall := vm.Exec(dispatchRunner, s.Proc)
-		bat.Clean(mp)
-		if errCall != nil {
-			return errCall
+		var result vmpipeline.StepResult
+		for {
+			result, err = dispatchPipeline.Step()
+			if err != nil {
+				bat.Clean(mp)
+				return err
+			}
+			if result.Status != vmpipeline.StepWaiting {
+				break
+			}
+			if result.OnReady == nil {
+				bat.Clean(mp)
+				return moerr.NewInternalErrorNoCtx("remote dispatch continuation waited without readiness")
+			}
+			ready := make(chan struct{}, 1)
+			if err = result.OnReady(func() {
+				select {
+				case ready <- struct{}{}:
+				default:
+				}
+			}); err != nil {
+				bat.Clean(mp)
+				return err
+			}
+			select {
+			case <-ready:
+			case <-s.Proc.Ctx.Done():
+				bat.Clean(mp)
+				return s.Proc.Ctx.Err()
+			}
 		}
+		bat.Clean(mp)
 		// ExecStop can mean that every receiver has already stopped. Release the
 		// decoded batch's remote credit before ending the receive loop.
 		if err = sender.acknowledgeRemoteBatch(); err != nil {
 			return err
 		}
-		if result.Status == vm.ExecStop {
+		if result.Status == vmpipeline.StepDone {
 			return nil
 		}
 	}
@@ -495,6 +546,11 @@ type messageSenderOnClient struct {
 	reportingRequestStarted bool
 	stateMu                 sync.Mutex
 	closeOnce               sync.Once
+	asyncCloseMu            sync.Mutex
+	asyncCloseStarted       bool
+	asyncCloseFinished      bool
+	asyncCloseErr           error
+	asyncCloseWaiters       []func(error)
 	requestFinishAck        bool
 	pendingBatchAck         uint64
 	// allowCleanupCancellation is set after successful local cleanup. Pipeline
@@ -507,6 +563,81 @@ type messageSenderOnClient struct {
 	gaugeDecOnce sync.Once
 	terminalMu   sync.Mutex
 	terminalSeen bool
+}
+
+// remoteBatchDecoder incrementally consumes one MORPC message at a time. It
+// is shared by remote-run and remote-notify state machines so neither path
+// needs to park an event worker in receiveBatch while waiting for the next
+// fragment.
+type remoteBatchDecoder struct {
+	dataBuffer    []byte
+	batchSequence uint64
+}
+
+func (d *remoteBatchDecoder) consume(
+	sender *messageSenderOnClient,
+	message morpc.Message,
+	ok bool,
+) (*batch.Batch, bool, error) {
+	if !ok {
+		sender.markReceiveClosed()
+		return nil, false, moerr.NewStreamClosed(sender.ctx)
+	}
+	if message == nil {
+		if ctxErr := sender.contextDoneError(); ctxErr != nil {
+			return nil, false, ctxErr
+		}
+		return nil, true, nil
+	}
+	m, ok := message.(*pipeline.Message)
+	if !ok || m == nil {
+		return nil, false, moerr.NewInternalErrorNoCtx("remote stream returned an unexpected message")
+	}
+	if sequence := m.GetBatchSequence(); sequence != 0 {
+		if d.batchSequence != 0 && d.batchSequence != sequence {
+			return nil, false, moerr.NewInvalidStateNoCtxf(
+				"remote batch fragments changed sequence from %d to %d",
+				d.batchSequence, sequence)
+		}
+		d.batchSequence = sequence
+	}
+	if m.IsEndMessage() {
+		if err := sender.dealRemoteTerminal(m.GetAnalyse()); err != nil {
+			return nil, false, err
+		}
+	}
+	if info, get := m.TryToGetMoErr(); get {
+		sender.markTerminal(m, false)
+		return nil, false, info
+	}
+	if m.IsEndMessage() {
+		sender.markTerminal(m, true)
+		d.dataBuffer = nil
+		d.batchSequence = 0
+		return nil, true, nil
+	}
+	if d.dataBuffer == nil {
+		d.dataBuffer = m.Data
+	} else {
+		d.dataBuffer = append(d.dataBuffer, m.Data...)
+	}
+	if m.WaitingNextToMerge() {
+		return nil, false, nil
+	}
+
+	batchSequence := d.batchSequence
+	bat, err := decodeBatch(sender.mp, d.dataBuffer)
+	d.dataBuffer = nil
+	d.batchSequence = 0
+	if err == nil {
+		if sender.pendingBatchAck != 0 {
+			bat.Clean(sender.mp)
+			return nil, false, moerr.NewInvalidStateNoCtx(
+				"remote batch ACK was not sent before receiving the next batch")
+		}
+		sender.pendingBatchAck = batchSequence
+	}
+	return bat, false, err
 }
 
 func newMessageSenderOnClient(
@@ -603,6 +734,27 @@ func (sender *messageSenderOnClient) requestStreamProtocols(message *pipeline.Me
 func (sender *messageSenderOnClient) sendPipeline(
 	scopeData, procData []byte, noDataBack bool, eachMessageSizeLimitation int, debugMsg string) error {
 	sender.markReportingRequestStarted()
+	for _, message := range sender.pipelineMessages(
+		scopeData,
+		procData,
+		noDataBack,
+		eachMessageSizeLimitation,
+		debugMsg,
+	) {
+		if err := sender.streamSender.Send(sender.ctx, message); err != nil {
+			return err
+		}
+	}
+	sender.markStreamActive(pipeline.Method_PipelineMessage)
+	return nil
+}
+
+func (sender *messageSenderOnClient) pipelineMessages(
+	scopeData, procData []byte,
+	noDataBack bool,
+	eachMessageSizeLimitation int,
+	debugMsg string,
+) []*pipeline.Message {
 	sdLen := len(scopeData)
 	if sdLen <= eachMessageSizeLimitation {
 		message := cnclient.AcquireMessage()
@@ -614,17 +766,12 @@ func (sender *messageSenderOnClient) sendPipeline(
 		message.SetSid(pipeline.Status_Last)
 		sender.requestStreamProtocols(message)
 		message.NeedNotReply = noDataBack
-		if err := sender.streamSender.Send(sender.ctx, message); err != nil {
-			return err
-		}
-		sender.markStreamActive(pipeline.Method_PipelineMessage)
-		return nil
+		return []*pipeline.Message{message}
 	}
 
-	start := 0
-	for start < sdLen {
+	messages := make([]*pipeline.Message, 0, (sdLen+eachMessageSizeLimitation-1)/eachMessageSizeLimitation)
+	for start := 0; start < sdLen; start += eachMessageSizeLimitation {
 		end := start + eachMessageSizeLimitation
-
 		message := cnclient.AcquireMessage()
 		message.SetDebugMsg(debugMsg)
 		message.SetID(sender.streamSender.ID())
@@ -639,14 +786,57 @@ func (sender *messageSenderOnClient) sendPipeline(
 		}
 		message.NeedNotReply = noDataBack
 		sender.requestStreamProtocols(message)
-
-		if err := sender.streamSender.Send(sender.ctx, message); err != nil {
-			return err
-		}
-		start = end
+		messages = append(messages, message)
 	}
-	sender.markStreamActive(pipeline.Method_PipelineMessage)
-	return nil
+	return messages
+}
+
+// sendPipelineAsync sends one pipeline fragment per scheduler event. The
+// continuation advances only after MORPC writer admission, so an output queue
+// that is full becomes a channel event rather than a blocked scheduler lane.
+func (sender *messageSenderOnClient) sendPipelineAsync(
+	scheduler *scopeTaskScheduler,
+	scopeData, procData []byte,
+	noDataBack bool,
+	eachMessageSizeLimitation int,
+	debugMsg string,
+	done func(error),
+) error {
+	if scheduler == nil {
+		return moerr.NewInternalErrorNoCtx("nil scheduler for remote pipeline send")
+	}
+	if done == nil {
+		return moerr.NewInternalErrorNoCtx("nil callback for remote pipeline send")
+	}
+	sender.markReportingRequestStarted()
+	messages := sender.pipelineMessages(scopeData, procData, noDataBack, eachMessageSizeLimitation, debugMsg)
+	var once sync.Once
+	finish := func(err error) { once.Do(func() { done(err) }) }
+	index := 0
+	var sendNext func()
+	sendNext = func() {
+		if index >= len(messages) {
+			sender.markStreamActive(pipeline.Method_PipelineMessage)
+			finish(nil)
+			return
+		}
+		message := messages[index]
+		index++
+		if err := scheduler.submitStreamSendWithContext("remote-pipeline-send", sender.streamSender, sender.ctx, message, func(err error) {
+			if err != nil {
+				finish(err)
+				return
+			}
+			sendNext()
+		}, true); err != nil {
+			finish(err)
+		}
+	}
+	// The initial pipeline message is also the cancellation/stop handshake
+	// boundary: even an already-expired query must be admitted far enough to
+	// publish the remote terminal cleanup signal. The MORPC send itself still
+	// observes the expired context and reports its result asynchronously.
+	return scheduler.submitRootWithContext("remote-pipeline-send-start", sendNext, true)
 }
 
 func (sender *messageSenderOnClient) markStreamActive(method pipeline.Method) {
@@ -789,6 +979,48 @@ func (sender *messageSenderOnClient) acknowledgeRemoteBatch() error {
 	return nil
 }
 
+// acknowledgeRemoteBatchAsync publishes the batch credit through the query
+// scheduler. Normal remote state-machine paths must not wait in a ready task
+// for MORPC writer-queue admission; the synchronous helper above remains for
+// legacy blocking receive loops and terminal compatibility cleanup.
+func (sender *messageSenderOnClient) acknowledgeRemoteBatchAsync(
+	scheduler *scopeTaskScheduler,
+	name string,
+	done func(error),
+) error {
+	return sender.acknowledgeRemoteBatchAsyncWithContext(scheduler, name, done, false)
+}
+
+func (sender *messageSenderOnClient) acknowledgeRemoteBatchAsyncWithContext(
+	scheduler *scopeTaskScheduler,
+	name string,
+	done func(error),
+	allowCanceled bool,
+) error {
+	if scheduler == nil {
+		return moerr.NewInternalErrorNoCtx("nil scheduler for remote batch acknowledgement")
+	}
+	if done == nil {
+		return moerr.NewInternalErrorNoCtx("nil callback for remote batch acknowledgement")
+	}
+	sequence := sender.pendingBatchAck
+	if sequence == 0 {
+		done(nil)
+		return nil
+	}
+	message := cnclient.AcquireMessage()
+	message.SetID(sender.streamSender.ID())
+	message.SetMessageType(pipeline.Method_PipelineBatchAck)
+	message.SetSid(pipeline.Status_Last)
+	message.BatchAckSequence = sequence
+	return scheduler.submitStreamSendWithContext(name, sender.streamSender, sender.ctx, message, func(err error) {
+		if err == nil {
+			sender.pendingBatchAck = 0
+		}
+		done(err)
+	}, allowCanceled)
+}
+
 func (sender *messageSenderOnClient) contextDoneError() error {
 	if sender.ctx == nil {
 		return nil
@@ -902,6 +1134,145 @@ func (sender *messageSenderOnClient) waitingTheStopResponse() error {
 	}
 }
 
+// stopSendingAsync performs the cancellation handshake without parking a
+// scheduler worker on either the MORPC writer or the receive channel. The
+// caller must keep the scheduler alive until done is invoked.
+func (sender *messageSenderOnClient) stopSendingAsync(
+	scheduler *scopeTaskScheduler,
+	done func(error),
+) error {
+	if scheduler == nil {
+		return moerr.NewInternalErrorNoCtx("nil scheduler for asynchronous stop")
+	}
+	if done == nil {
+		return moerr.NewInternalErrorNoCtx("nil callback for asynchronous stop")
+	}
+
+	sender.stateMu.Lock()
+	if sender.receiveClosed || sender.safeToClose || sender.stopResponseTried {
+		sender.stateMu.Unlock()
+		done(nil)
+		return nil
+	}
+	sender.stopResponseTried = true
+	sender.stateMu.Unlock()
+
+	maxWaitingTime, cancel := context.WithTimeoutCause(
+		context.Background(), pipelineStopSendingClientTimeout, moerr.CauseWaitingTheStopResponse)
+	var once sync.Once
+	var receiveCancelMu sync.Mutex
+	var receiveCancel func()
+	setReceiveCancel := func(cancel func()) {
+		if cancel == nil {
+			return
+		}
+		receiveCancelMu.Lock()
+		old := receiveCancel
+		receiveCancel = cancel
+		receiveCancelMu.Unlock()
+		if old != nil {
+			old()
+		}
+	}
+	finish := func(err error) {
+		once.Do(func() {
+			receiveCancelMu.Lock()
+			cancelReceive := receiveCancel
+			receiveCancel = nil
+			receiveCancelMu.Unlock()
+			if cancelReceive != nil {
+				cancelReceive()
+			}
+			cancel()
+			done(err)
+		})
+	}
+
+	timerCancel, err := scheduler.submitTimerWithContext(
+		"remote-stop-timeout",
+		pipelineStopSendingClientTimeout,
+		func() { finish(moerr.NewRPCTimeout(maxWaitingTime)) },
+		true,
+	)
+	if err != nil {
+		cancel()
+		return err
+	}
+	finishWithTimer := func(err error) {
+		if timerCancel != nil {
+			timerCancel()
+		}
+		finish(err)
+	}
+
+	var receive func()
+	receive = func() {
+		cancelReceive, err := scheduler.submitChannelEventCancelable(
+			"remote-stop-receive",
+			sender.receiveCh,
+			func(value morpc.Message, ok bool) {
+				if !ok || value == nil {
+					sender.markReceiveClosed()
+					finishWithTimer(moerr.NewStreamClosedNoCtx())
+					return
+				}
+				message, ok := value.(*pipeline.Message)
+				if !ok || message == nil {
+					finishWithTimer(moerr.NewInternalErrorNoCtx("remote stop response has unexpected message type"))
+					return
+				}
+				if !message.IsEndMessage() && len(message.GetErr()) == 0 {
+					receive()
+					return
+				}
+				_ = sender.dealRemoteTerminal(message.GetAnalyse())
+				if terminalErr, terminal := message.TryToGetMoErr(); terminal {
+					sender.markTerminal(message, false)
+					finishWithTimer(terminalErr)
+					return
+				}
+				sender.markTerminal(message, true)
+				finishWithTimer(nil)
+			},
+			func(err error) { finishWithTimer(err) },
+			true,
+		)
+		setReceiveCancel(cancelReceive)
+		if err != nil {
+			finishWithTimer(err)
+		}
+	}
+	message := generateStopSendingMessage(sender.streamSender.ID())
+	if err := scheduler.submitStreamSendWithContext(
+		"remote-stop-send",
+		sender.streamSender,
+		maxWaitingTime,
+		message,
+		func(sendErr error) {
+			if sendErr != nil {
+				if maxWaitingTime.Err() != nil {
+					finishWithTimer(moerr.NewRPCTimeout(maxWaitingTime))
+					return
+				}
+				if isScopeCancellationError(sendErr) {
+					finishWithTimer(moerr.NewStreamClosedNoCtx())
+					return
+				}
+				finishWithTimer(sendErr)
+				return
+			}
+			if maxWaitingTime.Err() != nil {
+				return
+			}
+			receive()
+		},
+		true,
+	); err != nil {
+		finishWithTimer(err)
+	}
+	return nil
+}
+
 func generatePipelineStreamFinishMessage(streamID uint64) *pipeline.Message {
 	message := cnclient.AcquireMessage()
 	message.SetMessageType(pipeline.Method_PipelineStreamFinish)
@@ -948,6 +1319,132 @@ func (sender *messageSenderOnClient) finishStreamForReuse() bool {
 	case <-senderDone:
 		return false
 	}
+}
+
+// finishStreamForReuseAsync sends FIN and waits for FIN-ACK through scheduler
+// events. It preserves the synchronous method for legacy callers that do not
+// own a query scheduler.
+func (sender *messageSenderOnClient) finishStreamForReuseAsync(
+	scheduler *scopeTaskScheduler,
+	done func(bool),
+) error {
+	if scheduler == nil {
+		return moerr.NewInternalErrorNoCtx("nil scheduler for asynchronous stream finish")
+	}
+	if done == nil {
+		return moerr.NewInternalErrorNoCtx("nil callback for asynchronous stream finish")
+	}
+	sender.stateMu.Lock()
+	allowCleanupCancellation := sender.allowCleanupCancellation
+	receiveClosed := sender.receiveClosed
+	reuseEligible := sender.reuseEligible
+	sender.stateMu.Unlock()
+	if receiveClosed || !reuseEligible {
+		sender.finalizeClose(false)
+		done(false)
+		return nil
+	}
+	if !allowCleanupCancellation && sender.ctx != nil && sender.ctx.Err() != nil {
+		sender.finalizeClose(false)
+		done(false)
+		return nil
+	}
+
+	finishCtx, cancel := context.WithTimeout(context.Background(), pipelineStreamFinishClientTimeout)
+	var once sync.Once
+	var receiveCancelMu sync.Mutex
+	var receiveCancel func()
+	setReceiveCancel := func(cancel func()) {
+		if cancel == nil {
+			return
+		}
+		receiveCancelMu.Lock()
+		old := receiveCancel
+		receiveCancel = cancel
+		receiveCancelMu.Unlock()
+		if old != nil {
+			old()
+		}
+	}
+	finish := func(reused bool) {
+		once.Do(func() {
+			receiveCancelMu.Lock()
+			cancelReceive := receiveCancel
+			receiveCancel = nil
+			receiveCancelMu.Unlock()
+			if cancelReceive != nil {
+				cancelReceive()
+			}
+			cancel()
+			sender.finalizeClose(reused)
+			done(reused)
+		})
+	}
+	timerCancel, err := scheduler.submitTimerWithContext(
+		"remote-finish-timeout",
+		pipelineStreamFinishClientTimeout,
+		func() { finish(false) },
+		true,
+	)
+	if err != nil {
+		cancel()
+		return err
+	}
+	finishWithTimer := func(reused bool) {
+		if timerCancel != nil {
+			timerCancel()
+		}
+		finish(reused)
+	}
+	streamID := sender.streamSender.ID()
+	message := generatePipelineStreamFinishMessage(streamID)
+	if err := scheduler.submitStreamSendWithContext(
+		"remote-finish-send",
+		sender.streamSender,
+		finishCtx,
+		message,
+		func(sendErr error) {
+			if sendErr != nil {
+				finishWithTimer(false)
+				return
+			}
+			if finishCtx.Err() != nil {
+				return
+			}
+			cancelReceive, err := scheduler.submitChannelEventCancelable(
+				"remote-finish-receive",
+				sender.receiveCh,
+				func(value morpc.Message, ok bool) {
+					if !ok || value == nil {
+						sender.markReceiveClosed()
+						finishWithTimer(false)
+						return
+					}
+					response, ok := value.(*pipeline.Message)
+					if !ok || response == nil || response.GetID() != streamID ||
+						response.GetCmd() != pipeline.Method_PipelineStreamFinishAck ||
+						response.GetSid() != pipeline.Status_MessageEnd ||
+						len(response.GetErr()) != 0 ||
+						response.GetAcceptedTeardownMode() != pipeline.StreamTeardownMode_FinishAck {
+						sender.markReceiveClosed()
+						finishWithTimer(false)
+						return
+					}
+					finishWithTimer(true)
+				},
+				func(error) { finishWithTimer(false) },
+				true,
+			)
+			setReceiveCancel(cancelReceive)
+			if err != nil {
+				finishWithTimer(false)
+			}
+		},
+		true,
+	); err != nil {
+		finishWithTimer(false)
+	}
+	return nil
 }
 
 func generateStopSendingMessage(streamID uint64) *pipeline.Message {
@@ -1066,6 +1563,101 @@ func (sender *messageSenderOnClient) close() {
 		}
 		_ = sender.streamSender.Close(true)
 	})
+}
+
+func (sender *messageSenderOnClient) finalizeClose(reuse bool) {
+	sender.closeOnce.Do(func() {
+		defer sender.gaugeDecOnce.Do(func() { v2.PipelineMessageSenderGauge.Dec() })
+		if sender.ctxCancel != nil {
+			sender.ctxCancel()
+		}
+		if reuse {
+			v2.PipelineStreamTeardownCounter.WithLabelValues("client_reuse").Inc()
+			if err := sender.streamSender.Close(false); err != nil {
+				_ = sender.streamSender.Close(true)
+			}
+			return
+		}
+		v2.PipelineStreamTeardownCounter.WithLabelValues("client_async_close").Inc()
+		_ = sender.streamSender.Close(true)
+	})
+}
+
+// closeAsync is the transport teardown state machine used by event-driven
+// Scope execution. It never waits on MORPC Send or Receive. The callback is
+// invoked after STOP/FIN negotiation and local stream close are complete.
+func (sender *messageSenderOnClient) closeAsync(
+	scheduler *scopeTaskScheduler,
+	done func(error),
+) error {
+	if scheduler == nil {
+		return moerr.NewInternalErrorNoCtx("nil scheduler for asynchronous close")
+	}
+	if done == nil {
+		return moerr.NewInternalErrorNoCtx("nil callback for asynchronous close")
+	}
+	sender.asyncCloseMu.Lock()
+	if sender.asyncCloseStarted {
+		if sender.asyncCloseFinished {
+			err := sender.asyncCloseErr
+			sender.asyncCloseMu.Unlock()
+			done(err)
+			return nil
+		}
+		sender.asyncCloseWaiters = append(sender.asyncCloseWaiters, done)
+		sender.asyncCloseMu.Unlock()
+		return nil
+	}
+	sender.asyncCloseStarted = true
+	sender.asyncCloseWaiters = append(sender.asyncCloseWaiters, done)
+	sender.asyncCloseMu.Unlock()
+
+	complete := func(err error) {
+		sender.asyncCloseMu.Lock()
+		sender.asyncCloseFinished = true
+		sender.asyncCloseErr = err
+		waiters := append([]func(error){nil}, sender.asyncCloseWaiters...)
+		sender.asyncCloseWaiters = nil
+		sender.asyncCloseMu.Unlock()
+		for _, waiter := range waiters {
+			if waiter != nil {
+				waiter(err)
+			}
+		}
+	}
+	finishOrClose := func() {
+		sender.stateMu.Lock()
+		receiveClosed, reuseEligible := sender.receiveClosed, sender.reuseEligible
+		sender.stateMu.Unlock()
+		if !receiveClosed && reuseEligible {
+			if err := sender.finishStreamForReuseAsync(scheduler, func(bool) { complete(nil) }); err != nil {
+				sender.finalizeClose(false)
+				complete(err)
+			}
+			return
+		}
+		sender.finalizeClose(false)
+		complete(nil)
+	}
+	sender.stateMu.Lock()
+	needsStop := !sender.receiveClosed && !sender.safeToClose && !sender.stopResponseTried
+	sender.stateMu.Unlock()
+	if needsStop {
+		if err := sender.stopSendingAsync(scheduler, func(err error) {
+			if err != nil {
+				sender.finalizeClose(false)
+				complete(err)
+				return
+			}
+			finishOrClose()
+		}); err != nil {
+			sender.finalizeClose(false)
+			complete(err)
+		}
+		return nil
+	}
+	finishOrClose()
+	return nil
 }
 
 func (sender *messageSenderOnClient) markMissingGroupConcatTerminal() {

@@ -24,7 +24,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/util/gpumode"
-	"github.com/matrixorigin/matrixone/pkg/util/resource"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/brute_force"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -77,6 +76,30 @@ func (productl2 *Productl2) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case Build:
+			if ctr.joinMapReceiver == nil {
+				ctr.joinMapReceiver = message.NewJoinMapReceiver(
+					productl2.JoinMapTag, false, 0, proc.GetMessageBoard())
+			}
+			if ctr.pendingJoinMap == nil {
+				dep, ready, waitErr := ctr.joinMapReceiver.TryReceive()
+				if waitErr != nil {
+					return result, waitErr
+				}
+				if !ready {
+					if !proc.HasEventSubmitter() {
+						dep, receiveErr := ctr.joinMapReceiver.Receive(proc.Ctx)
+						if receiveErr != nil {
+							return result, receiveErr
+						}
+						ctr.pendingJoinMap = &dep
+						continue
+					}
+					result.Status = vm.ExecWaiting
+					result.OnReady = ctr.joinMapReceiver.RegisterReady
+					return result, nil
+				}
+				ctr.pendingJoinMap = &dep
+			}
 			if err := productl2.build(proc, analyzer); err != nil {
 				return result, err
 			}
@@ -175,12 +198,16 @@ func getIndex[T types.RealNumbers](ap *Productl2, proc *process.Process, analyze
 
 func (productl2 *Productl2) build(proc *process.Process, analyzer process.Analyzer) error {
 	ctr := &productl2.ctr
-	mp, err := process.MeasureWait(analyzer, resource.WaitOther, func() (*message.JoinMap, error) {
-		return message.ReceiveJoinMap(productl2.JoinMapTag, false, 0, proc.GetMessageBoard(), proc.Ctx)
-	})
-	if err != nil {
-		return err
+	var err error
+	if ctr.pendingJoinMap == nil {
+		return moerr.NewInternalErrorNoCtx("productl2 build resumed without a ready join map")
 	}
+	dep := *ctr.pendingJoinMap
+	ctr.pendingJoinMap = nil
+	if buildErr := dep.BuildError(); buildErr != nil {
+		return buildErr.AsError()
+	}
+	mp := dep.JoinMap()
 	if mp == nil {
 		return nil
 	}
