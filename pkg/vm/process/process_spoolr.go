@@ -618,7 +618,7 @@ func (receiver *PipelineSignalReceiver) consumeReadySignal(
 // false; registration on an already-ready edge invokes the callback inline.
 func (receiver *PipelineSignalReceiver) RegisterReady(callback func()) error {
 	if callback == nil {
-		return errors.New("nil pipeline receiver readiness callback")
+		return moerr.NewInternalErrorNoCtx("nil pipeline receiver readiness callback")
 	}
 	if receiver == nil {
 		callback()
