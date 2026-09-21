@@ -2539,26 +2539,41 @@ func checkIndexFilter(fn *plan.Function) (int, *plan.ColRef) {
 		}
 		col := fn.Args[0].GetCol()
 		if col != nil && isRuntimeConstExpr(fn.Args[1]) {
+			// Serialized regular-index keys preserve the physical distinction
+			// between -0 and +0. SQL equality does not, so using this predicate
+			// as an index access condition can silently drop one of the zeros.
+			// Fall back to the base scan until the access path compares decoded
+			// floating-point values.
+			if isFloatIndexFilterExpr(fn.Args[0]) {
+				return UnsupportedIndexCondition, nil
+			}
 			return EqualIndexCondition, col
 		}
 
 	case "in", "between":
 		col := fn.Args[0].GetCol()
-		if col != nil {
+		if col != nil && !isFloatIndexFilterExpr(fn.Args[0]) {
 			return NonEqualIndexCondition, col
 		}
 
 	case ">", ">=", "<", "<=":
 		if fn.Args[0].GetCol() != nil && isRuntimeConstExpr(fn.Args[1]) {
+			if isFloatIndexFilterExpr(fn.Args[0]) {
+				return UnsupportedIndexCondition, nil
+			}
 			return NonEqualIndexCondition, fn.Args[0].GetCol()
 		}
 		if isRuntimeConstExpr(fn.Args[0]) && fn.Args[1].GetCol() != nil {
+			if isFloatIndexFilterExpr(fn.Args[1]) {
+				return UnsupportedIndexCondition, nil
+			}
 			return NonEqualIndexCondition, fn.Args[1].GetCol()
 		}
 
 	case "in_range":
 		col := fn.Args[0].GetCol()
-		if col != nil && isRuntimeConstExpr(fn.Args[1]) && isRuntimeConstExpr(fn.Args[2]) {
+		if col != nil && !isFloatIndexFilterExpr(fn.Args[0]) &&
+			isRuntimeConstExpr(fn.Args[1]) && isRuntimeConstExpr(fn.Args[2]) {
 			return NonEqualIndexCondition, col
 		}
 
@@ -2580,6 +2595,14 @@ func checkIndexFilter(fn *plan.Function) (int, *plan.ColRef) {
 		return NonEqualIndexCondition, col
 	}
 	return UnsupportedIndexCondition, nil
+}
+
+func isFloatIndexFilterExpr(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	typ := types.T(expr.Typ.Id)
+	return typ == types.T_float32 || typ == types.T_float64
 }
 
 func findLeadingFilter(idxDef *IndexDef, node *plan.Node) ([]int32, bool) {

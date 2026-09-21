@@ -64,6 +64,8 @@ func (s *Server) doHeartbeat(ctx context.Context) {
 		ViewMetadataAdmissionSupported:  s.viewMetadataAdmissionGeneration != 0,
 		ViewMetadataAdmissionGeneration: s.viewMetadataAdmissionGeneration,
 		ViewMetadataObservedEpoch:       s.viewMetadataObservedEpoch.Load(),
+		CatalogMetadataCapabilities:     &pb.CatalogMetadataCapabilities{BarrierParticipantProtocol: 1},
+		CatalogMetadataAck:              s.catalogMetadataParticipant.Ack(s.viewMetadataAdmissionGeneration),
 	})
 	if err != nil {
 		err = moerr.AttachCause(heartbeatCtx, err)
@@ -71,6 +73,7 @@ func (s *Server) doHeartbeat(ctx context.Context) {
 		s.runtime.Logger().Error("failed to send heartbeat", zap.Error(err))
 	} else {
 		heartbeatCancel()
+		s.catalogMetadataParticipant.Observe(s.viewMetadataAdmissionGeneration, batch.CatalogMetadataBarrier)
 		refreshCtx, refreshCancel := context.WithTimeoutCause(ctx, timeout, moerr.CauseDoHeartbeat)
 		err = s.applyViewMetadataAdmission(refreshCtx, batch.ViewMetadataAdmission)
 		refreshCancel()

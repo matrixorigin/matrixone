@@ -1603,6 +1603,40 @@ func Test_convertRowsIntoBatch(t *testing.T) {
 	}
 }
 
+func TestGetValueFromVectorPreservesTemporalScale(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
+	clock, err := types.ParseTime("00:00:02.654321", 6)
+	require.NoError(t, err)
+	datetime, err := types.ParseDatetime("2024-01-02 03:04:05.654321", 6)
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name  string
+		typ   types.Type
+		value any
+		want  string
+	}{
+		{name: "time", typ: types.T_time.ToTypeWithScale(6), value: clock, want: clock.String2(6)},
+		{name: "datetime", typ: types.New(types.T_datetime, 0, 6), value: datetime, want: datetime.String2(6)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vec := vector.NewVec(tc.typ)
+			t.Cleanup(func() { vec.Free(mp) })
+			switch value := tc.value.(type) {
+			case types.Time:
+				require.NoError(t, vector.AppendFixed[types.Time](vec, value, false, mp))
+			case types.Datetime:
+				require.NoError(t, vector.AppendFixed[types.Datetime](vec, value, false, mp))
+			}
+			got, err := getValueFromVector(context.Background(), vec, nil, nil)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
 func Test_convertRowsIntoBatchDecimal(t *testing.T) {
 	cases := []struct {
 		name      string
@@ -2136,19 +2170,23 @@ func TestResultColumnMetadataDistinguishesBlobFromText(t *testing.T) {
 
 func TestMysqlBlobMetadataPreservesKnownAndUnknownBounds(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		width  int32
-		length uint32
+		name      string
+		width     int32
+		length    uint32
+		mysqlType defines.MysqlType
 	}{
-		{name: "unknown expression bound", width: 0, length: math.MaxUint32},
-		{name: "N", width: math.MaxUint16, length: math.MaxUint16},
-		{name: "N plus one", width: math.MaxUint16 + 1, length: math.MaxUint16 + 1},
+		{name: "unknown expression bound", width: 0, length: math.MaxUint32, mysqlType: defines.MYSQL_TYPE_BLOB},
+		{name: "tiny", width: types.MaxTinyTextLen, length: types.MaxTinyTextLen, mysqlType: defines.MYSQL_TYPE_TINY_BLOB},
+		{name: "blob", width: types.MaxStringSize, length: types.MaxStringSize, mysqlType: defines.MYSQL_TYPE_BLOB},
+		{name: "medium", width: types.MaxMediumTextLen, length: types.MaxMediumTextLen, mysqlType: defines.MYSQL_TYPE_MEDIUM_BLOB},
+		{name: "long", width: types.MaxLongTextLen, length: types.MaxLongTextLen, mysqlType: defines.MYSQL_TYPE_LONG_BLOB},
+		{name: "N plus one", width: math.MaxUint16 + 1, length: math.MaxUint16 + 1, mysqlType: defines.MYSQL_TYPE_MEDIUM_BLOB},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			col := new(MysqlColumn)
 			require.NoError(t, setMysqlColumnTypeInfo(
 				context.Background(), types.New(types.T_blob, tc.width, 0), col))
-			require.Equal(t, defines.MYSQL_TYPE_BLOB, col.ColumnType())
+			require.Equal(t, tc.mysqlType, col.ColumnType())
 			require.Equal(t, uint16(charsetBinary), col.Charset())
 			require.Equal(t, tc.length, col.Length())
 			require.Equal(t, uint16(defines.BLOB_FLAG|defines.BINARY_FLAG), col.Flag())

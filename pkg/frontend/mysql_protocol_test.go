@@ -3365,6 +3365,57 @@ func buildStringExecutePacket(proto *MysqlProtocolImpl, tp defines.MysqlType, pa
 	return data[:pos]
 }
 
+func buildStringExecutePacketForParams(
+	proto *MysqlProtocolImpl,
+	types []defines.MysqlType,
+	payloads []string,
+) []byte {
+	if len(types) != len(payloads) {
+		panic("parameter type and payload counts differ")
+	}
+	dataLen := 7 + len(types)*2
+	for _, payload := range payloads {
+		dataLen += 9 + len(payload)
+	}
+	data := make([]byte, dataLen)
+	copy(data, []byte{0, 1, 0, 0, 0, 0, 1})
+	pos := 7
+	for _, tp := range types {
+		data[pos] = byte(tp)
+		pos++
+		data[pos] = 0
+		pos++
+	}
+	for _, payload := range payloads {
+		pos = proto.writeStringLenEnc(data, pos, payload)
+	}
+	return data[:pos]
+}
+
+func buildDateExecutePacketForParams(
+	types []defines.MysqlType,
+	year uint16,
+	month, day byte,
+) []byte {
+	data := make([]byte, 7+len(types)*2+len(types)*5)
+	copy(data, []byte{0, 1, 0, 0, 0, 0, 1})
+	pos := 7
+	for _, tp := range types {
+		data[pos] = byte(tp)
+		pos++
+		data[pos] = 0
+		pos++
+	}
+	for range types {
+		data[pos] = 4
+		binary.LittleEndian.PutUint16(data[pos+1:pos+3], year)
+		data[pos+3] = month
+		data[pos+4] = day
+		pos += 5
+	}
+	return data[:pos]
+}
+
 func buildFloat32ExecutePacket(value float32) []byte {
 	data := make([]byte, 13)
 	// flag, iteration-count=1, null bitmap, new-params-bound, type, value
@@ -6589,6 +6640,22 @@ func Test_readTime_advancesPastMicroseconds(t *testing.T) {
 			convey.So(ok, convey.ShouldBeTrue)
 			convey.So(val, convey.ShouldEqual, "10:20:30")
 			convey.So(pos, convey.ShouldEqual, 8)
+		})
+
+		convey.Convey("day is normalized to total hours", func() {
+			dayData := []byte{0, 1, 0, 0, 0, 2, 3, 4}
+			pos, val, ok := proto.readTime(dayData, 0, 8)
+			convey.So(ok, convey.ShouldBeTrue)
+			convey.So(val, convey.ShouldEqual, "26:03:04")
+			convey.So(pos, convey.ShouldEqual, 8)
+		})
+
+		convey.Convey("negative day and microseconds", func() {
+			negativeData := []byte{1, 1, 0, 0, 0, 2, 3, 4, 0x20, 0xa1, 0x07, 0x00}
+			pos, val, ok := proto.readTime(negativeData, 0, 12)
+			convey.So(ok, convey.ShouldBeTrue)
+			convey.So(val, convey.ShouldEqual, "-26:03:04.500000")
+			convey.So(pos, convey.ShouldEqual, 12)
 		})
 
 		convey.Convey("truncated at microsecond boundary", func() {

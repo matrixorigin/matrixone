@@ -27,6 +27,7 @@ import (
 
 var debugInstructionNames = map[vm.OpType]string{
 	vm.Top:                     "top",
+	vm.AdaptiveTop:             "adaptive top",
 	vm.Limit:                   "limit",
 	vm.Merge:                   "merge",
 	vm.Order:                   "order",

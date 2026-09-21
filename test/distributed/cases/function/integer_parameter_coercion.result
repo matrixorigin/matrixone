@@ -1,0 +1,196 @@
+drop database if exists integer_parameter_coercion;
+create database integer_parameter_coercion;
+use integer_parameter_coercion;
+create table sources(id int, d decimal(38,18), v double, s varchar(32), bits bit(8));
+insert into sources values (1,2.5,2.5,'1.9tail',b'10'),(2,1.5,1.5,'-1.9tail',b'1'),(3,null,null,null,null);
+select id,substring_index('a.b.c.d','.',d),substring_index('a.b.c.d','.',v),substring_index('a.b.c.d','.',cast(v as double)),substring_index('a.b.c.d','.',s),substring_index('a.b.c.d','.',bits) from sources order by id;
+➤ id[4,32,0]  ¦  substring_index(a.b.c.d, ., d)[12,7,0]  ¦  substring_index(a.b.c.d, ., v)[12,7,0]  ¦  substring_index(a.b.c.d, ., cast(v as double))[12,7,0]  ¦  substring_index(a.b.c.d, ., s)[12,7,0]  ¦  substring_index(a.b.c.d, ., bits)[12,7,0]  𝄀
+1  ¦  a.b.c  ¦  a.b  ¦  a.b  ¦  a  ¦  a.b  𝄀
+2  ¦  a.b  ¦  a.b  ¦  a  ¦  d  ¦  a  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
+select substring_index('a.b.c.d','.',2.5),substring_index('a.b.c.d','.',2.5e0),substring_index('a.b.c.d','.',cast(1.5 as double));
+➤ substring_index(a.b.c.d, ., 2.5)[12,7,0]  ¦  substring_index(a.b.c.d, ., 2.5e0)[12,7,0]  ¦  substring_index(a.b.c.d, ., cast(1.5 as double))[12,7,0]  𝄀
+a.b.c  ¦  a.b  ¦  a
+select id,substring_index('a.b.c.d','.',if(id=1,d,v)),substring_index('a.b.c.d','.',case when id=1 then d else v end),substring_index('a.b.c.d','.',if(id=2,cast(v as double),v)) from sources order by id;
+➤ id[4,32,0]  ¦  substring_index(a.b.c.d, ., if(id = 1, d, v))[12,7,0]  ¦  substring_index(a.b.c.d, ., case when id = 1 then d else v end)[12,7,0]  ¦  substring_index(a.b.c.d, ., if(id = 2, cast(v as double), v))[12,7,0]  𝄀
+1  ¦  a.b.c  ¦  a.b.c  ¦  a.b  𝄀
+2  ¦  a.b  ¦  a.b  ¦  a  𝄀
+3  ¦  null  ¦  null  ¦  null
+select id,substring_index('a.b.c.d','.',cast(v as double)+0e0),substring_index('a.b.c.d','.',abs(cast(v as double))),substring_index('a.b.c.d','.',coalesce(cast(v as double),0e0)),substring_index('a.b.c.d','.',ifnull(cast(v as double),0e0)),substring_index('a.b.c.d','.',nullif(cast(v as double),-1e0)) from sources order by id;
+➤ id[4,32,0]  ¦  substring_index(a.b.c.d, ., cast(v as double) + 0e0)[12,7,0]  ¦  substring_index(a.b.c.d, ., abs(cast(v as double)))[12,7,0]  ¦  substring_index(a.b.c.d, ., coalesce(cast(v as double), 0e0))[12,7,0]  ¦  substring_index(a.b.c.d, ., ifnull(cast(v as double), 0e0))[12,7,0]  ¦  substring_index(a.b.c.d, ., nullif(cast(v as double), -1e0))[12,7,0]  𝄀
+1  ¦  a.b  ¦  a.b  ¦  a.b  ¦  a.b  ¦  a.b  𝄀
+2  ¦  a.b  ¦  a.b  ¦  a.b  ¦  a.b  ¦  a  𝄀
+3  ¦  null  ¦  null  ¦    ¦    ¦  null
+select substring_index('a.b.c','.',if(true,1,cast('9223372036854775808' as decimal(20,0))));
+➤ substring_index(a.b.c, ., if(true, 1, cast(9223372036854775808 as decimal(20))))[12,5,0]  𝄀
+a
+select substring_index('a.b.c','.',case when false then cast('9223372036854775808' as decimal(20,0)) else 1 end);
+➤ substring_index(a.b.c, ., case when false then cast(9223372036854775808 as decimal(20)) else 1 end)[12,5,0]  𝄀
+a
+select substring_index('a.b.c','.',true),substring_index('a.b.c','.',false),substring_index('a.b.c','.', '  +2tail'),substring_index('a.b.c','.', '1e2'),substring_index('a.b.c','.', 'bad');
+➤ substring_index(a.b.c, ., true)[12,5,0]  ¦  substring_index(a.b.c, ., false)[12,5,0]  ¦  substring_index(a.b.c, .,   +2tail)[12,5,0]  ¦  substring_index(a.b.c, ., 1e2)[12,5,0]  ¦  substring_index(a.b.c, ., bad)[12,5,0]  𝄀
+a  ¦    ¦  a.b  ¦  a  ¦  
+select substring_index('a.b.c','.',cast('9007199254740993.5' as decimal(38,1)));
+➤ substring_index(a.b.c, ., cast(9007199254740993.5 as decimal(38, 1)))[12,5,0]  𝄀
+a.b.c
+select substring_index('a.b.c','.',cast('9223372036854775807.4' as decimal(38,1)));
+➤ substring_index(a.b.c, ., cast(9223372036854775807.4 as decimal(38, 1)))[12,5,0]  𝄀
+a.b.c
+select substring_index('a.b.c','.',cast('9223372036854775807.5' as decimal(38,1)));
+Data truncation: data out of range: data type int64, integer argument
+select substring_index('a.b.c','.',18446744073709551615);
+Data truncation: data out of range: data type int64, integer argument
+select substring_index('a.b.c','.', '-9223372036854775809');
+Data truncation: data out of range: data type int64, integer argument
+select substring_index('a.b.c','.',null);
+➤ substring_index(a.b.c, ., null)[12,5,0]  𝄀
+null
+create table defaults_t(a varchar(32) default (substring_index('a.b.c.d','.',2.5)),b varchar(32) default (substring_index('a.b.c.d','.',cast(1.5 as double))));
+insert into defaults_t values (default,default);
+select * from defaults_t;
+➤ a[12,32,0]  ¦  b[12,32,0]  𝄀
+a.b.c  ¦  a
+create table generated_t(v double,g varchar(32) generated always as (substring_index('a.b.c.d','.',v)) stored,h varchar(32) generated always as (substring_index('a.b.c.d','.',cast(v as double))) stored,check(length(substring_index('a.b.c.d','.',v))>=0));
+insert into generated_t(v) values (1.5),(2.5),(null);
+select * from generated_t order by v;
+➤ v[8,53,31]  ¦  g[12,32,0]  ¦  h[12,32,0]  𝄀
+null  ¦  null  ¦  null  𝄀
+1.5  ¦  a.b  ¦  a  𝄀
+2.5  ¦  a.b  ¦  a.b
+update generated_t set v=3.5 where v=1.5;
+select * from generated_t order by v;
+➤ v[8,53,31]  ¦  g[12,32,0]  ¦  h[12,32,0]  𝄀
+null  ¦  null  ¦  null  𝄀
+2.5  ¦  a.b  ¦  a.b  𝄀
+3.5  ¦  a.b.c.d  ¦  a.b.c
+prepare integer_source from 'select substring_index("a.b.c.d",".",?),substring_index("a.b.c.d",".",cast(? as double))';
+set @v=1.5e0;
+execute integer_source using @v,@v;
+➤ substring_index(a.b.c.d, ., ?)[12,7,0]  ¦  substring_index(a.b.c.d, ., cast(? as double))[12,7,0]  𝄀
+a.b  ¦  a
+set @v=2.5;
+execute integer_source using @v,@v;
+➤ substring_index(a.b.c.d, ., ?)[12,7,0]  ¦  substring_index(a.b.c.d, ., cast(? as double))[12,7,0]  𝄀
+a.b.c  ¦  a.b
+set @v='1.9tail';
+execute integer_source using @v,@v;
+➤ substring_index(a.b.c.d, ., ?)[12,7,0]  ¦  substring_index(a.b.c.d, ., cast(? as double))[12,7,0]  𝄀
+a  ¦  a
+set @v=null;
+execute integer_source using @v,@v;
+➤ substring_index(a.b.c.d, ., ?)[12,7,0]  ¦  substring_index(a.b.c.d, ., cast(? as double))[12,7,0]  𝄀
+null  ¦  null
+set @v='9223372036854775808';
+execute integer_source using @v,@v;
+Data truncation: data out of range: data type int64, integer argument
+set @v=1.5e0;
+execute integer_source using @v,@v;
+➤ substring_index(a.b.c.d, ., ?)[12,7,0]  ¦  substring_index(a.b.c.d, ., cast(? as double))[12,7,0]  𝄀
+a.b  ¦  a
+deallocate prepare integer_source;
+prepare nullable_source from 'select substring_index("a.b.c.d",".",(select ? group by 1)),substring_index("a.b.c.d",".",(select ? union all select null limit 1)),substring_index("a.b.c.d",".",coalesce(?,null))';
+set @v=null;
+execute nullable_source using @v,@v,@v;
+➤ substring_index(a.b.c.d, ., (select ? group by 1))[12,7,0]  ¦  substring_index(a.b.c.d, ., (select ? union all select null limit 1))[12,7,0]  ¦  substring_index(a.b.c.d, ., coalesce(?, null))[12,7,0]  𝄀
+null  ¦  null  ¦  null
+set @v=1.5e0;
+execute nullable_source using @v,@v,@v;
+➤ substring_index(a.b.c.d, ., (select ? group by 1))[12,7,0]  ¦  substring_index(a.b.c.d, ., (select ? union all select null limit 1))[12,7,0]  ¦  substring_index(a.b.c.d, ., coalesce(?, null))[12,7,0]  𝄀
+a.b  ¦  a.b  ¦  a.b
+set @v='1.5';
+execute nullable_source using @v,@v,@v;
+➤ substring_index(a.b.c.d, ., (select ? group by 1))[12,7,0]  ¦  substring_index(a.b.c.d, ., (select ? union all select null limit 1))[12,7,0]  ¦  substring_index(a.b.c.d, ., coalesce(?, null))[12,7,0]  𝄀
+a  ¦  a  ¦  a
+set @v=null;
+execute nullable_source using @v,@v,@v;
+➤ substring_index(a.b.c.d, ., (select ? group by 1))[12,7,0]  ¦  substring_index(a.b.c.d, ., (select ? union all select null limit 1))[12,7,0]  ¦  substring_index(a.b.c.d, ., coalesce(?, null))[12,7,0]  𝄀
+null  ¦  null  ¦  null
+deallocate prepare nullable_source;
+prepare bit_source from 'select substring_index("a.b.c.d",".",(select bit_or(?) from sources where id=1)),substring_index("a.b.c.d",".",(select bit_and(?) from sources where id=1)),substring_index("a.b.c.d",".",(select bit_xor(?) from sources where id=1))';
+set @v='1.5';
+execute bit_source using @v,@v,@v;
+➤ substring_index(a.b.c.d, ., (select bit_or(?) from sources where id = 1))[12,7,0]  ¦  substring_index(a.b.c.d, ., (select bit_and(?) from sources where id = 1))[12,7,0]  ¦  substring_index(a.b.c.d, ., (select bit_xor(?) from sources where id = 1))[12,7,0]  𝄀
+a  ¦  a  ¦  a
+set @v=1.5e0;
+execute bit_source using @v,@v,@v;
+➤ substring_index(a.b.c.d, ., (select bit_or(?) from sources where id = 1))[12,7,0]  ¦  substring_index(a.b.c.d, ., (select bit_and(?) from sources where id = 1))[12,7,0]  ¦  substring_index(a.b.c.d, ., (select bit_xor(?) from sources where id = 1))[12,7,0]  𝄀
+a.b  ¦  a.b  ¦  a.b
+deallocate prepare bit_source;
+prepare lineage_source from 'select substring_index("a.b.c.d",".",coalesce((select ? where true),2.5e0)),substring_index("a.b.c.d",".",(select 0e0 where false union all select x from (select ? x) d)),substring_index("a.b.c.d",".",(with recursive r(n) as (select ? union all select n from r where false) select n from r)),substring_index("a.b.c.d",".",bit_count(?))';
+set @v=1.5e0,@bits=2;
+execute lineage_source using @v,@v,@v,@bits;
+➤ substring_index(a.b.c.d, ., coalesce((select ? where true), 2.5e0))[12,7,0]  ¦  substring_index(a.b.c.d, ., (select 0e0 where false union all select x from (select ? as x) as d))[12,7,0]  ¦  substring_index(a.b.c.d, ., (with recursive r(n) as (select ? union all select n from r where false) select n from r))[12,7,0]  ¦  substring_index(a.b.c.d, ., bit_count(?))[12,7,0]  𝄀
+a.b  ¦  a.b  ¦  a.b  ¦  a
+set @v='1.5',@bits='2';
+execute lineage_source using @v,@v,@v,@bits;
+➤ substring_index(a.b.c.d, ., coalesce((select ? where true), 2.5e0))[12,7,0]  ¦  substring_index(a.b.c.d, ., (select 0e0 where false union all select x from (select ? as x) as d))[12,7,0]  ¦  substring_index(a.b.c.d, ., (with recursive r(n) as (select ? union all select n from r where false) select n from r))[12,7,0]  ¦  substring_index(a.b.c.d, ., bit_count(?))[12,7,0]  𝄀
+a  ¦  a  ¦  a  ¦  a.b.c
+set @v=null,@bits=null;
+execute lineage_source using @v,@v,@v,@bits;
+➤ substring_index(a.b.c.d, ., coalesce((select ? where true), 2.5e0))[12,7,0]  ¦  substring_index(a.b.c.d, ., (select 0e0 where false union all select x from (select ? as x) as d))[12,7,0]  ¦  substring_index(a.b.c.d, ., (with recursive r(n) as (select ? union all select n from r where false) select n from r))[12,7,0]  ¦  substring_index(a.b.c.d, ., bit_count(?))[12,7,0]  𝄀
+a.b  ¦  null  ¦  null  ¦  null
+deallocate prepare lineage_source;
+select id,left('abcdef',d),right('abcdef',v),substring('abcdef',d),substr('abcdef',1,v),mid('abcdef',1,cast(v as double)),lpad('x',d,'.'),rpad('x',v,'.') from sources order by id;
+➤ id[4,32,0]  ¦  left(abcdef, d)[12,6,0]  ¦  right(abcdef, v)[12,6,0]  ¦  substring(abcdef, d)[12,6,0]  ¦  substr(abcdef, 1, v)[12,6,0]  ¦  mid(abcdef, 1, cast(v as double))[12,6,0]  ¦  lpad(x, d, .)[-1,16383,0]  ¦  rpad(x, v, .)[-1,16383,0]  𝄀
+1  ¦  abc  ¦  ef  ¦  cdef  ¦  ab  ¦  ab  ¦  ..x  ¦  x.  𝄀
+2  ¦  ab  ¦  ef  ¦  bcdef  ¦  ab  ¦  a  ¦  .x  ¦  x.  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
+select id,insert('abcdef',d,1,'X'),insert('abcdef',1,v,'X'),locate('a','baaa',d),repeat('x',v),length(space(d)),elt(d,'a','b','c'),elt(s,'a','b','c') from sources order by id;
+➤ id[4,32,0]  ¦  insert(abcdef, d, 1, X)[12,7,0]  ¦  insert(abcdef, 1, v, X)[12,7,0]  ¦  locate(a, baaa, d)[-5,64,0]  ¦  repeat(x, v)[-1,16383,0]  ¦  length(space(d))[-5,64,0]  ¦  elt(d, a, b, c)[12,1,0]  ¦  elt(s, a, b, c)[12,1,0]  𝄀
+1  ¦  abXdef  ¦  Xcdef  ¦  3  ¦  xx  ¦  3  ¦  c  ¦  a  𝄀
+2  ¦  aXcdef  ¦  Xcdef  ¦  2  ¦  xx  ¦  2  ¦  b  ¦  null  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
+select left('abcdef',2.5),left('abcdef',2.5e0),left('abcdef',cast(1.5 as double)),left('abcdef','1.9tail');
+➤ left(abcdef, 2.5)[12,6,0]  ¦  left(abcdef, 2.5e0)[12,6,0]  ¦  left(abcdef, cast(1.5 as double))[12,6,0]  ¦  left(abcdef, 1.9tail)[12,6,0]  𝄀
+abc  ¦  ab  ¦  a  ¦  a
+select id,left('abcdef',if(id=1,d,v)),substring('abcdef',1,case when id=1 then d else v end),elt(if(id=1,d,v),'a','b','c') from sources order by id;
+➤ id[4,32,0]  ¦  left(abcdef, if(id = 1, d, v))[12,6,0]  ¦  substring(abcdef, 1, case when id = 1 then d else v end)[12,6,0]  ¦  elt(if(id = 1, d, v), a, b, c)[12,1,0]  𝄀
+1  ¦  abc  ¦  abc  ¦  c  𝄀
+2  ¦  ab  ¦  ab  ¦  b  𝄀
+3  ¦  null  ¦  null  ¦  null
+select left('abc',-1),right('abc',0),substring('abc',-2),substring('abc',1,0),lpad('x',0,'.'),rpad('x',0,'.'),insert('abc',0,1,'X'),locate('a','abc',0),repeat('x',-1),length(space(-1)),elt(0,'a','b');
+➤ left(abc, -1)[12,536870911,0]  ¦  right(abc, 0)[12,536870911,0]  ¦  substring(abc, -2)[12,3,0]  ¦  substring(abc, 1, 0)[12,536870911,0]  ¦  lpad(x, 0, .)[12,536870911,0]  ¦  rpad(x, 0, .)[12,536870911,0]  ¦  insert(abc, 0, 1, X)[12,4,0]  ¦  locate(a, abc, 0)[-5,64,0]  ¦  repeat(x, -1)[-1,16383,0]  ¦  length(space(-1))[-5,64,0]  ¦  elt(0, a, b)[12,1,0]  𝄀
+  ¦    ¦  bc  ¦    ¦    ¦    ¦  abc  ¦  0  ¦    ¦  0  ¦  null
+select locate('a','baaa'),substring('abcdef',2),substr('abcdef',2),mid('abcdef',2);
+➤ locate(a, baaa)[-5,64,0]  ¦  substring(abcdef, 2)[12,6,0]  ¦  substr(abcdef, 2)[12,6,0]  ¦  mid(abcdef, 2)[12,6,0]  𝄀
+2  ¦  bcdef  ¦  bcdef  ¦  bcdef
+select left('abc',cast('9223372036854775807.4' as decimal(38,1))),elt(9223372036854775807,'a','b'),length(space(-9223372036854775808));
+➤ left(abc, cast(9223372036854775807.4 as decimal(38, 1)))[12,3,0]  ¦  elt(9223372036854775807, a, b)[12,1,0]  ¦  length(space(-9223372036854775808))[-5,64,0]  𝄀
+abc  ¦  null  ¦  0
+select left('abc',cast('9223372036854775807.5' as decimal(38,1)));
+Data truncation: data out of range: data type int64, integer argument
+select substring('abc',1,18446744073709551615);
+Data truncation: data out of range: data type int64, integer argument
+select elt(18446744073709551615,'a','b');
+Data truncation: data out of range: data type int64, integer argument
+select space('-9223372036854775809');
+Data truncation: data out of range: data type int64, integer argument
+select repeat('x',if(true,2,18446744073709551615)),elt(case when false then 18446744073709551615 else 1 end,'a','b');
+➤ repeat(x, if(true, 2, 18446744073709551615))[-1,16383,0]  ¦  elt(case when false then 18446744073709551615 else 1 end, a, b)[12,1,0]  𝄀
+xx  ¦  a
+prepare string_source from 'select left("abcdef",?),right("abcdef",?),substring("abcdef",?),substr("abcdef",1,?),mid("abcdef",1,?),lpad("x",?,"."),rpad("x",?,"."),insert("abcdef",?,1,"X"),insert("abcdef",1,?,"X"),locate("a","baaa",?),repeat("x",?),length(space(?)),elt(?,"a","b","c")';
+set @v=null;
+execute string_source using @v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v;
+➤ left(abcdef, ?)[12,6,0]  ¦  right(abcdef, ?)[12,6,0]  ¦  substring(abcdef, ?)[12,6,0]  ¦  substr(abcdef, 1, ?)[12,6,0]  ¦  mid(abcdef, 1, ?)[12,6,0]  ¦  lpad(x, ?, .)[-1,16383,0]  ¦  rpad(x, ?, .)[-1,16383,0]  ¦  insert(abcdef, ?, 1, X)[12,7,0]  ¦  insert(abcdef, 1, ?, X)[12,7,0]  ¦  locate(a, baaa, ?)[-5,64,0]  ¦  repeat(x, ?)[-1,16383,0]  ¦  length(space(?))[-5,64,0]  ¦  elt(?, a, b, c)[12,1,0]  𝄀
+null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
+set @v=2.5;
+execute string_source using @v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v;
+➤ left(abcdef, ?)[12,6,0]  ¦  right(abcdef, ?)[12,6,0]  ¦  substring(abcdef, ?)[12,6,0]  ¦  substr(abcdef, 1, ?)[12,6,0]  ¦  mid(abcdef, 1, ?)[12,6,0]  ¦  lpad(x, ?, .)[-1,16383,0]  ¦  rpad(x, ?, .)[-1,16383,0]  ¦  insert(abcdef, ?, 1, X)[12,7,0]  ¦  insert(abcdef, 1, ?, X)[12,7,0]  ¦  locate(a, baaa, ?)[-5,64,0]  ¦  repeat(x, ?)[-1,16383,0]  ¦  length(space(?))[-5,64,0]  ¦  elt(?, a, b, c)[12,1,0]  𝄀
+abc  ¦  def  ¦  cdef  ¦  abc  ¦  abc  ¦  ..x  ¦  x..  ¦  abXdef  ¦  Xdef  ¦  3  ¦  xxx  ¦  3  ¦  c
+set @v=2.5e0;
+execute string_source using @v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v;
+➤ left(abcdef, ?)[12,6,0]  ¦  right(abcdef, ?)[12,6,0]  ¦  substring(abcdef, ?)[12,6,0]  ¦  substr(abcdef, 1, ?)[12,6,0]  ¦  mid(abcdef, 1, ?)[12,6,0]  ¦  lpad(x, ?, .)[-1,16383,0]  ¦  rpad(x, ?, .)[-1,16383,0]  ¦  insert(abcdef, ?, 1, X)[12,7,0]  ¦  insert(abcdef, 1, ?, X)[12,7,0]  ¦  locate(a, baaa, ?)[-5,64,0]  ¦  repeat(x, ?)[-1,16383,0]  ¦  length(space(?))[-5,64,0]  ¦  elt(?, a, b, c)[12,1,0]  𝄀
+ab  ¦  ef  ¦  bcdef  ¦  ab  ¦  ab  ¦  .x  ¦  x.  ¦  aXcdef  ¦  Xcdef  ¦  2  ¦  xx  ¦  2  ¦  b
+set @v='1.9tail';
+execute string_source using @v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v;
+➤ left(abcdef, ?)[12,6,0]  ¦  right(abcdef, ?)[12,6,0]  ¦  substring(abcdef, ?)[12,6,0]  ¦  substr(abcdef, 1, ?)[12,6,0]  ¦  mid(abcdef, 1, ?)[12,6,0]  ¦  lpad(x, ?, .)[-1,16383,0]  ¦  rpad(x, ?, .)[-1,16383,0]  ¦  insert(abcdef, ?, 1, X)[12,7,0]  ¦  insert(abcdef, 1, ?, X)[12,7,0]  ¦  locate(a, baaa, ?)[-5,64,0]  ¦  repeat(x, ?)[-1,16383,0]  ¦  length(space(?))[-5,64,0]  ¦  elt(?, a, b, c)[12,1,0]  𝄀
+a  ¦  f  ¦  abcdef  ¦  a  ¦  a  ¦  x  ¦  x  ¦  Xbcdef  ¦  Xbcdef  ¦  2  ¦  x  ¦  1  ¦  a
+set @v='9223372036854775808';
+execute string_source using @v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v;
+Data truncation: data out of range: data type int64, integer argument
+set @v=2;
+execute string_source using @v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v;
+➤ left(abcdef, ?)[12,6,0]  ¦  right(abcdef, ?)[12,6,0]  ¦  substring(abcdef, ?)[12,6,0]  ¦  substr(abcdef, 1, ?)[12,6,0]  ¦  mid(abcdef, 1, ?)[12,6,0]  ¦  lpad(x, ?, .)[-1,16383,0]  ¦  rpad(x, ?, .)[-1,16383,0]  ¦  insert(abcdef, ?, 1, X)[12,7,0]  ¦  insert(abcdef, 1, ?, X)[12,7,0]  ¦  locate(a, baaa, ?)[-5,64,0]  ¦  repeat(x, ?)[-1,16383,0]  ¦  length(space(?))[-5,64,0]  ¦  elt(?, a, b, c)[12,1,0]  𝄀
+ab  ¦  ef  ¦  bcdef  ¦  ab  ¦  ab  ¦  .x  ¦  x.  ¦  aXcdef  ¦  Xcdef  ¦  2  ¦  xx  ¦  2  ¦  b
+deallocate prepare string_source;
+drop database integer_parameter_coercion;

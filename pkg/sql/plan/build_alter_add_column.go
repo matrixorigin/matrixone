@@ -17,7 +17,6 @@ package plan
 import (
 	"context"
 	"fmt"
-	"math"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -112,7 +111,10 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 	}
 
 	newCol := &ColDef{
-		ColId: math.MaxUint64,
+		// Keep planner-only IDs distinct until the replacement relation assigns
+		// durable IDs. Foreign keys added by the same COPY ALTER use these IDs to
+		// render column names in the temporary CREATE TABLE statement.
+		ColId: nextAlterCopyColumnID(alterPlan.CopyTableDef.Cols),
 		//Primary: originalCol.Primary,
 		//NotNull:  originalCol.NotNull,
 		//Default:  originalCol.Default,
@@ -237,6 +239,21 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 		}
 	}
 	return newCol, nil
+}
+
+func nextAlterCopyColumnID(cols []*ColDef) uint64 {
+	used := make(map[uint64]struct{}, len(cols))
+	for _, col := range cols {
+		if col != nil {
+			used[col.ColId] = struct{}{}
+		}
+	}
+	for candidate := UnKnownColId; candidate > 0; candidate-- {
+		if _, exists := used[candidate]; !exists {
+			return candidate
+		}
+	}
+	return 0
 }
 
 // checkTypeCapSize check type for add single column.

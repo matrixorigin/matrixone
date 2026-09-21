@@ -1,0 +1,82 @@
+-- @suite
+-- @case
+-- @desc: Bounded XML/XPath compatibility, byte-preserving updates, warnings and prepared reuse.
+-- @label:bvt
+
+SELECT ExtractValue('<a><b>1</b><b>2</b></a>', '/a/b') AS multi,
+ExtractValue('<a id="7"/>', '/a/@id') AS attr,
+ExtractValue('<a><b/><b/></a>', 'count(/a/b)') AS count_nodes;
+SELECT ExtractValue('<a>x<b>y</b>z</a>', '/a') AS direct_text,
+ExtractValue('<a>x<b>y</b>z</a>', '/a/text()') AS explicit_text,
+ExtractValue('<a>x<b>y</b>z</a>', '/a|/a/b') AS union_text;
+SELECT ExtractValue('<a/><b>x</b>', '/b') AS fragment,
+ExtractValue('', '/a') = '' AS empty_xml,
+ExtractValue('<a/>', '/b') = '' AS missing,
+ExtractValue('plain', '/') AS plain;
+SELECT ExtractValue('<a>&amp;&#65;&unknown;</a>', '/a') AS entities,
+ExtractValue('<a>x<![CDATA[y]]><!--c-->z</a>', '/a') AS segments,
+ExtractValue('<p:a>x</p:a>', '/p:a') AS lexical_prefix;
+SELECT ExtractValue('<a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a>', '/a/b[1]') AS per_parent,
+ExtractValue('<a><b k="X">yes</b></a>', '/a/b[@k="x"]') AS predicate;
+SELECT ExtractValue('<a>x<b>y</b>z</a>', '//text()') AS all_text,
+ExtractValue('<a>x<b>y</b>z</a>', '/a//text()') AS descendants,
+ExtractValue('<a>x<b>y</b>z</a>', '/a/text()') AS direct_text;
+SELECT ExtractValue('<a>x<b>y</b>z</a>', '/a|/a//text()') AS mixed_text,
+ExtractValue('<a>x<b>y</b>z</a>', '/a/b|/a/text()') AS ordered_text,
+ExtractValue('<p:a p:id="7"><p:b>x</p:b></p:a>', '/p:a[@p:id="7"][p:b="x"]/@p:id') AS qualified;
+SELECT UpdateXML('<a><b>1</b></a>', '/a/b', '<c>2</c>') AS replaced,
+UpdateXML('<a><b>1</b><b>2</b></a>', '/a/b', '<c/>') AS multiple_unchanged,
+UpdateXML('<a/>', '/missing', '<c/>') AS missing_unchanged;
+SELECT UpdateXML('<a k="7"><b/></a>', '/a/@k', 'z') AS attribute_span,
+UpdateXML('<a />', '/a', 'not xml') AS raw_replacement,
+UpdateXML('<a/>', '/', 'raw') AS document_replacement,
+UpdateXML('<a/>', 'count(/a)', '<b/>') IS NULL AS scalar_update;
+SELECT ExtractValue('<a>', '/a') IS NULL AS malformed;
+SHOW WARNINGS;
+SELECT UpdateXML('<a>', '/a', '<b/>') IS NULL AS malformed_update;
+SHOW WARNINGS;
+SELECT ExtractValue('<!DOCTYPE a><a/>', '/a') IS NULL AS no_dtd;
+SHOW WARNINGS;
+SELECT ExtractValue(NULL, '/a') IS NULL AS null_xml,
+ExtractValue('<a>', NULL) IS NULL AS null_path,
+UpdateXML('<a/>', '/a', NULL) IS NULL AS null_replacement;
+SELECT ExtractValue(NULL, '[');
+SELECT UpdateXML('<a/>', '[', NULL);
+SELECT ExtractValue('<a>', '[');
+SELECT ExtractValue('<a/>', 'sum(/a)');
+SELECT UpdateXML('<a>x</a>', '/a/text()', 'Q');
+SELECT UpdateXML('<a>x<b>y</b></a>', '/a//text()', 'Q');
+SELECT ExtractValue('<a/>', '/:a');
+SELECT ExtractValue('<a/>', '/a:b:c');
+SELECT IF(FALSE, ExtractValue('<a>', '['), 'ok') AS masked;
+SHOW COUNT(*) WARNINGS;
+
+DROP DATABASE IF EXISTS xml_functions_28306;
+CREATE DATABASE xml_functions_28306;
+CREATE TABLE xml_functions_28306.inputs(id INT PRIMARY KEY, doc TEXT, path VARCHAR(30));
+INSERT INTO xml_functions_28306.inputs VALUES (1,'<a>x</a>','/a'),(2,'<a>','/a'),(3,NULL,'/a');
+SELECT id, ExtractValue(doc, '/a') AS extracted FROM xml_functions_28306.inputs ORDER BY id;
+SHOW WARNINGS;
+SELECT ExtractValue(doc, path) FROM xml_functions_28306.inputs WHERE id=1;
+CREATE TABLE xml_functions_28306.output AS SELECT ExtractValue('<a>', '/a') AS extracted;
+SHOW WARNINGS;
+SELECT extracted IS NULL AS nullable_value FROM xml_functions_28306.output;
+SELECT data_type,is_nullable FROM information_schema.columns
+WHERE table_schema='xml_functions_28306' AND table_name='output' AND column_name='extracted';
+CREATE TABLE xml_functions_28306.large_output AS
+SELECT ExtractValue(CONCAT('<a>', REPEAT('x', 65536), '</a>'), '/a') AS extracted;
+SELECT LENGTH(extracted) AS beyond_varchar FROM xml_functions_28306.large_output;
+
+PREPARE xml_function_probe FROM 'SELECT ExtractValue(?, ?) AS value';
+SET @xml_doc='<a>one</a>', @xml_path='/a';
+EXECUTE xml_function_probe USING @xml_doc,@xml_path;
+SET @xml_doc='<b>two</b>', @xml_path='/b';
+EXECUTE xml_function_probe USING @xml_doc,@xml_path;
+SET @xml_path='[';
+EXECUTE xml_function_probe USING @xml_doc,@xml_path;
+SET @xml_path=NULL;
+EXECUTE xml_function_probe USING @xml_doc,@xml_path;
+DEALLOCATE PREPARE xml_function_probe;
+SET @xml_doc=NULL,@xml_path=NULL;
+DROP DATABASE xml_functions_28306;
+SELECT COUNT(*) AS leftover_databases FROM mo_catalog.mo_database WHERE datname='xml_functions_28306';
