@@ -145,6 +145,7 @@ func (s *scopeTaskScheduler) eventWorker() {
 		s.eventMu.Unlock()
 
 		func() {
+			defer s.finishTask()
 			defer func() {
 				if recovered := recover(); recovered != nil {
 					logutil.Errorf("[scope-scheduler] event source panic id=%d name=%s value=%v", s.id, task.name, recovered)
@@ -152,7 +153,6 @@ func (s *scopeTaskScheduler) eventWorker() {
 						s.onPanic(recovered)
 					}
 				}
-				s.finishTask()
 			}()
 			logutil.Debugf("[scope-scheduler] start id=%d lane=event-source name=%s", s.id, task.name)
 			task.run()
