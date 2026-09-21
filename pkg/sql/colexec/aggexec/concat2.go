@@ -397,10 +397,7 @@ func (a *GroupConcatWarningAccumulator) addBatchOwned(
 	if source != nil {
 		if undercharged {
 			if replacement != 0 {
-				_, consumed := a.warningBudget.Reconcile(replacement, 0)
-				if consumed {
-					replacement = 0
-				}
+				a.warningBudget.Reconcile(replacement, 0)
 			}
 		} else if sameBudget {
 			if chargedBytes > accounted {
