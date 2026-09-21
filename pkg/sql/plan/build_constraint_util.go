@@ -1840,7 +1840,26 @@ func forceCastExprWithNameAndAssignment(
 	}, nil
 }
 
-func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colType *types.Type, isIgnore bool) (*plan.Expr, error) {
+// MakeInsertValueConstExpr keeps the historical helper contract used by
+// planner tests and non-DML callers. DML supplies whether the statement is a
+// prepared statement through makeInsertValueConstExpr so direct VALUES keeps
+// its left-to-right plan-time error ordering.
+func MakeInsertValueConstExpr(
+	proc *process.Process,
+	numVal *tree.NumVal,
+	colType *types.Type,
+	isIgnore bool,
+) (*plan.Expr, error) {
+	return makeInsertValueConstExpr(proc, numVal, colType, isIgnore, true)
+}
+
+func makeInsertValueConstExpr(
+	proc *process.Process,
+	numVal *tree.NumVal,
+	colType *types.Type,
+	isIgnore bool,
+	deferTemporalToExecution bool,
+) (*plan.Expr, error) {
 	if numVal.ValType == tree.P_null || numVal.ValType == tree.P_nulltext {
 		return makePlan2NullConstExprWithType(), nil
 	}
@@ -1853,12 +1872,13 @@ func MakeInsertValueConstExpr(proc *process.Process, numVal *tree.NumVal, colTyp
 		return forceAssignmentCastExprWithProcess(proc.Ctx, expr, makePlan2Type(colType), true, proc)
 	}
 	// Keep string temporal literals as text until execution. Parsing an invalid
-	// DATE/DATETIME under ALLOW_INVALID_DATES here would retain the prepare-time
+	// DATE/DATETIME/TIMESTAMP under the prepare-time policy would retain that
 	// policy in the cached plan and bypass the execution-time SQL mode check.
-	if numVal.ValType == tree.P_char && numVal.String() != "" {
+	if deferTemporalToExecution && numVal.ValType == tree.P_char && numVal.String() != "" {
 		targetType := makePlan2Type(colType)
 		if targetType.Id == int32(types.T_date) ||
-			targetType.Id == int32(types.T_datetime) {
+			targetType.Id == int32(types.T_datetime) ||
+			targetType.Id == int32(types.T_timestamp) {
 			expr := MakePlan2StringConstExprWithType(numVal.String())
 			return forceAssignmentCastExprWithProcess(proc.Ctx, expr, targetType, isIgnore, proc)
 		}
@@ -2124,7 +2144,7 @@ func buildValueScan(
 					}
 				}
 				if nv, ok := r[i].(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) {
-					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp, builder.isInsertIgnore)
+					expr, err := makeInsertValueConstExpr(proc, nv, &colTyp, builder.isInsertIgnore, builder.isPrepareStatement)
 					if err != nil {
 						return nil, err
 					}

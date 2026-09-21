@@ -240,7 +240,7 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 		fn.Args[i] = r.constantFold(fn.Args[i], proc)
 		isVec = isVec || fn.Args[i].GetVec() != nil
 	}
-	if r.isPrepared && isSqlModeDependentTemporalCast(fn) {
+	if IsSqlModeDependentTemporalCast(fn) {
 		return expr
 	}
 	if f.IsAgg() || f.IsWin() {
@@ -862,7 +862,10 @@ func ContainsSerializedLiteral(exprs []*plan.Expr) bool {
 	return false
 }
 
-func isSqlModeDependentTemporalCast(fn *plan.Function) bool {
+// IsSqlModeDependentTemporalCast identifies explicit string-to-temporal casts
+// whose result depends on the execution session's SQL mode. Such expressions
+// must remain executable until the current session is available.
+func IsSqlModeDependentTemporalCast(fn *plan.Function) bool {
 	functionID, _ := function.DecodeOverloadID(fn.Func.GetObj())
 	if functionID != function.CAST || len(fn.Args) != 2 {
 		return false

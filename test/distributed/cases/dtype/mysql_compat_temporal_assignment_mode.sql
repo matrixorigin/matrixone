@@ -56,6 +56,7 @@ execute prepared_date;
 execute prepared_datetime;
 deallocate prepare prepared_date;
 deallocate prepare prepared_datetime;
+set session sql_mode = 'ALLOW_INVALID_DATES';
 select count(*) as prepared_rows from target_temporal;
 select count(*) as prepared_invalid_dates
 from target_temporal where d = '2024-02-30';

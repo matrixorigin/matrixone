@@ -5456,7 +5456,7 @@ func (builder *QueryBuilder) buildValueScan(
 					}
 				}
 				if nv, ok := r[i].(*tree.NumVal); ok && !isEnumOrSetPlanType(&col.Typ) && !isTypedArrayPlanType(&col.Typ) {
-					expr, err := MakeInsertValueConstExpr(proc, nv, &colTyp, builder.isInsertIgnore)
+					expr, err := makeInsertValueConstExpr(proc, nv, &colTyp, builder.isInsertIgnore, builder.isPrepareStatement)
 					if err != nil {
 						return 0, nil, err
 					}
