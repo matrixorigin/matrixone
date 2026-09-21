@@ -767,6 +767,7 @@ func TestSession_Migrate(t *testing.T) {
 			DB:                      "d1",
 			LastAffectedRows:        7,
 			LastInsertID:            13,
+			LastInsertIDExported:    true,
 			FoundRows:               11,
 			UserDefinedVarsExported: true,
 			UserDefinedVars: []*query.MigrateUserDefinedVar{
@@ -826,6 +827,23 @@ func TestSession_Migrate(t *testing.T) {
 		assert.Equal(t, int64(0), s.GetProc().GetAffectedRows())
 	})
 
+	t.Run("rejects missing LAST_INSERT_ID snapshot", func(t *testing.T) {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		runtime.SetupServiceBasedRuntime(sid, runtime.DefaultRuntime())
+		InitServerLevelVars(sid)
+		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
+		s := genSession(ctrl, "d1", nil)
+		s.SetLastInsertID(9)
+		s.GetProc().SetLastInsertID(9)
+
+		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{DB: "d1"})
+		require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
+		require.Equal(t, uint64(9), s.GetLastInsertID())
+		require.Equal(t, uint64(9), s.GetProc().GetLastInsertID())
+	})
+
 	t.Run("typed user variables", func(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
@@ -869,9 +887,10 @@ func TestSession_Migrate(t *testing.T) {
 
 		target := genSession(ctrl, "d1", nil)
 		require.NoError(t, Migrate(context.Background(), target, &query.MigrateConnToRequest{
-			ConnID:      88,
-			DB:          exported.DB,
-			SetVarStmts: []string{"set sql_mode = @mode"},
+			ConnID:               88,
+			DB:                   exported.DB,
+			LastInsertIDExported: true,
+			SetVarStmts:          []string{"set sql_mode = @mode"},
 			PrepareStmts: append(exported.PrepareStmts, &query.PrepareStmt{
 				Name: "pending_isolation_prepare",
 				SQL:  "select ?",
@@ -908,6 +927,7 @@ func TestSession_Migrate(t *testing.T) {
 		invalidTarget := genSession(ctrl, "d1", nil)
 		err = Migrate(context.Background(), invalidTarget, &query.MigrateConnToRequest{
 			DB:                      "d1",
+			LastInsertIDExported:    true,
 			UserDefinedVarsExported: true,
 			UserDefinedVars:         []*query.MigrateUserDefinedVar{{Name: "mode", Value: plan2.MakePlan2StringConstExprWithType("PIPES_AS_CONCAT")}},
 			SystemVariablesExported: true,
@@ -944,6 +964,7 @@ func TestSession_Migrate(t *testing.T) {
 		}()
 		err := Migrate(context.Background(), target, &query.MigrateConnToRequest{
 			DB:                      "d1",
+			LastInsertIDExported:    true,
 			UserDefinedVarsExported: true,
 			UserDefinedVars: []*query.MigrateUserDefinedVar{{
 				Name:  "ts0",
@@ -957,6 +978,7 @@ func TestSession_Migrate(t *testing.T) {
 		targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion22)
 		err = Migrate(context.Background(), target, &query.MigrateConnToRequest{
 			DB:                      "d1",
+			LastInsertIDExported:    true,
 			UserDefinedVarsExported: true,
 			UserDefinedVars: []*query.MigrateUserDefinedVar{{
 				Name:  "ts0",
@@ -990,7 +1012,8 @@ func TestSession_Migrate(t *testing.T) {
 		}()
 
 		err := Migrate(context.Background(), target, &query.MigrateConnToRequest{
-			DB: "d1",
+			DB:                   "d1",
+			LastInsertIDExported: true,
 			TempTables: []*query.MigrateTempTable{{
 				Database: "d1", Alias: "tmp", PhysicalName: "__mo_tmp_source_d1_tmp",
 			}},
@@ -1040,6 +1063,7 @@ func TestSession_Migrate(t *testing.T) {
 
 		err := Migrate(context.Background(), target, &query.MigrateConnToRequest{
 			DB:                        "d1",
+			LastInsertIDExported:      true,
 			SystemVariablesExported:   true,
 			SystemVariablesReplayable: true,
 			SystemVariables: []*query.MigrateSystemVariable{
@@ -1098,6 +1122,7 @@ func TestSession_Migrate(t *testing.T) {
 		// invalidate when restoring either cache-control variable.
 		err := Migrate(context.Background(), target, &query.MigrateConnToRequest{
 			DB:                        "d1",
+			LastInsertIDExported:      true,
 			SystemVariablesExported:   true,
 			SystemVariablesReplayable: true,
 			SystemVariables: []*query.MigrateSystemVariable{
@@ -1156,6 +1181,7 @@ func TestSession_Migrate(t *testing.T) {
 		require.True(t, target.GetTxnHandler().OptionBitsIsSet(OPTION_AUTOCOMMIT))
 
 		require.NoError(t, Migrate(context.Background(), target, &query.MigrateConnToRequest{
+			LastInsertIDExported:    true,
 			SystemVariablesExported: true,
 			SystemVariables:         exported,
 		}))
@@ -1189,8 +1215,9 @@ func TestSession_Migrate(t *testing.T) {
 		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
 		s := genSession(ctrl, "d1", nil)
 		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{
-			ConnID: 88,
-			DB:     "d1",
+			ConnID:               88,
+			DB:                   "d1",
+			LastInsertIDExported: true,
 			UserLevelLocks: []*query.UserLevelLock{
 				{Name: "restored_lock", Count: 2},
 			},
@@ -1213,7 +1240,10 @@ func TestSession_Migrate(t *testing.T) {
 		InitServerLevelVars(sid)
 		SetSessionAlloc(sid, NewSessionAllocator(&config.ParameterUnit{SV: sv}))
 		s := genSession(ctrl, "d2", context.Canceled)
-		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{DB: "d2"})
+		err := Migrate(context.Background(), s, &query.MigrateConnToRequest{
+			DB:                   "d2",
+			LastInsertIDExported: true,
+		})
 		assert.Equal(t, "", s.GetDatabaseName())
 		assert.NoError(t, err)
 	})
@@ -1230,7 +1260,11 @@ func TestSession_Migrate(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		err := Migrate(ctx, s, &query.MigrateConnToRequest{DB: "d3", LastAffectedRows: 3})
+		err := Migrate(ctx, s, &query.MigrateConnToRequest{
+			DB:                   "d3",
+			LastAffectedRows:     3,
+			LastInsertIDExported: true,
+		})
 		assert.ErrorIs(t, err, context.Canceled)
 		assert.Equal(t, int64(9), s.GetLastAffectedRows())
 	})

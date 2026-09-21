@@ -713,6 +713,11 @@ func (rt *Routine) migrateConnectionTo(ctx context.Context, req *query.MigrateCo
 		return moerr.NewInternalErrorNoCtx("cannot start migrate as routine has been closed")
 	}
 	defer rt.mc.endOperation()
+	if !req.LastInsertIDExported {
+		// Do not consume the one-shot migration slot for a request whose source
+		// snapshot cannot prove LAST_INSERT_ID state is authoritative.
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
 
 	rt.mc.migrateOnce.Do(func() {
 		ses := rt.getSession()
@@ -743,7 +748,7 @@ func (rt *Routine) migrateConnectionFromActionWithContext(
 	resp *query.MigrateConnFromResponse,
 ) error {
 	return rt.migrateConnectionFromActionWithCapabilities(
-		ctx, action, true, resp,
+		ctx, action, true, true, resp,
 	)
 }
 
@@ -751,6 +756,7 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 	ctx context.Context,
 	action query.MigrateConnFromAction,
 	tempTableMigrationSupported bool,
+	lastInsertIDMigrationSupported bool,
 	resp *query.MigrateConnFromResponse,
 ) error {
 	operationCtx, ok := rt.mc.beginOperationWithContext(ctx)
@@ -778,6 +784,12 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 	case query.MigrateConnFromAction_MigrateConnFromEnableUserLevelLockRelease:
 		ses.userLevelLocksMigrated = false
 		return nil
+	}
+	if !lastInsertIDMigrationSupported {
+		// A legacy Proxy cannot forward the value or prove that a zero is
+		// authoritative. Keep the source session on this CN instead of allowing
+		// a successful handoff to silently reset LAST_INSERT_ID().
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
 	if states := function.UserLevelLocksForMigration(ses.proc); len(states) > 0 {
 		return moerr.NewInternalErrorNoCtx("cannot migrate connection while user-level locks are held")
@@ -814,6 +826,7 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 	resp.DB = ses.GetDatabaseName()
 	resp.LastAffectedRows = ses.GetLastAffectedRows()
 	resp.LastInsertID = ses.GetLastInsertID()
+	resp.LastInsertIDExported = true
 	prepareStmts := ses.GetPrepareStmts()
 	for _, st := range prepareStmts {
 		// COM_STMT_SEND_LONG_DATA has no protocol response and its parameter

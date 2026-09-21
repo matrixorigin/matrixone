@@ -3844,7 +3844,6 @@ func migrateTempTables(
 func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest) error {
 	ses.EnterFPrint(FPMigrate)
 	defer ses.ExitFPrint(FPMigrate)
-	parameters := getPu(ses.GetService()).SV
 
 	if ctx == nil {
 		ctx = ses.GetTxnHandler().GetTxnCtx()
@@ -3852,6 +3851,13 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 	if err := context.Cause(ctx); err != nil {
 		return err
 	}
+	if !req.LastInsertIDExported {
+		// A missing marker means the source or Proxy could not provide an
+		// authoritative value. Do not turn that absence into a zero on the
+		// target session.
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
+	parameters := getPu(ses.GetService()).SV
 	// USE and PREPARE are replayed as internal statements and update ROW_COUNT().
 	// Restore the source session values after all replay work has finished.
 	defer restoreRowCount(ses, ses.GetProc(), req.LastAffectedRows)

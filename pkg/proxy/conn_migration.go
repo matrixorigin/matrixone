@@ -40,8 +40,9 @@ func (c *clientConn) migrateConnFromContext(
 	}
 	req := c.queryClient.NewRequest(query.CmdMethod_MigrateConnFrom)
 	req.MigrateConnFromRequest = &query.MigrateConnFromRequest{
-		ConnID:                      c.connID,
-		TempTableMigrationSupported: true,
+		ConnID:                         c.connID,
+		TempTableMigrationSupported:    true,
+		LastInsertIDMigrationSupported: true,
 	}
 	ctx, cancel := context.WithTimeoutCause(parent, time.Second*3, moerr.CauseMigrateConnFrom)
 	defer cancel()
@@ -60,6 +61,12 @@ func (c *clientConn) migrateConnFromContext(
 	r := resp.MigrateConnFromResponse
 	if r == nil {
 		return nil, moerr.NewInternalError(parent, "bad response")
+	}
+	if !r.LastInsertIDExported {
+		// A legacy source cannot distinguish an authoritative zero from a
+		// missing LAST_INSERT_ID snapshot. Keep the source session in place
+		// instead of allowing the target to observe a fabricated zero.
+		return nil, moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
 	if c.tun != nil && !c.tun.acceptPendingLongDataSnapshot(r.PreparedStmtLongDataChecked) {
 		c.tun.rejectPendingLongDataReconciliation()
@@ -106,7 +113,11 @@ func (c *clientConn) migrateConnToContext(
 		info.SystemVariablesSnapshotTooLarge || info.UserDefinedVarsSnapshotTooLarge
 	typedMigrationSupported := false
 	addr := ""
-	if typedMigration || info.FoundRows != 0 || info.LastInsertID != 0 || len(info.TempTables) > 0 {
+	if !info.LastInsertIDExported {
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
+	if typedMigration || info.FoundRows != 0 || info.LastInsertID != 0 ||
+		len(info.TempTables) > 0 {
 		addr = getQueryAddress(c.moCluster, sc.RawConn().RemoteAddr().String())
 		if addr == "" {
 			return moerr.NewInternalError(ctx, "cannot get query service address")
@@ -205,6 +216,7 @@ func (c *clientConn) migrateConnToContext(
 		PrepareStmts:              info.PrepareStmts,
 		LastAffectedRows:          info.LastAffectedRows,
 		LastInsertID:              info.LastInsertID,
+		LastInsertIDExported:      info.LastInsertIDExported,
 		FoundRows:                 info.FoundRows,
 		UserDefinedVars:           nil,
 		UserDefinedVarsExported:   false,

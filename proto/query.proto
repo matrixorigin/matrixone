@@ -567,6 +567,9 @@ message MigrateConnFromRequest {
   // True when Proxy understands MigrateTempTable snapshots. A current CN must
   // reject migration of a session with temporary tables when this is false.
   bool TempTableMigrationSupported = 4;
+  // True when Proxy understands the complete LAST_INSERT_ID migration
+  // contract, including the export marker and target compatibility checks.
+  bool LastInsertIDMigrationSupported = 5;
 }
 
 message MigrateConnFromResponse {
@@ -601,6 +604,9 @@ message MigrateConnFromResponse {
   bool TempTableStateExported = 17;
   // LastInsertID is the session-visible value returned by LAST_INSERT_ID().
   uint64 LastInsertID = 18;
+  // True when LastInsertID was captured by a source that understands this
+  // migration contract. False means the value is unavailable, not zero.
+  bool LastInsertIDExported = 19;
 }
 
 message MigrateConnToRequest {
@@ -623,6 +629,8 @@ message MigrateConnToRequest {
   repeated MigrateTempTable TempTables = 14;
   // LastInsertID is the session-visible value returned by LAST_INSERT_ID().
   uint64 LastInsertID = 15;
+  // True only when LastInsertID came from an authoritative source snapshot.
+  bool LastInsertIDExported = 16;
 }
 
 message MigrateUserDefinedVar {
