@@ -17,11 +17,13 @@ package compile
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
@@ -40,23 +42,29 @@ var (
 // pipeline continuations; a bounded event-worker lane owns external blocking
 // I/O and teardown, and always re-admits completion to this queue.
 type scopeTaskScheduler struct {
-	id           uint64
-	ctx          context.Context
-	readyMu      sync.Mutex
-	readyCond    *sync.Cond
-	readyQueue   []scopeScheduledTask
-	readyClosed  bool
-	workers      sync.WaitGroup
-	eventMu      sync.Mutex
-	eventCond    *sync.Cond
-	eventQueue   []scopeEventTask
-	eventClosed  bool
-	eventWorkers sync.WaitGroup
-	mu           sync.Mutex
-	taskCond     *sync.Cond
-	pending      int
-	closed       bool
-	waitOnce     sync.Once
+	id            uint64
+	ctx           context.Context
+	readyMu       sync.Mutex
+	readyCond     *sync.Cond
+	readyQueue    []scopeScheduledTask
+	readyClosed   bool
+	workers       sync.WaitGroup
+	eventMu       sync.Mutex
+	eventCond     *sync.Cond
+	eventQueue    []scopeEventTask
+	eventClosed   bool
+	eventWorkers  sync.WaitGroup
+	channelMu     sync.Mutex
+	channelWake   chan struct{}
+	channelNext   uint64
+	channelEvents map[uint64]scopeChannelEvent
+	channelClosed bool
+	channelWorker sync.WaitGroup
+	mu            sync.Mutex
+	taskCond      *sync.Cond
+	pending       int
+	closed        bool
+	waitOnce      sync.Once
 
 	onPanic func(any)
 }
@@ -74,6 +82,18 @@ type scopeScheduledTask struct {
 type scopeEventTask struct {
 	name string
 	run  func()
+}
+
+// scopeChannelEvent bridges a channel that is already fed by an external
+// transport into the ready queue.  The dispatcher waits on all registered
+// channels with one fixed goroutine; it never parks a scheduler event worker
+// on a network receive.
+type scopeChannelEvent struct {
+	id     uint64
+	name   string
+	ch     <-chan morpc.Message
+	ready  func(morpc.Message, bool)
+	reject func(error)
 }
 
 func newScopeTaskScheduler(
@@ -96,6 +116,8 @@ func newScopeTaskScheduler(
 	s.taskCond = sync.NewCond(&s.mu)
 	s.readyCond = sync.NewCond(&s.readyMu)
 	s.eventCond = sync.NewCond(&s.eventMu)
+	s.channelWake = make(chan struct{}, 1)
+	s.channelEvents = make(map[uint64]scopeChannelEvent)
 
 	for i := 0; i < workerCount; i++ {
 		s.workers.Add(1)
@@ -103,6 +125,8 @@ func newScopeTaskScheduler(
 		s.eventWorkers.Add(1)
 		go s.eventWorker()
 	}
+	s.channelWorker.Add(1)
+	go s.channelEventWorker()
 	logutil.Debugf("[scope-scheduler] create id=%d workers=%d", s.id, workerCount)
 	return s
 }
@@ -157,6 +181,105 @@ func (s *scopeTaskScheduler) eventWorker() {
 			logutil.Debugf("[scope-scheduler] start id=%d lane=event-source name=%s", s.id, task.name)
 			task.run()
 		}()
+	}
+}
+
+func (s *scopeTaskScheduler) channelEventWorker() {
+	defer s.channelWorker.Done()
+	for {
+		s.channelMu.Lock()
+		if s.channelClosed && len(s.channelEvents) == 0 {
+			s.channelMu.Unlock()
+			return
+		}
+
+		cases := make([]reflect.SelectCase, 0, len(s.channelEvents)+2)
+		cases = append(cases, reflect.SelectCase{
+			Dir:  reflect.SelectRecv,
+			Chan: reflect.ValueOf(s.channelWake),
+		})
+		contextCase := -1
+		if s.ctx != nil && s.ctx.Done() != nil {
+			contextCase = len(cases)
+			cases = append(cases, reflect.SelectCase{
+				Dir:  reflect.SelectRecv,
+				Chan: reflect.ValueOf(s.ctx.Done()),
+			})
+		}
+		ids := make([]uint64, 0, len(s.channelEvents))
+		for id, event := range s.channelEvents {
+			ids = append(ids, id)
+			cases = append(cases, reflect.SelectCase{
+				Dir:  reflect.SelectRecv,
+				Chan: reflect.ValueOf(event.ch),
+			})
+		}
+		s.channelMu.Unlock()
+
+		chosen, value, ok := reflect.Select(cases)
+		if chosen == 0 {
+			continue
+		}
+		if chosen == contextCase {
+			s.rejectChannelEvents(context.Cause(s.ctx))
+			continue
+		}
+		index := chosen - 1
+		if contextCase >= 0 {
+			index--
+		}
+		if index < 0 || index >= len(ids) {
+			continue
+		}
+		id := ids[index]
+		s.channelMu.Lock()
+		event, exists := s.channelEvents[id]
+		if exists {
+			delete(s.channelEvents, id)
+		}
+		s.channelMu.Unlock()
+		if !exists {
+			continue
+		}
+		var message morpc.Message
+		if value.IsValid() && value.CanInterface() {
+			message, _ = value.Interface().(morpc.Message)
+		}
+		if err := s.submitRoot(event.name, func() {
+			event.ready(message, ok)
+		}); err != nil {
+			event.reject(err)
+		}
+		// Keep the registration pending until the ready callback has either
+		// been admitted or rejected. This closes the wait-vs-submit race in
+		// scheduler shutdown where a zero pending count could retire workers
+		// before the received message was re-admitted.
+		s.finishTask()
+	}
+}
+
+func (s *scopeTaskScheduler) rejectChannelEvents(err error) {
+	if err == nil {
+		err = context.Canceled
+	}
+	s.channelMu.Lock()
+	if len(s.channelEvents) == 0 {
+		s.channelClosed = true
+		s.channelMu.Unlock()
+		return
+	}
+	events := make([]scopeChannelEvent, 0, len(s.channelEvents))
+	for id, event := range s.channelEvents {
+		delete(s.channelEvents, id)
+		events = append(events, event)
+	}
+	s.channelClosed = true
+	s.channelMu.Unlock()
+	for i := range events {
+		s.finishTask()
+		if events[i].reject != nil {
+			events[i].reject(err)
+		}
 	}
 }
 
@@ -370,6 +493,64 @@ func (s *scopeTaskScheduler) submitEventSource(name string, task func()) error {
 	return s.submitEventSourceWithContext(name, task, false)
 }
 
+// submitChannelEvent registers one receive from an externally-fed MORPC
+// channel.  The channel dispatcher removes the registration as soon as one
+// message (or close) is observed, then admits the callback as a ready task.
+// A caller must register the next receive from its callback after it has
+// reduced the message; this makes backpressure and batch ACK ownership
+// explicit in the state machine.
+func (s *scopeTaskScheduler) submitChannelEvent(
+	name string,
+	ch <-chan morpc.Message,
+	ready func(morpc.Message, bool),
+	reject func(error),
+) error {
+	if ch == nil {
+		return errors.New("nil scope channel event")
+	}
+	if ready == nil {
+		return errors.New("nil scope channel callback")
+	}
+
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return errScopeTaskSchedulerClosed
+	}
+	if s.ctx != nil {
+		select {
+		case <-s.ctx.Done():
+			s.mu.Unlock()
+			return context.Cause(s.ctx)
+		default:
+		}
+	}
+	s.pending++
+	s.mu.Unlock()
+
+	s.channelMu.Lock()
+	if s.channelClosed {
+		s.channelMu.Unlock()
+		s.finishTask()
+		return errScopeTaskSchedulerClosed
+	}
+	s.channelNext++
+	id := s.channelNext
+	s.channelEvents[id] = scopeChannelEvent{
+		id:     id,
+		name:   name,
+		ch:     ch,
+		ready:  ready,
+		reject: reject,
+	}
+	s.channelMu.Unlock()
+	select {
+	case s.channelWake <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
 // submitTimer admits a delayed external event without parking an event
 // worker. The timer keeps one scheduler task pending until it either enqueues
 // the event or is canceled with the scheduler context.
@@ -486,8 +667,16 @@ func (s *scopeTaskScheduler) wait() {
 		s.eventClosed = true
 		s.eventCond.Broadcast()
 		s.eventMu.Unlock()
+		s.channelMu.Lock()
+		s.channelClosed = true
+		s.channelMu.Unlock()
+		select {
+		case s.channelWake <- struct{}{}:
+		default:
+		}
 		s.workers.Wait()
 		s.eventWorkers.Wait()
+		s.channelWorker.Wait()
 		logutil.Debugf("[scope-scheduler] close id=%d duration=%s", s.id, time.Since(started))
 	})
 }

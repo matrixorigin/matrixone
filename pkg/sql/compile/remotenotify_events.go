@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	pbpipeline "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -47,6 +48,7 @@ type remoteNotifyEventState struct {
 	sender     *messageSenderOnClient
 	forwardReg *process.WaitRegister
 	pending    *batch.Batch
+	decoder    remoteBatchDecoder
 	attempt    int
 
 	stateMu    sync.Mutex
@@ -124,21 +126,55 @@ func (r *remoteNotifyEventState) receiveNext() {
 		r.finish(err)
 		return
 	}
-	err := r.scheduler.submitEventSource("remote-notify-receive", func() {
-		bat, end, receiveErr := r.sender.receiveBatch()
-		if submitErr := r.scheduler.submitRoot("remote-notify-received", func() {
-			r.handleReceived(bat, end, receiveErr)
-		}); submitErr != nil {
-			if bat != nil {
-				bat.Clean(r.s.Proc.Mp())
-				_ = r.sender.acknowledgeRemoteBatch()
+	err := r.scheduler.submitChannelEvent(
+		"remote-notify-receive",
+		r.sender.receiveCh,
+		func(message morpc.Message, ok bool) {
+			bat, end, receiveErr := r.decoder.consume(r.sender, message, ok)
+			if receiveErr != nil || end || bat != nil {
+				r.handleReceived(bat, end, receiveErr)
+				return
 			}
-			r.finish(submitErr)
-		}
-	})
+			// A fragmented batch needs another transport event before it can
+			// be forwarded to the dispatch receiver.
+			if err := r.receiveNextError(); err != nil {
+				r.finish(err)
+			}
+		},
+		func(err error) {
+			r.finish(err)
+		},
+	)
 	if err != nil {
 		r.finish(err)
 	}
+}
+
+func (r *remoteNotifyEventState) receiveNextError() error {
+	if r.isFinished() {
+		return nil
+	}
+	if err := r.contextError(); err != nil {
+		r.finish(err)
+		return err
+	}
+	return r.scheduler.submitChannelEvent(
+		"remote-notify-receive",
+		r.sender.receiveCh,
+		func(message morpc.Message, ok bool) {
+			bat, end, receiveErr := r.decoder.consume(r.sender, message, ok)
+			if receiveErr != nil || end || bat != nil {
+				r.handleReceived(bat, end, receiveErr)
+				return
+			}
+			if err := r.receiveNextError(); err != nil {
+				r.finish(err)
+			}
+		},
+		func(err error) {
+			r.finish(err)
+		},
+	)
 }
 
 func (r *remoteNotifyEventState) handleReceived(

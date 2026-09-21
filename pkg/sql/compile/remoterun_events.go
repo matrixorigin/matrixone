@@ -19,6 +19,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
@@ -45,6 +46,7 @@ type remoteRunEventState struct {
 
 	connector *connector.Connector
 	pending   *batch.Batch
+	decoder   remoteBatchDecoder
 
 	fake        *value_scan.ValueScan
 	runner      *dispatch.Dispatch
@@ -84,25 +86,34 @@ func (r *remoteRunEventState) isFinished() bool {
 	return r.finished
 }
 
-// receiveNext schedules exactly one blocking stream receive. The event source
-// only decodes MORPC messages and publishes a short ready task; VM work stays
-// on the query scheduler's ready queue.
+// receiveNext registers exactly one receive from the MORPC stream. The stream
+// transport already owns the producer-side receive loop and publishes into
+// receiveCh; the scheduler's channel dispatcher turns that message into one
+// ready task without parking an event worker on network I/O.
 func (r *remoteRunEventState) receiveNext() error {
 	if r.isFinished() {
 		return nil
 	}
-	err := r.scheduler.submitEventSource("remote-receive", func() {
-		bat, end, receiveErr := r.sender.receiveBatch()
-		if err := r.scheduler.submitRoot("remote-receive-ready", func() {
-			r.handleReceived(bat, end, receiveErr)
-		}); err != nil {
-			if bat != nil {
-				bat.Clean(r.s.Proc.Mp())
-				_ = r.sender.acknowledgeRemoteBatch()
+	err := r.scheduler.submitChannelEvent(
+		"remote-receive",
+		r.sender.receiveCh,
+		func(message morpc.Message, ok bool) {
+			bat, end, receiveErr := r.decoder.consume(r.sender, message, ok)
+			if receiveErr != nil || end || bat != nil {
+				r.handleReceived(bat, end, receiveErr)
+				return
 			}
+			// A fragmented batch is not visible to the operator until all
+			// fragments arrive. Re-register the next channel event from the
+			// ready callback, preserving the same state machine ownership.
+			if err := r.receiveNext(); err != nil {
+				r.finish(err)
+			}
+		},
+		func(err error) {
 			r.finish(err)
-		}
-	})
+		},
+	)
 	if err != nil {
 		r.finish(err)
 	}

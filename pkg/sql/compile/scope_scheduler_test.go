@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 )
 
@@ -120,6 +121,40 @@ func TestScopeTaskSchedulerEventSourceDoesNotDeadlockSingleWorker(t *testing.T) 
 	if err := <-submitErr; err != nil {
 		t.Fatalf("submit dependency: %v", err)
 	}
+}
+
+func TestScopeTaskSchedulerChannelEventDoesNotOccupyEventWorker(t *testing.T) {
+	scheduler := newScopeTaskScheduler(context.Background(), 1, nil)
+	messages := make(chan morpc.Message, 1)
+	channelDone := make(chan struct{})
+	readyDone := make(chan struct{})
+
+	if err := scheduler.submitChannelEvent(
+		"channel-event",
+		messages,
+		func(morpc.Message, bool) { close(channelDone) },
+		func(error) { close(channelDone) },
+	); err != nil {
+		t.Fatalf("submit channel event: %v", err)
+	}
+	if err := scheduler.submitRoot("ready-while-channel-waits", func() {
+		close(readyDone)
+	}); err != nil {
+		t.Fatalf("submit ready task: %v", err)
+	}
+	select {
+	case <-readyDone:
+	case <-time.After(time.Second):
+		t.Fatal("ready worker was blocked by channel event")
+	}
+
+	messages <- nil
+	select {
+	case <-channelDone:
+	case <-time.After(time.Second):
+		t.Fatal("channel event did not run")
+	}
+	scheduler.wait()
 }
 
 func TestScopeTaskSchedulerTimerDoesNotOccupyEventWorker(t *testing.T) {

@@ -543,6 +543,81 @@ type messageSenderOnClient struct {
 	terminalSeen bool
 }
 
+// remoteBatchDecoder incrementally consumes one MORPC message at a time. It
+// is shared by remote-run and remote-notify state machines so neither path
+// needs to park an event worker in receiveBatch while waiting for the next
+// fragment.
+type remoteBatchDecoder struct {
+	dataBuffer    []byte
+	batchSequence uint64
+}
+
+func (d *remoteBatchDecoder) consume(
+	sender *messageSenderOnClient,
+	message morpc.Message,
+	ok bool,
+) (*batch.Batch, bool, error) {
+	if !ok {
+		sender.markReceiveClosed()
+		return nil, false, moerr.NewStreamClosed(sender.ctx)
+	}
+	if message == nil {
+		if ctxErr := sender.contextDoneError(); ctxErr != nil {
+			return nil, false, ctxErr
+		}
+		return nil, true, nil
+	}
+	m, ok := message.(*pipeline.Message)
+	if !ok || m == nil {
+		return nil, false, moerr.NewInternalErrorNoCtx("remote stream returned an unexpected message")
+	}
+	if sequence := m.GetBatchSequence(); sequence != 0 {
+		if d.batchSequence != 0 && d.batchSequence != sequence {
+			return nil, false, moerr.NewInvalidStateNoCtxf(
+				"remote batch fragments changed sequence from %d to %d",
+				d.batchSequence, sequence)
+		}
+		d.batchSequence = sequence
+	}
+	if m.IsEndMessage() {
+		if err := sender.dealRemoteTerminal(m.GetAnalyse()); err != nil {
+			return nil, false, err
+		}
+	}
+	if info, get := m.TryToGetMoErr(); get {
+		sender.markTerminal(m, false)
+		return nil, false, info
+	}
+	if m.IsEndMessage() {
+		sender.markTerminal(m, true)
+		d.dataBuffer = nil
+		d.batchSequence = 0
+		return nil, true, nil
+	}
+	if d.dataBuffer == nil {
+		d.dataBuffer = m.Data
+	} else {
+		d.dataBuffer = append(d.dataBuffer, m.Data...)
+	}
+	if m.WaitingNextToMerge() {
+		return nil, false, nil
+	}
+
+	batchSequence := d.batchSequence
+	bat, err := decodeBatch(sender.mp, d.dataBuffer)
+	d.dataBuffer = nil
+	d.batchSequence = 0
+	if err == nil {
+		if sender.pendingBatchAck != 0 {
+			bat.Clean(sender.mp)
+			return nil, false, moerr.NewInvalidStateNoCtx(
+				"remote batch ACK was not sent before receiving the next batch")
+		}
+		sender.pendingBatchAck = batchSequence
+	}
+	return bat, false, err
+}
+
 func newMessageSenderOnClient(
 	ctx context.Context,
 	sid string,
