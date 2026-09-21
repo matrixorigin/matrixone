@@ -643,9 +643,7 @@ func decimalInputLosesScale(text string, scale int32) bool {
 		return false
 	}
 	normalized := strings.TrimSpace(text)
-	if strings.HasPrefix(normalized, "+") {
-		normalized = normalized[1:]
-	}
+	normalized = strings.TrimPrefix(normalized, "+")
 	value, ok := new(big.Rat).SetString(normalized)
 	if !ok {
 		return false
