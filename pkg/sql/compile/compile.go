@@ -701,8 +701,15 @@ func (c *Compile) runControlScopeAsync(s *Scope, done func(error)) error {
 		return moerr.NewInternalErrorNoCtx("invalid control scope execution")
 	}
 	scheduler := c.ensureScopeTaskScheduler(1)
-	return scheduler.submitBlockingEvent("scope-control", func() {
-		done(c.run(s))
+	future, err := submitBlockingFuture(scheduler, "scope-control", false,
+		func() (struct{}, error) {
+			return struct{}{}, c.run(s)
+		})
+	if err != nil {
+		return err
+	}
+	return future.OnComplete(func(_ struct{}, runErr error) {
+		done(runErr)
 	})
 }
 

@@ -347,8 +347,10 @@ func (s *Scope) Run(c *Compile) (err error) {
 	if c == nil {
 		return moerr.NewInternalErrorNoCtx("nil compile for Scope.Run")
 	}
-	result := make(chan error, 1)
-	if err := s.runEventAsync(c, func(runErr error) { result <- runErr }); err != nil {
+	future, err := newScopeExecutionFuture(c, "scope-run", func(done func(error)) error {
+		return s.runEventAsync(c, done)
+	})
+	if err != nil {
 		normalized, _ := normalizeScopeRunError(
 			err,
 			s.Proc.Ctx,
@@ -356,11 +358,9 @@ func (s *Scope) Run(c *Compile) (err error) {
 		)
 		return normalized
 	}
-	select {
-	case err := <-result:
-		c.waitScopeTaskScheduler()
-		return err
-	}
+	_, err = future.Await(context.Background())
+	c.waitScopeTaskScheduler()
+	return err
 }
 
 // runEventAsync constructs one scope pipeline and admits its continuation to
@@ -485,44 +485,39 @@ func (s *Scope) runEventAsync(c *Compile, done func(error)) (err error) {
 
 	if s.DataSource != nil && !s.DataSource.isConst && s.DataSource.R == nil {
 		// Reader construction can perform storage metadata and remote I/O. Keep
-		// it out of the ready worker; the completion event admits the VM only
+		// it out of the ready worker; the Future completion admits the VM only
 		// after the reader is fully bound to this pipeline generation.
-		return scheduler.submitBlockingEvent("scope-reader", func() {
-			var readers []engine.Reader
-			var buildErr error
-			func() {
-				defer func() {
-					if recovered := recover(); recovered != nil {
-						buildErr = moerr.ConvertPanicError(s.Proc.Ctx, recovered)
-					}
-				}()
+		future, err := submitBlockingFuture(scheduler, "scope-reader", false,
+			func() ([]engine.Reader, error) {
+				var (
+					readers  []engine.Reader
+					buildErr error
+				)
 				s.NodeInfo.Data = readutil.BuildEmptyRelData()
 				stats := statistic.StatsInfoFromContext(c.proc.GetTopContext())
 				buildStart := time.Now()
 				readers, buildErr = s.buildReaders(c)
 				stats.AddBuildReaderTimeConsumption(time.Since(buildStart))
-			}()
-			if buildErr == nil {
-				if len(readers) == 0 || readers[0] == nil {
+				if buildErr == nil && (len(readers) == 0 || readers[0] == nil) {
 					buildErr = moerr.NewInternalErrorNoCtx("scope reader construction returned no reader")
-				} else {
-					s.DataSource.R = readers[0]
-					s.DataSource.R.SetOrderBy(s.DataSource.OrderBy)
-					s.DataSource.R.SetIndexParam(s.DataSource.IndexReaderParam)
 				}
+				return readers, buildErr
+			})
+		if err != nil {
+			return err
+		}
+		return future.OnComplete(func(readers []engine.Reader, buildErr error) {
+			if buildErr != nil {
+				if cleanupErr := scheduleCleanup(buildErr, done); cleanupErr != nil {
+					done(cleanupErr)
+				}
+				return
 			}
-			if err := scheduler.submitRoot("scope-reader-ready", func() {
-				if buildErr != nil {
-					if cleanupErr := scheduleCleanup(buildErr, done); cleanupErr != nil {
-						done(cleanupErr)
-					}
-					return
-				}
-				if startErr := startContinuation(); startErr != nil {
-					done(startErr)
-				}
-			}); err != nil {
-				done(err)
+			s.DataSource.R = readers[0]
+			s.DataSource.R.SetOrderBy(s.DataSource.OrderBy)
+			s.DataSource.R.SetIndexParam(s.DataSource.IndexReaderParam)
+			if startErr := startContinuation(); startErr != nil {
+				done(startErr)
 			}
 		})
 	}
@@ -784,13 +779,13 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	// implementation here: the production path and this compatibility entry
 	// both use the same event-driven remote state machine.  The scheduler owns
 	// transport waits and re-admits VM continuations through ready events.
-	result := make(chan error, 1)
-	if err := s.remoteRunAsync(c, func(runErr error) {
-		result <- runErr
-	}); err != nil {
+	future, err := newScopeExecutionFuture(c, "remote-run", func(done func(error)) error {
+		return s.remoteRunAsync(c, done)
+	})
+	if err != nil {
 		return err
 	}
-	err := <-result
+	_, err = future.Await(context.Background())
 	c.waitScopeTaskScheduler()
 	return err
 }
@@ -827,43 +822,59 @@ func (s *Scope) remoteRunAsync(c *Compile, done func(error)) error {
 	}
 	s.ScopeAnalyzer.Start()
 	scheduler := c.ensureScopeTaskScheduler(max(1, len(c.scopes)))
-	// Encoding, stream creation, and the initial pipeline send may all perform
-	// serialization or network I/O. Admit that preparation as an external
-	// event; only the resulting state-machine admission returns to the ready
-	// queue.
+	// Encoding and stream creation may perform serialization or network I/O.
+	// Adapt only that synchronous preparation to a Future; the resulting
+	// state-machine admission returns to the ready queue.
 	// Even an already-canceled query must admit the initial transport setup.
 	// The sender owns the stream-close/StopSending handshake; rejecting this
 	// event at admission would skip that cleanup and leave the remote receiver
 	// without a terminal signal.  The state machine still observes cancellation
 	// before admitting any VM work.
-	err := scheduler.submitBlockingEventWithContext("remote-start", func() {
-		sender, withoutOutput, scopeData, procData, debugMsg, prepareErr := s.prepareRemoteRunData(c)
-		if prepareErr != nil {
-			if sender != nil {
-				sender.close()
+	type remoteStartData struct {
+		sender        *messageSenderOnClient
+		withoutOutput bool
+		scopeData     []byte
+		procData      []byte
+		debugMsg      string
+	}
+	future, err := submitBlockingFuture(scheduler, "remote-start", true,
+		func() (remoteStartData, error) {
+			sender, withoutOutput, scopeData, procData, debugMsg, prepareErr := s.prepareRemoteRunData(c)
+			if prepareErr != nil {
+				if sender != nil {
+					sender.close()
+				}
+				return remoteStartData{}, prepareErr
 			}
+			return remoteStartData{
+				sender:        sender,
+				withoutOutput: withoutOutput,
+				scopeData:     scopeData,
+				procData:      procData,
+				debugMsg:      debugMsg,
+			}, nil
+		})
+	if err != nil {
+		s.ScopeAnalyzer.Stop()
+		return err
+	}
+	err = future.OnComplete(func(data remoteStartData, prepareErr error) {
+		if prepareErr != nil {
 			failErr := s.failRemoteRunBeforeStart(c, prepareErr)
 			s.ScopeAnalyzer.Stop()
-			if err := scheduler.submitRoot("remote-start-failed", func() {
-				done(failErr)
-			}); err != nil {
-				done(err)
-			}
+			done(failErr)
 			return
 		}
+		sender := data.sender
 		sendDone := func(sendErr error) {
 			if sendErr != nil {
 				sender.close()
 				failErr := s.failRemoteRunBeforeStart(c, sendErr)
 				s.ScopeAnalyzer.Stop()
-				if err := scheduler.submitRoot("remote-start-send-failed", func() {
-					done(failErr)
-				}); err != nil {
-					done(err)
-				}
+				done(failErr)
 				return
 			}
-			state := newRemoteRunEventState(s, c, scheduler, sender, withoutOutput, done)
+			state := newRemoteRunEventState(s, c, scheduler, sender, data.withoutOutput, done)
 			if err := scheduler.submitRoot("remote-start-ready", func() {
 				if startErr := state.start(); startErr != nil {
 					state.finish(startErr)
@@ -876,18 +887,18 @@ func (s *Scope) remoteRunAsync(c *Compile, done func(error)) error {
 				state.finish(err)
 			}
 		}
-		if err := sender.sendPipelineAsync(
+		if sendErr := sender.sendPipelineAsync(
 			scheduler,
-			scopeData,
-			procData,
-			withoutOutput,
+			data.scopeData,
+			data.procData,
+			data.withoutOutput,
 			maxMessageSizeToMoRpc,
-			debugMsg,
+			data.debugMsg,
 			sendDone,
-		); err != nil {
-			sendDone(err)
+		); sendErr != nil {
+			sendDone(sendErr)
 		}
-	}, true)
+	})
 	if err != nil {
 		s.ScopeAnalyzer.Stop()
 	}
@@ -999,11 +1010,13 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 	// actual execution is delegated to the same asynchronous construction and
 	// continuation path used by MergeRun; no second blocking VM implementation
 	// is allowed to grow here.
-	result := make(chan error, 1)
-	if err := s.parallelRunAsync(c, func(runErr error) { result <- runErr }); err != nil {
+	future, err := newScopeExecutionFuture(c, "parallel-run", func(done func(error)) error {
+		return s.parallelRunAsync(c, done)
+	})
+	if err != nil {
 		return err
 	}
-	err = <-result
+	_, err = future.Await(context.Background())
 	c.waitScopeTaskScheduler()
 	return err
 }
@@ -1034,52 +1047,59 @@ func (s *Scope) parallelRunAsync(c *Compile, done func(error)) (err error) {
 	}
 
 	// Reader expansion and parallel-scope construction can block on catalog,
-	// metadata, or storage I/O. Keep that work off the ready queue; only the
-	// resulting scope admission is returned to the event-driven VM path.
+	// metadata, or storage I/O. The Future adapter keeps that compatibility
+	// operation off the ready queue and re-admits the state transition only
+	// after construction has completed.
 	scheduler := c.ensureScopeTaskScheduler(max(1, len(c.scopes)))
-	return scheduler.submitBlockingEvent("parallel-scope-build", func() {
-		var parallelScope *Scope
-		var buildErr error
-		defer func() {
-			if recovered := recover(); recovered != nil {
-				buildErr = moerr.ConvertPanicError(s.Proc.Ctx, recovered)
-			}
-			if buildErr != nil {
-				queryCtx := scopeRunQueryContext(s.Proc)
-				normalizedErr, normalized := normalizeScopeRunError(buildErr, s.Proc.Ctx, queryCtx)
-				if isScopeCancellationError(buildErr) {
-					reportParallelScopeBuildCancellation(s, buildErr, normalizedErr, normalized, queryCtx)
+	future, err := submitBlockingFuture(scheduler, "parallel-scope-build", false,
+		func() (*Scope, error) {
+			var parallelScope *Scope
+			var buildErr error
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					buildErr = moerr.ConvertPanicError(s.Proc.Ctx, recovered)
 				}
-				pipeline.NewMerge(s.RootOp).Cleanup(s.Proc, normalizedErr != nil, c.isPrepare, normalizedErr)
-				complete(normalizedErr)
-				return
+			}()
+			switch {
+			case s.IsLoad:
+				parallelScope, buildErr = buildLoadParallelRun(s, c)
+			case s.isTableScan():
+				parallelScope, buildErr = buildScanParallelRun(s, c)
+			case s.IsTbFunc:
+				parallelScope, buildErr = buildLoadParallelRun(s, c)
+			default:
+				parallelScope = s
 			}
+			return parallelScope, buildErr
+		})
+	if err != nil {
+		return err
+	}
+	return future.OnComplete(func(parallelScope *Scope, buildErr error) {
+		if buildErr != nil {
+			queryCtx := scopeRunQueryContext(s.Proc)
+			normalizedErr, normalized := normalizeScopeRunError(buildErr, s.Proc.Ctx, queryCtx)
+			if isScopeCancellationError(buildErr) {
+				reportParallelScopeBuildCancellation(s, buildErr, normalizedErr, normalized, queryCtx)
+			}
+			pipeline.NewMerge(s.RootOp).Cleanup(s.Proc, normalizedErr != nil, c.isPrepare, normalizedErr)
+			complete(normalizedErr)
+			return
+		}
 
-			if parallelScope == s {
-				if runErr := parallelScope.runEventAsync(c, complete); runErr != nil {
-					complete(runErr)
-				}
-				return
-			}
-
-			if s.ScopeAnalyzer != nil {
-				s.ScopeAnalyzer.Stop()
-			}
-			setContextForParallelScope(parallelScope, s.Proc.Ctx, s.Proc.Cancel)
-			if runErr := parallelScope.mergeRunAsync(c, complete); runErr != nil {
+		if parallelScope == s {
+			if runErr := parallelScope.runEventAsync(c, complete); runErr != nil {
 				complete(runErr)
 			}
-		}()
+			return
+		}
 
-		switch {
-		case s.IsLoad:
-			parallelScope, buildErr = buildLoadParallelRun(s, c)
-		case s.isTableScan():
-			parallelScope, buildErr = buildScanParallelRun(s, c)
-		case s.IsTbFunc:
-			parallelScope, buildErr = buildLoadParallelRun(s, c)
-		default:
-			parallelScope = s
+		if s.ScopeAnalyzer != nil {
+			s.ScopeAnalyzer.Stop()
+		}
+		setContextForParallelScope(parallelScope, s.Proc.Ctx, s.Proc.Cancel)
+		if runErr := parallelScope.mergeRunAsync(c, complete); runErr != nil {
+			complete(runErr)
 		}
 	})
 }

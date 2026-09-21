@@ -97,15 +97,15 @@ func (s *Scope) MergeRun(c *Compile) error {
 	if c == nil {
 		return moerr.NewInternalErrorNoCtx("nil compile for MergeRun")
 	}
-	result := make(chan error, 1)
-	if err := s.mergeRunAsync(c, func(err error) { result <- err }); err != nil {
+	future, err := newScopeExecutionFuture(c, "merge-run", func(done func(error)) error {
+		return s.mergeRunAsync(c, done)
+	})
+	if err != nil {
 		return err
 	}
-	select {
-	case err := <-result:
-		c.waitScopeTaskScheduler()
-		return err
-	}
+	_, err = future.Await(context.Background())
+	c.waitScopeTaskScheduler()
+	return err
 }
 
 // mergeRunAsync starts MergeRun and returns after its continuation has been

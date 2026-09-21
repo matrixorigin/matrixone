@@ -160,6 +160,64 @@ func TestScopeTaskSchedulerBlockingEventDoesNotOccupyEventWorker(t *testing.T) {
 	scheduler.wait()
 }
 
+func TestScopeFutureReadmitsCompletionToReadyQueue(t *testing.T) {
+	scheduler := newScopeTaskScheduler(context.Background(), 1, nil)
+	operationStarted := make(chan struct{})
+	callbackDone := make(chan int, 1)
+	future, err := submitBlockingFuture(scheduler, "future-reader", false, func() (int, error) {
+		close(operationStarted)
+		return 42, nil
+	})
+	if err != nil {
+		t.Fatalf("submit future: %v", err)
+	}
+	if err := future.OnComplete(func(value int, err error) {
+		if err != nil {
+			t.Errorf("future callback error: %v", err)
+			return
+		}
+		callbackDone <- value
+	}); err != nil {
+		t.Fatalf("register future callback: %v", err)
+	}
+	select {
+	case <-operationStarted:
+	case <-time.After(time.Second):
+		t.Fatal("future operation did not start")
+	}
+	select {
+	case value := <-callbackDone:
+		if value != 42 {
+			t.Fatalf("future value: got %d, want 42", value)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("future callback did not run")
+	}
+	value, err := future.Await(context.Background())
+	if err != nil {
+		t.Fatalf("await future: %v", err)
+	}
+	if value != 42 {
+		t.Fatalf("awaited value: got %d, want 42", value)
+	}
+	scheduler.wait()
+}
+
+func TestScopeFutureConvertsOperationPanic(t *testing.T) {
+	scheduler := newScopeTaskScheduler(context.Background(), 1, nil)
+	future, err := submitBlockingFuture(scheduler, "future-panic", false, func() (struct{}, error) {
+		panic("future operation failure")
+	})
+	if err != nil {
+		t.Fatalf("submit future: %v", err)
+	}
+	_, err = future.Await(context.Background())
+	if err == nil {
+		t.Fatal("expected panic conversion error")
+	}
+	scheduler.wait()
+}
+
 func TestScopeTaskSchedulerChannelEventDoesNotOccupyEventWorker(t *testing.T) {
 	scheduler := newScopeTaskScheduler(context.Background(), 1, nil)
 	messages := make(chan morpc.Message, 1)
