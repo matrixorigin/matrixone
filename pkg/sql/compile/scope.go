@@ -384,9 +384,14 @@ func (s *Scope) runEventAsync(c *Compile, done func(error)) (err error) {
 	// Parallel/remote scope construction can introduce operators after the
 	// statement-level allocation owner walk has run. Reconcile this scope at
 	// the execution boundary so every event-driven continuation observes the
-	// same account before vm.Prepare allocates join/hash state.
-	if err := c.attachRuntimeAllocationOwners([]*Scope{s}); err != nil {
-		return err
+	// same account before vm.Prepare allocates join/hash state.  Direct
+	// Scope.Run/MergeRun callers may install an operator-owned account
+	// themselves (the public compatibility API does not open a statement
+	// attempt); in that mode there is no lifecycle attempt to attach to.
+	if c.allocationAttempt != nil {
+		if err := c.attachRuntimeAllocationOwners([]*Scope{s}); err != nil {
+			return err
+		}
 	}
 	// Some compile-time helper scopes are built with NewNoContextChildProc and
 	// are not reachable from the top-level context walk.  A continuation must

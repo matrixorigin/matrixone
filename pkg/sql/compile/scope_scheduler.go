@@ -631,17 +631,6 @@ func (s *scopeTaskScheduler) submitChannelEvent(
 	return err
 }
 
-func (s *scopeTaskScheduler) submitChannelEventWithContext(
-	name string,
-	ch <-chan morpc.Message,
-	ready func(morpc.Message, bool),
-	reject func(error),
-	allowCanceled bool,
-) error {
-	_, err := s.submitChannelEventCancelable(name, ch, ready, reject, allowCanceled)
-	return err
-}
-
 // submitChannelEventCancelable is the ownership form used by teardown state
 // machines. Removing a pending registration releases its scheduler task when
 // a timeout wins before the transport channel produces a value.

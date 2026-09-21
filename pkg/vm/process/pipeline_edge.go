@@ -437,13 +437,14 @@ func (e *PipelineEdge) trySendTerminal(signal PipelineSignal) bool {
 		return false
 	}
 	delivered := true
+fatalSendLoop:
 	for e.fatalDelivered < e.fatalRemaining {
 		select {
 		case e.Ch2 <- signal:
 			e.fatalDelivered++
 		default:
 			delivered = false
-			break
+			break fatalSendLoop
 		}
 		if !delivered {
 			break
@@ -503,13 +504,14 @@ func (e *PipelineEdge) sendTerminalWithContext(ctx context.Context, signal Pipel
 	// enqueue as many fatal signals as fit and let the receiver synthesize any
 	// missing remainder from the recorded state.
 	delivered := true
+fatalSendLoop:
 	for e.fatalDelivered < e.fatalRemaining {
 		select {
 		case e.Ch2 <- signal:
 			e.fatalDelivered++
 		default:
 			delivered = false
-			break
+			break fatalSendLoop
 		}
 		if !delivered {
 			break

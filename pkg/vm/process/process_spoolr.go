@@ -548,6 +548,7 @@ func (receiver *PipelineSignalReceiver) TryGetNextBatch(
 	receiver.releaseCurrent()
 	for receiver.alive > 0 {
 		madeProgress := false
+	scanSources:
 		for i, reg := range receiver.srcReg {
 			if reg == nil {
 				continue
@@ -559,7 +560,7 @@ func (receiver *PipelineSignalReceiver) TryGetNextBatch(
 					return content, info, true
 				}
 				madeProgress = true
-				break
+				break scanSources
 			}
 			select {
 			case <-reg.Done():
@@ -626,8 +627,7 @@ func (receiver *PipelineSignalReceiver) RegisterReady(callback func()) error {
 	}
 	var once sync.Once
 	entry := &receiverReadyCallback{}
-	var wake func()
-	wake = func() {
+	wake := func() {
 		once.Do(func() {
 			receiver.removeReadyCallback(entry)
 			callback()
