@@ -343,6 +343,12 @@ func useExplicitCastOverload(typ tree.ResolvableTypeReference) bool {
 		// Character and binary casts are semantic boundaries even though the
 		// value conversion is shared with ordinary overload-coercion casts.
 		return true
+	case defines.MYSQL_TYPE_DATE, defines.MYSQL_TYPE_DATETIME,
+		defines.MYSQL_TYPE_TIMESTAMP:
+		// Temporal CASTs read SQL mode and, for TIMESTAMP, the session time
+		// zone. Keep user-written casts on the explicit execution path so
+		// prepared plans do not confuse them with implicit type reconciliation.
+		return true
 	case defines.MYSQL_TYPE_LONGLONG:
 		family := strings.ToLower(internal.FamilyString)
 		return family == "signed" || family == "integer" ||
