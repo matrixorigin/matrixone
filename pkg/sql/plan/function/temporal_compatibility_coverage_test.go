@@ -335,5 +335,7 @@ func TestTemporalCompatibilityErrorAndBoundaryHelpers(t *testing.T) {
 
 	require.Equal(t, types.MySQLTimeFunctionMaxForScale(6), signedMySQLTimeFunctionMax(false))
 	require.Equal(t, -types.MySQLTimeFunctionMaxForScale(6), signedMySQLTimeFunctionMax(true))
-	require.Equal(t, types.MySQLTimeMaxForScale(6), timeDiff(types.TimeFromClock(false, 838, 59, 59, 0), -tm))
+	diff, err := timeDiff(types.TimeFromClock(false, 838, 59, 59, 0), -tm)
+	require.NoError(t, err)
+	require.Equal(t, types.MySQLTimeMaxForScale(6), diff)
 }
