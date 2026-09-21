@@ -124,14 +124,21 @@ func TestEvictKeyWaitsForOlderGenerationUnderSameKey(t *testing.T) {
 	go func() { bReturned <- c.EvictKey(key) }()
 	<-genB.started
 
-	// B completes first. This must NOT clear A's in-flight signal.
+	// B's own generation finishes tearing down first. This must NOT clear A's in-flight signal, and --
+	// critically -- B's EvictCall removed the current generation (returns 1) yet must STILL wait for the
+	// prior generation A before returning: the success path shares the same completion barrier as the
+	// failure path (the P2 fix). Returning 1 here while A is alive would be a premature "gone".
 	close(genB.release)
-	require.Equal(t, int64(1), <-bReturned, "B performed its eviction")
 
-	// A third EvictKey finds no map entry, but A is still tearing down: it MUST wait, not report 0.
+	// A third EvictKey finds no map entry, but A is still tearing down: it too MUST wait, not report 0.
 	cReturned := make(chan int64, 1)
 	go func() { cReturned <- c.EvictKey(key) }()
+
+	// Neither the success-path call (B, removed 1) nor the no-occupant call (C, removed 0) may return
+	// while generation A is still tearing down under the same key.
 	select {
+	case <-bReturned:
+		t.Fatal("EvictKey returned after removing generation B while prior generation A was still tearing down (success path skipped the completion barrier, #28985)")
 	case <-cReturned:
 		t.Fatal("EvictKey returned before generation A's teardown finished (older-generation signal overwritten, #28985)")
 	case <-aReturned:
@@ -140,9 +147,10 @@ func TestEvictKeyWaitsForOlderGenerationUnderSameKey(t *testing.T) {
 		// correctly still blocked on A
 	}
 
-	// Release A; A's own EvictKey and the waiting third call both settle.
+	// Release A; A's own EvictKey, B's success-path call, and the waiting third call all settle.
 	close(genA.release)
 	require.Equal(t, int64(1), <-aReturned, "A performed its eviction")
+	require.Equal(t, int64(1), <-bReturned, "B removed generation B, returning only after A settled")
 	select {
 	case got := <-cReturned:
 		require.Equal(t, int64(0), got, "third call removed nothing, returning only after A settled")

@@ -844,15 +844,20 @@ func (c *VectorIndexCache) EvictKey(key string) int64 {
 	// the caller that won the claim. A pre-count instead let two concurrent callers both see 1 and
 	// both report evicted=1 while only one owned the removal, and let a losing caller report success
 	// though it removed nothing. The winner's Destroy waits out any in-flight search before returning.
+	var removed int64
 	if c.evictEntry(key, nil, "ctl") {
-		return 1
+		removed = 1
 	}
-	// We did not perform the eviction: the key was absent, or a concurrent evictor (another EvictKey,
-	// a TTL/stale sweep, empty-generation, shutdown, ...) already claimed it. Do NOT report a
-	// premature success -- wait until any in-flight teardown of this key has fully completed (the
-	// in-flight search drained and the native handle freed) before returning 0, so a caller polling
-	// for "gone" cannot observe it while the old resource is still alive (#28985). Both waits are
-	// bounded: whoever removes an entry always follows with Destroy, which closes both signals.
+	// The count above is what THIS call removed; it is independent of the completion barrier below.
+	// Before returning -- on BOTH the success and the failure path -- wait until every OTHER in-flight
+	// teardown of this key has fully completed (its in-flight search drained and native handle freed),
+	// so a caller polling for "gone" cannot observe a still-alive resource for the key (#28985). This
+	// matters even when we just removed the current generation: a PRIOR generation can be
+	// removed-but-still-destroying under the same key (its evictor parked in Destroy) while the reload
+	// we evicted occupied the map. Returning removed==1 immediately would report completion while that
+	// prior generation is still alive. Both waits are bounded: whoever removes an entry always follows
+	// with Destroy, which closes both signals; our own eviction, if any, already cleared its channel
+	// via finishEviction before evictEntry returned, so this never self-waits.
 	if hadOccupant {
 		if algo, ok := occupant.(*VectorIndexSearch); ok {
 			_ = algo.awaitDestroyed(context.Background())
@@ -874,7 +879,7 @@ func (c *VectorIndexCache) EvictKey(key string) int64 {
 	for _, ch := range pending {
 		<-ch
 	}
-	return 0
+	return removed
 }
 
 // Keys returns the exact cache keys this cache currently holds, sorted. Read-only introspection
