@@ -867,7 +867,15 @@ func (s *TableDetector) scanTable() error {
 
 			key := GenDbTblKey(dbName, tblName)
 
+			// The callback may clear one-shot metadata while a scan is building
+			// its next snapshot. Protect the shared map lookup and clone with the
+			// same mutex used by publication/cleanup.
+			s.mu.Lock()
 			oldInfo, exists := s.Mp[accountId][key]
+			if exists {
+				oldInfo = oldInfo.Clone()
+			}
+			s.mu.Unlock()
 			newInfo := &DbTableInfo{
 				SourceDbId:        dbId,
 				SourceDbName:      dbName,
@@ -881,7 +889,7 @@ func (s *TableDetector) scanTable() error {
 				mp[accountId][key] = newInfo
 			} else {
 				idChanged := oldInfo.OnlyDiffinTblId(newInfo)
-				updatedInfo := oldInfo.Clone()
+				updatedInfo := oldInfo
 				updatedInfo.SourceDbId = dbId
 				updatedInfo.SourceDbName = dbName
 				updatedInfo.SourceTblId = tblId

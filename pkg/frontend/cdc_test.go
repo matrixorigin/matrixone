@@ -5020,6 +5020,11 @@ func TestCdcTask_handleNewTables_addpipeline(t *testing.T) {
 		claimFence: cdc.NewOwnerFenceForGeneration(
 			time.UnixMicro(123), func(context.Context) error { return nil }),
 	}
+	detector := &cdc.TableDetector{Mp: make(map[uint32]cdc.TblMap)}
+	stubDetector := gostub.Stub(&cdc.GetTableDetector, func(string) *cdc.TableDetector {
+		return detector
+	})
+	defer stubDetector.Reset()
 
 	mp := map[uint32]cdc.TblMap{
 		0: {
@@ -5027,6 +5032,7 @@ func TestCdcTask_handleNewTables_addpipeline(t *testing.T) {
 			"db1.tb2": &cdc.DbTableInfo{IdChanged: true},
 		},
 	}
+	detector.Mp = mp
 
 	fault.Enable()
 	objectio.SimpleInject(objectio.FJ_CDCAddExecErr)
@@ -5038,7 +5044,8 @@ func TestCdcTask_handleNewTables_addpipeline(t *testing.T) {
 	objectio.SimpleInject(objectio.FJ_CDCAddExecConsumeTruncate)
 	err = cdcTask.handleNewTables(mp)
 	require.NoError(t, err)
-	require.Equal(t, false, mp[0]["db1.tb2"].IdChanged)
+	require.True(t, mp[0]["db1.tb2"].IdChanged, "callback snapshot is immutable")
+	require.False(t, detector.Mp[0]["db1.tb2"].IdChanged, "detector-owned marker is consumed")
 	fault.Disable()
 }
 
