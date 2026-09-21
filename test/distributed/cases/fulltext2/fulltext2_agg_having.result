@@ -90,4 +90,37 @@ from wd group by cat having max(match(body) against('alpha')) > 0
 3  ¦  0.031008132  ¦  2
 select id from docs group by id, body having max(match(body) against('alpha')) >= floor(1e-1) order by id;
 not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
+create table rd(id int primary key, cat int, body text, digits int, fulltext2 index rdft(body));
+insert into rd values
+(1,10,'alpha',null),(2,10,'beta',0),
+(3,20,'alpha',2),(4,20,'gamma',0),
+(5,30,'beta gamma',0),(6,30,'gamma delta',0),
+(7,40,'delta beta',0),(8,40,'gamma beta',0);
+alter table rd alter reindex rdft fulltext2 force_sync;
+explain select cat, sum(round(match(body) against('alpha'), 2)) as total
+from rd group by cat having max(match(body) against('alpha')) > 0 order by cat;
+-- @regex("fulltext2_search", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: rd.cat INTERNAL  𝄀
+        ->  Aggregate  𝄀
+              Group Key: rd.cat  𝄀
+              Aggregate Functions: max(mo_fulltext_alias_0.__mo_ft_score), sum(round(cast(mo_fulltext_alias_0.__mo_ft_score AS DOUBLE), 2))  𝄀
+              Filter Cond: (max(MATCH (body) AGAINST ('alpha')) > 0)  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (rd.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+                    Runtime Filter Build: #[-1,0]  𝄀
+                    ->  Table Scan on ft2_agg_having.rd  𝄀
+                          Runtime Filter Probe: rd.id  𝄀
+                    ->  Table Function on fulltext2_search
+select cat, sum(round(match(body) against('alpha'), 2)) as total
+from rd group by cat having max(match(body) against('alpha')) > 0 order by cat;
+➤ cat[4,32,0]  ¦  total[8,53,31]  𝄀
+10  ¦  0.43  𝄀
+20  ¦  0.43
+select cat, sum(round(match(body) against('alpha'), digits)) as total
+from rd group by cat having max(match(body) against('alpha')) > 0 order by cat;
+not supported: MATCH() AGAINST() function cannot be replaced by FULLTEXT INDEX and full table scan with fulltext search is not supported yet.
 drop database ft2_agg_having;

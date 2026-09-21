@@ -1868,6 +1868,52 @@ func monotoneWrappedFullTextMatch(expr *plan.Expr) *plan.Expr {
 	return nil
 }
 
+// wrappedMatchDropSafe finds the fulltext_match inside expr AND proves the wrapper is invariant to
+// dropping a non-matching row. Driving the index INNER-joins the matchers before aggregation, so a
+// non-matching row (relevance 0) is removed; its wrapped value must therefore be a deterministic,
+// non-NULL zero -- the identity for SUM and <= any positive matched relevance for MAX.
+//
+// This is DISTINCT from monotoneWrappedFullTextMatch, which only discovers the nested MATCH: that
+// discovery follows argument 0 and ignores a wrapper's other arguments and NULL behaviour. round
+// takes a per-row `digits` (round(score, digits) returns NULL when digits is NULL). If digits is a
+// column or nullable, a dropped non-matching row can map to a non-NULL 0 while the kept rows map to
+// NULL -- e.g. a group with (body='alpha', digits=NULL) kept and (body='beta', digits=0) dropped
+// turns SUM([NULL,0])=0 into SUM([NULL])=NULL, silently losing the group. So every argument other
+// than the wrapped value must be a constant, non-NULL literal. floor/ceil take only the value, and
+// cast's extra argument is a compile-time type; each maps 0 -> non-NULL 0 (a non-numeric cast under
+// SUM/MAX is rejected at bind time). Returns (match, true) only when the whole chain is drop-safe.
+func wrappedMatchDropSafe(expr *plan.Expr) (*plan.Expr, bool) {
+	for expr != nil {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil {
+			return nil, false
+		}
+		switch fn.Func.ObjName {
+		case "fulltext_match":
+			return expr, true
+		case "floor", "ceil", "cast":
+			if len(fn.Args) == 0 {
+				return nil, false
+			}
+			expr = fn.Args[0]
+		case "round":
+			if len(fn.Args) == 0 {
+				return nil, false
+			}
+			for _, extra := range fn.Args[1:] {
+				lit := extra.GetLit()
+				if lit == nil || lit.Isnull {
+					return nil, false
+				}
+			}
+			expr = fn.Args[0]
+		default:
+			return nil, false
+		}
+	}
+	return nil, false
+}
+
 // nonNegativeConstValue returns the numeric value of a non-negative literal.
 // fulltextRuntimeScoreGuard rebuilds the score comparisons on matchFn that the planner
 // could not test, as a boolean the engine can.
@@ -2426,8 +2472,8 @@ func (builder *QueryBuilder) aggOutputInvariantToMatcherFilter(aggNode *plan.Nod
 		if fn == nil || fn.Func == nil || !safeAggForFullTextDriver(fn.Func.ObjName) || len(fn.Args) != 1 {
 			return false
 		}
-		m := monotoneWrappedFullTextMatch(fn.Args[0])
-		if m == nil {
+		m, safe := wrappedMatchDropSafe(fn.Args[0])
+		if m == nil || !safe {
 			return false
 		}
 		mfn := m.GetF()

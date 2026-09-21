@@ -550,4 +550,46 @@ func TestAggOutputInvariantToMatcherFilter(t *testing.T) {
 	require.False(t, builder.aggOutputInvariantToMatcherFilter(agg([]*planpb.Expr{ftAggFn("max", other)}, nil), drivers), "max over a different match")
 	require.False(t, builder.aggOutputInvariantToMatcherFilter(agg([]*planpb.Expr{ftAggFn("max", match)}, []*planpb.Expr{match}), drivers), "grouping key is a match")
 	require.True(t, builder.aggOutputInvariantToMatcherFilter(agg([]*planpb.Expr{ftAggFn("max", match)}, []*planpb.Expr{ftjColExpr(tableDef, scanTag, 1)}), drivers))
+
+	// Wrapped drivers: round with a constant, non-null digits is drop-safe (round(0,c)=0 is the
+	// SUM identity), but a nullable or per-row (column) digits is NOT -- dropping a non-matching
+	// row whose round(0,digits) is a non-null 0 while the kept rows round to NULL flips SUM/MAX
+	// from 0 to NULL, silently losing the group (#29065).
+	wrap := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		return &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: name}, Args: args}}}
+	}
+	nullLit := &planpb.Expr{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}}}
+	colDigits := ftjColExpr(tableDef, scanTag, 1)
+	require.True(t, builder.aggOutputInvariantToMatcherFilter(agg([]*planpb.Expr{ftAggFn("sum", wrap("round", match, makePlan2Int64ConstExprWithType(2)))}, nil), drivers), "round with constant digits is drop-safe")
+	require.False(t, builder.aggOutputInvariantToMatcherFilter(agg([]*planpb.Expr{ftAggFn("sum", wrap("round", match, nullLit))}, nil), drivers), "round with NULL digits is not drop-safe")
+	require.False(t, builder.aggOutputInvariantToMatcherFilter(agg([]*planpb.Expr{ftAggFn("sum", wrap("round", match, colDigits))}, nil), drivers), "round with per-row column digits is not drop-safe")
+}
+
+func TestWrappedMatchDropSafe(t *testing.T) {
+	match := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: "fulltext_match"}}}}
+	col := &planpb.Expr{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}
+	nullLit := &planpb.Expr{Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}}}
+	constDigits := makePlan2Int64ConstExprWithType(2)
+	wrap := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		return &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: name}, Args: args}}}
+	}
+	ok := func(e *planpb.Expr) bool { m, s := wrappedMatchDropSafe(e); return m != nil && s }
+
+	// Bare match and single-value monotone wrappers are drop-safe (each maps 0 -> non-null 0).
+	require.True(t, ok(match))
+	require.True(t, ok(wrap("floor", match)))
+	require.True(t, ok(wrap("ceil", match)))
+	require.True(t, ok(wrap("round", match)), "round with no digits")
+	require.True(t, ok(wrap("round", match, constDigits)), "round with constant non-null digits")
+	require.True(t, ok(wrap("cast", match, constDigits)), "cast's extra arg is a compile-time type")
+	require.True(t, ok(wrap("cast", wrap("round", match, constDigits))), "nested safe wrappers")
+
+	// round with a nullable or per-row (column) digits is NOT drop-safe (#29065).
+	require.False(t, ok(wrap("round", match, nullLit)), "NULL digits maps kept rows to NULL")
+	require.False(t, ok(wrap("round", match, col)), "column digits varies per row")
+
+	// no match, non-monotone wrapper, or an empty wrapper.
+	require.False(t, ok(col))
+	require.False(t, ok(wrap("+", match)))
+	require.False(t, ok(wrap("round")), "no args")
 }

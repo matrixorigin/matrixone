@@ -87,4 +87,30 @@ select cat, score, rn from (
 -- (ids 3,5) instead of rejecting.
 select id from docs group by id, body having max(match(body) against('alpha')) >= floor(1e-1) order by id;
 
+-- #29065 P1: an aggregate wrapper with a per-row / nullable extra argument is NOT drop-safe.
+-- ROUND(MATCH,digits) returns NULL when digits is NULL. Driving drops non-matching rows before
+-- aggregation, so a group whose kept (matching) row rounds to NULL and whose dropped (non-matching)
+-- row rounded to a non-null 0 flips SUM([NULL,0])=0 into SUM([NULL])=NULL, silently losing the group.
+-- cat 10 has (alpha,digits=NULL) matching and (beta,digits=0) non-matching -- exactly that shape.
+create table rd(id int primary key, cat int, body text, digits int, fulltext2 index rdft(body));
+insert into rd values
+  (1,10,'alpha',null),(2,10,'beta',0),
+  (3,20,'alpha',2),(4,20,'gamma',0),
+  (5,30,'beta gamma',0),(6,30,'gamma delta',0),
+  (7,40,'delta beta',0),(8,40,'gamma beta',0);
+alter table rd alter reindex rdft fulltext2 force_sync;
+
+-- Constant, non-null digits IS drop-safe: round(0,2)=0 is the SUM identity, so driving is
+-- result-preserving and the index is used.
+-- @separator:table
+-- @regex("fulltext2_search", true)
+explain select cat, sum(round(match(body) against('alpha'), 2)) as total
+from rd group by cat having max(match(body) against('alpha')) > 0 order by cat;
+select cat, sum(round(match(body) against('alpha'), 2)) as total
+from rd group by cat having max(match(body) against('alpha')) > 0 order by cat;
+
+-- Per-row (column) digits is NOT drop-safe -> refused (20105) rather than silently losing cat 10.
+select cat, sum(round(match(body) against('alpha'), digits)) as total
+from rd group by cat having max(match(body) against('alpha')) > 0 order by cat;
+
 drop database ft2_agg_having;
