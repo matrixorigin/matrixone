@@ -4707,34 +4707,6 @@ func (builder *QueryBuilder) analyzeOdkuCorrelatedSubquery(
 	return hasTargetCorrelation, hasCandidateCorrelation, hasNestedSubquery
 }
 
-// analyzeTargetCorrelatedSubquery distinguishes a target correlation inside a
-// subquery from an ordinary target reference in the ODKU expression. The latter
-// is evaluated by DedupJoin against its evolving old-row image; the former is
-// flattened into the candidate side and must not be allowed to observe a stale
-// target snapshot in an unsupported shape.
-func (builder *QueryBuilder) analyzeTargetCorrelatedSubquery(
-	expr *plan.Expr, targetTag int32,
-) (hasTargetCorrelation, hasNestedSubquery bool) {
-	hasTargetCorrelation, _, hasNestedSubquery = builder.analyzeOdkuCorrelatedSubquery(expr, targetTag, 0)
-	return hasTargetCorrelation, hasNestedSubquery
-}
-
-// exprHasTargetCorrelatedSubquery reports whether a subquery contains a
-// correlation to the target row rather than an ordinary ODKU target reference.
-func (builder *QueryBuilder) exprHasTargetCorrelatedSubquery(expr *plan.Expr, targetTag int32) bool {
-	hasTarget, _ := builder.analyzeTargetCorrelatedSubquery(expr, targetTag)
-	return hasTarget
-}
-
-// exprHasCandidateCorrelatedSubquery reports whether a subquery references the
-// incoming INSERT row. Such a reference is valid only after duplicate-key
-// arbitration has selected the UPDATE branch, so it uses the same target-match
-// guard as a target-row correlation.
-func (builder *QueryBuilder) exprHasCandidateCorrelatedSubquery(expr *plan.Expr, candidateTag int32) bool {
-	_, hasCandidate, _ := builder.analyzeOdkuCorrelatedSubquery(expr, 0, candidateTag)
-	return hasCandidate
-}
-
 // insertScopeRef is a global binding reference that must be made visible by
 // the projection which normalizes a flattened ODKU subquery input. Keeping the
 // encounter order makes the generated plan deterministic and avoids relying
