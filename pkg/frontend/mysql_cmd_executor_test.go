@@ -4672,6 +4672,53 @@ func TestExecuteStmtFetchAdvancesAndClosesCursor(t *testing.T) {
 	require.Zero(t, ses.preparedCursorBytes.Load())
 }
 
+func TestExecuteStmtFetchRejectsInvalidatedPreparedStatement(t *testing.T) {
+	writer := &testMysqlWriter{writeEOFOrOKFunc: func(uint16, uint16) error { return nil }}
+	ses := &Session{
+		feSessionImpl: feSessionImpl{
+			respr:      NewMysqlResp(writer),
+			txnHandler: &TxnHandler{},
+		},
+		prepareStmts: make(map[string]*PrepareStmt),
+	}
+	stmt := &PrepareStmt{
+		Name: getPrepareStmtName(274),
+		cursor: &preparedStmtCursor{
+			result: &MysqlResultSet{Data: [][]interface{}{{int64(1)}}},
+			owner:  ses,
+			bytes:  1,
+		},
+	}
+	ses.preparedCursorBytes.Store(1)
+	ses.prepareStmts[strings.ToLower(stmt.Name)] = stmt
+	stmt.invalidateRewritePolicy()
+
+	data := make([]byte, 8)
+	binary.LittleEndian.PutUint32(data[0:4], 274)
+	binary.LittleEndian.PutUint32(data[4:8], 1)
+	resp, err := executeStmtFetch(context.Background(), ses, data)
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Equal(t, ErrorResponse, resp.category)
+	require.True(t, moerr.IsMoErrCode(resp.GetData().(error), moerr.ErrNeedReprepare))
+	require.Nil(t, stmt.cursor)
+	require.Zero(t, ses.preparedCursorBytes.Load())
+}
+
+func TestParseStmtExecuteRejectsInvalidatedPreparedStatement(t *testing.T) {
+	stmtID := uint32(275)
+	stmt := &PrepareStmt{Name: getPrepareStmtName(stmtID)}
+	ses := &Session{prepareStmts: map[string]*PrepareStmt{strings.ToLower(stmt.Name): stmt}}
+	stmt.invalidateRewritePolicy()
+
+	data := make([]byte, 4)
+	binary.LittleEndian.PutUint32(data, stmtID)
+	_, got, err := parseStmtExecute(context.Background(), ses, data)
+	require.Error(t, err)
+	require.Nil(t, got)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNeedReprepare))
+}
+
 func TestExecuteStmtFetchEmptyCursorClosesOnFirstFetch(t *testing.T) {
 	var status uint16
 	writer := &testMysqlWriter{writeEOFOrOKFunc: func(_, got uint16) error {

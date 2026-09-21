@@ -2207,10 +2207,31 @@ func (ses *Session) InvalidatePrivilegeCache() {
 	defer ses.mu.Unlock()
 	ses.cache.invalidate()
 
-	// Clear rule cache with proper locking
+	// Clearing role-rule policy also invalidates every prepared handle that may
+	// contain the previous policy in its AST or plan. Keep the handles alive so
+	// an active owner can finish its normal cleanup; execution will fail closed
+	// until the client explicitly prepares a new statement.
+	ses.invalidateRewriteRuleCacheLocked()
+}
+
+func (ses *Session) invalidateRewriteRuleCache() {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ses.invalidateRewriteRuleCacheLocked()
+}
+
+func (ses *Session) invalidateRewriteRuleCacheLocked() {
+	// Clear rule cache with proper locking.
 	ses.ruleCacheMu.Lock()
 	ses.ruleCache = nil
 	ses.ruleCacheMu.Unlock()
+
+	if !ses.rewriteEnabled.Load() {
+		return
+	}
+	for _, stmt := range ses.prepareStmts {
+		stmt.invalidateRewritePolicy()
+	}
 }
 
 // GetBackgroundExec generates a background executor
@@ -2519,10 +2540,20 @@ func (ses *Session) getMaxPrepareStmtCountLocked() uint64 {
 }
 
 func (ses *Session) GetPrepareStmt(ctx context.Context, name string) (*PrepareStmt, error) {
+	return ses.getPrepareStmt(ctx, name, false)
+}
+
+func (ses *Session) getPrepareStmt(ctx context.Context, name string, allowInvalidated bool) (*PrepareStmt, error) {
 	normalizedName := strings.ToLower(name)
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	if prepareStmt, ok := ses.prepareStmts[normalizedName]; ok {
+		if !allowInvalidated {
+			if err := prepareStmt.checkRewritePolicy(ctx); err != nil {
+				ses.Errorf(ctx, "prepared statement '%s' needs to be re-prepared", name)
+				return nil, err
+			}
+		}
 		return prepareStmt, nil
 	}
 	var connID uint32
@@ -2533,14 +2564,34 @@ func (ses *Session) GetPrepareStmt(ctx context.Context, name string) (*PrepareSt
 	return nil, moerr.NewInvalidStatef(ctx, "prepared statement '%s' does not exist", name)
 }
 
+func (ses *Session) getPrepareStmtAllowInvalidated(ctx context.Context, name string) (*PrepareStmt, error) {
+	return ses.getPrepareStmt(ctx, name, true)
+}
+
 func (ses *Session) GetPrepareStmts() []*PrepareStmt {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
 	ret := make([]*PrepareStmt, 0, len(ses.prepareStmts))
 	for _, st := range ses.prepareStmts {
+		if st != nil && st.rewritePolicyInvalidated.Load() {
+			continue
+		}
 		ret = append(ret, st)
 	}
 	return ret
+}
+
+func (ses *Session) getPrepareStmtsForMigration() ([]*PrepareStmt, bool) {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	ret := make([]*PrepareStmt, 0, len(ses.prepareStmts))
+	for _, stmt := range ses.prepareStmts {
+		if stmt != nil && stmt.rewritePolicyInvalidated.Load() {
+			return nil, true
+		}
+		ret = append(ret, stmt)
+	}
+	return ret, false
 }
 
 func (ses *Session) RemovePrepareStmt(name string) bool {

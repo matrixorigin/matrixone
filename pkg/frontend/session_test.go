@@ -2052,6 +2052,51 @@ func TestRemoveAllPrepareStmts(t *testing.T) {
 	assert.Equal(t, 0, len(ses.prepareStmts))
 }
 
+func TestInvalidatePrivilegeCacheInvalidatesRewritePreparedStatements(t *testing.T) {
+	ctx := context.Background()
+	oldStmt := &PrepareStmt{Name: "old"}
+	ses := &Session{
+		cache:        &privilegeCache{},
+		prepareStmts: map[string]*PrepareStmt{"old": oldStmt},
+	}
+	ses.rewriteEnabled.Store(true)
+
+	ses.InvalidatePrivilegeCache()
+
+	_, err := ses.GetPrepareStmt(ctx, "old")
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNeedReprepare))
+	require.Equal(t, moerr.ER_NEED_REPREPARE, err.(*moerr.Error).MySQLCode())
+	require.Empty(t, ses.GetPrepareStmts())
+
+	// Explicit cleanup remains available for an invalidated handle.
+	got, err := ses.getPrepareStmtAllowInvalidated(ctx, "old")
+	require.NoError(t, err)
+	require.Same(t, oldStmt, got)
+
+	// A fresh PREPARE replaces the invalidated handle and is executable.
+	newStmt := &PrepareStmt{Name: "old"}
+	require.NoError(t, ses.SetPrepareStmt(ctx, "old", newStmt))
+	got, err = ses.GetPrepareStmt(ctx, "old")
+	require.NoError(t, err)
+	require.Same(t, newStmt, got)
+}
+
+func TestInvalidatePrivilegeCachePreservesPreparedStatementsWithoutRewrite(t *testing.T) {
+	ctx := context.Background()
+	stmt := &PrepareStmt{Name: "stmt"}
+	ses := &Session{
+		cache:        &privilegeCache{},
+		prepareStmts: map[string]*PrepareStmt{"stmt": stmt},
+	}
+
+	ses.InvalidatePrivilegeCache()
+
+	got, err := ses.GetPrepareStmt(ctx, "stmt")
+	require.NoError(t, err)
+	require.Same(t, stmt, got)
+}
+
 func TestPrepareStmtNamesAreCaseInsensitive(t *testing.T) {
 	ctx := context.Background()
 	ses := &Session{prepareStmts: make(map[string]*PrepareStmt)}

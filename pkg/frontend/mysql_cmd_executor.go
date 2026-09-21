@@ -4183,6 +4183,15 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 	var cws []ComputationWrapper = nil
 	var statementRemaps []map[string]string
 	if preparePlan := execCtx.input.getPreparePlan(); preparePlan != nil {
+		// Binary execute carries the prepared plan directly in UserInput. Check
+		// the owning handle before the plan reaches privilege checks or Compile;
+		// parsing the packet already checks this in the normal protocol path, but
+		// this guard also covers internal callers that construct UserInput.
+		if execCtx.input.isBinaryProtExecute {
+			if _, err := ses.GetPrepareStmt(execCtx.reqCtx, execCtx.input.stmtName); err != nil {
+				return nil, err
+			}
+		}
 		tcw := InitTxnComputationWrapper(ses, execCtx.input.stmt, proc)
 		tcw.plan = preparePlan.GetDcl().GetPrepare().Plan
 		tcw.binaryPrepare = execCtx.input.isBinaryProtExecute
@@ -6516,7 +6525,10 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		stmtID := binary.LittleEndian.Uint32(data[0:4])
 		var preStmt *PrepareStmt
 		stmtName := getPrepareStmtName(stmtID)
-		preStmt, err = ses.GetPrepareStmt(execCtx.reqCtx, stmtName)
+		// Closing an invalidated handle must remain possible. Execution paths use
+		// GetPrepareStmt, which rejects the handle before any retained state is
+		// consumed; COM_STMT_CLOSE is the explicit cleanup/reprepare escape hatch.
+		preStmt, err = ses.getPrepareStmtAllowInvalidated(execCtx.reqCtx, stmtName)
 		if err != nil {
 			restoreRowCount(ses, ses.GetProc(), savedRowCount)
 			return NewGeneralErrorResponse(COM_STMT_CLOSE, ses.GetTxnHandler().GetServerStatus(), err), nil
@@ -6642,8 +6654,12 @@ func executeStmtFetch(ctx context.Context, ses *Session, data []byte) (*Response
 	}
 	stmtID := binary.LittleEndian.Uint32(data[:4])
 	fetchRows := uint64(binary.LittleEndian.Uint32(data[4:8]))
-	stmt, err := ses.GetPrepareStmt(ctx, getPrepareStmtName(stmtID))
+	stmt, err := ses.getPrepareStmtAllowInvalidated(ctx, getPrepareStmtName(stmtID))
 	if err != nil {
+		return NewGeneralErrorResponse(COM_STMT_FETCH, ses.GetTxnHandler().GetServerStatus(), err), nil
+	}
+	if err = stmt.checkRewritePolicy(ctx); err != nil {
+		stmt.closeCursor()
 		return NewGeneralErrorResponse(COM_STMT_FETCH, ses.GetTxnHandler().GetServerStatus(), err), nil
 	}
 	if stmt.cursor == nil || stmt.cursor.result == nil {

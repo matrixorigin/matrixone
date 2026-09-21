@@ -223,6 +223,9 @@ const (
 	// field-duplicate code introduced on main.
 	ErrWrongNumberOfColumnsInSelect uint16 = 20478
 	ErrTooLongIdent                 uint16 = 20479
+	// ErrNeedReprepare is returned when a prepared statement depends on
+	// session state that has been invalidated and must not be executed again.
+	ErrNeedReprepare uint16 = 20480
 
 	// Group 5: rpc errors
 	//
@@ -580,6 +583,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrFieldSpecifiedTwice:                      {ER_FIELD_SPECIFIED_TWICE, []string{"42000"}, "Column '%-.192s' specified twice"},
 	ErrWrongNumberOfColumnsInSelect:             {ER_WRONG_NUMBER_OF_COLUMNS_IN_SELECT, []string{"21000"}, "The used SELECT statements have a different number of columns"},
 	ErrTooLongIdent:                             {ER_TOO_LONG_IDENT, []string{"42000", "S1009"}, "Identifier name '%-.100s' is too long"},
+	ErrNeedReprepare:                            {ER_NEED_REPREPARE, []string{"HY000"}, "Prepared statement needs to be re-prepared"},
 
 	// Group 5: rpc errors
 	ErrRPCTimeout:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "rpc timeout"},
@@ -1207,6 +1211,10 @@ func NewCharacterSetMismatch(ctx context.Context, left, right, function string) 
 
 func NewUnknownStmtHandler(ctx context.Context, name, operation string) *Error {
 	return newError(ctx, ErrUnknownStmtHandler, name, operation)
+}
+
+func NewNeedReprepare(ctx context.Context) *Error {
+	return newError(ctx, ErrNeedReprepare)
 }
 
 func NewSyntaxErrorf(ctx context.Context, format string, args ...any) *Error {
