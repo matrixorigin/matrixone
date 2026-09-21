@@ -138,7 +138,7 @@ func prepareRemoteRunSendingData(sqlStr string, s *Scope) (
     scopeData, err = encodeScope(s)
     
     // Encode Process information
-    processData, err = encodeProcessInfo(s.Proc, sqlStr)
+    processData, err = encodeProcessInfo(s.Proc, sqlStr, remoteFragmentCounts, remoteExecutionID, containsStatementHash)
     
     return scopeData, withoutOutput, processData, nil
 }
