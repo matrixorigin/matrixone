@@ -3856,6 +3856,10 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 	// Restore the source session values after all replay work has finished.
 	defer restoreRowCount(ses, ses.GetProc(), req.LastAffectedRows)
 	defer func() {
+		ses.SetLastInsertID(req.LastInsertID)
+		if proc := ses.GetProc(); proc != nil {
+			proc.SetLastInsertID(req.LastInsertID)
+		}
 		ses.SetLastFoundRows(req.FoundRows)
 		if proc := ses.GetProc(); proc != nil {
 			proc.SetFoundRows(req.FoundRows)

@@ -717,6 +717,7 @@ func TestMigrateConnectionFromPreservesLastAffectedRows(t *testing.T) {
 	defer ctrl.Finish()
 	ses := newTestSession(t, ctrl)
 	ses.SetLastAffectedRows(7)
+	ses.SetLastInsertID(13)
 	ses.SetLastFoundRows(11)
 	rt := &Routine{mc: newMigrateController()}
 	rt.setSession(ses)
@@ -724,6 +725,7 @@ func TestMigrateConnectionFromPreservesLastAffectedRows(t *testing.T) {
 	resp := &query.MigrateConnFromResponse{}
 	require.NoError(t, rt.migrateConnectionFrom(resp))
 	require.Equal(t, int64(7), resp.LastAffectedRows)
+	require.Equal(t, uint64(13), resp.LastInsertID)
 	require.Equal(t, uint64(11), resp.FoundRows)
 	require.True(t, resp.TempTableStateExported)
 }

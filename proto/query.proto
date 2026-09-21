@@ -599,6 +599,8 @@ message MigrateConnFromResponse {
   // Distinguishes an empty snapshot from an older CN that cannot report
   // temporary-table state.
   bool TempTableStateExported = 17;
+  // LastInsertID is the session-visible value returned by LAST_INSERT_ID().
+  uint64 LastInsertID = 18;
 }
 
 message MigrateConnToRequest {
@@ -619,6 +621,8 @@ message MigrateConnToRequest {
   bool SystemVariablesReplayable = 12;
   uint64 FoundRows = 13;
   repeated MigrateTempTable TempTables = 14;
+  // LastInsertID is the session-visible value returned by LAST_INSERT_ID().
+  uint64 LastInsertID = 15;
 }
 
 message MigrateUserDefinedVar {

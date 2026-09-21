@@ -106,7 +106,7 @@ func (c *clientConn) migrateConnToContext(
 		info.SystemVariablesSnapshotTooLarge || info.UserDefinedVarsSnapshotTooLarge
 	typedMigrationSupported := false
 	addr := ""
-	if typedMigration || info.FoundRows != 0 || len(info.TempTables) > 0 {
+	if typedMigration || info.FoundRows != 0 || info.LastInsertID != 0 || len(info.TempTables) > 0 {
 		addr = getQueryAddress(c.moCluster, sc.RawConn().RemoteAddr().String())
 		if addr == "" {
 			return moerr.NewInternalError(ctx, "cannot get query service address")
@@ -119,6 +119,10 @@ func (c *clientConn) migrateConnToContext(
 		if info.FoundRows != 0 && targetProtocol < defines.MORPCVersion29 {
 			return moerr.NewInternalError(ctx,
 				"cannot migrate non-zero FOUND_ROWS state to a pre-v29 target")
+		}
+		if info.LastInsertID != 0 && targetProtocol < defines.MORPCVersion93 {
+			return moerr.NewInternalError(ctx,
+				"cannot migrate non-zero LAST_INSERT_ID state to a pre-v93 target")
 		}
 		if len(info.TempTables) > 0 && targetProtocol < defines.MORPCVersion38 {
 			return moerr.NewInternalError(ctx,
@@ -200,6 +204,7 @@ func (c *clientConn) migrateConnToContext(
 		DB:                        info.DB,
 		PrepareStmts:              info.PrepareStmts,
 		LastAffectedRows:          info.LastAffectedRows,
+		LastInsertID:              info.LastInsertID,
 		FoundRows:                 info.FoundRows,
 		UserDefinedVars:           nil,
 		UserDefinedVarsExported:   false,

@@ -813,6 +813,7 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 	resp.UserLevelLockReleaseSupported = true
 	resp.DB = ses.GetDatabaseName()
 	resp.LastAffectedRows = ses.GetLastAffectedRows()
+	resp.LastInsertID = ses.GetLastInsertID()
 	prepareStmts := ses.GetPrepareStmts()
 	for _, st := range prepareStmts {
 		// COM_STMT_SEND_LONG_DATA has no protocol response and its parameter

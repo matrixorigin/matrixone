@@ -125,6 +125,7 @@ func runTestWithQueryServiceHandlersAndRefresh(
 				resp.MigrateConnFromResponse = &pb.MigrateConnFromResponse{
 					DB:                            "d1",
 					LastAffectedRows:              7,
+					LastInsertID:                  13,
 					FoundRows:                     11,
 					UserLevelLockReleaseSupported: true,
 					TempTableStateExported:        true,
@@ -139,6 +140,10 @@ func runTestWithQueryServiceHandlersAndRefresh(
 					if req.MigrateConnToRequest.LastAffectedRows != 7 {
 						return moerr.NewInternalErrorf(ctx, "unexpected last affected rows: %d",
 							req.MigrateConnToRequest.LastAffectedRows)
+					}
+					if req.MigrateConnToRequest.LastInsertID != 13 {
+						return moerr.NewInternalErrorf(ctx, "unexpected last insert id: %d",
+							req.MigrateConnToRequest.LastInsertID)
 					}
 					resp.MigrateConnToResponse = &pb.MigrateConnToResponse{
 						Success: true,
@@ -200,6 +205,7 @@ func TestQueryServiceMigrateFrom(t *testing.T) {
 		assert.NotNil(t, resp)
 		assert.Equal(t, "d1", resp.DB)
 		assert.Equal(t, int64(7), resp.LastAffectedRows)
+		assert.Equal(t, uint64(13), resp.LastInsertID)
 		assert.Equal(t, uint64(11), resp.FoundRows)
 	})
 }
@@ -239,6 +245,10 @@ func TestQueryServiceMigrateTo(t *testing.T) {
 		if req.MigrateConnToRequest.FoundRows != 11 {
 			return moerr.NewInternalErrorf(ctx, "unexpected found rows: %d",
 				req.MigrateConnToRequest.FoundRows)
+		}
+		if req.MigrateConnToRequest.LastInsertID != 13 {
+			return moerr.NewInternalErrorf(ctx, "unexpected last insert id: %d",
+				req.MigrateConnToRequest.LastInsertID)
 		}
 		resp.MigrateConnToResponse = &pb.MigrateConnToResponse{Success: true}
 		return nil
@@ -322,6 +332,31 @@ func TestQueryServiceMigrateToRejectsNonZeroFoundRowsForPreV29Target(t *testing.
 
 		err := cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{FoundRows: 11})
 		assert.ErrorContains(t, err, "cannot migrate non-zero FOUND_ROWS state to a pre-v29 target")
+		assert.Empty(t, sc.statements)
+	})
+}
+
+func TestQueryServiceMigrateToRejectsNonZeroLastInsertIDForPreV93Target(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
+	runTestWithQueryService(t, cn, func(cc *clientConn, _ string) {
+		targetRuntime := runtime.ServiceRuntime(cn.ServiceID)
+		oldVersion, hadVersion := targetRuntime.GetGlobalVariables(runtime.MOProtocolVersion)
+		targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion92)
+		defer func() {
+			if hadVersion {
+				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, oldVersion)
+			} else {
+				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+			}
+		}()
+
+		local, remote := net.Pipe()
+		defer remote.Close()
+		sc := &recordingMigrationServerConn{mockServerConn: newMockServerConn(local)}
+		defer sc.Close()
+
+		err := cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{LastInsertID: 13})
+		assert.ErrorContains(t, err, "cannot migrate non-zero LAST_INSERT_ID state to a pre-v93 target")
 		assert.Empty(t, sc.statements)
 	})
 }
