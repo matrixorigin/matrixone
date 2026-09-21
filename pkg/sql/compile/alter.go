@@ -1949,34 +1949,76 @@ func isClusterTableRename(qry *plan.AlterTable) bool {
 	return alterTableHasRename(qry) && qry.GetIsClusterTable()
 }
 
+func roleRuleRenameNameKeys(qrys []*plan.AlterTable) []string {
+	keys := make([]string, 0, len(qrys)*2)
+	seen := make(map[string]struct{}, len(qrys)*2)
+	for _, qry := range qrys {
+		if qry == nil {
+			continue
+		}
+		database := qry.GetDatabase()
+		if database == "" && qry.GetTableDef() != nil {
+			database = qry.GetTableDef().GetDbName()
+		}
+		for _, action := range qry.GetActions() {
+			if action == nil {
+				continue
+			}
+			rename := action.GetAlterName()
+			if rename == nil || rename.OldName == rename.NewName {
+				continue
+			}
+			for _, tableName := range []string{rename.OldName, rename.NewName} {
+				key := database + "." + tableName
+				if _, ok := seen[key]; ok {
+					continue
+				}
+				seen[key] = struct{}{}
+				keys = append(keys, key)
+			}
+		}
+	}
+	return keys
+}
+
 // checkRoleRuleRenameAdmission closes the gap between the name-keyed role-rule
 // catalog and relation renames. mo_role_rule stores the rule SQL verbatim and
 // has no table object id, so rewriting arbitrary SQL here would be unsafe. A
-// rename is therefore admitted only when the current account has no persisted
-// role rules.
+// rename is therefore admitted only when no persisted rule matches any source
+// or destination name in the complete rename batch.
 type roleRuleRenameAdmissionHooks struct {
 	lockRoleRules      func(context.Context) error
 	acquireReadBarrier func(context.Context) (timestamp.Timestamp, error)
 	currentSnapshot    func() timestamp.Timestamp
 	updateSnapshot     func(context.Context, timestamp.Timestamp) error
-	hasRoleRules       func(context.Context) (bool, error)
+	hasRoleRules       func(context.Context, []string) (bool, error)
 }
 
 func checkRoleRuleRenameAdmission(c *Compile, qry *plan.AlterTable) error {
-	if !alterTableHasRename(qry) {
+	return checkRoleRuleRenameAdmissionBatch(c, []*plan.AlterTable{qry})
+}
+
+func checkRoleRuleRenameAdmissionBatch(c *Compile, qrys []*plan.AlterTable) error {
+	hasRename := false
+	for _, qry := range qrys {
+		if !alterTableHasRename(qry) {
+			continue
+		}
+		hasRename = true
+		if isClusterTableRename(qry) {
+			return moerr.NewNotSupported(
+				c.proc.Ctx,
+				"renaming a cluster table while role rewrite rules may exist is not supported",
+			)
+		}
+	}
+	if !hasRename {
 		return nil
 	}
-	if isClusterTableRename(qry) {
-		return moerr.NewNotSupported(
-			c.proc.Ctx,
-			"renaming a cluster table while role rewrite rules may exist is not supported",
-		)
-	}
-
 	txnOp := c.proc.GetTxnOperator()
 	return checkRoleRuleRenameAdmissionWithHooks(
 		c.proc.Ctx,
-		qry,
+		qrys,
 		txnOp.Txn().IsPessimistic(),
 		txnOp.Txn().IsRCIsolation(),
 		roleRuleRenameAdmissionHooks{
@@ -1999,9 +2041,23 @@ func checkRoleRuleRenameAdmission(c *Compile, qry *plan.AlterTable) error {
 			},
 			currentSnapshot: txnOp.SnapshotTS,
 			updateSnapshot:  txnOp.UpdateSnapshot,
-			hasRoleRules: func(ctx context.Context) (bool, error) {
+			hasRoleRules: func(ctx context.Context, names []string) (bool, error) {
+				if len(names) == 0 {
+					return false, nil
+				}
+				// Identifiers are case-insensitive, while legacy rule rows may
+				// preserve the spelling used when the rule was created.
+				quotedNames := make([]string, len(names))
+				for i, name := range names {
+					quotedNames[i] = "'" + sqlquote.EscapeString(strings.ToLower(name)) + "'"
+				}
 				res, err := c.runSqlWithResultAndOptions(
-					fmt.Sprintf("select 1 from %s.%s limit 1", catalog.MO_CATALOG, catalog.MO_ROLE_RULE),
+					fmt.Sprintf(
+						"select 1 from %s.%s where lower(rule_name) in (%s) limit 1",
+						catalog.MO_CATALOG,
+						catalog.MO_ROLE_RULE,
+						strings.Join(quotedNames, ","),
+					),
 					NoAccountId,
 					executor.StatementOption{}.WithDisableLog(),
 				)
@@ -2023,19 +2079,26 @@ func checkRoleRuleRenameAdmission(c *Compile, qry *plan.AlterTable) error {
 
 func checkRoleRuleRenameAdmissionWithHooks(
 	ctx context.Context,
-	qry *plan.AlterTable,
+	qrys []*plan.AlterTable,
 	isPessimistic bool,
 	isReadCommitted bool,
 	hooks roleRuleRenameAdmissionHooks,
 ) error {
-	if !alterTableHasRename(qry) {
-		return nil
+	hasRename := false
+	for _, qry := range qrys {
+		if !alterTableHasRename(qry) {
+			continue
+		}
+		hasRename = true
+		if isClusterTableRename(qry) {
+			return moerr.NewNotSupported(
+				ctx,
+				"renaming a cluster table while role rewrite rules may exist is not supported",
+			)
+		}
 	}
-	if isClusterTableRename(qry) {
-		return moerr.NewNotSupported(
-			ctx,
-			"renaming a cluster table while role rewrite rules may exist is not supported",
-		)
+	if !hasRename {
+		return nil
 	}
 	if !isPessimistic || !isReadCommitted {
 		return moerr.NewNotSupported(
@@ -2071,7 +2134,7 @@ func checkRoleRuleRenameAdmissionWithHooks(
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	roleRulesExist, err := hooks.hasRoleRules(ctx)
+	roleRulesExist, err := hooks.hasRoleRules(ctx, roleRuleRenameNameKeys(qrys))
 	if err != nil {
 		return err
 	}
@@ -2094,8 +2157,10 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 	defer cleanup.finish(&err)
 
 	qry := s.Plan.GetDdl().GetAlterTable()
-	if err = checkRoleRuleRenameAdmission(c, qry); err != nil {
-		return err
+	if !s.roleRuleRenameAdmissionChecked {
+		if err = checkRoleRuleRenameAdmission(c, qry); err != nil {
+			return err
+		}
 	}
 
 	// Check if target table is a CCPR shared table (from publication)
@@ -2331,6 +2396,9 @@ func (s *Scope) RenameTable(c *Compile) (err error) {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetRenameTable()
+	if err = checkRoleRuleRenameAdmissionBatch(c, qry.AlterTables); err != nil {
+		return err
+	}
 	for _, alterTable := range qry.AlterTables {
 		plan := &plan.Plan{
 			Plan: &plan.Plan_Ddl{
@@ -2343,6 +2411,7 @@ func (s *Scope) RenameTable(c *Compile) (err error) {
 			},
 		}
 		subScope := newScope(AlterTable).withPlan(plan)
+		subScope.roleRuleRenameAdmissionChecked = true
 		defer subScope.release()
 		err = subScope.AlterTable(c)
 		if err != nil {

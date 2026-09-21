@@ -92,7 +92,7 @@ select * from db1.t1;
 100  ¦  30
 create table db1.t_rename_chain_guard(a int);
 insert into db1.t_rename_chain_guard values (7);
-rename table db1.t1 to db1.t1_renamed, db1.t_rename_chain_guard to db1.t_rename_chain_guard_after;
+rename table db1.t_rename_chain_guard to db1.t_rename_chain_guard_after, db1.t1 to db1.t1_renamed;
 not supported: renaming a table while role rewrite rules exist is not supported; drop the rules first
 select * from db1.t_rename_chain_guard;
 ➤ a[4,32,0]

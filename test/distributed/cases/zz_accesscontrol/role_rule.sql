@@ -102,7 +102,7 @@ select * from db1.t1;
 
 create table db1.t_rename_chain_guard(a int);
 insert into db1.t_rename_chain_guard values (7);
-rename table db1.t1 to db1.t1_renamed, db1.t_rename_chain_guard to db1.t_rename_chain_guard_after;
+rename table db1.t_rename_chain_guard to db1.t_rename_chain_guard_after, db1.t1 to db1.t1_renamed;
 select * from db1.t_rename_chain_guard;
 
 -- 12. SET SECONDARY ROLE ALL merges select * rewrite rules from all active roles
