@@ -37,6 +37,35 @@ type SiriusPrepareRequest struct {
 	Headings    []string
 	Deadline    time.Time
 	Release     func(context.Context) error
+	Snapshot    [12]byte
+	Reads       []SiriusReadDescriptor
+}
+
+// SiriusInput accepts MO-native vector buffers synchronously. It never retains
+// Go memory after Push returns. Producers are lazy and owned by the execution.
+type SiriusInput interface {
+	Push(context.Context, uint32, []SiriusInputVector) error
+}
+
+type SiriusInputVector struct {
+	Class             uint32
+	Data, Area, Nulls []byte
+}
+
+type SiriusReadColumn struct {
+	Type       planpb.Type
+	Name       string
+	PhysicalID uint64
+	Sequence   uint32
+}
+
+type SiriusReadDescriptor struct {
+	BindingID               uint64
+	Database, Table, Schema string
+	Columns                 []SiriusReadColumn
+	Producer                func(context.Context, SiriusInput) error
+	TAEManifest             []byte
+	DataRoot                string
 }
 
 // SiriusExecution owns one prepared execution. Run is single-use and must not

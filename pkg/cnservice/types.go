@@ -108,7 +108,11 @@ type SiriusConfig struct {
 	Enabled bool `toml:"enabled"`
 	// Backend defaults to Flight during migration. Embedded selection remains
 	// fail-closed until the native backend and its build capability are present.
-	Backend string `toml:"backend"`
+	Backend           string `toml:"backend"`
+	InputMode         string `toml:"input-mode"`
+	NativeConfigPath  string `toml:"native-config-path"`
+	GPUStreams        uint32 `toml:"gpu-streams"`
+	MaxWaitingQueries uint32 `toml:"max-waiting-queries"`
 	// BenchmarkNoGC enables the one-to-one CN/sidecar benchmark adapter. It
 	// must only be used together with TN GCCfg.DisableGC=true; normal Sirius
 	// startup keeps requiring durable GC-protected lease dependencies.
@@ -556,6 +560,9 @@ func (c *SiriusConfig) validate() error {
 		c.RequestTimeout.Duration > time.Duration(1<<63-1)-c.CleanupTimeout.Duration {
 		return moerr.NewBadConfigNoCtx("invalid Sirius transport limits")
 	}
+	if c.Backend == "embedded" {
+		return validateSiriusEmbeddedConfig(c)
+	}
 	minimumLeaseTTL := c.RequestTimeout.Duration + c.CleanupTimeout.Duration
 	if c.LeaseTTL.Duration == 0 {
 		c.LeaseTTL.Duration = minimumLeaseTTL
@@ -584,7 +591,7 @@ func (c *SiriusConfig) validateBackend() error {
 		c.Backend = "flight"
 	case "flight":
 	case "embedded":
-		return moerr.NewBadConfigNoCtx("Sirius embedded backend is not available in this build")
+		return validateSiriusEmbeddedBuild()
 	default:
 		return moerr.NewBadConfigNoCtx("invalid Sirius backend: expected flight or embedded")
 	}
