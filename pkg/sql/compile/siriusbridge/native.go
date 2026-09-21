@@ -236,6 +236,10 @@ func (d *engine) prepare(ctx context.Context, req Request) (result queryDriver, 
 			q.inputs[read.BindingID] = input
 		}
 	}
+	// All descriptor APIs above copy synchronously. Waiting for native admission
+	// must not retain a second C arena for every queued query.
+	memory.free()
+	memory = nil
 	for {
 		if err := ctx.Err(); err != nil {
 			return q, err
