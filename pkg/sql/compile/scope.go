@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -64,7 +63,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
-	"go.uber.org/zap"
 )
 
 func newScope(magic magicType) *Scope {
@@ -774,74 +772,27 @@ func cleanScopeTreeWithStartFail(sp *Scope, fail error, isPrepare bool) {
 
 // RemoteRun send the scope to a remote node for execution.
 func (s *Scope) RemoteRun(c *Compile) error {
-	s.resourceExecutedLocally = false
-
-	if s.ScopeAnalyzer == nil {
-		s.ScopeAnalyzer = NewScopeAnalyzer()
+	if s == nil {
+		return nil
 	}
-	s.ScopeAnalyzer.Start()
-	defer s.ScopeAnalyzer.Stop()
-
-	if err := validateRemoteRunAddress(s.NodeInfo.Addr, c.addr); err != nil {
-		return s.failRemoteRunBeforeStart(c, err)
-	}
-	if s.ipAddrMatch(c.addr) {
-		return s.MergeRun(c)
-	}
-	if err := s.holdAnyCannotRemoteOperator(); err != nil {
-		return s.failRemoteRunBeforeStart(c, err)
+	if c == nil {
+		return moerr.NewInternalErrorNoCtx("nil compile for RemoteRun")
 	}
 
-	if !checkPipelineStandaloneExecutableAtRemote(s) {
-		return s.failRemoteRunBeforeStart(c, moerr.NewInternalErrorNoCtxf(
-			"remote pipeline for CN %q is not standalone executable", s.NodeInfo.Addr))
+	// RemoteRun is retained as a synchronous API boundary for callers that
+	// still need an error return.  There must not be a second remote execution
+	// implementation here: the production path and this compatibility entry
+	// both use the same event-driven remote state machine.  The scheduler owns
+	// transport waits and re-admits VM continuations through ready events.
+	result := make(chan error, 1)
+	if err := s.remoteRunAsync(c, func(runErr error) {
+		result <- runErr
+	}); err != nil {
+		return err
 	}
-	runtime.ServiceRuntime(s.Proc.GetService()).Logger().
-		Debug("remote run pipeline",
-			zap.String("local-address", c.addr),
-			zap.String("remote-address", s.NodeInfo.Addr))
-
-	p := pipeline.New(0, nil, s.RootOp)
-	sender, err := s.remoteRun(c)
-	queryCtx := scopeRunQueryContext(s.Proc)
-	var terminalErr error
-	if sender != nil && isScopeCancellationError(err) {
-		// An internal cancellation can win the receive select just before the
-		// remote execution publishes its terminal response. Stop the producer
-		// through the existing cleanup handshake and retain its terminal for
-		// arbitration after resolving the cancellation's primary cause.
-		terminalErr = sender.waitingTheStopResponse()
-	}
-
-	runErr, _ := normalizeScopeRunError(
-		err,
-		s.Proc.Ctx,
-		queryCtx,
-	)
-	if runErr == nil && terminalErr != nil {
-		// A query-owned terminal or substantive pipeline cancellation cause is
-		// primary. StopSending supplies the result only when the original
-		// cancellation was secondary; this still makes a terminal-less handshake
-		// fail closed without allowing teardown fallout to hide execution failure.
-		runErr, _ = normalizeScopeRunError(terminalErr, s.Proc.Ctx, queryCtx)
-	}
-	// The retained local root is the hand-off boundary from RemoteRun to its
-	// consumer. Publish its durable Error terminal before canceling this scope;
-	// otherwise the consumer can observe cancellation first and finish without
-	// the remote execution error that caused it.
-	p.CleanRootOperator(s.Proc, runErr != nil, c.isPrepare, runErr)
-	if runErr != nil && s.Proc.Cancel != nil {
-		s.Proc.Cancel(runErr)
-	}
-
-	// sender should be closed after cleanup (tell the children-pipeline that query was done).
-	if sender != nil {
-		if runErr == nil {
-			sender.prepareForLocalCleanup()
-		}
-		sender.close()
-	}
-	return runErr
+	err := <-result
+	c.waitScopeTaskScheduler()
+	return err
 }
 
 // remoteRunAsync treats the MORPC stream as an external event source. The
@@ -856,6 +807,7 @@ func (s *Scope) remoteRunAsync(c *Compile, done func(error)) error {
 	if c == nil || done == nil {
 		return moerr.NewInternalErrorNoCtx("remote scope event execution requires compile and completion")
 	}
+	s.resourceExecutedLocally = false
 	if err := validateRemoteRunAddress(s.NodeInfo.Addr, c.addr); err != nil {
 		return s.failRemoteRunBeforeStart(c, err)
 	}
@@ -870,7 +822,6 @@ func (s *Scope) remoteRunAsync(c *Compile, done func(error)) error {
 			"remote pipeline for CN %q is not standalone executable", s.NodeInfo.Addr))
 	}
 
-	s.resourceExecutedLocally = false
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
 	}
@@ -880,13 +831,19 @@ func (s *Scope) remoteRunAsync(c *Compile, done func(error)) error {
 	// serialization or network I/O. Admit that preparation as an external
 	// event; only the resulting state-machine admission returns to the ready
 	// queue.
-	err := scheduler.submitEventSource("remote-start", func() {
+	// Even an already-canceled query must admit the initial transport setup.
+	// The sender owns the stream-close/StopSending handshake; rejecting this
+	// event at admission would skip that cleanup and leave the remote receiver
+	// without a terminal signal.  The state machine still observes cancellation
+	// before admitting any VM work.
+	err := scheduler.submitEventSourceWithContext("remote-start", func() {
 		sender, withoutOutput, prepareErr := s.prepareRemoteRun(c)
 		if prepareErr != nil {
 			if sender != nil {
 				sender.close()
 			}
 			failErr := s.failRemoteRunBeforeStart(c, prepareErr)
+			s.ScopeAnalyzer.Stop()
 			if err := scheduler.submitRoot("remote-start-failed", func() {
 				done(failErr)
 			}); err != nil {
@@ -894,16 +851,17 @@ func (s *Scope) remoteRunAsync(c *Compile, done func(error)) error {
 			}
 			return
 		}
+		state := newRemoteRunEventState(s, c, scheduler, sender, withoutOutput, done)
 		if err := scheduler.submitRoot("remote-start-ready", func() {
-			state := newRemoteRunEventState(s, c, scheduler, sender, withoutOutput, done)
 			_ = state.start()
 		}); err != nil {
-			if sender != nil {
-				sender.close()
-			}
-			done(err)
+			// The state owns the sender from this point onward. Finish it
+			// through the same teardown event used by receive failures so the
+			// retained local root publishes its terminal before completion.
+			s.ScopeAnalyzer.Stop()
+			state.finish(err)
 		}
-	})
+	}, true)
 	if err != nil {
 		s.ScopeAnalyzer.Stop()
 	}

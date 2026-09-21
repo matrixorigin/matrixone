@@ -389,6 +389,13 @@ func (r *remoteRunEventState) cleanup(err error) {
 		}
 		r.sender.close()
 	}
+	// remoteRunAsync owns the analyzer for the whole remote state machine.
+	// Stop it only after transport and retained operator state have reached a
+	// terminal cleanup point; the synchronous compatibility wrapper no longer
+	// has a separate defer covering this lifecycle.
+	if r.s != nil && r.s.ScopeAnalyzer != nil {
+		r.s.ScopeAnalyzer.Stop()
+	}
 	if r.done != nil {
 		r.done(runErr)
 	}

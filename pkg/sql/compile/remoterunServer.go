@@ -602,7 +602,11 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 			MarkQueryDone(runCompile, runCompile.proc.GetTxnOperator())
 		}()
 
-		runErr = s.MergeRun(runCompile)
+		// The RPC handler needs the terminal error before it can send the
+		// pipeline-end response, but execution itself must enter the same
+		// event-driven dispatcher as coordinator scopes.  Do not call the
+		// legacy Scope.MergeRun implementation directly here.
+		runErr = runRemoteScopeThroughScheduler(runCompile, s)
 		if runErr == nil {
 			runCompile.GenPhyPlan(runCompile)
 			receiver.phyPlan = runCompile.anal.GetPhyPlan()
@@ -621,6 +625,26 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 		panic(fmt.Sprintf("unknown pipeline message type %d.", receiver.messageTyp))
 	}
 	return nil
+}
+
+// runRemoteScopeThroughScheduler is the RPC response boundary for a decoded
+// remote scope.  MORPC requires the handler to retain the receiver until the
+// pipeline has reached a terminal state, so this function waits only outside
+// the scheduler; all VM execution, child admission, and transport readiness
+// are still driven by Compile.runAsync and its query-local event state machine.
+func runRemoteScopeThroughScheduler(c *Compile, s *Scope) error {
+	if c == nil || s == nil {
+		return nil
+	}
+	result := make(chan error, 1)
+	if err := c.runAsync(s, func(runErr error) {
+		result <- runErr
+	}); err != nil {
+		return err
+	}
+	err := <-result
+	c.waitScopeTaskScheduler()
+	return err
 }
 
 type remoteDispatchReceiverRegistrations struct {
