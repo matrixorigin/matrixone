@@ -1677,6 +1677,15 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 		//TO Check password
 		if CheckPassword(psw, mp.GetSalt(), authResponse) {
 			ses.Debugf(ctx, "check password succeeded")
+			// AuthenticateUser has finished its catalog transaction. Repair
+			// accounts missed by a rolling upgrade's finite account snapshot
+			// before allowing queries on this CN. Bootstrap special users have
+			// no catalog create_version and must not enter the upgrade path.
+			if createVersion := ses.GetCreateVersion(); createVersion != "" {
+				if err = ses.MaybeUpgradeTenant(ctx, createVersion, int64(ses.GetTenantInfo().GetTenantID())); err != nil {
+					return err
+				}
+			}
 			bh := ses.GetBackgroundExec(ctx)
 			defer bh.Close()
 			if err = ses.InitSystemVariables(ctx, bh); err != nil {

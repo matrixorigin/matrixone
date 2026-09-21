@@ -607,6 +607,32 @@ func setOperationOutputType(
 	return leftType
 }
 
+// setOperationPureCharCommonType keeps a set operation made exclusively from
+// CHAR expressions in the fixed-width CHAR domain. The conditional-expression
+// resolver intentionally promotes CHAR with VARCHAR/TEXT to a variable string,
+// but that rule is not valid for set-operation row materialization: changing
+// CHAR to VARCHAR loses the common PAD SPACE representation and lets equal
+// values with different declared widths survive DISTINCT operations.
+func setOperationPureCharCommonType(source []types.Type) (types.Type, bool) {
+	if len(source) == 0 {
+		return types.Type{}, false
+	}
+	result := source[0]
+	if result.Oid != types.T_char {
+		return types.Type{}, false
+	}
+	for _, typ := range source[1:] {
+		if typ.Oid != types.T_char {
+			return types.Type{}, false
+		}
+		if result.Width < typ.Width {
+			result.Width = typ.Width
+		}
+	}
+	result.Charset = types.MergeStringCharset(source, result.Charset)
+	return result, true
+}
+
 type ColRefRemapping struct {
 	globalToLocal map[[2]int32][2]int32
 	localToGlobal [][2]int32
@@ -973,6 +999,86 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 	}
 
 	switch node.NodeType {
+	case plan.Node_ADAPTIVE_TOP:
+		if len(node.Children) < 2 || len(node.BindingTags) > 1 {
+			return nil, moerr.NewInternalError(builder.GetContext(), "invalid adaptive top remapping topology")
+		}
+		needed := make([]int, 0, len(node.ProjectList))
+		if len(node.BindingTags) == 1 {
+			outputTag := node.BindingTags[0]
+			for i := range node.ProjectList {
+				if colRefCnt[[2]int32{outputTag, int32(i)}] > 0 {
+					needed = append(needed, i)
+				}
+			}
+		} else {
+			// A SORT-anchored region has no output binding tag. Preserve its complete
+			// positional schema; ancestors reference the underlying project tags.
+			for i := range node.ProjectList {
+				needed = append(needed, i)
+			}
+		}
+		if len(needed) == 0 && len(node.ProjectList) > 0 {
+			needed = append(needed, 0)
+		}
+		var first *ColRefRemapping
+		for _, childID := range node.Children {
+			for _, pos := range needed {
+				increaseRefCnt(node.ProjectList[pos], 1, colRefCnt)
+			}
+			// SORT-anchored candidates expose constants only positionally; those
+			// expressions have no ColRef for increaseRefCnt to retain. Pin the
+			// corresponding output project columns explicitly.
+			for outputID := childID; outputID >= 0 && int(outputID) < len(builder.qry.Nodes); {
+				output := builder.qry.Nodes[outputID]
+				if output.NodeType == plan.Node_PROJECT && len(output.BindingTags) == 1 &&
+					len(output.ProjectList) >= len(node.ProjectList) {
+					for _, pos := range needed {
+						colRefCnt[[2]int32{output.BindingTags[0], int32(pos)}]++
+					}
+					break
+				}
+				if len(output.Children) != 1 {
+					break
+				}
+				outputID = output.Children[0]
+			}
+			childRemapping, err := builder.remapAllColRefs(childID, step, colRefCnt, colRefBool, sinkColRef)
+			if err != nil {
+				return nil, err
+			}
+			if first == nil {
+				first = childRemapping
+			} else if len(first.localToGlobal) != len(childRemapping.localToGlobal) {
+				return nil, moerr.NewInternalError(builder.GetContext(), "adaptive top candidate width changed during remapping")
+			}
+		}
+		if len(node.BindingTags) == 0 {
+			if first == nil {
+				return nil, moerr.NewInternalError(builder.GetContext(), "adaptive top has no candidate remapping")
+			}
+			node.ProjectList = make([]*plan.Expr, len(first.localToGlobal))
+			for i, globalRef := range first.localToGlobal {
+				node.ProjectList[i] = &plan.Expr{
+					Typ:  builder.qry.Nodes[node.Children[0]].ProjectList[i].Typ,
+					Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: int32(i)}},
+				}
+				remapping.addColRef(globalRef)
+			}
+			break
+		}
+		outputTag := node.BindingTags[0]
+		newProjectList := make([]*plan.Expr, 0, len(needed))
+		for _, pos := range needed {
+			globalRef := [2]int32{outputTag, int32(pos)}
+			remapping.addColRef(globalRef)
+			newProjectList = append(newProjectList, &plan.Expr{
+				Typ:  node.ProjectList[pos].Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: int32(len(newProjectList))}},
+			})
+		}
+		node.ProjectList = newProjectList
+
 	case plan.Node_FUNCTION_SCAN, plan.Node_VECTOR_INDEX_SCAN:
 		for _, expr := range node.FilterList {
 			increaseRefCnt(expr, 1, colRefCnt)
@@ -3813,6 +3919,11 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		// passes. Build only those paths here; regular/fulltext index rewrites keep
 		// their established late placement below.
 		builder.prepareSpecialIndexGuards(rootID)
+		// Multiple adaptive regions can be mutually dependent through a JOIN or
+		// set-operation consumer. Until candidate scopes carry independent runtime
+		// filter/message generations, execute those regions exactly once with the
+		// existing FORCE path rather than replaying either side.
+		builder.forceMultipleAdaptiveVectorRegions(rootID)
 		earlyIndexColMap := make(map[[2]int32]*plan.Expr)
 		rootID, err = builder.applyVectorIndicesEarly(rootID, colRefCnt, earlyIndexColMap)
 		builder.resetSpecialIndexGuards()
@@ -4169,31 +4280,35 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		}
 
 		if len(tmpArgsType) > 0 {
-			fGet, err := function.GetFunctionByName(builder.GetContext(), "coalesce", tmpArgsType)
-			if err != nil {
-				return 0, moerr.NewParseErrorf(builder.GetContext(), "the %d column cann't cast to a same type", columnIdx)
-			}
-			argsCastType, _ := fGet.ShouldDoImplicitTypeCast()
-
-			if len(argsCastType) > 0 && int(argsCastType[0].Oid) == int(types.T_datetime) {
-				for i := 0; i < len(argsCastType); i++ {
-					argsCastType[i].Scale = 0
-				}
-			}
 			var targetType plan.Type
 			var targetArgType types.Type
-			if len(argsCastType) == 0 {
-				targetArgType = tmpArgsType[0]
-				// if string union string, different length may cause error.
-				if targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_char {
-					for _, typ := range tmpArgsType {
-						if targetArgType.Width < typ.Width {
-							targetArgType.Width = typ.Width
-						}
+			if pureCharType, ok := setOperationPureCharCommonType(tmpArgsType); ok {
+				targetArgType = pureCharType
+			} else {
+				fGet, err := function.GetFunctionByName(builder.GetContext(), "coalesce", tmpArgsType)
+				if err != nil {
+					return 0, moerr.NewParseErrorf(builder.GetContext(), "the %d column cann't cast to a same type", columnIdx)
+				}
+				argsCastType, _ := fGet.ShouldDoImplicitTypeCast()
+
+				if len(argsCastType) > 0 && int(argsCastType[0].Oid) == int(types.T_datetime) {
+					for i := 0; i < len(argsCastType); i++ {
+						argsCastType[i].Scale = 0
 					}
 				}
-			} else {
-				targetArgType = argsCastType[0]
+				if len(argsCastType) == 0 {
+					targetArgType = tmpArgsType[0]
+					// if string union string, different length may cause error.
+					if targetArgType.Oid == types.T_varchar || targetArgType.Oid == types.T_char {
+						for _, typ := range tmpArgsType {
+							if targetArgType.Width < typ.Width {
+								targetArgType.Width = typ.Width
+							}
+						}
+					}
+				} else {
+					targetArgType = argsCastType[0]
+				}
 			}
 			allCharInputs := len(tmpArgsType) > 0
 			for _, typ := range tmpArgsType {
@@ -5284,6 +5399,14 @@ func (bc *BindContext) bindingRecurStmt() bool {
 	return bc.cteState.cteBindType == CteBindTypeRecurStmt
 }
 
+// bindingRecurQueryBlock reports whether the current context owns the
+// recursive query block itself. Nested SELECT contexts inherit the recursive
+// CTE state, but own an independent query block.
+func (bc *BindContext) bindingRecurQueryBlock() bool {
+	return bc.bindingRecurStmt() &&
+		bc.queryBlockOwner == bc.cteState.recursiveRefQueryBlock
+}
+
 func (builder *QueryBuilder) bindCte(
 	ctx *BindContext,
 	stmt tree.NodeFormatter,
@@ -5868,7 +5991,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	// materialize scalar subqueries into that input before fixing the group-key
 	// layout. Projection, alias, and ordinal references already point at the
 	// corresponding group position and do not need to be rebound.
-	if !ctx.sampleFunc.hasSampleFunc && !ctx.bindingRecurStmt() {
+	if !ctx.sampleFunc.hasSampleFunc && !ctx.bindingRecurQueryBlock() {
 		for i, group := range ctx.groups {
 			if nodeID, ctx.groups[i], err = builder.flattenSubqueries(nodeID, group, ctx); err != nil {
 				return
@@ -5969,7 +6092,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			}
 		}
 	}
-	if len(ctx.groups) > 0 || ctx.isDistinct {
+	if len(ctx.groups) > 0 || ctx.isDistinct || boundCountExpr != nil || boundOffsetExpr != nil {
 		for i := 0; i < resultLen; i++ {
 			if typ := mysqlSpecialTypeFromProvenance(ctx.outputColumnProvenanceForProject(int32(i))); typ != nil {
 				ctx.setMySQLSpecialCanonicalType(int32(i), typ)
@@ -9832,6 +9955,11 @@ func (builder *QueryBuilder) rewriteMySQLSpecialOrderByExpr(ctx *BindContext, ex
 	}
 
 	projectExpr := ctx.projects[col.ColPos]
+	if storageType := ctx.mysqlSpecialOrderTypeForProject(col.ColPos); ctx.isDistinct && isSetPlanType(storageType) {
+		// Sort the surviving visible value after DISTINCT; adding raw identity
+		// to its input projection would change the equality tuple.
+		return makeCanonicalSetValue(builder.GetContext(), expr, storageType)
+	}
 	var orderKeyExpr *plan.Expr
 	if isEnumOrSetDisplayValueExpr(projectExpr) {
 		fn := projectExpr.GetF()
@@ -9844,7 +9972,7 @@ func (builder *QueryBuilder) rewriteMySQLSpecialOrderByExpr(ctx *BindContext, ex
 		orderKeyExpr = DeepCopyExpr(fn.Args[1])
 	} else if storageType := ctx.mysqlSpecialOrderTypeForProject(col.ColPos); storageType != nil {
 		var err error
-		orderKeyExpr, err = makeMySQLSpecialOrderKey(builder.GetContext(), projectExpr, storageType)
+		orderKeyExpr, err = builder.mysqlSpecialOrderKey(ctx, projectExpr, storageType)
 		if err != nil {
 			return nil, err
 		}
@@ -10082,7 +10210,7 @@ func (builder *QueryBuilder) appendAggNode(
 	boundHavingList []*plan.Expr,
 	rollupFilter bool,
 ) (newNodeID int32, postTimeWindowHavingList []*plan.Expr, err error) {
-	if ctx.bindingRecurStmt() {
+	if ctx.bindingRecurQueryBlock() {
 		err = moerr.NewInternalError(builder.GetContext(), "not support aggregate function recursive cte")
 		return
 	}

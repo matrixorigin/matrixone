@@ -890,6 +890,11 @@ type BindContext struct {
 	// VIEW definition. Ordinary SELECT planning must not clone its select list
 	// just to support view metadata persistence.
 	captureViewStarExpansion bool
+	// persistedExpressionProtocolRequirement is shared by the root view bind
+	// context and all nested query blocks. It records protocol-sensitive
+	// expressions immediately after function binding, before a bind-time fold
+	// can erase the function from the persisted plan.
+	persistedExpressionProtocolRequirement *int64
 	// expandedSelectLists records the expanded output for each SELECT clause
 	// participating in a view definition, including UNION branches.
 	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs
@@ -1111,8 +1116,17 @@ type baseBinder struct {
 	mysqlSpecialTargetType           *Type
 	allowCanonicalNameConstValueCast bool
 	bindRawMySQLSpecialType          bool
-	subqueryInAggregateInput         bool
-	aggregateInputCorrelation        bool
+	// suppressDefaultValueBindType prevents a destination column type from
+	// changing the type of a nested literal while a function-specific binder
+	// resolves that literal.  Some functions, such as INET_NTOA, have a
+	// string-valued result but still preserve native numeric input overloads.
+	suppressDefaultValueBindType bool
+	// inetNtoaNumericLiteralContext preserves HEX/BIT literal provenance until
+	// INET_NTOA can select its numeric overload.  Those literals are otherwise
+	// materialized as binary strings by the generic literal binder.
+	inetNtoaNumericLiteralContext bool
+	subqueryInAggregateInput      bool
+	aggregateInputCorrelation     bool
 }
 
 type boundColumn struct {

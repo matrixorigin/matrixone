@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"fmt"
 	"math"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -472,8 +473,13 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 		enableVectorAutoModeByDefault,
 	)
 
-	// If index should be disabled (force mode), return nil
+	// An AUTO decision that selects the exact path is terminal for this region.
+	// Persist FORCE so the legacy statement-output retry owner cannot retry the
+	// unchanged AUTO AST forever (including implicit AUTO from session config).
 	if shouldDisableIndex {
+		if isAutoMode {
+			builder.forceAdaptiveVectorRegion(vecCtx)
+		}
 		return nil, nil
 	}
 
@@ -591,7 +597,17 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 }
 
 func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+	return builder.applyIndicesForSortUsingIvfflatWithContext(nodeID, vecCtx, multiTableIndex, colRefCnt, idxColMap, nil)
+}
 
+func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
+	nodeID int32,
+	vecCtx *vectorSortContext,
+	multiTableIndex *MultiTableIndex,
+	colRefCnt map[[2]int32]int,
+	idxColMap map[[2]int32]*plan.Expr,
+	prepared *ivfIndexContext,
+) (int32, error) {
 	if !hasCompleteVectorPagination(vecCtx) || vecCtx.sortNode == nil || vecCtx.scanNode == nil {
 		return nodeID, nil
 	}
@@ -604,9 +620,26 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	orderExpr := vecCtx.orderExpr
 	limit := vecCtx.limit
 
-	ivfCtx, err := builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
-	if err != nil || ivfCtx == nil {
-		return nodeID, err
+	// AUTO regions that already select an exact scan must stop advertising AUTO
+	// to the legacy statement-output retry owner. Replay-unsafe expressions must
+	// likewise execute exactly once; discarded candidate batches cannot roll back
+	// sequence allocations or other volatile evaluation.
+	if vectorRankMode(vecCtx) == "auto" &&
+		(builder.shouldUseForceMode(vecCtx) || !builder.adaptiveIvfReplaySafe(nodeID)) {
+		builder.forceAdaptiveVectorRegion(vecCtx)
+		return nodeID, nil
+	}
+
+	ivfCtx := prepared
+	if ivfCtx == nil {
+		var err error
+		ivfCtx, err = builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
+		if err != nil || ivfCtx == nil {
+			return nodeID, err
+		}
+	}
+	if ivfCtx.isAutoMode && prepared == nil {
+		return builder.buildAdaptiveIvfTop(nodeID, vecCtx, multiTableIndex, colRefCnt, idxColMap, ivfCtx)
 	}
 
 	// Persist the inferred auto mode back to the plan nodes so downstream
@@ -634,8 +667,28 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	if err != nil {
 		return 0, err
 	}
+	// An explicit POST query normally keeps its approximate, single-round
+	// behavior. When its predicate is covered by an INCLUDE column, however,
+	// an empty first-round page is ambiguous: the matching row may be in a
+	// later centroid. Build a subtree-local exact fallback for that narrow
+	// case. The prepared context prevents the POST candidate from recursively
+	// rebuilding the fallback while it is being materialized.
+	coveredFilters, _ := splitFiltersByVectorIndexCoverage(
+		newFilterList, scanNode, includeColumns, ivfCtx.partPos)
+	if prepared == nil && len(includeColumns) > 0 && vecCtx.rankOption != nil &&
+		vecCtx.rankOption.Mode == "post" && len(coveredFilters) > 0 &&
+		hasVectorIndexIncludedColumnFilter(coveredFilters, scanNode, includeColumns) &&
+		builder.adaptiveIvfTopSupported(nodeID, vecCtx, true) {
+		return builder.buildAdaptiveIvfTopWithPolicy(
+			nodeID, vecCtx, multiTableIndex, colRefCnt, idxColMap, ivfCtx, true)
+	}
 	includeAwareColumns := includeColumns
-	if vecCtx.rankOption != nil {
+	// The local POST candidate is annotated as explicit POST to prevent nested
+	// adaptive construction, but it still owns the AUTO resolution semantics.
+	// Preserve AUTO's include-aware index-only eligibility from the prepared
+	// context. A user-written explicit POST keeps its historical behavior.
+	preserveAutoInclude := prepared != nil && ivfCtx.isAutoMode
+	if vecCtx.rankOption != nil && !preserveAutoInclude {
 		switch vecCtx.rankOption.Mode {
 		case "", "include", "auto":
 		default:
@@ -776,7 +829,9 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	}
 	tableFuncNodeID := builder.appendNode(tableFuncNode, ctx)
 
-	err = builder.addBinding(tableFuncNodeID, tree.AliasClause{Alias: tree.Identifier("mo_ivf_alias_0")}, ctx)
+	err = builder.addBinding(tableFuncNodeID, tree.AliasClause{
+		Alias: tree.Identifier(fmt.Sprintf("mo_ivf_alias_%d", tableFuncNodeID)),
+	}, ctx)
 	if err != nil {
 		return 0, err
 	}
@@ -1166,6 +1221,202 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflat(nodeID int32, vecCt
 	}
 	remap := vectorRemapForChildProject(childNode, orderExpr, orderByScore[0].Expr, scanRemap)
 	return builder.spliceVectorRewrite(vecCtx, nodeID, sortByID, remap, idxColMap), nil
+}
+
+func vectorRankMode(vecCtx *vectorSortContext) string {
+	if vecCtx == nil || vecCtx.rankOption == nil {
+		return ""
+	}
+	return vecCtx.rankOption.Mode
+}
+
+func (builder *QueryBuilder) forceAdaptiveVectorRegion(vecCtx *vectorSortContext) {
+	if vecCtx == nil {
+		return
+	}
+	option := DeepCopyRankOption(vecCtx.rankOption)
+	if option == nil {
+		option = &plan.RankOption{}
+	}
+	option.Mode = "force"
+	vecCtx.rankOption = option
+	for _, node := range []*plan.Node{vecCtx.projNode, vecCtx.sortNode, vecCtx.scanNode} {
+		if node != nil {
+			node.RankOption = DeepCopyRankOption(option)
+		}
+	}
+}
+
+func (builder *QueryBuilder) adaptiveIvfReplaySafe(root int32) bool {
+	visited := make(map[int32]struct{})
+	var safe func(int32) bool
+	safe = func(id int32) bool {
+		if id < 0 || int(id) >= len(builder.qry.Nodes) {
+			return false
+		}
+		if _, ok := visited[id]; ok {
+			return true
+		}
+		visited[id] = struct{}{}
+		node := builder.qry.Nodes[id]
+		if containsSequenceNodeExpressions(node) {
+			return false
+		}
+		exprLists := [][]*plan.Expr{
+			node.ProjectList, node.OnList, node.FilterList, node.GroupBy,
+			node.AggList, node.WinSpecList, node.TblFuncExprList,
+			node.BlockFilterList, node.FillVal, node.OnUpdateExprs,
+		}
+		for _, exprs := range exprLists {
+			for _, expr := range exprs {
+				if ContainsVolatileFunction(expr) {
+					return false
+				}
+			}
+		}
+		for _, spec := range node.OrderBy {
+			if spec != nil && ContainsVolatileFunction(spec.Expr) {
+				return false
+			}
+		}
+		for _, child := range node.Children {
+			if !safe(child) {
+				return false
+			}
+		}
+		return true
+	}
+	return safe(root)
+}
+
+func (builder *QueryBuilder) adaptiveIvfTopSupported(nodeID int32, vecCtx *vectorSortContext, allowMultiColumn bool) bool {
+	return vecCtx != nil && vecCtx.projNode != nil && len(vecCtx.projNode.ProjectList) > 0 &&
+		(allowMultiColumn || len(vecCtx.projNode.ProjectList) == 1) &&
+		!vecCtx.hasMembership && vecCtx.providerNodeID < 0 &&
+		builder.adaptiveIvfReplaySafe(nodeID)
+}
+
+func (builder *QueryBuilder) buildAdaptiveIvfTop(
+	nodeID int32,
+	vecCtx *vectorSortContext,
+	multiTableIndex *MultiTableIndex,
+	colRefCnt map[[2]int32]int,
+	idxColMap map[[2]int32]*plan.Expr,
+	autoCtx *ivfIndexContext,
+) (int32, error) {
+	return builder.buildAdaptiveIvfTopWithPolicy(
+		nodeID, vecCtx, multiTableIndex, colRefCnt, idxColMap, autoCtx, false)
+}
+
+func (builder *QueryBuilder) buildAdaptiveIvfTopWithPolicy(
+	nodeID int32,
+	vecCtx *vectorSortContext,
+	multiTableIndex *MultiTableIndex,
+	colRefCnt map[[2]int32]int,
+	idxColMap map[[2]int32]*plan.Expr,
+	autoCtx *ivfIndexContext,
+	fallbackOnEmpty bool,
+) (int32, error) {
+	ctx := builder.ctxByNode[nodeID]
+	// Replay requires an explicit positional output boundary and no external
+	// membership/provider dependency. A SORT alone has no output schema before
+	// remapping; copying its empty ProjectList cannot define candidate layouts.
+	// Keep unsupported regions intact and exact, before cloning or rewriting tags.
+	if !builder.adaptiveIvfTopSupported(nodeID, vecCtx, fallbackOnEmpty) {
+		builder.forceAdaptiveVectorRegion(vecCtx)
+		return nodeID, nil
+	}
+	var preRoot int32
+	if !fallbackOnEmpty {
+		preRoot = builder.copyNode(ctx, nodeID)
+	}
+	forceRoot := builder.copyNode(ctx, nodeID)
+
+	setVectorMode := func(root int32, mode string) {
+		visited := make(map[int32]struct{})
+		var walk func(int32)
+		walk = func(id int32) {
+			if _, ok := visited[id]; ok || id < 0 || int(id) >= len(builder.qry.Nodes) {
+				return
+			}
+			visited[id] = struct{}{}
+			node := builder.qry.Nodes[id]
+			if node.RankOption != nil || node.NodeType == plan.Node_SORT ||
+				node.NodeType == plan.Node_PROJECT || node.NodeType == plan.Node_TABLE_SCAN {
+				node.RankOption = DeepCopyRankOption(node.RankOption)
+				if node.RankOption == nil {
+					node.RankOption = &plan.RankOption{}
+				}
+				node.RankOption.Mode = mode
+			}
+			for _, child := range node.Children {
+				walk(child)
+			}
+		}
+		walk(root)
+	}
+	contextFor := func(root int32) *vectorSortContext {
+		if vecCtx.projNode != nil {
+			return builder.buildVectorSortContext(builder.qry.Nodes[root])
+		}
+		return builder.buildVectorSortContextFromSort(builder.qry.Nodes[root])
+	}
+
+	setVectorMode(nodeID, "post")
+	postCtx := contextFor(nodeID)
+	if postCtx == nil {
+		return nodeID, moerr.NewInternalErrorNoCtx("cannot rebuild adaptive POST vector context")
+	}
+	postMap := make(map[[2]int32]*plan.Expr)
+	// Keep AUTO's adaptive nprobe and other resolved search parameters. Re-running
+	// prepare after changing RankOption to explicit POST would collapse nprobe
+	// back to the session probe_limit.
+	postRoot, err := builder.applyIndicesForSortUsingIvfflatWithContext(
+		nodeID, postCtx, multiTableIndex, colRefCnt, postMap, autoCtx)
+	if err != nil {
+		return nodeID, err
+	}
+
+	setVectorMode(forceRoot, "force")
+	if !fallbackOnEmpty {
+		setVectorMode(preRoot, "pre")
+		preCtx := contextFor(preRoot)
+		if preCtx == nil {
+			return nodeID, moerr.NewInternalErrorNoCtx("cannot rebuild adaptive PRE vector context")
+		}
+		preRoot, err = builder.applyIndicesForSortUsingIvfflat(preRoot, preCtx, multiTableIndex, colRefCnt, make(map[[2]int32]*plan.Expr))
+		if err != nil {
+			return nodeID, err
+		}
+	}
+	for key, expr := range postMap {
+		idxColMap[key] = expr
+	}
+
+	resultLimit, _ := vectorResultPagination(vecCtx)
+	if resultLimit == nil {
+		return nodeID, moerr.NewInternalErrorNoCtx("adaptive vector result limit is missing")
+	}
+	postNode := builder.qry.Nodes[postRoot]
+	adaptive := &plan.Node{
+		NodeType:                   plan.Node_ADAPTIVE_TOP,
+		Children:                   []int32{postRoot, forceRoot},
+		Limit:                      DeepCopyExpr(resultLimit),
+		ProjectList:                DeepCopyExprList(postNode.ProjectList),
+		BindingTags:                append([]int32(nil), postNode.BindingTags...),
+		Stats:                      DeepCopyStats(postNode.Stats),
+		AdaptiveTopFallbackOnEmpty: fallbackOnEmpty,
+	}
+	if !fallbackOnEmpty {
+		adaptive.Children = []int32{postRoot, preRoot, forceRoot}
+	}
+	if adaptive.Stats != nil && resultLimit.GetLit() != nil {
+		limit := resultLimit.GetLit().GetU64Val()
+		if adaptive.Stats.Outcnt > float64(limit) {
+			adaptive.Stats.Outcnt = float64(limit)
+		}
+	}
+	return builder.appendNode(adaptive, ctx), nil
 }
 
 func rebindIvfPreFilters(filters []*plan.Expr, scanNode *plan.Node, includeColumns []string) []*plan.Expr {

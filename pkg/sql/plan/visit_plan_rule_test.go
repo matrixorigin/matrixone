@@ -100,6 +100,101 @@ func TestHexPreparedArgumentUsesSQLExecuteSourceType(t *testing.T) {
 	require.Equal(t, int32(0), unchangedOverload, "execute-time rebinding must not mutate the prepared plan")
 }
 
+func TestInetNtoaPreparedArgumentUsesSQLExecuteSourceType(t *testing.T) {
+	ctx := context.Background()
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt_inet_ntoa from 'select inet_ntoa(?)'")
+	require.NoError(t, err)
+	preparedPlan := prepared.GetDcl().GetPrepare().Plan
+	preparedInetNtoa := findPlanFunctionExpr(preparedPlan, "inet_ntoa")
+	require.NotNil(t, preparedInetNtoa)
+	_, preparedOverload := planfunction.DecodeOverloadID(preparedInetNtoa.GetF().GetFunc().GetObj())
+	// An untyped SQL marker is provisionally TEXT.  The dynamic TEXT overload
+	// must be rebound at EXECUTE time when the user variable carries a numeric
+	// source type.
+	require.Equal(t, int32(18), preparedOverload)
+
+	for _, tc := range []struct {
+		name        string
+		param       ParamValue
+		specialized bool
+		overloadID  int32
+		argType     types.T
+		want        string
+	}{
+		{
+			name: "decimal user variable",
+			param: ParamValue{
+				Value: "1.6", SourceType: types.New(types.T_decimal64, 2, 1), HasSourceType: true,
+			},
+			specialized: true, overloadID: 6, argType: types.T_decimal64, want: "0.0.0.2",
+		},
+		{
+			name: "float user variable",
+			param: ParamValue{
+				Value: "1.6", SourceType: types.T_float64.ToType(), HasSourceType: true,
+			},
+			specialized: true, overloadID: 4, argType: types.T_float64, want: "0.0.0.2",
+		},
+		{
+			name: "string user variable keeps prefix semantics",
+			param: ParamValue{
+				Value: "1.6", SourceType: types.T_varchar.ToType(), HasSourceType: true,
+			},
+			specialized: false, overloadID: 18, argType: types.T_text, want: "0.0.0.1",
+		},
+		{
+			name: "date user variable preserves temporal domain",
+			param: ParamValue{
+				Value: "2024-01-02", InetNtoaSourceType: types.T_date.ToType(),
+				HasInetNtoaSourceType: true,
+			},
+			specialized: true, overloadID: 11, argType: types.T_date, want: "1.52.214.230",
+		},
+		{
+			name: "time user variable preserves fractional domain",
+			param: ParamValue{
+				Value: "00:00:02.654321", InetNtoaSourceType: types.T_time.ToTypeWithScale(6),
+				HasInetNtoaSourceType: true,
+			},
+			specialized: true, overloadID: 14, argType: types.T_time, want: "0.0.0.3",
+		},
+		{
+			name: "json user variable preserves JSON domain",
+			param: ParamValue{
+				Value: "1.6", InetNtoaSourceType: types.T_json.ToType(),
+				HasInetNtoaSourceType: true,
+			},
+			specialized: true, overloadID: 15, argType: types.T_json, want: "0.0.0.2",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			filled, specialized, fillErr := FillValuesOfParamsInPlanWithSpecialization(
+				ctx, preparedPlan, []any{tc.param})
+			require.NoError(t, fillErr)
+			require.Equal(t, tc.specialized, specialized)
+			inetNtoa := findPlanFunctionExpr(filled, "inet_ntoa")
+			require.NotNil(t, inetNtoa)
+			_, overloadID := planfunction.DecodeOverloadID(inetNtoa.GetF().GetFunc().GetObj())
+			require.Equal(t, tc.overloadID, overloadID, inetNtoa.String())
+			require.Equal(t, tc.argType, types.T(inetNtoa.GetF().GetArgs()[0].Typ.Id), inetNtoa.String())
+
+			proc := testutil.NewProcess(t)
+			executor, execErr := colexec.NewExpressionExecutor(proc, inetNtoa)
+			require.NoError(t, execErr)
+			defer executor.Free()
+			out, execErr := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+			require.NoError(t, execErr)
+			require.Equal(t, tc.want, string(out.GetBytesAt(0)))
+		})
+	}
+
+	_, unchangedOverload := planfunction.DecodeOverloadID(
+		findPlanFunctionExpr(preparedPlan, "inet_ntoa").GetF().GetFunc().GetObj())
+	require.Equal(t, int32(18), unchangedOverload,
+		"execute-time rebinding must not mutate the prepared plan")
+}
+
 func TestRestorePreparedRuntimeParamRefsKeepsTypedCast(t *testing.T) {
 	literal := &planpb.Expr{
 		Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 2, Scale: 1},

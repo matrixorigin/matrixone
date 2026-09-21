@@ -652,6 +652,12 @@ func (bc *BindContext) mysqlSpecialCanonicalTypeForExpr(expr *plan.Expr) *plan.T
 	if col == nil {
 		return nil
 	}
+	// The final result projection preserves visible positions but has its own
+	// tag (for example above DISTINCT or SORT/LIMIT). Resolve that output back
+	// to this block's canonical metadata, never through its pre-boundary input.
+	if bc.resultTag > 0 && col.RelPos == bc.resultTag {
+		return bc.mysqlSpecialCanonicalTypeForProject(col.ColPos)
+	}
 	if col.RelPos == bc.projectTag && col.ColPos >= 0 && int(col.ColPos) < len(bc.projects) {
 		if typ, recorded := bc.mysqlSpecialCanonicalTypes[col.ColPos]; recorded {
 			return DeepCopyType(typ)
@@ -786,11 +792,18 @@ func (b *baseBinder) useStoredMySQLSpecialTypesForNumericContractWithProvenance(
 	if !hasProvenanceCandidate {
 		return result, nil
 	}
+	if (name == "sum" || name == "avg") && len(args) == 1 {
+		recovered, err := b.mysqlSpecialNumericOperand(ctx, args[0])
+		if err != nil {
+			return nil, err
+		}
+		return []*plan.Expr{recovered}, nil
+	}
 	if mysqlSpecialNumericInList(name, args) {
 		if _, direct := storedMySQLSpecialTypeExpr(args[0]); !direct {
 			storageType := b.ctx.mysqlSpecialOrderTypeForExpr(args[0])
-			if storageType != nil && mysqlSpecialNumericTypeReversible(storageType) {
-				recovered, err := makeMySQLSpecialNumericValue(ctx, args[0], storageType)
+			if storageType != nil && (isSetPlanType(storageType) || mysqlSpecialNumericTypeReversible(storageType)) {
+				recovered, err := b.mysqlSpecialNumericOperand(ctx, args[0])
 				if err != nil {
 					return nil, err
 				}
@@ -823,11 +836,11 @@ func (b *baseBinder) useStoredMySQLSpecialTypesForNumericContractWithProvenance(
 			continue
 		}
 		storageType := b.ctx.mysqlSpecialOrderTypeForExpr(arg)
-		if storageType == nil || !mysqlSpecialNumericTypeReversible(storageType) {
+		if storageType == nil {
 			continue
 		}
 
-		recovered, err := makeMySQLSpecialNumericValue(ctx, arg, storageType)
+		recovered, err := b.mysqlSpecialNumericOperand(ctx, arg)
 		if err != nil {
 			return nil, err
 		}
@@ -838,6 +851,69 @@ func (b *baseBinder) useStoredMySQLSpecialTypesForNumericContractWithProvenance(
 		result[i] = recovered
 	}
 	return result, nil
+}
+
+// Numeric consumers distinguish retained input identity from a canonical
+// materialized SET display. A same-block group key supplies neither a stable
+// representative nor permission to interpret its text as an ordinary number.
+func (b *baseBinder) mysqlSpecialNumericOperand(ctx context.Context, expr *plan.Expr) (*plan.Expr, error) {
+	if raw, ok := storedMySQLSpecialTypeExpr(expr); ok {
+		return raw, nil
+	}
+	typ := b.ctx.mysqlSpecialOrderTypeForExpr(expr)
+	if typ == nil {
+		return expr, nil
+	}
+	if isSetPlanType(typ) && b.ctx.mysqlSpecialCanonicalTypeForExpr(expr) != nil {
+		return makeCanonicalSetValue(ctx, expr, typ)
+	}
+	if b.builder != nil {
+		if raw, ok := b.builder.materializeTransparentMySQLSpecialValue(expr); ok {
+			return raw, nil
+		}
+	}
+	if mysqlSpecialNumericTypeReversible(typ) {
+		return makeMySQLSpecialNumericValue(ctx, expr, typ)
+	}
+	if isSetPlanType(typ) {
+		return nil, moerr.NewNotSupported(ctx, "numeric SET value without retained storage identity or canonical materialized output")
+	}
+	return expr, nil
+}
+
+// Canonical conversion is authorized only by a materialization/equality
+// boundary, never simply by failure to recover the original bitmap.
+func makeCanonicalSetValue(ctx context.Context, expr *plan.Expr, typ *plan.Type) (*plan.Expr, error) {
+	_, valueToIndex, _, err := mysqlSpecialTypeFuncNames(typ)
+	if err != nil {
+		return nil, err
+	}
+	value, err := BindFuncExprImplByPlanExpr(ctx, valueToIndex, []*plan.Expr{
+		makePlan2StringConstExprWithType(typ.Enumvalues), DeepCopyExpr(expr),
+	})
+	if err != nil {
+		return nil, err
+	}
+	value.Typ.NotNullable = expr.Typ.NotNullable
+	value.Typ.Enumvalues = ""
+	return value, nil
+}
+
+func (builder *QueryBuilder) mysqlSpecialOrderKey(bc *BindContext, expr *plan.Expr, typ *plan.Type) (*plan.Expr, error) {
+	if isSetPlanType(typ) {
+		col := expr.GetCol()
+		if bc.mysqlSpecialCanonicalTypeForExpr(expr) != nil || (col != nil && col.RelPos == bc.groupTag) {
+			return makeCanonicalSetValue(builder.GetContext(), expr, typ)
+		}
+		if raw, ok := builder.materializeTransparentMySQLSpecialValue(expr); ok {
+			return raw, nil
+		}
+	}
+	return makeMySQLSpecialOrderKey(builder.GetContext(), expr, typ)
+}
+
+func (b *baseBinder) mysqlSpecialOrderKey(expr *plan.Expr, typ *plan.Type) (*plan.Expr, error) {
+	return b.builder.mysqlSpecialOrderKey(b.ctx, expr, typ)
 }
 
 func makeMySQLSpecialNumericValue(

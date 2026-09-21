@@ -2907,6 +2907,8 @@ func createPrepareStmtInSession(
 			prepareControl.Plan),
 		conversionParamPositions: plan2.PreparedPlanConversionParamPositions(
 			prepareControl.Plan),
+		inetNtoaParamPositions: plan2.PreparedPlanInetNtoaParamPositions(
+			prepareControl.Plan),
 		directResultParamPositions: plan2.PreparedPlanDirectResultParamPositions(
 			prepareControl.Plan),
 		directResultParamPositionsSet: true,

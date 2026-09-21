@@ -132,7 +132,7 @@ Data truncation: Can't cast 'ehiuwjey73y8213092kjfm3e#$%^WHJfne32edwfdewvvcqeveq
 INSERT INTO mid_02 VALUES(9, '2',32769, 0);
 Data truncation: data out of range: data type int16, value '32769'
 INSERT INTO mid_02 VALUES(10, '1', 328, 18446744073709551618);
-Data truncation: data out of range: data type uint64, value '18446744073709551618'
+Data truncation: data out of range: data type BIGINT UNSIGNED, value 18446744073709551618
 SELECT mid(s, NULL, NULL) FROM mid_02;
 mid(s, null, null)
 null

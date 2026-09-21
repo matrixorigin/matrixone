@@ -556,6 +556,7 @@ type testBootService struct {
 	bootstrapHook        func()
 	bootstrapUpgradeHook func(context.Context) error
 	maybeUpgrade         func()
+	maybeUpgradeFetch    func(func() (int32, string, error))
 }
 
 func (boot *testBootService) Bootstrap(ctx context.Context) error {
@@ -574,6 +575,9 @@ func (boot *testBootService) BootstrapUpgrade(ctx context.Context) error {
 }
 
 func (boot *testBootService) MaybeUpgradeTenant(ctx context.Context, tenantFetchFunc func() (int32, string, error), txnOp client.TxnOperator) (bool, error) {
+	if boot.maybeUpgradeFetch != nil {
+		boot.maybeUpgradeFetch(tenantFetchFunc)
+	}
 	if boot.maybeUpgrade != nil {
 		boot.maybeUpgrade()
 	}
@@ -1590,7 +1594,12 @@ func Test_tenant(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	boot := &testBootService{}
+	boot := &testBootService{maybeUpgradeFetch: func(fetch func() (int32, string, error)) {
+		tenantID, version, err := fetch()
+		require.NoError(t, err)
+		require.Equal(t, int32(3), tenantID)
+		require.Empty(t, version, "the serving CN's version must not stand in for the account's version")
+	}}
 
 	sv := &service{
 		bootstrapService: boot,

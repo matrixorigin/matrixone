@@ -1,7 +1,7 @@
 -- @suite
 
 -- @case
--- @desc: ordinary binary-string functions use byte semantics without changing static metadata
+-- @desc: binary-string functions use byte semantics and narrow only proven-binary metadata
 -- @label:bvt
 
 --- @metacmp(true)
@@ -185,5 +185,13 @@ from binary_function_ctas;
 select hex(substring(left(if(false, X'ff', '你好'), 2), 2, 1)) as selected_text,
        hex(substring(left(if(false, X'ff', '你好'), 2), 2)) as selected_text_tail,
        hex(substring(left(if(true, X'e4bda0e5a5bd', '你好'), 2), 2, 1)) as selected_binary;
+
+-- A derived projection has the same common binary-shaped type, but its text
+-- branch must remain visible to the outer slicing metadata contract.
+with mixed_domain as (
+    select if(false, X'ff', '你好') as value
+)
+select hex(left(value, 1)), char_length(value)
+from mixed_domain;
 
 drop database binary_string_function_semantics;

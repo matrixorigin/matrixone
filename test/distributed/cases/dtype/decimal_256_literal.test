@@ -1,0 +1,56 @@
+drop table if exists decimal_256_unquoted_literal_t;
+create table decimal_256_unquoted_literal_t (
+id int primary key,
+d decimal(65,30)
+);
+insert into decimal_256_unquoted_literal_t values
+(1, cast('12345678901234567890123456789012345.123456789012345678901234567890' as decimal(65,30)));
+select 12345678901234567890123456789012345.123456789012345678901234567890 as unquoted_decimal256;
+select id from decimal_256_unquoted_literal_t
+where d = 12345678901234567890123456789012345.123456789012345678901234567890;
+
+-- Plain decimal literals remain exact when the Decimal256 product fits. The
+-- explicit decimal comparison is an independent oracle for the full 40-digit
+-- fractional coefficient, rather than a rounded Decimal128 expectation.
+select count(*)
+from (
+    select cast('12345678901234567890' as decimal(65,0)) *
+        0.2871438217498217489217843728134214212143 as product
+) as exact_product
+where product = cast('3544985421796633986.5689846262348675848726349359393395888270' as decimal(65,40));
+
+-- A genuine signed-Decimal256 overflow remains an error on the negative path.
+select cast('-99999999999999999999999999999999999999' as decimal(65,0)) *
+    0.2871438217498217489217843728134214212143;
+
+-- Display-only zeroes must not consume DECIMAL precision, while fractional
+-- zeroes remain part of the exact scale.
+select 0000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000001.25 as leading_zero_decimal;
+select 0.0000000000000000000000000000000000000000000000000000000000000000000000000001 as fractional_zero_decimal;
+
+drop view if exists decimal_256_unquoted_literal_v;
+create view decimal_256_unquoted_literal_v as
+select 12345678901234567890123456789012345678.1 as exact_value;
+select exact_value from decimal_256_unquoted_literal_v;
+drop view decimal_256_unquoted_literal_v;
+
+drop table decimal_256_unquoted_literal_t;
+
+-- Typed IN vectors and BETWEEN must use exact suffix decisions, including
+-- rejected coercions; view rebinding must retain the same dependency.
+drop view if exists decimal_suffix_v;
+drop table if exists decimal_suffix_t;
+create table decimal_suffix_t (d decimal(30,0) not null);
+insert into decimal_suffix_t values (-1234567890123456790), (-1234567890123456789), (-11), (-10), (-9);
+select d, d in (-1234567890123456789.0, -10.0) as in_match,
+       d not in (-1234567890123456789.0, -10.0) as not_in_match,
+       d between -1234567890123456789.6 and -10.0 as between_match
+from decimal_suffix_t order by d;
+create view decimal_suffix_v as
+select d, d in (-1234567890123456789.0, -10.0) as in_match,
+       d not in (-1234567890123456789.0, -10.0) as not_in_match,
+       d between -1234567890123456789.6 and -10.0 as between_match
+from decimal_suffix_t;
+select * from decimal_suffix_v order by d;
+drop view decimal_suffix_v;
+drop table decimal_suffix_t;
