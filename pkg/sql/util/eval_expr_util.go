@@ -290,7 +290,10 @@ func arrayUserVariableTypedValueToBytes[T types.ArrayElement](typ types.Type, va
 		if size <= 0 || len(value)%size != 0 {
 			return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), len(value))
 		}
-		if got := len(value) / size; got != int(typ.Width) {
+		if len(value)/size > types.MaxArrayDimension {
+			return nil, moerr.NewInvalidInputNoCtx("vector dimension exceeds maximum dimension")
+		}
+		if got := len(value) / size; typ.Width != types.MaxArrayDimension && got != int(typ.Width) {
 			return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), got)
 		}
 	}
@@ -841,85 +844,12 @@ func SetInsertValueString(proc *process.Process, numVal *tree.NumVal, typ *types
 
 		var v []byte
 		if typ.Oid.IsArrayRelate() {
-			// Assuming that input s is of type "[1,2,3]"
-
-			switch typ.Oid {
-			case types.T_array_float32:
-				_v, err := types.StringToArray[float32](s)
-				if err != nil {
-					return nil, err
-				}
-
-				if len(_v) != destLen {
-					return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), len(_v))
-				}
-
-				v = types.ArrayToBytes[float32](_v)
-
-			case types.T_array_float64:
-				_v, err := types.StringToArray[float64](s)
-				if err != nil {
-					return nil, err
-				}
-
-				if len(_v) != destLen {
-					return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), len(_v))
-				}
-
-				v = types.ArrayToBytes[float64](_v)
-
-			case types.T_array_bf16:
-				_v, err := types.StringToArray[types.BF16](s)
-				if err != nil {
-					return nil, err
-				}
-
-				if len(_v) != destLen {
-					return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), len(_v))
-				}
-
-				v = types.ArrayToBytes[types.BF16](_v)
-
-			case types.T_array_float16:
-				_v, err := types.StringToArray[types.Float16](s)
-				if err != nil {
-					return nil, err
-				}
-
-				if len(_v) != destLen {
-					return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), len(_v))
-				}
-
-				v = types.ArrayToBytes[types.Float16](_v)
-
-			case types.T_array_int8:
-				_v, err := types.StringToArray[int8](s)
-				if err != nil {
-					return nil, err
-				}
-
-				if len(_v) != destLen {
-					return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), len(_v))
-				}
-
-				v = types.ArrayToBytes[int8](_v)
-
-			case types.T_array_uint8:
-				_v, err := types.StringToArray[uint8](s)
-				if err != nil {
-					return nil, err
-				}
-
-				if len(_v) != destLen {
-					return nil, moerr.NewArrayDefMismatchNoCtx(int(typ.Width), len(_v))
-				}
-
-				v = types.ArrayToBytes[uint8](_v)
-			default:
-				return nil, moerr.NewInternalErrorNoCtxf("%s is not supported array type", typ.String())
-
+			// 与参数绑定共用六类型解析及固定/动态维度校验。
+			var err error
+			v, err = arrayUserVariableValueToBytes(*typ, s)
+			if err != nil {
+				return nil, err
 			}
-
 		} else {
 			v = []byte(s)
 		}

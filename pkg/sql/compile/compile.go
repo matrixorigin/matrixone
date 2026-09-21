@@ -1565,6 +1565,12 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	if err = c.constrainBoundedConditionalStringWorkers(qry); err != nil {
 		return nil, err
 	}
+	if err = c.constrainSpatialDistanceWorkers(qry); err != nil {
+		return nil, err
+	}
+	if err = c.constrainDecimalLiteralWorkers(qry); err != nil {
+		return nil, err
+	}
 	if err = c.constrainStrictWriteWorkers(); err != nil {
 		return nil, err
 	}
@@ -7811,7 +7817,7 @@ func (c *Compile) compileGroupWithoutShuffle(
 func (c *Compile) hasUnsupportedRemoteGroupWire(node *plan.Node) bool {
 	return (hasApproxPercentile(node) && !c.supportsRemoteApproxPercentile()) ||
 		(hasHLLAggregate(node) && !c.supportsRemoteHLL()) ||
-		(hasCanonicalHLLAddAggregate(node) && !c.supportsRemoteCanonicalHLLAdd()) ||
+		(canonicalHLLAddRequiredVersion(node) > c.remoteProtocolVersion()) ||
 		(hasVariableLengthGroupKey(node) && !c.supportsRemoteGroupHashString()) ||
 		(hasCanonicalDistinctKeyWire(node) && !c.supportsRemoteCanonicalDistinctKeyWire()) ||
 		(hasLegacyFloatDistinctKeyWire(node) && !c.supportsRemoteCanonicalDistinctKeyWire()) ||
@@ -8025,23 +8031,32 @@ func hasHLLAggregate(node *plan.Node) bool {
 }
 
 func hasCanonicalHLLAddAggregate(node *plan.Node) bool {
+	return canonicalHLLAddRequiredVersion(node) != 0
+}
+
+func canonicalHLLAddRequiredVersion(node *plan.Node) int64 {
 	if node == nil {
-		return false
+		return 0
 	}
+	var required int64
 	for _, agg := range node.AggList {
 		fn := agg.GetF()
 		if fn == nil || fn.Func == nil || fn.Func.ObjName != "hll_add_agg" ||
 			len(fn.Args) == 0 || fn.Args[0] == nil {
 			continue
 		}
-		if isCanonicalHLLVectorType(types.T(fn.Args[0].Typ.Id)) {
-			return true
+		typ := types.T(fn.Args[0].Typ.Id)
+		if isCanonicalTextHLLAddType(typ) {
+			return defines.MORPCVersion91
+		}
+		if isCanonicalVectorHLLAddType(typ) {
+			required = defines.MORPCVersion88
 		}
 	}
-	return false
+	return required
 }
 
-func isCanonicalHLLVectorType(typ types.T) bool {
+func isCanonicalVectorHLLAddType(typ types.T) bool {
 	switch typ {
 	case types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16:
@@ -8049,6 +8064,10 @@ func isCanonicalHLLVectorType(typ types.T) bool {
 	default:
 		return false
 	}
+}
+
+func isCanonicalTextHLLAddType(typ types.T) bool {
+	return typ == types.T_char || typ == types.T_json
 }
 
 // hasVariableLengthGroupKey mirrors Group.prepareGroupAndAggArg's v78 fence
@@ -8200,7 +8219,22 @@ func (c *Compile) supportsRemoteHLL() bool {
 }
 
 func (c *Compile) supportsRemoteCanonicalHLLAdd() bool {
-	return supportsRemoteCanonicalHLLAdd(c.proc.GetService())
+	return c.remoteProtocolVersion() >= defines.MORPCVersion88
+}
+
+func (c *Compile) supportsRemoteCanonicalTextHLLAdd() bool {
+	return c.remoteProtocolVersion() >= defines.MORPCVersion91
+
+}
+
+func (c *Compile) remoteProtocolVersion() int64 {
+	version, ok := moruntime.ServiceRuntime(c.proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return 0
+	}
+	protocolVersion, _ := version.(int64)
+	return protocolVersion
 }
 
 func (c *Compile) supportsRemoteGroupHashString() bool {
@@ -8272,6 +8306,16 @@ func supportsRemoteCanonicalHLLAdd(service string) bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion88
+}
+
+func supportsRemoteCanonicalTextHLLAdd(service string) bool {
+	version, ok := moruntime.ServiceRuntime(service).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion91
 }
 
 func supportsRemoteGroupHashString(service string) bool {
@@ -8590,7 +8634,7 @@ func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
 		(!hasOrderedSetPercentile(node) || c.supportsRemoteOrderedSetAggregates()) &&
 		(!hasApproxPercentile(node) || c.supportsRemoteApproxPercentile()) &&
 		(!hasHLLAggregate(node) || c.supportsRemoteHLL()) &&
-		(!hasCanonicalHLLAddAggregate(node) || c.supportsRemoteCanonicalHLLAdd()) &&
+		(canonicalHLLAddRequiredVersion(node) <= c.remoteProtocolVersion()) &&
 		(!hasVariableLengthGroupKey(node) || c.supportsRemoteGroupHashString()) &&
 		(!hasCanonicalDistinctKeyWire(node) || c.supportsRemoteCanonicalDistinctKeyWire()) &&
 		(!hasLegacyFloatDistinctKeyWire(node) || c.supportsRemoteCanonicalDistinctKeyWire()) &&

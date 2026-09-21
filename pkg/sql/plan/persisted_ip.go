@@ -99,6 +99,9 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.StringNumericResultContracts && requiredVersion < defines.MORPCVersion80 {
 		requiredVersion = defines.MORPCVersion80
 	}
+	if features.DecimalLiteralSemantics && requiredVersion < defines.MORPCVersion89 {
+		requiredVersion = defines.MORPCVersion89
+	}
 	if features.IntegerParameterCoercion && requiredVersion < defines.MORPCVersion85 {
 		requiredVersion = defines.MORPCVersion85
 	}
@@ -108,6 +111,9 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if (features.ExpressionResultMetadataContracts || features.TOBase64ResultContracts || features.IPFunctionResultContracts) &&
 		requiredVersion < defines.MORPCVersion86 {
 		requiredVersion = defines.MORPCVersion86
+	}
+	if features.SpatialDistanceSemantics && requiredVersion < defines.MORPCVersion90 {
+		requiredVersion = defines.MORPCVersion90
 	}
 	return requiredVersion, nil
 }

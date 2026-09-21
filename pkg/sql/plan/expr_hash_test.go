@@ -289,6 +289,31 @@ func TestExprStructuralHashIgnoresDiagnosticProvenance(t *testing.T) {
 	require.False(t, exprStructuralEqual(vectorExpr, differentLen))
 }
 
+func TestExprStructuralHashIncludesDecimalProtocolProvenance(t *testing.T) {
+	literal := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_decimal64), Width: 8, Scale: 2},
+		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+			Value: &planpb.Literal_Decimal64Val{Decimal64Val: &planpb.Decimal64{A: 125}},
+		}},
+	}
+	markedLiteral := DeepCopyExpr(literal)
+	markedLiteral.GetLit().DecimalLiteralRequiresV82 = true
+	require.NotEqual(t, exprStructuralHash(literal), exprStructuralHash(markedLiteral))
+	require.False(t, exprStructuralEqual(literal, markedLiteral))
+
+	vectorExpr := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_decimal256), Width: 42, Scale: 2},
+		Expr: &planpb.Expr_Vec{Vec: &planpb.LiteralVec{
+			Len:  2,
+			Data: []byte("same executable decimal vector"),
+		}},
+	}
+	markedVector := DeepCopyExpr(vectorExpr)
+	markedVector.GetVec().DecimalLiteralRequiresV82 = true
+	require.NotEqual(t, exprStructuralHash(vectorExpr), exprStructuralHash(markedVector))
+	require.False(t, exprStructuralEqual(vectorExpr, markedVector))
+}
+
 // TestExprStructuralEqualNullAndTypeMismatch covers the null-vs-non-null and
 // cross-variant paths (e.g. literal vs function, literal vs column).
 func TestExprStructuralEqualNullAndTypeMismatch(t *testing.T) {

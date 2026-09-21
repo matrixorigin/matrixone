@@ -2018,6 +2018,122 @@ func TestDecimal128HasTrailingZeros(t *testing.T) {
 	}
 }
 
+func TestDecimal256StringHasTrailingZerosWithoutNarrowing(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		value           string
+		width           int32
+		constScale      int32
+		columnScale     int32
+		wantTrailing    bool
+		wantAlwaysFalse bool
+	}{
+		{
+			name:            "18 digit suffix",
+			value:           "12345678901234567890.000000000000000000",
+			width:           38,
+			constScale:      18,
+			columnScale:     0,
+			wantTrailing:    true,
+			wantAlwaysFalse: false,
+		},
+		{
+			name:            "19 digit suffix",
+			value:           "12345678901234567890.0000000000000000000",
+			width:           39,
+			constScale:      19,
+			columnScale:     0,
+			wantTrailing:    true,
+			wantAlwaysFalse: false,
+		},
+		{
+			name:            "wide suffix",
+			value:           "1234567890123456789012345678901234567890.000000000000000000000000000000",
+			width:           70,
+			constScale:      30,
+			columnScale:     0,
+			wantTrailing:    true,
+			wantAlwaysFalse: false,
+		},
+		{
+			name:            "wide nonzero suffix",
+			value:           "12345678901234567890.0000000000000000001",
+			width:           39,
+			constScale:      19,
+			columnScale:     0,
+			wantTrailing:    false,
+			wantAlwaysFalse: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			constType := types.New(types.T_decimal256, tc.width, tc.constScale)
+			constExpr := &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_decimal256), Width: tc.width, Scale: tc.constScale},
+				Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+					Isnull: false,
+					Value:  &plan.Literal_Sval{Sval: tc.value},
+				}},
+			}
+
+			require.Equal(t, tc.wantTrailing,
+				hasTrailingZeros(constExpr, constType, tc.columnScale))
+			require.Equal(t, tc.wantAlwaysFalse,
+				isDecimalComparisonAlwaysFalseCore(constExpr, constType, tc.columnScale))
+		})
+	}
+}
+
+func TestDecimalTrailingZerosIsSignIndependent(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name         string
+		value        string
+		wantTrailing bool
+		wantProven   bool
+	}{
+		{
+			name:         "positive zero suffix",
+			value:        "50.500000",
+			wantTrailing: true,
+			wantProven:   true,
+		},
+		{
+			name:         "negative zero suffix",
+			value:        "-50.500000",
+			wantTrailing: true,
+			wantProven:   true,
+		},
+		{
+			name:         "positive nonzero suffix",
+			value:        "50.500001",
+			wantTrailing: false,
+			wantProven:   true,
+		},
+		{
+			name:         "negative nonzero suffix",
+			value:        "-50.500001",
+			wantTrailing: false,
+			wantProven:   true,
+		},
+		{
+			name:         "negative wide coefficient",
+			value:        "-12345678901234567890.0000000000000000000",
+			wantTrailing: true,
+			wantProven:   true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expr, err := makePlan2DecimalExprWithType(ctx, tc.value)
+			require.NoError(t, err)
+			constType := makeTypeByPlan2Expr(expr)
+
+			gotTrailing, gotProven := decimalTrailingZerosStatus(expr, constType, 2)
+			require.Equal(t, tc.wantTrailing, gotTrailing)
+			require.Equal(t, tc.wantProven, gotProven)
+		})
+	}
+}
+
 // TestParseHiveOptionKV verifies hive key parsing via Init*Param helper.
 // Covers legacy-JSON fallback where Option[] still carries hive_partitioning /
 // hive_partition_columns (stripHiveOptionKeys did not run). The key behavior:
