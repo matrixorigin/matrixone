@@ -766,6 +766,9 @@ func typeInList(typ types.T, supported []types.T) bool {
 // widened. Bind through the existing UINT64 aggregate instead of changing the
 // interpretation of old BIT partial states or treating BIT width as precision.
 func sumAvgTypeCheck(inputs []types.Type) checkResult {
+	if len(inputs) == 1 && inputs[0].Oid == types.T_enum {
+		return newCheckResultWithCast(0, []types.Type{types.T_uint16.ToType()})
+	}
 	if len(inputs) == 1 && inputs[0].Oid == types.T_bit {
 		return newCheckResultWithCast(0, []types.Type{types.T_uint64.ToType()})
 	}

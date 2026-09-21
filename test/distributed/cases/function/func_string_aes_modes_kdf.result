@@ -1,0 +1,93 @@
+SET block_encryption_mode = 'aes-192-cfb8';
+SELECT HEX(AES_ENCRYPT(UNHEX('4d61747269784f6e652041455300ff73747265616d2d6d6f6465'), '0123456789abcdef01234567', '0123456789abcdef')) AS cfb8;
+cfb8
+97A7843FEAE0450B9443A1FE8F0C43EBB4E57D59CC0C60E7B380
+SELECT HEX(AES_DECRYPT(UNHEX('97a7843feae0450b9443a1fe8f0c43ebb4e57d59cc0c60e7b380'), '0123456789abcdef01234567', '0123456789abcdefignored')) AS plaintext;
+plaintext
+4D61747269784F6E652041455300FF73747265616D2D6D6F6465
+SELECT LENGTH(AES_ENCRYPT('', 'key', '0123456789abcdef')) AS empty_length;
+empty_length
+0
+SELECT LENGTH(AES_ENCRYPT('abc', 'key', '0123456789abcdef')) AS short_length;
+short_length
+3
+SET block_encryption_mode = 'aes-256-ofb';
+SELECT HEX(AES_ENCRYPT(UNHEX('4d61747269784f6e652041455300ff73747265616d2d6d6f6465'), '0123456789abcdef0123456789abcdef', '0123456789abcdef')) AS ofb;
+ofb
+B55DEE12B57494F644BF389386DBE9460F8EF01E87CBD8B1B77A
+SET block_encryption_mode = 'aes-128-ecb';
+SELECT HEX(AES_ENCRYPT('hello', 'password', '', 'hkdf')) AS hkdf_default;
+hkdf_default
+7D0CFC63F883519E5B8F78DE8933DEE6
+SELECT HEX(AES_ENCRYPT('hello', 'password', '', 'hkdf', 'salt')) AS hkdf_salt;
+hkdf_salt
+98B27BBB4FCE2EE0D2A57E55828B8CB0
+SELECT HEX(AES_ENCRYPT('hello', 'password', '', 'hkdf', 'salt', 'info')) AS hkdf_info;
+hkdf_info
+F35282C2B466630949EB317C0F1B6F57
+SELECT AES_DECRYPT(UNHEX('7d0cfc63f883519e5b8f78de8933dee6'), 'password', '', 'hkdf') AS decrypted;
+decrypted
+hello
+SELECT AES_DECRYPT(UNHEX('98b27bbb4fce2ee0d2a57e55828b8cb0'), 'password', '', 'hkdf', 'salt') AS decrypted;
+decrypted
+hello
+SELECT AES_DECRYPT(UNHEX('f35282c2b466630949eb317c0f1b6f57'), 'password', '', 'hkdf', 'salt', 'info') AS decrypted;
+decrypted
+hello
+SELECT HEX(AES_ENCRYPT('hello', 'password', '', 'pbkdf2_hmac')) AS pbkdf2_default;
+pbkdf2_default
+CAC24CA8C9FCD9BBA907863D39D55CD8
+SELECT HEX(AES_ENCRYPT('hello', 'password', '', 'pbkdf2_hmac', 'salt')) AS pbkdf2_salt;
+pbkdf2_salt
+8D7EE6AABA97089A79D01672F0AFB145
+SELECT HEX(AES_ENCRYPT('hello', 'password', '', 'pbkdf2_hmac', 'salt', 1000)) AS pbkdf2_numeric;
+pbkdf2_numeric
+8D7EE6AABA97089A79D01672F0AFB145
+SELECT HEX(AES_ENCRYPT('hello', 'password', '', 'pbkdf2_hmac', 'salt', '1000x')) AS pbkdf2_prefix;
+pbkdf2_prefix
+8D7EE6AABA97089A79D01672F0AFB145
+SELECT AES_DECRYPT(UNHEX('cac24ca8c9fcd9bba907863d39d55cd8'), 'password', '', 'pbkdf2_hmac') AS decrypted;
+decrypted
+hello
+SELECT AES_DECRYPT(UNHEX('8d7ee6aaba97089a79d01672f0afb145'), 'password', '', 'pbkdf2_hmac', 'salt') AS decrypted;
+decrypted
+hello
+SELECT AES_DECRYPT(UNHEX('8d7ee6aaba97089a79d01672f0afb145'), 'password', '', 'pbkdf2_hmac', 'salt', 1000) AS decrypted;
+decrypted
+hello
+SELECT AES_DECRYPT(UNHEX('92f3e260a3927b6043f3e17f0db5413292f3e260a3927b6043f3e17f0db54132'), '0123456789abcdef') AS invalid_padding;
+invalid_padding
+null
+SELECT HEX(AES_ENCRYPT('hello', 'password', NULL, 'hkdf')) AS ignored_ecb_iv;
+ignored_ecb_iv
+7D0CFC63F883519E5B8F78DE8933DEE6
+SELECT AES_ENCRYPT('hello', 'password', '', 'HKDF');
+invalid input: invalid AES KDF name
+SELECT AES_ENCRYPT('hello', 'password', '', 'hkdf', NULL);
+invalid input: AES KDF options must not be NULL
+SELECT AES_ENCRYPT('hello', 'password', '', 'pbkdf2_hmac', '', 999);
+invalid input: invalid AES KDF iterations
+SELECT AES_ENCRYPT('hello', 'password', '', 'pbkdf2_hmac', '', 65536);
+invalid input: invalid AES KDF iterations
+SELECT AES_ENCRYPT('hello', 'password', '', 'pbkdf2_hmac', '', 1000.0);
+invalid input: invalid AES KDF iterations
+PREPARE aes_mode_reuse FROM 'SELECT LENGTH(AES_ENCRYPT(?, ?, ?)) AS ciphertext_length';
+SET @aes_data = 'hello';
+SET @aes_key = 'password';
+SET @aes_iv = '0123456789abcdef';
+EXECUTE aes_mode_reuse USING @aes_data, @aes_key, @aes_iv;
+ciphertext_length
+16
+SET block_encryption_mode = 'aes-128-cfb1';
+EXECUTE aes_mode_reuse USING @aes_data, @aes_key, @aes_iv;
+ciphertext_length
+5
+DEALLOCATE PREPARE aes_mode_reuse;
+SELECT AES_ENCRYPT(NULL, 'key', NULL, 'bad') AS null_data;
+null_data
+null
+SET block_encryption_mode = 'invalid-mode';
+SELECT AES_ENCRYPT('hello', 'key') AS invalid_mode;
+invalid_mode
+null
+SET block_encryption_mode = 'aes-128-ecb';

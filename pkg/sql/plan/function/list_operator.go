@@ -3813,7 +3813,7 @@ var supportedOperators = []FuncNew{
 
 func isStrictAssignmentCastTarget(target types.T) bool {
 	switch target {
-	case types.T_char, types.T_varchar, types.T_text, types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_year,
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_year,
 		types.T_uint32:
 		return true
 	default:

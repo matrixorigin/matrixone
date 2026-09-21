@@ -980,6 +980,9 @@ func makePlan2AssignmentCastExpr(ctx context.Context, expr *Expr, targetType Typ
 	if useAssignmentStrictCast(targetType) {
 		funcName = "cast_strict"
 	}
+	if targetType.Id == int32(types.T_blob) || targetType.Id == int32(types.T_text) {
+		return forceAssignmentCastExprWithName(ctx, expr, targetType, funcName)
+	}
 	return makePlan2CastExprWithName(ctx, expr, targetType, funcName)
 }
 

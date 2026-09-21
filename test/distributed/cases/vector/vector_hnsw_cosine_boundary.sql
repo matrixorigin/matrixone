@@ -34,6 +34,9 @@ explain select id, cosine_distance(v, '[1e-20,1e-20,1e-20]') as d
 -- This is the result-set failure on the unfixed HNSW path: the tiny query's
 -- projected scores can be negative or -Inf even though the scalar contract is
 -- finite and non-negative.
+-- Positive scaling preserves direction: d([2,1,1], [t,t,t]) = 1-4/sqrt(18)
+-- for t > 0, including t=1e-20. The expected value must not preserve the old
+-- float32 squared-norm underflow error (0.057188 instead of 0.057191).
 select id, round(cosine_distance(v, '[1e-20,1e-20,1e-20]'), 6) as d
   from h_src
  order by cosine_distance(v, '[1e-20,1e-20,1e-20]')
