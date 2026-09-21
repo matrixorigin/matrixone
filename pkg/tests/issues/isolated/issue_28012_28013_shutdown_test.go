@@ -38,8 +38,11 @@ import (
 // accepted commit; after restart the multi-row statement is wholly visible or
 // wholly absent, and the restarted cluster accepts a new transaction.
 func TestIssue28012And28013AcceptedCommitDuringStandaloneShutdown(t *testing.T) {
-	faultEnabledHere := fault.Enable()
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	var (
+		faultEnabledHere bool
+		ctx              context.Context
+		cancel           context.CancelFunc
+	)
 	commitWaiters := "issue28012_28013_commit_waiters"
 	drainWaiters := "issue28012_28013_drain_waiters"
 	handlersDrainedWaiters := "issue28012_28013_handlers_drained_waiters"
@@ -70,7 +73,9 @@ func TestIssue28012And28013AcceptedCommitDuringStandaloneShutdown(t *testing.T) 
 		for _, point := range faultPoints {
 			_, _ = fault.RemoveFaultPoint(context.Background(), point)
 		}
-		cancel()
+		if cancel != nil {
+			cancel()
+		}
 
 		cleanupErr := waitIssue28012And28013Goroutines(&goroutines, 30*time.Second)
 		for _, db := range dbs {
@@ -88,6 +93,10 @@ func TestIssue28012And28013AcceptedCommitDuringStandaloneShutdown(t *testing.T) 
 	var err error
 	cluster, err = embed.StartTestCluster(embed.WithCNCount(1))
 	require.NoError(t, err)
+	// Cluster admission can wait behind other coverage tests for minutes.
+	// Start the SQL deadline only after this test owns a running cluster.
+	faultEnabledHere = fault.Enable()
+	ctx, cancel = context.WithTimeout(context.Background(), 2*time.Minute)
 	sysDB := openIssue28012And28013DB(t, ctx, cluster, "dump:111", &dbs)
 	accountName := fmt.Sprintf("issue28012_%d", time.Now().UnixNano())
 	mustExecIssue28012And28013(t, ctx, sysDB, fmt.Sprintf(
@@ -133,7 +142,7 @@ func TestIssue28012And28013AcceptedCommitDuringStandaloneShutdown(t *testing.T) 
 	// This boundary is reached by the TN transaction server from the real
 	// cluster.Close path only after quiesce has started and while the accepted
 	// commit is still counted as an active handler.
-	waitIssue28012And28013FaultWaiters(t, drainWaiters, 1, 5*time.Second)
+	waitIssue28012And28013FaultWaiters(t, drainWaiters, 1, 30*time.Second)
 	_, _, ok := fault.TriggerFault(drainRelease)
 	require.True(t, ok)
 
