@@ -163,6 +163,10 @@ message GetProtocolVersionRequest {
 message GetProtocolVersionResponse {
   // ProtocolVersion is the version of the protocol
   int64 Version = 1;
+  // CommitID identifies the exact MatrixOne source revision running at this
+  // query endpoint. MO_STATEMENT_HASH requires matching parser/formatter code
+  // on every CN that evaluates the function in one query.
+  string BuildCommitID = 2;
 }
 
 message SetProtocolVersionRequest {

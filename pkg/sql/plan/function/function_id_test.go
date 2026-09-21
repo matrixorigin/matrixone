@@ -766,7 +766,8 @@ var predefinedFunids = map[int]int{
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
 	EXTRACTVALUE:        581,
 	UPDATEXML:           582,
-	FUNCTION_END_NUMBER: 583,
+	MO_STATEMENT_HASH:   583,
+	FUNCTION_END_NUMBER: 584,
 }
 
 func Test_funids(t *testing.T) {

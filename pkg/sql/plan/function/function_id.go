@@ -850,16 +850,20 @@ const (
 
 	EXTRACTVALUE = 581
 	UPDATEXML    = 582
+	// MO_STATEMENT_HASH is MatrixOne's native statement-hash function. Keep it
+	// after the XML functions added by main so function IDs remain unique.
+	MO_STATEMENT_HASH = 583
 
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 583
+	FUNCTION_END_NUMBER = 584
 )
 
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
-	"extractvalue": EXTRACTVALUE,
-	"updatexml":    UPDATEXML,
+	"extractvalue":      EXTRACTVALUE,
+	"updatexml":         UPDATEXML,
+	"mo_statement_hash": MO_STATEMENT_HASH,
 	// operators
 	"=":            EQUAL,
 	"<=>":          NULL_SAFE_EQUAL,

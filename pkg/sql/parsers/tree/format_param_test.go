@@ -27,3 +27,12 @@ func TestParamExprFormattingKeepsOffsetsOptIn(t *testing.T) {
 	require.Equal(t, "?", String(param, dialect.MYSQL))
 	require.Equal(t, "?7", StringWithOpts(param, dialect.MYSQL, WithParamExprOffset()))
 }
+
+func TestFormatCanonicalUserVariableNames(t *testing.T) {
+	user := NewVarExpr("MiXeD", false, false, nil)
+	require.Equal(t, "@`MiXeD`", StringWithOpts(user, dialect.MYSQL, WithQuoteIdentifier()))
+	require.Equal(t, "@`mixed`", StringWithOpts(user, dialect.MYSQL, WithQuoteIdentifier(), WithCanonicalUserVariableNames()))
+
+	system := NewVarExpr("time_zone", true, true, nil)
+	require.Equal(t, "@@global.time_zone", StringWithOpts(system, dialect.MYSQL, WithCanonicalUserVariableNames()))
+}

@@ -381,6 +381,8 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 	require.NoError(t, vector.AppendBytes(params, []byte("text"), false, proc.Mp()))
 	t.Cleanup(func() { params.Free(proc.Mp()) })
 
+	timeZone, err := time.Unix(0, 0).UTC().MarshalBinary()
+	require.NoError(t, err)
 	procInfo := &pipeline.ProcessInfo{
 		Id:                         "test-proc-id",
 		AccountId:                  catalog.System_Account,
@@ -390,6 +392,9 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 		PlanSnapshotTs:             &timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 4},
 		PlanGenerationReused:       true,
 		StringShuffleHashAlgorithm: uint32(process.StringShuffleHashComplete),
+		SessionInfo: pipeline.SessionInfo{
+			TimeZone: timeZone,
+		},
 		Snapshot: txn.CNTxnSnapshot{
 			Txn: txn.TxnMeta{
 				ID: []byte("test-txn-id"),
@@ -425,6 +430,22 @@ func TestGenerateProcessHelper_WithSnapshot(t *testing.T) {
 	require.NotNil(t, helper.txnOperator, "txnOperator should be created from snapshot")
 	// Verify that rebuilt txnOperator has nil workspace (key point for remote run)
 	require.Nil(t, helper.txnOperator.GetWorkspace(), "rebuilt txnOperator should have nil workspace initially")
+}
+
+func TestGenerateProcessHelperToleratesEmptyTimeZone(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	txnClient := mock_frontend.NewMockTxnClient(ctrl)
+	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+	txnClient.EXPECT().NewWithSnapshot(gomock.Any(), gomock.Any()).Return(txnOperator, nil).Times(1)
+
+	data, err := (&pipeline.ProcessInfo{}).Marshal()
+	require.NoError(t, err)
+
+	helper, err := generateProcessHelper(context.Background(), data, txnClient)
+	require.NoError(t, err)
+	require.Nil(t, helper.sessionInfo.TimeZone)
 }
 
 func TestGenerateProcessHelperRejectsUnknownStringShuffleHashAlgorithm(t *testing.T) {
