@@ -36,6 +36,16 @@ insert into db1.t1 values (1,1),(2,2),(100,30);
 create table db1.t_dup(a int, marker int);
 insert into db1.t_dup values (1,1),(1,2),(2,3);
 
+-- 0. Rename admission keeps tables without role rules working and closes the
+-- shared cluster-table path conservatively.
+create table db1.t_rename_no_rule(a int);
+alter table db1.t_rename_no_rule rename to db1.t_rename_no_rule_after;
+rename table db1.t_rename_no_rule_after to db1.t_rename_no_rule;
+create table db1.t_rename_chain_ok_a(a int);
+create table db1.t_rename_chain_ok_b(a int);
+rename table db1.t_rename_chain_ok_a to db1.t_rename_chain_ok_a_after, db1.t_rename_chain_ok_b to db1.t_rename_chain_ok_b_after;
+rename table db1.t_rename_chain_ok_a_after to db1.t_rename_chain_ok_a, db1.t_rename_chain_ok_b_after to db1.t_rename_chain_ok_b;
+
 -- 1. ADD RULE normal case + SHOW RULES verification
 create role test_rule_role;
 alter role test_rule_role add rule "select * from db1.t1 where age > 28" on table db1.t1;
@@ -82,7 +92,20 @@ set enable_remap_hint = 0;
 select * from db1.t1;
 -- @session
 
--- 11. SET SECONDARY ROLE ALL merges select * rewrite rules from all active roles
+-- 11. Table renames are rejected while role rewrite metadata exists
+alter table db1.t1 rename to db1.t1_renamed;
+rename table db1.t1 to db1.t1_renamed;
+-- @session:id=10&user=sys:test_rule_user:test_rule_role&password=123456
+set enable_remap_hint = 1;
+select * from db1.t1;
+-- @session
+
+create table db1.t_rename_chain_guard(a int);
+insert into db1.t_rename_chain_guard values (7);
+rename table db1.t1 to db1.t1_renamed, db1.t_rename_chain_guard to db1.t_rename_chain_guard_after;
+select * from db1.t_rename_chain_guard;
+
+-- 12. SET SECONDARY ROLE ALL merges select * rewrite rules from all active roles
 create database db2;
 create table db2.t2(a int, age int);
 insert into db2.t2 values (10,10),(20,35),(200,60);

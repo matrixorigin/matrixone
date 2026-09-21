@@ -5378,6 +5378,33 @@ func doLockTable(
 	return err
 }
 
+func lockTableForSnapshotRefresh(
+	ctx context.Context,
+	eng engine.Engine,
+	proc *process.Process,
+	rel engine.Relation,
+	defChanged bool) error {
+	id := rel.GetTableID(proc.Ctx)
+	defs, err := rel.GetPrimaryKeys(ctx)
+	if err != nil {
+		return err
+	}
+
+	if len(defs) != 1 {
+		panic("invalid primary keys")
+	}
+
+	return lockop.LockTableForSnapshotRefreshWithContext(
+		ctx,
+		eng,
+		proc,
+		id,
+		defs[0].Type,
+		lock.LockMode_Exclusive,
+		defChanged,
+	)
+}
+
 var lockTable = func(
 	ctx context.Context,
 	eng engine.Engine,

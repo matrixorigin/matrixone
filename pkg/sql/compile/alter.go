@@ -1929,6 +1929,161 @@ func (c *Compile) reconcileAlterCopyAutoIncrement(
 	return newRel.AlterTable(c.proc.Ctx, nil, epochReqs)
 }
 
+func alterTableHasRename(qry *plan.AlterTable) bool {
+	if qry == nil {
+		return false
+	}
+	for _, action := range qry.Actions {
+		if action == nil {
+			continue
+		}
+		name := action.GetAlterName()
+		if name != nil && name.OldName != name.NewName {
+			return true
+		}
+	}
+	return false
+}
+
+func isClusterTableRename(qry *plan.AlterTable) bool {
+	return alterTableHasRename(qry) && qry.GetIsClusterTable()
+}
+
+// checkRoleRuleRenameAdmission closes the gap between the name-keyed role-rule
+// catalog and relation renames. mo_role_rule stores the rule SQL verbatim and
+// has no table object id, so rewriting arbitrary SQL here would be unsafe. A
+// rename is therefore admitted only when the current account has no persisted
+// role rules.
+type roleRuleRenameAdmissionHooks struct {
+	lockRoleRules      func(context.Context) error
+	acquireReadBarrier func(context.Context) (timestamp.Timestamp, error)
+	currentSnapshot    func() timestamp.Timestamp
+	updateSnapshot     func(context.Context, timestamp.Timestamp) error
+	hasRoleRules       func(context.Context) (bool, error)
+}
+
+func checkRoleRuleRenameAdmission(c *Compile, qry *plan.AlterTable) error {
+	if !alterTableHasRename(qry) {
+		return nil
+	}
+	if isClusterTableRename(qry) {
+		return moerr.NewNotSupported(
+			c.proc.Ctx,
+			"renaming a cluster table while role rewrite rules may exist is not supported",
+		)
+	}
+
+	txnOp := c.proc.GetTxnOperator()
+	return checkRoleRuleRenameAdmissionWithHooks(
+		c.proc.Ctx,
+		qry,
+		txnOp.Txn().IsPessimistic(),
+		txnOp.Txn().IsRCIsolation(),
+		roleRuleRenameAdmissionHooks{
+			lockRoleRules: func(ctx context.Context) error {
+				roleRuleRel, err := getRelFromMoCatalog(c, catalog.MO_ROLE_RULE)
+				if err != nil {
+					return err
+				}
+				return lockTableForSnapshotRefresh(ctx, c.e, c.proc, roleRuleRel, false)
+			},
+			acquireReadBarrier: func(ctx context.Context) (timestamp.Timestamp, error) {
+				barrier, ok := loadLogtailReadBarrier(c.e)
+				if !ok {
+					return timestamp.Timestamp{}, moerr.NewNotSupported(
+						ctx,
+						"table rename is not supported without a logtail read barrier",
+					)
+				}
+				return barrier.AcquireLogtailReadBarrier(ctx)
+			},
+			currentSnapshot: txnOp.SnapshotTS,
+			updateSnapshot:  txnOp.UpdateSnapshot,
+			hasRoleRules: func(ctx context.Context) (bool, error) {
+				res, err := c.runSqlWithResultAndOptions(
+					fmt.Sprintf("select 1 from %s.%s limit 1", catalog.MO_CATALOG, catalog.MO_ROLE_RULE),
+					NoAccountId,
+					executor.StatementOption{}.WithDisableLog(),
+				)
+				if err != nil {
+					return false, err
+				}
+				defer res.Close()
+
+				for _, bat := range res.Batches {
+					if bat != nil && bat.RowCount() > 0 {
+						return true, nil
+					}
+				}
+				return false, nil
+			},
+		},
+	)
+}
+
+func checkRoleRuleRenameAdmissionWithHooks(
+	ctx context.Context,
+	qry *plan.AlterTable,
+	isPessimistic bool,
+	isReadCommitted bool,
+	hooks roleRuleRenameAdmissionHooks,
+) error {
+	if !alterTableHasRename(qry) {
+		return nil
+	}
+	if isClusterTableRename(qry) {
+		return moerr.NewNotSupported(
+			ctx,
+			"renaming a cluster table while role rewrite rules may exist is not supported",
+		)
+	}
+	if !isPessimistic || !isReadCommitted {
+		return moerr.NewNotSupported(
+			ctx,
+			"table rename is not supported outside pessimistic read-committed transactions",
+		)
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if hooks.lockRoleRules == nil || hooks.acquireReadBarrier == nil ||
+		hooks.currentSnapshot == nil || hooks.updateSnapshot == nil || hooks.hasRoleRules == nil {
+		return moerr.NewInternalError(ctx, "incomplete role-rule rename admission hooks")
+	}
+	if err := hooks.lockRoleRules(ctx); err != nil {
+		return err
+	}
+	frontier, err := hooks.acquireReadBarrier(ctx)
+	if err != nil {
+		return err
+	}
+	if frontier.IsEmpty() {
+		return moerr.NewInternalError(ctx, "logtail read barrier returned an empty timestamp")
+	}
+	if hooks.currentSnapshot().Less(frontier) {
+		if err = hooks.updateSnapshot(ctx, frontier); err != nil {
+			return err
+		}
+		if hooks.currentSnapshot().Less(frontier) {
+			return moerr.NewInternalError(ctx, "transaction snapshot did not advance after the logtail read barrier")
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	roleRulesExist, err := hooks.hasRoleRules(ctx)
+	if err != nil {
+		return err
+	}
+	if roleRulesExist {
+		return moerr.NewNotSupported(
+			ctx,
+			"renaming a table while role rewrite rules exist is not supported; drop the rules first",
+		)
+	}
+	return nil
+}
+
 func (s *Scope) AlterTable(c *Compile) (err error) {
 	if s.ScopeAnalyzer == nil {
 		s.ScopeAnalyzer = NewScopeAnalyzer()
@@ -1939,6 +2094,9 @@ func (s *Scope) AlterTable(c *Compile) (err error) {
 	defer cleanup.finish(&err)
 
 	qry := s.Plan.GetDdl().GetAlterTable()
+	if err = checkRoleRuleRenameAdmission(c, qry); err != nil {
+		return err
+	}
 
 	// Check if target table is a CCPR shared table (from publication)
 	if c.shouldBlockCCPRReadOnly(qry.TableDef) {
