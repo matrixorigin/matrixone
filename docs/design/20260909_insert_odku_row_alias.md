@@ -25,8 +25,13 @@ Approve the following restricted contract for the first implementation:
    `target.column` to the target-row identity. Resolve inner `FROM` names
    before considering an outer alias; a local name may shadow the row alias.
 3. Remap by target-column identity after generated/default projection is built.
-   Never use a source-array position, expose hidden columns, mutate catalog
-   metadata, or persist execution values.
+   A generated column may occupy an incoming alias-mapping slot and its
+   materialized generated value may be read through the row alias. The source
+   value for that slot must be `DEFAULT`; an explicit non-`DEFAULT` value is
+   rejected. The same rule applies to an ODKU assignment whose target is a
+   generated column: `DEFAULT` is allowed, any other value is rejected. Never
+   use a source-array position, expose hidden columns, mutate catalog metadata,
+   or persist execution values.
 4. Keep `VALUES(column)` semantics and diagnostics unchanged. The feature adds
    no catalog field, plan operator, protobuf field, protocol capability,
    feature flag, or persisted state.
@@ -59,7 +64,7 @@ direct expressions when they contain no subquery.
 |---|---|---|
 | `VALUES (...) AS new` with direct `new.column` expressions | Supported | Candidate values reach the selected INSERT/UPDATE row exactly once |
 | `SET ... AS new` with direct `new.column` expressions | Supported | Same identity and assignment-order guarantees as `VALUES` |
-| `AS new(c1, c2, ...)` with a one-to-one visible target mapping | Supported | Invalid, duplicate, hidden, generated, or count-mismatched names fail before execution |
+| `AS new(c1, c2, ...)` with a one-to-one visible target mapping | Supported | Invalid, duplicate, hidden, or count-mismatched names fail before execution; a generated target name is legal when its source slot is `DEFAULT` |
 | An unqualified incoming alias column after `AS new(c1, ...)` | Supported when unique | It binds to the incoming identity; unknown or ambiguous names fail before execution |
 | Qualified `target.column` in a direct RHS | Supported | It binds to the target identity; value visibility keeps the existing left-to-right ODKU assignment contract |
 | An inner `FROM` name shadows an outer row alias | Binding invariant | The local binding wins during validation; if the containing row-alias RHS has a subquery, the whole statement is rejected by the gate below |
@@ -67,9 +72,40 @@ direct expressions when they contain no subquery.
 | Any subquery in a new row-alias ODKU RHS, including uncorrelated scalar/`EXISTS`/`IN`, correlated, nested, and multi-row forms | Rejected in this revision | `ErrUnsupportedDML` before key lookup/flatten/build; exact wire error is specified below; no target mutation and the connection remains usable |
 | Target- or candidate-correlated ODKU subquery in legacy syntax | Rejected fail-closed by this revision | Use the retained-rejection `ErrUnsupportedDML` contract below; no target mutation and the connection remains usable. This is a deliberate compatibility change from the `main` baseline |
 | Legacy uncorrelated ODKU subquery with no row alias | Compatibility-preserved only | The free-variable set excludes target and incoming-row bindings; result, error code/text, and state must match the `main` baseline. This is not new admission or evidence that row-alias subqueries are safe |
-| No-key fallback with a direct row-alias RHS and generated-column `DEFAULT` | Supported boundary | Validate names, types, and complete parameter metadata, discard the unreachable UPDATE arm, and perform the ordinary insert |
+| No-key fallback with a direct row-alias RHS and generated-column `DEFAULT` | Supported boundary | Preserve generated slots while validating the alias mapping, accept `DEFAULT`, materialize the generated value, remap by target identity, discard the unreachable UPDATE arm, and perform the ordinary insert |
 | No-key fallback with a row-alias RHS containing a subquery | Rejected by the same pre-fallback gate | Return the row-alias subquery error without evaluating the unreachable subquery or partially inserting |
 | `INSERT ... SELECT`, `VALUES ROW(...)`, `REPLACE`, `INSERT OVERWRITE` row-alias forms | Rejected | Parser/planner error with no partial target mutation |
+
+The mapping-count rule is fixed before generated/default rewriting:
+
+- With an explicit `INSERT` or `SET` target list, the effective source list is
+  the user-listed visible target columns in their written order. Its width,
+  the source tuple/assignment width, and an optional row-alias column-list
+  width must agree. A generated column counts as one slot when it is listed
+  with `DEFAULT`; it is removed only from the executable projection after the
+  alias identity has been recorded.
+- With an implicit `VALUES` list, the effective source list is the table's
+  non-hidden columns in table order, including generated columns. The source
+  tuple and an optional alias column list use that full width. A generated
+  `DEFAULT` slot is then stripped from the executable projection without
+  changing the already-recorded alias mapping.
+- Hidden columns never enter either effective list and cannot be named by an
+  alias. A generated slot with any non-`DEFAULT` source expression, or an
+  ODKU assignment other than `generated_col = DEFAULT`, is an invalid write and
+  fails before any row is changed.
+
+For example, this explicit generated-column slot is supported on the no-key
+fallback path and produces `(a, g) = (1, 2)`:
+
+```sql
+CREATE TABLE t(a INT, g INT GENERATED ALWAYS AS (a + 1) STORED);
+INSERT INTO t(a, g) VALUES (1, DEFAULT) AS n(x, y)
+  ON DUPLICATE KEY UPDATE a = n.x;
+```
+
+The corresponding implicit form keeps `g` in the source/alias width until the
+`DEFAULT` rewrite, and `n.g` reads the materialized value. Replacing either
+`DEFAULT` with an explicit value is a generated-column write and is rejected.
 
 The row-alias subquery rejection is deliberate. For example:
 
@@ -90,10 +126,12 @@ and duplicate-target cases; it does not claim that the current eager path is
 safe.
 
 The ordering is explicit. Parser syntax errors and structural row-alias
-declaration errors (unknown, duplicate, hidden, generated, or count-mismatched
-columns) are reported first. Next, an AST-only walk records subquery nodes,
-scope-local names, and prepared-marker offsets without catalog lookup, type
-lowering, flattening, or evaluation. For a new row-alias RHS, finding any
+declaration errors (unknown, duplicate, hidden, or count-mismatched columns)
+are reported first. Generated-column legality is then checked against the
+source/assignment expression: `DEFAULT` is accepted, while a non-`DEFAULT`
+write is rejected before execution. Next, an AST-only walk records subquery
+nodes, scope-local names, and prepared-marker offsets without catalog lookup,
+type lowering, flattening, or evaluation. For a new row-alias RHS, finding any
 subquery returns the row-alias rejection before recursive binding and before
 deciding whether the target has a duplicate key; invalid names or types inside
 that rejected subquery do not replace the deterministic rejection. Only a
@@ -136,6 +174,9 @@ For every candidate row:
 
 - each legal row-alias reference resolves to one immutable target-column
   identity and the final incoming projection for that identity;
+- generated columns remain in the identity mapping until their `DEFAULT`
+  projection is materialized, and `row_alias.generated_col` reads that
+  materialized value; only `DEFAULT` may write the generated target slot;
 - each qualified target reference resolves to the target-column identity, and
   its value visibility follows the existing left-to-right assignment rules;
 - nested scopes preserve local shadowing and do not leak statement-local alias
@@ -174,15 +215,20 @@ leave Draft, it must provide:
 1. Parser and formatter tests for `VALUES`/`SET`, optional column aliases,
    prepared parsing, unsupported grammar forms, and connection reuse after
    rejection.
-2. Planner tests for identity remapping, generated/default/hidden columns,
-   local shadowing, ambiguous names, direct no-key fallback, the pre-fallback
-   subquery gate, and complete parameter traversal.
+2. Planner tests for identity remapping, explicit and implicit column-list
+   widths, generated-column `DEFAULT` slots, reading a materialized generated
+   value through the row alias, rejection of non-`DEFAULT` generated writes,
+   hidden columns, local shadowing, ambiguous names, direct no-key fallback,
+   the pre-fallback subquery gate, and complete parameter traversal.
 3. BVT controls for an empty keyed target, a duplicate keyed target, a no-key
    direct fallback, a no-key row-alias subquery rejection, direct aliases,
-   invalid casts, multi-row and nested subqueries, prepared repeated execution,
-   legacy correlated rejection, legacy uncorrelated baseline parity, and every
-   rejected grammar shape. Each rejection must assert code, SQLSTATE, exact
-   text, unchanged table state, and a successful follow-up statement.
+   explicit and implicit generated-column slots, reading the materialized
+   generated value, `generated_col = DEFAULT`, rejection of non-`DEFAULT`
+   generated writes, invalid casts, multi-row and nested subqueries, prepared
+   repeated execution, legacy correlated rejection, legacy uncorrelated
+   baseline parity, and every rejected grammar shape. Each rejection must
+   assert code, SQLSTATE, exact text, unchanged table state, and a successful
+   follow-up statement.
 4. A defect-control run at the exact implementation head
    `dd2b0b38f056ac56671a5d78c9de33b68b06ef07` showing the eager-build failure
    or premature subquery evaluation for the counterexample above. The current
