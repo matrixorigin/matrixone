@@ -54,6 +54,18 @@ func TestXMLExtractionOracle(t *testing.T) {
 		{`<a><b k="x">1</b></a>`, `a/*/../b/.`, `1`},
 		{`<a><b k="x">1</b></a>`, `/a/b|//b`, `1`},
 		{`<a><b>YES</b></a>`, `/a[b='yes']/b`, `YES`},
+		{`<a><b>x<c/>y</b></a>`, `/a[b="x"]/b`, `x y`},
+		{`<a><b>x<c/>y</b></a>`, `/a[b="y"]/b`, `x y`},
+		{`<a><b>x<c/>y</b></a>`, `count(/a[b="xy"])`, `0`},
+		{`<a><b>x<c/>y</b></a>`, `count(/a[b="x y"])`, `0`},
+		{`<a><b><c>x</c></b></a>`, `count(/a[b="x"])`, `0`},
+		{`<a><b/><b></b></a>`, `count(/a[b=""])`, `0`},
+		{`<a><b>x</b><b>y</b></a>`, `count(/a[b="x"][b="y"])`, `1`},
+		{`<a k="7">t<b k="8">u</b></a>`, `/a/@k//.`, `7`},
+		{`<a k="7">t<b k="8">u</b></a>`, `count(/a/@k//.)`, `1`},
+		{`<a k="7">t<b k="8">u</b></a>`, `/a/@k//..`, `t`},
+		{`<a k="7">t<b k="8">u</b></a>`, `count(/a//.)`, `2`},
+		{`<a k="7">t<b k="8">u</b></a>`, `count(/a//@k//.)`, `2`},
 		{`<a/>`, `count(/a/c)`, `0`},
 		{`<a/>`, `/a/c`, ``},
 	} {
@@ -113,6 +125,12 @@ func TestXMLUpdateOracle(t *testing.T) {
 		{`<a />`, `/a`, `not xml`, `not xml`},
 		{`<a/>`, `/`, `raw`, `raw`},
 		{`<?p x?><a k='&amp;'><!--c--><b /></a>`, `//b`, `<z>new</z>`, `<?p x?><a k='&amp;'><!--c--><z>new</z></a>`},
+		{`<a k="7">t<b k="8">u</b></a>`, `/a/@k//.`, `z`, `<a z>t<b k="8">u</b></a>`},
+		{`<a k="7">t<b k="8">u</b></a>`, `/a/@k//./.`, `z`, `<a z>t<b k="8">u</b></a>`},
+		{`<a k="7">t<b k="8">u</b></a>`, `/a/@k//..`, `z`, `z`},
+		{`<a k="7">t<b k="8">u</b></a>`, `/a/@k//*`, `z`, `<a k="7">t<b k="8">u</b></a>`},
+		{`<a k="7">t<b k="8">u</b></a>`, `/a/@k//@*`, `z`, `<a k="7">t<b k="8">u</b></a>`},
+		{`<a k="7">t<b k="8">u</b></a>`, `/a//@k//.`, `z`, `<a k="7">t<b k="8">u</b></a>`},
 	} {
 		t.Run(tc.path+tc.xml, func(t *testing.T) {
 			fc := NewFunctionTestCase(proc, []FunctionTestInput{

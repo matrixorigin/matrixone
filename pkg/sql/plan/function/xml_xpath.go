@@ -250,6 +250,34 @@ func (d *xmlFragment) appendCandidate(dst []int, id int) ([]int, error) {
 	}
 	return append(dst, id), nil
 }
+func (d *xmlFragment) predicateLiteralMatches(id int, value string) (bool, error) {
+	n := d.nodes[id]
+	if n.kind == xmlAttribute {
+		if err := d.budget.spend(1+(len(n.value)+len(value))/64, 0); err != nil {
+			return false, err
+		}
+		return strings.EqualFold(n.value, value), nil
+	}
+	// Predicate comparison is separate from extraction formatting. MySQL's
+	// ExtractValue-compatible subset compares each direct text record, rather
+	// than joining records separated by child elements with a space.
+	for c := n.first; c >= 0; c = d.nodes[c].next {
+		child := d.nodes[c]
+		if err := d.budget.spend(1+len(child.value)/64, 0); err != nil {
+			return false, err
+		}
+		if child.kind != xmlText {
+			continue
+		}
+		if err := d.budget.spend(1+(len(child.value)+len(value))/64, 0); err != nil {
+			return false, err
+		}
+		if strings.EqualFold(child.value, value) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
 func (d *xmlFragment) predicateMatches(id int, p xmlPredicate) (bool, error) {
 	for c := d.nodes[id].first; c >= 0; c = d.nodes[c].next {
 		n := d.nodes[c]
@@ -262,14 +290,11 @@ func (d *xmlFragment) predicateMatches(id int, p xmlPredicate) (bool, error) {
 		if p.exists {
 			return true, nil
 		}
-		v, err := d.text(c)
+		ok, err := d.predicateLiteralMatches(c, p.value)
 		if err != nil {
 			return false, err
 		}
-		if err = d.budget.spend(1+(len(v)+len(p.value))/64, 0); err != nil {
-			return false, err
-		}
-		if strings.EqualFold(v, p.value) {
+		if ok {
 			return true, nil
 		}
 	}
@@ -350,23 +375,39 @@ func (d *xmlFragment) evaluate(p *xmlXPath) ([]int, error) {
 		for _, step := range path.steps {
 			clear(seen)
 			for _, id := range current {
-				end := id + 1
-				if step.descendant {
-					end = d.nodes[id].subtreeEnd
-				}
-				for parent := id; parent < end; parent++ {
-					if err := d.budget.spend(1, 0); err != nil {
-						return nil, err
-					}
-					if step.descendant && d.nodes[parent].kind != xmlElement && d.nodes[parent].kind != xmlDocument {
-						continue
-					}
+				apply := func(parent int) error {
 					candidates, err := d.candidates(parent, step)
 					if err != nil {
-						return nil, err
+						return err
 					}
 					for _, c := range candidates {
 						seen[c] = true
+					}
+					return nil
+				}
+				// The abbreviated // form expands the current context through
+				// descendant-or-self. Evaluate self first for every node kind;
+				// this is required for paths such as /a/@k//. where the
+				// attribute is a leaf. Only elements can provide strict XML
+				// descendants, so attribute and text records are not traversed.
+				if err := d.budget.spend(1, 0); err != nil {
+					return nil, err
+				}
+				if err := apply(id); err != nil {
+					return nil, err
+				}
+				if !step.descendant || (d.nodes[id].kind != xmlElement && d.nodes[id].kind != xmlDocument) {
+					continue
+				}
+				for parent := id + 1; parent < d.nodes[id].subtreeEnd; parent++ {
+					if err := d.budget.spend(1, 0); err != nil {
+						return nil, err
+					}
+					if d.nodes[parent].kind != xmlElement {
+						continue
+					}
+					if err := apply(parent); err != nil {
+						return nil, err
 					}
 				}
 			}

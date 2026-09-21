@@ -301,28 +301,3 @@ func parseXMLFragment(ctx context.Context, source string) (*xmlFragment, error) 
 	d.nodes[0].subtreeEnd = len(d.nodes)
 	return d, nil
 }
-
-func (d *xmlFragment) text(id int) (string, error) {
-	n := d.nodes[id]
-	if n.kind == xmlAttribute {
-		return n.value, nil
-	}
-	var out strings.Builder
-	for child := n.first; child >= 0; child = d.nodes[child].next {
-		v := d.nodes[child]
-		if err := d.budget.spend(1, 0); err != nil {
-			return "", err
-		}
-		if v.kind != xmlText || v.value == "" {
-			continue
-		}
-		if err := d.budget.spend(1+len(v.value)/64, 2*(len(v.value)+1)); err != nil {
-			return "", err
-		}
-		if out.Len() > 0 {
-			out.WriteByte(' ')
-		}
-		out.WriteString(v.value)
-	}
-	return out.String(), nil
-}
