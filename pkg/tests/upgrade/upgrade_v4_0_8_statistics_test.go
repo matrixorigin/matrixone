@@ -135,11 +135,17 @@ func TestV408UpgradeRefreshesStatistics(t *testing.T) {
 
 				for run := 0; run < 2; run++ {
 					var creates int
+					// Run the tenant-upgrade transaction as the sys account, mirroring the
+					// production driver (service.MaybeUpgradeTenant scopes the txn to
+					// System_Account and targets the tenant via the tenantID passed to
+					// HandleTenantUpgrade, whose per-tenant statements carry
+					// UpgradeStatementOption(tenantID)). The cluster-wide protocol-version check
+					// runs mo_ctl, which only the sys account may execute.
 					require.NoError(t, sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
 						return v4_0_8.Handler.HandleTenantUpgrade(ctx, int32(test.accountID),
 							&statisticsUpgradeTxn{TxnExecutor: txn, creates: &creates})
 					}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).
-						WithAccountID(test.accountID).WithWaitCommittedLogApplied()))
+						WithAccountID(catalog.System_Account).WithWaitCommittedLogApplied()))
 					if run == 0 {
 						require.Equal(t, 1, creates, "the old view must be recreated")
 					} else {
