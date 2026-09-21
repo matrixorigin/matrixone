@@ -352,3 +352,76 @@ func TestIrregularIndexDeleteJoinIsRowScoped(t *testing.T) {
 	require.False(t, originDelete.DeleteCtx.CanTruncate, "a join must be evaluated before deleting target rows")
 	require.Equal(t, 1, fulltextDeleteCount, "row-scoped fulltext maintenance must not be skipped")
 }
+
+func TestLegacyMultiTableDeleteNormalizesSpecialOldValues(t *testing.T) {
+	mock := NewMockOptimizer(true)
+	dept := mock.ctxt.tables["dept"]
+	for _, col := range dept.Cols {
+		if col.Name == "dname" {
+			col.Typ = planpb.Type{Id: int32(types.T_enum), Enumvalues: "a,b"}
+		}
+	}
+	docs := mock.ctxt.tables["docs_ft"]
+	for _, col := range docs.Cols {
+		if col.Name == "payload" {
+			col.Typ = planpb.Type{Id: int32(types.T_uint64), Enumvalues: "a,b"}
+		}
+	}
+
+	logicPlan, err := runOneStmt(
+		mock,
+		t,
+		"delete s,d from constraint_test.docs_ft d join constraint_test.dept s on d.id = s.deptno",
+	)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	var enumExpr, setExpr *planpb.Expr
+	var hasColRef func(expr *planpb.Expr, name string) bool
+	hasColRef = func(expr *planpb.Expr, name string) bool {
+		if expr == nil {
+			return false
+		}
+		if col := expr.GetCol(); col != nil {
+			return col.Name == name
+		}
+		if fn := expr.GetF(); fn != nil {
+			for _, arg := range fn.Args {
+				if hasColRef(arg, name) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	for _, node := range query.Nodes {
+		if node.NodeType != planpb.Node_PROJECT || len(node.Children) != 1 {
+			continue
+		}
+		childID := node.Children[0]
+		if childID < 0 || int(childID) >= len(query.Nodes) || query.Nodes[childID].NodeType != planpb.Node_JOIN {
+			continue
+		}
+		for _, expr := range node.ProjectList {
+			if hasColRef(expr, "s.dname") {
+				enumExpr = expr
+			}
+			if hasColRef(expr, "d.payload") {
+				setExpr = expr
+			}
+		}
+	}
+	require.NotNil(t, enumExpr, "legacy DELETE source must include the ENUM old value")
+	require.NotNil(t, enumExpr.GetCol(), "ENUM old value must be restored to its storage column")
+	require.Equal(t, int32(types.T_enum), enumExpr.Typ.Id)
+	require.Equal(t, "a,b", enumExpr.Typ.Enumvalues)
+
+	require.NotNil(t, setExpr, "legacy DELETE source must include the SET old value")
+	require.Equal(t, int32(types.T_uint64), setExpr.Typ.Id)
+	if setExpr.GetF() != nil {
+		require.Equal(t, moSetCastIndexValueToIndexFun, setExpr.GetF().GetFunc().GetObjName())
+		require.Len(t, setExpr.GetF().Args, 2)
+		require.True(t, hasColRef(setExpr.GetF().Args[1], "d.payload"))
+		require.Empty(t, setExpr.GetF().Args[1].Typ.Enumvalues)
+	}
+}

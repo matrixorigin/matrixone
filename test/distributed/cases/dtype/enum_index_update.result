@@ -166,3 +166,20 @@ select id, opts from set_delete_order01 order by id;
 id    opts
 2    a
 drop table set_delete_order01;
+drop table if exists enum_delete_multi_uk01;
+drop table if exists enum_delete_multi_src01;
+create table enum_delete_multi_uk01 (id int primary key, status enum('new','paid','shipped'), unique key uk_status(status));
+create table enum_delete_multi_src01 (id int primary key);
+insert into enum_delete_multi_uk01 values (1,'new'),(2,'paid');
+insert into enum_delete_multi_src01 values (1),(2);
+delete t,s from enum_delete_multi_uk01 t join enum_delete_multi_src01 s on t.id = s.id where t.id = 1;
+insert into enum_delete_multi_uk01 values (3,'new');
+select id, status from enum_delete_multi_uk01 order by id;
+id    status
+2    paid
+3    new
+select id from enum_delete_multi_src01 order by id;
+id
+2
+drop table enum_delete_multi_uk01;
+drop table enum_delete_multi_src01;
