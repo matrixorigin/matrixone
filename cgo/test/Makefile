@@ -29,11 +29,7 @@ endif
 CFLAGS := -I.. -g -I../../thirdparties/install/include $(COMPILER_FLAGS)
 LDFLAGS := $(LIBS) -lroaring $(LINKER_FLAGS)
 
-ifeq ($(MO_CL_CUDA),1)
 all: test_add.exe test_bloom.exe test_varlena.exe test_cbitmap.exe test_croaring.exe
-else
-all: test_add.exe test_bloom.exe test_varlena.exe test_cbitmap.exe test_croaring.exe test_xcall.exe
-endif
 
 test_add.exe: test_add.c
 	$(CC) $(CFLAGS) -o $@ test_add.c $(LDFLAGS)
@@ -49,9 +45,6 @@ test_bloom.exe: test_bloom.c
 
 test_varlena.exe: varlena_test.c
 	$(CC) $(CFLAGS) -o $@ varlena_test.c $(LDFLAGS)
-
-test_xcall.exe: test_xcall.c ../xcall.c ../xcall.h
-	$(CC) $(CFLAGS) -O3 -fno-fast-math -o $@ test_xcall.c ../xcall.c -lm
 
 bloom_whole_test.exe: bloom_whole_test.c 
 	$(CC) $(CFLAGS) $(NVCC_FLAGS) -o bloom_whole_test.exe bloom_whole_test.c $(LDFLAGS)
