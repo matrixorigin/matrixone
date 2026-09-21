@@ -34,6 +34,16 @@ func TestXMLExtractionOracle(t *testing.T) {
 		{`<a><b/><b/></a>`, `count(/a/b)`, `2`},
 		{`<a>x<b>y</b>z</a>`, `/a`, `x z`},
 		{`<a>x<b>y</b>z</a>`, `/a/text()`, `x z`},
+		{`<a>x<b>y</b>z</a>`, `//text()`, `x y z`},
+		{`<a>x<b>y</b>z</a>`, `/a//text()`, `x y z`},
+		{`<a>x<b>y</b>z</a>`, `/a/b/text()`, `y`},
+		{`pre<a>x<b>y</b>z</a>post`, `//text()`, `pre x y z post`},
+		{`<a>x<a>y</a>z</a>`, `//a//text()`, `x y z`},
+		{`<a>x</a><a>x</a>`, `//text()`, `x x`},
+		{`<a k="7">x<b>y</b></a>`, `/a/@k//text()`, ``},
+		{`<a k="7">x<b>y</b></a>`, `/a/@k|/a//text()`, `7 x y`},
+		{`<_p:_a>x</_p:_a>`, `/_p:_a`, `x`},
+		{`<é:β>x</é:β>`, `/é:β`, `x`},
 		{`<a>x<b>y</b>z</a>`, `/a|/a/b`, `x y z`},
 		{`<a/><b>x</b>`, `/b`, `x`},
 		{``, `/a`, ``},
@@ -54,6 +64,7 @@ func TestXMLExtractionOracle(t *testing.T) {
 		{`<a><b k="x">1</b></a>`, `a/*/../b/.`, `1`},
 		{`<a><b k="x">1</b></a>`, `/a/b|//b`, `1`},
 		{`<a><b>YES</b></a>`, `/a[b='yes']/b`, `YES`},
+		{`<p:a p:id="7"><p:b>x</p:b></p:a>`, `/p:a[@p:id="7"][p:b="x"]/@p:id`, `7`},
 		{`<a><b>x<c/>y</b></a>`, `/a[b="x"]/b`, `x y`},
 		{`<a><b>x<c/>y</b></a>`, `/a[b="y"]/b`, `x y`},
 		{`<a><b>x<c/>y</b></a>`, `count(/a[b="xy"])`, `0`},
@@ -144,6 +155,39 @@ func TestXMLUpdateOracle(t *testing.T) {
 	}
 }
 
+func TestXMLUpdateTextUnsupported(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	for _, path := range []string{"/a/text()", "//text()", "/a//text()", "/a|/a//text()"} {
+		doc, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(`<a>x<b>y</b></a>`), 1, proc.Mp())
+		xpath, xpathErr := vector.NewConstBytes(types.T_varchar.ToType(), []byte(path), 1, proc.Mp())
+		replacement, replacementErr := vector.NewConstBytes(types.T_varchar.ToType(), []byte("z"), 1, proc.Mp())
+		require.NoError(t, err)
+		t.Cleanup(func() { doc.Free(proc.Mp()) })
+		require.NoError(t, xpathErr)
+		t.Cleanup(func() { xpath.Free(proc.Mp()) })
+		require.NoError(t, replacementErr)
+		t.Cleanup(func() { replacement.Free(proc.Mp()) })
+		result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+		t.Cleanup(result.Free)
+		require.NoError(t, result.PreExtendAndReset(1))
+		err = UpdateXML([]*vector.Vector{doc, xpath, replacement}, result, proc, 1, nil)
+		require.ErrorContains(t, err, "UpdateXML text() target is unsupported", path)
+	}
+	doc := vector.NewConstNull(types.T_varchar.ToType(), 1, proc.Mp())
+	xpath, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte("/a|/a//text()"), 1, proc.Mp())
+	replacement := vector.NewConstNull(types.T_varchar.ToType(), 1, proc.Mp())
+	require.NoError(t, err)
+	t.Cleanup(func() { doc.Free(proc.Mp()) })
+	t.Cleanup(func() { xpath.Free(proc.Mp()) })
+	t.Cleanup(func() { replacement.Free(proc.Mp()) })
+	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+	t.Cleanup(result.Free)
+	require.NoError(t, result.PreExtendAndReset(1))
+	err = UpdateXML([]*vector.Vector{doc, xpath, replacement}, result, proc, 1, nil)
+	require.ErrorContains(t, err, "UpdateXML text() target is unsupported")
+}
+
 func TestXMLMalformedAndUnsupported(t *testing.T) {
 	for _, s := range []string{`<a>`, `<a></b>`, `<a/><b`, `<a x='1' x='2'/>`, `<a x=1/>`, `<a x='<'>`, `<!DOCTYPE a><a/>`, `<a>\x00</a>`} {
 		if s == `<a>\x00</a>` {
@@ -152,7 +196,7 @@ func TestXMLMalformedAndUnsupported(t *testing.T) {
 		_, err := parseXMLFragment(context.Background(), s)
 		require.ErrorIs(t, err, errXMLMalformed, s)
 	}
-	for _, s := range []string{"", "[", "/a[", "//", "/a/", "/a[0]", "/a[-1]", "/a/ancestor::b", "sum(/a)", "1+2", "true()", "$x", "count(/a/text())", "/a[text()='x']", "/a/@"} {
+	for _, s := range []string{"", "[", "/a[", "//", "/a/", "/a[0]", "/a[-1]", "/a/ancestor::b", "sum(/a)", "1+2", "true()", "$x", "count(/a/text())", "count(//text())", "count(/a|/a//text())", "/a[text()='x']", "/a/@", "/:a", "/a:", "/a:b:c", "/a::b", "/p:1a", "/p:-a", "/a/@:k", "/a/@k:", "/a/@p:k:q", "/a[@:k]", "/a[@p:k:q='v']", "/a[:b='v']", "/a[p:b:c='v']", "/*:a", "/p:*", "/a/@p:*", "/a[@p:*='v']", "/a/text()[1]"} {
 		_, err := compileXMLXPath(context.Background(), s)
 		require.Error(t, err, s)
 	}

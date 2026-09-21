@@ -18,6 +18,8 @@ import (
 	"context"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -33,11 +35,11 @@ type xmlStep struct {
 	name       string
 	axis       byte // c child, a attribute, s self, p parent
 	descendant bool
+	text       bool
 	predicates []xmlPredicate
 }
 type xmlPath struct {
 	steps []xmlStep
-	text  bool
 }
 type xmlXPath struct {
 	paths []xmlPath
@@ -70,10 +72,39 @@ func (p *xmlPathParser) name() string {
 	start := p.pos
 	p.pos = xmlNameEnd(p.s, p.pos)
 	name := p.s[start:p.pos]
-	if strings.Contains(name, "::") {
+	if !xmlXPathQName(name) {
 		return ""
 	}
 	return name
+}
+
+func xmlXPathQName(name string) bool {
+	colon := strings.IndexByte(name, ':')
+	if colon < 0 {
+		return xmlXPathQNamePart(name)
+	}
+	if colon == 0 || colon+1 == len(name) || strings.IndexByte(name[colon+1:], ':') >= 0 {
+		return false
+	}
+	return xmlXPathQNamePart(name[:colon]) && xmlXPathQNamePart(name[colon+1:])
+}
+
+func xmlXPathQNamePart(name string) bool {
+	if name == "" {
+		return false
+	}
+	r, width := utf8.DecodeRuneInString(name)
+	if !(unicode.IsLetter(r) || r == '_') {
+		return false
+	}
+	for pos := width; pos < len(name); {
+		r, width = utf8.DecodeRuneInString(name[pos:])
+		if !(unicode.IsLetter(r) || r == '_' || unicode.IsDigit(r) || r == '-' || r == '.' || unicode.IsMark(r)) {
+			return false
+		}
+		pos += width
+	}
+	return true
 }
 func (p *xmlPathParser) number() (int, bool) {
 	p.space()
@@ -172,12 +203,10 @@ func (p *xmlPathParser) path() (xmlPath, error) {
 		}
 		s := xmlStep{axis: 'c', descendant: descendant}
 		if p.take("text()") {
-			// MySQL's ExtractValue text() is the direct-text extraction surface.
-			// Do not pretend it is an element nodeset for count or replacement.
-			if descendant {
-				return out, p.failure()
-			}
-			out.text = true
+			// text() is a terminal child-text selector. Its descendant bit is
+			// retained so /a/text() and /a//text() select different records.
+			s.text = true
+			out.steps = append(out.steps, s)
 			return out, nil
 		}
 		switch {
@@ -226,7 +255,7 @@ func compileXMLXPath(ctx context.Context, s string) (*xmlXPath, error) {
 		if err != nil {
 			return nil, err
 		}
-		if path.text && out.count {
+		if path.terminalText() && out.count {
 			return nil, p.failure()
 		}
 		out.paths = append(out.paths, path)
@@ -242,6 +271,10 @@ func compileXMLXPath(ctx context.Context, s string) (*xmlXPath, error) {
 		return nil, p.failure()
 	}
 	return out, nil
+}
+
+func (p xmlPath) terminalText() bool {
+	return len(p.steps) > 0 && p.steps[len(p.steps)-1].text
 }
 
 func (d *xmlFragment) appendCandidate(dst []int, id int) ([]int, error) {
@@ -303,7 +336,20 @@ func (d *xmlFragment) predicateMatches(id int, p xmlPredicate) (bool, error) {
 func (d *xmlFragment) candidates(id int, s xmlStep) ([]int, error) {
 	var out []int
 	var err error
-	if s.axis == 's' {
+	if s.text {
+		for c := d.nodes[id].first; c >= 0; c = d.nodes[c].next {
+			n := d.nodes[c]
+			if err = d.budget.spend(1, 0); err != nil {
+				return nil, err
+			}
+			if n.kind == xmlText {
+				out, err = d.appendCandidate(out, c)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+	} else if s.axis == 's' {
 		out, err = d.appendCandidate(out, id)
 	} else if s.axis == 'p' {
 		if d.nodes[id].parent >= 0 {
@@ -464,7 +510,7 @@ func (d *xmlFragment) extract(p *xmlXPath, ids []int) (string, error) {
 		if n.kind == xmlAttribute && selected[id] {
 			v = n.value
 		}
-		if n.kind == xmlText && selected[n.parent] {
+		if n.kind == xmlText && (selected[id] || selected[n.parent]) {
 			v = n.value
 		}
 		if v == "" {

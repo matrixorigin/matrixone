@@ -81,7 +81,7 @@ func executeXMLFunction(parameters []*vector.Vector, result vector.FunctionResul
 			}
 			if update {
 				for _, p := range program.paths {
-					if p.text {
+					if p.terminalText() {
 						return moerr.NewNotSupported(proc.Ctx, "UpdateXML text() target is unsupported")
 					}
 				}

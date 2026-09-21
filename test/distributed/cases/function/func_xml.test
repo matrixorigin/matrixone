@@ -18,6 +18,12 @@ ExtractValue('<a>x<![CDATA[y]]><!--c-->z</a>', '/a') AS segments,
 ExtractValue('<p:a>x</p:a>', '/p:a') AS lexical_prefix;
 SELECT ExtractValue('<a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a>', '/a/b[1]') AS per_parent,
 ExtractValue('<a><b k="X">yes</b></a>', '/a/b[@k="x"]') AS predicate;
+SELECT ExtractValue('<a>x<b>y</b>z</a>', '//text()') AS all_text,
+ExtractValue('<a>x<b>y</b>z</a>', '/a//text()') AS descendants,
+ExtractValue('<a>x<b>y</b>z</a>', '/a/text()') AS direct_text;
+SELECT ExtractValue('<a>x<b>y</b>z</a>', '/a|/a//text()') AS mixed_text,
+ExtractValue('<a>x<b>y</b>z</a>', '/a/b|/a/text()') AS ordered_text,
+ExtractValue('<p:a p:id="7"><p:b>x</p:b></p:a>', '/p:a[@p:id="7"][p:b="x"]/@p:id') AS qualified;
 SELECT UpdateXML('<a><b>1</b></a>', '/a/b', '<c>2</c>') AS replaced,
 UpdateXML('<a><b>1</b><b>2</b></a>', '/a/b', '<c/>') AS multiple_unchanged,
 UpdateXML('<a/>', '/missing', '<c/>') AS missing_unchanged;
@@ -39,6 +45,9 @@ SELECT UpdateXML('<a/>', '[', NULL);
 SELECT ExtractValue('<a>', '[');
 SELECT ExtractValue('<a/>', 'sum(/a)');
 SELECT UpdateXML('<a>x</a>', '/a/text()', 'Q');
+SELECT UpdateXML('<a>x<b>y</b></a>', '/a//text()', 'Q');
+SELECT ExtractValue('<a/>', '/:a');
+SELECT ExtractValue('<a/>', '/a:b:c');
 SELECT IF(FALSE, ExtractValue('<a>', '['), 'ok') AS masked;
 SHOW COUNT(*) WARNINGS;
 

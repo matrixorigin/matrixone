@@ -16,23 +16,34 @@ Support absolute/relative paths, `/`, `//`, lexical qualified names, wildcard,
 attributes, self/parent, sequential predicates (positive positions, last(),
 position()=integer, attribute existence/equality, direct-child literal equality),
 node-set union with document-order deduplication, and top-level count(path).
-Terminal text() is supported for extraction. UpdateXML supports element,
-attribute and document-root replacement; terminal text() remains explicitly
-unsupported. Other axes, variables, arbitrary arithmetic and scalar functions
-are explicitly unsupported. Invalid/unsupported XPath is an error, not NULL.
+Terminal text() is supported for extraction as a real terminal child-text
+selector: `/P/text()` selects P's direct text records, while `/P//text()`
+selects direct text records of P and of element descendants; `//text()` starts
+at the synthetic document node. The existing text-record model is preserved,
+so emitted nonempty records are space-joined without recursively forming an
+XPath string value. Text-bearing `count()` paths and all UpdateXML text()
+targets remain explicitly unsupported. UpdateXML supports element, attribute
+and document-root replacement. Other axes, variables, arbitrary arithmetic and
+scalar functions are explicitly unsupported. Invalid/unsupported XPath is an
+error, not NULL.
 
 Parent obtained the reference using an isolated MySQL 8.0.45 container with no
 network or host port, then removed exactly that container. Oracle observations:
 
-- All direct text segments are joined by spaces, not descendant text. Mixed
-  `x<b>y</b>z` extracts `x z`; text/CDATA/comment-separated `x,y,z` gives `x y z`.
-  Empty matches contribute no separator. Whitespace is preserved.
+- Ordinary element extraction joins all direct text segments by spaces and does
+  not recursively include descendant text. Mixed `x<b>y</b>z` extracts `x z`;
+  text/CDATA/comment-separated `x,y,z` gives `x y z`. Explicit `//text()`
+  selectors include direct text records from element descendants. Empty matches
+  contribute no separator. Whitespace is preserved.
 - Empty XML gives empty extraction; multiple roots and plain document text work.
   Entities (including unknown and numeric references) stay lexical, not decoded.
   CDATA delimiters are stripped. Prefixes match lexically, declared or not.
 - Attribute/child literal predicates compare case-insensitively (Unicode simple
   case folding is this subset's declared comparison; no full SQL collation claim).
   Positions apply per parent: /a/b[1] across two a elements returns both first b's.
+- Qualified XPath names are lexical only: an optional nonempty prefix and local
+  name separated by one colon. Namespace declarations are not resolved; malformed
+  QNames such as `/:a`, `/a:`, and `/a:b:c` are rejected as invalid XPath.
 - Malformed XML, including DTD, gives NULL and warning1525. No entity expansion,
   external resolution, network, filesystem access or charset loader is allowed.
 - Validate non-NULL XPath before document/replacement NULL tests. Bad XPath wins

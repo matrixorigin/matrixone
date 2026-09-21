@@ -23,6 +23,16 @@ SELECT ExtractValue('<a><b>1</b><b>2</b></a><a><b>3</b><b>4</b></a>', '/a/b[1]')
 ExtractValue('<a><b k="X">yes</b></a>', '/a/b[@k="x"]') AS predicate;
 ➤ per_parent[-1,536870911,0]  ¦  predicate[-1,536870911,0]  𝄀
 1 3  ¦  yes
+SELECT ExtractValue('<a>x<b>y</b>z</a>', '//text()') AS all_text,
+ExtractValue('<a>x<b>y</b>z</a>', '/a//text()') AS descendants,
+ExtractValue('<a>x<b>y</b>z</a>', '/a/text()') AS direct_text;
+➤ all_text[-1,536870911,0]  ¦  descendants[-1,536870911,0]  ¦  direct_text[-1,536870911,0]  𝄀
+x y z  ¦  x y z  ¦  x z
+SELECT ExtractValue('<a>x<b>y</b>z</a>', '/a|/a//text()') AS mixed_text,
+ExtractValue('<a>x<b>y</b>z</a>', '/a/b|/a/text()') AS ordered_text,
+ExtractValue('<p:a p:id="7"><p:b>x</p:b></p:a>', '/p:a[@p:id="7"][p:b="x"]/@p:id') AS qualified;
+➤ mixed_text[-1,536870911,0]  ¦  ordered_text[-1,536870911,0]  ¦  qualified[-1,536870911,0]  𝄀
+x y z  ¦  x y z  ¦  7
 SELECT UpdateXML('<a><b>1</b></a>', '/a/b', '<c>2</c>') AS replaced,
 UpdateXML('<a><b>1</b><b>2</b></a>', '/a/b', '<c/>') AS multiple_unchanged,
 UpdateXML('<a/>', '/missing', '<c/>') AS missing_unchanged;
@@ -67,6 +77,12 @@ SELECT ExtractValue('<a/>', 'sum(/a)');
 not supported: XPATH syntax error or unsupported XPath feature
 SELECT UpdateXML('<a>x</a>', '/a/text()', 'Q');
 not supported: UpdateXML text() target is unsupported
+SELECT UpdateXML('<a>x<b>y</b></a>', '/a//text()', 'Q');
+not supported: UpdateXML text() target is unsupported
+SELECT ExtractValue('<a/>', '/:a');
+not supported: XPATH syntax error or unsupported XPath feature
+SELECT ExtractValue('<a/>', '/a:b:c');
+not supported: XPATH syntax error or unsupported XPath feature
 SELECT IF(FALSE, ExtractValue('<a>', '['), 'ok') AS masked;
 ➤ masked[-1,536870911,0]  𝄀
 ok
