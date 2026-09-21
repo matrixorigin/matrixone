@@ -190,6 +190,41 @@ type TblMap map[string]*DbTableInfo
 
 type TableCallback func(map[uint32]TblMap) error
 
+// cloneTableSnapshot gives each subscriber an immutable view of a scan. The
+// detector retains ownership of its maps and may consume one-shot generation
+// markers while another subscriber is still processing its callback.
+func cloneTableSnapshot(src map[uint32]TblMap) map[uint32]TblMap {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[uint32]TblMap, len(src))
+	for accountID, tables := range src {
+		clonedTables := make(TblMap, len(tables))
+		for key, info := range tables {
+			if info != nil {
+				clonedTables[key] = info.Clone()
+			}
+		}
+		dst[accountID] = clonedTables
+	}
+	return dst
+}
+
+func reconcileTableSnapshotMarkers(current, next map[uint32]TblMap) {
+	for accountID, tables := range next {
+		currentTables := current[accountID]
+		for key, info := range tables {
+			currentInfo, ok := currentTables[key]
+			if !ok || currentInfo == nil || info == nil {
+				continue
+			}
+			if currentInfo.SourceTblId == info.SourceTblId {
+				info.IdChanged = currentInfo.IdChanged
+			}
+		}
+	}
+}
+
 type TableIterationState struct {
 	CreateAt time.Time
 	EndAt    time.Time
@@ -665,7 +700,7 @@ func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]T
 	}()
 
 	for _, cb := range callbacks {
-		if cbErr := cb(tables); cbErr != nil {
+		if cbErr := cb(cloneTableSnapshot(tables)); cbErr != nil {
 			err = cbErr
 		}
 	}
@@ -907,8 +942,12 @@ func (s *TableDetector) scanTable() error {
 		return scanErr
 	}
 
-	// replace the old table map
+	// Publish the new scan while reconciling one-shot markers consumed by a
+	// callback during the SQL scan. A callback may clear IdChanged after this
+	// scan cloned the old descriptor; blindly replacing Mp would resurrect the
+	// marker and cause a later pipeline recreation to reset the target again.
 	s.mu.Lock()
+	reconcileTableSnapshotMarkers(s.Mp, mp)
 	s.Mp = mp
 	s.mu.Unlock()
 	return nil

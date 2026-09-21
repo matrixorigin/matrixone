@@ -195,6 +195,48 @@ func TestPitrCases(t *testing.T) {
 	)
 }
 
+// TestCDCNoPrimaryKeyRejected exercises the public CREATE CDC SQL path. It is
+// intentionally independent of the external sink used by TestCDCCases: a
+// source without a user-visible primary key must be rejected before a task is
+// persisted or any sink connection is attempted.
+func TestCDCNoPrimaryKeyRejected(t *testing.T) {
+	runSQLIntegration(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		defer cancel()
+
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		exec := testutils.GetSQLExecutor(cn)
+		db := testutils.GetDatabaseName(t)
+		defer cleanupSQLIntegration(t, cn, "drop database if exists "+db)
+
+		res, err := exec.Exec(ctx, "create database "+db, executor.Options{})
+		require.NoError(t, err)
+		res.Close()
+
+		execSQL := func(sql string) {
+			res, execErr := exec.Exec(ctx, sql, executor.Options{}.WithDatabase(db))
+			require.NoError(t, execErr)
+			res.Close()
+		}
+		execSQL("create pitr if not exists cdc_pitr for database " + db + " range 3 'h' internal")
+		execSQL("create table no_pk (value int)")
+
+		conn := "mysql://user:password@127.0.0.1:1"
+		_, err = exec.Exec(ctx,
+			"create cdc rejected_no_pk '"+conn+"' 'matrixone' '"+conn+"' '"+db+".no_pk' {'Level'='table'} internal",
+			executor.Options{}.WithDatabase(db))
+		require.Error(t, err)
+
+		res, err := exec.Exec(ctx,
+			"select count(*) from mo_catalog.mo_cdc_task where task_name='rejected_no_pk'",
+			executor.Options{}.WithDatabase(db))
+		require.NoError(t, err)
+		defer res.Close()
+		require.Equal(t, 0, testutils.ReadCount(res))
+	})
+}
+
 func TestCDCCases(t *testing.T) {
 	if os.Getenv("GITHUB_ACTIONS") == "true" {
 		t.Skip("skipping CDC integration test on GitHub Actions; it requires an external MySQL endpoint")

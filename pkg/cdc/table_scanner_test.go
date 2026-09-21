@@ -619,6 +619,63 @@ func TestTableDetectorProcessCallbackNoReentry(t *testing.T) {
 	wg.Wait()
 }
 
+func TestTableDetectorProcessCallbackUsesIndependentSnapshots(t *testing.T) {
+	td := &TableDetector{
+		Mp:                   make(map[uint32]TblMap),
+		Callbacks:            make(map[string]TableCallback),
+		CallBackAccountId:    make(map[string]uint32),
+		SubscribedAccountIds: make(map[uint32][]string),
+		CallBackDbName:       make(map[string][]string),
+		SubscribedDbNames:    make(map[string][]string),
+		CallBackTableName:    make(map[string][]string),
+		SubscribedTableNames: make(map[string][]string),
+		cleanupPeriod:        time.Second,
+		cleanupWarn:          time.Second,
+		nowFn:                time.Now,
+	}
+	defer td.Close()
+
+	var first, second bool
+	consume := func(tables map[uint32]TblMap) error {
+		tables[1]["db.tbl"].IdChanged = false
+		first = true
+		return nil
+	}
+	observe := func(tables map[uint32]TblMap) error {
+		second = tables[1]["db.tbl"].IdChanged
+		return nil
+	}
+	require.True(t, td.RegisterIfAbsent("first", 1, []string{"db"}, []string{"tbl"}, consume))
+	require.True(t, td.RegisterIfAbsent("second", 1, []string{"db"}, []string{"tbl"}, observe))
+
+	td.processCallback(context.Background(), map[uint32]TblMap{
+		1: {"db.tbl": {SourceDbName: "db", SourceTblName: "tbl", IdChanged: true}},
+	})
+	require.True(t, first)
+	require.True(t, second, "one subscriber must not consume another subscriber's generation marker")
+}
+
+func TestReconcileTableSnapshotMarkersDoesNotResurrectConsumedMarker(t *testing.T) {
+	current := map[uint32]TblMap{
+		1: {"db.tbl": {SourceTblId: 7, IdChanged: false}},
+	}
+	next := map[uint32]TblMap{
+		1: {"db.tbl": {SourceTblId: 7, IdChanged: true}},
+	}
+	reconcileTableSnapshotMarkers(current, next)
+	require.False(t, next[1]["db.tbl"].IdChanged)
+
+	current[1]["db.tbl"].IdChanged = true
+	next[1]["db.tbl"].IdChanged = false
+	reconcileTableSnapshotMarkers(current, next)
+	require.True(t, next[1]["db.tbl"].IdChanged)
+
+	next[1]["db.tbl"].SourceTblId = 8
+	next[1]["db.tbl"].IdChanged = true
+	reconcileTableSnapshotMarkers(current, next)
+	require.True(t, next[1]["db.tbl"].IdChanged)
+}
+
 func TestTableDetectorRegisterDuringCallback(t *testing.T) {
 	td := &TableDetector{
 		Mp:                   make(map[uint32]TblMap),
