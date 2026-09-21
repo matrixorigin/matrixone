@@ -1513,6 +1513,12 @@ func (builder *QueryBuilder) forceProjectedAssignmentCastExpr(
 	if err != nil || rewritten {
 		return expr, err
 	}
+	if types.T(targetType.Id).IsInteger() && preparedExprContainsParam(sourceExpr) &&
+		makeTypeByPlan2Expr(expr).Eq(makeTypeByPlan2Type(targetType)) {
+		return forceCastExprWithNameAndAssignment(
+			builder.GetContext(), expr, targetType,
+			assignmentCastFunctionName(targetType, isIgnore, builder.compCtx.GetProcess()), true, true)
+	}
 	return builder.forceAssignmentCastExpr(expr, targetType, isIgnore)
 }
 
@@ -1861,11 +1867,11 @@ func (builder *QueryBuilder) materializeProjectedSetBitmapAtNode(
 }
 
 func forceCastExprWithName(ctx context.Context, expr *Expr, targetType Type, funcName string) (*Expr, error) {
-	return forceCastExprWithNameAndAssignment(ctx, expr, targetType, funcName, false)
+	return forceCastExprWithNameAndAssignment(ctx, expr, targetType, funcName, false, false)
 }
 
 func forceAssignmentCastExprWithName(ctx context.Context, expr *Expr, targetType Type, funcName string) (*Expr, error) {
-	return forceCastExprWithNameAndAssignment(ctx, expr, targetType, funcName, true)
+	return forceCastExprWithNameAndAssignment(ctx, expr, targetType, funcName, true, false)
 }
 
 func forceCastExprWithNameAndAssignment(
@@ -1874,6 +1880,7 @@ func forceCastExprWithNameAndAssignment(
 	targetType Type,
 	funcName string,
 	isAssignment bool,
+	forceSameType bool,
 ) (*Expr, error) {
 	if targetType.Id == 0 {
 		return expr, nil
@@ -1891,7 +1898,7 @@ func forceCastExprWithNameAndAssignment(
 		return funcCastForTypedArrayType(ctx, expr, targetType)
 	}
 	t1, t2 := makeTypeByPlan2Expr(expr), makeTypeByPlan2Type(targetType)
-	if t1.Eq(t2) && !(isAssignment && needsSameTypeAssignmentCast(targetType)) {
+	if t1.Eq(t2) && !forceSameType && !(isAssignment && needsSameTypeAssignmentCast(targetType)) {
 		return expr, nil
 	}
 
