@@ -130,17 +130,8 @@ func main() {
 	// Keep the successful seed in the report as well. The E2E artifact contract
 	// requires one complete report directory for every case, including the setup
 	// phase that supplies the catalog tables for the SQL scenarios below.
-	seedResult := passedCase(
-		"ICE-CI-E2E-000",
-		"rest-seed",
-		[]string{"seed Iceberg REST catalog tables"},
-		[]string{"seed completed"},
-		[]string{"seed completed"},
-		nil,
-	)
-	summary.Cases = append(summary.Cases, seedResult)
-	if err := writeCaseReport(cfg.ReportDir, seedResult); err != nil {
-		fatal(fmt.Errorf("write REST seed report: %w", err))
+	if err := recordSuccessfulRESTSeed(cfg.ReportDir, &summary); err != nil {
+		fatal(err)
 	}
 
 	db, err := sql.Open("mysql", cfg.DSN)
@@ -1564,6 +1555,30 @@ func passedCase(id, name string, sqls, expected, actual []string, details map[st
 
 func failedCase(id, name string, sqls, expected, actual []string, msg string) caseResult {
 	return caseResult{ID: id, Name: name, Status: "failed", SQL: sqls, Expected: expected, Actual: actual, Error: msg}
+}
+
+func recordSuccessfulRESTSeed(reportDir string, summary *runSummary) error {
+	if summary == nil {
+		return errors.New("record REST seed: run summary is nil")
+	}
+	if strings.TrimSpace(reportDir) == "" {
+		return errors.New("record REST seed: report directory is empty")
+	}
+	result := passedCase(
+		"ICE-CI-E2E-000",
+		"rest-seed",
+		[]string{"seed Iceberg REST catalog tables"},
+		[]string{"seed completed"},
+		[]string{"seed completed"},
+		nil,
+	)
+	if err := writeCaseReport(reportDir, result); err != nil {
+		return fmt.Errorf("write REST seed report: %w", err)
+	}
+	// Do not advertise a completed case in the run summary until its artifact
+	// has been written successfully.
+	summary.Cases = append(summary.Cases, result)
+	return nil
 }
 
 func writeCaseReport(reportDir string, result caseResult) error {
