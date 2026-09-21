@@ -632,35 +632,41 @@ func TestCDCNoFullPublicLifecycle(t *testing.T) {
 				return nil
 			}, executor.Options{}.WithDatabase(dbName)))
 			require.False(t, boundary.IsEmpty())
+			readWatermark := func() (types.TS, bool, error) {
+				res, queryErr := exec.Exec(ctx,
+					"select watermark from mo_catalog.mo_cdc_watermark where task_id = (select task_id from mo_catalog.mo_cdc_task where task_name='"+taskName+"') and db_name='"+dbName+"' and table_name='"+tableName+"'",
+					executor.Options{})
+				if queryErr != nil {
+					return types.TS{}, false, queryErr
+				}
+				defer res.Close()
+				var watermarks []string
+				res.ReadRows(func(_ int, cols []*vector.Vector) bool {
+					watermarks = append(watermarks, executor.GetStringRows(cols[0])...)
+					return true
+				})
+				if len(watermarks) == 0 {
+					return types.TS{}, false, nil
+				}
+				require.Len(t, watermarks, 1, "duplicate table watermarks")
+				persisted, parseErr := frontend.CDCStrToTS(watermarks[0])
+				return persisted, true, parseErr
+			}
+
 			var checkpointBeforeRestart types.TS
 			deadline := time.NewTimer(30 * time.Second)
 			defer deadline.Stop()
 			for {
-				var watermarks []string
-				res, queryErr := exec.Exec(ctx,
-					"select watermark from mo_catalog.mo_cdc_watermark where task_id = (select task_id from mo_catalog.mo_cdc_task where task_name='"+taskName+"') and db_name='"+dbName+"' and table_name='"+tableName+"'",
-					executor.Options{})
-				if queryErr == nil {
-					res.ReadRows(func(_ int, cols []*vector.Vector) bool {
-						watermarks = append(watermarks, executor.GetStringRows(cols[0])...)
-						return true
-					})
-					res.Close()
-				}
-				require.LessOrEqual(t, len(watermarks), 1, "duplicate table watermarks")
-				if len(watermarks) == 1 {
-					persisted, parseErr := frontend.CDCStrToTS(watermarks[0])
-					require.NoError(t, parseErr)
-					if persisted.GE(&boundary) {
-						checkpointBeforeRestart = persisted
-						break
-					}
+				persisted, found, queryErr := readWatermark()
+				if queryErr == nil && found && persisted.GE(&boundary) {
+					checkpointBeforeRestart = persisted
+					break
 				}
 				select {
 				case <-ctx.Done():
 					t.Fatalf("waiting for durable CDC progress: %v", ctx.Err())
 				case <-deadline.C:
-					t.Fatalf("CDC progress did not reach %s: watermarks=%v query error=%v", boundary.ToString(), watermarks, queryErr)
+					t.Fatalf("CDC progress did not reach %s: query error=%v", boundary.ToString(), queryErr)
 				case <-time.After(100 * time.Millisecond):
 				}
 			}
@@ -697,6 +703,15 @@ func TestCDCNoFullPublicLifecycle(t *testing.T) {
 				}
 			}
 		secondAdmissionEntered:
+			// Admission is still blocked, so the replacement reader has not had a
+			// chance to publish a new checkpoint.  This exact equality is the
+			// recovery oracle: a reader that fell back to the CREATE boundary would
+			// not resume from the durable progress observed above.
+			persistedAfterRestart, found, err := readWatermark()
+			require.NoError(t, err)
+			require.True(t, found, "replacement reader must observe the durable watermark")
+			require.Equal(t, checkpointBeforeRestart, persistedAfterRestart,
+				"replacement reader must start from the persisted pre-restart checkpoint")
 			mustExec(dbName, "insert into "+tableName+" values (3, 'after_restart')")
 			releaseSecond()
 			require.NoError(t, <-secondScanDone)

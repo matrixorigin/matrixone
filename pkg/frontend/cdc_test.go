@@ -3705,52 +3705,89 @@ func TestCdcTaskClaimLossDelayedCancelPreservesReplacementWatermark(t *testing.T
 	}
 	start := types.BuildTS(10, 1)
 	replacement := types.BuildTS(20, 2)
-	ownerA := cdc.NewOwnerFenceForGeneration(time.UnixMicro(100), func(context.Context) error { return nil })
-	ownerB := cdc.NewOwnerFenceForGeneration(time.UnixMicro(200), func(context.Context) error { return nil })
-	ownerC := cdc.NewOwnerFenceForGeneration(time.UnixMicro(300), func(context.Context) error { return nil })
+	var ownerA, ownerB, ownerC *cdc.OwnerFence
 
+	var claimMu sync.Mutex
+	var durableClaim task.DaemonTask
+	service := &testTaskService{}
+	service.heartbeatDaemonTaskFn = func(ctx context.Context, claim task.DaemonTask) error {
+		claimMu.Lock()
+		current := durableClaim
+		claimMu.Unlock()
+		if current.TaskRunner != claim.TaskRunner || !current.LastRun.Equal(claim.LastRun) {
+			return moerr.NewInvalidTask(ctx, claim.TaskRunner, claim.ID)
+		}
+		return nil
+	}
+
+	newExecutor := func(taskID, runner string, lastRun time.Time) (*CDCTaskExecutor, task.DaemonTask) {
+		claim := task.DaemonTask{
+			ID:         1,
+			TaskRunner: runner,
+			LastRun:    lastRun,
+			TaskStatus: task.TaskStatus_Running,
+			Metadata: task.TaskMetadata{
+				Executor: task.TaskCode_InitCdcLosslessStart,
+			},
+		}
+		spec := &task.CreateCdcDetails{
+			TaskId:   key.TaskId,
+			TaskName: taskID,
+			Accounts: []*task.Account{{Id: key.AccountId}},
+		}
+		exec := NewCDCTaskExecutor(
+			zap.NewNop(), nil, spec, runner, nil, nil, nil, nil,
+		)
+		exec.taskService = service
+		exec.watermarkUpdater = updater
+		exec.runningReaders = &sync.Map{}
+		exec.noFull = true
+		exec.stableInitialSnapshot = true
+		exec.setActiveRoutine(cdc.NewCdcActiveRoutine())
+		exec.UpdateDaemonTaskClaim(claim)
+		require.NoError(t, exec.stateMachine.Transition(TransitionStart))
+		require.NoError(t, exec.stateMachine.Transition(TransitionStartSuccess))
+		return exec, claim
+	}
+
+	// CN A is a real constructed executor whose claim is durably replaced by B.
+	// Delay A's shutdown until B has committed its checkpoint, matching the
+	// heartbeat/claim-loss ordering that used to delete the replacement row.
+	executorA, claimA := newExecutor("executor-a", "cn-a", time.UnixMicro(100))
+	claimMu.Lock()
+	durableClaim = claimA
+	claimMu.Unlock()
+	ownerA = executorA.currentDaemonClaimFence()
+	ownerCtx := cdc.WithWatermarkOwnerFence(context.Background(), ownerA, 1)
 	claimed, _, err := updater.ClaimWatermarkOwner(context.Background(), key, ownerA)
 	require.NoError(t, err)
 	require.Equal(t, types.BuildTS(0, 0), claimed)
-	ownerCtx := cdc.WithWatermarkOwnerFence(context.Background(), ownerA, 1)
 	require.NoError(t, updater.UpdateWatermarkOnly(ownerCtx, key, &start))
 	require.NoError(t, updater.ForceFlush(context.Background()))
 
+	aShutdown := make(chan struct{})
+	aShutdownDone := make(chan error, 1)
+	go func() {
+		<-aShutdown
+		aShutdownDone <- executorA.CancelWithoutWatermarkCleanup()
+	}()
+
+	executorB, claimB := newExecutor("executor-b", "cn-b", time.UnixMicro(200))
+	claimMu.Lock()
+	durableClaim = claimB
+	claimMu.Unlock()
+	ownerB = executorB.currentDaemonClaimFence()
 	claimed, _, err = updater.ClaimWatermarkOwner(context.Background(), key, ownerB)
 	require.NoError(t, err)
 	require.Equal(t, start, claimed)
 	ownerCtx = cdc.WithWatermarkOwnerFence(context.Background(), ownerB, 1)
 	require.NoError(t, updater.UpdateWatermarkOnly(ownerCtx, key, &replacement))
 	require.NoError(t, updater.ForceFlush(context.Background()))
-
-	newExecutor := func(taskID string, fence *cdc.OwnerFence) *CDCTaskExecutor {
-		exec := &CDCTaskExecutor{
-			activeRoutine:    cdc.NewCdcActiveRoutine(),
-			watermarkUpdater: updater,
-			cnUUID:           "test-cn-" + taskID,
-			claimFence:       fence,
-			runningReaders:   &sync.Map{},
-			spec: &task.CreateCdcDetails{
-				TaskId:   key.TaskId,
-				TaskName: taskID,
-				Accounts: []*task.Account{{Id: key.AccountId}},
-			},
-			stateMachine: NewExecutorStateMachine(),
-			holdCh:       make(chan int, 1),
-		}
-		require.NoError(t, exec.stateMachine.Transition(TransitionStart))
-		require.NoError(t, exec.stateMachine.Transition(TransitionStartSuccess))
-		return exec
-	}
-
-	// CN A loses the claim but shuts down late, after CN B has committed its
-	// replacement checkpoint. Claim-loss cancellation must not run terminal
-	// watermark deletion against B's live task.
-	executorA := newExecutor("executor-a", ownerA)
-	clientExecutor := newExecutor("executor-b", ownerB)
-	require.NoError(t, executorA.CancelWithoutWatermarkCleanup())
+	close(aShutdown)
+	require.NoError(t, <-aShutdownDone)
 	require.Equal(t, StateCancelled, executorA.stateMachine.State())
-	require.Equal(t, StateRunning, clientExecutor.stateMachine.State())
+	require.Equal(t, StateRunning, executorB.stateMachine.State())
+	require.Error(t, ownerA.Check(context.Background()), "A must be fenced after B takes over")
 
 	got, generation, err := updater.GetWatermarkProgress(context.Background(), key)
 	require.NoError(t, err)
@@ -3761,14 +3798,18 @@ func TestCdcTaskClaimLossDelayedCancelPreservesReplacementWatermark(t *testing.T
 	require.False(t, catalog.deleted)
 	catalog.mu.Unlock()
 
-	// A fresh executor (CN C) must resume from B's durable progress rather than
-	// falling back to the original NoFull creation boundary.
-	executorC := newExecutor("executor-c", ownerC)
+	// A fresh executor (CN C) must resume through the real owner-claim path from
+	// B's durable progress rather than falling back to the original NoFull
+	// creation boundary.  Do not seed executorC.startTs: the value below is the
+	// only start point available to a newly constructed executor.
+	executorC, claimC := newExecutor("executor-c", "cn-c", time.UnixMicro(300))
+	claimMu.Lock()
+	durableClaim = claimC
+	claimMu.Unlock()
+	ownerC = executorC.currentDaemonClaimFence()
 	resumed, _, err := updater.ClaimWatermarkOwner(context.Background(), key, ownerC)
 	require.NoError(t, err)
 	require.Equal(t, replacement, resumed)
-	executorC.startTs = resumed
-	require.Equal(t, replacement, executorC.startTs)
 }
 
 func TestCdcTaskCancelDrainsInFlightTableCallback(t *testing.T) {
