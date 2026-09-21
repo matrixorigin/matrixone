@@ -1003,6 +1003,7 @@ func (c *Compile) ensureScopeTaskScheduler(workerCount int) *scopeTaskScheduler 
 	c.scopeScheduler = newScopeTaskScheduler(ctx, workerCount, c.handleScopeTaskPanic)
 	if c.proc != nil {
 		c.proc.SetEventSubmitter(c.scopeScheduler.submitEventSource)
+		c.proc.SetBlockingSubmitter(c.scopeScheduler.submitBlockingEvent)
 		c.proc.SetReadySubmitter(c.scopeScheduler.submitRoot)
 	}
 	return c.scopeScheduler
@@ -1021,6 +1022,7 @@ func (c *Compile) waitScopeTaskScheduler() {
 	scheduler.wait()
 	if c.proc != nil {
 		c.proc.SetEventSubmitter(nil)
+		c.proc.SetBlockingSubmitter(nil)
 		c.proc.SetReadySubmitter(nil)
 	}
 	c.scopeSchedulerMu.Lock()

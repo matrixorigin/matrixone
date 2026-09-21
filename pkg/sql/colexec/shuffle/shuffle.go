@@ -303,7 +303,7 @@ func (shuffle *Shuffle) registerReady(proc *process.Process, name string, wait f
 		if ready == nil {
 			return moerr.NewInvalidInputNoCtx("nil shuffle readiness callback")
 		}
-		return proc.SubmitEvent(name, func() {
+		return proc.SubmitBlockingEvent(name, func() {
 			wait()
 			ready()
 		})
@@ -452,7 +452,7 @@ func (shuffle *Shuffle) registerProducerEvent(
 	if proc.Ctx != nil {
 		stop = context.AfterFunc(proc.Ctx, ready)
 	}
-	err := proc.SubmitEvent(name, func() {
+	err := proc.SubmitBlockingEvent(name, func() {
 		wait()
 		ready()
 	})

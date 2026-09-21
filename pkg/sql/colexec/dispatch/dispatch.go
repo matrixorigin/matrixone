@@ -310,7 +310,7 @@ func (dispatch *Dispatch) startRemoteTask(proc *process.Process, bat *batch.Batc
 		taskFn()
 		return nil
 	}
-	if err := proc.SubmitEvent("dispatch-remote-send", taskFn); err != nil {
+	if err := proc.SubmitBlockingEvent("dispatch-remote-send", taskFn); err != nil {
 		dispatch.ctr.remoteTask = nil
 		return err
 	}
