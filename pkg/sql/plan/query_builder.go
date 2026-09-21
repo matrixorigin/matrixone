@@ -5399,6 +5399,14 @@ func (bc *BindContext) bindingRecurStmt() bool {
 	return bc.cteState.cteBindType == CteBindTypeRecurStmt
 }
 
+// bindingRecurQueryBlock reports whether the current context owns the
+// recursive query block itself. Nested SELECT contexts inherit the recursive
+// CTE state, but own an independent query block.
+func (bc *BindContext) bindingRecurQueryBlock() bool {
+	return bc.bindingRecurStmt() &&
+		bc.queryBlockOwner == bc.cteState.recursiveRefQueryBlock
+}
+
 func (builder *QueryBuilder) bindCte(
 	ctx *BindContext,
 	stmt tree.NodeFormatter,
@@ -5983,7 +5991,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	// materialize scalar subqueries into that input before fixing the group-key
 	// layout. Projection, alias, and ordinal references already point at the
 	// corresponding group position and do not need to be rebound.
-	if !ctx.sampleFunc.hasSampleFunc && !ctx.bindingRecurStmt() {
+	if !ctx.sampleFunc.hasSampleFunc && !ctx.bindingRecurQueryBlock() {
 		for i, group := range ctx.groups {
 			if nodeID, ctx.groups[i], err = builder.flattenSubqueries(nodeID, group, ctx); err != nil {
 				return
@@ -10202,7 +10210,7 @@ func (builder *QueryBuilder) appendAggNode(
 	boundHavingList []*plan.Expr,
 	rollupFilter bool,
 ) (newNodeID int32, postTimeWindowHavingList []*plan.Expr, err error) {
-	if ctx.bindingRecurStmt() {
+	if ctx.bindingRecurQueryBlock() {
 		err = moerr.NewInternalError(builder.GetContext(), "not support aggregate function recursive cte")
 		return
 	}
