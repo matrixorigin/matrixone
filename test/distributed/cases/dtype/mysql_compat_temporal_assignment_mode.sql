@@ -42,26 +42,20 @@ set session sql_mode = 'ALLOW_INVALID_DATES';
 prepare prepared_date from 'insert into target_temporal (d) values (''2024-02-30'')';
 prepare prepared_datetime from 'insert into target_temporal (dt) values (''2024-04-31 12:34:56'')';
 set session sql_mode = '';
--- @regex("parsedate",true)
 execute prepared_date;
--- @regex("invalid datetime value",true)
 execute prepared_datetime;
 set session sql_mode = 'ALLOW_INVALID_DATES';
 execute prepared_date;
 execute prepared_datetime;
 set session sql_mode = '';
--- @regex("parsedate",true)
 execute prepared_date;
--- @regex("invalid datetime value",true)
 execute prepared_datetime;
 deallocate prepare prepared_date;
 deallocate prepare prepared_datetime;
 set session sql_mode = 'ALLOW_INVALID_DATES';
 select count(*) as prepared_rows from target_temporal;
-select count(*) as prepared_invalid_dates
-from target_temporal where d = '2024-02-30';
-select count(*) as prepared_invalid_datetimes
-from target_temporal where dt = '2024-04-31 12:34:56';
+select count(*) as prepared_invalid_dates from target_temporal where year(d) = 2024 and month(d) = 2 and day(d) = 30;
+select count(*) as prepared_invalid_datetimes from target_temporal where year(dt) = 2024 and month(dt) = 4 and day(dt) = 31 and hour(dt) = 12 and minute(dt) = 34 and second(dt) = 56;
 
 -- Tagged invalid dates must normalize overflow fields for calendar arithmetic.
 set session sql_mode = 'ALLOW_INVALID_DATES';

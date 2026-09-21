@@ -350,6 +350,25 @@ func TestConstantFoldStillFoldsUnaffectedCasts(t *testing.T) {
 	require.NotNil(t, NewConstantFold(false).constantFold(ordinaryStrictTime, proc).GetLit())
 }
 
+func TestConstantFoldDefersSqlModeDependentTemporalParents(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	stringType := types.New(types.T_varchar, 32, 0)
+	dateType := types.T_date.ToType()
+	cast := makeConstantCastExpr(t, "cast", stringType, dateType, "2024-02-30")
+	weekday, err := function.GetFunctionByName(context.Background(), "weekday", []types.Type{dateType})
+	require.NoError(t, err)
+	parent := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: weekday.GetEncodedOverloadID(), ObjName: "weekday"},
+			Args: []*plan.Expr{cast},
+		}},
+	}
+
+	folded := NewConstantFold(false).constantFold(parent, proc)
+	require.NotNil(t, folded.GetF())
+}
+
 func TestConstantFoldDefersLegacyTimeAssignmentCast(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	expr := makeConstantCastExpr(

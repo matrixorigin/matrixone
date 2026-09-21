@@ -253,7 +253,7 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 		fn.Args[i] = r.constantFold(fn.Args[i], proc)
 		isVec = isVec || fn.Args[i].GetVec() != nil
 	}
-	if IsSqlModeDependentTemporalCast(fn) {
+	if ContainsSqlModeDependentTemporalCast(expr) {
 		return expr
 	}
 	if f.IsAgg() || f.IsWin() {
@@ -942,6 +942,36 @@ func IsSqlModeDependentTemporalCast(fn *plan.Function) bool {
 
 	year, month, day, err := types.ParseDateCastComponents(value.Sval)
 	return err == nil && (year == 0 || month == 0 || day == 0)
+}
+
+// ContainsSqlModeDependentTemporalCast reports whether folding expr would
+// evaluate a temporal cast under the planner's SQL mode instead of the
+// execution session's mode. The dependency must propagate through enclosing
+// constant expressions such as WEEKDAY(CAST(...)), otherwise the inner cast
+// remains visible but the parent still folds it to a planner-time NULL.
+func ContainsSqlModeDependentTemporalCast(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if fn := expr.GetF(); fn != nil {
+		if IsSqlModeDependentTemporalCast(fn) {
+			return true
+		}
+		for _, arg := range fn.Args {
+			if ContainsSqlModeDependentTemporalCast(arg) {
+				return true
+			}
+		}
+		return false
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if ContainsSqlModeDependentTemporalCast(item) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // IsLegacyTimeAssignmentOutsideInternalRange identifies a CAST_STRICT literal

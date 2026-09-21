@@ -34,20 +34,16 @@ prepare prepared_date from 'insert into target_temporal (d) values (''2024-02-30
 prepare prepared_datetime from 'insert into target_temporal (dt) values (''2024-04-31 12:34:56'')';
 set session sql_mode = '';
 execute prepared_date;
--- @regex("parsedate",true)
 invalid argument parsedate, bad value 2024-02-30
 execute prepared_datetime;
--- @regex("invalid datetime value",true)
 invalid input: invalid datetime value 2024-04-31 12:34:56
 set session sql_mode = 'ALLOW_INVALID_DATES';
 execute prepared_date;
 execute prepared_datetime;
 set session sql_mode = '';
 execute prepared_date;
--- @regex("parsedate",true)
 invalid argument parsedate, bad value 2024-02-30
 execute prepared_datetime;
--- @regex("invalid datetime value",true)
 invalid input: invalid datetime value 2024-04-31 12:34:56
 deallocate prepare prepared_date;
 deallocate prepare prepared_datetime;
@@ -55,12 +51,10 @@ set session sql_mode = 'ALLOW_INVALID_DATES';
 select count(*) as prepared_rows from target_temporal;
 prepared_rows
 4
-select count(*) as prepared_invalid_dates
-from target_temporal where d = '2024-02-30';
+select count(*) as prepared_invalid_dates from target_temporal where year(d) = 2024 and month(d) = 2 and day(d) = 30;
 prepared_invalid_dates
 1
-select count(*) as prepared_invalid_datetimes
-from target_temporal where dt = '2024-04-31 12:34:56';
+select count(*) as prepared_invalid_datetimes from target_temporal where year(dt) = 2024 and month(dt) = 4 and day(dt) = 31 and hour(dt) = 12 and minute(dt) = 34 and second(dt) = 56;
 prepared_invalid_datetimes
 1
 set session sql_mode = 'ALLOW_INVALID_DATES';
