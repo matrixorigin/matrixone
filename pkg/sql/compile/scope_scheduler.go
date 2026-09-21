@@ -16,7 +16,6 @@ package compile
 
 import (
 	"context"
-	"errors"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -30,7 +29,7 @@ import (
 )
 
 var (
-	errScopeTaskSchedulerClosed = errors.New("scope task scheduler is closed")
+	errScopeTaskSchedulerClosed = moerr.NewInternalErrorNoCtx("scope task scheduler is closed")
 	scopeTaskSchedulerID        atomic.Uint64
 )
 
@@ -404,7 +403,7 @@ func (s *scopeTaskScheduler) submitRoot(name string, task func()) error {
 
 func (s *scopeTaskScheduler) submitRootWithContext(name string, task func(), allowCanceled bool) error {
 	if task == nil {
-		return errors.New("nil scope task")
+		return moerr.NewInternalErrorNoCtx("nil scope task")
 	}
 
 	s.mu.Lock()
@@ -444,7 +443,7 @@ func (s *scopeTaskScheduler) submitRootWithContext(name string, task func(), all
 // once when its event-driven continuation reaches a terminal state.
 func (s *scopeTaskScheduler) submitRootAsync(name string, start func(done func())) error {
 	if start == nil {
-		return errors.New("nil scope event task")
+		return moerr.NewInternalErrorNoCtx("nil scope event task")
 	}
 
 	s.mu.Lock()
@@ -503,10 +502,10 @@ func (s *scopeTaskScheduler) submitContinuation(
 	done func(error),
 ) error {
 	if continuation == nil {
-		return errors.New("nil pipeline continuation")
+		return moerr.NewInternalErrorNoCtx("nil pipeline continuation")
 	}
 	if done == nil {
-		return errors.New("nil continuation completion")
+		return moerr.NewInternalErrorNoCtx("nil continuation completion")
 	}
 
 	var once sync.Once
@@ -586,7 +585,7 @@ func (s *scopeTaskScheduler) submitBlockingEvent(name string, task func()) error
 
 func (s *scopeTaskScheduler) submitBlockingEventWithContext(name string, task func(), allowCanceled bool) error {
 	if task == nil {
-		return errors.New("nil blocking scope task")
+		return moerr.NewInternalErrorNoCtx("nil blocking scope task")
 	}
 	s.mu.Lock()
 	if s.closed {
@@ -654,10 +653,10 @@ func (s *scopeTaskScheduler) submitChannelEventCancelable(
 	allowCanceled bool,
 ) (func(), error) {
 	if ch == nil {
-		return nil, errors.New("nil scope channel event")
+		return nil, moerr.NewInternalErrorNoCtx("nil scope channel event")
 	}
 	if ready == nil {
-		return nil, errors.New("nil scope channel callback")
+		return nil, moerr.NewInternalErrorNoCtx("nil scope channel callback")
 	}
 
 	s.mu.Lock()
@@ -736,10 +735,10 @@ func (s *scopeTaskScheduler) submitErrorEventWithContext(
 	allowCanceled bool,
 ) error {
 	if ch == nil {
-		return errors.New("nil scope error event")
+		return moerr.NewInternalErrorNoCtx("nil scope error event")
 	}
 	if ready == nil {
-		return errors.New("nil scope error callback")
+		return moerr.NewInternalErrorNoCtx("nil scope error callback")
 	}
 
 	s.mu.Lock()
@@ -772,7 +771,7 @@ func (s *scopeTaskScheduler) submitErrorEventWithContext(
 		errCh: ch,
 		errReady: func(err error, ok bool) {
 			if !ok {
-				err = errors.New("scope error event channel closed")
+				err = moerr.NewInternalErrorNoCtx("scope error event channel closed")
 			}
 			ready(err)
 		},
@@ -809,10 +808,10 @@ func (s *scopeTaskScheduler) submitStreamSendWithContext(
 	allowCanceled bool,
 ) error {
 	if stream == nil {
-		return errors.New("nil stream")
+		return moerr.NewInternalErrorNoCtx("nil stream")
 	}
 	if ready == nil {
-		return errors.New("nil stream send callback")
+		return moerr.NewInternalErrorNoCtx("nil stream send callback")
 	}
 	if async, ok := stream.(morpc.AsyncStream); ok {
 		future, err := async.SendAsync(ctx, message)
@@ -851,7 +850,7 @@ func (s *scopeTaskScheduler) submitTimerWithContext(
 	allowCanceled bool,
 ) (func(), error) {
 	if task == nil {
-		return nil, errors.New("nil scope timer task")
+		return nil, moerr.NewInternalErrorNoCtx("nil scope timer task")
 	}
 	if delay < 0 {
 		delay = 0
@@ -914,7 +913,7 @@ func (s *scopeTaskScheduler) submitTeardown(name string, task func()) error {
 
 func (s *scopeTaskScheduler) submitEventSourceWithContext(name string, task func(), teardown bool) error {
 	if task == nil {
-		return errors.New("nil scope task")
+		return moerr.NewInternalErrorNoCtx("nil scope task")
 	}
 
 	s.mu.Lock()
