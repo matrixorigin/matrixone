@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -5001,6 +5002,71 @@ func TestSetOperationMixedCharVarcharCommonTypeIsOrderIndependent(t *testing.T) 
 			require.Equal(t, int32(8), intersect.ProjectList[0].Typ.Width)
 		})
 	}
+
+}
+
+func TestPreparedSetOperationPureCharUsesCommonPaddedType(t *testing.T) {
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare pure_char_set from 'select ? as v union all select ? as v'")
+	require.NoError(t, err)
+	preparedPlan := prepared.GetDcl().GetPrepare().Plan
+	cached := DeepCopyPlan(preparedPlan)
+
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(), preparedPlan, []any{ParamValue{
+			Value: "MO", IsBinaryProtocol: true,
+			RuntimeType: types.New(types.T_char, 8, 0), HasRuntimeType: true,
+		}, ParamValue{
+			Value: "MO", IsBinaryProtocol: true,
+			RuntimeType: types.New(types.T_char, 4, 0), HasRuntimeType: true,
+		}},
+	)
+	require.NoError(t, err)
+	require.True(t, specialized)
+
+	var setNode *plan.Node
+	for _, node := range filled.GetQuery().Nodes {
+		if node.NodeType == plan.Node_UNION || node.NodeType == plan.Node_UNION_ALL {
+			setNode = node
+			break
+		}
+	}
+	require.NotNil(t, setNode)
+	require.Len(t, setNode.ProjectList, 1)
+	require.Equal(t, int32(types.T_char), setNode.ProjectList[0].Typ.Id, setNode.String())
+	require.Equal(t, int32(8), setNode.ProjectList[0].Typ.Width)
+	for branch, childID := range setNode.Children {
+		child := filled.GetQuery().Nodes[childID]
+		require.Equal(t, int32(types.T_char), child.ProjectList[0].Typ.Id,
+			"prepared branch %d must retain the common CHAR domain", branch)
+		require.Equal(t, int32(8), child.ProjectList[0].Typ.Width)
+	}
+	require.True(t, proto.Equal(cached, preparedPlan),
+		"prepared specialization must not mutate the cached template")
+
+	mixed, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare mixed_char_set from 'select ? as v union all select ? as v'")
+	require.NoError(t, err)
+	mixedFilled, _, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(), mixed.GetDcl().GetPrepare().Plan, []any{ParamValue{
+			Value: "MO", IsBinaryProtocol: true,
+			RuntimeType: types.New(types.T_char, 8, 0), HasRuntimeType: true,
+		}, ParamValue{
+			Value: "MO", IsBinaryProtocol: true,
+			RuntimeType: types.New(types.T_varchar, 4, 0), HasRuntimeType: true,
+		}},
+	)
+	require.NoError(t, err)
+	var mixedSetNode *plan.Node
+	for _, node := range mixedFilled.GetQuery().Nodes {
+		if node.NodeType == plan.Node_UNION || node.NodeType == plan.Node_UNION_ALL {
+			mixedSetNode = node
+			break
+		}
+	}
+	require.NotNil(t, mixedSetNode)
+	require.Equal(t, int32(types.T_varchar), mixedSetNode.ProjectList[0].Typ.Id,
+		"mixed CHAR/VARCHAR must keep the variable-string output domain")
 }
 
 func TestDistinctPromotedCharUsesSeparatePadSpaceKey(t *testing.T) {

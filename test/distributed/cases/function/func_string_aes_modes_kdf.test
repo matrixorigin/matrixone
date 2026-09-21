@@ -1,0 +1,49 @@
+# MySQL 8.0.45 contract; OpenSSL 3.6.3 independent ciphertext fixtures.
+# Provenance and generation commands: pkg/sql/plan/function/func_binary_aes_compat_test.go.
+# No reference service is required. Restore the default session mode at the end.
+SET block_encryption_mode = 'aes-192-cfb8';
+SELECT HEX(AES_ENCRYPT(UNHEX('4d61747269784f6e652041455300ff73747265616d2d6d6f6465'), '0123456789abcdef01234567', '0123456789abcdef')) AS cfb8;
+SELECT HEX(AES_DECRYPT(UNHEX('97a7843feae0450b9443a1fe8f0c43ebb4e57d59cc0c60e7b380'), '0123456789abcdef01234567', '0123456789abcdefignored')) AS plaintext;
+SELECT LENGTH(AES_ENCRYPT('', 'key', '0123456789abcdef')) AS empty_length;
+SELECT LENGTH(AES_ENCRYPT('abc', 'key', '0123456789abcdef')) AS short_length;
+SET block_encryption_mode = 'aes-256-ofb';
+SELECT HEX(AES_ENCRYPT(UNHEX('4d61747269784f6e652041455300ff73747265616d2d6d6f6465'), '0123456789abcdef0123456789abcdef', '0123456789abcdef')) AS ofb;
+SET block_encryption_mode = 'aes-128-ecb';
+SELECT HEX(AES_ENCRYPT('hello', 'password', '', 'hkdf')) AS hkdf_default;
+SELECT HEX(AES_ENCRYPT('hello', 'password', '', 'hkdf', 'salt')) AS hkdf_salt;
+SELECT HEX(AES_ENCRYPT('hello', 'password', '', 'hkdf', 'salt', 'info')) AS hkdf_info;
+SELECT AES_DECRYPT(UNHEX('7d0cfc63f883519e5b8f78de8933dee6'), 'password', '', 'hkdf') AS decrypted;
+SELECT AES_DECRYPT(UNHEX('98b27bbb4fce2ee0d2a57e55828b8cb0'), 'password', '', 'hkdf', 'salt') AS decrypted;
+SELECT AES_DECRYPT(UNHEX('f35282c2b466630949eb317c0f1b6f57'), 'password', '', 'hkdf', 'salt', 'info') AS decrypted;
+SELECT HEX(AES_ENCRYPT('hello', 'password', '', 'pbkdf2_hmac')) AS pbkdf2_default;
+SELECT HEX(AES_ENCRYPT('hello', 'password', '', 'pbkdf2_hmac', 'salt')) AS pbkdf2_salt;
+SELECT HEX(AES_ENCRYPT('hello', 'password', '', 'pbkdf2_hmac', 'salt', 1000)) AS pbkdf2_numeric;
+SELECT HEX(AES_ENCRYPT('hello', 'password', '', 'pbkdf2_hmac', 'salt', '1000x')) AS pbkdf2_prefix;
+SELECT AES_DECRYPT(UNHEX('cac24ca8c9fcd9bba907863d39d55cd8'), 'password', '', 'pbkdf2_hmac') AS decrypted;
+SELECT AES_DECRYPT(UNHEX('8d7ee6aaba97089a79d01672f0afb145'), 'password', '', 'pbkdf2_hmac', 'salt') AS decrypted;
+SELECT AES_DECRYPT(UNHEX('8d7ee6aaba97089a79d01672f0afb145'), 'password', '', 'pbkdf2_hmac', 'salt', 1000) AS decrypted;
+SELECT AES_DECRYPT(UNHEX('92f3e260a3927b6043f3e17f0db5413292f3e260a3927b6043f3e17f0db54132'), '0123456789abcdef') AS invalid_padding;
+SELECT HEX(AES_ENCRYPT('hello', 'password', NULL, 'hkdf')) AS ignored_ecb_iv;
+#error ER_UNKNOWN_ERROR
+SELECT AES_ENCRYPT('hello', 'password', '', 'HKDF');
+#error ER_UNKNOWN_ERROR
+SELECT AES_ENCRYPT('hello', 'password', '', 'hkdf', NULL);
+#error ER_UNKNOWN_ERROR
+SELECT AES_ENCRYPT('hello', 'password', '', 'pbkdf2_hmac', '', 999);
+#error ER_UNKNOWN_ERROR
+SELECT AES_ENCRYPT('hello', 'password', '', 'pbkdf2_hmac', '', 65536);
+#error ER_UNKNOWN_ERROR
+SELECT AES_ENCRYPT('hello', 'password', '', 'pbkdf2_hmac', '', 1000.0);
+PREPARE aes_mode_reuse FROM 'SELECT LENGTH(AES_ENCRYPT(?, ?, ?)) AS ciphertext_length';
+SET @aes_data = 'hello';
+SET @aes_key = 'password';
+SET @aes_iv = '0123456789abcdef';
+EXECUTE aes_mode_reuse USING @aes_data, @aes_key, @aes_iv;
+SET block_encryption_mode = 'aes-128-cfb1';
+EXECUTE aes_mode_reuse USING @aes_data, @aes_key, @aes_iv;
+DEALLOCATE PREPARE aes_mode_reuse;
+# NULL data short-circuits IV/KDF validation; invalid mode preserves old NULL behavior.
+SELECT AES_ENCRYPT(NULL, 'key', NULL, 'bad') AS null_data;
+SET block_encryption_mode = 'invalid-mode';
+SELECT AES_ENCRYPT('hello', 'key') AS invalid_mode;
+SET block_encryption_mode = 'aes-128-ecb';

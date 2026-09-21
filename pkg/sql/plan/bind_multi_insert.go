@@ -618,7 +618,7 @@ func (builder *QueryBuilder) bindMultiInsertGroup(
 			}
 		}
 		lastNodeID, colName2Idx, skipUniqueIdx, autoIncrementGeneratedColumn, err = builder.appendNodesForInsertStmt(
-			tCtx, unionID, tableDef, objRef, insertColToExpr)
+			tCtx, unionID, tableDef, objRef, insertColToExpr, builder.isInsertIgnore)
 		if err != nil {
 			return err
 		}
@@ -1112,7 +1112,7 @@ func (builder *QueryBuilder) bindMultiInsertBranchSource(
 			if ok {
 				expr, err = builder.castInsertSourceColumn(expr, expr, colDef)
 			} else {
-				expr, err = getDefaultExpr(sysCtx, colDef)
+				expr, err = getDefaultExprForAssignment(sysCtx, colDef, builder.compCtx.GetProcess(), builder.isInsertIgnore)
 			}
 			if err != nil {
 				return 0, err

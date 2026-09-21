@@ -3126,18 +3126,7 @@ func validateOrderedPercentileExpr(expr *plan.Expr, name string) error {
 }
 
 func isPercentileConfigExpr(expr *plan.Expr) bool {
-	if expr == nil {
-		return false
-	}
-	if rule.IsConstant(expr, true) || expr.GetP() != nil {
-		return true
-	}
-	// CAST cannot be folded by the generic rule, but the binder inserts this
-	// exact shape to give a TEXT-backed prepared marker its numeric p type.
-	fn := expr.GetF()
-	return fn != nil && fn.Func != nil && fn.Func.GetObjName() == "cast" &&
-		len(fn.Args) == 2 && isPercentileConfigExpr(fn.Args[0]) &&
-		rule.IsConstant(fn.Args[1], true)
+	return plan2.IsPercentileConfigExpr(expr)
 }
 
 // getPercentileConfig extracts the percentile value from a vector for

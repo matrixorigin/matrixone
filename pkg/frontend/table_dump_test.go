@@ -1802,6 +1802,25 @@ func TestTableDumpManifestCreateSQLRebuildsAlteredLegacyText(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestTableDumpManifestCreateSQLPreservesLegacyUnboundedBlob(t *testing.T) {
+	def := &plan.TableDef{
+		Name:      "source",
+		TableType: catalog.SystemOrdinaryRel,
+		Createsql: "CREATE TABLE source(payload BLOB)",
+		Cols: []*plan.ColDef{{
+			Name: "payload",
+			Typ:  plan.Type{Id: int32(types.T_blob), Width: 0},
+			Default: &plan.Default{
+				NullAbility: true,
+			},
+		}},
+	}
+
+	createSQL, err := tableDumpManifestCreateSQL(t.Context(), def, nil)
+	require.NoError(t, err)
+	require.Contains(t, strings.ToUpper(createSQL), "`PAYLOAD` LONGBLOB")
+}
+
 func TestTableSchemaHashFallback(t *testing.T) {
 	def := &plan.TableDef{
 		TblId: 10, DbId: 20, DbName: "db", Name: "table", OriginalName: "old",
