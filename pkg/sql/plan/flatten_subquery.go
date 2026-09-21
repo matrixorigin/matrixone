@@ -450,7 +450,6 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	if err != nil {
 		return 0, nil, err
 	}
-
 	// When a scalar aggregate subquery has non-equality correlated predicates,
 	// pullupThroughAgg forces inner expressions into GROUP BY, producing
 	// multiple rows per outer row and breaking SINGLE JOIN semantics.
