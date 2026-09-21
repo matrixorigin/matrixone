@@ -131,6 +131,13 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 		case *plan.Literal_Decimal128Val:
 			fmt.Fprintf(buf, "%s",
 				types.Decimal128{B0_63: uint64(val.Decimal128Val.A), B64_127: uint64(val.Decimal128Val.B)}.Format(expr.Typ.GetScale()))
+		case *plan.Literal_VecVal:
+			if exprImpl.Lit.IsSerialized || val.VecVal == "" {
+				return moerr.NewInvalidInput(ctx, "vector literal cannot be serialized for EXPLAIN FORMAT=JSON")
+			}
+			buf.WriteString(printableVectorText(val.VecVal))
+		default:
+			return moerr.NewInvalidInputf(ctx, "unsupported literal value %T", val)
 		}
 
 	case *plan.Expr_F:

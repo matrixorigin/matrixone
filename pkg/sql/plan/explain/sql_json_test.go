@@ -611,6 +611,68 @@ func TestBuildSQLJSONPlanPreservesVectorIndexPayload(t *testing.T) {
 	}, decoded.MatrixOne.Nodes[0].Expressions)
 }
 
+func TestBuildSQLJSONPlanPreservesLiteralVectorQuery(t *testing.T) {
+	data, err := BuildSQLJSONPlan(context.Background(), &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*plan.Node{{
+			NodeId:   0,
+			NodeType: plan.Node_VECTOR_INDEX_SCAN,
+			TableDef: &plan.TableDef{Name: "items"},
+			VectorIndexScan: &plan.VectorIndexScan{
+				Index:       &plan.IndexDef{IndexName: "idx_embedding"},
+				QueryVector: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{VecVal: "[1,2]"}}}},
+			},
+		}},
+	})
+	require.NoError(t, err)
+	var decoded struct {
+		MatrixOne struct {
+			Nodes []sqlJSONNode `json:"nodes"`
+		} `json:"matrixone"`
+	}
+	require.NoError(t, json.Unmarshal(data, &decoded))
+	require.Equal(t, []string{
+		"index=idx_embedding",
+		"direction=INTERNAL",
+		"initial_probe_count=0",
+		"bucket_expand_step=0",
+		"post_filter_over_fetch=false",
+		"query_vector=[1,2]",
+	}, decoded.MatrixOne.Nodes[0].Expressions)
+}
+
+func TestBuildSQLJSONPlanPreservesSamplePolicy(t *testing.T) {
+	buildExpressions := func(spec *plan.SampleFuncSpec) []string {
+		data, err := BuildSQLJSONPlan(context.Background(), &plan.Query{
+			StmtType: plan.Query_SELECT,
+			Steps:    []int32{0},
+			Nodes: []*plan.Node{{
+				NodeId:     0,
+				NodeType:   plan.Node_SAMPLE,
+				SampleFunc: spec,
+			}},
+		})
+		require.NoError(t, err)
+		var decoded struct {
+			MatrixOne struct {
+				Nodes []sqlJSONNode `json:"nodes"`
+			} `json:"matrixone"`
+		}
+		require.NoError(t, json.Unmarshal(data, &decoded))
+		return decoded.MatrixOne.Nodes[0].Expressions
+	}
+
+	rows := buildExpressions(&plan.SampleFuncSpec{Rows: 1, Percent: -1, UsingRow: false})
+	moreRows := buildExpressions(&plan.SampleFuncSpec{Rows: 100, Percent: -1, UsingRow: true})
+	percent := buildExpressions(&plan.SampleFuncSpec{Rows: -1, Percent: 12.5, UsingRow: true})
+	require.NotEqual(t, rows, moreRows)
+	require.NotEqual(t, rows, percent)
+	require.Equal(t, []string{"sample_rows=1", "sample_using_row=false"}, rows)
+	require.Equal(t, []string{"sample_rows=100", "sample_using_row=true"}, moreRows)
+	require.Equal(t, []string{"sample_percent=12.5", "sample_using_row=true"}, percent)
+}
+
 func TestBuildSQLJSONPlanPreservesVectorExecutionSettings(t *testing.T) {
 	buildExpressions := func(probe uint32, direction plan.OrderBySpec_OrderByFlag, expand uint32, overfetch bool) []string {
 		data, err := BuildSQLJSONPlan(context.Background(), &plan.Query{
@@ -752,6 +814,25 @@ func TestSQLJSONHelpersRejectMalformedInputsAndPreserveStatistics(t *testing.T) 
 	_, err = sqlJSONExpr(context.Background(), &plan.Expr{}, &ExplainOptions{Format: EXPLAIN_FORMAT_TEXT})
 	require.Error(t, err)
 	_, err = BuildSQLJSONPlan(context.Background(), &plan.Query{StmtType: plan.Query_SELECT, Steps: []int32{0}, Nodes: []*plan.Node{{NodeId: 1, NodeType: plan.Node_PROJECT, ProjectList: []*plan.Expr{{}}}}})
+	require.Error(t, err)
+	_, err = BuildSQLJSONPlan(context.Background(), &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*plan.Node{{
+			NodeId:   1,
+			NodeType: plan.Node_VECTOR_INDEX_SCAN,
+			VectorIndexScan: &plan.VectorIndexScan{
+				Index:       &plan.IndexDef{IndexName: "idx_embedding"},
+				QueryVector: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Jsonval{Jsonval: "{}"}}}},
+			},
+		}},
+	})
+	require.Error(t, err)
+	_, err = BuildSQLJSONPlan(context.Background(), &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes:    []*plan.Node{{NodeId: 1, NodeType: plan.Node_SAMPLE}},
+	})
 	require.Error(t, err)
 }
 

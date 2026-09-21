@@ -375,6 +375,11 @@ func (b *sqlJSONPlanBuilder) addNodeDetails(item *sqlJSONNode, node *plan.Node) 
 		if err != nil {
 			return err
 		}
+	case plan.Node_SAMPLE:
+		item.Expressions, err = sqlJSONSampleExpressions(b.ctx, node.SampleFunc)
+		if err != nil {
+			return err
+		}
 	case plan.Node_PARTITION:
 		buf := bytes.NewBuffer(make([]byte, 0, 128))
 		if err := NewOrderByDescribeImpl(node.OrderBy).GetDescription(b.ctx, &b.textOpts, buf); err != nil {
@@ -551,6 +556,28 @@ func sqlJSONExprList(ctx context.Context, exprs []*plan.Expr, options *ExplainOp
 		return "", err
 	}
 	return strings.Join(values, ", "), nil
+}
+
+func sqlJSONSampleExpressions(ctx context.Context, spec *plan.SampleFuncSpec) ([]string, error) {
+	if spec == nil {
+		return nil, moerr.NewInvalidInput(ctx, "sample node metadata is missing")
+	}
+	if spec.Rows != -1 {
+		if spec.Rows < 0 {
+			return nil, moerr.NewInvalidInputf(ctx, "sample node has invalid row count %d", spec.Rows)
+		}
+		return []string{
+			"sample_rows=" + strconv.FormatInt(int64(spec.Rows), 10),
+			"sample_using_row=" + strconv.FormatBool(spec.UsingRow),
+		}, nil
+	}
+	if spec.Percent < 0 {
+		return nil, moerr.NewInvalidInputf(ctx, "sample node has invalid percent %v", spec.Percent)
+	}
+	return []string{
+		"sample_percent=" + strconv.FormatFloat(spec.Percent, 'f', -1, 64),
+		"sample_using_row=" + strconv.FormatBool(spec.UsingRow),
+	}, nil
 }
 
 func sqlJSONVectorIndexExpressions(ctx context.Context, spec *plan.VectorIndexScan, options *ExplainOptions) ([]string, error) {
@@ -861,7 +888,11 @@ func sqlJSONExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions) 
 	if err := describeExpr(ctx, expr, options, buf); err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(buf.String()), nil
+	value = strings.TrimSpace(buf.String())
+	if value == "" {
+		return "", moerr.NewInvalidInput(ctx, "plan expression serialized to empty text")
+	}
+	return value, nil
 }
 
 func sqlJSONTableName(node *plan.Node) string {
