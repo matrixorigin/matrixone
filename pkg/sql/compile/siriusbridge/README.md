@@ -37,17 +37,24 @@ is local to the package, and records binary, SDK, and baseline library hashes
 in `lib/sirius-provenance.json`. Neither native compilation nor a container
 rebuild is performed by this packaging step.
 
-CN configuration selects `backend="embedded"`, `input-mode="mo"`, and an
-explicit `native-config-path`. Native configuration owns GPU selection and
-finite host/GPU/spill capacity. Streams default to 2 (maximum 128), waiting
-queries to 16 (maximum 16). MO input needs no Flight certificates, resolver or
-direct-TAE leases. Flight remains the default backend.
+CN configuration selects `backend="embedded"`, an explicit
+`native-config-path`, and either `input-mode="mo"` (the default) or protected
+`input-mode="tae"`. Native configuration owns GPU selection and finite
+host/GPU/spill capacity. Streams default to 2 (maximum 128), waiting queries to
+16 (maximum 16). MO input needs no Flight certificates, resolver, or leases.
+Direct TAE instead requires the replayed durable lease manager, data root, and
+bounded lease lifetime; stale embedded leases are released and unreconciled
+Flight work blocks startup before native/GPU allocation. Flight remains the
+default backend.
 
 Preparation validates typed read/output descriptors before starting any lazy
-producer. Input capacity is acquired before synchronous copies; a producer
+producer. For each MO range, a size-only pass precedes native input acquisition;
+only granted credit permits compact clones, NULL bitmap allocation, synchronous
+copy, and publication. Native acquisition is the authoritative hard limit
+because it includes allocator rounding and per-column descriptors. A producer
 must handle `IsNotNeeded` and stop on cancellation. Results retain their native
-lease until the output callback finishes. The ABI copies result payloads into
-a bounded Go buffer; CN copies vectors into the normal MO memory pool before
+lease until the output callback finishes. The ABI copies result payloads into a
+bounded Go buffer; CN copies vectors into the normal MO memory pool before
 calling the existing output function. This is bounded transport, not zero-copy.
 
 Before any C allocation, the bridge caps transient query descriptors (including
@@ -69,7 +76,5 @@ joins producers, in-flight calls and cancellation subscriptions; only then
 does it destroy handles and release admitted resources. Failed cleanup keeps
 ownership for a retry and seals new admission.
 
-This PR supplies the execution boundary and service owner. SQL reader admission
-and actual MO reader wiring are the following PR; attempts to select embedded
-SQL execution remain explicit errors until that wiring is present. Direct TAE
-admission is also a separate integration, not an implicit fallback.
+Embedded SQL remains explicit and fail-closed: neither rejected MO reads nor
+direct-TAE admission can fall back to native MO execution after selection.

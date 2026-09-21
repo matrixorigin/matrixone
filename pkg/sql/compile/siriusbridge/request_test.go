@@ -91,3 +91,15 @@ func TestDescriptorBudgetPreservesMaximumPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestQueryIDIsOpaqueBinaryWhileTextRemainsNULFree(t *testing.T) {
+	req := testRequest()
+	req.QueryID = []byte{0, 1, 2, 3, 4, 0, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
+	if err := validateRequest(req); err != nil {
+		t.Fatalf("opaque query ID: %v", err)
+	}
+	req.Columns[0].Name = "c\x00hidden"
+	if err := validateRequest(req); err == nil {
+		t.Fatal("NUL-containing text accepted")
+	}
+}

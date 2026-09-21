@@ -15,7 +15,6 @@
 package siriusbridge
 
 import (
-	"bytes"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -31,7 +30,7 @@ const maxColumns = 1024
 
 func validateRequest(req Request) error {
 	invalid := func() error { return moerr.NewInvalidInputNoCtx("invalid or oversized Sirius query descriptors") }
-	if req.AccountID > uint64(^uint32(0)) || len(req.Reads) > 16 || len(req.Columns) == 0 || len(req.Columns) > maxColumns || len(req.Plan) == 0 || len(req.Plan) > 16<<20 || len(req.QueryID) == 0 || len(req.QueryID) > 256 || bytes.IndexByte(req.QueryID, 0) >= 0 {
+	if req.AccountID > uint64(^uint32(0)) || len(req.Reads) > 16 || len(req.Columns) == 0 || len(req.Columns) > maxColumns || len(req.Plan) == 0 || len(req.Plan) > 16<<20 || len(req.QueryID) == 0 || len(req.QueryID) > 256 {
 		return invalid()
 	}
 	validText := func(text string, required bool) bool {

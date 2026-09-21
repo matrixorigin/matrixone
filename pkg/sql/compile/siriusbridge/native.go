@@ -374,41 +374,47 @@ func (q *nativeQuery) next(fill func(Result) error) (err error) {
 	return fill(result)
 }
 
-func (i *nativeInput) push(ctx context.Context, rows uint32, vectors []Vector) (err error) {
-	if len(vectors) == 0 || len(vectors) != i.columns {
-		return moerr.NewInvalidInputNoCtx("empty Sirius input schema")
-	}
-	var total uint64
-	for _, v := range vectors {
-		for _, b := range [][]byte{v.Data, v.Area, v.Nulls} {
-			if uint64(len(b)) > WindowBytes-total {
-				return moerr.NewInvalidInputNoCtx("Sirius input exceeds native window; split at row boundaries")
-			}
-			total += uint64(len(b))
-		}
+type nativeInputLease struct {
+	input    *nativeInput
+	handle   *C.sirius_batch_handle
+	capacity uint64
+}
+
+func (i *nativeInput) acquire(ctx context.Context, payloadBytes uint64) (inputLeaseDriver, error) {
+	if i == nil || i.handle == nil || payloadBytes > WindowBytes {
+		return nil, moerr.NewInvalidInputNoCtx("invalid Sirius native input acquisition")
 	}
 	var handle *C.sirius_batch_handle
 	var e C.sirius_error
 	for {
-		if err = ctx.Err(); err != nil {
-			return err
+		if err := ctx.Err(); err != nil {
+			return nil, context.Cause(ctx)
 		}
 		// Empty and constant-NULL vectors have no payload, but still need a
 		// charged native owner for their descriptors until consumption.
-		code := C.sirius_input_acquire(i.handle, C.uint64_t(max(total, 1)), millis(ctx), &handle, &e)
+		code := C.sirius_input_acquire(i.handle, C.uint64_t(max(payloadBytes, 1)), millis(ctx), &handle, &e)
 		if code == C.SIRIUS_TIMEOUT {
 			continue
 		}
-		if err = status(code, &e); err != nil {
-			return err
+		if err := status(code, &e); err != nil {
+			return nil, err
 		}
-		break
+		return &nativeInputLease{input: i, handle: handle, capacity: payloadBytes}, nil
 	}
-	defer func() {
-		if handle != nil {
-			err = errors.Join(err, i.query.release(&handle))
-		}
-	}()
+}
+
+func (l *nativeInputLease) publish(rows uint32, vectors []Vector) error {
+	if l == nil || l.input == nil || l.handle == nil || len(vectors) == 0 || len(vectors) != l.input.columns {
+		return moerr.NewInvalidInputNoCtx("empty Sirius input schema")
+	}
+	total, err := vectorPayloadBytes(vectors)
+	if err != nil {
+		return err
+	}
+	if total > l.capacity {
+		return moerr.NewInvalidInputNoCtx("Sirius input payload exceeds reserved native credit")
+	}
+	var e C.sirius_error
 	columns := make([]C.sirius_input_vector, len(vectors))
 	var offset uint64
 	for n, v := range vectors {
@@ -427,14 +433,25 @@ func (i *nativeInput) push(ctx context.Context, rows uint32, vectors []Vector) (
 				c.null_bytes = C.uint64_t(len(b))
 			}
 			if len(b) > 0 {
-				if err = status(C.sirius_input_write(handle, C.uint64_t(offset), unsafe.Pointer(&b[0]), C.uint64_t(len(b)), &e), &e); err != nil {
+				if err = status(C.sirius_input_write(l.handle, C.uint64_t(offset), unsafe.Pointer(&b[0]), C.uint64_t(len(b)), &e), &e); err != nil {
 					return err
 				}
 			}
 			offset += uint64(len(b))
 		}
 	}
-	return status(C.sirius_input_publish(i.handle, &handle, C.uint32_t(rows), &columns[0], C.uint32_t(len(columns)), &e), &e)
+	return status(C.sirius_input_publish(l.input.handle, &l.handle, C.uint32_t(rows), &columns[0], C.uint32_t(len(columns)), &e), &e)
+}
+
+func (l *nativeInputLease) release() error {
+	if l == nil || l.handle == nil {
+		return nil
+	}
+	err := l.input.query.release(&l.handle)
+	// query.release retains a failed non-nil handle for Query.Close retry.
+	// The lease transfers that retry ownership and must never append it twice.
+	l.handle = nil
+	return err
 }
 func (i *nativeInput) finish() error {
 	var e C.sirius_error
