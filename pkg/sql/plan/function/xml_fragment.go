@@ -16,7 +16,6 @@ package function
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -33,7 +32,7 @@ const (
 	xmlWorkLimit    = 1000000
 )
 
-var errXMLMalformed = errors.New("malformed XML fragment")
+var errXMLMalformed = moerr.NewInvalidInputNoCtx("malformed XML fragment")
 
 // Scratch is conservatively charged for slice capacity growth, not merely
 // logical length. It belongs to one row; input strings remain borrowed.
