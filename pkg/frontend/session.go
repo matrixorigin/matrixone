@@ -260,7 +260,11 @@ type Session struct {
 
 	cache       *privilegeCache
 	ruleCache   map[string]string // rewrite rule cache, nil means not loaded
-	ruleCacheMu sync.RWMutex      // protects ruleCache
+	ruleCacheMu sync.RWMutex      // protects ruleCache and rewritePolicyGeneration
+	// rewritePolicyGeneration changes whenever session policy state is
+	// invalidated. Prepared statements capture this generation at publication
+	// time so a request-frozen policy cannot be registered after a refresh.
+	rewritePolicyGeneration uint64
 
 	// foreignConns caches connections to foreign data sources (Elasticsearch,
 	// external SQL databases) opened by esql_tvf_connect / sql_tvf_connect and
@@ -2221,9 +2225,13 @@ func (ses *Session) invalidateRewriteRuleCache() {
 }
 
 func (ses *Session) invalidateRewriteRuleCacheLocked() {
-	// Clear rule cache with proper locking.
+	// Clear the rule cache and advance its generation together. A PREPARE that
+	// captured the previous request policy is rejected when it is registered
+	// after this point, even if the invalidation happened earlier in the same
+	// multi-statement request.
 	ses.ruleCacheMu.Lock()
 	ses.ruleCache = nil
+	ses.rewritePolicyGeneration++
 	ses.ruleCacheMu.Unlock()
 
 	if !ses.rewriteEnabled.Load() {
@@ -2232,6 +2240,12 @@ func (ses *Session) invalidateRewriteRuleCacheLocked() {
 	for _, stmt := range ses.prepareStmts {
 		stmt.invalidateRewritePolicy()
 	}
+}
+
+func (ses *Session) bumpRewritePolicyGeneration() {
+	ses.ruleCacheMu.Lock()
+	ses.rewritePolicyGeneration++
+	ses.ruleCacheMu.Unlock()
 }
 
 // GetBackgroundExec generates a background executor
@@ -2523,6 +2537,14 @@ func (ses *Session) SetPrepareStmt(ctx context.Context, name string, prepareStmt
 	if prepareStmt != nil && prepareStmt.proc == nil {
 		prepareStmt.proc = ses.proc
 	}
+	if prepareStmt != nil && prepareStmt.rewritePolicyCaptured {
+		ses.ruleCacheMu.RLock()
+		currentGeneration := ses.rewritePolicyGeneration
+		ses.ruleCacheMu.RUnlock()
+		if prepareStmt.rewritePolicyGeneration != currentGeneration {
+			prepareStmt.invalidateRewritePolicy()
+		}
+	}
 	ses.prepareStmts[name] = prepareStmt
 
 	return nil
@@ -2551,7 +2573,7 @@ func (ses *Session) getPrepareStmt(ctx context.Context, name string, allowInvali
 		if !allowInvalidated {
 			if err := prepareStmt.checkRewritePolicy(ctx); err != nil {
 				ses.Errorf(ctx, "prepared statement '%s' needs to be re-prepared", name)
-				return nil, err
+				return prepareStmt, err
 			}
 		}
 		return prepareStmt, nil

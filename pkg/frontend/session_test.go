@@ -2097,6 +2097,41 @@ func TestInvalidatePrivilegeCachePreservesPreparedStatementsWithoutRewrite(t *te
 	require.Same(t, stmt, got)
 }
 
+func TestSetPrepareStmtRejectsStaleRewritePolicyGeneration(t *testing.T) {
+	ctx := context.Background()
+	ses := &Session{
+		cache:        &privilegeCache{},
+		prepareStmts: make(map[string]*PrepareStmt),
+	}
+	ses.rewriteEnabled.Store(true)
+
+	ses.InvalidatePrivilegeCache()
+
+	stale := &PrepareStmt{
+		Name:                    "stale",
+		rewritePolicyCaptured:   true,
+		rewritePolicyGeneration: 0,
+	}
+	require.NoError(t, ses.SetPrepareStmt(ctx, stale.Name, stale))
+	require.True(t, stale.rewritePolicyInvalidated.Load())
+	_, err := ses.GetPrepareStmt(ctx, stale.Name)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNeedReprepare))
+
+	ses.ruleCacheMu.RLock()
+	currentGeneration := ses.rewritePolicyGeneration
+	ses.ruleCacheMu.RUnlock()
+	fresh := &PrepareStmt{
+		Name:                    "fresh",
+		rewritePolicyCaptured:   true,
+		rewritePolicyGeneration: currentGeneration,
+	}
+	require.NoError(t, ses.SetPrepareStmt(ctx, fresh.Name, fresh))
+	got, err := ses.GetPrepareStmt(ctx, fresh.Name)
+	require.NoError(t, err)
+	require.Same(t, fresh, got)
+}
+
 func TestPrepareStmtNamesAreCaseInsensitive(t *testing.T) {
 	ctx := context.Background()
 	ses := &Session{prepareStmts: make(map[string]*PrepareStmt)}
