@@ -188,21 +188,21 @@ func newScopeExecutionFuture(
 	c *Compile,
 	name string,
 	start func(func(error)) error,
-) (*scopeFuture[struct{}], error) {
+) (*scopeFuture[struct{}], bool, error) {
 	if c == nil {
-		return nil, moerr.NewInternalErrorNoCtx("nil compile for scope future")
+		return nil, false, moerr.NewInternalErrorNoCtx("nil compile for scope future")
 	}
 	if start == nil {
-		return nil, moerr.NewInternalErrorNoCtx("nil scope future starter")
+		return nil, false, moerr.NewInternalErrorNoCtx("nil scope future starter")
 	}
-	scheduler := c.ensureScopeTaskScheduler(max(1, len(c.scopes)))
+	scheduler, ownsScheduler := c.ensureScopeTaskSchedulerWithOwnership(max(1, len(c.scopes)))
 	future := newScopeFuture[struct{}](scheduler, name+"-complete")
 	err := start(func(runErr error) {
 		future.complete(struct{}{}, runErr)
 	})
 	if err != nil {
 		future.complete(struct{}{}, err)
-		return nil, err
+		return nil, ownsScheduler, err
 	}
-	return future, nil
+	return future, ownsScheduler, nil
 }

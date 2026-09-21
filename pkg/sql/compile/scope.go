@@ -347,7 +347,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 	if c == nil {
 		return moerr.NewInternalErrorNoCtx("nil compile for Scope.Run")
 	}
-	future, err := newScopeExecutionFuture(c, "scope-run", func(done func(error)) error {
+	future, ownsScheduler, err := newScopeExecutionFuture(c, "scope-run", func(done func(error)) error {
 		return s.runEventAsync(c, done)
 	})
 	if err != nil {
@@ -359,7 +359,9 @@ func (s *Scope) Run(c *Compile) (err error) {
 		return normalized
 	}
 	_, err = future.Await(context.Background())
-	c.waitScopeTaskScheduler()
+	if ownsScheduler {
+		c.waitScopeTaskScheduler()
+	}
 	return err
 }
 
@@ -791,14 +793,16 @@ func (s *Scope) RemoteRun(c *Compile) error {
 	// implementation here: the production path and this compatibility entry
 	// both use the same event-driven remote state machine.  The scheduler owns
 	// transport waits and re-admits VM continuations through ready events.
-	future, err := newScopeExecutionFuture(c, "remote-run", func(done func(error)) error {
+	future, ownsScheduler, err := newScopeExecutionFuture(c, "remote-run", func(done func(error)) error {
 		return s.remoteRunAsync(c, done)
 	})
 	if err != nil {
 		return err
 	}
 	_, err = future.Await(context.Background())
-	c.waitScopeTaskScheduler()
+	if ownsScheduler {
+		c.waitScopeTaskScheduler()
+	}
 	return err
 }
 
@@ -1022,14 +1026,16 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 	// actual execution is delegated to the same asynchronous construction and
 	// continuation path used by MergeRun; no second blocking VM implementation
 	// is allowed to grow here.
-	future, err := newScopeExecutionFuture(c, "parallel-run", func(done func(error)) error {
+	future, ownsScheduler, err := newScopeExecutionFuture(c, "parallel-run", func(done func(error)) error {
 		return s.parallelRunAsync(c, done)
 	})
 	if err != nil {
 		return err
 	}
 	_, err = future.Await(context.Background())
-	c.waitScopeTaskScheduler()
+	if ownsScheduler {
+		c.waitScopeTaskScheduler()
+	}
 	return err
 }
 

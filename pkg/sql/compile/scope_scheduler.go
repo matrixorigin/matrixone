@@ -135,6 +135,15 @@ func newScopeTaskScheduler(
 		go s.eventWorker()
 	}
 	blockingCount := workerCount
+	// Control/DDL adapters can synchronously enter a Scope.Run/MergeRun
+	// compatibility boundary.  That nested execution submits its reader or
+	// transport preparation back to the blocking lane while the outer control
+	// operation is still waiting for it.  Keep one spare worker so the lane
+	// remains re-entrant instead of self-deadlocking on a single-worker query
+	// (for example restore account -> table clone -> Scope.Run).
+	if blockingCount < 2 {
+		blockingCount = 2
+	}
 	if blockingCount > 4 {
 		blockingCount = 4
 	}
@@ -980,8 +989,23 @@ func (s *scopeTaskScheduler) wait() {
 func (c *Compile) ensureScopeTaskScheduler(workerCount int) *scopeTaskScheduler {
 	c.scopeSchedulerMu.Lock()
 	defer c.scopeSchedulerMu.Unlock()
+	scheduler, _ := c.ensureScopeTaskSchedulerLocked(workerCount)
+	return scheduler
+}
+
+// ensureScopeTaskSchedulerWithOwnership returns whether this call created the
+// scheduler. Synchronous compatibility wrappers use that ownership bit to
+// retire only a scheduler they created; nested Scope.Run calls must not wait on
+// their caller's still-running scheduler task.
+func (c *Compile) ensureScopeTaskSchedulerWithOwnership(workerCount int) (*scopeTaskScheduler, bool) {
+	c.scopeSchedulerMu.Lock()
+	defer c.scopeSchedulerMu.Unlock()
+	return c.ensureScopeTaskSchedulerLocked(workerCount)
+}
+
+func (c *Compile) ensureScopeTaskSchedulerLocked(workerCount int) (*scopeTaskScheduler, bool) {
 	if c.scopeScheduler != nil {
-		return c.scopeScheduler
+		return c.scopeScheduler, false
 	}
 
 	ctx := context.Background()
@@ -994,7 +1018,7 @@ func (c *Compile) ensureScopeTaskScheduler(workerCount int) *scopeTaskScheduler 
 		c.proc.SetBlockingSubmitter(c.scopeScheduler.submitBlockingEvent)
 		c.proc.SetReadySubmitter(c.scopeScheduler.submitRoot)
 	}
-	return c.scopeScheduler
+	return c.scopeScheduler, true
 }
 
 func (c *Compile) waitScopeTaskScheduler() {

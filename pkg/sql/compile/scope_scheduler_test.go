@@ -203,6 +203,38 @@ func TestScopeFutureReadmitsCompletionToReadyQueue(t *testing.T) {
 	scheduler.wait()
 }
 
+func TestScopeTaskSchedulerNestedBlockingFutureDoesNotDeadlock(t *testing.T) {
+	scheduler := newScopeTaskScheduler(context.Background(), 1, nil)
+	completed := make(chan struct{})
+
+	if err := scheduler.submitBlockingEvent("outer-control", func() {
+		future, err := submitBlockingFuture(scheduler, "nested-reader", false, func() (int, error) {
+			return 42, nil
+		})
+		if err != nil {
+			t.Errorf("submit nested future: %v", err)
+			close(completed)
+			return
+		}
+		value, err := future.Await(context.Background())
+		if err != nil {
+			t.Errorf("await nested future: %v", err)
+		} else if value != 42 {
+			t.Errorf("nested future value: got %d, want 42", value)
+		}
+		close(completed)
+	}); err != nil {
+		t.Fatalf("submit outer blocking event: %v", err)
+	}
+
+	select {
+	case <-completed:
+	case <-time.After(time.Second):
+		t.Fatal("nested blocking future deadlocked the blocking lane")
+	}
+	scheduler.wait()
+}
+
 func TestScopeFutureConvertsOperationPanic(t *testing.T) {
 	scheduler := newScopeTaskScheduler(context.Background(), 1, nil)
 	future, err := submitBlockingFuture(scheduler, "future-panic", false, func() (struct{}, error) {
