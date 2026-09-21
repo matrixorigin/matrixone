@@ -1588,6 +1588,45 @@ func TestTunnelRequestBoundaryTracker(t *testing.T) {
 		require.False(t, tun.hasInFlightClientRequest())
 	})
 
+	t.Run("legacy cursor execute has one terminal EOF", func(t *testing.T) {
+		tun := &tunnel{}
+		tun.trackClientRequest(makeStmtCommandPacket(frontend.COM_STMT_EXECUTE, 41))
+		tun.trackServerResponse(makeSimplePacket("column count"))
+		tun.trackServerResponse(makeSimplePacket("column definition"))
+		tun.trackServerResponse(makeLegacyEOFPacket(frontend.SERVER_STATUS_CURSOR_EXISTS))
+		require.False(t, tun.hasInFlightClientRequest())
+		require.False(t, tun.hasUntransferableClientState(),
+			"the authoritative CN cursor check, not Proxy response framing, gates migration")
+
+		ping := makeSimplePacket("ping")
+		ping[4] = byte(frontend.COM_PING)
+		tun.trackClientRequest(ping)
+		tun.trackServerResponse(makeOKPacket(8))
+		require.False(t, tun.hasInFlightClientRequest())
+		require.False(t, tun.hasUntransferableClientState())
+	})
+
+	t.Run("ordinary legacy execute still waits for row EOF", func(t *testing.T) {
+		tun := &tunnel{}
+		tun.trackClientRequest(makeStmtCommandPacket(frontend.COM_STMT_EXECUTE, 41))
+		tun.trackServerResponse(makeSimplePacket("column count"))
+		tun.trackServerResponse(makeSimplePacket("column definition"))
+		tun.trackServerResponse(makeLegacyEOFPacket(0))
+		require.True(t, tun.hasInFlightClientRequest())
+		tun.trackServerResponse(makeSimplePacket("binary row"))
+		tun.trackServerResponse(makeLegacyEOFPacket(0))
+		require.False(t, tun.hasInFlightClientRequest())
+	})
+
+	t.Run("deprecated EOF cursor execute completes", func(t *testing.T) {
+		tun := &tunnel{clientDeprecatesEOF: true}
+		tun.trackClientRequest(makeStmtCommandPacket(frontend.COM_STMT_EXECUTE, 41))
+		tun.trackServerResponse(makeSimplePacket("column count"))
+		tun.trackServerResponse(makeSimplePacket("column definition"))
+		tun.trackServerResponse(makeDeprecatedEOFPacket(frontend.SERVER_STATUS_CURSOR_EXISTS))
+		require.False(t, tun.hasInFlightClientRequest())
+	})
+
 	t.Run("deprecated EOF result", func(t *testing.T) {
 		tun := &tunnel{clientDeprecatesEOF: true}
 		tun.trackClientRequest(makeSimplePacket("select 1"))

@@ -815,6 +815,11 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 	resp.LastAffectedRows = ses.GetLastAffectedRows()
 	prepareStmts := ses.GetPrepareStmts()
 	for _, st := range prepareStmts {
+		// A server cursor retains its result and fetch offset only on this CN.
+		// Even an empty cursor remains fetchable until the client closes it.
+		if st.cursor != nil {
+			return moerr.GetOkExpectedNotSafeToStartTransfer()
+		}
 		// COM_STMT_SEND_LONG_DATA has no protocol response and its parameter
 		// buffers are not part of the migration payload. Reject the snapshot at
 		// the authoritative session owner instead of relying on the proxy to
@@ -823,6 +828,7 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 			return moerr.GetOkExpectedNotSafeToStartTransfer()
 		}
 	}
+	resp.PreparedStmtCursorsChecked = true
 	resp.PreparedStmtLongDataChecked = true
 	resp.FoundRows = ses.GetLastFoundRows()
 	if currentProtocolVersion(ses.proc) >= defines.MORPCVersion22 {

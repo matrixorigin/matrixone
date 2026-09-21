@@ -802,6 +802,14 @@ func (t *tunnel) trackServerResponse(msg []byte) {
 			return
 		}
 		if !s.legacyResultEOFSeen {
+			// Cursor EXECUTE has no row stream: its sole EOF follows the column
+			// definitions and carries CURSOR_EXISTS. Ordinary result sets still
+			// have a second EOF after their rows.
+			if s.command == frontend.COM_STMT_EXECUTE &&
+				status&frontend.SERVER_STATUS_CURSOR_EXISTS != 0 {
+				t.finishTrackedResponseLocked(status, true)
+				return
+			}
 			s.legacyResultEOFSeen = true
 			return
 		}

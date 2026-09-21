@@ -805,6 +805,44 @@ func TestMigrateConnectionFromRejectsPendingPreparedLongData(t *testing.T) {
 	require.Equal(t, prepared.Name, resp.PrepareStmts[0].Name)
 }
 
+func TestMigrateConnectionFromRejectsActivePreparedCursors(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	first := &PrepareStmt{
+		Name: GetPrepareStmtName(41),
+		Sql:  "select 1",
+		// An empty result is still fetchable until FETCH closes its cursor.
+		cursor: &preparedStmtCursor{result: &MysqlResultSet{}},
+	}
+	second := &PrepareStmt{
+		Name: GetPrepareStmtName(42),
+		Sql:  "select 2",
+		cursor: &preparedStmtCursor{
+			result: &MysqlResultSet{Data: [][]interface{}{{int64(1)}, {int64(2)}}},
+			offset: 1,
+		},
+	}
+	require.NoError(t, ses.SetPrepareStmt(context.Background(), first.Name, first))
+	require.NoError(t, ses.SetPrepareStmt(context.Background(), second.Name, second))
+	rt := &Routine{mc: newMigrateController()}
+	rt.setSession(ses)
+
+	for _, active := range []*PrepareStmt{first, second} {
+		resp := &query.MigrateConnFromResponse{}
+		err := rt.migrateConnectionFrom(resp)
+		require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
+		require.False(t, resp.PreparedStmtCursorsChecked)
+		require.Empty(t, resp.PrepareStmts)
+		require.NotNil(t, active.cursor, "rejected migration must preserve the source cursor")
+		active.closeCursor()
+	}
+
+	resp := &query.MigrateConnFromResponse{}
+	require.NoError(t, rt.migrateConnectionFrom(resp))
+	require.True(t, resp.PreparedStmtCursorsChecked)
+	require.Len(t, resp.PrepareStmts, 2)
+}
+
 func TestMigrateConnectionFromExportsEvaluatedUserVariables(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()

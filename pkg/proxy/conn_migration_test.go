@@ -128,6 +128,7 @@ func runTestWithQueryServiceHandlersAndRefresh(
 					FoundRows:                     11,
 					UserLevelLockReleaseSupported: true,
 					TempTableStateExported:        true,
+					PreparedStmtCursorsChecked:    true,
 				}
 				return nil
 			}, false)
@@ -820,6 +821,7 @@ type migrationUserLockQueryClient struct {
 	migrateToPrepareStmts         []*pb.PrepareStmt
 	migrateFromErr                error
 	preparedStmtLongDataChecked   bool
+	omitPreparedStmtCursorsCheck  bool
 	omitTempTableState            bool
 	releaseCount                  int
 }
@@ -840,6 +842,7 @@ func (c *migrationUserLockQueryClient) SendMessage(ctx context.Context, address 
 			UserLevelLocks:                c.userLevelLocks,
 			UserLevelLockReleaseSupported: c.userLevelLockReleaseSupported,
 			PreparedStmtLongDataChecked:   c.preparedStmtLongDataChecked,
+			PreparedStmtCursorsChecked:    !c.omitPreparedStmtCursorsCheck,
 			TempTableStateExported:        !c.omitTempTableState,
 		}}, nil
 	case pb.CmdMethod_MigrateConnTo:
@@ -849,6 +852,35 @@ func (c *migrationUserLockQueryClient) SendMessage(ctx context.Context, address 
 	default:
 		return nil, moerr.NewInternalError(ctx, "unexpected request")
 	}
+}
+
+func TestMigrateConnFromRejectsOldCNWithoutCursorAttestation(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe", QueryAddress: "query"}
+	cluster := clusterservice.NewMOCluster(
+		"",
+		nil,
+		0,
+		clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices([]metadata.CNService{cn}, nil))
+	defer cluster.Close()
+
+	cc, closeFn := createNewClientConn(t)
+	defer closeFn()
+	client := cc.(*clientConn)
+	queryClient := &migrationUserLockQueryClient{omitPreparedStmtCursorsCheck: true}
+	client.queryClient = queryClient
+	client.moCluster = cluster
+
+	// Do not rely on a Proxy tunnel or a cursor-status inference: an old CN
+	// cannot attest to either the presence or the absence of cursor state.
+	_, err := client.migrateConnFromContext(context.Background(), "pipe")
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
+	require.Equal(t, 1, queryClient.releaseCount)
+
+	queryClient.omitPreparedStmtCursorsCheck = false
+	resp, err := client.migrateConnFromContext(context.Background(), "pipe")
+	require.NoError(t, err)
+	require.True(t, resp.PreparedStmtCursorsChecked)
 }
 
 func TestMigrateConnFromReblocksLongDataRejectedByOldCN(t *testing.T) {

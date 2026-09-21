@@ -599,6 +599,9 @@ message MigrateConnFromResponse {
   // Distinguishes an empty snapshot from an older CN that cannot report
   // temporary-table state.
   bool TempTableStateExported = 17;
+  // True only when the exporting CN verified that no prepared statement owns
+  // an active server cursor, whose result and offset cannot be migrated.
+  bool PreparedStmtCursorsChecked = 18;
 }
 
 message MigrateConnToRequest {

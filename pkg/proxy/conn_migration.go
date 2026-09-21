@@ -61,6 +61,11 @@ func (c *clientConn) migrateConnFromContext(
 	if r == nil {
 		return nil, moerr.NewInternalError(parent, "bad response")
 	}
+	if !r.PreparedStmtCursorsChecked {
+		// An older CN cannot attest that its prepared statements are free of
+		// active cursors. Their retained results are absent from the snapshot.
+		return nil, moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
 	if c.tun != nil && !c.tun.acceptPendingLongDataSnapshot(r.PreparedStmtLongDataChecked) {
 		c.tun.rejectPendingLongDataReconciliation()
 		return nil, moerr.GetOkExpectedNotSafeToStartTransfer()
