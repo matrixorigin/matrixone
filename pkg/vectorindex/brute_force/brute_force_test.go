@@ -509,6 +509,16 @@ func TestCpuBruteForceIndexWideFloat32CentroidAssignment(t *testing.T) {
 	require.Equal(t, []int64{0}, keys)
 	require.Len(t, distances, 1)
 	require.False(t, math.IsInf(distances[0], 0))
+
+	// ProductL2 consumes the key written by SearchFloat32. The output
+	// distance is narrowed to float32 and may be +Inf, but the comparison
+	// must still happen in the wide float64 result type.
+	outKeys := make([]int64, 1)
+	outDists := make([]float32, 1)
+	err = idx.SearchFloat32(sqlproc, [][]float32{{1e38, 1e38}},
+		vectorindex.RuntimeConfig{Limit: 1, NThreads: 1}, outKeys, outDists)
+	require.NoError(t, err)
+	require.Equal(t, int64(0), outKeys[0])
 }
 
 func TestGetUsearchQuantizationFromType(t *testing.T) {

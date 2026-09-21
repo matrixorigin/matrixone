@@ -141,8 +141,13 @@ func ResolveDistanceFn[T types.ArrayElement, R types.RealNumbers](metric MetricT
 		if _, wide := any(*new(R)).(float64); wide {
 			var fn func([]float32, []float32) (float64, error)
 			var err error
-			if metric == Metric_L2Distance {
-				fn = StableL2DistanceSq[float32]
+			if metric == Metric_L2Distance || metric == Metric_L2sqDistance {
+				// Float32 input is accumulated in float64 without the per-call
+				// scale/NaN/Inf scan. The wide kernel falls back to the stable
+				// implementation for non-finite input or an unexpected wide
+				// accumulator result, so extreme finite values keep their range
+				// while ordinary IVF centroid assignment stays on a single pass.
+				fn = wideL2DistanceSqFloat32
 			} else {
 				fn, err = StableDistanceFn[float32](metric)
 				if err != nil {
