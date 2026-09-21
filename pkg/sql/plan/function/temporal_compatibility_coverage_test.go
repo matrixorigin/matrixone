@@ -17,6 +17,7 @@ package function
 import (
 	"bytes"
 	"context"
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -257,4 +258,82 @@ func TestTemporalCompatibilityPeriodAndUnixDomains(t *testing.T) {
 		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{11, 0}, nil), PeriodDiff)
 	ok, info := periodDiff.Run()
 	require.True(t, ok, info)
+}
+
+func TestTemporalCompatibilityErrorAndBoundaryHelpers(t *testing.T) {
+	dt, err := types.ParseDatetime("2024-02-29 12:34:56.123456", 6)
+	require.NoError(t, err)
+	date, err := types.ParseDateCast("2024-02-29")
+	require.NoError(t, err)
+	tm := types.TimeFromClock(false, 12, 34, 56, 123456)
+
+	// Exercise the invalid and overflow branches used by DATE_SUB/SUBTIME.
+	_, err = doDateSub(types.ZeroDate, 1, types.Day)
+	require.Error(t, err)
+	_, err = doDateSub(date, math.MaxInt64, types.Day)
+	require.Error(t, err)
+	_, err = doDateStringSub("12:34:56", 1, types.Day)
+	require.Error(t, err)
+	_, err = doDateStringSub("not-a-date", 1, types.Day)
+	require.Error(t, err)
+	_, err = doDatetimeSub(types.ZeroDatetime, 1, types.Day)
+	require.Error(t, err)
+	_, err = doDatetimeSub(dt, math.MaxInt64, types.Day)
+	require.Error(t, err)
+	_, err = doTimeSub(tm, math.MaxInt64, types.Second)
+	require.Error(t, err)
+	clamped, err := doTimeSub(types.TimeFromClock(false, 0, 0, 0, 0), 1, types.Day)
+	require.NoError(t, err)
+	require.Equal(t, -types.MySQLTimeMaxForScale(6), clamped)
+
+	// These parsers deliberately distinguish calendar strings from durations.
+	_, _, kind, err := parseTemporalString("12:34:56", 6)
+	require.NoError(t, err)
+	require.Equal(t, temporalStringTime, kind)
+	_, _, kind, err = parseTemporalString("2024-02-29 12:34:56", 6)
+	require.NoError(t, err)
+	require.Equal(t, temporalStringDateTime, kind)
+	_, err = parseTimeOperand("2024-02-29", 6)
+	require.Error(t, err)
+	_, err = parseTimeOperand("bad", 6)
+	require.Error(t, err)
+
+	for _, tc := range []struct {
+		value int64
+		want  bool
+	}{
+		{0, false}, {int64(types.MySQLTimeMaxForScale(0)) / types.MicroSecsPerSec, false},
+		{int64(types.MySQLTimeMaxForScale(0))/types.MicroSecsPerSec + 1, true},
+		{-int64(types.MySQLTimeMaxForScale(0))/types.MicroSecsPerSec - 1, true},
+	} {
+		_, warning := secToTimeFromInt64(tc.value)
+		require.Equal(t, tc.want, warning)
+	}
+	_, warning := secToTimeFromUint64(uint64(types.MySQLTimeMaxForScale(0))/types.MicroSecsPerSec + 1)
+	require.True(t, warning)
+	_, warning, _ = secToTimeFromFloat64(math.NaN())
+	require.True(t, warning)
+	_, warning, clampedFlag := secToTimeFromFloat64(math.Inf(1))
+	require.False(t, warning)
+	require.True(t, clampedFlag)
+
+	for _, tc := range []struct {
+		value int64
+		want  int64
+	}{
+		{200802, 2008*12 + 2},
+		{9912, 1999*12 + 12},
+	} {
+		year, month, err := parsePeriod(tc.value)
+		require.NoError(t, err)
+		require.Equal(t, tc.want, int64(year)*12+int64(month))
+	}
+	_, _, err = parsePeriod(13)
+	require.Error(t, err)
+	_, _, err = parsePeriod(200813)
+	require.Error(t, err)
+
+	require.Equal(t, types.MySQLTimeFunctionMaxForScale(6), signedMySQLTimeFunctionMax(false))
+	require.Equal(t, -types.MySQLTimeFunctionMaxForScale(6), signedMySQLTimeFunctionMax(true))
+	require.Equal(t, types.MySQLTimeMaxForScale(6), timeDiff(types.TimeFromClock(false, 838, 59, 59, 0), -tm))
 }
