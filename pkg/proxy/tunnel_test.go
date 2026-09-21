@@ -1263,6 +1263,68 @@ func makeStmtCommandPacket(cmd frontend.CommandType, statementID uint32, tail ..
 	return msg
 }
 
+func makeBinaryBigIntRow(value uint64) []byte {
+	// A one-column binary row has a 0x00 header, a zero NULL bitmap, and
+	// eight little-endian value bytes. 528384 makes bytes 7:9 look like the
+	// 0x0810 status of an OK packet to the generic parser.
+	msg := make([]byte, mysqlHeadLen+10)
+	msg[0] = 10
+	msg[3] = 1
+	binary.LittleEndian.PutUint64(msg[6:], value)
+	return msg
+}
+
+func TestFinalFetchKeepsTransferBlockedUntilTerminator(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		deprecatesEOF  bool
+		makeTerminator func(uint16) []byte
+	}{
+		{"legacy EOF", false, makeLegacyEOFPacket},
+		{"deprecated EOF", true, makeDeprecatedEOFPacket},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tun := newTunnel(context.Background(), runtime.DefaultRuntime().Logger(), newCounterSet())
+			defer tun.ctxCancel()
+			tun.clientDeprecatesEOF = tc.deprecatesEOF
+			tun.transferIntent.Store(true)
+			csp, scp := &pipe{}, &pipe{}
+			tun.mu.started = true
+			tun.mu.csp, tun.mu.scp = csp, scp
+			scp.mu.inTxn = true
+
+			forward := func(msg []byte) {
+				if tun.responseMayCarryTxnStatus(msg) {
+					if inTxn, ok := checkTxnStatus(msg, false); ok {
+						scp.mu.inTxn = inTxn
+					}
+				}
+				tun.trackServerResponse(msg)
+			}
+			tun.trackClientRequest(makeStmtCommandPacket(frontend.COM_STMT_FETCH, 41, 2, 0, 0, 0))
+			firstRow := makeBinaryBigIntRow(528384)
+			status, ok := okPacketStatus(firstRow)
+			require.True(t, ok, "the row must reproduce the misleading OK shape")
+			require.Equal(t, uint16(0x0810), status)
+			for _, row := range [][]byte{firstRow, makeBinaryBigIntRow(1)} {
+				forward(row)
+				require.True(t, tun.hasInFlightClientRequest())
+				require.True(t, scp.mu.inTxn, "binary rows have no transaction status")
+				_, admitted := tun.admitTransfer(false)
+				require.False(t, admitted, "migration must wait for the final FETCH EOF")
+			}
+
+			terminalStatus := frontend.SERVER_QUERY_WAS_SLOW |
+				frontend.SERVER_STATUS_NO_GOOD_INDEX_USED | frontend.SERVER_STATUS_LAST_ROW_SENT
+			forward(tc.makeTerminator(terminalStatus))
+			require.False(t, tun.hasInFlightClientRequest())
+			require.False(t, scp.mu.inTxn)
+			_, admitted := tun.admitTransfer(false)
+			require.True(t, admitted, "migration can begin after the FETCH terminator")
+		})
+	}
+}
+
 func TestTunnelRequestBoundaryTracker(t *testing.T) {
 	t.Run("nil and quit packets", func(t *testing.T) {
 		var nilTunnel *tunnel

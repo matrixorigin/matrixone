@@ -832,6 +832,17 @@ func (t *tunnel) trackServerResponse(msg []byte) {
 		}
 		return
 	}
+	if s.command == frontend.COM_STMT_FETCH {
+		// FETCH returns binary rows without a result-set header. A row can
+		// begin with 0x00 and look like an OK packet, so only its actual EOF
+		// terminator may complete this response.
+		if status, ok := legacyEOFPacketStatus(msg); ok {
+			t.finishTrackedResponseLocked(status, true)
+		} else if status, ok := eofOKPacketStatus(msg); ok {
+			t.finishTrackedResponseLocked(status, true)
+		}
+		return
+	}
 	if status, ok := okPacketStatus(msg); ok {
 		t.finishTrackedResponseLocked(status, true)
 		return
@@ -840,7 +851,7 @@ func (t *tunnel) trackServerResponse(msg []byte) {
 		t.finishTrackedResponseLocked(0, true)
 		return
 	}
-	if s.command == frontend.COM_FIELD_LIST || s.command == frontend.COM_STMT_FETCH {
+	if s.command == frontend.COM_FIELD_LIST {
 		if status, ok := legacyEOFPacketStatus(msg); ok {
 			t.finishTrackedResponseLocked(status, true)
 		} else if status, ok := eofOKPacketStatus(msg); ok {
@@ -857,6 +868,25 @@ func (t *tunnel) trackServerResponse(msg []byte) {
 	// All other first packets begin a result set. Its terminal packet depends
 	// on CLIENT_DEPRECATE_EOF; row packets cannot release request ownership.
 	s.phase = responsePhaseResult
+}
+
+// FETCH binary rows can also resemble OK packets to the independent
+// transaction-status parser. Only a FETCH terminator supplies server status.
+func (t *tunnel) responseMayCarryTxnStatus(msg []byte) bool {
+	if t == nil {
+		return true
+	}
+	t.requestBoundary.Lock()
+	defer t.requestBoundary.Unlock()
+	s := &t.requestBoundary
+	if !s.inFlight || s.command != frontend.COM_STMT_FETCH {
+		return true
+	}
+	if _, ok := legacyEOFPacketStatus(msg); ok {
+		return true
+	}
+	_, ok := eofOKPacketStatus(msg)
+	return ok
 }
 
 func wrapPipeSendError(name string, err error) error {
@@ -1469,9 +1499,11 @@ func (p *pipe) kickoff(ctx context.Context, peer *pipe) (e error) {
 				firstCond = false
 			}
 
-			inTxn, ok := checkTxnStatus(tempBuf, mustOK)
-			if ok {
-				p.mu.inTxn = inTxn
+			if p.tun.responseMayCarryTxnStatus(tempBuf) {
+				inTxn, ok := checkTxnStatus(tempBuf, mustOK)
+				if ok {
+					p.mu.inTxn = inTxn
+				}
 			}
 			p.tun.trackServerResponse(tempBuf)
 			if !p.mu.inTxn && p.tun.transferIntent.Load() && !rotated {
