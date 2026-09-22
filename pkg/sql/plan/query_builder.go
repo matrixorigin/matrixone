@@ -5399,6 +5399,14 @@ func (bc *BindContext) bindingRecurStmt() bool {
 	return bc.cteState.cteBindType == CteBindTypeRecurStmt
 }
 
+// bindingRecurQueryBlock reports whether the current context owns the
+// recursive query block itself. Nested SELECT contexts inherit the recursive
+// CTE state, but own an independent query block.
+func (bc *BindContext) bindingRecurQueryBlock() bool {
+	return bc.bindingRecurStmt() &&
+		bc.queryBlockOwner == bc.cteState.recursiveRefQueryBlock
+}
+
 func (builder *QueryBuilder) bindCte(
 	ctx *BindContext,
 	stmt tree.NodeFormatter,
@@ -5983,7 +5991,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	// materialize scalar subqueries into that input before fixing the group-key
 	// layout. Projection, alias, and ordinal references already point at the
 	// corresponding group position and do not need to be rebound.
-	if !ctx.sampleFunc.hasSampleFunc && !ctx.bindingRecurStmt() {
+	if !ctx.sampleFunc.hasSampleFunc && !ctx.bindingRecurQueryBlock() {
 		for i, group := range ctx.groups {
 			if nodeID, ctx.groups[i], err = builder.flattenSubqueries(nodeID, group, ctx); err != nil {
 				return
@@ -10086,6 +10094,8 @@ func (builder *QueryBuilder) bindValues(
 			Name:  colName,
 		}
 
+		columnExprs := make([]*plan.Expr, rowCount)
+		pureNulls := make([]bool, rowCount)
 		for j := 0; j < rowCount; j++ {
 			var planExpr *plan.Expr
 			if i < len(ctx.numericProjectionTypes) &&
@@ -10099,7 +10109,15 @@ func (builder *QueryBuilder) bindValues(
 				return
 			}
 
-			tableDef.Cols[i].Typ = planExpr.Typ
+			columnExprs[j] = planExpr
+			pureNulls[j] = isNullAstExpr(unwrapParenExpr(valuesClause.Rows[j][i]))
+		}
+
+		tableDef.Cols[i].Typ, err = builder.coerceValuesColumnToCommonType(columnExprs, pureNulls, i)
+		if err != nil {
+			return
+		}
+		for _, planExpr := range columnExprs {
 			rowSetData.Cols[i].Data = append(rowSetData.Cols[i].Data, &plan.RowsetExpr{
 				Expr: planExpr,
 			})
@@ -10117,6 +10135,125 @@ func (builder *QueryBuilder) bindValues(
 
 	err = builder.addBinding(nodeID, tree.AliasClause{Alias: "_valuescan"}, ctx)
 	return
+}
+
+// coerceValuesColumnToCommonType makes one VALUES column independent of row
+// order. VALUE_SCAN materializes one vector per column, so every row expression
+// must use the same complete type, including DECIMAL width and scale.
+func (builder *QueryBuilder) coerceValuesColumnToCommonType(
+	exprs []*plan.Expr,
+	pureNulls []bool,
+	columnIdx int,
+) (plan.Type, error) {
+	hasDecimal := false
+	hasPadSpace := false
+	allPureNull := len(exprs) > 0
+	for i, expr := range exprs {
+		pureNull := i < len(pureNulls) && pureNulls[i]
+		allPureNull = allPureNull && pureNull
+		if pureNull || expr == nil {
+			continue
+		}
+		hasDecimal = hasDecimal || types.T(expr.Typ.Id).IsDecimal()
+		hasPadSpace = hasPadSpace || types.T(expr.Typ.Id) == types.T_char || hasPadSpaceStringProvenance(expr)
+	}
+
+	commonInputs := make([]types.Type, 0, len(exprs))
+	for i, expr := range exprs {
+		if expr == nil || i < len(pureNulls) && pureNulls[i] {
+			continue
+		}
+		typ := makeTypeByPlan2Expr(expr)
+		if typ.Oid == types.T_any {
+			continue
+		}
+		if hasDecimal {
+			if exact, ok := setOperationIntegerLiteralDecimalType(expr); ok {
+				typ = exact
+			}
+		}
+		commonInputs = append(commonInputs, typ)
+	}
+
+	var commonType types.Type
+	switch {
+	case len(commonInputs) > 0:
+		if pureCharType, ok := setOperationPureCharCommonType(commonInputs); ok {
+			commonType = pureCharType
+		} else {
+			resolved, err := function.GetFunctionByName(builder.GetContext(), "coalesce", commonInputs)
+			if err != nil {
+				return plan.Type{}, moerr.NewParseErrorf(
+					builder.GetContext(), "the %d column cann't cast to a same type", columnIdx)
+			}
+			castTypes, _ := resolved.ShouldDoImplicitTypeCast()
+			if len(castTypes) > 0 {
+				commonType = castTypes[0]
+			} else {
+				commonType = commonInputs[0]
+				if commonType.Oid == types.T_varchar || commonType.Oid == types.T_char {
+					for _, typ := range commonInputs[1:] {
+						if typ.Width > commonType.Width {
+							commonType.Width = typ.Width
+						}
+					}
+				}
+			}
+		}
+	case allPureNull:
+		commonType = types.T_text.ToType()
+	default:
+		// Keep unresolved parameter-only columns in their existing domain. The
+		// prepared-plan specialization pass will assign their runtime type.
+		for i, expr := range exprs {
+			if expr != nil && !(i < len(pureNulls) && pureNulls[i]) {
+				commonType = makeTypeByPlan2Expr(expr)
+				break
+			}
+		}
+	}
+
+	commonPlanType := makePlan2Type(&commonType)
+	// Physical types do not carry CHAR-derived comparison provenance. Retain
+	// it on the column so comparisons and DISTINCT use the PAD SPACE domain.
+	if commonType.Oid == types.T_varchar || commonType.Oid == types.T_text {
+		commonPlanType.PadSpace = hasPadSpace
+	}
+	commonPlanType.NotNullable = len(exprs) > 0
+	for i, expr := range exprs {
+		pureNull := i < len(pureNulls) && pureNulls[i]
+		if expr == nil || pureNull || !expr.Typ.NotNullable {
+			commonPlanType.NotNullable = false
+		}
+	}
+
+	for i, expr := range exprs {
+		if expr == nil {
+			continue
+		}
+		pureNull := i < len(pureNulls) && pureNulls[i]
+		sourceType := makeTypeByPlan2Expr(expr)
+		if pureNull || sourceType.Oid == types.T_any {
+			expr.Typ = commonPlanType
+			expr.Typ.NotNullable = false
+			continue
+		}
+		if sourceType.Eq(commonType) {
+			continue
+		}
+
+		var err error
+		if commonType.Oid == types.T_char {
+			exprs[i], err = appendSetOperationCastBeforeExpr(builder.GetContext(), expr, commonPlanType)
+		} else {
+			exprs[i], err = appendCastBeforeExpr(builder.GetContext(), expr, commonPlanType)
+		}
+		if err != nil {
+			return plan.Type{}, err
+		}
+	}
+
+	return commonPlanType, nil
 }
 
 func (builder *QueryBuilder) appendWhereNode(
@@ -10202,7 +10339,7 @@ func (builder *QueryBuilder) appendAggNode(
 	boundHavingList []*plan.Expr,
 	rollupFilter bool,
 ) (newNodeID int32, postTimeWindowHavingList []*plan.Expr, err error) {
-	if ctx.bindingRecurStmt() {
+	if ctx.bindingRecurQueryBlock() {
 		err = moerr.NewInternalError(builder.GetContext(), "not support aggregate function recursive cte")
 		return
 	}

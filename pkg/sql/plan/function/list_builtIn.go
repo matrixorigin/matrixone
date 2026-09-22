@@ -12266,6 +12266,20 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 		},
 	},
 
+	// XML errors/warnings belong to execution, including literal-only queries.
+	{
+		functionId: EXTRACTVALUE, class: plan.Function_STRICT, layout: STANDARD_FUNCTION,
+		checkFn: xmlFunctionCheck,
+		Overloads: []overload{{overloadId: 0, args: []types.T{types.T_varchar, types.T_varchar},
+			volatile: true, retType: xmlFunctionReturnType, newOp: func() executeLogicOfOverload { return ExtractValue }}},
+	},
+	{
+		functionId: UPDATEXML, class: plan.Function_STRICT, layout: STANDARD_FUNCTION,
+		checkFn: xmlFunctionCheck,
+		Overloads: []overload{{overloadId: 0, args: []types.T{types.T_varchar, types.T_varchar, types.T_varchar},
+			volatile: true, retType: xmlFunctionReturnType, newOp: func() executeLogicOfOverload { return UpdateXML }}},
+	},
+
 	// function `date_trunc`
 	{
 		functionId: DATE_TRUNC,

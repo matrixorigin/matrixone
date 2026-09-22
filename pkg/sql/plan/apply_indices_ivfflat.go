@@ -17,6 +17,7 @@ package plan
 import (
 	"fmt"
 	"math"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -667,6 +668,21 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
 	if err != nil {
 		return 0, err
 	}
+	// An explicit POST query normally keeps its approximate, single-round
+	// behavior. When its predicate is covered by an INCLUDE column, however,
+	// an empty first-round page is ambiguous: the matching row may be in a
+	// later centroid. Build a subtree-local exact fallback for that narrow
+	// case. The prepared context prevents the POST candidate from recursively
+	// rebuilding the fallback while it is being materialized.
+	coveredFilters, _ := splitFiltersByVectorIndexCoverage(
+		newFilterList, scanNode, includeColumns, ivfCtx.partPos)
+	if prepared == nil && len(includeColumns) > 0 && vecCtx.rankOption != nil &&
+		vecCtx.rankOption.Mode == "post" && len(coveredFilters) > 0 &&
+		hasVectorIndexIncludedColumnFilter(coveredFilters, scanNode, includeColumns) &&
+		builder.adaptiveIvfTopSupported(nodeID, vecCtx, true) {
+		return builder.buildAdaptiveIvfTopWithPolicy(
+			nodeID, vecCtx, multiTableIndex, colRefCnt, idxColMap, ivfCtx, true)
+	}
 	includeAwareColumns := includeColumns
 	// The local POST candidate is annotated as explicit POST to prevent nested
 	// adaptive construction, but it still owns the AUTO resolution semantics.
@@ -1274,6 +1290,13 @@ func (builder *QueryBuilder) adaptiveIvfReplaySafe(root int32) bool {
 	return safe(root)
 }
 
+func (builder *QueryBuilder) adaptiveIvfTopSupported(nodeID int32, vecCtx *vectorSortContext, allowMultiColumn bool) bool {
+	return vecCtx != nil && vecCtx.projNode != nil && len(vecCtx.projNode.ProjectList) > 0 &&
+		(allowMultiColumn || len(vecCtx.projNode.ProjectList) == 1) &&
+		!vecCtx.hasMembership && vecCtx.providerNodeID < 0 &&
+		builder.adaptiveIvfReplaySafe(nodeID)
+}
+
 func (builder *QueryBuilder) buildAdaptiveIvfTop(
 	nodeID int32,
 	vecCtx *vectorSortContext,
@@ -1282,18 +1305,32 @@ func (builder *QueryBuilder) buildAdaptiveIvfTop(
 	idxColMap map[[2]int32]*plan.Expr,
 	autoCtx *ivfIndexContext,
 ) (int32, error) {
+	return builder.buildAdaptiveIvfTopWithPolicy(
+		nodeID, vecCtx, multiTableIndex, colRefCnt, idxColMap, autoCtx, false)
+}
+
+func (builder *QueryBuilder) buildAdaptiveIvfTopWithPolicy(
+	nodeID int32,
+	vecCtx *vectorSortContext,
+	multiTableIndex *MultiTableIndex,
+	colRefCnt map[[2]int32]int,
+	idxColMap map[[2]int32]*plan.Expr,
+	autoCtx *ivfIndexContext,
+	fallbackOnEmpty bool,
+) (int32, error) {
 	ctx := builder.ctxByNode[nodeID]
 	// Replay requires an explicit positional output boundary and no external
 	// membership/provider dependency. A SORT alone has no output schema before
 	// remapping; copying its empty ProjectList cannot define candidate layouts.
 	// Keep unsupported regions intact and exact, before cloning or rewriting tags.
-	if vecCtx.projNode == nil || len(vecCtx.projNode.ProjectList) != 1 ||
-		vecCtx.hasMembership || vecCtx.providerNodeID >= 0 ||
-		!builder.adaptiveIvfReplaySafe(nodeID) {
+	if !builder.adaptiveIvfTopSupported(nodeID, vecCtx, fallbackOnEmpty) {
 		builder.forceAdaptiveVectorRegion(vecCtx)
 		return nodeID, nil
 	}
-	preRoot := builder.copyNode(ctx, nodeID)
+	var preRoot int32
+	if !fallbackOnEmpty {
+		preRoot = builder.copyNode(ctx, nodeID)
+	}
 	forceRoot := builder.copyNode(ctx, nodeID)
 
 	setVectorMode := func(root int32, mode string) {
@@ -1342,14 +1379,16 @@ func (builder *QueryBuilder) buildAdaptiveIvfTop(
 	}
 
 	setVectorMode(forceRoot, "force")
-	setVectorMode(preRoot, "pre")
-	preCtx := contextFor(preRoot)
-	if preCtx == nil {
-		return nodeID, moerr.NewInternalErrorNoCtx("cannot rebuild adaptive PRE vector context")
-	}
-	preRoot, err = builder.applyIndicesForSortUsingIvfflat(preRoot, preCtx, multiTableIndex, colRefCnt, make(map[[2]int32]*plan.Expr))
-	if err != nil {
-		return nodeID, err
+	if !fallbackOnEmpty {
+		setVectorMode(preRoot, "pre")
+		preCtx := contextFor(preRoot)
+		if preCtx == nil {
+			return nodeID, moerr.NewInternalErrorNoCtx("cannot rebuild adaptive PRE vector context")
+		}
+		preRoot, err = builder.applyIndicesForSortUsingIvfflat(preRoot, preCtx, multiTableIndex, colRefCnt, make(map[[2]int32]*plan.Expr))
+		if err != nil {
+			return nodeID, err
+		}
 	}
 	for key, expr := range postMap {
 		idxColMap[key] = expr
@@ -1361,12 +1400,16 @@ func (builder *QueryBuilder) buildAdaptiveIvfTop(
 	}
 	postNode := builder.qry.Nodes[postRoot]
 	adaptive := &plan.Node{
-		NodeType:    plan.Node_ADAPTIVE_TOP,
-		Children:    []int32{postRoot, preRoot, forceRoot},
-		Limit:       DeepCopyExpr(resultLimit),
-		ProjectList: DeepCopyExprList(postNode.ProjectList),
-		BindingTags: append([]int32(nil), postNode.BindingTags...),
-		Stats:       DeepCopyStats(postNode.Stats),
+		NodeType:                   plan.Node_ADAPTIVE_TOP,
+		Children:                   []int32{postRoot, forceRoot},
+		Limit:                      DeepCopyExpr(resultLimit),
+		ProjectList:                DeepCopyExprList(postNode.ProjectList),
+		BindingTags:                append([]int32(nil), postNode.BindingTags...),
+		Stats:                      DeepCopyStats(postNode.Stats),
+		AdaptiveTopFallbackOnEmpty: fallbackOnEmpty,
+	}
+	if !fallbackOnEmpty {
+		adaptive.Children = []int32{postRoot, preRoot, forceRoot}
 	}
 	if adaptive.Stats != nil && resultLimit.GetLit() != nil {
 		limit := resultLimit.GetLit().GetU64Val()
@@ -1655,4 +1698,122 @@ func refsColumn(expr *plan.Expr, tag int32, colPos int32) bool {
 		}
 	}
 	return false
+}
+
+// -----------------------------------------------------------------------------
+// IVFFlat result-column source resolution.
+//
+// These functions resolve a VECTOR_INDEX_SCAN result column (pkid / score /
+// __mo_index_include_<name>) back to its source-table column metadata. They live
+// here, in the ivfflat plan layer, rather than in build.go's generic result-column
+// resolver, because the synthetic schema they decode is IVFFlat-specific.
+// build.go dispatches into resultColumnSourceFromVectorIndexScan for a
+// VECTOR_INDEX_SCAN node; the function fails closed (returns nil) for any node
+// whose index algorithm is not IVFFlat, so a VECTOR_INDEX_SCAN emitted by another
+// algorithm never inherits IVFFlat's schema by accident (#29212). Relocated from
+// build.go where it was introduced by PR #28833 (fixes #28719).
+// -----------------------------------------------------------------------------
+
+func resultColumnSourceFromVectorIndexScan(scan *plan.VectorIndexScan, vectorTableDef *plan.TableDef, colPos int32) *resultColumnSource {
+	if scan == nil || scan.SourceTableDef == nil || vectorTableDef == nil || colPos < 0 {
+		return nil
+	}
+
+	// Only IVFFlat's synthetic schema (pkid, score, __mo_index_include_<name>) is
+	// understood here. Any other algorithm's VECTOR_INDEX_SCAN has a different
+	// schema, so fail closed rather than mis-resolve it as IVFFlat (#29212).
+	// GetIndexAlgo is nil-safe, so a missing Index also fails closed.
+	if !catalog.IsIvfIndexAlgo(scan.Index.GetIndexAlgo()) {
+		return nil
+	}
+
+	// remapAllColRefs compacts VECTOR_INDEX_SCAN.TableDef.Cols to only the
+	// slots still referenced by consumers and rewrites their ColPos values to
+	// local positions. Resolve the synthetic column name (not the slot index),
+	// so a pruned [score, include] schema cannot be mistaken for the original
+	// [pkid, score, include...] layout.
+	if int(colPos) >= len(vectorTableDef.Cols) {
+		return nil
+	}
+	col := vectorTableDef.Cols[colPos]
+	if col == nil {
+		return nil
+	}
+	var sourceColPos int32
+	switch {
+	case strings.EqualFold(col.Name, "pkid"):
+		sourceColPos = resultColumnPrimaryKeyPosition(scan.SourceTableDef)
+		if sourceColPos < 0 {
+			return nil
+		}
+	case strings.EqualFold(col.Name, "score"):
+		return nil
+	case strings.HasPrefix(col.Name, catalog.SystemSI_IVFFLAT_IncludeColPrefix):
+		includeName := strings.TrimPrefix(col.Name, catalog.SystemSI_IVFFLAT_IncludeColPrefix)
+		if includeName == "" || !resultColumnNameInList(scan.IncludedColumns, includeName) {
+			return nil
+		}
+		var found bool
+		sourceColPos, found = resultColumnPositionByName(scan.SourceTableDef, includeName)
+		if !found {
+			return nil
+		}
+	default:
+		return nil
+	}
+
+	source := resultColumnSourceFromTableDef(scan.SourceTableDef, sourceColPos)
+	if source == nil {
+		return nil
+	}
+	// ObjectRef is the authoritative resolved object identity for vector
+	// scans.  Older plans may leave the corresponding names empty on
+	// SourceTableDef, so use it only to complete missing/physical names.
+	if scan.SourceTable != nil {
+		if source.dbName == "" {
+			source.dbName = scan.SourceTable.DbName
+			if source.dbName == "" {
+				source.dbName = scan.SourceTable.SchemaName
+			}
+		}
+		if source.tableName == "" {
+			source.tableName = scan.SourceTable.ObjName
+		}
+	}
+	return source
+}
+
+func resultColumnPrimaryKeyPosition(tableDef *plan.TableDef) int32 {
+	if tableDef == nil || tableDef.Pkey == nil || tableDef.Pkey.PkeyColName == "" {
+		return -1
+	}
+	if pos, ok := resultColumnPositionByName(tableDef, tableDef.Pkey.PkeyColName); ok {
+		return pos
+	}
+	return -1
+}
+
+func resultColumnPositionByName(tableDef *plan.TableDef, name string) (int32, bool) {
+	if tableDef == nil || name == "" {
+		return -1, false
+	}
+	if tableDef.Name2ColIndex != nil {
+		if pos, ok := tableDef.Name2ColIndex[strings.ToLower(name)]; ok &&
+			pos >= 0 && int(pos) < len(tableDef.Cols) && tableDef.Cols[pos] != nil &&
+			strings.EqualFold(tableDef.Cols[pos].GetOriginCaseName(), name) {
+			return pos, true
+		}
+	}
+
+	var found int32 = -1
+	for pos, col := range tableDef.Cols {
+		if col == nil || !strings.EqualFold(col.GetOriginCaseName(), name) {
+			continue
+		}
+		if found >= 0 {
+			return -1, false
+		}
+		found = int32(pos)
+	}
+	return found, found >= 0
 }
