@@ -655,6 +655,52 @@ func TestTableDetectorProcessCallbackUsesIndependentSnapshots(t *testing.T) {
 	require.True(t, second, "one subscriber must not consume another subscriber's generation marker")
 }
 
+func TestTableDetectorProcessCallbackRetainsMarkerUntilAllSubscribersSucceed(t *testing.T) {
+	td := &TableDetector{
+		Mp:                   make(map[uint32]TblMap),
+		Callbacks:            make(map[string]TableCallback),
+		CallBackAccountId:    make(map[string]uint32),
+		SubscribedAccountIds: make(map[uint32][]string),
+		CallBackDbName:       make(map[string][]string),
+		SubscribedDbNames:    make(map[string][]string),
+		CallBackTableName:    make(map[string][]string),
+		SubscribedTableNames: make(map[string][]string),
+		cleanupPeriod:        time.Second,
+		cleanupWarn:          time.Second,
+		nowFn:                time.Now,
+	}
+	defer td.Close()
+
+	tables := map[uint32]TblMap{
+		1: {"db.tbl": {SourceTblId: 7, IdChanged: true}},
+	}
+	td.Mp = tables
+	td.lastMp = tables
+
+	var observed []bool
+	retry := true
+	consume := func(snapshot map[uint32]TblMap) error {
+		td.ClearTableIdChanged(1, "db.tbl", 7)
+		return nil
+	}
+	flaky := func(snapshot map[uint32]TblMap) error {
+		observed = append(observed, snapshot[1]["db.tbl"].IdChanged)
+		if retry {
+			retry = false
+			return moerr.NewInternalErrorNoCtx("transient subscriber failure")
+		}
+		return nil
+	}
+	require.True(t, td.RegisterIfAbsent("consume", 1, []string{"db"}, []string{"tbl"}, consume))
+	require.True(t, td.RegisterIfAbsent("flaky", 1, []string{"db"}, []string{"tbl"}, flaky))
+
+	td.processCallback(context.Background(), tables)
+	require.True(t, tables[1]["db.tbl"].IdChanged, "failed fan-out must retain the marker")
+	td.processCallback(context.Background(), tables)
+	require.Equal(t, []bool{true, true}, observed)
+	require.False(t, tables[1]["db.tbl"].IdChanged, "marker clears after all subscribers succeed")
+}
+
 func TestReconcileTableSnapshotMarkersDoesNotResurrectConsumedMarker(t *testing.T) {
 	current := map[uint32]TblMap{
 		1: {"db.tbl": {SourceTblId: 7, IdChanged: false}},

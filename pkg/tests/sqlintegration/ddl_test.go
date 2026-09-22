@@ -232,6 +232,11 @@ func TestCDCNoPrimaryKeyRejected(t *testing.T) {
 		execSQL("create table composite_pk (id1 int, id2 int, value int, primary key (id1, id2))")
 
 		conn := "mysql://user:password@127.0.0.1:1"
+		execCDC := func(sql string) {
+			res, execErr := exec.Exec(ctx, sql, executor.Options{}.WithDatabase(db))
+			require.NoError(t, execErr)
+			res.Close()
+		}
 		verifyTask := func(name string, want bool) {
 			res, queryErr := exec.Exec(ctx,
 				"select count(*) from mo_catalog.mo_cdc_task where task_name='"+name+"'",
@@ -241,24 +246,21 @@ func TestCDCNoPrimaryKeyRejected(t *testing.T) {
 			require.Equal(t, want, testutils.ReadCount(res) > 0)
 		}
 
-		_, err = exec.Exec(ctx,
-			"create cdc accepted_table '"+conn+"' 'matrixone' '"+conn+"' '"+db+".with_pk' {'Level'='table'} internal",
-			executor.Options{}.WithDatabase(db))
-		require.NoError(t, err)
+		execCDC(
+			"create cdc accepted_table '" + conn + "' 'matrixone' '" + conn + "' '" + db + ".with_pk' {'Level'='table'}",
+		)
 		verifyTask("accepted_table", true)
-		_, err = exec.Exec(ctx,
-			"create cdc accepted_composite '"+conn+"' 'matrixone' '"+conn+"' '"+db+".composite_pk' {'Level'='table'} internal",
-			executor.Options{}.WithDatabase(db))
-		require.NoError(t, err)
+		execCDC(
+			"create cdc accepted_composite '" + conn + "' 'matrixone' '" + conn + "' '" + db + ".composite_pk' {'Level'='table'}",
+		)
 		verifyTask("accepted_composite", true)
-		_, err = exec.Exec(ctx,
-			"create cdc accepted_database '"+conn+"' 'matrixone' '"+conn+"' '"+db+"' {'Level'='database'} internal",
-			executor.Options{}.WithDatabase(db))
-		require.NoError(t, err)
+		execCDC(
+			"create cdc accepted_database '" + conn + "' 'matrixone' '" + conn + "' '" + db + "' {'Level'='database'}",
+		)
 		verifyTask("accepted_database", true)
 
 		badDB := db + "_bad"
-		res, err := exec.Exec(ctx, "create database "+badDB, executor.Options{})
+		res, err = exec.Exec(ctx, "create database "+badDB, executor.Options{})
 		require.NoError(t, err)
 		res.Close()
 		defer cleanupSQLIntegration(t, cn, "drop database if exists "+badDB)
@@ -269,11 +271,11 @@ func TestCDCNoPrimaryKeyRejected(t *testing.T) {
 		require.NoError(t, err)
 		res.Close()
 		_, err = exec.Exec(ctx,
-			"create cdc rejected_no_pk '"+conn+"' 'matrixone' '"+conn+"' '"+badDB+"' {'Level'='database'} internal",
+			"create cdc rejected_no_pk '"+conn+"' 'matrixone' '"+conn+"' '"+badDB+"' {'Level'='database'}",
 			executor.Options{}.WithDatabase(badDB))
 		require.Error(t, err)
 
-		res, err := exec.Exec(ctx,
+		res, err = exec.Exec(ctx,
 			"select count(*) from mo_catalog.mo_cdc_task where task_name='rejected_no_pk'",
 			executor.Options{}.WithDatabase(db))
 		require.NoError(t, err)

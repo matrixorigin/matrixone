@@ -358,17 +358,29 @@ type TableDetector struct {
 	scanTableFn func() error
 
 	// to make sure there is at most only one handleNewTables running, so the truncate info will not be lost
-	handling        bool
-	lastMp          map[uint32]TblMap
-	mu              sync.Mutex
-	cdcStateManager *CDCStateManager
-	cleanupPeriod   time.Duration
-	cleanupWarn     time.Duration
-	nowFn           func() time.Time
+	handling bool
+	lastMp   map[uint32]TblMap
+	// markerAcks are collected while callbacks are running.  A callback may
+	// acknowledge a generation marker before a later subscriber fails; keep the
+	// published marker intact until the whole callback fan-out succeeds so the
+	// failed subscriber observes it again on retry.
+	processingCallbacks bool
+	markerAcks          map[tableMarker]struct{}
+	mu                  sync.Mutex
+	cdcStateManager     *CDCStateManager
+	cleanupPeriod       time.Duration
+	cleanupWarn         time.Duration
+	nowFn               func() time.Time
 
 	loopRunning atomic.Bool
 	loopSeq     atomic.Uint64
 	currentLoop uint64
+}
+
+type tableMarker struct {
+	accountID     uint32
+	key           string
+	sourceTableID uint64
 }
 
 // RegisterIfAbsent registers the task only if it has not been registered before.
@@ -428,17 +440,29 @@ func (s *TableDetector) IsTaskRegistered(id string) bool {
 func (s *TableDetector) ClearTableIdChanged(accountID uint32, key string, sourceTableID uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	marker := tableMarker{accountID: accountID, key: key, sourceTableID: sourceTableID}
+	if s.processingCallbacks {
+		if s.markerAcks == nil {
+			s.markerAcks = make(map[tableMarker]struct{})
+		}
+		s.markerAcks[marker] = struct{}{}
+		return
+	}
+	s.clearTableIdChangedLocked(marker)
+}
+
+func (s *TableDetector) clearTableIdChangedLocked(marker tableMarker) {
 	clear := func(mp map[uint32]TblMap) {
-		if mp == nil || mp[accountID] == nil {
+		if mp == nil || mp[marker.accountID] == nil {
 			return
 		}
-		info, ok := mp[accountID][key]
-		if !ok || info == nil || info.SourceTblId != sourceTableID || !info.IdChanged {
+		info, ok := mp[marker.accountID][marker.key]
+		if !ok || info == nil || info.SourceTblId != marker.sourceTableID || !info.IdChanged {
 			return
 		}
 		updated := info.Clone()
 		updated.IdChanged = false
-		mp[accountID][key] = updated
+		mp[marker.accountID][marker.key] = updated
 	}
 	clear(s.Mp)
 	clear(s.lastMp)
@@ -665,6 +689,8 @@ func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]T
 		return
 	}
 	s.handling = true
+	s.processingCallbacks = true
+	s.markerAcks = make(map[tableMarker]struct{})
 	// Snapshot under the detector lock. ClearTableIdChanged replaces entries
 	// in the published map under the same lock; cloning outside it would race
 	// with that map write even though each subscriber receives its own copy.
@@ -693,8 +719,13 @@ func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]T
 			logutil.Warn("cdc.table_detector.callback_failed", zap.Error(err))
 		} else {
 			logutil.Debug("cdc.table_detector.callback_success")
+			for marker := range s.markerAcks {
+				s.clearTableIdChangedLocked(marker)
+			}
 			s.lastMp = nil
 		}
+		s.processingCallbacks = false
+		s.markerAcks = nil
 		s.handling = false
 		s.mu.Unlock()
 
