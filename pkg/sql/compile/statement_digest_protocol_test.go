@@ -78,16 +78,18 @@ func TestStatementHashDestinationProtocolValidation(t *testing.T) {
 
 	for _, version := range []int64{
 		defines.MORPCVersion68, // Previously used by a different mainline capability.
-		defines.MORPCVersion85, // Integer-parameter support alone is below this feature's v92 gate.
-		defines.MORPCVersion86, // Expression-result contracts alone are below the v92 hash gate.
-		defines.MORPCVersion87, // Grouping provenance alone is below the v92 hash gate.
+		defines.MORPCVersion85, // Integer-parameter support alone is below this feature's v100 gate.
+		defines.MORPCVersion86, // Expression-result contracts alone are below the v100 hash gate.
+		defines.MORPCVersion87, // Grouping provenance alone is below the v100 hash gate.
+		defines.MORPCVersion92, // Scalar FLOAT HLL_ADD_AGG is not the statement-hash contract.
+		defines.MORPCVersion99, // Unrelated current-main protocol features are below the hash gate.
 	} {
 		client.version = version
 		_, err := encodeRemoteScope(scope, c.proc)
 		require.ErrorContains(t, err, "remote destination does not support MO_STATEMENT_HASH")
 	}
 
-	client.version = defines.MORPCVersion92
+	client.version = defines.MORPCVersion100
 	data, err := encodeRemoteScope(scope, c.proc)
 	require.NoError(t, err)
 	require.NotEmpty(t, data)
@@ -105,12 +107,14 @@ func TestStatementHashDestinationProtocolValidation(t *testing.T) {
 		defines.MORPCVersion87,
 		defines.MORPCVersion88,
 		defines.MORPCVersion91,
+		defines.MORPCVersion92,
+		defines.MORPCVersion99,
 	} {
 		client.version = version
 		_, err = encodeRemoteScope(scope, c.proc)
 		require.ErrorContains(t, err, "remote destination does not support MO_STATEMENT_HASH")
 	}
-	client.version = defines.MORPCVersion92
+	client.version = defines.MORPCVersion100
 	_, err = encodeRemoteScope(scope, c.proc)
 	require.NoError(t, err)
 
@@ -141,7 +145,7 @@ func TestStatementHashRemoteForwardingPreservesOriginBuildAcrossHops(t *testing.
 	oldBuildCommitID := version.BuildCommitID
 	version.BuildCommitID = originBuild
 	t.Cleanup(func() { version.BuildCommitID = oldBuildCommitID })
-	client.version = defines.MORPCVersion92
+	client.version = defines.MORPCVersion100
 	client.buildCommitID = originBuild
 
 	remoteSession, err := process.ConvertToProcessSessionInfo(pipeline.SessionInfo{
@@ -172,7 +176,7 @@ func TestStatementHashRemoteForwardingRejectsIntermediateBuildBeforeProbe(t *tes
 	oldBuildCommitID := version.BuildCommitID
 	version.BuildCommitID = originBuild
 	t.Cleanup(func() { version.BuildCommitID = oldBuildCommitID })
-	client.version = defines.MORPCVersion92
+	client.version = defines.MORPCVersion100
 	client.buildCommitID = originBuild
 
 	remoteSession, err := process.ConvertToProcessSessionInfo(pipeline.SessionInfo{
@@ -201,7 +205,7 @@ func TestStatementHashDestinationRejectsUnknownOrFailedProbe(t *testing.T) {
 	scope := statementHashProtocolScope(c.proc)
 	defer scope.RootOp.Release()
 
-	client.version = defines.MORPCVersion92
+	client.version = defines.MORPCVersion100
 	scope.NodeInfo.Id = "missing-worker"
 	_, err := encodeRemoteScope(scope, c.proc)
 	require.ErrorContains(t, err, "remote destination does not support MO_STATEMENT_HASH")
@@ -216,11 +220,11 @@ func TestStatementHashDestinationRejectsUnknownOrFailedProbe(t *testing.T) {
 	// A missing pipeline destination is also fail-closed when validation is
 	// called directly (fillPipeline normally materializes an empty NodeInfo).
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion92)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion100)
 	err = validateStatementHashDestination(c.proc, &pipeline.Pipeline{})
 	require.ErrorContains(t, err, "requires a versioned remote destination")
 
-	// A coordinator below v92 is rejected by the coordinator gate before any
+	// A coordinator below v100 is rejected by the coordinator gate before any
 	// worker probe; a worker version cannot make the sender safe by itself.
 	client.customResponse = false
 	client.sendErr = nil
@@ -241,11 +245,13 @@ func TestStatementHashDestinationRejectsUnknownOrFailedProbe(t *testing.T) {
 		defines.MORPCVersion85,
 		defines.MORPCVersion88,
 		defines.MORPCVersion91,
+		defines.MORPCVersion92,
+		defines.MORPCVersion99,
 	} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		probeCalls := client.calls
 		_, err = encodeRemoteScope(scope, c.proc)
-		require.ErrorContains(t, err, "MO_STATEMENT_HASH remote execution requires MORPC protocol version 92")
+		require.ErrorContains(t, err, "MO_STATEMENT_HASH remote execution requires MORPC protocol version 100")
 		require.Equal(t, probeCalls, client.calls, "coordinator gate must reject before probing the worker")
 	}
 }
@@ -254,12 +260,12 @@ func TestStatementHashReceiverRejectsProbeThenDowngrade(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
 	oldBuildCommitID := version.BuildCommitID
 	version.BuildCommitID = strings.Repeat("a", 40)
-	client.version = defines.MORPCVersion92
+	client.version = defines.MORPCVersion100
 	client.buildCommitID = version.BuildCommitID
 	t.Cleanup(func() { version.BuildCommitID = oldBuildCommitID })
 
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion92)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion100)
 	scope := statementHashProtocolScope(c.proc)
 	defer scope.RootOp.Release()
 
@@ -270,10 +276,12 @@ func TestStatementHashReceiverRejectsProbeThenDowngrade(t *testing.T) {
 
 	// The destination may be replaced or downgraded after the sender probe.
 	// Receiver admission must use its current protocol, not the stale probe.
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion91)
-	decoded, err := decodeScope(data, c.proc, true, nil)
-	require.ErrorContains(t, err, "MO_STATEMENT_HASH remote execution requires MORPC protocol version 92")
-	require.Nil(t, decoded)
+	for _, version := range []int64{defines.MORPCVersion99, defines.MORPCVersion92, defines.MORPCVersion91} {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		decoded, err := decodeScope(data, c.proc, true, nil)
+		require.ErrorContains(t, err, "MO_STATEMENT_HASH remote execution requires MORPC protocol version 100")
+		require.Nil(t, decoded)
+	}
 }
 
 func TestStatementHashReceiverRejectsBuildMismatchBeforeScopeExecution(t *testing.T) {
@@ -283,11 +291,11 @@ func TestStatementHashReceiverRejectsBuildMismatchBeforeScopeExecution(t *testin
 	c, client := expressionProtocolTestCompile(t)
 	oldBuildCommitID := version.BuildCommitID
 	version.BuildCommitID = originBuild
-	client.version = defines.MORPCVersion92
+	client.version = defines.MORPCVersion100
 	client.buildCommitID = originBuild
 	t.Cleanup(func() { version.BuildCommitID = oldBuildCommitID })
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion92)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion100)
 
 	scope := statementHashProtocolScope(c.proc)
 	defer scope.RootOp.Release()
