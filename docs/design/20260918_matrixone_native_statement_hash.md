@@ -1,6 +1,6 @@
 # MatrixOne-native statement hash
 
-- Status: implementation-ready revision; a separate design-approval gate is not required for this PR under the agreed single-author workflow
+- Status: accepted implementation contract; no separate approval link is required under the agreed single-author workflow
 - Implementation PR: [matrixorigin/matrixone#27988](https://github.com/matrixorigin/matrixone/pull/27988)
 - Related issue: [matrixorigin/matrixone#23024](https://github.com/matrixorigin/matrixone/issues/23024) asks for MySQL-compatible `STATEMENT_DIGEST`; this implementation does not satisfy or close that issue
 - Owner: SQL function / execution maintainers; PR #27988 is the tracking record for this function
