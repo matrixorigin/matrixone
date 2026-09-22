@@ -14,8 +14,12 @@
 
 from pathlib import Path
 import copy
+import os
+import select
+import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import sirius_parity
 
@@ -110,7 +114,10 @@ class SiriusParityTest(unittest.TestCase):
                     "tae_peak_active_work": 1,
                     "tae_peak_queued_work": 1,
                     "tae_work_limit": work_limit,
-                    "tae_slice_bytes": (64 << 20) // work_limit,
+                    "tae_slice_bytes": min(
+                        sirius_parity.TAE_STAGING_SLICE_BYTES,
+                        sirius_parity.TAE_HOST_WINDOW_BYTES // work_limit,
+                    ),
                     "tae_peak_cached_metadata_charged_bytes": 1024,
                     "tae_peak_staging_charged_bytes": 2048,
                     "tae_peak_gpu_reservation_admitted_bytes": 4096,
@@ -208,8 +215,10 @@ class SiriusParityTest(unittest.TestCase):
         for field, value in (
             ("tae_work_limit", 99),
             ("tae_active_work", 1),
-            ("tae_slice_bytes", 64 << 20),
+            ("tae_slice_bytes", sirius_parity.TAE_STAGING_SLICE_BYTES + 1),
+            ("tae_peak_cached_metadata_charged_bytes", 1 << 40),
             ("tae_peak_staging_charged_bytes", 0),
+            ("tae_peak_staging_charged_bytes", sirius_parity.TAE_HOST_WINDOW_BYTES + 1),
             ("tae_peak_gpu_reservation_admitted_bytes", 0),
             ("tae_payload_bytes", 0),
         ):
@@ -223,6 +232,11 @@ class SiriusParityTest(unittest.TestCase):
             broken[tae_index]["output"]["execution_stats"][field] = 0
             with self.assertRaisesRegex(sirius_parity.CampaignError, "invalid result retention evidence"):
                 sirius_parity.validate_runs(campaign, broken)
+
+        broken = copy.deepcopy(runs)
+        broken[tae_index]["output"]["execution_stats"]["result_peak_charged_bytes"] = 1 << 40
+        with self.assertRaisesRegex(sirius_parity.CampaignError, "invalid result retention evidence"):
+            sirius_parity.validate_runs(campaign, broken)
 
     def test_result_policy_is_exact_except_explicit_float_tolerance(self):
         with self.assertRaisesRegex(sirius_parity.CampaignError, "exact floating"):
@@ -238,6 +252,38 @@ class SiriusParityTest(unittest.TestCase):
                 {"type": "decimal", "value": "1.01"},
                 {"absolute": 1.0, "relative": 1.0},
             )
+
+        tolerance = {"absolute": 1.0, "relative": 0.0}
+        decimal = {
+            "schema": [{"name": "value", "type": "decimal(15,2)"}],
+            "rows": [[{"type": "decimal(15,2)", "value": "1.00"}]],
+        }
+        wrong_decimal = copy.deepcopy(decimal)
+        wrong_decimal["rows"][0][0]["value"] = "1.50"
+        with self.assertRaisesRegex(sirius_parity.CampaignError, "exact result"):
+            sirius_parity._compare_results(decimal, wrong_decimal, tolerance)
+
+        integer = {
+            "schema": [{"name": "value", "type": "bigint"}],
+            "rows": [[{"type": "bigint", "value": 1}]],
+        }
+        wrong_integer = copy.deepcopy(integer)
+        wrong_integer["rows"][0][0]["value"] = 2
+        with self.assertRaisesRegex(sirius_parity.CampaignError, "exact result"):
+            sirius_parity._compare_results(integer, wrong_integer, tolerance)
+
+        floating = {
+            "schema": [{"name": "value", "type": "double"}],
+            "rows": [[{"type": "double", "value": 1.0}]],
+        }
+        close_float = copy.deepcopy(floating)
+        close_float["rows"][0][0]["value"] = 1.5
+        sirius_parity._compare_results(floating, close_float, tolerance)
+
+        inexact_decimal = copy.deepcopy(decimal)
+        inexact_decimal["rows"][0][0]["value"] = 1.0
+        with self.assertRaisesRegex(sirius_parity.CampaignError, "inexact decimal"):
+            sirius_parity._validate_typed_result(inexact_decimal, 1)
 
     def test_relative_gate_failures_are_reported(self):
         campaign = sirius_parity.build_campaign(self.provenance())
@@ -263,7 +309,7 @@ class SiriusParityTest(unittest.TestCase):
             output = self.output(spec)
             output["result"] = {
                 "schema": [{"name": "value", "type": "varchar"}],
-                "rows": [[secret]],
+                "rows": [[{"type": "varchar", "value": secret}]],
             }
             output["unknown_runner_field"] = {"object_path": secret}
             if "execution_stats" in output:
@@ -279,6 +325,68 @@ class SiriusParityTest(unittest.TestCase):
             self.assertNotIn("unknown_runner_field", raw)
             self.assertNotIn("unknown_object_path", raw)
             self.assertIn('"row_count":1', raw)
+
+        malicious = sirius_parity.execute_campaign(campaign, self.output)
+        malicious[0]["output"]["result"]["schema"][0]["object_path"] = secret
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(sirius_parity.CampaignError, "invalid result schema"):
+                sirius_parity.write_artifacts(campaign, malicious, Path(directory))
+
+    @unittest.skipUnless(
+        os.name == "posix" and hasattr(os, "pidfd_open"),
+        "process-group descendant proof requires POSIX pidfds",
+    )
+    def test_subprocess_timeout_kills_descendants(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory_path = Path(directory)
+            child_pid = directory_path / "child.pid"
+            runner = directory_path / "runner.py"
+            runner.write_text(
+                """
+import pathlib
+import signal
+import subprocess
+import sys
+
+child = subprocess.Popen([sys.executable, "-c", "import signal; signal.pause()"])
+pathlib.Path(sys.argv[1]).write_text(str(child.pid), encoding="utf-8")
+signal.pause()
+""",
+                encoding="utf-8",
+            )
+            executor = sirius_parity.SubprocessExecutor(
+                [sys.executable, str(runner), str(child_pid)],
+                timeout_seconds=2,
+            )
+            with self.assertRaisesRegex(sirius_parity.CampaignError, "runner timed out"):
+                executor({"sequence": 1})
+            pid = int(child_pid.read_text(encoding="utf-8"))
+            try:
+                descriptor = os.pidfd_open(pid)
+            except ProcessLookupError:
+                return
+            try:
+                poller = select.poll()
+                poller.register(descriptor, select.POLLIN)
+                self.assertTrue(poller.poll(1000), "runner descendant survived timeout cleanup")
+            finally:
+                os.close(descriptor)
+
+    def test_subprocess_cancellation_kills_and_reaps_group(self):
+        process = mock.Mock()
+        process.pid = 123
+        process.communicate.side_effect = [KeyboardInterrupt(), ("", "")]
+        executor = sirius_parity.SubprocessExecutor(["runner"], timeout_seconds=1)
+        with (
+            mock.patch.object(sirius_parity.subprocess, "Popen", return_value=process) as popen,
+            mock.patch.object(sirius_parity.os, "killpg") as killpg,
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            executor({"sequence": 1})
+        popen.assert_called_once()
+        self.assertTrue(popen.call_args.kwargs["start_new_session"])
+        killpg.assert_called_once_with(process.pid, sirius_parity.signal.SIGKILL)
+        self.assertEqual(2, process.communicate.call_count)
 
     def test_provenance_is_mandatory(self):
         provenance = self.provenance()

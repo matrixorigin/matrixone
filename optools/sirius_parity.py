@@ -35,6 +35,7 @@ import json
 import math
 import os
 from pathlib import Path
+import signal
 import statistics
 import subprocess
 import sys
@@ -48,6 +49,16 @@ STREAMS = (1, 2, 4)
 PERFORMANCE_STREAMS = 2
 MEASURED_SUITES = 5
 Q9_REPETITIONS = 10
+# Reviewed design v2 section 5: one TAE staging unit is at most 8 MiB,
+# immutable cached metadata is at most 32 MiB, and both the aggregate TAE host
+# window and result window are 64 MiB.
+TAE_HOST_WINDOW_BYTES = 64 << 20
+TAE_STAGING_SLICE_BYTES = 8 << 20
+TAE_METADATA_CACHE_BYTES = 32 << 20
+RESULT_WINDOW_BYTES = 64 << 20
+RESULT_SCHEMA_FIELDS = frozenset(("name", "type"))
+RESULT_CELL_FIELDS = frozenset(("type", "value"))
+FLOAT_SQL_TYPES = frozenset(("double", "float", "float32", "float64", "real"))
 ROUTES = (
     {"id": "mo-native", "backend": "native", "scan_mode": "mo"},
     {"id": "flight-tae", "backend": "flight", "scan_mode": "tae"},
@@ -310,23 +321,41 @@ class SubprocessExecutor:
         self.timeout_seconds = timeout_seconds
 
     def __call__(self, spec: Mapping[str, Any]) -> Mapping[str, Any]:
+        if os.name != "posix":
+            raise CampaignError("campaign runner process-group isolation requires POSIX")
         environment = os.environ.copy()
         environment["MO_SIRIUS_CAMPAIGN_RUN"] = canonical_json(spec)
-        completed = subprocess.run(
+        process = subprocess.Popen(
             self.command,
-            check=False,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=self.timeout_seconds,
             env=environment,
+            start_new_session=True,
         )
-        if completed.returncode != 0:
+        try:
+            stdout, stderr = process.communicate(timeout=self.timeout_seconds)
+        except subprocess.TimeoutExpired as error:
+            self._kill_process_group(process)
+            process.communicate()
             raise CampaignError(
-                f"runner failed for sequence {spec['sequence']}: exit {completed.returncode}: "
-                f"{completed.stderr.strip()}"
+                f"runner timed out for sequence {spec['sequence']}"
+            ) from error
+        except BaseException:
+            self._kill_process_group(process)
+            process.communicate()
+            raise
+        # The direct runner is reaped by communicate. Kill any descendant that
+        # deliberately closed the inherited pipes and outlived its parent so a
+        # completed run cannot contaminate the next serial campaign cell.
+        self._kill_process_group(process)
+        if process.returncode != 0:
+            raise CampaignError(
+                f"runner failed for sequence {spec['sequence']}: exit {process.returncode}: "
+                f"{stderr.strip()}"
             )
         try:
-            result = json.loads(completed.stdout)
+            result = json.loads(stdout)
         except json.JSONDecodeError as error:
             raise CampaignError(
                 f"runner returned invalid JSON for sequence {spec['sequence']}: {error}"
@@ -334,6 +363,76 @@ class SubprocessExecutor:
         if not isinstance(result, dict):
             raise CampaignError(f"runner result for sequence {spec['sequence']} is not an object")
         return result
+
+    @staticmethod
+    def _kill_process_group(process: subprocess.Popen[str]) -> None:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+
+def _sql_type_base(value: str) -> str:
+    return value.strip().lower().split("(", 1)[0].strip()
+
+
+def _validated_result_schema(schema: Any, sequence: int | None = None) -> list[dict[str, str]]:
+    location = "" if sequence is None else f" at sequence {sequence}"
+    if not isinstance(schema, list) or not schema:
+        raise CampaignError(f"invalid result schema{location}")
+    validated: list[dict[str, str]] = []
+    for column in schema:
+        if not isinstance(column, dict) or set(column) != RESULT_SCHEMA_FIELDS:
+            raise CampaignError(f"invalid result schema{location}")
+        name, sql_type = column["name"], column["type"]
+        if (
+            not isinstance(name, str)
+            or not name
+            or "\x00" in name
+            or not isinstance(sql_type, str)
+            or not sql_type
+            or "\x00" in sql_type
+        ):
+            raise CampaignError(f"invalid result schema{location}")
+        validated.append({"name": name, "type": sql_type})
+    return validated
+
+
+def _validate_typed_result(result: Mapping[str, Any], sequence: int) -> None:
+    schema = _validated_result_schema(result.get("schema"), sequence)
+    rows = result.get("rows")
+    if not isinstance(rows, list) or not rows:
+        raise CampaignError(f"canonical TPCH result is empty at sequence {sequence}")
+    for row_index, row in enumerate(rows):
+        if not isinstance(row, list) or len(row) != len(schema):
+            raise CampaignError(f"invalid result row at sequence {sequence}/{row_index}")
+        for column_index, (column, cell) in enumerate(zip(schema, row)):
+            if (
+                not isinstance(cell, dict)
+                or set(cell) != RESULT_CELL_FIELDS
+                or cell["type"] != column["type"]
+                or (
+                    cell["value"] is not None
+                    and type(cell["value"]) not in (bool, int, float, str)
+                )
+            ):
+                raise CampaignError(
+                    f"invalid typed result cell at sequence {sequence}/{row_index}/{column_index}"
+                )
+            value = cell["value"]
+            type_base = _sql_type_base(column["type"])
+            if type_base in ("decimal", "numeric") and value is not None and not isinstance(value, str):
+                raise CampaignError(
+                    f"inexact decimal result encoding at sequence {sequence}/{row_index}/{column_index}"
+                )
+            if (
+                type_base in FLOAT_SQL_TYPES
+                and value is not None
+                and (type(value) not in (int, float) or not math.isfinite(value))
+            ):
+                raise CampaignError(
+                    f"invalid floating result encoding at sequence {sequence}/{row_index}/{column_index}"
+                )
 
 
 def _validate_output(spec: Mapping[str, Any], output: Mapping[str, Any], required_stats: Iterable[str]) -> None:
@@ -381,8 +480,7 @@ def _validate_output(spec: Mapping[str, Any], output: Mapping[str, Any], require
     result = output.get("result")
     if not isinstance(result, dict) or "schema" not in result or "rows" not in result:
         raise CampaignError(f"missing typed result at sequence {spec['sequence']}")
-    if not isinstance(result["schema"], list) or not isinstance(result["rows"], list) or not result["rows"]:
-        raise CampaignError(f"canonical TPCH result is empty at sequence {spec['sequence']}")
+    _validate_typed_result(result, spec["sequence"])
     if spec["route"] == "mo-native":
         return
     stats = output.get("execution_stats")
@@ -415,6 +513,7 @@ def _validate_output(spec: Mapping[str, Any], output: Mapping[str, Any], require
         stats["result_rows"] <= 0
         or stats["result_payload_bytes"] <= 0
         or stats["result_peak_charged_bytes"] <= 0
+        or stats["result_peak_charged_bytes"] > RESULT_WINDOW_BYTES
         or stats["result_retained_charged_bytes"] != 0
         or stats["result_parked_publications"] != 0
     ):
@@ -436,7 +535,10 @@ def _validate_output(spec: Mapping[str, Any], output: Mapping[str, Any], require
             raise CampaignError(f"MO source execution evidence mismatch at sequence {spec['sequence']}")
     else:
         expected_limit = max(2, 2 * spec["streams"])
-        maximum_slice = (64 << 20) // expected_limit
+        maximum_slice = min(
+            TAE_STAGING_SLICE_BYTES,
+            TAE_HOST_WINDOW_BYTES // expected_limit,
+        )
         if (
             stats["mo_input_units"] != 0
             or stats["mo_input_retained_charged_bytes"] != 0
@@ -451,8 +553,10 @@ def _validate_output(spec: Mapping[str, Any], output: Mapping[str, Any], require
             or stats["tae_peak_active_work"] > expected_limit
             or stats["tae_slice_bytes"] <= 0
             or stats["tae_slice_bytes"] > maximum_slice
+            or stats["tae_peak_cached_metadata_charged_bytes"] <= 0
+            or stats["tae_peak_cached_metadata_charged_bytes"] > TAE_METADATA_CACHE_BYTES
             or stats["tae_peak_staging_charged_bytes"] <= 0
-            or stats["tae_peak_staging_charged_bytes"] > (64 << 20)
+            or stats["tae_peak_staging_charged_bytes"] > TAE_HOST_WINDOW_BYTES
             or stats["tae_peak_gpu_reservation_admitted_bytes"] <= 0
             or stats["tae_payload_bytes"] <= 0
         ):
@@ -493,6 +597,44 @@ def _compare_typed(expected: Any, actual: Any, tolerance: Mapping[str, float] | 
         raise CampaignError(f"exact result mismatch at {path}")
 
 
+def _compare_results(
+    expected: Mapping[str, Any],
+    actual: Mapping[str, Any],
+    tolerance: Mapping[str, float] | None,
+) -> None:
+    _validate_typed_result(expected, 0)
+    _validate_typed_result(actual, 0)
+    expected_schema = _validated_result_schema(expected.get("schema"))
+    actual_schema = _validated_result_schema(actual.get("schema"))
+    _compare_typed(expected_schema, actual_schema, None, "result.schema")
+    expected_rows, actual_rows = expected.get("rows"), actual.get("rows")
+    if not isinstance(expected_rows, list) or not isinstance(actual_rows, list):
+        raise CampaignError("invalid result rows")
+    if len(expected_rows) != len(actual_rows):
+        raise CampaignError("result length mismatch at result.rows")
+    for row_index, (expected_row, actual_row) in enumerate(zip(expected_rows, actual_rows)):
+        if not isinstance(expected_row, list) or not isinstance(actual_row, list):
+            raise CampaignError(f"invalid result row at result.rows[{row_index}]")
+        if len(expected_row) != len(expected_schema) or len(actual_row) != len(actual_schema):
+            raise CampaignError(f"result length mismatch at result.rows[{row_index}]")
+        for column_index, (column, expected_cell, actual_cell) in enumerate(
+            zip(expected_schema, expected_row, actual_row)
+        ):
+            path = f"result.rows[{row_index}][{column_index}]"
+            if not isinstance(expected_cell, dict) or not isinstance(actual_cell, dict):
+                raise CampaignError(f"invalid typed result cell at {path}")
+            _compare_typed(expected_cell.get("type"), actual_cell.get("type"), None, f"{path}.type")
+            cell_tolerance = (
+                tolerance
+                if _sql_type_base(column["type"]) in FLOAT_SQL_TYPES
+                else None
+            )
+            _compare_typed(
+                expected_cell.get("value"), actual_cell.get("value"),
+                cell_tolerance, f"{path}.value",
+            )
+
+
 def validate_runs(campaign: Mapping[str, Any], runs: Sequence[Mapping[str, Any]]) -> None:
     schedule = campaign["schedule"]
     if len(runs) != len(schedule):
@@ -529,7 +671,7 @@ def validate_runs(campaign: Mapping[str, Any], runs: Sequence[Mapping[str, Any]]
         )
         if base not in by_cell:
             raise CampaignError(f"missing native result oracle for sequence {expected['sequence']}")
-        _compare_typed(
+        _compare_results(
             by_cell[base]["result"], by_cell[actual]["result"],
             tolerances.get(f"Q{expected['query']}"),
         )
@@ -716,7 +858,7 @@ def _artifact_run(campaign: Mapping[str, Any], record: Mapping[str, Any]) -> dic
         "cancellation_origin": output["cancellation_origin"],
         "terminal_health": output["terminal_health"],
         "result": {
-            "schema": result["schema"],
+            "schema": _validated_result_schema(result["schema"]),
             "row_count": len(result["rows"]),
             "sha256": hashlib.sha256(result_bytes).hexdigest(),
         },
