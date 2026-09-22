@@ -100,9 +100,15 @@ native_common_environment_hash() {
 
 native_accelerator_environment_hash() {
     environment_accelerator=$1
+    gpu_toolchain_fingerprint=
+    if [ "$environment_accelerator" = gpu ] && [ -n "${GPU_TOOLCHAIN_MANIFEST:-}" ]; then
+        gpu_toolchain_fingerprint=$(python3 "$root/cgo/mo_gpu_toolchain.py" resolve --format fingerprint) || return 1
+    fi
     {
         printf 'accelerator=%s\n' "$environment_accelerator"
         if [ "$environment_accelerator" = gpu ]; then
+            printf 'GPU_TOOLCHAIN_MANIFEST=%s\n' "${GPU_TOOLCHAIN_MANIFEST-}"
+            printf 'GPU_TOOLCHAIN_FINGERPRINT=%s\n' "$gpu_toolchain_fingerprint"
             # Keep both GPU sub-build variable families explicit. cuda uses
             # NVCCFLAGS while cuVS uses NVCC_FLAGS; treating them as aliases
             # lets a real compiler-profile change reuse the previous objects.
