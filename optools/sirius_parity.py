@@ -28,6 +28,7 @@ work. The real executor is deployment-owned and is injected here.
 from __future__ import annotations
 
 import argparse
+import copy
 import ctypes
 import csv
 import hashlib
@@ -159,6 +160,69 @@ REQUIRED_EXECUTION_STATS = (
 
 class CampaignError(ValueError):
     pass
+
+
+FAILURE_FIELDS = (
+    "category",
+    "sequence",
+    "route",
+    "attempted",
+    "validated",
+    "status",
+)
+FAILURE_CATEGORIES = frozenset(
+    (
+        "runner-exception",
+        "malformed-output",
+        "invalid-output",
+        "result-mismatch",
+        "order",
+        "duplicate",
+        "missing-native",
+        "incomplete",
+        "campaign-spec",
+        "output-directory",
+        "artifact-write",
+    )
+)
+FAILURE_STATUSES = frozenset(("invalid", "incomplete"))
+
+
+class CampaignFailure(CampaignError):
+    """A safe, structured campaign failure.
+
+    The exception message is useful to local callers and tests, but callers
+    reporting a failure must use ``diagnostic``.  That record deliberately has
+    no runner-controlled detail.
+    """
+
+    def __init__(
+        self,
+        category: str,
+        sequence: int | None,
+        route: str | None,
+        attempted: int,
+        validated: int,
+        status: str,
+        detail: str | None = None,
+    ):
+        self.diagnostic = {
+            "category": category,
+            "sequence": sequence,
+            "route": route,
+            "attempted": attempted,
+            "validated": validated,
+            "status": status,
+        }
+        super().__init__(detail or f"{category} at sequence {sequence}")
+
+    @property
+    def category(self) -> str:
+        return self.diagnostic["category"]
+
+    @property
+    def status(self) -> str:
+        return self.diagnostic["status"]
 
 
 def canonical_json(value: Any) -> str:
@@ -348,13 +412,203 @@ def build_campaign(
 Executor = Callable[[Mapping[str, Any]], Mapping[str, Any]]
 
 
+def _oracle_cell(spec: Mapping[str, Any]) -> tuple[Any, ...]:
+    return (
+        spec["scale_factor"], spec["phase"], spec["streams"], spec["suite"],
+        spec["repetition"], spec["query"],
+    )
+
+
+class IncrementalValidator:
+    """Validate one serial campaign while retaining seen route results."""
+
+    def __init__(self, campaign: Mapping[str, Any]):
+        self.schedule = tuple(campaign["schedule"])
+        self.required_stats = campaign["required_execution_stats"]
+        self.tolerances = campaign["result_policy"]["float_tolerances"]
+        self.attempted = 0
+        self.validated = 0
+        self._next_index = 0
+        self._cells: dict[
+            tuple[Any, ...],
+            dict[str, tuple[Mapping[str, Any], Mapping[str, Any]]],
+        ] = {}
+
+    def _expected_position(self, expected: Mapping[str, Any]) -> None:
+        if self._next_index >= len(self.schedule):
+            self._fail(
+                "incomplete",
+                expected,
+                "incomplete campaign: received a run after the schedule ended",
+                status="incomplete",
+            )
+        scheduled = self.schedule[self._next_index]
+        if scheduled != expected:
+            self._fail(
+                "order",
+                expected,
+                f"campaign order/spec mismatch at sequence {scheduled['sequence']}",
+            )
+
+    def attempt(self, expected: Mapping[str, Any]) -> None:
+        """Count an execution before invoking its runner."""
+        self._expected_position(expected)
+        self.attempted += 1
+
+    def _fail(
+        self,
+        category: str,
+        expected: Mapping[str, Any] | None,
+        detail: str,
+        *,
+        status: str = "invalid",
+    ) -> None:
+        raise CampaignFailure(
+            category,
+            None if expected is None else expected.get("sequence"),
+            None if expected is None else expected.get("route"),
+            self.attempted,
+            self.validated,
+            status,
+            detail,
+        )
+
+    def accept(self, expected: Mapping[str, Any], record: Mapping[str, Any]) -> None:
+        """Accept one record and compare any oracle pair that is now ready."""
+        self._expected_position(expected)
+        # Direct validator users need not call attempt(); the executor path
+        # calls it explicitly so the count includes a runner exception.
+        if self.attempted == self._next_index:
+            self.attempted += 1
+        if not isinstance(record, Mapping):
+            self._fail("malformed-output", expected, "runner result is not an object")
+        try:
+            record_spec = {key: record.get(key) for key in expected}
+        except Exception:
+            self._fail("malformed-output", expected, "runner result is not an object")
+        if record_spec != expected:
+            self._fail(
+                "order",
+                expected,
+                f"campaign order/spec mismatch at sequence {expected['sequence']}",
+            )
+        output = record.get("output")
+        if not isinstance(output, dict):
+            self._fail("malformed-output", expected, "runner output is not an object")
+        try:
+            _validate_output(expected, output, self.required_stats)
+        except CampaignError as error:
+            self._fail("invalid-output", expected, str(error))
+        except Exception:
+            self._fail("malformed-output", expected, "runner output is malformed")
+
+        oracle_cell = _oracle_cell(expected)
+        group = self._cells.setdefault(oracle_cell, {})
+        route = expected["route"]
+        if route in group:
+            self._fail(
+                "duplicate",
+                expected,
+                f"duplicate campaign cell at sequence {expected['sequence']}",
+            )
+        group[route] = (expected, output)
+        self._next_index += 1
+
+        if route == "mo-native":
+            self.validated += 1
+            for pending_route, (pending_expected, pending_output) in group.items():
+                if pending_route == "mo-native":
+                    continue
+                self._compare_or_fail(
+                    pending_expected, output, pending_output, failure_expected=expected
+                )
+                self.validated += 1
+            return
+
+        native = group.get("mo-native")
+        if native is None:
+            return
+        self._compare_or_fail(expected, native[1], output)
+        self.validated += 1
+
+    def _compare_or_fail(
+        self,
+        comparison_expected: Mapping[str, Any],
+        native: Mapping[str, Any],
+        actual: Mapping[str, Any],
+        failure_expected: Mapping[str, Any] | None = None,
+    ) -> None:
+        try:
+            _compare_results(
+                native["result"],
+                actual["result"],
+                self.tolerances.get(f"Q{comparison_expected['query']}"),
+            )
+        except CampaignError as error:
+            self._fail(
+                "result-mismatch", failure_expected or comparison_expected, str(error)
+            )
+        except Exception:
+            self._fail(
+                "result-mismatch", failure_expected or comparison_expected,
+                "result comparison failed",
+            )
+
+    def finish(self) -> None:
+        if self._next_index != len(self.schedule):
+            expected = (
+                self.schedule[self._next_index]
+                if self._next_index < len(self.schedule)
+                else None
+            )
+            self._fail(
+                "incomplete",
+                expected,
+                f"incomplete campaign: expected {len(self.schedule)} runs, "
+                f"got {self._next_index}",
+                status="incomplete",
+            )
+        for group in self._cells.values():
+            if "mo-native" not in group:
+                expected, _ = next(iter(group.values()))
+                self._fail(
+                    "missing-native",
+                    expected,
+                    f"missing native result oracle for sequence {expected['sequence']}",
+                    status="incomplete",
+                )
+
+
 def execute_campaign(campaign: Mapping[str, Any], executor: Executor) -> list[dict[str, Any]]:
+    validator = IncrementalValidator(campaign)
     runs: list[dict[str, Any]] = []
     for spec in campaign["schedule"]:
-        output = dict(executor(spec))
-        record = dict(spec)
+        validator.attempt(spec)
+        try:
+            # The runner receives a private copy.  Diagnostics and records use
+            # the trusted schedule object, even if a runner mutates its input.
+            raw_output = executor(copy.deepcopy(spec))
+        except Exception:
+            raise CampaignFailure(
+                "runner-exception",
+                spec["sequence"],
+                spec["route"],
+                validator.attempted,
+                validator.validated,
+                "invalid",
+                "runner exception",
+            ) from None
+        if not isinstance(raw_output, Mapping):
+            validator._fail("malformed-output", spec, "runner result is not an object")
+        try:
+            output = dict(raw_output)
+        except Exception:
+            validator._fail("malformed-output", spec, "runner result is not an object")
+        record = copy.deepcopy(spec)
         record["output"] = output
+        validator.accept(spec, record)
         runs.append(record)
+    validator.finish()
     return runs
 
 
@@ -409,15 +663,14 @@ class SubprocessExecutor:
             process = None
             if returncode != 0:
                 raise CampaignError(
-                    f"runner failed for sequence {spec['sequence']}: exit {returncode}: "
-                    f"{stderr.strip()}"
+                    f"runner failed for sequence {spec['sequence']}: exit {returncode}"
                 )
             try:
                 result = json.loads(stdout)
-            except json.JSONDecodeError as error:
+            except json.JSONDecodeError:
                 raise CampaignError(
-                    f"runner returned invalid JSON for sequence {spec['sequence']}: {error}"
-                ) from error
+                    f"runner returned invalid JSON for sequence {spec['sequence']}"
+                )
             if not isinstance(result, dict):
                 raise CampaignError(
                     f"runner result for sequence {spec['sequence']} is not an object"
@@ -832,45 +1085,21 @@ def _compare_results(
 
 
 def validate_runs(campaign: Mapping[str, Any], runs: Sequence[Mapping[str, Any]]) -> None:
-    schedule = campaign["schedule"]
-    if len(runs) != len(schedule):
-        raise CampaignError(f"incomplete campaign: expected {len(schedule)} runs, got {len(runs)}")
-    by_cell: dict[tuple[Any, ...], Mapping[str, Any]] = {}
-    required_stats = campaign["required_execution_stats"]
-    for expected, record in zip(schedule, runs):
-        spec = {key: record.get(key) for key in expected}
-        if spec != expected:
-            raise CampaignError(f"campaign order/spec mismatch at sequence {expected['sequence']}")
-        output = record.get("output")
-        if not isinstance(output, dict):
-            raise CampaignError(f"missing output at sequence {expected['sequence']}")
-        _validate_output(expected, output, required_stats)
-        cell = (
-            expected["scale_factor"], expected["phase"], expected["streams"], expected["suite"],
-            expected["repetition"], expected["query"], expected["route"],
-        )
-        if cell in by_cell:
-            raise CampaignError(f"duplicate campaign cell at sequence {expected['sequence']}")
-        by_cell[cell] = output
-
-    tolerances = campaign["result_policy"]["float_tolerances"]
-    for expected in schedule:
-        if expected["route"] == "mo-native":
-            continue
-        base = (
-            expected["scale_factor"], expected["phase"], expected["streams"], expected["suite"],
-            expected["repetition"], expected["query"], "mo-native",
-        )
-        actual = (
-            expected["scale_factor"], expected["phase"], expected["streams"], expected["suite"],
-            expected["repetition"], expected["query"], expected["route"],
-        )
-        if base not in by_cell:
-            raise CampaignError(f"missing native result oracle for sequence {expected['sequence']}")
-        _compare_results(
-            by_cell[base]["result"], by_cell[actual]["result"],
-            tolerances.get(f"Q{expected['query']}"),
-        )
+    validator = IncrementalValidator(campaign)
+    for index, record in enumerate(runs):
+        if index >= len(validator.schedule):
+            validator.attempted += 1
+            validator._fail(
+                "incomplete",
+                None,
+                f"incomplete campaign: expected {len(validator.schedule)} runs, "
+                f"got more than {len(validator.schedule)}",
+                status="incomplete",
+            )
+        expected = validator.schedule[index]
+        validator.attempt(expected)
+        validator.accept(expected, record)
+    validator.finish()
 
 
 def _median(values: Iterable[float]) -> float:
@@ -1023,13 +1252,101 @@ def write_artifacts(
     output_directory: Path,
 ) -> dict[str, Any]:
     summary = summarize(campaign, runs)
-    output_directory.mkdir(parents=True, exist_ok=True)
-    (output_directory / "campaign.json").write_text(canonical_json(campaign) + "\n", encoding="utf-8")
-    raw = "".join(canonical_json(_artifact_run(campaign, record)) + "\n" for record in runs)
-    (output_directory / "runs.jsonl").write_text(raw, encoding="utf-8")
-    (output_directory / "summary.csv").write_text(summary_csv(summary), encoding="utf-8")
-    (output_directory / "summary.md").write_text(summary_markdown(summary), encoding="utf-8")
+    _ensure_output_directory_available(output_directory)
+    try:
+        output_directory.mkdir(parents=True, exist_ok=True)
+        (output_directory / "campaign.json").write_text(
+            canonical_json(campaign) + "\n", encoding="utf-8"
+        )
+        raw = "".join(canonical_json(_artifact_run(campaign, record)) + "\n" for record in runs)
+        (output_directory / "runs.jsonl").write_text(raw, encoding="utf-8")
+        (output_directory / "summary.csv").write_text(summary_csv(summary), encoding="utf-8")
+        (output_directory / "summary.md").write_text(summary_markdown(summary), encoding="utf-8")
+    except OSError:
+        raise CampaignFailure(
+            "artifact-write", None, None, len(runs), len(runs), "invalid", "artifact write failed"
+        ) from None
     return summary
+
+
+def _ensure_output_directory_available(output_directory: Path) -> None:
+    try:
+        if not output_directory.exists():
+            return
+        if not output_directory.is_dir():
+            raise CampaignFailure(
+                "output-directory", None, None, 0, 0, "invalid", "output path is not a directory"
+            )
+        if next(output_directory.iterdir(), None) is not None:
+            raise CampaignFailure(
+                "output-directory", None, None, 0, 0, "invalid", "output directory is not empty"
+            )
+    except CampaignFailure:
+        raise
+    except OSError:
+        raise CampaignFailure(
+            "output-directory", None, None, 0, 0, "invalid", "output directory is unavailable"
+        ) from None
+
+
+def _safe_failure_payload(failure: CampaignFailure | Mapping[str, Any]) -> dict[str, Any]:
+    payload = dict(failure.diagnostic if isinstance(failure, CampaignFailure) else failure)
+    if set(payload) != set(FAILURE_FIELDS):
+        raise CampaignError("invalid failure diagnostic fields")
+    if payload["category"] not in FAILURE_CATEGORIES:
+        raise CampaignError("invalid failure diagnostic category")
+    if payload["status"] not in FAILURE_STATUSES:
+        raise CampaignError("invalid failure diagnostic status")
+    if payload["sequence"] is not None and (
+        type(payload["sequence"]) is not int or payload["sequence"] <= 0
+    ):
+        raise CampaignError("invalid failure diagnostic sequence")
+    if payload["route"] is not None and payload["route"] not in {
+        route["id"] for route in ROUTES
+    }:
+        raise CampaignError("invalid failure diagnostic route")
+    if type(payload["attempted"]) is not int or payload["attempted"] < 0:
+        raise CampaignError("invalid failure diagnostic attempted count")
+    if (
+        type(payload["validated"]) is not int
+        or payload["validated"] < 0
+        or payload["validated"] > payload["attempted"]
+    ):
+        raise CampaignError("invalid failure diagnostic validated count")
+    return {field: payload[field] for field in FAILURE_FIELDS}
+
+
+def write_failure(
+    output_directory: Path,
+    failure: CampaignFailure | Mapping[str, Any],
+) -> None:
+    """Write only a fixed, redacted failure record to a fresh directory."""
+    payload = _safe_failure_payload(failure)
+    output_directory.mkdir(parents=True, exist_ok=True)
+    if next(output_directory.iterdir(), None) is not None:
+        raise CampaignError("failure artifact directory is not empty")
+    (output_directory / "failure.json").write_text(
+        canonical_json(payload) + "\n", encoding="utf-8"
+    )
+
+
+def _report_failure(failure: CampaignFailure, output_directory: Path) -> int:
+    if failure.category == "output-directory":
+        artifact_status = "not-written"
+    else:
+        try:
+            write_failure(output_directory, failure)
+        except Exception:
+            artifact_status = "write-failed"
+        else:
+            artifact_status = "written"
+    print(
+        "sirius parity campaign failed: "
+        f"{canonical_json(_safe_failure_payload(failure))} "
+        f"artifact_status={artifact_status}",
+        file=sys.stderr,
+    )
+    return 1
 
 
 def _artifact_run(campaign: Mapping[str, Any], record: Mapping[str, Any]) -> dict[str, Any]:
@@ -1080,13 +1397,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     if runner and runner[0] == "--":
         runner = runner[1:]
     try:
+        # Reject stale output before constructing or invoking a runner.
+        _ensure_output_directory_available(arguments.output)
         spec = json.loads(arguments.spec.read_text(encoding="utf-8"))
         campaign = build_campaign(spec["provenance"], spec.get("float_tolerances"))
         runs = execute_campaign(campaign, SubprocessExecutor(runner, arguments.timeout_seconds))
         summary = write_artifacts(campaign, runs, arguments.output)
-    except (CampaignError, KeyError, OSError, subprocess.SubprocessError, json.JSONDecodeError) as error:
-        print(f"sirius parity campaign failed: {error}", file=sys.stderr)
-        return 1
+    except CampaignFailure as error:
+        return _report_failure(error, arguments.output)
+    except (CampaignError, KeyError, OSError, subprocess.SubprocessError, TypeError, ValueError):
+        return _report_failure(
+            CampaignFailure("campaign-spec", None, None, 0, 0, "invalid", "campaign input failed"),
+            arguments.output,
+        )
     return 0 if summary["passed"] else 2
 
 

@@ -276,7 +276,12 @@ to `sirius-db/sirius:dev` are outside this ten-PR count.
 ## 9. Verification and observability
 
 Each behavior-changing PR includes its own focused tests. PR 8 is integration
-proof, not a deferred dumping ground for earlier missing ownership tests.
+proof, not a deferred dumping ground for earlier missing ownership tests. Its
+parity harness validates each runner result incrementally, stops before later
+work on invalid evidence, and writes only a fixed, sanitized `failure.json`;
+the CLI rejects a non-empty output directory before invoking the runner and
+leaves it untouched. Complete campaigns retain the full schedule and existing
+performance gates.
 
 - Deterministic UTs: success/empty/NULL/variable width, transfer rejection,
   exact byte/count limits, oversized rows, blocked consumers, missed wakeups,
