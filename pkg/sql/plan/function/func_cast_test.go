@@ -141,6 +141,95 @@ func TestStringToFloat32ExplicitCompatibilityRange(t *testing.T) {
 	require.True(t, succeed, info)
 }
 
+func TestOrdinaryFloatToInt64BoundsAndSelection(t *testing.T) {
+	for _, sourceType := range []types.T{types.T_float32, types.T_float64} {
+		t.Run(sourceType.String(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			upperValid := math.Nextafter(0x1p63, 0)
+			lowerInvalid := math.Nextafter(-0x1p63, math.Inf(-1))
+			if sourceType == types.T_float32 {
+				upperValid = float64(math.Nextafter32(0x1p63, 0))
+				lowerInvalid = float64(math.Nextafter32(-0x1p63, float32(math.Inf(-1))))
+			}
+			makeInput := func(values []float64) *vector.Vector {
+				if sourceType == types.T_float32 {
+					converted := make([]float32, len(values))
+					for i, value := range values {
+						converted[i] = float32(value)
+					}
+					return newVectorByType(proc.Mp(), sourceType.ToType(), converted, nil)
+				}
+				return newVectorByType(proc.Mp(), sourceType.ToType(), values, nil)
+			}
+			for _, tc := range []struct {
+				name      string
+				values    []float64
+				nulls     []uint64
+				constant  bool
+				selection *FunctionSelectList
+				want      []int64
+				wantNulls []bool
+				wantErr   bool
+			}{
+				{name: "bounds and ordinary rounding", values: []float64{upperValid, -0x1p63, 2.5, -2.5, 2.25, -2.25, 0, math.Copysign(0, -1)}, want: []int64{int64(upperValid), math.MinInt64, 3, -3, 2, -2, 0, 0}},
+				{name: "upper overflow", values: []float64{0x1p63}, wantErr: true},
+				{name: "lower overflow", values: []float64{lowerInvalid}, wantErr: true},
+				{name: "NaN", values: []float64{math.NaN()}, wantErr: true},
+				{name: "positive infinity", values: []float64{math.Inf(1)}, wantErr: true},
+				{name: "negative infinity", values: []float64{math.Inf(-1)}, wantErr: true},
+				{name: "NULL payload", values: []float64{math.NaN(), 2.5}, nulls: []uint64{0}, want: []int64{0, 3}, wantNulls: []bool{true, false}},
+				{name: "inactive invalid row", values: []float64{2.5, math.NaN()}, selection: &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}}, want: []int64{3, 0}, wantNulls: []bool{false, true}},
+				{name: "active invalid row", values: []float64{2.5, math.NaN()}, selection: &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}}, wantErr: true},
+				{name: "all inactive", values: []float64{0x1p63, math.NaN()}, selection: &FunctionSelectList{AllNull: true}, want: []int64{0, 0}, wantNulls: []bool{true, true}},
+				{name: "constant", values: []float64{2.5}, constant: true, want: []int64{3, 3, 3}},
+				{name: "constant NULL", values: []float64{math.NaN()}, nulls: []uint64{0}, constant: true, want: []int64{0, 0, 0}, wantNulls: []bool{true, true, true}},
+				{name: "constant invalid", values: []float64{0x1p63}, constant: true, wantErr: true},
+				{name: "constant inactive invalid", values: []float64{math.NaN()}, constant: true, selection: &FunctionSelectList{AllNull: true}, want: []int64{0, 0, 0}, wantNulls: []bool{true, true, true}},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					input := makeInput(tc.values)
+					defer input.Free(proc.Mp())
+					for _, row := range tc.nulls {
+						input.GetNulls().Add(row)
+					}
+					length := len(tc.values)
+					if tc.constant {
+						input.SetClass(vector.CONSTANT)
+						length = 3
+						input.SetLength(length)
+					}
+					target := newVectorByType(proc.Mp(), types.T_int64.ToType(), []int64{}, nil)
+					defer target.Free(proc.Mp())
+					result := vector.NewFunctionResultWrapper(types.T_int64.ToType(), proc.Mp())
+					defer result.Free()
+					require.NoError(t, result.PreExtendAndReset(length))
+					err := NewCast([]*vector.Vector{input, target}, result, proc, length, tc.selection)
+					if tc.wantErr {
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "%v", err)
+						// Reuse the same result after an expected conversion error.
+						valid := makeInput([]float64{2.5})
+						defer valid.Free(proc.Mp())
+						require.NoError(t, result.PreExtendAndReset(1))
+						require.NoError(t, NewCast([]*vector.Vector{valid, target}, result, proc, 1, nil))
+						require.Equal(t, int64(3), vector.GetFixedAtNoTypeCheck[int64](result.GetResultVector(), 0))
+						return
+					}
+					require.NoError(t, err)
+					got := result.GetResultVector()
+					require.Equal(t, len(tc.want), got.Length())
+					for i, want := range tc.want {
+						wantNull := len(tc.wantNulls) > 0 && tc.wantNulls[i]
+						require.Equal(t, wantNull, got.IsNull(uint64(i)), "row %d", i)
+						if !wantNull {
+							require.Equal(t, want, vector.GetFixedAtNoTypeCheck[int64](got, i))
+						}
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestCastEnumToNumericTypes(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	source := []types.Enum{1, 3, 0}

@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"math"
 	"testing"
 	"time"
 
@@ -45,45 +46,115 @@ func TestIssue28523NumericCompatibilityOverBinaryPreparedStatement(t *testing.T)
 		db.SetMaxOpenConns(1)
 		db.SetMaxIdleConns(1)
 
-		_, err = db.ExecContext(ctx, "SET SESSION sql_mode = ''")
-		require.NoError(t, err)
-		stmt, err := db.PrepareContext(ctx, "SELECT ABS(?)")
-		require.NoError(t, err)
-		defer stmt.Close()
-
-		query := func(value string) (float64, error) {
-			var got float64
-			err := stmt.QueryRowContext(ctx, value).Scan(&got)
-			return got, err
+		for _, tc := range []struct {
+			name, query            string
+			prefix, complete, zero float64
+		}{
+			{name: "ABS", query: "SELECT ABS(?)", prefix: 1.5, complete: 125, zero: 0},
+			{name: "IF", query: "SELECT IF(?, 10, 20)", prefix: 10, complete: 10, zero: 20},
+			{name: "IFF", query: "SELECT IFF(?, 10, 20)", prefix: 10, complete: 10, zero: 20},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				_, err := db.ExecContext(ctx, "SET SESSION sql_mode = ''")
+				require.NoError(t, err)
+				stmt, err := db.PrepareContext(ctx, tc.query)
+				require.NoError(t, err)
+				defer stmt.Close()
+				query := func(value string) (float64, error) {
+					var got float64
+					err := stmt.QueryRowContext(ctx, value).Scan(&got)
+					return got, err
+				}
+				// Toggle in both directions without replacing the COM_STMT handle.
+				for _, mode := range []string{"", "MYSQL_NUMERIC_COMPATIBILITY", "", "MYSQL_NUMERIC_COMPATIBILITY", "MATRIXONE_NATIVE,MYSQL_NUMERIC_COMPATIBILITY"} {
+					_, err := db.ExecContext(ctx, "SET SESSION sql_mode = '"+mode+"'")
+					require.NoError(t, err)
+					got, err := query("1.5tail")
+					if mode == "MYSQL_NUMERIC_COMPATIBILITY" {
+						require.NoError(t, err)
+						require.Equal(t, tc.prefix, got)
+					} else {
+						require.ErrorContains(t, err, "invalid numeric string", mode)
+					}
+					got, err = query("  -1.25e2 ")
+					require.NoError(t, err, "complete tokens must work after rejected input")
+					require.Equal(t, tc.complete, got)
+					got, err = query("0")
+					require.NoError(t, err)
+					require.Equal(t, tc.zero, got)
+				}
+			})
 		}
-		_, err = query("1.5tail")
-		require.Error(t, err, "empty sql_mode must use strict complete-token parsing")
-		require.Contains(t, err.Error(), "invalid numeric string")
 
-		_, err = db.ExecContext(ctx, "SET SESSION sql_mode = 'MYSQL_NUMERIC_COMPATIBILITY'")
-		require.NoError(t, err)
-		got, err := query("1.5tail")
-		require.NoError(t, err)
-		require.Equal(t, 1.5, got)
-		got, err = query("  -1.25e2 ")
-		require.NoError(t, err, "a complete signed exponent remains valid")
-		require.Equal(t, 125.0, got)
+		for _, name := range []string{"ROUND", "TRUNCATE", "CEIL", "CEILING", "FLOOR"} {
+			t.Run(name+" precision", func(t *testing.T) {
+				stmt, err := db.PrepareContext(ctx, "SELECT "+name+"(?, ?)")
+				require.NoError(t, err)
+				defer stmt.Close()
+				for _, mode := range []string{"", "MYSQL_NUMERIC_COMPATIBILITY"} {
+					_, err := db.ExecContext(ctx, "SET SESSION sql_mode = '"+mode+"'")
+					require.NoError(t, err)
+					var got float64
+					err = stmt.QueryRowContext(ctx, 12.345, "2.5tail").Scan(&got)
+					require.ErrorContains(t, err, "invalid argument cast to int", mode)
+					for _, precision := range []float64{0x1p63, math.Nextafter(-0x1p63, math.Inf(-1))} {
+						err = stmt.QueryRowContext(ctx, 12.345, precision).Scan(&got)
+						require.ErrorContains(t, err, "out of range", mode)
+					}
+					err = stmt.QueryRowContext(ctx, 12.345, 2.5).Scan(&got)
+					require.NoError(t, err, "ordinary INT64 rounding and post-error reuse")
+					require.InDelta(t, 12.345, got, 1e-10)
+				}
+			})
+		}
 
-		// Exercise both directions on the same cached COM_STMT handle.
-		_, err = db.ExecContext(ctx, "SET SESSION sql_mode = ''")
-		require.NoError(t, err)
-		_, err = query("1.5tail")
-		require.Error(t, err)
-		_, err = db.ExecContext(ctx, "SET SESSION sql_mode = 'MYSQL_NUMERIC_COMPATIBILITY'")
-		require.NoError(t, err)
-		got, err = query("1.5tail")
-		require.NoError(t, err)
-		require.Equal(t, 1.5, got)
-
-		_, err = db.ExecContext(ctx, "SET SESSION sql_mode = 'MATRIXONE_NATIVE,MYSQL_NUMERIC_COMPATIBILITY'")
-		require.NoError(t, err)
-		_, err = query("1.5tail")
-		require.Error(t, err, "MATRIXONE_NATIVE must take precedence over compatibility")
-		require.Contains(t, err.Error(), "invalid numeric string")
+		t.Run("binary literal and flow control ownership", func(t *testing.T) {
+			// A HEX literal in numeric context is 49. A binary string containing
+			// "1", including a string-valued conditional result, converts to 1.
+			// String-domain sidecars do not confer numeric-literal identity.
+			var literal, binaryString float64
+			require.NoError(t, db.QueryRowContext(ctx,
+				"SELECT ABS(X'31'), ABS(CAST('1' AS BINARY))").Scan(&literal, &binaryString))
+			require.Equal(t, float64(49), literal)
+			require.Equal(t, float64(1), binaryString)
+			for _, expression := range []string{
+				"CASE WHEN id=1 THEN X'31' WHEN id=2 THEN '1' ELSE NULL END",
+				"IF(id=1, X'31', IF(id=2, '1', NULL))",
+				"COALESCE(IF(id=1, X'31', NULL), IF(id=2, '1', NULL))",
+			} {
+				query := fmt.Sprintf("SELECT id, ABS(%[1]s), ROUND(%[1]s), MOD(%[1]s, 50) "+
+					"FROM (SELECT 1 AS id UNION ALL SELECT 2 UNION ALL SELECT 3) AS src WHERE id <= ? ORDER BY id", expression)
+				stmt, err := db.PrepareContext(ctx, query)
+				require.NoError(t, err)
+				func() {
+					defer stmt.Close()
+					for _, mode := range []string{"", "MYSQL_NUMERIC_COMPATIBILITY", "MATRIXONE_NATIVE"} {
+						_, err := db.ExecContext(ctx, "SET SESSION sql_mode = '"+mode+"'")
+						require.NoError(t, err)
+						rows, err := stmt.QueryContext(ctx, 3)
+						require.NoError(t, err)
+						func() {
+							defer rows.Close()
+							count := 0
+							for rows.Next() {
+								var id int
+								var abs, round, mod sql.NullFloat64
+								require.NoError(t, rows.Scan(&id, &abs, &round, &mod))
+								count++
+								require.Equal(t, count, id)
+								for _, got := range []sql.NullFloat64{abs, round, mod} {
+									require.Equal(t, id != 3, got.Valid, expression)
+									if id != 3 {
+										require.Equal(t, float64(1), got.Float64, "mode=%q expression=%s", mode, expression)
+									}
+								}
+							}
+							require.NoError(t, rows.Err())
+							require.Equal(t, 3, count)
+						}()
+					}
+				}()
+			}
+		})
 	})
 }

@@ -183,3 +183,135 @@ func TestStrictStringNumericCompatibilityMixedVersionFence(t *testing.T) {
 		}
 	}
 }
+
+func TestStringNumericCompatibilityAdmissionByExpressionAndMode(t *testing.T) {
+	for _, expression := range []struct {
+		name       string
+		historical bool
+		id         int64
+	}{
+		{name: "cast"},
+		{name: "if"},
+		{name: "iff"},
+		{name: "ceil", historical: true, id: 72},
+		{name: "floor", historical: true, id: 103},
+		{name: "float_int64"},
+	} {
+		for _, mode := range []struct {
+			name   string
+			mysql  bool
+			native bool
+			value  string
+		}{
+			{name: "default", value: "1.5tail"},
+			{name: "mysql", mysql: true, value: "1.5tail"},
+			{name: "native", mysql: true, native: true, value: " 1.5 "},
+		} {
+			t.Run(expression.name+"/"+mode.name, func(t *testing.T) {
+				c, client := expressionProtocolTestCompile(t)
+				qry, scope := strictStringNumericCompatibilityPipeline(t, types.T_varchar, 0)
+				scope.Proc = c.proc
+				t.Cleanup(scope.RootOp.Release)
+				expr := qry.Nodes[0].ProjectList[0]
+				if expression.name == "float_int64" {
+					// Bind a real precision column, not an explicit CAST1, so the
+					// test proves ROUND's reachable ordinary FLOAT -> INT64 path.
+					bound, err := plan.BindFuncExprImplByPlanExpr(context.Background(), "round", []*planpb.Expr{
+						{Typ: planpb.Type{Id: int32(types.T_float64)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Dval{Dval: 12.345}}}},
+						{Typ: planpb.Type{Id: int32(types.T_float64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+					})
+					require.NoError(t, err)
+					expr = bound
+				}
+				if expression.name == "if" || expression.name == "iff" {
+					condition := expr.GetF().Args[0]
+					bound, err := plan.BindFuncExprImplByPlanExpr(context.Background(), expression.name, []*planpb.Expr{
+						condition,
+						{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: 10}}}},
+						{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: 20}}}},
+					})
+					require.NoError(t, err)
+					require.NotNil(t, bound.GetF())
+					require.NotNil(t, bound.GetF().Args[0].GetCol())
+					require.Equal(t, condition.Typ.Id, bound.GetF().Args[0].Typ.Id)
+					require.Nil(t, bound.GetF().Args[0].GetF(), "binding must preserve the string condition without a CAST")
+					expr = bound
+				}
+				if expression.historical {
+					generated := &planpb.GeneratedCol{Expr: &planpb.Expr{
+						Typ: planpb.Type{Id: int32(types.T_float64)},
+						Expr: &planpb.Expr_F{F: &planpb.Function{
+							Func: &planpb.ObjectRef{Obj: expression.id<<32 | 12, ObjName: expression.name},
+							Args: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_Lit{
+								Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: mode.value}},
+							}}},
+						}},
+					}}
+					wire, err := generated.MarshalBinary()
+					require.NoError(t, err)
+					decoded := &planpb.GeneratedCol{}
+					require.NoError(t, decoded.UnmarshalBinary(wire))
+					expr = decoded.Expr
+				}
+				qry.Nodes[0].ProjectList = []*planpb.Expr{expr}
+				scope.RootOp.(*projection.Projection).ProjectList = []*planpb.Expr{expr}
+				features, err := planpb.RequiredRemoteExpressionFeatures(qry)
+				require.NoError(t, err)
+				require.Equal(t, expression.name != "float_int64", features.StrictStringNumericCompatibility)
+				require.Equal(t, expression.name == "float_int64", features.OrdinaryFloatInt64Bounds)
+				require.Equal(t, expression.historical, features.HistoricalStringMathCompatibility)
+				info := c.proc.GetSessionInfo()
+				info.MySQLNumericCompatibilityMode = mode.mysql
+				info.MatrixOneNativeMode = mode.native
+				info.LegacyNumericCompatibilityMode = false
+				rt := runtime.ServiceRuntime(c.proc.GetService())
+				oldVersion, _ := rt.GetGlobalVariables(runtime.MOProtocolVersion)
+				t.Cleanup(func() { rt.SetGlobalVariables(runtime.MOProtocolVersion, oldVersion) })
+				wirePipeline := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
+				requiresCurrent := expression.historical || expression.name == "float_int64" || (!mode.mysql && !mode.native)
+				for _, version := range []int64{defines.MORPCVersion93, defines.MORPCVersion92} {
+					client.version = version
+					c.execType = plan.ExecTypeAP_MULTICN
+					c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+					require.NoError(t, c.constrainStrictStringNumericCompatibilityWorkers(qry))
+					denied := requiresCurrent && version < defines.MORPCVersion93
+					if denied {
+						require.Equal(t, plan.ExecTypeAP_ONECN, c.execType)
+						require.Equal(t, c.addr, c.cnList[0].Addr)
+					} else {
+						require.Equal(t, plan.ExecTypeAP_MULTICN, c.execType)
+					}
+					data, err := encodeRemoteScope(scope, c.proc)
+					if denied {
+						require.ErrorContains(t, err, "version 93")
+					} else {
+						require.NoError(t, err)
+						require.NotEmpty(t, data)
+					}
+					rt.SetGlobalVariables(runtime.MOProtocolVersion, version)
+					err = validateRemoteExpressionPipelineProtocol(c.proc, wirePipeline)
+					if denied {
+						require.ErrorContains(t, err, "version 93")
+					} else {
+						require.NoError(t, err)
+					}
+				}
+				client.version = defines.MORPCVersion93
+				rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion93)
+				info.LegacyNumericCompatibilityMode = true
+				c.execType = plan.ExecTypeAP_MULTICN
+				c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+				placementErr := c.constrainStrictStringNumericCompatibilityWorkers(qry)
+				_, sendErr := encodeRemoteScope(scope, c.proc)
+				receiveErr := validateRemoteExpressionPipelineProtocol(c.proc, wirePipeline)
+				for _, err := range []error{placementErr, sendErr, receiveErr} {
+					if requiresCurrent {
+						require.ErrorContains(t, err, "legacy session contract")
+					} else {
+						require.NoError(t, err, "CAST and IF retain their explicit compatible legacy mappings")
+					}
+				}
+			})
+		}
+	}
+}

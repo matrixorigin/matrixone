@@ -391,6 +391,9 @@ func newExpressionExecutorWithAllocation(
 			}
 			executor.SetParameter(i, subExecutor)
 		}
+		if (executor.fid == function.CEIL || executor.fid == function.FLOOR) && len(t.F.Args) == 2 {
+			executor.constantMathPrecision = isRowIndependentMathPrecision(proc.Ctx, t.F.Args[1])
+		}
 		return executor, nil
 	}
 
@@ -413,6 +416,35 @@ func isStringToNumericCast(expr *plan.Expr) bool {
 	source := types.T(f.Args[0].Typ.Id)
 	target := types.T(expr.Typ.Id)
 	return source.IsMySQLString() && target.ToType().IsNumeric()
+}
+
+// CEIL/FLOOR require constant precision, but a deterministic scalar cast can
+// produce a flat vector because its warnings must be emitted for every active
+// row. Prove independence from input rows, not equality within one batch.
+func isRowIndependentMathPrecision(ctx context.Context, expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Lit, *plan.Expr_P, *plan.Expr_T:
+		return true
+	case *plan.Expr_F:
+		if e.F == nil || e.F.Func == nil {
+			return false
+		}
+		overload, err := function.GetFunctionById(ctx, e.F.Func.Obj)
+		if err != nil || overload.CannotFold() || overload.IsRealTimeRelated() {
+			return false
+		}
+		for _, arg := range e.F.Args {
+			if !isRowIndependentMathPrecision(ctx, arg) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
 }
 
 func newExpressionOffHeapVector(
@@ -497,6 +529,9 @@ type FunctionExpressionExecutor struct {
 	// runtime, so reusable result vectors must start each evaluation from this
 	// stable type before the function applies the current runtime metadata.
 	resultType types.Type
+	// A warning-bearing scalar precision is evaluated normally before a
+	// temporary constant vector is passed to the CEIL/FLOOR kernel.
+	constantMathPrecision bool
 	functionInformationForEval
 	folded      functionFolding
 	selectList1 []bool
@@ -1467,7 +1502,7 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 	if err := expr.selectedResult.PreExtendAndReset(selectedCount); err != nil {
 		return nil, err
 	}
-	if err := expr.evalFn(
+	if err := expr.evalWithConstantMathPrecision(
 		expr.selectedParameterResults, expr.selectedResult, proc, selectedCount, nil); err != nil {
 		return nil, err
 	}
@@ -1618,7 +1653,7 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		}
 	}
 
-	if err = expr.evalFn(
+	if err = expr.evalWithConstantMathPrecision(
 		expr.parameterResults, expr.resultVector, proc, rowCount, &expr.selectList); err != nil {
 		return nil, err
 	}
@@ -1636,6 +1671,33 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 	}
 
 	return expr.resultVector.GetResultVector(), nil
+}
+
+func (expr *FunctionExpressionExecutor) evalWithConstantMathPrecision(
+	parameters []*vector.Vector, result vector.FunctionResultWrapper,
+	proc *process.Process, rowCount int, selectList *function.FunctionSelectList,
+) error {
+	if !expr.constantMathPrecision || rowCount == 0 {
+		return expr.evalFn(parameters, result, proc, rowCount, selectList)
+	}
+	precision := parameters[1]
+	if precision.IsConst() || precision.Length() == 0 || precision.GetType().Oid != types.T_int64 || precision.IsNull(0) {
+		return expr.evalFn(parameters, result, proc, rowCount, selectList)
+	}
+	// All children have already evaluated the active rows, including their
+	// warnings. The selected-row path has compacted those rows, so index zero
+	// is active here. Never mutate or fold the child-owned result vector.
+	constant, err := newExpressionConstFixed(*precision.GetType(),
+		vector.GetFixedAtWithTypeCheck[int64](precision, 0), rowCount, expr.m, expr.allocation)
+	if err != nil {
+		return err
+	}
+	parameters[1] = constant
+	defer func() {
+		parameters[1] = precision
+		constant.Free(expr.m)
+	}()
+	return expr.evalFn(parameters, result, proc, rowCount, selectList)
 }
 
 func (expr *FunctionExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {

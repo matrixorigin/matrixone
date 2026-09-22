@@ -393,19 +393,25 @@ const (
 // the strict-by-default contract. Pre-v93 workers understand the prefix-cast
 // representation but default to permissive conversion when the new SessionInfo
 // marker is absent.
+// HistoricalStringMathCompatibility requires v93 in every mode: old CEIL/FLOOR
+// VARCHAR overloads used ParseFloat, not the current mode-aware parser.
 type RemoteExpressionFeatures struct {
-	NumericPrefix                    bool
-	StrictStringNumericCompatibility bool
-	JSONComparisonParam              bool
-	MixedJSONBooleanEquality         bool
-	FormatNumericArguments           bool
-	TypedConversionFunctions         bool
-	IntegerArithmeticDomains         bool
-	RowDependentConvBases            bool
-	ASCIIInt32Result                 bool
-	StringNumericResultContracts     bool
-	BoundedConditionalStringDomains  bool
-	IPFunctionSemantics              bool
+	NumericPrefix                     bool
+	StrictStringNumericCompatibility  bool
+	HistoricalStringMathCompatibility bool
+	// Ordinary/comparison/set-operation FLOAT -> INT64 casts require v93's
+	// exact bounds in every mode, independently of string-prefix conversion.
+	OrdinaryFloatInt64Bounds        bool
+	JSONComparisonParam             bool
+	MixedJSONBooleanEquality        bool
+	FormatNumericArguments          bool
+	TypedConversionFunctions        bool
+	IntegerArithmeticDomains        bool
+	RowDependentConvBases           bool
+	ASCIIInt32Result                bool
+	StringNumericResultContracts    bool
+	BoundedConditionalStringDomains bool
+	IPFunctionSemantics             bool
 	// IntegerParameterCoercion requires v85 for private CAST 5..8.
 	IntegerParameterCoercion          bool
 	TOBase64ResultContracts           bool
@@ -418,6 +424,8 @@ type RemoteExpressionFeatures struct {
 func (features RemoteExpressionFeatures) Any() bool {
 	return features.NumericPrefix ||
 		features.StrictStringNumericCompatibility ||
+		features.HistoricalStringMathCompatibility ||
+		features.OrdinaryFloatInt64Bounds ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
 		features.FormatNumericArguments ||
@@ -862,8 +870,15 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			if !features.StrictStringNumericCompatibility && isStrictStringNumericCompatibilityCast(current) {
 				features.StrictStringNumericCompatibility = true
 			}
-			if !features.StrictStringNumericCompatibility && isHistoricalStringMathCompatibilityFunction(current) {
+			if !features.StrictStringNumericCompatibility && isStringConditionCompatibilityFunction(current) {
 				features.StrictStringNumericCompatibility = true
+			}
+			if !features.HistoricalStringMathCompatibility && isHistoricalStringMathCompatibilityFunction(current) {
+				features.StrictStringNumericCompatibility = true
+				features.HistoricalStringMathCompatibility = true
+			}
+			if !features.OrdinaryFloatInt64Bounds && isOrdinaryFloatInt64Bounds(current) {
+				features.OrdinaryFloatInt64Bounds = true
 			}
 			if !features.JSONComparisonParam && fn != nil && fn.Func != nil &&
 				int32(fn.Func.Obj>>32) == internalJSONComparisonFunctionID {
@@ -937,7 +952,7 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 // isStrictStringNumericCompatibilityCast identifies string-to-floating casts
 // whose executor consults CompatibilityModeFromProcess. This includes the
 // planner's comparison cast and ordinary/explicit CAST identities; integer
-// and decimal CASTs retain their existing protocol contracts.
+// and decimal CASTs have separate protocol contracts.
 func isStrictStringNumericCompatibilityCast(expr *Expr) bool {
 	if expr == nil || expr.GetF() == nil || expr.GetF().Func == nil || len(expr.GetF().Args) == 0 {
 		return false
@@ -961,6 +976,39 @@ func isPlanNumericCompatibilityStringType(id int32) bool {
 	default:
 		return false
 	}
+}
+
+func isOrdinaryFloatInt64Bounds(expr *Expr) bool {
+	if expr == nil || expr.Typ.Id != 23 { // INT64
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || int32(fn.Func.Obj>>32) != 21 || len(fn.Args) == 0 || fn.Args[0] == nil {
+		return false
+	}
+	// Only these stable CAST identities use floatToInt64. Explicit,
+	// assignment and private integer casts retain their own conversion paths.
+	switch int32(fn.Func.Obj) {
+	case 0, 2, 3:
+		return fn.Args[0].Typ.Id == 30 || fn.Args[0].Typ.Id == 31
+	default:
+		return false
+	}
+}
+
+// IF/IFF consumes string conditions directly, without a floating CAST. Both
+// scalar and vector executors consult the same process compatibility mode.
+func isStringConditionCompatibilityFunction(expr *Expr) bool {
+	if expr == nil || expr.GetF() == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn.Func == nil || len(fn.Args) == 0 || fn.Args[0] == nil {
+		return false
+	}
+	return (int32(fn.Func.Obj>>32) == iffFunctionID ||
+		strings.EqualFold(fn.Func.ObjName, "if") || strings.EqualFold(fn.Func.ObjName, "iff")) &&
+		isPlanNumericCompatibilityStringType(fn.Args[0].Typ.Id)
 }
 
 // isHistoricalStringMathCompatibilityFunction covers the two serialized

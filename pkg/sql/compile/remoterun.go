@@ -156,7 +156,7 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 			return nil, err
 		}
 	}
-	if features.StrictStringNumericCompatibility {
+	if requiresStringNumericCompatibilityProtocol(proc, features) {
 		if err = validateStrictStringNumericCompatibilityDestination(proc, p); err != nil {
 			return nil, err
 		}
@@ -2270,15 +2270,15 @@ func validateRemoteExpressionPipelineProtocol(
 			"prepared numeric-prefix casts require MORPC protocol version 30",
 		)
 	}
-	if features.StrictStringNumericCompatibility && strictStringNumericCompatibilityDefault(proc) {
-		if proc.GetSessionInfo().LegacyNumericCompatibilityMode {
+	if requiresStringNumericCompatibilityProtocol(proc, features) {
+		if proc != nil && proc.Base != nil && proc.GetSessionInfo().LegacyNumericCompatibilityMode {
 			return moerr.NewNotSupportedNoCtx(
-				"strict-by-default string numeric compatibility cannot run with a legacy session contract",
+				"string numeric compatibility cannot run with a legacy session contract",
 			)
 		}
 		if !hasProtocolVersion || protocolVersion < defines.MORPCVersion93 {
 			return moerr.NewNotSupportedNoCtx(
-				"strict-by-default string numeric compatibility requires MORPC protocol version 93",
+				"string numeric compatibility requires MORPC protocol version 93",
 			)
 		}
 	}
@@ -2358,11 +2358,20 @@ func validateRemoteExpressionPipelineProtocol(
 	return nil
 }
 
+// Historical string overloads and ordinary FLOAT -> INT64 bounds changed in
+// every mode. String-prefix casts retain their explicit MySQL/native mapping.
+// Reuse the caller's feature scan so all three admission boundaries agree.
+func requiresStringNumericCompatibilityProtocol(proc *process.Process, features plan.RemoteExpressionFeatures) bool {
+	return features.HistoricalStringMathCompatibility ||
+		features.OrdinaryFloatInt64Bounds ||
+		(features.StrictStringNumericCompatibility && strictStringNumericCompatibilityDefault(proc))
+}
+
 // strictStringNumericCompatibilityDefault reports whether this execution
 // generation relies on the v93 strict-by-default contract. A legacy process
 // snapshot remains strict locally, but is rejected for changed remote
-// expressions until its sender contract is known; only explicit MySQL mode
-// bypasses this fence.
+// expressions until its sender contract is known. Explicit MySQL and native
+// modes preserve the old CAST/IF contract.
 func strictStringNumericCompatibilityDefault(proc *process.Process) bool {
 	if proc == nil || proc.Base == nil {
 		return false

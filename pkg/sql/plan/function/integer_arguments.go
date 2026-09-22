@@ -32,6 +32,9 @@ const (
 type integerParameter struct {
 	position int
 	target   types.T
+	// Math precision keeps ordinary CAST semantics, including strict integer
+	// text and rounding, instead of private integer-prefix evaluation.
+	ordinaryCast bool
 	// physicalTarget preserves a legacy executor signature after logical
 	// parameter coercion. Zero means the executor consumes target directly.
 	physicalTarget types.T
@@ -88,11 +91,12 @@ func IntegerArgumentTargetForSource(name string, position int, source types.T, b
 	return parameter.sourceTarget(source, binaryLiteral)
 }
 
-// IntegerArgumentTarget exposes the same parameter contract to AST binding,
-// expression rebinding and prepared specialization. Positions are zero-based.
+// IntegerArgumentTarget exposes private integer-evaluation contracts to AST
+// binding, expression rebinding and prepared specialization. Ordinary-cast
+// parameters still participate in signature matching. Positions are zero-based.
 func IntegerArgumentTarget(name string, position int) (types.T, bool) {
 	parameter, ok := integerParameterForPosition(name, position)
-	if !ok || parameter.mode != fixedIntegerParameter || parameter.temporal || parameter.uuid {
+	if !ok || parameter.ordinaryCast || parameter.mode != fixedIntegerParameter || parameter.temporal || parameter.uuid {
 		return 0, false
 	}
 	return parameter.target, true

@@ -203,6 +203,16 @@ null  ¦  null
 select ceil(12.345,2.5),floor(12.345,2.5),round(12.345,2.5),truncate(12.345,2.5);
 ➤ ceil(12.345, 2.5)[3,5,3]  ¦  floor(12.345, 2.5)[3,5,3]  ¦  round(12.345, 2.5)[3,5,3]  ¦  truncate(12.345, 2.5)[3,5,3]  𝄀
 12.345  ¦  12.345  ¦  12.345  ¦  12.345
+select ceil(12.345,'2.5tail');
+invalid argument cast to int, bad value 2.5tail
+select ceiling(12.345,'2.5tail');
+invalid argument cast to int, bad value 2.5tail
+select floor(12.345,'2.5tail');
+invalid argument cast to int, bad value 2.5tail
+select round(12.345,'2.5tail');
+invalid argument cast to int, bad value 2.5tail
+select truncate(12.345,'2.5tail');
+invalid argument cast to int, bad value 2.5tail
 select from_days(d),week(cast('2026-09-20' as date),d),yearweek(cast('2026-09-20' as date),d),timestampadd(day,d,cast('2026-09-20' as date)) from sources order by id;
 ➤ from_days(d)[91,10,0]  ¦  week(cast(2026-09-20 as date), d)[-6,8,0]  ¦  yearweek(cast(2026-09-20 as date), d)[-5,64,0]  ¦  timestampadd(day, d, cast(2026-09-20 as date))[91,10,0]  𝄀
 null  ¦  38  ¦  202638  ¦  2026-09-23  𝄀
@@ -234,9 +244,13 @@ execute utility_source using @v,@v,@v,@v,@v,@v,@v,@v;
 ➤ period_add(202401, ?)[-5,64,0]  ¦  round(12.345, ?)[3,5,3]  ¦  from_days(?)[91,10,0]  ¦  week(cast(2026-09-20 as date), ?)[-6,8,0]  ¦  timestampadd(day, ?, cast(2026-09-20 as date))[91,10,0]  ¦  split_part(a.b.c, ., ?)[12,5,0]  ¦  sha2(matrixone, ?)[12,128,0]  ¦  regexp_instr(abcabc, b, ?)[-5,64,0]  𝄀
 202403  ¦  12.350  ¦  null  ¦  38  ¦  2026-09-22  ¦  b  ¦  null  ¦  2
 set @v='2.5tail';
-execute utility_source using @v,@v,@v,@v,@v,@v,@v,@v;
+set @integer_math_precision=2;
+execute utility_source using @v,@integer_math_precision,@v,@v,@v,@v,@v,@v;
 ➤ period_add(202401, ?)[-5,64,0]  ¦  round(12.345, ?)[3,5,3]  ¦  from_days(?)[91,10,0]  ¦  week(cast(2026-09-20 as date), ?)[-6,8,0]  ¦  timestampadd(day, ?, cast(2026-09-20 as date))[91,10,0]  ¦  split_part(a.b.c, ., ?)[12,5,0]  ¦  sha2(matrixone, ?)[12,128,0]  ¦  regexp_instr(abcabc, b, ?)[-5,64,0]  𝄀
 202403  ¦  12.350  ¦  null  ¦  38  ¦  2026-09-22  ¦  b  ¦  null  ¦  2
+execute utility_source using @v,@v,@v,@v,@v,@v,@v,@v;
+invalid argument cast to int, bad value 2.5tail
+set @integer_math_precision=null;
 set @v=null;
 execute utility_source using @v,@v,@v,@v,@v,@v,@v,@v;
 ➤ period_add(202401, ?)[-5,64,0]  ¦  round(12.345, ?)[3,5,3]  ¦  from_days(?)[91,10,0]  ¦  week(cast(2026-09-20 as date), ?)[-6,8,0]  ¦  timestampadd(day, ?, cast(2026-09-20 as date))[91,10,0]  ¦  split_part(a.b.c, ., ?)[12,5,0]  ¦  sha2(matrixone, ?)[12,128,0]  ¦  regexp_instr(abcabc, b, ?)[-5,64,0]  𝄀

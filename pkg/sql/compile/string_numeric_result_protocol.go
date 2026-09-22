@@ -49,21 +49,21 @@ func (c *Compile) constrainStringNumericResultWorkers(qry *plan.Query) error {
 }
 
 // constrainStrictStringNumericCompatibilityWorkers keeps expressions whose
-// conversion semantics depend on the strict-by-default contract away from
-// pre-v93 workers. A legacy process marker is rejected rather than silently
-// treated as the new strict sender; both directions are fail-closed.
+// conversion semantics changed in v93 away from older workers. Historical
+// CEIL/FLOOR overloads require this in every mode. A legacy process marker is
+// rejected rather than silently treated as the new sender contract.
 func (c *Compile) constrainStrictStringNumericCompatibilityWorkers(qry *plan.Query) error {
-	if c.execType != plan2.ExecTypeAP_MULTICN || !strictStringNumericCompatibilityDefault(c.proc) {
+	if c.execType != plan2.ExecTypeAP_MULTICN {
 		return nil
+	}
+	features, err := plan.RequiredRemoteExpressionFeatures(qry)
+	if err != nil || !requiresStringNumericCompatibilityProtocol(c.proc, features) {
+		return err
 	}
 	if c.proc.GetSessionInfo().LegacyNumericCompatibilityMode {
 		return moerr.NewNotSupportedNoCtx(
-			"strict-by-default string numeric compatibility cannot run with a legacy session contract",
+			"string numeric compatibility cannot run with a legacy session contract",
 		)
-	}
-	features, err := plan.RequiredRemoteExpressionFeatures(qry)
-	if err != nil || !features.StrictStringNumericCompatibility {
-		return err
 	}
 	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion93)
 	if err != nil {
@@ -86,15 +86,12 @@ func (c *Compile) constrainStrictStringNumericCompatibilityWorkers(qry *plan.Que
 func validateStrictStringNumericCompatibilityDestination(proc *process.Process, p *pipeline.Pipeline) error {
 	if p == nil || p.Node == nil || p.Node.Addr == "" {
 		return moerr.NewNotSupportedNoCtx(
-			"strict-by-default string numeric compatibility requires a known v93 remote destination",
+			"string numeric compatibility requires a known v93 remote destination",
 		)
-	}
-	if !strictStringNumericCompatibilityDefault(proc) {
-		return nil
 	}
 	if proc.GetSessionInfo().LegacyNumericCompatibilityMode {
 		return moerr.NewNotSupportedNoCtx(
-			"strict-by-default string numeric compatibility cannot run with a legacy session contract",
+			"string numeric compatibility cannot run with a legacy session contract",
 		)
 	}
 	supported, err := remoteWorkersSupportProtocol(
@@ -107,7 +104,7 @@ func validateStrictStringNumericCompatibilityDestination(proc *process.Process, 
 	}
 	if !supported {
 		return moerr.NewNotSupportedNoCtx(
-			"strict-by-default string numeric compatibility requires MORPC protocol version 93 on the remote destination",
+			"string numeric compatibility requires MORPC protocol version 93 on the remote destination",
 		)
 	}
 	return nil

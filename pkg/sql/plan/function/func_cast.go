@@ -2023,7 +2023,7 @@ func float32ToOthers(proc *process.Process,
 		return floatToInteger(ctx, source, rs, length, selectList)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		return floatToInteger(ctx, source, rs, length, selectList)
+		return floatToInt64(ctx, source, rs, length, selectList)
 	case types.T_uint8:
 		rs := vector.MustFunctionResult[uint8](result)
 		return floatToInteger(ctx, source, rs, length, selectList)
@@ -2094,7 +2094,7 @@ func float64ToOthers(proc *process.Process,
 		return floatToInteger(ctx, source, rs, length, selectList)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		return floatToInteger(ctx, source, rs, length, selectList)
+		return floatToInt64(ctx, source, rs, length, selectList)
 	case types.T_uint8:
 		rs := vector.MustFunctionResult[uint8](result)
 		return floatToInteger(ctx, source, rs, length, selectList)
@@ -3516,7 +3516,38 @@ func floatExceedsBitRange(value float64, bitSize int) bool {
 	return value > float64(maxBitValue(bitSize))
 }
 
-// XXX do not use it to cast float to integer, please use floatToInteger
+// floatToInt64 keeps ordinary CAST rounding while checking the exact signed
+// range. float64(MaxInt64) rounds up to 2^63, so its upper bound is exclusive.
+func floatToInt64[T constraints.Float](
+	ctx context.Context,
+	from vector.FunctionParameterWrapper[T], to *vector.FunctionResult[int64],
+	length int, selectList *FunctionSelectList,
+) error {
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		value, null := from.GetValue(i)
+		if null {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		rounded := math.Round(float64(value))
+		if math.IsNaN(rounded) || rounded < -0x1p63 || rounded >= 0x1p63 {
+			return moerr.NewOutOfRangef(ctx, "int64", "value '%v'", value)
+		}
+		if err := to.Append(int64(rounded), false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func floatToInteger[T1 constraints.Float, T2 constraints.Integer](
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[T1], to *vector.FunctionResult[T2],

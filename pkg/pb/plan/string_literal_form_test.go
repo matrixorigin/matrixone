@@ -1025,3 +1025,115 @@ func TestRequiredRemoteExpressionFeaturesDecimalLiteralSemantics(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, features.DecimalLiteralSemantics)
 }
+
+func TestStrictStringNumericCompatibilityConditionsAndHistoricalOwners(t *testing.T) {
+	for _, identity := range []struct {
+		name string
+		obj  int64
+	}{
+		{name: "encoded_if", obj: int64(iffFunctionID) << 32},
+		{name: "if"},
+		{name: "iff"},
+	} {
+		for _, source := range []struct {
+			id   int32
+			want bool
+		}{
+			{id: planCharTypeID, want: true},
+			{id: planVarcharTypeID, want: true},
+			{id: planTextTypeID, want: true},
+			{id: planBinaryTypeID, want: true},
+			{id: planVarbinaryTypeID, want: true},
+			{id: planBlobTypeID, want: true},
+			{id: 23},
+			{id: 31},
+			{id: planBooleanTypeID},
+			{id: planAnyTypeID},
+		} {
+			t.Run(fmt.Sprintf("%s/source_%d", identity.name, source.id), func(t *testing.T) {
+				condition := &Expr{Typ: Type{Id: source.id}, Expr: &Expr_Col{Col: &ColRef{ColPos: 0}}}
+				if source.id == planAnyTypeID {
+					condition.Expr = &Expr_Lit{Lit: &Literal{Isnull: true}}
+				}
+				expr := &Expr{Typ: Type{Id: 23}, Expr: &Expr_F{F: &Function{
+					Func: &ObjectRef{Obj: identity.obj, ObjName: identity.name},
+					Args: []*Expr{
+						condition,
+						{Typ: Type{Id: 23}, Expr: &Expr_Lit{Lit: &Literal{Value: &Literal_I64Val{I64Val: 10}}}},
+						{Typ: Type{Id: 23}, Expr: &Expr_Lit{Lit: &Literal{Value: &Literal_I64Val{I64Val: 20}}}},
+					},
+				}}}
+				features, err := RequiredRemoteExpressionFeatures(expr)
+				require.NoError(t, err)
+				require.Equal(t, source.want, features.StrictStringNumericCompatibility)
+				require.False(t, features.HistoricalStringMathCompatibility)
+			})
+		}
+	}
+	for _, math := range []struct {
+		name string
+		id   int32
+	}{
+		{name: "ceil", id: ceilFunctionID},
+		{name: "floor", id: floorFunctionID},
+	} {
+		t.Run(math.name+"_generated_owner", func(t *testing.T) {
+			source := &Expr{Typ: Type{Id: planVarcharTypeID}, Expr: &Expr_Col{Col: &ColRef{ColPos: 0}}}
+			generated := &GeneratedCol{Expr: &Expr{Typ: Type{Id: 31}, Expr: &Expr_F{F: &Function{
+				Func: &ObjectRef{Obj: int64(math.id)<<32 | 12, ObjName: math.name},
+				Args: []*Expr{source},
+			}}}}
+			wire, err := generated.MarshalBinary()
+			require.NoError(t, err)
+			decoded := &GeneratedCol{}
+			require.NoError(t, decoded.UnmarshalBinary(wire))
+			require.Equal(t, int64(math.id)<<32|12, decoded.Expr.GetF().Func.Obj)
+			cast := &Expr{Typ: Type{Id: 31}, Expr: &Expr_F{F: &Function{
+				Func: &ObjectRef{ObjName: "cast"},
+				Args: []*Expr{source},
+			}}}
+			owner := &struct {
+				Expressions []*Expr
+				Generated   *GeneratedCol
+			}{Expressions: []*Expr{cast}, Generated: decoded}
+			features, err := RequiredRemoteExpressionFeatures(owner)
+			require.NoError(t, err)
+			require.True(t, features.StrictStringNumericCompatibility)
+			require.True(t, features.HistoricalStringMathCompatibility,
+				"finding an earlier CAST must not stop discovery of a historical generated expression")
+			require.True(t, features.Any())
+		})
+	}
+}
+
+func TestOrdinaryFloatInt64BoundsRemoteFeatures(t *testing.T) {
+	for _, tc := range []struct {
+		id, overload, source, target int32
+		want                         bool
+	}{
+		{21, 0, 30, 23, true}, {21, 0, 31, 23, true},
+		{21, 2, 30, 23, true}, {21, 2, 31, 23, true},
+		{21, 3, 30, 23, true}, {21, 3, 31, 23, true},
+		{21, 1, 31, 23, false}, {21, 4, 31, 23, false},
+		{21, 5, 31, 23, false}, {21, 6, 31, 23, false},
+		{21, 0, 23, 23, false}, {21, 0, 31, 22, false},
+		{21, 0, 31, 28, false}, {21, 0, planTextTypeID, 23, false},
+		{541, 0, 31, 23, false}, {554, 0, 31, 23, false}, {555, 0, 31, 23, false},
+	} {
+		t.Run(fmt.Sprintf("%d_%d_%d_%d", tc.id, tc.overload, tc.source, tc.target), func(t *testing.T) {
+			expr := &Expr{Typ: Type{Id: tc.target}, Expr: &Expr_F{F: &Function{
+				Func: &ObjectRef{Obj: int64(tc.id)<<32 | int64(tc.overload), ObjName: "cast"},
+				Args: []*Expr{
+					{Typ: Type{Id: tc.source}, Expr: &Expr_Col{Col: &ColRef{ColPos: 0}}},
+					{Typ: Type{Id: tc.target}, Expr: &Expr_T{T: &TargetType{}}},
+				},
+			}}}
+			features, err := RequiredRemoteExpressionFeatures(expr)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, features.OrdinaryFloatInt64Bounds)
+			if tc.want {
+				require.True(t, features.Any())
+			}
+		})
+	}
+}

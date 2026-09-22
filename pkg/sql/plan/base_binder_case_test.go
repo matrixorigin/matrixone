@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"math"
 	"strings"
 	"testing"
 	"unsafe"
@@ -1634,15 +1635,16 @@ func TestPreparedMathStringValueAndPrecisionRoles(t *testing.T) {
 		return ParamValue{Value: value, SourceType: types.T_varchar.ToType(), HasSourceType: true}
 	}
 
-	for _, name := range []string{"round", "truncate"} {
+	for _, name := range []string{"round", "truncate", "ceil", "ceiling", "floor"} {
 		t.Run(name+" rejects non-integer precision without DOUBLE prefix", func(t *testing.T) {
 			prepared, err := runOneStmt(NewMockOptimizer(false), t,
 				"prepare stmt_math_precision from 'select "+name+"(?, ?)'")
 			require.NoError(t, err)
 			preparePlan := prepared.GetDcl().GetPrepare().Plan
+			original := proto.Clone(preparePlan)
 			for _, precision := range []string{"0.5tail", "1.5tail", "-0.5tail", "abc", ""} {
 				filled, specialized, fillErr := FillValuesOfParamsInPlanWithSpecialization(ctx, preparePlan, []any{
-					stringParam("1.5tail"),
+					stringParam("1.5"),
 					stringParam(precision),
 				})
 				require.NoError(t, fillErr, precision)
@@ -1652,13 +1654,87 @@ func TestPreparedMathStringValueAndPrecisionRoles(t *testing.T) {
 				require.Len(t, fn.GetF().Args, 2)
 				precisionCast := fn.GetF().Args[1]
 				require.Equal(t, int32(types.T_int64), precisionCast.Typ.Id, precisionCast.String())
+				require.NotNil(t, precisionCast.GetF())
+				_, castOverload := function.DecodeOverloadID(precisionCast.GetF().Func.Obj)
+				require.Equal(t, int32(0), castOverload, "precision must not use the private integer-prefix cast")
 				require.Equal(t, int32(types.T_text), precisionCast.GetF().Args[0].Typ.Id,
 					"precision must retain the INT64 cast's text source, not a DOUBLE source")
 				require.Equal(t, precision, precisionCast.GetF().Args[0].GetLit().GetSval())
-				_, evalErr := eval(t, fn, executionMode{mysqlNumericCompatibility: true})
-				require.ErrorContains(t, evalErr, "invalid argument cast to int, bad value "+precision,
-					"precision=%q must keep direct/prepared INT64 error semantics", precision)
+				direct, err := runOneStmt(NewMockOptimizer(false), t,
+					fmt.Sprintf("select %s('1.5', '%s')", name, precision))
+				require.NoError(t, err)
+				directFn := findPlanFunctionExpr(direct, name)
+				require.NotNil(t, directFn)
+				for _, compatibility := range []bool{false, true} {
+					mode := executionMode{mysqlNumericCompatibility: compatibility}
+					for _, expr := range []*planpb.Expr{directFn, fn} {
+						_, evalErr := eval(t, expr, mode)
+						require.ErrorContains(t, evalErr, "invalid argument cast to int, bad value "+precision,
+							"precision=%q compatibility=%t must keep direct/prepared INT64 error semantics", precision, compatibility)
+					}
+				}
 			}
+			valid, _, err := FillValuesOfParamsInPlanWithSpecialization(ctx, preparePlan,
+				[]any{stringParam("1.5"), stringParam("2")})
+			require.NoError(t, err)
+			got, err := eval(t, findPlanFunctionExpr(valid, name))
+			require.NoError(t, err, "the same template must work after rejected precision values")
+			require.Equal(t, float64(1.5), got.value)
+			require.True(t, proto.Equal(original, preparePlan), "EXECUTE must not mutate the cached template")
+		})
+
+		t.Run(name+" precision keeps actual source and ordinary cast", func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t,
+				"prepare stmt_precision_sources from 'select "+name+"(1.25, ?)'")
+			require.NoError(t, err)
+			preparePlan := prepared.GetDcl().GetPrepare().Plan
+			original := proto.Clone(preparePlan)
+			for _, tc := range []struct {
+				name     string
+				value    ParamValue
+				want     int64
+				wantNull bool
+				wantErr  bool
+			}{
+				{name: "text integer", value: stringParam("2"), want: 2},
+				{name: "DOUBLE halfway", value: ParamValue{Value: float64(2.5), RuntimeType: types.T_float64.ToType(), HasRuntimeType: true}, want: 3},
+				{name: "negative DOUBLE halfway", value: ParamValue{Value: float64(-2.5), RuntimeType: types.T_float64.ToType(), HasRuntimeType: true}, want: -3},
+				{name: "DOUBLE upper overflow", value: ParamValue{Value: float64(0x1p63), RuntimeType: types.T_float64.ToType(), HasRuntimeType: true}, wantErr: true},
+				{name: "DOUBLE lower overflow", value: ParamValue{Value: math.Nextafter(-0x1p63, math.Inf(-1)), RuntimeType: types.T_float64.ToType(), HasRuntimeType: true}, wantErr: true},
+				{name: "SQL EXECUTE DECIMAL halfway", value: ParamValue{Value: "2.5", PrepareParamKind: vector.PrepareParamDecimal, SourceType: types.New(types.T_decimal64, 2, 1), HasSourceType: true}, want: 3},
+				{name: "COM_STMT DECIMAL halfway", value: ParamValue{Value: "2.5", PrepareParamKind: vector.PrepareParamDecimal, RuntimeType: types.New(types.T_decimal64, 2, 1), HasRuntimeType: true}, want: 3},
+				{name: "exact integer beyond DOUBLE", value: ParamValue{Value: int64(9007199254740993), RuntimeType: types.T_int64.ToType(), HasRuntimeType: true}, want: 9007199254740993},
+				{name: "maximum signed text", value: stringParam("9223372036854775807"), want: 9223372036854775807},
+				{name: "minimum signed text", value: stringParam("-9223372036854775808"), want: -9223372036854775808},
+				{name: "unsigned overflow", value: ParamValue{Value: uint64(9223372036854775808), RuntimeType: types.T_uint64.ToType(), HasRuntimeType: true}, wantErr: true},
+				{name: "NULL", value: ParamValue{SourceType: types.T_varchar.ToType(), HasSourceType: true}, wantNull: true},
+				{name: "valid after overflow and NULL", value: stringParam("1"), want: 1},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					filled, _, err := FillValuesOfParamsInPlanWithSpecialization(ctx, preparePlan, []any{tc.value})
+					require.NoError(t, err)
+					fn := findPlanFunctionExpr(filled, name)
+					require.NotNil(t, fn)
+					precision := fn.GetF().Args[1]
+					require.Equal(t, int32(types.T_int64), precision.Typ.Id)
+					if cast := precision.GetF(); cast != nil {
+						require.Equal(t, "cast", cast.Func.ObjName)
+						_, overload := function.DecodeOverloadID(cast.Func.Obj)
+						require.Equal(t, int32(0), overload)
+					}
+					got, evalErr := eval(t, precision)
+					if tc.wantErr {
+						require.True(t, moerr.IsMoErrCode(evalErr, moerr.ErrOutOfRange), "%v", evalErr)
+						return
+					}
+					require.NoError(t, evalErr)
+					require.Equal(t, tc.wantNull, got.isNull)
+					if !tc.wantNull {
+						require.Equal(t, tc.want, got.value)
+					}
+				})
+			}
+			require.True(t, proto.Equal(original, preparePlan))
 		})
 
 		t.Run(name+" value marker still uses numeric-prefix source", func(t *testing.T) {
@@ -1676,7 +1752,7 @@ func TestPreparedMathStringValueAndPrecisionRoles(t *testing.T) {
 			require.Equal(t, types.T_float64, got.typ)
 			require.False(t, got.isNull)
 			want := float64(2)
-			if name == "truncate" {
+			if name == "truncate" || name == "floor" {
 				want = 1
 			}
 			require.Equal(t, want, got.value)
@@ -1722,7 +1798,7 @@ func TestPreparedMathStringValueAndPrecisionRoles(t *testing.T) {
 								"precision zero must produce the expected DECIMAL scale")
 						}
 						wantValue := test.wantValue
-						if name == "truncate" {
+						if name == "truncate" || name == "floor" {
 							switch test.name {
 							case "DOUBLE":
 								wantValue = float64(1)
@@ -1771,12 +1847,15 @@ func TestPreparedMathStringValueAndPrecisionRoles(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		sql  string
+		fn   string
 		want string
 	}{
 		{name: "round precision inner abs", sql: "prepare stmt_inner_abs from 'select round(12.34, abs(?))'", want: "12.34"},
 		{name: "round precision inner arithmetic", sql: "prepare stmt_inner_arithmetic from 'select round(12.34, ? + 0)'", want: "12.34"},
 		{name: "round precision explicit signed", sql: "prepare stmt_explicit_signed from 'select round(12.34, cast(? as signed))'", want: "12.30"},
 		{name: "round precision explicit double", sql: "prepare stmt_explicit_double from 'select round(12.34, cast(? as double))'", want: "12.34"},
+		{name: "ceil precision explicit double", sql: "prepare stmt_ceil_explicit_double from 'select ceil(12.34, cast(? as double))'", fn: "ceil", want: "12.34"},
+		{name: "floor precision selector", sql: "prepare stmt_floor_selector from 'select floor(12.34, if(true, cast(? as double), 0e0))'", fn: "floor", want: "12.34"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			prepared, err := runOneStmt(NewMockOptimizer(false), t, tc.sql)
@@ -1784,7 +1863,11 @@ func TestPreparedMathStringValueAndPrecisionRoles(t *testing.T) {
 			filled, _, err := FillValuesOfParamsInPlanWithSpecialization(ctx,
 				prepared.GetDcl().GetPrepare().Plan, []any{stringParam("1.5tail")})
 			require.NoError(t, err)
-			fn := findPlanFunctionExpr(filled, "round")
+			fnName := tc.fn
+			if fnName == "" {
+				fnName = "round"
+			}
+			fn := findPlanFunctionExpr(filled, fnName)
 			require.NotNil(t, fn)
 			require.Len(t, fn.GetF().Args, 2)
 			precisionArg := fn.GetF().Args[1]
@@ -1819,7 +1902,7 @@ func TestPreparedMathStringValueAndPrecisionRoles(t *testing.T) {
 				_, overload := function.DecodeOverloadID(precisionCast.GetFunc().GetObj())
 				require.Equal(t, int32(1), overload)
 				require.Equal(t, int32(types.T_text), precisionCast.GetArgs()[0].Typ.Id)
-			case "round precision explicit double":
+			case "round precision explicit double", "ceil precision explicit double":
 				// ROUND adds only its own implicit INT64 reconciliation cast;
 				// the user-written DOUBLE cast remains an explicit overload
 				// inside it and is not removed by role-aware fallback.

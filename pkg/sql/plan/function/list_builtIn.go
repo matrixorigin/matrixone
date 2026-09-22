@@ -8369,7 +8369,7 @@ var supportedMathBuiltIns = []FuncNew{
 	{
 		functionId:        CEIL,
 		class:             plan.Function_STRICT,
-		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
+		integerParameters: []integerParameter{{position: 1, target: types.T_int64, ordinaryCast: true}},
 		layout:            STANDARD_FUNCTION,
 		checkFn:           mathStringTypeMatchKeepBoolStringFallback,
 
@@ -8600,7 +8600,7 @@ var supportedMathBuiltIns = []FuncNew{
 	{
 		functionId:        FLOOR,
 		class:             plan.Function_STRICT,
-		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
+		integerParameters: []integerParameter{{position: 1, target: types.T_int64, ordinaryCast: true}},
 		layout:            STANDARD_FUNCTION,
 		checkFn:           mathStringTypeMatchKeepBoolStringFallback,
 
@@ -9347,7 +9347,7 @@ var supportedMathBuiltIns = []FuncNew{
 	{
 		functionId:        ROUND,
 		class:             plan.Function_STRICT,
-		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
+		integerParameters: []integerParameter{{position: 1, target: types.T_int64, ordinaryCast: true}},
 		layout:            STANDARD_FUNCTION,
 		checkFn:           mathStringTypeMatch,
 
@@ -9479,7 +9479,7 @@ var supportedMathBuiltIns = []FuncNew{
 	{
 		functionId:        TRUNCATE,
 		class:             plan.Function_STRICT,
-		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
+		integerParameters: []integerParameter{{position: 1, target: types.T_int64, ordinaryCast: true}},
 		layout:            STANDARD_FUNCTION,
 		checkFn:           mathStringTypeMatch,
 

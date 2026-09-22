@@ -187,10 +187,14 @@ func TestIntegerArgumentPreparedRuntimeCandidates(t *testing.T) {
 		{`select substring_index(?,".",?)`, []int32{1}},
 		{`select period_add(?,?)`, []int32{0, 1}},
 		{`select period_diff(?,?)`, []int32{0, 1}},
-		{`select ceil(1.25,?)`, []int32{0}},
-		{`select floor(1.25,?)`, []int32{0}},
-		{`select round(1.25,?)`, []int32{0}},
-		{`select truncate(1.25,?)`, []int32{0}},
+		// Math precision retains ordinary strict INT64 casts, so these markers
+		// must not enter private integer-prefix source discovery. Their runtime
+		// source and CAST0 contract is covered by TestPreparedMathStringValueAndPrecisionRoles.
+		{`select ceil(1.25,?)`, nil},
+		{`select ceiling(1.25,?)`, nil},
+		{`select floor(1.25,?)`, nil},
+		{`select round(1.25,?)`, nil},
+		{`select truncate(1.25,?)`, nil},
 		{`select from_days(?)`, []int32{0}},
 		{`select week(cast("2026-09-20" as date),?)`, []int32{0}},
 		{`select yearweek(cast("2026-09-20" as date),?)`, []int32{0}},

@@ -3245,11 +3245,11 @@ func preparedMathFunctionTargets(name string, argCount int) ([]*Type, bool) {
 	floatTarget := makePlan2Type(&floatType)
 	integerTarget := makePlan2Type(&integerType)
 	switch strings.ToLower(name) {
-	case "ceil", "ceiling", "floor", "sign":
+	case "sign":
 		if argCount == 1 {
 			return []*Type{&floatTarget}, true
 		}
-	case "round", "truncate":
+	case "ceil", "ceiling", "floor", "round", "truncate":
 		switch argCount {
 		case 1:
 			return []*Type{&floatTarget}, true
