@@ -7664,7 +7664,13 @@ func strToFloatWithProc[T constraints.Float](
 	length int, selectList *FunctionSelectList) error {
 	var i uint64
 	var l = uint64(length)
-	isBinary := from.GetSourceVector().GetIsBin()
+	source := from.GetSourceVector()
+	// GetIsBin records the scalar HEX/BIT-literal marker.  Flow-control
+	// expressions can instead carry row-level string provenance (for example,
+	// CASE mixing X'31' and '1'); consult that sidecar per row without changing
+	// the established ordinary BINARY-string conversion contract.
+	isBinaryLiteral := source.GetIsBin()
+	hasRowBinary := source.HasBinaryStringRows()
 	if selectList != nil && selectList.IgnoreAllRow() {
 		to.SetNullResult(l)
 		return nil
@@ -7686,11 +7692,15 @@ func strToFloatWithProc[T constraints.Float](
 				return err
 			}
 		} else {
+			isBinary := isBinaryLiteral
+			if hasRowBinary {
+				isBinary = source.GetIsBinaryStringAt(int(i))
+			}
 			parseBitSize := bitSize
 			if !isBinary && bitSize == 32 && to.GetType().Width > 0 && to.GetType().Scale >= 0 {
 				parseBitSize = 64
 			}
-			if from.GetSourceVector().GetPrepareParamKindAt(int(i)) == vector.PrepareParamBoolean {
+			if source.GetPrepareParamKindAt(int(i)) == vector.PrepareParamBoolean {
 				// Prepared Boolean values travel as canonical text. Restore their
 				// numeric category without changing ordinary SQL string coercion.
 				b, err := strconv.ParseBool(convertByteSliceToString(v))

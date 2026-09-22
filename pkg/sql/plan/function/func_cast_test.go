@@ -835,6 +835,33 @@ func TestStringToFloatSkipsInactiveInvalidRows(t *testing.T) {
 	}
 }
 
+func TestStringToFloatPreservesMixedRowBinaryProvenance(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	input := makeBinaryStringTestInput(t, proc, types.T_varchar.ToType(), [][]byte{
+		{0x31}, []byte("1"),
+	}, []types.RuntimeStringDomain{
+		types.RuntimeStringBinary,
+		types.RuntimeStringText,
+	})
+	defer input.Free(proc.Mp())
+
+	result := vector.NewFunctionResultWrapper(types.T_float64.ToType(), proc.Mp()).(*vector.FunctionResult[float64])
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(2))
+	require.NoError(t, strToFloat(context.Background(), SQLCompatibilityMySQL,
+		vector.GenerateFunctionStrParameter(input), result, 64, 2, nil))
+	require.Equal(t, []float64{49, 1}, vector.MustFixedColWithTypeCheck[float64](result.GetResultVector()))
+
+	// A static binary string is not a HEX/BIT literal and keeps the ordinary
+	// text-value conversion contract.
+	ordinary := makeBinaryStringTestInput(t, proc, types.T_varbinary.ToType(), [][]byte{{0x31}}, nil)
+	defer ordinary.Free(proc.Mp())
+	require.NoError(t, result.PreExtendAndReset(1))
+	require.NoError(t, strToFloat(context.Background(), SQLCompatibilityMySQL,
+		vector.GenerateFunctionStrParameter(ordinary), result, 64, 1, nil))
+	require.Equal(t, []float64{1}, vector.MustFixedColWithTypeCheck[float64](result.GetResultVector()))
+}
+
 func TestCastSignedStringNumericSign(t *testing.T) {
 	proc := testutil.NewProcess(t)
 

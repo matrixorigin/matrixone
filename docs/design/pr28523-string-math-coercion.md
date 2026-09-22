@@ -248,6 +248,15 @@ binary value (49), not as character text (`'1'`). Ordinary binary string types
 and HEX/BIT literal provenance are distinct. Rebinding, deep-copy, and
 parameter-restoration paths must preserve the marker that affects this result.
 
+When a flow-control expression produces a heterogeneous string vector, its
+row-level provenance sidecar is authoritative for the implicit string-to-
+`DOUBLE` cast: a row selected from `X'31'` remains 49 while a row selected from
+`'1'` remains 1. The cast consults `GetIsBinaryStringAt(row)` only when that
+sidecar is active; the scalar `GetIsBin()` marker continues to identify direct
+HEX/BIT literals, and ordinary static `BINARY`/`VARBINARY` values keep their
+text-value conversion contract. `CASE`, `IF`, and `COALESCE` regressions cover
+binary, text, and NULL rows together.
+
 ### 2.5 Overload and mixed-version safety
 
 The implementation reuses existing numeric overload identities and existing

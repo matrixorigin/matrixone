@@ -110,8 +110,9 @@ func TestIssue28523NumericCompatibilityOverBinaryPreparedStatement(t *testing.T)
 
 		t.Run("binary literal and flow control ownership", func(t *testing.T) {
 			// A HEX literal in numeric context is 49. A binary string containing
-			// "1", including a string-valued conditional result, converts to 1.
-			// String-domain sidecars do not confer numeric-literal identity.
+			// "1" converts to 1. Mixed string-valued conditionals retain that
+			// provenance per row: the HEX row is 49 and the text row is 1.
+			// Ordinary binary-string values remain distinct from HEX/BIT literals.
 			var literal, binaryString float64
 			require.NoError(t, db.QueryRowContext(ctx,
 				"SELECT ABS(X'31'), ABS(CAST('1' AS BINARY))").Scan(&literal, &binaryString))
@@ -145,7 +146,11 @@ func TestIssue28523NumericCompatibilityOverBinaryPreparedStatement(t *testing.T)
 								for _, got := range []sql.NullFloat64{abs, round, mod} {
 									require.Equal(t, id != 3, got.Valid, expression)
 									if id != 3 {
-										require.Equal(t, float64(1), got.Float64, "mode=%q expression=%s", mode, expression)
+										want := float64(1)
+										if id == 1 {
+											want = 49
+										}
+										require.Equal(t, want, got.Float64, "mode=%q expression=%s", mode, expression)
 									}
 								}
 							}
