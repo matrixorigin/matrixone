@@ -3055,7 +3055,10 @@ func TestGetComputationWrapperUsesRequestRewriteSnapshot(t *testing.T) {
 	selectStmt, ok := cws[0].GetAst().(*tree.Select)
 	require.True(t, ok)
 	require.NotNil(t, selectStmt.RewriteOption)
-	require.Len(t, selectStmt.RewriteOption.Rewrites["src.t"], 1)
+	// Remap rewrites the outer table to dst.t, so the rewrite key must follow
+	// or the planner misses the role rule (issue #29161).
+	require.Len(t, selectStmt.RewriteOption.Rewrites["dst.t"], 1)
+	require.NotContains(t, selectStmt.RewriteOption.Rewrites, "src.t")
 }
 
 func TestGetComputationWrapperRestoresStatementRemapOnPlanCacheHit(t *testing.T) {
