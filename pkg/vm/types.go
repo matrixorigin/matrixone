@@ -115,6 +115,8 @@ const (
 	// PreInsertAutoIDCache is a wire-only marker for the opt-in table policy.
 	// Old decoders reject it rather than silently discarding AutoIdCache.
 	PreInsertAutoIDCache
+	// AdaptiveTop 只在协调节点执行，不允许作为远端指令编码。
+	AdaptiveTop
 	// OpTypeEnd is the exclusive upper bound for executable operator types.
 	// New operator types must be added before it.
 	OpTypeEnd
@@ -191,6 +193,7 @@ func init() {
 		MongoScan:               "MongoScan",
 		ShuffleStable:           "ShuffleStable",
 		PreInsertAutoIDCache:    "PreInsertAutoIDCache",
+		AdaptiveTop:             "AdaptiveTop",
 	}
 
 	// Initialize StrToOperatorMap

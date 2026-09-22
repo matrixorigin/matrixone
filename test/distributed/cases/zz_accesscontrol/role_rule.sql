@@ -1,6 +1,7 @@
 set global enable_privilege_cache = off;
 -- cleanup residual resources
 drop user if exists test_rule_user;
+drop user if exists test_rule_user_show;
 drop user if exists test_rule_user_multi;
 drop user if exists test_rule_user_multi_diff;
 drop user if exists test_rule_user_inherit;
@@ -220,8 +221,15 @@ set secondary role all;
 select b, count(*) from db1.t_dup group by b order by b;
 -- @session
 
+-- 20. SHOW RULES privilege: ordinary user cannot disclose another role's rules (#29159)
+create user test_rule_user_show identified by '123456';
+-- @session:id=20&user=sys:test_rule_user_show&password=123456
+show rules on role test_rule_role_validate;
+-- @session
+
 -- cleanup all test resources
 drop user if exists test_rule_user;
+drop user if exists test_rule_user_show;
 drop user if exists test_rule_user_multi;
 drop user if exists test_rule_user_multi_diff;
 drop user if exists test_rule_user_inherit;

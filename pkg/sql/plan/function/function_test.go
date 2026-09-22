@@ -490,14 +490,14 @@ func Test_GetFunctionByName(t *testing.T) {
 			name: "elt", args: []types.Type{types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},
 			shouldErr:  false,
 			requireFid: ELT, requireOid: 0,
-			shouldCast: false,
+			shouldCast: true, requireTyp: []types.Type{types.T_int64.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},
 			requireRet: types.T_varchar.ToType(),
 		},
 		{
 			name: "elt", args: []types.Type{types.T_bit.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},
 			shouldErr:  false,
 			requireFid: ELT, requireOid: 0,
-			shouldCast: false,
+			shouldCast: true, requireTyp: []types.Type{types.T_int64.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType()},
 			requireRet: types.T_varchar.ToType(),
 		},
 		{
@@ -1480,6 +1480,20 @@ func TestUserLevelLockBuiltinRegistration(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestUncompressedLengthOverloadsAreVolatile(t *testing.T) {
+	for i := range supportedStringBuiltIns {
+		if supportedStringBuiltIns[i].functionId != UNCOMPRESSED_LENGTH {
+			continue
+		}
+		require.Len(t, supportedStringBuiltIns[i].Overloads, 4)
+		for _, overload := range supportedStringBuiltIns[i].Overloads {
+			require.True(t, overload.volatile)
+		}
+		return
+	}
+	require.Fail(t, "UNCOMPRESSED_LENGTH registration not found")
 }
 
 func TestRunPositionCharFunctionDirectly(t *testing.T) {

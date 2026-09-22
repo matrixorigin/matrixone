@@ -1881,6 +1881,13 @@ func (ctr *container) makeAggListWithAllocation(
 			} else {
 				aggexec.ConfigureHLLLegacyState(aggList[i])
 			}
+		} else if (ctr.legacyVectorHLLState && hllVectorStateSupported(agExpr)) ||
+			(ctr.legacyTextHLLAddState && hllTextAddStateSupported(agExpr)) ||
+			(ctr.legacyFloatHLLAddState && hllFloatAddStateSupported(agExpr)) {
+			// Keep each producer on v2 until its type family's protocol contract
+			// is understood by every peer (vectors at v88, CHAR/JSON at v91,
+			// FLOAT/DOUBLE at v92).
+			aggexec.ConfigureHLLLegacyState(aggList[i])
 		}
 		if ctr.legacyDistinctFloatKeys {
 			if err := aggexec.ConfigureLegacyDistinctFloatKeys(aggList[i], true); err != nil {
@@ -1939,6 +1946,49 @@ func jsonAggregateOpaqueProtocolVersion(proc *process.Process) int64 {
 		return 0
 	}
 	return version
+}
+
+func hllVectorStateSupported(
+	agg aggexec.AggFuncExecExpression,
+) bool {
+	if agg.GetAggID() != aggexec.AggIdOfHllAdd {
+		return false
+	}
+	args := agg.GetArgExpressions()
+	if len(args) == 0 || args[0] == nil {
+		return false
+	}
+	switch types.T(args[0].Typ.Id) {
+	case types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16:
+		return true
+	default:
+		return false
+	}
+}
+
+func hllTextAddStateSupported(agg aggexec.AggFuncExecExpression) bool {
+	if agg.GetAggID() != aggexec.AggIdOfHllAdd {
+		return false
+	}
+	args := agg.GetArgExpressions()
+	if len(args) == 0 || args[0] == nil {
+		return false
+	}
+	return types.T(args[0].Typ.Id) == types.T_char ||
+		types.T(args[0].Typ.Id) == types.T_json
+}
+
+func hllFloatAddStateSupported(agg aggexec.AggFuncExecExpression) bool {
+	if agg.GetAggID() != aggexec.AggIdOfHllAdd {
+		return false
+	}
+	args := agg.GetArgExpressions()
+	if len(args) == 0 || args[0] == nil {
+		return false
+	}
+	return types.T(args[0].Typ.Id) == types.T_float32 ||
+		types.T(args[0].Typ.Id) == types.T_float64
 }
 
 func useLegacyTextMinMaxForRemote(proc *process.Process) bool {
@@ -2025,6 +2075,48 @@ func useLegacyHLLStateForRemote(proc *process.Process) bool {
 		GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
 	return !ok || !valid || version < defines.MORPCVersion77
+}
+
+func useLegacyVectorHLLStateForRemote(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return false
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return false
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return !ok || !valid || version < defines.MORPCVersion88
+}
+
+func useLegacyTextHLLAddStateForRemote(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return false
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return false
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return !ok || !valid || version < defines.MORPCVersion91
+}
+
+func useLegacyFloatHLLAddStateForRemote(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return false
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return false
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return !ok || !valid || version < defines.MORPCVersion92
 }
 
 func useFloatZeroHLLStateForRemote(proc *process.Process) bool {

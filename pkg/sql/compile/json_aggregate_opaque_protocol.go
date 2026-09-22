@@ -30,7 +30,7 @@ import (
 // not establish that a peer has the JSON aggregate consumer, which was added
 // here. Keep the aggregate capability on its own protocol version so a
 // current-main v82/v83/v84 peer cannot be admitted as an aggregate worker.
-const jsonAggregateOpaqueCapabilityVersion = defines.MORPCVersion85
+const jsonAggregateOpaqueCapabilityVersion = defines.MORPCVersion94
 
 func (c *Compile) constrainJSONAggregateOpaqueWorkers(qry *plan.Query) error {
 	if c.execType != plan2.ExecTypeAP_MULTICN {

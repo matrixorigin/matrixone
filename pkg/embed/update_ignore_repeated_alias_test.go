@@ -33,18 +33,32 @@ func TestUpdateIgnoreRepeatedAliasesAdvanceGreedily(t *testing.T) {
 		require.NoError(t, err)
 		defer db.Close()
 
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 		conn, err := db.Conn(ctx)
+		cancel()
 		require.NoError(t, err)
 		defer conn.Close()
 
+		// Each SQL operation gets its own bounded budget. A shared deadline
+		// makes later scenarios inherit time spent by earlier DDL and commits
+		// on a loaded race-test runner.
 		exec := func(statement string, args ...any) sql.Result {
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+			defer cancel()
 			result, execErr := conn.ExecContext(ctx, statement, args...)
 			require.NoError(t, execErr, statement)
 			return result
 		}
+		execPrepared := func(stmt *sql.Stmt, args ...any) sql.Result {
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+			defer cancel()
+			result, execErr := stmt.ExecContext(ctx, args...)
+			require.NoError(t, execErr)
+			return result
+		}
 		queryInts := func(statement string, count int) []int64 {
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+			defer cancel()
 			row := conn.QueryRowContext(ctx, statement)
 			values := make([]int64, count)
 			dest := make([]any, count)
@@ -55,6 +69,8 @@ func TestUpdateIgnoreRepeatedAliasesAdvanceGreedily(t *testing.T) {
 			return values
 		}
 		queryNullablePair := func(statement string) [2]sql.NullInt64 {
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+			defer cancel()
 			var values [2]sql.NullInt64
 			require.NoError(t, conn.QueryRowContext(ctx, statement).Scan(&values[0], &values[1]), statement)
 			return values
@@ -73,7 +89,11 @@ func TestUpdateIgnoreRepeatedAliasesAdvanceGreedily(t *testing.T) {
 
 		exec("drop database if exists update_ignore_greedy_test")
 		exec("create database update_ignore_greedy_test")
-		defer conn.ExecContext(context.Background(), "drop database if exists update_ignore_greedy_test")
+		defer func() {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_, _ = conn.ExecContext(cleanupCtx, "drop database if exists update_ignore_greedy_test")
+		}()
 		exec("use update_ignore_greedy_test")
 
 		exec("create table unique_t (id int primary key, u int not null, v int not null, x int not null, unique key uk_uv(u,v))")
@@ -172,14 +192,15 @@ func TestUpdateIgnoreRepeatedAliasesAdvanceGreedily(t *testing.T) {
 		result = exec("update ignore right_join_t b right join right_join_t a on b.id=a.id set a.x=2,b.x=3 where a.id=1")
 		assertAffected(result, 2)
 		require.Equal(t, []int64{3}, queryInts("select x from right_join_t where id=1", 1))
-		rightPrepared, prepareErr := conn.PrepareContext(ctx,
+		prepareCtx, prepareCancel := context.WithTimeout(t.Context(), 2*time.Minute)
+		rightPrepared, prepareErr := conn.PrepareContext(prepareCtx,
 			"update ignore right_join_t b right join right_join_t a on b.id=a.id set a.x=?,b.x=? where a.id=1")
+		prepareCancel()
 		require.NoError(t, prepareErr)
 		defer rightPrepared.Close()
 		for range 2 {
 			exec("update right_join_t set x=0 where id=1")
-			result, execErr := rightPrepared.ExecContext(ctx, 2, 3)
-			require.NoError(t, execErr)
+			result := execPrepared(rightPrepared, 2, 3)
 			assertAffected(result, 2)
 			require.Equal(t, []int64{3}, queryInts("select x from right_join_t where id=1", 1))
 		}
@@ -238,14 +259,15 @@ func TestUpdateIgnoreRepeatedAliasesAdvanceGreedily(t *testing.T) {
 			assertSourcePair(queryNullablePair(fmt.Sprintf(
 				"select x,y from nullable_source_target_t where id=%d", id)))
 		}
-		nullablePrepared, prepareErr := conn.PrepareContext(ctx,
+		prepareCtx, prepareCancel = context.WithTimeout(t.Context(), 2*time.Minute)
+		nullablePrepared, prepareErr := conn.PrepareContext(prepareCtx,
 			"update nullable_source_target_t a join nullable_source_target_t b on a.id=b.id join nullable_source_t s on s.target_id=a.id set a.x=s.source_x,a.y=s.source_y,b.z=b.z")
+		prepareCancel()
 		require.NoError(t, prepareErr)
 		defer nullablePrepared.Close()
 		for range 2 {
 			exec("update nullable_source_target_t set x=0,y=0,z=0")
-			result, execErr := nullablePrepared.ExecContext(ctx)
-			require.NoError(t, execErr)
+			result := execPrepared(nullablePrepared)
 			assertAffected(result, 4)
 			for _, id := range []int{1, 2} {
 				assertSourcePair(queryNullablePair(fmt.Sprintf(
@@ -291,15 +313,16 @@ func TestUpdateIgnoreRepeatedAliasesAdvanceGreedily(t *testing.T) {
 		require.Equal(t, []int64{1, 2, 2}, queryInts("select id,coalesce(u,-1),v from released_null_composite_t where id=1", 3))
 		require.Equal(t, []int64{2, -1, 2}, queryInts("select id,coalesce(u,-1),v from released_null_composite_t where id=2", 3))
 
-		prepared, prepareErr := conn.PrepareContext(ctx,
+		prepareCtx, prepareCancel = context.WithTimeout(t.Context(), 2*time.Minute)
+		prepared, prepareErr := conn.PrepareContext(prepareCtx,
 			"update ignore released_null_t b join released_null_t a on b.id=2 and a.id=1 set b.u=?,a.u=?")
+		prepareCancel()
 		require.NoError(t, prepareErr)
 		defer prepared.Close()
 		for range 2 {
 			exec("truncate table released_null_t")
 			exec("insert into released_null_t values (1,1,0),(2,2,0),(3,3,0)")
-			result, execErr := prepared.ExecContext(ctx, nil, 2)
-			require.NoError(t, execErr)
+			result := execPrepared(prepared, nil, 2)
 			assertAffected(result, 2)
 			require.Equal(t, []int64{1, 2}, queryInts("select id,coalesce(u,-1) from released_null_t where id=1", 2))
 			require.Equal(t, []int64{2, -1}, queryInts("select id,coalesce(u,-1) from released_null_t where id=2", 2))
