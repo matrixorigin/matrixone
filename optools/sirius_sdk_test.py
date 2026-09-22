@@ -137,6 +137,49 @@ class SDKTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "SONAME"):
             sirius_sdk.runtime_libraries("/build/libwithout-soname.so (0x1)")
 
+    def test_gpu_toolchain_binds_verified_roots_and_rejects_stubs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prefix = root / "pixi"
+            stubs = prefix / "lib/stubs"
+            stubs.mkdir(parents=True)
+            runtime = prefix / "lib/libcudart.so.13"
+            runtime.write_bytes(b"verified runtime")
+            stub = stubs / "libcuda.so"
+            stub.write_bytes(b"driver stub")
+            toolchain_path = root / "toolchain.json"
+            toolchain = {
+                "schema_version": 1,
+                "provider": "pixi",
+                "platform": "linux-64",
+                "prefix": str(prefix),
+                "cuda": {"stub_library_dirs": [str(stubs)]},
+                "runtime_roots": [str(runtime)],
+                "artifact_sha256": {
+                    str(runtime): sirius_sdk.digest(runtime),
+                    str(stub): sirius_sdk.digest(stub),
+                },
+            }
+            toolchain_path.write_text(json.dumps(toolchain))
+            manifest = {
+                "gpu_toolchain_manifest": str(toolchain_path),
+                "artifact_sha256": {
+                    str(toolchain_path): sirius_sdk.digest(toolchain_path),
+                    **toolchain["artifact_sha256"],
+                },
+            }
+            got = sirius_sdk.gpu_toolchain(manifest)
+            self.assertEqual(got["prefix"], str(prefix))
+            self.assertIn(str(runtime), got["artifact_sha256"])
+
+            toolchain["runtime_roots"] = [str(stub)]
+            toolchain_path.write_text(json.dumps(toolchain))
+            manifest["artifact_sha256"][str(toolchain_path)] = sirius_sdk.digest(
+                toolchain_path
+            )
+            with self.assertRaisesRegex(ValueError, "runtime root is unsafe"):
+                sirius_sdk.gpu_toolchain(manifest)
+
     def package_fixture(self, root):
         bundle = root / "bundle"
         output = bundle / "lib"
@@ -175,7 +218,7 @@ class SDKTest(unittest.TestCase):
         )
         return args, source, originals
 
-    def package_tools(self, args, source, force_external=False):
+    def package_tools(self, args, source, force_external=False, gpu_source=None):
         def command(*words):
             if words[0] == "patchelf":
                 self.assertEqual(words[1], "--set-rpath")
@@ -198,6 +241,14 @@ class SDKTest(unittest.TestCase):
                 "libusearch.so": args.output / "libusearch.so" if local else None,
                 "libgomp.so.1": (args.output if local else source) / "libgomp.so.1",
             }
+            if gpu_source is not None:
+                gpu_staged = args.output / "libcudart.so.13"
+                paths["libcudart.so.13"] = (
+                    gpu_staged
+                    if gpu_staged.is_file()
+                    and b"|rpath=$ORIGIN" in gpu_staged.read_bytes()
+                    else gpu_source
+                )
             if force_external:
                 paths["libmo.so"] = source / "libmo.so"
             return "\n".join(
@@ -237,6 +288,87 @@ class SDKTest(unittest.TestCase):
             )
             self.assertEqual(report["binary_sha256"], sirius_sdk.digest(args.binary))
             self.assertNotEqual(report["linked_binary_sha256"], report["binary_sha256"])
+            sirius_sdk.verify_package(
+                SimpleNamespace(prepared=args.prepared, output=args.output)
+            )
+            changed = args.output / "libgomp.so.1"
+            changed.chmod(0o755)
+            changed.write_bytes(b"changed after packaging")
+            with self.assertRaisesRegex(ValueError, "runtime changed"):
+                sirius_sdk.verify_package(
+                    SimpleNamespace(prepared=args.prepared, output=args.output)
+                )
+
+    def test_package_stages_only_manifest_verified_gpu_runtime(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args, source, _ = self.package_fixture(root)
+            prefix = root / "pixi"
+            stubs = prefix / "lib/stubs"
+            stubs.mkdir(parents=True)
+            cudart = prefix / "lib/libcudart.so.13.3"
+            cudart.write_bytes(b"\x7fELF verified cudart")
+            cudart.chmod(0o755)
+            provenance = json.loads((args.prepared / "provenance.json").read_text())
+            provenance["artifact_sha256"] = {
+                str(cudart): sirius_sdk.digest(cudart)
+            }
+            provenance["gpu_toolchain"] = {
+                "manifest": str(root / "toolchain.json"),
+                "manifest_sha256": "a" * 64,
+                "prefix": str(prefix),
+                "stub_library_dirs": [str(stubs)],
+                "artifact_sha256": {
+                    str(cudart): sirius_sdk.digest(cudart)
+                },
+            }
+            (args.prepared / "provenance.json").write_text(json.dumps(provenance))
+            with patch.object(
+                sirius_sdk,
+                "run",
+                side_effect=self.package_tools(args, source, gpu_source=cudart),
+            ):
+                sirius_sdk.package(args)
+            staged = args.output / "libcudart.so.13"
+            self.assertIn(b"|rpath=$ORIGIN", staged.read_bytes())
+            self.assertEqual(cudart.read_bytes(), b"\x7fELF verified cudart")
+            report = json.loads((args.output / "sirius-provenance.json").read_text())
+            self.assertEqual(
+                report["gpu_runtime_input_sha256"],
+                {"libcudart.so.13": sirius_sdk.digest(cudart)},
+            )
+
+    def test_package_rejects_gpu_runtime_from_stub_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args, source, _ = self.package_fixture(root)
+            prefix = root / "pixi"
+            stubs = prefix / "lib/stubs"
+            stubs.mkdir(parents=True)
+            cudart = stubs / "libcudart.so.13"
+            cudart.write_bytes(b"\x7fELF forbidden stub")
+            provenance = json.loads((args.prepared / "provenance.json").read_text())
+            provenance["artifact_sha256"] = {
+                str(cudart): sirius_sdk.digest(cudart)
+            }
+            provenance["gpu_toolchain"] = {
+                "manifest": str(root / "toolchain.json"),
+                "manifest_sha256": "a" * 64,
+                "prefix": str(prefix),
+                "stub_library_dirs": [str(stubs)],
+                "artifact_sha256": {
+                    str(cudart): sirius_sdk.digest(cudart)
+                },
+            }
+            (args.prepared / "provenance.json").write_text(json.dumps(provenance))
+            with patch.object(
+                sirius_sdk,
+                "run",
+                side_effect=self.package_tools(args, source, gpu_source=cudart),
+            ):
+                with self.assertRaisesRegex(ValueError, "unverified MO GPU"):
+                    sirius_sdk.package(args)
+            self.assertFalse((args.output / "sirius-provenance.json").exists())
 
     def test_package_requires_local_baseline_closure_and_consistent_layout(self):
         for failure in (

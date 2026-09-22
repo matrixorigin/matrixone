@@ -139,6 +139,82 @@ def relocatable_flags(flags):
     return result
 
 
+def gpu_toolchain(manifest):
+    value = manifest.get("gpu_toolchain_manifest")
+    if value is None:
+        return None
+    path = Path(value)
+    hashes = manifest.get("artifact_sha256", {})
+    if (
+        not path.is_absolute()
+        or not path.is_file()
+        or hashes.get(str(path)) != digest(path)
+    ):
+        raise ValueError("Sirius SDK GPU toolchain manifest is not verified")
+    data = json.loads(path.read_text())
+    prefix_value = data.get("prefix")
+    if not isinstance(prefix_value, str):
+        raise ValueError("Sirius SDK GPU toolchain provider is incompatible")
+    prefix = Path(prefix_value)
+    if (
+        data.get("schema_version") != 1
+        or data.get("provider") != "pixi"
+        or data.get("platform") != "linux-64"
+        or not prefix.is_absolute()
+        or not prefix.is_dir()
+    ):
+        raise ValueError("Sirius SDK GPU toolchain provider is incompatible")
+    prefix = prefix.resolve()
+    artifacts = data.get("artifact_sha256")
+    if not isinstance(artifacts, dict) or not artifacts:
+        raise ValueError("Sirius SDK GPU toolchain artifacts are missing")
+    normalized = {}
+    for name, expected in artifacts.items():
+        artifact = Path(name)
+        if (
+            not artifact.is_absolute()
+            or not artifact.is_file()
+            or not isinstance(expected, str)
+            or hashes.get(name) != expected
+        ):
+            raise ValueError("Sirius SDK GPU toolchain artifact is not verified: " + name)
+        normalized[str(artifact.resolve())] = expected
+    stubs = []
+    for name in data.get("cuda", {}).get("stub_library_dirs", []):
+        directory = Path(name)
+        if (
+            not directory.is_absolute()
+            or not directory.is_dir()
+            or not directory.resolve().is_relative_to(prefix)
+        ):
+            raise ValueError("Sirius SDK GPU stub directory is invalid")
+        stubs.append(str(directory.resolve()))
+    if not stubs:
+        raise ValueError("Sirius SDK GPU stub directory is missing")
+    roots = data.get("runtime_roots")
+    if not isinstance(roots, list) or not roots:
+        raise ValueError("Sirius SDK GPU runtime roots are missing")
+    for name in roots:
+        root_path = Path(name)
+        root = root_path.resolve()
+        if (
+            not root_path.is_absolute()
+            or not root.is_file()
+            or not root.is_relative_to(prefix)
+            or any(root.is_relative_to(Path(stub)) for stub in stubs)
+            or root.name.startswith(("libcuda.so", "libnvidia-"))
+            or str(root) not in normalized
+        ):
+            raise ValueError("Sirius SDK GPU runtime root is unsafe: " + name)
+    return {
+        "manifest": str(path),
+        "manifest_sha256": hashes[str(path)],
+        "prefix": str(prefix),
+        "stub_library_dirs": stubs,
+        "artifact_sha256": normalized,
+    }
+
+
 def runtime_libraries(text, allow_missing=False):
     libraries = {}
     # glibc and the NVIDIA driver belong to the host ABI, never the SDK bundle.
@@ -176,6 +252,7 @@ def runtime_libraries(text, allow_missing=False):
 
 def prepare(args):
     manifest = validate(args.sdk, args.mode, args.merged_ref)
+    toolchain = gpu_toolchain(manifest)
     libraries = runtime_libraries(run("ldd", manifest["consumer"]))
     args.output.mkdir(parents=True, exist_ok=True)
     flags = relocatable_flags(manifest["link_arguments"])
@@ -193,6 +270,7 @@ def prepare(args):
             name: {"source": str(path), "sha256": digest(path)}
             for name, path in libraries.items()
         },
+        "gpu_toolchain": toolchain,
     }
     (args.output / "provenance.json").write_text(
         json.dumps(provenance, indent=2) + "\n"
@@ -244,6 +322,7 @@ def package(args):
 
     patched = set(provenance["runtime_libraries"])
     baseline_hashes = {}
+    gpu_runtime_hashes = {}
     # Re-evaluate after patching each newly reachable baseline ELF. Its former
     # absolute RPATH may have selected an external library (or hidden a staged
     # transitive dependency). Never copy such baseline inputs from that path:
@@ -256,9 +335,27 @@ def package(args):
         for name in sorted(pending):
             staged = output / name
             if not staged.is_file():
-                raise ValueError("missing staged MO runtime dependency: " + name)
-            baseline_hashes[name] = digest(staged)
-            stage_rpath(staged, staged, "$ORIGIN")
+                toolchain = provenance.get("gpu_toolchain")
+                source = resolved[name]
+                if toolchain is None or source is None:
+                    raise ValueError("missing staged MO runtime dependency: " + name)
+                source = source.resolve()
+                prefix = Path(toolchain["prefix"])
+                stubs = [Path(path) for path in toolchain["stub_library_dirs"]]
+                expected = toolchain["artifact_sha256"].get(str(source))
+                if (
+                    not source.is_relative_to(prefix)
+                    or any(source.is_relative_to(stub) for stub in stubs)
+                    or source.name.startswith(("libcuda.so", "libnvidia-"))
+                    or expected is None
+                    or digest(source) != expected
+                ):
+                    raise ValueError("unverified MO GPU runtime dependency: " + name)
+                gpu_runtime_hashes[name] = expected
+                stage_rpath(source, staged, "$ORIGIN")
+            else:
+                baseline_hashes[name] = digest(staged)
+                stage_rpath(staged, staged, "$ORIGIN")
             patched.add(name)
 
     resolved = runtime_libraries(run("ldd", str(binary)))
@@ -267,12 +364,28 @@ def package(args):
             raise ValueError("MO resolved a non-local packaged dependency: " + name)
     provenance["binary_sha256"] = digest(binary)
     provenance["baseline_input_sha256"] = baseline_hashes
+    provenance["gpu_runtime_input_sha256"] = gpu_runtime_hashes
     provenance["packaged_sha256"] = {
         name: digest(output / name) for name in sorted(patched)
     }
     (output / "sirius-provenance.json").write_text(
         json.dumps(provenance, indent=2) + "\n"
     )
+
+
+def verify_package(args):
+    prepared = json.loads((args.prepared / "provenance.json").read_text())
+    packaged = json.loads((args.output / "sirius-provenance.json").read_text())
+    for key, value in prepared.items():
+        if packaged.get(key) != value:
+            raise ValueError("packaged Sirius runtime is stale: " + key)
+    hashes = packaged.get("packaged_sha256")
+    if not isinstance(hashes, dict) or not hashes:
+        raise ValueError("packaged Sirius runtime has no dependency closure")
+    for name, expected in hashes.items():
+        path = args.output / name
+        if Path(name).name != name or not path.is_file() or digest(path) != expected:
+            raise ValueError("packaged Sirius runtime changed: " + name)
 
 
 def main():
@@ -289,6 +402,10 @@ def main():
     p.add_argument("--binary", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True)
     p.set_defaults(action=package)
+    p = commands.add_parser("verify-package")
+    p.add_argument("--prepared", type=Path, required=True)
+    p.add_argument("--output", type=Path, required=True)
+    p.set_defaults(action=verify_package)
     args = parser.parse_args()
     args.action(args)
 

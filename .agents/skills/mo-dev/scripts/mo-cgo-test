@@ -252,6 +252,112 @@ if [ "${MO_CL_CUDA:-}" = "1" ]; then
     fi
 fi
 
+sirius_cflags=
+sirius_link_flags=
+sirius_runtime_paths=
+sirius_tag_args=
+sirius_extld=
+if [ "${MO_SIRIUS:-}" = "1" ]; then
+    if [ "$goos/$goarch" != linux/amd64 ]; then
+        echo "MO_SIRIUS=1 CGo tests require linux/amd64, not $goos/$goarch" >&2
+        exit 1
+    fi
+    if [ -z "${SIRIUS_SDK:-}" ] || [ ! -f "$SIRIUS_SDK/link.json" ]; then
+        echo "MO_SIRIUS=1 CGo tests require a generated SIRIUS_SDK" >&2
+        exit 1
+    fi
+    case "$SIRIUS_SDK" in
+        /*) ;;
+        *) echo "SIRIUS_SDK must be an absolute path" >&2; exit 1 ;;
+    esac
+    case "$SIRIUS_SDK" in
+        *[[:space:]]*) echo "SIRIUS_SDK cannot contain whitespace" >&2; exit 1 ;;
+    esac
+    python3 "$repo_root/optools/sirius_sdk.py" prepare \
+        --sdk "$SIRIUS_SDK" \
+        --mode "${SIRIUS_BUILD_MODE:-release}" \
+        --merged-ref "${SIRIUS_MERGED_REF:-}" \
+        --output "$repo_root/.sirius-sdk"
+    if [ ! -f "$repo_root/lib/sirius-provenance.json" ]; then
+        echo "missing packaged Sirius runtime closure: $repo_root/lib/sirius-provenance.json" >&2
+        echo "build the combined binary before running native Sirius tests" >&2
+        exit 1
+    fi
+    python3 "$repo_root/optools/sirius_sdk.py" verify-package \
+        --prepared "$repo_root/.sirius-sdk" --output "$repo_root/lib"
+    sirius_cc=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["c_compiler"])' "$SIRIUS_SDK/link.json")
+    sirius_cxx=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["compiler"])' "$SIRIUS_SDK/link.json")
+    canonical_compiler() {
+        case "$1" in
+            */*) compiler_path=$1 ;;
+            *) compiler_path=$(command -v "$1") ;;
+        esac
+        readlink -f "$compiler_path"
+    }
+    compilers_match() {
+        left=$(canonical_compiler "$1")
+        right=$(canonical_compiler "$2")
+        [ "$left" = "$right" ] || cmp -s "$left" "$right"
+    }
+    if [ "${MO_CL_CUDA:-}" = "1" ] &&
+       { ! compilers_match "$sirius_cc" "$MO_GPU_CC" ||
+         ! compilers_match "$sirius_cxx" "$MO_GPU_CXX"; }; then
+        echo "Sirius SDK and MO GPU manifest selected different compilers" >&2
+        exit 1
+    fi
+    CC=$sirius_cc
+    CXX=$sirius_cxx
+    export CC CXX
+    sirius_fingerprint=$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$SIRIUS_SDK/link.json")
+    sirius_cflags=" -I$SIRIUS_SDK -DSIRIUS_SDK_BUILD_$sirius_fingerprint=1"
+    sirius_link_flags=" @$repo_root/.sirius-sdk/link.rsp -Wl,-rpath,$repo_root/lib"
+    sirius_runtime_paths=":$repo_root/lib"
+    sirius_extld="-extld=$sirius_cxx "
+
+    merge_sirius_tag() {
+        case ",$(printf '%s' "$1" | tr ' ' ',')," in
+            *,sirius,*) printf '%s' "$1" ;;
+            ,,) printf 'sirius' ;;
+            *) printf '%s,sirius' "$1" ;;
+        esac
+    }
+    caller_set_tags=0
+    argc=$#
+    i=0
+    while [ "$i" -lt "$argc" ]; do
+        arg="$1"
+        shift
+        i=$((i + 1))
+        case "$arg" in
+            -tags | --tags)
+                caller_set_tags=1
+                if [ "$i" -lt "$argc" ] && [ $# -gt 0 ]; then
+                    val="$1"
+                    shift
+                    i=$((i + 1))
+                else
+                    val=
+                fi
+                set -- "$@" "$arg" "$(merge_sirius_tag "$val")"
+                ;;
+            -tags=* | --tags=*)
+                caller_set_tags=1
+                set -- "$@" "${arg%%=*}=$(merge_sirius_tag "${arg#*=}")"
+                ;;
+            *)
+                set -- "$@" "$arg"
+                ;;
+        esac
+    done
+    if [ "$caller_set_tags" -eq 0 ]; then
+        if [ -n "$gpu_tag_args" ]; then
+            gpu_tag_args="-tags gpu,sirius"
+        else
+            sirius_tag_args="-tags sirius"
+        fi
+    fi
+fi
+
 for required in "$libmo" "$include_dir" "$lib_dir"; do
     if [ ! -e "$required" ]; then
         echo "missing MatrixOne CGo prerequisite: $required" >&2
@@ -286,7 +392,7 @@ fi
 # Match the repository build contract and remove ambient module/CGo flag
 # drift. CC/CXX and other standard toolchain selectors remain caller-owned.
 export GOWORK=off
-export CGO_CFLAGS="'-I$source_cgo_dir' '-I$include_dir'${cuda_cflags:+ $cuda_cflags}"
+export CGO_CFLAGS="'-I$source_cgo_dir' '-I$include_dir'${cuda_cflags:+ $cuda_cflags}$sirius_cflags"
 export CGO_LDFLAGS="'-L$lib_dir'"
 if [ -n "$cuda_fatbin" ]; then
     # Go test executables live in temporary directories, while production
@@ -306,7 +412,7 @@ if [ -z "$cgo_link_flags" ]; then
     exit 1
 fi
 
-runtime_paths="$artifact_cgo_dir:$lib_dir$cuda_runtime_paths"
+runtime_paths="$artifact_cgo_dir:$lib_dir$sirius_runtime_paths$cuda_runtime_paths"
 if [ "$runtime_path_var" = DYLD_LIBRARY_PATH ]; then
     export DYLD_LIBRARY_PATH="$runtime_paths"
 else
@@ -319,8 +425,8 @@ fi
 # The wrapper injects libmo even when the requested package does not import
 # cgo/lib.go, so it must also close libmo's dependency graph. Keep the queried
 # flags after -lmo: archive resolution is order-sensitive on common linkers.
-external_flags="$platform_link_flags${cuda_ldflags:+ $cuda_ldflags} -L$artifact_cgo_dir -lmo -L$lib_dir $cgo_link_flags -Wl,-rpath,$artifact_cgo_dir -Wl,-rpath,$lib_dir${cuda_rpaths:+ $cuda_rpaths}"
-ldflags="-extldflags '$external_flags'"
+external_flags="$platform_link_flags${cuda_ldflags:+ $cuda_ldflags} -L$artifact_cgo_dir -lmo -L$lib_dir $cgo_link_flags -Wl,-rpath,$artifact_cgo_dir -Wl,-rpath,$lib_dir${cuda_rpaths:+ $cuda_rpaths}$sirius_link_flags"
+ldflags="${sirius_extld}-extldflags '$external_flags'"
 
 cd "$repo_root"
-exec go test -mod=readonly $gpu_tag_args -ldflags "$ldflags" "$@"
+exec go test -mod=readonly $gpu_tag_args $sirius_tag_args -ldflags "$ldflags" "$@"
