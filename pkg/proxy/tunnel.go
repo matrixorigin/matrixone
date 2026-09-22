@@ -166,6 +166,8 @@ type tunnel struct {
 		statementID              uint32
 		statementIDValid         bool
 		requestContinuation      bool
+		responseContinuation     bool
+		responseNextSequence     byte
 		localInfileUpload        bool
 		requestNextSequence      byte
 		phase                    responsePhase
@@ -700,6 +702,8 @@ func (t *tunnel) resetTrackedRequestLocked() {
 	t.requestBoundary.statementID = 0
 	t.requestBoundary.statementIDValid = false
 	t.requestBoundary.phase = responsePhaseFirst
+	t.requestBoundary.responseContinuation = false
+	t.requestBoundary.responseNextSequence = 0
 	t.requestBoundary.legacyResultEOFSeen = false
 	t.requestBoundary.prepareMetadataRemaining = 0
 }
@@ -755,7 +759,7 @@ func (t *tunnel) trackServerResponse(msg []byte) {
 		return
 	}
 	msg = firstMySQLPacketPrefix(msg)
-	if len(msg) < preRecvLen {
+	if len(msg) < mysqlHeadLen {
 		return
 	}
 	t.requestBoundary.Lock()
@@ -769,6 +773,29 @@ func (t *tunnel) trackServerResponse(msg []byte) {
 		// request is still being framed or uploaded. Keep this generation
 		// permanently non-transferable rather than guessing packet ownership.
 		s.ambiguous = true
+		return
+	}
+	// MySQL splits one logical response packet into MaxPayloadSize wire
+	// packets followed by a shorter (possibly empty) continuation. A short
+	// continuation can have exactly the shape of an EOF/OK/ERR packet, but it
+	// is still row data. Do not interpret any fragment as a response boundary.
+	if s.responseContinuation {
+		if msg[3] != s.responseNextSequence {
+			s.ambiguous = true
+			return
+		}
+		s.responseNextSequence++
+		if mysqlPacketPayloadLength(msg) < int(frontend.MaxPayloadSize) {
+			s.responseContinuation = false
+		}
+		return
+	}
+	if mysqlPacketPayloadLength(msg) == int(frontend.MaxPayloadSize) {
+		s.responseContinuation = true
+		s.responseNextSequence = msg[3] + 1
+		return
+	}
+	if len(msg) < preRecvLen {
 		return
 	}
 	if isErrPacket(msg) {
@@ -879,6 +906,9 @@ func (t *tunnel) responseMayCarryTxnStatus(msg []byte) bool {
 	t.requestBoundary.Lock()
 	defer t.requestBoundary.Unlock()
 	s := &t.requestBoundary
+	if s.responseContinuation || mysqlPacketPayloadLength(msg) == int(frontend.MaxPayloadSize) {
+		return false
+	}
 	if !s.inFlight || s.command != frontend.COM_STMT_FETCH {
 		return true
 	}

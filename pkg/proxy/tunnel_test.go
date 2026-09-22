@@ -1274,6 +1274,18 @@ func makeBinaryBigIntRow(value uint64) []byte {
 	return msg
 }
 
+func makeSplitBinaryStringRow() ([]byte, []byte) {
+	// The one-column binary row has a header, null bitmap and four-byte
+	// length-encoded value length. A 0xfffffe-byte value therefore needs
+	// MaxPayloadSize + 5 payload bytes. Its last five data bytes deliberately
+	// look like a legacy EOF with status 0x0810.
+	first := make([]byte, mysqlHeadLen+int(frontend.MaxPayloadSize))
+	first[0], first[1], first[2], first[3] = 0xff, 0xff, 0xff, 3
+	first[6], first[7], first[8], first[9] = 0xfd, 0xfe, 0xff, 0xff
+	continuation := []byte{5, 0, 0, 4, 0xfe, 0, 0, 0x10, 0x08}
+	return first, continuation
+}
+
 func TestFinalFetchKeepsTransferBlockedUntilTerminator(t *testing.T) {
 	for _, tc := range []struct {
 		name           string
@@ -1349,12 +1361,15 @@ func TestFinalFetchForwardingBeforeBackendReplacement(t *testing.T) {
 		name           string
 		deprecatesEOF  bool
 		makeTerminator func(uint16) []byte
+		splitRow       bool
 	}{
-		{"legacy EOF", false, makeLegacyEOFPacket},
-		{"deprecated EOF", true, makeDeprecatedEOFPacket},
+		{"legacy EOF", false, makeLegacyEOFPacket, false},
+		{"deprecated EOF", true, makeDeprecatedEOFPacket, false},
+		{"legacy EOF split row", false, makeLegacyEOFPacket, true},
+		{"deprecated EOF split row", true, makeDeprecatedEOFPacket, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			clientProxy, client := net.Pipe()
 			oldProxy, oldBackend := net.Pipe()
@@ -1384,6 +1399,10 @@ func TestFinalFetchForwardingBeforeBackendReplacement(t *testing.T) {
 			releaseTerminator := make(chan struct{})
 			var releaseOnce sync.Once
 			defer releaseOnce.Do(func() { close(releaseTerminator) })
+			terminalResponseIndex := int32(3)
+			if tc.splitRow {
+				terminalResponseIndex = 5
+			}
 			var responseIndex atomic.Int32
 			tun.mu.scp.testHelper.beforeSend = func() {
 				switch responseIndex.Add(1) {
@@ -1391,14 +1410,14 @@ func TestFinalFetchForwardingBeforeBackendReplacement(t *testing.T) {
 					// Reaching the second packet means the first row's
 					// handleTransferIntent attempt has completed.
 					close(firstAttemptDone)
-				case 3:
+				case terminalResponseIndex:
 					close(secondAttemptDone)
 					<-releaseTerminator
 				}
 			}
 			require.NoError(t, tun.kickoff())
 			for _, conn := range []net.Conn{client, oldBackend, newBackend} {
-				require.NoError(t, conn.SetDeadline(time.Now().Add(10*time.Second)))
+				require.NoError(t, conn.SetDeadline(time.Now().Add(30*time.Second)))
 			}
 
 			forwardRequest := func(backend net.Conn, packet []byte) {
@@ -1418,7 +1437,7 @@ func TestFinalFetchForwardingBeforeBackendReplacement(t *testing.T) {
 				got := make([]byte, len(packet))
 				_, err := io.ReadFull(client, got)
 				require.NoError(t, err)
-				require.Equal(t, packet, got, "client must receive every response packet in order")
+				require.True(t, bytes.Equal(packet, got), "client must receive every response packet in order")
 				require.NoError(t, <-writeDone)
 			}
 
@@ -1426,7 +1445,9 @@ func TestFinalFetchForwardingBeforeBackendReplacement(t *testing.T) {
 			tun.setTransferIntent(true)
 			defer tun.setTransferIntent(false)
 			firstRow := makeBinaryBigIntRow(528384)
-			for _, row := range [][]byte{firstRow, makeBinaryBigIntRow(1)} {
+			secondRow := makeBinaryBigIntRow(1)
+			secondRow[3] = 2
+			for _, row := range [][]byte{firstRow, secondRow} {
 				forwardResponse(oldBackend, row)
 				require.True(t, tun.hasInFlightClientRequest())
 			}
@@ -1436,9 +1457,28 @@ func TestFinalFetchForwardingBeforeBackendReplacement(t *testing.T) {
 				t.Fatal("the first row did not reach pending-transfer admission")
 			}
 			require.Zero(t, cc.buildCalls.Load(), "binary rows must not replace the backend")
+			if tc.splitRow {
+				// Keep an in-transaction status until the real EOF. The fake EOF
+				// continuation must not clear it or admit the pending transfer.
+				tun.mu.scp.mu.Lock()
+				tun.mu.scp.mu.inTxn = true
+				tun.mu.scp.mu.Unlock()
+				first, continuation := makeSplitBinaryStringRow()
+				fakeStatus, looksLikeEOF := legacyEOFPacketStatus(continuation)
+				require.True(t, looksLikeEOF, "the row tail must reproduce the false EOF")
+				require.Equal(t, uint16(0x0810), fakeStatus)
+				forwardResponse(oldBackend, first)
+				forwardResponse(oldBackend, continuation)
+				require.True(t, tun.hasInFlightClientRequest())
+				tun.mu.scp.mu.Lock()
+				require.True(t, tun.mu.scp.mu.inTxn, "a row continuation has no transaction status")
+				tun.mu.scp.mu.Unlock()
+				require.Zero(t, cc.buildCalls.Load(), "a row continuation must not replace the backend")
+			}
 			terminalStatus := frontend.SERVER_QUERY_WAS_SLOW |
 				frontend.SERVER_STATUS_NO_GOOD_INDEX_USED | frontend.SERVER_STATUS_LAST_ROW_SENT
 			terminator := tc.makeTerminator(terminalStatus)
+			terminator[3] = byte(terminalResponseIndex)
 			writeDone := make(chan error, 1)
 			go func() { _, err := oldBackend.Write(terminator); writeDone <- err }()
 			select {
