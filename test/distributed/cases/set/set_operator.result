@@ -59,3 +59,5 @@ set @val = cast('2022-10-10' as date);
 select @val;
 @val
 2022-10-10
+drop table t1;
+drop table t2;

@@ -207,6 +207,23 @@ func TestIssue28234ExceptAllCluster(t *testing.T) {
 					require.NoError(t, db.QueryRowContext(ctx, "select hex(v) from (select v from strings except all select v from chars) d").Scan(&value))
 					require.Equal(t, "6120", value, "comparison keys must not trim surviving VARCHAR output")
 					var count int
+					// Byte-sensitive predicates must see the surviving rows, not
+					// change which PAD SPACE-equivalent rows cancel or match.
+					for _, tc := range []struct {
+						op   string
+						want int
+					}{
+						{"except all", 1}, {"minus all", 1}, {"except", 0},
+						{"intersect", 1}, {"intersect all", 1}, {"union all", 2},
+					} {
+						for _, suffix := range []string{" limit 100", ""} {
+							for _, predicate := range []string{"hex(v)='6120'", "length(v)=2"} {
+								query := "select count(*) from (select v from strings " + tc.op + " select v from chars" + suffix + ") d where " + predicate
+								require.NoError(t, db.QueryRowContext(ctx, query).Scan(&count))
+								require.Equal(t, tc.want, count, query)
+							}
+						}
+					}
 					require.NoError(t, db.QueryRowContext(ctx, "select count(*) from (select cast(v as binary) v from strings except all select cast(v as binary) from chars) d").Scan(&count))
 					require.Equal(t, 2, count, "binary keys must not trim trailing spaces")
 					for _, tc := range []struct{ left, right, hex string }{{"a ", "a", ""}, {"b ", "a", "6220"}, {"a  ", "a", ""}} {

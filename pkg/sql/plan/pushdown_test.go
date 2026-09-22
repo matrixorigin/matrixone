@@ -341,6 +341,60 @@ func TestNestedLimitPushdownPreservesInnerWindow(t *testing.T) {
 	}
 }
 
+func TestSetPhysicalEqualityFilterBoundary(t *testing.T) {
+	for _, kind := range []plan.Node_NodeType{
+		plan.Node_UNION, plan.Node_UNION_ALL, plan.Node_MINUS,
+		plan.Node_MINUS_ALL, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL,
+	} {
+		for _, keyed := range []bool{false, true} {
+			name := kind.String() + "/exact"
+			if keyed {
+				name = kind.String() + "/normalized"
+			}
+			t.Run(name, func(t *testing.T) {
+				ctx := NewMockCompilerContext(true)
+				builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+				typ := Type{Id: int32(types.T_varchar), Width: 8}
+				left, right, output := GetColExpr(typ, 1, 0), GetColExpr(typ, 2, 0), GetColExpr(typ, 3, 0)
+				predicate := func(col *plan.Expr) *plan.Expr {
+					hex, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "hex", []*plan.Expr{DeepCopyExpr(col)})
+					require.NoError(t, err)
+					expr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*plan.Expr{hex, makePlan2StringConstExprWithType("6120")})
+					require.NoError(t, err)
+					return expr
+				}
+				local := predicate(left)
+				set := &plan.Node{NodeType: kind, Children: []int32{2, 1}, ProjectList: []*plan.Expr{output}, BindingTags: []int32{3}}
+				if keyed {
+					set.PhysicalEqualityKeyList = []*plan.Expr{DeepCopyExpr(output)}
+				}
+				builder.qry.Nodes = []*plan.Node{
+					{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{1}, ProjectList: []*plan.Expr{left}, Stats: &plan.Stats{Outcnt: 1}},
+					{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{2}, ProjectList: []*plan.Expr{right}, Stats: &plan.Stats{Outcnt: 1}},
+					{NodeType: plan.Node_FILTER, Children: []int32{0}, ProjectList: []*plan.Expr{left}, FilterList: []*plan.Expr{local}},
+					set,
+				}
+				filter := predicate(output)
+				original := DeepCopyExpr(filter)
+				_, residual := builder.pushdownFilters(3, []*plan.Expr{filter}, false)
+				if keyed && kind != plan.Node_UNION_ALL {
+					require.Equal(t, []*plan.Expr{original}, residual)
+					require.Same(t, filter, residual[0])
+					require.Len(t, builder.qry.Nodes[0].FilterList, 1, "branch-local filter must still optimize")
+					require.Empty(t, builder.qry.Nodes[1].FilterList)
+					set.Limit = makePlan2Uint64ConstExprWithType(100)
+					_, residual = builder.pushdownFilters(3, []*plan.Expr{filter}, false)
+					require.Equal(t, []*plan.Expr{original}, residual, "LIMIT residual must not be lost or duplicated")
+				} else {
+					require.Empty(t, residual)
+					require.NotEmpty(t, builder.qry.Nodes[0].FilterList)
+					require.Len(t, builder.qry.Nodes[1].FilterList, 1, "exact-key and UNION ALL pushdown must remain enabled")
+				}
+			})
+		}
+	}
+}
+
 func TestVolatileFilterStopsAtPlanBoundary(t *testing.T) {
 	for _, test := range []struct {
 		name       string

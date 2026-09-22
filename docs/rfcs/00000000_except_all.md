@@ -1,4 +1,4 @@
-# EXCEPT ALL / MINUS ALL: design and acceptance, revision 1
+# EXCEPT ALL / MINUS ALL: design and acceptance, revision 2
 
 - Status: drafted; maintainer design approval pending
 - Start date: 2026-09-22
@@ -22,6 +22,16 @@ values: physical PAD SPACE normalization is for equality, not output rewriting.
 CHAR/VARCHAR promotion uses the existing planner's physical equality keys;
 binary values must not be trimmed. Prepared specialization refreshes the keys
 after input/output type changes.
+
+Revision 2 adds a predicate-placement invariant: an outer predicate must not
+change membership within a physical equality class before subtraction. For
+example, `HEX(v)` distinguishes `'a '` from `'a'` although their PAD SPACE keys
+match. The planner conservatively retains incoming predicates above keyed
+UNION, MINUS, MINUS ALL, INTERSECT and INTERSECT ALL nodes. Branch-local filters
+still optimize; UNION ALL and set operations without physical normalization
+retain existing pushdown. No function-name allowlist or proof of predicate
+equivalence-preservation is claimed. This may increase input rows and memory
+for keyed set operations compared with the incorrect pushed-down plan.
 
 The new `MinusAll` operator consumes the complete right input into a
 NULL-inclusive hash table and uint64 multiplicity array, then probes the left
@@ -86,6 +96,7 @@ reviewed independently of local logs:
 | Multiplicity, NULL, batch boundaries, error/reset/reuse and complete mpool release | `pkg/sql/colexec/minusall` |
 | All four binary ancestors, ordered merge ranges, connector identity, nested malformed-wire rejection | `TestMinusAllTransportRoundTrip`, `TestMinusAllTransportRejectsMalformedNestedShape` |
 | Prepared type specialization refreshes physical keys rather than only changing a WHERE filter | `pkg/sql/plan/minusall_prepared_key_test.go` |
+| Outer byte-sensitive predicates preserve set membership; exact-key and UNION ALL pushdown remain enabled | `TestSetPhysicalEqualityFilterBoundary` and live HEX/LENGTH counts with LIMIT controls in `TestIssue28234ExceptAllCluster` |
 | Single-CN and actual peer-owned execution, nested operations, exact counts, empty inputs, LIMIT and prepared reuse | `TestIssue28234ExceptAllCluster` |
 | Peer address, DOP 1 and MinusAll in the same scope's own pipeline, not a child scan | `TestMinusAllOwnerPlanAssertion` and live EXPLAIN ANALYZE assertions |
 | CHAR/VARCHAR trailing-space equality, preserved left bytes, binary no-trim and repeated bound-key changes | Two equality passes on the same live fixture/session/prepared statement |

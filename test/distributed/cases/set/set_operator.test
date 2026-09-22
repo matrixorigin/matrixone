@@ -46,3 +46,5 @@ set max_allowed_packet = cast('2048' as unsigned);
 show variables where variable_name = 'max_allowed_packet';
 set @val = cast('2022-10-10' as date);
 select @val;
+drop table t1;
+drop table t2;
