@@ -16,6 +16,7 @@ insert into unique_values values
     (1, 10, 100, 1.25),
     (2, 20, 200, null),
     (3, 30, 300, 3.50);
+-- @metacmp(true)
 select a, b, count(*), count(v), sum(v), avg(v), min(v), max(v)
 from unique_values
 group by a, b
