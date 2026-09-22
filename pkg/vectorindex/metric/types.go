@@ -250,6 +250,14 @@ func DistanceTransformIvfflat(dist float64, origMetricType, metricType MetricTyp
 		// metric is l2sq but origin is l2_distance
 		return RoundDistanceToElemDomain(math.Sqrt(dist))
 	}
+	if origMetricType == Metric_L2sqDistance {
+		// l2_distance_sq is the one distance NOT rounded here, because its scalar twin is not
+		// rounded either: moarray.L2DistanceSq returns the raw float64 square on purpose, since
+		// IVF reuses l2_distance_sq as its own squared intermediate. Rounding only this side
+		// splits them -- a vecf64 [3.1] gives raw 9.6100000000000012 vs float32 9.6099996566772461,
+		// so `l2_distance_sq(v,'[0]') < 9.61` matched under an ivfflat index and not without it.
+		return dist
+	}
 	return RoundDistanceToElemDomain(dist)
 }
 

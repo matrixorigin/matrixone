@@ -24,6 +24,12 @@ import (
 // L2FromSquared narrows a squared L2 distance to the distance itself, rejecting a squared sum that
 // left T's domain. The kernels accumulate the square in T, so a float32 pair 2e19 apart overflows
 // to +Inf even though its distance 2.8e19 is a representable float32.
+//
+// The mirror case is NOT rejected: a float32 pair 1e-30 apart squares to 1e-60, which underflows
+// to zero and reports the two as identical. Detecting it needs the vectors, and comparing them
+// whenever the square is zero costs 447ns against 36ns at dim 768 -- an exact match is the common
+// case in vector search, not a degenerate one, and it is exactly the case that walks both vectors
+// to the end.
 func L2FromSquared[T types.RealNumbers](sq T) (T, error) {
 	if _, err := CheckFiniteDist(sq, l2What); err != nil {
 		return 0, err
