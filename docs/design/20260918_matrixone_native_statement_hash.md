@@ -29,7 +29,7 @@ than as an unspecified future hash function:
 | Public API | Add only `MO_STATEMENT_HASH(sql)` with the contract in section 3; do not alias MySQL `STATEMENT_DIGEST`. | The function name, arity, input overloads, NULL behavior, and 64-character lowercase result are accepted. |
 | Stability | Promise equality only for the same executable, formatter, and effective SQL mode; do not promise a cross-upgrade or persistent identifier. | Consumers must treat the value as build-scoped syntax telemetry, not a durable key or wire format. |
 | SQL-mode ownership | Resolve the effective mode at the coordinator, capture the snapshot, and forward it unchanged through every hop. | A worker never substitutes its local resolver/default for the captured snapshot; resolver failures follow section 5. |
-| Remote isolation | Admit a remote scope only with MORPC v93+ and an exact matching 40-character source commit; reject on missing, invalid, or mismatching provenance. | No mixed-build hash, coordinator fallback, or per-row bypass is allowed. |
+| Remote isolation | Admit a remote scope only with MORPC v94+ and an exact matching 40-character source commit; reject on missing, invalid, or mismatching provenance. | No mixed-build hash, coordinator fallback, or per-row bypass is allowed. |
 | Rollout and rollback | A heterogeneous cluster may continue plans that do not use this function; hash plans fail closed until an eligible worker is selected. No automatic digest migration is promised. | A single query never mixes different builds; hash values may change after an upgrade or rollback. |
 | Resource and validation boundary | Enforce the inclusive limits in section 7 and the evidence matrix in section 10; the contract does not claim a total Go-heap ceiling. | Boundary, failure, cancellation, empty/masked, multi-hop, and exact-head SQL tests must pass before merge. |
 
@@ -153,10 +153,10 @@ discarded for an evaluated row.
 Remote execution is supported only when both conditions hold:
 
 1. The selected remote destination supports the complete statement-hash wire
-   contract (`MORPCVersion93` or later). MORPC v88 remains reserved for the
+   contract (`MORPCVersion94` or later). MORPC v88 remains reserved for the
    canonical vector `HLL_ADD_AGG` contract already present on main, and v91
    remains reserved for canonical CHAR/JSON `HLL_ADD_AGG`; v92 is reserved for
-   canonical scalar FLOAT `HLL_ADD_AGG`; v93 is the first admission epoch for
+   canonical scalar FLOAT `HLL_ADD_AGG`; v94 is the first admission epoch for
    this complete native-hash contract.
 2. Its full 40-character source commit ID exactly matches the coordinator
    source commit selected for this statement-hash scope.

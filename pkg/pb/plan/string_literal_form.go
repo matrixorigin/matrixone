@@ -340,7 +340,7 @@ const (
 // overload identities and their fixed-width execution contracts changed in
 // the same release. ASCIIInt32Result requires MORPC v65 because ASCII keeps
 // its overload IDs but changes its physical result vector from UINT8 to INT32.
-// StatementHashFunction requires MORPC v93 for the complete remote function,
+// StatementHashFunction requires MORPC v94 for the complete remote function,
 // build-identity, and deferred resolver-error transport contract.
 // A struct makes compatibility call sites name every capability instead of
 // relying on positional booleans.

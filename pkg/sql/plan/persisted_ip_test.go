@@ -830,31 +830,31 @@ func TestPersistedExpressionProtocolAdmissionForStatementHash(t *testing.T) {
 	require.True(t, features.StatementHashFunction)
 	required, err := RequiredPersistedExpressionProtocolVersion(expr)
 	require.NoError(t, err)
-	require.Equal(t, int64(defines.MORPCVersion93), required)
+	require.Equal(t, int64(defines.MORPCVersion94), required)
 
-	// A catalog-bound view/default must retain the hash feature's v93 floor;
+	// A catalog-bound view/default must retain the hash feature's v94 floor;
 	// an older reader or authoring snapshot cannot admit it.
 	owner := &planpb.TableDef{Cols: []*planpb.ColDef{{Default: &planpb.Default{Expr: expr}}}}
 	required, err = RequiredPersistedExpressionProtocolVersion(owner)
 	require.NoError(t, err)
-	require.Equal(t, int64(defines.MORPCVersion93), required)
+	require.Equal(t, int64(defines.MORPCVersion94), required)
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion91)
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion91))
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion91))
 	require.ErrorContains(t,
-		RequirePersistedExpressionProtocol(proc.Ctx, proc, owner), "protocol version 93")
+		RequirePersistedExpressionProtocol(proc.Ctx, proc, owner), "protocol version 94")
 	require.ErrorContains(t,
-		RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, owner), "protocol version 93")
+		RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, owner), "protocol version 94")
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion92)
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion92))
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion92))
 	require.ErrorContains(t,
-		RequirePersistedExpressionProtocol(proc.Ctx, proc, owner), "protocol version 93")
+		RequirePersistedExpressionProtocol(proc.Ctx, proc, owner), "protocol version 94")
 	require.ErrorContains(t,
-		RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, owner), "protocol version 93")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion93)
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion93))
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion93))
+		RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, owner), "protocol version 94")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion94)
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion94))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion94))
 	require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, owner))
 	require.NoError(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, owner))
 }

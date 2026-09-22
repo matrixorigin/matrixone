@@ -37,7 +37,7 @@ func validateStatementHashDestination(proc *process.Process, p *pipeline.Pipelin
 		return err
 	}
 	supported, err := remoteWorkersSupportProtocolAndBuild(proc,
-		engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion93, expectedBuildCommitID)
+		engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion94, expectedBuildCommitID)
 	if err != nil {
 		return err
 	}
