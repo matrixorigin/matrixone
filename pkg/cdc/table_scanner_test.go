@@ -704,6 +704,49 @@ func TestTableDetectorProcessCallbackRetainsMarkerUntilAllSubscribersSucceed(t *
 	require.False(t, tables[1]["db.tbl"].IdChanged, "marker clears after all subscribers succeed")
 }
 
+func TestTableDetectorProcessCallbackPrunesObsoleteMarkerAcknowledgements(t *testing.T) {
+	td := &TableDetector{
+		Mp:                   make(map[uint32]TblMap),
+		Callbacks:            make(map[string]TableCallback),
+		CallBackAccountId:    make(map[string]uint32),
+		SubscribedAccountIds: make(map[uint32][]string),
+		CallBackDbName:       make(map[string][]string),
+		SubscribedDbNames:    make(map[string][]string),
+		CallBackTableName:    make(map[string][]string),
+		SubscribedTableNames: make(map[string][]string),
+		cleanupPeriod:        time.Second,
+		cleanupWarn:          time.Second,
+		nowFn:                time.Now,
+	}
+	defer td.Close()
+
+	consume := func(snapshot map[uint32]TblMap) error {
+		info := snapshot[1]["db.tbl"]
+		td.ClearTableIdChanged(1, "db.tbl", info.SourceTblId)
+		return nil
+	}
+	flaky := func(map[uint32]TblMap) error {
+		return moerr.NewInternalErrorNoCtx("persistent subscriber failure")
+	}
+	require.True(t, td.RegisterIfAbsent("consume", 1, []string{"db"}, []string{"tbl"}, consume))
+	require.True(t, td.RegisterIfAbsent("flaky", 1, []string{"db"}, []string{"tbl"}, flaky))
+
+	for sourceTableID := uint64(1); sourceTableID <= 1000; sourceTableID++ {
+		tables := map[uint32]TblMap{
+			1: {"db.tbl": {SourceTblId: sourceTableID, IdChanged: true}},
+		}
+		td.mu.Lock()
+		td.Mp = tables
+		td.lastMp = tables
+		td.mu.Unlock()
+		td.processCallback(context.Background(), tables)
+	}
+
+	td.mu.Lock()
+	defer td.mu.Unlock()
+	require.LessOrEqual(t, len(td.markerAcks), 1, "obsolete generation acknowledgements must be pruned")
+}
+
 func TestReconcileTableSnapshotMarkersDoesNotResurrectConsumedMarker(t *testing.T) {
 	current := map[uint32]TblMap{
 		1: {"db.tbl": {SourceTblId: 7, IdChanged: false}},

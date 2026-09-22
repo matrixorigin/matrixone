@@ -468,6 +468,26 @@ func (s *TableDetector) clearTableIdChangedLocked(marker tableMarker) {
 	clear(s.lastMp)
 }
 
+// pruneMarkerAcksLocked drops acknowledgements that can no longer be applied
+// to the detector's current published generation. A retry may span scans, so
+// retaining acknowledgements by source ID without this check would grow with
+// table recreation while another subscriber remains unhealthy.
+func (s *TableDetector) pruneMarkerAcksLocked() {
+	if len(s.markerAcks) == 0 {
+		return
+	}
+	current := s.Mp
+	if current == nil {
+		current = s.lastMp
+	}
+	for marker := range s.markerAcks {
+		info := current[marker.accountID][marker.key]
+		if info == nil || info.SourceTblId != marker.sourceTableID || !info.IdChanged {
+			delete(s.markerAcks, marker)
+		}
+	}
+}
+
 func (s *TableDetector) UnRegister(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -688,6 +708,7 @@ func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]T
 		s.mu.Unlock()
 		return
 	}
+	s.pruneMarkerAcksLocked()
 	s.handling = true
 	s.processingCallbacks = true
 	// Keep acknowledgements from an earlier failed fan-out. A callback may have
