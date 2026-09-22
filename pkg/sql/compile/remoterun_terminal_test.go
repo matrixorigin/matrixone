@@ -27,7 +27,9 @@ import (
 	pb "github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -131,6 +133,162 @@ func TestRemoteNotifyReadsDispatchTerminal(t *testing.T) {
 				server.RemoveRelatedPipeline(session, receiver.messageId)
 			})
 		}
+	}
+}
+
+type observedDoneCallsContext struct {
+	context.Context
+	calls chan struct{}
+}
+
+func (c *observedDoneCallsContext) Done() <-chan struct{} {
+	select {
+	case c.calls <- struct{}{}:
+	default:
+	}
+	return c.Context.Done()
+}
+
+// TestRemoteNotifyAfterDispatchAttachmentPreservesTerminalOutcome forces the
+// PrepareDoneNotify stream through the real dispatch attachment channel before
+// source cleanup starts. This is the lifecycle window from issue #28313: an
+// empty source cancels its local pipeline during cleanup after the remote
+// receiver has attached, while a real source error must survive that cleanup.
+func TestRemoteNotifyAfterDispatchAttachmentPreservesTerminalOutcome(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		sourceErr error
+	}{
+		{name: "empty source"},
+		{name: "source error", sourceErr: moerr.NewDuplicateEntryNoCtx("1", "primary")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			queryCtx := proc.Base.GetContextBase().BuildQueryCtx(context.Background())
+			proc.BuildPipelineContext(queryCtx)
+			server := colexec.NewServer(proc.GetService())
+			uid := uuid.MustParse("00000000-0000-0000-0000-000000028314")
+
+			child := value_scan.NewArgument()
+			t.Cleanup(child.Release)
+			require.NoError(t, child.Prepare(proc))
+			d := dispatch.NewArgument()
+			t.Cleanup(d.Release)
+			d.FuncId = dispatch.SendToAllFunc
+			d.RemoteRegs = []colexec.ReceiveInfo{{Uuid: uid}}
+			d.AppendChild(child)
+			registration, err := d.RegisterRemoteReceiversWithHandle(proc)
+			require.NoError(t, err)
+			require.NotNil(t, registration)
+			t.Cleanup(registration.Cleanup)
+			require.NoError(t, d.Prepare(proc))
+
+			messageCtx, cancelMessage := context.WithCancel(context.Background())
+			defer cancelMessage()
+			connectionDoneCalls := make(chan struct{}, 4)
+			connectionCtx := &observedDoneCallsContext{
+				Context: context.Background(),
+				calls:   connectionDoneCalls,
+			}
+			session := mock_morpc.NewMockClientSession(gomock.NewController(t))
+			session.EXPECT().SessionCtx().Return(context.Background()).AnyTimes()
+			receiver := &messageReceiverOnServer{
+				messageCtx:    messageCtx,
+				connectionCtx: connectionCtx,
+				messageId:     9,
+				messageTyp:    pb.Method_PrepareDoneNotifyMessage,
+				messageUuid:   uid,
+				clientSession: session,
+				colexecServer: server,
+			}
+			done := make(chan error, 1)
+			go func() { done <- handlePipelineMessage(receiver) }()
+			handlerJoined := false
+			type callResult struct {
+				result vm.CallResult
+				err    error
+			}
+			callDone := make(chan callResult, 1)
+			callJoined := false
+			defer func() {
+				cancelMessage()
+				if proc.Cancel != nil {
+					proc.Cancel(context.Canceled)
+				}
+				if !callJoined {
+					select {
+					case <-callDone:
+					case <-time.After(5 * time.Second):
+						t.Errorf("dispatch Call goroutine survived test cleanup")
+					}
+				}
+				registration.Cleanup()
+				if !handlerJoined {
+					select {
+					case <-done:
+					case <-time.After(5 * time.Second):
+						t.Errorf("remote notify goroutine survived test cleanup")
+					}
+				}
+				server.RemoveRelatedPipeline(session, receiver.messageId)
+			}()
+
+			go func() {
+				result, err := d.Call(proc)
+				callDone <- callResult{result: result, err: err}
+			}()
+			select {
+			case got := <-callDone:
+				callJoined = true
+				require.NoError(t, got.err)
+				require.Equal(t, vm.ExecStop, got.result.Status)
+			case <-time.After(5 * time.Second):
+				t.Fatal("dispatch did not consume the remote attachment")
+			}
+			// getRemoteDispatchReceiver reads connection Done once before attach,
+			// and the select that publishes the attachment reads it again. The
+			// third read is made only by the post-attach terminal select.
+			for call := 0; call < 3; call++ {
+				select {
+				case <-connectionDoneCalls:
+				case <-time.After(5 * time.Second):
+					t.Fatalf("remote notify did not enter post-attach terminal wait (Done call %d)", call+1)
+				}
+			}
+			select {
+			case err := <-done:
+				handlerJoined = true
+				t.Fatalf("remote notify returned before dispatch cleanup: %v", err)
+			default:
+			}
+
+			// Pipeline cleanup cancels the local process even on an empty-success
+			// path. Reset is the sole terminal owner and must preserve its own
+			// outcome instead of exposing that local cancellation to the peer.
+			proc.Cancel(tc.sourceErr)
+			select {
+			case got := <-done:
+				handlerJoined = true
+				t.Fatalf("local pipeline cancellation escaped before Reset published the terminal: %v", got)
+			case <-time.After(20 * time.Millisecond):
+			}
+			d.Reset(proc, tc.sourceErr != nil, tc.sourceErr)
+			registration.Cleanup()
+
+			select {
+			case got := <-done:
+				handlerJoined = true
+				if tc.sourceErr == nil {
+					require.NoError(t, got)
+				} else {
+					require.ErrorIs(t, got, tc.sourceErr)
+					require.NotErrorIs(t, got, context.Canceled)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("attached remote notify did not observe dispatch terminal")
+			}
+			require.NoError(t, queryCtx.Err(), "local cleanup must not cancel the query")
+		})
 	}
 }
 
