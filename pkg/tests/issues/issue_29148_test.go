@@ -115,16 +115,19 @@ func TestIssue29148PreparedRowRuleProtocolLifecycle(t *testing.T) {
 		// Prepare through the binary protocol while the policy is current, then
 		// refresh the same session again. A large parameter makes the Go MySQL
 		// driver emit COM_STMT_SEND_LONG_DATA before COM_STMT_EXECUTE.
-		stmt, err := userConn.PrepareContext(ctx,
-			"select id, amount from "+dbName+"."+tableName+" where amount > ? order by id")
-		require.NoError(t, err)
-		adminRule := "alter role " + roleName + " add rule \"select id, amount from " + dbName + "." + tableName + " where tenant = 1\" on table " + dbName + "." + tableName
-		execSQLRequire(t, ctx, adminDB, adminRule)
-		execOnUser("set role " + roleName)
+		func() {
+			stmt, err := userConn.PrepareContext(ctx,
+				"select id, amount from "+dbName+"."+tableName+" where amount > ? order by id")
+			require.NoError(t, err)
+			defer stmt.Close()
 
-		_, err = stmt.ExecContext(ctx, []byte(strings.Repeat("x", 700*1024)))
-		requireNeedReprepare(t, err)
-		require.NoError(t, stmt.Close())
+			adminRule := "alter role " + roleName + " add rule \"select id, amount from " + dbName + "." + tableName + " where tenant = 1\" on table " + dbName + "." + tableName
+			execSQLRequire(t, ctx, adminDB, adminRule)
+			execOnUser("set role " + roleName)
+
+			_, err = stmt.ExecContext(ctx, []byte(strings.Repeat("x", 700*1024)))
+			requireNeedReprepare(t, err)
+		}()
 
 		// The execute error must be the only response consumed for the failed
 		// request. A normal command immediately afterward proves that the
