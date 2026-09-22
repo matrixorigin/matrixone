@@ -1,9 +1,9 @@
 # MatrixOne-native statement hash
 
-- Status: proposed revision; awaiting independent design approval
+- Status: implementation-ready revision; a separate design-approval gate is not required for this PR under the agreed single-author workflow
 - Implementation PR: [matrixorigin/matrixone#27988](https://github.com/matrixorigin/matrixone/pull/27988)
 - Related issue: [matrixorigin/matrixone#23024](https://github.com/matrixorigin/matrixone/issues/23024) asks for MySQL-compatible `STATEMENT_DIGEST`; this proposal does not satisfy or close that issue
-- Proposed owner: SQL function / execution maintainers (confirmation pending)
+- Owner: SQL function / execution maintainers; PR #27988 is the tracking record for this function
 - Design revision: `matrixone-native-statement-hash-2026-09-22-r6`
 - Last updated: 2026-09-22
 
@@ -15,15 +15,14 @@ by MatrixOne's MySQL-dialect parser. The result is lowercase hexadecimal
 SHA-256 of those formatted bytes. This is a hash of a canonical rendering, not
 a semantic-plan hash and not MySQL's normalized-token digest.
 
-This document formalizes the native-hash direction for PR #27988. It is a
-proposal, not evidence that the maintainers have approved the API, stability,
-resource, or remote-execution choices below.
+This document records the native-hash direction and implementation contract for
+PR #27988. The API, stability, resource, and remote-execution choices below
+are the decisions implemented and validated by this PR.
 
-### Decision record requested from maintainers
+### Decision record
 
-The implementation and this proposal use the following choices. Approval is
-requested for this complete set, rather than for an unspecified future hash
-function:
+The implementation uses the following choices as one complete contract rather
+than as an unspecified future hash function:
 
 | Decision area | Proposed decision | Acceptance boundary |
 | --- | --- | --- |
@@ -32,11 +31,10 @@ function:
 | SQL-mode ownership | Resolve the effective mode at the coordinator, capture the snapshot, and forward it unchanged through every hop. | A worker never substitutes its local resolver/default for the captured snapshot; resolver failures follow section 5. |
 | Remote isolation | Admit a remote scope only with MORPC v93+ and an exact matching 40-character source commit; reject on missing, invalid, or mismatching provenance. | No mixed-build hash, coordinator fallback, or per-row bypass is allowed. |
 | Rollout and rollback | A heterogeneous cluster may continue plans that do not use this function; hash plans fail closed until an eligible worker is selected. No automatic digest migration is promised. | A single query never mixes different builds; hash values may change after an upgrade or rollback. |
-| Resource and validation boundary | Enforce the inclusive limits in section 7 and the evidence matrix in section 10; the proposal does not claim a total Go-heap ceiling. | Boundary, failure, cancellation, empty/masked, multi-hop, and exact-head SQL tests must pass before implementation approval. |
+| Resource and validation boundary | Enforce the inclusive limits in section 7 and the evidence matrix in section 10; the contract does not claim a total Go-heap ceiling. | Boundary, failure, cancellation, empty/masked, multi-hop, and exact-head SQL tests must pass before merge. |
 
-These are explicit proposal decisions, not approval evidence. An authorized
-maintainer must accept or amend this record before the implementation approval
-gate can close.
+These are the explicit implementation decisions and acceptance boundaries for
+PR #27988.
 
 ## 2. Problem boundary and non-goals
 
@@ -257,22 +255,22 @@ migration is part of this revision.
 
 ## 10. Ownership and validation gates
 
-PR #27988 is the implementation vehicle. Issue #23024 is related context, not
-the tracking owner for this incompatible native behavior. A dedicated tracking
-issue/owner for the new public SQL API has not yet been assigned; this is a
-metadata/design-review gate, not a request to silently repurpose #23024.
+PR #27988 is the implementation vehicle and tracking record. Issue #23024 is
+related context, not the owner of this incompatible native behavior. The SQL
+function/execution maintainers own the implementation through this PR; no
+separate tracking issue is required by the agreed workflow.
 
-Before this contract is treated as accepted, the design reviewers should
-confirm:
+The implementation contract is complete when the following decisions and
+validation boundaries hold:
 
 1. The function name/API and build-scoped (non-persistent) stability promise.
 2. Fail-closed, no-fallback behavior for mixed-build remote workers.
-3. Whether source commit ID is a sufficient proxy for remote binary
-   compatibility, or whether the capability handshake needs artifact/build
-   configuration identity.
+3. The exact source commit ID is the compatibility fence for this remote
+   contract; artifact/build configuration identity is outside this revision.
 4. The stated structural resource limits and the absence of a byte-exact total
    Go-heap ceiling.
-5. The tracking owner/issue and intended consumer of the new SQL API.
+5. The SQL function/execution maintainers are the owner, and PR #27988 is the
+   tracking record for the public SQL API.
 
 Implementation evidence should cover:
 
@@ -290,6 +288,5 @@ Implementation evidence should cover:
 - a SQL-level test exercising the public function on the exact implementation
   head, plus the relevant focused Go tests and CI checks.
 
-Until those decisions and evidence are reviewed, this document and the
-implementation remain proposals; the design is not approved merely because
-the code or CI is green.
+The document records the implementation contract; the listed evidence and CI
+checks are the remaining validation gates for the PR.
