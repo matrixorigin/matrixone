@@ -726,6 +726,7 @@ func doLock(
 		Granularity:     g,
 		Policy:          proc.GetWaitPolicy(),
 		Mode:            opts.mode,
+		WriterFair:      isWriterFairLockRequest(ctx),
 		TableDefChanged: opts.changeDef,
 		Sharding:        opts.sharding,
 		Group:           opts.group,
@@ -1047,6 +1048,10 @@ func doLock(
 		return false, false, timestamp.Timestamp{}, err
 	}
 	return true, result.TableDefChanged, newTS, nil
+}
+
+func isWriterFairLockRequest(ctx context.Context) bool {
+	return defines.IsLockWriterFair(ctx)
 }
 
 func setPlanSnapshotForLock(
