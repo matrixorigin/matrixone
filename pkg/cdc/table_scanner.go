@@ -442,6 +442,9 @@ func (s *TableDetector) ClearTableIdChanged(accountID uint32, key string, source
 	defer s.mu.Unlock()
 	marker := tableMarker{accountID: accountID, key: key, sourceTableID: sourceTableID}
 	if s.processingCallbacks {
+		if !s.markerIsCurrentLocked(marker) {
+			return
+		}
 		if s.markerAcks == nil {
 			s.markerAcks = make(map[tableMarker]struct{})
 		}
@@ -466,6 +469,15 @@ func (s *TableDetector) clearTableIdChangedLocked(marker tableMarker) {
 	}
 	clear(s.Mp)
 	clear(s.lastMp)
+}
+
+func (s *TableDetector) markerIsCurrentLocked(marker tableMarker) bool {
+	current := s.Mp
+	if current == nil {
+		current = s.lastMp
+	}
+	info := current[marker.accountID][marker.key]
+	return info != nil && info.SourceTblId == marker.sourceTableID && info.IdChanged
 }
 
 // pruneMarkerAcksLocked drops acknowledgements that can no longer be applied
