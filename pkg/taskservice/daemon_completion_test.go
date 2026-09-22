@@ -219,6 +219,34 @@ func TestDaemonCompletionCleanupOwnership(t *testing.T) {
 	}
 }
 
+func TestDaemonCompletionFailedCDCUsesNonDestructiveCleanup(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	defer r.stopper.Stop()
+
+	claim := newDaemonTaskForTest(1, task.TaskStatus_Running, r.runnerID)
+	claim.Metadata.Executor = task.TaskCode_InitCdcLosslessStart
+	claim.TaskType = task.TaskType_CreateCdc
+	claim.LastRun = time.Now().UTC().Truncate(time.Microsecond)
+	mustAddTestDaemonTask(t, store, 1, claim)
+
+	routine := &claimLossRoutine{mockActiveRoutine: newMockActiveRoutine(), completed: make(chan struct{})}
+	ar := ActiveRoutine(routine)
+	local := &daemonTask{task: claim}
+	local.activeRoutine.Store(&ar)
+	r.addDaemonTask(local)
+
+	r.completeDaemonTask(context.Background(), local, claim, false, errors.New("startup failed"))
+
+	select {
+	case <-routine.completed:
+	case <-time.After(time.Second):
+		t.Fatal("failed CDC completion did not stop its executor")
+	}
+	require.Equal(t, int32(0), routine.destructive.Load(),
+		"failed execution completion is not authorized to delete shared progress")
+	require.Equal(t, int32(1), routine.preserved.Load())
+}
+
 // One row, explicit factory completion and explicit lease expiry distinguish
 // admission still in progress from admission that can never Attach. Exercise
 // the real dispatcher afterward: removal alone is not the recovery oracle.

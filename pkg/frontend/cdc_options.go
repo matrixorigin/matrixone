@@ -317,12 +317,11 @@ func validateLosslessNoFullStartProtocol(ctx context.Context, protocolVersion in
 
 func (opts *CDCCreateTaskOptions) BuildTaskMetadata() task.TaskMetadata {
 	executor := task.TaskCode_InitCdc
-	if (!opts.NoFull && cdc.UsesStableEpochInitialSnapshot(opts.ExtraOpts)) ||
-		(opts.NoFull && cdc.UsesLosslessNoFullStart(opts.ExtraOpts)) {
-		executor = task.TaskCode_InitCdcStableEpoch
-	}
-	if opts.NoFull && cdc.UsesLosslessNoFullStart(opts.ExtraOpts) {
+	switch {
+	case opts.NoFull && cdc.UsesLosslessNoFullStart(opts.ExtraOpts):
 		executor = task.TaskCode_InitCdcLosslessStart
+	case !opts.NoFull && cdc.UsesStableEpochInitialSnapshot(opts.ExtraOpts):
+		executor = task.TaskCode_InitCdcStableEpoch
 	}
 	return task.TaskMetadata{
 		ID:       opts.TaskId,

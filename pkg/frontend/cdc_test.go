@@ -6088,10 +6088,16 @@ func TestCdcTask_addExecPipelineForTable(t *testing.T) {
 
 func TestEffectiveCDCStartTSUsesLegacyDurableProgress(t *testing.T) {
 	durableProgress := types.BuildTS(100, 5)
+	admission := types.BuildTS(200, 1)
 
 	assert.Equal(t, durableProgress, effectiveCDCStartTS(types.TS{}, durableProgress, true))
-	assert.Equal(t, types.BuildTS(200, 1), effectiveCDCStartTS(types.BuildTS(200, 1), durableProgress, false))
+	assert.Equal(t, admission, effectiveCDCStartTS(admission, durableProgress, false))
 	assert.Equal(t, types.TS{}, effectiveCDCStartTS(types.TS{}, types.TS{}, true))
+	assert.Equal(t, durableProgress, legacyNoFullStartTS(durableProgress, true, admission))
+	assert.Equal(t, admission, legacyNoFullStartTS(types.TS{}, false, admission),
+		"a legacy table discovered after upgrade starts at its admission snapshot")
+	assert.Equal(t, admission, legacyNoFullStartTS(types.TS{}, true, admission),
+		"an empty legacy watermark must not become an empty reader boundary")
 }
 
 func TestCdcTask_checkPitr(t *testing.T) {

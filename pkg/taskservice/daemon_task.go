@@ -242,7 +242,15 @@ func (r *taskRunner) completeDaemonTask(ctx context.Context, dt *daemonTask, cla
 		if isCDCTaskCode(claim.Metadata.Executor) {
 			dt.claimLost.Store(true)
 			if ar := dt.activeRoutine.Load(); ar != nil && *ar != nil {
-				if cancelErr := (*ar).Cancel(); cancelErr != nil {
+				active := *ar
+				cancel := active.Cancel
+				if preserved, ok := active.(ClaimLossActiveRoutine); ok {
+					// Completion after a failed startup is not authorized task
+					// removal. Keep the watermark so a later claim can resume
+					// from the replacement owner's durable progress.
+					cancel = preserved.CancelWithoutWatermarkCleanup
+				}
+				if cancelErr := cancel(); cancelErr != nil {
 					r.logger.Warn("failed to cancel completed daemon execution", zap.Uint64("task ID", claim.ID), zap.Error(cancelErr))
 				}
 			}

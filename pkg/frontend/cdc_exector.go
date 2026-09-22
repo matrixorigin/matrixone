@@ -3046,6 +3046,13 @@ func effectiveCDCStartTS(taskStart, durableProgress types.TS, legacyNoFull bool)
 	return taskStart
 }
 
+func legacyNoFullStartTS(durable types.TS, found bool, admission types.TS) types.TS {
+	if found && !durable.IsEmpty() {
+		return durable
+	}
+	return admission
+}
+
 // reader ----> sinker ----> remote db
 func (exec *CDCTaskExecutor) addExecPipelineForTable(
 	ctx context.Context,
@@ -3087,13 +3094,12 @@ func (exec *CDCTaskExecutor) addExecPipelineForTable(
 		if err != nil {
 			return err
 		}
-		if !found || watermark.IsEmpty() {
-			return moerr.NewNotSupportedf(ctx, "legacy NoFull CDC task has no durable creation start; recreate after all CNs support protocol version %d", defines.MORPCVersion92)
-		}
+		watermark = legacyNoFullStartTS(watermark, found, types.TimestampToTS(txnOp.SnapshotTS()))
 	} else if exec.noFull && watermark.IsEmpty() {
-		// New NoFull tasks persist the CREATE CDC snapshot in startTs. Keep the
-		// fallback for legacy task rows that have no durable start watermark.
-		watermark = types.TimestampToTS(txnOp.SnapshotTS())
+		// A stable-protocol marker without its lossless start_ts is a malformed
+		// catalog row. Do not silently replace the activation boundary with a
+		// later executor snapshot.
+		return moerr.NewInternalErrorNoCtx("CDC NoFull task has a stable protocol marker without a durable start timestamp")
 	}
 	var initialSnapshotEpoch types.TS
 	var initialSnapshotPending bool
