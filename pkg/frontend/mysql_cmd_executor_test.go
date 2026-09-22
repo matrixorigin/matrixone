@@ -996,10 +996,37 @@ func TestGenericTransactionReadOnlyAssignments(t *testing.T) {
 	require.NoError(t, execSet("set session tx_read_only = 0"))
 	assertReadOnly(0)
 
+	for _, test := range []struct {
+		sql      string
+		readOnly int64
+	}{
+		{sql: "set session transaction_read_only = true", readOnly: 1},
+		{sql: "set session transaction_read_only = false", readOnly: 0},
+		{sql: "set session tx_read_only = true", readOnly: 1},
+		{sql: "set session tx_read_only = false", readOnly: 0},
+	} {
+		t.Run(test.sql, func(t *testing.T) {
+			require.NoError(t, execSet(test.sql))
+			assertReadOnly(test.readOnly)
+		})
+	}
+
 	// SESSION DEFAULT inherits the account-global value. The static default is
 	// only used by GLOBAL DEFAULT.
 	ses.gSysVars.Set(transactionReadOnlySystemVariable, int64(1))
-	require.NoError(t, execSet("set session transaction_read_only = default"))
+	for _, sql := range []string{
+		"set session transaction_read_only = default",
+		"set session tx_read_only = default",
+	} {
+		require.NoError(t, execSet(sql))
+		assertReadOnly(1)
+	}
+	// DEFAULT follows the global value, while an explicit FALSE remains zero.
+	require.NoError(t, execSet("set session transaction_read_only = false"))
+	assertReadOnly(0)
+	require.NoError(t, execSet("set session tx_read_only = false"))
+	assertReadOnly(0)
+	require.NoError(t, execSet("set session transaction_read_only = true"))
 	assertReadOnly(1)
 
 	// An unqualified @@ read-only assignment is NEXT scope and must not be
@@ -1019,11 +1046,19 @@ func TestGenericTransactionReadOnlyAssignments(t *testing.T) {
 	// prefix, so an unsupported isolation level cannot leave read-only changed.
 	require.NoError(t, ses.SetSessionSysVar(ctx, transactionReadOnlySystemVariable, int64(0)))
 	require.NoError(t, ses.SetSessionSysVar(ctx, transactionIsolationSystemVariable, "REPEATABLE-READ"))
+	require.NoError(t,
+		execSet("set session transaction_read_only = true, transaction_isolation = 'READ-COMMITTED'"))
+	assertReadOnly(1)
+	gotIsolation, err := ses.GetSessionSysVar(transactionIsolationSystemVariable)
+	require.NoError(t, err)
+	require.Equal(t, "READ-COMMITTED", gotIsolation)
+	require.NoError(t, ses.SetSessionSysVar(ctx, transactionReadOnlySystemVariable, int64(0)))
+	require.NoError(t, ses.SetSessionSysVar(ctx, transactionIsolationSystemVariable, "REPEATABLE-READ"))
 	assertReadOnly(0)
-	err := execSet("set session transaction_read_only = 1, transaction_isolation = 'READ-UNCOMMITTED'")
+	err = execSet("set session transaction_read_only = 1, transaction_isolation = 'READ-UNCOMMITTED'")
 	require.ErrorContains(t, err, "is not supported")
 	assertReadOnly(0)
-	gotIsolation, err := ses.GetSessionSysVar(transactionIsolationSystemVariable)
+	gotIsolation, err = ses.GetSessionSysVar(transactionIsolationSystemVariable)
 	require.NoError(t, err)
 	require.Equal(t, "REPEATABLE-READ", gotIsolation)
 

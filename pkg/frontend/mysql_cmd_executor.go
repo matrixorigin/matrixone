@@ -1357,6 +1357,17 @@ func staticSetExprValue(expr tree.Expr) (value interface{}, static bool, isDefau
 	}
 }
 
+func transactionReadOnlyBooleanValue(expr tree.Expr) (int64, bool) {
+	value, ok := expr.(*tree.NumVal)
+	if !ok || value.ValType != tree.P_bool {
+		return 0, false
+	}
+	if value.Bool() {
+		return 1, true
+	}
+	return 0, true
+}
+
 // validateTransactionAssignmentScopes rejects unsupported transaction
 // characteristic scopes before any assignment in the SET list is applied.
 // In particular, an unqualified @@transaction_read_only must not silently
@@ -1420,6 +1431,11 @@ func validateStaticTransactionAssignments(
 				return moerr.NewCantChangeTxCharacteristics(ctx)
 			}
 			continue
+		}
+		if readOnly {
+			if normalized, ok := transactionReadOnlyBooleanValue(assign.Value); ok {
+				value = normalized
+			}
 		}
 		def, ok := gSysVarsDefs[assign.Name]
 		if !ok {
@@ -1547,7 +1563,8 @@ func doSetVar(
 		}
 
 		if systemVar, exists := gSysVarsDefs[assign.Name]; exists {
-			if isDefault, isBool := value.(bool); isBool && isDefault {
+			_, isDefault := assign.Value.(*tree.DefaultVal)
+			if isDefault {
 				if scope, isTxnIsolation := transactionIsolationAssignmentScope(assign); isTxnIsolation {
 					value, evalErr = transactionIsolationDefaultValue(
 						execCtx.reqCtx, ses, scope)
@@ -1562,6 +1579,10 @@ func doSetVar(
 					}
 				} else {
 					value = systemVar.Default
+				}
+			} else if _, isTxnReadOnly := transactionReadOnlyAssignmentScope(assign); isTxnReadOnly {
+				if boolValue, isBool := transactionReadOnlyBooleanValue(assign.Value); isBool {
+					value = boolValue
 				}
 			}
 		}
