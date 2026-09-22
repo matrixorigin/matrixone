@@ -11057,6 +11057,60 @@ func TestSetGlobalSysVar(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(value, convey.ShouldEqual, 0)
 
+		groupConcatGetSQL := getSqlForGetSysVarWithAccount(sysAccountID, groupConcatMaxLenVariable)
+		bh.sql2result[groupConcatGetSQL] = newMrsForSystemVariableNameOfAccount([][]interface{}{})
+		groupConcatInsertSQL := getSqlForInsertSysVarWithAccount(
+			sysAccountID, sysAccountName, groupConcatMaxLenVariable, "4")
+		bh.sql2result[groupConcatInsertSQL] = nil
+		err = ses0.SetGlobalSysVar(context.TODO(), groupConcatMaxLenVariable, int64(0))
+		convey.So(err, convey.ShouldBeNil)
+		value, err = ses0.GetGlobalSysVar(groupConcatMaxLenVariable)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(value, convey.ShouldEqual, uint64(4))
+		info := ses0.diagnosticsSnapshot()
+		convey.So(info.codes, convey.ShouldResemble, []uint16{moerr.ER_TRUNCATED_WRONG_VALUE})
+		convey.So(info.msgs, convey.ShouldResemble,
+			[]string{groupConcatMaxLenTruncationWarning(int64(0))})
+
+		globalControls := []struct {
+			value   string
+			persist string
+			want    uint64
+		}{
+			{value: "+4", persist: "4", want: 4},
+			{value: "+9223372036854775807", persist: "9223372036854775807", want: uint64(9223372036854775807)},
+			{value: "+18446744073709551615", persist: "18446744073709551615", want: ^uint64(0)},
+		}
+		for _, tc := range globalControls {
+			ses0.resetDiagnostics()
+			bh.sql2result[getSqlForInsertSysVarWithAccount(
+				sysAccountID, sysAccountName, groupConcatMaxLenVariable, tc.persist)] = nil
+			err = ses0.SetGlobalSysVar(context.TODO(), groupConcatMaxLenVariable, tc.value)
+			convey.So(err, convey.ShouldBeNil)
+			value, err = ses0.GetGlobalSysVar(groupConcatMaxLenVariable)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(value, convey.ShouldEqual, tc.want)
+			info = ses0.diagnosticsSnapshot()
+			convey.So(info.codes, convey.ShouldBeEmpty)
+			convey.So(info.msgs, convey.ShouldBeEmpty)
+		}
+
+		for _, invalid := range []string{
+			"invalid",
+			"18446744073709551616",
+			"+18446744073709551616",
+		} {
+			ses0.resetDiagnostics()
+			err = ses0.SetGlobalSysVar(context.TODO(), groupConcatMaxLenVariable, invalid)
+			convey.So(err, convey.ShouldNotBeNil)
+			value, err = ses0.GetGlobalSysVar(groupConcatMaxLenVariable)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(value, convey.ShouldEqual, ^uint64(0))
+			info = ses0.diagnosticsSnapshot()
+			convey.So(info.codes, convey.ShouldBeEmpty)
+			convey.So(info.msgs, convey.ShouldBeEmpty)
+		}
+
 		err = ses0.SetGlobalSysVar(context.TODO(), "not exists sys var", "xxxx")
 		convey.So(err, convey.ShouldNotBeNil)
 	})
@@ -12733,6 +12787,7 @@ type backgroundExecTest struct {
 	dropDatabaseIgnoresForeignKeys bool
 	systemCTELimits                []bool
 	executionAccountIDs            []uint32
+	executionDatabaseTypes         []string
 }
 
 func (bt *backgroundExecTest) ExecStmt(ctx context.Context, statement tree.Statement) error {
@@ -12856,6 +12911,8 @@ func (bt *backgroundExecTest) Exec(ctx context.Context, s string) error {
 	bt.systemCTELimits = append(bt.systemCTELimits, process.HasSystemCTELimits(ctx))
 	accountID, _ := defines.GetAccountId(ctx)
 	bt.executionAccountIDs = append(bt.executionAccountIDs, accountID)
+	databaseType, _ := ctx.Value(defines.DatTypKey{}).(string)
+	bt.executionDatabaseTypes = append(bt.executionDatabaseTypes, databaseType)
 	if strings.HasPrefix(s, "drop database if exists ") {
 		bt.dropDatabaseIgnoresForeignKeys, _ = ctx.Value(defines.IgnoreForeignKey{}).(bool)
 	}
@@ -12873,6 +12930,8 @@ func (bt *backgroundExecTest) ExecWithSQLMode(ctx context.Context, s string, sql
 func (bt *backgroundExecTest) ExecRestore(ctx context.Context, s string, from uint32, to uint32) error {
 	bt.currentSql = s
 	bt.executedSQLs = append(bt.executedSQLs, s)
+	databaseType, _ := ctx.Value(defines.DatTypKey{}).(string)
+	bt.executionDatabaseTypes = append(bt.executionDatabaseTypes, databaseType)
 	return bt.sql2err[s]
 }
 
@@ -18624,6 +18683,91 @@ func Test_determinePrivilegeSetOfStatement_CreateTableAsSelect(t *testing.T) {
 	require.True(t, seen[PrivilegeTypeDatabaseOwnership])
 	require.False(t, seen[PrivilegeTypeSelect])
 	require.False(t, seen[PrivilegeTypeInsert])
+}
+
+func Test_determinePrivilegeSetOfStatement_ShowRules(t *testing.T) {
+	stmt := &tree.ShowRules{RoleName: "r1"}
+	priv := determinePrivilegeSetOfStatement(stmt)
+
+	require.Equal(t, privilegeKindGeneral, priv.kind)
+	require.Equal(t, objectTypeAccount, priv.objectType())
+	require.True(t, priv.canExecInRestricted)
+
+	seen := make(map[PrivilegeType]bool)
+	for _, entry := range priv.entries {
+		seen[entry.privilegeId] = true
+	}
+	require.True(t, seen[PrivilegeTypeAlterRole])
+	require.True(t, seen[PrivilegeTypeAccountAll])
+}
+
+func Test_authenticateShowRulesRequiresAlterRole(t *testing.T) {
+	stmt := &tree.ShowRules{RoleName: "r1"}
+	priv := determinePrivilegeSetOfStatement(stmt)
+
+	convey.Convey("ordinary role without alter role cannot show rules", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newSes(priv, ctrl)
+
+		rowsOfMoUserGrant := [][]interface{}{
+			{0, false},
+		}
+		roleIdsInMoRolePrivs := []int{0}
+		rowsOfMoRolePrivs := [][]interface{}{}
+		roleIdsInMoRoleGrant := []int{0}
+		rowsOfMoRoleGrant := [][]interface{}{}
+
+		sql2result := makeSql2ExecResult(0, rowsOfMoUserGrant,
+			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
+			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
+
+		bh := newBh(ctrl, sql2result)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(
+			ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeFalse)
+	})
+
+	convey.Convey("role with alter role can show rules", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newSes(priv, ctrl)
+
+		rowsOfMoUserGrant := [][]interface{}{
+			{0, false},
+		}
+		roleIdsInMoRolePrivs := []int{0}
+		rowsOfMoRolePrivs := make([][][][]interface{}, len(roleIdsInMoRolePrivs))
+		for i := 0; i < len(roleIdsInMoRolePrivs); i++ {
+			rowsOfMoRolePrivs[i] = make([][][]interface{}, len(priv.entries))
+		}
+		// AlterRole granted; AccountAll not granted.
+		rowsOfMoRolePrivs[0][0] = [][]interface{}{
+			{int64(PrivilegeTypeAlterRole), false},
+		}
+		rowsOfMoRolePrivs[0][1] = [][]interface{}{}
+
+		roleIdsInMoRoleGrant := []int{0}
+		rowsOfMoRoleGrant := [][][]interface{}{{}}
+
+		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant, roleIdsInMoRolePrivs,
+			priv.entries, rowsOfMoRolePrivs, roleIdsInMoRoleGrant, rowsOfMoRoleGrant, nil, nil)
+
+		bh := newBh(ctrl, sql2result)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(
+			ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+	})
 }
 
 func TestCopyTablePrivileges(t *testing.T) {

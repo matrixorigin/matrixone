@@ -1,0 +1,89 @@
+-- @suite
+-- @case
+-- @desc: INSERT/UPDATE IGNORE expose one warning per skipped constraint row
+-- @label:bvt
+
+drop database if exists issue_28254_ignore_warnings;
+create database issue_28254_ignore_warnings;
+use issue_28254_ignore_warnings;
+
+-- Existing primary and secondary unique conflicts must both be visible.
+create table uq(id int primary key, v int unique);
+insert into uq values (1, 10);
+insert ignore into uq values (1, 11), (2, 10), (3, 30);
+show warnings;
+select * from uq order by id;
+
+-- Duplicates within the incoming batch must be reported once per skipped row.
+insert ignore into uq values (4, 40), (4, 41), (5, 50), (5, 50);
+show warnings;
+select * from uq order by id;
+
+-- The ordinary single-key dedup path must expose the same warning contract.
+create table single_pk(id int primary key);
+insert into single_pk values (1);
+insert ignore into single_pk values (1), (2), (1);
+show warnings;
+select * from single_pk order by id;
+
+-- UPDATE IGNORE must report both unique-key rejection forms.
+update ignore uq set v = 10 where id = 3;
+show warnings;
+select * from uq order by id;
+update ignore uq set id = 1 where id = 3;
+show warnings;
+select * from uq order by id;
+
+-- CHECK violations use the same warning contract for INSERT IGNORE.
+create table ck(
+    id int primary key,
+    v int,
+    constraint ck_pos check(v > 0)
+);
+insert ignore into ck values (1, -1), (2, 2), (3, -3);
+show warnings;
+select * from ck order by id;
+
+-- A constant-false CHECK still runs once per input row.  Folding the
+-- predicate must not collapse three diagnostics into one.
+create table ck_const(
+    id int primary key,
+    constraint ck_never check (1 = 0)
+);
+insert ignore into ck_const values (1), (2), (3);
+show warnings;
+select * from ck_const order by id;
+
+-- UPDATE IGNORE must retain valid rows and report each rejected update.
+update ignore ck set v = -v;
+show warnings;
+select * from ck order by id;
+
+-- Composite keys must render the logical user tuple, not the serialized index
+-- key.
+create table composite_pk(
+    a int,
+    b int,
+    v int,
+    primary key(a, b)
+);
+insert into composite_pk values (1, 2, 10);
+insert ignore into composite_pk values (1, 2, 11), (1, 3, 12), (2, 2, 22);
+show warnings;
+select * from composite_pk order by a, b;
+
+-- The count is exact even when SHOW WARNINGS retains only its bounded prefix.
+create table warning_limit(id int primary key);
+insert into warning_limit values (1);
+insert ignore into warning_limit values
+    (1), (1), (1), (1), (1), (1), (1), (1), (1), (1),
+    (1), (1), (1), (1), (1), (1), (1), (1), (1), (1),
+    (1), (1), (1), (1), (1), (1), (1), (1), (1), (1),
+    (1), (1), (1), (1), (1), (1), (1), (1), (1), (1),
+    (1), (1), (1), (1), (1), (1), (1), (1), (1), (1),
+    (1), (1), (1), (1), (1), (1), (1), (1), (1), (1),
+    (1), (1), (1), (1), (1);
+show warnings;
+select count(*) from warning_limit;
+
+drop database issue_28254_ignore_warnings;

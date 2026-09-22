@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"fmt"
 	"sync/atomic"
 	"testing"
 
@@ -29,6 +30,29 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/stretchr/testify/require"
 )
+
+func TestBuildBlockReadersCombinedPartitions(t *testing.T) {
+	for _, num := range []int{1, 3} {
+		t.Run(fmt.Sprintf("dop%d", num), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			t.Cleanup(proc.Free)
+			e := &Engine{fs: proc.GetFileService()}
+			data := &CombinedRelData{
+				tables: []engine.RelData{partitionTestRanges(1), partitionTestRanges(2)},
+				cnt:    2,
+			}
+			var readers []engine.Reader
+			t.Cleanup(func() { closeReaders(readers) })
+			var err error
+			require.NotPanics(t, func() {
+				readers, err = e.BuildBlockReaders(context.Background(), proc, timestamp.Timestamp{PhysicalTime: 42},
+					nil, &plan.TableDef{Name: "partitioned", Pkey: &plan.PrimaryKeyDef{PkeyColName: "pk"}}, data, num)
+			})
+			require.NoError(t, err)
+			require.Len(t, readers, num)
+		})
+	}
+}
 
 type remoteMembershipFilterAdmission struct {
 	acquired atomic.Int64

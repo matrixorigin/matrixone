@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -219,12 +220,18 @@ type container struct {
 
 	inputDone    bool
 	currBatchIdx int
+	// inputRowCount is the source-row cursor used by GROUP_CONCAT diagnostics.
+	// It survives resident spills/reloads but is reset for a new execution.
+	inputRowCount uint64
 
 	// hash.
 	hr          ResHashRelated
 	mtyp        int32
 	keyWidth    int32
 	keyNullable bool
+	// legacyH8CharSemantics keeps pre-v78 CHAR bytes intact when this
+	// container must merge a short variable-length H8 partial.
+	legacyH8CharSemantics bool
 	// groupingAware selects the collision-free HStr key grammar whenever a
 	// grouping-set rollup sentinel can appear, including NOT NULL input keys.
 	groupingAware bool
@@ -247,14 +254,39 @@ type container struct {
 	// survive resident spills, because later partials and queued spill records
 	// still belong to that same hash-key domain.
 	mergePartialMetadataSet bool
+	// groupConcatSourceRowsUntrusted is a statement-wide, monotonic fallback
+	// mode. It survives resident spills and aggregate rebuilds; once a remote
+	// or legacy partial is observed, every later finalization uses the legacy
+	// local warning counter.
+	groupConcatSourceRowsUntrusted bool
 
 	// aggs, which holds the intermediate state of agg functions.
-	aggList                []aggexec.GroupAggFuncExec
-	aggExprs               []aggexec.AggFuncExecExpression
-	prepareParamKind       aggexec.PrepareParamKindStates
-	prepareParamKindWireV1 bool
-	legacyTextMinMax       bool
-	legacyVarianceState    bool
+	aggList                     []aggexec.GroupAggFuncExec
+	aggExprs                    []aggexec.AggFuncExecExpression
+	groupConcatWarnings         aggexec.GroupConcatWarningAccumulator
+	prepareParamKind            aggexec.PrepareParamKindStates
+	prepareParamKindWireV1      bool
+	legacyTextMinMax            bool
+	legacyVarianceState         bool
+	legacyDecimalSumState       bool
+	legacyDecimalSumResult      bool
+	legacyApproxPercentileState bool
+	legacyHLLState              bool
+	floatZeroHLLState           bool
+	// legacyVectorHLLState keeps vector HLL_ADD_AGG on the raw v2 hash domain
+	// while a pre-v88 peer may consume that state.
+	legacyVectorHLLState bool
+	// legacyTextHLLAddState keeps CHAR and JSON HLL_ADD_AGG on the raw v2 hash
+	// domain while a pre-v91 peer may consume that state.
+	legacyTextHLLAddState bool
+	// legacyFloatHLLAddState keeps scalar FLOAT/DOUBLE HLL_ADD_AGG on the raw
+	// v2 hash domain while a pre-v92 peer may consume that state.
+	legacyFloatHLLAddState bool
+	// legacyDistinctFloatKeys is frozen before aggregate groups are admitted.
+	// Pre-v79 remote producers keep the compatibility FLOAT key policy, which
+	// preserves every non-zero bit pattern in the fixed index and wire output.
+	legacyDistinctFloatKeys bool
+	timeZone                *time.Location
 
 	// spill, agglist to load spilled data.
 	spillMem        int64
@@ -624,6 +656,7 @@ func (ctr *container) freeGroupingRollups() {
 func (ctr *container) free() {
 	// free container stuff, WTH is the Free0?
 	ctr.inputDone = false
+	ctr.inputRowCount = 0
 	ctr.hr.Free0()
 
 	ctr.groupByEvaluate.Free()
@@ -636,6 +669,7 @@ func (ctr *container) free() {
 	ctr.freeGroupByBatches()
 	ctr.freeGroupingRollups()
 	ctr.freeAggList()
+	ctr.groupConcatWarnings.Reset()
 	ctr.prepareParamKind.Reset(nil)
 	ctr.aggExprs = nil
 	ctr.prepareParamKindWireV1 = false
@@ -663,10 +697,28 @@ func (ctr *container) free() {
 	ctr.groupByHashKey = nil
 	ctr.hashKeyVecs = nil
 	ctr.mergePartialMetadataSet = false
+	ctr.groupConcatSourceRowsUntrusted = false
+	ctr.legacyDistinctFloatKeys = false
 	ctr.budget = nil
 
 	mpool.DeleteMPool(ctr.mp)
 	ctr.mp = nil
+}
+
+// refreshGroupConcatSourceRowTrust folds the current aggregate modes into the
+// logical Group/MergeGroup mode. The reduction is monotonic: a legacy or
+// independent remote partial permanently selects the fallback for this
+// execution, including all later spill rebuilds.
+func (ctr *container) refreshGroupConcatSourceRowTrust() {
+	if ctr == nil || ctr.groupConcatSourceRowsUntrusted {
+		return
+	}
+	for _, agg := range ctr.aggList {
+		if !aggexec.GroupConcatSourceRowsTrusted(agg) {
+			ctr.groupConcatSourceRowsUntrusted = true
+			return
+		}
+	}
 }
 
 func (ctr *container) reset() {
@@ -798,6 +850,9 @@ func (group *Group) ExecProjection(proc *process.Process, input *batch.Batch) (*
 
 func (group *Group) Free(proc *process.Process, pipelineFailed bool, err error) {
 	group.logDiagnostics(proc, pipelineFailed, err)
+	if !pipelineFailed && err == nil && proc != nil {
+		group.ctr.groupConcatWarnings.Report(proc.GetWarningSink())
+	}
 	group.ctr.free()
 	// free projection stuff,
 	group.FreeProjection(proc)
@@ -805,6 +860,9 @@ func (group *Group) Free(proc *process.Process, pipelineFailed bool, err error) 
 
 func (group *Group) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	group.logDiagnostics(proc, pipelineFailed, err)
+	if !pipelineFailed && err == nil && proc != nil {
+		group.ctr.groupConcatWarnings.Report(proc.GetWarningSink())
+	}
 	group.ctr.reset()
 	if group.ctr.allocationAccount != nil {
 		// Account selections are immutable per execution attempt, and function
@@ -937,7 +995,10 @@ func (mergeGroup *MergeGroup) ExecProjection(proc *process.Process, input *batch
 	return mergeGroup.EvalProjection(input, proc)
 }
 
-func (mergeGroup *MergeGroup) Reset(proc *process.Process, _ bool, _ error) {
+func (mergeGroup *MergeGroup) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	if !pipelineFailed && err == nil && proc != nil {
+		mergeGroup.ctr.groupConcatWarnings.Report(proc.GetWarningSink())
+	}
 	mergeGroup.ctr.reset()
 	if mergeGroup.ctr.allocationAccount != nil {
 		mergeGroup.FreeProjection(proc)
@@ -946,7 +1007,10 @@ func (mergeGroup *MergeGroup) Reset(proc *process.Process, _ bool, _ error) {
 	}
 }
 
-func (mergeGroup *MergeGroup) Free(proc *process.Process, _ bool, _ error) {
+func (mergeGroup *MergeGroup) Free(proc *process.Process, pipelineFailed bool, err error) {
+	if !pipelineFailed && err == nil && proc != nil {
+		mergeGroup.ctr.groupConcatWarnings.Report(proc.GetWarningSink())
+	}
 	mergeGroup.ctr.free()
 	mergeGroup.FreeProjection(proc)
 }

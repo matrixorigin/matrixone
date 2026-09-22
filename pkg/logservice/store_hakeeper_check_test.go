@@ -248,11 +248,8 @@ func TestIDAllocatorCapacity(t *testing.T) {
 func TestIDAllocatorSet(t *testing.T) {
 	alloc := idAllocator{nextID: 100, lastID: 200}
 	alloc.Set(hakeeper.K8SIDRangeEnd, hakeeper.K8SIDRangeEnd+100)
-	expected := idAllocator{
-		nextID: hakeeper.K8SIDRangeEnd,
-		lastID: hakeeper.K8SIDRangeEnd + 100,
-	}
-	assert.Equal(t, expected, alloc)
+	assert.Equal(t, hakeeper.K8SIDRangeEnd, alloc.nextID)
+	assert.Equal(t, hakeeper.K8SIDRangeEnd+100, alloc.lastID)
 }
 
 func TestIDAllocatorDiscardsCachedRangeOnlyDuringRecovery(t *testing.T) {
@@ -403,10 +400,24 @@ func TestCheckBootstrapWaitsForReplicatedLogServiceRecovery(t *testing.T) {
 }
 
 func runHAKeeperStoreTest(t *testing.T, startLogReplica bool, fn func(*testing.T, *store)) {
+	runHAKeeperStoreTestWithWorkers(t, startLogReplica, true, fn)
+}
+
+func runManualHAKeeperStoreTest(t *testing.T, startLogReplica bool, fn func(*testing.T, *store)) {
+	runHAKeeperStoreTestWithWorkers(t, startLogReplica, false, fn)
+}
+
+func runHAKeeperStoreTestWithWorkers(
+	t *testing.T,
+	startLogReplica bool,
+	workers bool,
+	fn func(*testing.T, *store),
+) {
 	defer leaktest.AfterTest(t)()
 	var cfg Config
 	genCfg := func() Config {
 		cfg = getStoreTestConfig()
+		cfg.DisableWorkers = !workers
 		return cfg
 	}
 	defer vfs.ReportLeakedFD(cfg.FS, t)
@@ -421,23 +432,23 @@ func runHAKeeperStoreTest(t *testing.T, startLogReplica bool, fn func(*testing.T
 	fn(t, store)
 }
 
-func runHakeeperTaskServiceTest(t *testing.T, fn func(*testing.T, *store, taskservice.TaskService)) {
-	runHakeeperTaskServiceTestWithCNStoreTimeout(t, 5*time.Second, fn)
-}
-
-func runHakeeperTaskServiceTestWithCNStoreTimeout(
+// Manual bootstrap and task scheduling must share one driver. Tests of the
+// scheduling ticker start only that ticker explicitly.
+func runManualHakeeperTaskServiceTest(
 	t *testing.T,
 	cnStoreTimeout time.Duration,
 	fn func(*testing.T, *store, taskservice.TaskService),
 ) {
+	t.Helper()
 	defer leaktest.AfterTest(t)()
 	var cfg Config
 	genCfg := func() Config {
 		cfg = getStoreTestConfig()
+		cfg.DisableWorkers = true
 		cfg.HAKeeperConfig.CNStoreTimeout.Duration = cnStoreTimeout
 		return cfg
 	}
-	defer vfs.ReportLeakedFD(cfg.FS, t)
+	defer func() { vfs.ReportLeakedFD(cfg.FS, t) }()
 
 	taskService := taskservice.NewTaskService(runtime.DefaultRuntime(), taskservice.NewMemTaskStorage())
 	defer func() {
@@ -445,13 +456,12 @@ func runHakeeperTaskServiceTestWithCNStoreTimeout(
 	}()
 
 	store, err := getTestStore(genCfg, false, taskService)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	defer func() {
 		assert.NoError(t, store.close())
 	}()
-	peers := make(map[uint64]dragonboat.Target)
-	peers[1] = store.id()
-	assert.NoError(t, store.startHAKeeperReplica(1, peers, false))
+	peers := map[uint64]dragonboat.Target{1: store.id()}
+	require.NoError(t, store.startHAKeeperReplica(1, peers, false))
 	fn(t, store, taskService)
 }
 
@@ -900,7 +910,7 @@ func TestGetCheckerStateFromLeader(t *testing.T) {
 					assert.NotEqual(t, (*pb.CheckerState)(nil), state)
 					return
 				}
-				time.Sleep(time.Second)
+				time.Sleep(20 * time.Millisecond)
 			}
 		}
 	}
@@ -919,6 +929,8 @@ func TestGetCheckerState(t *testing.T) {
 
 func TestSetInitialClusterInfo(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
+		// Keep background ID preallocation out of the exact watermark assertions.
+		store.tickerStopper.Stop()
 		state, err := store.getCheckerState()
 		require.NoError(t, err)
 		assert.Equal(t, pb.HAKeeperCreated, state.State)
@@ -969,11 +981,15 @@ func TestSetInitialClusterInfo(t *testing.T) {
 		assert.Equal(t, uint64(2), state.NextIDByKey["b"])
 		assert.Zero(t, state.NextIDByKey["c"])
 	}
-	runHAKeeperStoreTest(t, false, fn)
+	runManualHAKeeperStoreTest(t, false, fn)
 }
 
 func TestRestoreIDWatermarksRejectsLateLogServiceRecovery(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
+		// This test drives the state transitions itself. Join the background
+		// checker before initialization so its ID preallocation cannot change
+		// the watermark used to verify that rejected recovery has no effect.
+		store.tickerStopper.Stop()
 		require.NoError(t, store.setInitialClusterInfo(
 			1, 1, 1, hakeeper.K8SIDRangeEnd+10, nil, nil))
 
@@ -995,7 +1011,7 @@ func TestRestoreIDWatermarksRejectsLateLogServiceRecovery(t *testing.T) {
 		require.Empty(t, state.NextIDByKey)
 		require.False(t, state.LogServiceRecoveryPending)
 	}
-	runHAKeeperStoreTest(t, false, fn)
+	runManualHAKeeperStoreTest(t, false, fn)
 }
 
 func TestCNAllocateIDRejectsUninitializedHAKeeper(t *testing.T) {
@@ -1009,7 +1025,7 @@ func TestCNAllocateIDRejectsUninitializedHAKeeper(t *testing.T) {
 }
 
 func TestHAKeeperBootstrapErrorUsesConfiguredCadence(t *testing.T) {
-	runHAKeeperStoreTest(t, false, func(t *testing.T, s *store) {
+	runManualHAKeeperStoreTest(t, false, func(t *testing.T, s *store) {
 		require.NoError(t, s.setInitialClusterInfo(1, 1, 1, hakeeper.K8SIDRangeEnd+10, nil, nil))
 		// No LogStore heartbeat: bootstrap cannot place its replica yet. Exercise
 		// the real checker result consumed by the ticker, not a synthetic nil.
@@ -1128,7 +1144,7 @@ func TestRecoveryBootstrapDefersTNUntilCompletion(t *testing.T) {
 		require.Equal(t, pb.TNService, cb.Commands[0].ServiceType)
 		require.False(t, cb.Commands[0].Bootstrapping)
 	}
-	runHAKeeperStoreTest(t, false, fn)
+	runManualHAKeeperStoreTest(t, false, fn)
 }
 
 func testBootstrap(t *testing.T, fail bool, remoteRecoveryPending bool) {
@@ -1183,10 +1199,10 @@ func testBootstrap(t *testing.T, fail bool, remoteRecoveryPending bool) {
 		assert.False(t, store.bootstrapMgr.CheckBootstrap(state.LogState))
 
 		if fail {
-			// Move the deadline into the past so this test does not spend the
-			// real multi-minute bootstrap budget.
-			store.bootstrapCheckDeadline = time.Now().Add(-time.Second)
-			store.checkBootstrap(state)
+			// Drive the elapsed-time check through its explicit-time seam rather
+			// than mutating the production-owned deadline.
+			expired := time.Now().Add(store.bootstrapCheckWindow())
+			require.NoError(t, store.checkBootstrapWithSetterAt(expired, state, store.setBootstrapState))
 
 			state, err = store.getCheckerState()
 			require.NoError(t, err)
@@ -1259,77 +1275,16 @@ func testBootstrap(t *testing.T, fail bool, remoteRecoveryPending bool) {
 			}
 		}
 	}
-	runHAKeeperStoreTest(t, false, fn)
+	runManualHAKeeperStoreTest(t, false, fn)
 }
 
 func TestTaskSchedulerCanScheduleTasksToCNs(t *testing.T) {
 	fn := func(t *testing.T, store *store, taskService taskservice.TaskService) {
-		state, err := store.getCheckerState()
-		require.NoError(t, err)
-		assert.Equal(t, pb.HAKeeperCreated, state.State)
-		nextIDByKey := map[string]uint64{"a": 1, "b": 2}
-		require.NoError(t, store.setInitialClusterInfo(
-			1,
-			1,
-			1,
-			hakeeper.K8SIDRangeEnd+10,
-			nextIDByKey,
-			nil,
-		))
-		state, err = store.getCheckerState()
-		require.NoError(t, err)
-		assert.Equal(t, pb.HAKeeperBootstrapping, state.State)
-		assert.Equal(t, hakeeper.K8SIDRangeEnd+10, state.NextId)
-		assert.Equal(t, nextIDByKey, state.NextIDByKey)
-		m := store.getHeartbeatMessage()
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		proceedHAKeeperToRunning(t, store)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_, err = store.addLogStoreHeartbeat(ctx, m)
-		assert.NoError(t, err)
-
-		_, term, err := store.isLeaderHAKeeper()
-		require.NoError(t, err)
-
-		state, err = store.getCheckerState()
-		require.NoError(t, err)
-		store.bootstrap(term, state)
-
-		state, err = store.getCheckerState()
-		require.NoError(t, err)
-		assert.Equal(t, pb.HAKeeperBootstrapCommandsReceived, state.State)
-		assert.False(t, store.bootstrapCheckDeadline.IsZero())
-		require.NotNil(t, store.bootstrapMgr)
-		assert.False(t, store.bootstrapMgr.CheckBootstrap(state.LogState))
-
-		cb, err := store.getCommandBatch(ctx, store.id())
-		require.NoError(t, err)
-		require.Equal(t, 1, len(cb.Commands))
-		assert.True(t, cb.Commands[0].Bootstrapping)
-		service := &Service{store: store}
-		service.handleStartReplica(cb.Commands[0])
-
-		for i := 0; i < 100; i++ {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-			defer cancel()
-			m := store.getHeartbeatMessage()
-			_, err = store.addLogStoreHeartbeat(ctx, m)
-			assert.NoError(t, err)
-
-			state, err = store.getCheckerState()
-			require.NoError(t, err)
-			store.checkBootstrap(state)
-
-			state, err = store.getCheckerState()
-			require.NoError(t, err)
-			if state.State != pb.HAKeeperRunning {
-				time.Sleep(50 * time.Millisecond)
-			} else {
-				break
-			}
-			if i == 99 {
-				t.Fatalf("failed to complete bootstrap")
-			}
-		}
+		var state *pb.CheckerState
+		var err error
 
 		cnUUID1 := uuid.New().String()
 		cnMsg1 := pb.CNStoreHeartbeat{UUID: cnUUID1}
@@ -1367,129 +1322,94 @@ func TestTaskSchedulerCanScheduleTasksToCNs(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, 1, len(tasks))
 	}
-	runHakeeperTaskServiceTest(t, fn)
+	// This case drives bootstrap and scheduling explicitly; a background
+	// HAKeeper check would race with bootstrap and mutate scheduler state.
+	runManualHakeeperTaskServiceTest(t, 5*time.Second, fn)
 }
 
 func TestTaskSchedulerCanReScheduleExpiredTasks(t *testing.T) {
-	fn := func(t *testing.T, store *store, taskService taskservice.TaskService) {
-		state, err := store.getCheckerState()
-		require.NoError(t, err)
-		assert.Equal(t, pb.HAKeeperCreated, state.State)
-		nextIDByKey := map[string]uint64{"a": 1, "b": 2}
-		require.NoError(t, store.setInitialClusterInfo(
-			1,
-			1,
-			1,
-			hakeeper.K8SIDRangeEnd+10,
-			nextIDByKey,
-			nil,
-		))
-		state, err = store.getCheckerState()
-		require.NoError(t, err)
-		assert.Equal(t, pb.HAKeeperBootstrapping, state.State)
-		assert.Equal(t, hakeeper.K8SIDRangeEnd+10, state.NextId)
-		assert.Equal(t, nextIDByKey, state.NextIDByKey)
-		m := store.getHeartbeatMessage()
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	runManualHakeeperTaskServiceTest(t, time.Second, func(t *testing.T, store *store, ts taskservice.TaskService) {
+		proceedHAKeeperToRunning(t, store)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_, err = store.addLogStoreHeartbeat(ctx, m)
-		assert.NoError(t, err)
-
-		_, term, err := store.isLeaderHAKeeper()
-		require.NoError(t, err)
-
-		state, err = store.getCheckerState()
-		require.NoError(t, err)
-		store.bootstrap(term, state)
-
-		state, err = store.getCheckerState()
-		require.NoError(t, err)
-		assert.Equal(t, pb.HAKeeperBootstrapCommandsReceived, state.State)
-		assert.False(t, store.bootstrapCheckDeadline.IsZero())
-		require.NotNil(t, store.bootstrapMgr)
-		assert.False(t, store.bootstrapMgr.CheckBootstrap(state.LogState))
-
-		cb, err := store.getCommandBatch(ctx, store.id())
-		require.NoError(t, err)
-		require.Equal(t, 1, len(cb.Commands))
-		assert.True(t, cb.Commands[0].Bootstrapping)
-		service := &Service{store: store}
-		service.handleStartReplica(cb.Commands[0])
-
-		for i := 0; i < 100; i++ {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-			defer cancel()
-			m := store.getHeartbeatMessage()
-			_, err = store.addLogStoreHeartbeat(ctx, m)
-			assert.NoError(t, err)
-
-			state, err = store.getCheckerState()
+		checkerState := func() *pb.CheckerState {
+			state, err := store.getCheckerState()
 			require.NoError(t, err)
-			store.checkBootstrap(state)
-
-			state, err = store.getCheckerState()
+			return state
+		}
+		heartbeat := func(cn string) {
+			_, err := store.addCNStoreHeartbeat(ctx, pb.CNStoreHeartbeat{UUID: cn})
 			require.NoError(t, err)
-			if state.State != pb.HAKeeperRunning {
-				time.Sleep(50 * time.Millisecond)
-			} else {
-				break
-			}
-			if i == 99 {
-				t.Fatalf("failed to complete bootstrap")
-			}
 		}
-
-		cnUUID1 := uuid.New().String()
-		cnMsg1 := pb.CNStoreHeartbeat{UUID: cnUUID1}
-		_, err = store.addCNStoreHeartbeat(ctx, cnMsg1)
-		assert.NoError(t, err)
-		err = taskService.CreateAsyncTask(ctx, task.TaskMetadata{ID: "a"})
-		assert.NoError(t, err)
-		state, err = store.getCheckerState()
-		require.NoError(t, err)
-		tasks, err := taskService.QueryAsyncTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID1))
-		assert.NoError(t, err)
-		assert.Equal(t, 0, len(tasks))
-		store.taskSchedule(state)
-		// update state
-		state, err = store.getCheckerState()
-		require.NoError(t, err)
-		store.taskSchedule(state)
-		tasks, err = taskService.QueryAsyncTask(ctx, taskservice.WithTaskRunnerCond(taskservice.EQ, cnUUID1))
-		assert.NoError(t, err)
-		assert.Equal(t, 1, len(tasks))
-
-		cnUUID2 := uuid.New().String()
-		for i := 0; i < 1000; i++ {
-			testLogger.Debug(fmt.Sprintf("iteration %d", i))
-			tn := func() bool {
-				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-				defer cancel()
-				cnMsg2 := pb.CNStoreHeartbeat{UUID: cnUUID2}
-				_, err = store.addCNStoreHeartbeat(ctx, cnMsg2)
-				assert.NoError(t, err)
-				state, err = store.getCheckerState()
-				require.NoError(t, err)
-				store.taskSchedule(state)
-				tasks, err = taskService.QueryAsyncTask(ctx, taskservice.WithTaskMetadataId(taskservice.EQ, "a"))
-				assert.NoError(t, err)
-				if len(tasks) == 0 {
-					testLogger.Info("no task found")
-					return true
-				}
-				return false
-			}
-			completed := tn()
-			if completed {
-				store.taskScheduler.StopScheduleCronTask()
-				store.taskScheduler.StopScheduleSQLTask()
-				return
-			}
-			time.Sleep(100 * time.Millisecond)
+		query := func(id string) []task.AsyncTask {
+			tasks, err := ts.QueryAsyncTask(ctx, taskservice.WithTaskMetadataId(taskservice.EQ, id))
+			require.NoError(t, err)
+			return tasks
 		}
-		t.Fatalf("failed to reschedule expired tasks")
-	}
-	runHakeeperTaskServiceTestWithCNStoreTimeout(t, time.Second, fn)
+		assertRunning := func(id, runner string) {
+			t.Helper()
+			tasks := query(id)
+			require.Len(t, tasks, 1)
+			require.Equal(t, task.TaskStatus_Running, tasks[0].Status)
+			require.Equal(t, runner, tasks[0].TaskRunner)
+		}
+		tick := func() {
+			// Propose through Raft, with errors visible to the test, instead of
+			// waiting for a wall-clock worker to advance the logical clock.
+			session := store.nh.GetNoOPSession(hakeeper.DefaultHAKeeperShardID)
+			_, err := store.propose(ctx, session, hakeeper.GetTickCmd())
+			require.NoError(t, err)
+		}
+		store.taskSchedule(checkerState()) // Register the task-table user.
+		require.Equal(t, pb.TaskSchedulerRunning, checkerState().TaskSchedulerState)
+
+		// No eligible CN: scheduling must retain the unassigned task.
+		require.NoError(t, ts.CreateAsyncTask(ctx, task.TaskMetadata{ID: "a"}))
+		store.taskSchedule(checkerState())
+		tasks := query("a")
+		require.Len(t, tasks, 1)
+		require.Equal(t, task.TaskStatus_Created, tasks[0].Status)
+		require.Empty(t, tasks[0].TaskRunner)
+
+		heartbeat("cn-1")
+		startTick := checkerState().Tick
+		store.taskSchedule(checkerState())
+		assertRunning("a", "cn-1")
+
+		// At the exact expiration boundary cn-1 is still alive (strict >).
+		expirationTicks := uint64(store.cfg.HAKeeperConfig.CNStoreTimeout.Duration/time.Second) *
+			uint64(store.cfg.HAKeeperConfig.TickPerSecond)
+		require.Positive(t, expirationTicks)
+		for i := uint64(0); i < expirationTicks; i++ {
+			tick()
+		}
+		require.Equal(t, startTick+expirationTicks, checkerState().Tick)
+		heartbeat("cn-2")
+		require.NoError(t, ts.CreateAsyncTask(ctx, task.TaskMetadata{ID: "b"}))
+		store.taskSchedule(checkerState())
+		assertRunning("a", "cn-1")
+		assertRunning("b", "cn-2")
+
+		// One tick later, only the expired runner's task is completed and
+		// truncated. The live runner's task must survive the same pass.
+		tick()
+		require.Equal(t, startTick+expirationTicks+1, checkerState().Tick)
+		heartbeat("cn-2")
+		store.taskSchedule(checkerState())
+		require.Empty(t, query("a"))
+		assertRunning("b", "cn-2")
+		store.taskSchedule(checkerState())
+		require.Empty(t, query("a"))
+		assertRunning("b", "cn-2")
+
+		// A returning CN becomes eligible again without reviving its old task.
+		heartbeat("cn-1")
+		require.NoError(t, ts.CreateAsyncTask(ctx, task.TaskMetadata{ID: "c"}))
+		store.taskSchedule(checkerState())
+		assertRunning("c", "cn-1")
+		assertRunning("b", "cn-2")
+		require.Empty(t, query("a"))
+	})
 }
 
 func TestGetTaskTableUserFromEnv(t *testing.T) {

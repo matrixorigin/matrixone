@@ -15,6 +15,7 @@
 package function
 
 import (
+	"bytes"
 	"context"
 	"strings"
 	"testing"
@@ -320,6 +321,74 @@ func TestNewAssignCastHonorsSqlMode(t *testing.T) {
 	require.Error(t, NewStrictCast([]*vector.Vector{src, dst}, rs, proc, 1, nil))
 }
 
+func TestAssignStringWidthWarningDiagnostics(t *testing.T) {
+	cases := []struct {
+		name        string
+		target      types.T
+		input       string
+		want        string
+		wantWarning bool
+	}{
+		{name: "char non-space overflow", target: types.T_char, input: "abcd", want: "abc", wantWarning: true},
+		{name: "char multibyte overflow", target: types.T_char, input: "你好世界", want: "你好世", wantWarning: true},
+		{name: "varchar non-space overflow", target: types.T_varchar, input: "abcd", want: "abc", wantWarning: true},
+		{name: "varchar multibyte overflow", target: types.T_varchar, input: "你好世界", want: "你好世", wantWarning: true},
+		{name: "varchar trailing space overflow", target: types.T_varchar, input: "abc ", want: "abc", wantWarning: true},
+		{name: "char trailing space exemption", target: types.T_char, input: "abc ", want: "abc", wantWarning: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			session := &numericWarningSession{}
+			proc.Session = session
+			source := vector.NewVec(types.T_varchar.ToType())
+			defer source.Free(proc.Mp())
+			require.NoError(t, vector.AppendBytes(source, []byte(tc.input), false, proc.Mp()))
+			target := types.New(tc.target, 3, 0)
+			destination := vector.NewVec(target)
+			defer destination.Free(proc.Mp())
+			result := vector.NewFunctionResultWrapper(target, proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+
+			require.NoError(t, NewAssignIgnoreCast([]*vector.Vector{source, destination}, result, proc, 1, nil))
+			got, null := vector.GenerateFunctionStrParameter(result.GetResultVector()).GetStrValue(0)
+			require.False(t, null)
+			require.Equal(t, tc.want, string(got))
+			if !tc.wantWarning {
+				require.Empty(t, session.warnings)
+				return
+			}
+			require.Len(t, session.warnings, 1)
+			require.Equal(t, moerr.WARN_DATA_TRUNCATED, session.warnings[0].code)
+			require.Contains(t, session.warnings[0].msg, "Data truncated for column")
+			require.Contains(t, session.warnings[0].msg, "row 1")
+		})
+	}
+}
+
+func TestAssignStringWidthWarningUsesExecutionAttemptSink(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	sink := &numericWarningSession{}
+	proc.WarningSink = sink
+
+	source := vector.NewVec(types.T_varchar.ToType())
+	defer source.Free(proc.Mp())
+	require.NoError(t, vector.AppendBytes(source, []byte("abcd"), false, proc.Mp()))
+	target := types.New(types.T_varchar, 3, 0)
+	destination := vector.NewVec(target)
+	defer destination.Free(proc.Mp())
+	result := vector.NewFunctionResultWrapper(target, proc.Mp())
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(1))
+
+	require.NoError(t, NewAssignIgnoreCast([]*vector.Vector{source, destination}, result, proc, 1, nil))
+	require.Nil(t, proc.Session)
+	require.Len(t, sink.warnings, 1)
+	require.Equal(t, moerr.WARN_DATA_TRUNCATED, sink.warnings[0].code)
+}
+
 func TestNewAssignCastRemoteEmptyResolverUsesSessionSnapshot(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	// A remote CN has no frontend session. Its resolver may still be attached
@@ -396,6 +465,104 @@ func TestTinyTextAssignmentWidthUsesBytes(t *testing.T) {
 	got, err = run(t, "STRICT_TRANS_TABLES", strings.Repeat("b", types.MaxTinyTextLen+1), NewAssignIgnoreCast)
 	require.NoError(t, err)
 	require.Len(t, got, types.MaxTinyTextLen)
+}
+
+func TestTextBlobFamilyAssignmentWidthUsesBytes(t *testing.T) {
+	run := func(
+		t *testing.T,
+		sourceType, targetType types.Type,
+		input []byte,
+		sqlMode string,
+		cast func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error,
+	) ([]byte, []numericWarning, error) {
+		t.Helper()
+		proc := testutil.NewProcess(t)
+		proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+			require.Equal(t, "sql_mode", name)
+			return sqlMode, nil
+		})
+		session := &numericWarningSession{}
+		proc.Session = session
+
+		src := vector.NewVec(sourceType)
+		require.NoError(t, vector.AppendBytes(src, input, false, proc.Mp()))
+		defer src.Free(proc.Mp())
+		dst := vector.NewVec(targetType)
+		defer dst.Free(proc.Mp())
+		result := vector.NewFunctionResultWrapper(targetType, proc.Mp())
+		defer result.Free()
+		require.NoError(t, result.PreExtendAndReset(1))
+
+		err := cast([]*vector.Vector{src, dst}, result, proc, 1, nil)
+		if err != nil {
+			return nil, session.warnings, err
+		}
+		got, null := vector.GenerateFunctionStrParameter(result.GetResultVector()).GetStrValue(0)
+		require.False(t, null)
+		return bytes.Clone(got), session.warnings, nil
+	}
+
+	for _, tc := range []struct {
+		name       string
+		target     types.Type
+		input      []byte
+		wantPrefix []byte
+	}{
+		{
+			name:       "text",
+			target:     types.New(types.T_text, types.MaxStringSize, 0),
+			input:      []byte(strings.Repeat("t", types.MaxStringSize+1)),
+			wantPrefix: []byte(strings.Repeat("t", types.MaxStringSize)),
+		},
+		{
+			name:       "text_utf8_boundary",
+			target:     types.New(types.T_text, types.MaxStringSize, 0),
+			input:      append([]byte(strings.Repeat("a", types.MaxStringSize-1)), []byte("你")...),
+			wantPrefix: []byte(strings.Repeat("a", types.MaxStringSize-1)),
+		},
+		{
+			name:       "tinyblob_raw_bytes",
+			target:     types.New(types.T_blob, types.MaxTinyTextLen, 0),
+			input:      append(bytes.Repeat([]byte{0xff}, types.MaxTinyTextLen), 0x00),
+			wantPrefix: bytes.Repeat([]byte{0xff}, types.MaxTinyTextLen),
+		},
+		{
+			name:       "blob_raw_bytes",
+			target:     types.New(types.T_blob, types.MaxStringSize, 0),
+			input:      append(bytes.Repeat([]byte{0xff}, types.MaxStringSize), 0x00),
+			wantPrefix: bytes.Repeat([]byte{0xff}, types.MaxStringSize),
+		},
+	} {
+		t.Run(tc.name+"/strict", func(t *testing.T) {
+			_, _, err := run(t, types.T_varbinary.ToType(), tc.target, tc.input, "STRICT_TRANS_TABLES", NewAssignCast)
+			require.Error(t, err)
+			require.Equal(t, moerr.ErrCastWidthExceeded, err.(*moerr.Error).ErrorCode())
+			require.Equal(t, uint16(moerr.ER_DATA_TOO_LONG), err.(*moerr.Error).MySQLCode())
+		})
+		t.Run(tc.name+"/nonstrict", func(t *testing.T) {
+			got, warnings, err := run(t, types.T_varbinary.ToType(), tc.target, tc.input, "", NewAssignCast)
+			require.NoError(t, err)
+			require.True(t, bytes.Equal(tc.wantPrefix, got))
+			require.Len(t, warnings, 1)
+			require.Equal(t, moerr.WARN_DATA_TRUNCATED, warnings[0].code)
+		})
+		t.Run(tc.name+"/ignore", func(t *testing.T) {
+			got, warnings, err := run(t, types.T_varbinary.ToType(), tc.target, tc.input, "STRICT_TRANS_TABLES", NewAssignIgnoreCast)
+			require.NoError(t, err)
+			require.True(t, bytes.Equal(tc.wantPrefix, got))
+			require.Len(t, warnings, 1)
+			require.Equal(t, moerr.WARN_DATA_TRUNCATED, warnings[0].code)
+		})
+	}
+
+	// Width-zero BLOB is the legacy catalog representation shared by all four
+	// MySQL BLOB families. Keep it unbounded until a safe declaration marker is
+	// available instead of narrowing a historical MEDIUM/LONG BLOB to BLOB.
+	legacyValue := bytes.Repeat([]byte{'z'}, types.MaxStringSize+1)
+	got, warnings, err := run(t, types.T_varbinary.ToType(), types.T_blob.ToType(), legacyValue, "STRICT_TRANS_TABLES", NewAssignCast)
+	require.NoError(t, err)
+	require.Equal(t, legacyValue, got)
+	require.Empty(t, warnings)
 }
 
 func TestAssignmentCastTypedSource(t *testing.T) {
@@ -567,6 +734,29 @@ func TestGeometryToVarcharWidthEnforcement(t *testing.T) {
 	require.Equal(t, "POI", got)
 }
 
+func TestGeometryToTextAssignmentWidthFallback(t *testing.T) {
+	wkt := "LINESTRING (" + strings.Repeat("0 0, ", 100) + "0 0)"
+	targetType := types.T_text
+	targetWidth := int32(types.MaxTinyTextLen)
+
+	strictProc := testutil.NewProcess(t)
+	_, err := castGeometryToString(t, strictProc, wkt, types.T_geometry, targetType, targetWidth, false, NewStrictCast)
+	require.Error(t, err, "cast_strict must enforce TEXT-family byte width")
+
+	nonstrictProc := testutil.NewProcess(t)
+	nonstrictProc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		require.Equal(t, "sql_mode", name)
+		return "", nil
+	})
+	warnings := &numericWarningSession{}
+	nonstrictProc.Session = warnings
+	got, err := castGeometryToString(t, nonstrictProc, wkt, types.T_geometry, targetType, targetWidth, false, NewAssignCast)
+	require.NoError(t, err)
+	require.LessOrEqual(t, len([]byte(got)), types.MaxTinyTextLen)
+	require.Len(t, warnings.warnings, 1)
+	require.Equal(t, moerr.WARN_DATA_TRUNCATED, warnings.warnings[0].code)
+}
+
 func TestGeometryToZeroWidthCharVarchar(t *testing.T) {
 	newProc := func(sqlMode string) *process.Process {
 		proc := testutil.NewProcess(t)
@@ -666,6 +856,7 @@ func TestGeometryToZeroWidthCharVarchar(t *testing.T) {
 
 func runJSONToStrWidth(t *testing.T, mp *mpool.MPool, jsonText string, toType types.Type, strict, allowTrim bool) (string, error) {
 	t.Helper()
+	proc := testutil.NewProcess(t)
 	encoded := makeJSONEncodedFromText(t, []string{jsonText}, nil)[0]
 	src := vector.NewVec(types.T_json.ToType())
 	require.NoError(t, vector.AppendBytes(src, []byte(encoded), false, mp))
@@ -677,7 +868,7 @@ func runJSONToStrWidth(t *testing.T, mp *mpool.MPool, jsonText string, toType ty
 	defer to.Free()
 	require.NoError(t, to.PreExtendAndReset(1))
 
-	if err := jsonToStr(context.Background(), from, to, 1, nil, strict, allowTrim, allowTrim); err != nil {
+	if err := jsonToStr(proc, context.Background(), from, to, 1, nil, strict, allowTrim, allowTrim, allowTrim); err != nil {
 		return "", err
 	}
 	got, _ := vector.GenerateFunctionStrParameter(to.GetResultVector()).GetStrValue(0)
@@ -724,4 +915,51 @@ func TestJSONToStrWidthEnforcement(t *testing.T) {
 			require.Equal(t, c.want, got)
 		})
 	}
+}
+
+func TestJSONBlobAssignmentWidthWarning(t *testing.T) {
+	input := `"` + strings.Repeat("x", types.MaxStringSize+1) + `"`
+	encoded := makeJSONEncodedFromText(t, []string{input}, nil)[0]
+
+	run := func(t *testing.T, sqlMode string, cast func([]*vector.Vector, vector.FunctionResultWrapper, *process.Process, int, *FunctionSelectList) error) ([]byte, *numericWarningSession, error) {
+		t.Helper()
+		proc := testutil.NewProcess(t)
+		proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+			require.Equal(t, "sql_mode", name)
+			return sqlMode, nil
+		})
+		session := &numericWarningSession{}
+		proc.Session = session
+
+		source := vector.NewVec(types.T_json.ToType())
+		require.NoError(t, vector.AppendBytes(source, []byte(encoded), false, proc.Mp()))
+		defer source.Free(proc.Mp())
+		target := types.New(types.T_blob, types.MaxStringSize, 0)
+		destination := vector.NewVec(target)
+		defer destination.Free(proc.Mp())
+		result := vector.NewFunctionResultWrapper(target, proc.Mp())
+		defer result.Free()
+		require.NoError(t, result.PreExtendAndReset(1))
+		err := cast([]*vector.Vector{source, destination}, result, proc, 1, nil)
+		if err != nil {
+			return nil, session, err
+		}
+		got, null := vector.GenerateFunctionStrParameter(result.GetResultVector()).GetStrValue(0)
+		require.False(t, null)
+		return bytes.Clone(got), session, nil
+	}
+
+	_, _, err := run(t, "STRICT_TRANS_TABLES", NewAssignCast)
+	require.Error(t, err)
+	require.Equal(t, moerr.ErrCastWidthExceeded, err.(*moerr.Error).ErrorCode())
+	require.Equal(t, uint16(moerr.ER_DATA_TOO_LONG), err.(*moerr.Error).MySQLCode())
+
+	got, session, err := run(t, "", NewAssignCast)
+	require.NoError(t, err)
+	require.Len(t, got, types.MaxStringSize)
+	require.Len(t, session.warnings, 1)
+	require.Equal(t, moerr.WARN_DATA_TRUNCATED, session.warnings[0].code)
+
+	_, _, err = run(t, "", NewStrictCast)
+	require.Error(t, err, "the old-protocol cast_strict fallback must enforce BLOB width")
 }

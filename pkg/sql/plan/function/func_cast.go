@@ -452,6 +452,7 @@ var supportedTypeCast = map[types.T][]types.T{
 		types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
 		types.T_year,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
@@ -781,7 +782,7 @@ var supportedTypeCast = map[types.T][]types.T{
 
 	types.T_json: {
 		types.T_json,
-		types.T_char, types.T_varchar, types.T_text,
+		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_bool,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
@@ -911,6 +912,13 @@ func (m castMode) isAssignment() bool {
 		m == castModeAssignmentIgnore
 }
 
+// reportsStringTruncationWarning identifies the assignment modes that keep a
+// truncated value. Strict assignment returns ER_DATA_TOO_LONG instead, while
+// ordinary expression and explicit casts do not have DML warning semantics.
+func (m castMode) reportsStringTruncationWarning() bool {
+	return m == castModeAssignment || m == castModeAssignmentIgnore
+}
+
 func NewCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	return newCast(parameters, result, proc, length, selectList, castModeNormal, false)
 }
@@ -938,7 +946,8 @@ func NewStrictCast(parameters []*vector.Vector, result vector.FunctionResultWrap
 // NewAssignCast is used by DML assignment paths (INSERT/UPDATE projection) for
 // SQL-mode-sensitive targets. It applies strict/non-strict behavior at runtime
 // for width-constrained strings, YEAR values, and TIME column boundaries. For
-// CHAR/VARCHAR only, excess trailing spaces are accepted in strict mode too.
+// CHAR/VARCHAR only, excess trailing spaces are accepted in strict mode too;
+// TEXT/BLOB family limits count every assigned byte, including spaces.
 func NewAssignCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	mode := castModeAssignment
 	if isStrictSqlMode(proc) {
@@ -1009,6 +1018,24 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	fromType := parameters[0].GetType()
 	toType := parameters[1].GetType()
 	from := parameters[0]
+	if mode.isAssignment() && toType.Oid.IsInteger() {
+		switch fromType.Oid {
+		case types.T_float32:
+			return floatToIntegerAssignment(proc.Ctx, vector.GenerateFunctionFixedTypeParameter[float32](from), toType.Oid, result, length, selectList)
+		case types.T_float64:
+			return floatToIntegerAssignment(proc.Ctx, vector.GenerateFunctionFixedTypeParameter[float64](from), toType.Oid, result, length, selectList)
+		}
+	}
+	if mode.isAssignment() && toType.Oid.IsUnsignedInt() {
+		switch fromType.Oid {
+		case types.T_decimal64:
+			return decimalToUnsignedAssignment(proc.Ctx, vector.GenerateFunctionFixedTypeParameter[types.Decimal64](from), toType.Oid, result, length, selectList, decimal64RoundedIntegerString)
+		case types.T_decimal128:
+			return decimalToUnsignedAssignment(proc.Ctx, vector.GenerateFunctionFixedTypeParameter[types.Decimal128](from), toType.Oid, result, length, selectList, decimal128RoundedIntegerString)
+		case types.T_decimal256:
+			return decimalToUnsignedAssignment(proc.Ctx, vector.GenerateFunctionFixedTypeParameter[types.Decimal256](from), toType.Oid, result, length, selectList, decimal256RoundedIntegerString)
+		}
+	}
 	if mode == castModeExplicit && toType.IsDecimal() && fromType.IsNumeric() {
 		if handled, err := explicitNumericToDecimal(from, *toType, result, length); handled {
 			return err
@@ -1159,8 +1186,8 @@ func newCast(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 		err = blockidToOthers(proc.Ctx, s, *toType, result, length, selectList)
 	case types.T_json:
 		s := vector.GenerateFunctionStrParameter(from)
-		err = jsonToOthers(execProc.Ctx, s, *toType, result, length, selectList,
-			strictStringWidth, allowTrailingSpaceTrim, reportDataTooLong)
+		err = jsonToOthers(execProc, execProc.Ctx, s, *toType, result, length, selectList,
+			strictStringWidth, allowTrailingSpaceTrim, mode.isAssignment(), reportDataTooLong)
 	case types.T_enum:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Enum](from)
 		err = enumToOthers(execProc.Ctx, s, *toType, result, length, selectList, strictStringWidth, reportDataTooLong)
@@ -1231,7 +1258,7 @@ func castToDecimal256(proc *process.Process, from *vector.Vector, toType types.T
 		return decimal256ToDecimal256(s, rs, length, selectList)
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_datalink:
 		s := vector.GenerateFunctionStrParameter(from)
-		return strToDecimal256(s, rs, length, selectList, mode)
+		return strToDecimal256(proc, s, rs, length, selectList, mode)
 	default:
 		return moerr.NewInternalError(proc.Ctx, fmt.Sprintf("unsupported cast from %s to %s", from.GetType(), toType))
 	}
@@ -1327,6 +1354,12 @@ func boolToOthers(ctx context.Context,
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
 		return boolToInteger(source, rs, length, selectList)
+	case types.T_float32:
+		rs := vector.MustFunctionResult[float32](result)
+		return boolToFloat(source, rs, length, selectList)
+	case types.T_float64:
+		rs := vector.MustFunctionResult[float64](result)
+		return boolToFloat(source, rs, length, selectList)
 	case types.T_year:
 		rs := vector.MustFunctionResult[types.MoYear](result)
 		return boolToYear(source, rs, length, selectList)
@@ -2528,6 +2561,7 @@ func decimal256ToOthersWithContext(
 // geometryToTextCast renders a GEOMETRY/GEOMETRY32 value as WKT for casts to a
 // textual type, matching ST_AsText.
 func geometryToTextCast(
+	proc *process.Process,
 	ctx context.Context,
 	source vector.FunctionParameterWrapper[types.Varlena],
 	result vector.FunctionResultWrapper,
@@ -2535,6 +2569,7 @@ func geometryToTextCast(
 	toType types.Type,
 	strictStringWidth bool,
 	allowTrailingSpaceTrim bool,
+	assignment bool,
 	reportDataTooLong bool,
 ) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
@@ -2550,15 +2585,38 @@ func geometryToTextCast(
 		if err != nil {
 			return err
 		}
+		byteWidth, hasByteWidth := stringFamilyByteWidth(toType)
+		assignmentByteWidth := assignment && hasByteWidth
 		overWidth := false
-		if isTinyTextType(toType) {
+		if assignmentByteWidth {
+			overWidth = len(wkt) > byteWidth
+		} else if isTinyTextType(toType) {
 			overWidth = len(wkt) > int(toType.Width)
 		} else if toType.Oid == types.T_char || toType.Oid == types.T_varchar {
 			overWidth = toType.Width >= 0 && utf8.RuneCountInString(wkt) > int(toType.Width)
 		}
 		if overWidth {
 			destLen := int(toType.Width)
-			if isTinyTextType(toType) && !strictStringWidth {
+			if assignmentByteWidth && !strictStringWidth {
+				appendStringAssignmentTruncationWarning(proc, toType, i, false)
+				wkt = string(truncateStringFamilyByBytes([]byte(wkt), toType, byteWidth))
+			} else if assignmentByteWidth {
+				sourceLen := len(wkt)
+				destLen = byteWidth
+				extraInfo := fmt.Sprintf(
+					"Src length %v is larger than Dest length %v",
+					sourceLen,
+					destLen,
+				)
+				return formatGeometryWidthError(
+					ctx,
+					source.GetSourceVector(),
+					wkt,
+					toType,
+					extraInfo,
+					reportDataTooLong,
+				)
+			} else if isTinyTextType(toType) && !strictStringWidth {
 				wkt = string(truncateTextByBytes([]byte(wkt), destLen))
 			} else if !isTinyTextType(toType) &&
 				((allowTrailingSpaceTrim && overLenIsAllTrailingSpaces(wkt, destLen)) || !strictStringWidth) {
@@ -2623,7 +2681,6 @@ func strTypeToOthers(proc *process.Process,
 	// string families remain byte payloads.
 	numericPrefix := mode == castModeComparison &&
 		(fromType.Oid == types.T_char || fromType.Oid == types.T_varchar || fromType.Oid == types.T_text)
-	assignmentCast := mode == castModeStrictStringWidth
 	// Geometry is stored as bare WKB. Casting to a textual type must render
 	// WKT (like ST_AsText); the generic string-copy path below would otherwise
 	// emit the raw, unreadable WKB bytes. Casts to binary/varbinary/blob (raw
@@ -2632,6 +2689,7 @@ func strTypeToOthers(proc *process.Process,
 		switch toType.Oid {
 		case types.T_char, types.T_varchar, types.T_text:
 			return geometryToTextCast(
+				proc,
 				ctx,
 				source,
 				result,
@@ -2639,6 +2697,7 @@ func strTypeToOthers(proc *process.Process,
 				toType,
 				strictStringWidth,
 				allowTrailingSpaceTrim,
+				mode.isAssignment(),
 				reportDataTooLong,
 			)
 		}
@@ -2679,28 +2738,28 @@ func strTypeToOthers(proc *process.Process,
 		return strToBit(ctx, proc, source, rs, int(toType.Width), length, selectList)
 	case types.T_int8:
 		rs := vector.MustFunctionResult[int8](result)
-		return strToSignedWithProc(ctx, proc, source, rs, 8, length, selectList, explicit, numericPrefix)
+		return strToSignedWithProc(ctx, proc, source, rs, 8, length, selectList, mode, explicit, numericPrefix)
 	case types.T_int16:
 		rs := vector.MustFunctionResult[int16](result)
-		return strToSignedWithProc(ctx, proc, source, rs, 16, length, selectList, explicit, numericPrefix)
+		return strToSignedWithProc(ctx, proc, source, rs, 16, length, selectList, mode, explicit, numericPrefix)
 	case types.T_int32:
 		rs := vector.MustFunctionResult[int32](result)
-		return strToSignedWithProc(ctx, proc, source, rs, 32, length, selectList, explicit, numericPrefix)
+		return strToSignedWithProc(ctx, proc, source, rs, 32, length, selectList, mode, explicit, numericPrefix)
 	case types.T_int64:
 		rs := vector.MustFunctionResult[int64](result)
-		return strToSignedWithProc(ctx, proc, source, rs, 64, length, selectList, explicit, numericPrefix)
+		return strToSignedWithProc(ctx, proc, source, rs, 64, length, selectList, mode, explicit, numericPrefix)
 	case types.T_uint8:
 		rs := vector.MustFunctionResult[uint8](result)
-		return strToUnsignedWithProc(ctx, proc, source, rs, 8, length, selectList, explicit, numericPrefix)
+		return strToUnsignedWithProc(ctx, proc, source, rs, 8, length, selectList, mode, explicit, numericPrefix)
 	case types.T_uint16:
 		rs := vector.MustFunctionResult[uint16](result)
-		return strToUnsignedWithProc(ctx, proc, source, rs, 16, length, selectList, explicit, numericPrefix)
+		return strToUnsignedWithProc(ctx, proc, source, rs, 16, length, selectList, mode, explicit, numericPrefix)
 	case types.T_uint32:
 		rs := vector.MustFunctionResult[uint32](result)
-		return strToUnsignedWithProc(ctx, proc, source, rs, 32, length, selectList, explicit, numericPrefix)
+		return strToUnsignedWithProc(ctx, proc, source, rs, 32, length, selectList, mode, explicit, numericPrefix)
 	case types.T_uint64:
 		rs := vector.MustFunctionResult[uint64](result)
-		return strToUnsignedWithProc(ctx, proc, source, rs, 64, length, selectList, explicit, numericPrefix)
+		return strToUnsignedWithProc(ctx, proc, source, rs, 64, length, selectList, mode, explicit, numericPrefix)
 	case types.T_float32:
 		rs := vector.MustFunctionResult[float32](result)
 		return strToFloatWithProc(ctx, proc, CompatibilityModeFromProcess(proc), source, rs, 32, length, selectList)
@@ -2709,10 +2768,10 @@ func strTypeToOthers(proc *process.Process,
 		return strToFloatWithProc(ctx, proc, CompatibilityModeFromProcess(proc), source, rs, 64, length, selectList)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
-		return strToDecimal64(source, rs, length, selectList, mode)
+		return strToDecimal64(proc, source, rs, length, selectList, mode)
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
-		return strToDecimal128(source, rs, length, selectList, mode)
+		return strToDecimal128(proc, source, rs, length, selectList, mode)
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
 		return strToBool(source, rs, length, selectList)
@@ -2724,10 +2783,10 @@ func strTypeToOthers(proc *process.Process,
 		return strToUuid(source, rs, length, selectList)
 	case types.T_date:
 		rs := vector.MustFunctionResult[types.Date](result)
-		return strToDate(proc, source, rs, length, selectList, assignmentCast)
+		return strToDate(proc, source, rs, length, selectList, mode)
 	case types.T_datetime:
 		rs := vector.MustFunctionResult[types.Datetime](result)
-		return strToDatetime(proc, source, rs, length, selectList, assignmentCast)
+		return strToDatetime(proc, source, rs, length, selectList, mode)
 	case types.T_time:
 		rs := vector.MustFunctionResult[types.Time](result)
 		return strToTime(proc, source, rs, length, selectList, mode)
@@ -2737,7 +2796,7 @@ func strTypeToOthers(proc *process.Process,
 		if proc != nil {
 			zone = proc.GetSessionInfo().TimeZone
 		}
-		return strToTimestamp(proc, source, rs, zone, length, selectList, assignmentCast)
+		return strToTimestamp(proc, source, rs, zone, length, selectList, mode)
 	case types.T_char, types.T_varchar, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_blob, types.T_geometry, types.T_geometry32:
 		rs := vector.MustFunctionResult[types.Varlena](result)
@@ -2871,10 +2930,10 @@ func blockidToOthers(ctx context.Context,
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from blockid to %s", toType))
 }
 
-func jsonToOthers(ctx context.Context,
+func jsonToOthers(proc *process.Process, ctx context.Context,
 	source vector.FunctionParameterWrapper[types.Varlena],
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList,
-	strictStringWidth bool, allowTrailingSpaceTrim bool, reportDataTooLong bool) error {
+	strictStringWidth bool, allowTrailingSpaceTrim bool, assignment bool, reportDataTooLong bool) error {
 	switch toType.Oid {
 	case types.T_json:
 		rs := vector.MustFunctionResult[types.Varlena](result)
@@ -2885,10 +2944,10 @@ func jsonToOthers(ctx context.Context,
 			}
 		}
 		return nil
-	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
+	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_datalink:
 		rs := vector.MustFunctionResult[types.Varlena](result)
-		return jsonToStr(ctx, source, rs, length, selectList,
-			strictStringWidth, allowTrailingSpaceTrim, reportDataTooLong)
+		return jsonToStr(proc, ctx, source, rs, length, selectList,
+			strictStringWidth, allowTrailingSpaceTrim, assignment, reportDataTooLong)
 	case types.T_bool:
 		return jsonToBool(ctx, source, result, length)
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
@@ -3557,10 +3616,14 @@ func boolToStr(
 func boolToInteger[T constraints.Integer](
 	from vector.FunctionParameterWrapper[bool],
 	to *vector.FunctionResult[T], length int, selectList *FunctionSelectList) error {
-	var i uint64
-	l := uint64(length)
 	var dft T
-	for i = 0; i < l; i++ {
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v, null := from.GetValue(i)
 		if null {
 			if err := to.Append(dft, true); err != nil {
@@ -3576,6 +3639,35 @@ func boolToInteger[T constraints.Integer](
 					return err
 				}
 			}
+		}
+	}
+	return nil
+}
+
+func boolToFloat[T constraints.Float](
+	from vector.FunctionParameterWrapper[bool],
+	to *vector.FunctionResult[T], length int, selectList *FunctionSelectList) error {
+	var dft T
+	for i := uint64(0); i < uint64(length); i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+			continue
+		}
+		v, null := from.GetValue(i)
+		if null {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+			continue
+		}
+		if v {
+			if err := to.Append(1, false); err != nil {
+				return err
+			}
+		} else if err := to.Append(dft, false); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -4619,7 +4711,7 @@ func mysqlTimeOutOfRangeForCast(
 		return 0, moerr.NewOutOfRangef(ctx, "time", "value '%s'", value)
 	}
 	if proc != nil {
-		if appender, ok := proc.GetSession().(warningDiagnosticAppender); ok {
+		if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
 			appender.AppendWarningDiagnostic(moerr.ER_WARN_DATA_OUT_OF_RANGE,
 				fmt.Sprintf("Out of range value for column 'time' at row %d", row+1))
 		}
@@ -4656,7 +4748,7 @@ func mysqlInvalidTimeForCast(
 		return 0, moerr.NewTruncatedWrongValue(ctx, "time", value)
 	}
 	if proc != nil {
-		if appender, ok := proc.GetSession().(warningDiagnosticAppender); ok {
+		if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
 			appender.AppendWarningDiagnostic(moerr.WARN_DATA_TRUNCATED,
 				fmt.Sprintf("Data truncated for column 'time' at row %d", row+1))
 		}
@@ -6476,7 +6568,7 @@ func strToSigned[T constraints.Signed](
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[T], bitSize int,
 	length int, selectList *FunctionSelectList, explicit ...bool) error {
-	return strToSignedWithProc(ctx, nil, from, to, bitSize, length, selectList, explicit...)
+	return strToSignedWithProc(ctx, nil, from, to, bitSize, length, selectList, castModeNormal, explicit...)
 }
 
 func strToSignedWithProc[T constraints.Signed](
@@ -6484,13 +6576,19 @@ func strToSignedWithProc[T constraints.Signed](
 	proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[T], bitSize int,
-	length int, selectList *FunctionSelectList, explicit ...bool) error {
+	length int, selectList *FunctionSelectList, mode castMode, explicit ...bool) error {
 	var i uint64
 	var l = uint64(length)
 	isBinary := from.GetSourceVector().GetIsBin()
 
 	var result T
 	for i = 0; i < l; i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v, null := from.GetStrValue(i)
 		if null {
 			if err := to.Append(0, true); err != nil {
@@ -6531,6 +6629,32 @@ func strToSignedWithProc[T constraints.Signed](
 					r, err = parseSignedCastString(s, bitSize)
 				}
 				if err != nil {
+					if mode == castModeAssignmentIgnore && !isBinary && !isAssignmentSpecialNumericSyntax(s) {
+						if prefix, hasPrefix, truncated, prefixErr := assignmentIntegerPrefix(s); hasPrefix {
+							if prefixErr == nil {
+								var prefixed int64
+								prefixed, prefixErr = parseSignedCastString(prefix, bitSize)
+								if prefixErr == nil {
+									if truncated {
+										appendTruncatedAssignmentConversionWarning(proc, "INTEGER", s)
+									}
+									result = T(prefixed)
+									if err = to.Append(result, false); err != nil {
+										return err
+									}
+									continue
+								}
+							}
+							err = prefixErr
+						} else if isIntegerLexicalConversionError(err) {
+							appendInvalidAssignmentConversionWarning(proc, "INTEGER", s)
+							result = 0
+							if err = to.Append(result, false); err != nil {
+								return err
+							}
+							continue
+						}
+					}
 					// XXX I'm not sure if we should return the int8 / int16 / int64 info. or
 					// just return the int. the old code just return the int. too much bvt result needs to update.
 					if strings.Contains(err.Error(), "value out of range") {
@@ -6708,6 +6832,256 @@ type warningDiagnosticAppender interface {
 	AppendWarningDiagnostic(code uint16, msg string)
 }
 
+func isIntegerLexicalConversionError(err error) bool {
+	return errors.Is(err, strconv.ErrSyntax) || moerr.IsMoErrCode(err, moerr.ErrInvalidInput)
+}
+
+func isTemporalLexicalConversionError(err error) bool {
+	return moerr.IsMoErrCode(err, moerr.ErrInvalidArg) || moerr.IsMoErrCode(err, moerr.ErrInvalidInput)
+}
+
+func appendInvalidAssignmentConversionWarning(proc *process.Process, targetType, value string) {
+	if proc == nil {
+		return
+	}
+	appender, ok := proc.GetWarningSink().(warningDiagnosticAppender)
+	if !ok {
+		return
+	}
+	appender.AppendWarningDiagnostic(
+		moerr.ER_TRUNCATED_WRONG_VALUE_FOR_FIELD,
+		fmt.Sprintf("Incorrect %s value: '%-.128s'", targetType, value),
+	)
+}
+
+func appendTruncatedAssignmentConversionWarning(proc *process.Process, targetType, value string) {
+	if proc == nil {
+		return
+	}
+	appender, ok := proc.GetWarningSink().(warningDiagnosticAppender)
+	if !ok {
+		return
+	}
+	appender.AppendWarningDiagnostic(
+		moerr.WARN_DATA_TRUNCATED,
+		fmt.Sprintf("Data truncated for %s value: '%-.128s'", targetType, value),
+	)
+}
+
+func appendTemporalAssignmentConversionWarning(proc *process.Process, targetType, value string) {
+	if proc == nil {
+		return
+	}
+	appender, ok := proc.GetWarningSink().(warningDiagnosticAppender)
+	if !ok {
+		return
+	}
+	appender.AppendWarningDiagnostic(
+		moerr.ER_WARN_DATA_OUT_OF_RANGE,
+		fmt.Sprintf("Out of range value for %s: '%-.128s'", targetType, value),
+	)
+}
+
+// assignmentIntegerPrefix returns the exact decimal prefix rounded to an
+// integer using assignment semantics and whether a non-whitespace suffix is
+// discarded. It is intentionally separate from leadingDecimalIntegerPrefix,
+// which serves explicit casts and truncates at the decimal point. hasPrefix
+// distinguishes lexical values such as "abc" from numeric values that round
+// to zero.
+func assignmentIntegerPrefix(s string) (integer string, hasPrefix, truncated bool, err error) {
+	prefix, negative, ok := scanDecimalFloatPrefix(s)
+	if !ok {
+		return "", false, false, nil
+	}
+	prefixEnd := skipASCIISpace(s, 0) + len(prefix)
+	truncated = skipASCIISpace(s, prefixEnd) < len(s)
+	value, overflow := roundedDecimalPrefixMagnitude(prefix)
+	if overflow {
+		return "", true, truncated, strconv.ErrRange
+	}
+	integer = strconv.FormatUint(value, 10)
+	if negative {
+		integer = "-" + integer
+	}
+	return integer, true, truncated, nil
+}
+
+// roundedDecimalPrefixMagnitude converts a scanned decimal mantissa/exponent
+// to an integer magnitude without float conversion or exponent-sized
+// allocation. Only the at-most-20 destination digits are accumulated; long
+// mantissas and exponents are inspected in place.
+func roundedDecimalPrefixMagnitude(prefix string) (uint64, bool) {
+	start := 0
+	if len(prefix) > 0 && (prefix[0] == '+' || prefix[0] == '-') {
+		start++
+	}
+	mantissaEnd := len(prefix)
+	for i := start; i < len(prefix); i++ {
+		if prefix[i] == 'e' || prefix[i] == 'E' {
+			mantissaEnd = i
+			break
+		}
+	}
+
+	var digitsBeforeDecimal, digitCount int64
+	firstNonZero := int64(-1)
+	seenDecimal := false
+	for i := start; i < mantissaEnd; i++ {
+		c := prefix[i]
+		if c == '.' {
+			seenDecimal = true
+			continue
+		}
+		if !isASCIIDigit(c) {
+			return 0, true
+		}
+		if !seenDecimal {
+			digitsBeforeDecimal++
+		}
+		if firstNonZero < 0 && c != '0' {
+			firstNonZero = digitCount
+		}
+		digitCount++
+	}
+
+	exponentLimit := int64(len(prefix))
+	if exponentLimit <= math.MaxInt64-64 {
+		exponentLimit += 64
+	} else {
+		exponentLimit = math.MaxInt64
+	}
+	var exponent int64
+	if mantissaEnd < len(prefix) {
+		i := mantissaEnd + 1
+		negativeExponent := false
+		if i < len(prefix) && (prefix[i] == '+' || prefix[i] == '-') {
+			negativeExponent = prefix[i] == '-'
+			i++
+		}
+		for ; i < len(prefix); i++ {
+			digit := int64(prefix[i] - '0')
+			if exponent > (exponentLimit-digit)/10 {
+				exponent = exponentLimit
+			} else {
+				exponent = exponent*10 + digit
+			}
+		}
+		if negativeExponent {
+			exponent = -exponent
+		}
+	}
+	decimalPosition := saturatingDecimalPosition(digitsBeforeDecimal, exponent, exponentLimit)
+
+	integerDigitEnd := decimalPosition
+	if integerDigitEnd < 0 {
+		integerDigitEnd = 0
+	}
+	if integerDigitEnd > digitCount {
+		integerDigitEnd = digitCount
+	}
+	var significantDigits int64
+	if firstNonZero >= 0 && firstNonZero < integerDigitEnd {
+		significantDigits = integerDigitEnd - firstNonZero
+		if decimalPosition > digitCount {
+			zeroDigits := decimalPosition - digitCount
+			if zeroDigits > 20-significantDigits {
+				return 0, true
+			}
+			significantDigits += zeroDigits
+		}
+	}
+	if significantDigits > 20 {
+		return 0, true
+	}
+
+	var magnitude uint64
+	var roundingDigit byte
+	var digitIndex int64
+	for i := start; i < mantissaEnd; i++ {
+		c := prefix[i]
+		if c == '.' {
+			continue
+		}
+		if digitIndex == decimalPosition {
+			roundingDigit = c
+		}
+		if firstNonZero >= 0 && digitIndex >= firstNonZero && digitIndex < integerDigitEnd {
+			digit := uint64(c - '0')
+			if magnitude > (math.MaxUint64-digit)/10 {
+				return 0, true
+			}
+			magnitude = magnitude*10 + digit
+		}
+		digitIndex++
+	}
+	if decimalPosition > digitCount {
+		for zeroDigits := decimalPosition - digitCount; zeroDigits > 0; zeroDigits-- {
+			if magnitude > math.MaxUint64/10 {
+				return 0, true
+			}
+			magnitude *= 10
+		}
+	}
+	if decimalPosition >= 0 && decimalPosition < digitCount && roundingDigit >= '5' {
+		if magnitude == math.MaxUint64 {
+			return 0, true
+		}
+		magnitude++
+	}
+	return magnitude, false
+}
+
+func saturatingDecimalPosition(integerDigits, exponent, limit int64) int64 {
+	if exponent > 0 && integerDigits > limit-exponent {
+		return limit
+	}
+	if exponent < 0 && integerDigits < -limit-exponent {
+		return -limit
+	}
+	return integerDigits + exponent
+}
+
+// assignmentDecimalPrefix uses the same prefix grammar as MySQL decimal
+// conversion, but reports whether a numeric token actually exists. The
+// existing mysqlDecimalPrefix helper returns a synthetic "0" for "abc", which
+// is useful for ordinary prefix conversion but would blur lexical failure and
+// a real zero here.
+func assignmentDecimalPrefix(s string) (string, bool) {
+	prefix, _, ok := scanDecimalFloatPrefix(s)
+	if !ok {
+		return "", false
+	}
+	return canonicalizeMySQLDecimalPrefix(prefix), true
+}
+
+func isDecimalLexicalConversionError(err error) bool {
+	return errors.Is(err, strconv.ErrSyntax) || moerr.IsMoErrCode(err, moerr.ErrInvalidInput)
+}
+
+// appendStringAssignmentTruncationWarning reports the warning produced when a
+// width-constrained string assignment keeps a truncated value. The expression
+// layer does not carry the target column name, so use the stable target type as
+// the column label while preserving MySQL's warning code and row format. CHAR
+// values whose excess consists only of trailing spaces are explicitly exempt.
+func appendStringAssignmentTruncationWarning(
+	proc *process.Process, toType types.Type, row uint64, trailingSpaceOnly bool,
+) {
+	if trailingSpaceOnly && toType.Oid == types.T_char {
+		return
+	}
+	if proc == nil {
+		return
+	}
+	appender, ok := proc.GetWarningSink().(warningDiagnosticAppender)
+	if !ok {
+		return
+	}
+	appender.AppendWarningDiagnostic(
+		moerr.WARN_DATA_TRUNCATED,
+		fmt.Sprintf("Data truncated for column '%s' at row %d", strings.ToLower(toType.Oid.String()), row+1),
+	)
+}
+
 // appendNumericCoercionWarning mirrors MySQL's warning for a non-empty string
 // whose numeric prefix was consumed and whose remaining text was discarded.
 // Empty strings intentionally coerce to zero without a warning.
@@ -6727,7 +7101,7 @@ func appendNumericCoercionWarning(proc *process.Process, value string) {
 	if proc == nil {
 		return
 	}
-	session := proc.GetSession()
+	session := proc.GetWarningSink()
 	appender, ok := session.(warningDiagnosticAppender)
 	if !ok {
 		return
@@ -6749,7 +7123,7 @@ func appendIntegerNumericCoercionWarning(
 	if trimmed == "" || proc == nil {
 		return
 	}
-	session := proc.GetSession()
+	session := proc.GetWarningSink()
 	appender, ok := session.(warningDiagnosticAppender)
 	if !ok {
 		return
@@ -6808,6 +7182,31 @@ func isExtensionFloatCandidate(s string) bool {
 		return true
 	}
 	return false
+}
+
+// isAssignmentSpecialNumericSyntax excludes only the extension forms that
+// have an established non-decimal interpretation in the cast parser. Do not
+// reuse isExtensionFloatCandidate here: its prefix-oriented float behavior
+// intentionally recognizes words such as "information" as candidates, while
+// IGNORE integer/decimal assignment must treat those words as ordinary invalid
+// text and adjust them to zero with a warning.
+func isAssignmentSpecialNumericSyntax(s string) bool {
+	_, body, _, _ := splitCastNumericSign(s)
+	if body == "" {
+		return false
+	}
+	if len(body) >= 2 && body[0] == '0' {
+		switch body[1] {
+		case 'b', 'B', 'o', 'O', 'x', 'X':
+			return true
+		}
+	}
+	switch strings.ToLower(body) {
+	case "nan", "inf", "infinity":
+		return true
+	default:
+		return false
+	}
 }
 
 func scanDecimalFloatPrefix(s string) (prefix string, negative bool, ok bool) {
@@ -7093,7 +7492,7 @@ func strToUnsigned[T constraints.Unsigned](
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[T], bitSize int,
 	length int, selectList *FunctionSelectList, explicit ...bool) error {
-	return strToUnsignedWithProc(ctx, nil, from, to, bitSize, length, selectList, explicit...)
+	return strToUnsignedWithProc(ctx, nil, from, to, bitSize, length, selectList, castModeNormal, explicit...)
 }
 
 func strToUnsignedWithProc[T constraints.Unsigned](
@@ -7101,7 +7500,7 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 	proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[T], bitSize int,
-	length int, selectList *FunctionSelectList, explicit ...bool) error {
+	length int, selectList *FunctionSelectList, mode castMode, explicit ...bool) error {
 	var i uint64
 	var l = uint64(length)
 	isBinary := from.GetSourceVector().GetIsBin()
@@ -7109,6 +7508,12 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 	var val uint64
 	var tErr error
 	for i = 0; i < l; i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := to.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v, null := from.GetStrValue(i)
 		if null {
 			if err := to.Append(0, true); err != nil {
@@ -7135,6 +7540,30 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 				}
 			}
 			if tErr != nil {
+				if mode == castModeAssignmentIgnore && !isBinary && !isAssignmentSpecialNumericSyntax(*res) {
+					if prefix, hasPrefix, truncated, prefixErr := assignmentIntegerPrefix(*res); hasPrefix {
+						if prefixErr == nil {
+							var prefixed uint64
+							prefixed, prefixErr = parseUnsignedCastString(prefix, bitSize)
+							if prefixErr == nil {
+								if truncated {
+									appendTruncatedAssignmentConversionWarning(proc, "INTEGER", *res)
+								}
+								if err := to.Append(T(prefixed), false); err != nil {
+									return err
+								}
+								continue
+							}
+						}
+						tErr = prefixErr
+					} else if isIntegerLexicalConversionError(tErr) {
+						appendInvalidAssignmentConversionWarning(proc, "INTEGER", *res)
+						if err := to.Append(T(0), false); err != nil {
+							return err
+						}
+						continue
+					}
+				}
 				if strings.Contains(tErr.Error(), "value out of range") {
 					return moerr.NewOutOfRangef(ctx, fmt.Sprintf("uint%d", bitSize), "value '%s'", *res)
 				}
@@ -7199,12 +7628,25 @@ func strToFloatWithProc[T constraints.Float](
 			if !isBinary && bitSize == 32 && to.GetType().Width > 0 && to.GetType().Scale >= 0 {
 				parseBitSize = 64
 			}
-			r2, tErr = parseBytesToFloat(v, isBinary, parseBitSize, mode)
-			if tErr != nil {
-				return tErr
-			}
-			if !isBinary && mode == SQLCompatibilityMySQL {
-				appendNumericCoercionWarning(proc, convertByteSliceToString(v))
+			if from.GetSourceVector().GetPrepareParamKindAt(int(i)) == vector.PrepareParamBoolean {
+				// Prepared Boolean values travel as canonical text. Restore their
+				// numeric category without changing ordinary SQL string coercion.
+				b, err := strconv.ParseBool(convertByteSliceToString(v))
+				if err != nil {
+					return moerr.NewInvalidArg(ctx, "prepared Boolean", convertByteSliceToString(v))
+				}
+				r2 = 0
+				if b {
+					r2 = 1
+				}
+			} else {
+				r2, tErr = parseBytesToFloat(v, isBinary, parseBitSize, mode)
+				if tErr != nil {
+					return tErr
+				}
+				if !isBinary && mode == SQLCompatibilityMySQL {
+					appendNumericCoercionWarning(proc, convertByteSliceToString(v))
+				}
 			}
 			if to.GetType().Scale < 0 || to.GetType().Width == 0 {
 				result = T(r2)
@@ -7224,6 +7666,7 @@ func strToFloatWithProc[T constraints.Float](
 }
 
 func strToDecimal64(
+	proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Decimal64], length int, selectList *FunctionSelectList,
 	mode castMode,
@@ -7251,6 +7694,12 @@ func strToDecimal64(
 		return nil
 	}
 	for i = 0; i < l; i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v, null := from.GetStrValue(i)
 		if null {
 			if err := to.Append(dft, true); err != nil {
@@ -7275,6 +7724,23 @@ func strToDecimal64(
 					}
 				}
 				if err != nil {
+					if mode == castModeAssignmentIgnore && !isAssignmentSpecialNumericSyntax(s) {
+						if prefix, ok := assignmentDecimalPrefix(s); ok {
+							if prefixed, prefixErr := parseDecimal64CastString(prefix, totype.Width, totype.Scale); prefixErr == nil {
+								appendTruncatedAssignmentConversionWarning(proc, "DECIMAL", s)
+								if err = to.Append(prefixed, false); err != nil {
+									return err
+								}
+								continue
+							}
+						} else if isDecimalLexicalConversionError(err) {
+							appendInvalidAssignmentConversionWarning(proc, "DECIMAL", s)
+							if err = to.Append(dft, false); err != nil {
+								return err
+							}
+							continue
+						}
+					}
 					return err
 				}
 				if err = to.Append(result, false); err != nil {
@@ -7680,6 +8146,7 @@ func parseExplicitDecimal256CastString(s string, width, scale int32) (types.Deci
 }
 
 func strToDecimal128(
+	proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Decimal128], length int, selectList *FunctionSelectList,
 	mode castMode,
@@ -7707,6 +8174,12 @@ func strToDecimal128(
 		return nil
 	}
 	for i = 0; i < l; i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v, null := from.GetStrValue(i)
 		if null {
 			if err := to.Append(dft, true); err != nil {
@@ -7731,6 +8204,23 @@ func strToDecimal128(
 					}
 				}
 				if err != nil {
+					if mode == castModeAssignmentIgnore && !isAssignmentSpecialNumericSyntax(s) {
+						if prefix, ok := assignmentDecimalPrefix(s); ok {
+							if prefixed, prefixErr := parseDecimal128CastString(prefix, totype.Width, totype.Scale); prefixErr == nil {
+								appendTruncatedAssignmentConversionWarning(proc, "DECIMAL", s)
+								if err = to.Append(prefixed, false); err != nil {
+									return err
+								}
+								continue
+							}
+						} else if isDecimalLexicalConversionError(err) {
+							appendInvalidAssignmentConversionWarning(proc, "DECIMAL", s)
+							if err = to.Append(dft, false); err != nil {
+								return err
+							}
+							continue
+						}
+					}
 					return err
 				}
 				if err = to.Append(result, false); err != nil {
@@ -7782,6 +8272,7 @@ func clampDecimal128CastString(s string, width, scale int32) (types.Decimal128, 
 }
 
 func strToDecimal256(
+	proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Decimal256], length int, selectList *FunctionSelectList,
 	mode castMode,
@@ -7809,6 +8300,12 @@ func strToDecimal256(
 		return nil
 	}
 	for i = 0; i < l; i++ {
+		if functionRowSkipped(selectList, i) {
+			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+			continue
+		}
 		v, null := from.GetStrValue(i)
 		if null {
 			if err := to.Append(dft, true); err != nil {
@@ -7833,6 +8330,23 @@ func strToDecimal256(
 					}
 				}
 				if err != nil {
+					if mode == castModeAssignmentIgnore && !isAssignmentSpecialNumericSyntax(s) {
+						if prefix, ok := assignmentDecimalPrefix(s); ok {
+							if prefixed, prefixErr := parseDecimal256CastString(prefix, totype.Width, totype.Scale); prefixErr == nil {
+								appendTruncatedAssignmentConversionWarning(proc, "DECIMAL", s)
+								if err = to.Append(prefixed, false); err != nil {
+									return err
+								}
+								continue
+							}
+						} else if isDecimalLexicalConversionError(err) {
+							appendInvalidAssignmentConversionWarning(proc, "DECIMAL", s)
+							if err = to.Append(dft, false); err != nil {
+								return err
+							}
+							continue
+						}
+					}
 					return err
 				}
 				if err = to.Append(result, false); err != nil {
@@ -8103,10 +8617,12 @@ func strToJson(
 
 func strToDate(proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Varlena],
-	to *vector.FunctionResult[types.Date], length int, selectList *FunctionSelectList, assignmentCast bool) error {
+	to *vector.FunctionResult[types.Date], length int, selectList *FunctionSelectList, mode castMode) error {
 	var i uint64
 	var l = uint64(length)
 	var dft types.Date
+	isBinary := from.GetSourceVector().GetIsBin()
+	assignmentCast := mode == castModeStrictStringWidth || mode == castModeAssignmentIgnore
 	modeChecked := false
 	nullifyZero := false
 	for i = 0; i < l; i++ {
@@ -8117,14 +8633,30 @@ func strToDate(proc *process.Process,
 			continue
 		}
 		v, null := from.GetStrValue(i)
-		if null || len(v) == 0 {
+		if null {
 			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+		} else if len(v) == 0 {
+			if mode == castModeAssignmentIgnore && !isBinary {
+				appendTemporalAssignmentConversionWarning(proc, "date", "")
+				if err := to.Append(types.ZeroDate, false); err != nil {
+					return err
+				}
+			} else if err := to.Append(dft, true); err != nil {
 				return err
 			}
 		} else {
 			s := convertByteSliceToString(v)
 			val, err := types.ParseDateCast(s)
 			if err != nil {
+				if mode == castModeAssignmentIgnore && !isBinary && isTemporalLexicalConversionError(err) {
+					appendTemporalAssignmentConversionWarning(proc, "date", s)
+					if err = to.Append(types.ZeroDate, false); err != nil {
+						return err
+					}
+					continue
+				}
 				if assignmentCast {
 					return err
 				}
@@ -8219,10 +8751,12 @@ func strToTime(
 
 func strToDatetime(proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Varlena],
-	to *vector.FunctionResult[types.Datetime], length int, selectList *FunctionSelectList, assignmentCast bool) error {
+	to *vector.FunctionResult[types.Datetime], length int, selectList *FunctionSelectList, mode castMode) error {
 	var i uint64
 	var l = uint64(length)
 	var dft types.Datetime
+	isBinary := from.GetSourceVector().GetIsBin()
+	assignmentCast := mode == castModeStrictStringWidth || mode == castModeAssignmentIgnore
 	totype := to.GetType()
 	modeChecked := false
 	nullifyZero := false
@@ -8234,14 +8768,30 @@ func strToDatetime(proc *process.Process,
 			continue
 		}
 		v, null := from.GetStrValue(i)
-		if null || len(v) == 0 {
+		if null {
 			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+		} else if len(v) == 0 {
+			if mode == castModeAssignmentIgnore && !isBinary {
+				appendTemporalAssignmentConversionWarning(proc, "datetime", "")
+				if err := to.Append(types.ZeroDatetime, false); err != nil {
+					return err
+				}
+			} else if err := to.Append(dft, true); err != nil {
 				return err
 			}
 		} else {
 			s := convertByteSliceToString(v)
 			val, err := types.ParseDatetime(s, totype.Scale)
 			if err != nil {
+				if mode == castModeAssignmentIgnore && !isBinary && isTemporalLexicalConversionError(err) {
+					appendTemporalAssignmentConversionWarning(proc, "datetime", s)
+					if err = to.Append(types.ZeroDatetime, false); err != nil {
+						return err
+					}
+					continue
+				}
 				return err
 			}
 			if val == types.ZeroDatetime && !assignmentCast {
@@ -8270,10 +8820,12 @@ func strToDatetime(proc *process.Process,
 func strToTimestamp(proc *process.Process,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Timestamp],
-	zone *time.Location, length int, selectList *FunctionSelectList, assignmentCast bool) error {
+	zone *time.Location, length int, selectList *FunctionSelectList, mode castMode) error {
 	var i uint64
 	var l = uint64(length)
 	var dft types.Timestamp
+	isBinary := from.GetSourceVector().GetIsBin()
+	assignmentCast := mode == castModeStrictStringWidth || mode == castModeAssignmentIgnore
 	totype := to.GetType()
 	modeChecked := false
 	nullifyZero := false
@@ -8285,14 +8837,30 @@ func strToTimestamp(proc *process.Process,
 			continue
 		}
 		v, null := from.GetStrValue(i)
-		if null || len(v) == 0 {
+		if null {
 			if err := to.Append(dft, true); err != nil {
+				return err
+			}
+		} else if len(v) == 0 {
+			if mode == castModeAssignmentIgnore && !isBinary {
+				appendTemporalAssignmentConversionWarning(proc, "timestamp", "")
+				if err := to.Append(types.ZeroTimestamp, false); err != nil {
+					return err
+				}
+			} else if err := to.Append(dft, true); err != nil {
 				return err
 			}
 		} else {
 			s := convertByteSliceToString(v)
 			val, err := types.ParseTimestamp(zone, s, totype.Scale)
 			if err != nil {
+				if mode == castModeAssignmentIgnore && !isBinary && isTemporalLexicalConversionError(err) {
+					appendTemporalAssignmentConversionWarning(proc, "timestamp", s)
+					if err = to.Append(types.ZeroTimestamp, false); err != nil {
+						return err
+					}
+					continue
+				}
 				return err
 			}
 			if val == types.ZeroTimestamp && !assignmentCast {
@@ -8434,8 +9002,10 @@ func strToStr(
 		return nil
 	}
 
-	if (totype.Oid != types.T_text || isTinyTextType(totype)) &&
-		(destLen != 0 || totype.Oid == types.T_char || totype.Oid == types.T_varchar) {
+	byteWidth, hasByteWidth := stringFamilyByteWidth(toType)
+	enforceByteWidth := mode.isAssignment() && hasByteWidth
+	if (totype.Oid != types.T_text || isTinyTextType(totype) || enforceByteWidth) &&
+		(destLen != 0 || totype.Oid == types.T_char || totype.Oid == types.T_varchar || enforceByteWidth) {
 		for i = 0; i < l; i++ {
 			v, null := from.GetStrValue(i)
 			if null {
@@ -8456,7 +9026,11 @@ func strToStr(
 				//     (allowTrailingSpaceTrim, MySQL-compatible);
 				//   - non-strict mode: truncate;
 				//   - otherwise (strict, real over-length): reject with 1406.
-				if (allowTrailingSpaceTrim && overLenIsAllTrailingSpaces(s, destLen)) || !strictStringWidth {
+				trailingSpaceOnly := allowTrailingSpaceTrim && overLenIsAllTrailingSpaces(s, destLen)
+				if trailingSpaceOnly || !strictStringWidth {
+					if mode.reportsStringTruncationWarning() {
+						appendStringAssignmentTruncationWarning(proc, toType, i, trailingSpaceOnly)
+					}
 					v = []byte(truncateStringByRunes(s, destLen))
 				} else if allowTrailingSpaceTrim {
 					extraInfo := fmt.Sprintf(
@@ -8476,14 +9050,27 @@ func strToStr(
 						destLen,
 					))
 				}
+			} else if enforceByteWidth && len(v) > byteWidth {
+				if !strictStringWidth {
+					if mode.reportsStringTruncationWarning() {
+						appendStringAssignmentTruncationWarning(proc, toType, i, false)
+					}
+					v = truncateStringFamilyByBytes(v, toType, byteWidth)
+				} else {
+					return formatDataTruncationError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(
+						"Src length %v is larger than Dest length %v", len(v), byteWidth), reportDataTooLong)
+				}
 			} else if isTinyTextType(toType) && len(v) > destLen {
 				if !strictStringWidth {
+					if mode.reportsStringTruncationWarning() {
+						appendStringAssignmentTruncationWarning(proc, toType, i, false)
+					}
 					v = truncateTextByBytes(v, destLen)
 				} else {
 					return formatDataTruncationError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(
 						"Src length %v is larger than Dest length %v", len(v), destLen), reportDataTooLong)
 				}
-			} else if utf8.RuneCountInString(s) > destLen {
+			} else if toType.Oid != types.T_text && toType.Oid != types.T_blob && utf8.RuneCountInString(s) > destLen {
 				return formatDataTruncationError(ctx, from.GetSourceVector(), totype, fmt.Sprintf(
 					"Src length %v is larger than Dest length %v", len(s), destLen))
 			}
@@ -8740,9 +9327,15 @@ func blobToArray[T types.ArrayElement](
 				return err
 			}
 		} else {
-			arr := types.BytesToArray[T](v)
-			if int(toType.Width) != len(arr) {
-				return moerr.NewArrayDefMismatchNoCtx(int(toType.Width), len(arr))
+			size := toType.GetArrayElementSize()
+			if len(v)%size != 0 {
+				return moerr.NewInvalidInputNoCtx("vector payload is not aligned to its element size")
+			}
+			if len(v)/size > types.MaxArrayDimension {
+				return moerr.NewInvalidInputNoCtx("vector dimension exceeds maximum dimension")
+			}
+			if n := len(v) / size; toType.Width != types.MaxArrayDimension && int(toType.Width) != n {
+				return moerr.NewArrayDefMismatchNoCtx(int(toType.Width), n)
 			}
 
 			if err := to.AppendBytes(v, false); err != nil {
@@ -8769,9 +9362,26 @@ func arrayToArray[I types.ArrayElement, O types.ArrayElement](
 			continue
 		}
 
-		// NOTE: During ARRAY --> ARRAY conversion, if you do width check
-		// `to.GetType().Width != from.GetType().Width`
-		// cases b/b and b+sqrt(b) fails.
+		// A DECLARED target dimension (to.Width) MUST match the value's ACTUAL element count.
+		// The same-OID branch below copies the payload verbatim and the cross-OID bridge preserves
+		// the element count, so without this a wrong-dimension value slips through under the target
+		// label -- e.g. a 3-d vector stored as VECF32(4) -- a mixed-dimension column that breaks
+		// distance queries and HNSW index construction (#28917). Validate the actual count, NOT the
+		// from-type width. An UNSIZED target (Width == MaxArrayDimension, the sentinel an arithmetic
+		// result such as b/b or b+sqrt(b) carries) declares no dimension, so skip it -- only a real
+		// declared dimension is enforced.
+		size := from.GetType().GetArrayElementSize()
+		if len(v)%size != 0 {
+			return moerr.NewInvalidInputNoCtx("vector payload is not aligned to its element size")
+		}
+		if len(v)/size > types.MaxArrayDimension {
+			return moerr.NewInvalidInputNoCtx("vector dimension exceeds maximum dimension")
+		}
+		if w := int(to.GetType().Width); w > 0 && w != types.MaxArrayDimension {
+			if n := len(v) / size; n != w {
+				return moerr.NewArrayDefMismatchNoCtx(w, n)
+			}
+		}
 
 		if from.GetType().Oid == to.GetType().Oid {
 			// Eg:- VECF32(3) --> VECF32(3): identical byte layout, copy as-is.
@@ -8921,10 +9531,11 @@ func tsToInt64(
 }
 
 func jsonToStr(
+	proc *process.Process,
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
 	to *vector.FunctionResult[types.Varlena], length int, selectList *FunctionSelectList,
-	strictStringWidth bool, allowTrailingSpaceTrim bool, reportDataTooLong bool) error {
+	strictStringWidth bool, allowTrailingSpaceTrim bool, assignment bool, reportDataTooLong bool) error {
 	var i uint64
 	toType := to.GetType()
 	for i = 0; i < uint64(length); i++ {
@@ -8950,9 +9561,11 @@ func jsonToStr(
 				str = string(bs)
 			}
 			val := []byte(str)
-			// CHAR/VARCHAR widths count runes; TINYTEXT's limit counts bytes.
-			// Both paths preserve valid UTF-8 while applying sql_mode at runtime.
+			// CHAR/VARCHAR widths count runes; TEXT/BLOB family limits count
+			// bytes. Apply the latter only at an assignment boundary so ordinary
+			// expression casts keep their existing behavior.
 			destLen := int(toType.Width)
+			byteWidth, hasByteWidth := stringFamilyByteWidth(toType)
 			if toType.Oid == types.T_char || toType.Oid == types.T_varchar {
 				runeCount := utf8.RuneCountInString(str)
 				if runeCount > destLen {
@@ -8973,6 +9586,14 @@ func jsonToStr(
 						return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
 							"Src length %v is larger than Dest length %v", runeCount, destLen))
 					}
+				}
+			} else if assignment && hasByteWidth && len(val) > byteWidth {
+				if !strictStringWidth {
+					appendStringAssignmentTruncationWarning(proc, toType, i, false)
+					val = truncateStringFamilyByBytes(val, toType, byteWidth)
+				} else {
+					return formatDataTruncationError(ctx, from.GetSourceVector(), toType, fmt.Sprintf(
+						"Src length %v is larger than Dest length %v", len(val), byteWidth), reportDataTooLong)
 				}
 			} else if isTinyTextType(toType) && len(val) > destLen {
 				if !strictStringWidth {
@@ -9464,6 +10085,42 @@ func isTinyTextType(typ types.Type) bool {
 	return typ.Oid == types.T_text && typ.Width == types.MaxTinyTextLen
 }
 
+// stringFamilyByteWidth returns the declared byte capacity for a TEXT/BLOB
+// assignment target. Width zero is the legacy representation of ordinary TEXT
+// columns, so it keeps the ordinary TEXT limit. A width-zero BLOB is
+// intentionally left unbounded: old catalogs persisted TINYBLOB/BLOB/
+// MEDIUMBLOB/LONGBLOB with the same zero width and cannot be safely classified
+// after the fact. Newly declared BLOB columns carry a non-zero family width.
+func stringFamilyByteWidth(typ types.Type) (int, bool) {
+	if typ.Width < 0 {
+		return 0, false
+	}
+	switch typ.Oid {
+	case types.T_text:
+		if typ.Width == 0 {
+			return types.MaxStringSize, true
+		}
+		return int(typ.Width), true
+	case types.T_blob:
+		if typ.Width == 0 {
+			return 0, false
+		}
+		return int(typ.Width), true
+	default:
+		return 0, false
+	}
+}
+
+func truncateStringFamilyByBytes(value []byte, typ types.Type, maxBytes int) []byte {
+	if maxBytes < 0 || len(value) <= maxBytes {
+		return value
+	}
+	if typ.Oid == types.T_text {
+		return truncateTextByBytes(value, maxBytes)
+	}
+	return value[:maxBytes]
+}
+
 func castResultExceedsByteWidth(result []byte, toType types.Type) bool {
 	if toType.Width < 0 || toType.Oid == types.T_blob || toType.Oid == types.T_datalink {
 		return false
@@ -9549,7 +10206,8 @@ func formatDataTruncationError(
 	assignment ...bool,
 ) error {
 	if len(assignment) == 0 || !assignment[0] ||
-		(typ.Oid != types.T_char && typ.Oid != types.T_varchar && !isTinyTextType(typ)) {
+		(typ.Oid != types.T_char && typ.Oid != types.T_varchar &&
+			typ.Oid != types.T_blob && typ.Oid != types.T_text) {
 		return formatCastError(ctx, vec, typ, extraInfo)
 	}
 	var errStr string

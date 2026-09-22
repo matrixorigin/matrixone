@@ -94,7 +94,41 @@ const (
 	MORPCVersion56     int64 = 56 // session-scoped AUTO_INCREMENT increment/offset and provenance
 	MORPCVersion57     int64 = 57 // Arrow LOAD external-scan pipeline payload
 	MORPCVersion58     int64 = 58 // binary-string function semantics and runtime-domain metadata
-	MORPCLatestVersion       = MORPCVersion58
+	MORPCVersion59     int64 = 59 // typed numeric FORMAT arguments in remote expressions
+	MORPCVersion60     int64 = 60 // row-dependent expression defaults
+	MORPCVersion61     int64 = 61 // index metadata provenance columns (nrow, build_ts)
+	MORPCVersion62     int64 = 62 // VARCHAR OCT overload identities
+	MORPCVersion63     int64 = 63 // INSERT IGNORE CHECK warning diagnostics
+	MORPCVersion64     int64 = 64 // typed BIN/CONV execution contracts
+	MORPCVersion65     int64 = 65 // signed INT result contract for ASCII
+	MORPCVersion66     int64 = 66 // GROUP_CONCAT source-row diagnostics in aggregate partial state
+	MORPCVersion67     int64 = 67 // named process timezone identity
+	MORPCVersion68     int64 = 68 // complete GROUP_CONCAT cut reporting for strict writes
+	MORPCVersion69     int64 = 69 // exact bounded per-partition RANK with boundary ties
+	MORPCVersion70     int64 = 70 // row-dependent and unsigned CONV bases
+	MORPCVersion71     int64 = 71 // checked integer arithmetic overloads
+	MORPCVersion72     int64 = 72 // corrected IP function semantics and overload identities
+	MORPCVersion73     int64 = 73 // widened DECIMAL SUM partial state
+	MORPCVersion74     int64 = 74 // corrected numeric HEX overload identities
+	MORPCVersion75     int64 = 75 // persistent data-branch database identity
+	MORPCVersion76     int64 = 76 // NaN-ordered percentile and compatible HLL states
+	MORPCVersion77     int64 = 77 // complete typed SQL equivalence keys in HLL states
+	MORPCVersion78     int64 = 78 // length-delimited variable-length GROUP hash keys
+	MORPCVersion79     int64 = 79 // canonical opaque DISTINCT argument wire keys
+	MORPCVersion80     int64 = 80 // signed and widened string numeric result contracts
+	MORPCVersion81     int64 = 81 // opt-in table-owned AUTO_ID_CACHE and its PRE_INSERT wire marker
+	MORPCVersion82     int64 = 82 // self-completing fulltext2 json index probe (probe_tail contract)
+	MORPCVersion83     int64 = 83 // bounded COALESCE character and binary result domains
+	MORPCVersion84     int64 = 84 // extended discrete percentile input types
+	MORPCVersion85     int64 = 85 // shared integer-parameter coercion execution identities
+	MORPCVersion86     int64 = 86 // extended IP overload/result and expression metadata contracts
+	MORPCVersion87     int64 = 87 // preserve grouping provenance in remote batch transport
+	MORPCVersion88     int64 = 88 // canonical vector HLL_ADD_AGG hash keys
+	MORPCVersion89     int64 = 89 // exact decimal literal and coercion semantics
+	MORPCVersion90     int64 = 90 // geodetic distance semantics and length-unit overloads
+	MORPCVersion91     int64 = 91 // canonical CHAR and JSON HLL_ADD_AGG hash keys
+	MORPCVersion92     int64 = 92 // canonical scalar FLOAT HLL_ADD_AGG hash keys
+	MORPCLatestVersion       = MORPCVersion92
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

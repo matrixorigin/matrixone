@@ -1143,6 +1143,13 @@ func TestOnDuplicateUpdateVarcharFromTextUsesAssignmentCast(t *testing.T) {
 	logicPlan, err := runOneStmt(mock, t, "insert into text_cast_t(id, txt, vc) values (1, repeat('a', 260), '') on duplicate key update vc = txt")
 	assert.NoError(t, err)
 	assert.True(t, planHasTextToVarcharAssignCastWithWidth(logicPlan, 255))
+
+	// INSERT IGNORE keeps the same assignment conversion contract when an
+	// executable ODKU list is present; IGNORE must not route the statement to
+	// the insert-only row-skip path.
+	ignorePlan, err := runOneStmt(mock, t, "insert ignore into text_cast_t(id, txt, vc) values (1, repeat('a', 260), '') on duplicate key update vc = txt")
+	assert.NoError(t, err)
+	assert.True(t, planHasTextToVarcharCastWithNameAndWidth(ignorePlan, "cast_ignore", 255))
 }
 
 // test single table plan building
@@ -5822,7 +5829,7 @@ func TestInsertAddsCheckConstraintFilter(t *testing.T) {
 				continue
 			}
 			for _, expr := range node.FilterList {
-				if expr.GetF() != nil && expr.GetF().GetFunc().GetObjName() == "coalesce" {
+				if expr.GetF() != nil && expr.GetF().GetFunc().GetObjName() == "_check_constraint_assert" {
 					found = true
 				}
 			}
@@ -5941,7 +5948,7 @@ func TestInsertIgnoreCheckCompositeUniqueBuildsPlan(t *testing.T) {
 			continue
 		}
 		for _, expr := range node.FilterList {
-			foundCheckFilter = foundCheckFilter || exprContainsFuncName(expr, "coalesce")
+			foundCheckFilter = foundCheckFilter || exprContainsFuncName(expr, "_check_constraint_assert")
 		}
 	}
 	require.True(t, foundCheckFilter)
@@ -6314,7 +6321,7 @@ func TestCheckConstraintWithChildForeignKey(t *testing.T) {
 					if exprContainsFunction(expr, checkFunc) {
 						hasCheck = true
 						checkNodeID = int32(nodeID)
-						if nodeType == plan.Node_FILTER && checkFunc == "coalesce" {
+						if nodeType == plan.Node_FILTER && checkFunc == "_check_constraint_assert" {
 							require.True(t, node.FilterIsBarrier,
 								"IGNORE CHECK must remain above the final-row producer")
 						}
@@ -6346,7 +6353,7 @@ func TestCheckConstraintWithChildForeignKey(t *testing.T) {
 
 	t.Run("insert ignore", func(t *testing.T) {
 		query := build("INSERT IGNORE INTO emp (empno, deptno) VALUES (1, 10)")
-		assertPlanShape(t, query, plan.Node_FILTER, "coalesce")
+		assertPlanShape(t, query, plan.Node_FILTER, "_check_constraint_assert")
 	})
 
 	t.Run("update", func(t *testing.T) {
@@ -6356,7 +6363,7 @@ func TestCheckConstraintWithChildForeignKey(t *testing.T) {
 
 	t.Run("update ignore", func(t *testing.T) {
 		query := build("UPDATE IGNORE emp SET deptno = 0")
-		assertPlanShape(t, query, plan.Node_FILTER, "coalesce")
+		assertPlanShape(t, query, plan.Node_FILTER, "_check_constraint_assert")
 	})
 
 	t.Run("joined update", func(t *testing.T) {
@@ -8566,8 +8573,179 @@ func TestAggregateArgumentScalarSubqueryFlattenedBeforeOrderedGroupConcat(t *tes
 	require.Empty(t, collectReachableSortNodes(query))
 }
 
-func TestGroupConcatRejectsOrderBySubquery(t *testing.T) {
+func TestGroupConcatLogicalCallsKeepIndependentAggregateSlots(t *testing.T) {
+	// GROUP_CONCAT produces both a value and a warning side effect. The two
+	// calls below have the same value expression, but they are two logical
+	// aggregate instances in the SELECT list and MySQL reports a truncation
+	// warning for each one. The planner must not collapse the second call into
+	// the first aggregate slot through aggregateByAst.
+	logicPlan, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		`SELECT GROUP_CONCAT(N_NAME ORDER BY N_NATIONKEY),
+		        HEX(GROUP_CONCAT(N_NAME ORDER BY N_NATIONKEY))
+		   FROM NATION`,
+	)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	var aggregateSlots []int
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_AGG {
+			continue
+		}
+		count := 0
+		for _, agg := range node.AggList {
+			if fn := agg.GetF(); fn != nil && fn.Func != nil &&
+				fn.Func.ObjName == NameGroupConcat {
+				count++
+			}
+		}
+		if count > 0 {
+			aggregateSlots = append(aggregateSlots, count)
+		}
+	}
+	require.NotEmpty(t, aggregateSlots)
+	for _, count := range aggregateSlots {
+		require.Equal(t, 2, count)
+	}
+}
+
+func TestGroupConcatAliasReferencesReuseAggregateSlot(t *testing.T) {
+	queries := map[string]struct {
+		sql  string
+		want int
+	}{
+		"having alias": {
+			sql: `SELECT GROUP_CONCAT(N_NAME ORDER BY N_NATIONKEY) AS g
+		                   FROM NATION
+		                  HAVING LENGTH(g) > 0`,
+			want: 1,
+		},
+		"order alias": {
+			sql: `SELECT GROUP_CONCAT(N_NAME ORDER BY N_NATIONKEY) AS g
+		                 FROM NATION
+		                ORDER BY g`,
+			want: 1,
+		},
+		"nested order alias": {
+			sql: `SELECT GROUP_CONCAT(N_NAME ORDER BY N_NATIONKEY) AS g
+		                         FROM NATION
+		                        ORDER BY HEX(g)`,
+			want: 1,
+		},
+		"order exact expression": {
+			sql: `SELECT GROUP_CONCAT(N_NAME ORDER BY N_NATIONKEY)
+		                           FROM NATION
+		                          ORDER BY GROUP_CONCAT(N_NAME ORDER BY N_NATIONKEY)`,
+			want: 1,
+		},
+		"parenthesized exact expression": {
+			sql: `SELECT GROUP_CONCAT(N_NAME ORDER BY N_NATIONKEY)
+		                           FROM NATION
+		                          GROUP BY N_REGIONKEY
+		                          ORDER BY (GROUP_CONCAT(N_NAME ORDER BY N_NATIONKEY))`,
+			want: 1,
+		},
+		"order wrapped expression": {
+			sql: `SELECT GROUP_CONCAT(N_NAME ORDER BY N_NATIONKEY)
+		                              FROM NATION
+		                             GROUP BY N_REGIONKEY
+		                             ORDER BY HEX(GROUP_CONCAT(N_NAME ORDER BY N_NATIONKEY))`,
+			want: 2,
+		},
+		"single row wrapped expression": {
+			sql: `SELECT GROUP_CONCAT(N_NAME ORDER BY N_NATIONKEY)
+		                              FROM NATION
+		                             ORDER BY HEX(GROUP_CONCAT(N_NAME ORDER BY N_NATIONKEY))`,
+			want: 1,
+		},
+		"order ordinal": {
+			sql: `SELECT GROUP_CONCAT(N_NAME ORDER BY N_NATIONKEY) AS g
+		                   FROM NATION
+		                  ORDER BY 1`,
+			want: 1,
+		},
+		"distinct exact expression": {
+			sql: `SELECT DISTINCT GROUP_CONCAT(N_NAME ORDER BY N_NATIONKEY) AS g
+		                              FROM NATION
+		                             ORDER BY GROUP_CONCAT(N_NAME ORDER BY N_NATIONKEY)`,
+			want: 1,
+		},
+	}
+	for name, query := range queries {
+		t.Run(name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, query.sql)
+			require.NoError(t, err)
+			require.Equal(t, query.want, countGroupConcatAggregateSlots(logicPlan.GetQuery()))
+		})
+	}
+
+	logicPlan, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		`SELECT GROUP_CONCAT(N_NAME ORDER BY N_NATIONKEY)
+		   FROM NATION
+		  HAVING LENGTH(GROUP_CONCAT(N_NAME ORDER BY N_NATIONKEY)) > 0`,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 2, countGroupConcatAggregateSlots(logicPlan.GetQuery()))
+}
+
+func TestGroupConcatAliasesKeepTheirOwnAggregateSlots(t *testing.T) {
+	logicPlan, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		`WITH t AS (SELECT 1 AS id)
+		 SELECT GROUP_CONCAT(UUID()) AS a, GROUP_CONCAT(UUID()) AS b
+		   FROM t
+		  HAVING a <> b`,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 2, countGroupConcatAggregateSlots(logicPlan.GetQuery()))
+}
+
+func TestGroupConcatAliasExpansionDoesNotChangeGroupByBinding(t *testing.T) {
+	_, err := runOneStmt(
+		NewMockOptimizer(false),
+		t,
+		`WITH t AS (SELECT 1 AS id UNION ALL SELECT 2 AS id)
+		 SELECT id + 1 AS a
+		   FROM t
+		  GROUP BY (a)`,
+	)
+	require.NoError(t, err)
+}
+
+func countGroupConcatAggregateSlots(query *plan.Query) int {
+	count := 0
+	for _, node := range query.Nodes {
+		if node.NodeType != plan.Node_AGG {
+			continue
+		}
+		for _, agg := range node.AggList {
+			if fn := agg.GetF(); fn != nil && fn.Func != nil &&
+				fn.Func.ObjName == NameGroupConcat {
+				count++
+			}
+		}
+	}
+	return count
+}
+
+func TestGroupConcatOrderByScalarSubqueryIsFlattened(t *testing.T) {
 	tests := map[string]string{
+		"correlated explicit": `SELECT GROUP_CONCAT(
+		                              n.N_NAME
+		                              ORDER BY (SELECT r.R_REGIONKEY
+		                                          FROM REGION r
+		                                         WHERE r.R_REGIONKEY = n.N_NATIONKEY))
+		                         FROM NATION n`,
+		"uncorrelated explicit": `SELECT GROUP_CONCAT(
+		                                n.N_NAME
+		                                ORDER BY (SELECT MAX(r.R_REGIONKEY)
+		                                            FROM REGION r))
+		                           FROM NATION n`,
 		"positional": `SELECT n.N_REGIONKEY,
 		                     GROUP_CONCAT(
 		                         (SELECT r.R_NAME
@@ -8596,9 +8774,27 @@ func TestGroupConcatRejectsOrderBySubquery(t *testing.T) {
 
 	for name, sql := range tests {
 		t.Run(name, func(t *testing.T) {
-			_, err := runOneStmt(NewMockOptimizer(false), t, sql)
-			require.Error(t, err)
-			require.Contains(t, err.Error(), "subquery in group_concat ORDER BY")
+			logicPlan, err := runOneStmt(NewMockOptimizer(false), t, sql)
+			require.NoError(t, err)
+
+			foundGroupConcat := false
+			foundJoin := false
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_JOIN {
+					foundJoin = true
+				}
+				for _, agg := range node.AggList {
+					fn := agg.GetF()
+					if fn == nil || fn.Func == nil || fn.Func.ObjName != NameGroupConcat {
+						continue
+					}
+					foundGroupConcat = true
+					require.False(t, hasSubquery(agg), "GROUP_CONCAT contains an executable Expr_Sub")
+					require.Equal(t, plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER, fn.AggConfigType)
+				}
+			}
+			require.True(t, foundGroupConcat)
+			require.True(t, foundJoin, "scalar order key was not flattened into a join")
 		})
 	}
 }

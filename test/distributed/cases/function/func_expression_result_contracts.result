@@ -1,0 +1,259 @@
+drop database if exists expression_result_contracts;
+create database expression_result_contracts;
+use expression_result_contracts;
+create table source (
+txt varchar(512),
+b varbinary(128),
+t0 time(0),
+t6 time(6),
+dt0 datetime(0),
+dt6 datetime(6),
+ip varchar(32)
+);
+insert into source values
+('abcdefghi', _binary 'abc', '00:00:00', '00:00:00.123456',
+'2024-01-02 03:04:05', '2024-01-02 03:04:05.123456', '1.6'),
+('short', _binary 'z', NULL, '00:00:01.654321',
+NULL, '2024-01-02 03:04:06.654321', '1.6');
+create table contract_ctas as
+select to_base64(b) as b64,
+substring(txt, 1, 7) as sub7,
+left(txt, 7) as left7,
+right(txt, 7) as right7,
+coalesce(t0, t6) as coalesce_time,
+ifnull(t0, t6) as ifnull_time,
+if(dt0 is null, dt6, dt0) as if_datetime,
+case when t0 is null then t6 else t0 end as case_time,
+nullif(t0, t6) as nullif_time,
+inet_ntoa(ip) as ip_text,
+is_ipv4(ip) as ip_flag
+from source;
+select column_name, column_type, is_nullable
+from information_schema.columns
+where table_schema = database() and table_name = 'contract_ctas'
+order by ordinal_position;
+➤ column_name[12,256,0]  ¦  column_type[12,65535,0]  ¦  is_nullable[12,3,0]  𝄀
+b64  ¦  VARCHAR(174)  ¦  YES  𝄀
+sub7  ¦  VARCHAR(7)  ¦  YES  𝄀
+left7  ¦  VARCHAR(7)  ¦  YES  𝄀
+right7  ¦  VARCHAR(7)  ¦  YES  𝄀
+coalesce_time  ¦  TIME(6)  ¦  YES  𝄀
+ifnull_time  ¦  TIME(6)  ¦  YES  𝄀
+if_datetime  ¦  DATETIME(6)  ¦  YES  𝄀
+case_time  ¦  TIME(6)  ¦  YES  𝄀
+nullif_time  ¦  TIME(0)  ¦  YES  𝄀
+ip_text  ¦  VARCHAR(31)  ¦  YES  𝄀
+ip_flag  ¦  INT  ¦  YES
+select b64, sub7, left7, right7, coalesce_time, ifnull_time,
+if_datetime, case_time, nullif_time, ip_text, ip_flag
+from contract_ctas;
+➤ b64[12,174,0]  ¦  sub7[12,7,0]  ¦  left7[12,7,0]  ¦  right7[12,7,0]  ¦  coalesce_time[92,17,0]  ¦  ifnull_time[92,17,0]  ¦  if_datetime[93,26,0]  ¦  case_time[92,17,0]  ¦  nullif_time[92,10,0]  ¦  ip_text[12,31,0]  ¦  ip_flag[4,32,0]  𝄀
+YWJj  ¦  abcdefg  ¦  abcdefg  ¦  cdefghi  ¦  00:00:00  ¦  00:00:00  ¦  2024-01-02 03:04:05  ¦  00:00:00  ¦  00:00:00  ¦  0.0.0.1  ¦  0  𝄀
+eg==  ¦  short  ¦  short  ¦  short  ¦  00:00:01.654321000  ¦  00:00:01.654321000  ¦  2024-01-02 03:04:06.654321000  ¦  00:00:01.654321000  ¦  null  ¦  0.0.0.1  ¦  0
+create index idx_contract_b64 on contract_ctas (b64);
+select count(*) as indexed_bounded_result
+from mo_catalog.mo_indexes as i
+join mo_catalog.mo_tables as t on i.table_id = t.rel_id
+where t.reldatabase = database() and t.relname = 'contract_ctas'
+and i.name = 'idx_contract_b64' and i.column_name = 'b64';
+➤ indexed_bounded_result[-5,64,0]  𝄀
+1
+create view contract_view as
+select to_base64(b) as b64,
+substring(txt, 1, 7) as sub7,
+left(txt, 7) as left7,
+right(txt, 7) as right7,
+coalesce(t0, t6) as coalesce_time,
+ifnull(t0, t6) as ifnull_time,
+if(dt0 is null, dt6, dt0) as if_datetime,
+case when t0 is null then t6 else t0 end as case_time,
+nullif(t0, t6) as nullif_time,
+inet_ntoa(ip) as ip_text,
+is_ipv4(ip) as ip_flag
+from source;
+select column_name, column_type, is_nullable
+from information_schema.columns
+where table_schema = database() and table_name = 'contract_view'
+order by ordinal_position;
+➤ column_name[12,256,0]  ¦  column_type[12,65535,0]  ¦  is_nullable[12,3,0]  𝄀
+b64  ¦  VARCHAR(174)  ¦  YES  𝄀
+sub7  ¦  VARCHAR(7)  ¦  YES  𝄀
+left7  ¦  VARCHAR(7)  ¦  YES  𝄀
+right7  ¦  VARCHAR(7)  ¦  YES  𝄀
+coalesce_time  ¦  TIME(6)  ¦  YES  𝄀
+ifnull_time  ¦  TIME(6)  ¦  YES  𝄀
+if_datetime  ¦  DATETIME(6)  ¦  YES  𝄀
+case_time  ¦  TIME(6)  ¦  YES  𝄀
+nullif_time  ¦  TIME(0)  ¦  YES  𝄀
+ip_text  ¦  VARCHAR(31)  ¦  YES  𝄀
+ip_flag  ¦  INT  ¦  YES
+select b64, sub7, left7, right7, coalesce_time, ifnull_time,
+if_datetime, case_time, nullif_time, ip_text, ip_flag
+from contract_view
+order by if_datetime is null, if_datetime;
+➤ b64[12,174,0]  ¦  sub7[12,7,0]  ¦  left7[12,7,0]  ¦  right7[12,7,0]  ¦  coalesce_time[92,17,0]  ¦  ifnull_time[92,17,0]  ¦  if_datetime[93,26,0]  ¦  case_time[92,17,0]  ¦  nullif_time[92,10,0]  ¦  ip_text[12,31,0]  ¦  ip_flag[4,32,0]  𝄀
+YWJj  ¦  abcdefg  ¦  abcdefg  ¦  cdefghi  ¦  00:00:00  ¦  00:00:00  ¦  2024-01-02 03:04:05  ¦  00:00:00  ¦  00:00:00  ¦  0.0.0.1  ¦  0  𝄀
+eg==  ¦  short  ¦  short  ¦  short  ¦  00:00:01.654321000  ¦  00:00:01.654321000  ¦  2024-01-02 03:04:06.654321000  ¦  00:00:01.654321000  ¦  null  ¦  0.0.0.1  ¦  0
+create table slice_source (id int, txt varchar(5000), t6 time(6), t0 time(0), dt6 datetime(6), dt0 datetime(0));
+insert into slice_source values
+(1, '甲乙丙丁', '00:00:00.123456', '00:00:00', '2024-01-02 03:04:05.123456', '2024-01-02 03:04:05'),
+(2, 'abc', '00:00:01', '00:00:01', '2024-01-02 03:04:05', '2024-01-02 03:04:05'),
+(3, NULL, NULL, '00:00:01', NULL, '2024-01-02 03:04:05'),
+(4, '甲乙丙丁', '00:00:00.999999', NULL, '2024-01-02 03:04:05.999999', NULL);
+select id, substring(txt, 1, 3) as sub3, left(txt, 3) as left3, right(txt, 3) as right3,
+nullif(t6, t0) as nt6, nullif(t0, t6) as nt0,
+nullif(dt6, dt0) as nd6, nullif(dt0, dt6) as nd0
+from slice_source order by id;
+➤ id[4,32,0]  ¦  sub3[12,3,0]  ¦  left3[12,3,0]  ¦  right3[12,3,0]  ¦  nt6[92,17,0]  ¦  nt0[92,10,0]  ¦  nd6[93,26,0]  ¦  nd0[93,19,0]  𝄀
+1  ¦  甲乙丙  ¦  甲乙丙  ¦  乙丙丁  ¦  00:00:00.123456000  ¦  00:00:00  ¦  2024-01-02 03:04:05.123456000  ¦  2024-01-02 03:04:05  𝄀
+2  ¦  abc  ¦  abc  ¦  abc  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null  ¦  00:00:01  ¦  null  ¦  2024-01-02 03:04:05  𝄀
+4  ¦  甲乙丙  ¦  甲乙丙  ¦  乙丙丁  ¦  00:00:00.999999000  ¦  null  ¦  2024-01-02 03:04:05.999999000  ¦  null
+create view slice_view as
+select id, substring(txt, 1, 3) as sub3, substr(txt, 2, 3) as substr3,
+mid(txt, 2, 3) as mid3, left(txt, 3) as left3, right(txt, 3) as right3,
+substring(txt, 1, 100) as sub100,
+nullif(t6, t0) as nt6, nullif(t0, t6) as nt0,
+nullif(dt6, dt0) as nd6, nullif(dt0, dt6) as nd0
+from slice_source;
+create table slice_ctas as select * from slice_view;
+select table_name, column_name, column_type from information_schema.columns
+where table_schema = database() and table_name in ('slice_view', 'slice_ctas')
+order by table_name, ordinal_position;
+➤ table_name[12,256,0]  ¦  column_name[12,256,0]  ¦  column_type[12,65535,0]  𝄀
+slice_ctas  ¦  id  ¦  INT(32)  𝄀
+slice_ctas  ¦  sub3  ¦  VARCHAR(3)  𝄀
+slice_ctas  ¦  substr3  ¦  VARCHAR(3)  𝄀
+slice_ctas  ¦  mid3  ¦  VARCHAR(3)  𝄀
+slice_ctas  ¦  left3  ¦  VARCHAR(3)  𝄀
+slice_ctas  ¦  right3  ¦  VARCHAR(3)  𝄀
+slice_ctas  ¦  sub100  ¦  VARCHAR(100)  𝄀
+slice_ctas  ¦  nt6  ¦  TIME(6)  𝄀
+slice_ctas  ¦  nt0  ¦  TIME(0)  𝄀
+slice_ctas  ¦  nd6  ¦  DATETIME(6)  𝄀
+slice_ctas  ¦  nd0  ¦  DATETIME(0)  𝄀
+slice_view  ¦  id  ¦  INT(32)  𝄀
+slice_view  ¦  sub3  ¦  VARCHAR(3)  𝄀
+slice_view  ¦  substr3  ¦  VARCHAR(3)  𝄀
+slice_view  ¦  mid3  ¦  VARCHAR(3)  𝄀
+slice_view  ¦  left3  ¦  VARCHAR(3)  𝄀
+slice_view  ¦  right3  ¦  VARCHAR(3)  𝄀
+slice_view  ¦  sub100  ¦  VARCHAR(100)  𝄀
+slice_view  ¦  nt6  ¦  TIME(6)  𝄀
+slice_view  ¦  nt0  ¦  TIME(0)  𝄀
+slice_view  ¦  nd6  ¦  DATETIME(6)  𝄀
+slice_view  ¦  nd0  ¦  DATETIME(0)
+select * from slice_view order by id;
+➤ id[4,32,0]  ¦  sub3[12,3,0]  ¦  substr3[12,3,0]  ¦  mid3[12,3,0]  ¦  left3[12,3,0]  ¦  right3[12,3,0]  ¦  sub100[12,100,0]  ¦  nt6[92,17,0]  ¦  nt0[92,10,0]  ¦  nd6[93,26,0]  ¦  nd0[93,19,0]  𝄀
+1  ¦  甲乙丙  ¦  乙丙丁  ¦  乙丙丁  ¦  甲乙丙  ¦  乙丙丁  ¦  甲乙丙丁  ¦  00:00:00.123456000  ¦  00:00:00  ¦  2024-01-02 03:04:05.123456000  ¦  2024-01-02 03:04:05  𝄀
+2  ¦  abc  ¦  bc  ¦  bc  ¦  abc  ¦  abc  ¦  abc  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  00:00:01  ¦  null  ¦  2024-01-02 03:04:05  𝄀
+4  ¦  甲乙丙  ¦  乙丙丁  ¦  乙丙丁  ¦  甲乙丙  ¦  乙丙丁  ¦  甲乙丙丁  ¦  00:00:00.999999000  ¦  null  ¦  2024-01-02 03:04:05.999999000  ¦  null
+select * from slice_ctas order by id;
+➤ id[4,32,0]  ¦  sub3[12,3,0]  ¦  substr3[12,3,0]  ¦  mid3[12,3,0]  ¦  left3[12,3,0]  ¦  right3[12,3,0]  ¦  sub100[12,100,0]  ¦  nt6[92,17,0]  ¦  nt0[92,10,0]  ¦  nd6[93,26,0]  ¦  nd0[93,19,0]  𝄀
+1  ¦  甲乙丙  ¦  乙丙丁  ¦  乙丙丁  ¦  甲乙丙  ¦  乙丙丁  ¦  甲乙丙丁  ¦  00:00:00.123456000  ¦  00:00:00  ¦  2024-01-02 03:04:05.123456000  ¦  2024-01-02 03:04:05  𝄀
+2  ¦  abc  ¦  bc  ¦  bc  ¦  abc  ¦  abc  ¦  abc  ¦  null  ¦  null  ¦  null  ¦  null  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  00:00:01  ¦  null  ¦  2024-01-02 03:04:05  𝄀
+4  ¦  甲乙丙  ¦  乙丙丁  ¦  乙丙丁  ¦  甲乙丙  ¦  乙丙丁  ¦  甲乙丙丁  ¦  00:00:00.999999000  ¦  null  ¦  2024-01-02 03:04:05.999999000  ¦  null
+prepare slice_reuse from 'select id, substring(txt, 1, 3) as sub3, char_length(left(txt, 3)) as chars, octet_length(left(txt, 3)) as bytes, nullif(t6, t0) as nt6, nullif(t0, t6) as nt0, nullif(dt6, dt0) as nd6 from slice_source where id = ?';
+set @slice_id = 1;
+execute slice_reuse using @slice_id;
+➤ id[4,32,0]  ¦  sub3[12,3,0]  ¦  chars[-5,64,0]  ¦  bytes[-5,64,0]  ¦  nt6[92,17,0]  ¦  nt0[92,10,0]  ¦  nd6[93,26,0]  𝄀
+1  ¦  甲乙丙  ¦  3  ¦  9  ¦  00:00:00.123456000  ¦  00:00:00  ¦  2024-01-02 03:04:05.123456000
+set @slice_id = 2;
+execute slice_reuse using @slice_id;
+➤ id[4,32,0]  ¦  sub3[12,3,0]  ¦  chars[-5,64,0]  ¦  bytes[-5,64,0]  ¦  nt6[92,17,0]  ¦  nt0[92,10,0]  ¦  nd6[93,26,0]  𝄀
+2  ¦  abc  ¦  3  ¦  3  ¦  null  ¦  null  ¦  null
+set @slice_id = 3;
+execute slice_reuse using @slice_id;
+➤ id[4,32,0]  ¦  sub3[12,3,0]  ¦  chars[-5,64,0]  ¦  bytes[-5,64,0]  ¦  nt6[92,17,0]  ¦  nt0[92,10,0]  ¦  nd6[93,26,0]  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null  ¦  00:00:01  ¦  null
+set @slice_id = 4;
+execute slice_reuse using @slice_id;
+➤ id[4,32,0]  ¦  sub3[12,3,0]  ¦  chars[-5,64,0]  ¦  bytes[-5,64,0]  ¦  nt6[92,17,0]  ¦  nt0[92,10,0]  ¦  nd6[93,26,0]  𝄀
+4  ¦  甲乙丙  ¦  3  ¦  9  ¦  00:00:00.999999000  ¦  null  ¦  2024-01-02 03:04:05.999999000
+set @slice_id = 1;
+execute slice_reuse using @slice_id;
+➤ id[4,32,0]  ¦  sub3[12,3,0]  ¦  chars[-5,64,0]  ¦  bytes[-5,64,0]  ¦  nt6[92,17,0]  ¦  nt0[92,10,0]  ¦  nd6[93,26,0]  𝄀
+1  ¦  甲乙丙  ¦  3  ¦  9  ¦  00:00:00.123456000  ¦  00:00:00  ¦  2024-01-02 03:04:05.123456000
+deallocate prepare slice_reuse;
+create table ip_inputs (v varchar(32));
+insert into ip_inputs values ('1.6'), ('4294967295.9'), ('4294967296'), ('bad'), (NULL);
+select v, inet_ntoa(v) as ip_text from ip_inputs order by v is null, v;
+➤ v[12,32,0]  ¦  ip_text[12,31,0]  𝄀
+1.6  ¦  0.0.0.1  𝄀
+4294967295.9  ¦  255.255.255.255  𝄀
+4294967296  ¦  null  𝄀
+bad  ¦  0.0.0.0  𝄀
+null  ¦  null
+select inet_ntoa(true) as bool_value,
+inet_ntoa(date '2024-01-02') as date_value,
+inet_ntoa(time '00:00:02.654321') as time_value,
+inet_ntoa(cast(1.6 as json)) as json_number,
+inet_ntoa(json_extract(cast('1.6' as json), '$')) as json_extract_number,
+inet_ntoa(cast(true as json)) as json_true,
+inet_ntoa(cast(false as json)) as json_false,
+inet_ntoa(json_extract(json_array('258'), '$[0]')) as json_string_integer,
+inet_ntoa(json_extract(json_array('bad'), '$[0]')) as json_string_bad,
+inet_ntoa(json_extract(json_array('1e100'), '$[0]')) as json_string_overflow;
+➤ bool_value[12,31,0]  ¦  date_value[12,31,0]  ¦  time_value[12,31,0]  ¦  json_number[12,31,0]  ¦  json_extract_number[12,31,0]  ¦  json_true[12,31,0]  ¦  json_false[12,31,0]  ¦  json_string_integer[12,31,0]  ¦  json_string_bad[12,31,0]  ¦  json_string_overflow[12,31,0]  𝄀
+0.0.0.1  ¦  1.52.214.230  ¦  0.0.0.2  ¦  0.0.0.2  ¦  0.0.0.2  ¦  0.0.0.1  ¦  0.0.0.0  ¦  0.0.1.2  ¦  0.0.0.0  ¦  null
+prepare inet_ntoa_contract_reuse from 'select inet_ntoa(?) as ip_text';
+set @inet_value = 1.6;
+execute inet_ntoa_contract_reuse using @inet_value;
+➤ ip_text[12,31,0]  𝄀
+0.0.0.2
+prepare inet_ntoa_domain_isolation from 'select inet_ntoa(?) as ip_text, concat(?, ''x'') as text_value';
+set @inet_value = cast(1.6 as json);
+execute inet_ntoa_domain_isolation using @inet_value, @inet_value;
+➤ ip_text[12,31,0]  ¦  text_value[-1,16383,0]  𝄀
+0.0.0.2  ¦  1.6x
+deallocate prepare inet_ntoa_domain_isolation;
+set @inet_value = '1.6';
+execute inet_ntoa_contract_reuse using @inet_value;
+➤ ip_text[12,31,0]  𝄀
+0.0.0.1
+set @inet_value = cast('2024-01-02' as date);
+execute inet_ntoa_contract_reuse using @inet_value;
+➤ ip_text[12,31,0]  𝄀
+1.52.214.230
+set @inet_value = cast('00:00:02.654321' as time(6));
+execute inet_ntoa_contract_reuse using @inet_value;
+➤ ip_text[12,31,0]  𝄀
+0.0.0.3
+set @inet_value = cast(1.6 as json);
+execute inet_ntoa_contract_reuse using @inet_value;
+➤ ip_text[12,31,0]  𝄀
+0.0.0.2
+set @inet_value = json_extract(json_array('258'), '$[0]');
+execute inet_ntoa_contract_reuse using @inet_value;
+➤ ip_text[12,31,0]  𝄀
+0.0.1.2
+set @inet_value = NULL;
+execute inet_ntoa_contract_reuse using @inet_value;
+➤ ip_text[12,31,0]  𝄀
+null
+deallocate prepare inet_ntoa_contract_reuse;
+create table inet_ntoa_dml_contract (ip varchar(31));
+prepare inet_ntoa_dml_insert from
+'insert into inet_ntoa_dml_contract values (inet_ntoa(?))';
+set @inet_insert_value = cast(1.6 as json);
+execute inet_ntoa_dml_insert using @inet_insert_value;
+set @inet_insert_value = '1.6';
+execute inet_ntoa_dml_insert using @inet_insert_value;
+select ip from inet_ntoa_dml_contract order by ip;
+➤ ip[12,31,0]  𝄀
+0.0.0.1  𝄀
+0.0.0.2
+deallocate prepare inet_ntoa_dml_insert;
+drop table inet_ntoa_dml_contract;
+select inet_ntoa(0x0102) as hex_value,
+inet_ntoa(X'31') as hex_string_value,
+inet_ntoa(b'100000010') as bit_value,
+inet_ntoa(_binary '1.6') as binary_string_value,
+inet_ntoa(_binary X'31') as binary_hex_string_value,
+inet_ntoa(concat(X'31')) as nested_hex_concat_value,
+inet_ntoa(cast(X'31' as char)) as nested_hex_cast_value;
+➤ hex_value[12,31,0]  ¦  hex_string_value[12,31,0]  ¦  bit_value[12,31,0]  ¦  binary_string_value[12,31,0]  ¦  binary_hex_string_value[12,31,0]  ¦  nested_hex_concat_value[12,31,0]  ¦  nested_hex_cast_value[12,31,0]  𝄀
+0.0.1.2  ¦  0.0.0.49  ¦  0.0.1.2  ¦  0.0.0.1  ¦  0.0.0.1  ¦  0.0.0.1  ¦  0.0.0.1
+drop database if exists expression_result_contracts;

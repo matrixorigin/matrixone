@@ -19,6 +19,7 @@ import (
 	"math"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -45,8 +46,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/rightdedupjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_function"
+	windowop "github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -277,7 +281,7 @@ func TestConstructAggregateConfigIncludesGroupConcatMaxLen(t *testing.T) {
 		require.Equal(t, "group_concat_max_len", name)
 		require.True(t, system)
 		require.False(t, global)
-		return int64(5), nil
+		return uint64(5), nil
 	})
 
 	valueArg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}}
@@ -289,6 +293,42 @@ func TestConstructAggregateConfigIncludesGroupConcatMaxLen(t *testing.T) {
 
 	require.Equal(t, []*plan.Expr{valueArg}, args)
 	require.Equal(t, aggexec.EncodeGroupConcatConfig("", 5), config)
+}
+
+func TestGroupConcatMaxLenAsUint64(t *testing.T) {
+	tests := []struct {
+		name  string
+		value interface{}
+		want  uint64
+		ok    bool
+	}{
+		{name: "int", value: int(5), want: 5, ok: true},
+		{name: "negative int", value: int(-1)},
+		{name: "uint", value: uint(5), want: 5, ok: true},
+		{name: "int8", value: int8(5), want: 5, ok: true},
+		{name: "negative int8", value: int8(-1)},
+		{name: "uint8", value: uint8(5), want: 5, ok: true},
+		{name: "int16", value: int16(5), want: 5, ok: true},
+		{name: "negative int16", value: int16(-1)},
+		{name: "uint16", value: uint16(5), want: 5, ok: true},
+		{name: "int32", value: int32(5), want: 5, ok: true},
+		{name: "negative int32", value: int32(-1)},
+		{name: "uint32", value: uint32(5), want: 5, ok: true},
+		{name: "int64", value: int64(5), want: 5, ok: true},
+		{name: "negative int64", value: int64(-1)},
+		{name: "uint64", value: uint64(5), want: 5, ok: true},
+		{name: "float", value: float64(5)},
+		{name: "string", value: "5"},
+		{name: "nil", value: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := groupConcatMaxLenAsUint64(tt.value)
+			require.Equal(t, tt.want, got)
+			require.Equal(t, tt.ok, ok)
+		})
+	}
 }
 
 func TestConstructAggregateConfigPreservesOrderedGroupConcatArgs(t *testing.T) {
@@ -327,7 +367,7 @@ func TestConstructAggregateConfigApproxPercentileWithinGroup(t *testing.T) {
 	}{
 		{name: "ordinary form", want: "0.25"},
 		{name: "ordered ascending", planConfig: []byte{0}, want: "0.25"},
-		{name: "ordered descending", planConfig: []byte{1}, want: "0.75"},
+		{name: "ordered descending", planConfig: []byte{1}, want: "DESC:0.25"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			args, config := constructAggregateConfig(&plan.Function{
@@ -339,24 +379,6 @@ func TestConstructAggregateConfigApproxPercentileWithinGroup(t *testing.T) {
 			require.Equal(t, tc.want, string(config))
 		})
 	}
-}
-
-func TestComplementPercentileConfigPreservesDecimalScale(t *testing.T) {
-	for _, tc := range []struct {
-		input string
-		want  string
-	}{
-		{input: "0", want: "1"},
-		{input: "1", want: "0"},
-		{input: "0.95", want: "0.05"},
-		{input: "0.500", want: "0.500"},
-	} {
-		actual, err := complementPercentileConfig([]byte(tc.input))
-		require.NoError(t, err)
-		require.Equal(t, tc.want, string(actual))
-	}
-	_, err := complementPercentileConfig([]byte("invalid"))
-	require.Error(t, err)
 }
 
 func TestConstructAggregateConfigOrderedPercentile(t *testing.T) {
@@ -383,6 +405,329 @@ func TestConstructAggregateConfigOrderedPercentile(t *testing.T) {
 	require.Equal(t, aggexec.EncodeOrderedPercentileConfig([]byte("0"), false), config)
 }
 
+func TestConstructAggregateConfigPreparedPercentile(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("0.25"), false, proc.Mp()))
+	defer params.Free(proc.Mp())
+	proc.SetPrepareParams(params)
+
+	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}}
+	for _, tc := range []struct {
+		name string
+		want []byte
+	}{
+		{name: plan2.NameApproxPercentile, want: []byte("0.25")},
+		{name: plan2.NamePercentileCont, want: aggexec.EncodeOrderedPercentileConfig([]byte("0.25"), false)},
+		{name: plan2.NamePercentileDisc, want: aggexec.EncodeOrderedPercentileConfig([]byte("0.25"), false)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			percentile := &plan.Expr{
+				Typ:  plan.Type{Id: int32(types.T_text)},
+				Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+			}
+			bound, err := plan2.BindFuncExprImplByPlanExpr(
+				context.Background(), tc.name, []*plan.Expr{value, percentile})
+			require.NoError(t, err)
+			args, config := constructAggregateConfig(bound.GetF(), proc)
+			require.Equal(t, []*plan.Expr{value}, args)
+			require.Equal(t, tc.want, config)
+		})
+	}
+}
+
+func TestConstructAggregateConfigPreparedPercentileExpression(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}}
+	parameter := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_text)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+	}
+	percent := plan2.MakePlan2Float64ConstExprWithType(100)
+	configExpr, err := plan2.BindFuncExprImplByPlanExpr(
+		context.Background(), "/", []*plan.Expr{parameter, percent})
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name string
+		want []byte
+	}{
+		{name: plan2.NameApproxPercentile, want: []byte("0.5")},
+		{name: plan2.NamePercentileCont, want: aggexec.EncodeOrderedPercentileConfig([]byte("0.5"), false)},
+		{name: plan2.NamePercentileDisc, want: aggexec.EncodeOrderedPercentileConfig([]byte("0.5"), false)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bound, bindErr := plan2.BindFuncExprImplByPlanExpr(
+				context.Background(), tc.name, []*plan.Expr{value, plan2.DeepCopyExpr(configExpr)})
+			require.NoError(t, bindErr)
+			original := plan2.DeepCopyExpr(bound.GetF().Args[1])
+
+			check := func(param []byte, isNull bool) ([]byte, error) {
+				params := vector.NewVec(types.T_text.ToType())
+				require.NoError(t, vector.AppendBytes(params, param, isNull, proc.Mp()))
+				proc.SetPrepareParams(params)
+				baseline := proc.Mp().CurrNB()
+				_, config, configErr := constructAggregateConfigWithError(bound.GetF(), proc)
+				require.Equal(t, baseline, proc.Mp().CurrNB())
+				proc.SetPrepareParams(nil)
+				params.Free(proc.Mp())
+				return config, configErr
+			}
+
+			config, configErr := check([]byte("50"), false)
+			require.NoError(t, configErr)
+			require.Equal(t, tc.want, config)
+
+			_, configErr = check([]byte("150"), false)
+			require.ErrorContains(t, configErr, "must be finite and in [0,1]")
+			_, configErr = check(nil, true)
+			require.ErrorContains(t, configErr, "cannot be NULL")
+			_, configErr = check([]byte("NaN"), false)
+			require.ErrorContains(t, configErr, "must be finite and in [0,1]")
+
+			config, configErr = check([]byte("50"), false)
+			require.NoError(t, configErr)
+			require.Equal(t, tc.want, config)
+			require.Equal(t, original, bound.GetF().Args[1],
+				"prepared execution must not mutate the cached expression")
+		})
+	}
+}
+
+func TestConstructAggregateConfigPreparedPercentileExpressionDivisionByZero(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("50"), false, proc.Mp()))
+	defer params.Free(proc.Mp())
+	proc.SetPrepareParams(params)
+
+	parameter := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_text)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+	}
+	configExpr, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "/", []*plan.Expr{
+		parameter,
+		plan2.MakePlan2Float64ConstExprWithType(0),
+	})
+	require.NoError(t, err)
+	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}}
+	bound, err := plan2.BindFuncExprImplByPlanExpr(
+		context.Background(), plan2.NamePercentileCont, []*plan.Expr{value, configExpr})
+	require.NoError(t, err)
+
+	_, _, err = constructAggregateConfigWithError(bound.GetF(), proc)
+	require.Error(t, err)
+}
+
+func TestConstructAggregateConfigPreparedDecimalPercentilePreservesPrecision(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	parameter := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_text)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+	}
+	decimalType := types.New(types.T_decimal128, 19, 18)
+	configExpr, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "cast", []*plan.Expr{
+		parameter,
+		{
+			Typ:  plan2.MakePlan2Type(&decimalType),
+			Expr: &plan.Expr_T{T: &plan.TargetType{}},
+		},
+	})
+	require.NoError(t, err)
+	configExpr.GetF().SyntaxExplicitCast = true
+	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}}
+
+	for _, tc := range []struct {
+		name string
+		want []byte
+	}{
+		{name: plan2.NameApproxPercentile, want: []byte("0.500000000000000001")},
+		{name: plan2.NamePercentileCont, want: aggexec.EncodeOrderedPercentileConfig([]byte("0.500000000000000001"), false)},
+		{name: plan2.NamePercentileDisc, want: aggexec.EncodeOrderedPercentileConfig([]byte("0.500000000000000001"), false)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bound, bindErr := plan2.BindFuncExprImplByPlanExpr(
+				context.Background(), tc.name, []*plan.Expr{value, plan2.DeepCopyExpr(configExpr)})
+			require.NoError(t, bindErr)
+			require.Equal(t, int32(types.T_decimal128), bound.GetF().Args[1].Typ.Id)
+
+			check := func(param string) ([]byte, error) {
+				params := vector.NewVec(types.T_text.ToType())
+				require.NoError(t, vector.AppendBytes(params, []byte(param), false, proc.Mp()))
+				proc.SetPrepareParams(params)
+				baseline := proc.Mp().CurrNB()
+				_, config, configErr := constructAggregateConfigWithError(bound.GetF(), proc)
+				require.Equal(t, baseline, proc.Mp().CurrNB())
+				proc.SetPrepareParams(nil)
+				params.Free(proc.Mp())
+				return config, configErr
+			}
+
+			config, configErr := check("0.500000000000000001")
+			require.NoError(t, configErr)
+			require.Equal(t, tc.want, config)
+
+			_, configErr = check("1.000000000000000001")
+			require.ErrorContains(t, configErr,
+				"must be in [0,1], got 1.000000000000000001")
+		})
+	}
+}
+
+func TestPreflightPercentileConfigsReturnsPreparedValueError(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}}
+	for _, test := range []struct {
+		name       string
+		function   string
+		descending bool
+		wantConfig []byte
+	}{
+		{name: "ordinary approx", function: plan2.NameApproxPercentile, wantConfig: []byte("0.25")},
+		{name: "ordered approx descending", function: plan2.NameApproxPercentile, descending: true, wantConfig: aggexec.EncodeApproxPercentileConfig([]byte("0.25"), true)},
+		{name: "continuous", function: plan2.NamePercentileCont},
+		{name: "discrete", function: plan2.NamePercentileDisc},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			percentile := &plan.Expr{
+				Typ:  plan.Type{Id: int32(types.T_text)},
+				Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+			}
+			bound, err := plan2.BindFuncExprImplByPlanExpr(
+				context.Background(), test.function,
+				[]*plan.Expr{value, percentile})
+			require.NoError(t, err)
+			if test.descending {
+				bound.GetF().AggConfig = []byte{1}
+			}
+			node := &plan.Node{AggList: []*plan.Expr{bound}}
+
+			check := func(param []byte, isNull bool) error {
+				params := vector.NewVec(types.T_text.ToType())
+				require.NoError(t, vector.AppendBytes(params, param, isNull, proc.Mp()))
+				proc.SetPrepareParams(params)
+				baseline := proc.Mp().CurrNB()
+				err := preflightPercentileConfigs(node, proc)
+				require.Equal(t, baseline, proc.Mp().CurrNB(),
+					"preflight evaluation must release its temporary vector")
+				proc.SetPrepareParams(nil)
+				params.Free(proc.Mp())
+				return err
+			}
+
+			err = check([]byte("1.5"), false)
+			require.ErrorContains(t, err,
+				"percentile argument of "+test.function+" must be finite and in [0,1]")
+			err = check(nil, true)
+			require.ErrorContains(t, err,
+				"percentile argument of "+test.function+" cannot be NULL")
+
+			params := vector.NewVec(types.T_text.ToType())
+			require.NoError(t, vector.AppendBytes(params, []byte("0.25"), false, proc.Mp()))
+			proc.SetPrepareParams(params)
+			baseline := proc.Mp().CurrNB()
+			require.NoError(t, preflightPercentileConfigs(node, proc),
+				"the same prepared aggregate must remain reusable after rejected executions")
+			require.Equal(t, baseline, proc.Mp().CurrNB())
+			if test.wantConfig != nil {
+				_, config, configErr := constructApproxPercentileConfig(bound.GetF(), proc)
+				require.NoError(t, configErr)
+				require.Equal(t, test.wantConfig, config)
+				require.Equal(t, baseline, proc.Mp().CurrNB())
+			}
+			proc.SetPrepareParams(nil)
+			params.Free(proc.Mp())
+		})
+	}
+}
+
+func TestConstructAggregateConfigOrderedPercentileNormalizesStaticCast(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		fn   string
+		desc bool
+	}{
+		{name: "continuous ascending", fn: plan2.NamePercentileCont},
+		{name: "discrete descending", fn: plan2.NamePercentileDisc, desc: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := plan2.NewMockCompilerContext(false)
+			direction := ""
+			if tc.desc {
+				direction = " desc"
+			}
+			stmt, err := parsers.ParseOne(
+				context.Background(),
+				dialect.MYSQL,
+				"select "+tc.fn+"(0.5) within group (order by n_nationkey"+direction+") from nation",
+				1,
+			)
+			require.NoError(t, err)
+			defer stmt.Free()
+			queryPlan, err := plan2.BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+
+			var percentileFn *plan.Function
+			for _, node := range queryPlan.GetQuery().GetNodes() {
+				for _, aggregate := range node.GetAggList() {
+					if fn := aggregate.GetF(); fn != nil && fn.GetFunc().GetObjName() == tc.fn {
+						percentileFn = fn
+					}
+				}
+			}
+			require.NotNil(t, percentileFn)
+			require.Len(t, percentileFn.GetArgs(), 2)
+			require.NotNil(t, percentileFn.GetArgs()[1].GetF(), "raw planner output should retain the static cast")
+			originalConfigExpr := plan2.DeepCopyExpr(percentileFn.GetArgs()[1])
+
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			defer proc.Free()
+			args, config := constructAggregateConfig(percentileFn, proc)
+			require.Len(t, args, 1)
+			require.Equal(t,
+				aggexec.EncodeOrderedPercentileConfig([]byte("0.5"), tc.desc),
+				config)
+			require.Equal(t, originalConfigExpr, percentileFn.GetArgs()[1])
+		})
+	}
+}
+
+func TestConstructAggregateConfigApproxPercentileNormalizesStaticCast(t *testing.T) {
+	ctx := plan2.NewMockCompilerContext(false)
+	stmt, err := parsers.ParseOne(
+		context.Background(), dialect.MYSQL,
+		"select approx_percentile(0.5) within group (order by n_nationkey) from nation", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	queryPlan, err := plan2.BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+
+	var percentileFn *plan.Function
+	for _, node := range queryPlan.GetQuery().GetNodes() {
+		for _, aggregate := range node.GetAggList() {
+			if fn := aggregate.GetF(); fn != nil && fn.GetFunc().GetObjName() == plan2.NameApproxPercentile {
+				percentileFn = fn
+			}
+		}
+	}
+	require.NotNil(t, percentileFn)
+	require.Len(t, percentileFn.GetArgs(), 2)
+	require.NotNil(t, percentileFn.GetArgs()[1].GetF(), "raw planner output should retain the static cast")
+
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	args, config := constructAggregateConfig(percentileFn, proc)
+	require.Len(t, args, 1)
+	require.Equal(t, []byte("0.5"), config)
+}
+
 func TestConstructAggregateConfigOrderedPercentileRejectsInvalidInput(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	defer proc.Free()
@@ -396,20 +741,18 @@ func TestConstructAggregateConfigOrderedPercentileRejectsInvalidInput(t *testing
 
 	for _, fn := range []string{plan2.NamePercentileCont, plan2.NamePercentileDisc} {
 		t.Run(fn+" wrong argument count", func(t *testing.T) {
-			require.Panics(t, func() {
-				constructAggregateConfig(&plan.Function{
-					Func: &plan.ObjectRef{ObjName: fn},
-					Args: []*plan.Expr{value},
-				}, proc)
-			})
+			_, _, err := constructAggregateConfigWithError(&plan.Function{
+				Func: &plan.ObjectRef{ObjName: fn},
+				Args: []*plan.Expr{value},
+			}, proc)
+			require.ErrorContains(t, err, "requires a value and percentile argument")
 		})
 		t.Run(fn+" nonconstant percentile", func(t *testing.T) {
-			require.Panics(t, func() {
-				constructAggregateConfig(&plan.Function{
-					Func: &plan.ObjectRef{ObjName: fn},
-					Args: []*plan.Expr{value, percentileColumn},
-				}, proc)
-			})
+			_, _, err := constructAggregateConfigWithError(&plan.Function{
+				Func: &plan.ObjectRef{ObjName: fn},
+				Args: []*plan.Expr{value, percentileColumn},
+			}, proc)
+			require.ErrorContains(t, err, "must be a constant")
 		})
 	}
 
@@ -470,6 +813,16 @@ func TestDupOperatorMergeOrder(t *testing.T) {
 	if dupOp.SpillThreshold != op.SpillThreshold {
 		t.Errorf("SpillThreshold mismatch: got %d, want %d", dupOp.SpillThreshold, op.SpillThreshold)
 	}
+}
+
+func TestDupOperatorWindowPreservesSpillThreshold(t *testing.T) {
+	op := windowop.NewArgument()
+	defer op.Release()
+	op.SpillThreshold = 1234
+
+	duplicated := dupOperator(op, 0, 1).(*windowop.Window)
+	defer duplicated.Release()
+	require.Equal(t, op.SpillThreshold, duplicated.SpillThreshold)
 }
 
 func TestDupOperatorOrderPreservesSpecsAndAllocationContract(t *testing.T) {
@@ -736,16 +1089,224 @@ func TestConstructTimeWindowApproxPercentileRejectsInvalidConfig(t *testing.T) {
 		{
 			name:       "non constant",
 			percentile: nonConstant,
-			want:       "invalid input: percentile argument of approx_percentile must be a constant",
+			want:       "invalid input: percentile argument of approx_percentile must be a constant or parameter",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			node := makeTimeWindowAggNode(fn.GetEncodedOverloadID(), plan2.NameApproxPercentile, tc.percentile)
-			require.PanicsWithError(t, tc.want, func() {
-				constructTimeWindow(context.Background(), node, proc)
+			require.NotPanics(t, func() {
+				err = validateAggregateConfigs(node, proc)
 			})
+			require.ErrorContains(t, err, tc.want)
+			require.NotContains(t, err.Error(), "operator.go")
 		})
 	}
+}
+
+func TestCompileRejectsInvalidAggregateConfigWithoutPanicFrames(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	fn, err := function.GetFunctionByName(context.Background(), plan2.NameApproxPercentile, []types.Type{
+		types.T_int32.ToType(), types.T_float64.ToType(),
+	})
+	require.NoError(t, err)
+	node := makeTimeWindowAggNode(
+		fn.GetEncodedOverloadID(),
+		plan2.NameApproxPercentile,
+		plan2.MakePlan2Float64ConstExprWithType(-0.01),
+	)
+	node.NodeType = plan.Node_TIME_WINDOW
+
+	c := &Compile{proc: proc}
+	_, err = c.compilePlanScopeWithUnionAllDemand(
+		0, 0, []*plan.Node{node}, false)
+	require.ErrorContains(t, err,
+		"invalid input: percentile argument of approx_percentile")
+	require.NotContains(t, err.Error(), "operator.go")
+	require.NotContains(t, err.Error(), "compile.go")
+}
+
+func TestCompileValidatesAggregateConfigsBeforeBuildingEachOperator(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	fn, err := function.GetFunctionByName(context.Background(), plan2.NameApproxPercentile, []types.Type{
+		types.T_int32.ToType(), types.T_float64.ToType(),
+	})
+	require.NoError(t, err)
+
+	newInvalidAggregate := func() *plan.Expr {
+		return makeTimeWindowAggNode(
+			fn.GetEncodedOverloadID(),
+			plan2.NameApproxPercentile,
+			plan2.MakePlan2Float64ConstExprWithType(-0.01),
+		).AggList[0]
+	}
+	tests := []struct {
+		name string
+		node func() *plan.Node
+	}{
+		{
+			name: "aggregate",
+			node: func() *plan.Node {
+				return &plan.Node{
+					NodeType: plan.Node_AGG,
+					AggList:  []*plan.Expr{newInvalidAggregate()},
+				}
+			},
+		},
+		{
+			name: "window",
+			node: func() *plan.Node {
+				return &plan.Node{
+					NodeType: plan.Node_WINDOW,
+					WinSpecList: []*plan.Expr{{
+						Expr: &plan.Expr_W{W: &plan.WindowSpec{
+							WindowFunc: newInvalidAggregate(),
+						}},
+					}},
+				}
+			},
+		},
+		{
+			name: "time window",
+			node: func() *plan.Node {
+				node := makeTimeWindowAggNode(
+					fn.GetEncodedOverloadID(),
+					plan2.NameApproxPercentile,
+					plan2.MakePlan2Float64ConstExprWithType(-0.01),
+				)
+				node.NodeType = plan.Node_TIME_WINDOW
+				return node
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := &Compile{proc: proc}
+			var err error
+			require.NotPanics(t, func() {
+				_, err = c.compilePlanScopeWithUnionAllDemand(
+					0, 0, []*plan.Node{tc.node()}, false)
+			})
+			require.ErrorContains(t, err,
+				"invalid input: percentile argument of approx_percentile")
+			require.NotContains(t, err.Error(), "operator.go")
+			require.NotContains(t, err.Error(), "compile.go")
+		})
+	}
+}
+
+func TestConstructAggregateConfigRejectsOrderedPercentileErrors(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	value := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int32)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}},
+	}
+	nonConstant := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_float64)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 2}},
+	}
+	for _, name := range []string{plan2.NamePercentileCont, plan2.NamePercentileDisc} {
+		for _, tc := range []struct {
+			name   string
+			config *plan.Expr
+			want   string
+		}{
+			{
+				name:   "below range",
+				config: plan2.MakePlan2Float64ConstExprWithType(-0.01),
+				want:   "must be finite and in [0,1], got -0.01",
+			},
+			{
+				name:   "above range",
+				config: plan2.MakePlan2Float64ConstExprWithType(1.01),
+				want:   "must be finite and in [0,1], got 1.01",
+			},
+			{
+				name:   "non constant",
+				config: nonConstant,
+				want:   "must be a constant",
+			},
+			{
+				name:   "unsupported type",
+				config: plan2.MakePlan2StringConstExprWithType("0.5"),
+				want:   "unsupported percentile type",
+			},
+		} {
+			t.Run(name+"/"+tc.name, func(t *testing.T) {
+				f := &plan.Function{
+					Func: &plan.ObjectRef{ObjName: name},
+					Args: []*plan.Expr{value, tc.config},
+				}
+				_, _, err := constructAggregateConfigWithError(f, proc)
+				require.ErrorContains(t, err, tc.want)
+			})
+		}
+	}
+}
+
+func TestConstructAggregateConfigPropagatesConfigExpressionErrors(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	value := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int32)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}},
+	}
+	invalidConfig := &plan.Expr{Typ: plan.Type{Id: int32(types.T_float64)}}
+	for _, name := range []string{plan2.NamePercentileCont, plan2.NamePercentileDisc} {
+		f := &plan.Function{
+			Func: &plan.ObjectRef{ObjName: name},
+			Args: []*plan.Expr{value, invalidConfig},
+		}
+		_, _, err := constructAggregateConfigWithError(f, proc)
+		require.Error(t, err, name)
+	}
+}
+
+func TestConstructAggregateConfigCoversLegacyConfigurationFailures(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	value := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}}
+	badString := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}}
+
+	_, _, err := constructAggregateConfigWithError(nil, proc)
+	require.ErrorContains(t, err, "configuration is nil")
+	require.Panics(t, func() { constructAggregateConfig(nil, proc) })
+
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return nil, moerr.NewInvalidInputNoCtx("cannot resolve group_concat_max_len")
+	})
+	_, _, err = constructAggregateConfigWithError(&plan.Function{
+		Func: &plan.ObjectRef{ObjName: plan2.NameGroupConcat},
+		Args: []*plan.Expr{value},
+	}, proc)
+	require.ErrorContains(t, err, "cannot resolve group_concat_max_len")
+
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return "invalid", nil
+	})
+	_, _, err = constructAggregateConfigWithError(&plan.Function{
+		Func: &plan.ObjectRef{ObjName: plan2.NameGroupConcat},
+		Args: []*plan.Expr{value},
+	}, proc)
+	require.ErrorContains(t, err, "group_concat_max_len has invalid value")
+
+	proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+		return int64(1024), nil
+	})
+	for _, name := range []string{plan2.NameGroupConcat, plan2.NameClusterCenters} {
+		_, _, err = constructAggregateConfigWithError(&plan.Function{
+			Func: &plan.ObjectRef{ObjName: name},
+			Args: []*plan.Expr{value, badString},
+		}, proc)
+		require.Error(t, err, name)
+	}
+
 }
 
 func TestConstructAggregateConfigPreservesOtherSpecialConfigs(t *testing.T) {
@@ -1270,7 +1831,7 @@ func TestValidateApproxPercentileExpr(t *testing.T) {
 		}},
 	}
 	require.NoError(t, validateApproxPercentileExpr(literal))
-	require.Error(t, validateApproxPercentileExpr(parameter))
+	require.NoError(t, validateApproxPercentileExpr(parameter))
 }
 
 func TestValidateOrderedPercentileExpr(t *testing.T) {
@@ -1286,7 +1847,7 @@ func TestValidateOrderedPercentileExpr(t *testing.T) {
 
 	require.Error(t, validateOrderedPercentileExpr(nil, plan2.NamePercentileCont))
 	require.Error(t, validateOrderedPercentileExpr(column, plan2.NamePercentileCont))
-	require.Error(t, validateOrderedPercentileExpr(parameter, plan2.NamePercentileDisc))
+	require.NoError(t, validateOrderedPercentileExpr(parameter, plan2.NamePercentileDisc))
 	require.NoError(t, validateOrderedPercentileExpr(literal, plan2.NamePercentileCont))
 }
 

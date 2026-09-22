@@ -141,10 +141,10 @@ func cleanupClusterOnError(c Cluster, cause error) (Cluster, error) {
 		return nil, cause
 	}
 	cleanupErr := c.Close()
-	if cleanupErr != nil {
+	if !closeComplete(c, cleanupErr) {
 		return c, errors.Join(cause, cleanupErr)
 	}
-	return nil, cause
+	return nil, errors.Join(cause, cleanupErr)
 }
 
 func (c *cluster) ID() uint64 {
@@ -157,6 +157,9 @@ func (c *cluster) Start() (err error) {
 
 	if c.state == started {
 		return moerr.NewInvalidStateNoCtx("embed mo cluster already started")
+	}
+	if c.needsCleanupLocked() || c.testAdmission != nil {
+		return moerr.NewInvalidStateNoCtx("embedded cluster cleanup is incomplete")
 	}
 	phaseStarted := time.Now()
 	if err = c.ensurePortLeaseLocked(); err != nil {
@@ -189,9 +192,9 @@ func (c *cluster) Start() (err error) {
 	phaseStarted = time.Now()
 	if err = c.doStartLocked(0); err != nil {
 		c.logTestSetup("service-start", time.Since(phaseStarted), err)
-		cleanupErr := c.closeServicesFromLocked(0)
-		if cleanupErr == nil {
-			cleanupErr = c.releaseTestAdmissionLocked()
+		cleanupErr := c.closeServicesLocked()
+		if !c.needsCleanupLocked() {
+			cleanupErr = errors.Join(cleanupErr, c.releaseTestAdmissionLocked())
 		}
 		return errors.Join(err, cleanupErr)
 	}
@@ -201,40 +204,47 @@ func (c *cluster) Start() (err error) {
 }
 
 func (c *cluster) doStartLocked(from int) error {
+	services := c.services[from:]
+	// Each service owns one slot. Join only after every started CN has returned,
+	// so rollback cannot race startup and diagnostics retain all failures in
+	// configuration order regardless of completion order or concrete error type.
+	startErrors := make([]error, len(services))
 	var wg sync.WaitGroup
-	var startErr atomic.Value
-	for _, s := range c.services[from:] {
+	for i, s := range services {
 		if s.serviceType != metadata.ServiceType_CN {
 			if err := c.startServiceLocked(s); err != nil {
-				return err
+				startErrors[i] = err
+				break
 			}
 			continue
 		}
 
 		wg.Add(1)
-		go func(s *operator) {
+		go func(i int, s *operator) {
 			defer wg.Done()
-			if err := c.startServiceLocked(s); err != nil {
-				// Only the first error is captured; concurrent failures
-				// from other services are discarded since knowing that
-				// any service failed is sufficient to abort startup.
-				startErr.CompareAndSwap(nil, err)
-			}
-		}(s)
+			startErrors[i] = c.startServiceLocked(s)
+		}(i, s)
 	}
 
 	wg.Wait()
-	if v := startErr.Load(); v != nil {
-		return v.(error)
-	}
-	return nil
+	return errors.Join(startErrors...)
 }
 
 func (c *cluster) startServiceLocked(op *operator) error {
+	var err error
 	if c.startFn != nil {
-		return c.startFn(op)
+		err = c.startFn(op)
+	} else {
+		err = op.Start()
 	}
-	return op.Start()
+	if err != nil {
+		return errors.Join(
+			moerr.NewInternalErrorNoCtxf("embedded cluster %d start %s service %q",
+				c.id, op.serviceType, op.sid),
+			err,
+		)
+	}
+	return nil
 }
 
 func (c *cluster) Close() error {
@@ -251,24 +261,47 @@ func (c *cluster) Close() error {
 	started := time.Now()
 	err := c.closeServicesLocked()
 	c.logTestSetup("service-close", time.Since(started), err)
-	if err == nil {
-		err = c.releaseTestAdmissionLocked()
+	if c.needsCleanupLocked() {
+		return err
 	}
-	if err == nil {
+	admissionErr := c.releaseTestAdmissionLocked()
+	err = errors.Join(err, admissionErr)
+	if admissionErr == nil {
 		started = time.Now()
-		err = c.releasePortLeaseLocked()
-		c.logTestSetup("port-lease-release", time.Since(started), err)
+		portErr := c.releasePortLeaseLocked()
+		c.logTestSetup("port-lease-release", time.Since(started), portErr)
+		err = errors.Join(err, portErr)
 	}
 	return err
 }
 
 func (c *cluster) closeServicesLocked() error {
-	err := errors.Join(
-		c.closeServicesFromLocked(0),
-		c.retryPendingCleanupLocked(),
-	)
+	// Detached CNs still depend on the ordinary TN/log services.
+	err := c.retryPendingCleanupLocked()
+	if len(c.pendingCleanup) == 0 {
+		err = errors.Join(err, c.closeServicesFromLocked(0))
+	}
 	c.state = stopped
 	return err
+}
+
+func (c *cluster) needsCleanupLocked() bool {
+	if len(c.pendingCleanup) != 0 {
+		return true
+	}
+	for _, op := range c.services {
+		if op.needsCleanup() {
+			return true
+		}
+	}
+	return false
+}
+
+// CloseComplete includes lease ownership, but does not suppress Close errors.
+func (c *cluster) CloseComplete() bool {
+	c.Lock()
+	defer c.Unlock()
+	return !c.needsCleanupLocked() && c.testAdmission == nil && c.portLease == nil
 }
 
 func (c *cluster) closeServicesFromLocked(from int) error {
@@ -276,7 +309,7 @@ func (c *cluster) closeServicesFromLocked(from int) error {
 	for i := len(c.services) - 1; i >= from; i-- {
 		closeErr := c.services[i].Close()
 		err = errors.Join(err, closeErr)
-		if closeErr != nil {
+		if c.services[i].needsCleanup() {
 			// Keep the remaining dependencies alive.  In particular, a TN
 			// drain failure must not close LogService/WAL while accepted
 			// handlers are still resolving their terminal state.
@@ -384,11 +417,9 @@ func (c *cluster) rollbackNewServicesLocked(serviceFrom, cnFrom int) error {
 	c.files = c.files[:serviceFrom]
 	c.options.cn = cnFrom
 
-	if err != nil {
-		for _, op := range newServices {
-			if op.needsCleanup() {
-				c.pendingCleanup = append(c.pendingCleanup, op)
-			}
+	for _, op := range newServices {
+		if op.needsCleanup() {
+			c.pendingCleanup = append(c.pendingCleanup, op)
 		}
 	}
 	return err
@@ -399,11 +430,15 @@ func (c *cluster) retryPendingCleanupLocked() error {
 	c.pendingCleanup = nil
 
 	var err error
-	for _, op := range pending {
+	for i := len(pending) - 1; i >= 0; i-- {
+		op := pending[i]
 		closeErr := op.Close()
 		err = errors.Join(err, closeErr)
-		if closeErr != nil && op.needsCleanup() {
-			c.pendingCleanup = append(c.pendingCleanup, op)
+		if op.needsCleanup() {
+			// Preserve acquisition order for the next reverse retry.
+			clear(pending[i+1:])
+			c.pendingCleanup = pending[:i+1]
+			break
 		}
 	}
 	return err
@@ -492,6 +527,9 @@ func (c *cluster) createServiceOperators(from int) error {
 		}
 		if c.options.testing {
 			s.Adjust(applyTestingHAKeeperBackendReadTimeout)
+			if s.serviceType == metadata.ServiceType_CN {
+				s.Adjust(applyTestingTxnTraceBuffer)
+			}
 		}
 
 		if c.options.preStart != nil {
@@ -500,6 +538,15 @@ func (c *cluster) createServiceOperators(from int) error {
 		c.services = append(c.services, s)
 	}
 	return nil
+}
+
+// Keep tracing functional in embedded tests without reserving four million
+// events per CN before tracing is enabled. Scenario callbacks run afterwards
+// and can override this test-only default.
+func applyTestingTxnTraceBuffer(cfg *ServiceConfig) {
+	if cfg.CN.Txn.Trace.BufferSize == 0 {
+		cfg.CN.Txn.Trace.BufferSize = 1024
+	}
 }
 
 func applyTestingHAKeeperBackendReadTimeout(cfg *ServiceConfig) {

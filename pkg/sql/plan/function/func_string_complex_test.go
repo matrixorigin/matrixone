@@ -126,6 +126,26 @@ func Test_BuiltInConcat(t *testing.T) {
 	}
 }
 
+func Test_BuiltInConcatSingleArgument(t *testing.T) {
+	require.Equal(t, failedFunctionParametersWrong, builtInConcatCheck(nil, nil).status)
+	require.Equal(t, succeedMatched,
+		builtInConcatCheck(nil, []types.Type{types.T_varchar.ToType()}).status)
+
+	proc := testutil.NewProcess(t)
+	caseData := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"hello", "", "ignored"}, []bool{false, false, true}),
+		},
+		NewFunctionTestResult(types.T_varchar.ToType(), false,
+			[]string{"hello", "", ""}, []bool{false, false, true}),
+		builtInConcat,
+	)
+	succeed, info := caseData.Run()
+	require.True(t, succeed, info)
+}
+
 // Test_ConcatWs tests CONCAT_WS function (concat with separator)
 // This is a complex function with conditional logic for NULL handling
 func Test_ConcatWs(t *testing.T) {
@@ -1041,10 +1061,10 @@ func Test_BuiltInCharCheck(t *testing.T) {
 		}
 	}
 
-	// numeric types (float/decimal): cast to int64
+	// numeric and boolean types (float/decimal/bool): cast to int64
 	{
 		got := builtInCharCheck(nil, []types.Type{
-			types.T_float64.ToType(), types.T_decimal128.ToType(),
+			types.T_float64.ToType(), types.T_decimal128.ToType(), types.T_bool.ToType(),
 		})
 		require.Equal(t, succeedWithCast, got.status)
 		for _, ft := range got.finalType {

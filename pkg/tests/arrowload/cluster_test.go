@@ -30,7 +30,8 @@ import (
 
 // Arrow LOAD tests use dedicated, non-shared embedded clusters and close them at
 // cleanup. This keeps process-local metrics and lifecycle state out of pkg/embed's
-// package-level shared clusters. All Arrow execution tests opt in explicitly.
+// package-level shared clusters. Default-path tests leave Arrow configuration
+// untouched; focused rollback tests explicitly override the kill switches.
 type arrowLoadClusterOptions struct {
 	cnCount            int
 	enabled            bool
@@ -49,7 +50,7 @@ func startArrowLoadCluster(t testing.TB, cnCount int, enabled, s3Enabled, distri
 }
 
 // startArrowLoadClusterWithDefaults deliberately installs no Arrow-specific
-// configuration. Tests using it prove the product default rejects Arrow LOAD.
+// configuration. Tests using it prove the product default is available.
 func startArrowLoadClusterWithDefaults(t testing.TB, cnCount int) embed.Cluster {
 	t.Helper()
 	return startArrowLoadClusterWithOptions(t, arrowLoadClusterOptions{
@@ -74,11 +75,53 @@ func startArrowLoadClusterWithOptions(t testing.TB, options arrowLoadClusterOpti
 		}))
 	}
 	c, err := embed.StartTestCluster(clusterOptions...)
+	if c != nil {
+		t.Cleanup(func() {
+			require.NoError(t, c.Close())
+		})
+	}
 	require.NoError(t, err)
-	t.Cleanup(func() {
-		require.NoError(t, c.Close())
-	})
 	return c
+}
+
+// startArrowLoadStaticPolicyCluster combines only the two static policy
+// matrices. Both scenarios exercise independent CN frontends and disjoint
+// databases; neither owns a restart or a mutable process-wide fault boundary.
+// The caller owns this one lifecycle and closes it before another test in the
+// package starts an exclusive fixture.
+func startArrowLoadStaticPolicyCluster(t testing.TB) embed.Cluster {
+	t.Helper()
+	nextCN := 0
+	c, err := embed.StartTestCluster(
+		embed.WithCNCount(4),
+		embed.WithPreStart(func(svc embed.ServiceOperator) {
+			if svc.ServiceType() != metadata.ServiceType_CN {
+				return
+			}
+			cnIndex := nextCN
+			nextCN++
+			svc.Adjust(func(cfg *embed.ServiceConfig) {
+				cfg.CN.Frontend.ArrowLoad.Enabled = cnIndex != 2
+				cfg.CN.Frontend.ArrowLoad.S3Enabled = true
+				cfg.CN.Frontend.ArrowLoad.DistributedEnabled = cnIndex != 3
+				cfg.CN.Frontend.ArrowLoad.ForceMaterialize = cnIndex == 1
+			})
+		}))
+	if c != nil {
+		t.Cleanup(func() { require.NoError(t, c.Close()) })
+	}
+	require.NoError(t, err)
+	return c
+}
+
+func requireArrowLoadPolicy(t testing.TB, c embed.Cluster, cnIndex int, enabled, s3Enabled, distributedEnabled bool) {
+	t.Helper()
+	cn, err := c.GetCNService(cnIndex)
+	require.NoError(t, err)
+	arrowLoad := cn.GetServiceConfig().CN.Frontend.ArrowLoad
+	require.Equal(t, enabled, arrowLoad.Enabled, "CN%d Arrow LOAD enabled policy", cnIndex)
+	require.Equal(t, s3Enabled, arrowLoad.S3Enabled, "CN%d Arrow LOAD S3 policy", cnIndex)
+	require.Equal(t, distributedEnabled, arrowLoad.DistributedEnabled, "CN%d Arrow LOAD distributed policy", cnIndex)
 }
 
 // adjustArrowLoadCluster changes only the next CN generation's rollout

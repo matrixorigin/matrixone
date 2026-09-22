@@ -31,15 +31,20 @@ select VAR_SAMP(h) from t1;
 ➤ VAR_SAMP(h)[3,38,12]  𝄀
 3005.438266666667
 select VAR_SAMP(i) from t1;
-invalid argument aggregate function var_samp, bad value [DATE]
+➤ VAR_SAMP(i)[3,38,6]  𝄀
+24690296.000000
 select VAR_SAMP(k) from t1;
-invalid argument aggregate function var_samp, bad value [DATETIME]
+➤ VAR_SAMP(k)[3,38,6]  𝄀
+958333333333333401600.000000
 select VAR_SAMP(l) from t1;
-invalid argument aggregate function var_samp, bad value [TIMESTAMP]
+➤ VAR_SAMP(l)[3,38,6]  𝄀
+16358333343166664704000.000000
 select VAR_SAMP(m) from t1;
-invalid argument aggregate function var_samp, bad value [CHAR]
+➤ VAR_SAMP(m)[8,53,31]  𝄀
+2.25
 select VAR_SAMP(n) from t1;
-invalid argument aggregate function var_samp, bad value [VARCHAR]
+➤ VAR_SAMP(n)[8,53,31]  𝄀
+2.25
 drop table t1;
 select VAR_SAMP(99999999999999999.99999);
 ➤ VAR_SAMP(99999999999999999.99999)[3,38,11]  𝄀
@@ -189,8 +194,8 @@ select * from decimal02;
 -34243214324324342321313321321342342343  𝄀
 0
 select VAR_SAMP(col1) from decimal02;
--- @regex("Can't convert Float64 To Decimal128: [0-9.e+-]+\(38,6\)", true)
-invalid input: Can't convert Float64 To Decimal128: 1494093533837166931261344328780506188043635413695981476877493008122817544192.000000(38,6)
+-- @regex("invalid input: [0-9.e+-]+ beyond the range, can't be converted to Decimal128\(38,6\)\.", true)
+invalid input: 1.4940935338371673e+75 beyond the range, can't be converted to Decimal128(38,6).
 drop table decimal02;
 drop table if exists test02;
 create table test02(col1 decimal(37));
@@ -207,8 +212,8 @@ select * from test02;
 -123  𝄀
 9932129321093029302930290439029432424
 select VAR_SAMP(col1) from test02;
--- @regex("Can't convert Float64 To Decimal128: [0-9.e+-]+\(38,6\)", true)
-invalid input: Can't convert Float64 To Decimal128: 33178519536945147127097816767048484882222064136834093367693581501396418560.000000(38,6)
+-- @regex("invalid input: [0-9.e+-]+ beyond the range, can't be converted to Decimal128\(38,6\)\.", true)
+invalid input: 3.317851953694514e+73 beyond the range, can't be converted to Decimal128(38,6).
 drop table test02;
 drop table if exists test03;
 create table test03(a decimal(38,2));
@@ -216,7 +221,8 @@ insert into test03 values(9999999999999999999999999999999.1);
 insert into test03 values(-0.00001);
 insert into test03 values(NULL);
 select VAR_SAMP(a) from test03;
-invalid input: Can't convert Float64 To Decimal128: 49999999999999996042109072147741062289896281101175367271448576.000000(38,8)
+-- @regex("invalid input: [0-9.e+-]+ beyond the range, can't be converted to Decimal128\(38,8\)\.", true)
+invalid input: 4.9999999999999996e+61 beyond the range, can't be converted to Decimal128(38,8).
 drop table test03;
 drop table if exists test04;
 create table test04(a decimal(38,20));
@@ -233,7 +239,8 @@ select * from test04;
 -999999999999999999.90000000000000000000  𝄀
 -1E-20
 select VAR_SAMP(a) from test04;
-invalid input: Can't convert Float64 To Decimal128: 503800634139817825664116031565594624.000000(38,20)
+-- @regex("invalid input: [0-9.e+-]+ beyond the range, can't be converted to Decimal128\(38,20\)\.", true)
+invalid input: 5.038006341398178e+35 beyond the range, can't be converted to Decimal128(38,20).
 drop table test04;
 drop table if exists test05;
 create table test05(a decimal(20,10));

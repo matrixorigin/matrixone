@@ -54,6 +54,7 @@ const (
 // query limit creates the relevant shared-budget pressure without TPCH-sized
 // fixture data.
 func TestHashBuildSharedBudgetRecoverySQL(t *testing.T) {
+	releaseSharedSingleCNCluster(t)
 	cluster, err := embed.StartTestCluster(
 		embed.WithCNCount(1),
 		embed.WithPreStart(func(service embed.ServiceOperator) {

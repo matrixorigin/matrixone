@@ -98,6 +98,11 @@ message Literal {
   // Executable value ownership encoded as container/types.StringSource + 1.
   // Zero means an ordinary source literal for compatibility with old plans.
   uint32 string_source = 29;
+  // The planner normalized a plain decimal literal spelling before selecting
+  // its exact DECIMAL carrier. Older CNs would reparse the original SQL and
+  // could round or reject the value differently, so persisted owners carrying
+  // this bit require the Decimal256 literal protocol fence.
+  bool decimal_literal_requires_v82 = 30;
 }
 
 // Bounded param for prepared statement.  User fill on execution.
@@ -251,7 +256,7 @@ message Function {
 }
 
 // PreparedNumericMetadata is sparse planner provenance for a numeric overload
-// that cannot be selected until COM_STMT_EXECUTE supplies a parameter type.
+// or runtime string domain that cannot be represented by Expr.Type alone.
 // It is kept behind one optional pointer on Expr because the metadata is rare;
 // ordinary expressions must not carry five always-resident scalar fields.
 message PreparedNumericMetadata {
@@ -269,10 +274,10 @@ message PreparedNumericMetadata {
   int32 provisional_result_peer_type_id = 8;
   int32 provisional_result_peer_width = 9;
   int32 provisional_result_peer_scale = 10;
-  // This field shares the already sparse prepared-expression allocation but
+  // This field shares the already sparse expression-provenance allocation but
   // is semantically independent of numeric fallback. It preserves the source
-  // expression needed to recompute a runtime string domain after scalar-
-  // subquery flattening without adding another pointer to every Expr.
+  // expression needed to recompute a runtime string domain after derived-column
+  // or scalar-subquery flattening without adding another pointer to every Expr.
   Expr string_domain_source = 11;
 }
 
@@ -322,6 +327,10 @@ message LiteralVec {
   // Uniform runtime value owner. Values follow container/types.StringSource;
   // zero is Expression so legacy and runtime-produced payloads stay ordinary.
   uint32 string_source = 4;
+  // True when at least one element came from a plain decimal literal whose
+  // exact normalized binding requires the decimal protocol fence. This bit preserves
+  // the compatibility fence without disabling the compact vector encoding.
+  bool decimal_literal_requires_v82 = 5;
 }
 
 enum CompressType {
@@ -576,6 +585,8 @@ message TableDef {
   // Default collation class inherited by textual columns without an explicit
   // column-level collation. Uses the container/types Charset constants.
   uint32 default_charset = 39;
+  // Zero inherits the service policy; one disables speculative ID reservation.
+  uint64 auto_id_cache = 40;
 }
 
 message TableFunction {
@@ -973,6 +984,8 @@ message Node {
     MULTI_UPDATE = 54;
     POSTDML = 55;
     TABLE_CLONE = 56;
+    // Coordinator-local selector for bounded POST -> PRE -> FORCE Top-K candidates.
+    ADAPTIVE_TOP = 57;
   }
 
   enum JoinType {
@@ -1227,6 +1240,15 @@ message Node {
   // PARTITION only: optimizer-selected implementation for ordinary window
   // partitioning. Partition Top-N ignores this field.
   PartitionAlgorithm partition_algorithm = 90;
+
+  // PARTITION Top-N only: retain every peer of the Nth row so the reduced
+  // candidate stream is exact for RANK rather than only ROW_NUMBER.
+  bool partition_top_n_with_ties = 91;
+
+  // ADAPTIVE_TOP only: select the first candidate with any rows and use the
+  // final candidate only when the initial candidate is empty. This is used by
+  // explicit IVF POST fallback and preserves its partial-result behavior.
+  bool adaptive_top_fallback_on_empty = 92;
 }
 
 message SnapshotExtraInfo {
@@ -1499,6 +1521,12 @@ message PreInsertUkCtx {
   int32 auto_increment_generated_column = 13;
   int32 auto_increment_key_index = 14;
   int32 auto_increment_output_column = 15;
+  // User-facing metadata for diagnostics emitted by ordered INSERT IGNORE
+  // arbitration. key_names and key_type_counts are parallel to key_columns;
+  // key_types is the concatenation of the logical types for each key.
+  repeated string key_names = 16;
+  repeated Type key_types = 17;
+  repeated int32 key_type_counts = 18;
 }
 
 message PreInsertCtx {
@@ -1675,6 +1703,12 @@ message Query {
   // false when the SELECT has an explicit top-level LIMIT, which takes
   // precedence according to MySQL semantics.
   bool apply_sql_select_limit = 15;
+
+  // Index hints that could not be resolved from the table definition used to
+  // build this plan. The compiler validates their table metadata before
+  // execution so a committed concurrent CREATE INDEX can rebuild the plan;
+  // without a definition change, it returns the original key-not-found error.
+  repeated UnresolvedIndexHint unresolved_index_hints = 16;
 }
 
 message TransationControl {
@@ -2025,6 +2059,7 @@ message AlterCopyOpt {
   bool skip_pk_dedup = 2;
   string target_table_name = 3;
   map<string, bool> skip_indexes_copy = 4;
+  map<string, bool> new_plugin_indexes = 5;
 }
 
 message AlterTable {
@@ -2338,4 +2373,9 @@ message VectorIndexScanWork {
   int32 blocks = 2;
   double vector_bytes_per_row = 3;
   int32 objects = 4;
+}
+
+message UnresolvedIndexHint {
+  ObjectRef table = 1;
+  string index_name = 2;
 }

@@ -181,7 +181,7 @@ type incrTableCache interface {
 	commit()
 	columns() []AutoColumn
 	insertAutoValues(ctx context.Context, tableID uint64, vecs []*vector.Vector, rows int, estimate int64) (uint64, error)
-	currentValue(ctx context.Context, tableID uint64, col string) (uint64, error)
+	currentValue(ctx context.Context, tableID uint64, col string, store IncrValueStore) (uint64, error)
 	getLastAllocateTS(ctx context.Context, colName string) (timestamp.Timestamp, error)
 	adjust(ctx context.Context, cols []AutoColumn) error
 	close() error
@@ -199,6 +199,8 @@ type valueAllocator interface {
 type IncrValueStore interface {
 	// GetColumns return auto columns of table.
 	GetColumns(ctx context.Context, tableID uint64, txnOp client.TxnOperator) ([]AutoColumn, error)
+	// GetColumnValue observes fresh offset/step without reserving IDs or reading table policy.
+	GetColumnValue(ctx context.Context, tableID uint64, colName string, txnOp client.TxnOperator) (uint64, uint64, error)
 	// Create add metadata records into catalog.AutoIncrTableName.
 	Create(ctx context.Context, tableID uint64, cols []AutoColumn, txnOp client.TxnOperator) error
 	// Allocate allocate new range for auto-increment column.
@@ -225,6 +227,8 @@ type AutoColumn struct {
 	ColIndex int
 	Offset   uint64
 	Step     uint64
+	// CacheSize is projected from the table's SchemaExtra, not stored in the allocator row.
+	CacheSize uint64
 }
 
 // ValidateAutoColumnOffset rejects allocator offsets that cannot be represented
@@ -284,11 +288,12 @@ func getAutoColumnsFromDef(def *plan.TableDef, include func(*plan.ColDef) bool) 
 	for i, col := range def.Cols {
 		if col.Typ.AutoIncr && include(col) {
 			cols = append(cols, AutoColumn{
-				ColName:  col.Name,
-				TableID:  def.TblId,
-				Step:     1,
-				Offset:   def.AutoIncrOffset,
-				ColIndex: i,
+				ColName:   col.Name,
+				TableID:   def.TblId,
+				Step:      1,
+				Offset:    def.AutoIncrOffset,
+				ColIndex:  i,
+				CacheSize: def.AutoIdCache,
 			})
 		}
 	}

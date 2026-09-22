@@ -64,6 +64,148 @@ func TestPreparedNumericFallbackMetadataSurvivesProtoRoundTrip(t *testing.T) {
 		"prepared numeric provenance must not be encoded as an executor memo id")
 }
 
+func TestTemporalBindingUsesPrivatePreparedProvenance(t *testing.T) {
+	ctx := context.Background()
+	value := makePlan2StringConstExprWithType("2024-02-29 12:34:56.123456")
+	formatParam := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_varchar)},
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+	}
+
+	for _, name := range []string{"str_to_date", "to_date"} {
+		t.Run(name+" dynamic", func(t *testing.T) {
+			bound, err := BindFuncExprImplByPlanExpr(ctx, name, []*planpb.Expr{DeepCopyExpr(value), DeepCopyExpr(formatParam)})
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_datetime), bound.Typ.Id)
+			require.Equal(t, int32(6), bound.Typ.Scale)
+			require.Len(t, bound.GetF().Args, 3)
+			_, overload := function.DecodeOverloadID(bound.GetF().Func.Obj)
+			require.Equal(t, int32(0), overload)
+			original := DeepCopyExpr(bound)
+
+			for _, format := range []string{"%Y-%m-%d", "%H:%i:%s", "%Y-%m-%d %H:%i:%s.%f"} {
+				rebound, err := bindPreparedFuncExprImplByPlanExpr(
+					ctx,
+					bound,
+					name,
+					[]*planpb.Expr{DeepCopyExpr(value), makePlan2StringConstExprWithType(format)},
+					nil,
+				)
+				require.NoError(t, err)
+				require.Equal(t, int32(types.T_datetime), rebound.Typ.Id)
+				require.Equal(t, int32(6), rebound.Typ.Scale)
+				require.Len(t, rebound.GetF().Args, 3)
+				_, reboundOverload := function.DecodeOverloadID(rebound.GetF().Func.Obj)
+				require.Equal(t, int32(0), reboundOverload)
+			}
+
+			rule := NewResetParamRefRule(ctx, []*planpb.Expr{makePlan2StringConstExprWithType("%Y-%m-%d")})
+			rewritten, err := rule.ApplyExpr(DeepCopyExpr(bound))
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_datetime), rewritten.Typ.Id)
+			require.Equal(t, int32(6), rewritten.Typ.Scale)
+			require.Len(t, rewritten.GetF().Args, 3)
+			_, reboundOverload := function.DecodeOverloadID(rewritten.GetF().Func.Obj)
+			require.Equal(t, int32(0), reboundOverload)
+			require.True(t, proto.Equal(original, bound), "prepared rebinding must not mutate the cached bound expression")
+		})
+
+		for _, literal := range []struct {
+			format       string
+			wantType     types.T
+			wantScale    int32
+			wantOverload int32
+		}{
+			{format: "%Y-%m-%d", wantType: types.T_date, wantOverload: 1},
+			{format: "%H:%i:%s.%f", wantType: types.T_time, wantScale: 6, wantOverload: 2},
+			{format: "%Y-%m-%d %H:%i:%s.%f", wantType: types.T_datetime, wantScale: 6, wantOverload: 0},
+		} {
+			t.Run(name+" literal "+literal.format, func(t *testing.T) {
+				bound, err := BindFuncExprImplByPlanExpr(ctx, name, []*planpb.Expr{DeepCopyExpr(value), makePlan2StringConstExprWithType(literal.format)})
+				require.NoError(t, err)
+				require.Equal(t, int32(literal.wantType), bound.Typ.Id)
+				require.Equal(t, literal.wantScale, bound.Typ.Scale)
+				require.Len(t, bound.GetF().Args, 3)
+				_, overload := function.DecodeOverloadID(bound.GetF().Func.Obj)
+				require.Equal(t, literal.wantOverload, overload)
+			})
+		}
+
+		t.Run(name+" public internal shape rejected", func(t *testing.T) {
+			_, err := BindFuncExprImplByPlanExpr(ctx, name, []*planpb.Expr{
+				DeepCopyExpr(value),
+				makePlan2StringConstExprWithType("%Y-%m-%d"),
+				makePlan2DateConstNullExpr(types.T_date),
+			})
+			require.Error(t, err)
+		})
+	}
+
+	date := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_datetime), Scale: 3}}
+	for _, name := range []string{"date_add", "date_sub"} {
+		t.Run(name+" public internal shape rejected", func(t *testing.T) {
+			_, err := BindFuncExprImplByPlanExpr(ctx, name, []*planpb.Expr{
+				DeepCopyExpr(date), makePlan2Int64ConstExprWithType(1), makePlan2Int64ConstExprWithType(int64(types.MicroSecond)),
+			})
+			require.Error(t, err)
+		})
+	}
+
+	for _, alias := range []string{"adddate", "subdate"} {
+		t.Run(alias+" normalizes once", func(t *testing.T) {
+			bound, err := BindFuncExprImplByPlanExpr(ctx, alias, []*planpb.Expr{DeepCopyExpr(date), makePlan2Int64ConstExprWithType(1)})
+			require.NoError(t, err)
+			require.Len(t, bound.GetF().Args, 3)
+			require.Equal(t, int32(3), bound.Typ.Scale)
+		})
+	}
+
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt_temporal from 'select str_to_date(?, ?)'")
+	require.NoError(t, err)
+	preparedPlan := prepared.GetDcl().GetPrepare().Plan
+	preparedExpr := findPlanFunctionExpr(preparedPlan, "str_to_date")
+	require.NotNil(t, preparedExpr)
+	require.Equal(t, int32(types.T_datetime), preparedExpr.Typ.Id)
+	require.Equal(t, int32(6), preparedExpr.Typ.Scale)
+	require.Len(t, preparedExpr.GetF().Args, 3)
+	preparedPlanCopy := DeepCopyPlan(preparedPlan)
+
+	for _, execution := range []struct {
+		name   string
+		params []any
+	}{
+		{
+			name: "SQL execute",
+			params: []any{
+				ParamValue{Value: "2024-02-29", SourceType: types.T_varchar.ToType(), HasSourceType: true},
+				ParamValue{Value: "%Y-%m-%d", SourceType: types.T_varchar.ToType(), HasSourceType: true},
+			},
+		},
+		{
+			name: "binary execute",
+			params: []any{
+				ParamValue{Value: "2024-02-29 12:34:56.123456", IsBinaryProtocol: true},
+				ParamValue{Value: "%Y-%m-%d %H:%i:%s.%f", IsBinaryProtocol: true},
+			},
+		},
+	} {
+		t.Run(execution.name, func(t *testing.T) {
+			filled, err := FillValuesOfParamsInPlan(ctx, preparedPlan, execution.params)
+			require.NoError(t, err)
+			filledExpr := findPlanFunctionExpr(filled, "str_to_date")
+			require.NotNil(t, filledExpr)
+			require.Equal(t, int32(types.T_datetime), filledExpr.Typ.Id)
+			require.Equal(t, int32(6), filledExpr.Typ.Scale)
+			require.Len(t, filledExpr.GetF().Args, 3)
+			_, overload := function.DecodeOverloadID(filledExpr.GetF().Func.Obj)
+			require.Equal(t, int32(0), overload)
+			require.True(t, proto.Equal(preparedPlanCopy, preparedPlan),
+				"parameter filling must not mutate the cached prepared plan")
+		})
+	}
+}
+
 func TestPreparedBitCountDefaultsToBinaryAndSpecializesNumericValues(t *testing.T) {
 	ctx := context.Background()
 	prepared, err := runOneStmt(NewMockOptimizer(false), t,
@@ -324,6 +466,131 @@ func TestPreparedRegexpScalarSubqueryPropagatesDerivedColumnRuntimeDomain(t *tes
 	require.NotNil(t, regexpInstr)
 	require.Equal(t, int32(types.T_varbinary), regexpInstr.GetF().Args[0].Typ.Id)
 	require.Equal(t, int32(types.T_varbinary), regexpInstr.GetF().Args[1].Typ.Id)
+}
+
+func TestPreparedRegexpDerivedScalarPreservesResultBranchParams(t *testing.T) {
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt_regexp_multi_derived_domain from 'select regexp_instr("+
+			"(select d.subject from (select if(?, ?, ?) as subject) d), "+
+			"?, 2)'")
+	require.NoError(t, err)
+	preparedRegexp := findPlanFunctionExpr(
+		prepared.GetDcl().GetPrepare().Plan, "regexp_instr")
+	require.NotNil(t, preparedRegexp)
+	witness := preparedRegexp.GetF().Args[0].GetPreparedNumeric().GetStringDomainSource()
+	require.NotNil(t, witness)
+	require.Equal(t, "coalesce", witness.GetF().GetFunc().GetObjName())
+	require.Equal(t, []int32{1, 2}, []int32{
+		witness.GetF().Args[0].GetP().Pos,
+		witness.GetF().Args[1].GetP().Pos,
+	})
+
+	ctx := context.Background()
+	preparedPlan := prepared.GetDcl().GetPrepare().Plan
+	cached := proto.Clone(preparedPlan).(*planpb.Plan)
+	textPlan, _, err := FillValuesOfParamsInPlanWithSpecialization(ctx, preparedPlan, []any{
+		ParamValue{Value: true, RuntimeType: types.T_bool.ToType(), HasRuntimeType: true},
+		ParamValue{Value: int64(7), RuntimeType: types.T_int64.ToType(), HasRuntimeType: true},
+		ParamValue{Value: int64(8), RuntimeType: types.T_int64.ToType(), HasRuntimeType: true},
+		ParamValue{Value: "x", IsBinaryProtocol: true, RuntimeType: types.T_text.ToType(), HasRuntimeType: true},
+	})
+	require.NoError(t, err)
+	regexpInstr := findPlanFunctionExpr(textPlan, "regexp_instr")
+	require.NotNil(t, regexpInstr)
+	require.Equal(t, types.StringDomainText,
+		types.StaticStringDomain(makeTypeByPlan2Expr(regexpInstr.GetF().Args[0])))
+
+	binaryPlan, _, err := FillValuesOfParamsInPlanWithSpecialization(ctx, preparedPlan, []any{
+		ParamValue{Value: true, RuntimeType: types.T_bool.ToType(), HasRuntimeType: true},
+		ParamValue{Value: "7", IsBin: true, IsBinaryProtocol: true,
+			RuntimeType: types.T_varbinary.ToType(), HasRuntimeType: true},
+		ParamValue{Value: "8", IsBin: true, IsBinaryProtocol: true,
+			RuntimeType: types.T_varbinary.ToType(), HasRuntimeType: true},
+		ParamValue{Value: "x", IsBin: true, IsBinaryProtocol: true,
+			RuntimeType: types.T_varbinary.ToType(), HasRuntimeType: true},
+	})
+	require.NoError(t, err)
+	regexpInstr = findPlanFunctionExpr(binaryPlan, "regexp_instr")
+	require.NotNil(t, regexpInstr)
+	require.Equal(t, int32(types.T_varbinary), regexpInstr.GetF().Args[0].Typ.Id)
+	require.True(t, proto.Equal(cached, preparedPlan),
+		"multi-branch runtime-domain specialization must not mutate the cached plan")
+}
+
+func TestStringDomainWitnessKeepsImplicitTextConversion(t *testing.T) {
+	textType := types.T_text.ToType()
+	param := &planpb.Expr{
+		Typ:  makePlan2Type(&textType),
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+	}
+	source := &planpb.Expr{
+		Typ: makePlan2Type(&textType),
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{ObjName: "substring"},
+			Args: []*planpb.Expr{param, makePlan2Int64ConstExprWithType(1)},
+		}},
+	}
+	domains := possibleStringDomainsForExpr(source)
+	require.Equal(t, possibleStringDomainText|possibleStringDomainBinary, domains)
+	witness := stringDomainSourceWitness(source, domains)
+	require.Equal(t, "substring", witness.GetF().GetFunc().GetObjName())
+
+	rule := NewResetParamRefRule(context.Background(), nil)
+	rule.SetParamValues([]any{ParamValue{
+		Value:          int64(7),
+		RuntimeType:    types.T_int64.ToType(),
+		HasRuntimeType: true,
+	}})
+	got, dynamic, domainless, err := rule.preparedExecutionExprType(witness)
+	require.NoError(t, err)
+	require.True(t, dynamic)
+	require.False(t, domainless)
+	require.Equal(t, types.StringDomainText, types.StaticStringDomain(got))
+
+	rule.SetParamValues([]any{ParamValue{
+		Value:            "7",
+		IsBin:            true,
+		IsBinaryProtocol: true,
+		RuntimeType:      types.T_varbinary.ToType(),
+		HasRuntimeType:   true,
+	}})
+	got, dynamic, domainless, err = rule.preparedExecutionExprType(witness)
+	require.NoError(t, err)
+	require.True(t, dynamic)
+	require.False(t, domainless)
+	require.Equal(t, types.StringDomainBinary, types.StaticStringDomain(got))
+
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt_regexp_substring_domain from 'select regexp_instr("+
+			"substring(?, 1), ?, 2)'")
+	require.NoError(t, err)
+	preparedPlan := prepared.GetDcl().GetPrepare().Plan
+	cached := proto.Clone(preparedPlan).(*planpb.Plan)
+
+	textPlan, _, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(), preparedPlan, []any{
+			ParamValue{Value: int64(7), RuntimeType: types.T_int64.ToType(), HasRuntimeType: true},
+			ParamValue{Value: "x", IsBinaryProtocol: true, RuntimeType: types.T_text.ToType(), HasRuntimeType: true},
+		})
+	require.NoError(t, err)
+	regexpInstr := findPlanFunctionExpr(textPlan, "regexp_instr")
+	require.NotNil(t, regexpInstr)
+	require.Equal(t, types.StringDomainText,
+		types.StaticStringDomain(makeTypeByPlan2Expr(regexpInstr.GetF().Args[0])))
+
+	binaryPlan, _, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(), preparedPlan, []any{
+			ParamValue{Value: "7", IsBin: true, IsBinaryProtocol: true,
+				RuntimeType: types.T_varbinary.ToType(), HasRuntimeType: true},
+			ParamValue{Value: "x", IsBin: true, IsBinaryProtocol: true,
+				RuntimeType: types.T_varbinary.ToType(), HasRuntimeType: true},
+		})
+	require.NoError(t, err)
+	regexpInstr = findPlanFunctionExpr(binaryPlan, "regexp_instr")
+	require.NotNil(t, regexpInstr)
+	require.Equal(t, int32(types.T_varbinary), regexpInstr.GetF().Args[0].Typ.Id)
+	require.True(t, proto.Equal(cached, preparedPlan),
+		"substring runtime-domain specialization must not mutate the cached plan")
 }
 
 func TestPreparedNumericMetadataIsSparse(t *testing.T) {

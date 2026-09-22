@@ -1,0 +1,51 @@
+# Fractional temporal values must retain their source scale during numeric
+# coercion for variance and standard-deviation aggregates.
+DROP TABLE IF EXISTS variance_fraction;
+CREATE TABLE variance_fraction (
+    id INT,
+    t TIME(6),
+    d DATETIME(6),
+    ts TIMESTAMP(6)
+);
+INSERT INTO variance_fraction VALUES
+    (1, '00:00:00.100000', '2020-01-01 00:00:00.100000', '2020-01-01 00:00:00.100000'),
+    (1, '00:00:00.300000', '2020-01-01 00:00:00.300000', '2020-01-01 00:00:00.300000'),
+    (1, NULL, NULL, NULL),
+    (2, '-00:00:00.100000', '2020-01-01 00:00:00.100000', '2020-01-01 00:00:00.100000'),
+    (2, '-00:00:00.300000', '2020-01-01 00:00:00.300000', '2020-01-01 00:00:00.300000'),
+    (2, NULL, NULL, NULL);
+
+# Distributed aggregation, NULL neighbors, and negative TIME.
+SELECT id,
+       VAR_POP(t), VAR_SAMP(t), STDDEV_POP(t), STDDEV_SAMP(t),
+       VAR_POP(d), VAR_SAMP(d), STDDEV_POP(d), STDDEV_SAMP(d),
+       VAR_POP(ts), VAR_SAMP(ts), STDDEV_POP(ts), STDDEV_SAMP(ts)
+FROM variance_fraction
+GROUP BY id
+ORDER BY id;
+
+# Prepared execution must retain the temporal scale as well.
+SET @variance_fraction_id = 1;
+PREPARE variance_fraction_stmt FROM
+    'SELECT VAR_POP(t), VAR_SAMP(t), STDDEV_POP(t), STDDEV_SAMP(t) FROM variance_fraction WHERE id = ?';
+EXECUTE variance_fraction_stmt USING @variance_fraction_id;
+DEALLOCATE PREPARE variance_fraction_stmt;
+
+DROP TABLE variance_fraction;
+
+# Large temporal variance must decimalize the stable float result without
+# exposing binary ULP digits at user-visible DECIMAL precision.
+DROP TABLE IF EXISTS temporal_variance_precision;
+CREATE TABLE temporal_variance_precision (
+    id INT PRIMARY KEY,
+    d DATETIME,
+    ts TIMESTAMP
+);
+INSERT INTO temporal_variance_precision VALUES
+    (1, '2024-01-01 01:02:03', '2024-01-01 01:02:03'),
+    (2, '2024-01-02 02:03:04', '2024-01-02 02:03:04'),
+    (3, '2024-01-03 03:04:05', '2024-01-03 03:04:05');
+SELECT CAST(VAR_POP(d) AS DECIMAL(24,6)) AS datetime_var_pop,
+       CAST(VAR_POP(ts) AS DECIMAL(24,6)) AS timestamp_var_pop
+FROM temporal_variance_precision;
+DROP TABLE temporal_variance_precision;

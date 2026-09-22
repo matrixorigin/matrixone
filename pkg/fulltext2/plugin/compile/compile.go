@@ -133,7 +133,7 @@ func buildAndRegisterCDC(ctx compileplugin.CompileContext, storeDef, metaDef *pl
 				return err
 			}
 		}
-		cache.Cache.Remove(storeDef.IndexTableName)
+		cache.Cache.RemoveAllGenerations(storeDef.IndexTableName, "ddl")
 	}
 	// buildFromSource clears the prior tag=0 bases (idempotent) and rebuilds them.
 	if err := buildFromSource(ctx, storeDef, metaDef, origTable, db); err != nil {
@@ -367,6 +367,30 @@ func handleMergeCompact(ctx compileplugin.CompileContext, storeDef, metaDef *pla
 // the post-clone TS.
 func (Hooks) RestoreInitSQL(_ compileplugin.CompileContext, _ map[string]*plan.IndexDef) (bool, string, error) {
 	return true, "SELECT 1", nil
+}
+
+// AlterCopyInitSQL — a COPY ALTER's cloneUnaffectedIndexes SKIPS this (SkipWholeIndex)
+// async index, so unlike RestoreInitSQL the storage/metadata rows are NOT present.
+// fulltext2's base (tag=0) + metadata are written only by buildFromSource, and the CDC
+// consumer only appends the cdc_tail — so a from-0 CDC alone leaves a queryable-less
+// tail with no base and MATCH returns empty (#28837). Returning a REINDEX FORCE_SYNC as
+// the InitSQL rebuilds the base from source as the CDC's first iteration (post-commit);
+// the replacement then carries the tag=0 base with an empty cdc_tail, not a re-collected
+// copy of the rebuilt rows.
+func (Hooks) AlterCopyInitSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) (bool, string, error) {
+	var idxName string
+	for _, d := range indexDefs {
+		if d != nil {
+			idxName = d.IndexName
+			break
+		}
+	}
+	if idxName == "" {
+		return false, "", moerr.NewInternalErrorNoCtx("fulltext2 AlterCopyInitSQL: no index def")
+	}
+	return true, fmt.Sprintf("ALTER TABLE %s ALTER REINDEX %s FULLTEXT2 FORCE_SYNC",
+		sqlquote.QualifiedIdent(ctx.QryDatabase(), ctx.OriginalTableDef().Name),
+		sqlquote.Ident(idxName)), nil
 }
 
 // ValidateReindexParams — fulltext2 honors position_free on a rebuild (its only

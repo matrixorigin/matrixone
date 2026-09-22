@@ -45,7 +45,6 @@ var causeArray = []error{
 	CauseSaveProfile,
 	CauseHeartbeat,
 	CauseCanClaimDaemonTask,
-	CauseMergeObject,
 	CauseRSSCacheEvict,
 
 	CauseDeadlineContextCodec,

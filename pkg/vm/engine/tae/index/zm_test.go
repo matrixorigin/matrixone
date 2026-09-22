@@ -661,6 +661,34 @@ func TestPrefixInRange(t *testing.T) {
 	require.False(t, zm.PrefixInRange([]byte("aaa"), []byte("bbb"), 3))
 }
 
+func TestPrefixInIsIndependentOfNeedleOrder(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	zm := BuildZM(types.T_varchar, []byte("az"))
+	UpdateZM(zm, []byte("c"))
+
+	for _, needles := range [][]string{
+		{"a", "ab"},
+		{"ab", "a"},
+		{"x", "a", "ab"},
+	} {
+		vec := vector.NewVec(types.T_varchar.ToType())
+		for _, needle := range needles {
+			require.NoError(t, vector.AppendBytes(vec, []byte(needle), false, mp))
+		}
+		require.True(t, zm.PrefixIn(vec), "needles %v must match", needles)
+		vec.Free(mp)
+	}
+
+	miss := vector.NewVec(types.T_varchar.ToType())
+	defer miss.Free(mp)
+	for _, needle := range []string{"x", "xy"} {
+		require.NoError(t, vector.AppendBytes(miss, []byte(needle), false, mp))
+	}
+	require.False(t, zm.PrefixIn(miss))
+}
+
 func TestInRangeZM(t *testing.T) {
 	v10 := int64(10)
 	v20 := int64(20)

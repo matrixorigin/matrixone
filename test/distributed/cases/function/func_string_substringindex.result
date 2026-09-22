@@ -50,20 +50,15 @@ SELECT SUBSTRING_INDEX('www.mysql.com', '', '0');
 substring_index(www.mysql.com, , 0)
 
 select substring_index('xyz', 'abc', 9223372036854775808);
-substring_index(xyz, abc, 9223372036854775808)
-xyz
+Data truncation: data out of range: data type int64, integer argument
 select substring_index("aaa.bbb.ccc.ddd.eee",'.',18446744073709551613);
-substring_index(aaa.bbb.ccc.ddd.eee, ., 18446744073709551613)
-aaa.bbb.ccc.ddd.eee
+Data truncation: data out of range: data type int64, integer argument
 select substring_index("aaa.bbb.ccc.ddd.eee",'.',-18446744073709551613);
-substring_index(aaa.bbb.ccc.ddd.eee, ., -18446744073709551613)
-aaa.bbb.ccc.ddd.eee
+Data truncation: data out of range: data type int64, integer argument
 select substring_index(null, 'abc', 9223372036854775808);
-substring_index(null, abc, 9223372036854775808)
-null
+Data truncation: data out of range: data type int64, integer argument
 select substring_index('xyz', null, 9223372036854775808);
-substring_index(xyz, null, 9223372036854775808)
-null
+Data truncation: data out of range: data type int64, integer argument
 select substring_index('xyz', 'abc', null);
 substring_index(xyz, abc, null)
 null

@@ -799,6 +799,13 @@ func TestMigrateConnectionFromRejectsPendingPreparedLongData(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
 
 	prepared.resetBinaryParamState()
+	prepared.latchLongDataError(moerr.NewInvalidInput(context.Background(), "deferred long data failure"))
+	require.True(t, prepared.hasPendingLongData())
+	err = rt.migrateConnectionFrom(&query.MigrateConnFromResponse{})
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
+
+	prepared.resetBinaryParamState()
 	resp := &query.MigrateConnFromResponse{}
 	require.NoError(t, rt.migrateConnectionFrom(resp))
 	require.Len(t, resp.PrepareStmts, 1)
@@ -2433,8 +2440,6 @@ func Test_ConnectionCount(t *testing.T) {
 
 	waitForClientCount(2)
 	waitForGauge(2)
-
-	time.Sleep(time.Millisecond * 10)
 
 	//close the connection
 	closeDbConn(t, conn1)

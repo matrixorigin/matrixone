@@ -493,6 +493,18 @@ type BaseProcess struct {
 	// It is intentionally not part of SessionInfo: remote/rebuilt session state
 	// must not copy or replace a live synchronization object.
 	sequenceGate sequenceGate
+	// groupConcatInputRowCounters gives each logical Group operator one
+	// statement-scoped source-row cursor. A BaseProcess is shared by local
+	// parallel child processes, so partial producers do not restart at row 1.
+	// The map is reset with the query context and is not serialized to remote
+	// processes; remote state keeps the source rows assigned by its producer.
+	groupConcatInputRowCountersMu sync.Mutex
+	groupConcatInputRowCounters   map[int]*atomic.Uint64
+	// groupConcatSourceRowProvenanceUntrusted is true on a remote process that
+	// cannot share the coordinator's input-row namespace. It is kept on the
+	// shared BaseProcess so child pipelines inherit the same decision. The
+	// negative form keeps zero-value test processes compatible with local use.
+	groupConcatSourceRowProvenanceUntrusted bool
 	// incrStatementDisabled marks a process that executes internal SQL on a
 	// caller-owned transaction without opening a statement of its own
 	// (executor.Options.WithDisableIncrStatement). Compiles on such a process
@@ -570,6 +582,9 @@ type Process struct {
 	Ctx     context.Context
 	Cancel  context.CancelCauseFunc
 	Session Session
+	// WarningSink is an immutable execution-attempt destination. Children inherit
+	// the pointer; remote callbacks retain it after a failed attempt is sealed.
+	WarningSink any
 }
 
 type sqlHelper interface {
@@ -586,14 +601,18 @@ type WrapCs struct {
 	// ReceiverStopped certifies an explicit StopSending while the registration
 	// connection and message remain live. It does not imply query success.
 	ReceiverStopped func() bool
-	MsgId           uint64
-	Uid             uuid.UUID
-	Cs              morpc.ClientSession
-	Err             chan error
-	ReserveBatch    func(context.Context, uint64) (uint64, error)
-	RollbackBatch   func(uint64)
-	BatchCredits    uint32
-	ByteCredits     uint64
+	// TerminalBacked marks registrations whose immutable terminal owns the
+	// generation result. Such registrations must not use Err for a second,
+	// competing terminal notification; Err is nil for that path.
+	TerminalBacked bool
+	MsgId          uint64
+	Uid            uuid.UUID
+	Cs             morpc.ClientSession
+	Err            chan error
+	ReserveBatch   func(context.Context, uint64) (uint64, error)
+	RollbackBatch  func(uint64)
+	BatchCredits   uint32
+	ByteCredits    uint64
 }
 
 // RemotePipelineInformationChannel used to deliver remote receiver pipeline's information.
@@ -1146,4 +1165,12 @@ func (proc *Process) DebugBreakDump(cond bool) {
 	if proc.Base.SessionInfo.User == "dump" && cond {
 		logutil.GetGlobalLogger().Info("debug break dump")
 	}
+}
+
+// GetWarningSink preserves session diagnostics outside an execution attempt.
+func (proc *Process) GetWarningSink() any {
+	if proc.WarningSink != nil {
+		return proc.WarningSink
+	}
+	return proc.Session
 }

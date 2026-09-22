@@ -83,6 +83,14 @@ func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, 
 	}
 
 	origFuncName := vecCtx.distFnExpr.Func.ObjName
+	// usearch's cosine score is not SQL-compatible at the zero/subnormal boundary:
+	// it can return 0 for zero-vs-zero and +/-Inf for tiny finite vectors. HNSW also
+	// ranks candidates before DistanceTransformHnsw runs, so a post-search clamp would
+	// not repair the result set. Keep cosine on the exact SQL path until the index can
+	// provide the same score semantics.
+	if opType == metric.OpType_CosineDistance {
+		return nil, nil
+	}
 	// An index serves this distance function when its op_type is metric-equivalent to the
 	// query's, not only when it is the canonical one — vector_l2_ops and vector_l2sq_ops
 	// build the same index and both answer l2_distance / l2_distance_sq (#25966).
@@ -187,6 +195,8 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *
 		BindingTags:     []int32{tableFuncTag},
 		Children:        vectorSearchProviderChildren(vecCtx),
 		TblFuncExprList: buildHnswTableFuncArgs(tblCfgStr, hnswCtx.vecLitArg),
+		// Named-snapshot read TS for the TVF; DeepCopySnapshot(nil) is nil (#27927).
+		ScanSnapshot: DeepCopySnapshot(vecCtx.scanNode.ScanSnapshot),
 	}
 	tableFuncNodeID := builder.appendNode(tableFuncNode, ctx)
 

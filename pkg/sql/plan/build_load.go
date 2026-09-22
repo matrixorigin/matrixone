@@ -693,9 +693,24 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	}
 
 	if stmt.Param.Parallel && noCompress && stmt.Param.Format != tree.PARQUET && stmt.Param.Format != tree.ARROW {
-		projectNode.ProjectList = makeCastExpr(stmt, fileName, originTableDef, projectNode)
+		projectNode.ProjectList = makeCastExpr(stmt, fileName, originTableDef, projectNode, colToIndex)
 	}
-	lastNodeId = builder.appendNode(projectNode, bindCtx)
+	// Parallel CSV staging converts file columns first. Enforce byte limits
+	// before defaults can read those assigned values, including the FK fallback.
+	for i, col := range originTableDef.Cols {
+		if _, supplied := colToIndex[col.Name]; !supplied ||
+			(col.Typ.Id != int32(types.T_blob) && col.Typ.Id != int32(types.T_text)) {
+			continue
+		}
+		projectNode.ProjectList[i], err = builder.forceAssignmentCastExpr(projectNode.ProjectList[i], col.Typ, loadAssignmentIgnore(stmt))
+		if err != nil {
+			return nil, err
+		}
+	}
+	lastNodeId, err = builder.appendLoadDefaultProjections(bindCtx, projectNode, originTableDef, colToIndex)
+	if err != nil {
+		return nil, err
+	}
 	builder.qry.LoadTag = true
 
 	// External write target: no lock (no engine relation to lock).
@@ -907,7 +922,7 @@ func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, table
 			continue
 		}
 
-		defExpr, err := getDefaultExpr(ctx.GetContext(), tableDef.Cols[i])
+		defExpr, err := getDefaultExprForAssignment(ctx.GetContext(), tableDef.Cols[i], ctx.GetProcess(), loadAssignmentIgnore(stmt))
 		if err != nil {
 			return false, err
 		}
@@ -919,6 +934,56 @@ func getProjectNode(stmt *tree.Load, ctx CompilerContext, node *plan.Node, table
 	}
 
 	return ifExistAutoPkCol, nil
+}
+
+// LOAD builds physical (child-batch) references directly, unlike INSERT's
+// logical binding tags. Normalize file columns first, then reuse the same
+// dependency stages as INSERT and lower their tags to child-batch coordinates.
+func (builder *QueryBuilder) appendLoadDefaultProjections(
+	bindCtx *BindContext, node *plan.Node, tableDef *TableDef, supplied map[string]int32,
+) (int32, error) {
+	needed := false
+	for i, col := range tableDef.Cols {
+		if _, ok := supplied[col.Name]; !ok && exprHasLocalColumnRef(node.ProjectList[i]) {
+			needed = true
+			break
+		}
+	}
+	if !needed {
+		return builder.appendNode(node, bindCtx), nil
+	}
+	positions := make(map[int32]int32, len(tableDef.Cols))
+	expressions := make(map[int32]*plan.Expr, len(tableDef.Cols))
+	materialize := make(map[int32]bool)
+	order := make([]int32, 0)
+	inputTag := builder.genNewBindTag()
+	for i, col := range tableDef.Cols {
+		pos := int32(i)
+		positions[pos] = pos
+		expr := DeepCopyExpr(node.ProjectList[i])
+		if _, ok := supplied[col.Name]; ok {
+			replaceColRefTag(expr, 0, inputTag)
+		} else if exprHasLocalColumnRef(expr) {
+			materialize[pos] = true
+			order = append(order, pos)
+		}
+		expressions[pos] = expr
+	}
+	first := len(builder.qry.Nodes)
+	id, _, err := builder.appendMaterializedExprProjections(bindCtx, node.Children[0],
+		builder.genNewBindTag(), node.ProjectList, positions, expressions, materialize, order)
+	if err != nil {
+		return 0, err
+	}
+	previousTag := inputTag
+	for _, stage := range builder.qry.Nodes[first:] {
+		for _, expr := range stage.ProjectList {
+			replaceColRefTag(expr, previousTag, 0)
+		}
+		previousTag = stage.BindingTags[0]
+		stage.BindingTags = nil
+	}
+	return id, nil
 }
 
 func InitNullMap(param *tree.ExternParam, ctx CompilerContext) error {
@@ -1004,10 +1069,16 @@ func getCompressType(param *tree.ExternParam, filepath string) string {
 // lenient handling. Using lenient cast here avoids baking a strictness
 // decision into the plan at PREPARE time, which would become stale when
 // a prepared LOAD statement is EXECUTEd under a different sql_mode.
-func makeCastExpr(stmt *tree.Load, fileName string, tableDef *TableDef, node *plan.Node) []*plan.Expr {
+func makeCastExpr(stmt *tree.Load, fileName string, tableDef *TableDef, node *plan.Node, supplied map[string]int32) []*plan.Expr {
 	ret := make([]*plan.Expr, 0)
 	stringTyp := makeGeneratedPlan2Type(types.T_varchar, 0, 0, false)
 	for i := 0; i < len(tableDef.Cols); i++ {
+		// Only file fields arrive as strings. Defaults already have their bound
+		// result type, including constants and references to other target columns.
+		if _, ok := supplied[tableDef.Cols[i].Name]; !ok {
+			ret = append(ret, node.ProjectList[i])
+			continue
+		}
 		typ := node.ProjectList[i].Typ
 		expr := node.ProjectList[i].Expr
 		// Parallel CSV LOAD normally scans varchar values and casts them in the
@@ -1023,6 +1094,13 @@ func makeCastExpr(stmt *tree.Load, fileName string, tableDef *TableDef, node *pl
 			Expr: expr,
 		}
 
+		if typ.Id == int32(types.T_blob) || typ.Id == int32(types.T_text) {
+			// The following assignment projection owns both conversion and
+			// width enforcement. An ordinary TINYTEXT cast here would silently
+			// truncate before strict/IGNORE assignment can inspect the payload.
+			ret = append(ret, planExpr)
+			continue
+		}
 		planExpr, _ = makePlan2CastExpr(stmt.Param.Ctx, planExpr, typ)
 		ret = append(ret, planExpr)
 	}

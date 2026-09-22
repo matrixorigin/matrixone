@@ -49,4 +49,43 @@ EXECUTE p_mod USING @a;
 ➤ cast(MOD(?, 2) as signed)[-5,64,0]  𝄀
 1
 DEALLOCATE PREPARE p_mod;
+PREPARE p_bool FROM 'SELECT CAST(? AS DOUBLE) AS d, ROUND(SIN(?),12) AS s, ROUND(ACOS(?),12) AS a';
+SET @bool_math = TRUE;
+EXECUTE p_bool USING @bool_math, @bool_math, @bool_math;
+➤ d[8,64,0]  ¦  s[8,64,0]  ¦  a[8,64,0]  𝄀
+1  ¦  0.841470984808  ¦  0
+SET @bool_math = FALSE;
+EXECUTE p_bool USING @bool_math, @bool_math, @bool_math;
+➤ d[8,64,0]  ¦  s[8,64,0]  ¦  a[8,64,0]  𝄀
+0  ¦  0  ¦  1.570796326795
+SET @bool_math = NULL;
+EXECUTE p_bool USING @bool_math, @bool_math, @bool_math;
+➤ d[8,64,0]  ¦  s[8,64,0]  ¦  a[8,64,0]  𝄀
+null  ¦  null  ¦  null
+SET @bool_math = 'true';
+EXECUTE p_bool USING @bool_math, @bool_math, @bool_math;
+➤ d[8,64,0]  ¦  s[8,64,0]  ¦  a[8,64,0]  𝄀
+0  ¦  0  ¦  1.570796326795
+SET @bool_math = TRUE;
+EXECUTE p_bool USING @bool_math, @bool_math, @bool_math;
+➤ d[8,64,0]  ¦  s[8,64,0]  ¦  a[8,64,0]  𝄀
+1  ¦  0.841470984808  ¦  0
+DEALLOCATE PREPARE p_bool;
+PREPARE p_bool_int FROM 'SELECT ABS(?) AS a, ROUND(?) AS r, SIGN(?) AS s';
+EXECUTE p_bool_int USING @bool_math, @bool_math, @bool_math;
+➤ a[-5,64,0]  ¦  r[-5,64,0]  ¦  s[-5,64,0]  𝄀
+1  ¦  1  ¦  1
+SET @bool_math = FALSE;
+EXECUTE p_bool_int USING @bool_math, @bool_math, @bool_math;
+➤ a[-5,64,0]  ¦  r[-5,64,0]  ¦  s[-5,64,0]  𝄀
+0  ¦  0  ¦  0
+SET @bool_math = NULL;
+EXECUTE p_bool_int USING @bool_math, @bool_math, @bool_math;
+➤ a[-5,64,0]  ¦  r[-5,64,0]  ¦  s[-5,64,0]  𝄀
+null  ¦  null  ¦  null
+SET @bool_math = TRUE;
+EXECUTE p_bool_int USING @bool_math, @bool_math, @bool_math;
+➤ a[-5,64,0]  ¦  r[-5,64,0]  ¦  s[-5,64,0]  𝄀
+1  ¦  1  ¦  1
+DEALLOCATE PREPARE p_bool_int;
 DROP DATABASE numeric_context_test;

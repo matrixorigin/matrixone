@@ -98,7 +98,12 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 						// statement ACROSS frames — so a burst of tiny frames costs ~totalChunks/maxInsertTuples
 						// RunSql round-trips in this one txn, not one INSERT per frame. chunk_ids stay
 						// contiguous in frame order, so recency is unchanged.
-						sqls, chunkID := fulltext2.TailFramesInsertSqls(w.cfg, startChunk, segs)
+						// The frames' rows record the version this flush applied, written in
+						// THIS transaction alongside the bytes they describe -- so an index's
+						// recorded coverage can never disagree with what it actually stores,
+						// which a watermark read from elsewhere cannot promise.
+						sqls, chunkID := fulltext2.TailFramesInsertSqlsAt(
+							sqlproc, w.cfg, startChunk, segs, r.GetToTS().Physical())
 						for _, s := range sqls {
 							res, e := sqlexec.RunSql(sqlproc, s)
 							if e != nil {
@@ -120,6 +125,14 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 				if err != nil {
 					errch <- err
 					return
+				}
+				// The tail this flush committed is now durable but the querying CN may
+				// still serve a warm cache loaded before it (an index created empty has
+				// no tag=0 base, so that warm copy is doc-less). Drop it IF idle so the
+				// next query reloads the tail; a busy entry stays warm and refreshes
+				// later. No-op when nothing was written.
+				if len(segs) > 0 {
+					fulltext2.EvictIdleCache(w.cfg.IndexTable)
 				}
 				return
 			}

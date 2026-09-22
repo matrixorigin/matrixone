@@ -252,6 +252,11 @@ type DatTypKey struct{}
 type TableIDKey struct{}
 type LogicalIdKey struct{}
 
+// RelKindKey carries a mo_tables.relkind that a CREATE TABLE must adopt verbatim
+// instead of deriving one from the table name. Set by ALTER TABLE ... COPY so the
+// replica keeps the original table's kind.
+type RelKindKey struct{}
+
 // CarryOnCtxKeys defines keys needed to be serialized when pass context through net
 var CarryOnCtxKeys = []any{TenantIDKey{}, UserIDKey{}, RoleIDKey{}}
 
@@ -260,6 +265,11 @@ type IsMoLogger struct{}
 type IgnoreForeignKey struct{}
 
 type AlterCopyOpt struct{}
+
+// OptimizerHints carries a per-statement optimizer_hints string (same key=value
+// format as the global variable) set by the internal SQL executor via
+// StatementOption.WithOptimizerHints and applied by the planner's parseOptimizeHints.
+type OptimizerHints struct{}
 
 // Determine if now is a bg sql.
 type BgKey struct{}

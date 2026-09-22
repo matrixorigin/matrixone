@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/google/uuid"
 	"github.com/lni/dragonboat/v4"
 	"github.com/lni/goutils/leaktest"
@@ -116,6 +117,67 @@ func TestCommandDeliveryLogStoresReadyFiltersExpiredStores(t *testing.T) {
 	live.CommandDeliverySupported = false
 	state.LogState.Stores["log-live"] = live
 	require.False(t, store.commandDeliveryLogStoresReady(state))
+}
+
+func TestViewMetadataAdmissionLogStoresReadyWithProtocolChecksCurrentMembers(t *testing.T) {
+	store := &store{cfg: DefaultConfig()}
+	state := &pb.CheckerState{
+		Tick: 100,
+		LogState: pb.LogState{
+			Shards: map[uint64]pb.LogShardInfo{
+				hakeeper.DefaultHAKeeperShardID: {
+					Replicas:          map[uint64]string{1: "voting"},
+					NonVotingReplicas: map[uint64]string{2: "non-voting"},
+				},
+			},
+			Stores: map[string]pb.LogStoreInfo{
+				// These records are expired, but both UUIDs remain current
+				// HAKeeper members and therefore still receive Raft entries.
+				"voting": {
+					Tick:                                     1,
+					ViewMetadataAdmissionSupported:           true,
+					ViewMetadataAdmissionProtocolV3Supported: false,
+				},
+				"non-voting": {
+					Tick:                                     1,
+					ViewMetadataAdmissionSupported:           true,
+					ViewMetadataAdmissionProtocolV3Supported: false,
+				},
+				// A stale record that is no longer in the shard must not block
+				// activation, regardless of its heartbeat or capabilities.
+				"historical": {Tick: 1},
+			},
+		},
+	}
+	require.False(t, store.viewMetadataAdmissionLogStoresReadyWithProtocol(state, true))
+
+	voting := state.LogState.Stores["voting"]
+	voting.ViewMetadataAdmissionProtocolV3Supported = true
+	state.LogState.Stores["voting"] = voting
+	nonVoting := state.LogState.Stores["non-voting"]
+	nonVoting.ViewMetadataAdmissionProtocolV3Supported = true
+	state.LogState.Stores["non-voting"] = nonVoting
+	require.True(t, store.viewMetadataAdmissionLogStoresReadyWithProtocol(state, true))
+
+	// The same membership check also requires the legacy admission capability.
+	nonVoting.ViewMetadataAdmissionSupported = false
+	state.LogState.Stores["non-voting"] = nonVoting
+	require.False(t, store.viewMetadataAdmissionLogStoresReadyWithProtocol(state, false))
+
+	delete(state.LogState.Shards[hakeeper.DefaultHAKeeperShardID].Replicas, 1)
+	delete(state.LogState.Shards[hakeeper.DefaultHAKeeperShardID].NonVotingReplicas, 2)
+	state.LogState.Shards[hakeeper.DefaultHAKeeperShardID] = pb.LogShardInfo{
+		Replicas: map[uint64]string{1: "historical"},
+	}
+	require.False(t, store.viewMetadataAdmissionLogStoresReadyWithProtocol(state, true),
+		"a current member without a heartbeat must block activation")
+	delete(state.LogState.Shards[hakeeper.DefaultHAKeeperShardID].Replicas, 1)
+	state.LogState.Shards[hakeeper.DefaultHAKeeperShardID] = pb.LogShardInfo{
+		Replicas: map[uint64]string{1: "voting"},
+	}
+	delete(state.LogState.Stores, "historical")
+	require.True(t, store.viewMetadataAdmissionLogStoresReadyWithProtocol(state, true),
+		"a stale non-member record must not participate in the gate")
 }
 
 func TestRaftConfig(t *testing.T) {
@@ -428,71 +490,53 @@ func TestQueryLog(t *testing.T) {
 }
 
 func proceedHAKeeperToRunning(t *testing.T, store *store) {
+	t.Helper()
+	require.True(t, store.cfg.DisableWorkers, "manual bootstrap requires exclusive HAKeeper ownership")
 	state, err := store.getCheckerState()
-	assert.NoError(t, err)
-	assert.Equal(t, pb.HAKeeperCreated, state.State)
+	require.NoError(t, err)
+	require.Equal(t, pb.HAKeeperCreated, state.State)
 
 	nextIDByKey := map[string]uint64{"a": 1, "b": 2}
-	err = store.setInitialClusterInfo(
-		1,
-		1,
-		1,
-		hakeeper.K8SIDRangeEnd+10,
-		nextIDByKey,
-		nil,
-	)
-	assert.NoError(t, err)
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	require.NoError(t, store.setInitialClusterInfo(
+		1, 1, 1, hakeeper.K8SIDRangeEnd+10, nextIDByKey, nil))
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-
-	hb := store.getHeartbeatMessage()
-	_, err = store.addLogStoreHeartbeat(ctx, hb)
-	assert.NoError(t, err)
-
+	_, err = store.addLogStoreHeartbeat(ctx, store.getHeartbeatMessage())
+	require.NoError(t, err)
 	state, err = store.getCheckerState()
-	assert.NoError(t, err)
-	assert.Equal(t, pb.HAKeeperBootstrapping, state.State)
-	assert.Equal(t, hakeeper.K8SIDRangeEnd+10, state.NextId)
-	assert.Equal(t, nextIDByKey, state.NextIDByKey)
+	require.NoError(t, err)
+	require.Equal(t, pb.HAKeeperBootstrapping, state.State)
+	require.Equal(t, hakeeper.K8SIDRangeEnd+10, state.NextId)
+	require.Equal(t, nextIDByKey, state.NextIDByKey)
 
-	_, term, err := store.isLeaderHAKeeper()
-	assert.NoError(t, err)
-
-	store.bootstrap(term, state)
+	isLeader, term, err := store.isLeaderHAKeeper()
+	require.NoError(t, err)
+	require.True(t, isLeader)
+	require.NoError(t, store.bootstrap(term, state))
 	state, err = store.getCheckerState()
-
-	assert.NoError(t, err)
-	assert.Equal(t, pb.HAKeeperBootstrapCommandsReceived, state.State)
+	require.NoError(t, err)
+	require.Equal(t, pb.HAKeeperBootstrapCommandsReceived, state.State)
+	require.False(t, store.bootstrapCheckDeadline.IsZero())
+	require.NotNil(t, store.bootstrapMgr)
+	require.False(t, store.bootstrapMgr.CheckBootstrap(state.LogState))
 
 	cmd, err := store.getCommandBatch(ctx, store.id())
 	require.NoError(t, err)
-	require.Equal(t, 1, len(cmd.Commands))
-	assert.True(t, cmd.Commands[0].Bootstrapping)
-
-	// handle startReplica to make sure logHeartbeat msg contain shards info,
-	// which used in store.checkBootstrap to determine if all log shards ready
+	require.Len(t, cmd.Commands, 1)
+	require.True(t, cmd.Commands[0].Bootstrapping)
+	// Start the real replica; wait only for its asynchronous Raft readiness.
 	service := &Service{store: store}
 	service.handleStartReplica(cmd.Commands[0])
-
-	deadline := time.Now().Add(10 * time.Second)
-	for state.State != pb.HAKeeperRunning && time.Now().Before(deadline) {
-		func() {
-			ctx, cancel = context.WithTimeout(context.Background(), time.Second)
-			defer cancel()
-
-			_, err = store.addLogStoreHeartbeat(ctx, store.getHeartbeatMessage())
-			assert.NoError(t, err)
-
-			store.checkBootstrap(state)
-			state, err = store.getCheckerState()
-			assert.NoError(t, err)
-
-			time.Sleep(time.Millisecond * 100)
-		}()
-	}
-
-	assert.Equal(t, pb.HAKeeperRunning, state.State)
+	require.Eventually(t, func() bool {
+		_, err = store.addLogStoreHeartbeat(ctx, store.getHeartbeatMessage())
+		require.NoError(t, err)
+		state, err = store.getCheckerState()
+		require.NoError(t, err)
+		require.NoError(t, store.checkBootstrap(state))
+		state, err = store.getCheckerState()
+		require.NoError(t, err)
+		return state.State == pb.HAKeeperRunning
+	}, 10*time.Second, 10*time.Millisecond)
 }
 
 // test if the tickerForTaskSchedule can push forward these routine
@@ -500,14 +544,21 @@ func TestTickerForTaskSchedule(t *testing.T) {
 	fn := func(t *testing.T, store *store, taskService taskservice.TaskService) {
 
 		tickerCxt, tickerCancel := context.WithCancel(context.Background())
-		defer tickerCancel()
+		tickerDone := make(chan struct{})
+		defer func() {
+			tickerCancel()
+			<-tickerDone
+		}()
 
 		//do task schedule background
-		go store.tickerForTaskSchedule(
-			tickerCxt,
-			time.Millisecond*10,
-			store.getCheckerStateFromLeader,
-		)
+		go func() {
+			defer close(tickerDone)
+			store.tickerForTaskSchedule(
+				tickerCxt,
+				time.Millisecond*10,
+				store.getCheckerStateFromLeader,
+			)
+		}()
 
 		// making hakeeper state proceeds to running before test task schedule
 		proceedHAKeeperToRunning(t, store)
@@ -543,7 +594,10 @@ func TestTickerForTaskSchedule(t *testing.T) {
 
 	}
 
-	runHakeeperTaskServiceTest(t, fn)
+	// Bootstrap is driven explicitly below. Keep the production HAKeeper
+	// worker disabled so it cannot concurrently advance the same state machine
+	// and ID allocator while this test is preparing the task-scheduling state.
+	runManualHakeeperTaskServiceTest(t, 5*time.Second, fn)
 }
 
 func TestStoreCloseWaitsForTaskScheduleTicker(t *testing.T) {
@@ -698,33 +752,87 @@ func TestAddHeartbeat(t *testing.T) {
 	fn := func(t *testing.T, store *store) {
 		peers := make(map[uint64]dragonboat.Target)
 		peers[1] = store.id()
-		assert.NoError(t, store.startHAKeeperReplica(1, peers, false))
+		require.NoError(t, store.startHAKeeperReplica(1, peers, false))
+		// Startup is asynchronous. Establish applied readiness separately from
+		// the independent one-second budget for each heartbeat below.
+		func() {
+			ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
+			defer cancel()
+			ready, err := store.waitHAKeeperLeaderReady(ctx, testIOTimeout)
+			require.NoError(t, err)
+			require.True(t, ready)
+			_, err = store.getCheckerStateWithContext(ctx)
+			require.NoError(t, err)
+		}()
 
 		m := store.getHeartbeatMessage()
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-		defer cancel()
-		_, err := store.addLogStoreHeartbeat(ctx, m)
-		assert.NoError(t, err)
+		func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_, err := store.addLogStoreHeartbeat(ctx, m)
+			require.NoError(t, err)
+		}()
 
 		cnMsg := pb.CNStoreHeartbeat{
-			UUID: store.id(),
+			UUID:           store.id(),
+			ServiceAddress: "cn-service",
 		}
-		_, err = store.addCNStoreHeartbeat(ctx, cnMsg)
-		assert.NoError(t, err)
+		func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_, err := store.addCNStoreHeartbeat(ctx, cnMsg)
+			require.NoError(t, err)
+		}()
 
 		tnMsg := pb.TNStoreHeartbeat{
 			UUID:   store.id(),
 			Shards: make([]pb.TNShardInfo, 0),
 		}
 		tnMsg.Shards = append(tnMsg.Shards, pb.TNShardInfo{ShardID: 2, ReplicaID: 3})
-		_, err = store.addTNStoreHeartbeat(ctx, tnMsg)
-		assert.NoError(t, err)
+		func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_, err := store.addTNStoreHeartbeat(ctx, tnMsg)
+			require.NoError(t, err)
+		}()
 
 		proxyMsg := pb.ProxyHeartbeat{
-			UUID: store.id(),
+			UUID:          store.id(),
+			ListenAddress: "proxy-listen",
 		}
-		_, err = store.addProxyHeartbeat(ctx, proxyMsg)
-		assert.NoError(t, err)
+		func() {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			_, err := store.addProxyHeartbeat(ctx, proxyMsg)
+			require.NoError(t, err)
+		}()
+
+		ctx, cancel := context.WithTimeout(context.Background(), testIOTimeout)
+		defer cancel()
+		state, err := store.getCheckerStateWithContext(ctx)
+		require.NoError(t, err)
+		logInfo, ok := state.LogState.Stores[m.UUID]
+		require.True(t, ok)
+		assert.Equal(t, m.ServiceAddress, logInfo.ServiceAddress)
+		assert.Equal(t, m.RaftAddress, logInfo.RaftAddress)
+		assert.Equal(t, m.GossipAddress, logInfo.GossipAddress)
+		assert.Equal(t, m.StoreIncarnation, logInfo.StoreIncarnation)
+		require.Len(t, logInfo.Replicas, len(m.Replicas))
+		for i := range m.Replicas {
+			// Protobuf round trips normalize empty maps to nil.
+			assert.True(t, proto.Equal(&m.Replicas[i], &logInfo.Replicas[i]), "replica %d", i)
+		}
+		cnInfo, ok := state.CNState.Stores[cnMsg.UUID]
+		require.True(t, ok)
+		assert.Equal(t, cnMsg.ServiceAddress, cnInfo.ServiceAddress)
+		assert.Equal(t, metadata.WorkState_Working, cnInfo.WorkState)
+		tnInfo, ok := state.TNState.Stores[tnMsg.UUID]
+		require.True(t, ok)
+		assert.Equal(t, tnMsg.Shards, tnInfo.Shards)
+		proxyInfo, ok := state.ProxyState.Stores[proxyMsg.UUID]
+		require.True(t, ok)
+		assert.Equal(t, proxyMsg.UUID, proxyInfo.UUID)
+		assert.Equal(t, proxyMsg.ListenAddress, proxyInfo.ListenAddress)
 	}
 	runStoreTest(t, fn)
 }
@@ -885,6 +993,107 @@ func TestStopReplicaCanResetHAKeeperReplicaID(t *testing.T) {
 		assert.Equal(t, uint64(0), atomic.LoadUint64(&store.haKeeperReplicaID))
 	}
 	runStoreTest(t, fn)
+}
+
+func TestHAKeeperTickerSurvivesReplicaRestart(t *testing.T) {
+	for _, nonVoting := range []bool{false, true} {
+		t.Run(fmt.Sprintf("non-voting=%t", nonVoting), func(t *testing.T) {
+			defer leaktest.AfterTest(t)()
+			logger, logs := captureLogger()
+			var cfg Config
+			genCfg := func() Config {
+				cfg = getStoreTestConfig()
+				return cfg
+			}
+			defer func() { vfs.ReportLeakedFD(cfg.FS, t) }()
+			s, err := newLogStoreWithRetry(genCfg, func() taskservice.TaskService { return nil }, nil,
+				runtime.NewRuntime(metadata.ServiceType_LOG, "test", logger), nil)
+			require.NoError(t, err)
+			defer func() { require.NoError(t, s.close()) }()
+			// Concurrent admissions before any local HAKeeper replica exists
+			// must still create exactly one store-owned driver.
+			var wg sync.WaitGroup
+			errs := make(chan error, 8)
+			for i := 0; i < cap(errs); i++ {
+				wg.Go(func() { errs <- s.startHAKeeperTicker() })
+			}
+			wg.Wait()
+			close(errs)
+			for err := range errs {
+				require.NoError(t, err)
+			}
+			start := s.startHAKeeperReplica
+			if nonVoting {
+				start = s.startHAKeeperNonVotingReplica
+			}
+			members := map[uint64]dragonboat.Target{1: s.id()}
+			if nonVoting {
+				members = nil // Non-voting replicas join an existing membership.
+			}
+			require.NoError(t, start(1, members, nonVoting))
+			for generation := 0; generation < 2; generation++ {
+				if !nonVoting {
+					// The same store-owned ticker must still advance the replicated
+					// clock after the replica has been stopped and resumed.
+					var initialTick uint64
+					require.Eventually(t, func() bool {
+						state, err := s.getCheckerState()
+						if err != nil {
+							return false
+						}
+						initialTick = state.Tick
+						return true
+					}, 10*time.Second, 10*time.Millisecond)
+					require.Eventually(t, func() bool {
+						state, err := s.getCheckerState()
+						return err == nil && state.Tick > initialTick
+					}, 10*time.Second, 10*time.Millisecond)
+				}
+				if generation == 0 {
+					require.NoError(t, s.stopReplica(hakeeper.DefaultHAKeeperShardID, 1))
+					require.Zero(t, atomic.LoadUint64(&s.haKeeperReplicaID))
+					// Dragonboat offloads stopped replicas asynchronously. Only
+					// ErrShardAlreadyExist is a readiness condition for resuming.
+					require.Eventually(t, func() bool {
+						err := start(1, nil, false)
+						if err == dragonboat.ErrShardAlreadyExist {
+							return false
+						}
+						require.NoError(t, err)
+						return true
+					}, 10*time.Second, 10*time.Millisecond)
+				}
+			}
+			// Join every admitted worker before counting entries, including
+			// a worker whose goroutine had not yet been scheduled at shutdown.
+			s.tickerStopper.Stop()
+			require.Equal(t, 1, logs.FilterMessage("HAKeeper ticker started").Len())
+		})
+	}
+}
+
+func TestHAKeeperTickerRejectsStartupAfterShutdown(t *testing.T) {
+	for _, disabled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("disabled=%t", disabled), func(t *testing.T) {
+			s := &store{tickerStopper: stopper.NewStopper("test-hakeeper-admission")}
+			s.cfg.DisableWorkers = disabled
+			s.tickerStopper.Stop()
+			var wg sync.WaitGroup
+			errs := make(chan error, 8)
+			for i := 0; i < cap(errs); i++ {
+				wg.Go(func() { errs <- s.startHAKeeperTicker() })
+			}
+			wg.Wait()
+			close(errs)
+			for err := range errs {
+				if disabled {
+					require.NoError(t, err)
+				} else {
+					require.ErrorIs(t, err, stopper.ErrUnavailable)
+				}
+			}
+		})
+	}
 }
 
 func hasShard(s *store, shardID uint64) bool {

@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	mysqlparser "github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/stretchr/testify/require"
@@ -298,6 +299,19 @@ func TestSelectIntoPlanIsNeverReusedFromPlanCache(t *testing.T) {
 	require.False(t, ses.isCached(input.getHash()))
 }
 
+func TestJSONMergePlanIsNeverReusedFromPlanCache(t *testing.T) {
+	pc := newPlanCache(2)
+	stmt := &trackedStatement{}
+	input := &UserInput{sql: "select json_merge('[1]', '[2]')"}
+	input.genHash()
+	pc.cache(input.getHash(), []tree.Statement{stmt}, []*plan.Plan{{}})
+
+	ses := &Session{planCache: pc}
+	require.Nil(t, cachedPlanForInput(ses, input))
+	require.False(t, ses.isCached(input.getHash()))
+	require.Equal(t, 1, stmt.freed)
+}
+
 func TestFreeStmtsSkipsNil(t *testing.T) {
 	good := &trackedStatement{}
 	stmts := []tree.Statement{nil, good, nil}
@@ -461,6 +475,51 @@ func TestSessionSQLModePresenceChangeClearsPlanCache(t *testing.T) {
 	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES,MATRIXONE_NATIVE"))
 	require.False(t, ses.isCached("cached-sql"))
 	require.Equal(t, 1, stmt.freed)
+
+	stmt = &trackedStatement{}
+	ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "HIGH_NOT_PRECEDENCE"))
+	require.False(t, ses.isCached("cached-sql"))
+	require.Equal(t, 1, stmt.freed)
+
+	for _, mode := range []string{
+		"ANSI_QUOTES",
+		"PIPES_AS_CONCAT",
+		"NO_BACKSLASH_ESCAPES",
+		"REAL_AS_FLOAT",
+		"NO_UNSIGNED_SUBTRACTION",
+	} {
+		require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES"))
+		stmt = &trackedStatement{}
+		ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+		require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES,"+mode))
+		require.False(t, ses.isCached("cached-sql"), mode)
+		require.Equal(t, 1, stmt.freed, mode)
+	}
+
+	stmt = &trackedStatement{}
+	ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES,MATRIXONE_NATIVE,IGNORE_SPACE"))
+	require.False(t, ses.isCached("cached-sql"))
+	require.Equal(t, 1, stmt.freed)
+
+	stmt = &trackedStatement{}
+	ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES,MATRIXONE_NATIVE"))
+	require.False(t, ses.isCached("cached-sql"))
+	require.Equal(t, 1, stmt.freed)
+
+	stmt = &trackedStatement{}
+	ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "ANSI"))
+	require.False(t, ses.isCached("cached-sql"))
+	require.Equal(t, 1, stmt.freed)
+
+	stmt = &trackedStatement{}
+	ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES"))
+	require.False(t, ses.isCached("cached-sql"))
+	require.Equal(t, 1, stmt.freed)
 }
 
 func TestSessionProtocolVersionChangeInvalidatesPlanCache(t *testing.T) {
@@ -523,4 +582,28 @@ func TestSessionSQLModePresenceMatcherUsesExactToken(t *testing.T) {
 
 	_, ok = sqlModeHasEnableBoolSumAvgValue(int64(0))
 	require.False(t, ok)
+}
+
+func TestSessionSQLModeHighNotPrecedenceHelpers(t *testing.T) {
+	has, ok := sqlModeHasHighNotPrecedenceValue("STRICT_TRANS_TABLES,HIGH_NOT_PRECEDENCE")
+	require.True(t, ok)
+	require.True(t, has)
+
+	has, ok = sqlModeHasHighNotPrecedenceValue("STRICT_TRANS_TABLES,HIGH_NOT_PRECEDENCE_EXTRA")
+	require.True(t, ok)
+	require.False(t, has)
+
+	_, ok = sqlModeHasHighNotPrecedenceValue(int64(0))
+	require.False(t, ok)
+
+	flags, ok := sqlModeParserFlagsValue("ANSI_QUOTES,HIGH_NOT_PRECEDENCE")
+	require.True(t, ok)
+	require.Equal(t, mysqlparser.SQLModeFlags(mysqlparser.SQLModeANSIQuotes|mysqlparser.SQLModeHighNotPrecedence), flags)
+
+	_, ok = sqlModeParserFlagsValue(int64(0))
+	require.False(t, ok)
+
+	var nilSession *Session
+	require.False(t, nilSession.sqlModeHasHighNotPrecedence())
+	require.Zero(t, nilSession.sqlModeParserFlags())
 }

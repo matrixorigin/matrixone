@@ -265,6 +265,47 @@ func parseLeadingInteger(s string) (int64, bool) {
 	return v, true
 }
 
+// parseLeadingUint64 extracts the decimal integer prefix used by OCT's
+// string-to-number conversion. MySQL parses OCT's string argument through an
+// unsigned longlong: a representable sign is applied modulo 2^64, positive
+// overflow saturates at ULLONG_MAX, and negative overflow converts to zero.
+//
+// Leading whitespace must already be stripped by the caller. The boolean is
+// false when there is no digit after an optional sign.
+func parseLeadingUint64(s string) (uint64, bool) {
+	if len(s) == 0 {
+		return 0, false
+	}
+	start := 0
+	negative := false
+	if s[0] == '+' || s[0] == '-' {
+		start = 1
+		negative = s[0] == '-'
+	}
+
+	end := start
+	for end < len(s) && s[end] >= '0' && s[end] <= '9' {
+		end++
+	}
+	if end == start {
+		return 0, false
+	}
+
+	value, err := strconv.ParseUint(s[start:end], 10, 64)
+	if err != nil {
+		// MySQL's conversion clamps a positive overflow to ULLONG_MAX, but
+		// returns zero when the negative magnitude itself overflows.
+		if negative {
+			return 0, true
+		}
+		return ^uint64(0), true
+	}
+	if negative {
+		return 0 - value, true
+	}
+	return value, true
+}
+
 // encodeCharBytes converts an int64 argument for MySQL CHAR() into big-endian
 // bytes. MySQL treats CHAR(N) values as unsigned 32-bit integers and expands
 // values > 255 into multiple big-endian bytes:
@@ -308,6 +349,35 @@ const (
 // Width holds srid+1 when an SRID is declared (0 means undeclared). These two
 // helpers mirror that rendering for information_schema.COLUMNS / desc, matching
 // what SHOW CREATE TABLE produces via plan.FormatColType.
+
+func mysqlVisibleStringFamilyName(typ *types.Type) string {
+	switch typ.Oid {
+	case types.T_text:
+		switch typ.Width {
+		case types.MaxTinyTextLen:
+			return "TINYTEXT"
+		case types.MaxMediumTextLen:
+			return "MEDIUMTEXT"
+		case types.MaxLongTextLen:
+			return "LONGTEXT"
+		default:
+			return "TEXT"
+		}
+	case types.T_blob:
+		switch typ.Width {
+		case types.MaxTinyTextLen:
+			return "TINYBLOB"
+		case types.MaxMediumTextLen:
+			return "MEDIUMBLOB"
+		case types.MaxLongTextLen:
+			return "LONGBLOB"
+		default:
+			return "BLOB"
+		}
+	default:
+		return typ.String()
+	}
+}
 
 // geometryShowDataType renders the DATA_TYPE of a geometry column: the subtype
 // name (POINT, LINESTRING, ...) or the base family when the subtype is generic.
@@ -377,7 +447,7 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			if err != nil {
 				return nil, err
 			}
-			ts := typ.String()
+			ts := mysqlVisibleStringFamilyName(typ)
 			// after decimal fix, remove this
 			if typ.Oid.IsDecimal() {
 				ts = "DECIMAL"
@@ -412,9 +482,29 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 					ret = "MEDIUMTEXT"
 				case types.MaxLongTextLen:
 					ret = "LONGTEXT"
+				case 0, types.MaxStringSize:
+					ret = "TEXT"
 				default:
 					ret = fmt.Sprintf("%s(%d)", ts, typ.Width)
 				}
+			} else if typ.Oid == types.T_blob {
+				switch typ.Width {
+				case types.MaxTinyTextLen:
+					ret = "TINYBLOB"
+				case types.MaxMediumTextLen:
+					ret = "MEDIUMBLOB"
+				case types.MaxLongTextLen:
+					ret = "LONGBLOB"
+				case types.MaxStringSize:
+					ret = "BLOB"
+				default:
+					ret = fmt.Sprintf("%s(%d)", ts, typ.Width)
+				}
+			} else if typ.IsIntOrUint() && typ.Width == 0 {
+				// Width is the physical type width for stored integer columns, but
+				// expression-only integer types may leave it unset. Do not expose
+				// that internal zero as a MySQL display width.
+				ret = ts
 			} else {
 				ret = fmt.Sprintf("%s(%d)", ts, typ.Width)
 			}
@@ -951,7 +1041,7 @@ func builtInInternalCharacterSet(parameters []*vector.Vector, result vector.Func
 }
 
 func builtInConcatCheck(_ []overload, inputs []types.Type) checkResult {
-	if len(inputs) > 1 {
+	if len(inputs) > 0 {
 		shouldCast := false
 
 		ret := make([]types.Type, len(inputs))
@@ -1311,8 +1401,13 @@ func builtInCharCheck(_ []overload, inputs []types.Type) checkResult {
 			// char/text/blob/binary/varbinary -> varchar (truncated in builtInChar)
 			shouldCast = true
 			ret[i] = types.T_varchar.ToType()
+		case source.Oid == types.T_bool:
+			// BOOL is represented as a distinct MatrixOne type, but MySQL
+			// treats it as the numeric value 0 or 1 for CHAR.
+			shouldCast = true
+			ret[i] = types.T_int64.ToType()
 		default:
-			// float/decimal/bool/bit/... -> int64 (rounded by the cast, like MySQL)
+			// float/decimal/bit/... -> int64 (rounded by the cast, like MySQL)
 			c, _ := tryToMatch([]types.Type{source}, []types.T{types.T_int64})
 			if c == matchFailed {
 				return newCheckResultWithFailure(failedFunctionParametersWrong)
@@ -2599,8 +2694,16 @@ func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionRes
 		for i := uint64(0); i < uint64(length); i++ {
 			v1, null1 := p1.GetValue(i)
 			unixMicro := int64(v1) - int64(types.UnixToTimestamp(0))
-			if v1 == types.ZeroTimestamp || unixMicro < 0 || null1 {
+			if null1 {
 				if err := rs.Append(zero, true); err != nil {
+					return err
+				}
+			} else if v1 == types.ZeroTimestamp {
+				if err := rs.Append(zero, true); err != nil {
+					return err
+				}
+			} else if unixMicro < 0 {
+				if err := rs.Append(zero, false); err != nil {
 					return err
 				}
 			} else {
@@ -2617,9 +2720,16 @@ func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionRes
 	for i := uint64(0); i < uint64(length); i++ {
 		v1, null1 := p1.GetValue(i)
 		val := v1.Unix()
-		if v1 == types.ZeroTimestamp || val < 0 || null1 {
-			// XXX v1 < 0 need to raise error here.
+		if null1 {
 			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else if v1 == types.ZeroTimestamp {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+		} else if val < 0 {
+			if err := rs.Append(0, false); err != nil {
 				return err
 			}
 		} else {
@@ -2631,12 +2741,12 @@ func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionRes
 	return nil
 }
 
-func mustTimestamp(loc *time.Location, s string) types.Timestamp {
+func parseTimestampForUnix(loc *time.Location, s string) (types.Timestamp, bool) {
 	ts, err := types.ParseTimestamp(loc, s, 6)
 	if err != nil {
-		ts = types.ZeroTimestamp
+		return types.ZeroTimestamp, true
 	}
-	return ts
+	return ts, false
 }
 
 func builtInUnixTimestampVarcharToInt64(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -2650,10 +2760,21 @@ func builtInUnixTimestampVarcharToInt64(parameters []*vector.Vector, result vect
 				return err
 			}
 		} else {
-			timestamp := mustTimestamp(proc.GetSessionInfo().TimeZone, string(v1))
+			timestamp, invalid := parseTimestampForUnix(proc.GetSessionInfo().TimeZone, string(v1))
+			if invalid {
+				if err := rs.Append(0, false); err != nil {
+					return err
+				}
+				continue
+			}
 			val := timestamp.Unix()
-			if timestamp == types.ZeroTimestamp || val < 0 {
+			if timestamp == types.ZeroTimestamp {
 				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
+			} else if val < 0 {
+				if err := rs.Append(0, false); err != nil {
 					return err
 				}
 				continue
@@ -2679,10 +2800,21 @@ func builtInUnixTimestampVarcharToFloat64(parameters []*vector.Vector, result ve
 				return err
 			}
 		} else {
-			val := mustTimestamp(proc.GetSessionInfo().TimeZone, string(v1))
+			val, invalid := parseTimestampForUnix(proc.GetSessionInfo().TimeZone, string(v1))
+			if invalid {
+				if err := rs.Append(0, false); err != nil {
+					return err
+				}
+				continue
+			}
 			unix := val.UnixToFloat()
-			if val == types.ZeroTimestamp || unix < 0 {
+			if val == types.ZeroTimestamp {
 				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
+			} else if unix < 0 {
+				if err := rs.Append(0, false); err != nil {
 					return err
 				}
 				continue
@@ -2707,9 +2839,21 @@ func builtInUnixTimestampVarcharToDecimal128(parameters []*vector.Vector, result
 				return err
 			}
 		} else {
-			timestamp := mustTimestamp(proc.GetSessionInfo().TimeZone, string(v1))
+			timestamp, invalid := parseTimestampForUnix(proc.GetSessionInfo().TimeZone, string(v1))
+			if invalid {
+				if err := rs.Append(d, false); err != nil {
+					return err
+				}
+				continue
+			}
 			if timestamp == types.ZeroTimestamp {
 				if err := rs.Append(d, true); err != nil {
+					return err
+				}
+				continue
+			}
+			if timestamp < types.UnixToTimestamp(0) {
+				if err := rs.Append(d, false); err != nil {
 					return err
 				}
 				continue
@@ -2717,12 +2861,6 @@ func builtInUnixTimestampVarcharToDecimal128(parameters []*vector.Vector, result
 			val, err := timestamp.UnixToDecimal128()
 			if err != nil {
 				return err
-			}
-			if val.Compare(types.Decimal128{B0_63: 0, B64_127: 0}) <= 0 {
-				if err := rs.Append(d, true); err != nil {
-					return err
-				}
-				continue
 			}
 			if err = rs.Append(val, false); err != nil {
 				return err
@@ -3151,6 +3289,11 @@ func getPackFun(v *vector.Vector) (func(v *vector.Vector, idx int, ps *types.Pac
 			val := vector.GetFixedAtNoTypeCheck[types.Decimal128](v, idx)
 			ps.EncodeDecimal128(val)
 		}, nil
+	case types.T_decimal256:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			val := vector.GetFixedAtNoTypeCheck[types.Decimal256](v, idx)
+			ps.EncodeDecimal256(val)
+		}, nil
 	case types.T_uuid:
 		return func(v *vector.Vector, idx int, ps *types.Packer) {
 			val := vector.GetFixedAtNoTypeCheck[types.Uuid](v, idx)
@@ -3555,6 +3698,25 @@ func SerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 				ps[i].EncodeDecimal128(b)
 			}
 		}
+	case types.T_decimal256:
+		s := vector.ExpandFixedCol[types.Decimal256](v)
+		if hasNull {
+			for i, b := range s {
+				if v.IsNull(uint64(i)) {
+					if isFull {
+						ps[i].EncodeNull()
+					} else {
+						nulls.Add(bitMap, uint64(i))
+					}
+				} else {
+					ps[i].EncodeDecimal256(b)
+				}
+			}
+		} else {
+			for i, b := range s {
+				ps[i].EncodeDecimal256(b)
+			}
+		}
 	case types.T_uuid:
 		s := vector.ExpandFixedCol[types.Uuid](v)
 		if hasNull {
@@ -3651,6 +3813,9 @@ func builtInSerialExtract(parameters []*vector.Vector, result vector.FunctionRes
 		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
+	case types.T_decimal256:
+		rs := vector.MustFunctionResult[types.Decimal256](result)
 		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 	case types.T_bool:
 		rs := vector.MustFunctionResult[bool](result)
@@ -4212,9 +4377,10 @@ func builtInTan(parameters []*vector.Vector, result vector.FunctionResultWrapper
 	return nil
 }
 
-func builtInExp(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
-		return momath.Exp(v)
+func builtInExp(parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixedWithNullCheck[float64, float64](parameters, result, length, func(v float64) (float64, bool) {
+		r := math.Exp(v)
+		return r, math.IsInf(r, 0)
 	}, selectList)
 }
 

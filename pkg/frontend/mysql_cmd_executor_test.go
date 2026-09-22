@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -283,6 +284,154 @@ func TestShowErrorsFiltersWarningDiagnostics(t *testing.T) {
 	require.Equal(t, "Warning", level)
 }
 
+func TestShowDiagnosticCountsUseIndependentTotals(t *testing.T) {
+	ses := &Session{
+		feSessionImpl: feSessionImpl{mrs: &MysqlResultSet{}},
+		errInfo:       &errInfo{maxCnt: 1},
+	}
+	ses.appendWarningDiagnostic(1292, "warning")
+	ses.appendErrorDiagnostic(1064, "error")
+	ses.appendErrorDiagnostic(1065, "newest error")
+
+	warningCount, errorCount := ses.diagnosticsCounts()
+	require.Equal(t, uint64(3), warningCount)
+	require.Equal(t, uint64(2), errorCount)
+	require.Len(t, ses.diagnosticsSnapshot().codes, 1)
+
+	for _, test := range []struct {
+		name       string
+		stmt       tree.Statement
+		columnName string
+		want       uint64
+	}{
+		{
+			name:       "warnings",
+			stmt:       &tree.ShowWarnings{Count: true},
+			columnName: "@@session.warning_count",
+			want:       3,
+		},
+		{
+			name:       "errors",
+			stmt:       &tree.ShowErrors{Count: true},
+			columnName: "@@session.error_count",
+			want:       2,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ses.SetMysqlResultSet(&MysqlResultSet{})
+			execCtx := &ExecCtx{reqCtx: context.Background(), stmt: test.stmt}
+			require.NoError(t, doShowErrors(ses, execCtx))
+			mrs := ses.GetMysqlResultSet()
+			require.Equal(t, uint64(1), mrs.GetColumnCount())
+			require.Equal(t, test.columnName, mrs.Columns[0].Name())
+			column, ok := mrs.Columns[0].(*MysqlColumn)
+			require.True(t, ok)
+			require.Equal(t, defines.MYSQL_TYPE_LONGLONG, column.ColumnType())
+			require.False(t, column.IsSigned())
+			require.Equal(t, uint64(1), mrs.GetRowCount())
+			got, err := mrs.GetUint64(context.Background(), 0, 0)
+			require.NoError(t, err)
+			require.Equal(t, test.want, got)
+		})
+	}
+}
+
+func TestShowDiagnosticsLimitFiltersBeforePagination(t *testing.T) {
+	ses := &Session{
+		feSessionImpl: feSessionImpl{mrs: &MysqlResultSet{}},
+		errInfo:       &errInfo{maxCnt: MoDefaultErrorCount},
+	}
+	ses.appendErrorDiagnostic(1001, "old error")
+	ses.appendWarningDiagnostic(1002, "warning")
+	ses.appendErrorDiagnostic(1003, "new error")
+
+	limit := func(offset, count int64) *tree.Limit {
+		return &tree.Limit{
+			Offset: tree.NewNumVal(offset, fmt.Sprintf("%d", offset), false, tree.P_int64),
+			Count:  tree.NewNumVal(count, fmt.Sprintf("%d", count), false, tree.P_int64),
+		}
+	}
+
+	showDiagnostics := func(stmt tree.Statement, wantCode string) {
+		ses.SetMysqlResultSet(&MysqlResultSet{})
+		execCtx := &ExecCtx{reqCtx: context.Background(), stmt: stmt}
+		require.NoError(t, doShowErrors(ses, execCtx))
+		require.Equal(t, uint64(1), ses.GetMysqlResultSet().GetRowCount())
+		code, err := ses.GetMysqlResultSet().GetString(context.Background(), 0, 1)
+		require.NoError(t, err)
+		require.Equal(t, wantCode, code)
+	}
+
+	showDiagnostics(&tree.ShowErrors{Limit: limit(1, 1)}, "1001")
+	showDiagnostics(&tree.ShowWarnings{Limit: limit(1, 1)}, "1002")
+
+	ses.SetMysqlResultSet(&MysqlResultSet{})
+	invalid := &ExecCtx{
+		reqCtx: context.Background(),
+		stmt: &tree.ShowWarnings{Limit: &tree.Limit{
+			Count: tree.NewUnaryExpr(
+				tree.UNARY_MINUS,
+				tree.NewNumVal[int64](1, "1", false, tree.P_int64),
+			),
+		}},
+	}
+	require.Error(t, doShowErrors(ses, invalid))
+	require.Empty(t, ses.GetMysqlResultSet().Data)
+}
+
+func TestDiagnosticCountVariableExpressionsParse(t *testing.T) {
+	for _, sql := range []string{
+		"select @@warning_count",
+		"select (@@warning_count) as w, @@error_count",
+		"select @@warning_count + 1",
+		"select @@warning_count from dual",
+		"select @@warning_count limit 1",
+	} {
+		stmt, err := mysql.ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err, sql)
+		stmt.Free()
+	}
+
+	for _, sql := range []string{
+		"select @warning_count",
+		"select @@global.warning_count",
+	} {
+		stmt, err := mysql.ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err, sql)
+		selectStmt, ok := stmt.(*tree.Select)
+		require.True(t, ok, sql)
+		selectStmt.Free()
+	}
+}
+
+func TestDiagnosticCountVariableUsesStatementSnapshot(t *testing.T) {
+	ses := &Session{errInfo: &errInfo{maxCnt: MoDefaultErrorCount}}
+	ses.appendWarningDiagnostic(1292, "previous warning")
+	ses.appendErrorDiagnostic(1064, "previous error")
+
+	execCtx := &ExecCtx{reqCtx: context.Background(), ses: ses}
+	tcc := &TxnCompilerContext{}
+	tcc.SetExecCtx(execCtx)
+	execCtx.captureDiagnosticCountsSnapshot(ses)
+	resetDiagnosticsForStatement(ses, execCtx, &UserInput{}, &tree.Select{})
+	ses.appendWarningDiagnostic(1365, "new warning")
+
+	warningCount, err := tcc.ResolveVariable(warningCountSystemVariable, true, false)
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), warningCount)
+	errorCount, err := tcc.ResolveVariable(errorCountSystemVariable, true, false)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), errorCount)
+
+	execCtx.clearDiagnosticCountsSnapshot()
+	warningCount, err = tcc.ResolveVariable(warningCountSystemVariable, true, false)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), warningCount)
+	errorCount, err = tcc.ResolveVariable(errorCountSystemVariable, true, false)
+	require.NoError(t, err)
+	require.Zero(t, errorCount)
+}
+
 func TestSetNewResponseIncludesWarningDiagnostics(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
@@ -305,6 +454,26 @@ func TestAppendWarningBatchBoundsRecordsAndPreservesTotal(t *testing.T) {
 	require.Len(t, info.codes, 3)
 	require.Equal(t, []uint16{2, 3, 4}, info.codes)
 	require.Equal(t, uint16(100), info.warningCount())
+}
+
+func TestAppendWarningCountSaturatesAndBoundsMessageBytes(t *testing.T) {
+	ses := &Session{errInfo: &errInfo{maxCnt: MoDefaultErrorCount}}
+	ses.AppendWarningCount(^uint64(0))
+	ses.AppendWarningCount(1)
+	ses.AppendWarningDiagnostic(1, strings.Repeat("x", process.WarningDiagnosticMaxMessageBytes*2))
+
+	info := ses.diagnosticsSnapshot()
+	require.Equal(t, ^uint64(0), info.totalWarnings)
+	require.Len(t, info.msgs, 1)
+	require.LessOrEqual(t, len(info.msgs[0]), process.WarningDiagnosticMaxMessageBytes)
+}
+
+func TestAppendWarningBatchDoesNotRetainMoreRecordsThanTotal(t *testing.T) {
+	ses := &Session{errInfo: &errInfo{maxCnt: MoDefaultErrorCount}}
+	ses.AppendWarningBatch(1, []uint16{1292, 1292}, []string{"first", "second"})
+	info := ses.diagnosticsSnapshot()
+	require.Equal(t, uint64(1), info.totalWarnings)
+	require.Len(t, info.msgs, 1)
 }
 
 func TestHandleSetTransaction(t *testing.T) {
@@ -1661,7 +1830,7 @@ func TestRecordStatementSetsIgnoreForInsertIgnore(t *testing.T) {
 	proc := ses.GetProc()
 	require.NotNil(t, proc)
 
-	insertIgnore := &tree.Insert{OnDuplicateUpdate: tree.UpdateExprs{nil}}
+	insertIgnore := &tree.Insert{Ignore: true}
 	cw := InitTxnComputationWrapper(ses, insertIgnore, proc)
 	_, err := RecordStatement(ctx, ses, proc, cw, time.Now(), "insert ignore into t values (1, 10 / 0)", constant.ExternSql, true)
 	require.NoError(t, err)
@@ -1679,17 +1848,17 @@ func TestRecordStatementSetsIgnoreForInsertIgnore(t *testing.T) {
 			Tail: &tree.TailParameter{IgnoredLines: 1},
 		}},
 	}
-	require.False(t, isIgnoreStatement(loadIgnoreLines))
+	require.False(t, tree.IsIgnoreStatement(loadIgnoreLines))
 
 	parsed, err := mysql.Parse(ctx, "load data local infile 'data.csv' ignore into table t fields terminated by ','", 1)
 	require.NoError(t, err)
 	require.Len(t, parsed, 1)
-	require.True(t, isIgnoreStatement(parsed[0]))
+	require.True(t, tree.IsIgnoreStatement(parsed[0]))
 
 	parsed, err = mysql.Parse(ctx, "load data local infile 'data.csv' into table t fields terminated by ',' ignore 1 lines", 1)
 	require.NoError(t, err)
 	require.Len(t, parsed, 1)
-	require.False(t, isIgnoreStatement(parsed[0]))
+	require.False(t, tree.IsIgnoreStatement(parsed[0]))
 }
 
 func TestRecordStatementSetsIgnoreForUpdateIgnore(t *testing.T) {
@@ -1743,7 +1912,7 @@ func TestRefreshProcessStmtProfileForPreparedStmtUsesInnerInsert(t *testing.T) {
 	require.Equal(t, tree.QueryTypeOth, ses.GetQueryType())
 
 	atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
-	insertIgnore := &tree.Insert{OnDuplicateUpdate: tree.UpdateExprs{nil}}
+	insertIgnore := &tree.Insert{Ignore: true}
 	refreshProcessStmtProfileForPreparedStmt(proc, insertIgnore)
 
 	stmtType, queryType, ignore := proc.GetStmtProfile().GetStatementRuntimeProfile()
@@ -4208,7 +4377,7 @@ func Test_doResetClearsPreparedBinaryState(t *testing.T) {
 	ses.prepareStmts[stmtName] = prepareStmt
 
 	require.NoError(t, doReset(ctx, ses, tree.NewReset(tree.Identifier(stmtName))))
-	require.False(t, prepareStmt.params.GetNulls().Any())
+	require.Nil(t, prepareStmt.params)
 	require.Empty(t, prepareStmt.getFromSendLongData)
 }
 
@@ -6973,6 +7142,18 @@ func TestDirectSessionStrictPoolWithoutLabelSelectorFailsClosed(t *testing.T) {
 	require.Zero(t, trace.Attempts[0].Query.ResolvedCount)
 }
 
+func TestWriteExplainResultRejectsUnresolvedIndexHint(t *testing.T) {
+	query := &plan0.Query{UnresolvedIndexHints: []*plan0.UnresolvedIndexHint{{
+		Table: &plan0.ObjectRef{ObjName: "t"}, IndexName: "idx_missing",
+	}}}
+	// No session is needed: validation must finish before result publication.
+	err := writeExplainResult(context.Background(), nil, nil,
+		&plan0.Plan{Plan: &plan0.Plan_Query{Query: query}}, nil, "", nil)
+	var moErr *moerr.Error
+	require.ErrorAs(t, err, &moErr)
+	require.Equal(t, moerr.ER_KEY_DOES_NOT_EXIST, moErr.MySQLCode())
+}
+
 func TestWriteExplainResultSetsValidTextMetadata(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
@@ -8806,12 +8987,80 @@ func TestExecRequestStmtSendLongDataRowCount(t *testing.T) {
 			setRowCount(ses, ses.GetProc(), 7)
 			resp, err := ExecRequest(ses, execCtx, &Request{cmd: COM_STMT_SEND_LONG_DATA, data: tc.data})
 			require.NoError(t, err)
-			require.NotNil(t, resp)
-			require.Equal(t, ErrorResponse, resp.category)
-			require.Equal(t, int64(-1), ses.GetLastAffectedRows())
-			require.Equal(t, int64(-1), ses.GetProc().GetAffectedRows())
+			require.Nil(t, resp)
+			require.Equal(t, int64(7), ses.GetLastAffectedRows())
+			require.Equal(t, int64(7), ses.GetProc().GetAffectedRows())
 		})
 	}
+}
+
+func TestExecRequestStmtSendLongDataDefersFailureUntilExecute(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ses.sesSysVars = &SystemVariables{
+		mp: map[string]interface{}{"max_allowed_packet": int64(1024)},
+	}
+	proto, _, _ := newBinaryPrepareProtocolTestCase(t, "select ?")
+	proto.SetSession(ses)
+	ses.respr = NewMysqlResp(proto)
+	execCtx := newTestExecCtx(ctx, ctrl)
+	stmtID := uint32(29187)
+	stmtName := getPrepareStmtName(stmtID)
+	st := tree.NewPrepareString(tree.Identifier(stmtName), "select ?")
+	stmts, err := mysql.Parse(ctx, st.Sql, 1)
+	require.NoError(t, err)
+	preparePlan, err := buildPlan(ctx, nil, plan.NewEmptyCompilerContext(), st)
+	require.NoError(t, err)
+	stmt := &PrepareStmt{
+		Name: stmtName, PreparePlan: preparePlan, PrepareStmt: stmts[0],
+	}
+	defer stmt.Close()
+	require.NoError(t, ses.SetPrepareStmt(ctx, stmtName, stmt))
+
+	data := make([]byte, 6)
+	binary.LittleEndian.PutUint32(data, stmtID)
+	data = append(data, bytes.Repeat([]byte{'x'}, 600)...)
+	for i := 0; i < 3; i++ {
+		resp, err := ExecRequest(ses, execCtx,
+			&Request{cmd: COM_STMT_SEND_LONG_DATA, data: data})
+		require.NoError(t, err)
+		require.Nil(t, resp, "SEND_LONG_DATA must never send an unsolicited response")
+	}
+	require.ErrorContains(t, stmt.longDataErr, "max_allowed_packet")
+	require.Empty(t, stmt.longDataBuffers)
+	require.True(t, stmt.hasPendingLongData(), "a deferred error must block migration")
+
+	execute := make([]byte, 4)
+	binary.LittleEndian.PutUint32(execute, stmtID)
+	execute = append(execute, buildNullExecutePacket(defines.MYSQL_TYPE_VAR_STRING)...)
+	resp, err := ExecRequest(ses, execCtx,
+		&Request{cmd: COM_STMT_EXECUTE, data: execute})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Equal(t, ErrorResponse, resp.category)
+	require.ErrorContains(t, resp.GetData().(error), "max_allowed_packet")
+	require.True(t, stmt.hasPendingLongData())
+
+	stmt.resetBinaryParamState()
+	require.False(t, stmt.hasPendingLongData())
+	require.Nil(t, stmt.longDataErr)
+
+	invalidIndex := make([]byte, 6)
+	binary.LittleEndian.PutUint32(invalidIndex, stmtID)
+	binary.LittleEndian.PutUint16(invalidIndex[4:], 1)
+	resp, err = ExecRequest(ses, execCtx,
+		&Request{cmd: COM_STMT_SEND_LONG_DATA, data: invalidIndex})
+	require.NoError(t, err)
+	require.Nil(t, resp)
+	require.ErrorContains(t, stmt.longDataErr, "param index out of range")
+	resp, err = ExecRequest(ses, execCtx,
+		&Request{cmd: COM_STMT_EXECUTE, data: execute})
+	require.NoError(t, err)
+	require.Equal(t, ErrorResponse, resp.category)
+	stmt.resetBinaryParamState()
+	require.False(t, stmt.hasPendingLongData())
 }
 
 func Test_ExecRequest_SidecarHintUsesNormalQueryPath(t *testing.T) {
@@ -9645,16 +9894,15 @@ func Test_parseStmtSendLongData(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		// Test case 1: data length < 4 bytes - should return error
+		// A packet without a statement id cannot be associated with a deferred error.
 		convey.Convey("data length less than 4 bytes", func() {
 			ses := newTestSession(t, ctrl)
 			data := []byte{1, 2, 3} // only 3 bytes
 			err := parseStmtSendLongData(ctx, ses, data)
-			convey.So(err, convey.ShouldNotBeNil)
-			convey.So(moerr.IsMoErrCode(err, moerr.ErrInvalidInput), convey.ShouldBeTrue)
+			convey.So(err, convey.ShouldBeNil)
 		})
 
-		// Test case 2: GetPrepareStmt returns error
+		// An unknown statement id is silently discarded by this response-free command.
 		convey.Convey("GetPrepareStmt returns error", func() {
 			ses := newTestSession(t, ctrl)
 			stmtID := uint32(123)
@@ -9664,7 +9912,7 @@ func Test_parseStmtSendLongData(t *testing.T) {
 			data = append(data, []byte("additional data")...)
 
 			err := parseStmtSendLongData(ctx, ses, data)
-			convey.So(err, convey.ShouldNotBeNil)
+			convey.So(err, convey.ShouldBeNil)
 		})
 
 		// Test case 3: Normal flow with IsCloudNonuser = false
@@ -9780,8 +10028,8 @@ func Test_parseStmtSendLongData(t *testing.T) {
 			data = append(data, []byte("long data content")...)
 
 			err = parseStmtSendLongData(ctx, ses, data)
-			convey.So(err, convey.ShouldNotBeNil)
-			convey.So(err, convey.ShouldEqual, expectedErr)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(preStmt.longDataErr, convey.ShouldEqual, expectedErr)
 		})
 
 		// Test case 6: Empty data after stmtID (only 4 bytes)
@@ -9998,4 +10246,28 @@ func TestPreparedCloneSQLUsesRemappedDefaultDatabase(t *testing.T) {
 	require.True(t, parsed.SrcTable.ExplicitSchema)
 	require.True(t, parsed.CreateTable.Table.ExplicitSchema)
 	require.Equal(t, "source_db", ses.GetTxnCompileCtx().GetDatabase())
+}
+
+func TestPreparedGroupConcatFloorCapturedWithoutPhysicalCompile(t *testing.T) {
+	setSessionAlloc("", NewLeakCheckAllocator())
+	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
+	const sql = "prepare gc_floor from select /*+ SET_VAR(query_max_workers=1) */ group_concat('abcdef')"
+	parsed, err := parsers.ParseOne(ctx, dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	defer parsed.Free()
+	ctrl := gomock.NewController(t)
+	execCtx := newTestExecCtx(ctx, ctrl)
+	runTestHandle("prepared GROUP_CONCAT floor without physical compile", t, func(ses *Session) error {
+		execCtx.resper = ses.respr
+		require.NoError(t, ses.SetSessionSysVar(ctx, "group_concat_max_len", int64(1024)))
+		prepared, err := handlePrepareStmt(ses, execCtx, parsed.(*tree.PrepareStmt), sql)
+		if err != nil {
+			return err
+		}
+		require.Nil(t, prepared.compile, "explicit placement must exercise uncached prepare")
+		require.Equal(t, uint64(1024), prepared.groupConcatMaxLenFloor)
+		require.NoError(t, ses.SetSessionSysVar(ctx, "group_concat_max_len", int64(5)))
+		require.Equal(t, uint64(1024), prepared.groupConcatMaxLenFloor, "the logical prepared owner retains its original floor")
+		return nil
+	})
 }

@@ -152,7 +152,7 @@ desc items;
 Field    Type    Null    Key    Default    Extra    Comment
 id    BIGINT(64)    NO    PRI    null        
 name    VARCHAR(100)    YES        null        
-description    TEXT(0)    YES        null        
+description    TEXT    YES        null        
 image_vector    VECF32(4)    YES    MUL    null        
 text_vector    VECF32(10)    YES    MUL    null        
 category    VARCHAR(50)    YES        null        
@@ -221,6 +221,7 @@ text_vector,
 category,
 created_at
 from items;
+invalid input: expected vector dimension 5 != actual dimension 4.
 alter table items drop column image_vector;
 select * from items;
 id    name    description    text_vector    category    created_at
@@ -234,7 +235,7 @@ desc items;
 Field    Type    Null    Key    Default    Extra    Comment
 id    BIGINT(64)    NO    PRI    null        
 name    VARCHAR(100)    YES        null        
-description    TEXT(0)    YES        null        
+description    TEXT    YES        null        
 text_vector    VECF32(10)    YES        null        
 category    VARCHAR(50)    YES        null        
 created_at    TIMESTAMP(0)    YES        now()        

@@ -397,6 +397,30 @@ func TestNormalizePrepareParamRefsIsIdempotentAcrossVisitedAliases(t *testing.T)
 	})
 }
 
+func TestNormalizePrepareParamRefsVisitsSubqueryRoots(t *testing.T) {
+	param := &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 1}}}
+	queryPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		Steps: []int32{0},
+		Nodes: []*plan.Node{
+			{
+				NodeId:   0,
+				NodeType: plan.Node_PROJECT,
+				ProjectList: []*plan.Expr{{Expr: &plan.Expr_Sub{Sub: &plan.SubqueryRef{
+					NodeId: 1,
+				}}}},
+			},
+			{
+				NodeId:      1,
+				NodeType:    plan.Node_PROJECT,
+				ProjectList: []*plan.Expr{param},
+			},
+		},
+	}}}
+
+	require.NoError(t, NormalizePrepareParamRefs(context.Background(), queryPlan))
+	require.Equal(t, int32(0), param.GetP().Pos)
+}
+
 func TestFillValuesOfParamsInPlanDoesNotMutatePreparedPlan(t *testing.T) {
 	source := &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 1}}}
 	binaryLiteral := &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
@@ -660,8 +684,16 @@ func TestPreparedSQLExecuteNumericParamExprPreservesSourceDomain(t *testing.T) {
 			sourceType: types.T_int64.ToType(), wantType: types.T_int64},
 		{name: "year retains numeric type", value: int32(2026),
 			sourceType: types.T_year.ToType(), wantType: types.T_year},
-		{name: "date is not an arithmetic source", value: "2026-08-28",
+		{name: "date is not a shared numeric source", value: "2026-08-28",
 			sourceType: types.T_date.ToType(), wantNil: true},
+		{name: "time is not a shared numeric source", value: "12:34:56.123456",
+			sourceType: types.New(types.T_time, 6, 6), wantNil: true},
+		{name: "datetime is not a shared numeric source", value: "2026-08-28 12:34:56.123456",
+			sourceType: types.New(types.T_datetime, 6, 6), wantNil: true},
+		{name: "timestamp is not a shared numeric source", value: "2026-08-28 12:34:56.123456",
+			sourceType: types.New(types.T_timestamp, 6, 6), wantNil: true},
+		{name: "json is not a shared numeric source", value: "1.6",
+			sourceType: types.T_json.ToType(), wantNil: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			expr, err := preparedSQLExecuteNumericParamExpr(
@@ -752,6 +784,46 @@ func TestPreparedNumericPrefixTypeFromString(t *testing.T) {
 	}
 }
 
+func TestPreparedNumericStringIsComplete(t *testing.T) {
+	for _, test := range []struct {
+		value string
+		want  bool
+	}{
+		{value: "65.5", want: true},
+		{value: " 65.5e0 ", want: true},
+		{value: "+1", want: true},
+		{value: "65.5xyz", want: false},
+		{value: "abc", want: false},
+		{value: "1e+", want: false},
+	} {
+		t.Run(test.value, func(t *testing.T) {
+			require.Equal(t, test.want, PreparedNumericStringIsComplete(test.value))
+		})
+	}
+}
+
+func TestPreparedCharSourceTypeFromString(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		value     string
+		want      types.T
+		wantExact bool
+	}{
+		{name: "signed minimum", value: "-9223372036854775808", want: types.T_int64, wantExact: true},
+		{name: "unsigned above signed maximum", value: "9223372036854775809", want: types.T_uint64, wantExact: true},
+		{name: "decimal", value: "65.5e0", want: types.T_decimal64, wantExact: true},
+		{name: "numeric suffix", value: "65.5xyz", want: types.T_varchar},
+		{name: "non-numeric", value: "abc", want: types.T_varchar},
+		{name: "decimal overflow falls back to string", value: strings.Repeat("9", 77), want: types.T_varchar},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, exact := PreparedCharSourceTypeFromString(test.value)
+			require.Equal(t, test.want, got.Oid)
+			require.Equal(t, test.wantExact, exact)
+		})
+	}
+}
+
 func TestPreparedDecimalRuntimeTypePreservesWireDomain(t *testing.T) {
 	for _, test := range []struct {
 		name      string
@@ -790,33 +862,71 @@ func TestPreparedDecimalRuntimeTypePreservesWireDomain(t *testing.T) {
 
 func TestPreparedDecimalRuntimeDomainsCanonicalMaterialization(t *testing.T) {
 	for _, test := range []struct {
-		name      string
-		value     string
-		canonical string
-		visible   types.Type
+		name       string
+		value      string
+		normalized types.Type
+		canonical  string
+		visible    types.Type
+		exact      bool
 	}{
 		{
 			name: "decimal64 leading zeroes", value: strings.Repeat("0", 100) + "1.0",
-			canonical: "10e-1", visible: types.New(types.T_decimal64, 2, 1),
+			normalized: types.New(types.T_decimal64, 1, 0),
+			canonical:  "1", visible: types.New(types.T_decimal64, 2, 1),
 		},
 		{
 			name: "signed exponent", value: "-00012.3400e+2",
-			canonical: "-123400e-2", visible: types.New(types.T_decimal64, 6, 2),
+			normalized: types.New(types.T_decimal64, 4, 0),
+			canonical:  "-1234", visible: types.New(types.T_decimal64, 6, 2), exact: true,
+		},
+		{
+			name: "trailing zeroes fit normalized domain", value: "1.200000000000000000000000000000",
+			normalized: types.New(types.T_decimal64, 2, 1),
+			canonical:  "12e-1", visible: types.New(types.T_decimal128, 31, 30), exact: true,
 		},
 		{
 			name: "decimal256 leading zeroes", value: strings.Repeat("0", 100) + strings.Repeat("9", 65),
-			canonical: strings.Repeat("9", 65), visible: types.New(types.T_decimal256, 65, 0),
+			normalized: types.New(types.T_decimal256, 65, 0),
+			canonical:  strings.Repeat("9", 65), visible: types.New(types.T_decimal256, 65, 0),
 		},
 		{
 			name: "huge exponent zero", value: "-000.000e+999999999999999999999",
-			canonical: "0", visible: types.New(types.T_decimal64, 1, 0),
+			normalized: types.New(types.T_decimal64, 1, 0),
+			canonical:  "0", visible: types.New(types.T_decimal64, 1, 0),
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			_, visible, canonical, ok := PreparedDecimalRuntimeDomains(test.value)
+			normalized, visible, canonical, ok := PreparedDecimalRuntimeDomains(test.value)
 			require.True(t, ok)
+			require.Equal(t, test.normalized, normalized)
 			require.Equal(t, test.visible, visible)
 			require.Equal(t, test.canonical, canonical)
+			parse := func(value string, typ types.Type) (any, error) {
+				switch typ.Oid {
+				case types.T_decimal64:
+					parsed, err := types.ParseDecimal64(value, typ.Width, typ.Scale)
+					return parsed, err
+				case types.T_decimal128:
+					parsed, err := types.ParseDecimal128(value, typ.Width, typ.Scale)
+					return parsed, err
+				case types.T_decimal256:
+					parsed, err := types.ParseDecimal256(value, typ.Width, typ.Scale)
+					return parsed, err
+				default:
+					t.Fatalf("unexpected DECIMAL domain %s", typ.Oid)
+					return nil, nil
+				}
+			}
+			_, err := parse(canonical, normalized)
+			require.NoError(t, err, "canonical must parse in normalized domain")
+			canonicalVisible, err := parse(canonical, visible)
+			require.NoError(t, err, "canonical must parse in visible domain")
+			if test.exact {
+				originalVisible, err := parse(test.value, visible)
+				require.NoError(t, err)
+				require.Equal(t, originalVisible, canonicalVisible,
+					"canonical must preserve the visible-domain value and scale")
+			}
 		})
 	}
 
@@ -826,6 +936,8 @@ func TestPreparedDecimalRuntimeDomainsCanonicalMaterialization(t *testing.T) {
 	require.Equal(t, types.New(types.T_decimal128, 20, 0), normalized)
 	require.Equal(t, normalized, visible)
 	require.Equal(t, "90071992547409920001", canonical)
+	_, err := types.ParseDecimal128(canonical, normalized.Width, normalized.Scale)
+	require.NoError(t, err)
 
 	raw := strings.Repeat("0", 100) + "1.0"
 	_, visible, canonical, ok = PreparedDecimalRuntimeDomains(raw)
@@ -967,6 +1079,53 @@ func TestPreparedPlanDirectResultParamPositions(t *testing.T) {
 	require.Nil(t, PreparedPlanDirectResultParamPositions(&plan.Plan{
 		Plan: &plan.Plan_Query{Query: &plan.Query{StmtType: plan.Query_SELECT}},
 	}))
+}
+
+func TestPreparedPlanConversionParamPositions(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		sql  string
+		want []int32
+	}{
+		{name: "bin value", sql: "prepare bin_value from 'select bin(?)'", want: []int32{0}},
+		{name: "conv value", sql: "prepare conv_value from 'select conv(?, 10, 16)'", want: []int32{0}},
+		{name: "multiple values", sql: "prepare multiple_values from 'select bin(?), conv(?, 10, 16)'", want: []int32{0, 1}},
+		{name: "no conversion", sql: "prepare no_conversion from 'select abs(?)'", want: nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+			planUnderTest := prepared.GetDcl().GetPrepare().GetPlan()
+			require.Equal(t, test.want, PreparedPlanConversionParamPositions(planUnderTest))
+		})
+	}
+
+	require.Nil(t, PreparedPlanConversionParamPositions(nil))
+	require.Nil(t, PreparedPlanConversionParamPositions(&plan.Plan{
+		Plan: &plan.Plan_Query{Query: &plan.Query{StmtType: plan.Query_SELECT}},
+	}))
+}
+
+func TestPreparedPlanInetNtoaParamPositions(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		sql  string
+		want []int32
+	}{
+		{name: "direct", sql: "prepare inet_direct from 'select inet_ntoa(?)'", want: []int32{0}},
+		{name: "multiple", sql: "prepare inet_multiple from 'select inet_ntoa(?), inet_ntoa(?)'", want: []int32{0, 1}},
+		{name: "nested expression owns its text domain", sql: "prepare inet_nested from 'select inet_ntoa(concat(?))'", want: nil},
+		{name: "other function", sql: "prepare inet_other from 'select inet_aton(?)'", want: nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+			planUnderTest := prepared.GetDcl().GetPrepare().GetPlan()
+			require.Equal(t, test.want, PreparedPlanInetNtoaParamPositions(planUnderTest))
+		})
+	}
+
+	require.Nil(t, PreparedPlanInetNtoaParamPositions(nil))
 }
 
 func TestPreparedDirectResultSpecializationUpdatesVisibleType(t *testing.T) {
@@ -1855,6 +2014,122 @@ func TestDecimal128HasTrailingZeros(t *testing.T) {
 
 			wrapperResult := hasTrailingZeros(constExpr, constType, tt.columnScale)
 			require.Equal(t, tt.expectTrailing, wrapperResult, "hasTrailingZeros wrapper result mismatch")
+		})
+	}
+}
+
+func TestDecimal256StringHasTrailingZerosWithoutNarrowing(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		value           string
+		width           int32
+		constScale      int32
+		columnScale     int32
+		wantTrailing    bool
+		wantAlwaysFalse bool
+	}{
+		{
+			name:            "18 digit suffix",
+			value:           "12345678901234567890.000000000000000000",
+			width:           38,
+			constScale:      18,
+			columnScale:     0,
+			wantTrailing:    true,
+			wantAlwaysFalse: false,
+		},
+		{
+			name:            "19 digit suffix",
+			value:           "12345678901234567890.0000000000000000000",
+			width:           39,
+			constScale:      19,
+			columnScale:     0,
+			wantTrailing:    true,
+			wantAlwaysFalse: false,
+		},
+		{
+			name:            "wide suffix",
+			value:           "1234567890123456789012345678901234567890.000000000000000000000000000000",
+			width:           70,
+			constScale:      30,
+			columnScale:     0,
+			wantTrailing:    true,
+			wantAlwaysFalse: false,
+		},
+		{
+			name:            "wide nonzero suffix",
+			value:           "12345678901234567890.0000000000000000001",
+			width:           39,
+			constScale:      19,
+			columnScale:     0,
+			wantTrailing:    false,
+			wantAlwaysFalse: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			constType := types.New(types.T_decimal256, tc.width, tc.constScale)
+			constExpr := &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_decimal256), Width: tc.width, Scale: tc.constScale},
+				Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+					Isnull: false,
+					Value:  &plan.Literal_Sval{Sval: tc.value},
+				}},
+			}
+
+			require.Equal(t, tc.wantTrailing,
+				hasTrailingZeros(constExpr, constType, tc.columnScale))
+			require.Equal(t, tc.wantAlwaysFalse,
+				isDecimalComparisonAlwaysFalseCore(constExpr, constType, tc.columnScale))
+		})
+	}
+}
+
+func TestDecimalTrailingZerosIsSignIndependent(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name         string
+		value        string
+		wantTrailing bool
+		wantProven   bool
+	}{
+		{
+			name:         "positive zero suffix",
+			value:        "50.500000",
+			wantTrailing: true,
+			wantProven:   true,
+		},
+		{
+			name:         "negative zero suffix",
+			value:        "-50.500000",
+			wantTrailing: true,
+			wantProven:   true,
+		},
+		{
+			name:         "positive nonzero suffix",
+			value:        "50.500001",
+			wantTrailing: false,
+			wantProven:   true,
+		},
+		{
+			name:         "negative nonzero suffix",
+			value:        "-50.500001",
+			wantTrailing: false,
+			wantProven:   true,
+		},
+		{
+			name:         "negative wide coefficient",
+			value:        "-12345678901234567890.0000000000000000000",
+			wantTrailing: true,
+			wantProven:   true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expr, err := makePlan2DecimalExprWithType(ctx, tc.value)
+			require.NoError(t, err)
+			constType := makeTypeByPlan2Expr(expr)
+
+			gotTrailing, gotProven := decimalTrailingZerosStatus(expr, constType, 2)
+			require.Equal(t, tc.wantTrailing, gotTrailing)
+			require.Equal(t, tc.wantProven, gotProven)
 		})
 	}
 }

@@ -544,7 +544,7 @@ func (tcc *TxnCompilerContext) recoverLegacyTinyText(
 	if tableDef.DbName == "" {
 		tableDef.DbName = dbName
 	}
-	return plan2.RecoverLegacyTinyText(ctx, tableDef, func(
+	if err := plan2.RecoverLegacyTinyText(ctx, tableDef, func(
 		_ context.Context,
 		sourceDB string,
 		sourceTable string,
@@ -561,7 +561,10 @@ func (tcc *TxnCompilerContext) recoverLegacyTinyText(
 			sourceDef.DbName = sourceDB
 		}
 		return sourceDef, nil
-	})
+	}); err != nil {
+		return err
+	}
+	return plan2.MigrateLegacyHexTableDef(tcc.GetProcess(), tableDef)
 }
 
 func (tcc *TxnCompilerContext) ensureDatabaseIsNotEmpty(dbName string, checkSub bool, snapshot *plan2.Snapshot) (string, *plan.SubscriptionMeta, error) {
@@ -999,6 +1002,9 @@ func (tcc *TxnCompilerContext) ResolveVariable(varName string, isSystemVar, isGl
 				return
 			}
 		} else {
+			if value, ok := tcc.execCtx.diagnosticCountSnapshot(varName); ok {
+				return value, nil
+			}
 			if varValue, err = tcc.GetSession().GetSessionSysVar(varName); err != nil {
 				return
 			}

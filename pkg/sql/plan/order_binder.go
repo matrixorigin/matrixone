@@ -416,7 +416,17 @@ func (b *OrderBinder) BindExpr(astExpr tree.Expr) (*plan.Expr, error) {
 		return nil, err
 	}
 
+	previousGroupConcatReuse := b.ProjectionBinder.allowGroupConcatReuse
+	// ORDER BY is evaluated from the aggregate result. An exact
+	// GROUP_CONCAT(...) expression reuses the selected slot. With GROUP BY, a
+	// wrapper such as HEX(GROUP_CONCAT(...)) is an independent aggregate call in
+	// MySQL because the wrapper is evaluated as a per-group sort key. A scalar
+	// aggregate has one output row, so its wrapper does not need another slot.
+	b.ProjectionBinder.allowGroupConcatReuse =
+		isGroupConcatAggregateExpr(unwrapParenExpr(astExpr)) ||
+			b.ctx == nil || len(b.ctx.groups) == 0
 	expr, err := b.ProjectionBinder.BindExpr(astExpr, 0, true)
+	b.ProjectionBinder.allowGroupConcatReuse = previousGroupConcatReuse
 	if err != nil {
 		return nil, err
 	}

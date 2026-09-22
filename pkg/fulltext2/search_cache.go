@@ -83,6 +83,32 @@ type Fulltext2Search struct {
 	loadedTs   int64
 	loadedTail int64
 	genValid   bool
+
+	// buildTS is MAX(metadata.build_ts) over the loaded generation (base + cdc_tail):
+	// the greatest source-table commit this index reflects. Captured at Load so it
+	// matches exactly the generation this object searches. 0 = unknown (pre-migration
+	// index or read error), which callers must treat as "not current".
+	buildTS int64
+
+	// preloadNdoc is the base doc count read by Preload, so GetIndexSize can report what the
+	// following Load will cost before any base is mapped, and so Load can run the heap-budget
+	// check without repeating the aggregate. Superseded by the loaded segments once Load
+	// succeeds. preloaded distinguishes "Preload ran and counted zero docs" from "Preload
+	// never ran" -- a caller may reach Load directly.
+	preloadNdoc int64
+	// reservedAhead is what the governor says other in-flight loads have promised. Set
+	// between Preload and Load via SetReservedAhead; see checkTailLoadBudget.
+	reservedAhead int64
+	// preloadTailBytes is the peak the CDC tail costs to load. See tailPeakBytes.
+	preloadTailBytes int64
+	// preloadBytes is the on-disk size of the bases Load will map. See baseDocCountAndBytes.
+	preloadBytes int64
+	preloaded    bool
+
+	// baseSegs / tailSegs are the tag=0 base and tag=1 cdc_tail segment counts captured at
+	// Load. A generation with neither serves no docs (see EmptyGeneration).
+	baseSegs int
+	tailSegs int
 }
 
 var _ veccache.VectorIndexSearchIf = (*Fulltext2Search)(nil)
@@ -93,23 +119,61 @@ func NewFulltext2Search(cfg TableConfig) *Fulltext2Search {
 	return &Fulltext2Search{cfg: cfg}
 }
 
+// EvictIdleCache drops the live cached index for indexTable IF no search is in
+// flight, so the next query reloads the just-appended cdc_tail generation. A busy
+// entry is left warm (RemoveIdle returns false) and refreshes at a later idle
+// moment or via the IsStale sweep. Called after a CDC tail flush commits, this
+// bounds the stale-empty window an index created empty (copy-alter / create on an
+// empty table, no tag=0 base) would otherwise show until the housekeeping sweep,
+// without the reader thrash a forced evict on every flush would cause.
+func EvictIdleCache(indexTable string) bool {
+	return veccache.Cache.RemoveIdle(indexTable, "cdc")
+}
+
 // Load reads the index from the chunk store: the tag=0 base sub-indexes plus the
 // tag=1 CdcTail delta frames (+ delete set), assembled into a queryable Index with
 // global stats and per-pk liveness. An index created on an empty table has no tag=0
 // base, so segs may hold only tail segments (or be empty → a loaded, doc-less index).
+// Preload counts the docs across every tag=0 base -- the quantity the heap cost is derived
+// from -- without loading or mapping any of them, so the cache can reclaim room for this index
+// before Load claims it.
+func (s *Fulltext2Search) Preload(sqlproc *sqlexec.SqlProcess) error {
+	ndoc, bytes, err := baseDocCountAndBytes(sqlproc, s.cfg)
+	if err != nil {
+		return err
+	}
+	// The CDC tail is loaded too, and it is pure Go heap. An index with only a tail counts
+	// ZERO base docs, so without this the arrival publishes (0,0), makeRoom takes its
+	// "nothing to account for" exit BEFORE registering a reservation, and the load is
+	// invisible to admission entirely. Counting the chunks is cheap enough to do here; see
+	// tailPeakBytes.
+	tail, _, err := tailPeakBytes(sqlproc, s.cfg)
+	if err != nil {
+		return err
+	}
+	s.preloadNdoc, s.preloadBytes, s.preloadTailBytes, s.preloaded = ndoc, bytes, tail, true
+	return nil
+}
+
 func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) error {
 	// Fail fast on the QUERY path if the bases' per-doc metadata won't fit the heap
 	// budget, rather than OOM-killing the CN (which takes down every query on the node).
 	// This guard is on Load, NOT LoadAllBases, so CompactSegments (MERGE) — the remedy —
 	// stays exempt and can still load the bases to reclaim dead docs.
-	if err := checkBaseLoadBudget(sqlproc, s.cfg); err != nil {
+	// Reuse Preload's count when it ran: checkBaseLoadBudget would otherwise repeat the
+	// SUM(nrow) aggregate that Preload already paid for, on every cache miss.
+	if s.preloaded {
+		if err := checkBaseLoadBudgetFor(sqlproc, s.cfg, s.preloadNdoc); err != nil {
+			return err
+		}
+	} else if err := checkBaseLoadBudget(sqlproc, s.cfg); err != nil {
 		return err
 	}
 	bases, err := LoadAllBases(sqlproc, s.cfg)
 	if err != nil {
 		return err
 	}
-	tails, deletes, err := LoadTailSegments(sqlproc, s.cfg)
+	tails, deletes, err := LoadTailSegmentsWithin(sqlproc, s.cfg, s.reservedAhead)
 	if err != nil {
 		freeSegs(bases) // munmap the base segments on a tail-load error (don't leak the mappings)
 		return err
@@ -117,6 +181,13 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) error {
 	segs := append(bases, tails...)
 	s.idx = NewIndex(segs, deletes)
 	s.loaded = true
+	s.baseSegs = len(bases)
+	s.tailSegs = len(tails)
+
+	// Capture the base-table coverage of exactly what was just loaded, in the same
+	// txn/snapshot as the data, so a reader (the json-probe operator) can bind its
+	// table_changes tail to the exact generation this object searched.
+	s.buildTS = MaxBuildTS(sqlproc, s.cfg, false /* base + cdc_tail */)
 
 	// Capture the generation + durable handles for IsStale. Same txn as the load, so the
 	// captured generation matches the loaded snapshot exactly. On any capture failure genValid
@@ -129,6 +200,51 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) error {
 		}
 	}
 	return nil
+}
+
+// EmptyGeneration reports a loaded generation with NO tag=0 base AND NO tag=1 cdc_tail: the
+// transient copy-alter init window (hidden tables created empty, before the REINDEX FORCE_SYNC
+// builds the base) or an index on an empty table. The cache declines to retain such a
+// generation so the next query reloads and picks up the base once it appears, instead of
+// pinning a doc-less generation -- which returns false-negative MATCH -- until the housekeeping
+// sweep. A base- or tail-bearing generation has data worth serving and is cached normally.
+func (s *Fulltext2Search) EmptyGeneration() bool {
+	return s.loaded && s.baseSegs == 0 && s.tailSegs == 0
+}
+
+// GetIndexSize reports the Go-heap cost of the loaded index, charged with the SAME per-doc
+// model checkBaseLoadBudget uses to admit the load in the first place (estBytesPerDocHeap), so
+// the governor bounds exactly the quantity that gate measured. Base posting blocks are excluded
+// for the same reason they are excluded there: they are views into a shared read-only mmap --
+// reclaimable OS page cache, not heap, and they cannot OOM the CN. Nothing here is device
+// resident, so the device figure is 0.
+// GetIndexSize charges the doc heap PLUS the file this entry maps.
+//
+// The mapping is not shared between cache entries: LoadFromStorage spills to a fresh LOCAL file
+// per load and mmaps it whole, so a second named-snapshot key of the same index maps its own
+// copy. Reporting only the heap made a multi-megabyte mapping look like a few hundred bytes, and
+// N generations could pin N files while the governor saw almost nothing. Same shape as hnsw:
+// rows x per-row heap, plus the mapped file.
+func (s *Fulltext2Search) GetIndexSize() (hostBytes, deviceBytes int64) {
+	if !s.loaded || s.idx == nil {
+		// Between Preload and Load: report what Load is about to cost, mapping included.
+		return s.preloadNdoc*estBytesPerDocHeap + max(s.preloadBytes, 0) + max(s.preloadTailBytes, 0), 0
+	}
+	var ndoc, mapped int64
+	for _, seg := range s.idx.segments {
+		if seg == nil {
+			continue
+		}
+		ndoc += seg.N
+		mapped += int64(len(seg.mmapData))
+	}
+	return ndoc*estBytesPerDocHeap + mapped, 0
+}
+
+// BuildTS returns the greatest source-table commit this loaded generation reflects
+// (MAX(metadata.build_ts) over base + cdc_tail), captured at Load. 0 = unknown.
+func (s *Fulltext2Search) BuildTS() int64 {
+	return s.buildTS
 }
 
 // IsStale reports whether the underlying index has changed since this entry was loaded, by
@@ -396,3 +512,8 @@ func (s *Fulltext2Search) Destroy() {
 	s.idx = nil
 	s.loaded = false
 }
+
+// SetReservedAhead receives what the governor has already promised to loads ahead of this one,
+// between Preload and Load. The tail budget subtracts it, so two concurrent loads cannot spend
+// the same free memory twice. Implements the cache's reservationAware interface.
+func (s *Fulltext2Search) SetReservedAhead(n int64) { s.reservedAhead = n }

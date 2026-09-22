@@ -1,6 +1,21 @@
 select oct(0b11111111);
 oct(0b11111111)
 377
+SELECT oct(X'FF') AS oct_hex_literal;
+oct_hex_literal
+377
+SELECT oct(X'0102') AS oct_multi_byte_hex_literal;
+oct_multi_byte_hex_literal
+402
+DROP TABLE IF EXISTS oct_binary_columns;
+CREATE TABLE oct_binary_columns (v VARBINARY(10), b BINARY(3), l BLOB);
+INSERT INTO oct_binary_columns VALUES (X'FF', X'0102FF', X'3132'), (X'0102', X'0001FF', X'FF'), (X'', X'000000', X'');
+SELECT HEX(v), OCT(v), HEX(b), OCT(b), OCT(l) FROM oct_binary_columns;
+HEX(v)    OCT(v)    HEX(b)    OCT(b)    OCT(l)
+FF    0    0102FF    0    14
+0102    0    0001FF    0    0
+    null    000000    0    null
+DROP TABLE oct_binary_columns;
 select oct(12);
 oct(12)
 14
@@ -23,9 +38,25 @@ select oct(-1);
 oct(-1)
 1777777777777777777777
 select oct(10e50);
-internal error: the input value is out of integer range
+oct(10e50)
+1
 select oct(-10e50);
-internal error: the input value is out of integer range
+oct(-10e50)
+1777777777777777777777
+SELECT OCT(1e308) AS positive_huge, OCT(-1e308) AS negative_huge, OCT(1e-15) AS fixed_tiny, OCT(1e-16) AS scientific_tiny;
+positive_huge	negative_huge	fixed_tiny	scientific_tiny
+1	1777777777777777777777	0	1
+CREATE TABLE oct_decimal_exact (id INT, d DECIMAL(38,1));
+INSERT INTO oct_decimal_exact VALUES (1, 9007199254740993.9), (2, 18446744073709551615), (3, 18446744073709551616), (4, -18446744073709551615), (5, -18446744073709551616), (6, NULL);
+SELECT id, OCT(d) AS oct_value FROM oct_decimal_exact ORDER BY id;
+id	oct_value
+1	400000000000000001
+2	1777777777777777777777
+3	1777777777777777777777
+4	1
+5	0
+6	null
+DROP TABLE oct_decimal_exact;
 select oct(0.00000000000000000000000001);
 oct(0.00000000000000000000000001)
 0
@@ -33,7 +64,40 @@ select oct(-0.00000000000000000000000001);
 oct(-0.00000000000000000000000001)
 0
 select oct("你好");
-invalid argument function oct, bad value 你好
+oct(你好)
+0
+SELECT oct('12tail') AS oct_prefix,
+oct('12.5') AS oct_fraction,
+oct('abc') AS oct_non_numeric,
+oct('') AS oct_empty;
+oct_prefix    oct_fraction    oct_non_numeric    oct_empty
+14    14    0    null
+SELECT oct('20240506') AS oct_compact,
+oct('20240101123456') AS oct_compact_datetime;
+oct_compact    oct_compact_datetime
+115154172    446420402322600
+SELECT oct(TIME '12:34:56') AS oct_time,
+oct(TIME '-12:34:56') AS oct_negative_time;
+oct_time    oct_negative_time
+14    1777777777777777777764
+SELECT oct(8) AS oct_text, oct(8) + 0 AS oct_numeric_context;
+oct_text    oct_numeric_context
+10    10
+SELECT oct(8) + oct(1) AS oct_add,
+oct(8) - oct(1) AS oct_subtract,
+oct(8) * oct(2) AS oct_multiply,
+oct(8) / oct(2) AS oct_divide,
+oct(8) % oct(3) AS oct_modulo,
+oct(8) DIV oct(2) AS oct_integer_divide,
+-oct(8) AS oct_unary_minus;
+oct_add    oct_subtract    oct_multiply    oct_divide    oct_modulo    oct_integer_divide    oct_unary_minus
+11.0    9.0    20.0    5.0    1.0    5    -10.0
+SELECT OCT(0.5) AS oct_half, OCT(0.6) AS oct_fraction_below_one, OCT(1.5) AS oct_one_half, OCT(1.6) AS oct_one_fraction, OCT(-1.5) AS oct_negative_one_half, OCT(-2.5) AS oct_negative_two_half;
+oct_half    oct_fraction_below_one    oct_one_half    oct_one_fraction    oct_negative_one_half    oct_negative_two_half
+0    0    1    1    1777777777777777777777    1777777777777777777776
+SELECT oct('-18446744073709551616') AS oct_negative_overflow;
+oct_negative_overflow
+0
 create table t1(a int);
 insert into t1 values();
 select oct(a) from t1;
@@ -46,7 +110,11 @@ insert into t1 values(1, 1, 2, 4, 5, 5.5, 31.13, 14.314, "2012-03-12", "2012-03-
 insert into t1 values(1, 1, 2, 4, 5, 5.5, 31.13, 14.314, "2012-03-12", "2012-03-12 10:03:12", "2012-03-12 13:03:12", "abc", "dcf");
 insert into t1 values(1, 1, 2, 4, 5, 5.5, 31.13, 14.314, "2012-03-12", "2012-03-12 10:03:12", "2012-03-12 13:03:12", "abc", "dcf");
 select oct(a),oct(b),oct(c),oct(d),oct(e),oct(f),oct(g),oct(h),oct(i),oct(k),oct(l),oct(m),oct(n) from t1;
-invalid argument function oct, bad value abc
+oct(a)    oct(b)    oct(c)    oct(d)    oct(e)    oct(f)    oct(g)    oct(h)    oct(i)    oct(k)    oct(l)    oct(m)    oct(n)
+1    1    2    4    5    5    37    16    3734    3734    3734    0    0
+1    1    2    4    5    5    37    16    3734    3734    3734    0    0
+1    1    2    4    5    5    37    16    3734    3734    3734    0    0
+1    1    2    4    5    5    37    16    3734    3734    3734    0    0
 drop table t1;
 CREATE TABLE t1(a char(255), b varchar(255));
 INSERT INTO t1 select oct(56), oct(234);
@@ -88,3 +156,27 @@ drop table t2;
 SELECT OCT(NULL) IS UNKNOWN;
 OCT(null) is unknown
 1
+SELECT OCT(-9.999999999999999e-100) AS rounded_negative, OCT(9.999999999999999e-100) AS positive_control;
+rounded_negative    positive_control
+1777777777777777777777    11
+DROP TABLE IF EXISTS oct_nn_copy;
+DROP TABLE IF EXISTS oct_nn_source;
+CREATE TABLE oct_nn_source (id INT NOT NULL, v VARCHAR(10) NOT NULL, b VARBINARY(10) NOT NULL, n BIGINT NOT NULL);
+INSERT INTO oct_nn_source VALUES (1, '', X'', 0), (2, '12', X'3132', 12);
+SELECT id, OCT(v) AS text_oct, OCT(b) AS binary_oct, OCT(n) AS numeric_oct FROM oct_nn_source ORDER BY id;
+id    text_oct    binary_oct    numeric_oct
+1    NULL    NULL    0
+2    14    14    14
+CREATE TABLE oct_nn_copy AS SELECT id, OCT(v) AS text_oct, OCT(b) AS binary_oct, OCT(n) AS numeric_oct FROM oct_nn_source;
+SELECT id, text_oct, binary_oct, numeric_oct FROM oct_nn_copy ORDER BY id;
+id    text_oct    binary_oct    numeric_oct
+1    NULL    NULL    0
+2    14    14    14
+SELECT COLUMN_NAME, IS_NULLABLE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'oct_nn_copy' ORDER BY ORDINAL_POSITION;
+COLUMN_NAME    IS_NULLABLE
+id    NO
+text_oct    YES
+binary_oct    YES
+numeric_oct    NO
+DROP TABLE oct_nn_copy;
+DROP TABLE oct_nn_source;

@@ -134,8 +134,8 @@ type Vector struct {
 	preparedJSONComparisonParam bool
 	// prepareParamType keeps the concrete SQL type of a direct prepared
 	// parameter independently from its coarse string-conversion category. It is
-	// scalar because one ParamRef resolves to one value for an execution; the
-	// JSON comparison adapter consumes it before values can be materialized or
+	// scalar because one ParamRef resolves to one value for an execution;
+	// domain-sensitive consumers inspect it before values can be materialized or
 	// merged with other rows.
 	prepareParamType types.T
 	// prepareParamKindSeen distinguishes an observed string/byte source
@@ -560,6 +560,9 @@ func (v *Vector) GetType() *types.Type {
 // This is very dangerous.   We changed vector type
 // but did not change the underlying data.   So the length
 // and capacity are all messed up.
+// SetType changes representation metadata; it does not cast or admit payloads.
+// A nonempty T_json result must already contain valid encoded JSON. Raw text
+// must go through the JSON cast/parser and a checked vector write instead.
 func (v *Vector) SetType(typ types.Type) {
 	if v.typ.IsVarlen() || typ.IsVarlen() {
 		// An empty logical range has no descriptors, even if reusable backing
@@ -941,7 +944,9 @@ func (v *Vector) SetPrepareParamKind(kind PrepareParamKind) {
 }
 
 // GetPrepareParamType returns the concrete SQL type attached to a direct
-// prepared parameter, or T_any when no exact type is available.
+// prepared parameter, or T_any when no exact type is available. Domain-
+// sensitive consumers use this to distinguish text transport from the source
+// SQL type.
 func (v *Vector) GetPrepareParamType() types.T {
 	if v == nil {
 		return types.T_any
@@ -3974,6 +3979,9 @@ func NewOffHeapVec() *Vector {
 	return vec
 }
 
+// NewVecWithData is an unchecked ownership transfer. Its descriptors and
+// payload must come from a valid vector of typ, with no mutable aliases retained.
+// External bytes must enter through NewVecWithDataCopy or checked unmarshal.
 func NewVecWithData(
 	typ types.Type,
 	length int,
@@ -3996,6 +4004,14 @@ func NewVecWithDataCopy(
 	area []byte,
 	mp *mpool.MPool,
 ) (*Vector, error) {
+	if typ.Oid == types.T_json {
+		if length < 0 || uint64(length) > math.MaxUint32 {
+			return nil, moerr.NewInvalidInputNoCtx("invalid JSON vector length")
+		}
+		if err := validateVectorBinary(FLAT, typ, uint32(length), data, area, &nulls.Nulls{}, true); err != nil {
+			return nil, err
+		}
+	}
 	vec := NewVec(typ)
 	vec.length = length
 	vec.areaDisjoint = !typ.IsVarlen() || length == 0
@@ -5018,6 +5034,9 @@ func validateVectorBinary(
 				}
 				payloadLen = size
 			}
+			if err := validateJSONPayload(typ, values[i].GetByteSlice(area)); err != nil {
+				return err
+			}
 			if arrayElementSize > 0 && payloadLen%uint32(arrayElementSize) != 0 {
 				return moerr.NewInvalidInputNoCtx("invalid vector array payload size")
 			}
@@ -5154,12 +5173,17 @@ func (v *Vector) UnmarshalBinaryWithCopy(data []byte, mp *mpool.MPool) error {
 	return nil
 }
 
-func (v *Vector) UnmarshalWithReader(r io.Reader, mp *mpool.MPool) error {
+func (v *Vector) UnmarshalWithReader(r io.Reader, mp *mpool.MPool) (retErr error) {
 	if v == nil || r == nil {
 		return io.ErrClosedPipe
 	}
 	v.areaDisjoint = false
 	v.ResetWithSameType()
+	defer func() {
+		if retErr != nil && v.typ.Oid == types.T_json {
+			v.CleanOnlyData()
+		}
+	}()
 	var err error
 
 	if v.class, err = types.ReadByteAsInt(r); err != nil {
@@ -8058,13 +8082,24 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 	sourceGrouping := nulls.Contains(&w.gsp, uint64(sel))
 	sourceNull := w.IsConstNull() ||
 		(!w.IsConst() && nulls.Contains(&w.nsp, uint64(sel)))
-	if err := v.PreflightUnionOnePrepareParamKinds(w, sel, mp); err != nil {
-		return err
+	// Uniform ordinary metadata needs neither per-row lookup nor sidecar
+	// admission. Include both vectors: an ordinary source can still append to
+	// a mixed destination, and NULL rows retain their string-source ownership.
+	plainMetadata := v.prepareParamKinds == nil && w.prepareParamKinds == nil &&
+		v.prepareParamKind == PrepareParamNone && w.prepareParamKind == PrepareParamNone &&
+		!v.binaryStringRowsActive && !w.binaryStringRowsActive && !v.binaryString && !w.binaryString &&
+		v.stringSources == nil && w.stringSources == nil &&
+		(v.length == 0 || v.stringSource == w.stringSource)
+	if !plainMetadata {
+		if err := v.PreflightUnionOnePrepareParamKinds(w, sel, mp); err != nil {
+			return err
+		}
+		if err := v.PreflightUnionOneBinaryString(w, sel, mp); err != nil {
+			v.FinalizeStringSourcePreflight()
+			return err
+		}
 	}
 	defer v.FinalizeStringSourcePreflight()
-	if err := v.PreflightUnionOneBinaryString(w, sel, mp); err != nil {
-		return err
-	}
 	if err := extendWithBitmaps(
 		v,
 		1,
@@ -8080,7 +8115,9 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 
 	oldLen := v.length
 	v.setLengthAfterExtend(v.length + 1)
-	if err := v.appendStringSourceAt(oldLen, oldLen, w.GetStringSourceAt(int(sel)), mp); err != nil {
+	if plainMetadata {
+		v.stringSource = w.stringSource
+	} else if err := v.appendStringSourceAt(oldLen, oldLen, w.GetStringSourceAt(int(sel)), mp); err != nil {
 		return err
 	}
 	sourceHasValue := !sourceNull
@@ -8129,6 +8166,10 @@ func (v *Vector) UnionOne(w *Vector, sel int64, mp *mpool.MPool) error {
 
 	if sourceHasValue {
 		v.prepareParamKindAppendStart(oldLen)
+		if plainMetadata {
+			v.prepareParamKindSeen = true
+			return nil
+		}
 		if err := v.appendPrepareParamKindAt(oldLen, w.GetPrepareParamKindAt(int(sel)), mp); err != nil {
 			return err
 		}
@@ -8299,6 +8340,9 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 	if len(sels) == 0 {
 		return nil
 	}
+	preserveDisjointArea := v.typ.IsVarlen() &&
+		v.AreaBackingKind() == OwnedMPoolUnique &&
+		v.VarlenaAreaIsDisjoint()
 	if err := v.preflightPrepareParamKindAppend(
 		v.length+len(sels),
 		summarizePrepareParamKindSelection(w, sels),
@@ -8414,6 +8458,10 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 				}
 			}
 		}
+		// Selection materialization copies every non-inline value into a fresh
+		// destination range. It cannot introduce aliases for a non-const source,
+		// even when source rows repeat or arrive out of order.
+		v.areaDisjoint = preserveDisjointArea
 	} else {
 		tlen := v.GetType().TypeSize()
 		if !w.nsp.EmptyByFlag() {
@@ -9145,14 +9193,20 @@ func SetConstBytes(vec *Vector, val []byte, length int, mp *mpool.MPool) error {
 		return err
 	}
 	vec.areaDisjoint = false
-	if err := extend(vec, 1, mp); err != nil {
+	oldAreaLen := len(vec.area)
+	var value types.Varlena
+	if err := BuildVarlenaFromByteSlice(vec, &value, &val, mp); err != nil {
+		vec.area = vec.area[:oldAreaLen]
 		return err
 	}
+	if err := extend(vec, 1, mp); err != nil {
+		vec.area = vec.area[:oldAreaLen]
+		return err
+	}
+	vec.areaDisjoint = false
 	vec.class = CONSTANT
 	col := toSliceOfLengthNoTypeCheck[types.Varlena](vec, 1)
-	if err := BuildVarlenaFromByteSlice(vec, &col[0], &val, mp); err != nil {
-		return err
-	}
+	col[0] = value
 	vec.length = length
 	return nil
 }
@@ -9162,14 +9216,20 @@ func SetConstByteJson(vec *Vector, bj bytejson.ByteJson, length int, mp *mpool.M
 		return err
 	}
 	vec.areaDisjoint = false
-	if err := extend(vec, 1, mp); err != nil {
+	oldAreaLen := len(vec.area)
+	var value types.Varlena
+	if err := BuildVarlenaFromByteJson(vec, &value, bj, mp); err != nil {
+		vec.area = vec.area[:oldAreaLen]
 		return err
 	}
+	if err := extend(vec, 1, mp); err != nil {
+		vec.area = vec.area[:oldAreaLen]
+		return err
+	}
+	vec.areaDisjoint = false
 	vec.class = CONSTANT
 	col := toSliceOfLengthNoTypeCheck[types.Varlena](vec, 1)
-	if err := BuildVarlenaFromByteJson(vec, &col[0], bj, mp); err != nil {
-		return err
-	}
+	col[0] = value
 	vec.length = length
 	return nil
 }
@@ -9501,6 +9561,9 @@ func AppendBytesWithWriter(vec *Vector, size int, mp *mpool.MPool, writer func([
 		}
 		value.SetOffsetLen(uint32(offset), uint32(size))
 	}
+	if err = validateJSONPayload(vec.typ, value.GetByteSlice(vec.area)); err != nil {
+		return err
+	}
 	return appendOneOwnedVarlena(vec, value, mp)
 }
 
@@ -9518,13 +9581,24 @@ func AppendByteJsonEncoded(
 	vec *Vector,
 	enc bytejson.ByteJsonDataEncoder,
 	mp *mpool.MPool,
-) error {
+) (retErr error) {
 	if vec.IsConst() {
 		panic(moerr.NewInternalErrorNoCtx("append to const vector"))
 	}
 	if mp == nil {
 		panic(moerr.NewInternalErrorNoCtx("vector append does not have a mpool"))
 	}
+
+	checkpoint := vec.MakeAppendCheckpoint()
+	wasNull := vec.nsp.Contains(uint64(vec.length))
+	defer func() {
+		if retErr != nil {
+			vec.RollbackAppend(checkpoint, 1)
+			if wasNull {
+				vec.nsp.Add(uint64(checkpoint.length))
+			}
+		}
+	}()
 
 	if err := extend(vec, 1, mp); err != nil {
 		return err
@@ -9536,7 +9610,6 @@ func AppendByteJsonEncoded(
 	values := toSliceOfLengthNoTypeCheck[types.Varlena](vec, index+1)
 	oldValue := values[index]
 	oldAreaLen := len(vec.area)
-	wasNull := vec.nsp.Contains(uint64(index))
 	if err := BuildVarlenaFromByteJsonEncoded(vec, &values[index], enc, mp); err != nil {
 		vec.area = vec.area[:oldAreaLen]
 		values[index] = oldValue
@@ -11998,6 +12071,15 @@ func BuildVarlenaInline(v1, v2 *types.Varlena) {
 }
 
 func BuildVarlenaNoInline(vec *Vector, v1 *types.Varlena, bs *[]byte, m *mpool.MPool) error {
+	if err := validateJSONPayload(vec.typ, *bs); err != nil {
+		return err
+	}
+	return buildVarlenaNoInline(vec, v1, bs, m)
+}
+
+// buildVarlenaNoInline copies bytes already admitted by a raw boundary or
+// borrowed from an immutable source vector of the same type.
+func buildVarlenaNoInline(vec *Vector, v1 *types.Varlena, bs *[]byte, m *mpool.MPool) error {
 	vlen := len(*bs)
 	area1 := vec.GetArea()
 	voff := len(area1)
@@ -12029,6 +12111,13 @@ func BuildVarlenaNoInline(vec *Vector, v1 *types.Varlena, bs *[]byte, m *mpool.M
 }
 
 func BuildVarlenaNoInlineFromByteJson(vec *Vector, v1 *types.Varlena, bj bytejson.ByteJson, m *mpool.MPool) error {
+	if err := validateJSONValue(vec.typ, bj); err != nil {
+		return err
+	}
+	return buildVarlenaNoInlineFromByteJson(vec, v1, bj, m)
+}
+
+func buildVarlenaNoInlineFromByteJson(vec *Vector, v1 *types.Varlena, bj bytejson.ByteJson, m *mpool.MPool) error {
 	vlen := len(bj.Data) + 1
 	area1 := vec.GetArea()
 	voff := len(area1)
@@ -12058,6 +12147,8 @@ func BuildVarlenaNoInlineFromByteJson(vec *Vector, v1 *types.Varlena, bj bytejso
 	return nil
 }
 
+// BuildVarlenaFromVarlena requires v2/area to belong to an admitted source
+// vector of the same type. The source bytes must stay immutable during copy.
 func BuildVarlenaFromVarlena(vec *Vector, v1, v2 *types.Varlena, area *[]byte, m *mpool.MPool) error {
 	if (*v2)[0] <= types.VarlenaInlineSize {
 		BuildVarlenaInline(v1, v2)
@@ -12065,10 +12156,13 @@ func BuildVarlenaFromVarlena(vec *Vector, v1, v2 *types.Varlena, area *[]byte, m
 	}
 	voff, vlen := v2.OffsetLen()
 	bs := (*area)[voff : voff+vlen]
-	return BuildVarlenaNoInline(vec, v1, &bs, m)
+	return buildVarlenaNoInline(vec, v1, &bs, m)
 }
 
 func BuildVarlenaFromByteSlice(vec *Vector, v *types.Varlena, bs *[]byte, m *mpool.MPool) error {
+	if err := validateJSONPayload(vec.typ, *bs); err != nil {
+		return err
+	}
 	vlen := len(*bs)
 	if vlen <= types.VarlenaInlineSize {
 		// first clear varlena to 0
@@ -12080,10 +12174,13 @@ func BuildVarlenaFromByteSlice(vec *Vector, v *types.Varlena, bs *[]byte, m *mpo
 		copy(v[1:1+vlen], *bs)
 		return nil
 	}
-	return BuildVarlenaNoInline(vec, v, bs, m)
+	return buildVarlenaNoInline(vec, v, bs, m)
 }
 
 func BuildVarlenaFromByteJson(vec *Vector, v *types.Varlena, bj bytejson.ByteJson, m *mpool.MPool) error {
+	if err := validateJSONValue(vec.typ, bj); err != nil {
+		return err
+	}
 	stored, err := bj.StorageCompatible()
 	if err != nil {
 		return err
@@ -12101,14 +12198,13 @@ func BuildVarlenaFromByteJson(vec *Vector, v *types.Varlena, bj bytejson.ByteJso
 		copy(v[2:vlen+1], bj.Data)
 		return nil
 	}
-	return BuildVarlenaNoInlineFromByteJson(vec, v, bj, m)
+	return buildVarlenaNoInlineFromByteJson(vec, v, bj, m)
 }
 
+// Validate the bytes emitted by the encoder before publishing the row. An
+// optional source validator cannot certify an arbitrary encoder's output.
 func BuildVarlenaFromByteJsonEncoded(
-	vec *Vector,
-	v *types.Varlena,
-	enc bytejson.ByteJsonDataEncoder,
-	m *mpool.MPool,
+	vec *Vector, v *types.Varlena, enc bytejson.ByteJsonDataEncoder, m *mpool.MPool,
 ) error {
 	if validator, ok := enc.(bytejson.ByteJsonDataValidator); ok {
 		if err := validator.ValidateData(); err != nil {
@@ -12123,18 +12219,25 @@ func BuildVarlenaFromByteJsonEncoded(
 	}
 
 	if storageSize <= types.VarlenaInlineSize {
+		oldValue := *v
 		clear(v[:])
 		v[0] = byte(storageSize)
 		v[1] = enc.TypeCode()
 		dst := v[2 : 2+int(dataSize)]
 		n, err := enc.EncodeDataInto(dst)
 		if err != nil {
+			*v = oldValue
 			return err
 		}
 		if n != len(dst) {
+			*v = oldValue
 			return moerr.NewInternalErrorNoCtxf(
 				"bytejson encoder size mismatch: expected %d, got %d", len(dst), n,
 			)
+		}
+		if err := validateJSONPayload(vec.typ, v.GetByteSlice(nil)); err != nil {
+			*v = oldValue
+			return err
 		}
 		return nil
 	}
@@ -12169,6 +12272,10 @@ func BuildVarlenaFromByteJsonEncoded(
 		return moerr.NewInternalErrorNoCtxf(
 			"bytejson encoder size mismatch: expected %d, got %d", len(dst), n,
 		)
+	}
+	if err := validateJSONPayload(vec.typ, vec.area[oldAreaLen:int(newAreaLen)]); err != nil {
+		vec.area = vec.area[:oldAreaLen]
+		return err
 	}
 	v.SetOffsetLen(uint32(oldAreaLen), uint32(storageSize))
 	return nil

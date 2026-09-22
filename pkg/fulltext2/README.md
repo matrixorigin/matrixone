@@ -162,10 +162,18 @@ A segment has **two representations** that never coexist:
   - `pkOffsets []int32` + `pkRaw []byte` — the docmap bytes; `pk(ord)` decodes a pk on demand
     (instead of materializing `N` boxed `any` pks, ~24 B each).
 
-A loaded segment **expands nothing at load**: `LookupLoaded(term)` decodes only the touched term's
-directory entry on demand; WAND then decodes only the *blocks* its walk lands on. Resident heap is
+A loaded segment does not traverse posting directories at load. `LookupLoaded(term)` decodes
+only the touched term's directory on demand; clean-segment global DF reads only its header.
+WAND decodes only the *blocks* its walk lands on. Resident heap is
 `O(current query)`, not `O(vocabulary)`. `Free()` releases the mmap under the cache's eviction
 write-lock.
+
+Header-only DF preserves scoring for valid serialized indexes. Dirty segments still decode
+the directory and count live postings; search independently decodes the directory as before.
+A readable DF header is not proof of directory validity: a malformed directory can be rejected
+by search while its header contributes to global DF. Scores, rankings and Top-K results on
+such already-corrupt indexes are not guaranteed to match the full-decoder DF path. Existing
+checksum checks and local decoder bounds checks remain; no whole-vocabulary validation is added.
 
 `Recency` orders segments when the same pk lands in several (UPDATE / reinsert / stale base copy):
 only the highest-`Recency` copy is live.
@@ -548,9 +556,11 @@ Full-text indexes are large; the engine is careful on both the query and build s
 
 - Base segments are **mmap'd read-only** on the fast LOCAL (SSD) `__fulltext2` fileservice dir —
   page-cache-backed (reclaimable, *not* Go heap), shared by all concurrent queries, no copy.
-- A loaded segment expands **nothing** at load: FST resident (compact), directory entries decoded
-  per touched term, docID/tf blocks decoded per block the WAND walk visits, positions decoded only
-  for phrase verification. Resident heap is `O(current query)`, not `O(vocabulary)`.
+- A loaded segment does not traverse posting directories at load: the FST is resident (compact),
+  directory entries are decoded per touched term, docID/tf blocks per block the WAND walk visits,
+  and positions only for phrase verification. Clean-segment global DF reads just the header;
+  dirty-segment DF and repeated FST lookups remain unchanged. Resident heap is `O(current query)`,
+  not `O(vocabulary)`.
 - pks are decoded on demand from the docmap bytes (no `N` boxed `any`).
 - `liveOrd == nil` for an append-only segment ⇒ zero resident liveness heap.
 - A base-load budget guard fails fast (clear error) rather than letting a huge base OOM-kill the CN.

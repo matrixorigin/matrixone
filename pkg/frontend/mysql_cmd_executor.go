@@ -245,7 +245,7 @@ var RecordStatement = func(ctx context.Context, ses *Session, proc *process.Proc
 		// process view so statement-dependent cached decisions are recomputed.
 		proc.SetStmtProfile(&ses.stmtProfile)
 	}
-	ses.stmtProfile.SetStatementRuntimeProfile(stmtTyp, queryTyp, isIgnoreStatement(statement))
+	ses.stmtProfile.SetStatementRuntimeProfile(stmtTyp, queryTyp, tree.IsIgnoreStatement(statement))
 
 	//note: txn id here may be empty
 	// add by #9907, set the result of last_query_id(), this will pass those isCmdFieldListSql() from client.
@@ -389,27 +389,6 @@ func redactStatementErrorForLogging(err error, text string) error {
 	return moerr.NewParseErrorNoCtx("parse error in <redacted MongoDB __mo_query statement>")
 }
 
-func isIgnoreStatement(statement tree.Statement) bool {
-	switch stmt := statement.(type) {
-	case *tree.Insert:
-		return len(stmt.OnDuplicateUpdate) == 1 && stmt.OnDuplicateUpdate[0] == nil
-	case *tree.Update:
-		return stmt.Ignore
-	case *tree.Load:
-		return isLoadDataIgnore(stmt)
-	default:
-		return false
-	}
-}
-
-func isLoadDataIgnore(stmt *tree.Load) bool {
-	if stmt == nil {
-		return false
-	}
-	_, ok := stmt.DuplicateHandling.(*tree.DuplicateKeyIgnore)
-	return ok
-}
-
 func refreshProcessStmtProfileForPreparedStmt(proc *process.Process, statement tree.Statement) {
 	if proc == nil || statement == nil {
 		return
@@ -419,7 +398,7 @@ func refreshProcessStmtProfileForPreparedStmt(proc *process.Process, statement t
 	stmtProfile.SetStatementRuntimeProfile(
 		getStatementType(statement).GetStatementType(),
 		getStatementType(statement).GetQueryType(),
-		isIgnoreStatement(statement),
+		tree.IsIgnoreStatement(statement),
 	)
 }
 
@@ -1865,6 +1844,31 @@ func preparedSetExpression(execCtx *ExecCtx) bool {
 }
 
 func doShowErrors(ses *Session, execCtx *ExecCtx) error {
+	showErrorsOnly := false
+	countOnly := false
+	var limit *tree.Limit
+	if execCtx != nil {
+		switch stmt := execCtx.stmt.(type) {
+		case *tree.ShowErrors:
+			showErrorsOnly = true
+			countOnly = stmt.Count
+			limit = stmt.Limit
+		case *tree.ShowWarnings:
+			countOnly = stmt.Count
+			limit = stmt.Limit
+		}
+	}
+	if countOnly {
+		if limit != nil {
+			return moerr.NewInvalidInput(execCtx.reqCtx, "SHOW COUNT(*) does not support LIMIT")
+		}
+		return doShowDiagnosticCount(ses, execCtx, showErrorsOnly)
+	}
+
+	offset, rowCount, err := parseDiagnosticLimit(execCtx.reqCtx, limit)
+	if err != nil {
+		return err
+	}
 
 	levelCol := new(MysqlColumn)
 	levelCol.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
@@ -1885,25 +1889,99 @@ func doShowErrors(ses *Session, execCtx *ExecCtx) error {
 	mrs.AddColumn(MsgCol)
 
 	info := ses.diagnosticsSnapshot()
-	showErrorsOnly := false
-	if execCtx != nil {
-		_, showErrorsOnly = execCtx.stmt.(*tree.ShowErrors)
-	}
-
+	var skipped, added uint64
 	for i := info.length() - 1; i >= 0; i-- {
-		row := make([]interface{}, 3)
-		row[0] = "Error"
+		level := "Error"
 		if i < len(info.levels) && info.levels[i] != "" {
-			row[0] = info.levels[i]
+			level = info.levels[i]
 		}
-		if showErrorsOnly && !strings.EqualFold(row[0].(string), "Error") {
+		if showErrorsOnly && !strings.EqualFold(level, "Error") {
 			continue
 		}
+		if skipped < offset {
+			skipped++
+			continue
+		}
+		if added >= rowCount {
+			break
+		}
+
+		row := make([]interface{}, 3)
+		row[0] = level
 		row[1] = int16(info.codes[i])
 		row[2] = info.msgs[i]
 		mrs.AddRow(row)
+		added++
 	}
 	return trySaveQueryResult(execCtx.reqCtx, ses, mrs)
+}
+
+func doShowDiagnosticCount(ses *Session, execCtx *ExecCtx, errorsOnly bool) error {
+	warningCount, errorCount := ses.diagnosticsCounts()
+	name := "@@session.warning_count"
+	value := warningCount
+	if errorsOnly {
+		name = "@@session.error_count"
+		value = errorCount
+	}
+
+	column := new(MysqlColumn)
+	column.SetName(name)
+	column.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
+	column.SetSigned(false)
+
+	mrs := ses.GetMysqlResultSet()
+	mrs.AddColumn(column)
+	mrs.AddRow([]interface{}{value})
+	return trySaveQueryResult(execCtx.reqCtx, ses, mrs)
+}
+
+func parseDiagnosticLimit(ctx context.Context, limit *tree.Limit) (offset, rowCount uint64, err error) {
+	if limit == nil {
+		return 0, math.MaxUint64, nil
+	}
+	if limit.Count == nil {
+		return 0, 0, moerr.NewInvalidInput(ctx, "SHOW diagnostics LIMIT requires a row count")
+	}
+	if limit.Offset != nil {
+		offset, err = parseDiagnosticLimitExpr(ctx, limit.Offset, "offset")
+		if err != nil {
+			return 0, 0, err
+		}
+	}
+	rowCount, err = parseDiagnosticLimitExpr(ctx, limit.Count, "row count")
+	if err != nil {
+		return 0, 0, err
+	}
+	return offset, rowCount, nil
+}
+
+func parseDiagnosticLimitExpr(ctx context.Context, expr tree.Expr, part string) (uint64, error) {
+	switch value := expr.(type) {
+	case *tree.ParenExpr:
+		return parseDiagnosticLimitExpr(ctx, value.Expr, part)
+	case *tree.UnaryExpr:
+		if value.Op == tree.UNARY_PLUS {
+			return parseDiagnosticLimitExpr(ctx, value.Expr, part)
+		}
+		return 0, moerr.NewInvalidInputf(ctx,
+			"SHOW diagnostics LIMIT %s must be a non-negative integer", part)
+	case *tree.NumVal:
+		switch value.ValType {
+		case tree.P_int64:
+			v, ok := value.Int64()
+			if ok && v >= 0 && !value.Negative() {
+				return uint64(v), nil
+			}
+		case tree.P_uint64:
+			v, ok := value.Uint64()
+			if ok && !value.Negative() {
+				return v, nil
+			}
+		}
+	}
+	return 0, moerr.NewInvalidInputf(ctx,
+		"SHOW diagnostics LIMIT %s must be a non-negative integer", part)
 }
 
 func handleShowErrors(ses FeSession, execCtx *ExecCtx) error {
@@ -1931,6 +2009,7 @@ func isTopLevelClientStatement(ses *Session, execCtx *ExecCtx, input *UserInput)
 func resetDiagnosticsForStatement(ses *Session, execCtx *ExecCtx, input *UserInput, stmt tree.Statement) {
 	if isTopLevelClientStatement(ses, execCtx, input) && !isDiagnosticsStatement(stmt) {
 		ses.resetDiagnostics()
+		beginJSONMergeWarningStatement(ses, execCtx, input, stmt)
 	}
 }
 
@@ -2333,6 +2412,9 @@ func writeExplainResult(
 ) error {
 	if exPlan.GetQuery() == nil {
 		return moerr.NewNotSupported(reqCtx, "the sql query plan does not support explain.")
+	}
+	if err := plan2.ValidateUnresolvedIndexHints(reqCtx, exPlan.GetQuery()); err != nil {
+		return err
 	}
 	txnHaveDDL := sessionTxnHaveDDL(ses)
 	// generator query explain
@@ -2745,6 +2827,15 @@ func createPrepareStmtInSession(
 		return nil, err
 	}
 	prepareTs := currentTxnSnapshotTSForProcess(executionProc)
+	groupConcatValue, err := owner.GetSessionSysVar("group_concat_max_len")
+	if err != nil {
+		return nil, err
+	}
+	groupConcatLimit, validGroupConcat := groupConcatMaxLenAsUint64(groupConcatValue)
+	if !validGroupConcat || groupConcatLimit < groupConcatMaxLenMinimum {
+		return nil, moerr.NewInternalErrorf(execCtx.reqCtx, "invalid group_concat_max_len: %v", groupConcatValue)
+	}
+	groupConcatFloor := groupConcatLimit
 
 	schedulingSQLMode := sessionSQLModeForParser(owner)
 	prepareSchedulingIntent := querySchedulingIntentForStatementWithSQLMode(
@@ -2775,6 +2866,7 @@ func createPrepareStmtInSession(
 			true,
 			nil,
 			nil,
+			groupConcatFloor,
 		)
 		if err != nil {
 			if !moerr.IsMoErrCode(err, moerr.ErrCantCompileForPrepare) {
@@ -2792,24 +2884,30 @@ func createPrepareStmtInSession(
 	fixedIntegerParamPositions, hasPaginationParams, hasLagLeadParams :=
 		preparedFixedIntegerParamPositions(prepareControl.Plan)
 	prepareStmt := &PrepareStmt{
-		Name:             preparePlan.GetDcl().GetPrepare().GetName(),
-		Sql:              originSQL,
-		compile:          comp,
-		PreparePlan:      preparePlan,
-		PrepareStmt:      saveStmt,
-		NativeMode:       owner.sqlModeHasMatrixOneNative(),
-		OnlyFullGroupBy:  owner.sqlModeHasOnlyFullGroupBy(),
-		BoolSumAvg:       owner.sqlModeHasEnableBoolSumAvg(),
-		sqlModeFlagsSet:  true,
-		remapDb:          maps.Clone(execCtx.remapDb),
-		defaultDatabase:  executionSes.GetTxnCompileCtx().GetDatabase(),
-		tempTableVersion: owner.GetTempTableVersion(),
-		ddlVersion:       owner.getDDLVersion(),
-		cloneSQL:         cloneSQL,
-		protocolVersion:  protocolVersion,
+		groupConcatMaxLenFloor: groupConcatFloor,
+		Name:                   preparePlan.GetDcl().GetPrepare().GetName(),
+		Sql:                    originSQL,
+		compile:                comp,
+		PreparePlan:            preparePlan,
+		PrepareStmt:            saveStmt,
+		NativeMode:             owner.sqlModeHasMatrixOneNative(),
+		OnlyFullGroupBy:        owner.sqlModeHasOnlyFullGroupBy(),
+		BoolSumAvg:             owner.sqlModeHasEnableBoolSumAvg(),
+		NoUnsignedSubtraction:  owner.sqlModeHasNoUnsignedSubtraction(),
+		sqlModeFlagsSet:        true,
+		remapDb:                maps.Clone(execCtx.remapDb),
+		defaultDatabase:        executionSes.GetTxnCompileCtx().GetDatabase(),
+		tempTableVersion:       owner.GetTempTableVersion(),
+		ddlVersion:             owner.getDDLVersion(),
+		cloneSQL:               cloneSQL,
+		protocolVersion:        protocolVersion,
 		numericOverloadParamPositions: plan2.PreparedPlanNumericFallbackParamPositions(
 			prepareControl.Plan),
 		bitCountOverloadParamPositions: plan2.PreparedPlanBitCountFallbackParamPositions(
+			prepareControl.Plan),
+		conversionParamPositions: plan2.PreparedPlanConversionParamPositions(
+			prepareControl.Plan),
+		inetNtoaParamPositions: plan2.PreparedPlanInetNtoaParamPositions(
 			prepareControl.Plan),
 		directResultParamPositions: plan2.PreparedPlanDirectResultParamPositions(
 			prepareControl.Plan),
@@ -2826,6 +2924,7 @@ func createPrepareStmtInSession(
 	}
 	prepareStmt.refreshNumericPrefixConsumer(
 		prepareControl.Plan, len(prepareControl.ParamTypes))
+	prepareStmt.refreshGeometrySRIDParamPositions(prepareControl.Plan)
 	prepareStmt.directResultParamPositions = plan2.PreparedPlanDirectResultParamPositions(prepareControl.Plan)
 	prepareStmt.directResultParamPositionsSet = true
 
@@ -3825,6 +3924,15 @@ func buildPlanWithPrepareMode(
 	if planContext == nil {
 		planContext = context.Background()
 	}
+	warningOrigin, ok := plan2.JSONMergeWarningOriginFromContext(planContext)
+	if !ok {
+		warningOrigin = plan2.JSONMergeWarningUser
+	}
+	var warningSink plan2.JSONMergeWarningSink
+	if ses != nil {
+		warningSink, _ = ses.(plan2.JSONMergeWarningSink)
+	}
+	planContext = plan2.AttachJSONMergeWarningContext(planContext, warningSink, warningOrigin)
 	stats := statistic.StatsInfoFromContext(planContext)
 	stats.PlanStart()
 
@@ -4009,6 +4117,13 @@ func checkModify(plan0 *plan.Plan, resolveFn func(string, string, *plan2.Snapsho
 
 func cachedPlanForInput(ses *Session, input *UserInput) *cachedPlan {
 	if !input.canUsePlanCache() {
+		return nil
+	}
+	if containsJSONMergeCall(input.getSql()) {
+		// A pre-existing entry may have been created before this compatibility
+		// guard was reached. Remove it so a later request cannot bypass binding
+		// and silently lose warning 1287.
+		ses.removeCachedPlan(input.getHash())
 		return nil
 	}
 	if !reusablePlanGenerationSupported(ses.proc) {
@@ -5489,6 +5604,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	defer ses.ExitFPrint(FPDoComQuery)
 	defer ses.ClearDDLOwnerRoleID()
 	ses.GetTxnCompileCtx().SetExecCtx(execCtx)
+	defer execCtx.clearDiagnosticCountsSnapshot()
 	beginInstant := time.Now()
 	execCtx.reqCtx = appendStatementAt(execCtx.reqCtx, beginInstant)
 	execCtx.reqCtx = defines.AttachDDLOwnerRoleIDProvider(execCtx.reqCtx, ses)
@@ -5697,6 +5813,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	}()
 
 	canCache := !stagedSQLMode && input.canUsePlanCache() &&
+		!containsJSONMergeCall(input.getSql()) &&
 		reusablePlanGenerationSupported(proc)
 	Cached := false
 	defer func() {
@@ -5774,7 +5891,9 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		effectiveStmt, effectiveDefaultDatabase, resolveErr := effectiveStatementForTxn(
 			execCtx.reqCtx, ses, stmt,
 		)
+		diagnosticStmt := stmt
 		if resolveErr == nil {
+			diagnosticStmt = effectiveStmt
 			if effectiveDefaultDatabase == "" {
 				effectiveDefaultDatabase = execCtx.effectiveTxnDefaultDatabase
 			}
@@ -5822,7 +5941,10 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// statement so the remote PRE_INSERT path observes the session values
 		// established by earlier statements in the request.
 		refreshStatementScopedSessionInfo(ses, proc)
-		resetDiagnosticsForStatement(ses, execCtx, currentInput, stmt)
+		if isTopLevelClientStatement(ses, execCtx, currentInput) {
+			execCtx.captureDiagnosticCountsSnapshot(ses)
+		}
+		resetDiagnosticsForStatement(ses, execCtx, currentInput, diagnosticStmt)
 		removePrepareStmtForReplacement(ses, stmt)
 		var err2 error
 		execCtx.reqCtx, err2 = RecordStatement(execCtx.reqCtx, ses, proc, cw, beginInstant, currentSQLRecord, sqlType, singleStatement)
@@ -6161,6 +6283,9 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			// error so retained rows and the session accounting are released.
 			if execCtx != nil && execCtx.prepareStmt != nil {
 				execCtx.prepareStmt.closeCursor()
+				if req != nil && req.GetCmd() == COM_STMT_EXECUTE {
+					execCtx.prepareStmt.clearBinaryParamState(ses.GetProc())
+				}
 			}
 			markRowCountFailed(ses, ses.GetProc())
 			var serverStatus uint16
@@ -6346,12 +6471,9 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 
 	case COM_STMT_SEND_LONG_DATA:
 		ses.SetCmd(COM_STMT_SEND_LONG_DATA)
-		err = parseStmtSendLongData(execCtx.reqCtx, ses, req.GetData().([]byte))
-		if err != nil {
-			markRowCountFailed(ses, ses.GetProc())
-			resp = NewGeneralErrorResponse(COM_STMT_SEND_LONG_DATA, ses.GetTxnHandler().GetServerStatus(), err)
-			return resp, nil
-		}
+		// This command has no response, including when the statement rejects a
+		// chunk. A known statement reports its latched error at EXECUTE.
+		parseStmtSendLongData(execCtx.reqCtx, ses, req.GetData().([]byte))
 		return nil, nil
 
 	case COM_STMT_CLOSE:
@@ -6451,6 +6573,15 @@ func parseStmtExecute(reqCtx context.Context, ses *Session, data []byte) (string
 	if err != nil {
 		return "", nil, err
 	}
+	if preStmt.longDataErr != nil {
+		return "", preStmt, preStmt.longDataErr
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			preStmt.clearBinaryParamState(ses.GetProc())
+			panic(recovered)
+		}
+	}()
 
 	var sql string
 	if preStmt.IsCloudNonuser {
@@ -6530,11 +6661,12 @@ func executeStmtFetch(ctx context.Context, ses *Session, data []byte) (*Response
 	return nil, nil
 }
 
-func parseStmtSendLongData(reqCtx context.Context, ses *Session, data []byte) error {
+func parseStmtSendLongData(reqCtx context.Context, ses *Session, data []byte) (err error) {
 	// see https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_stmt_send_long_data.html
 	pos := 0
 	if len(data) < 4 {
-		return moerr.NewInvalidInput(reqCtx, "sql command contains malformed packet")
+		// No statement can be identified and SEND_LONG_DATA has no response.
+		return nil
 	}
 	stmtID := binary.LittleEndian.Uint32(data[0:4])
 	pos += 4
@@ -6542,8 +6674,18 @@ func parseStmtSendLongData(reqCtx context.Context, ses *Session, data []byte) er
 	stmtName := getPrepareStmtName(stmtID)
 	preStmt, err := ses.GetPrepareStmt(reqCtx, stmtName)
 	if err != nil {
-		return err
+		// MySQL silently discards long data for an unknown statement id.
+		return nil
 	}
+	if preStmt.longDataErr != nil {
+		return nil
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			preStmt.latchLongDataError(moerr.ConvertPanicError(reqCtx, recovered))
+			err = nil // SEND_LONG_DATA must not emit a response.
+		}
+	}()
 
 	var sql string
 	if preStmt.IsCloudNonuser {
@@ -6562,7 +6704,7 @@ func parseStmtSendLongData(reqCtx context.Context, ses *Session, data []byte) er
 
 	err = ses.GetResponser().MysqlRrWr().ParseSendLongData(reqCtx, ses.GetProc(), preStmt, data, pos)
 	if err != nil {
-		return err
+		preStmt.latchLongDataError(err)
 	}
 	return nil
 }

@@ -58,6 +58,96 @@ type closeTrackingFileService struct {
 	closeCount atomic.Int32
 }
 
+// A diagnostic error does not imply that the owner still uses dependencies.
+type completedCloseService struct {
+	closeTrackingService
+	complete bool
+}
+
+func (s *completedCloseService) CloseComplete() bool { return s.complete }
+
+func TestClusterCloseCompletedErrorReleasesOwnership(t *testing.T) {
+	failure := errors.New("final metadata withdrawal failed")
+	cn := &completedCloseService{closeTrackingService: closeTrackingService{closeErr: failure}, complete: true}
+	dependency := &closeTrackingService{}
+	fs := &closeTrackingFileService{}
+	op := &operator{state: started}
+	op.reset.svc, op.reset.fs = cn, fs
+	dep := &operator{state: started}
+	dep.reset.svc = dependency
+	c := &cluster{state: started, services: []*operator{dep, op}}
+	ports, err := acquireClusterPortLease()
+	require.NoError(t, err)
+	c.portLease = ports
+	t.Cleanup(func() { require.NoError(t, ports.lock.Close()) })
+	lease, err := clusteradmission.Acquire(t.Context(), clusteradmission.Exclusive)
+	require.NoError(t, err)
+	c.testAdmission = lease
+	t.Cleanup(func() { require.NoError(t, lease.Release()) })
+	err = c.Close()
+	require.ErrorIs(t, err, failure)
+	require.False(t, op.needsCleanup())
+	require.Equal(t, int32(1), fs.closeCount.Load())
+	require.Equal(t, int32(1), dependency.closeCount.Load())
+	require.Nil(t, c.testAdmission)
+	require.Nil(t, c.portLease)
+	require.True(t, c.CloseComplete())
+	next, err := clusteradmission.Acquire(t.Context(), clusteradmission.Exclusive)
+	require.NoError(t, err, "completed close must not poison the next cluster")
+	t.Cleanup(func() { require.NoError(t, next.Release()) })
+	require.NoError(t, c.Close())
+	require.Equal(t, int32(1), cn.closeCount.Load())
+	require.Equal(t, int32(1), fs.closeCount.Load())
+}
+
+func TestClusterClosePendingOwnerPrecedesDependencies(t *testing.T) {
+	failure := errors.New("pending CN drain")
+	pending := &completedCloseService{closeTrackingService: closeTrackingService{closeErr: failure}}
+	op := &operator{}
+	op.reset.svc = pending
+	depService := &closeTrackingService{}
+	dep := &operator{state: started}
+	dep.reset.svc = depService
+	c := &cluster{state: started, services: []*operator{dep}, pendingCleanup: []*operator{op}}
+	require.ErrorIs(t, c.Close(), failure)
+	require.Zero(t, depService.closeCount.Load())
+	require.False(t, c.CloseComplete())
+	require.ErrorContains(t, c.Start(), "cleanup is incomplete")
+	require.Nil(t, c.portLease, "rejected Start must not allocate a lease")
+	pending.complete = true
+	require.ErrorIs(t, c.Close(), failure)
+	require.Equal(t, int32(1), depService.closeCount.Load())
+	require.Empty(t, c.pendingCleanup)
+	require.True(t, c.CloseComplete())
+}
+
+func TestOperatorStartPreservesIncompleteOwnership(t *testing.T) {
+	svc := &completedCloseService{}
+	op := &operator{}
+	op.reset.svc = svc // partial startup did not reach state=started
+	require.ErrorContains(t, op.Start(), "cleanup is incomplete")
+	require.Same(t, svc, op.reset.svc)
+	require.ErrorContains(t, op.Close(), "cleanup is incomplete", "nil error is not a completion certificate")
+	require.True(t, op.needsCleanup())
+	svc.complete = true
+	require.NoError(t, op.Close())
+	require.False(t, op.needsCleanup())
+}
+
+func TestClusterStartRollbackCompletedErrorReleasesAdmission(t *testing.T) {
+	failure := errors.New("startup and withdrawal failed")
+	svc := &completedCloseService{closeTrackingService: closeTrackingService{closeErr: failure}, complete: true}
+	op := &operator{serviceType: metadata.ServiceType_CN}
+	c := &cluster{services: []*operator{op}}
+	c.options.testing = true
+	c.startFn = func(op *operator) error { op.reset.svc = svc; return failure }
+	t.Cleanup(func() { require.NoError(t, c.Close()) })
+	require.ErrorIs(t, c.Start(), failure)
+	require.Nil(t, c.testAdmission)
+	require.False(t, op.needsCleanup())
+	require.Equal(t, int32(1), svc.closeCount.Load())
+}
+
 func (s *closeTrackingFileService) Close(context.Context) {
 	s.closeCount.Add(1)
 }
@@ -170,6 +260,7 @@ func TestClusterLifecycleAndCNExpansion(t *testing.T) {
 	cn, err = c.GetCNService(3)
 	require.NoError(t, err)
 	require.False(t, cn.GetServiceConfig().CN.AutomaticUpgrade)
+	require.Equal(t, 1024, cn.GetServiceConfig().CN.Txn.Trace.BufferSize)
 }
 
 func TestSharedBaseClusterCanWorkWithConcurrentCluster(t *testing.T) {
@@ -535,6 +626,7 @@ func TestWithTestingBoundsHeartbeatRecoveryInsideStoreLiveness(t *testing.T) {
 			cfg.HAKeeperClient.BackendReadTimeout.Duration)
 		switch svc.ServiceType() {
 		case metadata.ServiceType_CN:
+			require.Equal(t, 1024, cfg.CN.Txn.Trace.BufferSize)
 			require.Equal(t, testHAKeeperHeartbeatTimeout,
 				cfg.CN.HAKeeper.HeatbeatTimeout.Duration)
 			require.Less(t, cfg.CN.HAKeeper.HeatbeatTimeout.Duration,
@@ -552,6 +644,42 @@ func TestWithTestingBoundsHeartbeatRecoveryInsideStoreLiveness(t *testing.T) {
 			require.Less(t, cfg.HAKeeperClient.BackendReadTimeout.Duration,
 				cfg.LogService.HAKeeperConfig.TNStoreTimeout.Duration)
 		}
+	}
+}
+
+func TestTestingTxnTraceBufferPreservesOverrides(t *testing.T) {
+	cfg := newServiceConfig()
+	cfg.CN.Txn.Trace.BufferSize = 4096
+	applyTestingTxnTraceBuffer(&cfg)
+	require.Equal(t, 4096, cfg.CN.Txn.Trace.BufferSize)
+	for _, testingMode := range []bool{false, true} {
+		t.Run(fmt.Sprintf("testing=%t", testingMode), func(t *testing.T) {
+			opts := []Option{WithCNCount(2)}
+			if testingMode {
+				opts = append(opts, WithTesting())
+			}
+			opts = append(opts, WithPreStart(func(svc ServiceOperator) {
+				if svc.ServiceType() != metadata.ServiceType_CN {
+					return
+				}
+				want := 0
+				if testingMode {
+					want = 1024
+				}
+				require.Equal(t, want, svc.GetServiceConfig().CN.Txn.Trace.BufferSize)
+				svc.Adjust(func(cfg *ServiceConfig) { cfg.CN.Txn.Trace.BufferSize = 8192 })
+			}))
+			c, err := NewCluster(opts...)
+			if c != nil {
+				t.Cleanup(func() { require.NoError(t, c.Close()) })
+			}
+			require.NoError(t, err)
+			for i := range 2 {
+				cn, err := c.GetCNService(i)
+				require.NoError(t, err)
+				require.Equal(t, 8192, cn.GetServiceConfig().CN.Txn.Trace.BufferSize)
+			}
+		})
 	}
 }
 
@@ -660,9 +788,7 @@ func TestCreateDB(t *testing.T) {
 // doStartLocked that are not reached by normal cluster startup tests.
 func TestDoStartLockedErrorPaths(t *testing.T) {
 	t.Run("non-CN service error returns immediately", func(t *testing.T) {
-		// A non-CN operator whose state is already 'started' will return
-		// an error from Start(), exercising the direct-return path at
-		// cluster.go line 119-121.
+		// A non-CN operator rejects duplicate startup before allocating resources.
 		op := &operator{
 			serviceType: metadata.ServiceType_LOG,
 			state:       started, // forces Start() to return error
@@ -675,10 +801,8 @@ func TestDoStartLockedErrorPaths(t *testing.T) {
 		assert.Contains(t, err.Error(), "already started")
 	})
 
-	t.Run("CN service error captured via atomic.Value", func(t *testing.T) {
-		// A CN operator whose state is already 'started' will return an
-		// error from Start(), exercising the goroutine error-capture path
-		// at cluster.go lines 128-133 and the error-return at 138-140.
+	t.Run("CN service error preserves cause", func(t *testing.T) {
+		// The concurrent startup path preserves the same rejection.
 		op := &operator{
 			serviceType: metadata.ServiceType_CN,
 			state:       started,
@@ -692,7 +816,7 @@ func TestDoStartLockedErrorPaths(t *testing.T) {
 	})
 
 	t.Run("Start propagates doStartLocked error", func(t *testing.T) {
-		// Exercises the error propagation in Start() at line 107-109.
+		// Start preserves service errors through rollback.
 		op := &operator{
 			serviceType: metadata.ServiceType_LOG,
 			state:       started,
@@ -731,6 +855,79 @@ func TestDoStartLockedErrorPaths(t *testing.T) {
 		err := c.doStartLocked(0)
 		assert.NoError(t, err)
 	})
+}
+
+// These startup regressions use the existing startFn seam: no real services,
+// ports, cluster admission, or wall-clock sleeps are needed.
+func TestDoStartLockedConcurrentErrors(t *testing.T) {
+	first := errors.New("connection refused")
+	second := &os.PathError{Op: "open", Path: "catalog", Err: os.ErrPermission}
+	c := &cluster{
+		id: 42,
+		services: []*operator{
+			{serviceType: metadata.ServiceType_CN, sid: "cn-a"},
+			{serviceType: metadata.ServiceType_CN, sid: "cn-b"},
+		},
+		startFn: func(op *operator) error {
+			if op.sid == "cn-a" {
+				return first
+			}
+			return second
+		},
+	}
+	err := c.doStartLocked(0)
+	require.ErrorIs(t, err, first)
+	require.ErrorIs(t, err, second)
+	var pathErr *os.PathError
+	require.ErrorAs(t, err, &pathErr)
+	require.Same(t, second, pathErr)
+	require.EqualError(t, err,
+		"internal error: embedded cluster 42 start CN service \"cn-a\"\n"+
+			"connection refused\n"+
+			"internal error: embedded cluster 42 start CN service \"cn-b\"\n"+
+			"open catalog: permission denied")
+
+	// Startup results belong to this invocation, including incremental CN starts.
+	c.startFn = func(op *operator) error {
+		assert.Equal(t, "cn-b", op.sid)
+		return nil
+	}
+	require.NoError(t, c.doStartLocked(1))
+}
+
+func TestDoStartLockedJoinsCNBeforeReturningInfrastructureFailure(t *testing.T) {
+	cnEntered := make(chan struct{})
+	infrastructureFailed := make(chan struct{})
+	cnErr := errors.New("CN startup failed")
+	logErr := errors.New("log startup failed")
+	var cnReturned atomic.Bool
+	c := &cluster{
+		services: []*operator{
+			{serviceType: metadata.ServiceType_CN, sid: "cn"},
+			{serviceType: metadata.ServiceType_LOG, sid: "log"},
+			{serviceType: metadata.ServiceType_TN, sid: "not-started"},
+		},
+		startFn: func(op *operator) error {
+			switch op.sid {
+			case "cn":
+				close(cnEntered)
+				<-infrastructureFailed
+				defer cnReturned.Store(true)
+				return cnErr
+			case "log":
+				<-cnEntered
+				close(infrastructureFailed)
+				return logErr
+			default:
+				t.Error("started a service after infrastructure failure")
+				return nil
+			}
+		},
+	}
+	err := c.doStartLocked(0)
+	require.True(t, cnReturned.Load(), "all startup workers must finish before caller can roll back")
+	require.ErrorIs(t, err, cnErr)
+	require.ErrorIs(t, err, logErr)
 }
 
 func TestClusterStartRollbackClosesPartiallyStartedServices(t *testing.T) {

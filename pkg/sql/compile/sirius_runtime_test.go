@@ -66,7 +66,7 @@ func TestSiriusRuntimeValidationAndLookup(t *testing.T) {
 
 	nondurable := substrait.NewLeaseManager(1, &siriusRuntimeTestProtector{})
 	invalid := &SiriusRuntime{
-		Flight: &sidecarflight.Runtime{}, Leases: nondurable, Resolver: &substrait.ResolverServer{},
+		Backend: NewSiriusFlightBackend(&sidecarflight.Runtime{}), Leases: nondurable, Resolver: &substrait.ResolverServer{},
 		AuthorizedClientSPKIHash: make([]byte, 32), DataDir: t.TempDir(), LeaseTTL: time.Minute, CleanupTimeout: time.Second,
 	}
 	require.Error(t, invalid.Validate())
@@ -81,7 +81,7 @@ func TestSiriusRuntimeValidationAndLookup(t *testing.T) {
 	leases := substrait.NewPersistentLeaseManager(1, &siriusRuntimeTestProtector{}, siriusJournalStub{})
 	require.NoError(t, leases.Replay(context.Background()))
 	valid := &SiriusRuntime{
-		Flight:   &sidecarflight.Runtime{},
+		Backend:  NewSiriusFlightBackend(&sidecarflight.Runtime{}),
 		Leases:   leases,
 		Resolver: &substrait.ResolverServer{}, AuthorizedClientSPKIHash: make([]byte, 32),
 		DataDir: t.TempDir(), LeaseTTL: time.Minute, CleanupTimeout: time.Second,
@@ -132,7 +132,7 @@ func TestRecoverAdmittedReadReleasesOrRetainsRetryableOwner(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Len(t, leases.PendingExecutions(), 1)
-	runtime := &SiriusRuntime{Flight: &sidecarflight.Runtime{}, Leases: leases, CleanupTimeout: time.Second}
+	runtime := &SiriusRuntime{Backend: NewSiriusFlightBackend(&sidecarflight.Runtime{}), Leases: leases, CleanupTimeout: time.Second}
 	plan := &SiriusReadPlan{ReadRefs: admitted.ReadRefs}
 	require.NoError(t, runtime.recoverAdmittedRead(nil, 1, bytes.Repeat([]byte{'q'}, 16), plan))
 	require.Empty(t, leases.PendingExecutions())
@@ -158,6 +158,10 @@ func TestSiriusCompileFastRejections(t *testing.T) {
 	require.False(t, siriusStatementEligible(&tree.Select{Ep: &tree.ExportParam{}}))
 	require.False(t, siriusStatementEligible(sqlCalcFoundRowsTestStatement()))
 	require.False(t, siriusStatementEligible(nil))
+	require.False(t, siriusPlanEligible(&planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		UnresolvedIndexHints: []*planpb.UnresolvedIndexHint{{IndexName: "idx_new"}},
+	}}}))
+	require.True(t, siriusPlanEligible(&planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{}}}))
 
 	requested := WithSiriusOffload(context.Background())
 	for _, c := range []*Compile{

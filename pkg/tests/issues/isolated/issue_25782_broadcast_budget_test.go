@@ -56,6 +56,7 @@ const (
 // key keeps the physical topology independent of SQL predicate ordering and
 // avoids turning this into a shuffle-spill test.
 func TestIssue25782BroadcastHashBuildFailsClosedUnderHardBudget(t *testing.T) {
+	releaseSharedSingleCNCluster(t)
 	cluster, err := embed.StartTestCluster(
 		embed.WithCNCount(1),
 		embed.WithPreStart(func(service embed.ServiceOperator) {

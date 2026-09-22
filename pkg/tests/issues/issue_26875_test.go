@@ -47,6 +47,10 @@ func TestIssue26875ForeignKeyActions(t *testing.T) {
 		t.Logf("MO_UT_SETUP fixture=issue26875 phase=database-create-and-select duration=%s", time.Since(databaseStarted))
 		defer dropIssue26875Database(t, conn, dbName)
 
+		// The database is created through CN0 and selected through CN1. Publish
+		// the DDL commit before CN1 resolves the database; otherwise its catalog
+		// snapshot can still predate the successful CREATE DATABASE.
+		mustExec(t, ctx, conn2, "select mo_ctl('cn', 'SYNCCOMMIT', '')")
 		selectStarted := time.Now()
 		mustExec(t, ctx, conn2, fmt.Sprintf("use `%s`", dbName))
 		t.Logf("MO_UT_SETUP fixture=issue26875 phase=second-connection-select duration=%s", time.Since(selectStarted))
@@ -206,6 +210,10 @@ func runIssue26875ReplaceMaintainsIndexedForeignKeyChildren(t *testing.T, ctx co
 					id int primary key, pid int, %s,
 					foreign key(pid) references %s(id) on delete set null)`, tc.tableName, tc.indexDDL, tc.tableName))
 		mustExec(t, ctx, conn, fmt.Sprintf("insert into %s values(1,null),(2,1)", tc.tableName))
+		// The table is created on CN0 while the prepared REPLACE runs on CN1.
+		// Publish CN0's DDL commit before CN1 plans the statement; otherwise CN1
+		// can legally prepare against a catalog snapshot that predates the table.
+		mustExec(t, ctx, conn2, "select mo_ctl('cn', 'SYNCCOMMIT', '')")
 		selfStmt, prepareErr := conn2.PrepareContext(ctx, fmt.Sprintf("replace into %s values(?,?)", tc.tableName))
 		require.NoError(t, prepareErr)
 		defer selfStmt.Close()

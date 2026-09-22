@@ -45,7 +45,10 @@ func TestBindBackExecSession(t *testing.T) {
 	}
 	proc := &process.Process{Base: &process.BaseProcess{}}
 
-	bindBackExecSession(proc, backSes)
+	parentSink := &struct{}{}
+	ctx := process.ContextWithWarningSink(context.Background(), parentSink)
+	bindBackExecSession(proc, backSes, ctx)
+	require.Same(t, parentSink, proc.WarningSink)
 
 	require.Same(t, backSes, proc.GetSession())
 	require.Equal(t, clientSessionID, proc.Base.SessionInfo.SessionId)
@@ -81,7 +84,7 @@ func TestBindBackExecSessionWithoutUpstream(t *testing.T) {
 	}
 	proc := &process.Process{Base: &process.BaseProcess{}}
 
-	bindBackExecSession(proc, backSes)
+	bindBackExecSession(proc, backSes, context.Background())
 
 	require.Nil(t, proc.GetSession())
 	require.Equal(t, uuid.Nil, proc.Base.SessionInfo.SessionId)

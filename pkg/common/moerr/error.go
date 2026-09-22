@@ -78,6 +78,7 @@ const (
 	ErrRegexpIllegalArgument       uint16 = 20206
 	ErrPreparedParamOutOfRange     uint16 = 20207
 	ErrTruncatedWrongValue         uint16 = 20208
+	ErrGroupConcatCut              uint16 = 20209
 
 	// Group 3: invalid input
 	ErrBadConfig            uint16 = 20300
@@ -130,7 +131,17 @@ const (
 	// required argument depends on a runtime system variable.
 	ErrWrongParamCountToNativeFct uint16 = 20333
 	ErrAESInvalidIV               uint16 = 20334
-	ErrInvalidJSONPathWildcard uint16 = 20337
+	// ErrUserLockWrongName preserves MySQL's ER_USER_LOCK_WRONG_NAME contract.
+	ErrUserLockWrongName uint16 = 20335
+	// ErrInvalidBitwiseOperandsSize reports a scalar binary-string bitwise
+	// length mismatch as a user-input error.
+	ErrInvalidBitwiseOperandsSize uint16 = 20336
+	// ErrCannotConvertString preserves MySQL's binary-to-text conversion error
+	// when a character function receives invalid UTF-8 bytes.
+	ErrCannotConvertString uint16 = 20337
+	// ErrInvalidJSONPathWildcard preserves MySQL's ER_INVALID_JSON_PATH_WILDCARD
+	// contract without reusing an internal error code already allocated on main.
+	ErrInvalidJSONPathWildcard uint16 = 20338
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -449,6 +460,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrRegexpIllegalArgument:       {ER_REGEXP_ILLEGAL_ARGUMENT, []string{MySQLDefaultSqlState}, "Illegal argument to a regular expression."},
 	ErrPreparedParamOutOfRange:     {ER_DATA_OUT_OF_RANGE, []string{"22003"}, "%s value is out of range in '%s'"},
 	ErrTruncatedWrongValue:         {ER_TRUNCATED_WRONG_VALUE, []string{"22007"}, "Truncated incorrect %-.64s value: '%-.128s'"},
+	ErrGroupConcatCut:              {ER_CUT_VALUE_GROUP_CONCAT, []string{"HY000"}, "%s"},
 
 	// Group 3: invalid input
 	ErrBadConfig:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid configuration: %s"},
@@ -486,8 +498,11 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrMultiUpdateKeyConflict:              {ER_MULTI_UPDATE_KEY_CONFLICT, []string{MySQLDefaultSqlState}, "Primary key/partition key update is not allowed since the table is updated both as '%-.192s' and '%-.192s'."},
 	ErrCharacterSetMismatch:                {ER_CHARACTER_SET_MISMATCH, []string{"HY000"}, "Character set '%s' cannot be used in conjunction with '%s' in call to %s."},
 	ErrInvalidBitwiseAggregateOperandsSize: {ER_INVALID_BITWISE_AGGREGATE_OPERANDS_SIZE, []string{MySQLDefaultSqlState}, "Aggregate bitwise functions cannot accept arguments longer than 511 bytes; consider using the SUBSTRING() function"},
+	ErrInvalidBitwiseOperandsSize:          {ER_INVALID_BITWISE_OPERANDS_SIZE, []string{MySQLDefaultSqlState}, "Binary operands of bitwise operators must be of equal length"},
+	ErrCannotConvertString:                 {ER_CANNOT_CONVERT_STRING, []string{MySQLDefaultSqlState}, "Cannot convert string '%.64s' from %s to %s"},
 	ErrWrongParamCountToNativeFct:          {ER_WRONG_PARAMCOUNT_TO_NATIVE_FCT, []string{"42000"}, "Incorrect parameter count in the call to native function '%-.192s'"},
 	ErrAESInvalidIV:                        {ER_AES_INVALID_IV, []string{"HY000"}, "The initialization vector supplied to %s is too short. Must be at least %d bytes long"},
+	ErrUserLockWrongName:                   {ER_USER_LOCK_WRONG_NAME, []string{"42000"}, "Incorrect user-level lock name '%-.192s'."},
 
 	// Group 4: unexpected state or file io error
 	ErrInvalidState:                             {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid state %s"},
@@ -1086,6 +1101,13 @@ func NewDataTruncatedf(ctx context.Context, typ string, format string, args ...a
 	return newError(ctx, ErrDataTruncated, typ, msg)
 }
 
+func NewGroupConcatCut(ctx context.Context, message string) *Error {
+	if message == "" {
+		message = "Row 1 was cut by GROUP_CONCAT()"
+	}
+	return newError(ctx, ErrGroupConcatCut, message)
+}
+
 func NewInvalidArg(ctx context.Context, arg string, val any) *Error {
 	msg := fmt.Sprintf("%v", val)
 	return newError(ctx, ErrInvalidArg, arg, msg)
@@ -1143,6 +1165,10 @@ func NewAESInvalidIV(ctx context.Context, function string, minLength int) *Error
 	return newError(ctx, ErrAESInvalidIV, function, minLength)
 }
 
+func NewUserLockWrongName(ctx context.Context, name string) *Error {
+	return newError(ctx, ErrUserLockWrongName, name)
+}
+
 func NewWrongUsage(ctx context.Context, first, second string) *Error {
 	return newError(ctx, ErrWrongUsage, first, second)
 }
@@ -1159,12 +1185,20 @@ func NewInvalidGroupFuncUse(ctx context.Context) *Error {
 	return newError(ctx, ErrInvalidGroupFuncUse)
 }
 
-	func NewInvalidBitwiseAggregateOperandsSize(ctx context.Context) *Error {
-		return newError(ctx, ErrInvalidBitwiseAggregateOperandsSize)
-	}
+func NewInvalidBitwiseAggregateOperandsSize(ctx context.Context) *Error {
+	return newError(ctx, ErrInvalidBitwiseAggregateOperandsSize)
+}
 
 func NewInvalidJSONPathWildcard(ctx context.Context) *Error {
 	return newError(ctx, ErrInvalidJSONPathWildcard)
+}
+
+func NewInvalidBitwiseOperandsSize(ctx context.Context) *Error {
+	return newError(ctx, ErrInvalidBitwiseOperandsSize)
+}
+
+func NewCannotConvertString(ctx context.Context, value, from, to string) *Error {
+	return newError(ctx, ErrCannotConvertString, value, from, to)
 }
 
 func NewInvalidTypeForJSON(ctx context.Context, argument int, function string) *Error {
@@ -1644,6 +1678,13 @@ func NewDuplicate(ctx context.Context) *Error {
 
 func NewDuplicateEntry(ctx context.Context, entry string, key string) *Error {
 	return newError(ctx, ErrDuplicateEntry, entry, key)
+}
+
+// FormatDuplicateEntry returns the duplicate-entry diagnostic text without
+// constructing or reporting an error. INSERT IGNORE uses this path because a
+// rejected row is an expected warning rather than an execution error.
+func FormatDuplicateEntry(entry string, key string) string {
+	return fmt.Sprintf(errorMsgRefer[ErrDuplicateEntry].errorMsgOrFormat, entry, key)
 }
 
 func NewWrongValueCountOnRow(ctx context.Context, row int) *Error {

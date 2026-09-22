@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -797,6 +798,7 @@ func buildViewsForLowerCaseTest(
 	ctx.EXPECT().GetProcess().Return(nil).AnyTimes()
 	ctx.EXPECT().Stats(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	ctx.EXPECT().GetBuildingAlterView().Return(false, "", "").AnyTimes()
+	ctx.EXPECT().SetContext(gomock.Any()).AnyTimes()
 	ctx.EXPECT().DatabaseExists(gomock.Any(), gomock.Any()).Return(true).AnyTimes()
 	ctx.EXPECT().GetLowerCaseTableNames().Return(int64(1)).AnyTimes()
 	ctx.EXPECT().GetSubscriptionMeta(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
@@ -861,6 +863,7 @@ func buildViewForSQLModeTest(t *testing.T, viewName string, viewData ViewData) (
 			return x.obj, x.table, nil
 		}).AnyTimes()
 	ctx.EXPECT().GetContext().Return(context.Background()).AnyTimes()
+	ctx.EXPECT().SetContext(gomock.Any()).AnyTimes()
 	ctx.EXPECT().GetProcess().Return(nil).AnyTimes()
 	ctx.EXPECT().Stats(gomock.Any(), gomock.Any()).Return(nil, nil).AnyTimes()
 	ctx.EXPECT().GetBuildingAlterView().Return(false, "", "").AnyTimes()
@@ -4842,6 +4845,24 @@ func TestSetOperationMixedCharVarcharUsesSeparatePadSpaceKey(t *testing.T) {
 			wantKey:  true,
 		},
 		{
+			name:     "char-only union",
+			sql:      "select cast('MO' as char(8)) union select cast('MO' as char(4))",
+			nodeType: plan.Node_UNION,
+			wantKey:  true,
+		},
+		{
+			name:     "char-only intersect",
+			sql:      "select cast('MO' as char(8)) intersect select cast('MO' as char(4))",
+			nodeType: plan.Node_INTERSECT,
+			wantKey:  true,
+		},
+		{
+			name:     "char-only minus",
+			sql:      "select cast('MO' as char(8)) minus select cast('MO' as char(4))",
+			nodeType: plan.Node_MINUS,
+			wantKey:  true,
+		},
+		{
 			name:     "promoted char union",
 			sql:      "select coalesce(cast(n_name as char(8)), cast(n_comment as varchar(8))) from nation union select cast(r_name as varchar(8)) from region",
 			nodeType: plan.Node_UNION,
@@ -4889,6 +4910,163 @@ func TestSetOperationMixedCharVarcharUsesSeparatePadSpaceKey(t *testing.T) {
 			require.Equal(t, int32(3), overloadID)
 		})
 	}
+}
+
+func TestSetOperationMixedWidthCharUsesCommonPaddedType(t *testing.T) {
+	cases := []struct {
+		name     string
+		sql      string
+		nodeType plan.Node_NodeType
+	}{
+		{
+			name:     "union",
+			sql:      "select cast('MO' as char(8)) union select cast('MO' as char(4))",
+			nodeType: plan.Node_UNION,
+		},
+		{
+			name:     "intersect",
+			sql:      "select cast('MO' as char(8)) intersect select cast('MO' as char(4))",
+			nodeType: plan.Node_INTERSECT,
+		},
+		{
+			name:     "minus",
+			sql:      "select cast('MO' as char(8)) minus select cast('MO' as char(4))",
+			nodeType: plan.Node_MINUS,
+		},
+		{
+			name:     "reversed union",
+			sql:      "select cast('MO' as char(4)) union select cast('MO' as char(8))",
+			nodeType: plan.Node_UNION,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			require.NoError(t, err)
+
+			query := logicPlan.GetQuery()
+			var setNode *plan.Node
+			for _, node := range query.Nodes {
+				if node.NodeType == tc.nodeType {
+					setNode = node
+					break
+				}
+			}
+			require.NotNil(t, setNode)
+			require.Len(t, setNode.ProjectList, 1)
+			require.Equal(t, int32(types.T_char), setNode.ProjectList[0].Typ.Id)
+			require.Equal(t, int32(8), setNode.ProjectList[0].Typ.Width)
+
+			require.Len(t, setNode.Children, 2)
+			for branch, childID := range setNode.Children {
+				require.GreaterOrEqual(t, childID, int32(0))
+				require.Less(t, int(childID), len(query.Nodes))
+				child := query.Nodes[childID]
+				require.Len(t, child.ProjectList, 1)
+				require.Equal(t, setNode.ProjectList[0].Typ, child.ProjectList[0].Typ,
+					"set-operation branch %d must use the common CHAR width", branch)
+			}
+		})
+	}
+}
+
+func TestSetOperationMixedCharVarcharCommonTypeIsOrderIndependent(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "char first",
+			sql:  "select cast('MO' as char(8)) intersect select cast('MO' as varchar(8))",
+		},
+		{
+			name: "varchar first",
+			sql:  "select cast('MO' as varchar(8)) intersect select cast('MO' as char(8))",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tc.sql)
+			require.NoError(t, err)
+
+			var intersect *plan.Node
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_INTERSECT {
+					intersect = node
+					break
+				}
+			}
+			require.NotNil(t, intersect)
+			require.Len(t, intersect.ProjectList, 1)
+			require.Equal(t, int32(types.T_varchar), intersect.ProjectList[0].Typ.Id)
+			require.Equal(t, int32(8), intersect.ProjectList[0].Typ.Width)
+		})
+	}
+
+}
+
+func TestPreparedSetOperationPureCharUsesCommonPaddedType(t *testing.T) {
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare pure_char_set from 'select ? as v union all select ? as v'")
+	require.NoError(t, err)
+	preparedPlan := prepared.GetDcl().GetPrepare().Plan
+	cached := DeepCopyPlan(preparedPlan)
+
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(), preparedPlan, []any{ParamValue{
+			Value: "MO", IsBinaryProtocol: true,
+			RuntimeType: types.New(types.T_char, 8, 0), HasRuntimeType: true,
+		}, ParamValue{
+			Value: "MO", IsBinaryProtocol: true,
+			RuntimeType: types.New(types.T_char, 4, 0), HasRuntimeType: true,
+		}},
+	)
+	require.NoError(t, err)
+	require.True(t, specialized)
+
+	var setNode *plan.Node
+	for _, node := range filled.GetQuery().Nodes {
+		if node.NodeType == plan.Node_UNION || node.NodeType == plan.Node_UNION_ALL {
+			setNode = node
+			break
+		}
+	}
+	require.NotNil(t, setNode)
+	require.Len(t, setNode.ProjectList, 1)
+	require.Equal(t, int32(types.T_char), setNode.ProjectList[0].Typ.Id, setNode.String())
+	require.Equal(t, int32(8), setNode.ProjectList[0].Typ.Width)
+	for branch, childID := range setNode.Children {
+		child := filled.GetQuery().Nodes[childID]
+		require.Equal(t, int32(types.T_char), child.ProjectList[0].Typ.Id,
+			"prepared branch %d must retain the common CHAR domain", branch)
+		require.Equal(t, int32(8), child.ProjectList[0].Typ.Width)
+	}
+	require.True(t, proto.Equal(cached, preparedPlan),
+		"prepared specialization must not mutate the cached template")
+
+	mixed, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare mixed_char_set from 'select ? as v union all select ? as v'")
+	require.NoError(t, err)
+	mixedFilled, _, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(), mixed.GetDcl().GetPrepare().Plan, []any{ParamValue{
+			Value: "MO", IsBinaryProtocol: true,
+			RuntimeType: types.New(types.T_char, 8, 0), HasRuntimeType: true,
+		}, ParamValue{
+			Value: "MO", IsBinaryProtocol: true,
+			RuntimeType: types.New(types.T_varchar, 4, 0), HasRuntimeType: true,
+		}},
+	)
+	require.NoError(t, err)
+	var mixedSetNode *plan.Node
+	for _, node := range mixedFilled.GetQuery().Nodes {
+		if node.NodeType == plan.Node_UNION || node.NodeType == plan.Node_UNION_ALL {
+			mixedSetNode = node
+			break
+		}
+	}
+	require.NotNil(t, mixedSetNode)
+	require.Equal(t, int32(types.T_varchar), mixedSetNode.ProjectList[0].Typ.Id,
+		"mixed CHAR/VARCHAR must keep the variable-string output domain")
 }
 
 func TestDistinctPromotedCharUsesSeparatePadSpaceKey(t *testing.T) {
@@ -5961,6 +6139,186 @@ func TestQueryBuilder_bindValues(t *testing.T) {
 	assert.Equal(t, 1, len(selectList))
 }
 
+func TestQueryBuilderBindValuesUsesColumnCommonType(t *testing.T) {
+	bindValues := func(t *testing.T, rows string) (*plan.Node, error) {
+		t.Helper()
+		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+		bindCtx := NewBindContext(builder, nil)
+
+		stmts, err := parsers.Parse(
+			context.TODO(), dialect.MYSQL,
+			"select score from (values "+rows+") as tmp(score)", 1)
+		require.NoError(t, err)
+		tables := stmts[0].(*tree.Select).Select.(*tree.SelectClause).From.Tables
+		joinTable := tables[0].(*tree.JoinTableExpr)
+		aliasedTable := joinTable.Left.(*tree.AliasedTableExpr)
+		parenTable := aliasedTable.Expr.(*tree.ParenTableExpr)
+		valuesClause := parenTable.Expr.(*tree.Select).Select.(*tree.ValuesClause)
+
+		nodeID, _, err := builder.bindValues(bindCtx, valuesClause)
+		if err != nil {
+			return nil, err
+		}
+		return builder.qry.Nodes[nodeID], nil
+	}
+
+	for _, test := range []struct {
+		name        string
+		rows        string
+		oid         types.T
+		width       int32
+		scale       int32
+		notNullable bool
+	}{
+		{
+			name:        "decimal scale grows",
+			rows:        "row(26.27946), row(15.2667265)",
+			oid:         types.T_decimal64,
+			width:       9,
+			scale:       7,
+			notNullable: true,
+		},
+		{
+			name:        "decimal scale is order independent",
+			rows:        "row(15.2667265), row(26.27946)",
+			oid:         types.T_decimal64,
+			width:       9,
+			scale:       7,
+			notNullable: true,
+		},
+		{
+			name:  "bare null before decimal",
+			rows:  "row(null), row(26.27946)",
+			oid:   types.T_decimal64,
+			width: 7,
+			scale: 5,
+		},
+		{
+			name:  "bare null after decimal",
+			rows:  "row(26.27946), row(null)",
+			oid:   types.T_decimal64,
+			width: 7,
+			scale: 5,
+		},
+		{
+			name:  "all bare null",
+			rows:  "row(null), row(null)",
+			oid:   types.T_text,
+			width: 0,
+			scale: 0,
+		},
+		{
+			name:        "integer literal joins decimal precision",
+			rows:        "row(1), row(2.50)",
+			oid:         types.T_decimal64,
+			width:       3,
+			scale:       2,
+			notNullable: true,
+		},
+		{
+			name:        "datetime scale grows",
+			rows:        "row(cast('2024-01-02 12:34:56.123' as datetime(3))), row(cast('2024-01-02 12:34:56.123456' as datetime(6)))",
+			oid:         types.T_datetime,
+			width:       6,
+			scale:       6,
+			notNullable: true,
+		},
+		{
+			name:        "datetime scale is order independent",
+			rows:        "row(cast('2024-01-02 12:34:56.123456' as datetime(6))), row(cast('2024-01-02 12:34:56.123' as datetime(3)))",
+			oid:         types.T_datetime,
+			width:       6,
+			scale:       6,
+			notNullable: true,
+		},
+		{
+			name:        "char width grows",
+			rows:        "row(cast('a' as char(4))), row(cast('abcdefgh' as char(8)))",
+			oid:         types.T_char,
+			width:       8,
+			notNullable: true,
+		},
+		{
+			name:        "char width is order independent",
+			rows:        "row(cast('abcdefgh' as char(8))), row(cast('a' as char(4)))",
+			oid:         types.T_char,
+			width:       8,
+			notNullable: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			node, err := bindValues(t, test.rows)
+			require.NoError(t, err)
+			require.Len(t, node.TableDef.Cols, 1)
+			columnType := node.TableDef.Cols[0].Typ
+			require.Equal(t, int32(test.oid), columnType.Id)
+			require.Equal(t, test.width, columnType.Width)
+			require.Equal(t, test.scale, columnType.Scale)
+			require.Equal(t, test.notNullable, columnType.NotNullable)
+
+			require.Len(t, node.RowsetData.Cols, 1)
+			for _, row := range node.RowsetData.Cols[0].Data {
+				require.Equal(t, columnType.Id, row.Expr.Typ.Id)
+				require.Equal(t, columnType.Width, row.Expr.Typ.Width)
+				require.Equal(t, columnType.Scale, row.Expr.Typ.Scale)
+			}
+		})
+	}
+
+	t.Run("string comparison provenance", func(t *testing.T) {
+		for _, test := range []struct {
+			rows     string
+			padSpace bool
+		}{
+			{"row(coalesce(cast('a   ' as char(4)), cast('x' as varchar(8))))", true},
+			{"row(cast('a' as varchar(8))), row(cast('a   ' as char(4)))", true},
+			{"row(cast('a   ' as char(4))), row(cast('a' as varchar(8)))", true},
+			{"row(null), row(coalesce(cast('a   ' as char(4)), cast('x' as varchar(8))))", true},
+			{"row(cast(null as char(4))), row(cast('a' as varchar(8)))", true},
+			{"row(coalesce(cast('a   ' as char(4)), cast('x' as varchar(8)))), row(cast('a' as varchar(8)))", true},
+			{"row(null), row(null)", false},
+			{"row(cast('a   ' as varchar(8))), row(cast('a' as varchar(8)))", false},
+			{"row(concat(cast('a' as char(4)), '   '))", false},
+		} {
+			t.Run(test.rows, func(t *testing.T) {
+				node, err := bindValues(t, test.rows)
+				require.NoError(t, err)
+				require.Equal(t, test.padSpace, node.TableDef.Cols[0].Typ.PadSpace)
+			})
+		}
+	})
+
+	t.Run("vector remains vector", func(t *testing.T) {
+		node, err := bindValues(t, "row(cast('[1,2,3]' as vecf32(3)))")
+		require.NoError(t, err)
+		columnType := node.TableDef.Cols[0].Typ
+		require.Equal(t, int32(types.T_array_float32), columnType.Id)
+		require.Equal(t, int32(3), columnType.Width)
+		require.Len(t, node.RowsetData.Cols[0].Data, 1)
+		require.Equal(t, columnType.Id, node.RowsetData.Cols[0].Data[0].Expr.Typ.Id)
+		require.Equal(t, columnType.Width, node.RowsetData.Cols[0].Data[0].Expr.Typ.Width)
+	})
+
+	t.Run("parameter-only column remains unresolved", func(t *testing.T) {
+		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+		exprs := []*plan.Expr{
+			{Typ: plan.Type{Id: int32(types.T_any)}},
+			{Typ: plan.Type{Id: int32(types.T_any)}},
+		}
+		commonType, err := builder.coerceValuesColumnToCommonType(exprs, []bool{false, false}, 0)
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_any), commonType.Id)
+		for _, expr := range exprs {
+			require.Equal(t, int32(types.T_any), expr.Typ.Id)
+		}
+	})
+
+	t.Run("incompatible vector and scalar types are rejected", func(t *testing.T) {
+		_, err := bindValues(t, "row(1), row(cast('[1,2,3]' as vecf32(3)))")
+		require.Error(t, err)
+	})
+}
+
 func TestQueryBuilderBuildValuesAndTableSubqueries(t *testing.T) {
 	for _, sql := range []string{
 		"select (values row(1))",
@@ -6065,6 +6423,7 @@ func TestQueryBuilder_appendTimeWindowNode(t *testing.T) {}
 
 func TestQueryBuilder_appendWindowNode(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	builder.sortSpillMem = 4096
 	bindCtx := NewBindContext(builder, nil)
 	bindCtx.groupTag = builder.GenNewBindTag()
 	bindCtx.aggregateTag = builder.GenNewBindTag()
@@ -6104,6 +6463,7 @@ func TestQueryBuilder_appendWindowNode(t *testing.T) {
 	for _, node := range builder.qry.Nodes {
 		if node.NodeType == plan.Node_WINDOW {
 			windowNodeFound = true
+			require.Equal(t, int64(4096), node.SpillMem)
 			break
 		}
 	}

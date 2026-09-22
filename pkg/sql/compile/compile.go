@@ -55,6 +55,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/adaptivetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
@@ -203,7 +204,7 @@ func (c *Compile) Release() {
 	doCompileRelease(c)
 }
 
-func (c Compile) TypeName() string {
+func (c *Compile) TypeName() string {
 	return "compile.Compile"
 }
 
@@ -309,7 +310,7 @@ func (c *Compile) Reset(proc *process.Process, startAt time.Time, fill func(*bat
 	if c.lockMeta != nil {
 		c.lockMeta.reset(c.proc)
 	}
-	if err := refreshGroupConcatMaxLen(c.scopes, proc); err != nil {
+	if err := refreshGroupConcatMaxLen(c.scopes, proc, c.groupConcatMaxLenFloor); err != nil {
 		return err
 	}
 	rejectZeroTemporal, err := util.RejectZeroTemporalWritePolicy(proc)
@@ -536,6 +537,7 @@ func (c *Compile) clear() {
 	c.remoteFragmentCounts = nil
 	c.remoteExecutionID = uuid.Nil
 	c.isPrepare = false
+	c.groupConcatMaxLenFloor = 0
 	c.hasMergeOp = false
 	c.needBlock = false
 	c.ignorePublish = false
@@ -889,6 +891,9 @@ func (c *Compile) prePipelineInitializer() (startedSources []*materialized.Sourc
 	if err = c.lockMeta.doLock(c.e, c.proc); err != nil {
 		return nil, err
 	}
+	if err = c.unresolvedIndexHintError(); err != nil {
+		return nil, err
+	}
 	if err = c.lockTable(); err != nil {
 		return nil, err
 	}
@@ -923,6 +928,25 @@ func (c *Compile) prePipelineInitializer() (startedSources []*materialized.Sourc
 		startedSources = append(startedSources, source)
 	}
 	return startedSources, nil
+}
+
+// unresolvedIndexHintError restores the ordinary MySQL error after the
+// metadata lock has established that no concurrent definition change made the
+// hinted index visible. It runs before sources start, so an invalid hint cannot
+// execute the base-table plan produced while the hint was unresolved.
+func (c *Compile) unresolvedIndexHintError() error {
+	return plan2.ValidateUnresolvedIndexHints(c.proc.Ctx, c.pn.GetQuery())
+}
+
+func (c *Compile) appendUnresolvedIndexHintMetaTables(query *plan.Query) {
+	if query == nil {
+		return
+	}
+	for _, hint := range query.GetUnresolvedIndexHints() {
+		if hint != nil && hint.GetTable() != nil {
+			c.appendMetaTables(hint.GetTable())
+		}
+	}
 }
 
 func closeMaterializedSourceGenerations(sources []*materialized.Source) {
@@ -1403,6 +1427,39 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err = c.constrainIntegerDomainWorkers(qry); err != nil {
+		return nil, err
+	}
+	if err = c.constrainConvBasesWorkers(qry); err != nil {
+		return nil, err
+	}
+	if err = c.constrainIntegerArgumentWorkers(qry); err != nil {
+		return nil, err
+	}
+	if err = c.constrainIPFunctionWorkers(qry); err != nil {
+		return nil, err
+	}
+	if err = c.constrainStringNumericResultWorkers(qry); err != nil {
+		return nil, err
+	}
+	if err = c.constrainBoundedConditionalStringWorkers(qry); err != nil {
+		return nil, err
+	}
+	if err = c.constrainSpatialDistanceWorkers(qry); err != nil {
+		return nil, err
+	}
+	if err = c.constrainDecimalLiteralWorkers(qry); err != nil {
+		return nil, err
+	}
+	if err = c.constrainStrictWriteWorkers(); err != nil {
+		return nil, err
+	}
+	if err = c.constrainGroupConcatTimeZoneWorkers(qry); err != nil {
+		return nil, err
+	}
+	if err = c.validateGroupingTransportPlacement(qry); err != nil {
+		return nil, err
+	}
 
 	if c.isPrepare && !c.IsTpQuery() {
 		return nil, cantCompileForPrepareErr
@@ -1450,6 +1507,9 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	}
 	if err = validateLocalRuntimeFilterTopology(qry, c.compiledLocalRuntimeFilterNodes, steps); err != nil {
 		return nil, err
+	}
+	if queryNeedsGroupingTransport(qry) {
+		attachGroupingTransportPlan(steps, &plan.Plan{Plan: &plan.Plan_Query{Query: qry}})
 	}
 
 	return steps, err
@@ -1554,21 +1614,6 @@ func (c *Compile) isMaterializedCTEStep(qry *plan.Query, step int32) bool {
 		sink.ExtraOptions == materialized.CTESinkOption
 }
 
-func (c *Compile) isAdaptiveVectorSearch(qry *plan.Query) bool {
-	if qry == nil {
-		return false
-	}
-
-	for _, node := range qry.Nodes {
-		// Check for vector search in auto mode
-		if node.RankOption != nil && node.RankOption.Mode == "auto" {
-			return true
-		}
-	}
-
-	return false
-}
-
 func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Scope, error) {
 	if qry.Nodes[step].NodeType == plan.Node_SINK {
 		return ss, nil
@@ -1631,13 +1676,14 @@ func (c *Compile) compileSteps(qry *plan.Query, ss []*Scope, step int32) ([]*Sco
 			}
 		}
 
-		isAdaptive := c.isAdaptiveVectorSearch(qry)
-
+		// IVF AUTO fallback is owned by the local ADAPTIVE_TOP region. Unmatched
+		// AUTO shapes execute their exact plan once; enabling Output retry here
+		// would replay the whole statement and can loop when AST rewriting cannot
+		// reach a nested SELECT.
 		rs.setRootOperator(
 			output.NewArgument().
 				WithFunc(c.resultWriter()).
-				WithBlock(c.needBlock).
-				WithAdaptive(isAdaptive),
+				WithBlock(c.needBlock),
 		)
 		return []*Scope{rs}, nil
 	}
@@ -1913,9 +1959,16 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		ss = c.compileSort(node, ss)
 		return ss, nil
 	case plan.Node_AGG:
+		if err = preflightPercentileConfigs(node, c.proc); err != nil {
+			return nil, err
+		}
+		if err = validateAggregateConfigs(node, c.proc); err != nil {
+			return nil, err
+		}
 		childNodeID := node.Children[0]
 		childNode := nodes[childNodeID]
-		if isLocalPreAggregationGroup(node, childNode) {
+		if isLocalPreAggregationGroup(node, childNode) &&
+			!c.hasUnsupportedRemoteGroupWire(node) {
 			ss, err = c.compileLocalPreAggregationScope(step, childNodeID, nodes)
 		} else {
 			ss, err = c.compilePlanScope(step, childNodeID, nodes)
@@ -1948,6 +2001,9 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileSample(node, ss))))
 		return ss, nil
 	case plan.Node_WINDOW:
+		if err = validateAggregateConfigs(node, c.proc); err != nil {
+			return nil, err
+		}
 		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
 			return nil, err
@@ -1958,6 +2014,9 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		ss = c.compileSort(node, c.compileProjection(node, c.compileRestrict(node, c.compileWin(node, ss))))
 		return ss, nil
 	case plan.Node_TIME_WINDOW:
+		if err = validateAggregateConfigs(node, c.proc); err != nil {
+			return nil, err
+		}
 		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
 			return nil, err
@@ -2050,6 +2109,22 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileSort(node, ss)
 		return ss, nil
+	case plan.Node_ADAPTIVE_TOP:
+		if len(node.Children) < 2 || len(node.Children) > 3 || node.Limit == nil {
+			return nil, moerr.NewInternalErrorNoCtx("invalid adaptive top plan")
+		}
+		branches := make([][]*Scope, len(node.Children))
+		for i, childID := range node.Children {
+			branches[i], err = c.compilePlanScope(step, childID, nodes)
+			if err != nil {
+				for j := 0; j < i; j++ {
+					ReleaseScopes(branches[j])
+				}
+				return nil, err
+			}
+		}
+		c.setAnalyzeCurrent(nil, int(curNodeIdx))
+		return c.compileAdaptiveTop(node, branches), nil
 	case plan.Node_UNION_ALL:
 		lazy := streamingUnionAllDemand(node, outerUnionAllDemand)
 		if !lazy && c.pn != nil {
@@ -5001,19 +5076,63 @@ func (c *Compile) generateSeriesParallel(proc *process.Process, node *plan.Node,
 		return true, 0, nil, nil
 	}
 
-	temp := (end - start + 1) / int64(parallelSize)
-	for i := 0; i < parallelSize; i++ {
-		tempEnd := start + temp - 1
-		if i == parallelSize-1 {
-			tempEnd = end
-		}
+	offset, ok := generateSeriesOffsets(start, end, step, parallelSize)
+	if !ok {
+		return false, 0, nil, nil
+	}
+	return true, step, offset, nil
+}
 
-		arr := [2]int64{start, tempEnd}
-		offset = append(offset, arr)
-		start = tempEnd + 1
+func generateSeriesOffsets(start, end, step int64, parallelSize int) ([][2]int64, bool) {
+	if parallelSize <= 0 || step == 0 ||
+		(step > 0 && start > end) || (step < 0 && start < end) {
+		return nil, false
 	}
 
-	return true, step, offset, nil
+	var distance, stepMagnitude uint64
+	if step > 0 {
+		distance = uint64(end) - uint64(start)
+		stepMagnitude = uint64(step)
+	} else {
+		distance = uint64(start) - uint64(end)
+		stepMagnitude = uint64(-(step + 1)) + 1
+	}
+	lastIndex := distance / stepMagnitude
+	if lastIndex == math.MaxUint64 {
+		// Keep the only cardinality that cannot fit in uint64 on the serial path.
+		return nil, false
+	}
+	count := lastIndex + 1
+	shardCount := uint64(parallelSize)
+	if count < shardCount {
+		return nil, false
+	}
+
+	baseSize := count / shardCount
+	extra := count % shardCount
+	offsets := make([][2]int64, 0, parallelSize)
+	var firstIndex uint64
+	for shard := uint64(0); shard < shardCount; shard++ {
+		size := baseSize
+		if shard < extra {
+			size++
+		}
+		lastIndex := firstIndex + size - 1
+		offsets = append(offsets, [2]int64{
+			generateSeriesValueAt(start, step, stepMagnitude, firstIndex),
+			generateSeriesValueAt(start, step, stepMagnitude, lastIndex),
+		})
+		firstIndex = lastIndex + 1
+	}
+	return offsets, true
+}
+
+func generateSeriesValueAt(start, step int64, stepMagnitude, index uint64) int64 {
+	delta := index * stepMagnitude
+	if step > 0 {
+		return int64(uint64(start) + delta)
+	}
+	return int64(uint64(start) - delta)
 }
 
 func (c *Compile) compileSingleTableFunction(node *plan.Node) ([]*Scope, error) {
@@ -5045,8 +5164,14 @@ func (c *Compile) compileGenerateSeriesParallel(node *plan.Node, ss []*Scope, pa
 		}
 
 		op.CanOpt = canOpt
-		op.GenerateSeriesCtrNumState(offset[0][0], offset[len(offset)-1][1], step, offset[0][0])
-		op.OffsetTotal = append(op.OffsetTotal, offset[startOffset:startOffset+currMcpu]...)
+		scopeOffsets := offset[startOffset : startOffset+currMcpu]
+		op.GenerateSeriesCtrNumState(
+			scopeOffsets[0][0],
+			scopeOffsets[len(scopeOffsets)-1][1],
+			step,
+			scopeOffsets[0][0],
+		)
+		op.OffsetTotal = append(op.OffsetTotal, scopeOffsets...)
 		startOffset += currMcpu
 
 		ds.NodeInfo = getEngineNode(c)
@@ -5333,6 +5458,62 @@ func prepareVectorIndexScanForExecution(source *Source, proc *process.Process) (
 	return spec, nil
 }
 
+// buildFoldedFilterExprs prepares an isolated copy of a filter list and its
+// fold executors. The caller publishes both only after every expression has
+// been rewritten (and, for storage filters, evaluated) successfully.
+func buildFoldedFilterExprs(
+	proc *process.Process,
+	exprs []*plan.Expr,
+	existing []colexec.ExpressionExecutor,
+	evaluate bool,
+) ([]*plan.Expr, []colexec.ExpressionExecutor, error) {
+	filters := plan2.DeepCopyExprList(exprs)
+	executors := append([]colexec.ExpressionExecutor(nil), existing...)
+	firstNewExecutor := len(executors)
+	rollback := func(err error) ([]*plan.Expr, []colexec.ExpressionExecutor, error) {
+		for _, executor := range executors[firstNewExecutor:] {
+			executor.Free()
+		}
+		return nil, existing, err
+	}
+
+	for _, expr := range filters {
+		if _, err := plan2.ReplaceFoldExpr(proc, expr, &executors); err != nil {
+			return rollback(err)
+		}
+	}
+	if evaluate {
+		for _, expr := range filters {
+			if err := plan2.EvalFoldExpr(proc, expr, &executors); err != nil {
+				return rollback(err)
+			}
+		}
+	}
+	return filters, executors, nil
+}
+
+func prepareFoldedFilterExprs(
+	proc *process.Process,
+	exprs []*plan.Expr,
+	cached []*plan.Expr,
+	executors []colexec.ExpressionExecutor,
+	evaluate bool,
+) ([]*plan.Expr, []colexec.ExpressionExecutor, bool, error) {
+	if len(exprs) != len(cached) {
+		filters, nextExecutors, err := buildFoldedFilterExprs(
+			proc, exprs, executors, evaluate)
+		return filters, nextExecutors, err == nil, err
+	}
+	if evaluate {
+		for _, expr := range cached {
+			if err := plan2.EvalFoldExpr(proc, expr, &executors); err != nil {
+				return cached, executors, false, err
+			}
+		}
+	}
+	return cached, executors, false, nil
+}
+
 func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	var err error
 	var tblDef *plan.TableDef
@@ -5374,32 +5555,28 @@ func (c *Compile) compileTableScanDataSource(s *Scope) error {
 	}
 	tblDef = s.DataSource.Rel.GetTableDef(ctx)
 
+	c.filterExprMu.Lock()
+	defer c.filterExprMu.Unlock()
 	storageFilters := filterScanStorageExprs(node.FilterList)
-	if len(storageFilters) != len(s.DataSource.FilterList) {
-		s.DataSource.FilterList = plan2.DeepCopyExprList(storageFilters)
-		for _, e := range s.DataSource.FilterList {
-			_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes)
-			if err != nil {
-				return err
-			}
-		}
+	filters, executors, rebuilt, err := prepareFoldedFilterExprs(
+		c.proc, storageFilters, s.DataSource.FilterList, c.filterExprExes, true)
+	if err != nil {
+		return err
 	}
-	for _, e := range s.DataSource.FilterList {
-		err = plan2.EvalFoldExpr(c.proc, e, &c.filterExprExes)
-		if err != nil {
-			return err
-		}
+	if rebuilt {
+		c.filterExprExes = executors
+		s.DataSource.FilterList = filters
 	}
 	s.DataSource.FilterExpr = colexec.RewriteFilterExprList(s.DataSource.FilterList)
 
-	if len(node.BlockFilterList) != len(s.DataSource.BlockFilterList) {
-		s.DataSource.BlockFilterList = plan2.DeepCopyExprList(node.BlockFilterList)
-		for _, e := range s.DataSource.BlockFilterList {
-			_, err := plan2.ReplaceFoldExpr(c.proc, e, &c.filterExprExes)
-			if err != nil {
-				return err
-			}
-		}
+	filters, executors, rebuilt, err = prepareFoldedFilterExprs(
+		c.proc, node.BlockFilterList, s.DataSource.BlockFilterList, c.filterExprExes, false)
+	if err != nil {
+		return err
+	}
+	if rebuilt {
+		c.filterExprExes = executors
+		s.DataSource.BlockFilterList = filters
 	}
 
 	s.DataSource.Timestamp = ts
@@ -5585,10 +5762,49 @@ func (c *Compile) compileProjection(node *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) ensureCoordinatorOnlyFunctions(node *plan.Node, ss []*Scope) []*Scope {
-	if (!nodeHasUserLevelLockFunction(node) && !nodeHasFoundRowsFunction(node)) || c.scopesRunOnCoordinator(ss) {
+	if (!nodeHasUserLevelLockFunction(node) && !nodeHasFoundRowsFunction(node) &&
+		!c.needsCoordinatorIgnoreCheck(node)) || c.scopesRunOnCoordinator(ss) {
 		return ss
 	}
 	return []*Scope{c.newMergeScope(ss)}
+}
+
+// statementIgnoreEnabled is defensive because a few compile/serialization
+// tests construct a Process shell without its shared BaseProcess.  The normal
+// execution path always has both objects, but a protocol gate must not turn a
+// malformed/incomplete process into a panic while handling an error path.
+func statementIgnoreEnabled(proc *process.Process) bool {
+	return proc != nil && proc.Base != nil && proc.GetStmtProfile().GetStatementIgnore()
+}
+
+// An older CN resolves the same CHECK function ID but throws instead of
+// filtering invalid INSERT IGNORE rows. Keep only this filter local while
+// upgrading; ordinary CHECKs and fully upgraded clusters remain distributed.
+func (c *Compile) needsCoordinatorIgnoreCheck(node *plan.Node) bool {
+	if node == nil || len(node.FilterList) == 0 || !statementIgnoreEnabled(c.proc) ||
+		supportsRemoteIgnoreCheck(c.proc.GetService()) {
+		return false
+	}
+	for _, expr := range node.FilterList {
+		if containsFunctionInExpr(expr, nil, isCheckConstraintFunction) {
+			return true
+		}
+	}
+	return false
+}
+
+func isCheckConstraintFunction(functionID, _ int32) bool {
+	return functionID == function.CHECK_CONSTRAINT_ASSERT
+}
+
+func supportsRemoteIgnoreCheck(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, versionOK := value.(int64)
+	return ok && versionOK && version >= defines.MORPCVersion63
 }
 
 func (c *Compile) scopesRunOnCoordinator(ss []*Scope) bool {
@@ -5927,6 +6143,38 @@ func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right
 	}
 	c.anal.isFirst = false
 	return rs
+}
+
+func (c *Compile) compileAdaptiveTop(node *plan.Node, candidates [][]*Scope) []*Scope {
+	branches := make([]*Scope, len(candidates))
+	for i := range candidates {
+		branches[i] = c.newMergeScope(candidates[i])
+	}
+	rs := c.newMergeScope(branches)
+	rs.LazyPreScopes = true
+	mergeOp, ok := rs.RootOp.(*merge.Merge)
+	if !ok {
+		panic("adaptive top scope has no merge input")
+	}
+	mergeOp.WithPartial(0, 0)
+	op := adaptivetop.NewArgument()
+	op.LimitExpr = plan2.DeepCopyExpr(node.Limit)
+	op.Branches = len(branches)
+	op.FallbackOnEmpty = node.GetAdaptiveTopFallbackOnEmpty()
+	op.SpillConfig = materialized.SpillConfig{
+		FileFactory: func(name string) (*os.File, error) {
+			spillFS, err := c.proc.GetSpillFileService()
+			if err != nil {
+				return nil, err
+			}
+			return spillFS.CreateAndRemoveFile(c.proc.Ctx, name)
+		},
+		Budget: newMaterializedSpillBudget(c.proc),
+	}
+	op.SetAnalyzeControl(c.anal.curNodeIdx, c.anal.isFirst)
+	rs.setRootOperator(op)
+	c.anal.isFirst = false
+	return []*Scope{rs}
 }
 
 func (c *Compile) compileUnionAll(
@@ -6695,8 +6943,14 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 	buildOpScopes := make([]*Scope, 0, len(stageNodes))
 	probeScopeGroups := c.groupBroadcastProbeScopesByCN(rs, stageNodes)
 
-	if len(rs) > len(stageNodes) || hasMultiScopeGroup(probeScopeGroups) { // probe side is shuffle scopes
+	if len(rs) > len(stageNodes) || hasMultiScopeGroup(probeScopeGroups) {
 		for _, tmp := range probeScopeGroups {
+			// Each parallel probe worker releases one reference to the shared map.
+			// A colocated scope can contain more than one worker.
+			var probeWorkers int32
+			for _, scope := range tmp {
+				probeWorkers += int32(scope.NodeInfo.Mcpu)
+			}
 			bs := newScope(Remote)
 			bs.NodeInfo = scopeNodeWithMcpu(tmp[0].NodeInfo, 1)
 			bs.Proc = c.proc.NewNoContextChildProc(0)
@@ -6708,7 +6962,7 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 			mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 			bs.setRootOperator(mergeOp)
 			bs.setRootOperator(constructJoinBuildOperator(
-				c, tmp[0].RootOp, int32(len(tmp)), node.RuntimeFilterBuildList))
+				c, tmp[0].RootOp, probeWorkers, node.RuntimeFilterBuildList))
 			tmp[0].PreScopes = append(tmp[0].PreScopes, bs)
 			buildOpScopes = append(buildOpScopes, bs)
 		}
@@ -6826,7 +7080,11 @@ func (c *Compile) compilePostDml(node *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) compilePartition(node *plan.Node, ss []*Scope) []*Scope {
-	if node.Limit != nil && c.supportsRemotePartitionTopN() {
+	partitionTopNSupported := c.supportsRemotePartitionTopN()
+	if node.PartitionTopNWithTies {
+		partitionTopNSupported = c.supportsRemotePartitionTopNWithTies()
+	}
+	if node.Limit != nil && partitionTopNSupported {
 		currentFirstFlag := c.anal.isFirst
 		for i := range ss {
 			op := constructPartition(node)
@@ -6879,6 +7137,7 @@ func (c *Compile) compilePartition(node *plan.Node, ss []*Scope) []*Scope {
 		arg.OrderBySpecs = node.OrderBy[:node.PartitionByCount]
 		arg.Limit = nil
 		arg.PartitionByCount = 0
+		arg.WithTies = false
 	}
 	arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 	rs.setRootOperator(arg)
@@ -7426,7 +7685,7 @@ func (c *Compile) compileGroupWithoutShuffle(
 	distinctRequiresSingleStage bool,
 ) []*Scope {
 	if hasOrderedGroupConcat(node) || hasOrderedSetPercentile(node) ||
-		(hasVarianceAggregate(node) && !c.supportsRemoteVarianceAggregates()) {
+		c.hasUnsupportedRemoteGroupWire(node) {
 		return c.compileOrderedAggregateSingleStage(node, ss, ns)
 	}
 	if c.IsSingleScope(ss) {
@@ -7434,6 +7693,16 @@ func (c *Compile) compileGroupWithoutShuffle(
 	}
 	return c.compileMergeGroup(
 		node, ss, ns, distinctRequiresSingleStage)
+}
+
+func (c *Compile) hasUnsupportedRemoteGroupWire(node *plan.Node) bool {
+	return (hasApproxPercentile(node) && !c.supportsRemoteApproxPercentile()) ||
+		(hasHLLAggregate(node) && !c.supportsRemoteHLL()) ||
+		(canonicalHLLAddRequiredVersion(node) > c.remoteProtocolVersion()) ||
+		(hasVariableLengthGroupKey(node) && !c.supportsRemoteGroupHashString()) ||
+		(hasCanonicalDistinctKeyWire(node) && !c.supportsRemoteCanonicalDistinctKeyWire()) ||
+		(hasLegacyFloatDistinctKeyWire(node) && !c.supportsRemoteCanonicalDistinctKeyWire()) ||
+		(hasVarianceAggregate(node) && !c.supportsRemoteVarianceAggregates())
 }
 
 func isLocalPreAggregationGroup(parent, child *plan.Node) bool {
@@ -7621,6 +7890,166 @@ func hasOrderedSetPercentile(node *plan.Node) bool {
 	return false
 }
 
+func hasApproxPercentile(node *plan.Node) bool {
+	for _, agg := range node.AggList {
+		if fn := agg.GetF(); fn != nil && fn.Func.ObjName == plan2.NameApproxPercentile {
+			return true
+		}
+	}
+	return false
+}
+
+func hasHLLAggregate(node *plan.Node) bool {
+	for _, agg := range node.AggList {
+		if fn := agg.GetF(); fn != nil {
+			switch fn.Func.ObjName {
+			case "approx_count", "approx_count_distinct", "hll_add_agg", "hll_merge_agg":
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func hasCanonicalHLLAddAggregate(node *plan.Node) bool {
+	return canonicalHLLAddRequiredVersion(node) != 0
+}
+
+func canonicalHLLAddRequiredVersion(node *plan.Node) int64 {
+	if node == nil {
+		return 0
+	}
+	var required int64
+	for _, agg := range node.AggList {
+		fn := agg.GetF()
+		if fn == nil || fn.Func == nil || fn.Func.ObjName != "hll_add_agg" ||
+			len(fn.Args) == 0 || fn.Args[0] == nil {
+			continue
+		}
+		typ := types.T(fn.Args[0].Typ.Id)
+		switch {
+		case isCanonicalFloatHLLAddType(typ):
+			required = max(required, defines.MORPCVersion92)
+		case isCanonicalTextHLLAddType(typ):
+			required = max(required, defines.MORPCVersion91)
+		case isCanonicalVectorHLLAddType(typ):
+			required = max(required, defines.MORPCVersion88)
+		}
+	}
+	return required
+}
+
+func isCanonicalVectorHLLAddType(typ types.T) bool {
+	switch typ {
+	case types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16:
+		return true
+	default:
+		return false
+	}
+}
+
+func isCanonicalTextHLLAddType(typ types.T) bool {
+	return typ == types.T_char || typ == types.T_json
+}
+
+func isCanonicalFloatHLLAddType(typ types.T) bool {
+	return typ == types.T_float32 || typ == types.T_float64
+}
+
+// hasVariableLengthGroupKey mirrors Group.prepareGroupAndAggArg's v78 fence
+// for a short variable-length physical key. Long variable-length keys already
+// used the historical HStr partial grammar, so they remain remotely usable
+// before v78.
+func hasVariableLengthGroupKey(node *plan.Node) bool {
+	if node == nil {
+		return false
+	}
+	positions := node.GroupByHashKey
+	if len(positions) == 0 {
+		positions = make([]int32, len(node.GroupBy))
+		for i := range node.GroupBy {
+			positions[i] = int32(i)
+		}
+	}
+
+	nullable := false
+	keyWidth := 0
+	variable := false
+	for _, pos := range positions {
+		if pos < 0 || int(pos) >= len(node.GroupBy) {
+			// Let the operator's existing plan validation report the malformed
+			// index; conservatively disable remote compilation here.
+			return true
+		}
+		expr := node.GroupBy[pos]
+		if expr == nil {
+			return true
+		}
+		nullable = nullable || !expr.Typ.NotNullable
+		variable = variable || types.T(expr.Typ.Id).FixedLength() < 0
+		keyWidth += group.GetKeyWidth(
+			types.T(expr.Typ.Id), expr.Typ.Width, nullable)
+		if variable && keyWidth > 8 {
+			return false
+		}
+	}
+	return variable && keyWidth <= 8
+}
+
+// hasCanonicalDistinctKeyWire is the plan-side counterpart of
+// aggexec.RequiresCanonicalDistinctKeyWire. Opaque DISTINCT state is used for
+// multi-argument aggregates and for single variable-length arguments. Keeping
+// that topology local during a pre-v79 rollout lets the receiver continue to
+// accept legacy raw payloads without asking an older peer to parse the marker
+// tagged grammar.
+func hasCanonicalDistinctKeyWire(node *plan.Node) bool {
+	if node == nil {
+		return false
+	}
+	for _, expr := range node.AggList {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil ||
+			uint64(fn.Func.Obj)&function.Distinct == 0 {
+			continue
+		}
+		// GROUP_CONCAT has its own ordered/source-row wire contracts and does
+		// not use the canonical DISTINCT marker grammar.
+		if fn.Func.ObjName == plan2.NameGroupConcat {
+			continue
+		}
+		if len(fn.Args) != 1 || types.T(fn.Args[0].Typ.Id).FixedLength() < 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// hasLegacyFloatDistinctKeyWire identifies the fixed-width FLOAT DISTINCT
+// contract that changed with the canonical key fast path. Before MORPC v79 a
+// remote producer must keep every non-zero float bit pattern as a separate
+// key, so a new coordinator keeps this aggregation local until all remote
+// peers understand the modern contract. GROUP_CONCAT has an independent
+// ordered wire format and is intentionally excluded.
+func hasLegacyFloatDistinctKeyWire(node *plan.Node) bool {
+	if node == nil {
+		return false
+	}
+	for _, expr := range node.AggList {
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil ||
+			uint64(fn.Func.Obj)&function.Distinct == 0 ||
+			fn.Func.ObjName == plan2.NameGroupConcat || len(fn.Args) != 1 {
+			continue
+		}
+		oid := types.T(fn.Args[0].Typ.Id)
+		if oid == types.T_float32 || oid == types.T_float64 {
+			return true
+		}
+	}
+	return false
+}
+
 func hasVarianceAggregate(node *plan.Node) bool {
 	for _, agg := range node.AggList {
 		if fn := agg.GetF(); fn != nil {
@@ -7634,12 +8063,77 @@ func hasVarianceAggregate(node *plan.Node) bool {
 	return false
 }
 
+// hasWidenedDecimalSum reports SUM expressions whose public result is
+// Decimal256. Before MORPC v73, a new CN can still exchange the legacy
+// Decimal128 partial state with an old CN, but a final shuffle Group evaluates
+// the state on its remote owner and sends the public result directly. That
+// final batch would be Decimal256 on the new binary and Decimal128 on the old
+// binary, so mixed-version clusters must use Group + coordinator MergeGroup.
+func hasWidenedDecimalSum(node *plan.Node) bool {
+	for _, agg := range node.AggList {
+		fn := agg.GetF()
+		if fn == nil || fn.Func == nil || len(fn.Args) == 0 ||
+			int64(uint64(fn.Func.Obj)&function.DistinctMask) != aggexec.AggIdOfSum {
+			continue
+		}
+
+		input := fn.Args[0].Typ
+		oid := types.T(input.Id)
+		if oid != types.T_decimal64 && oid != types.T_decimal128 && oid != types.T_decimal256 {
+			continue
+		}
+		if aggexec.SumReturnType([]types.Type{types.New(oid, input.Width, input.Scale)}).Oid == types.T_decimal256 {
+			return true
+		}
+	}
+	return false
+}
+
 func (c *Compile) supportsRemoteOrderedAggregates() bool {
 	return supportsRemoteOrderedAggregates(c.proc.GetService())
 }
 
 func (c *Compile) supportsRemoteOrderedSetAggregates() bool {
 	return supportsRemoteOrderedSetAggregates(c.proc.GetService())
+}
+
+func (c *Compile) supportsRemoteApproxPercentile() bool {
+	return supportsRemoteApproxPercentile(c.proc.GetService())
+}
+
+func (c *Compile) supportsRemoteHLL() bool {
+	return supportsRemoteHLL(c.proc.GetService())
+}
+
+func (c *Compile) supportsRemoteCanonicalHLLAdd() bool {
+	return c.remoteProtocolVersion() >= defines.MORPCVersion88
+}
+
+func (c *Compile) supportsRemoteCanonicalTextHLLAdd() bool {
+	return c.remoteProtocolVersion() >= defines.MORPCVersion91
+
+}
+
+func (c *Compile) supportsRemoteCanonicalFloatHLLAdd() bool {
+	return c.remoteProtocolVersion() >= defines.MORPCVersion92
+}
+
+func (c *Compile) remoteProtocolVersion() int64 {
+	version, ok := moruntime.ServiceRuntime(c.proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return 0
+	}
+	protocolVersion, _ := version.(int64)
+	return protocolVersion
+}
+
+func (c *Compile) supportsRemoteGroupHashString() bool {
+	return supportsRemoteGroupHashString(c.proc.GetService())
+}
+
+func (c *Compile) supportsRemoteCanonicalDistinctKeyWire() bool {
+	return supportsRemoteCanonicalDistinctKeyWire(c.proc.GetService())
 }
 
 func supportsRemoteOrderedAggregates(service string) bool {
@@ -7665,6 +8159,86 @@ func supportsRemoteOrderedSetAggregates(service string) bool {
 	return ok && protocolVersion >= defines.MORPCVersion17
 }
 
+func supportsRemoteOrderedSetExtendedTypes(service string) bool {
+	version, ok := moruntime.ServiceRuntime(service).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion84
+}
+
+func supportsRemoteApproxPercentile(service string) bool {
+	version, ok := moruntime.ServiceRuntime(service).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion76
+}
+
+func supportsRemoteHLL(service string) bool {
+	version, ok := moruntime.ServiceRuntime(service).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion77
+}
+
+func supportsRemoteCanonicalHLLAdd(service string) bool {
+	version, ok := moruntime.ServiceRuntime(service).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion88
+}
+
+func supportsRemoteCanonicalTextHLLAdd(service string) bool {
+	version, ok := moruntime.ServiceRuntime(service).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion91
+}
+
+func supportsRemoteCanonicalFloatHLLAdd(service string) bool {
+	version, ok := moruntime.ServiceRuntime(service).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion92
+}
+
+func supportsRemoteGroupHashString(service string) bool {
+	version, ok := moruntime.ServiceRuntime(service).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion78
+}
+
+func supportsRemoteCanonicalDistinctKeyWire(service string) bool {
+	version, ok := moruntime.ServiceRuntime(service).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion79
+}
+
 func (c *Compile) supportsRemoteVarianceAggregates() bool {
 	version, ok := moruntime.ServiceRuntime(c.proc.GetService()).
 		GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -7675,6 +8249,16 @@ func (c *Compile) supportsRemoteVarianceAggregates() bool {
 	return ok && protocolVersion >= defines.MORPCVersion35
 }
 
+func (c *Compile) supportsRemoteWidenedDecimalSum() bool {
+	version, ok := moruntime.ServiceRuntime(c.proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion73
+}
+
 func (c *Compile) supportsRemotePartitionTopN() bool {
 	version, ok := moruntime.ServiceRuntime(c.proc.GetService()).
 		GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -7683,6 +8267,16 @@ func (c *Compile) supportsRemotePartitionTopN() bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion19
+}
+
+func (c *Compile) supportsRemotePartitionTopNWithTies() bool {
+	version, ok := moruntime.ServiceRuntime(c.proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion69
 }
 
 func (c *Compile) supportsRemoteHashPartition() bool {
@@ -7939,7 +8533,14 @@ func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
 		node.Stats.HashmapStats.Shuffle &&
 		(!hasOrderedGroupConcat(node) || c.supportsRemoteOrderedAggregates()) &&
 		(!hasOrderedSetPercentile(node) || c.supportsRemoteOrderedSetAggregates()) &&
-		(!hasVarianceAggregate(node) || c.supportsRemoteVarianceAggregates())
+		(!hasApproxPercentile(node) || c.supportsRemoteApproxPercentile()) &&
+		(!hasHLLAggregate(node) || c.supportsRemoteHLL()) &&
+		(canonicalHLLAddRequiredVersion(node) <= c.remoteProtocolVersion()) &&
+		(!hasVariableLengthGroupKey(node) || c.supportsRemoteGroupHashString()) &&
+		(!hasCanonicalDistinctKeyWire(node) || c.supportsRemoteCanonicalDistinctKeyWire()) &&
+		(!hasLegacyFloatDistinctKeyWire(node) || c.supportsRemoteCanonicalDistinctKeyWire()) &&
+		(!hasVarianceAggregate(node) || c.supportsRemoteVarianceAggregates()) &&
+		(!hasWidenedDecimalSum(node) || c.supportsRemoteWidenedDecimalSum())
 }
 
 func (c *Compile) compileLocalShuffleGroup(node *plan.Node, inputSS []*Scope, nodes []*plan.Node) []*Scope {
@@ -10081,6 +10682,7 @@ func (c *Compile) runSqlWithResultAndOptions(
 	if accountId >= 0 {
 		opts = opts.WithAccountID(uint32(accountId))
 	}
+	ctx = process.ContextWithWarningSink(ctx, c.proc.WarningSink)
 	return exec.Exec(ctx, sql, opts)
 }
 
@@ -10303,3 +10905,8 @@ func (c *Compile) isCCPRTaskTransaction() bool {
 	}
 	return false
 }
+
+// SetGroupConcatMaxLenFloor binds the prepared statement's execution floor
+// before physical compilation or Compile.Reset. Zero keeps ordinary statements
+// fully dynamic.
+func (c *Compile) SetGroupConcatMaxLenFloor(floor uint64) { c.groupConcatMaxLenFloor = floor }
