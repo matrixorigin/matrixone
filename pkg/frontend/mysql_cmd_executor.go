@@ -1410,6 +1410,9 @@ func validateStaticTransactionAssignments(
 			return nil
 		}
 		if isDefault {
+			if isolation && isolationScope == tree.TransactionScopeNext && activeTxnAtStart {
+				return moerr.NewCantChangeTxCharacteristics(ctx)
+			}
 			continue
 		}
 		def, ok := gSysVarsDefs[assign.Name]

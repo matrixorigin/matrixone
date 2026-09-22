@@ -1051,6 +1051,14 @@ func TestGenericTransactionAssignmentsRejectActiveNextIsolationBeforeMutation(t 
 			name: "isolation before read-only",
 			sql:  "set @@transaction_isolation = 'READ-COMMITTED', session transaction_read_only = 1",
 		},
+		{
+			name: "read-only before default isolation",
+			sql:  "set session transaction_read_only = 1, @@transaction_isolation = default",
+		},
+		{
+			name: "default isolation before read-only",
+			sql:  "set @@transaction_isolation = default, session transaction_read_only = 1",
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
@@ -1103,6 +1111,8 @@ func TestGenericTransactionAssignmentsRejectActiveNextIsolationBeforeMutation(t 
 			require.Equal(t, "REPEATABLE-READ", gotIsolation)
 			require.True(t, handler.InActiveTxn())
 			require.Same(t, op, handler.GetTxn())
+			_, hasNextIsolation := handler.nextTxnIsolationSnapshot()
+			require.False(t, hasNextIsolation)
 		})
 	}
 }
