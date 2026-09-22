@@ -397,9 +397,9 @@ func (b *baseBinder) baseBindVar(astExpr *tree.VarExpr, depth int32, isRoot bool
 	}
 	if !astExpr.System && b.numericParamType != nil {
 		// User variables are text-backed when their assignment came from a
-		// string.  Numeric expressions use MySQL's prefix conversion for such
-		// values (for example, '12abc' -> 12), rather than the strict implicit
-		// cast which rejects the trailing text.
+		// string. The explicit FLOAT64 cast keeps the execution-time
+		// compatibility decision: MySQL mode consumes a prefix (for example,
+		// '12abc' -> 12), while MATRIXONE_NATIVE rejects the trailing text.
 		if isStringBackedType(typ) {
 			return appendExplicitCastBeforeExpr(b.GetContext(), variable, *b.numericParamType)
 		}
@@ -439,7 +439,8 @@ func (b *baseBinder) resolveUserVariableType(expr *tree.VarExpr) (Type, bool) {
 // evaluated through one value-independent floating-point target: their
 // contents can change after PREPARE, so selecting BIGINT/DECIMAL from the
 // value observed during binding would freeze the wrong cast in the prepared
-// plan. The explicit cast overload consumes MySQL's numeric prefix at runtime.
+// plan. The explicit cast overload applies the effective MySQL/native
+// compatibility mode at runtime.
 func (b *baseBinder) resolveUserVariableNumericType(expr *tree.VarExpr) (Type, bool) {
 	if typ, ok := b.resolveUserVariableType(expr); ok {
 		resolved := makeTypeByPlan2Type(typ)
@@ -2101,6 +2102,31 @@ func supportsGenericNumericFunctionContext(name string) bool {
 	}
 }
 
+// preparedStringMathFunctionValueArg reports which arguments of the
+// string-to-number math functions are value operands.  ROUND/TRUNCATE's
+// second argument is a precision/control operand and must retain the
+// prepare-time integer contract; it must not inherit the permissive DOUBLE
+// source used for their value argument.  MOD consumes both operands as
+// values.  Keep this predicate shared by prepare-time source discovery and
+// execute-time rebinding so the two paths cannot disagree about an argument's
+// role.
+func preparedStringMathFunctionValueArg(name string, argIndex, argCount int) bool {
+	if argIndex < 0 || argIndex >= argCount {
+		return false
+	}
+	lowerName := strings.ToLower(name)
+	switch lowerName {
+	case "abs", "ceil", "ceiling", "floor", "sign":
+		return argIndex == 0
+	case "mod":
+		return argCount == 2 && (argIndex == 0 || argIndex == 1)
+	case "round", "truncate":
+		return argIndex == 0
+	default:
+		return false
+	}
+}
+
 func isNumericContextFunction(name string) bool {
 	switch name {
 	case "+", "-", "*", "/", "%", "div", "^", "unary_plus", "unary_minus",
@@ -2203,7 +2229,16 @@ func mysqlNumericPrefixFunctionArg(name string, idx, argCount int, source, targe
 		return false
 	}
 
-	switch strings.ToLower(name) {
+	lowerName := strings.ToLower(name)
+	switch lowerName {
+	case "abs", "ceil", "ceiling", "floor", "mod", "round", "sign", "truncate":
+		// String-valued operands of these numeric functions are deliberately
+		// bound through the comparison cast.  NewCast is intentionally strict
+		// for ordinary implicit reconciliation, whereas NewComparisonCast is
+		// the execution path that carries MySQL's numeric-prefix behavior and
+		// consults MATRIXONE_NATIVE at runtime.  Only value operands are
+		// eligible; ROUND/TRUNCATE precision remains an integer control input.
+		return (lowerName == "mod" && argCount == 2) || idx == 0
 	case "left", "right", "lpad", "rpad", "repeat":
 		return idx == 1 && argCount >= 2
 	case "space":
@@ -2983,6 +3018,7 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 		return nil, moerr.NewNYIf(b.GetContext(), "function expr '%v'", astExpr)
 	}
 	funcName := funcRef.ColName()
+	markPreparedMathFallback := false
 	if strings.EqualFold(funcName, "grouping") {
 		return b.bindGroupingFuncExpr(astExpr)
 	}
@@ -2990,7 +3026,17 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 		return b.bindGenericFunctionExpr(funcName, astExpr.Exprs, depth)
 	}
 	if strings.EqualFold(funcName, "mod") && b.numericParamType == nil {
-		return b.bindNumericExprWithDefaultContext(astExpr, depth, b.defaultNumericOuterType())
+		expr, err := b.bindNumericExprWithDefaultContext(astExpr, depth, b.defaultNumericOuterType())
+		if err != nil {
+			return nil, err
+		}
+		if b.builder != nil && b.builder.isPrepareStatement {
+			hasPreparedParam := hasDirectPreparedNumericParamExprs(astExpr.Exprs)
+			if hasPreparedParam {
+				b.markPreparedNumericFallback(expr)
+			}
+		}
+		return expr, nil
 	}
 	if supportsGenericNumericFunctionContext(strings.ToLower(funcName)) &&
 		mysqlSpecialTypeInExprs(b, astExpr.Exprs) {
@@ -3013,6 +3059,15 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 		if strings.EqualFold(funcName, "get_lock") && len(astExpr.Exprs) == 2 {
 			if _, directParam := unwrapParenExpr(astExpr.Exprs[1]).(*tree.ParamExpr); directParam {
 				return b.bindPreparedGetLockFuncExpr(astExpr.Exprs, depth)
+			}
+		}
+		if targets, ok := preparedMathFunctionTargets(funcName, len(astExpr.Exprs)); ok {
+			hasPreparedParam := hasDirectPreparedNumericParamExprs(astExpr.Exprs)
+			if hasPreparedParam {
+				if b.numericParamType == nil {
+					return b.bindPreparedMathFuncExpr(funcName, astExpr.Exprs, depth, targets)
+				}
+				markPreparedMathFallback = true
 			}
 		}
 		if target, ok := preparedNumericFunctionTarget(funcName, len(astExpr.Exprs)); ok && target != nil &&
@@ -3046,6 +3101,9 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 	expr, err := b.bindFuncExprImplByAstExpr(funcName, astExpr.Exprs, depth)
 	if err == nil && strings.EqualFold(funcName, "json_merge") {
 		appendJSONMergeWarning(b.GetContext(), astExpr)
+	}
+	if err == nil && markPreparedMathFallback {
+		b.markPreparedNumericFallback(expr)
 	}
 	return expr, err
 }
@@ -3128,6 +3186,15 @@ func (b *baseBinder) hasPreparedNumericParamExprs(exprs []tree.Expr, depth int32
 	return false, nil
 }
 
+func hasDirectPreparedNumericParamExprs(exprs []tree.Expr) bool {
+	for _, expr := range exprs {
+		if _, ok := unwrapParenExpr(expr).(*tree.ParamExpr); ok {
+			return true
+		}
+	}
+	return false
+}
+
 func isPreparedNumericAggregate(name string, argCount int) bool {
 	return argCount == 1 && (strings.EqualFold(name, "sum") || strings.EqualFold(name, "avg"))
 }
@@ -3167,6 +3234,58 @@ func preparedNumericFunctionTarget(name string, argCount int) (*Type, bool) {
 		return &target, true
 	}
 	return nil, false
+}
+
+// preparedMathFunctionTargets gives ambiguous prepared math arguments a
+// temporary domain that is broad enough to build a cached plan. The resulting
+// expression is rebound when EXECUTE supplies the actual parameter domain.
+func preparedMathFunctionTargets(name string, argCount int) ([]*Type, bool) {
+	floatType := types.T_float64.ToType()
+	integerType := types.T_int64.ToType()
+	floatTarget := makePlan2Type(&floatType)
+	integerTarget := makePlan2Type(&integerType)
+	switch strings.ToLower(name) {
+	case "ceil", "ceiling", "floor", "sign":
+		if argCount == 1 {
+			return []*Type{&floatTarget}, true
+		}
+	case "round", "truncate":
+		switch argCount {
+		case 1:
+			return []*Type{&floatTarget}, true
+		case 2:
+			return []*Type{&floatTarget, &integerTarget}, true
+		}
+	}
+	return nil, false
+}
+
+func (b *baseBinder) bindPreparedMathFuncExpr(
+	name string,
+	astArgs []tree.Expr,
+	depth int32,
+	targets []*Type,
+) (*plan.Expr, error) {
+	args := make([]*plan.Expr, len(astArgs))
+	for i, arg := range astArgs {
+		bound, err := b.bindNumericExprWithContext(arg, depth, targets[i])
+		if err != nil {
+			return nil, err
+		}
+		args[i] = bound
+	}
+	expr, err := bindBoundFuncExprAndConstFoldWithObserver(
+		b.GetContext(), b.builder.compCtx.GetProcess(), name, args,
+		b.observePersistedExpressionProtocol,
+	)
+	if err != nil {
+		return nil, err
+	}
+	// The marker belongs to the whole function, not its provisional casts. At
+	// EXECUTE this lets a VARCHAR parameter choose the dedicated string
+	// overload while integers and DECIMALs recover their native overload.
+	b.markPreparedNumericFallback(expr)
+	return expr, nil
 }
 
 func (b *baseBinder) markPreparedNumericFallback(expr *plan.Expr) {

@@ -6,6 +6,11 @@ DROP DATABASE IF EXISTS prepared_numeric_aggregate;
 CREATE DATABASE prepared_numeric_aggregate;
 USE prepared_numeric_aggregate;
 
+-- The string parameter row intentionally checks MySQL's permissive numeric
+-- conversion; keep it scoped to the compatibility mode.
+SET @prepared_numeric_aggregate_saved_sql_mode = @@session.sql_mode;
+SET SESSION sql_mode = CONCAT_WS(',', NULLIF(@prepared_numeric_aggregate_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
+
 PREPARE p_sum FROM 'SELECT CAST(SUM(?) AS SIGNED) AS got';
 SET @value = 2;
 EXECUTE p_sum USING @value;
@@ -18,6 +23,8 @@ EXECUTE p_sum USING @value;
 SET @value = 3;
 EXECUTE p_sum USING @value;
 DEALLOCATE PREPARE p_sum;
+SET SESSION sql_mode = @prepared_numeric_aggregate_saved_sql_mode;
+SET @prepared_numeric_aggregate_saved_sql_mode = NULL;
 
 PREPARE p_avg FROM 'SELECT CAST(AVG(?) AS SIGNED) AS got';
 SET @value = 4;

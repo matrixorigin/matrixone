@@ -2,6 +2,11 @@ drop database if exists integer_parameter_coercion;
 create database integer_parameter_coercion;
 use integer_parameter_coercion;
 
+-- These cases preserve MySQL's permissive integer-parameter behavior. Opt in
+-- explicitly because the server default now rejects numeric prefixes.
+SET @integer_parameter_saved_sql_mode = @@session.sql_mode;
+SET SESSION sql_mode = CONCAT_WS(',', NULLIF(@integer_parameter_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
+
 -- Source-domain behavior is owned by the integer parameter, not only its final type.
 create table sources(id int, d decimal(38,18), v double, s varchar(32), bits bit(8));
 insert into sources values (1,2.5,2.5,'1.9tail',b'10'),(2,1.5,1.5,'-1.9tail',b'1'),(3,null,null,null,null);
@@ -126,3 +131,5 @@ execute utility_source using @v,@v,@v,@v,@v,@v,@v,@v;
 deallocate prepare utility_source;
 
 drop database integer_parameter_coercion;
+SET SESSION sql_mode = @integer_parameter_saved_sql_mode;
+SET @integer_parameter_saved_sql_mode = NULL;

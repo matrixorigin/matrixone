@@ -121,12 +121,16 @@ select if(false, X'ff', '你a') into @selected_text_into;
 select charset(@selected_text_into), collation(@selected_text_into),
        char_length(@selected_text_into), hex(left(@selected_text_into, 1));
 set @choose_binary = false;
+SET @binary_string_saved_sql_mode = @@session.sql_mode;
+SET SESSION sql_mode = CONCAT_WS(',', NULLIF(@binary_string_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 prepare prepared_set_domain from
     'set @prepared_selected_text = if(?, X''ff'', ''你a'')';
 execute prepared_set_domain using @choose_binary;
 select charset(@prepared_selected_text), collation(@prepared_selected_text),
        char_length(@prepared_selected_text), hex(left(@prepared_selected_text, 1));
 deallocate prepare prepared_set_domain;
+SET SESSION sql_mode = @binary_string_saved_sql_mode;
+SET @binary_string_saved_sql_mode = NULL;
 
 set @typed_binary_null = cast(null as binary(8));
 prepare typed_binary_null_stmt from

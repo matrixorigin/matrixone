@@ -314,18 +314,19 @@ func newPreparedExecuteEnvForSQLWithCompilerContext(
 	fixedIntegerParamPositions, hasPaginationParams, hasLagLeadParams :=
 		preparedFixedIntegerParamPositions(preparePlan.GetDcl().GetPrepare().Plan)
 	prepareStmt := &PrepareStmt{
-		Name:                       stmtName,
-		Sql:                        prepareString.Sql,
-		PreparePlan:                preparePlan,
-		PrepareStmt:                stmts[0],
-		NativeMode:                 ses.sqlModeHasMatrixOneNative(),
-		OnlyFullGroupBy:            ses.sqlModeHasOnlyFullGroupBy(),
-		BoolSumAvg:                 ses.sqlModeHasEnableBoolSumAvg(),
-		sqlModeFlagsSet:            true,
-		getFromSendLongData:        make(map[int]struct{}),
-		protocolVersion:            currentProtocolVersion(proc),
-		directResultParamPositions: plan2.PreparedPlanDirectResultParamPositions(preparePlan.GetDcl().GetPrepare().Plan),
-		inetNtoaParamPositions:     plan2.PreparedPlanInetNtoaParamPositions(preparePlan.GetDcl().GetPrepare().Plan),
+		Name:                          stmtName,
+		Sql:                           prepareString.Sql,
+		PreparePlan:                   preparePlan,
+		PrepareStmt:                   stmts[0],
+		NativeMode:                    ses.sqlModeHasMatrixOneNative(),
+		MySQLNumericCompatibilityMode: ses.sqlModeHasMySQLNumericCompatibility(),
+		OnlyFullGroupBy:               ses.sqlModeHasOnlyFullGroupBy(),
+		BoolSumAvg:                    ses.sqlModeHasEnableBoolSumAvg(),
+		sqlModeFlagsSet:               true,
+		getFromSendLongData:           make(map[int]struct{}),
+		protocolVersion:               currentProtocolVersion(proc),
+		directResultParamPositions:    plan2.PreparedPlanDirectResultParamPositions(preparePlan.GetDcl().GetPrepare().Plan),
+		inetNtoaParamPositions:        plan2.PreparedPlanInetNtoaParamPositions(preparePlan.GetDcl().GetPrepare().Plan),
 		jsonComparisonParamPositions: plan2.PreparedJSONComparisonParamPositions(
 			preparePlan.GetDcl().GetPrepare().Plan),
 		jsonMemberOfParamPositions: plan2.PreparedJSONMemberOfParamPositions(
@@ -363,6 +364,33 @@ func newPreparedExecuteEnvForSQLWithCompilerContext(
 	proc.SetResolveVariableStringDomainFunc(ses.txnCompileCtx.ResolveVariableStringDomain)
 	proc.SetResolveVariablePrepareParamKindFunc(ses.txnCompileCtx.ResolveVariablePrepareParamKind)
 	return ses, prepareStmt, cw, execCtx
+}
+
+func TestInitExecuteStmtParamRebuildsPreparedPlanWhenMySQLNumericCompatibilityChanges(t *testing.T) {
+	ses, prepareStmt, cw, execCtx := newPreparedExecuteEnv(t, 113)
+	defer prepareStmt.Close()
+
+	execCtx.reqCtx = defines.AttachAccountId(execCtx.reqCtx, catalog.System_Account)
+	require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "sql_mode", ""))
+	prepareStmt.MySQLNumericCompatibilityMode = false
+	prepareStmt.sqlModeFlagsSet = true
+	originalPlan := prepareStmt.PreparePlan
+	require.NoError(t, ses.SetSessionSysVar(
+		execCtx.reqCtx, "sql_mode", "MYSQL_NUMERIC_COMPATIBILITY"))
+
+	_, retPlan, retStmt, _, _, err := initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.NotNil(t, retPlan)
+	require.NotNil(t, retStmt)
+	require.True(t, prepareStmt.MySQLNumericCompatibilityMode)
+	require.NotSame(t, originalPlan, prepareStmt.PreparePlan)
+
+	compatibilityPlan := prepareStmt.PreparePlan
+	require.NoError(t, ses.SetSessionSysVar(execCtx.reqCtx, "sql_mode", ""))
+	_, _, _, _, _, err = initExecuteStmtParam(execCtx, ses, cw, nil, prepareStmt.Name)
+	require.NoError(t, err)
+	require.False(t, prepareStmt.MySQLNumericCompatibilityMode)
+	require.NotSame(t, compatibilityPlan, prepareStmt.PreparePlan)
 }
 
 func TestInitExecuteStmtParamPreservesStaticBinarySourceType(t *testing.T) {

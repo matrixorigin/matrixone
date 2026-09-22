@@ -1,6 +1,8 @@
 drop database if exists integer_parameter_coercion;
 create database integer_parameter_coercion;
 use integer_parameter_coercion;
+SET @integer_parameter_saved_sql_mode = @@session.sql_mode;
+SET SESSION sql_mode = CONCAT_WS(',', NULLIF(@integer_parameter_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 create table sources(id int, d decimal(38,18), v double, s varchar(32), bits bit(8));
 insert into sources values (1,2.5,2.5,'1.9tail',b'10'),(2,1.5,1.5,'-1.9tail',b'1'),(3,null,null,null,null);
 select id,substring_index('a.b.c.d','.',d),substring_index('a.b.c.d','.',v),substring_index('a.b.c.d','.',cast(v as double)),substring_index('a.b.c.d','.',s),substring_index('a.b.c.d','.',bits) from sources order by id;
@@ -241,3 +243,5 @@ execute utility_source using @v,@v,@v,@v,@v,@v,@v,@v;
 null  ¦  null  ¦  null  ¦  38  ¦  null  ¦  null  ¦  null  ¦  null
 deallocate prepare utility_source;
 drop database integer_parameter_coercion;
+SET SESSION sql_mode = @integer_parameter_saved_sql_mode;
+SET @integer_parameter_saved_sql_mode = NULL;

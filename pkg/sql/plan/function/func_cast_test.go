@@ -33,8 +33,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestStringToFloatDefaultCompatibilityUsesNumericPrefix(t *testing.T) {
+func TestStringToFloatExplicitCompatibilityUsesNumericPrefix(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().MySQLNumericCompatibilityMode = true
 
 	for _, tt := range []struct {
 		input string
@@ -64,12 +65,11 @@ func TestStringToFloatDefaultCompatibilityUsesNumericPrefix(t *testing.T) {
 	}
 }
 
-func TestStringToFloatMatrixOneNativeRejectsIncompleteTokens(t *testing.T) {
+func TestStringToFloatDefaultStrictRejectsIncompleteTokens(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	proc.GetSessionInfo().MatrixOneNativeMode = true
 
 	for _, input := range []string{
-		"1abc", "abc", "", "   ", "  -2.5foo", ".5xyz", "1e2foo", "1eabc", "-0suffix", "1e10000",
+		"1abc", "1.5tail", "abc", "", "   ", "  -2.5foo", ".5xyz", "1e2foo", "1eabc", "-0suffix", "1e10000",
 	} {
 		t.Run(input, func(t *testing.T) {
 			tc := NewFunctionTestCase(proc,
@@ -84,8 +84,52 @@ func TestStringToFloatMatrixOneNativeRejectsIncompleteTokens(t *testing.T) {
 	}
 }
 
-func TestStringToFloat32DefaultCompatibilityRange(t *testing.T) {
+func TestStringToFloatMatrixOneNativeTakesPrecedenceOverCompatibility(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().MatrixOneNativeMode = true
+	proc.GetSessionInfo().MySQLNumericCompatibilityMode = true
+
+	for _, input := range []string{"1.5tail", "abc", "", "   ", "1eabc"} {
+		t.Run(input, func(t *testing.T) {
+			tc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{input}, nil),
+					NewFunctionTestInput(types.T_float64.ToType(), []float64{}, nil),
+				},
+				NewFunctionTestResult(types.T_float64.ToType(), true, nil, nil), NewCast)
+			succeed, info := tc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestStringToFloatStrictAcceptsCompleteTokens(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		input string
+		want  float64
+	}{
+		{input: "  -1.5 ", want: -1.5},
+		{input: "+1.5", want: 1.5},
+		{input: "1e2", want: 100},
+		{input: "-1.25E-2", want: -0.0125},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			tc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.input}, nil),
+					NewFunctionTestInput(types.T_float64.ToType(), []float64{}, nil),
+				},
+				NewFunctionTestResult(types.T_float64.ToType(), false, []float64{tc.want}, nil), NewCast)
+			succeed, info := tc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
+func TestStringToFloat32ExplicitCompatibilityRange(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().MySQLNumericCompatibilityMode = true
 	tc := NewFunctionTestCase(proc,
 		[]FunctionTestInput{
 			NewFunctionTestInput(types.T_varchar.ToType(), []string{"1e100", "-1e100", "1e-100", "-1e-100"}, nil),
@@ -5171,12 +5215,27 @@ func TestParseStringToFloatMySQLStrtodRegressionCases(t *testing.T) {
 }
 
 func TestCompatibilityModeFromProcess(t *testing.T) {
-	require.Equal(t, SQLCompatibilityMySQL, CompatibilityModeFromProcess(nil))
+	require.Equal(t, SQLCompatibilityMatrixOne, SQLCompatibilityMode(0))
+	require.Equal(t, SQLCompatibilityMatrixOne, CompatibilityModeFromProcess(nil))
 
 	proc := testutil.NewProcess(t)
+	require.Equal(t, SQLCompatibilityMatrixOne, CompatibilityModeFromProcess(proc))
+	proc.GetSessionInfo().MySQLNumericCompatibilityMode = true
 	require.Equal(t, SQLCompatibilityMySQL, CompatibilityModeFromProcess(proc))
 	proc.GetSessionInfo().MatrixOneNativeMode = true
 	require.Equal(t, SQLCompatibilityMatrixOne, CompatibilityModeFromProcess(proc))
+}
+
+func TestPreparedStringToFloatRequiresExplicitCompatibilityMode(t *testing.T) {
+	for _, matrixOneNative := range []bool{false, true} {
+		_, err := ParsePreparedStringToFloat64("1.5tail", matrixOneNative)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+	}
+
+	got, err := ParsePreparedStringToFloat64WithMode("1.5tail", SQLCompatibilityMySQL)
+	require.NoError(t, err)
+	require.Equal(t, 1.5, got)
 }
 
 func TestMySQLDecimalPrefix(t *testing.T) {

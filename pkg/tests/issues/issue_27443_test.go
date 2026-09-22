@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -46,6 +47,22 @@ func TestIssue27443BinaryPreparedDMLAndAggregate(t *testing.T) {
 		defer db.Close()
 		db.SetMaxOpenConns(1)
 		db.SetMaxIdleConns(1)
+
+		enableMySQLNumericCompatibility := func() func() {
+			var originalSQLMode string
+			require.NoError(t, db.QueryRowContext(ctx, "select @@session.sql_mode").Scan(&originalSQLMode))
+			compatibilitySQLMode := originalSQLMode
+			if compatibilitySQLMode != "" {
+				compatibilitySQLMode += ","
+			}
+			compatibilitySQLMode += "MYSQL_NUMERIC_COMPATIBILITY"
+			execSQLRequire(t, ctx, db, fmt.Sprintf(
+				"set session sql_mode = '%s'", strings.ReplaceAll(compatibilitySQLMode, "'", "''")))
+			return func() {
+				execSQLRequire(t, ctx, db, fmt.Sprintf(
+					"set session sql_mode = '%s'", strings.ReplaceAll(originalSQLMode, "'", "''")))
+			}
+		}
 
 		dbName := testutils.GetDatabaseName(t)
 		execSQLRequire(t, ctx, db, "create database `"+dbName+"`")
@@ -222,6 +239,16 @@ func TestIssue27443BinaryPreparedDMLAndAggregate(t *testing.T) {
 		// DOUBLE conversion for the entire text domain, not only complete finite
 		// numeric literals. This preserves numeric prefixes, non-numeric-to-zero,
 		// range handling, and the corresponding truncation diagnostics.
+		//
+		// These cases intentionally exercise MySQL's legacy conversion, so opt in
+		// only for this compatibility section. The default-mode behavior remains
+		// covered by issue 28523 and by the strict cases above.
+		restoreSQLMode := enableMySQLNumericCompatibility()
+		defer func() {
+			if restoreSQLMode != nil {
+				restoreSQLMode()
+			}
+		}()
 		for _, test := range []struct {
 			name        string
 			numeric     any
@@ -504,6 +531,8 @@ func TestIssue27443BinaryPreparedDMLAndAggregate(t *testing.T) {
 				require.Equal(t, test.status, status)
 			})
 		}
+		restoreSQLMode()
+		restoreSQLMode = nil
 
 		t.Run("string function keeps text input", func(t *testing.T) {
 			execSQLRequire(t, ctx, db, "update `"+dbName+"`.predicate_dst set status = 0 where id = 1")

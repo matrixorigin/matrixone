@@ -112,9 +112,13 @@ SELECT id FROM token_values WHERE d = X'10' ORDER BY id;
 SELECT id FROM token_values WHERE d = b'10000' ORDER BY id;
 SELECT id FROM token_values WHERE d = '0x10' ORDER BY id;
 SELECT id FROM token_values WHERE d = CONCAT('0x', '10') ORDER BY id;
+SET @decimal_string_compat_saved_sql_mode = @@session.sql_mode;
+SET SESSION sql_mode = CONCAT_WS(',', NULLIF(@decimal_string_compat_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 SELECT id FROM token_values WHERE d = CONCAT('1e2', 'suffix') ORDER BY id;
 SHOW WARNINGS;
 SELECT id FROM token_values WHERE d = CONCAT('0x', '10foo') ORDER BY id;
+SET SESSION sql_mode = @decimal_string_compat_saved_sql_mode;
+SET @decimal_string_compat_saved_sql_mode = NULL;
 
 SET @decimal_string_old_sql_mode = @@session.sql_mode;
 SET SESSION sql_mode = 'MATRIXONE_NATIVE';

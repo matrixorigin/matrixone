@@ -702,6 +702,7 @@ func TestEvalIffPropagatesSelectedBranchError(t *testing.T) {
 
 func TestEvalIffUsesStatementCompatibilityMode(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().MySQLNumericCompatibilityMode = true
 	bat := batch.New(nil)
 	bat.SetRowCount(2)
 
@@ -3171,6 +3172,7 @@ func TestPreparedStringNumericCastWarningsAcrossReuse(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
+			proc.GetSessionInfo().MySQLNumericCompatibilityMode = true
 			defer proc.Free()
 			proc.SetBaseProcessRunningStatus(true)
 			session := &preparedCastWarningSession{}
