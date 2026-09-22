@@ -3412,6 +3412,10 @@ func (b *baseBinder) bindPreparedNumericFuncExpr(
 	if err != nil {
 		return nil, err
 	}
+	args, err = b.coerceJSONNumericAggregateArg(name, args)
+	if err != nil {
+		return nil, err
+	}
 	return bindBoundFuncExprAndConstFold(
 		b.GetContext(), b.builder.compCtx.GetProcess(), name, args,
 	)
@@ -3492,6 +3496,32 @@ func (b *baseBinder) coerceBoolNumericAggregateArg(
 		return nil, err
 	}
 	return []*plan.Expr{casted}, nil
+}
+
+// coerceJSONNumericAggregateArg routes JSON operands of the six numeric
+// aggregates through json_agg_to_double so MySQL warning conversion applies
+// (booleans 1/0, numeric-prefix strings, JSON null/composites as 0 with a
+// warning). Explicit CAST(json AS DOUBLE) keeps the strict JSON-to-DOUBLE
+// contract and is not rewritten here.
+func (b *baseBinder) coerceJSONNumericAggregateArg(
+	name string, args []*plan.Expr,
+) ([]*plan.Expr, error) {
+	if len(args) != 1 || args[0] == nil || args[0].Typ == nil {
+		return args, nil
+	}
+	switch strings.ToLower(name) {
+	case "sum", "avg", "var_pop", "var_samp", "stddev_pop", "stddev_samp":
+	default:
+		return args, nil
+	}
+	if args[0].Typ.Id != int32(types.T_json) {
+		return args, nil
+	}
+	converted, err := BindFuncExprImplByPlanExpr(b.GetContext(), "json_agg_to_double", []*plan.Expr{args[0]})
+	if err != nil {
+		return nil, err
+	}
+	return []*plan.Expr{converted}, nil
 }
 
 func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr, depth int32) (*plan.Expr, error) {
@@ -3760,6 +3790,10 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		b.markPreparedStringDomainSubquerySources(name, args)
 	}
 	args, coerceErr := b.coerceBoolNumericAggregateArg(name, args)
+	if coerceErr != nil {
+		return nil, coerceErr
+	}
+	args, coerceErr = b.coerceJSONNumericAggregateArg(name, args)
 	if coerceErr != nil {
 		return nil, coerceErr
 	}

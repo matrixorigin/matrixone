@@ -35,12 +35,13 @@ type jsonNumericAggExpectation struct {
 }
 
 var jsonNumericAggExpectations = []jsonNumericAggExpectation{
+	// Mixed input 1, 2.5, 3, JSON null->0, SQL NULL skipped.
 	{name: "sum", want: 6.5},
-	{name: "avg", want: 13.0 / 6},
-	{name: "var_pop", want: 13.0 / 18},
-	{name: "var_samp", want: 13.0 / 12},
-	{name: "stddev_pop", want: math.Sqrt(13.0 / 18)},
-	{name: "stddev_samp", want: math.Sqrt(13.0 / 12)},
+	{name: "avg", want: 6.5 / 4},
+	{name: "var_pop", want: 1.421875},
+	{name: "var_samp", want: 1.8958333333333333},
+	{name: "stddev_pop", want: math.Sqrt(1.421875)},
+	{name: "stddev_samp", want: math.Sqrt(1.8958333333333333)},
 }
 
 func jsonNumericAggNulls(values []bool) *nulls.Nulls {
@@ -56,9 +57,8 @@ func jsonNumericAggNulls(values []bool) *nulls.Nulls {
 	return nsp
 }
 
-// castJSONNumericAggInput deliberately binds and runs the existing CAST
-// overload. Expected aggregate values in these tests are hand-computed below;
-// this helper only supplies the production JSON-to-DOUBLE input boundary.
+// castJSONNumericAggInput binds and runs json_agg_to_double, the production
+// MySQL warning-conversion boundary used by SUM/AVG/VAR_*/STDDEV_* over JSON.
 func castJSONNumericAggInput(
 	t *testing.T,
 	proc *process.Process,
@@ -72,19 +72,16 @@ func castJSONNumericAggInput(
 	encoded := makeJSONEncodedFromText(t, jsonTexts, nullList)
 	input := newVectorByType(
 		proc.Mp(), types.T_json.ToType(), encoded, jsonNumericAggNulls(nullList))
-	target := vector.NewVec(types.T_float64.ToType())
-	cast, err := GetFunctionByName(proc.Ctx, "cast", []types.Type{
-		types.T_json.ToType(), types.T_float64.ToType(),
+	cast, err := GetFunctionByName(proc.Ctx, "json_agg_to_double", []types.Type{
+		types.T_json.ToType(),
 	})
 	if err != nil {
 		input.Free(proc.Mp())
-		target.Free(proc.Mp())
 		return nil, err
 	}
 	result, err := RunFunctionDirectly(
-		proc, cast.GetEncodedOverloadID(), []*vector.Vector{input, target}, len(jsonTexts))
+		proc, cast.GetEncodedOverloadID(), []*vector.Vector{input}, len(jsonTexts))
 	input.Free(proc.Mp())
-	target.Free(proc.Mp())
 	return result, err
 }
 
@@ -152,7 +149,7 @@ func TestJSONNumericAggExecUsesExistingCastDomain(t *testing.T) {
 			wantNull bool
 		}{
 			{name: "empty", texts: []string{}, wantNull: true},
-			{name: "all-null", texts: []string{`null`, ``}, nulls: []bool{false, true}, wantNull: true},
+			{name: "json-null-is-zero", texts: []string{`null`, `null`, ``}, nulls: []bool{false, false, true}, want: 0, wantNull: false},
 			{name: "singleton", texts: []string{`2.5`}, want: 2.5},
 		} {
 			t.Run(expectation.name+"/"+input.name, func(t *testing.T) {
@@ -246,11 +243,11 @@ func TestJSONNumericAggExecDistinctAndGrouped(t *testing.T) {
 			require.False(t, gotNull)
 			want := map[string]float64{
 				"sum":         6,
-				"avg":         2,
-				"var_pop":     2.0 / 3,
-				"var_samp":    1,
-				"stddev_pop":  math.Sqrt(2.0 / 3),
-				"stddev_samp": 1,
+				"avg":         1.5,
+				"var_pop":     1.25,
+				"var_samp":    5.0 / 3,
+				"stddev_pop":  math.Sqrt(1.25),
+				"stddev_samp": math.Sqrt(5.0 / 3),
 			}[expectation.name]
 			require.InDelta(t, want, got, 1e-14)
 		})
@@ -290,17 +287,47 @@ func TestJSONNumericAggExecDistinctAndGrouped(t *testing.T) {
 			}[expectation.name]
 			wantGroup2 := map[string]float64{
 				"sum":         7,
-				"avg":         3.5,
-				"var_pop":     0.25,
-				"var_samp":    0.5,
-				"stddev_pop":  0.5,
-				"stddev_samp": math.Sqrt(0.5),
+				"avg":         7.0 / 3,
+				"var_pop":     26.0 / 9,
+				"var_samp":    13.0 / 3,
+				"stddev_pop":  math.Sqrt(26.0 / 9),
+				"stddev_samp": math.Sqrt(13.0 / 3),
 			}[expectation.name]
 			require.False(t, results[0].IsNull(0))
 			require.False(t, results[0].IsNull(1))
 			got := vector.MustFixedColNoTypeCheck[float64](results[0])
 			require.InDelta(t, wantGroup1, got[0], 1e-14)
 			require.InDelta(t, wantGroup2, got[1], 1e-14)
+		})
+	}
+}
+
+func TestJSONNumericAggMySQLWarningConversion(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	proc := testutil.NewProcess(t, testutil.WithMPool(mp))
+	t.Cleanup(func() {
+		proc.Free()
+		require.Zero(t, mp.CurrNB())
+		mpool.DeleteMPool(mp)
+	})
+	cases := []struct {
+		text string
+		want float64
+	}{
+		{text: `true`, want: 1},
+		{text: `false`, want: 0},
+		{text: `"12x"`, want: 12},
+		{text: `null`, want: 0},
+		{text: `[1]`, want: 0},
+		{text: `{"v":1}`, want: 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.text, func(t *testing.T) {
+			values, err := castJSONNumericAggInput(t, proc, []string{tc.text}, nil)
+			require.NoError(t, err)
+			defer values.Free(proc.Mp())
+			require.False(t, values.IsNull(0))
+			require.InDelta(t, tc.want, vector.GetFixedAtNoTypeCheck[float64](values, 0), 1e-14)
 		})
 	}
 }
@@ -313,41 +340,11 @@ func TestJSONNumericAggCastErrorsDoNotPoisonRetry(t *testing.T) {
 		require.Zero(t, mp.CurrNB())
 		mpool.DeleteMPool(mp)
 	})
-
-	for _, badJSON := range []struct {
-		name string
-		text string
-	}{
-		{name: "invalid-string", text: `"not-a-number"`},
-		{name: "numeric-prefix-string", text: `"12x"`},
-		{name: "empty-string", text: `""`},
-		{name: "boolean", text: `true`},
-		{name: "array", text: `[1]`},
-		{name: "object", text: `{"v":1}`},
-	} {
-		t.Run(badJSON.name, func(t *testing.T) {
-			for _, expectation := range jsonNumericAggExpectations {
-				values, err := castJSONNumericAggInput(t, proc, []string{badJSON.text}, nil)
-				require.Error(t, err)
-				require.Nil(t, values)
-
-				got, gotNull := runJSONNumericAgg(
-					t, proc, expectation.name, []string{`2.5`}, nil, false)
-				if expectation.name == "var_samp" || expectation.name == "stddev_samp" {
-					require.True(t, gotNull, "singleton sample aggregate must return SQL NULL")
-					continue
-				}
-				require.False(t, gotNull)
-				want := float64(0)
-				if expectation.name == "sum" || expectation.name == "avg" {
-					want = 2.5
-				}
-				require.InDelta(t, want, got, 1e-14)
-			}
-		})
-	}
+	// SQL NULL inputs remain skipped; a later non-null value still aggregates.
+	got, gotNull := runJSONNumericAgg(t, proc, "sum", []string{``, `2.5`}, []bool{true, false}, false)
+	require.False(t, gotNull)
+	require.InDelta(t, 2.5, got, 1e-14)
 }
-
 func TestJSONNumericAggDoublePrecisionBoundary(t *testing.T) {
 	mp := mpool.MustNewZeroNoFixed()
 	proc := testutil.NewProcess(t, testutil.WithMPool(mp))

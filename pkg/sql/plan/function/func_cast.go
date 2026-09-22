@@ -2970,6 +2970,103 @@ func jsonToUint64Scalar(bj bytejson.ByteJson) (uint64, bool, bool) {
 	return value, false, ok
 }
 
+// jsonAggToFloat64 applies MySQL's numeric-aggregate coercion of a JSON value.
+// Unlike CAST(json AS DOUBLE), JSON null and composites contribute 0 with a
+// warning instead of SQL NULL / a cast error, booleans become 1/0, and strings
+// keep their numeric prefix under the MySQL string-to-DOUBLE contract.
+func jsonAggToFloat64(bj bytejson.ByteJson, proc *process.Process) (float64, bool) {
+	emit := func(msg string) {
+		if proc == nil {
+			return
+		}
+		if appender, ok := proc.GetWarningSink().(warningDiagnosticAppender); ok {
+			appender.AppendWarningDiagnostic(moerr.WARN_DATA_TRUNCATED, msg)
+		}
+	}
+	switch bj.Type {
+	case bytejson.TpCodeInt64:
+		return float64(bj.GetInt64()), false
+	case bytejson.TpCodeUint64:
+		return float64(bj.GetUint64()), false
+	case bytejson.TpCodeFloat64:
+		return bj.GetFloat64(), false
+	case bytejson.TpCodeDecimal:
+		s := string(bj.GetString())
+		f, err := parseStringToFloat(s, SQLCompatibilityMySQL)
+		if err != nil {
+			emit(fmt.Sprintf("Truncated incorrect DOUBLE value: '%s'", s))
+			return 0, true
+		}
+		return f, false
+	case bytejson.TpCodeString:
+		s := string(bj.GetString())
+		f, err := parseStringToFloat(s, SQLCompatibilityMySQL)
+		if err != nil {
+			emit(fmt.Sprintf("Truncated incorrect DOUBLE value: '%s'", s))
+			return 0, true
+		}
+		return f, false
+	case bytejson.TpCodeLiteral:
+		if len(bj.Data) == 0 {
+			emit("Truncated incorrect DOUBLE value")
+			return 0, true
+		}
+		switch bj.Data[0] {
+		case bytejson.LiteralNull:
+			emit("Truncated incorrect DOUBLE value: 'null'")
+			return 0, true
+		case bytejson.LiteralTrue:
+			return 1, false
+		case bytejson.LiteralFalse:
+			return 0, false
+		default:
+			emit("Truncated incorrect DOUBLE value")
+			return 0, true
+		}
+	case bytejson.TpCodeObject, bytejson.TpCodeArray:
+		emit("Truncated incorrect DOUBLE value")
+		return 0, true
+	default:
+		emit("Truncated incorrect DOUBLE value")
+		return 0, true
+	}
+}
+
+// JsonAggToDouble is the numeric-aggregate JSON conversion boundary.
+func JsonAggToDouble(
+	ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process,
+	length int, selectList *FunctionSelectList,
+) error {
+	if len(ivecs) != 1 {
+		return moerr.NewInternalError(proc.Ctx, "json_agg_to_double expects one argument")
+	}
+	source, err := vector.GenerateFunctionStrParameter[types.Varlena](ivecs[0])
+	if err != nil {
+		return err
+	}
+	rs := vector.MustFunctionResult[float64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && !selectList.Contains(i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		v, null := source.GetStrValue(i)
+		if null {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		value, _ := jsonAggToFloat64(types.DecodeJson(v), proc)
+		if err := rs.Append(value, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // jsonToNumeric implements JSON -> all numeric types in one loop; append per row via type switch.
 func jsonToNumeric(ctx context.Context, source vector.FunctionParameterWrapper[types.Varlena],
 	result vector.FunctionResultWrapper, length int, toType types.Type) error {
