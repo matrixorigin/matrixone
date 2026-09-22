@@ -44,8 +44,23 @@ UT_RUN_ID=${UT_RUN_ID:-"${G_TS}-${TEST_TYPE}"}
 UT_TIMEOUT=${UT_TIMEOUT:-"15"}
 UT_HARD_TIMEOUT=${UT_HARD_TIMEOUT:-"120m"}
 UT_PARALLEL=${UT_PARALLEL:-"1"}
+UT_LIGHT_PARALLEL=${UT_LIGHT_PARALLEL:-"6"}
+UT_LINK_PARALLEL=${UT_LINK_PARALLEL:-"3"}
+UT_LINK_DIR=""
+LIGHT_TOOL_FLAGS=()
 UT_SHARD=${UT_SHARD:-"all"}
-UT_PREBUILD_EMBEDDED=${UT_PREBUILD_EMBEDDED:-"0"}
+# Compile embedded packages while the exclusive issues fixture is active, then
+# execute those exact binaries after issues releases the cluster admission
+# lock. This removes their compile/link work from the serial critical path
+# without admitting a second cluster process. A failed prebuild falls back to
+# the complete-scope go test before any prebuilt binary is executed.
+UT_PREBUILD_EMBEDDED=${UT_PREBUILD_EMBEDDED:-"1"}
+# Nine race binaries currently occupy several GiB. Preserve enough workspace
+# headroom for Go's build cache, reports, and the running issues fixture.
+UT_PREBUILD_MIN_FREE_KB=${UT_PREBUILD_MIN_FREE_KB:-"6291456"}
+# Zero derives a package execution boundary from UT_TIMEOUT plus two minutes
+# for TestMain cleanup and output drain. Tests may set a short explicit value.
+UT_EMBEDDED_HARD_TIMEOUT_SECONDS=${UT_EMBEDDED_HARD_TIMEOUT_SECONDS:-"0"}
 UT_OVERLAP_PLAN=${UT_OVERLAP_PLAN:-"1"}
 # Light/issues overlap is opt-in: the measured treatment regressed wall time
 # and did not meet the runner's memory-headroom gate.
@@ -102,11 +117,16 @@ CURRENT_UT_LABEL="startup"
 UT_TERMINATING=0
 UT_HEARTBEAT_INTERVAL=${UT_HEARTBEAT_INTERVAL:-"60"}
 UT_HEARTBEAT_PID=""
+UT_HEARTBEAT_STATE="${G_WKSP}/${G_TS}-active-ut-state.json"
 TAGS="matrixone_test"
 GO_MODULE_MODE="-mod=readonly"
 # Static analysis owns vet in the separate SCA job. Running it again for every
 # UT package duplicates work and increases race-test compile CPU/memory.
 GO_TEST_VET_FLAGS="-vet=off"
+# Ordinary `go test` omits DWARF, but `go test -c` retains it by default.
+# Our temporary race binaries are executed, not debugged: give the compile-only
+# paths the same policy without stripping the Go symbol table or race support.
+GO_TEST_BINARY_FLAGS="-ldflags=-w"
 # CI runs the checked-out MatrixOne module, never a caller's Go workspace.
 export GOWORK=off
 
@@ -226,6 +246,64 @@ function run_ut_command(){
     finish_ut_command
 }
 
+function prepare_light_link_gate(){
+    LIGHT_TOOL_FLAGS=()
+    if ! [[ "${UT_LINK_PARALLEL}" =~ ^(0|[1-9][0-9]?)$ ]] ||
+        (( UT_LINK_PARALLEL > 64 )); then
+        logger "ERR" "UT_LINK_PARALLEL must be an integer from 0 through 64"
+        return 1
+    fi
+    (( UT_LINK_PARALLEL == 0 )) && return 0
+    local go_flags
+    go_flags=$(go env GOFLAGS) || return 1
+    if [[ "$(uname -s)" != Linux ]] || ! command -v flock >/dev/null ||
+        [[ "${go_flags}" == *-toolexec* ]]; then
+        # Do not silently replace a caller's tool wrapper or admit six heavy
+        # links on platforms without kernel-backed slot admission.
+        (( light_stage_parallel <= 3 )) || light_stage_parallel=3
+        (( light_parallel <= 3 )) || light_parallel=3
+        logger "INF" "Link gate unavailable or external toolexec configured; cap light tasks at three"
+        return 0
+    fi
+    local saved_term_trap term_pending=0 create_status=0
+    saved_term_trap=$(trap -p TERM)
+    trap 'term_pending=1' TERM
+    UT_LINK_DIR=$(mktemp -d "${G_WKSP}/ut-link-slots.XXXXXX") || create_status=$?
+    restore_ut_term_trap "${saved_term_trap}"
+    if (( term_pending != 0 )); then
+        cleanup_light_link_gate
+        handle_ut_termination
+    fi
+    (( create_status == 0 )) || return "${create_status}"
+    export UT_LINK_DIR UT_LINK_PARALLEL
+    export UT_LINK_LOG="${UT_DIAGNOSTIC_DIR}/ut-link-admission.log"
+    : > "${UT_LINK_LOG}"
+    local slot
+    for (( slot=0; slot<UT_LINK_PARALLEL; slot++ )); do
+        if ! : > "${UT_LINK_DIR}/slot-${slot}"; then
+            cleanup_light_link_gate
+            return 1
+        fi
+    done
+    # Go parses a quoted command string for -toolexec, not a shell command.
+    LIGHT_TOOL_FLAGS=(-toolexec "bash '${BUILD_WKSP}/optools/ut_link_gate.sh'")
+    checkpoint_ut_event "configured" "light-link" "Go link admission" "" \
+        "task_parallel=${light_stage_parallel} link_parallel=${UT_LINK_PARALLEL}"
+}
+
+function cleanup_light_link_gate(){
+    # Only after the light process group is drained: never unlink a live lease.
+    if [[ -n "${UT_LINK_DIR}" ]]; then
+        local slot
+        for (( slot=0; slot<UT_LINK_PARALLEL; slot++ )); do
+            rm -f "${UT_LINK_DIR}/slot-${slot}"
+        done
+        rmdir "${UT_LINK_DIR}" || true
+        UT_LINK_DIR=""
+    fi
+    LIGHT_TOOL_FLAGS=()
+}
+
 function start_light_race(){
     if (( $# != 2 )); then
         logger "ERR" "start_light_race requires package scope and parallelism"
@@ -250,7 +328,7 @@ function start_light_race(){
     env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
         CGO_CFLAGS="${CGO_CFLAGS}" \
         CGO_LDFLAGS="${CGO_LDFLAGS}" \
-        go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json \
+        go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} ${LIGHT_TOOL_FLAGS[@]+"${LIGHT_TOOL_FLAGS[@]}"} -short -v -json \
         -tags "${TAGS}" -p "${package_parallel}" -timeout "${UT_TIMEOUT}m" \
         -race ${package_scope} > "${LIGHT_RACE_REPORT}" 2>> "${UT_STDERR}" &
     LIGHT_RACE_JOB_PID=$!
@@ -305,6 +383,7 @@ function finish_light_race(){
     checkpoint_ut_event "finish" "light" "light race-test packages" "${status}"
     consume_light_race_report
     report_status=$?
+    cleanup_light_link_gate
     if (( report_status != 0 && status == 0 )); then
         status=${report_status}
     fi
@@ -402,6 +481,7 @@ function start_ut_heartbeat(){
     if [[ -n "${UT_HEARTBEAT_PID}" ]]; then
         return 0
     fi
+    rm -f "${UT_HEARTBEAT_STATE}"
 
     local saved_term_trap
     local heartbeat_term_pending=0
@@ -412,6 +492,7 @@ function start_ut_heartbeat(){
     trap 'heartbeat_term_pending=1' TERM
     (
         local heartbeat_sleep_pid=""
+        local heartbeat_scan_pid=""
         local heartbeat_stop_requested=0
         local heartbeat_sleep_status=0
         function request_heartbeat_stop(){
@@ -425,6 +506,9 @@ function start_ut_heartbeat(){
                 # the exact child so it cannot retain the runner's pipes.
                 kill -KILL "${heartbeat_sleep_pid}" 2>/dev/null || true
             fi
+            if [[ -n "${heartbeat_scan_pid}" ]]; then
+                terminate_ut_process_group "${heartbeat_scan_pid}" KILL
+            fi
         }
         function finish_heartbeat_stop(){
             # Do not restore default handling: another TERM/INT must not
@@ -435,6 +519,12 @@ function start_ut_heartbeat(){
                 wait "${heartbeat_sleep_pid}" 2>/dev/null || true
                 heartbeat_sleep_pid=""
             fi
+            if [[ -n "${heartbeat_scan_pid}" ]]; then
+                terminate_ut_process_group "${heartbeat_scan_pid}" KILL
+                wait "${heartbeat_scan_pid}" 2>/dev/null || true
+                heartbeat_scan_pid=""
+            fi
+            rm -f "${UT_HEARTBEAT_STATE}" "${UT_HEARTBEAT_STATE}.out"
             exit 0
         }
         trap request_heartbeat_stop TERM INT
@@ -463,7 +553,9 @@ function start_ut_heartbeat(){
 
             local latest stage label active_cases active_detail active_records process_count memory report
             local -a heartbeat_reports
-            latest=$(tail -n 1 "${UT_CHECKPOINT}" 2>/dev/null || true)
+            # A heartbeat can race a stage transition. Never read our own stale
+            # stage back as the source of truth on the next tick.
+            latest=$(awk '!/event=heartbeat / { latest=$0 } END { print latest }' "${UT_CHECKPOINT}" 2>/dev/null || true)
             stage=$(sed -n 's/.* stage=\([^ ]*\).*/\1/p' <<< "${latest}")
             label=$(sed -n 's/.* label=\(.*\) status=.*/\1/p' <<< "${latest}")
             [[ -n "${stage}" ]] || stage="unknown"
@@ -479,16 +571,40 @@ function start_ut_heartbeat(){
                 "${G_WKSP}/${G_TS}-plan-race-report.out"
                 "${G_WKSP}/${G_TS}-plan-race-report.out".*
             )
-            active_records=""
-            for report in "${heartbeat_reports[@]}"; do
-                if [[ -s "${report}" ]]; then
-                    active_records+=$'\n'"$(awk -f "${BUILD_WKSP}/optools/active_ut_cases.awk" "${report}" 2>/dev/null || true)"
+            # Own the finite scan as a group. A large first scan or fallback
+            # must not outlive heartbeat cancellation or keep its pipes open.
+            set -m
+            (
+                trap - TERM INT
+                if ! python3 "${BUILD_WKSP}/optools/active_ut_incremental.py" \
+                    --state "${UT_HEARTBEAT_STATE}" "${heartbeat_reports[@]}" 2>/dev/null; then
+                    # The original full-scan reader remains the recovery path.
+                    for report in "${heartbeat_reports[@]}"; do
+                        if [[ -s "${report}" ]]; then
+                            awk -f "${BUILD_WKSP}/optools/active_ut_cases.awk" "${report}" 2>/dev/null || true
+                        fi
+                    done
                 fi
-            done
+            ) > "${UT_HEARTBEAT_STATE}.out" &
+            heartbeat_scan_pid=$!
+            set +m
+            if (( heartbeat_stop_requested != 0 )); then finish_heartbeat_stop; fi
+            wait "${heartbeat_scan_pid}" || true
+            if (( heartbeat_stop_requested != 0 )); then finish_heartbeat_stop; fi
+            heartbeat_scan_pid=""
+            active_records=$(< "${UT_HEARTBEAT_STATE}.out")
             active_cases=$(grep -c '^active UT case:' <<< "${active_records}" || true)
             active_detail=$(grep '^active UT case:' <<< "${active_records}" | LC_ALL=C sort -u | head -n 3 | paste -sd ';' - || true)
-            process_count=$(ps -e --no-headers 2>/dev/null | wc -l | tr -d ' ' || true)
+            local process_snapshot
+            process_snapshot=$(ps -eo pid=,ppid=,rss=,comm= 2>/dev/null || true)
+            process_count=$(awk 'NF { n++ } END { print n+0 }' <<< "${process_snapshot}")
             memory=$(cgroup_memory_metrics)
+            # RSS is per process (shared pages may be counted more than once),
+            # whereas cgroup memory also includes file cache and kernel memory.
+            # Do not print command arguments, which may contain credentials.
+            local top_rss
+            top_rss=$(LC_ALL=C sort -k3,3nr <<< "${process_snapshot}" | awk 'NF && NR <= 8 { printf "pid=%s,ppid=%s,rss_kib=%s,comm=%s;", $1, $2, $3, $4 }' || true)
+            memory+=" processes.top_rss=${top_rss:-unavailable}"
             logger "INF" "[ut_heartbeat] stage=${stage} label=${label} active_cases=${active_cases:-0} active=${active_detail:-none} processes=${process_count:-unknown} memory=${memory:-unknown} report=${UT_REPORT}"
             checkpoint_ut_event "heartbeat" "${stage}" "${label}" "" \
                 "active_cases=${active_cases:-0} active=${active_detail:-none} processes=${process_count:-unknown} memory=${memory:-unknown}"
@@ -737,6 +853,34 @@ function resolve_cgroup_memory_boundary(){
     fi
 }
 
+function cgroup_resource_breakdown(){
+    local path="$1"
+    # These counters overlap: file includes shmem, and kernel includes slab.
+    # Preserve names rather than presenting their sum as total memory.
+    local stat
+    # These are the visible values at this scope, not a claim that an ancestor
+    # or cpuset cannot impose a tighter effective CPU limit.
+    if [[ -r "${path}/cpu.max" ]]; then
+        printf ' cpu.visible_scope=%s' "$(cgroup_memory_log_escape "${path}")"
+        awk 'NF == 2 { printf " cpu.max.quota=%s cpu.max.period=%s", $1, $2 }' "${path}/cpu.max"
+    fi
+    if [[ -r "${path}/cpuset.cpus.effective" ]]; then
+        awk 'NF == 1 { printf " cpu.cpuset.effective=%s", $1 }' "${path}/cpuset.cpus.effective"
+    fi
+    for stat in memory.stat memory.events cpu.stat memory.pressure cpu.pressure io.pressure; do
+        if [[ -r "${path}/${stat}" ]]; then
+            awk -v prefix="${stat}" '
+                prefix == "memory.stat" && $1 !~ /^(anon|file|shmem|kernel|slab|file_dirty|file_writeback|pagetables)$/ { next }
+                /^(some|full) / {
+                    for (i=2; i<=NF; i++) if ($i ~ /^total=/) printf " %s.%s.%s", prefix, $1, $i
+                    next
+                }
+                NF == 2 { printf " %s.%s=%s", prefix, $1, $2 }
+            ' "${path}/${stat}" 2>/dev/null || true
+        fi
+    done
+}
+
 function cgroup_memory_metrics(){
     local relative_path=""
     local cgroup_root="/sys/fs/cgroup"
@@ -767,6 +911,7 @@ function cgroup_memory_metrics(){
                 "${CGROUP_MEMORY_LIMIT}" "${cgroup_path}" "${CGROUP_MEMORY_PATH}" \
                 "${CGROUP_MEMORY_HIERARCHY_COMPLETE}" "${CGROUP_MEMORY_EVENTS_HIERARCHICAL}" \
                 "${CGROUP_MEMORY_HIERARCHY}"
+            cgroup_resource_breakdown "${CGROUP_MEMORY_PATH}"
             return 0
         fi
     fi
@@ -968,7 +1113,16 @@ function handle_ut_termination(){
         logger "ERR" "UT cancellation: stopping ${CURRENT_UT_LABEL} child ${CURRENT_UT_PID}"
         # Leave the outer timeout's kill-after budget for descendants that do
         # not honour TERM; do not block the diagnostic path indefinitely.
-        wait_for_ut_process_group "${CURRENT_UT_PID}" 20
+        local current_grace_ticks=20
+        # The prebuilt embedded helper owns an active test group and a
+        # watchdog group. Its handler gives the active group five seconds to
+        # stop before KILL, so the parent must not kill the helper on the same
+        # deadline and orphan that independently admitted group.
+        if [[ "${CURRENT_UT_COMMAND_STAGE}" == embedded &&
+            "${CURRENT_UT_COMMAND_LABEL}" == "prebuilt embedded-cluster race-test packages" ]]; then
+            current_grace_ticks=${UT_HELPER_TERM_GRACE_TICKS}
+        fi
+        wait_for_ut_process_group "${CURRENT_UT_PID}" "${current_grace_ticks}"
         wait "${CURRENT_UT_PID}" 2>/dev/null || true
         CURRENT_UT_PID=""
     fi
@@ -978,6 +1132,7 @@ function handle_ut_termination(){
         LIGHT_RACE_JOB_PID=""
     fi
     consume_light_race_report
+    cleanup_light_link_gate
     if [[ -n "${ENGINE_RACE_JOB_PID}" ]]; then
         wait_for_ut_process_group "${ENGINE_RACE_JOB_PID}" "${UT_HELPER_TERM_GRACE_TICKS}"
         wait "${ENGINE_RACE_JOB_PID}" 2>/dev/null || true
@@ -1135,7 +1290,7 @@ function run_engine_race_shards(){
     start_engine_child 0 env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
         CGO_CFLAGS="${CGO_CFLAGS}" \
         CGO_LDFLAGS="${CGO_LDFLAGS}" \
-        go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -race -tags "${TAGS}" \
+        go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} ${GO_TEST_BINARY_FLAGS} -short -race -tags "${TAGS}" \
         -p 1 -c -o "${ENGINE_RACE_TEST_BINARY}" "${engine_package}" > "${build_log}" 2>&1
     build_start_status=$?
     if (( build_start_status != 0 )); then
@@ -1372,7 +1527,7 @@ function run_plan_race_shards(){
     LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
         CGO_CFLAGS="${CGO_CFLAGS}" \
         CGO_LDFLAGS="${CGO_LDFLAGS}" \
-        go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -race -tags "${TAGS}" \
+        go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} ${GO_TEST_BINARY_FLAGS} -short -race -tags "${TAGS}" \
         -p 1 -c -o "${plan_test_binary}" "${plan_package}" > "${build_log}" 2>&1 &
     plan_child_pid=$!
     set +m
@@ -1576,8 +1731,9 @@ function remove_packages_from_scope(){
     printf '%s\n' "${scope}"
 }
 
-# Build-only optimization. The original complete-scope go test remains the sole
-# executor, retaining its external timeout, TestMain and output-drain semantics.
+# Build the exact binaries that the embedded stage can execute after the
+# exclusive issues fixture exits. Every artifact is indexed by the immutable
+# package order so package names containing path separators never become paths.
 function run_embedded_prebuild(){
     local package_scope=$1
     local package_parallel=$2
@@ -1628,18 +1784,22 @@ function run_embedded_prebuild(){
                 restore_ut_term_trap "${previous_term_trap}"
                 return 1
             fi
+            checkpoint_ut_event "start" "embedded-prebuild" "${package}" "" \
+                "package_index=${package_index} parallel=${package_parallel} compile_only=true"
             # TERM must not observe a spawned but unregistered process group.
             term_pending=0
             trap 'term_pending=1' TERM
             set -m
             env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" \
                 CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" \
-                go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -race \
+                go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} ${GO_TEST_BINARY_FLAGS} -short -race \
                 -tags "${TAGS}" -p 1 -timeout "${UT_TIMEOUT}m" \
                 -c -o "${output_path}" "${package}" > "${package_report}" 2>&1 &
             child_pids[package_index]=$!
             set +m
             restore_ut_term_trap "${wave_term_trap}"
+            checkpoint_ut_event "pid-start" "embedded-prebuild" "${package}" "" \
+                "package_index=${package_index} child_pid=${child_pids[package_index]} parallel=${package_parallel} compile_only=true"
             if (( term_pending != 0 )); then
                 cancel_embedded_wave
             fi
@@ -1657,6 +1817,8 @@ function run_embedded_prebuild(){
             child_pids[package_index]=0
             (( child_status == 0 )) || wave_status=1
             active_count=$((active_count - 1))
+            checkpoint_ut_event "finish" "embedded-prebuild" "${packages[package_index]}" "${child_status}" \
+                "package_index=${package_index} parallel=${package_parallel} compile_only=true"
             progress=1
         done
         if (( active_count > 0 && progress == 0 )); then sleep 0.05; fi
@@ -1680,8 +1842,13 @@ function start_embedded_prebuild(){
     # Disk exhaustion must only disable this optional optimization.
     local available_kb
     available_kb=$(df -Pk "${G_WKSP}" | awk 'END {print $4}')
-    if ! [[ "${available_kb}" =~ ^[0-9]+$ ]] || (( available_kb == 0 )); then
-        logger "WRN" "embedded prebuild has no verified available disk; use go test"
+    if ! [[ "${UT_PREBUILD_MIN_FREE_KB}" =~ ^[1-9][0-9]*$ ]]; then
+        logger "WRN" "invalid UT_PREBUILD_MIN_FREE_KB=${UT_PREBUILD_MIN_FREE_KB}; use go test"
+        return 0
+    fi
+    if ! [[ "${available_kb}" =~ ^[0-9]+$ ]] ||
+        (( available_kb < UT_PREBUILD_MIN_FREE_KB )); then
+        logger "WRN" "embedded prebuild requires ${UT_PREBUILD_MIN_FREE_KB} KiB free (available ${available_kb:-unknown}); use go test"
         return 0
     fi
     CLUSTER_PREBUILD_DIR=$(mktemp -d "${G_WKSP}/${G_TS}-embedded.XXXXXX") || return 0
@@ -1708,16 +1875,14 @@ function finish_embedded_prebuild(){
     if [[ -z "${CLUSTER_PREBUILD_JOB_PID}" ]]; then
         return 0
     fi
+    checkpoint_ut_event "join-start" "embedded-prebuild" "compile embedded-cluster packages" "" \
+        "child_pid=${CLUSTER_PREBUILD_JOB_PID} compile_only=true"
     wait "${CLUSTER_PREBUILD_JOB_PID}" || prebuild_status=$?
     CLUSTER_PREBUILD_JOB_PID=""
+    checkpoint_ut_event "join-finish" "embedded-prebuild" "compile embedded-cluster packages" "${prebuild_status}" \
+        "compile_only=true"
     mark_ut_stage "embedded-prebuild" "compile embedded-cluster packages" finish "${prebuild_status}"
-    if (( prebuild_status != 0 )); then
-        # The real embedded test command remains authoritative. A prebuild can
-        # fail because of an environment-only test invocation; retain its
-        # output for diagnosis but do not turn a later passing test red.
-        logger "WRN" "embedded prebuild failed with status ${prebuild_status}; continuing with the authoritative test run"
-    fi
-    cleanup_embedded_prebuild
+    return "${prebuild_status}"
 }
 
 function cleanup_embedded_prebuild(){
@@ -1746,14 +1911,180 @@ function cleanup_embedded_prebuild(){
     if (( term_pending != 0 && UT_TERMINATING == 0 )); then handle_ut_termination; fi
 }
 
+function run_prebuilt_embedded_tests(){
+    local package_scope=$1
+    local report_base=$2
+    local hard_timeout_seconds=$3
+    local package=""
+    local package_dir=""
+    local package_import=""
+    local binary=""
+    local metadata=""
+    local package_index=0
+    local package_status=0
+    local suite_status=0
+    local active_pid=""
+    local watchdog_pid=""
+    local previous_term_trap=""
+    local execution_term_trap=""
+    local term_pending=0
+
+    previous_term_trap=$(trap -p TERM)
+    function cancel_prebuilt_embedded_execution(){
+        trap '' TERM
+        if [[ -n "${active_pid}" ]]; then
+            terminate_ut_process_group "${active_pid}" TERM
+        fi
+        if [[ -n "${watchdog_pid}" ]]; then
+            terminate_ut_process_group "${watchdog_pid}" TERM
+        fi
+        [[ -n "${active_pid}" ]] && wait_for_ut_process_group "${active_pid}" 20 >&2
+        [[ -n "${watchdog_pid}" ]] && wait_for_ut_process_group "${watchdog_pid}" 20 >&2
+        wait 2>/dev/null || true
+        exit 143
+    }
+    trap cancel_prebuilt_embedded_execution TERM
+    execution_term_trap=$(trap -p TERM)
+
+    while IFS= read -r package; do
+        [[ -n "${package}" ]] || continue
+        binary="${report_base}.package.${package_index}.test"
+        metadata="${report_base}.package.${package_index}.meta"
+        checkpoint_ut_event "start" "embedded" "${package}" "" \
+            "package_index=${package_index} prebuilt=true"
+        if [[ ! -x "${binary}" ]]; then
+            logger "ERR" "missing prebuilt embedded test binary for ${package}" >&2
+            checkpoint_ut_event "finish" "embedded" "${package}" "1" \
+                "package_index=${package_index} phase=artifact prebuilt=true"
+            suite_status=1
+            package_index=$((package_index + 1))
+            continue
+        fi
+        if ! IFS=$'\t' read -r package_dir package_import < "${metadata}" ||
+            [[ -z "${package_dir}" || -z "${package_import}" ]]; then
+            logger "ERR" "invalid prevalidated metadata for prebuilt embedded package ${package}" >&2
+            checkpoint_ut_event "finish" "embedded" "${package}" "1" \
+                "package_index=${package_index} phase=discover prebuilt=true"
+            suite_status=1
+            package_index=$((package_index + 1))
+            continue
+        fi
+
+        package_status=0
+        term_pending=0
+        trap 'term_pending=1' TERM
+        set -m
+        (
+            cd "${package_dir}" || exit 2
+            LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" go tool test2json -t -p "${package_import}" \
+                "${binary}" -test.short=true -test.v=test2json \
+                -test.paniconexit0=true -test.count=1 -test.timeout="${UT_TIMEOUT}m"
+        ) &
+        active_pid=$!
+        set +m
+        restore_ut_term_trap "${execution_term_trap}"
+        if (( term_pending != 0 )); then cancel_prebuilt_embedded_execution; fi
+
+        term_pending=0
+        trap 'term_pending=1' TERM
+        set -m
+        (
+            sleep "${hard_timeout_seconds}"
+            if kill -0 "${active_pid}" 2>/dev/null; then
+                logger "ERR" "prebuilt embedded package ${package} exceeded ${hard_timeout_seconds}s hard timeout" >&2
+                terminate_ut_process_group "${active_pid}" TERM
+                wait_for_ut_process_group "${active_pid}" 20
+            fi
+        ) >&2 &
+        watchdog_pid=$!
+        set +m
+        restore_ut_term_trap "${execution_term_trap}"
+        if (( term_pending != 0 )); then cancel_prebuilt_embedded_execution; fi
+        wait "${active_pid}" || package_status=$?
+        # test2json can exit after TERM while a descendant still owns its
+        # stdout pipe or ignores TERM. Do not stop the watchdog or release the
+        # artifact until the entire package process group is gone.
+        wait_for_ut_process_group "${active_pid}" 20 >&2
+        active_pid=""
+        terminate_ut_process_group "${watchdog_pid}" TERM
+        wait_for_ut_process_group "${watchdog_pid}" 20
+        wait "${watchdog_pid}" 2>/dev/null || true
+        watchdog_pid=""
+        checkpoint_ut_event "finish" "embedded" "${package}" "${package_status}" \
+            "package_index=${package_index} phase=execute prebuilt=true"
+        if (( package_status != 0 )); then
+            suite_status=1
+            logger "ERR" "prebuilt embedded package ${package} failed with status ${package_status}" >&2
+        fi
+        package_index=$((package_index + 1))
+    done <<< "${package_scope}"
+    restore_ut_term_trap "${previous_term_trap}"
+    return "${suite_status}"
+}
+
 function run_embedded_tests(){
     local package_scope=$1
-    local package_parallel=$2
-    finish_embedded_prebuild
+    local prebuild_status=1
+    local test_status=0
+    local report_base="${CLUSTER_PREBUILD_REPORT}"
+    local hard_timeout_seconds=0
+    local package_dir=""
+    local package_import=""
+
+    if [[ -n "${CLUSTER_PREBUILD_JOB_PID}" ]]; then
+        finish_embedded_prebuild
+        prebuild_status=$?
+    fi
+    if (( prebuild_status == 0 )) && [[ -n "${report_base}" ]]; then
+        local package=""
+        local package_index=0
+        if ! [[ "${UT_TIMEOUT}" =~ ^[1-9][0-9]*$ ]] ||
+            ! [[ "${UT_EMBEDDED_HARD_TIMEOUT_SECONDS}" =~ ^[0-9]+$ ]]; then
+            logger "WRN" "invalid embedded timeout configuration; use the authoritative complete-scope go test"
+            prebuild_status=1
+        elif (( UT_EMBEDDED_HARD_TIMEOUT_SECONDS > 0 )); then
+            hard_timeout_seconds=${UT_EMBEDDED_HARD_TIMEOUT_SECONDS}
+        else
+            hard_timeout_seconds=$((10#${UT_TIMEOUT} * 60 + 120))
+        fi
+        while IFS= read -r package; do
+            (( prebuild_status == 0 )) || break
+            [[ -n "${package}" ]] || continue
+            if [[ ! -x "${report_base}.package.${package_index}.test" ]]; then
+                logger "WRN" "embedded prebuild did not publish a binary for ${package}"
+                prebuild_status=1
+                break
+            fi
+            if ! go list ${GO_MODULE_MODE} -race -tags "${TAGS}" \
+                -f '{{.Dir}}{{"\t"}}{{.ImportPath}}' "${package}" \
+                > "${report_base}.package.${package_index}.meta" ||
+                ! IFS=$'\t' read -r package_dir package_import \
+                < "${report_base}.package.${package_index}.meta" ||
+                [[ -z "${package_dir}" || -z "${package_import}" ]]; then
+                logger "WRN" "embedded prebuild metadata validation failed for ${package}; use go test"
+                prebuild_status=1
+                break
+            fi
+            package_index=$((package_index + 1))
+        done <<< "${package_scope}"
+    fi
+    if (( prebuild_status == 0 )) && [[ -n "${report_base}" ]]; then
+        logger "INF" "Run embedded-cluster race-test packages from binaries compiled during the issues stage"
+        run_ut_command embedded "prebuilt embedded-cluster race-test packages" \
+            run_prebuilt_embedded_tests "${package_scope}" "${report_base}" "${hard_timeout_seconds}"
+        test_status=$?
+        cleanup_embedded_prebuild || return 1
+        return "${test_status}"
+    fi
+
+    if [[ -n "${report_base}" ]]; then
+        logger "WRN" "embedded prebuild failed with status ${prebuild_status}; use the authoritative complete-scope go test"
+        cleanup_embedded_prebuild || return 1
+    fi
     run_ut_command embedded "embedded-cluster race-test packages" \
         env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" \
         go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" \
-        -p "${package_parallel}" -timeout "${UT_TIMEOUT}m" -race ${package_scope}
+        -p 1 -timeout "${UT_TIMEOUT}m" -race ${package_scope}
 }
 
 function run_tests(){
@@ -1766,6 +2097,8 @@ function run_tests(){
     echo "#  UT TIMEOUT:      $UT_TIMEOUT"
     echo "#  UT HARD TIMEOUT: $UT_HARD_TIMEOUT"
     echo "#  UT PARALLEL:     $UT_PARALLEL"
+    echo "#  LIGHT PARALLEL:  $UT_LIGHT_PARALLEL"
+    echo "#  LINK PARALLEL:   $UT_LINK_PARALLEL"
     echo "#  UT SHARD:        $UT_SHARD"
     echo "#  EMBEDDED PREBUILD: $UT_PREBUILD_EMBEDDED"
     echo "#  PLAN OVERLAP:    $UT_OVERLAP_PLAN"
@@ -1910,7 +2243,6 @@ function run_tests(){
         local resource_heavy_test_scope
         local light_test_scope
         local package
-        local cluster_package_parallel=2
         local package_status=0
         local light_status=0
         local hnsw_status=0
@@ -1925,6 +2257,7 @@ function run_tests(){
         local shard_engine=1
         local light_started=0
         local overlap_light=0
+        local light_stage_parallel=${UT_LIGHT_PARALLEL}
         local light_parallel=${UT_OVERLAP_LIGHT_PARALLEL}
 
         if ! [[ "${UT_PARALLEL}" =~ ^[1-9][0-9]*$ ]]; then
@@ -1932,9 +2265,23 @@ function run_tests(){
             UT_TEST_STATUS=1
             return 0
         fi
+        if ! [[ "${UT_LIGHT_PARALLEL}" =~ ^[1-9][0-9]*$ ]] ||
+            (( UT_LIGHT_PARALLEL > 64 )); then
+            logger "ERR" "UT_LIGHT_PARALLEL must be an integer from 1 through 64, got '${UT_LIGHT_PARALLEL}'"
+            UT_TEST_STATUS=1
+            return 0
+        fi
+        if (( light_stage_parallel > UT_PARALLEL )); then
+            light_stage_parallel=${UT_PARALLEL}
+            logger "INF" "Cap light race parallelism to UT_PARALLEL=${UT_PARALLEL}"
+        fi
         if (( light_parallel > UT_PARALLEL )); then
             light_parallel=${UT_PARALLEL}
             logger "INF" "Cap overlapping light package parallelism to UT_PARALLEL=${UT_PARALLEL}"
+        fi
+        if (( light_parallel > light_stage_parallel )); then
+            light_parallel=${light_stage_parallel}
+            logger "INF" "Cap overlapping light package parallelism to UT_LIGHT_PARALLEL=${light_stage_parallel}"
         fi
 
         if ! [[ "${HEAVY_RACE_PARALLEL}" =~ ^[1-9][0-9]*$ ]] ||
@@ -1943,10 +2290,6 @@ function run_tests(){
             UT_TEST_STATUS=1
             return 0
         fi
-        if (( HEAVY_RACE_PARALLEL < cluster_package_parallel )); then
-            cluster_package_parallel=${HEAVY_RACE_PARALLEL}
-        fi
-
         if ! plan_package=$(go list ${GO_MODULE_MODE} ./pkg/sql/plan); then
             logger "ERR" "Failed to resolve ./pkg/sql/plan"
             UT_TEST_STATUS=1
@@ -2047,6 +2390,12 @@ function run_tests(){
             return 0
         fi
 
+        if should_run_ut_stage light && [[ -n "${light_test_scope}" ]]; then
+            if ! prepare_light_link_gate; then
+                UT_TEST_STATUS=1
+                return 0
+            fi
+        fi
         : > "${UT_REPORT}"
         # HNSW owns native worker pools inside its test binary. It must finish
         # before another race wave starts. When the bounded light/issues
@@ -2069,14 +2418,14 @@ function run_tests(){
                 # from the authoritative suite. Fall back to the original
                 # foreground command so the package scope still executes.
                 logger "ERR" "failed to start overlapping light race-test helper; retrying in foreground"
-                run_ut_command "light" "light race-test packages" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $light_test_scope
+                run_ut_command "light" "light race-test packages" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} ${LIGHT_TOOL_FLAGS[@]+"${LIGHT_TOOL_FLAGS[@]}"} -short -v -json -tags "${TAGS}" -p ${light_stage_parallel} -timeout "${UT_TIMEOUT}m" -race $light_test_scope
                 light_status=$?
                 overlap_light=0
             fi
         else
             if should_run_ut_stage light && [[ -n "${light_test_scope}" ]]; then
-                logger "INF" "Run light race-test packages with parallelism ${UT_PARALLEL}"
-                run_ut_command "light" "light race-test packages" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" -p ${UT_PARALLEL} -timeout "${UT_TIMEOUT}m" -race $light_test_scope
+                logger "INF" "Run light race-test packages with parallelism ${light_stage_parallel} (requested ${UT_LIGHT_PARALLEL}, global ${UT_PARALLEL})"
+                run_ut_command "light" "light race-test packages" env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} ${LIGHT_TOOL_FLAGS[@]+"${LIGHT_TOOL_FLAGS[@]}"} -short -v -json -tags "${TAGS}" -p ${light_stage_parallel} -timeout "${UT_TIMEOUT}m" -race $light_test_scope
                 light_status=$?
             fi
 
@@ -2095,7 +2444,10 @@ function run_tests(){
             (( overlap_light == 0 )) &&
             should_run_ut_stage serial && should_run_ut_stage embedded &&
             [[ -n "${cluster_test_scope}" ]]; then
-            start_embedded_prebuild "${cluster_test_scope}" "${cluster_package_parallel}"
+            # One compiler is the bounded companion to the running issues test
+            # process. More compiler groups increase memory/CPU pressure and
+            # make the overlap slower on the eight-core CI runner.
+            start_embedded_prebuild "${cluster_test_scope}" 1
         fi
 
         if should_run_ut_stage serial; then
@@ -2116,15 +2468,16 @@ function run_tests(){
             light_status=$?
             report_cgroup_memory_usage "Light/issues overlap"
         fi
+        cleanup_light_link_gate
 
-        # These packages link embedded clusters with substantial race-detector
-        # memory. The runner-wide file-lock admission keeps complete cluster
-        # lifecycles serialized across test binaries. Allow one additional
-        # package process to overlap linking, setup, and non-cluster work without
-        # returning to the six-way contention that starved HAKeeper.
+        # Cluster admission serializes service lifecycles, not whole test
+        # processes: a waiting race binary still retains memory, and linking or
+        # non-cluster work can contend with the admitted cluster. Serialize the
+        # complete package commands as well so HAKeeper and transactions do not
+        # compete with another embedded package's work on constrained runners.
         if should_run_ut_stage embedded; then
-            logger "INF" "Run embedded-cluster race-test packages with package parallelism ${cluster_package_parallel} and serialized cluster lifecycle admission"
-            run_embedded_tests "${cluster_test_scope}" "${cluster_package_parallel}"
+            logger "INF" "Run embedded-cluster race-test packages with package parallelism 1 and serialized cluster lifecycle admission"
+            run_embedded_tests "${cluster_test_scope}"
             cluster_status=$?
         fi
 
@@ -2237,6 +2590,12 @@ function ut_summary(){
   mkdir -p "${report_path}/failed/outputs"
 
   logger "INF" "UT checkpoint artifact: ${UT_CHECKPOINT}"
+  if [[ -s "${UT_DIAGNOSTIC_DIR}/ut-link-admission.log" ]]; then
+    awk '{ for (i=1; i<=NF; i++) if ($i ~ /^wait_seconds=/) {
+        split($i, field, "="); count++; total+=field[2]; if (field[2]>max) max=field[2]
+    }} END { printf "[ut_link_admission] links=%d wait_seconds_sum=%d wait_seconds_max=%d (overlapping waits, not wall savings)\n", count, total, max }' \
+        "${UT_DIAGNOSTIC_DIR}/ut-link-admission.log"
+  fi
   if [[ -s "${UT_CHECKPOINT}" ]]; then
     tail -n 40 "${UT_CHECKPOINT}" | sed 's/^/[ut_checkpoint] /'
   fi

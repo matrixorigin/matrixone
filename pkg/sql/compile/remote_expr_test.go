@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -116,6 +117,60 @@ func TestRemoteNumericCastWarningAppearsAtExecution(t *testing.T) {
 	require.Len(t, session.warnings, 2)
 	require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, session.warnings[0].code)
 	require.Contains(t, session.warnings[0].msg, "12abc")
+}
+
+func TestMixedTemporalConditionalPreservesFractionalValues(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.TimeZone = time.UTC
+	condition := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_bool)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+	}
+	timestamp, err := types.ParseTimestamp(time.UTC, "2024-01-02 12:34:56.123456", 6)
+	require.NoError(t, err)
+	datetime, err := types.ParseDatetime("2024-01-02 12:34:56.654", 3)
+	require.NoError(t, err)
+	value := func(oid types.T, value int64, scale int32) *plan.Expr {
+		result := &plan.Expr{
+			Typ:  plan.Type{Id: int32(oid), Width: scale, Scale: scale},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{}},
+		}
+		switch oid {
+		case types.T_timestamp:
+			result.GetLit().Value = &plan.Literal_Timestampval{Timestampval: value}
+		case types.T_datetime:
+			result.GetLit().Value = &plan.Literal_Datetimeval{Datetimeval: value}
+		}
+		return result
+	}
+	expr, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "if", []*plan.Expr{
+		condition,
+		value(types.T_timestamp, int64(timestamp), 6),
+		value(types.T_datetime, int64(datetime), 3),
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.T_datetime, types.T(expr.Typ.Id))
+	require.Equal(t, int32(6), expr.Typ.Scale)
+
+	executor, err := colexec.NewExpressionExecutor(proc, expr)
+	require.NoError(t, err)
+	defer executor.Free()
+	input := batch.NewWithSize(1)
+	conditions := vector.NewVec(types.T_bool.ToType())
+	require.NoError(t, vector.AppendFixed(conditions, true, false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(conditions, false, false, proc.Mp()))
+	input.Vecs[0] = conditions
+	input.SetRowCount(2)
+	defer conditions.Free(proc.Mp())
+
+	result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.Equal(t, types.T_datetime, result.GetType().Oid)
+	require.Equal(t, int32(6), result.GetType().Scale)
+	require.Equal(t, "2024-01-02 12:34:56.123456",
+		types.Datetime(vector.GetFixedAtNoTypeCheck[types.Datetime](result, 0)).String2(6))
+	require.Equal(t, "2024-01-02 12:34:56.654000",
+		types.Datetime(vector.GetFixedAtNoTypeCheck[types.Datetime](result, 1)).String2(6))
 }
 
 func TestRemoteSecToTimeConversionWarningsRemainBounded(t *testing.T) {
@@ -566,6 +621,29 @@ func TestOrderedSetPercentileRemoteProtocolValidation(t *testing.T) {
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion17)
 	require.NoError(t, validateRemoteAggregateProtocol(proc, percentile))
+
+	extended := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfPercentileDisc,
+		false,
+		[]*plan.Expr{makeTestVarExprWithType("value", types.T_varchar.ToType())},
+		aggexec.EncodeOrderedPercentileConfig([]byte("0.5"), false),
+		plan.AggregateConfigType_AGG_CONFIG_NONE,
+	)}
+	// Main's v76-v83 features do not implement extended discrete-percentile inputs.
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion81)
+	require.ErrorContains(
+		t,
+		validateRemoteAggregateProtocol(proc, extended),
+		"extended discrete percentile input types require MORPC protocol version 84",
+	)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion83)
+	require.Error(t, validateRemoteAggregateProtocol(proc, extended),
+		"v83 is reserved for bounded conditional string domains")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion84)
+	require.NoError(t, validateRemoteAggregateProtocol(proc, extended))
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion81)
+	require.Error(t, validateRemoteAggregateProtocol(proc, extended),
+		"rollback must disable extended discrete-percentile state before exchange")
 }
 
 func TestApproxPercentileRemoteProtocolValidation(t *testing.T) {
@@ -638,6 +716,74 @@ func TestHLLRemoteProtocolValidation(t *testing.T) {
 		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion77)
 		require.NoError(t, validateRemoteAggregateProtocol(proc, agg))
 	}
+	vectorArg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_array_float32)}}
+	vectorAgg := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfHllAdd, false, []*plan.Expr{vectorArg}, nil,
+	)}
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion87)
+	require.ErrorContains(t, validateRemoteAggregateProtocol(proc, vectorAgg),
+		"canonical vector HLL_ADD_AGG remote execution requires MORPC protocol version 88")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion88)
+	require.NoError(t, validateRemoteAggregateProtocol(proc, vectorAgg))
+}
+
+func TestCanonicalHLLAddRemoteProtocolValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	for _, tc := range []struct {
+		name      string
+		typ       types.Type
+		canonical bool
+	}{
+		{name: "char", typ: types.New(types.T_char, 4, 0), canonical: true},
+		{name: "json", typ: types.T_json.ToType(), canonical: true},
+		{name: "varchar-control", typ: types.New(types.T_varchar, 4, 0)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			aggs := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+				aggexec.AggIdOfHllAdd,
+				false,
+				[]*plan.Expr{makeTestVarExprWithType("value", tc.typ)},
+				nil,
+			)}
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion87)
+			if tc.canonical {
+				require.ErrorContains(t, validateRemoteAggregateProtocol(proc, aggs),
+					"canonical JSON/CHAR HLL_ADD_AGG remote execution requires MORPC protocol version 91")
+			} else {
+				require.NoError(t, validateRemoteAggregateProtocol(proc, aggs))
+			}
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion90)
+			if tc.canonical {
+				require.ErrorContains(t, validateRemoteAggregateProtocol(proc, aggs),
+					"canonical JSON/CHAR HLL_ADD_AGG remote execution requires MORPC protocol version 91")
+			} else {
+				require.NoError(t, validateRemoteAggregateProtocol(proc, aggs))
+			}
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion91)
+			require.NoError(t, validateRemoteAggregateProtocol(proc, aggs))
+		})
+	}
+}
+
+func TestCanonicalFloatHLLAddRemoteProtocolValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	for _, typ := range []types.Type{types.T_float32.ToType(), types.T_float64.ToType()} {
+		aggs := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+			aggexec.AggIdOfHllAdd,
+			false,
+			[]*plan.Expr{makeTestVarExprWithType("value", typ)},
+			nil,
+		)}
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion91)
+		require.ErrorContains(t, validateRemoteAggregateProtocol(proc, aggs),
+			"canonical FLOAT HLL_ADD_AGG remote execution requires MORPC protocol version 92")
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion92)
+		require.NoError(t, validateRemoteAggregateProtocol(proc, aggs))
+	}
 }
 
 func TestTextMinMaxRemoteProtocolValidation(t *testing.T) {
@@ -702,7 +848,7 @@ func TestOrderedSetPercentileMergeGroupRemoteProtocolValidation(t *testing.T) {
 	merge.Aggs = []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
 		aggexec.AggIdOfPercentileDisc,
 		false,
-		[]*plan.Expr{makeTestVarExpr("value")},
+		[]*plan.Expr{makeTestVarExprWithType("value", types.T_int64.ToType())},
 		aggexec.EncodeOrderedPercentileConfig([]byte("0.5"), false),
 		plan.AggregateConfigType_AGG_CONFIG_NONE,
 	)}
@@ -1203,6 +1349,10 @@ func TestScopeContainsVarExprReturnsFalseWithoutVar(t *testing.T) {
 
 func makeTestVarExpr(name string) *plan.Expr {
 	typ := types.T_text.ToType()
+	return makeTestVarExprWithType(name, typ)
+}
+
+func makeTestVarExprWithType(name string, typ types.Type) *plan.Expr {
 	return &plan.Expr{
 		Typ: plan2.MakePlan2Type(&typ),
 		Expr: &plan.Expr_V{

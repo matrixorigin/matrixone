@@ -37,3 +37,43 @@ SHOW WARNINGS;
 DROP DATABASE uncompress_warnings_28458;
 SELECT COUNT(*) AS leftover_tables FROM information_schema.tables
 WHERE table_schema = 'uncompress_warnings_28458';
+
+-- UNCOMPRESSED_LENGTH keeps returning zero for short invalid inputs, but now
+-- exposes one MySQL-compatible warning for each evaluated non-empty value.
+SELECT UNCOMPRESSED_LENGTH(x'00') AS one_byte,
+UNCOMPRESSED_LENGTH(x'000000') AS three_bytes,
+UNCOMPRESSED_LENGTH(x'01000000') AS four_bytes;
+SHOW COUNT(*) WARNINGS;
+SHOW WARNINGS;
+
+-- Empty, NULL, and valid compressed values remain warning-free.
+SELECT UNCOMPRESSED_LENGTH(x'') AS empty_input,
+UNCOMPRESSED_LENGTH(NULL) AS null_input,
+UNCOMPRESSED_LENGTH(COMPRESS('abc')) AS valid_input;
+SHOW COUNT(*) WARNINGS;
+
+-- Warning-producing calls must execute for every prepared execution and every
+-- selected row; constant folding must not consume or undercount diagnostics.
+SET @short_compressed = x'00';
+PREPARE short_length FROM 'SELECT UNCOMPRESSED_LENGTH(?) AS n';
+EXECUTE short_length USING @short_compressed;
+SHOW COUNT(*) WARNINGS;
+EXECUTE short_length USING @short_compressed;
+SHOW COUNT(*) WARNINGS;
+DEALLOCATE PREPARE short_length;
+
+DROP DATABASE IF EXISTS uncompress_length_warning_rows;
+CREATE DATABASE uncompress_length_warning_rows;
+CREATE TABLE uncompress_length_warning_rows.warning_rows(id INT PRIMARY KEY);
+INSERT INTO uncompress_length_warning_rows.warning_rows VALUES (1), (2), (3);
+PREPARE row_lengths FROM 'SELECT id, UNCOMPRESSED_LENGTH(?) AS n FROM uncompress_length_warning_rows.warning_rows ORDER BY id';
+EXECUTE row_lengths USING @short_compressed;
+SHOW COUNT(*) WARNINGS;
+DEALLOCATE PREPARE row_lengths;
+DROP DATABASE uncompress_length_warning_rows;
+SELECT COUNT(*) AS leftover_tables FROM information_schema.tables
+WHERE table_schema = 'uncompress_length_warning_rows';
+
+-- An unselected branch must not emit the warning.
+SELECT IF(FALSE, UNCOMPRESSED_LENGTH(x'00'), 7) AS chosen;
+SHOW COUNT(*) WARNINGS;

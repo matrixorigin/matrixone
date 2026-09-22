@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"strings"
 	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -66,9 +67,40 @@ func MakePlan2Decimal128ExprWithType(v types.Decimal128, typ *Type) *plan.Expr {
 
 func makePlan2DecimalExprWithType(ctx context.Context, v string, isBin ...bool) (*plan.Expr, error) {
 	var typ plan.Type
+	canonical := v
 	width := decimalLiteralPrecision(v)
-	_, scale, err := types.Parse128(v)
-	if err == nil && scale < 18 && len(v) < 18 {
+	plain := isPlainDecimalLiteral(v)
+	requiresV82 := false
+	if normalized, normalizedWidth, _, ok := normalizePlainDecimalLiteral(v); ok {
+		canonical = normalized
+		width = normalizedWidth
+		requiresV82 = decimalLiteralRequiresV82(v, canonical, width)
+	}
+	// Parse128 rounds the first digit after its 38-digit physical boundary and
+	// still returns nil error. Select the wide carrier from the source token
+	// before parsing so an exact DECIMAL256 literal is never materialized from
+	// an already-rounded Decimal128 value. Scientific notation keeps the
+	// existing parser path because its effective precision is exponent-sensitive.
+	if isPlainDecimalLiteral(v) && width > types.T_decimal128.ToType().Width {
+		if width > types.T_decimal256.ToType().Width {
+			return nil, moerr.NewInvalidInputNoCtxf(
+				"%s beyond the range, can't be converted to Decimal256.", v)
+		}
+		_, scale, err := types.Parse256(canonical)
+		if err != nil {
+			return nil, err
+		}
+		typ = plan.Type{
+			Id:          int32(types.T_decimal256),
+			Width:       width,
+			Scale:       scale,
+			NotNullable: true,
+		}
+		return appendCastBeforeExpr(ctx,
+			makePlan2DecimalSourceExpr(canonical, requiresV82 && plain, isBin...), typ)
+	}
+	_, scale, err := types.Parse128(canonical)
+	if err == nil && scale < 18 && len(canonical) < 18 {
 		typ = plan.Type{
 			Id:          int32(types.T_decimal64),
 			Width:       width,
@@ -83,7 +115,7 @@ func makePlan2DecimalExprWithType(ctx context.Context, v string, isBin ...bool) 
 			NotNullable: true,
 		}
 	} else {
-		_, scale, err = types.Parse256(v)
+		_, scale, err = types.Parse256(canonical)
 		if err != nil {
 			return nil, err
 		}
@@ -94,7 +126,252 @@ func makePlan2DecimalExprWithType(ctx context.Context, v string, isBin ...bool) 
 			NotNullable: true,
 		}
 	}
-	return appendCastBeforeExpr(ctx, makePlan2StringConstExprWithType(v, isBin...), typ)
+	return appendCastBeforeExpr(ctx,
+		makePlan2DecimalSourceExpr(canonical, requiresV82 && plain, isBin...), typ)
+}
+
+// makePlan2DecimalSourceExpr keeps the canonical decimal text in an ordinary
+// string literal so the existing cast executor can materialize Decimal256.
+// The provenance bit is execution-inert and only records that an older binder
+// would not necessarily reconstruct the same exact value from persisted SQL.
+func makePlan2DecimalSourceExpr(value string, requiresV82 bool, isBin ...bool) *plan.Expr {
+	expr := makePlan2StringConstExprWithType(value, isBin...)
+	if requiresV82 {
+		expr.GetLit().DecimalLiteralRequiresV82 = true
+	}
+	return expr
+}
+
+func markDecimalLiteralRequiresV82(expr *plan.Expr, source, canonical string, width int32) {
+	if expr == nil || !decimalLiteralRequiresV82(source, canonical, width) {
+		return
+	}
+	if literal := expr.GetLit(); literal != nil {
+		literal.DecimalLiteralRequiresV82 = true
+	}
+}
+
+// markDecimalComparisonProtocolRequirement carries the exact-decimal fence
+// through comparison binding. The expanded zero-tail analysis can change a
+// narrow literal's result without changing its literal spelling, so the
+// source literal itself must be marked even when the comparison is retained.
+func markDecimalComparisonProtocolRequirement(expr *plan.Expr, owner any) {
+	required, err := plan.RequiresMORPCVersion89DecimalLiteralSemantics(owner)
+	args, hasArgs := owner.([]*plan.Expr)
+	extended := hasArgs && decimalComparisonUsesExtendedTrailingZeroSemantics(args)
+	if err != nil || (!required && !extended) {
+		return
+	}
+	if expr != nil {
+		if literal := expr.GetLit(); literal != nil {
+			literal.DecimalLiteralRequiresV82 = true
+		}
+	}
+	if hasArgs {
+		markDecimalComparisonLiteralRequirement(args)
+	}
+}
+
+func markDecimalComparisonLiteralRequirement(args []*plan.Expr) {
+	for _, arg := range args {
+		_ = plan.VisitExprTree(arg, func(current *plan.Expr) error {
+			if literal := current.GetLit(); literal != nil {
+				literal.DecimalLiteralRequiresV82 = true
+			}
+			return nil
+		})
+	}
+}
+
+func decimalComparisonUsesExtendedTrailingZeroSemantics(args []*plan.Expr) bool {
+	if len(args) != 2 {
+		return false
+	}
+	left, right := unwrapCast(args[0]), unwrapCast(args[1])
+	var colExpr, constExpr *plan.Expr
+	var originalConst *plan.Expr
+	if left != nil && left.GetCol() != nil && right != nil && right.GetLit() != nil {
+		colExpr, constExpr, originalConst = left, right, args[1]
+	} else if right != nil && right.GetCol() != nil && left != nil && left.GetLit() != nil {
+		colExpr, constExpr, originalConst = right, left, args[0]
+	} else {
+		return false
+	}
+	colType := makeTypeByPlan2Expr(colExpr)
+	constType := makeTypeByPlan2Expr(originalConst)
+	if !colType.Oid.IsDecimal() {
+		return false
+	}
+	hasZeros, proven := decimalTrailingZerosStatus(constExpr, constType, colType.Scale)
+	return decimalSuffixUsesExtendedSemantics(originalConst, constType, colType.Scale, hasZeros, proven)
+}
+
+func decimalSuffixUsesExtendedSemantics(originalConst *plan.Expr, constType types.Type, columnScale int32, hasZeros, proven bool) bool {
+	constExpr := unwrapCast(originalConst)
+	return constType.Oid.IsDecimal() &&
+		constExpr != nil && constExpr.GetLit() != nil && !constExpr.GetLit().Isnull &&
+		(decimalComparisonSourceScaleMismatch(originalConst, constExpr, constType) ||
+			constType.Scale-columnScale > 18 ||
+			decimalComparisonUsesLegacyTrailingZeroSemantics(
+				constExpr, constType, columnScale, hasZeros, proven))
+}
+
+// decimalComparisonUsesLegacyTrailingZeroSemantics fences either direction of
+// disagreement with the old Decimal128 remainder check. That check interpreted
+// a high-zero low word as signed, but negative Decimal128 values as unsigned.
+// Keep the legacy helper unchanged: it describes compatibility, not execution.
+func decimalComparisonUsesLegacyTrailingZeroSemantics(
+	constExpr *plan.Expr, constType types.Type, columnScale int32, trailingZeros, proven bool,
+) bool {
+	trailingDigits := constType.Scale - columnScale
+	if trailingDigits <= 0 || trailingDigits > 18 {
+		return false
+	}
+	if constExpr == nil {
+		return false
+	}
+	literal := constExpr.GetLit()
+	if literal == nil || literal.Isnull {
+		return false
+	}
+	var legacyZeros bool
+	switch value := literal.Value.(type) {
+	case *plan.Literal_Sval:
+		// String-backed Decimal64/128 casts were both parsed through the old
+		// Decimal128 helper, so retain the fence for either target carrier.
+		if constType.Oid != types.T_decimal64 &&
+			constType.Oid != types.T_decimal128 &&
+			constType.Oid != types.T_decimal256 {
+			return false
+		}
+		if coefficient, _, err := types.Parse128(value.Sval); err == nil {
+			legacyZeros = decimal128HasTrailingZeros(int64(coefficient.B0_63), int64(coefficient.B64_127), trailingDigits)
+		}
+	case *plan.Literal_Decimal128Val:
+		if constType.Oid != types.T_decimal128 && constType.Oid != types.T_decimal256 {
+			return false
+		}
+		if value.Decimal128Val == nil {
+			return false
+		}
+		legacyZeros = decimal128HasTrailingZeros(value.Decimal128Val.A, value.Decimal128Val.B, trailingDigits)
+	default:
+		return false
+	}
+	return !proven || legacyZeros != trailingZeros
+}
+
+// decimalComparisonSourceScaleMismatch identifies an explicit DECIMAL cast
+// whose source literal scale differs from the cast target scale. The legacy
+// comparison binder inspected the source spelling as if it already had the
+// target scale, while execution evaluates the cast first; that can change a
+// comparison from a folded constant to a matching predicate even when the
+// scale difference is small.
+func decimalComparisonSourceScaleMismatch(
+	originalConst, sourceExpr *plan.Expr,
+	constType types.Type,
+) bool {
+	if originalConst == nil || sourceExpr == nil || !constType.Oid.IsDecimal() {
+		return false
+	}
+	cast := originalConst.GetF()
+	if cast == nil || cast.Func == nil || cast.Func.GetObjName() != "cast" ||
+		len(cast.Args) == 0 || cast.Args[0].GetLit() == nil {
+		return false
+	}
+	lit := cast.Args[0].GetLit()
+	switch value := lit.Value.(type) {
+	case *plan.Literal_Sval:
+		_, sourceScale, err := types.Parse256(value.Sval)
+		return err == nil && sourceScale != constType.Scale
+	case *plan.Literal_Decimal64Val, *plan.Literal_Decimal128Val:
+		sourceType := makeTypeByPlan2Expr(sourceExpr)
+		return sourceType.Oid.IsDecimal() && sourceType.Scale != constType.Scale
+	default:
+		return false
+	}
+}
+
+func decimalComparisonColumnIsNotNullable(args []*plan.Expr) bool {
+	if len(args) != 2 {
+		return false
+	}
+	left, right := unwrapCast(args[0]), unwrapCast(args[1])
+	if left != nil && left.GetCol() != nil && right != nil && right.GetLit() != nil {
+		return left.Typ.NotNullable
+	}
+	if right != nil && right.GetCol() != nil && left != nil && left.GetLit() != nil {
+		return right.Typ.NotNullable
+	}
+	return false
+}
+
+func decimalLiteralRequiresV82(source, canonical string, normalizedWidth int32) bool {
+	return isPlainDecimalLiteral(source) &&
+		(canonical != source || normalizedWidth > types.T_decimal128.ToType().Width)
+}
+
+func isPlainDecimalLiteral(v string) bool {
+	if v == "" {
+		return false
+	}
+	pos := 0
+	if v[pos] == '+' || v[pos] == '-' {
+		pos++
+	}
+	seenDigit, seenPoint := false, false
+	for ; pos < len(v); pos++ {
+		switch ch := v[pos]; {
+		case ch >= '0' && ch <= '9':
+			seenDigit = true
+		case ch == '.' && !seenPoint:
+			seenPoint = true
+		default:
+			return false
+		}
+	}
+	return seenDigit
+}
+
+// normalizePlainDecimalLiteral removes spelling-only integer zeroes before a
+// decimal literal is parsed. The parser's decimal width is based on the
+// digits it sees, so retaining those zeroes can make a value such as
+// 000...001.25 or 0.000...001 exceed the physical Decimal256 boundary even
+// though its numeric value fits. Fractional zeroes remain significant because
+// they define scale.
+func normalizePlainDecimalLiteral(v string) (string, int32, int32, bool) {
+	if !isPlainDecimalLiteral(v) {
+		return "", 0, 0, false
+	}
+
+	pos := 0
+	sign := ""
+	if v[pos] == '+' || v[pos] == '-' {
+		sign = v[pos : pos+1]
+		pos++
+	}
+	rest := v[pos:]
+	integerPart := rest
+	fractionPart := ""
+	if dot := strings.IndexByte(rest, '.'); dot >= 0 {
+		integerPart = rest[:dot]
+		fractionPart = rest[dot+1:]
+	}
+
+	integerPart = strings.TrimLeft(integerPart, "0")
+	scale := int32(len(fractionPart))
+	if integerPart == "" {
+		if fractionPart == "" {
+			return sign + "0", 1, 0, true
+		}
+		return sign + "." + fractionPart, scale, scale, true
+	}
+
+	canonical := sign + integerPart
+	if fractionPart != "" {
+		canonical += "." + fractionPart
+	}
+	return canonical, int32(len(integerPart) + len(fractionPart)), scale, true
 }
 
 func decimalLiteralPrecision(v string) int32 {
@@ -695,9 +972,16 @@ func makePlan2CastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr,
 // preservation. DDL-specific error mapping is applied by the DDL validation
 // layer rather than changing cast_strict's execution contract.
 func makePlan2AssignmentCastExpr(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {
+	if types.T(targetType.Id).IsArrayRelate() {
+		// 生成列即使类型元数据相同，也必须校验实际载荷的维度。
+		return forceAssignmentCastExprWithName(ctx, expr, targetType, "cast")
+	}
 	funcName := "cast"
 	if useAssignmentStrictCast(targetType) {
 		funcName = "cast_strict"
+	}
+	if targetType.Id == int32(types.T_blob) || targetType.Id == int32(types.T_text) {
+		return forceAssignmentCastExprWithName(ctx, expr, targetType, funcName)
 	}
 	return makePlan2CastExprWithName(ctx, expr, targetType, funcName)
 }

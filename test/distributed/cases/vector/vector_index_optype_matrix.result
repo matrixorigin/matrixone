@@ -246,6 +246,7 @@ Project  𝄀
               ->  Table Scan on vec_optype_matrix.h  𝄀
                     Runtime Filter Probe: h.a  𝄀
               ->  Table Function on hnsw_search  𝄀
+                    Index Reader Param:  Limit: 3  𝄀
                     Limit: 3
 explain select a from h order by l2_distance_sq(v,'[1,1,1,1]') limit 3;
 -- @regex("hnsw_search", true)
@@ -261,6 +262,7 @@ Project  𝄀
               ->  Table Scan on vec_optype_matrix.h  𝄀
                     Runtime Filter Probe: h.a  𝄀
               ->  Table Function on hnsw_search  𝄀
+                    Index Reader Param:  Limit: 3  𝄀
                     Limit: 3
 explain select a from h order by cosine_distance(v,'[1,1,1,1]') limit 3;
 -- @regex("hnsw_search", false)
@@ -303,6 +305,7 @@ Project  𝄀
               ->  Table Scan on vec_optype_matrix.h  𝄀
                     Runtime Filter Probe: h.a  𝄀
               ->  Table Function on hnsw_search  𝄀
+                    Index Reader Param:  Limit: 3  𝄀
                     Limit: 3
 explain select a from h order by l2_distance(v,'[1,1,1,1]') limit 3;
 -- @regex("hnsw_search", true)
@@ -318,6 +321,7 @@ Project  𝄀
               ->  Table Scan on vec_optype_matrix.h  𝄀
                     Runtime Filter Probe: h.a  𝄀
               ->  Table Function on hnsw_search  𝄀
+                    Index Reader Param:  Limit: 3  𝄀
                     Limit: 3
 select a, l2_distance_sq(v,'[1,1,1,1]') as dsq from h order by l2_distance_sq(v,'[1,1,1,1]') limit 3;
 ➤ a[-5,64,0]  ¦  dsq[8,9,0]  𝄀
@@ -332,20 +336,13 @@ select a, l2_distance_sq(v,'[1,1,1,1]') as dsq from t_ref order by l2_distance_s
 alter table h drop index h_l2sq;
 create index h_cos using hnsw on hc(v) op_type 'vector_cosine_ops';
 explain select a from hc order by cosine_distance(v,'[1,0,0,0]') limit 3;
--- @regex("hnsw_search", true)
+-- @regex("hnsw_search", false)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: mo_hnsw_alias_0.score INTERNAL  𝄀
+        Sort Key: cosine_distance(hc.v, ) INTERNAL, hc.a INTERNAL  𝄀
         Limit: 3  𝄀
-        ->  Join  𝄀
-              Join Type: INNER  𝄀
-              Join Cond: (hc.a = mo_hnsw_alias_0.pkid)  𝄀
-              Runtime Filter Build: #[-1,0]  𝄀
-              ->  Table Scan on vec_optype_matrix.hc  𝄀
-                    Runtime Filter Probe: hc.a  𝄀
-              ->  Table Function on hnsw_search  𝄀
-                    Limit: 3
+        ->  Table Scan on vec_optype_matrix.hc
 select a, round(cosine_distance(v,'[1,0,0,0]'),4) as d from hc order by cosine_distance(v,'[1,0,0,0]') limit 3;
 ➤ a[-5,64,0]  ¦  d[8,53,31]  𝄀
 1  ¦  0.0  𝄀
@@ -372,6 +369,7 @@ Project  𝄀
               ->  Table Scan on vec_optype_matrix.h  𝄀
                     Runtime Filter Probe: h.a  𝄀
               ->  Table Function on hnsw_search  𝄀
+                    Index Reader Param:  Limit: 3  𝄀
                     Limit: 3
 select a, inner_product(v,'[1,1,1,1]') as d from h order by inner_product(v,'[1,1,1,1]') limit 3;
 ➤ a[-5,64,0]  ¦  d[8,9,0]  𝄀

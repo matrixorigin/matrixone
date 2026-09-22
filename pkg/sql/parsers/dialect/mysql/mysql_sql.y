@@ -811,7 +811,7 @@ func makeWindowSpec(refName *tree.CStr, partitionBy tree.Exprs, orderBy tree.Ord
 %type <referenceOnRecord> on_delete_update_opt
 %type <attributeReference> references_def
 %type <alterTableOptions> alter_option_list
-%type <alterTableOption> alter_option alter_table_drop alter_table_alter alter_table_rename
+%type <alterTableOption> alter_option alter_table_drop alter_table_alter alter_table_rename alter_table_reindex
 %type <renameTableOptions> rename_table_list
 %type <renameTableOption> rename_option
 %type <alterPartitionOption> alter_partition_option partition_option
@@ -3994,6 +3994,13 @@ alter_table_stmt:
         alterTable.PartitionOption = $4
         $$ = alterTable
     }
+|   ALTER TABLE table_name alter_table_reindex
+    {
+        var table = $3
+        alterTable := tree.NewAlterTable(table)
+        alterTable.Options = []tree.AlterTableOption{$4}
+        $$ = alterTable
+    }
 
 rename_stmt:
     RENAME TABLE rename_table_list
@@ -4021,6 +4028,73 @@ rename_option:
         opt := tree.AlterTableOption($3)
         alterTable.Options = []tree.AlterTableOption{opt}
         $$ = alterTable
+    }
+
+alter_table_reindex:
+    ALTER REINDEX ident IVFFLAT index_option_list
+    {
+        var io *tree.IndexOption = nil
+        if $5 == nil {
+            io = tree.NewIndexOption()
+            io.IType = tree.INDEX_TYPE_IVFFLAT
+        } else {
+            io = $5
+            io.IType = tree.INDEX_TYPE_IVFFLAT
+        }
+        var name = tree.Identifier($3.Compare())
+        $$ = tree.NewAlterOptionAlterReIndex(name, io)
+    }
+|   ALTER REINDEX ident HNSW index_option_list
+    {
+        var io *tree.IndexOption = nil
+        if $5 == nil {
+            io = tree.NewIndexOption()
+            io.IType = tree.INDEX_TYPE_HNSW
+        } else {
+            io = $5
+            io.IType = tree.INDEX_TYPE_HNSW
+        }
+        var name = tree.Identifier($3.Compare())
+        $$ = tree.NewAlterOptionAlterReIndex(name, io)
+    }
+|   ALTER REINDEX ident IVFPQ index_option_list
+    {
+        var io *tree.IndexOption = nil
+        if $5 == nil {
+            io = tree.NewIndexOption()
+            io.IType = tree.INDEX_TYPE_IVFPQ
+        } else {
+            io = $5
+            io.IType = tree.INDEX_TYPE_IVFPQ
+        }
+        var name = tree.Identifier($3.Compare())
+        $$ = tree.NewAlterOptionAlterReIndex(name, io)
+    }
+|   ALTER REINDEX ident CAGRA index_option_list
+    {
+        var io *tree.IndexOption = nil
+        if $5 == nil {
+            io = tree.NewIndexOption()
+            io.IType = tree.INDEX_TYPE_CAGRA
+        } else {
+            io = $5
+            io.IType = tree.INDEX_TYPE_CAGRA
+        }
+        var name = tree.Identifier($3.Compare())
+        $$ = tree.NewAlterOptionAlterReIndex(name, io)
+    }
+|   ALTER REINDEX ident FULLTEXT2 index_option_list
+    {
+        var io *tree.IndexOption = nil
+        if $5 == nil {
+            io = tree.NewIndexOption()
+            io.IType = tree.INDEX_TYPE_FULLTEXT2
+        } else {
+            io = $5
+            io.IType = tree.INDEX_TYPE_FULLTEXT2
+        }
+        var name = tree.Identifier($3.Compare())
+        $$ = tree.NewAlterOptionAlterReIndex(name, io)
     }
 
 alter_option_list:
@@ -4495,71 +4569,6 @@ alter_table_alter:
 	var auto_update = $4
 	io.AutoUpdate = auto_update
         $$ = tree.NewAlterOptionAlterAutoUpdate(name, io)
-    }
-| REINDEX ident IVFFLAT index_option_list
-    {
-        var io *tree.IndexOption = nil
-        if $4 == nil {
-            io = tree.NewIndexOption()
-            io.IType = tree.INDEX_TYPE_IVFFLAT
-        } else {
-            io = $4
-            io.IType = tree.INDEX_TYPE_IVFFLAT
-        }
-        var name = tree.Identifier($2.Compare())
-        $$ = tree.NewAlterOptionAlterReIndex(name, io)
-    }
-| REINDEX ident HNSW index_option_list
-    {
-        var io *tree.IndexOption = nil
-        if $4 == nil {
-            io = tree.NewIndexOption()
-            io.IType = tree.INDEX_TYPE_HNSW
-        } else {
-            io = $4
-            io.IType = tree.INDEX_TYPE_HNSW
-        }
-        var name = tree.Identifier($2.Compare())
-        $$ = tree.NewAlterOptionAlterReIndex(name, io)
-    }
-| REINDEX ident IVFPQ index_option_list
-    {
-        var io *tree.IndexOption = nil
-        if $4 == nil {
-            io = tree.NewIndexOption()
-            io.IType = tree.INDEX_TYPE_IVFPQ
-        } else {
-            io = $4
-            io.IType = tree.INDEX_TYPE_IVFPQ
-        }
-        var name = tree.Identifier($2.Compare())
-        $$ = tree.NewAlterOptionAlterReIndex(name, io)
-    }
-| REINDEX ident CAGRA index_option_list
-    {
-        var io *tree.IndexOption = nil
-        if $4 == nil {
-            io = tree.NewIndexOption()
-            io.IType = tree.INDEX_TYPE_CAGRA
-        } else {
-            io = $4
-            io.IType = tree.INDEX_TYPE_CAGRA
-        }
-        var name = tree.Identifier($2.Compare())
-        $$ = tree.NewAlterOptionAlterReIndex(name, io)
-    }
-| REINDEX ident FULLTEXT2 index_option_list
-    {
-        var io *tree.IndexOption = nil
-        if $4 == nil {
-            io = tree.NewIndexOption()
-            io.IType = tree.INDEX_TYPE_FULLTEXT2
-        } else {
-            io = $4
-            io.IType = tree.INDEX_TYPE_FULLTEXT2
-        }
-        var name = tree.Identifier($2.Compare())
-        $$ = tree.NewAlterOptionAlterReIndex(name, io)
     }
 |   CHECK ident enforce
     {
@@ -13508,9 +13517,30 @@ window_definition:
 function_call_aggregate:
     GROUP_CONCAT '(' func_type_opt expression_list order_by_opt separator_opt ')' within_group_opt window_spec_opt
 	    {
-	        name := tree.NewUnresolvedColName($1)
+	        functionName := $1
+	        arguments := $4
+	        separator := tree.Expr(tree.NewNumVal($6, $6, false, tree.P_char))
+	        if strings.EqualFold(functionName, "listagg") {
+	            // LISTAGG is a compatibility surface over GROUP_CONCAT. Keep the
+	            // spelling in FuncName for deparsing, but bind the canonical name.
+	            functionName = "group_concat"
+	            if len(arguments) < 1 || len(arguments) > 2 {
+	                yylex.Error("listagg requires one value and an optional delimiter")
+	                return 1
+	            }
+	            if len(arguments) == 2 {
+	                literal, ok := arguments[1].(*tree.NumVal)
+	                if !ok || (literal.ValType != tree.P_char && literal.ValType != tree.P_null) {
+	                    yylex.Error("listagg delimiter must be a string literal or NULL")
+	                    return 1
+	                }
+	                separator = arguments[1]
+	                arguments = arguments[:1]
+	            }
+	        }
+	        name := tree.NewUnresolvedColName(functionName)
 	        if $5 != nil && $8 != nil {
-	            yylex.Error("group_concat cannot use both ORDER BY and WITHIN GROUP ORDER BY")
+	            yylex.Error($1 + " cannot use both ORDER BY and WITHIN GROUP ORDER BY")
 	            return 1
 	        }
 	        orderBy := $5
@@ -13520,7 +13550,7 @@ function_call_aggregate:
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),
-            Exprs: append($4,tree.NewNumVal($6, $6, false, tree.P_char)),
+            Exprs: append(arguments, separator),
             Type: $3,
             WindowSpec: $9,
             OrderBy: orderBy,
@@ -13807,7 +13837,13 @@ function_call_aggregate:
     }
 |   JSON_ARRAYAGG '(' func_type_opt expression ')' window_spec_opt
     {
-        name := tree.NewUnresolvedColName($1)
+	    functionName := $1
+	    if strings.EqualFold(functionName, "array_agg") {
+	        // MatrixOne has no general SQL ARRAY value. ARRAY_AGG deliberately
+	        // adopts JSON_ARRAYAGG's JSON return contract instead.
+	        functionName = "json_arrayagg"
+	    }
+	    name := tree.NewUnresolvedColName(functionName)
         $$ = &tree.FuncExpr{
             Func: tree.FuncName2ResolvableFunctionReference(name),
             FuncName: tree.NewCStr($1, 1),

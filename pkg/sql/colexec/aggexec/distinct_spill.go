@@ -42,6 +42,7 @@ func initBoundedDistinctWorkState(
 	capacity int32,
 	allocation *AllocationAccount,
 	distinctKeyWidth int,
+	legacyDistinctFloatKeys bool,
 ) error {
 	if state == nil || mp == nil || length < 0 || capacity <= 0 ||
 		length > capacity || capacity > AggBatchSize {
@@ -65,6 +66,7 @@ func initBoundedDistinctWorkState(
 	state.allocation = allocation
 	state.distinctKeyWidth = distinctKeyWidth
 	state.distinctFixedDeferred = distinctKeyWidth > 0
+	state.legacyDistinctFloatKeys = legacyDistinctFloatKeys
 	state.distinctIndex.groupLimit = int(capacity)
 	state.argCnt = counts
 	state.argbuf = buffer
@@ -235,6 +237,7 @@ func (d *countDistinctArgumentDrain) Commit() error {
 			state.capacity,
 			d.replacement,
 			state.distinctKeyWidth,
+			d.exec.legacyDistinctFloatKeys,
 		); err != nil {
 			return err
 		}
@@ -305,7 +308,7 @@ func (exec *countColumnExec) RehomeDistinctArgumentState(
 		var replacement aggState
 		if err := initBoundedDistinctWorkState(
 			&replacement, exec.mp, state.length, state.capacity, allocation,
-			state.distinctKeyWidth,
+			state.distinctKeyWidth, exec.legacyDistinctFloatKeys,
 		); err != nil {
 			return err
 		}

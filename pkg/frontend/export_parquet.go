@@ -106,8 +106,12 @@ func buildParquetNode(typ defines.MysqlType, flag uint16) parquet.Node {
 	case defines.MYSQL_TYPE_VARCHAR, defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_STRING,
 		defines.MYSQL_TYPE_JSON, defines.MYSQL_TYPE_UUID, defines.MYSQL_TYPE_TEXT:
 		return parquet.Optional(parquet.String())
-	case defines.MYSQL_TYPE_BLOB:
-		return parquet.Optional(parquet.Leaf(parquet.ByteArrayType))
+	case defines.MYSQL_TYPE_TINY_BLOB, defines.MYSQL_TYPE_BLOB,
+		defines.MYSQL_TYPE_MEDIUM_BLOB, defines.MYSQL_TYPE_LONG_BLOB:
+		if flag&uint16(defines.BINARY_FLAG) != 0 {
+			return parquet.Optional(parquet.Leaf(parquet.ByteArrayType))
+		}
+		return parquet.Optional(parquet.String())
 	default:
 		// Default to string for unknown types
 		return parquet.Optional(parquet.String())

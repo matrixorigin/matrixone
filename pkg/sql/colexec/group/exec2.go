@@ -118,6 +118,13 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	group.ctr.legacyApproxPercentileState = useLegacyApproxPercentileStateForRemote(proc)
 	group.ctr.legacyHLLState = useLegacyHLLStateForRemote(proc)
 	group.ctr.floatZeroHLLState = useFloatZeroHLLStateForRemote(proc)
+	group.ctr.legacyVectorHLLState = useLegacyVectorHLLStateForRemote(proc)
+	group.ctr.legacyTextHLLAddState = useLegacyTextHLLAddStateForRemote(proc)
+	group.ctr.legacyFloatHLLAddState = useLegacyFloatHLLAddStateForRemote(proc)
+	// Freeze the FLOAT DISTINCT key policy before makeAggList creates any
+	// states. A pre-v79 remote producer keeps every legacy float key (including
+	// distinct NaN payloads); local and v79+ execution uses canonical keys.
+	group.ctr.legacyDistinctFloatKeys = !canonicalDistinctKeyWireEnabled(proc)
 	group.ctr.timeZone = proc.Base.SessionInfo.TimeZone
 
 	// debug,
@@ -1336,8 +1343,20 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 		aggexec.SetGroupConcatSourceRowWire(ag, groupConcatSourceRowWireEnabled(proc))
 		aggexec.SetGroupConcatSourceRowProvenanceWire(
 			ag, groupConcatSourceRowProvenanceWireEnabled(proc))
+		// The FLOAT DISTINCT membership policy is frozen when the aggregate
+		// state is admitted. If the capability gate advances while a prepared
+		// Group is draining, keep legacy-policy state on the legacy framing;
+		// the v79 marker would make a receiver treat legacy float bytes as
+		// already canonical and preserve distinct NaN payloads incorrectly.
+		canonicalDistinctWire := canonicalDistinctKeyWireEnabled(proc) &&
+			!group.ctr.legacyDistinctFloatKeys
+		if aggexec.RequiresModernDistinctFloatKeyWire(ag) &&
+			!canonicalDistinctWire {
+			return vm.CancelResult, false, moerr.NewInvalidStateNoCtx(
+				"modern FLOAT DISTINCT key state requires MORPCVersion79")
+		}
 		aggexec.SetCanonicalDistinctKeyWire(
-			ag, canonicalDistinctKeyWireEnabled(proc))
+			ag, canonicalDistinctWire)
 		if aggexec.RequiresCanonicalDistinctKeyWire(ag) &&
 			!canonicalDistinctKeyWireEnabled(proc) {
 			return vm.CancelResult, false, moerr.NewInvalidStateNoCtx(
