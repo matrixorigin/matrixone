@@ -2007,6 +2007,13 @@ func isTopLevelClientStatement(ses *Session, execCtx *ExecCtx, input *UserInput)
 }
 
 func resetDiagnosticsForStatement(ses *Session, execCtx *ExecCtx, input *UserInput, stmt tree.Statement) {
+	if ses != nil && ses.GetCmd() == COM_STMT_CLOSE {
+		if _, ok := stmt.(*tree.Deallocate); ok {
+			// Protocol cleanup is not a new SQL statement. Drivers may close an
+			// implicit prepared statement before inspecting its diagnostics.
+			return
+		}
+	}
 	if isTopLevelClientStatement(ses, execCtx, input) && !isDiagnosticsStatement(stmt) {
 		ses.resetDiagnostics()
 		beginJSONMergeWarningStatement(ses, execCtx, input, stmt)
