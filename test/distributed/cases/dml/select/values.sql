@@ -16,3 +16,9 @@ select ord, dt from (values row(1, cast('2024-01-02 12:34:56.123' as datetime(3)
 select ord, dt from (values row(1, cast('2024-01-02 12:34:56.123456' as datetime(6))), row(2, cast('2024-01-02 12:34:56.123' as datetime(3)))) as v(ord, dt) order by ord;
 select ord, label from (values row(1, cast('a' as char(4))), row(2, cast('abcdefgh' as char(8)))) as v(ord, label) order by ord;
 select ord, label from (values row(1, cast('abcdefgh' as char(8))), row(2, cast('a' as char(4)))) as v(ord, label) order by ord;
+select x = 'a' as eq, hex(x) as bytes from (values row(coalesce(cast('a   ' as char(4)), cast('x' as varchar(8))))) v(x);
+select count(*) as n from (select distinct x from (values row(coalesce(cast('a   ' as char(4)), cast('x' as varchar(8)))), row(cast('a' as varchar(8)))) v(x)) d;
+select count(*) as n from (select distinct x from (values row(cast('a' as varchar(8))), row(coalesce(cast('a   ' as char(4)), cast('x' as varchar(8))))) v(x)) d;
+select ord, x = 'a' as eq from (values row(1, null), row(2, coalesce(cast('a   ' as char(4)), cast('x' as varchar(8)))), row(3, null)) v(ord, x) order by ord;
+select count(*) as n from (select distinct x from (values row(null), row(coalesce(cast('a   ' as char(4)), cast('x' as varchar(8)))), row(cast('a' as varchar(8))), row(null)) v(x)) d;
+select count(*) as n from (select distinct x from (values row(cast('a   ' as varchar(8))), row(cast('a' as varchar(8)))) v(x)) d;

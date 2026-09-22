@@ -10146,6 +10146,7 @@ func (builder *QueryBuilder) coerceValuesColumnToCommonType(
 	columnIdx int,
 ) (plan.Type, error) {
 	hasDecimal := false
+	hasPadSpace := false
 	allPureNull := len(exprs) > 0
 	for i, expr := range exprs {
 		pureNull := i < len(pureNulls) && pureNulls[i]
@@ -10154,6 +10155,7 @@ func (builder *QueryBuilder) coerceValuesColumnToCommonType(
 			continue
 		}
 		hasDecimal = hasDecimal || types.T(expr.Typ.Id).IsDecimal()
+		hasPadSpace = hasPadSpace || types.T(expr.Typ.Id) == types.T_char || hasPadSpaceStringProvenance(expr)
 	}
 
 	commonInputs := make([]types.Type, 0, len(exprs))
@@ -10212,6 +10214,11 @@ func (builder *QueryBuilder) coerceValuesColumnToCommonType(
 	}
 
 	commonPlanType := makePlan2Type(&commonType)
+	// Physical types do not carry CHAR-derived comparison provenance. Retain
+	// it on the column so comparisons and DISTINCT use the PAD SPACE domain.
+	if commonType.Oid == types.T_varchar || commonType.Oid == types.T_text {
+		commonPlanType.PadSpace = hasPadSpace
+	}
 	commonPlanType.NotNullable = len(exprs) > 0
 	for i, expr := range exprs {
 		pureNull := i < len(pureNulls) && pureNulls[i]

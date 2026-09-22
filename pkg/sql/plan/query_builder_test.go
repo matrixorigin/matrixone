@@ -6265,6 +6265,29 @@ func TestQueryBuilderBindValuesUsesColumnCommonType(t *testing.T) {
 		})
 	}
 
+	t.Run("string comparison provenance", func(t *testing.T) {
+		for _, test := range []struct {
+			rows     string
+			padSpace bool
+		}{
+			{"row(coalesce(cast('a   ' as char(4)), cast('x' as varchar(8))))", true},
+			{"row(cast('a' as varchar(8))), row(cast('a   ' as char(4)))", true},
+			{"row(cast('a   ' as char(4))), row(cast('a' as varchar(8)))", true},
+			{"row(null), row(coalesce(cast('a   ' as char(4)), cast('x' as varchar(8))))", true},
+			{"row(cast(null as char(4))), row(cast('a' as varchar(8)))", true},
+			{"row(coalesce(cast('a   ' as char(4)), cast('x' as varchar(8)))), row(cast('a' as varchar(8)))", true},
+			{"row(null), row(null)", false},
+			{"row(cast('a   ' as varchar(8))), row(cast('a' as varchar(8)))", false},
+			{"row(concat(cast('a' as char(4)), '   '))", false},
+		} {
+			t.Run(test.rows, func(t *testing.T) {
+				node, err := bindValues(t, test.rows)
+				require.NoError(t, err)
+				require.Equal(t, test.padSpace, node.TableDef.Cols[0].Typ.PadSpace)
+			})
+		}
+	})
+
 	t.Run("vector remains vector", func(t *testing.T) {
 		node, err := bindValues(t, "row(cast('[1,2,3]' as vecf32(3)))")
 		require.NoError(t, err)
