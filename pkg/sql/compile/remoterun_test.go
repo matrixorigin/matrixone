@@ -68,6 +68,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minusall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mongoscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
@@ -308,6 +309,7 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		&intersect.Intersect{},
 		&minus.Minus{},
 		&intersectall.IntersectAll{},
+		&minusall.MinusAll{},
 		&merge.Merge{},
 		&mergerecursive.MergeRecursive{},
 		&group.MergeGroup{},
@@ -383,6 +385,7 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.Intersect), SetOp: &pipeline.SetOp{}},
 		{Op: int32(vm.IntersectAll), SetOp: &pipeline.SetOp{}},
 		{Op: int32(vm.Minus), SetOp: &pipeline.SetOp{}},
+		{Op: int32(vm.MinusAll), SetOp: &pipeline.SetOp{}},
 		{Op: int32(vm.Connector), Connect: &pipeline.Connector{}},
 		{Op: int32(vm.Merge), Merge: &pipeline.Merge{}},
 		{Op: int32(vm.MergeRecursive)},
@@ -569,6 +572,16 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 		require.Equal(t, original.KeyExprs, restored.(*intersectall.IntersectAll).KeyExprs)
 	})
 
+	t.Run("MinusAll", func(t *testing.T) {
+		keyExpr := plan.MakePlan2Int64ConstExprWithType(8)
+		original := &minusall.MinusAll{KeyExprs: []*planpb.Expr{keyExpr}}
+		restored := roundTrip(t, original)
+		defer restored.Release()
+		require.IsType(t, &minusall.MinusAll{}, restored)
+		require.Equal(t, vm.MinusAll, restored.OpType())
+		require.Equal(t, original.KeyExprs, restored.(*minusall.MinusAll).KeyExprs)
+	})
+
 	t.Run("Order", func(t *testing.T) {
 		original := order.NewArgument()
 		original.OrderBySpec = []*planpb.OrderBySpec{{
@@ -707,6 +720,35 @@ func TestRemoteRunOperatorCodecRoundTrip(t *testing.T) {
 		require.False(t, targets[0].LockTable)
 		require.Equal(t, lockpb.LockMode_Shared, targets[0].Mode)
 	})
+}
+
+func TestRestoreMinusAllBinaryRemoteShape(t *testing.T) {
+	left := merge.NewArgument()
+	right := merge.NewArgument()
+	right.AppendChild(left)
+	scope := &Scope{RootOp: right}
+	op := minusall.NewArgument()
+
+	require.NoError(t, scope.restoreBinarySetChildren(op))
+	require.Same(t, op, scope.RootOp)
+	require.Equal(t, 2, op.GetOperatorBase().NumChildren())
+	require.Same(t, left, op.GetOperatorBase().GetChildren(0))
+	require.Same(t, right, op.GetOperatorBase().GetChildren(1))
+	require.Zero(t, right.GetOperatorBase().NumChildren())
+
+	op.GetOperatorBase().ResetChildren()
+	op.Release()
+	left.Release()
+	right.Release()
+}
+
+func TestRestoreMinusAllRejectsLinearShapeWithoutTwoMerges(t *testing.T) {
+	scope := &Scope{RootOp: merge.NewArgument()}
+	defer scope.RootOp.Release()
+	op := minusall.NewArgument()
+	defer op.Release()
+
+	require.ErrorContains(t, scope.restoreBinarySetChildren(op), "right input")
 }
 
 func TestRemoteRunOrderedPipelineEdgeRoundTrip(t *testing.T) {

@@ -58,6 +58,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minusall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mongoscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
@@ -689,8 +690,37 @@ func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline,
 		if err != nil {
 			return err
 		}
+		switch ins.OpType() {
+		case vm.Minus, vm.MinusAll, vm.Intersect, vm.IntersectAll:
+			if err := s.restoreBinarySetChildren(ins); err != nil {
+				ins.Release()
+				return err
+			}
+			continue
+		}
 		s.doSetRootOperator(ins)
 	}
+	return nil
+}
+
+// restoreBinarySetChildren reverses the fixed post-order wire shape emitted by
+// both set-operation compiler paths: left merge, right merge, binary operator.
+// The legacy decoder otherwise rebuilds instructions as a unary chain. This
+// also applies to a distinct or intersect ancestor of a nested MINUS ALL.
+func (s *Scope) restoreBinarySetChildren(op vm.Operator) error {
+	right := s.RootOp
+	if right == nil || right.OpType() != vm.Merge || right.GetOperatorBase().NumChildren() != 1 {
+		return moerr.NewInternalErrorNoCtxf("invalid remote binary set operator %v right input", op.OpType())
+	}
+	left := right.GetOperatorBase().GetChildren(0)
+	if left == nil || left.OpType() != vm.Merge || left.GetOperatorBase().NumChildren() != 0 {
+		return moerr.NewInternalErrorNoCtxf("invalid remote binary set operator %v left input", op.OpType())
+	}
+	right.GetOperatorBase().SetChild(nil, 0)
+	right.GetOperatorBase().ResetChildren()
+	op.AppendChild(left)
+	op.AppendChild(right)
+	s.RootOp = op
 	return nil
 }
 
@@ -968,6 +998,8 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *intersect.Intersect:
 		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
 	case *minus.Minus:
+		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
+	case *minusall.MinusAll:
 		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
 	case *intersectall.IntersectAll:
 		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
@@ -1623,6 +1655,12 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 			arg.KeyExprs = setOp.GetKeyExprs()
 		}
 		op = arg
+	case vm.MinusAll:
+		arg := minusall.NewArgument()
+		if setOp := opr.GetSetOp(); setOp != nil {
+			arg.KeyExprs = setOp.GetKeyExprs()
+		}
+		op = arg
 	case vm.Connector:
 		t := opr.GetConnect()
 		op = connector.NewArgument().
@@ -2030,6 +2068,11 @@ func validateRemoteAggregateProtocol(
 				(proc == nil || !supportsRemoteCanonicalTextHLLAdd(proc.GetService())) {
 				return moerr.NewNotSupportedNoCtx(
 					"canonical JSON/CHAR HLL_ADD_AGG remote execution requires MORPC protocol version 91")
+			}
+			if isCanonicalFloatHLLAddType(typ) &&
+				(proc == nil || !supportsRemoteCanonicalFloatHLLAdd(proc.GetService())) {
+				return moerr.NewNotSupportedNoCtx(
+					"canonical FLOAT HLL_ADD_AGG remote execution requires MORPC protocol version 92")
 			}
 		}
 		if agg.GetConfigType() == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {

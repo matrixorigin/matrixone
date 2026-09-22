@@ -18685,6 +18685,91 @@ func Test_determinePrivilegeSetOfStatement_CreateTableAsSelect(t *testing.T) {
 	require.False(t, seen[PrivilegeTypeInsert])
 }
 
+func Test_determinePrivilegeSetOfStatement_ShowRules(t *testing.T) {
+	stmt := &tree.ShowRules{RoleName: "r1"}
+	priv := determinePrivilegeSetOfStatement(stmt)
+
+	require.Equal(t, privilegeKindGeneral, priv.kind)
+	require.Equal(t, objectTypeAccount, priv.objectType())
+	require.True(t, priv.canExecInRestricted)
+
+	seen := make(map[PrivilegeType]bool)
+	for _, entry := range priv.entries {
+		seen[entry.privilegeId] = true
+	}
+	require.True(t, seen[PrivilegeTypeAlterRole])
+	require.True(t, seen[PrivilegeTypeAccountAll])
+}
+
+func Test_authenticateShowRulesRequiresAlterRole(t *testing.T) {
+	stmt := &tree.ShowRules{RoleName: "r1"}
+	priv := determinePrivilegeSetOfStatement(stmt)
+
+	convey.Convey("ordinary role without alter role cannot show rules", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newSes(priv, ctrl)
+
+		rowsOfMoUserGrant := [][]interface{}{
+			{0, false},
+		}
+		roleIdsInMoRolePrivs := []int{0}
+		rowsOfMoRolePrivs := [][]interface{}{}
+		roleIdsInMoRoleGrant := []int{0}
+		rowsOfMoRoleGrant := [][]interface{}{}
+
+		sql2result := makeSql2ExecResult(0, rowsOfMoUserGrant,
+			roleIdsInMoRolePrivs, priv.entries, rowsOfMoRolePrivs,
+			roleIdsInMoRoleGrant, rowsOfMoRoleGrant)
+
+		bh := newBh(ctrl, sql2result)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(
+			ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeFalse)
+	})
+
+	convey.Convey("role with alter role can show rules", t, func() {
+		ctrl := gomock.NewController(t)
+		defer ctrl.Finish()
+
+		ses := newSes(priv, ctrl)
+
+		rowsOfMoUserGrant := [][]interface{}{
+			{0, false},
+		}
+		roleIdsInMoRolePrivs := []int{0}
+		rowsOfMoRolePrivs := make([][][][]interface{}, len(roleIdsInMoRolePrivs))
+		for i := 0; i < len(roleIdsInMoRolePrivs); i++ {
+			rowsOfMoRolePrivs[i] = make([][][]interface{}, len(priv.entries))
+		}
+		// AlterRole granted; AccountAll not granted.
+		rowsOfMoRolePrivs[0][0] = [][]interface{}{
+			{int64(PrivilegeTypeAlterRole), false},
+		}
+		rowsOfMoRolePrivs[0][1] = [][]interface{}{}
+
+		roleIdsInMoRoleGrant := []int{0}
+		rowsOfMoRoleGrant := [][][]interface{}{{}}
+
+		sql2result := makeSql2ExecResult2(0, rowsOfMoUserGrant, roleIdsInMoRolePrivs,
+			priv.entries, rowsOfMoRolePrivs, roleIdsInMoRoleGrant, rowsOfMoRoleGrant, nil, nil)
+
+		bh := newBh(ctrl, sql2result)
+		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+		defer bhStub.Reset()
+
+		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(
+			ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeTrue)
+	})
+}
+
 func TestCopyTablePrivileges(t *testing.T) {
 	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(1001))
 	srcID := int64(10001)

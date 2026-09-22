@@ -32,8 +32,11 @@ const (
 type integerParameter struct {
 	position int
 	target   types.T
-	mode     integerParameterMode
-	variadic bool
+	// physicalTarget preserves a legacy executor signature after logical
+	// parameter coercion. Zero means the executor consumes target directly.
+	physicalTarget types.T
+	mode           integerParameterMode
+	variadic       bool
 	// Only roles whose original signatures accepted temporal values opt in.
 	temporal bool
 	uuid     bool
@@ -93,6 +96,14 @@ func IntegerArgumentTarget(name string, position int) (types.T, bool) {
 		return 0, false
 	}
 	return parameter.target, true
+}
+
+func IntegerArgumentPhysicalTarget(name string, position int) (types.T, bool) {
+	parameter, ok := integerParameterForPosition(name, position)
+	if !ok || parameter.physicalTarget == 0 {
+		return 0, false
+	}
+	return parameter.physicalTarget, true
 }
 
 func IntegerArgumentUsesExtendedSources(name string, position int) bool {
@@ -168,6 +179,9 @@ func (fn FuncNew) checkArgumentTypes(inputs []types.Type, modes []StringDomainCh
 		}
 		for position := parameter.position; position < end; position++ {
 			source := inputs[position]
+			if parameter.physicalTarget != 0 && source.Oid == parameter.physicalTarget {
+				continue
+			}
 			target, applies := parameter.sourceTarget(source.Oid, false)
 			if !applies {
 				continue

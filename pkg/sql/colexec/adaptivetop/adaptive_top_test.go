@@ -178,6 +178,31 @@ func TestAdaptiveTopSelectsOnlyOneCompleteCandidate(t *testing.T) {
 	}
 }
 
+func TestAdaptiveTopFallbackOnEmptyPreservesPartialPostResults(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		candidates [][][]int64
+		want       []int64
+		starts     []int
+	}{
+		{"empty post falls back", [][][]int64{{}, {{21, 22, 23}}}, []int64{21, 22, 23}, []int{0, 1}},
+		{"partial post is accepted", [][][]int64{{{1}}, {{21, 22, 23}}}, []int64{1}, []int{0}},
+		{"both candidates empty", [][][]int64{{}, {}}, nil, []int{0, 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newAdaptiveFixture(t, 3)
+			f.op.Branches = 2
+			f.proc.Reg.MergeReceivers = f.proc.Reg.MergeReceivers[:2]
+			f.op.FallbackOnEmpty = true
+			f.install(t, tc.candidates)
+			require.NoError(t, vm.Prepare(f.op, f.proc))
+			require.Equal(t, tc.want, f.read(t))
+			require.Equal(t, tc.starts, f.starts)
+			require.Equal(t, f.starts, f.waits)
+		})
+	}
+}
+
 func TestAdaptiveTopReportsRetainedMemory(t *testing.T) {
 	f := newAdaptiveFixture(t, 3)
 	f.install(t, [][][]int64{{{1, 2, 3}}, {}, {}})

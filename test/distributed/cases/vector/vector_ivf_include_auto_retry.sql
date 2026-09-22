@@ -1,6 +1,7 @@
--- Regression for IVF auto fallback with included columns.
--- The post path sees only the nearby category=0 cluster. Auto must rebuild
--- the equivalent pre path without changing result-column metadata.
+-- Regression for explicit IVF POST fallback with included columns.
+-- The initial POST path sees only the nearby category=0 cluster. An empty
+-- INCLUDE-covered page must retry the same subtree exactly, while AUTO keeps
+-- its existing POST/PRE/FORCE behavior.
 drop database if exists vector_ivf_include_auto_retry;
 create database vector_ivf_include_auto_retry;
 use vector_ivf_include_auto_retry;
@@ -45,6 +46,11 @@ from t
 where category = 1
 order by l2_distance(vec, '[0,0,0]')
 limit 1 by rank with option 'mode=post';
+
+prepare p from 'select id, category, payload from t where category = 1 order by l2_distance(vec, ''[0,0,0]'') limit 1 by rank with option ''mode=post''';
+execute p;
+execute p;
+deallocate prepare p;
 
 select id, category, payload
 from t

@@ -133,6 +133,27 @@ func TestIntegerArgumentBoundSources(t *testing.T) {
 	}
 }
 
+func TestSplitPartKeepsLegacyPhysicalContract(t *testing.T) {
+	ctx := context.Background()
+	for _, source := range []types.T{types.T_int64, types.T_decimal128} {
+		column := &planpb.Expr{Typ: planpb.Type{Id: int32(source), Scale: 1}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+		bound, err := BindFuncExprImplByPlanExpr(ctx, "split_part", []*Expr{
+			makePlan2StringConstExprWithType("a.b.c"), makePlan2StringConstExprWithType("."), column,
+		})
+		require.NoError(t, err)
+		_, overload := function.DecodeOverloadID(bound.GetF().Func.Obj)
+		require.Equal(t, int32(0), overload)
+
+		physical := bound.GetF().Args[2]
+		require.Equal(t, int32(types.T_uint32), physical.Typ.Id)
+		require.Equal(t, "cast_strict", physical.GetF().Func.ObjName)
+		require.Equal(t, int32(types.T_int64), physical.GetF().Args[0].Typ.Id)
+		if source == types.T_decimal128 {
+			require.True(t, isIntegerArgumentCast(physical.GetF().Args[0]))
+		}
+	}
+}
+
 func TestIntegerArgumentBoundSelection(t *testing.T) {
 	ctx := context.Background()
 	proc := testutil.NewProcess(t)
@@ -164,6 +185,24 @@ func TestIntegerArgumentPreparedRuntimeCandidates(t *testing.T) {
 		positions []int32
 	}{
 		{`select substring_index(?,".",?)`, []int32{1}},
+		{`select period_add(?,?)`, []int32{0, 1}},
+		{`select period_diff(?,?)`, []int32{0, 1}},
+		{`select ceil(1.25,?)`, []int32{0}},
+		{`select floor(1.25,?)`, []int32{0}},
+		{`select round(1.25,?)`, []int32{0}},
+		{`select truncate(1.25,?)`, []int32{0}},
+		{`select from_days(?)`, []int32{0}},
+		{`select week(cast("2026-09-20" as date),?)`, []int32{0}},
+		{`select yearweek(cast("2026-09-20" as date),?)`, []int32{0}},
+		{`select timestampadd(day,?,cast("2026-09-20" as date))`, []int32{0}},
+		{`select subvector(cast("[1,2,3]" as vecf32(3)),?)`, []int32{0}},
+		{`select last_query_id(?)`, []int32{0}},
+		{`select random_bytes(?)`, []int32{0}},
+		{`select sha2("x",?)`, []int32{0}},
+		{`select split_part("a.b.c",".",?)`, []int32{0}},
+		{`select regexp_instr("abc","b",?)`, []int32{0}},
+		{`select regexp_replace("abc","b","x",?,?)`, []int32{0, 1}},
+		{`select regexp_substr("abc","b",?,?)`, []int32{0, 1}},
 		{`select substring_index("a.b.c",".",cast(? as double))`, []int32{0}},
 		{`select substring_index("a.b.c",".",if(?,?,?))`, []int32{1, 2}},
 		{`select substring_index("a.b.c",".",coalesce(?,0e0))`, []int32{0}},

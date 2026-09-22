@@ -51,12 +51,13 @@ var canonicalEmptyHLL = func() [hllEncodedSize]byte {
 // hllSketch is the dense p=14 representation historically produced by
 // hyperloglog.NewNoSparse. Keeping the register array in MPool makes the
 // fixed 16 KiB per-group allocation physically accountable. Version 2 keeps
-// the legacy raw-value hash semantics for scalar and persisted HLL_ADD states;
+// the legacy raw-value hash semantics for non-floating scalar and persisted
+// HLL_ADD states;
 // version 3 canonicalizes only scalar floating-point signed zero, and version
-// 4 uses the complete typed SQL equivalence key. Vector HLL_ADD uses version 4
-// for new states, while an old version-2 state keeps its original hash domain
-// when it is restored and appended. Sketches with different hash versions
-// cannot be merged losslessly.
+// 4 uses the complete typed SQL equivalence key. Vector and scalar FLOAT/
+// DOUBLE HLL_ADD states use version 4 for new states, while an old version-2
+// state keeps its original hash domain when it is restored and appended.
+// Sketches with different hash versions cannot be merged losslessly.
 type hllSketch struct {
 	mp          *mpool.MPool
 	regs        []byte
@@ -941,10 +942,10 @@ type hllAddExec struct {
 
 func makeHllAdd(mp *mpool.MPool, id int64, arg types.Type) AggFuncExec {
 	// HLL_ADD_AGG output is persisted and consumed by HLL_MERGE_AGG. New vector,
-	// JSON, and CHAR states use the typed v4 equivalence domain; other scalar
-	// inputs retain the historical v2 state until an explicit migration.
-	// Restored v2 states keep their serialized version and therefore continue
-	// hashing appended values in the old domain.
+	// JSON, CHAR, FLOAT, and DOUBLE states use the typed v4 equivalence domain;
+	// other scalar inputs retain the historical v2 state. Restored v2 states
+	// keep their serialized version and therefore continue hashing appended
+	// values in the old domain.
 	if hllAddUsesCanonicalTypedKey(arg) {
 		return &hllAddExec{hllStateExec: hllStateExec{
 			family: hllStateFamilyAdd,
@@ -966,7 +967,7 @@ func makeHllAdd(mp *mpool.MPool, id int64, arg types.Type) AggFuncExec {
 
 func hllAddUsesCanonicalTypedKey(arg types.Type) bool {
 	switch arg.Oid {
-	case types.T_char, types.T_json,
+	case types.T_char, types.T_json, types.T_float32, types.T_float64,
 		types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16:
 		return true
@@ -1033,7 +1034,9 @@ type hllMergeExec struct {
 }
 
 func makeHllMerge(mp *mpool.MPool, id int64, arg types.Type) AggFuncExec {
-	// HLL_MERGE_AGG must accept and emit the same v2 state as HLL_ADD_AGG.
+	// HLL_MERGE_AGG starts with a v2 empty state for compatibility, then adopts
+	// the version of its first non-empty HLL_ADD_AGG input. This lets it merge
+	// new v4 scalar FLOAT/DOUBLE states without reinterpreting old registers.
 	return &hllMergeExec{hllStateExec: hllStateExec{family: hllStateFamilyMerge, legacyWireState: true, aggExec: aggExec{
 		mp:      mp,
 		aggInfo: makeLegacyHLLStateInfo(id, arg, types.T_varbinary.ToType()),

@@ -73,8 +73,28 @@ func TestIntegerArgumentCanonicalBinding(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestSplitPartReusesLegacyExecutionIdentity(t *testing.T) {
+	for _, source := range []types.T{types.T_int64, types.T_uint64, types.T_float64, types.T_decimal128, types.T_varchar, types.T_any} {
+		resolved, err := GetFunctionByName(context.Background(), "split_part", []types.Type{
+			types.T_varchar.ToType(), types.T_varchar.ToType(), source.ToType(),
+		})
+		require.NoError(t, err, source)
+		_, overload := DecodeOverloadID(resolved.GetEncodedOverloadID())
+		require.Equal(t, int32(0), overload, source)
+		targets, cast := resolved.ShouldDoImplicitTypeCast()
+		require.True(t, cast)
+		require.Equal(t, types.T_uint32, targets[2].Oid)
+	}
+
+	// Persisted plans created before integer-parameter migration retain UINT32.
+	_, err := GetFunctionByNameWithOverload(context.Background(), "split_part", []types.Type{
+		types.T_varchar.ToType(), types.T_varchar.ToType(), types.T_uint32.ToType(),
+	}, 0)
+	require.NoError(t, err)
+}
+
 func TestIntegerArgumentAdditionalSignatures(t *testing.T) {
-	for _, name := range []string{"ceil", "ceiling", "floor", "round", "truncate", "regexp_instr", "regexp_replace", "regexp_substr", "from_days", "week", "yearweek", "sha2", "subvector", "last_query_id", "random_bytes", "timestampadd"} {
+	for _, name := range []string{"period_add", "period_diff", "ceil", "ceiling", "floor", "round", "truncate", "from_days", "week", "yearweek", "timestampadd", "subvector", "last_query_id", "random_bytes", "sha2", "split_part", "regexp_instr", "regexp_replace", "regexp_substr"} {
 		id, ok := getFunctionIdByNameWithoutErr(name)
 		require.True(t, ok, name)
 		fn := allSupportedFunctions[id]

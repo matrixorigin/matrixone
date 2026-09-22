@@ -286,13 +286,14 @@ func (cwft *TxnComputationWrapper) GetProcess() *process.Process {
 	return cwft.proc
 }
 
-func columnsToMysqlColumns(ctx context.Context, cols []*plan2.ColDef) ([]interface{}, error) {
+func columnsToMysqlColumns(ctx context.Context, cols []*plan2.ColDef, directIntegerLengths ...uint32) ([]interface{}, error) {
 	columns := make([]interface{}, len(cols))
 	for i, col := range cols {
 		c, err := colDef2MysqlColumn(ctx, col)
 		if err != nil {
 			return nil, err
 		}
+		applyDirectIntegerResultMetadata(c, directIntegerLengths, i)
 		columns[i] = c
 	}
 	return columns, nil
@@ -304,7 +305,7 @@ func (cwft *TxnComputationWrapper) getColumnsWithResultColumns(ctx context.Conte
 		overlayPreparedGroupConcatResultMetadata(
 			cwft.plan.GetQuery(), cols, cwft.preparedStmt.groupConcatMaxLenFloor)
 	}
-	columns, err := columnsToMysqlColumns(ctx, cols)
+	columns, err := columnsToMysqlColumns(ctx, cols, directIntegerResultLengths(cwft.GetAst(), cols)...)
 	return columns, cols, err
 }
 
@@ -336,7 +337,7 @@ func (cwft *TxnComputationWrapper) GetColumns(ctx context.Context) ([]interface{
 			}
 		}
 	}
-	return columnsToMysqlColumns(ctx, cols)
+	return columnsToMysqlColumns(ctx, cols, directIntegerResultLengths(cwft.GetAst(), cols)...)
 }
 
 func (cwft *TxnComputationWrapper) GetServerStatus() uint16 {
@@ -1395,6 +1396,9 @@ func initExecuteStmtParamWithResolverInSession(
 	if err != nil {
 		return nil, nil, nil, "", false, err
 	}
+	if prepareStmt.longDataErr != nil {
+		return nil, nil, nil, "", false, prepareStmt.longDataErr
+	}
 	cwft.preparedStmt = prepareStmt
 	// Carry the binding database through execute-time authorization, lifecycle
 	// admission, and ownership cleanup. All three must address the same object.
@@ -1510,7 +1514,7 @@ func initExecuteStmtParamWithResolverInSession(
 		if executionSes.IsBackgroundSession() {
 			resper = owner.GetResponser()
 		}
-		newColDefData, err := resper.MysqlRrWr().MakeColumnDefData(reqCtx, columns)
+		newColDefData, err := resper.MysqlRrWr().MakeColumnDefData(reqCtx, columns, directIntegerResultLengths(prepareStmt.PrepareStmt, columns)...)
 		if err != nil {
 			return nil, nil, nil, "", false, err
 		}
@@ -1576,7 +1580,7 @@ func initExecuteStmtParamWithResolverInSession(
 			if executionSes.IsBackgroundSession() {
 				resper = owner.GetResponser()
 			}
-			newColDefData, metadataErr := resper.MysqlRrWr().MakeColumnDefData(reqCtx, columns)
+			newColDefData, metadataErr := resper.MysqlRrWr().MakeColumnDefData(reqCtx, columns, directIntegerResultLengths(prepareStmt.PrepareStmt, columns)...)
 			if metadataErr != nil {
 				return nil, nil, nil, "", false, metadataErr
 			}
@@ -2002,7 +2006,7 @@ func initExecuteStmtParamWithResolverInSession(
 			if executionSes.IsBackgroundSession() {
 				resper = owner.GetResponser()
 			}
-			colDefData, metadataErr := resper.MysqlRrWr().MakeColumnDefData(reqCtx, columns)
+			colDefData, metadataErr := resper.MysqlRrWr().MakeColumnDefData(reqCtx, columns, directIntegerResultLengths(prepareStmt.PrepareStmt, columns)...)
 			if metadataErr != nil {
 				return nil, nil, nil, originSQL, false, metadataErr
 			}

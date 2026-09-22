@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
@@ -254,6 +255,28 @@ func TestResetDiagnosticsForStatementLifecycle(t *testing.T) {
 	snapshot := ses.diagnosticsSnapshot()
 	snapshot.codes[0] = 2000
 	require.Equal(t, uint16(1001), ses.diagnosticsSnapshot().codes[0])
+}
+
+func TestStmtClosePreservesDiagnostics(t *testing.T) {
+	ses := &Session{errInfo: &errInfo{maxCnt: MoDefaultErrorCount}}
+	execCtx := &ExecCtx{}
+	input := &UserInput{}
+	ses.appendWarningDiagnostic(1259, "ZLIB: Input data corrupted")
+	ses.appendErrorDiagnostic(1000, "previous error")
+	ses.AppendWarningCount(3) // Totals may exceed the retained diagnostic records.
+	want := ses.diagnosticsSnapshot()
+
+	ses.SetCmd(COM_STMT_CLOSE)
+	resetDiagnosticsForStatement(ses, execCtx, input, &tree.Deallocate{})
+	require.Equal(t, want, ses.diagnosticsSnapshot())
+
+	// An explicit SQL DEALLOCATE is still a new client statement.
+	ses.SetCmd(COM_QUERY)
+	resetDiagnosticsForStatement(ses, execCtx, input, &tree.Deallocate{})
+	require.Zero(t, ses.diagnosticsSnapshot().length())
+	warnings, errors := ses.diagnosticsCounts()
+	require.Zero(t, warnings)
+	require.Zero(t, errors)
 }
 
 func TestShowErrorsFiltersWarningDiagnostics(t *testing.T) {
@@ -4376,7 +4399,7 @@ func Test_doResetClearsPreparedBinaryState(t *testing.T) {
 	ses.prepareStmts[stmtName] = prepareStmt
 
 	require.NoError(t, doReset(ctx, ses, tree.NewReset(tree.Identifier(stmtName))))
-	require.False(t, prepareStmt.params.GetNulls().Any())
+	require.Nil(t, prepareStmt.params)
 	require.Empty(t, prepareStmt.getFromSendLongData)
 }
 
@@ -8986,12 +9009,80 @@ func TestExecRequestStmtSendLongDataRowCount(t *testing.T) {
 			setRowCount(ses, ses.GetProc(), 7)
 			resp, err := ExecRequest(ses, execCtx, &Request{cmd: COM_STMT_SEND_LONG_DATA, data: tc.data})
 			require.NoError(t, err)
-			require.NotNil(t, resp)
-			require.Equal(t, ErrorResponse, resp.category)
-			require.Equal(t, int64(-1), ses.GetLastAffectedRows())
-			require.Equal(t, int64(-1), ses.GetProc().GetAffectedRows())
+			require.Nil(t, resp)
+			require.Equal(t, int64(7), ses.GetLastAffectedRows())
+			require.Equal(t, int64(7), ses.GetProc().GetAffectedRows())
 		})
 	}
+}
+
+func TestExecRequestStmtSendLongDataDefersFailureUntilExecute(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	ses := newTestSession(t, ctrl)
+	ses.sesSysVars = &SystemVariables{
+		mp: map[string]interface{}{"max_allowed_packet": int64(1024)},
+	}
+	proto, _, _ := newBinaryPrepareProtocolTestCase(t, "select ?")
+	proto.SetSession(ses)
+	ses.respr = NewMysqlResp(proto)
+	execCtx := newTestExecCtx(ctx, ctrl)
+	stmtID := uint32(29187)
+	stmtName := getPrepareStmtName(stmtID)
+	st := tree.NewPrepareString(tree.Identifier(stmtName), "select ?")
+	stmts, err := mysql.Parse(ctx, st.Sql, 1)
+	require.NoError(t, err)
+	preparePlan, err := buildPlan(ctx, nil, plan.NewEmptyCompilerContext(), st)
+	require.NoError(t, err)
+	stmt := &PrepareStmt{
+		Name: stmtName, PreparePlan: preparePlan, PrepareStmt: stmts[0],
+	}
+	defer stmt.Close()
+	require.NoError(t, ses.SetPrepareStmt(ctx, stmtName, stmt))
+
+	data := make([]byte, 6)
+	binary.LittleEndian.PutUint32(data, stmtID)
+	data = append(data, bytes.Repeat([]byte{'x'}, 600)...)
+	for i := 0; i < 3; i++ {
+		resp, err := ExecRequest(ses, execCtx,
+			&Request{cmd: COM_STMT_SEND_LONG_DATA, data: data})
+		require.NoError(t, err)
+		require.Nil(t, resp, "SEND_LONG_DATA must never send an unsolicited response")
+	}
+	require.ErrorContains(t, stmt.longDataErr, "max_allowed_packet")
+	require.Empty(t, stmt.longDataBuffers)
+	require.True(t, stmt.hasPendingLongData(), "a deferred error must block migration")
+
+	execute := make([]byte, 4)
+	binary.LittleEndian.PutUint32(execute, stmtID)
+	execute = append(execute, buildNullExecutePacket(defines.MYSQL_TYPE_VAR_STRING)...)
+	resp, err := ExecRequest(ses, execCtx,
+		&Request{cmd: COM_STMT_EXECUTE, data: execute})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Equal(t, ErrorResponse, resp.category)
+	require.ErrorContains(t, resp.GetData().(error), "max_allowed_packet")
+	require.True(t, stmt.hasPendingLongData())
+
+	stmt.resetBinaryParamState()
+	require.False(t, stmt.hasPendingLongData())
+	require.Nil(t, stmt.longDataErr)
+
+	invalidIndex := make([]byte, 6)
+	binary.LittleEndian.PutUint32(invalidIndex, stmtID)
+	binary.LittleEndian.PutUint16(invalidIndex[4:], 1)
+	resp, err = ExecRequest(ses, execCtx,
+		&Request{cmd: COM_STMT_SEND_LONG_DATA, data: invalidIndex})
+	require.NoError(t, err)
+	require.Nil(t, resp)
+	require.ErrorContains(t, stmt.longDataErr, "param index out of range")
+	resp, err = ExecRequest(ses, execCtx,
+		&Request{cmd: COM_STMT_EXECUTE, data: execute})
+	require.NoError(t, err)
+	require.Equal(t, ErrorResponse, resp.category)
+	stmt.resetBinaryParamState()
+	require.False(t, stmt.hasPendingLongData())
 }
 
 func Test_ExecRequest_SidecarHintUsesNormalQueryPath(t *testing.T) {
@@ -9825,16 +9916,15 @@ func Test_parseStmtSendLongData(t *testing.T) {
 		ctrl := gomock.NewController(t)
 		defer ctrl.Finish()
 
-		// Test case 1: data length < 4 bytes - should return error
+		// A packet without a statement id cannot be associated with a deferred error.
 		convey.Convey("data length less than 4 bytes", func() {
 			ses := newTestSession(t, ctrl)
 			data := []byte{1, 2, 3} // only 3 bytes
 			err := parseStmtSendLongData(ctx, ses, data)
-			convey.So(err, convey.ShouldNotBeNil)
-			convey.So(moerr.IsMoErrCode(err, moerr.ErrInvalidInput), convey.ShouldBeTrue)
+			convey.So(err, convey.ShouldBeNil)
 		})
 
-		// Test case 2: GetPrepareStmt returns error
+		// An unknown statement id is silently discarded by this response-free command.
 		convey.Convey("GetPrepareStmt returns error", func() {
 			ses := newTestSession(t, ctrl)
 			stmtID := uint32(123)
@@ -9844,7 +9934,7 @@ func Test_parseStmtSendLongData(t *testing.T) {
 			data = append(data, []byte("additional data")...)
 
 			err := parseStmtSendLongData(ctx, ses, data)
-			convey.So(err, convey.ShouldNotBeNil)
+			convey.So(err, convey.ShouldBeNil)
 		})
 
 		// Test case 3: Normal flow with IsCloudNonuser = false
@@ -9960,8 +10050,8 @@ func Test_parseStmtSendLongData(t *testing.T) {
 			data = append(data, []byte("long data content")...)
 
 			err = parseStmtSendLongData(ctx, ses, data)
-			convey.So(err, convey.ShouldNotBeNil)
-			convey.So(err, convey.ShouldEqual, expectedErr)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(preStmt.longDataErr, convey.ShouldEqual, expectedErr)
 		})
 
 		// Test case 6: Empty data after stmtID (only 4 bytes)

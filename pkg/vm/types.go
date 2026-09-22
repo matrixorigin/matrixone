@@ -117,6 +117,8 @@ const (
 	PreInsertAutoIDCache
 	// AdaptiveTop 只在协调节点执行，不允许作为远端指令编码。
 	AdaptiveTop
+	// MinusAll is appended to preserve all existing remote operator wire values.
+	MinusAll
 	// OpTypeEnd is the exclusive upper bound for executable operator types.
 	// New operator types must be added before it.
 	OpTypeEnd
@@ -194,6 +196,7 @@ func init() {
 		ShuffleStable:           "ShuffleStable",
 		PreInsertAutoIDCache:    "PreInsertAutoIDCache",
 		AdaptiveTop:             "AdaptiveTop",
+		MinusAll:                "MinusAll",
 	}
 
 	// Initialize StrToOperatorMap

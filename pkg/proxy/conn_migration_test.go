@@ -122,9 +122,14 @@ func runTestWithQueryServiceHandlersAndRefresh(
 				if !req.MigrateConnFromRequest.TempTableMigrationSupported {
 					return moerr.NewInternalError(ctx, "missing temporary-table migration capability")
 				}
+				if !req.MigrateConnFromRequest.LastInsertIDMigrationSupported {
+					return moerr.NewInternalError(ctx, "missing LAST_INSERT_ID migration capability")
+				}
 				resp.MigrateConnFromResponse = &pb.MigrateConnFromResponse{
 					DB:                            "d1",
 					LastAffectedRows:              7,
+					LastInsertID:                  13,
+					LastInsertIDExported:          true,
 					FoundRows:                     11,
 					UserLevelLockReleaseSupported: true,
 					TempTableStateExported:        true,
@@ -200,6 +205,7 @@ func TestQueryServiceMigrateFrom(t *testing.T) {
 		assert.NotNil(t, resp)
 		assert.Equal(t, "d1", resp.DB)
 		assert.Equal(t, int64(7), resp.LastAffectedRows)
+		assert.Equal(t, uint64(13), resp.LastInsertID)
 		assert.Equal(t, uint64(11), resp.FoundRows)
 	})
 }
@@ -240,6 +246,13 @@ func TestQueryServiceMigrateTo(t *testing.T) {
 			return moerr.NewInternalErrorf(ctx, "unexpected found rows: %d",
 				req.MigrateConnToRequest.FoundRows)
 		}
+		if req.MigrateConnToRequest.LastInsertID != 13 {
+			return moerr.NewInternalErrorf(ctx, "unexpected last insert id: %d",
+				req.MigrateConnToRequest.LastInsertID)
+		}
+		if !req.MigrateConnToRequest.LastInsertIDExported {
+			return moerr.NewInternalError(ctx, "missing exported LAST_INSERT_ID state")
+		}
 		resp.MigrateConnToResponse = &pb.MigrateConnToResponse{Success: true}
 		return nil
 	}
@@ -272,7 +285,10 @@ func TestQueryServiceMigrateToClearsReadDeadlineAfterControlReads(t *testing.T) 
 		defer sc.Close()
 
 		cc.migration.setVarStmts = []string{"set @mode = 'PIPES_AS_CONCAT'"}
-		require.NoError(t, cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{LastAffectedRows: 7}))
+		require.NoError(t, cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{
+			LastAffectedRows:     7,
+			LastInsertIDExported: true,
+		}))
 		assert.Equal(t, []string{
 			"/* cloud_nonuser */ set transferred=1;",
 			"set @mode = 'PIPES_AS_CONCAT'",
@@ -294,7 +310,7 @@ func TestQueryServiceMigrateToRejectsReadDeadlineClearFailure(t *testing.T) {
 		}
 		defer sc.Close()
 
-		err := cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{})
+		err := cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{LastInsertIDExported: true})
 		assert.ErrorContains(t, err, "read deadline clear failed")
 		assert.False(t, raw.readDeadline().IsZero(),
 			"a failed clear must not make the backend eligible for handoff")
@@ -320,8 +336,39 @@ func TestQueryServiceMigrateToRejectsNonZeroFoundRowsForPreV29Target(t *testing.
 		sc := &recordingMigrationServerConn{mockServerConn: newMockServerConn(local)}
 		defer sc.Close()
 
-		err := cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{FoundRows: 11})
+		err := cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{
+			FoundRows:            11,
+			LastInsertIDExported: true,
+		})
 		assert.ErrorContains(t, err, "cannot migrate non-zero FOUND_ROWS state to a pre-v29 target")
+		assert.Empty(t, sc.statements)
+	})
+}
+
+func TestQueryServiceMigrateToRejectsNonZeroLastInsertIDForPreV93Target(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
+	runTestWithQueryService(t, cn, func(cc *clientConn, _ string) {
+		targetRuntime := runtime.ServiceRuntime(cn.ServiceID)
+		oldVersion, hadVersion := targetRuntime.GetGlobalVariables(runtime.MOProtocolVersion)
+		targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion92)
+		defer func() {
+			if hadVersion {
+				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, oldVersion)
+			} else {
+				targetRuntime.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+			}
+		}()
+
+		local, remote := net.Pipe()
+		defer remote.Close()
+		sc := &recordingMigrationServerConn{mockServerConn: newMockServerConn(local)}
+		defer sc.Close()
+
+		err := cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{
+			LastInsertID:         13,
+			LastInsertIDExported: true,
+		})
+		assert.ErrorContains(t, err, "cannot migrate non-zero LAST_INSERT_ID state to a pre-v93 target")
 		assert.Empty(t, sc.statements)
 	})
 }
@@ -345,7 +392,10 @@ func TestQueryServiceMigrateToAllowsZeroFoundRowsForPreV22Target(t *testing.T) {
 		sc := &recordingMigrationServerConn{mockServerConn: newMockServerConn(local)}
 		defer sc.Close()
 
-		assert.NoError(t, cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{LastAffectedRows: 7}))
+		assert.NoError(t, cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{
+			LastAffectedRows:     7,
+			LastInsertIDExported: true,
+		}))
 		assert.Equal(t, []string{"/* cloud_nonuser */ set transferred=1;"}, sc.statements)
 	})
 }
@@ -371,7 +421,8 @@ func TestQueryServiceMigrateToCarriesTemporaryTables(t *testing.T) {
 		defer sc.Close()
 
 		require.NoError(t, cc.migrateConnTo(sc, &pb.MigrateConnFromResponse{
-			TempTables: tables,
+			TempTables:           tables,
+			LastInsertIDExported: true,
 		}))
 		assert.Equal(t, []string{"/* cloud_nonuser */ set transferred=1;"}, sc.statements)
 	})
@@ -400,6 +451,7 @@ func TestQueryServiceMigrateToRejectsTemporaryTablesForPreV38Target(t *testing.T
 			TempTables: []*pb.MigrateTempTable{{
 				Database: "d1", Alias: "tmp", PhysicalName: "__mo_tmp_source_d1_tmp",
 			}},
+			LastInsertIDExported: true,
 		})
 		assert.ErrorContains(t, err, "cannot migrate temporary tables to a pre-v38 target")
 		assert.Empty(t, sc.statements)
@@ -432,6 +484,7 @@ func TestQueryServiceMigrateToCarriesTypedUserVariables(t *testing.T) {
 			UserDefinedVarsReplayable:     true,
 			SystemVariablesReplayable:     true,
 			UserLevelLockReleaseSupported: true,
+			LastInsertIDExported:          true,
 			UserDefinedVars: []*pb.MigrateUserDefinedVar{{
 				Name:  "ts0",
 				Value: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "stable-value"}}}},
@@ -464,6 +517,7 @@ func TestQueryServiceMigrateToCarriesTypedSystemVariables(t *testing.T) {
 			UserDefinedVarsExported:       true,
 			SystemVariablesExported:       true,
 			UserLevelLockReleaseSupported: true,
+			LastInsertIDExported:          true,
 			UserDefinedVars: []*pb.MigrateUserDefinedVar{{
 				Name:  "mode",
 				Value: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "PIPES_AS_CONCAT"}}}},
@@ -523,6 +577,7 @@ func TestQueryServiceMigrateToFallsBackForPreV22Target(t *testing.T) {
 			SystemVariablesExported:   true,
 			UserDefinedVarsReplayable: true,
 			SystemVariablesReplayable: true,
+			LastInsertIDExported:      true,
 		}
 		assert.NoError(t, cc.migrateConnTo(sc, info))
 		assert.Equal(t, []string{
@@ -556,6 +611,7 @@ func TestQueryServiceMigrateToAllowsOversizedSystemSnapshotForPreV22Target(t *te
 			SystemVariablesSnapshotTooLarge: true,
 			SystemVariablesReplayable:       true,
 			UserLevelLockReleaseSupported:   true,
+			LastInsertIDExported:            true,
 		}
 		assert.NoError(t, cc.migrateConnTo(sc, info))
 		assert.Equal(t, []string{
@@ -577,6 +633,7 @@ func TestQueryServiceMigrateToRejectsOversizedSystemSnapshotForV22Target(t *test
 			SystemVariablesSnapshotTooLarge: true,
 			SystemVariablesReplayable:       true,
 			UserLevelLockReleaseSupported:   true,
+			LastInsertIDExported:            true,
 		}
 		err := cc.migrateConnTo(sc, info)
 		assert.ErrorContains(t, err, "snapshot exceeds the connection migration size limit")
@@ -596,6 +653,7 @@ func TestQueryServiceMigrateToRejectsOversizedUserSnapshotForV22Target(t *testin
 			UserDefinedVarsSnapshotTooLarge: true,
 			UserDefinedVarsReplayable:       true,
 			UserLevelLockReleaseSupported:   true,
+			LastInsertIDExported:            true,
 		}
 		err := cc.migrateConnTo(sc, info)
 		assert.ErrorContains(t, err, "typed user variables because the snapshot exceeds")
@@ -626,6 +684,7 @@ func TestQueryServiceMigrateToRejectsUnreplayableTypedStateForPreV22Target(t *te
 			UserDefinedVarsReplayable:     false,
 			UserDefinedVars:               []*pb.MigrateUserDefinedVar{{Name: "v"}},
 			UserLevelLockReleaseSupported: true,
+			LastInsertIDExported:          true,
 		}
 		err := cc.migrateConnTo(sc, info)
 		assert.ErrorContains(t, err, "complete raw replay")
@@ -656,6 +715,7 @@ func TestQueryServiceMigrateToRejectsUnreplayableTypedSystemStateForPreV22Target
 			SystemVariablesReplayable:     false,
 			SystemVariables:               []*pb.MigrateSystemVariable{{Name: "optimizer_hints"}},
 			UserLevelLockReleaseSupported: true,
+			LastInsertIDExported:          true,
 		}
 		err := cc.migrateConnTo(sc, info)
 		assert.ErrorContains(t, err, "complete raw replay")
@@ -684,6 +744,7 @@ func TestQueryServiceMigrateToReplaysRawUserStateWhenTypedUserSnapshotMissing(t 
 		cc.migration.setVarStmts = []string{"set @mode = 'PIPES_AS_CONCAT'"}
 		info := &pb.MigrateConnFromResponse{
 			SystemVariablesExported: true,
+			LastInsertIDExported:    true,
 		}
 		assert.NoError(t, cc.migrateConnTo(sc, info))
 		assert.Equal(t, []string{
@@ -724,7 +785,9 @@ func TestMigrateConnToUsesTransferDeadline(t *testing.T) {
 		deadline, ok := ctx.Deadline()
 		assert.True(t, ok)
 		transferDeadline <- deadline
-		err := cc.migrateConnToContext(ctx, sc, &pb.MigrateConnFromResponse{})
+		err := cc.migrateConnToContext(ctx, sc, &pb.MigrateConnFromResponse{
+			LastInsertIDExported: true,
+		})
 		assert.NoError(t, err)
 	})
 }
@@ -754,7 +817,9 @@ func TestMigrateConnToPropagatesCancellation(t *testing.T) {
 		defer cancel()
 		result := make(chan error, 1)
 		go func() {
-			result <- cc.migrateConnToContext(ctx, sc, &pb.MigrateConnFromResponse{})
+			result <- cc.migrateConnToContext(ctx, sc, &pb.MigrateConnFromResponse{
+				LastInsertIDExported: true,
+			})
 		}()
 
 		handlerReleased := false
@@ -796,7 +861,9 @@ func TestMigrateConnToContextCancelsReplay(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	go func() {
-		result <- cc.migrateConnToContext(ctx, blocked, &pb.MigrateConnFromResponse{})
+		result <- cc.migrateConnToContext(ctx, blocked, &pb.MigrateConnFromResponse{
+			LastInsertIDExported: true,
+		})
 	}()
 
 	select {
@@ -821,6 +888,7 @@ type migrationUserLockQueryClient struct {
 	migrateFromErr                error
 	preparedStmtLongDataChecked   bool
 	omitTempTableState            bool
+	omitLastInsertIDState         bool
 	releaseCount                  int
 }
 
@@ -841,6 +909,7 @@ func (c *migrationUserLockQueryClient) SendMessage(ctx context.Context, address 
 			UserLevelLockReleaseSupported: c.userLevelLockReleaseSupported,
 			PreparedStmtLongDataChecked:   c.preparedStmtLongDataChecked,
 			TempTableStateExported:        !c.omitTempTableState,
+			LastInsertIDExported:          !c.omitLastInsertIDState,
 		}}, nil
 	case pb.CmdMethod_MigrateConnTo:
 		c.migrateToPrepareStmts = append(
@@ -849,6 +918,28 @@ func (c *migrationUserLockQueryClient) SendMessage(ctx context.Context, address 
 	default:
 		return nil, moerr.NewInternalError(ctx, "unexpected request")
 	}
+}
+
+func TestMigrateConnFromRejectsMissingLastInsertIDSnapshot(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe", QueryAddress: "query"}
+	cluster := clusterservice.NewMOCluster(
+		"",
+		nil,
+		0,
+		clusterservice.WithDisableRefresh(),
+		clusterservice.WithServices([]metadata.CNService{cn}, nil))
+	defer cluster.Close()
+
+	cc, closeFn := createNewClientConn(t)
+	defer closeFn()
+	ccc := cc.(*clientConn)
+	queryClient := &migrationUserLockQueryClient{omitLastInsertIDState: true}
+	ccc.queryClient = queryClient
+	ccc.moCluster = cluster
+
+	_, err := ccc.migrateConnFromContext(context.Background(), "pipe")
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
+	require.Equal(t, 1, queryClient.releaseCount)
 }
 
 func TestMigrateConnFromReblocksLongDataRejectedByOldCN(t *testing.T) {

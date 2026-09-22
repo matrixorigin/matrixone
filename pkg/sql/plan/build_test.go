@@ -2757,6 +2757,8 @@ func TestUnionSqlBuilder(t *testing.T) {
 		"with qn (foo, bar) as (select 1 as col, 2 as coll union select 4, 5) select qn1.bar from qn qn1",
 		"select n_name, n_comment from nation union all select n_name, n_comment from nation2",
 		"select n_name from nation intersect all select n_name from nation2",
+		"select n_name from nation except all select n_name from nation2",
+		"select n_name from nation minus all select n_name from nation2",
 		"(select n_name from nation for update) union all (select n_name from nation2 for update)",
 		"(select n_name from nation for update) union all (select n_name from nation2)",
 		"with qn as (select n_nationkey from nation union all select n_nationkey from nation2) select * from qn for update",
@@ -2784,7 +2786,6 @@ func TestUnionSqlBuilder(t *testing.T) {
 	sqls = []string{
 		"select 1 union select 2, 'a'",
 		"select n_name as a from nation union select n_comment from nation order by n_name",
-		"select n_name from nation minus all select n_name from nation2", // not support
 		"select n_name from nation union all select n_name from nation2 for update",
 	}
 	runTestShouldError(mock, t, sqls)

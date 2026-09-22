@@ -128,7 +128,7 @@ func TestRecoverAdmittedReadReleasesOrRetainsRetryableOwner(t *testing.T) {
 	admitted, err := substrait.AdmitReads(context.Background(), substrait.AdmissionRequest{
 		Candidate: candidate, Provider: siriusRuntimeTestProvider{schema: candidate.Reads()[0].Schema}, Leases: leases,
 		AccountID: 1, QueryID: bytes.Repeat([]byte{'q'}, 16), SnapshotTS: make([]byte, 12),
-		AuthorizedClientSPKIHash: make([]byte, 32), TTL: time.Minute, ReadOnly: true,
+		AuthorizedClientSPKIHash: bytes.Repeat([]byte{1}, 32), TTL: time.Minute, ReadOnly: true,
 	})
 	require.NoError(t, err)
 	require.Len(t, leases.PendingExecutions(), 1)
@@ -140,7 +140,7 @@ func TestRecoverAdmittedReadReleasesOrRetainsRetryableOwner(t *testing.T) {
 	admitted, err = substrait.AdmitReads(context.Background(), substrait.AdmissionRequest{
 		Candidate: candidate, Provider: siriusRuntimeTestProvider{schema: candidate.Reads()[0].Schema}, Leases: leases,
 		AccountID: 1, QueryID: bytes.Repeat([]byte{'r'}, 16), SnapshotTS: make([]byte, 12),
-		AuthorizedClientSPKIHash: make([]byte, 32), TTL: time.Minute, ReadOnly: true,
+		AuthorizedClientSPKIHash: bytes.Repeat([]byte{1}, 32), TTL: time.Minute, ReadOnly: true,
 	})
 	require.NoError(t, err)
 	protector.failUnregister = true

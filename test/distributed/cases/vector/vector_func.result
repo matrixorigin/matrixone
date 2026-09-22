@@ -890,7 +890,12 @@ null  𝄀
 null  𝄀
 null
 select subvector(c2,8,"a") from vector_01;
-invalid argument cast to int, bad value a
+➤ subvector(c2, 8, a)[12,65535,0]  𝄀
+[]  𝄀
+[]  𝄀
+[]  𝄀
+[]  𝄀
+[]
 select subvector(c2,NULL,NULL) from vector_01;
 ➤ subvector(c2, null, null)[12,65535,0]  𝄀
 null  𝄀
