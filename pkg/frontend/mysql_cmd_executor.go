@@ -2740,8 +2740,13 @@ func prepareStringStatement(execCtx *ExecCtx, ses *Session, sql string) (string,
 	rewritten := sql
 	var err error
 	if execCtx.rewriteEnabled {
-		rewritten, err = rewriteSQLFromMaterializedPolicyWithSQLMode(
-			execCtx.reqCtx, execCtx.sqlOfStmt, sql, sessionSQLModeForParser(ses), parserLowerCaseTableNames(ses))
+		sessionEnabled := ses.rewriteEnabled.Load()
+		if execCtx.input != nil && execCtx.input.rewritePolicy != nil {
+			sessionEnabled = execCtx.input.rewritePolicy.sessionEnabled
+		}
+		rewritten, err = rewriteSQLFromMaterializedPolicyWithSQLModeAndSessionEnabled(
+			execCtx.reqCtx, execCtx.sqlOfStmt, sql, sessionSQLModeForParser(ses),
+			sessionEnabled, parserLowerCaseTableNames(ses))
 		if err != nil {
 			return sql, nil, nil, err
 		}
@@ -6386,7 +6391,10 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 		var preparedRemapDb map[string]string
 		// Materialize rewrite rules on the protocol payload before it enters the
 		// prepareable_stmt grammar. The resulting AST consumes the hint once.
-		if ses.rewriteEnabled.Load() {
+		// Always go through rewriteSQL/captureRewritePolicy: mandatory role
+		// rules apply even when enable_remap_hint is off (issue #29142); the
+		// policy itself skips optional session/inline layers in that case.
+		{
 			var rewriteErr error
 			sql, rewriteErr = rewriteSQL(execCtx.reqCtx, ses, sql)
 			if rewriteErr != nil {
@@ -6395,7 +6403,9 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 				resp = NewGeneralErrorResponse(COM_STMT_PREPARE, ses.GetTxnHandler().GetServerStatus(), rewriteErr)
 				return resp, nil
 			}
-			preparedRemapDb = extractInlineRemapDb(sql)
+			if ses.rewriteEnabled.Load() {
+				preparedRemapDb = extractInlineRemapDb(sql)
+			}
 		}
 		if err = validateNativePrepareJSONHints(execCtx.reqCtx, sql, parserLowerCaseTableNames(ses)); err != nil {
 			ses.resetDiagnostics()

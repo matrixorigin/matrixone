@@ -2210,6 +2210,7 @@ func Test_mce(t *testing.T) {
 			UserID:        rootID,
 			DefaultRoleID: moAdminRoleID,
 		})
+		ses.ruleCache = map[string]string{}
 		proto.SetSession(ses)
 
 		sysVarStubs := gostub.StubFunc(&ExeSqlInBgSes, nil, nil)
@@ -8673,6 +8674,7 @@ func TestExecRequestStmtPrepareAcceptsExplainAndSetVariable(t *testing.T) {
 
 	ses := newTestSession(t, ctrl)
 	defer ses.Close()
+	ses.ruleCache = map[string]string{}
 	ses.GetResponser().MysqlRrWr().(*MysqlProtocolImpl).SetSession(ses)
 	ses.txnHandler = InitTxnHandler(ses.GetService(), nil, ctx, txnOperator)
 	require.True(t, ses.txnHandler.InActiveTxn())
@@ -8882,6 +8884,7 @@ func TestExecRequestStmtPrepareRejectsNonPrepareableAndEmptyPayloads(t *testing.
 
 	ses := newTestSession(t, ctrl)
 	defer ses.Close()
+	ses.ruleCache = map[string]string{}
 	ses.GetResponser().MysqlRrWr().(*MysqlProtocolImpl).SetSession(ses)
 	ses.txnHandler = &TxnHandler{}
 	execCtx := newTestExecCtx(ctx, ctrl)
