@@ -76,6 +76,8 @@ type Options struct {
 	lockWaitTimeoutSet      bool
 	txnIsolation            txn.TxnIsolation
 	txnIsolationSet         bool
+	txnMode                 txn.TxnMode
+	txnModeSet              bool
 	// isFrontend records whether the caller is a frontend
 	// session-bound invocation. Go zero value (false) means
 	// background: every caller of the internal SQL executor is

@@ -22,26 +22,45 @@ import (
 )
 
 func TestLockViewMetadataLifecycleOrderAndErrors(t *testing.T) {
-	for _, failAt := range []int{0, 1, 2} {
-		t.Run([]string{"success", "snapshot failure", "view failure"}[failAt], func(t *testing.T) {
-			var sqls []string
-			failure := errors.New("lock canceled")
-			err := LockViewMetadataLifecycle(func(sql string) error {
-				sqls = append(sqls, sql)
-				if len(sqls) == failAt {
-					return failure
-				}
-				return nil
-			})
-			if failAt == 0 {
-				require.NoError(t, err)
-			} else {
-				require.ErrorIs(t, err, failure)
-			}
-			if failAt == 1 {
-				require.Equal(t, []string{SnapshotLifecycleGateSQL}, sqls)
-			} else {
-				require.Equal(t, []string{SnapshotLifecycleGateSQL, ViewMetadataLifecycleGateSQL}, sqls)
+	for _, lock := range []struct {
+		name string
+		fn   func(func(string) error) error
+		want []string
+	}{
+		{
+			name: "exclusive",
+			fn:   LockViewMetadataLifecycle,
+			want: []string{SnapshotLifecycleGateSQL, ViewMetadataLifecycleGateSQL},
+		},
+		{
+			name: "shared",
+			fn:   LockViewMetadataLifecycleShared,
+			want: []string{SnapshotLifecycleSharedGateSQL, ViewMetadataLifecycleSharedGateSQL},
+		},
+	} {
+		t.Run(lock.name, func(t *testing.T) {
+			for _, failAt := range []int{0, 1, 2} {
+				t.Run([]string{"success", "snapshot failure", "view failure"}[failAt], func(t *testing.T) {
+					var sqls []string
+					failure := errors.New("lock canceled")
+					err := lock.fn(func(sql string) error {
+						sqls = append(sqls, sql)
+						if len(sqls) == failAt {
+							return failure
+						}
+						return nil
+					})
+					if failAt == 0 {
+						require.NoError(t, err)
+					} else {
+						require.ErrorIs(t, err, failure)
+					}
+					if failAt == 1 {
+						require.Equal(t, lock.want[:1], sqls)
+					} else {
+						require.Equal(t, lock.want, sqls)
+					}
+				})
 			}
 		})
 	}

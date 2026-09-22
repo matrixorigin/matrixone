@@ -1161,6 +1161,17 @@ func newTestTxnClientAndOpWithIsolation(
 	isolation txn.TxnIsolation,
 	workspaces ...client.Workspace,
 ) (client.TxnClient, client.TxnOperator) {
+	return newTestTxnClientAndOpWithModeIsolation(
+		ctrl, txn.TxnMode_Optimistic, isolation, workspaces...,
+	)
+}
+
+func newTestTxnClientAndOpWithModeIsolation(
+	ctrl *gomock.Controller,
+	mode txn.TxnMode,
+	isolation txn.TxnIsolation,
+	workspaces ...client.Workspace,
+) (client.TxnClient, client.TxnOperator) {
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 	workspace := client.Workspace(&Ws{})
 	if len(workspaces) > 0 {
@@ -1169,7 +1180,7 @@ func newTestTxnClientAndOpWithIsolation(
 	txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
 	txnOperator.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
-	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{Isolation: isolation}).AnyTimes()
+	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{Mode: mode, Isolation: isolation}).AnyTimes()
 	txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 	txnOperator.EXPECT().NextSequence().Return(uint64(0)).AnyTimes()
 	txnOperator.EXPECT().TryEnterRunSqlWithTokenAndSQL(gomock.Any(), gomock.Any()).Return(uint64(1), nil).AnyTimes()

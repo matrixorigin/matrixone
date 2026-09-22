@@ -289,6 +289,26 @@ func (opts Options) TxnIsolation() txn.TxnIsolation {
 	return opts.txnIsolation
 }
 
+// WithTxnMode overrides the runtime default for a newly created internal
+// transaction.
+func (opts Options) WithTxnMode(mode txn.TxnMode) Options {
+	opts.txnMode = mode
+	opts.txnModeSet = true
+	opts.txnOpts = append(opts.txnOpts, client.WithTxnMode(mode))
+	return opts
+}
+
+// HasTxnMode reports whether this execution explicitly supplied a transaction
+// mode for a newly created internal transaction.
+func (opts Options) HasTxnMode() bool {
+	return opts.txnModeSet
+}
+
+// TxnMode returns the explicitly supplied transaction mode.
+func (opts Options) TxnMode() txn.TxnMode {
+	return opts.txnMode
+}
+
 // WithLockWaitTimeout sets a per-execution lock wait budget. It is propagated
 // both to newly created transactions and to the process used by an existing
 // transaction, so background execution can override the global default

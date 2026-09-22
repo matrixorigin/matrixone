@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -48,6 +49,8 @@ type viewMetadataCleanupRecordingExecutor struct {
 	systemCTELimits []bool
 	results         []executor.Result
 	failures        map[int]error
+	opts            []executor.Options
+	txnOptions      []executor.Options
 }
 
 func enableViewMetadataRefreshForTest(t *testing.T) {
@@ -67,9 +70,10 @@ func setSynchronousViewRefreshBudgetForTest(t *testing.T, budget int) {
 func (e *viewMetadataCleanupRecordingExecutor) Exec(
 	ctx context.Context,
 	sql string,
-	_ executor.Options,
+	opts executor.Options,
 ) (executor.Result, error) {
 	e.sqls = append(e.sqls, sql)
+	e.opts = append(e.opts, opts)
 	e.systemCTELimits = append(e.systemCTELimits, process.HasSystemCTELimits(ctx))
 	call := len(e.sqls)
 	if err := e.failures[call]; err != nil {
@@ -86,6 +90,7 @@ func (e *viewMetadataCleanupRecordingExecutor) ExecTxn(
 	execFunc func(executor.TxnExecutor) error,
 	opts executor.Options,
 ) error {
+	e.txnOptions = append(e.txnOptions, opts)
 	return execFunc(executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
 		return e.Exec(ctx, sql, opts)
 	}, nil))
@@ -199,6 +204,15 @@ func TestRunRecoveryContinuesAfterTransactionConflict(t *testing.T) {
 		failures: map[int]error{4: moerr.NewTxnNeedRetryWithDefChangedNoCtx()},
 	}
 	require.NoError(t, RunViewMetadataRecovery(context.Background(), exec, "worker"))
+	for i, sql := range exec.sqls {
+		if !strings.Contains(sql, "mo_ctl('CN','RefreshViewMetadata'") {
+			continue
+		}
+		require.True(t, exec.opts[i].HasTxnMode())
+		require.Equal(t, txn.TxnMode_Pessimistic, exec.opts[i].TxnMode())
+		require.True(t, exec.opts[i].HasTxnIsolation())
+		require.Equal(t, txn.TxnIsolation_RC, exec.opts[i].TxnIsolation())
+	}
 	require.GreaterOrEqual(t, len(exec.sqls), 6)
 	require.Contains(t, exec.sqls[4], "next_retry_at=date_add(now(),interval 2 second)")
 	require.Contains(t, exec.sqls[4], "target_generation=13")
@@ -560,6 +574,12 @@ func TestEnabledViewMetadataCommandRoutesLifecycleOperations(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			enableViewMetadataRefreshForTest(t)
 			proc := testutil.NewProcess(t)
+			ctrl := gomock.NewController(t)
+			txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOperator.EXPECT().Txn().Return(txn.TxnMeta{
+				Mode: txn.TxnMode_Pessimistic, Isolation: txn.TxnIsolation_RC,
+			}).AnyTimes()
+			proc.Base.TxnOperator = txnOperator
 			exec := &viewMetadataCleanupRecordingExecutor{results: append([]executor.Result{{}}, tc.results...)}
 			installViewMetadataTestExecutor(t, proc, exec)
 			count, err := recoverViewMetadataCommand(proc, tc.parameter)
@@ -582,6 +602,9 @@ func TestEnabledRelationMutationDurablyEnqueuesClosure(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOperator.EXPECT().SnapshotTS().Return(timestamp.Timestamp{PhysicalTime: 31})
+	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{
+		Mode: txn.TxnMode_Pessimistic, Isolation: txn.TxnIsolation_RC,
+	}).AnyTimes()
 	proc.Base.TxnOperator = txnOperator
 	engine := mock_frontend.NewMockEngine(ctrl)
 	database := mock_frontend.NewMockDatabase(ctrl)
@@ -654,6 +677,9 @@ func TestEnabledLifecycleRemovalAndCleanupPaths(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 	txnOperator.EXPECT().SnapshotTS().Return(timestamp.Timestamp{PhysicalTime: 31})
+	txnOperator.EXPECT().Txn().Return(txn.TxnMeta{
+		Mode: txn.TxnMode_Pessimistic, Isolation: txn.TxnIsolation_RC,
+	}).AnyTimes()
 	proc.Base.TxnOperator = txnOperator
 	exec := &viewMetadataCleanupRecordingExecutor{}
 	installViewMetadataTestExecutor(t, proc, exec)
@@ -1410,6 +1436,28 @@ func TestViewMetadataRecoveryRejectsUnavailableRuntimeState(t *testing.T) {
 	require.NoError(t, lockViewMetadataLifecycleGate(proc))
 }
 
+func TestViewMetadataLifecycleGateRejectsNonPessimisticRCTransaction(t *testing.T) {
+	for _, meta := range []txn.TxnMeta{
+		{Mode: txn.TxnMode_Optimistic, Isolation: txn.TxnIsolation_SI},
+		{Mode: txn.TxnMode_Pessimistic, Isolation: txn.TxnIsolation_SI},
+	} {
+		t.Run(meta.DebugString(), func(t *testing.T) {
+			enableViewMetadataRefreshForTest(t)
+			proc := testutil.NewProcess(t)
+			ctrl := gomock.NewController(t)
+			txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
+			txnOperator.EXPECT().Txn().Return(meta).AnyTimes()
+			proc.Base.TxnOperator = txnOperator
+			exec := &viewMetadataCleanupRecordingExecutor{}
+			installViewMetadataTestExecutor(t, proc, exec)
+
+			err := lockViewMetadataLifecycleGate(proc)
+			require.ErrorContains(t, err, "requires a pessimistic RC transaction")
+			require.Empty(t, exec.sqls)
+		})
+	}
+}
+
 func TestRefreshPendingViewFailsClosedBeforeRegeneration(t *testing.T) {
 	lookupErr := moerr.NewInternalErrorNoCtx("catalog lookup failed")
 	for _, tc := range []struct {
@@ -1718,6 +1766,13 @@ func TestViewMetadataRevalidationActivationIsPersistedAndIdempotent(t *testing.T
 	}}
 	require.NoError(t, RequireViewMetadataRevalidation(context.Background(), exec))
 	require.NoError(t, StartViewMetadataRevalidation(context.Background(), exec, "worker"))
+	require.Len(t, exec.txnOptions, 2)
+	for _, opts := range exec.txnOptions {
+		require.True(t, opts.HasTxnMode())
+		require.Equal(t, txn.TxnMode_Pessimistic, opts.TxnMode())
+		require.True(t, opts.HasTxnIsolation())
+		require.Equal(t, txn.TxnIsolation_RC, opts.TxnIsolation())
+	}
 	require.Len(t, exec.sqls, 10)
 	require.Equal(t, []string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL}, exec.sqls[:2])
 	require.Contains(t, exec.sqls[2], "select source_account_id")

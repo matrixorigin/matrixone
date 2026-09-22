@@ -293,6 +293,13 @@ func checkMethodVersion(
 		return moerr.NewNotSupportedNoCtx(
 			"owner-local lock wait snapshot is unavailable in the current protocol version")
 	}
+	if err != nil && req.Method == pb.Method_LockWriterFair {
+		// This method is deliberately capability-bearing. A local rollout gate
+		// below v94 is equivalent to an old remote owner: reject before admission
+		// so remoteLockTable can retry the logical request as Exclusive.
+		return moerr.NewNotSupportedNoCtx(
+			"writer-fair lock admission is unavailable in the current protocol version")
+	}
 	return err
 }
 
@@ -360,6 +367,7 @@ func (c *client) asyncSend(
 			sid = getUUIDFromServiceIdentifier(request.Lock.Options.ForwardTo)
 			address, lookupErr = c.lookupLockServiceAddress(ctx, sid)
 		case pb.Method_Lock,
+			pb.Method_LockWriterFair,
 			pb.Method_Unlock,
 			pb.Method_BatchUnlock,
 			pb.Method_GetTxnLock,

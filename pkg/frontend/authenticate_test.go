@@ -402,6 +402,16 @@ func Test_checkTenantExistsOrNot(t *testing.T) {
 
 		ses := newSes(nil, ctrl)
 		ses.tenant = tenant
+		originalAcquire := acquireAccountLifecycleSharedGates
+		acquireAccountLifecycleSharedGates = func(
+			context.Context,
+			*Session,
+			BackgroundExec,
+			...accountLifecycleGate,
+		) error {
+			return nil
+		}
+		defer func() { acquireAccountLifecycleSharedGates = originalAcquire }()
 
 		err = InitGeneralTenant(ctx, bh, ses, &createAccount{
 			Name:        "test",
@@ -12786,6 +12796,7 @@ type backgroundExecTest struct {
 	beforeExec                     func(string)
 	dropDatabaseIgnoresForeignKeys bool
 	systemCTELimits                []bool
+	lockWriterFair                 []bool
 	executionAccountIDs            []uint32
 	executionDatabaseTypes         []string
 }
@@ -12799,6 +12810,13 @@ func TestInheritViewMetadataRevalidation(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
 	t.Cleanup(ses.Close)
+	originalAcquire := acquireAccountLifecycleSharedGates
+	acquireAccountLifecycleSharedGates = func(
+		context.Context, *Session, BackgroundExec, ...accountLifecycleGate,
+	) error {
+		return nil
+	}
+	t.Cleanup(func() { acquireAccountLifecycleSharedGates = originalAcquire })
 	runtime := moruntime.ServiceRuntime(ses.GetService())
 	readyCluster := &mockMOCluster{cnServices: []metadata.CNService{{
 		ServiceID: "ready-cn", WorkState: metadata.WorkState_Working,
@@ -12816,9 +12834,9 @@ func TestInheritViewMetadataRevalidation(t *testing.T) {
 	t.Run("inherits active generation", func(t *testing.T) {
 		bh := &backgroundExecTest{}
 		bh.init()
-		require.NoError(t, inheritViewMetadataRevalidation(context.Background(), bh, ses.GetService(), 42))
+		require.NoError(t, inheritViewMetadataRevalidation(context.Background(), bh, ses, 42))
 		require.Len(t, bh.executedSQLs, 3)
-		require.Equal(t, []string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL}, bh.executedSQLs[:2])
+		require.Equal(t, []string{catalog.SnapshotLifecycleSharedGateSQL, catalog.ViewMetadataLifecycleSharedGateSQL}, bh.executedSQLs[:2])
 		require.Contains(t, bh.executedSQLs[2], "select 42,0,0,0")
 		require.Contains(t, bh.executedSQLs[2], "d.dependency_generation")
 		require.Contains(t, bh.executedSQLs[2], "d.source_relation_kind")
@@ -12835,29 +12853,36 @@ func TestInheritViewMetadataRevalidation(t *testing.T) {
 		defer runtime.SetGlobalVariables(moruntime.ClusterService, readyCluster)
 		bh := &backgroundExecTest{}
 		bh.init()
-		require.NoError(t, inheritViewMetadataRevalidation(context.Background(), bh, ses.GetService(), 42))
+		require.NoError(t, inheritViewMetadataRevalidation(context.Background(), bh, ses, 42))
 		require.Len(t, bh.executedSQLs, 3)
-		require.Equal(t, []string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL}, bh.executedSQLs[:2])
+		require.Equal(t, []string{catalog.SnapshotLifecycleSharedGateSQL, catalog.ViewMetadataLifecycleSharedGateSQL}, bh.executedSQLs[:2])
 		require.Contains(t, bh.executedSQLs[2], "select 42,0,0,0")
 
 		missing := &backgroundExecTest{}
 		missing.init()
-		missing.sql2err[catalog.ViewMetadataLifecycleGateSQL] =
+		missing.sql2err[catalog.ViewMetadataLifecycleSharedGateSQL] =
 			moerr.NewNoSuchTableNoCtx("mo_catalog", catalog.MO_VIEW_REFRESH)
 		require.NoError(t, inheritViewMetadataRevalidation(
-			context.Background(), missing, ses.GetService(), 43))
-		require.Equal(t, []string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL}, missing.executedSQLs)
+			context.Background(), missing, ses, 43))
+		require.Equal(t, []string{catalog.SnapshotLifecycleSharedGateSQL, catalog.ViewMetadataLifecycleSharedGateSQL}, missing.executedSQLs)
 	})
 }
 
-func TestInitGeneralTenantLocksSnapshotBeforeAccountName(t *testing.T) {
+func TestInitGeneralTenantLocksSharedSnapshotBeforeAccountName(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newSes(nil, ctrl)
+	originalAcquire := acquireAccountLifecycleSharedGates
+	acquireAccountLifecycleSharedGates = func(
+		context.Context, *Session, BackgroundExec, ...accountLifecycleGate,
+	) error {
+		return nil
+	}
+	t.Cleanup(func() { acquireAccountLifecycleSharedGates = originalAcquire })
 
 	bh := &backgroundExecTest{}
 	bh.init()
 	wantErr := errors.New("snapshot lifecycle gate failed")
-	bh.sql2err[catalog.SnapshotLifecycleGateSQL] = wantErr
+	bh.sql2err[catalog.SnapshotLifecycleSharedGateSQL] = wantErr
 
 	err := InitGeneralTenant(context.Background(), bh, ses, &createAccount{
 		Name:      "issue_28433_account",
@@ -12870,7 +12895,7 @@ func TestInitGeneralTenantLocksSnapshotBeforeAccountName(t *testing.T) {
 	accountLock, err := getSqlForLockMoAccountNameFormat(context.Background(), "issue_28433_account")
 	require.NoError(t, err)
 	require.Equal(t,
-		[]string{"begin;", catalog.SnapshotLifecycleGateSQL, "rollback;"},
+		[]string{"begin;", catalog.SnapshotLifecycleSharedGateSQL, "rollback;"},
 		bh.executedSQLs,
 	)
 	require.NotContains(t, bh.executedSQLs, accountLock)
@@ -12909,6 +12934,7 @@ func (bt *backgroundExecTest) Exec(ctx context.Context, s string) error {
 	bt.currentSql = s
 	bt.executedSQLs = append(bt.executedSQLs, s)
 	bt.systemCTELimits = append(bt.systemCTELimits, process.HasSystemCTELimits(ctx))
+	bt.lockWriterFair = append(bt.lockWriterFair, defines.IsLockWriterFair(ctx))
 	accountID, _ := defines.GetAccountId(ctx)
 	bt.executionAccountIDs = append(bt.executionAccountIDs, accountID)
 	databaseType, _ := ctx.Value(defines.DatTypKey{}).(string)

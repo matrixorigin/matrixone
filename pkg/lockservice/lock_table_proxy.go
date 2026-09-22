@@ -78,14 +78,6 @@ func (lp *localLockTableProxy) lock(
 		lp.remote.lock(ctx, txn, rows, options, cb)
 		return
 	}
-	if !supportsLockProtocolV28(lp.protocolServiceID) {
-		// An existing proxy can outlive a process-wide protocol transition. Stop
-		// admitting new cache-only sharers while v28 is unavailable; a direct
-		// owner lock/unlock remains compatible with pre-v28 peers and is tracked by
-		// remoteUnlockRequired in the transaction ledger.
-		lp.remote.lock(ctx, txn, rows, options, cb)
-		return
-	}
 
 	lp.mu.Lock()
 	if err := ctx.Err(); err != nil {
@@ -106,10 +98,16 @@ func (lp *localLockTableProxy) lock(
 	}
 	v, ok := lp.mu.holders[key]
 	hasRemoteHolder := lp.hasRemoteHolderLocked(key)
+	if !ok && (options.WriterFair || !supportsLockProtocolV28(lp.protocolServiceID)) {
+		lp.mu.Unlock()
+		lp.remote.lock(ctx, txn, rows, options, cb)
+		return
+	}
 	if !ok {
 		v = &sharedOps{}
 		lp.mu.holders[key] = v
-	} else if !hasRemoteHolder && !v.remoteInFlight {
+	} else if !hasRemoteHolder && !v.remoteInFlight &&
+		!options.WriterFair && supportsLockProtocolV28(lp.protocolServiceID) {
 		// A completed generation can temporarily retain pending followers after
 		// its last admitted holder has released the physical lock. Those followers
 		// finish against the detached generation and retry at the owner; a new
@@ -127,37 +125,6 @@ func (lp *localLockTableProxy) lock(
 		r := v.result
 		lp.mu.Unlock()
 		cb(r, nil)
-		return
-	}
-	if hasRemoteHolder && !containsTxn {
-		// Make transaction bookkeeping durable before publishing this caller as
-		// a handoff candidate. Unlock takes the same txn -> proxy lock order, so
-		// holding lp.mu across this bounded local update makes admission atomic
-		// with representative replacement.
-		bind := lp.getBind()
-		err := txn.remoteLockAdded(
-			bind.Group,
-			bind,
-			rows,
-			options.LockOptions,
-			lp.logger,
-		)
-		if err == nil {
-			v.addAdmitted(txn)
-			r := v.result
-			lp.mu.Unlock()
-			cb(r, nil)
-			return
-		}
-		lp.mu.Unlock()
-		if moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade) {
-			// This transaction cannot retain another exact proxy membership, but
-			// the negotiated owner snapshot and transaction-scoped remote unlock
-			// make a direct, uncached Shared acquisition fully representable.
-			lp.remote.lock(ctx, txn, rows, options, cb)
-			return
-		}
-		cb(pb.Result{}, err)
 		return
 	}
 	if containsTxn {
@@ -200,6 +167,46 @@ func (lp *localLockTableProxy) lock(
 			return
 		}
 		cb(r, nil)
+		return
+	}
+	if options.WriterFair || !supportsLockProtocolV28(lp.protocolServiceID) {
+		// A writer-fair new reader must be admitted by the authoritative owner,
+		// because the proxy cache cannot observe an Exclusive waiter queued there.
+		// Existing admitted/pending transactions were handled above so a re-entry
+		// cannot wait behind its own proxy representative.
+		lp.mu.Unlock()
+		lp.remote.lock(ctx, txn, rows, options, cb)
+		return
+	}
+	if hasRemoteHolder {
+		// Make transaction bookkeeping durable before publishing this caller as
+		// a handoff candidate. Unlock takes the same txn -> proxy lock order, so
+		// holding lp.mu across this bounded local update makes admission atomic
+		// with representative replacement.
+		bind := lp.getBind()
+		err := txn.remoteLockAdded(
+			bind.Group,
+			bind,
+			rows,
+			options.LockOptions,
+			lp.logger,
+		)
+		if err == nil {
+			v.addAdmitted(txn)
+			r := v.result
+			lp.mu.Unlock()
+			cb(r, nil)
+			return
+		}
+		lp.mu.Unlock()
+		if moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade) {
+			// This transaction cannot retain another exact proxy membership, but
+			// the negotiated owner snapshot and transaction-scoped remote unlock
+			// make a direct, uncached Shared acquisition fully representable.
+			lp.remote.lock(ctx, txn, rows, options, cb)
+			return
+		}
+		cb(pb.Result{}, err)
 		return
 	}
 

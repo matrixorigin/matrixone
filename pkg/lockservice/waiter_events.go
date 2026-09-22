@@ -242,7 +242,6 @@ func (mw *waiterEvents) add(c *lockContext) {
 		c.w.lockWaitTimeout = c.getLockWaitTimeout()
 		c.w.lockWaitTimeoutErr = c.getLockWaitTimeoutErr()
 		c.w.lockWaitGranularity = c.opts.Granularity
-		c.w.lockWaitMode = c.opts.Mode
 		if c.w.lockWaitTimeout <= 0 && !c.lockWaitDeadline.IsZero() {
 			c.w.lockWaitTimeout = time.Nanosecond
 		}

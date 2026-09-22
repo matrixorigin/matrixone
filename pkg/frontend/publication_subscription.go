@@ -427,7 +427,7 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 		dbType          string
 		sql             string
 	)
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
 	tenantInfo := ses.GetTenantInfo()
@@ -663,7 +663,7 @@ func doDropPublication(ctx context.Context, ses *Session, dp *tree.DropPublicati
 		v2.DropPubHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
 	tenantInfo := ses.GetTenantInfo()

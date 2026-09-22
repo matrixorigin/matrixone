@@ -1177,6 +1177,43 @@ func TestForcedObjectLifecycleTxnConsumesNextIsolation(t *testing.T) {
 	})
 }
 
+func TestForcedLifecycleModePreservesNextIsolation(t *testing.T) {
+	txnclient.RunTxnTests(func(realTxnClient txnclient.TxnClient, _ rpc.TxnSender) {
+		ctrl := gomock.NewController(t)
+		ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+		ses := newTestSession(t, ctrl)
+		defer ses.Close()
+		originalTxnClient := getPu("").TxnClient
+		defer func() { getPu("").TxnClient = originalTxnClient }()
+		getPu("").TxnClient = realTxnClient
+
+		handler := ses.GetTxnHandler()
+		require.NoError(t, handler.setNextTxnIsolation(ctx, txn.TxnIsolation_SI, false))
+		execCtx := &ExecCtx{
+			reqCtx: ctx,
+			ses:    ses,
+			stmt:   &tree.AlterTable{},
+			txnOpt: FeTxnOption{
+				autoCommit:                    true,
+				forcePessimisticLifecycleMode: true,
+			},
+		}
+
+		handler.mu.Lock()
+		err := handler.createTxnOpUnsafe(execCtx)
+		op := handler.txnOp
+		handler.txnOp = nil
+		handler.mu.Unlock()
+		require.NoError(t, err)
+		require.NotNil(t, op)
+		require.Equal(t, txn.TxnMode_Pessimistic, op.Txn().Mode)
+		require.Equal(t, txn.TxnIsolation_SI, op.Txn().Isolation)
+		require.NoError(t, op.Rollback(ctx))
+		_, hasNextIsolation := handler.nextTxnIsolationSnapshot()
+		require.False(t, hasNextIsolation)
+	})
+}
+
 func TestExecCtxStatementGenerationPreparedDatabase(t *testing.T) {
 	preparedStmt := &PrepareStmt{
 		Name:            "binary_drop",
@@ -1265,6 +1302,39 @@ func TestHandleDropAccountUsesLifecycleOwnerTxn(t *testing.T) {
 	}
 
 	err := handleDropAccount(ses, &ExecCtx{reqCtx: ctx}, &tree.DropAccount{Name: boxExprStr("tenant")}, ses.GetProc())
+	require.ErrorIs(t, err, beginErr)
+	require.True(t, forcedPessimisticRC)
+}
+
+func TestHandleCreateAccountUsesLifecycleOwnerTxn(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ctx := context.Background()
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	bh := &backgroundExecTest{}
+	bh.init()
+	beginErr := errors.New("begin failed")
+	bh.sql2err["begin;"] = beginErr
+	oldNewBackgroundExec := NewBackgroundExec
+	defer func() { NewBackgroundExec = oldNewBackgroundExec }()
+	forcedPessimisticRC := false
+	NewBackgroundExec = func(_ context.Context, _ FeSession, opts ...*BackgroundExecOption) BackgroundExec {
+		for _, opt := range opts {
+			forcedPessimisticRC = forcedPessimisticRC || opt != nil && opt.forcePessimisticRC
+		}
+		return bh
+	}
+
+	err := handleCreateAccount(ses, &ExecCtx{reqCtx: ctx}, &tree.CreateAccount{
+		Name: boxExprStr("tenant"),
+		AuthOption: tree.AccountAuthOption{
+			AdminName: boxExprStr("admin"),
+			IdentifiedType: tree.AccountIdentified{
+				Typ: tree.AccountIdentifiedByPassword,
+				Str: boxExprStr("111"),
+			},
+		},
+	}, ses.GetProc())
 	require.ErrorIs(t, err, beginErr)
 	require.True(t, forcedPessimisticRC)
 }

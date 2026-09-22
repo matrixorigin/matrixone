@@ -178,6 +178,7 @@ func compactExpiredAlterDataBranchLineageBatchWithExecutor(
 		return nil
 	}, executor.Options{}.
 		WithAccountID(catalog.System_Account).
+		WithTxnMode(txn.TxnMode_Pessimistic).
 		WithTxnIsolation(txn.TxnIsolation_SI).
 		WithLockWaitTimeout(dataBranchLineageGCLockWaitTimeout))
 	return compacted, err

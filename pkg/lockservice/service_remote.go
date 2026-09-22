@@ -94,6 +94,7 @@ func (c *asyncLockAdmissionCompletion) finalize() {
 
 var methodVersions = map[pb.Method]int64{
 	pb.Method_Lock:                         defines.MORPCVersion1,
+	pb.Method_LockWriterFair:               defines.MORPCVersion94,
 	pb.Method_ForwardLock:                  defines.MORPCVersion1,
 	pb.Method_Unlock:                       defines.MORPCVersion1,
 	pb.Method_BatchUnlock:                  defines.MORPCVersion31,
@@ -141,6 +142,19 @@ func supportsLockProtocolV31(serviceID string) bool {
 	}
 	version, ok := value.(int64)
 	return ok && version >= defines.MORPCVersion31
+}
+
+func supportsLockProtocolV94(serviceID string) bool {
+	rt := moruntime.ServiceRuntime(serviceID)
+	if rt == nil {
+		return false
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	version, ok := value.(int64)
+	return ok && version >= defines.MORPCVersion94
 }
 
 func (s *service) initRemote() {
@@ -334,6 +348,8 @@ func sendRemoteActiveTxnCheck(
 func (s *service) initRemoteHandler() {
 	s.remote.server.RegisterMethodHandler(pb.Method_Lock,
 		s.handleRemoteLock)
+	s.remote.server.RegisterMethodHandler(pb.Method_LockWriterFair,
+		s.handleRemoteWriterFairLock)
 	s.remote.server.RegisterMethodHandler(pb.Method_ForwardLock,
 		s.handleForwardLock)
 	s.remote.server.RegisterMethodHandler(pb.Method_Unlock,
@@ -358,6 +374,35 @@ func (s *service) initRemoteHandler() {
 		s.handleCheckActiveTxn)
 	s.remote.server.RegisterMethodHandler(pb.Method_AbortRemoteDeadlockTxn,
 		s.handleAbortRemoteDeadlockTxn)
+}
+
+// handleRemoteWriterFairLock is a capability-bearing entry point. An owner
+// rejects the method before lock admission when writer-fair semantics are not
+// active locally; the origin can then retry the same logical request as an
+// Exclusive lock without allowing a Shared reader to barge first.
+func (s *service) handleRemoteWriterFairLock(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	req *pb.Request,
+	resp *pb.Response,
+	cs morpc.ClientSession,
+) {
+	if !supportsLockProtocolV94(s.cfg.ServiceID) ||
+		req.Lock.Options.Mode != pb.LockMode_Shared ||
+		req.Lock.Options.Granularity != pb.Granularity_Row ||
+		!req.Lock.Options.WriterFair {
+		_ = writeResponseWithDeadline(
+			s.logger,
+			cancel,
+			resp,
+			moerr.NewNotSupportedNoCtx("writer-fair lock admission is unavailable"),
+			cs,
+			defaultRPCWriteTimeout,
+			remoteLockResponseLogFields(req),
+		)
+		return
+	}
+	s.handleRemoteLock(ctx, cancel, req, resp, cs)
 }
 
 func (s *service) handleRemoteLock(

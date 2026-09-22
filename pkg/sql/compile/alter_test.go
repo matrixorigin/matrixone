@@ -68,6 +68,19 @@ func TestShouldEnableAlterCopyPipelineFlush(t *testing.T) {
 	assert.True(t, shouldEnableAlterCopyPipelineFlush(&plan2.AlterCopyOpt{SkipPkDedup: true}))
 }
 
+func TestLineageLifecycleWriterRejectsOptimisticTransaction(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProcess(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{
+		Mode: txn.TxnMode_Optimistic, Isolation: txn.TxnIsolation_SI,
+	})
+	proc.Base.TxnOperator = txnOp
+
+	err := (&Compile{proc: proc}).lockDataBranchLineageOwnerLifecycle()
+	require.ErrorContains(t, err, "requires a pessimistic transaction")
+}
+
 func TestShouldUseFixedAlterCopySnapshot(t *testing.T) {
 	require.True(t, isExplicitAlterTxn(true, true))
 	require.True(t, isExplicitAlterTxn(false, false))
@@ -2138,6 +2151,17 @@ func (e *alterCopyInsertSpyExecutor) ExecTxn(
 
 func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
 	insertErr := errors.New("stop after insert-copy")
+	lockDatabaseStub := gostub.Stub(&lockMoDatabase,
+		func(_ *Compile, _ string, _ lock.LockMode) error { return nil })
+	defer lockDatabaseStub.Reset()
+	lockTableMetadataStub := gostub.Stub(&lockMoTable,
+		func(_ *Compile, _, _ string, _ lock.LockMode) error { return nil })
+	defer lockTableMetadataStub.Reset()
+	lockRelationStub := gostub.Stub(&lockTable,
+		func(_ context.Context, _ engine.Engine, _ *process.Process, _ engine.Relation, _ string, _ bool) error {
+			return nil
+		})
+	defer lockRelationStub.Reset()
 
 	for _, tc := range []struct {
 		name               string
@@ -2183,7 +2207,9 @@ func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
 			proc.Ctx = ctx
 			proc.ReplaceTopCtx(ctx)
 
-			txnCli, txnOp := newTestTxnClientAndOp(ctrl)
+			txnCli, txnOp := newTestTxnClientAndOpWithModeIsolation(
+				ctrl, txn.TxnMode_Pessimistic, txn.TxnIsolation_SI,
+			)
 			proc.Base.TxnClient = txnCli
 			proc.Base.TxnOperator = txnOp
 
@@ -2256,6 +2282,7 @@ func TestScopeAlterTableCopyInsertTmpDataPipelineFlush(t *testing.T) {
 
 			c := NewCompile("test", "test", "alter table dept", "", "", eng, proc, nil, false, nil, time.Now())
 			c.pn = s.Plan
+			c.disableLock = true
 			origCtx := proc.Ctx
 
 			err := s.AlterTableCopy(c)
@@ -2424,6 +2451,18 @@ func TestGetAlterCopyPkPrecheck(t *testing.T) {
 }
 
 func TestScopeAlterTableCopyPrecheckPrimaryKeyThenSkipDedup(t *testing.T) {
+	lockDatabaseStub := gostub.Stub(&lockMoDatabase,
+		func(_ *Compile, _ string, _ lock.LockMode) error { return nil })
+	defer lockDatabaseStub.Reset()
+	lockTableMetadataStub := gostub.Stub(&lockMoTable,
+		func(_ *Compile, _, _ string, _ lock.LockMode) error { return nil })
+	defer lockTableMetadataStub.Reset()
+	lockRelationStub := gostub.Stub(&lockTable,
+		func(_ context.Context, _ engine.Engine, _ *process.Process, _ engine.Relation, _ string, _ bool) error {
+			return nil
+		})
+	defer lockRelationStub.Reset()
+
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
 
@@ -2442,7 +2481,9 @@ func TestScopeAlterTableCopyPrecheckPrimaryKeyThenSkipDedup(t *testing.T) {
 	proc.Ctx = ctx
 	proc.ReplaceTopCtx(ctx)
 
-	txnCli, txnOp := newTestTxnClientAndOp(ctrl)
+	txnCli, txnOp := newTestTxnClientAndOpWithModeIsolation(
+		ctrl, txn.TxnMode_Pessimistic, txn.TxnIsolation_SI,
+	)
 	proc.Base.TxnClient = txnCli
 	proc.Base.TxnOperator = txnOp
 
@@ -2515,6 +2556,7 @@ func TestScopeAlterTableCopyPrecheckPrimaryKeyThenSkipDedup(t *testing.T) {
 
 	c := NewCompile("test", "test", "alter table dept", "", "", eng, proc, nil, false, nil, time.Now())
 	c.pn = s.Plan
+	c.disableLock = true
 
 	err := s.AlterTableCopy(c)
 	require.ErrorIs(t, err, insertErr)
@@ -2666,8 +2708,10 @@ func newAlterCopyPrecheckCompile(
 	proc.Ctx = ctx
 	proc.ReplaceTopCtx(ctx)
 
-	txnCli, txnOp := newTestTxnClientAndOp(
+	txnCli, txnOp := newTestTxnClientAndOpWithModeIsolation(
 		ctrl,
+		txn.TxnMode_Pessimistic,
+		txn.TxnIsolation_SI,
 		alterCopyAutoIncrEpochWorkspace{
 			Workspace: &Ws{},
 			supported: true,
@@ -3056,6 +3100,8 @@ func TestDataBranchLineageGCExecutorMakesDurableProgressAcrossRuns(t *testing.T)
 		require.Equal(t, dataBranchLineageGCLockWaitTimeout, spyExec.opts[txnIndex].LockWaitTimeout())
 		require.True(t, spyExec.opts[txnIndex].HasTxnIsolation())
 		require.Equal(t, txn.TxnIsolation_SI, spyExec.opts[txnIndex].TxnIsolation())
+		require.True(t, spyExec.opts[txnIndex].HasTxnMode())
+		require.Equal(t, txn.TxnMode_Pessimistic, spyExec.opts[txnIndex].TxnMode())
 		gateIndex := slices.Index(sqls, gateSQL)
 		if gateIndex < 0 {
 			// The final empty discovery transaction performs no mutation.

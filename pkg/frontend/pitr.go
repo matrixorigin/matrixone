@@ -293,7 +293,7 @@ func doCreatePitr(ctx context.Context, ses *Session, stmt *tree.CreatePitr) (err
 		newUUid        uuid.UUID
 	)
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
 	// check create pitr priv
@@ -772,7 +772,7 @@ func doDropPitr(ctx context.Context, ses *Session, stmt *tree.DropPitr) (err err
 		erArray   []ExecResult
 	)
 
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
 	// check drop pitr priv
@@ -856,7 +856,7 @@ func doAlterPitr(ctx context.Context, ses *Session, stmt *tree.AlterPitr) (err e
 		sql       string
 		pitrExist bool
 	)
-	bh := ses.GetBackgroundExec(ctx)
+	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
 	defer bh.Close()
 
 	// check alter pitr priv
