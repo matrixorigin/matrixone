@@ -64,4 +64,14 @@ select cosine_similarity(v, '[1e-200,0]') from tu order by id;
 -- A genuinely zero vector keeps its convention.
 select cosine_distance(v, '[0,0]') from tu where id = 2;
 
+-- l2_distance_xc / l2_distance_sq_xc are a second, C implementation of the same distance. They
+-- compute the element difference and its square in float32 and report success whatever comes out,
+-- so they must be held to the same contract as l2_distance where the value crosses back into Go.
+select l2_distance_xc(cast('[2e19,2e19]' as vecf32(2)), cast('[0,0]' as vecf32(2)));
+select l2_distance_sq_xc(cast('[2e19,2e19]' as vecf32(2)), cast('[0,0]' as vecf32(2)));
+-- ordinary magnitudes agree with the Go path
+select l2_distance(cast('[3,4]' as vecf32(2)), cast('[0,0]' as vecf32(2))) as go_path,
+       l2_distance_xc(cast('[3,4]' as vecf32(2)), cast('[0,0]' as vecf32(2))) as c_path,
+       l2_distance_sq_xc(cast('[3,4]' as vecf32(2)), cast('[0,0]' as vecf32(2))) as c_sq;
+
 drop database vec_extreme;

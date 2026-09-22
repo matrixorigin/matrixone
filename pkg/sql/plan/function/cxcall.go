@@ -169,5 +169,37 @@ func (xcall *XCallFunction) XCall(ivecs []*vector.Vector, result vector.Function
 		}
 	}
 
-	return c_xcall(xcall, proc.Mp(), length, resultVec, ivecs)
+	if err := c_xcall(xcall, proc.Mp(), length, resultVec, ivecs); err != nil {
+		return err
+	}
+	// The C kernels compute the element difference and its square in float32 and report success
+	// whatever comes out, so a finite input pair can leave a +Inf in the result where the Go
+	// l2_distance raises the overflow error. Enforce the same contract where the values cross
+	// back into Go, as the usearch and cuVS boundaries do.
+	return checkXCallDistanceFinite(xcall.xFuncId, resultVec, length)
+}
+
+// checkXCallDistanceFinite rejects a non-finite distance produced by an XCall distance kernel.
+func checkXCallDistanceFinite(xFuncId int64, resultVec *vector.Vector, length int) error {
+	switch xFuncId {
+	case XCALL_L2DISTANCE_F32, XCALL_L2DISTANCE_F64,
+		XCALL_L2DISTANCE_SQ_F32, XCALL_L2DISTANCE_SQ_F64:
+	default:
+		return nil
+	}
+	vals := vector.MustFixedColNoTypeCheck[float64](resultVec)
+	if len(vals) > length {
+		vals = vals[:length]
+	}
+	nsp := resultVec.GetNulls()
+	for i := range vals {
+		if nsp != nil && nsp.Contains(uint64(i)) {
+			continue
+		}
+		if d := vals[i]; d-d != 0 {
+			return moerr.NewInternalErrorNoCtx(
+				"l2 distance: vector magnitude is too large, the result overflows the element domain")
+		}
+	}
+	return nil
 }

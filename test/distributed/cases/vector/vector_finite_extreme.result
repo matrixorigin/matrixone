@@ -67,4 +67,13 @@ internal error: cosine similarity: vector magnitude underflows the element domai
 select cosine_distance(v, '[0,0]') from tu where id = 2;
 ➤ cosine_distance(v, [0,0])[8,53,31]  𝄀
 1.0
+select l2_distance_xc(cast('[2e19,2e19]' as vecf32(2)), cast('[0,0]' as vecf32(2)));
+internal error: l2 distance: vector magnitude is too large, the result overflows the element domain
+select l2_distance_sq_xc(cast('[2e19,2e19]' as vecf32(2)), cast('[0,0]' as vecf32(2)));
+internal error: l2 distance: vector magnitude is too large, the result overflows the element domain
+select l2_distance(cast('[3,4]' as vecf32(2)), cast('[0,0]' as vecf32(2))) as go_path,
+l2_distance_xc(cast('[3,4]' as vecf32(2)), cast('[0,0]' as vecf32(2))) as c_path,
+l2_distance_sq_xc(cast('[3,4]' as vecf32(2)), cast('[0,0]' as vecf32(2))) as c_sq;
+➤ go_path[8,53,31]  ¦  c_path[8,53,31]  ¦  c_sq[8,53,31]  𝄀
+5.0  ¦  5.0  ¦  25.0
 drop database vec_extreme;

@@ -78,3 +78,20 @@ func TestSQLDistancesRejectNonFiniteResults(t *testing.T) {
 		})
 	}
 }
+
+// Summation adds in float64 and rejects a total that left that domain: finite elements can still
+// sum past it, and +Inf is not a sum.
+func TestSummationRejectsOverflow(t *testing.T) {
+	_, err := Summation[float64]([]float64{1e308, 1e308, -1e308, -1e308})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "overflows the element domain")
+
+	// the mathematical total of that input is 0, which is exactly why the +Inf must not be returned
+	got, err := Summation[float64]([]float64{1, 2, 3, -4})
+	require.NoError(t, err)
+	require.EqualValues(t, 2, got)
+
+	got, err = Summation[float32]([]float32{0.5, 0.25})
+	require.NoError(t, err)
+	require.EqualValues(t, 0.75, got)
+}

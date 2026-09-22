@@ -370,13 +370,16 @@ func Sqrt[T types.RealNumbers](v []T) (res []float64, err error) {
 	return res, nil
 }
 
+// Summation adds the elements in float64 and rejects a total that left that domain. Finite
+// elements can still sum past it -- [1e308,1e308,-1e308,-1e308] reaches +Inf on the second term
+// and never comes back, returning +Inf where the mathematical total is 0 -- and +Inf is not a sum.
 func Summation[T types.RealNumbers](v []T) (float64, error) {
 	n := len(v)
 	var sum float64 = 0
 	for i := 0; i < n; i++ {
 		sum += float64(v[i])
 	}
-	return sum, nil
+	return metric.CheckFiniteDist(sum, "summation")
 }
 
 func Cast[I types.RealNumbers, O types.RealNumbers](in []I) (out []O, err error) {
