@@ -196,6 +196,7 @@ func TestStringNumericCompatibilityAdmissionByExpressionAndMode(t *testing.T) {
 		{name: "ceil", historical: true, id: 72},
 		{name: "floor", historical: true, id: 103},
 		{name: "float_int64"},
+		{name: "ceil_scalar"},
 	} {
 		for _, mode := range []struct {
 			name   string
@@ -213,6 +214,15 @@ func TestStringNumericCompatibilityAdmissionByExpressionAndMode(t *testing.T) {
 				scope.Proc = c.proc
 				t.Cleanup(scope.RootOp.Release)
 				expr := qry.Nodes[0].ProjectList[0]
+				if expression.name == "ceil_scalar" {
+					bound, err := plan.BindFuncExprImplByPlanExpr(context.Background(), "ceil", []*planpb.Expr{
+						{Typ: planpb.Type{Id: int32(types.T_float64)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+						{Typ: planpb.Type{Id: int32(types.T_text)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "2"}}}},
+					})
+					require.NoError(t, err)
+					require.NotNil(t, bound.GetF().Args[1].GetF())
+					expr = bound
+				}
 				if expression.name == "float_int64" {
 					// Bind a real precision column, not an explicit CAST1, so the
 					// test proves ROUND's reachable ordinary FLOAT -> INT64 path.
@@ -257,8 +267,9 @@ func TestStringNumericCompatibilityAdmissionByExpressionAndMode(t *testing.T) {
 				scope.RootOp.(*projection.Projection).ProjectList = []*planpb.Expr{expr}
 				features, err := planpb.RequiredRemoteExpressionFeatures(qry)
 				require.NoError(t, err)
-				require.Equal(t, expression.name != "float_int64", features.StrictStringNumericCompatibility)
+				require.Equal(t, expression.name != "float_int64" && expression.name != "ceil_scalar", features.StrictStringNumericCompatibility)
 				require.Equal(t, expression.name == "float_int64", features.OrdinaryFloatInt64Bounds)
+				require.Equal(t, expression.name == "ceil_scalar", features.ScalarMathPrecisionCompatibility)
 				require.Equal(t, expression.historical, features.HistoricalStringMathCompatibility)
 				info := c.proc.GetSessionInfo()
 				info.MySQLNumericCompatibilityMode = mode.mysql
@@ -268,7 +279,7 @@ func TestStringNumericCompatibilityAdmissionByExpressionAndMode(t *testing.T) {
 				oldVersion, _ := rt.GetGlobalVariables(runtime.MOProtocolVersion)
 				t.Cleanup(func() { rt.SetGlobalVariables(runtime.MOProtocolVersion, oldVersion) })
 				wirePipeline := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
-				requiresCurrent := expression.historical || expression.name == "float_int64" || (!mode.mysql && !mode.native)
+				requiresCurrent := expression.historical || expression.name == "float_int64" || expression.name == "ceil_scalar" || (!mode.mysql && !mode.native)
 				for _, version := range []int64{defines.MORPCVersion93, defines.MORPCVersion92} {
 					client.version = version
 					c.execType = plan.ExecTypeAP_MULTICN

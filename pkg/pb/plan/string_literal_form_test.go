@@ -1137,3 +1137,22 @@ func TestOrdinaryFloatInt64BoundsRemoteFeatures(t *testing.T) {
 		})
 	}
 }
+
+func TestScalarMathPrecisionCompatibilityRemoteFeatures(t *testing.T) {
+	literal := &Expr{Typ: Type{Id: 23}, Expr: &Expr_Lit{Lit: &Literal{Value: &Literal_I64Val{I64Val: 2}}}}
+	parameter := &Expr{Typ: Type{Id: 23}, Expr: &Expr_P{P: &ParamRef{Pos: 0}}}
+	cast := &Expr{Typ: Type{Id: 23}, Expr: &Expr_F{F: &Function{
+		Func: &ObjectRef{Obj: int64(21) << 32, ObjName: "cast"},
+		Args: []*Expr{literal, {Typ: Type{Id: 23}, Expr: &Expr_T{T: &TargetType{}}}},
+	}}}
+	for _, id := range []int32{ceilFunctionID, floorFunctionID, 167} { // ROUND is unchanged.
+		for index, precision := range []*Expr{literal, parameter, cast} {
+			expr := &Expr{Typ: Type{Id: 31}, Expr: &Expr_F{F: &Function{
+				Func: &ObjectRef{Obj: int64(id)<<32 | 4}, Args: []*Expr{literal, precision},
+			}}}
+			features, err := RequiredRemoteExpressionFeatures(expr)
+			require.NoError(t, err)
+			require.Equal(t, id != 167 && index == 2, features.ScalarMathPrecisionCompatibility)
+		}
+	}
+}

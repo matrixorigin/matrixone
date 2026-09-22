@@ -401,17 +401,20 @@ type RemoteExpressionFeatures struct {
 	HistoricalStringMathCompatibility bool
 	// Ordinary/comparison/set-operation FLOAT -> INT64 casts require v93's
 	// exact bounds in every mode, independently of string-prefix conversion.
-	OrdinaryFloatInt64Bounds        bool
-	JSONComparisonParam             bool
-	MixedJSONBooleanEquality        bool
-	FormatNumericArguments          bool
-	TypedConversionFunctions        bool
-	IntegerArithmeticDomains        bool
-	RowDependentConvBases           bool
-	ASCIIInt32Result                bool
-	StringNumericResultContracts    bool
-	BoundedConditionalStringDomains bool
-	IPFunctionSemantics             bool
+	OrdinaryFloatInt64Bounds bool
+	// CEIL/FLOOR scalar precision evaluation preserves row-level warnings
+	// while presenting a constant argument to their kernels starting in v93.
+	ScalarMathPrecisionCompatibility bool
+	JSONComparisonParam              bool
+	MixedJSONBooleanEquality         bool
+	FormatNumericArguments           bool
+	TypedConversionFunctions         bool
+	IntegerArithmeticDomains         bool
+	RowDependentConvBases            bool
+	ASCIIInt32Result                 bool
+	StringNumericResultContracts     bool
+	BoundedConditionalStringDomains  bool
+	IPFunctionSemantics              bool
 	// IntegerParameterCoercion requires v85 for private CAST 5..8.
 	IntegerParameterCoercion          bool
 	TOBase64ResultContracts           bool
@@ -426,6 +429,7 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.StrictStringNumericCompatibility ||
 		features.HistoricalStringMathCompatibility ||
 		features.OrdinaryFloatInt64Bounds ||
+		features.ScalarMathPrecisionCompatibility ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
 		features.FormatNumericArguments ||
@@ -880,6 +884,9 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			if !features.OrdinaryFloatInt64Bounds && isOrdinaryFloatInt64Bounds(current) {
 				features.OrdinaryFloatInt64Bounds = true
 			}
+			if !features.ScalarMathPrecisionCompatibility && isScalarMathPrecisionCompatibility(current) {
+				features.ScalarMathPrecisionCompatibility = true
+			}
 			if !features.JSONComparisonParam && fn != nil && fn.Func != nil &&
 				int32(fn.Func.Obj>>32) == internalJSONComparisonFunctionID {
 				features.JSONComparisonParam = true
@@ -994,6 +1001,20 @@ func isOrdinaryFloatInt64Bounds(expr *Expr) bool {
 	default:
 		return false
 	}
+}
+
+func isScalarMathPrecisionCompatibility(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) != 2 || fn.Args[1] == nil || fn.Args[1].GetF() == nil {
+		return false
+	}
+	// Direct literals/parameters are already constant. Conservatively fence
+	// function subtrees without duplicating executor folding/volatility rules.
+	id := int32(fn.Func.Obj >> 32)
+	return id == ceilFunctionID || id == floorFunctionID
 }
 
 // IF/IFF consumes string conditions directly, without a floating CAST. Both

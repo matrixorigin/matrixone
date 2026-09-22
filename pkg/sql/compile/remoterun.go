@@ -2358,12 +2358,13 @@ func validateRemoteExpressionPipelineProtocol(
 	return nil
 }
 
-// Historical string overloads and ordinary FLOAT -> INT64 bounds changed in
-// every mode. String-prefix casts retain their explicit MySQL/native mapping.
+// Historical string overloads, FLOAT -> INT64 bounds and scalar math precision
+// changed in every mode. String-prefix casts retain their explicit mapping.
 // Reuse the caller's feature scan so all three admission boundaries agree.
 func requiresStringNumericCompatibilityProtocol(proc *process.Process, features plan.RemoteExpressionFeatures) bool {
 	return features.HistoricalStringMathCompatibility ||
 		features.OrdinaryFloatInt64Bounds ||
+		features.ScalarMathPrecisionCompatibility ||
 		(features.StrictStringNumericCompatibility && strictStringNumericCompatibilityDefault(proc))
 }
 
