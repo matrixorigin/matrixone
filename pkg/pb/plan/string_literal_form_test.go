@@ -182,6 +182,89 @@ func TestRequiresMORPCVersion30NumericPrefix(t *testing.T) {
 	require.False(t, required)
 }
 
+func TestRequiresMORPCVersion93StrictStringNumericCompatibility(t *testing.T) {
+	stringValue := &Expr{
+		Typ:  Type{Id: planVarcharTypeID},
+		Expr: &Expr_Col{Col: &ColRef{ColPos: 0}},
+	}
+	strictCast := &Expr{
+		Typ: Type{Id: 30},
+		Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{Obj: 2, ObjName: "cast"},
+			Args: []*Expr{stringValue},
+		}},
+	}
+	required, err := RequiresMORPCVersion93StrictStringNumericCompatibility(
+		&struct{ Expr *Expr }{Expr: strictCast})
+	require.NoError(t, err)
+	require.True(t, required, "string-to-numeric casts depend on the strict default")
+
+	numericValue := &Expr{Typ: Type{Id: 23}, Expr: &Expr_Col{Col: &ColRef{ColPos: 1}}}
+	numericCast := &Expr{
+		Typ: Type{Id: 30},
+		Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{ObjName: "cast"},
+			Args: []*Expr{numericValue},
+		}},
+	}
+	required, err = RequiresMORPCVersion93StrictStringNumericCompatibility(
+		&struct{ Expr *Expr }{Expr: numericCast})
+	require.NoError(t, err)
+	require.False(t, required, "numeric-to-numeric casts do not consult string compatibility")
+	for _, overload := range []int32{0, 1, 2} {
+		cast := &Expr{
+			Typ: Type{Id: 31},
+			Expr: &Expr_F{F: &Function{
+				Func: &ObjectRef{Obj: int64(overload), ObjName: "cast"},
+				Args: []*Expr{stringValue},
+			}},
+		}
+		required, err = RequiresMORPCVersion93StrictStringNumericCompatibility(
+			&struct{ Expr *Expr }{Expr: cast})
+		require.NoError(t, err)
+		require.True(t, required, "string-to-float CAST overload %d uses the process compatibility mode", overload)
+	}
+	for _, sourceType := range []int32{planCharTypeID, planVarcharTypeID, planTextTypeID,
+		planBinaryTypeID, planVarbinaryTypeID, planBlobTypeID} {
+		cast := &Expr{
+			Typ: Type{Id: 31},
+			Expr: &Expr_F{F: &Function{
+				Func: &ObjectRef{Obj: 2, ObjName: "cast"},
+				Args: []*Expr{{Typ: Type{Id: sourceType}, Expr: &Expr_Col{Col: &ColRef{ColPos: 2}}}},
+			}},
+		}
+		required, err = RequiresMORPCVersion93StrictStringNumericCompatibility(
+			&struct{ Expr *Expr }{Expr: cast})
+		require.NoError(t, err)
+		require.True(t, required, "declared string source type %d can use mode-aware text provenance", sourceType)
+	}
+
+	prefixCast := &Expr{
+		Typ: Type{Id: 30, Charset: 255},
+		Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{ObjName: "cast"},
+			Args: []*Expr{stringValue},
+		}},
+	}
+	features, err := RequiredRemoteExpressionFeatures(&struct{ Expr *Expr }{Expr: prefixCast})
+	require.NoError(t, err)
+	require.True(t, features.NumericPrefix)
+	require.True(t, features.StrictStringNumericCompatibility,
+		"a numeric-prefix FLOAT cast also uses the process compatibility mode")
+
+	legacyCeil := &Expr{
+		Typ: Type{Id: 30},
+		Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{Obj: (int64(ceilFunctionID) << 32) | 12, ObjName: "ceil"},
+			Args: []*Expr{stringValue},
+		}},
+	}
+	features, err = RequiredRemoteExpressionFeatures(&struct{ Expr *Expr }{Expr: legacyCeil})
+	require.NoError(t, err)
+	require.True(t, features.StrictStringNumericCompatibility,
+		"historical CEIL VARCHAR overloads also depend on the compatibility mode")
+}
+
 func TestRequiresMORPCVersion23DynamicStringProvenance(t *testing.T) {
 	textType := Type{Id: 61}
 	binaryType := Type{Id: 65}

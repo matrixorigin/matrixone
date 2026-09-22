@@ -22,217 +22,76 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
-	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
-func TestExactMathStringNumericPrefixExecutors(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	proc.GetSessionInfo().MySQLNumericCompatibilityMode = true
-	inputs := NewFunctionTestInput(types.T_varchar.ToType(), []string{
-		"1.5", "-1.5", " 1.5", "+1.5", "1.5tail", "abc", "",
-	}, nil)
-
-	run := func(name string, expect FunctionTestResult, op fEvalFn) {
-		t.Helper()
-		testCase := NewFunctionTestCase(proc, []FunctionTestInput{inputs}, expect, op)
-		ok, info := testCase.Run()
-		require.True(t, ok, "%s: %s", name, info)
-	}
-	run("abs", NewFunctionTestResult(types.T_float64.ToType(), false,
-		[]float64{1.5, 1.5, 1.5, 1.5, 1.5, 0, 0}, nil), AbsStr)
-	run("sign", NewFunctionTestResult(types.T_int64.ToType(), false,
-		[]int64{1, -1, 1, 1, 1, 0, 0}, nil), SignStr)
-	run("ceil", NewFunctionTestResult(types.T_float64.ToType(), false,
-		[]float64{2, -1, 2, 2, 2, 0, 0}, nil), CeilStr)
-	run("floor", NewFunctionTestResult(types.T_float64.ToType(), false,
-		[]float64{1, -2, 1, 1, 1, 0, 0}, nil), FloorStr)
-	run("round", NewFunctionTestResult(types.T_float64.ToType(), false,
-		[]float64{2, -2, 2, 2, 2, 0, 0}, nil), RoundStr)
-	truncateInputs := []FunctionTestInput{
-		inputs,
-		NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, nil),
-	}
-	testCase := NewFunctionTestCase(proc, truncateInputs,
-		NewFunctionTestResult(types.T_float64.ToType(), false,
-			[]float64{1, -1, 1, 1, 1, 0, 0}, nil), TruncateStr)
-	ok, info := testCase.Run()
-	require.True(t, ok, "truncate: %s", info)
-
-	nullInput := NewFunctionTestInput(types.T_varchar.ToType(), []string{"1.5", "ignored"}, []bool{false, true})
-	testCase = NewFunctionTestCase(proc, []FunctionTestInput{nullInput},
-		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{1.5, 0}, []bool{false, true}), AbsStr)
-	ok, info = testCase.Run()
-	require.True(t, ok, "NULL propagation: %s", info)
-}
-
-func TestMathStringExecutorsAreStrictWithoutExplicitCompatibility(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	for _, test := range []struct {
-		name       string
-		fn         fEvalFn
-		resultType types.Type
-		digits     bool
+// String arguments are converted to DOUBLE by the planner and then use the
+// ordinary numeric overload.  Keep this test at the resolver boundary so it
+// cannot accidentally start exercising a private, unregistered string
+// executor instead of the live SQL path.
+func TestMathStringResolutionUsesNumericOverloads(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name        string
+		args        []types.Type
+		fid         int32
+		overload    int32
+		returnType  types.T
+		targetTypes []types.T
 	}{
-		{name: "abs", fn: AbsStr, resultType: types.T_float64.ToType()},
-		{name: "sign", fn: SignStr, resultType: types.T_int64.ToType()},
-		{name: "ceil", fn: CeilStr, resultType: types.T_float64.ToType()},
-		{name: "floor", fn: FloorStr, resultType: types.T_float64.ToType()},
-		{name: "round", fn: RoundStr, resultType: types.T_float64.ToType()},
-		{name: "truncate", fn: TruncateStr, resultType: types.T_float64.ToType(), digits: true},
+		{name: "abs", args: []types.Type{types.T_varchar.ToType()}, fid: ABS, overload: 2, returnType: types.T_float64, targetTypes: []types.T{types.T_float64}},
+		{name: "sign", args: []types.Type{types.T_varchar.ToType()}, fid: SIGN, overload: 2, returnType: types.T_int64, targetTypes: []types.T{types.T_float64}},
+		{name: "ceil", args: []types.Type{types.T_varchar.ToType()}, fid: CEIL, overload: 4, returnType: types.T_float64, targetTypes: []types.T{types.T_float64}},
+		{name: "floor", args: []types.Type{types.T_varchar.ToType()}, fid: FLOOR, overload: 4, returnType: types.T_float64, targetTypes: []types.T{types.T_float64}},
+		{name: "round", args: []types.Type{types.T_varchar.ToType()}, fid: ROUND, overload: 4, returnType: types.T_float64, targetTypes: []types.T{types.T_float64}},
+		{name: "truncate", args: []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()}, fid: TRUNCATE, overload: 5, returnType: types.T_float64, targetTypes: []types.T{types.T_float64, types.T_int64}},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			for _, input := range []string{"1.5tail", "abc", "true", "", "   ", "1eabc"} {
-				inputs := []FunctionTestInput{
-					NewFunctionTestInput(types.T_varchar.ToType(), []string{input}, nil),
-				}
-				if test.digits {
-					inputs = append(inputs, NewFunctionTestConstInput(
-						types.T_int64.ToType(), []int64{0}, nil))
-				}
-				caseTest := NewFunctionTestCase(proc, inputs,
-					NewFunctionTestResult(test.resultType, true, nil, nil), test.fn)
-				ok, info := caseTest.Run()
-				require.True(t, ok, "%q: %s", input, info)
+		t.Run(tc.name, func(t *testing.T) {
+			resolved, err := GetFunctionByName(ctx, tc.name, tc.args)
+			require.NoError(t, err)
+			fid, overload := DecodeOverloadID(resolved.GetEncodedOverloadID())
+			require.Equal(t, tc.fid, fid)
+			require.Equal(t, tc.overload, overload)
+			require.Equal(t, tc.returnType, resolved.GetReturnType().Oid)
+			targets, needsCast := resolved.ShouldDoImplicitTypeCast()
+			require.True(t, needsCast)
+			require.Len(t, targets, len(tc.targetTypes))
+			for i := range targets {
+				require.Equal(t, tc.targetTypes[i], targets[i].Oid)
 			}
 		})
 	}
-
-	maskedInput := NewFunctionTestInput(types.T_varchar.ToType(),
-		[]string{"1.5", "1.5tail", "ignored"}, []bool{false, false, true})
-	masked := NewFunctionTestCase(proc, []FunctionTestInput{maskedInput},
-		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{1.5, 0, 0},
-			[]bool{false, true, true}), AbsStr).
-		WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}})
-	ok, info := masked.Run()
-	require.True(t, ok, "NULL/masked invalid rows: %s", info)
 }
 
-func TestMathStringExecutorsPreserveBinaryLiteralProvenance(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	input := makeBinaryStringTestInput(t, proc, types.T_varbinary.ToType(), [][]byte{
-		{0x31}, // X'31' is the numeric value 0x31, not the text number 1.
-		{0x32},
-	}, nil)
-	input.SetIsBin(true)
-
-	assertFloat64 := func(name string, fn binaryStringTestFn, expected []float64, args ...*vector.Vector) {
-		t.Helper()
-		result := runBinaryStringBytesFn(t, proc, fn, types.T_float64.ToType(), args...)
-		require.Equal(t, expected, vector.MustFixedColWithTypeCheck[float64](result.GetResultVector()), name)
-	}
-	assertInt64 := func(name string, fn binaryStringTestFn, expected []int64, args ...*vector.Vector) {
-		t.Helper()
-		result := runBinaryStringBytesFn(t, proc, fn, types.T_int64.ToType(), args...)
-		require.Equal(t, expected, vector.MustFixedColWithTypeCheck[int64](result.GetResultVector()), name)
-	}
-
-	assertFloat64("abs", AbsStr, []float64{49, 50}, input)
-	assertInt64("sign", SignStr, []int64{1, 1}, input)
-	assertFloat64("ceil", CeilStr, []float64{49, 50}, input)
-	assertFloat64("floor", FloorStr, []float64{49, 50}, input)
-	digits, err := vector.NewConstFixed[int64](types.T_int64.ToType(), 0, input.Length(), proc.Mp())
-	require.NoError(t, err)
-	assertFloat64("round", RoundStr, []float64{49, 50}, input,
-		digits)
-	assertFloat64("truncate", TruncateStr, []float64{49, 50}, input,
-		digits)
-}
-
-func TestMathStringExecutorsEmitNumericCoercionWarnings(t *testing.T) {
-	session := &numericWarningSession{}
-	proc := testutil.NewProcess(t)
-	proc.Session = session
-	proc.GetSessionInfo().MySQLNumericCompatibilityMode = true
-	tc := NewFunctionTestCase(proc,
-		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(),
-			[]string{"1.5tail", "abc", "", "   ", "1eabc", "2.5e1", "ignored"},
-			[]bool{false, false, false, false, false, false, true})},
-		NewFunctionTestResult(types.T_float64.ToType(), false,
-			[]float64{1.5, 0, 0, 0, 1, 25, 0},
-			[]bool{false, false, false, false, false, false, true}), AbsStr)
-	ok, info := tc.Run()
-	require.True(t, ok, info)
-	require.Len(t, session.warnings, 3)
-	for _, warning := range session.warnings {
-		require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, warning.code)
-		require.Contains(t, warning.msg, "DOUBLE")
-	}
-}
-
-func TestDirectMathStringExecutorsHonorExplicitCompatibilityAndNativePrecedence(t *testing.T) {
-	values := []string{"1.5tail", "abc", ""}
+// T_any is used for both a bare NULL and an unbound prepare marker.  It must
+// stay in the arithmetic/metadata domain until execution rebinding proves that
+// a concrete character value is present; otherwise MOD(NULL, bigint) widens
+// CTAS/UNION/COM_STMT metadata to DOUBLE for no semantic reason.
+func TestModUntypedNullKeepsNumericDomain(t *testing.T) {
+	ctx := context.Background()
+	decimal := types.New(types.T_decimal64, 10, 2)
 	for _, tc := range []struct {
-		name       string
-		fn         fEvalFn
-		resultType types.Type
-		want       any
-		digits     bool
+		name        string
+		args        []types.Type
+		wantReturn  types.T
+		wantTargets []types.T
 	}{
-		{name: "abs", fn: AbsStr, resultType: types.T_float64.ToType(), want: []float64{1.5, 0, 0}},
-		{name: "sign", fn: SignStr, resultType: types.T_int64.ToType(), want: []int64{1, 0, 0}},
-		{name: "ceil", fn: CeilStr, resultType: types.T_float64.ToType(), want: []float64{2, 0, 0}},
-		{name: "floor", fn: FloorStr, resultType: types.T_float64.ToType(), want: []float64{1, 0, 0}},
-		{name: "round", fn: RoundStr, resultType: types.T_float64.ToType(), want: []float64{2, 0, 0}},
-		{name: "truncate", fn: TruncateStr, resultType: types.T_float64.ToType(), want: []float64{1, 0, 0}, digits: true},
+		{name: "left null", args: []types.Type{types.T_any.ToType(), types.T_int64.ToType()}, wantReturn: types.T_int64, wantTargets: []types.T{types.T_int64, types.T_int64}},
+		{name: "right null", args: []types.Type{types.T_int64.ToType(), types.T_any.ToType()}, wantReturn: types.T_int64, wantTargets: []types.T{types.T_int64, types.T_int64}},
+		{name: "decimal right null", args: []types.Type{decimal, types.T_any.ToType()}, wantReturn: types.T_decimal64, wantTargets: []types.T{types.T_decimal64, types.T_decimal64}},
+		{name: "both null", args: []types.Type{types.T_any.ToType(), types.T_any.ToType()}, wantReturn: types.T_int64, wantTargets: []types.T{types.T_int64, types.T_int64}},
+		{name: "known string remains double", args: []types.Type{types.T_varchar.ToType(), types.T_any.ToType()}, wantReturn: types.T_float64, wantTargets: []types.T{types.T_float64, types.T_float64}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			mysqlSession := &numericWarningSession{}
-			mysqlProc := testutil.NewProcess(t)
-			defer mysqlProc.Free()
-			mysqlProc.Session = mysqlSession
-			mysqlProc.GetSessionInfo().MySQLNumericCompatibilityMode = true
-
-			makeInputs := func(input []string) []FunctionTestInput {
-				inputs := []FunctionTestInput{
-					NewFunctionTestInput(types.T_varchar.ToType(), input, nil),
-				}
-				if tc.digits {
-					inputs = append(inputs, NewFunctionTestConstInput(types.T_int64.ToType(), []int64{0}, nil))
-				}
-				return inputs
+			resolved, err := GetFunctionByName(ctx, "mod", tc.args)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantReturn, resolved.GetReturnType().Oid)
+			targets, needsCast := resolved.ShouldDoImplicitTypeCast()
+			require.True(t, needsCast)
+			require.Len(t, targets, len(tc.wantTargets))
+			for i := range targets {
+				require.Equal(t, tc.wantTargets[i], targets[i].Oid)
 			}
-			run := func(proc *process.Process, input []string, wantErr bool) (bool, string) {
-				caseTest := NewFunctionTestCase(proc, makeInputs(input),
-					NewFunctionTestResult(tc.resultType, wantErr, tc.want, nil), tc.fn)
-				defer func() {
-					for _, parameter := range caseTest.parameters {
-						parameter.Free(proc.Mp())
-					}
-					caseTest.result.Free()
-				}()
-				return caseTest.Run()
-			}
-
-			ok, info := run(mysqlProc, values, false)
-			require.True(t, ok, info)
-			require.Len(t, mysqlSession.warnings, 2)
-			for _, warning := range mysqlSession.warnings {
-				require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, warning.code)
-				require.Contains(t, warning.msg, "DOUBLE")
-			}
-
-			strictProc := testutil.NewProcess(t)
-			defer strictProc.Free()
-			strictSession := &numericWarningSession{}
-			strictProc.Session = strictSession
-			for _, input := range values {
-				ok, info = run(strictProc, []string{input}, true)
-				require.True(t, ok, "%q: %s", input, info)
-			}
-			require.Empty(t, strictSession.warnings)
-
-			nativeProc := testutil.NewProcess(t)
-			defer nativeProc.Free()
-			nativeSession := &numericWarningSession{}
-			nativeProc.Session = nativeSession
-			nativeProc.GetSessionInfo().MatrixOneNativeMode = true
-			nativeProc.GetSessionInfo().MySQLNumericCompatibilityMode = true
-			for _, input := range values {
-				ok, info = run(nativeProc, []string{input}, true)
-				require.True(t, ok, "%s: %s", input, info)
-			}
-			require.Empty(t, nativeSession.warnings)
 		})
 	}
 }

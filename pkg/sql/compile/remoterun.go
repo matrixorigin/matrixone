@@ -156,6 +156,11 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 			return nil, err
 		}
 	}
+	if features.StrictStringNumericCompatibility {
+		if err = validateStrictStringNumericCompatibilityDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
 	if features.BoundedConditionalStringDomains {
 		if err = validateBoundedConditionalStringDestination(proc, p); err != nil {
 			return nil, err
@@ -2265,6 +2270,18 @@ func validateRemoteExpressionPipelineProtocol(
 			"prepared numeric-prefix casts require MORPC protocol version 30",
 		)
 	}
+	if features.StrictStringNumericCompatibility && strictStringNumericCompatibilityDefault(proc) {
+		if proc.GetSessionInfo().LegacyNumericCompatibilityMode {
+			return moerr.NewNotSupportedNoCtx(
+				"strict-by-default string numeric compatibility cannot run with a legacy session contract",
+			)
+		}
+		if !hasProtocolVersion || protocolVersion < defines.MORPCVersion93 {
+			return moerr.NewNotSupportedNoCtx(
+				"strict-by-default string numeric compatibility requires MORPC protocol version 93",
+			)
+		}
+	}
 	if features.JSONComparisonParam &&
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion36) {
 		return moerr.NewNotSupportedNoCtx(
@@ -2339,6 +2356,20 @@ func validateRemoteExpressionPipelineProtocol(
 		)
 	}
 	return nil
+}
+
+// strictStringNumericCompatibilityDefault reports whether this execution
+// generation relies on the v93 strict-by-default contract. A legacy process
+// snapshot remains strict locally, but is rejected for changed remote
+// expressions until its sender contract is known; only explicit MySQL mode
+// bypasses this fence.
+func strictStringNumericCompatibilityDefault(proc *process.Process) bool {
+	if proc == nil || proc.Base == nil {
+		return false
+	}
+	info := proc.GetSessionInfo()
+	return !info.MatrixOneNativeMode &&
+		!info.MySQLNumericCompatibilityMode
 }
 
 // validateRemoteMongoUserQueryPipelineProtocol is the final sender/receiver

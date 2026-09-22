@@ -5224,6 +5224,14 @@ func TestCompatibilityModeFromProcess(t *testing.T) {
 	require.Equal(t, SQLCompatibilityMySQL, CompatibilityModeFromProcess(proc))
 	proc.GetSessionInfo().MatrixOneNativeMode = true
 	require.Equal(t, SQLCompatibilityMatrixOne, CompatibilityModeFromProcess(proc))
+	proc.GetSessionInfo().MatrixOneNativeMode = false
+	proc.GetSessionInfo().MySQLNumericCompatibilityMode = false
+	proc.GetSessionInfo().LegacyNumericCompatibilityMode = true
+	require.Equal(t, SQLCompatibilityMatrixOne, CompatibilityModeFromProcess(proc),
+		"a pre-contract remote payload remains strict until an explicit compatibility opt-in")
+	proc.GetSessionInfo().MatrixOneNativeMode = true
+	require.Equal(t, SQLCompatibilityMatrixOne, CompatibilityModeFromProcess(proc),
+		"native mode still wins over legacy compatibility")
 }
 
 func TestPreparedStringToFloatRequiresExplicitCompatibilityMode(t *testing.T) {
@@ -5232,6 +5240,10 @@ func TestPreparedStringToFloatRequiresExplicitCompatibilityMode(t *testing.T) {
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 	}
+
+	_, err := ParsePreparedStringToFloat64WithMode("1.5tail", SQLCompatibilityMatrixOne)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 
 	got, err := ParsePreparedStringToFloat64WithMode("1.5tail", SQLCompatibilityMySQL)
 	require.NoError(t, err)

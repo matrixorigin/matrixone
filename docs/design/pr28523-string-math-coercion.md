@@ -256,9 +256,13 @@ overload IDs. `validFunctionOverloadID` validates both function and overload
 indices, including negative and out-of-range values. This bounds check is a
 panic-safety rule, not a claim that all old and new nodes have identical
 semantics. Catalog format and function/overload identifiers are unchanged.
-SessionInfo adds an additive boolean protobuf field 18 to carry the explicit
-numeric-compatibility mode across process boundaries; older payloads omit it
-and therefore fail closed as strict.
+SessionInfo adds additive protobuf fields 18 and 19 to carry the explicit
+numeric-compatibility mode and the sender contract marker across process
+boundaries. A zero/absent contract marker identifies a legacy payload; it does
+not infer a MySQL opt-in, and mode-sensitive remote expressions fail closed
+until the v88 contract is known. New strict senders also fence pre-v88 workers
+at placement and send time. Explicit MySQL compatibility remains the only
+permissive opt-in.
 
 ## 3. Ownership and execution design
 
@@ -1053,7 +1057,7 @@ Frozen design decisions for this implementation snapshot:
 2. Zonemap correctness: do not advertise function-wide CEIL/FLOOR/ROUND zonemap pruning for string-derived numeric expressions. Correctness wins over that optimization; a later change may add overload-specific pruning only with an equivalence proof and endpoint-trap tests.
 3. Bounded scan cost: retain the bounded per-parameter source/owner scan. The recorded deep no-match and mixed-role measurements are the selected evidence for this scope; a one-pass occurrence-role table or cross-execution cache is deferred until cache invalidation, ownership equivalence, and new measurements are specified separately.
 4. Argument ownership: retain the revision-9 ownership boundaries and no-inherited-role fast path. Only eligible string-math value occurrences are rebound; control/precision arguments stay in their declared domains; nested/non-owning functions do not inherit a string role.
-5. Compatibility contract: default, empty, unset, and legacy/nil process state are strict; only explicit MYSQL_NUMERIC_COMPATIBILITY enables MySQL numeric-prefix conversion; MATRIXONE_NATIVE is always strict and wins if both flags are present; the token is appended without shifting existing SQL-mode positions and is transported through protobuf field 18 with legacy/missing payloads failing closed.
+5. Compatibility contract: default, empty, unset, and legacy/nil process state are strict; only explicit MYSQL_NUMERIC_COMPATIBILITY enables MySQL numeric-prefix conversion; MATRIXONE_NATIVE is always strict and wins if both flags are present; the token is appended without shifting existing SQL-mode positions and is transported through protobuf fields 18/19 with legacy/missing payloads failing closed for mode-sensitive remote expressions.
 These decisions are frozen for the implementation snapshot and are distinct from the GitHub approval action. They are not changed by the two non-blocking implementation observations in the latest automated review.
 Evidence links: [PR #28523](https://github.com/matrixorigin/matrixone/pull/28523); [historical-head CI run 35197284882](https://github.com/matrixorigin/matrixone/actions/runs/35197284882); the PR/evidence ledger is the record for commit replay, review, CI, and BVT; current local post-rebase evidence is recorded above
 Implementation deviations requiring follow-up: MOD native arithmetic widening regression fixed in 8fc4d5250. The remaining follow-up is optimization-only: safe overload-specific zonemap pruning and a one-pass role table may be evaluated in a separate change; they are not required by this frozen contract.

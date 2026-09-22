@@ -154,6 +154,30 @@ func RequiresMORPCVersion30NumericPrefix(owner any) (bool, error) {
 	return features.NumericPrefix, err
 }
 
+// RequiresMORPCVersion93StrictStringNumericCompatibility reports whether an
+// owner contains a numeric string conversion whose result depends on the
+// sender's strict-by-default compatibility contract.
+func RequiresMORPCVersion93StrictStringNumericCompatibility(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.StrictStringNumericCompatibility, err
+}
+
+// RequiresMORPCVersion92StrictStringNumericCompatibility is retained as a
+// source-level alias for callers from the pre-v93 development branch. MORPC
+// v92 is already assigned to the canonical scalar FLOAT HLL contract on main;
+// the strict string numeric contract is admitted at v93.
+// Deprecated: use RequiresMORPCVersion93StrictStringNumericCompatibility.
+func RequiresMORPCVersion92StrictStringNumericCompatibility(owner any) (bool, error) {
+	return RequiresMORPCVersion93StrictStringNumericCompatibility(owner)
+}
+
+// RequiresMORPCVersion88StrictStringNumericCompatibility is retained as a
+// source-level alias for callers from the older development branch.
+// Deprecated: use RequiresMORPCVersion93StrictStringNumericCompatibility.
+func RequiresMORPCVersion88StrictStringNumericCompatibility(owner any) (bool, error) {
+	return RequiresMORPCVersion93StrictStringNumericCompatibility(owner)
+}
+
 // RequiresMORPCVersion36JSONComparisonParam reports whether an owner contains
 // the internal prepared-JSON comparison function.  The function is deliberately
 // identified by its numeric ID: unlike ordinary SQL functions, its name is an
@@ -300,6 +324,8 @@ const (
 	planJSONTypeID                   int32 = 62
 	binFunctionID                    int32 = 270
 	convFunctionID                   int32 = 367
+	ceilFunctionID                   int32 = 72
+	floorFunctionID                  int32 = 103
 	asciiFunctionID                  int32 = 52
 	asciiInt32ResultTypeID           int32 = 22
 	findInSetFunctionID              int32 = 101
@@ -363,18 +389,23 @@ const (
 // SpatialDistanceSemantics requires MORPC v90 because geodetic
 // ST_FRECHETDISTANCE/ST_HAUSDORFFDISTANCE change the meaning of existing
 // overloads and the distance family adds length-unit overloads.
+// StrictStringNumericCompatibility requires MORPC v93 when the sender uses
+// the strict-by-default contract. Pre-v93 workers understand the prefix-cast
+// representation but default to permissive conversion when the new SessionInfo
+// marker is absent.
 type RemoteExpressionFeatures struct {
-	NumericPrefix                   bool
-	JSONComparisonParam             bool
-	MixedJSONBooleanEquality        bool
-	FormatNumericArguments          bool
-	TypedConversionFunctions        bool
-	IntegerArithmeticDomains        bool
-	RowDependentConvBases           bool
-	ASCIIInt32Result                bool
-	StringNumericResultContracts    bool
-	BoundedConditionalStringDomains bool
-	IPFunctionSemantics             bool
+	NumericPrefix                    bool
+	StrictStringNumericCompatibility bool
+	JSONComparisonParam              bool
+	MixedJSONBooleanEquality         bool
+	FormatNumericArguments           bool
+	TypedConversionFunctions         bool
+	IntegerArithmeticDomains         bool
+	RowDependentConvBases            bool
+	ASCIIInt32Result                 bool
+	StringNumericResultContracts     bool
+	BoundedConditionalStringDomains  bool
+	IPFunctionSemantics              bool
 	// IntegerParameterCoercion requires v85 for private CAST 5..8.
 	IntegerParameterCoercion          bool
 	TOBase64ResultContracts           bool
@@ -386,6 +417,7 @@ type RemoteExpressionFeatures struct {
 
 func (features RemoteExpressionFeatures) Any() bool {
 	return features.NumericPrefix ||
+		features.StrictStringNumericCompatibility ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
 		features.FormatNumericArguments ||
@@ -823,9 +855,15 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 					features.IntegerArithmeticDomains = true
 				}
 			}
-			if !features.NumericPrefix && current.Typ.Charset == 255 && fn != nil && fn.Func != nil &&
+			if current.Typ.Charset == 255 && fn != nil && fn.Func != nil &&
 				strings.EqualFold(fn.Func.GetObjName(), "cast") {
 				features.NumericPrefix = true
+			}
+			if !features.StrictStringNumericCompatibility && isStrictStringNumericCompatibilityCast(current) {
+				features.StrictStringNumericCompatibility = true
+			}
+			if !features.StrictStringNumericCompatibility && isHistoricalStringMathCompatibilityFunction(current) {
+				features.StrictStringNumericCompatibility = true
 			}
 			if !features.JSONComparisonParam && fn != nil && fn.Func != nil &&
 				int32(fn.Func.Obj>>32) == internalJSONComparisonFunctionID {
@@ -894,6 +932,48 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 		})
 	})
 	return
+}
+
+// isStrictStringNumericCompatibilityCast identifies string-to-floating casts
+// whose executor consults CompatibilityModeFromProcess. This includes the
+// planner's comparison cast and ordinary/explicit CAST identities; integer
+// and decimal CASTs retain their existing protocol contracts.
+func isStrictStringNumericCompatibilityCast(expr *Expr) bool {
+	if expr == nil || expr.GetF() == nil || expr.GetF().Func == nil || len(expr.GetF().Args) == 0 {
+		return false
+	}
+	if !strings.EqualFold(expr.GetF().Func.GetObjName(), "cast") || expr.GetF().Args[0] == nil {
+		return false
+	}
+	return isPlanNumericCompatibilityStringType(expr.GetF().Args[0].Typ.Id) &&
+		(expr.Typ.Id == 30 || expr.Typ.Id == 31)
+}
+
+// isPlanNumericCompatibilityStringType follows the planner's complete string
+// domain. Whether a value is interpreted as raw bytes or text is runtime
+// provenance (vector.IsBin), not the declared OID; a VARBINARY/BLOB column can
+// therefore still take the mode-aware text parser and must be fenced too.
+func isPlanNumericCompatibilityStringType(id int32) bool {
+	switch id {
+	case planCharTypeID, planVarcharTypeID, planTextTypeID,
+		planBinaryTypeID, planVarbinaryTypeID, planBlobTypeID:
+		return true
+	default:
+		return false
+	}
+}
+
+// isHistoricalStringMathCompatibilityFunction covers the two serialized
+// VARCHAR overloads that predate the numeric-cast routing. They remain
+// executable for old persisted plans and therefore need the same mixed-version
+// admission fence even though their arguments are not wrapped by a CAST.
+func isHistoricalStringMathCompatibilityFunction(expr *Expr) bool {
+	if expr == nil || expr.GetF() == nil || expr.GetF().Func == nil {
+		return false
+	}
+	functionID := int32(expr.GetF().Func.Obj >> 32)
+	overloadID := int32(expr.GetF().Func.Obj)
+	return overloadID == 12 && (functionID == ceilFunctionID || functionID == floorFunctionID)
 }
 
 // isASCIIInt32Result identifies the new physical result contract of ASCII.

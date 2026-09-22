@@ -152,23 +152,31 @@ func (proc *Process) BuildProcessInfo(
 			return procInfo, err
 		}
 
+		contractVersion := uint32(1)
+		if proc.Base.SessionInfo.LegacyNumericCompatibilityMode {
+			// A new CN may forward a process received from an old coordinator.
+			// Preserve the unknown contract so the next worker can fail closed
+			// instead of silently treating the hop as a new strict sender.
+			contractVersion = 0
+		}
 		procInfo.SessionInfo = pipeline.SessionInfo{
-			User:                          proc.Base.SessionInfo.GetUser(),
-			Host:                          proc.Base.SessionInfo.GetHost(),
-			Role:                          proc.Base.SessionInfo.GetRole(),
-			ConnectionId:                  proc.Base.SessionInfo.GetConnectionID(),
-			Database:                      proc.Base.SessionInfo.GetDatabase(),
-			Version:                       proc.Base.SessionInfo.GetVersion(),
-			TimeZone:                      timeBytes,
-			TimeZoneName:                  TimeZoneLocationName(loc),
-			QueryId:                       proc.Base.SessionInfo.QueryId,
-			LockWaitTimeout:               resolveLockWaitTimeoutSeconds(proc),
-			LockWaitTimeoutSet:            proc.Base.SessionInfo.LockWaitTimeoutSet,
-			MatrixoneNativeMode:           proc.Base.SessionInfo.MatrixOneNativeMode,
-			MysqlNumericCompatibilityMode: proc.Base.SessionInfo.MySQLNumericCompatibilityMode,
-			SqlMode:                       resolveSqlMode(proc),
-			AutoIncrementIncrement:        proc.Base.SessionInfo.AutoIncrementIncrement,
-			AutoIncrementOffset:           proc.Base.SessionInfo.AutoIncrementOffset,
+			User:                                proc.Base.SessionInfo.GetUser(),
+			Host:                                proc.Base.SessionInfo.GetHost(),
+			Role:                                proc.Base.SessionInfo.GetRole(),
+			ConnectionId:                        proc.Base.SessionInfo.GetConnectionID(),
+			Database:                            proc.Base.SessionInfo.GetDatabase(),
+			Version:                             proc.Base.SessionInfo.GetVersion(),
+			TimeZone:                            timeBytes,
+			TimeZoneName:                        TimeZoneLocationName(loc),
+			QueryId:                             proc.Base.SessionInfo.QueryId,
+			LockWaitTimeout:                     resolveLockWaitTimeoutSeconds(proc),
+			LockWaitTimeoutSet:                  proc.Base.SessionInfo.LockWaitTimeoutSet,
+			MatrixoneNativeMode:                 proc.Base.SessionInfo.MatrixOneNativeMode,
+			MysqlNumericCompatibilityMode:       proc.Base.SessionInfo.MySQLNumericCompatibilityMode,
+			NumericCompatibilityContractVersion: contractVersion,
+			SqlMode:                             resolveSqlMode(proc),
+			AutoIncrementIncrement:              proc.Base.SessionInfo.AutoIncrementIncrement,
+			AutoIncrementOffset:                 proc.Base.SessionInfo.AutoIncrementOffset,
 		}
 		nullifyZeroTemporal, err := ResolveExplicitZeroTemporalCastReturnsNull(proc)
 		if err != nil {
@@ -468,6 +476,7 @@ func ConvertToProcessSessionInfo(
 		LockWaitTimeoutSet:                  sei.LockWaitTimeoutSet,
 		MatrixOneNativeMode:                 sei.MatrixoneNativeMode,
 		MySQLNumericCompatibilityMode:       sei.MysqlNumericCompatibilityMode,
+		LegacyNumericCompatibilityMode:      sei.NumericCompatibilityContractVersion == 0,
 		ExplicitZeroTemporalCastReturnsNull: sei.ExplicitZeroTemporalCastReturnsNull,
 		SqlMode:                             sei.SqlMode,
 		AutoIncrementIncrement:              sei.AutoIncrementIncrement,

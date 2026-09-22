@@ -467,13 +467,16 @@ func modTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) != 2 {
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
 	}
-	if inputs[0].Oid.IsMySQLString() || inputs[1].Oid.IsMySQLString() ||
-		inputs[0].Oid == types.T_any || inputs[1].Oid == types.T_any {
+	// A bare NULL and an unbound prepare marker are represented by T_any, but
+	// neither is a character operand.  Let the arithmetic matrix resolve those
+	// values against the known numeric side; execution-time prepare rebinding
+	// will run this matcher again once a concrete string value is available.
+	if inputs[0].Oid.IsMySQLString() || inputs[1].Oid.IsMySQLString() {
 		return newCheckResultWithCast(0, []types.Type{types.T_float64.ToType(), types.T_float64.ToType()})
 	}
 	// Native numeric MOD keeps its historical arithmetic widening contract
-	// (notably BIT64 with signed INT64 -> DECIMAL128). Only the string/ANY
-	// branch above uses the MySQL numeric-prefix DOUBLE domain.
+	// (notably BIT64 with signed INT64 -> DECIMAL128). Only the string branch
+	// above uses the MySQL numeric-prefix DOUBLE domain.
 	has, t1, t2 := arithmeticTypeCastRule1(inputs[0], inputs[1])
 	if has {
 		if modOperatorSupports(t1, t2) {

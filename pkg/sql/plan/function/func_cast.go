@@ -6701,8 +6701,9 @@ type castNumericToken struct {
 type SQLCompatibilityMode uint8
 
 const (
-	// Zero is strict so nil, uninitialized, and older process snapshots fail
-	// closed. MySQL numeric-prefix behavior is an explicit opt-in.
+	// Zero is strict for a current process with the v88 contract marker. A
+	// legacy wire payload is tracked separately by LegacyNumericCompatibilityMode
+	// so mode-sensitive remote execution can fail closed during a rolling upgrade.
 	SQLCompatibilityMatrixOne SQLCompatibilityMode = iota
 	SQLCompatibilityMySQL
 )

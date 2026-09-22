@@ -788,8 +788,15 @@ message SessionInfo {
   // time_zone bytes describe a fixed-offset location.
   string time_zone_name = 17;
   // Explicitly enables MySQL's permissive string-to-floating-number prefix
-  // conversion. False, including when absent in older payloads, is strict.
+  // conversion for a sender using the current transport contract. Older
+  // payloads omit the separate contract marker below; receivers must not infer
+  // an explicit MySQL opt-in from that absence.
   bool mysql_numeric_compatibility_mode = 18;
+  // Sender-side contract marker for strict-by-default string numeric
+  // conversion. New senders set this to 1; a zero value identifies a legacy
+  // payload whose strict-sensitive remote execution must fail closed until the
+  // sender contract is known.
+  uint32 numeric_compatibility_contract_version = 19;
 }
 
 message SessionLoggerInfo {

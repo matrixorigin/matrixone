@@ -128,7 +128,7 @@ const (
 	MORPCVersion90     int64 = 90 // geodetic distance semantics and length-unit overloads
 	MORPCVersion91     int64 = 91 // canonical CHAR and JSON HLL_ADD_AGG hash keys
 	MORPCVersion92     int64 = 92 // canonical scalar FLOAT HLL_ADD_AGG hash keys
-	MORPCVersion93     int64 = 93 // session LAST_INSERT_ID connection migration state
+	MORPCVersion93     int64 = 93 // LAST_INSERT_ID migration state and strict string-numeric compatibility
 	MORPCLatestVersion       = MORPCVersion93
 )
 

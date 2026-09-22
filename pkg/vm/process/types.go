@@ -125,8 +125,14 @@ type SessionInfo struct {
 	MatrixOneNativeMode bool
 	// MySQLNumericCompatibilityMode is an explicit opt-in for MySQL's
 	// permissive string-to-floating-number prefix conversion. False is strict,
-	// including for older process payloads that omit the field.
+	// for current process payloads. LegacyNumericCompatibilityMode is set when a
+	// pre-contract remote payload is decoded; strict expressions fail closed until
+	// the peer's v93 contract is known, rather than gaining an implicit opt-in.
 	MySQLNumericCompatibilityMode bool
+	// LegacyNumericCompatibilityMode identifies a remote SessionInfo payload
+	// that predates the strict-default contract marker. It is transport-derived
+	// and is copied when forwarding so the next hop can fail closed as well.
+	LegacyNumericCompatibilityMode bool
 	// IsRestore identifies catalog DDL executed by snapshot/PITR restore. Such
 	// DDL rebuilds persisted View metadata through legacy discovery after the
 	// restore transaction, rather than running dependency hooks while catalog
