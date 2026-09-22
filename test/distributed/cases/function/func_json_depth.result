@@ -48,3 +48,37 @@ SELECT JSON_DEPTH(CONCAT(REPEAT('{"a":', 100), '1', REPEAT('}', 100))) AS result
 101
 SELECT JSON_DEPTH(CONCAT(REPEAT('{"a":', 101), '1', REPEAT('}', 101))) AS result;
 invalid input: json document nesting depth exceeds 100
+PREPARE json_depth_prepared FROM 'SELECT JSON_DEPTH(?) AS result';
+SET @json_depth_input = '{"a":[1]}';
+EXECUTE json_depth_prepared USING @json_depth_input;
+➤ result[-5,64,0]  𝄀
+3
+SET @json_depth_input = 42;
+EXECUTE json_depth_prepared USING @json_depth_input;
+Invalid data type for JSON data in argument 1 to function json_depth; a JSON string or JSON type is required.
+SET @json_depth_input = CAST('{"a":[1]}' AS BINARY);
+EXECUTE json_depth_prepared USING @json_depth_input;
+Invalid data type for JSON data in argument 1 to function json_depth; a JSON string or JSON type is required.
+SET @json_depth_input = NULL;
+EXECUTE json_depth_prepared USING @json_depth_input;
+➤ result[-5,64,0]  𝄀
+null
+SET @json_depth_input = 'not-json';
+EXECUTE json_depth_prepared USING @json_depth_input;
+invalid argument json_depth, bad value invalid JSON document
+SET @json_depth_input = '{"a":{"b":1}}';
+EXECUTE json_depth_prepared USING @json_depth_input;
+➤ result[-5,64,0]  𝄀
+3
+DEALLOCATE PREPARE json_depth_prepared;
+SET @json_depth_input = NULL;
+DROP TABLE IF EXISTS t_json_depth_teardown;
+CREATE TABLE t_json_depth_teardown (id INT PRIMARY KEY, doc VARCHAR(64));
+INSERT INTO t_json_depth_teardown VALUES (1, '[]');
+SELECT JSON_DEPTH(doc) FROM t_json_depth_teardown;
+JSON_DEPTH(doc)
+1
+DROP TABLE t_json_depth_teardown;
+SELECT COUNT(*) AS residue FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 't_json_depth_teardown';
+residue
+0
