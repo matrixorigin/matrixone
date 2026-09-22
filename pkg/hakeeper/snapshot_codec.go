@@ -34,8 +34,9 @@ const (
 	hakeeperSnapshotEnvelopeVersion        uint32 = 1
 	hakeeperSnapshotFeatureExpressionFloor uint64 = 1 << 0
 	hakeeperSnapshotFeatureCatalogBarrier  uint64 = 1 << 1
+	hakeeperSnapshotFeatureCatalogRuntime  uint64 = 1 << 2
 	hakeeperSnapshotKnownFeatures                 = hakeeperSnapshotFeatureExpressionFloor |
-		hakeeperSnapshotFeatureCatalogBarrier
+		hakeeperSnapshotFeatureCatalogBarrier | hakeeperSnapshotFeatureCatalogRuntime
 )
 
 func validateCatalogMetadataBarrier(state *pb.CatalogMetadataBarrierState) error {
@@ -85,6 +86,9 @@ func snapshotRequiredFeatures(state *pb.HAKeeperRSMState) uint64 {
 	if catalogMetadataBarrierEnabled(state) {
 		features |= hakeeperSnapshotFeatureCatalogBarrier
 	}
+	if state.CatalogMetadataBarrierRequiredProtocolVersion != 0 {
+		features |= hakeeperSnapshotFeatureCatalogRuntime
+	}
 	return features
 }
 
@@ -104,11 +108,14 @@ func marshalHAKeeperSnapshot(state *pb.HAKeeperRSMState, forceV3 bool) ([]byte, 
 	if err := validateCatalogMetadataBarrier(state.CatalogMetadataBarrier); err != nil {
 		return nil, err
 	}
+	if err := validateCatalogMetadataEvidence(state); err != nil {
+		return nil, err
+	}
 	payload, err := state.Marshal()
 	if err != nil {
 		return nil, err
 	}
-	if catalogMetadataBarrierEnabled(state) || forceV3 {
+	if catalogMetadataBarrierEnabled(state) || state.CatalogMetadataBarrierRequiredProtocolVersion != 0 || forceV3 {
 		envelope := pb.HAKeeperSnapshotEnvelope{
 			FormatVersion:    hakeeperSnapshotEnvelopeVersion,
 			RSMState:         payload,
@@ -165,7 +172,7 @@ func unmarshalHAKeeperSnapshot(data []byte) (pb.HAKeeperRSMState, error) {
 			return pb.HAKeeperRSMState{}, moerr.NewInvalidInputNoCtx(
 				"persisted HAKeeper snapshot envelope is missing its protocol floor")
 		}
-		if catalogMetadataBarrierEnabled(&decoded) {
+		if catalogMetadataBarrierEnabled(&decoded) || decoded.CatalogMetadataBarrierRequiredProtocolVersion != 0 {
 			return pb.HAKeeperRSMState{}, moerr.NewInvalidInputNoCtx("MOH2 snapshot contains catalog metadata barrier state")
 		}
 		if err := validateCatalogMetadataBarrier(decoded.CatalogMetadataBarrier); err != nil {
@@ -177,12 +184,15 @@ func unmarshalHAKeeperSnapshot(data []byte) (pb.HAKeeperRSMState, error) {
 		if err := decoded.Unmarshal(data); err != nil {
 			return pb.HAKeeperRSMState{}, err
 		}
-		if catalogMetadataBarrierEnabled(&decoded) {
+		if catalogMetadataBarrierEnabled(&decoded) || decoded.CatalogMetadataBarrierRequiredProtocolVersion != 0 {
 			return pb.HAKeeperRSMState{}, moerr.NewInvalidInputNoCtx("legacy snapshot contains catalog metadata barrier state")
 		}
 		if err := validateCatalogMetadataBarrier(decoded.CatalogMetadataBarrier); err != nil {
 			return pb.HAKeeperRSMState{}, err
 		}
+	}
+	if err := validateCatalogMetadataEvidence(&decoded); err != nil {
+		return pb.HAKeeperRSMState{}, err
 	}
 	return decoded, nil
 }

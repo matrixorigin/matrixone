@@ -1534,27 +1534,27 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 		t.Cleanup(op.Release)
 		cRT := moruntime.ServiceRuntime(c.proc.GetService())
 
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion85)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion93)
 		err = validateRemoteExpressionPipelineProtocol(proc, remotePipeline)
-		require.ErrorContains(t, err, "CRC32 JSON text-byte semantics require MORPC protocol version 86")
+		require.ErrorContains(t, err, "CRC32 JSON text-byte semantics require MORPC protocol version 94")
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
-		client.version = defines.MORPCVersion85
+		client.version = defines.MORPCVersion93
 		_, err = encodeRemoteScope(scope, c.proc)
-		require.ErrorContains(t, err, "CRC32 JSON text-byte semantics require MORPC protocol version 86")
+		require.ErrorContains(t, err, "CRC32 JSON text-byte semantics require MORPC protocol version 94")
 
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion86)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion94)
 		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
-		client.version = defines.MORPCVersion86
-		cRT.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion86)
+		client.version = defines.MORPCVersion94
+		cRT.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion94)
 		encoded, err := encodeRemoteScope(scope, c.proc)
 		require.NoError(t, err)
 		decoded, err := decodeScope(encoded, c.proc, true, nil)
 		require.NoError(t, err)
 		decoded.release()
 
-		cRT.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion85)
+		cRT.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion93)
 		decoded, err = decodeScope(encoded, c.proc, true, nil)
-		require.ErrorContains(t, err, "CRC32 JSON text-byte semantics require MORPC protocol version 86")
+		require.ErrorContains(t, err, "CRC32 JSON text-byte semantics require MORPC protocol version 94")
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 		require.Nil(t, decoded)
 	})

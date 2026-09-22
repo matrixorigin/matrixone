@@ -1,0 +1,29 @@
+drop table if exists t_list_array_compat;
+create table t_list_array_compat(g int, pos int, v varchar(10));
+insert into t_list_array_compat values
+    (1, 2, 'b'), (1, 1, 'a'), (1, 3, null), (1, 4, 'a'),
+    (2, 1, null);
+
+select g,
+       listagg(v, '|') within group (order by pos) as ordered_values
+from t_list_array_compat
+group by g order by g;
+
+select listagg(distinct v) within group (order by pos desc) as distinct_values
+from t_list_array_compat where g = 1;
+
+select json_type(array_agg(v)) as result_type,
+       json_length(array_agg(v)) as element_count
+from t_list_array_compat where g = 1;
+
+select json_length(array_agg(distinct v)) as distinct_count
+from t_list_array_compat where g = 1;
+
+select array_agg(v) as empty_array_compat
+from t_list_array_compat where g = 99;
+
+select pos,
+       array_agg(v) over (order by pos rows between unbounded preceding and current row) as running_array
+from t_list_array_compat where g = 1 order by pos;
+
+drop table t_list_array_compat;

@@ -17,6 +17,7 @@ package plan
 import (
 	"reflect"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -202,6 +203,94 @@ func RequiresMORPCVersion83BoundedConditionalStringDomains(owner any) (bool, err
 	return features.BoundedConditionalStringDomains, err
 }
 
+// RequiresMORPCVersion86ExpressionResultContracts reports whether an owner
+// contains a follow-up expression contract that changes a result domain or
+// overload identity.
+func RequiresMORPCVersion86ExpressionResultContracts(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.ExpressionResultMetadataContracts ||
+		features.TOBase64ResultContracts || features.IPFunctionResultContracts, err
+}
+
+// RequiresMORPCVersion85ExpressionResultContracts is retained for source
+// compatibility with callers introduced before MORPC v85 was reserved for
+// integer-parameter coercion. The actual admission epoch is v86.
+// Deprecated: use RequiresMORPCVersion86ExpressionResultContracts.
+func RequiresMORPCVersion85ExpressionResultContracts(owner any) (bool, error) {
+	return RequiresMORPCVersion86ExpressionResultContracts(owner)
+}
+
+// RequiresMORPCVersion89DecimalLiteralSemantics reports whether an owner
+// contains a plain decimal literal whose exact normalized binding must not be
+// replayed by a pre-v89 binder.
+func RequiresMORPCVersion89DecimalLiteralSemantics(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.DecimalLiteralSemantics, err
+}
+
+// RequiresMORPCVersion88DecimalLiteralSemantics is retained as a source-level
+// compatibility alias. MORPC v88 is owned by canonical vector HLL keys.
+// Deprecated: use RequiresMORPCVersion89DecimalLiteralSemantics.
+func RequiresMORPCVersion88DecimalLiteralSemantics(owner any) (bool, error) {
+	return RequiresMORPCVersion89DecimalLiteralSemantics(owner)
+}
+
+// RequiresMORPCVersion87DecimalLiteralSemantics is retained as a source-level
+// compatibility alias. Decimal literal admission moved to v89 because v87 and
+// v88 are owned by grouping provenance and canonical vector HLL keys.
+// Deprecated: use RequiresMORPCVersion89DecimalLiteralSemantics.
+func RequiresMORPCVersion87DecimalLiteralSemantics(owner any) (bool, error) {
+	return RequiresMORPCVersion89DecimalLiteralSemantics(owner)
+}
+
+// RequiresMORPCVersion84DecimalLiteralSemantics is retained as a source-level
+// compatibility alias. Decimal literal admission moved to v89 because v84 is
+// already owned by the extended discrete percentile contract on main.
+// Deprecated: use RequiresMORPCVersion89DecimalLiteralSemantics.
+func RequiresMORPCVersion84DecimalLiteralSemantics(owner any) (bool, error) {
+	return RequiresMORPCVersion89DecimalLiteralSemantics(owner)
+}
+
+// RequiresMORPCVersion82DecimalLiteralSemantics is retained as a source-level
+// compatibility alias for callers introduced with the original decimal marker.
+// Deprecated: use RequiresMORPCVersion89DecimalLiteralSemantics.
+func RequiresMORPCVersion82DecimalLiteralSemantics(owner any) (bool, error) {
+	return RequiresMORPCVersion89DecimalLiteralSemantics(owner)
+}
+
+// RequiresMORPCVersion90SpatialDistanceSemantics reports whether an owner
+// contains a spatial-distance expression whose meaning or overload contract
+// changed in MORPC v90. Constant folding must retain such an expression until
+// persisted-expression admission has observed this requirement.
+func RequiresMORPCVersion90SpatialDistanceSemantics(owner any) (bool, error) {
+	features, err := RequiredRemoteExpressionFeatures(owner)
+	return features.SpatialDistanceSemantics, err
+}
+
+// RequiresMORPCVersion89SpatialDistanceSemantics retains the pre-main source alias.
+// Deprecated: use RequiresMORPCVersion90SpatialDistanceSemantics; admission is v90.
+func RequiresMORPCVersion89SpatialDistanceSemantics(owner any) (bool, error) {
+	return RequiresMORPCVersion90SpatialDistanceSemantics(owner)
+}
+
+// RequiresMORPCVersion86SpatialDistanceSemantics retains the original source alias.
+// Deprecated: use RequiresMORPCVersion90SpatialDistanceSemantics; admission is v90.
+func RequiresMORPCVersion86SpatialDistanceSemantics(owner any) (bool, error) {
+	return RequiresMORPCVersion90SpatialDistanceSemantics(owner)
+}
+
+// RequiresMORPCVersion87SpatialDistanceSemantics retains the unmerged stack alias.
+// Deprecated: use RequiresMORPCVersion90SpatialDistanceSemantics; admission is v90.
+func RequiresMORPCVersion87SpatialDistanceSemantics(owner any) (bool, error) {
+	return RequiresMORPCVersion90SpatialDistanceSemantics(owner)
+}
+
+// RequiresMORPCVersion88SpatialDistanceSemantics retains the pre-main source alias.
+// Deprecated: use RequiresMORPCVersion90SpatialDistanceSemantics; admission is v90.
+func RequiresMORPCVersion88SpatialDistanceSemantics(owner any) (bool, error) {
+	return RequiresMORPCVersion90SpatialDistanceSemantics(owner)
+}
+
 const (
 	equalFunctionID                  int32 = 0
 	notEqualFunctionID               int32 = 1
@@ -219,9 +308,27 @@ const (
 	uncompressedLengthFunctionID     int32 = 389
 	crc32FunctionID                  int32 = 81
 	coalesceFunctionID               int32 = 74
+	caseFunctionID                   int32 = 71
+	iffFunctionID                    int32 = 113
+	leftFunctionID                   int32 = 123
+	rightFunctionID                  int32 = 166
+	substringFunctionID              int32 = 210
 	stringNumericInt32ResultTypeID   int32 = 22
 	stringNumericInt64ResultTypeID   int32 = 23
 	stringNumericUint64ResultTypeID  int32 = 28
+	planVarcharTypeID                int32 = 61
+	planBinaryTypeID                 int32 = 64
+	planVarbinaryTypeID              int32 = 65
+	planBlobTypeID                   int32 = 70
+	planTextTypeID                   int32 = 71
+	ipInt32ResultTypeID              int32 = 22
+	planCharTypeID                   int32 = 60
+	planDateTypeID                   int32 = 50
+	planTimeTypeID                   int32 = 51
+	planDatetimeTypeID               int32 = 52
+	planTimestampTypeID              int32 = 53
+	planAnyTypeID                    int32 = 0
+	maxVarcharWidth                  int32 = 65535
 )
 
 // RemoteExpressionFeatures is the complete set of versioned expression
@@ -242,7 +349,21 @@ const (
 // vectors to signed INT/ BIGINT or BIGINT UNSIGNED.
 // BoundedConditionalStringDomains requires MORPC v83 because the bounded
 // BINARY/VARBINARY COALESCE overload identities are new to the registry.
-// CRC32JSONTextBytes requires MORPC v86 because CRC32's existing JSON
+// DecimalLiteralSemantics requires MORPC v89 because plain DECIMAL256
+// literals are normalized and kept exact by the new planner, while older
+// binders can round or reject the same persisted SQL at the Decimal128
+// boundary.
+// TOBase64ResultContracts and IPFunctionResultContracts require MORPC v86:
+// the former changes a VARCHAR result bound and adds binary overloads, while
+// the latter changes IP predicate results to INT32 and adds domain-aware
+// INET_NTOA overloads.
+// ExpressionResultMetadataContracts also requires MORPC v86 because bounded
+// character slicing and fractional temporal conditional results change the
+// serialized result metadata consumed by persisted views and remote workers.
+// SpatialDistanceSemantics requires MORPC v90 because geodetic
+// ST_FRECHETDISTANCE/ST_HAUSDORFFDISTANCE change the meaning of existing
+// overloads and the distance family adds length-unit overloads.
+// CRC32JSONTextBytes requires MORPC v94 because CRC32's existing JSON
 // overload keeps its function identity while changing its input contract from
 // the internal binary representation to normalized JSON text bytes.
 type RemoteExpressionFeatures struct {
@@ -257,7 +378,14 @@ type RemoteExpressionFeatures struct {
 	StringNumericResultContracts    bool
 	BoundedConditionalStringDomains bool
 	IPFunctionSemantics             bool
-	CRC32JSONTextBytes              bool
+	// IntegerParameterCoercion requires v85 for private CAST 5..8.
+	IntegerParameterCoercion          bool
+	TOBase64ResultContracts           bool
+	IPFunctionResultContracts         bool
+	ExpressionResultMetadataContracts bool
+	DecimalLiteralSemantics           bool
+	SpatialDistanceSemantics          bool
+	CRC32JSONTextBytes                bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
@@ -272,6 +400,12 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.StringNumericResultContracts ||
 		features.BoundedConditionalStringDomains ||
 		features.IPFunctionSemantics ||
+		features.IntegerParameterCoercion ||
+		features.TOBase64ResultContracts ||
+		features.IPFunctionResultContracts ||
+		features.ExpressionResultMetadataContracts ||
+		features.DecimalLiteralSemantics ||
+		features.SpatialDistanceSemantics ||
 		features.CRC32JSONTextBytes
 }
 
@@ -291,14 +425,53 @@ func isBoundedConditionalStringDomain(fn *Function) bool {
 // therefore based on function identity, not on the operand types selected by a
 // particular planner invocation.
 const (
-	remoteIPInet6AtonFunctionID    int32 = 392
-	remoteIPInet6NtoaFunctionID    int32 = 393
-	remoteIPInetAtonFunctionID     int32 = 394
-	remoteIPInetNtoaFunctionID     int32 = 395
-	remoteIPIsIPv4FunctionID       int32 = 396
-	remoteIPIsIPv6FunctionID       int32 = 397
-	remoteIPIsIPv4CompatFunctionID int32 = 398
+	remoteIPInet6AtonFunctionID       int32 = 392
+	remoteIPInet6NtoaFunctionID       int32 = 393
+	remoteIPInetAtonFunctionID        int32 = 394
+	remoteIPInetNtoaFunctionID        int32 = 395
+	remoteIPIsIPv4FunctionID          int32 = 396
+	remoteIPIsIPv6FunctionID          int32 = 397
+	remoteIPIsIPv4CompatFunctionID    int32 = 398
+	remoteIPIsIPv4MappedFunctionID    int32 = 399
+	remoteTOBase64FunctionID          int32 = 213
+	remoteINETNTOAFunctionID          int32 = 395
+	remoteSpatialDistanceFunctionID   int32 = 421
+	remoteFrechetDistanceFunctionID   int32 = 506
+	remoteHausdorffDistanceFunctionID int32 = 507
 )
+
+func isValidIntegerArgumentSource(id, source int32) bool {
+	standard := source == 0 || source == 10 || isPlanNumericType(source) ||
+		source == 55 || source == 66 || isPlanMySQLStringType(source)
+	if id == 7 {
+		return source == 0 || isPlanMySQLStringType(source)
+	}
+	if id == 8 {
+		return standard || (source >= 50 && source <= 53) || source == 63
+	}
+	return standard
+}
+
+func validateIntegerArgumentCast(expr *Expr, overload int32) error {
+	fn := expr.GetF()
+	if fn == nil || len(fn.Args) != 2 || fn.Args[0] == nil || fn.Args[1] == nil {
+		return moerr.NewNotSupportedNoCtx("invalid private integer parameter CAST arity")
+	}
+	target := int32(23)
+	if overload == 7 || (overload != 8 && expr.Typ.Id == 28) {
+		target = 28
+	}
+	if !isValidIntegerArgumentSource(overload, fn.Args[0].Typ.Id) {
+		return moerr.NewNotSupportedNoCtx("invalid private integer parameter CAST source type")
+	}
+	if fn.Args[1].GetT() == nil || fn.Args[1].Typ.Id != target {
+		return moerr.NewNotSupportedNoCtx("invalid private integer parameter CAST target marker")
+	}
+	if expr.Typ.Id != target {
+		return moerr.NewNotSupportedNoCtx("invalid private integer parameter CAST result type")
+	}
+	return nil
+}
 
 func isRemoteIPFunction(functionID int32) bool {
 	switch functionID {
@@ -308,10 +481,319 @@ func isRemoteIPFunction(functionID int32) bool {
 		remoteIPInetNtoaFunctionID,
 		remoteIPIsIPv4FunctionID,
 		remoteIPIsIPv6FunctionID,
-		remoteIPIsIPv4CompatFunctionID:
+		remoteIPIsIPv4CompatFunctionID,
+		remoteIPIsIPv4MappedFunctionID:
 		return true
 	default:
 		return false
+	}
+}
+
+func isTOBase64ResultContract(expr *Expr) bool {
+	if expr == nil || expr.Typ.Id == 0 {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || int32(fn.Func.Obj>>32) != remoteTOBase64FunctionID {
+		return false
+	}
+	overloadID := int32(fn.Func.Obj)
+	return overloadID >= 3 || (overloadID == 0 && expr.Typ.Id == planVarcharTypeID)
+}
+
+func isIPFunctionResultContract(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	functionID := int32(fn.Func.Obj >> 32)
+	overloadID := int32(fn.Func.Obj)
+	if functionID == remoteINETNTOAFunctionID {
+		return overloadID >= 9
+	}
+	if functionID == remoteIPIsIPv4FunctionID ||
+		functionID == remoteIPIsIPv6FunctionID ||
+		functionID == remoteIPIsIPv4CompatFunctionID ||
+		functionID == remoteIPIsIPv4MappedFunctionID {
+		return expr.Typ.Id == ipInt32ResultTypeID
+	}
+	return false
+}
+
+func isPlanTemporalType(id int32) bool {
+	switch id {
+	case planDateTypeID, planTimeTypeID, planDatetimeTypeID, planTimestampTypeID:
+		return true
+	default:
+		return false
+	}
+}
+
+func isKnownIntegerLiteral(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if lit := expr.GetLit(); lit != nil {
+		if lit.Isnull {
+			return false
+		}
+		switch lit.Value.(type) {
+		case *Literal_I8Val, *Literal_I16Val, *Literal_I32Val, *Literal_I64Val,
+			*Literal_U8Val, *Literal_U16Val, *Literal_U32Val, *Literal_U64Val:
+			return true
+		default:
+			return false
+		}
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" ||
+		fn.GetSyntaxExplicitCast() || len(fn.Args) != 2 {
+		return false
+	}
+	return isKnownIntegerLiteral(fn.Args[0])
+}
+
+// expressionCharacterWidth recovers the source width through an implicit
+// planner cast. A new bounded slice commonly stores its source as an implicit
+// VARCHAR(n) cast, while an explicit CAST is a user-requested semantic
+// boundary and must not be treated as evidence that the outer slice changed.
+func expressionCharacterWidth(expr *Expr) (int32, bool) {
+	if expr == nil {
+		return 0, false
+	}
+	fn := expr.GetF()
+	if fn != nil && fn.Func != nil && fn.Func.GetObjName() == "cast" &&
+		!fn.GetSyntaxExplicitCast() && len(fn.Args) > 0 {
+		return expressionCharacterWidth(fn.Args[0])
+	}
+	if isPlanStringType(expr.Typ.Id) {
+		maxWidth := maxVarcharWidth
+		if isPlanBinaryType(expr.Typ.Id) {
+			maxWidth = maxVarbinaryWidth
+		}
+		if expr.Typ.Width > 0 && expr.Typ.Width != maxWidth {
+			return expr.Typ.Width, true
+		}
+	}
+	if lit := expr.GetLit(); lit != nil && !lit.Isnull {
+		if value, ok := lit.Value.(*Literal_Sval); ok {
+			if isPlanBinaryType(expr.Typ.Id) {
+				return int32(len(value.Sval)), true
+			}
+			return int32(utf8.RuneCountInString(value.Sval)), true
+		}
+	}
+	return 0, false
+}
+
+const maxVarbinaryWidth int32 = 65535
+
+func isPlanBinaryType(id int32) bool {
+	switch id {
+	case planBinaryTypeID, planVarbinaryTypeID, planBlobTypeID:
+		return true
+	default:
+		return false
+	}
+}
+
+func isPlanStringType(id int32) bool {
+	switch id {
+	case planCharTypeID, planVarcharTypeID, planTextTypeID,
+		planBinaryTypeID, planVarbinaryTypeID, planBlobTypeID:
+		return true
+	default:
+		return false
+	}
+}
+
+func isChangedCharacterSliceResultContract(expr *Expr, functionID int32, name string) bool {
+	if !isPlanStringType(expr.Typ.Id) {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil {
+		return false
+	}
+	var source, length *Expr
+	switch {
+	case functionID == leftFunctionID || functionID == rightFunctionID || name == "left" || name == "right":
+		if len(fn.Args) != 2 {
+			return false
+		}
+		source, length = fn.Args[0], fn.Args[1]
+	case functionID == substringFunctionID || name == "substring" || name == "substr" || name == "mid":
+		// The two-argument SUBSTRING(source, start) has no fixed output
+		// length. Only the explicit length form can be narrower than the
+		// already source-derived legacy metadata.
+		if len(fn.Args) != 3 {
+			return false
+		}
+		source, length = fn.Args[0], fn.Args[2]
+	default:
+		return false
+	}
+	if !isKnownIntegerLiteral(length) || expr.Typ.Width < 0 {
+		return false
+	}
+	if sourceWidth, known := expressionCharacterWidth(source); known {
+		return expr.Typ.Width < sourceWidth
+	}
+	if isPlanBinaryType(expr.Typ.Id) {
+		return expr.Typ.Width != maxVarbinaryWidth
+	}
+	return expr.Typ.Width != maxVarcharWidth
+}
+
+func conditionalFirstValue(fn *Function, functionID int32, name string) *Expr {
+	if fn == nil || len(fn.Args) == 0 {
+		return nil
+	}
+	switch {
+	case functionID == coalesceFunctionID || name == "coalesce":
+		return fn.Args[0]
+	case functionID == caseFunctionID || functionID == iffFunctionID ||
+		name == "case" || name == "if" || name == "iff":
+		if len(fn.Args) > 1 {
+			return fn.Args[1]
+		}
+	}
+	return nil
+}
+
+func expressionSourceType(expr *Expr) Type {
+	if expr == nil {
+		return Type{}
+	}
+	fn := expr.GetF()
+	if fn != nil && fn.Func != nil && fn.Func.GetObjName() == "cast" &&
+		!fn.GetSyntaxExplicitCast() && len(fn.Args) > 0 {
+		return expressionSourceType(fn.Args[0])
+	}
+	return expr.Typ
+}
+
+func conditionalValueSources(fn *Function, functionID int32, name string) (values []*Expr, omittedElse bool) {
+	if fn == nil {
+		return nil, false
+	}
+	switch {
+	case functionID == caseFunctionID || name == "case":
+		// CASE arguments are condition/value pairs, followed by an optional
+		// ELSE value. An even number of arguments therefore means that the
+		// implicit ELSE NULL is part of the result contract.
+		for i := 1; i < len(fn.Args); i += 2 {
+			values = append(values, fn.Args[i])
+		}
+		if len(fn.Args)%2 == 1 && len(fn.Args) > 0 {
+			values = append(values, fn.Args[len(fn.Args)-1])
+		}
+		return values, len(fn.Args)%2 == 0
+	case functionID == iffFunctionID || name == "if" || name == "iff":
+		if len(fn.Args) >= 3 {
+			return fn.Args[1:3], false
+		}
+	}
+	return nil, false
+}
+
+func conditionalConditionNeedsMetadataFence(fn *Function, functionID int32, name string) bool {
+	if fn == nil {
+		return false
+	}
+	switch {
+	case functionID == caseFunctionID || name == "case":
+		// CASE conditions are lowered to BOOL. Preserve the original source
+		// type so a legacy condition cast cannot silently select the old
+		// temporal overload.
+		for i := 0; i+1 < len(fn.Args); i += 2 {
+			if expressionSourceType(fn.Args[i]).Id != planBooleanTypeID {
+				return true
+			}
+		}
+	case functionID == iffFunctionID || name == "if" || name == "iff":
+		// IF/IFF intentionally keep the legacy numeric/string condition
+		// behavior. Only an unresolved ANY condition needs the new fence.
+		return len(fn.Args) == 0 || expressionSourceType(fn.Args[0]).Id == planAnyTypeID
+	}
+	return false
+}
+
+func isChangedTemporalConditionalResultContract(expr *Expr, functionID int32, name string) bool {
+	if !isPlanTemporalType(expr.Typ.Id) || expr.Typ.Scale <= 0 {
+		return false
+	}
+	fn := expr.GetF()
+	switch {
+	case functionID == coalesceFunctionID || name == "coalesce":
+		// DATETIME used the first branch's FSP historically; TIME used the
+		// zero-FSP overload. TIMESTAMP already merged source FSP before this
+		// follow-up and therefore needs no new fence.
+		if expr.Typ.Id == planTimeTypeID {
+			return true
+		}
+		if expr.Typ.Id != planDatetimeTypeID {
+			return false
+		}
+		first := expressionSourceType(conditionalFirstValue(fn, functionID, name))
+		return expr.Typ.Scale > first.Scale
+	case functionID == caseFunctionID || functionID == iffFunctionID ||
+		name == "case" || name == "if" || name == "iff":
+		if conditionalConditionNeedsMetadataFence(fn, functionID, name) {
+			return true
+		}
+		values, omittedElse := conditionalValueSources(fn, functionID, name)
+		if omittedElse {
+			return true
+		}
+		for _, value := range values {
+			source := expressionSourceType(value)
+			if source.Id == planAnyTypeID {
+				return true
+			}
+			if isPlanTemporalType(source.Id) && source.Id != expr.Typ.Id {
+				return true
+			}
+		}
+		first := expressionSourceType(conditionalFirstValue(fn, functionID, name))
+		return expr.Typ.Scale > first.Scale
+	default:
+		return false
+	}
+}
+
+// isExpressionResultMetadataContract identifies only the follow-up metadata
+// changes from the result-contract fixes. It deliberately keys off the
+// serialized function identity and result type rather than fencing every
+// conditional or string expression at v86. Legacy plans with the old
+// unbounded slice metadata or zero-FSP conditional metadata remain usable.
+func isExpressionResultMetadataContract(expr *Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	functionID := int32(fn.Func.Obj >> 32)
+	name := strings.ToLower(fn.Func.GetObjName())
+	switch functionID {
+	case leftFunctionID, rightFunctionID, substringFunctionID:
+		return isChangedCharacterSliceResultContract(expr, functionID, name)
+	case caseFunctionID, coalesceFunctionID, iffFunctionID:
+		return isChangedTemporalConditionalResultContract(expr, functionID, name)
+	default:
+		switch name {
+		case "left", "right", "substring", "substr", "mid":
+			return isChangedCharacterSliceResultContract(expr, functionID, name)
+		case "case", "coalesce", "if", "iff":
+			return isChangedTemporalConditionalResultContract(expr, functionID, name)
+		default:
+			return false
+		}
 	}
 }
 
@@ -322,9 +804,25 @@ func isRemoteIPFunction(functionID int32) bool {
 func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatures, err error) {
 	err = walkExpressionsInOwner(owner, func(expr *Expr) error {
 		return VisitExprTree(expr, func(current *Expr) error {
+			if !features.DecimalLiteralSemantics {
+				if literal := current.GetLit(); literal != nil {
+					features.DecimalLiteralSemantics = literal.DecimalLiteralRequiresV82
+				}
+				if literalVec := current.GetVec(); literalVec != nil {
+					features.DecimalLiteralSemantics = literalVec.DecimalLiteralRequiresV82
+				}
+			}
 			fn := current.GetF()
 			if fn != nil && fn.Func != nil {
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
+				// CAST is stable function ID 21. Match execution identity, not
+				// names or source types; legacy CAST 0..4 remains executable.
+				if id == 21 && overload >= 5 && overload <= 8 {
+					if err := validateIntegerArgumentCast(current, overload); err != nil {
+						return err
+					}
+					features.IntegerParameterCoercion = true
+				}
 				// PLUS/MINUS/MULTI are stable function IDs 10/11/12.
 				if (id >= 10 && id <= 12 && overload == 2) || (id == 11 && overload == 3) {
 					features.IntegerArithmeticDomains = true
@@ -372,8 +870,33 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			if !features.BoundedConditionalStringDomains && isBoundedConditionalStringDomain(fn) {
 				features.BoundedConditionalStringDomains = true
 			}
+			if !features.TOBase64ResultContracts && isTOBase64ResultContract(current) {
+				features.TOBase64ResultContracts = true
+			}
+			if !features.IPFunctionResultContracts && isIPFunctionResultContract(current) {
+				features.IPFunctionResultContracts = true
+			}
+			if !features.ExpressionResultMetadataContracts && isExpressionResultMetadataContract(current) {
+				features.ExpressionResultMetadataContracts = true
+			}
 			if !features.IPFunctionSemantics && fn != nil && fn.Func != nil {
 				features.IPFunctionSemantics = isRemoteIPFunction(int32(fn.Func.Obj >> 32))
+			}
+			if !features.SpatialDistanceSemantics && fn != nil && fn.Func != nil {
+				functionID := int32(fn.Func.Obj >> 32)
+				overloadID := int32(fn.Func.Obj)
+				switch functionID {
+				case remoteFrechetDistanceFunctionID, remoteHausdorffDistanceFunctionID:
+					// Overloads 0/1 are the historical planar identities. The
+					// unit overloads 2/3 and the corrected two-argument
+					// geodetic identities 4/5 are v90 contracts.
+					features.SpatialDistanceSemantics = overloadID >= 2 && overloadID <= 5
+				case remoteSpatialDistanceFunctionID:
+					// ST_DISTANCE overloads 4/5 are the new length-unit forms.
+					// Legacy two-argument and explicit-SRID forms retain their
+					// historical wire contract.
+					features.SpatialDistanceSemantics = overloadID == 4 || overloadID == 5
+				}
 			}
 			return nil
 		})
@@ -396,9 +919,9 @@ func isCRC32JSONTextBytes(expr *Expr) bool {
 	return len(fn.Args) > 0 && fn.Args[0] != nil && fn.Args[0].Typ.Id == planJSONTypeID
 }
 
-// RequiresMORPCVersion86CRC32JSONTextBytes reports whether an owner contains
+// RequiresMORPCVersion94CRC32JSONTextBytes reports whether an owner contains
 // the normalized-JSON-text CRC32 contract introduced by the CRC32 JSON fix.
-func RequiresMORPCVersion86CRC32JSONTextBytes(owner any) (bool, error) {
+func RequiresMORPCVersion94CRC32JSONTextBytes(owner any) (bool, error) {
 	features, err := RequiredRemoteExpressionFeatures(owner)
 	return features.CRC32JSONTextBytes, err
 }

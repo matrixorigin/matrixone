@@ -18,6 +18,7 @@ import (
 	"encoding/json"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -26,9 +27,10 @@ func (builder *QueryBuilder) bindLoad(stmt *tree.Load, bindCtx *BindContext) (in
 	// LOAD never carries INSERT's duplicate-key ignore policy. Reset the
 	// statement-local flag in case a QueryBuilder is reused across DML binds.
 	builder.isInsertIgnore = false
+	assignmentIgnore := loadAssignmentIgnore(stmt)
 	dmlCtx := NewDMLContext()
 	builder.qry.LoadTag = true
-	lastNodeID, insertColToExpr, err := builder.bindExternalScan(stmt, bindCtx, dmlCtx)
+	lastNodeID, insertColToExpr, err := builder.bindExternalScan(stmt, bindCtx, dmlCtx, assignmentIgnore)
 	if err != nil {
 		return -1, err
 	}
@@ -42,7 +44,7 @@ func (builder *QueryBuilder) bindLoad(stmt *tree.Load, bindCtx *BindContext) (in
 	// strips them. HNSW/CAGRA/IVF-PQ are cron-maintained and ride the modern path.
 	irregularIndexes := getIrregularIndexes(tableDef)
 
-	lastNodeID, colName2Idx, skipUniqueIdx, autoIncrementGeneratedColumn, err := builder.appendNodesForInsertStmt(bindCtx, lastNodeID, tableDef, dmlCtx.objRefs[0], insertColToExpr)
+	lastNodeID, colName2Idx, skipUniqueIdx, autoIncrementGeneratedColumn, err := builder.appendNodesForInsertStmt(bindCtx, lastNodeID, tableDef, dmlCtx.objRefs[0], insertColToExpr, assignmentIgnore)
 	if err != nil {
 		return -1, err
 	}
@@ -56,7 +58,8 @@ func (builder *QueryBuilder) bindLoad(stmt *tree.Load, bindCtx *BindContext) (in
 func (builder *QueryBuilder) bindExternalScan(
 	stmt *tree.Load,
 	bindCtx *BindContext,
-	dmlCtx *DMLContext) (int32, map[string]*plan.Expr, error) {
+	dmlCtx *DMLContext,
+	assignmentIgnore bool) (int32, map[string]*plan.Expr, error) {
 	externalScanTag := builder.genNewBindTag()
 	err := dmlCtx.ResolveTables(builder.compCtx, tree.TableExprs{stmt.Table}, nil, nil, true)
 	if err != nil {
@@ -151,6 +154,12 @@ func (builder *QueryBuilder) bindExternalScan(
 		}
 	}
 
+	// External scans expose target-typed columns. For BLOB/TEXT, equal type
+	// metadata does not prove that the runtime payload fits the target family.
+	if err = builder.applyLoadAssignmentCasts(tableDef, insertColToExpr, assignmentIgnore); err != nil {
+		return -1, nil, err
+	}
+
 	if err := checkNullMap(stmt, tableDef.Cols, ctx); err != nil {
 		return -1, nil, err
 	}
@@ -218,4 +227,37 @@ func (builder *QueryBuilder) bindExternalScan(
 	lastNodeId := builder.appendNode(externalScanNode, bindCtx)
 
 	return lastNodeId, insertColToExpr, nil
+}
+
+func loadAssignmentIgnore(stmt *tree.Load) bool {
+	if stmt == nil {
+		return false
+	}
+	if tree.IsIgnoreStatement(stmt) {
+		return true
+	}
+	if !stmt.Local {
+		return false
+	}
+	_, replace := stmt.DuplicateHandling.(*tree.DuplicateKeyReplace)
+	return !replace
+}
+
+func (builder *QueryBuilder) applyLoadAssignmentCasts(
+	tableDef *plan.TableDef,
+	insertColToExpr map[string]*plan.Expr,
+	assignmentIgnore bool,
+) error {
+	for _, col := range tableDef.Cols {
+		expr, ok := insertColToExpr[col.Name]
+		if !ok || (col.Typ.Id != int32(types.T_blob) && col.Typ.Id != int32(types.T_text)) {
+			continue
+		}
+		casted, err := builder.forceAssignmentCastExpr(expr, col.Typ, assignmentIgnore)
+		if err != nil {
+			return err
+		}
+		insertColToExpr[col.Name] = casted
+	}
+	return nil
 }

@@ -444,6 +444,60 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 // overload shape: the single WITHIN GROUP ORDER BY expression becomes the
 // first executor argument, followed by any direct arguments. Aggregate-specific
 // execution remains unchanged.
+func validateOrderedSetAggregateShape(
+	ctx context.Context,
+	funcName string,
+	astExpr *tree.FuncExpr,
+	spec orderedSetAggregateSpec,
+) (*tree.Order, error) {
+	if !astExpr.WithinGroup {
+		return nil, moerr.NewSyntaxErrorf(ctx,
+			"%s requires WITHIN GROUP (ORDER BY ...)", funcName)
+	}
+	if len(astExpr.Exprs) != spec.directArgumentCount {
+		if spec.directArgumentCount == 0 {
+			return nil, moerr.NewSyntaxErrorf(ctx,
+				"%s WITHIN GROUP does not accept a direct argument", funcName)
+		}
+		return nil, moerr.NewSyntaxErrorf(ctx,
+			"%s requires exactly one %s argument", funcName, spec.directArgumentName)
+	}
+	if len(astExpr.OrderBy) != 1 {
+		return nil, moerr.NewSyntaxErrorf(ctx,
+			"%s requires exactly one WITHIN GROUP ORDER BY expression", funcName)
+	}
+
+	orderExpr := astExpr.OrderBy[0]
+	if orderExpr == nil || orderExpr.Expr == nil {
+		return nil, moerr.NewSyntaxErrorf(ctx,
+			"%s requires an ORDER BY expression", funcName)
+	}
+	return orderExpr, nil
+}
+
+func applyOrderedSetAggregateDirection(
+	ctx context.Context,
+	expr *plan.Expr,
+	spec orderedSetAggregateSpec,
+	orderExpr *tree.Order,
+) error {
+	if !spec.directionMatters {
+		return nil
+	}
+	fn := expr.GetF()
+	if fn == nil {
+		return moerr.NewInternalError(ctx,
+			"invalid ordered-set aggregate expression")
+	}
+	if orderExpr.Direction == tree.Descending {
+		fn.AggConfig = []byte{1}
+	} else {
+		fn.AggConfig = []byte{0}
+	}
+	fn.AggConfigType = plan.AggregateConfigType_AGG_CONFIG_NONE
+	return nil
+}
+
 func (b *HavingBinder) bindOrderedSetAggregate(
 	funcName string,
 	astExpr *tree.FuncExpr,
@@ -455,27 +509,10 @@ func (b *HavingBinder) bindOrderedSetAggregate(
 		return nil, moerr.NewNotSupported(b.GetContext(),
 			"ordered-set percentile aggregates in time windows")
 	}
-	if !astExpr.WithinGroup {
-		return nil, moerr.NewSyntaxErrorf(b.GetContext(),
-			"%s requires WITHIN GROUP (ORDER BY ...)", funcName)
-	}
-	if len(astExpr.Exprs) != spec.directArgumentCount {
-		if spec.directArgumentCount == 0 {
-			return nil, moerr.NewSyntaxErrorf(b.GetContext(),
-				"%s WITHIN GROUP does not accept a direct argument", funcName)
-		}
-		return nil, moerr.NewSyntaxErrorf(b.GetContext(),
-			"%s requires exactly one %s argument", funcName, spec.directArgumentName)
-	}
-	if len(astExpr.OrderBy) != 1 {
-		return nil, moerr.NewSyntaxErrorf(b.GetContext(),
-			"%s requires exactly one WITHIN GROUP ORDER BY expression", funcName)
-	}
-
-	orderExpr := astExpr.OrderBy[0]
-	if orderExpr == nil || orderExpr.Expr == nil {
-		return nil, moerr.NewSyntaxErrorf(b.GetContext(),
-			"%s requires an ORDER BY expression", funcName)
+	orderExpr, err := validateOrderedSetAggregateShape(
+		b.GetContext(), funcName, astExpr, spec)
+	if err != nil {
+		return nil, err
 	}
 	value, err := b.BindExpr(orderExpr.Expr, depth, isRoot)
 	if err != nil {
@@ -510,20 +547,10 @@ func (b *HavingBinder) bindOrderedSetAggregate(
 	if err != nil {
 		return nil, err
 	}
-	if !spec.directionMatters {
-		return expr, nil
+	if err = applyOrderedSetAggregateDirection(
+		b.GetContext(), expr, spec, orderExpr); err != nil {
+		return nil, err
 	}
-	fn := expr.GetF()
-	if fn == nil {
-		return nil, moerr.NewInternalError(b.GetContext(),
-			"invalid ordered-set aggregate expression")
-	}
-	if orderExpr.Direction == tree.Descending {
-		fn.AggConfig = []byte{1}
-	} else {
-		fn.AggConfig = []byte{0}
-	}
-	fn.AggConfigType = plan.AggregateConfigType_AGG_CONFIG_NONE
 	return expr, nil
 }
 
@@ -809,7 +836,7 @@ func (b *HavingBinder) groupConcatOrderKey(expr *plan.Expr) (*plan.Expr, error) 
 		}
 	}
 	if storageType := b.ctx.mysqlSpecialOrderTypeForExpr(expr); storageType != nil {
-		return makeMySQLSpecialOrderKey(b.GetContext(), expr, storageType)
+		return b.builder.mysqlSpecialOrderKey(b.ctx, expr, storageType)
 	}
 	return expr, nil
 }

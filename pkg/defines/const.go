@@ -120,9 +120,17 @@ const (
 	MORPCVersion82     int64 = 82 // self-completing fulltext2 json index probe (probe_tail contract)
 	MORPCVersion83     int64 = 83 // bounded COALESCE character and binary result domains
 	MORPCVersion84     int64 = 84 // extended discrete percentile input types
-	MORPCVersion85     int64 = 85 // JSON_VALUE RETURNING/DEFAULT contract
-	MORPCVersion86     int64 = 86 // CRC32 hashes normalized JSON text bytes
-	MORPCLatestVersion       = MORPCVersion86
+	MORPCVersion85     int64 = 85 // shared integer-parameter coercion execution identities
+	MORPCVersion86     int64 = 86 // extended IP overload/result and expression metadata contracts
+	MORPCVersion87     int64 = 87 // preserve grouping provenance in remote batch transport
+	MORPCVersion88     int64 = 88 // canonical vector HLL_ADD_AGG hash keys
+	MORPCVersion89     int64 = 89 // exact decimal literal and coercion semantics
+	MORPCVersion90     int64 = 90 // geodetic distance semantics and length-unit overloads
+	MORPCVersion91     int64 = 91 // canonical CHAR and JSON HLL_ADD_AGG hash keys
+	MORPCVersion92     int64 = 92 // canonical scalar FLOAT HLL_ADD_AGG hash keys
+	MORPCVersion93     int64 = 93 // session LAST_INSERT_ID connection migration state
+	MORPCVersion94     int64 = 94 // CRC32 hashes normalized JSON text bytes
+	MORPCLatestVersion       = MORPCVersion94
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

@@ -41,8 +41,14 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 
 	queryBindCtx := NewBindContext(builder, nil)
-	lastNodeId, err := deleteToSelect(builder, queryBindCtx, stmt, true, tblInfo)
+	lastNodeId, colName2Idx, err := deleteToSelect(builder, queryBindCtx, stmt, true, tblInfo)
 	if err != nil {
+		return nil, err
+	}
+	// The legacy path is used by multi-target and unsupported modern DELETEs.
+	// Normalize before the source is materialized so index maintenance receives
+	// ENUM ordinals and SET bitmaps rather than their display values.
+	if err = builder.normalizeDeleteOldValueProjection(lastNodeId, tblInfo.tableDefs, colName2Idx); err != nil {
 		return nil, err
 	}
 	sourceStep := builder.appendStep(lastNodeId)

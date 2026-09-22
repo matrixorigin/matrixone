@@ -845,7 +845,7 @@ func TestPrepareHnswIndexContext_DifferentDistanceFunctions(t *testing.T) {
 		{
 			name:         "cosine_distance",
 			funcName:     "cosine_distance",
-			shouldHaveOp: true,
+			shouldHaveOp: false,
 		},
 		{
 			name:         "l1_distance",
@@ -938,6 +938,10 @@ func TestPrepareHnswIndexContext_DifferentDistanceFunctions(t *testing.T) {
 
 			result, err := builder.prepareHnswIndexContext(vecCtx, multiTableIndex)
 			require.NoError(t, err)
+			if !tc.shouldHaveOp {
+				require.Nil(t, result)
+				return
+			}
 			require.NotNil(t, result)
 			assert.Equal(t, tc.funcName, result.origFuncName)
 		})

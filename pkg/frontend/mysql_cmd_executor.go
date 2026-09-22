@@ -2007,6 +2007,13 @@ func isTopLevelClientStatement(ses *Session, execCtx *ExecCtx, input *UserInput)
 }
 
 func resetDiagnosticsForStatement(ses *Session, execCtx *ExecCtx, input *UserInput, stmt tree.Statement) {
+	if ses != nil && ses.GetCmd() == COM_STMT_CLOSE {
+		if _, ok := stmt.(*tree.Deallocate); ok {
+			// Protocol cleanup is not a new SQL statement. Drivers may close an
+			// implicit prepared statement before inspecting its diagnostics.
+			return
+		}
+	}
 	if isTopLevelClientStatement(ses, execCtx, input) && !isDiagnosticsStatement(stmt) {
 		ses.resetDiagnostics()
 		beginJSONMergeWarningStatement(ses, execCtx, input, stmt)
@@ -2907,6 +2914,8 @@ func createPrepareStmtInSession(
 			prepareControl.Plan),
 		conversionParamPositions: plan2.PreparedPlanConversionParamPositions(
 			prepareControl.Plan),
+		inetNtoaParamPositions: plan2.PreparedPlanInetNtoaParamPositions(
+			prepareControl.Plan),
 		directResultParamPositions: plan2.PreparedPlanDirectResultParamPositions(
 			prepareControl.Plan),
 		directResultParamPositionsSet: true,
@@ -2933,7 +2942,7 @@ func createPrepareStmtInSession(
 		if executionSes.IsBackgroundSession() {
 			resper = owner.GetResponser()
 		}
-		if prepareStmt.ColDefData, err = resper.MysqlRrWr().MakeColumnDefData(execCtx.reqCtx, columns); err != nil {
+		if prepareStmt.ColDefData, err = resper.MysqlRrWr().MakeColumnDefData(execCtx.reqCtx, columns, directIntegerResultLengths(prepareStmt.PrepareStmt, columns)...); err != nil {
 			logutil.Errorf("Error make column def data for prepare statement: %v", err)
 		}
 	}
@@ -6281,6 +6290,9 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 			// error so retained rows and the session accounting are released.
 			if execCtx != nil && execCtx.prepareStmt != nil {
 				execCtx.prepareStmt.closeCursor()
+				if req != nil && req.GetCmd() == COM_STMT_EXECUTE {
+					execCtx.prepareStmt.clearBinaryParamState(ses.GetProc())
+				}
 			}
 			markRowCountFailed(ses, ses.GetProc())
 			var serverStatus uint16
@@ -6466,12 +6478,9 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 
 	case COM_STMT_SEND_LONG_DATA:
 		ses.SetCmd(COM_STMT_SEND_LONG_DATA)
-		err = parseStmtSendLongData(execCtx.reqCtx, ses, req.GetData().([]byte))
-		if err != nil {
-			markRowCountFailed(ses, ses.GetProc())
-			resp = NewGeneralErrorResponse(COM_STMT_SEND_LONG_DATA, ses.GetTxnHandler().GetServerStatus(), err)
-			return resp, nil
-		}
+		// This command has no response, including when the statement rejects a
+		// chunk. A known statement reports its latched error at EXECUTE.
+		parseStmtSendLongData(execCtx.reqCtx, ses, req.GetData().([]byte))
 		return nil, nil
 
 	case COM_STMT_CLOSE:
@@ -6571,6 +6580,15 @@ func parseStmtExecute(reqCtx context.Context, ses *Session, data []byte) (string
 	if err != nil {
 		return "", nil, err
 	}
+	if preStmt.longDataErr != nil {
+		return "", preStmt, preStmt.longDataErr
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			preStmt.clearBinaryParamState(ses.GetProc())
+			panic(recovered)
+		}
+	}()
 
 	var sql string
 	if preStmt.IsCloudNonuser {
@@ -6650,11 +6668,12 @@ func executeStmtFetch(ctx context.Context, ses *Session, data []byte) (*Response
 	return nil, nil
 }
 
-func parseStmtSendLongData(reqCtx context.Context, ses *Session, data []byte) error {
+func parseStmtSendLongData(reqCtx context.Context, ses *Session, data []byte) (err error) {
 	// see https://dev.mysql.com/doc/dev/mysql-server/latest/page_protocol_com_stmt_send_long_data.html
 	pos := 0
 	if len(data) < 4 {
-		return moerr.NewInvalidInput(reqCtx, "sql command contains malformed packet")
+		// No statement can be identified and SEND_LONG_DATA has no response.
+		return nil
 	}
 	stmtID := binary.LittleEndian.Uint32(data[0:4])
 	pos += 4
@@ -6662,8 +6681,18 @@ func parseStmtSendLongData(reqCtx context.Context, ses *Session, data []byte) er
 	stmtName := getPrepareStmtName(stmtID)
 	preStmt, err := ses.GetPrepareStmt(reqCtx, stmtName)
 	if err != nil {
-		return err
+		// MySQL silently discards long data for an unknown statement id.
+		return nil
 	}
+	if preStmt.longDataErr != nil {
+		return nil
+	}
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			preStmt.latchLongDataError(moerr.ConvertPanicError(reqCtx, recovered))
+			err = nil // SEND_LONG_DATA must not emit a response.
+		}
+	}()
 
 	var sql string
 	if preStmt.IsCloudNonuser {
@@ -6682,7 +6711,7 @@ func parseStmtSendLongData(reqCtx context.Context, ses *Session, data []byte) er
 
 	err = ses.GetResponser().MysqlRrWr().ParseSendLongData(reqCtx, ses.GetProc(), preStmt, data, pos)
 	if err != nil {
-		return err
+		preStmt.latchLongDataError(err)
 	}
 	return nil
 }
