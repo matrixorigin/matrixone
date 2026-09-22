@@ -438,3 +438,20 @@ select id, u, v, updated_at = @ts_sec as ts_unchanged from t_odku_sec_uk order b
 insert into t_odku_sec_uk(id, u, v) values (3, 10, 5) on duplicate key update v = v + 1;
 select id, u, v, updated_at > @ts_sec as ts_advanced from t_odku_sec_uk order by id;
 drop table if exists t_odku_sec_uk;
+
+-- An ODKU assignment that can change a stored generated PRIMARY KEY is rejected
+-- before synchronous index maintenance can use the old document identity.
+drop table if exists t_odku_generated_pk;
+create table t_odku_generated_pk (
+  a int,
+  b int generated always as (a * 2) stored,
+  payload int,
+  primary key (b)
+);
+insert into t_odku_generated_pk(a, payload) values (1, 10);
+insert into t_odku_generated_pk(a, payload) values (1, 20) on duplicate key update a = 5;
+select a, b, payload from t_odku_generated_pk order by b;
+-- Updating a column unrelated to the generated key remains supported.
+insert into t_odku_generated_pk(a, payload) values (1, 20) on duplicate key update payload = values(payload);
+select a, b, payload from t_odku_generated_pk order by b;
+drop table if exists t_odku_generated_pk;

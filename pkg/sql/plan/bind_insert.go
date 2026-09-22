@@ -1812,6 +1812,65 @@ func (builder *QueryBuilder) buildInsertIgnoreFkFilter(
 	return lastNodeID, newTag, nil
 }
 
+// collectGeneratedColumnDependents returns every column that may change when
+// ODKU assigns one of the seed columns. Generated dependencies are expanded to
+// a fixed point because generated columns may depend on other generated
+// columns. Returned names are canonical table column names.
+func collectGeneratedColumnDependents(
+	ctx context.Context,
+	tableDef *plan.TableDef,
+	seed map[string]struct{},
+) (map[string]struct{}, error) {
+	possiblyChanged := make(map[string]struct{}, len(seed))
+	for name := range seed {
+		resolved := catalog.ResolveAlias(name)
+		colIdx, ok := tableDef.Name2ColIndex[resolved]
+		if !ok || colIdx < 0 || int(colIdx) >= len(tableDef.Cols) {
+			return nil, moerr.NewInternalErrorf(ctx,
+				"cannot resolve generated column dependency seed %q", name)
+		}
+		possiblyChanged[tableDef.Cols[colIdx].Name] = struct{}{}
+	}
+
+	for {
+		expanded := false
+		for _, col := range tableDef.Cols {
+			if col.GeneratedCol == nil {
+				continue
+			}
+			references := collectRefColPos(col.GeneratedCol.Expr)
+			for _, pos := range references {
+				if pos < 0 || int(pos) >= len(tableDef.Cols) {
+					return nil, moerr.NewInternalErrorf(ctx,
+						"invalid generated column reference position %d for column %q", pos, col.Name)
+				}
+			}
+			if _, alreadyChanged := possiblyChanged[col.Name]; alreadyChanged {
+				continue
+			}
+			for _, pos := range references {
+				if _, sourceChanged := possiblyChanged[tableDef.Cols[pos].Name]; sourceChanged {
+					possiblyChanged[col.Name] = struct{}{}
+					expanded = true
+					break
+				}
+			}
+		}
+		if !expanded {
+			return possiblyChanged, nil
+		}
+	}
+}
+
+func columnPossiblyChanged(tableDef *plan.TableDef, possiblyChanged map[string]struct{}, name string) bool {
+	resolved := catalog.ResolveAlias(name)
+	if colIdx, ok := tableDef.Name2ColIndex[resolved]; ok && colIdx >= 0 && int(colIdx) < len(tableDef.Cols) {
+		resolved = tableDef.Cols[colIdx].Name
+	}
+	_, ok := possiblyChanged[resolved]
+	return ok
+}
+
 func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	bindCtx *BindContext,
 	dmlCtx *DMLContext,
@@ -1869,6 +1928,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	selectTag := selectNode.BindingTags[0]
 	scanTag := builder.genNewBindTag()
 	updateExprs := make(map[string]*plan.Expr)
+	possiblyChangedCols := make(map[string]struct{})
 	autoUpdateCols := make(map[string]bool)
 
 	if len(astUpdateExprs) == 0 {
@@ -1949,6 +2009,21 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			updateExprs[colName] = updateExpr
 		}
 
+		// Keep dependency tracking separate from updateExprs. updateExprs becomes
+		// the final row image below and receives every generated expression, while
+		// possiblyChangedCols describes only columns that may actually change as a
+		// consequence of the explicit and implicit assignments.
+		seedCols := make(map[string]struct{}, len(updateExprs))
+		for colName := range updateExprs {
+			seedCols[colName] = struct{}{}
+		}
+		possiblyChangedCols, err = collectGeneratedColumnDependents(
+			builder.GetContext(), tableDef, seedCols,
+		)
+		if err != nil {
+			return 0, err
+		}
+
 		// Recompute generated columns from the final updated row image, so
 		// ON DUPLICATE KEY UPDATE stays consistent with regular UPDATE behavior.
 		finalRowExprs := make([]*plan.Expr, len(tableDef.Cols))
@@ -1983,12 +2058,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	}
 
 	for _, part := range tableDef.Pkey.Names {
-		if _, ok := updateExprs[part]; ok {
-			// Generated columns are auto-recomputed, not explicitly updated by the user.
-			// Allow them in PK even though they appear in updateExprs.
-			if idx, exists := tableDef.Name2ColIndex[part]; exists && tableDef.Cols[idx].GeneratedCol != nil {
-				continue
-			}
+		if columnPossiblyChanged(tableDef, possiblyChangedCols, part) {
 			return 0, moerr.NewUnsupportedDML(builder.GetContext(), "update primary key on duplicate")
 		}
 	}
@@ -2059,12 +2129,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	idxNeedUpdate := make([]bool, len(tableDef.Indexes))
 	for i, idxDef := range tableDef.Indexes {
 		for _, part := range idxDef.Parts {
-			resolved := catalog.ResolveAlias(part)
-			if _, ok := updateExprs[resolved]; ok {
-				// Skip generated columns in unique key check (auto-recomputed, not user-set)
-				if idx, exists := tableDef.Name2ColIndex[resolved]; exists && tableDef.Cols[idx].GeneratedCol != nil {
-					continue
-				}
+			if columnPossiblyChanged(tableDef, possiblyChangedCols, part) {
 				if idxDef.Unique {
 					return 0, moerr.NewUnsupportedDML(builder.GetContext(), "update unique key on duplicate")
 				} else {
@@ -2744,39 +2809,6 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	var affectedIrregularIndexes, insertOnlyIrregularIndexes []*plan.IndexDef
 	var irregularValueChangeFilters []irregularIndexValueChangeFilter
 	if onDupAction == plan.Node_UPDATE && len(irregularIndexes) > 0 {
-		possiblyChangedCols := make(map[string]struct{}, len(astUpdateExprs)+len(autoUpdateCols))
-		for _, astUpdateExpr := range astUpdateExprs {
-			columnName := astUpdateExpr.Names[0].ColName()
-			columnPos, ok := tableDef.Name2ColIndex[columnName]
-			if !ok || tableDef.Cols[columnPos].GeneratedCol != nil {
-				continue
-			}
-			possiblyChangedCols[columnName] = struct{}{}
-		}
-		for columnName := range autoUpdateCols {
-			possiblyChangedCols[columnName] = struct{}{}
-		}
-		for changed := true; changed; {
-			changed = false
-			for _, column := range tableDef.Cols {
-				if column.GeneratedCol == nil {
-					continue
-				}
-				if _, ok := possiblyChangedCols[column.Name]; ok {
-					continue
-				}
-				for _, sourcePos := range collectRefColPos(column.GeneratedCol.Expr) {
-					if sourcePos < 0 || int(sourcePos) >= len(tableDef.Cols) {
-						continue
-					}
-					if _, ok := possiblyChangedCols[tableDef.Cols[sourcePos].Name]; ok {
-						possiblyChangedCols[column.Name] = struct{}{}
-						changed = true
-						break
-					}
-				}
-			}
-		}
 		affectedIrregularIndexes, insertOnlyIrregularIndexes, err =
 			splitIrregularIndexesByUpdatedColumns(tableDef, irregularIndexes, possiblyChangedCols)
 		if err != nil {

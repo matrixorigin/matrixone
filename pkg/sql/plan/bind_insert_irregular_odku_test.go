@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -86,6 +87,82 @@ func mockTableColPos(t *testing.T, tableDef *planpb.TableDef, name string) int32
 	}
 	t.Fatalf("column %q not found in table %q", name, tableDef.Name)
 	return -1
+}
+
+func TestCollectGeneratedColumnDependents(t *testing.T) {
+	typ := planpb.Type{Id: int32(types.T_int64)}
+	tableDef := &planpb.TableDef{
+		Cols: []*planpb.ColDef{
+			{Name: "source", Typ: typ},
+			{Name: "middle", Typ: typ, GeneratedCol: &planpb.GeneratedCol{
+				Expr: generatedColumnRefExpr(typ, 0, "source"),
+			}},
+			{Name: "tail", Typ: typ, GeneratedCol: &planpb.GeneratedCol{
+				Expr: generatedColumnRefExpr(typ, 1, "middle"),
+			}},
+			{Name: "other", Typ: typ},
+		},
+		Name2ColIndex: map[string]int32{
+			"source": 0,
+			"middle": 1,
+			"tail":   2,
+			"other":  3,
+		},
+	}
+
+	possiblyChanged, err := collectGeneratedColumnDependents(
+		context.Background(), tableDef, map[string]struct{}{"source": {}},
+	)
+	require.NoError(t, err)
+	require.Equal(t, map[string]struct{}{
+		"source": {},
+		"middle": {},
+		"tail":   {},
+	}, possiblyChanged)
+	require.True(t, columnPossiblyChanged(tableDef, possiblyChanged, catalog.CreateAlias("tail")))
+	require.False(t, columnPossiblyChanged(tableDef, possiblyChanged, "other"))
+
+	tableDef.Cols[1].GeneratedCol.Expr = generatedColumnRefExpr(typ, 4, "invalid")
+	_, err = collectGeneratedColumnDependents(
+		context.Background(), tableDef, map[string]struct{}{"source": {}},
+	)
+	require.ErrorContains(t, err, "invalid generated column reference position")
+}
+
+func configureMockGeneratedPrimaryKey(t *testing.T, mock *MockOptimizer) {
+	t.Helper()
+	base := mock.ctxt.tables["t_on_update_gen"]
+	require.NotNil(t, base)
+	sourcePos := mockTableColPos(t, base, "val")
+	idCol := base.Cols[mockTableColPos(t, base, "id")]
+	idCol.GeneratedCol = &planpb.GeneratedCol{
+		Expr:     generatedColumnRefExpr(idCol.Typ, sourcePos, "val"),
+		IsStored: true,
+	}
+	base.Cols[mockTableColPos(t, base, "updated_at")].OnUpdate = nil
+	base.Indexes = nil
+}
+
+func TestInsertOnDupGeneratedPrimaryKeyDependency(t *testing.T) {
+	t.Run("source update is rejected", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		configureMockGeneratedPrimaryKey(t, mock)
+
+		_, err := runOneStmt(mock, t,
+			"insert into constraint_test.t_on_update_gen (val, updated_at) values (1, null) "+
+				"on duplicate key update val = values(val)")
+		require.ErrorContains(t, err, "unsupported DML: update primary key on duplicate")
+	})
+
+	t.Run("unrelated update remains supported", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		configureMockGeneratedPrimaryKey(t, mock)
+
+		_, err := runOneStmt(mock, t,
+			"insert into constraint_test.t_on_update_gen (val, updated_at) values (1, null) "+
+				"on duplicate key update updated_at = values(updated_at)")
+		require.NoError(t, err)
+	})
 }
 
 func reachableODKUPlanNodes(query *planpb.Query) map[int32]struct{} {
