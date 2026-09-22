@@ -69,6 +69,7 @@ func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 	mergeGroup.ctr.floatZeroHLLState = useFloatZeroHLLStateForRemote(proc)
 	mergeGroup.ctr.legacyVectorHLLState = useLegacyVectorHLLStateForRemote(proc)
 	mergeGroup.ctr.legacyTextHLLAddState = useLegacyTextHLLAddStateForRemote(proc)
+	mergeGroup.ctr.legacyFloatHLLAddState = useLegacyFloatHLLAddStateForRemote(proc)
 	// MergeGroup is a receiver. It canonicalizes legacy producer payloads into
 	// the current in-memory DISTINCT domain, so its destination uses the modern
 	// key policy even when the incoming peer is below v79.

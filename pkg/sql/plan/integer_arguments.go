@@ -393,6 +393,13 @@ func bindIntegerFunctionArguments(ctx context.Context, name string, args []*Expr
 		if err != nil {
 			return nil, err
 		}
+		if physical, adapted := function.IntegerArgumentPhysicalTarget(name, i); adapted {
+			physicalType := physical.ToType()
+			bound, err = forceAssignmentCastExprWithName(ctx, bound, makePlan2Type(&physicalType), "cast_strict")
+			if err != nil {
+				return nil, err
+			}
+		}
 		if bound == arg {
 			continue
 		}

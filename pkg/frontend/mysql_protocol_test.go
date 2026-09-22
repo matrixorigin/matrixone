@@ -3504,27 +3504,134 @@ func TestParseExecuteDataRejectsTruncatedNewParamBoundFlag(t *testing.T) {
 func TestParseSendLongDataAppendsRepeatedChunks(t *testing.T) {
 	ctx := context.TODO()
 	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, "select ?")
+	defer prepareStmt.clearBinaryParamState(proc)
 
 	firstChunk := append(make([]byte, 2), []byte("hello ")...)
 	secondChunk := append(make([]byte, 2), []byte("world")...)
 
 	require.NoError(t, proto.ParseSendLongData(ctx, proc, prepareStmt, firstChunk, 0))
 	require.NoError(t, proto.ParseSendLongData(ctx, proc, prepareStmt, secondChunk, 0))
-	require.Equal(t, "hello world", prepareStmt.params.GetStringAt(0))
+	require.Nil(t, prepareStmt.params)
+	require.Equal(t, "hello world", string(prepareStmt.longDataBuffers[0]))
 	_, ok := prepareStmt.getFromSendLongData[0]
 	require.True(t, ok)
+	require.NoError(t, proto.ParseExecuteData(ctx, proc, prepareStmt,
+		buildLongDataExecutePacket(defines.MYSQL_TYPE_VAR_STRING), 0))
+	require.Equal(t, "hello world", prepareStmt.params.GetStringAt(0))
+	require.Empty(t, prepareStmt.longDataBuffers)
+}
+
+func buildLongDataExecutePacket(paramTypes ...defines.MysqlType) []byte {
+	// Cursor flag, iteration count, NULL bitmap, new-bound flag, and types.
+	// Streamed parameters have no inline values in COM_STMT_EXECUTE.
+	data := []byte{0, 1, 0, 0, 0}
+	data = append(data, make([]byte, (len(paramTypes)+7)>>3)...)
+	data = append(data, 1)
+	for _, tp := range paramTypes {
+		data = append(data, byte(tp), 0)
+	}
+	return data
 }
 
 func TestParseSendLongDataInitializesTrackingMap(t *testing.T) {
 	ctx := context.TODO()
 	proto, proc, prepareStmt := newBinaryPrepareProtocolTestCase(t, "select ?")
+	defer prepareStmt.clearBinaryParamState(proc)
 	prepareStmt.getFromSendLongData = nil
 
 	chunk := append(make([]byte, 2), []byte("hello")...)
 	require.NoError(t, proto.ParseSendLongData(ctx, proc, prepareStmt, chunk, 0))
-	require.Equal(t, "hello", prepareStmt.params.GetStringAt(0))
+	require.Nil(t, prepareStmt.params)
+	require.Equal(t, "hello", string(prepareStmt.longDataBuffers[0]))
 	_, ok := prepareStmt.getFromSendLongData[0]
 	require.True(t, ok)
+}
+
+func TestParseSendLongDataKeepsOneBoundedBuffer(t *testing.T) {
+	ctx := context.Background()
+	proto, proc, stmt := newBinaryPrepareProtocolTestCase(t, "select ?")
+	defer stmt.clearBinaryParamState(proc)
+	baseline := proc.Mp().CurrNB()
+	chunk := bytes.Repeat([]byte{'x'}, 16<<10)
+	packet := append(make([]byte, 2), chunk...)
+	for i := 0; i < 64; i++ {
+		require.NoError(t, proto.ParseSendLongData(ctx, proc, stmt, packet, 0))
+	}
+	require.Nil(t, stmt.params, "SEND_LONG_DATA must not retain vector prefixes")
+	require.Len(t, stmt.longDataBuffers[0], 1<<20)
+	require.LessOrEqual(t, cap(stmt.longDataBuffers[0]), 2<<20)
+	require.LessOrEqual(t, proc.Mp().CurrNB()-baseline, int64(3<<20))
+	copy(packet[2:], bytes.Repeat([]byte{'y'}, len(chunk)))
+	require.Equal(t, byte('x'), stmt.longDataBuffers[0][0], "receive buffer must not be borrowed")
+
+	require.NoError(t, proto.ParseExecuteData(ctx, proc, stmt,
+		buildLongDataExecutePacket(defines.MYSQL_TYPE_VAR_STRING), 0))
+	require.Len(t, stmt.params.GetBytesAt(0), 1<<20)
+	require.Equal(t, byte('x'), stmt.params.GetBytesAt(0)[0])
+	require.Empty(t, stmt.longDataBuffers)
+}
+
+func TestParseSendLongDataEmptyOverridesExecuteNull(t *testing.T) {
+	ctx := context.Background()
+	proto, proc, stmt := newBinaryPrepareProtocolTestCase(t, "select ?")
+	defer stmt.clearBinaryParamState(proc)
+	require.NoError(t, proto.ParseSendLongData(ctx, proc, stmt, make([]byte, 2), 0))
+	require.True(t, stmt.hasPendingLongData())
+	require.NoError(t, proto.ParseExecuteData(ctx, proc, stmt,
+		buildNullExecutePacket(defines.MYSQL_TYPE_VAR_STRING), 0))
+	require.False(t, stmt.params.GetNulls().Contains(0))
+	require.Equal(t, "", stmt.params.GetStringAt(0))
+}
+
+func TestParseSendLongDataEnforcesCumulativePacketLimit(t *testing.T) {
+	ctx := context.Background()
+	proto, proc, stmt := newBinaryPrepareProtocolTestCase(t, "select ?")
+	defer stmt.clearBinaryParamState(proc)
+	proto.GetSession().sesSysVars = &SystemVariables{
+		mp: map[string]interface{}{"max_allowed_packet": int64(1024)},
+	}
+	packet := append(make([]byte, 2), bytes.Repeat([]byte{'x'}, 600)...)
+	require.NoError(t, proto.ParseSendLongData(ctx, proc, stmt, packet, 0))
+	require.ErrorContains(t, proto.ParseSendLongData(ctx, proc, stmt, packet, 0), "max_allowed_packet")
+	require.Len(t, stmt.longDataBuffers[0], 600)
+	stmt.resetBinaryParamState()
+	require.Empty(t, stmt.longDataBuffers)
+	require.False(t, stmt.hasPendingLongData())
+}
+
+func TestParseSendLongDataInterleavedParametersAndReset(t *testing.T) {
+	ctx := context.Background()
+	proto, proc, stmt := newBinaryPrepareProtocolTestCase(t, "select ?, ?")
+	defer stmt.clearBinaryParamState(proc)
+	baseline := proc.Mp().CurrNB()
+	packet := func(index byte, value []byte) []byte {
+		return append([]byte{index, 0}, value...)
+	}
+	require.NoError(t, proto.ParseSendLongData(ctx, proc, stmt, packet(0, []byte("a")), 0))
+	require.NoError(t, proto.ParseSendLongData(ctx, proc, stmt, packet(1, []byte{0, 0xff}), 0))
+	require.NoError(t, proto.ParseSendLongData(ctx, proc, stmt, packet(0, []byte("b")), 0))
+	require.NoError(t, proto.ParseExecuteData(ctx, proc, stmt,
+		buildLongDataExecutePacket(defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_BLOB), 0))
+	require.Equal(t, []byte("ab"), stmt.params.GetBytesAt(0))
+	require.Equal(t, []byte{0, 0xff}, stmt.params.GetBytesAt(1))
+	require.Empty(t, stmt.longDataBuffers)
+
+	stmt.resetBinaryParamState()
+	require.Nil(t, stmt.params)
+	require.False(t, stmt.hasPendingLongData())
+	require.Equal(t, baseline, proc.Mp().CurrNB())
+}
+
+func TestPrepareStmtCloseReleasesPendingLongData(t *testing.T) {
+	ctx := context.Background()
+	proto, proc, stmt := newBinaryPrepareProtocolTestCase(t, "select ?")
+	baseline := proc.Mp().CurrNB()
+	packet := append(make([]byte, 2), bytes.Repeat([]byte{'x'}, 1<<20)...)
+	require.NoError(t, proto.ParseSendLongData(ctx, proc, stmt, packet, 0))
+	require.Greater(t, proc.Mp().CurrNB(), baseline)
+	stmt.Close()
+	require.Equal(t, baseline, proc.Mp().CurrNB())
+	require.False(t, stmt.hasPendingLongData())
 }
 
 /* FIXME The prepare process has undergone some modifications,
@@ -4516,7 +4623,7 @@ func (fp *testMysqlWriter) Flush() error {
 	return nil
 }
 
-func (fp *testMysqlWriter) MakeColumnDefData(ctx context.Context, columns []*planPb.ColDef) ([][]byte, error) {
+func (fp *testMysqlWriter) MakeColumnDefData(ctx context.Context, columns []*planPb.ColDef, directIntegerLengths ...uint32) ([][]byte, error) {
 	if fp.makeColumnDefDataFunc != nil {
 		return fp.makeColumnDefDataFunc(ctx, columns)
 	}

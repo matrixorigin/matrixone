@@ -76,6 +76,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minusall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mongoscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
@@ -2093,7 +2094,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileSort(node, ss)
 		return ss, nil
-	case plan.Node_MINUS, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
+	case plan.Node_MINUS, plan.Node_MINUS_ALL, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
 		left, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
 			return nil, err
@@ -6077,6 +6078,12 @@ func (c *Compile) compileTpMinusAndIntersect(node *plan.Node, left []*Scope, rig
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		rs[0].setRootOperator(arg)
 		arg.AppendChild(merge1)
+	case plan.Node_MINUS_ALL:
+		arg := minusall.NewArgument()
+		arg.KeyExprs = node.PhysicalEqualityKeyList
+		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		rs[0].setRootOperator(arg)
+		arg.AppendChild(merge1)
 	case plan.Node_INTERSECT:
 		arg := intersect.NewArgument()
 		arg.KeyExprs = node.PhysicalEqualityKeyList
@@ -6095,6 +6102,17 @@ func (c *Compile) compileTpMinusAndIntersect(node *plan.Node, left []*Scope, rig
 }
 
 func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
+	if nodeType == plan.Node_MINUS_ALL {
+		// Multiplicity subtraction needs one owner of every occurrence from both
+		// inputs. The existing parallel set-op path broadcasts rows to workers;
+		// using it here would multiply the result cardinality.
+		return c.compileTpMinusAndIntersect(
+			node,
+			[]*Scope{c.newMergeScope(left)},
+			[]*Scope{c.newMergeScope(right)},
+			nodeType,
+		)
+	}
 	if c.IsSingleScope(left) && c.IsSingleScope(right) {
 		return c.compileTpMinusAndIntersect(node, left, right, nodeType)
 	}
@@ -6160,6 +6178,7 @@ func (c *Compile) compileAdaptiveTop(node *plan.Node, candidates [][]*Scope) []*
 	op := adaptivetop.NewArgument()
 	op.LimitExpr = plan2.DeepCopyExpr(node.Limit)
 	op.Branches = len(branches)
+	op.FallbackOnEmpty = node.GetAdaptiveTopFallbackOnEmpty()
 	op.SpillConfig = materialized.SpillConfig{
 		FileFactory: func(name string) (*os.File, error) {
 			spillFS, err := c.proc.GetSpillFileService()
@@ -7926,11 +7945,13 @@ func canonicalHLLAddRequiredVersion(node *plan.Node) int64 {
 			continue
 		}
 		typ := types.T(fn.Args[0].Typ.Id)
-		if isCanonicalTextHLLAddType(typ) {
-			return defines.MORPCVersion91
-		}
-		if isCanonicalVectorHLLAddType(typ) {
-			required = defines.MORPCVersion88
+		switch {
+		case isCanonicalFloatHLLAddType(typ):
+			required = max(required, defines.MORPCVersion92)
+		case isCanonicalTextHLLAddType(typ):
+			required = max(required, defines.MORPCVersion91)
+		case isCanonicalVectorHLLAddType(typ):
+			required = max(required, defines.MORPCVersion88)
 		}
 	}
 	return required
@@ -7948,6 +7969,10 @@ func isCanonicalVectorHLLAddType(typ types.T) bool {
 
 func isCanonicalTextHLLAddType(typ types.T) bool {
 	return typ == types.T_char || typ == types.T_json
+}
+
+func isCanonicalFloatHLLAddType(typ types.T) bool {
+	return typ == types.T_float32 || typ == types.T_float64
 }
 
 // hasVariableLengthGroupKey mirrors Group.prepareGroupAndAggArg's v78 fence
@@ -8107,6 +8132,10 @@ func (c *Compile) supportsRemoteCanonicalTextHLLAdd() bool {
 
 }
 
+func (c *Compile) supportsRemoteCanonicalFloatHLLAdd() bool {
+	return c.remoteProtocolVersion() >= defines.MORPCVersion92
+}
+
 func (c *Compile) remoteProtocolVersion() int64 {
 	version, ok := moruntime.ServiceRuntime(c.proc.GetService()).
 		GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -8196,6 +8225,16 @@ func supportsRemoteCanonicalTextHLLAdd(service string) bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion91
+}
+
+func supportsRemoteCanonicalFloatHLLAdd(service string) bool {
+	version, ok := moruntime.ServiceRuntime(service).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion92
 }
 
 func supportsRemoteGroupHashString(service string) bool {
