@@ -175,7 +175,9 @@ func (a *AdaptiveTop) collect(proc *process.Process) error {
 			return err
 		}
 		a.ctr.source.Finish(nil)
-		if rows == a.ctr.limit || branch == a.Branches-1 {
+		if (a.FallbackOnEmpty && rows > 0) ||
+			(!a.FallbackOnEmpty && rows == a.ctr.limit) ||
+			branch == a.Branches-1 {
 			a.ctr.selected = true
 			return nil
 		}

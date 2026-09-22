@@ -87,21 +87,23 @@ create or replace view v_good_score as
 select id, match(body) against('hello') as score from docs where match(body) against('hello');
 select id from v_good_score order by id;
 
--- A MATCH combined with a window function stays refused even WITH the matching index. The
--- fulltext rewrite fires for project -> scan, sort -> scan and agg -> scan; a Window node
--- between the project and the scan defeats resolveFullTextIndexPath, so fulltext_match
--- survives as a raw filter and the query cannot run. The DIRECT query fails identically
--- (ERROR 20105) with no view involved, so nothing is lost by refusing here -- these views
--- never worked. Both spellings are pinned: MATCH inside the window spec, and MATCH in the
--- WHERE alongside an unrelated window function.
---
--- If the rewrite is ever taught to see through a Window node, these two become servable
--- and will simply start being accepted; this guard needs no change for that.
+-- A MATCH that appears ONLY inside the window's OVER spec, with no WHERE clause to seed an index
+-- scan, stays refused even WITH the matching index: there is no filter for the rewrite to build the
+-- fulltext scan from, so fulltext_match survives and the view cannot run. The direct query fails
+-- identically (ERROR 20105), so nothing is lost by refusing.
 create view v_window_idx as
 select id, row_number() over (order by match(body) against('hello')) as rn from docs;
 
+-- A WHERE MATCH alongside a window function IS served now (#28974): the rewrite descends the WINDOW
+-- (and the PARTITION node that OVER(PARTITION BY ...) inserts) to reach the scan, so these views are
+-- accepted and run. The plain and partitioned forms are both pinned.
 create view v_window_where as
 select id, row_number() over (order by id) as rn from docs where match(body) against('hello');
+select id, rn from v_window_where order by id;
+
+create view v_window_part as
+select id, row_number() over (partition by title order by id) as rn from docs where match(body) against('hello');
+select id, rn from v_window_part order by id;
 
 -- a window function with no MATCH is unaffected and must still work
 create view v_window_plain as select id, row_number() over (order by id) as rn from docs;
