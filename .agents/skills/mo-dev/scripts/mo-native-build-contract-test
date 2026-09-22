@@ -309,7 +309,7 @@ set +e
 cuda_debug=$(make -C "$repo_root/cgo/cuda" -Bn HOST_ARCH=x86_64 \
     CONDA_PREFIX="$work/conda" TARGET_ARCH=x86_64 TARGET_OS=linux dbg=1 all 2>&1)
 cuda_debug_status=$?
-cuvs_debug=$(make -C "$repo_root/cgo/cuvs" -n \
+cuvs_debug=$(make -C "$repo_root/cgo/cuvs" -Bn \
     CONDA_PREFIX="$work/conda" HOST_ARCH=x86_64 debug 2>&1)
 cuvs_debug_status=$?
 set -e
