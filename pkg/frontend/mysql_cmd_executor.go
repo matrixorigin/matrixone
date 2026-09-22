@@ -1396,9 +1396,11 @@ func validateTransactionAssignmentScopes(
 func validateStaticTransactionAssignments(
 	ctx context.Context,
 	sv *tree.SetVar,
+	activeTxnAtStart bool,
 ) error {
 	for _, assign := range sv.Assignments {
-		if _, isolation := transactionIsolationAssignmentScope(assign); !isolation {
+		isolationScope, isolation := transactionIsolationAssignmentScope(assign)
+		if !isolation {
 			if _, readOnly := transactionReadOnlyAssignmentScope(assign); !readOnly {
 				return nil
 			}
@@ -1419,9 +1421,12 @@ func validateStaticTransactionAssignments(
 		if err != nil {
 			return err
 		}
-		if _, isolation := transactionIsolationAssignmentScope(assign); isolation {
+		if isolation {
 			if _, err = txnIsolationFromSystemValue(ctx, converted); err != nil {
 				return err
+			}
+			if isolationScope == tree.TransactionScopeNext && activeTxnAtStart {
+				return moerr.NewCantChangeTxCharacteristics(ctx)
 			}
 		}
 	}
@@ -1447,7 +1452,11 @@ func doSetVar(
 		return err
 	}
 	if !preparedExpression {
-		if err := validateStaticTransactionAssignments(execCtx.reqCtx, sv); err != nil {
+		if err := validateStaticTransactionAssignments(
+			execCtx.reqCtx,
+			sv,
+			execCtx.txnOpt.activeTxnAtStartKnown && execCtx.txnOpt.activeTxnAtStart,
+		); err != nil {
 			return err
 		}
 	}

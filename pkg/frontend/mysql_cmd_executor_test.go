@@ -1036,6 +1036,77 @@ func TestGenericTransactionReadOnlyAssignments(t *testing.T) {
 	require.Equal(t, "READ-COMMITTED", gotIsolation)
 }
 
+func TestGenericTransactionAssignmentsRejectActiveNextIsolationBeforeMutation(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+
+	for _, test := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "read-only before isolation",
+			sql:  "set session transaction_read_only = 1, @@transaction_isolation = 'READ-COMMITTED'",
+		},
+		{
+			name: "isolation before read-only",
+			sql:  "set @@transaction_isolation = 'READ-COMMITTED', session transaction_read_only = 1",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ses := newTestSession(t, ctrl)
+			defer ses.Close()
+
+			require.NoError(t, ses.SetSessionSysVar(
+				ctx, transactionReadOnlySystemVariable, int64(0)))
+			require.NoError(t, ses.SetSessionSysVar(
+				ctx, transactionIsolationSystemVariable, "REPEATABLE-READ"))
+
+			handler := ses.GetTxnHandler()
+			op := newTestTxnOp()
+			handler.mu.Lock()
+			handler.txnOp = op
+			handler.mu.Unlock()
+			defer func() {
+				handler.mu.Lock()
+				handler.txnOp = nil
+				handler.mu.Unlock()
+			}()
+
+			stmt, err := mysql.ParseOne(ctx, test.sql, 1)
+			require.NoError(t, err)
+			_, err = execInFrontend(ses, &ExecCtx{
+				reqCtx: ctx,
+				stmt:   stmt,
+				txnOpt: FeTxnOption{
+					activeTxnAtStartKnown: true,
+					activeTxnAtStart:      true,
+				},
+			})
+			require.ErrorContains(t, err,
+				"Transaction characteristics can't be changed while a transaction is in progress")
+			moErr, ok := err.(*moerr.Error)
+			require.True(t, ok)
+			require.Equal(t, uint16(moerr.ER_CANT_CHANGE_TX_CHARACTERISTICS), moErr.MySQLCode())
+			require.Equal(t, "25001", moErr.SqlState())
+
+			for _, name := range []string{
+				transactionReadOnlySystemVariable,
+				transactionReadOnlySystemVariableAlias,
+			} {
+				got, getErr := ses.GetSessionSysVar(name)
+				require.NoError(t, getErr)
+				require.Equal(t, int64(0), got, name)
+			}
+			gotIsolation, getErr := ses.GetSessionSysVar(transactionIsolationSystemVariable)
+			require.NoError(t, getErr)
+			require.Equal(t, "REPEATABLE-READ", gotIsolation)
+			require.True(t, handler.InActiveTxn())
+			require.Same(t, op, handler.GetTxn())
+		})
+	}
+}
+
 func TestGlobalSystemVariablesLoadReadOnlyAlias(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
