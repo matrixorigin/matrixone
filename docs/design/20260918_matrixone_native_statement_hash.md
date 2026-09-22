@@ -180,8 +180,8 @@ row evaluation as specified above.
 
 Operational consequence: during a mixed-build rollout, a plan containing this
 function can fail if its selected worker is not on the coordinator's exact
-build. This proposal chooses fail-closed behavior over potentially
-inconsistent hashes; maintainers must explicitly accept this rollout behavior.
+build. This contract chooses fail-closed behavior over potentially inconsistent
+hashes; the behavior is part of the implementation boundary for this PR.
 
 ## 7. Resource and cancellation boundary
 
