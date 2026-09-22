@@ -3319,6 +3319,19 @@ func TestQueryBuilderBindValuesUsesColumnCommonType(t *testing.T) {
 			width:       20,
 			notNullable: true,
 		},
+		{
+			name:        "homogeneous geometry",
+			rows:        "row(st_point(1, 2)), row(st_point(3, 4))",
+			oid:         types.T_geometry,
+			notNullable: true,
+		},
+		{
+			name:  "homogeneous geometry with null",
+			rows:  "row(st_point(1, 2)), row(null)",
+			oid:   types.T_geometry,
+			width: 0,
+			scale: 0,
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			node, err := bindValues(t, test.rows)
@@ -3362,6 +3375,18 @@ func TestQueryBuilderBindValuesUsesColumnCommonType(t *testing.T) {
 			name: "vecf64 precision is order independent",
 			rows: "row(cast('[1,2,3]' as vecf64(3))), row(cast('[1,2,3]' as vecf32(3)))",
 		},
+		{
+			name: "string between vecf32 and vecf64 preserves precision",
+			rows: "row(cast('[1,2,3]' as vecf32(3))), row('[1.0000000001,2,3]'), row(cast('[1.0000000001,2,3]' as vecf64(3)))",
+		},
+		{
+			name: "string before vecf64 and vecf32 preserves precision",
+			rows: "row('[1.0000000001,2,3]'), row(cast('[1.0000000001,2,3]' as vecf64(3))), row(cast('[1,2,3]' as vecf32(3)))",
+		},
+		{
+			name: "string after vecf64 and vecf32 preserves precision",
+			rows: "row(cast('[1.0000000001,2,3]' as vecf64(3))), row(cast('[1,2,3]' as vecf32(3))), row('[1.0000000001,2,3]')",
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			node, err := bindValues(t, test.rows)
@@ -3379,6 +3404,9 @@ func TestQueryBuilderBindValuesUsesColumnCommonType(t *testing.T) {
 	for _, rows := range []string{
 		"row(cast('[1,2]' as vecf32(2))), row(cast('[1,2,3]' as vecf64(3)))",
 		"row(cast('[1,2,3]' as vecf64(3))), row(cast('[1,2]' as vecf32(2)))",
+		"row(cast('[1,2]' as vecf32(2))), row('[1,2,3]'), row(cast('[1,2,3]' as vecf64(3)))",
+		"row('[1,2,3]'), row(cast('[1,2,3]' as vecf64(3))), row(cast('[1,2]' as vecf32(2)))",
+		"row(cast('[1,2,3]' as vecf64(3))), row(cast('[1,2]' as vecf32(2))), row('[1,2,3]')",
 	} {
 		t.Run("different vector dimensions are rejected: "+rows, func(t *testing.T) {
 			_, err := bindValues(t, rows)

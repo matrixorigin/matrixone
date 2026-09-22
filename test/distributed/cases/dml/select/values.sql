@@ -24,3 +24,5 @@ select ord, embedding from (values row(1, cast('[1,2,3]' as vecf32(3))), row(2, 
 select ord, embedding from (values row(1, cast('[1.0000000001,2,3]' as vecf64(3))), row(2, cast('[1,2,3]' as vecf32(3)))) as v(ord, embedding) order by ord;
 select embedding from (values row(cast('[1,2]' as vecf32(2))), row(cast('[1,2,3]' as vecf64(3)))) as v(embedding);
 select embedding from (values row(cast('[1,2,3]' as vecf64(3))), row(cast('[1,2]' as vecf32(2)))) as v(embedding);
+select ord, embedding from (values row(1, cast('[1,2,3]' as vecf32(3))), row(2, '[1.0000000001,2,3]'), row(3, cast('[1.0000000001,2,3]' as vecf64(3)))) as v(ord, embedding) order by ord;
+select ord, st_astext(g) as g from (values row(1, st_point(1, 2)), row(2, st_point(3, 4)), row(3, null)) as v(ord, g) order by ord;

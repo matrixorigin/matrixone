@@ -7920,21 +7920,45 @@ func (builder *QueryBuilder) coerceValuesColumnToCommonType(
 	var commonType types.Type
 	switch {
 	case len(commonInputs) > 0:
-		vectorType, allFloatVectors, err := valuesFloatVectorCommonType(commonInputs)
-		if err != nil {
-			return plan.Type{}, moerr.NewParseErrorf(
-				builder.GetContext(), "the %d column cann't cast to a same type", columnIdx)
-		}
-		if allFloatVectors {
-			commonType = vectorType
+		if homogeneousType, ok := valuesHomogeneousCommonType(commonInputs); ok {
+			// Not every type has a COALESCE overload (for example GEOMETRY),
+			// but an already homogeneous VALUES column needs no type resolution.
+			commonType = homogeneousType
 		} else {
-			resolved, err := function.GetFunctionByName(builder.GetContext(), "coalesce", commonInputs)
+			vectorType, hasFloatVector, err := valuesFloatVectorCommonType(commonInputs)
 			if err != nil {
 				return plan.Type{}, moerr.NewParseErrorf(
 					builder.GetContext(), "the %d column cann't cast to a same type", columnIdx)
 			}
-			castTypes, _ := resolved.ShouldDoImplicitTypeCast()
-			if len(castTypes) > 0 {
+
+			resolverInputs := commonInputs
+			if hasFloatVector {
+				// Normalize every vector member before asking the generic resolver
+				// whether the remaining domains (for example VARCHAR literals) can
+				// join it. Otherwise argument order can let a string select VECF32
+				// even when another row requires VECF64.
+				resolverInputs = slices.Clone(commonInputs)
+				for i := range resolverInputs {
+					if resolverInputs[i].Oid == types.T_array_float32 ||
+						resolverInputs[i].Oid == types.T_array_float64 {
+						resolverInputs[i] = vectorType
+					}
+				}
+			}
+
+			resolved, err := function.GetFunctionByName(builder.GetContext(), "coalesce", resolverInputs)
+			if err != nil {
+				return plan.Type{}, moerr.NewParseErrorf(
+					builder.GetContext(), "the %d column cann't cast to a same type", columnIdx)
+			}
+			castTypes, shouldCast := resolved.ShouldDoImplicitTypeCast()
+			if hasFloatVector {
+				if !valuesResolverKeepsFloatVectorDomain(resolverInputs, castTypes, shouldCast, vectorType.Oid) {
+					return plan.Type{}, moerr.NewParseErrorf(
+						builder.GetContext(), "the %d column cann't cast to a same type", columnIdx)
+				}
+				commonType = vectorType
+			} else if len(castTypes) > 0 {
 				commonType = castTypes[0]
 			} else {
 				commonType = commonInputs[0]
@@ -8013,6 +8037,19 @@ func (builder *QueryBuilder) coerceValuesColumnToCommonType(
 	return commonPlanType, nil
 }
 
+func valuesHomogeneousCommonType(inputs []types.Type) (types.Type, bool) {
+	if len(inputs) == 0 {
+		return types.Type{}, false
+	}
+	common := inputs[0]
+	for _, typ := range inputs[1:] {
+		if !common.Eq(typ) {
+			return types.Type{}, false
+		}
+	}
+	return common, true
+}
+
 // valuesIntegerDomainDecimalType maps an integer's complete value domain to a
 // DECIMAL type. It is used when signed and unsigned integers share a VALUES
 // column, because neither BIGINT nor BIGINT UNSIGNED can represent both
@@ -8026,27 +8063,57 @@ func valuesIntegerDomainDecimalType(oid types.T) types.Type {
 	return types.New(decimalOid, width, 0)
 }
 
-// valuesFloatVectorCommonType returns an order-independent common type for a
-// VALUES column consisting entirely of VECF32/VECF64 values. Vector dimensions
-// must match, and VECF64 wins so implicit coercion never loses precision.
+// valuesFloatVectorCommonType returns the vector domain present in a VALUES
+// column. Non-vector inputs are validated separately by the generic resolver.
+// All vector dimensions must match, and VECF64 wins so implicit coercion never
+// loses precision.
 func valuesFloatVectorCommonType(inputs []types.Type) (types.Type, bool, error) {
-	if len(inputs) == 0 {
-		return types.Type{}, false, nil
-	}
-	width := inputs[0].Width
+	width := int32(0)
 	commonOid := types.T_array_float32
+	found := false
 	for _, typ := range inputs {
 		if typ.Oid != types.T_array_float32 && typ.Oid != types.T_array_float64 {
-			return types.Type{}, false, nil
+			continue
 		}
-		if typ.Width != width {
+		if !found {
+			width = typ.Width
+			found = true
+		} else if typ.Width != width {
 			return types.Type{}, true, moerr.NewInvalidInputNoCtx("vector dimensions must match")
 		}
 		if typ.Oid == types.T_array_float64 {
 			commonOid = types.T_array_float64
 		}
 	}
+	if !found {
+		return types.Type{}, false, nil
+	}
 	return types.New(commonOid, width, 0), true, nil
+}
+
+func valuesResolverKeepsFloatVectorDomain(
+	inputs []types.Type,
+	castTypes []types.Type,
+	shouldCast bool,
+	vectorOid types.T,
+) bool {
+	if shouldCast {
+		if len(castTypes) != len(inputs) {
+			return false
+		}
+		for _, typ := range castTypes {
+			if typ.Oid != vectorOid {
+				return false
+			}
+		}
+		return true
+	}
+	for _, typ := range inputs {
+		if typ.Oid != vectorOid {
+			return false
+		}
+	}
+	return true
 }
 
 // setOperationIntegerLiteralDecimalType returns the value domain of a direct
