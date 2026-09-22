@@ -1038,24 +1038,21 @@ maintainer approval is recorded in the approval record below.
 
 ## Current published review artifact (revision 18)
 
-The implementation/test source head for this review artifact is
-`ef9331788241c1b5e8d3707320dc6be79c23fc41` (tree
-`78653ab5d771f1bce48bdf9b248b3cc7af362f23`), based on
-`d8ddce92b1c5c172111b50aefe6b6b200b2589cb` (tree
-`a270c3c5bd225762cb735afb9ab22d3fd9d78674`). The revision-17 design document
-is added in a docs-only commit on top of this source head. The only source/test change after the
-revision-16 implementation snapshot is the frontend regression-test oracle:
-`TestCOMStmtInetNtoaDomainHintDoesNotLeakIntoComparison` now explicitly sets
-`MYSQL_NUMERIC_COMPATIBILITY` and refreshes statement-scoped process state
-before asserting the legacy text-prefix comparison. The strict default path is
-still covered by the existing conversion tests and remains unchanged.
+The current implementation/test source head for this review artifact is
+`2d32e42b1abfbfe42f296179e16e89ac2dc64d66`, based on
+`1634996a33afb3941c9b90a837853122a43e4344`. The revision-18 document is
+updated after the protocol-version allocation so this paragraph remains a
+source-of-truth pointer rather than a pending design request. The current
+implementation keeps the approved strict-default conversion contract, preserves
+main's v93 `LAST_INSERT_ID` migration state, and admits changed string-numeric
+remote expressions only at v94.
 
-Validation on the revision-18 local equivalent passed the focused test, all
-`TestCOMStmtInetNtoa*` tests, and the full `pkg/frontend` package through the
-repository CGo wrapper; `gofmt` and `git diff --check` also passed. The
-corresponding ALL CI run is pending. Revision 18 freezes the design decisions
-below, and the authorized-maintainer sign-off is recorded in the approval
-record.
+Validation on the revision-18 local equivalent passed the focused row-provenance
+and issue regressions; the v93/v94 admission tests and the full affected
+`pkg/pb/plan` and `pkg/sql/compile` packages pass through the repository CGo
+wrapper. `gofmt` and `git diff --check` pass. Revision 18 freezes the design
+decisions below, and the authorized-maintainer sign-off is recorded in the
+approval record.
 
 ## 7. Approval record
 
@@ -1064,6 +1061,7 @@ Design path: docs/design/pr28523-string-math-coercion.md
 Design revision: 18
 Candidate source inputs: published revision-17 head ef9331788241c1b5e8d3707320dc6be79c23fc41 (tree 78653ab5d771f1bce48bdf9b248b3cc7af362f23); local equivalent b0ee3f3a1726b4604940fc01ee7ea756afd2a984; revision-16 implementation/test candidate 845a50360ac97e5f5b35dfd398eb7625f44b0f3d (tree 79c397550626ccb4f2a5808b8fc5b1ce235b7821).
 Integration base: d8ddce92b1c5c172111b50aefe6b6b200b2589cb (tree a270c3c5bd225762cb735afb9ab22d3fd9d78674)
+Current implementation/test head: 2d32e42b1abfbfe42f296179e16e89ac2dc64d66 on base 1634996a33afb3941c9b90a837853122a43e4344; strict string-numeric remote admission is MORPC v94 and main's v93 remains LAST_INSERT_ID-only
 Scope/trigger: PR reviews 5199052257, 5214666396 and comment 5687377735; >500 production lines and planner/plan compatibility boundary
 Reviewer identity and role: historical GPT-6 Astra review of d56711fa5b429e5e6e52f64f603d2e853478edca against base 4ff27bb9b35c43c1b0961bb9a01bf8fc0b6a2171; any exact-head review decision is tracked separately from maintainer design approval
 Review timestamp: exact final-candidate Astra Medium review is tracked separately; authorized maintainer design approval is recorded by the linked exact-head review below
