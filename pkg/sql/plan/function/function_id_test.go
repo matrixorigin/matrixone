@@ -764,7 +764,9 @@ var predefinedFunids = map[int]int{
 	JSON_STORAGE_FREE:              580,
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER: 581,
+	EXTRACTVALUE:        581,
+	UPDATEXML:           582,
+	FUNCTION_END_NUMBER: 583,
 }
 
 func Test_funids(t *testing.T) {

@@ -727,6 +727,65 @@ func TestHLLRemoteProtocolValidation(t *testing.T) {
 	require.NoError(t, validateRemoteAggregateProtocol(proc, vectorAgg))
 }
 
+func TestCanonicalHLLAddRemoteProtocolValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	for _, tc := range []struct {
+		name      string
+		typ       types.Type
+		canonical bool
+	}{
+		{name: "char", typ: types.New(types.T_char, 4, 0), canonical: true},
+		{name: "json", typ: types.T_json.ToType(), canonical: true},
+		{name: "varchar-control", typ: types.New(types.T_varchar, 4, 0)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			aggs := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+				aggexec.AggIdOfHllAdd,
+				false,
+				[]*plan.Expr{makeTestVarExprWithType("value", tc.typ)},
+				nil,
+			)}
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion87)
+			if tc.canonical {
+				require.ErrorContains(t, validateRemoteAggregateProtocol(proc, aggs),
+					"canonical JSON/CHAR HLL_ADD_AGG remote execution requires MORPC protocol version 91")
+			} else {
+				require.NoError(t, validateRemoteAggregateProtocol(proc, aggs))
+			}
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion90)
+			if tc.canonical {
+				require.ErrorContains(t, validateRemoteAggregateProtocol(proc, aggs),
+					"canonical JSON/CHAR HLL_ADD_AGG remote execution requires MORPC protocol version 91")
+			} else {
+				require.NoError(t, validateRemoteAggregateProtocol(proc, aggs))
+			}
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion91)
+			require.NoError(t, validateRemoteAggregateProtocol(proc, aggs))
+		})
+	}
+}
+
+func TestCanonicalFloatHLLAddRemoteProtocolValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	for _, typ := range []types.Type{types.T_float32.ToType(), types.T_float64.ToType()} {
+		aggs := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+			aggexec.AggIdOfHllAdd,
+			false,
+			[]*plan.Expr{makeTestVarExprWithType("value", typ)},
+			nil,
+		)}
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion91)
+		require.ErrorContains(t, validateRemoteAggregateProtocol(proc, aggs),
+			"canonical FLOAT HLL_ADD_AGG remote execution requires MORPC protocol version 92")
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion92)
+		require.NoError(t, validateRemoteAggregateProtocol(proc, aggs))
+	}
+}
+
 func TestTextMinMaxRemoteProtocolValidation(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	rt := runtime.ServiceRuntime(proc.GetService())

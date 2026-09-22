@@ -273,9 +273,15 @@ type container struct {
 	legacyApproxPercentileState bool
 	legacyHLLState              bool
 	floatZeroHLLState           bool
-	// legacyVectorHLLState keeps vector HLL_ADD_AGG on the raw v2 hash
-	// domain while a pre-v88 peer may still produce or consume that state.
+	// legacyVectorHLLState keeps vector HLL_ADD_AGG on the raw v2 hash domain
+	// while a pre-v88 peer may consume that state.
 	legacyVectorHLLState bool
+	// legacyTextHLLAddState keeps CHAR and JSON HLL_ADD_AGG on the raw v2 hash
+	// domain while a pre-v91 peer may consume that state.
+	legacyTextHLLAddState bool
+	// legacyFloatHLLAddState keeps scalar FLOAT/DOUBLE HLL_ADD_AGG on the raw
+	// v2 hash domain while a pre-v92 peer may consume that state.
+	legacyFloatHLLAddState bool
 	// legacyDistinctFloatKeys is frozen before aggregate groups are admitted.
 	// Pre-v79 remote producers keep the compatibility FLOAT key policy, which
 	// preserves every non-zero bit pattern in the fixed index and wire output.

@@ -1445,6 +1445,12 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	if err = c.constrainBoundedConditionalStringWorkers(qry); err != nil {
 		return nil, err
 	}
+	if err = c.constrainSpatialDistanceWorkers(qry); err != nil {
+		return nil, err
+	}
+	if err = c.constrainDecimalLiteralWorkers(qry); err != nil {
+		return nil, err
+	}
 	if err = c.constrainStrictWriteWorkers(); err != nil {
 		return nil, err
 	}
@@ -6154,6 +6160,7 @@ func (c *Compile) compileAdaptiveTop(node *plan.Node, candidates [][]*Scope) []*
 	op := adaptivetop.NewArgument()
 	op.LimitExpr = plan2.DeepCopyExpr(node.Limit)
 	op.Branches = len(branches)
+	op.FallbackOnEmpty = node.GetAdaptiveTopFallbackOnEmpty()
 	op.SpillConfig = materialized.SpillConfig{
 		FileFactory: func(name string) (*os.File, error) {
 			spillFS, err := c.proc.GetSpillFileService()
@@ -7691,7 +7698,7 @@ func (c *Compile) compileGroupWithoutShuffle(
 func (c *Compile) hasUnsupportedRemoteGroupWire(node *plan.Node) bool {
 	return (hasApproxPercentile(node) && !c.supportsRemoteApproxPercentile()) ||
 		(hasHLLAggregate(node) && !c.supportsRemoteHLL()) ||
-		(hasCanonicalHLLAddAggregate(node) && !c.supportsRemoteCanonicalHLLAdd()) ||
+		(canonicalHLLAddRequiredVersion(node) > c.remoteProtocolVersion()) ||
 		(hasVariableLengthGroupKey(node) && !c.supportsRemoteGroupHashString()) ||
 		(hasCanonicalDistinctKeyWire(node) && !c.supportsRemoteCanonicalDistinctKeyWire()) ||
 		(hasLegacyFloatDistinctKeyWire(node) && !c.supportsRemoteCanonicalDistinctKeyWire()) ||
@@ -7905,23 +7912,34 @@ func hasHLLAggregate(node *plan.Node) bool {
 }
 
 func hasCanonicalHLLAddAggregate(node *plan.Node) bool {
+	return canonicalHLLAddRequiredVersion(node) != 0
+}
+
+func canonicalHLLAddRequiredVersion(node *plan.Node) int64 {
 	if node == nil {
-		return false
+		return 0
 	}
+	var required int64
 	for _, agg := range node.AggList {
 		fn := agg.GetF()
 		if fn == nil || fn.Func == nil || fn.Func.ObjName != "hll_add_agg" ||
 			len(fn.Args) == 0 || fn.Args[0] == nil {
 			continue
 		}
-		if isCanonicalHLLVectorType(types.T(fn.Args[0].Typ.Id)) {
-			return true
+		typ := types.T(fn.Args[0].Typ.Id)
+		switch {
+		case isCanonicalFloatHLLAddType(typ):
+			required = max(required, defines.MORPCVersion92)
+		case isCanonicalTextHLLAddType(typ):
+			required = max(required, defines.MORPCVersion91)
+		case isCanonicalVectorHLLAddType(typ):
+			required = max(required, defines.MORPCVersion88)
 		}
 	}
-	return false
+	return required
 }
 
-func isCanonicalHLLVectorType(typ types.T) bool {
+func isCanonicalVectorHLLAddType(typ types.T) bool {
 	switch typ {
 	case types.T_array_float32, types.T_array_float64,
 		types.T_array_bf16, types.T_array_float16:
@@ -7929,6 +7947,14 @@ func isCanonicalHLLVectorType(typ types.T) bool {
 	default:
 		return false
 	}
+}
+
+func isCanonicalTextHLLAddType(typ types.T) bool {
+	return typ == types.T_char || typ == types.T_json
+}
+
+func isCanonicalFloatHLLAddType(typ types.T) bool {
+	return typ == types.T_float32 || typ == types.T_float64
 }
 
 // hasVariableLengthGroupKey mirrors Group.prepareGroupAndAggArg's v78 fence
@@ -8080,7 +8106,26 @@ func (c *Compile) supportsRemoteHLL() bool {
 }
 
 func (c *Compile) supportsRemoteCanonicalHLLAdd() bool {
-	return supportsRemoteCanonicalHLLAdd(c.proc.GetService())
+	return c.remoteProtocolVersion() >= defines.MORPCVersion88
+}
+
+func (c *Compile) supportsRemoteCanonicalTextHLLAdd() bool {
+	return c.remoteProtocolVersion() >= defines.MORPCVersion91
+
+}
+
+func (c *Compile) supportsRemoteCanonicalFloatHLLAdd() bool {
+	return c.remoteProtocolVersion() >= defines.MORPCVersion92
+}
+
+func (c *Compile) remoteProtocolVersion() int64 {
+	version, ok := moruntime.ServiceRuntime(c.proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return 0
+	}
+	protocolVersion, _ := version.(int64)
+	return protocolVersion
 }
 
 func (c *Compile) supportsRemoteGroupHashString() bool {
@@ -8152,6 +8197,26 @@ func supportsRemoteCanonicalHLLAdd(service string) bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion88
+}
+
+func supportsRemoteCanonicalTextHLLAdd(service string) bool {
+	version, ok := moruntime.ServiceRuntime(service).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion91
+}
+
+func supportsRemoteCanonicalFloatHLLAdd(service string) bool {
+	version, ok := moruntime.ServiceRuntime(service).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion92
 }
 
 func supportsRemoteGroupHashString(service string) bool {
@@ -8470,7 +8535,7 @@ func (c *Compile) canCompileShuffleGroup(node *plan.Node) bool {
 		(!hasOrderedSetPercentile(node) || c.supportsRemoteOrderedSetAggregates()) &&
 		(!hasApproxPercentile(node) || c.supportsRemoteApproxPercentile()) &&
 		(!hasHLLAggregate(node) || c.supportsRemoteHLL()) &&
-		(!hasCanonicalHLLAddAggregate(node) || c.supportsRemoteCanonicalHLLAdd()) &&
+		(canonicalHLLAddRequiredVersion(node) <= c.remoteProtocolVersion()) &&
 		(!hasVariableLengthGroupKey(node) || c.supportsRemoteGroupHashString()) &&
 		(!hasCanonicalDistinctKeyWire(node) || c.supportsRemoteCanonicalDistinctKeyWire()) &&
 		(!hasLegacyFloatDistinctKeyWire(node) || c.supportsRemoteCanonicalDistinctKeyWire()) &&

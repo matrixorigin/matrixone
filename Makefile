@@ -532,12 +532,12 @@ UT_SHARD ?= all
 UT_HARD_TIMEOUT ?= 120m
 # Emit one bounded progress heartbeat per interval while UT is running.
 UT_HEARTBEAT_INTERVAL ?= 60
-# Build embedded test packages ahead of their execution while the issues
-# fixture is active. This is bounded cache warming: it never executes a
-# prebuilt test binary, and the authoritative go test still owns every test
-# result. Keep it opt-in until a comparable run proves a critical-path gain
-# without consuming the runner's memory headroom.
-UT_PREBUILD_EMBEDDED ?= 0
+# Build embedded race binaries with one compiler while the exclusive issues
+# fixture runs, then execute those exact binaries serially. Build or admission
+# failures fall back before any prebuilt binary executes.
+UT_PREBUILD_EMBEDDED ?= 1
+UT_PREBUILD_MIN_FREE_KB ?= 6291456
+UT_EMBEDDED_HARD_TIMEOUT_SECONDS ?= 0
 # Reuse released engine slots for plan while resource-heavy work finishes.
 # The heavy process budget is unchanged; set 0 for a sequential A/B baseline.
 UT_OVERLAP_PLAN ?= 1
@@ -549,7 +549,7 @@ UT_OVERLAP_LIGHT_PARALLEL ?= 2
 # Parent cancellation waits long enough for helper-owned child process groups
 # to receive TERM and bounded KILL cleanup in sequence.
 UT_HELPER_TERM_GRACE_TICKS ?= 60
-export UT_SHARD UT_HARD_TIMEOUT UT_HEARTBEAT_INTERVAL UT_PREBUILD_EMBEDDED UT_OVERLAP_PLAN UT_OVERLAP_LIGHT UT_OVERLAP_LIGHT_PARALLEL UT_LIGHT_PARALLEL UT_LINK_PARALLEL UT_HELPER_TERM_GRACE_TICKS
+export UT_SHARD UT_HARD_TIMEOUT UT_HEARTBEAT_INTERVAL UT_PREBUILD_EMBEDDED UT_PREBUILD_MIN_FREE_KB UT_EMBEDDED_HARD_TIMEOUT_SECONDS UT_OVERLAP_PLAN UT_OVERLAP_LIGHT UT_OVERLAP_LIGHT_PARALLEL UT_LIGHT_PARALLEL UT_LINK_PARALLEL UT_HELPER_TERM_GRACE_TICKS
 # Native compilation runs before Go tests, so it can use an explicit UT CPU
 # budget without increasing peak race-test memory. With the default UT value,
 # omit -j and preserve recursive make's jobserver contract: a plain make stays

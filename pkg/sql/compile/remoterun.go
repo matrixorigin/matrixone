@@ -160,6 +160,16 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 			return nil, err
 		}
 	}
+	if features.SpatialDistanceSemantics {
+		if err = validateSpatialDistanceDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
+	if features.DecimalLiteralSemantics {
+		if err = validateDecimalLiteralDestination(proc, p); err != nil {
+			return nil, err
+		}
+	}
 	if err = validateStrictWriteDestination(proc, p); err != nil {
 		return nil, err
 	}
@@ -2009,13 +2019,23 @@ func validateRemoteAggregateProtocol(
 				"HLL remote execution requires MORPC protocol version 77",
 			)
 		}
-		if agg.GetAggID() == aggexec.AggIdOfHllAdd &&
-			len(agg.GetArgExpressions()) > 0 &&
-			isCanonicalHLLVectorType(types.T(agg.GetArgExpressions()[0].Typ.Id)) &&
-			(proc == nil || !supportsRemoteCanonicalHLLAdd(proc.GetService())) {
-			return moerr.NewNotSupportedNoCtx(
-				"canonical vector HLL_ADD_AGG remote execution requires MORPC protocol version 88",
-			)
+		if agg.GetAggID() == aggexec.AggIdOfHllAdd && len(agg.GetArgExpressions()) > 0 {
+			typ := types.T(agg.GetArgExpressions()[0].Typ.Id)
+			if isCanonicalVectorHLLAddType(typ) &&
+				(proc == nil || !supportsRemoteCanonicalHLLAdd(proc.GetService())) {
+				return moerr.NewNotSupportedNoCtx(
+					"canonical vector HLL_ADD_AGG remote execution requires MORPC protocol version 88")
+			}
+			if isCanonicalTextHLLAddType(typ) &&
+				(proc == nil || !supportsRemoteCanonicalTextHLLAdd(proc.GetService())) {
+				return moerr.NewNotSupportedNoCtx(
+					"canonical JSON/CHAR HLL_ADD_AGG remote execution requires MORPC protocol version 91")
+			}
+			if isCanonicalFloatHLLAddType(typ) &&
+				(proc == nil || !supportsRemoteCanonicalFloatHLLAdd(proc.GetService())) {
+				return moerr.NewNotSupportedNoCtx(
+					"canonical FLOAT HLL_ADD_AGG remote execution requires MORPC protocol version 92")
+			}
 		}
 		if agg.GetConfigType() == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
 			if proc == nil || !supportsRemoteOrderedAggregates(proc.GetService()) {
@@ -2255,6 +2275,12 @@ func validateRemoteExpressionPipelineProtocol(
 			"bounded conditional string domains require MORPC protocol version 83",
 		)
 	}
+	if features.DecimalLiteralSemantics &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion89) {
+		return moerr.NewNotSupportedNoCtx(
+			"exact DECIMAL256 literal semantics require MORPC protocol version 89",
+		)
+	}
 	if features.IPFunctionSemantics &&
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion72) {
 		return moerr.NewNotSupportedNoCtx(
@@ -2267,6 +2293,12 @@ func validateRemoteExpressionPipelineProtocol(
 				"expression result contracts require MORPC protocol version 86",
 			)
 		}
+	}
+	if features.SpatialDistanceSemantics &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion90) {
+		return moerr.NewNotSupportedNoCtx(
+			"geodetic spatial-distance semantics require MORPC protocol version 90",
+		)
 	}
 	return nil
 }

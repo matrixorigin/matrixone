@@ -1497,6 +1497,7 @@ func TestFrozenResultMetadataAcceptsEquivalentVectorAccessPath(t *testing.T) {
 		vectorSpec := &plan.VectorIndexScan{
 			SourceTable:    &plan.ObjectRef{SchemaName: "source_db", ObjName: "source_table"},
 			SourceTableDef: sourceTable,
+			Index:          &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()},
 			IncludedColumns: []string{
 				"category",
 				"payload",
@@ -2434,6 +2435,91 @@ func TestCompileShuffleGroupGatesHLLByProtocolVersion(t *testing.T) {
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion88)
 	require.True(t, c.supportsRemoteCanonicalHLLAdd())
 	require.True(t, c.canCompileShuffleGroup(aggNode))
+}
+
+func TestCompileShuffleGroupGatesCanonicalHLLAddByProtocolVersion(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	aggNode, nodes := newShuffleGroupTestNodes(16)
+	rt := runtime.ServiceRuntime(c.proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	for _, tc := range []struct {
+		name      string
+		typ       types.Type
+		canonical bool
+	}{
+		{name: "char", typ: types.New(types.T_char, 4, 0), canonical: true},
+		{name: "json", typ: types.T_json.ToType(), canonical: true},
+		{name: "varchar-control", typ: types.New(types.T_varchar, 4, 0)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			arg := &plan.Expr{Typ: plan.Type{
+				Id:    int32(tc.typ.Oid),
+				Width: tc.typ.Width,
+				Scale: tc.typ.Scale,
+			}}
+			aggNode.AggList = []*plan.Expr{{
+				Expr: &plan.Expr_F{F: &plan.Function{
+					Func: &plan.ObjectRef{ObjName: "hll_add_agg"},
+					Args: []*plan.Expr{arg},
+				}},
+			}}
+
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion87)
+			require.Equal(t, tc.canonical, hasCanonicalHLLAddAggregate(aggNode))
+			require.Equal(t, !tc.canonical, c.canCompileShuffleGroup(aggNode))
+			if tc.canonical {
+				local := c.compileGroupWithoutShuffle(
+					aggNode,
+					[]*Scope{newShuffleGroupInputScope(t, 1)},
+					nodes,
+					false,
+				)
+				require.Len(t, local, 1)
+				require.True(t, local[0].RootOp.(*group.Group).NeedEval)
+			}
+
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion88)
+			require.True(t, c.supportsRemoteCanonicalHLLAdd())
+			require.Equal(t, !tc.canonical, c.canCompileShuffleGroup(aggNode))
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion90)
+			require.False(t, c.supportsRemoteCanonicalTextHLLAdd())
+			require.Equal(t, !tc.canonical, c.canCompileShuffleGroup(aggNode))
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion91)
+			require.True(t, c.supportsRemoteCanonicalTextHLLAdd())
+			require.True(t, c.canCompileShuffleGroup(aggNode))
+		})
+	}
+}
+
+func TestCompileShuffleGroupGatesScalarFloatHLLAddByProtocolVersion(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	aggNode, _ := newShuffleGroupTestNodes(16)
+	rt := runtime.ServiceRuntime(c.proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	makeAgg := func(typ types.T) *plan.Expr {
+		return &plan.Expr{
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: "hll_add_agg"},
+				Args: []*plan.Expr{{Typ: plan.Type{Id: int32(typ)}}},
+			}},
+		}
+	}
+	aggNode.AggList = []*plan.Expr{makeAgg(types.T_float32)}
+	require.Equal(t, defines.MORPCVersion92, canonicalHLLAddRequiredVersion(aggNode))
+	for _, version := range []int64{defines.MORPCVersion91, defines.MORPCVersion92} {
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, version)
+		require.Equal(t, version >= defines.MORPCVersion92,
+			c.supportsRemoteCanonicalFloatHLLAdd())
+		require.Equal(t, version >= defines.MORPCVersion92,
+			c.canCompileShuffleGroup(aggNode))
+	}
+
+	// The requirement is the maximum across all HLL_ADD_AGG expressions; a
+	// later scalar FLOAT must not be hidden by an earlier CHAR expression.
+	aggNode.AggList = []*plan.Expr{makeAgg(types.T_char), makeAgg(types.T_float64)}
+	require.Equal(t, defines.MORPCVersion92, canonicalHLLAddRequiredVersion(aggNode))
 }
 
 func TestCompileShuffleGroupGatesAggregateWireByProtocolVersion(t *testing.T) {
