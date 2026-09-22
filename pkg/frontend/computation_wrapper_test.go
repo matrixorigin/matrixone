@@ -2338,6 +2338,13 @@ func TestCOMStmtInetNtoaDomainHintDoesNotLeakIntoComparison(t *testing.T) {
 		prepareStmt.Close()
 		scratchPrepare.Close()
 	}()
+	// This assertion covers the legacy text-prefix comparison semantics.  Keep
+	// it explicit now that strict numeric conversion is the default; without
+	// the compatibility flag the DATE value must fail when compared as a
+	// number.
+	require.NoError(t, ses.SetSessionSysVar(
+		execCtx.reqCtx, "sql_mode", "MYSQL_NUMERIC_COMPATIBILITY"))
+	refreshStatementScopedSessionInfo(ses, cw.proc)
 
 	require.NoError(t, proto.ParseExecuteData(
 		execCtx.reqCtx, cw.proc, prepareStmt,
