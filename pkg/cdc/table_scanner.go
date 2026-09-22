@@ -690,7 +690,12 @@ func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]T
 	}
 	s.handling = true
 	s.processingCallbacks = true
-	s.markerAcks = make(map[tableMarker]struct{})
+	// Keep acknowledgements from an earlier failed fan-out. A callback may have
+	// consumed one table successfully before returning an aggregate error; on
+	// retry its existing-reader path need not call ClearTableIdChanged again.
+	if s.markerAcks == nil {
+		s.markerAcks = make(map[tableMarker]struct{})
+	}
 	// Snapshot under the detector lock. ClearTableIdChanged replaces entries
 	// in the published map under the same lock; cloning outside it would race
 	// with that map write even though each subscriber receives its own copy.
@@ -725,7 +730,9 @@ func (s *TableDetector) processCallback(ctx context.Context, tables map[uint32]T
 			s.lastMp = nil
 		}
 		s.processingCallbacks = false
-		s.markerAcks = nil
+		if err == nil {
+			s.markerAcks = nil
+		}
 		s.handling = false
 		s.mu.Unlock()
 

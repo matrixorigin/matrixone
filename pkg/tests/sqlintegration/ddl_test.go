@@ -227,7 +227,7 @@ func TestCDCNoPrimaryKeyRejected(t *testing.T) {
 			require.NoError(t, execErr)
 			res.Close()
 		}
-		execSQL("create pitr if not exists cdc_pitr for database " + db + " range 3 'h' internal")
+		execSQL("create pitr if not exists cdc_pitr for account range 3 'h' internal")
 		execSQL("create table with_pk (id int primary key, value int)")
 		execSQL("create table composite_pk (id1 int, id2 int, value int, primary key (id1, id2))")
 
@@ -264,9 +264,6 @@ func TestCDCNoPrimaryKeyRejected(t *testing.T) {
 		require.NoError(t, err)
 		res.Close()
 		defer cleanupSQLIntegration(t, cn, "drop database if exists "+badDB)
-		res, err = exec.Exec(ctx, "create pitr if not exists cdc_pitr_bad for database "+badDB+" range 3 'h' internal", executor.Options{}.WithDatabase(badDB))
-		require.NoError(t, err)
-		res.Close()
 		res, err = exec.Exec(ctx, "create table no_pk (value int)", executor.Options{}.WithDatabase(badDB))
 		require.NoError(t, err)
 		res.Close()

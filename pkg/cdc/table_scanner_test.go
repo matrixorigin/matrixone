@@ -678,9 +678,12 @@ func TestTableDetectorProcessCallbackRetainsMarkerUntilAllSubscribersSucceed(t *
 	td.lastMp = tables
 
 	var observed []bool
+	var consumeCalls atomic.Int32
 	retry := true
 	consume := func(snapshot map[uint32]TblMap) error {
-		td.ClearTableIdChanged(1, "db.tbl", 7)
+		if consumeCalls.Add(1) == 1 {
+			td.ClearTableIdChanged(1, "db.tbl", 7)
+		}
 		return nil
 	}
 	flaky := func(snapshot map[uint32]TblMap) error {
