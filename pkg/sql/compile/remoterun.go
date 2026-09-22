@@ -690,8 +690,9 @@ func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline,
 		if err != nil {
 			return err
 		}
-		if _, ok := ins.(*minusall.MinusAll); ok {
-			if err := s.restoreMinusAllChildren(ins); err != nil {
+		switch ins.OpType() {
+		case vm.Minus, vm.MinusAll, vm.Intersect, vm.IntersectAll:
+			if err := s.restoreBinarySetChildren(ins); err != nil {
 				ins.Release()
 				return err
 			}
@@ -702,17 +703,18 @@ func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline,
 	return nil
 }
 
-// restoreMinusAllChildren reverses the fixed post-order wire shape emitted for
-// the binary set operator: left merge, right merge, MinusAll. The legacy remote
-// instruction decoder otherwise rebuilds every instruction as a unary chain.
-func (s *Scope) restoreMinusAllChildren(op vm.Operator) error {
+// restoreBinarySetChildren reverses the fixed post-order wire shape emitted by
+// both set-operation compiler paths: left merge, right merge, binary operator.
+// The legacy decoder otherwise rebuilds instructions as a unary chain. This
+// also applies to a distinct or intersect ancestor of a nested MINUS ALL.
+func (s *Scope) restoreBinarySetChildren(op vm.Operator) error {
 	right := s.RootOp
 	if right == nil || right.OpType() != vm.Merge || right.GetOperatorBase().NumChildren() != 1 {
-		return moerr.NewInternalErrorNoCtx("invalid remote MINUS ALL right input")
+		return moerr.NewInternalErrorNoCtxf("invalid remote binary set operator %v right input", op.OpType())
 	}
 	left := right.GetOperatorBase().GetChildren(0)
 	if left == nil || left.OpType() != vm.Merge || left.GetOperatorBase().NumChildren() != 0 {
-		return moerr.NewInternalErrorNoCtx("invalid remote MINUS ALL left input")
+		return moerr.NewInternalErrorNoCtxf("invalid remote binary set operator %v left input", op.OpType())
 	}
 	right.GetOperatorBase().SetChild(nil, 0)
 	right.GetOperatorBase().ResetChildren()

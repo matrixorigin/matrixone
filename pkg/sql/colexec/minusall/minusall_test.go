@@ -15,6 +15,7 @@
 package minusall
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -27,6 +28,59 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+type failingMinusAllInput struct {
+	*colexec.MockOperator
+	err   error
+	calls int
+}
+
+func (input *failingMinusAllInput) Call(proc *process.Process) (vm.CallResult, error) {
+	input.calls++
+	if input.calls == 2 {
+		return vm.CancelResult, input.err
+	}
+	return input.MockOperator.Call(proc)
+}
+
+func TestMinusAllResetAfterInputFailure(t *testing.T) {
+	for _, side := range []int{0, 1} {
+		t.Run([]string{"probe", "build"}[side], func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			arg := NewArgument()
+			t.Cleanup(func() {
+				for _, child := range arg.Children {
+					child.Free(proc, false, nil)
+				}
+				arg.Free(proc, false, nil)
+				arg.Release()
+				proc.Free()
+				require.Zero(t, proc.Mp().CurrNB())
+			})
+			setChildren(proc, arg)
+			failure := errors.New("injected input failure")
+			arg.Children[side] = &failingMinusAllInput{MockOperator: arg.Children[side].(*colexec.MockOperator), err: failure}
+			require.NoError(t, arg.Prepare(proc))
+			_, err := vm.Exec(arg, proc)
+			require.ErrorIs(t, err, failure)
+			arg.Reset(proc, true, err)
+			require.Nil(t, arg.ctr.hashTable)
+			require.Nil(t, arg.ctr.remaining)
+			setChildren(proc, arg)
+			require.NoError(t, arg.Prepare(proc))
+			rows := 0
+			for {
+				result, err := vm.Exec(arg, proc)
+				require.NoError(t, err)
+				if result.Batch == nil {
+					break
+				}
+				rows += result.Batch.RowCount()
+			}
+			require.Equal(t, 4, rows)
+		})
+	}
+}
 
 func TestMinusAllMultiplicityNullsAndReset(t *testing.T) {
 	proc := testutil.NewProcess(t)

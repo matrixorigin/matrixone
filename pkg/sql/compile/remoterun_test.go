@@ -729,7 +729,7 @@ func TestRestoreMinusAllBinaryRemoteShape(t *testing.T) {
 	scope := &Scope{RootOp: right}
 	op := minusall.NewArgument()
 
-	require.NoError(t, scope.restoreMinusAllChildren(op))
+	require.NoError(t, scope.restoreBinarySetChildren(op))
 	require.Same(t, op, scope.RootOp)
 	require.Equal(t, 2, op.GetOperatorBase().NumChildren())
 	require.Same(t, left, op.GetOperatorBase().GetChildren(0))
@@ -748,7 +748,7 @@ func TestRestoreMinusAllRejectsLinearShapeWithoutTwoMerges(t *testing.T) {
 	op := minusall.NewArgument()
 	defer op.Release()
 
-	require.ErrorContains(t, scope.restoreMinusAllChildren(op), "right input")
+	require.ErrorContains(t, scope.restoreBinarySetChildren(op), "right input")
 }
 
 func TestRemoteRunOrderedPipelineEdgeRoundTrip(t *testing.T) {
