@@ -7927,11 +7927,13 @@ func canonicalHLLAddRequiredVersion(node *plan.Node) int64 {
 			continue
 		}
 		typ := types.T(fn.Args[0].Typ.Id)
-		if isCanonicalTextHLLAddType(typ) {
-			return defines.MORPCVersion91
-		}
-		if isCanonicalVectorHLLAddType(typ) {
-			required = defines.MORPCVersion88
+		switch {
+		case isCanonicalFloatHLLAddType(typ):
+			required = max(required, defines.MORPCVersion92)
+		case isCanonicalTextHLLAddType(typ):
+			required = max(required, defines.MORPCVersion91)
+		case isCanonicalVectorHLLAddType(typ):
+			required = max(required, defines.MORPCVersion88)
 		}
 	}
 	return required
@@ -7949,6 +7951,10 @@ func isCanonicalVectorHLLAddType(typ types.T) bool {
 
 func isCanonicalTextHLLAddType(typ types.T) bool {
 	return typ == types.T_char || typ == types.T_json
+}
+
+func isCanonicalFloatHLLAddType(typ types.T) bool {
+	return typ == types.T_float32 || typ == types.T_float64
 }
 
 // hasVariableLengthGroupKey mirrors Group.prepareGroupAndAggArg's v78 fence
@@ -8108,6 +8114,10 @@ func (c *Compile) supportsRemoteCanonicalTextHLLAdd() bool {
 
 }
 
+func (c *Compile) supportsRemoteCanonicalFloatHLLAdd() bool {
+	return c.remoteProtocolVersion() >= defines.MORPCVersion92
+}
+
 func (c *Compile) remoteProtocolVersion() int64 {
 	version, ok := moruntime.ServiceRuntime(c.proc.GetService()).
 		GetGlobalVariables(moruntime.MOProtocolVersion)
@@ -8197,6 +8207,16 @@ func supportsRemoteCanonicalTextHLLAdd(service string) bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion91
+}
+
+func supportsRemoteCanonicalFloatHLLAdd(service string) bool {
+	version, ok := moruntime.ServiceRuntime(service).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion92
 }
 
 func supportsRemoteGroupHashString(service string) bool {

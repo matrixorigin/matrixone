@@ -2031,6 +2031,11 @@ func validateRemoteAggregateProtocol(
 				return moerr.NewNotSupportedNoCtx(
 					"canonical JSON/CHAR HLL_ADD_AGG remote execution requires MORPC protocol version 91")
 			}
+			if isCanonicalFloatHLLAddType(typ) &&
+				(proc == nil || !supportsRemoteCanonicalFloatHLLAdd(proc.GetService())) {
+				return moerr.NewNotSupportedNoCtx(
+					"canonical FLOAT HLL_ADD_AGG remote execution requires MORPC protocol version 92")
+			}
 		}
 		if agg.GetConfigType() == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
 			if proc == nil || !supportsRemoteOrderedAggregates(proc.GetService()) {
