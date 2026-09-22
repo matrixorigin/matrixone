@@ -18,6 +18,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net"
+	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -37,7 +40,26 @@ func TestIssue28234ExceptAllCluster(t *testing.T) {
 		t.Run(fmt.Sprintf("cn=%d", cnCount), func(t *testing.T) {
 			cluster, err := embed.StartTestCluster(embed.WithCNCount(cnCount))
 			if cluster != nil {
-				t.Cleanup(func() { require.NoError(t, cluster.Close()) })
+				var listeners []string
+				cluster.ForeachServices(func(service embed.ServiceOperator) bool {
+					if service.ServiceType() == metadata.ServiceType_CN {
+						listeners = append(listeners, fmt.Sprintf("127.0.0.1:%d", service.GetServiceConfig().CN.Frontend.Port))
+					}
+					return true
+				})
+				t.Cleanup(func() {
+					require.NoError(t, cluster.Close())
+					for _, address := range listeners {
+						require.Eventually(t, func() bool {
+							conn, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
+							if err != nil {
+								return true
+							}
+							_ = conn.Close()
+							return false
+						}, 5*time.Second, 50*time.Millisecond, "CN listener must close: %s", address)
+					}
+				})
 			}
 			require.NoError(t, err)
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -82,7 +104,11 @@ func TestIssue28234ExceptAllCluster(t *testing.T) {
 			exec(fmt.Sprintf("insert into r select result %% 4 from generate_series(0,%d) g", n/2-1))
 			exec("insert into l values(null),(null)")
 			exec("insert into r values(null)")
-			for _, table := range []string{"l", "r"} {
+			exec("create table chars(v char(8))")
+			exec("insert into chars values('a')")
+			exec("create table strings(v varchar(8))")
+			exec("insert into strings values('a '),('a ')")
+			for _, table := range []string{"l", "r", "chars", "strings"} {
 				exec("select mo_ctl('dn','flush','except_all_cluster." + table + "')")
 			}
 			if cnCount == 2 {
@@ -129,8 +155,7 @@ func TestIssue28234ExceptAllCluster(t *testing.T) {
 						physical, err := testutils.QueryTextResult(ctx, db, "explain phyplan analyze "+query)
 						require.NoError(t, err)
 						require.NotEmpty(t, peerAddr)
-						require.Contains(t, physical.Text, peerAddr)
-						require.Contains(t, physical.Text, "minus all")
+						require.True(t, hasRemoteMinusAllOwner(physical.Text, peerAddr), physical.Text)
 						t.Logf("executed distributed plan:\n%s", physical.Text)
 					}
 					var rows, nonnull, sum int64
@@ -171,6 +196,55 @@ func TestIssue28234ExceptAllCluster(t *testing.T) {
 				require.NoError(t, stmt.QueryRowContext(ctx, tc.left, tc.right).Scan(&count))
 				require.Equal(t, tc.want, count)
 			}
+			keyStmt, err := db.PrepareContext(ctx, "select hex(v) from (select cast(? as varchar(8)) v from chars except all select cast(? as char(8)) from chars) d")
+			require.NoError(t, err)
+			defer keyStmt.Close()
+			// Two passes on the same cluster, connection and prepared object:
+			// stale multiplicities/keys cannot be hidden by restarting services.
+			for pass := range 2 {
+				t.Run(fmt.Sprintf("equality-reuse-%d", pass), func(t *testing.T) {
+					var value string
+					require.NoError(t, db.QueryRowContext(ctx, "select hex(v) from (select v from strings except all select v from chars) d").Scan(&value))
+					require.Equal(t, "6120", value, "comparison keys must not trim surviving VARCHAR output")
+					var count int
+					require.NoError(t, db.QueryRowContext(ctx, "select count(*) from (select cast(v as binary) v from strings except all select cast(v as binary) from chars) d").Scan(&count))
+					require.Equal(t, 2, count, "binary keys must not trim trailing spaces")
+					for _, tc := range []struct{ left, right, hex string }{{"a ", "a", ""}, {"b ", "a", "6220"}, {"a  ", "a", ""}} {
+						err := keyStmt.QueryRowContext(ctx, tc.left, tc.right).Scan(&value)
+						if tc.hex == "" {
+							require.ErrorIs(t, err, sql.ErrNoRows)
+						} else {
+							require.NoError(t, err)
+							require.Equal(t, tc.hex, value)
+						}
+					}
+				})
+			}
 		})
 	}
+}
+
+// Only inspect the current scope's pipeline; a peer scan in a child scope
+// must not be mistaken for a remote subtraction owner.
+func hasRemoteMinusAllOwner(physical, peer string) bool {
+	heading := regexp.MustCompile(`^\s*Scope \d+ \(Magic: Remote, addr:` + regexp.QuoteMeta(peer) + `, mcpu: 1,`)
+	owner := false
+	for _, line := range strings.Split(physical, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "Scope ") {
+			owner = heading.MatchString(line)
+		} else if strings.HasPrefix(trimmed, "PreScopes:") || trimmed == "}" {
+			owner = false
+		} else if owner && strings.Contains(line, "── minus all") {
+			return true
+		}
+	}
+	return false
+}
+
+func TestMinusAllOwnerPlanAssertion(t *testing.T) {
+	const peer = "127.0.0.1:10140"
+	require.True(t, hasRemoteMinusAllOwner("Scope 1 (Magic: Remote, addr:"+peer+", mcpu: 1, Receiver: [])\n Pipeline: └── minus all", peer))
+	require.False(t, hasRemoteMinusAllOwner("Scope 1 (Magic: Remote, addr:"+peer+", mcpu: 1, Receiver: [])\n Pipeline: └── tablescan\nScope 2 (Magic: Remote, addr:local, mcpu: 1, Receiver: [])\n Pipeline: └── minus all", peer))
+	require.False(t, hasRemoteMinusAllOwner("Scope 1 (Magic: Remote, addr:"+peer+", mcpu: 1, Receiver: [])\n PreScopes: {\nScope 1 (Magic: Remote, addr:local, mcpu: 1, Receiver: [])\n Pipeline: └── minus all", peer))
 }
