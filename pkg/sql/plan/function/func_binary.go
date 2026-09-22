@@ -10647,13 +10647,17 @@ func batchArrayDistanceSync[T types.RealNumbers](
 	proc *process.Process,
 	selectList *FunctionSelectList,
 ) ([]float32, bool, error) {
-	// Whether a value is constant must not change the value SQL returns, so this path may
-	// only run where it is exactly equivalent to the per-row kernel.
+	// Whether a value is constant must not change what SQL returns, so this path may only run
+	// where it answers in the same domain as the per-row kernel: same value, or the same
+	// error, up to that domain's own rounding.
 	//
 	// Precision: the result is materialized as []float32 (metric.PairwiseDistance* is
-	// float32-out by construction). For float32 elements that is precisely what the scalar
-	// path computes -- ResolveDistanceFn[float32, float32] hands back the SAME kernel
-	// moarray calls, with no cast -- so the two agree bit for bit. For float64 the resolver
+	// float32-out by construction), which is the domain the scalar path answers in for float32
+	// elements. The two are NOT bit-identical for Metric_L2Distance: this path resolves
+	// L2DistanceSq[float32], which accumulates the square in float32, while the scalar
+	// moarray.L2Distance accumulates in float64 (l2DistanceF64, #29083). Measured at dim 768,
+	// 313 of 2000 random pairs differ, by at most 1.2e-07 relative -- one float32 ULP, the
+	// rounding this domain already carries. For float64 the resolver
 	// wraps the kernel in a float64->float32 cast: `l1_distance(vecf64_col, '[16777217]')`
 	// against [0] answers 16777216 where the scalar path answers 16777217. Distinct
 	// distances can collapse and reorder an ORDER BY, so float64 stays on the scalar path.
