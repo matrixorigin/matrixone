@@ -1117,6 +1117,102 @@ func TestGenericTransactionAssignmentsRejectActiveNextIsolationBeforeMutation(t 
 	}
 }
 
+func TestGenericTransactionGlobalAssignmentsRejectNonAdminBeforeMutation(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+
+	for _, test := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "read-only before global isolation",
+			sql:  "set session transaction_read_only = 1, global transaction_isolation = 'READ-COMMITTED'",
+		},
+		{
+			name: "global isolation before read-only",
+			sql:  "set global transaction_isolation = 'READ-COMMITTED', session transaction_read_only = 1",
+		},
+		{
+			name: "read-only before global default isolation",
+			sql:  "set session transaction_read_only = 1, global transaction_isolation = default",
+		},
+		{
+			name: "global default isolation before read-only",
+			sql:  "set global transaction_isolation = default, session transaction_read_only = 1",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ses := newTestSession(t, ctrl)
+			defer ses.Close()
+			ses.SetTenantInfo(&TenantInfo{
+				Tenant:        sysAccountName,
+				User:          rootName,
+				DefaultRole:   publicRoleName,
+				TenantID:      sysAccountID,
+				UserID:        rootID,
+				DefaultRoleID: publicRoleID,
+			})
+
+			require.NoError(t, ses.SetSessionSysVar(
+				ctx, transactionReadOnlySystemVariable, int64(0)))
+			require.NoError(t, ses.SetSessionSysVar(
+				ctx, transactionIsolationSystemVariable, "REPEATABLE-READ"))
+			initialSessionIsolation, err := ses.GetSessionSysVar(transactionIsolationSystemVariable)
+			require.NoError(t, err)
+			initialGlobalIsolation, err := ses.GetGlobalSysVar(transactionIsolationSystemVariable)
+			require.NoError(t, err)
+			initialGlobalIsolationAlias, err := ses.GetGlobalSysVar(transactionIsolationSystemVariableAlias)
+			require.NoError(t, err)
+
+			handler := ses.GetTxnHandler()
+			op := newTestTxnOp()
+			handler.mu.Lock()
+			handler.txnOp = op
+			handler.mu.Unlock()
+			defer func() {
+				handler.mu.Lock()
+				handler.txnOp = nil
+				handler.mu.Unlock()
+			}()
+
+			stmt, err := mysql.ParseOne(ctx, test.sql, 1)
+			require.NoError(t, err)
+			_, err = execInFrontend(ses, &ExecCtx{
+				reqCtx: ctx,
+				stmt:   stmt,
+				txnOpt: FeTxnOption{
+					activeTxnAtStartKnown: true,
+					activeTxnAtStart:      true,
+				},
+			})
+			require.ErrorContains(t, err, "do not have privilege to execute the statement")
+
+			for _, name := range []string{
+				transactionReadOnlySystemVariable,
+				transactionReadOnlySystemVariableAlias,
+			} {
+				got, getErr := ses.GetSessionSysVar(name)
+				require.NoError(t, getErr)
+				require.Equal(t, int64(0), got, name)
+			}
+			got, err := ses.GetSessionSysVar(transactionIsolationSystemVariable)
+			require.NoError(t, err)
+			require.Equal(t, initialSessionIsolation, got)
+			got, err = ses.GetGlobalSysVar(transactionIsolationSystemVariable)
+			require.NoError(t, err)
+			require.Equal(t, initialGlobalIsolation, got)
+			got, err = ses.GetGlobalSysVar(transactionIsolationSystemVariableAlias)
+			require.NoError(t, err)
+			require.Equal(t, initialGlobalIsolationAlias, got)
+			require.True(t, handler.InActiveTxn())
+			require.Same(t, op, handler.GetTxn())
+			require.Zero(t, op.commitCalls)
+			require.Zero(t, op.rollbackCalls)
+		})
+	}
+}
+
 func TestGlobalSystemVariablesLoadReadOnlyAlias(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)

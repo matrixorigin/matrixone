@@ -1395,19 +1395,25 @@ func validateTransactionAssignmentScopes(
 // SET language instead of attempting general SET atomicity here.
 func validateStaticTransactionAssignments(
 	ctx context.Context,
+	ses *Session,
 	sv *tree.SetVar,
 	activeTxnAtStart bool,
 ) error {
 	for _, assign := range sv.Assignments {
 		isolationScope, isolation := transactionIsolationAssignmentScope(assign)
-		if !isolation {
-			if _, readOnly := transactionReadOnlyAssignmentScope(assign); !readOnly {
-				return nil
-			}
+		readOnlyScope, readOnly := transactionReadOnlyAssignmentScope(assign)
+		if !isolation && !readOnly {
+			return nil
 		}
 		value, static, isDefault := staticSetExprValue(assign.Value)
 		if !static {
 			return nil
+		}
+		if (isolation && isolationScope == tree.TransactionScopeGlobal) ||
+			(readOnly && readOnlyScope == tree.TransactionScopeGlobal) {
+			if err := doCheckRole(ctx, ses); err != nil {
+				return err
+			}
 		}
 		if isDefault {
 			if isolation && isolationScope == tree.TransactionScopeNext && activeTxnAtStart {
@@ -1457,6 +1463,7 @@ func doSetVar(
 	if !preparedExpression {
 		if err := validateStaticTransactionAssignments(
 			execCtx.reqCtx,
+			ses,
 			sv,
 			execCtx.txnOpt.activeTxnAtStartKnown && execCtx.txnOpt.activeTxnAtStart,
 		); err != nil {
