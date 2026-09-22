@@ -2492,6 +2492,36 @@ func TestCompileShuffleGroupGatesCanonicalHLLAddByProtocolVersion(t *testing.T) 
 	}
 }
 
+func TestCompileShuffleGroupGatesScalarFloatHLLAddByProtocolVersion(t *testing.T) {
+	c := newCompileForShuffleGroupTest(t)
+	aggNode, _ := newShuffleGroupTestNodes(16)
+	rt := runtime.ServiceRuntime(c.proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	makeAgg := func(typ types.T) *plan.Expr {
+		return &plan.Expr{
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: "hll_add_agg"},
+				Args: []*plan.Expr{{Typ: plan.Type{Id: int32(typ)}}},
+			}},
+		}
+	}
+	aggNode.AggList = []*plan.Expr{makeAgg(types.T_float32)}
+	require.Equal(t, defines.MORPCVersion92, canonicalHLLAddRequiredVersion(aggNode))
+	for _, version := range []int64{defines.MORPCVersion91, defines.MORPCVersion92} {
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, version)
+		require.Equal(t, version >= defines.MORPCVersion92,
+			c.supportsRemoteCanonicalFloatHLLAdd())
+		require.Equal(t, version >= defines.MORPCVersion92,
+			c.canCompileShuffleGroup(aggNode))
+	}
+
+	// The requirement is the maximum across all HLL_ADD_AGG expressions; a
+	// later scalar FLOAT must not be hidden by an earlier CHAR expression.
+	aggNode.AggList = []*plan.Expr{makeAgg(types.T_char), makeAgg(types.T_float64)}
+	require.Equal(t, defines.MORPCVersion92, canonicalHLLAddRequiredVersion(aggNode))
+}
+
 func TestCompileShuffleGroupGatesAggregateWireByProtocolVersion(t *testing.T) {
 	c := newCompileForShuffleGroupTest(t)
 	aggNode, _ := newShuffleGroupTestNodes(16)
