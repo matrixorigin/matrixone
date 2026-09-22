@@ -34,6 +34,20 @@ explain format=json select id from vectors where l2_distance(v,'[1,1,1]') < 5 or
 EXPLAIN
 explain format=json select id from vectors where l2_distance(v,'[1,1,1]') < 50 order by l2_distance(v,'[1,1,1]') limit 2;
 EXPLAIN
+explain format=json select id from vectors where l2_distance(v,'[1,1,1]') <= 5 order by l2_distance(v,'[1,1,1]') limit 2;
+EXPLAIN
+explain format=json select id from vectors where l2_distance(v,'[1,1,1]') >= 1 order by l2_distance(v,'[1,1,1]') limit 2;
+EXPLAIN
+explain format=json select id from vectors where l2_distance(v,'[1,1,1]') > 1 order by l2_distance(v,'[1,1,1]') limit 2;
+EXPLAIN
+create table vectors_include(id bigint primary key, v vecf32(3), tag varchar(10));
+insert into vectors_include values (1,'[0,0,0]','zero'),(2,'[1,1,1]','one'),(3,'[2,2,2]','two');
+create index ix_include using ivfflat on vectors_include(v) lists=1 op_type 'vector_l2_ops' include(tag);
+explain format=json select id, tag from vectors_include order by l2_distance(v,'[1,1,1]') limit 2 by rank with option 'mode=include';
+EXPLAIN
+explain format=json select id, tag from vectors_include order by l2_distance(v,'[1,1,1]') limit 3 by rank with option 'mode=include';
+EXPLAIN
+drop table vectors_include;
 set probe_limit=default;
 explain (analyze false, format json) select * from t;
 EXPLAIN

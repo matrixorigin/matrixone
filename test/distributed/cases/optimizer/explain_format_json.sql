@@ -51,6 +51,25 @@ explain format=json select id from vectors order by l2_distance(v,'[1,1,1]') lim
 explain format=json select id from vectors where l2_distance(v,'[1,1,1]') < 5 order by l2_distance(v,'[1,1,1]') limit 2;
 -- @regex("(?s)Vector Index Scan.*distance_upper_bound_type=EXCLUSIVE.*distance_upper_bound=50[^0-9]",true)
 explain format=json select id from vectors where l2_distance(v,'[1,1,1]') < 50 order by l2_distance(v,'[1,1,1]') limit 2;
+
+-- Planner-generated distance ranges must preserve inclusive and lower-bound semantics.
+-- @regex("(?s)Vector Index Scan.*distance_upper_bound_type=INCLUSIVE.*distance_upper_bound=5[^0-9]",true)
+explain format=json select id from vectors where l2_distance(v,'[1,1,1]') <= 5 order by l2_distance(v,'[1,1,1]') limit 2;
+-- @regex("(?s)Vector Index Scan.*distance_lower_bound_type=INCLUSIVE.*distance_lower_bound=1[^0-9]",true)
+explain format=json select id from vectors where l2_distance(v,'[1,1,1]') >= 1 order by l2_distance(v,'[1,1,1]') limit 2;
+-- @regex("(?s)Vector Index Scan.*distance_lower_bound_type=EXCLUSIVE.*distance_lower_bound=1[^0-9]",true)
+explain format=json select id from vectors where l2_distance(v,'[1,1,1]') > 1 order by l2_distance(v,'[1,1,1]') limit 2;
+
+-- INCLUDE-mode plans are built by the production optimizer and must expose the
+-- first-round budget derived from the semantic LIMIT, not only the final k.
+create table vectors_include(id bigint primary key, v vecf32(3), tag varchar(10));
+insert into vectors_include values (1,'[0,0,0]','zero'),(2,'[1,1,1]','one'),(3,'[2,2,2]','two');
+create index ix_include using ivfflat on vectors_include(v) lists=1 op_type 'vector_l2_ops' include(tag);
+-- @regex("(?s)Vector Index Scan.*first_round_limit=2",true)
+explain format=json select id, tag from vectors_include order by l2_distance(v,'[1,1,1]') limit 2 by rank with option 'mode=include';
+-- @regex("(?s)Vector Index Scan.*first_round_limit=3",true)
+explain format=json select id, tag from vectors_include order by l2_distance(v,'[1,1,1]') limit 3 by rank with option 'mode=include';
+drop table vectors_include;
 set probe_limit=default;
 
 -- ANALYZE FALSE is normalized to ordinary JSON EXPLAIN and must not start a runner.
