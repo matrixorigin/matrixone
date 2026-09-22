@@ -21,20 +21,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// A squared L2 distance that leaves the float32 domain is rejected by the batch path rather than
-// answered with the +Inf the float32 accumulation produced. The scalar kernel accumulates in
-// float64 and still returns the distance, which is representable.
+// A squared L2 distance that leaves the element domain is rejected on both paths, with the same
+// error: the scalar and batch kernels both accumulate the square in float32, so neither can answer
+// this pair, and neither returns the +Inf that accumulation produced.
 func TestPairwiseL2RejectsSquaredOverflow(t *testing.T) {
 	x := [][]float32{{0, 0}}
 	y := [][]float32{{2e19, 2e19}}
 
-	scalar, err := L2Distance[float32](x[0], y[0])
-	require.NoError(t, err)
-	require.False(t, math.IsInf(float64(scalar), 1), "the scalar distance is representable")
+	_, err := L2Distance[float32](x[0], y[0])
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "overflows the element domain")
 
 	_, err = GoPairWiseDistance(x, y, Metric_L2Distance)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "overflows the float32 domain")
+	require.Contains(t, err.Error(), "overflows the element domain")
 
 	// An ordinary pair is unaffected.
 	ok, err := GoPairWiseDistance([][]float32{{0, 0}}, [][]float32{{3, 4}}, Metric_L2Distance)
@@ -58,7 +58,7 @@ func TestCheckL2Finite(t *testing.T) {
 		require.False(t, AllFiniteF32(dist))
 		err := CheckL2Finite(dist)
 		require.Error(t, err)
-		require.Contains(t, err.Error(), "overflows the float32 domain")
+		require.Contains(t, err.Error(), "overflows the element domain")
 	}
 }
 
@@ -128,7 +128,7 @@ func TestPairWiseDistanceGPURejectsOverflow(t *testing.T) {
 
 	_, err := PairWiseDistance(x, y, Metric_L2Distance, true)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "overflows the float32 domain")
+	require.Contains(t, err.Error(), "overflows the element domain")
 
 	// The same shape with ordinary magnitudes still returns distances.
 	for i := 0; i < n; i++ {

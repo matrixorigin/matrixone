@@ -52,11 +52,10 @@ func TestCosineSimilarityZeroVectorErrorsOnBatchPath(t *testing.T) {
 }
 
 // The const-vs-column L2 fast path must agree with the per-row path on a distance whose square
-// overflows float32 but which is itself representable. The batch kernel accumulates the square in
-// float32 and reaches +Inf, so it hands the row to the per-row kernel (float64 accumulation)
-// instead of answering; both cases return the float32-domain value 2.8284270320491168e+19
-// (= float64(float32(2*2e19/sqrt(2)))), not +Inf.
-func TestL2DistanceBatchAgreesWithScalarOnSquaredOverflow(t *testing.T) {
+// leaves float32. Both kernels accumulate the square in float32, so neither can answer the pair:
+// the batch kernel reaches +Inf and hands the row to the per-row kernel, which raises the
+// canonical error. Making an operand constant must not change what SQL returns.
+func TestL2DistanceBatchRejectsSquaredOverflowLikeScalar(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
 	batch := NewFunctionTestCase(proc,
@@ -64,7 +63,7 @@ func TestL2DistanceBatchAgreesWithScalarOnSquaredOverflow(t *testing.T) {
 			NewFunctionTestConstInput(types.T_array_float32.ToType(), [][]float32{{0, 0}}, []bool{false}),
 			NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{2e19, 2e19}}, []bool{false}),
 		},
-		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{2.8284270320491168e+19}, []bool{false}),
+		NewFunctionTestResult(types.T_float64.ToType(), true, []float64{}, []bool{}),
 		L2DistanceArray[float32])
 	s, info := batch.Run()
 	require.True(t, s, info)
@@ -74,10 +73,33 @@ func TestL2DistanceBatchAgreesWithScalarOnSquaredOverflow(t *testing.T) {
 			NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{0, 0}}, []bool{false}),
 			NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{2e19, 2e19}}, []bool{false}),
 		},
-		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{2.8284270320491168e+19}, []bool{false}),
+		NewFunctionTestResult(types.T_float64.ToType(), true, []float64{}, []bool{}),
 		L2DistanceArray[float32])
 	s, info = perRow.Run()
 	require.True(t, s, info)
+
+	// An ordinary pair takes the batch path and both forms answer identically.
+	for _, tc := range []struct {
+		name  string
+		input []FunctionTestInput
+	}{
+		{"const", []FunctionTestInput{
+			NewFunctionTestConstInput(types.T_array_float32.ToType(), [][]float32{{0, 0}}, []bool{false}),
+			NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{3, 4}}, []bool{false}),
+		}},
+		{"column", []FunctionTestInput{
+			NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{0, 0}}, []bool{false}),
+			NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{3, 4}}, []bool{false}),
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewFunctionTestCase(proc, tc.input,
+				NewFunctionTestResult(types.T_float64.ToType(), false, []float64{5}, []bool{false}),
+				L2DistanceArray[float32])
+			ok, info := c.Run()
+			require.True(t, ok, info)
+		})
+	}
 }
 
 // normalize_l2 leaves its output buffer untouched when it rejects a vector, and that buffer is

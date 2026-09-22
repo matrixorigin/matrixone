@@ -770,10 +770,13 @@ func Test_AngularDistance(t *testing.T) {
 	}
 }
 
-// Test_L2Distance_Float32SquaredOverflow covers #29083: a float32 vector pair whose
-// per-element squared difference overflows float32 (diff*diff > MaxFloat32) but whose L2
-// distance is representable in float32. The float32 squared sum (L2DistanceSq) overflows to
-// +Inf, but L2Distance accumulates the squared sum in float64 and returns a finite distance.
+// Test_L2Distance_Float32SquaredOverflow covers #29083: a float32 vector pair whose per-element
+// squared difference overflows float32 (diff*diff > MaxFloat32). The distance itself is
+// representable in float32, but the squared sum that every kernel accumulates is not, so it is
+// rejected rather than returned as the +Inf that sum produces.
+//
+// Accumulating the sum in float64 would return the distance, at the cost of the kernel's AVX-512
+// form and of agreeing with the batch kernel, which stays in float32. See L2FromSquared.
 func Test_L2Distance_Float32SquaredOverflow(t *testing.T) {
 	// diff = 3e19 per element; diff*diff = 9e38 > MaxFloat32 (~3.4e38) -> squared sum overflows.
 	v1 := []float32{3e19, 3e19}
@@ -783,12 +786,12 @@ func Test_L2Distance_Float32SquaredOverflow(t *testing.T) {
 	require.Nil(t, err)
 	require.True(t, math.IsInf(float64(sq), 1), "precondition: float32 squared sum must overflow to +Inf")
 
-	got, err := L2Distance(v1, v2)
-	require.Nil(t, err)
-	require.False(t, math.IsInf(float64(got), 0), "L2Distance must not return Inf when the distance is representable")
-	require.False(t, math.IsNaN(float64(got)), "L2Distance must not return NaN")
+	_, err = L2Distance(v1, v2)
+	require.Error(t, err, "L2Distance must not return the +Inf its squared sum produced")
+	require.Contains(t, err.Error(), "overflows the element domain")
 
-	// true distance = sqrt(9e38 + 9e38) = sqrt(1.8e39) ~= 4.2426e19, finite in float32.
-	want := float32(math.Sqrt(1.8e39))
-	require.InEpsilon(t, want, got, 1e-6)
+	// A pair whose square stays in float32 is unaffected.
+	got, err := L2Distance([]float32{3, 4}, []float32{0, 0})
+	require.Nil(t, err)
+	require.EqualValues(t, 5, got)
 }

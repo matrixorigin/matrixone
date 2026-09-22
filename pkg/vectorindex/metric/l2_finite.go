@@ -21,29 +21,32 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-// l2DistanceF64 computes the L2 distance accumulating the squared sum in float64. Accumulating in
-// float64 (not the element type) keeps the intermediate squared sum from overflowing for a float32
-// base whose distance is still representable (#29083). The result is cast back to T, so the exposed
-// float32 distance stays in its own domain (#29040/#29050).
-func l2DistanceF64[T types.RealNumbers](v1, v2 []T) (T, error) {
-	if len(v1) != len(v2) {
-		return 0, moerr.NewInternalErrorNoCtx("vector dimension not matched")
+// L2FromSquared narrows a squared L2 distance to the distance itself, rejecting a squared sum
+// that left T's domain.
+//
+// The kernels accumulate the square in T, so summing finite elements can overflow T even when the
+// distance is representable (a float32 pair 2e19 apart squares past float32 while 2.8e19 is a fine
+// float32). sqrt of that overflow is +Inf, which is not a distance and silently corrupts any
+// ordering built on it, so it is rejected here.
+//
+// Accumulating in float64 instead would return the distance, but it costs the float32 kernel its
+// AVX-512 form -- 47.7ns vs 457ns per dim-768 pair, and +24% on a balanced k-means build -- and it
+// makes the scalar kernel disagree with the batch kernel, which stays in float32. One domain, one
+// answer, and an error where that domain runs out.
+func L2FromSquared[T types.RealNumbers](sq T) (T, error) {
+	if sq-sq != 0 {
+		return 0, moerr.NewInternalErrorNoCtx(l2OverflowMsg)
 	}
-	var sum float64
-	for i := range v1 {
-		d := float64(v1[i]) - float64(v2[i])
-		sum += d * d
-	}
-	return T(math.Sqrt(sum)), nil
+	return T(math.Sqrt(float64(sq))), nil
 }
+
+const l2OverflowMsg = "l2 distance: vector magnitude is too large, the squared distance overflows the element domain"
 
 // CheckL2Finite rejects a pairwise L2 result that holds a non-finite entry.
 //
-// The batch kernels accumulate the squared distance in float32 -- the CPU loop and cuVS on the
-// GPU -- so a pair whose square exceeds float32 (|diff| above ~1.8e19) loses the result: the CPU
-// loop reaches +Inf, and cuVS computes the expanded form ||a||^2 + ||b||^2 - 2ab, whose overflow
-// is Inf - Inf = NaN. Neither value is a distance, and both would silently corrupt an ordering,
-// so the query fails here instead of returning one.
+// This is L2FromSquared's check applied to a whole pairwise result. The CPU loop reaches +Inf on
+// overflow; cuVS computes the expanded form ||a||^2 + ||b||^2 - 2ab, whose overflow is
+// Inf - Inf = NaN. Neither is a distance, so the query fails instead of returning one.
 //
 // A stored vector cannot hold NaN or Inf -- those are rejected at the cast boundary (#28688) --
 // so a non-finite entry is always this intermediate overflow and never an input value.
@@ -51,7 +54,7 @@ func CheckL2Finite(dist []float32) error {
 	if AllFiniteF32(dist) {
 		return nil
 	}
-	return moerr.NewInternalErrorNoCtx("l2 distance: vector magnitude is too large, the squared distance overflows the float32 domain")
+	return moerr.NewInternalErrorNoCtx(l2OverflowMsg)
 }
 
 // AllFiniteF32 reports whether every entry is finite. Callers that can answer a non-finite batch

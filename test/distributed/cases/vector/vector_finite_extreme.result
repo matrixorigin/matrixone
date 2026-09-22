@@ -4,23 +4,22 @@ use vec_extreme;
 create table t32(id int primary key, v vecf32(2));
 insert into t32 values (1, '[2e19,2e19]'), (2, '[3,4]');
 select id, l2_distance(v, '[0,0]') from t32 order by id;
-➤ id[4,32,0]  ¦  l2_distance(v, [0,0])[8,53,31]  𝄀
-1  ¦  2.8284270320491168E19  𝄀
-2  ¦  5.0
+internal error: l2 distance: vector magnitude is too large, the squared distance overflows the element domain
 select a.id, l2_distance(a.v, b.v) from t32 a join t32 b on b.id = 2 order by a.id;
-➤ id[4,32,0]  ¦  l2_distance(a.v, b.v)[8,53,31]  𝄀
-1  ¦  2.8284270320491168E19  𝄀
-2  ¦  0.0
-select l2_distance(v, '[0,0]') = l2_distance('[0,0]', v) as symmetric from t32 order by id;
-➤ symmetric[-7,1,0]  𝄀
-1  𝄀
-1
+internal error: l2 distance: vector magnitude is too large, the squared distance overflows the element domain
 create table t32n(id int primary key, v vecf32(2));
 insert into t32n values (1, '[2e19,2e19]'), (2, null);
 select id, l2_distance(v, '[0,0]') from t32n order by id;
+internal error: l2 distance: vector magnitude is too large, the squared distance overflows the element domain
+select id, l2_distance(v, '[0,0]') from t32 where id = 2;
 ➤ id[4,32,0]  ¦  l2_distance(v, [0,0])[8,53,31]  𝄀
-1  ¦  2.8284270320491168E19  𝄀
-2  ¦  null
+2  ¦  5.0
+select a.id, l2_distance(a.v, b.v) from t32 a join t32 b on b.id = 2 where a.id = 2;
+➤ id[4,32,0]  ¦  l2_distance(a.v, b.v)[8,53,31]  𝄀
+2  ¦  0.0
+select l2_distance(v, '[0,0]') = l2_distance('[0,0]', v) as symmetric from t32 where id = 2;
+➤ symmetric[-7,1,0]  𝄀
+1
 create table tz(id int primary key, v vecf32(2));
 insert into tz values (1, '[0,0]'), (2, '[1,1]');
 select cosine_similarity(v, '[1,1]') from tz order by id;
