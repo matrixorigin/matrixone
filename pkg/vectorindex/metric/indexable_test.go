@@ -16,6 +16,7 @@ package metric
 
 import (
 	"math"
+	"math/rand"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -66,7 +67,53 @@ func TestCheckIndexableVector(t *testing.T) {
 	require.NoError(t, CheckIndexableVector([]float64{1e200, 0, 0}))
 	require.NoError(t, CheckIndexableVector([]float64{3, 4}))
 
-	// the unrolled accumulation agrees with a plain sum at every length across the 4-wide body
+	// The unrolled accumulation must agree with a plain sum, not merely reach the same verdict on
+	// values far from the boundary. Each vector below is scaled so its squared norm sits just
+	// inside or just outside the float32 normal range, so a dropped or double-counted lane flips
+	// the decision -- and the reference is computed with an ordinary loop.
+	reference := func(v []float32) bool {
+		var sumSq float64
+		nonZero := false
+		for _, x := range v {
+			if x != 0 {
+				nonZero = true
+			}
+			sumSq += float64(x) * float64(x)
+		}
+		if !nonZero {
+			return true
+		}
+		sq32 := float32(sumSq)
+		return sq32 >= smallestNormalFloat32 && !math.IsInf(float64(sq32), 1)
+	}
+	rnd := rand.New(rand.NewSource(11))
+	for n := 1; n <= 40; n++ {
+		for _, scale := range []float64{
+			1,                                       // ordinary
+			math.Sqrt(smallestNormalFloat32 / 2),    // squared norm near the underflow boundary
+			math.Sqrt(smallestNormalFloat32),        //
+			math.Sqrt(float64(math.MaxFloat32) / 2), // near the overflow boundary
+			math.Sqrt(float64(math.MaxFloat32)),     //
+			1e-22, 1e19,                             // clearly outside on each side
+		} {
+			v := make([]float32, n)
+			for i := range v {
+				v[i] = float32(rnd.Float64() * scale)
+			}
+			require.Equal(t, reference(v), CheckIndexableVector(v) == nil,
+				"n=%d scale=%g disagrees with a plain sum", n, scale)
+
+			// the same vector with one lane zeroed, at every position: a lane the unrolled loop
+			// mishandles changes the sum and so the verdict
+			for pos := 0; pos < n; pos++ {
+				w := append([]float32(nil), v...)
+				w[pos] = 0
+				require.Equal(t, reference(w), CheckIndexableVector(w) == nil,
+					"n=%d scale=%g pos=%d disagrees with a plain sum", n, scale, pos)
+			}
+		}
+	}
+
 	for n := 1; n <= 13; n++ {
 		v := make([]float32, n)
 		for i := range v {
