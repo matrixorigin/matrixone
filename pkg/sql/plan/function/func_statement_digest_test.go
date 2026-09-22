@@ -110,6 +110,8 @@ func TestStatementHashUsesMatrixOneASTDeparse(t *testing.T) {
 		{sql: "SELECT @name", formatted: "select @`name`"},
 		{sql: "SELECT ?", formatted: "select ?"},
 		{sql: "SELECT 1 + 2", formatted: "select 1 + 2"},
+		{sql: "SELECT /*+ MAX_EXECUTION_TIME(1000) */ 1", formatted: "select 1"},
+		{sql: "SELECT * FROM t USE INDEX (idx)", formatted: "select * from `t` use index(`idx`)"},
 	}
 
 	for _, tc := range cases {
@@ -185,6 +187,21 @@ func TestStatementHashSQLModeAndVariables(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, string(globalSystem), string(otherGlobalSystem))
 	require.NotEqual(t, string(globalSystem), string(sessionSystem))
+
+	// The same input bytes contain one backslash in the parsed literal under
+	// the default mode, but two under NO_BACKSLASH_ESCAPES. Formatting escapes
+	// the retained value; the mode itself is not an extra hash salt.
+	for _, tc := range []struct{ mode, formatted string }{
+		{"", `select 'a\\b'`},
+		{"NO_BACKSLASH_ESCAPES", `select 'a\\\\b'`},
+	} {
+		t.Run("backslashes/"+tc.mode, func(t *testing.T) {
+			require.Equal(t, tc.formatted, statementHashFormatForTest(t, `SELECT 'a\\b'`, tc.mode))
+			got, err := statementHashValue(t.Context(), `SELECT 'a\\b'`, tc.mode)
+			require.NoError(t, err)
+			require.Equal(t, statementHashHashForTest(tc.formatted), string(got))
+		})
+	}
 }
 
 func TestStatementHashFormatsNestedAndSpecialStatements(t *testing.T) {
@@ -382,9 +399,16 @@ func TestStatementHashFormatFailureIsAnError(t *testing.T) {
 	_, err = statementHashDeparse(testStatementHashFormatter{})
 	require.EqualError(t, err, "not supported: AST formatter produced empty output for MO_STATEMENT_HASH")
 
+	output := strings.Repeat("x", maxStatementHashFormattedBytes+1)
+	formatted, err := statementHashDeparse(testStatementHashFormatter{
+		formatted: output[:maxStatementHashFormattedBytes],
+	})
+	require.NoError(t, err, "the exact formatted-output limit is accepted")
+	require.Equal(t, output[:maxStatementHashFormattedBytes], formatted)
+
 	formattedLen := 0
 	_, err = statementHashDeparse(testStatementHashFormatter{
-		formatted:    strings.Repeat("x", maxStatementHashFormattedBytes+1),
+		formatted:    output,
 		formattedLen: &formattedLen,
 	})
 	require.EqualError(t, err,
@@ -419,6 +443,36 @@ func TestStatementHashCancelledContextDoesNotParse(t *testing.T) {
 	cancel()
 	_, err := statementHashValue(ctx, "SELECT 1", "")
 	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestStatementHashCancellationDuringPrescan(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	probe := &testStatementHashScanContext{Context: ctx, cancel: cancel}
+	// Cancel at the second scanner checkpoint, after scanning has begun. No
+	// goroutine, sleep, or wall-clock race is needed to exercise this boundary.
+	err := validateStatementHashInputComplexity(probe, strings.Repeat(";", 512), "")
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, 2, probe.checks)
+
+	// The cancelled scan must return its pooled scanner in reusable state.
+	got, err := statementHashValue(t.Context(), "SELECT 1", "")
+	require.NoError(t, err)
+	require.Equal(t, statementHashHashForTest("select 1"), string(got))
+}
+
+type testStatementHashScanContext struct {
+	context.Context
+	cancel context.CancelFunc
+	checks int
+}
+
+func (c *testStatementHashScanContext) Err() error {
+	c.checks++
+	if c.checks == 2 {
+		c.cancel()
+	}
+	return c.Context.Err()
 }
 
 func TestStatementHashNullConstantAndMaskedRows(t *testing.T) {
