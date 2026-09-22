@@ -282,7 +282,7 @@ func TestTemporalCompatibilityErrorAndBoundaryHelpers(t *testing.T) {
 	require.Error(t, err)
 	_, err = doTimeSub(tm, math.MaxInt64, types.Second)
 	require.Error(t, err)
-	clamped, err := doTimeSub(types.TimeFromClock(false, 0, 0, 0, 0), 1, types.Day)
+	clamped, err := doTimeSub(types.TimeFromClock(false, 0, 0, 0, 0), int64(types.MaxHourInTime+1), types.Hour)
 	require.NoError(t, err)
 	require.Equal(t, -types.MySQLTimeMaxForScale(6), clamped)
 
