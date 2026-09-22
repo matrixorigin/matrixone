@@ -455,3 +455,35 @@ select a, b, payload from t_odku_generated_pk order by b;
 insert into t_odku_generated_pk(a, payload) values (1, 20) on duplicate key update payload = values(payload);
 select a, b, payload from t_odku_generated_pk order by b;
 drop table if exists t_odku_generated_pk;
+
+-- Explicit source updates that can change a generated UNIQUE key are rejected;
+-- an update unrelated to that generated key remains supported.
+drop table if exists t_odku_generated_unique;
+create table t_odku_generated_unique (
+  id int primary key,
+  source int,
+  generated_key int generated always as (source * 2) stored,
+  payload int,
+  unique key uk_generated_key (generated_key)
+);
+insert into t_odku_generated_unique(id, source, payload) values (1, 1, 10);
+insert into t_odku_generated_unique(id, source, payload) values (1, 2, 20) on duplicate key update source = values(source);
+select id, source, generated_key, payload from t_odku_generated_unique order by id;
+insert into t_odku_generated_unique(id, source, payload) values (1, 2, 20) on duplicate key update payload = values(payload);
+select id, source, generated_key, payload from t_odku_generated_unique order by id;
+drop table if exists t_odku_generated_unique;
+
+-- Implicit ON UPDATE assignments participate in generated-key dependency
+-- expansion before ODKU is allowed to modify a UNIQUE key indirectly.
+drop table if exists t_odku_generated_on_update;
+create table t_odku_generated_on_update (
+  id int primary key,
+  updated_at timestamp default current_timestamp on update current_timestamp,
+  generated_key timestamp generated always as (updated_at) stored,
+  payload int,
+  unique key uk_generated_key (generated_key)
+);
+insert into t_odku_generated_on_update(id, payload) values (1, 10);
+insert into t_odku_generated_on_update(id, payload) values (1, 20) on duplicate key update payload = values(payload);
+select id, payload from t_odku_generated_on_update order by id;
+drop table if exists t_odku_generated_on_update;

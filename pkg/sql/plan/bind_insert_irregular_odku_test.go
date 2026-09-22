@@ -143,6 +143,36 @@ func configureMockGeneratedPrimaryKey(t *testing.T, mock *MockOptimizer) {
 	base.Indexes = nil
 }
 
+func configureMockGeneratedUniqueKey(t *testing.T, mock *MockOptimizer, implicitOnUpdate bool) {
+	t.Helper()
+	base := mock.ctxt.tables["t_on_update_gen"]
+	require.NotNil(t, base)
+	valPos := mockTableColPos(t, base, "val")
+	updatedAtPos := mockTableColPos(t, base, "updated_at")
+	gPos := mockTableColPos(t, base, "g")
+
+	valCol := base.Cols[valPos]
+	updatedAtCol := base.Cols[updatedAtPos]
+	gCol := base.Cols[gPos]
+	gCol.Typ = valCol.Typ
+	gCol.GeneratedCol = &planpb.GeneratedCol{
+		Expr:     generatedColumnRefExpr(gCol.Typ, valPos, "val"),
+		IsStored: true,
+	}
+	updatedAtCol.OnUpdate = nil
+	valCol.OnUpdate = nil
+	if implicitOnUpdate {
+		valCol.OnUpdate = &planpb.OnUpdate{Expr: makePlan2Int32ConstExprWithType(1)}
+	}
+	base.Indexes = []*planpb.IndexDef{{
+		IndexName:      "uk_generated_g",
+		Parts:          []string{"g"},
+		Unique:         true,
+		IndexTableName: catalog.UniqueIndexTableNamePrefix + "docs-ft-dual-payload",
+		TableExist:     true,
+	}}
+}
+
 func TestInsertOnDupGeneratedPrimaryKeyDependency(t *testing.T) {
 	t.Run("source update is rejected", func(t *testing.T) {
 		mock := NewMockOptimizer(true)
@@ -160,6 +190,38 @@ func TestInsertOnDupGeneratedPrimaryKeyDependency(t *testing.T) {
 
 		_, err := runOneStmt(mock, t,
 			"insert into constraint_test.t_on_update_gen (val, updated_at) values (1, null) "+
+				"on duplicate key update updated_at = values(updated_at)")
+		require.NoError(t, err)
+	})
+}
+
+func TestInsertOnDupGeneratedUniqueKeyDependency(t *testing.T) {
+	t.Run("explicit source update is rejected", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		configureMockGeneratedUniqueKey(t, mock, false)
+
+		_, err := runOneStmt(mock, t,
+			"insert into constraint_test.t_on_update_gen (id, val, updated_at) values (1, 2, null) "+
+				"on duplicate key update val = values(val)")
+		require.ErrorContains(t, err, "unsupported DML: update unique key on duplicate")
+	})
+
+	t.Run("implicit on update source is rejected", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		configureMockGeneratedUniqueKey(t, mock, true)
+
+		_, err := runOneStmt(mock, t,
+			"insert into constraint_test.t_on_update_gen (id, val, updated_at) values (1, 2, null) "+
+				"on duplicate key update updated_at = values(updated_at)")
+		require.ErrorContains(t, err, "unsupported DML: update unique key on duplicate")
+	})
+
+	t.Run("unrelated update remains supported", func(t *testing.T) {
+		mock := NewMockOptimizer(true)
+		configureMockGeneratedUniqueKey(t, mock, false)
+
+		_, err := runOneStmt(mock, t,
+			"insert into constraint_test.t_on_update_gen (id, val, updated_at) values (1, 2, null) "+
 				"on duplicate key update updated_at = values(updated_at)")
 		require.NoError(t, err)
 	})
@@ -233,6 +295,7 @@ func inspectFulltextODKUPlan(t *testing.T, mock *MockOptimizer, sql string) full
 	require.NoError(t, err)
 	query := logicPlan.GetQuery()
 	require.NotNil(t, query)
+	assertEverySinkStepHasConsumer(t, query)
 
 	shape := fulltextODKUShape{hiddenScans: make(map[string]int)}
 	reachable := reachableODKUPlanNodes(query)
