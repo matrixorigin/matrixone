@@ -280,8 +280,10 @@ proof, not a deferred dumping ground for earlier missing ownership tests. Its
 parity harness validates each runner result incrementally, stops before later
 work on invalid evidence, and writes only a fixed, sanitized `failure.json`;
 the CLI rejects a non-empty output directory before invoking the runner and
-leaves it untouched. Complete campaigns retain the full schedule and existing
-performance gates.
+leaves it untouched. Failure diagnostics can accompany this invocation's partial
+artifacts but never overwrite an existing diagnostic. Result validation and
+digests use the same schema/rows boundary, ignoring unknown result fields.
+Complete campaigns retain the full schedule and existing performance gates.
 
 - Deterministic UTs: success/empty/NULL/variable width, transfer rejection,
   exact byte/count limits, oversized rows, blocked consumers, missed wakeups,
