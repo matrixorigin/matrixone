@@ -48,3 +48,19 @@ select score from (values row(null), row(null)) as v(score);
 score
 NULL
 NULL
+select ord, dt from (values row(1, cast('2024-01-02 12:34:56.123' as datetime(3))), row(2, cast('2024-01-02 12:34:56.123456' as datetime(6)))) as v(ord, dt) order by ord;
+ord    dt
+1    2024-01-02 12:34:56.123000000
+2    2024-01-02 12:34:56.123456000
+select ord, dt from (values row(1, cast('2024-01-02 12:34:56.123456' as datetime(6))), row(2, cast('2024-01-02 12:34:56.123' as datetime(3)))) as v(ord, dt) order by ord;
+ord    dt
+1    2024-01-02 12:34:56.123456000
+2    2024-01-02 12:34:56.123000000
+select ord, label from (values row(1, cast('a' as char(4))), row(2, cast('abcdefgh' as char(8)))) as v(ord, label) order by ord;
+ord    label
+1    a
+2    abcdefgh
+select ord, label from (values row(1, cast('abcdefgh' as char(8))), row(2, cast('a' as char(4)))) as v(ord, label) order by ord;
+ord    label
+1    abcdefgh
+2    a

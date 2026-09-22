@@ -10176,23 +10176,24 @@ func (builder *QueryBuilder) coerceValuesColumnToCommonType(
 	var commonType types.Type
 	switch {
 	case len(commonInputs) > 0:
-		resolved, err := function.GetFunctionByName(builder.GetContext(), "coalesce", commonInputs)
-		if err != nil {
-			return plan.Type{}, moerr.NewParseErrorf(
-				builder.GetContext(), "the %d column cann't cast to a same type", columnIdx)
-		}
-		castTypes, _ := resolved.ShouldDoImplicitTypeCast()
-		if len(castTypes) > 0 {
-			commonType = castTypes[0]
-			if commonType.Oid == types.T_datetime {
-				commonType.Scale = 0
-			}
+		if pureCharType, ok := setOperationPureCharCommonType(commonInputs); ok {
+			commonType = pureCharType
 		} else {
-			commonType = commonInputs[0]
-			if commonType.Oid == types.T_varchar || commonType.Oid == types.T_char {
-				for _, typ := range commonInputs[1:] {
-					if typ.Width > commonType.Width {
-						commonType.Width = typ.Width
+			resolved, err := function.GetFunctionByName(builder.GetContext(), "coalesce", commonInputs)
+			if err != nil {
+				return plan.Type{}, moerr.NewParseErrorf(
+					builder.GetContext(), "the %d column cann't cast to a same type", columnIdx)
+			}
+			castTypes, _ := resolved.ShouldDoImplicitTypeCast()
+			if len(castTypes) > 0 {
+				commonType = castTypes[0]
+			} else {
+				commonType = commonInputs[0]
+				if commonType.Oid == types.T_varchar || commonType.Oid == types.T_char {
+					for _, typ := range commonInputs[1:] {
+						if typ.Width > commonType.Width {
+							commonType.Width = typ.Width
+						}
 					}
 				}
 			}

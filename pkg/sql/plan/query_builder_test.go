@@ -6140,7 +6140,7 @@ func TestQueryBuilder_bindValues(t *testing.T) {
 }
 
 func TestQueryBuilderBindValuesUsesColumnCommonType(t *testing.T) {
-	bindValues := func(t *testing.T, rows string) *plan.Node {
+	bindValues := func(t *testing.T, rows string) (*plan.Node, error) {
 		t.Helper()
 		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 		bindCtx := NewBindContext(builder, nil)
@@ -6156,8 +6156,10 @@ func TestQueryBuilderBindValuesUsesColumnCommonType(t *testing.T) {
 		valuesClause := parenTable.Expr.(*tree.Select).Select.(*tree.ValuesClause)
 
 		nodeID, _, err := builder.bindValues(bindCtx, valuesClause)
-		require.NoError(t, err)
-		return builder.qry.Nodes[nodeID]
+		if err != nil {
+			return nil, err
+		}
+		return builder.qry.Nodes[nodeID], nil
 	}
 
 	for _, test := range []struct {
@@ -6213,9 +6215,40 @@ func TestQueryBuilderBindValuesUsesColumnCommonType(t *testing.T) {
 			scale:       2,
 			notNullable: true,
 		},
+		{
+			name:        "datetime scale grows",
+			rows:        "row(cast('2024-01-02 12:34:56.123' as datetime(3))), row(cast('2024-01-02 12:34:56.123456' as datetime(6)))",
+			oid:         types.T_datetime,
+			width:       6,
+			scale:       6,
+			notNullable: true,
+		},
+		{
+			name:        "datetime scale is order independent",
+			rows:        "row(cast('2024-01-02 12:34:56.123456' as datetime(6))), row(cast('2024-01-02 12:34:56.123' as datetime(3)))",
+			oid:         types.T_datetime,
+			width:       6,
+			scale:       6,
+			notNullable: true,
+		},
+		{
+			name:        "char width grows",
+			rows:        "row(cast('a' as char(4))), row(cast('abcdefgh' as char(8)))",
+			oid:         types.T_char,
+			width:       8,
+			notNullable: true,
+		},
+		{
+			name:        "char width is order independent",
+			rows:        "row(cast('abcdefgh' as char(8))), row(cast('a' as char(4)))",
+			oid:         types.T_char,
+			width:       8,
+			notNullable: true,
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			node := bindValues(t, test.rows)
+			node, err := bindValues(t, test.rows)
+			require.NoError(t, err)
 			require.Len(t, node.TableDef.Cols, 1)
 			columnType := node.TableDef.Cols[0].Typ
 			require.Equal(t, int32(test.oid), columnType.Id)
@@ -6233,13 +6266,33 @@ func TestQueryBuilderBindValuesUsesColumnCommonType(t *testing.T) {
 	}
 
 	t.Run("vector remains vector", func(t *testing.T) {
-		node := bindValues(t, "row(cast('[1,2,3]' as vecf32(3)))")
+		node, err := bindValues(t, "row(cast('[1,2,3]' as vecf32(3)))")
+		require.NoError(t, err)
 		columnType := node.TableDef.Cols[0].Typ
 		require.Equal(t, int32(types.T_array_float32), columnType.Id)
 		require.Equal(t, int32(3), columnType.Width)
 		require.Len(t, node.RowsetData.Cols[0].Data, 1)
 		require.Equal(t, columnType.Id, node.RowsetData.Cols[0].Data[0].Expr.Typ.Id)
 		require.Equal(t, columnType.Width, node.RowsetData.Cols[0].Data[0].Expr.Typ.Width)
+	})
+
+	t.Run("parameter-only column remains unresolved", func(t *testing.T) {
+		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+		exprs := []*plan.Expr{
+			{Typ: plan.Type{Id: int32(types.T_any)}},
+			{Typ: plan.Type{Id: int32(types.T_any)}},
+		}
+		commonType, err := builder.coerceValuesColumnToCommonType(exprs, []bool{false, false}, 0)
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_any), commonType.Id)
+		for _, expr := range exprs {
+			require.Equal(t, int32(types.T_any), expr.Typ.Id)
+		}
+	})
+
+	t.Run("incompatible vector and scalar types are rejected", func(t *testing.T) {
+		_, err := bindValues(t, "row(1), row(cast('[1,2,3]' as vecf32(3)))")
+		require.Error(t, err)
 	})
 }
 

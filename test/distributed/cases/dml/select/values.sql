@@ -12,3 +12,7 @@ select ord, score from (values row(1, 15.2667265), row(2, 26.27946)) as v(ord, s
 select ord, score from (values row(1, null), row(2, 26.27946)) as v(ord, score) order by ord;
 select ord, score from (values row(1, 26.27946), row(2, null)) as v(ord, score) order by ord;
 select score from (values row(null), row(null)) as v(score);
+select ord, dt from (values row(1, cast('2024-01-02 12:34:56.123' as datetime(3))), row(2, cast('2024-01-02 12:34:56.123456' as datetime(6)))) as v(ord, dt) order by ord;
+select ord, dt from (values row(1, cast('2024-01-02 12:34:56.123456' as datetime(6))), row(2, cast('2024-01-02 12:34:56.123' as datetime(3)))) as v(ord, dt) order by ord;
+select ord, label from (values row(1, cast('a' as char(4))), row(2, cast('abcdefgh' as char(8)))) as v(ord, label) order by ord;
+select ord, label from (values row(1, cast('abcdefgh' as char(8))), row(2, cast('a' as char(4)))) as v(ord, label) order by ord;
