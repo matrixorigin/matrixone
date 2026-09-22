@@ -7830,6 +7830,8 @@ func (builder *QueryBuilder) bindValues(
 			Name:  colName,
 		}
 
+		columnExprs := make([]*plan.Expr, rowCount)
+		pureNulls := make([]bool, rowCount)
 		for j := 0; j < rowCount; j++ {
 			var planExpr *plan.Expr
 			if i < len(ctx.numericProjectionTypes) &&
@@ -7843,7 +7845,15 @@ func (builder *QueryBuilder) bindValues(
 				return
 			}
 
-			tableDef.Cols[i].Typ = planExpr.Typ
+			columnExprs[j] = planExpr
+			pureNulls[j] = isNullAstExpr(unwrapParenExpr(valuesClause.Rows[j][i]))
+		}
+
+		tableDef.Cols[i].Typ, err = builder.coerceValuesColumnToCommonType(columnExprs, pureNulls, i)
+		if err != nil {
+			return
+		}
+		for _, planExpr := range columnExprs {
 			rowSetData.Cols[i].Data = append(rowSetData.Cols[i].Data, &plan.RowsetExpr{
 				Expr: planExpr,
 			})
@@ -7861,6 +7871,182 @@ func (builder *QueryBuilder) bindValues(
 
 	err = builder.addBinding(nodeID, tree.AliasClause{Alias: "_valuescan"}, ctx)
 	return
+}
+
+// coerceValuesColumnToCommonType makes one VALUES column independent of row
+// order. VALUE_SCAN materializes one vector per column, so every row expression
+// must use the same complete type, including DECIMAL width and scale.
+func (builder *QueryBuilder) coerceValuesColumnToCommonType(
+	exprs []*plan.Expr,
+	pureNulls []bool,
+	columnIdx int,
+) (plan.Type, error) {
+	hasDecimal := false
+	allPureNull := len(exprs) > 0
+	for i, expr := range exprs {
+		pureNull := i < len(pureNulls) && pureNulls[i]
+		allPureNull = allPureNull && pureNull
+		if pureNull || expr == nil {
+			continue
+		}
+		hasDecimal = hasDecimal || types.T(expr.Typ.Id).IsDecimal()
+	}
+
+	commonInputs := make([]types.Type, 0, len(exprs))
+	for i, expr := range exprs {
+		if expr == nil || i < len(pureNulls) && pureNulls[i] {
+			continue
+		}
+		typ := makeTypeByPlan2Expr(expr)
+		if typ.Oid == types.T_any {
+			continue
+		}
+		if hasDecimal {
+			if exact, ok := setOperationIntegerLiteralDecimalType(expr); ok {
+				typ = exact
+			}
+		}
+		commonInputs = append(commonInputs, typ)
+	}
+
+	var commonType types.Type
+	switch {
+	case len(commonInputs) > 0:
+		resolved, err := function.GetFunctionByName(builder.GetContext(), "coalesce", commonInputs)
+		if err != nil {
+			return plan.Type{}, moerr.NewParseErrorf(
+				builder.GetContext(), "the %d column cann't cast to a same type", columnIdx)
+		}
+		castTypes, _ := resolved.ShouldDoImplicitTypeCast()
+		if len(castTypes) > 0 {
+			commonType = castTypes[0]
+		} else {
+			commonType = commonInputs[0]
+			if commonType.Oid == types.T_varchar || commonType.Oid == types.T_char {
+				for _, typ := range commonInputs[1:] {
+					if typ.Width > commonType.Width {
+						commonType.Width = typ.Width
+					}
+				}
+			}
+		}
+	case allPureNull:
+		commonType = types.T_text.ToType()
+	default:
+		// Keep unresolved parameter-only columns in their existing domain. The
+		// prepared-plan specialization pass will assign their runtime type.
+		for i, expr := range exprs {
+			if expr != nil && !(i < len(pureNulls) && pureNulls[i]) {
+				commonType = makeTypeByPlan2Expr(expr)
+				break
+			}
+		}
+	}
+	if commonType.Oid.IsDateRelate() {
+		for _, typ := range commonInputs {
+			if typ.Width > commonType.Width {
+				commonType.Width = typ.Width
+			}
+			if typ.Scale > commonType.Scale {
+				commonType.Scale = typ.Scale
+			}
+		}
+	}
+
+	commonPlanType := makePlan2Type(&commonType)
+	commonPlanType.NotNullable = len(exprs) > 0
+	for i, expr := range exprs {
+		pureNull := i < len(pureNulls) && pureNulls[i]
+		if expr == nil || pureNull || !expr.Typ.NotNullable {
+			commonPlanType.NotNullable = false
+		}
+	}
+
+	for i, expr := range exprs {
+		if expr == nil {
+			continue
+		}
+		pureNull := i < len(pureNulls) && pureNulls[i]
+		sourceType := makeTypeByPlan2Expr(expr)
+		if pureNull || sourceType.Oid == types.T_any {
+			expr.Typ = commonPlanType
+			expr.Typ.NotNullable = false
+			continue
+		}
+		if sourceType.Eq(commonType) {
+			continue
+		}
+
+		var err error
+		exprs[i], err = appendCastBeforeExpr(builder.GetContext(), expr, commonPlanType)
+		if err != nil {
+			return plan.Type{}, err
+		}
+	}
+
+	return commonPlanType, nil
+}
+
+// setOperationIntegerLiteralDecimalType returns the value domain of a direct
+// integer literal when a VALUES column also contains DECIMAL values. Using the
+// literal precision instead of the full integer domain matches MySQL's common
+// type for cases such as VALUES ROW(1), ROW(2.50).
+func setOperationIntegerLiteralDecimalType(expr *plan.Expr) (types.Type, bool) {
+	for expr != nil {
+		fn := expr.GetF()
+		if fn == nil || fn.GetFunc() == nil || len(fn.Args) != 1 {
+			break
+		}
+		switch fn.GetFunc().GetObjName() {
+		case "unary_minus", "unary_plus":
+			expr = fn.Args[0]
+		default:
+			return types.Type{}, false
+		}
+	}
+	if expr == nil {
+		return types.Type{}, false
+	}
+	literal := expr.GetLit()
+	if literal == nil || literal.Isnull {
+		return types.Type{}, false
+	}
+
+	var digits int
+	switch value := literal.Value.(type) {
+	case *plan.Literal_I8Val:
+		digits = signedIntegerLiteralDigits(int64(value.I8Val))
+	case *plan.Literal_I16Val:
+		digits = signedIntegerLiteralDigits(int64(value.I16Val))
+	case *plan.Literal_I32Val:
+		digits = signedIntegerLiteralDigits(int64(value.I32Val))
+	case *plan.Literal_I64Val:
+		digits = signedIntegerLiteralDigits(value.I64Val)
+	case *plan.Literal_U8Val:
+		digits = len(strconv.FormatUint(uint64(value.U8Val), 10))
+	case *plan.Literal_U16Val:
+		digits = len(strconv.FormatUint(uint64(value.U16Val), 10))
+	case *plan.Literal_U32Val:
+		digits = len(strconv.FormatUint(uint64(value.U32Val), 10))
+	case *plan.Literal_U64Val:
+		digits = len(strconv.FormatUint(value.U64Val, 10))
+	default:
+		return types.Type{}, false
+	}
+
+	oid := types.T_decimal64
+	if digits > 18 {
+		oid = types.T_decimal128
+	}
+	return types.New(oid, int32(digits), 0), true
+}
+
+func signedIntegerLiteralDigits(value int64) int {
+	formatted := strconv.FormatInt(value, 10)
+	if formatted[0] == '-' {
+		return len(formatted) - 1
+	}
+	return len(formatted)
 }
 
 func (builder *QueryBuilder) appendWhereNode(

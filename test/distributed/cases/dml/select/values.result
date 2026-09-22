@@ -28,3 +28,39 @@ column_1
 select column_2 from (values row(0, 1, cast('[3, 4, 5]' as vecf32(3)))) as v;
 column_2
 [3, 4, 5]
+select ord, score from (values row(1, 26.27946), row(2, 15.2667265)) as v(ord, score) order by ord;
+ord    score
+1    26.2794600
+2    15.2667265
+select ord, score from (values row(1, 15.2667265), row(2, 26.27946)) as v(ord, score) order by ord;
+ord    score
+1    15.2667265
+2    26.2794600
+select ord, score from (values row(1, null), row(2, 26.27946)) as v(ord, score) order by ord;
+ord    score
+1    NULL
+2    26.27946
+select ord, score from (values row(1, 26.27946), row(2, null)) as v(ord, score) order by ord;
+ord    score
+1    26.27946
+2    NULL
+select score from (values row(null), row(null)) as v(score);
+score
+NULL
+NULL
+select ord, dt from (values row(1, cast('2024-01-02 12:34:56.123' as datetime(3))), row(2, cast('2024-01-02 12:34:56.123456' as datetime(6)))) as v(ord, dt) order by ord;
+ord    dt
+1    2024-01-02 12:34:56.123000
+2    2024-01-02 12:34:56.123456
+select ord, dt from (values row(1, cast('2024-01-02 12:34:56.123456' as datetime(6))), row(2, cast('2024-01-02 12:34:56.123' as datetime(3)))) as v(ord, dt) order by ord;
+ord    dt
+1    2024-01-02 12:34:56.123456
+2    2024-01-02 12:34:56.123000
+select ord, label from (values row(1, cast('a' as char(4))), row(2, cast('abcdefgh' as char(8)))) as v(ord, label) order by ord;
+ord    label
+1    a
+2    abcdefgh
+select ord, label from (values row(1, cast('abcdefgh' as char(8))), row(2, cast('a' as char(4)))) as v(ord, label) order by ord;
+ord    label
+1    abcdefgh
+2    a
