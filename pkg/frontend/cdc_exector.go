@@ -69,6 +69,16 @@ var cdcTestAdmissionHook struct {
 	fn func()
 }
 
+// cdcTestCancelHook is a process-local barrier for lifecycle integration tests.
+// It is intentionally inert in production and lets a test hold a runner's
+// cancellation after local readers have stopped but before the cancellation
+// path returns to taskservice. This makes claim handoff and delayed cleanup
+// ordering observable without scheduler sleeps.
+var cdcTestCancelHook struct {
+	sync.RWMutex
+	fn func()
+}
+
 // SetCDCTestAdmissionHookForTest installs a process-local CDC pipeline
 // admission hook and returns a restore function.  The hook is invoked outside
 // the mutex and must be deterministic/non-blocking unless the caller is
@@ -89,6 +99,30 @@ func runCDCTestAdmissionHook() {
 	cdcTestAdmissionHook.RLock()
 	hook := cdcTestAdmissionHook.fn
 	cdcTestAdmissionHook.RUnlock()
+	if hook != nil {
+		hook()
+	}
+}
+
+// SetCDCTestCancelHookForTest installs a process-local cancellation barrier and
+// returns a restore function. The hook runs outside the mutex and may block
+// only when the caller is deliberately controlling a test phase.
+func SetCDCTestCancelHookForTest(hook func()) (restore func()) {
+	cdcTestCancelHook.Lock()
+	previous := cdcTestCancelHook.fn
+	cdcTestCancelHook.fn = hook
+	cdcTestCancelHook.Unlock()
+	return func() {
+		cdcTestCancelHook.Lock()
+		cdcTestCancelHook.fn = previous
+		cdcTestCancelHook.Unlock()
+	}
+}
+
+func runCDCTestCancelHook() {
+	cdcTestCancelHook.RLock()
+	hook := cdcTestCancelHook.fn
+	cdcTestCancelHook.RUnlock()
 	if hook != nil {
 		hook()
 	}
@@ -1701,6 +1735,10 @@ func (exec *CDCTaskExecutor) cancel(deleteWatermarks bool) (err error) {
 	cdc.GetTableDetector(exec.cnUUID).UnRegister(exec.spec.TaskId)
 	exec.closeActiveRoutineCancel()
 	readersStopped, readersDone := exec.stopAllReaders()
+	// Let lifecycle tests hold the runner-selected cleanup after local work has
+	// stopped. Claim takeover can then advance the durable owner/checkpoint while
+	// the old generation is still unwinding.
+	runCDCTestCancelHook()
 	// let Start() go, including the no-reader path where there is no
 	// completion channel to wait on.
 	select {

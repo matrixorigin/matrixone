@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
+	taskpb "github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
@@ -741,6 +742,307 @@ func TestCDCNoFullPublicLifecycle(t *testing.T) {
 				"row 2 missing or duplicated after restart")
 			require.Equal(t, 0, countRows("select count(*) from "+sinkDBName+"."+sinkTableName+" where id=1"),
 				"pre-CREATE row was delivered after restart")
+		},
+	)
+}
+
+// TestCDCNoFullPublicTakeoverLifecycle proves the cross-CN ownership boundary
+// against the real task and watermark tables.  The test deliberately moves the
+// durable daemon claim from CN A to CN B while A's runner-selected cancellation
+// is held.  B must consume the existing checkpoint and A must not erase or
+// regress B's owner generation after its delayed cleanup returns.
+func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
+	runSQLIntegration(t,
+		func(c embed.Cluster) {
+			ctx, cancel := context.WithTimeout(context.Background(), 240*time.Second)
+			defer cancel()
+
+			cnA, err := c.GetCNService(0)
+			require.NoError(t, err)
+			if w, ok := any(c).(interface {
+				WaitCNStoreTaskServiceCreatedIndexed(ctx context.Context, index int)
+			}); ok {
+				w.WaitCNStoreTaskServiceCreatedIndexed(ctx, 0)
+			}
+
+			firstEntered := make(chan struct{})
+			firstRelease := make(chan struct{})
+			secondEntered := make(chan struct{})
+			secondRelease := make(chan struct{})
+			cancelEntered := make(chan struct{})
+			cancelRelease := make(chan struct{})
+			var phase atomic.Int32
+			var firstEnteredOnce, secondEnteredOnce, cancelEnteredOnce sync.Once
+			var firstReleaseOnce, secondReleaseOnce, cancelReleaseOnce sync.Once
+			releaseFirst := func() { firstReleaseOnce.Do(func() { close(firstRelease) }) }
+			releaseSecond := func() { secondReleaseOnce.Do(func() { close(secondRelease) }) }
+			releaseCancel := func() { cancelReleaseOnce.Do(func() { close(cancelRelease) }) }
+			restoreAdmission := frontend.SetCDCTestAdmissionHookForTest(func() {
+				switch phase.Load() {
+				case 0:
+					firstEnteredOnce.Do(func() { close(firstEntered) })
+					<-firstRelease
+					phase.Store(1)
+				case 2:
+					secondEnteredOnce.Do(func() { close(secondEntered) })
+					<-secondRelease
+					phase.Store(3)
+				}
+			})
+			defer restoreAdmission()
+			restoreCancel := frontend.SetCDCTestCancelHookForTest(func() {
+				cancelEnteredOnce.Do(func() { close(cancelEntered) })
+				<-cancelRelease
+			})
+			defer restoreCancel()
+
+			var captureB atomic.Bool
+			bBoundary := make(chan types.TS, 1)
+			restoreBoundary := cdc.SetCDCCollectBoundaryHookForTest(func(from, _ types.TS) {
+				if captureB.Load() {
+					select {
+					case bBoundary <- from:
+					default:
+					}
+				}
+			})
+			defer restoreBoundary()
+
+			var sqlExec = testutils.GetSQLExecutor(cnA)
+			dbName := strings.ToLower(testutils.GetDatabaseName(t))
+			sinkDBName := dbName + "_takeover_sink"
+			tableName := "cdc_takeover_source"
+			taskName := "cdc_takeover_lifecycle"
+			cleanupCN := cnA
+			defer func() {
+				cleanupSQLIntegration(t, cleanupCN,
+					"drop cdc task "+taskName+" internal",
+					"drop pitr pitr_takeover internal",
+					"drop pitr pitr_takeover_db internal",
+					"drop database if exists "+sinkDBName,
+					"drop database if exists "+dbName)
+			}()
+			// These late defers run before cleanupSQLIntegration on every failure,
+			// so a test assertion cannot leave a task runner blocked behind a
+			// phase barrier while the cluster is being torn down.
+			defer releaseFirst()
+			defer releaseSecond()
+			defer releaseCancel()
+			cdc.ResetTableDetectorForTest(cnA.ServiceID())
+
+			mustExec := func(database, statement string) {
+				res, execErr := sqlExec.Exec(ctx, statement, executor.Options{}.WithDatabase(database))
+				require.NoError(t, execErr, statement)
+				res.Close()
+			}
+			countRows := func(statement string) int {
+				res, queryErr := sqlExec.Exec(ctx, statement, executor.Options{})
+				if queryErr != nil {
+					return 0
+				}
+				defer res.Close()
+				return testutils.ReadCount(res)
+			}
+			waitTarget := func(id int) bool {
+				return countRows(fmt.Sprintf("select count(*) from %s.%s where id=%d", sinkDBName, tableName, id)) > 0
+			}
+			readWatermark := func() (types.TS, uint64, bool, error) {
+				res, queryErr := sqlExec.Exec(ctx,
+					"select owner_generation, watermark from mo_catalog.mo_cdc_watermark where task_id = (select task_id from mo_catalog.mo_cdc_task where task_name='"+taskName+"') and db_name='"+dbName+"' and table_name='"+tableName+"'",
+					executor.Options{})
+				if queryErr != nil {
+					return types.TS{}, 0, false, queryErr
+				}
+				defer res.Close()
+				var generation uint64
+				var watermark string
+				rows := 0
+				res.ReadRows(func(_ int, cols []*vector.Vector) bool {
+					generation = vector.GetFixedAtNoTypeCheck[uint64](cols[0], 0)
+					watermark = cols[1].GetStringAt(0)
+					rows++
+					return false
+				})
+				if rows == 0 {
+					return types.TS{}, 0, false, nil
+				}
+				parsed, parseErr := frontend.CDCStrToTS(watermark)
+				return parsed, generation, true, parseErr
+			}
+			readTaskStart := func() (types.TS, error) {
+				res, queryErr := sqlExec.Exec(ctx,
+					"select start_ts from mo_catalog.mo_cdc_task where task_name='"+taskName+"'",
+					executor.Options{})
+				if queryErr != nil {
+					return types.TS{}, queryErr
+				}
+				defer res.Close()
+				var start string
+				rows := 0
+				res.ReadRows(func(_ int, cols []*vector.Vector) bool {
+					start = cols[0].GetStringAt(0)
+					rows++
+					return false
+				})
+				if rows == 0 {
+					return types.TS{}, fmt.Errorf("CDC task %s not found", taskName)
+				}
+				return frontend.CDCStrToTS(start)
+			}
+			readDaemonTask := func(taskID string) (uint64, error) {
+				res, queryErr := sqlExec.Exec(ctx,
+					"select task_id from mo_task.sys_daemon_task where task_metadata_id='"+taskID+"'",
+					executor.Options{})
+				if queryErr != nil {
+					return 0, queryErr
+				}
+				defer res.Close()
+				var id uint64
+				rows := 0
+				res.ReadRows(func(_ int, cols []*vector.Vector) bool {
+					id = vector.GetFixedAtNoTypeCheck[uint64](cols[0], 0)
+					rows++
+					return false
+				})
+				if rows == 0 {
+					return 0, fmt.Errorf("daemon task %s not found", taskID)
+				}
+				return id, nil
+			}
+
+			mustExec("", "create database "+dbName)
+			mustExec(dbName, "create table "+tableName+" (id int primary key, value varchar(32))")
+			mustExec(dbName, "insert into "+tableName+" values (1, 'before_create')")
+			mustExec("", "create database "+sinkDBName)
+			mustExec(dbName, "create pitr pitr_takeover for table "+dbName+" "+tableName+" range 3 'h' internal")
+			mustExec(dbName, "create pitr pitr_takeover_db for database "+dbName+" range 3 'h' internal")
+
+			port := fmt.Sprintf("%d", cnA.GetServiceConfig().CN.Frontend.Port)
+			uri := "mysql://sys#dump:111@127.0.0.1:" + port
+			mustExec(dbName, "create cdc "+taskName+" '"+uri+"' 'matrixone' '"+uri+"' '"+dbName+":"+sinkDBName+"' {'Level'='database','NoFull'='true'} internal")
+			mustExec(dbName, "insert into "+tableName+" values (2, 'after_create')")
+			creationStart, err := readTaskStart()
+			require.NoError(t, err)
+			require.False(t, creationStart.IsEmpty())
+
+			var firstScanDone chan error
+			for attempts := 0; ; attempts++ {
+				firstScanDone = make(chan error, 1)
+				go func(done chan error) { done <- cdc.RunTableDetectorScanForTest(cnA.ServiceID()) }(firstScanDone)
+				select {
+				case <-firstEntered:
+					goto firstAdmissionEntered
+				case scanErr := <-firstScanDone:
+					if scanErr != nil && attempts%10 == 0 {
+						t.Logf("CN A detector scan retry %d: %v", attempts, scanErr)
+					}
+					select {
+					case <-ctx.Done():
+						t.Fatal("CN A did not reach admission")
+					case <-time.After(100 * time.Millisecond):
+					}
+				}
+			}
+		firstAdmissionEntered:
+			releaseFirst()
+			require.NoError(t, <-firstScanDone)
+			require.Eventually(t, func() bool { return waitTarget(2) }, 90*time.Second, 200*time.Millisecond)
+
+			var checkpointA types.TS
+			var generationA uint64
+			var found bool
+			require.Eventually(t, func() bool {
+				var err error
+				checkpointA, generationA, found, err = readWatermark()
+				return err == nil && found && !checkpointA.IsEmpty() && checkpointA.GT(&creationStart)
+			}, 30*time.Second, 200*time.Millisecond)
+
+			// Add CN B only after A has admitted and persisted progress. This keeps
+			// the first generation deterministic while still using a real second
+			// task runner for takeover.
+			require.NoError(t, c.StartNewCNService(1))
+			cnB, err := c.GetCNService(1)
+			require.NoError(t, err)
+			if w, ok := any(c).(interface {
+				WaitCNStoreTaskServiceCreatedIndexed(ctx context.Context, index int)
+			}); ok {
+				w.WaitCNStoreTaskServiceCreatedIndexed(ctx, 1)
+			}
+			sqlExec = testutils.GetSQLExecutor(cnB)
+			cleanupCN = cnB
+
+			// Move the live daemon claim to CN B in the real task table and make
+			// A's heartbeat stale. This is the deterministic equivalent of a newer
+			// owner generation: CN A's next heartbeat is fenced, while CN B's real
+			// start runner claims the stale running row without stopping CN A.
+			var cdcTaskID string
+			res, queryErr := sqlExec.Exec(ctx,
+				"select task_id from mo_catalog.mo_cdc_task where task_name='"+taskName+"'",
+				executor.Options{})
+			require.NoError(t, queryErr)
+			res.ReadRows(func(_ int, cols []*vector.Vector) bool {
+				cdcTaskID = vector.GetFixedAtNoTypeCheck[types.Uuid](cols[0], 0).String()
+				return false
+			})
+			res.Close()
+			require.NotEmpty(t, cdcTaskID)
+			daemonID, err := readDaemonTask(cdcTaskID)
+			require.NoError(t, err)
+			phase.Store(2)
+			mustExec("", fmt.Sprintf("update mo_task.sys_daemon_task set task_status=%d, task_runner='%s', last_heartbeat='2000-01-01 00:00:00' where task_id=%d", taskpb.TaskStatus_Running, cnB.ServiceID(), daemonID))
+
+			// A has lost the claim, but its runner-selected cancellation is held.
+			select {
+			case <-cancelEntered:
+			case <-ctx.Done():
+				t.Fatal("CN A did not enter delayed claim-loss cleanup")
+			}
+			// stopAllReaders has completed before the cancel barrier. Re-read the
+			// durable row at that linearization point so B is compared with A's
+			// final committed checkpoint, not an earlier polling sample.
+			checkpointA, generationA, found, err = readWatermark()
+			require.NoError(t, err)
+			require.True(t, found)
+			require.True(t, checkpointA.GT(&creationStart),
+				"CN A must durably advance past the CREATE boundary before takeover")
+			// A's cancellation remains blocked until B commits W. The stale
+			// running row is not eligible to A's local runner after the claim
+			// transfer, while B's task service observes and claims it.
+			select {
+			case <-secondEntered:
+			case <-ctx.Done():
+				t.Fatal("CN B did not reach replacement admission")
+			}
+			checkpointBeforeB, _, found, err := readWatermark()
+			require.NoError(t, err)
+			require.True(t, found)
+			// The admission barrier runs before B's owner claim. The durable
+			// generation is checked after B has collected and flushed W below.
+			require.Equal(t, checkpointA, checkpointBeforeB)
+			mustExec(dbName, "insert into "+tableName+" values (3, 'after_takeover')")
+			captureB.Store(true)
+			releaseSecond()
+			require.Eventually(t, func() bool { return waitTarget(3) }, 90*time.Second, 200*time.Millisecond)
+			select {
+			case got := <-bBoundary:
+				require.Equal(t, checkpointBeforeB, got)
+			case <-ctx.Done():
+				t.Fatal("replacement reader did not collect from B's checkpoint")
+			}
+			var checkpointB types.TS
+			var generationAfterB uint64
+			require.Eventually(t, func() bool {
+				var readErr error
+				checkpointB, generationAfterB, found, readErr = readWatermark()
+				return readErr == nil && found && generationAfterB > generationA && checkpointB.GE(&checkpointBeforeB)
+			}, 30*time.Second, 200*time.Millisecond)
+
+			// Let A's delayed runner cleanup return only after B has committed W.
+			releaseCancel()
+			require.Eventually(t, func() bool {
+				got, generation, found, readErr := readWatermark()
+				return readErr == nil && found && generation == generationAfterB && got == checkpointB
+			}, 30*time.Second, 200*time.Millisecond)
 		},
 	)
 }
