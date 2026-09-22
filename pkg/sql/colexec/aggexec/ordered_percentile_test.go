@@ -75,6 +75,134 @@ func TestOrderedPercentileExecNumericAndDirection(t *testing.T) {
 	disc.Free()
 }
 
+func TestOrderedPercentileFillBatchInvariance(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	values := buildFixedVec(t, mp, types.T_int64.ToType(), []int64{9, 1, 8, 2, 7, 3, 6, 4, 5, 10})
+	defer values.Free(mp)
+	groups := []uint64{1, 1, 1, 1, 1, 1, 1, 1, 1, 1}
+
+	for _, tc := range []struct {
+		name  string
+		aggID int64
+		mode  orderedPercentileMode
+	}{
+		{name: "continuous", aggID: AggIdOfPercentileCont, mode: orderedPercentileContinuous},
+		{name: "discrete", aggID: AggIdOfPercentileDisc, mode: orderedPercentileDiscrete},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			newExec := func() AggFuncExec {
+				exec, err := makeOrderedPercentileExec(mp, tc.aggID, false,
+					types.T_int64.ToType(), tc.mode)
+				require.NoError(t, err)
+				require.NoError(t, exec.GroupGrow(1))
+				require.NoError(t, exec.SetExtraInformation(
+					EncodeOrderedPercentileConfig([]byte("0.25"), false), 0))
+				return exec
+			}
+
+			bulk := newExec()
+			defer bulk.Free()
+			require.NoError(t, bulk.BulkFill(0, []*vector.Vector{values}))
+
+			rowByRow := newExec()
+			defer rowByRow.Free()
+			for row := 0; row < values.Length(); row++ {
+				require.NoError(t, rowByRow.Fill(0, row, []*vector.Vector{values}))
+			}
+
+			batched := newExec()
+			defer batched.Free()
+			require.NoError(t, batched.BatchFill(0, groups[:3], []*vector.Vector{values}))
+			require.NoError(t, batched.BatchFill(3, groups[3:4], []*vector.Vector{values}))
+			require.NoError(t, batched.BatchFill(4, groups[4:], []*vector.Vector{values}))
+
+			bulkResult, err := bulk.Flush()
+			require.NoError(t, err)
+			defer bulkResult[0].Free(mp)
+			rowResult, err := rowByRow.Flush()
+			require.NoError(t, err)
+			defer rowResult[0].Free(mp)
+			batchResult, err := batched.Flush()
+			require.NoError(t, err)
+			defer batchResult[0].Free(mp)
+
+			if tc.mode == orderedPercentileContinuous {
+				want := 3.25
+				require.Equal(t, want, vector.GetFixedAtNoTypeCheck[float64](bulkResult[0], 0))
+				require.Equal(t, want, vector.GetFixedAtNoTypeCheck[float64](rowResult[0], 0))
+				require.Equal(t, want, vector.GetFixedAtNoTypeCheck[float64](batchResult[0], 0))
+				return
+			}
+			want := int64(3)
+			require.Equal(t, want, vector.GetFixedAtNoTypeCheck[int64](bulkResult[0], 0))
+			require.Equal(t, want, vector.GetFixedAtNoTypeCheck[int64](rowResult[0], 0))
+			require.Equal(t, want, vector.GetFixedAtNoTypeCheck[int64](batchResult[0], 0))
+		})
+	}
+}
+
+func TestOrderedPercentileFourWayBatchMerge(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	for _, tc := range []struct {
+		name  string
+		aggID int64
+		mode  orderedPercentileMode
+	}{
+		{name: "continuous", aggID: AggIdOfPercentileCont, mode: orderedPercentileContinuous},
+		{name: "discrete", aggID: AggIdOfPercentileDisc, mode: orderedPercentileDiscrete},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			newExec := func() AggFuncExec {
+				exec, err := makeOrderedPercentileExec(mp, tc.aggID, false,
+					types.T_int64.ToType(), tc.mode)
+				require.NoError(t, err)
+				require.NoError(t, exec.GroupGrow(1))
+				require.NoError(t, exec.SetExtraInformation(
+					EncodeOrderedPercentileConfig([]byte("0.5"), false), 0))
+				return exec
+			}
+
+			baseline := newExec()
+			defer baseline.Free()
+			baselineValues := buildFixedVec(t, mp, types.T_int64.ToType(), []int64{1, 2, 3, 4, 5, 6, 7, 8})
+			defer baselineValues.Free(mp)
+			require.NoError(t, baseline.BulkFill(0, []*vector.Vector{baselineValues}))
+
+			merged := newExec()
+			defer merged.Free()
+			for _, shard := range [][]int64{{1, 8}, {2, 7}, {3, 6}, {4, 5}} {
+				source := newExec()
+				shardValues := buildFixedVec(t, mp, types.T_int64.ToType(), shard)
+				require.NoError(t, source.BulkFill(0, []*vector.Vector{shardValues}))
+				require.NoError(t, merged.BatchMerge(source, 0, []uint64{1}))
+				shardValues.Free(mp)
+				source.Free()
+			}
+
+			baselineResult, err := baseline.Flush()
+			require.NoError(t, err)
+			defer baselineResult[0].Free(mp)
+			mergedResult, err := merged.Flush()
+			require.NoError(t, err)
+			defer mergedResult[0].Free(mp)
+
+			if tc.mode == orderedPercentileContinuous {
+				want := 4.5
+				require.Equal(t, want, vector.GetFixedAtNoTypeCheck[float64](baselineResult[0], 0))
+				require.Equal(t, want, vector.GetFixedAtNoTypeCheck[float64](mergedResult[0], 0))
+				return
+			}
+			want := int64(4)
+			require.Equal(t, want, vector.GetFixedAtNoTypeCheck[int64](baselineResult[0], 0))
+			require.Equal(t, want, vector.GetFixedAtNoTypeCheck[int64](mergedResult[0], 0))
+		})
+	}
+}
+
 func TestOrderedPercentileUsesNativeUint64Order(t *testing.T) {
 	mp := mpool.MustNewZero()
 	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
