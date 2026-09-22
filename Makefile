@@ -39,13 +39,15 @@
 # make proto-vendor
 #
 # To compile mo-service with GPU support,
-# 1. install CUDA toolkit (version 13.3 or above)
+# 1. install CUDA toolkit (version 13.3)
 # 2. install cuVS Go bindings with conda
 #  % conda env create --name go -f optools/images/gpu/go_cuda-133_arch-$(uname -m).yaml
 #  % conda activate go
 # 3. compile matrixone
 #  % cd matrixone
 #  % MO_CL_CUDA=1 make
+# Alternatively use the optional Pixi profile in optools/gpu/README.md and set
+# GPU_TOOLCHAIN_MANIFEST to its exported absolute toolchain.json path.
 
 # Go toolchain (override with `make GO=/path/to/go ...`); defaults to `go`.
 # Requires Go 1.26+ for the arch-specific SIMD kernels (built by default on x86_64).
@@ -54,7 +56,7 @@ ifeq ($(GO),)
 endif
 
 # where am I
-ROOT_DIR = $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
+ROOT_DIR := $(shell dirname $(realpath $(lastword $(MAKEFILE_LIST))))
 BIN_NAME := mo-service
 # MatrixOne is a single-module repository. Official Make targets must not
 # inherit a parent or user-selected go.work that can replace dependencies.
@@ -271,13 +273,9 @@ ifeq ("$(UNAME_M)", "x86_64")
 endif
 
 ifeq ($(MO_CL_CUDA),1)
-  ifeq ($(CONDA_PREFIX),)
-    $(error CONDA_PREFIX env variable not found.)
-  endif
-	CUVS_CFLAGS := -I$(CONDA_PREFIX)/include
-	CUVS_LDFLAGS := -L$(CONDA_PREFIX)/lib -lcuvs -lcuvs_c
-	CUDA_CFLAGS := -I/usr/local/cuda/include $(CUVS_CFLAGS)
-	CUDA_LDFLAGS := -L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64 -lcudart $(CUVS_LDFLAGS) -lstdc++
+	include $(ROOT_DIR)/cgo/gpu-toolchain.mk
+	CUDA_CFLAGS := $(MO_GPU_CFLAGS)
+	CUDA_LDFLAGS := $(MO_GPU_LDFLAGS)
 	TAGS += -tags "gpu"
 endif
 

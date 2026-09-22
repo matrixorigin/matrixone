@@ -16,6 +16,8 @@
 *.swp
 *.fatbin
 *.py
+!cgo/mo_gpu_toolchain.py
+!cgo/test_gpu_toolchain.py
 !pkg/iceberg/metadata/testdata/generate_golden_vectors.py
 !optools/iceberg_external_runner.py
 !optools/summarize_ut_setup.py

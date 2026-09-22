@@ -307,7 +307,7 @@ fi
 
 set +e
 cuda_debug=$(make -C "$repo_root/cgo/cuda" -Bn HOST_ARCH=x86_64 \
-    TARGET_ARCH=x86_64 TARGET_OS=linux dbg=1 all 2>&1)
+    CONDA_PREFIX="$work/conda" TARGET_ARCH=x86_64 TARGET_OS=linux dbg=1 all 2>&1)
 cuda_debug_status=$?
 cuvs_debug=$(make -C "$repo_root/cgo/cuvs" -n \
     CONDA_PREFIX="$work/conda" HOST_ARCH=x86_64 debug 2>&1)
@@ -336,7 +336,7 @@ check_cuda_debug_override() {
     variable=$1
     description=$2
     cuda_debug_override=$(make -C "$repo_root/cgo/cuda" -Bn \
-        HOST_ARCH=x86_64 TARGET_ARCH=x86_64 TARGET_OS=linux dbg=1 \
+        CONDA_PREFIX="$work/conda" HOST_ARCH=x86_64 TARGET_ARCH=x86_64 TARGET_OS=linux dbg=1 \
         "$variable=-O3 -DPROFILE_A" all 2>&1)
     if printf '%s\n' "$cuda_debug_override" | grep -q -- ' -O0 ' &&
        printf '%s\n' "$cuda_debug_override" | grep -q -- ' -DPROFILE_A ' &&
@@ -354,7 +354,7 @@ check_cuda_debug_override CCFLAGS "base host"
 check_cuda_debug_override EXTRA_CCFLAGS "extra host"
 
 cuda_level_override=$(make -C "$repo_root/cgo/cuda" -Bn \
-    HOST_ARCH=x86_64 TARGET_ARCH=x86_64 TARGET_OS=linux dbg=1 \
+    CONDA_PREFIX="$work/conda" HOST_ARCH=x86_64 TARGET_ARCH=x86_64 TARGET_OS=linux dbg=1 \
     CUDA_OPT_LEVEL=-O3 NVCCFLAGS=-DPROFILE_LEVEL all 2>&1)
 if printf '%s\n' "$cuda_level_override" | grep -q -- ' -O0 ' &&
    printf '%s\n' "$cuda_level_override" | grep -q -- ' -DPROFILE_LEVEL ' &&
@@ -379,7 +379,7 @@ fi
 cuvs_profile=$(make -C "$repo_root/cgo/cuvs" -Bn \
     CONDA_PREFIX="$work/conda" HOST_ARCH=x86_64 \
     NVCC_FLAGS=-DPROFILE_A all 2>&1)
-if printf '%s\n' "$cuvs_profile" | grep -q -- 'nvcc -DPROFILE_A -c'; then
+if printf '%s\n' "$cuvs_profile" | grep -q -- 'nvcc -ccbin [^ ]* -DPROFILE_A -c'; then
     pass "cuVS NVCC_FLAGS is an effective compiler-profile input"
 else
     fail "cuVS NVCC_FLAGS is an effective compiler-profile input"

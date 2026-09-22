@@ -31,8 +31,8 @@
 #
 ################################################################################
 
-# Location of the CUDA Toolkit
-CUDA_PATH ?= /usr/local/cuda
+# Share the provider contract with libmo, cuVS, Go, and the test runner.
+include ../gpu-toolchain.mk
 
 ##############################
 # start deprecated interface #
@@ -160,8 +160,8 @@ else ifneq ($(TARGET_ARCH),$(HOST_ARCH))
         HOST_COMPILER ?= powerpc64le-linux-gnu-g++
     endif
 endif
-HOST_COMPILER ?= g++
-NVCC          := $(CUDA_PATH)/bin/nvcc -ccbin $(HOST_COMPILER)
+HOST_COMPILER := $(MO_GPU_CXX)
+NVCC          := $(MO_GPU_NVCC) -ccbin $(HOST_COMPILER)
 
 # internal flags
 NVCCFLAGS   := -m${TARGET_SIZE}
@@ -286,7 +286,7 @@ ALL_LDFLAGS += $(addprefix -Xlinker ,$(LDFLAGS))
 ALL_LDFLAGS += $(addprefix -Xlinker ,$(EXTRA_LDFLAGS))
 
 # Common includes and paths for CUDA
-INCLUDES  := -I../../thirdparties/cuda/Common
+INCLUDES  := -I../../thirdparties/cuda/Common $(MO_GPU_CFLAGS)
 LIBRARIES :=
 
 ################################################################################
@@ -321,7 +321,9 @@ GENCODE_FLAGS += -gencode arch=compute_$(HIGHEST_SM),code=compute_$(HIGHEST_SM)
 endif
 endif
 
-ifeq ($(TARGET_OS),darwin)
+ifneq ($(MO_GPU_CUDA_STUB_DIRS),)
+  LIBRARIES += $(addprefix -L,$(MO_GPU_CUDA_STUB_DIRS)) -lcuda
+else ifeq ($(TARGET_OS),darwin)
   ALL_LDFLAGS += -Xcompiler -F/Library/Frameworks -Xlinker -framework -Xlinker CUDA
 else
   ifeq ($(TARGET_ARCH),x86_64)

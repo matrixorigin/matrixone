@@ -12,17 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-NVCC := /usr/local/cuda/bin/nvcc
-CC   := gcc
-CXX  := g++
+include ../gpu-toolchain.mk
+NVCC := $(MO_GPU_NVCC) -ccbin $(MO_GPU_CXX)
 
 # Libraries
 # -lgomp is needed for OpenMP pragmas in filter.hpp's eval_filter_bitmap_cpu;
 # nvcc's host compiler (gcc) emits libgomp calls when -fopenmp is passed via
 # -Xcompiler below.
-LIBS := -L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64/cudart -L$(CONDA_PREFIX)/lib -lcuvs -lcuvs_c -ldl -lrmm -lrapids_logger -Xlinker -lpthread -Xlinker -lm -Xlinker -lgomp
+LIBS := $(MO_GPU_LDFLAGS) -ldl -lrmm -lrapids_logger -Xlinker -lpthread -Xlinker -lm -Xlinker -lgomp
 
-INCLUDES := -I. -I/usr/local/cuda/include -I$(CONDA_PREFIX)/include -I$(CONDA_PREFIX)/include/rapids -I$(CONDA_PREFIX)/include/raft -I$(CONDA_PREFIX)/include/cuvs
+INCLUDES := -I. $(MO_GPU_CFLAGS) $(foreach root,$(MO_GPU_RAPIDS_INCLUDE_DIRS),-I$(root)/rapids -I$(root)/raft -I$(root)/cuvs)
 
 # NVCC_FLAGS are for compilation only. -x cu tells nvcc to treat .cpp as .cu.
 # -fopenmp is forwarded to the host compiler via -Xcompiler so OpenMP pragmas

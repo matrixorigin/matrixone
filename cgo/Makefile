@@ -2,6 +2,7 @@ DEBUG_OPT :=
 UNAME_M := $(shell uname -m)
 UNAME_S := $(shell uname -s)
 CC ?= gcc
+MO_CGO_CC = $(CC)
 
 # Yeah, fast math.  We want it to be fast, for all xcall, 
 # IEEE compliance should not be an issue.
@@ -28,15 +29,13 @@ ifeq ($(UNAME_M), x86_64)
 endif
 
 ifeq ($(MO_CL_CUDA),1)
-	ifeq ($(CONDA_PREFIX),)
-		$(error CONDA_PREFIX env variable not found. Please activate your conda environment.)
-	endif
-	CC = /usr/local/cuda/bin/nvcc 
-	CFLAGS = -ccbin g++ -m64 -Xcompiler -fPIC -gencode arch=compute_75,code=sm_75 -gencode arch=compute_80,code=sm_80 -gencode arch=compute_86,code=sm_86 -gencode arch=compute_89,code=sm_89 -gencode arch=compute_90,code=sm_90 -gencode arch=compute_90,code=compute_90
-	CFLAGS += -I../thirdparties/install/include -DMO_CL_CUDA
+	include gpu-toolchain.mk
+	MO_CGO_CC = $(MO_GPU_NVCC) -ccbin $(MO_GPU_CXX)
+	CFLAGS = -m64 -Xcompiler -fPIC -gencode arch=compute_75,code=sm_75 -gencode arch=compute_80,code=sm_80 -gencode arch=compute_86,code=sm_86 -gencode arch=compute_89,code=sm_89 -gencode arch=compute_90,code=sm_90 -gencode arch=compute_90,code=compute_90
+	CFLAGS += -I../thirdparties/install/include -DMO_CL_CUDA $(MO_GPU_CFLAGS)
 	CUDA_OBJS += cuda/cuda.o
 	# Explicitly include all needed libraries for shared library linking
-	CUDA_LDFLAGS := -L/usr/local/cuda/lib64/stubs -lcuda -L/usr/local/cuda/lib64 -lcudart -L$(CONDA_PREFIX)/lib -lcuvs -lcuvs_c -ldl -lrmm -lstdc++
+	CUDA_LDFLAGS := $(MO_GPU_LDFLAGS) -ldl -lrmm
 	LDFLAGS += $(CUDA_LDFLAGS)
 endif
 
@@ -75,9 +74,9 @@ all: $(TARGET_LIB) libmo.a
 
 $(TARGET_LIB): $(LIB_PREREQS)
 ifeq ($(MO_CL_CUDA),1)
-	$(CC) $(LDFLAGS) -o $@ $(OBJS) $(CUDA_OBJS) cuvs/*.o
+	$(MO_CGO_CC) $(LDFLAGS) -o $@ $(OBJS) $(CUDA_OBJS) cuvs/*.o
 else
-	$(CC) $(LDFLAGS) -o $@ $(OBJS)
+	$(MO_CGO_CC) $(LDFLAGS) -o $@ $(OBJS)
 endif
 
 libmo.a: $(LIB_PREREQS)
@@ -88,7 +87,7 @@ else
 endif
 
 %.o: %.c
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(MO_CGO_CC) $(CFLAGS) -c $< -o $@
 
 # The stable XCall reductions deliberately divide by a runtime scale. Keep
 # fast-math from rewriting that division into an unsafe reciprocal operation or
@@ -101,7 +100,7 @@ XCALL_CFLAGS := -fno-fast-math
 endif
 
 xcall.o: xcall.c
-	$(CC) $(CFLAGS) $(XCALL_CFLAGS) -c $< -o $@
+	$(MO_CGO_CC) $(CFLAGS) $(XCALL_CFLAGS) -c $< -o $@
 
 test: $(TARGET_LIB)
 	$(MAKE) -C test

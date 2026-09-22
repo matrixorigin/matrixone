@@ -70,6 +70,7 @@ git -C "$fake" init --quiet
 : > "$fake/mocl_kernel64.fatbin"
 fake_wrapper="$fake/.agents/skills/mo-dev/scripts/mo-cgo-test"
 cp "$wrapper" "$fake_wrapper"
+cp "$script_dir/../../../../cgo/mo_gpu_toolchain.py" "$fake/cgo/mo_gpu_toolchain.py"
 chmod +x "$fake_wrapper"
 
 cat > "$work/bin/go" <<'STUB'

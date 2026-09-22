@@ -337,6 +337,16 @@ GPU support compiles the CUDA-backed vector index algorithms (**CAGRA**, **IVF-P
 
 Prerequisites:
 
+For an explicitly selected Pixi profile, set `GPU_TOOLCHAIN_MANIFEST` to the
+exported `toolchain.json`. The shared MO resolver validates its CUDA target
+directories, compiler/NVCC, RAPIDS installation, lockfile and artifact identity.
+Make and the CGo test wrapper use that description; they do not require
+`/usr/local/cuda` or silently fall back to a different provider. This profile
+also supports MO GPU-only builds without Sirius source. Normal CPU builds do
+not invoke GPU discovery or Pixi.
+
+Without `GPU_TOOLCHAIN_MANIFEST`, retain the legacy provider below:
+
 1. CUDA toolkit matching the versions pinned by
    `optools/images/gpu/Dockerfile` and
    `optools/images/gpu/go_cuda-133_arch-x86_64.yaml`, installed under the path

@@ -36,6 +36,7 @@ git -C "$primary" init --quiet
 cp "$wrapper" "$primary/.agents/skills/mo-dev/scripts/mo-cgo-test"
 chmod +x "$primary/.agents/skills/mo-dev/scripts/mo-cgo-test"
 cp "$provenance_writer" "$primary/cgo/mo-native-provenance"
+cp "$script_dir/../../../../cgo/mo_gpu_toolchain.py" "$primary/cgo/mo_gpu_toolchain.py"
 chmod +x "$primary/cgo/mo-native-provenance"
 
 cat > "$primary/.gitignore" <<'EOF'
