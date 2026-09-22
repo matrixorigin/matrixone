@@ -2329,9 +2329,9 @@ func validateRemoteExpressionFeaturesProtocol(
 		)
 	}
 	if features.StatementHashFunction &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion92) {
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion93) {
 		return moerr.NewNotSupportedNoCtx(
-			"MO_STATEMENT_HASH remote execution requires MORPC protocol version 92",
+			"MO_STATEMENT_HASH remote execution requires MORPC protocol version 93",
 		)
 	}
 	if features.FormatNumericArguments &&

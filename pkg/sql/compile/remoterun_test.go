@@ -1622,7 +1622,7 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion36)
 		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
 	})
-	t.Run("statement hash function requires v92", func(t *testing.T) {
+	t.Run("statement hash function requires v93", func(t *testing.T) {
 		remotePipeline := &pipeline.Pipeline{
 			InstructionList: []*pipeline.Instruction{{
 				ProjectList: []*planpb.Expr{statementHash()},
@@ -1633,14 +1633,15 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 			defines.MORPCVersion84,
 			defines.MORPCVersion85,
 			defines.MORPCVersion88,
+			defines.MORPCVersion92,
 		} {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 			err := validateRemoteExpressionPipelineProtocol(proc, remotePipeline)
-			require.ErrorContains(t, err, "MO_STATEMENT_HASH remote execution requires MORPC protocol version 92")
+			require.ErrorContains(t, err, "MO_STATEMENT_HASH remote execution requires MORPC protocol version 93")
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 		}
 
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion92)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion93)
 		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, remotePipeline))
 	})
 	t.Run("statement hash sql mode resolver errors are deferred", func(t *testing.T) {
@@ -1652,7 +1653,7 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 		oldBuildCommitID := version.BuildCommitID
 		version.BuildCommitID = strings.Repeat("a", 40)
 		t.Cleanup(func() { version.BuildCommitID = oldBuildCommitID })
-		client.version = defines.MORPCVersion92
+		client.version = defines.MORPCVersion93
 		client.buildCommitID = version.BuildCommitID
 		resolverErr := moerr.NewInternalErrorNoCtx("sql mode resolver failed")
 		resolverProc.Base.IsFrontend = true
@@ -1667,7 +1668,7 @@ func TestRemoteExpressionProtocolValidation(t *testing.T) {
 			}
 		})
 		resolverRT := moruntime.ServiceRuntime(resolverProc.GetService())
-		resolverRT.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion92)
+		resolverRT.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion93)
 
 		statementScope := makeScope(statementHash())
 		statementScope.Proc = resolverProc

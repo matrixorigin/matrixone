@@ -37,13 +37,13 @@ func validateStatementHashDestination(proc *process.Process, p *pipeline.Pipelin
 		return err
 	}
 	supported, err := remoteWorkersSupportProtocolAndBuild(proc,
-		engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion92, expectedBuildCommitID)
+		engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion93, expectedBuildCommitID)
 	if err != nil {
 		return err
 	}
 	if !supported {
 		return moerr.NewNotSupportedNoCtx(
-			"remote destination does not support MO_STATEMENT_HASH with the same build commit (MORPC version 92)",
+			"remote destination does not support MO_STATEMENT_HASH with the same build commit (MORPC version 93)",
 		)
 	}
 	return nil

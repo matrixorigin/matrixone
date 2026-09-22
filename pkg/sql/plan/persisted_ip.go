@@ -115,8 +115,8 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.SpatialDistanceSemantics && requiredVersion < defines.MORPCVersion90 {
 		requiredVersion = defines.MORPCVersion90
 	}
-	if features.StatementHashFunction && requiredVersion < defines.MORPCVersion92 {
-		requiredVersion = defines.MORPCVersion92
+	if features.StatementHashFunction && requiredVersion < defines.MORPCVersion93 {
+		requiredVersion = defines.MORPCVersion93
 	}
 	return requiredVersion, nil
 }
