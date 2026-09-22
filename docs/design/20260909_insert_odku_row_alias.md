@@ -8,6 +8,7 @@
   `dd2b0b38f056ac56671a5d78c9de33b68b06ef07`
 - Scope: MySQL-compatible `INSERT ... VALUES/SET ... AS row_alias[(column_alias, ...)]`
 - Oracle: MySQL 8.4 grammar and `insert_update.test`
+- Frozen legacy corpus: `legacy-odku-v1` below, pinned to the compatibility baseline and file blobs.
 
 This document is the approval boundary for the row-alias implementation. It
 does not claim that the implementation PR is mergeable, that CI is QA, or that
@@ -183,6 +184,265 @@ unsupported DML: target-correlated subqueries in on duplicate key update cannot 
 Legacy uncorrelated subqueries are compared against the frozen baseline and
 must not be normalized to either new message by this revision.
 
+## Frozen baseline corpus and stateful acceptance oracle
+
+`legacy-odku-v1` is a fixed comparison corpus, not a moving copy of whatever
+happens to be in the test tree. Its compatibility baseline is exactly
+`main@e9bfd9bbdde3b2a66b36fb9f1f39b0d4e31749f5`. The source fixtures are pinned
+by both commit and blob:
+
+- `test/distributed/cases/dml/insert/on_duplicate_key.sql`, blob
+  `524d3c5da01055c0efdfe8fb93b2da75c23e2e9d`, SHA-256
+  `20a146fdddc790dbc0cf694e2f3468c937f18810852ab6439dc5a4db92bd3639`;
+  include the legacy direct/`VALUES()`/secondary-key, partitioned, no-op, and
+  NULL cases from normal ranges 1–25, 43–89, 96–115, 145–180, and 190–214 of
+  that blob. Lines 90–95 are a separate `@bvt:issue#4423` case, not part of
+  the normal typed-multiset corpus: retain its lines 90–92 setup/statement and
+  93–95 marker/result handling, then apply the runner's explicit BVT issue
+  skip/expected-output classification.
+- `test/distributed/cases/prepare/prepare.test`, blob
+  `256b4b81406985b6794ec1cce58e5682ef02eab0`, SHA-256
+  `bb526265ff9b7bb603eeb8140604741b506060517a74b1b7fe3ed300ac364cfc`;
+  include the legacy `SET`/ODKU prepared cases from lines 282–319.
+- `test/distributed/cases/function/row_count.sql`, blob
+  `3bba97990bef1142c3bf417917b21a8427a8973c`, SHA-256
+  `ab6df81eaf252b9f7469370539e00e44b5ea16d88634016877823e9b907737b8`;
+  use lines 64–76 as the affected-row oracle for an insert, a changed ODKU
+  duplicate, and a `CLIENT_FOUND_ROWS` no-op.
+
+Each listed line range is an independent corpus case. The runner must create a
+fresh schema/connection or apply the exact setup and cleanup surrounding that
+range, including omitted `DROP`/`CREATE` statements needed by a range that
+reuses names such as `t1` or `s1`; it must not concatenate the ranges into one
+session. The setup/cleanup identity is recorded with the source blob. Result
+sets without an explicit `ORDER BY` are compared as typed row multisets, not
+by physical row order. In particular, split the `43–115` range at its
+`t1` DROP/CREATE boundaries and at the issue case (`43–89`, `90–95`, and
+`96–115`), split `145–180` at each partition/secondary-key fixture and
+deallocate `s1` after its four executions, and run the `1–25` and `190–214`
+ranges from their own fresh setup/cleanup. The prepared `282–319` range
+likewise uses its `prepare_test` database and its included
+`DEALLOCATE PREPARE` boundaries; no prepared name is carried into another
+case.
+
+The corpus also has this small deterministic control fixture for the legacy
+statement shapes that the existing files do not isolate. The runner must set
+and record `sql_mode = 'STRICT_TRANS_TABLES'` and the session autocommit mode
+before each case, capture the protocol status flags described below, use the
+same schema/seed on baseline and implementation, and compare
+result rows, affected-row/OK-packet fields, error code, SQLSTATE, full message,
+and table state. Result rows are compared as ordered rows only when the SQL
+contains an explicit `ORDER BY`; otherwise compare typed row multisets. If the
+server does not accept the requested mode, the case is `NOT_RUN`; it must not
+silently use the server default.
+
+```sql
+DROP TABLE IF EXISTS odku_legacy_v1;
+CREATE TABLE odku_legacy_v1 (
+    id INT PRIMARY KEY,
+    u INT UNIQUE,
+    v INT NOT NULL
+);
+INSERT INTO odku_legacy_v1 VALUES (1, 10, 100), (2, 20, 200);
+
+-- L1: direct keyed ODKU.
+INSERT INTO odku_legacy_v1 VALUES (1, 11, 101)
+    ON DUPLICATE KEY UPDATE v = v + 1;
+-- L2: legacy VALUES(column) keyed ODKU.
+INSERT INTO odku_legacy_v1 VALUES (1, 12, 102)
+    ON DUPLICATE KEY UPDATE v = VALUES(v);
+-- L3: legacy uncorrelated scalar subquery.
+INSERT INTO odku_legacy_v1 VALUES (1, 13, 103)
+    ON DUPLICATE KEY UPDATE v = (SELECT 13);
+-- L4: legacy uncorrelated EXISTS subquery.
+INSERT INTO odku_legacy_v1 VALUES (1, 14, 104)
+    ON DUPLICATE KEY UPDATE v = IF(EXISTS (SELECT 1), VALUES(v), v);
+
+DROP TABLE IF EXISTS odku_legacy_v1_nokey;
+CREATE TABLE odku_legacy_v1_nokey (a INT, b INT);
+-- L5: direct no-key fallback; the UPDATE arm is unreachable.
+INSERT INTO odku_legacy_v1_nokey VALUES (1, 2)
+    ON DUPLICATE KEY UPDATE b = b + 1;
+```
+
+The stateful acceptance has three independent controls. It uses an actual
+`NOT NULL` constraint, never division by zero, a default cast failure, or a
+scheduler-dependent expression. The baseline and implementation do not run
+the same SQL text: the baseline cannot parse row aliases, so it supplies the
+transaction/error envelope with the old `VALUES(v)` form, while the
+implementation head supplies the row-alias syntax oracle. These are compared
+as corresponding contracts, not claimed as byte-for-byte SQL parity.
+
+For the transaction/error envelope, run each form against a fresh copy of the
+same seed with `sql_mode = 'STRICT_TRANS_TABLES'` and an explicitly recorded
+session autocommit mode. The status oracle is the MySQL protocol's
+`SERVER_STATUS_IN_TRANS` bit (`0x0001`) and `SERVER_STATUS_AUTOCOMMIT` bit
+(`0x0002`). Record both bits from the status-bearing OK packet after the
+transaction begins and from the successful no-side-effect query after the
+failed statement; an ERR packet itself has no status field.
+
+```sql
+SET sql_mode = 'STRICT_TRANS_TABLES';
+SET autocommit = 1;
+DROP TABLE IF EXISTS odku_stateful_v1;
+CREATE TABLE odku_stateful_v1 (id INT PRIMARY KEY, v INT NOT NULL);
+INSERT INTO odku_stateful_v1 VALUES (1, 10);
+START TRANSACTION;
+INSERT INTO odku_stateful_v1 VALUES (9, 90); -- transaction marker
+-- Run exactly one of the following statement forms per fresh seed.
+-- Baseline only: the old syntax is the compatibility oracle.
+INSERT INTO odku_stateful_v1 VALUES (1, NULL)
+    ON DUPLICATE KEY UPDATE v = VALUES(v);
+-- Reset the seed and run the implementation form instead; never run both in
+-- one transaction.
+INSERT INTO odku_stateful_v1 VALUES (1, NULL) AS n(id, v)
+    ON DUPLICATE KEY UPDATE v = n.v;
+-- Both forms must return the pinned constraint packet and no partial change.
+SELECT id, v FROM odku_stateful_v1 ORDER BY id; -- assert id=1 and marker state
+SELECT 1; -- inspect the following status-bearing OK/EOF packet
+ROLLBACK;
+SELECT 1; -- inspect status bits after rollback
+SELECT id, v FROM odku_stateful_v1 ORDER BY id;
+```
+
+The same connection must show no partial row or value after the failed
+statement, no implicit transaction commit, and a successful explicit
+`ROLLBACK`. For the expected statement-rollback contract, the post-error
+`SELECT 1` status packet retains `SERVER_STATUS_IN_TRANS` and the recorded
+autocommit bit; the post-rollback packet clears `SERVER_STATUS_IN_TRANS` while
+retaining the session autocommit bit. If an exact baseline control instead
+proves whole-transaction abort, freeze the cleared in-transaction result and
+match it at the implementation head. A result-set protocol that uses EOF must
+inspect its status-bearing EOF packet; with deprecate-EOF it must inspect the
+status-bearing OK packet. A second connection must observe the unchanged
+committed state. If either server rejects `STRICT_TRANS_TABLES`, the
+corresponding control is `NOT_RUN` rather than silently inheriting a default
+mode. At the implementation head named by this design, the source error contract is
+`moerr.ErrConstraintViolation` (internal code `20304`), MySQL errno `3819`
+(`ER_CHECK_CONSTRAINT_VIOLATED`), SQLSTATE `HY000`, and
+`constraint violation: Column 'v' cannot be null`. Each exact-head run must
+assert that packet; another mapped error or message is a contract mismatch,
+not permission to widen the oracle.
+
+The prior-action/rollback property is a separate implementation-head test-only
+control. It must build the row-alias plan for the same table and feed the
+executor's action stream in two controlled batches: batch 1 contains only
+`(id=2, v=20)`, and batch 2 contains only `(id=1, v=NULL)`. An action observer
+or equivalent barrier must record `id=2` action completion before the harness
+releases batch 2. The error must then be raised by the real `NOT NULL` action
+check for batch 2. This is the evidence that an earlier candidate reached the
+action path; it must not be inferred from the textual order of a multi-row
+`VALUES` list. Before feeding batch 1, the harness starts an explicit
+transaction and writes marker `(id=9, v=90)` in the same table. Immediately
+after the batch-2 error and
+before any explicit `ROLLBACK`, the same connection must assert that `id=2` is
+not visible, that no commit occurred, and that the marker plus
+`SERVER_STATUS_IN_TRANS`/`SERVER_STATUS_AUTOCOMMIT` bits from a subsequent
+no-side-effect `SELECT 1` status-bearing OK/EOF packet match the frozen
+transaction-failure contract. The ERR packet itself is not used for this
+status assertion. The expected statement-rollback contract is marker still
+visible, `SERVER_STATUS_IN_TRANS` still set, and the autocommit bit unchanged;
+if an exact baseline control instead proves whole-transaction abort, the
+marker-absent/cleared-in-transaction result must be frozen and matched at the
+implementation head. Either outcome must be decided before rollback, never
+hidden by it. A second connection must not see `id=2` or the marker before or
+after rollback. The harness then performs `ROLLBACK`, checks the post-rollback
+status bits with another `SELECT 1`, and checks the committed table again. This
+observer control must not be presented as the baseline SQL parity run or as
+proof that a normal BVT multi-row statement has a particular natural execution
+order.
+
+Prepared reuse is a separate implementation-head binary-protocol control. One
+`COM_STMT_PREPARE` creates this statement and is retained for all three
+executions:
+
+```sql
+INSERT INTO odku_stateful_v1 VALUES (?, ?) AS n(id, v)
+    ON DUPLICATE KEY UPDATE v = n.v
+```
+
+The client explicitly negotiates `CLIENT_FOUND_ROWS` (`0x00000002`) for all
+three executions, records the session mode, and executes `SET autocommit = 1`
+before preparing.
+Against a fresh seed and explicit `STRICT_TRANS_TABLES`, it binds both
+parameters as signed `MYSQL_TYPE_LONG` (`INT`) values and executes `(1, 10)`,
+`(1, NULL)`, and `(1, 12)` without changing the SQL text or preparing again.
+With the seed row `(1, 10)`, the first duplicate is a no-op and must return
+`affected_rows = 1` under `CLIENT_FOUND_ROWS`; the third changes `v` and must
+return `affected_rows = 2`. These values are the pinned MatrixOne baseline
+contract in `row_count.sql`, not an unverified generic MySQL assumption. The
+middle round returns only the pinned ERR packet, not an OK count. The required
+oracle is therefore OK(1) → the same strict `NOT NULL` ERR → OK(2), with the
+final row equal to `(1, 12)`. If the exact baseline reports another count or
+packet field, stop as a contract mismatch and update the design; do not
+substitute a generic “expected fields” rule.
+
+The client records the same statement ID, the two signed `MYSQL_TYPE_LONG`
+parameter metadata entries with unsigned flags clear, `new_params_bound = 1`
+only on the first execute and `0` on the next two, and NULL bitmaps `0x00`,
+`0x02`, `0x00` for the three rounds. It records the exact ERR packet (errno,
+SQLSTATE, and message) for the middle round. If the client does not negotiate
+`CLIENT_FOUND_ROWS` or cannot bind the stated parameter metadata, the case is
+`NOT_RUN` rather than silently accepting different affected-row counts. SQL
+`PREPARE`/`EXECUTE` text commands may supplement this case but do not prove
+binary statement-ID reuse or absence of an implicit reprepare.
+
+## Rollout, mixed-version, rollback, and diagnosis
+
+This revision deliberately changes acceptance of legacy target- or
+candidate-correlated ODKU subqueries while adding row-alias syntax. It adds no
+catalog field, persisted state, wire field, capability bit, or feature flag,
+so the server cannot negotiate these SQL semantics with an older SQL-facing
+planner. “No protocol change” therefore does not mean that a mixed-version SQL
+route is behaviorally compatible.
+
+The rollout contract is:
+
+1. Freeze `legacy-odku-v1`, the SQL transaction/error envelope, the
+   implementation-head action-observer control, and the prepared success →
+   failure → success control before rollout. Capture the exact server build,
+   SQL mode, route, parameter/protocol oracle, and table/transaction digests.
+2. Before upgrading the first SQL-facing route, inventory clients that emit
+   legacy target/candidate-correlated ODKU. Migrate them to a supported
+   direct/`VALUES()` form, or explicitly isolate/pin them to an old route until
+   migration is complete. They must not be sent to a new route and discover
+   the deliberate rejection during the rolling window; blind retries are not
+   an isolation strategy. This client gate and route pinning are deployment
+   work outside this documentation PR.
+3. Upgrade every SQL-facing parser/planner route that may receive this SQL
+   class to the approved implementation head before any client sends row-alias
+   syntax. A route that still runs the baseline parser is not admitted for the
+   new syntax; a route that still runs baseline ODKU binding is not admitted
+   for the changed legacy-correlated rejection.
+4. During the rolling deployment, keep admitted clients on the frozen legacy
+   corpus and direct-expression/`VALUES()` forms until all SQL-facing routes
+   pass the same exact-head probes. Do not claim mixed-version acceptance
+   merely because existing plan transport has no new field.
+5. Migrate clients to row-alias syntax only after homogeneous SQL-facing
+   admission is established. Clients that cannot migrate their legacy
+   correlated form must remain isolated or handle the deterministic rejection
+   on an explicitly compatible route.
+6. To roll back, first stop clients from emitting row-alias syntax and drain
+   those requests, then downgrade all SQL-facing planner routes as one
+   compatibility unit and rerun `legacy-odku-v1`. An old route cannot accept
+   the new syntax, and a mixed rollback cannot preserve the deliberate legacy
+   rejection boundary. No catalog or wire rollback step is needed because this
+   design adds no such state.
+
+For diagnosis, the runner or production incident record must retain a
+redacted/normalized statement shape, server build and SQL-facing route,
+`sql_mode`, whether the statement used a row alias or a legacy correlated
+reference, the exact error code/SQLSTATE/full text, the affected-row/OK or ERR
+packet, and before/after table and transaction digests. A parser error for row
+aliases identifies a baseline route. `ErrUnsupportedDML` code `20313`,
+SQLSTATE `HY000`, with the exact retained-rejection text identifies the
+intentional legacy boundary. A failure of a direct expression, `VALUES()`
+case, or legacy uncorrelated case in `legacy-odku-v1` is a regression; a
+failure that follows only one route is a mixed-version admission problem. The
+same-connection follow-up and the stateful control above must distinguish a
+statement rejection from partial mutation before any client retry or rollback
+decision.
+
 ## Scope, ownership, and invariants
 
 The parser owns syntax retention and formatting. The planner owns validation,
@@ -249,22 +509,43 @@ leave Draft, it must provide:
    non-`DEFAULT` generated writes, invalid casts, multi-row and nested
    subqueries, prepared repeated execution of the empty-tuple form, legacy
    correlated rejection, legacy uncorrelated baseline parity, and every
-   rejected grammar shape. Each rejection must assert code, SQLSTATE, exact
-   text, unchanged table state, and a successful follow-up statement.
+   rejected grammar shape. The exact frozen `legacy-odku-v1` corpus must run at
+   both exact baseline and exact implementation head. The SQL stateful
+   transaction/error envelope must run against fresh seeds at both heads, using
+   old `VALUES(v)` syntax for the baseline and row-alias syntax only at the
+   implementation head; it is a corresponding state/error oracle, not a claim
+   that baseline parses the new SQL. The implementation must additionally
+   provide the two-batch action observer/barrier control above to prove a prior
+   candidate reached the action path, without inferring order from a `VALUES`
+   list. Assert the pinned code, SQLSTATE, exact text, transaction/table state,
+   rollback, and follow-up results for the SQL control, and the pre-rollback
+   observer event plus post-rollback state for the test-only control.
 4. A defect-control run at the exact implementation head
    `dd2b0b38f056ac56671a5d78c9de33b68b06ef07` showing the eager-build failure
    or premature subquery evaluation for the counterexample above. The current
    `main` baseline cannot parse row-alias syntax, so it must not be reported as
    an executable control for that query. The corrected exact head must show the
    new deterministic rejection and no mutation.
-5. A legacy compatibility run that compares the fixed no-row-alias corpus
-   that must remain unchanged (direct expressions, `VALUES(column)`, and
-   uncorrelated scalar/`EXISTS`) between the `main` compatibility baseline and
-   the implementation head, including result/error/state, not only a plan
-   shape. Correlated cases are tested separately against the retained-rejection
-   contract above, including keyed and no-key targets; they are not claimed as
-   `main` parity.
-6. Maintainer approval of this exact matrix and QA validation of the
+5. A legacy compatibility run that compares the pinned `legacy-odku-v1`
+   corpus (direct expressions, `VALUES(column)`, uncorrelated scalar/`EXISTS`,
+   no-key direct fallback, and the named legacy prepared cases) between the
+   `main` compatibility baseline and the implementation head, including
+   result/error/state, affected-row/OK or ERR packet, and the fixed SQL mode,
+   not only a plan shape. Correlated cases are tested separately against the
+   retained-rejection contract above, including keyed and no-key targets; they
+   are not claimed as `main` parity. The SQL stateful envelope is compared as
+   old `VALUES(v)` on baseline versus row-alias syntax on the implementation
+   head, with the syntax difference recorded explicitly. The two-batch action
+   observer is implementation-head-only. The prepared stateful control must
+   use one binary `COM_STMT_PREPARE` and prove success → failure → success with
+   changed parameters and explicit parameter/protocol oracles; SQL
+   `PREPARE`/`EXECUTE` is supplemental only.
+6. A rollout artifact that records homogeneous SQL-facing admission, the
+   mixed-version route decision, client migration/rollback order, and the
+   diagnosis fields above. It must identify unsupported/NOT_RUN gates instead
+   of treating parser compatibility or absence of a wire change as proof of
+   mixed-version acceptance.
+7. Maintainer approval of this exact matrix and QA validation of the
    user-visible SQL compatibility boundary. CI success alone is not design
    approval.
 
