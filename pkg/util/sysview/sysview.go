@@ -76,7 +76,7 @@ var (
 )
 
 func InitInformationSchemaSysTablesForProtocol(protocol int64) []string {
-	if protocol >= defines.MORPCVersion92 {
+	if protocol >= defines.MORPCVersion94 {
 		return InitInformationSchemaSysTables
 	}
 

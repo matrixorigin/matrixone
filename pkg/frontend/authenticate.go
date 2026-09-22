@@ -11074,10 +11074,11 @@ func protocolVersionForTenantInitializationWithContext(
 	proc *process.Process,
 ) (int64, error) {
 	// Account creation must remain available while the cluster is rolling out
-	// the parser-derived VIEWS functions. The v91 predecessor definition is safe
+	// the parser-derived VIEWS functions. The v93 predecessor VIEWS definition is safe
 	// on every CN and the final-version account row is revisited by bootstrap
 	// maintenance once the capability becomes available.
 	legacyVersion := defines.MORPCVersion91
+	predecessorViewsVersion := defines.MORPCVersion93
 	rt := moruntime.ServiceRuntime(service)
 	if rt == nil {
 		return legacyVersion, nil
@@ -11090,30 +11091,30 @@ func protocolVersionForTenantInitializationWithContext(
 	if !ok {
 		return legacyVersion, nil
 	}
-	if version < defines.MORPCVersion92 {
+	if version < defines.MORPCVersion94 {
 		// Preserve every pre-existing protocol-specific information_schema
-		// contract. Only the new VIEWS function needs the v91 predecessor
+		// contract. Only the new VIEWS function needs the v93 predecessor
 		// fallback; promoting an older known protocol would also install newer
 		// TABLES/COLUMNS and role-closure definitions.
 		return version, nil
 	}
 	// The local protocol version and the authoring floor advance at different
 	// points during admission. The former only says that this CN can decode
-	// v92; the latter says that the local catalog fence has completed and new
-	// v92 metadata may be published. Keep account creation on the predecessor
+	// v94; the latter says that the local catalog fence has completed and new
+	// v94 metadata may be published. Keep account creation on the predecessor
 	// until that write-side fence is ready. A missing key preserves the
 	// standalone/unit-test behavior used by runtimes created before admission.
 	if floorValue, present := rt.GetGlobalVariables(
 		moruntime.PersistedExpressionProtocolAuthoringFloor); present {
 		floor, valid := floorValue.(int64)
-		if !valid || floor < defines.MORPCVersion92 {
+		if !valid || floor < defines.MORPCVersion94 {
 			if err := ctx.Err(); err != nil {
 				return 0, err
 			}
-			return legacyVersion, nil
+			return predecessorViewsVersion, nil
 		}
 	}
-	supported, err := compile.AllCNsSupportProtocolWithContext(ctx, proc, defines.MORPCVersion92)
+	supported, err := compile.AllCNsSupportProtocolWithContext(ctx, proc, defines.MORPCVersion94)
 	if err != nil {
 		// Capability discovery is deliberately best-effort for account
 		// creation. Do not turn a temporary inventory/RPC failure into a
@@ -11122,10 +11123,10 @@ func protocolVersionForTenantInitializationWithContext(
 		if ctx.Err() != nil {
 			return 0, ctx.Err()
 		}
-		return legacyVersion, nil
+		return predecessorViewsVersion, nil
 	}
 	if !supported {
-		return legacyVersion, nil
+		return predecessorViewsVersion, nil
 	}
 	return version, nil
 }

@@ -192,7 +192,7 @@ func TestStatisticsUpgradeOldWorkerCannotCompleteNewTask(t *testing.T) {
 						// The control case models a worker built before this change. Its
 						// v4.0.7 handler had no semantic VIEWS entry, so replace the
 						// current handler with an offset-only test double rather than
-						// accidentally exercising the new v92 gate.
+						// accidentally exercising the new v94 gate.
 						legacyV407 := newTestVersionHandler(
 							"4.0.7", "4.0.6", versions.Yes, versions.Yes, 0)
 						s.handles = append(s.handles, legacyV407)

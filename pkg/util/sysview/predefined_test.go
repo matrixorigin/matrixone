@@ -301,7 +301,7 @@ func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
 		assertInformationSchemaInitSQLParses(t, sql)
 	}
 
-	for _, protocol := range []int64{defines.MORPCVersion58, defines.MORPCVersion91} {
+	for _, protocol := range []int64{defines.MORPCVersion58, defines.MORPCVersion91, defines.MORPCVersion92, defines.MORPCVersion93} {
 		t.Run(fmt.Sprintf("preserve-current-columns-before-views-v%d", protocol), func(t *testing.T) {
 			catalog := InitInformationSchemaSysTablesForProtocol(protocol)
 			joined := strings.Join(catalog, "\n")
@@ -316,7 +316,21 @@ func TestInitInformationSchemaSysTablesForProtocol(t *testing.T) {
 		})
 	}
 
-	latest := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion92)
+	v92 := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion92)
+	assert.Contains(t, v92, InformationSchemaViewsLegacyDDL)
+	assert.NotContains(t, strings.Join(v92, "\n"), "mo_view_definition(")
+	for _, sql := range v92 {
+		assertInformationSchemaInitSQLParses(t, sql)
+	}
+
+	v93 := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion93)
+	assert.Contains(t, v93, InformationSchemaViewsLegacyDDL)
+	assert.NotContains(t, strings.Join(v93, "\n"), "mo_view_definition(")
+	for _, sql := range v93 {
+		assertInformationSchemaInitSQLParses(t, sql)
+	}
+
+	latest := InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion94)
 	assert.Equal(t, InitInformationSchemaSysTables, latest)
 	assert.Contains(t, strings.Join(latest, "\n"), "WHEN 3 then 'utf8mb4'")
 }

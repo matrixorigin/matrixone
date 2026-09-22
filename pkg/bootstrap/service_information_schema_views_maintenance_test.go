@@ -64,7 +64,7 @@ func TestMaintainInformationSchemaViewsRetriesFailedReplacement(t *testing.T) {
 	service := newInformationSchemaViewsMaintenanceTestService(t, func(sql string) (executor.Result, error) {
 		switch {
 		case sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
-			return newBootstrapStringResult(`{"method":"GETPROTOCOLVERSION","result":"cn-a:92"}`), nil
+			return newBootstrapStringResult(`{"method":"GETPROTOCOLVERSION","result":"cn-a:94"}`), nil
 		case strings.HasPrefix(sql, "select account_id from mo_catalog.mo_account"):
 			accountLookups++
 			require.Contains(t, sql, "limit 32")
@@ -164,8 +164,8 @@ func TestMaintainInformationSchemaViewsRollsBackOnMidPageProtocolLoss(t *testing
 		definition: sysview.InformationSchemaViewsLegacyDDL,
 		accountIDs: []int32{10, 20},
 		protocolResponses: []string{
-			`{"method":"GETPROTOCOLVERSION","result":"cn-a:92"}`,
-			`{"method":"GETPROTOCOLVERSION","result":"cn-a:92"}`,
+			`{"method":"GETPROTOCOLVERSION","result":"cn-a:94"}`,
+			`{"method":"GETPROTOCOLVERSION","result":"cn-a:94"}`,
 			`{"method":"GETPROTOCOLVERSION","result":"cn-a:91"}`,
 		},
 	}
@@ -193,7 +193,7 @@ func TestMaintainInformationSchemaViewsRollsBackOnMidPageProtocolLoss(t *testing
 		"a mid-page gate miss must roll back the staged replacement")
 	require.Zero(t, service.upgrade.informationSchemaViewsMaintenanceState.accountCursor)
 
-	// The gate miss is retryable. The next page attempt sees v92 and commits
+	// The gate miss is retryable. The next page attempt sees v94 and commits
 	// both tenants, while the first failed attempt left no persisted progress.
 	require.NoError(t, service.maintainInformationSchemaViews(t.Context()))
 	require.Equal(t, int32(6), state.protocolCalls.Load())
@@ -361,9 +361,9 @@ func TestMaintainInformationSchemaViewsTransitionsLegacyDefinitionForPublicConsu
 		definition: sysview.InformationSchemaViewsLegacyDDL,
 		protocolResponses: []string{
 			`{"method":"GETPROTOCOLVERSION","result":"cn-a:74"}`,
-			`{"method":"GETPROTOCOLVERSION","result":"cn-a:92"}`,
-			`{"method":"GETPROTOCOLVERSION","result":"cn-a:92"}`,
-			`{"method":"GETPROTOCOLVERSION","result":"cn-a:92"}`,
+			`{"method":"GETPROTOCOLVERSION","result":"cn-a:94"}`,
+			`{"method":"GETPROTOCOLVERSION","result":"cn-a:94"}`,
+			`{"method":"GETPROTOCOLVERSION","result":"cn-a:94"}`,
 		},
 	}
 	installTransactionalInformationSchemaViewsCheck(t, state, accountID)
@@ -460,7 +460,7 @@ func TestMaintainInformationSchemaViewsSkipsAccountDroppedDuringScan(t *testing.
 	service := newInformationSchemaViewsMaintenanceTestService(t, func(sql string) (executor.Result, error) {
 		switch {
 		case sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
-			return newBootstrapStringResult(`{"method":"GETPROTOCOLVERSION","result":"cn-a:92"}`), nil
+			return newBootstrapStringResult(`{"method":"GETPROTOCOLVERSION","result":"cn-a:94"}`), nil
 		case strings.HasPrefix(sql, "select account_id from mo_catalog.mo_account"):
 			require.Contains(t, sql, "account_id >= 0")
 			return buildInformationSchemaViewsMaintenanceAccountRows(droppedAccountID, survivingAccountID), nil
@@ -503,7 +503,7 @@ func TestMaintainInformationSchemaViewsFindsLateAccountAfterWrap(t *testing.T) {
 	service := newInformationSchemaViewsMaintenanceTestService(t, func(sql string) (executor.Result, error) {
 		switch {
 		case sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
-			return newBootstrapStringResult(`{"method":"GETPROTOCOLVERSION","result":"cn-a:92"}`), nil
+			return newBootstrapStringResult(`{"method":"GETPROTOCOLVERSION","result":"cn-a:94"}`), nil
 		case strings.HasPrefix(sql, "select account_id from mo_catalog.mo_account"):
 			accountLookups++
 			switch accountLookups {
@@ -703,7 +703,7 @@ func (txn *transactionalInformationSchemaViewsTxn) Exec(
 			txn.state.protocolOnce.Do(func() { close(txn.state.protocolEntered) })
 			<-txn.state.protocolRelease
 		}
-		response := `{"method":"GETPROTOCOLVERSION","result":"cn-a:92"}`
+		response := `{"method":"GETPROTOCOLVERSION","result":"cn-a:94"}`
 		call := int(txn.state.protocolCalls.Add(1)) - 1
 		if call < len(txn.state.protocolResponses) {
 			response = txn.state.protocolResponses[call]
