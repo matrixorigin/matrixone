@@ -145,6 +145,7 @@ class SDKTest(unittest.TestCase):
             stubs.mkdir(parents=True)
             runtime = prefix / "lib/libcudart.so.13"
             runtime.write_bytes(b"verified runtime")
+            (prefix / "lib/libcudart.so").symlink_to(runtime.name)
             stub = stubs / "libcuda.so"
             stub.write_bytes(b"driver stub")
             toolchain_path = root / "toolchain.json"
@@ -153,7 +154,10 @@ class SDKTest(unittest.TestCase):
                 "provider": "pixi",
                 "platform": "linux-64",
                 "prefix": str(prefix),
-                "cuda": {"stub_library_dirs": [str(stubs)]},
+                "cuda": {
+                    "library_dirs": [str(prefix / "lib")],
+                    "stub_library_dirs": [str(stubs)],
+                },
                 "runtime_roots": [str(runtime)],
                 "artifact_sha256": {
                     str(runtime): sirius_sdk.digest(runtime),
@@ -168,9 +172,18 @@ class SDKTest(unittest.TestCase):
                     **toolchain["artifact_sha256"],
                 },
             }
-            got = sirius_sdk.gpu_toolchain(manifest)
+            with patch.object(
+                sirius_sdk,
+                "run",
+                return_value="0x000000000000000e (SONAME) Library soname: [libcudart.so.13]",
+            ):
+                got = sirius_sdk.gpu_toolchain(manifest)
             self.assertEqual(got["prefix"], str(prefix))
             self.assertIn(str(runtime), got["artifact_sha256"])
+            self.assertEqual(
+                got["runtime_libraries"]["libcudart.so.13"]["source"],
+                str(runtime),
+            )
 
             toolchain["runtime_roots"] = [str(stub)]
             toolchain_path.write_text(json.dumps(toolchain))
@@ -244,10 +257,7 @@ class SDKTest(unittest.TestCase):
             if gpu_source is not None:
                 gpu_staged = args.output / "libcudart.so.13"
                 paths["libcudart.so.13"] = (
-                    gpu_staged
-                    if gpu_staged.is_file()
-                    and b"|rpath=$ORIGIN" in gpu_staged.read_bytes()
-                    else gpu_source
+                    gpu_staged if gpu_staged.is_file() else gpu_source
                 )
             if force_external:
                 paths["libmo.so"] = source / "libmo.so"
@@ -309,6 +319,8 @@ class SDKTest(unittest.TestCase):
             cudart = prefix / "lib/libcudart.so.13.3"
             cudart.write_bytes(b"\x7fELF verified cudart")
             cudart.chmod(0o755)
+            staged = args.output / "libcudart.so.13"
+            staged.write_bytes(b"\x7fELF stale prior provider")
             provenance = json.loads((args.prepared / "provenance.json").read_text())
             provenance["artifact_sha256"] = {
                 str(cudart): sirius_sdk.digest(cudart)
@@ -321,6 +333,12 @@ class SDKTest(unittest.TestCase):
                 "artifact_sha256": {
                     str(cudart): sirius_sdk.digest(cudart)
                 },
+                "runtime_libraries": {
+                    "libcudart.so.13": {
+                        "source": str(cudart),
+                        "sha256": sirius_sdk.digest(cudart),
+                    }
+                },
             }
             (args.prepared / "provenance.json").write_text(json.dumps(provenance))
             with patch.object(
@@ -329,8 +347,8 @@ class SDKTest(unittest.TestCase):
                 side_effect=self.package_tools(args, source, gpu_source=cudart),
             ):
                 sirius_sdk.package(args)
-            staged = args.output / "libcudart.so.13"
             self.assertIn(b"|rpath=$ORIGIN", staged.read_bytes())
+            self.assertNotIn(b"stale prior provider", staged.read_bytes())
             self.assertEqual(cudart.read_bytes(), b"\x7fELF verified cudart")
             report = json.loads((args.output / "sirius-provenance.json").read_text())
             self.assertEqual(
@@ -358,6 +376,12 @@ class SDKTest(unittest.TestCase):
                 "stub_library_dirs": [str(stubs)],
                 "artifact_sha256": {
                     str(cudart): sirius_sdk.digest(cudart)
+                },
+                "runtime_libraries": {
+                    "libcudart.so.13": {
+                        "source": str(cudart),
+                        "sha256": sirius_sdk.digest(cudart),
+                    }
                 },
             }
             (args.prepared / "provenance.json").write_text(json.dumps(provenance))

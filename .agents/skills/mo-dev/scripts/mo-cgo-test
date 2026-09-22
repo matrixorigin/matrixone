@@ -271,7 +271,10 @@ if [ "${MO_SIRIUS:-}" = "1" ]; then
         *) echo "SIRIUS_SDK must be an absolute path" >&2; exit 1 ;;
     esac
     case "$SIRIUS_SDK" in
-        *[[:space:]]*) echo "SIRIUS_SDK cannot contain whitespace" >&2; exit 1 ;;
+        *[!A-Za-z0-9_./+@-]*)
+            echo "SIRIUS_SDK cannot contain whitespace or metacharacters" >&2
+            exit 1
+            ;;
     esac
     python3 "$repo_root/optools/sirius_sdk.py" prepare \
         --sdk "$SIRIUS_SDK" \

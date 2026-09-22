@@ -139,6 +139,14 @@ def relocatable_flags(flags):
     return result
 
 
+def elf_soname(path):
+    output = run("readelf", "-d", str(path))
+    match = re.search(r"\(SONAME\).*\[([^]]+)\]", output)
+    if match is None or Path(match[1]).name != match[1]:
+        raise ValueError("GPU runtime dependency lacks a relocatable SONAME: " + str(path))
+    return match[1]
+
+
 def gpu_toolchain(manifest):
     value = manifest.get("gpu_toolchain_manifest")
     if value is None:
@@ -194,6 +202,7 @@ def gpu_toolchain(manifest):
     roots = data.get("runtime_roots")
     if not isinstance(roots, list) or not roots:
         raise ValueError("Sirius SDK GPU runtime roots are missing")
+    runtime_paths = []
     for name in roots:
         root_path = Path(name)
         root = root_path.resolve()
@@ -206,12 +215,30 @@ def gpu_toolchain(manifest):
             or str(root) not in normalized
         ):
             raise ValueError("Sirius SDK GPU runtime root is unsafe: " + name)
+        runtime_paths.append(root)
+    cudart = None
+    for name in data.get("cuda", {}).get("library_dirs", []):
+        candidate = Path(name) / "libcudart.so"
+        if candidate.is_file():
+            cudart = candidate.resolve()
+            break
+    if cudart is None or str(cudart) not in normalized:
+        raise ValueError("Sirius SDK GPU runtime libcudart is not verified")
+    runtime_paths.append(cudart)
+    runtime_libraries = {}
+    for source in runtime_paths:
+        soname = elf_soname(source)
+        item = {"source": str(source), "sha256": normalized[str(source)]}
+        if soname in runtime_libraries and runtime_libraries[soname] != item:
+            raise ValueError("Sirius SDK GPU runtime SONAME is ambiguous: " + soname)
+        runtime_libraries[soname] = item
     return {
         "manifest": str(path),
         "manifest_sha256": hashes[str(path)],
         "prefix": str(prefix),
         "stub_library_dirs": stubs,
         "artifact_sha256": normalized,
+        "runtime_libraries": runtime_libraries,
     }
 
 
@@ -334,8 +361,28 @@ def package(args):
             break
         for name in sorted(pending):
             staged = output / name
-            if not staged.is_file():
-                toolchain = provenance.get("gpu_toolchain")
+            toolchain = provenance.get("gpu_toolchain")
+            provider = (
+                toolchain.get("runtime_libraries", {}).get(name)
+                if toolchain is not None
+                else None
+            )
+            if provider is not None:
+                source = Path(provider["source"]).resolve()
+                expected = provider["sha256"]
+                prefix = Path(toolchain["prefix"])
+                stubs = [Path(path) for path in toolchain["stub_library_dirs"]]
+                if (
+                    not source.is_relative_to(prefix)
+                    or any(source.is_relative_to(stub) for stub in stubs)
+                    or source.name.startswith(("libcuda.so", "libnvidia-"))
+                    or toolchain["artifact_sha256"].get(str(source)) != expected
+                    or digest(source) != expected
+                ):
+                    raise ValueError("unverified MO GPU runtime dependency: " + name)
+                gpu_runtime_hashes[name] = expected
+                stage_rpath(source, staged, "$ORIGIN")
+            elif not staged.is_file():
                 source = resolved[name]
                 if toolchain is None or source is None:
                     raise ValueError("missing staged MO runtime dependency: " + name)
