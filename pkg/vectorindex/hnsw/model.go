@@ -425,10 +425,6 @@ func (idx *HnswModel[T]) Add(key int64, vec []T) error {
 		return moerr.NewInternalErrorNoCtx(fmt.Sprintf("usearch dimension not match (expected %d but got %d)", dim, len(vec)))
 	}
 
-	if err := metric.CheckIndexableVector(vec); err != nil {
-		return err
-	}
-
 	defer runtime.KeepAlive(vec)
 	return idx.Index.AddUnsafe(uint64(key), util.UnsafePointer(&vec[0]))
 }
@@ -456,10 +452,6 @@ func (idx *HnswModel[T]) AddWithoutIncr(key int64, vec []T) error {
 
 	if uint(len(vec)) != dim {
 		return moerr.NewInternalErrorNoCtx("usearch dimension not match")
-	}
-
-	if err := metric.CheckIndexableVector(vec); err != nil {
-		return err
 	}
 
 	defer runtime.KeepAlive(vec)
