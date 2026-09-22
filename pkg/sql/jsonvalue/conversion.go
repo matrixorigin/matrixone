@@ -17,6 +17,7 @@ package jsonvalue
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -466,11 +467,13 @@ func validJSONValue(value bytejson.ByteJson) bool {
 		}
 		floating := math.Float64frombits(binary.LittleEndian.Uint64(value.Data))
 		return !math.IsNaN(floating) && !math.IsInf(floating, 0)
-	case bytejson.TpCodeString, bytejson.TpCodeDecimal,
+	case bytejson.TpCodeString,
 		bytejson.TpCodeDate, bytejson.TpCodeTime, bytejson.TpCodeDatetime,
 		bytejson.TpCodeBlob, bytejson.TpCodeOpaque, bytejson.TpCodeBit:
 		_, ok := bytejsonvalidate.UvarintPayload(value.Data)
 		return ok
+	case bytejson.TpCodeDecimal:
+		return validDecimalJSONPayload(value.Data)
 	case bytejson.TpCodeArray, bytejson.TpCodeObject:
 		return bytejsonvalidate.Container(byte(value.Type), value.Data, validJSONScalar)
 	default:
@@ -480,6 +483,24 @@ func validJSONValue(value bytejson.ByteJson) bool {
 
 func validJSONScalar(tp byte, data []byte) bool {
 	return validJSONValue(bytejson.ByteJson{Type: bytejson.TpCode(tp), Data: data})
+}
+
+// validDecimalJSONPayload checks the producer contract for TpCodeDecimal.
+// Decimal bytes are emitted verbatim by ByteJson.MarshalJSON, so they must be
+// one complete JSON number. json.Valid performs only linear lexical scanning;
+// it does not parse the exponent into an unbounded numeric intermediate.
+func validDecimalJSONPayload(data []byte) bool {
+	payload, ok := bytejsonvalidate.UvarintPayload(data)
+	if !ok || len(payload) == 0 ||
+		(payload[0] != '-' && (payload[0] < '0' || payload[0] > '9')) {
+		return false
+	}
+	for _, ch := range payload {
+		if ch == ' ' || ch == '\t' || ch == '\r' || ch == '\n' {
+			return false
+		}
+	}
+	return json.Valid(payload)
 }
 
 func safeScalarText(value bytejson.ByteJson) (text string, err error) {
@@ -725,14 +746,10 @@ func convertDecimal(text string, target types.Type, parse func(string) (any, err
 			return Result{Status: StatusRangeError, Err: decimalRangeError(text, target)}
 		}
 	}
-	// A successful non-hex input outside the bounded decimal grammar is accepted
-	// by the legacy parser. It is unsafe to treat that representation as exact,
-	// so preserve the warning contract conservatively rather than silently
-	// losing diagnostics. Hexadecimal input is checked separately as an exact
-	// integer representation and does not need this fallback warning.
-	if !known && !isHexadecimal {
-		truncated = true
-	}
+	// Inputs outside the bounded grammar retain the legacy parser's value and
+	// diagnostic contract. Range is checked above for every successful fallback;
+	// scale-loss warnings come only from the bounded canonical path, where the
+	// discarded digits are observable without an unbounded numeric intermediate.
 	return decimalResult(value, target, truncated)
 }
 

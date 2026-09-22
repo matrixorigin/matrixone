@@ -380,8 +380,9 @@ func TestConvertScalarDecimalBoundaryMatrix(t *testing.T) {
 			}
 
 			lossyFallback := ConvertScalar(parseConversionValue(t, `"1e2-3"`), test.target)
-			require.Equal(t, StatusTruncated, lossyFallback.Status)
-			require.NotNil(t, lossyFallback.Warning)
+			require.Equal(t, StatusSuccess, lossyFallback.Status)
+			require.Nil(t, lossyFallback.Warning)
+			require.Equal(t, "0", decimalValueCoefficient(lossyFallback.Value).String())
 		})
 	}
 
@@ -424,6 +425,50 @@ func TestConvertScalarDecimalBoundaryMatrix(t *testing.T) {
 					require.Equal(t, want, result.Value)
 				}
 			}
+		})
+	}
+}
+
+func TestConvertScalarLegacyDecimalFallbackRetainsParserContract(t *testing.T) {
+	legacy := []struct {
+		name   string
+		target types.Type
+		input  string
+		parse  func(string) (any, error)
+	}{
+		{
+			name:   "decimal64 malformed exponent",
+			target: types.New(types.T_decimal64, 10, 2),
+			input:  "1e2-3",
+			parse: func(input string) (any, error) {
+				return types.ParseDecimal64(input, 10, 2)
+			},
+		},
+		{
+			name:   "decimal128 malformed exponent",
+			target: types.New(types.T_decimal128, 20, 2),
+			input:  "1e2-3",
+			parse: func(input string) (any, error) {
+				return types.ParseDecimal128(input, 20, 2)
+			},
+		},
+		{
+			name:   "decimal256 malformed exponent",
+			target: types.New(types.T_decimal256, 40, 2),
+			input:  "1e2e3",
+			parse: func(input string) (any, error) {
+				return types.ParseDecimal256(input, 40, 2)
+			},
+		},
+	}
+	for _, test := range legacy {
+		t.Run(test.name, func(t *testing.T) {
+			want, err := test.parse(test.input)
+			require.NoError(t, err, "legacy parser must accept %q", test.input)
+			result := ConvertScalar(parseConversionValue(t, strconv.Quote(test.input)), test.target)
+			require.Equal(t, StatusSuccess, result.Status)
+			require.Nil(t, result.Warning)
+			require.Equal(t, want, result.Value)
 		})
 	}
 }
@@ -485,6 +530,12 @@ func TestConvertScalarDecimalResultAppendsWithWarningAndRejectsRange(t *testing.
 }
 
 func TestConvertScalarMalformedByteJsonFailsClosed(t *testing.T) {
+	decimalValue := func(text string) bytejson.ByteJson {
+		data := binary.AppendUvarint(nil, uint64(len(text)))
+		data = append(data, text...)
+		return bytejson.ByteJson{Type: bytejson.TpCodeDecimal, Data: data}
+	}
+
 	malformed := bytejson.ByteJson{Type: bytejson.TpCodeInt64, Data: []byte{1}}
 	result := ConvertScalar(malformed, types.T_int64.ToType())
 	require.Equal(t, StatusStatementError, result.Status)
@@ -503,6 +554,26 @@ func TestConvertScalarMalformedByteJsonFailsClosed(t *testing.T) {
 	malformedString := bytejson.ByteJson{Type: bytejson.TpCodeString, Data: []byte{0x80}}
 	result = ConvertScalar(malformedString, types.T_varchar.ToType())
 	require.Equal(t, StatusStatementError, result.Status)
+	require.Error(t, result.Err)
+	for _, text := range []string{"not-a-decimal", "+1", "01", "1e", "1e+"} {
+		for _, target := range []types.Type{
+			types.T_varchar.ToType(),
+			types.T_json.ToType(),
+			types.New(types.T_decimal64, 10, 2),
+		} {
+			result = ConvertScalar(decimalValue(text), target)
+			require.Equal(t, StatusStatementError, result.Status, "%q -> %s", text, target.DescString())
+			require.Error(t, result.Err, "%q -> %s", text, target.DescString())
+		}
+	}
+	for _, text := range []string{"0.00", "-0.01", "1e100", "1E-300"} {
+		result = ConvertScalar(decimalValue(text), types.T_varchar.ToType())
+		require.Equal(t, StatusSuccess, result.Status, "valid decimal payload %q", text)
+		require.Equal(t, []byte(text), result.Value, "valid decimal payload %q", text)
+	}
+	largeExponent := "1e" + strings.Repeat("9", 4096)
+	result = ConvertScalar(decimalValue(largeExponent), types.New(types.T_decimal64, 10, 2))
+	require.Equal(t, StatusRangeError, result.Status)
 	require.Error(t, result.Err)
 	for _, floating := range []float64{math.NaN(), math.Inf(1)} {
 		data := make([]byte, 8)
