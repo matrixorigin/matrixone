@@ -344,6 +344,18 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumer(
 			}
 		}
 
+	case *plan.Expr_List:
+		for i, item := range exprImpl.List.List {
+			// Tuple comparisons are not strictly null-propagating: an earlier
+			// unequal field can decide the result before a later NULL field.
+			// Flatten a nested scalar without inheriting the enclosing
+			// predicate's null-rejection optimization.
+			nodeID, exprImpl.List.List[i], err = builder.flattenSubqueriesWithContext(nodeID, item, ctx, false)
+			if err != nil {
+				return 0, nil, err
+			}
+		}
+
 	case *plan.Expr_Sub:
 		nodeID, expr, err = builder.flattenSubqueryWithConsumer(nodeID, exprImpl.Sub, ctx, nullResultRejected, consumer)
 	}
@@ -381,13 +393,20 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 		return id, expr, err
 	}
 	if subquery.Child != nil && hasSubquery(subquery.Child) {
-		return 0, nil, moerr.NewNotSupported(builder.GetContext(), "a quantified subquery's left operand can't contain subquery")
+		if subquery.Typ != plan.SubqueryRef_SCALAR {
+			return 0, nil, moerr.NewNotSupported(builder.GetContext(), "a quantified subquery's left operand can't contain subquery")
+		}
+		var err error
+		nodeID, subquery.Child, err = builder.flattenSubqueriesWithContext(nodeID, subquery.Child, ctx, false)
+		if err != nil {
+			return 0, nil, err
+		}
 	}
 
 	subID := subquery.NodeId
 	subCtx := builder.ctxByNode[subID]
-	var scalarMatch *plan.Expr
-	var scalarOuterResult *plan.Expr
+	var scalarMatches []*plan.Expr
+	var scalarOuterResults []*plan.Expr
 	var scalarExistential bool
 	var scalarPerOuterOrderKey *plan.Expr
 	var scalarProjectionStatus scalarProjectionNormalization
@@ -442,7 +461,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	}
 
 	if subquery.Typ == plan.SubqueryRef_SCALAR {
-		subID, scalarMatch, scalarOuterResult, scalarExistential, scalarPerOuterOrderKey, scalarProjectionStatus =
+		subID, scalarMatches, scalarOuterResults, scalarExistential, scalarPerOuterOrderKey, scalarProjectionStatus =
 			builder.normalizeCorrelatedScalarProjection(subID, subCtx)
 		if scalarProjectionStatus == scalarProjectionUnsafe {
 			return 0, nil, moerr.NewNYI(builder.GetContext(),
@@ -512,9 +531,18 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 					FilterList: filterPreds,
 				}, ctx)
 			}
+			if subquery.Child != nil {
+				projects, err := builder.finalizeCorrelatedScalarProjections(
+					subCtx, scalarMatches, scalarOuterResults, retExpr)
+				if err != nil {
+					return 0, nil, err
+				}
+				newExpr, err := builder.generateRowComparisonWithProjects(subquery.Op, subquery.Child, projects)
+				return nodeID, newExpr, err
+			}
 			retExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "case", []*plan.Expr{
 				retExpr,
-				scalarOuterResult,
+				scalarOuterResults[0],
 				makePlan2NullConstExprWithType(),
 			})
 			return nodeID, retExpr, err
@@ -540,7 +568,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 			joinType = plan.Node_LEFT
 		}
 
-		postJoinProjections, finalizeProjection, err :=
+		subID, postJoinProjections, finalizeProjection, err :=
 			builder.prepareCorrelatedScalarAggregatePostJoinProjection(subID, subCtx, joinPreds)
 		if err != nil {
 			return nodeID, nil, err
@@ -548,6 +576,11 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 		if scalarProjectionStatus == scalarProjectionAggregatePending && !finalizeProjection {
 			return 0, nil, moerr.NewNYI(builder.GetContext(),
 				"wrapped correlated aggregate projection cannot be safely decorrelated")
+		}
+		if subquery.Child != nil && subCtx.hasSingleRow && len(subCtx.groups) == 0 &&
+			len(subCtx.aggregates) > 0 && len(joinPreds) > 0 && !finalizeProjection {
+			return 0, nil, moerr.NewNYI(builder.GetContext(),
+				"correlated aggregate row result cannot be safely decorrelated")
 		}
 
 		nodeID = builder.appendNode(&plan.Node{
@@ -576,13 +609,34 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 			if finalizeProjection {
 				newExpr, err := builder.generateRowComparisonWithProjects(
 					subquery.Op, subquery.Child, postJoinProjections)
+				if err != nil {
+					return 0, nil, err
+				}
+				// This comparison consumes synthesized post-join aggregate values.
+				// Keep its tuple conjunction as one predicate so filter pushdown
+				// cannot move an individual aggregate comparison below the LEFT
+				// join and change the empty-input semantics. Double negation is a
+				// three-valued boolean identity and acts only as that boundary.
+				newExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "not", []*plan.Expr{newExpr})
+				if err != nil {
+					return 0, nil, err
+				}
+				newExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "not", []*plan.Expr{newExpr})
 				return nodeID, newExpr, err
 			}
-			newExpr, err := builder.generateRowComparison(subquery.Op, subquery.Child, subCtx, false)
+			projects, err := builder.finalizeCorrelatedScalarProjections(
+				subCtx, scalarMatches, scalarOuterResults, nil)
+			if err != nil {
+				return 0, nil, err
+			}
+			newExpr, err := builder.generateRowComparisonWithProjects(subquery.Op, subquery.Child, projects)
 			return nodeID, newExpr, err
 		}
 
-		retExpr := scalarMatch
+		var retExpr *plan.Expr
+		if len(scalarMatches) > 0 {
+			retExpr = scalarMatches[0]
+		}
 		if finalizeProjection {
 			if len(postJoinProjections) != 1 {
 				return 0, nil, moerr.NewInternalError(builder.GetContext(),
@@ -600,10 +654,10 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 				},
 			}
 		}
-		if scalarOuterResult != nil {
+		if len(scalarOuterResults) > 0 && scalarOuterResults[0] != nil {
 			retExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "case", []*plan.Expr{
 				retExpr,
-				scalarOuterResult,
+				scalarOuterResults[0],
 				makePlan2NullConstExprWithType(),
 			})
 			if err != nil {
@@ -759,26 +813,50 @@ const (
 func (builder *QueryBuilder) normalizeCorrelatedScalarProjection(
 	subID int32,
 	ctx *BindContext,
-) (int32, *plan.Expr, *plan.Expr, bool, *plan.Expr, scalarProjectionNormalization) {
-	if len(ctx.projects) == 0 || !hasCorrCol(ctx.projects[0]) {
+) (int32, []*plan.Expr, []*plan.Expr, bool, *plan.Expr, scalarProjectionNormalization) {
+	resultCount := len(ctx.results)
+	if resultCount == 0 || len(ctx.projects) < resultCount {
 		return subID, nil, nil, false, nil, scalarProjectionNotApplicable
 	}
-	unsafe := func() (int32, *plan.Expr, *plan.Expr, bool, *plan.Expr, scalarProjectionNormalization) {
+	hasCorrelatedResult := false
+	for i := range resultCount {
+		hasCorrelatedResult = hasCorrelatedResult || hasCorrCol(ctx.projects[i])
+	}
+	if !hasCorrelatedResult {
+		return subID, nil, nil, false, nil, scalarProjectionNotApplicable
+	}
+	unsafe := func() (int32, []*plan.Expr, []*plan.Expr, bool, *plan.Expr, scalarProjectionNormalization) {
 		return subID, nil, nil, false, nil, scalarProjectionUnsafe
 	}
-	if len(ctx.results) != 1 || len(ctx.groups) > 0 || !allCorrColsAtDepthOne(ctx.projects[0]) {
+	if len(ctx.groups) > 0 {
 		return unsafe()
+	}
+	for i := range resultCount {
+		if hasCorrCol(ctx.projects[i]) && !allCorrColsAtDepthOne(ctx.projects[i]) {
+			return unsafe()
+		}
 	}
 	// Ungrouped scalar aggregates are accepted only if the dedicated post-join
 	// reconstruction later proves that their exact plan shape is supported.
 	if len(ctx.aggregates) > 0 {
 		return subID, nil, nil, false, nil, scalarProjectionAggregatePending
 	}
-	if containsVolatileFunction(ctx.projects[0]) || !builder.casePreservesType(ctx.projects[0]) {
-		return unsafe()
+
+	for i := range resultCount {
+		if hasCorrCol(ctx.projects[i]) &&
+			(containsVolatileFunction(ctx.projects[i]) || !builder.casePreservesType(ctx.projects[i])) {
+			return unsafe()
+		}
 	}
 
-	innerDependent := exprHasColRef(ctx.projects[0])
+	rowInnerDependent := false
+	correlatedInnerDependent := false
+	for i := range resultCount {
+		rowInnerDependent = rowInnerDependent || exprHasColRef(ctx.projects[i])
+		if hasCorrCol(ctx.projects[i]) {
+			correlatedInnerDependent = correlatedInnerDependent || exprHasColRef(ctx.projects[i])
+		}
+	}
 	nodeID := subID
 	limitOne := false
 	hasOrdering := false
@@ -800,38 +878,59 @@ func (builder *QueryBuilder) normalizeCorrelatedScalarProjection(
 		}
 
 		if node.NodeType == plan.Node_PROJECT && len(node.BindingTags) > 0 && node.BindingTags[0] == ctx.projectTag {
-			if len(node.ProjectList) == 0 || !exprStructuralEqual(node.ProjectList[0], ctx.projects[0]) ||
-				!hasCorrCol(node.ProjectList[0]) || !allCorrColsAtDepthOne(node.ProjectList[0]) {
+			if len(node.ProjectList) < resultCount {
 				return unsafe()
 			}
-			if innerDependent && (nodeID != subID || hasDistinct ||
+			for i := range resultCount {
+				if !exprStructuralEqual(node.ProjectList[i], ctx.projects[i]) ||
+					(hasCorrCol(node.ProjectList[i]) && !allCorrColsAtDepthOne(node.ProjectList[i])) {
+					return unsafe()
+				}
+			}
+			if correlatedInnerDependent && (nodeID != subID || hasDistinct ||
 				(limitOne && (hasOrdering || builder.isPrepareStatement ||
 					builder.qry.StmtType != plan.Query_SELECT))) {
 				return unsafe()
 			}
 			var innerOrderSource *plan.Expr
-			if innerDependent && limitOne {
+			if rowInnerDependent && limitOne {
+				if hasOrdering || hasDistinct {
+					return unsafe()
+				}
 				innerOrderSource = builder.findReachableRowIDColRef(node.Children[0])
 				if innerOrderSource == nil {
 					return unsafe()
 				}
 			}
 
-			liftedResult := builder.pullupThroughProj(
-				ctx, node, ctx.projectTag, DeepCopyExpr(node.ProjectList[0]))
-			innerDependent = exprHasColRef(liftedResult)
-			liftedResult, stillCorrelated := decreaseDepth(liftedResult)
-			if stillCorrelated {
-				return unsafe()
+			matches := make([]*plan.Expr, resultCount)
+			outerResults := make([]*plan.Expr, resultCount)
+			for i := range resultCount {
+				if !hasCorrCol(node.ProjectList[i]) {
+					continue
+				}
+				liftedResult := builder.pullupThroughProj(
+					ctx, node, ctx.projectTag, DeepCopyExpr(node.ProjectList[i]))
+				liftedResult, stillCorrelated := decreaseDepth(liftedResult)
+				if stillCorrelated {
+					return unsafe()
+				}
+
+				marker := DeepCopyExpr(constTrue)
+				node.ProjectList[i] = marker
+				ctx.projects[i] = marker
+				matches[i] = GetColExpr(marker.Typ, ctx.projectTag, int32(i))
+				outerResults[i] = liftedResult
 			}
 
-			marker := DeepCopyExpr(constTrue)
-			node.ProjectList[0] = marker
-			ctx.projects[0] = marker
-			match := GetColExpr(marker.Typ, ctx.projectTag, 0)
-			if !innerDependent {
+			if !rowInnerDependent {
+				for i := range resultCount {
+					if outerResults[i] == nil {
+						outerResults[i] = DeepCopyExpr(ctx.projects[i])
+					}
+				}
 				node.Limit = nil
-				return nodeID, match, liftedResult, limitOne || hasDistinct, nil, scalarProjectionNormalized
+				return nodeID, matches, outerResults, limitOne || hasDistinct, nil, scalarProjectionNormalized
 			}
 			if limitOne {
 				// SQL does not define which matching row an unordered LIMIT 1
@@ -841,9 +940,9 @@ func (builder *QueryBuilder) normalizeCorrelatedScalarProjection(
 				node.ProjectList = append(node.ProjectList, innerOrderSource)
 				orderKey := GetColExpr(innerOrderSource.Typ, ctx.projectTag, orderPos)
 				node.Limit = nil
-				return nodeID, match, liftedResult, false, orderKey, scalarProjectionNormalized
+				return nodeID, matches, outerResults, false, orderKey, scalarProjectionNormalized
 			}
-			return nodeID, match, liftedResult, false, nil, scalarProjectionNormalized
+			return subID, matches, outerResults, false, nil, scalarProjectionNormalized
 		}
 
 		if len(node.Children) != 1 {
@@ -858,6 +957,47 @@ func (builder *QueryBuilder) normalizeCorrelatedScalarProjection(
 		}
 		nodeID = node.Children[0]
 	}
+}
+
+func (builder *QueryBuilder) finalizeCorrelatedScalarProjections(
+	ctx *BindContext,
+	matches, outerResults []*plan.Expr,
+	existentialMatch *plan.Expr,
+) ([]*plan.Expr, error) {
+	sharedMatch := existentialMatch
+	if sharedMatch == nil {
+		for _, match := range matches {
+			if match != nil {
+				sharedMatch = match
+				break
+			}
+		}
+	}
+	projects := make([]*plan.Expr, len(ctx.results))
+	for i := range projects {
+		if i >= len(outerResults) || outerResults[i] == nil {
+			projects[i] = getProjectExpr(i, ctx, false)
+			continue
+		}
+		match := sharedMatch
+		if i < len(matches) && matches[i] != nil {
+			match = matches[i]
+		}
+		if match == nil {
+			return nil, moerr.NewInternalError(builder.GetContext(),
+				"correlated scalar projection is missing its match marker")
+		}
+		var err error
+		projects[i], err = BindFuncExprImplByPlanExpr(builder.GetContext(), "case", []*plan.Expr{
+			DeepCopyExpr(match),
+			outerResults[i],
+			makePlan2NullConstExprWithType(),
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	return projects, nil
 }
 
 func (builder *QueryBuilder) correlatedScalarOuterRowID(nodeID int32, ctx *BindContext) *plan.Expr {
@@ -1161,77 +1301,81 @@ func (builder *QueryBuilder) generateRowComparisonWithProjects(
 // extension. The saved final expression is then evaluated against those
 // post-join values.
 //
-// This is intentionally limited to a direct AGG or the ordinary PROJECT -> AGG
-// shape. Wrappers that can remove or reorder the aggregate row (for example
-// HAVING, DISTINCT, SORT, or LIMIT) keep the legacy path.
+// This is intentionally limited to a direct AGG or PROJECT -> [HAVING] -> AGG.
+// Wrappers that can remove or reorder rows in other ways fail closed in the
+// row-scalar caller rather than skipping the aggregate empty-input fallback.
 func (builder *QueryBuilder) prepareCorrelatedScalarAggregatePostJoinProjection(
 	subID int32,
 	subCtx *BindContext,
 	joinPreds []*plan.Expr,
-) ([]*plan.Expr, bool, error) {
+) (int32, []*plan.Expr, bool, error) {
 	if !subCtx.hasSingleRow || len(subCtx.groups) != 0 || len(subCtx.aggregates) == 0 || len(joinPreds) == 0 {
-		return nil, false, nil
+		return subID, nil, false, nil
 	}
 
-	project := builder.qry.Nodes[subID]
-	if project.NodeType == plan.Node_AGG {
-		if len(project.BindingTags) < 2 || project.BindingTags[1] != subCtx.aggregateTag ||
-			len(project.AggList) != len(subCtx.aggregates) || len(project.AggList) != len(subCtx.results) {
-			return nil, false, nil
+	root := builder.qry.Nodes[subID]
+	if root.NodeType == plan.Node_AGG {
+		if len(root.BindingTags) < 2 || root.BindingTags[1] != subCtx.aggregateTag ||
+			len(root.AggList) != len(subCtx.aggregates) || len(root.AggList) != len(subCtx.results) {
+			return subID, nil, false, nil
 		}
-		postJoinProjections := make([]*plan.Expr, len(project.AggList))
-		for i, aggregate := range project.AggList {
+		postJoinProjections := make([]*plan.Expr, len(root.AggList))
+		for i, aggregate := range root.AggList {
 			fn := aggregate.GetF()
 			if fn == nil || fn.Func == nil {
-				return nil, false, nil
+				return subID, nil, false, nil
 			}
 			projected := GetColExpr(aggregate.Typ, subCtx.aggregateTag, int32(i))
 			projected.Typ.NotNullable = false
 			var err error
 			postJoinProjections[i], err = builder.restoreAggregateEmptyResult(projected, aggregate, fn.Func.ObjName)
 			if err != nil {
-				return nil, false, err
+				return subID, nil, false, err
 			}
 		}
-		return postJoinProjections, true, nil
+		return subID, postJoinProjections, true, nil
 	}
-	if project.NodeType != plan.Node_PROJECT || len(project.Children) != 1 || len(project.BindingTags) != 1 ||
-		len(project.ProjectList) == 0 || project.Limit != nil || project.Offset != nil || project.RankOption != nil {
-		return nil, false, nil
+	if root.NodeType != plan.Node_PROJECT || len(root.Children) != 1 || len(root.BindingTags) != 1 ||
+		len(root.ProjectList) == 0 || root.Limit != nil || root.Offset != nil || root.RankOption != nil ||
+		len(root.OrderBy) != 0 {
+		return subID, nil, false, nil
 	}
 
-	agg := builder.qry.Nodes[project.Children[0]]
+	aggID := root.Children[0]
+	var having []*plan.Expr
+	if child := builder.qry.Nodes[aggID]; child.NodeType == plan.Node_FILTER {
+		if len(child.Children) != 1 || child.Limit != nil || child.Offset != nil || child.RankOption != nil ||
+			len(child.OrderBy) != 0 {
+			return subID, nil, false, nil
+		}
+		having = child.FilterList
+		aggID = child.Children[0]
+	}
+
+	agg := builder.qry.Nodes[aggID]
 	if agg.NodeType != plan.Node_AGG || len(agg.BindingTags) < 2 || agg.BindingTags[1] != subCtx.aggregateTag ||
 		len(agg.AggList) != len(subCtx.aggregates) {
-		return nil, false, nil
+		return subID, nil, false, nil
 	}
 
 	resultCount := len(subCtx.results)
-	if resultCount == 0 || len(project.ProjectList) < resultCount {
-		return nil, false, nil
+	if resultCount == 0 || len(root.ProjectList) < resultCount {
+		return subID, nil, false, nil
 	}
-	projectTag := project.BindingTags[0]
 	projectedAggregates := make([]*plan.Expr, len(agg.AggList))
-	rawAggregates := make([]*plan.Expr, len(agg.AggList))
-	firstAppendedPos := int32(len(project.ProjectList))
 	for i, aggregate := range agg.AggList {
 		fn := aggregate.GetF()
 		if fn == nil || fn.Func == nil {
-			return nil, false, nil
+			return subID, nil, false, nil
 		}
 
-		projectPos := int32(i)
-		if i >= resultCount {
-			projectPos = firstAppendedPos + int32(i-resultCount)
-		}
-		rawAggregates[i] = GetColExpr(aggregate.Typ, subCtx.aggregateTag, int32(i))
-		projected := GetColExpr(aggregate.Typ, projectTag, projectPos)
+		projected := GetColExpr(aggregate.Typ, subCtx.aggregateTag, int32(i))
 		projected.Typ.NotNullable = false
 
 		var err error
 		projectedAggregates[i], err = builder.restoreAggregateEmptyResult(projected, aggregate, fn.Func.ObjName)
 		if err != nil {
-			return nil, false, err
+			return subID, nil, false, err
 		}
 	}
 
@@ -1239,24 +1383,56 @@ func (builder *QueryBuilder) prepareCorrelatedScalarAggregatePostJoinProjection(
 	for i := range postJoinProjections {
 		var ok bool
 		postJoinProjections[i], ok = replaceAggregateRefsForPostJoin(
-			DeepCopyExpr(project.ProjectList[i]), subCtx.aggregateTag, projectedAggregates)
+			DeepCopyExpr(root.ProjectList[i]), subCtx.aggregateTag, projectedAggregates)
 		if !ok {
-			return nil, false, nil
+			return subID, nil, false, nil
 		}
 		var stillCorrelated bool
 		postJoinProjections[i], stillCorrelated = decreaseDepth(postJoinProjections[i])
 		if stillCorrelated {
-			return nil, false, nil
+			return subID, nil, false, nil
 		}
 	}
 
-	newProjectList := make([]*plan.Expr, len(project.ProjectList), len(project.ProjectList)+len(rawAggregates)-1)
-	copy(newProjectList, project.ProjectList)
-	copyCount := min(resultCount, len(rawAggregates))
-	copy(newProjectList[:copyCount], rawAggregates[:copyCount])
-	newProjectList = append(newProjectList, rawAggregates[copyCount:]...)
-	project.ProjectList = newProjectList
-	return postJoinProjections, true, nil
+	if len(having) > 0 {
+		postJoinHaving := make([]*plan.Expr, len(having))
+		for i := range having {
+			var ok bool
+			postJoinHaving[i], ok = replaceAggregateRefsForPostJoin(
+				DeepCopyExpr(having[i]), subCtx.aggregateTag, projectedAggregates)
+			if !ok {
+				return subID, nil, false, nil
+			}
+			var stillCorrelated bool
+			postJoinHaving[i], stillCorrelated = decreaseDepth(postJoinHaving[i])
+			if stillCorrelated {
+				return subID, nil, false, nil
+			}
+		}
+		havingMatch, err := combinePlanExprsBalanced(builder.GetContext(), "and", postJoinHaving)
+		if err != nil {
+			return subID, nil, false, err
+		}
+		for i := range postJoinProjections {
+			postJoinProjections[i], err = BindFuncExprImplByPlanExpr(builder.GetContext(), "case", []*plan.Expr{
+				DeepCopyExpr(havingMatch),
+				postJoinProjections[i],
+				makePlan2NullConstExprWithType(),
+			})
+			if err != nil {
+				return subID, nil, false, err
+			}
+		}
+	}
+
+	// The pulled-up join predicates may still address correlation keys that
+	// the top PROJECT appended. Rebind those keys to the AGG outputs before
+	// bypassing the PROJECT; otherwise the executor sees a dangling project tag.
+	projectTag := root.BindingTags[0]
+	for i := range joinPreds {
+		joinPreds[i] = replaceGroupTagRefs(joinPreds[i], projectTag, root.ProjectList)
+	}
+	return aggID, postJoinProjections, true, nil
 }
 
 func (builder *QueryBuilder) restoreAggregateEmptyResult(

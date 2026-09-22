@@ -585,6 +585,9 @@ order_v
 select (1,null) <=> (select a,b from row_scalar_28295 where id=2) as null_safe_v;
 null_safe_v
 1
+select (1,(select 5)) = (select a,b from row_scalar_28295 where id=1) as nested_scalar_v;
+nested_scalar_v
+1
 select id from row_scalar_28295 outer_row
 where (outer_row.a, outer_row.b) =
 (select inner_row.a, inner_row.b from row_scalar_28295 inner_row where inner_row.id=outer_row.id)
@@ -593,6 +596,21 @@ id
 1
 3
 4
+select id from row_scalar_28295 outer_row
+where (outer_row.id, outer_row.a) =
+(select outer_row.id, inner_row.a from row_scalar_28295 inner_row where inner_row.id=outer_row.id)
+order by id;
+id
+1
+2
+3
+4
+select (0,null) <=>
+(select count(*),sum(inner_row.b) from row_scalar_28295 inner_row
+where inner_row.id=outer_row.id+100 having count(*)=0) as aggregate_empty_v
+from row_scalar_28295 outer_row where outer_row.id=1;
+aggregate_empty_v
+1
 select (1,5) = (select a,b from row_scalar_28295 where id>0) as multi_v;
 Subquery returns more than 1 row
 set @row_scalar_a=1, @row_scalar_b=5;

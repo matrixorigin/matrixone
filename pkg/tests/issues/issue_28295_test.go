@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	mysql "github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/stretchr/testify/require"
@@ -76,6 +76,8 @@ func TestIssue28295RowConstructorScalarSubquery(t *testing.T) {
 		assertBool("select (1,null) <=> (select a,b from scalar_rows where id=2)", sql.NullBool{Bool: true, Valid: true})
 		assertBool("select (1,5) <=> (select a,b from scalar_rows where id=99)", sql.NullBool{Valid: true})
 		assertBool("select (1,'5') = (select a,b from scalar_rows where id=1)", sql.NullBool{Bool: true, Valid: true})
+		assertBool("select (1,(select 5)) = (select a,b from scalar_rows where id=1)", sql.NullBool{Bool: true, Valid: true})
+		assertBool("select (select a,b from scalar_rows where id=1) = ((select 1),5)", sql.NullBool{Bool: true, Valid: true})
 
 		var correlatedCount int
 		err = conn.QueryRowContext(ctx, `select count(*) from scalar_rows outer_row
@@ -98,6 +100,21 @@ func TestIssue28295RowConstructorScalarSubquery(t *testing.T) {
 		assertBool(`select (0,null) <=>
 			(select count(*),sum(v) from scalar_inner i where i.k=o.k)
 			from scalar_outer o where o.k=2`, sql.NullBool{Bool: true, Valid: true})
+		assertBool(`select (1,1) =
+			(select o.k,i.k from scalar_inner i where i.k=o.k)
+			from scalar_outer o where o.k=1`, sql.NullBool{Bool: true, Valid: true})
+		assertBool(`select (1,1) =
+			(select i.k,o.k from scalar_inner i where i.k=o.k)
+			from scalar_outer o where o.k=1`, sql.NullBool{Bool: true, Valid: true})
+		assertBool(`select (1,7) =
+			(select o.k,7 from scalar_inner i where i.k=o.k)
+			from scalar_outer o where o.k=1`, sql.NullBool{Bool: true, Valid: true})
+		assertBool(`select (2,7) =
+			(select o.k,7 from scalar_inner i where i.k=o.k)
+			from scalar_outer o where o.k=2`, sql.NullBool{})
+		assertBool(`select (0,null) <=>
+			(select count(*),sum(v) from scalar_inner i where i.k=o.k having count(*)=0)
+			from scalar_outer o where o.k=2`, sql.NullBool{Bool: true, Valid: true})
 		err = conn.QueryRowContext(ctx, `select count(*) from scalar_outer o
 			where (1,10) =
 				(select count(*),sum(v) from scalar_inner i where i.k<o.k)`).Scan(&correlatedCount)
@@ -117,6 +134,10 @@ func TestIssue28295RowConstructorScalarSubquery(t *testing.T) {
 			queryErr = rows.Err()
 		}()
 		require.ErrorContains(t, queryErr, "Subquery returns more than 1 row")
+		var mysqlErr *mysql.MySQLError
+		require.ErrorAs(t, queryErr, &mysqlErr)
+		require.Equal(t, uint16(1242), mysqlErr.Number)
+		require.Equal(t, "21000", string(mysqlErr.SQLState[:]))
 
 		_, err = conn.ExecContext(ctx, "set @issue28295_a = 1, @issue28295_b = 5")
 		require.NoError(t, err)
