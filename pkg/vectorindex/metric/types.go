@@ -15,9 +15,11 @@
 package metric
 
 import (
+	"fmt"
 	"math"
 	"reflect"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	usearch "github.com/unum-cloud/usearch/golang"
 )
@@ -292,6 +294,64 @@ func CosineVectorL2Norm[T types.RealNumbers](v []T) (norm float64, ok bool) {
 		sumSq += d * d
 	}
 	return math.Sqrt(sumSq), float32(sumSq) >= smallestNormalFloat32
+}
+
+// CheckIndexableVector rejects a float32 vector no vector index can score in the float32 domain it
+// computes in. It is metric-independent: usearch and cuVS both accumulate in float32, so a stored
+// vector whose SQUARED norm leaves that domain breaks every metric, not just cosine. Measured
+// against usearch with two distinct stored vectors:
+//
+//	[1e-30,0,0] / [2e-30,0,0]  L2sq -> distances 0 and 0, ranking inverted
+//	[1e20,0,0]  / [2e20,0,0]   L2sq -> distances +Inf and +Inf
+//	[1e20,0,0]  / [2e20,0,0]   IP   -> distances -Inf and -Inf
+//
+// all reported without error. Cosine is only the case where the norm is also the divisor.
+//
+// SCOPE: float32 elements only. A narrower storage quantization has a narrower bound this does not
+// test -- under F16, [70000,0,0] and [140000,0,0] are ordinary float32 (squared norm 4.9e9) yet
+// store as +Inf and invert the ranking. Covering that needs the configured quantization, not just
+// the element type; f16/int8/uint8 are NOT covered here and must not be assumed safe.
+//
+// An all-zero vector is legal and passes: its distances are well defined (l2sq to it is the other
+// vector's squared norm, and cosine_distance returns 1 by convention). What cannot be indexed is a
+// vector that HOLDS a value yet whose squared norm is not a normal float32 -- it is scored as
+// though it were zero, or as +/-Inf.
+//
+// Called once per inserted row. Measured at dim 768: 475ns against a 148,565ns Add, so 0.3% of the
+// graph insertion it precedes.
+func CheckIndexableVector[T types.RealNumbers](v []T) error {
+	f32, ok := any(v).([]float32)
+	if !ok {
+		return nil
+	}
+	var s0, s1, s2, s3 float64
+	nonZero := false
+	i, n := 0, len(f32)
+	for ; i <= n-4; i += 4 {
+		// BCE hint
+		vv := f32[i : i+4 : i+4]
+		nonZero = nonZero || vv[0] != 0 || vv[1] != 0 || vv[2] != 0 || vv[3] != 0
+		a, b, c, d := float64(vv[0]), float64(vv[1]), float64(vv[2]), float64(vv[3])
+		s0 += a * a
+		s1 += b * b
+		s2 += c * c
+		s3 += d * d
+	}
+	for ; i < n; i++ {
+		nonZero = nonZero || f32[i] != 0
+		d := float64(f32[i])
+		s0 += d * d
+	}
+	if !nonZero {
+		return nil
+	}
+	sumSq := (s0 + s1) + (s2 + s3)
+	if sq32 := float32(sumSq); sq32 >= smallestNormalFloat32 && !math.IsInf(float64(sq32), 1) {
+		return nil
+	}
+	return moerr.NewInternalErrorNoCtx(fmt.Sprintf(
+		"vector index: cannot index this vector; its L2 norm %g leaves the float32 domain the index computes in",
+		math.Sqrt(sumSq)))
 }
 
 // HasFloat64DistanceOverflow reports whether an index search must fail fast because a float64 base
