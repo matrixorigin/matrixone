@@ -964,6 +964,78 @@ func TestTableScopedDDLDatabaseEOBMapsToNoSuchTable(t *testing.T) {
 		require.NoError(t, s.dropTableSingle(c, qry))
 	})
 }
+
+func TestCreateIndexLockProtocol(t *testing.T) {
+	newCompile := func(t *testing.T, eng *stubEngine) *Compile {
+		t.Helper()
+		proc := testutil.NewProcess(t)
+		proc.Base.SessionInfo.Buf = buffer.New()
+		proc.Ctx = defines.AttachAccountId(context.Background(), sysAccountId)
+		return NewCompile("test", "db1", "create index idx_a on t1(a)", "", "", eng, proc, nil, false, nil, time.Now())
+	}
+	newScope := func() *Scope {
+		return &Scope{Plan: &plan2.Plan{Plan: &plan2.Plan_Ddl{Ddl: &plan2.DataDefinition{
+			Definition: &plan2.DataDefinition_CreateIndex{CreateIndex: &plan2.CreateIndex{
+				Database: "db1",
+				Table:    "t1",
+				TableDef: &plan2.TableDef{Name: "t1", TblId: 42},
+			}},
+		}}}}
+	}
+
+	t.Run("metadata conflict rebuilds the plan", func(t *testing.T) {
+		eng := newStubEngine()
+		lockMoDb := gostub.Stub(&lockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error { return nil })
+		defer lockMoDb.Reset()
+		lockMoTbl := gostub.Stub(&lockMoTable, func(_ *Compile, _ string, _ string, _ lock.LockMode) error {
+			return moerr.NewTxnNeedRetry(context.Background())
+		})
+		defer lockMoTbl.Reset()
+
+		err := newScope().CreateIndex(newCompile(t, eng))
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged), err)
+	})
+
+	t.Run("base relation lock publishes a definition fence", func(t *testing.T) {
+		eng := newStubEngine()
+		db := newStubDatabase("db1")
+		relation := newStubRelation("t1")
+		relation.tableID = 42
+		db.rels["t1"] = relation
+		eng.dbs["db1"] = db
+
+		metadataLocked := false
+		lockMoDb := gostub.Stub(&lockMoDatabase, func(_ *Compile, _ string, _ lock.LockMode) error { return nil })
+		defer lockMoDb.Reset()
+		lockMoTbl := gostub.Stub(&lockMoTable, func(_ *Compile, dbName, tableName string, mode lock.LockMode) error {
+			require.Equal(t, "db1", dbName)
+			require.Equal(t, "t1", tableName)
+			require.Equal(t, lock.LockMode_Exclusive, mode)
+			metadataLocked = true
+			return nil
+		})
+		defer lockMoTbl.Reset()
+		stop := errors.New("stop after base-table lock")
+		baseLock := gostub.Stub(&lockTable, func(
+			_ context.Context,
+			_ engine.Engine,
+			_ *process.Process,
+			locked engine.Relation,
+			dbName string,
+			definitionChanged bool,
+		) error {
+			require.True(t, metadataLocked)
+			require.Same(t, relation, locked)
+			require.Equal(t, "db1", dbName)
+			require.True(t, definitionChanged)
+			return stop
+		})
+		defer baseLock.Reset()
+
+		err := newScope().CreateIndex(newCompile(t, eng))
+		require.ErrorIs(t, err, stop)
+	})
+}
 func Test_lockIndexTable(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	db := mock_frontend.NewMockDatabase(ctrl)
