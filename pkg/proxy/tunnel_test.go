@@ -1337,6 +1337,28 @@ func TestFinalFetchKeepsTransferBlockedUntilTerminator(t *testing.T) {
 	}
 }
 
+func TestFinalFetchExactMaxPayloadNeedsEmptyContinuation(t *testing.T) {
+	tun := newTunnel(context.Background(), runtime.DefaultRuntime().Logger(), newCounterSet())
+	defer tun.ctxCancel()
+	tun.trackClientRequest(makeStmtCommandPacket(frontend.COM_STMT_FETCH, 41, 1, 0, 0, 0))
+	// The response tracker intentionally receives only a prefix of a large
+	// wire packet. An exact MaxPayloadSize packet is followed by an empty
+	// continuation before the real FETCH terminator.
+	fullPrefix := []byte{0xff, 0xff, 0xff, 1, 0}
+	require.False(t, tun.responseMayCarryTxnStatus(fullPrefix))
+	tun.trackServerResponse(fullPrefix)
+	require.True(t, tun.hasInFlightClientRequest())
+	emptyContinuation := []byte{0, 0, 0, 2}
+	require.False(t, tun.responseMayCarryTxnStatus(emptyContinuation))
+	tun.trackServerResponse(emptyContinuation)
+	require.True(t, tun.hasInFlightClientRequest())
+	terminator := makeLegacyEOFPacket(frontend.SERVER_STATUS_LAST_ROW_SENT)
+	terminator[3] = 3
+	require.True(t, tun.responseMayCarryTxnStatus(terminator))
+	tun.trackServerResponse(terminator)
+	require.False(t, tun.hasInFlightClientRequest())
+}
+
 type finalFetchTransferClientConn struct {
 	ClientConn
 	replacement ServerConn
