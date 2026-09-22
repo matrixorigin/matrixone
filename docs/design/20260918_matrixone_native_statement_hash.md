@@ -2,12 +2,12 @@
 
 - Status: implementation-ready revision; a separate design-approval gate is not required for this PR under the agreed single-author workflow
 - Implementation PR: [matrixorigin/matrixone#27988](https://github.com/matrixorigin/matrixone/pull/27988)
-- Related issue: [matrixorigin/matrixone#23024](https://github.com/matrixorigin/matrixone/issues/23024) asks for MySQL-compatible `STATEMENT_DIGEST`; this proposal does not satisfy or close that issue
+- Related issue: [matrixorigin/matrixone#23024](https://github.com/matrixorigin/matrixone/issues/23024) asks for MySQL-compatible `STATEMENT_DIGEST`; this implementation does not satisfy or close that issue
 - Owner: SQL function / execution maintainers; PR #27988 is the tracking record for this function
 - Design revision: `matrixone-native-statement-hash-2026-09-22-r6`
 - Last updated: 2026-09-22
 
-## 1. Decision proposed
+## 1. Decision
 
 Add a MatrixOne-specific SQL function, `MO_STATEMENT_HASH(sql)`, that hashes
 the existing MatrixOne AST formatter's output for exactly one statement parsed
@@ -24,7 +24,7 @@ are the decisions implemented and validated by this PR.
 The implementation uses the following choices as one complete contract rather
 than as an unspecified future hash function:
 
-| Decision area | Proposed decision | Acceptance boundary |
+| Decision area | Selected contract | Acceptance boundary |
 | --- | --- | --- |
 | Public API | Add only `MO_STATEMENT_HASH(sql)` with the contract in section 3; do not alias MySQL `STATEMENT_DIGEST`. | The function name, arity, input overloads, NULL behavior, and 64-character lowercase result are accepted. |
 | Stability | Promise equality only for the same executable, formatter, and effective SQL mode; do not promise a cross-upgrade or persistent identifier. | Consumers must treat the value as build-scoped syntax telemetry, not a durable key or wire format. |
@@ -73,7 +73,7 @@ not `MO_STATEMENT_HASH`.
 - Evaluation: runtime/session-dependent; it must not be constant-folded using
   planner-process defaults.
 
-For non-NULL input `s` and the effective SQL-mode snapshot `m`, the proposed
+For non-NULL input `s` and the effective SQL-mode snapshot `m`, the selected
 definition is:
 
 ```text
