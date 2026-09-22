@@ -246,8 +246,8 @@ execute utility_source using @v,@v,@v,@v,@v,@v,@v,@v;
 set @v='2.5tail';
 set @integer_math_precision=2;
 execute utility_source using @v,@integer_math_precision,@v,@v,@v,@v,@v,@v;
-➤ period_add(202401, ?)[-5,64,0]  ¦  round(12.345, ?)[3,5,3]  ¦  from_days(?)[91,10,0]  ¦  week(cast(2026-09-20 as date), ?)[-6,8,0]  ¦  timestampadd(day, ?, cast(2026-09-20 as date))[91,10,0]  ¦  split_part(a.b.c, ., ?)[12,5,0]  ¦  sha2(matrixone, ?)[12,128,0]  ¦  regexp_instr(abcabc, b, ?)[-5,64,0]  𝄀
-202403  ¦  12.350  ¦  null  ¦  38  ¦  2026-09-22  ¦  b  ¦  null  ¦  2
+➤ period_add(202401, ?)[-5,64,0]  ¦  round(12.345, ?)[3,5,2]  ¦  from_days(?)[91,10,0]  ¦  week(cast(2026-09-20 as date), ?)[-6,8,0]  ¦  timestampadd(day, ?, cast(2026-09-20 as date))[91,10,0]  ¦  split_part(a.b.c, ., ?)[12,5,0]  ¦  sha2(matrixone, ?)[12,128,0]  ¦  regexp_instr(abcabc, b, ?)[-5,64,0]  𝄀
+202403  ¦  12.35  ¦  null  ¦  38  ¦  2026-09-22  ¦  b  ¦  null  ¦  2
 execute utility_source using @v,@v,@v,@v,@v,@v,@v,@v;
 invalid argument cast to int, bad value 2.5tail
 set @integer_math_precision=null;

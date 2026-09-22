@@ -132,6 +132,7 @@ set @v=1.5;
 execute utility_source using @v,@v,@v,@v,@v,@v,@v,@v;
 set @v='2.5tail';
 set @integer_math_precision=2;
+-- @metacmp(true)
 execute utility_source using @v,@integer_math_precision,@v,@v,@v,@v,@v,@v;
 -- Preserve the other utilities' prefix oracle, then reject ROUND's own control.
 execute utility_source using @v,@v,@v,@v,@v,@v,@v,@v;
