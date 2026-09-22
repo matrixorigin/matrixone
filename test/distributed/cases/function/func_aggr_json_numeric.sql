@@ -1,5 +1,7 @@
--- JSON operands for the six numeric aggregate families use the existing
--- JSON-to-DOUBLE conversion boundary before aggregate execution.
+-- JSON operands for the six numeric aggregate families use MySQL warning
+-- conversion (json_agg_to_double): booleans become 1/0, numeric-prefix strings
+-- keep their prefix, and JSON null/composites contribute 0 with warnings.
+-- SQL NULL is still skipped. Explicit CAST(json AS DOUBLE) stays strict.
 DROP TABLE IF EXISTS json_numeric_agg;
 CREATE TABLE json_numeric_agg (id INT, grp INT, j JSON);
 INSERT INTO json_numeric_agg VALUES (1, 1, '1'), (2, 1, '2.5'), (3, 1, '3'), (4, 1, 'null'), (5, 1, NULL), (6, 2, '1'), (7, 2, '1.0'), (8, 2, '"1"'), (9, 2, '4'), (10, 2, 'null'), (11, 2, NULL), (12, 3, '"2.5"'), (13, 4, '9007199254740992'), (14, 4, '9007199254740993'), (15, 4, '-9007199254740993');
@@ -24,3 +26,10 @@ SELECT g, SUM(DISTINCT j), AVG(DISTINCT j) FROM json_numeric_agg_not_null GROUP 
 DROP TABLE json_numeric_agg_not_null;
 
 DROP TABLE json_numeric_agg;
+
+-- MySQL warning conversion: boolean 1/0, numeric-prefix strings, composites as 0.
+DROP TABLE IF EXISTS json_numeric_agg_mysql;
+CREATE TABLE json_numeric_agg_mysql (id INT, j JSON);
+INSERT INTO json_numeric_agg_mysql VALUES (1, 'true'), (2, 'false'), (3, '"12x"'), (4, '[1]'), (5, 'null');
+SELECT SUM(j), AVG(j) FROM json_numeric_agg_mysql;
+DROP TABLE json_numeric_agg_mysql;
