@@ -3178,6 +3178,262 @@ func TestQueryBuilder_bindValues(t *testing.T) {
 	assert.Equal(t, 1, len(selectList))
 }
 
+func TestQueryBuilderBindValuesUsesColumnCommonType(t *testing.T) {
+	bindValues := func(t *testing.T, rows string) (*plan.Node, error) {
+		t.Helper()
+		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+		bindCtx := NewBindContext(builder, nil)
+
+		stmts, err := parsers.Parse(
+			context.TODO(), dialect.MYSQL,
+			"select score from (values "+rows+") as tmp(score)", 1)
+		require.NoError(t, err)
+		tables := stmts[0].(*tree.Select).Select.(*tree.SelectClause).From.Tables
+		joinTable := tables[0].(*tree.JoinTableExpr)
+		aliasedTable := joinTable.Left.(*tree.AliasedTableExpr)
+		parenTable := aliasedTable.Expr.(*tree.ParenTableExpr)
+		valuesClause := parenTable.Expr.(*tree.Select).Select.(*tree.ValuesClause)
+
+		nodeID, _, err := builder.bindValues(bindCtx, valuesClause)
+		if err != nil {
+			return nil, err
+		}
+		return builder.qry.Nodes[nodeID], nil
+	}
+
+	for _, test := range []struct {
+		name        string
+		rows        string
+		oid         types.T
+		width       int32
+		scale       int32
+		notNullable bool
+	}{
+		{
+			name:        "decimal scale grows",
+			rows:        "row(26.27946), row(15.2667265)",
+			oid:         types.T_decimal64,
+			width:       9,
+			scale:       7,
+			notNullable: true,
+		},
+		{
+			name:        "decimal scale is order independent",
+			rows:        "row(15.2667265), row(26.27946)",
+			oid:         types.T_decimal64,
+			width:       9,
+			scale:       7,
+			notNullable: true,
+		},
+		{
+			name:  "bare null before decimal",
+			rows:  "row(null), row(26.27946)",
+			oid:   types.T_decimal64,
+			width: 7,
+			scale: 5,
+		},
+		{
+			name:  "bare null after decimal",
+			rows:  "row(26.27946), row(null)",
+			oid:   types.T_decimal64,
+			width: 7,
+			scale: 5,
+		},
+		{
+			name:  "all bare null",
+			rows:  "row(null), row(null)",
+			oid:   types.T_text,
+			width: 0,
+			scale: 0,
+		},
+		{
+			name:        "integer literal joins decimal precision",
+			rows:        "row(1), row(2.50)",
+			oid:         types.T_decimal64,
+			width:       3,
+			scale:       2,
+			notNullable: true,
+		},
+		{
+			name:        "datetime scale grows",
+			rows:        "row(cast('2024-01-02 12:34:56.123' as datetime(3))), row(cast('2024-01-02 12:34:56.123456' as datetime(6)))",
+			oid:         types.T_datetime,
+			width:       6,
+			scale:       6,
+			notNullable: true,
+		},
+		{
+			name:        "datetime scale is order independent",
+			rows:        "row(cast('2024-01-02 12:34:56.123456' as datetime(6))), row(cast('2024-01-02 12:34:56.123' as datetime(3)))",
+			oid:         types.T_datetime,
+			width:       6,
+			scale:       6,
+			notNullable: true,
+		},
+		{
+			name:        "char width grows",
+			rows:        "row(cast('a' as char(4))), row(cast('abcdefgh' as char(8)))",
+			oid:         types.T_char,
+			width:       8,
+			notNullable: true,
+		},
+		{
+			name:        "char width is order independent",
+			rows:        "row(cast('abcdefgh' as char(8))), row(cast('a' as char(4)))",
+			oid:         types.T_char,
+			width:       8,
+			notNullable: true,
+		},
+		{
+			name:        "char and varchar use maximum width",
+			rows:        "row(cast('abcdefgh' as char(8))), row(cast('x' as varchar(1)))",
+			oid:         types.T_varchar,
+			width:       8,
+			notNullable: true,
+		},
+		{
+			name:        "char and varchar maximum width is order independent",
+			rows:        "row(cast('x' as varchar(1))), row(cast('abcdefgh' as char(8)))",
+			oid:         types.T_varchar,
+			width:       8,
+			notNullable: true,
+		},
+		{
+			name:        "varchar and integer keep resolver width",
+			rows:        "row(cast('x' as varchar(1))), row(123456)",
+			oid:         types.T_varchar,
+			width:       types.MaxVarcharLen,
+			notNullable: true,
+		},
+		{
+			name:        "signed negative and unsigned maximum use decimal",
+			rows:        "row(cast(-1 as signed)), row(cast(18446744073709551615 as unsigned))",
+			oid:         types.T_decimal128,
+			width:       20,
+			notNullable: true,
+		},
+		{
+			name:        "signed and unsigned decimal choice is order independent",
+			rows:        "row(cast(18446744073709551615 as unsigned)), row(cast(-1 as signed))",
+			oid:         types.T_decimal128,
+			width:       20,
+			notNullable: true,
+		},
+		{
+			name:        "homogeneous geometry",
+			rows:        "row(st_point(1, 2)), row(st_point(3, 4))",
+			oid:         types.T_geometry,
+			notNullable: true,
+		},
+		{
+			name:  "homogeneous geometry with null",
+			rows:  "row(st_point(1, 2)), row(null)",
+			oid:   types.T_geometry,
+			width: 0,
+			scale: 0,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			node, err := bindValues(t, test.rows)
+			require.NoError(t, err)
+			require.Len(t, node.TableDef.Cols, 1)
+			columnType := node.TableDef.Cols[0].Typ
+			require.Equal(t, int32(test.oid), columnType.Id)
+			require.Equal(t, test.width, columnType.Width)
+			require.Equal(t, test.scale, columnType.Scale)
+			require.Equal(t, test.notNullable, columnType.NotNullable)
+
+			require.Len(t, node.RowsetData.Cols, 1)
+			for _, row := range node.RowsetData.Cols[0].Data {
+				require.Equal(t, columnType.Id, row.Expr.Typ.Id)
+				require.Equal(t, columnType.Width, row.Expr.Typ.Width)
+				require.Equal(t, columnType.Scale, row.Expr.Typ.Scale)
+			}
+		})
+	}
+
+	t.Run("vector remains vector", func(t *testing.T) {
+		node, err := bindValues(t, "row(cast('[1,2,3]' as vecf32(3)))")
+		require.NoError(t, err)
+		columnType := node.TableDef.Cols[0].Typ
+		require.Equal(t, int32(types.T_array_float32), columnType.Id)
+		require.Equal(t, int32(3), columnType.Width)
+		require.Len(t, node.RowsetData.Cols[0].Data, 1)
+		require.Equal(t, columnType.Id, node.RowsetData.Cols[0].Data[0].Expr.Typ.Id)
+		require.Equal(t, columnType.Width, node.RowsetData.Cols[0].Data[0].Expr.Typ.Width)
+	})
+
+	for _, test := range []struct {
+		name string
+		rows string
+	}{
+		{
+			name: "vecf64 preserves precision after vecf32",
+			rows: "row(cast('[1,2,3]' as vecf32(3))), row(cast('[1,2,3]' as vecf64(3)))",
+		},
+		{
+			name: "vecf64 precision is order independent",
+			rows: "row(cast('[1,2,3]' as vecf64(3))), row(cast('[1,2,3]' as vecf32(3)))",
+		},
+		{
+			name: "string between vecf32 and vecf64 preserves precision",
+			rows: "row(cast('[1,2,3]' as vecf32(3))), row('[1.0000000001,2,3]'), row(cast('[1.0000000001,2,3]' as vecf64(3)))",
+		},
+		{
+			name: "string before vecf64 and vecf32 preserves precision",
+			rows: "row('[1.0000000001,2,3]'), row(cast('[1.0000000001,2,3]' as vecf64(3))), row(cast('[1,2,3]' as vecf32(3)))",
+		},
+		{
+			name: "string after vecf64 and vecf32 preserves precision",
+			rows: "row(cast('[1.0000000001,2,3]' as vecf64(3))), row(cast('[1,2,3]' as vecf32(3))), row('[1.0000000001,2,3]')",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			node, err := bindValues(t, test.rows)
+			require.NoError(t, err)
+			columnType := node.TableDef.Cols[0].Typ
+			require.Equal(t, int32(types.T_array_float64), columnType.Id)
+			require.Equal(t, int32(3), columnType.Width)
+			for _, row := range node.RowsetData.Cols[0].Data {
+				require.Equal(t, columnType.Id, row.Expr.Typ.Id)
+				require.Equal(t, columnType.Width, row.Expr.Typ.Width)
+			}
+		})
+	}
+
+	for _, rows := range []string{
+		"row(cast('[1,2]' as vecf32(2))), row(cast('[1,2,3]' as vecf64(3)))",
+		"row(cast('[1,2,3]' as vecf64(3))), row(cast('[1,2]' as vecf32(2)))",
+		"row(cast('[1,2]' as vecf32(2))), row('[1,2,3]'), row(cast('[1,2,3]' as vecf64(3)))",
+		"row('[1,2,3]'), row(cast('[1,2,3]' as vecf64(3))), row(cast('[1,2]' as vecf32(2)))",
+		"row(cast('[1,2,3]' as vecf64(3))), row(cast('[1,2]' as vecf32(2))), row('[1,2,3]')",
+	} {
+		t.Run("different vector dimensions are rejected: "+rows, func(t *testing.T) {
+			_, err := bindValues(t, rows)
+			require.Error(t, err)
+		})
+	}
+
+	t.Run("parameter-only column remains unresolved", func(t *testing.T) {
+		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+		exprs := []*plan.Expr{
+			{Typ: plan.Type{Id: int32(types.T_any)}},
+			{Typ: plan.Type{Id: int32(types.T_any)}},
+		}
+		commonType, err := builder.coerceValuesColumnToCommonType(exprs, []bool{false, false}, 0)
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_any), commonType.Id)
+		for _, expr := range exprs {
+			require.Equal(t, int32(types.T_any), expr.Typ.Id)
+		}
+	})
+
+	t.Run("incompatible vector and scalar types are rejected", func(t *testing.T) {
+		_, err := bindValues(t, "row(1), row(cast('[1,2,3]' as vecf32(3)))")
+		require.Error(t, err)
+	})
+}
+
 func TestQueryBuilderBuildValuesAndTableSubqueries(t *testing.T) {
 	for _, sql := range []string{
 		"select (values row(1))",
