@@ -35,6 +35,7 @@ import (
 	"golang.org/x/exp/slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	util2 "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -924,7 +925,6 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 }
 
 func (mp *MysqlProtocolImpl) ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
-	var err error
 	stmt.proc = proc
 	dcPrepare, ok := stmt.PreparePlan.GetDcl().Control.(*planPb.DataControl_Prepare)
 	if !ok {
@@ -941,32 +941,20 @@ func (mp *MysqlProtocolImpl) ParseSendLongData(ctx context.Context, proc *proces
 		return moerr.NewInternalErrorf(ctx, "get param index out of range. get %d, param length is %d", paramIdx, numParams)
 	}
 
-	if stmt.params == nil {
-		stmt.params = vector.NewVec(types.T_text.ToType())
-		for i := 0; i < numParams; i++ {
-			err = vector.AppendBytes(stmt.params, []byte{}, false, proc.GetMPool())
-			if err != nil {
-				return err
-			}
-		}
-	}
-
 	length := len(data) - pos
 	val, _, ok := mp.readCountOfBytes(data, pos, length)
 	if !ok {
 		return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 	}
-	if stmt.getFromSendLongData == nil {
-		stmt.getFromSendLongData = make(map[int]struct{})
-	}
-	if _, ok := stmt.getFromSendLongData[int(paramIdx)]; ok {
-		val = append(append([]byte(nil), stmt.params.GetBytesAt(int(paramIdx))...), val...)
-	}
-	if err = util.SetAnyToStringVector(proc, val, stmt.params, int(paramIdx)); err != nil {
+	allowed, err := mp.GetSession().GetSessionSysVar("max_allowed_packet")
+	if err != nil {
 		return err
 	}
-	stmt.getFromSendLongData[int(paramIdx)] = struct{}{}
-	return nil
+	limit, ok := allowed.(int64)
+	if !ok {
+		return moerr.NewInternalErrorf(ctx, "invalid max_allowed_packet value %T", allowed)
+	}
+	return stmt.appendLongData(ctx, proc, int(paramIdx), val, limit)
 }
 
 func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
@@ -978,6 +966,9 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 		return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 	}
 	stmt.proc = proc
+	if stmt.longDataErr != nil {
+		return stmt.longDataErr
+	}
 	dcPrepare, ok := stmt.PreparePlan.GetDcl().Control.(*planPb.DataControl_Prepare)
 	if !ok {
 		return moerr.NewInternalError(ctx, "can not get Prepare plan in prepareStmt")
@@ -1042,9 +1033,20 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 
 		// get paramters and set value to session variables
 		for i := 0; i < numParams; i++ {
-			// if params had received via COM_STMT_SEND_LONG_DATA, use them directly(we set the params when deal with COM_STMT_SEND_LONG_DATA).
+			// Materialize each streamed parameter only once. Long data takes
+			// precedence over the execute NULL bitmap, including an empty chunk.
 			// ref https://dev.mysql.com/doc/internals/en/com-stmt-send-long-data.html
 			if _, ok := stmt.getFromSendLongData[i]; ok {
+				value := stmt.longDataBuffers[i]
+				if len(value) > types.VarlenaInlineSize &&
+					int64(len(stmt.params.GetArea()))+int64(len(value)) > mpool.MaxAllocationSize() {
+					return moerr.NewInvalidInput(ctx, "prepared parameter vector area exceeds allocation limit")
+				}
+				if err = vector.SetBytesAt(stmt.params, i, value, proc.Mp()); err != nil {
+					return err
+				}
+				stmt.params.GetNulls().Unset(uint64(i))
+				stmt.releaseLongDataBuffer(i)
 				continue
 			}
 
