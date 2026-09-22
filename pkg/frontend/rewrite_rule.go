@@ -429,15 +429,6 @@ func rewriteSQLFromMaterializedPolicy(
 		ctx, outerSQL, innerSQL, "", true, lowerCaseTableNamesArg...)
 }
 
-func rewriteSQLFromMaterializedPolicyWithSQLMode(
-	ctx context.Context,
-	outerSQL, innerSQL, sqlMode string,
-	lowerCaseTableNamesArg ...int64,
-) (string, error) {
-	return rewriteSQLFromMaterializedPolicyWithSQLModeAndSessionEnabled(
-		ctx, outerSQL, innerSQL, sqlMode, true, lowerCaseTableNamesArg...)
-}
-
 func rewriteSQLFromMaterializedPolicyWithSQLModeAndSessionEnabled(
 	ctx context.Context,
 	outerSQL, innerSQL, sqlMode string,
