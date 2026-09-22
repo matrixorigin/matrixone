@@ -1395,6 +1395,9 @@ func initExecuteStmtParamWithResolverInSession(
 	if err != nil {
 		return nil, nil, nil, "", false, err
 	}
+	if prepareStmt.longDataErr != nil {
+		return nil, nil, nil, "", false, prepareStmt.longDataErr
+	}
 	cwft.preparedStmt = prepareStmt
 	// Carry the binding database through execute-time authorization, lifecycle
 	// admission, and ownership cleanup. All three must address the same object.
