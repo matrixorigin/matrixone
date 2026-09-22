@@ -1015,7 +1015,7 @@ The implementation is complete on this local candidate and does not wait for
 design approval, as requested. The approval record remains explicitly pending
 and must not be represented as maintainer-approved.
 
-## Current published review artifact (revision 17)
+## Current published review artifact (revision 18)
 
 The implementation/test source head for this review artifact is
 `ef9331788241c1b5e8d3707320dc6be79c23fc41` (tree
@@ -1029,27 +1029,34 @@ revision-16 implementation snapshot is the frontend regression-test oracle:
 before asserting the legacy text-prefix comparison. The strict default path is
 still covered by the existing conversion tests and remains unchanged.
 
-Validation on the revision-17 local equivalent passed the focused test, all
+Validation on the revision-18 local equivalent passed the focused test, all
 `TestCOMStmtInetNtoa*` tests, and the full `pkg/frontend` package through the
 repository CGo wrapper; `gofmt` and `git diff --check` also passed. The
-corresponding ALL CI run is pending, and the approval record below remains
-`DRAFT / AWAITING MAINTAINER APPROVAL`.
+corresponding ALL CI run is pending. Revision 18 freezes the design decisions
+below; the separate authorized-maintainer sign-off is still pending and is
+recorded as a process state, not as an unresolved design choice.
 
 ## 7. Approval record
 
 ```text
 Design path: docs/design/pr28523-string-math-coercion.md
-Design revision: 17
+Design revision: 18
 Candidate source inputs: published revision-17 head ef9331788241c1b5e8d3707320dc6be79c23fc41 (tree 78653ab5d771f1bce48bdf9b248b3cc7af362f23); local equivalent b0ee3f3a1726b4604940fc01ee7ea756afd2a984; revision-16 implementation/test candidate 845a50360ac97e5f5b35dfd398eb7625f44b0f3d (tree 79c397550626ccb4f2a5808b8fc5b1ce235b7821).
 Integration base: d8ddce92b1c5c172111b50aefe6b6b200b2589cb (tree a270c3c5bd225762cb735afb9ab22d3fd9d78674)
 Scope/trigger: PR reviews 5199052257, 5214666396 and comment 5687377735; >500 production lines and planner/plan compatibility boundary
 Reviewer identity and role: historical GPT-6 Astra review of d56711fa5b429e5e6e52f64f603d2e853478edca against base 4ff27bb9b35c43c1b0961bb9a01bf8fc0b6a2171; any exact-head review decision is tracked separately from maintainer design approval
 Review timestamp: exact final-candidate Astra Medium review is tracked separately from maintainer design approval, which remains pending
-Decision: DRAFT / AWAITING MAINTAINER APPROVAL
-Validation evidence: historical revisions 9-16 remain recorded above. Revision 17 records the published head, strict-default frontend test-oracle repair, focused/all `TestCOMStmtInetNtoa*` tests, full `pkg/frontend`, gofmt, and diff-check. No remote CI or PR-wide coverage pass is claimed until the current run completes.
-User-selected compatibility contract for this revision: default/empty/unset/nil is strict; only explicit MYSQL_NUMERIC_COMPATIBILITY selects MySQL numeric-prefix conversion; MATRIXONE_NATIVE is always strict and wins if both are present; the new token is absent from the existing default SQL mode. This design decision was selected by the user and implementation proceeds on that basis; it is not maintainer approval. Remaining decisions proposed for maintainer acceptance: retain strict INT64 precision controls (no general integer-prefix widening); prefer correctness over function-wide zonemap pruning; retain the bounded per-parameter source scan with its measured owner-boundary traversal cost; approve the revision-9 argument-owner boundaries and no-inherited-role fast path
+Decision state: DESIGN DECISIONS FROZEN / AWAITING AUTHORIZED MAINTAINER SIGN-OFF
+Validation evidence: historical revisions 9-16 remain recorded above. Revision 18 records the published head, strict-default frontend test-oracle repair, focused/all `TestCOMStmtInetNtoa*` tests, full `pkg/frontend`, gofmt, and diff-check. No remote CI or PR-wide coverage pass is claimed until the current run completes.
+Frozen design decisions for this implementation snapshot:
+1. Strict INT64 precision: retain strict integer-domain controls and do not widen arbitrary integer inputs through general prefix parsing. Exact integer, unsigned, BOOL, DECIMAL, and FLOAT sources retain their existing numeric domains; only eligible string-math value roles use the compatibility source.
+2. Zonemap correctness: do not advertise function-wide CEIL/FLOOR/ROUND zonemap pruning for string-derived numeric expressions. Correctness wins over that optimization; a later change may add overload-specific pruning only with an equivalence proof and endpoint-trap tests.
+3. Bounded scan cost: retain the bounded per-parameter source/owner scan. The recorded deep no-match and mixed-role measurements are the selected evidence for this scope; a one-pass occurrence-role table or cross-execution cache is deferred until cache invalidation, ownership equivalence, and new measurements are specified separately.
+4. Argument ownership: retain the revision-9 ownership boundaries and no-inherited-role fast path. Only eligible string-math value occurrences are rebound; control/precision arguments stay in their declared domains; nested/non-owning functions do not inherit a string role.
+5. Compatibility contract: default, empty, unset, and legacy/nil process state are strict; only explicit MYSQL_NUMERIC_COMPATIBILITY enables MySQL numeric-prefix conversion; MATRIXONE_NATIVE is always strict and wins if both flags are present; the token is appended without shifting existing SQL-mode positions and is transported through protobuf field 18 with legacy/missing payloads failing closed.
+These decisions are frozen for the implementation snapshot and are distinct from the GitHub approval action. They are not changed by the two non-blocking implementation observations in the latest automated review.
 Evidence links: [PR #28523](https://github.com/matrixorigin/matrixone/pull/28523); [historical-head CI run 35197284882](https://github.com/matrixorigin/matrixone/actions/runs/35197284882); the PR/evidence ledger is the record for commit replay, review, CI, and BVT; current local post-rebase evidence is recorded above
-Implementation deviations requiring follow-up: MOD native arithmetic widening regression fixed in 8fc4d5250; strict INT64 precision acceptance, zonemap-pruning decision, and scan-cost acceptance remain pending
+Implementation deviations requiring follow-up: MOD native arithmetic widening regression fixed in 8fc4d5250. The remaining follow-up is optimization-only: safe overload-specific zonemap pruning and a one-pass role table may be evaluated in a separate change; they are not required by this frozen contract.
 Approval link: pending maintainer review
 ```
 
