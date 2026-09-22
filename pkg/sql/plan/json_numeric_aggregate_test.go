@@ -34,10 +34,18 @@ func jsonNumericAggregatePlanColumn() *planpb.Expr {
 	}
 }
 
-func requireJSONNumericAggregateBinding(t *testing.T, name string) *planpb.Expr {
+func jsonNumericAggregateNotNullPlanColumn() *planpb.Expr {
+	column := jsonNumericAggregatePlanColumn()
+	column.Typ.NotNullable = true
+	return column
+}
+
+func requireJSONNumericAggregateBindingForColumn(
+	t *testing.T, name string, column *planpb.Expr,
+) *planpb.Expr {
 	t.Helper()
 	expr, err := BindFuncExprImplByPlanExpr(
-		context.Background(), name, []*planpb.Expr{jsonNumericAggregatePlanColumn()})
+		context.Background(), name, []*planpb.Expr{column})
 	require.NoError(t, err)
 	require.Equal(t, int32(types.T_float64), expr.Typ.Id)
 	require.NotNil(t, expr.GetF())
@@ -52,6 +60,11 @@ func requireJSONNumericAggregateBinding(t *testing.T, name string) *planpb.Expr 
 	return expr
 }
 
+func requireJSONNumericAggregateBinding(t *testing.T, name string) *planpb.Expr {
+	return requireJSONNumericAggregateBindingForColumn(
+		t, name, jsonNumericAggregatePlanColumn())
+}
+
 func TestJSONNumericAggregateBindingUsesDoubleDomain(t *testing.T) {
 	for _, name := range []string{
 		"sum", "avg", "var_pop", "var_samp", "stddev_pop", "stddev_samp",
@@ -61,6 +74,36 @@ func TestJSONNumericAggregateBindingUsesDoubleDomain(t *testing.T) {
 			requireJSONNumericAggregateBinding(t, name)
 		})
 	}
+}
+
+func TestJSONNumericAggregateCastDoesNotInheritJSONNotNull(t *testing.T) {
+	for _, name := range []string{"sum", "avg"} {
+		t.Run(name, func(t *testing.T) {
+			expr, err := BindFuncExprImplByPlanExpr(
+				context.Background(), name, []*planpb.Expr{jsonNumericAggregateNotNullPlanColumn()})
+			require.NoError(t, err)
+			require.Len(t, expr.GetF().Args, 1)
+			cast := expr.GetF().Args[0]
+			require.True(t, isCastOverload(cast, 0))
+			require.False(t, cast.Typ.NotNullable,
+				"JSON literal null must remain SQL NULL after JSON-to-DOUBLE cast")
+		})
+	}
+}
+
+func TestNumericCastKeepsNotNullSourceContract(t *testing.T) {
+	source := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_int64), NotNullable: true},
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{
+			RelPos: 1,
+			ColPos: 1,
+		}},
+	}
+	cast, err := appendCastBeforeExpr(
+		context.Background(), source, planpb.Type{Id: int32(types.T_float64)})
+	require.NoError(t, err)
+	require.True(t, cast.Typ.NotNullable,
+		"non-JSON numeric casts must preserve a NOT NULL source")
 }
 
 func TestJSONNumericAggregateBindingRejectsWrongShapes(t *testing.T) {
@@ -128,8 +171,26 @@ func TestNumericAggregateBindingPreservesExistingDomains(t *testing.T) {
 			require.Len(t, inner.GroupBy, 2)
 			require.Equal(t, int32(types.T_float64), inner.GroupBy[1].Typ.Id)
 			require.True(t, isCastOverload(inner.GroupBy[1], 0))
+			require.False(t, inner.GroupBy[1].Typ.NotNullable,
+				"the DISTINCT group key must retain JSON literal NULL")
 			require.Zero(t, uint64(outer.AggList[0].GetF().Func.Obj)&function.Distinct)
 			require.Equal(t, int32(types.T_float64), outer.AggList[0].GetF().Args[0].Typ.Id)
+			require.False(t, outer.AggList[0].GetF().Args[0].Typ.NotNullable)
+		})
+
+		t.Run(name+" NOT NULL source distinct rewrite", func(t *testing.T) {
+			bound := requireJSONNumericAggregateBindingForColumn(
+				t, name, jsonNumericAggregateNotNullPlanColumn())
+			bound.GetF().Func.Obj = int64(uint64(bound.GetF().Func.Obj) | function.Distinct)
+			builder, outer := newDistinctAggTestBuilder(
+				1_000, 10, 100, []*planpb.Expr{bound})
+			require.NoError(t, builder.optimizeDistinctAgg(1))
+			require.Len(t, builder.qry.Nodes, 3)
+			inner := builder.qry.Nodes[2]
+			require.Len(t, inner.GroupBy, 2)
+			require.False(t, inner.GroupBy[1].Typ.NotNullable,
+				"NOT NULL JSON source must not make JSON-to-DOUBLE key NOT NULL")
+			require.False(t, outer.AggList[0].GetF().Args[0].Typ.NotNullable)
 		})
 
 		t.Run(name+" sibling aggregate keeps bound argument", func(t *testing.T) {
@@ -145,6 +206,21 @@ func TestNumericAggregateBindingPreservesExistingDomains(t *testing.T) {
 			require.True(t, uint64(outer.AggList[0].GetF().Func.Obj)&function.Distinct != 0)
 			require.Equal(t, int32(types.T_float64), outer.AggList[0].GetF().Args[0].Typ.Id)
 			require.True(t, isCastOverload(outer.AggList[0].GetF().Args[0], 0))
+		})
+
+		t.Run(name+" sibling aggregate keeps NULLable bound argument", func(t *testing.T) {
+			bound := requireJSONNumericAggregateBindingForColumn(
+				t, name, jsonNumericAggregateNotNullPlanColumn())
+			bound.GetF().Func.Obj = int64(uint64(bound.GetF().Func.Obj) | function.Distinct)
+			sibling := distinctAggTestExpr(
+				function.SUM, false, planpb.Type{Id: int32(types.T_float64)},
+				distinctAggTestCol(types.T_float64, 1, 2, 100))
+			builder, outer := newDistinctAggTestBuilder(
+				1_000, 10, 100, []*planpb.Expr{bound, sibling})
+			require.NoError(t, builder.optimizeDistinctAgg(1))
+			require.Len(t, builder.qry.Nodes, 2)
+			require.True(t, uint64(outer.AggList[0].GetF().Func.Obj)&function.Distinct != 0)
+			require.False(t, outer.AggList[0].GetF().Args[0].Typ.NotNullable)
 		})
 	}
 }

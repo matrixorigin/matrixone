@@ -11,4 +11,16 @@ SELECT id, SUM(j) OVER (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT
 SELECT SUM(j) FROM json_numeric_agg WHERE grp = 3;
 SELECT SUM(j), SUM(DISTINCT j) FROM json_numeric_agg WHERE grp = 4;
 
+-- JSON NOT NULL still permits the JSON literal null, which casts to SQL NULL.
+-- Keep its grouping row through both the single-aggregate DISTINCT rewrite and
+-- the sibling-aggregate path that leaves DISTINCT in the outer node.
+DROP TABLE IF EXISTS json_numeric_agg_not_null;
+CREATE TABLE json_numeric_agg_not_null (g INT NOT NULL, j JSON NOT NULL);
+INSERT INTO json_numeric_agg_not_null VALUES (1, 'null'), (2, '1'), (2, '1.0');
+SELECT g, SUM(DISTINCT j) FROM json_numeric_agg_not_null GROUP BY g ORDER BY g;
+SELECT g, AVG(DISTINCT j) FROM json_numeric_agg_not_null GROUP BY g ORDER BY g;
+SELECT g, COUNT(CAST(j AS DOUBLE)) FROM json_numeric_agg_not_null GROUP BY g ORDER BY g;
+SELECT g, SUM(DISTINCT j), AVG(DISTINCT j) FROM json_numeric_agg_not_null GROUP BY g ORDER BY g;
+DROP TABLE json_numeric_agg_not_null;
+
 DROP TABLE json_numeric_agg;
