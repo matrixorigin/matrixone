@@ -21,7 +21,24 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/features"
 )
+
+type scanUniqueKeySource uint8
+
+const (
+	scanUniqueKeyPrimary scanUniqueKeySource = iota
+	scanUniqueKeySecondary
+)
+
+// scanUniqueKeyProof is a planner-local proof that one direct scan cannot
+// produce two visible rows with the same SQL-equality key. It deliberately
+// carries column ordinals rather than names so consumers must also match the
+// exact scan binding that owns the TableDef.
+type scanUniqueKeyProof struct {
+	columnPositions []int32
+	source          scanUniqueKeySource
+}
 
 func primaryKeyColumnPositions(tableDef *pbplan.TableDef) ([]int32, bool) {
 	if tableDef == nil || tableDef.Pkey == nil || tableDef.Pkey.PkeyColName == "" ||
@@ -115,6 +132,85 @@ func sqlEqualityCompatiblePrimaryKeyColumnPositions(tableDef *pbplan.TableDef) (
 		}
 	}
 	return positions, true
+}
+
+// sqlEqualityCompatibleUniqueIndexColumnPositions validates the catalog and
+// equality-domain part of a regular UNIQUE key. Query-local NULL and relation
+// scope are consumer-specific and are intentionally not inferred here.
+func sqlEqualityCompatibleUniqueIndexColumnPositions(
+	tableDef *pbplan.TableDef,
+	index *pbplan.IndexDef,
+) ([]int32, bool) {
+	if tableDef == nil || index == nil || !index.Unique || !index.TableExist ||
+		index.IndexTableName == "" || len(index.Parts) == 0 ||
+		!catalog.IsRegularIndexAlgo(index.IndexAlgo) || catalog.IsRTreeIndexAlgo(index.IndexAlgo) {
+		return nil, false
+	}
+	prefixes, err := catalog.IndexPrefixLengthsFromParamsWithError(index.IndexAlgoParams)
+	if err != nil || len(prefixes) != 0 {
+		return nil, false
+	}
+
+	positions := make([]int32, 0, len(index.Parts))
+	seen := make(map[int32]struct{}, len(index.Parts))
+	for _, name := range index.Parts {
+		pos, ok := tableColumnPosition(tableDef, name)
+		if !ok {
+			return nil, false
+		}
+		if _, duplicate := seen[pos]; duplicate {
+			return nil, false
+		}
+		seen[pos] = struct{}{}
+		col := tableDef.Cols[pos]
+		if col == nil || col.Hidden || col.GeneratedCol != nil || col.Default == nil ||
+			!primaryKeyColumnTypeSupportsSQLEqualityProof(col.Typ) {
+			return nil, false
+		}
+		positions = append(positions, pos)
+	}
+	return positions, true
+}
+
+// sqlEqualityCompatibleScanUniqueKeys returns every key that can prove at most
+// one row for a direct scan. Existing primary-key eligibility is preserved.
+// Secondary UNIQUE admission is intentionally narrower: only an ordinary,
+// non-partitioned persisted relation with a declared NOT NULL complete key is
+// accepted in this first phase.
+func sqlEqualityCompatibleScanUniqueKeys(tableDef *pbplan.TableDef) []scanUniqueKeyProof {
+	proofs := make([]scanUniqueKeyProof, 0, 1)
+	if positions, ok := sqlEqualityCompatiblePrimaryKeyColumnPositions(tableDef); ok {
+		proofs = append(proofs, scanUniqueKeyProof{
+			columnPositions: positions,
+			source:          scanUniqueKeyPrimary,
+		})
+	}
+
+	if tableDef == nil || tableDef.TableType != catalog.SystemOrdinaryRel ||
+		tableDef.IsTemporary || features.IsPartitioned(tableDef.FeatureFlag) {
+		return proofs
+	}
+	for _, index := range tableDef.Indexes {
+		positions, ok := sqlEqualityCompatibleUniqueIndexColumnPositions(tableDef, index)
+		if !ok {
+			continue
+		}
+		notNull := true
+		for _, pos := range positions {
+			col := tableDef.Cols[pos]
+			if col.Default.NullAbility || !col.Typ.NotNullable {
+				notNull = false
+				break
+			}
+		}
+		if notNull {
+			proofs = append(proofs, scanUniqueKeyProof{
+				columnPositions: positions,
+				source:          scanUniqueKeySecondary,
+			})
+		}
+	}
+	return proofs
 }
 
 func primaryKeyColumnTypeSupportsSQLEqualityProof(typ pbplan.Type) bool {
