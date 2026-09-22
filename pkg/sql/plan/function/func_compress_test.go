@@ -413,6 +413,49 @@ func TestUncompressedLengthEmitsWarningForShortNonEmptyInput(t *testing.T) {
 	}, warnings.records[3])
 }
 
+func TestUncompressedLengthWarningRetentionUsesProcessLimits(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		maxErrorCount   int
+		queryLimit      int64
+		rowCount        int
+		wantRecordCount int
+	}{
+		{name: "capacity above default", maxErrorCount: 2048, rowCount: 1100, wantRecordCount: 1100},
+		{name: "explicit zero", maxErrorCount: 0, rowCount: 3, wantRecordCount: 0},
+		{
+			name:            "shared budget",
+			maxErrorCount:   2048,
+			queryLimit:      int64(process.WarningDiagnosticRecordBytes(uncompressDataWarning)),
+			rowCount:        2,
+			wantRecordCount: 1,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			proc.Base.SessionInfo.MaxErrorCount = tc.maxErrorCount
+			proc.Base.SessionInfo.MaxErrorCountSet = true
+			warnings := &uncompressWarningSink{}
+			proc.WarningSink = warnings
+
+			input, err := vector.NewConstBytes(types.T_blob.ToType(), []byte{0}, tc.rowCount, proc.Mp())
+			require.NoError(t, err)
+			defer input.Free(proc.Mp())
+			result := vector.NewFunctionResultWrapper(types.T_int32.ToType(), proc.Mp())
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(tc.rowCount))
+			if tc.queryLimit > 0 {
+				proc.Base.Lim.Size = tc.queryLimit
+			}
+
+			require.NoError(t, UncompressedLength([]*vector.Vector{input}, result, proc, tc.rowCount, nil))
+			require.Equal(t, uint64(tc.rowCount), warnings.total)
+			require.Len(t, warnings.records, tc.wantRecordCount)
+		})
+	}
+}
+
 type uncompressWarningRecord struct {
 	code    uint16
 	message string
