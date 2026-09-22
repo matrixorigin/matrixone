@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -138,14 +139,11 @@ func TestRemoteNotifyReadsDispatchTerminal(t *testing.T) {
 
 type observedDoneCallsContext struct {
 	context.Context
-	calls chan struct{}
+	calls atomic.Int32
 }
 
 func (c *observedDoneCallsContext) Done() <-chan struct{} {
-	select {
-	case c.calls <- struct{}{}:
-	default:
-	}
+	c.calls.Add(1)
 	return c.Context.Done()
 }
 
@@ -182,19 +180,19 @@ func TestRemoteNotifyAfterDispatchAttachmentPreservesTerminalOutcome(t *testing.
 			require.NotNil(t, registration)
 			t.Cleanup(registration.Cleanup)
 			require.NoError(t, d.Prepare(proc))
+			// Observe the whole run, including select operand evaluation. Even
+			// when Reset wins a select, a forbidden process-context dependency
+			// must be detected independently of goroutine scheduling.
+			pipelineCtx := &observedDoneCallsContext{Context: proc.Ctx}
+			proc.Ctx = pipelineCtx
 
 			messageCtx, cancelMessage := context.WithCancel(context.Background())
 			defer cancelMessage()
-			connectionDoneCalls := make(chan struct{}, 4)
-			connectionCtx := &observedDoneCallsContext{
-				Context: context.Background(),
-				calls:   connectionDoneCalls,
-			}
 			session := mock_morpc.NewMockClientSession(gomock.NewController(t))
 			session.EXPECT().SessionCtx().Return(context.Background()).AnyTimes()
 			receiver := &messageReceiverOnServer{
 				messageCtx:    messageCtx,
-				connectionCtx: connectionCtx,
+				connectionCtx: context.Background(),
 				messageId:     9,
 				messageTyp:    pb.Method_PrepareDoneNotifyMessage,
 				messageUuid:   uid,
@@ -245,39 +243,23 @@ func TestRemoteNotifyAfterDispatchAttachmentPreservesTerminalOutcome(t *testing.
 			case <-time.After(5 * time.Second):
 				t.Fatal("dispatch did not consume the remote attachment")
 			}
-			// getRemoteDispatchReceiver reads connection Done once before attach,
-			// and the select that publishes the attachment reads it again. The
-			// third read is made only by the post-attach terminal select.
-			for call := 0; call < 3; call++ {
-				select {
-				case <-connectionDoneCalls:
-				case <-time.After(5 * time.Second):
-					t.Fatalf("remote notify did not enter post-attach terminal wait (Done call %d)", call+1)
-				}
-			}
-			select {
-			case err := <-done:
-				handlerJoined = true
-				t.Fatalf("remote notify returned before dispatch cleanup: %v", err)
-			default:
-			}
-
 			// Pipeline cleanup cancels the local process even on an empty-success
 			// path. Reset is the sole terminal owner and must preserve its own
 			// outcome instead of exposing that local cancellation to the peer.
-			proc.Cancel(tc.sourceErr)
-			select {
-			case got := <-done:
-				handlerJoined = true
-				t.Fatalf("local pipeline cancellation escaped before Reset published the terminal: %v", got)
-			case <-time.After(20 * time.Millisecond):
-			}
+			cleanupErr := moerr.NewInternalErrorNoCtx("local pipeline cleanup")
+			proc.Cancel(cleanupErr)
 			d.Reset(proc, tc.sourceErr != nil, tc.sourceErr)
 			registration.Cleanup()
 
 			select {
 			case got := <-done:
 				handlerJoined = true
+				// dispatch.waitRemoteRegsReady and the value-scan child's
+				// vm.CancelCheck each read Done once. The terminal-backed
+				// handler must never read this reusable process context.
+				require.Equal(t, int32(2), pipelineCtx.calls.Load(),
+					"terminal-backed notify must not depend on the process context")
+				require.NotErrorIs(t, got, cleanupErr)
 				if tc.sourceErr == nil {
 					require.NoError(t, got)
 				} else {
