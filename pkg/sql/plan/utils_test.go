@@ -684,8 +684,16 @@ func TestPreparedSQLExecuteNumericParamExprPreservesSourceDomain(t *testing.T) {
 			sourceType: types.T_int64.ToType(), wantType: types.T_int64},
 		{name: "year retains numeric type", value: int32(2026),
 			sourceType: types.T_year.ToType(), wantType: types.T_year},
-		{name: "date is not an arithmetic source", value: "2026-08-28",
+		{name: "date is not a shared numeric source", value: "2026-08-28",
 			sourceType: types.T_date.ToType(), wantNil: true},
+		{name: "time is not a shared numeric source", value: "12:34:56.123456",
+			sourceType: types.New(types.T_time, 6, 6), wantNil: true},
+		{name: "datetime is not a shared numeric source", value: "2026-08-28 12:34:56.123456",
+			sourceType: types.New(types.T_datetime, 6, 6), wantNil: true},
+		{name: "timestamp is not a shared numeric source", value: "2026-08-28 12:34:56.123456",
+			sourceType: types.New(types.T_timestamp, 6, 6), wantNil: true},
+		{name: "json is not a shared numeric source", value: "1.6",
+			sourceType: types.T_json.ToType(), wantNil: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			expr, err := preparedSQLExecuteNumericParamExpr(
@@ -1096,6 +1104,28 @@ func TestPreparedPlanConversionParamPositions(t *testing.T) {
 	require.Nil(t, PreparedPlanConversionParamPositions(&plan.Plan{
 		Plan: &plan.Plan_Query{Query: &plan.Query{StmtType: plan.Query_SELECT}},
 	}))
+}
+
+func TestPreparedPlanInetNtoaParamPositions(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		sql  string
+		want []int32
+	}{
+		{name: "direct", sql: "prepare inet_direct from 'select inet_ntoa(?)'", want: []int32{0}},
+		{name: "multiple", sql: "prepare inet_multiple from 'select inet_ntoa(?), inet_ntoa(?)'", want: []int32{0, 1}},
+		{name: "nested expression owns its text domain", sql: "prepare inet_nested from 'select inet_ntoa(concat(?))'", want: nil},
+		{name: "other function", sql: "prepare inet_other from 'select inet_aton(?)'", want: nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+			planUnderTest := prepared.GetDcl().GetPrepare().GetPlan()
+			require.Equal(t, test.want, PreparedPlanInetNtoaParamPositions(planUnderTest))
+		})
+	}
+
+	require.Nil(t, PreparedPlanInetNtoaParamPositions(nil))
 }
 
 func TestPreparedDirectResultSpecializationUpdatesVisibleType(t *testing.T) {
@@ -1984,6 +2014,122 @@ func TestDecimal128HasTrailingZeros(t *testing.T) {
 
 			wrapperResult := hasTrailingZeros(constExpr, constType, tt.columnScale)
 			require.Equal(t, tt.expectTrailing, wrapperResult, "hasTrailingZeros wrapper result mismatch")
+		})
+	}
+}
+
+func TestDecimal256StringHasTrailingZerosWithoutNarrowing(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		value           string
+		width           int32
+		constScale      int32
+		columnScale     int32
+		wantTrailing    bool
+		wantAlwaysFalse bool
+	}{
+		{
+			name:            "18 digit suffix",
+			value:           "12345678901234567890.000000000000000000",
+			width:           38,
+			constScale:      18,
+			columnScale:     0,
+			wantTrailing:    true,
+			wantAlwaysFalse: false,
+		},
+		{
+			name:            "19 digit suffix",
+			value:           "12345678901234567890.0000000000000000000",
+			width:           39,
+			constScale:      19,
+			columnScale:     0,
+			wantTrailing:    true,
+			wantAlwaysFalse: false,
+		},
+		{
+			name:            "wide suffix",
+			value:           "1234567890123456789012345678901234567890.000000000000000000000000000000",
+			width:           70,
+			constScale:      30,
+			columnScale:     0,
+			wantTrailing:    true,
+			wantAlwaysFalse: false,
+		},
+		{
+			name:            "wide nonzero suffix",
+			value:           "12345678901234567890.0000000000000000001",
+			width:           39,
+			constScale:      19,
+			columnScale:     0,
+			wantTrailing:    false,
+			wantAlwaysFalse: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			constType := types.New(types.T_decimal256, tc.width, tc.constScale)
+			constExpr := &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_decimal256), Width: tc.width, Scale: tc.constScale},
+				Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+					Isnull: false,
+					Value:  &plan.Literal_Sval{Sval: tc.value},
+				}},
+			}
+
+			require.Equal(t, tc.wantTrailing,
+				hasTrailingZeros(constExpr, constType, tc.columnScale))
+			require.Equal(t, tc.wantAlwaysFalse,
+				isDecimalComparisonAlwaysFalseCore(constExpr, constType, tc.columnScale))
+		})
+	}
+}
+
+func TestDecimalTrailingZerosIsSignIndependent(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name         string
+		value        string
+		wantTrailing bool
+		wantProven   bool
+	}{
+		{
+			name:         "positive zero suffix",
+			value:        "50.500000",
+			wantTrailing: true,
+			wantProven:   true,
+		},
+		{
+			name:         "negative zero suffix",
+			value:        "-50.500000",
+			wantTrailing: true,
+			wantProven:   true,
+		},
+		{
+			name:         "positive nonzero suffix",
+			value:        "50.500001",
+			wantTrailing: false,
+			wantProven:   true,
+		},
+		{
+			name:         "negative nonzero suffix",
+			value:        "-50.500001",
+			wantTrailing: false,
+			wantProven:   true,
+		},
+		{
+			name:         "negative wide coefficient",
+			value:        "-12345678901234567890.0000000000000000000",
+			wantTrailing: true,
+			wantProven:   true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expr, err := makePlan2DecimalExprWithType(ctx, tc.value)
+			require.NoError(t, err)
+			constType := makeTypeByPlan2Expr(expr)
+
+			gotTrailing, gotProven := decimalTrailingZerosStatus(expr, constType, 2)
+			require.Equal(t, tc.wantTrailing, gotTrailing)
+			require.Equal(t, tc.wantProven, gotProven)
 		})
 	}
 }

@@ -99,10 +99,41 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.StringNumericResultContracts && requiredVersion < defines.MORPCVersion80 {
 		requiredVersion = defines.MORPCVersion80
 	}
+	if features.DecimalLiteralSemantics && requiredVersion < defines.MORPCVersion89 {
+		requiredVersion = defines.MORPCVersion89
+	}
+	if features.IntegerParameterCoercion && requiredVersion < defines.MORPCVersion85 {
+		requiredVersion = defines.MORPCVersion85
+	}
 	if features.BoundedConditionalStringDomains && requiredVersion < defines.MORPCVersion83 {
 		requiredVersion = defines.MORPCVersion83
 	}
+	if (features.ExpressionResultMetadataContracts || features.TOBase64ResultContracts || features.IPFunctionResultContracts) &&
+		requiredVersion < defines.MORPCVersion86 {
+		requiredVersion = defines.MORPCVersion86
+	}
+	if features.SpatialDistanceSemantics && requiredVersion < defines.MORPCVersion90 {
+		requiredVersion = defines.MORPCVersion90
+	}
 	return requiredVersion, nil
+}
+
+// observePersistedExpressionProtocol records the requirement while a
+// persisted view expression is still represented as a function tree. Binding
+// folds some expressions (notably BETWEEN bounds) before the view validator
+// sees the plan; recording here keeps admission independent of that rewrite.
+func (b *baseBinder) observePersistedExpressionProtocol(expr *planpb.Expr) error {
+	if b == nil || b.ctx == nil || b.ctx.persistedExpressionProtocolRequirement == nil {
+		return nil
+	}
+	requiredVersion, err := RequiredPersistedExpressionProtocolVersion(expr)
+	if err != nil {
+		return err
+	}
+	if requiredVersion > *b.ctx.persistedExpressionProtocolRequirement {
+		*b.ctx.persistedExpressionProtocolRequirement = requiredVersion
+	}
+	return nil
 }
 
 // RequiredPersistedIPFunctionProtocolVersion is retained for callers that

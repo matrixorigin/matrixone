@@ -35,6 +35,7 @@ import (
 	"golang.org/x/exp/slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	util2 "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -924,7 +925,6 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 }
 
 func (mp *MysqlProtocolImpl) ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
-	var err error
 	stmt.proc = proc
 	dcPrepare, ok := stmt.PreparePlan.GetDcl().Control.(*planPb.DataControl_Prepare)
 	if !ok {
@@ -941,37 +941,34 @@ func (mp *MysqlProtocolImpl) ParseSendLongData(ctx context.Context, proc *proces
 		return moerr.NewInternalErrorf(ctx, "get param index out of range. get %d, param length is %d", paramIdx, numParams)
 	}
 
-	if stmt.params == nil {
-		stmt.params = vector.NewVec(types.T_text.ToType())
-		for i := 0; i < numParams; i++ {
-			err = vector.AppendBytes(stmt.params, []byte{}, false, proc.GetMPool())
-			if err != nil {
-				return err
-			}
-		}
-	}
-
 	length := len(data) - pos
 	val, _, ok := mp.readCountOfBytes(data, pos, length)
 	if !ok {
 		return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 	}
-	if stmt.getFromSendLongData == nil {
-		stmt.getFromSendLongData = make(map[int]struct{})
-	}
-	if _, ok := stmt.getFromSendLongData[int(paramIdx)]; ok {
-		val = append(append([]byte(nil), stmt.params.GetBytesAt(int(paramIdx))...), val...)
-	}
-	if err = util.SetAnyToStringVector(proc, val, stmt.params, int(paramIdx)); err != nil {
+	allowed, err := mp.GetSession().GetSessionSysVar("max_allowed_packet")
+	if err != nil {
 		return err
 	}
-	stmt.getFromSendLongData[int(paramIdx)] = struct{}{}
-	return nil
+	limit, ok := allowed.(int64)
+	if !ok {
+		return moerr.NewInternalErrorf(ctx, "invalid max_allowed_packet value %T", allowed)
+	}
+	return stmt.appendLongData(ctx, proc, int(paramIdx), val, limit)
 }
 
 func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
 	var err error
+	// The fixed part after the statement id contains the cursor flag and the
+	// four-byte iteration count. Check it before changing statement state; a
+	// zero-parameter EXECUTE has no later reads to catch a truncated count.
+	if pos < 0 || pos > len(data) || len(data)-pos < 5 {
+		return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
+	}
 	stmt.proc = proc
+	if stmt.longDataErr != nil {
+		return stmt.longDataErr
+	}
 	dcPrepare, ok := stmt.PreparePlan.GetDcl().Control.(*planPb.DataControl_Prepare)
 	if !ok {
 		return moerr.NewInternalError(ctx, "can not get Prepare plan in prepareStmt")
@@ -1008,6 +1005,8 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 	pos += 4
 
 	if numParams > 0 {
+		paramTypes := stmt.ParamTypes
+		newParamTypes := false
 		var nullBitmaps []byte
 		nullBitmapLen := (numParams + 7) >> 3
 		nullBitmaps, pos, ok = mp.readCountOfBytes(data, pos, nullBitmapLen)
@@ -1021,22 +1020,33 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 		if !ok {
 			return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 		}
-		if newParamBoundFlag == 1 {
-
-			// Just the first StmtExecute packet contain parameters type,
-			// we need save it for further use.
-			stmt.ParamTypes, pos, ok = mp.readCountOfBytes(data, pos, numParams<<1)
-
+		if newParamBoundFlag != 0 {
+			// MySQL treats every nonzero flag as a new type vector. Decode into
+			// local state first so a malformed packet cannot discard the types
+			// saved by the previous successful EXECUTE.
+			paramTypes, pos, ok = mp.readCountOfBytes(data, pos, numParams<<1)
 			if !ok {
 				return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 			}
+			newParamTypes = true
 		}
 
 		// get paramters and set value to session variables
 		for i := 0; i < numParams; i++ {
-			// if params had received via COM_STMT_SEND_LONG_DATA, use them directly(we set the params when deal with COM_STMT_SEND_LONG_DATA).
+			// Materialize each streamed parameter only once. Long data takes
+			// precedence over the execute NULL bitmap, including an empty chunk.
 			// ref https://dev.mysql.com/doc/internals/en/com-stmt-send-long-data.html
 			if _, ok := stmt.getFromSendLongData[i]; ok {
+				value := stmt.longDataBuffers[i]
+				if len(value) > types.VarlenaInlineSize &&
+					int64(len(stmt.params.GetArea()))+int64(len(value)) > mpool.MaxAllocationSize() {
+					return moerr.NewInvalidInput(ctx, "prepared parameter vector area exceeds allocation limit")
+				}
+				if err = vector.SetBytesAt(stmt.params, i, value, proc.Mp()); err != nil {
+					return err
+				}
+				stmt.params.GetNulls().Unset(uint64(i))
+				stmt.releaseLongDataBuffer(i)
 				continue
 			}
 
@@ -1048,12 +1058,12 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 				continue
 			}
 
-			if (i<<1)+1 >= len(stmt.ParamTypes) {
+			if (i<<1)+1 >= len(paramTypes) {
 				return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 
 			}
-			tp := stmt.ParamTypes[i<<1]
-			isUnsigned := (stmt.ParamTypes[(i<<1)+1] & 0x80) > 0
+			tp := paramTypes[i<<1]
+			isUnsigned := (paramTypes[(i<<1)+1] & 0x80) > 0
 
 			switch defines.MysqlType(tp) {
 			case defines.MYSQL_TYPE_NULL:
@@ -1176,7 +1186,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 				var val string
 				switch length {
 				case 0:
-					val = "0d 00:00:00"
+					val = "00:00:00"
 				case 8, 12:
 					pos, val, ok = mp.readTime(data, pos, length)
 					if !ok {
@@ -1237,6 +1247,9 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 				return err
 			}
 		}
+		if newParamTypes {
+			stmt.ParamTypes = bytes.Clone(paramTypes)
+		}
 	}
 
 	return nil
@@ -1266,13 +1279,10 @@ func (mp *MysqlProtocolImpl) readTime(data []byte, pos int, length uint8) (int, 
 		return 0, "", false
 	}
 	pos = tmpPos
-	if day > 0 {
-		retStr += fmt.Sprintf("%dd ", day)
-	}
 	if pos+3 > len(data) { //nolint:typecheck
 		return 0, "", false
 	}
-	hour := data[pos]
+	hour := uint64(day)*24 + uint64(data[pos])
 	pos++
 	minute := data[pos]
 	pos++
@@ -1680,6 +1690,15 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 		//TO Check password
 		if CheckPassword(psw, mp.GetSalt(), authResponse) {
 			ses.Debugf(ctx, "check password succeeded")
+			// AuthenticateUser has finished its catalog transaction. Repair
+			// accounts missed by a rolling upgrade's finite account snapshot
+			// before allowing queries on this CN. Bootstrap special users have
+			// no catalog create_version and must not enter the upgrade path.
+			if createVersion := ses.GetCreateVersion(); createVersion != "" {
+				if err = ses.MaybeUpgradeTenant(ctx, createVersion, int64(ses.GetTenantInfo().GetTenantID())); err != nil {
+					return err
+				}
+			}
 			bh := ses.GetBackgroundExec(ctx)
 			defer bh.Close()
 			if err = ses.InitSystemVariables(ctx, bh); err != nil {

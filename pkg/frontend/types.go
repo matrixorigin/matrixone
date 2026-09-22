@@ -318,6 +318,12 @@ type PrepareStmt struct {
 
 	params              *vector.Vector
 	getFromSendLongData map[int]struct{}
+	// COM_STMT_SEND_LONG_DATA owns its chunks until EXECUTE materializes each
+	// parameter once. The pool must be the one that allocated the buffers,
+	// even if a later command uses a different process.
+	longDataBuffers map[int][]byte
+	longDataPool    *mpool.MPool
+	longDataErr     error
 	// cursorRequested is set by the current COM_STMT_EXECUTE packet. The
 	// materialized cursor is kept on the prepared statement because a later
 	// COM_STMT_FETCH only carries the statement id.
@@ -398,6 +404,10 @@ type PrepareStmt struct {
 	// prepared-plan generation. SQL EXECUTE uses it to restore the variable's
 	// concrete domain without walking the plan for every execution.
 	conversionParamPositions []int32
+	// inetNtoaParamPositions identifies direct INET_NTOA markers once per
+	// prepared-plan generation. SQL EXECUTE uses it to carry temporal/JSON
+	// provenance only to INET_NTOA, without changing unrelated expressions.
+	inetNtoaParamPositions []int32
 	// runtimePlan/runtimeCompile form a one-entry bounded cache keyed by the
 	// stable parameter semantic category. The cached runtime plan retains
 	// ParamRefs, so equivalent values reuse the compile without embedding the
@@ -418,6 +428,9 @@ type PrepareStmt struct {
 	// EXECUTE.
 	runtimeSpecializationPlan   *plan.Plan
 	runtimeSpecializationNeeded bool
+	// runtimeIntegerAssignmentParams belongs to the same plan generation. These
+	// markers alone do not force specialization for ordinary integer packets.
+	runtimeIntegerAssignmentParams []int32
 }
 
 // preparedStmtCursor is the server-side result retained between
@@ -854,6 +867,8 @@ func (prepareStmt *PrepareStmt) clearRuntimeSpecializationCache() {
 
 func (prepareStmt *PrepareStmt) Close() {
 	prepareStmt.closeCursor()
+	prepareStmt.releaseLongDataBuffers()
+	prepareStmt.longDataErr = nil
 	// Release the runtime compile while the current parameter vector is still
 	// valid; releaseRuntimeCompile temporarily detaches and restores it.
 	prepareStmt.clearRuntimeSpecializationCache()
@@ -883,6 +898,7 @@ func (prepareStmt *PrepareStmt) Close() {
 	prepareStmt.directResultParamPositions = nil
 	prepareStmt.directResultParamPositionsSet = false
 	prepareStmt.remapDb = nil
+	prepareStmt.getFromSendLongData = nil
 }
 
 // invalidateCachedCompile detaches and returns the old cached topology. The
@@ -906,23 +922,30 @@ func (prepareStmt *PrepareStmt) resetBinaryParamState() {
 	if prepareStmt == nil {
 		return
 	}
-	if prepareStmt.params != nil {
-		prepareStmt.params.GetNulls().Reset()
-	}
-	for k := range prepareStmt.getFromSendLongData {
-		delete(prepareStmt.getFromSendLongData, k)
-	}
+	prepareStmt.clearBinaryParamState(prepareStmt.proc)
+	prepareStmt.longDataErr = nil
 }
 
 func (prepareStmt *PrepareStmt) hasPendingLongData() bool {
-	return prepareStmt != nil && len(prepareStmt.getFromSendLongData) > 0
+	return prepareStmt != nil && (len(prepareStmt.getFromSendLongData) > 0 ||
+		len(prepareStmt.longDataBuffers) > 0 || prepareStmt.longDataErr != nil)
 }
 
 func (prepareStmt *PrepareStmt) clearBinaryParamState(proc *process.Process) {
 	if prepareStmt == nil {
 		return
 	}
+	prepareStmt.releaseLongDataBuffers()
+	if proc == nil {
+		proc = prepareStmt.proc
+	}
 	if prepareStmt.params != nil && proc != nil {
+		if prepareStmt.proc != nil && prepareStmt.proc.GetPrepareParams() == prepareStmt.params {
+			prepareStmt.proc.SetPrepareParams(nil)
+		}
+		if proc.GetPrepareParams() == prepareStmt.params {
+			proc.SetPrepareParams(nil)
+		}
 		prepareStmt.params.Free(proc.Mp())
 		prepareStmt.params = nil
 	}

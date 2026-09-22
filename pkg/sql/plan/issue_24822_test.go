@@ -88,6 +88,39 @@ func newIssue24822Optimizer() *issue24822Optimizer {
 	return &issue24822Optimizer{ctx: ctx}
 }
 
+func newIssue24822FullText2Optimizer() *issue24822Optimizer {
+	optimizer := newIssue24822Optimizer()
+	ftDef := optimizer.ctx.tables["ft"]
+	logical := ftDef.Indexes[0]
+	store := *logical
+	store.IndexAlgo = catalog.MoIndexFullText2Algo.ToString()
+	store.IndexAlgoParams = `{"parser":"default"}`
+	store.IndexAlgoTableType = catalog.FullText2Index_TblType_Storage
+	store.IndexTableName = logical.IndexTableName + "_store"
+	meta := store
+	meta.IndexAlgoTableType = catalog.FullText2Index_TblType_Metadata
+	meta.IndexTableName = logical.IndexTableName + "_meta"
+	ftDef.Indexes = []*planpb.IndexDef{&store, &meta}
+	for _, indexTableName := range []string{store.IndexTableName, meta.IndexTableName} {
+		optimizer.ctx.objects[indexTableName] = &planpb.ObjectRef{
+			SchemaName: "tpch",
+			ObjName:    indexTableName,
+		}
+		optimizer.ctx.tables[indexTableName] = &planpb.TableDef{
+			Name: indexTableName,
+			Cols: []*planpb.ColDef{
+				{Name: catalog.IndexTableIndexColName, Typ: planpb.Type{Id: int32(types.T_varchar), Width: 191}},
+				{Name: catalog.IndexTablePrimaryColName, Typ: planpb.Type{Id: int32(types.T_varchar), Width: 191}},
+			},
+			Name2ColIndex: map[string]int32{
+				catalog.IndexTableIndexColName:   0,
+				catalog.IndexTablePrimaryColName: 1,
+			},
+		}
+	}
+	return optimizer
+}
+
 func countReachableFullTextScans(query *planpb.Query) int {
 	seen := make(map[int32]bool)
 	var visit func(int32) int
@@ -100,6 +133,33 @@ func countReachableFullTextScans(query *planpb.Query) int {
 		count := 0
 		if node.NodeType == planpb.Node_FUNCTION_SCAN && node.TableDef != nil &&
 			node.TableDef.TblFunc != nil && node.TableDef.TblFunc.Name == fulltext_index_scan_func_name {
+			count++
+		}
+		for _, childID := range node.Children {
+			count += visit(childID)
+		}
+		return count
+	}
+
+	count := 0
+	for _, step := range query.Steps {
+		count += visit(step)
+	}
+	return count
+}
+
+func countReachableFullText2Scans(query *planpb.Query) int {
+	seen := make(map[int32]bool)
+	var visit func(int32) int
+	visit = func(nodeID int32) int {
+		if nodeID < 0 || int(nodeID) >= len(query.Nodes) || seen[nodeID] {
+			return 0
+		}
+		seen[nodeID] = true
+		node := query.Nodes[nodeID]
+		count := 0
+		if node.NodeType == planpb.Node_FUNCTION_SCAN && node.TableDef != nil &&
+			node.TableDef.TblFunc != nil && node.TableDef.TblFunc.Name == fulltext2_search_func_name {
 			count++
 		}
 		for _, childID := range node.Children {
@@ -315,6 +375,83 @@ func TestFullTextGroupedAggregateWithOrderByUsesIndex(t *testing.T) {
 			require.Equal(t, test.sortAboveAggregate, hasReachableSortAboveAggregate(query))
 			require.Equal(t, 1, countReachableFullTextScans(query))
 			require.Zero(t, countReachableFullTextMatches(query))
+		})
+	}
+}
+
+func TestFullTextWrappedPassengerUsesBareMatchStream(t *testing.T) {
+	logicPlan, err := runOneStmt(newIssue24822Optimizer(), t, `
+		SELECT id
+		FROM ft
+		WHERE MATCH(title, body) AGAINST('hello')
+		  AND MATCH(title, body) AGAINST('hello') < 0.0125`)
+	require.NoError(t, err)
+	query := logicPlan.GetQuery()
+	require.Zero(t, countReachableFullTextMatches(query),
+		"the score passenger must be rewritten against the bare MATCH stream")
+	require.Equal(t, 1, countReachableFullTextScans(query))
+}
+
+func TestFullText2WrappedPassengerUsesBareMatchStream(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "exclusive upper bound",
+			sql: `
+				SELECT id
+				FROM ft
+				WHERE MATCH(title, body) AGAINST('hello')
+				  AND MATCH(title, body) AGAINST('hello') < 0.0125`,
+		},
+		{
+			name: "inclusive upper bound",
+			sql: `
+				SELECT id
+				FROM ft
+				WHERE MATCH(title, body) AGAINST('hello')
+				  AND MATCH(title, body) AGAINST('hello') <= 0.013416502`,
+		},
+		{
+			name: "or residual",
+			sql: `
+				SELECT id
+				FROM ft
+				WHERE MATCH(title, body) AGAINST('hello')
+				  AND (MATCH(title, body) AGAINST('hello') > 0.0138 OR id = '1')`,
+		},
+		{
+			name: "limit",
+			sql: `
+				SELECT id
+				FROM ft
+				WHERE MATCH(title, body) AGAINST('hello')
+				  AND MATCH(title, body) AGAINST('hello') < 0.0118
+				LIMIT 1`,
+		},
+		{
+			name: "aggregate over limited passenger",
+			sql: `
+				SELECT COUNT(*)
+				FROM (
+					SELECT id
+					FROM ft
+					WHERE MATCH(title, body) AGAINST('hello')
+					  AND MATCH(title, body) AGAINST('hello') < 0.0132
+					LIMIT 1
+				) q`,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(newIssue24822FullText2Optimizer(), t, test.sql)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			require.Zero(t, countReachableFullTextMatches(query),
+				"the score passenger must be rewritten against the bare MATCH2 stream")
+			require.Equal(t, 1, countReachableFullText2Scans(query))
 		})
 	}
 }

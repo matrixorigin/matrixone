@@ -17,7 +17,6 @@ package sqlintegration
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -38,25 +37,16 @@ const (
 	issue26111TargetAccount  = "i26111t"
 )
 
-func cleanupIssue26111Catalog(ctx context.Context, db *sql.DB) error {
-	statements := []string{
-		"drop snapshot if exists " + issue26111SnapshotName,
-		"drop database if exists `" + issue26111BranchDB + "`",
-		"drop database if exists `" + issue26111SnapshotBranch + "`",
-		"drop database if exists `" + issue26111ExistingTarget + "`",
-		"drop database if exists `" + issue26111SourceDB + "`",
-		"drop account if exists `" + issue26111TargetAccount + "`",
-	}
-	var cleanupErr error
-	for _, statement := range statements {
-		if _, err := db.ExecContext(ctx, statement); err != nil {
-			cleanupErr = errors.Join(cleanupErr, err)
-		}
-	}
-	return cleanupErr
-}
-
 func TestIssue26111DataBranchDatabaseWithCyclicForeignKeys(t *testing.T) {
+	// This cross-account scenario owns a disposable fixture generation. Catalog
+	// teardown repeats expensive DDL without adding a regression oracle; closing
+	// the generation also isolates partial setup and canceled SQL from later tests.
+	require.NoError(t, embed.CloseSingleCNBaseClusterTests())
+	t.Cleanup(func() {
+		if err := embed.CloseSingleCNBaseClusterTests(); err != nil {
+			t.Errorf("issue 26111 fixture cleanup failed: %v", err)
+		}
+	})
 	runSQLIntegration(t, func(c embed.Cluster) {
 		runIssue26111DataBranchDatabaseWithCyclicForeignKeys(t, c)
 	})
@@ -87,21 +77,6 @@ func runIssue26111DataBranchDatabaseWithCyclicForeignKeys(t *testing.T, c embed.
 		existingTarget = issue26111ExistingTarget
 		targetAccount  = issue26111TargetAccount
 	)
-	// The single-CN base fixture is shared with issue 26114. Every object created
-	// here therefore has an explicit reset path; the regression keeps its
-	// cross-database and cross-account oracles while leaving no catalog state for
-	// the next scenario.
-	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cleanupCancel()
-	require.NoError(t, cleanupIssue26111Catalog(cleanupCtx, db))
-	defer func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cleanupCancel()
-		if cleanupErr := cleanupIssue26111Catalog(cleanupCtx, db); cleanupErr != nil {
-			t.Errorf("issue 26111 catalog cleanup failed: %v", cleanupErr)
-		}
-	}()
-
 	execSQLRequire(t, ctx, db, "create database `"+sourceDB+"`")
 	execSQLRequire(t, ctx, db, "create table `"+sourceDB+"`.`a` (id int primary key, b_id int)")
 	execSQLRequire(t, ctx, db, "create table `"+sourceDB+"`.`b` (id int primary key, a_id int, constraint `fk_b_a` foreign key (a_id) references `"+sourceDB+"`.`a`(id))")
