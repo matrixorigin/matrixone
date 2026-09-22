@@ -929,3 +929,58 @@ func TestMergeReaderReturnsCloseErrorAndDoesNotRetry(t *testing.T) {
 	require.NoError(t, mr.Close())
 	require.Equal(t, int32(1), atomic.LoadInt32(&closed))
 }
+
+// TestReaderSetIndexParamL2sqBoundWidenedToFloat32 pins the l2_distance_sq half of #29040.
+//
+// l2_distance_sq exposes the squared distance float32-rounded (DistanceTransformIvfflat), while the
+// storage gate compares the raw float64 square. Without widening, a row whose exposed score is
+// exactly the bound -- raw 1+1e-10 rounds to 1.0, so `<= 1` holds -- is dropped by the gate before
+// the exact source-domain post-filter ever sees it. The bound is widened to the adjacent float32
+// and, unlike the l2_distance case, NOT squared: an l2sq bound is already in the squared domain.
+func TestReaderSetIndexParamL2sqBoundWidenedToFloat32(t *testing.T) {
+	const bound = 1.0
+	// the hazard: a raw square just above the bound whose exposed float32 score satisfies it
+	raw := math.Nextafter(bound, 2)
+	require.Greater(t, raw, bound, "raw square is outside the un-widened gate")
+	require.EqualValues(t, float32(bound), float32(raw), "but its exposed float32 score is not")
+
+	r := &reader{}
+	vectorCol := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_array_float32), Width: 2},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 3}},
+	}
+	vectorLit := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_array_float32), Width: 2, NotNullable: true},
+		Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_VecVal{
+			VecVal: string(types.ArrayToBytes[float32]([]float32{0, 0})),
+		}}},
+	}
+	orderExpr := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_float64), NotNullable: true},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: metric.DistFn_L2sqDistance},
+			Args: []*plan.Expr{vectorCol, vectorLit},
+		}},
+	}
+	param := &plan.IndexReaderParam{
+		OrderBy:      []*plan.OrderBySpec{{Expr: orderExpr}},
+		Limit:        plan2.MakePlan2Uint64ConstExprWithType(10),
+		OrigFuncName: metric.DistFn_L2sqDistance,
+		DistRange: &plan.DistRange{
+			UpperBoundType: plan.BoundType_INCLUSIVE,
+			UpperBound: &plan.Expr{
+				Typ:  plan.Type{Id: int32(types.T_float64)},
+				Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Dval{Dval: bound}}},
+			},
+		},
+	}
+	r.SetIndexParam(param)
+	require.NotNil(t, r.orderByLimit)
+
+	require.Equal(t, f32BoundOutward(bound, math.Inf(1)), r.orderByLimit.UpperBound)
+	require.GreaterOrEqual(t, r.orderByLimit.UpperBound, raw,
+		"the gate must keep a row whose exposed float32 score satisfies the predicate")
+	// and it is NOT squared: squaring would have widened a bound of 1 to ~1, but a bound of 0.5
+	// would collapse to 0.25 and drop valid rows.
+	require.Less(t, r.orderByLimit.UpperBound, 1.0000002, "bound must not be squared or over-widened")
+}

@@ -687,7 +687,26 @@ func (r *reader) SetIndexParam(param *plan.IndexReaderParam) {
 			}
 		}
 
-		if param.OrigFuncName == metric.DistFn_L2Distance {
+		if param.OrigFuncName == metric.DistFn_L2sqDistance {
+			// l2_distance_sq exposes the squared distance itself, float32-rounded
+			// (DistanceTransformIvfflat), while this gate compares the raw float64 square. Widen
+			// the bound to the adjacent float32 so the gate stays a superset of the predicate --
+			// without squaring, since an l2sq bound is already in the squared domain. The exact
+			// source-domain post-filter removes the extra candidates.
+			if indexTop.LowerBoundType != plan.BoundType_UNBOUNDED {
+				if indexTop.LowerBound <= 0 {
+					// see the L2 case: a squared distance is non-negative, so a bound of 0 or below
+					// excludes nothing here and the post-filter enforces an exclusive `> 0`.
+					indexTop.LowerBoundType = plan.BoundType_UNBOUNDED
+					indexTop.LowerBound = 0
+				} else {
+					indexTop.LowerBound = f32BoundOutward(indexTop.LowerBound, math.Inf(-1))
+				}
+			}
+			if indexTop.UpperBoundType != plan.BoundType_UNBOUNDED && indexTop.UpperBound >= 0 {
+				indexTop.UpperBound = f32BoundOutward(indexTop.UpperBound, math.Inf(1))
+			}
+		} else if param.OrigFuncName == metric.DistFn_L2Distance {
 			// Vector distances are a float32 domain for every base type (usearch/cuvs return float32,
 			// and the scalar l2_distance matches), so the L2 bound must be widened to the next float32
 			// before squaring -- otherwise the squared f64 gate is off by ~1e-6 from the float32
@@ -737,8 +756,15 @@ func (r *reader) SetExplainVectorTopStats(stats *objectio.IndexReaderTopStats) {
 // only one float64 ULP would leave a ~1e-6 gap that drops a boundary row. The
 // exact source-domain post-filter still removes the extra candidates (#29040).
 func squareL2BoundOutward(bound, direction float64) float64 {
-	bound = float64(math.Nextafter32(float32(bound), float32(direction)))
-	return math.Nextafter(bound*bound, direction)
+	b := f32BoundOutward(bound, direction)
+	return math.Nextafter(b*b, direction)
+}
+
+// f32BoundOutward returns the adjacent float32 outward from bound. A row is gated on a distance
+// this repo exposes in the float32 domain, so a bound compared against a raw float64 must first
+// step past that rounding.
+func f32BoundOutward(bound, direction float64) float64 {
+	return float64(math.Nextafter32(float32(bound), float32(direction)))
 }
 
 func validBoundType(boundType plan.BoundType) bool {
