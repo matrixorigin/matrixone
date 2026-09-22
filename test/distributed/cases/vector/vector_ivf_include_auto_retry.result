@@ -39,6 +39,15 @@ where category = 1
 order by l2_distance(vec, '[0,0,0]')
 limit 1 by rank with option 'mode=post';
 ➤ id[4,32,0]  ¦  category[4,32,0]  ¦  payload[12,-1,0]
+999  ¦  1  ¦  hit
+prepare p from 'select id, category, payload from t where category = 1 order by l2_distance(vec, ''[0,0,0]'') limit 1 by rank with option ''mode=post''';
+execute p;
+➤ id[4,32,0]  ¦  category[4,32,0]  ¦  payload[12,-1,0]  𝄀
+999  ¦  1  ¦  hit
+execute p;
+➤ id[4,32,0]  ¦  category[4,32,0]  ¦  payload[12,-1,0]  𝄀
+999  ¦  1  ¦  hit
+deallocate prepare p;
 select id, category, payload
 from t
 where category = 1
