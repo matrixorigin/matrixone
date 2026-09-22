@@ -301,7 +301,11 @@ func (j *fileServiceLeaseJournal) load(ctx context.Context, visit func(*Lease) e
 		if err != nil || !equalBytes(tr.ReadRef, readRef) {
 			return moerr.NewInternalErrorNoCtxf("substrait: lease journal identity mismatch %q", name)
 		}
-		lease := &Lease{Read: tr, Wire: record.Wire, Manifest: record.Manifest, CanonicalSchema: record.CanonicalSchema, AuthorizedClientSPKIHash: record.AuthorizedClientSPKIHash, ObjectNames: record.ObjectNames}
+		consumer, consumerErr := inferReadConsumer(record.AuthorizedClientSPKIHash)
+		if consumerErr != nil {
+			return moerr.NewInternalErrorNoCtxf("substrait: invalid lease journal consumer marker %q", name)
+		}
+		lease := &Lease{Read: tr, Wire: record.Wire, Manifest: record.Manifest, CanonicalSchema: record.CanonicalSchema, AuthorizedClientSPKIHash: record.AuthorizedClientSPKIHash, ObjectNames: record.ObjectNames, Consumer: consumer}
 		wantAuthority := leaseAuthorityDigest(lease)
 		if !equalBytes(authority, wantAuthority[:]) {
 			return moerr.NewInternalErrorNoCtxf("substrait: lease journal authority mismatch %q", name)
