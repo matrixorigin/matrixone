@@ -25,3 +25,30 @@ SELECT JSON_DEPTH(CAST('1' AS BINARY)) AS result;
 -- 100 container levels are accepted (SQL depth 101); 101 are rejected.
 SELECT JSON_DEPTH(CONCAT(REPEAT('{"a":', 100), '1', REPEAT('}', 100))) AS result;
 SELECT JSON_DEPTH(CONCAT(REPEAT('{"a":', 101), '1', REPEAT('}', 101))) AS result;
+
+-- Prepared statement provenance: valid text, numeric/binary rejection, NULL,
+-- malformed JSON, then valid text recovery on the same statement. Reuse the
+-- statement after a binary parameter so the provenance path is exercised twice.
+PREPARE json_depth_prepared FROM 'SELECT JSON_DEPTH(?) AS result';
+SET @json_depth_input = '{"a":[1]}';
+EXECUTE json_depth_prepared USING @json_depth_input;
+SET @json_depth_input = 42;
+EXECUTE json_depth_prepared USING @json_depth_input;
+SET @json_depth_input = CAST('{"a":[1]}' AS BINARY);
+EXECUTE json_depth_prepared USING @json_depth_input;
+SET @json_depth_input = NULL;
+EXECUTE json_depth_prepared USING @json_depth_input;
+SET @json_depth_input = 'not-json';
+EXECUTE json_depth_prepared USING @json_depth_input;
+SET @json_depth_input = '{"a":{"b":1}}';
+EXECUTE json_depth_prepared USING @json_depth_input;
+DEALLOCATE PREPARE json_depth_prepared;
+SET @json_depth_input = NULL;
+
+-- Independent teardown residue check (DROP IF EXISTS alone can hide leftovers).
+DROP TABLE IF EXISTS t_json_depth_teardown;
+CREATE TABLE t_json_depth_teardown (id INT PRIMARY KEY, doc VARCHAR(64));
+INSERT INTO t_json_depth_teardown VALUES (1, '[]');
+SELECT JSON_DEPTH(doc) FROM t_json_depth_teardown;
+DROP TABLE t_json_depth_teardown;
+SELECT COUNT(*) AS residue FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 't_json_depth_teardown';
