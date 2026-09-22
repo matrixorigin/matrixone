@@ -2192,7 +2192,7 @@ type MysqlWriter interface {
 }
 
 type MysqlHelper interface {
-	MakeColumnDefData(context.Context, []*plan.ColDef) ([][]byte, error)
+	MakeColumnDefData(context.Context, []*plan.ColDef, ...uint32) ([][]byte, error)
 }
 
 type MysqlRrWr interface {

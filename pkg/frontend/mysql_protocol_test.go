@@ -4623,7 +4623,7 @@ func (fp *testMysqlWriter) Flush() error {
 	return nil
 }
 
-func (fp *testMysqlWriter) MakeColumnDefData(ctx context.Context, columns []*planPb.ColDef) ([][]byte, error) {
+func (fp *testMysqlWriter) MakeColumnDefData(ctx context.Context, columns []*planPb.ColDef, directIntegerLengths ...uint32) ([][]byte, error) {
 	if fp.makeColumnDefDataFunc != nil {
 		return fp.makeColumnDefDataFunc(ctx, columns)
 	}
