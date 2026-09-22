@@ -272,6 +272,22 @@ class SiriusParityTest(unittest.TestCase):
         with self.assertRaisesRegex(sirius_parity.CampaignError, "exact result"):
             sirius_parity._compare_results(integer, wrong_integer, tolerance)
 
+        large_integer = copy.deepcopy(integer)
+        large_integer["rows"][0][0]["value"] = (1 << 53) + 1
+        sirius_parity._validate_typed_result(large_integer, 1)
+        lossy_integer = copy.deepcopy(large_integer)
+        lossy_integer["rows"][0][0]["value"] = float((1 << 53) + 1)
+        with self.assertRaisesRegex(sirius_parity.CampaignError, "inexact integer"):
+            sirius_parity._validate_typed_result(lossy_integer, 1)
+        boolean_integer = copy.deepcopy(integer)
+        boolean_integer["rows"][0][0]["value"] = True
+        with self.assertRaisesRegex(sirius_parity.CampaignError, "inexact integer"):
+            sirius_parity._validate_typed_result(boolean_integer, 1)
+        overflow_integer = copy.deepcopy(integer)
+        overflow_integer["rows"][0][0]["value"] = 1 << 63
+        with self.assertRaisesRegex(sirius_parity.CampaignError, "inexact integer"):
+            sirius_parity._validate_typed_result(overflow_integer, 1)
+
         floating = {
             "schema": [{"name": "value", "type": "double"}],
             "rows": [[{"type": "double", "value": 1.0}]],
@@ -333,8 +349,10 @@ class SiriusParityTest(unittest.TestCase):
                 sirius_parity.write_artifacts(campaign, malicious, Path(directory))
 
     @unittest.skipUnless(
-        os.name == "posix" and hasattr(os, "pidfd_open"),
-        "process-group descendant proof requires POSIX pidfds",
+        sys.platform == "linux"
+        and hasattr(os, "pidfd_open")
+        and hasattr(sirius_parity.signal, "pidfd_send_signal"),
+        "detached-descendant proof requires Linux subreapers and pidfds",
     )
     def test_subprocess_timeout_kills_descendants(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -348,7 +366,11 @@ import signal
 import subprocess
 import sys
 
-child = subprocess.Popen([sys.executable, "-c", "import signal; signal.pause()"])
+child = subprocess.Popen([
+    sys.executable,
+    "-c",
+    "import os, signal; os.setsid(); signal.pause()",
+])
 pathlib.Path(sys.argv[1]).write_text(str(child.pid), encoding="utf-8")
 signal.pause()
 """,
@@ -372,6 +394,44 @@ signal.pause()
             finally:
                 os.close(descriptor)
 
+    @unittest.skipUnless(
+        sys.platform == "linux"
+        and hasattr(os, "pidfd_open")
+        and hasattr(sirius_parity.signal, "pidfd_send_signal"),
+        "detached-descendant proof requires Linux subreapers and pidfds",
+    )
+    def test_successful_runner_cannot_leave_detached_descendant(self):
+        with tempfile.TemporaryDirectory() as directory:
+            directory_path = Path(directory)
+            child_pid = directory_path / "child.pid"
+            runner = directory_path / "runner.py"
+            runner.write_text(
+                """
+import pathlib
+import subprocess
+import sys
+
+child = subprocess.Popen(
+    [sys.executable, "-c", "import os, signal; os.setsid(); signal.pause()"],
+    stdin=subprocess.DEVNULL,
+    stdout=subprocess.DEVNULL,
+    stderr=subprocess.DEVNULL,
+    close_fds=True,
+)
+pathlib.Path(sys.argv[1]).write_text(str(child.pid), encoding="utf-8")
+print("{}")
+""",
+                encoding="utf-8",
+            )
+            executor = sirius_parity.SubprocessExecutor(
+                [sys.executable, str(runner), str(child_pid)],
+                timeout_seconds=2,
+            )
+            self.assertEqual({}, executor({"sequence": 1}))
+            pid = int(child_pid.read_text(encoding="utf-8"))
+            with self.assertRaises(ProcessLookupError):
+                os.pidfd_open(pid)
+
     def test_subprocess_cancellation_kills_and_reaps_group(self):
         process = mock.Mock()
         process.pid = 123
@@ -379,14 +439,51 @@ signal.pause()
         executor = sirius_parity.SubprocessExecutor(["runner"], timeout_seconds=1)
         with (
             mock.patch.object(sirius_parity.subprocess, "Popen", return_value=process) as popen,
-            mock.patch.object(sirius_parity.os, "killpg") as killpg,
+            mock.patch.object(sirius_parity, "_enter_exclusive_subreaper", return_value=False),
+            mock.patch.object(sirius_parity, "_cleanup_owned_processes") as cleanup,
+            mock.patch.object(sirius_parity, "_direct_child_pids", return_value=set()),
+            mock.patch.object(sirius_parity, "_set_child_subreaper") as restore,
             self.assertRaises(KeyboardInterrupt),
         ):
             executor({"sequence": 1})
         popen.assert_called_once()
         self.assertTrue(popen.call_args.kwargs["start_new_session"])
-        killpg.assert_called_once_with(process.pid, sirius_parity.signal.SIGKILL)
-        self.assertEqual(2, process.communicate.call_count)
+        cleanup.assert_called_once_with(process, close_pipes=True)
+        restore.assert_called_once_with(False)
+
+    @unittest.skipUnless(sys.platform == "linux", "exclusive child ownership requires procfs")
+    def test_subprocess_rejects_preexisting_child(self):
+        child = sirius_parity.subprocess.Popen(
+            [sys.executable, "-c", "import signal; signal.pause()"]
+        )
+        self.addCleanup(child.wait)
+        self.addCleanup(lambda: child.poll() is None and child.kill())
+        executor = sirius_parity.SubprocessExecutor(["runner"], timeout_seconds=1)
+        with self.assertRaisesRegex(sirius_parity.CampaignError, "exclusive subprocess ownership"):
+            executor({"sequence": 1})
+
+    def test_cleanup_failure_poisons_executor(self):
+        process = mock.Mock()
+        process.pid = 123
+        process.returncode = 0
+        process.communicate.return_value = ('{"ok":true}', "")
+        executor = sirius_parity.SubprocessExecutor(["runner"], timeout_seconds=1)
+        cleanup_error = sirius_parity.CampaignError("cleanup deadline")
+        with (
+            mock.patch.object(sirius_parity.subprocess, "Popen", return_value=process),
+            mock.patch.object(sirius_parity, "_enter_exclusive_subreaper", return_value=False),
+            mock.patch.object(
+                sirius_parity, "_cleanup_owned_processes",
+                side_effect=[cleanup_error, cleanup_error],
+            ),
+            mock.patch.object(sirius_parity, "_direct_child_pids", return_value=set()),
+            mock.patch.object(sirius_parity, "_set_child_subreaper"),
+            self.assertRaisesRegex(sirius_parity.CampaignError, "cleanup deadline"),
+        ):
+            executor({"sequence": 1})
+        self.assertTrue(executor.poisoned)
+        with self.assertRaisesRegex(sirius_parity.CampaignError, "poisoned"):
+            executor({"sequence": 2})
 
     def test_provenance_is_mandatory(self):
         provenance = self.provenance()

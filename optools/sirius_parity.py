@@ -28,6 +28,7 @@ work. The real executor is deployment-owned and is injected here.
 from __future__ import annotations
 
 import argparse
+import ctypes
 import csv
 import hashlib
 import io
@@ -35,10 +36,13 @@ import json
 import math
 import os
 from pathlib import Path
+import select
 import signal
 import statistics
 import subprocess
 import sys
+import threading
+import time
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 
@@ -59,6 +63,47 @@ RESULT_WINDOW_BYTES = 64 << 20
 RESULT_SCHEMA_FIELDS = frozenset(("name", "type"))
 RESULT_CELL_FIELDS = frozenset(("type", "value"))
 FLOAT_SQL_TYPES = frozenset(("double", "float", "float32", "float64", "real"))
+INTEGER_SQL_RANGES = {
+    "tinyint": (-(1 << 7), (1 << 7) - 1),
+    "smallint": (-(1 << 15), (1 << 15) - 1),
+    "mediumint": (-(1 << 23), (1 << 23) - 1),
+    "int": (-(1 << 31), (1 << 31) - 1),
+    "integer": (-(1 << 31), (1 << 31) - 1),
+    "bigint": (-(1 << 63), (1 << 63) - 1),
+    "hugeint": (-(1 << 127), (1 << 127) - 1),
+    "int8": (-(1 << 7), (1 << 7) - 1),
+    "int16": (-(1 << 15), (1 << 15) - 1),
+    "int32": (-(1 << 31), (1 << 31) - 1),
+    "int64": (-(1 << 63), (1 << 63) - 1),
+    "int128": (-(1 << 127), (1 << 127) - 1),
+    "utinyint": (0, (1 << 8) - 1),
+    "usmallint": (0, (1 << 16) - 1),
+    "umediumint": (0, (1 << 24) - 1),
+    "uinteger": (0, (1 << 32) - 1),
+    "ubigint": (0, (1 << 64) - 1),
+    "uhugeint": (0, (1 << 128) - 1),
+    "uint8": (0, (1 << 8) - 1),
+    "uint16": (0, (1 << 16) - 1),
+    "uint32": (0, (1 << 32) - 1),
+    "uint64": (0, (1 << 64) - 1),
+    "uint128": (0, (1 << 128) - 1),
+    "unsigned tinyint": (0, (1 << 8) - 1),
+    "unsigned smallint": (0, (1 << 16) - 1),
+    "unsigned mediumint": (0, (1 << 24) - 1),
+    "unsigned int": (0, (1 << 32) - 1),
+    "unsigned integer": (0, (1 << 32) - 1),
+    "unsigned bigint": (0, (1 << 64) - 1),
+    "tinyint unsigned": (0, (1 << 8) - 1),
+    "smallint unsigned": (0, (1 << 16) - 1),
+    "mediumint unsigned": (0, (1 << 24) - 1),
+    "int unsigned": (0, (1 << 32) - 1),
+    "integer unsigned": (0, (1 << 32) - 1),
+    "bigint unsigned": (0, (1 << 64) - 1),
+}
+RUNNER_CLEANUP_TIMEOUT_SECONDS = 5.0
+_PR_SET_CHILD_SUBREAPER = 36
+_PR_GET_CHILD_SUBREAPER = 37
+_SUBPROCESS_EXECUTOR_LOCK = threading.Lock()
 ROUTES = (
     {"id": "mo-native", "backend": "native", "scan_mode": "mo"},
     {"id": "flight-tae", "backend": "flight", "scan_mode": "tae"},
@@ -317,59 +362,204 @@ class SubprocessExecutor:
     def __init__(self, command: Sequence[str], timeout_seconds: float):
         if not command:
             raise CampaignError("runner command is required")
+        if not math.isfinite(timeout_seconds) or timeout_seconds <= 0:
+            raise CampaignError("runner timeout must be positive and finite")
         self.command = tuple(command)
         self.timeout_seconds = timeout_seconds
+        self.poisoned = False
 
     def __call__(self, spec: Mapping[str, Any]) -> Mapping[str, Any]:
-        if os.name != "posix":
-            raise CampaignError("campaign runner process-group isolation requires POSIX")
+        with _SUBPROCESS_EXECUTOR_LOCK:
+            return self._call_exclusive(spec)
+
+    def _call_exclusive(self, spec: Mapping[str, Any]) -> Mapping[str, Any]:
+        if self.poisoned:
+            raise CampaignError("campaign runner cleanup owner is poisoned")
+        previous_subreaper = _enter_exclusive_subreaper()
         environment = os.environ.copy()
         environment["MO_SIRIUS_CAMPAIGN_RUN"] = canonical_json(spec)
-        process = subprocess.Popen(
-            self.command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            env=environment,
-            start_new_session=True,
-        )
+        process: subprocess.Popen[str] | None = None
         try:
-            stdout, stderr = process.communicate(timeout=self.timeout_seconds)
-        except subprocess.TimeoutExpired as error:
-            self._kill_process_group(process)
-            process.communicate()
-            raise CampaignError(
-                f"runner timed out for sequence {spec['sequence']}"
-            ) from error
-        except BaseException:
-            self._kill_process_group(process)
-            process.communicate()
-            raise
-        # The direct runner is reaped by communicate. Kill any descendant that
-        # deliberately closed the inherited pipes and outlived its parent so a
-        # completed run cannot contaminate the next serial campaign cell.
-        self._kill_process_group(process)
-        if process.returncode != 0:
-            raise CampaignError(
-                f"runner failed for sequence {spec['sequence']}: exit {process.returncode}: "
-                f"{stderr.strip()}"
+            process = subprocess.Popen(
+                self.command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=environment,
+                start_new_session=True,
             )
-        try:
-            result = json.loads(stdout)
-        except json.JSONDecodeError as error:
-            raise CampaignError(
-                f"runner returned invalid JSON for sequence {spec['sequence']}: {error}"
-            ) from error
-        if not isinstance(result, dict):
-            raise CampaignError(f"runner result for sequence {spec['sequence']} is not an object")
-        return result
+            try:
+                stdout, stderr = process.communicate(timeout=self.timeout_seconds)
+            except subprocess.TimeoutExpired as error:
+                _cleanup_owned_processes(process, close_pipes=True)
+                process = None
+                raise CampaignError(
+                    f"runner timed out for sequence {spec['sequence']}"
+                ) from error
+            except BaseException:
+                _cleanup_owned_processes(process, close_pipes=True)
+                process = None
+                raise
 
-    @staticmethod
-    def _kill_process_group(process: subprocess.Popen[str]) -> None:
+            # communicate reaped the direct runner. A child can nevertheless
+            # detach with setsid and close its inherited pipes; subreaper
+            # adoption makes every such survivor our direct child here.
+            returncode = process.returncode
+            _cleanup_owned_processes(process, close_pipes=False)
+            process = None
+            if returncode != 0:
+                raise CampaignError(
+                    f"runner failed for sequence {spec['sequence']}: exit {returncode}: "
+                    f"{stderr.strip()}"
+                )
+            try:
+                result = json.loads(stdout)
+            except json.JSONDecodeError as error:
+                raise CampaignError(
+                    f"runner returned invalid JSON for sequence {spec['sequence']}: {error}"
+                ) from error
+            if not isinstance(result, dict):
+                raise CampaignError(
+                    f"runner result for sequence {spec['sequence']} is not an object"
+                )
+            return result
+        finally:
+            if process is not None:
+                try:
+                    _cleanup_owned_processes(process, close_pipes=True)
+                except BaseException:
+                    self.poisoned = True
+                    raise
+            children = _direct_child_pids()
+            if children:
+                self.poisoned = True
+                raise CampaignError(
+                    f"campaign runner cleanup left owned children: {sorted(children)}"
+                )
+            _set_child_subreaper(previous_subreaper)
+
+
+def _libc_prctl() -> Any:
+    libc = ctypes.CDLL(None, use_errno=True)
+    if not hasattr(libc, "prctl"):
+        raise CampaignError("campaign runner requires Linux prctl")
+    return libc.prctl
+
+
+def _get_child_subreaper() -> bool:
+    value = ctypes.c_int()
+    if _libc_prctl()(_PR_GET_CHILD_SUBREAPER, ctypes.byref(value), 0, 0, 0) != 0:
+        error = ctypes.get_errno()
+        raise CampaignError(f"read child-subreaper state: {os.strerror(error)}")
+    return bool(value.value)
+
+
+def _set_child_subreaper(enabled: bool) -> None:
+    if _libc_prctl()(_PR_SET_CHILD_SUBREAPER, int(enabled), 0, 0, 0) != 0:
+        error = ctypes.get_errno()
+        raise CampaignError(f"set child-subreaper state: {os.strerror(error)}")
+
+
+def _direct_child_pids() -> set[int]:
+    children: set[int] = set()
+    task_root = Path(f"/proc/{os.getpid()}/task")
+    try:
+        tasks = tuple(task_root.iterdir())
+    except OSError as error:
+        raise CampaignError(f"enumerate campaign tasks: {error}") from error
+    for task in tasks:
         try:
-            os.killpg(process.pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+            raw = (task / "children").read_text(encoding="ascii").strip()
+        except FileNotFoundError:
+            continue
+        except OSError as error:
+            raise CampaignError(f"enumerate campaign children: {error}") from error
+        if raw:
+            children.update(int(value) for value in raw.split())
+    return children
+
+
+def _enter_exclusive_subreaper() -> bool:
+    if sys.platform != "linux" or not hasattr(os, "pidfd_open") or not hasattr(signal, "pidfd_send_signal"):
+        raise CampaignError("campaign runner ownership requires Linux prctl, procfs, and pidfds")
+    existing = _direct_child_pids()
+    if existing:
+        raise CampaignError(
+            f"campaign runner requires exclusive subprocess ownership; existing children={sorted(existing)}"
+        )
+    previous = _get_child_subreaper()
+    _set_child_subreaper(True)
+    return previous
+
+
+def _remaining_cleanup_seconds(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise CampaignError("campaign runner cleanup deadline exceeded")
+    return remaining
+
+
+def _kill_original_process_group(process: subprocess.Popen[str]) -> None:
+    try:
+        os.killpg(process.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+
+
+def _close_process_pipes(process: subprocess.Popen[str]) -> None:
+    for pipe in (process.stdout, process.stderr):
+        if pipe is not None:
+            pipe.close()
+
+
+def _kill_and_reap_adopted_children(deadline: float) -> None:
+    while True:
+        children = _direct_child_pids()
+        if not children:
+            return
+        descriptors: dict[int, int] = {}
+        try:
+            for pid in children:
+                try:
+                    descriptor = os.pidfd_open(pid)
+                except ProcessLookupError:
+                    continue
+                descriptors[pid] = descriptor
+                try:
+                    signal.pidfd_send_signal(descriptor, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            poller = select.poll()
+            for descriptor in descriptors.values():
+                poller.register(descriptor, select.POLLIN)
+            pending = set(descriptors.values())
+            while pending:
+                timeout_ms = max(1, math.ceil(_remaining_cleanup_seconds(deadline) * 1000))
+                events = poller.poll(timeout_ms)
+                if not events:
+                    raise CampaignError("campaign runner cleanup deadline exceeded")
+                pending.difference_update(descriptor for descriptor, _ in events)
+        finally:
+            for descriptor in descriptors.values():
+                os.close(descriptor)
+        for pid in children:
+            try:
+                os.waitpid(pid, os.WNOHANG)
+            except ChildProcessError:
+                pass
+
+
+def _cleanup_owned_processes(process: subprocess.Popen[str], close_pipes: bool) -> None:
+    deadline = time.monotonic() + RUNNER_CLEANUP_TIMEOUT_SECONDS
+    _kill_original_process_group(process)
+    if close_pipes:
+        _close_process_pipes(process)
+    if process.poll() is None:
+        try:
+            process.wait(timeout=_remaining_cleanup_seconds(deadline))
+        except subprocess.TimeoutExpired as error:
+            raise CampaignError("direct campaign runner did not terminate during cleanup") from error
+    _kill_and_reap_adopted_children(deadline)
 
 
 def _sql_type_base(value: str) -> str:
@@ -425,6 +615,12 @@ def _validate_typed_result(result: Mapping[str, Any], sequence: int) -> None:
                 raise CampaignError(
                     f"inexact decimal result encoding at sequence {sequence}/{row_index}/{column_index}"
                 )
+            if type_base in INTEGER_SQL_RANGES and value is not None:
+                minimum, maximum = INTEGER_SQL_RANGES[type_base]
+                if type(value) is not int or value < minimum or value > maximum:
+                    raise CampaignError(
+                        f"inexact integer result encoding at sequence {sequence}/{row_index}/{column_index}"
+                    )
             if (
                 type_base in FLOAT_SQL_TYPES
                 and value is not None
