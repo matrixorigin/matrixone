@@ -14,13 +14,22 @@ query-service lookup fail before the cursor guard is exercised. Obtain the IPs
 with `docker inspect mo-cn1 mo-cn2` and keep this adjustment in generated,
 ignored local configuration only.
 
-Compile and run with a Connector/J 8.x JAR:
+Compile and run the Java probe with a Connector/J 8.x JAR:
 
 ```sh
 javac -cp mysql-connector-java-8.0.27.jar Issue29182CursorDrainProbe.java
 java -cp .:mysql-connector-java-8.0.27.jar Issue29182CursorDrainProbe
+```
 
-go run ./raw_cursor_probe.go
+Run the raw-wire probe from the repository root. The source is kept as a
+`.go.txt` example because it is an interactive, external-cluster probe, not a
+CI unit test or production package. Copying it outside the repository also
+keeps the working tree clean:
+
+```sh
+probe_dir=$(mktemp -d)
+cp test/manual/issue29182/raw_cursor_probe.go.txt "$probe_dir/raw_cursor_probe.go"
+go run "$probe_dir/raw_cursor_probe.go"
 ```
 
 The Java probe's optional arguments are Proxy JDBC URL, CN1 JDBC URL, CN1 UUID,

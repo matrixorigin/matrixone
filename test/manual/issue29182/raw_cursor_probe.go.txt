@@ -1,4 +1,5 @@
 // Manual two-CN cursor-drain probe for both MySQL EOF capability modes.
+// Copy this file to a .go path before running it; see README.md.
 // See README.md for the isolated cluster and SQL-address prerequisites.
 package main
 
