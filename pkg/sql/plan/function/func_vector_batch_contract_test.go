@@ -23,12 +23,39 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 )
 
-// One constant operand selects the batch distance kernel. cosine_similarity rejects a zero-magnitude
-// vector while cosine_distance returns 1 for it, so the batch path must still raise that error --
-// otherwise making an operand constant turns an error into a value.
-func TestCosineSimilarityZeroVectorErrorsOnBatchPath(t *testing.T) {
+// cosine_similarity must answer identically whether or not an operand is constant. It has no
+// batch path: the batch kernels compute cosine DISTANCE, and recovering similarity as 1-distance
+// loses what the subtraction cancels -- for [1e-6,1] against [1,0] that recovery lands about 116k
+// float32 ULP away from the kernel's own answer. The zero-vector contract differs too:
+// cosine_distance returns 1 by convention where cosine_similarity rejects.
+func TestCosineSimilarityIsConstnessIndependent(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
+	// The precision case: constant operand and column operand must give the same value.
+	const want = 1e-06
+	for _, tc := range []struct {
+		name  string
+		input []FunctionTestInput
+	}{
+		{"const", []FunctionTestInput{
+			NewFunctionTestConstInput(types.T_array_float32.ToType(), [][]float32{{1, 0}}, []bool{false}),
+			NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1e-6, 1}}, []bool{false}),
+		}},
+		{"column", []FunctionTestInput{
+			NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 0}}, []bool{false}),
+			NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1e-6, 1}}, []bool{false}),
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewFunctionTestCase(proc, tc.input,
+				NewFunctionTestResult(types.T_float64.ToType(), false, []float64{want}, []bool{false}),
+				CosineSimilarityArray[float32])
+			ok, info := c.Run()
+			require.True(t, ok, info)
+		})
+	}
+
+	// A zero-magnitude vector is rejected with either operand constant.
 	constZero := NewFunctionTestCase(proc,
 		[]FunctionTestInput{
 			NewFunctionTestConstInput(types.T_array_float32.ToType(), [][]float32{{0, 0, 0}}, []bool{false}),
@@ -39,7 +66,7 @@ func TestCosineSimilarityZeroVectorErrorsOnBatchPath(t *testing.T) {
 	s, info := constZero.Run()
 	require.True(t, s, info)
 
-	// The same shape with non-zero vectors still uses the batch path and returns values.
+	// Ordinary vectors still answer.
 	constOk := NewFunctionTestCase(proc,
 		[]FunctionTestInput{
 			NewFunctionTestConstInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),

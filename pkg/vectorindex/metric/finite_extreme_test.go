@@ -42,11 +42,11 @@ func TestPairwiseL2RejectsSquaredOverflow(t *testing.T) {
 	require.EqualValues(t, 5, ok[0])
 }
 
-// CheckL2Finite / AllFiniteF32 accept every finite result and reject both non-finite values a
+// CheckFiniteDists / AllFiniteF32 accept every finite result and reject both non-finite values a
 // batch kernel can produce: +Inf from the CPU loop, NaN from cuVS's expanded form.
-func TestCheckL2Finite(t *testing.T) {
-	require.NoError(t, CheckL2Finite(nil))
-	require.NoError(t, CheckL2Finite([]float32{0, 1.5, 7, -3, math.MaxFloat32}))
+func TestCheckFiniteDists(t *testing.T) {
+	require.NoError(t, CheckFiniteDists(nil, l2What))
+	require.NoError(t, CheckFiniteDists([]float32{0, 1.5, 7, -3, math.MaxFloat32}, l2What))
 	require.True(t, AllFiniteF32([]float32{0, 1.5, 7}))
 
 	for _, bad := range []float32{
@@ -56,7 +56,7 @@ func TestCheckL2Finite(t *testing.T) {
 	} {
 		dist := []float32{1, 2, bad, 4}
 		require.False(t, AllFiniteF32(dist))
-		err := CheckL2Finite(dist)
+		err := CheckFiniteDists(dist, l2What)
 		require.Error(t, err)
 		require.Contains(t, err.Error(), "overflows the element domain")
 	}
@@ -138,4 +138,83 @@ func TestPairWiseDistanceGPURejectsOverflow(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, got, n*n)
 	require.EqualValues(t, 3, got[0])
+}
+
+// Every distance kernel rejects a result that left the element domain. Finite inputs can still
+// produce +Inf (a float32 dot product of 1e20-magnitude vectors) or NaN (that +Inf cancelling
+// against a -Inf of the opposite sign); neither is a distance.
+func TestKernelsRejectNonFiniteResults(t *testing.T) {
+	t.Run("inner product NaN", func(t *testing.T) {
+		_, err := InnerProduct[float32]([]float32{1e20, 1e20}, []float32{1e20, -1e20})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "inner product")
+
+		_, err = InnerProduct[float64]([]float64{1e200, 1e200}, []float64{1e200, -1e200})
+		require.Error(t, err)
+	})
+
+	t.Run("l2 squared overflow", func(t *testing.T) {
+		_, err := L2DistanceSq[float32]([]float32{0, 0}, []float32{3e19, 3e19})
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "l2 distance")
+	})
+
+	t.Run("l1 overflow", func(t *testing.T) {
+		big := make([]float32, 4)
+		zero := make([]float32, 4)
+		for i := range big {
+			big[i] = math.MaxFloat32
+		}
+		_, err := L1Distance[float32](big, zero)
+		require.Error(t, err)
+		require.Contains(t, err.Error(), "l1 distance")
+	})
+
+	// Ordinary vectors are unaffected on every kernel.
+	t.Run("ordinary", func(t *testing.T) {
+		a := []float32{1, 2, 3}
+		b := []float32{4, 6, 3}
+		for _, tc := range []struct {
+			name string
+			fn   func() (float32, error)
+			want float32
+		}{
+			{"l2sq", func() (float32, error) { return L2DistanceSq[float32](a, b) }, 25},
+			{"l2", func() (float32, error) { return L2Distance[float32](a, b) }, 5},
+			{"l1", func() (float32, error) { return L1Distance[float32](a, b) }, 7},
+			{"ip", func() (float32, error) { return InnerProduct[float32](a, b) }, -25},
+		} {
+			got, err := tc.fn()
+			require.NoError(t, err, tc.name)
+			require.EqualValues(t, tc.want, got, tc.name)
+		}
+	})
+}
+
+// A zero denominator is either a genuinely zero vector, which keeps the documented convention, or
+// two non-zero vectors whose norms underflowed -- which has no computable cosine and is rejected
+// rather than reported as maximally dissimilar.
+func TestCosineUnderflowVsZeroVector(t *testing.T) {
+	// float64 elements near 1e-200 square below the float64 range; identical vectors must not
+	// report distance 1.
+	_, err := CosineDistance[float64]([]float64{1e-200, 0}, []float64{1e-200, 0})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "underflows")
+
+	_, err = CosineSimilarity[float64]([]float64{1e-200, 0}, []float64{1e-200, 0})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "underflows")
+
+	// float32 squares are recovered in float64, so this one answers.
+	d, err := CosineDistance[float32]([]float32{1e-30, 0}, []float32{1e-30, 0})
+	require.NoError(t, err)
+	require.EqualValues(t, 0, d)
+
+	// A genuinely zero vector keeps its convention on both functions.
+	d64, err := CosineDistance[float64]([]float64{0, 0}, []float64{1, 1})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, d64)
+	_, err = CosineSimilarity[float64]([]float64{0, 0}, []float64{1, 1})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "one of the vector is zero")
 }

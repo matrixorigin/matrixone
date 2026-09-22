@@ -161,6 +161,9 @@ func (s *IvfpqSearch[B, Q]) SearchFloat32(proc *sqlexec.SqlProcess, query any, r
 	for i, d := range dists {
 		outDists[i] = float32(d)
 	}
+	if err := metric.CheckFiniteDists(outDists, "vector index search"); err != nil {
+		return err
+	}
 	return nil
 }
 

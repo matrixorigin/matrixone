@@ -92,7 +92,7 @@ func L2DistanceSq[T types.RealNumbers](p, q []T) (T, error) {
 		i++
 	}
 
-	return sum, nil
+	return CheckFiniteDist(sum, "l2 distance")
 }
 
 // L1Distance calculates the L1 (Manhattan) distance between two vectors.
@@ -151,7 +151,7 @@ func L1Distance[T types.RealNumbers](p, q []T) (T, error) {
 		i++
 	}
 
-	return sum, nil
+	return CheckFiniteDist(sum, "l1 distance")
 }
 
 // InnerProduct calculates the inner product (dot product) of two vectors.
@@ -202,7 +202,7 @@ func InnerProduct[T types.RealNumbers](p, q []T) (T, error) {
 		i++
 	}
 
-	return -sum, nil
+	return CheckFiniteDist(-sum, "inner product")
 }
 
 // CosineDistance calculates the cosine distance between two vectors using generics.
@@ -273,7 +273,13 @@ func CosineDistance[T types.RealNumbers](p, q []T) (T, error) {
 	// the cosine similarity is undefined. A distance of 1.0 is a common convention,
 	// implying the vectors are maximally dissimilar (orthogonal).
 	if denominator == 0 {
-		// This can happen if one or both vectors are all zeros.
+		// A zero denominator means a zero norm. If that vector really is all zeros it takes the
+		// documented convention; if BOTH vectors hold non-zero values the norms underflowed even
+		// in float64 (a float64 element near 1e-200), which has no computable cosine and is
+		// rejected rather than reported as maximally dissimilar.
+		if anyNonZero(p) && anyNonZero(q) {
+			return T(0), moerr.NewInternalErrorNoCtx("cosine distance: vector magnitude underflows the element domain")
+		}
 		return 1.0, nil
 	}
 
@@ -357,7 +363,10 @@ func CosineSimilarity[T types.RealNumbers](p, q []T) (T, error) {
 	}
 
 	if denominator == 0 {
-		// This can happen if one or both vectors are all zeros.
+		// See CosineDistance: an underflowed magnitude is distinct from a zero vector.
+		if anyNonZero(p) && anyNonZero(q) {
+			return T(0), moerr.NewInternalErrorNoCtx("cosine similarity: vector magnitude underflows the element domain")
+		}
 		return 0, moerr.NewInternalErrorNoCtx("cosine similarity: one of the vector is zero")
 	}
 

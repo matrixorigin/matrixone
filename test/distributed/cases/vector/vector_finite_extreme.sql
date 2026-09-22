@@ -47,4 +47,21 @@ insert into tsmall values (1, '[1e-300,1e-300]'), (2, '[0,0]'), (3, '[3,4]');
 select normalize_l2(v) from tsmall where id = 1;
 select id, normalize_l2(v) from tsmall where id in (2,3) order by id;
 
+-- inner_product rejects a dot product that leaves the element domain: each term is finite, the
+-- sum is not. Constant and column operands report the same error.
+create table tip(id int primary key, v vecf32(2));
+insert into tip values (1, '[1e20,1e20]'), (2, '[1,2]');
+select id, inner_product(v, '[1e20,-1e20]') from tip order by id;
+select a.id, inner_product(a.v, b.v) from tip a join tip b on b.id = 1 where a.id = 1;
+select id, inner_product(v, '[1,1]') from tip where id = 2;
+
+-- A float64 vector whose squared norm underflows has no computable cosine; it is rejected rather
+-- than reported as maximally dissimilar (distance 1) against itself.
+create table tu(id int primary key, v vecf64(2));
+insert into tu values (1, '[1e-200,0]'), (2, '[3,4]');
+select cosine_distance(v, '[1e-200,0]') from tu order by id;
+select cosine_similarity(v, '[1e-200,0]') from tu order by id;
+-- A genuinely zero vector keeps its convention.
+select cosine_distance(v, '[0,0]') from tu where id = 2;
+
 drop database vec_extreme;

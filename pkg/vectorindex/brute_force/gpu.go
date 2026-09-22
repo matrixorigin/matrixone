@@ -221,6 +221,9 @@ func (idx *GpuAdhocBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries
 		return nil, nil, err
 	}
 
+	if err = metric.CheckFiniteDists(*f32Ptr, "vector index search"); err != nil {
+		return nil, nil, err
+	}
 	retdistances = make([]float64, n)
 	for i, d := range *f32Ptr {
 		retdistances[i] = float64(d)
@@ -476,6 +479,9 @@ func (idx *GpuBruteForceIndex[T]) Search(proc *sqlexec.SqlProcess, _queries any,
 		return nil, nil, err
 	}
 
+	if err = metric.CheckFiniteDists(*f32Ptr, "vector index search"); err != nil {
+		return nil, nil, err
+	}
 	retdistances = make([]float64, n)
 	for i, d := range *f32Ptr {
 		retdistances[i] = float64(d)

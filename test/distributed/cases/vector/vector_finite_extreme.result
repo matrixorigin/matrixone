@@ -4,13 +4,13 @@ use vec_extreme;
 create table t32(id int primary key, v vecf32(2));
 insert into t32 values (1, '[2e19,2e19]'), (2, '[3,4]');
 select id, l2_distance(v, '[0,0]') from t32 order by id;
-internal error: l2 distance: vector magnitude is too large, the squared distance overflows the element domain
+internal error: l2 distance: vector magnitude is too large, the result overflows the element domain
 select a.id, l2_distance(a.v, b.v) from t32 a join t32 b on b.id = 2 order by a.id;
-internal error: l2 distance: vector magnitude is too large, the squared distance overflows the element domain
+internal error: l2 distance: vector magnitude is too large, the result overflows the element domain
 create table t32n(id int primary key, v vecf32(2));
 insert into t32n values (1, '[2e19,2e19]'), (2, null);
 select id, l2_distance(v, '[0,0]') from t32n order by id;
-internal error: l2 distance: vector magnitude is too large, the squared distance overflows the element domain
+internal error: l2 distance: vector magnitude is too large, the result overflows the element domain
 select id, l2_distance(v, '[0,0]') from t32 where id = 2;
 ➤ id[4,32,0]  ¦  l2_distance(v, [0,0])[8,53,31]  𝄀
 2  ¦  5.0
@@ -49,4 +49,22 @@ select id, normalize_l2(v) from tsmall where id in (2,3) order by id;
 ➤ id[4,32,0]  ¦  normalize_l2(v)[12,2,0]  𝄀
 2  ¦  [0, 0]  𝄀
 3  ¦  [0.6, 0.8]
+create table tip(id int primary key, v vecf32(2));
+insert into tip values (1, '[1e20,1e20]'), (2, '[1,2]');
+select id, inner_product(v, '[1e20,-1e20]') from tip order by id;
+internal error: inner product: vector magnitude is too large, the result overflows the element domain
+select a.id, inner_product(a.v, b.v) from tip a join tip b on b.id = 1 where a.id = 1;
+internal error: inner product: vector magnitude is too large, the result overflows the element domain
+select id, inner_product(v, '[1,1]') from tip where id = 2;
+➤ id[4,32,0]  ¦  inner_product(v, [1,1])[8,53,31]  𝄀
+2  ¦  -3.0
+create table tu(id int primary key, v vecf64(2));
+insert into tu values (1, '[1e-200,0]'), (2, '[3,4]');
+select cosine_distance(v, '[1e-200,0]') from tu order by id;
+internal error: cosine distance: vector magnitude underflows the element domain
+select cosine_similarity(v, '[1e-200,0]') from tu order by id;
+internal error: cosine similarity: vector magnitude underflows the element domain
+select cosine_distance(v, '[0,0]') from tu where id = 2;
+➤ cosine_distance(v, [0,0])[8,53,31]  𝄀
+1.0
 drop database vec_extreme;

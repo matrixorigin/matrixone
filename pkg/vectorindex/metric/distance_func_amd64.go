@@ -244,11 +244,17 @@ func InnerProductFloat64(a, b []float64) (float64, error) {
 func L2DistanceSq[T types.RealNumbers](p, q []T) (T, error) {
 	if pf32, ok := any(p).([]float32); ok {
 		res, err := L2DistanceSqFloat32(pf32, any(q).([]float32))
-		return T(res), err
+		if err != nil {
+			return 0, err
+		}
+		return CheckFiniteDist(T(res), "l2 distance")
 	}
 	if pf64, ok := any(p).([]float64); ok {
 		res, err := L2DistanceSqFloat64(pf64, any(q).([]float64))
-		return T(res), err
+		if err != nil {
+			return 0, err
+		}
+		return CheckFiniteDist(T(res), "l2 distance")
 	}
 	return 0, moerr.NewInternalErrorNoCtx("vector type not supported")
 }
@@ -256,11 +262,17 @@ func L2DistanceSq[T types.RealNumbers](p, q []T) (T, error) {
 func InnerProduct[T types.RealNumbers](p, q []T) (T, error) {
 	if pf32, ok := any(p).([]float32); ok {
 		res, err := InnerProductFloat32(pf32, any(q).([]float32))
-		return T(res), err
+		if err != nil {
+			return 0, err
+		}
+		return CheckFiniteDist(T(res), "inner product")
 	}
 	if pf64, ok := any(p).([]float64); ok {
 		res, err := InnerProductFloat64(pf64, any(q).([]float64))
-		return T(res), err
+		if err != nil {
+			return 0, err
+		}
+		return CheckFiniteDist(T(res), "inner product")
 	}
 	return 0, moerr.NewInternalErrorNoCtx("vector type not supported")
 }
@@ -344,11 +356,17 @@ func L1DistanceFloat64(a, b []float64) (float64, error) {
 func L1Distance[T types.RealNumbers](p, q []T) (T, error) {
 	if pf32, ok := any(p).([]float32); ok {
 		res, err := L1DistanceFloat32(pf32, any(q).([]float32))
-		return T(res), err
+		if err != nil {
+			return 0, err
+		}
+		return CheckFiniteDist(T(res), "l1 distance")
 	}
 	if pf64, ok := any(p).([]float64); ok {
 		res, err := L1DistanceFloat64(pf64, any(q).([]float64))
-		return T(res), err
+		if err != nil {
+			return 0, err
+		}
+		return CheckFiniteDist(T(res), "l1 distance")
 	}
 	return 0, moerr.NewInternalErrorNoCtx("vector type not supported")
 }
@@ -396,6 +414,9 @@ func CosineDistanceF32(a, b []float32) (float32, error) {
 		den = math.Sqrt(nP) * math.Sqrt(nQ)
 	}
 	if den == 0 {
+		if anyNonZero(a) && anyNonZero(b) {
+			return 0, moerr.NewInternalErrorNoCtx("cosine distance: vector magnitude underflows the element domain")
+		}
 		return 1.0, nil
 	}
 	return float32(cosineDistClamped(d, den)), nil
@@ -444,6 +465,9 @@ func CosineDistanceF64(a, b []float64) (float64, error) {
 		den = math.Sqrt(nP) * math.Sqrt(nQ)
 	}
 	if den == 0 {
+		if anyNonZero(a) && anyNonZero(b) {
+			return 0, moerr.NewInternalErrorNoCtx("cosine distance: vector magnitude underflows the element domain")
+		}
 		return 1.0, nil
 	}
 	return cosineDistClamped(d, den), nil
@@ -507,6 +531,9 @@ func CosineSimilarityF32(a, b []float32) (float32, error) {
 		den = math.Sqrt(nP) * math.Sqrt(nQ)
 	}
 	if den == 0 {
+		if anyNonZero(a) && anyNonZero(b) {
+			return 0, moerr.NewInternalErrorNoCtx("cosine similarity: vector magnitude underflows the element domain")
+		}
 		return 0, moerr.NewInternalErrorNoCtx("cosine similarity: one of the vector is zero")
 	}
 	// Clamp to [-1,1]: float32 accumulation can push the quotient a hair
@@ -566,6 +593,9 @@ func CosineSimilarityF64(a, b []float64) (float64, error) {
 		den = math.Sqrt(nP) * math.Sqrt(nQ)
 	}
 	if den == 0 {
+		if anyNonZero(a) && anyNonZero(b) {
+			return 0, moerr.NewInternalErrorNoCtx("cosine similarity: vector magnitude underflows the element domain")
+		}
 		return 0, moerr.NewInternalErrorNoCtx("cosine similarity: one of the vector is zero")
 	}
 	// Clamp to [-1,1]: float accumulation can push the quotient a hair
