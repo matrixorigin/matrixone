@@ -112,6 +112,13 @@ func TestIssue28295RowConstructorScalarSubquery(t *testing.T) {
 		assertBool(`select (2,7) =
 			(select o.k,7 from scalar_inner i where i.k=o.k)
 			from scalar_outer o where o.k=2`, sql.NullBool{})
+		assertBool(`select (1,7) =
+			(select o.k,7 from scalar_inner i where i.k=o.k limit 1)
+			from scalar_outer o where o.k=1`, sql.NullBool{Bool: true, Valid: true})
+		assertBool(`select (1,7) =
+			(select distinct o.k,7 from scalar_inner i where i.k=o.k)
+			from scalar_outer o where o.k=1`, sql.NullBool{Bool: true, Valid: true})
+
 		assertBool(`select (0,null) <=>
 			(select count(*),sum(v) from scalar_inner i where i.k=o.k having count(*)=0)
 			from scalar_outer o where o.k=2`, sql.NullBool{Bool: true, Valid: true})
@@ -121,23 +128,9 @@ func TestIssue28295RowConstructorScalarSubquery(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, 1, correlatedCount)
 
-		var queryErr error
-		func() {
-			rows, err := conn.QueryContext(ctx, "select (1,5) = (select a,b from scalar_rows where id > 0)")
-			if err != nil {
-				queryErr = err
-				return
-			}
-			defer rows.Close()
-			for rows.Next() {
-			}
-			queryErr = rows.Err()
-		}()
-		require.ErrorContains(t, queryErr, "Subquery returns more than 1 row")
-		var mysqlErr *mysql.MySQLError
-		require.ErrorAs(t, queryErr, &mysqlErr)
-		require.Equal(t, uint16(1242), mysqlErr.Number)
-		require.Equal(t, "21000", string(mysqlErr.SQLState[:]))
+		queryErr := drainQueryError(ctx, conn,
+			"select (1,5) = (select a,b from scalar_rows where id > 0)")
+		assertSubqueryCardinalityError(t, queryErr)
 
 		_, err = conn.ExecContext(ctx, "set @issue28295_a = 1, @issue28295_b = 5")
 		require.NoError(t, err)
@@ -155,4 +148,24 @@ func TestIssue28295RowConstructorScalarSubquery(t *testing.T) {
 		require.NoError(t, prepared.QueryRowContext(ctx, int64(1), int64(5)).Scan(&preparedResult))
 		require.Equal(t, sql.NullBool{Bool: true, Valid: true}, preparedResult)
 	})
+}
+
+func drainQueryError(ctx context.Context, conn *sql.Conn, query string) error {
+	rows, err := conn.QueryContext(ctx, query)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+	}
+	return rows.Err()
+}
+
+func assertSubqueryCardinalityError(t *testing.T, err error) {
+	t.Helper()
+	require.ErrorContains(t, err, "Subquery returns more than 1 row")
+	var mysqlErr *mysql.MySQLError
+	require.ErrorAs(t, err, &mysqlErr)
+	require.Equal(t, uint16(1242), mysqlErr.Number)
+	require.Equal(t, "21000", string(mysqlErr.SQLState[:]))
 }

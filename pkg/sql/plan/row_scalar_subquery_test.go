@@ -49,6 +49,14 @@ func TestRowConstructorScalarSubqueryComparisonBuilds(t *testing.T) {
 		{name: "correlated result with constant", sql: `select N_NATIONKEY from NATION n
 			where (n.N_REGIONKEY, 1) =
 				(select n.N_REGIONKEY, 1 from REGION r where r.R_REGIONKEY = n.N_REGIONKEY)`},
+		{name: "correlated outer-only result with limit", sql: `select N_NATIONKEY from NATION n
+			where (n.N_REGIONKEY, 1) =
+				(select n.N_REGIONKEY, 1 from REGION r
+					where r.R_REGIONKEY = n.N_REGIONKEY limit 1)`},
+		{name: "correlated outer-only result with distinct", sql: `select N_NATIONKEY from NATION n
+			where (n.N_REGIONKEY, 1) =
+				(select distinct n.N_REGIONKEY, 1 from REGION r
+					where r.R_REGIONKEY = n.N_REGIONKEY)`},
 		{name: "correlated later result with limit", sql: `select N_NATIONKEY from NATION n
 			where (n.N_REGIONKEY, n.N_REGIONKEY) =
 				(select r.R_REGIONKEY, n.N_REGIONKEY from REGION r
@@ -104,6 +112,23 @@ func TestRowConstructorCorrelatedAggregateUnsupportedWrapperFailsClosed(t *testi
 			(select count(*), sum(r.R_REGIONKEY) from REGION r
 				where r.R_REGIONKEY = n.N_REGIONKEY limit 0)`)
 	require.ErrorContains(t, err, "correlated aggregate row result cannot be safely decorrelated")
+}
+
+func TestRowConstructorCorrelatedVolatileProjectionFailsClosed(t *testing.T) {
+	for _, sql := range []string{
+		`select N_NATIONKEY from NATION n where (n.N_REGIONKEY, 1) =
+			(select n.N_REGIONKEY, nextval('row_scalar_seq') from REGION r
+			 where r.R_REGIONKEY = n.N_REGIONKEY)`,
+		`select N_NATIONKEY from NATION n where (n.N_REGIONKEY, 1) =
+			(select distinct n.N_REGIONKEY, nextval('row_scalar_seq') from REGION r
+			 where r.R_REGIONKEY = n.N_REGIONKEY)`,
+		`select N_NATIONKEY from NATION n where (n.N_REGIONKEY, 1) =
+			(select n.N_REGIONKEY, nextval('row_scalar_seq') from REGION r
+			 where r.R_REGIONKEY = n.N_REGIONKEY limit 1)`,
+	} {
+		_, err := runOneStmt(NewMockOptimizer(false), t, sql)
+		require.ErrorContains(t, err, "wrapped correlated scalar projection cannot be safely decorrelated")
+	}
 }
 
 func TestRowConstructorScalarSubqueryComparisonRejectsArityMismatch(t *testing.T) {

@@ -843,8 +843,11 @@ func (builder *QueryBuilder) normalizeCorrelatedScalarProjection(
 	}
 
 	for i := range resultCount {
-		if hasCorrCol(ctx.projects[i]) &&
-			(containsVolatileFunction(ctx.projects[i]) || !builder.casePreservesType(ctx.projects[i])) {
+		// Lifting any visible volatile result across the join can change both
+		// its evaluation count and DISTINCT cardinality.  Keep this shape
+		// fail-closed until it can be decorrelated without moving evaluation.
+		if containsVolatileFunction(ctx.projects[i]) ||
+			(hasCorrCol(ctx.projects[i]) && !builder.casePreservesType(ctx.projects[i])) {
 			return unsafe()
 		}
 	}
@@ -855,6 +858,15 @@ func (builder *QueryBuilder) normalizeCorrelatedScalarProjection(
 		rowInnerDependent = rowInnerDependent || exprHasColRef(ctx.projects[i])
 		if hasCorrCol(ctx.projects[i]) {
 			correlatedInnerDependent = correlatedInnerDependent || exprHasColRef(ctx.projects[i])
+		}
+	}
+	if !rowInnerDependent {
+		// Every visible result is reconstructed by a nullable CASE in this
+		// branch, including constants without a Corr reference.
+		for i := range resultCount {
+			if !builder.casePreservesType(ctx.projects[i]) {
+				return unsafe()
+			}
 		}
 	}
 	nodeID := subID
@@ -980,7 +992,10 @@ func (builder *QueryBuilder) finalizeCorrelatedScalarProjections(
 			continue
 		}
 		match := sharedMatch
-		if i < len(matches) && matches[i] != nil {
+		// A MARK join replaces the per-project markers.  Those markers are no
+		// longer outputs of the join and must not override its existential
+		// marker, or the final projection retains a dangling project tag.
+		if existentialMatch == nil && i < len(matches) && matches[i] != nil {
 			match = matches[i]
 		}
 		if match == nil {

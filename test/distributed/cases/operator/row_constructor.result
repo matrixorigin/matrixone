@@ -605,6 +605,18 @@ id
 2
 3
 4
+select (1,7) =
+(select outer_row.id,7 from row_scalar_28295 inner_row
+where inner_row.id=outer_row.id limit 1) as outer_limit_v
+from row_scalar_28295 outer_row where outer_row.id=1;
+outer_limit_v
+1
+select (1,7) =
+(select distinct outer_row.id,7 from row_scalar_28295 inner_row
+where inner_row.id=outer_row.id) as outer_distinct_v
+from row_scalar_28295 outer_row where outer_row.id=1;
+outer_distinct_v
+1
 select (0,null) <=>
 (select count(*),sum(inner_row.b) from row_scalar_28295 inner_row
 where inner_row.id=outer_row.id+100 having count(*)=0) as aggregate_empty_v
