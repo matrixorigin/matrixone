@@ -257,6 +257,28 @@ func TestResetDiagnosticsForStatementLifecycle(t *testing.T) {
 	require.Equal(t, uint16(1001), ses.diagnosticsSnapshot().codes[0])
 }
 
+func TestStmtClosePreservesDiagnostics(t *testing.T) {
+	ses := &Session{errInfo: &errInfo{maxCnt: MoDefaultErrorCount}}
+	execCtx := &ExecCtx{}
+	input := &UserInput{}
+	ses.appendWarningDiagnostic(1259, "ZLIB: Input data corrupted")
+	ses.appendErrorDiagnostic(1000, "previous error")
+	ses.AppendWarningCount(3) // Totals may exceed the retained diagnostic records.
+	want := ses.diagnosticsSnapshot()
+
+	ses.SetCmd(COM_STMT_CLOSE)
+	resetDiagnosticsForStatement(ses, execCtx, input, &tree.Deallocate{})
+	require.Equal(t, want, ses.diagnosticsSnapshot())
+
+	// An explicit SQL DEALLOCATE is still a new client statement.
+	ses.SetCmd(COM_QUERY)
+	resetDiagnosticsForStatement(ses, execCtx, input, &tree.Deallocate{})
+	require.Zero(t, ses.diagnosticsSnapshot().length())
+	warnings, errors := ses.diagnosticsCounts()
+	require.Zero(t, warnings)
+	require.Zero(t, errors)
+}
+
 func TestShowErrorsFiltersWarningDiagnostics(t *testing.T) {
 	ses := &Session{
 		feSessionImpl: feSessionImpl{mrs: &MysqlResultSet{}},
