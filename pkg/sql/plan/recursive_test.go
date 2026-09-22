@@ -100,6 +100,71 @@ func TestRecursiveUnionRejectsMixedModes(t *testing.T) {
 	require.ErrorContains(t, err, "mixing UNION ALL and UNION DISTINCT")
 }
 
+func TestRecursiveCteAggregateQueryBlockScope(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		sql       string
+		wantError string
+	}{
+		{
+			name: "independent scalar aggregate in predicate",
+			sql: `with recursive r(n) as (
+				select 1
+				union all
+				select n + 1 from r
+				where n < (select max(a) from cte_test.t1)
+			) select * from r`,
+		},
+		{
+			name: "independent scalar aggregate in projection",
+			sql: `with recursive r(n, total) as (
+				select 1, 0
+				union all
+				select n + 1, (select count(*) from cte_test.t1)
+				from r where n < 3
+			) select * from r`,
+		},
+		{
+			name: "correlated scalar aggregate in projection",
+			sql: `with recursive r(n, total) as (
+				select 1, 0
+				union all
+				select n + 1, (select count(*) from cte_test.t1 where a = r.n)
+				from r where n < 3
+			) select * from r`,
+		},
+		{
+			name: "nested scalar subquery in aggregate input",
+			sql: `with recursive r(n, total) as (
+				select 1, 0
+				union all
+				select n + 1,
+					   (select max(a + (select count(*) from cte_test.t1))
+						from cte_test.t1)
+				from r where n < 2
+			) select * from r`,
+		},
+		{
+			name: "aggregate directly in recursive member remains rejected",
+			sql: `with recursive r(n) as (
+				select 1
+				union all
+				select max(n) from r where n < 3
+			) select * from r`,
+			wantError: "not support aggregate function recursive cte",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			if test.wantError == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, test.wantError)
+		})
+	}
+}
+
 func TestRecursiveCteConsumerAliases(t *testing.T) {
 	for _, test := range []struct {
 		name             string

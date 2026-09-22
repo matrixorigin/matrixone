@@ -15,12 +15,14 @@
 package plan
 
 import (
+	"context"
 	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	fulltextplan "github.com/matrixorigin/matrixone/pkg/fulltext/plugin/plan"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
@@ -654,6 +656,39 @@ func TestIrregularIVFMaintenancePropagatesInvalidParams(t *testing.T) {
 		err := builder.buildIrregularIndexDeleteMaintenance(bindCtx)
 		require.Error(t, err)
 	})
+}
+
+func TestAlterCopySkipsClonedAndNewPluginIndexInsertMaintenance(t *testing.T) {
+	ctx := NewMockCompilerContext(true)
+	ctx.SetContext(context.WithValue(context.Background(), defines.AlterCopyOpt{}, &planpb.AlterCopyOpt{
+		TargetTableName:  "copy_t",
+		SkipIndexesCopy:  map[string]bool{"cloned_ft": true},
+		NewPluginIndexes: map[string]bool{"new_ft": true},
+	}))
+	builder := NewQueryBuilder(planpb.Query_INSERT, ctx, false, true)
+	bindCtx := NewBindContext(builder, nil)
+	tableDef := &planpb.TableDef{
+		Name: "copy_t",
+		Indexes: []*planpb.IndexDef{
+			{
+				IndexName:      "cloned_ft",
+				IndexAlgo:      catalog.MOIndexFullTextAlgo.ToString(),
+				IndexTableName: "cloned_ft_table",
+				TableExist:     true,
+			},
+			{
+				IndexName:      "new_ft",
+				IndexAlgo:      catalog.MOIndexFullTextAlgo.ToString(),
+				IndexTableName: "new_ft_table",
+				TableExist:     true,
+			},
+		},
+	}
+
+	before := len(builder.qry.Nodes)
+	require.NoError(t, builder.buildIrregularIndexInsertMaintenance(bindCtx, 0, tableDef))
+	require.Len(t, builder.qry.Nodes, before,
+		"COPY must not populate plugin index tables that are cloned or rebuilt after the base-table copy")
 }
 
 func TestReduceSinkSinkScanKeepsOtherApplyInput(t *testing.T) {

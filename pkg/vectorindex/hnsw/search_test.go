@@ -156,6 +156,22 @@ func TestHnswSearchFloat32_BadQueryType(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestHnswSearchCosineRejected(t *testing.T) {
+	m := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", m)
+	sqlproc := sqlexec.NewSqlProcess(proc)
+
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(3)}
+	idxcfg.Usearch.Metric = usearch.Cosine
+	s := NewHnswSearch[float32](idxcfg, vectorindex.IndexTableConfig{})
+
+	_, _, err := s.Search(sqlproc, []float32{1e-20, 1e-20, 1e-20}, vectorindex.RuntimeConfig{
+		Limit:        1,
+		OrigFuncName: "cosine_distance",
+	})
+	require.ErrorContains(t, err, "hnsw cosine search is disabled")
+}
+
 func TestBoundedHnswSearchLimits(t *testing.T) {
 	// requested >= every file: each file returns its full cardinality, result = total.
 	perIndex, resultLimit := boundedHnswSearchLimits([]uint{3, 7}, ^uint(0))
@@ -242,10 +258,8 @@ func TestHnsw(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			for j := 0; j < iterations; j++ {
-				cache.Cache.Once()
-
 				algo := NewHnswSearch[float32](idxcfg, tblcfg)
-				anykeys, distances, err := cache.Cache.Search(sqlproc, tblcfg.IndexTable, algo, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+				anykeys, distances, err := testCache.Search(sqlproc, tblcfg.IndexTable, algo, fp32a, vectorindex.RuntimeConfig{Limit: 4})
 				require.Nil(t, err)
 				keys, ok := anykeys.([]int64)
 				require.True(t, ok)
@@ -260,14 +274,23 @@ func TestHnsw(t *testing.T) {
 
 	wg.Wait()
 
-	require.Eventually(t, func() bool {
-		empty := true
-		testCache.IndexMap.Range(func(_, _ any) bool {
-			empty = false
-			return false
-		})
-		return empty
-	}, 3*cacheTTL, 10*time.Millisecond, "cache entry must expire after searches stop")
+	// This stress test intentionally does not start the cache ticker.  Starting
+	// it would introduce a second eviction owner: the ticker can claim the
+	// entry, pause before deleting it, and make the synchronous assertion below
+	// observe an intermediate state.  The cache package owns wall-clock ticker
+	// coverage; this test owns concurrent HNSW load/search and the explicit
+	// idle-eviction invariant.
+	value, loaded := testCache.IndexMap.Load(tblcfg.IndexTable)
+	require.True(t, loaded, "concurrent HNSW searches must leave a resident cache entry")
+	entry, ok := value.(*cache.VectorIndexSearch)
+	require.True(t, ok, "HNSW cache must contain VectorIndexSearch entries")
+	entry.ExpireAt.Store(time.Now().Add(-time.Second).UnixMicro())
+	testCache.HouseKeeping()
+
+	_, loaded = testCache.IndexMap.Load(tblcfg.IndexTable)
+	require.False(t, loaded, "an idle expired HNSW entry must be evicted by HouseKeeping")
+	require.Equal(t, int32(cache.STATUS_DESTROYED), entry.Status.Load(),
+		"HouseKeeping must finish destroying the evicted HNSW entry")
 }
 
 func makeMetaBatch(proc *process.Process) *batch.Batch {

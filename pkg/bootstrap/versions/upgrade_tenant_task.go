@@ -194,21 +194,39 @@ func nextUpgradeTenantTaskAfter(accountID int32) (int32, bool) {
 func GetTenantCreateVersionForUpdate(
 	tenantID int32,
 	txn executor.TxnExecutor) (string, error) {
-	sql := fmt.Sprintf("select create_version from mo_account where account_id = %d for update", tenantID)
+	return getTenantVersion(tenantID, txn, true)
+}
+
+func GetTenantVersion(
+	tenantID int32,
+	txn executor.TxnExecutor) (string, error) {
+	return getTenantVersion(tenantID, txn, false)
+}
+
+// An account can be dropped after authentication or before the locking recheck.
+// Missing rows are a normal lookup failure, not a CN-fatal invariant violation.
+func getTenantVersion(tenantID int32, txn executor.TxnExecutor, forUpdate bool) (string, error) {
+	sql := fmt.Sprintf("select create_version from mo_account where account_id = %d", tenantID)
+	if forUpdate {
+		sql += " for update"
+	}
 	res, err := txn.Exec(sql, executor.StatementOption{})
 	if err != nil {
 		return "", err
 	}
 	defer res.Close()
 	version := ""
-	_, rows := readSingleRow(res, func(cols []*vector.Vector) {
+	loaded, rows := readSingleRow(res, func(cols []*vector.Vector) {
 		version = cols[0].GetStringAt(0)
 	})
 	if rows > 1 {
 		return "", moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected rows count: %d", rows))
 	}
+	if !loaded {
+		return "", moerr.NewNotFoundNoCtx()
+	}
 	if version == "" {
-		getLogger(txn.Txn().TxnOptions().CN).Fatal(fmt.Sprintf("BUG: missing tenant: %d", tenantID))
+		return "", moerr.NewInvalidStateNoCtxf("tenant %d has an empty create_version", tenantID)
 	}
 	return version, nil
 }
@@ -234,26 +252,4 @@ func UpgradeTenantVersion(
 
 func isConflictError(err error) bool {
 	return moerr.IsMoErrCode(err, moerr.ErrLockConflict)
-}
-
-func GetTenantVersion(
-	tenantID int32,
-	txn executor.TxnExecutor) (string, error) {
-	sql := fmt.Sprintf("select create_version from mo_account where account_id = %d", tenantID)
-	res, err := txn.Exec(sql, executor.StatementOption{})
-	if err != nil {
-		return "", err
-	}
-	defer res.Close()
-	version := ""
-	_, rows := readSingleRow(res, func(cols []*vector.Vector) {
-		version = cols[0].GetStringAt(0)
-	})
-	if rows > 1 {
-		return "", moerr.NewInternalErrorNoCtx(fmt.Sprintf("unexpected rows count: %d", rows))
-	}
-	if version == "" {
-		getLogger(txn.Txn().TxnOptions().CN).Fatal(fmt.Sprintf("BUG: missing tenant: %d", tenantID))
-	}
-	return version, nil
 }

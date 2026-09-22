@@ -1229,6 +1229,8 @@ func Test_BuiltIn_MoShowVisibleBinTextFamilyWithLen(t *testing.T) {
 		typ  types.Type
 		want string
 	}{
+		{name: "legacy text", typ: types.New(types.T_text, 0, 0), want: "TEXT"},
+		{name: "text", typ: types.New(types.T_text, types.MaxStringSize, 0), want: "TEXT"},
 		{name: "tinytext", typ: types.New(types.T_text, types.MaxTinyTextLen, 0), want: "TINYTEXT"},
 		{name: "mediumtext", typ: types.New(types.T_text, types.MaxMediumTextLen, 0), want: "MEDIUMTEXT"},
 		{name: "longtext", typ: types.New(types.T_text, types.MaxLongTextLen, 0), want: "LONGTEXT"},
@@ -1241,6 +1243,70 @@ func Test_BuiltIn_MoShowVisibleBinTextFamilyWithLen(t *testing.T) {
 				inputs: []FunctionTestInput{
 					NewFunctionTestInput(types.T_varchar.ToType(), []string{string(typeBytes)}, nil),
 					NewFunctionTestInput(types.T_uint8.ToType(), []uint8{typWithLen}, nil),
+				},
+				expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, nil),
+			}
+			tcc := NewFunctionTestCase(proc, input.inputs, input.expect, builtInMoShowVisibleBin)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, input.info, info)
+		})
+	}
+}
+
+func Test_BuiltIn_MoShowVisibleBinBlobFamilyWithLen(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		name string
+		typ  types.Type
+		want string
+	}{
+		{name: "tinyblob", typ: types.New(types.T_blob, types.MaxTinyTextLen, 0), want: "TINYBLOB"},
+		{name: "blob", typ: types.New(types.T_blob, types.MaxStringSize, 0), want: "BLOB"},
+		{name: "mediumblob", typ: types.New(types.T_blob, types.MaxMediumTextLen, 0), want: "MEDIUMBLOB"},
+		{name: "longblob", typ: types.New(types.T_blob, types.MaxLongTextLen, 0), want: "LONGBLOB"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			typeBytes, err := types.Encode(&tc.typ)
+			require.NoError(t, err)
+			input := tcTemp{
+				info: "show visible bin blob family with len",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{string(typeBytes)}, nil),
+					NewFunctionTestInput(types.T_uint8.ToType(), []uint8{typWithLen}, nil),
+				},
+				expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, nil),
+			}
+			tcc := NewFunctionTestCase(proc, input.inputs, input.expect, builtInMoShowVisibleBin)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, input.info, info)
+		})
+	}
+}
+
+func Test_BuiltIn_MoShowVisibleBinStringFamilyNormal(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	for _, tc := range []struct {
+		name string
+		typ  types.Type
+		want string
+	}{
+		{name: "tinytext", typ: types.New(types.T_text, types.MaxTinyTextLen, 0), want: "TINYTEXT"},
+		{name: "text", typ: types.New(types.T_text, types.MaxStringSize, 0), want: "TEXT"},
+		{name: "mediumtext", typ: types.New(types.T_text, types.MaxMediumTextLen, 0), want: "MEDIUMTEXT"},
+		{name: "longtext", typ: types.New(types.T_text, types.MaxLongTextLen, 0), want: "LONGTEXT"},
+		{name: "tinyblob", typ: types.New(types.T_blob, types.MaxTinyTextLen, 0), want: "TINYBLOB"},
+		{name: "blob", typ: types.New(types.T_blob, types.MaxStringSize, 0), want: "BLOB"},
+		{name: "mediumblob", typ: types.New(types.T_blob, types.MaxMediumTextLen, 0), want: "MEDIUMBLOB"},
+		{name: "longblob", typ: types.New(types.T_blob, types.MaxLongTextLen, 0), want: "LONGBLOB"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			typeBytes, err := types.Encode(&tc.typ)
+			require.NoError(t, err)
+			input := tcTemp{
+				info: "show visible bin string family normal",
+				inputs: []FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{string(typeBytes)}, nil),
+					NewFunctionTestInput(types.T_uint8.ToType(), []uint8{typNormal}, nil),
 				},
 				expect: NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, nil),
 			}

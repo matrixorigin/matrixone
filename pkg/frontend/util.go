@@ -816,10 +816,10 @@ func getValueFromVector(ctx context.Context, vec *vector.Vector, feSes FeSession
 		return val.String(), nil
 	case types.T_time:
 		val := vector.MustFixedColNoTypeCheck[types.Time](vec)[0]
-		return val.String(), nil
+		return val.String2(vec.GetType().Scale), nil
 	case types.T_datetime:
 		val := vector.MustFixedColNoTypeCheck[types.Datetime](vec)[0]
-		return val.String(), nil
+		return val.String2(vec.GetType().Scale), nil
 	case types.T_timestamp:
 		val := vector.MustFixedColNoTypeCheck[types.Timestamp](vec)[0]
 		return val.String2(feSes.GetTimeZone(), vec.GetType().Scale), nil
@@ -2037,6 +2037,37 @@ func setMysqlColumnTypeInfo(ctx context.Context, typ types.Type, col *MysqlColum
 }
 
 func setMysqlBinaryBlobColumnMetadata(col *MysqlColumn, length uint32) {
+	switch length {
+	case 0, math.MaxUint32:
+		col.SetColumnType(defines.MYSQL_TYPE_BLOB)
+	case types.MaxTinyTextLen:
+		col.SetColumnType(defines.MYSQL_TYPE_TINY_BLOB)
+	case types.MaxMediumTextLen:
+		col.SetColumnType(defines.MYSQL_TYPE_MEDIUM_BLOB)
+	case types.MaxLongTextLen:
+		col.SetColumnType(defines.MYSQL_TYPE_LONG_BLOB)
+	default:
+		switch {
+		case length <= types.MaxTinyTextLen:
+			col.SetColumnType(defines.MYSQL_TYPE_TINY_BLOB)
+		case length <= types.MaxStringSize:
+			col.SetColumnType(defines.MYSQL_TYPE_BLOB)
+		case length <= types.MaxMediumTextLen:
+			col.SetColumnType(defines.MYSQL_TYPE_MEDIUM_BLOB)
+		default:
+			col.SetColumnType(defines.MYSQL_TYPE_LONG_BLOB)
+		}
+	}
+	col.SetCharset(charsetBinary)
+	col.SetLength(length)
+	col.SetFlag(col.Flag() | uint16(defines.BLOB_FLAG|defines.BINARY_FLAG))
+}
+
+// setMysqlOpaqueBinaryBlobColumnMetadata describes an internal binary payload
+// whose chunk size is not a MySQL BLOB family declaration. Keep it as generic
+// BLOB metadata instead of deriving TINY/MEDIUM/LONG_BLOB from the transport
+// limit.
+func setMysqlOpaqueBinaryBlobColumnMetadata(col *MysqlColumn, length uint32) {
 	col.SetColumnType(defines.MYSQL_TYPE_BLOB)
 	col.SetCharset(charsetBinary)
 	col.SetLength(length)
@@ -2619,7 +2650,7 @@ func colDef2MysqlColumn(ctx context.Context, col *plan.ColDef) (*MysqlColumn, er
 	if err = setMysqlColumnTypeInfo(ctx, typ, c); err != nil {
 		return nil, err
 	}
-	if typ.Oid == types.T_blob && col.OriginTblName != "" {
+	if typ.Oid == types.T_blob && typ.Width == 0 && col.OriginTblName != "" {
 		// A directly selected table BLOB has MySQL's regular BLOB capacity.
 		// Width-less computed BLOB expressions keep the conservative upper bound
 		// installed by setMysqlColumnTypeInfo instead.
