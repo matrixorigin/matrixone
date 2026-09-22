@@ -8284,6 +8284,12 @@ func appendCastBeforeExprWithOverload(
 		return expr, nil
 	}
 	toType.NotNullable = expr.Typ.NotNullable
+	// JSON literal null is a SQL NULL when converted to a numeric type, even
+	// when the source JSON column is declared NOT NULL. Keep that runtime
+	// contract in the plan so DISTINCT aggregate rewrites retain the null key.
+	if types.T(expr.Typ.Id) == types.T_json && makeTypeByPlan2Type(toType).IsNumeric() {
+		toType.NotNullable = false
+	}
 	argsType := []types.Type{
 		makeTypeByPlan2Expr(expr),
 		makeTypeByPlan2Type(toType),

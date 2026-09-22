@@ -26,4 +26,24 @@ SELECT SUM(j) FROM json_numeric_agg WHERE grp = 3;
 SELECT SUM(j), SUM(DISTINCT j) FROM json_numeric_agg WHERE grp = 4;
 ➤ SUM(j)[8,54,0]  ¦  SUM(DISTINCT j)[8,54,0]  𝄀
 9007199254740992  ¦  0
+DROP TABLE IF EXISTS json_numeric_agg_not_null;
+CREATE TABLE json_numeric_agg_not_null (g INT NOT NULL, j JSON NOT NULL);
+INSERT INTO json_numeric_agg_not_null VALUES (1, 'null'), (2, '1'), (2, '1.0');
+SELECT g, SUM(DISTINCT j) FROM json_numeric_agg_not_null GROUP BY g ORDER BY g;
+➤ g[4,32,0]  ¦  SUM(DISTINCT j)[8,54,0]  𝄀
+1  ¦  NULL  𝄀
+2  ¦  1
+SELECT g, AVG(DISTINCT j) FROM json_numeric_agg_not_null GROUP BY g ORDER BY g;
+➤ g[4,32,0]  ¦  AVG(DISTINCT j)[8,54,0]  𝄀
+1  ¦  NULL  𝄀
+2  ¦  1
+SELECT g, COUNT(CAST(j AS DOUBLE)) FROM json_numeric_agg_not_null GROUP BY g ORDER BY g;
+➤ g[4,32,0]  ¦  COUNT(CAST(j AS DOUBLE))[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  2
+SELECT g, SUM(DISTINCT j), AVG(DISTINCT j) FROM json_numeric_agg_not_null GROUP BY g ORDER BY g;
+➤ g[4,32,0]  ¦  SUM(DISTINCT j)[8,54,0]  ¦  AVG(DISTINCT j)[8,54,0]  𝄀
+1  ¦  NULL  ¦  NULL  𝄀
+2  ¦  1  ¦  1
+DROP TABLE json_numeric_agg_not_null;
 DROP TABLE json_numeric_agg;
