@@ -353,9 +353,10 @@ select * from t36_remap;
 create table t37_odku_pk (a int, b int generated always as (a*2) stored, primary key(b));
 insert into t37_odku_pk (a) values (1);
 insert into t37_odku_pk (a) values (1) on duplicate key update a=5;
+unsupported DML: update primary key on duplicate
 select * from t37_odku_pk;
 ➤ a[4,32,0]  ¦  b[4,32,0]  𝄀
-5  ¦  10
+1  ¦  2
 create table t38_modify (a int, b int, c int generated always as (a + b) stored);
 alter table t38_modify modify column a bigint;
 invalid input: Cannot modify column 'a': generated column 'c' depends on it

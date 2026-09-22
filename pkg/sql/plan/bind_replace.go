@@ -1086,9 +1086,12 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	// and let the main plan, the insert maintenance (new entries) and the delete
 	// maintenance (drop the old entries, keyed by the old PK) all read it.
 	if len(irregularIndexes) > 0 && replaceOldPkPos >= 0 {
-		lastNodeID = builder.appendOnDupIrregularMaintSource(
+		lastNodeID, err = builder.appendOnDupIrregularMaintSource(
 			bindCtx, lastNodeID, finalProjTag, replaceOldPkPos, replaceOldPkTyp,
-			irregularIndexes, tableDef, objRef)
+			irregularIndexes, nil, -1, nil, tableDef, objRef)
+		if err != nil {
+			return 0, err
+		}
 	}
 
 	if len(lockTargets) > 0 && !buildParentFKActions {

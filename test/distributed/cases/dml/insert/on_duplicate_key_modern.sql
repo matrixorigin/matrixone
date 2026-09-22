@@ -148,17 +148,28 @@ drop table if exists t_odku_realpk;
 -- ============================================================
 set experimental_fulltext_index = 1;
 drop table if exists t_odku_ft;
-create table t_odku_ft(id int primary key, uk int unique, body text, val int);
-insert into t_odku_ft values (1, 10, 'hello world', 100), (2, 20, 'foo bar', 200);
+create table t_odku_ft(id int primary key, uk int unique, body text, embedding vecf32(3), val int);
+insert into t_odku_ft values (1, 10, 'hello world', '[1,2,3]', 100), (2, 20, 'foo bar', '[4,5,6]', 200);
 create fulltext index ftidx on t_odku_ft(body);
+select id from t_odku_ft where match(body) against('hello') order by id;
 
--- PK conflict on a fulltext-indexed table: modern path, updates row 1
-insert into t_odku_ft values (1, 99, 'changed', 5) on duplicate key update val = val + 1;
+-- PK conflict updates only a non-indexed scalar. The raw vector has no ANN
+-- index, and the unchanged fulltext posting must remain searchable.
+insert into t_odku_ft values (1, 99, 'changed', '[7,8,9]', 5) on duplicate key update val = val + 1;
 select id, uk, val from t_odku_ft order by id;
+select id from t_odku_ft where match(body) against('hello') order by id;
 
 -- unique-key conflict (uk=10 hits row 1): updates the conflicting row, keeps id=1
-insert into t_odku_ft values (3, 10, 'new', 5) on duplicate key update val = val + 1;
+insert into t_odku_ft values (3, 10, 'new', '[1,1,1]', 5) on duplicate key update val = val + 1;
 select id, uk, val from t_odku_ft order by id;
+select id from t_odku_ft where match(body) against('hello') order by id;
+
+-- One statement can contain a conflict and a fresh insert. The conflict must
+-- skip fulltext rebuild while the fresh row still receives postings.
+insert into t_odku_ft values (1, 99, 'ignored', '[9,9,9]', 5), (3, 30, 'fresh token', '[3,3,3]', 300) on duplicate key update val = val + 1;
+select id, uk, val from t_odku_ft order by id;
+select id from t_odku_ft where match(body) against('hello') order by id;
+select id from t_odku_ft where match(body) against('fresh') order by id;
 
 drop table if exists t_odku_ft;
 
@@ -174,10 +185,67 @@ select id, body from t_odku_ft2 order by id;
 select id from t_odku_ft2 where match(body) against('alpha') order by id;
 select id from t_odku_ft2 where match(body) against('hello') order by id;
 select id from t_odku_ft2 where match(body) against('foo') order by id;
+-- Rollback must undo both the base-row update and synchronous posting changes.
+begin;
+insert into t_odku_ft2 values (1, 'ignored') on duplicate key update body = 'rollback token';
+rollback;
+select id from t_odku_ft2 where match(body) against('rollback') order by id;
+select id from t_odku_ft2 where match(body) against('alpha') order by id;
+-- Replaying the same final indexed value remains one visible document.
+insert into t_odku_ft2 values (1, 'ignored') on duplicate key update body = 'alpha beta';
+select id from t_odku_ft2 where match(body) against('alpha') order by id;
 -- no-conflict insert is also indexed
 insert into t_odku_ft2 values (3, 'gamma delta') on duplicate key update body = 'nope';
 select id from t_odku_ft2 where match(body) against('gamma') order by id;
 drop table if exists t_odku_ft2;
+
+-- If the assignment list includes the fulltext column but the final stored
+-- value is unchanged, a conflicting row must keep its postings without a
+-- rebuild. A fresh row in the same batch must still be tokenized and indexed.
+drop table if exists t_odku_ft_value_noop;
+create table t_odku_ft_value_noop(id int primary key, body text, payload int);
+create fulltext index ftidx_value_noop on t_odku_ft_value_noop(body);
+insert into t_odku_ft_value_noop values (1, 'same posting', 10), (2, 'untouched token', 20);
+-- 100% conflict: the assignment mentions body, but its final stored value is equal.
+insert into t_odku_ft_value_noop values (1, 'same posting', 11) on duplicate key update body = values(body), payload = values(payload);
+select id, body, payload from t_odku_ft_value_noop order by id;
+-- Mixed batch: the equal conflict is filtered while the new row is indexed.
+insert into t_odku_ft_value_noop values (1, 'same posting', 12), (3, 'fresh token', 30) on duplicate key update body = values(body), payload = values(payload);
+select id, body, payload from t_odku_ft_value_noop order by id;
+select id from t_odku_ft_value_noop where match(body) against('same') order by id;
+select id from t_odku_ft_value_noop where match(body) against('untouched') order by id;
+select id from t_odku_ft_value_noop where match(body) against('fresh') order by id;
+drop table if exists t_odku_ft_value_noop;
+
+-- NULL-safe equality boundaries: NULL->NULL is a no-op, while NULL->text and
+-- text->NULL must rebuild the posting set.
+drop table if exists t_odku_ft_nulls;
+create table t_odku_ft_nulls(id int primary key, body text);
+insert into t_odku_ft_nulls values (1, NULL), (2, 'oldtoken');
+create fulltext index ftidx_nulls on t_odku_ft_nulls(body);
+insert into t_odku_ft_nulls values (1, NULL) on duplicate key update body = values(body);
+select id, body from t_odku_ft_nulls order by id;
+insert into t_odku_ft_nulls values (1, 'newtoken') on duplicate key update body = values(body);
+select id from t_odku_ft_nulls where match(body) against('newtoken') order by id;
+insert into t_odku_ft_nulls values (2, NULL) on duplicate key update body = values(body);
+select id from t_odku_ft_nulls where match(body) against('oldtoken') order by id;
+select id, body from t_odku_ft_nulls order by id;
+drop table if exists t_odku_ft_nulls;
+
+-- A multi-column FULLTEXT index can skip maintenance only when every indexed
+-- value is equal. Changing either part must replace the whole posting set.
+drop table if exists t_odku_ft_multi;
+create table t_odku_ft_multi(id int primary key, title text, body text, payload int);
+insert into t_odku_ft_multi values (1, 'alpha title', 'beta body', 10), (2, 'stable title', 'stable body', 20);
+create fulltext index ftidx_multi on t_odku_ft_multi(title, body);
+insert into t_odku_ft_multi values (1, 'alpha title', 'beta body', 11) on duplicate key update title = values(title), body = values(body), payload = values(payload);
+select id, title, body, payload from t_odku_ft_multi order by id;
+select id from t_odku_ft_multi where match(title, body) against('beta') order by id;
+insert into t_odku_ft_multi values (1, 'alpha title', 'gamma body', 12) on duplicate key update title = values(title), body = values(body), payload = values(payload);
+select id from t_odku_ft_multi where match(title, body) against('alpha') order by id;
+select id from t_odku_ft_multi where match(title, body) against('beta') order by id;
+select id from t_odku_ft_multi where match(title, body) against('gamma') order by id;
+drop table if exists t_odku_ft_multi;
 
 -- ============================================================
 -- Part 7: table carrying an irregular (ivfflat vector) index
@@ -370,3 +438,52 @@ select id, u, v, updated_at = @ts_sec as ts_unchanged from t_odku_sec_uk order b
 insert into t_odku_sec_uk(id, u, v) values (3, 10, 5) on duplicate key update v = v + 1;
 select id, u, v, updated_at > @ts_sec as ts_advanced from t_odku_sec_uk order by id;
 drop table if exists t_odku_sec_uk;
+
+-- An ODKU assignment that can change a stored generated PRIMARY KEY is rejected
+-- before synchronous index maintenance can use the old document identity.
+drop table if exists t_odku_generated_pk;
+create table t_odku_generated_pk (
+  a int,
+  b int generated always as (a * 2) stored,
+  payload int,
+  primary key (b)
+);
+insert into t_odku_generated_pk(a, payload) values (1, 10);
+insert into t_odku_generated_pk(a, payload) values (1, 20) on duplicate key update a = 5;
+select a, b, payload from t_odku_generated_pk order by b;
+-- Updating a column unrelated to the generated key remains supported.
+insert into t_odku_generated_pk(a, payload) values (1, 20) on duplicate key update payload = values(payload);
+select a, b, payload from t_odku_generated_pk order by b;
+drop table if exists t_odku_generated_pk;
+
+-- Explicit source updates that can change a generated UNIQUE key are rejected;
+-- an update unrelated to that generated key remains supported.
+drop table if exists t_odku_generated_unique;
+create table t_odku_generated_unique (
+  id int primary key,
+  source int,
+  generated_key int generated always as (source * 2) stored,
+  payload int,
+  unique key uk_generated_key (generated_key)
+);
+insert into t_odku_generated_unique(id, source, payload) values (1, 1, 10);
+insert into t_odku_generated_unique(id, source, payload) values (1, 2, 20) on duplicate key update source = values(source);
+select id, source, generated_key, payload from t_odku_generated_unique order by id;
+insert into t_odku_generated_unique(id, source, payload) values (1, 2, 20) on duplicate key update payload = values(payload);
+select id, source, generated_key, payload from t_odku_generated_unique order by id;
+drop table if exists t_odku_generated_unique;
+
+-- Implicit ON UPDATE assignments participate in generated-key dependency
+-- expansion before ODKU is allowed to modify a UNIQUE key indirectly.
+drop table if exists t_odku_generated_on_update;
+create table t_odku_generated_on_update (
+  id int primary key,
+  updated_at timestamp default current_timestamp on update current_timestamp,
+  generated_key timestamp generated always as (updated_at) stored,
+  payload int,
+  unique key uk_generated_key (generated_key)
+);
+insert into t_odku_generated_on_update(id, payload) values (1, 10);
+insert into t_odku_generated_on_update(id, payload) values (1, 20) on duplicate key update payload = values(payload);
+select id, payload from t_odku_generated_on_update order by id;
+drop table if exists t_odku_generated_on_update;
