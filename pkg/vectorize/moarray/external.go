@@ -180,7 +180,7 @@ func InnerProduct[T types.RealNumbers](v1, v2 []T) (float64, error) {
 	// domain too, keeping the scalar and the index in the same precision (#29040 / #29050).
 	// This is float32-domain agreement, not bitwise equality -- see metric.RoundDistanceToElemDomain
 	// for the residual float32-ULP boundary case. No-op for a float32 base.
-	return metric.RoundDistanceToElemDomain(float64(ret)), err
+	return metric.CheckFiniteDist(metric.RoundDistanceToElemDomain(float64(ret)), metric.MetricWhat(metric.Metric_InnerProduct))
 }
 
 // L1Distance returns the Manhattan distance sum|a-b|. Like its L2 siblings it checks the
@@ -193,9 +193,12 @@ func L1Distance[T types.RealNumbers](v1, v2 []T) (float64, error) {
 	}
 
 	ret, err := metric.L1Distance[T](v1, v2)
+	if err != nil {
+		return 0, err
+	}
 	// Round a float64 base into the float32 distance domain so every vector distance is uniform
 	// (see InnerProduct); no-op for a float32 base (#29040 / #29050).
-	return metric.RoundDistanceToElemDomain(float64(ret)), err
+	return metric.CheckFiniteDist(metric.RoundDistanceToElemDomain(float64(ret)), metric.MetricWhat(metric.Metric_L1Distance))
 }
 
 func L2Distance[T types.RealNumbers](v1, v2 []T) (float64, error) {
@@ -204,10 +207,13 @@ func L2Distance[T types.RealNumbers](v1, v2 []T) (float64, error) {
 	}
 
 	ret, err := metric.L2Distance[T](v1, v2)
+	if err != nil {
+		return 0, err
+	}
 	// Round a float64 base into the float32 distance domain so the scalar and index agree in
 	// that domain -- float32-domain agreement, not bitwise (see InnerProduct and
 	// metric.RoundDistanceToElemDomain); no-op for a float32 base (#29040 / #29050).
-	return metric.RoundDistanceToElemDomain(float64(ret)), err
+	return metric.CheckFiniteDist(metric.RoundDistanceToElemDomain(float64(ret)), metric.MetricWhat(metric.Metric_L2Distance))
 }
 
 // L2DistanceSq returns the squared L2 distance between two vectors.
@@ -226,7 +232,10 @@ func L2DistanceSq[T types.RealNumbers](v1, v2 []T) (float64, error) {
 	}
 
 	ret, err := metric.L2DistanceSq[T](v1, v2)
-	return float64(ret), err
+	if err != nil {
+		return 0, err
+	}
+	return metric.CheckFiniteDist(float64(ret), metric.MetricWhat(metric.Metric_L2sqDistance))
 }
 
 func CosineDistance[T types.RealNumbers](v1, v2 []T) (float64, error) {

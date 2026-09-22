@@ -92,7 +92,7 @@ func L2DistanceSq[T types.RealNumbers](p, q []T) (T, error) {
 		i++
 	}
 
-	return CheckFiniteDist(sum, "l2 distance")
+	return sum, nil
 }
 
 // L1Distance calculates the L1 (Manhattan) distance between two vectors.
@@ -151,7 +151,7 @@ func L1Distance[T types.RealNumbers](p, q []T) (T, error) {
 		i++
 	}
 
-	return CheckFiniteDist(sum, "l1 distance")
+	return sum, nil
 }
 
 // InnerProduct calculates the inner product (dot product) of two vectors.
@@ -202,7 +202,7 @@ func InnerProduct[T types.RealNumbers](p, q []T) (T, error) {
 		i++
 	}
 
-	return CheckFiniteDist(-sum, "inner product")
+	return -sum, nil
 }
 
 // CosineDistance calculates the cosine distance between two vectors using generics.

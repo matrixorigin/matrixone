@@ -386,7 +386,7 @@ func (idx *GoBruteForceIndex[T, R]) SearchFloat32(proc *sqlexec.SqlProcess, _que
 	}
 
 	exec := concurrent.NewThreadPoolExecutor(int(nthreads))
-	return exec.Execute(
+	err = exec.Execute(
 		proc.GetContext(),
 		nqueries,
 		func(ctx context.Context, thread_id int, start, end int) error {
@@ -450,6 +450,14 @@ func (idx *GoBruteForceIndex[T, R]) SearchFloat32(proc *sqlexec.SqlProcess, _que
 			}
 			return nil
 		})
+	if err != nil {
+		return err
+	}
+	// Checked once over the results rather than per candidate: a distance that left the element
+	// domain cannot win a min-comparison, so it never changes the ranking -- it matters only if
+	// one is handed back as a score. An all-candidates-out-of-domain query is caught by the
+	// negative-index guard above.
+	return metric.CheckFiniteDists(outDists, metric.MetricWhat(idx.Metric))
 }
 
 func (idx *GoBruteForceIndex[T, R]) Search(proc *sqlexec.SqlProcess, _queries any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {

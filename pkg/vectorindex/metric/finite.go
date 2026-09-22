@@ -33,19 +33,24 @@ func L2FromSquared[T types.RealNumbers](sq T) (T, error) {
 
 // l2What names every L2 path -- scalar, squared, pairwise, GPU -- in its overflow error, so which
 // kernel answered cannot change the error text.
-const l2What = "l2 distance"
+const (
+	l2What     = "l2 distance"
+	ipWhat     = "inner product"
+	cosineWhat = "cosine distance"
+	l1What     = "l1 distance"
+)
 
-// metricWhat names a metric in an overflow error.
-func metricWhat(m MetricType) string {
+// MetricWhat names a metric in an overflow error.
+func MetricWhat(m MetricType) string {
 	switch m {
 	case Metric_L2Distance, Metric_L2sqDistance:
 		return l2What
 	case Metric_InnerProduct:
-		return "inner product"
+		return ipWhat
 	case Metric_CosineDistance:
-		return "cosine distance"
+		return cosineWhat
 	case Metric_L1Distance:
-		return "l1 distance"
+		return l1What
 	default:
 		return "vector distance"
 	}
@@ -83,6 +88,16 @@ func CheckFiniteDists(dist []float32, what string) error {
 		return nil
 	}
 	return moerr.NewInternalErrorNoCtx(what + nonFiniteMsg)
+}
+
+// CheckFiniteDists64 is CheckFiniteDists for a result read as float64.
+func CheckFiniteDists64(dist []float64, what string) error {
+	for _, d := range dist {
+		if d-d != 0 {
+			return moerr.NewInternalErrorNoCtx(what + nonFiniteMsg)
+		}
+	}
+	return nil
 }
 
 // AllFiniteF32 reports whether every entry is finite. Callers that answer a non-finite batch

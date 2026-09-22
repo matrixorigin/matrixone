@@ -244,17 +244,11 @@ func InnerProductFloat64(a, b []float64) (float64, error) {
 func L2DistanceSq[T types.RealNumbers](p, q []T) (T, error) {
 	if pf32, ok := any(p).([]float32); ok {
 		res, err := L2DistanceSqFloat32(pf32, any(q).([]float32))
-		if err != nil {
-			return 0, err
-		}
-		return CheckFiniteDist(T(res), "l2 distance")
+		return T(res), err
 	}
 	if pf64, ok := any(p).([]float64); ok {
 		res, err := L2DistanceSqFloat64(pf64, any(q).([]float64))
-		if err != nil {
-			return 0, err
-		}
-		return CheckFiniteDist(T(res), "l2 distance")
+		return T(res), err
 	}
 	return 0, moerr.NewInternalErrorNoCtx("vector type not supported")
 }
@@ -262,17 +256,11 @@ func L2DistanceSq[T types.RealNumbers](p, q []T) (T, error) {
 func InnerProduct[T types.RealNumbers](p, q []T) (T, error) {
 	if pf32, ok := any(p).([]float32); ok {
 		res, err := InnerProductFloat32(pf32, any(q).([]float32))
-		if err != nil {
-			return 0, err
-		}
-		return CheckFiniteDist(T(res), "inner product")
+		return T(res), err
 	}
 	if pf64, ok := any(p).([]float64); ok {
 		res, err := InnerProductFloat64(pf64, any(q).([]float64))
-		if err != nil {
-			return 0, err
-		}
-		return CheckFiniteDist(T(res), "inner product")
+		return T(res), err
 	}
 	return 0, moerr.NewInternalErrorNoCtx("vector type not supported")
 }
@@ -356,17 +344,11 @@ func L1DistanceFloat64(a, b []float64) (float64, error) {
 func L1Distance[T types.RealNumbers](p, q []T) (T, error) {
 	if pf32, ok := any(p).([]float32); ok {
 		res, err := L1DistanceFloat32(pf32, any(q).([]float32))
-		if err != nil {
-			return 0, err
-		}
-		return CheckFiniteDist(T(res), "l1 distance")
+		return T(res), err
 	}
 	if pf64, ok := any(p).([]float64); ok {
 		res, err := L1DistanceFloat64(pf64, any(q).([]float64))
-		if err != nil {
-			return 0, err
-		}
-		return CheckFiniteDist(T(res), "l1 distance")
+		return T(res), err
 	}
 	return 0, moerr.NewInternalErrorNoCtx("vector type not supported")
 }

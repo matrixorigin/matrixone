@@ -100,7 +100,7 @@ func PairWiseDistance[T types.ArrayElement](
 		if err != nil {
 			return nil, err
 		}
-		if err := CheckFiniteDists(out, metricWhat(metric)); err != nil {
+		if err := CheckFiniteDists(out, MetricWhat(metric)); err != nil {
 			return nil, err
 		}
 		return out, nil

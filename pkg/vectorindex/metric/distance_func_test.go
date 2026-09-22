@@ -782,17 +782,12 @@ func Test_L2Distance_Float32SquaredOverflow(t *testing.T) {
 	v1 := []float32{3e19, 3e19}
 	v2 := []float32{0, 0}
 
-	// precondition: the float32 squared sum overflows. Computed here rather than read back from
-	// L2DistanceSq, which now rejects that value instead of passing it on (and is asserted next).
-	var sq float32
-	for i := range v1 {
-		d := v1[i] - v2[i]
-		sq += d * d
-	}
+	// L2DistanceSq passes the raw square through: the scan paths read one distance per candidate,
+	// where an out-of-domain value can never win a min-comparison. The contract is enforced where
+	// a distance is a RESULT -- L2Distance here, and moarray's SQL entry points.
+	sq, err := L2DistanceSq(v1, v2)
+	require.NoError(t, err)
 	require.True(t, math.IsInf(float64(sq), 1), "precondition: float32 squared sum must overflow to +Inf")
-
-	_, err := L2DistanceSq(v1, v2)
-	require.Error(t, err, "the squared-distance kernel must reject its own overflow")
 
 	_, err = L2Distance(v1, v2)
 	require.Error(t, err, "L2Distance must not return the +Inf its squared sum produced")

@@ -140,57 +140,6 @@ func TestPairWiseDistanceGPURejectsOverflow(t *testing.T) {
 	require.EqualValues(t, 3, got[0])
 }
 
-// Every distance kernel rejects a result that left the element domain. Finite inputs can still
-// produce +Inf (a float32 dot product of 1e20-magnitude vectors) or NaN (that +Inf cancelling
-// against a -Inf of the opposite sign); neither is a distance.
-func TestKernelsRejectNonFiniteResults(t *testing.T) {
-	t.Run("inner product NaN", func(t *testing.T) {
-		_, err := InnerProduct[float32]([]float32{1e20, 1e20}, []float32{1e20, -1e20})
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "inner product")
-
-		_, err = InnerProduct[float64]([]float64{1e200, 1e200}, []float64{1e200, -1e200})
-		require.Error(t, err)
-	})
-
-	t.Run("l2 squared overflow", func(t *testing.T) {
-		_, err := L2DistanceSq[float32]([]float32{0, 0}, []float32{3e19, 3e19})
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "l2 distance")
-	})
-
-	t.Run("l1 overflow", func(t *testing.T) {
-		big := make([]float32, 4)
-		zero := make([]float32, 4)
-		for i := range big {
-			big[i] = math.MaxFloat32
-		}
-		_, err := L1Distance[float32](big, zero)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "l1 distance")
-	})
-
-	// Ordinary vectors are unaffected on every kernel.
-	t.Run("ordinary", func(t *testing.T) {
-		a := []float32{1, 2, 3}
-		b := []float32{4, 6, 3}
-		for _, tc := range []struct {
-			name string
-			fn   func() (float32, error)
-			want float32
-		}{
-			{"l2sq", func() (float32, error) { return L2DistanceSq[float32](a, b) }, 25},
-			{"l2", func() (float32, error) { return L2Distance[float32](a, b) }, 5},
-			{"l1", func() (float32, error) { return L1Distance[float32](a, b) }, 7},
-			{"ip", func() (float32, error) { return InnerProduct[float32](a, b) }, -25},
-		} {
-			got, err := tc.fn()
-			require.NoError(t, err, tc.name)
-			require.EqualValues(t, tc.want, got, tc.name)
-		}
-	})
-}
-
 // A zero denominator is either a genuinely zero vector, which keeps the documented convention, or
 // two non-zero vectors whose norms underflowed -- which has no computable cosine and is rejected
 // rather than reported as maximally dissimilar.
