@@ -1217,7 +1217,7 @@ func (sv *SystemVariables) Get(name string) interface{} {
 		// normalizes this state, but the fallback keeps rolling upgrades and
 		// tests deterministic.
 		if alias := transactionSystemVariableAlias(name); alias != "" {
-			value, ok = sv.mp[alias]
+			value = sv.mp[alias]
 		}
 	}
 	return value
