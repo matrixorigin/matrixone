@@ -104,3 +104,13 @@ func LockRoleGrantGraph(ctx context.Context, eng engine.Engine, proc *process.Pr
 		updateSnapshot:  txnOp.UpdateSnapshot,
 	}, "role grant graph")
 }
+
+func supportsLogtailReadBarrier(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return ok && valid && version >= defines.MORPCVersion11
+}
