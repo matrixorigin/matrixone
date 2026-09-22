@@ -413,14 +413,19 @@ class SiriusParityTest(unittest.TestCase):
                 ("gate", regressed, 2, "Overall: FAIL"),
             ):
                 output_directory = root / name
-                with mock.patch.object(
-                    sirius_parity, "SubprocessExecutor", return_value=runner
+                with (
+                    mock.patch.object(sirius_parity, "SubprocessExecutor", return_value=runner),
+                    mock.patch.object(sirius_parity, "_validate_output", wraps=sirius_parity._validate_output) as validation,
+                    mock.patch.object(sirius_parity, "_compare_results", wraps=sirius_parity._compare_results) as comparison,
+                    mock.patch.object(sirius_parity, "_result_bytes", wraps=sirius_parity._result_bytes) as encoding,
                 ):
                     result = sirius_parity.main([
                         "--spec", str(spec_path), "--output", str(output_directory),
                         "--", "runner",
                     ])
                 self.assertEqual(expected_exit, result)
+                self.assertEqual((1860, 1488, 3720),
+                                 (validation.call_count, comparison.call_count, encoding.call_count))
                 self.assertTrue((output_directory / "campaign.json").exists())
                 self.assertTrue((output_directory / "runs.jsonl").exists())
                 self.assertIn(marker, (output_directory / "summary.md").read_text())
@@ -607,6 +612,8 @@ class SiriusParityTest(unittest.TestCase):
 
         malicious = sirius_parity.execute_campaign(campaign, self.output)
         malicious[0]["output"]["result"]["schema"][0]["object_path"] = secret
+        with self.assertRaisesRegex(sirius_parity.CampaignError, "invalid result schema"):
+            sirius_parity.summarize(campaign, malicious)
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(sirius_parity.CampaignError, "invalid result schema"):
                 sirius_parity.write_artifacts(campaign, malicious, Path(directory))

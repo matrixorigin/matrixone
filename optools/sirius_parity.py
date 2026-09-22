@@ -1063,6 +1063,10 @@ def _median(values: Iterable[float]) -> float:
 
 def summarize(campaign: Mapping[str, Any], runs: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     validate_runs(campaign, runs)
+    return _summarize_validated(campaign, runs)
+
+
+def _summarize_validated(campaign: Mapping[str, Any], runs: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     routes = [route["id"] for route in ROUTES]
     query_samples: dict[tuple[int, str, int], list[float]] = {}
     suite_samples: dict[tuple[int, str, int], list[float]] = {}
@@ -1204,8 +1208,18 @@ def write_artifacts(
     output_directory: Path,
 ) -> dict[str, Any]:
     _ensure_output_directory_available(output_directory)
+    validate_runs(campaign, runs)
+    return _write_validated_artifacts(campaign, runs, output_directory)
+
+
+def _write_validated_artifacts(
+    campaign: Mapping[str, Any],
+    runs: Sequence[Mapping[str, Any]],
+    output_directory: Path,
+) -> dict[str, Any]:
+    _ensure_output_directory_available(output_directory)
     try:
-        summary = summarize(campaign, runs)
+        summary = _summarize_validated(campaign, runs)
         output_directory.mkdir(parents=True, exist_ok=True)
         (output_directory / "campaign.json").write_text(
             canonical_json(campaign) + "\n", encoding="utf-8"
@@ -1341,7 +1355,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     try:
         runs = execute_campaign(campaign, executor)
-        summary = write_artifacts(campaign, runs, arguments.output)
+        # The CLI owns these just-validated records; public callers may mutate theirs.
+        summary = _write_validated_artifacts(campaign, runs, arguments.output)
     except CampaignFailure as error:
         return _report_failure(error, arguments.output, allow_partial=True)
     return 0 if summary["passed"] else 2
