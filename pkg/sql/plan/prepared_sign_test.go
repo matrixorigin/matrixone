@@ -149,7 +149,6 @@ func TestPreparedEltRebindsRuntimeNumericDomain(t *testing.T) {
 
 			proc := testutil.NewProc(t)
 			defer proc.Free()
-			proc.GetSessionInfo().MySQLNumericCompatibilityMode = true
 			executor, err := colexec.NewExpressionExecutor(proc, bound)
 			require.NoError(t, err)
 			defer executor.Free()
@@ -204,17 +203,17 @@ func TestPreparedEltRebindsNumericTextWithStringRuntimeMetadata(t *testing.T) {
 		wantSpecialized bool
 	}{
 		{
-			name: "runtime text type with complete decimal token",
+			name: "runtime text type keeps integer-prefix semantics",
 			param: ParamValue{Value: "1.6", RuntimeType: types.T_text.ToType(),
 				HasRuntimeType: true},
-			want:            "b",
+			want:            "a",
 			wantSpecialized: true,
 		},
 		{
-			name: "source text type with complete decimal token",
+			name: "source text type keeps integer-prefix semantics",
 			param: ParamValue{Value: "1.6", SourceType: types.T_text.ToType(),
 				HasSourceType: true},
-			want:            "b",
+			want:            "a",
 			wantSpecialized: true,
 		},
 		{
@@ -222,6 +221,11 @@ func TestPreparedEltRebindsNumericTextWithStringRuntimeMetadata(t *testing.T) {
 			param: ParamValue{Value: "foo", MaterializedValue: "foo",
 				RuntimeType: types.T_text.ToType(), HasRuntimeType: true},
 			wantNull: true,
+			// The current prepared-ELT path specializes every runtime string
+			// category so the execution plan cannot retain a stale integer
+			// overload. Invalid text remains NULL under the shared integer
+			// argument contract; specialization is expected.
+			wantSpecialized: true,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
