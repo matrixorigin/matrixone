@@ -7882,6 +7882,8 @@ func (builder *QueryBuilder) coerceValuesColumnToCommonType(
 	columnIdx int,
 ) (plan.Type, error) {
 	hasDecimal := false
+	hasSignedInteger := false
+	hasUnsignedInteger := false
 	allPureNull := len(exprs) > 0
 	for i, expr := range exprs {
 		pureNull := i < len(pureNulls) && pureNulls[i]
@@ -7889,8 +7891,12 @@ func (builder *QueryBuilder) coerceValuesColumnToCommonType(
 		if pureNull || expr == nil {
 			continue
 		}
-		hasDecimal = hasDecimal || types.T(expr.Typ.Id).IsDecimal()
+		oid := types.T(expr.Typ.Id)
+		hasDecimal = hasDecimal || oid.IsDecimal()
+		hasSignedInteger = hasSignedInteger || oid.IsSignedInt()
+		hasUnsignedInteger = hasUnsignedInteger || oid.IsUnsignedInt()
 	}
+	mixedSignedUnsigned := hasSignedInteger && hasUnsignedInteger
 
 	commonInputs := make([]types.Type, 0, len(exprs))
 	for i, expr := range exprs {
@@ -7901,9 +7907,11 @@ func (builder *QueryBuilder) coerceValuesColumnToCommonType(
 		if typ.Oid == types.T_any {
 			continue
 		}
-		if hasDecimal {
+		if hasDecimal || mixedSignedUnsigned {
 			if exact, ok := setOperationIntegerLiteralDecimalType(expr); ok {
 				typ = exact
+			} else if mixedSignedUnsigned && typ.Oid.IsInteger() {
+				typ = valuesIntegerDomainDecimalType(typ.Oid)
 			}
 		}
 		commonInputs = append(commonInputs, typ)
@@ -7912,22 +7920,24 @@ func (builder *QueryBuilder) coerceValuesColumnToCommonType(
 	var commonType types.Type
 	switch {
 	case len(commonInputs) > 0:
-		resolved, err := function.GetFunctionByName(builder.GetContext(), "coalesce", commonInputs)
+		vectorType, allFloatVectors, err := valuesFloatVectorCommonType(commonInputs)
 		if err != nil {
 			return plan.Type{}, moerr.NewParseErrorf(
 				builder.GetContext(), "the %d column cann't cast to a same type", columnIdx)
 		}
-		castTypes, _ := resolved.ShouldDoImplicitTypeCast()
-		if len(castTypes) > 0 {
-			commonType = castTypes[0]
+		if allFloatVectors {
+			commonType = vectorType
 		} else {
-			commonType = commonInputs[0]
-			if commonType.Oid == types.T_varchar || commonType.Oid == types.T_char {
-				for _, typ := range commonInputs[1:] {
-					if typ.Width > commonType.Width {
-						commonType.Width = typ.Width
-					}
-				}
+			resolved, err := function.GetFunctionByName(builder.GetContext(), "coalesce", commonInputs)
+			if err != nil {
+				return plan.Type{}, moerr.NewParseErrorf(
+					builder.GetContext(), "the %d column cann't cast to a same type", columnIdx)
+			}
+			castTypes, _ := resolved.ShouldDoImplicitTypeCast()
+			if len(castTypes) > 0 {
+				commonType = castTypes[0]
+			} else {
+				commonType = commonInputs[0]
 			}
 		}
 	case allPureNull:
@@ -7940,6 +7950,22 @@ func (builder *QueryBuilder) coerceValuesColumnToCommonType(
 				commonType = makeTypeByPlan2Expr(expr)
 				break
 			}
+		}
+	}
+	if commonType.Oid == types.T_varchar || commonType.Oid == types.T_char {
+		maxWidth := int32(0)
+		allCharVarchar := true
+		for _, typ := range commonInputs {
+			if typ.Oid != types.T_varchar && typ.Oid != types.T_char {
+				allCharVarchar = false
+				break
+			}
+			if typ.Width > maxWidth {
+				maxWidth = typ.Width
+			}
+		}
+		if allCharVarchar {
+			commonType.Width = maxWidth
 		}
 	}
 	if commonType.Oid.IsDateRelate() {
@@ -7985,6 +8011,42 @@ func (builder *QueryBuilder) coerceValuesColumnToCommonType(
 	}
 
 	return commonPlanType, nil
+}
+
+// valuesIntegerDomainDecimalType maps an integer's complete value domain to a
+// DECIMAL type. It is used when signed and unsigned integers share a VALUES
+// column, because neither BIGINT nor BIGINT UNSIGNED can represent both
+// BIGINT's negative range and UINT64_MAX.
+func valuesIntegerDomainDecimalType(oid types.T) types.Type {
+	width := integerMetadataWidth(oid)
+	decimalOid := types.T_decimal64
+	if width > 18 {
+		decimalOid = types.T_decimal128
+	}
+	return types.New(decimalOid, width, 0)
+}
+
+// valuesFloatVectorCommonType returns an order-independent common type for a
+// VALUES column consisting entirely of VECF32/VECF64 values. Vector dimensions
+// must match, and VECF64 wins so implicit coercion never loses precision.
+func valuesFloatVectorCommonType(inputs []types.Type) (types.Type, bool, error) {
+	if len(inputs) == 0 {
+		return types.Type{}, false, nil
+	}
+	width := inputs[0].Width
+	commonOid := types.T_array_float32
+	for _, typ := range inputs {
+		if typ.Oid != types.T_array_float32 && typ.Oid != types.T_array_float64 {
+			return types.Type{}, false, nil
+		}
+		if typ.Width != width {
+			return types.Type{}, true, moerr.NewInvalidInputNoCtx("vector dimensions must match")
+		}
+		if typ.Oid == types.T_array_float64 {
+			commonOid = types.T_array_float64
+		}
+	}
+	return types.New(commonOid, width, 0), true, nil
 }
 
 // setOperationIntegerLiteralDecimalType returns the value domain of a direct

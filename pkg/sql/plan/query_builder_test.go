@@ -3284,6 +3284,41 @@ func TestQueryBuilderBindValuesUsesColumnCommonType(t *testing.T) {
 			width:       8,
 			notNullable: true,
 		},
+		{
+			name:        "char and varchar use maximum width",
+			rows:        "row(cast('abcdefgh' as char(8))), row(cast('x' as varchar(1)))",
+			oid:         types.T_varchar,
+			width:       8,
+			notNullable: true,
+		},
+		{
+			name:        "char and varchar maximum width is order independent",
+			rows:        "row(cast('x' as varchar(1))), row(cast('abcdefgh' as char(8)))",
+			oid:         types.T_varchar,
+			width:       8,
+			notNullable: true,
+		},
+		{
+			name:        "varchar and integer keep resolver width",
+			rows:        "row(cast('x' as varchar(1))), row(123456)",
+			oid:         types.T_varchar,
+			width:       types.MaxVarcharLen,
+			notNullable: true,
+		},
+		{
+			name:        "signed negative and unsigned maximum use decimal",
+			rows:        "row(cast(-1 as signed)), row(cast(18446744073709551615 as unsigned))",
+			oid:         types.T_decimal128,
+			width:       20,
+			notNullable: true,
+		},
+		{
+			name:        "signed and unsigned decimal choice is order independent",
+			rows:        "row(cast(18446744073709551615 as unsigned)), row(cast(-1 as signed))",
+			oid:         types.T_decimal128,
+			width:       20,
+			notNullable: true,
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			node, err := bindValues(t, test.rows)
@@ -3314,6 +3349,42 @@ func TestQueryBuilderBindValuesUsesColumnCommonType(t *testing.T) {
 		require.Equal(t, columnType.Id, node.RowsetData.Cols[0].Data[0].Expr.Typ.Id)
 		require.Equal(t, columnType.Width, node.RowsetData.Cols[0].Data[0].Expr.Typ.Width)
 	})
+
+	for _, test := range []struct {
+		name string
+		rows string
+	}{
+		{
+			name: "vecf64 preserves precision after vecf32",
+			rows: "row(cast('[1,2,3]' as vecf32(3))), row(cast('[1,2,3]' as vecf64(3)))",
+		},
+		{
+			name: "vecf64 precision is order independent",
+			rows: "row(cast('[1,2,3]' as vecf64(3))), row(cast('[1,2,3]' as vecf32(3)))",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			node, err := bindValues(t, test.rows)
+			require.NoError(t, err)
+			columnType := node.TableDef.Cols[0].Typ
+			require.Equal(t, int32(types.T_array_float64), columnType.Id)
+			require.Equal(t, int32(3), columnType.Width)
+			for _, row := range node.RowsetData.Cols[0].Data {
+				require.Equal(t, columnType.Id, row.Expr.Typ.Id)
+				require.Equal(t, columnType.Width, row.Expr.Typ.Width)
+			}
+		})
+	}
+
+	for _, rows := range []string{
+		"row(cast('[1,2]' as vecf32(2))), row(cast('[1,2,3]' as vecf64(3)))",
+		"row(cast('[1,2,3]' as vecf64(3))), row(cast('[1,2]' as vecf32(2)))",
+	} {
+		t.Run("different vector dimensions are rejected: "+rows, func(t *testing.T) {
+			_, err := bindValues(t, rows)
+			require.Error(t, err)
+		})
+	}
 
 	t.Run("parameter-only column remains unresolved", func(t *testing.T) {
 		builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)

@@ -16,3 +16,11 @@ select ord, dt from (values row(1, cast('2024-01-02 12:34:56.123' as datetime(3)
 select ord, dt from (values row(1, cast('2024-01-02 12:34:56.123456' as datetime(6))), row(2, cast('2024-01-02 12:34:56.123' as datetime(3)))) as v(ord, dt) order by ord;
 select ord, label from (values row(1, cast('a' as char(4))), row(2, cast('abcdefgh' as char(8)))) as v(ord, label) order by ord;
 select ord, label from (values row(1, cast('abcdefgh' as char(8))), row(2, cast('a' as char(4)))) as v(ord, label) order by ord;
+select ord, label from (values row(1, cast('abcdefgh' as char(8))), row(2, cast('x' as varchar(1)))) as v(ord, label) order by ord;
+select ord, label from (values row(1, cast('x' as varchar(1))), row(2, cast('abcdefgh' as char(8)))) as v(ord, label) order by ord;
+select ord, n from (values row(1, cast(-1 as signed)), row(2, cast(18446744073709551615 as unsigned))) as v(ord, n) order by ord;
+select ord, n from (values row(1, cast(18446744073709551615 as unsigned)), row(2, cast(-1 as signed))) as v(ord, n) order by ord;
+select ord, embedding from (values row(1, cast('[1,2,3]' as vecf32(3))), row(2, cast('[1.0000000001,2,3]' as vecf64(3)))) as v(ord, embedding) order by ord;
+select ord, embedding from (values row(1, cast('[1.0000000001,2,3]' as vecf64(3))), row(2, cast('[1,2,3]' as vecf32(3)))) as v(ord, embedding) order by ord;
+select embedding from (values row(cast('[1,2]' as vecf32(2))), row(cast('[1,2,3]' as vecf64(3)))) as v(embedding);
+select embedding from (values row(cast('[1,2,3]' as vecf64(3))), row(cast('[1,2]' as vecf32(2)))) as v(embedding);

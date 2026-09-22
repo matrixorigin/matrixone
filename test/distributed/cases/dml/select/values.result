@@ -50,12 +50,12 @@ NULL
 NULL
 select ord, dt from (values row(1, cast('2024-01-02 12:34:56.123' as datetime(3))), row(2, cast('2024-01-02 12:34:56.123456' as datetime(6)))) as v(ord, dt) order by ord;
 ord    dt
-1    2024-01-02 12:34:56.123000
-2    2024-01-02 12:34:56.123456
+1    2024-01-02 12:34:56.123000000
+2    2024-01-02 12:34:56.123456000
 select ord, dt from (values row(1, cast('2024-01-02 12:34:56.123456' as datetime(6))), row(2, cast('2024-01-02 12:34:56.123' as datetime(3)))) as v(ord, dt) order by ord;
 ord    dt
-1    2024-01-02 12:34:56.123456
-2    2024-01-02 12:34:56.123000
+1    2024-01-02 12:34:56.123456000
+2    2024-01-02 12:34:56.123000000
 select ord, label from (values row(1, cast('a' as char(4))), row(2, cast('abcdefgh' as char(8)))) as v(ord, label) order by ord;
 ord    label
 1    a
@@ -64,3 +64,31 @@ select ord, label from (values row(1, cast('abcdefgh' as char(8))), row(2, cast(
 ord    label
 1    abcdefgh
 2    a
+select ord, label from (values row(1, cast('abcdefgh' as char(8))), row(2, cast('x' as varchar(1)))) as v(ord, label) order by ord;
+ord    label
+1    abcdefgh
+2    x
+select ord, label from (values row(1, cast('x' as varchar(1))), row(2, cast('abcdefgh' as char(8)))) as v(ord, label) order by ord;
+ord    label
+1    x
+2    abcdefgh
+select ord, n from (values row(1, cast(-1 as signed)), row(2, cast(18446744073709551615 as unsigned))) as v(ord, n) order by ord;
+ord    n
+1    -1
+2    18446744073709551615
+select ord, n from (values row(1, cast(18446744073709551615 as unsigned)), row(2, cast(-1 as signed))) as v(ord, n) order by ord;
+ord    n
+1    18446744073709551615
+2    -1
+select ord, embedding from (values row(1, cast('[1,2,3]' as vecf32(3))), row(2, cast('[1.0000000001,2,3]' as vecf64(3)))) as v(ord, embedding) order by ord;
+ord    embedding
+1    [1, 2, 3]
+2    [1.0000000001, 2, 3]
+select ord, embedding from (values row(1, cast('[1.0000000001,2,3]' as vecf64(3))), row(2, cast('[1,2,3]' as vecf32(3)))) as v(ord, embedding) order by ord;
+ord    embedding
+1    [1.0000000001, 2, 3]
+2    [1, 2, 3]
+select embedding from (values row(cast('[1,2]' as vecf32(2))), row(cast('[1,2,3]' as vecf64(3)))) as v(embedding);
+SQL parser error: the 0 column cann't cast to a same type
+select embedding from (values row(cast('[1,2,3]' as vecf64(3))), row(cast('[1,2]' as vecf32(2)))) as v(embedding);
+SQL parser error: the 0 column cann't cast to a same type
