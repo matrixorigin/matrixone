@@ -238,9 +238,9 @@ select * from test14;
 2  ¦  2023-04-17 01:01:45  𝄀
 3  ¦  null
 select col2 / col1 from test14;
-➤ col2 / col1[3,38,6]  𝄀
-20200113122059.000000  𝄀
-10115208505072.500000  𝄀
+➤ col2 / col1[3,38,4]  𝄀
+20200113122059.0000  𝄀
+10115208505072.5000  𝄀
 null
 select col1 * col2 from test14;
 ➤ col1 * col2[3,38,0]  𝄀
@@ -284,9 +284,9 @@ select col1 * col2 from datetime01;
 2460149091480549.129  𝄀
 -1569792378271505764738.200
 select col1 / col2 from datetime01;
-➤ col1 / col2[3,38,9]  𝄀
-162611480698.033520325  𝄀
--253802.868202729
+➤ col1 / col2[3,38,7]  𝄀
+162611480698.0335203  𝄀
+-253802.8682027
 select col1 % col2 from datetime01;
 ➤ col1 % col2[3,38,3]  𝄀
 4.123  𝄀
@@ -326,9 +326,9 @@ select * from time01;
 2  ¦  23:59:59  𝄀
 3  ¦  null
 select col2 / col1 from time01;
-➤ col2 / col1[3,38,6]  𝄀
-122059.000000  𝄀
-117979.500000  𝄀
+➤ col2 / col1[3,22,4]  𝄀
+122059.0000  𝄀
+117979.5000  𝄀
 null
 select col1 * col2 from time01;
 ➤ col1 * col2[3,38,0]  𝄀
@@ -360,9 +360,9 @@ select * from time01;
 1787945645414794854456412  ¦  12:20:59  𝄀
 -789466511231027845  ¦  23:59:59
 select col2 / col1 from time01;
-➤ col2 / col1[3,38,6]  𝄀
-0.000000  𝄀
-0.000000
+➤ col2 / col1[3,38,4]  𝄀
+0.0000  𝄀
+0.0000
 select col1 * col2 from time01;
 ➤ col1 * col2[3,38,0]  𝄀
 218234857533684445140095192308  𝄀
@@ -484,9 +484,9 @@ select col1 * col2 from timestamp01;
 -449519865965421900  𝄀
 null
 select col2 / col1 from timestamp01;
-➤ col2 / col1[3,38,6]  𝄀
-2020011312.205900  𝄀
--910459811.437669  𝄀
+➤ col2 / col1[3,38,4]  𝄀
+2020011312.2059  𝄀
+-910459811.4377  𝄀
 null
 select col2 % col1 from timestamp01;
 ➤ col2 % col1[3,38,0]  𝄀
@@ -520,9 +520,9 @@ null  𝄀
 -91330855830619356626.035395000000000000  𝄀
 null
 select col2 / col1 from timestamp01;
-➤ col2 / col1[3,38,6]  𝄀
+➤ col2 / col1[3,38,4]  𝄀
 null  𝄀
--4481177.458398  𝄀
+-4481177.4584  𝄀
 null
 select col2 % col1 from timestamp01;
 ➤ col2 % col1[3,38,18]  𝄀

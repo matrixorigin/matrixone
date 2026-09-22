@@ -584,13 +584,16 @@ func divFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 		}, selectList)
 	case types.T_decimal64:
 		shouldError := checkDivisionByZeroBehavior(proc, selectList)
-		return decimalBatchArith[types.Decimal64, types.Decimal128](parameters, result, proc, length, d64DivKernel(shouldError), selectList)
+		resultScale := result.GetResultVector().GetType().Scale
+		return decimalBatchArith[types.Decimal64, types.Decimal128](parameters, result, proc, length, d64DivKernelAtScale(shouldError, resultScale), selectList)
 	case types.T_decimal128:
 		shouldError := checkDivisionByZeroBehavior(proc, selectList)
-		return decimalBatchArith[types.Decimal128, types.Decimal128](parameters, result, proc, length, d128DivKernel(shouldError), selectList)
+		resultScale := result.GetResultVector().GetType().Scale
+		return decimalBatchArith[types.Decimal128, types.Decimal128](parameters, result, proc, length, d128DivKernelAtScale(shouldError, resultScale), selectList)
 	case types.T_decimal256:
 		shouldError := checkDivisionByZeroBehavior(proc, selectList)
-		return decimalBatchArith[types.Decimal256, types.Decimal256](parameters, result, proc, length, d256DivKernel(shouldError), selectList)
+		resultScale := result.GetResultVector().GetType().Scale
+		return decimalBatchArith[types.Decimal256, types.Decimal256](parameters, result, proc, length, d256DivKernelAtScale(shouldError, resultScale), selectList)
 	case types.T_array_float32:
 		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, divFnArray[float32], selectList)
 	case types.T_array_float64:

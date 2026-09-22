@@ -1,0 +1,73 @@
+drop database if exists issue_28594_div_precision;
+create database issue_28594_div_precision;
+use issue_28594_div_precision;
+create table operands (a decimal(10,2), b decimal(10,2));
+insert into operands values (1, 3);
+set session div_precision_increment = 0;
+select a / b as q from operands;
+➤ q[3,12,2]  𝄀
+0.33
+create table result_0 as select a / b as q from operands;
+show create table result_0;
+➤ Table[12,8,0]  ¦  Create Table[12,60,0]  𝄀
+result_0  ¦  CREATE TABLE `result_0` (
+  `q` decimal(12,2) DEFAULT NULL
+)
+set session div_precision_increment = 4;
+select a / b as q from operands;
+➤ q[3,16,6]  𝄀
+0.333333
+create table result_4 as select a / b as q from operands;
+show create table result_4;
+➤ Table[12,8,0]  ¦  Create Table[12,60,0]  𝄀
+result_4  ¦  CREATE TABLE `result_4` (
+  `q` decimal(16,6) DEFAULT NULL
+)
+set session div_precision_increment = 10;
+select a / b as q from operands;
+➤ q[3,22,12]  𝄀
+0.333333333333
+set session div_precision_increment = 30;
+select a / b as q from operands;
+➤ q[3,42,30]  𝄀
+0.333333333333333333333333333333
+create table result_30 as select a / b as q from operands;
+show create table result_30;
+➤ Table[12,9,0]  ¦  Create Table[12,62,0]  𝄀
+result_30  ¦  CREATE TABLE `result_30` (
+  `q` decimal(42,30) DEFAULT NULL
+)
+create table wide_operands (a decimal(50,10), b decimal(10,0));
+insert into wide_operands values (1, 3);
+set session div_precision_increment = 0;
+select a / b as q from wide_operands;
+➤ q[3,50,10]  𝄀
+0.3333333333
+set session div_precision_increment = 4;
+select a / b as q from wide_operands;
+➤ q[3,54,14]  𝄀
+0.33333333333333
+set session div_precision_increment = 10;
+select a / b as q from wide_operands;
+➤ q[3,60,20]  𝄀
+0.33333333333333333333
+set session div_precision_increment = 30;
+select a / b as q from wide_operands;
+➤ q[3,65,30]  𝄀
+0.333333333333333333333333333333
+select cast(99999999999999999999999999999999999999999999999999999999999999999 as decimal(65,0)) /
+cast(99999999999999999999999999999999999999999999999999999999999999999 as decimal(65,0)) as q;
+➤ q[3,65,30]  𝄀
+1.000000000000000000000000000000
+set session div_precision_increment = 10;
+prepare div_precision_stmt from 'select a / b as q from operands';
+execute div_precision_stmt;
+➤ q[3,22,12]  𝄀
+0.333333333333
+set session div_precision_increment = 30;
+execute div_precision_stmt;
+➤ q[3,42,30]  𝄀
+0.333333333333333333333333333333
+deallocate prepare div_precision_stmt;
+set session div_precision_increment = 4;
+drop database issue_28594_div_precision;

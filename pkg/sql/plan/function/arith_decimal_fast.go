@@ -27,6 +27,7 @@ package function
 //   - Integer Div: d64IntDiv, d128IntDiv, d256IntDiv (DIV operator)
 
 import (
+	"encoding/binary"
 	"math"
 	"math/big"
 	"math/bits"
@@ -751,11 +752,19 @@ func d128DivKernel(shouldError bool) func(v1, v2 []types.Decimal128, rs []types.
 	}
 }
 
+func d128DivKernelAtScale(shouldError bool, resultScale int32) func(v1, v2 []types.Decimal128, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.Nulls) error {
+	return func(v1, v2 []types.Decimal128, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.Nulls) error {
+		return d128DivAtScale(v1, v2, rs, scale1, scale2, resultScale, rsnull, shouldError)
+	}
+}
+
 // d64DivKernel returns a batch division kernel for Decimal64 → Decimal128.
 
 func d128Div(v1, v2 []types.Decimal128, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.Nulls, shouldError bool) error {
-	bmp := rsnull.GetBitmap()
-	// Compute result scale once (same logic as Decimal128.Div).
+	return d128DivAtScale(v1, v2, rs, scale1, scale2, legacyDecimalDivisionScale(scale1), rsnull, shouldError)
+}
+
+func legacyDecimalDivisionScale(scale1 int32) int32 {
 	scale := int32(12)
 	if scale > scale1+6 {
 		scale = scale1 + 6
@@ -763,7 +772,12 @@ func d128Div(v1, v2 []types.Decimal128, rs []types.Decimal128, scale1, scale2 in
 	if scale < scale1 {
 		scale = scale1
 	}
-	scaleAdj := scale - scale1 + scale2
+	return scale
+}
+
+func d128DivAtScale(v1, v2 []types.Decimal128, rs []types.Decimal128, scale1, scale2, resultScale int32, rsnull *nulls.Nulls, shouldError bool) error {
+	bmp := rsnull.GetBitmap()
+	scaleAdj := resultScale - scale1 + scale2
 
 	// Pre-compute scale factor for the fast inline path.
 	var scaleFactor uint64
@@ -989,6 +1003,23 @@ func d128DivOne(x, y types.Decimal128, dst *types.Decimal128, scaleAdj int32, rs
 		rsnull.Add(idx)
 		return nil
 	}
+	if scaleAdj < 0 {
+		originalX, originalY := x, y
+		signX := d128Abs(&x)
+		signY := d128Abs(&y)
+		x256 := types.Decimal256{B0_63: x.B0_63, B64_127: x.B64_127}
+		y256 := types.Decimal256{B0_63: y.B0_63, B64_127: y.B64_127}
+		var result types.Decimal256
+		if err := d256DivBig(x256, y256, scaleAdj, signX != signY, &result); err != nil {
+			return moerr.NewInvalidInputNoCtxf("Decimal128 Div overflow: %s/%s", originalX.Format(scale1), originalY.Format(scale2))
+		}
+		signExtension := ^uint64(0) * (result.B64_127 >> 63)
+		if result.B128_191 != signExtension || result.B192_255 != signExtension {
+			return moerr.NewInvalidInputNoCtxf("Decimal128 Div overflow: %s/%s", originalX.Format(scale1), originalY.Format(scale2))
+		}
+		*dst = types.Decimal128{B0_63: result.B0_63, B64_127: result.B64_127}
+		return nil
+	}
 
 	signxU := d128Abs(&x)
 	signyU := d128Abs(&y)
@@ -1033,6 +1064,17 @@ func d128DivOneToD256(x, y types.Decimal128, dst *types.Decimal256, scaleAdj int
 			return moerr.NewDivByZeroNoCtx()
 		}
 		rsnull.Add(idx)
+		return nil
+	}
+	if scaleAdj < 0 {
+		originalX, originalY := x, y
+		signX := d128Abs(&x)
+		signY := d128Abs(&y)
+		x256 := types.Decimal256{B0_63: x.B0_63, B64_127: x.B64_127}
+		y256 := types.Decimal256{B0_63: y.B0_63, B64_127: y.B64_127}
+		if err := d256DivBig(x256, y256, scaleAdj, signX != signY, dst); err != nil {
+			return moerr.NewInvalidInputNoCtxf("Decimal256 Div overflow: %s/%s", originalX.Format(scale1), originalY.Format(scale2))
+		}
 		return nil
 	}
 
@@ -3216,6 +3258,12 @@ func d256DivKernel(shouldError bool) func(v1, v2, rs []types.Decimal256, scale1,
 	}
 }
 
+func d256DivKernelAtScale(shouldError bool, resultScale int32) func(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.Nulls) error {
+	return func(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.Nulls) error {
+		return d256DivAtScale(v1, v2, rs, scale1, scale2, resultScale, rsnull, shouldError)
+	}
+}
+
 // d256AllFitD128 checks if ALL elements in a D256 slice fit in a D128 value.
 // A D256 fits in D128 when the upper 128 bits are the sign extension of bit 127.
 // Returns true if the entire batch can use the D128 fast path.
@@ -3230,6 +3278,10 @@ func d256AllFitD128(vs []types.Decimal256) bool {
 }
 
 func d256Div(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.Nulls, shouldError bool) error {
+	return d256DivAtScale(v1, v2, rs, scale1, scale2, legacyDecimalDivisionScale(scale1), rsnull, shouldError)
+}
+
+func d256DivAtScale(v1, v2, rs []types.Decimal256, scale1, scale2, resultScale int32, rsnull *nulls.Nulls, shouldError bool) error {
 	len1, len2 := len(v1), len(v2)
 	hasNull := !rsnull.IsEmpty()
 	var bmp *bitmap.Bitmap
@@ -3238,14 +3290,7 @@ func d256Div(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 	}
 
 	// Pre-compute D128 scale factors for fast path.
-	scale := int32(12)
-	if scale > scale1+6 {
-		scale = scale1 + 6
-	}
-	if scale < scale1 {
-		scale = scale1
-	}
-	scaleAdj := scale - scale1 + scale2
+	scaleAdj := resultScale - scale1 + scale2
 
 	// Pre-scan: if all elements fit in D128, use the fast D128 division path
 	// for the entire batch without per-element fit checks.
@@ -3255,11 +3300,35 @@ func d256Div(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 
 	// Slow path: use generic D256 division.
 	divGeneric := func(a, b types.Decimal256, dst *types.Decimal256) error {
-		r, _, err := a.Div(b, scale1, scale2)
-		if err != nil {
-			return moerr.NewInvalidInputNoCtxf("Decimal256 Div overflow: %s/%s", a.Format(scale1), b.Format(scale2))
+		originalA, originalB := a, b
+		signA, signB := a.Sign(), b.Sign()
+		if signA {
+			a = a.Minus()
 		}
-		*dst = r
+		if signB {
+			b = b.Minus()
+		}
+		if scaleAdj < 0 {
+			if err := d256DivBig(a, b, scaleAdj, signA != signB, dst); err != nil {
+				return moerr.NewInvalidInputNoCtxf("Decimal256 Div overflow: %s/%s", originalA.Format(scale1), originalB.Format(scale2))
+			}
+			return nil
+		}
+		scaled, err := a.Scale(scaleAdj)
+		if err != nil {
+			if err = d256DivBig(a, b, scaleAdj, signA != signB, dst); err == nil {
+				return nil
+			}
+			return moerr.NewInvalidInputNoCtxf("Decimal256 Div overflow: %s/%s", originalA.Format(scale1), originalB.Format(scale2))
+		}
+		quotient, err := scaled.Div256(b)
+		if err != nil {
+			return moerr.NewInvalidInputNoCtxf("Decimal256 Div overflow: %s/%s", originalA.Format(scale1), originalB.Format(scale2))
+		}
+		if signA != signB {
+			quotient = quotient.Minus()
+		}
+		*dst = quotient
 		return nil
 	}
 
@@ -3314,6 +3383,63 @@ func d256Div(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.
 			}
 		}
 	}
+	return nil
+}
+
+// d256DivBig computes a rounded quotient without materializing an overflowing
+// fixed-width scaled operand. The guards also protect direct callers with
+// malformed scale metadata from constructing an unbounded big.Int.
+func d256DivBig(
+	a, b types.Decimal256,
+	scaleAdj int32,
+	negative bool,
+	dst *types.Decimal256,
+) error {
+	if d256IsZero(a) {
+		*dst = types.Decimal256{}
+		return nil
+	}
+	if scaleAdj >= 154 {
+		return moerr.NewOutOfRangeNoCtx("DECIMAL256", "")
+	}
+	if scaleAdj <= -78 {
+		*dst = types.Decimal256{}
+		return nil
+	}
+
+	divisor := d256MagnitudeBigInt(b)
+	if divisor.Sign() == 0 {
+		return moerr.NewDivByZeroNoCtx()
+	}
+	numerator := d256MagnitudeBigInt(a)
+	if scaleAdj >= 0 {
+		multiplier := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scaleAdj)), nil)
+		numerator.Mul(numerator, multiplier)
+	} else {
+		multiplier := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(-scaleAdj)), nil)
+		divisor.Mul(divisor, multiplier)
+	}
+	quotient, remainder := new(big.Int), new(big.Int)
+	quotient.QuoRem(numerator, divisor, remainder)
+	if remainder.Lsh(remainder, 1).Cmp(divisor) >= 0 {
+		quotient.Add(quotient, big.NewInt(1))
+	}
+	if quotient.BitLen() > 255 {
+		return moerr.NewOutOfRangeNoCtx("DECIMAL256", "")
+	}
+
+	var encoded [32]byte
+	quotient.FillBytes(encoded[:])
+	result := types.Decimal256{
+		B192_255: binary.BigEndian.Uint64(encoded[0:8]),
+		B128_191: binary.BigEndian.Uint64(encoded[8:16]),
+		B64_127:  binary.BigEndian.Uint64(encoded[16:24]),
+		B0_63:    binary.BigEndian.Uint64(encoded[24:32]),
+	}
+	if negative {
+		result = result.Minus()
+	}
+	*dst = result
 	return nil
 }
 
@@ -4621,17 +4747,19 @@ func d64DivKernel(shouldError bool) func(v1, v2 []types.Decimal64, rs []types.De
 	}
 }
 
+func d64DivKernelAtScale(shouldError bool, resultScale int32) func(v1, v2 []types.Decimal64, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.Nulls) error {
+	return func(v1, v2 []types.Decimal64, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.Nulls) error {
+		return d64DivAtScale(v1, v2, rs, scale1, scale2, resultScale, rsnull, shouldError)
+	}
+}
+
 func d64Div(v1, v2 []types.Decimal64, rs []types.Decimal128, scale1, scale2 int32, rsnull *nulls.Nulls, shouldError bool) error {
+	return d64DivAtScale(v1, v2, rs, scale1, scale2, legacyDecimalDivisionScale(scale1), rsnull, shouldError)
+}
+
+func d64DivAtScale(v1, v2 []types.Decimal64, rs []types.Decimal128, scale1, scale2, resultScale int32, rsnull *nulls.Nulls, shouldError bool) error {
 	bmp := rsnull.GetBitmap()
-	// Compute result scale once.
-	scale := int32(12)
-	if scale > scale1+6 {
-		scale = scale1 + 6
-	}
-	if scale < scale1 {
-		scale = scale1
-	}
-	scaleAdj := scale - scale1 + scale2
+	scaleAdj := resultScale - scale1 + scale2
 
 	// D64 division always uses the inline fast path:
 	// scaleAdj is always ≤ 19 (max scale1=18, so scaleAdj ≤ 18+18=36? no..

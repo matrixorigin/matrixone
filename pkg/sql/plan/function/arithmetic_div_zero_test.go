@@ -670,14 +670,14 @@ func TestArithmeticNullDividendOverConstZero(t *testing.T) {
 	decimal128DivType := resolvedReturnType(t, DIV, []types.Type{decimal128Type, decimal128Type})
 	decimal256DivType := resolvedReturnType(t, DIV, []types.Type{decimal256Type, decimal256Type})
 	require.Equal(t, types.T_decimal128, decimal64DivType.Oid)
-	require.Equal(t, int32(38), decimal64DivType.Width)
-	require.Equal(t, int32(8), decimal64DivType.Scale)
+	require.Equal(t, int32(24), decimal64DivType.Width)
+	require.Equal(t, int32(6), decimal64DivType.Scale)
 	require.Equal(t, types.T_decimal128, decimal128DivType.Oid)
 	require.Equal(t, int32(38), decimal128DivType.Width)
-	require.Equal(t, int32(8), decimal128DivType.Scale)
+	require.Equal(t, int32(6), decimal128DivType.Scale)
 	require.Equal(t, types.T_decimal256, decimal256DivType.Oid)
 	require.Equal(t, int32(65), decimal256DivType.Width)
-	require.Equal(t, int32(8), decimal256DivType.Scale)
+	require.Equal(t, int32(6), decimal256DivType.Scale)
 	testCases := []testCase{
 		{
 			name: "signed integer divide",

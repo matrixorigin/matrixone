@@ -2194,27 +2194,20 @@ var supportedOperators = []FuncNew{
 			{
 				overloadId: 0,
 				retType: func(parameters []types.Type) types.Type {
-					if parameters[0].Oid == types.T_decimal256 || parameters[1].Oid == types.T_decimal256 {
-						scale := int32(12)
-						scale1 := parameters[0].Scale
-						if scale > scale1+6 {
-							scale = scale1 + 6
+					if result, ok := decimalDivisionReturnType(
+						parameters, parameters, DefaultDivPrecisionIncrement,
+					); ok {
+						// Context-aware binding promotes operands together with the
+						// result. Keep the raw overload callback physically compatible
+						// for legacy direct execution, which bypasses binding casts.
+						if result.Oid == types.T_decimal256 &&
+							parameters[0].Oid != types.T_decimal256 && parameters[1].Oid != types.T_decimal256 {
+							result.Oid = types.T_decimal128
+							if result.Width > 38 {
+								result.Width = 38
+							}
 						}
-						if scale < scale1 {
-							scale = scale1
-						}
-						return types.New(types.T_decimal256, 65, scale)
-					}
-					if parameters[0].Oid.IsDecimal() {
-						scale := int32(12)
-						scale1 := parameters[0].Scale
-						if scale1 > scale {
-							scale = scale1
-						}
-						if scale1+6 < scale {
-							scale = scale1 + 6
-						}
-						return types.New(types.T_decimal128, 38, scale)
+						return result
 					}
 					if parameters[0].Oid == types.T_year {
 						return types.T_float64.ToType()

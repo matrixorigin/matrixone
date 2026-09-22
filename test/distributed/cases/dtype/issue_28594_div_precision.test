@@ -1,0 +1,55 @@
+-- @suite
+
+-- @case
+-- @desc: div_precision_increment controls DECIMAL division values and metadata
+-- @label:bvt
+--- @metacmp(true)
+
+drop database if exists issue_28594_div_precision;
+create database issue_28594_div_precision;
+use issue_28594_div_precision;
+
+create table operands (a decimal(10,2), b decimal(10,2));
+insert into operands values (1, 3);
+
+set session div_precision_increment = 0;
+select a / b as q from operands;
+create table result_0 as select a / b as q from operands;
+show create table result_0;
+
+set session div_precision_increment = 4;
+select a / b as q from operands;
+create table result_4 as select a / b as q from operands;
+show create table result_4;
+
+set session div_precision_increment = 10;
+select a / b as q from operands;
+
+set session div_precision_increment = 30;
+select a / b as q from operands;
+create table result_30 as select a / b as q from operands;
+show create table result_30;
+
+create table wide_operands (a decimal(50,10), b decimal(10,0));
+insert into wide_operands values (1, 3);
+
+set session div_precision_increment = 0;
+select a / b as q from wide_operands;
+set session div_precision_increment = 4;
+select a / b as q from wide_operands;
+set session div_precision_increment = 10;
+select a / b as q from wide_operands;
+set session div_precision_increment = 30;
+select a / b as q from wide_operands;
+select cast(99999999999999999999999999999999999999999999999999999999999999999 as decimal(65,0)) /
+       cast(99999999999999999999999999999999999999999999999999999999999999999 as decimal(65,0)) as q;
+
+set session div_precision_increment = 10;
+prepare div_precision_stmt from 'select a / b as q from operands';
+execute div_precision_stmt;
+set session div_precision_increment = 30;
+execute div_precision_stmt;
+deallocate prepare div_precision_stmt;
+
+set session div_precision_increment = 4;
+drop database issue_28594_div_precision;
