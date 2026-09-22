@@ -58,6 +58,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minusall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mongoscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
@@ -689,8 +690,35 @@ func fillInstructionsForScope(s *Scope, ctx *scopeContext, p *pipeline.Pipeline,
 		if err != nil {
 			return err
 		}
+		if _, ok := ins.(*minusall.MinusAll); ok {
+			if err := s.restoreMinusAllChildren(ins); err != nil {
+				ins.Release()
+				return err
+			}
+			continue
+		}
 		s.doSetRootOperator(ins)
 	}
+	return nil
+}
+
+// restoreMinusAllChildren reverses the fixed post-order wire shape emitted for
+// the binary set operator: left merge, right merge, MinusAll. The legacy remote
+// instruction decoder otherwise rebuilds every instruction as a unary chain.
+func (s *Scope) restoreMinusAllChildren(op vm.Operator) error {
+	right := s.RootOp
+	if right == nil || right.OpType() != vm.Merge || right.GetOperatorBase().NumChildren() != 1 {
+		return moerr.NewInternalErrorNoCtx("invalid remote MINUS ALL right input")
+	}
+	left := right.GetOperatorBase().GetChildren(0)
+	if left == nil || left.OpType() != vm.Merge || left.GetOperatorBase().NumChildren() != 0 {
+		return moerr.NewInternalErrorNoCtx("invalid remote MINUS ALL left input")
+	}
+	right.GetOperatorBase().SetChild(nil, 0)
+	right.GetOperatorBase().ResetChildren()
+	op.AppendChild(left)
+	op.AppendChild(right)
+	s.RootOp = op
 	return nil
 }
 
@@ -968,6 +996,8 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *intersect.Intersect:
 		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
 	case *minus.Minus:
+		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
+	case *minusall.MinusAll:
 		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
 	case *intersectall.IntersectAll:
 		in.SetOp = &pipeline.SetOp{KeyExprs: t.KeyExprs}
@@ -1619,6 +1649,12 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		op = arg
 	case vm.Minus:
 		arg := minus.NewArgument()
+		if setOp := opr.GetSetOp(); setOp != nil {
+			arg.KeyExprs = setOp.GetKeyExprs()
+		}
+		op = arg
+	case vm.MinusAll:
+		arg := minusall.NewArgument()
 		if setOp := opr.GetSetOp(); setOp != nil {
 			arg.KeyExprs = setOp.GetKeyExprs()
 		}
