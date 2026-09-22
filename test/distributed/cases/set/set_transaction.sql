@@ -22,6 +22,9 @@ select @@session.transaction_read_only, @@session.tx_read_only;
 set session transaction isolation level repeatable read, read only;
 select @@session.transaction_read_only, @@session.tx_read_only;
 select @@transaction_isolation;
+set session transaction read write, isolation level read committed;
+select @@session.transaction_read_only, @@session.tx_read_only;
+select @@transaction_isolation;
 
 -- Duplicate and conflicting characteristics are rejected before state changes.
 set session transaction isolation level read committed, isolation level read committed;

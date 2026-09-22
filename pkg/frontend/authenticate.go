@@ -12519,8 +12519,8 @@ func doRevokePrivilegeImplicitly(
 }
 
 // doSetGlobalSystemVariables persists equivalent compatibility names in one
-// catalog transaction. transaction_isolation uses this to update both the
-// canonical name and tx_isolation so old and new CNs agree during a rolling
+// catalog transaction. Transaction characteristic aliases use this to update
+// both canonical and legacy names so old and new CNs agree during a rolling
 // upgrade.
 func doSetGlobalSystemVariables(
 	ctx context.Context,

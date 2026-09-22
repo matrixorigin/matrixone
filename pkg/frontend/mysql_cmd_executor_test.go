@@ -861,6 +861,9 @@ func TestSetTransactionDoesNotFinishExistingTransaction(t *testing.T) {
 	t.Run("session system variable scope preserves prior work", func(t *testing.T) {
 		run(t, "set session transaction_isolation = 'READ-COMMITTED'", "")
 	})
+	t.Run("session read-only system variable scope preserves prior work", func(t *testing.T) {
+		run(t, "set session transaction_read_only = 1", "")
+	})
 	t.Run("rejected next scope preserves prior work", func(t *testing.T) {
 		run(t,
 			"set transaction isolation level read committed",
@@ -959,6 +962,109 @@ func TestTransactionIsolationAliasUsesCanonicalState(t *testing.T) {
 	vars.mu.Unlock()
 	require.Equal(t, "REPEATABLE-READ", canonicalValue)
 	require.Equal(t, "REPEATABLE-READ", aliasValue)
+}
+
+func TestGenericTransactionReadOnlyAssignments(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	execSet := func(sql string) error {
+		t.Helper()
+		stmt, err := mysql.ParseOne(ctx, sql, 1)
+		require.NoError(t, err)
+		_, err = execInFrontend(ses, &ExecCtx{reqCtx: ctx, stmt: stmt})
+		return err
+	}
+	assertReadOnly := func(want int64) {
+		t.Helper()
+		for _, name := range []string{
+			transactionReadOnlySystemVariable,
+			transactionReadOnlySystemVariableAlias,
+		} {
+			got, err := ses.GetSessionSysVar(name)
+			require.NoError(t, err)
+			require.Equal(t, want, got, name)
+		}
+	}
+
+	// Both SQL spellings are one canonical session state, including direct
+	// generic SET assignments rather than only SET TRANSACTION syntax.
+	require.NoError(t, execSet("set session transaction_read_only = 1"))
+	assertReadOnly(1)
+	require.NoError(t, execSet("set session tx_read_only = 0"))
+	assertReadOnly(0)
+
+	// SESSION DEFAULT inherits the account-global value. The static default is
+	// only used by GLOBAL DEFAULT.
+	ses.gSysVars.Set(transactionReadOnlySystemVariable, int64(1))
+	require.NoError(t, execSet("set session transaction_read_only = default"))
+	assertReadOnly(1)
+
+	// An unqualified @@ read-only assignment is NEXT scope and must not be
+	// silently treated as a SESSION assignment.
+	for _, sql := range []string{
+		"set @@transaction_read_only = 0",
+		"set @@tx_read_only = 0",
+	} {
+		err := execSet(sql)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+		require.ErrorContains(t, err, "transaction access mode")
+		assertReadOnly(1)
+	}
+
+	// Literal transaction assignments are prevalidated as a bounded atomic
+	// prefix, so an unsupported isolation level cannot leave read-only changed.
+	require.NoError(t, ses.SetSessionSysVar(ctx, transactionReadOnlySystemVariable, int64(0)))
+	require.NoError(t, ses.SetSessionSysVar(ctx, transactionIsolationSystemVariable, "REPEATABLE-READ"))
+	assertReadOnly(0)
+	err := execSet("set session transaction_read_only = 1, transaction_isolation = 'READ-UNCOMMITTED'")
+	require.ErrorContains(t, err, "is not supported")
+	assertReadOnly(0)
+	gotIsolation, err := ses.GetSessionSysVar(transactionIsolationSystemVariable)
+	require.NoError(t, err)
+	require.Equal(t, "REPEATABLE-READ", gotIsolation)
+
+	// The reverse clause order is a supported mixed assignment as well.
+	require.NoError(t,
+		execSet("set session transaction_read_only = 1, transaction_isolation = 'READ-COMMITTED'"))
+	assertReadOnly(1)
+	gotIsolation, err = ses.GetSessionSysVar(transactionIsolationSystemVariable)
+	require.NoError(t, err)
+	require.Equal(t, "READ-COMMITTED", gotIsolation)
+}
+
+func TestGlobalSystemVariablesLoadReadOnlyAlias(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	rows := [][]interface{}{
+		{transactionReadOnlySystemVariableAlias, "0"},
+		{transactionReadOnlySystemVariable, "1"},
+	}
+	stub := gostub.Stub(&ExeSqlInBgSes, func(
+		context.Context,
+		BackgroundExec,
+		string,
+	) ([]ExecResult, error) {
+		return []ExecResult{newMrsForGlobalSystemVariables(rows)}, nil
+	})
+	defer stub.Reset()
+
+	vars, err := ses.getGlobalSysVars(ctx, nil)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), vars[transactionReadOnlySystemVariable])
+	require.Equal(t, int64(1), vars[transactionReadOnlySystemVariableAlias])
+
+	rows = [][]interface{}{{transactionReadOnlySystemVariableAlias, "1"}}
+	vars, err = ses.getGlobalSysVars(ctx, nil)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), vars[transactionReadOnlySystemVariable])
+	require.Equal(t, int64(1), vars[transactionReadOnlySystemVariableAlias])
 }
 
 func TestSetTransactionIsolationAppliedToTxnMeta(t *testing.T) {
@@ -1471,7 +1577,7 @@ func TestPrepareConsumesNextTransactionIsolationWhenAutocommitOff(t *testing.T) 
 }
 
 func TestHandleSetGlobalTransaction(t *testing.T) {
-	ctx := context.Background()
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
 	bh := &backgroundExecTest{}
 	bh.init()
 	bh.sql2result["begin;"] = nil
@@ -1509,6 +1615,33 @@ func TestHandleSetGlobalTransaction(t *testing.T) {
 	require.Contains(t, bh.executedSQLs,
 		getSqlForInsertSysVarWithAccount(
 			sysAccountID, sysAccountName, "tx_isolation", "READ-COMMITTED"))
+
+	bh.sql2result[getSqlForGetSysVarWithAccount(sysAccountID, transactionReadOnlySystemVariable)] =
+		newMrsForSystemVariableNameOfAccount(nil)
+	bh.sql2result[getSqlForInsertSysVarWithAccount(
+		sysAccountID, sysAccountName, transactionReadOnlySystemVariable, "1")] = nil
+	bh.sql2result[getSqlForGetSysVarWithAccount(sysAccountID, transactionReadOnlySystemVariableAlias)] =
+		newMrsForSystemVariableNameOfAccount(nil)
+	bh.sql2result[getSqlForInsertSysVarWithAccount(
+		sysAccountID, sysAccountName, transactionReadOnlySystemVariableAlias, "1")] = nil
+
+	readOnlyStmt, err := mysql.ParseOne(ctx,
+		"set global transaction_read_only = 1", 1)
+	require.NoError(t, err)
+	_, err = execInFrontend(ses, &ExecCtx{reqCtx: ctx, stmt: readOnlyStmt})
+	require.NoError(t, err)
+	require.Contains(t, bh.executedSQLs,
+		getSqlForInsertSysVarWithAccount(
+			sysAccountID, sysAccountName, transactionReadOnlySystemVariable, "1"))
+	require.Contains(t, bh.executedSQLs,
+		getSqlForInsertSysVarWithAccount(
+			sysAccountID, sysAccountName, transactionReadOnlySystemVariableAlias, "1"))
+	readOnlyValue, err := ses.GetGlobalSysVar(transactionReadOnlySystemVariable)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), readOnlyValue)
+	readOnlyValue, err = ses.GetGlobalSysVar(transactionReadOnlySystemVariableAlias)
+	require.NoError(t, err)
+	require.Equal(t, int64(1), readOnlyValue)
 
 	got, err := ses.GetGlobalSysVar("transaction_isolation")
 	require.NoError(t, err)

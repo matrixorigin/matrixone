@@ -31,6 +31,13 @@ select @@session.transaction_read_only, @@session.tx_read_only;
 select @@transaction_isolation;
 @@transaction_isolation
 REPEATABLE-READ
+set session transaction read write, isolation level read committed;
+select @@session.transaction_read_only, @@session.tx_read_only;
+➤ @@transaction_read_only[12,0,0]  ¦  @@tx_read_only[12,0,0]  𝄀
+0  ¦  0
+select @@transaction_isolation;
+@@transaction_isolation
+READ-COMMITTED
 set session transaction isolation level read committed, isolation level read committed;
 invalid input: transaction isolation level specified more than once
 set session transaction isolation level read committed, isolation level repeatable read;
@@ -41,7 +48,7 @@ set session transaction read only, read write;
 invalid input: transaction access mode specified more than once
 select @@transaction_isolation, @@session.transaction_read_only, @@session.tx_read_only;
 ➤ @@transaction_isolation[12,0,0]  ¦  @@transaction_read_only[12,0,0]  ¦  @@tx_read_only[12,0,0]  𝄀
-REPEATABLE-READ  ¦  1  ¦  1
+READ-COMMITTED  ¦  0  ¦  0
 set session transaction_read_only = @saved_session_transaction_read_only;
 set session tx_read_only = @saved_session_tx_read_only;
 set session transaction_isolation = @saved_session_transaction_isolation;

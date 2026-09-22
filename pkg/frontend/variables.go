@@ -1144,18 +1144,38 @@ type SystemVariables struct {
 const (
 	transactionIsolationSystemVariable      = "transaction_isolation"
 	transactionIsolationSystemVariableAlias = "tx_isolation"
+	transactionReadOnlySystemVariable       = "transaction_read_only"
+	transactionReadOnlySystemVariableAlias  = "tx_read_only"
 )
 
 func canonicalSystemVariableName(name string) string {
 	name = strings.ToLower(name)
-	if name == transactionIsolationSystemVariableAlias {
+	switch name {
+	case transactionIsolationSystemVariableAlias:
 		return transactionIsolationSystemVariable
+	case transactionReadOnlySystemVariableAlias:
+		return transactionReadOnlySystemVariable
 	}
 	return name
 }
 
 func isTransactionIsolationSystemVariable(name string) bool {
 	return canonicalSystemVariableName(name) == transactionIsolationSystemVariable
+}
+
+func isTransactionReadOnlySystemVariable(name string) bool {
+	return canonicalSystemVariableName(name) == transactionReadOnlySystemVariable
+}
+
+func transactionSystemVariableAlias(name string) string {
+	switch canonicalName := canonicalSystemVariableName(name); canonicalName {
+	case transactionIsolationSystemVariable:
+		return transactionIsolationSystemVariableAlias
+	case transactionReadOnlySystemVariable:
+		return transactionReadOnlySystemVariableAlias
+	default:
+		return ""
+	}
 }
 
 func (sv *SystemVariables) getMutationGeneration() uint64 {
@@ -1191,11 +1211,14 @@ func (sv *SystemVariables) Get(name string) interface{} {
 	defer sv.mu.Unlock()
 	name = canonicalSystemVariableName(name)
 	value, ok := sv.mp[name]
-	if !ok && name == transactionIsolationSystemVariable {
+	if !ok {
 		// Accept an in-memory snapshot produced by an older node that only
-		// populated the legacy alias. Catalog loading normalizes this state, but
-		// the fallback also keeps rolling upgrades and tests deterministic.
-		return sv.mp[transactionIsolationSystemVariableAlias]
+		// populated a legacy transaction-variable alias. Catalog loading
+		// normalizes this state, but the fallback keeps rolling upgrades and
+		// tests deterministic.
+		if alias := transactionSystemVariableAlias(name); alias != "" {
+			value, ok = sv.mp[alias]
+		}
 	}
 	return value
 }
@@ -1205,10 +1228,10 @@ func (sv *SystemVariables) Set(name string, value interface{}) {
 	defer sv.mu.Unlock()
 	name = canonicalSystemVariableName(name)
 	sv.mp[name] = value
-	if name == transactionIsolationSystemVariable {
+	if alias := transactionSystemVariableAlias(name); alias != "" {
 		// Keep SHOW-style map iteration and any legacy direct lookup coherent
 		// while all semantic reads resolve through the canonical name.
-		sv.mp[transactionIsolationSystemVariableAlias] = value
+		sv.mp[alias] = value
 	}
 	sv.mutationGeneration++
 }
