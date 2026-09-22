@@ -24,6 +24,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	planpkg "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
@@ -671,6 +673,56 @@ func TestBuildSQLJSONPlanPreservesSamplePolicy(t *testing.T) {
 	require.Equal(t, []string{"sample_rows=1", "sample_using_row=false"}, rows)
 	require.Equal(t, []string{"sample_rows=100", "sample_using_row=true"}, moreRows)
 	require.Equal(t, []string{"sample_percent=12.5", "sample_using_row=true"}, percent)
+}
+
+func TestBuildSQLJSONPlanPreservesPlannerAggregateDistinct(t *testing.T) {
+	nodes := buildPlannerSQLJSONNodes(t,
+		"select n_nationkey, sum(distinct n_regionkey), sum(n_nationkey) from nation group by n_nationkey")
+	var aggregate string
+	for _, node := range nodes {
+		if strings.Contains(strings.ToLower(node.Operator), "agg") {
+			aggregate = node.Aggregate
+			break
+		}
+	}
+	require.NotEmpty(t, aggregate)
+	require.Contains(t, aggregate, "DISTINCT")
+	require.Contains(t, aggregate, "sum(")
+	require.NotEqual(t, "sum(DISTINCT n_regionkey)", aggregate,
+		"the non-DISTINCT control must remain visible in the same aggregate node")
+}
+
+func TestBuildSQLJSONPlanPreservesPlannerSampleRoles(t *testing.T) {
+	nodes := buildPlannerSQLJSONNodes(t,
+		"select n_regionkey, sample(n_nationkey + 1, 2 rows) from nation group by n_regionkey")
+	var sample sqlJSONNode
+	for _, node := range nodes {
+		if strings.Contains(strings.ToLower(node.Operator), "sample") {
+			sample = node
+			break
+		}
+	}
+	require.NotEmpty(t, sample.ID)
+	require.Contains(t, sample.GroupBy, "n_regionkey")
+	require.NotEmpty(t, sample.Aggregate)
+	require.Contains(t, sample.Aggregate, "+")
+}
+
+func buildPlannerSQLJSONNodes(t *testing.T, sql string) []sqlJSONNode {
+	t.Helper()
+	stmt, err := mysql.ParseOne(t.Context(), sql, 1)
+	require.NoError(t, err)
+	query, err := planpkg.NewBaseOptimizer(planpkg.NewMockCompilerContext(true)).Optimize(stmt, false)
+	require.NoError(t, err)
+	data, err := BuildSQLJSONPlan(t.Context(), query)
+	require.NoError(t, err)
+	var decoded struct {
+		MatrixOne struct {
+			Nodes []sqlJSONNode `json:"nodes"`
+		} `json:"matrixone"`
+	}
+	require.NoError(t, json.Unmarshal(data, &decoded))
+	return decoded.MatrixOne.Nodes
 }
 
 func TestBuildSQLJSONPlanPreservesVectorExecutionSettings(t *testing.T) {

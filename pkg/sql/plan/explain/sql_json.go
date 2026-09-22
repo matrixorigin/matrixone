@@ -380,6 +380,14 @@ func (b *sqlJSONPlanBuilder) addNodeDetails(item *sqlJSONNode, node *plan.Node) 
 		if err != nil {
 			return err
 		}
+		item.GroupBy, err = sqlJSONExprList(b.ctx, node.GroupBy, &b.textOpts)
+		if err != nil {
+			return err
+		}
+		item.Aggregate, err = sqlJSONExprList(b.ctx, node.AggList, &b.textOpts)
+		if err != nil {
+			return err
+		}
 	case plan.Node_PARTITION:
 		buf := bytes.NewBuffer(make([]byte, 0, 128))
 		if err := NewOrderByDescribeImpl(node.OrderBy).GetDescription(b.ctx, &b.textOpts, buf); err != nil {

@@ -255,6 +255,86 @@ func TestJSONExplainPreservesTimestampPrecisionAndCompleteLiteralVector(t *testi
 	}
 }
 
+func TestLiteralVecExplainPreservesTypedScaleBoundariesAndNulls(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	datetimeType := types.T_datetime.ToTypeWithScale(6)
+	datetimeVec := vector.NewVec(datetimeType)
+	dt, err := types.ParseDatetime("2024-01-02 03:04:05.123456", 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = vector.AppendFixed[types.Datetime](datetimeVec, dt, false, mp); err != nil {
+		t.Fatal(err)
+	}
+	if err = vector.AppendFixed[types.Datetime](datetimeVec, 0, true, mp); err != nil {
+		t.Fatal(err)
+	}
+	datetimeData, err := datetimeVec.MarshalBinary()
+	datetimeVec.Free(mp)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	decimalType := types.T_decimal64.ToTypeWithScale(2)
+	decimalVec := vector.NewVec(decimalType)
+	first, err := types.ParseDecimal64("1.20", decimalType.Width, decimalType.Scale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := types.ParseDecimal64("12.00", decimalType.Width, decimalType.Scale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = vector.AppendFixed[types.Decimal64](decimalVec, first, false, mp); err != nil {
+		t.Fatal(err)
+	}
+	if err = vector.AppendFixed[types.Decimal64](decimalVec, second, false, mp); err != nil {
+		t.Fatal(err)
+	}
+	decimalData, err := decimalVec.MarshalBinary()
+	decimalVec.Free(mp)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for name, test := range map[string]struct {
+		typ  planpb.Type
+		data []byte
+		want string
+	}{
+		"datetime": {
+			typ:  planpb.Type{Id: int32(types.T_datetime), Scale: 6},
+			data: datetimeData,
+			want: "[2024-01-02 03:04:05.123456, NULL]",
+		},
+		"decimal": {
+			typ:  planpb.Type{Id: int32(types.T_decimal64), Scale: 2},
+			data: decimalData,
+			want: "[1.20, 12.00]",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			expr := &planpb.Expr{
+				Typ: test.typ,
+				Expr: &planpb.Expr_Vec{Vec: &planpb.LiteralVec{
+					Len:  int32(strings.Count(test.want, ",") + 1),
+					Data: test.data,
+				}},
+			}
+			var buf bytes.Buffer
+			if err := describeExpr(t.Context(), expr, &ExplainOptions{
+				Format:                 EXPLAIN_FORMAT_JSON,
+				CompleteLiteralVectors: true,
+			}, &buf); err != nil {
+				t.Fatal(err)
+			}
+			if got := buf.String(); got != test.want {
+				t.Fatalf("typed literal vector rendering changed: got %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestPublicSerializedINListExplainIsOpaqueAndPrintable(t *testing.T) {
 	planText := explainSQLForSerializedTest(
 		t,

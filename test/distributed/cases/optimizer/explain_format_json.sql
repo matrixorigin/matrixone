@@ -23,9 +23,35 @@ explain format=json with c as (select id from t) select * from c;
 -- @regex("(?s)matrixone.*operator.*Window",true)
 explain format=json select id, row_number() over (order by id) as rn from t;
 
+-- Aggregate layout must preserve DISTINCT and the non-DISTINCT control.
+-- @regex("(?s)operator.*Agg.*aggregate.*DISTINCT.*sum",true)
+explain format=json select id, sum(distinct v), sum(id) from t group by id;
+
+-- Grouped SAMPLE keeps both its group key and computed sampled expression.
+-- @regex("(?s)operator.*Sample.*group_by.*id.*aggregate.*[+]",true)
+explain format=json select id, sample(v + 1, 1 rows) from t group by id;
+
 -- Typed table-function identity must remain visible in the MatrixOne graph.
 -- @regex("(?s)matrixone.*operator.*Function Scan.*table_name.*generate_series",true)
 explain format=json select * from generate_series(1, 5) g;
+
+-- Production optimizer vector scans retain query identity, probe count and bounds.
+create table vectors(id bigint primary key, v vecf32(3));
+insert into vectors values (1,'[0,0,0]'),(2,'[1,1,1]'),(3,'[2,2,2]');
+create index ix using ivfflat on vectors(v) lists=1 op_type 'vector_l2_ops';
+set probe_limit=1;
+-- @regex("(?s)Vector Index Scan.*query_vector=0x0000803F0000803F0000803F",true)
+explain format=json select id from vectors order by l2_distance(v,'[1,1,1]') limit 2;
+-- @regex("(?s)Vector Index Scan.*query_vector=0x000000400000004000000040",true)
+explain format=json select id from vectors order by l2_distance(v,'[2,2,2]') limit 2;
+set probe_limit=16;
+-- @regex("(?s)Vector Index Scan.*initial_probe_count=16",true)
+explain format=json select id from vectors order by l2_distance(v,'[1,1,1]') limit 2;
+-- @regex("(?s)Vector Index Scan.*distance_upper_bound_type=EXCLUSIVE.*distance_upper_bound=5[^0-9]",true)
+explain format=json select id from vectors where l2_distance(v,'[1,1,1]') < 5 order by l2_distance(v,'[1,1,1]') limit 2;
+-- @regex("(?s)Vector Index Scan.*distance_upper_bound_type=EXCLUSIVE.*distance_upper_bound=50[^0-9]",true)
+explain format=json select id from vectors where l2_distance(v,'[1,1,1]') < 50 order by l2_distance(v,'[1,1,1]') limit 2;
+set probe_limit=default;
 
 -- ANALYZE FALSE is normalized to ordinary JSON EXPLAIN and must not start a runner.
 -- @regex("(?s)query_block.*matrixone.*schema_version",true)

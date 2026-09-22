@@ -261,14 +261,120 @@ func literalVecText(literalVec *plan.LiteralVec, complete bool) (text string) {
 	}
 
 	originalLen := vec.Length()
-	if !complete && originalLen > 16 {
-		vec.SetLength(16)
+	if !complete {
+		// Preserve the established text EXPLAIN display contract.
+		if originalLen > 16 {
+			vec.SetLength(16)
+		}
+		text = printableVectorText(vec.String())
+		if originalLen > 16 {
+			text += fmt.Sprintf("... %v values", originalLen)
+		}
+		return text
 	}
-	text = printableVectorText(vec.String())
-	if !complete && originalLen > 16 {
-		text += fmt.Sprintf("... %v values", originalLen)
+	renderLen := originalLen
+	values := make([]string, 0, renderLen)
+	for i := 0; i < renderLen; i++ {
+		values = append(values, literalVecElementText(vec, i))
+	}
+	if renderLen == 1 {
+		text = values[0]
+	} else {
+		text = "[" + strings.Join(values, ", ") + "]"
 	}
 	return text
+}
+
+// literalVecElementText renders one element with the type and scale carried by
+// the vector wire payload. Vector.String is a display helper, not a lossless
+// plan format: it drops decimal scale, uses a timestamp display default, and
+// leaves varlen element boundaries implicit. EXPLAIN must keep distinct plan
+// values distinguishable, including NULLs and values beyond the truncation
+// boundary.
+func literalVecElementText(vec *vector.Vector, index int) string {
+	if vec.IsNull(uint64(index)) {
+		return "NULL"
+	}
+	typ := vec.GetType()
+	if typ == nil {
+		return "<invalid-vector>"
+	}
+	switch typ.Oid {
+	case types.T_bool:
+		return strconv.FormatBool(vector.GetFixedAtWithTypeCheck[bool](vec, index))
+	case types.T_bit:
+		return strconv.FormatUint(vector.GetFixedAtWithTypeCheck[uint64](vec, index), 10)
+	case types.T_int8:
+		return strconv.FormatInt(int64(vector.GetFixedAtWithTypeCheck[int8](vec, index)), 10)
+	case types.T_int16:
+		return strconv.FormatInt(int64(vector.GetFixedAtWithTypeCheck[int16](vec, index)), 10)
+	case types.T_int32:
+		return strconv.FormatInt(int64(vector.GetFixedAtWithTypeCheck[int32](vec, index)), 10)
+	case types.T_int64:
+		return strconv.FormatInt(vector.GetFixedAtWithTypeCheck[int64](vec, index), 10)
+	case types.T_uint8:
+		return strconv.FormatUint(uint64(vector.GetFixedAtWithTypeCheck[uint8](vec, index)), 10)
+	case types.T_uint16:
+		return strconv.FormatUint(uint64(vector.GetFixedAtWithTypeCheck[uint16](vec, index)), 10)
+	case types.T_uint32:
+		return strconv.FormatUint(uint64(vector.GetFixedAtWithTypeCheck[uint32](vec, index)), 10)
+	case types.T_uint64:
+		return strconv.FormatUint(vector.GetFixedAtWithTypeCheck[uint64](vec, index), 10)
+	case types.T_float32:
+		return strconv.FormatFloat(float64(vector.GetFixedAtWithTypeCheck[float32](vec, index)), 'g', -1, 32)
+	case types.T_float64:
+		return strconv.FormatFloat(vector.GetFixedAtWithTypeCheck[float64](vec, index), 'g', -1, 64)
+	case types.T_date:
+		return vector.GetFixedAtWithTypeCheck[types.Date](vec, index).String()
+	case types.T_datetime:
+		return vector.GetFixedAtWithTypeCheck[types.Datetime](vec, index).String2(typ.Scale)
+	case types.T_time:
+		return vector.GetFixedAtWithTypeCheck[types.Time](vec, index).String2(typ.Scale)
+	case types.T_timestamp:
+		return vector.GetFixedAtWithTypeCheck[types.Timestamp](vec, index).String2(time.UTC, typ.Scale)
+	case types.T_decimal64:
+		return vector.GetFixedAtWithTypeCheck[types.Decimal64](vec, index).Format(typ.Scale)
+	case types.T_decimal128:
+		return vector.GetFixedAtWithTypeCheck[types.Decimal128](vec, index).Format(typ.Scale)
+	case types.T_decimal256:
+		return vector.GetFixedAtWithTypeCheck[types.Decimal256](vec, index).Format(typ.Scale)
+	case types.T_enum:
+		return vector.GetFixedAtWithTypeCheck[types.Enum](vec, index).String()
+	case types.T_year:
+		return vector.GetFixedAtWithTypeCheck[types.MoYear](vec, index).String()
+	case types.T_uuid:
+		return vector.GetFixedAtWithTypeCheck[types.Uuid](vec, index).String()
+	case types.T_TS:
+		return vector.GetFixedAtWithTypeCheck[types.TS](vec, index).String()
+	case types.T_Rowid:
+		return vector.GetFixedAtWithTypeCheck[types.Rowid](vec, index).String()
+	case types.T_Blockid:
+		blockID := vector.GetFixedAtWithTypeCheck[types.Blockid](vec, index)
+		return blockID.String()
+	case types.T_char, types.T_varchar, types.T_json, types.T_text, types.T_blob, types.T_datalink,
+		types.T_geometry, types.T_geometry32:
+		value := vec.GetStringAt(index)
+		if isPrintableUTF8(value) {
+			return strconv.Quote(value)
+		}
+		return fmt.Sprintf("0x%X", []byte(value))
+	case types.T_binary, types.T_varbinary:
+		return fmt.Sprintf("0x%X", []byte(vec.GetStringAt(index)))
+	case types.T_array_float32:
+		return fmt.Sprintf("%v", vector.GetArrayAt[float32](vec, index))
+	case types.T_array_float64:
+		return fmt.Sprintf("%v", vector.GetArrayAt[float64](vec, index))
+	case types.T_array_bf16:
+		return fmt.Sprintf("%v", vector.GetArrayAt[types.BF16](vec, index))
+	case types.T_array_float16:
+		return fmt.Sprintf("%v", vector.GetArrayAt[types.Float16](vec, index))
+	case types.T_array_int8:
+		return fmt.Sprintf("%v", vector.GetArrayAt[int8](vec, index))
+	case types.T_array_uint8:
+		return fmt.Sprintf("%v", vector.GetArrayAt[uint8](vec, index))
+	default:
+		return printableVectorText(fmt.Sprint(vec.String()))
+	}
 }
 
 // geometryLiteralText renders a geometry literal's WKB payload as WKT so
@@ -328,6 +434,9 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Function, Typ *plan.Typ
 			return explainOrderedPercentile(ctx, funcExpr, options, buf)
 		}
 		buf.WriteString(funcExpr.Func.GetObjName() + "(")
+		if uint64(funcExpr.Func.Obj)&function.Distinct != 0 {
+			buf.WriteString("DISTINCT ")
+		}
 		if needSpecialHandling(funcExpr) {
 			//contains invisible character, need special handling
 			err = describeExpr(ctx, funcExpr.Args[0], options, buf)
