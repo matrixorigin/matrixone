@@ -96,7 +96,16 @@ func PairWiseDistance[T types.ArrayElement](
 		if err != nil {
 			return nil, err
 		}
-		return PairwiseDistanceWait(handle, metric)
+		out, err := PairwiseDistanceWait(handle, metric)
+		if err != nil {
+			return nil, err
+		}
+		if metric == Metric_L2Distance {
+			if err := CheckL2Finite(out); err != nil {
+				return nil, err
+			}
+		}
+		return out, nil
 	}
 
 	return GoPairWiseDistance(x, y, metric)

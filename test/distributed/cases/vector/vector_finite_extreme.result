@@ -1,0 +1,53 @@
+drop database if exists vec_extreme;
+create database vec_extreme;
+use vec_extreme;
+create table t32(id int primary key, v vecf32(2));
+insert into t32 values (1, '[2e19,2e19]'), (2, '[3,4]');
+select id, l2_distance(v, '[0,0]') from t32 order by id;
+➤ id[4,32,0]  ¦  l2_distance(v, [0,0])[8,53,31]  𝄀
+1  ¦  2.8284270320491168E19  𝄀
+2  ¦  5.0
+select a.id, l2_distance(a.v, b.v) from t32 a join t32 b on b.id = 2 order by a.id;
+➤ id[4,32,0]  ¦  l2_distance(a.v, b.v)[8,53,31]  𝄀
+1  ¦  2.8284270320491168E19  𝄀
+2  ¦  0.0
+select l2_distance(v, '[0,0]') = l2_distance('[0,0]', v) as symmetric from t32 order by id;
+➤ symmetric[-7,1,0]  𝄀
+1  𝄀
+1
+create table t32n(id int primary key, v vecf32(2));
+insert into t32n values (1, '[2e19,2e19]'), (2, null);
+select id, l2_distance(v, '[0,0]') from t32n order by id;
+➤ id[4,32,0]  ¦  l2_distance(v, [0,0])[8,53,31]  𝄀
+1  ¦  2.8284270320491168E19  𝄀
+2  ¦  null
+create table tz(id int primary key, v vecf32(2));
+insert into tz values (1, '[0,0]'), (2, '[1,1]');
+select cosine_similarity(v, '[1,1]') from tz order by id;
+internal error: cosine similarity: one of the vector is zero
+select cosine_similarity(v, v) from tz order by id;
+internal error: cosine similarity: one of the vector is zero
+select id, cosine_distance(v, '[1,1]') from tz order by id;
+➤ id[4,32,0]  ¦  cosine_distance(v, [1,1])[8,53,31]  𝄀
+1  ¦  1.0  𝄀
+2  ¦  2.220446049250313E-16
+create table t64(id int primary key, v vecf64(2));
+insert into t64 values (1, '[1e200,1e200]'), (2, '[3,4]');
+select cosine_distance(v, '[1e200,1e200]') from t64 order by id;
+internal error: cosine distance: vector magnitude overflows the float64 domain
+select cosine_similarity(v, '[1e200,1e200]') from t64 order by id;
+internal error: cosine similarity: vector magnitude overflows the float64 domain
+select id, cosine_distance(v, '[3,4]') from t64 where id = 2;
+➤ id[4,32,0]  ¦  cosine_distance(v, [3,4])[8,53,31]  𝄀
+2  ¦  0.0
+select normalize_l2(v) from t64 order by id;
+internal error: cannot normalize vector: its squared norm overflows the float64 domain
+create table tsmall(id int primary key, v vecf64(2));
+insert into tsmall values (1, '[1e-300,1e-300]'), (2, '[0,0]'), (3, '[3,4]');
+select normalize_l2(v) from tsmall where id = 1;
+internal error: cannot normalize vector: its squared norm underflows the float64 domain
+select id, normalize_l2(v) from tsmall where id in (2,3) order by id;
+➤ id[4,32,0]  ¦  normalize_l2(v)[12,2,0]  𝄀
+2  ¦  [0, 0]  𝄀
+3  ¦  [0.6, 0.8]
+drop database vec_extreme;

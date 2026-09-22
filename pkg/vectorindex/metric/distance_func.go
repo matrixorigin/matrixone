@@ -251,9 +251,19 @@ func CosineDistance[T types.RealNumbers](p, q []T) (T, error) {
 		i++
 	}
 
-	// The denominator is the product of the L2 norms (Euclidean lengths).
-	// We must cast to float64 to use the standard library's math.Sqrt.
+	// The denominator is the product of the L2 norms (Euclidean lengths). Each norm is
+	// square-rooted before multiplying so a representable cosine is not lost to an
+	// intermediate overflow of normP*normQ.
+	dot := float64(dotProduct)
 	denominator := math.Sqrt(float64(normV1Sq)) * math.Sqrt(float64(normV2Sq))
+	if !cosineDenOK(denominator) {
+		var normP, normQ float64
+		var ok bool
+		if dot, normP, normQ, ok = cosineRecomputeF64(p, q); !ok {
+			return T(0), moerr.NewInternalErrorNoCtx("cosine distance: vector magnitude overflows the float64 domain")
+		}
+		denominator = math.Sqrt(normP) * math.Sqrt(normQ)
+	}
 
 	// Handle the edge case of a zero-magnitude vector. If the denominator is zero,
 	// the cosine similarity is undefined. A distance of 1.0 is a common convention,
@@ -264,7 +274,7 @@ func CosineDistance[T types.RealNumbers](p, q []T) (T, error) {
 	}
 
 	// Calculate cosine similarity.
-	similarity := float64(dotProduct) / denominator
+	similarity := dot / denominator
 
 	// handle precision issues. Clamp the cosine simliarity to the range [-1, 1].
 	if similarity > 1.0 {
@@ -330,9 +340,17 @@ func CosineSimilarity[T types.RealNumbers](p, q []T) (T, error) {
 		i++
 	}
 
-	// The denominator is the product of the L2 norms (Euclidean lengths).
-	// We must cast to float64 to use the standard library's math.Sqrt.
+	// Each norm is square-rooted before multiplying -- see CosineDistance.
+	dot := float64(dotProduct)
 	denominator := math.Sqrt(float64(normV1Sq)) * math.Sqrt(float64(normV2Sq))
+	if !cosineDenOK(denominator) {
+		var normP, normQ float64
+		var ok bool
+		if dot, normP, normQ, ok = cosineRecomputeF64(p, q); !ok {
+			return T(0), moerr.NewInternalErrorNoCtx("cosine similarity: vector magnitude overflows the float64 domain")
+		}
+		denominator = math.Sqrt(normP) * math.Sqrt(normQ)
+	}
 
 	if denominator == 0 {
 		// This can happen if one or both vectors are all zeros.
@@ -340,7 +358,7 @@ func CosineSimilarity[T types.RealNumbers](p, q []T) (T, error) {
 	}
 
 	// Calculate cosine similarity.
-	similarity := float64(dotProduct) / denominator
+	similarity := dot / denominator
 
 	// handle precision issues. Clamp the cosine simliarity to the range [-1, 1].
 	if similarity > 1.0 {

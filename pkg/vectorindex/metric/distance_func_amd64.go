@@ -379,11 +379,20 @@ func CosineDistanceF32(a, b []float32) (float32, error) {
 	for ; i < n; i++ {
 		dot, normA, normB = dot+a[i]*b[i], normA+a[i]*a[i], normB+b[i]*b[i]
 	}
+	d := float64(dot)
 	den := math.Sqrt(float64(normA)) * math.Sqrt(float64(normB))
+	if !cosineDenOK(den) {
+		var nP, nQ float64
+		var ok bool
+		if d, nP, nQ, ok = cosineRecomputeF64(a, b); !ok {
+			return 0, moerr.NewInternalErrorNoCtx("cosine distance: vector magnitude overflows the float64 domain")
+		}
+		den = math.Sqrt(nP) * math.Sqrt(nQ)
+	}
 	if den == 0 {
 		return 1.0, nil
 	}
-	return float32(cosineDistClamped(float64(dot), den)), nil
+	return float32(cosineDistClamped(d, den)), nil
 }
 
 func CosineDistanceF64(a, b []float64) (float64, error) {
@@ -418,11 +427,20 @@ func CosineDistanceF64(a, b []float64) (float64, error) {
 	for ; i < n; i++ {
 		dot, normA, normB = dot+a[i]*b[i], normA+a[i]*a[i], normB+b[i]*b[i]
 	}
-	den := math.Sqrt(normA) * math.Sqrt(normB)
+	d := float64(dot)
+	den := math.Sqrt(float64(normA)) * math.Sqrt(float64(normB))
+	if !cosineDenOK(den) {
+		var nP, nQ float64
+		var ok bool
+		if d, nP, nQ, ok = cosineRecomputeF64(a, b); !ok {
+			return 0, moerr.NewInternalErrorNoCtx("cosine distance: vector magnitude overflows the float64 domain")
+		}
+		den = math.Sqrt(nP) * math.Sqrt(nQ)
+	}
 	if den == 0 {
 		return 1.0, nil
 	}
-	return cosineDistClamped(dot, den), nil
+	return cosineDistClamped(d, den), nil
 }
 
 func CosineDistance[T types.RealNumbers](p, q []T) (T, error) {
@@ -472,13 +490,22 @@ func CosineSimilarityF32(a, b []float32) (float32, error) {
 	for ; i < n; i++ {
 		dot, normA, normB = dot+a[i]*b[i], normA+a[i]*a[i], normB+b[i]*b[i]
 	}
+	d := float64(dot)
 	den := math.Sqrt(float64(normA)) * math.Sqrt(float64(normB))
+	if !cosineDenOK(den) {
+		var nP, nQ float64
+		var ok bool
+		if d, nP, nQ, ok = cosineRecomputeF64(a, b); !ok {
+			return 0, moerr.NewInternalErrorNoCtx("cosine similarity: vector magnitude overflows the float64 domain")
+		}
+		den = math.Sqrt(nP) * math.Sqrt(nQ)
+	}
 	if den == 0 {
-		return 0, moerr.NewInternalErrorNoCtx("cosine similarity zero denominator")
+		return 0, moerr.NewInternalErrorNoCtx("cosine similarity: one of the vector is zero")
 	}
 	// Clamp to [-1,1]: float32 accumulation can push the quotient a hair
 	// outside (e.g. 1.000000119) and mirror the scalar CosineSimilarity.
-	sim := float64(dot) / den
+	sim := d / den
 	if sim > 1 {
 		sim = 1
 	} else if sim < -1 {
@@ -522,13 +549,22 @@ func CosineSimilarityF64(a, b []float64) (float64, error) {
 	for ; i < n; i++ {
 		dot, normA, normB = dot+a[i]*b[i], normA+a[i]*a[i], normB+b[i]*b[i]
 	}
-	den := math.Sqrt(normA) * math.Sqrt(normB)
+	d := float64(dot)
+	den := math.Sqrt(float64(normA)) * math.Sqrt(float64(normB))
+	if !cosineDenOK(den) {
+		var nP, nQ float64
+		var ok bool
+		if d, nP, nQ, ok = cosineRecomputeF64(a, b); !ok {
+			return 0, moerr.NewInternalErrorNoCtx("cosine similarity: vector magnitude overflows the float64 domain")
+		}
+		den = math.Sqrt(nP) * math.Sqrt(nQ)
+	}
 	if den == 0 {
-		return 0, moerr.NewInternalErrorNoCtx("cosine similarity zero denominator")
+		return 0, moerr.NewInternalErrorNoCtx("cosine similarity: one of the vector is zero")
 	}
 	// Clamp to [-1,1]: float accumulation can push the quotient a hair
 	// outside and mirror the scalar CosineSimilarity.
-	sim := dot / den
+	sim := d / den
 	if sim > 1 {
 		sim = 1
 	} else if sim < -1 {

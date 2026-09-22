@@ -21,8 +21,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-// NormalizeL2 writes the L2-normalized v1 into normalized. A zero-norm vector is copied unchanged.
+// NormalizeL2 writes the L2-normalized v1 into normalized. An all-zero vector is copied unchanged.
 // The norm is accumulated in float64 regardless of T.
+//
+// A vector whose squared norm leaves the float64 domain has no computable norm here: squaring a
+// float64 element above ~1.3e154 overflows to +Inf (every component would normalize to 0), and
+// squaring one below ~1.5e-162 underflows to 0 (the vector would be returned unnormalized). Both
+// are rejected rather than returned silently wrong.
 func NormalizeL2[T types.RealNumbers](v1 []T, normalized []T) error {
 	if len(v1) == 0 {
 		return moerr.NewInternalErrorNoCtx("cannot normalize empty vector")
@@ -31,8 +36,19 @@ func NormalizeL2[T types.RealNumbers](v1 []T, normalized []T) error {
 	for _, val := range v1 {
 		sumSquares += float64(val) * float64(val)
 	}
+	if math.IsInf(sumSquares, 0) || math.IsNaN(sumSquares) {
+		return moerr.NewInternalErrorNoCtx("cannot normalize vector: its squared norm overflows the float64 domain")
+	}
 	norm := math.Sqrt(sumSquares)
 	if norm == 0 {
+		// A zero norm is either an all-zero vector or one whose squares all underflowed. Telling
+		// them apart needs a second pass, but only on this degenerate input -- an all-zero test
+		// inside the accumulation loop above would cost every ordinary vector a branch per element.
+		for _, val := range v1 {
+			if val != 0 {
+				return moerr.NewInternalErrorNoCtx("cannot normalize vector: its squared norm underflows the float64 domain")
+			}
+		}
 		copy(normalized, v1)
 		return nil
 	}

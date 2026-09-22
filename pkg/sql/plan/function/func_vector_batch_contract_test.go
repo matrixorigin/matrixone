@@ -1,0 +1,123 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package function
+
+import (
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+)
+
+// One constant operand selects the batch distance kernel. cosine_similarity rejects a zero-magnitude
+// vector while cosine_distance returns 1 for it, so the batch path must still raise that error --
+// otherwise making an operand constant turns an error into a value.
+func TestCosineSimilarityZeroVectorErrorsOnBatchPath(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	constZero := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestConstInput(types.T_array_float32.ToType(), [][]float32{{0, 0, 0}}, []bool{false}),
+			NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}, {0, 0, 0}}, []bool{false, false}),
+		},
+		NewFunctionTestResult(types.T_float64.ToType(), true, []float64{0, 0}, []bool{false, false}),
+		CosineSimilarityArray[float32])
+	s, info := constZero.Run()
+	require.True(t, s, info)
+
+	// The same shape with non-zero vectors still uses the batch path and returns values.
+	constOk := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestConstInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}}, []bool{false}),
+			NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{1, 2, 3}, {2, 4, 6}}, []bool{false, false}),
+		},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{1, 1}, []bool{false, false}),
+		CosineSimilarityArray[float32])
+	s, info = constOk.Run()
+	require.True(t, s, info)
+}
+
+// The const-vs-column L2 fast path must agree with the per-row path on a distance whose square
+// overflows float32 but which is itself representable. The batch kernel accumulates the square in
+// float32 and reaches +Inf, so it hands the row to the per-row kernel (float64 accumulation)
+// instead of answering; both cases return the float32-domain value 2.8284270320491168e+19
+// (= float64(float32(2*2e19/sqrt(2)))), not +Inf.
+func TestL2DistanceBatchAgreesWithScalarOnSquaredOverflow(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	batch := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestConstInput(types.T_array_float32.ToType(), [][]float32{{0, 0}}, []bool{false}),
+			NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{2e19, 2e19}}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{2.8284270320491168e+19}, []bool{false}),
+		L2DistanceArray[float32])
+	s, info := batch.Run()
+	require.True(t, s, info)
+
+	perRow := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{0, 0}}, []bool{false}),
+			NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{{2e19, 2e19}}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_float64.ToType(), false, []float64{2.8284270320491168e+19}, []bool{false}),
+		L2DistanceArray[float32])
+	s, info = perRow.Run()
+	require.True(t, s, info)
+}
+
+// normalize_l2 leaves its output buffer untouched when it rejects a vector, and that buffer is
+// taken from a sync.Pool and resized without being zeroed. A discarded error would therefore emit
+// an earlier row's vector as this row's result, so the error must reach the caller.
+func TestNormalizeL2RejectsInsteadOfEmittingStaleBuffer(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// Row 0 normalizes and fills the pooled buffer; row 1's squared norm overflows float64.
+	f64 := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_array_float64.ToType(),
+				[][]float64{{3, 4}, {1e308, 1e308}}, []bool{false, false}),
+		},
+		NewFunctionTestResult(types.T_array_float64.ToType(), true, [][]float64{}, []bool{}),
+		NormalizeL2Array[float64])
+	s, info := f64.Run()
+	require.True(t, s, info)
+
+	// Underflow is rejected the same way. Only float64 reaches either bound: the norm accumulates
+	// in float64, and no float32 element squares outside that domain.
+	under := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_array_float64.ToType(),
+				[][]float64{{3, 4}, {1e-300, 1e-300}}, []bool{false, false}),
+		},
+		NewFunctionTestResult(types.T_array_float64.ToType(), true, [][]float64{}, []bool{}),
+		NormalizeL2Array[float64])
+	s, info = under.Run()
+	require.True(t, s, info)
+
+	// Ordinary rows still normalize, and a null row stays null.
+	ok := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_array_float32.ToType(),
+				[][]float32{{3, 4}, {}, {0, 0}}, []bool{false, true, false}),
+		},
+		NewFunctionTestResult(types.T_array_float32.ToType(), false,
+			[][]float32{{0.6, 0.8}, {}, {0, 0}}, []bool{false, true, false}),
+		NormalizeL2Array[float32])
+	s, info = ok.Run()
+	require.True(t, s, info)
+}

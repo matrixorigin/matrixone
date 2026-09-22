@@ -10725,6 +10725,16 @@ func batchArrayDistanceSync[T types.RealNumbers](
 	if err != nil {
 		return nil, false, err
 	}
+	// A non-finite entry means the batch kernel lost the value the per-row kernel still has: the
+	// batch kernels accumulate in float32, so an L2 square above ~3.4e38 reaches +Inf on the CPU
+	// and NaN on the GPU (cuVS computes ||a||^2 + ||b||^2 - 2ab), while moarray.L2Distance
+	// accumulates in float64 -- and an overflowed cosine norm is what the per-row kernel reports
+	// as an error. Hand those rows back rather than answer with the +Inf/NaN: making an operand
+	// constant must not change what SQL returns. A stored vector cannot hold NaN or Inf (#28688),
+	// so a non-finite entry is always this intermediate overflow.
+	if !metric.AllFiniteF32(dist) {
+		return nil, false, nil
+	}
 	return dist, true, nil
 }
 
@@ -10747,16 +10757,29 @@ func InnerProductArray[T types.RealNumbers](ivecs []*vector.Vector, result vecto
 }
 
 func CosineSimilarityArray[T types.RealNumbers](ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	// Use Metric_CosineDistance and convert: similarity = 1 - distance.
+	// Use Metric_CosineDistance and convert: similarity = 1 - distance. The two functions differ
+	// on a zero-magnitude vector: cosine_distance returns 1 by convention, while cosine_similarity
+	// rejects it. A distance of exactly 1 is the only value a zero vector can produce, so those
+	// rows (and only those) fall back to the per-row path, which raises that error -- otherwise
+	// making an operand constant would turn the error into a value.
 	if dist, ok, err := batchArrayDistanceSync[T](ivecs, length, metric.Metric_CosineDistance, proc, selectList); err != nil {
 		return err
 	} else if ok {
-		rs := vector.MustFunctionResult[float64](result)
-		rss := vector.MustFixedColNoTypeCheck[float64](rs.GetResultVector())
-		for i, d := range dist {
-			rss[i] = 1.0 - float64(d)
+		zeroCandidate := false
+		for _, d := range dist {
+			if d == 1.0 {
+				zeroCandidate = true
+				break
+			}
 		}
-		return nil
+		if !zeroCandidate {
+			rs := vector.MustFunctionResult[float64](result)
+			rss := vector.MustFixedColNoTypeCheck[float64](rs.GetResultVector())
+			for i, d := range dist {
+				rss[i] = 1.0 - float64(d)
+			}
+			return nil
+		}
 	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[float64](ivecs, result, proc, length, func(v1, v2 []byte) (out float64, err error) {
 		_v1 := types.BytesToArray[T](v1)

@@ -36,3 +36,39 @@ func l2DistanceF64[T types.RealNumbers](v1, v2 []T) (T, error) {
 	}
 	return T(math.Sqrt(sum)), nil
 }
+
+// CheckL2Finite rejects a pairwise L2 result that holds a non-finite entry.
+//
+// The batch kernels accumulate the squared distance in float32 -- the CPU loop and cuVS on the
+// GPU -- so a pair whose square exceeds float32 (|diff| above ~1.8e19) loses the result: the CPU
+// loop reaches +Inf, and cuVS computes the expanded form ||a||^2 + ||b||^2 - 2ab, whose overflow
+// is Inf - Inf = NaN. Neither value is a distance, and both would silently corrupt an ordering,
+// so the query fails here instead of returning one.
+//
+// A stored vector cannot hold NaN or Inf -- those are rejected at the cast boundary (#28688) --
+// so a non-finite entry is always this intermediate overflow and never an input value.
+func CheckL2Finite(dist []float32) error {
+	if AllFiniteF32(dist) {
+		return nil
+	}
+	return moerr.NewInternalErrorNoCtx("l2 distance: vector magnitude is too large, the squared distance overflows the float32 domain")
+}
+
+// AllFiniteF32 reports whether every entry is finite. Callers that can answer a non-finite batch
+// result some other way -- the SQL functions hand those rows to the per-row kernel, which
+// accumulates in float64 -- use this instead of CheckL2Finite.
+func AllFiniteF32(dist []float32) bool {
+	for i := range dist {
+		if !isFiniteF32(dist[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// isFiniteF32 is one subtraction and one comparison: x-x is 0 for every finite x, and NaN for
+// +Inf, -Inf and NaN alike. It is called once per pairwise result entry, so it must not become a
+// call to math.IsInf/math.IsNaN through a float64 conversion.
+func isFiniteF32(x float32) bool {
+	return x-x == 0
+}
