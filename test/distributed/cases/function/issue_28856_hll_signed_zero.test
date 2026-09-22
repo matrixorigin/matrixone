@@ -1,6 +1,6 @@
--- #28856: APPROX_COUNT_DISTINCT canonicalizes FLOAT signed zero to one SQL
--- value. HLL_ADD_AGG remains on its persisted v2 raw-value wire semantics so
--- existing HLL_ADD_AGG/HLL_MERGE_AGG states remain mergeable across upgrade.
+-- #28856: FLOAT signed zero is one SQL value for both HLL aggregate paths.
+-- Existing persisted v2 HLL_ADD_AGG states retain their raw-value wire domain;
+-- newly constructed states use the canonical v4 domain.
 drop table if exists issue_28856_hll_signed_zero;
 create table issue_28856_hll_signed_zero(v double);
 insert into issue_28856_hll_signed_zero values

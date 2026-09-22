@@ -767,6 +767,25 @@ func TestCanonicalHLLAddRemoteProtocolValidation(t *testing.T) {
 	}
 }
 
+func TestCanonicalFloatHLLAddRemoteProtocolValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	for _, typ := range []types.Type{types.T_float32.ToType(), types.T_float64.ToType()} {
+		aggs := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+			aggexec.AggIdOfHllAdd,
+			false,
+			[]*plan.Expr{makeTestVarExprWithType("value", typ)},
+			nil,
+		)}
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion91)
+		require.ErrorContains(t, validateRemoteAggregateProtocol(proc, aggs),
+			"canonical FLOAT HLL_ADD_AGG remote execution requires MORPC protocol version 92")
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion92)
+		require.NoError(t, validateRemoteAggregateProtocol(proc, aggs))
+	}
+}
+
 func TestTextMinMaxRemoteProtocolValidation(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	rt := runtime.ServiceRuntime(proc.GetService())
