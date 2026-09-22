@@ -1,7 +1,7 @@
 # PR #28523: String Math Numeric Coercion and Prepared-Parameter Roles
 
-- Status: Draft / awaiting maintainer approval
-- Design revision: 17
+- Status: APPROVED / authorized maintainer sign-off recorded
+- Design revision: 18
 - Issue: [#28487](https://github.com/matrixorigin/matrixone/issues/28487)
 - Implementation PR: [#28523](https://github.com/matrixorigin/matrixone/pull/28523)
 - Revision-17 implementation/test source head: `ef9331788241c1b5e8d3707320dc6be79c23fc41`
@@ -1045,8 +1045,8 @@ Candidate source inputs: published revision-17 head ef9331788241c1b5e8d3707320dc
 Integration base: d8ddce92b1c5c172111b50aefe6b6b200b2589cb (tree a270c3c5bd225762cb735afb9ab22d3fd9d78674)
 Scope/trigger: PR reviews 5199052257, 5214666396 and comment 5687377735; >500 production lines and planner/plan compatibility boundary
 Reviewer identity and role: historical GPT-6 Astra review of d56711fa5b429e5e6e52f64f603d2e853478edca against base 4ff27bb9b35c43c1b0961bb9a01bf8fc0b6a2171; any exact-head review decision is tracked separately from maintainer design approval
-Review timestamp: exact final-candidate Astra Medium review is tracked separately from maintainer design approval, which remains pending
-Decision state: DESIGN DECISIONS FROZEN / AWAITING AUTHORIZED MAINTAINER SIGN-OFF
+Review timestamp: exact final-candidate Astra Medium review is tracked separately; authorized maintainer design approval is recorded by the linked exact-head review below
+Decision state: DESIGN DECISIONS APPROVED / AUTHORIZED MAINTAINER SIGN-OFF RECORDED
 Validation evidence: historical revisions 9-16 remain recorded above. Revision 18 records the published head, strict-default frontend test-oracle repair, focused/all `TestCOMStmtInetNtoa*` tests, full `pkg/frontend`, gofmt, and diff-check. No remote CI or PR-wide coverage pass is claimed until the current run completes.
 Frozen design decisions for this implementation snapshot:
 1. Strict INT64 precision: retain strict integer-domain controls and do not widen arbitrary integer inputs through general prefix parsing. Exact integer, unsigned, BOOL, DECIMAL, and FLOAT sources retain their existing numeric domains; only eligible string-math value roles use the compatibility source.
@@ -1057,8 +1057,11 @@ Frozen design decisions for this implementation snapshot:
 These decisions are frozen for the implementation snapshot and are distinct from the GitHub approval action. They are not changed by the two non-blocking implementation observations in the latest automated review.
 Evidence links: [PR #28523](https://github.com/matrixorigin/matrixone/pull/28523); [historical-head CI run 35197284882](https://github.com/matrixorigin/matrixone/actions/runs/35197284882); the PR/evidence ledger is the record for commit replay, review, CI, and BVT; current local post-rebase evidence is recorded above
 Implementation deviations requiring follow-up: MOD native arithmetic widening regression fixed in 8fc4d5250. The remaining follow-up is optimization-only: safe overload-specific zonemap pruning and a one-pass role table may be evaluated in a separate change; they are not required by this frozen contract.
-Approval link: pending maintainer review
+Approval link: [fengttt APPROVED review for exact implementation head `a1b63763eccdc864d494728827190de73c293dca`](https://github.com/matrixorigin/matrixone/pull/28523#pullrequestreview-5261973268) (submitted 2026-09-20T22:40:07Z)
+
+Approval scope note: this link records the authorized maintainer's GitHub approval for the exact implementation head and is the recorded sign-off for revision 18 and its frozen decisions. This document records the external approval; it does not create or substitute for that approval.
 ```
 
 The Astra review, implementation-agent self-review, and maintainer approval
-must remain separate records. This document is not self-certified as approved.
+remain separate records. The maintainer approval is recorded by the linked
+GitHub review above.
