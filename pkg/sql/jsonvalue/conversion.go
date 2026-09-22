@@ -918,7 +918,6 @@ func canonicalDecimalInput(text string, target types.Type) (canonical string, tr
 	if !ok {
 		return "", false, false, false
 	}
-	known = true
 	if scan.digitCount == 0 {
 		return "0", false, true, false
 	}
