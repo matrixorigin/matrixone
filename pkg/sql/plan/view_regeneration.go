@@ -118,6 +118,48 @@ func RegenerateViewDefinitionWithPartialDependencies(
 	ctx CompilerContext,
 	persistedViewData string,
 ) (*RegeneratedViewDefinition, []ViewDependency, error) {
+	tableDef, dependencies, err := bindPersistedViewDefinition(ctx, persistedViewData, false)
+	if err != nil {
+		return nil, dependencies, err
+	}
+	var original, generated ViewData
+	if err = json.Unmarshal([]byte(persistedViewData), &original); err != nil {
+		return nil, nil, err
+	}
+	if err = json.Unmarshal([]byte(tableDef.ViewSql.View), &generated); err != nil {
+		return nil, nil, err
+	}
+	updated, err := patchPersistedViewMetadata(
+		persistedViewData, &generated.Stmt, dependencies,
+		*generated.LowerCaseTableNames, maxPersistedProtocolVersion(
+			original.RequiredProtocolVersion, generated.RequiredProtocolVersion))
+	if err != nil {
+		return nil, nil, err
+	}
+	tableDef.ViewSql.View = updated
+	return &RegeneratedViewDefinition{TableDef: tableDef, Dependencies: dependencies}, dependencies, nil
+}
+
+// DescribeViewColumns binds the semantic definition in the caller's catalog
+// context without updating the definition or any catalog object. The caller
+// owns the returned columns. Authorization and snapshot selection belong to the
+// caller; this function must not be used to discover unauthorized objects.
+func DescribeViewColumns(ctx CompilerContext, persistedViewData string) ([]*planpb.ColDef, error) {
+	tableDef, _, err := bindPersistedViewDefinition(ctx, persistedViewData, true)
+	if err != nil {
+		return nil, err
+	}
+	return tableDef.Cols, nil
+}
+
+func bindPersistedViewDefinition(
+	ctx CompilerContext,
+	persistedViewData string,
+	columnsOnly bool,
+) (*planpb.TableDef, []ViewDependency, error) {
+	if err := ctx.GetContext().Err(); err != nil {
+		return nil, nil, err
+	}
 	var viewData ViewData
 	if err := json.Unmarshal([]byte(persistedViewData), &viewData); err != nil {
 		return nil, nil, err
@@ -179,28 +221,12 @@ func RegenerateViewDefinitionWithPartialDependencies(
 		rootSQL:             viewData.Stmt,
 		lowerCaseTableNames: lowerCaseTableNames,
 	}
-	tableDef, err := genViewTableDef(
-		regenerationCtx, selectStmt, columnNames, viewDatabase, viewName, false)
+	tableDef, err := generateViewTableDef(
+		regenerationCtx, selectStmt, columnNames, viewDatabase, viewName, false, columnsOnly)
 	if err != nil {
 		return nil, regenerationCtx.partialDependencies, err
 	}
-	var generatedData ViewData
-	if err = json.Unmarshal([]byte(tableDef.ViewSql.View), &generatedData); err != nil {
-		return nil, nil, err
-	}
-
-	updatedViewData, err := patchPersistedViewMetadata(
-		persistedViewData, &generatedData.Stmt, generatedData.Dependencies,
-		lowerCaseTableNames, maxPersistedProtocolVersion(
-			viewData.RequiredProtocolVersion, generatedData.RequiredProtocolVersion))
-	if err != nil {
-		return nil, nil, err
-	}
-	tableDef.ViewSql.View = updatedViewData
-	return &RegeneratedViewDefinition{
-		TableDef:     tableDef,
-		Dependencies: generatedData.Dependencies,
-	}, generatedData.Dependencies, nil
+	return tableDef, regenerationCtx.partialDependencies, nil
 }
 
 func patchPersistedViewMetadata(

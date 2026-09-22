@@ -54,7 +54,9 @@ func TestDurableViewRecoveryUpgrade(t *testing.T) {
 	require.NoError(t, Handler.HandleClusterUpgrade(ctx, txn))
 	require.NoError(t, Handler.HandleClusterUpgrade(ctx, txn))
 	require.Equal(t, 2, created)
-	require.NoError(t, Handler.HandleTenantUpgrade(ctx, 17, txn))
+	// The upstream 4.0.8 handler now performs the tenant STATISTICS migration;
+	// its transaction/runtime fixture is covered by statistics_upgrade_test.go.
+	// This fixture only exercises the independent cluster migration.
 	require.Error(t, Handler.HandleCreateFrameworkDeps(txn))
 }
 
