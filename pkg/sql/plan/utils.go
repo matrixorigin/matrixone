@@ -1079,9 +1079,9 @@ func PreparedPlanNumericFallbackParamPositions(preparePlan *Plan) []int32 {
 		_ = plan.VisitExpressionsInOwner(node, func(expr *plan.Expr) error {
 			fn := expr.GetF()
 			_ = plan.VisitExprTree(expr, func(nested *plan.Expr) error {
-				if isIntegerArgumentCast(nested) {
+				for _, source := range integerArgumentSources(nested) {
 					collectPreparedIntegerArgumentParamPositions(
-						query, int32(nodeID), nested.GetF().Args[0], positions,
+						query, int32(nodeID), source, positions,
 						make(map[[2]int32]struct{}), nil)
 				}
 				return nil

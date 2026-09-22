@@ -59,7 +59,7 @@ func TestHexPreparedArgumentUsesSQLExecuteSourceType(t *testing.T) {
 			name: "decimal", param: ParamValue{
 				Value: "15.5", SourceType: types.New(types.T_decimal64, 3, 1), HasSourceType: true,
 			},
-			overloadID: 8, argType: types.T_decimal64, want: "10",
+			overloadID: 2, argType: types.T_int64, want: "10",
 		},
 		{
 			name: "bool", param: ParamValue{

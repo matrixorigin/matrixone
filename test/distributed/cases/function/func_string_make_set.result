@@ -99,8 +99,7 @@ SELECT MAKE_SET(CAST('1.9999999999999999' AS DECIMAL(18,16)), 'a', 'b', 'c', 'd'
 ➤ decimal_precision_boundary[12,7,0]  𝄀
 b
 SELECT MAKE_SET(CAST('18446744073709551616' AS DECIMAL(38,0)), 'a', 'b', 'c', 'd') AS decimal_positive_overflow;
-➤ decimal_positive_overflow[12,7,0]  𝄀
-a,b,c,d
+Data truncation: data out of range: data type int64, integer argument
 SELECT MAKE_SET(0.90000000000000000000000000000000000000, 'a', 'b') AS decimal_scale38_positive;
 ➤ decimal_scale38_positive[12,3,0]  𝄀
 a

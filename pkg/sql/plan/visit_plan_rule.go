@@ -830,8 +830,8 @@ func (rule *ResetParamRefRule) setPreparedPlan(preparePlan *Plan) {
 		}
 		_ = plan.VisitExpressionsInOwner(node, func(root *plan.Expr) error {
 			return plan.VisitExprTree(root, func(expr *plan.Expr) error {
-				if isIntegerArgumentCast(expr) {
-					collectPreparedIntegerArgumentParamPositions(query, int32(nodeID), expr.GetF().Args[0],
+				for _, source := range integerArgumentSources(expr) {
+					collectPreparedIntegerArgumentParamPositions(query, int32(nodeID), source,
 						positions, make(map[[2]int32]struct{}), rule.integerSourceRoots)
 				}
 				return nil
@@ -2037,6 +2037,9 @@ func (rule *ResetParamRefRule) refreshPreparedNumericSource(expr *plan.Expr) (*E
 		if typ, ok := rule.preparedNumericSourceType(expr); ok && !reflect.DeepEqual(expr.Typ, typ) {
 			copy := DeepCopyExpr(expr)
 			copy.Typ = typ
+			// The producer owns the value domain, but an outer join can add
+			// NULLs at this occurrence even for a non-nullable aggregate.
+			copy.Typ.NotNullable = typ.NotNullable && expr.Typ.NotNullable
 			return copy, true, nil
 		}
 		return expr, false, nil
@@ -2124,6 +2127,9 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 		fallbackSource = nil
 		rewritten, err = rule.integerArgumentRuntimeSource(e)
 		rule.specialized = true
+	} else if hasSourceDependentIntegerArguments(e) {
+		fallbackSource = nil
+		rewritten, err = rule.rebindSourceDependentIntegerArguments(e)
 	} else if isIntegerArgumentCast(e) {
 		rewritten, err = rule.rebindIntegerArgumentCast(e)
 	} else if _, preserve := rule.preserveRoots[e]; preserve {

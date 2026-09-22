@@ -185,6 +185,11 @@ func TestIntegerArgumentPreparedRuntimeCandidates(t *testing.T) {
 		positions []int32
 	}{
 		{`select substring_index(?,".",?)`, []int32{1}},
+		{`select hex(?)`, []int32{0}},
+		{`select char(?,?)`, []int32{0, 1}},
+		{`select make_set(?,"a","b")`, []int32{0}},
+		{`select export_set(?,"Y","N","",4)`, []int32{0}},
+		{`select conv("ff",?,?)`, []int32{0, 1}},
 		{`select period_add(?,?)`, []int32{0, 1}},
 		{`select period_diff(?,?)`, []int32{0, 1}},
 		{`select ceil(1.25,?)`, []int32{0}},

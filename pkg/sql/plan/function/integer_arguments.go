@@ -59,7 +59,7 @@ func (p integerParameter) sourceTarget(source types.T, binaryLiteral bool) (type
 	if p.mode == integerBitPatternParameter && source.IsMySQLString() {
 		return types.T_uint64, true
 	}
-	if p.mode == numericOnlyIntegerParameter && !(source.IsInteger() || source.IsFloat() || source.IsDecimal() || source == types.T_bool || source == types.T_bit || source == types.T_year) {
+	if p.mode == numericOnlyIntegerParameter && !(source.IsInteger() || source.IsFloat() || source.IsDecimal() || source == types.T_bool || source == types.T_bit || source == types.T_year || source == types.T_enum) {
 		return 0, false
 	}
 	if p.mode != fixedIntegerParameter && (source.IsUnsignedInt() || source == types.T_bit || binaryLiteral) {

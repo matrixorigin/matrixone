@@ -814,9 +814,10 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `char`
 	{
-		functionId: CHAR,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    builtInCharCheck,
+		functionId:        CHAR,
+		integerParameters: []integerParameter{{position: 0, target: types.T_int64, mode: integerBitPatternParameter, variadic: true}},
+		layout:            STANDARD_FUNCTION,
+		checkFn:           builtInCharCheck,
 
 		Overloads: []overload{
 			{
@@ -997,10 +998,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `make_set`
 	{
-		functionId: MAKE_SET,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    makeSetCheck,
+		functionId:        MAKE_SET,
+		integerParameters: []integerParameter{{position: 0, target: types.T_int64, mode: integerBitPatternParameter}},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           makeSetCheck,
 
 		Overloads: []overload{
 			{
@@ -1017,10 +1019,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `export_set`
 	{
-		functionId: EXPORT_SET,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    exportSetCheck,
+		functionId:        EXPORT_SET,
+		integerParameters: []integerParameter{{position: 0, target: types.T_int64, mode: integerBitPatternParameter}},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           exportSetCheck,
 
 		Overloads: []overload{
 			{
@@ -2362,10 +2365,11 @@ var supportedStringBuiltIns = []FuncNew{
 
 	// function `conv`
 	{
-		functionId: CONV,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    convTypeCheck,
+		functionId:        CONV,
+		integerParameters: []integerParameter{{position: 1, target: types.T_int64}, {position: 2, target: types.T_int64}},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           convTypeCheck,
 
 		Overloads: []overload{
 			{
@@ -8737,10 +8741,12 @@ var supportedMathBuiltIns = []FuncNew{
 
 	// function `hex`
 	{
-		functionId: HEX,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    hexTypeMatch,
+		functionId:        HEX,
+		integerParameters: []integerParameter{{position: 0, target: types.T_int64, mode: numericOnlyIntegerParameter}},
+		bindingOverloads:  []int{0, 1, 2, 3, 6, 7},
+		class:             plan.Function_STRICT,
+		layout:            STANDARD_FUNCTION,
+		checkFn:           stringDomainFixedTypeMatch,
 
 		Overloads: []overload{
 			{
