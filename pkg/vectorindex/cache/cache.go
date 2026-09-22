@@ -714,6 +714,12 @@ type VectorIndexCache struct {
 	// cadence. Sys-admin-only test/ops knob (mo_ctl SetVectorIndexFreshnessInterval), never persisted.
 	staleCheckIntervalNs atomic.Int64
 
+	// effectiveTickerNs records, in nanoseconds, the interval the LIVE sweep ticker was last
+	// created with (serve) or Reset to (SetStaleCheckInterval). It exists so a test can
+	// deterministically confirm an override that races serve() actually reached the running
+	// ticker -- not merely the stored staleCheckIntervalNs, which the ticker could lag.
+	effectiveTickerNs atomic.Int64
+
 	// serveMu serializes serve()'s ticker creation + started publication with
 	// SetStaleCheckInterval's started-check + Reset. Without it an override that lands during the
 	// first lazy serve() (after serve reads the default interval but before it publishes started)
@@ -794,7 +800,9 @@ func (c *VectorIndexCache) SetStaleCheckInterval(d time.Duration) {
 	// consumer no longer exists. The stored value above still governs if serve() runs again.
 	c.serveMu.Lock()
 	if c.started.Load() && !c.exited.Load() && c.ticker != nil {
-		c.ticker.Reset(c.staleTickerInterval())
+		iv := c.staleTickerInterval()
+		c.ticker.Reset(iv)
+		c.effectiveTickerNs.Store(int64(iv))
 		reset = true
 	}
 	c.serveMu.Unlock()
@@ -906,7 +914,9 @@ func (c *VectorIndexCache) serve() {
 	// serveMu makes ticker creation + started publication atomic w.r.t. SetStaleCheckInterval, so a
 	// freshness-interval override that lands during startup is either read here or Reset afterwards.
 	c.serveMu.Lock()
-	c.ticker = time.NewTicker(c.staleTickerInterval())
+	serveIv := c.staleTickerInterval()
+	c.ticker = time.NewTicker(serveIv)
+	c.effectiveTickerNs.Store(int64(serveIv))
 	c.done = make(chan bool)
 	c.sigc = make(chan os.Signal, 3)
 	signal.Notify(c.sigc, syscall.SIGTERM, syscall.SIGINT, os.Interrupt)
@@ -1029,6 +1039,15 @@ func (c *VectorIndexCache) finishEviction(done chan struct{}) {
 }
 
 func (c *VectorIndexCache) discardFailedLoad(key string, algo *VectorIndexSearch) {
+	// Publish this teardown as in-flight BEFORE removing the entry, so a concurrent EvictKey that
+	// finds neither an occupant (already CompareAndDelete'd) nor an in-flight eviction still waits
+	// on `done` rather than reporting a premature completion while destroyFailedLoad is still
+	// releasing the native handle (#28985). Keyed by the unique `done` channel so it never
+	// overwrites another generation's signal; cleared after destruction. destroyFailedLoad (not
+	// Destroy) preserves the failed-load path's deliberate skip of the key-wide invalidation hook.
+	done := make(chan struct{})
+	c.evictInFlight.Store(done, key)
+	defer c.finishEviction(done)
 	if c.IndexMap.CompareAndDelete(key, algo) {
 		algo.destroyFailedLoad()
 	}
@@ -1224,9 +1243,7 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 					}
 					continue
 				}
-				if c.IndexMap.CompareAndDelete(key, algo) {
-					algo.destroyFailedLoad()
-				}
+				c.discardFailedLoad(key, algo)
 				return nil, nil, perr
 			}
 			// Overload: nothing idle left to reclaim, and live queries are not preempted
@@ -1234,9 +1251,7 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 			// down exactly as a failed load would.
 			release, rerr := c.gov().makeRoom(sqlproc, key, algo)
 			if rerr != nil {
-				if c.IndexMap.CompareAndDelete(key, algo) {
-					algo.destroyFailedLoad()
-				}
+				c.discardFailedLoad(key, algo)
 				return nil, nil, rerr
 			}
 			// Remove only this exact failed entry, then destroy it without a
@@ -1268,9 +1283,7 @@ func (c *VectorIndexCache) Search(sqlproc *sqlexec.SqlProcess, key string, newal
 					}
 					continue
 				}
-				if c.IndexMap.CompareAndDelete(key, algo) {
-					algo.destroyFailedLoad()
-				}
+				c.discardFailedLoad(key, algo)
 				return nil, nil, err
 			}
 			c.gov().chargeAndEnforce(sqlproc, key, algo)
@@ -1354,17 +1367,13 @@ func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, n
 					}
 					continue
 				}
-				if c.IndexMap.CompareAndDelete(key, algo) {
-					algo.destroyFailedLoad()
-				}
+				c.discardFailedLoad(key, algo)
 				return perr
 			}
 			// See Search: refuse rather than preempt a live query.
 			release, rerr := c.gov().makeRoom(sqlproc, key, algo)
 			if rerr != nil {
-				if c.IndexMap.CompareAndDelete(key, algo) {
-					algo.destroyFailedLoad()
-				}
+				c.discardFailedLoad(key, algo)
 				return rerr
 			}
 			// Released on every exit from Load; see Search.
@@ -1392,9 +1401,7 @@ func (c *VectorIndexCache) SearchInto(sqlproc *sqlexec.SqlProcess, key string, n
 					}
 					continue
 				}
-				if c.IndexMap.CompareAndDelete(key, algo) {
-					algo.destroyFailedLoad()
-				}
+				c.discardFailedLoad(key, algo)
 				return err
 			}
 			c.gov().chargeAndEnforce(sqlproc, key, algo)

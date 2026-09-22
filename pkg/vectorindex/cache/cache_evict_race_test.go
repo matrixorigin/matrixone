@@ -161,3 +161,50 @@ func TestEvictKeyWaitsForOlderGenerationUnderSameKey(t *testing.T) {
 	require.Zero(t, c.CountKey(key))
 	require.False(t, c.hasInFlightEviction(key), "no in-flight eviction may remain for the key")
 }
+
+// TestEvictKeyWaitsForBlockedFailedLoadCleanup proves the failed-load teardown path honors the
+// same completion barrier as ordinary eviction (#28985 P2). discardFailedLoad removes the exact
+// failed entry and blocks inside destroyFailedLoad's Destroy; a concurrent EvictKey that finds no
+// occupant and no map entry must still WAIT for that in-flight teardown -- before the fix it drained
+// an empty evictInFlight and returned a premature "gone" while the native handle was still alive.
+func TestEvictKeyWaitsForBlockedFailedLoadCleanup(t *testing.T) {
+	c := NewVectorIndexCache()
+	t.Cleanup(func() { c.Destroy() })
+
+	const key = "victim"
+	mock := &blockingDestroySearch{started: make(chan struct{}), release: make(chan struct{})}
+	entry := newVectorIndexSearch(mock)
+	c.IndexMap.Store(key, entry)
+
+	// A failed load discards this exact entry: it removes it from the map and parks inside
+	// destroyFailedLoad's Destroy (native handle alive), registered in evictInFlight.
+	discardDone := make(chan struct{})
+	go func() { defer close(discardDone); c.discardFailedLoad(key, entry) }()
+	<-mock.started // discardFailedLoad removed the entry and is now inside Destroy.
+
+	// EvictKey finds no occupant and no map entry, but the failed-load teardown is in flight; it
+	// must block on it, not report a premature completion.
+	evictDone := make(chan int64, 1)
+	go func() { evictDone <- c.EvictKey(key) }()
+	select {
+	case <-evictDone:
+		t.Fatal("EvictKey returned before the blocked failed-load cleanup finished (barrier bypassed, #28985)")
+	case <-discardDone:
+		t.Fatal("discardFailedLoad returned though its Destroy was still blocked")
+	case <-time.After(200 * time.Millisecond):
+		// correctly still blocked on the in-flight failed-load teardown
+	}
+
+	// Let the failed-load teardown finish; EvictKey now settles, having removed nothing.
+	close(mock.release)
+	select {
+	case got := <-evictDone:
+		require.Equal(t, int64(0), got, "EvictKey removed nothing, returning only after the teardown settled")
+	case <-time.After(5 * time.Second):
+		t.Fatal("EvictKey blocked forever after the failed-load cleanup completed")
+	}
+	<-discardDone
+
+	require.Zero(t, c.CountKey(key))
+	require.False(t, c.hasInFlightEviction(key), "the in-flight failed-load registration must be cleared")
+}

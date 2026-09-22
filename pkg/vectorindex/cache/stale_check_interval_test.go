@@ -91,6 +91,13 @@ func TestSetStaleCheckIntervalDuringServeIsNotLost(t *testing.T) {
 		go func() { defer wg.Done(); c.SetStaleCheckInterval(2 * time.Second) }()
 		wg.Wait()
 		require.Equal(t, 2*time.Second, c.staleTickerInterval())
+		// Assert the LIVE ticker actually carries the override, not merely the stored value: the
+		// original bug stored the new interval yet left the running ticker on the old cadence, and
+		// a staleTickerInterval()-only check would still pass. effectiveTickerNs records the
+		// interval the ticker was created (serve) or Reset (SetStaleCheckInterval) with, so this
+		// fails if the override raced serve() and never reached the running ticker.
+		require.Equal(t, int64(2*time.Second), c.effectiveTickerNs.Load(),
+			"the override must reach the live ticker, not only staleCheckIntervalNs")
 		c.Destroy()
 	}
 }
