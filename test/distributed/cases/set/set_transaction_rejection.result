@@ -1,0 +1,44 @@
+drop database if exists issue29185_txn_rejection;
+create database issue29185_txn_rejection;
+create table issue29185_txn_rejection.t (id int primary key);
+insert into issue29185_txn_rejection.t values (1);
+select count(*) as committed_rows
+from issue29185_txn_rejection.t
+where id = 1;
+➤ committed_rows[-5,64,0]  𝄀
+1
+set session transaction_read_only = 0;
+set session transaction_isolation = 'REPEATABLE-READ';
+begin;
+insert into issue29185_txn_rejection.t values (29185);
+set session transaction_read_only = 1,
+@@transaction_isolation = 'READ-COMMITTED';
+Transaction characteristics can't be changed while a transaction is in progress
+select @@session.transaction_read_only,
+@@session.tx_read_only,
+@@session.transaction_isolation,
+@@session.tx_isolation;
+➤ @@transaction_read_only[12,0,0]  ¦  @@tx_read_only[12,0,0]  ¦  @@transaction_isolation[12,0,0]  ¦  @@tx_isolation[12,0,0]  𝄀
+0  ¦  0  ¦  REPEATABLE-READ  ¦  REPEATABLE-READ
+select count(*) as writer_uncommitted_rows
+from issue29185_txn_rejection.t
+where id = 29185;
+➤ writer_uncommitted_rows[-5,64,0]  𝄀
+1
+select count(*) as observer_uncommitted_rows
+from issue29185_txn_rejection.t
+where id = 29185;
+➤ observer_uncommitted_rows[-5,64,0]  𝄀
+0
+rollback;
+select count(*) as writer_rows_after_rollback
+from issue29185_txn_rejection.t
+where id = 29185;
+➤ writer_rows_after_rollback[-5,64,0]  𝄀
+0
+select count(*) as observer_rows_after_rollback
+from issue29185_txn_rejection.t
+where id = 29185;
+➤ observer_rows_after_rollback[-5,64,0]  𝄀
+0
+drop database issue29185_txn_rejection;
