@@ -49,7 +49,7 @@ func (c *Compile) constrainStringNumericResultWorkers(qry *plan.Query) error {
 }
 
 // constrainStrictStringNumericCompatibilityWorkers keeps expressions whose
-// conversion semantics changed in v93 away from older workers. Historical
+// conversion semantics changed in v94 away from older workers. Historical
 // CEIL/FLOOR overloads require this in every mode. A legacy process marker is
 // rejected rather than silently treated as the new sender contract.
 func (c *Compile) constrainStrictStringNumericCompatibilityWorkers(qry *plan.Query) error {
@@ -65,7 +65,7 @@ func (c *Compile) constrainStrictStringNumericCompatibilityWorkers(qry *plan.Que
 			"string numeric compatibility cannot run with a legacy session contract",
 		)
 	}
-	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion93)
+	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion94)
 	if err != nil {
 		return err
 	}
@@ -81,12 +81,12 @@ func (c *Compile) constrainStrictStringNumericCompatibilityWorkers(qry *plan.Que
 // capability probe immediately before a remote send. Placement is only a
 // snapshot: a selected CN may be drained or replaced by an older binary before
 // the scope is serialized. Without this check a new coordinator could still
-// send strict semantics to a pre-v93 worker after passing compile-time
+// send strict semantics to a pre-v94 worker after passing compile-time
 // admission.
 func validateStrictStringNumericCompatibilityDestination(proc *process.Process, p *pipeline.Pipeline) error {
 	if p == nil || p.Node == nil || p.Node.Addr == "" {
 		return moerr.NewNotSupportedNoCtx(
-			"string numeric compatibility requires a known v93 remote destination",
+			"string numeric compatibility requires a known v94 remote destination",
 		)
 	}
 	if proc.GetSessionInfo().LegacyNumericCompatibilityMode {
@@ -97,14 +97,14 @@ func validateStrictStringNumericCompatibilityDestination(proc *process.Process, 
 	supported, err := remoteWorkersSupportProtocol(
 		proc,
 		engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}},
-		defines.MORPCVersion93,
+		defines.MORPCVersion94,
 	)
 	if err != nil {
 		return err
 	}
 	if !supported {
 		return moerr.NewNotSupportedNoCtx(
-			"string numeric compatibility requires MORPC protocol version 93 on the remote destination",
+			"string numeric compatibility requires MORPC protocol version 94 on the remote destination",
 		)
 	}
 	return nil

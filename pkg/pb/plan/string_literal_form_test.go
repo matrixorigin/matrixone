@@ -182,7 +182,7 @@ func TestRequiresMORPCVersion30NumericPrefix(t *testing.T) {
 	require.False(t, required)
 }
 
-func TestRequiresMORPCVersion93StrictStringNumericCompatibility(t *testing.T) {
+func TestRequiresMORPCVersion94StrictStringNumericCompatibility(t *testing.T) {
 	stringValue := &Expr{
 		Typ:  Type{Id: planVarcharTypeID},
 		Expr: &Expr_Col{Col: &ColRef{ColPos: 0}},
@@ -194,7 +194,7 @@ func TestRequiresMORPCVersion93StrictStringNumericCompatibility(t *testing.T) {
 			Args: []*Expr{stringValue},
 		}},
 	}
-	required, err := RequiresMORPCVersion93StrictStringNumericCompatibility(
+	required, err := RequiresMORPCVersion94StrictStringNumericCompatibility(
 		&struct{ Expr *Expr }{Expr: strictCast})
 	require.NoError(t, err)
 	require.True(t, required, "string-to-numeric casts depend on the strict default")
@@ -207,7 +207,7 @@ func TestRequiresMORPCVersion93StrictStringNumericCompatibility(t *testing.T) {
 			Args: []*Expr{numericValue},
 		}},
 	}
-	required, err = RequiresMORPCVersion93StrictStringNumericCompatibility(
+	required, err = RequiresMORPCVersion94StrictStringNumericCompatibility(
 		&struct{ Expr *Expr }{Expr: numericCast})
 	require.NoError(t, err)
 	require.False(t, required, "numeric-to-numeric casts do not consult string compatibility")
@@ -219,7 +219,7 @@ func TestRequiresMORPCVersion93StrictStringNumericCompatibility(t *testing.T) {
 				Args: []*Expr{stringValue},
 			}},
 		}
-		required, err = RequiresMORPCVersion93StrictStringNumericCompatibility(
+		required, err = RequiresMORPCVersion94StrictStringNumericCompatibility(
 			&struct{ Expr *Expr }{Expr: cast})
 		require.NoError(t, err)
 		require.True(t, required, "string-to-float CAST overload %d uses the process compatibility mode", overload)
@@ -233,7 +233,7 @@ func TestRequiresMORPCVersion93StrictStringNumericCompatibility(t *testing.T) {
 				Args: []*Expr{{Typ: Type{Id: sourceType}, Expr: &Expr_Col{Col: &ColRef{ColPos: 2}}}},
 			}},
 		}
-		required, err = RequiresMORPCVersion93StrictStringNumericCompatibility(
+		required, err = RequiresMORPCVersion94StrictStringNumericCompatibility(
 			&struct{ Expr *Expr }{Expr: cast})
 		require.NoError(t, err)
 		require.True(t, required, "declared string source type %d can use mode-aware text provenance", sourceType)

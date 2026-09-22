@@ -67,8 +67,12 @@ func TestIntegerArgumentProtocolBoundaries(t *testing.T) {
 				if features.OrdinaryFloatInt64Bounds {
 					// These FLOAT -> INT64 identities use the corrected bounds,
 					// independently of the v85 private integer-argument casts.
-					require.ErrorContains(t, err, "version 93")
+					require.ErrorContains(t, err, "version 94")
+					// Main's v93 is reserved for LAST_INSERT_ID migration and
+					// must not admit the strict numeric contract.
 					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion93)
+					require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 94")
+					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion94)
 					require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 					// The same ordinary identity with an integer source remains
 					// executable on old peers; do not fence every CAST0/2/3.

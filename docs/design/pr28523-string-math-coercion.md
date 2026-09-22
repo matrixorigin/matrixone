@@ -268,9 +268,18 @@ SessionInfo adds additive protobuf fields 18 and 19 to carry the explicit
 numeric-compatibility mode and the sender contract marker across process
 boundaries. A zero/absent contract marker identifies a legacy payload; it does
 not infer a MySQL opt-in, and mode-sensitive remote expressions fail closed
-until the v88 contract is known. New strict senders also fence pre-v88 workers
+until the v94 contract is known. New strict senders also fence pre-v94 workers
 at placement and send time. Explicit MySQL compatibility remains the only
 permissive opt-in.
+
+The current main branch reserves MORPC v93 for the session
+`LAST_INSERT_ID` connection-migration state. This implementation's strict
+string-numeric compatibility contract, including changed FLOAT-to-INT64
+bounds and scalar-math precision admission, therefore uses the distinct MORPC
+v94 capability boundary. A v93 worker is treated as pre-contract for these
+numeric expressions; placement, send-time destination validation, and
+receiver-side validation all require v94. No existing v93 `LAST_INSERT_ID`
+field or migration behavior is changed.
 
 ## 3. Ownership and execution design
 

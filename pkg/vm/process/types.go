@@ -127,7 +127,7 @@ type SessionInfo struct {
 	// permissive string-to-floating-number prefix conversion. False is strict,
 	// for current process payloads. LegacyNumericCompatibilityMode is set when a
 	// pre-contract remote payload is decoded; strict expressions fail closed until
-	// the peer's v93 contract is known, rather than gaining an implicit opt-in.
+	// the peer's v94 contract is known, rather than gaining an implicit opt-in.
 	MySQLNumericCompatibilityMode bool
 	// LegacyNumericCompatibilityMode identifies a remote SessionInfo payload
 	// that predates the strict-default contract marker. It is transport-derived

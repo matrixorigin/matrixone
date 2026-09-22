@@ -154,28 +154,28 @@ func RequiresMORPCVersion30NumericPrefix(owner any) (bool, error) {
 	return features.NumericPrefix, err
 }
 
-// RequiresMORPCVersion93StrictStringNumericCompatibility reports whether an
+// RequiresMORPCVersion94StrictStringNumericCompatibility reports whether an
 // owner contains a numeric string conversion whose result depends on the
 // sender's strict-by-default compatibility contract.
-func RequiresMORPCVersion93StrictStringNumericCompatibility(owner any) (bool, error) {
+func RequiresMORPCVersion94StrictStringNumericCompatibility(owner any) (bool, error) {
 	features, err := RequiredRemoteExpressionFeatures(owner)
 	return features.StrictStringNumericCompatibility, err
 }
 
 // RequiresMORPCVersion92StrictStringNumericCompatibility is retained as a
-// source-level alias for callers from the pre-v93 development branch. MORPC
+// source-level alias for callers from the pre-v94 development branch. MORPC
 // v92 is already assigned to the canonical scalar FLOAT HLL contract on main;
-// the strict string numeric contract is admitted at v93.
-// Deprecated: use RequiresMORPCVersion93StrictStringNumericCompatibility.
+// the strict string numeric contract is admitted at v94.
+// Deprecated: use RequiresMORPCVersion94StrictStringNumericCompatibility.
 func RequiresMORPCVersion92StrictStringNumericCompatibility(owner any) (bool, error) {
-	return RequiresMORPCVersion93StrictStringNumericCompatibility(owner)
+	return RequiresMORPCVersion94StrictStringNumericCompatibility(owner)
 }
 
 // RequiresMORPCVersion88StrictStringNumericCompatibility is retained as a
 // source-level alias for callers from the older development branch.
-// Deprecated: use RequiresMORPCVersion93StrictStringNumericCompatibility.
+// Deprecated: use RequiresMORPCVersion94StrictStringNumericCompatibility.
 func RequiresMORPCVersion88StrictStringNumericCompatibility(owner any) (bool, error) {
-	return RequiresMORPCVersion93StrictStringNumericCompatibility(owner)
+	return RequiresMORPCVersion94StrictStringNumericCompatibility(owner)
 }
 
 // RequiresMORPCVersion36JSONComparisonParam reports whether an owner contains
@@ -389,21 +389,21 @@ const (
 // SpatialDistanceSemantics requires MORPC v90 because geodetic
 // ST_FRECHETDISTANCE/ST_HAUSDORFFDISTANCE change the meaning of existing
 // overloads and the distance family adds length-unit overloads.
-// StrictStringNumericCompatibility requires MORPC v93 when the sender uses
-// the strict-by-default contract. Pre-v93 workers understand the prefix-cast
+// StrictStringNumericCompatibility requires MORPC v94 when the sender uses
+// the strict-by-default contract. Pre-v94 workers understand the prefix-cast
 // representation but default to permissive conversion when the new SessionInfo
 // marker is absent.
-// HistoricalStringMathCompatibility requires v93 in every mode: old CEIL/FLOOR
+// HistoricalStringMathCompatibility requires v94 in every mode: old CEIL/FLOOR
 // VARCHAR overloads used ParseFloat, not the current mode-aware parser.
 type RemoteExpressionFeatures struct {
 	NumericPrefix                     bool
 	StrictStringNumericCompatibility  bool
 	HistoricalStringMathCompatibility bool
-	// Ordinary/comparison/set-operation FLOAT -> INT64 casts require v93's
+	// Ordinary/comparison/set-operation FLOAT -> INT64 casts require v94's
 	// exact bounds in every mode, independently of string-prefix conversion.
 	OrdinaryFloatInt64Bounds bool
 	// CEIL/FLOOR scalar precision evaluation preserves row-level warnings
-	// while presenting a constant argument to their kernels starting in v93.
+	// while presenting a constant argument to their kernels starting in v94.
 	ScalarMathPrecisionCompatibility bool
 	JSONComparisonParam              bool
 	MixedJSONBooleanEquality         bool
