@@ -19,7 +19,10 @@ import (
 	"encoding/binary"
 	"errors"
 	"math"
+	"math/big"
 	"runtime"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,6 +39,93 @@ func parseConversionValue(t *testing.T, text string) bytejson.ByteJson {
 	value, err := bytejson.ParseFromString(text)
 	require.NoError(t, err)
 	return value
+}
+
+func referenceDecimalCoefficient(input string, scale int32) (*big.Int, bool) {
+	text := strings.ReplaceAll(strings.TrimSpace(input), " ", "")
+	negative := false
+	if strings.HasPrefix(text, "+") || strings.HasPrefix(text, "-") {
+		negative = text[0] == '-'
+		text = text[1:]
+	}
+	exponent := int64(0)
+	if index := strings.IndexAny(text, "eE"); index >= 0 {
+		parsed, err := strconv.ParseInt(text[index+1:], 10, 32)
+		if err != nil {
+			return nil, false
+		}
+		exponent = parsed
+		text = text[:index]
+	}
+	point := len(text)
+	if index := strings.IndexByte(text, '.'); index >= 0 {
+		point = index
+		text = text[:index] + text[index+1:]
+	}
+	numerator := new(big.Int)
+	if text == "" {
+		return nil, false
+	}
+	if _, ok := numerator.SetString(text, 10); !ok {
+		return nil, false
+	}
+	shift := int64(point) + exponent + int64(scale) - int64(len(text))
+	truncated := false
+	if shift >= 0 {
+		factor := new(big.Int).Exp(big.NewInt(10), big.NewInt(shift), nil)
+		numerator.Mul(numerator, factor)
+	} else {
+		divisor := new(big.Int).Exp(big.NewInt(10), big.NewInt(-shift), nil)
+		quotient, remainder := new(big.Int), new(big.Int)
+		quotient.QuoRem(numerator, divisor, remainder)
+		if remainder.Sign() != 0 {
+			truncated = true
+			doubled := new(big.Int).Lsh(remainder, 1)
+			if doubled.Cmp(divisor) >= 0 {
+				quotient.Add(quotient, big.NewInt(1))
+			}
+		}
+		numerator = quotient
+	}
+	if negative && numerator.Sign() != 0 {
+		numerator.Neg(numerator)
+	}
+	return numerator, truncated
+}
+
+func decimalReferenceForTarget(input string, target types.Type) (*big.Int, bool, bool) {
+	coefficient, truncated := referenceDecimalCoefficient(input, target.Scale)
+	if coefficient == nil {
+		return nil, false, true
+	}
+	width := target.Width
+	if limit := decimalWidthLimit(target.Oid); width > limit {
+		width = limit
+	}
+	limit := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(width)), nil)
+	if new(big.Int).Abs(new(big.Int).Set(coefficient)).Cmp(limit) >= 0 {
+		return nil, false, true
+	}
+	return coefficient, truncated, false
+}
+
+func decimalValueCoefficient(value any) *big.Int {
+	var formatted string
+	switch value := value.(type) {
+	case types.Decimal64:
+		formatted = value.Format(0)
+	case types.Decimal128:
+		formatted = value.Format(0)
+	case types.Decimal256:
+		formatted = value.Format(0)
+	default:
+		return nil
+	}
+	coefficient, ok := new(big.Int).SetString(formatted, 10)
+	if !ok {
+		return nil
+	}
+	return coefficient
 }
 
 func conversionIterator(t *testing.T, document, pathText string) *bytejson.PathIterator {
@@ -193,6 +283,207 @@ func TestConvertScalarDecimalTruncationPreservesValueAndWarning(t *testing.T) {
 	}
 }
 
+func TestConvertScalarDecimalMatchesIndependentBoundedReference(t *testing.T) {
+	inputs := []string{
+		"0", "1", "-1", "000001.2300", "12.340", "12.345", "-12.345",
+		"0.0049", "0.005", "-0.005", "9.994", "9.995", "-9.995",
+		"99.95", "999.5", "1e2", "1e-2", "1.234e+2", "-1.234e-2",
+		"1.2349999999999999999", "-1.2349999999999999999",
+		"12.3 45", "+12.345", "000000000000000000000000123.450000",
+		"12345678901234567890123456789012345678901234567890123456789012345.5",
+	}
+	targets := []types.Type{
+		types.New(types.T_decimal64, 3, 0),
+		types.New(types.T_decimal64, 10, 2),
+		types.New(types.T_decimal128, 20, 2),
+		types.New(types.T_decimal256, 40, 2),
+		types.New(types.T_decimal256, 76, 10),
+	}
+	for _, target := range targets {
+		for _, input := range inputs {
+			want, truncated, outOfRange := decimalReferenceForTarget(input, target)
+			result := ConvertScalar(parseConversionValue(t, strconv.Quote(input)), target)
+			if outOfRange {
+				require.Equal(t, StatusRangeError, result.Status, "%s %q", target.DescString(), input)
+				require.Error(t, result.Err)
+				continue
+			}
+			if truncated {
+				require.Equal(t, StatusTruncated, result.Status, "%s %q", target.DescString(), input)
+				require.NotNil(t, result.Warning)
+			} else {
+				require.Equal(t, StatusSuccess, result.Status, "%s %q", target.DescString(), input)
+				require.Nil(t, result.Warning)
+			}
+			require.Equal(t, want.String(), decimalValueCoefficient(result.Value).String(), "%s %q", target.DescString(), input)
+		}
+	}
+}
+
+func TestConvertScalarDecimalBoundaryMatrix(t *testing.T) {
+	type decimalCase struct {
+		name   string
+		target types.Type
+		want   any
+	}
+	cases := []decimalCase{
+		{name: "decimal64", target: types.New(types.T_decimal64, 10, 2), want: types.Decimal64(1235)},
+		{name: "decimal128", target: types.New(types.T_decimal128, 20, 2), want: types.Decimal128FromInt64(1235)},
+		{name: "decimal256", target: types.New(types.T_decimal256, 40, 2), want: types.Decimal256FromInt64(1235)},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			for _, input := range []string{`"12.3 45"`, `"+12.345"`} {
+				result := ConvertScalar(parseConversionValue(t, input), test.target)
+				require.Equal(t, StatusTruncated, result.Status)
+				require.Equal(t, test.want, result.Value)
+				require.NotNil(t, result.Warning)
+			}
+
+			negative := ConvertScalar(parseConversionValue(t, `" -12.345"`), test.target)
+			require.Equal(t, StatusTruncated, negative.Status)
+			require.NotNil(t, negative.Warning)
+			switch test.target.Oid {
+			case types.T_decimal64:
+				require.Equal(t, types.Decimal64(1235).Minus(), negative.Value)
+			case types.T_decimal128:
+				require.Equal(t, types.Decimal128FromInt64(-1235), negative.Value)
+			case types.T_decimal256:
+				require.Equal(t, types.Decimal256FromInt64(-1235), negative.Value)
+			}
+
+			doubleRound := ConvertScalar(parseConversionValue(t, `"1.2349999999999999999"`), test.target)
+			require.Equal(t, StatusTruncated, doubleRound.Status)
+			switch test.target.Oid {
+			case types.T_decimal64:
+				require.Equal(t, types.Decimal64(123), doubleRound.Value)
+			case types.T_decimal128:
+				require.Equal(t, types.Decimal128FromInt64(123), doubleRound.Value)
+			case types.T_decimal256:
+				require.Equal(t, types.Decimal256FromInt64(123), doubleRound.Value)
+			}
+
+			exactExponent := ConvertScalar(parseConversionValue(t, `"1.234e+2"`), test.target)
+			require.Equal(t, StatusSuccess, exactExponent.Status)
+			require.Nil(t, exactExponent.Warning)
+
+			exactHex := ConvertScalar(parseConversionValue(t, `"0x1"`), test.target)
+			require.Equal(t, StatusSuccess, exactHex.Status)
+			require.Nil(t, exactHex.Warning)
+			switch test.target.Oid {
+			case types.T_decimal64:
+				require.Equal(t, types.Decimal64(100), exactHex.Value)
+			case types.T_decimal128:
+				require.Equal(t, types.Decimal128FromInt64(100), exactHex.Value)
+			case types.T_decimal256:
+				require.Equal(t, types.Decimal256FromInt64(100), exactHex.Value)
+			}
+
+			lossyFallback := ConvertScalar(parseConversionValue(t, `"1e2-3"`), test.target)
+			require.Equal(t, StatusTruncated, lossyFallback.Status)
+			require.NotNil(t, lossyFallback.Warning)
+		})
+	}
+
+	for _, oid := range []types.T{types.T_decimal64, types.T_decimal128, types.T_decimal256} {
+		t.Run(oid.String()+" range endpoints", func(t *testing.T) {
+			target := types.New(oid, 3, 0)
+			for _, input := range []string{`"-1000"`, `"1000"`} {
+				result := ConvertScalar(parseConversionValue(t, input), target)
+				require.Equal(t, StatusRangeError, result.Status)
+				require.Error(t, result.Err)
+			}
+			for _, input := range []string{`"-0x3e8"`, `"0x3e8"`, `"-0xFFFFFFFFFFFFFFFF"`, `"0xFFFFFFFFFFFFFFFF"`} {
+				result := ConvertScalar(parseConversionValue(t, input), target)
+				require.Equal(t, StatusRangeError, result.Status)
+				require.Error(t, result.Err)
+			}
+			for _, input := range []string{`"-0x3e7"`, `"0x3e7"`} {
+				result := ConvertScalar(parseConversionValue(t, input), target)
+				require.Equal(t, StatusSuccess, result.Status)
+				require.Nil(t, result.Warning)
+				negative := strings.HasPrefix(input, `"-`)
+				switch oid {
+				case types.T_decimal64:
+					want := types.Decimal64(999)
+					if negative {
+						want = want.Minus()
+					}
+					require.Equal(t, want, result.Value)
+				case types.T_decimal128:
+					want := types.Decimal128FromInt64(999)
+					if negative {
+						want = types.Decimal128FromInt64(-999)
+					}
+					require.Equal(t, want, result.Value)
+				case types.T_decimal256:
+					want := types.Decimal256FromInt64(999)
+					if negative {
+						want = types.Decimal256FromInt64(-999)
+					}
+					require.Equal(t, want, result.Value)
+				}
+			}
+		})
+	}
+}
+
+func TestConvertScalarDecimalResultAppendsWithWarningAndRejectsRange(t *testing.T) {
+	cases := []struct {
+		name   string
+		target types.Type
+		want   any
+		read   func(*vector.Vector) any
+	}{
+		{
+			name:   "decimal64",
+			target: types.New(types.T_decimal64, 10, 2),
+			want:   types.Decimal64(123),
+			read: func(vec *vector.Vector) any {
+				return vector.GetFixedAtNoTypeCheck[types.Decimal64](vec, 0)
+			},
+		},
+		{
+			name:   "decimal128",
+			target: types.New(types.T_decimal128, 20, 2),
+			want:   types.Decimal128FromInt64(123),
+			read: func(vec *vector.Vector) any {
+				return vector.GetFixedAtNoTypeCheck[types.Decimal128](vec, 0)
+			},
+		},
+		{
+			name:   "decimal256",
+			target: types.New(types.T_decimal256, 40, 2),
+			want:   types.Decimal256FromInt64(123),
+			read: func(vec *vector.Vector) any {
+				return vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, 0)
+			},
+		},
+	}
+
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			vec := vector.NewVec(test.target)
+			defer vec.Free(mp)
+
+			result := ConvertScalar(parseConversionValue(t, `"1.2349999999999999999"`), test.target)
+			require.Equal(t, StatusTruncated, result.Status)
+			require.NotNil(t, result.Warning)
+			require.Equal(t, moerr.WARN_DATA_TRUNCATED, result.Warning.Code)
+			require.NoError(t, AppendResult(vec, result, mp))
+			require.Equal(t, 1, vec.Length())
+			require.Equal(t, test.want, test.read(vec))
+
+			rangeResult := ConvertScalar(parseConversionValue(t, `"-1000"`), types.New(test.target.Oid, 3, 0))
+			require.Equal(t, StatusRangeError, rangeResult.Status)
+			require.Error(t, rangeResult.Err)
+			require.ErrorIs(t, AppendResult(vec, rangeResult, mp), rangeResult.Err)
+			require.Equal(t, 1, vec.Length())
+		})
+	}
+}
+
 func TestConvertScalarMalformedByteJsonFailsClosed(t *testing.T) {
 	malformed := bytejson.ByteJson{Type: bytejson.TpCodeInt64, Data: []byte{1}}
 	result := ConvertScalar(malformed, types.T_int64.ToType())
@@ -206,11 +497,48 @@ func TestConvertScalarMalformedByteJsonFailsClosed(t *testing.T) {
 	result = ConvertScalar(unknown, types.T_json.ToType())
 	require.Equal(t, StatusStatementError, result.Status)
 	require.Error(t, result.Err)
+	result = ConvertScalar(unknown, types.T_varchar.ToType())
+	require.Equal(t, StatusStatementError, result.Status)
+	require.Error(t, result.Err)
+	malformedString := bytejson.ByteJson{Type: bytejson.TpCodeString, Data: []byte{0x80}}
+	result = ConvertScalar(malformedString, types.T_varchar.ToType())
+	require.Equal(t, StatusStatementError, result.Status)
+	require.Error(t, result.Err)
+	for _, floating := range []float64{math.NaN(), math.Inf(1)} {
+		data := make([]byte, 8)
+		binary.LittleEndian.PutUint64(data, math.Float64bits(floating))
+		result = ConvertScalar(bytejson.ByteJson{Type: bytejson.TpCodeFloat64, Data: data}, types.T_varchar.ToType())
+		require.Equal(t, StatusStatementError, result.Status)
+		require.Error(t, result.Err)
+	}
 
 	malformedComposite := bytejson.ByteJson{Type: bytejson.TpCodeArray, Data: []byte{1}}
 	result = ConvertScalar(malformedComposite, types.T_json.ToType())
 	require.Equal(t, StatusStatementError, result.Status)
 	require.Error(t, result.Err)
+}
+
+func TestConvertScalarDecimalAnalysisIsBounded(t *testing.T) {
+	target := types.New(types.T_decimal64, 10, 2)
+	_, _, known, _ := canonicalDecimalInput("1e2-3", target)
+	require.False(t, known, "an exponent sign is valid only before exponent digits")
+	_, _, known, _ = canonicalDecimalInput("1E2", target)
+	require.False(t, known, "legacy decimal parser accepts only lowercase e")
+	for _, input := range []string{"1e", "1e+", "1e-"} {
+		_, _, known, _ = canonicalDecimalInput(input, target)
+		require.True(t, known, "legacy zero exponent compatibility for %q", input)
+	}
+
+	tooManyDigits := parseConversionValue(t, `"`+strings.Repeat("9", 4096)+`"`)
+	result := ConvertScalar(tooManyDigits, target)
+	require.Equal(t, StatusRangeError, result.Status)
+	require.Error(t, result.Err)
+
+	tinyExponent := parseConversionValue(t, `"1e-`+strings.Repeat("9", 4096)+`"`)
+	result = ConvertScalar(tinyExponent, target)
+	require.Equal(t, StatusTruncated, result.Status)
+	require.Equal(t, types.Decimal64(0), result.Value)
+	require.NotNil(t, result.Warning)
 }
 
 func TestConvertPathMatchesMalformedRootJSONFailsClosed(t *testing.T) {

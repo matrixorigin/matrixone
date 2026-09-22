@@ -20,7 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"math/big"
 	"strconv"
 	"strings"
 	"time"
@@ -154,6 +153,14 @@ func ConvertScalarWithContext(ctx context.Context, value bytejson.ByteJson, targ
 		}
 		return Result{Value: encoded, Status: StatusSuccess}
 	}
+	if err := validateJSONValue(value); err != nil {
+		// Keep the established conversion classification for a well-shaped
+		// floating-point payload whose value is NaN or Inf. Other malformed
+		// representations must not fall through to an empty scalar string.
+		if value.Type != bytejson.TpCodeFloat64 || len(value.Data) != 8 || isTextConversionTarget(target.Oid) {
+			return Result{Status: StatusStatementError, Err: err}
+		}
+	}
 	if value.Type == bytejson.TpCodeObject || value.Type == bytejson.TpCodeArray {
 		return Result{
 			Status: StatusComposite,
@@ -192,23 +199,17 @@ func ConvertScalarWithContext(ctx context.Context, value bytejson.ByteJson, targ
 	case types.T_float32, types.T_float64:
 		return convertFloat(text, target)
 	case types.T_decimal64:
-		v, err := types.ParseDecimal64(text, target.Width, target.Scale)
-		if err != nil {
-			return Result{Status: decimalFailureStatus(text), Err: err}
-		}
-		return decimalResult(v, text, target)
+		return convertDecimal(text, target, func(input string) (any, error) {
+			return types.ParseDecimal64(input, target.Width, target.Scale)
+		})
 	case types.T_decimal128:
-		v, err := types.ParseDecimal128(text, target.Width, target.Scale)
-		if err != nil {
-			return Result{Status: decimalFailureStatus(text), Err: err}
-		}
-		return decimalResult(v, text, target)
+		return convertDecimal(text, target, func(input string) (any, error) {
+			return types.ParseDecimal128(input, target.Width, target.Scale)
+		})
 	case types.T_decimal256:
-		v, err := types.ParseDecimal256(text, target.Width, target.Scale)
-		if err != nil {
-			return Result{Status: decimalFailureStatus(text), Err: err}
-		}
-		return decimalResult(v, text, target)
+		return convertDecimal(text, target, func(input string) (any, error) {
+			return types.ParseDecimal256(input, target.Width, target.Scale)
+		})
 	case types.T_date:
 		v, err := types.ParseDateCast(text)
 		if err != nil {
@@ -499,6 +500,16 @@ func safeScalarText(value bytejson.ByteJson) (text string, err error) {
 	return value.Unquote()
 }
 
+func isTextConversionTarget(oid types.T) bool {
+	switch oid {
+	case types.T_char, types.T_varchar, types.T_text,
+		types.T_binary, types.T_varbinary, types.T_blob, types.T_datalink:
+		return true
+	default:
+		return false
+	}
+}
+
 func convertSignedInteger(value bytejson.ByteJson, text string, target types.Type) Result {
 	v, ok := numericToInt(value, text)
 	if !ok {
@@ -620,15 +631,114 @@ func numericFailure(value bytejson.ByteJson, text string, target types.Type) Res
 }
 
 func decimalFailureStatus(text string) ConversionStatus {
-	if textLooksNumeric(text) {
+	if textLooksNumeric(text) || textLooksHexadecimal(text) {
 		return StatusRangeError
 	}
 	return StatusConversionError
 }
 
-func decimalResult(value any, text string, target types.Type) Result {
+func textLooksHexadecimal(text string) bool {
+	start, ok := hexadecimalPayloadStart(text)
+	if !ok {
+		return false
+	}
+	digits := 0
+	for i := start; i < len(text); i++ {
+		if text[i] == ' ' {
+			continue
+		}
+		if _, ok := hexadecimalDigit(text[i]); !ok {
+			return false
+		}
+		digits++
+	}
+	return digits > 0
+}
+
+func hexadecimalPayloadStart(text string) (int, bool) {
+	i := 0
+	for i < len(text) && text[i] == ' ' {
+		i++
+	}
+	if i < len(text) && (text[i] == '-' || text[i] == '+') {
+		i++
+		for i < len(text) && text[i] == ' ' {
+			i++
+		}
+	}
+	if i+2 > len(text) || text[i] != '0' || text[i+1] != 'x' {
+		return 0, false
+	}
+	return i + 2, true
+}
+
+func hexadecimalDigit(ch byte) (byte, bool) {
+	switch {
+	case ch >= '0' && ch <= '9':
+		return ch - '0', true
+	case ch >= 'a' && ch <= 'f':
+		return ch - 'a' + 10, true
+	case ch >= 'A' && ch <= 'F':
+		return ch - 'A' + 10, true
+	default:
+		return 0, false
+	}
+}
+
+type decimalScan struct {
+	negative      bool
+	digits        []byte
+	digitCount    int64
+	suffixNonZero bool
+	point         int64
+	exponent      int64
+	exponentSign  int64
+	exponentHuge  bool
+}
+
+// convertDecimal parses a bounded canonical decimal representation before
+// calling the existing Decimal implementation. The existing parser rounds
+// while it reads its fixed-width coefficient, so passing a long input through
+// it can round once while parsing and again while applying the target scale.
+// Keeping only the target-width prefix plus one rounding digit avoids that
+// double rounding while keeping retained analysis state bounded by the
+// destination type.
+func convertDecimal(text string, target types.Type, parse func(string) (any, error)) Result {
+	canonical, truncated, known, outOfRange := canonicalDecimalInput(text, target)
+	if outOfRange {
+		return Result{Status: StatusRangeError, Err: decimalRangeError(text, target)}
+	}
+	input := text
+	if known {
+		input = canonical
+	}
+	value, err := parse(input)
+	if err != nil {
+		return Result{Status: decimalFailureStatus(text), Err: err}
+	}
+	isHexadecimal, withinHexWidth := decimalHexValueWithinWidth(text, target)
+	if !known {
+		if isHexadecimal && !withinHexWidth {
+			return Result{Status: StatusRangeError, Err: decimalRangeError(text, target)}
+		}
+		if !decimalValueWithinWidth(value, target) {
+			return Result{Status: StatusRangeError, Err: decimalRangeError(text, target)}
+		}
+	}
+	// A successful non-hex input outside the bounded decimal grammar is accepted
+	// by the legacy parser. It is unsafe to treat that representation as exact,
+	// so preserve the warning contract conservatively rather than silently
+	// losing diagnostics. Hexadecimal input is checked separately as an exact
+	// integer representation and does not need this fallback warning.
+	if !known && !isHexadecimal {
+		truncated = true
+	}
+	return decimalResult(value, target, truncated)
+}
+
+func decimalResult(value any, target types.Type, truncated bool) Result {
 	result := Result{Value: value, Status: StatusSuccess}
-	if decimalInputLosesScale(text, target.Scale) {
+	if truncated {
 		result.Status = StatusTruncated
 		result.Warning = &WarningDescriptor{
 			Code:    moerr.WARN_DATA_TRUNCATED,
@@ -638,19 +748,357 @@ func decimalResult(value any, text string, target types.Type) Result {
 	return result
 }
 
-func decimalInputLosesScale(text string, scale int32) bool {
-	if scale < 0 {
+func decimalWidthLimit(oid types.T) int32 {
+	switch oid {
+	case types.T_decimal64:
+		return 18
+	case types.T_decimal128:
+		return 38
+	case types.T_decimal256:
+		return 76
+	default:
+		return 0
+	}
+}
+
+func decimalRangeError(text string, target types.Type) error {
+	width := target.Width
+	if limit := decimalWidthLimit(target.Oid); width > limit {
+		width = limit
+	}
+	switch target.Oid {
+	case types.T_decimal64:
+		return moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal64(%d,%d).", text, width, target.Scale)
+	case types.T_decimal128:
+		return moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal128(%d,%d).", text, width, target.Scale)
+	case types.T_decimal256:
+		return moerr.NewInvalidInputNoCtxf("%s beyond the range, can't be converted to Decimal256(%d,%d).", text, width, target.Scale)
+	default:
+		return conversionError(target, text)
+	}
+}
+
+func decimalValueWithinWidth(value any, target types.Type) bool {
+	width := target.Width
+	if limit := decimalWidthLimit(target.Oid); width > limit {
+		width = limit
+	}
+	if width < 0 {
 		return false
 	}
-	normalized := strings.TrimSpace(text)
-	normalized = strings.TrimPrefix(normalized, "+")
-	value, ok := new(big.Rat).SetString(normalized)
+
+	var formatted string
+	switch value := value.(type) {
+	case types.Decimal64:
+		formatted = value.Format(0)
+	case types.Decimal128:
+		formatted = value.Format(0)
+	case types.Decimal256:
+		formatted = value.Format(0)
+	default:
+		return false
+	}
+	magnitude := strings.TrimLeft(strings.TrimPrefix(formatted, "-"), "0")
+	return len(magnitude) <= int(width)
+}
+
+func decimalHexValueWithinWidth(text string, target types.Type) (isHexadecimal, within bool) {
+	start, ok := hexadecimalPayloadStart(text)
 	if !ok {
-		return false
+		return false, true
 	}
-	factor := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(scale)), nil)
-	scaled := new(big.Rat).Mul(value, new(big.Rat).SetInt(factor))
-	return scaled.Denom().Cmp(big.NewInt(1)) != 0
+	width := target.Width
+	if limit := decimalWidthLimit(target.Oid); width > limit {
+		width = limit
+	}
+	integerDigits := width - target.Scale
+	if integerDigits < 0 {
+		integerDigits = 0
+	}
+
+	var magnitude types.Decimal256
+	seenNonZero := false
+	var significantDigits int32
+	for i := start; i < len(text); i++ {
+		if text[i] == ' ' {
+			continue
+		}
+		digit, ok := hexadecimalDigit(text[i])
+		if !ok {
+			return true, false
+		}
+		if !seenNonZero && digit == 0 {
+			continue
+		}
+		seenNonZero = true
+		significantDigits++
+		if significantDigits > integerDigits {
+			return true, false
+		}
+		var err error
+		magnitude, err = magnitude.Mul256(types.Decimal256{B0_63: 16})
+		if err != nil {
+			return true, false
+		}
+		magnitude, err = magnitude.Add256(types.Decimal256{B0_63: uint64(digit)})
+		if err != nil {
+			return true, false
+		}
+	}
+	if !seenNonZero {
+		return true, true
+	}
+	limit, ok := decimal256PowerOfTen(integerDigits)
+	if !ok || magnitude.Sign() {
+		return true, false
+	}
+	return true, magnitude.Less(limit)
+}
+
+func decimal256PowerOfTen(width int32) (types.Decimal256, bool) {
+	if width < 0 || width > 76 {
+		return types.Decimal256{}, false
+	}
+	result := types.Decimal256{B0_63: 1}
+	for width >= 19 {
+		var err error
+		result, err = result.Mul256(types.Decimal256{B0_63: types.Pow10[19]})
+		if err != nil {
+			return types.Decimal256{}, false
+		}
+		width -= 19
+	}
+	if width > 0 {
+		var err error
+		result, err = result.Mul256(types.Decimal256{B0_63: types.Pow10[width]})
+		if err != nil {
+			return types.Decimal256{}, false
+		}
+	}
+	return result, true
+}
+
+// canonicalDecimalInput returns a short decimal token whose value is already
+// rounded to target.Scale. The scan accepts the decimal syntax understood by
+// the JSON_TABLE conversion boundary, including spaces ignored by the legacy
+// decimal parser and an optional leading plus sign. It never allocates based
+// on an exponent or retains more than width+1 significant digits.
+func canonicalDecimalInput(text string, target types.Type) (canonical string, truncated, known, outOfRange bool) {
+	widthLimit := decimalWidthLimit(target.Oid)
+	if widthLimit == 0 || target.Width <= 0 || target.Scale < 0 || target.Scale > widthLimit {
+		return "", false, false, false
+	}
+	width := target.Width
+	if width > widthLimit {
+		width = widthLimit
+	}
+	if width <= 0 {
+		return "", false, false, false
+	}
+
+	keepLimit := int64(width) + 1
+	scan, ok := scanDecimal(text, keepLimit)
+	if !ok {
+		return "", false, false, false
+	}
+	known = true
+	if scan.digitCount == 0 {
+		return "0", false, true, false
+	}
+	if scan.exponentHuge {
+		if scan.exponentSign > 0 {
+			return "", false, true, true
+		}
+		return "0", true, true, false
+	}
+
+	cut := scan.point + int64(target.Scale)
+	if cut > int64(width) {
+		return "", false, true, true
+	}
+
+	var coefficient []byte
+	roundUp := false
+	if cut <= 0 {
+		truncated = true
+		if cut == 0 && scan.digits[0] >= '5' {
+			roundUp = true
+		}
+		coefficient = []byte{'0'}
+	} else if cut < scan.digitCount {
+		// cut <= width < keepLimit, so the first discarded digit is always
+		// retained by scanDecimal.
+		coefficient = append([]byte(nil), scan.digits[:cut]...)
+		for _, digit := range scan.digits[cut:] {
+			if digit != '0' {
+				truncated = true
+				break
+			}
+		}
+		if scan.suffixNonZero {
+			truncated = true
+		}
+		roundUp = scan.digits[cut] >= '5'
+	} else {
+		coefficient = append([]byte(nil), scan.digits...)
+		for int64(len(coefficient)) < cut {
+			coefficient = append(coefficient, '0')
+		}
+	}
+	if roundUp {
+		coefficient = incrementDecimalDigits(coefficient)
+	}
+	if int32(len(coefficient)) > width {
+		return "", false, true, true
+	}
+
+	canonical = formatScaledDecimal(coefficient, target.Scale, scan.negative)
+	return canonical, truncated, true, false
+}
+
+// scanDecimal retains only significant digits needed to form a target-width
+// coefficient. It records whether non-zero digits were omitted so warning
+// classification never depends on an unbounded intermediate number.
+func scanDecimal(text string, keepLimit int64) (decimalScan, bool) {
+	text = strings.TrimSpace(text)
+	var scan decimalScan
+	scan.exponentSign = 1
+	firstNonZero := int64(-1)
+	digitIndex := int64(0)
+	digitsBeforeDot := int64(0)
+	seenDot := false
+	seenExponent := false
+	inExponent := false
+	exponentSignSeen := false
+	exponentDigitsSeen := false
+	const maxExponent = int64(1 << 60)
+
+	for i := 0; i < len(text); i++ {
+		ch := text[i]
+		if ch == ' ' {
+			continue
+		}
+		if i == 0 && (ch == '-' || ch == '+') {
+			scan.negative = ch == '-'
+			continue
+		}
+		if !inExponent {
+			switch {
+			case ch >= '0' && ch <= '9':
+				if !seenDot {
+					digitsBeforeDot++
+				}
+				if firstNonZero < 0 && ch != '0' {
+					firstNonZero = digitIndex
+				}
+				if firstNonZero >= 0 {
+					significantIndex := digitIndex - firstNonZero
+					scan.digitCount++
+					if significantIndex < keepLimit {
+						scan.digits = append(scan.digits, ch)
+					} else if ch != '0' {
+						scan.suffixNonZero = true
+					}
+				}
+				digitIndex++
+			case ch == '.':
+				if seenDot {
+					return decimalScan{}, false
+				}
+				seenDot = true
+			case ch == 'e':
+				if seenExponent || digitIndex == 0 {
+					return decimalScan{}, false
+				}
+				seenExponent = true
+				inExponent = true
+			default:
+				return decimalScan{}, false
+			}
+			continue
+		}
+
+		if !exponentSignSeen && !exponentDigitsSeen && (ch == '-' || ch == '+') {
+			scan.exponentSign = 1
+			if ch == '-' {
+				scan.exponentSign = -1
+			}
+			exponentSignSeen = true
+			continue
+		}
+		if ch < '0' || ch > '9' {
+			return decimalScan{}, false
+		}
+		exponentDigitsSeen = true
+		if scan.exponentHuge {
+			continue
+		}
+		digit := int64(ch - '0')
+		if scan.exponent > (maxExponent-digit)/10 {
+			scan.exponentHuge = true
+			continue
+		}
+		scan.exponent = scan.exponent*10 + digit
+	}
+	if digitIndex == 0 {
+		return decimalScan{}, false
+	}
+	// ParseDecimal accepts a missing exponent number (for example, "1e+")
+	// as a zero exponent. Keep that established behavior while rejecting a
+	// second sign after exponent digits.
+	if firstNonZero < 0 {
+		return scan, true
+	}
+	scan.point = digitsBeforeDot - firstNonZero
+	if scan.exponentHuge {
+		scan.exponent = maxExponent
+	} else if scan.exponent != 0 {
+		if scan.exponentSign > 0 {
+			if scan.point > maxExponent-scan.exponent {
+				scan.exponentHuge = true
+			} else {
+				scan.point += scan.exponent
+			}
+		} else {
+			if scan.point < -maxExponent+scan.exponent {
+				scan.exponentHuge = true
+				scan.exponentSign = -1
+			} else {
+				scan.point -= scan.exponent
+			}
+		}
+	}
+	return scan, true
+}
+
+func incrementDecimalDigits(digits []byte) []byte {
+	for i := len(digits) - 1; i >= 0; i-- {
+		if digits[i] < '9' {
+			digits[i]++
+			return digits
+		}
+		digits[i] = '0'
+	}
+	return append([]byte{'1'}, digits...)
+}
+
+func formatScaledDecimal(coefficient []byte, scale int32, negative bool) string {
+	for len(coefficient) > 1 && coefficient[0] == '0' {
+		coefficient = coefficient[1:]
+	}
+	var value string
+	if scale == 0 {
+		value = string(coefficient)
+	} else if int32(len(coefficient)) <= scale {
+		value = "0." + strings.Repeat("0", int(scale)-len(coefficient)) + string(coefficient)
+	} else {
+		point := len(coefficient) - int(scale)
+		value = string(coefficient[:point]) + "." + string(coefficient[point:])
+	}
+	if negative && value != "0" {
+		return "-" + value
+	}
+	return value
 }
 
 func textLooksNumeric(text string) bool {
