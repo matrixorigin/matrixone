@@ -207,4 +207,24 @@ select (col1,col2) = ('abcdef','{"t1": "a"}') from row05;
 select (col1,col2) != ('abcdef','{"ehyiuwqnve": "ashyiujewv"}') from row05;
 drop table row05;
 
+-- #28295: direct row constructors against multi-column scalar subqueries.
+drop table if exists row_scalar_28295;
+create table row_scalar_28295(id int primary key, a int, b int);
+insert into row_scalar_28295 values (1,1,5),(2,1,null),(3,2,8),(4,2,10);
+select (1,5) = (select a,b from row_scalar_28295 where id=1) as match_v;
+select (1,5) = (select a,b from row_scalar_28295 where id=99) as empty_v;
+select (1,5) = (select a,b from row_scalar_28295 where id=2) as null_v;
+select (1,4) < (select a,b from row_scalar_28295 where id=1) as order_v;
+select (1,null) <=> (select a,b from row_scalar_28295 where id=2) as null_safe_v;
+select id from row_scalar_28295 outer_row
+where (outer_row.a, outer_row.b) =
+      (select inner_row.a, inner_row.b from row_scalar_28295 inner_row where inner_row.id=outer_row.id)
+order by id;
+select (1,5) = (select a,b from row_scalar_28295 where id>0) as multi_v;
+set @row_scalar_a=1, @row_scalar_b=5;
+prepare row_scalar_stmt from 'select (?,?) = (select a,b from row_scalar_28295 where id=1) as prepared_v';
+execute row_scalar_stmt using @row_scalar_a, @row_scalar_b;
+deallocate prepare row_scalar_stmt;
+drop table row_scalar_28295;
+
 drop database test;

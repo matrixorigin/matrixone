@@ -399,6 +399,10 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 		builder.qry.Nodes[subNode.Children[0]].TableDef == nil {
 		switch subquery.Typ {
 		case plan.SubqueryRef_SCALAR:
+			if subquery.Child != nil {
+				newExpr, err := builder.generateRowComparison(subquery.Op, subquery.Child, subCtx, true)
+				return nodeID, newExpr, err
+			}
 			newProj, _ := decreaseDepth(subNode.ProjectList[0])
 			return nodeID, newProj, nil
 
@@ -456,7 +460,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	// multiple rows per outer row and breaking SINGLE JOIN semantics.
 	// Fix: bypass the inner AGG, use LEFT JOIN, and re-aggregate on top.
 	if subquery.Typ == plan.SubqueryRef_SCALAR && len(subCtx.aggregates) > 0 && builder.findNonEqPred(preds) {
-		return builder.flattenScalarSubqueryWithNonEqAgg(nodeID, subID, subCtx, preds, ctx)
+		return builder.flattenScalarSubqueryWithNonEqAgg(nodeID, subID, subCtx, preds, ctx, subquery)
 	}
 
 	filterPreds, joinPreds := decreaseDepthAndDispatch(preds)
@@ -536,7 +540,7 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 			joinType = plan.Node_LEFT
 		}
 
-		postJoinProjection, finalizeProjection, err :=
+		postJoinProjections, finalizeProjection, err :=
 			builder.prepareCorrelatedScalarAggregatePostJoinProjection(subID, subCtx, joinPreds)
 		if err != nil {
 			return nodeID, nil, err
@@ -568,10 +572,23 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 				FilterList: filterPreds,
 			}, ctx)
 		}
+		if subquery.Child != nil {
+			if finalizeProjection {
+				newExpr, err := builder.generateRowComparisonWithProjects(
+					subquery.Op, subquery.Child, postJoinProjections)
+				return nodeID, newExpr, err
+			}
+			newExpr, err := builder.generateRowComparison(subquery.Op, subquery.Child, subCtx, false)
+			return nodeID, newExpr, err
+		}
 
 		retExpr := scalarMatch
 		if finalizeProjection {
-			retExpr = postJoinProjection
+			if len(postJoinProjections) != 1 {
+				return 0, nil, moerr.NewInternalError(builder.GetContext(),
+					"scalar aggregate projection must return exactly one column")
+			}
+			retExpr = postJoinProjections[0]
 		} else if retExpr == nil {
 			retExpr = &plan.Expr{
 				Typ: subCtx.results[0].Typ,
@@ -1071,14 +1088,29 @@ func getProjectExpr(idx int, ctx *BindContext, strip bool) *plan.Expr {
 }
 
 func (builder *QueryBuilder) generateRowComparison(op string, child *plan.Expr, ctx *BindContext, strip bool) (*plan.Expr, error) {
+	projects := make([]*plan.Expr, len(ctx.results))
+	for i := range projects {
+		projects[i] = getProjectExpr(i, ctx, strip)
+	}
+	return builder.generateRowComparisonWithProjects(op, child, projects)
+}
+
+func (builder *QueryBuilder) generateRowComparisonWithProjects(
+	op string,
+	child *plan.Expr,
+	projects []*plan.Expr,
+) (*plan.Expr, error) {
 	switch childImpl := child.Expr.(type) {
 	case *plan.Expr_List:
 		childList := childImpl.List.List
 		if len(childList) == 0 {
 			return nil, moerr.NewInternalError(builder.GetContext(), "row comparison requires at least one column")
 		}
+		if len(childList) != len(projects) {
+			return nil, moerr.NewInternalError(builder.GetContext(), "row comparison column count changed while flattening subquery")
+		}
 		switch op {
-		case "=", "<>":
+		case "=", "<>", "<=>":
 			logicalOp := "and"
 			if op == "<>" {
 				logicalOp = "or"
@@ -1088,7 +1120,7 @@ func (builder *QueryBuilder) generateRowComparison(op string, child *plan.Expr, 
 			for i := range childList {
 				comparison, err := BindFuncExprImplByPlanExpr(builder.GetContext(), op, []*plan.Expr{
 					childList[i],
-					getProjectExpr(i, ctx, strip),
+					projects[i],
 				})
 				if err != nil {
 					return nil, err
@@ -1099,23 +1131,20 @@ func (builder *QueryBuilder) generateRowComparison(op string, child *plan.Expr, 
 			return combinePlanExprsBalanced(builder.GetContext(), logicalOp, comparisons)
 
 		case "<", "<=", ">", ">=":
-			projList := make([]*plan.Expr, len(childList))
-			for i := range projList {
-				projList[i] = getProjectExpr(i, ctx, strip)
-
-			}
-
 			nonEqOp := op[:1] // <= -> <, >= -> >
-			return unwindTupleComparison(builder.GetContext(), nonEqOp, op, childList, projList, 0)
+			return unwindTupleComparison(builder.GetContext(), nonEqOp, op, childList, projects, 0)
 
 		default:
 			return nil, moerr.NewNotSupported(builder.GetContext(), "row constructor only support comparison operators")
 		}
 
 	default:
+		if len(projects) != 1 {
+			return nil, moerr.NewInternalError(builder.GetContext(), "scalar comparison requires exactly one subquery column")
+		}
 		return BindFuncExprImplByPlanExpr(builder.GetContext(), op, []*plan.Expr{
 			child,
-			getProjectExpr(0, ctx, strip),
+			projects[0],
 		})
 	}
 }
@@ -1139,7 +1168,7 @@ func (builder *QueryBuilder) prepareCorrelatedScalarAggregatePostJoinProjection(
 	subID int32,
 	subCtx *BindContext,
 	joinPreds []*plan.Expr,
-) (*plan.Expr, bool, error) {
+) ([]*plan.Expr, bool, error) {
 	if !subCtx.hasSingleRow || len(subCtx.groups) != 0 || len(subCtx.aggregates) == 0 || len(joinPreds) == 0 {
 		return nil, false, nil
 	}
@@ -1147,18 +1176,24 @@ func (builder *QueryBuilder) prepareCorrelatedScalarAggregatePostJoinProjection(
 	project := builder.qry.Nodes[subID]
 	if project.NodeType == plan.Node_AGG {
 		if len(project.BindingTags) < 2 || project.BindingTags[1] != subCtx.aggregateTag ||
-			len(project.AggList) != 1 || len(subCtx.aggregates) != 1 || len(subCtx.results) != 1 {
+			len(project.AggList) != len(subCtx.aggregates) || len(project.AggList) != len(subCtx.results) {
 			return nil, false, nil
 		}
-		aggregate := project.AggList[0]
-		fn := aggregate.GetF()
-		if fn == nil || fn.Func == nil {
-			return nil, false, nil
+		postJoinProjections := make([]*plan.Expr, len(project.AggList))
+		for i, aggregate := range project.AggList {
+			fn := aggregate.GetF()
+			if fn == nil || fn.Func == nil {
+				return nil, false, nil
+			}
+			projected := GetColExpr(aggregate.Typ, subCtx.aggregateTag, int32(i))
+			projected.Typ.NotNullable = false
+			var err error
+			postJoinProjections[i], err = builder.restoreAggregateEmptyResult(projected, aggregate, fn.Func.ObjName)
+			if err != nil {
+				return nil, false, err
+			}
 		}
-		projected := GetColExpr(aggregate.Typ, subCtx.aggregateTag, 0)
-		projected.Typ.NotNullable = false
-		postJoinProjection, err := builder.restoreAggregateEmptyResult(projected, aggregate, fn.Func.ObjName)
-		return postJoinProjection, err == nil, err
+		return postJoinProjections, true, nil
 	}
 	if project.NodeType != plan.Node_PROJECT || len(project.Children) != 1 || len(project.BindingTags) != 1 ||
 		len(project.ProjectList) == 0 || project.Limit != nil || project.Offset != nil || project.RankOption != nil {
@@ -1171,6 +1206,10 @@ func (builder *QueryBuilder) prepareCorrelatedScalarAggregatePostJoinProjection(
 		return nil, false, nil
 	}
 
+	resultCount := len(subCtx.results)
+	if resultCount == 0 || len(project.ProjectList) < resultCount {
+		return nil, false, nil
+	}
 	projectTag := project.BindingTags[0]
 	projectedAggregates := make([]*plan.Expr, len(agg.AggList))
 	rawAggregates := make([]*plan.Expr, len(agg.AggList))
@@ -1181,9 +1220,9 @@ func (builder *QueryBuilder) prepareCorrelatedScalarAggregatePostJoinProjection(
 			return nil, false, nil
 		}
 
-		projectPos := int32(0)
-		if i > 0 {
-			projectPos = firstAppendedPos + int32(i-1)
+		projectPos := int32(i)
+		if i >= resultCount {
+			projectPos = firstAppendedPos + int32(i-resultCount)
 		}
 		rawAggregates[i] = GetColExpr(aggregate.Typ, subCtx.aggregateTag, int32(i))
 		projected := GetColExpr(aggregate.Typ, projectTag, projectPos)
@@ -1196,22 +1235,28 @@ func (builder *QueryBuilder) prepareCorrelatedScalarAggregatePostJoinProjection(
 		}
 	}
 
-	postJoinProjection, ok := replaceAggregateRefsForPostJoin(
-		DeepCopyExpr(project.ProjectList[0]), subCtx.aggregateTag, projectedAggregates)
-	if !ok {
-		return nil, false, nil
-	}
-	postJoinProjection, stillCorrelated := decreaseDepth(postJoinProjection)
-	if stillCorrelated {
-		return nil, false, nil
+	postJoinProjections := make([]*plan.Expr, resultCount)
+	for i := range postJoinProjections {
+		var ok bool
+		postJoinProjections[i], ok = replaceAggregateRefsForPostJoin(
+			DeepCopyExpr(project.ProjectList[i]), subCtx.aggregateTag, projectedAggregates)
+		if !ok {
+			return nil, false, nil
+		}
+		var stillCorrelated bool
+		postJoinProjections[i], stillCorrelated = decreaseDepth(postJoinProjections[i])
+		if stillCorrelated {
+			return nil, false, nil
+		}
 	}
 
 	newProjectList := make([]*plan.Expr, len(project.ProjectList), len(project.ProjectList)+len(rawAggregates)-1)
 	copy(newProjectList, project.ProjectList)
-	newProjectList[0] = rawAggregates[0]
-	newProjectList = append(newProjectList, rawAggregates[1:]...)
+	copyCount := min(resultCount, len(rawAggregates))
+	copy(newProjectList[:copyCount], rawAggregates[:copyCount])
+	newProjectList = append(newProjectList, rawAggregates[copyCount:]...)
 	project.ProjectList = newProjectList
-	return postJoinProjection, true, nil
+	return postJoinProjections, true, nil
 }
 
 func (builder *QueryBuilder) restoreAggregateEmptyResult(
@@ -1921,6 +1966,7 @@ func containsNonEqComparison(expr *plan.Expr) bool {
 // producing the correct result.
 func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 	nodeID, subID int32, subCtx *BindContext, preds []*plan.Expr, ctx *BindContext,
+	subquery *plan.SubqueryRef,
 ) (int32, *plan.Expr, error) {
 	// Find the AGG node in the subquery plan
 	aggNode := builder.findAggNodeBelow(subID)
@@ -1948,6 +1994,10 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 			"aggregation with non equal predicate in scalar subquery will be supported in future version")
 	}
 	subRoot := builder.qry.Nodes[subID]
+	if subquery.Child != nil && subRoot == aggNode && len(subCtx.results) != len(aggNode.AggList) {
+		return 0, nil, moerr.NewNYIf(builder.GetContext(),
+			"aggregation with non equal predicate in scalar subquery will be supported in future version")
+	}
 	if subRoot != aggNode {
 		if subRoot.NodeType != plan.Node_PROJECT ||
 			len(subRoot.Children) != 1 ||
@@ -1958,10 +2008,21 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 				"aggregation with non equal predicate in scalar subquery will be supported in future version")
 		}
 
-		col, ok := subRoot.ProjectList[0].Expr.(*plan.Expr_Col)
-		if !ok || col.Col == nil {
+		resultCount := 1
+		if subquery.Child != nil {
+			resultCount = len(subCtx.results)
+		}
+		if len(subRoot.ProjectList) < resultCount {
 			return 0, nil, moerr.NewNYIf(builder.GetContext(),
 				"aggregation with non equal predicate in scalar subquery will be supported in future version")
+		}
+		for i := range resultCount {
+			col, ok := subRoot.ProjectList[i].Expr.(*plan.Expr_Col)
+			if !ok || col.Col == nil || col.Col.RelPos != subCtx.aggregateTag ||
+				col.Col.ColPos < 0 || int(col.Col.ColPos) >= len(aggNode.AggList) {
+				return 0, nil, moerr.NewNYIf(builder.GetContext(),
+					"aggregation with non equal predicate in scalar subquery will be supported in future version")
+			}
 		}
 	}
 
@@ -2097,6 +2158,18 @@ func (builder *QueryBuilder) flattenScalarSubqueryWithNonEqAgg(
 		BindingTags: []int32{reuseGroupTag, newAggTag},
 		SpillMem:    builder.aggSpillMem,
 	}, ctx)
+	if subquery.Child != nil {
+		projects := make([]*plan.Expr, len(subCtx.results))
+		for i, result := range subCtx.results {
+			aggregatePos := int32(i)
+			if subRoot != aggNode {
+				aggregatePos = subRoot.ProjectList[i].GetCol().ColPos
+			}
+			projects[i] = GetColExpr(result.Typ, newAggTag, aggregatePos)
+		}
+		retExpr, err := builder.generateRowComparisonWithProjects(subquery.Op, subquery.Child, projects)
+		return nodeID, retExpr, err
+	}
 
 	retExpr := &plan.Expr{
 		Typ:  subCtx.results[0].Typ,

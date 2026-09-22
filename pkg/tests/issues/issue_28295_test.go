@@ -1,0 +1,137 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package issues
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"testing"
+	"time"
+
+	_ "github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
+	"github.com/stretchr/testify/require"
+)
+
+func TestIssue28295RowConstructorScalarSubquery(t *testing.T) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		port := cn.GetServiceConfig().CN.Frontend.Port
+		admin, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?interpolateParams=false", port))
+		require.NoError(t, err)
+		defer admin.Close()
+		conn, err := admin.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+
+		database := testutils.GetDatabaseName(t)
+		_, err = conn.ExecContext(ctx, "create database `"+database+"`")
+		require.NoError(t, err)
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cleanupCancel()
+			_, _ = conn.ExecContext(cleanupCtx, "drop database if exists `"+database+"`")
+		}()
+		_, err = conn.ExecContext(ctx, "use `"+database+"`")
+		require.NoError(t, err)
+
+		_, err = conn.ExecContext(ctx, "create table scalar_rows(id int primary key, a int, b int)")
+		require.NoError(t, err)
+		_, err = conn.ExecContext(ctx, "insert into scalar_rows values (1,1,5),(2,1,null),(3,2,8),(4,2,10)")
+		require.NoError(t, err)
+
+		assertBool := func(query string, want sql.NullBool) {
+			t.Helper()
+			var got sql.NullBool
+			require.NoError(t, conn.QueryRowContext(ctx, query).Scan(&got))
+			require.Equal(t, want, got)
+		}
+		assertBool("select (1,5) = (select a,b from scalar_rows where id=1)", sql.NullBool{Bool: true, Valid: true})
+		assertBool("select (1,4) <> (select a,b from scalar_rows where id=1)", sql.NullBool{Bool: true, Valid: true})
+		assertBool("select (1,4) < (select a,b from scalar_rows where id=1)", sql.NullBool{Bool: true, Valid: true})
+		assertBool("select (2,8) <= (select a,b from scalar_rows where id=3)", sql.NullBool{Bool: true, Valid: true})
+		assertBool("select (select a,b from scalar_rows where id=4) > (2,8)", sql.NullBool{Bool: true, Valid: true})
+		assertBool("select (2,10) >= (select a,b from scalar_rows where id=4)", sql.NullBool{Bool: true, Valid: true})
+		assertBool("select (1,5) = (select a,b from scalar_rows where id=99)", sql.NullBool{})
+		assertBool("select (1,5) = (select a,b from scalar_rows where id=2)", sql.NullBool{})
+		assertBool("select (0,5) = (select a,b from scalar_rows where id=2)", sql.NullBool{Valid: true})
+		assertBool("select (1,null) <=> (select a,b from scalar_rows where id=2)", sql.NullBool{Bool: true, Valid: true})
+		assertBool("select (1,5) <=> (select a,b from scalar_rows where id=99)", sql.NullBool{Valid: true})
+		assertBool("select (1,'5') = (select a,b from scalar_rows where id=1)", sql.NullBool{Bool: true, Valid: true})
+
+		var correlatedCount int
+		err = conn.QueryRowContext(ctx, `select count(*) from scalar_rows outer_row
+			where (outer_row.a, outer_row.b) =
+				(select inner_row.a, inner_row.b from scalar_rows inner_row where inner_row.id = outer_row.id)`).Scan(&correlatedCount)
+		require.NoError(t, err)
+		require.Equal(t, 3, correlatedCount)
+
+		_, err = conn.ExecContext(ctx, "create table scalar_outer(k int primary key)")
+		require.NoError(t, err)
+		_, err = conn.ExecContext(ctx, "insert into scalar_outer values (1),(2)")
+		require.NoError(t, err)
+		_, err = conn.ExecContext(ctx, "create table scalar_inner(k int, v int)")
+		require.NoError(t, err)
+		_, err = conn.ExecContext(ctx, "insert into scalar_inner values (1,10)")
+		require.NoError(t, err)
+		assertBool(`select (1,10) =
+			(select count(*),sum(v) from scalar_inner i where i.k=o.k)
+			from scalar_outer o where o.k=2`, sql.NullBool{Valid: true})
+		assertBool(`select (0,null) <=>
+			(select count(*),sum(v) from scalar_inner i where i.k=o.k)
+			from scalar_outer o where o.k=2`, sql.NullBool{Bool: true, Valid: true})
+		err = conn.QueryRowContext(ctx, `select count(*) from scalar_outer o
+			where (1,10) =
+				(select count(*),sum(v) from scalar_inner i where i.k<o.k)`).Scan(&correlatedCount)
+		require.NoError(t, err)
+		require.Equal(t, 1, correlatedCount)
+
+		var queryErr error
+		func() {
+			rows, err := conn.QueryContext(ctx, "select (1,5) = (select a,b from scalar_rows where id > 0)")
+			if err != nil {
+				queryErr = err
+				return
+			}
+			defer rows.Close()
+			for rows.Next() {
+			}
+			queryErr = rows.Err()
+		}()
+		require.ErrorContains(t, queryErr, "Subquery returns more than 1 row")
+
+		_, err = conn.ExecContext(ctx, "set @issue28295_a = 1, @issue28295_b = 5")
+		require.NoError(t, err)
+		_, err = conn.ExecContext(ctx,
+			"prepare issue28295_text from 'select (?,?) = (select a,b from scalar_rows where id=1)'")
+		require.NoError(t, err)
+		defer func() { _, _ = conn.ExecContext(ctx, "deallocate prepare issue28295_text") }()
+		assertBool("execute issue28295_text using @issue28295_a, @issue28295_b", sql.NullBool{Bool: true, Valid: true})
+
+		prepared, err := conn.PrepareContext(ctx,
+			"select (?,?) = (select a,b from scalar_rows where id=1)")
+		require.NoError(t, err)
+		defer prepared.Close()
+		var preparedResult sql.NullBool
+		require.NoError(t, prepared.QueryRowContext(ctx, int64(1), int64(5)).Scan(&preparedResult))
+		require.Equal(t, sql.NullBool{Bool: true, Valid: true}, preparedResult)
+	})
+}

@@ -2134,11 +2134,13 @@ func TestPrepareCorrelatedScalarAggregatePostJoinProjection(t *testing.T) {
 		hasSingleRow: true,
 		aggregateTag: aggregateTag,
 		aggregates:   aggregates,
+		results:      []*plan.Expr{projection},
 	}
 
-	postJoinProjection, ok, err := builder.prepareCorrelatedScalarAggregatePostJoinProjection(1, ctx, []*plan.Expr{constTrue})
+	postJoinProjections, ok, err := builder.prepareCorrelatedScalarAggregatePostJoinProjection(1, ctx, []*plan.Expr{constTrue})
 	require.NoError(t, err)
 	require.True(t, ok)
+	require.Len(t, postJoinProjections, 1)
 	require.Len(t, builder.qry.Nodes[1].ProjectList, len(aggregates)+1)
 	require.Equal(t, groupTag, builder.qry.Nodes[1].ProjectList[1].GetCol().RelPos)
 	require.Equal(t, int32(0), builder.qry.Nodes[1].ProjectList[1].GetCol().ColPos)
@@ -2149,7 +2151,7 @@ func TestPrepareCorrelatedScalarAggregatePostJoinProjection(t *testing.T) {
 		require.Equal(t, int32(i), raw.GetCol().ColPos)
 	}
 
-	postJoinArgs := postJoinProjection.GetF().Args
+	postJoinArgs := postJoinProjections[0].GetF().Args
 	require.Len(t, postJoinArgs, len(aggregates)+1)
 	for i := 0; i < 5; i++ {
 		require.Equal(t, projectTag, postJoinArgs[i].GetCol().RelPos)
@@ -2299,21 +2301,26 @@ func TestPrepareCorrelatedScalarAggregatePostJoinProjectionRejectsUnsupportedSha
 				},
 				{NodeType: plan.Node_FILTER, Children: []int32{0}},
 			}
-			ctx := &BindContext{hasSingleRow: true, aggregateTag: aggregateTag, aggregates: []*plan.Expr{aggregate}}
+			ctx := &BindContext{
+				hasSingleRow: true,
+				aggregateTag: aggregateTag,
+				aggregates:   []*plan.Expr{aggregate},
+				results:      []*plan.Expr{nodes[1].ProjectList[0]},
+			}
 			if tt.mutate != nil {
 				tt.mutate(ctx, nodes)
 			}
 			builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 			builder.qry.Nodes = nodes
 
-			postJoinProjection, ok, err := builder.prepareCorrelatedScalarAggregatePostJoinProjection(1, ctx, []*plan.Expr{constTrue})
+			postJoinProjections, ok, err := builder.prepareCorrelatedScalarAggregatePostJoinProjection(1, ctx, []*plan.Expr{constTrue})
 			if tt.wantErr {
 				require.Error(t, err)
 				return
 			}
 			require.NoError(t, err)
 			require.False(t, ok)
-			require.Nil(t, postJoinProjection)
+			require.Nil(t, postJoinProjections)
 			require.Len(t, builder.qry.Nodes[1].ProjectList, 1)
 		})
 	}
@@ -2334,10 +2341,10 @@ func TestPrepareCorrelatedScalarAggregatePostJoinProjectionRejectsUnsupportedDir
 		results:      []*plan.Expr{GetColExpr(aggregate.Typ, 21, 0)},
 	}
 
-	postJoinProjection, ok, err := builder.prepareCorrelatedScalarAggregatePostJoinProjection(0, ctx, []*plan.Expr{constTrue})
+	postJoinProjections, ok, err := builder.prepareCorrelatedScalarAggregatePostJoinProjection(0, ctx, []*plan.Expr{constTrue})
 	require.Error(t, err)
 	require.False(t, ok)
-	require.Nil(t, postJoinProjection)
+	require.Nil(t, postJoinProjections)
 }
 
 func hasCorrelatedAggregatePostJoinProjection(query *plan.Query) bool {

@@ -2692,6 +2692,12 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		return nil, moerr.NewNYIf(b.GetContext(), "'%v'", astExpr)
 	}
 
+	if astExpr.SubOp < tree.ANY {
+		if expr, handled, err := b.bindRowScalarSubqueryComparison(leftAst, rightAst, op, depth); handled {
+			return expr, err
+		}
+	}
+
 	if astExpr.SubOp >= tree.ANY {
 		expr, err := b.impl.BindExpr(astExpr.Right, depth, false)
 		if err != nil {
@@ -2752,6 +2758,89 @@ func (b *baseBinder) bindComparisonExpr(astExpr *tree.ComparisonExpr, depth int3
 		})
 	}
 	return b.bindFuncExprImplByAstExpr(op, args, depth)
+}
+
+// bindRowScalarSubqueryComparison preserves a direct row comparison until the
+// scalar subquery has been decorrelated. A multi-column scalar subquery is
+// represented as TUPLE while binding, but its individual result expressions
+// only become available to the outer expression during subquery flattening.
+func (b *baseBinder) bindRowScalarSubqueryComparison(
+	leftAst, rightAst tree.Expr,
+	op string,
+	depth int32,
+) (*Expr, bool, error) {
+	switch op {
+	case "=", "<>", "<", "<=", ">", ">=", "<=>":
+	default:
+		return nil, false, nil
+	}
+
+	var rowAst, subqueryAst tree.Expr
+	reversed := false
+	if _, ok := leftAst.(*tree.Tuple); ok {
+		if _, ok = rightAst.(*tree.Subquery); ok {
+			rowAst, subqueryAst = leftAst, rightAst
+		}
+	}
+	if rowAst == nil {
+		if _, ok := rightAst.(*tree.Tuple); ok {
+			if _, ok = leftAst.(*tree.Subquery); ok {
+				rowAst, subqueryAst = rightAst, leftAst
+				reversed = true
+			}
+		}
+	}
+	if rowAst == nil {
+		return nil, false, nil
+	}
+
+	row, err := b.impl.BindExpr(rowAst, depth, false)
+	if err != nil {
+		return nil, true, err
+	}
+	subqueryExpr, err := b.impl.BindExpr(subqueryAst, depth, false)
+	if err != nil {
+		return nil, true, err
+	}
+	subquery := subqueryExpr.GetSub()
+	if subquery == nil || subquery.Typ != plan.SubqueryRef_SCALAR {
+		return nil, true, moerr.NewInvalidInput(b.GetContext(), "row comparison requires a scalar subquery")
+	}
+	if err = rejectBoundIntervalFunctionArgs(b.GetContext(), op, []*plan.Expr{row}); err != nil {
+		return nil, true, err
+	}
+	items := row.GetList()
+	if items == nil {
+		return nil, true, moerr.NewInvalidInput(b.GetContext(), "row comparison requires a row constructor")
+	}
+	if len(items.List) != int(subquery.RowSize) {
+		return nil, true, moerr.NewInvalidInputf(
+			b.GetContext(), "subquery should return %d columns", len(items.List))
+	}
+	row, err = b.useStoredMySQLSpecialTypesForNumericSubquery(row, subqueryExpr)
+	if err != nil {
+		return nil, true, err
+	}
+	if reversed {
+		switch op {
+		case "<":
+			op = ">"
+		case "<=":
+			op = ">="
+		case ">":
+			op = "<"
+		case ">=":
+			op = "<="
+		}
+	}
+
+	subquery.Op = op
+	subquery.Child = row
+	subqueryExpr.Typ = plan.Type{
+		Id:          int32(types.T_bool),
+		NotNullable: op == "<=>",
+	}
+	return subqueryExpr, true, nil
 }
 
 func (b *baseBinder) bindWithRawMySQLSpecialTypes(bind func() (*Expr, error)) (*Expr, error) {
