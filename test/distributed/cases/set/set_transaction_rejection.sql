@@ -16,6 +16,8 @@ where id = 1;
 
 set session transaction_read_only = 0;
 set session transaction_isolation = 'REPEATABLE-READ';
+set @saved_session_sql_mode = @@session.sql_mode;
+set session sql_mode = 'ONLY_FULL_GROUP_BY';
 begin;
 insert into issue29185_txn_rejection.t values (29185);
 
@@ -38,6 +40,27 @@ from issue29185_txn_rejection.t
 where id = 29185;
 -- @session}
 
+-- An unrelated literal assignment must not interrupt static preflight. The
+-- rejected NEXT isolation assignment must prevent both earlier SESSION
+-- assignments from changing the active connection.
+set session transaction_read_only = 1,
+    session sql_mode = 'ANSI_QUOTES',
+    @@transaction_isolation = 'READ-COMMITTED';
+select @@session.transaction_read_only,
+       @@session.tx_read_only,
+       @@session.sql_mode,
+       @@session.transaction_isolation,
+       @@session.tx_isolation;
+select count(*) as writer_uncommitted_rows_after_static_separator
+from issue29185_txn_rejection.t
+where id = 29185;
+
+-- @session:id=3{
+select count(*) as observer_uncommitted_rows_after_static_separator
+from issue29185_txn_rejection.t
+where id = 29185;
+-- @session}
+
 rollback;
 select count(*) as writer_rows_after_rollback
 from issue29185_txn_rejection.t
@@ -50,5 +73,7 @@ select count(*) as observer_rows_after_rollback
 from issue29185_txn_rejection.t
 where id = 29185;
 -- @session}
+
+set session sql_mode = @saved_session_sql_mode;
 
 drop database issue29185_txn_rejection;

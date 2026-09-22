@@ -1399,11 +1399,12 @@ func validateTransactionAssignmentScopes(
 }
 
 // validateStaticTransactionAssignments is a bounded atomicity guard. It
-// prevalidates a leading run of literal/DEFAULT transaction assignments so a
-// mixed SET cannot first change read-only state and then fail on an obviously
-// unsupported isolation level. It intentionally stops at the first dynamic or
-// unrelated assignment, preserving expression evaluation order for the wider
-// SET language instead of attempting general SET atomicity here.
+// prevalidates a leading run of literal/DEFAULT assignments so a mixed SET
+// cannot first change read-only state and then fail on an obviously unsupported
+// isolation level. Unrelated literal assignments remain part of that prefix;
+// the first dynamic expression ends preflight, preserving expression
+// evaluation order for the wider SET language instead of attempting general
+// SET atomicity here.
 func validateStaticTransactionAssignments(
 	ctx context.Context,
 	ses *Session,
@@ -1411,14 +1412,15 @@ func validateStaticTransactionAssignments(
 	activeTxnAtStart bool,
 ) error {
 	for _, assign := range sv.Assignments {
-		isolationScope, isolation := transactionIsolationAssignmentScope(assign)
-		readOnlyScope, readOnly := transactionReadOnlyAssignmentScope(assign)
-		if !isolation && !readOnly {
-			return nil
-		}
 		value, static, isDefault := staticSetExprValue(assign.Value)
 		if !static {
 			return nil
+		}
+
+		isolationScope, isolation := transactionIsolationAssignmentScope(assign)
+		readOnlyScope, readOnly := transactionReadOnlyAssignmentScope(assign)
+		if !isolation && !readOnly {
+			continue
 		}
 		if (isolation && isolationScope == tree.TransactionScopeGlobal) ||
 			(readOnly && readOnlyScope == tree.TransactionScopeGlobal) {

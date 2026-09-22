@@ -9,6 +9,8 @@ where id = 1;
 1
 set session transaction_read_only = 0;
 set session transaction_isolation = 'REPEATABLE-READ';
+set @saved_session_sql_mode = @@session.sql_mode;
+set session sql_mode = 'ONLY_FULL_GROUP_BY';
 begin;
 insert into issue29185_txn_rejection.t values (29185);
 set session transaction_read_only = 1,
@@ -30,6 +32,27 @@ from issue29185_txn_rejection.t
 where id = 29185;
 ➤ observer_uncommitted_rows[-5,64,0]  𝄀
 0
+set session transaction_read_only = 1,
+session sql_mode = 'ANSI_QUOTES',
+@@transaction_isolation = 'READ-COMMITTED';
+Transaction characteristics can't be changed while a transaction is in progress
+select @@session.transaction_read_only,
+@@session.tx_read_only,
+@@session.sql_mode,
+@@session.transaction_isolation,
+@@session.tx_isolation;
+➤ @@transaction_read_only[12,0,0]  ¦  @@tx_read_only[12,0,0]  ¦  @@sql_mode[12,0,0]  ¦  @@transaction_isolation[12,0,0]  ¦  @@tx_isolation[12,0,0]  𝄀
+0  ¦  0  ¦  ONLY_FULL_GROUP_BY  ¦  REPEATABLE-READ  ¦  REPEATABLE-READ
+select count(*) as writer_uncommitted_rows_after_static_separator
+from issue29185_txn_rejection.t
+where id = 29185;
+➤ writer_uncommitted_rows_after_static_separator[-5,64,0]  𝄀
+1
+select count(*) as observer_uncommitted_rows_after_static_separator
+from issue29185_txn_rejection.t
+where id = 29185;
+➤ observer_uncommitted_rows_after_static_separator[-5,64,0]  𝄀
+0
 rollback;
 select count(*) as writer_rows_after_rollback
 from issue29185_txn_rejection.t
@@ -41,4 +64,5 @@ from issue29185_txn_rejection.t
 where id = 29185;
 ➤ observer_rows_after_rollback[-5,64,0]  𝄀
 0
+set session sql_mode = @saved_session_sql_mode;
 drop database issue29185_txn_rejection;

@@ -1094,6 +1094,10 @@ func TestGenericTransactionAssignmentsRejectActiveNextIsolationBeforeMutation(t 
 			name: "default isolation before read-only",
 			sql:  "set @@transaction_isolation = default, session transaction_read_only = 1",
 		},
+		{
+			name: "unrelated static assignment between transaction assignments",
+			sql:  "set session transaction_read_only = 1, session sql_mode = 'ANSI_QUOTES', @@transaction_isolation = 'READ-COMMITTED'",
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
@@ -1104,6 +1108,7 @@ func TestGenericTransactionAssignmentsRejectActiveNextIsolationBeforeMutation(t 
 				ctx, transactionReadOnlySystemVariable, int64(0)))
 			require.NoError(t, ses.SetSessionSysVar(
 				ctx, transactionIsolationSystemVariable, "REPEATABLE-READ"))
+			require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "ONLY_FULL_GROUP_BY"))
 
 			handler := ses.GetTxnHandler()
 			op := newTestTxnOp()
@@ -1144,12 +1149,74 @@ func TestGenericTransactionAssignmentsRejectActiveNextIsolationBeforeMutation(t 
 			gotIsolation, getErr := ses.GetSessionSysVar(transactionIsolationSystemVariable)
 			require.NoError(t, getErr)
 			require.Equal(t, "REPEATABLE-READ", gotIsolation)
+			gotSQLMode, getErr := ses.GetSessionSysVar("sql_mode")
+			require.NoError(t, getErr)
+			require.Equal(t, "ONLY_FULL_GROUP_BY", gotSQLMode)
 			require.True(t, handler.InActiveTxn())
 			require.Same(t, op, handler.GetTxn())
 			_, hasNextIsolation := handler.nextTxnIsolationSnapshot()
 			require.False(t, hasNextIsolation)
 		})
 	}
+}
+
+func TestGenericTransactionPreflightStopsAtDynamicAssignment(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), sysAccountID)
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	require.NoError(t, ses.SetSessionSysVar(
+		ctx, transactionReadOnlySystemVariable, int64(0)))
+	require.NoError(t, ses.SetSessionSysVar(
+		ctx, transactionIsolationSystemVariable, "REPEATABLE-READ"))
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "ONLY_FULL_GROUP_BY"))
+	require.NoError(t, ses.SetUserDefinedVar(
+		"mode", "ANSI_QUOTES", "set @mode = 'ANSI_QUOTES'"))
+
+	handler := ses.GetTxnHandler()
+	op := newTestTxnOp()
+	handler.mu.Lock()
+	handler.txnOp = op
+	handler.mu.Unlock()
+	defer func() {
+		handler.mu.Lock()
+		handler.txnOp = nil
+		handler.mu.Unlock()
+	}()
+
+	stmt, err := mysql.ParseOne(ctx,
+		"set session transaction_read_only = 1, session sql_mode = @mode, @@transaction_isolation = 'READ-COMMITTED'", 1)
+	require.NoError(t, err)
+	_, err = execInFrontend(ses, &ExecCtx{
+		reqCtx: ctx,
+		stmt:   stmt,
+		txnOpt: FeTxnOption{
+			activeTxnAtStartKnown: true,
+			activeTxnAtStart:      true,
+		},
+	})
+	require.ErrorContains(t, err,
+		"Transaction characteristics can't be changed while a transaction is in progress")
+
+	// A dynamic assignment ends static preflight, so the earlier assignments
+	// retain their normal left-to-right application semantics.
+	for _, name := range []string{
+		transactionReadOnlySystemVariable,
+		transactionReadOnlySystemVariableAlias,
+	} {
+		got, getErr := ses.GetSessionSysVar(name)
+		require.NoError(t, getErr)
+		require.Equal(t, int64(1), got, name)
+	}
+	gotSQLMode, err := ses.GetSessionSysVar("sql_mode")
+	require.NoError(t, err)
+	require.Equal(t, "ANSI_QUOTES", gotSQLMode)
+	gotIsolation, err := ses.GetSessionSysVar(transactionIsolationSystemVariable)
+	require.NoError(t, err)
+	require.Equal(t, "REPEATABLE-READ", gotIsolation)
+	_, hasNextIsolation := handler.nextTxnIsolationSnapshot()
+	require.False(t, hasNextIsolation)
 }
 
 func TestGenericTransactionGlobalAssignmentsRejectNonAdminBeforeMutation(t *testing.T) {
