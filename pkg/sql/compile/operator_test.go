@@ -39,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minusall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/order"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
@@ -780,6 +781,16 @@ func TestDupSetOperatorPreservesPhysicalEqualityKeys(t *testing.T) {
 	source.KeyExprs = []*plan.Expr{plan2.MakePlan2Int64ConstExprWithType(7)}
 
 	duplicated := dupOperator(source, 0, 1).(*intersectall.IntersectAll)
+	defer duplicated.Release()
+	require.Equal(t, source.KeyExprs, duplicated.KeyExprs)
+}
+
+func TestDupMinusAllPreservesPhysicalEqualityKeys(t *testing.T) {
+	source := minusall.NewArgument()
+	defer source.Release()
+	source.KeyExprs = []*plan.Expr{plan2.MakePlan2Int64ConstExprWithType(9)}
+
+	duplicated := dupOperator(source, 0, 1).(*minusall.MinusAll)
 	defer duplicated.Release()
 	require.Equal(t, source.KeyExprs, duplicated.KeyExprs)
 }
