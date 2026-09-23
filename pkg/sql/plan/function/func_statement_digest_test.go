@@ -36,7 +36,7 @@ func statementDigestTextInput(t *testing.T, proc *process.Process, sql string, s
 
 func runStatementDigestText(t *testing.T, proc *process.Process, input *vector.Vector) (*vector.Vector, error) {
 	t.Helper()
-	fn, err := GetFunctionByName(proc.Ctx, "statement_digest_text", []types.Type{input.GetType()})
+	fn, err := GetFunctionByName(proc.Ctx, "statement_digest_text", []types.Type{*input.GetType()})
 	require.NoError(t, err)
 	return RunFunctionDirectly(proc, fn.GetEncodedOverloadID(), []*vector.Vector{input}, input.Length())
 }
