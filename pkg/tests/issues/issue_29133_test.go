@@ -23,6 +23,7 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
@@ -49,6 +50,7 @@ func TestIssue29133RenameAdmissionSerializesRoleRuleWrite(t *testing.T) {
 		}
 		writerDB := openDB(writerCN.GetServiceConfig().CN.Frontend.Port)
 		ddlDB := openDB(ddlCN.GetServiceConfig().CN.Frontend.Port)
+		addDB := openDB(writerCN.GetServiceConfig().CN.Frontend.Port)
 		writerExec := testutils.GetSQLExecutor(writerCN)
 
 		database := testutils.GetDatabaseName(t)
@@ -204,6 +206,123 @@ func TestIssue29133RenameAdmissionSerializesRoleRuleWrite(t *testing.T) {
 				t.Fatal("rename did not finish after the role-rule writer committed")
 			}
 			deleteRule()
+		})
+
+		t.Run("rename-first rejects a stale waiting add", func(t *testing.T) {
+			writerReady := make(chan struct{})
+			writerRelease := make(chan struct{})
+			writerDone := make(chan error, 1)
+			var releaseOnce sync.Once
+			releaseWriter := func() { releaseOnce.Do(func() { close(writerRelease) }) }
+			go func() {
+				writerDone <- writerExec.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
+					res, err := txn.Exec(
+						"insert into `"+database+"`.`t` values (29133)",
+						executor.StatementOption{},
+					)
+					res.Close()
+					if err != nil {
+						return err
+					}
+					close(writerReady)
+					select {
+					case <-writerRelease:
+						return nil
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+				}, executor.Options{}.WithAccountID(0))
+			}()
+			select {
+			case <-writerReady:
+			case <-ctx.Done():
+				t.Fatal("target-table writer did not acquire its transaction")
+			}
+			writerFinished := false
+			defer func() {
+				releaseWriter()
+				if !writerFinished {
+					require.NoError(t, <-writerDone)
+				}
+			}()
+
+			renameCatalogWaiterQueued := make(chan struct{})
+			roleRuleWaiterQueued := make(chan struct{})
+			var renameCatalogOnce, roleRuleOnce sync.Once
+			restoreHook := lockservice.SetWaiterEnqueuedHookForTest(func(
+				tableID uint64, _ []byte, _ [][]byte,
+			) {
+				switch tableID {
+				case catalog.MO_TABLES_ID:
+					renameCatalogOnce.Do(func() { close(renameCatalogWaiterQueued) })
+				case roleRuleTableID:
+					roleRuleOnce.Do(func() { close(roleRuleWaiterQueued) })
+				}
+			})
+			defer restoreHook()
+
+			renameCtx, cancelRename := context.WithCancel(ctx)
+			defer cancelRename()
+			renameDone := make(chan error, 1)
+			go func() {
+				_, renameErr := ddl.ExecContext(renameCtx, renameSQL)
+				renameDone <- renameErr
+			}()
+			select {
+			case <-renameCatalogWaiterQueued:
+			case <-ctx.Done():
+				t.Fatal("rename did not wait on the catalog lock after taking the role-rule gate")
+			}
+
+			addSQL := fmt.Sprintf(
+				"alter role `%s` add rule \"%s\" on table `%s`.`t`",
+				role, ruleSQL, database,
+			)
+			addDone := make(chan error, 1)
+			go func() {
+				_, addErr := addDB.ExecContext(ctx, addSQL)
+				addDone <- addErr
+			}()
+			select {
+			case addErr := <-addDone:
+				t.Fatalf("ADD RULE returned before taking the role-rule lifecycle gate: %v", addErr)
+			case <-roleRuleWaiterQueued:
+			case <-ctx.Done():
+				t.Fatal("ADD RULE did not wait on the rename's role-rule lifecycle gate")
+			}
+			select {
+			case addErr := <-addDone:
+				t.Fatalf("ADD RULE returned before rename committed: %v", addErr)
+			default:
+			}
+
+			releaseWriter()
+			writerErr := <-writerDone
+			writerFinished = true
+			require.NoError(t, writerErr)
+			select {
+			case renameErr := <-renameDone:
+				require.NoError(t, renameErr)
+			case <-ctx.Done():
+				t.Fatal("rename did not finish after the target-table writer committed")
+			}
+			select {
+			case addErr := <-addDone:
+				require.ErrorContains(t, addErr, "there is no table")
+			case <-ctx.Done():
+				t.Fatal("waiting ADD RULE did not finish after rename committed")
+			}
+
+			var ruleCount int
+			require.NoError(t, writerDB.QueryRowContext(ctx,
+				"select count(*) from mo_catalog.mo_role_rule where role_id = ? and rule_name = ?",
+				roleID, ruleName).Scan(&ruleCount))
+			require.Zero(t, ruleCount, "failed ADD RULE must not publish a stale rule")
+			execSQLRequire(t, ctx, writerDB, "create table `"+database+"`.`t` (id int primary key)")
+			require.NoError(t, writerDB.QueryRowContext(ctx,
+				"select count(*) from mo_catalog.mo_role_rule where role_id = ? and rule_name = ?",
+				roleID, ruleName).Scan(&ruleCount))
+			require.Zero(t, ruleCount, "recreating the old table must not activate a stale rule")
 		})
 	})
 }
