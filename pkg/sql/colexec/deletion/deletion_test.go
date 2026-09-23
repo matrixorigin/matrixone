@@ -24,15 +24,19 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -210,6 +214,90 @@ func TestNewDeletionTombstoneWriterUsesProcessService(t *testing.T) {
 func TestFlushCreatesTombstoneWriterForFirstBlock(t *testing.T) {
 	proc := testutil.NewProc(t)
 	defer proc.Free()
+	ctr, objectName := flushTombstoneObjectForTest(t, proc)
+	require.Empty(t, ctr.s3Writers, "successful flush transfers object ownership to its stats batch")
+	_, err := ctr.fs.StatFile(proc.Ctx, objectName)
+	require.NoError(t, err)
+	ctr.fs = &failOnceDeleteFileService{
+		FileService: ctr.fs,
+		failErr:     errors.New("injected tombstone cleanup failure"),
+		failCount:   2,
+	}
+
+	arg := &Deletion{RemoteDelete: true, ctr: *ctr}
+	arg.Reset(proc, true, errors.New("downstream pipeline failed"))
+	require.Empty(t, arg.ctr.partitionId_tombstoneObjectStatsBats, "failed output must not remain visible to the next execution")
+	require.Len(t, arg.ctr.pendingTombstoneObjectStatsBats, 1, "failed deletion must retain its private cleanup ledger")
+	require.Error(t, arg.Prepare(proc), "reuse must fail while the prior object's cleanup is pending")
+	_, err = arg.ctr.fs.StatFile(proc.Ctx, objectName)
+	require.NoError(t, err, "failed first cleanup should leave the object available for retry")
+	arg.Free(proc, false, nil)
+	require.Empty(t, arg.ctr.partitionId_tombstoneObjectStatsBats)
+	require.Empty(t, arg.ctr.pendingTombstoneObjectStatsBats)
+	_, err = arg.ctr.fs.StatFile(proc.Ctx, objectName)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "object should be deleted, got %v", err)
+}
+
+type deletionS3CleanupWorkspace struct {
+	client.Workspace
+	cleanups []func(context.Context) error
+}
+
+func (w *deletionS3CleanupWorkspace) RetainUnpublishedS3Cleanup(
+	cleanup func(context.Context) error,
+) {
+	w.cleanups = append(w.cleanups, cleanup)
+}
+
+func TestRemoteDeleteFreeTransfersFailedCleanupToTransaction(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	ctr, objectName := flushTombstoneObjectForTest(t, proc)
+	deleteErr := errors.New("injected persistent tombstone cleanup failure")
+	ctr.fs = &failOnceDeleteFileService{
+		FileService: ctr.fs,
+		failErr:     deleteErr,
+		failCount:   2,
+	}
+
+	ctrl := gomock.NewController(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	workspace := &deletionS3CleanupWorkspace{}
+	txnOp.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
+	proc.Base.TxnOperator = txnOp
+
+	arg := NewArgument()
+	arg.RemoteDelete = true
+	arg.ctr = *ctr
+	arg.Reset(proc, true, deleteErr)
+	arg.Free(proc, false, nil)
+	require.Empty(t, arg.ctr.pendingTombstoneObjectStatsBats,
+		"transaction callback must own cleanup after operator release")
+	require.Len(t, workspace.cleanups, 1)
+	arg.Release()
+
+	_, err := ctr.fs.StatFile(proc.Ctx, objectName)
+	require.NoError(t, err, "failed deletes should leave the object pending")
+	require.NoError(t, workspace.cleanups[0](proc.Ctx))
+	_, err = ctr.fs.StatFile(proc.Ctx, objectName)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "transaction retry should delete the object, got %v", err)
+}
+
+func TestRemoteDeleteSuccessfulResetPreservesTransferredTombstones(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	ctr, objectName := flushTombstoneObjectForTest(t, proc)
+	arg := &Deletion{RemoteDelete: true, ctr: *ctr}
+
+	arg.Reset(proc, false, nil)
+	require.Empty(t, arg.ctr.partitionId_tombstoneObjectStatsBats)
+	_, err := ctr.fs.StatFile(proc.Ctx, objectName)
+	require.NoError(t, err, "successful pipeline reset must leave transferred tombstones intact")
+	arg.Free(proc, false, nil)
+}
+
+func flushTombstoneObjectForTest(t *testing.T, proc *process.Process) (*container, string) {
+	t.Helper()
 	blockID := types.BuildTestBlockid(1, 1)
 	rowID := types.NewRowid(&blockID, 0)
 	bat := batch.NewWithSize(2)
@@ -219,7 +307,7 @@ func TestFlushCreatesTombstoneWriterForFirstBlock(t *testing.T) {
 	require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(7), false, proc.Mp()))
 	bat.SetRowCount(1)
 
-	ctr := container{
+	ctr := &container{
 		partitionId_blockId_rowIdBatch: map[int]map[types.Blockid]*batch.Batch{
 			0: {blockID: bat},
 		},
@@ -232,10 +320,25 @@ func TestFlushCreatesTombstoneWriterForFirstBlock(t *testing.T) {
 	require.NotZero(t, size)
 	require.Empty(t, ctr.partitionId_blockId_rowIdBatch[0])
 	require.Len(t, ctr.partitionId_tombstoneObjectStatsBats[0], 1)
-	for _, statsBat := range ctr.partitionId_tombstoneObjectStatsBats[0] {
-		statsBat.Clean(proc.Mp())
+	statsBat := ctr.partitionId_tombstoneObjectStatsBats[0][0]
+	data, area := vector.MustVarlenaRawData(statsBat.Vecs[0])
+	stats := objectio.ObjectStats(data[0].GetByteSlice(area))
+	objectName := stats.ObjectName().String()
+	_, err = ctr.fs.StatFile(proc.Ctx, objectName)
+	require.NoError(t, err)
+	return ctr, objectName
+}
+
+type failOnceDeleteFileService struct {
+	fileservice.FileService
+	failErr   error
+	failCount int
+}
+
+func (fs *failOnceDeleteFileService) Delete(ctx context.Context, names ...string) error {
+	if fs.failCount > 0 {
+		fs.failCount--
+		return fs.failErr
 	}
-	for _, pooled := range ctr.pool.pools {
-		pooled.Clean(proc.Mp())
-	}
+	return fs.FileService.Delete(ctx, names...)
 }

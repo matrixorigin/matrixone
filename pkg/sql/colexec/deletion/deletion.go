@@ -50,6 +50,10 @@ func (deletion *Deletion) OpType() vm.OpType {
 }
 
 func (deletion *Deletion) Prepare(proc *process.Process) error {
+	if err := deletion.retryPendingS3Cleanup(proc); err != nil {
+		return err
+	}
+
 	if deletion.OpAnalyzer == nil {
 		deletion.OpAnalyzer = process.NewAnalyzer(deletion.GetIdx(), deletion.IsFirst, deletion.IsLast, "deletion")
 	} else {

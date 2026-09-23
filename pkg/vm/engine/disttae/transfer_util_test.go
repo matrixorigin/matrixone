@@ -16,16 +16,24 @@ package disttae
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -128,6 +136,105 @@ func TestTransferFlowBatchesAcrossObjectBlocks(t *testing.T) {
 	require.NoError(t, flow.processOneBatch(ctx, input))
 	require.Equal(t, rowCount*2, flow.staged.RowCount())
 	require.Equal(t, rowCount*2, flow.transferred.rowCnt)
+}
+
+func TestTransferFlowRetainsUnpublishedSinkerForCleanupRetry(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	baseFS, err := fileservice.Get[fileservice.FileService](
+		proc.Base.FileService, defines.SharedFileServiceName,
+	)
+	require.NoError(t, err)
+
+	deleteErr := errors.New("injected transfer cleanup failure")
+	fs := &failOnceTransferDeleteFS{FileService: baseFS, failErr: deleteErr, failCount: 2}
+	flow, objectName := newTransferFlowWithPersistedObject(t, proc, fs)
+	flowBuffer := flow.buffer
+	sinker := flow.sinker
+	txn := &Transaction{}
+
+	err = txn.closeTransferFlow(proc.Ctx, flow, true)
+	require.ErrorIs(t, err, deleteErr)
+	require.Same(t, sinker, flow.sinker, "failed cleanup must retain the sinker")
+	require.Same(t, flowBuffer, flow.buffer, "the retained sinker shares the flow buffer")
+	require.Len(t, txn.unpublishedS3Cleanup, 1, "transaction must retain the failed cleanup owner")
+	_, err = baseFS.StatFile(proc.Ctx, objectName)
+	require.NoError(t, err, "the object must remain available for cleanup retry")
+	require.ErrorIs(t, txn.closeTransferFlow(proc.Ctx, flow, false), deleteErr,
+		"a later success-shaped callback must still retry the abort cleanup")
+	require.Same(t, sinker, flow.sinker)
+
+	require.NoError(t, txn.CleanupUnpublishedS3Objects(proc.Ctx))
+	require.Nil(t, flow.sinker)
+	require.Nil(t, flow.buffer)
+	_, err = baseFS.StatFile(proc.Ctx, objectName)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "unpublished object should be deleted, got %v", err)
+}
+
+func TestTransferFlowClosePreservesRegisteredObjects(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	fs, err := fileservice.Get[fileservice.FileService](
+		proc.Base.FileService, defines.SharedFileServiceName,
+	)
+	require.NoError(t, err)
+	flow, objectName := newTransferFlowWithPersistedObject(t, proc, fs)
+
+	require.NoError(t, flow.CloseWithCleanup(proc.Ctx, false))
+	_, err = fs.StatFile(proc.Ctx, objectName)
+	require.NoError(t, err, "registered tombstone object must survive flow close")
+	require.NoError(t, fs.Delete(proc.Ctx, objectName))
+}
+
+func newTransferFlowWithPersistedObject(
+	t *testing.T,
+	proc *process.Process,
+	fs fileservice.FileService,
+) (*TransferFlow, string) {
+	t.Helper()
+	pkType := types.T_int64.ToType()
+	attrs, attrTypes := objectio.GetTombstoneSchema(pkType, objectio.HiddenColumnSelection_None)
+	buffer := containers.NewOneSchemaBatchBuffer(mpool.MB*8, attrs, attrTypes, false)
+	sinker := ioutil.NewTombstoneSinker(
+		objectio.HiddenColumnSelection_None,
+		pkType,
+		proc.Mp(),
+		fs,
+		ioutil.WithBuffer(buffer, false),
+		ioutil.WithMemorySizeThreshold(mpool.MB*16),
+		ioutil.WithTailSizeCap(0),
+	)
+	flow := &TransferFlow{buffer: buffer, sinker: sinker, mp: proc.Mp(), fs: fs}
+	bat := batch.NewWithSize(len(attrs))
+	bat.SetAttributes(attrs)
+	for i := range attrTypes {
+		bat.Vecs[i] = vector.NewVec(attrTypes[i])
+	}
+	rowID := types.RandomRowid()
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0], rowID, false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[1], int64(1), false, proc.Mp()))
+	bat.SetRowCount(1)
+	require.NoError(t, sinker.Write(proc.Ctx, bat))
+	bat.Clean(proc.Mp())
+	require.NoError(t, sinker.Sync(proc.Ctx))
+	stats, tail := sinker.GetResult()
+	require.Len(t, stats, 1)
+	require.Empty(t, tail)
+	return flow, stats[0].ObjectName().String()
+}
+
+type failOnceTransferDeleteFS struct {
+	fileservice.FileService
+	failErr   error
+	failCount int
+}
+
+func (fs *failOnceTransferDeleteFS) Delete(ctx context.Context, names ...string) error {
+	if fs.failCount > 0 {
+		fs.failCount--
+		return fs.failErr
+	}
+	return fs.FileService.Delete(ctx, names...)
 }
 
 func makeRepeated[T any](value T, count int) []T {

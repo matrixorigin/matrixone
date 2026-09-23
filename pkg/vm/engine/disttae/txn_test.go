@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -1155,6 +1156,134 @@ func TestIssue25589DumpInsertRestoresWorkspaceAccounting(t *testing.T) {
 	for i := range txn.writes {
 		txn.releaseWorkspaceEntryBatchLocked(i)
 	}
+}
+
+func TestIssue29257DumpRegistrationFailureDeletesUnpublishedObjects(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		typ  int
+	}{
+		{name: "insert", typ: INSERT},
+		{name: "delete", typ: DELETE},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			colexec.NewServer("")
+			txn := newTransactionWithActivePKTableForTest(t, "pk")
+			defer txn.proc.Free()
+			txn.op = &unsupportedAutoIncrEpochTxnOperator{TxnOperator: txn.op}
+			tbl := txn.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
+			require.NotNil(t, tbl)
+			tbl.tableDef.Cols[0].Typ = pbplan.Type{Id: int32(types.T_int64)}
+			txn.tnStores = []DNStore{{}}
+			txn.batchSelectList = make(map[*batch.Batch][]int64)
+			txn.tablesInVain = make(map[uint64]int)
+			txn.deletedBlocks = &deletedBlocks{offsets: make(map[types.Blockid][]int64)}
+			txn.cnObjsSummary = make(map[types.Objectid]Summary)
+			txn.currentRowId.SetSegment(colexec.TxnWorkspaceSegment)
+
+			var bat *batch.Batch
+			if tc.typ == INSERT {
+				bat = newInsertBatchWithRowIDForTest(t, txn.proc, []int64{1, 2, 3})
+			} else {
+				bat = newDeleteBatchForTest(t, txn.proc, []int64{1, 2, 3})
+			}
+			txn.appendWorkspaceEntryLocked(Entry{
+				typ:                tc.typ,
+				accountId:          1,
+				databaseId:         7,
+				tableId:            42,
+				databaseName:       "db",
+				tableName:          "tbl",
+				bat:                bat,
+				autoIncrEpoch:      1,
+				autoIncrEpochKnown: true,
+			})
+
+			baseFS, err := colexec.GetSharedFSFromProc(txn.proc)
+			require.NoError(t, err)
+			fs := &recordingObjectFileService{
+				FileService:     baseFS,
+				failDeleteCount: 1,
+				deleteErr:       moerr.NewInternalErrorNoCtx("injected cleanup failure"),
+			}
+			txn.Lock()
+			if tc.typ == INSERT {
+				var pkCount int
+				err = txn.dumpInsertBatchLocked(context.Background(), fs, 0, &pkCount)
+			} else {
+				err = txn.dumpDeleteBatchLocked(context.Background(), fs, 0)
+			}
+			txn.Unlock()
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "registration should reject unsupported epoch fence: %v", err)
+			txn.unpublishedS3OwnersMu.Lock()
+			pendingWriterCount := len(txn.unpublishedS3Cleanup)
+			txn.unpublishedS3OwnersMu.Unlock()
+			require.Equal(t, 1, pendingWriterCount, "failed immediate cleanup must remain transaction-owned")
+			require.NoError(t, txn.CleanupUnpublishedS3Objects(context.Background()))
+
+			written, deleted := fs.paths()
+			require.NotEmpty(t, written)
+			require.NotEmpty(t, deleted, "failed workspace registration must delete the uploaded object")
+			for _, name := range written {
+				_, statErr := baseFS.StatFile(context.Background(), name)
+				require.True(t, moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound), "unpublished file %q leaked: %v", name, statErr)
+			}
+		})
+	}
+}
+
+func TestTransactionRetriesUnpublishedS3CleanupOwners(t *testing.T) {
+	txn := &Transaction{}
+	cleanupErr := moerr.NewInternalErrorNoCtx("injected cleanup failure")
+	attempts := 0
+	txn.RetainUnpublishedS3Cleanup(func(context.Context) error {
+		attempts++
+		if attempts == 1 {
+			return cleanupErr
+		}
+		return nil
+	})
+
+	require.ErrorIs(t, txn.CleanupUnpublishedS3Objects(context.Background()), cleanupErr)
+	require.Len(t, txn.unpublishedS3Cleanup, 1, "failed cleanup must preserve its retry owner")
+	require.NoError(t, txn.CleanupUnpublishedS3Objects(context.Background()))
+	require.Empty(t, txn.unpublishedS3Cleanup)
+	require.Equal(t, 2, attempts)
+}
+
+type recordingObjectFileService struct {
+	fileservice.FileService
+	mu              sync.Mutex
+	written         []string
+	deleted         []string
+	failDeleteCount int
+	deleteErr       error
+}
+
+func (fs *recordingObjectFileService) Write(ctx context.Context, vector fileservice.IOVector) error {
+	fs.mu.Lock()
+	fs.written = append(fs.written, vector.FilePath)
+	fs.mu.Unlock()
+	return fs.FileService.Write(ctx, vector)
+}
+
+func (fs *recordingObjectFileService) Delete(ctx context.Context, names ...string) error {
+	fs.mu.Lock()
+	fs.deleted = append(fs.deleted, names...)
+	if fs.failDeleteCount > 0 {
+		fs.failDeleteCount--
+		err := fs.deleteErr
+		fs.mu.Unlock()
+		return err
+	}
+	fs.mu.Unlock()
+	return fs.FileService.Delete(ctx, names...)
+}
+
+func (fs *recordingObjectFileService) paths() (written, deleted []string) {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	return append([]string(nil), fs.written...), append([]string(nil), fs.deleted...)
 }
 
 func TestIssue25589SoftDeleteObjectUsesWorkspaceAccounting(t *testing.T) {

@@ -18,6 +18,7 @@ import (
 	"cmp"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
 	"runtime"
@@ -1140,7 +1141,10 @@ func (txn *Transaction) dumpInsertBatchLocked(
 
 	defer func() {
 		if s3Writer != nil {
-			s3Writer.Close()
+			if closeErr := s3Writer.CloseWithCleanup(ctx, true); closeErr != nil {
+				logutil.Warn("failed to clean unpublished insert object", zap.Error(closeErr))
+				txn.retainUnpublishedS3Writer(s3Writer)
+			}
 		}
 	}()
 
@@ -1191,9 +1195,11 @@ func (txn *Transaction) dumpInsertBatchLocked(
 			return err
 		}
 
-		s3Writer.Close()
-
+		writer := s3Writer
 		s3Writer = nil
+		if err = writer.Close(); err != nil {
+			return err
+		}
 	}
 
 	return nil
@@ -1283,7 +1289,10 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 
 	defer func() {
 		if s3Writer != nil {
-			s3Writer.Close()
+			if closeErr := s3Writer.CloseWithCleanup(ctx, true); closeErr != nil {
+				logutil.Warn("failed to clean unpublished delete object", zap.Error(closeErr))
+				txn.retainUnpublishedS3Writer(s3Writer)
+			}
 		}
 	}()
 
@@ -1335,12 +1344,83 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 			return err
 		}
 
-		if err = s3Writer.Close(); err != nil {
+		writer := s3Writer
+		s3Writer = nil
+		if err = writer.Close(); err != nil {
 			return err
 		}
 	}
 
 	return nil
+}
+
+func (txn *Transaction) retainUnpublishedS3Writer(writer *colexec.CNS3Writer) {
+	if writer == nil {
+		return
+	}
+	txn.RetainUnpublishedS3Cleanup(func(ctx context.Context) error {
+		return writer.CloseWithCleanup(ctx, true)
+	})
+}
+
+func (txn *Transaction) retainUnpublishedTransferFlow(flow *TransferFlow) {
+	if flow == nil || flow.sinker == nil {
+		return
+	}
+	txn.RetainUnpublishedS3Cleanup(func(ctx context.Context) error {
+		return flow.CloseWithCleanup(ctx, true)
+	})
+}
+
+// RetainUnpublishedS3Cleanup transfers an unpublished object's retry owner to
+// the transaction workspace before an execution-local owner is released.
+func (txn *Transaction) RetainUnpublishedS3Cleanup(cleanup func(context.Context) error) {
+	if cleanup == nil {
+		return
+	}
+	txn.unpublishedS3OwnersMu.Lock()
+	txn.unpublishedS3Cleanup = append(txn.unpublishedS3Cleanup, cleanup)
+	txn.unpublishedS3OwnersMu.Unlock()
+}
+
+func (txn *Transaction) closeTransferFlow(
+	ctx context.Context,
+	flow *TransferFlow,
+	failed bool,
+) error {
+	err := flow.CloseWithCleanup(ctx, failed)
+	if flow.sinker != nil {
+		txn.retainUnpublishedTransferFlow(flow)
+	}
+	return err
+}
+
+// CleanupUnpublishedS3Objects retries cleanup for objects that never crossed
+// the workspace-registration boundary. Detach the owners during I/O so no
+// file-service call runs while holding the transaction mutex; failed cleanup
+// keeps the exact owner on the transaction for the next lifecycle callback.
+func (txn *Transaction) CleanupUnpublishedS3Objects(ctx context.Context) error {
+	txn.unpublishedS3OwnersMu.Lock()
+	cleanups := txn.unpublishedS3Cleanup
+	txn.unpublishedS3Cleanup = nil
+	txn.unpublishedS3OwnersMu.Unlock()
+
+	var (
+		pending []func(context.Context) error
+		errs    []error
+	)
+	for _, cleanup := range cleanups {
+		if err := cleanup(ctx); err != nil {
+			pending = append(pending, cleanup)
+			errs = append(errs, err)
+		}
+	}
+	if len(pending) != 0 {
+		txn.unpublishedS3OwnersMu.Lock()
+		txn.unpublishedS3Cleanup = append(txn.unpublishedS3Cleanup, pending...)
+		txn.unpublishedS3OwnersMu.Unlock()
+	}
+	return errors.Join(errs...)
 }
 
 // resolveDumpTablesLocked resolves the engine.Relation of every table whose
@@ -2368,8 +2448,17 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 		tbl.ensureSeqnumsAndTypesExpectRowid()
 		locker.Unlock()
 
-		bat, fileName, err := tbl.rewriteObjectByDeletion(ctx, stats, objBlkDeletion[*objId])
+		bat, fileName, s3Writer, err := tbl.rewriteObjectByDeletion(ctx, stats, objBlkDeletion[*objId])
 		if err != nil {
+			if bat != nil {
+				bat.Clean(txn.proc.Mp())
+			}
+			if s3Writer != nil {
+				if cleanupErr := s3Writer.CloseWithCleanup(ctx, true); cleanupErr != nil {
+					logutil.Warn("failed to clean rewritten object", zap.Error(cleanupErr))
+					txn.retainUnpublishedS3Writer(s3Writer)
+				}
+			}
 			panicWhenFailed(err, "rewrite object by deletion failed")
 		}
 
@@ -2388,11 +2477,18 @@ func (txn *Transaction) compactDeletionOnObjsLocked(ctx context.Context) error {
 			tbKey.autoIncrEpoch,
 			tbKey.autoIncrEpochKnown,
 		); err != nil {
+			if cleanupErr := s3Writer.CloseWithCleanup(ctx, true); cleanupErr != nil {
+				logutil.Warn("failed to clean rewritten object after registration failure", zap.Error(cleanupErr))
+				txn.retainUnpublishedS3Writer(s3Writer)
+			}
 			bat.Clean(txn.proc.Mp())
 			panicWhenFailed(err, "write txn file failed")
 		}
 
 		bat.Clean(txn.proc.Mp())
+		if closeErr := s3Writer.Close(); closeErr != nil {
+			panicWhenFailed(closeErr, "close rewritten object writer failed")
+		}
 	}
 
 	dirtyObject := make([]objectio.ObjectStats, 0, 1)
@@ -2684,6 +2780,10 @@ func (txn *Transaction) getCachedTableByKey(
 }
 
 func (txn *Transaction) Commit(ctx context.Context) (reqs []txn.TxnRequest, err error) {
+	if err := txn.CleanupUnpublishedS3Objects(ctx); err != nil {
+		return nil, err
+	}
+
 	common.DoIfDebugEnabled(func() {
 		logutil.Debug(
 			"Transaction.Commit",
@@ -2958,6 +3058,7 @@ func skipTransfer(ctx context.Context, txn *Transaction) bool {
 }
 
 func (txn *Transaction) Rollback(ctx context.Context) error {
+	unpublishedCleanupErr := txn.CleanupUnpublishedS3Objects(ctx)
 	if !txn.ReadOnly() && len(txn.writes) > 0 {
 		logutil.Info(
 			"Transaction.Rollback",
@@ -2979,7 +3080,7 @@ func (txn *Transaction) Rollback(ctx context.Context) error {
 		}
 	}
 	txn.delTransaction()
-	return loadCleanupErr
+	return errors.Join(unpublishedCleanupErr, loadCleanupErr)
 }
 
 func (txn *Transaction) delTransaction() {

@@ -16,6 +16,8 @@ package multi_update
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -84,6 +86,9 @@ func newDeleteBlockData(inputBatch *batch.Batch, pkIdx int) *deleteBlockData {
 type s3WriterDelegate struct {
 	// persistent per-table insert sinkers, created lazily on first append.
 	insertSinkers []*colexec.CNS3Writer
+	// writers for one-shot sort/sync batches remain owners until the enclosing
+	// pipeline either registers their metadata or aborts.
+	ownedWriters []*colexec.CNS3Writer
 	// per-table delete column accumulators (rowid + pk only).
 	deleteBatches []*batch.BatchSet
 	segmentMap    map[string]int32
@@ -125,6 +130,8 @@ type s3WriterDelegate struct {
 		grantedSize int64
 		throttler   rscthrottler.RSCThrottler
 	}
+	cleanupErr error
+	cleanupMP  *mpool.MPool
 }
 
 func newS3Writer(
@@ -684,8 +691,7 @@ func (writer *s3WriterDelegate) sortAndSyncOneTable(
 			proc.GetService(), proc.Mp(), fs, tblDef, -1, false, opts...,
 		)
 	}
-
-	defer s3Writer.Close()
+	writer.ownedWriters = append(writer.ownedWriters, s3Writer)
 
 	counterSet := analyzer.GetOpCounterSet()
 	writeCtx := perfcounter.AttachS3RequestKey(proc.Ctx, counterSet)
@@ -903,9 +909,20 @@ func (writer *s3WriterDelegate) flushTailAndWriteToOutput(proc *process.Process,
 	return nil
 }
 
-func (writer *s3WriterDelegate) reset(proc *process.Process) (err error) {
+func (writer *s3WriterDelegate) reset(proc *process.Process, pipelineFailed bool) (err error) {
 
 	writer.cleanDeleteBatches(proc.Mp())
+	var cleanupErrs []error
+
+	var pendingWriters []*colexec.CNS3Writer
+	for _, s3w := range writer.ownedWriters {
+		if closeErr := s3w.CloseWithCleanup(proc.Ctx, pipelineFailed); closeErr != nil {
+			logutil.Warn("failed to clean multi-update S3 writer", zap.Error(closeErr))
+			cleanupErrs = append(cleanupErrs, closeErr)
+			pendingWriters = append(pendingWriters, s3w)
+		}
+	}
+	writer.ownedWriters = pendingWriters
 
 	// Reset persistent insert sinkers so any buffered data from a failed
 	// pipeline execution is discarded. The sinkers stay alive and reuse
@@ -914,7 +931,11 @@ func (writer *s3WriterDelegate) reset(proc *process.Process) (err error) {
 	// flushTailAndWriteToOutput(), so Reset() is a no-op on the data side.
 	for _, s3w := range writer.insertSinkers {
 		if s3w != nil {
-			s3w.Reset()
+			if cleanupErr := s3w.ResetWithCleanup(proc.Ctx, pipelineFailed); cleanupErr != nil {
+				logutil.Warn("failed to clean multi-update insert S3 writer", zap.Error(cleanupErr))
+				cleanupErrs = append(cleanupErrs, cleanupErr)
+				continue
+			}
 		}
 	}
 
@@ -946,29 +967,52 @@ func (writer *s3WriterDelegate) reset(proc *process.Process) (err error) {
 	}
 
 	writer.buf.Reset()
-	return
+	writer.cleanupErr = errors.Join(cleanupErrs...)
+	return writer.cleanupErr
 }
 
-func (writer *s3WriterDelegate) free(proc *process.Process) (err error) {
+func (writer *s3WriterDelegate) free(proc *process.Process, pipelineFailed bool) (err error) {
 
 	writer.cleanDeleteBatches(proc.Mp())
 	mp := proc.Mp()
+	writer.cleanupMP = mp
+	var cleanupErrs []error
+
+	for i, s3w := range writer.ownedWriters {
+		if s3w == nil {
+			continue
+		}
+		if closeErr := s3w.CloseWithCleanup(proc.Ctx, pipelineFailed); closeErr != nil {
+			cleanupErrs = append(cleanupErrs, closeErr)
+			logutil.Warn("failed to clean multi-update S3 writer", zap.Error(closeErr))
+		} else {
+			writer.ownedWriters[i] = nil
+		}
+	}
+	if len(cleanupErrs) == 0 {
+		writer.ownedWriters = nil
+	}
 
 	// Close persistent insert sinkers.
 	for i, s3w := range writer.insertSinkers {
 		if s3w != nil {
-			s3w.Close()
-			writer.insertSinkers[i] = nil
+			if closeErr := s3w.CloseWithCleanup(proc.Ctx, pipelineFailed); closeErr != nil {
+				cleanupErrs = append(cleanupErrs, closeErr)
+				logutil.Warn("failed to clean multi-update insert S3 writer", zap.Error(closeErr))
+			} else {
+				writer.insertSinkers[i] = nil
+			}
 		}
 	}
-	writer.insertSinkers = nil
-
-	for _, fl := range writer.insertFreeLists {
-		if fl != nil {
-			fl.Close(mp)
+	if len(cleanupErrs) == 0 {
+		writer.insertSinkers = nil
+		for _, fl := range writer.insertFreeLists {
+			if fl != nil {
+				fl.Close(mp)
+			}
 		}
+		writer.insertFreeLists = nil
 	}
-	writer.insertFreeLists = nil
 
 	for _, bat := range writer.insertBlockInfo {
 		if bat != nil {
@@ -1000,7 +1044,44 @@ func (writer *s3WriterDelegate) free(proc *process.Process) (err error) {
 	}
 	writer.buf.Reset()
 
-	return
+	writer.cleanupErr = errors.Join(cleanupErrs...)
+	return writer.cleanupErr
+}
+
+func (writer *s3WriterDelegate) cleanupUnpublishedS3Objects(ctx context.Context) error {
+	var cleanupErrs []error
+	for i, s3w := range writer.ownedWriters {
+		if s3w == nil {
+			continue
+		}
+		if err := s3w.CloseWithCleanup(ctx, true); err != nil {
+			cleanupErrs = append(cleanupErrs, err)
+		} else {
+			writer.ownedWriters[i] = nil
+		}
+	}
+	for i, s3w := range writer.insertSinkers {
+		if s3w == nil {
+			continue
+		}
+		if err := s3w.CloseWithCleanup(ctx, true); err != nil {
+			cleanupErrs = append(cleanupErrs, err)
+		} else {
+			writer.insertSinkers[i] = nil
+		}
+	}
+	if err := errors.Join(cleanupErrs...); err != nil {
+		return err
+	}
+	writer.ownedWriters = nil
+	writer.insertSinkers = nil
+	for _, freeList := range writer.insertFreeLists {
+		if freeList != nil {
+			freeList.Close(writer.cleanupMP)
+		}
+	}
+	writer.insertFreeLists = nil
+	return nil
 }
 
 func (writer *s3WriterDelegate) addBatchToOutput(

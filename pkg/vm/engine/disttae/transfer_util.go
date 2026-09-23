@@ -16,7 +16,10 @@ package disttae
 
 import (
 	"context"
+	"errors"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -199,6 +202,7 @@ type TransferFlow struct {
 	buffer            *containers.OneSchemaBatchBuffer
 	staged            *batch.Batch
 	sinker            *ioutil.Sinker
+	cleanupPending    bool
 	mp                *mpool.MPool
 	fs                fileservice.FileService
 
@@ -359,24 +363,62 @@ func (flow *TransferFlow) GetResult() ([]objectio.ObjectStats, []*batch.Batch) {
 }
 
 func (flow *TransferFlow) Close() error {
+	return flow.CloseWithCleanup(context.Background(), false)
+}
+
+// CloseWithCleanup discards persisted objects if the flow failed before its
+// result metadata was registered on the transaction. If deletion fails, keep
+// the sinker and its shared buffer alive so the transaction can retry cleanup.
+func (flow *TransferFlow) CloseWithCleanup(ctx context.Context, failed bool) error {
+	var (
+		errs          []error
+		cleanupFailed bool
+	)
+	if (failed || flow.cleanupPending) && flow.sinker != nil {
+		if err := cleanupUnpublishedTransferSinker(ctx, flow.sinker); err != nil {
+			errs = append(errs, err)
+			cleanupFailed = true
+			flow.cleanupPending = true
+		} else {
+			flow.cleanupPending = false
+		}
+	}
 	if flow.sourcer != nil {
-		flow.sourcer.Close()
+		if err := flow.sourcer.Close(); err != nil {
+			errs = append(errs, err)
+		}
 		flow.sourcer = nil
-	}
-	if flow.sinker != nil {
-		flow.sinker.Close()
-		flow.sinker = nil
-	}
-	if flow.buffer != nil {
-		flow.buffer.Close(flow.mp)
-		flow.buffer = nil
 	}
 	if flow.staged != nil {
 		flow.staged.Clean(flow.mp)
 		flow.staged = nil
 	}
-	flow.mp = nil
+	if flow.sinker != nil && !cleanupFailed {
+		if err := flow.sinker.Close(); err != nil {
+			errs = append(errs, err)
+		}
+		flow.sinker = nil
+	}
+	if flow.sinker == nil {
+		if flow.buffer != nil {
+			flow.buffer.Close(flow.mp)
+			flow.buffer = nil
+		}
+		flow.mp = nil
+	}
 	flow.table = nil
+	flow.newDataObjects = nil
+	flow.isObjectDeletedFn = nil
+	flow.fs = nil
 	flow.transferred.objDetails = nil
-	return nil
+	return errors.Join(errs...)
+}
+
+func cleanupUnpublishedTransferSinker(ctx context.Context, sinker *ioutil.Sinker) error {
+	cleanupCtx, cancel := context.WithTimeoutCause(
+		context.WithoutCancel(ctx), 10*time.Minute, moerr.CauseCleanUpUselessFiles,
+	)
+	defer cancel()
+	_, err := sinker.DeletePersisted(cleanupCtx)
+	return err
 }
