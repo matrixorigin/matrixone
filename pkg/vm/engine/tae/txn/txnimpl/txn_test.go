@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -56,6 +57,21 @@ func (noopReplayObserver) OnTimeStamp(types.TS) {}
 type dedupErrorObjectData struct {
 	data.Object
 	err error
+}
+
+type containsObjectData struct {
+	data.Object
+	contains func(containers.Vector) error
+}
+
+func (data *containsObjectData) Contains(
+	_ context.Context,
+	_ txnif.TxnReader,
+	keys containers.Vector,
+	_ index.ZM,
+	_ *mpool.MPool,
+) error {
+	return data.contains(keys)
 }
 
 func (data *dedupErrorObjectData) GetDuplicatedRows(
@@ -124,6 +140,77 @@ func TestIncrementalGetRowsByPKReleasesResultOnError(t *testing.T) {
 	require.Nil(t, rowIDs)
 	used, _ := pool.Used(false)
 	require.Zero(t, used)
+}
+
+func TestFindDeletesForCandidatesRetainsPartialFilteringOnWW(t *testing.T) {
+	defer testutils.AfterTest(t)()
+
+	schema := catalog.MockSchemaAll(3, 2)
+	entry := catalog.MockStaloneTableEntry(1, schema)
+	pool := containers.NewVectorPool(t.Name(), 8)
+	defer pool.Destory()
+	txn := txnbase.MockTxnReaderWithStartTS(types.BuildTS(100, 0))
+	tbl := &txnTable{
+		entry: entry,
+		store: &txnStore{
+			txn: txn,
+			rt:  dbutils.NewRuntime(dbutils.WithRuntimeSmallPool(pool)),
+		},
+	}
+
+	candidates, err := newDuplicatedRowIDs(pool, 1)
+	require.NoError(t, err)
+	defer candidates.Close()
+	appendableObjectID := objectio.NewObjectid()
+	appendableID := types.NewRowIDWithObjectIDBlkNumAndRowID(appendableObjectID, 0, 0)
+	nonAppendableObjectID := objectio.NewObjectid()
+	nonAppendableID := types.NewRowIDWithObjectIDBlkNumAndRowID(nonAppendableObjectID, 0, 0)
+	candidates.add(true, 0, appendableID)
+	candidates.add(false, 0, nonAppendableID)
+
+	firstObjectID := objectio.NewObjectid()
+	firstStats := objectio.NewObjectStatsWithObjectID(&firstObjectID, false, false, false)
+	first := catalog.MockObjectEntry(
+		entry,
+		firstStats,
+		true,
+		func(*catalog.ObjectEntry) data.Object {
+			return &containsObjectData{
+				contains: func(keys containers.Vector) error {
+					containers.UpdateValue(keys.GetDownstreamVector(), 0, nil, true, common.WorkspaceAllocator)
+					return nil
+				},
+			}
+		},
+		types.BuildTS(1, 0),
+	)
+	secondObjectID := objectio.NewObjectid()
+	secondStats := objectio.NewObjectStatsWithObjectID(&secondObjectID, false, false, false)
+	second := catalog.MockObjectEntry(
+		entry,
+		secondStats,
+		true,
+		func(*catalog.ObjectEntry) data.Object {
+			return &containsObjectData{
+				contains: func(containers.Vector) error {
+					return moerr.NewTxnWWConflictNoCtx(0, "")
+				},
+			}
+		},
+		types.BuildTS(2, 0),
+	)
+	entry.AddEntryLocked(first)
+	entry.AddEntryLocked(second)
+
+	err = tbl.findDeletesForCandidates(context.Background(), candidates, types.TS{}, types.MaxTs())
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict), err)
+	require.True(t, candidates.appendable.IsNull(candidates.appendableByKey[0][0]))
+	require.False(t, candidates.nonAppendable.IsNull(candidates.nonAppendableByKey[0][0]))
+
+	merged := candidates.Merge(pool)
+	defer merged.Close()
+	require.False(t, merged.IsNull(0))
+	require.Equal(t, nonAppendableID, vector.GetFixedAtNoTypeCheck[types.Rowid](merged.GetDownstreamVector(), 0))
 }
 
 func newPreparingEpochTestTxn(t *testing.T, id string, start, prepare types.TS) *txnbase.Txn {

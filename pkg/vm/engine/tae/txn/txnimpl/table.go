@@ -1471,40 +1471,43 @@ func (tbl *txnTable) findDeletesForCandidates(
 	candidates *duplicatedRowIDs,
 	from, to types.TS,
 ) error {
-	length := candidates.appendable.Length()
 	combined := tbl.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
 	defer combined.Close()
-	for i := 0; i < length; i++ {
-		if candidates.appendable.IsNull(i) {
-			combined.Append(nil, true)
-		} else {
-			combined.Append(vector.GetFixedAtNoTypeCheck[types.Rowid](candidates.appendable.GetDownstreamVector(), i), false)
+	type candidateRef struct {
+		rows  containers.Vector
+		index int
+	}
+	refs := make([]candidateRef, 0)
+	appendCandidates := func(rows containers.Vector, byKey [][]int) {
+		for _, indexes := range byKey {
+			for _, index := range indexes {
+				if rows.IsNull(index) {
+					combined.Append(nil, true)
+				} else {
+					combined.Append(vector.GetFixedAtNoTypeCheck[types.Rowid](rows.GetDownstreamVector(), index), false)
+				}
+				refs = append(refs, candidateRef{rows: rows, index: index})
+			}
 		}
 	}
-	for i := 0; i < length; i++ {
-		if candidates.nonAppendable.IsNull(i) {
-			combined.Append(nil, true)
-		} else {
-			combined.Append(vector.GetFixedAtNoTypeCheck[types.Rowid](candidates.nonAppendable.GetDownstreamVector(), i), false)
+	appendCandidates(candidates.appendable, candidates.appendableByKey)
+	appendCandidates(candidates.nonAppendable, candidates.nonAppendableByKey)
+	copyBack := func() {
+		for i, ref := range refs {
+			if combined.IsNull(i) {
+				containers.UpdateValue(ref.rows.GetDownstreamVector(), uint32(ref.index), nil, true, common.WorkspaceAllocator)
+			} else {
+				containers.UpdateValue(ref.rows.GetDownstreamVector(), uint32(ref.index), vector.GetFixedAtNoTypeCheck[types.Rowid](combined.GetDownstreamVector(), i), false, common.WorkspaceAllocator)
+			}
 		}
 	}
-	if err := tbl.findDeletes(ctx, combined, from, to); err != nil {
-		return err
-	}
-	for i := 0; i < length; i++ {
-		if combined.IsNull(i) {
-			containers.UpdateValue(candidates.appendable.GetDownstreamVector(), uint32(i), nil, true, common.WorkspaceAllocator)
-		} else {
-			containers.UpdateValue(candidates.appendable.GetDownstreamVector(), uint32(i), vector.GetFixedAtNoTypeCheck[types.Rowid](combined.GetDownstreamVector(), i), false, common.WorkspaceAllocator)
-		}
-		idx := i + length
-		if combined.IsNull(idx) {
-			containers.UpdateValue(candidates.nonAppendable.GetDownstreamVector(), uint32(i), nil, true, common.WorkspaceAllocator)
-		} else {
-			containers.UpdateValue(candidates.nonAppendable.GetDownstreamVector(), uint32(i), vector.GetFixedAtNoTypeCheck[types.Rowid](combined.GetDownstreamVector(), idx), false, common.WorkspaceAllocator)
-		}
-	}
-	return nil
+	err := tbl.findDeletes(ctx, combined, from, to)
+	// findDeletes may have completed filtering for earlier tombstones before
+	// returning a WW conflict from a later one. Preserve that partial result so
+	// callers that intentionally tolerate the conflict do not resurrect a stale
+	// candidate from the unfiltered vectors.
+	copyBack()
+	return err
 }
 
 /*

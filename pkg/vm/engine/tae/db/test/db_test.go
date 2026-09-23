@@ -15681,26 +15681,27 @@ func TestGetByFilterAfterMergeKeepsTheNewAppend(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, mergeTask.OnExec(ctx))
 
-	// Commit the replacement append from mergeTxn's Freeze callback. This puts
-	// its commit timestamp after the merge output was built, while its original
-	// appendable object remains older in object-list order.
+	// Commit the replacement while the merge transaction is still pending. The
+	// replacement is intentionally flushed before the merge commit so that both
+	// rows are represented by non-appendable objects during candidate lookup.
 	updateTxn, updateRel := tae.GetRelation()
 	updateTxn.SetDedupType(txnif.DedupPolicy_CheckIncremental)
 	require.NoError(t, updateRel.UpdateByFilter(
 		ctx, handle.NewEQFilter(pk), 2, int32(42), false,
 	))
-	mergeTxn.SetFreezeFn(func(at txnif.AsyncTxn) error {
-		if err := at.GetStore().Freeze(ctx); err != nil {
-			return err
-		}
-		return updateTxn.Commit(ctx)
-	})
-	require.NoError(t, mergeTxn.Commit(ctx))
+	require.NoError(t, updateTxn.Commit(ctx))
 
-	readTxn, readRel := tae.GetRelation()
-	_, _, err = readRel.GetByFilter(ctx, handle.NewEQFilter(pk))
+	flushTxn, flushRel := tae.GetRelation()
+	appendableMetas := testutil.GetAllAppendableMetas(flushRel, false)
+	require.Len(t, appendableMetas, 1)
+	flushTask, err := jobs.NewFlushTableTailTask(
+		nil, flushTxn, appendableMetas, nil, tae.Runtime,
+	)
 	require.NoError(t, err)
-	require.NoError(t, readTxn.Commit(ctx))
+	require.NoError(t, flushTask.OnExec(ctx))
+	require.NoError(t, flushTxn.Commit(ctx))
+
+	require.NoError(t, mergeTxn.Commit(ctx))
 
 	insertTxn, insertRel := tae.GetRelation()
 	err = insertRel.Append(ctx, bat)

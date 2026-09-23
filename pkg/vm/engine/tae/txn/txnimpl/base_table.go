@@ -50,8 +50,10 @@ type baseTable struct {
 // caller fall back to the live replacement row instead of treating the key as
 // absent.
 type duplicatedRowIDs struct {
-	appendable    containers.Vector
-	nonAppendable containers.Vector
+	appendable         containers.Vector
+	nonAppendable      containers.Vector
+	appendableByKey    [][]int
+	nonAppendableByKey [][]int
 }
 
 func newDuplicatedRowIDs(
@@ -59,25 +61,10 @@ func newDuplicatedRowIDs(
 	length int,
 ) (*duplicatedRowIDs, error) {
 	rowIDs := &duplicatedRowIDs{
-		appendable:    pool.GetVector(&objectio.RowidType),
-		nonAppendable: pool.GetVector(&objectio.RowidType),
-	}
-	initVector := func(vec containers.Vector) error {
-		return vector.AppendMultiFixed[types.Rowid](
-			vec.GetDownstreamVector(),
-			types.EmptyRowid,
-			true,
-			length,
-			common.WorkspaceAllocator,
-		)
-	}
-	if err := initVector(rowIDs.appendable); err != nil {
-		rowIDs.Close()
-		return nil, err
-	}
-	if err := initVector(rowIDs.nonAppendable); err != nil {
-		rowIDs.Close()
-		return nil, err
+		appendable:         pool.GetVector(&objectio.RowidType),
+		nonAppendable:      pool.GetVector(&objectio.RowidType),
+		appendableByKey:    make([][]int, length),
+		nonAppendableByKey: make([][]int, length),
 	}
 	return rowIDs, nil
 }
@@ -96,38 +83,66 @@ func (r *duplicatedRowIDs) Close() {
 	}
 }
 
-func (r *duplicatedRowIDs) ForObject(appendable bool) containers.Vector {
+func (r *duplicatedRowIDs) add(appendable bool, key int, rowID types.Rowid) {
+	var (
+		rows containers.Vector
+		keys *[][]int
+	)
 	if appendable {
-		return r.appendable
+		rows = r.appendable
+		keys = &r.appendableByKey
+	} else {
+		rows = r.nonAppendable
+		keys = &r.nonAppendableByKey
 	}
-	return r.nonAppendable
+	idx := rows.Length()
+	rows.Append(rowID, false)
+	(*keys)[key] = append((*keys)[key], idx)
 }
 
 func (r *duplicatedRowIDs) HasCandidate() bool {
-	for i := 0; i < r.appendable.Length(); i++ {
-		if !r.appendable.IsNull(i) || !r.nonAppendable.IsNull(i) {
-			return true
+	for i := range r.appendableByKey {
+		for _, idx := range r.appendableByKey[i] {
+			if !r.appendable.IsNull(idx) {
+				return true
+			}
+		}
+		for _, idx := range r.nonAppendableByKey[i] {
+			if !r.nonAppendable.IsNull(idx) {
+				return true
+			}
 		}
 	}
 	return false
 }
 
+func (r *duplicatedRowIDs) firstLive(
+	rows containers.Vector,
+	indexes []int,
+) (types.Rowid, bool) {
+	for _, idx := range indexes {
+		if !rows.IsNull(idx) {
+			return vector.GetFixedAtNoTypeCheck[types.Rowid](rows.GetDownstreamVector(), idx), true
+		}
+	}
+	return types.EmptyRowid, false
+}
+
 // Merge chooses an effective row only after all object candidates have been
 // checked against tombstones. Appendable rows are preferred because they are
-// the replacement rows created after a merge source was written.
+// the replacement rows created after a merge source was written. Multiple
+// candidates from the same object class are retained until that filtering is
+// complete; the first surviving candidate preserves the existing object-list
+// traversal order.
 func (r *duplicatedRowIDs) Merge(pool *containers.VectorPool) containers.Vector {
-	length := r.appendable.Length()
-	if r.nonAppendable.Length() > length {
-		length = r.nonAppendable.Length()
-	}
 	rowIDs := pool.GetVector(&objectio.RowidType)
-	for i := 0; i < length; i++ {
-		if !r.appendable.IsNull(i) {
-			rowIDs.Append(vector.GetFixedAtNoTypeCheck[types.Rowid](r.appendable.GetDownstreamVector(), i), false)
+	for i := range r.appendableByKey {
+		if rowID, ok := r.firstLive(r.appendable, r.appendableByKey[i]); ok {
+			rowIDs.Append(rowID, false)
 			continue
 		}
-		if !r.nonAppendable.IsNull(i) {
-			rowIDs.Append(vector.GetFixedAtNoTypeCheck[types.Rowid](r.nonAppendable.GetDownstreamVector(), i), false)
+		if rowID, ok := r.firstLive(r.nonAppendable, r.nonAppendableByKey[i]); ok {
+			rowIDs.Append(rowID, false)
 			continue
 		}
 		rowIDs.Append(nil, true)
@@ -288,15 +303,37 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector) (r
 				continue
 			}
 		}
-		err = obj.GetObjectData().GetDuplicatedRows(
-			ctx,
-			tbl.txnTable.store.txn,
-			pks,
-			nil,
-			types.TS{}, types.MaxTs(),
-			rowIDs.ForObject(obj.IsAppendable()),
+		objectRowIDs := tbl.txnTable.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
+		err = vector.AppendMultiFixed[types.Rowid](
+			objectRowIDs.GetDownstreamVector(),
+			types.EmptyRowid,
+			true,
+			pks.Length(),
 			common.WorkspaceAllocator,
 		)
+		if err == nil {
+			err = obj.GetObjectData().GetDuplicatedRows(
+				ctx,
+				tbl.txnTable.store.txn,
+				pks,
+				nil,
+				types.TS{}, types.MaxTs(),
+				objectRowIDs,
+				common.WorkspaceAllocator,
+			)
+		}
+		if err == nil || moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+			for i := 0; i < pks.Length(); i++ {
+				if !objectRowIDs.IsNull(i) {
+					rowIDs.add(
+						obj.IsAppendable(),
+						i,
+						vector.GetFixedAtNoTypeCheck[types.Rowid](objectRowIDs.GetDownstreamVector(), i),
+					)
+				}
+			}
+		}
+		objectRowIDs.Close()
 		if err != nil {
 			logutil.Infof("getRowsByPK failed GetDuplicate: %v, obj %v", err, obj.ID().String())
 			return
