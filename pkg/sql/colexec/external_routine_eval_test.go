@@ -17,6 +17,8 @@ package colexec
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"strconv"
 	"testing"
 	"time"
 
@@ -36,13 +38,14 @@ import (
 type externalRoutineTestExecutor struct {
 	vector   *vector.Vector
 	evalSeen *int
+	err      error
 }
 
 func (e *externalRoutineTestExecutor) Eval(_ *process.Process, _ []*batch.Batch, _ []bool) (*vector.Vector, error) {
 	if e.evalSeen != nil {
 		*e.evalSeen++
 	}
-	return e.vector, nil
+	return e.vector, e.err
 }
 
 func (e *externalRoutineTestExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
@@ -61,10 +64,18 @@ type externalRoutineCaptureRuntime struct {
 
 type externalRoutineEmptySuccessRuntime struct{}
 
+type externalRoutineErrorRuntime struct{ err error }
+
 func (r *externalRoutineEmptySuccessRuntime) Language() string { return udf.LanguagePython }
 
 func (r *externalRoutineEmptySuccessRuntime) Execute(_ context.Context, _ *udf.Invocation, _ vector.FunctionResultWrapper, _ *mpool.MPool) error {
 	return nil
+}
+
+func (r *externalRoutineErrorRuntime) Language() string { return udf.LanguagePython }
+
+func (r *externalRoutineErrorRuntime) Execute(_ context.Context, _ *udf.Invocation, _ vector.FunctionResultWrapper, _ *mpool.MPool) error {
+	return r.err
 }
 
 func (r *externalRoutineCaptureRuntime) Language() string { return udf.LanguagePython }
@@ -254,6 +265,39 @@ func TestExternalRoutineEvalRequiresRowDomainForZeroArgumentVector(t *testing.T)
 	require.ErrorContains(t, err, "input batch 0 is nil")
 }
 
+func TestExternalRoutineRowCountValidatesAllJoinDomains(t *testing.T) {
+	first := batch.NewWithSize(0)
+	first.SetRowCount(3)
+	second := batch.NewWithSize(0)
+	second.SetRowCount(3)
+	short := batch.NewWithSize(0)
+	short.SetRowCount(2)
+	for _, tc := range []struct {
+		name    string
+		mode    string
+		batches []*batch.Batch
+		want    int
+		err     string
+	}{
+		{name: "aligned join row domains", mode: "SCALAR", batches: []*batch.Batch{first, second}, want: 3},
+		{name: "scalar without explicit batch has one row", mode: "SCALAR", want: 1},
+		{name: "empty vector batch carries zero rows", mode: "VECTOR", batches: []*batch.Batch{{}}, err: ""},
+		{name: "nil later relation", mode: "SCALAR", batches: []*batch.Batch{first, nil}, err: "input batch 1 is nil"},
+		{name: "unequal join cardinality", mode: "SCALAR", batches: []*batch.Batch{first, short}, err: "has 2 rows, expected 3"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rows, err := externalRoutineRowCount(tc.mode, tc.batches)
+			if tc.err != "" {
+				require.Zero(t, rows)
+				require.ErrorContains(t, err, tc.err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.want, rows)
+		})
+	}
+}
+
 func TestExternalRoutineEvalAcceptsAlignedJoinBatches(t *testing.T) {
 	first := batch.NewWithSize(0)
 	first.SetRowCount(1)
@@ -405,6 +449,100 @@ func TestBuildRoutineContextRejectsSubMinuteFixedTimezone(t *testing.T) {
 	require.ErrorContains(t, err, "whole number of minutes")
 }
 
+func TestBuildRoutineContextRejectsMissingStatementInputs(t *testing.T) {
+	if _, err := buildRoutineContext(nil); err == nil {
+		t.Fatal("nil process must not produce an invocation context")
+	}
+	if _, err := buildRoutineContext(&process.Process{}); err == nil {
+		t.Fatal("process without Base must not produce an invocation context")
+	}
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.Base.StmtProfile = &process.StmtProfile{}
+	proc.GetSessionInfo().TimeZone = time.UTC
+	proc.Base.UnixTime = 0
+	_, err := buildRoutineContext(proc)
+	require.ErrorContains(t, err, "statement timestamp is unavailable")
+
+	proc.Base.UnixTime = time.Now().UnixNano()
+	proc.GetSessionInfo().TimeZone = nil
+	_, err = buildRoutineContext(proc)
+	require.ErrorContains(t, err, "session timezone is unavailable")
+}
+
+func TestResolveSystemTimezoneUsesExplicitStableZone(t *testing.T) {
+	t.Setenv("TZ", "posix/UTC")
+	name, location, err := resolveSystemTimezone()
+	require.NoError(t, err)
+	require.Equal(t, "UTC", name)
+	require.Equal(t, "UTC", location.String())
+}
+
+func TestBuildRoutineContextUsesStableStatementAndSessionSnapshot(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		sessionMode string
+		resolve     func() (interface{}, error)
+		wantMode    string
+	}{
+		{
+			name:        "resolved SQL mode overrides session fallback",
+			sessionMode: "ANSI",
+			resolve:     func() (interface{}, error) { return "strict_trans_tables, ansi,STRICT_TRANS_TABLES", nil },
+			wantMode:    `["ANSI","STRICT_TRANS_TABLES"]`,
+		},
+		{
+			name:        "resolver error keeps session SQL mode",
+			sessionMode: "ansi, strict_trans_tables",
+			resolve:     func() (interface{}, error) { return nil, errors.New("variable unavailable") },
+			wantMode:    `["ANSI","STRICT_TRANS_TABLES"]`,
+		},
+		{
+			name:        "non-string resolution keeps session SQL mode",
+			sessionMode: "ANSI",
+			resolve:     func() (interface{}, error) { return int64(1), nil },
+			wantMode:    `["ANSI"]`,
+		},
+		{
+			name:        "empty sentinel becomes empty mode list",
+			sessionMode: process.EmptySqlModeSentinel,
+			wantMode:    `[]`,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			proc.SetQueryId("")
+			proc.GetSessionInfo().TimeZone = time.UTC
+			proc.GetSessionInfo().User = "root"
+			proc.GetSessionInfo().Database = ""
+			proc.GetSessionInfo().Role = ""
+			proc.GetSessionInfo().SqlMode = tc.sessionMode
+			proc.Base.StmtProfile = &process.StmtProfile{}
+			proc.Base.UnixTime = time.Date(2026, 9, 23, 1, 2, 3, 4000, time.UTC).UnixNano()
+			if tc.resolve != nil {
+				proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+					require.Equal(t, "sql_mode", name)
+					require.True(t, system)
+					require.False(t, global)
+					return tc.resolve()
+				})
+			}
+
+			values, err := buildRoutineContext(proc)
+			require.NoError(t, err)
+			require.NotContains(t, values, "statement_id")
+			require.Equal(t, strconv.FormatInt(time.Unix(0, proc.Base.UnixTime).UTC().UnixMicro(), 10), values["statement_timestamp_utc"])
+			require.Equal(t, "IANA", values["session_timezone_kind"])
+			require.Equal(t, "UTC", values["session_timezone_name"])
+			require.NotEmpty(t, values["session_timezone_tzdb_version"])
+			require.Equal(t, tc.wantMode, values["sql_mode"])
+			require.NotContains(t, values, "current_database")
+			require.NotContains(t, values, "current_role")
+		})
+	}
+}
+
 func testExternalRoutineCall(t *testing.T, mode, nullPolicy string) *planpb.RoutineCall {
 	t.Helper()
 	descriptor, err := function.NewPythonTypeDescriptor(types.T_int64.ToType())
@@ -481,6 +619,48 @@ func TestExternalRoutineEvalRejectsSuccessfulRuntimeWithoutResultRows(t *testing
 	require.ErrorContains(t, err, "runtime produced 0 result rows, expected 1")
 }
 
+func TestExternalRoutineEvalPropagatesParameterAndRuntimeFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		parameterFailure bool
+		runtimeFailure   bool
+		want             string
+	}{
+		{name: "parameter evaluation fails", parameterFailure: true, want: "parameter expression failed"},
+		{name: "runtime is disabled", want: "runtime is not enabled"},
+		{name: "runtime execution fails", runtimeFailure: true, want: "handler process was cancelled"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			proc.SetQueryId("error-path-query")
+			proc.GetSessionInfo().TimeZone = time.UTC
+			proc.GetSessionInfo().User = "root"
+			proc.Base.StmtProfile = &process.StmtProfile{}
+			proc.GetStmtProfile().SetQueryStart(time.Date(2026, 9, 23, 0, 0, 0, 0, time.UTC))
+			input := vector.NewVec(types.T_int64.ToType())
+			defer input.Free(proc.Mp())
+			require.NoError(t, vector.AppendFixed(input, int64(10), false, proc.Mp()))
+			parameter := &externalRoutineTestExecutor{vector: input}
+			if tc.parameterFailure {
+				parameter.err = errors.New(tc.want)
+			} else if tc.runtimeFailure {
+				proc.Base.UdfService = &externalRoutineErrorRuntime{err: errors.New(tc.want)}
+			}
+			evaluator, err := newExternalRoutineEval(
+				proc, testExternalRoutineCall(t, python.ModeScalar, udf.NullCallHandler),
+				[]ExpressionExecutor{parameter}, nil,
+			)
+			require.NoError(t, err)
+			defer evaluator.Free()
+			bat := batch.NewWithSize(0)
+			bat.SetRowCount(1)
+			_, err = evaluator.Eval(proc, []*batch.Batch{bat}, []bool{true})
+			require.ErrorContains(t, err, tc.want)
+		})
+	}
+}
+
 func TestExternalRoutineTransfersResultOwnership(t *testing.T) {
 	for _, mode := range []string{"SCALAR", "VECTOR"} {
 		t.Run(mode, func(t *testing.T) {
@@ -532,6 +712,88 @@ func TestExternalRoutineRejectsDamagedDefinitionBeforeArguments(t *testing.T) {
 				call.ArgumentTypes[0].Id = int32(types.T_int32)
 			}
 			require.Error(t, validateRoutineCall(call))
+		})
+	}
+}
+
+func TestValidateRoutineCallRejectsIncompleteTypedContracts(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*planpb.RoutineCall)
+		want   string
+	}{
+		{name: "missing FunctionRef", mutate: func(call *planpb.RoutineCall) { call.FunctionRef = nil }, want: "no exact FunctionRef"},
+		{name: "zero function identity", mutate: func(call *planpb.RoutineCall) { call.FunctionRef.FunctionId = 0 }, want: "no exact FunctionRef"},
+		{name: "missing return descriptor", mutate: func(call *planpb.RoutineCall) { call.ReturnType.Id = int32(types.T_any) }, want: "no return descriptor"},
+		{name: "unsupported contract version", mutate: func(call *planpb.RoutineCall) { call.ContractVersion++ }, want: "unsupported typed routine call contract"},
+		{name: "non-volatile function", mutate: func(call *planpb.RoutineCall) { call.Volatility = "IMMUTABLE" }, want: "must be VOLATILE"},
+		{name: "function cannot error", mutate: func(call *planpb.RoutineCall) { call.MayError = false }, want: "semantic contract is not supported"},
+		{name: "unsupported security contract", mutate: func(call *planpb.RoutineCall) { call.SecurityMode = "DEFINER" }, want: "semantic contract is not supported"},
+		{name: "leakproof function", mutate: func(call *planpb.RoutineCall) { call.Leakproof = true }, want: "semantic contract is not supported"},
+		{name: "invalid callsite newline", mutate: func(call *planpb.RoutineCall) { call.CallsiteId = "python/test\nother" }, want: "valid callsite id"},
+		{name: "execution context in plan", mutate: func(call *planpb.RoutineCall) { call.Context = map[string]string{"statement_id": "stale"} }, want: "contains execution context"},
+		{name: "missing Python implementation", mutate: func(call *planpb.RoutineCall) { call.Implementation = nil }, want: "no Python implementation"},
+		{name: "source in plan", mutate: func(call *planpb.RoutineCall) { call.GetPython().Source = "def add(ctx, value): return value" }, want: "plan contains source"},
+		{name: "unsupported SDK contract", mutate: func(call *planpb.RoutineCall) { call.GetPython().SdkVersion = "future" }, want: "implementation contract is not supported"},
+		{name: "unsupported mode", mutate: func(call *planpb.RoutineCall) { call.GetPython().Mode = "BATCH" }, want: "unsupported typed call mode"},
+		{name: "unsupported NULL policy", mutate: func(call *planpb.RoutineCall) { call.GetPython().NullPolicy = "DEFAULT" }, want: "unsupported typed NULL policy"},
+		{name: "NULL policy mismatch", mutate: func(call *planpb.RoutineCall) { call.NullPolicy = udf.NullReturnNull }, want: "NULL policy does not match"},
+		{name: "malformed artifact digest", mutate: func(call *planpb.RoutineCall) { call.GetPython().ArtifactDigest = "not-a-digest" }, want: "invalid artifact/environment digest"},
+		{name: "malformed definition fingerprint", mutate: func(call *planpb.RoutineCall) { call.GetPython().DefinitionFingerprint = "not-a-digest" }, want: "invalid definition fingerprint"},
+		{name: "nil argument descriptor", mutate: func(call *planpb.RoutineCall) { call.ArgumentTypes[0] = nil }, want: "argument 0 is nil"},
+		{name: "unsupported argument type", mutate: func(call *planpb.RoutineCall) { call.ArgumentTypes[0].Id = int32(types.T_any) }, want: "argument 0 is unsupported"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			call := testExternalRoutineCall(t, python.ModeScalar, udf.NullCallHandler)
+			tc.mutate(call)
+			require.ErrorContains(t, validateRoutineCall(call), tc.want)
+		})
+	}
+}
+
+func TestValidateExternalRoutineInputsChecksRowAndTypeContracts(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	int64Rows := vector.NewVec(types.T_int64.ToType())
+	defer int64Rows.Free(proc.Mp())
+	require.NoError(t, vector.AppendFixed(int64Rows, int64(1), false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(int64Rows, int64(2), false, proc.Mp()))
+	shortRows := vector.NewVec(types.T_int64.ToType())
+	defer shortRows.Free(proc.Mp())
+	require.NoError(t, vector.AppendFixed(shortRows, int64(1), false, proc.Mp()))
+	int32Rows := vector.NewVec(types.T_int32.ToType())
+	defer int32Rows.Free(proc.Mp())
+	require.NoError(t, vector.AppendFixed(int32Rows, int32(1), false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(int32Rows, int32(2), false, proc.Mp()))
+	emptyRows := vector.NewVec(types.T_int64.ToType())
+	defer emptyRows.Free(proc.Mp())
+
+	for _, tc := range []struct {
+		name    string
+		inputs  []*vector.Vector
+		rows    int
+		mutate  func(*planpb.RoutineCall)
+		wantErr string
+	}{
+		{name: "valid aligned input", inputs: []*vector.Vector{int64Rows}, rows: 2},
+		{name: "argument count mismatch", inputs: nil, rows: 2, wantErr: "evaluated input count 0"},
+		{name: "missing input vector", inputs: []*vector.Vector{nil}, rows: 1, wantErr: "has no type"},
+		{name: "empty input vector", inputs: []*vector.Vector{emptyRows}, rows: 1, wantErr: "has 0 rows"},
+		{name: "short non-constant input", inputs: []*vector.Vector{shortRows}, rows: 2, wantErr: "expected at least 2"},
+		{name: "physical SQL type mismatch", inputs: []*vector.Vector{int32Rows}, rows: 2, wantErr: "does not match the frozen descriptor"},
+		{name: "unsupported frozen descriptor", inputs: []*vector.Vector{int64Rows}, rows: 2, mutate: func(call *planpb.RoutineCall) { call.ArgumentTypes[0].Id = int32(types.T_enum) }, wantErr: "invalid argument descriptor 0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			call := testExternalRoutineCall(t, python.ModeScalar, udf.NullCallHandler)
+			if tc.mutate != nil {
+				tc.mutate(call)
+			}
+			err := validateExternalRoutineInputs(tc.inputs, call, tc.rows)
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.ErrorContains(t, err, tc.wantErr)
 		})
 	}
 }
