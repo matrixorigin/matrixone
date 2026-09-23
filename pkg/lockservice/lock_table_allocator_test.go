@@ -235,8 +235,33 @@ func TestSetRestartService(t *testing.T) {
 		t,
 		time.Hour,
 		func(a *lockTableAllocator) {
-			a.setRestartService("s1")
-			assert.True(t, a.canRestartService("s1"))
+			a.Get("s1", 0, 1, 0, pb.Sharding_None)
+			assert.True(t, a.setRestartService("s1"))
+			assert.False(t, a.canRestartService("s1"))
+		})
+}
+
+func TestSetRestartServiceIsIdempotentAfterSafeCompletion(t *testing.T) {
+	runLockTableAllocatorTest(
+		t,
+		time.Hour,
+		func(a *lockTableAllocator) {
+			a.Get("s1", 0, 1, 0, pb.Sharding_None)
+			binds := a.getServiceBinds("s1")
+			binds.setStatus(pb.Status_ServiceCanRestart)
+			assert.True(t, a.setRestartService("s1"))
+			assert.True(t, binds.isStatus(pb.Status_ServiceCanRestart),
+				"duplicate SetRestart must not regress a completed drain")
+		})
+}
+
+func TestSetRestartServiceMissingFailsClosed(t *testing.T) {
+	runLockTableAllocatorTest(
+		t,
+		time.Hour,
+		func(a *lockTableAllocator) {
+			assert.False(t, a.setRestartService("missing"),
+				"missing lock service must not report a successful drain request")
 		})
 }
 
@@ -248,6 +273,62 @@ func TestCanRestartService(t *testing.T) {
 			a.Get("s1", 0, 1, 0, pb.Sharding_None)
 			a.setRestartService("s1")
 			assert.False(t, a.canRestartService("s1"))
+		})
+}
+
+func TestCanRestartServiceAfterUnsafeBindRemovalFailsClosed(t *testing.T) {
+	runLockTableAllocatorTest(
+		t,
+		time.Hour,
+		func(a *lockTableAllocator) {
+			a.Get("s1", 0, 1, 0, pb.Sharding_None)
+			a.disableTableBinds(a.getServiceBinds("s1"))
+			assert.False(t, a.canRestartService("s1"),
+				"removing a bind without a completed drain must fail closed")
+		})
+}
+
+func TestCanRestartServiceMissingStateFailsClosed(t *testing.T) {
+	runLockTableAllocatorTest(
+		t,
+		time.Hour,
+		func(a *lockTableAllocator) {
+			assert.False(t, a.canRestartService("never-observed"),
+				"a lookup miss is not proof of safe retirement")
+		})
+}
+
+func TestCanRestartServiceKeepsSafeRetirementEvidenceAfterBindRemoval(t *testing.T) {
+	runLockTableAllocatorTest(
+		t,
+		time.Hour,
+		func(a *lockTableAllocator) {
+			a.Get("s1", 0, 1, 0, pb.Sharding_None)
+			binds := a.getServiceBinds("s1")
+			binds.setStatus(pb.Status_ServiceCanRestart)
+			a.disableTableBinds(binds)
+			assert.True(t, a.canRestartService("s1"),
+				"a completed drain remains positive evidence after bind cleanup")
+		})
+}
+
+func TestCanRestartServiceDoesNotReuseSafeEvidenceAcrossSameUUIDIncarnation(t *testing.T) {
+	runLockTableAllocatorTest(
+		t,
+		time.Hour,
+		func(a *lockTableAllocator) {
+			oldID := "1234567890123456789uuid1"
+			newID := "1234567890123456790uuid1"
+			old := a.registerService(oldID)
+			old.setStatus(pb.Status_ServiceCanRestart)
+			a.disableTableBinds(old)
+			assert.True(t, a.canRestartService(oldID))
+
+			current := a.registerService(newID)
+			current.setStatus(pb.Status_ServiceLockEnable)
+			a.disableTableBinds(current)
+			assert.False(t, a.canRestartService(newID),
+				"an unsafe new incarnation must not inherit an older safe tombstone")
 		})
 }
 

@@ -1,0 +1,33 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package query
+
+import "testing"
+
+func TestGetLockInfoCarriesExactLockServiceID(t *testing.T) {
+	const id = "1234567890123456789uuid1"
+	response := GetLockInfoResponse{CnId: "uuid1", LockServiceID: id}
+	data, err := response.Marshal()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded GetLockInfoResponse
+	if err := decoded.Unmarshal(data); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.CnId != "uuid1" || decoded.LockServiceID != id {
+		t.Fatalf("lock service incarnation was lost: %+v", decoded)
+	}
+}

@@ -2855,7 +2855,8 @@ func TestRestartInRollingRestartCN(t *testing.T) {
 		[]string{"s1"},
 		func(alloc *lockTableAllocator, s []*service) {
 			alloc.setRestartService("s1")
-			require.Equal(t, true, alloc.canRestartService("s1"))
+			require.Equal(t, false, alloc.canRestartService("s1"),
+				"SetRestart must wait for the CN to confirm drain completion")
 		},
 	)
 }
@@ -6829,7 +6830,13 @@ func TestDrainPinsAsyncRemoteWaiterIntent(t *testing.T) {
 			case <-ctx.Done():
 				t.Fatal("remote waiter did not acquire after holder unlock")
 			}
+			require.False(t, owner.isStatus(pb.Status_ServiceUnLockSucc),
+				"a remote lock holder must keep the owner in drain-waiting")
 			require.NoError(t, caller.Unlock(ctx, waiterTxn, timestamp.Timestamp{}))
+			require.Eventually(t, func() bool {
+				return owner.isStatus(pb.Status_ServiceUnLockSucc)
+			}, time.Second, time.Millisecond,
+				"owner must advertise restart only after the remote waiter releases")
 		})
 }
 
