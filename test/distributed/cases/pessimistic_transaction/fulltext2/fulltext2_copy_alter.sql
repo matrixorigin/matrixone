@@ -11,20 +11,21 @@
 --
 -- #28985 (multi-CN read-your-writes): the copy-alter warms a base-only generation on the query
 -- CN, and cross-CN cache refresh is EVENTUAL by design -- the periodic IsStale sweep (~10m by
--- default; RemoveIdle evicts only the CDC-consumer CN -- see the won't-fix note in
--- pkg/vectorindex/cache/cache.go). Rather than skip the tail assertion, this case PROVES the
--- eventual mechanism converges: at the START it lowers the periodic sweep cadence cluster-wide via
--- mo_ctl (moadmin-only, broadcast to all CNs, not persisted), so the SWEEP -- not any manual
--- eviction -- refreshes stale entries in seconds; it restores the default at the end. BVT runs
--- serially, so this global knob is safe, and a short interval is benign to any later case (it only
--- refreshes caches sooner). At the very end it also directly exercises the manual EvictVectorIndexCache
--- mo_ctl and confirms via GetVectorIndexCacheInfo that no CN holds the entry afterwards.
+-- default; see the won't-fix note in pkg/vectorindex/cache/cache.go). An ordinary CDC flush no
+-- longer evicts a warm search object at all (#29227 keeps it warm; freshness follows the
+-- generation/stale-sweep/TTL lifecycle), so the periodic sweep is now the SOLE mechanism that
+-- refreshes a stale entry. Rather than skip the tail assertion, this case PROVES the eventual
+-- mechanism converges: at the START it lowers the periodic sweep cadence cluster-wide via mo_ctl
+-- (moadmin-only, broadcast to all CNs, not persisted), so the SWEEP refreshes stale entries in
+-- seconds; it restores the default at the end. BVT runs serially, so this global knob is safe, and
+-- a short interval is benign to any later case (it only refreshes caches sooner). At the very end
+-- it also directly exercises the manual EvictVectorIndexCache mo_ctl and confirms via
+-- GetVectorIndexCacheInfo that no CN holds the entry afterwards.
 --
--- This is a MULTI-CN test (it runs in the pessimistic multi-CN BVT suite). That is what makes the
--- GetVectorIndexCacheInfo=0 poll a genuine proof of the cross-CN sweep: cached is summed over ALL
--- CNs, and RemoveIdle only evicts the CDC-consumer CN, so a non-consumer CN's stale entry can be
--- cleared only by the periodic sweep. The sum can reach 0 only once the sweep has evicted the
--- non-consumer CN(s) -- RemoveIdle alone cannot zero it.
+-- This is a MULTI-CN test (it runs in the pessimistic multi-CN BVT suite). Because #29227 removed
+-- the CDC-flush eviction, there is no per-CN shortcut left: the GetVectorIndexCacheInfo=0 poll --
+-- cached summed over ALL CNs -- can reach 0 only once the periodic sweep has evicted the stale
+-- entry on every CN that holds it. Nothing but the sweep drives it to zero.
 set experimental_fulltext2_index = 1;
 
 -- Lower the periodic cross-CN freshness sweep cadence for the duration of this case. Everything

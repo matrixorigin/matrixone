@@ -82,24 +82,53 @@ func TestSetStaleCheckIntervalResetsRunningTicker(t *testing.T) {
 // check+reset, so after both run the override governs (either serve() read it when creating the
 // ticker, or SetStaleCheckInterval Reset the live ticker). Run under -race to prove no data race
 // or deadlock on serveMu/ticker/started across the two goroutines.
+// TestSetStaleCheckIntervalDuringServeIsNotLost proves an override reaches the LIVE sweep ticker
+// (effectiveTickerNs), not merely the stored value, across the serve()/SetStaleCheckInterval race.
+// The original bug stored the new interval yet left the running ticker on the old cadence, so the
+// effectiveTickerNs assertion is what catches it. Both orderings are forced deterministically
+// (controlled synchronization) rather than only hoped for over a concurrent loop, and every case
+// tears the cache down unconditionally so a failed require never leaks a serve goroutine.
 func TestSetStaleCheckIntervalDuringServeIsNotLost(t *testing.T) {
-	for i := 0; i < 100; i++ {
+	const want = int64(2 * time.Second)
+
+	// Ordering A: the override lands BEFORE startup (started not yet published, so its own Reset is
+	// skipped) -- serve() must build the live ticker from the stored override.
+	t.Run("override before serve", func(t *testing.T) {
 		c := NewVectorIndexCache()
-		var wg sync.WaitGroup
-		wg.Add(2)
-		go func() { defer wg.Done(); c.serve() }()
-		go func() { defer wg.Done(); c.SetStaleCheckInterval(2 * time.Second) }()
-		wg.Wait()
-		require.Equal(t, 2*time.Second, c.staleTickerInterval())
-		// Assert the LIVE ticker actually carries the override, not merely the stored value: the
-		// original bug stored the new interval yet left the running ticker on the old cadence, and
-		// a staleTickerInterval()-only check would still pass. effectiveTickerNs records the
-		// interval the ticker was created (serve) or Reset (SetStaleCheckInterval) with, so this
-		// fails if the override raced serve() and never reached the running ticker.
-		require.Equal(t, int64(2*time.Second), c.effectiveTickerNs.Load(),
-			"the override must reach the live ticker, not only staleCheckIntervalNs")
-		c.Destroy()
-	}
+		t.Cleanup(c.Destroy)
+		c.SetStaleCheckInterval(2 * time.Second)
+		c.serve()
+		require.Equal(t, want, c.effectiveTickerNs.Load(),
+			"serve() must create the live ticker from an override that landed before startup")
+	})
+
+	// Ordering B: the override lands AFTER startup -- SetStaleCheckInterval must Reset the already
+	// live ticker (the path the original bug skipped).
+	t.Run("override after serve", func(t *testing.T) {
+		c := NewVectorIndexCache()
+		t.Cleanup(c.Destroy)
+		c.serve()
+		c.SetStaleCheckInterval(2 * time.Second)
+		require.Equal(t, want, c.effectiveTickerNs.Load(),
+			"SetStaleCheckInterval must Reset the already-running ticker")
+	})
+
+	// The actual overlap, many times. serveMu serializes the two, so whichever wins, the override
+	// reaches the live ticker. Read effectiveTickerNs and Destroy BEFORE asserting, so a failure
+	// still reclaims the serve goroutine.
+	t.Run("concurrent", func(t *testing.T) {
+		for i := 0; i < 100; i++ {
+			c := NewVectorIndexCache()
+			var wg sync.WaitGroup
+			wg.Add(2)
+			go func() { defer wg.Done(); c.serve() }()
+			go func() { defer wg.Done(); c.SetStaleCheckInterval(2 * time.Second) }()
+			wg.Wait()
+			got := c.effectiveTickerNs.Load()
+			c.Destroy()
+			require.Equal(t, want, got, "the override must reach the live ticker regardless of interleaving")
+		}
+	})
 }
 
 // The rigorous, placement-free proof of the mechanism the configurable interval accelerates: the
@@ -140,33 +169,38 @@ func TestStaleSweepEvictsStaleEntryAndKeepsFresh(t *testing.T) {
 // VectorIndexCache instances model two CNs: RemoveIdle is pure-local to the CDC-consumer CN, so a
 // stale warm entry on a NON-consumer CN survives the consumer's flush and is removed ONLY by that
 // CN's periodic IsStale sweep -- which is what drives the cluster-summed cached count to zero.
-func TestNonConsumerCNStaleEntryClearedOnlyBySweep(t *testing.T) {
-	const key = "idx"
-	warmStale := func(c *VectorIndexCache) {
-		e := newVectorIndexSearch(&countingSearch{stale: true})
-		e.Status.Store(STATUS_LOADED)
-		c.IndexMap.Store(key, e)
-	}
+// TestPeriodicSweepTickerEvictsStaleEntry proves the AUTOMATIC ticker dispatch, not just that
+// checkStale works when called by hand: with #29227 an ordinary CDC flush no longer evicts the warm
+// cache (RemoveIdle is gone), so on EVERY CN a warm entry a CDC append made stale is removed solely
+// by that CN's own periodic sweep ticker. A real serve() ticker (no manual checkStale/HouseKeeping
+// call) must evict the stale entry on its own and leave a current one resident.
+//
+// (True separate-CN placement needs multiple OS processes -- a single-process launch shares one
+// global cache -- so the per-CN aspect is modeled as one cache's own automatic ticker; the ticker
+// DISPATCH and stale/fresh selectivity are what this proves deterministically.)
+func TestPeriodicSweepTickerEvictsStaleEntry(t *testing.T) {
+	c := NewVectorIndexCache()
+	t.Cleanup(c.Destroy)
 
-	// Two CNs, each holding its own warm generation that a CDC append has since made stale.
-	consumer := NewVectorIndexCache()
-	nonConsumer := NewVectorIndexCache()
-	warmStale(consumer)
-	warmStale(nonConsumer)
+	// Drive the base sweep ticker at a millisecond cadence so the every-Nth-tick automatic sweep
+	// fires in tens of ms, not the ~10m default. Set the field directly to bypass the 1s operator
+	// floor (MinStaleCheckInterval) -- this is the internal cadence knob the ticker reads.
+	c.staleCheckIntervalNs.Store(int64(2 * time.Millisecond))
+	c.serve() // starts the housekeeping + every-Nth-tick sweep goroutine
 
-	// The CDC flush runs RemoveIdle on the CONSUMER CN only. It is pure-local: it drops the
-	// consumer's entry and cannot reach the non-consumer's independent cache.
-	require.True(t, consumer.RemoveIdle(key, "cdc"), "RemoveIdle claims and drops the consumer's idle entry")
-	require.Equal(t, int64(0), consumer.CountKey(key), "consumer CN cleared by its local RemoveIdle")
-	require.Equal(t, int64(1), nonConsumer.CountKey(key),
-		"the non-consumer CN's stale entry is untouched by the consumer's RemoveIdle")
+	stale := newVectorIndexSearch(&countingSearch{stale: true})
+	stale.Status.Store(STATUS_LOADED)
+	c.IndexMap.Store("stale", stale)
+	fresh := newVectorIndexSearch(&countingSearch{stale: false})
+	fresh.Status.Store(STATUS_LOADED)
+	c.IndexMap.Store("fresh", fresh)
 
-	// So the cluster-summed cached count (what the COPY ALTER cached->0 poll observes) is still
-	// non-zero after the flush; only the non-consumer CN's periodic sweep drives it to zero.
-	nonConsumer.checkStale()
-	nonConsumer.HouseKeeping()
-	require.Equal(t, int64(0), nonConsumer.CountKey(key),
-		"the non-consumer CN's stale entry is removed only by its periodic IsStale sweep")
+	// The ticker-driven sweep (checkStale marks -> HouseKeeping evicts) must remove the stale entry
+	// with NO manual call, and must not touch the current one.
+	require.Eventually(t, func() bool { return c.CountKey("stale") == 0 }, 5*time.Second, 5*time.Millisecond,
+		"the periodic sweep ticker must evict a stale entry on its own")
+	require.Equal(t, int64(1), c.CountKey("fresh"),
+		"the automatic sweep must not evict a current entry")
 }
 
 // CountKey reports per-key cache occupancy (0 when absent/evicted), the signal the
