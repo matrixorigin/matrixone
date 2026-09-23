@@ -163,6 +163,21 @@ func TestFinalizeRemoteS3OwnershipWaitsForBatchAcknowledgements(t *testing.T) {
 		require.False(t, workspace.accepted)
 		require.Equal(t, []string{"cleanup"}, workspace.events)
 	})
+
+	t.Run("successful cleanup preserves original SQL error", func(t *testing.T) {
+		workspace := &remoteS3CleanupWorkspace{}
+		receiver := messageReceiverOnServer{
+			messageCtx:                    context.Background(),
+			unpublishedS3CleanupWorkspace: workspace,
+			unpublishedS3ObjectOwners:     workspace,
+		}
+		handlerErr := moerr.NewDuplicateEntryNoCtx("value", "key")
+
+		err := receiver.finalizeUnpublishedS3Objects(handlerErr, nil)
+		require.Same(t, handlerErr, err)
+		require.Same(t, handlerErr, moerr.ConvertGoError(context.Background(), err))
+		require.Equal(t, 1, workspace.calls)
+	})
 }
 
 // TestWorkspaceCreationInRemoteRun tests that workspace is created early in remote run scenario.
