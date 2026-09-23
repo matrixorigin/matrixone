@@ -1000,6 +1000,9 @@ func (writer *s3WriterDelegate) flushTailAndWriteToOutput(proc *process.Process,
 		if err = writer.fillInsertBlockInfo(proc, i, blockInfoBat, rowCount); err != nil {
 			return
 		}
+		if err = s3w.TransferPersistedObjects(proc); err != nil {
+			return err
+		}
 	}
 
 	// Flush remaining deletes — always call sortAndSync so that accumulated

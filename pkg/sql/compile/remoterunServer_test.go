@@ -58,6 +58,7 @@ type remoteS3CleanupWorkspace struct {
 	pendingOwners bool
 	accepted      bool
 	events        []string
+	owners        []*colexec.UnpublishedS3ObjectOwner
 }
 
 func (w *remoteS3CleanupWorkspace) CleanupUnpublishedS3Objects(context.Context) error {
@@ -74,6 +75,7 @@ func (w *remoteS3CleanupWorkspace) RetainUnpublishedS3ObjectOwner(
 	owner *colexec.UnpublishedS3ObjectOwner,
 ) {
 	w.pendingOwners = owner != nil && owner.Pending()
+	w.owners = append(w.owners, owner)
 }
 
 func (w *remoteS3CleanupWorkspace) AcceptUnpublishedS3ObjectNames(...string) {}
@@ -122,6 +124,9 @@ func TestFinalizeRemoteS3OwnershipWaitsForBatchAcknowledgements(t *testing.T) {
 	t.Run("drained acknowledged stream transfers before cleanup", func(t *testing.T) {
 		workspace := &remoteS3CleanupWorkspace{pendingOwners: true}
 		flow := newPipelineBatchFlow(1, 1024)
+		seq, err := flow.reserve(context.Background(), context.Background(), 10)
+		require.NoError(t, err)
+		require.NoError(t, flow.acknowledgeOwnership(seq, true))
 		receiver := messageReceiverOnServer{
 			messageCtx:                    context.Background(),
 			unpublishedS3CleanupWorkspace: workspace,
@@ -178,6 +183,38 @@ func TestFinalizeRemoteS3OwnershipWaitsForBatchAcknowledgements(t *testing.T) {
 		require.Same(t, handlerErr, moerr.ConvertGoError(context.Background(), err))
 		require.Equal(t, 1, workspace.calls)
 	})
+}
+
+func TestFinalizeRemoteS3OwnershipRejectsUnprovenTakeover(t *testing.T) {
+	for _, scenario := range []string{"no-output", "empty", "pending", "stopped", "aborted", "old-coordinator"} {
+		t.Run(scenario, func(t *testing.T) {
+			workspace := &remoteS3CleanupWorkspace{pendingOwners: true}
+			flow := newPipelineBatchFlow(1, 1024)
+			if scenario != "empty" {
+				seq, err := flow.reserve(context.Background(), context.Background(), 10)
+				require.NoError(t, err)
+				if scenario != "pending" {
+					require.NoError(t, flow.acknowledgeOwnership(seq, scenario != "old-coordinator"))
+				}
+			}
+			if scenario == "stopped" {
+				flow.stop(context.Canceled)
+			}
+			if scenario == "aborted" {
+				flow.abort(context.Canceled)
+			}
+			receiver := messageReceiverOnServer{
+				messageCtx:                    context.Background(),
+				needNotReply:                  scenario == "no-output",
+				unpublishedS3CleanupWorkspace: workspace,
+				unpublishedS3ObjectOwners:     workspace,
+			}
+			err := receiver.finalizeUnpublishedS3Objects(nil, &pipelineStreamLifecycle{batchFlow: flow})
+			require.ErrorContains(t, err, "ownership handoff requires batch acknowledgements")
+			require.False(t, workspace.accepted)
+			require.Equal(t, []string{"cleanup"}, workspace.events)
+		})
+	}
 }
 
 // TestWorkspaceCreationInRemoteRun tests that workspace is created early in remote run scenario.

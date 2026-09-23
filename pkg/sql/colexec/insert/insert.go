@@ -503,6 +503,9 @@ func (insert *Insert) flushS3WriterOnMemoryPressure(proc *process.Process, analy
 		insert.ctr.s3Writer.ResetBlockInfoBat()
 	}
 
+	if err = insert.ctr.s3Writer.TransferPersistedObjects(proc); err != nil {
+		return err
+	}
 	insert.refreshAndReleaseS3MemGrant()
 	return nil
 }
@@ -620,6 +623,9 @@ func flushTailBatch(
 		return err
 	}
 
+	if err = writer.TransferPersistedObjects(proc); err != nil {
+		return err
+	}
 	writer.ResetBlockInfoBat()
 
 	return nil
