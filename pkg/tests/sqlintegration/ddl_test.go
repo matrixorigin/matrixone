@@ -774,6 +774,10 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			cancelEntered := make(chan struct{})
 			cancelRelease := make(chan struct{})
 			cancelCompleted := make(chan error, 1)
+			bCancelDone := make(chan struct{})
+			var bCancelErr error
+			var bCancelErrMu sync.Mutex
+			var cancelCompletionCount atomic.Int32
 			var phase atomic.Int32
 			var firstEnteredOnce, secondEnteredOnce, freshEnteredOnce, cancelEnteredOnce sync.Once
 			var firstReleaseOnce, secondReleaseOnce, freshReleaseOnce, cancelReleaseOnce sync.Once
@@ -793,6 +797,10 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 					phase.Store(3)
 				case 4:
 					freshEnteredOnce.Do(func() { close(freshEntered) })
+					// C's admission is deliberately held until B's runner-selected
+					// cancellation has returned. This freezes the surviving B
+					// checkpoint before C initializes its first reader.
+					<-bCancelDone
 					<-freshRelease
 					phase.Store(5)
 				}
@@ -804,9 +812,22 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			})
 			defer restoreCancel()
 			restoreCancelCompletion := frontend.SetCDCTestCancelCompletionHookForTest(func(err error) {
-				select {
-				case cancelCompleted <- err:
-				default:
+				// The first completion is A's delayed claim-loss cleanup. After
+				// the durable claim is transferred to C, B is also expected to
+				// relinquish its local runner. Keep both completion points
+				// observable so C cannot be admitted while B may still advance the
+				// shared watermark.
+				switch cancelCompletionCount.Add(1) {
+				case 1:
+					select {
+					case cancelCompleted <- err:
+					default:
+					}
+				case 2:
+					bCancelErrMu.Lock()
+					bCancelErr = err
+					bCancelErrMu.Unlock()
+					close(bCancelDone)
 				}
 			})
 			defer restoreCancelCompletion()
@@ -1094,6 +1115,15 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			case <-freshEntered:
 			case <-ctx.Done():
 				t.Fatal("CN C did not reach fresh-reader admission")
+			}
+			select {
+			case <-bCancelDone:
+				bCancelErrMu.Lock()
+				err := bCancelErr
+				bCancelErrMu.Unlock()
+				require.NoError(t, err, "CN B cancellation must complete before C admission")
+			case <-ctx.Done():
+				t.Fatal("CN B cancellation did not complete before C admission")
 			}
 			freshStart, _, found, err := readWatermark()
 			require.NoError(t, err)
