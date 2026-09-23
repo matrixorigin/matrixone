@@ -56,6 +56,9 @@ func TestInstanceBoundDrainProtocol(t *testing.T) {
 		// publishing CanRestart. That disabled flag is not an unsafe timeout.
 		current.disable()
 		current.setStatus(pb.Status_ServiceCanRestart)
+		if !a.beginDrain(pb.BeginDrainRequest{ServiceID: newID, AttemptID: "attempt-1"}).OK {
+			t.Fatal("retry of completed live attempt must remain idempotent")
+		}
 		if !a.queryDrain(query).Safe {
 			t.Fatal("completed exact attempt was not accepted")
 		}
@@ -81,6 +84,9 @@ func TestInstanceBoundDrainProtocol(t *testing.T) {
 			t.Fatal("old incarnation inherited the current attempt")
 		}
 		a.disableTableBinds(current)
+		if !a.beginDrain(pb.BeginDrainRequest{ServiceID: newID, AttemptID: "attempt-1"}).OK {
+			t.Fatal("retry of safely retired attempt must remain idempotent")
+		}
 		if !a.queryDrain(query).Safe {
 			t.Fatal("safe retirement lost its exact attempt proof")
 		}
@@ -105,6 +111,38 @@ func TestInstanceBoundDrainRejectsLegacyOrLostState(t *testing.T) {
 			AllocatorID: a.allocatorID, AllocatorVersion: a.version,
 		}).Safe {
 			t.Fatal("missing or unsafe retirement was treated as complete")
+		}
+	})
+}
+
+func TestInstanceBoundDrainRetirementExpiresFailClosed(t *testing.T) {
+	runLockTableAllocatorTest(t, time.Hour, func(a *lockTableAllocator) {
+		const id = "1234567890123456789uuid1"
+		const attempt = "attempt-1"
+		bind := a.registerService(id)
+		begin := a.beginDrain(pb.BeginDrainRequest{ServiceID: id, AttemptID: attempt})
+		if !begin.OK {
+			t.Fatal("drain was not accepted")
+		}
+		bind.setStatus(pb.Status_ServiceCanRestart)
+		a.disableTableBinds(bind)
+		query := pb.QueryDrainRequest{
+			ServiceID: id, AttemptID: attempt,
+			AllocatorID: begin.AllocatorID, AllocatorVersion: begin.AllocatorVersion,
+		}
+		retiredAt := a.retiredAt[id]
+		a.cleanRetiredServices(retiredAt.Add(23*time.Hour), 24*time.Hour)
+		if !a.queryDrain(query).Safe ||
+			!a.beginDrain(pb.BeginDrainRequest{ServiceID: id, AttemptID: attempt}).OK {
+			t.Fatal("short lost-response retry window lost its exact proof")
+		}
+		a.cleanRetiredServices(retiredAt.Add(24*time.Hour), 24*time.Hour)
+		if a.queryDrain(query).Safe ||
+			a.beginDrain(pb.BeginDrainRequest{ServiceID: id, AttemptID: attempt}).OK {
+			t.Fatal("expired retirement was treated as safe")
+		}
+		if len(a.retiredServices) != 0 || len(a.retiredDrainAttempts) != 0 || len(a.retiredAt) != 0 {
+			t.Fatal("expired retirement records were retained")
 		}
 	})
 }
