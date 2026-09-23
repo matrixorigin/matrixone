@@ -535,11 +535,11 @@ func (rule *ResetParamRefRule) sourceDependentIntegerRuntimeSource(source *Expr,
 		}
 	}
 	if fn := source.GetF(); fn != nil && fn.Func != nil && (fn.Func.ObjName == "case" || fn.Func.ObjName == "if" || fn.Func.ObjName == "iff") {
-		// Preserve branch domains until the consuming role binds them. This is
-		// required for both bit-pattern roles and numeric-only roles such as HEX:
-		// the PREPARE-time selector result may otherwise retain a provisional
-		// VARCHAR envelope after its marker has acquired a numeric runtime type.
-		bound := DeepCopyExpr(source)
+		// First restore every branch's runtime source domain. A numeric-only
+		// consumer must let the selector choose its ordinary common domain before
+		// applying integer conversion: IF(FLOAT, VARCHAR) is a VARCHAR value for
+		// HEX, while IF(FLOAT, FLOAT) remains a numeric integer argument.
+		runtimeArgs := make([]*Expr, len(fn.Args))
 		for i, arg := range fn.Args {
 			var err error
 			if i%2 == 1 || i == len(fn.Args)-1 {
@@ -547,27 +547,38 @@ func (rule *ResetParamRefRule) sourceDependentIntegerRuntimeSource(source *Expr,
 				restoredPeer := arg.GetPreparedNumeric().GetProvisionalResultPeer()
 				if restoredPeer {
 					arg, err = restorePreparedResultPeer(rule.ctx, arg)
-					if err != nil {
-						return nil, err
-					}
-				}
-				if !restoredPeer {
+				} else {
 					arg, err = rule.sourceDependentIntegerRuntimeSource(arg, name, position)
 				}
-				if err == nil {
-					// Convert each restored source under the consumer's role before
-					// reconciling the selector. This keeps a restored numeric CAST from
-					// being confused with the obsolete PREPARE-time VARCHAR envelope.
-					bound.GetF().Args[i], err = appendSourceDependentIntegerArgument(rule.ctx, arg, name, position)
-				}
+				runtimeArgs[i] = arg
 			} else {
-				bound.GetF().Args[i], err = rule.ApplyExpr(arg)
+				runtimeArgs[i], err = rule.ApplyExpr(arg)
 			}
 			if err != nil {
 				return nil, err
 			}
 		}
-		return bindIntegerSelector(rule.ctx, bound.GetF().Args, bitSources)
+		if !bitSources {
+			ordinary, err := BindFuncExprImplByPlanExpr(rule.ctx, "case", runtimeArgs)
+			if err != nil {
+				return nil, err
+			}
+			if _, numeric := function.IntegerArgumentTargetForSource(name, position, types.T(ordinary.Typ.Id), false); !numeric {
+				return ordinary, nil
+			}
+		}
+		integerArgs := append([]*Expr(nil), runtimeArgs...)
+		for i, arg := range integerArgs {
+			if i%2 != 1 && i != len(integerArgs)-1 {
+				continue
+			}
+			var err error
+			integerArgs[i], err = appendSourceDependentIntegerArgument(rule.ctx, arg, name, position)
+			if err != nil {
+				return nil, err
+			}
+		}
+		return bindIntegerSelector(rule.ctx, integerArgs, bitSources)
 	}
 	return rule.integerArgumentRuntimeSource(source)
 }

@@ -115,11 +115,36 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 			_, err := conn.ExecContext(ctx, "deallocate prepare hex_numeric_selector")
 			require.NoError(t, err)
 		}()
-		_, err = conn.ExecContext(ctx, "set @hex_selector_value=1.5e0")
+		for _, tc := range []struct {
+			source, want string
+		}{
+			{"1.5e0", "2"},
+			{"-1.5e0", "FFFFFFFFFFFFFFFE"},
+			{"cast(2.5 as decimal(2,1))", "2"},
+		} {
+			_, err = conn.ExecContext(ctx, "set @hex_selector_value="+tc.source)
+			require.NoError(t, err)
+			var got string
+			require.NoError(t, conn.QueryRowContext(ctx, "execute hex_numeric_selector using @hex_selector_value").Scan(&got))
+			require.Equal(t, tc.want, got)
+		}
+		_, err = conn.ExecContext(ctx, "deallocate prepare hex_numeric_selector")
 		require.NoError(t, err)
-		var got string
-		require.NoError(t, conn.QueryRowContext(ctx, "execute hex_numeric_selector using @hex_selector_value").Scan(&got))
-		require.Equal(t, "2", got)
+		_, err = conn.ExecContext(ctx, `prepare hex_numeric_selector from 'select hex(if(true,?,"peer"))'`)
+		require.NoError(t, err)
+		for _, tc := range []struct {
+			source, want string
+		}{
+			{"1.5e0", "312E35"},
+			{"-1.5e0", "2D312E35"},
+			{"cast(2.5 as decimal(2,1))", "322E35"},
+		} {
+			_, err = conn.ExecContext(ctx, "set @hex_selector_value="+tc.source)
+			require.NoError(t, err)
+			var got string
+			require.NoError(t, conn.QueryRowContext(ctx, "execute hex_numeric_selector using @hex_selector_value").Scan(&got))
+			require.Equal(t, tc.want, got)
+		}
 	})
 	t.Run("binary decimal descriptor", func(t *testing.T) {
 		var mu sync.Mutex
