@@ -1,6 +1,7 @@
 # EXPLAIN FORMAT=JSON compatibility contract
 
-- Status: draft; implementation and QA remain pending
+- Status: accepted design; implementation validation and QA remain separate gates
+- Design acceptance: [PR #28415](https://github.com/matrixorigin/matrixone/pull/28415), merged 2026-09-11 as `b922526ecb40f70e02f59e68b83ba3996a7325e5`
 - Tracking issue: [matrixorigin/matrixone#28301](https://github.com/matrixorigin/matrixone/issues/28301)
 - Target: MatrixOne main
 - Design revision: explain-format-json-2026-09-09-r2

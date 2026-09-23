@@ -144,6 +144,9 @@ type ExplainOptions struct {
 	Format    ExplainFormat
 	NodeType  plan.Node_NodeType
 	CheckExpr []string
+	// CompleteLiteralVectors keeps JSON plan expressions lossless. Text EXPLAIN
+	// retains its existing bounded vector rendering.
+	CompleteLiteralVectors bool
 }
 
 func NewExplainDefaultOptions() *ExplainOptions {

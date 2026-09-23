@@ -20,6 +20,7 @@ import (
 	"encoding/hex"
 	"strings"
 	"testing"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -197,6 +198,140 @@ func TestLiteralVecExplainNeverWritesRawNonTextBytes(t *testing.T) {
 	assertPrintableExplainText(t, buf.String())
 	if got, want := buf.String(), "0xFF00"; got != want {
 		t.Fatalf("non-text vector was not rendered canonically: got %q, want %q", got, want)
+	}
+}
+
+func TestJSONExplainPreservesTimestampPrecisionAndCompleteLiteralVector(t *testing.T) {
+	ts, err := types.ParseTimestamp(time.UTC, "2024-01-02 03:04:05.123456", 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	timestamp := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_timestamp), Scale: 6},
+		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+			Value: &planpb.Literal_Timestampval{Timestampval: int64(ts)},
+		}},
+	}
+	var timestampBuf bytes.Buffer
+	if err := describeExpr(t.Context(), timestamp, &ExplainOptions{Format: EXPLAIN_FORMAT_JSON}, &timestampBuf); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := timestampBuf.String(), "2024-01-02 03:04:05.123456"; got != want {
+		t.Fatalf("timestamp precision was not preserved: got %q, want %q", got, want)
+	}
+
+	mp := mpool.MustNew(t.Name())
+	vec := vector.NewVec(types.T_int32.ToType())
+	for i := 1; i <= 17; i++ {
+		if err := vector.AppendFixed[int32](vec, int32(i), false, mp); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data, err := vec.MarshalBinary()
+	vec.Free(mp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	vectorExpr := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_int32)},
+		Expr: &planpb.Expr_Vec{Vec: &planpb.LiteralVec{Len: 17, Data: data}},
+	}
+	var vectorBuf bytes.Buffer
+	if err := describeExpr(t.Context(), vectorExpr, &ExplainOptions{
+		Format:                 EXPLAIN_FORMAT_TEXT,
+		CompleteLiteralVectors: true,
+	}, &vectorBuf); err != nil {
+		t.Fatal(err)
+	}
+	if got := vectorBuf.String(); !strings.Contains(got, "16") || !strings.Contains(got, "17") {
+		t.Fatalf("complete JSON vector lost its 17th value: %q", got)
+	}
+	var textBuf bytes.Buffer
+	if err := describeExpr(t.Context(), vectorExpr, NewExplainDefaultOptions(), &textBuf); err != nil {
+		t.Fatal(err)
+	}
+	if got := textBuf.String(); !strings.Contains(got, "... 17 values") {
+		t.Fatalf("text EXPLAIN vector truncation changed: %q", got)
+	}
+}
+
+func TestLiteralVecExplainPreservesTypedScaleBoundariesAndNulls(t *testing.T) {
+	mp := mpool.MustNew(t.Name())
+	datetimeType := types.T_datetime.ToTypeWithScale(6)
+	datetimeVec := vector.NewVec(datetimeType)
+	dt, err := types.ParseDatetime("2024-01-02 03:04:05.123456", 6)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = vector.AppendFixed[types.Datetime](datetimeVec, dt, false, mp); err != nil {
+		t.Fatal(err)
+	}
+	if err = vector.AppendFixed[types.Datetime](datetimeVec, 0, true, mp); err != nil {
+		t.Fatal(err)
+	}
+	datetimeData, err := datetimeVec.MarshalBinary()
+	datetimeVec.Free(mp)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	decimalType := types.T_decimal64.ToTypeWithScale(2)
+	decimalVec := vector.NewVec(decimalType)
+	first, err := types.ParseDecimal64("1.20", decimalType.Width, decimalType.Scale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := types.ParseDecimal64("12.00", decimalType.Width, decimalType.Scale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = vector.AppendFixed[types.Decimal64](decimalVec, first, false, mp); err != nil {
+		t.Fatal(err)
+	}
+	if err = vector.AppendFixed[types.Decimal64](decimalVec, second, false, mp); err != nil {
+		t.Fatal(err)
+	}
+	decimalData, err := decimalVec.MarshalBinary()
+	decimalVec.Free(mp)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for name, test := range map[string]struct {
+		typ  planpb.Type
+		data []byte
+		want string
+	}{
+		"datetime": {
+			typ:  planpb.Type{Id: int32(types.T_datetime), Scale: 6},
+			data: datetimeData,
+			want: "[2024-01-02 03:04:05.123456, NULL]",
+		},
+		"decimal": {
+			typ:  planpb.Type{Id: int32(types.T_decimal64), Scale: 2},
+			data: decimalData,
+			want: "[1.20, 12.00]",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			expr := &planpb.Expr{
+				Typ: test.typ,
+				Expr: &planpb.Expr_Vec{Vec: &planpb.LiteralVec{
+					Len:  int32(strings.Count(test.want, ",") + 1),
+					Data: test.data,
+				}},
+			}
+			var buf bytes.Buffer
+			if err := describeExpr(t.Context(), expr, &ExplainOptions{
+				Format:                 EXPLAIN_FORMAT_JSON,
+				CompleteLiteralVectors: true,
+			}, &buf); err != nil {
+				t.Fatal(err)
+			}
+			if got := buf.String(); got != test.want {
+				t.Fatalf("typed literal vector rendering changed: got %q, want %q", got, test.want)
+			}
+		})
 	}
 }
 
