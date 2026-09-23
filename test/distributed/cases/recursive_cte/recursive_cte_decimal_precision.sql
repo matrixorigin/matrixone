@@ -49,7 +49,34 @@ with recursive r(n) as (
 )
 select n from r order by n;
 
--- Legal boundaries remain available, including through prepared execution.
+-- Increasing scale can reduce the available integer digits even when total
+-- precision grows. The recursive assignment must validate the complete target.
+with recursive r(n) as (
+    select cast(0.0000 as decimal(5, 4))
+    union all
+    select cast(99.99 as decimal(4, 2)) from r where n = 0
+)
+select n from r order by n;
+
+create table scale_growth_target(n decimal(5, 4));
+insert into scale_growth_target
+with recursive r(n) as (
+    select cast(0.0000 as decimal(5, 4))
+    union all
+    select cast(99.99 as decimal(4, 2)) from r where n = 0
+)
+select n from r;
+select count(*) from scale_growth_target;
+
+-- Legal boundaries remain available, including through scale growth and
+-- prepared execution.
+with recursive r(n) as (
+    select cast(0.0000 as decimal(5, 4))
+    union all
+    select cast(9.99 as decimal(3, 2)) from r where n = 0
+)
+select n from r order by n;
+
 with recursive r(n) as (
     select cast(999.98 as decimal(5, 2))
     union all

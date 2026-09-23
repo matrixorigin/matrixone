@@ -49,6 +49,34 @@ select n + 0.01 from r where n < 100000000000000000
 select n from r order by n;
 invalid input: 100000000000000000.00 beyond the range, can't be converted to Decimal128(19,2).
 with recursive r(n) as (
+select cast(0.0000 as decimal(5, 4))
+union all
+select cast(99.99 as decimal(4, 2)) from r where n = 0
+)
+select n from r order by n;
+invalid input: 99.99 beyond the range, can't be converted to Decimal64(5,4).
+create table scale_growth_target(n decimal(5, 4));
+insert into scale_growth_target
+with recursive r(n) as (
+select cast(0.0000 as decimal(5, 4))
+union all
+select cast(99.99 as decimal(4, 2)) from r where n = 0
+)
+select n from r;
+invalid input: 99.99 beyond the range, can't be converted to Decimal64(5,4).
+select count(*) from scale_growth_target;
+➤ count(*)[-5,64,0]  𝄀
+0
+with recursive r(n) as (
+select cast(0.0000 as decimal(5, 4))
+union all
+select cast(9.99 as decimal(3, 2)) from r where n = 0
+)
+select n from r order by n;
+➤ n[3,5,4]  𝄀
+0.0000  𝄀
+9.9900
+with recursive r(n) as (
 select cast(999.98 as decimal(5, 2))
 union all
 select n + 0.01 from r where n < 999.99

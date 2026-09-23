@@ -68,6 +68,94 @@ func TestDecimalCastChecksNarrowedPrecision(t *testing.T) {
 	}
 }
 
+func TestDecimalCastChecksScaleGrowthAgainstTargetPrecision(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	decimal256Overflow, err := types.ParseDecimal256("99.99", 4, 2)
+	require.NoError(t, err)
+
+	for _, test := range []struct {
+		name   string
+		source types.Type
+		target types.Type
+		values any
+	}{
+		{
+			name:   "decimal64",
+			source: types.New(types.T_decimal64, 4, 2),
+			target: types.New(types.T_decimal64, 5, 4),
+			values: []types.Decimal64{9999},
+		},
+		{
+			name:   "decimal128",
+			source: types.New(types.T_decimal128, 4, 2),
+			target: types.New(types.T_decimal128, 5, 4),
+			values: []types.Decimal128{{B0_63: 9999}},
+		},
+		{
+			name:   "decimal256",
+			source: types.New(types.T_decimal256, 4, 2),
+			target: types.New(types.T_decimal256, 5, 4),
+			values: []types.Decimal256{decimal256Overflow},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			testCase := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(test.source, test.values, nil),
+					NewFunctionTestInput(test.target, test.values, nil),
+				},
+				NewFunctionTestResult(test.target, true, nil, nil), NewCast)
+			succeed, info := testCase.Run()
+			require.True(t, succeed, info)
+		})
+	}
+
+	for _, test := range []struct {
+		name   string
+		source FunctionTestInput
+		target types.Type
+		zero   any
+	}{
+		{
+			name:   "decimal64_to_decimal128",
+			source: NewFunctionTestInput(types.New(types.T_decimal64, 4, 2), []types.Decimal64{9999}, nil),
+			target: types.New(types.T_decimal128, 5, 4),
+			zero:   []types.Decimal128{},
+		},
+		{
+			name:   "decimal64_to_decimal256",
+			source: NewFunctionTestInput(types.New(types.T_decimal64, 4, 2), []types.Decimal64{9999}, nil),
+			target: types.New(types.T_decimal256, 5, 4),
+			zero:   []types.Decimal256{},
+		},
+		{
+			name: "decimal128_to_decimal256",
+			source: NewFunctionTestInput(types.New(types.T_decimal128, 4, 2),
+				[]types.Decimal128{{B0_63: 9999}}, nil),
+			target: types.New(types.T_decimal256, 5, 4),
+			zero:   []types.Decimal256{},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			testCase := NewFunctionTestCase(proc,
+				[]FunctionTestInput{test.source, NewFunctionTestInput(test.target, test.zero, nil)},
+				NewFunctionTestResult(test.target, true, nil, nil), NewCast)
+			succeed, info := testCase.Run()
+			require.True(t, succeed, info)
+		})
+	}
+
+	legal := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.New(types.T_decimal64, 3, 2), []types.Decimal64{999, 0}, []bool{false, true}),
+			NewFunctionTestInput(types.New(types.T_decimal64, 5, 4), []types.Decimal64{}, nil),
+		},
+		NewFunctionTestResult(types.New(types.T_decimal64, 5, 4), false,
+			[]types.Decimal64{99900, 0}, []bool{false, true}), NewCast)
+	succeed, info := legal.Run()
+	require.True(t, succeed, info)
+}
+
 func TestDecimal128WideningCastDoesNotRetypeSource(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	sourceType := types.New(types.T_decimal128, 19, 2)
