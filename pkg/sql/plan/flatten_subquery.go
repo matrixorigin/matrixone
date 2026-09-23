@@ -325,6 +325,15 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumer(
 
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_F:
+		// Function overloads are bound before subqueries are decorrelated.  A
+		// scalar aggregate that becomes the nullable side of a LEFT JOIN keeps
+		// its SQL data type but can lose its NOT NULL guarantee.  Refresh every
+		// enclosing consumer bottom-up so its result nullability still matches
+		// the arguments that will reach execution.
+		containsSubquery := false
+		for _, arg := range exprImpl.F.Args {
+			containsSubquery = containsSubquery || hasSubquery(arg)
+		}
 		if consumer == existentialNegatedFilter && len(builder.pendingExistentials) != 0 {
 			// The caller admits only the direct NOT(EXISTS) WHERE conjunct.
 			sub := *exprImpl.F.Args[0].GetSub()
@@ -342,6 +351,9 @@ func (builder *QueryBuilder) flattenSubqueriesWithConsumer(
 			if err != nil {
 				return 0, nil, err
 			}
+		}
+		if containsSubquery && exprImpl.F.Func != nil {
+			expr.Typ.NotNullable = function.DeduceNotNullable(exprImpl.F.Func.Obj, exprImpl.F.Args)
 		}
 
 	case *plan.Expr_List:

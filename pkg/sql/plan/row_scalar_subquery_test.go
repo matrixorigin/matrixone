@@ -17,9 +17,57 @@ package plan
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
+
+func TestScalarAggregateSubqueryRefreshesConsumerNullability(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(false), t, `
+		select ps.PS_PARTKEY from PARTSUPP ps
+		where ps.PS_SUPPLYCOST = (
+			select min(inner_ps.PS_SUPPLYCOST) from PARTSUPP inner_ps
+			where inner_ps.PS_PARTKEY = ps.PS_PARTKEY)`)
+	require.NoError(t, err)
+
+	found := false
+	var visit func(*planpb.Expr)
+	visit = func(expr *planpb.Expr) {
+		if expr == nil {
+			return
+		}
+		if call := expr.GetF(); call != nil {
+			if call.Func != nil && call.Func.ObjName == "=" && len(call.Args) == 2 &&
+				types.T(call.Args[0].Typ.Id).IsDecimal() && types.T(call.Args[1].Typ.Id).IsDecimal() &&
+				(!call.Args[0].Typ.NotNullable || !call.Args[1].Typ.NotNullable) {
+				found = true
+				require.Equal(t,
+					function.DeduceNotNullable(call.Func.Obj, call.Args),
+					expr.Typ.NotNullable)
+				require.False(t, expr.Typ.NotNullable)
+			}
+			for _, arg := range call.Args {
+				visit(arg)
+			}
+		}
+		if list := expr.GetList(); list != nil {
+			for _, item := range list.List {
+				visit(item)
+			}
+		}
+	}
+	for _, node := range logicPlan.GetQuery().Nodes {
+		for _, expressions := range [][]*planpb.Expr{
+			node.ProjectList, node.FilterList, node.OnList, node.GroupBy, node.AggList,
+		} {
+			for _, expr := range expressions {
+				visit(expr)
+			}
+		}
+	}
+	require.True(t, found, "expected a nullable decimal equality consumer")
+}
 
 func TestRowConstructorScalarSubqueryComparisonBuilds(t *testing.T) {
 	tests := []struct {
