@@ -2831,7 +2831,7 @@ func TestCachedPlanWithoutCapturedFingerprintIsEvictedBeforeBorrow(t *testing.T)
 		ses.cachePlanWithSnapshotsAndStatsVersionsAndFingerprints(
 			"cache-key",
 			[]tree.Statement{stmt},
-			[]*plan.Plan{&plan.Plan{}},
+			[]*plan.Plan{{}},
 			[]timestamp.Timestamp{{PhysicalTime: 1}},
 			[]map[optimizerStatsTableKey]uint64{nil},
 			[]string{""},
@@ -2849,7 +2849,7 @@ func TestCachedPlanWithoutCapturedFingerprintIsEvictedBeforeBorrow(t *testing.T)
 		ses.cachePlanWithSnapshotsAndStatsVersionsAndFingerprints(
 			"cache-key",
 			[]tree.Statement{stmt},
-			[]*plan.Plan{&plan.Plan{}},
+			[]*plan.Plan{{}},
 			[]timestamp.Timestamp{{PhysicalTime: 1}},
 			[]map[optimizerStatsTableKey]uint64{nil},
 			[]string{""},
