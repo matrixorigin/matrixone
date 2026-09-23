@@ -137,6 +137,79 @@ func TestOperatorFixedInConstNullListUsesThreeValuedLogic(t *testing.T) {
 	require.True(t, ok, errInfo)
 }
 
+func TestOperatorBitInAndNotInUseUnsignedThreeValuedLogic(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	bitType := types.New(types.T_bit, 64, 0)
+	highBit := uint64(1) << 63
+	maxBit := ^uint64(0)
+	left := []uint64{0, 1, highBit, maxBit, 42, 0}
+	leftNulls := []bool{false, false, false, false, false, true}
+
+	for _, test := range []struct {
+		name      string
+		right     []uint64
+		rightNull []bool
+		inValues  []bool
+		inNulls   []bool
+		notValues []bool
+		notNulls  []bool
+	}{
+		{
+			name:      "non-null list",
+			right:     []uint64{1, highBit, maxBit, maxBit},
+			inValues:  []bool{false, true, true, true, false, false},
+			inNulls:   []bool{false, false, false, false, false, true},
+			notValues: []bool{true, false, false, false, true, false},
+			notNulls:  []bool{false, false, false, false, false, true},
+		},
+		{
+			name:      "nullable list",
+			right:     []uint64{1, highBit, maxBit, 0},
+			rightNull: []bool{false, false, false, true},
+			inValues:  []bool{false, true, true, true, false, false},
+			inNulls:   []bool{true, false, false, false, true, true},
+			notValues: []bool{false, false, false, false, false, false},
+			notNulls:  []bool{true, false, false, false, true, true},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			inputs := []FunctionTestInput{
+				NewFunctionTestInput(bitType, left, leftNulls),
+				NewFunctionTestInput(bitType, test.right, test.rightNull),
+			}
+			inCase := NewFunctionTestCase(
+				proc,
+				inputs,
+				NewFunctionTestResult(types.T_bool.ToType(), false, test.inValues, test.inNulls),
+				newOpOperatorFixedIn[uint64]().operatorIn,
+			)
+			ok, errInfo := inCase.Run()
+			require.True(t, ok, errInfo)
+
+			notInCase := NewFunctionTestCase(
+				proc,
+				inputs,
+				NewFunctionTestResult(types.T_bool.ToType(), false, test.notValues, test.notNulls),
+				newOpOperatorFixedIn[uint64]().operatorNotIn,
+			)
+			ok, errInfo = notInCase.Run()
+			require.True(t, ok, errInfo)
+		})
+	}
+
+	constNullIn := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(bitType, []uint64{0, 1, maxBit}, nil),
+			NewFunctionTestConstInput(bitType, []uint64{0}, []bool{true}),
+		},
+		NewFunctionTestResult(types.T_bool.ToType(), false, []bool{false, false, false}, []bool{true, true, true}),
+		newOpOperatorFixedIn[uint64]().operatorIn,
+	)
+	ok, errInfo := constNullIn.Run()
+	require.True(t, ok, errInfo)
+}
+
 func TestOperatorEnumInUsesOrdinalEquality(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
