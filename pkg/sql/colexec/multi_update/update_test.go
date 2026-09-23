@@ -638,6 +638,42 @@ func TestNewS3WriterAllowsIndexOnlyContext(t *testing.T) {
 	require.NoError(t, writer.free(proc, false))
 }
 
+func TestPersistentInsertProducerTransfersOwnership(t *testing.T) {
+	_, _, proc := prepareTestCtx(t, true)
+	defer proc.Free()
+	workspace := proc.GetTxnOperator().GetWorkspace().(*multiUpdateS3CleanupWorkspace)
+	_, tableDef := getTestMainTable()
+	arg := &MultiUpdate{MultiUpdateCtx: []*MultiUpdateCtx{{TableDef: tableDef, InsertCols: []int{0, 1, 2, 3}}}}
+	arg.resetMultiUpdateCtxs()
+	writer, err := newS3Writer(proc.GetService(), arg)
+	require.NoError(t, err)
+	writer.addAffectedRows = func(uint64) {}
+	defer func() { require.NoError(t, writer.free(proc, true)) }()
+	bats, _ := prepareTestInsertBatchs(proc.Mp(), 1, 16, false, false)
+	defer bats[0].Clean(proc.Mp())
+	analyzer := process.NewAnalyzer(0, false, false, "persistent-insert-owner")
+	require.NoError(t, writer.append(proc, analyzer, bats[0]))
+	require.NoError(t, writer.flushTailAndWriteToOutput(proc, analyzer))
+	names := objectNamesFromInsertInfo(t, writer.insertBlockInfo[0])
+	require.NotEmpty(t, names)
+	require.ElementsMatch(t, names, workspace.pendingObjectNames())
+	fs, err := colexec.GetSharedFSFromProc(proc)
+	require.NoError(t, err)
+	// A successful producer reset cannot retire the workspace's cleanup owner.
+	require.NoError(t, writer.reset(proc, false))
+	require.ElementsMatch(t, names, workspace.pendingObjectNames())
+	require.NoError(t, writer.free(proc, true))
+	for _, name := range names {
+		_, err = fs.StatFile(proc.Ctx, name)
+		require.NoError(t, err)
+	}
+	require.NoError(t, workspace.CleanupUnpublishedS3Objects(proc.Ctx))
+	for _, name := range names {
+		_, err = fs.StatFile(proc.Ctx, name)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "%v", err)
+	}
+}
+
 func TestSortAndSyncOneTableUsesDataWriter(t *testing.T) {
 	_, ctrl, proc := prepareTestCtx(t, true)
 	defer proc.Free()

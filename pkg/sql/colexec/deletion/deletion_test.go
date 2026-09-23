@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -211,93 +212,125 @@ func TestNewDeletionTombstoneWriterUsesProcessService(t *testing.T) {
 	require.NoError(t, writer.Close())
 }
 
-func TestFlushCreatesTombstoneWriterForFirstBlock(t *testing.T) {
-	proc := testutil.NewProc(t)
-	defer proc.Free()
-	ctr, objectName := flushTombstoneObjectForTest(t, proc)
-	require.Empty(t, ctr.s3Writers, "successful flush transfers object ownership to its stats batch")
-	_, err := ctr.fs.StatFile(proc.Ctx, objectName)
-	require.NoError(t, err)
-	ctr.fs = &failOnceDeleteFileService{
-		FileService: ctr.fs,
-		failErr:     errors.New("injected tombstone cleanup failure"),
-		failCount:   2,
+func TestRemoteDeleteFlushTransfersOwnershipBeforeReset(t *testing.T) {
+	for _, accepted := range []bool{false, true} {
+		t.Run(fmt.Sprintf("accepted=%v", accepted), func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			defer proc.Free()
+			ctr, objectName := flushTombstoneObjectForTest(t, proc)
+			workspace := proc.GetTxnOperator().GetWorkspace().(*deletionS3CleanupWorkspace)
+			require.Len(t, workspace.owners, 1)
+			require.Empty(t, ctr.s3Writers, "completed writer buffers must be released")
+			if accepted {
+				workspace.AcceptUnpublishedS3ObjectNames(objectName)
+			}
+			arg := &Deletion{RemoteDelete: true, ctr: *ctr}
+			// Both success and later failure teardown must leave transferred
+			// objects alone. Only the workspace knows which names registered.
+			arg.Reset(proc, false, nil)
+			arg.Free(proc, true, errors.New("consumer failed"))
+			_, err := ctr.fs.StatFile(proc.Ctx, objectName)
+			require.NoError(t, err)
+			require.NoError(t, workspace.Cleanup(proc.Ctx))
+			_, err = ctr.fs.StatFile(proc.Ctx, objectName)
+			if accepted {
+				require.NoError(t, err)
+			} else {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "%v", err)
+			}
+		})
 	}
-
-	arg := &Deletion{RemoteDelete: true, ctr: *ctr}
-	arg.Reset(proc, true, errors.New("downstream pipeline failed"))
-	require.Empty(t, arg.ctr.partitionId_tombstoneObjectStatsBats, "failed output must not remain visible to the next execution")
-	require.Len(t, arg.ctr.pendingTombstoneObjectStatsBats, 1, "failed deletion must retain its private cleanup ledger")
-	require.Error(t, arg.Prepare(proc), "reuse must fail while the prior object's cleanup is pending")
-	_, err = arg.ctr.fs.StatFile(proc.Ctx, objectName)
-	require.NoError(t, err, "failed first cleanup should leave the object available for retry")
-	arg.Free(proc, false, nil)
-	require.Empty(t, arg.ctr.partitionId_tombstoneObjectStatsBats)
-	require.Empty(t, arg.ctr.pendingTombstoneObjectStatsBats)
-	_, err = arg.ctr.fs.StatFile(proc.Ctx, objectName)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "object should be deleted, got %v", err)
 }
 
 type deletionS3CleanupWorkspace struct {
 	client.Workspace
-	cleanups []func(context.Context) error
+	owners []*colexec.UnpublishedS3ObjectOwner
 }
 
-func (w *deletionS3CleanupWorkspace) RetainUnpublishedS3Cleanup(
-	cleanup func(context.Context) error,
-) {
-	w.cleanups = append(w.cleanups, cleanup)
-}
-
-func TestRemoteDeleteFreeTransfersFailedCleanupToTransaction(t *testing.T) {
+func TestRemoteDeleteWorkspaceRetriesCleanupAfterProducerReuse(t *testing.T) {
 	proc := testutil.NewProc(t)
 	defer proc.Free()
-	ctr, objectName := flushTombstoneObjectForTest(t, proc)
-	deleteErr := errors.New("injected persistent tombstone cleanup failure")
-	ctr.fs = &failOnceDeleteFileService{
-		FileService: ctr.fs,
-		failErr:     deleteErr,
-		failCount:   2,
-	}
-
-	ctrl := gomock.NewController(t)
-	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
-	workspace := &deletionS3CleanupWorkspace{}
-	txnOp.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
-	proc.Base.TxnOperator = txnOp
-
-	arg := NewArgument()
-	arg.RemoteDelete = true
-	arg.ctr = *ctr
-	arg.Reset(proc, true, deleteErr)
-	arg.Free(proc, false, nil)
-	require.Empty(t, arg.ctr.pendingTombstoneObjectStatsBats,
-		"transaction callback must own cleanup after operator release")
-	require.Len(t, workspace.cleanups, 1)
-	arg.Release()
-
-	_, err := ctr.fs.StatFile(proc.Ctx, objectName)
-	require.NoError(t, err, "failed deletes should leave the object pending")
-	require.NoError(t, workspace.cleanups[0](proc.Ctx))
-	_, err = ctr.fs.StatFile(proc.Ctx, objectName)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "transaction retry should delete the object, got %v", err)
-}
-
-func TestRemoteDeleteSuccessfulResetPreservesTransferredTombstones(t *testing.T) {
-	proc := testutil.NewProc(t)
-	defer proc.Free()
-	ctr, objectName := flushTombstoneObjectForTest(t, proc)
+	baseFS, err := colexec.GetSharedFSFromProc(proc)
+	require.NoError(t, err)
+	deleteErr := errors.New("injected tombstone cleanup failure")
+	fs := &failOnceDeleteFileService{FileService: baseFS, failErr: deleteErr, failCount: 1}
+	proc.Base.FileService = fs
+	ctr, name := flushTombstoneObjectForTest(t, proc)
+	workspace := proc.GetTxnOperator().GetWorkspace().(*deletionS3CleanupWorkspace)
 	arg := &Deletion{RemoteDelete: true, ctr: *ctr}
+	arg.Reset(proc, true, errors.New("consumer failed"))
+	require.ErrorIs(t, workspace.Cleanup(proc.Ctx), deleteErr)
+	require.True(t, workspace.HasUnpublishedS3ObjectOwners())
+	require.Equal(t, []string{name}, workspace.owners[0].Names())
+	_, err = fs.StatFile(proc.Ctx, name)
+	require.NoError(t, err)
+	// Reuse is safe now: the workspace outlives the reusable operator and keeps
+	// the retry ledger, without retaining old stats batches or writer buffers.
+	require.NoError(t, arg.retryPendingS3Cleanup(proc))
+	arg.Free(proc, false, nil)
+	require.True(t, workspace.HasUnpublishedS3ObjectOwners())
+	require.NoError(t, workspace.Cleanup(proc.Ctx))
+	require.False(t, workspace.HasUnpublishedS3ObjectOwners())
+	_, err = fs.StatFile(proc.Ctx, name)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "%v", err)
+}
 
+func TestRemoteDeleteMissingWorkspacePreservesWriterCleanup(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	baseFS, err := colexec.GetSharedFSFromProc(proc)
+	require.NoError(t, err)
+	deleteErr := errors.New("injected writer cleanup failure")
+	fs := &failOnceDeleteFileService{FileService: baseFS, failErr: deleteErr, failCount: 1}
+	proc.Base.FileService = fs
+	ctr, name := flushTombstoneObjectForTest(t, proc, true)
+	require.Len(t, ctr.s3Writers, 1, "failed retention and deletion must keep the writer")
+	arg := &Deletion{RemoteDelete: true, ctr: *ctr}
 	arg.Reset(proc, false, nil)
-	require.Empty(t, arg.ctr.partitionId_tombstoneObjectStatsBats)
-	_, err := ctr.fs.StatFile(proc.Ctx, objectName)
-	require.NoError(t, err, "successful pipeline reset must leave transferred tombstones intact")
+	require.Empty(t, arg.ctr.s3Writers)
+	_, err = fs.StatFile(proc.Ctx, name)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "%v", err)
 	arg.Free(proc, false, nil)
 }
 
-func flushTombstoneObjectForTest(t *testing.T, proc *process.Process) (*container, string) {
+func (w *deletionS3CleanupWorkspace) RetainUnpublishedS3ObjectOwner(owner *colexec.UnpublishedS3ObjectOwner) {
+	w.owners = append(w.owners, owner)
+}
+func (w *deletionS3CleanupWorkspace) AcceptUnpublishedS3ObjectNames(names ...string) {
+	for _, owner := range w.owners {
+		owner.Accept(names...)
+	}
+}
+func (w *deletionS3CleanupWorkspace) HasUnpublishedS3ObjectOwners() bool {
+	for _, owner := range w.owners {
+		if owner.Pending() {
+			return true
+		}
+	}
+	return false
+}
+func (w *deletionS3CleanupWorkspace) AcceptAllUnpublishedS3ObjectOwners() {
+	for _, owner := range w.owners {
+		owner.AcceptAll()
+	}
+}
+func (w *deletionS3CleanupWorkspace) Cleanup(ctx context.Context) error {
+	for _, owner := range w.owners {
+		if err := owner.Cleanup(ctx); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func flushTombstoneObjectForTest(t *testing.T, proc *process.Process, missingWorkspace ...bool) (*container, string) {
 	t.Helper()
+	if len(missingWorkspace) == 0 {
+		ctrl := gomock.NewController(t)
+		txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+		txnOp.EXPECT().GetWorkspace().Return(&deletionS3CleanupWorkspace{}).AnyTimes()
+		proc.Base.TxnOperator = txnOp
+	}
 	blockID := types.BuildTestBlockid(1, 1)
 	rowID := types.NewRowid(&blockID, 0)
 	bat := batch.NewWithSize(2)
@@ -316,8 +349,12 @@ func flushTombstoneObjectForTest(t *testing.T, proc *process.Process) (*containe
 		pool:                                 &BatchPool{},
 	}
 	size, err := ctr.flush(proc, process.NewAnalyzer(0, false, false, "deletion-flush"))
-	require.NoError(t, err)
-	require.NotZero(t, size)
+	if len(missingWorkspace) == 0 {
+		require.NoError(t, err)
+		require.NotZero(t, size)
+	} else {
+		require.ErrorContains(t, err, "transaction workspace cannot retain")
+	}
 	require.Empty(t, ctr.partitionId_blockId_rowIdBatch[0])
 	require.Len(t, ctr.partitionId_tombstoneObjectStatsBats[0], 1)
 	statsBat := ctr.partitionId_tombstoneObjectStatsBats[0][0]

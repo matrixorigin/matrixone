@@ -213,8 +213,16 @@ func (receiver *messageReceiverOnServer) finalizeUnpublishedS3Objects(
 	if receiver.unpublishedS3CleanupWorkspace == nil {
 		return handlerErr
 	}
-	flowAccepted := handlerErr == nil && lifecycle != nil &&
-		lifecycle.batchFlow != nil && !lifecycle.batchFlow.wasStoppedByReceiver()
+	flowAccepted := false
+	if handlerErr == nil && !receiver.needNotReply && lifecycle != nil && lifecycle.batchFlow != nil {
+		flow := lifecycle.batchFlow
+		flow.mu.Lock()
+		// An empty/no-output stream is not evidence of a coordinator takeover.
+		// Only actual acknowledged output can release the worker's lease.
+		flowAccepted = flow.nextSeq > 0 && flow.ownershipAckedSeq == flow.nextSeq && len(flow.pending) == 0 &&
+			flow.abortErr == nil && !flow.stoppedByReceiver
+		flow.mu.Unlock()
+	}
 	if flowAccepted && receiver.unpublishedS3ObjectOwners != nil {
 		receiver.unpublishedS3ObjectOwners.AcceptAllUnpublishedS3ObjectOwners()
 	} else if handlerErr == nil && receiver.unpublishedS3ObjectOwners != nil &&
@@ -222,7 +230,7 @@ func (receiver *messageReceiverOnServer) finalizeUnpublishedS3Objects(
 		// Without an ACK-capable stream the worker cannot prove the coordinator
 		// retained ownership before accepting its own cleanup lease.
 		handlerErr = moerr.NewNotSupportedNoCtx(
-			"remote multi-update S3 ownership handoff requires batch acknowledgements",
+			"remote S3 ownership handoff requires batch acknowledgements for exported output",
 		)
 	}
 	cleanupCtx, cancel := context.WithTimeoutCause(

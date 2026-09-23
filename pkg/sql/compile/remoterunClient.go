@@ -24,15 +24,22 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice/cnclient"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/deletion"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
@@ -317,6 +324,7 @@ func receiveMessageFromCnServerIfOnlyRun(s *Scope, sender *messageSenderOnClient
 	var err error
 
 	mp := s.Proc.Mp()
+	outputKind := scopeS3Output(s)
 	// Waiting the EndMessage or ErrorMessage.
 	// In fact, for a pipeline that only needs to be executed remotely but without sending data back,
 	// there should be no message sent back except for EndMessage or ErrorMessage.
@@ -325,6 +333,10 @@ func receiveMessageFromCnServerIfOnlyRun(s *Scope, sender *messageSenderOnClient
 		bat, end, err = sender.receiveBatch()
 		if err != nil || end || bat == nil {
 			return err
+		}
+		if outputKind != remoteS3None && !bat.IsEmpty() {
+			bat.Clean(mp)
+			return moerr.NewInternalErrorNoCtx("unexpected remote S3 output on a no-output stream")
 		}
 		bat.Clean(mp)
 		if err = sender.acknowledgeRemoteBatch(); err != nil {
@@ -344,18 +356,16 @@ func receiveMessageFromCnServerIfConnector(s *Scope, sender *messageSenderOnClie
 
 	mp := s.Proc.Mp()
 	nextReg := s.RootOp.(*connector.Connector).Reg
-	retainS3ObjectOwnership := scopeWritesMultiUpdateS3(s)
+	outputKind := scopeS3Output(s)
 	for {
 		bat, end, err = sender.receiveBatch()
 		if err != nil || end || bat == nil {
 			return err
 		}
 		connectorAnalyze.Network(bat)
-		if retainS3ObjectOwnership {
-			if err = multi_update.RetainOutputS3ObjectOwnership(s.Proc, bat); err != nil {
-				bat.Clean(mp)
-				return err
-			}
+		if err = retainRemoteS3Output(s.Proc, outputKind, bat); err != nil {
+			bat.Clean(mp)
+			return err
 		}
 
 		var receiverDone bool
@@ -364,7 +374,7 @@ func receiveMessageFromCnServerIfConnector(s *Scope, sender *messageSenderOnClie
 		}
 		// A stopped receiver intentionally discarded the decoded batch, but the
 		// remote sender still owns its credit until this ACK is sent.
-		if err = sender.acknowledgeRemoteBatch(); err != nil {
+		if err = sender.acknowledgeRemoteBatchWithOwnership(outputKind != remoteS3None); err != nil {
 			return err
 		}
 		if receiverDone {
@@ -373,19 +383,187 @@ func receiveMessageFromCnServerIfConnector(s *Scope, sender *messageSenderOnClie
 	}
 }
 
-func scopeWritesMultiUpdateS3(s *Scope) bool {
-	if s == nil || s.RootOp == nil {
-		return false
+type remoteS3Output uint8
+
+const (
+	remoteS3None remoteS3Output = iota
+	remoteS3MultiUpdate
+	remoteS3Insert
+	remoteS3Delete
+)
+
+// Follow only operators that preserve the producer's metadata format. In
+// particular, do not search through FlushS3Info, MergeBlock or MergeDelete:
+// they have already registered their input in the worker's workspace.
+func scopeS3Output(s *Scope) remoteS3Output {
+	if s == nil {
+		return remoteS3None
 	}
-	found := false
-	_ = vm.HandleAllOp(s.RootOp, func(_ vm.Operator, op vm.Operator) error {
-		if update, ok := op.(*multi_update.MultiUpdate); ok &&
-			update.Action == multi_update.UpdateWriteS3 && update.IsRemote {
-			found = true
+	preOutput := func() remoteS3Output {
+		for _, pre := range s.PreScopes {
+			if kind := scopeS3Output(pre); kind != remoteS3None {
+				return kind
+			}
 		}
+		return remoteS3None
+	}
+	if s.RootOp == nil {
+		return preOutput()
+	}
+	var output func(vm.Operator) remoteS3Output
+	output = func(op vm.Operator) remoteS3Output {
+		switch arg := op.(type) {
+		case *multi_update.MultiUpdate:
+			if arg.Action == multi_update.UpdateWriteS3 {
+				return remoteS3MultiUpdate
+			}
+		case *insert.Insert:
+			if arg.ToWriteS3 {
+				return remoteS3Insert
+			}
+		case *deletion.Deletion:
+			if arg.RemoteDelete {
+				return remoteS3Delete
+			}
+		default:
+			switch op.OpType() {
+			case vm.Connector, vm.Dispatch:
+				if children := op.GetOperatorBase().Children; len(children) != 0 {
+					return output(children[0])
+				}
+				return preOutput()
+			case vm.Merge:
+				for _, child := range op.GetOperatorBase().Children {
+					if kind := output(child); kind != remoteS3None {
+						return kind
+					}
+				}
+				return preOutput()
+			}
+		}
+		return remoteS3None
+	}
+	return output(s.RootOp)
+}
+
+// Retain before forwarding or discarding, and before releasing the remote
+// batch credit. A failed takeover must leave the batch unacknowledged.
+func retainRemoteS3Output(proc *process.Process, kind remoteS3Output, bat *batch.Batch) error {
+	if kind == remoteS3None || bat == nil || bat.IsEmpty() {
 		return nil
-	})
-	return found
+	}
+	if kind == remoteS3MultiUpdate {
+		return multi_update.RetainOutputS3ObjectOwnership(proc, bat)
+	}
+	var names []string
+	if kind == remoteS3Insert {
+		var err error
+		names, err = remoteS3MetadataNames(bat)
+		if err != nil {
+			return err
+		}
+	} else {
+		if len(bat.Vecs) != 5 || bat.Vecs[1] == nil || bat.Vecs[2] == nil ||
+			!bat.Vecs[1].GetType().IsVarlen() || bat.Vecs[2].GetType().Oid != types.T_int8 ||
+			bat.Vecs[1].Length() != bat.RowCount() || bat.Vecs[2].Length() != bat.RowCount() {
+			return moerr.NewInternalErrorNoCtx("invalid remote delete S3 output")
+		}
+		for row := 0; row < bat.RowCount(); row++ {
+			if vector.GetFixedAtWithTypeCheck[int8](bat.Vecs[2], row) != deletion.FlushDeltaLoc {
+				continue
+			}
+			metadata := batch.NewOffHeapEmpty()
+			err := metadata.UnmarshalBinaryWithAnyMp(bat.Vecs[1].GetBytesAt(row), proc.Mp())
+			if err == nil {
+				var objectNames []string
+				objectNames, err = remoteS3MetadataNames(metadata)
+				names = append(names, objectNames...)
+			}
+			metadata.Clean(proc.Mp())
+			if err != nil {
+				return err
+			}
+		}
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	fs, err := colexec.GetSharedFSFromProc(proc)
+	if err != nil {
+		return err
+	}
+	owner, err := colexec.NewUnpublishedS3ObjectOwner(fs, names...)
+	if err != nil {
+		return err
+	}
+	if !colexec.RetainUnpublishedS3ObjectOwner(proc, owner) {
+		return moerr.NewInternalErrorNoCtx("receiving transaction workspace cannot retain remote S3 object ownership")
+	}
+	return nil
+}
+
+func remoteS3MetadataNames(bat *batch.Batch) ([]string, error) {
+	var names []string
+	foundMetadata := false
+	legacy := len(bat.Attrs) > 0 && bat.Attrs[0] == catalog.BlockMeta_TableIdx_Insert
+	if legacy && (len(bat.Vecs) == 0 || bat.Vecs[0] == nil ||
+		bat.Vecs[0].GetType().Oid != types.T_int16 || bat.Vecs[0].Length() != bat.RowCount()) {
+		return nil, moerr.NewInternalErrorNoCtx("invalid remote S3 table index")
+	}
+	for col, attr := range bat.Attrs {
+		if attr != catalog.ObjectMeta_ObjectStats && attr != catalog.BlockMeta_BlockInfo {
+			continue
+		}
+		foundMetadata = true
+		if col >= len(bat.Vecs) || bat.Vecs[col] == nil || !bat.Vecs[col].GetType().IsVarlen() {
+			return nil, moerr.NewInternalErrorNoCtx("invalid remote S3 metadata column")
+		}
+		for row := 0; row < bat.Vecs[col].Length(); row++ {
+			data := bat.Vecs[col].GetBytesAt(row)
+			// Legacy insert output can carry raw batches in negative table-index
+			// rows. Those rows do not describe newly persisted objects.
+			if legacy && attr == catalog.BlockMeta_BlockInfo &&
+				row < bat.Vecs[0].Length() && vector.GetFixedAtWithTypeCheck[int16](bat.Vecs[0], row) < 0 {
+				continue
+			}
+			if len(data) == 0 { // stats are sparse in legacy block-info batches
+				continue
+			}
+			if attr == catalog.ObjectMeta_ObjectStats {
+				if len(data) != objectio.ObjectStatsLen {
+					return nil, moerr.NewInternalErrorNoCtx("invalid remote S3 object stats")
+				}
+				stats := objectio.ObjectStats(data)
+				names = append(names, stats.ObjectName().String())
+			} else {
+				if len(data) != objectio.BlockInfoSize {
+					return nil, moerr.NewInternalErrorNoCtx("invalid remote S3 block info")
+				}
+				names = append(names, objectio.DecodeBlockInfo(data).MetaLocation().Name().String())
+			}
+		}
+	}
+	if !foundMetadata {
+		return nil, moerr.NewInternalErrorNoCtx("missing remote S3 metadata columns")
+	}
+	if bat.RowCount() > 0 && len(names) == 0 {
+		// Stats are packed per object, while block-info is packed per block;
+		// their lengths need not match. Only legacy raw-batch-only output may
+		// legitimately contain rows without any persisted object names.
+		rawOnly := legacy
+		if legacy {
+			for row := 0; row < bat.RowCount(); row++ {
+				if vector.GetFixedAtWithTypeCheck[int16](bat.Vecs[0], row) >= 0 {
+					rawOnly = false
+					break
+				}
+			}
+		}
+		if !rawOnly {
+			return nil, moerr.NewInternalErrorNoCtx("remote S3 metadata contains no object names")
+		}
+	}
+	return names, nil
 }
 
 func receiveMessageFromCnServerIfDispatch(s *Scope, sender *messageSenderOnClient) error {
@@ -414,6 +592,7 @@ func receiveMessageFromCnServerIfDispatch(s *Scope, sender *messageSenderOnClien
 	dispatchAnalyze := dispatchRunner.GetOperatorBase().OpAnalyzer
 
 	mp := s.Proc.Mp()
+	outputKind := scopeS3Output(s)
 	for {
 		bat, end, err = sender.receiveBatch()
 		if err != nil || end || bat == nil {
@@ -421,6 +600,10 @@ func receiveMessageFromCnServerIfDispatch(s *Scope, sender *messageSenderOnClien
 		}
 
 		dispatchAnalyze.Network(bat)
+		if err = retainRemoteS3Output(s.Proc, outputKind, bat); err != nil {
+			bat.Clean(mp)
+			return err
+		}
 		fakeValueScanOperator.Batchs = append(fakeValueScanOperator.Batchs, bat)
 
 		result, errCall := vm.Exec(dispatchRunner, s.Proc)
@@ -430,7 +613,7 @@ func receiveMessageFromCnServerIfDispatch(s *Scope, sender *messageSenderOnClien
 		}
 		// ExecStop can mean that every receiver has already stopped. Release the
 		// decoded batch's remote credit before ending the receive loop.
-		if err = sender.acknowledgeRemoteBatch(); err != nil {
+		if err = sender.acknowledgeRemoteBatchWithOwnership(outputKind != remoteS3None); err != nil {
 			return err
 		}
 		if result.Status == vm.ExecStop {
@@ -796,6 +979,10 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 }
 
 func (sender *messageSenderOnClient) acknowledgeRemoteBatch() error {
+	return sender.acknowledgeRemoteBatchWithOwnership(false)
+}
+
+func (sender *messageSenderOnClient) acknowledgeRemoteBatchWithOwnership(retained bool) error {
 	sequence := sender.pendingBatchAck
 	if sequence == 0 {
 		return nil
@@ -805,6 +992,7 @@ func (sender *messageSenderOnClient) acknowledgeRemoteBatch() error {
 	message.SetMessageType(pipeline.Method_PipelineBatchAck)
 	message.SetSid(pipeline.Status_Last)
 	message.BatchAckSequence = sequence
+	message.BatchAckS3OwnershipRetained = retained
 	if err := sender.streamSender.Send(sender.ctx, message); err != nil {
 		return err
 	}

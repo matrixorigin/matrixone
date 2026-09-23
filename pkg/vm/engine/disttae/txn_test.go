@@ -1312,6 +1312,30 @@ func TestWorkspaceAppendAcceptsUnpublishedS3ObjectNames(t *testing.T) {
 	require.NoError(t, txn.CleanupUnpublishedS3Objects(context.Background()))
 }
 
+func TestRetainUnpublishedS3ObjectOwnerDeduplicatesNames(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	fs, err := colexec.GetSharedFSFromProc(proc)
+	require.NoError(t, err)
+
+	first, err := colexec.NewUnpublishedS3ObjectOwner(fs, "shared")
+	require.NoError(t, err)
+	second, err := colexec.NewUnpublishedS3ObjectOwner(fs, "shared", "other")
+	require.NoError(t, err)
+	txn := &Transaction{}
+	txn.RetainUnpublishedS3ObjectOwner(first)
+	txn.RetainUnpublishedS3ObjectOwner(second)
+
+	require.Equal(t, first, txn.unpublishedS3ObjectOwnersByName["shared"])
+	require.Equal(t, second, txn.unpublishedS3ObjectOwnersByName["other"])
+	require.Equal(t, []string{"other"}, second.Names())
+	txn.AcceptUnpublishedS3ObjectNames("shared")
+	require.False(t, first.Pending())
+	require.True(t, second.Pending())
+	txn.AcceptUnpublishedS3ObjectNames("other")
+	require.False(t, txn.HasUnpublishedS3ObjectOwners())
+}
+
 type recordingObjectFileService struct {
 	fileservice.FileService
 	mu              sync.Mutex

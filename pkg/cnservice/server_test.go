@@ -1541,6 +1541,55 @@ func TestPipelineAdmissionRejectCancelsRequestOnce(t *testing.T) {
 	require.Equal(t, int32(1), cancelCount.Load())
 }
 
+func TestPipelineBatchAckRunsBeforeIngressReturns(t *testing.T) {
+	started := make(chan struct{})
+	releaseHandler := make(chan struct{})
+	var releaseOnce sync.Once
+	t.Cleanup(func() { releaseOnce.Do(func() { close(releaseHandler) }) })
+	var cancelCount atomic.Int32
+	s := &service{cfg: &Config{}}
+	s.requestHandler = func(
+		_ context.Context,
+		_ string,
+		_ morpc.Message,
+		_ morpc.ClientSession,
+		_ engine.Engine,
+		_ fileservice.FileService,
+		_ lockservice.LockService,
+		_ qclient.QueryClient,
+		_ logservice.CNHAKeeperClient,
+		_ udf.Service,
+		_ client.TxnClient,
+		_ *defines.AutoIncrCacheManager,
+		_ func() morpc.Message,
+	) error {
+		close(started)
+		<-releaseHandler
+		return nil
+	}
+	returned := make(chan error, 1)
+	go func() {
+		returned <- s.handleRequest(context.Background(), morpc.RPCMessage{
+			Message: &pipeline.Message{Cmd: pipeline.Method_PipelineBatchAck, Sid: pipeline.Status_Last},
+			Cancel:  func() { cancelCount.Add(1) },
+		}, 0, nil)
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("ACK handler did not start")
+	}
+	select {
+	case <-returned:
+		t.Fatal("ingress returned before ACK processing completed")
+	case <-time.After(50 * time.Millisecond):
+	}
+	releaseOnce.Do(func() { close(releaseHandler) })
+	require.NoError(t, <-returned)
+	require.Equal(t, int32(1), cancelCount.Load())
+	require.Zero(t, s.pipelines.counter.Load())
+}
+
 func TestHandleRequestPropagatesConfiguredRPCMaxMessageSize(t *testing.T) {
 	const configuredLimit = 32 * 1024
 	s := &service{cfg: &Config{UUID: t.Name()}}

@@ -114,7 +114,7 @@ func transferTombstoneObjects(
 
 			registered := false
 			defer func() {
-				retErr = errors.Join(retErr, txn.closeTransferFlow(ctx, flow, !registered))
+				retErr = txn.closeTransferFlowWithError(ctx, flow, !registered, retErr)
 			}()
 
 			if err = flow.Process(ctx); err != nil {
@@ -177,6 +177,19 @@ func transferTombstoneObjects(
 
 			return nil
 		})
+}
+
+func (txn *Transaction) closeTransferFlowWithError(
+	ctx context.Context,
+	flow *TransferFlow,
+	failed bool,
+	originalErr error,
+) error {
+	cleanupErr := txn.closeTransferFlow(ctx, flow, failed)
+	if cleanupErr == nil {
+		return originalErr
+	}
+	return errors.Join(originalErr, cleanupErr)
 }
 
 func transferTombstones(

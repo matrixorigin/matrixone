@@ -1450,9 +1450,17 @@ func (txn *Transaction) retainUnpublishedS3ObjectOwnerLocked(
 	if _, exists := txn.unpublishedS3ObjectOwners[owner]; exists {
 		return
 	}
-	txn.unpublishedS3ObjectOwners[owner] = struct{}{}
 	for _, name := range owner.Names() {
+		if _, exists := txn.unpublishedS3ObjectOwnersByName[name]; exists {
+			// The first owner remains responsible until this name is registered.
+			// Keeping a second owner would delete an accepted object on rollback.
+			owner.Accept(name)
+			continue
+		}
 		txn.unpublishedS3ObjectOwnersByName[name] = owner
+	}
+	if owner.Pending() {
+		txn.unpublishedS3ObjectOwners[owner] = struct{}{}
 	}
 }
 

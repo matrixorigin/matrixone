@@ -860,14 +860,7 @@ func (s *service) handleRequest(
 		}
 	}
 
-	// start a goroutine to handle one received message.
-	owned = false
-	cancelOwned = false
-	go func() {
-		defer release()
-		if value.Cancel != nil {
-			defer value.Cancel()
-		}
+	invoke := func() {
 		s.pipelines.counter.Add(1)
 		defer s.pipelines.counter.Add(-1)
 
@@ -885,6 +878,24 @@ func (s *service) handleRequest(
 			s._txnClient,
 			s.aicm,
 			s.acquireMessage)
+	}
+	// The connection read loop calls handleRequest in wire order. Ownership
+	// receipts are per batch, so ACKs must not be processed out of order by
+	// separate handler goroutines.
+	if msg.GetCmd() == pipeline.Method_PipelineBatchAck {
+		invoke()
+		return nil
+	}
+
+	// start a goroutine to handle one received message.
+	owned = false
+	cancelOwned = false
+	go func() {
+		defer release()
+		if value.Cancel != nil {
+			defer value.Cancel()
+		}
+		invoke()
 	}()
 	return nil
 }

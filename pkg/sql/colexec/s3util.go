@@ -501,6 +501,35 @@ func (w *CNS3Writer) SyncAndFillBlockInfoBat(ctx context.Context) (*batch.Batch,
 	return w.blockInfoBat, nil
 }
 
+// TransferPersistedObjects hands completed objects to the transaction after the
+// caller has copied their output metadata. No more writes may occur between
+// Sync and this call. CN writers flush their entire tail (TailSizeCap=0), so
+// resetting after retention releases only completed results and reusable state.
+// Until retention succeeds, both sinker and detached names remain writer-owned.
+func (w *CNS3Writer) TransferPersistedObjects(proc *process.Process) error {
+	stats, _ := w.sinker.GetResult()
+	names := append([]string(nil), w.ownedPersistedNames...)
+	for i := range stats {
+		names = append(names, stats[i].ObjectName().String())
+	}
+	if len(names) == 0 {
+		return nil
+	}
+	owner, err := NewUnpublishedS3ObjectOwner(w.fs, names...)
+	if err != nil {
+		w.cleanupPending = true
+		return err
+	}
+	if !RetainUnpublishedS3ObjectOwner(proc, owner) {
+		w.cleanupPending = true
+		return moerr.NewInternalErrorNoCtx("transaction workspace cannot retain unpublished S3 objects")
+	}
+	w.sinker.Reset()
+	w.ownedPersistedNames = nil
+	w.cleanupPending = false
+	return nil
+}
+
 // DeletePersisted removes objects still owned by this writer, including
 // results detached by SyncAndFillBlockInfoBat. On deletion failure the sinker
 // and writer retain their exact names so the caller can retry before closing.

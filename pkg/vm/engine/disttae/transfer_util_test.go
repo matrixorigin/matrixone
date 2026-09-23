@@ -171,6 +171,24 @@ func TestTransferFlowRetainsUnpublishedSinkerForCleanupRetry(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "unpublished object should be deleted, got %v", err)
 }
 
+func TestTransferFlowCleanupPreservesOriginalSQLError(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	fs, err := fileservice.Get[fileservice.FileService](
+		proc.Base.FileService, defines.SharedFileServiceName,
+	)
+	require.NoError(t, err)
+	flow, objectName := newTransferFlowWithPersistedObject(t, proc, fs)
+	txn := &Transaction{}
+	originalErr := moerr.NewDuplicateEntryNoCtx("value", "key")
+
+	err = txn.closeTransferFlowWithError(proc.Ctx, flow, true, originalErr)
+	require.Same(t, originalErr, err)
+	require.Same(t, originalErr, moerr.ConvertGoError(proc.Ctx, err))
+	_, statErr := fs.StatFile(proc.Ctx, objectName)
+	require.True(t, moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound), "%v", statErr)
+}
+
 func TestTransferFlowClosePreservesRegisteredObjects(t *testing.T) {
 	proc := testutil.NewProc(t)
 	defer proc.Free()
