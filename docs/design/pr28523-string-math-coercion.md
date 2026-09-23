@@ -280,12 +280,13 @@ string-numeric compatibility contract, including changed FLOAT-to-INT64
 bounds and scalar-math precision admission, therefore uses the distinct MORPC
 v94 capability boundary. A v93 worker is treated as pre-contract for these
 numeric expressions; placement, send-time destination validation, and
-receiver-side validation all require v94. Row-level HEX/BIT numeric
-provenance is v94-gated in every SQL compatibility mode only when selected
-non-NULL value branches of a `CASE`, `IF`, or `COALESCE` can produce both
-marked literals and ordinary values. Uniformly marked results and NULL-only
-alternatives do not require the mixed-row trailer. This fence is independent
-of the mode-conditional strict string parsing contract. No existing v93
+receiver-side validation all require v94. HEX/BIT numeric provenance selected
+by a `CASE`, `IF`, or `COALESCE` is also v94-gated in every SQL compatibility
+mode, including uniformly marked results and marked-plus-NULL results. Older
+flow-control executors drop the marker even when no mixed-row bitmap is needed,
+so a downstream numeric cast can change from text value (for example `1`) to
+literal value (`49`). This fence is independent of the mode-conditional strict
+string parsing contract. No existing v93
 `LAST_INSERT_ID` field or migration behavior is changed.
 
 ## 3. Ownership and execution design
@@ -1065,25 +1066,27 @@ approval record.
 ## Current rebased implementation and validation evidence (2026-09-23)
 
 The approved design decisions below remain unchanged. The implementation
-snapshot `d8a527a347e9cc11f3239059725c6ae8e90d8e94` was rebased onto main
-`16d8e5106caaedfe0a7296e4f628683e1b6a92b4`; test-only formatting is recorded
-in descendant `9aef0619374a265c0b99e01c35d56c923da1dc8b`. The fix closes the
-SQL binder-folding path that had dropped the row-level HEX/BIT numeric marker
-through an implicit string cast; explicit casts and ordinary BINARY column
-values remain outside that literal-provenance behavior. The protocol marker
-remains independently v94-fenced in every SQL mode.
+snapshot `6d281f7a1213a0e9b69b813b4022624be38ce4ce` is based on main
+`16d8e5106caaedfe0a7296e4f628683e1b6a92b4`. It closes two transport gaps:
+the SQL binder-folding path now retains the HEX/BIT numeric marker through an
+implicit string cast, and v94 admission now covers any flow-control result that
+can select a non-NULL HEX/BIT value. This includes uniformly marked results
+and marked-plus-NULL results, because older flow-control executors drop even a
+scalar marker and can change a downstream numeric cast from `1` to `49`.
+Explicit casts and ordinary BINARY column values remain separate provenance
+boundaries. The protocol marker remains independently v94-fenced in every SQL
+mode.
 
 Validation on the descendant test snapshot:
 
 - Repository CGo tests passed for vector, batch, pSpool, plan/pipeline protobuf,
   colexec, compile, MySQL parser, planner, planner functions/rules, frontend,
-  process, and issue regression packages. The planner package was rerun after
-  the final gofmt-only correction.
+  process, and issue regression packages on this exact snapshot.
 - `func_math_string_numeric.test` passed twice at 128/128 with normal result
-  and metadata comparisons, not metadata suppression. The service binary was
-  built from the implementation snapshot; the only later source change was
-  gofmt in an unrelated planner test, so runtime sources and SQL fixtures were
-  identical.
+  and metadata comparisons, not metadata suppression. That isolated SQL
+  service build preceded the admission-only follow-up; no multi-CN runtime
+  result is claimed. The follow-up's v93/v94 placement, destination, receiver,
+  and legacy-sender paths are covered by exact-source compile tests.
 - `gofmt -l` on changed Go files, `git diff --check`, and CGo-aware `go vet` on
   the affected package set passed.
 - Incremental golangci-lint could not type-check this Go 1.27 source with the
