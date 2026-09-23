@@ -541,8 +541,9 @@ type ParquetHandler struct {
 	icebergNullFill []bool
 
 	// for nested types support
-	hasNestedCols bool
-	rowReader     parquet.Rows
+	hasNestedCols    bool
+	nestedColIndices []int
+	rowReader        parquet.Rows
 
 	// virtual column support (hive partitions + __mo_filepath)
 	partitionColIndices            []int
