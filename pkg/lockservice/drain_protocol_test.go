@@ -15,12 +15,75 @@
 package lockservice
 
 import (
+	"context"
 	"reflect"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 )
+
+func TestInstanceBoundDrainColdCNNeedsFreshHeartbeat(t *testing.T) {
+	runLockTableAllocatorTest(t, time.Hour, func(a *lockTableAllocator) {
+		const id = "1234567890123456789s1"
+		const attempt = "cold-attempt"
+		request := pb.BeginDrainRequest{ServiceID: id, AttemptID: attempt}
+		if a.beginDrain(request).OK {
+			t.Fatal("unobserved cold CN was accepted before its heartbeat")
+		}
+		bind := a.getServiceBinds(id)
+		if bind == nil || !bind.drainAwaitingHeartbeat || bind.getStatus() != pb.Status_ServiceLockWaiting {
+			t.Fatal("cold CN did not get a pending, non-admitting bind")
+		}
+		if a.canGetBind(id) || a.beginDrain(request).OK {
+			t.Fatal("pending CN admitted a new bind or drain request")
+		}
+		if a.Get(id, 0, 1, 0, pb.Sharding_None).Valid {
+			t.Fatal("GetBind admitted a table after the cold drain began")
+		}
+		query := pb.QueryDrainRequest{ServiceID: id, AttemptID: attempt,
+			AllocatorID: a.allocatorID, AllocatorVersion: a.version}
+		if a.queryDrain(query).Safe {
+			t.Fatal("pending registration was mistaken for completion")
+		}
+
+		client, err := NewClient("", morpc.Config{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer client.Close()
+		sendHeartbeat := func(status pb.Status) pb.KeepLockTableBindResponse {
+			req := acquireRequest()
+			defer releaseRequest(req)
+			req.Method = pb.Method_KeepLockTableBind
+			req.KeepLockTableBind.ServiceID = id
+			req.KeepLockTableBind.Status = status
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			resp, err := client.Send(ctx, req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer releaseResponse(resp)
+			return resp.KeepLockTableBind
+		}
+		if sendHeartbeat(pb.Status_ServiceUnLockSucc).OK || a.beginDrain(request).OK || a.queryDrain(query).Safe {
+			t.Fatal("stale completion heartbeat adopted a pending cold CN")
+		}
+		observed := sendHeartbeat(pb.Status_ServiceLockEnable)
+		if !observed.OK || observed.Status != pb.Status_ServiceLockWaiting || !a.beginDrain(request).OK {
+			t.Fatal("normal heartbeat did not establish the exact cold CN drain")
+		}
+		if a.queryDrain(query).Safe {
+			t.Fatal("heartbeat was mistaken for completed drain")
+		}
+		if completed := sendHeartbeat(pb.Status_ServiceUnLockSucc); !completed.OK ||
+			completed.Status != pb.Status_ServiceCanRestart || !a.queryDrain(query).Safe {
+			t.Fatal("completed cold CN drain was not accepted")
+		}
+	})
+}
 
 func TestInstanceBoundDrainProtocol(t *testing.T) {
 	runLockTableAllocatorTest(t, time.Hour, func(a *lockTableAllocator) {
@@ -90,9 +153,11 @@ func TestInstanceBoundDrainProtocol(t *testing.T) {
 		if !a.queryDrain(query).Safe {
 			t.Fatal("safe retirement lost its exact attempt proof")
 		}
-		a.registerService(newID)
-		if a.queryDrain(query).Safe {
-			t.Fatal("new bind inherited an old retirement proof")
+		if a.canGetBind(newID) || a.Get(newID, 0, 10, 0, pb.Sharding_None).Valid {
+			t.Fatal("completed drain allowed its exact incarnation to rebind")
+		}
+		if !a.queryDrain(query).Safe {
+			t.Fatal("late GetBind revoked the completed drain proof")
 		}
 	})
 }
