@@ -2221,7 +2221,8 @@ func (node *FullTextMatchExpr) Format(ctx *FmtCtx) {
 	ctx.WriteString(") ")
 	ctx.WriteString("AGAINST (")
 	// Post-#24796 the pattern is an Expr: a *NumVal (search_pattern: STRING) for a
-	// literal, or a *ParamExpr (VALUE_ARG) for a prepared '?'. For the string case
+	// literal, a *ParamExpr (VALUE_ARG) for a prepared '?', or an
+	// *UnresolvedName for a stored-procedure variable. For the string case
 	// (the common one) emit it as a single-quoted, escaped SQL string literal
 	// UNCONDITIONALLY — do NOT route it through NumVal.Format / ctx.WriteValue, which
 	// only quotes when the FmtCtx opts in (quoteString/singleQuoteString). The default

@@ -143,3 +143,24 @@ soundex_binary_view    s    varbinary    64    binary    binary
 DROP TABLE soundex_binary_ctas;
 DROP VIEW soundex_binary_view;
 DROP TABLE soundex_binary_domain;
+PREPARE soundex_prepared_28912 FROM 'SELECT HEX(SOUNDEX(?)) AS code_hex, SOUNDEX(?) IS NULL AS is_null';
+SET @soundex_prepared_28912 = CAST(UNHEX('C3A9') AS VARBINARY(2));
+EXECUTE soundex_prepared_28912 USING @soundex_prepared_28912, @soundex_prepared_28912;
+code_hex    is_null
+C3A9303030    0
+SET @soundex_prepared_28912 = 'Pfister';
+EXECUTE soundex_prepared_28912 USING @soundex_prepared_28912, @soundex_prepared_28912;
+code_hex    is_null
+50323336    0
+SET @soundex_prepared_28912 = CAST(UNHEX('C3A9') AS VARBINARY(2));
+EXECUTE soundex_prepared_28912 USING @soundex_prepared_28912, @soundex_prepared_28912;
+code_hex    is_null
+C3A9303030    0
+SET @soundex_prepared_28912 = NULL;
+EXECUTE soundex_prepared_28912 USING @soundex_prepared_28912, @soundex_prepared_28912;
+code_hex    is_null
+null    1
+DEALLOCATE PREPARE soundex_prepared_28912;
+SELECT COALESCE(NULLIF(HEX(SOUNDEX(CAST(UNHEX('C3A9') AS VARBINARY(2)))), ''), '<empty>') AS direct_binary_hex;
+direct_binary_hex
+<empty>
