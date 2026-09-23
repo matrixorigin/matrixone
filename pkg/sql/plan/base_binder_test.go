@@ -84,6 +84,29 @@ func TestStoredProcedureVariablesUseDeclaredDecimalType(t *testing.T) {
 	}
 }
 
+func TestFullTextPatternRequiresStoredProcedureVariable(t *testing.T) {
+	scopes := []map[string]interface{}{{"q": "outer"}, {"q": "engine"}}
+	typeScopes := []map[string]plan.Type{{"q": {Id: int32(types.T_varchar)}}, {"q": {Id: int32(types.T_varchar)}}}
+	ctx := context.WithValue(context.Background(), defines.VarScopeKey{}, &scopes)
+	ctx = context.WithValue(ctx, defines.VarScopeTypeKey{}, &typeScopes)
+	ctx = context.WithValue(ctx, defines.InSp{}, true)
+
+	name := tree.NewUnresolvedColName("q")
+	binder := NewDefaultBinder(ctx, nil, nil, plan.Type{}, nil)
+	bound, err := binder.BindExpr(name, 0, false)
+	require.NoError(t, err)
+	require.True(t, isStoredProcedureFullTextPattern(ctx, name, bound))
+
+	column := &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{}}}
+	require.False(t, isStoredProcedureFullTextPattern(ctx, name, column))
+	require.False(t, isStoredProcedureFullTextPattern(ctx, tree.NewUnresolvedName(tree.NewCStr("t", 1), tree.NewCStr("q", 1)), bound))
+	require.False(t, isStoredProcedureFullTextPattern(context.Background(), name, bound))
+
+	otherScopes := []map[string]interface{}{{"body": "engine"}}
+	noVariable := context.WithValue(ctx, defines.VarScopeKey{}, &otherScopes)
+	require.False(t, isStoredProcedureFullTextPattern(noVariable, name, bound))
+}
+
 func TestIgnoreSpaceGenericFunctionsDoNotUseBuiltins(t *testing.T) {
 	tests := []struct {
 		name    string
