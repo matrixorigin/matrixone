@@ -1724,6 +1724,90 @@ func TestBinaryStringBitmapAllocationFailureIsAtomic(t *testing.T) {
 	finalizeTestVectorAllocationAccount(t, state)
 }
 
+func TestNumericBinaryLiteralSingleRowCopyAndRawAppendAllocation(t *testing.T) {
+	t.Run("single-live-copy-keeps-scalar", func(t *testing.T) {
+		state := newTestVectorAllocationAccount(t, 1<<20, 16)
+		mp := mpool.MustNewZero()
+		destination := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+		source := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+		require.NoError(t, AppendFixed(destination, int64(10), false, mp))
+		require.NoError(t, AppendFixed(source, int64(20), false, mp))
+		source.SetIsBin(true)
+		state.account.Seal()
+
+		require.NoError(t, destination.Copy(source, 0, 0, mp))
+		require.True(t, destination.GetIsBinAt(0))
+		require.True(t, destination.GetIsBin())
+		require.False(t, destination.HasIsBinRows(), "one live value does not need a bitmap")
+
+		destination.Free(mp)
+		source.Free(mp)
+		finalizeTestVectorAllocationAccount(t, state)
+	})
+
+	t.Run("null-slot-overwrite-keeps-scalar", func(t *testing.T) {
+		state := newTestVectorAllocationAccount(t, 1<<20, 16)
+		mp := mpool.MustNewZero()
+		destination := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+		source := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+		require.NoError(t, AppendFixedList(destination, []int64{0, 0}, []bool{true, true}, mp))
+		require.NoError(t, AppendFixed(source, int64(20), false, mp))
+		source.SetIsBin(true)
+		state.account.Seal()
+
+		require.NoError(t, destination.Copy(source, 1, 0, mp))
+		require.True(t, destination.GetIsBinAt(1))
+		require.False(t, destination.IsNull(1))
+		require.False(t, destination.HasIsBinRows(), "the copied value is the only live row")
+
+		destination.Free(mp)
+		source.Free(mp)
+		finalizeTestVectorAllocationAccount(t, state)
+	})
+
+	t.Run("ordinary-append-fails-before-publishing", func(t *testing.T) {
+		state := newTestVectorAllocationAccount(t, 1<<20, 16)
+		mp := mpool.MustNewZero()
+		vec := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+		require.NoError(t, AppendFixed(vec, int64(10), false, mp))
+		require.NoError(t, vec.PreExtend(1, mp))
+		vec.SetIsBin(true)
+		state.account.Seal()
+
+		err := AppendFixed(vec, int64(20), false, mp)
+		require.ErrorIs(t, err, mpool.ErrAllocationAccountSealed)
+		require.Equal(t, 1, vec.Length())
+		require.True(t, vec.GetIsBinAt(0))
+		require.True(t, vec.GetIsBin())
+		require.False(t, vec.HasIsBinRows())
+
+		vec.Free(mp)
+		finalizeTestVectorAllocationAccount(t, state)
+	})
+}
+
+func TestSelectedBatchPreflightsNumericBinaryLiteralBitmap(t *testing.T) {
+	state := newTestVectorAllocationAccount(t, 1<<20, 16)
+	mp := mpool.MustNewZero()
+	destination := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+	source := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
+	require.NoError(t, AppendFixed(destination, int64(10), false, mp))
+	require.NoError(t, AppendFixed(source, int64(20), false, mp))
+	source.SetIsBin(true)
+	flags := []uint8{1}
+	require.NoError(t, destination.PreExtendSelectedBatch(source, 0, 1, flags, 2, mp))
+	state.account.Seal()
+
+	require.NoError(t, destination.UnionBatchPreflighted(source, 0, 1, flags, mp))
+	require.False(t, destination.GetIsBinAt(0))
+	require.True(t, destination.GetIsBinAt(1))
+	require.True(t, destination.HasIsBinRows())
+
+	destination.Free(mp)
+	source.Free(mp)
+	finalizeTestVectorAllocationAccount(t, state)
+}
+
 func TestSelectedRowsBinaryStringDecodeAllocationFailureIsAtomic(t *testing.T) {
 	const twoVarlenaRowsBytes = 2 * types.VarlenaSize
 	state := newTestVectorAllocationAccount(t, twoVarlenaRowsBytes, 16)

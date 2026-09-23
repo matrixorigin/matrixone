@@ -73,6 +73,48 @@ SELECT id, ABS(s) AS abs_null_compatibility FROM src WHERE id = 8;
 
 -- Binary literal provenance is unchanged: X'31' remains numeric value 49.
 SELECT ABS(X'31') AS binary_literal_value;
+SELECT ABS(B'00110001') AS bit_literal_value;
+
+-- Runtime BINARY domain and HEX literal numeric provenance are separate axes.
+-- CASE/IF/COALESCE must preserve the selected row's HEX/BIT marker while an
+-- ordinary BINARY cast or column continues to parse its bytes as text.
+CREATE TABLE numeric_binary_provenance(id INT PRIMARY KEY, binary_value BINARY(1));
+INSERT INTO numeric_binary_provenance VALUES (1, '1'), (2, '1'), (3, '1'), (4, '1');
+SELECT id,
+    ABS(CASE
+        WHEN id = 1 THEN CAST('1' AS BINARY)
+        WHEN id = 2 THEN X'31'
+        WHEN id = 3 THEN '1'
+        ELSE NULL
+    END) AS case_numeric_provenance,
+    ABS(CASE WHEN id = 2 THEN X'31' ELSE binary_value END) AS case_binary_column_provenance,
+    ABS(IF(id = 2, X'31', CAST('1' AS BINARY))) AS if_numeric_provenance,
+    ABS(COALESCE(IF(id = 2, X'31', NULL), CAST('1' AS BINARY))) AS coalesce_numeric_provenance
+FROM numeric_binary_provenance
+ORDER BY id;
+SELECT id,
+    ABS(CASE WHEN id = 3 THEN B'00110001' ELSE CAST('1' AS BINARY) END) AS bit_case_provenance,
+    ABS(IF(id = 3, B'00110001', CAST('1' AS BINARY))) AS bit_if_provenance,
+    ABS(COALESCE(IF(id = 3, B'00110001', NULL), CAST('1' AS BINARY))) AS bit_coalesce_provenance
+FROM numeric_binary_provenance
+ORDER BY id;
+
+-- Execution-only HEX/BIT provenance must not become stored column metadata.
+-- Once materialized, both byte strings are ordinary values and numeric math
+-- parses their bytes as text rather than treating 0x31 as the number 49.
+CREATE TABLE numeric_binary_materialized(id INT PRIMARY KEY, val VARBINARY(8));
+INSERT INTO numeric_binary_materialized
+SELECT id, CASE
+    WHEN id = 2 THEN X'31'
+    ELSE CAST('1' AS BINARY)
+END
+FROM numeric_binary_provenance
+WHERE id <= 2;
+DROP TABLE numeric_binary_provenance;
+SELECT id, ABS(val) AS stored_numeric_value
+FROM numeric_binary_materialized
+ORDER BY id;
+DROP TABLE numeric_binary_materialized;
 
 -- Prefix compatibility keeps its warning code/count; empty and whitespace-only
 -- inputs still coerce to zero without a warning.

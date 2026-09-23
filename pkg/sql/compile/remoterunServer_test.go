@@ -1000,6 +1000,55 @@ func TestMessageReceiverSendBatchPreservesMetadataAndRejectsOldProtocol(t *testi
 	require.Equal(t, types.StringSourceSQLPrepare, decodedWithSources.Vecs[0].GetStringSourceAt(1))
 }
 
+func TestMessageReceiverSendBatchRequiresV94ForNumericBinaryLiteralProvenance(t *testing.T) {
+	runtime := rt.ServiceRuntime("")
+	original, hadOriginal := runtime.GetGlobalVariables(rt.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadOriginal {
+			runtime.SetGlobalVariables(rt.MOProtocolVersion, original)
+		} else {
+			runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCLatestVersion)
+		}
+	})
+
+	mp := mpool.MustNewZero()
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytesList(bat.Vecs[0], [][]byte{{0x31}, []byte("1")}, nil, mp))
+	require.NoError(t, bat.Vecs[0].SetIsBinRowsWithMP([]bool{true, false}, mp))
+	bat.SetRowCount(2)
+	defer bat.Clean(mp)
+
+	ctrl := gomock.NewController(t)
+	session := mock_morpc.NewMockClientSession(ctrl)
+	receiver := &messageReceiverOnServer{
+		messageCtx:      context.Background(),
+		connectionCtx:   context.Background(),
+		messageId:       406,
+		clientSession:   session,
+		messageAcquirer: func() morpc.Message { return &pipeline.Message{} },
+		maxMessageSize:  1 << 20,
+	}
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion93)
+	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion94",
+		"the sender must reject the v93 downgrade before writing a batch")
+
+	var sent *pipeline.Message
+	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
+		func(_ context.Context, message any) error {
+			sent = message.(*pipeline.Message)
+			return nil
+		})
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion94)
+	require.NoError(t, receiver.sendBatch(bat))
+	require.NotNil(t, sent)
+	decoded := batch.NewOffHeapEmpty()
+	defer decoded.Clean(mp)
+	require.NoError(t, decoded.UnmarshalBinaryWithPrepareParamKinds(sent.Data, mp))
+	require.True(t, decoded.Vecs[0].GetIsBinAt(0))
+	require.False(t, decoded.Vecs[0].GetIsBinAt(1))
+}
+
 func TestMessageReceiverSendBatchPreservesGrouping(t *testing.T) {
 	runtime := rt.ServiceRuntime("")
 	original, _ := runtime.GetGlobalVariables(rt.MOProtocolVersion)

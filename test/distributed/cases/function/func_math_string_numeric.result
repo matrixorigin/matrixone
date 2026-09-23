@@ -92,6 +92,55 @@ SELECT id, ABS(s) AS abs_null_compatibility FROM src WHERE id = 8;
 SELECT ABS(X'31') AS binary_literal_value;
 ➤ binary_literal_value[8,53,31]  𝄀
 49.0
+SELECT ABS(B'00110001') AS bit_literal_value;
+➤ bit_literal_value[8,53,31]  𝄀
+49.0
+CREATE TABLE numeric_binary_provenance(id INT PRIMARY KEY, binary_value BINARY(1));
+INSERT INTO numeric_binary_provenance VALUES (1, '1'), (2, '1'), (3, '1'), (4, '1');
+SELECT id,
+ABS(CASE
+WHEN id = 1 THEN CAST('1' AS BINARY)
+WHEN id = 2 THEN X'31'
+WHEN id = 3 THEN '1'
+ELSE NULL
+END) AS case_numeric_provenance,
+ABS(CASE WHEN id = 2 THEN X'31' ELSE binary_value END) AS case_binary_column_provenance,
+ABS(IF(id = 2, X'31', CAST('1' AS BINARY))) AS if_numeric_provenance,
+ABS(COALESCE(IF(id = 2, X'31', NULL), CAST('1' AS BINARY))) AS coalesce_numeric_provenance
+FROM numeric_binary_provenance
+ORDER BY id;
+➤ id[4,32,0]  ¦  case_numeric_provenance[8,53,31]  ¦  case_binary_column_provenance[8,53,31]  ¦  if_numeric_provenance[8,53,31]  ¦  coalesce_numeric_provenance[8,53,31]  𝄀
+1  ¦  1.0  ¦  1.0  ¦  1.0  ¦  1.0  𝄀
+2  ¦  49.0  ¦  49.0  ¦  49.0  ¦  49.0  𝄀
+3  ¦  1.0  ¦  1.0  ¦  1.0  ¦  1.0  𝄀
+4  ¦  null  ¦  1.0  ¦  1.0  ¦  1.0
+SELECT id,
+ABS(CASE WHEN id = 3 THEN B'00110001' ELSE CAST('1' AS BINARY) END) AS bit_case_provenance,
+ABS(IF(id = 3, B'00110001', CAST('1' AS BINARY))) AS bit_if_provenance,
+ABS(COALESCE(IF(id = 3, B'00110001', NULL), CAST('1' AS BINARY))) AS bit_coalesce_provenance
+FROM numeric_binary_provenance
+ORDER BY id;
+➤ id[4,32,0]  ¦  bit_case_provenance[8,53,31]  ¦  bit_if_provenance[8,53,31]  ¦  bit_coalesce_provenance[8,53,31]  𝄀
+1  ¦  1.0  ¦  1.0  ¦  1.0  𝄀
+2  ¦  1.0  ¦  1.0  ¦  1.0  𝄀
+3  ¦  49.0  ¦  49.0  ¦  49.0  𝄀
+4  ¦  1.0  ¦  1.0  ¦  1.0
+CREATE TABLE numeric_binary_materialized(id INT PRIMARY KEY, val VARBINARY(8));
+INSERT INTO numeric_binary_materialized
+SELECT id, CASE
+WHEN id = 2 THEN X'31'
+ELSE CAST('1' AS BINARY)
+END
+FROM numeric_binary_provenance
+WHERE id <= 2;
+DROP TABLE numeric_binary_provenance;
+SELECT id, ABS(val) AS stored_numeric_value
+FROM numeric_binary_materialized
+ORDER BY id;
+➤ id[4,32,0]  ¦  stored_numeric_value[8,53,31]  𝄀
+1  ¦  1.0  𝄀
+2  ¦  1.0
+DROP TABLE numeric_binary_materialized;
 SELECT ABS('1.5tail') AS abs_prefix_warning;
 ➤ abs_prefix_warning[8,53,31]  𝄀
 1.5

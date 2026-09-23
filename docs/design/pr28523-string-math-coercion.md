@@ -248,13 +248,15 @@ and HEX/BIT literal provenance are distinct. Rebinding, deep-copy, and
 parameter-restoration paths must preserve the marker that affects this result.
 
 When a flow-control expression produces a heterogeneous string vector, its
-row-level provenance sidecar is authoritative for the implicit string-to-
-`DOUBLE` cast: a row selected from `X'31'` remains 49 while a row selected from
-`'1'` remains 1. The cast consults `GetIsBinaryStringAt(row)` only when that
-sidecar is active; the scalar `GetIsBin()` marker continues to identify direct
-HEX/BIT literals, and ordinary static `BINARY`/`VARBINARY` values keep their
-text-value conversion contract. `CASE`, `IF`, and `COALESCE` regressions cover
-binary, text, and NULL rows together.
+row-level runtime string-domain sidecar continues to describe text-versus-
+binary string semantics; it is not numeric-literal provenance. A separate
+transient row-level `IsBin` marker is authoritative for the implicit string-
+to-`DOUBLE` cast: a row selected from `X'31'` remains 49 while a row selected
+from `'1'` remains 1. Ordinary static `BINARY`/`VARBINARY` values without that
+marker keep their text-value conversion contract. `CASE`, `IF`, and
+`COALESCE` regressions cover HEX/BIT, ordinary BINARY, text, and NULL rows
+together. This execution-only marker is carried by the v94 batch trailer and
+is absent from stable vector/batch bytes.
 
 ### 2.5 Overload and mixed-version safety
 
@@ -278,8 +280,13 @@ string-numeric compatibility contract, including changed FLOAT-to-INT64
 bounds and scalar-math precision admission, therefore uses the distinct MORPC
 v94 capability boundary. A v93 worker is treated as pre-contract for these
 numeric expressions; placement, send-time destination validation, and
-receiver-side validation all require v94. No existing v93 `LAST_INSERT_ID`
-field or migration behavior is changed.
+receiver-side validation all require v94. Row-level HEX/BIT numeric
+provenance is v94-gated in every SQL compatibility mode only when selected
+non-NULL value branches of a `CASE`, `IF`, or `COALESCE` can produce both
+marked literals and ordinary values. Uniformly marked results and NULL-only
+alternatives do not require the mixed-row trailer. This fence is independent
+of the mode-conditional strict string parsing contract. No existing v93
+`LAST_INSERT_ID` field or migration behavior is changed.
 
 ## 3. Ownership and execution design
 

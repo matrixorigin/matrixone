@@ -1488,13 +1488,12 @@ func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrappe
 			// Direct integer parsing avoids float64 precision loss
 			// for large values (e.g. '9007199254740993').
 			sp := vector.GenerateFunctionStrParameter(param)
-			isBin := param.GetIsBin()
 			getters[i] = func(idx uint64) (int64, bool) {
 				v, null := sp.GetStrValue(idx)
 				if null {
 					return 0, true
 				}
-				if isBin {
+				if param.GetIsBinAt(int(idx)) {
 					// hex/bit literals (e.g. 0x41, b'01000001') arrive as raw
 					// bytes with IsBin set; interpret them as a big-endian
 					// integer, mirroring the varchar->int64 cast path

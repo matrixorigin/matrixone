@@ -251,6 +251,8 @@ func TestRequiresMORPCVersion94StrictStringNumericCompatibility(t *testing.T) {
 	require.True(t, features.NumericPrefix)
 	require.True(t, features.StrictStringNumericCompatibility,
 		"a numeric-prefix FLOAT cast also uses the process compatibility mode")
+	require.False(t, features.NumericBinaryLiteralProvenance,
+		"a plain string-to-FLOAT CAST has no mixed literal provenance")
 
 	legacyCeil := &Expr{
 		Typ: Type{Id: 30},
@@ -263,6 +265,92 @@ func TestRequiresMORPCVersion94StrictStringNumericCompatibility(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, features.StrictStringNumericCompatibility,
 		"historical CEIL VARCHAR overloads also depend on the compatibility mode")
+}
+
+func TestNumericBinaryLiteralProvenanceFeatureTracksMixedFlowControlRows(t *testing.T) {
+	const (
+		boolType    int32 = 10
+		int64Type   int32 = 23
+		varcharType int32 = planVarcharTypeID
+	)
+	column := &Expr{Typ: Type{Id: boolType}, Expr: &Expr_Col{Col: &ColRef{ColPos: 0}}}
+	textLiteral := func(value string) *Expr {
+		return &Expr{Typ: Type{Id: varcharType}, Expr: &Expr_Lit{Lit: &Literal{
+			Value: &Literal_Sval{Sval: value},
+		}}}
+	}
+	binaryLiteral := func(value string, form StringLiteralForm) *Expr {
+		return &Expr{Typ: Type{Id: varcharType}, Expr: &Expr_Lit{Lit: &Literal{
+			Value: &Literal_Sval{Sval: value}, IsBin: true, LiteralForm: form,
+		}}}
+	}
+	call := func(name string, id int32, typ int32, args ...*Expr) *Expr {
+		return &Expr{Typ: Type{Id: typ}, Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{Obj: int64(id) << 32, ObjName: name}, Args: args,
+		}}}
+	}
+	caseExpr := func(binary *Expr) *Expr {
+		return call("case", caseFunctionID, varcharType, column, binary, textLiteral("1"))
+	}
+	explicitCast := func(expr *Expr) *Expr {
+		return &Expr{Typ: Type{Id: planBinaryTypeID}, Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{ObjName: "cast"}, Args: []*Expr{expr}, SyntaxExplicitCast: true,
+		}}}
+	}
+	implicitCast := func(expr *Expr) *Expr {
+		return &Expr{Typ: Type{Id: varcharType}, Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{ObjName: "cast"}, Args: []*Expr{expr},
+		}}}
+	}
+
+	tests := []struct {
+		name string
+		expr *Expr
+		want bool
+	}{
+		{name: "hex case selected rows", expr: caseExpr(binaryLiteral("1", StringLiteralForm_STRING_LITERAL_HEX)), want: true},
+		{name: "bit coalesce selected rows", expr: call("coalesce", coalesceFunctionID, varcharType,
+			&Expr{Typ: Type{Id: varcharType}, Expr: &Expr_Col{Col: &ColRef{ColPos: 1}}},
+			binaryLiteral("00110001", StringLiteralForm_STRING_LITERAL_BIT)), want: true},
+		{name: "implicit binder cast is transparent", expr: call("if", iffFunctionID, varcharType,
+			column, implicitCast(binaryLiteral("1", StringLiteralForm_STRING_LITERAL_HEX)), textLiteral("1")), want: true},
+		{name: "if marked and ordinary selected rows", expr: call("if", iffFunctionID, varcharType,
+			column, binaryLiteral("1", StringLiteralForm_STRING_LITERAL_HEX), textLiteral("1")), want: true},
+		{name: "integer cast still transports mixed row marker", expr: call("cast", 21, int64Type,
+			caseExpr(binaryLiteral("1", StringLiteralForm_STRING_LITERAL_HEX))), want: true},
+		{name: "nested flow control used as string condition", expr: call("if", iffFunctionID, int64Type,
+			caseExpr(binaryLiteral("0", StringLiteralForm_STRING_LITERAL_BIT)),
+			&Expr{Typ: Type{Id: int64Type}, Expr: &Expr_Lit{Lit: &Literal{Value: &Literal_I64Val{I64Val: 1}}}},
+			&Expr{Typ: Type{Id: int64Type}, Expr: &Expr_Lit{Lit: &Literal{Value: &Literal_I64Val{I64Val: 2}}}}), want: true},
+		{name: "explicit cast ends numeric literal provenance", expr: call("coalesce", coalesceFunctionID, varcharType,
+			explicitCast(binaryLiteral("1", StringLiteralForm_STRING_LITERAL_HEX)), textLiteral("1"))},
+		{name: "all marked case branches are uniform", expr: call("case", caseFunctionID, varcharType,
+			column, binaryLiteral("1", StringLiteralForm_STRING_LITERAL_HEX),
+			binaryLiteral("2", StringLiteralForm_STRING_LITERAL_BIT))},
+		{name: "all marked if branches are uniform", expr: call("if", iffFunctionID, varcharType,
+			column, binaryLiteral("1", StringLiteralForm_STRING_LITERAL_HEX),
+			binaryLiteral("2", StringLiteralForm_STRING_LITERAL_BIT))},
+		{name: "all marked coalesce is stopped by first value", expr: call("coalesce", coalesceFunctionID, varcharType,
+			binaryLiteral("1", StringLiteralForm_STRING_LITERAL_HEX), textLiteral("1"))},
+		{name: "null coalesce argument does not create ordinary output", expr: call("coalesce", coalesceFunctionID, varcharType,
+			&Expr{Typ: Type{Id: varcharType}, Expr: &Expr_Lit{Lit: &Literal{Isnull: true}}},
+			binaryLiteral("1", StringLiteralForm_STRING_LITERAL_HEX))},
+		{name: "marked case plus null only has no mixed values", expr: call("case", caseFunctionID, varcharType,
+			column, binaryLiteral("1", StringLiteralForm_STRING_LITERAL_HEX),
+			&Expr{Typ: Type{Id: varcharType}, Expr: &Expr_Lit{Lit: &Literal{Isnull: true}}})},
+		{name: "binary literal in string condition is not a result branch", expr: call("if", iffFunctionID, varcharType,
+			binaryLiteral("1", StringLiteralForm_STRING_LITERAL_HEX), textLiteral("1"), textLiteral("2"))},
+		{name: "plain text flow control", expr: call("coalesce", coalesceFunctionID, varcharType,
+			textLiteral("1"), textLiteral("2"))},
+		{name: "direct literal has no row-level marker", expr: binaryLiteral("1", StringLiteralForm_STRING_LITERAL_HEX)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			features, err := RequiredRemoteExpressionFeatures(&struct{ Expr *Expr }{Expr: test.expr})
+			require.NoError(t, err)
+			require.Equal(t, test.want, features.NumericBinaryLiteralProvenance)
+		})
+	}
 }
 
 func TestRequiresMORPCVersion23DynamicStringProvenance(t *testing.T) {

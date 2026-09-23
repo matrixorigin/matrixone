@@ -835,22 +835,25 @@ func TestStringToFloatSkipsInactiveInvalidRows(t *testing.T) {
 	}
 }
 
-func TestStringToFloatPreservesMixedRowBinaryProvenance(t *testing.T) {
+func TestStringToFloatUsesNumericBinaryLiteralRowsNotBinaryStringDomain(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	input := makeBinaryStringTestInput(t, proc, types.T_varchar.ToType(), [][]byte{
-		{0x31}, []byte("1"),
+		{0x31}, []byte("1"), {0x31},
 	}, []types.RuntimeStringDomain{
 		types.RuntimeStringBinary,
 		types.RuntimeStringText,
+		types.RuntimeStringBinary,
 	})
 	defer input.Free(proc.Mp())
+	require.NoError(t, input.SetIsBinRowsWithMP([]bool{true, false, false}, proc.Mp()))
 
 	result := vector.NewFunctionResultWrapper(types.T_float64.ToType(), proc.Mp()).(*vector.FunctionResult[float64])
 	defer result.Free()
-	require.NoError(t, result.PreExtendAndReset(2))
+	require.NoError(t, result.PreExtendAndReset(3))
 	require.NoError(t, strToFloat(context.Background(), SQLCompatibilityMySQL,
-		vector.GenerateFunctionStrParameter(input), result, 64, 2, nil))
-	require.Equal(t, []float64{49, 1}, vector.MustFixedColWithTypeCheck[float64](result.GetResultVector()))
+		vector.GenerateFunctionStrParameter(input), result, 64, 3, nil))
+	require.Equal(t, []float64{49, 1, 1}, vector.MustFixedColWithTypeCheck[float64](result.GetResultVector()),
+		"only the HEX/BIT numeric marker selects byte-as-number semantics")
 
 	// A static binary string is not a HEX/BIT literal and keeps the ordinary
 	// text-value conversion contract.
@@ -860,6 +863,26 @@ func TestStringToFloatPreservesMixedRowBinaryProvenance(t *testing.T) {
 	require.NoError(t, strToFloat(context.Background(), SQLCompatibilityMySQL,
 		vector.GenerateFunctionStrParameter(ordinary), result, 64, 1, nil))
 	require.Equal(t, []float64{1}, vector.MustFixedColWithTypeCheck[float64](result.GetResultVector()))
+}
+
+func TestNumericBinaryLiteralMarkerDoesNotImplyBinaryStringDomain(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendStringList(vec, []string{"hex", "text", "text override"}, nil, mp))
+	require.NoError(t, vec.SetIsBinRowsWithMP([]bool{true, false, true}, mp))
+	require.NoError(t, vec.SetRuntimeStringDomainAtWithMP(2, types.RuntimeStringText, mp))
+	defer func() {
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	binary, perRow := stringDomainMode(vec)
+	require.False(t, binary)
+	require.True(t, perRow, "marker rows need row-exact binary-string operation semantics")
+	require.False(t, vec.GetIsBinaryStringAt(0), "the marker does not mutate runtime string-domain metadata")
+	require.True(t, binaryStringAt(vec, 0, binary, perRow), "direct HEX/BIT retains binary operation semantics")
+	require.False(t, binaryStringAt(vec, 1, binary, perRow), "ordinary text remains text")
+	require.False(t, binaryStringAt(vec, 2, binary, perRow), "explicit runtime text takes precedence over literal fallback")
 }
 
 func TestCastSignedStringNumericSign(t *testing.T) {

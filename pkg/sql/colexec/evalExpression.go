@@ -364,6 +364,7 @@ func newExpressionExecutorWithAllocation(
 		{
 			// init function information for evaluation.
 			executor.overloadID = overloadID
+			executor.syntaxExplicitCast = t.F.GetSyntaxExplicitCast()
 			// String-to-numeric casts can emit one warning for every logical
 			// output row. Do not fold ordinary text parameters, but retain the
 			// cast information so doFold can safely fold parameters whose
@@ -524,6 +525,10 @@ type FixedVectorExpressionExecutor struct {
 type FunctionExpressionExecutor struct {
 	m          *mpool.MPool
 	allocation *vector.AllocationAccountSelection
+	// syntaxExplicitCast distinguishes a user-written CAST from a binder-added
+	// overload-0 cast. Syntax-explicit casts share the legacy overload ID on the
+	// wire, but remain provenance boundaries.
+	syntaxExplicitCast bool
 	// resultType is the declared function return type. Some built-ins refine
 	// result metadata (for example temporal scale or decimal width/scale) at
 	// runtime, so reusable result vectors must start each evaluation from this
@@ -559,6 +564,7 @@ type FunctionExpressionExecutor struct {
 	flowControlKinds         []vector.PrepareParamKind
 	flowControlStringDomains []types.RuntimeStringDomain
 	flowControlStringSources []types.StringSource
+	flowControlIsBinRows     []bool
 	iffNullResults           [2]*vector.Vector
 }
 
@@ -1101,6 +1107,9 @@ func (expr *FunctionExpressionExecutor) resetFlowControlPrepareParamKind() {
 	if expr.flowControlStringSources != nil {
 		expr.flowControlStringSources = expr.flowControlStringSources[:0]
 	}
+	if expr.flowControlIsBinRows != nil {
+		expr.flowControlIsBinRows = expr.flowControlIsBinRows[:0]
+	}
 }
 
 func (expr *FunctionExpressionExecutor) ensureFlowControlPrepareParamRows(rows int) {
@@ -1143,6 +1152,19 @@ func (expr *FunctionExpressionExecutor) ensureFlowControlStringSourceRows(rows i
 		expr.flowControlStringSources, make([]types.StringSource, rows-old)...)
 }
 
+func (expr *FunctionExpressionExecutor) ensureFlowControlIsBinRows(rows int) {
+	if rows <= len(expr.flowControlIsBinRows) {
+		return
+	}
+	old := len(expr.flowControlIsBinRows)
+	if rows <= cap(expr.flowControlIsBinRows) {
+		expr.flowControlIsBinRows = expr.flowControlIsBinRows[:rows]
+		clear(expr.flowControlIsBinRows[old:])
+		return
+	}
+	expr.flowControlIsBinRows = append(expr.flowControlIsBinRows, make([]bool, rows-old)...)
+}
+
 // observeFlowControlPrepareParamKind inspects only rows that can reach one
 // IF/CASE/COALESCE arm. Column executors intentionally return their full input
 // vector even under a row mask, so checking value.AllNull() would incorrectly
@@ -1157,7 +1179,7 @@ func (expr *FunctionExpressionExecutor) observeFlowControlPrepareParamKind(
 		return
 	}
 	resultDomain := types.StaticStringDomain(expr.resultType)
-	if !value.HasNull() && !value.HasBinaryStringMetadata() &&
+	if !value.HasNull() && !value.HasBinaryStringMetadata() && !value.HasIsBinMetadata() &&
 		!value.HasPrepareParamKind() && len(value.GetPrepareParamKinds()) == 0 &&
 		!value.HasStringSourceMetadata() &&
 		types.StaticStringDomain(*value.GetType()) == resultDomain &&
@@ -1181,6 +1203,11 @@ func (expr *FunctionExpressionExecutor) observeFlowControlPrepareParamKind(
 			}
 			if value.IsNull(uint64(row)) {
 				continue
+			}
+			isBin := value.GetIsBinAt(row)
+			if isBin || len(expr.flowControlIsBinRows) != 0 {
+				expr.ensureFlowControlIsBinRows(len(selection))
+				expr.flowControlIsBinRows[row] = isBin
 			}
 			domain := value.GetRuntimeStringDomainAt(row)
 			if domain == types.RuntimeStringInherit {
@@ -1217,12 +1244,13 @@ func (expr *FunctionExpressionExecutor) observeFlowControlPrepareParamKind(
 }
 
 // flowControlSelectedValueSource unwraps only binder-inserted casts. Explicit
-// CAST uses overload 1 and remains a semantic boundary. An implicit cast has
-// already evaluated its source, so this does not execute an expression twice.
+// CAST uses a nonzero overload or SyntaxExplicitCast and remains a semantic
+// boundary. An implicit cast has already evaluated its source, so this does
+// not execute an expression twice.
 func flowControlSelectedValueSource(value *vector.Vector, executor ExpressionExecutor) *vector.Vector {
 	for {
 		fn, ok := executor.(*FunctionExpressionExecutor)
-		if !ok || fn.fid != function.CAST || len(fn.parameterResults) == 0 ||
+		if !ok || fn.fid != function.CAST || fn.syntaxExplicitCast || len(fn.parameterResults) == 0 ||
 			len(fn.parameterExecutor) == 0 || fn.parameterResults[0] == nil {
 			return value
 		}
@@ -1242,6 +1270,12 @@ func (expr *FunctionExpressionExecutor) applyFlowControlPrepareParamKinds(
 ) error {
 	if result == nil || rows <= 0 {
 		return nil
+	}
+	if len(expr.flowControlIsBinRows) != 0 {
+		expr.ensureFlowControlIsBinRows(rows)
+		if err := result.SetIsBinRowsWithMP(expr.flowControlIsBinRows[:rows], mp); err != nil {
+			return err
+		}
 	}
 	if len(expr.flowControlStringDomains) != 0 {
 		expr.ensureFlowControlBinaryStringRows(rows)
@@ -1269,7 +1303,7 @@ func (expr *FunctionExpressionExecutor) applyFlowControlPrepareParamKinds(
 }
 
 func (expr *FunctionExpressionExecutor) isImplicitCast() bool {
-	if expr.fid != function.CAST {
+	if expr.fid != function.CAST || expr.syntaxExplicitCast {
 		return false
 	}
 	_, overload := function.DecodeOverloadID(expr.overloadID)
@@ -1290,14 +1324,33 @@ func applyTransparentStringSource(
 	// consumers such as JSON_STORAGE can reject an ENUM value that travelled
 	// through the text transport instead of accepting it as VARCHAR.
 	result.SetPrepareParamType(source.GetPrepareParamType())
+	var err error
 	if source.GetStringSources() == nil {
-		return result.SetStringSource(source.GetStringSource())
+		err = result.SetStringSource(source.GetStringSource())
+	} else {
+		sources := make([]types.StringSource, rows)
+		for row := range sources {
+			sources[row] = source.GetStringSourceAt(row)
+		}
+		err = result.SetStringSourcesWithMP(sources, mp)
 	}
-	sources := make([]types.StringSource, rows)
-	for row := range sources {
-		sources[row] = source.GetStringSourceAt(row)
+	if err != nil {
+		return err
 	}
-	return result.SetStringSourcesWithMP(sources, mp)
+	// Numeric HEX/BIT provenance is independent of the string's runtime domain.
+	// Preserve it only across implicit string-to-string coercions; casts to a
+	// numeric type consume the marker, and explicit casts are not transparent.
+	if source.GetType().Oid.IsMySQLString() && result.GetType().Oid.IsMySQLString() {
+		if source.HasIsBinRows() {
+			isBinRows := make([]bool, rows)
+			for row := range isBinRows {
+				isBinRows[row] = source.GetIsBinAt(row)
+			}
+			return result.SetIsBinRowsWithMP(isBinRows, mp)
+		}
+		result.SetIsBin(source.GetIsBin())
+	}
+	return nil
 }
 
 func (expr *FunctionExpressionExecutor) getFlowControlPrepareParamKind() vector.PrepareParamKind {
@@ -1475,7 +1528,6 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 			} else {
 				selected.Reset(*parameter.GetType())
 			}
-			selected.SetIsBin(parameter.GetIsBin())
 			if err := selected.Union(parameter, expr.selectedRows, proc.Mp()); err != nil {
 				return nil, err
 			}
@@ -1515,7 +1567,6 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 
 	selectedResult := expr.selectedResult.GetResultVector()
 	runtimeType := *selectedResult.GetType()
-	runtimeIsBin := selectedResult.GetIsBin()
 	runtimePrepareParamKind := selectedResult.GetPrepareParamKind()
 	runtimePreparedJSONComparisonParam := selectedResult.IsPreparedJSONComparisonParam()
 	runtimePrepareParamType := selectedResult.GetPrepareParamType()
@@ -1525,7 +1576,6 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 
 	result := expr.resultVector.GetResultVector()
 	result.SetType(runtimeType)
-	result.SetIsBin(runtimeIsBin)
 	result.ResetWithSameType()
 	if expr.selectedNullResult == nil {
 		var err error
@@ -1539,7 +1589,7 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 		expr.selectedNullResult.SetType(runtimeType)
 		expr.selectedNullResult.SetLength(1)
 	}
-	expr.selectedNullResult.SetIsBin(runtimeIsBin)
+	expr.selectedNullResult.SetIsBin(false)
 	selectedRow := int64(0)
 	for row := 0; row < rowCount; row++ {
 		if selectList[row] {

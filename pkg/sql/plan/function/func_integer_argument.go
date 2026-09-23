@@ -203,7 +203,7 @@ func integerArgumentTextRows[R int64 | uint64](source *vector.Vector, result *ve
 			}
 			continue
 		}
-		normalized := textIntegerArgument(value, source.GetIsBin())
+		normalized := textIntegerArgument(value, source.GetIsBinAt(int(i)))
 		var integer R
 		var err error
 		if textBits && normalized.negative {

@@ -6610,8 +6610,6 @@ func strToSignedWithProc[T constraints.Signed](
 	length int, selectList *FunctionSelectList, mode castMode, explicit ...bool) error {
 	var i uint64
 	var l = uint64(length)
-	isBinary := from.GetSourceVector().GetIsBin()
-
 	var result T
 	for i = 0; i < l; i++ {
 		if functionRowSkipped(selectList, i) {
@@ -6626,6 +6624,7 @@ func strToSignedWithProc[T constraints.Signed](
 				return err
 			}
 		} else {
+			isBinary := from.GetSourceVector().GetIsBinAt(int(i))
 			if isBinary {
 				var r int64
 				var num uint64
@@ -7565,8 +7564,6 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 	length int, selectList *FunctionSelectList, mode castMode, explicit ...bool) error {
 	var i uint64
 	var l = uint64(length)
-	isBinary := from.GetSourceVector().GetIsBin()
-
 	var val uint64
 	var tErr error
 	for i = 0; i < l; i++ {
@@ -7582,6 +7579,7 @@ func strToUnsignedWithProc[T constraints.Unsigned](
 				return err
 			}
 		} else {
+			isBinary := from.GetSourceVector().GetIsBinAt(int(i))
 			var res *string
 			var integerPrefix string
 			var integerHasPrefix, integerOutOfRange bool
@@ -7665,12 +7663,6 @@ func strToFloatWithProc[T constraints.Float](
 	var i uint64
 	var l = uint64(length)
 	source := from.GetSourceVector()
-	// GetIsBin records the scalar HEX/BIT-literal marker.  Flow-control
-	// expressions can instead carry row-level string provenance (for example,
-	// CASE mixing X'31' and '1'); consult that sidecar per row without changing
-	// the established ordinary BINARY-string conversion contract.
-	isBinaryLiteral := source.GetIsBin()
-	hasRowBinary := source.HasBinaryStringRows()
 	if selectList != nil && selectList.IgnoreAllRow() {
 		to.SetNullResult(l)
 		return nil
@@ -7692,10 +7684,7 @@ func strToFloatWithProc[T constraints.Float](
 				return err
 			}
 		} else {
-			isBinary := isBinaryLiteral
-			if hasRowBinary {
-				isBinary = source.GetIsBinaryStringAt(int(i))
-			}
+			isBinary := source.GetIsBinAt(int(i))
 			parseBitSize := bitSize
 			if !isBinary && bitSize == 32 && to.GetType().Width > 0 && to.GetType().Scale >= 0 {
 				parseBitSize = 64
@@ -7747,7 +7736,6 @@ func strToDecimal64(
 	var l = uint64(length)
 	var dft types.Decimal64
 	totype := to.GetType()
-	isb := from.GetSourceVector().GetIsBin()
 	if totype.Charset == 255 && from.GetSourceVector().IsConst() {
 		v, null := from.GetStrValue(0)
 		var result types.Decimal64
@@ -7778,6 +7766,7 @@ func strToDecimal64(
 				return err
 			}
 		} else {
+			isb := from.GetSourceVector().GetIsBinAt(int(i))
 			s := convertByteSliceToString(v)
 			if !isb {
 				isExplicit := mode == castModeExplicit
@@ -8227,7 +8216,6 @@ func strToDecimal128(
 	var l = uint64(length)
 	var dft types.Decimal128
 	totype := to.GetType()
-	isb := from.GetSourceVector().GetIsBin()
 	if totype.Charset == 255 && from.GetSourceVector().IsConst() {
 		v, null := from.GetStrValue(0)
 		var result types.Decimal128
@@ -8258,6 +8246,7 @@ func strToDecimal128(
 				return err
 			}
 		} else {
+			isb := from.GetSourceVector().GetIsBinAt(int(i))
 			s := convertByteSliceToString(v)
 			if !isb {
 				isExplicit := mode == castModeExplicit
@@ -8353,7 +8342,6 @@ func strToDecimal256(
 	var l = uint64(length)
 	var dft types.Decimal256
 	totype := to.GetType()
-	isb := from.GetSourceVector().GetIsBin()
 	if totype.Charset == 255 && from.GetSourceVector().IsConst() {
 		v, null := from.GetStrValue(0)
 		var result types.Decimal256
@@ -8384,6 +8372,7 @@ func strToDecimal256(
 				return err
 			}
 		} else {
+			isb := from.GetSourceVector().GetIsBinAt(int(i))
 			s := convertByteSliceToString(v)
 			if !isb {
 				isExplicit := mode == castModeExplicit
@@ -8693,7 +8682,6 @@ func strToDate(proc *process.Process,
 	var i uint64
 	var l = uint64(length)
 	var dft types.Date
-	isBinary := from.GetSourceVector().GetIsBin()
 	assignmentCast := mode == castModeStrictStringWidth || mode == castModeAssignmentIgnore
 	modeChecked := false
 	nullifyZero := false
@@ -8705,6 +8693,7 @@ func strToDate(proc *process.Process,
 			continue
 		}
 		v, null := from.GetStrValue(i)
+		isBinary := from.GetSourceVector().GetIsBinAt(int(i))
 		if null {
 			if err := to.Append(dft, true); err != nil {
 				return err
@@ -8827,7 +8816,6 @@ func strToDatetime(proc *process.Process,
 	var i uint64
 	var l = uint64(length)
 	var dft types.Datetime
-	isBinary := from.GetSourceVector().GetIsBin()
 	assignmentCast := mode == castModeStrictStringWidth || mode == castModeAssignmentIgnore
 	totype := to.GetType()
 	modeChecked := false
@@ -8840,6 +8828,7 @@ func strToDatetime(proc *process.Process,
 			continue
 		}
 		v, null := from.GetStrValue(i)
+		isBinary := from.GetSourceVector().GetIsBinAt(int(i))
 		if null {
 			if err := to.Append(dft, true); err != nil {
 				return err
@@ -8896,7 +8885,6 @@ func strToTimestamp(proc *process.Process,
 	var i uint64
 	var l = uint64(length)
 	var dft types.Timestamp
-	isBinary := from.GetSourceVector().GetIsBin()
 	assignmentCast := mode == castModeStrictStringWidth || mode == castModeAssignmentIgnore
 	totype := to.GetType()
 	modeChecked := false
@@ -8909,6 +8897,7 @@ func strToTimestamp(proc *process.Process,
 			continue
 		}
 		v, null := from.GetStrValue(i)
+		isBinary := from.GetSourceVector().GetIsBinAt(int(i))
 		if null {
 			if err := to.Append(dft, true); err != nil {
 				return err

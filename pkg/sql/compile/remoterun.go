@@ -2365,6 +2365,7 @@ func requiresStringNumericCompatibilityProtocol(proc *process.Process, features 
 	return features.HistoricalStringMathCompatibility ||
 		features.OrdinaryFloatInt64Bounds ||
 		features.ScalarMathPrecisionCompatibility ||
+		features.NumericBinaryLiteralProvenance ||
 		(features.StrictStringNumericCompatibility && strictStringNumericCompatibilityDefault(proc))
 }
 

@@ -393,11 +393,16 @@ const (
 // the strict-by-default contract. Pre-v94 workers understand the prefix-cast
 // representation but default to permissive conversion when the new SessionInfo
 // marker is absent.
+// NumericBinaryLiteralProvenance requires v94 in every mode only when the
+// selected non-NULL value branches of CASE/IF/COALESCE can produce both a
+// row-level HEX/BIT marker and an ordinary value. This is independent of
+// string-prefix conversion mode.
 // HistoricalStringMathCompatibility requires v94 in every mode: old CEIL/FLOOR
 // VARCHAR overloads used ParseFloat, not the current mode-aware parser.
 type RemoteExpressionFeatures struct {
 	NumericPrefix                     bool
 	StrictStringNumericCompatibility  bool
+	NumericBinaryLiteralProvenance    bool
 	HistoricalStringMathCompatibility bool
 	// Ordinary/comparison/set-operation FLOAT -> INT64 casts require v94's
 	// exact bounds in every mode, independently of string-prefix conversion.
@@ -427,6 +432,7 @@ type RemoteExpressionFeatures struct {
 func (features RemoteExpressionFeatures) Any() bool {
 	return features.NumericPrefix ||
 		features.StrictStringNumericCompatibility ||
+		features.NumericBinaryLiteralProvenance ||
 		features.HistoricalStringMathCompatibility ||
 		features.OrdinaryFloatInt64Bounds ||
 		features.ScalarMathPrecisionCompatibility ||
@@ -720,6 +726,8 @@ func conditionalValueSources(fn *Function, functionID int32, name string) (value
 		return nil, false
 	}
 	switch {
+	case functionID == coalesceFunctionID || name == "coalesce":
+		return fn.Args, false
 	case functionID == caseFunctionID || name == "case":
 		// CASE arguments are condition/value pairs, followed by an optional
 		// ELSE value. An even number of arguments therefore means that the
@@ -737,6 +745,109 @@ func conditionalValueSources(fn *Function, functionID int32, name string) (value
 		}
 	}
 	return nil, false
+}
+
+type numericBinaryLiteralValueClass struct {
+	hasMarkedValue    bool
+	hasOrdinaryValue  bool
+	definitelyNull    bool
+	definitelyNonNull bool
+}
+
+// classifyNumericBinaryLiteralValue follows only provenance-transparent
+// implicit casts and flow-control expressions. Ordinary functions and columns
+// may produce unmarked values; they do not inherit literal provenance from
+// their inputs. Explicit CAST deliberately resets the marker.
+func classifyNumericBinaryLiteralValue(expr *Expr) numericBinaryLiteralValueClass {
+	if expr == nil {
+		return numericBinaryLiteralValueClass{}
+	}
+	if literal := expr.GetLit(); literal != nil {
+		if literal.GetIsnull() {
+			return numericBinaryLiteralValueClass{definitelyNull: true}
+		}
+		if literal.GetIsBin() {
+			return numericBinaryLiteralValueClass{hasMarkedValue: true, definitelyNonNull: true}
+		}
+		return numericBinaryLiteralValueClass{hasOrdinaryValue: true, definitelyNonNull: true}
+	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil {
+		if strings.EqualFold(fn.Func.GetObjName(), "cast") && len(fn.Args) > 0 {
+			source := classifyNumericBinaryLiteralValue(fn.Args[0])
+			if source.definitelyNull {
+				return numericBinaryLiteralValueClass{definitelyNull: true}
+			}
+			if !fn.GetSyntaxExplicitCast() {
+				return source
+			}
+			// An explicit cast is a semantic boundary: a non-NULL result is an
+			// ordinary value regardless of the source literal's HEX/BIT form.
+			return numericBinaryLiteralValueClass{
+				hasOrdinaryValue:  source.hasMarkedValue || source.hasOrdinaryValue,
+				definitelyNonNull: source.definitelyNonNull,
+			}
+		}
+
+		functionID := int32(fn.Func.Obj >> 32)
+		name := strings.ToLower(fn.Func.GetObjName())
+		values, omittedElse := conditionalValueSources(fn, functionID, name)
+		if values != nil {
+			isCoalesce := functionID == coalesceFunctionID || name == "coalesce"
+			result := numericBinaryLiteralValueClass{}
+			if isCoalesce {
+				for _, value := range values {
+					branch := classifyNumericBinaryLiteralValue(value)
+					if branch.definitelyNull {
+						continue
+					}
+					result.hasMarkedValue = result.hasMarkedValue || branch.hasMarkedValue
+					result.hasOrdinaryValue = result.hasOrdinaryValue || branch.hasOrdinaryValue
+					if branch.definitelyNonNull {
+						result.definitelyNonNull = true
+						break // later COALESCE arguments are unreachable
+					}
+				}
+				if !result.hasMarkedValue && !result.hasOrdinaryValue {
+					result.definitelyNull = true
+				}
+				return result
+			}
+
+			allDefinitelyNonNull := !omittedElse && len(values) != 0
+			for _, value := range values {
+				branch := classifyNumericBinaryLiteralValue(value)
+				result.hasMarkedValue = result.hasMarkedValue || branch.hasMarkedValue
+				result.hasOrdinaryValue = result.hasOrdinaryValue || branch.hasOrdinaryValue
+				allDefinitelyNonNull = allDefinitelyNonNull && branch.definitelyNonNull
+			}
+			result.definitelyNonNull = allDefinitelyNonNull
+			result.definitelyNull = !result.hasMarkedValue && !result.hasOrdinaryValue
+			return result
+		}
+	}
+	return numericBinaryLiteralValueClass{hasOrdinaryValue: true}
+}
+
+// isFlowControlNumericBinaryLiteralSource identifies only a heterogeneous
+// CASE/IF/COALESCE result whose selected non-NULL values include both marked
+// HEX/BIT literals and ordinary values. NULL-only alternatives do not require
+// row metadata because NULL rows never carry numeric-literal provenance.
+func isFlowControlNumericBinaryLiteralSource(expr *Expr) bool {
+	if expr == nil || expr.GetF() == nil || expr.GetF().Func == nil {
+		return false
+	}
+	fn := expr.GetF()
+	functionID := int32(fn.Func.Obj >> 32)
+	name := strings.ToLower(fn.Func.GetObjName())
+	switch {
+	case functionID == caseFunctionID || functionID == iffFunctionID ||
+		functionID == coalesceFunctionID || name == "case" ||
+		name == "if" || name == "iff" || name == "coalesce":
+	default:
+		return false
+	}
+	class := classifyNumericBinaryLiteralValue(expr)
+	return class.hasMarkedValue && class.hasOrdinaryValue
 }
 
 func conditionalConditionNeedsMetadataFence(fn *Function, functionID int32, name string) bool {
@@ -871,8 +982,11 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				strings.EqualFold(fn.Func.GetObjName(), "cast") {
 				features.NumericPrefix = true
 			}
-			if !features.StrictStringNumericCompatibility && isStrictStringNumericCompatibilityCast(current) {
+			if isStrictStringNumericCompatibilityCast(current) {
 				features.StrictStringNumericCompatibility = true
+			}
+			if isFlowControlNumericBinaryLiteralSource(current) {
+				features.NumericBinaryLiteralProvenance = true
 			}
 			if !features.StrictStringNumericCompatibility && isStringConditionCompatibilityFunction(current) {
 				features.StrictStringNumericCompatibility = true

@@ -249,6 +249,27 @@ func TestBitCountVarcharUsesRowStringDomain(t *testing.T) {
 	require.Equal(t, []uint64{7, 1, 1}, vector.MustFixedColNoTypeCheck[uint64](result.GetResultVector()))
 }
 
+func TestBitCountVarcharUsesNumericLiteralMarkerPerRow(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	mp := proc.Mp()
+	input := testutil.MakeVarlenaVector(
+		[][]byte{[]byte("64"), []byte("64"), []byte("64")},
+		nil,
+		types.T_varchar.ToType(),
+		mp,
+	)
+	defer input.Free(mp)
+	require.NoError(t, input.SetIsBinRowsWithMP([]bool{true, false, true}, mp))
+	require.NoError(t, input.SetRuntimeStringDomainAtWithMP(2, types.RuntimeStringText, mp))
+
+	result := vector.NewFunctionResultWrapper(types.T_uint64.ToType(), mp)
+	defer result.Free()
+	require.NoError(t, result.PreExtendAndReset(input.Length()))
+	require.NoError(t, BitCountNonBinaryString([]*vector.Vector{input}, result, proc, input.Length(), nil))
+	require.Equal(t, []uint64{7, 1, 1}, vector.MustFixedColNoTypeCheck[uint64](result.GetResultVector()),
+		"HEX/BIT numeric marker rows use byte semantics unless an explicit text domain overrides them")
+}
+
 func TestBitCountTypeCheck(t *testing.T) {
 	ctx := context.Background()
 

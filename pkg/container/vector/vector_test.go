@@ -2383,6 +2383,232 @@ func TestRawAppendIntroducesOrdinaryBinaryStringRows(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestNumericBinaryLiteralMetadataVectorLifecycle(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendStringList(source, []string{"z", "a", "m"}, nil, mp))
+	require.NoError(t, source.SetIsBinRowsWithMP([]bool{true, false, true}, mp))
+	require.False(t, source.GetIsBin(), "mixed row provenance has a conservative scalar summary")
+	t.Cleanup(func() {
+		source.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	})
+
+	duplicate, err := source.Dup(mp)
+	require.NoError(t, err)
+	require.True(t, duplicate.GetIsBinAt(0))
+	require.False(t, duplicate.GetIsBinAt(1))
+	require.True(t, duplicate.GetIsBinAt(2))
+	duplicate.Free(mp)
+
+	window, err := source.Window(1, 3)
+	require.NoError(t, err)
+	require.False(t, window.GetIsBinAt(0))
+	require.True(t, window.GetIsBinAt(1))
+	window.Free(mp)
+
+	cloned, err := source.CloneWindow(1, 3, mp)
+	require.NoError(t, err)
+	require.False(t, cloned.GetIsBinAt(0))
+	require.True(t, cloned.GetIsBinAt(1))
+	cloned.Free(mp)
+
+	shuffled, err := source.Dup(mp)
+	require.NoError(t, err)
+	require.NoError(t, shuffled.Shuffle([]int64{1, 2, 0}, mp))
+	require.False(t, shuffled.GetIsBinAt(0))
+	require.True(t, shuffled.GetIsBinAt(1))
+	require.True(t, shuffled.GetIsBinAt(2))
+	shuffled.Free(mp)
+
+	shrunk, err := source.Dup(mp)
+	require.NoError(t, err)
+	shrunk.Shrink([]int64{1, 2}, false)
+	require.Equal(t, 2, shrunk.Length())
+	require.False(t, shrunk.GetIsBinAt(0))
+	require.True(t, shrunk.GetIsBinAt(1))
+	shrunk.Free(mp)
+
+	destination := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendStringList(destination, []string{"ordinary", "slot"}, nil, mp))
+	require.NoError(t, destination.Copy(source, 1, 0, mp))
+	require.False(t, destination.GetIsBinAt(0))
+	require.True(t, destination.GetIsBinAt(1))
+	destination.Free(mp)
+
+	union := NewVec(types.T_text.ToType())
+	require.NoError(t, union.UnionBatch(source, 0, source.Length(), nil, mp))
+	for row, expected := range []bool{true, false, true} {
+		require.Equal(t, expected, union.GetIsBinAt(row))
+	}
+	union.Free(mp)
+
+	selected := NewVec(types.T_text.ToType())
+	require.NoError(t, selected.Union(source, []int64{2, 1}, mp))
+	require.True(t, selected.GetIsBinAt(0))
+	require.False(t, selected.GetIsBinAt(1))
+	selected.Free(mp)
+
+	selected32 := NewVec(types.T_text.ToType())
+	require.NoError(t, selected32.UnionInt32(source, []int32{1, 0}, mp))
+	require.False(t, selected32.GetIsBinAt(0))
+	require.True(t, selected32.GetIsBinAt(1))
+	selected32.Free(mp)
+
+	broadcast := NewVec(types.T_text.ToType())
+	require.NoError(t, broadcast.UnionMulti(source, 0, 4, mp))
+	for row := 0; row < broadcast.Length(); row++ {
+		require.True(t, broadcast.GetIsBinAt(row))
+	}
+	broadcast.Free(mp)
+
+	sorted := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendStringList(sorted, []string{"same", "same"}, nil, mp))
+	require.NoError(t, sorted.SetIsBinRowsWithMP([]bool{true, false}, mp))
+	sorted.InplaceSortAndCompact()
+	require.Equal(t, 2, sorted.Length(), "row-exact provenance participates in sort compaction identity")
+	require.False(t, sorted.GetIsBinAt(0))
+	require.True(t, sorted.GetIsBinAt(1))
+	sorted.Free(mp)
+
+	constVector := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendStringList(constVector, []string{"literal", "plain"}, nil, mp))
+	require.NoError(t, constVector.SetBinaryStringRowsWithMP([]bool{true, false}, mp))
+	require.NoError(t, constVector.SetIsBinRowsWithMP([]bool{true, false}, mp))
+	constVector.SetClass(CONSTANT)
+	constVector.SetLength(1)
+	require.False(t, constVector.HasIsBinRows(), "a const vector keeps only physical row zero")
+	require.True(t, constVector.GetIsBin())
+	require.True(t, constVector.GetIsBinaryStringAt(0))
+	constVector.Free(mp)
+
+	constSet := GetConstSetFunction(types.T_text.ToType(), mp)
+	constDestination := NewVec(types.T_text.ToType())
+	require.NoError(t, constSet(constDestination, source, 0, 2))
+	require.True(t, constDestination.GetIsBin(), "selected literal provenance reaches a const result")
+	require.NoError(t, constSet(constDestination, source, 1, 2))
+	require.False(t, constDestination.GetIsBin(), "reusing the const result clears a stale literal marker")
+	require.NoError(t, constSet(constDestination, source, 2, 0))
+	require.False(t, constDestination.HasIsBinMetadata(), "zero-length const results carry no value provenance")
+	constDestination.Free(mp)
+}
+
+func TestNumericBinaryLiteralMetadataBulkUnionBatch(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_int64.ToType())
+	destination := NewVec(types.T_int64.ToType())
+	const rows = 8192
+	values := make([]int64, rows)
+	markers := make([]bool, rows)
+	for row := range values {
+		values[row] = int64(row)
+		markers[row] = row%3 == 0
+	}
+	require.NoError(t, AppendFixedList(source, values, nil, mp))
+	require.NoError(t, source.SetIsBinRowsWithMP(markers, mp))
+	require.NoError(t, AppendFixed(destination, int64(-1), false, mp))
+	destination.SetIsBin(true)
+	defer func() {
+		destination.Free(mp)
+		source.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	require.NoError(t, destination.UnionBatch(source, 0, rows, nil, mp))
+	require.True(t, destination.GetIsBinAt(0), "the existing scalar marker survives promotion to mixed rows")
+	for row, expected := range markers {
+		require.Equal(t, expected, destination.GetIsBinAt(row+1))
+	}
+
+	// Repeated UnionBatch appends into an already mixed destination must retain
+	// every old marker while adding the selected source rows exactly.
+	mixedSource := NewVec(types.T_int64.ToType())
+	mixedDestination := NewVec(types.T_int64.ToType())
+	require.NoError(t, AppendFixedList(mixedSource, []int64{30, 40}, nil, mp))
+	require.NoError(t, mixedSource.SetIsBinRowsWithMP([]bool{true, false}, mp))
+	require.NoError(t, AppendFixedList(mixedDestination, []int64{10, 20}, nil, mp))
+	require.NoError(t, mixedDestination.SetIsBinRowsWithMP([]bool{true, false}, mp))
+	require.NoError(t, mixedDestination.UnionBatch(mixedSource, 0, 2, nil, mp))
+	require.NoError(t, mixedDestination.UnionBatch(mixedSource, 0, 2, nil, mp))
+	for row, expected := range []bool{true, false, true, false, true, false} {
+		require.Equal(t, expected, mixedDestination.GetIsBinAt(row))
+	}
+	mixedDestination.Free(mp)
+	mixedSource.Free(mp)
+}
+
+func TestNumericBinaryLiteralRepeatedBatchAppendRetainsUniformSidecar(t *testing.T) {
+	mp := mpool.MustNewZero()
+	source := NewVec(types.T_int64.ToType())
+	destination := NewVec(types.T_int64.ToType())
+	require.NoError(t, AppendFixed(source, int64(30), false, mp))
+	source.SetIsBin(true)
+	require.NoError(t, AppendFixedList(destination, []int64{10, 20}, nil, mp))
+	require.NoError(t, destination.SetIsBinRowsWithMP([]bool{true, false}, mp))
+	// A single-row update intentionally leaves an active but uniform bitmap.
+	require.NoError(t, destination.SetIsBinAt(1, true, mp))
+	require.True(t, destination.HasIsBinRows())
+	require.False(t, destination.GetIsBin())
+	defer func() {
+		destination.Free(mp)
+		source.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	const appends = 128
+	for range appends {
+		require.NoError(t, destination.UnionBatch(source, 0, 1, nil, mp))
+		require.True(t, destination.HasIsBinRows(), "append must not normalize the existing uniform sidecar")
+	}
+	require.Equal(t, 2+appends, destination.Length())
+	for row := 0; row < destination.Length(); row++ {
+		require.True(t, destination.GetIsBinAt(row), "row %d lost numeric-literal provenance", row)
+	}
+}
+
+func TestRawAppendClearsNumericBinaryLiteralProvenance(t *testing.T) {
+	mp := mpool.MustNewZero()
+	for _, test := range []struct {
+		name   string
+		append func(*Vector) error
+	}{
+		{name: "append-bytes", append: func(v *Vector) error {
+			return AppendBytes(v, []byte("2"), false, mp)
+		}},
+		{name: "append-string-list", append: func(v *Vector) error {
+			return AppendStringList(v, []string{"2", "3"}, nil, mp)
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			v := NewVec(types.T_text.ToType())
+			require.NoError(t, AppendBytes(v, []byte("1"), false, mp))
+			v.SetIsBin(true)
+			require.NoError(t, test.append(v))
+			require.True(t, v.GetIsBinAt(0))
+			for row := 1; row < v.Length(); row++ {
+				require.False(t, v.GetIsBinAt(row), "raw ordinary appends are never HEX/BIT literals")
+			}
+			v.Free(mp)
+		})
+	}
+	require.Zero(t, mp.CurrNB())
+}
+
+func TestNumericBinaryLiteralRowsClearBeforeNullNormalization(t *testing.T) {
+	mp := mpool.MustNewZero()
+	v := NewVec(types.T_text.ToType())
+	require.NoError(t, AppendStringList(v, []string{"a", "b", "c"}, nil, mp))
+	require.NoError(t, v.SetIsBinRowsWithMP([]bool{true, false, true}, mp))
+	v.SetNull(0)
+	require.NoError(t, v.SetIsBinAt(1, false, mp))
+	require.False(t, v.GetIsBinAt(0))
+	require.False(t, v.GetIsBinAt(1))
+	require.True(t, v.GetIsBinAt(2))
+	require.False(t, v.GetIsBin(), "a null marker must not scalar-collapse surviving mixed rows")
+	v.Free(mp)
+	require.Zero(t, mp.CurrNB())
+}
+
 func TestBinaryStringMetadataStableDecodeAndInplaceSort(t *testing.T) {
 	mp := mpool.MustNewZero()
 	plain := NewVec(types.T_text.ToType())
@@ -2394,8 +2620,11 @@ func TestBinaryStringMetadataStableDecodeAndInplaceSort(t *testing.T) {
 	target := NewVec(types.T_text.ToType())
 	require.NoError(t, target.UnmarshalBinary(stable))
 	target.SetIsBinaryString(true)
+	target.SetIsBin(true)
 	require.NoError(t, target.UnmarshalBinary(stable))
 	require.False(t, target.GetIsBinaryString())
+	require.False(t, target.HasIsBinMetadata(), "stable bytes do not carry transient numeric-literal markers")
+	require.False(t, target.GetIsBin())
 	target.Free(mp)
 
 	sorted := NewVec(types.T_text.ToType())
@@ -5271,6 +5500,28 @@ func TestSetPrepareParamKindsAndBinaryStringFromReader(t *testing.T) {
 	require.True(t, vec.GetIsBinaryStringAt(2))
 }
 
+func TestSetPrepareParamKindsReaderRejectsMixedConstNumericBinaryLiterals(t *testing.T) {
+	mp := mpool.MustNewZero()
+	vec := makePrepareParamKindReaderVector(t, mp, 3)
+	vec.ToConst()
+	defer func() {
+		vec.Free(mp)
+		require.Zero(t, mp.CurrNB())
+	}()
+	before := mp.CurrNB()
+	err := vec.SetPrepareParamKindsAndBinaryStringFromReader(
+		bytes.NewReader([]byte{0x80, 0, 0x80}),
+		3,
+		mp,
+		0x20,
+		0x40,
+		0x80,
+	)
+	require.ErrorContains(t, err, "constant vector cannot have mixed numeric binary-literal provenance")
+	require.Equal(t, before, mp.CurrNB(), "rejected const metadata must release staged rows")
+	require.False(t, vec.HasIsBinMetadata())
+}
+
 func TestSetPrepareParamKindsFromReaderErrorsReleaseTemporarySidecar(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -6384,6 +6635,45 @@ func BenchmarkUnionOnePrepareParamKindLateDivergence(b *testing.B) {
 				b.Fatal(err)
 			}
 		}
+	}
+}
+
+// This benchmark keeps appending one marked row into an active, initially
+// uniform numeric-provenance sidecar. Runtime should scale with appended rows,
+// not repeatedly classify the growing prefix.
+func BenchmarkUnionBatchNumericBinaryLiteralOneRowAppend(b *testing.B) {
+	for _, prefixRows := range []int{4 << 10, 512 << 10} {
+		b.Run(fmt.Sprintf("prefix=%d", prefixRows), func(b *testing.B) {
+			mp := mpool.MustNewZero()
+			source := NewVec(types.T_int64.ToType())
+			destination := NewVec(types.T_int64.ToType())
+			defer source.Free(mp)
+			defer destination.Free(mp)
+			require.NoError(b, AppendFixed(source, int64(1), false, mp))
+			source.SetIsBin(true)
+			values := make([]int64, prefixRows)
+			markers := make([]bool, prefixRows)
+			for row := range values {
+				markers[row] = true
+			}
+			markers[prefixRows-1] = false
+			require.NoError(b, AppendFixedList(destination, values, nil, mp))
+			require.NoError(b, destination.SetIsBinRowsWithMP(markers, mp))
+			require.NoError(b, destination.SetIsBinAt(prefixRows-1, true, mp))
+			require.True(b, destination.HasIsBinRows())
+			require.NoError(b, destination.ensureNumericBinaryLiteralCapacity(prefixRows+b.N, mp))
+			if err := extendWithBitmaps(destination, b.N, mp, false, false); err != nil {
+				b.Fatal(err)
+			}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for b.Loop() {
+				if err := destination.UnionBatch(source, 0, 1, nil, mp); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
 	}
 }
 

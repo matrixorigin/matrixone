@@ -2099,6 +2099,124 @@ func TestBindFuncExprImplByPlanExpr_CaseDifferentDecimalScale(t *testing.T) {
 	require.False(t, isCastExpr(funcExpr.Args[2]), "ELSE value already has the common decimal scale")
 }
 
+func TestFoldedImplicitStringCastPreservesNumericBinaryLiteralMarker(t *testing.T) {
+	ctx := context.Background()
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	source := makePlan2StringConstExprWithType("1", true)
+	source.GetLit().LiteralForm = planpb.StringLiteralForm_STRING_LITERAL_HEX
+	toType := types.T_binary.ToType()
+	toType.Width = 1
+
+	implicit, err := appendCastBeforeExpr(ctx, source, makePlan2Type(&toType))
+	require.NoError(t, err)
+	foldedImplicit, err := ConstantFold(batch.EmptyForConstFoldBatch, implicit, proc, false, true)
+	require.NoError(t, err)
+	require.NotNil(t, foldedImplicit.GetLit())
+	require.True(t, foldedImplicit.GetLit().GetIsBin(),
+		"folding an implicit string cast must retain the HEX/BIT numeric-literal marker")
+
+	explicit, err := appendSyntaxExplicitCastBeforeExpr(ctx, source, makePlan2Type(&toType))
+	require.NoError(t, err)
+	foldedExplicit, err := ConstantFold(batch.EmptyForConstFoldBatch, explicit, proc, false, true)
+	require.NoError(t, err)
+	require.NotNil(t, foldedExplicit.GetLit())
+	require.False(t, foldedExplicit.GetLit().GetIsBin(),
+		"an explicit cast is a numeric-literal provenance boundary")
+}
+
+func TestBoundFlowControlAfterImplicitStringCastFoldRetainsHexBitNumericRows(t *testing.T) {
+	ctx := context.Background()
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	input := batch.NewWithSize(3)
+	defer input.Clean(proc.Mp())
+	conditionRows := [][]bool{
+		{true, false, false, false},
+		{false, true, false, false},
+		{false, false, true, false},
+	}
+	for i, values := range conditionRows {
+		input.Vecs[i] = vector.NewVec(types.T_bool.ToType())
+		require.NoError(t, vector.AppendFixedList(input.Vecs[i], values, nil, proc.Mp()))
+	}
+	input.SetRowCount(4)
+
+	column := func(pos int32) *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_bool)},
+			Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: pos}},
+		}
+	}
+	bind := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		expr, err := BindFuncExprImplByPlanExpr(ctx, name, args)
+		require.NoError(t, err)
+		return expr
+	}
+	text := makePlan2StringConstExprWithType("1")
+	binaryType := types.T_binary.ToType()
+	binaryType.Width = 1
+	explicitBinary, err := appendSyntaxExplicitCastBeforeExpr(ctx, text, makePlan2Type(&binaryType))
+	require.NoError(t, err)
+
+	for _, literal := range []struct {
+		name string
+		form planpb.StringLiteralForm
+	}{
+		{name: "hex", form: planpb.StringLiteralForm_STRING_LITERAL_HEX},
+		{name: "bit", form: planpb.StringLiteralForm_STRING_LITERAL_BIT},
+	} {
+		t.Run(literal.name, func(t *testing.T) {
+			numericLiteral := makePlan2StringConstExprWithType("1", true)
+			numericLiteral.GetLit().LiteralForm = literal.form
+			elseNull := makePlan2NullConstExprWithType()
+			caseExpr := bind("case",
+				column(0), DeepCopyExpr(explicitBinary),
+				column(1), numericLiteral,
+				column(2), makePlan2StringConstExprWithType("1"),
+				elseNull,
+			)
+			ifExpr := bind("if", column(1), DeepCopyExpr(numericLiteral), DeepCopyExpr(explicitBinary))
+
+			for _, flow := range []struct {
+				name string
+				expr *planpb.Expr
+			}{
+				{name: "case", expr: caseExpr},
+				{name: "if", expr: ifExpr},
+			} {
+				t.Run(flow.name, func(t *testing.T) {
+					abs := bind("abs", flow.expr)
+					folded, err := ConstantFold(batch.EmptyForConstFoldBatch, abs, proc, false, true)
+					require.NoError(t, err)
+					features, err := planpb.RequiredRemoteExpressionFeatures(folded)
+					require.NoError(t, err)
+					require.True(t, features.NumericBinaryLiteralProvenance,
+						"the actual binder/folded CASE/IF plan must request its v94 row-marker trailer")
+
+					executor, err := colexec.NewExpressionExecutor(proc, folded)
+					require.NoError(t, err)
+					defer executor.Free()
+					result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+					require.NoError(t, err)
+					values := vector.MustFixedColNoTypeCheck[float64](result)
+					require.Equal(t, float64(1), values[0], "ordinary BINARY branch must remain text-numeric")
+					require.Equal(t, float64(49), values[1], "selected HEX/BIT branch must keep numeric-literal provenance")
+					if flow.name == "case" {
+						require.Equal(t, float64(1), values[2], "ordinary text branch must remain text-numeric")
+						require.True(t, result.IsNull(3), "ELSE NULL must remain NULL")
+					} else {
+						require.Equal(t, float64(1), values[2], "ordinary BINARY fallback must remain text-numeric")
+						require.Equal(t, float64(1), values[3], "ordinary BINARY fallback must remain text-numeric")
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestBuildPreparedCaseConditionParameter(t *testing.T) {
 	ctx := context.Background()
 	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL,
