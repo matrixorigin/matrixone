@@ -65,17 +65,6 @@ func TestDescribeViewColumnsFailureDoesNotCache(t *testing.T) {
 	require.Len(t, cols, 1)
 }
 
-func TestDescribeViewColumnsSkipsPersistence(t *testing.T) {
-	ctx := NewMockCompilerContext(false)
-	ctx.GetAccountIdFunc = func() (uint32, error) { return 42, nil }
-	const definition = `{"Stmt":"create view v as select n_name from nation","DefaultDatabase":"tpch","future_field":{"keep":true}}`
-	def, _, err := bindPersistedViewDefinition(ctx, definition, true)
-	require.NoError(t, err)
-	require.Nil(t, def.ViewSql, "read-side binding must not serialize a replacement definition")
-	require.Empty(t, def.Defs, "read-side binding must not produce catalog properties")
-	require.Len(t, def.Cols, 1)
-}
-
 func TestDescribeViewColumnsRejectsInvalidInputAndCancellation(t *testing.T) {
 	for _, definition := range []string{`{`, `{"Stmt":"select 1"}`, `{"Stmt":"create view v as select 1; select 2"}`} {
 		ctx := NewMockCompilerContext(false)

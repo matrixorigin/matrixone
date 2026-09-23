@@ -231,29 +231,9 @@ func genViewTableDef(
 	viewName string,
 	forAuthoring bool,
 ) (*plan.TableDef, error) {
-	return generateViewTableDef(ctx, stmt, colNames, viewDatabase, viewName, forAuthoring, false)
-}
-
-func generateViewTableDef(
-	ctx CompilerContext,
-	stmt *tree.Select,
-	colNames tree.IdentifierList,
-	viewDatabase, viewName string,
-	forAuthoring, columnsOnly bool,
-) (*plan.TableDef, error) {
 	var tableDef plan.TableDef
-	originalContext := ctx
 	dependencyCapture := newViewDependencyCaptureContext(ctx)
-	defer func() {
-		if observer, ok := originalContext.(interface {
-			capturePartialViewDependencies([]ViewDependency)
-		}); ok {
-			observer.capturePartialViewDependencies(dependencyCapture.dependencies())
-		}
-	}()
-	if !columnsOnly {
-		ctx = dependencyCapture
-	}
+	ctx = dependencyCapture
 	// The optimizer may constant-fold a protocol-sensitive function out of a
 	// persisted view. Keep the requirement observed on the bound plan so the
 	// catalog marker cannot depend on whether that fold happened to run.
@@ -381,9 +361,6 @@ func generateViewTableDef(
 		}
 	}
 	tableDef.Cols = cols
-	if columnsOnly {
-		return &tableDef, nil
-	}
 
 	// Check alter and change the viewsql.
 	rootSQL := ctx.GetRootSql()

@@ -113,14 +113,12 @@ var (
 		"mo_indexes":          systemCatalogRestoreSkip,
 		"mo_account":          systemCatalogRestoreSkip,
 
-		catalog.MOVersionTable:        systemCatalogRestoreSkip,
-		catalog.MOUpgradeTable:        systemCatalogRestoreSkip,
-		catalog.MOUpgradeTenantTable:  systemCatalogRestoreSkip,
-		catalog.MOAutoIncrTable:       systemCatalogRestoreSkip,
-		catalog.MO_VIEW_DEPENDENCIES:  systemCatalogRestoreSkip,
-		catalog.MO_VIEW_REFRESH:       systemCatalogRestoreSkip,
-		catalog.MO_VIEW_RECOVERY:      systemCatalogRestoreSkip,
-		catalog.MO_VIEW_RECOVERY_WORK: systemCatalogRestoreSkip,
+		catalog.MOVersionTable:       systemCatalogRestoreSkip,
+		catalog.MOUpgradeTable:       systemCatalogRestoreSkip,
+		catalog.MOUpgradeTenantTable: systemCatalogRestoreSkip,
+		catalog.MOAutoIncrTable:      systemCatalogRestoreSkip,
+		catalog.MO_VIEW_DEPENDENCIES: systemCatalogRestoreSkip,
+		catalog.MO_VIEW_REFRESH:      systemCatalogRestoreSkip,
 
 		"mo_user":                       systemCatalogRestoreCopy,
 		"mo_role":                       systemCatalogRestoreCopy,
@@ -971,15 +969,6 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 			return stats, err
 		}
 		if err = reconcileAccountViewMetadata(ctx, ses, bh, toAccountId); err != nil {
-			return stats, err
-		}
-	}
-	if stmt.Level == tree.RESTORELEVELDATABASE || stmt.Level == tree.RESTORELEVELTABLE {
-		restoredTable := ""
-		if stmt.Level == tree.RESTORELEVELTABLE {
-			restoredTable = tblName
-		}
-		if err = reconcileScopedViewMetadata(ctx, ses, bh, toAccountId, dbName, restoredTable); err != nil {
 			return stats, err
 		}
 	}
@@ -3534,49 +3523,21 @@ func reconcileAccountViewMetadata(
 	return reconcileAccountViewMetadataEnabled(ctx, bh, accountID)
 }
 
-// reconcileScopedViewMetadata seeds the pending recovery row in the restore
-// transaction when lifecycle maintenance is enabled. Until activation, it keeps
-// the existing durable revalidation marker instead of enabling public readers.
-func reconcileScopedViewMetadata(
-	ctx context.Context,
-	ses *Session,
-	bh BackgroundExec,
-	accountID uint32,
-	databaseName string,
-	relationName string,
-) error {
-	statements, err := compile.ReconcileScopedViewMetadataSQL(
-		accountID, databaseName, relationName, uint64(time.Now().UnixNano()))
-	if err != nil {
-		return err
-	}
-	enabled, err := prepareViewMetadataMutation(ctx, bh, ses.GetService())
-	if err != nil || !enabled {
-		return err
-	}
-	return reconcileViewMetadataStatements(ctx, bh, statements)
-}
-
-func reconcileViewMetadataStatements(ctx context.Context, bh BackgroundExec, statements []string) error {
-	systemCtx := process.WithSystemCTELimits(defines.AttachAccountId(ctx, catalog.System_Account))
-	if err := lockViewMetadataLifecycle(systemCtx, bh); err != nil {
-		return err
-	}
-	for _, sql := range statements {
-		if err := bh.Exec(systemCtx, sql); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func reconcileAccountViewMetadataEnabled(
 	ctx context.Context,
 	bh BackgroundExec,
 	accountID uint32,
 ) error {
-	return reconcileViewMetadataStatements(ctx, bh,
-		compile.ReconcileAccountViewMetadataSQL(accountID, uint64(time.Now().UnixNano())))
+	systemCtx := process.WithSystemCTELimits(defines.AttachAccountId(ctx, catalog.System_Account))
+	if err := lockViewMetadataLifecycle(systemCtx, bh); err != nil {
+		return err
+	}
+	for _, sql := range compile.ReconcileAccountViewMetadataSQL(accountID, uint64(time.Now().UnixNano())) {
+		if err := bh.Exec(systemCtx, sql); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func lockViewMetadataLifecycle(ctx context.Context, bh BackgroundExec) error {

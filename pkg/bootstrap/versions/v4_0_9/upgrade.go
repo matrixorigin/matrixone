@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v4_0_8
+package v4_0_9
 
 import (
 	"context"
@@ -27,18 +27,18 @@ import (
 	"go.uber.org/zap"
 )
 
-// Use a newer semantic version, not a 4.0.7 offset: old tenant workers compare only
+// Use a newer semantic version, not a 4.0.8 offset: old tenant workers compare only
 // ToVersion and would complete an offset-only task with their old, empty entry list.
-// Requiring 4.0.7 as the starting version also keeps its provenance migration in the
+// Requiring 4.0.8 as the starting version also keeps its provenance migration in the
 // upgrade chain for clusters that are still at 4.0.6.
 var Handler = &versionHandle{
 	metadata: versions.Version{
-		Version:                 "4.0.8",
-		MinUpgradeVersion:       "4.0.7",
+		Version:                 "4.0.9",
+		MinUpgradeVersion:       "4.0.8",
 		UpgradeCluster:          versions.No,
 		UpgradeTenant:           versions.Yes,
 		VersionOffset:           uint32(len(tenantUpgEntries)),
-		RequiredProtocolVersion: defines.MORPCVersion41,
+		RequiredProtocolVersion: defines.MORPCVersion93,
 	},
 }
 

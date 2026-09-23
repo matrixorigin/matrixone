@@ -670,6 +670,14 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 		sql = fmt.Sprintf(sql, keyStr, MO_CATALOG_DB_NAME, MO_CATALOG_DB_NAME, dbName, tblName)
 	}
 
+	if tableDef.ViewSql != nil && tableDef.ViewSql.View != "" {
+		columns, err := viewDescriptionRelation(ctx, tableDef, accountId, dbName, tblName)
+		if err != nil {
+			return nil, err
+		}
+		sql = strings.Replace(sql, "FROM "+MO_CATALOG_DB_NAME+".mo_columns col", "FROM "+columns+" col", 1)
+	}
+
 	if stmt.Where != nil {
 		return returnByWhereAndBaseSQL(ctx, sql, stmt.Where, ddlType)
 	}

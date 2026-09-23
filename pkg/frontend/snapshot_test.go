@@ -488,63 +488,6 @@ func TestViewMetadataTablesAreRebuiltDuringRestore(t *testing.T) {
 	}
 }
 
-func TestViewRecoveryControlStateIsNeverRestored(t *testing.T) {
-	for _, name := range []string{catalog.MO_VIEW_RECOVERY, catalog.MO_VIEW_RECOVERY_WORK} {
-		require.Equal(t, systemCatalogRestoreSkip, systemCatalogRestorePolicies[name])
-		require.True(t, needSkipTable(sysAccountID, moCatalog, name))
-		require.Contains(t, sysWantedTables, name)
-	}
-	require.Contains(t, createSqls, catalog.MoViewRecoveryDDL)
-	require.Contains(t, createSqls, catalog.MoViewRecoveryWorkDDL)
-	require.Contains(t, createSqls, catalog.MoViewRecoveryInitSQL)
-}
-
-func TestScopedViewMetadataRestoreReconciliation(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	ses := newTestSession(t, ctrl)
-	t.Cleanup(ses.Close)
-	t.Run("invalid scope has no catalog side effects", func(t *testing.T) {
-		bh := &backgroundExecTest{}
-		bh.init()
-		err := reconcileScopedViewMetadata(context.Background(), ses, bh, 42, "", "v")
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
-		require.Empty(t, bh.executedSQLs)
-	})
-	t.Run("public lifecycle remains disabled", func(t *testing.T) {
-		bh := &backgroundExecTest{}
-		bh.init()
-		require.NoError(t, reconcileScopedViewMetadata(context.Background(), ses, bh, 42, "db", "v"))
-		require.Equal(t, compile.ViewMetadataRequireRevalidationSQL(), bh.executedSQLs)
-		require.False(t, compile.ViewMetadataRefreshEnabled(ses.GetService()))
-	})
-	for _, relation := range []string{"", "v"} {
-		t.Run("scope="+relation, func(t *testing.T) {
-			statements, err := compile.ReconcileScopedViewMetadataSQL(42, "db", relation, 77)
-			require.NoError(t, err)
-			all := append([]string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL}, statements...)
-			for failAt := -1; failAt < len(all); failAt++ {
-				bh := &backgroundExecTest{}
-				bh.init()
-				want := moerr.NewInternalErrorNoCtx("reconciliation failed")
-				if failAt >= 0 {
-					bh.sql2err[all[failAt]] = want
-				}
-				err := reconcileViewMetadataStatements(defines.AttachAccountId(context.Background(), 42), bh, statements)
-				if failAt >= 0 {
-					require.ErrorIs(t, err, want)
-					require.Equal(t, all[:failAt+1], bh.executedSQLs)
-				} else {
-					require.NoError(t, err)
-					require.Equal(t, all, bh.executedSQLs)
-				}
-				for _, account := range bh.executionAccountIDs {
-					require.Equal(t, uint32(0), account)
-				}
-			}
-		})
-	}
-}
-
 func TestInvalidateAccountViewMetadataUsesSystemContextAndPropagatesErrors(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
@@ -555,8 +498,8 @@ func TestInvalidateAccountViewMetadataUsesSystemContextAndPropagatesErrors(t *te
 		bh.init()
 		require.NoError(t, invalidateAccountViewMetadata(context.Background(), ses, bh, 42))
 		require.Equal(t, compile.ViewMetadataRequireRevalidationSQL(), bh.executedSQLs)
-		require.Equal(t, []uint32{0, 0, 0, 0, 0}, bh.executionAccountIDs)
-		require.Equal(t, []bool{true, true, true, true, true}, bh.systemCTELimits)
+		require.Equal(t, []uint32{0, 0, 0, 0}, bh.executionAccountIDs)
+		require.Equal(t, []bool{true, true, true, true}, bh.systemCTELimits)
 		require.Contains(t, bh.executedSQLs[2], "REVALIDATE_REQUIRED")
 	})
 

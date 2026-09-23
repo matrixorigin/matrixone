@@ -166,6 +166,12 @@ func (builder *QueryBuilder) removeSimpleProjections(nodeID int32, parentType pl
 	}
 
 	replaceColumnsForNode(node, projMap)
+	if node.NodeType == plan.Node_APPLY && len(node.Children) == 2 {
+		// Correlated function arguments consume the left sibling's output,
+		// rather than the function node's own children.
+		right := builder.qry.Nodes[node.Children[1]]
+		replaceColumnsForExprList(right.TblFuncExprList, projMap)
+	}
 
 	if builder.canRemoveProject(parentType, node) {
 		allColRef := true
@@ -333,6 +339,7 @@ func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 	replaceColumnsForExprList(node.AggList, projMap)
 	replaceColumnsForExprList(node.WinSpecList, projMap)
 	replaceColumnsForExprList(node.TimeWindowPartitionBy, projMap)
+	replaceColumnsForExprList(node.TblFuncExprList, projMap)
 
 	for i := range node.OrderBy {
 		node.OrderBy[i].Expr = replaceColumnsForExpr(node.OrderBy[i].Expr, projMap)

@@ -279,6 +279,24 @@ func informationSchemaSubscriptionColumnAuthorizationPredicate() string {
 		"OR (rp.privilege_level = 'd' AND rp.obj_id = mc.att_database_id)))))"
 }
 
+func informationSchemaCurrentColumnsDDL() string {
+	original := informationSchemaColumnsV58DDL()
+	prefix := "CREATE VIEW information_schema.COLUMNS AS " + informationSchemaMetadataVisibilityCTE()
+	branches := strings.SplitN(strings.TrimPrefix(original, prefix), " UNION ALL ", 2)
+	local := branches[0]
+	viewRows := strings.Replace(local, informationSchemaColumnsLocalFromSQL(),
+		"from __mo_visible_tables mt cross apply mo_view_columns(mt.rel_id) mc ", 1)
+	viewRows = strings.NewReplacer(
+		"mc.att_database", "mt.reldatabase",
+		"mc.att_relname", "mt.relname",
+		"mc.account_id", "mt.account_id",
+		"mk.key_priority", "0",
+	).Replace(viewRows)
+	userView := "mt.relkind = 'v' AND mt.reldatabase NOT IN ('mo_catalog','information_schema','mysql','system','system_metrics','mo_task','mo_debug')"
+	return prefix + local + " AND NOT (" + userView + ") UNION ALL " +
+		viewRows + " AND (" + userView + ") UNION ALL " + branches[1]
+}
+
 func informationSchemaColumnsV58DDL() string {
 	return strings.NewReplacer(
 		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8' WHEN 2 then 'binary' WHEN 3 then 'utf8' else NULL end) AS CHARACTER_SET_NAME,",
@@ -409,7 +427,7 @@ var (
 	InformationSchemaColumnsV46UpgradeDDL = strings.NewReplacer(
 		" WHEN 3 then 'utf8'", "", " WHEN 3 then 'utf8_bin'", "",
 	).Replace(InformationSchemaColumnsV46DDL)
-	InformationSchemaColumnsDDL = informationSchemaColumnsV58DDL()
+	InformationSchemaColumnsDDL = informationSchemaCurrentColumnsDDL()
 
 	InformationSchemaProfilingDDL = "CREATE TABLE information_schema.PROFILING (" +
 		"QUERY_ID int NOT NULL DEFAULT '0'," +

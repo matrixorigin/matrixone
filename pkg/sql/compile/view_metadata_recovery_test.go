@@ -156,40 +156,6 @@ func TestReconcileAccountViewMetadataRemovesOrphansAndSeedsMissingViews(t *testi
 	require.Contains(t, sqls[2], "r.target_relation_id is null")
 }
 
-func TestReconcileScopedViewMetadataNeverWidensRestore(t *testing.T) {
-	for _, tc := range []struct {
-		name, database, relation string
-	}{
-		{name: "database", database: "db"},
-		{name: "table", database: "db", relation: "v"},
-		{name: "quoted", database: "d'b", relation: "v'x"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			sqls, err := ReconcileScopedViewMetadataSQL(42, tc.database, tc.relation, 77)
-			require.NoError(t, err)
-			require.Len(t, sqls, 3)
-			for _, sql := range sqls {
-				_, err := mysql.Parse(context.Background(), sql, 1)
-				require.NoError(t, err)
-				require.Contains(t, sql, "account_id=42")
-			}
-			for _, sql := range sqls[:2] {
-				require.Contains(t, sql, "target_database_name=")
-				require.Equal(t, tc.relation != "", strings.Contains(sql, "target_relation_name="))
-				require.Contains(t, sql, "target_relation_id<>0")
-			}
-			require.Contains(t, sqls[2], "t.reldatabase=")
-			require.Equal(t, tc.relation != "", strings.Contains(sqls[2], "t.relname="))
-			require.Contains(t, sqls[2], "77,0,'DISCOVERING'")
-		})
-	}
-	for _, relation := range []string{"", "v"} {
-		sqls, err := ReconcileScopedViewMetadataSQL(42, "", relation, 77)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
-		require.Nil(t, sqls)
-	}
-}
-
 func TestConflictingRecoveryTargetGetsGenerationFencedBackoff(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	selected := executor.NewMemResult([]types.Type{
@@ -415,9 +381,8 @@ func TestPersistViewDependenciesCoversCatalogWriteModes(t *testing.T) {
 	require.NoError(t, err)
 	viewDef := &planpb.TableDef{Name: "target view", ViewSql: &planpb.ViewDef{View: string(viewData)}}
 
-	for _, mode := range []string{"create", "synchronous", "recovery", "stale claim", "wrong identity"} {
-		t.Run(mode, func(t *testing.T) {
-			createState := mode == "create"
+	for _, createState := range []bool{true, false} {
+		t.Run(fmt.Sprintf("create state %t", createState), func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			proc := testutil.NewProcess(t)
 			exec := &viewMetadataCleanupRecordingExecutor{}
@@ -433,37 +398,9 @@ func TestPersistViewDependenciesCoversCatalogWriteModes(t *testing.T) {
 			database.EXPECT().GetDatabaseId(gomock.Any()).Return("11")
 			c := &Compile{proc: proc, pn: &planpb.Plan{}}
 
-			var claim *pendingViewRefresh
-			if mode == "recovery" || mode == "stale claim" || mode == "wrong identity" {
-				accountID, err := defines.GetAccountId(proc.Ctx)
-				require.NoError(t, err)
-				claim = &pendingViewRefresh{viewRefreshTarget: viewRefreshTarget{
-					accountID: accountID, relationID: 13, generation: 19,
-				}, leaseOwner: "worker", leaseEpoch: 3}
-			}
-			if mode == "stale claim" {
-				exec.results[4].AffectedRows = 0
-			}
-			if mode == "wrong identity" {
-				claim.relationID++
-			}
-			err := c.persistViewDependenciesWithContext(
-				proc.Ctx, database, "target db", viewDef, 19, createState, claim)
-			if mode == "stale claim" || mode == "wrong identity" {
-				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
-			} else {
-				require.NoError(t, err)
-			}
-			if mode == "wrong identity" {
-				require.Len(t, exec.sqls, 4)
-				return
-			}
+			require.NoError(t, c.persistViewDependenciesWithContext(
+				proc.Ctx, database, "target db", viewDef, 19, createState))
 			require.Len(t, exec.sqls, 5)
-			if claim != nil {
-				require.Contains(t, exec.sqls[4], viewRefreshClaimPredicate(claim))
-			} else {
-				require.NotContains(t, exec.sqls[4], "lease_expires_at>now()")
-			}
 			require.Contains(t, exec.sqls[0], "delete from mo_catalog.mo_view_dependencies")
 			require.Contains(t, exec.sqls[1], "source db")
 			require.Contains(t, exec.sqls[2], "subscription")
@@ -493,7 +430,7 @@ func TestPersistViewDependenciesRejectsStaleOrMalformedCatalogState(t *testing.T
 		expected := errors.New("relation unavailable")
 		database.EXPECT().Relation(gomock.Any(), "view", gomock.Any()).Return(nil, expected)
 		_, err := (&Compile{proc: proc, pn: &planpb.Plan{}}).persistViewDependencyEdgesWithContext(
-			proc.Ctx, database, "db", &planpb.TableDef{Name: "view", ViewSql: &planpb.ViewDef{View: `{}`}}, 1)
+			proc.Ctx, database, "db", &planpb.TableDef{Name: "view", ViewSql: &planpb.ViewDef{}}, 1)
 		require.ErrorIs(t, err, expected)
 	})
 
@@ -508,7 +445,7 @@ func TestPersistViewDependenciesRejectsStaleOrMalformedCatalogState(t *testing.T
 		relation.EXPECT().GetTableDef(gomock.Any()).Return(&planpb.TableDef{})
 		database.EXPECT().GetDatabaseId(gomock.Any()).Return("invalid")
 		_, err := (&Compile{proc: proc, pn: &planpb.Plan{}}).persistViewDependencyEdgesWithContext(
-			proc.Ctx, database, "db", &planpb.TableDef{Name: "view", ViewSql: &planpb.ViewDef{View: `{}`}}, 1)
+			proc.Ctx, database, "db", &planpb.TableDef{Name: "view", ViewSql: &planpb.ViewDef{}}, 1)
 		require.Error(t, err)
 	})
 
@@ -517,6 +454,11 @@ func TestPersistViewDependenciesRejectsStaleOrMalformedCatalogState(t *testing.T
 		proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
 		ctrl := gomock.NewController(t)
 		database := mock_frontend.NewMockDatabase(ctrl)
+		relation := mock_frontend.NewMockRelation(ctrl)
+		database.EXPECT().Relation(gomock.Any(), "view", gomock.Any()).Return(relation, nil)
+		relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(13))
+		relation.EXPECT().GetTableDef(gomock.Any()).Return(&planpb.TableDef{LogicalId: 17})
+		database.EXPECT().GetDatabaseId(gomock.Any()).Return("11")
 		_, err := (&Compile{proc: proc, pn: &planpb.Plan{}}).persistViewDependencyEdgesWithContext(
 			proc.Ctx, database, "db", &planpb.TableDef{
 				Name: "view", ViewSql: &planpb.ViewDef{View: "{"},
@@ -743,29 +685,6 @@ func TestEnabledLifecycleRemovalAndCleanupPaths(t *testing.T) {
 }
 
 func TestRecoveryCompilerContextCatalogAndBindingAdapters(t *testing.T) {
-	t.Run("failed lookup is not a negative cache entry", func(t *testing.T) {
-		proc := testutil.NewProcess(t)
-		proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
-		want := moerr.NewInternalErrorNoCtx("subscription catalog temporarily unavailable")
-		exec := &viewMetadataCleanupRecordingExecutor{failures: map[int]error{1: want, 2: want}}
-		installViewMetadataTestExecutor(t, proc, exec)
-		ctx := &recoveryCompilerContext{compilerContext: &compilerContext{
-			ctx: proc.Ctx, proc: proc, lower: 1,
-		}}
-		for range 2 {
-			meta, err := ctx.GetSubscriptionMeta("sub", nil)
-			require.ErrorIs(t, err, want)
-			require.Nil(t, meta)
-		}
-		require.Len(t, exec.sqls, 2)
-		// A successful empty lookup, unlike an error, is cached for this rebind.
-		for range 2 {
-			meta, err := ctx.GetSubscriptionMeta("sub", nil)
-			require.NoError(t, err)
-			require.Nil(t, meta)
-		}
-		require.Len(t, exec.sqls, 3)
-	})
 	t.Run("subscription catalog result is cached", func(t *testing.T) {
 		proc := testutil.NewProcess(t)
 		proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
@@ -828,8 +747,8 @@ func TestRecoveryCompilerContextCatalogAndBindingAdapters(t *testing.T) {
 		storage.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(nil, expected)
 		ctx := &recoveryCompilerContext{
 			compilerContext:          &compilerContext{ctx: proc.Ctx, proc: proc, engine: storage},
-			legacySubscriptionLooked: map[viewSubscriptionCacheKey]struct{}{{database: "db", account: 7}: {}},
-			legacySubscriptions:      map[viewSubscriptionCacheKey]*planpb.SubscriptionMeta{},
+			legacySubscriptionLooked: map[string]struct{}{"db": {}},
+			legacySubscriptions:      map[string]*planpb.SubscriptionMeta{},
 		}
 		originalTop := proc.GetTopContext()
 		require.False(t, ctx.DatabaseExists("db", nil))
@@ -851,9 +770,9 @@ func TestRecoveryCompilerContextCatalogAndBindingAdapters(t *testing.T) {
 				AccountID: 11, DatabaseName: "published_db", RelationName: "table",
 				SubscriptionName: "sub", RelationID: 13,
 			}},
-			legacySubscriptionLooked: map[viewSubscriptionCacheKey]struct{}{{database: "sub", account: 7}: {}},
-			legacySubscriptions: map[viewSubscriptionCacheKey]*planpb.SubscriptionMeta{
-				{database: "sub", account: 7}: {AccountId: 99, DbName: "published_db", SubName: "sub", Tables: "table"},
+			legacySubscriptionLooked: map[string]struct{}{"sub": {}},
+			legacySubscriptions: map[string]*planpb.SubscriptionMeta{
+				"sub": {AccountId: 99, DbName: "published_db", SubName: "sub", Tables: "table"},
 			},
 		}
 		_, _, err := ctx.Resolve("sub", "table", nil)
@@ -866,7 +785,7 @@ func TestUpdateViewRefreshFailurePersistsRetryAndTerminalState(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	pending := &pendingViewRefresh{viewRefreshTarget: viewRefreshTarget{
 		accountID: 7, relationID: 11, generation: 13,
-	}, leaseEpoch: 9, leaseOwner: "worker'one"}
+	}, leaseEpoch: 9}
 	for _, tc := range []struct {
 		name   string
 		retry  bool
@@ -877,27 +796,14 @@ func TestUpdateViewRefreshFailurePersistsRetryAndTerminalState(t *testing.T) {
 		{name: "terminal", status: viewRefreshStatusInvalid, want: "next_retry_at=null"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{{AffectedRows: 1}}}
+			exec := &viewMetadataCleanupRecordingExecutor{}
 			require.NoError(t, updateViewRefreshFailure(proc, exec, executor.Options{}, pending,
 				tc.status, viewRefreshFailureInfrastructure, tc.retry))
 			require.Len(t, exec.sqls, 1)
 			require.Contains(t, exec.sqls[0], tc.want)
 			require.Contains(t, exec.sqls[0], "target_generation=13 and lease_epoch=9")
-			require.Contains(t, exec.sqls[0], viewRefreshClaimPredicate(pending))
-			require.Contains(t, exec.sqls[0], "status='RUNNING' and lease_expires_at>now()")
-			_, parseErr := mysql.Parse(context.Background(), exec.sqls[0], 1)
-			require.NoError(t, parseErr)
 		})
 	}
-
-	t.Run("stale claim is not successful progress", func(t *testing.T) {
-		for _, affected := range []uint64{0, 2} {
-			exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{{AffectedRows: affected}}}
-			err := updateViewRefreshFailure(proc, exec, executor.Options{}, pending,
-				viewRefreshStatusPending, viewRefreshFailureInfrastructure, true)
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
-		}
-	})
 
 	t.Run("catalog error", func(t *testing.T) {
 		expected := errors.New("catalog unavailable")
@@ -1017,7 +923,7 @@ func TestRefreshOneViewRejectsStaleCatalogTargetsBeforeReplacement(t *testing.T)
 func TestRegenerateViewRejectsMalformedPersistedEnvironment(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	originalTop := proc.GetTopContext()
-	_, _, err := regenerateViewUsingPersistedEnvironment(proc, nil,
+	_, err := regenerateViewUsingPersistedEnvironment(proc, nil,
 		defines.AttachAccountId(proc.Ctx, 7), &planpb.TableDef{ViewSql: &planpb.ViewDef{View: "{"}})
 	require.Error(t, err)
 	require.Equal(t, originalTop, proc.GetTopContext())
@@ -1026,7 +932,7 @@ func TestRegenerateViewRejectsMalformedPersistedEnvironment(t *testing.T) {
 func TestRegenerateConstantViewUsingPersistedEnvironment(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	targetContext := defines.AttachAccountId(proc.Ctx, 7)
-	regenerated, _, err := regenerateViewUsingPersistedEnvironment(proc, nil, targetContext,
+	regenerated, err := regenerateViewUsingPersistedEnvironment(proc, nil, targetContext,
 		&planpb.TableDef{ViewSql: &planpb.ViewDef{
 			View: `{"Stmt":"create view view as select 1","DefaultDatabase":"db"}`,
 		}})
@@ -1036,84 +942,44 @@ func TestRegenerateConstantViewUsingPersistedEnvironment(t *testing.T) {
 }
 
 func TestRefreshPendingConstantViewCommitsReplacementAndLifecycleState(t *testing.T) {
-	for _, mode := range []string{"direct", "claimed", "stale completion"} {
-		t.Run(mode, func(t *testing.T) {
-			proc := testutil.NewProcess(t)
-			ownership := executor.NewMemResult([]types.Type{
-				types.T_uint32.ToType(), types.T_uint32.ToType(), types.T_timestamp.ToType(),
-			}, proc.Mp())
-			ownership.NewBatchWithRowCount(1)
-			require.NoError(t, executor.AppendFixedRows(ownership, 0, []uint32{3}))
-			require.NoError(t, executor.AppendFixedRows(ownership, 1, []uint32{5}))
-			require.NoError(t, executor.AppendFixedRows(ownership, 2, []types.Timestamp{7}))
-			exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{
-				{}, ownership.GetResult(), {}, {}, {AffectedRows: 1},
-			}}
-			if mode == "stale completion" {
-				exec.results[4].AffectedRows = 0
-			}
-			offset := 0
-			if mode != "direct" {
-				selected := executor.NewMemResult([]types.Type{
-					types.T_uint32.ToType(), types.T_uint64.ToType(), types.T_uint64.ToType(),
-					types.T_uint64.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(),
-					types.T_uint64.ToType(), types.T_uint64.ToType(), types.T_varchar.ToType(),
-				}, proc.Mp())
-				selected.NewBatchWithRowCount(1)
-				require.NoError(t, executor.AppendFixedRows(selected, 0, []uint32{7}))
-				for column, value := range map[int]uint64{1: 11, 2: 13, 3: 17, 6: 19, 7: 3} {
-					require.NoError(t, executor.AppendFixedRows(selected, column, []uint64{value}))
-				}
-				for column, value := range map[int]string{4: "db", 5: "view", 8: viewRefreshStatusPending} {
-					require.NoError(t, executor.AppendStringRows(selected, column, []string{value}))
-				}
-				exec.results = append([]executor.Result{selected.GetResult(), {AffectedRows: 1}}, exec.results...)
-				offset = 2
-				lockStub := gostub.Stub(&lockMoTable,
-					func(_ *Compile, _, _ string, _ lock.LockMode) error { return nil })
-				t.Cleanup(lockStub.Reset)
-			}
-			installViewMetadataTestExecutor(t, proc, exec)
-			ctrl := gomock.NewController(t)
-			storage := mock_frontend.NewMockEngine(ctrl)
-			database := mock_frontend.NewMockDatabase(ctrl)
-			relation := mock_frontend.NewMockRelation(ctrl)
-			proc.GetSessionInfo().StorageEngine = storage
-			storage.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(database, nil)
-			database.EXPECT().Relation(gomock.Any(), "view", gomock.Any()).Return(relation, nil).Times(2)
-			relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(13)).Times(2)
-			currentDef := &planpb.TableDef{
-				Name: "view", Version: 23, LogicalId: 17,
-				ViewSql: &planpb.ViewDef{View: `{"Stmt":"create view view as select 1","DefaultDatabase":"db"}`},
-			}
-			relation.EXPECT().CopyTableDef(gomock.Any()).Return(currentDef)
-			relation.EXPECT().AlterTable(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil)
-			relation.EXPECT().GetTableDef(gomock.Any()).Return(currentDef)
-			database.EXPECT().GetDatabaseId(gomock.Any()).Return("11")
-			if mode == "direct" {
-				wrote, err := refreshPendingView(proc, &pendingViewRefresh{viewRefreshTarget: viewRefreshTarget{
-					accountID: 7, databaseID: 11, relationID: 13, logicalID: 17,
-					databaseName: "db", relationName: "view", generation: 19,
-				}})
-				require.NoError(t, err)
-				require.True(t, wrote)
-			} else {
-				count, err := recoverPendingViewMetadataTarget(proc, "worker", viewMetadataRecoveryCommand{})
-				if mode == "stale completion" {
-					require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
-					require.Zero(t, count, "a failed completion must roll back, not commit a failure marker")
-				} else {
-					require.NoError(t, err)
-					require.Equal(t, 1, count)
-				}
-				require.Contains(t, exec.sqls[1], "lease_owner='worker',lease_epoch=4")
-				require.Contains(t, exec.sqls[6], "lease_epoch=4 and lease_owner='worker' and status='RUNNING'")
-			}
-			require.Len(t, exec.sqls, offset+5)
-			require.Contains(t, exec.sqls[offset], "r.target_relation_id is null or r.status='CURRENT'")
-			require.Contains(t, exec.sqls[offset+4], "completed_generation=19,status='CURRENT'")
-		})
+	proc := testutil.NewProcess(t)
+	ownership := executor.NewMemResult([]types.Type{
+		types.T_uint32.ToType(), types.T_uint32.ToType(), types.T_timestamp.ToType(),
+	}, proc.Mp())
+	ownership.NewBatchWithRowCount(1)
+	require.NoError(t, executor.AppendFixedRows(ownership, 0, []uint32{3}))
+	require.NoError(t, executor.AppendFixedRows(ownership, 1, []uint32{5}))
+	require.NoError(t, executor.AppendFixedRows(ownership, 2, []types.Timestamp{7}))
+	exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{
+		{}, ownership.GetResult(), {}, {}, {AffectedRows: 1},
+	}}
+	installViewMetadataTestExecutor(t, proc, exec)
+	ctrl := gomock.NewController(t)
+	storage := mock_frontend.NewMockEngine(ctrl)
+	database := mock_frontend.NewMockDatabase(ctrl)
+	relation := mock_frontend.NewMockRelation(ctrl)
+	proc.GetSessionInfo().StorageEngine = storage
+	storage.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(database, nil)
+	database.EXPECT().Relation(gomock.Any(), "view", gomock.Any()).Return(relation, nil).Times(2)
+	relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(13)).Times(2)
+	currentDef := &planpb.TableDef{
+		Name: "view", Version: 23, LogicalId: 17,
+		ViewSql: &planpb.ViewDef{View: `{"Stmt":"create view view as select 1","DefaultDatabase":"db"}`},
 	}
+	relation.EXPECT().CopyTableDef(gomock.Any()).Return(currentDef)
+	relation.EXPECT().AlterTable(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil)
+	relation.EXPECT().GetTableDef(gomock.Any()).Return(currentDef)
+	database.EXPECT().GetDatabaseId(gomock.Any()).Return("11")
+
+	wrote, err := refreshPendingView(proc, &pendingViewRefresh{viewRefreshTarget: viewRefreshTarget{
+		accountID: 7, databaseID: 11, relationID: 13, logicalID: 17,
+		databaseName: "db", relationName: "view", generation: 19,
+	}})
+	require.NoError(t, err)
+	require.True(t, wrote)
+	require.Len(t, exec.sqls, 5)
+	require.Contains(t, exec.sqls[0], "r.target_relation_id is null or r.status='CURRENT'")
+	require.Contains(t, exec.sqls[4], "completed_generation=19,status='CURRENT'")
 }
 
 func TestRefreshOneConstantViewCommitsReplacementAndLifecycleState(t *testing.T) {
@@ -1383,7 +1249,7 @@ func TestViewMetadataCleanupLocksLifecycleGateBeforeRows(t *testing.T) {
 			exec := &viewMetadataCleanupRecordingExecutor{}
 			installViewMetadataTestExecutor(t, proc, exec)
 			require.NoError(t, tc.run(&Compile{proc: proc, pn: &planpb.Plan{}}))
-			require.Len(t, exec.sqls, 5)
+			require.Len(t, exec.sqls, 4)
 			require.Equal(t, []string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL}, exec.sqls[:2])
 			require.Equal(t, viewMetadataRequireRevalidationSQL(), exec.sqls)
 			require.Contains(t, exec.sqls[3], "source_relation_kind='REVALIDATE_REQUIRED'")
@@ -1848,11 +1714,11 @@ func TestViewMetadataRevalidationActivationIsPersistedAndIdempotent(t *testing.T
 		return result.GetResult()
 	}
 	exec := &viewMetadataCleanupRecordingExecutor{results: []executor.Result{
-		{}, viewMetadataLifecycleGateTestResult(), {}, {}, {}, {}, markerResult(), {}, {}, markerResult(), {},
+		{}, viewMetadataLifecycleGateTestResult(), {}, {}, {}, markerResult(), {}, {}, markerResult(), {},
 	}}
 	require.NoError(t, RequireViewMetadataRevalidation(context.Background(), exec))
 	require.NoError(t, StartViewMetadataRevalidation(context.Background(), exec, "worker"))
-	require.Len(t, exec.sqls, 11)
+	require.Len(t, exec.sqls, 10)
 	require.Equal(t, []string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL}, exec.sqls[:2])
 	require.Contains(t, exec.sqls[2], "select source_account_id")
 	require.Contains(t, exec.sqls[3],
@@ -1864,17 +1730,16 @@ func TestViewMetadataRevalidationActivationIsPersistedAndIdempotent(t *testing.T
 	require.Contains(t, exec.sqls[4],
 		"source_relation_kind in ('LEGACY_SCAN','REVALIDATE_SCAN','ACTIVATED')")
 	require.Contains(t, exec.sqls[4], "where account_id=0")
-	require.Contains(t, exec.sqls[5], "mutation_revision=mutation_revision+assert(not completion_fence")
-	require.Contains(t, exec.sqls[6], "select source_account_id")
-	require.Equal(t, []string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL}, exec.sqls[7:9])
-	require.Contains(t, exec.sqls[9], "select source_account_id")
-	require.Contains(t, exec.sqls[10],
+	require.Contains(t, exec.sqls[5], "select source_account_id")
+	require.Equal(t, []string{catalog.SnapshotLifecycleGateSQL, catalog.ViewMetadataLifecycleGateSQL}, exec.sqls[6:8])
+	require.Contains(t, exec.sqls[8], "select source_account_id")
+	require.Contains(t, exec.sqls[9],
 		"source_relation_kind='REVALIDATE_SCAN'")
-	require.Contains(t, exec.sqls[10],
+	require.Contains(t, exec.sqls[9],
 		"source_relation_kind='REVALIDATE_REQUIRED'")
-	require.Contains(t, exec.sqls[10], "source_account_id=0")
-	require.NotContains(t, exec.sqls[10], "where account_id=0")
-	require.Contains(t, exec.sqls[10], "where target_relation_id=0")
+	require.Contains(t, exec.sqls[9], "source_account_id=0")
+	require.NotContains(t, exec.sqls[9], "where account_id=0")
+	require.Contains(t, exec.sqls[9], "where target_relation_id=0")
 	for _, sql := range exec.sqls {
 		statements, err := mysql.Parse(context.Background(), sql, 1)
 		require.NoError(t, err, sql)

@@ -61,7 +61,7 @@ func TestStatisticsUpgradeHandlerLifecycle(t *testing.T) {
 			return statisticsStringResult(t, sysview.InformationSchemaStatisticsDDL), nil
 		})
 		require.NoError(t, Handler.Prepare(ctx, txn, true))
-		// Cluster recovery migration has its own catalog fixture in upgrade_test.go.
+		require.NoError(t, Handler.HandleClusterUpgrade(ctx, txn))
 		require.ErrorContains(t, Handler.HandleCreateFrameworkDeps(txn), "Only v1.2.0 can initialize upgrade framework")
 		require.NoError(t, Handler.HandleTenantUpgrade(ctx, int32(catalog.System_Account), txn))
 

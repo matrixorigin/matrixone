@@ -7042,6 +7042,11 @@ func hasMultiScopeGroup(groups [][]*Scope) bool {
 }
 
 func (c *Compile) compileApply(node, right *plan.Node, rs []*Scope) []*Scope {
+	if right.GetTableDef().GetTblFunc().GetName() == "mo_view_columns" {
+		// Description owns an origin-session compiler context. Candidate scans
+		// may be distributed, but binding must run serially on the origin CN.
+		rs = []*Scope{c.newMergeScope(rs)}
+	}
 
 	switch node.ApplyType {
 	case plan.Node_CROSSAPPLY:

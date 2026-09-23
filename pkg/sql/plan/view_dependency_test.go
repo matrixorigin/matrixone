@@ -1140,25 +1140,6 @@ func TestViewDependencyCaptureResolveByID(t *testing.T) {
 	require.Len(t, capture.dependencies(), 1)
 }
 
-func TestRegenerateViewDefinitionReturnsPartialDependenciesOnBindingFailure(t *testing.T) {
-	ctx := &rootSQLCompilerContext{
-		MockCompilerContext: NewMockCompilerContext(false),
-		rootSQL:             "create view v as select missing_column from nation",
-	}
-	ctx.GetAccountIdFunc = func() (uint32, error) { return 42, nil }
-	persisted, err := json.Marshal(ViewData{
-		Stmt:            ctx.rootSQL,
-		DefaultDatabase: "tpch",
-	})
-	require.NoError(t, err)
-	regenerated, dependencies, err := RegenerateViewDefinitionWithPartialDependencies(ctx, string(persisted))
-	require.Error(t, err)
-	require.Nil(t, regenerated)
-	require.Len(t, dependencies, 1)
-	require.Equal(t, "tpch", dependencies[0].DatabaseName)
-	require.Equal(t, "nation", dependencies[0].RelationName)
-}
-
 func TestRegenerateViewDefinitionRejectsInvalidPersistedDefinitions(t *testing.T) {
 	ctx := NewMockCompilerContext(false)
 

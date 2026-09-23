@@ -775,7 +775,7 @@ func buildSubscriptionTablesQuery(candidate subscriptionCandidate, tableNames []
 }
 
 func buildSubscriptionColumnsQuery(candidate subscriptionCandidate, tableNames []string) string {
-	return "SELECT " +
+	ordinary := "SELECT " +
 		"CAST(" + strconv.FormatUint(uint64(candidate.subscriberID), 10) +
 		" AS INT UNSIGNED) AS account_id, " +
 		"CAST(" + strconv.FormatUint(candidate.localDatabaseID, 10) +
@@ -809,7 +809,23 @@ func buildSubscriptionColumnsQuery(candidate subscriptionCandidate, tableNames [
 		"ON mk.table_id = mc.att_relname_id AND mk.column_name = mc.attname " +
 		"WHERE mc.account_id = current_account_id() AND mc.att_database = " +
 		sqlquote.String(candidate.sourceDatabase) +
-		subscriptionTablePredicate("mc.att_relname", tableNames)
+		subscriptionTablePredicate("mc.att_relname", tableNames) +
+		" AND NOT (mt.relkind = 'v' AND mt.reldatabase NOT IN ('mo_catalog','information_schema','mysql','system','system_metrics','mo_task','mo_debug'))"
+	views := "SELECT " +
+		"CAST(" + strconv.FormatUint(uint64(candidate.subscriberID), 10) + " AS INT UNSIGNED) AS account_id, " +
+		"CAST(" + strconv.FormatUint(candidate.localDatabaseID, 10) + " AS BIGINT UNSIGNED) AS att_database_id, " +
+		"CAST(" + sqlquote.String(candidate.localDatabaseName) + " AS VARCHAR(256)) AS att_database, " +
+		"mt.rel_id, mt.relname, mc.attname, mc.atttyp, mc.attnum, mc.attnotnull, mc.att_default, " +
+		"mc.att_constraint_type, mc.att_is_auto_increment, mc.att_comment, mc.att_is_hidden, mc.attr_enum, " +
+		"mc.attr_has_generated, mc.attr_generated, CAST(0 AS BIGINT) AS key_priority, mt.rel_id, mt.relkind, " +
+		"mt.rel_createsql, mt.partitioned, mt.extra_info, mt.rel_logical_id, " +
+		"CAST(" + strconv.FormatUint(uint64(candidate.localOwner), 10) + " AS INT UNSIGNED) AS table_owner " +
+		"FROM mo_catalog.mo_tables mt CROSS APPLY mo_view_columns(mt.rel_id) mc " +
+		"WHERE mt.account_id = current_account_id() AND mt.reldatabase = " +
+		sqlquote.String(candidate.sourceDatabase) + subscriptionTablePredicate("mt.relname", tableNames) +
+		" AND mt.relkind = 'v' AND mt.reldatabase NOT IN " +
+		"('mo_catalog','information_schema','mysql','system','system_metrics','mo_task','mo_debug')"
+	return ordinary + " UNION ALL " + views
 }
 
 func publishSubscriptionMetadataError(ctx context.Context, errCh chan<- error, err error) {
