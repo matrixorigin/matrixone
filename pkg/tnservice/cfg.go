@@ -242,7 +242,7 @@ func (c *Config) Validate() error {
 		c.Txn.Storage.Backend = StorageTAE
 	}
 	if _, ok := supportTxnStorageBackends[c.Txn.Storage.Backend]; !ok {
-		return moerr.NewInternalErrorf(context.Background(), "%s txn storage backend not support", c.Txn.Storage)
+		return moerr.NewInternalErrorf(context.Background(), "%s txn storage backend not support", c.Txn.Storage.Backend)
 	}
 	if c.Txn.Storage.SiriusReadLeaseCapacity == 0 {
 		c.Txn.Storage.SiriusReadLeaseCapacity = DefaultSiriusReadLeaseCapacity

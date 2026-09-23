@@ -14549,7 +14549,7 @@ func Test_OpenWithError(t *testing.T) {
 	assert.NoError(t, err)
 	dir := testutils.InitTestEnv(ModuleName, t)
 	_, err = db.Open(ctx, dir, nil)
-	assert.ErrorIs(t, db.ErrCronJobsOpen, err)
+	assert.ErrorIs(t, err, db.ErrCronJobsOpen)
 }
 
 func Test_Controller1(t *testing.T) {
