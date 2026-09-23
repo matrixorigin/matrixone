@@ -359,6 +359,7 @@ type PrepareStmt struct {
 	// build this handle. It is checked while the handle is published.
 	rewritePolicyGeneration uint64
 	rewritePolicyCaptured   bool
+	rewritePolicyEnabled    bool
 	// compileNeedsRebuild remembers that this statement had an eligible cached
 	// topology before it was invalidated, even after that topology is released.
 	compileNeedsRebuild bool

@@ -2541,7 +2541,8 @@ func (ses *Session) SetPrepareStmt(ctx context.Context, name string, prepareStmt
 		ses.ruleCacheMu.RLock()
 		currentGeneration := ses.rewritePolicyGeneration
 		ses.ruleCacheMu.RUnlock()
-		if prepareStmt.rewritePolicyGeneration != currentGeneration {
+		if prepareStmt.rewritePolicyGeneration != currentGeneration &&
+			(prepareStmt.rewritePolicyEnabled || ses.rewriteEnabled.Load()) {
 			prepareStmt.invalidateRewritePolicy()
 		}
 	}

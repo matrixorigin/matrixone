@@ -2935,9 +2935,10 @@ func createPrepareStmtInSession(
 		schedulingSQLMode:          schedulingSQLMode,
 	}
 	if execCtx.input != nil && execCtx.input.rewritePolicy != nil &&
-		execCtx.input.rewritePolicy.captured && execCtx.input.rewritePolicy.enabled {
+		execCtx.input.rewritePolicy.captured {
 		prepareStmt.rewritePolicyGeneration = execCtx.input.rewritePolicy.generation
 		prepareStmt.rewritePolicyCaptured = true
+		prepareStmt.rewritePolicyEnabled = execCtx.input.rewritePolicy.enabled
 	}
 	prepareStmt.refreshNumericPrefixConsumer(
 		prepareControl.Plan, len(prepareControl.ParamTypes))

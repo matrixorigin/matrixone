@@ -2099,32 +2099,54 @@ func TestInvalidatePrivilegeCachePreservesPreparedStatementsWithoutRewrite(t *te
 
 func TestSetPrepareStmtRejectsStaleRewritePolicyGeneration(t *testing.T) {
 	ctx := context.Background()
+	for _, testCase := range []struct {
+		name            string
+		capturedEnabled bool
+		currentEnabled  bool
+		invalidated     bool
+	}{
+		{name: "enabled to enabled", capturedEnabled: true, currentEnabled: true, invalidated: true},
+		{name: "enabled to disabled", capturedEnabled: true, currentEnabled: false, invalidated: true},
+		{name: "disabled to enabled", capturedEnabled: false, currentEnabled: true, invalidated: true},
+		{name: "disabled to disabled", capturedEnabled: false, currentEnabled: false},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			ses := &Session{
+				cache:                   &privilegeCache{},
+				prepareStmts:            make(map[string]*PrepareStmt),
+				rewritePolicyGeneration: 1,
+			}
+			ses.rewriteEnabled.Store(testCase.currentEnabled)
+			stale := &PrepareStmt{
+				Name:                    "stale",
+				rewritePolicyCaptured:   true,
+				rewritePolicyEnabled:    testCase.capturedEnabled,
+				rewritePolicyGeneration: 0,
+			}
+			require.NoError(t, ses.SetPrepareStmt(ctx, stale.Name, stale))
+			require.Equal(t, testCase.invalidated, stale.rewritePolicyInvalidated.Load())
+			got, err := ses.GetPrepareStmt(ctx, stale.Name)
+			if testCase.invalidated {
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNeedReprepare))
+				return
+			}
+			require.NoError(t, err)
+			require.Same(t, stale, got)
+		})
+	}
+
 	ses := &Session{
-		cache:        &privilegeCache{},
-		prepareStmts: make(map[string]*PrepareStmt),
+		cache:                   &privilegeCache{},
+		prepareStmts:            make(map[string]*PrepareStmt),
+		rewritePolicyGeneration: 1,
 	}
 	ses.rewriteEnabled.Store(true)
-
-	ses.InvalidatePrivilegeCache()
-
-	stale := &PrepareStmt{
-		Name:                    "stale",
-		rewritePolicyCaptured:   true,
-		rewritePolicyGeneration: 0,
-	}
-	require.NoError(t, ses.SetPrepareStmt(ctx, stale.Name, stale))
-	require.True(t, stale.rewritePolicyInvalidated.Load())
-	_, err := ses.GetPrepareStmt(ctx, stale.Name)
-	require.Error(t, err)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNeedReprepare))
-
-	ses.ruleCacheMu.RLock()
-	currentGeneration := ses.rewritePolicyGeneration
-	ses.ruleCacheMu.RUnlock()
 	fresh := &PrepareStmt{
 		Name:                    "fresh",
 		rewritePolicyCaptured:   true,
-		rewritePolicyGeneration: currentGeneration,
+		rewritePolicyEnabled:    true,
+		rewritePolicyGeneration: 1,
 	}
 	require.NoError(t, ses.SetPrepareStmt(ctx, fresh.Name, fresh))
 	got, err := ses.GetPrepareStmt(ctx, fresh.Name)
