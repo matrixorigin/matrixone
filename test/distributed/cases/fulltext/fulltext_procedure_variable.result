@@ -25,6 +25,14 @@ call p_ft_param('engine');
 ➤ id[-5,64,0]  𝄀
 1  𝄀
 2
+call p_ft_param(NULL);
+invalid input: fulltext search pattern must not be NULL
+call p_ft_param('');
+invalid input: fulltext search pattern must not be empty
+call p_ft_param('engine');
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2
 call p_ft_local('engine');
 ➤ id[-5,64,0]  𝄀
 1  𝄀
@@ -58,6 +66,7 @@ create table docs2(id bigint primary key, body text);
 insert into docs2 values (1, 'matrix database engine'), (2, 'vector search engine'), (3, 'ordinary text');
 create fulltext2 index ft2 on docs2(body);
 create procedure p_ft2_param(in q varchar(100)) 'begin select id from docs2 where match(body) against(q) order by id; end';
+create procedure p_ft2_count(in q varchar(100)) 'begin select count(*) as hit_count from docs2 where match(body) against(q); end';
 create procedure p_ft2_local(in q varchar(100)) 'begin declare term varchar(100) default ''ordinary''; set term = q; select id from docs2 where match(body) against(term) order by id; end';
 create procedure p_ft2_boolean(in q varchar(100)) 'begin select id from docs2 where match(body) against(q in boolean mode) order by id; end';
 select id from docs2 where match(body) against('engine') order by id;
@@ -71,6 +80,22 @@ call p_ft2_param('engine');
 call p_ft2_param('ordinary');
 ➤ id[-5,64,0]  𝄀
 3
+call p_ft2_param('engine');
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2
+call p_ft2_count('engine');
+➤ hit_count[-5,64,0]  𝄀
+2
+call p_ft2_count(NULL);
+➤ hit_count[-5,64,0]  𝄀
+0
+call p_ft2_count('');
+➤ hit_count[-5,64,0]  𝄀
+0
+call p_ft2_count('engine');
+➤ hit_count[-5,64,0]  𝄀
+2
 call p_ft2_param('engine');
 ➤ id[-5,64,0]  𝄀
 1  𝄀
