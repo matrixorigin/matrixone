@@ -195,6 +195,8 @@ func initTxnMetrics() {
 	registry.MustRegister(TxnTNPrePrepareObjectBookmarkCounter)
 
 	registry.MustRegister(txnQueueSizeGauge)
+	registry.MustRegister(TxnTNCommitQueueStageDurationHistogram)
+	registry.MustRegister(TxnTNCommitQueueSizeGauge)
 	registry.MustRegister(TxnDeadlockDetectorQueueDepthGauge)
 
 	registry.MustRegister(txnCommitDurationHistogram)
