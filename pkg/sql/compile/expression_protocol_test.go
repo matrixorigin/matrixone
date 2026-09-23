@@ -17,14 +17,12 @@ package compile
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
-	"github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -32,7 +30,6 @@ import (
 type expressionVersionClient struct {
 	fakeQueryClient
 	version         int64
-	buildCommitID   string
 	calls, releases int
 	customResponse  bool
 	response        *query.Response
@@ -50,10 +47,7 @@ func (c *expressionVersionClient) SendMessage(ctx context.Context, _ string, _ *
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return &query.Response{GetProtocolVersion: &query.GetProtocolVersionResponse{
-		Version:       c.version,
-		BuildCommitID: c.buildCommitID,
-	}}, nil
+	return &query.Response{GetProtocolVersion: &query.GetProtocolVersionResponse{Version: c.version}}, nil
 }
 func (c *expressionVersionClient) Release(*query.Response) { c.releases++ }
 func expressionProtocolTestCompile(t *testing.T) (*Compile, *expressionVersionClient) {
@@ -113,41 +107,6 @@ func TestExpressionProtocolResolvesLegacyAddressOnlyScopes(t *testing.T) {
 	require.True(t, supported)
 	require.Equal(t, 1, client.calls)
 	require.Equal(t, client.calls, client.releases)
-}
-
-func TestExpressionProtocolRequiresExactBuildWhenRequested(t *testing.T) {
-	c, client := expressionProtocolTestCompile(t)
-	oldBuildCommitID := version.BuildCommitID
-	version.BuildCommitID = strings.Repeat("a", 40)
-	t.Cleanup(func() { version.BuildCommitID = oldBuildCommitID })
-	client.version = defines.MORPCVersion89
-	client.buildCommitID = version.BuildCommitID
-	workers := engine.Nodes{{Id: "old-worker", Addr: "remote:6001"}}
-
-	supported, err := remoteWorkersSupportProtocolAndBuild(c.proc, workers, defines.MORPCVersion89, version.BuildCommitID)
-	require.NoError(t, err)
-	require.True(t, supported)
-
-	client.buildCommitID = "build-b"
-	supported, err = remoteWorkersSupportProtocolAndBuild(c.proc, workers, defines.MORPCVersion89, version.BuildCommitID)
-	require.NoError(t, err)
-	require.False(t, supported, "same protocol capability does not imply the same formatter build")
-
-	client.buildCommitID = version.BuildCommitID[:7]
-	supported, err = remoteWorkersSupportProtocolAndBuild(c.proc, workers, defines.MORPCVersion89, version.BuildCommitID)
-	require.NoError(t, err)
-	require.False(t, supported, "an abbreviated prefix must not be treated as exact build identity")
-
-	client.buildCommitID = ""
-	supported, err = remoteWorkersSupportProtocolAndBuild(c.proc, workers, defines.MORPCVersion89, version.BuildCommitID)
-	require.NoError(t, err)
-	require.False(t, supported, "unknown worker build identity must fail closed")
-
-	client.version = defines.MORPCVersion88
-	client.buildCommitID = version.BuildCommitID
-	supported, err = remoteWorkersSupportProtocolAndBuild(c.proc, workers, defines.MORPCVersion89, version.BuildCommitID)
-	require.NoError(t, err)
-	require.False(t, supported, "older protocol peers cannot guarantee deferred-error/build identity semantics")
 }
 
 func TestExpressionProtocolFailedResponsesAreReleased(t *testing.T) {

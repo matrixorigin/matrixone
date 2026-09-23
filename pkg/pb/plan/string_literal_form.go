@@ -296,7 +296,6 @@ const (
 	notEqualFunctionID               int32 = 1
 	nullSafeEqualFunctionID          int32 = 406
 	internalJSONComparisonFunctionID int32 = 577
-	statementHashFunctionID          int32 = 583
 	planBooleanTypeID                int32 = 10
 	planJSONTypeID                   int32 = 62
 	binFunctionID                    int32 = 270
@@ -340,8 +339,6 @@ const (
 // overload identities and their fixed-width execution contracts changed in
 // the same release. ASCIIInt32Result requires MORPC v65 because ASCII keeps
 // its overload IDs but changes its physical result vector from UINT8 to INT32.
-// StatementHashFunction requires MORPC v94 for the complete remote function,
-// build-identity, and deferred resolver-error transport contract.
 // A struct makes compatibility call sites name every capability instead of
 // relying on positional booleans.
 // RowDependentConvBases requires MORPC v69 for nonconstant or unsigned bases.
@@ -370,7 +367,6 @@ type RemoteExpressionFeatures struct {
 	NumericPrefix                   bool
 	JSONComparisonParam             bool
 	MixedJSONBooleanEquality        bool
-	StatementHashFunction           bool
 	FormatNumericArguments          bool
 	TypedConversionFunctions        bool
 	IntegerArithmeticDomains        bool
@@ -392,7 +388,6 @@ func (features RemoteExpressionFeatures) Any() bool {
 	return features.NumericPrefix ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
-		features.StatementHashFunction ||
 		features.FormatNumericArguments ||
 		features.TypedConversionFunctions ||
 		features.ASCIIInt32Result ||
@@ -838,10 +833,6 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			}
 			if !features.MixedJSONBooleanEquality && isMixedJSONBooleanEquality(fn) {
 				features.MixedJSONBooleanEquality = true
-			}
-			if !features.StatementHashFunction && fn != nil && fn.Func != nil &&
-				int32(fn.Func.Obj>>32) == statementHashFunctionID {
-				features.StatementHashFunction = true
 			}
 			formatNumericArguments, err := isNumericFormatFunction(fn)
 			if err != nil {

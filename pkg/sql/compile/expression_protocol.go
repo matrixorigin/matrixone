@@ -16,14 +16,12 @@ package compile
 
 import (
 	"context"
-	"time"
-
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
-	versionpkg "github.com/matrixorigin/matrixone/pkg/version"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -31,18 +29,6 @@ import (
 // Probe the selected workers as well as the coordinator's rollout gate.
 // Capabilities are not cached across executions or sender checks.
 func remoteWorkersSupportProtocol(proc *process.Process, workers engine.Nodes, minimum int64) (bool, error) {
-	return remoteWorkersSupportProtocolAndBuild(proc, workers, minimum, "")
-}
-
-// remoteWorkersSupportProtocolAndBuild checks the live query endpoint rather
-// than relying only on possibly stale cluster metadata. A non-empty expected
-// commit requires the endpoint to report that exact source revision.
-func remoteWorkersSupportProtocolAndBuild(
-	proc *process.Process,
-	workers engine.Nodes,
-	minimum int64,
-	expectedBuildCommitID string,
-) (bool, error) {
 	if proc == nil {
 		return false, nil
 	}
@@ -105,10 +91,6 @@ func remoteWorkersSupportProtocolAndBuild(
 			return false, nil
 		}
 		supported := resp.GetProtocolVersion != nil && resp.GetProtocolVersion.Version >= minimum
-		if supported && expectedBuildCommitID != "" {
-			reportedBuildID := resp.GetProtocolVersion.BuildCommitID
-			supported = versionpkg.IsFullBuildCommitID(reportedBuildID) && reportedBuildID == expectedBuildCommitID
-		}
 		client.Release(resp)
 		if !supported {
 			return false, nil

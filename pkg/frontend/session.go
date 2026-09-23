@@ -2030,6 +2030,21 @@ func (ses *Session) cachePlanWithSnapshotsAndStatsVersions(
 	planStatsVersions []map[optimizerStatsTableKey]uint64,
 	versions ...int64,
 ) {
+	ses.cachePlanWithSnapshotsAndStatsVersionsAndFingerprints(
+		sql, stmts, plans, planSnapshotTS, planStatsVersions,
+		make([]string, len(plans)), make([]bool, len(plans)), versions...)
+}
+
+func (ses *Session) cachePlanWithSnapshotsAndStatsVersionsAndFingerprints(
+	sql string,
+	stmts []tree.Statement,
+	plans []*plan.Plan,
+	planSnapshotTS []timestamp.Timestamp,
+	planStatsVersions []map[optimizerStatsTableKey]uint64,
+	statementFingerprints []string,
+	statementFingerprintAttempted []bool,
+	versions ...int64,
+) {
 	if len(sql) == 0 {
 		return
 	}
@@ -2050,8 +2065,9 @@ func (ses *Session) cachePlanWithSnapshotsAndStatsVersions(
 	if len(versions) > 0 {
 		protocolVersion = versions[0]
 	}
-	ses.planCache.cacheWithPlanSnapshotsAndStatsVersions(
-		sql, stmts, plans, planSnapshotTS, planStatsVersions, protocolVersion)
+	ses.planCache.cacheWithPlanSnapshotsAndStatsVersionsAndFingerprints(
+		sql, stmts, plans, planSnapshotTS, planStatsVersions,
+		statementFingerprints, statementFingerprintAttempted, protocolVersion)
 }
 
 func (ses *Session) getCachedPlan(sql string) *cachedPlan {

@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
-	buildversion "github.com/matrixorigin/matrixone/pkg/version"
 )
 
 func (s *queryService) handleGetProtocolVersion() func(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
@@ -35,8 +34,7 @@ func (s *queryService) handleGetProtocolVersion() func(ctx context.Context, req 
 			return nil
 		}
 		resp.GetProtocolVersion = &query.GetProtocolVersionResponse{
-			Version:       version.(int64),
-			BuildCommitID: buildversion.BuildCommitID,
+			Version: version.(int64),
 		}
 		return nil
 	}

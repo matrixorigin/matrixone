@@ -70,6 +70,22 @@ func TestResourceAttemptOwnerEligible(t *testing.T) {
 	require.False(t, resourceAttemptOwnerEligible(derived))
 }
 
+func TestTxnComputationWrapperFingerprintLifecycle(t *testing.T) {
+	cw := &TxnComputationWrapper{}
+	cw.setStatementFingerprint("captured", true)
+	require.Equal(t, "captured", cw.getStatementFingerprint())
+	require.True(t, cw.statementFingerprintWasAttempted())
+
+	cw.ResetPlanAndStmt(nil)
+	require.Empty(t, cw.getStatementFingerprint())
+	require.False(t, cw.statementFingerprintWasAttempted())
+
+	cw.setStatementFingerprint("captured again", true)
+	cw.Clear()
+	require.Empty(t, cw.getStatementFingerprint())
+	require.False(t, cw.statementFingerprintWasAttempted())
+}
+
 func (m *mockCompile) Run(ts uint64) (*util2.RunResult, error) { return m.runFunc(ts) }
 func (m *mockCompile) GetPlan() *plan.Plan                     { return m.getPlanFunc() }
 func (m *mockCompile) PlanGenerationRebuilt() bool             { return m.planGenerationRebuilt }

@@ -113,133 +113,113 @@ func encodeScope(s *Scope) ([]byte, error) {
 }
 
 func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
-	data, _, err := encodeRemoteScopeWithFeatures(s, proc)
-	return data, err
-}
-
-func encodeRemoteScopeWithFeatures(
-	s *Scope,
-	proc *process.Process,
-) ([]byte, plan.RemoteExpressionFeatures, error) {
 	p, err := fillPipeline(s)
 	if err != nil {
-		return nil, plan.RemoteExpressionFeatures{}, err
+		return nil, err
 	}
 	if err = validateGroupingTransportDestinations(proc, p); err != nil {
-		return nil, plan.RemoteExpressionFeatures{}, err
+		return nil, err
 	}
 	if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
-		return nil, plan.RemoteExpressionFeatures{}, err
+		return nil, err
 	}
 	if err = validateRemoteExpressionPipelineProtocol(proc, p); err != nil {
-		return nil, plan.RemoteExpressionFeatures{}, err
+		return nil, err
 	}
 	features, err := plan.RequiredRemoteExpressionFeatures(p)
 	if err != nil {
-		return nil, plan.RemoteExpressionFeatures{}, err
-	}
-	if err = validateRemoteStringProvenancePipelineProtocol(proc, p); err != nil {
-		return nil, features, err
-	}
-	if err = validateRemoteExpressionFeaturesProtocol(proc, features); err != nil {
-		return nil, features, err
-	}
-	if features.StatementHashFunction {
-		if err = validateStatementHashDestination(proc, p); err != nil {
-			return nil, features, err
-		}
+		return nil, err
 	}
 	if features.IntegerArithmeticDomains {
 		if err = validateIntegerDomainDestination(proc, p); err != nil {
-			return nil, features, err
+			return nil, err
 		}
 	}
 	if features.RowDependentConvBases {
 		if err = validateConvBasesDestination(proc, p); err != nil {
-			return nil, features, err
+			return nil, err
 		}
 	}
 	if features.IntegerParameterCoercion {
 		if err = validateIntegerArgumentDestination(proc, p); err != nil {
-			return nil, features, err
+			return nil, err
 		}
 	}
 	if features.IPFunctionSemantics || features.TOBase64ResultContracts || features.IPFunctionResultContracts ||
 		features.ExpressionResultMetadataContracts {
 		if err = validateIPFunctionDestination(proc, p); err != nil {
-			return nil, features, err
+			return nil, err
 		}
 	}
 	if features.StringNumericResultContracts {
 		if err = validateStringNumericResultDestination(proc, p); err != nil {
-			return nil, features, err
+			return nil, err
 		}
 	}
 	if features.BoundedConditionalStringDomains {
 		if err = validateBoundedConditionalStringDestination(proc, p); err != nil {
-			return nil, features, err
+			return nil, err
 		}
 	}
 	if features.SpatialDistanceSemantics {
 		if err = validateSpatialDistanceDestination(proc, p); err != nil {
-			return nil, features, err
+			return nil, err
 		}
 	}
 	if features.DecimalLiteralSemantics {
 		if err = validateDecimalLiteralDestination(proc, p); err != nil {
-			return nil, features, err
+			return nil, err
 		}
 	}
 	if err = validateStrictWriteDestination(proc, p); err != nil {
-		return nil, features, err
+		return nil, err
 	}
 	if err = validateGroupConcatTimeZoneDestination(proc, p); err != nil {
-		return nil, features, err
+		return nil, err
 	}
 	if err = validateRemotePadSpacePipelineProtocol(proc, p); err != nil {
-		return nil, features, err
+		return nil, err
 	}
 	if err = validateRemoteMongoUserQueryPipelineProtocol(proc, p); err != nil {
-		return nil, features, err
+		return nil, err
 	}
 	if err = validateRemoteParquetWholeFileFanoutPipelineProtocol(proc, p); err != nil {
-		return nil, features, err
+		return nil, err
 	}
 	if err = validateRemoteBinaryStringPipelineProtocol(proc, p); err != nil {
-		return nil, features, err
+		return nil, err
 	}
 	if err = validateOctStringProtocol(proc, p); err != nil {
-		return nil, features, err
+		return nil, err
 	}
 	if err = validateHexMySQLNumericProtocol(proc, p); err != nil {
-		return nil, features, err
+		return nil, err
 	}
 	if err = validateRemoteIgnoreCheckPipelineProtocol(proc, p); err != nil {
-		return nil, features, err
+		return nil, err
 	}
 	if err = validateRemoteGroupingSetPipelineProtocol(proc, p); err != nil {
-		return nil, features, err
+		return nil, err
 	}
 	if err = validateRemoteDistributedOrderedTopPipelineProtocol(proc, p); err != nil {
-		return nil, features, err
+		return nil, err
 	}
 	if err = validateRemotePartitionTopNWithTiesPipelineProtocol(proc, p); err != nil {
-		return nil, features, err
+		return nil, err
 	}
 	if err = validateRemoteODKUAffectedRowsPipelineProtocol(proc, p); err != nil {
-		return nil, features, err
+		return nil, err
 	}
 	if err = validateRemoteArrowLoadPipelineProtocol(proc, p); err != nil {
-		return nil, features, err
+		return nil, err
 	}
 	if err = validateRemoteAutoIDCachePipelineProtocol(proc, p); err != nil {
-		return nil, features, err
+		return nil, err
 	}
 	if err = validateFulltext2ProbeTailDestination(proc, p); err != nil {
-		return nil, features, err
+		return nil, err
 	}
-	data, err := p.Marshal()
-	return data, features, err
+	return p.Marshal()
 }
 
 func icebergPlanningStatsToPipeline(stats process.ParquetProfileStats) *pipeline.IcebergPlanningStats {
@@ -305,23 +285,6 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		}
 		if err = validateRemoteExpressionPipelineProtocol(proc, p); err != nil {
 			return nil, err
-		}
-		features, featureErr := plan.RequiredRemoteExpressionFeatures(p)
-		if featureErr != nil {
-			return nil, featureErr
-		}
-		if features.StatementHashFunction {
-			// The build identity is a scope admission gate. Validate it before
-			// operators are constructed so a zero-row or fully masked scope
-			// cannot bypass the mixed-build fence.
-			if proc == nil {
-				return nil, moerr.NewNotSupportedNoCtx(
-					"MO_STATEMENT_HASH remote execution requires a process build identity",
-				)
-			}
-			if err = proc.ValidateStatementHashBuildCommitID(); err != nil {
-				return nil, err
-			}
 		}
 		if err = validateRemoteMongoUserQueryPipelineProtocol(proc, p); err != nil {
 			return nil, err
@@ -398,15 +361,8 @@ func encodeProcessInfo(
 	sql string,
 	remoteFragmentCounts map[string]uint32,
 	remoteExecutionID uuid.UUID,
-	containsStatementHash bool,
 ) ([]byte, error) {
-	var v pipeline.ProcessInfo
-	var err error
-	if containsStatementHash {
-		v, err = proc.BuildProcessInfoWithStatementHash(sql)
-	} else {
-		v, err = proc.BuildProcessInfo(sql)
-	}
+	v, err := proc.BuildProcessInfo(sql)
 	if err != nil {
 		return nil, err
 	}
@@ -2293,13 +2249,6 @@ func validateRemoteExpressionPipelineProtocol(
 	if err != nil {
 		return err
 	}
-	return validateRemoteExpressionFeaturesProtocol(proc, features)
-}
-
-func validateRemoteExpressionFeaturesProtocol(
-	proc *process.Process,
-	features plan.RemoteExpressionFeatures,
-) error {
 	if !features.Any() {
 		return nil
 	}
@@ -2326,12 +2275,6 @@ func validateRemoteExpressionFeaturesProtocol(
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion36) {
 		return moerr.NewNotSupportedNoCtx(
 			"mixed JSON/BOOL equality requires MORPC protocol version 36",
-		)
-	}
-	if features.StatementHashFunction &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion94) {
-		return moerr.NewNotSupportedNoCtx(
-			"MO_STATEMENT_HASH remote execution requires MORPC protocol version 94",
 		)
 	}
 	if features.FormatNumericArguments &&

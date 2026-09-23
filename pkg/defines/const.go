@@ -129,8 +129,7 @@ const (
 	MORPCVersion91     int64 = 91 // canonical CHAR and JSON HLL_ADD_AGG hash keys
 	MORPCVersion92     int64 = 92 // canonical scalar FLOAT HLL_ADD_AGG hash keys
 	MORPCVersion93     int64 = 93 // session LAST_INSERT_ID connection migration state
-	MORPCVersion94     int64 = 94 // complete MatrixOne-native MO_STATEMENT_HASH remote execution contract
-	MORPCLatestVersion       = MORPCVersion94
+	MORPCLatestVersion       = MORPCVersion93
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
