@@ -105,4 +105,24 @@ set @v=2;
 execute string_source using @v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v,@v;
 deallocate prepare string_source;
 
+-- Numeric, date/time selector, and bounded utility consumers use the same integer source contract.
+select period_add(202401,d),period_diff(202402+d,202401) from sources order by id;
+select ceil(12.345,2.5),floor(12.345,2.5),round(12.345,2.5),truncate(12.345,2.5);
+select from_days(d),week(cast('2026-09-20' as date),d),yearweek(cast('2026-09-20' as date),d),timestampadd(day,d,cast('2026-09-20' as date)) from sources order by id;
+select subvector(cast('[1,2,3,4]' as vecf32(4)),d),subvector(cast('[1,2,3,4]' as vecf32(4)),1,d) from sources order by id;
+select split_part('a.b.c','.',d),sha2('matrixone',d),regexp_instr('abcabc','b',d),regexp_replace('abcabc','b','X',d,d),regexp_substr('abcabc','b',d,d) from sources order by id;
+select length(random_bytes(2.5));
+select last_query_id(-1) is not null;
+select split_part('a.b.c','.',cast('4294967296' as decimal(20,0)));
+select sha2('matrixone',cast('9223372036854775807.5' as decimal(38,1)));
+
+prepare utility_source from 'select period_add(202401,?),round(12.345,?),from_days(?),week(cast("2026-09-20" as date),?),timestampadd(day,?,cast("2026-09-20" as date)),split_part("a.b.c",".",?),sha2("matrixone",?),regexp_instr("abcabc","b",?)';
+set @v=1.5;
+execute utility_source using @v,@v,@v,@v,@v,@v,@v,@v;
+set @v='2.5tail';
+execute utility_source using @v,@v,@v,@v,@v,@v,@v,@v;
+set @v=null;
+execute utility_source using @v,@v,@v,@v,@v,@v,@v,@v;
+deallocate prepare utility_source;
+
 drop database integer_parameter_coercion;

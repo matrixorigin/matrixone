@@ -168,10 +168,10 @@ func TestValidateLosslessNoFullStartCompileProtocol(t *testing.T) {
 		}
 	}()
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion91)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion93)
 	require.ErrorContains(t, validateLosslessNoFullStartCompileProtocol(
-		context.Background(), c), "protocol version 92")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion92)
+		context.Background(), c), "protocol version 94")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion94)
 	require.NoError(t, validateLosslessNoFullStartCompileProtocol(
 		context.Background(), c))
 }
