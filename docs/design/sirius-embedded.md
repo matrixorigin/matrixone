@@ -1,6 +1,6 @@
 # Embedded Sirius migration
 
-Design version: 2.
+Design version: 3.
 
 Owner: MatrixOne query execution.
 
@@ -182,31 +182,21 @@ input credit window.
 
 ### Bounded native execution details
 
-The approved follow-up split names the remaining closures C through I:
-C is the TAE demand pump, D the native result sink, E the CGo/service/SDK
-bridge, F the real MO reader/result path, G protected direct-TAE admission,
-H default cutover, and I sidecar retirement. They refine the delivery map
-below rather than creating another migration issue. C/D/E implementation
-can overlap with frozen interfaces; D readiness requires merged C, and E
-readiness requires merged D. F and G can proceed independently after E.
-H still requires both routes and every numeric/performance gate; I follows H.
+The follow-up split names the remaining closures C through I: C is bounded
+native input, D the native result sink, E the CGo/service/SDK bridge, F the
+real MO reader/result path, H default cutover, and I sidecar retirement. G,
+protected direct-TAE admission, is deferred to a separate design. C/D/E
+implementation can overlap with frozen interfaces; D readiness requires
+merged C, and E readiness requires merged D. F follows E. H requires the
+MO-reader route and every numeric/performance gate; I follows H.
 
-- TAE has one query-owned metadata worker and at most `max(2, 2*S)` live
-  units across all scans, where S is the GPU stream count. Dependency-blocked
-  scans do not request metadata. Immutable cached metadata is capped at
-  32 MiB inside the existing 256 MiB metadata envelope.
-- Each unit holds a fixed staging entitlement no larger than 8 MiB and
-  no larger than its share of the 64 MiB TAE host window. The sum fits the
-  window without waiting inside a GPU worker. Pinned allocation and payload
-  reads happen only after full converter GPU admission; logical entitlement
-  and physical allocation are not two separate charges. CRC-framed extents
-  larger than the window are read through that reusable slice.
-- Metadata-only tasks that cannot obtain their full converter reservation
-  stay in the scheduler's existing queue. Downstream tasks can bypass them.
-  Admission never clamps this mandatory floor below the required bytes;
-  observed retry floors are also respected. New task/device events wake the
-  scheduler, with a bounded 10 ms backstop for external cuCascade memory
-  retirement, which does not expose a public subscription API.
+- MO source units are granted native input credit before conversion and copy.
+  The producer cannot retain whole-table state while Sirius is stalled.
+- GPU tasks that cannot obtain their full converter reservation stay in the
+  scheduler's existing queue. Admission never clamps the mandatory floor
+  below required bytes; observed retry floors are also respected. New
+  task/device events wake the scheduler, with a bounded 10 ms backstop for
+  external cuCascade memory retirement, which has no public subscription API.
 - Each terminal producer obtains a query-wide ticket before claiming input.
   A dedicated bounded publisher owns completed GPU cursors and serializes
   result slices in claim order. It may wait for output credits; task-creator
