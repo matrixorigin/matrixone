@@ -26,20 +26,26 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestMemThrottlerUsesCgroupUsageForAdmission(t *testing.T) {
+func TestMemThrottlerUsesCgroupHeadroomForAdmission(t *testing.T) {
 	throttler := &memThrottler{}
 	throttler.actualTotalMemory.Store(100)
 	throttler.total.Store(200)
 	throttler.cgroup.Store(100)
 	throttler.rss.Store(60)
-	throttler.cgroupUsage.Store(95)
 	throttler.limit.Store(90)
 
-	// The process RSS leaves 40 units, but the cgroup has only 5 units left.
+	// Below hard pressure, reclaimable cgroup charge does not reduce the normal
+	// RSS-based component budget.
+	throttler.cgroupUsage.Store(90)
+	require.Equal(t, int64(40), throttler.Available())
+
+	// Once hard pressure is active, cap new admission by the remaining cgroup
+	// headroom without treating the whole cgroup charge as non-reclaimable RSS.
+	throttler.cgroupUsage.Store(95)
 	require.Equal(t, int64(5), throttler.Available())
 
 	throttler.options.specializedForMerge = true
-	require.Equal(t, int64(0), throttler.Available())
+	require.Equal(t, int64(5), throttler.Available())
 }
 
 func TestMemThrottlerPressureUsesCgroupUsage(t *testing.T) {
@@ -207,6 +213,19 @@ func TestAcquirePolicyForDataBranch(t *testing.T) {
 		require.True(t, ok)
 		require.Equal(t, int64(70), left)
 		require.Equal(t, int64(10), throttler.reserved.Load())
+	})
+
+	t.Run("cgroup headroom backstops data branch admission under hard pressure", func(t *testing.T) {
+		throttler := &memThrottler{limitRate: 0.80}
+		throttler.actualTotalMemory.Store(100)
+		throttler.limit.Store(80)
+		throttler.rss.Store(60)
+		throttler.cgroupUsage.Store(95)
+
+		left, ok := AcquirePolicyForDataBranch(throttler, 6)
+		require.False(t, ok)
+		require.Equal(t, int64(5), left)
+		require.Equal(t, int64(0), throttler.reserved.Load())
 	})
 }
 
@@ -594,6 +613,19 @@ func TestAcquirePolicyForCNFlushS3(t *testing.T) {
 		throttler.actualTotalMemory.Store(100)
 		throttler.limit.Store(90)
 		throttler.rss.Store(95)
+
+		left, ok := AcquirePolicyForCNFlushS3(throttler, 6)
+		require.False(t, ok)
+		require.Equal(t, int64(5), left)
+		require.Equal(t, int64(0), throttler.reserved.Load())
+	})
+
+	t.Run("cgroup headroom backstops new s3 reservation under hard pressure", func(t *testing.T) {
+		throttler := &memThrottler{limitRate: 0.90}
+		throttler.actualTotalMemory.Store(100)
+		throttler.limit.Store(90)
+		throttler.rss.Store(70)
+		throttler.cgroupUsage.Store(95)
 
 		left, ok := AcquirePolicyForCNFlushS3(throttler, 6)
 		require.False(t, ok)
