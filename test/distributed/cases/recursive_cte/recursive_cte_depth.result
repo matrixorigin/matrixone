@@ -37,6 +37,15 @@ select n + 1 from r where n < 1
 select n from r order by n;
 ➤ n[-5,64,0]  𝄀
 1
+set session cte_max_recursion_depth = 0;
+with recursive r(n) as (
+select 1
+union distinct
+select n from r
+)
+select count(*) from r;
+➤ count(*)[-5,64,0]  𝄀
+1
 with recursive r(n) as (
 select 1
 union all

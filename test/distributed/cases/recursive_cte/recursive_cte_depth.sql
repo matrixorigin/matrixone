@@ -1,8 +1,10 @@
 set @old_cte_max_recursion_depth = @@session.cte_max_recursion_depth;
 
--- The configured depth counts recursive result levels, not the anchor or the
--- empty iteration needed to detect convergence.
+-- Compatibility contract: unlike MySQL 8.0.45, MatrixOne counts only
+-- productive recursive frontiers, excluding empty convergence attempts.
 set session cte_max_recursion_depth = 2;
+-- MySQL 8.0.45 errors after the third (empty) recursive attempt; MatrixOne
+-- permits two productive recursive levels and returns 1, 2, 3.
 with recursive r(n) as (
     select 1
     union all
@@ -28,7 +30,8 @@ with recursive r(n) as (
 )
 select n from r order by n;
 
--- Zero depth allows the anchor when the recursive member is empty.
+-- MySQL 8.0.45 errors on the empty recursive attempt at depth zero; MatrixOne
+-- excludes that convergence probe and returns the anchor.
 set session cte_max_recursion_depth = 0;
 with recursive r(n) as (
     select 1
@@ -36,6 +39,16 @@ with recursive r(n) as (
     select n + 1 from r where n < 1
 )
 select n from r order by n;
+
+-- Duplicate-only UNION DISTINCT rounds do not add a new frontier in MatrixOne.
+-- MySQL 8.0.45 counts the recursive attempt and errors at depth zero.
+set session cte_max_recursion_depth = 0;
+with recursive r(n) as (
+    select 1
+    union distinct
+    select n from r
+)
+select count(*) from r;
 
 -- Zero depth still rejects a recursive level that produces a row.
 with recursive r(n) as (
