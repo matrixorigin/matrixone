@@ -769,13 +769,17 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			firstRelease := make(chan struct{})
 			secondEntered := make(chan struct{})
 			secondRelease := make(chan struct{})
+			freshEntered := make(chan struct{})
+			freshRelease := make(chan struct{})
 			cancelEntered := make(chan struct{})
 			cancelRelease := make(chan struct{})
+			cancelCompleted := make(chan error, 1)
 			var phase atomic.Int32
-			var firstEnteredOnce, secondEnteredOnce, cancelEnteredOnce sync.Once
-			var firstReleaseOnce, secondReleaseOnce, cancelReleaseOnce sync.Once
+			var firstEnteredOnce, secondEnteredOnce, freshEnteredOnce, cancelEnteredOnce sync.Once
+			var firstReleaseOnce, secondReleaseOnce, freshReleaseOnce, cancelReleaseOnce sync.Once
 			releaseFirst := func() { firstReleaseOnce.Do(func() { close(firstRelease) }) }
 			releaseSecond := func() { secondReleaseOnce.Do(func() { close(secondRelease) }) }
+			releaseFresh := func() { freshReleaseOnce.Do(func() { close(freshRelease) }) }
 			releaseCancel := func() { cancelReleaseOnce.Do(func() { close(cancelRelease) }) }
 			restoreAdmission := frontend.SetCDCTestAdmissionHookForTest(func() {
 				switch phase.Load() {
@@ -787,6 +791,10 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 					secondEnteredOnce.Do(func() { close(secondEntered) })
 					<-secondRelease
 					phase.Store(3)
+				case 4:
+					freshEnteredOnce.Do(func() { close(freshEntered) })
+					<-freshRelease
+					phase.Store(5)
 				}
 			})
 			defer restoreAdmission()
@@ -795,13 +803,27 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 				<-cancelRelease
 			})
 			defer restoreCancel()
+			restoreCancelCompletion := frontend.SetCDCTestCancelCompletionHookForTest(func(err error) {
+				select {
+				case cancelCompleted <- err:
+				default:
+				}
+			})
+			defer restoreCancelCompletion()
 
-			var captureB atomic.Bool
+			var captureB, captureFresh atomic.Bool
 			bBoundary := make(chan types.TS, 1)
+			freshBoundary := make(chan types.TS, 1)
 			restoreBoundary := cdc.SetCDCCollectBoundaryHookForTest(func(from, _ types.TS) {
 				if captureB.Load() {
 					select {
 					case bBoundary <- from:
+					default:
+					}
+				}
+				if captureFresh.Load() {
+					select {
+					case freshBoundary <- from:
 					default:
 					}
 				}
@@ -827,6 +849,7 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			// phase barrier while the cluster is being torn down.
 			defer releaseFirst()
 			defer releaseSecond()
+			defer releaseFresh()
 			defer releaseCancel()
 			cdc.ResetTableDetectorForTest(cnA.ServiceID())
 
@@ -1034,15 +1057,58 @@ func TestCDCNoFullPublicTakeoverLifecycle(t *testing.T) {
 			require.Eventually(t, func() bool {
 				var readErr error
 				checkpointB, generationAfterB, found, readErr = readWatermark()
-				return readErr == nil && found && generationAfterB > generationA && checkpointB.GE(&checkpointBeforeB)
+				return readErr == nil && found && generationAfterB > generationA && checkpointB.GT(&checkpointBeforeB)
 			}, 30*time.Second, 200*time.Millisecond)
 
-			// Let A's delayed runner cleanup return only after B has committed W.
+			// Let A's delayed runner cleanup return only after B has committed W,
+			// and join the actual cancellation completion rather than merely
+			// observing the pre-cleanup barrier.
 			releaseCancel()
+			select {
+			case cancelErr := <-cancelCompleted:
+				require.NoError(t, cancelErr)
+			case <-ctx.Done():
+				t.Fatal("CN A cancellation did not complete after release")
+			}
 			require.Eventually(t, func() bool {
 				got, generation, found, readErr := readWatermark()
 				return readErr == nil && found && generation == generationAfterB && got == checkpointB
 			}, 30*time.Second, 200*time.Millisecond)
+
+			// Add a fresh CN C after A has fully returned. Transfer the durable
+			// running claim to C so a new executor/reader, rather than B's existing
+			// reader, proves recovery from B's post-takeover checkpoint.
+			phase.Store(4)
+			require.NoError(t, c.StartNewCNService(2))
+			cnC, err := c.GetCNService(2)
+			require.NoError(t, err)
+			if w, ok := any(c).(interface {
+				WaitCNStoreTaskServiceCreatedIndexed(ctx context.Context, index int)
+			}); ok {
+				w.WaitCNStoreTaskServiceCreatedIndexed(ctx, 2)
+			}
+			sqlExec = testutils.GetSQLExecutor(cnC)
+			cleanupCN = cnC
+			mustExec("", fmt.Sprintf("update mo_task.sys_daemon_task set task_status=%d, task_runner='%s', last_heartbeat='2000-01-01 00:00:00' where task_id=%d", taskpb.TaskStatus_Running, cnC.ServiceID(), daemonID))
+			select {
+			case <-freshEntered:
+			case <-ctx.Done():
+				t.Fatal("CN C did not reach fresh-reader admission")
+			}
+			freshStart, _, found, err := readWatermark()
+			require.NoError(t, err)
+			require.True(t, found)
+			require.Equal(t, checkpointB, freshStart,
+				"fresh reader must observe B's surviving durable checkpoint")
+			captureFresh.Store(true)
+			releaseFresh()
+			select {
+			case actualStart := <-freshBoundary:
+				require.Equal(t, checkpointB, actualStart,
+					"fresh reader must collect from B's surviving checkpoint")
+			case <-ctx.Done():
+				t.Fatal("fresh reader did not reach CollectChanges")
+			}
 		},
 	)
 }

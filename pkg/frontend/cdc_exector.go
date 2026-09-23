@@ -79,6 +79,15 @@ var cdcTestCancelHook struct {
 	fn func()
 }
 
+// cdcTestCancelCompletionHook is a process-local completion observer for
+// lifecycle integration tests. It runs after the selected cancellation path
+// has finished all cleanup, so tests can distinguish the pre-cleanup barrier
+// above from the actual return of cancel.
+var cdcTestCancelCompletionHook struct {
+	sync.RWMutex
+	fn func(error)
+}
+
 // SetCDCTestAdmissionHookForTest installs a process-local CDC pipeline
 // admission hook and returns a restore function.  The hook is invoked outside
 // the mutex and must be deterministic/non-blocking unless the caller is
@@ -125,6 +134,29 @@ func runCDCTestCancelHook() {
 	cdcTestCancelHook.RUnlock()
 	if hook != nil {
 		hook()
+	}
+}
+
+// SetCDCTestCancelCompletionHookForTest installs a post-cancel observer and
+// returns a restore function. The observer is inert unless a test installs it.
+func SetCDCTestCancelCompletionHookForTest(hook func(error)) (restore func()) {
+	cdcTestCancelCompletionHook.Lock()
+	previous := cdcTestCancelCompletionHook.fn
+	cdcTestCancelCompletionHook.fn = hook
+	cdcTestCancelCompletionHook.Unlock()
+	return func() {
+		cdcTestCancelCompletionHook.Lock()
+		cdcTestCancelCompletionHook.fn = previous
+		cdcTestCancelCompletionHook.Unlock()
+	}
+}
+
+func runCDCTestCancelCompletionHook(err error) {
+	cdcTestCancelCompletionHook.RLock()
+	hook := cdcTestCancelCompletionHook.fn
+	cdcTestCancelCompletionHook.RUnlock()
+	if hook != nil {
+		hook(err)
 	}
 }
 
@@ -1644,6 +1676,9 @@ func (exec *CDCTaskExecutor) Cancel() error { return exec.cancel(true) }
 func (exec *CDCTaskExecutor) CancelWithoutWatermarkCleanup() error { return exec.cancel(false) }
 
 func (exec *CDCTaskExecutor) cancel(deleteWatermarks bool) (err error) {
+	defer func() {
+		runCDCTestCancelCompletionHook(err)
+	}()
 	exec.callbackMu.Lock()
 	// Check if running before state transition
 	stateBeforeCancel := exec.stateMachine.State()
