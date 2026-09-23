@@ -15,6 +15,7 @@
 package cache
 
 import (
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -128,6 +129,36 @@ func TestSetStaleCheckIntervalDuringServeIsNotLost(t *testing.T) {
 			c.Destroy()
 			require.Equal(t, want, got, "the override must reach the live ticker regardless of interleaving")
 		}
+	})
+
+	// Forced interleave: reproduce the exact original bug ordering deterministically rather than
+	// relying on the scheduler -- serve() reads the (default) interval, THEN the override lands
+	// (setter-before-started, so its own Reset is skipped), THEN serve() would publish a ticker built
+	// from the OLD interval. serveStartBarrier fires inside serve() in exactly that window. The fix
+	// must still land the override on the live ticker via the post-unlock Reset (serialized by
+	// serveMu). The barrier is reset unconditionally and the setter goroutine is joined.
+	t.Run("forced interleave: override between interval read and ticker publish", func(t *testing.T) {
+		c := NewVectorIndexCache()
+		t.Cleanup(c.Destroy)
+		t.Cleanup(func() { serveStartBarrier = nil })
+
+		setterDone := make(chan struct{})
+		serveStartBarrier = func() {
+			serveStartBarrier = nil // one-shot: only the first serve() startup
+			go func() {
+				defer close(setterDone)
+				c.SetStaleCheckInterval(2 * time.Second) // Store lands, then blocks on serveMu (serve holds it)
+			}()
+			// Return only after the override is stored -- i.e. it landed BEFORE serve publishes
+			// started. serve then builds the ticker from the OLD interval it already read.
+			for c.staleCheckIntervalNs.Load() != int64(2*time.Second) {
+				runtime.Gosched()
+			}
+		}
+		c.serve()    // reads old -> barrier -> publishes the OLD ticker -> unlocks serveMu
+		<-setterDone // the override's Reset ran after unlock (join)
+		require.Equal(t, want, c.effectiveTickerNs.Load(),
+			"an override that landed before started-publication must still reach the live ticker")
 	})
 }
 

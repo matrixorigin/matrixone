@@ -915,6 +915,9 @@ func (c *VectorIndexCache) serve() {
 	// freshness-interval override that lands during startup is either read here or Reset afterwards.
 	c.serveMu.Lock()
 	serveIv := c.staleTickerInterval()
+	if serveStartBarrier != nil {
+		serveStartBarrier()
+	}
 	c.ticker = time.NewTicker(serveIv)
 	c.effectiveTickerNs.Store(int64(serveIv))
 	c.done = make(chan bool)
@@ -972,6 +975,12 @@ func (c *VectorIndexCache) evictEntry(key string, expected *VectorIndexSearch, r
 // destroying it -- the window a check-then-destroy leaves open. Nil in production; a test sets
 // it to land a search there.
 var afterIdleClaim func(key string)
+
+// serveStartBarrier runs, when set, inside serve() AFTER it has read the sweep interval but BEFORE
+// it creates/publishes the live ticker (still holding serveMu). Nil in production; a test sets it to
+// force the startup race -- land a SetStaleCheckInterval override in exactly that window and prove
+// the override still reaches the live ticker.
+var serveStartBarrier func()
 
 // evictIdleEntry evicts key ONLY if no search is in flight on it, and holds that claim through
 // removal and destroy so the entry cannot become busy in between. Returns false if a search
