@@ -15,13 +15,640 @@
 package compile
 
 import (
+	"context"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	limitop "github.com/matrixorigin/matrixone/pkg/sql/colexec/limit"
+	offsetop "github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func sqlCalcFoundRowsTestStatement() *tree.Select {
+	return &tree.Select{Select: &tree.SelectClause{
+		Option: tree.QuerySpecOptionSqlCalcFoundRows,
+	}}
+}
+
+func TestStatementHasSQLCalcFoundRows(t *testing.T) {
+	withFoundRows := func() *tree.Select {
+		return sqlCalcFoundRowsTestStatement()
+	}
+
+	tests := []struct {
+		name string
+		stmt tree.Statement
+		want bool
+	}{
+		{name: "nil interface", stmt: nil, want: false},
+		{name: "nil select", stmt: (*tree.Select)(nil), want: false},
+		{name: "select clause", stmt: withFoundRows(), want: true},
+		{name: "plain select clause", stmt: &tree.Select{Select: &tree.SelectClause{}}, want: false},
+		{name: "parenthesized select", stmt: &tree.Select{Select: &tree.ParenSelect{Select: withFoundRows()}}, want: true},
+		{name: "union left select", stmt: &tree.Select{Select: &tree.UnionClause{Left: withFoundRows(), Right: &tree.ValuesClause{}}}, want: true},
+		{name: "union left parenthesized select", stmt: &tree.Select{Select: &tree.UnionClause{Left: &tree.ParenSelect{Select: withFoundRows()}, Right: &tree.ValuesClause{}}}, want: true},
+		{name: "union without select clause", stmt: &tree.Select{Select: &tree.UnionClause{Left: &tree.ValuesClause{}, Right: withFoundRows()}}, want: false},
+		{name: "non select statement", stmt: &tree.ValuesStatement{}, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, statementHasSQLCalcFoundRows(tt.stmt))
+		})
+	}
+
+	require.True(t, selectStatementHasSQLCalcFoundRows(withFoundRows()))
+	require.True(t, selectStatementHasSQLCalcFoundRows(&tree.ParenSelect{Select: withFoundRows()}))
+	require.False(t, selectStatementHasSQLCalcFoundRows(&tree.SelectClause{}))
+}
+
+func TestStatementHasSQLCalcFoundRowsPagination(t *testing.T) {
+	count := func(value int64) *tree.Limit {
+		return &tree.Limit{Count: tree.NewNumVal(value, "1", false, tree.P_int64)}
+	}
+	offset := &tree.Limit{Offset: tree.NewNumVal(int64(1), "1", false, tree.P_int64)}
+	withFoundRows := func() *tree.Select {
+		return sqlCalcFoundRowsTestStatement()
+	}
+
+	tests := []struct {
+		name string
+		stmt tree.Statement
+		want bool
+	}{
+		{name: "no final pagination", stmt: withFoundRows(), want: false},
+		{name: "direct limit", stmt: func() *tree.Select { stmt := withFoundRows(); stmt.Limit = count(1); return stmt }(), want: true},
+		{name: "direct offset", stmt: func() *tree.Select { stmt := withFoundRows(); stmt.Limit = offset; return stmt }(), want: true},
+		{name: "outer parenthesized limit", stmt: &tree.Select{Select: &tree.ParenSelect{Select: withFoundRows()}, Limit: count(1)}, want: true},
+		{name: "inner parenthesized limit", stmt: &tree.Select{Select: &tree.ParenSelect{Select: func() *tree.Select { stmt := withFoundRows(); stmt.Limit = count(1); return stmt }()}}, want: true},
+		{name: "outer union limit", stmt: &tree.Select{Select: &tree.UnionClause{Left: withFoundRows(), Right: &tree.ValuesClause{}}, Limit: count(1)}, want: true},
+		{name: "right union pagination is not final SQL calc pagination", stmt: &tree.Select{Select: &tree.UnionClause{Left: withFoundRows(), Right: &tree.Select{Select: &tree.SelectClause{}, Limit: count(1)}}}, want: false},
+		{name: "plain select limit", stmt: &tree.Select{Select: &tree.SelectClause{}, Limit: count(1)}, want: false},
+		{name: "non select", stmt: &tree.ValuesStatement{}, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, statementHasSQLCalcFoundRowsPagination(tt.stmt))
+		})
+	}
+}
+
+func TestLiteralLimitZeroSkipsUnconsumedProducerSteps(t *testing.T) {
+	c := newLazyUnionAllTestCompile(t)
+	producer := &plan.Node{NodeType: plan.Node_SINK}
+	final := &plan.Node{
+		NodeType: plan.Node_PROJECT,
+		Limit:    plan2.MakePlan2Uint64ConstExprWithType(0),
+	}
+	qry := &plan.Query{Nodes: []*plan.Node{producer, final}, Steps: []int32{0, 1}}
+	require.Equal(t, 1, c.firstStepToCompile(qry))
+
+	final.Limit = plan2.MakePlan2Uint64ConstExprWithType(1)
+	require.Zero(t, c.firstStepToCompile(qry))
+
+	c.stmt = sqlCalcFoundRowsTestStatement()
+	c.foundRowsOwnerNode = final
+	final.Limit = plan2.MakePlan2Uint64ConstExprWithType(0)
+	require.Zero(t, c.firstStepToCompile(qry))
+}
+
+func TestSQLCalcFoundRowsDisablesLiteralLimitZeroFastPath(t *testing.T) {
+	c := newLazyUnionAllTestCompile(t)
+	node := &plan.Node{Limit: plan2.MakePlan2Uint64ConstExprWithType(0)}
+	require.True(t, c.canUseLiteralLimitZeroFastPath(node))
+
+	c.stmt = sqlCalcFoundRowsTestStatement()
+	c.foundRowsOwnerNode = node
+	require.False(t, c.canUseLiteralLimitZeroFastPath(node))
+
+	nested := &plan.Node{Limit: plan2.MakePlan2Uint64ConstExprWithType(0)}
+	require.True(t, c.canUseLiteralLimitZeroFastPath(nested))
+
+	node.Limit = plan2.MakePlan2Uint64ConstExprWithType(1)
+	require.False(t, c.canUseLiteralLimitZeroFastPath(node))
+}
+
+func TestFindFoundRowsOwnerBelowResultProjection(t *testing.T) {
+	outerLimit := &plan.Node{
+		NodeType: plan.Node_SORT,
+		Children: []int32{0},
+		Limit:    plan2.MakePlan2Uint64ConstExprWithType(2),
+	}
+	root := &plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{1}}
+	query := &plan.Query{
+		Nodes: []*plan.Node{
+			{NodeType: plan.Node_TABLE_SCAN},
+			outerLimit,
+			root,
+		},
+		Steps: []int32{2},
+	}
+
+	stmt := sqlCalcFoundRowsTestStatement()
+	stmt.Limit = &tree.Limit{Count: tree.NewNumVal(int64(2), "2", false, tree.P_int64)}
+	c := &Compile{stmt: stmt}
+	require.True(t, statementHasSQLCalcFoundRowsPagination(stmt))
+	require.Same(t, outerLimit, findFoundRowsOwnerNode(query, query.Steps[0]))
+	require.Same(t, outerLimit, c.selectFoundRowsOwnerNode(query))
+
+	stmt.Limit = nil
+	require.False(t, statementHasSQLCalcFoundRowsPagination(stmt))
+	// Without top-level pagination, the same plan shape represents pagination
+	// owned by a derived table or CTE and must not publish the outer count.
+	require.Nil(t, c.selectFoundRowsOwnerNode(query))
+}
+
+func TestFindFoundRowsOwnerPrefersOuterPagination(t *testing.T) {
+	nestedLimit := &plan.Node{
+		NodeType: plan.Node_PROJECT,
+		Children: []int32{0},
+		Limit:    plan2.MakePlan2Uint64ConstExprWithType(5),
+	}
+	outerLimit := &plan.Node{
+		NodeType: plan.Node_SORT,
+		Children: []int32{1},
+		Limit:    plan2.MakePlan2Uint64ConstExprWithType(1),
+	}
+	root := &plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{2}}
+	query := &plan.Query{
+		Nodes: []*plan.Node{
+			{NodeType: plan.Node_TABLE_SCAN},
+			nestedLimit,
+			outerLimit,
+			root,
+		},
+		Steps: []int32{3},
+	}
+
+	stmt := sqlCalcFoundRowsTestStatement()
+	stmt.Limit = &tree.Limit{Count: tree.NewNumVal(int64(1), "1", false, tree.P_int64)}
+	c := &Compile{stmt: stmt}
+	require.Same(t, outerLimit, findFoundRowsOwnerNode(query, query.Steps[0]))
+	require.Same(t, outerLimit, c.selectFoundRowsOwnerNode(query))
+}
+
+func TestFindFoundRowsOwnerIncludesMaterializedSQLSelectLimit(t *testing.T) {
+	root := &plan.Node{
+		NodeType: plan.Node_PROJECT,
+		Limit:    plan2.MakePlan2Uint64ConstExprWithType(1),
+	}
+	query := &plan.Query{Nodes: []*plan.Node{root}, Steps: []int32{0}}
+
+	c := &Compile{
+		stmt:                            sqlCalcFoundRowsTestStatement(),
+		materializedSQLSelectLimitOwner: root,
+	}
+	require.True(t, statementHasSQLCalcFoundRows(c.stmt))
+	require.Same(t, root, c.selectFoundRowsOwnerNode(query))
+
+	// A LIMIT already present in the plan is not enough to infer that it is the
+	// implicit top-level session limit. Only the exact materialized node owns it.
+	c.materializedSQLSelectLimitOwner = nil
+	require.Nil(t, c.selectFoundRowsOwnerNode(query))
+	c.materializedSQLSelectLimitOwner = &plan.Node{Limit: root.Limit}
+	require.Nil(t, c.selectFoundRowsOwnerNode(query))
+}
+
+func TestSelectFoundRowsOwnerRejectsNestedOnlyPagination(t *testing.T) {
+	nestedLimit := &plan.Node{
+		NodeType: plan.Node_PROJECT,
+		Children: []int32{0},
+		Limit:    plan2.MakePlan2Uint64ConstExprWithType(5),
+	}
+	root := &plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{1}}
+	query := &plan.Query{
+		Nodes: []*plan.Node{
+			{NodeType: plan.Node_TABLE_SCAN},
+			nestedLimit,
+			root,
+		},
+		Steps: []int32{2},
+	}
+	c := &Compile{stmt: sqlCalcFoundRowsTestStatement()}
+
+	require.Same(t, nestedLimit, findFoundRowsOwnerNode(query, query.Steps[0]))
+	require.Nil(t, c.selectFoundRowsOwnerNode(query))
+
+	query.Steps[0] = -1
+	require.Nil(t, c.selectFoundRowsOwnerNode(query))
+	query.Steps[0] = int32(len(query.Nodes))
+	require.Nil(t, c.selectFoundRowsOwnerNode(query))
+}
+
+func TestSQLCalcFoundRowsLimitHasSingleCoordinatorOwner(t *testing.T) {
+	c := newLazyUnionAllTestCompile(t)
+	c.stmt = sqlCalcFoundRowsTestStatement()
+	node := &plan.Node{Limit: plan2.MakePlan2Uint64ConstExprWithType(1)}
+	c.foundRowsOwnerNode = node
+	left := newLazyUnionAllLeaf(c, nil)
+	right := newLazyUnionAllLeaf(c, nil)
+
+	result := c.compileLimit(node, []*Scope{left, right})
+	require.Len(t, result, 1)
+	_, leftHasLimit := left.RootOp.(*limitop.Limit)
+	_, rightHasLimit := right.RootOp.(*limitop.Limit)
+	coordinatorLimit, coordinatorHasLimit := result[0].RootOp.(*limitop.Limit)
+	require.False(t, leftHasLimit)
+	require.False(t, rightHasLimit)
+	require.True(t, coordinatorHasLimit)
+	require.True(t, coordinatorLimit.IsFoundRowsOwner())
+
+	freeLazyUnionAllTestScope(c, result[0])
+}
+
+func TestSQLCalcFoundRowsOffsetHasSingleCoordinatorOwner(t *testing.T) {
+	c := newLazyUnionAllTestCompile(t)
+	c.stmt = sqlCalcFoundRowsTestStatement()
+	node := &plan.Node{Offset: plan2.MakePlan2Uint64ConstExprWithType(1)}
+	c.foundRowsOwnerNode = node
+	input := newLazyUnionAllLeaf(c, nil)
+
+	result := c.compileOffset(node, []*Scope{input})
+	require.Len(t, result, 1)
+	_, inputHasOffset := input.RootOp.(*offsetop.Offset)
+	coordinatorOffset, coordinatorHasOffset := result[0].RootOp.(*offsetop.Offset)
+	require.False(t, inputHasOffset)
+	require.True(t, coordinatorHasOffset)
+	require.True(t, coordinatorOffset.IsFoundRowsOwner())
+
+	freeLazyUnionAllTestScope(c, result[0])
+}
+
+func TestNestedLimitDoesNotBecomeFoundRowsOwner(t *testing.T) {
+	c := newLazyUnionAllTestCompile(t)
+	c.stmt = sqlCalcFoundRowsTestStatement()
+	c.foundRowsOwnerNode = &plan.Node{}
+	nested := &plan.Node{Limit: plan2.MakePlan2Uint64ConstExprWithType(1)}
+	input := newLazyUnionAllLeaf(c, nil)
+
+	result := c.compileLimit(nested, []*Scope{input})
+	require.Len(t, result, 1)
+	nestedLimit, ok := result[0].RootOp.(*limitop.Limit)
+	require.True(t, ok)
+	require.False(t, nestedLimit.IsFoundRowsOwner())
+
+	freeLazyUnionAllTestScope(c, result[0])
+}
+
+func TestCompileResetBeginsSQLCalcFoundRowsExecution(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	c := NewCompile("test", "test", "", "", "", newStubEngine(), proc,
+		sqlCalcFoundRowsTestStatement(), false, nil, time.Now())
+	t.Cleanup(c.Release)
+	proc.BeginFoundRowsStatement(false)
+	proc.SetFoundRows(9)
+
+	require.NoError(t, c.Reset(proc, time.Now(), nil, "execute prepared_found_rows"))
+	require.True(t, proc.IsSqlCalcFoundRows())
+	require.False(t, proc.FoundRowsRecorded())
+	require.Zero(t, proc.GetResultRows())
+	require.Equal(t, uint64(9), proc.GetFoundRows())
+}
+
+func TestMarkInsertTableScansNotLockMetaDoesNotMutateWriteTarget(t *testing.T) {
+	targetRef := &plan.ObjectRef{SchemaName: "db", ObjName: "target"}
+	sourceRef := &plan.ObjectRef{SchemaName: "db", ObjName: "source"}
+	targetScan := &plan.Node{NodeType: plan.Node_TABLE_SCAN, ObjRef: targetRef}
+	sourceScan := &plan.Node{NodeType: plan.Node_TABLE_SCAN, ObjRef: sourceRef}
+	write := &plan.Node{
+		NodeType: plan.Node_MULTI_UPDATE,
+		UpdateCtxList: []*plan.UpdateCtx{{
+			ObjRef: targetRef,
+		}},
+	}
+	query := &plan.Query{Nodes: []*plan.Node{
+		targetScan,
+		sourceScan,
+		{NodeType: plan.Node_TABLE_SCAN},
+		write,
+	}}
+
+	markInsertTableScansNotLockMeta(query)
+
+	require.NotSame(t, targetRef, targetScan.ObjRef)
+	require.NotSame(t, sourceRef, sourceScan.ObjRef)
+	require.True(t, targetScan.ObjRef.NotLockMeta)
+	require.True(t, sourceScan.ObjRef.NotLockMeta)
+	require.False(t, targetRef.NotLockMeta)
+	require.False(t, sourceRef.NotLockMeta)
+	require.Same(t, targetRef, write.UpdateCtxList[0].ObjRef)
+
+	c := &Compile{needLockMeta: true, lockMeta: NewLockMeta()}
+	c.appendMetaTables(targetScan.ObjRef)
+	c.appendMetaTables(sourceScan.ObjRef)
+	c.appendMetaTables(write.UpdateCtxList[0].ObjRef)
+	require.Equal(t, map[string]struct{}{"db target": {}}, c.lockMeta.metaTables)
+}
+
+func TestSelectMetaLockRequirement(t *testing.T) {
+	call := func(name string, args ...*plan.Expr) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: name},
+			Args: args,
+		}}}
+	}
+
+	tests := []struct {
+		name               string
+		query              *plan.Query
+		wantLock           bool
+		wantUnresolvedFull bool
+	}{
+		{
+			name: "nil query",
+		},
+		{
+			name:  "nil node",
+			query: &plan.Query{Nodes: []*plan.Node{nil}},
+		},
+		{
+			name:  "ordinary select",
+			query: &plan.Query{Nodes: []*plan.Node{{NodeType: plan.Node_TABLE_SCAN}}},
+		},
+		{
+			name:     "select for update",
+			query:    &plan.Query{Nodes: []*plan.Node{{NodeType: plan.Node_LOCK_OP}}},
+			wantLock: true,
+		},
+		{
+			name: "unresolved fulltext filter",
+			query: &plan.Query{Nodes: []*plan.Node{{
+				NodeType:   plan.Node_TABLE_SCAN,
+				FilterList: []*plan.Expr{call("fulltext_match")},
+			}}},
+			wantLock:           true,
+			wantUnresolvedFull: true,
+		},
+		{
+			name: "nested unresolved fulltext score",
+			query: &plan.Query{Nodes: []*plan.Node{{
+				NodeType:    plan.Node_PROJECT,
+				ProjectList: []*plan.Expr{call("round", call("fulltext_match_score"))},
+			}}},
+			wantLock:           true,
+			wantUnresolvedFull: true,
+		},
+		{
+			name: "rewritten fulltext plan",
+			query: &plan.Query{Nodes: []*plan.Node{{
+				NodeType:    plan.Node_FUNCTION_SCAN,
+				ProjectList: []*plan.Expr{call("fulltext_index_scan")},
+			}}},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if test.query != nil {
+				test.query.Steps = []int32{0}
+			}
+			needsLock, hasUnresolvedFullText := selectMetaLockRequirement(test.query)
+			require.Equal(t, test.wantLock, needsLock)
+			require.Equal(t, test.wantUnresolvedFull, hasUnresolvedFullText)
+		})
+	}
+}
+
+func TestUnresolvedIndexHintMetadataValidation(t *testing.T) {
+	query := &plan.Query{UnresolvedIndexHints: []*plan.UnresolvedIndexHint{
+		{Table: &plan.ObjectRef{SchemaName: "db", ObjName: "t"}, IndexName: "idx_new"},
+		{Table: &plan.ObjectRef{SchemaName: "db", ObjName: "u"}, IndexName: "idx_later"},
+	}}
+
+	c := &Compile{needLockMeta: true, lockMeta: NewLockMeta()}
+	c.appendUnresolvedIndexHintMetaTables(query)
+	require.Equal(t, map[string]struct{}{"db t": {}, "db u": {}}, c.lockMeta.metaTables)
+
+	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
+	c.proc = testutil.NewProcess(t)
+	err := c.unresolvedIndexHintError()
+	require.ErrorContains(t, err, "Key 'idx_new' doesn't exist in table 't'")
+	require.NotContains(t, err.Error(), "idx_later")
+
+	query.UnresolvedIndexHints = nil
+	require.NoError(t, c.unresolvedIndexHintError())
+}
+
+func TestSelectMetaLockRequirementPlannerPaths(t *testing.T) {
+	tests := []struct {
+		name               string
+		sql                string
+		wantLock           bool
+		wantUnresolvedFull bool
+		wantRetainedFilter bool
+	}{
+		{
+			name:               "unindexed order by placeholder",
+			sql:                "select empno from constraint_test.emp order by match(ename) against('hello')",
+			wantLock:           true,
+			wantUnresolvedFull: true,
+		},
+		{
+			name:               "unindexed join on placeholder",
+			sql:                "select left_emp.empno from constraint_test.emp left_emp join constraint_test.emp right_emp on match(left_emp.ename) against('hello')",
+			wantLock:           true,
+			wantUnresolvedFull: true,
+		},
+		{
+			name:               "unindexed group by placeholder",
+			sql:                "select count(*) from constraint_test.emp group by match(ename) against('hello')",
+			wantLock:           true,
+			wantUnresolvedFull: true,
+		},
+		{
+			name:               "unindexed aggregate placeholder",
+			sql:                "select max(match(ename) against('hello')) from constraint_test.emp",
+			wantLock:           true,
+			wantUnresolvedFull: true,
+		},
+		{
+			name:               "unindexed window order placeholder",
+			sql:                "select row_number() over (order by match(ename) against('hello')) from constraint_test.emp",
+			wantLock:           true,
+			wantUnresolvedFull: true,
+		},
+		{
+			name:               "indexed filter",
+			sql:                "select id from constraint_test.docs_ft where match(body) against('hello')",
+			wantRetainedFilter: true,
+		},
+		{
+			name:               "indexed count filter",
+			sql:                "select count(*) from constraint_test.docs_ft where match(body) against('hello')",
+			wantRetainedFilter: true,
+		},
+		{
+			name: "indexed projection",
+			sql:  "select match(body) against('hello') from constraint_test.docs_ft",
+		},
+		{
+			name: "indexed score filter",
+			sql:  "select id from constraint_test.docs_ft where match(body) against('hello') > 0",
+		},
+		{
+			name: "indexed order by placeholder",
+			sql:  "select id from constraint_test.docs_ft order by match(body) against('hello') desc",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			optimizer := plan2.NewMockOptimizer(true)
+			ctx := optimizer.CurrentContext()
+			ctx.GetProcess().SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) {
+				return "BM25", nil
+			})
+			statements, err := mysql.Parse(context.Background(), test.sql, 1)
+			require.NoError(t, err)
+			defer statements[0].Free()
+			built, err := plan2.BuildPlan(ctx, statements[0], false)
+			require.NoError(t, err)
+			if test.wantRetainedFilter {
+				// These optimizer outputs retain the abandoned original filter.
+				// The executable plan must still be classified from reachable nodes.
+				retainedMatch := false
+				for _, node := range built.GetQuery().Nodes {
+					retainedMatch = retainedMatch || expressionsContainUnresolvedFullText(node.FilterList)
+				}
+				require.True(t, retainedMatch)
+			}
+			needsLock, unresolved := selectMetaLockRequirement(built.GetQuery())
+			require.Equal(t, test.wantUnresolvedFull, unresolved)
+			require.Equal(t, test.wantLock, needsLock)
+		})
+	}
+}
+
+func TestNodeContainsUnresolvedFullTextRuntimeSlots(t *testing.T) {
+	match := func() *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: "fulltext_match"},
+		}}}
+	}
+
+	tests := []struct {
+		name string
+		node *plan.Node
+	}{
+		{
+			name: "index reader lower distance bound",
+			node: &plan.Node{IndexReaderParam: &plan.IndexReaderParam{
+				DistRange: &plan.DistRange{LowerBound: match()},
+			}},
+		},
+		{
+			name: "index reader upper distance bound",
+			node: &plan.Node{IndexReaderParam: &plan.IndexReaderParam{
+				DistRange: &plan.DistRange{UpperBound: match()},
+			}},
+		},
+		{
+			name: "vector query vector",
+			node: &plan.Node{VectorIndexScan: &plan.VectorIndexScan{QueryVector: match()}},
+		},
+		{
+			name: "vector candidate limit",
+			node: &plan.Node{VectorIndexScan: &plan.VectorIndexScan{CandidateLimit: match()}},
+		},
+		{
+			name: "vector first round limit",
+			node: &plan.Node{VectorIndexScan: &plan.VectorIndexScan{FirstRoundLimit: match()}},
+		},
+		{
+			name: "vector lower distance bound",
+			node: &plan.Node{VectorIndexScan: &plan.VectorIndexScan{
+				DistanceRange: &plan.DistRange{LowerBound: match()},
+			}},
+		},
+		{
+			name: "vector upper distance bound",
+			node: &plan.Node{VectorIndexScan: &plan.VectorIndexScan{
+				DistanceRange: &plan.DistRange{UpperBound: match()},
+			}},
+		},
+		{
+			name: "vector prefilter",
+			node: &plan.Node{VectorIndexScan: &plan.VectorIndexScan{PreFilters: []*plan.Expr{match()}}},
+		},
+		{
+			name: "runtime filter probe expression",
+			node: &plan.Node{RuntimeFilterProbeList: []*plan.RuntimeFilterSpec{{Expr: match()}}},
+		},
+		{
+			name: "runtime filter build expression",
+			node: &plan.Node{RuntimeFilterBuildList: []*plan.RuntimeFilterSpec{{BuildExpr: match()}}},
+		},
+		{
+			name: "rowset expression",
+			node: &plan.Node{RowsetData: &plan.RowsetData{Cols: []*plan.ColData{{
+				Data: []*plan.RowsetExpr{{Expr: match()}},
+			}}}},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.True(t, nodeContainsUnresolvedFullText(test.node))
+		})
+	}
+}
+
+func TestNodeContainsUnresolvedFullTextIgnoresSourceTableDefaults(t *testing.T) {
+	match := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{ObjName: "fulltext_match"},
+	}}}
+	node := &plan.Node{
+		NodeType: plan.Node_VECTOR_INDEX_SCAN,
+		VectorIndexScan: &plan.VectorIndexScan{
+			SourceTableDef: &plan.TableDef{Cols: []*plan.ColDef{{
+				Default: &plan.Default{Expr: match},
+			}}},
+		},
+	}
+
+	require.False(t, nodeContainsUnresolvedFullText(node))
+	query := &plan.Query{Steps: []int32{0}, Nodes: []*plan.Node{node}}
+	needsLock, unresolved := selectMetaLockRequirement(query)
+	require.False(t, needsLock)
+	require.False(t, unresolved)
+}
+
+func TestSelectMetaLockRequirementReachability(t *testing.T) {
+	match := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{ObjName: "fulltext_match"},
+	}}}
+	query := &plan.Query{
+		Steps: []int32{0, 2, -1, 99},
+		Nodes: []*plan.Node{
+			{NodeType: plan.Node_SINK_SCAN, SourceStep: []int32{1, -1, 99}},
+			{NodeType: plan.Node_FILTER, FilterList: []*plan.Expr{match}},
+			{NodeType: plan.Node_PROJECT, Children: []int32{3, 3, -1, 99, 4}},
+			{NodeType: plan.Node_TABLE_SCAN, Children: []int32{0}},
+			nil,
+		},
+	}
+	lock, unresolved := selectMetaLockRequirement(query)
+	require.False(t, lock)
+	require.False(t, unresolved)
+
+	query.Nodes[3].FilterList = []*plan.Expr{match}
+	lock, unresolved = selectMetaLockRequirement(query)
+	require.True(t, lock)
+	require.True(t, unresolved)
+
+	query.Nodes[3].FilterList = nil
+	query.Nodes[3].NodeType = plan.Node_LOCK_OP
+	lock, unresolved = selectMetaLockRequirement(query)
+	require.True(t, lock)
+	require.False(t, unresolved)
+}
 
 // ============================================================================
 // Tests for rewriteAutoModeToPre
@@ -189,6 +816,29 @@ func TestRewriteAutoModeToPre_Insert(t *testing.T) {
 	assert.Equal(t, "pre", innerSelect.RankOption.Option["mode"])
 }
 
+func TestRewriteAutoModeToPre_MultiInsert(t *testing.T) {
+	// Test INSERT ALL ... SELECT with mode=auto: the rewrite reaches the source query.
+	innerSelect := &tree.Select{
+		RankOption: &tree.RankOption{
+			Option: map[string]string{"mode": "auto"},
+		},
+	}
+	multiInsert := &tree.MultiInsert{
+		Targets: []*tree.MultiInsertTarget{{Table: tree.NewTableName("t", tree.ObjectNamePrefix{}, nil)}},
+		Source:  innerSelect,
+	}
+
+	result := rewriteAutoModeToPre(multiInsert)
+	assert.True(t, result)
+	assert.Equal(t, "pre", innerSelect.RankOption.Option["mode"])
+
+	forced := &tree.Select{}
+	multiInsert.Source = forced
+	assert.True(t, forceModePre(multiInsert))
+	assert.NotNil(t, forced.RankOption)
+	assert.Equal(t, "pre", forced.RankOption.Option["mode"])
+}
+
 func TestRewriteAutoModeToPre_Replace(t *testing.T) {
 	// Test REPLACE ... SELECT with mode=auto
 	innerSelect := &tree.Select{
@@ -331,112 +981,6 @@ func TestForceModePre_NilRows(t *testing.T) {
 func TestRewriteAutoModeInSelect_NilSelect(t *testing.T) {
 	result := rewriteAutoModeInSelect(nil)
 	assert.False(t, result)
-}
-
-// ============================================================================
-// Tests for isAdaptiveVectorSearch
-// ============================================================================
-
-func TestIsAdaptiveVectorSearch(t *testing.T) {
-	c := &Compile{}
-
-	tests := []struct {
-		name     string
-		qry      *plan.Query
-		expected bool
-	}{
-		{
-			name:     "nil query",
-			qry:      nil,
-			expected: false,
-		},
-		{
-			name: "no nodes",
-			qry: &plan.Query{
-				Nodes: []*plan.Node{},
-			},
-			expected: false,
-		},
-		{
-			name: "nodes without RankOption",
-			qry: &plan.Query{
-				Nodes: []*plan.Node{
-					{NodeType: plan.Node_TABLE_SCAN},
-					{NodeType: plan.Node_SORT},
-				},
-			},
-			expected: false,
-		},
-		{
-			name: "node with RankOption but mode is not auto",
-			qry: &plan.Query{
-				Nodes: []*plan.Node{
-					{
-						NodeType:   plan.Node_SORT,
-						RankOption: &plan.RankOption{Mode: "post"},
-					},
-				},
-			},
-			expected: false,
-		},
-		{
-			name: "node with RankOption mode=pre",
-			qry: &plan.Query{
-				Nodes: []*plan.Node{
-					{
-						NodeType:   plan.Node_SORT,
-						RankOption: &plan.RankOption{Mode: "pre"},
-					},
-				},
-			},
-			expected: false,
-		},
-		{
-			name: "node with RankOption mode=auto",
-			qry: &plan.Query{
-				Nodes: []*plan.Node{
-					{
-						NodeType:   plan.Node_SORT,
-						RankOption: &plan.RankOption{Mode: "auto"},
-					},
-				},
-			},
-			expected: true,
-		},
-		{
-			name: "multiple nodes, one with mode=auto",
-			qry: &plan.Query{
-				Nodes: []*plan.Node{
-					{NodeType: plan.Node_TABLE_SCAN},
-					{
-						NodeType:   plan.Node_SORT,
-						RankOption: &plan.RankOption{Mode: "auto"},
-					},
-					{NodeType: plan.Node_PROJECT},
-				},
-			},
-			expected: true,
-		},
-		{
-			name: "node with empty RankOption",
-			qry: &plan.Query{
-				Nodes: []*plan.Node{
-					{
-						NodeType:   plan.Node_SORT,
-						RankOption: &plan.RankOption{},
-					},
-				},
-			},
-			expected: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := c.isAdaptiveVectorSearch(tt.qry)
-			assert.Equal(t, tt.expected, result)
-		})
-	}
 }
 
 // ============================================================================

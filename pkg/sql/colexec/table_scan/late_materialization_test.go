@@ -116,6 +116,7 @@ func lateTestCompare(t *testing.T, name string, pos int32, value int32) *pbplan.
 func TestConfigureLateMaterialization(t *testing.T) {
 	intType := types.T_int32.ToType()
 	shortVarchar := types.New(types.T_varchar, 36, 0)
+	blockSizedChar := types.New(types.T_char, 120, 0)
 	wideVarchar := types.New(types.T_varchar, 1024, 0)
 	textType := types.T_text.ToType()
 
@@ -154,6 +155,22 @@ func TestConfigureLateMaterialization(t *testing.T) {
 		require.Equal(t, []int{3}, scan.ctr.lateColumns)
 	})
 
+	t.Run("defers bounded output whose full block payload is large", func(t *testing.T) {
+		scan := &TableScan{
+			Attrs: []string{"filter_col", "small_value", "block_sized_value"},
+			Types: []pbplan.Type{
+				plan.MakePlan2Type(&intType),
+				plan.MakePlan2Type(&shortVarchar),
+				plan.MakePlan2Type(&blockSizedChar),
+			},
+			FilterExprs: []*pbplan.Expr{lateTestCol(0, intType)},
+			ctr:         container{allFilterExecutors: []colexec.ExpressionExecutor{nil}},
+		}
+		scan.configureLateMaterialization()
+		require.Equal(t, []int{0, 1}, scan.ctr.earlyColumns)
+		require.Equal(t, []int{2}, scan.ctr.lateColumns)
+	})
+
 	t.Run("unsupported reference stays eager", func(t *testing.T) {
 		scan := newScan(0)
 		scan.FilterExprs = []*pbplan.Expr{{Expr: &pbplan.Expr_Raw{Raw: &pbplan.RawColRef{}}}}
@@ -161,6 +178,14 @@ func TestConfigureLateMaterialization(t *testing.T) {
 		require.Empty(t, scan.ctr.earlyColumns)
 		require.Empty(t, scan.ctr.lateColumns)
 	})
+}
+
+func TestLateMaterializationCandidateUsesBlockPayload(t *testing.T) {
+	belowThreshold := types.New(types.T_varchar, 95, 0)
+	atThreshold := types.New(types.T_varchar, 96, 0)
+
+	require.False(t, isLateMaterializationCandidate(plan.MakePlan2Type(&belowThreshold)))
+	require.True(t, isLateMaterializationCandidate(plan.MakePlan2Type(&atThreshold)))
 }
 
 func TestLateMaterializationFilterPreservesOriginalSelections(t *testing.T) {
@@ -194,6 +219,45 @@ func TestLateMaterializationFilterPreservesOriginalSelections(t *testing.T) {
 	require.Equal(t, 2, bat.RowCount())
 	require.Equal(t, []int32{2, 3}, vector.MustFixedColWithTypeCheck[int32](bat.Vecs[0]))
 	require.Zero(t, bat.Vecs[1].Length())
+
+	bat.Clean(proc.Mp())
+	scan.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.GetMPool().CurrNB())
+}
+
+func TestLateMaterializationFilterSkipsUnloadedCharColumns(t *testing.T) {
+	proc := testutil.NewProc(t)
+	intType := types.T_int32.ToType()
+	charType := types.New(types.T_char, 120, 0)
+	scan := &TableScan{
+		Attrs: []string{"filter_col", "late_char"},
+		Types: []pbplan.Type{
+			plan.MakePlan2Type(&intType),
+			plan.MakePlan2Type(&charType),
+		},
+		FilterExprs: []*pbplan.Expr{lateTestCompare(t, ">", 0, 1)},
+	}
+	proc.SetResolveVariableFunc(func(string, bool, bool) (any, error) {
+		return "PAD_CHAR_TO_FULL_LENGTH", nil
+	})
+	require.NoError(t, scan.Prepare(proc))
+	require.Equal(t, []int{0}, scan.ctr.earlyColumns)
+	require.Equal(t, []int{1}, scan.ctr.lateColumns)
+
+	bat := batch.NewOffHeapWithSize(2)
+	bat.Vecs[0] = vector.NewOffHeapVecWithType(intType)
+	bat.Vecs[1] = vector.NewOffHeapVecWithType(charType)
+	for i := int32(0); i < 4; i++ {
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], i, false, proc.Mp()))
+	}
+	bat.SetRowCount(4)
+
+	result, err := scan.applyReaderFilter(proc, bat, []int{0})
+	require.NoError(t, err)
+	require.Equal(t, []int64{2, 3}, result.Sels)
+	require.Equal(t, 2, bat.RowCount())
+	require.Zero(t, bat.Vecs[1].Length(), "late CHAR vector must remain unloaded during filtering")
 
 	bat.Clean(proc.Mp())
 	scan.Free(proc, false, nil)

@@ -25,6 +25,9 @@ extern "C"
 }
 
 #include <string.h>
+#include <cerrno>
+#include <climits>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <unistd.h>
@@ -38,6 +41,7 @@ extern "C"
 #include <builtin_types.h>
 
 #define FATBIN_FILE "mocl_kernel64.fatbin"
+#define FATBIN_PATH_ENV "MO_CUDA_FATBIN_PATH"
 
 using namespace std;
 
@@ -80,14 +84,25 @@ int32_t CudaEnv_init(CudaEnv *env, uint8_t *errBuf) {
 #endif
 
 #ifdef __linux__
-    char mobin_path[PATH_MAX];
-    ssize_t nb = readlink("/proc/self/exe", mobin_path, PATH_MAX);
-    if (nb == -1) {
-        int nbErr = snprintf((char *) errBuf+1, 255, "readlink error %d", errno);
-        errBuf[0] = (uint8_t) nbErr;
-        return -1;
+    string fatbin_path;
+    const char *configured_fatbin = getenv(FATBIN_PATH_ENV);
+    if (configured_fatbin != NULL && configured_fatbin[0] != '\0') {
+        fatbin_path = configured_fatbin;
+    } else {
+        // readlink does not append NUL and returns the buffer size when the
+        // result was truncated. dirname requires a complete mutable C string.
+        char mobin_path[PATH_MAX + 1];
+        ssize_t nb = readlink("/proc/self/exe", mobin_path, PATH_MAX);
+        if (nb < 0 || nb >= PATH_MAX) {
+            int path_error = nb < 0 ? errno : ENAMETOOLONG;
+            int nbErr = snprintf((char *) errBuf+1, 255,
+                                 "readlink error %d", path_error);
+            errBuf[0] = (uint8_t) (nbErr < 0 ? 0 : (nbErr > 255 ? 255 : nbErr));
+            return -1;
+        }
+        mobin_path[nb] = '\0';
+        fatbin_path = string(dirname(mobin_path)) + "/" + FATBIN_FILE;
     }
-    string fatbin_path = string(dirname(mobin_path)) + "/" + FATBIN_FILE;
 #else
     // Not implemented yet.
     return -1;
@@ -111,6 +126,12 @@ CudaEnv *newCudaEnv(uint8_t *errBuf) {
     env->l2distance_f32_const = 0;
     env->l2distance_f64_const = 0;
     if (CudaEnv_init(env, errBuf) != 0) {
+        if (env->cuModule != 0) {
+            cuModuleUnload(env->cuModule);
+        }
+        if (env->cuContext != 0) {
+            cuCtxDestroy(env->cuContext);
+        }
         free(env);
         return NULL;
     }
@@ -265,4 +286,3 @@ int main(int argc, char **argv) {
     }
 }
 #endif  
-

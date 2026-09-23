@@ -458,6 +458,11 @@ func (s *service) doUpgrade(
 	}
 
 	if upgrade.UpgradeTenant == versions.Yes {
+		if required := h.Metadata().RequiredProtocolVersion; required > 0 {
+			if err := versions.CheckCommonProtocolVersion(txn, required); err != nil {
+				return 0, err
+			}
+		}
 		state = versions.StateUpgradingTenant
 		err := fetchTenants(
 			s.upgrade.upgradeTenantBatch,

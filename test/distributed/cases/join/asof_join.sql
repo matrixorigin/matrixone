@@ -160,5 +160,72 @@ select l.id, r.value
 from (select 1 id, 1 k, cast('2026-01-01 10:01:00' as timestamp) ts) l
 asof join duplicate_config r on l.k = r.k and l.ts >= r.ts;
 
+-- Issue #26986 regression: ASOF must also work through real table metadata
+-- (primary/unique keys, NOT NULL, DEFAULT and CHECK), including a prepared
+-- execution.  These are deliberately separate from the duplicate-timestamp
+-- case above: duplicate ties have no cross-CN ordering contract yet.
+create table constrained_readings (
+    id int primary key,
+    device varchar(12) not null,
+    region varchar(12) not null,
+    event_ts timestamp(6) not null,
+    reading decimal(10,2) not null,
+    constraint constrained_reading_nonnegative check (reading >= 0)
+);
+create table constrained_device_cfg (
+    device varchar(12) not null,
+    region varchar(12) not null,
+    effective_ts timestamp(6) not null,
+    setting varchar(32) not null default 'default-setting',
+    primary key (device, region, effective_ts)
+);
+create index constrained_cfg_setting_idx on constrained_device_cfg (setting);
+insert into constrained_device_cfg (device, region, effective_ts, setting) values
+    ('a', 'west', '2026-02-01 09:59:00.000000', 'v1'),
+    ('a', 'west', '2026-02-01 10:01:00.000000', 'v2');
+insert into constrained_device_cfg (device, region, effective_ts) values
+    ('b', 'east', '2026-02-01 10:00:00.000000');
+insert into constrained_readings values
+    (1, 'a', 'west', '2026-02-01 09:59:30.000000', 1.00),
+    (2, 'a', 'west', '2026-02-01 10:01:00.000000', 2.00),
+    (3, 'b', 'east', '2026-02-01 10:00:00.000000', 3.00);
+-- @regex("(?i)check",true)
+insert into constrained_readings values
+    (4, 'a', 'west', '2026-02-01 10:02:00.000000', -1.00);
+-- @regex("(?i)cannot be null",true)
+insert into constrained_device_cfg values
+    (null, 'east', '2026-02-01 10:02:00.000000', 'invalid-null-key');
+select r.id, c.setting
+from constrained_readings r asof left join constrained_device_cfg c
+  on r.device = c.device
+ and r.region = c.region
+ and r.event_ts >= c.effective_ts
+order by r.id;
+select r.id, c.setting
+from constrained_readings r asof left join constrained_device_cfg c
+  on r.device = c.device
+ and r.region = c.region
+ and r.event_ts >= c.effective_ts
+tolerance interval 30 second
+order by r.id;
+prepare constrained_asof from
+    'select r.id, c.setting from constrained_readings r asof join constrained_device_cfg c on r.device = c.device and r.region = c.region and r.event_ts >= c.effective_ts where r.id = ?';
+set @constrained_id = 2;
+execute constrained_asof using @constrained_id;
+deallocate prepare constrained_asof;
+-- @regex("Duplicate entry",true)
+insert into constrained_device_cfg values
+    ('a', 'west', '2026-02-01 10:01:00.000000', 'duplicate');
+-- @regex("ASOF JOIN requires at least one equality key",true)
+select r.id
+from constrained_readings r asof join constrained_device_cfg c
+  on r.event_ts >= c.effective_ts;
+-- @regex("ASOF JOIN temporal predicate must look backward",true)
+select r.id
+from constrained_readings r asof join constrained_device_cfg c
+  on r.device = c.device
+ and r.region = c.region
+ and r.event_ts <= c.effective_ts;
+
 drop database asof_join_db;
 set session time_zone = @saved_time_zone;

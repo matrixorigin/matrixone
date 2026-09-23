@@ -40,27 +40,16 @@ func TestIssue26121DatabaseOperationsKeepOrdinaryInternalLookingTables(t *testin
 		execSQLRequire(t, ctx, db, "set role moadmin")
 
 		const (
-			sourceDB         = "issue_26121_source"
-			branchDB         = "issue_26121_branch"
-			cloneDB          = "issue_26121_clone"
-			fullTextDB       = "issue_26121_fulltext"
-			fullTextCloneDB  = "issue_26121_fulltext_clone"
-			fullTextBranchDB = "issue_26121_fulltext_branch"
-			restoreDB        = "issue_26121_after_snapshot"
-			snapshotName     = "issue_26121_account_snapshot"
+			sourceDB     = "issue_26121_source"
+			branchDB     = "issue_26121_branch"
+			cloneDB      = "issue_26121_clone"
+			deleteDB     = "issue_26121_delete"
+			restoreDB    = "issue_26121_after_snapshot"
+			snapshotName = "issue_26121_account_snapshot"
 		)
-		deleteCases := []struct {
-			dbName    string
-			tableName string
-		}{
-			{dbName: "issue_26121_delete_tmp", tableName: "__mo_tmp_user_keep"},
-			{dbName: "issue_26121_delete_lock", tableName: "__mo_account_lock"},
-			{dbName: "issue_26121_delete_auto", tableName: "mo_increment_columns"},
-		}
-		cleanupDBs := []string{branchDB, cloneDB, sourceDB, fullTextBranchDB, fullTextCloneDB, fullTextDB, restoreDB}
-		for _, tc := range deleteCases {
-			cleanupDBs = append(cleanupDBs, tc.dbName)
-		}
+		deleteCases := []string{"__mo_tmp_user_keep", "__mo_account_lock", "mo_increment_columns"}
+		cleanupDBs := []string{branchDB, cloneDB, sourceDB, deleteDB, restoreDB}
+		execSQLMaybe(t, ctx, db, "drop snapshot if exists "+snapshotName)
 		for _, name := range cleanupDBs {
 			execSQLMaybe(t, ctx, db, fmt.Sprintf("drop database if exists `%s`", name))
 		}
@@ -70,6 +59,7 @@ func TestIssue26121DatabaseOperationsKeepOrdinaryInternalLookingTables(t *testin
 			for _, name := range cleanupDBs {
 				execSQLMaybe(t, cleanupCtx, db, fmt.Sprintf("drop database if exists `%s`", name))
 			}
+			execSQLMaybe(t, cleanupCtx, db, "drop snapshot if exists "+snapshotName)
 		}()
 
 		t.Run("account restore skips bootstrap index tables", func(t *testing.T) {
@@ -84,7 +74,7 @@ func TestIssue26121DatabaseOperationsKeepOrdinaryInternalLookingTables(t *testin
 			execSQLRequire(t, ctx, db, "drop snapshot `"+snapshotName+"`")
 		})
 
-		t.Run("database copies preserve ordinary tables", func(t *testing.T) {
+		t.Run("database copies", func(t *testing.T) {
 			execSQLRequire(t, ctx, db, "create database `"+sourceDB+"`")
 			tableNames := []string{"__mo_tmp_user_data", "__mo_account_lock", "mo_increment_columns"}
 			for i, tableName := range tableNames {
@@ -95,70 +85,66 @@ func TestIssue26121DatabaseOperationsKeepOrdinaryInternalLookingTables(t *testin
 					"insert into `%s`.`%s` values (%d, 'ordinary-user-row')",
 					sourceDB, tableName, i+1))
 			}
+			execSQLRequire(t, ctx, db, "create table `"+sourceDB+"`.`docs` (id bigint primary key, body text)")
+			execSQLRequire(t, ctx, db, "create fulltext index `ft_body` on `"+sourceDB+"`.`docs` (`body`)")
+			execSQLRequire(t, ctx, db, "insert into `"+sourceDB+"`.`docs` values (1, 'one document')")
+			var sourceHidden int
+			require.NoError(t, db.QueryRowContext(ctx,
+				"select count(*) from mo_catalog.mo_tables where reldatabase = ? and relname like '__mo_index_%'",
+				sourceDB).Scan(&sourceHidden))
+			require.Equal(t, 1, sourceHidden)
 
 			execSQLRequire(t, ctx, db, "data branch create database `"+branchDB+"` from `"+sourceDB+"`")
 			execSQLRequire(t, ctx, db, "create database `"+cloneDB+"` clone `"+sourceDB+"`")
 
-			for _, copiedDB := range []string{branchDB, cloneDB} {
-				for _, tableName := range tableNames {
-					var count int
-					err = db.QueryRowContext(ctx, fmt.Sprintf(
-						"select count(*) from `%s`.`%s`", copiedDB, tableName)).Scan(&count)
-					require.NoErrorf(t, err, "%s.%s must be copied", copiedDB, tableName)
-					require.Equal(t, 1, count, "%s.%s must retain its row", copiedDB, tableName)
+			t.Run("ordinary internal-looking tables", func(t *testing.T) {
+				for _, copiedDB := range []string{branchDB, cloneDB} {
+					for _, tableName := range tableNames {
+						var count int
+						err = db.QueryRowContext(ctx, fmt.Sprintf(
+							"select count(*) from `%s`.`%s`", copiedDB, tableName)).Scan(&count)
+						require.NoErrorf(t, err, "%s.%s must be copied", copiedDB, tableName)
+						require.Equal(t, 1, count, "%s.%s must retain its row", copiedDB, tableName)
+					}
 				}
-			}
-		})
+			})
 
-		t.Run("database copies do not copy fulltext storage independently", func(t *testing.T) {
-			execSQLRequire(t, ctx, db, "create database `"+fullTextDB+"`")
-			execSQLRequire(t, ctx, db, "create table `"+fullTextDB+"`.`docs` (id bigint primary key, body text)")
-			execSQLRequire(t, ctx, db, "create fulltext index `ft_body` on `"+fullTextDB+"`.`docs` (`body`)")
-			execSQLRequire(t, ctx, db, "insert into `"+fullTextDB+"`.`docs` values (1, 'one document')")
-
-			var sourceHidden int
-			require.NoError(t, db.QueryRowContext(ctx,
-				"select count(*) from mo_catalog.mo_tables where reldatabase = ? and relname like '__mo_index_%'",
-				fullTextDB).Scan(&sourceHidden))
-			require.Equal(t, 1, sourceHidden)
-
-			execSQLRequire(t, ctx, db, "create database `"+fullTextCloneDB+"` clone `"+fullTextDB+"`")
-			execSQLRequire(t, ctx, db, "data branch create database `"+fullTextBranchDB+"` from `"+fullTextDB+"`")
-
-			assertFullTextCopy := func(database string) {
-				var targetHidden int
-				require.NoError(t, db.QueryRowContext(ctx,
-					"select count(*) from mo_catalog.mo_tables where reldatabase = ? and relname like '__mo_index_%'",
-					database).Scan(&targetHidden))
-				require.Equal(t, sourceHidden, targetHidden)
-				var rows int
-				require.NoError(t, db.QueryRowContext(ctx,
-					"select count(*) from `"+database+"`.`docs`").Scan(&rows))
-				require.Equal(t, 1, rows)
-			}
-			assertFullTextCopy(fullTextCloneDB)
-			assertFullTextCopy(fullTextBranchDB)
+			t.Run("fulltext storage", func(t *testing.T) {
+				for _, copiedDB := range []string{branchDB, cloneDB} {
+					var targetHidden int
+					require.NoError(t, db.QueryRowContext(ctx,
+						"select count(*) from mo_catalog.mo_tables where reldatabase = ? and relname like '__mo_index_%'",
+						copiedDB).Scan(&targetHidden))
+					require.Equal(t, sourceHidden, targetHidden)
+					var rows int
+					require.NoError(t, db.QueryRowContext(ctx,
+						"select count(*) from `"+copiedDB+"`.`docs`").Scan(&rows))
+					require.Equal(t, 1, rows)
+				}
+			})
 		})
 
 		t.Run("delete validation sees ordinary tables", func(t *testing.T) {
-			for _, tc := range deleteCases {
-				t.Run(tc.tableName, func(t *testing.T) {
-					execSQLRequire(t, ctx, db, "create database `"+tc.dbName+"`")
-					execSQLRequire(t, ctx, db, "create table `"+tc.dbName+"`.`base` (id int primary key)")
-					execSQLRequire(t, ctx, db, "insert into `"+tc.dbName+"`.`base` values (1)")
-					execSQLRequire(t, ctx, db, "data branch create table `"+tc.dbName+"`.`branch_t` from `"+tc.dbName+"`.`base`")
-					execSQLRequire(t, ctx, db, "drop table `"+tc.dbName+"`.`base`")
-					execSQLRequire(t, ctx, db, "create table `"+tc.dbName+"`.`"+tc.tableName+"` (id int primary key)")
-					execSQLRequire(t, ctx, db, "insert into `"+tc.dbName+"`.`"+tc.tableName+"` values (1)")
+			execSQLRequire(t, ctx, db, "create database `"+deleteDB+"`")
+			execSQLRequire(t, ctx, db, "create table `"+deleteDB+"`.`base` (id int primary key)")
+			execSQLRequire(t, ctx, db, "insert into `"+deleteDB+"`.`base` values (1)")
+			execSQLRequire(t, ctx, db, "data branch create table `"+deleteDB+"`.`branch_t` from `"+deleteDB+"`.`base`")
+			execSQLRequire(t, ctx, db, "drop table `"+deleteDB+"`.`base`")
 
-					_, err = db.ExecContext(ctx, "data branch delete database `"+tc.dbName+"`")
+			for _, tableName := range deleteCases {
+				t.Run(tableName, func(t *testing.T) {
+					execSQLRequire(t, ctx, db, "create table `"+deleteDB+"`.`"+tableName+"` (id int primary key)")
+					execSQLRequire(t, ctx, db, "insert into `"+deleteDB+"`.`"+tableName+"` values (1)")
+
+					_, err = db.ExecContext(ctx, "data branch delete database `"+deleteDB+"`")
 					require.Error(t, err)
 					require.Contains(t, err.Error(), "is not an active branch table")
 
 					var count int
 					require.NoError(t, db.QueryRowContext(ctx,
-						"select count(*) from `"+tc.dbName+"`.`"+tc.tableName+"`").Scan(&count))
+						"select count(*) from `"+deleteDB+"`.`"+tableName+"`").Scan(&count))
 					require.Equal(t, 1, count)
+					execSQLRequire(t, ctx, db, "drop table `"+deleteDB+"`.`"+tableName+"`")
 				})
 			}
 		})

@@ -95,6 +95,9 @@ func updateRenameColumnInTableDef(
 	if err := checkColumnWithGeneratedDependency(ctx.GetContext(), tableDef, oldColName); err != nil {
 		return nil, err
 	}
+	if err := checkColumnWithDefaultDependency(ctx.GetContext(), tableDef, oldColName); err != nil {
+		return nil, err
+	}
 
 	// Check if the new column name is valid and conflicts with internal hidden columns
 	if err := checkColumnNameValid(ctx.GetContext(), newColName); err != nil {
@@ -129,8 +132,8 @@ func updateRenameColumnInTableDef(
 	indexAffected := false
 	for _, indexInfo := range tableDef.Indexes {
 		for j, partCol := range indexInfo.Parts {
-			partCol = catalog.ResolveAlias(partCol)
-			if partCol == oldColName {
+			partWasAlias := catalog.IsAlias(partCol)
+			if catalog.ResolveAlias(partCol) == oldColName {
 				prefixMetadataAffected, err := renameIndexPrefixLengthMetadata(
 					indexInfo, oldColName, newColName,
 				)
@@ -138,6 +141,9 @@ func updateRenameColumnInTableDef(
 					return nil, err
 				}
 				indexInfo.Parts[j] = newColName
+				if partWasAlias {
+					indexInfo.Parts[j] = catalog.CreateAlias(newColName)
+				}
 				indexAffected = true
 				if prefixMetadataAffected {
 					sqls = append(sqls, fmt.Sprintf(
@@ -172,19 +178,33 @@ func updateRenameColumnInTableDef(
 
 	// update primary key
 	primaryKeyDef := tableDef.Pkey
-	primaryKeyAffected := false
+	primaryKeyPartAffected := false
+	singleColumnPrimaryKeyAffected := false
 	for j, partCol := range primaryKeyDef.Names {
 		if partCol == oldColName {
 			primaryKeyDef.Names[j] = newColName
+			primaryKeyPartAffected = true
 			if len(primaryKeyDef.Names) == 1 {
-				primaryKeyAffected = true
+				singleColumnPrimaryKeyAffected = true
 				primaryKeyDef.PkeyColName = newColName
 			}
 			break
 		}
 	}
 
-	if primaryKeyAffected {
+	// PRIMARY rows persist user-facing column names. Ordinary index rows use
+	// the same representation, while an automatically appended single-column
+	// PK part in a secondary index uses the internal alias representation.
+	if primaryKeyPartAffected && !indexAffected {
+		sqls = append(sqls, fmt.Sprintf(
+			indexFmt,
+			sqlquote.EscapeString(newColNameOrigin),
+			tableDef.TblId,
+			sqlquote.EscapeString(oldColNameOrigin),
+		))
+	}
+
+	if singleColumnPrimaryKeyAffected {
 		sqls = append(sqls, fmt.Sprintf(
 			indexFmt,
 			sqlquote.EscapeString(catalog.CreateAlias(newColName)),
@@ -457,7 +477,9 @@ func AlterColumn(
 				defer func() {
 					tmpColumnDef.Free()
 				}()
-				defaultValue, err := buildDefaultExpr(tmpColumnDef, colDef.Typ, ctx.GetProcess())
+				defaultValue, err := buildDefaultExprWithColumns(
+					tmpColumnDef, colDef.Typ, ctx.GetProcess(), tableDef.Cols,
+				)
 				if err != nil {
 					return false, err
 				}

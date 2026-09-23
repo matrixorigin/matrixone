@@ -26,6 +26,56 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestParseLogShardsFencesChangedStoreIncarnation(t *testing.T) {
+	cluster := pb.ClusterInfo{LogShards: []metadata.LogShardRecord{{
+		ShardID:          1,
+		NumberOfReplicas: 1,
+	}}}
+	state := pb.LogState{
+		Shards: map[uint64]pb.LogShardInfo{1: {
+			ShardID:                  1,
+			Replicas:                 map[uint64]string{1: "log-a"},
+			NonVotingReplicas:        map[uint64]string{2: "log-b"},
+			ReplicaStoreIncarnations: map[uint64]string{1: "old-a", 2: "old-b"},
+			Epoch:                    1,
+		}},
+		Stores: map[string]pb.LogStoreInfo{
+			"log-a": {StoreIncarnation: "new-a"},
+			"log-b": {StoreIncarnation: "new-b"},
+		},
+	}
+
+	normal, nonVoting := parseLogShards(cluster, state, nil, 1)
+	assert.Equal(t, []replica{{uuid: "log-a", shardID: 1, replicaID: 1}}, normal.toRemove[1])
+	assert.Empty(t, normal.toStart)
+	assert.Equal(t, []replica{{uuid: "log-b", shardID: 1, replicaID: 2}}, nonVoting.toRemove[1])
+	assert.Empty(t, nonVoting.toStart)
+
+	// Once the store and replica generations agree, a missing local replica is
+	// an ordinary StartReplica case rather than a lost-storage replacement.
+	state.Stores["log-a"] = pb.LogStoreInfo{StoreIncarnation: "old-a"}
+	state.Stores["log-b"] = pb.LogStoreInfo{StoreIncarnation: "old-b"}
+	normal, nonVoting = parseLogShards(cluster, state, nil, 1)
+	assert.Empty(t, normal.toRemove)
+	assert.Equal(t, []replica{{uuid: "log-a", shardID: 1, replicaID: 1}}, normal.toStart)
+	assert.Empty(t, nonVoting.toRemove)
+	assert.Equal(t, []replica{{uuid: "log-b", shardID: 1, replicaID: 2}}, nonVoting.toStart)
+
+	// Empty incarnation fields represent a mixed-version cluster and preserve
+	// the legacy fail-open behavior.
+	state.Shards[1] = pb.LogShardInfo{
+		ShardID:           1,
+		Replicas:          map[uint64]string{1: "log-a"},
+		NonVotingReplicas: map[uint64]string{2: "log-b"},
+		Epoch:             1,
+	}
+	normal, nonVoting = parseLogShards(cluster, state, nil, 1)
+	assert.Empty(t, normal.toRemove)
+	assert.Len(t, normal.toStart, 1)
+	assert.Empty(t, nonVoting.toRemove)
+	assert.Len(t, nonVoting.toStart, 1)
+}
+
 func TestFixedLogShardInfo(t *testing.T) {
 	cases := []struct {
 		desc string

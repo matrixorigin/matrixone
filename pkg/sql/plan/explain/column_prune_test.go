@@ -864,11 +864,11 @@ func TestColumnPruneOperatorShape(t *testing.T) {
 		require.Equal(t, "starcount", agg.AggList[0].GetF().Func.ObjName)
 	})
 
-	t.Run("scalar aggregate handles interval carrier candidate", func(t *testing.T) {
+	t.Run("scalar aggregate handles consumed interval carrier candidate", func(t *testing.T) {
 		logicPlan, err := buildOneStmt(
 			plan2.NewMockOptimizer(false),
 			t,
-			"select 1 from (select count(interval 1 day), count(*) from mo_catalog.mo_database) s",
+			"select 1 from (select count(date_add(date '2026-01-01', interval n_regionkey day)), count(*) from nation) s",
 		)
 		require.NoError(t, err)
 

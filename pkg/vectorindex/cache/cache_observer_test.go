@@ -16,9 +16,11 @@ package cache
 
 import (
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/stretchr/testify/require"
 )
 
@@ -33,6 +35,15 @@ type observerMock struct {
 	destroyStarted    chan struct{}
 }
 
+type invalidationMock struct {
+	MockSearch
+	reasons []string
+}
+
+func (m *invalidationMock) OnCacheInvalidated(reason string) {
+	m.reasons = append(m.reasons, reason)
+}
+
 func (m *observerMock) SetLoadWaiters(n int64) { m.waiters = n }
 func (m *observerMock) FinishLoadObservation() { m.finished = true }
 func (m *observerMock) OnCacheInvalidated(reason string) {
@@ -43,6 +54,7 @@ func (m *observerMock) OnCacheInvalidated(reason string) {
 		<-m.allowInvalidation
 	}
 }
+func (m *observerMock) GetIndexSize() (int64, int64) { return 0, 0 }
 func (m *observerMock) Destroy() {
 	if m.destroyStarted != nil {
 		close(m.destroyStarted)
@@ -58,6 +70,93 @@ func TestVectorIndexSearchCompletesLoadObserverAfterWaiterSample(t *testing.T) {
 	require.Equal(t, int64(5), mock.waiters)
 	require.True(t, mock.finished)
 	s.Destroy()
+}
+
+func TestVectorIndexSearchDoesNotNotifyEmptyInvalidationReason(t *testing.T) {
+	mock := &invalidationMock{}
+	s := &VectorIndexSearch{Algo: mock}
+	s.Cond = sync.NewCond(s.Mutex.RLocker())
+	s.Destroy()
+	require.Empty(t, mock.reasons)
+}
+
+func TestVectorIndexCacheLifecycleHookRunsForEmptyShutdown(t *testing.T) {
+	var shutdown atomic.Bool
+	RegisterLifecycleHook(func(isShutdown bool) {
+		if isShutdown {
+			shutdown.Store(true)
+		}
+	})
+
+	c := NewVectorIndexCache()
+	c.Destroy()
+	require.True(t, shutdown.Load())
+}
+
+func TestVectorIndexCacheLifecycleHookPanicDoesNotStopLaterHooks(t *testing.T) {
+	var laterCalled atomic.Bool
+	lifecycleHooks.Lock()
+	previous := lifecycleHooks.hooks
+	lifecycleHooks.hooks = []func(bool){
+		func(bool) { panic("synthetic lifecycle hook panic") },
+		func(shutdown bool) {
+			if shutdown {
+				laterCalled.Store(true)
+			}
+		},
+	}
+	lifecycleHooks.Unlock()
+	t.Cleanup(func() {
+		lifecycleHooks.Lock()
+		lifecycleHooks.hooks = previous
+		lifecycleHooks.Unlock()
+	})
+
+	require.NotPanics(t, func() { NewVectorIndexCache().Destroy() })
+	require.True(t, laterCalled.Load())
+}
+
+type blockingInvalidationMock struct {
+	invalidationMock
+	started chan struct{}
+	release chan struct{}
+}
+
+func (m *blockingInvalidationMock) OnCacheInvalidated(reason string) {
+	close(m.started)
+	<-m.release
+	m.invalidationMock.OnCacheInvalidated(reason)
+}
+
+func TestVectorIndexCacheHouseKeepingPublishesBeforeDelete(t *testing.T) {
+	mock := &blockingInvalidationMock{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	s := &VectorIndexSearch{Algo: mock}
+	s.Cond = sync.NewCond(s.Mutex.RLocker())
+	s.ExpireAt.Store(time.Now().Add(-time.Second).UnixMicro())
+	c := NewVectorIndexCache()
+	c.IndexMap.Store("key", s)
+
+	done := make(chan struct{})
+	go func() {
+		houseKeepingSync(t, c)
+		close(done)
+	}()
+
+	<-mock.started
+	replacement := &VectorIndexSearch{Algo: &MockSearch{}}
+	replacement.Cond = sync.NewCond(replacement.Mutex.RLocker())
+	value, loaded := c.IndexMap.LoadOrStore("key", replacement)
+	require.True(t, loaded)
+	require.Same(t, s, value)
+
+	close(mock.release)
+	<-done
+	_, loaded = c.IndexMap.Load("key")
+	require.False(t, loaded)
+	require.Equal(t, []string{"ttl_expired"}, mock.reasons)
 }
 
 func TestVectorIndexSearchDestroyWithReasonNotifiesOptionalHook(t *testing.T) {
@@ -111,7 +210,6 @@ func TestVectorIndexCacheHouseKeepingPublishesReasonBeforeRemovingEntry(t *testi
 	c := NewVectorIndexCache()
 	c.IndexMap.Store("key", s)
 
-	// Model an active reader holding the entry lock while housekeeping evicts it.
 	s.Mutex.Lock()
 	mutexHeld := true
 	releasedInvalidation := false
@@ -129,7 +227,7 @@ func TestVectorIndexCacheHouseKeepingPublishesReasonBeforeRemovingEntry(t *testi
 		}
 	}()
 	go func() {
-		c.HouseKeeping()
+		houseKeepingSync(t, c)
 		close(done)
 	}()
 
@@ -191,7 +289,7 @@ func TestVectorIndexCacheHouseKeepingSkipsReplacedSnapshotEntry(t *testing.T) {
 
 	done := make(chan struct{})
 	go func() {
-		c.HouseKeeping()
+		houseKeepingSync(t, c)
 		close(done)
 	}()
 
@@ -230,3 +328,96 @@ func TestVectorIndexCacheHouseKeepingSkipsReplacedSnapshotEntry(t *testing.T) {
 	_, loaded = c.IndexMap.Load(capturedKey)
 	require.False(t, loaded, "the captured expired entry should be evicted")
 }
+
+func TestVectorIndexCacheHouseKeepingSkipsConcurrentlyRenewedSnapshotEntry(t *testing.T) {
+	makeExpiredLoaded := func(mock *observerMock) *VectorIndexSearch {
+		s := &VectorIndexSearch{Algo: mock}
+		s.Cond = sync.NewCond(s.Mutex.RLocker())
+		s.Status.Store(STATUS_LOADED)
+		s.ExpireAt.Store(time.Now().Add(-time.Second).UnixMicro())
+		return s
+	}
+	firstMock := &observerMock{
+		invalidatedReady:  make(chan struct{}),
+		allowInvalidation: make(chan struct{}),
+	}
+	secondMock := &observerMock{
+		invalidatedReady:  make(chan struct{}),
+		allowInvalidation: make(chan struct{}),
+	}
+	first := makeExpiredLoaded(firstMock)
+	second := makeExpiredLoaded(secondMock)
+	c := NewVectorIndexCache()
+	c.IndexMap.Store("first", first)
+	c.IndexMap.Store("second", second)
+
+	done := make(chan struct{})
+	go func() {
+		houseKeepingSync(t, c)
+		close(done)
+	}()
+
+	var renewedKey string
+	select {
+	case <-firstMock.invalidatedReady:
+		renewedKey = "second"
+	case <-secondMock.invalidatedReady:
+		renewedKey = "first"
+	case <-time.After(time.Second):
+		t.Fatal("housekeeping did not start evicting an expired snapshot entry")
+	}
+
+	_, _, err := c.Search(nil, renewedKey, &MockSearch{}, nil, vectorindex.RuntimeConfig{})
+	require.NoError(t, err)
+	value, loaded := c.IndexMap.Load(renewedKey)
+	require.True(t, loaded)
+	renewed := value.(*VectorIndexSearch)
+	require.False(t, renewed.Expired(), "the concurrent search must renew the snapshot entry")
+
+	close(firstMock.allowInvalidation)
+	close(secondMock.allowInvalidation)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("housekeeping did not finish after invalidation was released")
+	}
+
+	value, loaded = c.IndexMap.Load(renewedKey)
+	require.True(t, loaded, "a successful concurrent search must prevent snapshot eviction")
+	require.Same(t, renewed, value)
+	c.Remove("first")
+	c.Remove("second")
+}
+
+func TestVectorIndexCacheEvictEntrySkipsRenewedTTLAfterHousekeepingCheck(t *testing.T) {
+	c := NewVectorIndexCache()
+	entry := &VectorIndexSearch{Algo: &MockSearch{}}
+	entry.Cond = sync.NewCond(entry.Mutex.RLocker())
+	entry.Status.Store(STATUS_LOADED)
+	entry.ExpireAt.Store(time.Now().Add(-time.Second).UnixMicro())
+	c.IndexMap.Store("renewed", entry)
+
+	// HouseKeeping already observed expiry. A search in the gap must renew the
+	// entry, and the eviction claim must recheck TTL while excluding renewal.
+	require.True(t, entry.Expired())
+	_, _, err := c.Search(nil, "renewed", &MockSearch{}, nil, vectorindex.RuntimeConfig{})
+	require.NoError(t, err)
+	require.False(t, entry.Expired())
+	require.False(t, c.evictEntry("renewed", entry, "ttl_expired"))
+	value, loaded := c.IndexMap.Load("renewed")
+	require.True(t, loaded)
+	require.Same(t, entry, value)
+
+	stale := &VectorIndexSearch{Algo: &MockSearch{}}
+	stale.Cond = sync.NewCond(stale.Mutex.RLocker())
+	stale.Status.Store(STATUS_LOADED)
+	stale.ExpireAt.Store(time.Now().Add(time.Minute).UnixMicro())
+	stale.markStale()
+	c.IndexMap.Store("stale", stale)
+	require.True(t, c.evictEntry("stale", stale, "generation_changed"))
+
+	require.True(t, c.evictEntry("renewed", entry, ""))
+}
+
+// BuildTS stubs (fulltext2 async-freshness interface method).
+func (m *observerMock) BuildTS() int64 { return 0 }

@@ -258,6 +258,39 @@ func TestStartedTNReplicaLifecycle(t *testing.T) {
 	})
 }
 
+func TestCachedLocalDispatchIsRejectedAfterQuiesce(t *testing.T) {
+	s := &store{cfg: &Config{UUID: "test"}, replicas: &sync.Map{}}
+	shard := newTestTNShard(1, 2, 3)
+	r := newReplica(shard, runtime.DefaultRuntime())
+	require.True(t, r.reserveStart())
+	r.mu.Lock()
+	r.service = &closeTrackingTxnService{}
+	r.mu.Unlock()
+	r.finishStart(nil)
+	s.replicas.Store(uint64(1), r)
+
+	// Sender may retain this function after the lookup succeeded.  The call
+	// itself must acquire the store lifecycle lease, not just trust the stale
+	// lookup result.
+	handler := s.dispatchLocalRequest(shard)
+	require.NotNil(t, handler)
+	s.quiesceLocalHandlers()
+	err := handler(context.Background(), &txn.TxnRequest{}, &txn.TxnResponse{})
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrStreamClosed))
+}
+
+func TestLocalHandlerDrainWaitsForCachedDispatch(t *testing.T) {
+	s := &store{}
+	releaseHandler, ok := s.acquireLocalHandler()
+	require.True(t, ok)
+	s.quiesceLocalHandlers()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, s.drainLocalHandlers(ctx), context.Canceled)
+	releaseHandler()
+	require.NoError(t, s.drainLocalHandlers(context.Background()))
+}
+
 func TestHandleRead(t *testing.T) {
 	runTNStoreTest(t, func(s *store) {
 		shard := newTestTNShard(1, 2, 3)

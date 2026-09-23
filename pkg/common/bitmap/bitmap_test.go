@@ -233,6 +233,42 @@ func TestBitmap_Or(t *testing.T) {
 	require.Equal(t, 1400, np.Count())
 }
 
+func TestBitmapOrBounded(t *testing.T) {
+	dst := newBm(70)
+	dst.AddMany([]uint64{1, 69})
+	dst.InstallExternalStorage(make([]uint64, 2))
+	src := newBm(130)
+	src.AddMany([]uint64{0, 1, 63, 64, 69, 70, 129})
+
+	dst.OrBounded(src, 70)
+
+	require.EqualValues(t, 70, dst.Len())
+	require.Equal(t, 5, dst.Count())
+	for _, row := range []uint64{0, 1, 63, 64, 69} {
+		require.True(t, dst.Contains(row), "row %d", row)
+	}
+	for _, row := range []uint64{70, 129} {
+		require.False(t, dst.Contains(row), "row %d", row)
+	}
+	require.NoError(t, dst.Validate())
+}
+
+func TestBitmapExternalOrCapacityFailureIsAtomic(t *testing.T) {
+	dst := newBm(4)
+	dst.Add(2)
+	dst.InstallExternalStorage(make([]uint64, 1))
+	src := newBm(65)
+	src.Add(64)
+
+	require.PanicsWithValue(t, "bitmap external storage capacity exceeded", func() {
+		dst.Or(src)
+	})
+	require.EqualValues(t, 4, dst.Len())
+	require.Equal(t, 1, dst.Count())
+	require.True(t, dst.Contains(2))
+	require.NoError(t, dst.Validate())
+}
+
 func TestBitmap_And(t *testing.T) {
 	np := newBm(BenchmarkRows)
 	np.AddRange(100, 1000)

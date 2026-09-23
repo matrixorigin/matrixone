@@ -42,7 +42,7 @@ func (e *Execution) Run(
 		ctx = context.Background()
 	}
 	e.mu.Lock()
-	if e.started || e.terminal {
+	if e.started || e.terminal || e.quiesced {
 		e.mu.Unlock()
 		return internalErrorf("sidecar flight: ticket was already claimed or completed")
 	}

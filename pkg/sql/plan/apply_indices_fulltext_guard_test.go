@@ -121,3 +121,29 @@ func TestFullTextGuardCoversWrappedProjectionMatch(t *testing.T) {
 		})
 	}
 }
+
+func TestFullTextSQLCalcFoundRowsKeepsOnlyTopLevelLimit(t *testing.T) {
+	builder, _, projID := buildWrappedMatchGuardPlan(t, true)
+	builder.sqlCalcFoundRows = true
+	projNode := builder.qry.Nodes[projID]
+	projNode.Limit = makePlan2Uint64ConstExprWithType(1)
+
+	builder.prepareSpecialIndexGuards(projID)
+	newID, err := builder.applyIndices(projID, map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+	require.NoError(t, err)
+	require.Equal(t, projID, newID)
+	require.Equal(t, uint64(1), projNode.Limit.GetLit().GetU64Val(),
+		"the top-level coordinator pagination must remain")
+
+	require.Len(t, projNode.Children, 1)
+	internalSort := builder.qry.Nodes[projNode.Children[0]]
+	require.Equal(t, planpb.Node_SORT, internalSort.NodeType)
+	require.Nil(t, internalSort.Limit,
+		"the internal relevance sort must not truncate FOUND_ROWS input")
+	require.Nil(t, internalSort.Offset)
+
+	functions := collectFullTextFunctionScans(builder, projNode.Children[0])
+	require.Len(t, functions, 1)
+	require.Nil(t, functions[0].Limit,
+		"the full-text TVF must also receive an unbounded candidate stream")
+}

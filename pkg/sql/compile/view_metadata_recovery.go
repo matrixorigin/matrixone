@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -60,6 +61,7 @@ type viewMetadataRecoveryCommand struct {
 
 func viewMetadataRequireRevalidationSQL() []string {
 	return []string{
+		catalog.SnapshotLifecycleGateSQL,
 		catalog.ViewMetadataLifecycleGateSQL,
 		fmt.Sprintf(
 			"insert into %s.%s (%s) select 0,0,0,0,'%s','%s',0,0,0,0,0,'','','','','%s','',0,null,0,1 "+
@@ -101,11 +103,24 @@ func RequireViewMetadataRevalidation(ctx context.Context, sqlExecutor executor.S
 			return err
 		}
 		result.Close()
+		result, err = txn.Exec(statements[1], executor.StatementOption{})
+		if err != nil {
+			return err
+		}
+		gatePresent := false
+		result.ReadRows(func(rows int, _ []*vector.Vector) bool {
+			gatePresent = rows > 0
+			return !gatePresent
+		})
+		result.Close()
+		if !gatePresent {
+			return moerr.NewNoSuchTable(ctx, catalog.MO_CATALOG, catalog.MO_VIEW_REFRESH)
+		}
 		if _, active, seedErr := seedViewMetadataRevalidationPage(txn); seedErr != nil || active {
 			return seedErr
 		}
 
-		for _, statement := range statements[1:] {
+		for _, statement := range statements[2:] {
 			result, err := txn.Exec(statement, executor.StatementOption{})
 			if err != nil {
 				return err
@@ -118,6 +133,41 @@ func RequireViewMetadataRevalidation(ctx context.Context, sqlExecutor executor.S
 }
 
 const viewMetadataRevalidationSeedComplete = uint32(^uint32(0))
+
+func decodeViewMetadataAccountIDs(column *vector.Vector, rows int) ([]uint32, error) {
+	if column == nil {
+		return nil, moerr.NewInternalErrorNoCtx("view metadata account_id vector is nil")
+	}
+	if rows < 0 {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"view metadata account_id vector has invalid row count %d", rows)
+	}
+	if column.GetType().Oid != types.T_int32 {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"view metadata account_id vector has type %s, expected %s",
+			column.GetType().String(), types.T_int32.String())
+	}
+	if !column.IsConst() && rows > column.Length() {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"view metadata account_id vector has %d rows, length %d",
+			rows, column.Length())
+	}
+
+	accounts := make([]uint32, rows)
+	for i := range accounts {
+		if column.IsNull(uint64(i)) {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"view metadata account_id vector contains NULL at row %d", i)
+		}
+		accountID := vector.GetFixedAtWithTypeCheck[int32](column, i)
+		if accountID < 0 {
+			return nil, moerr.NewInternalErrorNoCtxf(
+				"view metadata account_id is negative: %d", accountID)
+		}
+		accounts[i] = uint32(accountID)
+	}
+	return accounts, nil
+}
 
 func seedViewMetadataRevalidationPage(txn executor.TxnExecutor) (complete bool, active bool, err error) {
 	cursorResult, err := txn.Exec(fmt.Sprintf(
@@ -153,11 +203,35 @@ func seedViewMetadataRevalidationPage(txn executor.TxnExecutor) (complete bool, 
 		return false, true, err
 	}
 	accounts := make([]uint32, 0, viewMetadataRecoveryPageSize)
+	var pageErr error
 	page.ReadRows(func(rows int, columns []*vector.Vector) bool {
-		accounts = append(accounts, vector.MustFixedColNoTypeCheck[uint32](columns[0])[:rows]...)
+		if rows == 0 {
+			return true
+		}
+		if rows < 0 || len(accounts) > viewMetadataRecoveryPageSize ||
+			rows > viewMetadataRecoveryPageSize-len(accounts) {
+			pageErr = moerr.NewInternalErrorNoCtxf(
+				"view metadata account page has too many rows: batch=%d, read=%d, maximum=%d",
+				rows, len(accounts), viewMetadataRecoveryPageSize)
+			return false
+		}
+		if len(columns) != 1 {
+			pageErr = moerr.NewInternalErrorNoCtxf(
+				"view metadata account page returned %d columns, expected 1", len(columns))
+			return false
+		}
+		var pageAccounts []uint32
+		pageAccounts, pageErr = decodeViewMetadataAccountIDs(columns[0], rows)
+		if pageErr != nil {
+			return false
+		}
+		accounts = append(accounts, pageAccounts...)
 		return true
 	})
 	page.Close()
+	if pageErr != nil {
+		return false, true, pageErr
+	}
 	for _, accountID := range accounts {
 		result, execErr := txn.Exec(fmt.Sprintf(
 			"replace into %s.%s (%s) values (%d,0,0,0,'%s','%s',0,0,0,0,0,"+
@@ -197,11 +271,15 @@ func StartViewMetadataRevalidation(ctx context.Context, sqlExecutor executor.SQL
 	callCtx, cancel := context.WithTimeout(ctx, viewMetadataRecoveryCallTimeout)
 	defer cancel()
 	return sqlExecutor.ExecTxn(callCtx, func(txn executor.TxnExecutor) error {
-		gate, err := txn.Exec(catalog.ViewMetadataLifecycleGateSQL, executor.StatementOption{})
-		if err != nil {
+		if err := catalog.LockViewMetadataLifecycle(func(sql string) error {
+			gate, err := txn.Exec(sql, executor.StatementOption{})
+			if err == nil {
+				gate.Close()
+			}
+			return err
+		}); err != nil {
 			return err
 		}
-		gate.Close()
 
 		complete, active, err := seedViewMetadataRevalidationPage(txn)
 		if err != nil || !active || !complete {
@@ -457,16 +535,17 @@ func lockViewMetadataLifecycleGate(proc *process.Process) error {
 	if !ok {
 		return moerr.NewInternalError(proc.Ctx, "internal SQL executor is unavailable")
 	}
-	result, err := v.(executor.SQLExecutor).Exec(proc.Ctx, catalog.ViewMetadataLifecycleGateSQL,
-		executor.Options{}.
-			WithDisableIncrStatement().
-			WithTxn(proc.GetTxnOperator()).
-			WithAccountID(catalog.System_Account))
-	if err != nil {
+	return catalog.LockViewMetadataLifecycle(func(sql string) error {
+		result, err := v.(executor.SQLExecutor).Exec(proc.Ctx, sql,
+			executor.Options{}.
+				WithDisableIncrStatement().
+				WithTxn(proc.GetTxnOperator()).
+				WithAccountID(catalog.System_Account))
+		if err == nil {
+			result.Close()
+		}
 		return err
-	}
-	result.Close()
-	return nil
+	})
 }
 
 func discoverLegacyViewMetadata(proc *process.Process) (int, error) {
@@ -1251,11 +1330,13 @@ func (c *Compile) enqueueCurrentDependentViews(mutation viewRelationMutation) er
 }
 
 func (c *Compile) enqueueViewsAfterDatabaseRemoval(
+	databaseName string,
 	accountID uint32,
 	databaseID uint64,
 	generation uint64,
 ) error {
-	if c.proc.GetSessionInfo().IsRestore && !restoreInvalidatesViewMetadata(c.proc.Ctx) {
+	if needSkipDbs[databaseName] ||
+		(c.proc.GetSessionInfo().IsRestore && !restoreInvalidatesViewMetadata(c.proc.Ctx)) {
 		return nil
 	}
 	available, err := c.viewMetadataRefreshAvailable()

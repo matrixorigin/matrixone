@@ -70,6 +70,9 @@ func ChangeColumn(
 		if err := checkColumnWithGeneratedDependency(ctx, tableDef, oldColName); err != nil {
 			return false, err
 		}
+		if err := checkColumnWithDefaultDependency(ctx, tableDef, oldColName); err != nil {
+			return false, err
+		}
 		// CHANGE COLUMN renames through the COPY path. Rewrite the CHECK
 		// definitions before ConstructCreateTableSQL builds the temporary table,
 		// otherwise its constraints still reference the removed column name.
@@ -147,6 +150,14 @@ func buildColumnAndConstraint(
 		Typ:        colType,
 		Alg:        plan.CompressType_Lz4,
 	}
+	defaultScope := make([]*ColDef, len(targetTableDef.Cols))
+	for i, col := range targetTableDef.Cols {
+		if strings.EqualFold(col.Name, oldCol.Name) {
+			defaultScope[i] = newCol
+		} else {
+			defaultScope[i] = col
+		}
+	}
 
 	// If the column null property is not specified, it defaults to allowing null
 	hasNullFlag := false
@@ -199,8 +210,7 @@ func buildColumnAndConstraint(
 			constrNames := map[string]bool{}
 			// Check not empty constraint name whether is duplicated.
 			for _, idx := range targetTableDef.Indexes {
-				nameLower := strings.ToLower(idx.IndexName)
-				constrNames[nameLower] = true
+				constrNames[indexNameKey(idx.IndexName)] = true
 			}
 			// set empty constraint names(index and unique index)
 			setEmptyUniqueIndexName(constrNames, uniqueIndex)
@@ -211,14 +221,14 @@ func buildColumnAndConstraint(
 			}
 			targetTableDef.Indexes = append(targetTableDef.Indexes, indexDef)
 		case *tree.AttributeDefault:
-			defaultValue, err := buildDefaultExpr(specNewColumn, colType, ctx.GetProcess())
+			defaultValue, err := buildDefaultExprWithColumns(specNewColumn, colType, ctx.GetProcess(), defaultScope)
 			if err != nil {
 				return nil, err
 			}
 			newCol.Default = defaultValue
 			hasDefaultValue = true
 		case *tree.AttributeNull:
-			defaultValue, err := buildDefaultExpr(specNewColumn, colType, ctx.GetProcess())
+			defaultValue, err := buildDefaultExprWithColumns(specNewColumn, colType, ctx.GetProcess(), defaultScope)
 			if err != nil {
 				return nil, err
 			}
@@ -263,11 +273,15 @@ func buildColumnAndConstraint(
 			return nil, moerr.NewErrInvalidDefault(ctx.GetContext(), newColNameOrigin)
 		}
 		if !hasDefaultValue {
-			defaultValue, err := buildDefaultExpr(specNewColumn, colType, ctx.GetProcess())
+			defaultValue, err := buildDefaultExprWithColumns(specNewColumn, colType, ctx.GetProcess(), defaultScope)
 			if err != nil {
 				return nil, err
 			}
 			newCol.Default = defaultValue
+		}
+		if exprReferencesColumn(newCol.Default.Expr, newColName, defaultScope) {
+			return nil, moerr.NewInvalidInputf(ctx.GetContext(),
+				"default expression for column '%s' cannot refer to itself", newColNameOrigin)
 		}
 	}
 

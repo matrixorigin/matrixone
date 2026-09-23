@@ -26,8 +26,12 @@
 package plugin
 
 import (
+	"context"
 	"strings"
 	"sync"
+
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/indexplugin/coverage"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
@@ -67,6 +71,15 @@ type SearchPlugin interface {
 	Search() searchplugin.Hooks
 }
 
+// CoveragePlugin is an optional capability implemented by algorithms that can
+// report whether their durable state covers a read snapshot. Only an algorithm
+// that can answer honestly implements it; the rest are treated as never covered,
+// so no plugin carries a no-op hook.
+type CoveragePlugin interface {
+	AlgoPlugin
+	Coverage() coverage.Hooks
+}
+
 var (
 	registryMu sync.RWMutex
 	registry   = map[string]AlgoPlugin{}
@@ -91,6 +104,30 @@ func Get(algo string) (AlgoPlugin, bool) {
 	defer registryMu.RUnlock()
 	p, ok := registry[normalize(algo)]
 	return p, ok
+}
+
+// CoversSnapshot asks algo whether its index is current enough to be used as a
+// MANDATORY filter at req.Snapshot, and returns the build_ts of the generation a probe would
+// search (0 = unknown) for the planner's partial-plan gap decision.
+//
+// It FAILS CLOSED at every step: an unregistered algo, one that does not
+// implement CoveragePlugin, or a hook that errors all report false. A caller may
+// therefore treat the result as "safe to filter with" without inspecting the
+// error, which is reported only for logging.
+func CoversSnapshot(ctx context.Context, algo string, req coverage.Request) (bool, types.TS, error) {
+	p, ok := Get(algo)
+	if !ok {
+		return false, types.TS{}, nil
+	}
+	cp, ok := p.(CoveragePlugin)
+	if !ok {
+		return false, types.TS{}, nil
+	}
+	covered, buildTS, err := cp.Coverage().CoversSnapshot(ctx, req)
+	if err != nil {
+		return false, types.TS{}, err
+	}
+	return covered, buildTS, nil
 }
 
 // All returns every registered plugin. Useful for catalog enumeration.

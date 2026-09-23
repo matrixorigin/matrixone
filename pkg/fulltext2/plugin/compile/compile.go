@@ -46,6 +46,22 @@ func parserFromParams(params string) string {
 	return p.Parser
 }
 
+// jsonTermShapeFromParams reads the json word breaker's persisted option. The
+// ISCP writer reads the SAME param, so the CREATE build and the incremental
+// build emit identical terms; absent means the default (keys on).
+func jsonTermShapeFromParams(params string) (noKeys bool) {
+	if len(params) == 0 {
+		return false
+	}
+	var p struct {
+		IncludeKeys string `json:"include_keys"`
+	}
+	if err := json.Unmarshal([]byte(params), &p); err != nil {
+		return false
+	}
+	return p.IncludeKeys == "false"
+}
+
 var _ compileplugin.Hooks = Hooks{}
 
 type Hooks struct{}
@@ -117,8 +133,7 @@ func buildAndRegisterCDC(ctx compileplugin.CompileContext, storeDef, metaDef *pl
 				return err
 			}
 		}
-		fulltext2.NewFulltext2Search(cfg).OnCacheInvalidated(string(fulltext2.LoadMissRebuild))
-		cache.Cache.Remove(storeDef.IndexTableName)
+		cache.Cache.RemoveAllGenerations(storeDef.IndexTableName, "ddl")
 	}
 	// buildFromSource clears the prior tag=0 bases (idempotent) and rebuilds them.
 	if err := buildFromSource(ctx, storeDef, metaDef, origTable, db); err != nil {
@@ -233,6 +248,7 @@ func genFulltext2BuildFromSourceSQL(origTable *plan.TableDef, storeDef, metaDef 
 	if err != nil {
 		return "", err
 	}
+	jsonNoKeys := jsonTermShapeFromParams(storeDef.IndexAlgoParams)
 	cfg := fulltext2.TableConfig{
 		DbName:          db,
 		SrcTable:        origTable.Name,
@@ -243,6 +259,7 @@ func genFulltext2BuildFromSourceSQL(origTable *plan.TableDef, storeDef, metaDef 
 		Capacity:        capacity,
 		PostingCapacity: postingCap,
 		PositionFree:    positionFree,
+		JSONNoKeys:      jsonNoKeys,
 		FromSource:      true,
 	}
 	cols := make([]string, 0, len(storeDef.Parts))
@@ -352,6 +369,30 @@ func (Hooks) RestoreInitSQL(_ compileplugin.CompileContext, _ map[string]*plan.I
 	return true, "SELECT 1", nil
 }
 
+// AlterCopyInitSQL — a COPY ALTER's cloneUnaffectedIndexes SKIPS this (SkipWholeIndex)
+// async index, so unlike RestoreInitSQL the storage/metadata rows are NOT present.
+// fulltext2's base (tag=0) + metadata are written only by buildFromSource, and the CDC
+// consumer only appends the cdc_tail — so a from-0 CDC alone leaves a queryable-less
+// tail with no base and MATCH returns empty (#28837). Returning a REINDEX FORCE_SYNC as
+// the InitSQL rebuilds the base from source as the CDC's first iteration (post-commit);
+// the replacement then carries the tag=0 base with an empty cdc_tail, not a re-collected
+// copy of the rebuilt rows.
+func (Hooks) AlterCopyInitSQL(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) (bool, string, error) {
+	var idxName string
+	for _, d := range indexDefs {
+		if d != nil {
+			idxName = d.IndexName
+			break
+		}
+	}
+	if idxName == "" {
+		return false, "", moerr.NewInternalErrorNoCtx("fulltext2 AlterCopyInitSQL: no index def")
+	}
+	return true, fmt.Sprintf("ALTER TABLE %s ALTER REINDEX %s FULLTEXT2 FORCE_SYNC",
+		sqlquote.QualifiedIdent(ctx.QryDatabase(), ctx.OriginalTableDef().Name),
+		sqlquote.Ident(idxName)), nil
+}
+
 // ValidateReindexParams — fulltext2 honors position_free on a rebuild (its only
 // reindex-time param): POSITION_FREE=TRUE sets it, =FALSE clears it (→ a positional
 // rebuild that re-derives positions from source), absence keeps the current setting.
@@ -405,21 +446,9 @@ func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.Re
 	return merged, nil
 }
 
-// HandleDropIndex clears any pooled immutable generations as well as the
-// generic cache entry. The cache entry may already be absent after TTL
-// eviction, while its base pool is intentionally retained for a later warm
-// load; DROP must not leave that storage mapping behind.
-func (Hooks) HandleDropIndex(ctx compileplugin.CompileContext, indexDefs map[string]*plan.IndexDef) error {
-	if ctx == nil {
-		return nil
-	}
-	storeDef, ok := indexDefs[catalog.FullText2Index_TblType_Storage]
-	if !ok || storeDef == nil || storeDef.IndexTableName == "" {
-		return nil
-	}
-	cfg := fulltext2.TableConfig{DbName: ctx.QryDatabase(), IndexTable: storeDef.IndexTableName}
-	fulltext2.NewFulltext2Search(cfg).OnCacheInvalidated(string(fulltext2.LoadMissRebuild))
-	cache.Cache.Remove(storeDef.IndexTableName)
+// HandleDropIndex — no algorithm-specific cleanup beyond the generic hidden-table
+// deletion the SQL layer performs.
+func (Hooks) HandleDropIndex(_ compileplugin.CompileContext, _ map[string]*plan.IndexDef) error {
 	return nil
 }
 

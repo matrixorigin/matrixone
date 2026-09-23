@@ -63,3 +63,47 @@ INSERT INTO t2 VALUES (65, 66), (NULL, 67), (68, NULL), (NULL, NULL);
 SELECT a, b, CHAR(a, b) AS char_nullable FROM t2;
 DROP TABLE t2;
 
+# Prepared numeric context and BOOL compatibility (issues #28454 and #28456).
+# Reuse one SQL PREPARE plan across DECIMAL, string-backed numeric and BOOL
+# values; direct string CHAR must keep its prefix-truncation contract.
+PREPARE p_char_issue_28454 FROM 'SELECT HEX(CHAR(?)) AS char_value';
+SET @char_value_issue_28454 = 65.5;
+EXECUTE p_char_issue_28454 USING @char_value_issue_28454;
+SET @char_value_issue_28454 = 64.5;
+EXECUTE p_char_issue_28454 USING @char_value_issue_28454;
+SET @char_value_issue_28454 = '65.5';
+EXECUTE p_char_issue_28454 USING @char_value_issue_28454;
+SET @char_value_issue_28454 = TRUE;
+EXECUTE p_char_issue_28454 USING @char_value_issue_28454;
+SET @char_value_issue_28454 = 'abc';
+EXECUTE p_char_issue_28454 USING @char_value_issue_28454;
+SET @char_value_issue_28454 = '9007199254740993';
+EXECUTE p_char_issue_28454 USING @char_value_issue_28454;
+SET @char_value_issue_28454 = '65.5xyz';
+EXECUTE p_char_issue_28454 USING @char_value_issue_28454;
+SET @char_value_issue_28454 = 64.5e0;
+EXECUTE p_char_issue_28454 USING @char_value_issue_28454;
+SET @char_value_issue_28454 = 65.5e0;
+EXECUTE p_char_issue_28454 USING @char_value_issue_28454;
+SET @char_value_issue_28454 = '64.5e0';
+EXECUTE p_char_issue_28454 USING @char_value_issue_28454;
+SET @char_value_issue_28454 = '65.5e1';
+EXECUTE p_char_issue_28454 USING @char_value_issue_28454;
+DEALLOCATE PREPARE p_char_issue_28454;
+
+SELECT HEX(CHAR(TRUE)) AS direct_bool;
+SELECT HEX(CHAR(FALSE)) AS direct_false;
+SELECT HEX(CHAR(1 = 1)) AS direct_bool_expression_true;
+SELECT HEX(CHAR(1 = 0)) AS direct_bool_expression_false;
+SELECT HEX(CHAR('65.5')) AS direct_string;
+SELECT HEX(CHAR(64.5e0)) AS direct_double_even_low;
+SELECT HEX(CHAR(65.5e0)) AS direct_double_even_high;
+SELECT HEX(CHAR(-64.5e0)) AS direct_double_even_negative;
+
+DROP TABLE IF EXISTS char_bool_28456;
+CREATE TABLE char_bool_28456(id INT PRIMARY KEY, b BOOLEAN);
+INSERT INTO char_bool_28456 VALUES (1, TRUE), (2, FALSE), (3, NULL);
+SELECT id, HEX(CHAR(b)) AS bool_column FROM char_bool_28456 ORDER BY id;
+SET @char_bool_issue_28456 = TRUE;
+SELECT HEX(CHAR(@char_bool_issue_28456)) AS bool_user_variable;
+DROP TABLE char_bool_28456;

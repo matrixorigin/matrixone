@@ -1578,10 +1578,19 @@ null
 28888888888888888888888888888888888.123
 99999999999999999999999999999999999.833
 99999999999999999999999999999999999.833
-select avg(d) over (partition by d) from decimal01;
-invalid input: Decimal128 Add overflow: 99999999999999999999999999999999999833+99999999999999999999999999999999999833
+select avg(d) over (partition by d) from decimal01 where d = 28888888888888888888888888888888888.123;
+avg(d) over (partition by d)
+28888888888888888888888888888888888.1230000
 select sum(d) over (partition by d order by d rows between 1 preceding and 1 following) from decimal01;
-invalid input: Decimal128 Add overflow: 99999999999999999999999999999999999833+99999999999999999999999999999999999833
+sum(d) over (partition by d order by d rows between 1 preceding and 1 following)
+null
+null
+-15683024624308624626317573082.684
+-15683024624308624626317573082.684
+0.000
+28888888888888888888888888888888888.123
+199999999999999999999999999999999999.666
+199999999999999999999999999999999999.666
 drop table decimal01;
 drop table if exists date01;
 create table date01(id date);
@@ -3356,7 +3365,17 @@ select count(*) from td;
 count(*)
 20971520
 select avg(d) over (order by d range between 2 preceding and 2 following) from td limit 10;
-[unknown result because it is related to issue#13008]
+avg(d) over (order by d range between 2 preceding and 2 following)
+2
+2.5
+3
+4
+5
+6
+7
+8
+9
+10
 select sum(d) over (order by d rows between 10 preceding and 10 following) from td limit 10;
 sum(d) over (order by d rows between 10 preceding and 10 following)
 66
@@ -4875,6 +4894,13 @@ id    sliding_sum
 5    40
 deallocate prepare window_27352;
 drop table t_window_27352;
+drop table if exists t_window_27343;
+create table t_window_27343(id int);
+insert into t_window_27343 values (1);
+select rn from (select row_number() over () as rn from t_window_27343) ranked where rn <= cast(18446744073709551615 as unsigned);
+rn
+1
+drop table t_window_27343;
 drop table t_desc;
 drop database test_range_desc;
 drop database test;

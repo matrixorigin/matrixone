@@ -40,7 +40,9 @@ func (c *clientConn) migrateConnFromContext(
 	}
 	req := c.queryClient.NewRequest(query.CmdMethod_MigrateConnFrom)
 	req.MigrateConnFromRequest = &query.MigrateConnFromRequest{
-		ConnID: c.connID,
+		ConnID:                         c.connID,
+		TempTableMigrationSupported:    true,
+		LastInsertIDMigrationSupported: true,
 	}
 	ctx, cancel := context.WithTimeoutCause(parent, time.Second*3, moerr.CauseMigrateConnFrom)
 	defer cancel()
@@ -60,8 +62,20 @@ func (c *clientConn) migrateConnFromContext(
 	if r == nil {
 		return nil, moerr.NewInternalError(parent, "bad response")
 	}
+	if !r.LastInsertIDExported {
+		// A legacy source cannot distinguish an authoritative zero from a
+		// missing LAST_INSERT_ID snapshot. Keep the source session in place
+		// instead of allowing the target to observe a fabricated zero.
+		return nil, moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
 	if c.tun != nil && !c.tun.acceptPendingLongDataSnapshot(r.PreparedStmtLongDataChecked) {
 		c.tun.rejectPendingLongDataReconciliation()
+		return nil, moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
+	if !r.TempTableStateExported {
+		// An older CN cannot distinguish an empty temporary-table snapshot from
+		// omitted session state. Refuse the transfer instead of risking silent
+		// table loss during a rolling upgrade.
 		return nil, moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
 	if c.tun != nil {
@@ -99,7 +113,11 @@ func (c *clientConn) migrateConnToContext(
 		info.SystemVariablesSnapshotTooLarge || info.UserDefinedVarsSnapshotTooLarge
 	typedMigrationSupported := false
 	addr := ""
-	if typedMigration {
+	if !info.LastInsertIDExported {
+		return moerr.GetOkExpectedNotSafeToStartTransfer()
+	}
+	if typedMigration || info.FoundRows != 0 || info.LastInsertID != 0 ||
+		len(info.TempTables) > 0 {
 		addr = getQueryAddress(c.moCluster, sc.RawConn().RemoteAddr().String())
 		if addr == "" {
 			return moerr.NewInternalError(ctx, "cannot get query service address")
@@ -109,6 +127,18 @@ func (c *clientConn) migrateConnToContext(
 			return err
 		}
 		typedMigrationSupported = targetProtocol >= defines.MORPCVersion22
+		if info.FoundRows != 0 && targetProtocol < defines.MORPCVersion29 {
+			return moerr.NewInternalError(ctx,
+				"cannot migrate non-zero FOUND_ROWS state to a pre-v29 target")
+		}
+		if info.LastInsertID != 0 && targetProtocol < defines.MORPCVersion93 {
+			return moerr.NewInternalError(ctx,
+				"cannot migrate non-zero LAST_INSERT_ID state to a pre-v93 target")
+		}
+		if len(info.TempTables) > 0 && targetProtocol < defines.MORPCVersion38 {
+			return moerr.NewInternalError(ctx,
+				"cannot migrate temporary tables to a pre-v38 target")
+		}
 		if typedMigrationSupported && info.SystemVariablesSnapshotTooLarge {
 			return moerr.NewInternalError(ctx,
 				"cannot migrate typed system variables because the snapshot exceeds the connection migration size limit")
@@ -185,12 +215,16 @@ func (c *clientConn) migrateConnToContext(
 		DB:                        info.DB,
 		PrepareStmts:              info.PrepareStmts,
 		LastAffectedRows:          info.LastAffectedRows,
+		LastInsertID:              info.LastInsertID,
+		LastInsertIDExported:      info.LastInsertIDExported,
+		FoundRows:                 info.FoundRows,
 		UserDefinedVars:           nil,
 		UserDefinedVarsExported:   false,
 		SystemVariables:           nil,
 		SystemVariablesExported:   false,
 		UserDefinedVarsReplayable: info.UserDefinedVarsReplayable,
 		SystemVariablesReplayable: info.SystemVariablesReplayable,
+		TempTables:                info.TempTables,
 	}
 	if typedMigrationSupported {
 		req.MigrateConnToRequest.UserDefinedVars = info.UserDefinedVars

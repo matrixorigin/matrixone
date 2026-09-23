@@ -21,7 +21,7 @@ Add a builtin function `onnx_run`,
 ## Impl
 
 We should use `github.com/yalue/onnxruntime_go`.   Put most of ONNX runtime related code in @pkg/mlai/onnx.  Use init in this package
-to load onnxruntime.so, which should be installed in the `third_party/install/lib`, and later along side with mo-serivce binary.
+to load onnxruntime.so, which should be installed in the `third_party/install/lib`, and later along side with mo-service binary.
 Make sure check the error of ONNX runtime initialization.   If failed to initialize, later ALL function call onnx should fail, but the 
 database should start normally.
 

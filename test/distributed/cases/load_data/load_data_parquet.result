@@ -19,6 +19,12 @@ select count(*) from pq_parallel_guard;
 ➤ count(*)[-5,64,0]  𝄀
 8
 drop table pq_parallel_guard;
+create table pq_parallel_opt_out(id bigint, name varchar);
+load data infile {'filepath'='$resources/load_data/simple.parq', 'format'='parquet'} into table pq_parallel_opt_out parallel 'false';
+select count(*) from pq_parallel_opt_out;
+➤ count(*)[-5,64,0]  𝄀
+8
+drop table pq_parallel_opt_out;
 create table pq_option_reject(id bigint, name varchar);
 load data infile {'filepath'='$resources/load_data/simple.parq', 'format'='parquet', 'compression'='gzip'} into table pq_option_reject;
 invalid configuration: LOAD DATA with format='parquet' does not support compression option
@@ -499,15 +505,19 @@ select * from pq_date32_datetime;
 2024-06-15 00:00:00  ¦  200  𝄀
 1970-01-01 00:00:00  ¦  300  𝄀
 null  ¦  400
+set experimental_parquet_load_parallel = 1;
+set experimental_parquet_load_parallel_min_size = 1;
 drop table if exists pq_file_fanout_rollback;
 create table pq_file_fanout_rollback(id bigint, name varchar(100), value double, status bool);
 insert into pq_file_fanout_rollback values(-1, 'seed', 0.0, false);
-load data infile {'filepath'='$resources/parquet/test_*.parquet', 'format'='parquet'} into table pq_file_fanout_rollback parallel 'true';
+load data infile {'filepath'='$resources/parquet/test_*.parquet', 'format'='parquet'} into table pq_file_fanout_rollback;
 invalid input: column name not found
 select count(*), min(id), max(id), cast(round(sum(value), 2) as decimal(10,2)) from pq_file_fanout_rollback;
 ➤ count(*)[-5,64,0]  ¦  min(id)[-5,64,0]  ¦  max(id)[-5,64,0]  ¦  cast(round(sum(value), 2) as decimal(10, 2))[3,10,2]  𝄀
 1  ¦  -1  ¦  -1  ¦  0.00
 drop table pq_file_fanout_rollback;
+set experimental_parquet_load_parallel = 0;
+set experimental_parquet_load_parallel_min_size = default;
 drop table if exists pq_not_null_rollback;
 create table pq_not_null_rollback(
 id bigint not null primary key,

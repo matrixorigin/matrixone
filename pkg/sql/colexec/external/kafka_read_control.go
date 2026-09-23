@@ -45,8 +45,8 @@ const (
 //
 // Semantics (issue #27518): start_id is the last-consumed offset — reading
 // begins at start_id+1. With autocommit=false a start_id is REQUIRED and the
-// read offset is committed at that position before reading (exactly-once
-// chaining with LAST_KAFKA_MESSAGE_ID()); -1 means "from the earliest". With
+// read offset is committed at that position before reading (gap-free chaining
+// with LAST_KAFKA_MESSAGE_ID()); -1 means "from the earliest". With
 // autocommit=true, 0 (the default) means earliest-inclusive and -1 means
 // latest. size caps the record count (0 = unlimited). timeout ends the read
 // when no new message arrives within that many seconds (0 = block forever).

@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -30,6 +31,40 @@ func TestBuildViewMetadataDependenciesFilterIncludesGlobalSentinel(t *testing.T)
 	require.Contains(t, filter, "account_id = 0")
 	require.Contains(t, filter, "target_relation_id = 0")
 	require.Contains(t, filter, "dependency_ordinal = 0")
+}
+
+func TestBuildTableScanAccountFilter(t *testing.T) {
+	tests := []struct {
+		name         string
+		accountID    uint32
+		databaseName string
+		tableName    string
+		tableType    string
+		wantFilter   bool
+		wantFragment string
+	}{
+		{name: "system account sees cluster table", databaseName: "db", tableName: "t", tableType: catalog.SystemClusterRel},
+		{name: "tenant sees ordinary table", accountID: 7, databaseName: "db", tableName: "t"},
+		{name: "tenant mo_database", accountID: 7, databaseName: catalog.MO_CATALOG, tableName: catalog.MO_DATABASE, wantFilter: true, wantFragment: "account_id = 7"},
+		{name: "tenant mo_tables", accountID: 7, databaseName: catalog.MO_CATALOG, tableName: catalog.MO_TABLES, wantFilter: true, wantFragment: "account_id = 7"},
+		{name: "tenant mo_columns", accountID: 7, databaseName: catalog.MO_CATALOG, tableName: catalog.MO_COLUMNS, wantFilter: true, wantFragment: "account_id = 7"},
+		{name: "tenant metric", accountID: 7, databaseName: catalog.MO_SYSTEM_METRICS, tableName: catalog.MO_METRIC, wantFilter: true, wantFragment: "account_id = 7"},
+		{name: "tenant sql_statement_cu", accountID: 7, databaseName: catalog.MO_SYSTEM_METRICS, tableName: catalog.MO_SQL_STMT_CU, wantFilter: true, wantFragment: "account_id = 7"},
+		{name: "tenant statement_info", accountID: 7, databaseName: catalog.MO_SYSTEM, tableName: catalog.MO_STATEMENT, wantFilter: true, wantFragment: "account_id = 7"},
+		{name: "tenant cluster table", accountID: 7, databaseName: "db", tableName: "t", tableType: catalog.SystemClusterRel, wantFilter: true, wantFragment: "account_id = 7"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			filter := BuildTableScanAccountFilter(
+				test.accountID, test.databaseName, test.tableName, test.tableType,
+			)
+			require.Equal(t, test.wantFilter, filter != nil)
+			if test.wantFilter {
+				require.Contains(t, tree.String(filter, dialect.MYSQL), test.wantFragment)
+			}
+		})
+	}
 }
 
 type kase struct {

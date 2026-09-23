@@ -144,12 +144,70 @@ func TestNumericStringPrefixWarning(t *testing.T) {
 	appendNumericCoercionWarning(proc, "abc")
 	appendNumericCoercionWarning(proc, "")
 	appendNumericCoercionWarning(proc, "12")
+	appendNumericCoercionWarning(proc, " 12 ")
+	appendNumericCoercionWarning(proc, "\u00a01")
 
-	require.Len(t, session.warnings, 2)
+	require.Len(t, session.warnings, 3)
 	for _, warning := range session.warnings {
 		require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, warning.code)
 		require.Contains(t, warning.msg, "Truncated incorrect DOUBLE value")
 	}
+}
+
+func TestImplicitStringToIntegerUsesIntegerPrefixDiagnostics(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	session := &numericWarningSession{}
+	proc.Session = session
+	inputs := []string{"2tail", "2.9", "2e1", "abc", ""}
+	testCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), inputs, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{2, 2, 2, 0, 0}, nil),
+		NewComparisonCast)
+	succeed, info := testCase.Run()
+	require.True(t, succeed, info)
+
+	require.Len(t, session.warnings, 4)
+	for _, warning := range session.warnings {
+		require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, warning.code)
+		require.Contains(t, warning.msg, "Truncated incorrect INTEGER value")
+	}
+
+	appendIntegerNumericCoercionWarning(
+		proc, "9223372036854775808", "9223372036854775808", true, true)
+	require.Len(t, session.warnings, 5)
+	require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, session.warnings[4].code)
+
+	value, _, _, outOfRange, err := parseSignedNumericPrefixCastString("9223372036854775808", 64)
+	require.NoError(t, err)
+	require.Equal(t, int64(math.MinInt64), value)
+	require.False(t, outOfRange)
+	_, _, _, outOfRange, err = parseSignedNumericPrefixCastString("18446744073709551616", 64)
+	require.NoError(t, err)
+	require.True(t, outOfRange)
+}
+
+func TestImplicitStringToIntegerNegativeRangeDiagnostics(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	session := &numericWarningSession{}
+	proc.Session = session
+	testCase := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{
+				"-9223372036854775808", "-9223372036854775809",
+			}, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false,
+			[]int64{math.MinInt64, math.MinInt64}, nil),
+		NewComparisonCast)
+	succeed, info := testCase.Run()
+	require.True(t, succeed, info)
+	require.Len(t, session.warnings, 1)
+	require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, session.warnings[0].code)
+	require.Contains(t, session.warnings[0].msg, "INTEGER")
 }
 
 func TestExplicitCastFloatToUnsigned(t *testing.T) {
@@ -637,6 +695,52 @@ func TestExplicitCastFloatToDecimalPreservesInRangeValues(t *testing.T) {
 			require.True(t, succeed, info)
 		})
 	}
+}
+
+func TestExplicitCastFloat64ToDecimal128PreservesScaledIntegerPrecision(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	target := types.New(types.T_decimal128, 38, 6)
+	base := types.Decimal128{B0_63: 1000000000001000000}
+	lower := types.Decimal128{B0_63: 1000000000000000000}
+	higher := types.Decimal128{B0_63: 1000000000002000000}
+	twoTo64 := types.Decimal128{B64_127: 1000000}
+	inputs := []float64{1000000000001, -1000000000001, 1000000000000, 1000000000002, math.Ldexp(1, 64), -math.Ldexp(1, 64), 0}
+	expect := NewFunctionTestResult(
+		target,
+		false,
+		[]types.Decimal128{base, base.Minus(), lower, higher, twoTo64, twoTo64.Minus(), {}},
+		[]bool{false, false, false, false, false, false, true},
+	)
+	testCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), inputs, []bool{false, false, false, false, false, false, true}),
+			NewFunctionTestInput(target, []types.Decimal128{}, nil),
+		},
+		expect,
+		NewExplicitCast,
+	)
+	succeed, info := testCase.Run()
+	require.True(t, succeed, info)
+}
+
+func TestExplicitCastFloat64ToDecimal128ClampsRoundedOverflow(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	target := types.New(types.T_decimal128, 5, 2)
+	max := types.Decimal128{B0_63: 99999}
+	inputs := []float64{999.995, -999.995}
+	expect := NewFunctionTestResult(target, false, []types.Decimal128{max, max.Minus()}, nil)
+	testCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_float64.ToType(), inputs, nil),
+			NewFunctionTestInput(target, []types.Decimal128{}, nil),
+		},
+		expect,
+		NewExplicitCast,
+	)
+	succeed, info := testCase.Run()
+	require.True(t, succeed, info)
 }
 
 func TestExplicitCastOverflowHelperBoundaries(t *testing.T) {

@@ -113,7 +113,7 @@ var supportedWindowInNewFramework = []FuncNew{
 			{
 				overloadId: 0,
 				isWin:      true,
-				retType:    aggexec.SingleWindowReturnType,
+				retType:    aggexec.NtileReturnType,
 				aggName:    "ntile",
 			},
 		},

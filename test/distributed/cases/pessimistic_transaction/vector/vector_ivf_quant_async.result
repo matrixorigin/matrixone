@@ -123,26 +123,20 @@ update qi8 set v = '[55,55,55,55]' where a = 1;
 update qu8 set v = '[55,55,55,55]' where a = 1;
 update qbf set v = '[55,55,55,55]' where a = 1;
 update qf set v = '[55,55,55,55]' where a = 1;
-select a from qi8 order by l2_distance(v,'[1,1,1,1]') limit 3;
-a
-7
-2
-3
-select a from qu8 order by l2_distance(v,'[1,1,1,1]') limit 3;
-a
-7
-2
-3
-select a from qbf order by l2_distance(v,'[1,1,1,1]') limit 3;
-a
-7
-2
-3
-select a from qf order by l2_distance(v,'[1,1,1,1]') limit 3;
-a
-7
-2
-3
+select case_name, a from (select 'int8' as case_name, a, d from (select a, l2_distance(v,'[1,1,1,1]') as d from qi8 order by l2_distance(v,'[1,1,1,1]') limit 3) q union all select 'uint8', a, d from (select a, l2_distance(v,'[1,1,1,1]') as d from qu8 order by l2_distance(v,'[1,1,1,1]') limit 3) q union all select 'bf16', a, d from (select a, l2_distance(v,'[1,1,1,1]') as d from qbf order by l2_distance(v,'[1,1,1,1]') limit 3) q union all select 'float16', a, d from (select a, l2_distance(v,'[1,1,1,1]') as d from qf order by l2_distance(v,'[1,1,1,1]') limit 3) q) readiness order by case_name, d;
+case_name	a
+bf16	7
+bf16	2
+bf16	3
+float16	7
+float16	2
+float16	3
+int8	7
+int8	2
+int8	3
+uint8	7
+uint8	2
+uint8	3
 deallocate prepare wait_quant_entries;
 drop table qi8;
 drop table qu8;

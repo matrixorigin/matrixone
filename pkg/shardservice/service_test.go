@@ -17,16 +17,94 @@ package shardservice
 import (
 	"context"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/lni/goutils/leaktest"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/shard"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/stretchr/testify/require"
 )
+
+func TestServiceWaitCNReported(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		reported bool
+	}{
+		{name: "reported", reported: true},
+		{name: "canceled-before-report"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, lookupC := newCNReportWaitTestService(t, tc.reported)
+			s.stopper = stopper.NewStopper(t.Name())
+			require.NoError(t, s.stopper.RunTask(s.doTask))
+			waitCNReportTestSignal(t, lookupC, "shard service did not check the CN report")
+
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				s.stopper.Stop()
+			}()
+			waitCNReportTestSignal(t, done, "shard service stopper did not stop while waiting for the CN report")
+		})
+	}
+}
+
+type cnReportWaitTestCluster struct {
+	clusterservice.MOCluster
+	service  metadata.CNService
+	reported bool
+	lookupC  chan struct{}
+	once     sync.Once
+}
+
+func (c *cnReportWaitTestCluster) GetCNServiceWithoutWorkingState(
+	_ clusterservice.Selector,
+	apply func(metadata.CNService) bool,
+) {
+	c.once.Do(func() { close(c.lookupC) })
+	if c.reported {
+		apply(c.service)
+	}
+}
+
+func newCNReportWaitTestService(t *testing.T, reported bool) (*service, <-chan struct{}) {
+	t.Helper()
+	serviceID := t.Name()
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime(serviceID, rt)
+
+	cluster := &cnReportWaitTestCluster{
+		service:  metadata.CNService{ServiceID: serviceID},
+		reported: reported,
+		lookupC:  make(chan struct{}),
+	}
+	rt.SetGlobalVariables(runtime.ClusterService, cluster)
+
+	cfg := Config{ServiceID: serviceID}
+	cfg.HeartbeatDuration.Duration = time.Hour
+	cfg.CheckChangedDuration.Duration = time.Hour
+	s := &service{cfg: cfg}
+	s.remote.cluster = cluster
+	s.options.waitCNReported = true
+	return s, cluster.lookupC
+}
+
+func waitCNReportTestSignal(t *testing.T, signal <-chan struct{}, failure string) {
+	t.Helper()
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-signal:
+	case <-timer.C:
+		t.Fatal(failure)
+	}
+}
 
 func TestCreateShards(t *testing.T) {
 	runServicesTest(

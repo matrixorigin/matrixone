@@ -158,8 +158,9 @@ func (u *fulltext2CreateState) start(tf *TableFunction, proc *process.Process, n
 		}
 	}
 	// Attach this row's INCLUDE column values (actual values → segment docmap for
-	// prefilter + coverage). Only for docs the Add loop created, i.e. non-empty text
-	// (a NULL/empty-text row is skipped above), consistent with the CDC/build empty-doc skip.
+	// prefilter + coverage). Only for docs the Add loop created, i.e. rows with
+	// searchable content (a no-searchable-content row is skipped above), consistent
+	// with the CDC/build empty-doc skip.
 	if len(u.tblcfg.IncludeTypes) > 0 {
 		u.cur.SetInclude(pk, u.rowInclude(tf, nthRow))
 	}
@@ -202,7 +203,7 @@ func (u *fulltext2CreateState) sealSegment(proc *process.Process) (err error) {
 	}
 	seg.Id = fulltext2.SubIndexId(u.uid, u.segIdx)
 	u.segIdx++
-	sqls, cleanup, err := seg.ToInsertSqls(sqlproc, u.tblcfg, u.ts, 0 /* tag=0 base */)
+	sqls, cleanup, err := seg.ToInsertSqls(sqlproc, u.tblcfg, u.ts, 0 /* tag=0 base */, sqlproc.BuildSnapshotTS())
 	if err != nil {
 		return err
 	}
@@ -245,24 +246,53 @@ func (u *fulltext2CreateState) rowInclude(tf *TableFunction, nthRow int) []any {
 
 // rowTerms tokenizes source row nthRow (columns argVecs[2..]) into ordered terms,
 // applying the index's parser. datalink columns are resolved to plain text and
-// json columns to their flattened values; a NULL column yields no tokens (matches
-// the classic tokenizer's per-row NULL handling).
+// json columns to their flattened values; a SQL NULL column yields no tokens
+// while other columns in the row continue to contribute terms.
 func (u *fulltext2CreateState) rowTerms(tf *TableFunction, proc *process.Process, nthRow int) ([]fulltext2.WordPos, error) {
 	argVecs := tf.ctr.argVecs
 	// Text columns are argVecs[2 : textEnd); the trailing len(IncludeTypes) args are INCLUDE
-	// columns (their values are stored verbatim, NOT tokenized). A NULL in any TEXT column
-	// yields no tokens (empty doc); a NULL INCLUDE column is fine (stored as NULL).
+	// columns (their values are stored verbatim, NOT tokenized). A SQL NULL text column
+	// contributes no terms; the other indexed columns in the same row remain searchable.
 	textEnd := len(argVecs) - len(u.tblcfg.IncludeTypes)
-	for i := 2; i < textEnd; i++ {
-		if argVecs[i].IsNull(uint64(nthRow)) {
-			return nil, nil
+
+	// The tuple json breaker must run BEFORE any flatten: flattening joins the
+	// leaf values and throws the keys away, and the keys are the whole point.
+	// This is the create-side half of the CREATE/ISCP pair — the ISCP writer
+	// calls the same per-column encoder (see Fulltext2SqlWriter.rowText).
+	if u.tblcfg.UsesJSONTupleTerms() {
+		opt := u.tblcfg.JSONTermOptions()
+		var terms []fulltext2.WordPos
+		for i := 2; i < textEnd; i++ {
+			if argVecs[i].IsNull(uint64(nthRow)) {
+				continue
+			}
+			binary := argVecs[i].GetType().Oid == types.T_json
+			var raw []byte
+			if binary {
+				raw = argVecs[i].GetRawBytesAt(nthRow)
+			} else {
+				raw = []byte(argVecs[i].GetStringAt(nthRow))
+			}
+			ts, err := fulltext2.JSONTupleColumnTerms(raw, binary, opt)
+			if err != nil {
+				return nil, err
+			}
+			for _, t := range ts {
+				// ordinal position: a tuple term has no meaningful byte offset,
+				// and ISCP numbers them the same way so the two agree.
+				terms = append(terms, fulltext2.WordPos{Word: t, Pos: int32(len(terms))})
+			}
 		}
+		return terms, nil
 	}
 
 	jsonValue := fulltext2.IsJSONValueParser(u.tblcfg.Parser)
 	var content bytes.Buffer
 	if fulltext2.IsJSONParser(u.tblcfg.Parser) {
 		for i := 2; i < textEnd; i++ {
+			if argVecs[i].IsNull(uint64(nthRow)) {
+				continue
+			}
 			binary := argVecs[i].GetType().Oid == types.T_json
 			var raw []byte
 			if binary {
@@ -289,6 +319,9 @@ func (u *fulltext2CreateState) rowTerms(tf *TableFunction, proc *process.Process
 		}
 	} else {
 		for i := 2; i < textEnd; i++ {
+			if argVecs[i].IsNull(uint64(nthRow)) {
+				continue
+			}
 			if content.Len() > 0 {
 				content.WriteByte('\n')
 			}
@@ -359,7 +392,6 @@ func (u *fulltext2CreateState) end(tf *TableFunction, proc *process.Process) err
 	// A fresh tag=0 was written (CREATE build, or a REBUILD reusing this TVF) — evict
 	// any cached search index so the next query reloads the new base(s) instead of the
 	// stale one held until the TTL. Local to this CN's cache.
-	fulltext2.NewFulltext2Search(u.tblcfg).OnCacheInvalidated(string(fulltext2.LoadMissRebuild))
 	veccache.Cache.Remove(u.tblcfg.IndexTable)
 	return nil
 }

@@ -1,0 +1,81 @@
+drop snapshot if exists issue_27055_bvt_snapshot;
+drop database if exists issue_27055_bvt_rollback_target;
+drop database if exists issue_27055_bvt_snapshot_target;
+drop database if exists issue_27055_bvt_autocommit_target;
+drop database if exists issue_27055_bvt_direct_target;
+drop database if exists issue_27055_bvt_new_target;
+drop database if exists issue_27055_bvt_new_source;
+drop database if exists issue_27055_bvt_target;
+drop database if exists issue_27055_bvt_source;
+create database issue_27055_bvt_source;
+create table issue_27055_bvt_source.t(id int primary key, v int);
+insert into issue_27055_bvt_source.t values (1, 1), (2, 2), (3, 3);
+begin;
+insert into issue_27055_bvt_source.t values (4, 4);
+create database issue_27055_bvt_target clone issue_27055_bvt_source;
+select count(*), sum(id), sum(v) from issue_27055_bvt_source.t;
+➤ count(*)[-5,64,0]  ¦  sum(id)[-5,64,0]  ¦  sum(v)[-5,64,0]  𝄀
+4  ¦  10  ¦  10
+select count(*), sum(id), sum(v) from issue_27055_bvt_target.t;
+➤ count(*)[-5,64,0]  ¦  sum(id)[-5,64,0]  ¦  sum(v)[-5,64,0]  𝄀
+4  ¦  10  ¦  10
+commit;
+select count(*), sum(id), sum(v) from issue_27055_bvt_target.t;
+➤ count(*)[-5,64,0]  ¦  sum(id)[-5,64,0]  ¦  sum(v)[-5,64,0]  𝄀
+4  ¦  10  ¦  10
+begin;
+create database issue_27055_bvt_direct_target clone issue_27055_bvt_source;
+select count(*), sum(id), sum(v) from issue_27055_bvt_direct_target.t;
+➤ count(*)[-5,64,0]  ¦  sum(id)[-5,64,0]  ¦  sum(v)[-5,64,0]  𝄀
+4  ¦  10  ¦  10
+commit;
+begin;
+create database issue_27055_bvt_new_source;
+create table issue_27055_bvt_new_source.t(id int primary key, v int);
+insert into issue_27055_bvt_new_source.t values (7, 70);
+create database issue_27055_bvt_new_target clone issue_27055_bvt_new_source;
+show tables from issue_27055_bvt_new_target;
+➤ Tables_in_issue_27055_bvt_new_target[12,5000,0]  𝄀
+t
+select count(*), sum(id), sum(v) from issue_27055_bvt_new_target.t;
+➤ count(*)[-5,64,0]  ¦  sum(id)[-5,64,0]  ¦  sum(v)[-5,64,0]  𝄀
+1  ¦  7  ¦  70
+commit;
+select count(*), sum(id), sum(v) from issue_27055_bvt_new_target.t;
+➤ count(*)[-5,64,0]  ¦  sum(id)[-5,64,0]  ¦  sum(v)[-5,64,0]  𝄀
+1  ¦  7  ¦  70
+begin;
+insert into issue_27055_bvt_source.t values (5, 5);
+create database issue_27055_bvt_rollback_target clone issue_27055_bvt_source;
+select count(*), sum(id), sum(v) from issue_27055_bvt_rollback_target.t;
+➤ count(*)[-5,64,0]  ¦  sum(id)[-5,64,0]  ¦  sum(v)[-5,64,0]  𝄀
+5  ¦  15  ¦  15
+rollback;
+select count(*), sum(id), sum(v) from issue_27055_bvt_source.t;
+➤ count(*)[-5,64,0]  ¦  sum(id)[-5,64,0]  ¦  sum(v)[-5,64,0]  𝄀
+4  ¦  10  ¦  10
+select count(*) from mo_catalog.mo_database
+where account_id = 0 and datname = 'issue_27055_bvt_rollback_target';
+➤ count(*)[-5,64,0]  𝄀
+0
+select 1;
+➤ 1[-5,64,0]  𝄀
+1
+create database issue_27055_bvt_autocommit_target clone issue_27055_bvt_source;
+select count(*), sum(id), sum(v) from issue_27055_bvt_autocommit_target.t;
+➤ count(*)[-5,64,0]  ¦  sum(id)[-5,64,0]  ¦  sum(v)[-5,64,0]  𝄀
+4  ¦  10  ¦  10
+create snapshot issue_27055_bvt_snapshot for database issue_27055_bvt_source;
+insert into issue_27055_bvt_source.t values (6, 6);
+create database issue_27055_bvt_snapshot_target clone issue_27055_bvt_source {snapshot = "issue_27055_bvt_snapshot"};
+select count(*), sum(id), sum(v) from issue_27055_bvt_snapshot_target.t;
+➤ count(*)[-5,64,0]  ¦  sum(id)[-5,64,0]  ¦  sum(v)[-5,64,0]  𝄀
+4  ¦  10  ¦  10
+drop snapshot issue_27055_bvt_snapshot;
+drop database issue_27055_bvt_snapshot_target;
+drop database issue_27055_bvt_autocommit_target;
+drop database issue_27055_bvt_new_target;
+drop database issue_27055_bvt_new_source;
+drop database issue_27055_bvt_direct_target;
+drop database issue_27055_bvt_target;
+drop database issue_27055_bvt_source;

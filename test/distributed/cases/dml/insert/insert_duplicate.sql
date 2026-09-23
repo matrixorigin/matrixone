@@ -252,7 +252,6 @@ ON DUPLICATE KEY UPDATE value = VALUES(value);
 SELECT * FROM indup_04_multi_uk_null ORDER BY a;
 
 -- 测试 3.9: 部分唯一键为 NULL 时，非 NULL 唯一键仍应命中对应旧行
--- @regex("Duplicate entry '10' for key",true)
 INSERT INTO indup_04_multi_uk_null VALUES (4,NULL,10,400)
 ON DUPLICATE KEY UPDATE value = VALUES(value);
 SELECT * FROM indup_04_multi_uk_null ORDER BY a;
@@ -1487,8 +1486,8 @@ EXECUTE check_idx;
 
 
 -- =====================================================
--- 测试场景 26: 错误场景 - 尝试更新主键列
--- 测试点：验证不允许更新主键列的限制
+-- 测试场景 26: 单列主键更新限制和 incoming 主键 no-op
+-- 测试点：验证真实主键更新被拒绝，VALUES(同一主键) 被视为 no-op
 -- =====================================================
 DROP TABLE IF EXISTS indup_err_01;
 CREATE TABLE indup_err_01(
@@ -1503,9 +1502,10 @@ INSERT INTO indup_err_01 VALUES (1, 'first', 100);
 INSERT INTO indup_err_01 VALUES (1, 'updated', 200) 
 ON DUPLICATE KEY UPDATE id = id + 10, name = VALUES(name);
 
--- 测试 26.2: 尝试使用 VALUES() 更新主键（应该报错）
+-- 测试 26.2: incoming 主键与冲突主键相同（应该成功且数据不变）
 INSERT INTO indup_err_01 VALUES (1, 'updated', 300) 
 ON DUPLICATE KEY UPDATE id = VALUES(id);
+SELECT * FROM indup_err_01;
 
 
 -- =====================================================
@@ -1539,8 +1539,8 @@ EXECUTE check_idx;
 
 
 -- =====================================================
--- 测试场景 28: 错误场景 - 尝试更新复合主键的任一列
--- 测试点：验证复合主键的任何列都不能更新
+-- 测试场景 28: 复合主键更新限制和 incoming 主键 no-op
+-- 测试点：验证真实主键更新被拒绝，VALUES(同一主键) 被视为 no-op
 -- =====================================================
 DROP TABLE IF EXISTS indup_err_03;
 CREATE TABLE indup_err_03(
@@ -1560,9 +1560,10 @@ ON DUPLICATE KEY UPDATE col1 = col1 + 1, col3 = VALUES(col3);
 INSERT INTO indup_err_03 VALUES (1, 2, 'updated') 
 ON DUPLICATE KEY UPDATE col2 = col2 + 1, col3 = VALUES(col3);
 
--- 测试 28.3: 尝试同时更新复合主键的两列（应该报错）
+-- 测试 28.3: 两个 incoming 主键分量均与冲突主键相同（应该成功且数据不变）
 INSERT INTO indup_err_03 VALUES (1, 2, 'updated') 
 ON DUPLICATE KEY UPDATE col1 = VALUES(col1), col2 = VALUES(col2);
+SELECT * FROM indup_err_03;
 
 
 -- =====================================================

@@ -54,6 +54,31 @@ func TestAddMetadata(t *testing.T) {
 	assert.Equal(t, uint64(10), ss.mu.metadata.Shards[0].ShardID)
 	assert.Equal(t, uint64(1), ss.mu.metadata.Shards[0].ReplicaID)
 	assert.Equal(t, true, ss.mu.metadata.Shards[0].NonVoting)
+	assert.NotEmpty(t, ss.mu.metadata.Incarnation)
+}
+
+func TestLoadMetadataPersistsStoreIncarnation(t *testing.T) {
+	cfg := getStoreTestConfig()
+	defer vfs.ReportLeakedFD(cfg.FS, t)
+
+	first := store{cfg: cfg, runtime: runtime.DefaultRuntime()}
+	first.mu.metadata.UUID = cfg.UUID
+	require.NoError(t, first.loadMetadata())
+	incarnation := first.getStoreIncarnation()
+	require.NotEmpty(t, incarnation)
+
+	restarted := store{cfg: cfg, runtime: runtime.DefaultRuntime()}
+	restarted.mu.metadata.UUID = cfg.UUID
+	require.NoError(t, restarted.loadMetadata())
+	require.Equal(t, incarnation, restarted.getStoreIncarnation())
+
+	freshCfg := cfg
+	freshCfg.FS = vfs.NewMem()
+	defer vfs.ReportLeakedFD(freshCfg.FS, t)
+	fresh := store{cfg: freshCfg, runtime: runtime.DefaultRuntime()}
+	fresh.mu.metadata.UUID = cfg.UUID
+	require.NoError(t, fresh.loadMetadata())
+	require.NotEqual(t, incarnation, fresh.getStoreIncarnation())
 }
 
 func TestAddMetadataRejectDupl(t *testing.T) {
@@ -115,6 +140,7 @@ func TestStartReplicas(t *testing.T) {
 	done := false
 	for i := 0; i < 1000; i++ {
 		hb := store.getHeartbeatMessage()
+		require.Equal(t, store.getStoreIncarnation(), hb.StoreIncarnation)
 		if len(hb.Replicas) != 2 {
 			time.Sleep(10 * time.Millisecond)
 			continue

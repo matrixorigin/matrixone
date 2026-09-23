@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -125,7 +126,6 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 	var curBatchSize uint64
 	var finish bool
 	var row []csvparser.Field
-	var unexpectEOF bool
 
 	for i := 0; i < OneBatchMaxRow; i++ {
 		select {
@@ -169,16 +169,64 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 			curBatchSize += uint64(len(row[j].Val))
 		}
 
+		// The physical line this record starts on, for __mo_file_line. Recorded
+		// per record so a multi-line quoted field reports its FIRST line.
+		if param.ErrorMode.WantLine {
+			param.ErrorMode.RecordLine = csvReader.RecordLine()
+		}
+
 		rowIdx := i
 		if param.Extern.Format == tree.JSONLINE {
-			row, err = r.transJson2Lines(proc.Ctx, row[0].Val, param.Attrs, param.Cols, param.Extern.JsonData)
+			raw := row[0].Val
+			if param.ErrorMode.Tolerate {
+				// The text this record is parsed from, so a failure reports
+				// the source line rather than the decoded fields.
+				param.ErrorMode.RawText = r.prevStr + raw
+			}
+			row, err = r.transJson2Lines(proc.Ctx, raw, param.Attrs, param.Cols, param.Extern.JsonData)
 			if err != nil {
-				if errors.Is(err, io.ErrUnexpectedEOF) {
+				// transJson2Lines holds the text over in prevStr only when the
+				// record is genuinely truncated; that -- not the EOF error
+				// alone -- is what makes this a continuation.
+				truncated := r.prevStr != ""
+				if truncated && !param.ErrorMode.Tolerate {
+					// Held over for the next line. Nothing is appended for
+					// this record, so there is no partial row to trim once
+					// the batch ends. (Rows used to be written into
+					// pre-allocated slots, which is why the batch tail was
+					// trimmed here; they are appended now.)
 					logutil.Infof("unexpected EOF, wait for next batch")
-					unexpectEOF = true
 					continue
 				}
-				return false, err
+				if !param.ErrorMode.Tolerate {
+					return false, err
+				}
+				if truncated {
+					// Under tolerance a truncated object is THIS line's
+					// failure, not a claim on the lines after it. Holding it
+					// over would append every following line to it and report
+					// one failure at EOF, losing every good record in between
+					// -- and it would buy nothing: a continuation line that
+					// starts with a quote makes the CSV splitter fail the
+					// whole scan, so a multi-line object is not reliably
+					// readable in the first place.
+					r.prevStr = ""
+					err = moerr.NewInvalidInput(proc.Ctx, "incomplete json record")
+				}
+				// A line that is not valid JSON is reported as a failed record
+				// rather than failing the query.
+				if err = appendErrorRow(proc, bat, nil, i, param, err); err != nil {
+					return false, err
+				}
+				// A reject row is a row: the batch has to be handed on at the
+				// same size limit as a row that parsed. Skipping this check let
+				// a run of malformed records build one batch far past
+				// maxBatchSize -- each carrying a copy of its source text in
+				// __mo_error_text -- defeating the transport and memory bound.
+				if curBatchSize >= param.maxBatchSize {
+					break
+				}
+				continue
 			}
 		}
 
@@ -191,16 +239,22 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 		}
 	}
 
-	n := bat.Vecs[0].Length()
-	if unexpectEOF && n > 0 {
-		n--
-		for i := 0; i < bat.VectorCount(); i++ {
-			vec := bat.GetVector(int32(i))
-			vec.SetLength(n)
-		}
-	}
 	bat.SetRowCount(bat.Vecs[0].Length())
 	return fileFinished, nil
+}
+
+// jsonLineTruncated reports whether a failed parse means "truncated" rather
+// than "malformed": the parser ran off the end of the text, and the text opens
+// the expected value, so appending the next line can still complete it. Only
+// such text is held over in prevStr. The prefix test matters because the
+// parser reports a bare word ("this is not json") as an unexpected EOF too,
+// and holding that over would glue it onto the following line.
+func jsonLineTruncated(err error, str string, open byte) bool {
+	if !errors.Is(err, io.ErrUnexpectedEOF) {
+		return false
+	}
+	trimmed := strings.TrimSpace(str)
+	return len(trimmed) > 0 && trimmed[0] == open
 }
 
 // transJson2Lines converts JSON string to CSV fields.
@@ -220,7 +274,8 @@ func (r *CsvReader) transJsonObject2Lines(ctx context.Context, str string, attrs
 	resultSize := 0
 	realCnt := 0
 	for idx, attr := range attrs {
-		if catalog.ContainExternalHidenCol(attr.ColName) || isKafkaSyntheticAttr(r.param, attr.ColName) {
+		if catalog.ContainExternalHidenCol(attr.ColName) || isKafkaSyntheticAttr(r.param, attr.ColName) ||
+			isExternalErrorAttr(attr, cols) {
 			continue
 		}
 		if idx >= len(cols) || cols[idx] == nil {
@@ -245,8 +300,11 @@ func (r *CsvReader) transJsonObject2Lines(ctx context.Context, str string, attrs
 	jsonNode, err := bytejson.ParseNodeString(str)
 	if err != nil {
 		logutil.Errorf("json unmarshal err:%v", err)
-		r.prevStr = str
-		return nil, err
+		if jsonLineTruncated(err, str, '{') {
+			r.prevStr = str
+			return nil, err
+		}
+		return nil, moerr.NewInvalidInput(ctx, "the line is not a well-formed json object")
 	}
 	defer jsonNode.Free()
 	g, ok := jsonNode.V.(*bytejson.Group)
@@ -258,7 +316,7 @@ func (r *CsvReader) transJsonObject2Lines(ctx context.Context, str string, attrs
 	}
 	for idx, attr := range attrs {
 		if catalog.ContainExternalHidenCol(attr.ColName) || cols[idx].Hidden ||
-			isKafkaSyntheticAttr(r.param, attr.ColName) {
+			isKafkaSyntheticAttr(r.param, attr.ColName) || isExternalErrorAttr(attr, cols) {
 			continue
 		}
 		ki := slices.Index(g.Keys, attr.ColName)
@@ -299,19 +357,28 @@ func (r *CsvReader) transJsonArray2Lines(ctx context.Context, str string, attrs 
 	}
 	jsonNode, err := bytejson.ParseNodeString(str)
 	if err != nil {
-		r.prevStr = str
-		return nil, err
+		if jsonLineTruncated(err, str, '[') {
+			r.prevStr = str
+			return nil, err
+		}
+		return nil, moerr.NewInvalidInput(ctx, "the line is not a well-formed json array")
 	}
 	defer jsonNode.Free()
 	g, ok := jsonNode.V.(*bytejson.Group)
 	if !ok || g.Obj {
 		return nil, moerr.NewInvalidInput(ctx, "not a json array")
 	}
-	if len(g.Values) < getRealAttrCnt(attrs) {
+	// Both bounds are measured against the columns the RECORD supplies, never
+	// against len(cols): the error-mode columns are synthesized and lengthen
+	// the table's column list, so bounding by it would let an extra array
+	// value land in a synthetic slot and turn a malformed record into a
+	// successful row -- rejected without error mode, accepted with it.
+	realCnt := getRealAttrCnt(attrs, cols)
+	if len(g.Values) < realCnt {
 		return nil, moerr.NewInternalError(ctx, ColumnCntLargerErrorInfo)
 	}
 	for idx, valN := range g.Values {
-		if idx >= len(cols) {
+		if idx >= realCnt || idx >= len(cols) {
 			return nil, moerr.NewInvalidInput(ctx, str+" , wrong number of colunms")
 		}
 
@@ -334,4 +401,15 @@ func (r *CsvReader) transJsonArray2Lines(ctx context.Context, str string, attrs 
 		res = append(res, csvparser.Field{Val: val, IsNull: val == JsonNull})
 	}
 	return res, nil
+}
+
+// isExternalErrorAttr reports whether an attribute is one of the synthesized
+// error-mode columns. They are produced by the scan, never matched against a
+// JSON key, so they must not be counted as record fields either.
+func isExternalErrorAttr(attr plan.ExternAttr, cols []*plan.ColDef) bool {
+	var colId uint64
+	if idx := int(attr.ColIndex); idx < len(cols) && cols[idx] != nil {
+		colId = cols[idx].ColId
+	}
+	return catalog.IsExternalErrorCol(attr.ColName, colId)
 }

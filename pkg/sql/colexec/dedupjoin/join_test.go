@@ -367,6 +367,8 @@ func TestDedupPrepareFailureCanRetry(t *testing.T) {
 	invalid := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int32)}}
 	arg := &DedupJoin{
 		Conditions:        [][]*plan.Expr{{valid}, {valid}},
+		LeftTypes:         []types.Type{typ},
+		UpdateColIdxList:  []int32{0, 0},
 		UpdateColExprList: []*plan.Expr{valid, invalid},
 	}
 	installTestAllocation(t, arg)

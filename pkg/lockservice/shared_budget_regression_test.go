@@ -279,6 +279,8 @@ func TestWaitingReplacementPreservesConcurrentSameTxnLocks(t *testing.T) {
 
 	for idx, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			txnA := []byte("replacement-merge-a")
+			txnB := []byte("replacement-merge-b")
 			runLockServiceTestsWithAdjustConfig(
 				t,
 				tt.serviceIDs,
@@ -293,8 +295,6 @@ func TestWaitingReplacementPreservesConcurrentSameTxnLocks(t *testing.T) {
 						ctx, 0, table, nil, pb.Sharding_None)
 					require.NoError(t, err)
 
-					txnA := []byte("replacement-merge-a")
-					txnB := []byte("replacement-merge-b")
 					lockA := newTestRowExclusiveOptions()
 					if tt.forward {
 						lockA.ForwardTo = owner.serviceID
@@ -391,6 +391,7 @@ func TestWaitingReplacementPreservesConcurrentSameTxnLocks(t *testing.T) {
 				func(c *Config) {
 					c.MaxLockRowCount = 4
 					c.MaxFixedSliceSize = 8
+					c.TxnIterFunc = newTestTxnIterFunc(txnA, txnB)
 				},
 			)
 		})
@@ -410,6 +411,9 @@ func TestWaitingReplacementFallsBackAfterConcurrentSharedLock(t *testing.T) {
 
 	for idx, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			txnA := []byte("replacement-mode-a")
+			txnB := []byte("replacement-mode-b")
+			txnC := []byte("replacement-mode-c")
 			runLockServiceTestsWithAdjustConfig(
 				t,
 				tt.serviceIDs,
@@ -424,9 +428,6 @@ func TestWaitingReplacementFallsBackAfterConcurrentSharedLock(t *testing.T) {
 						ctx, 0, table, nil, pb.Sharding_None)
 					require.NoError(t, err)
 
-					txnA := []byte("replacement-mode-a")
-					txnB := []byte("replacement-mode-b")
-					txnC := []byte("replacement-mode-c")
 					exclusive := newTestRowExclusiveOptions()
 					if tt.forward {
 						exclusive.ForwardTo = owner.serviceID
@@ -541,6 +542,7 @@ func TestWaitingReplacementFallsBackAfterConcurrentSharedLock(t *testing.T) {
 				func(c *Config) {
 					c.MaxLockRowCount = 3
 					c.MaxFixedSliceSize = 8
+					c.TxnIterFunc = newTestTxnIterFunc(txnA, txnB, txnC)
 				},
 			)
 		})
@@ -630,13 +632,7 @@ func TestRemoteSharedMergeSnapshotPreservesLogicalWaitFor(t *testing.T) {
 			// TxnIterFunc in production. Keep the synthetic transactions visible
 			// while the remote waiter is blocked so the orphan checker cannot
 			// invalidate the wait-for snapshot based on scheduler timing.
-			c.TxnIterFunc = func(fn func([]byte) bool) {
-				for _, txnID := range [][]byte{txnA, txnB, txnC} {
-					if !fn(txnID) {
-						return
-					}
-				}
-			}
+			c.TxnIterFunc = newTestTxnIterFunc(txnA, txnB, txnC)
 		},
 	)
 }
@@ -757,13 +753,7 @@ func TestLateSharedHolderCycleRemainsDeadlockDetectable(t *testing.T) {
 					// Production CheckActiveTxn reads frontend transaction liveness
 					// through TxnIterFunc. Keep these synthetic public-path transactions
 					// authoritative while the remote snapshot closes the wait-for cycle.
-					c.TxnIterFunc = func(fn func([]byte) bool) {
-						for _, txnID := range [][]byte{txnA, txnB, txnC} {
-							if !fn(txnID) {
-								return
-							}
-						}
-					}
+					c.TxnIterFunc = newTestTxnIterFunc(txnA, txnB, txnC)
 				},
 			)
 		})

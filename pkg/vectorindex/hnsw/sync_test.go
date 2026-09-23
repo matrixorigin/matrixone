@@ -157,7 +157,7 @@ func TestSyncEmptyCatalogError(t *testing.T) {
 		}
 	}
 
-	_, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3)
+	_, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "")
 	require.NotNil(t, err)
 }
 
@@ -203,7 +203,7 @@ func TestSyncUpsertWithEmpty(t *testing.T) {
 		}
 	}
 
-	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3)
+	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "")
 	require.Nil(t, err)
 	err = sync.RunOnce(sqlproc, &cdc)
 	require.Nil(t, err)
@@ -244,7 +244,7 @@ func TestSyncVariableError(t *testing.T) {
 		}
 	})
 
-	_, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3)
+	_, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "")
 	require.NotNil(t, err)
 
 	//err = sync.RunOnce(sqlproc, &cdc)
@@ -262,7 +262,7 @@ func TestSyncVariableError(t *testing.T) {
 		}
 	})
 
-	_, err = NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3)
+	_, err = NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "")
 	require.NotNil(t, err)
 }
 
@@ -291,7 +291,7 @@ func TestSyncUpsert(t *testing.T) {
 		}
 	}
 
-	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3)
+	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "")
 	require.Nil(t, err)
 	err = sync.RunOnce(sqlproc, &cdc)
 	require.Nil(t, err)
@@ -319,7 +319,7 @@ func TestSyncDelete(t *testing.T) {
 		key += 1
 	}
 
-	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3)
+	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "")
 	require.Nil(t, err)
 	err = sync.RunOnce(sqlproc, &cdc)
 	require.Nil(t, err)
@@ -356,7 +356,7 @@ func TestSyncDeleteAndInsert(t *testing.T) {
 
 	}
 
-	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3)
+	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "")
 	require.Nil(t, err)
 	err = sync.RunOnce(sqlproc, &cdc)
 	require.Nil(t, err)
@@ -385,7 +385,7 @@ func TestSyncUpdate(t *testing.T) {
 		key += 1
 	}
 
-	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3)
+	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "")
 	require.Nil(t, err)
 	err = sync.RunOnce(sqlproc, &cdc)
 	require.Nil(t, err)
@@ -422,7 +422,7 @@ func TestSyncDeleteAndUpsert(t *testing.T) {
 
 	}
 
-	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3)
+	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "")
 	require.Nil(t, err)
 	err = sync.RunOnce(sqlproc, &cdc)
 	require.Nil(t, err)
@@ -466,7 +466,7 @@ func TestSyncAddOneModel(t *testing.T) {
 		}
 	}
 
-	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3)
+	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "")
 	require.Nil(t, err)
 	defer sync.Destroy()
 
@@ -500,7 +500,7 @@ func TestSyncDelete2Files(t *testing.T) {
 		key += 1
 	}
 
-	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3)
+	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "")
 	require.Nil(t, err)
 	err = sync.RunOnce(sqlproc, &cdc)
 	require.Nil(t, err)
@@ -528,10 +528,12 @@ func TestSyncDeleteShuffle2Files(t *testing.T) {
 		key += 1
 	}
 
-	rand.Seed(uint64(time.Now().UnixNano()))
-	rand.Shuffle(len(cdc.Data), func(i, j int) { cdc.Data[i], cdc.Data[j] = cdc.Data[j], cdc.Data[i] })
+	seed := uint64(time.Now().UnixNano())
+	t.Logf("CDC shuffle seed: %d", seed)
+	r := rand.New(rand.NewSource(seed))
+	r.Shuffle(len(cdc.Data), func(i, j int) { cdc.Data[i], cdc.Data[j] = cdc.Data[j], cdc.Data[i] })
 
-	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3)
+	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "")
 	require.Nil(t, err)
 	err = sync.RunOnce(sqlproc, &cdc)
 	require.Nil(t, err)
@@ -563,7 +565,7 @@ func TestSyncUpdateShuffle2Files(t *testing.T) {
 	rand.Seed(uint64(time.Now().UnixNano()))
 	rand.Shuffle(len(cdc.Data), func(i, j int) { cdc.Data[i], cdc.Data[j] = cdc.Data[j], cdc.Data[i] })
 
-	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3)
+	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "")
 	require.Nil(t, err)
 	err = sync.RunOnce(sqlproc, &cdc)
 	require.Nil(t, err)
@@ -599,12 +601,12 @@ func runSyncUpdateInsertShuffle2Files[T types.RealNumbers](t *testing.T) {
 	var ff T
 	switch any(ff).(type) {
 	case float32:
-		sync, err := NewHnswSync[T](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3)
+		sync, err := NewHnswSync[T](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "")
 		require.Nil(t, err)
 		err = sync.RunOnce(sqlproc, &cdc)
 		require.Nil(t, err)
 	case float64:
-		sync, err := NewHnswSync[T](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float64), 3)
+		sync, err := NewHnswSync[T](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float64), 3, "")
 		require.Nil(t, err)
 		err = sync.RunOnce(sqlproc, &cdc)
 		require.Nil(t, err)
@@ -658,12 +660,12 @@ func runSyncUpdateInsertShuffle2FilesWithSmallCap[T types.RealNumbers](t *testin
 	var ff T
 	switch any(ff).(type) {
 	case float32:
-		sync, err := NewHnswSync[T](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3)
+		sync, err := NewHnswSync[T](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "")
 		require.Nil(t, err)
 		err = sync.RunOnce(sqlproc, &cdc)
 		require.Nil(t, err)
 	case float64:
-		sync, err := NewHnswSync[T](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float64), 3)
+		sync, err := NewHnswSync[T](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float64), 3, "")
 		require.Nil(t, err)
 		err = sync.RunOnce(sqlproc, &cdc)
 		require.Nil(t, err)
@@ -691,25 +693,41 @@ func runSyncContinuousUpdateInsertShuffle2FilesWithSmallCap[T types.RealNumbers]
 		}
 	})
 
+	oldRunSQL := runSql
+	oldRunSQLStreaming := runSql_streaming
+	oldRunTxn := runTxn
+	t.Cleanup(func() {
+		runSql = oldRunSQL
+		runSql_streaming = oldRunSQLStreaming
+		runTxn = oldRunTxn
+	})
 	runSql = mock_runSql_2files
 	runSql_streaming = mock_runSql_streaming_2files
 	runTxn = mock_runTxn
 	indexes := mockMoIndexes()
 
-	cdc := vectorindex.VectorIndexCdc[T]{Data: make([]vectorindex.VectorIndexCdcEntry[T], 0, 100)}
-
-	key := int64(0)
+	// The preceding one-shot SmallCap test retains the full 400-row mixed batch.
+	// This test owns the orthogonal repeated-lifecycle target: one update from
+	// each existing file plus eleven inserts cross the capacity-10 boundary into
+	// two models. Thirteen rows also distribute work to all eight build workers.
+	keys := []int64{0, 100}
+	for key := int64(200); key < 211; key++ {
+		keys = append(keys, key)
+	}
+	cdc := vectorindex.VectorIndexCdc[T]{
+		Data: make([]vectorindex.VectorIndexCdcEntry[T], 0, len(keys)),
+	}
 	v := []T{0.1, 0.2, 0.3}
 
-	// 0 - 199 key exists, 200 - 399 new insert
-	for i := 0; i < 400; i++ {
+	for _, key := range keys {
 		e := vectorindex.VectorIndexCdcEntry[T]{Type: vectorindex.CDC_UPSERT, PKey: key, Vec: v}
 		cdc.Data = append(cdc.Data, e)
-		key += 1
 	}
 
-	rand.Seed(uint64(time.Now().UnixNano()))
-	rand.Shuffle(len(cdc.Data), func(i, j int) { cdc.Data[i], cdc.Data[j] = cdc.Data[j], cdc.Data[i] })
+	// Keep this lifecycle regression reproducible; the adjacent full-batch test
+	// retains time-seeded shuffle diversity.
+	r := rand.New(rand.NewSource(99))
+	r.Shuffle(len(cdc.Data), func(i, j int) { cdc.Data[i], cdc.Data[j] = cdc.Data[j], cdc.Data[i] })
 
 	var err error
 	var sync *HnswSync[T]
@@ -717,18 +735,28 @@ func runSyncContinuousUpdateInsertShuffle2FilesWithSmallCap[T types.RealNumbers]
 	var ff T
 	switch any(ff).(type) {
 	case float32:
-		sync, err = NewHnswSync[T](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3)
+		sync, err = NewHnswSync[T](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "")
 		require.Nil(t, err)
 
 	case float64:
-		sync, err = NewHnswSync[T](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float64), 3)
+		sync, err = NewHnswSync[T](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float64), 3, "")
 		require.Nil(t, err)
 	}
 
 	defer sync.Destroy()
-	for i := 0; i < 10; i++ {
+	err = sync.Update(sqlproc, &cdc)
+	require.NoError(t, err)
+	require.Equal(t, int32(11), sync.ninsert.Load())
+	require.Equal(t, int32(2), sync.nupdate.Load())
+	require.Len(t, sync.indexes, 4)
+	require.Equal(t, int64(10), sync.indexes[2].Len.Load())
+	require.Equal(t, int64(1), sync.indexes[3].Len.Load())
+
+	for cycle := 1; cycle < 10; cycle++ {
 		err = sync.Update(sqlproc, &cdc)
-		require.Nil(t, err)
+		require.NoError(t, err, "update cycle %d", cycle+1)
+		require.Zero(t, sync.ninsert.Load(), "update cycle %d", cycle+1)
+		require.Equal(t, int32(len(cdc.Data)), sync.nupdate.Load(), "update cycle %d", cycle+1)
 	}
 
 	err = sync.Save(sqlproc)
@@ -772,7 +800,7 @@ func TestSyncInsertDuplicateKeyFailsCleanly(t *testing.T) {
 		{Type: vectorindex.CDC_INSERT, PKey: 1000, Vec: v},
 	}}
 
-	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3)
+	sync, err := NewHnswSync[float32](sqlproc, "db", "src", "idx", indexes, int32(types.T_array_float32), 3, "")
 	require.Nil(t, err)
 	defer sync.Destroy()
 

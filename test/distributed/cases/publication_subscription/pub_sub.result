@@ -5,6 +5,7 @@ create database republication01;
 use republication01;
 create publication publication01 database republication01 account test_tenant_1 comment 'republish';
 create table repub01(col1 int);
+create table repub_hidden(col1 int);
 insert into repub01 values (1);
 drop database if exists resub01;
 create database resub01 from sys publication publication01;
@@ -38,17 +39,51 @@ col1    INT(32)    YES        null
 show table status;
 Name    Engine    Row_format    Rows    Avg_row_length    Data_length    Max_data_length    Index_length    Data_free    Auto_increment    Create_time    Update_time    Check_time    Collation    Checksum    Create_options    Comment    Role_id    Role_name
 table01    Tae    Dynamic    2    0    96    0    0    NULL    0    2024-12-02 16:05:37    NULL    NULL    utf8mb4_bin    NULL            0    moadmin
-alter publication publication01 database republication01;
+alter publication publication01 database republication01 table repub01;
 show publications;
 publication    database    tables    sub_account    subscribed_accounts    create_time    update_time    comments
-publication01    republication01    *    test_tenant_1    test_tenant_1    2024-07-23 21:40:26    2024-07-23 21:40:27    republish
+publication01    republication01    repub01    test_tenant_1    test_tenant_1    2024-07-23 21:40:26    2024-07-23 21:40:27    republish
 show subscriptions all;
 pub_name    pub_account    pub_database    pub_tables    pub_comment    pub_time    sub_name    sub_time    status
-publication01    sys    republication01    *    republish    2024-07-23 21:40:27    resub01    2024-07-23 21:40:26    0
+publication01    sys    republication01    repub01    republish    2024-07-23 21:40:27    resub01    2024-07-23 21:40:26    0
+create publication publication02 database republication01 table repub01 account test_tenant_1;
+create database resub02 from sys publication publication02;
+select table_schema, table_name from information_schema.tables
+where table_schema in ('resub01', 'resub02') order by table_schema, table_name;
+table_schema    table_name
+resub01    repub01
+resub02    repub01
+select table_schema, table_name, column_name from information_schema.columns
+where table_schema in ('resub01', 'resub02') order by table_schema, table_name, ordinal_position;
+table_schema    table_name    column_name
+resub01    repub01    col1
+resub02    repub01    col1
 use resub01;
 show tables;
 Tables_in_resub01
 repub01
+select table_schema, table_name from information_schema.tables
+where table_schema = 'resub01' order by table_name;
+table_schema    table_name
+resub01    repub01
+select auto_increment from information_schema.tables
+where table_schema = 'resub01' and table_name = 'repub01';
+auto_increment
+0
+select * from information_schema.tables
+where table_schema = 'resub01' and table_name = 'repub01';
+TABLE_CATALOG    TABLE_SCHEMA    TABLE_NAME    TABLE_TYPE    ENGINE    VERSION    ROW_FORMAT    TABLE_ROWS    AVG_ROW_LENGTH    DATA_LENGTH    MAX_DATA_LENGTH    INDEX_LENGTH    DATA_FREE    AUTO_INCREMENT    CREATE_TIME    UPDATE_TIME    CHECK_TIME    TABLE_COLLATION    CHECKSUM    CREATE_OPTIONS    TABLE_COMMENT
+def    resub01    repub01    BASE TABLE    Tae    10    Compressed    0    0    0    0    0    0    0    2024-07-23 21:40:27    2024-07-23 21:40:27    2024-07-23 21:40:27    utf8mb4_general_ci    0    ignored    ignored
+select table_schema, table_name, column_name, ordinal_position from information_schema.columns
+where table_schema = 'resub01' order by table_name, ordinal_position;
+table_schema    table_name    column_name    ordinal_position
+resub01    repub01    col1    1
+select * from mo_subscription_tables();
+not supported: mo_subscription_tables is private to information_schema metadata views
+create database subscription_metadata_wrapper;
+create view subscription_metadata_wrapper.v as select * from mo_subscription_columns();
+not supported: mo_subscription_columns is private to information_schema metadata views
+drop database subscription_metadata_wrapper;
 show columns from repub01;
 Field    Type    Null    Key    Default    Extra    Comment
 col1    INT(32)    YES        null        
@@ -59,6 +94,13 @@ select * from repub01;
 col1
 1
 drop publication publication01;
+drop publication publication02;
+select count(*) from information_schema.tables where table_schema = 'resub01';
+count(*)
+0
+select count(*) from information_schema.columns where table_schema = 'resub01';
+count(*)
+0
 drop database database03;
 drop database republication01;
 drop account test_tenant_1;

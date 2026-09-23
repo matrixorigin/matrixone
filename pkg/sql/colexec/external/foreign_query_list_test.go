@@ -228,16 +228,16 @@ func TestGetFieldFromLineScopedToForeignScans(t *testing.T) {
 	line := []csvparser.Field{{Val: "data-value"}}
 	generic := &ExternalParam{}
 	generic.Fileparam = &ExFileparam{Filepath: "/some/file.csv"}
-	got := getFieldFromLine(line, catalog.ExternalQuery, generic, 0)
+	got := getFieldFromLine(line, catalog.ExternalQuery, 0, generic, 0)
 	require.Equal(t, "data-value", got.Val, "generic scan must read the real column")
 
 	foreign := &ExternalParam{}
 	foreign.ForeignScan = &plan.ForeignScan{Kind: "sql"}
 	foreign.Fileparam = &ExFileparam{Filepath: "select 1"}
-	got = getFieldFromLine(line, catalog.ExternalQuery, foreign, 0)
+	got = getFieldFromLine(line, catalog.ExternalQuery, 0, foreign, 0)
 	require.Equal(t, "select 1", got.Val, "foreign scan synthesizes the query text")
 
 	// __mo_filepath keeps its pre-existing name-based behavior everywhere
-	got = getFieldFromLine(line, catalog.ExternalFilePath, generic, 0)
+	got = getFieldFromLine(line, catalog.ExternalFilePath, 0, generic, 0)
 	require.Equal(t, "/some/file.csv", got.Val)
 }

@@ -428,6 +428,17 @@ func (l *LocalETLFS) PrefetchFile(ctx context.Context, filePath string) error {
 }
 
 func (l *LocalETLFS) List(ctx context.Context, dirPath string) iter.Seq2[*DirEntry, error] {
+	return l.list(ctx, dirPath, false)
+}
+
+// ListWithHidden includes dot-prefixed entries for callers that explicitly
+// select them. Ordinary List keeps hiding these entries, including temporary
+// files used by atomic writes.
+func (l *LocalETLFS) ListWithHidden(ctx context.Context, dirPath string) iter.Seq2[*DirEntry, error] {
+	return l.list(ctx, dirPath, true)
+}
+
+func (l *LocalETLFS) list(ctx context.Context, dirPath string, includeHidden bool) iter.Seq2[*DirEntry, error] {
 	return func(yield func(*DirEntry, error) bool) {
 		select {
 		case <-ctx.Done():
@@ -456,7 +467,7 @@ func (l *LocalETLFS) List(ctx context.Context, dirPath string) iter.Seq2[*DirEnt
 		entries, err := f.ReadDir(-1)
 		for _, entry := range entries {
 			name := entry.Name()
-			if strings.HasPrefix(name, ".") {
+			if !includeHidden && strings.HasPrefix(name, ".") {
 				continue
 			}
 			info, ok, err := localDirEntryInfo(entry)

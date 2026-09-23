@@ -186,7 +186,7 @@ select num_col1 ,num_col2 from test_16;
 
 ------------------------------------------------------------
 drop table if exists alter01;
-create table alter01 (col1 int, col2 decimal);
+create table alter01 (col1 int, col2 decimal(38,0));
 show create table alter01;
 insert into alter01 values(1, 3412.324);
 insert into alter01 values (-10, 323943.2343);
@@ -200,7 +200,7 @@ drop table alter01;
 
 ------------------------------------------------------------
 drop table if exists alter01;
-create table alter01 (col1 int primary key, col2 decimal);
+create table alter01 (col1 int primary key, col2 decimal(38,0));
 show create table alter01;
 insert into alter01 values(1, 3412.324);
 insert into alter01 values (-10, 323943.2343);
@@ -214,7 +214,7 @@ drop table alter01;
 
 ------------------------------------------------------------
 drop table if exists alter01;
-create table alter01 (col1 int primary key, col2 decimal);
+create table alter01 (col1 int primary key, col2 decimal(38,0));
 show create table alter01;
 insert into alter01 values(1, 3412.324);
 insert into alter01 values (-10, 323943.2343);

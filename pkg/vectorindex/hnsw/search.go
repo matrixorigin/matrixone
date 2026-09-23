@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -57,6 +58,11 @@ type HnswSearch[T types.RealNumbers] struct {
 	loadedFp    uint64
 	loadedCount int64
 	genValid    bool
+
+	// buildTS is MAX(metadata.build_ts) over the whole metadata read (base generations +
+	// cdc_tail frames), captured at metadata read so it reflects the generation searched.
+	// 0 = unknown. See BuildTS.
+	buildTS int64
 }
 
 func NewHnswSearch[T types.RealNumbers](idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig) *HnswSearch[T] {
@@ -91,6 +97,15 @@ func (s *HnswSearch[T]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt vec
 	query, ok := anyquery.([]T)
 	if !ok {
 		return nil, nil, moerr.NewInternalErrorNoCtx("query is not []float32")
+	}
+	if s.Idxcfg.Usearch.Metric == metric.MetricTypeToUsearchMetric[metric.Metric_CosineDistance] {
+		// Do not expose usearch's raw cosine score to a direct/old HNSW caller. It is
+		// not the SQL cosine_distance contract for zero and subnormal vectors, and the
+		// search heap has already discarded candidates before any output transform.
+		// New SQL plans avoid this path in prepareHnswIndexContext; this guard protects
+		// direct callers and mixed-version plans until all nodes use the planner gate.
+		return nil, nil, moerr.NewInternalErrorNoCtx(
+			"hnsw cosine search is disabled because usearch scores are not SQL-compatible at the zero-vector boundary")
 	}
 
 	limit := rt.Limit
@@ -221,20 +236,27 @@ func (s *HnswSearch[T]) Contains(key int64) (bool, error) {
 
 // Destroy HnswSearch (implement VectorIndexSearch.Destroy)
 func (s *HnswSearch[T]) Destroy() {
-	// destroy index
+	// Through the model's own Destroy, not idx.Index.Destroy(): after Preload a model carries
+	// metadata with a nil Index (and possibly a fetched Path), and a load abandoned between
+	// Preload and Load reaches here. HnswModel.Destroy nil-checks the handle and also releases
+	// the on-disk file and buffer, matching what LoadIndex's error path already does.
 	for _, idx := range s.Indexes {
-		idx.Index.Destroy()
+		idx.Destroy()
 	}
 	s.Indexes = nil
 }
 
 // load metadata from database
-func LoadMetadata[T types.RealNumbers](sqlproc *sqlexec.SqlProcess, dbname string, metatbl string) ([]*HnswModel[T], error) {
+// LoadMetadata returns the index's model rows and maxBuildTS, the greatest source-table
+// commit reflected across ALL metadata rows -- base generations AND cdc_tail frames (which
+// LoadIndex later drops from the resident set). It is the coverage point the async-index
+// freshness gate reports via BuildTS. 0 = unknown (pre-migration index).
+func LoadMetadata[T types.RealNumbers](sqlproc *sqlexec.SqlProcess, dbname string, metatbl string) ([]*HnswModel[T], int64, error) {
 
 	sql := fmt.Sprintf("SELECT * FROM %s ORDER BY timestamp ASC", sqlquote.QualifiedIdent(dbname, metatbl))
 	res, err := runSql(sqlproc, sql)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer res.Close()
 
@@ -256,11 +278,30 @@ func LoadMetadata[T types.RealNumbers](sqlproc *sqlexec.SqlProcess, dbname strin
 			fs := vector.GetFixedAtWithTypeCheck[int64](fsVec, i)
 
 			idx := &HnswModel[T]{Id: id, Checksum: chksum, Timestamp: ts, FileSize: fs}
+			// nrow and build_ts were appended after the original four columns, and the
+			// metadata table is created per index at CREATE INDEX -- REINDEX rewrites its rows,
+			// not the table -- so an index created before they existed still has four. Read
+			// them only when the batch actually carries them; absent means unknown.
+			if len(bat.Vecs) > 4 {
+				idx.Nrow = vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[4], i)
+			}
+			if len(bat.Vecs) > 5 {
+				idx.BuildTS = vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[5], i)
+			}
 			indexes = append(indexes, idx)
 		}
 	}
 
-	return indexes, nil
+	var rows, newest int64
+	for _, idx := range indexes {
+		rows += idx.Nrow
+		if idx.BuildTS > newest {
+			newest = idx.BuildTS
+		}
+	}
+	logMetadataProvenance(metatbl, len(indexes), rows, newest)
+
+	return indexes, newest, nil
 }
 
 // load index from database
@@ -284,18 +325,36 @@ func (s *HnswSearch[T]) LoadIndex(sqlproc *sqlexec.SqlProcess, indexes []*HnswMo
 	return indexes, nil
 }
 
-// load index from database (implement VectorIndexSearch.LoadFromDatabase)
-func (s *HnswSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
-	// load metadata
-	indexes, err := LoadMetadata[T](sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable)
+// Preload reads the metadata rows, which carry each model's FileSize -- the cost the following
+// Load will claim in host memory. The models are parked on s.Indexes unloaded, so GetIndexSize
+// answers before a single model file is read.
+func (s *HnswSearch[T]) Preload(sqlproc *sqlexec.SqlProcess) error {
+	indexes, buildTS, err := LoadMetadata[T](sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable)
 	if err != nil {
 		return err
+	}
+	s.Indexes = indexes
+	s.buildTS = buildTS
+	return nil
+}
+
+// load index from database (implement VectorIndexSearch.LoadFromDatabase)
+func (s *HnswSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
+	// Metadata was read by Preload; a caller that skipped it still gets a correct load.
+	indexes := s.Indexes
+	if indexes == nil {
+		var err error
+		if indexes, s.buildTS, err = LoadMetadata[T](sqlproc, s.Tblcfg.DbName, s.Tblcfg.MetadataTable); err != nil {
+			return err
+		}
 	}
 
 	if len(indexes) > 0 {
 		// load index model
+		var err error
 		indexes, err = s.LoadIndex(sqlproc, indexes)
 		if err != nil {
+			s.Indexes = nil
 			return err
 		}
 	}
@@ -315,9 +374,117 @@ func (s *HnswSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 	return nil
 }
 
-// IsStale reports whether the loaded model has fallen behind the persisted index — any content
-// change (CDC append/delete rewriting a model file, REBUILD/MERGE, or an emptied model) changes the
-// checksum fingerprint / model count — for the VectorIndexCache cross-CN freshness check.
+// EmptyGeneration reports a loaded generation with no vectors: no model rows (a freshly created
+// index, or the async-build window before the first model is written) or every loaded model empty.
+// The cache declines to retain such a generation, so the next query reloads and picks up the
+// models once the build writes them -- instead of pinning a vector-less generation until the
+// IsStale sweep evicts it. A generation with any populated model is cached normally.
+//
+// Fails CLOSED: a model whose size cannot be read (Empty errors on a nil usearch handle, or
+// usearch Len fails) counts as populated. Reading such a model as vector-less would evict a
+// full generation and re-stream every model file on the next query, where the opposite mistake
+// only keeps a vector-less generation until the IsStale sweep -- which hnsw has.
+func (s *HnswSearch[T]) EmptyGeneration() bool {
+	for _, m := range s.Indexes {
+		if m == nil {
+			continue
+		}
+		empty, err := m.Empty()
+		if err != nil || !empty {
+			return false
+		}
+	}
+	return true
+}
+
+// hnswViewedBytesPerRow is the HOST cost of one row in a VIEWED (mmap'd) usearch index: the
+// per-node bookkeeping usearch keeps outside the mapping (limits_.members * sizeof(node_t)).
+//
+// Measured against usearch's own memory_usage(), which is what GetIndexSize charges once the
+// index is loaded. It is exactly linear in the row count and completely independent of
+// dimension -- at 20k rows, dim 32 and dim 512 report the identical 161,536 bytes while the
+// model file grows 8x:
+//
+//	n=5000  dim=32   file=1.4MB   viewed=41536
+//	n=5000  dim=512  file=11.0MB  viewed=41536
+//	n=20000 dim=32   file=5.5MB   viewed=161536
+//	n=20000 dim=512  file=43.9MB  viewed=161536
+//	n=50000 dim=128  file=33.0MB  viewed=401536
+//
+// The deltas are 120000/15000 and 240000/30000 -- 8.000 bytes per row, over a fixed ~1536-byte
+// per-thread-context term that is not worth modelling.
+const hnswViewedBytesPerRow = 8
+
+// logMetadataProvenance reports what the metadata rows say a loaded index is: how many source
+// rows its generations cover, and the newest data version they were built from. build_ts is 0
+// for a generation written before the column existed, and for a fulltext2 MERGE, whose content
+// has no single source version -- both print as "unknown" rather than as an epoch timestamp.
+//
+// This is the read side of the provenance columns: without it nrow/build_ts are written and
+// never surfaced, and an operator asking "how far behind is this resident index?" has to query
+// the hidden metadata table by hand.
+func logMetadataProvenance(metatbl string, count int, rows, buildTS int64) {
+	if buildTS <= 0 {
+		logutil.Infof("%s: loaded %d generation(s), rows=%d, build_ts=unknown", metatbl, count, rows)
+		return
+	}
+	logutil.Infof("%s: loaded %d generation(s), rows=%d, build_ts=%d", metatbl, count, rows, buildTS)
+}
+
+// GetIndexSize charges usearch's native bookkeeping PLUS the mapped model file.
+//
+// The mmap is reclaimable page cache rather than allocation, so usearch's own figure omits it:
+// memory_usage() skips the node and vector bytes whenever viewed_file_ is set (index.hpp:
+// `if (!viewed_file_)`), reporting ~1.2% of the file. But it is not free, and it is not only
+// page cache. LoadIndexFromBuffer unlinks the spill file once View() has mapped it, so the
+// inode's blocks are held on the LOCAL fileservice volume until Destroy -- and since residency
+// is bounded by BYTES alone, the omission is what bounds admission. Charging only the
+// bookkeeping lets one client hold N whole models for N distinct named-snapshot timestamps
+// while the governor sees a hundredth of them, filling the CN's scratch mount under a cap that
+// looks satisfied.
+//
+// So the file is charged too. It over-states heap, which is the honest trade: the number the
+// governor acts on is "bytes this entry keeps the CN from reusing", and for a viewed hnsw model
+// that is dominated by the mapping, not by the allocator.
+//
+// Existing four-column metadata cannot estimate this before Load, so the charge lands after
+// materialization. No catalog migration is introduced just to estimate a cache entry.
+// BuildTS reports the greatest source-table commit this loaded generation reflects
+// (MAX(metadata.build_ts) over base + cdc_tail), for the async-index freshness gate.
+func (s *HnswSearch[T]) BuildTS() int64 {
+	return s.buildTS
+}
+
+func (s *HnswSearch[T]) GetIndexSize() (hostBytes, deviceBytes int64) {
+	for _, idx := range s.Indexes {
+		if idx == nil {
+			continue
+		}
+		// nrow*8 + FileSize: the allocation, plus the mapping that dominates it.
+		//
+		// Measured on a viewed index (100k rows, dim 128, 63 MB file): usearch MemoryUsage
+		// reports 0.76 MB, while the process's VmRSS grows 67.25 MB -- 107% of the file. The
+		// mapping is nominally reclaimable page cache, but reclaiming it makes the next search
+		// fault the graph back off disk, so it is resident for as long as the entry is useful.
+		// Charging the allocation alone under-states the entry by ~88x. Page tables are a
+		// third, far smaller cost (VmPTE grew 0.14 MB, 0.22% of the file, per ADDRESS SPACE not
+		// per thread), which FileSize covers by a wide margin.
+		//
+		// The same formula before and after load. Both terms come from the metadata row, so the
+		// pre-load reservation and the post-load charge are the SAME number -- the property the
+		// admission decision needs, since a reservation that under-states the charge lets a load
+		// blow a budget the pass just declared satisfied. usearch's MemoryUsage() is
+		// deliberately not consulted: at 100k and 200k rows it agrees with nrow*8 to within
+		// 0.4%, so asking it buys nothing and would make the two paths disagree.
+		//
+		// A generation written before the nrow column existed contributes 0 for the allocation
+		// term; its mapping is still charged.
+		hostBytes += idx.Nrow*hnswViewedBytesPerRow + max(idx.FileSize, 0)
+	}
+	return hostBytes, 0
+}
+
+// IsStale reports whether the loaded model has fallen behind persisted data.
 // Runs on the housekeeping goroutine via a background auto-commit txn (cnUUID/accountID captured
 // at load). A query error ⇒ (true, err): the index was likely dropped/rebuilt, so reclaim the
 // dead entry. No captured generation (capture failed at load, or no service to re-query) ⇒

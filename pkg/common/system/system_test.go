@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -311,7 +312,8 @@ func TestDebounceSimulatesK8sScaling(t *testing.T) {
 	}
 
 	// After debounce period, next event should trigger refresh
-	time.Sleep(time.Duration(quotaRefreshDebounceSeconds) * time.Second)
+	lastQuotaRefreshTime.Store(time.Now().UnixNano() -
+		int64(quotaRefreshDebounceSeconds)*int64(time.Second) - 1)
 	if !shouldRefreshQuotaConfig() {
 		t.Error("event after debounce period should trigger refresh")
 	}
@@ -350,4 +352,223 @@ func TestConcurrentDebounce(t *testing.T) {
 
 	// Should complete without panic or race condition
 	t.Log("concurrent debounce test passed")
+}
+
+// TestMinHierarchicalHeadroom is the counterexample for taking the minimum
+// ancestor LIMIT and then subtracting only the leaf's usage: a constrained
+// parent has far less headroom than that arithmetic reports.
+func TestMinHierarchicalHeadroom(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "tenant")
+	child := filepath.Join(parent, "query")
+	require.NoError(t, os.MkdirAll(child, 0o700))
+
+	write := func(dir, name, val string) {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(val+"\n"), 0o600))
+	}
+
+	// Parent: 8 GiB cap with 7 GiB already charged (siblings) -> 1 GiB headroom.
+	// Child:  4 GiB cap with 1 GiB charged to us              -> 3 GiB headroom.
+	// The binding constraint is the PARENT's 1 GiB. Limit-minimum minus
+	// leaf-usage would instead report 4 GiB - 1 GiB = 3 GiB, i.e. 3x too much.
+	write(root, "memory.max", "max")
+	write(root, "memory.current", "0")
+	write(parent, "memory.max", strconv.FormatUint(8<<30, 10))
+	write(parent, "memory.current", strconv.FormatUint(7<<30, 10))
+	write(child, "memory.max", strconv.FormatUint(4<<30, 10))
+	write(child, "memory.current", strconv.FormatUint(1<<30, 10))
+
+	got, ok := minHierarchicalHeadroom(child, root, "memory.max", "memory.current", "memory.stat", "inactive_file")
+	require.True(t, ok)
+	require.Equal(t, uint64(1<<30), got, "must report the parent's headroom, not the leaf's")
+
+	t.Run("exhausted level reports zero, still measured", func(t *testing.T) {
+		write(parent, "memory.current", strconv.FormatUint(9<<30, 10)) // over its cap
+		got, ok := minHierarchicalHeadroom(child, root, "memory.max", "memory.current", "memory.stat", "inactive_file")
+		require.True(t, ok, "an exhausted cgroup is MEASURED, not unmeasured")
+		require.Equal(t, uint64(0), got)
+		write(parent, "memory.current", strconv.FormatUint(7<<30, 10))
+	})
+
+	t.Run("limit without readable usage is unmeasured", func(t *testing.T) {
+		// Skipping such a level would resurrect the overstatement this prevents.
+		require.NoError(t, os.Remove(filepath.Join(parent, "memory.current")))
+		_, ok := minHierarchicalHeadroom(child, root, "memory.max", "memory.current", "memory.stat", "inactive_file")
+		require.False(t, ok)
+		write(parent, "memory.current", strconv.FormatUint(7<<30, 10))
+	})
+
+	t.Run("no limit anywhere is unmeasured", func(t *testing.T) {
+		write(parent, "memory.max", "max")
+		write(child, "memory.max", "max")
+		_, ok := minHierarchicalHeadroom(child, root, "memory.max", "memory.current", "memory.stat", "inactive_file")
+		require.False(t, ok, "unlimited hierarchy must fall back to the host reading")
+	})
+}
+
+func TestMemoryAvailableIncludingCacheReportsStatus(t *testing.T) {
+	// The contract that matters to callers: a zero value must be distinguishable
+	// from an unavailable measurement, because they demand opposite responses.
+	avail, measured := MemoryAvailableIncludingCache()
+	if measured {
+		require.GreaterOrEqual(t, avail, uint64(0))
+	} else {
+		require.Equal(t, uint64(0), avail, "unmeasured must report zero")
+	}
+}
+
+// cgroup v1 has no "max" string: when no memory limit is set it writes
+// PAGE_COUNTER_MAX into memory.limit_in_bytes, which parses as a perfectly
+// good integer. Treating it as a real limit reported ~9.2 EB of headroom as a
+// MEASURED figure, and a measured figure is exactly what callers size bulk
+// allocations from -- so an unlimited v1 host silently lost its memory bound
+// instead of falling back to the host reading.
+func TestMinHierarchicalHeadroom_V1UnlimitedSentinel(t *testing.T) {
+	const v1Unlimited = uint64(0x7FFFFFFFFFFFF000) // PAGE_COUNTER_MAX
+	root := t.TempDir()
+	child := filepath.Join(root, "child")
+	require.NoError(t, os.MkdirAll(child, 0o755))
+	write := func(dir, name string, val uint64) {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name),
+			[]byte(strconv.FormatUint(val, 10)+"\n"), 0o600))
+	}
+
+	write(root, "memory.limit_in_bytes", v1Unlimited)
+	write(root, "memory.usage_in_bytes", 1<<30)
+	write(child, "memory.limit_in_bytes", v1Unlimited)
+	write(child, "memory.usage_in_bytes", 1<<30)
+
+	_, ok := minHierarchicalHeadroom(child, root, "memory.limit_in_bytes", "memory.usage_in_bytes", "memory.stat", "total_inactive_file")
+	require.False(t, ok, "an unlimited v1 hierarchy must fall back to the host reading")
+
+	// A bare LONG_MAX is larger than the sentinel and must also read as unlimited.
+	write(child, "memory.limit_in_bytes", uint64(1<<63-1))
+	_, ok = minHierarchicalHeadroom(child, root, "memory.limit_in_bytes", "memory.usage_in_bytes", "memory.stat", "total_inactive_file")
+	require.False(t, ok, "LONG_MAX must also read as unlimited")
+
+	// A REAL v1 limit still binds: 4 GiB cap, 1 GiB used -> 3 GiB headroom.
+	write(child, "memory.limit_in_bytes", 4<<30)
+	got, ok := minHierarchicalHeadroom(child, root, "memory.limit_in_bytes", "memory.usage_in_bytes", "memory.stat", "total_inactive_file")
+	require.True(t, ok, "a real limit must still be measured")
+	require.Equal(t, uint64(3<<30), got)
+
+	// ...and the same sentinel must not be mistaken for a limit by the limit walk,
+	// which feeds CgroupMemoryLimit and thence the second tier of
+	// MemoryAvailableIncludingCache.
+	write(child, "memory.limit_in_bytes", v1Unlimited)
+	require.Zero(t, minHierarchicalLimit(child, root, "memory.limit_in_bytes"),
+		"unlimited v1 must not surface as a colossal limit")
+}
+
+// The hierarchy walk is not the only way the v1 sentinel reaches a caller:
+// CgroupMemoryLimit falls back to gosigar, which returns the sentinel verbatim
+// (its own tests assert 9223372036854771712). Filtering it in only one of the
+// two paths left MemoryAvailableIncludingCache's second tier still deriving a
+// budget from ~9.2 EB.
+func TestNormalizeCgroupLimit(t *testing.T) {
+	require.Zero(t, normalizeCgroupLimit(0), "no limit")
+	require.Zero(t, normalizeCgroupLimit(-1), "error sentinel")
+	require.Zero(t, normalizeCgroupLimit(int64(cgroupV1Unlimited)), "v1 PAGE_COUNTER_MAX")
+	require.Zero(t, normalizeCgroupLimit(1<<63-1), "bare LONG_MAX")
+	require.Equal(t, uint64(4<<30), normalizeCgroupLimit(4<<30), "a real limit survives")
+	require.Equal(t, uint64(cgroupV1Unlimited-1), normalizeCgroupLimit(int64(cgroupV1Unlimited)-1),
+		"just below the sentinel is still a real limit")
+}
+
+func TestNormalizeMemoryCapacity(t *testing.T) {
+	require.Zero(t, NormalizeMemoryCapacity(0), "unknown capacity")
+	require.Zero(t, NormalizeMemoryCapacity(cgroupV1Unlimited), "v1 PAGE_COUNTER_MAX")
+	require.Zero(t, NormalizeMemoryCapacity(^uint64(0)), "invalid oversized capacity")
+	require.Equal(t, uint64(4<<30), NormalizeMemoryCapacity(4<<30), "a real capacity survives")
+}
+
+func TestEffectiveContainerMemoryTotal(t *testing.T) {
+	require.Equal(t, uint64(4<<30), effectiveContainerMemoryTotal(4<<30, 256<<30),
+		"a finite cgroup limit wins over the host")
+	require.Equal(t, uint64(256<<30), effectiveContainerMemoryTotal(int64(cgroupV1Unlimited), 256<<30),
+		"an unlimited v1 value falls back to host capacity")
+	require.Equal(t, uint64(256<<30), effectiveContainerMemoryTotal(-1, 256<<30),
+		"an unavailable cgroup value falls back to host capacity")
+}
+
+// The function's contract is that reclaimable page cache is AVAILABLE -- that is what
+// distinguishes it from raw MemFree, which "drops to a few GiB the moment the cache warms up".
+// Cgroup usage counts page cache, so charging it verbatim reintroduces exactly the figure the
+// function exists to avoid, and does it right after a bulk load: reading 5.5 GB of CSV collapsed
+// the reported headroom from ~15 GB to 3.8 GB on a host with 14.7 GB genuinely available, which
+// split a 1M-row index into two sub-indexes by a 131 MB margin.
+func TestHierarchicalHeadroomDoesNotChargeReclaimableCache(t *testing.T) {
+	const (
+		limit    = 10 << 30
+		anon     = 2 << 30
+		inactive = 6 << 30 // page cache the kernel can drop without evicting anything live
+	)
+	root := t.TempDir()
+	child := filepath.Join(root, "leaf")
+	require.NoError(t, os.MkdirAll(child, 0o755))
+
+	write := func(dir, name, content string) {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0o644))
+	}
+	write(child, "memory.max", strconv.Itoa(limit))
+	write(child, "memory.current", strconv.Itoa(anon+inactive))
+
+	// No memory.stat: the reclaimable term is unreadable, so the full usage is charged.
+	got, ok := minHierarchicalHeadroom(child, root, "memory.max", "memory.current", "memory.stat", "inactive_file")
+	require.True(t, ok)
+	require.Equal(t, uint64(limit-anon-inactive), got,
+		"without a readable stat the conservative figure stands")
+
+	// With it, the reclaimable half comes back.
+	write(child, "memory.stat", "anon 2147483648\ninactive_file 6442450944\nactive_file 1073741824\n")
+	got, ok = minHierarchicalHeadroom(child, root, "memory.max", "memory.current", "memory.stat", "inactive_file")
+	require.True(t, ok)
+	require.Equal(t, uint64(limit-anon), got,
+		"inactive file pages are reclaimable, so they are headroom, not usage")
+	require.Greater(t, got, uint64(limit-anon-inactive))
+
+	// Active file pages are NOT added back: they are in use, and counting them would overstate
+	// headroom in the direction that gets a cgroup OOM-killed.
+	write(child, "memory.stat", "anon 2147483648\ninactive_file 0\nactive_file 6442450944\n")
+	got, ok = minHierarchicalHeadroom(child, root, "memory.max", "memory.current", "memory.stat", "inactive_file")
+	require.True(t, ok)
+	require.Equal(t, uint64(limit-anon-inactive), got, "active pages stay charged")
+
+	// A stat claiming more reclaimable than total usage must not underflow.
+	write(child, "memory.stat", "inactive_file 99999999999999\n")
+	got, ok = minHierarchicalHeadroom(child, root, "memory.max", "memory.current", "memory.stat", "inactive_file")
+	require.True(t, ok)
+	require.Equal(t, uint64(limit), got, "clamped to the limit, never wrapped")
+}
+
+// The single-level fallback and the hierarchy walk must read the SAME quantity, or one host
+// reports two different amounts of reclaimable cache depending on which path answered. cgroup v1
+// exposes both a cgroup-LOCAL `inactive_file` and a hierarchical `total_inactive_file`; the walk
+// asks for the hierarchical one, so reading the local key here under-reported reclaimable cache
+// -- and therefore available memory -- whenever the process's cgroup had children.
+func TestReclaimableCgroupCachePrefersTheHierarchicalKey(t *testing.T) {
+	dir := t.TempDir()
+
+	v1 := filepath.Join(dir, "v1.stat")
+	require.NoError(t, os.WriteFile(v1, []byte(
+		"cache 100\ninactive_file 4096\ntotal_cache 900\ntotal_inactive_file 65536\n"), 0644))
+	got, ok := reclaimableCgroupCache(v1)
+	require.True(t, ok)
+	require.Equal(t, uint64(65536), got, "v1: the hierarchical key, the one the walk uses")
+
+	// v2 has no total_ prefix at all, so the plain key is the answer rather than a fallback
+	// that never fires.
+	v2 := filepath.Join(dir, "v2.stat")
+	require.NoError(t, os.WriteFile(v2, []byte("anon 10\ninactive_file 8192\nslab 3\n"), 0644))
+	got, ok = reclaimableCgroupCache(v2)
+	require.True(t, ok)
+	require.Equal(t, uint64(8192), got)
+
+	_, ok = reclaimableCgroupCache(filepath.Join(dir, "absent.stat"))
+	require.False(t, ok, "an unreadable stat file is not a zero reading")
+
+	none := filepath.Join(dir, "none.stat")
+	require.NoError(t, os.WriteFile(none, []byte("anon 10\nslab 3\n"), 0644))
+	_, ok = reclaimableCgroupCache(none)
+	require.False(t, ok)
 }

@@ -32,12 +32,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/crt"
@@ -79,6 +82,15 @@ func (external *External) Prepare(proc *process.Process) error {
 	}
 
 	param := external.Es
+	if param == nil {
+		return moerr.NewInvalidInput(proc.Ctx, "external parameter is missing")
+	}
+	if err := validateParquetWholeFileFanoutProtocol(proc, param); err != nil {
+		return err
+	}
+	if param.Fileparam == nil {
+		return moerr.NewInvalidInput(proc.Ctx, "external file parameter is missing")
+	}
 	if proc.GetLim().MaxMsgSize == 0 {
 		param.maxBatchSize = uint64(morpc.GetMessageSize())
 	} else {
@@ -110,11 +122,35 @@ func (external *External) Prepare(proc *process.Process) error {
 			param.Extern.FileService = proc.Base.FileService
 		}
 	}
+	if param.Extern.FileService == nil {
+		// Decoded remote parameters carry path/configuration but not the local
+		// FileService interface. Install the executing CN's service before the
+		// rollout gate so aliases are classified against that worker's backend.
+		param.Extern.FileService = proc.Base.FileService
+	}
 	if param.ForeignScan != nil && param.ForeignScan.Kind == foreignScanKindESQL {
 		param.ESQLTemporalUTC = true
 	}
 	if !loadFormatIsValid(param.Extern) {
 		return moerr.NewNYIf(proc.Ctx, "load format '%s'", param.Extern.Format)
+	}
+	if param.Extern.Format == tree.ARROW &&
+		(param.Extern.ExternType != int32(plan.ExternType_LOAD) ||
+			param.ArrowExecutionScope != pipeline.ArrowExecutionScope_ArrowLoadData) {
+		return moerr.NewNotSupported(proc.Ctx, "Arrow format is supported only by LOAD DATA")
+	}
+	if param.Extern.Format == tree.ARROW {
+		// A remote External is reconstructed on the executing CN.  The compile
+		// gate on the coordinator is therefore not sufficient: each worker must
+		// enforce its own rollout configuration before it opens the source.
+		settings, err := plan2.RequireArrowLoadEnabled(proc, param.Extern)
+		if err != nil {
+			return err
+		}
+		if param.ArrowDistributedExecution && !settings.DistributedEnabled {
+			return moerr.NewNotSupported(proc.Ctx,
+				"distributed Arrow LOAD is disabled by configuration")
+		}
 	}
 	if param.Extern.ExternType == int32(plan.ExternType_LOAD) &&
 		(param.Extern.Parallel || param.Extern.ParallelLoadRequested) {
@@ -133,6 +169,12 @@ func (external *External) Prepare(proc *process.Process) error {
 	}
 	param.Ctx = proc.Ctx
 	param.addParquetProfile(icebergParquetProfileStats(param))
+	// Validate the physical output mapping before constructing a reader. A
+	// failed mapping must not leave a reader or batch behind for the caller to
+	// clean up after Prepare returns an error.
+	if err := validateExternalOutputAttrs(proc.Ctx, param.Attrs, param.Cols); err != nil {
+		return err
+	}
 
 	// Filter public preprocessing
 	if param.Filter == nil {
@@ -162,6 +204,10 @@ func (external *External) Prepare(proc *process.Process) error {
 		external.fileOpened = false
 	}
 
+	// Error-mode columns are resolved from the pruned attribute list before any
+	// reader is built, so every reader sees the same decision.
+	resolveExternalErrorMode(param)
+
 	// Create reader (single dispatch point)
 	switch {
 	case param.ForeignScan != nil:
@@ -174,6 +220,12 @@ func (external *External) Prepare(proc *process.Process) error {
 		external.reader = NewZonemapReader(param, proc)
 	case param.Extern.Format == tree.PARQUET:
 		external.reader = NewParquetReader(param, proc)
+	case param.Extern.Format == tree.ARROW:
+		reader, err := NewArrowReader(param, proc, external.allocationAccount)
+		if err != nil {
+			return err
+		}
+		external.reader = reader
 	default:
 		r, err := NewCsvReader(param, proc)
 		if err != nil {
@@ -202,10 +254,50 @@ func (external *External) Prepare(proc *process.Process) error {
 		if param.Extern.Format == tree.PARQUET {
 			flag = false
 		}
-		//alloc space for vector
-		for i := range param.Attrs {
-			typ := makeType(&param.Cols[i].Typ, flag)
+		// Allocate output vectors in Attrs order, but resolve their physical
+		// types through ColIndex. Generated or hidden columns can be omitted
+		// from Attrs, so output position and table-column position differ.
+		for i, attr := range param.Attrs {
+			colIndex := int(attr.ColIndex)
+			typ := makeType(&param.Cols[colIndex].Typ, flag)
 			external.ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(typ)
+		}
+	}
+	return nil
+}
+
+func validateParquetWholeFileFanoutProtocol(proc *process.Process, param *ExternalParam) error {
+	if param == nil || !param.ParquetWholeFileFanout {
+		return nil
+	}
+	if proc == nil || proc.Ctx == nil {
+		return moerr.NewNotSupportedNoCtx(
+			"Parquet whole-file fanout remote execution requires MORPC protocol version 45",
+		)
+	}
+	if remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool); !remote {
+		return nil
+	}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	if rt == nil {
+		return moerr.NewNotSupported(proc.Ctx, "Parquet whole-file fanout remote execution requires MORPC protocol version 45")
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return moerr.NewNotSupported(proc.Ctx, "Parquet whole-file fanout remote execution requires MORPC protocol version 45")
+	}
+	protocolVersion, ok := version.(int64)
+	if !ok || protocolVersion < defines.MORPCVersion45 {
+		return moerr.NewNotSupported(proc.Ctx, "Parquet whole-file fanout remote execution requires MORPC protocol version 45")
+	}
+	return nil
+}
+
+func validateExternalOutputAttrs(ctx context.Context, attrs []plan.ExternAttr, cols []*plan.ColDef) error {
+	for _, attr := range attrs {
+		colIndex := int(attr.ColIndex)
+		if colIndex < 0 || colIndex >= len(cols) || cols[colIndex] == nil {
+			return moerr.NewInvalidInputf(ctx, "external output column index %d is invalid", attr.ColIndex)
 		}
 	}
 	return nil
@@ -295,6 +387,9 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 		external.reader.Close()
 		external.fileOpened = false
 		param.Fileparam.End = true
+		if external.ctr.buf != nil {
+			external.ctr.buf.CleanOnlyData()
+		}
 		return result, err
 	}
 	if external.ctr.buf != nil && external.ctr.buf.RowCount() > 0 {
@@ -307,7 +402,14 @@ func (external *External) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 
 	if fileFinished {
-		external.reader.Close()
+		if err := external.reader.Close(); err != nil {
+			external.fileOpened = false
+			param.Fileparam.End = true
+			if external.ctr.buf != nil {
+				external.ctr.buf.CleanOnlyData()
+			}
+			return result, err
+		}
 		external.finishCurrentFile(param)
 	}
 
@@ -365,7 +467,7 @@ func isSafeFileLevelFunction(ref *plan.ObjectRef) bool {
 	// last_kafka_message_id is realTimeRelated (never constant-folded into a
 	// cached plan) but is deterministic WITHIN one compile on the session CN —
 	// it reads session state. Allowing it here is what makes server-side
-	// exactly-once chaining work:
+	// gap-free chaining work:
 	//   where __mo_read_start_id = last_kafka_message_id()
 	functionID, _ := function.DecodeOverloadID(ref.Obj)
 	if functionID == function.LAST_KAFKA_MESSAGE_ID {
@@ -932,6 +1034,14 @@ func isLegalLine(param *tree.ExternParam, cols []*plan.ColDef, fields []csvparse
 					return false
 				}
 			}
+		case types.T_decimal256:
+			_, err := types.ParseDecimal256(field.Val, col.Typ.Width, col.Typ.Scale)
+			if err != nil {
+				// we tolerate loss of digits.
+				if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
+					return false
+				}
+			}
 		case types.T_timestamp:
 			// Note: isLegalLine is only used for file offset calculation in parallel LOAD DATA,
 			// not for actual data loading. It uses time.Local as fallback since proc is not available.
@@ -970,10 +1080,22 @@ func isDirectParallelLoadType(id types.T) bool {
 	return id == types.T_array_float32 || id == types.T_array_float64
 }
 
-func getRealAttrCnt(attrs []plan.ExternAttr) int {
+// getRealAttrCnt counts the attributes that must be present as FIELDS in the
+// record. Synthesized columns — __mo_filepath and the error-mode columns — are
+// produced by the scan, not read from the record, so they must not inflate the
+// expected field count.
+func getRealAttrCnt(attrs []plan.ExternAttr, cols []*plan.ColDef) int {
 	cnt := 0
 	for i := 0; i < len(attrs); i++ {
 		if catalog.ContainExternalHidenCol(attrs[i].ColName) {
+			cnt++
+			continue
+		}
+		var colId uint64
+		if idx := int(attrs[i].ColIndex); idx < len(cols) && cols[idx] != nil {
+			colId = cols[idx].ColId
+		}
+		if catalog.IsExternalErrorCol(attrs[i].ColName, colId) {
 			cnt++
 		}
 	}
@@ -983,12 +1105,12 @@ func getRealAttrCnt(attrs []plan.ExternAttr) int {
 func checkLineValidRestrictive(param *ExternalParam, proc *process.Process, line []csvparser.Field, rowIdx int) error {
 	if param.ClusterTable != nil && param.ClusterTable.GetIsClusterTable() {
 		//the column account_id of the cluster table do need to be filled here
-		if len(line)+1 != getRealAttrCnt(param.Attrs) {
+		if len(line)+1 != getRealAttrCnt(param.Attrs, param.Cols) {
 			return moerr.NewInvalidInputf(proc.Ctx, "the data of row %d contained is not equal to input columns", rowIdx+1)
 		}
 	} else {
 		if param.Extern.ExternType == int32(plan.ExternType_EXTERNAL_TB) {
-			if len(line) < getRealAttrCnt(param.Attrs) {
+			if len(line) < getRealAttrCnt(param.Attrs, param.Cols) {
 				return moerr.NewInvalidInputf(proc.Ctx, "the data of row %d contained is less than input columns", rowIdx+1)
 			}
 			return nil
@@ -1101,7 +1223,7 @@ func isLoadNumericZeroFillType(id types.T) bool {
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128:
+		types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		return true
 	default:
 		return false
@@ -1113,7 +1235,7 @@ func isLoadNumericAdjustedValueType(id types.T) bool {
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64,
-		types.T_decimal64, types.T_decimal128:
+		types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		return true
 	default:
 		return false
@@ -1202,12 +1324,74 @@ func appendLoadEmptyNumericZero(vec *vector.Vector, id types.T, asBytes bool, mp
 		return vector.AppendFixed(vec, types.Decimal64(0), false, mp)
 	case types.T_decimal128:
 		return vector.AppendFixed(vec, types.Decimal128{}, false, mp)
+	case types.T_decimal256:
+		return vector.AppendFixed(vec, types.Decimal256{}, false, mp)
 	default:
 		return moerr.NewInternalErrorNoCtxf("unsupported type %v for empty numeric LOAD DATA zero-fill", id)
 	}
 }
 
-func getFieldFromLine(line []csvparser.Field, colName string, param *ExternalParam, fieldIdx int32) csvparser.Field {
+// resolveExternalErrorMode decides, once per scan, whether the error-mode
+// columns survived column pruning. An attribute absent from param.Attrs was
+// pruned, so a query that does not mention these columns behaves exactly as
+// before and pays nothing per row.
+func resolveExternalErrorMode(param *ExternalParam) {
+	mode := ExternalErrorMode{}
+	for _, attr := range param.Attrs {
+		var colId uint64
+		if int(attr.ColIndex) < len(param.Cols) && param.Cols[attr.ColIndex] != nil {
+			colId = param.Cols[attr.ColIndex].ColId
+		}
+		if catalog.IsExternalErrorToleranceCol(attr.ColName, colId) {
+			mode.Tolerate = true
+		}
+		if attr.ColName == catalog.ExternalFileLine && colId == catalog.ExternalFileLineColId {
+			mode.WantLine = true
+		}
+	}
+	param.ErrorMode = mode
+}
+
+// isSynthesizedAttr reports whether the scan produces this column itself
+// rather than reading it out of the record.
+func isSynthesizedAttr(attr plan.ExternAttr, colId uint64, param *ExternalParam) bool {
+	switch {
+	case catalog.ContainExternalHidenCol(attr.ColName):
+		return true
+	case param.ForeignScan != nil && attr.ColName == catalog.ExternalQuery:
+		return true
+	case attr.ColName == catalog.ExternalFileLine && colId == catalog.ExternalFileLineColId:
+		return true
+	}
+	if param.KafkaScan != nil {
+		if _, ok := kafkaMetaField(attr.ColName, param); ok {
+			return true
+		}
+	}
+	return false
+}
+
+func getFieldFromLine(line []csvparser.Field, colName string, colId uint64, param *ExternalParam, fieldIdx int32) csvparser.Field {
+	// Error-mode columns are synthesized, never read from the record. On a row
+	// that parsed, both error columns are NULL; the tolerant path overwrites
+	// them for a row that did not. __mo_file_line is position metadata and is
+	// filled whether or not the row parsed.
+	//
+	// Scoped by the reserved ColId, not by name: a table created before these
+	// names were reserved can have a REAL user column called
+	// __mo_error_message, and it has to keep reading its own data.
+	switch {
+	case colName == catalog.ExternalFileLine && colId == catalog.ExternalFileLineColId:
+		if param.KafkaScan != nil {
+			// A Kafka record has no line in a file; __mo_message_id is what
+			// identifies it.
+			return csvparser.Field{IsNull: true}
+		}
+		return csvparser.Field{Val: strconv.FormatInt(param.ErrorMode.RecordLine, 10)}
+	case colName == catalog.ExternalErrorMessage && colId == catalog.ExternalErrorMessageColId,
+		colName == catalog.ExternalErrorText && colId == catalog.ExternalErrorTextColId:
+		return csvparser.Field{IsNull: true}
+	}
 	// __mo_filepath is synthesized by name (pre-existing behavior); __mo_query
 	// only on foreign scans, so a real __mo_query data column in a
 	// pre-existing generic external table still reads source data.
@@ -1223,7 +1407,111 @@ func getFieldFromLine(line []csvparser.Field, colName string, param *ExternalPar
 	return line[fieldIdx]
 }
 
+// getOneRowData materializes one record into the batch.
+//
+// Without error mode this is exactly the historical behaviour: the first
+// conversion failure aborts the statement.
+//
+// With error mode (the query kept __mo_error_message or __mo_error_text) a
+// record that cannot be materialized must not fail the query. Columns are
+// appended one at a time, so a failure part-way leaves the batch's vectors at
+// unequal lengths; the row is therefore rolled back to the lengths captured
+// before it and re-emitted with every user column NULL and the error columns
+// describing the failure.
 func getOneRowData(proc *process.Process, bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam) error {
+	if !param.ErrorMode.Tolerate {
+		return materializeOneRow(proc, bat, line, rowIdx, param)
+	}
+
+	mode := &param.ErrorMode
+	if cap(mode.rowLens) < len(bat.Vecs) {
+		mode.rowLens = make([]int, len(bat.Vecs))
+	}
+	lens := mode.rowLens[:len(bat.Vecs)]
+	for i, vec := range bat.Vecs {
+		lens[i] = vec.Length()
+	}
+
+	err := materializeOneRow(proc, bat, line, rowIdx, param)
+	if err == nil {
+		return nil
+	}
+	for i, vec := range bat.Vecs {
+		vec.SetLength(lens[i])
+	}
+	return appendErrorRow(proc, bat, line, rowIdx, param, err)
+}
+
+// appendErrorRow emits the replacement row for a record that failed to
+// materialize: every user column NULL, __mo_filepath and __mo_file_line as
+// usual, and the two error columns describing the failure.
+func appendErrorRow(proc *process.Process, bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam, cause error) error {
+	mp := proc.GetMPool()
+	message := cause.Error()
+	text := recordText(line, param)
+	for _, attr := range param.Attrs {
+		vec := bat.Vecs[attr.ColIndex]
+		var colId uint64
+		if idx := int(attr.ColIndex); idx < len(param.Cols) && param.Cols[idx] != nil {
+			colId = param.Cols[idx].ColId
+		}
+		switch {
+		case attr.ColName == catalog.ExternalErrorMessage && colId == catalog.ExternalErrorMessageColId:
+			if err := vector.AppendBytes(vec, []byte(message), false, mp); err != nil {
+				return err
+			}
+		case attr.ColName == catalog.ExternalErrorText && colId == catalog.ExternalErrorTextColId:
+			if err := vector.AppendBytes(vec, []byte(text), false, mp); err != nil {
+				return err
+			}
+		case isSynthesizedAttr(attr, colId, param):
+			// Position and source metadata -- __mo_filepath, __mo_file_line,
+			// the Kafka message columns -- describe where the record came
+			// from, which is exactly what a failed record needs to be found.
+			// They are synthesized, so they do not depend on the record
+			// having parsed; the ordinary column path fills them, typed as
+			// the catalog declares them.
+			if err := getColData(bat, line, rowIdx, param, mp, attr, proc); err != nil {
+				return err
+			}
+		default:
+			// A record that failed to parse has no trustworthy value for any
+			// user column, so all of them are NULL — including the ones that
+			// happened to convert before the failure.
+			if err := vector.AppendBytes(vec, nil, true, mp); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// recordText rebuilds the failed record as text for __mo_error_text. The
+// parser hands back decoded fields, so the reconstruction re-joins them with
+// the configured terminator: quoting and escaping are normalized rather than
+// byte-identical to the file.
+func recordText(line []csvparser.Field, param *ExternalParam) string {
+	if param.ErrorMode.RawText != "" {
+		return param.ErrorMode.RawText
+	}
+	sep := ","
+	if param.Extern != nil && param.Extern.Tail != nil && param.Extern.Tail.Fields != nil &&
+		param.Extern.Tail.Fields.Terminated != nil && param.Extern.Tail.Fields.Terminated.Value != "" {
+		sep = param.Extern.Tail.Fields.Terminated.Value
+	}
+	var sb strings.Builder
+	for i, field := range line {
+		if i > 0 {
+			sb.WriteString(sep)
+		}
+		if !field.IsNull {
+			sb.WriteString(field.Val)
+		}
+	}
+	return sb.String()
+}
+
+func materializeOneRow(proc *process.Process, bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam) error {
 	mp := proc.GetMPool()
 	if checkLineStrict(param) {
 		if err := checkLineValidRestrictive(param, proc, line, rowIdx); err != nil {
@@ -1267,7 +1555,11 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 
 	fieldIdx := attr.ColFieldIndex
 
-	field := getFieldFromLine(line, colName, param, fieldIdx)
+	var colId uint64
+	if col != nil {
+		colId = col.ColId
+	}
+	field := getFieldFromLine(line, colName, colId, param, fieldIdx)
 	id := types.T(col.Typ.Id)
 	loadDataNonStrictAdjustments := shouldApplyLoadDataNonStrictAdjustments(param)
 	trimSpace := false
@@ -1766,6 +2058,18 @@ func getColData(bat *batch.Batch, line []csvparser.Field, rowIdx int, param *Ext
 		if err := vector.AppendFixed(vec, d, false, mp); err != nil {
 			return err
 		}
+	case types.T_decimal256:
+		d, err := types.ParseDecimal256(field.Val, vec.GetType().Width, vec.GetType().Scale)
+		if err != nil {
+			// we tolerate loss of digits.
+			if !moerr.IsMoErrCode(err, moerr.ErrDataTruncated) {
+				logutil.Errorf("parse field[%v] err:%v", field.Val, err)
+				return moerr.NewInternalErrorf(param.Ctx, "the input value '%v' is invalid Decimal256 type for column %d", field.Val, colIdx)
+			}
+		}
+		if err := vector.AppendFixed(vec, d, false, mp); err != nil {
+			return err
+		}
 	case types.T_timestamp:
 		d := temporalValue.timestamp
 		if !loadDataNonStrictAdjustments {
@@ -1835,7 +2139,7 @@ func parseLoadDataYear(field csvparser.Field) (types.MoYear, error) {
 
 func loadFormatIsValid(param *tree.ExternParam) bool {
 	switch param.Format {
-	case tree.JSONLINE, tree.CSV, tree.PARQUET:
+	case tree.JSONLINE, tree.CSV, tree.PARQUET, tree.ARROW:
 		return true
 	}
 	return false

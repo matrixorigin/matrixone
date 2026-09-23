@@ -47,7 +47,7 @@ func (minus *Minus) Prepare(proc *process.Process) error {
 	if err != nil {
 		return err
 	}
-	return nil
+	return minus.ctr.keyEvaluator.Prepare(proc, minus.KeyExprs)
 }
 
 // Call is the execute method of minus operator
@@ -113,6 +113,10 @@ func (minus *Minus) buildHashTable(proc *process.Process, analyzer process.Analy
 			continue
 		}
 
+		keyVecs, err := ctr.keyEvaluator.Eval(proc, input.Batch)
+		if err != nil {
+			return err
+		}
 		itr := ctr.hashTable.NewIterator()
 		count := input.Batch.Vecs[0].Length()
 		for i := 0; i < count; i += hashmap.UnitLimit {
@@ -120,7 +124,7 @@ func (minus *Minus) buildHashTable(proc *process.Process, analyzer process.Analy
 			if n > hashmap.UnitLimit {
 				n = hashmap.UnitLimit
 			}
-			_, _, err := itr.Insert(i, n, input.Batch.Vecs)
+			_, _, err := itr.Insert(i, n, keyVecs)
 			if err != nil {
 				return err
 			}
@@ -163,6 +167,10 @@ func (minus *Minus) probeHashTable(proc *process.Process, analyzer process.Analy
 		}
 		minus.ctr.bat.CleanOnlyData()
 
+		keyVecs, err := minus.ctr.keyEvaluator.Eval(proc, input.Batch)
+		if err != nil {
+			return false, err
+		}
 		count := input.Batch.Vecs[0].Length()
 		itr := minus.ctr.hashTable.NewIterator()
 		for i := 0; i < count; i += hashmap.UnitLimit {
@@ -172,7 +180,7 @@ func (minus *Minus) probeHashTable(proc *process.Process, analyzer process.Analy
 			if n > hashmap.UnitLimit {
 				n = hashmap.UnitLimit
 			}
-			vs, _, err := itr.Insert(i, n, input.Batch.Vecs)
+			vs, _, err := itr.Insert(i, n, keyVecs)
 			if err != nil {
 				return false, err
 			}

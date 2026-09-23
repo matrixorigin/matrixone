@@ -224,6 +224,23 @@ type mockConnCache struct {
 	popFn  func(cacheKey, uint32, []byte, []byte) ServerConn
 }
 
+type terminalAuthConnCache struct {
+	mockConnCache
+	err error
+}
+
+func (m *terminalAuthConnCache) PopContextWithIdentityError(
+	context.Context,
+	cacheKey,
+	uint32,
+	[]byte,
+	[]byte,
+	clientInfo,
+	cacheReuseIdentity,
+) (ServerConn, error) {
+	return nil, m.err
+}
+
 func (m *mockConnCache) Push(key cacheKey, sc ServerConn) bool {
 	if m.pushFn != nil {
 		return m.pushFn(key, sc)
@@ -264,6 +281,8 @@ func (r *killTestRouter) Connect(c *CNServer, handshakeResp *frontend.Packet, t 
 
 type killCurrentServerConn struct {
 	cn      *CNServer
+	stmts   *[]internalStmt
+	execFn  func(internalStmt) (bool, error)
 	closeFn func() error
 	quitFn  func() error
 }
@@ -276,6 +295,12 @@ func (s *killCurrentServerConn) HandleHandshake(_ *frontend.Packet, _ time.Durat
 	return nil, nil
 }
 func (s *killCurrentServerConn) ExecStmt(stmt internalStmt, resp chan<- []byte) (bool, error) {
+	if s.stmts != nil {
+		*s.stmts = append(*s.stmts, stmt)
+	}
+	if s.execFn != nil {
+		return s.execFn(stmt)
+	}
 	return true, nil
 }
 func (s *killCurrentServerConn) GetCNServer() *CNServer   { return s.cn }
@@ -367,10 +392,11 @@ func testStartClient(t *testing.T, tp *testProxyHandler, ci clientInfo, cn *CNSe
 
 func TestClientConn_KillCurrentBackendConn(t *testing.T) {
 	currentCN := &CNServer{
-		connID: 10,
-		uuid:   "cn1",
-		addr:   "127.0.0.1:6001",
-		salt:   testSlat,
+		connID:              10,
+		uuid:                "cn1",
+		addr:                "127.0.0.1:6001",
+		salt:                testSlat,
+		admissionGeneration: 23,
 	}
 	execSC := &killExecServerConn{}
 	activeTunnel := &tunnel{}
@@ -379,6 +405,7 @@ func TestClientConn_KillCurrentBackendConn(t *testing.T) {
 			require.Equal(t, currentCN.uuid, c.uuid)
 			require.Equal(t, currentCN.addr, c.addr)
 			require.Equal(t, currentCN.salt, c.salt)
+			require.Equal(t, currentCN.admissionGeneration, c.admissionGeneration)
 			require.NotZero(t, c.connID)
 			require.Nil(t, tun, "temporary admin connections must not borrow the active session tunnel")
 			return execSC, makeOKPacket(8), nil
@@ -486,10 +513,8 @@ func TestClientConn_HandleQuitEventRequiresCleanResponseBoundary(t *testing.T) {
 			tun.trackClientRequest(makeStmtCommandPacket(
 				frontend.COM_STMT_SEND_LONG_DATA, 1, 0, 0, 'x'))
 		}},
-		{name: "forwarded statement close", makeUnsafe: func(tun *tunnel) {
-			commit := tun.trackClientRequest(
-				makeStmtCommandPacket(frontend.COM_STMT_CLOSE, 1))
-			tun.commitClientRequest(commit)
+		{name: "changed session identity", makeUnsafe: func(tun *tunnel) {
+			tun.markCacheIdentityChanged()
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -530,6 +555,189 @@ func TestClientConn_HandleQuitEventRequiresCleanResponseBoundary(t *testing.T) {
 			require.False(t, c.isConnCached())
 		})
 	}
+}
+
+func TestClientConn_HandleQuitEventFencesClosedStatement(t *testing.T) {
+	tun := &tunnel{}
+	tun.mu.csp = &pipe{}
+	tun.mu.csp.mu.cond = sync.NewCond(&tun.mu.csp.mu)
+	tun.mu.scp = &pipe{}
+	tun.mu.scp.mu.cond = sync.NewCond(&tun.mu.scp.mu)
+	commit := tun.trackClientRequest(makeStmtCommandPacket(frontend.COM_STMT_CLOSE, 1))
+	tun.commitClientRequest(commit)
+
+	var statements []internalStmt
+	var pushed, closed int
+	c := &clientConn{
+		log: runtime.DefaultRuntime().Logger(),
+		tun: tun,
+		sc: &killCurrentServerConn{
+			cn:    &CNServer{connID: 11, uuid: "cn1"},
+			stmts: &statements,
+			closeFn: func() error {
+				closed++
+				return nil
+			},
+		},
+		connCache: &mockConnCache{
+			pushFn: func(cacheKey, ServerConn) bool {
+				pushed++
+				return true
+			},
+		},
+	}
+
+	require.NoError(t, c.handleQuitCommand(context.Background()))
+	require.Equal(t, []internalStmt{{cmdType: cmdPing}}, statements)
+	require.Equal(t, 1, pushed)
+	require.Zero(t, closed)
+	require.True(t, c.isConnCached())
+	require.False(t, tun.hasUnsafeClientState())
+}
+
+func TestClientConn_HandleQuitEventDiscardsAfterCloseFenceFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		fn   func(internalStmt) (bool, error)
+	}{
+		{
+			name: "error",
+			fn: func(stmt internalStmt) (bool, error) {
+				require.Equal(t, cmdPing, stmt.cmdType)
+				return false, moerr.NewInternalErrorNoCtx("fence failed")
+			},
+		},
+		{
+			name: "not ok",
+			fn: func(stmt internalStmt) (bool, error) {
+				require.Equal(t, cmdPing, stmt.cmdType)
+				return false, nil
+			},
+		},
+		{
+			name: "eof",
+			fn: func(stmt internalStmt) (bool, error) {
+				require.Equal(t, cmdPing, stmt.cmdType)
+				return false, io.EOF
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tun := &tunnel{}
+			tun.mu.csp = &pipe{}
+			tun.mu.csp.mu.cond = sync.NewCond(&tun.mu.csp.mu)
+			tun.mu.scp = &pipe{}
+			tun.mu.scp.mu.cond = sync.NewCond(&tun.mu.scp.mu)
+			commit := tun.trackClientRequest(makeStmtCommandPacket(frontend.COM_STMT_CLOSE, 1))
+			tun.commitClientRequest(commit)
+
+			var statements []internalStmt
+			var pushed, closed int
+			c := &clientConn{
+				log: runtime.DefaultRuntime().Logger(),
+				tun: tun,
+				sc: &killCurrentServerConn{
+					cn:      &CNServer{connID: 11, uuid: "cn1"},
+					stmts:   &statements,
+					execFn:  tc.fn,
+					closeFn: func() error { closed++; return nil },
+				},
+				connCache: &mockConnCache{
+					pushFn: func(cacheKey, ServerConn) bool { pushed++; return true },
+				},
+			}
+
+			require.NoError(t, c.handleQuitCommand(context.Background()))
+			require.Equal(t, []internalStmt{{cmdType: cmdPing}}, statements)
+			require.Zero(t, pushed)
+			require.Equal(t, 1, closed)
+			require.False(t, c.isConnCached())
+			require.True(t, tun.hasUnsafeClientState(), "failed fence must retain the close tombstone")
+		})
+	}
+}
+
+func TestClientConn_HandleQuitEventDiscardsWhenFenceCanceled(t *testing.T) {
+	tun := &tunnel{}
+	tun.mu.csp = &pipe{}
+	tun.mu.csp.mu.cond = sync.NewCond(&tun.mu.csp.mu)
+	tun.mu.scp = &pipe{}
+	tun.mu.scp.mu.cond = sync.NewCond(&tun.mu.scp.mu)
+	commit := tun.trackClientRequest(makeStmtCommandPacket(frontend.COM_STMT_CLOSE, 1))
+	tun.commitClientRequest(commit)
+
+	stalled := &stalledContextServerConn{
+		entered: make(chan struct{}),
+	}
+	var pushed int
+	c := &clientConn{
+		log: runtime.DefaultRuntime().Logger(),
+		tun: tun,
+		sc:  stalled,
+		connCache: &mockConnCache{
+			pushFn: func(cacheKey, ServerConn) bool {
+				pushed++
+				return true
+			},
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- c.handleQuitCommand(ctx)
+	}()
+	select {
+	case <-stalled.entered:
+	case <-time.After(time.Second):
+		t.Fatal("close fence did not enter backend I/O")
+	}
+	cancel()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		t.Fatal("canceled close fence did not terminate")
+	}
+	require.Zero(t, pushed)
+	require.False(t, c.isConnCached())
+	require.True(t, tun.hasUnsafeClientState(),
+		"cancellation must retain the unfenced close tombstone")
+}
+
+func TestClientConn_HandleQuitEventDiscardsWhenCacheRejectsFencedBackend(t *testing.T) {
+	tun := &tunnel{}
+	tun.mu.csp = &pipe{}
+	tun.mu.csp.mu.cond = sync.NewCond(&tun.mu.csp.mu)
+	tun.mu.scp = &pipe{}
+	tun.mu.scp.mu.cond = sync.NewCond(&tun.mu.scp.mu)
+	commit := tun.trackClientRequest(makeStmtCommandPacket(frontend.COM_STMT_CLOSE, 1))
+	tun.commitClientRequest(commit)
+
+	var statements []internalStmt
+	var closed int
+	c := &clientConn{
+		log: runtime.DefaultRuntime().Logger(),
+		tun: tun,
+		sc: &killCurrentServerConn{
+			cn:    &CNServer{connID: 11, uuid: "cn1"},
+			stmts: &statements,
+			closeFn: func() error {
+				closed++
+				return nil
+			},
+		},
+		connCache: &mockConnCache{
+			pushFn: func(cacheKey, ServerConn) bool { return false },
+		},
+	}
+
+	require.NoError(t, c.handleQuitCommand(context.Background()))
+	require.Equal(t, []internalStmt{{cmdType: cmdPing}}, statements)
+	require.Equal(t, 1, closed)
+	require.False(t, c.isConnCached())
+	require.False(t, tun.hasUnsafeClientState(),
+		"successful fence may clear CLOSE state even when cache admission rejects it")
 }
 
 func TestClientConn_HandleQuitEventClosesRejectedCacheEntry(t *testing.T) {
@@ -601,6 +809,7 @@ func TestAccountParser(t *testing.T) {
 		str      string
 		tenant   string
 		username string
+		role     string
 		hasErr   bool
 	}{
 		{
@@ -639,6 +848,13 @@ func TestAccountParser(t *testing.T) {
 			username: "u1",
 			hasErr:   false,
 		},
+		{
+			str:      "t1:u1:role1",
+			tenant:   "t1",
+			username: "u1",
+			role:     "role1",
+			hasErr:   false,
+		},
 	}
 	for _, item := range cases {
 		a := clientInfo{}
@@ -650,6 +866,7 @@ func TestAccountParser(t *testing.T) {
 		}
 		require.Equal(t, string(a.labelInfo.Tenant), item.tenant)
 		require.Equal(t, a.username, item.username)
+		require.Equal(t, a.role, item.role)
 	}
 }
 
@@ -2081,6 +2298,22 @@ type shortHandshakeServerConn struct {
 	rebound              *tunnel
 }
 
+type recordingShortHandshakeServerConn struct {
+	*shortHandshakeServerConn
+	statements []internalStmt
+	execFn     func(internalStmt) (bool, error)
+}
+
+func (s *recordingShortHandshakeServerConn) ExecStmt(
+	stmt internalStmt, _ chan<- []byte,
+) (bool, error) {
+	s.statements = append(s.statements, stmt)
+	if s.execFn != nil {
+		return s.execFn(stmt)
+	}
+	return true, nil
+}
+
 func (s *shortHandshakeServerConn) waitCacheReuseReady(context.Context) error {
 	return nil
 }
@@ -2417,6 +2650,154 @@ func Test_connectToBackend_BindsOnlyAuthenticatedTenant(t *testing.T) {
 		require.Equal(t, 1, serverConn.closeCount)
 		require.Zero(t, writer.writeCount)
 	})
+
+	t.Run("cached backend restores requested database", func(t *testing.T) {
+		limiter := newConnectionLimiter(2, 1)
+		client, _, writer, cleanup := newClient(t, limiter)
+		defer cleanup()
+		client.mysqlProto.SetDatabaseName("issue_20022")
+		serverConn := &recordingShortHandshakeServerConn{
+			shortHandshakeServerConn: &shortHandshakeServerConn{
+				mockServerConn: newMockServerConn(nil),
+				connResponse:   makeOKPacket(8)[4:],
+			},
+		}
+		client.router = &testRouter{}
+		client.connCache = &mockConnCache{popFn: func(cacheKey, uint32, []byte, []byte) ServerConn {
+			return serverConn
+		}}
+
+		got, err := client.connectToBackend("")
+		require.NoError(t, err)
+		require.Same(t, serverConn, got)
+		require.Equal(t, []internalStmt{{cmdType: cmdQuery, s: "use `issue_20022`"}}, serverConn.statements)
+		require.Equal(t, 1, writer.writeCount)
+	})
+
+	t.Run("failed database restore closes cache and falls back", func(t *testing.T) {
+		limiter := newConnectionLimiter(2, 1)
+		client, _, writer, cleanup := newClient(t, limiter)
+		defer cleanup()
+		client.mysqlProto.SetDatabaseName("issue_20022")
+		cached := &recordingShortHandshakeServerConn{
+			shortHandshakeServerConn: &shortHandshakeServerConn{
+				mockServerConn: newMockServerConn(nil),
+			},
+			execFn: func(internalStmt) (bool, error) {
+				return false, nil
+			},
+		}
+		fresh := &shortHandshakeServerConn{
+			mockServerConn: newMockServerConn(nil),
+		}
+		client.router = &shortHandshakeRouter{response: makeOKPacket(8), sc: fresh}
+		client.connCache = &mockConnCache{popFn: func(cacheKey, uint32, []byte, []byte) ServerConn {
+			return cached
+		}}
+
+		got, err := client.connectToBackend("")
+		require.NoError(t, err)
+		require.Same(t, fresh, got)
+		require.Equal(t, 1, cached.closeCount)
+		require.Equal(t, []internalStmt{{cmdType: cmdQuery, s: "use `issue_20022`"}}, cached.statements)
+		require.Equal(t, 1, writer.writeCount)
+	})
+
+	t.Run("canceled database restore closes cache and returns cause", func(t *testing.T) {
+		limiter := newConnectionLimiter(2, 1)
+		client, _, writer, cleanup := newClient(t, limiter)
+		defer cleanup()
+		client.mysqlProto.SetDatabaseName("issue_20022")
+		cached := &recordingShortHandshakeServerConn{
+			shortHandshakeServerConn: &shortHandshakeServerConn{
+				mockServerConn: newMockServerConn(nil),
+			},
+		}
+		client.router = &testRouter{}
+		client.connCache = &mockConnCache{popFn: func(cacheKey, uint32, []byte, []byte) ServerConn {
+			return cached
+		}}
+		ctx, cancel := context.WithCancel(context.Background())
+		client.ctx = ctx
+		cancel()
+
+		got, err := client.connectToBackend("")
+		require.ErrorIs(t, err, context.Canceled)
+		require.Nil(t, got)
+		require.Equal(t, 1, cached.closeCount)
+		require.Empty(t, cached.statements)
+		require.Zero(t, writer.writeCount)
+	})
+
+	t.Run("cached database restore clears read deadline", func(t *testing.T) {
+		limiter := newConnectionLimiter(2, 1)
+		client, _, writer, cleanup := newClient(t, limiter)
+		defer cleanup()
+		client.mysqlProto.SetDatabaseName("issue_20022")
+
+		local, remote := net.Pipe()
+		defer remote.Close()
+		raw := &phaseDeadlineConn{Conn: local}
+		statements := make([]string, 0, 1)
+		base := &recordingShortHandshakeServerConn{
+			shortHandshakeServerConn: &shortHandshakeServerConn{
+				mockServerConn: newMockServerConn(raw),
+				connResponse:   makeOKPacket(8)[4:],
+			},
+		}
+		serverConn := &deadlineRearmingServerConn{
+			ServerConn: base,
+			raw:        raw,
+			statements: &statements,
+		}
+		defer serverConn.Close()
+		client.router = &testRouter{}
+		client.connCache = &mockConnCache{popFn: func(cacheKey, uint32, []byte, []byte) ServerConn {
+			return serverConn
+		}}
+
+		got, err := client.connectToBackend("")
+		require.NoError(t, err)
+		require.Same(t, serverConn, got)
+		require.Equal(t, []string{"use `issue_20022`"}, statements)
+		require.True(t, raw.readDeadline().IsZero(),
+			"cached database restore must clear the deadline armed by USE")
+		require.Equal(t, 1, writer.writeCount)
+	})
+
+	t.Run("database restore deadline clear failure discards cache and falls back", func(t *testing.T) {
+		limiter := newConnectionLimiter(2, 1)
+		client, _, writer, cleanup := newClient(t, limiter)
+		defer cleanup()
+		client.mysqlProto.SetDatabaseName("issue_20022")
+
+		local, remote := net.Pipe()
+		defer remote.Close()
+		raw := &phaseDeadlineConn{Conn: local, failClear: true}
+		base := &recordingShortHandshakeServerConn{
+			shortHandshakeServerConn: &shortHandshakeServerConn{
+				mockServerConn: newMockServerConn(raw),
+			},
+		}
+		cached := &deadlineRearmingServerConn{
+			ServerConn: base,
+			raw:        raw,
+		}
+		fresh := &shortHandshakeServerConn{
+			mockServerConn: newMockServerConn(nil),
+		}
+		client.router = &shortHandshakeRouter{response: makeOKPacket(8), sc: fresh}
+		client.connCache = &mockConnCache{popFn: func(cacheKey, uint32, []byte, []byte) ServerConn {
+			return cached
+		}}
+
+		got, err := client.connectToBackend("")
+		require.NoError(t, err)
+		require.Same(t, fresh, got)
+		require.Equal(t, 1, base.closeCount)
+		require.False(t, raw.readDeadline().IsZero())
+		require.Equal(t, 1, writer.writeCount)
+	})
 }
 
 func Test_connectToBackend_SkipCacheOnMigration(t *testing.T) {
@@ -2491,6 +2872,25 @@ func Test_connectToBackend_PassesClientInfoToContextCache(t *testing.T) {
 	require.Nil(t, sConn)
 	require.Equal(t, 1, cache.popContextCount)
 	require.Equal(t, client, cache.lastClient)
+}
+
+func Test_connectToBackend_PropagatesCacheAuthenticationRejection(t *testing.T) {
+	cacheErr := withCode(
+		&cacheAuthRejectedError{cause: fmt.Errorf("check password failed")},
+		codeAuthFailed,
+	)
+	cConn := &clientConn{
+		ctx:        context.Background(),
+		router:     &routeErrRouter{},
+		mysqlProto: &frontend.MysqlProtocolImpl{},
+		connCache:  &terminalAuthConnCache{err: cacheErr},
+		log:        runtime.DefaultRuntime().Logger(),
+	}
+
+	sConn, err := cConn.connectToBackend("")
+	require.Nil(t, sConn)
+	require.ErrorIs(t, err, cacheErr)
+	require.Equal(t, codeAuthFailed, getErrorCode(err))
 }
 
 func Test_connectToBackend_SkipCacheWhenPluginRouterEnabled(t *testing.T) {

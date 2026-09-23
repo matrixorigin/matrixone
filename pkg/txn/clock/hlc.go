@@ -58,9 +58,10 @@ func SkipClockUncertainityPeriodOnRestart(ctx context.Context, clock Clock) {
 // Logical Physical Clocks and Consistent Snapshots in Globally Distributed
 // Databases
 type HLCClock struct {
-	nodeID        uint16
-	maxOffset     time.Duration
-	physicalClock func() int64
+	nodeID           uint16
+	maxOffset        time.Duration
+	checkClockOffset bool
+	physicalClock    func() int64
 
 	mu struct {
 		sync.Mutex
@@ -83,8 +84,9 @@ func NewHLCClock(clock func() int64, maxOffset time.Duration) *HLCClock {
 	}
 
 	return &HLCClock{
-		physicalClock: clock,
-		maxOffset:     maxOffset,
+		physicalClock:    clock,
+		maxOffset:        maxOffset,
+		checkClockOffset: maxOffset > 0,
 	}
 }
 
@@ -94,13 +96,16 @@ func NewHLCClock(clock func() int64, maxOffset time.Duration) *HLCClock {
 // maxOffset offset between any two nodes.
 func NewUnixNanoHLCClock(ctx context.Context, maxOffset time.Duration) *HLCClock {
 	clock := &HLCClock{
-		physicalClock: physicalClock,
-		maxOffset:     maxOffset,
+		physicalClock:    physicalClock,
+		maxOffset:        maxOffset,
+		checkClockOffset: maxOffset > 0,
 	}
 
-	go func() {
-		clock.offsetMonitor(ctx)
-	}()
+	if clock.checkClockOffset {
+		go func() {
+			clock.offsetMonitor(ctx)
+		}()
+	}
 
 	return clock
 }
@@ -108,11 +113,24 @@ func NewUnixNanoHLCClock(ctx context.Context, maxOffset time.Duration) *HLCClock
 // NewUnixNanoHLCClockWithStopper is similar to NewUnixNanoHLCClock, but perform
 // clock check use stopper
 func NewUnixNanoHLCClockWithStopper(stopper *stopper.Stopper, maxOffset time.Duration) *HLCClock {
+	return NewUnixNanoHLCClockWithStopperAndCheck(stopper, maxOffset, true)
+}
+
+// NewUnixNanoHLCClockWithStopperAndCheck creates a clock whose maxOffset is
+// always retained as the cluster clock-uncertainty contract. enableCheck only
+// controls active local clock-jump monitoring; disabling the monitor must not
+// erase the uncertainty bound used by timestamp-ordering correctness.
+func NewUnixNanoHLCClockWithStopperAndCheck(
+	stopper *stopper.Stopper,
+	maxOffset time.Duration,
+	enableCheck bool,
+) *HLCClock {
 	clock := &HLCClock{
-		physicalClock: physicalClock,
-		maxOffset:     maxOffset,
+		physicalClock:    physicalClock,
+		maxOffset:        maxOffset,
+		checkClockOffset: enableCheck && maxOffset > 0,
 	}
-	if maxOffset > 0 {
+	if clock.checkClockOffset {
 		if err := stopper.RunTask(clock.offsetMonitor); err != nil {
 			panic(err)
 		}
@@ -171,7 +189,7 @@ func (c *HLCClock) offsetMonitor(ctx context.Context) {
 func (c *HLCClock) getPhysicalClock() int64 {
 	newPts := c.physicalClock()
 	oldPts := c.keepPhysicalClock(newPts)
-	if c.maxOffset > 0 {
+	if c.checkClockOffset {
 		c.handleClockJump(oldPts, newPts)
 	}
 

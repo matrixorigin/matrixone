@@ -497,7 +497,11 @@ func renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName string, cols 
 		if sqlType := renderColumnSQLType(col); sqlType != "" {
 			sb.WriteString(" ")
 			sb.WriteString(sqlType)
-			if col.Unsigned && !strings.Contains(strings.ToUpper(sqlType), "UNSIGNED") {
+			// SET is stored as an unsigned integer in the catalog. Once the
+			// physical type has been restored to SET(...), the unsigned marker
+			// must not leak into the logical DDL.
+			if col.Unsigned && !strings.Contains(strings.ToUpper(sqlType), "UNSIGNED") &&
+				!strings.HasPrefix(strings.ToUpper(sqlType), "SET(") {
 				sb.WriteString(" UNSIGNED")
 			}
 		}

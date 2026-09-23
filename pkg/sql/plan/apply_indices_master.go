@@ -198,7 +198,12 @@ func makeIndexTblScan(builder *QueryBuilder, bindCtx *BindContext, filterExp *pl
 			_ = vector.AppendBytes(arg1ForPrefixInVec, ps[i].Bytes(), false, mp)
 		}
 
-		// d. convert result vector to LiteralVec
+		// d. convert result vector to LiteralVec. Sorted first: zone-map pruning
+		// binary-searches this payload (ZM.PrefixIn, via colexec.zoneMapInVector),
+		// and an IN list arrives in whatever order it was written, so an unsorted
+		// one is refused for pruning and scans every block. Compaction can shrink
+		// it, which is why Len below is read from the vector afterwards.
+		arg1ForPrefixInVec.InplaceSortAndCompact()
 		arg1ForPrefixInBytes, _ := arg1ForPrefixInVec.MarshalBinary()
 		arg1ForPrefixInLitVec := &plan.Expr{
 			Typ: makePlan2Type(&varcharType),

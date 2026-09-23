@@ -42,6 +42,91 @@ func TestOSSCredential(t *testing.T) {
 	assert.Equal(t, "", token)
 }
 
+func TestAliyunSDKConditionalObjectIdentityReads(t *testing.T) {
+	const lastModRaw = "Wed, 02 Sep 2026 03:04:05 GMT"
+	var requests []*http.Request
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests = append(requests, r.Clone(context.Background()))
+		if r.URL.Query().Get("versionId") == "gone" {
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, `<Error><Code>NoSuchVersion</Code><Message>planned version was deleted</Message></Error>`)
+			return
+		}
+		if r.URL.Query().Get("versionId") == "stale" || r.Header.Get("If-Match") == `"stale"` {
+			w.Header().Set("Content-Type", "application/xml")
+			w.WriteHeader(http.StatusPreconditionFailed)
+			_, _ = io.WriteString(w, `<Error><Code>PreconditionFailed</Code><Message>object changed</Message></Error>`)
+			return
+		}
+		if r.Method == http.MethodHead {
+			w.Header().Set("Content-Length", "6")
+			w.Header().Set("ETag", `"etag-v1"`)
+			w.Header().Set("x-oss-version-id", "version-v1")
+			w.Header().Set("Last-Modified", lastModRaw)
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		w.Header().Set("Content-Length", "3")
+		w.Header().Set("Content-Range", "bytes 1-3/6")
+		w.Header().Set("ETag", `"etag-v1"`)
+		w.Header().Set("Last-Modified", lastModRaw)
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = io.WriteString(w, "bcd")
+	}))
+	defer server.Close()
+
+	client, err := oss.New(server.URL, "id", "secret",
+		oss.ForcePathStyle(true), oss.HTTPClient(server.Client()))
+	require.NoError(t, err)
+	bucket, err := client.Bucket("bucket")
+	require.NoError(t, err)
+	sdk := &AliyunSDK{bucket: bucket}
+
+	identity, err := sdk.StatObjectIdentity(context.Background(), "object")
+	require.NoError(t, err)
+	wantLastModified, err := time.Parse(http.TimeFormat, lastModRaw)
+	require.NoError(t, err)
+	require.Equal(t, ObjectIdentity{
+		VersionID: "version-v1", ETag: `"etag-v1"`, Size: 6, LastModified: wantLastModified,
+	}, identity)
+
+	min, max := int64(1), int64(4)
+	reader, err := sdk.ReadObjectWithIdentity(context.Background(), "object", &min, &max, identity)
+	require.NoError(t, err)
+	data, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	require.NoError(t, reader.Close())
+	require.Equal(t, "bcd", string(data))
+	versionRequest := requests[len(requests)-1]
+	require.Equal(t, "version-v1", versionRequest.URL.Query().Get("versionId"))
+	require.Empty(t, versionRequest.Header.Get("If-Match"))
+	require.Equal(t, "bytes=1-3", versionRequest.Header.Get("Range"))
+
+	etagIdentity := identity
+	etagIdentity.VersionID = ""
+	reader, err = sdk.ReadObjectWithIdentity(context.Background(), "object", &min, &max, etagIdentity)
+	require.NoError(t, err)
+	require.NoError(t, reader.Close())
+	etagRequest := requests[len(requests)-1]
+	require.Empty(t, etagRequest.URL.Query().Get("versionId"))
+	require.Equal(t, `"etag-v1"`, etagRequest.Header.Get("If-Match"))
+
+	stale := identity
+	stale.VersionID = "stale"
+	_, err = sdk.ReadObjectWithIdentity(context.Background(), "object", &min, &max, stale)
+	require.ErrorIs(t, err, ErrObjectChanged)
+	stale.VersionID = ""
+	stale.ETag = `"stale"`
+	_, err = sdk.ReadObjectWithIdentity(context.Background(), "object", &min, &max, stale)
+	require.ErrorIs(t, err, ErrObjectChanged)
+
+	gone := identity
+	gone.VersionID = "gone"
+	_, err = sdk.ReadObjectWithIdentity(context.Background(), "object", &min, &max, gone)
+	require.ErrorIs(t, err, ErrObjectChanged)
+}
+
 func TestAliyunSDKCopyObjectPropagatesCancellation(t *testing.T) {
 	started := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {

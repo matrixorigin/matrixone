@@ -18,10 +18,12 @@ import (
 	"bytes"
 	"io"
 	"math"
+	"math/big"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/stretchr/testify/require"
@@ -854,6 +856,54 @@ func TestAccountedMedianPreservesFloatNaNSemantics(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestMedianExecInt64ExtremeMidpoint(t *testing.T) {
+	fillAndFlush := func(t *testing.T, exec AggFuncExec) {
+		t.Helper()
+		mp := exec.(*medianColumnNumericExec[int64]).mp
+		require.NoError(t, exec.GroupGrow(1))
+		input := buildFixedVec(t, mp, types.T_int64.ToType(),
+			[]int64{math.MinInt64, math.MaxInt64})
+		if preflight, ok := exec.(BatchCapacityPreflight); ok {
+			require.NoError(t, preflight.PreflightBatchFill(
+				0, []uint64{1, 1}, []*vector.Vector{input}))
+		}
+		require.NoError(t, exec.BatchFill(
+			0, []uint64{1, 1}, []*vector.Vector{input}))
+		result, err := exec.Flush()
+		require.NoError(t, err)
+		require.Len(t, result, 1)
+		require.Equal(t, math.Float64bits(-0.5), math.Float64bits(
+			vector.GetFixedAtNoTypeCheck[float64](result[0], 0)))
+		result[0].Free(mp)
+		input.Free(mp)
+	}
+
+	t.Run("legacy", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		exec, err := makeMedian(mp, AggIdOfMedian, false, types.T_int64.ToType())
+		require.NoError(t, err)
+		fillAndFlush(t, exec)
+		exec.Free()
+		require.Zero(t, mp.CurrNB())
+	})
+
+	t.Run("accounted-single-group", func(t *testing.T) {
+		mp := mpool.MustNewZero()
+		registry, account, allocation := newTestAggregateAllocation(t)
+		exec, err := MakeSingleGroupAgg(
+			mp, AggIdOfMedian, false, nil, nil, types.T_int64.ToType())
+		require.NoError(t, err)
+		owner := exec.(AllocationAccountOwner)
+		require.NoError(t, owner.SetAllocationAccount(allocation))
+		SyncAggregatorsToChunkSize([]AggFuncExec{exec}, AggBatchSize)
+		fillAndFlush(t, exec)
+		exec.Free()
+		require.NoError(t, owner.ClearAllocationAccount(allocation))
+		finishTestAggregateAllocation(t, registry, account)
+		require.Zero(t, mp.CurrNB())
+	})
+}
+
 func TestDenseMedianSelectorAcrossSegments(t *testing.T) {
 	mp := mpool.MustNewZero()
 	registry, account, allocation := newTestAggregateAllocation(t)
@@ -864,6 +914,13 @@ func TestDenseMedianSelectorAcrossSegments(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, 4.0, gotInt)
 	ints.Free(mp)
+
+	extremes := accountedMedianTestVectors(t, mp, allocation,
+		types.T_int64.ToType(), [][]int64{{math.MinInt64}, {math.MaxInt64}})
+	gotExtremes, err := denseMedianNumeric(extremes, allocation, mp)
+	require.NoError(t, err)
+	require.Equal(t, -0.5, gotExtremes)
+	extremes.Free(mp)
 
 	floats := accountedMedianTestVectors(t, mp, allocation,
 		types.T_float64.ToType(), [][]float64{{math.NaN(), 0}, {math.NaN()}})
@@ -1140,9 +1197,97 @@ func TestMedianDecimalDistinctMerge(t *testing.T) {
 	right.Free()
 }
 
-func TestMedianNumericValsAvoidsInt64Overflow(t *testing.T) {
-	vals := []int64{math.MaxInt64, math.MaxInt64}
-	require.Equal(t, float64(math.MaxInt64), medianNumericVals(vals))
+func TestMedianNumericValsIntegerMidpointBoundaries(t *testing.T) {
+	int64Midpoint := func(left, right int64) float64 {
+		sum := new(big.Int).Add(
+			new(big.Int).SetInt64(left), new(big.Int).SetInt64(right))
+		result, _ := new(big.Rat).SetFrac(sum, big.NewInt(2)).Float64()
+		return result
+	}
+	cases := []struct {
+		name  string
+		left  int64
+		right int64
+	}{
+		{name: "opposite extremes", left: math.MinInt64, right: math.MaxInt64},
+		{name: "reversed opposite extremes", left: math.MaxInt64, right: math.MinInt64},
+		{name: "precision boundary cancellation", left: -9007199254740993, right: 9007199254740992},
+		{name: "same maximum", left: math.MaxInt64, right: math.MaxInt64},
+		{name: "same minimum", left: math.MinInt64, right: math.MinInt64},
+		{name: "negative half", left: -1, right: 0},
+		{name: "positive half", left: 0, right: 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := medianNumericVals([]int64{tc.left, tc.right})
+			want := int64Midpoint(tc.left, tc.right)
+			require.Equal(t, math.Float64bits(want), math.Float64bits(got))
+		})
+	}
+}
+
+func TestMedianNumericValsAllIntegerTypes(t *testing.T) {
+	tests := []struct {
+		name string
+		got  float64
+		want float64
+	}{
+		{name: "int8", got: medianNumericVals([]int8{math.MinInt8, math.MaxInt8}), want: -0.5},
+		{name: "int16", got: medianNumericVals([]int16{math.MinInt16, math.MaxInt16}), want: -0.5},
+		{name: "int32", got: medianNumericVals([]int32{math.MinInt32, math.MaxInt32}), want: -0.5},
+		{name: "uint8", got: medianNumericVals([]uint8{0, math.MaxUint8}), want: 127.5},
+		{name: "uint16", got: medianNumericVals([]uint16{0, math.MaxUint16}), want: 32767.5},
+		{name: "uint32", got: medianNumericVals([]uint32{0, math.MaxUint32}), want: 2147483647.5},
+		{name: "uint64", got: medianNumericVals([]uint64{0, math.MaxUint64}), want: float64(math.MaxUint64) / 2},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, math.Float64bits(tc.want), math.Float64bits(tc.got))
+		})
+	}
+}
+
+func TestMedianNumericValsFloatMidpointBoundaries(t *testing.T) {
+	tests := []struct {
+		name string
+		got  float64
+		want float64
+	}{
+		{name: "finite maximum", got: medianNumericVals([]float64{math.MaxFloat64, math.MaxFloat64}), want: math.MaxFloat64},
+		{name: "finite minimum", got: medianNumericVals([]float64{-math.MaxFloat64, -math.MaxFloat64}), want: -math.MaxFloat64},
+		{name: "negative infinity and finite", got: medianNumericVals([]float64{math.Inf(-1), 1}), want: math.Inf(-1)},
+		{name: "positive infinity and finite", got: medianNumericVals([]float64{1, math.Inf(1)}), want: math.Inf(1)},
+		{name: "opposite infinities", got: medianNumericVals([]float64{math.Inf(-1), math.Inf(1)}), want: math.NaN()},
+		{name: "subnormal midpoint", got: medianNumericVals([]float64{math.SmallestNonzeroFloat64, 2 * math.SmallestNonzeroFloat64}), want: 2 * math.SmallestNonzeroFloat64},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if math.IsNaN(tc.want) {
+				require.True(t, math.IsNaN(tc.got))
+				return
+			}
+			require.Equal(t, math.Float64bits(tc.want), math.Float64bits(tc.got))
+		})
+	}
+}
+
+func TestMedianNumericMidpointReusesScratch(t *testing.T) {
+	if util.RaceDetectorEnabled {
+		t.Skip("allocation counts include race-detector instrumentation")
+	}
+	var arithmetic percentileArithmeticScratch
+	for range 4 {
+		_ = medianNumericMidpoint(
+			int64(math.MinInt64), int64(math.MaxInt64), &arithmetic)
+	}
+	allocs := testing.AllocsPerRun(100, func() {
+		got := medianNumericMidpoint(
+			int64(math.MinInt64), int64(math.MaxInt64), &arithmetic)
+		if got != -0.5 {
+			t.Fatalf("got %v, want -0.5", got)
+		}
+	})
+	require.Zero(t, allocs, "median midpoint must not allocate per group after scratch warmup")
 }
 
 func TestMedianIntermediateRoundTripRejectsInvalidGroupCount(t *testing.T) {

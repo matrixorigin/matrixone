@@ -21,7 +21,6 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 
-	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -169,11 +168,6 @@ func TestBuildShowDatabasesRestrictsDatabaseSnapshot(t *testing.T) {
 			},
 		},
 	}
-	ctx.tables["mo_database"].Cols = append(ctx.tables["mo_database"].Cols, &planpb.ColDef{
-		Name: "dat_id",
-		Typ:  planpb.Type{Id: int32(types.T_uint64)},
-	})
-
 	plan, err := buildShowDatabases(&tree.ShowDatabases{AtTsExpr: &tree.AtTimeStamp{
 		Type:         tree.ATTIMESTAMPSNAPSHOT,
 		SnapshotName: "snapshot",

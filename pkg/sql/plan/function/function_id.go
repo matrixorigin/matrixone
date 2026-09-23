@@ -838,17 +838,28 @@ const (
 	ESQL_TVF_DISCONNECT = 573
 	SQL_TVF_CONNECT     = 574
 	SQL_TVF_DISCONNECT  = 575
-
 	// Kafka external table (issue #27518).
 	LAST_KAFKA_MESSAGE_ID = 576
 
+	INTERNAL_JSON_COMPARISON_PARAM = 577
+	INTERNAL_JSON_MEMBER_OF        = 578
+	// JSON_STORAGE_SIZE and JSON_STORAGE_FREE expose MatrixOne's ByteJson
+	// logical payload size and currently-supported free-space contract.
+	JSON_STORAGE_SIZE = 579
+	JSON_STORAGE_FREE = 580
+
+	EXTRACTVALUE = 581
+	UPDATEXML    = 582
+
 	// FUNCTION_END_NUMBER is not a function, just a flag to record the max number of function.
 	// TODO: every one should put the new function id in front of this one if you want to make a new function.
-	FUNCTION_END_NUMBER = 577
+	FUNCTION_END_NUMBER = 583
 )
 
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
+	"extractvalue": EXTRACTVALUE,
+	"updatexml":    UPDATEXML,
 	// operators
 	"=":            EQUAL,
 	"<=>":          NULL_SAFE_EQUAL,
@@ -916,6 +927,7 @@ var functionIdRegister = map[string]int32{
 	"min":                          MIN,
 	"sum":                          SUM,
 	"group_concat":                 GROUP_CONCAT,
+	"listagg":                      GROUP_CONCAT,
 	"grouping":                     GROUPING,
 	"avg":                          AVG,
 	"avg_tw_cache":                 AVG_TW_CACHE,
@@ -1126,10 +1138,12 @@ var functionIdRegister = map[string]int32{
 	"json_extract_float64":           JSON_EXTRACT_FLOAT64,
 	"json_object":                    JSON_OBJECT,
 	"json_arrayagg":                  JSON_ARRAYAGG,
+	"array_agg":                      JSON_ARRAYAGG,
 	"json_objectagg":                 JSON_OBJECTAGG,
 	"json_quote":                     JSON_QUOTE,
 	"json_unquote":                   JSON_UNQUOTE,
 	JsonOrderingParamFunctionName:    INTERNAL_JSON_ORDERING_PARAM,
+	JsonComparisonParamFunctionName:  INTERNAL_JSON_COMPARISON_PARAM,
 	"json_row":                       JSON_ROW,
 	"json_set":                       JSON_SET,
 	"json_insert":                    JSON_INSERT,
@@ -1140,11 +1154,15 @@ var functionIdRegister = map[string]int32{
 	"json_type":                      JSON_TYPE,
 	"json_valid":                     JSON_VALID,
 	"json_length":                    JSON_LENGTH,
+	"json_storage_size":              JSON_STORAGE_SIZE,
+	"json_storage_free":              JSON_STORAGE_FREE,
 	"json_contains":                  JSON_CONTAINS,
 	"json_contains_path":             JSON_CONTAINS_PATH,
+	"json_merge":                     JSON_MERGE_PRESERVE,
 	"json_merge_patch":               JSON_MERGE_PATCH,
 	"json_merge_preserve":            JSON_MERGE_PRESERVE,
 	"json_overlaps":                  JSON_OVERLAPS,
+	"member of":                      INTERNAL_JSON_MEMBER_OF,
 	"onnx_run":                       ONNX_RUN,
 	"json_keys":                      JSON_KEYS,
 	"json_pretty":                    JSON_PRETTY,

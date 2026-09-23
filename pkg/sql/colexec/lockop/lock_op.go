@@ -361,6 +361,7 @@ func performLock(
 				WithFilterRows(target.filter, filterCols).
 				WithLockTable(lockTable, target.changeDef).
 				WithHasNewVersionInRangeFunc(hasNewVersionInRangeFunc),
+			0,
 		)
 		if lockOp.logger.Enabled(zap.DebugLevel) {
 			lockOp.logger.Debug("lock result",
@@ -437,7 +438,7 @@ func LockTableWithContext(
 	pkType types.Type,
 	changeDef bool) error {
 	return lockTableWithModeAndContext(
-		ctx, eng, proc, tableID, pkType, lock.LockMode_Exclusive, changeDef)
+		ctx, eng, proc, tableID, pkType, lock.LockMode_Exclusive, changeDef, true, 0)
 }
 
 // LockTableWithMode locks all rows in a table with the specified lock mode.
@@ -448,7 +449,28 @@ func LockTableWithMode(
 	pkType types.Type,
 	mode lock.LockMode,
 	changeDef bool) error {
-	return lockTableWithModeAndContext(proc.Ctx, eng, proc, tableID, pkType, mode, changeDef)
+	return lockTableWithModeAndContext(proc.Ctx, eng, proc, tableID, pkType, mode, changeDef, true, 0)
+}
+
+// LockTableForSnapshotRefreshWithContext acquires a table lock without turning
+// a successful wait into the ordinary snapshot-retry signal. The caller must
+// install a snapshot after its own stronger freshness barrier before reading or
+// writing the table. Definition changes remain retryable because a newer
+// snapshot cannot validate a stale logical plan.
+func LockTableForSnapshotRefreshWithContext(
+	ctx context.Context,
+	eng engine.Engine,
+	proc *process.Process,
+	tableID uint64,
+	pkType types.Type,
+	mode lock.LockMode,
+	changeDef bool) error {
+	var deadline int64
+	if value, ok := ctx.Deadline(); ok {
+		deadline = value.UnixNano()
+	}
+	return lockTableWithModeAndContext(
+		ctx, eng, proc, tableID, pkType, mode, changeDef, false, deadline)
 }
 
 func lockTableWithModeAndContext(
@@ -458,7 +480,9 @@ func lockTableWithModeAndContext(
 	tableID uint64,
 	pkType types.Type,
 	mode lock.LockMode,
-	changeDef bool) error {
+	changeDef bool,
+	retryOnRefresh bool,
+	lockWaitDeadline int64) error {
 	txnOp := proc.GetTxnOperator()
 	if !txnOp.Txn().IsPessimistic() {
 		return nil
@@ -496,17 +520,28 @@ func lockTableWithModeAndContext(
 		0,
 		pkType,
 		-1,
-		opts)
+		opts,
+		lockWaitDeadline)
 	if err != nil {
 		return err
 	}
 
-	// If the returned timestamp is not empty, we should return a retry error,
-	if !refreshTS.IsEmpty() {
-		if !defChanged {
-			return retryError
-		}
+	return lockTableRefreshError(defChanged, refreshTS, retryOnRefresh)
+}
+
+func lockTableRefreshError(
+	defChanged bool,
+	refreshTS timestamp.Timestamp,
+	retryOnRefresh bool,
+) error {
+	if refreshTS.IsEmpty() {
+		return nil
+	}
+	if defChanged {
 		return retryWithDefChangedError
+	}
+	if retryOnRefresh {
+		return retryError
 	}
 	return nil
 }
@@ -570,7 +605,8 @@ func LockRows(
 		idx,
 		pkType,
 		-1,
-		opts)
+		opts,
+		0)
 	if err != nil {
 		return err
 	}
@@ -600,6 +636,7 @@ func doLock(
 	pkType types.Type,
 	partitionIdx int32,
 	opts LockOptions,
+	lockWaitDeadline int64,
 ) (bool, bool, timestamp.Timestamp, error) {
 	txnOp := proc.GetTxnOperator()
 	txnClient := proc.Base.TxnClient
@@ -691,6 +728,9 @@ func doLock(
 		Group:           opts.group,
 		SnapShotTs:      txnOp.CreateTS(),
 	}
+	if err = setPlanSnapshotForLock(ctx, tableID, txn.IsRCIsolation(), proc, &options); err != nil {
+		return false, false, timestamp.Timestamp{}, err
+	}
 	if txn.Mirror {
 		options.ForwardTo = txn.LockService
 		if options.ForwardTo == "" {
@@ -703,10 +743,18 @@ func doLock(
 		}
 	}
 
-	// Attach the current statement/session lock_wait_timeout to the lock options.
-	if d := lockWaitTimeout(proc, txnOp); d > 0 {
-		options.LockWaitDeadline = time.Now().Add(d).UnixNano()
-		options, err = refreshLockWaitOptions(options)
+	// Attach the earliest caller-owned absolute deadline and the current
+	// statement/session lock_wait_timeout to every lock attempt. In particular,
+	// a multi-table promotion must not restart its wait budget at each remote
+	// lock owner.
+	lockTimeout := lockWaitTimeout(proc, txnOp)
+	if lockWaitDeadline > 0 || lockTimeout > 0 {
+		options, err = applyLockWaitDeadline(
+			options,
+			lockWaitDeadline,
+			lockTimeout,
+			time.Now(),
+		)
 		if err != nil {
 			return false, false, timestamp.Timestamp{}, err
 		}
@@ -971,6 +1019,55 @@ func doLock(
 	return true, result.TableDefChanged, newTS, nil
 }
 
+func setPlanSnapshotForLock(
+	ctx context.Context,
+	tableID uint64,
+	isRC bool,
+	proc *process.Process,
+	options *lock.LockOptions,
+) error {
+	options.PlanSnapshotTs = nil
+	planSnapshotTS := proc.PlanSnapshotTSForTransport()
+	// When the plan snapshot is at or after a non-empty transaction creation
+	// timestamp, CreateTS is an exact or conservative fallback and no extra wire
+	// field is needed. A mirror transaction has no local CreateTS; do not let its
+	// zero value bypass the wire/gate decision if placement changes in the future.
+	if planSnapshotTS == nil ||
+		(!options.SnapShotTs.IsEmpty() && !planSnapshotTS.Less(options.SnapShotTs)) {
+		return nil
+	}
+	if !planSnapshotWireSupported(proc) {
+		// The frontend rollout gate can change after a cached/prepared plan was
+		// admitted. Close that TOCTOU window at the final local boundary: rebuild
+		// the plan in the current transaction instead of sending a field that an
+		// old lock owner would silently ignore.
+		if proc.PlanGenerationReused() {
+			if !isRC {
+				return moerr.NewTxnWWConflict(ctx, tableID,
+					"table definition compatibility changed")
+			}
+			return retryWithDefChangedError
+		}
+		// With freshness sacrifice enabled, a freshly built plan can legitimately
+		// bind a snapshot older than CreateTS. Rebuilding it would bind the same
+		// snapshot forever. Preserve the legacy CreateTS fence during the rollout;
+		// only an actually reused generation requires the v32 field to be safe.
+		return nil
+	}
+	options.PlanSnapshotTs = planSnapshotTS
+	return nil
+}
+
+func planSnapshotWireSupported(proc *process.Process) bool {
+	value, ok := runtime.ServiceRuntime(proc.GetService()).GetGlobalVariables(
+		runtime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	version, ok := value.(int64)
+	return ok && version >= defines.MORPCVersion32
+}
+
 type lockRetryState struct {
 	backendRetryDeadline time.Time
 	useMemoryRetrySlot   bool
@@ -1041,6 +1138,22 @@ func refreshLockWaitOptions(options lock.LockOptions) (lock.LockOptions, error) 
 		options.LockWaitTimeout = 1
 	}
 	return options, nil
+}
+
+func applyLockWaitDeadline(
+	options lock.LockOptions,
+	absoluteDeadline int64,
+	lockWaitTimeout time.Duration,
+	now time.Time,
+) (lock.LockOptions, error) {
+	options.LockWaitDeadline = absoluteDeadline
+	if lockWaitTimeout > 0 {
+		sessionDeadline := now.Add(lockWaitTimeout).UnixNano()
+		if options.LockWaitDeadline <= 0 || sessionDeadline < options.LockWaitDeadline {
+			options.LockWaitDeadline = sessionDeadline
+		}
+	}
+	return refreshLockWaitOptions(options)
 }
 
 func lockWithRetry(

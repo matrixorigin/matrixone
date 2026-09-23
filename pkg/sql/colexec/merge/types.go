@@ -100,8 +100,8 @@ func (merge *Merge) ActivateReceiverRange(proc *process.Process, start, end int3
 	if merge.ctr.receiver != nil && merge.ctr.receiver.State().Alive != 0 {
 		return moerr.NewInternalErrorNoCtx("cannot replace an active merge receiver range")
 	}
-	merge.ctr.receiver = process.InitPipelineSignalReceiver(
-		proc.Ctx, proc.Reg.MergeReceivers[start:end])
+	merge.ctr.receiver = process.InitPipelineSignalReceiverFromProcess(
+		proc, proc.Reg.MergeReceivers[start:end])
 	return nil
 }
 
@@ -110,7 +110,7 @@ func (merge *Merge) ActivateReceiverRange(proc *process.Process, start, end int3
 // submitted. The containing pipeline still runs normal cleanup so its own
 // downstream connector receives the startup error.
 func (merge *Merge) DisableReceiverWaitForStartFailure(proc *process.Process) {
-	merge.ctr.receiver = process.InitPipelineSignalReceiver(proc.Ctx, nil)
+	merge.ctr.receiver = process.InitPipelineSignalReceiverFromProcess(proc, nil)
 }
 
 func (merge *Merge) Release() {

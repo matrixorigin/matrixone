@@ -15,12 +15,9 @@
 package fulltext2
 
 import (
-	"context"
 	"math"
 	"strings"
-	"sync"
 	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -30,7 +27,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
-	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/stretchr/testify/require"
 )
@@ -65,233 +61,111 @@ func TestFulltext2SearchNewAndUnloaded(t *testing.T) {
 
 	// SearchFloat32 is unsupported.
 	require.ErrorContains(t, s.SearchFloat32(proc, nil, vectorindex.RuntimeConfig{}, nil, nil), "not supported")
+
+	// Generic cache cleanup destroys failed loads too. An unloaded FULLTEXT2
+	// handle therefore has to be safe to destroy.
+	s.Destroy()
+	require.Nil(t, s.idx)
+	require.False(t, s.loaded)
 }
 
-func TestFulltext2SearchLoadEmitsTrace(t *testing.T) {
-	sp := &sqlexec.SqlProcess{SqlCtx: sqlexec.NewSqlContext(context.Background(), "cn-1", nil, 7, nil)}
-	mp := mpool.MustNewZero()
+func TestFulltext2SearchLoad(t *testing.T) {
+	sp, mp := mockSqlProc(t)
 	cfg := testStorageCfg()
-	var events []LoadEvent
-	restore := setLoadObserver(func(event LoadEvent) { events = append(events, event) })
-	defer restore()
-	invalidateLoadGeneration(cfg, LoadMissCDCFlush)
+	// Dispatch on the SQL, not on call ORDER: a stub keyed by sequence renumbers every case
+	// the moment the load path gains or drops a query, which is how it breaks for reasons
+	// unrelated to what it asserts.
 	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
 		switch {
-		case strings.Contains(sql, "CAST(COALESCE"):
-			return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 0)}}, nil
-		case strings.Contains(sql, "MAX(timestamp)"):
-			return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 11)}}, nil
-		case strings.Contains(sql, "MAX(chunk_id)"):
-			return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 22)}}, nil
-		case strings.Contains(sql, "LENGTH("):
-			return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 0)}}, nil
+		case strings.Contains(sql, "MAX(timestamp"):
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 11, 0)}}, nil
+		case strings.Contains(sql, "MAX(chunk_id"):
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 22, 0)}}, nil
+		case strings.Contains(sql, "SUM(") || strings.Contains(sql, "COUNT(*)"):
+			// base doc/byte sums, the tail frame sum, and the chunk-count fallback
+			return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 0, 0)}}, nil
 		default:
+			// base id enumeration and tail chunk data: neither has rows here
 			return executor.Result{Mp: mp}, nil
 		}
 	})
 
 	s := NewFulltext2Search(cfg)
 	require.NoError(t, s.Load(sp))
-	s.SetLoadWaiters(3)
-	s.FinishLoadObservation()
-	require.Len(t, events, 1)
-	require.Equal(t, LoadMissCDCFlush, events[0].MissReason)
-	require.Equal(t, int64(11), events[0].BaseGeneration)
-	require.Equal(t, int64(22), events[0].TailGeneration)
-	require.Equal(t, int64(3), events[0].SingleflightWaiters)
-	require.True(t, events[0].LoadSuccess)
-	reason, at := peekLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable))
-	require.Empty(t, reason)
-	require.True(t, at.IsZero())
+	require.True(t, s.loaded)
+	require.NotNil(t, s.idx)
+	require.True(t, s.genValid)
+	require.Equal(t, int64(11), s.loadedTs)
+	require.Equal(t, int64(22), s.loadedTail)
 	s.Destroy()
 }
 
-func TestFulltext2SearchLoadClassifiesQueryInterruptionAsCancel(t *testing.T) {
-	sp := &sqlexec.SqlProcess{SqlCtx: sqlexec.NewSqlContext(context.Background(), "cn-1", nil, 7, nil)}
-	var event LoadEvent
-	restore := setLoadObserver(func(got LoadEvent) { event = got })
-	defer restore()
-	swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
-		return executor.Result{}, moerr.NewQueryInterrupted(context.Background())
+func TestFulltext2SearchLoadErrors(t *testing.T) {
+	t.Run("base budget", func(t *testing.T) {
+		sp, _ := mockSqlProc(t)
+		swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+			return executor.Result{}, moerr.NewInternalErrorNoCtx("base budget failed")
+		})
+
+		s := NewFulltext2Search(testStorageCfg())
+		require.ErrorContains(t, s.Load(sp), "base budget failed")
 	})
 
-	s := NewFulltext2Search(testStorageCfg())
-	require.Error(t, s.Load(sp))
-	s.FinishLoadObservation()
-	require.True(t, event.LoadCancel)
-	require.False(t, event.LoadError)
-	require.False(t, event.LoadSuccess)
-}
+	t.Run("base enumeration", func(t *testing.T) {
+		sp, mp := mockSqlProc(t)
+		calls := 0
+		swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+			calls++
+			if calls == 1 {
+				return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 0, 0)}}, nil
+			}
+			return executor.Result{}, moerr.NewInternalErrorNoCtx("base enumeration failed")
+		})
 
-func TestFulltext2SearchLoadRetainsInvalidationReasonAfterFailure(t *testing.T) {
-	sp := &sqlexec.SqlProcess{SqlCtx: sqlexec.NewSqlContext(context.Background(), "cn-1", nil, 7, nil)}
-	cfg := testStorageCfg()
-	var events []LoadEvent
-	restore := setLoadObserver(func(got LoadEvent) { events = append(events, got) })
-	defer restore()
-
-	pendingLoadReasons.Lock()
-	previous := pendingLoadReasons.m
-	pendingLoadReasons.m = make(map[string]pendingLoadReason)
-	pendingLoadReasons.Unlock()
-	t.Cleanup(func() {
-		pendingLoadReasons.Lock()
-		pendingLoadReasons.m = previous
-		pendingLoadReasons.Unlock()
+		s := NewFulltext2Search(testStorageCfg())
+		require.ErrorContains(t, s.Load(sp), "base enumeration failed")
 	})
 
-	swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
-		return executor.Result{}, moerr.NewQueryInterrupted(context.Background())
-	})
-	invalidateLoadGeneration(cfg, LoadMissCDCFlush)
+	t.Run("tail query", func(t *testing.T) {
+		sp, mp := mockSqlProc(t)
+		calls := 0
+		swapRunSql(t, func(_ *sqlexec.SqlProcess, _ string) (executor.Result, error) {
+			calls++
+			switch calls {
+			case 1, 3:
+				return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 0, 0)}}, nil
+			case 2:
+				return executor.Result{Mp: mp}, nil // no base ids
+			default:
+				return executor.Result{}, moerr.NewInternalErrorNoCtx("tail query failed")
+			}
+		})
 
-	s := NewFulltext2Search(cfg)
-	require.Error(t, s.Load(sp))
-	s.FinishLoadObservation()
-	require.Error(t, s.Load(sp))
-	s.FinishLoadObservation()
-
-	require.Len(t, events, 2)
-	require.Equal(t, LoadMissCDCFlush, events[0].MissReason)
-	require.Equal(t, LoadMissCDCFlush, events[1].MissReason)
-	require.True(t, events[0].LoadCancel)
-	require.True(t, events[1].LoadCancel)
-}
-
-func TestFulltext2SearchInvalidationEvictionRecordsOneReason(t *testing.T) {
-	cleanupObserver := setLoadObserver(func(LoadEvent) {})
-	defer cleanupObserver()
-
-	pendingLoadReasons.Lock()
-	previousReasons := pendingLoadReasons.m
-	pendingLoadReasons.m = make(map[string]pendingLoadReason)
-	pendingLoadReasons.Unlock()
-	t.Cleanup(func() {
-		pendingLoadReasons.Lock()
-		pendingLoadReasons.m = previousReasons
-		pendingLoadReasons.Unlock()
+		s := NewFulltext2Search(testStorageCfg())
+		require.ErrorContains(t, s.Load(sp), "tail query failed")
 	})
 
-	previousCache := veccache.Cache
-	veccache.Cache = veccache.NewVectorIndexCache()
-	t.Cleanup(func() { veccache.Cache = previousCache })
+	t.Run("generation capture", func(t *testing.T) {
+		sp, mp := mockSqlProc(t)
+		// Only the generation reads fail; everything the load itself needs succeeds. Keyed on
+		// the SQL rather than call order, which renumbers whenever the load path changes.
+		swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+			switch {
+			case strings.Contains(sql, "MAX("):
+				return executor.Result{}, moerr.NewInternalErrorNoCtx("generation capture failed")
+			case strings.Contains(sql, "SUM(") || strings.Contains(sql, "COUNT(*)"):
+				return executor.Result{Mp: mp, Batches: []*batch.Batch{docsAndBytesBatch(mp, 0, 0)}}, nil
+			default:
+				return executor.Result{Mp: mp}, nil // no base ids and no tail chunks
+			}
+		})
 
-	cfg := testStorageCfg()
-	old := NewFulltext2Search(cfg)
-	old.idx = NewIndex(nil, nil)
-	old.loaded = true
-	oldEntry := &veccache.VectorIndexSearch{Algo: old}
-	oldEntry.Cond = sync.NewCond(oldEntry.Mutex.RLocker())
-	veccache.Cache.IndexMap.Store(cfg.IndexTable, oldEntry)
-
-	// This is the production mutation order: record the reason before evicting the
-	// local entry, then let the next query install a replacement.
-	old.OnCacheInvalidated(string(LoadMissCDCFlush))
-	veccache.Cache.Remove(cfg.IndexTable)
-	replacement := NewFulltext2Search(cfg)
-	replacement.idx = NewIndex(nil, nil)
-	replacement.loaded = true
-	replacementEntry := &veccache.VectorIndexSearch{Algo: replacement}
-	replacementEntry.Cond = sync.NewCond(replacementEntry.Mutex.RLocker())
-	veccache.Cache.IndexMap.Store(cfg.IndexTable, replacementEntry)
-
-	reason, observedAt := peekLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable))
-	require.Equal(t, LoadMissCDCFlush, reason)
-	require.NotZero(t, observedAt)
-	consumeLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable), observedAt)
-	reason, observedAt = peekLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable))
-	require.Empty(t, reason)
-	require.True(t, observedAt.IsZero())
-	veccache.Cache.Remove(cfg.IndexTable)
-}
-
-func TestFulltext2HouseKeepingPublishesTTLReasonBeforeReplacementLoad(t *testing.T) {
-	cleanupObserver := setLoadObserver(func(LoadEvent) {})
-	defer cleanupObserver()
-
-	pendingLoadReasons.Lock()
-	previousReasons := pendingLoadReasons.m
-	pendingLoadReasons.m = make(map[string]pendingLoadReason)
-	pendingLoadReasons.Unlock()
-	t.Cleanup(func() {
-		pendingLoadReasons.Lock()
-		pendingLoadReasons.m = previousReasons
-		pendingLoadReasons.Unlock()
+		s := NewFulltext2Search(testStorageCfg())
+		require.NoError(t, s.Load(sp))
+		require.True(t, s.loaded)
+		require.False(t, s.genValid)
+		s.Destroy()
 	})
-
-	cfg := testStorageCfg()
-	cache := veccache.NewVectorIndexCache()
-	old := NewFulltext2Search(cfg)
-	old.idx = NewIndex(nil, nil)
-	old.loaded = true
-	oldEntry := &veccache.VectorIndexSearch{Algo: old}
-	oldEntry.Cond = sync.NewCond(oldEntry.Mutex.RLocker())
-	oldEntry.Status.Store(veccache.STATUS_LOADED)
-	oldEntry.ExpireAt.Store(time.Now().Add(-time.Second).UnixMicro())
-	cache.IndexMap.Store(cfg.IndexTable, oldEntry)
-
-	// Keep destruction behind the old reader lock. The reason must still be
-	// visible before the replacement can claim the cache key.
-	oldEntry.Mutex.Lock()
-	mutexHeld := true
-	done := make(chan struct{})
-	defer func() {
-		if mutexHeld {
-			oldEntry.Mutex.Unlock()
-		}
-		select {
-		case <-done:
-		case <-time.After(time.Second):
-		}
-	}()
-	go func() {
-		cache.HouseKeeping()
-		close(done)
-	}()
-
-	require.Eventually(t, func() bool {
-		_, ok := cache.IndexMap.Load(cfg.IndexTable)
-		return !ok
-	}, time.Second, time.Millisecond)
-	reason, observedAt := peekLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable))
-	require.Equal(t, LoadMissTTLExpired, reason)
-	require.NotZero(t, observedAt)
-
-	replacement := NewFulltext2Search(cfg)
-	replacement.idx = NewIndex(nil, nil)
-	replacement.loaded = true
-	replacementEntry := &veccache.VectorIndexSearch{Algo: replacement}
-	replacementEntry.Cond = sync.NewCond(replacementEntry.Mutex.RLocker())
-	cache.IndexMap.Store(cfg.IndexTable, replacementEntry)
-
-	mp := mpool.MustNewZero()
-	swapRunSql(t, func(_ *sqlexec.SqlProcess, sql string) (executor.Result, error) {
-		switch {
-		case strings.Contains(sql, "CAST(COALESCE"):
-			return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 0)}}, nil
-		case strings.Contains(sql, "MAX(timestamp)"):
-			return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 11)}}, nil
-		case strings.Contains(sql, "MAX(chunk_id)"):
-			return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 22)}}, nil
-		case strings.Contains(sql, "LENGTH("):
-			return executor.Result{Mp: mp, Batches: []*batch.Batch{int64Batch(mp, 0)}}, nil
-		default:
-			return executor.Result{Mp: mp}, nil
-		}
-	})
-	require.NoError(t, replacementEntry.Load(newSearchProc(t)))
-	reason, observedAt = peekLoadReason(loadReasonKey(cfg.DbName, cfg.IndexTable))
-	require.Empty(t, reason)
-	require.True(t, observedAt.IsZero())
-
-	oldEntry.Mutex.Unlock()
-	mutexHeld = false
-	select {
-	case <-done:
-	case <-time.After(time.Second):
-		t.Fatal("housekeeping did not finish after the old reader released")
-	}
-	cache.Remove(cfg.IndexTable)
 }
 
 // TestStaleGenSqls pins the cache-freshness generation queries: MAX(timestamp) over the

@@ -15,6 +15,7 @@
 package aggexec
 
 import (
+	"bytes"
 	"strconv"
 	"strings"
 	"testing"
@@ -190,6 +191,83 @@ func BenchmarkAggExecPaths(b *testing.B) {
 		}
 	})
 
+	b.Run("AvgInt32/BatchFillFlush", func(b *testing.B) {
+		b.ReportAllocs()
+		int32Vals := make([]int32, rows)
+		for i := range int32Vals {
+			int32Vals[i] = int32(i % 1024)
+		}
+		int32Vec := testutil.NewInt32Vector(rows, types.T_int32.ToType(), mp, false, nil, int32Vals)
+		defer int32Vec.Free(mp)
+		vectors := []*vector.Vector{int32Vec}
+		b.StopTimer()
+		for i := 0; i < b.N; i++ {
+			exec, err := MakeAgg(mp, AggIdOfAvg, false, types.T_int32.ToType())
+			if err != nil {
+				b.Fatal(err)
+			}
+			if err = exec.GroupGrow(groupSize); err != nil {
+				exec.Free()
+				b.Fatal(err)
+			}
+			b.StartTimer()
+			if err = exec.BatchFill(0, groups, vectors); err != nil {
+				b.StopTimer()
+				exec.Free()
+				b.Fatal(err)
+			}
+			results, err := exec.Flush()
+			b.StopTimer()
+			if err != nil {
+				exec.Free()
+				b.Fatal(err)
+			}
+			for _, result := range results {
+				result.Free(mp)
+			}
+			exec.Free()
+		}
+	})
+
+	b.Run("AvgInt32FloatReference/BatchFillFlush", func(b *testing.B) {
+		b.ReportAllocs()
+		int32Vals := make([]int32, rows)
+		for i := range int32Vals {
+			int32Vals[i] = int32(i % 1024)
+		}
+		int32Vec := testutil.NewInt32Vector(rows, types.T_int32.ToType(), mp, false, nil, int32Vals)
+		defer int32Vec.Free(mp)
+		vectors := []*vector.Vector{int32Vec}
+		b.StopTimer()
+		for i := 0; i < b.N; i++ {
+			// Before exact AVG finalization, INT32 used this native accumulator
+			// and reinterpreted the sum buffer as float64 at Flush. Keep that
+			// path as a local benchmark reference for the compatibility tradeoff.
+			exec := newSumAvgExec[int64, int32](mp, int64OfCheck, false, AggIdOfAvg, false, types.T_int32.ToType())
+			exec.(*sumAvgExec[int64, int32]).exactAvg = false
+			if err := exec.GroupGrow(groupSize); err != nil {
+				exec.Free()
+				b.Fatal(err)
+			}
+			b.StartTimer()
+			if err := exec.BatchFill(0, groups, vectors); err != nil {
+				b.StopTimer()
+				exec.Free()
+				b.Fatal(err)
+			}
+			results, err := exec.Flush()
+			b.StopTimer()
+			if err != nil {
+				exec.Free()
+				b.Fatal(err)
+			}
+			for _, result := range results {
+				result.Free(mp)
+			}
+			exec.Free()
+		}
+	})
+
 	b.Run("CountColumn/BatchFill", func(b *testing.B) {
 		b.ReportAllocs()
 		vectors := []*vector.Vector{intVec}
@@ -338,6 +416,404 @@ func BenchmarkAggExecPaths(b *testing.B) {
 			exec.Free()
 		}
 	})
+}
+
+func BenchmarkCountDistinctSavedArguments(b *testing.B) {
+	const (
+		rows   = hashmap.UnitLimit * 256
+		groups = 1
+	)
+
+	mp := mpool.MustNewZero()
+	input := vector.NewVec(types.T_int64.ToType())
+	for i := 0; i < rows; i++ {
+		if err := vector.AppendFixed(input, int64(i), false, mp); err != nil {
+			b.Fatal(err)
+		}
+	}
+	defer input.Free(mp)
+	vectors := []*vector.Vector{input}
+	groupIDs := make([]uint64, hashmap.UnitLimit)
+	for i := range groupIDs {
+		groupIDs[i] = uint64(i%groups + 1)
+	}
+
+	registry, err := mpool.NewAllocationAccountRegistry(1, 512)
+	if err != nil {
+		b.Fatal(err)
+	}
+	account, err := registry.Open(128 << 20)
+	if err != nil {
+		b.Fatal(err)
+	}
+	allocation, err := NewAllocationAccount(
+		account, mpool.AllocationOwnerGroup, AllocationAccountSites{
+			VectorData: 1, VectorArea: 2, VectorNulls: 3,
+			VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+		})
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ReportAllocs()
+	b.SetBytes(rows * 8)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		agg := newCountColumnExec(
+			mp, AggIdOfCountColumn, true, []types.Type{types.T_int64.ToType()})
+		owner := AggFuncExec(agg).(AllocationAccountOwner)
+		if err = owner.SetAllocationAccount(allocation); err != nil {
+			b.Fatal(err)
+		}
+		if err = agg.GroupGrow(groups); err != nil {
+			b.Fatal(err)
+		}
+		b.StartTimer()
+		for offset := 0; offset < rows; offset += hashmap.UnitLimit {
+			if err = agg.(BatchCapacityPreflight).PreflightBatchFill(
+				offset, groupIDs, vectors); err != nil {
+				b.Fatal(err)
+			}
+			if err = agg.BatchFill(offset, groupIDs, vectors); err != nil {
+				b.Fatal(err)
+			}
+		}
+		b.StopTimer()
+		agg.Free()
+		if err = owner.ClearAllocationAccount(allocation); err != nil {
+			b.Fatal(err)
+		}
+	}
+	if account.Snapshot().Used != 0 {
+		b.Fatalf("account retains %d bytes", account.Snapshot().Used)
+	}
+	account.Seal()
+	if _, err = registry.Finalize(account); err != nil {
+		b.Fatal(err)
+	}
+}
+
+func BenchmarkCountDistinctSavedArgumentMerge(b *testing.B) {
+	const (
+		sourceCount   = 16
+		rowsPerSource = 1_000_000 / sourceCount
+		groupCount    = 100
+	)
+
+	mp := mpool.MustNewZero()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 512)
+	if err != nil {
+		b.Fatal(err)
+	}
+	account, err := registry.Open(512 << 20)
+	if err != nil {
+		b.Fatal(err)
+	}
+	allocation, err := NewAllocationAccount(
+		account, mpool.AllocationOwnerGroup, AllocationAccountSites{
+			VectorData: 1, VectorArea: 2, VectorNulls: 3,
+			VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+		})
+	if err != nil {
+		b.Fatal(err)
+	}
+	mergeGroups := make([]uint64, groupCount)
+	for i := range mergeGroups {
+		mergeGroups[i] = uint64(i + 1)
+	}
+
+	sources := make([]AggFuncExec, sourceCount)
+	for sourceIndex := range sources {
+		input := vector.NewVec(types.T_int64.ToType())
+		for row := 0; row < rowsPerSource; row++ {
+			value := int64(sourceIndex*rowsPerSource + row)
+			if err = vector.AppendFixed(input, value, false, mp); err != nil {
+				b.Fatal(err)
+			}
+		}
+		groups := make([]uint64, hashmap.UnitLimit)
+		for row := range groups {
+			groups[row] = uint64(row%groupCount + 1)
+		}
+		source := newCountColumnExec(
+			mp, AggIdOfCountColumn, true, []types.Type{types.T_int64.ToType()})
+		if err = source.(AllocationAccountOwner).SetAllocationAccount(allocation); err != nil {
+			b.Fatal(err)
+		}
+		if err = source.GroupGrow(groupCount); err != nil {
+			b.Fatal(err)
+		}
+		for offset := 0; offset < rowsPerSource; offset += hashmap.UnitLimit {
+			workGroups := groups[:min(hashmap.UnitLimit, rowsPerSource-offset)]
+			if err = source.(BatchCapacityPreflight).PreflightBatchFill(
+				offset, workGroups, []*vector.Vector{input}); err != nil {
+				b.Fatal(err)
+			}
+			if err = source.BatchFill(
+				offset, workGroups, []*vector.Vector{input}); err != nil {
+				b.Fatal(err)
+			}
+		}
+		input.Free(mp)
+		sources[sourceIndex] = source
+	}
+
+	b.ReportAllocs()
+	b.SetBytes(1_000_000 * 8)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		target := newCountColumnExec(
+			mp, AggIdOfCountColumn, true, []types.Type{types.T_int64.ToType()})
+		if err = target.(AllocationAccountOwner).SetAllocationAccount(allocation); err != nil {
+			b.Fatal(err)
+		}
+		if err = target.GroupGrow(groupCount); err != nil {
+			b.Fatal(err)
+		}
+		b.StartTimer()
+		for _, source := range sources {
+			if err = target.(BatchCapacityPreflight).PreflightBatchMerge(
+				source, 0, mergeGroups); err != nil {
+				b.Fatal(err)
+			}
+			if err = target.BatchMerge(source, 0, mergeGroups); err != nil {
+				b.Fatal(err)
+			}
+		}
+		b.StopTimer()
+		target.Free()
+		if err = target.(AllocationAccountOwner).ClearAllocationAccount(allocation); err != nil {
+			b.Fatal(err)
+		}
+	}
+	for _, source := range sources {
+		source.Free()
+		if err = source.(AllocationAccountOwner).ClearAllocationAccount(allocation); err != nil {
+			b.Fatal(err)
+		}
+	}
+	if account.Snapshot().Used != 0 {
+		b.Fatalf("account retains %d bytes", account.Snapshot().Used)
+	}
+	account.Seal()
+	if _, err = registry.Finalize(account); err != nil {
+		b.Fatal(err)
+	}
+}
+
+func BenchmarkCountDistinctSavedArgumentUnmarshal(b *testing.B) {
+	const rows = 250_000
+
+	mp := mpool.MustNewZero()
+	registry, err := mpool.NewAllocationAccountRegistry(1, 512)
+	if err != nil {
+		b.Fatal(err)
+	}
+	account, err := registry.Open(128 << 20)
+	if err != nil {
+		b.Fatal(err)
+	}
+	allocation, err := NewAllocationAccount(
+		account, mpool.AllocationOwnerGroup, AllocationAccountSites{
+			VectorData: 1, VectorArea: 2, VectorNulls: 3,
+			VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+		})
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	input := vector.NewVec(types.T_int64.ToType())
+	for row := range rows {
+		if err = vector.AppendFixed(input, int64(row), false, mp); err != nil {
+			b.Fatal(err)
+		}
+	}
+	groups := make([]uint64, hashmap.UnitLimit)
+	for row := range groups {
+		groups[row] = 1
+	}
+	source := newCountColumnExec(
+		mp, AggIdOfCountColumn, true, []types.Type{types.T_int64.ToType()})
+	if err = source.(AllocationAccountOwner).SetAllocationAccount(allocation); err != nil {
+		b.Fatal(err)
+	}
+	if err = source.GroupGrow(1); err != nil {
+		b.Fatal(err)
+	}
+	for offset := 0; offset < rows; offset += hashmap.UnitLimit {
+		workGroups := groups[:min(hashmap.UnitLimit, rows-offset)]
+		if err = source.(BatchCapacityPreflight).PreflightBatchFill(
+			offset, workGroups, []*vector.Vector{input}); err != nil {
+			b.Fatal(err)
+		}
+		if err = source.BatchFill(
+			offset, workGroups, []*vector.Vector{input}); err != nil {
+			b.Fatal(err)
+		}
+	}
+	input.Free(mp)
+
+	var encoded bytes.Buffer
+	if err = source.SaveIntermediateResult(
+		1, [][]uint8{{1}}, &encoded); err != nil {
+		b.Fatal(err)
+	}
+	payload := encoded.Bytes()
+
+	b.ReportAllocs()
+	b.SetBytes(rows * 8)
+	b.ResetTimer()
+	for range b.N {
+		target := newCountColumnExec(
+			mp, AggIdOfCountColumn, true, []types.Type{types.T_int64.ToType()})
+		if err = target.(AllocationAccountOwner).SetAllocationAccount(allocation); err != nil {
+			b.Fatal(err)
+		}
+		if err = target.UnmarshalFromReader(bytes.NewReader(payload), mp); err != nil {
+			b.Fatal(err)
+		}
+		target.Free()
+		if err = target.(AllocationAccountOwner).ClearAllocationAccount(allocation); err != nil {
+			b.Fatal(err)
+		}
+	}
+	b.StopTimer()
+
+	source.Free()
+	if err = source.(AllocationAccountOwner).ClearAllocationAccount(allocation); err != nil {
+		b.Fatal(err)
+	}
+	if account.Snapshot().Used != 0 {
+		b.Fatalf("account retains %d bytes", account.Snapshot().Used)
+	}
+	account.Seal()
+	if _, err = registry.Finalize(account); err != nil {
+		b.Fatal(err)
+	}
+}
+
+func BenchmarkArgumentPreflightCardinality(b *testing.B) {
+	type benchmarkCase struct {
+		name        string
+		distinct    bool
+		cardinality int
+		varlen      bool
+	}
+	cases := make([]benchmarkCase, 0, 12)
+	for _, varlen := range []bool{false, true} {
+		kind := "fixed"
+		if varlen {
+			kind = "varlen-1KiB"
+		}
+		for _, cardinality := range []int{
+			1, 2, distinctArgumentLinearLimit,
+			distinctArgumentLinearLimit + 1, hashmap.UnitLimit,
+		} {
+			cases = append(cases, benchmarkCase{
+				name:        "distinct/" + kind + "/cardinality-" + strconv.Itoa(cardinality),
+				distinct:    true,
+				cardinality: cardinality,
+				varlen:      varlen,
+			})
+		}
+		cases = append(cases, benchmarkCase{
+			name:        "non-distinct/" + kind,
+			cardinality: hashmap.UnitLimit,
+			varlen:      varlen,
+		})
+	}
+
+	for _, tc := range cases {
+		b.Run(tc.name, func(b *testing.B) {
+			mp := mpool.MustNewZero()
+			typ := types.T_int64.ToType()
+			if tc.varlen {
+				typ = types.T_varchar.ToType()
+			}
+			input := vector.NewVec(typ)
+			if tc.varlen {
+				prefix := strings.Repeat("x", 1024)
+				for row := 0; row < hashmap.UnitLimit; row++ {
+					value := []byte(prefix + strconv.Itoa(row%tc.cardinality))
+					if err := vector.AppendBytes(input, value, false, mp); err != nil {
+						b.Fatal(err)
+					}
+				}
+			} else {
+				for row := 0; row < hashmap.UnitLimit; row++ {
+					if err := vector.AppendFixed(
+						input, int64(row%tc.cardinality), false, mp); err != nil {
+						b.Fatal(err)
+					}
+				}
+			}
+			groups := make([]uint64, hashmap.UnitLimit)
+			for row := range groups {
+				groups[row] = 1
+			}
+
+			registry, err := mpool.NewAllocationAccountRegistry(1, 512)
+			if err != nil {
+				b.Fatal(err)
+			}
+			account, err := registry.Open(32 << 20)
+			if err != nil {
+				b.Fatal(err)
+			}
+			allocation, err := NewAllocationAccount(
+				account, mpool.AllocationOwnerGroup, AllocationAccountSites{
+					VectorData: 1, VectorArea: 2, VectorNulls: 3,
+					VectorGrouping: 4, ArgumentCount: 5, ArgumentArena: 6,
+				})
+			if err != nil {
+				b.Fatal(err)
+			}
+			info := aggInfo{
+				argTypes:   []types.Type{typ},
+				saveArg:    true,
+				isDistinct: tc.distinct,
+			}
+			state := aggState{}
+			if err = state.initWithAllocation(
+				mp, 1, 1, &info, false, allocation); err != nil {
+				b.Fatal(err)
+			}
+			exec := aggExec{
+				mp:         mp,
+				aggInfo:    info,
+				chunkSize:  AggBatchSize,
+				state:      []aggState{state},
+				allocation: allocation,
+			}
+
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if err = exec.preflightBatchFillArgs(
+					0, groups, []*vector.Vector{input}, tc.distinct); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.StopTimer()
+
+			exec.state[0].free(mp)
+			exec.state = nil
+			exec.allocation = nil
+			input.Free(mp)
+			if account.Snapshot().Used != 0 {
+				b.Fatalf("account retains %d bytes", account.Snapshot().Used)
+			}
+			account.Seal()
+			if _, err = registry.Finalize(account); err != nil {
+				b.Fatal(err)
+			}
+			if mp.CurrNB() != 0 {
+				b.Fatalf("memory leak detected: %d bytes", mp.CurrNB())
+			}
+		})
+	}
 }
 
 func BenchmarkSumDecimal64FastCardinality(b *testing.B) {

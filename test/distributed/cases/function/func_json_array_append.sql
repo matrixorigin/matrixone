@@ -9,6 +9,9 @@ SELECT JSON_ARRAY_APPEND('{"a":[]}', '$.a', CAST('{"x":1}' AS JSON)) AS result;
 SELECT JSON_ARRAY_APPEND(NULL, '$.a', 1) AS result;
 SELECT JSON_ARRAY_APPEND('{"a":[]}', NULL, 1) AS result;
 SELECT JSON_ARRAY_APPEND('{"a":[]}', '$.a', NULL) AS result;
+-- Binary values keep their tagged domain; NULL keeps ARRAY_APPEND's SQL NULL contract.
+SELECT JSON_ARRAY_APPEND('[]', '$', CAST('ab' AS BLOB)) AS result;
+SELECT JSON_ARRAY_APPEND('[]', '$', CAST(NULL AS BLOB)) AS result;
 SELECT JSON_ARRAY_APPEND('{"a":[]}', '$.*', 1) AS result;
 
 DROP TABLE IF EXISTS json_array_append_docs;

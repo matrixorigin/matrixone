@@ -15,6 +15,7 @@
 package mergesort
 
 import (
+	"bytes"
 	"context"
 	"math/rand"
 	"slices"
@@ -23,6 +24,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
@@ -102,6 +104,147 @@ func TestSortBlockColumns(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []int64{1, 0, 2}, columns)
 	require.Equal(t, []int32{0, 1, 3}, vector.MustFixedColWithTypeCheck[int32](vecWithNull.GetDownstreamVector()))
+}
+
+func TestJSONClusterKeyPreservesPhysicalOrderThroughWriteAndMerge(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	pool := mocks.GetTestVectorPool()
+	rawJSON := func(text string) []byte {
+		bj, err := bytejson.ParseFromString(text)
+		require.NoError(t, err)
+		encoded, err := bj.Marshal()
+		require.NoError(t, err)
+		return encoded
+	}
+
+	input := containers.MakeVector(types.T_json.ToType(), common.DefaultAllocator)
+	for _, value := range []string{"0", "1", "false", "true"} {
+		input.Append(rawJSON(value), false)
+	}
+	columns, err := SortBlockColumns([]containers.Vector{input}, 0, pool)
+	require.NoError(t, err)
+	require.Equal(t, []int64{3, 2, 0, 1}, columns)
+	require.Equal(t,
+		[][]byte{rawJSON("true"), rawJSON("false"), rawJSON("0"), rawJSON("1")},
+		vector.InefficientMustBytesCol(input.GetDownstreamVector()))
+	input.Close()
+
+	oldObject := containers.NewBatch()
+	oldVector := containers.MakeVector(types.T_json.ToType(), common.DefaultAllocator)
+	oldVector.Append(rawJSON("true"), false)
+	oldVector.Append(rawJSON("0"), false)
+	oldObject.AddVector("j", oldVector)
+
+	newObject := containers.NewBatch()
+	newVector := containers.MakeVector(types.T_json.ToType(), common.DefaultAllocator)
+	newVector.Append(rawJSON("false"), false)
+	newVector.Append(rawJSON("1"), false)
+	newObject.AddVector("j", newVector)
+	defer oldObject.Close()
+	defer newObject.Close()
+
+	mergerPool := &testPool{pool: pool}
+	merged, release, mapping, err := MergeAObj(
+		context.Background(), mergerPool, []*containers.Batch{oldObject, newObject}, 0, []uint32{4})
+	require.NoError(t, err)
+	defer release()
+	require.Equal(t, []int{0, 2, 1, 3}, mapping)
+	require.Equal(t,
+		[][]byte{rawJSON("true"), rawJSON("false"), rawJSON("0"), rawJSON("1")},
+		vector.InefficientMustBytesCol(merged[0].Vecs[0]))
+}
+
+func TestJSONClusterKeyPreservesDivergentLegacyArrayOrderThroughWriteAndMerge(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	pool := mocks.GetTestVectorPool()
+	rawJSON := func(text string) []byte {
+		bj, err := bytejson.ParseFromString(text)
+		require.NoError(t, err)
+		encoded, err := bj.Marshal()
+		require.NoError(t, err)
+		return encoded
+	}
+
+	zeroZero := rawJSON(`[0,0]`)
+	hundred := rawJSON(`[100]`)
+	require.Less(t, bytes.Compare(hundred, zeroZero), 0,
+		"the raw varlena order must diverge from the legacy JSON relation")
+	require.Less(t,
+		bytejson.CompareByteJsonPhysical(types.DecodeJson(zeroZero), types.DecodeJson(hundred)),
+		0,
+	)
+
+	newInput := containers.MakeVector(types.T_json.ToType(), common.DefaultAllocator)
+	newInput.Append(hundred, false)
+	newInput.Append(zeroZero, false)
+	columns, err := SortBlockColumns([]containers.Vector{newInput}, 0, pool)
+	require.NoError(t, err)
+	require.Equal(t, []int64{1, 0}, columns)
+	require.Equal(t, [][]byte{zeroZero, hundred},
+		vector.InefficientMustBytesCol(newInput.GetDownstreamVector()))
+
+	oldObject := containers.NewBatch()
+	oldVector := containers.MakeVector(types.T_json.ToType(), common.DefaultAllocator)
+	oldVector.Append(zeroZero, false)
+	oldObject.AddVector("j", oldVector)
+
+	newObject := containers.NewBatch()
+	newObject.AddVector("j", newInput)
+	defer oldObject.Close()
+	defer newObject.Close()
+
+	mergerPool := &testPool{pool: pool}
+	merged, release, mapping, err := MergeAObj(
+		context.Background(), mergerPool, []*containers.Batch{oldObject, newObject}, 0, []uint32{3})
+	require.NoError(t, err)
+	defer release()
+	require.Equal(t, []int{0, 1, 2}, mapping)
+	require.Equal(t, [][]byte{zeroZero, zeroZero, hundred},
+		vector.InefficientMustBytesCol(merged[0].Vecs[0]))
+}
+
+func TestJSONClusterKeyRejectsLegacyRawMergedRunReinterpretation(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	pool := mocks.GetTestVectorPool()
+	rawJSON := func(text string) []byte {
+		bj, err := bytejson.ParseFromString(text)
+		require.NoError(t, err)
+		encoded, err := bj.Marshal()
+		require.NoError(t, err)
+		return encoded
+	}
+
+	zeroZero := rawJSON(`[0,0]`)
+	hundred := rawJSON(`[100]`)
+	threeZeros := rawJSON(`[0,0,0]`)
+	require.Less(t, bytes.Compare(hundred, zeroZero), 0)
+	require.Greater(t, bytes.Compare(threeZeros, hundred), 0)
+	require.Less(t,
+		bytejson.CompareByteJsonPhysical(types.DecodeJson(threeZeros), types.DecodeJson(hundred)),
+		0,
+	)
+
+	legacyRun := containers.NewBatch()
+	legacyVector := containers.MakeVector(types.T_json.ToType(), common.DefaultAllocator)
+	legacyVector.Append(hundred, false)
+	legacyVector.Append(zeroZero, false)
+	legacyRun.AddVector("j", legacyVector)
+	newRun := containers.NewBatch()
+	newVector := containers.MakeVector(types.T_json.ToType(), common.DefaultAllocator)
+	newVector.Append(threeZeros, false)
+	newRun.AddVector("j", newVector)
+	defer legacyRun.Close()
+	defer newRun.Close()
+
+	merged, release, mapping, err := MergeAObj(
+		context.Background(), &testPool{pool: pool}, []*containers.Batch{legacyRun, newRun}, 0, []uint32{3})
+	require.NoError(t, err)
+	defer release()
+	require.Equal(t, []int{0, 1, 2}, mapping)
+	require.Equal(t,
+		[][]byte{hundred, zeroZero, threeZeros},
+		vector.InefficientMustBytesCol(merged[0].Vecs[0]),
+		"legacy merged input must retain the raw merger relation")
 }
 
 func BenchmarkSortBlockColumns(b *testing.B) {

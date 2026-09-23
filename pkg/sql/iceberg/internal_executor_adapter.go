@@ -33,6 +33,44 @@ type InternalSQLExecutorAdapter struct {
 	StatementOption internalexecutor.StatementOption
 }
 
+// ExecTxn runs a sequence of DAO operations in one internal transaction. It
+// keeps a catalog lifecycle lock held until dependent metadata is published.
+func (a InternalSQLExecutorAdapter) ExecTxn(ctx context.Context, fn func(SQLExecutor) error) error {
+	if a.Executor == nil {
+		return moerr.NewInvalidInput(ctx, "iceberg internal SQL executor adapter requires an executor")
+	}
+	return a.Executor.ExecTxn(ctx, func(txn internalexecutor.TxnExecutor) error {
+		return fn(internalTxnSQLExecutor{txn: txn, statement: a.StatementOption.WithDisableLog()})
+	}, a.Options)
+}
+
+type internalTxnSQLExecutor struct {
+	txn       internalexecutor.TxnExecutor
+	statement internalexecutor.StatementOption
+}
+
+func (a internalTxnSQLExecutor) Exec(ctx context.Context, sql string) (uint64, error) {
+	result, err := a.txn.Exec(sql, a.statement)
+	if err != nil {
+		return 0, err
+	}
+	defer result.Close()
+	return result.AffectedRows, nil
+}
+
+func (a internalTxnSQLExecutor) QueryRow(ctx context.Context, sql string) RowScanner {
+	rows, err := a.Query(ctx, sql)
+	return &internalSQLRow{rows: rows, err: err}
+}
+
+func (a internalTxnSQLExecutor) Query(ctx context.Context, sql string) (RowsScanner, error) {
+	result, err := a.txn.Exec(sql, a.statement)
+	if err != nil {
+		return nil, err
+	}
+	return &internalSQLRows{result: result}, nil
+}
+
 func (a InternalSQLExecutorAdapter) Exec(ctx context.Context, sql string) (uint64, error) {
 	if a.Executor == nil {
 		return 0, moerr.NewInvalidInput(ctx, "iceberg internal SQL executor adapter requires an executor")

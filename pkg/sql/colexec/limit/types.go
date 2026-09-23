@@ -30,10 +30,13 @@ type container struct {
 	limit         uint64
 	limitExecutor colexec.ExpressionExecutor
 	buf           *batch.Batch
+	draining      bool
 }
 type Limit struct {
-	ctr       container
-	LimitExpr *plan.Expr
+	ctr                    container
+	LimitExpr              *plan.Expr
+	calcFoundRows          bool
+	drainInputForFoundRows bool
 
 	vm.OperatorBase
 }
@@ -68,6 +71,28 @@ func (limit *Limit) WithLimit(limitExpr *plan.Expr) *Limit {
 	return limit
 }
 
+func (limit *Limit) WithFoundRows(enabled bool) *Limit {
+	limit.calcFoundRows = enabled
+	limit.drainInputForFoundRows = enabled
+	return limit
+}
+
+// WithFoundRowsDrain keeps consuming the input after the output limit is
+// reached without making this operator the owner that publishes FOUND_ROWS.
+// It is used by a final dynamic sql_select_limit above an OFFSET owner.
+func (limit *Limit) WithFoundRowsDrain(enabled bool) *Limit {
+	limit.drainInputForFoundRows = enabled
+	return limit
+}
+
+func (limit *Limit) IsFoundRowsOwner() bool {
+	return limit.calcFoundRows
+}
+
+func (limit *Limit) DrainsForFoundRows() bool {
+	return limit.drainInputForFoundRows
+}
+
 func (limit *Limit) Release() {
 	if limit != nil {
 		reuse.Free[Limit](limit, nil)
@@ -85,6 +110,7 @@ func (limit *Limit) Reset(proc *process.Process, pipelineFailed bool, err error)
 		limit.ctr.buf = nil
 	}
 	limit.ctr.seen = 0
+	limit.ctr.draining = false
 }
 
 func (limit *Limit) Free(proc *process.Process, pipelineFailed bool, err error) {

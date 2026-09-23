@@ -181,6 +181,79 @@ func TestOffsetResetReleasesCopiedAllocationAccountData(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestSQLCalcFoundRowsRecordsInputAtEnd(t *testing.T) {
+	tests := []struct {
+		name    string
+		batches func(proc *process.Process, input *batch.Batch) []*batch.Batch
+	}{
+		{
+			name: "nil batch",
+			batches: func(_ *process.Process, input *batch.Batch) []*batch.Batch {
+				return []*batch.Batch{input}
+			},
+		},
+		{
+			name: "last batch after empty batch",
+			batches: func(_ *process.Process, input *batch.Batch) []*batch.Batch {
+				last := batch.NewWithSize(0)
+				last.SetLast()
+				return []*batch.Batch{batch.EmptyBatch, input, last}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			defer proc.Free()
+			proc.BeginFoundRowsStatement(true)
+
+			input := colexec.MakeMockBatchs(proc.Mp())
+			arg := NewArgument().WithOffset(plan2.MakePlan2Uint64ConstExprWithType(0)).WithFoundRows(true)
+			child := colexec.NewMockOperator().WithBatchs(tt.batches(proc, input))
+			arg.AppendChild(child)
+			require.NoError(t, arg.Prepare(proc))
+
+			result, err := arg.Call(proc)
+			require.NoError(t, err)
+			require.NotNil(t, result.Batch)
+			require.Equal(t, input.RowCount(), result.Batch.RowCount())
+
+			result, err = arg.Call(proc)
+			require.NoError(t, err)
+			require.Equal(t, uint64(input.RowCount()), proc.GetFoundRows())
+			require.True(t, proc.FoundRowsRecorded())
+			arg.Free(proc, false, nil)
+			child.Free(proc, false, nil)
+			arg.Release()
+		})
+	}
+}
+
+func TestNestedOffsetDoesNotPublishFoundRows(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	proc.BeginFoundRowsStatement(true)
+
+	input := colexec.MakeMockBatchs(proc.Mp())
+	arg := NewArgument().WithOffset(plan2.MakePlan2Uint64ConstExprWithType(0))
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	result, err = arg.Call(proc)
+	require.NoError(t, err)
+	require.Nil(t, result.Batch)
+	require.False(t, proc.FoundRowsRecorded())
+
+	arg.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	arg.Release()
+}
+
 func BenchmarkOffset(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		tcs := []offsetTestCase{

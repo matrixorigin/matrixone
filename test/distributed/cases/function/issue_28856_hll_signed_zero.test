@@ -1,0 +1,89 @@
+-- #28856: FLOAT signed zero is one SQL value for both HLL aggregate paths.
+-- Existing persisted v2 HLL_ADD_AGG states retain their raw-value wire domain;
+-- newly constructed states use the canonical v4 domain.
+drop table if exists issue_28856_hll_signed_zero;
+create table issue_28856_hll_signed_zero(v double);
+insert into issue_28856_hll_signed_zero values
+    (cast('0.0' as double)), (cast('-0.0' as double));
+
+select approx_count_distinct(v) as approx_count,
+       hll_cardinality(hll_add_agg(v)) as hll_count
+from issue_28856_hll_signed_zero;
+
+drop table issue_28856_hll_signed_zero;
+
+-- Persisted FLOAT/DOUBLE sketches must retain SQL-equivalent signed-zero
+-- semantics when read back through HLL_MERGE_AGG. NULL-only groups and an
+-- explicitly empty sketch merge are also valid zero-cardinality controls.
+drop table if exists issue_28856_hll_signed_zero_source;
+create table issue_28856_hll_signed_zero_source(
+    part int,
+    legacy_value int,
+    float_value float,
+    double_value double
+);
+insert into issue_28856_hll_signed_zero_source values
+    (1, null, cast('0.0' as float), cast('0.0' as double)),
+    (2, null, cast('-0.0' as float), cast('-0.0' as double)),
+    (3, null, null, null),
+    (4, 1, 1.0, 1.0);
+
+drop table if exists issue_28856_hll_signed_zero_persisted;
+create table issue_28856_hll_signed_zero_persisted(
+    part int,
+    value_type varchar(8),
+    sketch blob
+);
+insert into issue_28856_hll_signed_zero_persisted
+select part, 'float32', hll_add_agg(float_value)
+from issue_28856_hll_signed_zero_source
+group by part;
+insert into issue_28856_hll_signed_zero_persisted
+select part, 'float64', hll_add_agg(double_value)
+from issue_28856_hll_signed_zero_source
+group by part;
+
+select value_type, part, hll_cardinality(hll_merge_agg(sketch)) as merged_count
+from issue_28856_hll_signed_zero_persisted
+group by value_type, part
+order by value_type, part;
+select value_type, hll_cardinality(hll_merge_agg(sketch)) as merged_count
+from issue_28856_hll_signed_zero_persisted
+where part in (1, 2)
+group by value_type
+order by value_type;
+select hll_cardinality(hll_add_agg(float_value)) as float_empty_count,
+       hll_cardinality(hll_add_agg(double_value)) as double_empty_count
+from issue_28856_hll_signed_zero_source
+where part = 3;
+select value_type, hll_cardinality(hll_merge_agg(sketch)) as merged_empty_count
+from issue_28856_hll_signed_zero_persisted
+where part = 3
+group by value_type
+order by value_type;
+
+-- Integer HLL_ADD_AGG remains a persisted v2 state. It must merge by itself,
+-- while mixing it with a new scalar FLOAT/DOUBLE v4 state must be rejected.
+drop table if exists issue_28856_hll_mixed_versions;
+create table issue_28856_hll_mixed_versions(part int, sketch blob);
+insert into issue_28856_hll_mixed_versions
+select 1, hll_add_agg(legacy_value)
+from issue_28856_hll_signed_zero_source
+where part = 4;
+insert into issue_28856_hll_mixed_versions
+select 2, hll_add_agg(double_value)
+from issue_28856_hll_signed_zero_source
+where part = 4;
+select hll_cardinality(hll_merge_agg(sketch)) as legacy_count
+from issue_28856_hll_mixed_versions
+where part = 1;
+select hll_cardinality(hll_merge_agg(sketch)) as current_count
+from issue_28856_hll_mixed_versions
+where part = 2;
+-- @regex("incompatible HLL hash versions", true)
+select hll_cardinality(hll_merge_agg(sketch)) as mixed_count
+from issue_28856_hll_mixed_versions;
+
+drop table issue_28856_hll_mixed_versions;
+drop table issue_28856_hll_signed_zero_persisted;
+drop table issue_28856_hll_signed_zero_source;

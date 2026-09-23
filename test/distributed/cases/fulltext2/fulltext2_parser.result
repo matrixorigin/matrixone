@@ -12,22 +12,27 @@ insert into zh values
 (4,'中文學習中文學習');
 create fulltext2 index ft on zh(body) with parser ngram;
 show create table zh;
-Table    Create Table
-zh    CREATE TABLE `zh` (\n  `id` bigint NOT NULL,\n  `body` text DEFAULT NULL,\n  PRIMARY KEY (`id`),\n FULLTEXT2 `ft`(`body`) WITH PARSER ngram\n)
+➤ Table[12,2,0]  ¦  Create Table[12,137,0]  𝄀
+zh  ¦  CREATE TABLE `zh` (
+  `id` bigint NOT NULL,
+  `body` text DEFAULT NULL,
+  PRIMARY KEY (`id`),
+ FULLTEXT2 `ft`(`body`) WITH PARSER ngram
+)
 select id from zh where match(body) against('中文學習') order by id;
-id
-0
+➤ id[-5,64,0]  𝄀
+0  𝄀
 4
 select id from zh where match(body) against('兒童') order by id;
-id
-0
+➤ id[-5,64,0]  𝄀
+0  𝄀
 2
 select id from zh where match(body) against('+中文 +學習' in boolean mode) order by id;
-id
-0
+➤ id[-5,64,0]  𝄀
+0  𝄀
 4
 select id from zh where match(body) against('+兒童 -中文' in boolean mode) order by id;
-id
+➤ id[-5,64,0]  𝄀
 2
 drop table if exists zj;
 create table zj(id bigint primary key, body text);
@@ -39,41 +44,149 @@ insert into zj values
 (4,'香蕉和苹果');
 create fulltext2 index ft on zj(body) with parser gojieba;
 select id from zj where match(body) against('北京') order by id;
-id
-0
-2
+➤ id[-5,64,0]  𝄀
+0  𝄀
+2  𝄀
 3
 select id from zj where match(body) against('清华大学') order by id;
-id
-0
+➤ id[-5,64,0]  𝄀
+0  𝄀
 3
 select id from zj where match(body) against('北京清华大学') order by id;
-id
+➤ id[-5,64,0]  𝄀
 0
 select id from zj where match(body) against('+苹果 +香蕉' in boolean mode) order by id;
-id
-1
+➤ id[-5,64,0]  𝄀
+1  𝄀
 4
 select id from zj where match(body) against('+北京 -苹果' in boolean mode) order by id;
-id
-0
-2
+➤ id[-5,64,0]  𝄀
+0  𝄀
+2  𝄀
 3
 drop table if exists js;
 create table js(id bigint primary key, doc json);
+drop table if exists js_plain;
+create table js_plain(id bigint primary key, doc json);
 insert into js values
 (0,'{"a":1,"b":"red apple"}'),
 (1,'{"a":2,"b":"中文學習教材"}'),
 (2,'{"a":3,"b":"red blue"}');
+insert into js_plain select * from js;
 create fulltext2 index ft on js(doc) with parser json;
-select id from js where match(doc) against('red' in boolean mode) order by id;
-id
+select id from js where json_extract_string(doc,'$.b') = 'red apple' order by id;
+➤ id[-5,64,0]  𝄀
 0
-2
-select id from js where match(doc) against('+red +apple' in boolean mode) order by id;
-id
+select id from js_plain where json_extract_string(doc,'$.b') = 'red apple' order by id;
+➤ id[-5,64,0]  𝄀
 0
-select id from js where match(doc) against('中文學習') order by id;
-id
+select id from js where json_extract_string(doc,'$.b') = '中文學習教材' order by id;
+➤ id[-5,64,0]  𝄀
 1
+select id from js_plain where json_extract_string(doc,'$.b') = '中文學習教材' order by id;
+➤ id[-5,64,0]  𝄀
+1
+select id from js where json_extract_string(doc,'$.b') = 'red' order by id;
+➤ id[-5,64,0]
+select id from js_plain where json_extract_string(doc,'$.b') = 'red' order by id;
+➤ id[-5,64,0]
+select id from js where json_extract_string(doc,'$.a') = 'red apple' order by id;
+➤ id[-5,64,0]
+select id from js_plain where json_extract_string(doc,'$.a') = 'red apple' order by id;
+➤ id[-5,64,0]
+select id from js where json_extract_float64(doc,'$.a') = 2 order by id;
+➤ id[-5,64,0]  𝄀
+1
+select id from js_plain where json_extract_float64(doc,'$.a') = 2 order by id;
+➤ id[-5,64,0]  𝄀
+1
+select id from js where json_extract_float64(doc,'$.a') >= 2 order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2
+select id from js_plain where json_extract_float64(doc,'$.a') >= 2 order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+2
+select id from js where json_extract_float64(doc,'$.a') < 3 order by id;
+➤ id[-5,64,0]  𝄀
+0  𝄀
+1
+select id from js_plain where json_extract_float64(doc,'$.a') < 3 order by id;
+➤ id[-5,64,0]  𝄀
+0  𝄀
+1
+drop table if exists pnull_default;
+create table pnull_default(id bigint primary key, left_doc text, right_doc text);
+insert into pnull_default values
+(1,NULL,'righttoken'),
+(2,'lefttoken',NULL),
+(3,NULL,NULL),
+(4,'lefttoken','righttoken');
+create fulltext2 index ft_default on pnull_default(left_doc, right_doc);
+select id from pnull_default where match(left_doc, right_doc) against('righttoken') order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+4
+select id from pnull_default where match(left_doc, right_doc) against('lefttoken') order by id;
+➤ id[-5,64,0]  𝄀
+2  𝄀
+4
+select id from pnull_default where match(left_doc, right_doc) against('+lefttoken +righttoken' in boolean mode) order by id;
+➤ id[-5,64,0]  𝄀
+4
+drop table if exists pnull_ngram;
+create table pnull_ngram(id bigint primary key, left_doc text, right_doc text);
+insert into pnull_ngram values
+(1,NULL,'righttoken'),
+(2,'lefttoken',NULL),
+(3,NULL,NULL),
+(4,'lefttoken','righttoken');
+create fulltext2 index ft_ngram on pnull_ngram(left_doc, right_doc) with parser ngram;
+select id from pnull_ngram where match(left_doc, right_doc) against('righttoken') order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+4
+select id from pnull_ngram where match(left_doc, right_doc) against('lefttoken') order by id;
+➤ id[-5,64,0]  𝄀
+2  𝄀
+4
+select id from pnull_ngram where match(left_doc, right_doc) against('+lefttoken +righttoken' in boolean mode) order by id;
+➤ id[-5,64,0]  𝄀
+4
+drop table if exists pnull_gojieba;
+create table pnull_gojieba(id bigint primary key, left_doc text, right_doc text);
+insert into pnull_gojieba values
+(1,NULL,'北京'),
+(2,'上海',NULL),
+(3,NULL,NULL),
+(4,'北京','上海');
+create fulltext2 index ft_gojieba on pnull_gojieba(left_doc, right_doc) with parser gojieba;
+select id from pnull_gojieba where match(left_doc, right_doc) against('北京') order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+4
+select id from pnull_gojieba where match(left_doc, right_doc) against('上海') order by id;
+➤ id[-5,64,0]  𝄀
+2  𝄀
+4
+select id from pnull_gojieba where match(left_doc, right_doc) against('+北京 +上海' in boolean mode) order by id;
+➤ id[-5,64,0]  𝄀
+4
+drop table if exists pnull_json;
+create table pnull_json(id bigint primary key, left_doc json, right_doc json);
+insert into pnull_json values
+(1,NULL,'{"k":"rightjson"}'),
+(2,'{"k":"leftjson"}',NULL),
+(3,NULL,NULL),
+(4,'{"k":"leftjson"}','{"k":"rightjson"}');
+create fulltext2 index ft_json on pnull_json(left_doc, right_doc) with parser json;
+select id from pnull_json where json_extract_string(right_doc,'$.k') = 'rightjson' order by id;
+➤ id[-5,64,0]  𝄀
+1  𝄀
+4
+select id from pnull_json where json_extract_string(left_doc,'$.k') = 'leftjson' order by id;
+➤ id[-5,64,0]  𝄀
+2  𝄀
+4
 drop database fulltext2_parser;

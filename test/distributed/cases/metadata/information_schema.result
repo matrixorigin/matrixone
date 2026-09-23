@@ -29,6 +29,7 @@ def    mo_catalog    mo_branch_metadata    BASE TABLE    Tae
 def    mo_catalog    mo_ccpr_dbs    BASE TABLE    Tae
 def    mo_catalog    mo_ccpr_log    BASE TABLE    Tae
 def    mo_catalog    mo_ccpr_tables    BASE TABLE    Tae
+def    mo_catalog    mo_cdc_snapshot    BASE TABLE    Tae
 def    mo_catalog    mo_cdc_task    BASE TABLE    Tae
 def    mo_catalog    mo_cdc_watermark    BASE TABLE    Tae
 def    mo_catalog    mo_columns    BASE TABLE    Tae
@@ -162,4 +163,15 @@ ordinal_position    column_name    data_type
 1    a    int
 2    b    int
 3    v    varchar
+set @metadata_schema = 'information_schema_data_type_case';
+set @metadata_table = 'composite_pk_probe';
+set @metadata_column = 'v';
+prepare metadata_limit_reuse from 'select column_name from information_schema.columns where table_schema = ? and table_name = ? and column_name = ? limit 1';
+execute metadata_limit_reuse using @metadata_schema, @metadata_table, @metadata_column;
+column_name
+v
+execute metadata_limit_reuse using @metadata_schema, @metadata_table, @metadata_column;
+column_name
+v
+deallocate prepare metadata_limit_reuse;
 drop database information_schema_data_type_case;

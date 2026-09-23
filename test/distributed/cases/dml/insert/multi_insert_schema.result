@@ -1,0 +1,289 @@
+drop database if exists mi_schema;
+create database mi_schema;
+use mi_schema;
+create table src (id int primary key, name varchar(30), amount decimal(12,3), ts datetime, flag bool, note text);
+insert into src values
+(1, 'alpha',   10.500, '2024-01-01 10:00:00', true,  'first row'),
+(2, 'beta',    20.250, '2024-02-02 11:30:00', false, 'second row'),
+(3, 'gamma',  -30.125, '2024-03-03 12:45:00', true,  NULL),
+(4, 'delta',    0.000, '2024-04-04 00:00:00', NULL,  'fourth row'),
+(5, 'epsilon', 99999.999, '2024-05-05 23:59:59', false, 'fifth row');
+create table narrow (id int primary key, name varchar(30));
+create table wide (id bigint primary key, name varchar(100), amount double, ts date, flag tinyint, note varchar(500), extra int default 42, created timestamp default current_timestamp);
+create table reordered (note text, amount decimal(20,6), id smallint primary key);
+create table typed (id int primary key, name char(10), amount int, ts_text varchar(30), amount_text varchar(30), when_day int);
+insert all
+into narrow (id, name) values (id, name)
+into wide (id, name, amount, ts, flag, note) values (id, name, amount, ts, flag, note)
+into reordered (id, note, amount) values (id, note, amount)
+into typed (id, name, amount, ts_text, amount_text, when_day) values (id, name, amount, ts, amount, day(ts))
+select id, name, amount, ts, flag, note from src;
+select * from narrow order by id;
+➤ id[4,32,0]  ¦  name[12,30,0]  𝄀
+1  ¦  alpha  𝄀
+2  ¦  beta  𝄀
+3  ¦  gamma  𝄀
+4  ¦  delta  𝄀
+5  ¦  epsilon
+select id, name, amount, ts, flag, note, extra, created is not null as has_created from wide order by id;
+➤ id[-5,64,0]  ¦  name[12,100,0]  ¦  amount[8,53,31]  ¦  ts[91,10,0]  ¦  flag[-6,8,0]  ¦  note[12,500,0]  ¦  extra[4,32,0]  ¦  has_created[-7,1,0]  𝄀
+1  ¦  alpha  ¦  10.5  ¦  2024-01-01  ¦  1  ¦  first row  ¦  42  ¦  1  𝄀
+2  ¦  beta  ¦  20.25  ¦  2024-02-02  ¦  0  ¦  second row  ¦  42  ¦  1  𝄀
+3  ¦  gamma  ¦  -30.125  ¦  2024-03-03  ¦  1  ¦  null  ¦  42  ¦  1  𝄀
+4  ¦  delta  ¦  0.0  ¦  2024-04-04  ¦  null  ¦  fourth row  ¦  42  ¦  1  𝄀
+5  ¦  epsilon  ¦  99999.999  ¦  2024-05-05  ¦  0  ¦  fifth row  ¦  42  ¦  1
+select id, amount, note from reordered order by id;
+➤ id[5,16,0]  ¦  amount[3,20,6]  ¦  note[-1,16383,0]  𝄀
+1  ¦  10.500000  ¦  first row  𝄀
+2  ¦  20.250000  ¦  second row  𝄀
+3  ¦  -30.125000  ¦  null  𝄀
+4  ¦  0.000000  ¦  fourth row  𝄀
+5  ¦  99999.999000  ¦  fifth row
+select * from typed order by id;
+➤ id[4,32,0]  ¦  name[1,10,0]  ¦  amount[4,32,0]  ¦  ts_text[12,30,0]  ¦  amount_text[12,30,0]  ¦  when_day[4,32,0]  𝄀
+1  ¦  alpha  ¦  11  ¦  2024-01-01 10:00:00  ¦  10.500  ¦  1  𝄀
+2  ¦  beta  ¦  20  ¦  2024-02-02 11:30:00  ¦  20.250  ¦  2  𝄀
+3  ¦  gamma  ¦  -30  ¦  2024-03-03 12:45:00  ¦  -30.125  ¦  3  𝄀
+4  ¦  delta  ¦  0  ¦  2024-04-04 00:00:00  ¦  0.000  ¦  4  𝄀
+5  ¦  epsilon  ¦  100000  ¦  2024-05-05 23:59:59  ¦  99999.999  ¦  5
+create table with_uk (id int primary key, name varchar(30), unique key uk_name(name), key ik_id(id));
+create table with_cpk (id int, name varchar(30), amount decimal(12,3), primary key (id, name));
+create table no_pk (id int, name varchar(30));
+create table with_auto (seq bigint auto_increment primary key, id int, name varchar(30));
+create table with_nn (id int primary key, name varchar(30) not null, amount decimal(12,3) not null default 0);
+create table with_check (id int primary key, amount decimal(12,3), check (amount >= 0));
+create table with_gen (id int primary key, amount decimal(12,3), doubled decimal(12,3) as (amount * 2) stored);
+create table with_cluster (id int, name varchar(30), amount decimal(12,3)) cluster by (name, id);
+insert all
+into with_uk (id, name) values (id, name)
+into with_cpk (id, name, amount) values (id, name, amount)
+into no_pk (id, name) values (id, name)
+into no_pk (id, name) values (id + 100, upper(name))
+into with_auto (id, name) values (id, name)
+into with_nn (id, name) values (id, name)
+into with_gen (id, amount) values (id, amount)
+into with_cluster (id, name, amount) values (id, name, amount)
+select id, name, amount from src;
+select * from with_uk order by id;
+➤ id[4,32,0]  ¦  name[12,30,0]  𝄀
+1  ¦  alpha  𝄀
+2  ¦  beta  𝄀
+3  ¦  gamma  𝄀
+4  ¦  delta  𝄀
+5  ¦  epsilon
+select * from with_cpk order by id;
+➤ id[4,32,0]  ¦  name[12,30,0]  ¦  amount[3,12,3]  𝄀
+1  ¦  alpha  ¦  10.500  𝄀
+2  ¦  beta  ¦  20.250  𝄀
+3  ¦  gamma  ¦  -30.125  𝄀
+4  ¦  delta  ¦  0.000  𝄀
+5  ¦  epsilon  ¦  99999.999
+select * from no_pk order by id;
+➤ id[4,32,0]  ¦  name[12,30,0]  𝄀
+1  ¦  alpha  𝄀
+2  ¦  beta  𝄀
+3  ¦  gamma  𝄀
+4  ¦  delta  𝄀
+5  ¦  epsilon  𝄀
+101  ¦  ALPHA  𝄀
+102  ¦  BETA  𝄀
+103  ¦  GAMMA  𝄀
+104  ¦  DELTA  𝄀
+105  ¦  EPSILON
+select * from with_auto order by seq;
+➤ seq[-5,64,0]  ¦  id[4,32,0]  ¦  name[12,30,0]  𝄀
+1  ¦  1  ¦  alpha  𝄀
+2  ¦  2  ¦  beta  𝄀
+3  ¦  3  ¦  gamma  𝄀
+4  ¦  4  ¦  delta  𝄀
+5  ¦  5  ¦  epsilon
+select * from with_nn order by id;
+➤ id[4,32,0]  ¦  name[12,30,0]  ¦  amount[3,12,3]  𝄀
+1  ¦  alpha  ¦  0.000  𝄀
+2  ¦  beta  ¦  0.000  𝄀
+3  ¦  gamma  ¦  0.000  𝄀
+4  ¦  delta  ¦  0.000  𝄀
+5  ¦  epsilon  ¦  0.000
+select * from with_gen order by id;
+➤ id[4,32,0]  ¦  amount[3,12,3]  ¦  doubled[3,12,3]  𝄀
+1  ¦  10.500  ¦  21.000  𝄀
+2  ¦  20.250  ¦  40.500  𝄀
+3  ¦  -30.125  ¦  -60.250  𝄀
+4  ¦  0.000  ¦  0.000  𝄀
+5  ¦  99999.999  ¦  199999.998
+select * from with_cluster order by id;
+➤ id[4,32,0]  ¦  name[12,30,0]  ¦  amount[3,12,3]  𝄀
+1  ¦  alpha  ¦  10.500  𝄀
+2  ¦  beta  ¦  20.250  𝄀
+3  ¦  gamma  ¦  -30.125  𝄀
+4  ¦  delta  ¦  0.000  𝄀
+5  ¦  epsilon  ¦  99999.999
+insert all
+into with_check (id, amount) values (id, amount)
+into no_pk (id, name) values (id + 1000, name)
+select id, name, amount from src;
+constraint violation: Check constraint '__mo_chk_1' is violated
+select count(*) from with_check;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from no_pk where id > 1000;
+➤ count(*)[-5,64,0]  𝄀
+0
+insert all
+into with_check (id, amount) values (id, amount)
+select id, amount from src where amount >= 0;
+select * from with_check order by id;
+➤ id[4,32,0]  ¦  amount[3,12,3]  𝄀
+1  ¦  10.500  𝄀
+2  ¦  20.250  𝄀
+4  ¦  0.000  𝄀
+5  ¦  99999.999
+insert all into with_nn (id, name) values (id + 10, note) select id, note from src;
+constraint violation: Column 'name' cannot be null
+select count(*) from with_nn;
+➤ count(*)[-5,64,0]  𝄀
+5
+insert all into with_gen (id, amount, doubled) values (id + 10, amount, amount) select id, amount from src;
+invalid input: the value specified for generated column 'doubled' in table 'with_gen' is not allowed
+create table conv (id int primary key, j json, e enum('alpha','beta','gamma','other'), b varbinary(20), d date, t time, f float);
+insert first
+when name in ('alpha', 'beta', 'gamma') then into conv (id, j, e, b, d, t, f) values (id, json_object('name', name, 'amount', amount), name, name, ts, ts, amount)
+else                                          into conv (id, j, e, b, d, t, f) values (id, json_array(id, name), 'other', 'x', ts, ts, amount)
+select id, name, amount, ts from src;
+select id, j, e, hex(b), d, t, f from conv order by id;
+➤ id[4,32,0]  ¦  j[-1,2147483647,0]  ¦  e[12,65535,0]  ¦  hex(b)[12,65535,0]  ¦  d[91,10,0]  ¦  t[92,10,0]  ¦  f[7,23,31]  𝄀
+1  ¦  {"amount": 10.500, "name": "alpha"}  ¦  alpha  ¦  616C706861  ¦  2024-01-01  ¦  10:00:00  ¦  10.5  𝄀
+2  ¦  {"amount": 20.250, "name": "beta"}  ¦  beta  ¦  62657461  ¦  2024-02-02  ¦  11:30:00  ¦  20.25  𝄀
+3  ¦  {"amount": -30.125, "name": "gamma"}  ¦  gamma  ¦  67616D6D61  ¦  2024-03-03  ¦  12:45:00  ¦  -30.125  𝄀
+4  ¦  [4, "delta"]  ¦  other  ¦  78  ¦  2024-04-04  ¦  00:00:00  ¦  0.0  𝄀
+5  ¦  [5, "epsilon"]  ¦  other  ¦  78  ¦  2024-05-05  ¦  23:59:59  ¦  100000.0
+insert all into conv (id, e) values (id + 10, name) select id, name from src where name = 'delta';
+internal error: convert to MySQL enum failed: item delta is not in enum [alpha beta gamma other]
+select count(*) from conv;
+➤ count(*)[-5,64,0]  𝄀
+5
+create table tight (id int primary key, name varchar(3));
+insert all into tight (id, name) values (id, name) select id, name from src where id = 1;
+Data truncation: Can't cast column from VARCHAR type to VARCHAR type because of one or more values in that column. Src length 5 is larger than Dest length 3
+select count(*) from tight;
+➤ count(*)[-5,64,0]  𝄀
+0
+insert all into tight (id, name) values (id, left(name, 3)) select id, name from src;
+select * from tight order by id;
+➤ id[4,32,0]  ¦  name[12,3,0]  𝄀
+1  ¦  alp  𝄀
+2  ¦  bet  𝄀
+3  ¦  gam  𝄀
+4  ¦  del  𝄀
+5  ¦  eps
+create database mi_schema_other;
+create table mi_schema_other.copy_t (id int primary key, name varchar(30));
+create temporary table tmp_t (id int primary key, name varchar(30));
+insert all
+into mi_schema_other.copy_t (id, name) values (id, name)
+into tmp_t (id, name) values (id, reverse(name))
+into src (id, name, amount, ts, flag, note) values (id + 100, name, amount, ts, flag, note)
+select id, name, amount, ts, flag, note from src;
+select * from mi_schema_other.copy_t order by id;
+➤ id[4,32,0]  ¦  name[12,30,0]  𝄀
+1  ¦  alpha  𝄀
+2  ¦  beta  𝄀
+3  ¦  gamma  𝄀
+4  ¦  delta  𝄀
+5  ¦  epsilon
+select * from tmp_t order by id;
+➤ id[4,32,0]  ¦  name[12,30,0]  𝄀
+1  ¦  ahpla  𝄀
+2  ¦  ateb  𝄀
+3  ¦  ammag  𝄀
+4  ¦  atled  𝄀
+5  ¦  nolispe
+select count(*) from src;
+➤ count(*)[-5,64,0]  𝄀
+10
+select id, name from src where id > 100 order by id;
+➤ id[4,32,0]  ¦  name[12,30,0]  𝄀
+101  ¦  alpha  𝄀
+102  ¦  beta  𝄀
+103  ¦  gamma  𝄀
+104  ¦  delta  𝄀
+105  ¦  epsilon
+drop database mi_schema_other;
+create table cased (ID int primary key, Name varchar(30));
+insert all into cased (id, NAME) values (id, name) into cased (Id, name) values (id + 10, upper(name)) select id, name from src where id <= 2;
+select * from cased order by ID;
+➤ id[4,32,0]  ¦  name[12,30,0]  𝄀
+1  ¦  alpha  𝄀
+2  ¦  beta  𝄀
+11  ¦  ALPHA  𝄀
+12  ¦  BETA
+insert all into cased (cased.id, cased.name) values (id + 20, name) select id, name from src where id = 1;
+insert all into cased (other.id, cased.name) values (id + 30, name) select id, name from src where id = 1;
+Unknown column 'other.id' in 'field list'
+select count(*) from cased;
+➤ count(*)[-5,64,0]  𝄀
+5
+create table union_t (id int primary key, a int default 1, b int default 2, c varchar(10) default 'c');
+insert all
+into union_t (id, a) values (id, 10)
+into union_t (id, b) values (id + 10, 20)
+into union_t (id, c) values (id + 20, 'x')
+into union_t (id, a, b, c) values (id + 30, 1, 2, 'y')
+select id from src;
+select * from union_t order by id;
+➤ id[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  ¦  c[12,10,0]  𝄀
+1  ¦  10  ¦  2  ¦  c  𝄀
+2  ¦  10  ¦  2  ¦  c  𝄀
+3  ¦  10  ¦  2  ¦  c  𝄀
+4  ¦  10  ¦  2  ¦  c  𝄀
+5  ¦  10  ¦  2  ¦  c  𝄀
+11  ¦  1  ¦  20  ¦  c  𝄀
+12  ¦  1  ¦  20  ¦  c  𝄀
+13  ¦  1  ¦  20  ¦  c  𝄀
+14  ¦  1  ¦  20  ¦  c  𝄀
+15  ¦  1  ¦  20  ¦  c  𝄀
+21  ¦  1  ¦  2  ¦  x  𝄀
+22  ¦  1  ¦  2  ¦  x  𝄀
+23  ¦  1  ¦  2  ¦  x  𝄀
+24  ¦  1  ¦  2  ¦  x  𝄀
+25  ¦  1  ¦  2  ¦  x  𝄀
+31  ¦  1  ¦  2  ¦  y  𝄀
+32  ¦  1  ¦  2  ¦  y  𝄀
+33  ¦  1  ¦  2  ¦  y  𝄀
+34  ¦  1  ¦  2  ¦  y  𝄀
+35  ¦  1  ¦  2  ¦  y  𝄀
+101  ¦  10  ¦  2  ¦  c  𝄀
+102  ¦  10  ¦  2  ¦  c  𝄀
+103  ¦  10  ¦  2  ¦  c  𝄀
+104  ¦  10  ¦  2  ¦  c  𝄀
+105  ¦  10  ¦  2  ¦  c  𝄀
+111  ¦  1  ¦  20  ¦  c  𝄀
+112  ¦  1  ¦  20  ¦  c  𝄀
+113  ¦  1  ¦  20  ¦  c  𝄀
+114  ¦  1  ¦  20  ¦  c  𝄀
+115  ¦  1  ¦  20  ¦  c  𝄀
+121  ¦  1  ¦  2  ¦  x  𝄀
+122  ¦  1  ¦  2  ¦  x  𝄀
+123  ¦  1  ¦  2  ¦  x  𝄀
+124  ¦  1  ¦  2  ¦  x  𝄀
+125  ¦  1  ¦  2  ¦  x  𝄀
+131  ¦  1  ¦  2  ¦  y  𝄀
+132  ¦  1  ¦  2  ¦  y  𝄀
+133  ¦  1  ¦  2  ¦  y  𝄀
+134  ¦  1  ¦  2  ¦  y  𝄀
+135  ¦  1  ¦  2  ¦  y
+insert all into narrow (id, name) values (id) select id, name from src;
+invalid input: insert values does not match the number of columns
+insert all into narrow select id, name, amount from src;
+invalid input: insert values does not match the number of columns
+insert all into narrow (id, nosuch) values (id, name) select id, name from src;
+Unknown column 'nosuch' in 'narrow'
+insert all into nosuch_table (id) values (id) select id from src;
+no such table mi_schema.nosuch_table
+create view v_src as select id, name from src;
+insert all into v_src (id, name) values (id, name) select id, name from src;
+invalid input: cannot insert/update/delete from view
+select count(*) from narrow;
+➤ count(*)[-5,64,0]  𝄀
+5
+drop database mi_schema;

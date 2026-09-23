@@ -31,8 +31,9 @@ import (
 )
 
 type MockSearch struct {
-	Idxcfg vectorindex.IndexConfig
-	Tblcfg vectorindex.IndexTableConfig
+	Idxcfg  vectorindex.IndexConfig
+	Tblcfg  vectorindex.IndexTableConfig
+	BuildTs int64
 }
 
 func (m *MockSearch) Search(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig) (keys any, distances []float64, err error) {
@@ -40,6 +41,8 @@ func (m *MockSearch) Search(sqlproc *sqlexec.SqlProcess, query any, rt vectorind
 	return []int64{1}, []float64{2.0}, nil
 }
 
+func (m *MockSearch) Preload(*sqlexec.SqlProcess) error { return nil }
+func (m *MockSearch) GetIndexSize() (int64, int64)      { return 0, 0 }
 func (m *MockSearch) Destroy() {
 }
 
@@ -62,6 +65,8 @@ func (m *MockAnySearch) Search(sqlproc *sqlexec.SqlProcess, query any, rt vector
 	return []any{any(1)}, []float64{2.0}, nil
 }
 
+func (m *MockAnySearch) Preload(*sqlexec.SqlProcess) error { return nil }
+func (m *MockAnySearch) GetIndexSize() (int64, int64)      { return 0, 0 }
 func (m *MockAnySearch) Destroy() {
 }
 
@@ -84,6 +89,8 @@ func (m *MockSearchLoadError) Search(sqlproc *sqlexec.SqlProcess, query any, rt 
 	return []int64{1}, []float64{2.0}, nil
 }
 
+func (m *MockSearchLoadError) Preload(*sqlexec.SqlProcess) error { return nil }
+func (m *MockSearchLoadError) GetIndexSize() (int64, int64)      { return 0, 0 }
 func (m *MockSearchLoadError) Destroy() {
 
 }
@@ -106,6 +113,8 @@ func (m *MockSearchSearchError) Search(sqlproc *sqlexec.SqlProcess, query any, r
 	return nil, nil, moerr.NewInternalErrorNoCtx("Search error")
 }
 
+func (m *MockSearchSearchError) Preload(*sqlexec.SqlProcess) error { return nil }
+func (m *MockSearchSearchError) GetIndexSize() (int64, int64)      { return 0, 0 }
 func (m *MockSearchSearchError) Destroy() {
 
 }
@@ -161,7 +170,9 @@ func (m *MockRuntimeSearch) SearchFloat32(proc *sqlexec.SqlProcess, query any, r
 	return nil
 }
 
-func (m *MockRuntimeSearch) Destroy() {}
+func (m *MockRuntimeSearch) Preload(*sqlexec.SqlProcess) error { return nil }
+func (m *MockRuntimeSearch) GetIndexSize() (int64, int64)      { return 0, 0 }
+func (m *MockRuntimeSearch) Destroy()                          {}
 
 func (m *MockRuntimeSearch) Load(*sqlexec.SqlProcess) error {
 	m.loads++
@@ -238,6 +249,178 @@ func TestCacheRemovePrefix(t *testing.T) {
 	Cache.Destroy()
 }
 
+// emptyGenSearch is a MockSearch that reports EmptyGeneration, exercising the cache's
+// not-cache-empty path (fulltext2's base-less + cdc_tail-less generation).
+type emptyGenSearch struct {
+	MockSearch
+	empty bool
+}
+
+func (m *emptyGenSearch) EmptyGeneration() bool { return m.empty }
+
+// TestCacheNotCacheEmpty: a loaded generation reporting EmptyGeneration (no tag=0 base, no
+// tag=1 cdc_tail) is served but NOT retained, so the next query reloads and picks up the base
+// once it appears -- the deterministic guard for the copy-alter base-less window regression. A
+// data-bearing generation is cached as usual. Covers both the Search and SearchInto paths.
+func TestCacheNotCacheEmpty(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	sqlproc := sqlexec.NewSqlProcess(proc)
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(8)}
+	idxcfg.Usearch.Metric = usearch.L2sq
+	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
+	fp32a := []float32{1, 2, 3, 4, 5, 6, 7, 8}
+
+	Cache = NewVectorIndexCache()
+	// Empty generation via Search: served, then evicted (not retained).
+	empty := &emptyGenSearch{MockSearch: MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}, empty: true}
+	_, _, err := Cache.Search(sqlproc, "empty_idx", empty, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+	require.Nil(t, err)
+	_, ok := Cache.IndexMap.Load("empty_idx")
+	require.False(t, ok, "a base-less + cdc_tail-less generation must not be retained")
+
+	// Non-empty generation via Search: cached as usual.
+	full := &emptyGenSearch{MockSearch: MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}, empty: false}
+	_, _, err = Cache.Search(sqlproc, "full_idx", full, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+	require.Nil(t, err)
+	_, ok = Cache.IndexMap.Load("full_idx")
+	require.True(t, ok, "a data-bearing generation must be cached")
+
+	// SearchInto path: same not-cache-empty contract.
+	var out vectorindex.SearchOutput
+	empty2 := &emptyGenSearch{MockSearch: MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}, empty: true}
+	require.Nil(t, Cache.SearchInto(sqlproc, "empty_idx2", empty2, fp32a, vectorindex.RuntimeConfig{Limit: 4}, &out))
+	_, ok = Cache.IndexMap.Load("empty_idx2")
+	require.False(t, ok, "SearchInto must not retain a base-less + cdc_tail-less generation")
+
+	Cache.Destroy()
+}
+
+// baseAwareSearch reports EmptyGeneration and returns a configurable result, so a reload can
+// observe a different (populated) generation than the evicted base-less one.
+type baseAwareSearch struct {
+	MockSearch
+	empty bool
+	keys  []int64
+	// searchErr, when set, fails the search AFTER the load succeeded -- the shape of an
+	// entries scan that errors or is cancelled on a loaded generation.
+	searchErr error
+}
+
+func (m *baseAwareSearch) EmptyGeneration() bool { return m.empty }
+
+func (m *baseAwareSearch) Search(sqlproc *sqlexec.SqlProcess, query any, rt vectorindex.RuntimeConfig) (any, []float64, error) {
+	if m.searchErr != nil {
+		return nil, nil, m.searchErr
+	}
+	return m.keys, make([]float64, len(m.keys)), nil
+}
+
+func (m *baseAwareSearch) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, out *vectorindex.SearchOutput) error {
+	if m.searchErr != nil {
+		return m.searchErr
+	}
+	return nil
+}
+
+// TestCacheNotCacheEmptyReloadsBase is the deterministic #28837 closure a SQL BVT cannot prove:
+// the copy-alter prewarm cannot be held before the async REINDEX publishes the base, so its
+// count(*)>=0 passes whether or not the base-less generation was retained. Here the two loads
+// are ordered by hand. A base-less generation (REINDEX not yet done) is served empty and, by
+// the not-cache-empty fix, is NOT retained. When the base is published, the SAME cache and key
+// reload a populated generation and return its rows -- with NO RemoveIdle (CDC flush) and NO
+// HouseKeeping (staleness sweep) in between. Were the base-less generation retained, the second
+// Search would LoadOrStore-hit it and return empty (the bug), so the []int64{42} assertion has
+// teeth.
+func TestCacheNotCacheEmptyReloadsBase(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	sqlproc := sqlexec.NewSqlProcess(proc)
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(8)}
+	idxcfg.Usearch.Metric = usearch.L2sq
+	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
+	fp32a := []float32{1, 2, 3, 4, 5, 6, 7, 8}
+
+	Cache = NewVectorIndexCache()
+	t.Cleanup(func() { Cache.Destroy() })
+	key := "reload_idx"
+
+	// Base-less initialization window: served empty, and not retained.
+	empty := &baseAwareSearch{MockSearch: MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}, empty: true, keys: []int64{}}
+	k1, _, err := Cache.Search(sqlproc, key, empty, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+	require.Nil(t, err)
+	require.Empty(t, k1.([]int64))
+	_, ok := Cache.IndexMap.Load(key)
+	require.False(t, ok, "a base-less + cdc_tail-less generation must not be retained")
+
+	// Base published. No RemoveIdle, no HouseKeeping -- the reload happens purely because the
+	// empty generation was evicted, so the same key LoadOrStore-misses and loads the base.
+	base := &baseAwareSearch{MockSearch: MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}, empty: false, keys: []int64{42}}
+	k2, _, err := Cache.Search(sqlproc, key, base, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+	require.Nil(t, err)
+	require.Equal(t, []int64{42}, k2.([]int64), "the same CN must reload and pick up the published base")
+	_, ok = Cache.IndexMap.Load(key)
+	require.True(t, ok, "a data-bearing generation must be retained")
+}
+
+// TestCacheNotCacheEmptyRetiresOnSearchError is the failure-path twin of the test above, and the
+// closure a success-only eviction misses: the loader's own query can fail AFTER Load -- an
+// IVF-FLAT entries scan that errors or is cancelled -- and the entry it loaded stays resident at
+// STATUS_LOADED. Only the loader ever retires an empty generation (a later caller finds
+// loaded==true and skips it), and IVF-FLAT has no IsStale, so a generation stranded here would
+// keep answering from the NULL-centroid placeholder -- bucket-1 routing -- for as long as traffic
+// refreshed its TTL, which is the #29011 bug reached through the error path. Both Search and
+// SearchInto must retire it.
+func TestCacheNotCacheEmptyRetiresOnSearchError(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	sqlproc := sqlexec.NewSqlProcess(proc)
+	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(8)}
+	idxcfg.Usearch.Metric = usearch.L2sq
+	tblcfg := vectorindex.IndexTableConfig{DbName: "db", SrcTable: "src", MetadataTable: "__secondary_meta", IndexTable: "__secondary_index"}
+	fp32a := []float32{1, 2, 3, 4, 5, 6, 7, 8}
+	scanErr := moerr.NewInternalErrorNoCtx("entries scan failed")
+
+	Cache = NewVectorIndexCache()
+	t.Cleanup(func() { Cache.Destroy() })
+
+	// --- Search path -------------------------------------------------------------------
+	key := "retire_on_err"
+
+	// Async-build window: the load sees the placeholder (empty generation) and the query that
+	// loaded it then fails. The error propagates, and the empty generation is NOT left behind.
+	broken := &baseAwareSearch{MockSearch: MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}, empty: true, searchErr: scanErr}
+	_, _, err := Cache.Search(sqlproc, key, broken, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+	require.ErrorIs(t, err, scanErr, "the algorithm error reaches the caller unchanged")
+	_, ok := Cache.IndexMap.Load(key)
+	require.False(t, ok, "a failed query must not strand the empty generation it loaded")
+
+	// The build commits the real centroids under the SAME version, so the same key. With no
+	// RemoveIdle and no HouseKeeping in between, the next query reloads purely because the
+	// empty generation was retired. Were it retained, this would LoadOrStore-hit the broken
+	// entry and fail again with scanErr instead of returning the base.
+	base := &baseAwareSearch{MockSearch: MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}, empty: false, keys: []int64{42}}
+	k, _, err := Cache.Search(sqlproc, key, base, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+	require.Nil(t, err)
+	require.Equal(t, []int64{42}, k.([]int64), "the same CN must reload and pick up the published base")
+	_, ok = Cache.IndexMap.Load(key)
+	require.True(t, ok, "a data-bearing generation must be retained")
+
+	// --- SearchInto path ---------------------------------------------------------------
+	intoKey := "retire_on_err_into"
+	var out vectorindex.SearchOutput
+	brokenInto := &baseAwareSearch{MockSearch: MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}, empty: true, searchErr: scanErr}
+	require.ErrorIs(t, Cache.SearchInto(sqlproc, intoKey, brokenInto, fp32a, vectorindex.RuntimeConfig{Limit: 4}, &out), scanErr)
+	_, ok = Cache.IndexMap.Load(intoKey)
+	require.False(t, ok, "SearchInto must not strand the empty generation its failed query loaded")
+
+	// A NON-empty generation whose query fails is kept: the failure says nothing about the
+	// index, and evicting it would re-load a healthy index on every transient error.
+	fullKey := "keep_on_err"
+	brokenFull := &baseAwareSearch{MockSearch: MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}, empty: false, searchErr: scanErr}
+	_, _, err = Cache.Search(sqlproc, fullKey, brokenFull, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+	require.ErrorIs(t, err, scanErr)
+	_, ok = Cache.IndexMap.Load(fullKey)
+	require.True(t, ok, "a populated generation survives a failed query")
+}
+
 func TestCacheAny(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)
@@ -266,16 +449,23 @@ func TestCache(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
-	VectorIndexCacheTTL = 5 * time.Second
-	VectorIndexCacheTTL = 5 * time.Second
-	Cache = NewVectorIndexCache()
-	Cache.TickerInterval = 5 * time.Second
+	oldTTL := VectorIndexCacheTTL
+	oldCache := Cache
+	VectorIndexCacheTTL = 50 * time.Millisecond
+	cache := NewVectorIndexCache()
+	Cache = cache
+	cache.TickerInterval = 10 * time.Millisecond
+	t.Cleanup(func() {
+		cache.Destroy()
+		VectorIndexCacheTTL = oldTTL
+		Cache = oldCache
+	})
 
-	Cache.Once()
-	Cache.Once()
-	Cache.Once()
-	Cache.Once()
-	Cache.Once()
+	cache.Once()
+	cache.Once()
+	cache.Once()
+	cache.Once()
+	cache.Once()
 
 	idxcfg := vectorindex.IndexConfig{Type: "hnsw", Usearch: usearch.DefaultConfig(8)}
 	idxcfg.Usearch.Metric = usearch.L2sq
@@ -292,14 +482,15 @@ func TestCache(t *testing.T) {
 	}
 	require.Equal(t, distances[0], float64(2.0))
 
-	os.Stderr.WriteString("cache sleep\n")
-	time.Sleep(8 * time.Second)
-
-	// cache expired
+	os.Stderr.WriteString("cache expire\n")
+	require.Eventually(t, func() bool {
+		_, loaded := cache.IndexMap.Load(tblcfg.IndexTable)
+		return !loaded
+	}, time.Second, 10*time.Millisecond, "ticker housekeeping should evict the expired cache entry")
 
 	// new search
 	m3 := &MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}
-	anykeys2, distances, err := Cache.Search(sqlproc, tblcfg.IndexTable, m3, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+	anykeys2, distances, err := cache.Search(sqlproc, tblcfg.IndexTable, m3, fp32a, vectorindex.RuntimeConfig{Limit: 4})
 	require.Nil(t, err)
 	if keys2, ok := anykeys2.([]int64); ok {
 		require.Equal(t, len(keys2), 1)
@@ -307,28 +498,30 @@ func TestCache(t *testing.T) {
 	}
 	require.Equal(t, distances[0], float64(2.0))
 
-	os.Stderr.WriteString("cache.Destroy\n")
-	Cache.Destroy()
-	os.Stderr.WriteString("cache.Destroy end\n")
-	Cache = nil
 }
 
 func TestCacheConcurrent(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	sqlproc := sqlexec.NewSqlProcess(proc)
 
-	VectorIndexCacheTTL = 2 * time.Second
-	VectorIndexCacheTTL = 2 * time.Second
-	Cache = NewVectorIndexCache()
-	Cache.TickerInterval = 1 * time.Second
+	oldTTL := VectorIndexCacheTTL
+	oldCache := Cache
+	VectorIndexCacheTTL = 50 * time.Millisecond
+	cache := NewVectorIndexCache()
+	Cache = cache
+	cache.TickerInterval = 10 * time.Millisecond
+	t.Cleanup(func() {
+		cache.Destroy()
+		VectorIndexCacheTTL = oldTTL
+		Cache = oldCache
+	})
 
-	Cache.Once()
-	Cache.Once()
-	Cache.Once()
-	Cache.Once()
-	Cache.Once()
+	cache.Once()
+	cache.Once()
+	cache.Once()
+	cache.Once()
+	cache.Once()
 
-	time.Sleep(1999 * time.Millisecond)
 	var wg sync.WaitGroup
 	nthread := 8
 	for i := 0; i < nthread; i++ {
@@ -343,7 +536,7 @@ func TestCacheConcurrent(t *testing.T) {
 				m := &MockSearch{Idxcfg: idxcfg, Tblcfg: tblcfg}
 				//os.Stderr.WriteString("cache search\n")
 				fp32a := []float32{1, 2, 3, 4, 5, 6, 7, 8}
-				anykeys, distances, err := Cache.Search(sqlproc, tblcfg.IndexTable, m, fp32a, vectorindex.RuntimeConfig{Limit: 4})
+				anykeys, distances, err := cache.Search(sqlproc, tblcfg.IndexTable, m, fp32a, vectorindex.RuntimeConfig{Limit: 4})
 				require.Nil(t, err)
 				if keys, ok := anykeys.([]int64); ok {
 					require.Equal(t, len(keys), 1)
@@ -355,12 +548,10 @@ func TestCacheConcurrent(t *testing.T) {
 	}
 
 	wg.Wait()
-	time.Sleep(4 * time.Second)
-
-	os.Stderr.WriteString("cache.Destroy\n")
-	Cache.Destroy()
-	os.Stderr.WriteString("cache.Destroy end\n")
-	Cache = nil
+	require.Eventually(t, func() bool {
+		_, loaded := cache.IndexMap.Load("__secondary_index")
+		return !loaded
+	}, time.Second, 10*time.Millisecond, "ticker housekeeping should evict the expired concurrent cache entry")
 }
 
 func TestCacheConcurrentNewSearchAndDelete(t *testing.T) {
@@ -378,7 +569,6 @@ func TestCacheConcurrentNewSearchAndDelete(t *testing.T) {
 	Cache.Once()
 	Cache.Once()
 
-	time.Sleep(1999 * time.Millisecond)
 	var wg sync.WaitGroup
 	nthread := 8
 	for i := 0; i < nthread; i++ {
@@ -538,4 +728,36 @@ func (m *MockSearchSearchError) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vecto
 
 func (m *MockRuntimeSearch) SearchInto(_ *sqlexec.SqlProcess, _ any, _ vectorindex.RuntimeConfig, _ *vectorindex.SearchOutput) error {
 	return nil
+}
+
+// BuildTS stubs (fulltext2 async-freshness interface method).
+func (m *MockSearch) BuildTS() int64            { return m.BuildTs }
+func (m *MockAnySearch) BuildTS() int64         { return 0 }
+func (m *MockSearchLoadError) BuildTS() int64   { return 0 }
+func (m *MockSearchSearchError) BuildTS() int64 { return 0 }
+func (m *MockRuntimeSearch) BuildTS() int64     { return 0 }
+
+func TestGetBuildTS(t *testing.T) {
+	c := &VectorIndexCache{}
+
+	// No cached entry: not found, so the freshness gate proceeds (a search loads fresh).
+	_, found := c.GetBuildTS("missing")
+	require.False(t, found)
+
+	// A loaded generation reports its own build_ts (what a probe now would search).
+	// captureSize publishes Algo.BuildTS() to the entry atomic, exactly as Load does.
+	loaded := &VectorIndexSearch{Algo: &MockSearch{BuildTs: 42}}
+	loaded.captureSize()
+	loaded.Status.Store(STATUS_LOADED)
+	c.IndexMap.Store("idx", loaded)
+	ts, found := c.GetBuildTS("idx")
+	require.True(t, found)
+	require.Equal(t, int64(42), ts)
+
+	// A not-yet-loaded entry has no meaningful build_ts: not found.
+	preloaded := &VectorIndexSearch{Algo: &MockSearch{BuildTs: 99}}
+	preloaded.Status.Store(STATUS_NOT_INIT)
+	c.IndexMap.Store("idx2", preloaded)
+	_, found = c.GetBuildTS("idx2")
+	require.False(t, found)
 }

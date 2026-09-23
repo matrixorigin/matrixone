@@ -32,6 +32,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestGetNodeBasicInfoAdaptiveTop(t *testing.T) {
+	for _, verbose := range []bool{false, true} {
+		node := &plan2.Node{NodeType: plan2.Node_ADAPTIVE_TOP, NodeId: 3}
+		got, err := NewNodeDescriptionImpl(node).GetNodeBasicInfo(context.Background(),
+			&ExplainOptions{Format: EXPLAIN_FORMAT_TEXT, Verbose: verbose})
+		require.NoError(t, err)
+		require.Contains(t, got, "Adaptive Top")
+		if verbose {
+			require.Contains(t, got, "[3]")
+		}
+	}
+}
+
 func TestGetNodeBasicInfoApplyType(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -121,6 +134,20 @@ func TestPartitionTopNExplain(t *testing.T) {
 	require.Contains(t, title, "Partition Keys:")
 	require.Contains(t, title, "Sort Keys:")
 	require.Contains(t, title, "N: 2")
+}
+
+func TestHashPartitionExplain(t *testing.T) {
+	node := &plan2.Node{
+		NodeType:           plan2.Node_PARTITION,
+		PartitionAlgorithm: plan2.Node_PARTITION_ALGORITHM_HASH,
+	}
+	opts := &ExplainOptions{Format: EXPLAIN_FORMAT_TEXT}
+	name, err := NewNodeDescriptionImpl(node).GetNodeBasicInfo(context.Background(), opts)
+	require.NoError(t, err)
+	require.Equal(t, "Hash Partition", name)
+	jsonName, err := NewMarshalNodeImpl(node).GetNodeName(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, "Hash Partition", jsonName)
 }
 
 func TestSingleSql(t *testing.T) {
@@ -1098,6 +1125,7 @@ func TestExplainOrderedPercentile(t *testing.T) {
 	}{
 		{name: "ascending continuous", fn: "percentile_cont", want: "percentile_cont(0.95) WITHIN GROUP (ORDER BY tw.v ASC)"},
 		{name: "descending discrete", fn: "percentile_disc", desc: 1, want: "percentile_disc(0.95) WITHIN GROUP (ORDER BY tw.v DESC)"},
+		{name: "descending approximate", fn: "approx_percentile", desc: 1, want: "approx_percentile(0.95) WITHIN GROUP (ORDER BY tw.v DESC)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			registered, err := function.GetFunctionByName(ctx, tc.fn,
@@ -1123,6 +1151,24 @@ func TestExplainOrderedPercentile(t *testing.T) {
 			require.Equal(t, tc.want, buf.String())
 		})
 	}
+
+	t.Run("ordinary approximate remains ordinary", func(t *testing.T) {
+		registered, err := function.GetFunctionByName(ctx, "approx_percentile",
+			[]types.Type{types.T_int64.ToType(), types.T_float64.ToType()})
+		require.NoError(t, err)
+		expr := &plan2.Expr{
+			Typ: plan2.Type{Id: int32(types.T_float64)},
+			Expr: &plan2.Expr_F{F: &plan2.Function{
+				Func: &plan2.ObjectRef{
+					Obj: registered.GetEncodedOverloadID(), ObjName: "approx_percentile",
+				},
+				Args: []*plan2.Expr{value, percentile},
+			}},
+		}
+		buf := bytes.NewBuffer(nil)
+		require.NoError(t, describeExpr(ctx, expr, &ExplainOptions{}, buf))
+		require.Equal(t, "approx_percentile(tw.v, 0.95)", buf.String())
+	})
 
 	t.Run("invalid argument count", func(t *testing.T) {
 		err := explainOrderedPercentile(ctx, &plan2.Function{

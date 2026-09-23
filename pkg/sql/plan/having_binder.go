@@ -41,6 +41,15 @@ func NewHavingBinder(builder *QueryBuilder, ctx *BindContext) *HavingBinder {
 }
 
 func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
+	if aliasExpr, projectPos, ok := b.ctx.isAliasExpansion(astExpr); ok {
+		if projectPos >= 0 && int(projectPos) < len(b.ctx.projects) {
+			return DeepCopyExpr(b.ctx.projects[projectPos]), nil
+		}
+		previous := b.bindingProjectedAlias
+		b.bindingProjectedAlias = true
+		defer func() { b.bindingProjectedAlias = previous }()
+		return b.BindExpr(aliasExpr.Expr, depth, isRoot)
+	}
 	astStr := windowExprAstKey(astExpr)
 
 	if !b.insideAgg {
@@ -57,7 +66,33 @@ func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*p
 		}
 	}
 
-	if colPos, ok := b.ctx.aggregateByAst[astStr]; ok {
+	// Reuse time-window and aggregate results only outside aggregate arguments.
+	// Nested aggregate calls must reach BindAggFunc for the standard rejection.
+	if !b.insideAgg {
+		if colPos, ok := b.ctx.timeByAst[astStr]; ok {
+			if astStr != TimeWindowEnd && astStr != TimeWindowStart {
+				b.ctx.timeAsts = append(b.ctx.timeAsts, astExpr)
+			}
+			return makeTimeWindowProjectionExpr(b.GetContext(), b.ctx, astExpr, colPos)
+		}
+	}
+
+	if !b.insideAgg {
+		if colPos, ok := b.ctx.groupConcatAggregatePosition(astExpr); ok {
+			return &plan.Expr{
+				Typ: b.ctx.aggregates[colPos].Typ,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: b.ctx.aggregateTag,
+						ColPos: colPos,
+					},
+				},
+			}, nil
+		}
+	}
+
+	if colPos, ok := b.ctx.aggregateByAst[astStr]; ok &&
+		!isGroupConcatAggregateExpr(astExpr) {
 		if !b.insideAgg {
 			return &plan.Expr{
 				Typ: b.ctx.aggregates[colPos].Typ,
@@ -68,8 +103,6 @@ func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*p
 					},
 				},
 			}, nil
-		} else {
-			return nil, moerr.NewInvalidInput(b.GetContext(), "nestted aggregate function")
 		}
 	}
 
@@ -126,9 +159,12 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 			// suppressing ONLY_FULL_GROUP_BY checks for its source columns. The
 			// flag is scoped to this recursive bind so an anonymous expression
 			// written directly in HAVING still follows normal visibility rules.
+			if projectPos := b.ctx.projectedExprPosition(projected); projectPos >= 0 {
+				projected = b.ctx.wrapAliasExpansion(projected, projectPos)
+			}
 			previous := b.bindingProjectedAlias
 			b.bindingProjectedAlias = true
-			expr, err := b.baseBindExpr(projected, depth, isRoot)
+			expr, err := b.BindExpr(projected, depth, isRoot)
 			b.bindingProjectedAlias = previous
 			return expr, err
 		}
@@ -257,6 +293,48 @@ func validateCountArgs(ctx context.Context, funcName string, astExpr *tree.FuncE
 	return nil
 }
 
+type orderedSetAggregateSpec struct {
+	directArgumentCount       int
+	directArgumentName        string
+	directionMatters          bool
+	useStoredNumericContract  bool
+	rejectInTimeWindowContext bool
+}
+
+// orderedSetAggregateSpecFor centralizes the ordered-set aggregates whose
+// WITHIN GROUP input can be lowered to an existing aggregate overload. Exact
+// percentiles are returned even when WITHIN GROUP is absent so the binder can
+// keep their required-clause diagnostic. MEDIAN and APPROX_PERCENTILE retain
+// their established ordinary aggregate forms when the marker is absent.
+func orderedSetAggregateSpecFor(
+	funcName string,
+	withinGroup bool,
+) (orderedSetAggregateSpec, bool) {
+	switch strings.ToLower(funcName) {
+	case NameMedian:
+		return orderedSetAggregateSpec{
+			directArgumentCount:      0,
+			useStoredNumericContract: true,
+		}, withinGroup
+	case NameApproxPercentile:
+		return orderedSetAggregateSpec{
+			directArgumentCount:      1,
+			directArgumentName:       "percentile",
+			directionMatters:         true,
+			useStoredNumericContract: true,
+		}, withinGroup
+	case NamePercentileCont, NamePercentileDisc:
+		return orderedSetAggregateSpec{
+			directArgumentCount:       1,
+			directArgumentName:        "percentile",
+			directionMatters:          true,
+			rejectInTimeWindowContext: true,
+		}, true
+	default:
+		return orderedSetAggregateSpec{}, false
+	}
+}
+
 func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {
 	if b.insideAgg {
 		return nil, moerr.NewSyntaxErrorf(b.GetContext(), "aggregate function %s calls cannot be nested", funcName)
@@ -269,8 +347,8 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 	b.insideAgg = true
 	var expr *plan.Expr
 	var err error
-	if strings.EqualFold(funcName, NamePercentileCont) || strings.EqualFold(funcName, NamePercentileDisc) {
-		expr, err = b.bindOrderedSetPercentileAgg(funcName, astExpr, depth, isRoot)
+	if spec, ok := orderedSetAggregateSpecFor(funcName, astExpr.WithinGroup); ok {
+		expr, err = b.bindOrderedSetAggregate(funcName, astExpr, spec, depth, isRoot)
 	} else {
 		expr, err = b.bindPreparedNumericFuncExpr(funcName, astExpr.Exprs, depth)
 	}
@@ -304,6 +382,26 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 		if funcName != "max" && funcName != "min" && funcName != "any_value" {
 			expr.GetF().Func.Obj = int64(uint64(expr.GetF().Func.Obj) | function.Distinct)
 		}
+		// Single-argument COUNT/SUM/AVG is rewritten into a GROUP BY later. That
+		// path already carries a separate physical key and must retain the
+		// visible aggregate argument. The remaining DISTINCT aggregates hash
+		// their arguments directly (for example COUNT(DISTINCT a, b) and
+		// GROUP_CONCAT), so give those hash inputs the promoted-CHAR PAD SPACE
+		// canonical form locally.
+		canRewriteDistinctArgument :=
+			(funcName == "count" || funcName == "sum" || funcName == "avg") &&
+				len(expr.GetF().Args) == 1 &&
+				expr.GetF().Args[0].Typ.Id != int32(types.T_tuple)
+		if !canRewriteDistinctArgument {
+			for i := range expr.GetF().Args {
+				expr.GetF().Args[i], err = appendPadSpaceComparisonCastIfNeeded(
+					b.GetContext(), expr.GetF().Args[i])
+				if err != nil {
+					b.insideAgg = false
+					return nil, err
+				}
+			}
+		}
 	}
 	if funcName == NameGroupConcat {
 		if err := b.bindGroupConcatOrderBy(astExpr, expr, depth, isRoot); err != nil {
@@ -324,6 +422,12 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 	astStr := semanticAstKey(astExpr)
 	b.ctx.aggregateByAst[astStr] = colPos
 	b.ctx.aggregates = append(b.ctx.aggregates, expr)
+	if funcName == NameGroupConcat {
+		if b.ctx.groupConcatByExpr == nil {
+			b.ctx.groupConcatByExpr = make(map[*tree.FuncExpr]int32)
+		}
+		b.ctx.groupConcatByExpr[astExpr] = colPos
+	}
 
 	return &plan.Expr{
 		Typ: expr.Typ,
@@ -336,65 +440,54 @@ func (b *HavingBinder) BindAggFunc(funcName string, astExpr *tree.FuncExpr, dept
 	}, nil
 }
 
-// bindOrderedSetPercentileAgg converts the SQL-standard
-// PERCENTILE_{CONT,DISC}(p) WITHIN GROUP (ORDER BY value) shape into the
-// executor's ordinary two-argument aggregate shape: [value, p]. The direct
-// percentile argument is retained until compile time, where it is evaluated
-// and moved into the aggregate extra configuration.
-func (b *HavingBinder) bindOrderedSetPercentileAgg(
+// bindOrderedSetAggregate lowers an ordered-set call to the existing aggregate
+// overload shape: the single WITHIN GROUP ORDER BY expression becomes the
+// first executor argument, followed by any direct arguments. Aggregate-specific
+// execution remains unchanged.
+func validateOrderedSetAggregateShape(
+	ctx context.Context,
 	funcName string,
 	astExpr *tree.FuncExpr,
-	depth int32,
-	isRoot bool,
-) (*plan.Expr, error) {
-	if b.ctx != nil && b.ctx.timeTag > 0 {
-		return nil, moerr.NewNotSupported(b.GetContext(),
-			"ordered-set percentile aggregates in time windows")
-	}
+	spec orderedSetAggregateSpec,
+) (*tree.Order, error) {
 	if !astExpr.WithinGroup {
-		return nil, moerr.NewSyntaxErrorf(b.GetContext(),
+		return nil, moerr.NewSyntaxErrorf(ctx,
 			"%s requires WITHIN GROUP (ORDER BY ...)", funcName)
 	}
-	if len(astExpr.Exprs) != 1 {
-		return nil, moerr.NewSyntaxErrorf(b.GetContext(),
-			"%s requires exactly one percentile argument", funcName)
+	if len(astExpr.Exprs) != spec.directArgumentCount {
+		if spec.directArgumentCount == 0 {
+			return nil, moerr.NewSyntaxErrorf(ctx,
+				"%s WITHIN GROUP does not accept a direct argument", funcName)
+		}
+		return nil, moerr.NewSyntaxErrorf(ctx,
+			"%s requires exactly one %s argument", funcName, spec.directArgumentName)
 	}
 	if len(astExpr.OrderBy) != 1 {
-		return nil, moerr.NewSyntaxErrorf(b.GetContext(),
+		return nil, moerr.NewSyntaxErrorf(ctx,
 			"%s requires exactly one WITHIN GROUP ORDER BY expression", funcName)
 	}
 
 	orderExpr := astExpr.OrderBy[0]
 	if orderExpr == nil || orderExpr.Expr == nil {
-		return nil, moerr.NewSyntaxErrorf(b.GetContext(),
+		return nil, moerr.NewSyntaxErrorf(ctx,
 			"%s requires an ORDER BY expression", funcName)
 	}
-	value, err := b.BindExpr(orderExpr.Expr, depth, isRoot)
-	if err != nil {
-		return nil, err
-	}
-	percentile, err := b.BindExpr(astExpr.Exprs[0], depth, false)
-	if err != nil {
-		return nil, err
-	}
+	return orderExpr, nil
+}
 
-	var expr *plan.Expr
-	if b.builder == nil || b.builder.compCtx == nil {
-		expr, err = BindFuncExprImplByPlanExpr(
-			b.GetContext(), funcName, []*plan.Expr{value, percentile})
-	} else {
-		expr, err = bindFuncExprAndConstFold(
-			b.GetContext(), b.builder.compCtx.GetProcess(), funcName,
-			[]*plan.Expr{value, percentile},
-		)
-	}
-	if err != nil {
-		return nil, err
+func applyOrderedSetAggregateDirection(
+	ctx context.Context,
+	expr *plan.Expr,
+	spec orderedSetAggregateSpec,
+	orderExpr *tree.Order,
+) error {
+	if !spec.directionMatters {
+		return nil
 	}
 	fn := expr.GetF()
 	if fn == nil {
-		return nil, moerr.NewInternalError(b.GetContext(),
-			"invalid ordered-set percentile expression")
+		return moerr.NewInternalError(ctx,
+			"invalid ordered-set aggregate expression")
 	}
 	if orderExpr.Direction == tree.Descending {
 		fn.AggConfig = []byte{1}
@@ -402,6 +495,62 @@ func (b *HavingBinder) bindOrderedSetPercentileAgg(
 		fn.AggConfig = []byte{0}
 	}
 	fn.AggConfigType = plan.AggregateConfigType_AGG_CONFIG_NONE
+	return nil
+}
+
+func (b *HavingBinder) bindOrderedSetAggregate(
+	funcName string,
+	astExpr *tree.FuncExpr,
+	spec orderedSetAggregateSpec,
+	depth int32,
+	isRoot bool,
+) (*plan.Expr, error) {
+	if spec.rejectInTimeWindowContext && b.ctx != nil && b.ctx.timeTag > 0 {
+		return nil, moerr.NewNotSupported(b.GetContext(),
+			"ordered-set percentile aggregates in time windows")
+	}
+	orderExpr, err := validateOrderedSetAggregateShape(
+		b.GetContext(), funcName, astExpr, spec)
+	if err != nil {
+		return nil, err
+	}
+	value, err := b.BindExpr(orderExpr.Expr, depth, isRoot)
+	if err != nil {
+		return nil, err
+	}
+	args := make([]*plan.Expr, 1, 1+spec.directArgumentCount)
+	args[0] = value
+	for _, directArg := range astExpr.Exprs {
+		bound, bindErr := b.BindExpr(directArg, depth, false)
+		if bindErr != nil {
+			return nil, bindErr
+		}
+		args = append(args, bound)
+	}
+	if spec.useStoredNumericContract {
+		args, err = b.useStoredMySQLSpecialTypesForNumericContractWithProvenance(
+			b.GetContext(), funcName, args)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	var expr *plan.Expr
+	if b.builder == nil || b.builder.compCtx == nil {
+		expr, err = BindFuncExprImplByPlanExpr(b.GetContext(), funcName, args)
+	} else {
+		expr, err = bindFuncExprAndConstFold(
+			b.GetContext(), b.builder.compCtx.GetProcess(), funcName,
+			args,
+		)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if err = applyOrderedSetAggregateDirection(
+		b.GetContext(), expr, spec, orderExpr); err != nil {
+		return nil, err
+	}
 	return expr, nil
 }
 
@@ -592,10 +741,9 @@ func (b *HavingBinder) bindGroupConcatOrderBy(
 			}
 		}
 
-		if _, ok := orderExpr.(*tree.Subquery); ok {
-			return moerr.NewNotSupported(b.GetContext(), "subquery in group_concat ORDER BY")
-		}
-
+		// Keep scalar subqueries as aggregate arguments here. QueryBuilder
+		// flattens every aggregate argument before constructing the AGG node,
+		// including the hidden arguments used as GROUP_CONCAT order keys.
 		var boundExpr *plan.Expr
 		if orderArgIndex >= 0 {
 			// Reuse the already-bound aggregate argument. Rebinding an ordinal
@@ -611,9 +759,6 @@ func (b *HavingBinder) bindGroupConcatOrderBy(
 			if err != nil {
 				return err
 			}
-		}
-		if hasSubquery(boundExpr) {
-			return moerr.NewNotSupported(b.GetContext(), "subquery in group_concat ORDER BY")
 		}
 		// A literal key is equal for every input row and has no effect on the
 		// ordering. Do not expose it as an executor key (NULL has type ANY).
@@ -691,7 +836,7 @@ func (b *HavingBinder) groupConcatOrderKey(expr *plan.Expr) (*plan.Expr, error) 
 		}
 	}
 	if storageType := b.ctx.mysqlSpecialOrderTypeForExpr(expr); storageType != nil {
-		return makeMySQLSpecialOrderKey(b.GetContext(), expr, storageType)
+		return b.builder.mysqlSpecialOrderKey(b.ctx, expr, storageType)
 	}
 	return expr, nil
 }
@@ -797,6 +942,7 @@ func (b *HavingBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExp
 
 	astStr := semanticAstKey(astExpr)
 	b.ctx.timeByAst[astStr] = colPos
+	b.ctx.timeAsts = append(b.ctx.timeAsts, astExpr)
 
 	return makeTimeWindowProjectionExpr(b.GetContext(), b.ctx, astExpr, colPos)
 }

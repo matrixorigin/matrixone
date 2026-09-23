@@ -70,6 +70,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergetop"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minusall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mongoscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/offset"
@@ -204,6 +205,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.NeedEval = t.NeedEval
 		op.SpillMem = t.SpillMem
 		op.GroupingFlag = t.GroupingFlag
+		op.DynamicGrouping = t.DynamicGrouping
 		op.GroupBy = t.GroupBy
 		op.GroupByHashKey = t.GroupByHashKey
 		op.Aggs = t.Aggs
@@ -275,6 +277,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		t := sourceOp.(*limit.Limit)
 		op := limit.NewArgument()
 		op.LimitExpr = t.LimitExpr
+		op.WithFoundRows(t.IsFoundRowsOwner())
+		op.WithFoundRowsDrain(t.DrainsForFoundRows())
 		op.SetInfo(&info)
 		return op
 
@@ -282,6 +286,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		t := sourceOp.(*offset.Offset)
 		op := offset.NewArgument()
 		op.OffsetExpr = t.OffsetExpr
+		op.WithFoundRows(t.IsFoundRowsOwner())
 		op.SetInfo(&info)
 		return op
 	case vm.Order:
@@ -311,6 +316,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		t := sourceOp.(*projection.Projection)
 		op := projection.NewArgument()
 		op.ProjectList = t.ProjectList
+		op.GroupingSetCount = t.GroupingSetCount
+		op.GroupingFlags = t.GroupingFlags
 		op.SetInfo(&info)
 		return op
 	case vm.Filter:
@@ -325,6 +332,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		t := sourceOp.(*top.Top)
 		op := top.NewArgument()
 		op.Limit = t.Limit
+		op.OrderedOutput = t.OrderedOutput
 		if t.TopValueTag > 0 {
 			op.TopValueTag = t.TopValueTag + int32(index)<<16
 		}
@@ -338,6 +346,9 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.Limit = t.Limit
 		op.PartitionByCount = t.PartitionByCount
 		op.PreReduce = t.PreReduce
+		op.WithTies = t.WithTies
+		op.Algorithm = t.Algorithm
+		op.SpillMem = t.SpillMem
 		op.SetInfo(&info)
 		return op
 	case vm.Window:
@@ -347,6 +358,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.Fs = t.Fs
 		op.Aggs = t.Aggs
 		op.PartitionTopN = t.PartitionTopN
+		op.SpillThreshold = t.SpillThreshold
 		op.SetInfo(&info)
 		return op
 	case vm.MergeTop:
@@ -354,6 +366,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op := mergetop.NewArgument()
 		op.Limit = t.Limit
 		op.Fs = t.Fs
+		op.OrderedStreams = t.OrderedStreams
 		op.SetInfo(&info)
 		return op
 	case vm.MergeOrder:
@@ -364,15 +377,27 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.SetInfo(&info)
 		return op
 	case vm.Intersect:
+		t := sourceOp.(*intersect.Intersect)
 		op := intersect.NewArgument()
+		op.KeyExprs = t.KeyExprs
 		op.SetInfo(&info)
 		return op
 	case vm.Minus: // 2
+		t := sourceOp.(*minus.Minus)
 		op := minus.NewArgument()
+		op.KeyExprs = t.KeyExprs
+		op.SetInfo(&info)
+		return op
+	case vm.MinusAll:
+		t := sourceOp.(*minusall.MinusAll)
+		op := minusall.NewArgument()
+		op.KeyExprs = t.KeyExprs
 		op.SetInfo(&info)
 		return op
 	case vm.IntersectAll:
+		t := sourceOp.(*intersectall.IntersectAll)
 		op := intersectall.NewArgument()
+		op.KeyExprs = t.KeyExprs
 		op.SetInfo(&info)
 		return op
 	case vm.Merge:
@@ -429,6 +454,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 					FileSize:               t.Es.FileSize,
 					FileOffsetTotal:        t.Es.FileOffsetTotal,
 					ParquetRowGroupShards:  t.Es.ParquetRowGroupShards,
+					ParquetWholeFileFanout: t.Es.ParquetWholeFileFanout,
 					Extern:                 t.Es.Extern,
 					StrictSqlMode:          t.Es.StrictSqlMode,
 					ParallelLoad:           t.Es.ParallelLoad,
@@ -481,6 +507,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.RuntimeFilterSpec = plan2.DeepCopyRuntimeFilterSpec(sourceArg.RuntimeFilterSpec)
 		op.CurrentShuffleIdx = int32(index)
 		op.DrainAllBuckets = sourceArg.DrainAllBuckets
+		op.StringHashKey = sourceArg.StringHashKey
 		op.SetInfo(&info)
 		return op
 	case vm.Dispatch:
@@ -554,6 +581,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.ClusterByExpr = t.ClusterByExpr
 		op.ColOffset = t.ColOffset
 		op.RejectZeroTemporal = t.RejectZeroTemporal
+		op.TrackAutoIncrementGenerated = t.TrackAutoIncrementGenerated
+		op.AutoIncrementGeneratedColumn = t.AutoIncrementGeneratedColumn
 		op.HasTargetSelector = t.HasTargetSelector
 		op.TargetRowNumberCol = t.TargetRowNumberCol
 		op.TargetActiveCol = t.TargetActiveCol
@@ -668,6 +697,20 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.DedupColTypes = t.DedupColTypes
 		op.UpdateColIdxList = t.UpdateColIdxList
 		op.UpdateColExprList = t.UpdateColExprList
+		op.HasODKUAffectedRows = t.HasODKUAffectedRows
+		op.AffectedRowsResultPos = t.AffectedRowsResultPos
+		op.PhysicalChangedResultPos = t.PhysicalChangedResultPos
+		op.UpdateCheckColIdxList = t.UpdateCheckColIdxList
+		op.CountFoundRows = t.CountFoundRows
+		op.EmitActionRows = t.EmitActionRows
+		op.ActionFinalResultPos = t.ActionFinalResultPos
+		op.ForeignKeyChecks = make([]dedupjoin.ODKUForeignKeyCheck, len(t.ForeignKeyChecks))
+		for i, check := range t.ForeignKeyChecks {
+			op.ForeignKeyChecks[i] = dedupjoin.ODKUForeignKeyCheck{
+				ColIdxList:           slices.Clone(check.ColIdxList),
+				EligibilityResultPos: check.EligibilityResultPos,
+			}
+		}
 		op.DelColIdx = t.DelColIdx
 		op.DedupDeleteMarkerColIdx = t.DedupDeleteMarkerColIdx
 		op.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
@@ -821,6 +864,9 @@ func constructFuzzyFilter(node, tableScan, sinkScan *plan.Node) *fuzzyfilter.Fuz
 
 func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, proc *process.Process) (*preinsert.PreInsert, error) {
 	preCtx := node.PreInsertCtx
+	if err := incrservice.CheckAutoIDCache(proc.Ctx, proc.GetService(), preCtx.TableDef.GetAutoIdCache()); err != nil {
+		return nil, err
+	}
 	schemaName := preCtx.Ref.SchemaName
 	var err error
 
@@ -870,6 +916,8 @@ func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, 
 	op.CompPkeyExpr = preCtx.CompPkeyExpr
 	op.ClusterByExpr = preCtx.ClusterByExpr
 	op.ColOffset = preCtx.ColOffset
+	op.TrackAutoIncrementGenerated = preCtx.TrackAutoIncrementGenerated
+	op.AutoIncrementGeneratedColumn = preCtx.AutoIncrementGeneratedColumn
 	op.HasTargetSelector = preCtx.HasTargetSelector
 	op.TargetRowNumberCol = preCtx.TargetRowNumberCol
 	op.TargetActiveCol = preCtx.TargetActiveCol
@@ -981,6 +1029,14 @@ func constructMultiUpdate(
 		if updateCtx.ChangedRowsCol != nil {
 			changedRowsCol := int(updateCtx.ChangedRowsCol.ColPos)
 			arg.MultiUpdateCtx[i].ChangedRowsCol = &changedRowsCol
+		}
+		if updateCtx.AffectedRowsWeightCol != nil {
+			col := int(updateCtx.AffectedRowsWeightCol.ColPos)
+			arg.MultiUpdateCtx[i].AffectedRowsWeightCol = &col
+		}
+		if updateCtx.PhysicalChangedRowsCol != nil {
+			col := int(updateCtx.PhysicalChangedRowsCol.ColPos)
+			arg.MultiUpdateCtx[i].PhysicalChangedRowsCol = &col
 		}
 	}
 	arg.Action = action
@@ -1339,29 +1395,37 @@ func buildExternalInsertArg(
 func constructProjection(node *plan.Node) *projection.Projection {
 	arg := projection.NewArgument()
 	arg.ProjectList = node.ProjectList
+	if count, ok := plan2.DecodeGroupingSetExpandOption(node.ExtraOptions); ok {
+		arg.GroupingSetCount = count
+		arg.GroupingFlags = node.GroupingFlag
+	}
 	return arg
 }
 
-func constructExternal(node *plan.Node, param *tree.ExternParam, ctx context.Context, fileList []string, FileSize []int64, fileOffset []*pipeline.FileOffset, strictSqlMode bool) *external.External {
+func constructExternal(node *plan.Node, param *tree.ExternParam, ctx context.Context, fileList []string, FileSize []int64, fileOffset []*pipeline.FileOffset, strictSqlMode bool, arrowScope pipeline.ArrowExecutionScope, arrowRuntime ...*arrowCompileRuntime) *external.External {
 	attrs := buildExternalAttrs(node)
-
-	return external.NewArgument().WithEs(
+	if param != nil && param.Format == tree.ARROW {
+		attrs = buildArrowExternalAttrs(node)
+	}
+	op := external.NewArgument().WithEs(
 		&external.ExternalParam{
 			ExParamConst: external.ExParamConst{
-				Attrs:           attrs,
-				Cols:            node.TableDef.Cols,
-				ColumnListLen:   externalColumnListLen(node),
-				Extern:          param,
-				FileOffsetTotal: fileOffset,
-				CreateSql:       node.TableDef.Createsql,
-				Ctx:             ctx,
-				FileList:        fileList,
-				FileSize:        FileSize,
-				ClusterTable:    node.GetClusterTable(),
-				StrictSqlMode:   strictSqlMode,
-				DatastreamScan:  node.ExternScan.GetDatastreamScan(),
-				ForeignScan:     node.ExternScan.GetForeignScan(),
-				KafkaScan:       node.ExternScan.GetKafkaScan(),
+				ArrowExecutionScope:   arrowScope,
+				ArrowForceMaterialize: param.ArrowForceMaterialize,
+				Attrs:                 attrs,
+				Cols:                  node.TableDef.Cols,
+				ColumnListLen:         externalColumnListLen(node),
+				Extern:                param,
+				FileOffsetTotal:       fileOffset,
+				CreateSql:             node.TableDef.Createsql,
+				Ctx:                   ctx,
+				FileList:              fileList,
+				FileSize:              FileSize,
+				ClusterTable:          node.GetClusterTable(),
+				StrictSqlMode:         strictSqlMode,
+				DatastreamScan:        node.ExternScan.GetDatastreamScan(),
+				ForeignScan:           node.ExternScan.GetForeignScan(),
+				KafkaScan:             node.ExternScan.GetKafkaScan(),
 				LoadEmptyNumericAsZero: param.ExternType == int32(plan.ExternType_LOAD) &&
 					(param.Parallel || param.ParallelLoadRequested),
 			},
@@ -1373,6 +1437,39 @@ func constructExternal(node *plan.Node, param *tree.ExternParam, ctx context.Con
 			},
 		},
 	)
+	if len(arrowRuntime) > 0 && arrowRuntime[0] != nil {
+		op.Es.ArrowObjectIdentities = arrowRuntime[0].identitiesFor(fileList)
+		op.Es.ArrowRecordBatchShards = arrowRuntime[0].shardsFor(fileList)
+		op.Es.ArrowSchemaFingerprint = append([]byte(nil), arrowRuntime[0].schemaFingerprint...)
+		op.Es.ArrowConversionPlanVersion = arrowRuntime[0].conversionPlanVersion
+	}
+	return op
+}
+
+// buildArrowExternalAttrs uses the LOAD binder's positive source-column map.
+// Generated/default/hidden target columns remain owned by the ordinary
+// projection/insert pipeline and must never be invented by the Arrow decoder.
+func buildArrowExternalAttrs(node *plan.Node) []plan.ExternAttr {
+	if node == nil || node.TableDef == nil || node.ExternScan == nil {
+		return nil
+	}
+	mapping := node.ExternScan.TbColToDataCol
+	attrs := make([]plan.ExternAttr, 0, len(mapping))
+	for i, col := range node.TableDef.Cols {
+		if col == nil || col.Hidden || col.GeneratedCol != nil {
+			continue
+		}
+		fieldIndex, ok := mapping[col.Name]
+		if !ok || fieldIndex < 0 {
+			continue
+		}
+		attrs = append(attrs, plan.ExternAttr{
+			ColName:       col.Name,
+			ColIndex:      int32(i),
+			ColFieldIndex: fieldIndex,
+		})
+	}
+	return attrs
 }
 
 func buildExternalAttrs(node *plan.Node) []plan.ExternAttr {
@@ -1417,6 +1514,7 @@ func constructTableFunction(node *plan.Node, qry *plan.Query) *table_function.Ta
 	arg.IsSingle = node.TableDef.TblFunc.IsSingle
 	arg.FulltextSourceRef = node.TableDef.TblFunc.FulltextSourceRef
 	arg.FulltextIndexRef = node.TableDef.TblFunc.FulltextIndexRef
+	arg.ScanSnapshot = node.ScanSnapshot
 	arg.Limit = node.Limit
 	// probe side runtime filter specs
 	arg.RuntimeFilterSpecs = node.RuntimeFilterProbeList
@@ -1522,6 +1620,24 @@ func constructDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, pro
 		arg.DedupBuildKeepLast = node.DedupJoinCtx.DedupBuildKeepLast
 		arg.UpdateColIdxList = node.DedupJoinCtx.UpdateColIdxList
 		arg.UpdateColExprList = node.DedupJoinCtx.UpdateColExprList
+		if node.DedupJoinCtx.AffectedRowsCol != nil && node.DedupJoinCtx.PhysicalChangedRowsCol != nil {
+			arg.HasODKUAffectedRows = true
+			arg.AffectedRowsResultPos = findJoinResultPos(result, node.DedupJoinCtx.AffectedRowsCol)
+			arg.PhysicalChangedResultPos = findJoinResultPos(result, node.DedupJoinCtx.PhysicalChangedRowsCol)
+			arg.UpdateCheckColIdxList = node.DedupJoinCtx.UpdateCheckColIdxList
+			arg.CountFoundRows = node.DedupJoinCtx.CountFoundRows
+		}
+		arg.EmitActionRows = node.DedupJoinCtx.EmitActionRows
+		if arg.EmitActionRows {
+			arg.ActionFinalResultPos = findJoinResultPos(result, node.DedupJoinCtx.ActionFinalCol)
+		}
+		arg.ForeignKeyChecks = make([]dedupjoin.ODKUForeignKeyCheck, len(node.DedupJoinCtx.ForeignKeyChecks))
+		for i, check := range node.DedupJoinCtx.ForeignKeyChecks {
+			arg.ForeignKeyChecks[i] = dedupjoin.ODKUForeignKeyCheck{
+				ColIdxList:           slices.Clone(check.ColIdxList),
+				EligibilityResultPos: findJoinResultPos(result, check.EligibilityCol),
+			}
+		}
 		// OldColList identifies the row being updated.  Both FAIL and IGNORE
 		// must exclude that row from duplicate detection: an UPDATE that keeps
 		// a primary/unique key unchanged is not a duplicate of itself.
@@ -1552,6 +1668,18 @@ func constructDedupJoin(node *plan.Node, leftTypes, rightTypes []types.Type, pro
 		panic("wrong joinmap tag!")
 	}
 	return arg
+}
+
+func findJoinResultPos(result []colexec.ResultPos, col *plan.ColRef) int32 {
+	if col == nil {
+		return -1
+	}
+	for i, pos := range result {
+		if pos.Rel == col.RelPos && pos.Pos == col.ColPos {
+			return int32(i)
+		}
+	}
+	return -1
 }
 
 func dedupDeleteKeepColIdxList(node *plan.Node) []int32 {
@@ -1749,6 +1877,7 @@ func constructWindow(_ context.Context, node *plan.Node, proc *process.Process) 
 	arg := window.NewArgument()
 	arg.Aggs = aggregationExpressions
 	arg.WinSpecList = node.WinSpecList
+	arg.SpillThreshold = node.SpillMem
 	return arg
 }
 
@@ -1799,89 +1928,257 @@ func constructGroup(_ context.Context, node, childNode *plan.Node, needEval bool
 	arg.NeedEval = needEval
 	arg.SpillMem = node.SpillMem
 	arg.GroupingFlag = node.GroupingFlag
+	_, arg.DynamicGrouping = plan2.DecodeGroupingSetExpandOption(childNode.ExtraOptions)
 	arg.GroupBy = node.GroupBy
 	arg.GroupByHashKey = node.GroupByHashKey
 	return arg
 }
 
+// preflightPercentileConfigs evaluates runtime percentile arguments
+// before the aggregate's child scopes are compiled. constructGroup follows the
+// operator-construction convention of panicking on errors; using that path for
+// a user-supplied prepared-statement value both decorates the client error with
+// a panic stack and strands the scopes that were already constructed.
+func preflightPercentileConfigs(node *plan.Node, proc *process.Process) error {
+	for _, expr := range node.AggList {
+		f := expr.GetF()
+		if f == nil {
+			continue
+		}
+		switch f.Func.ObjName {
+		case plan2.NameApproxPercentile:
+			if len(f.Args) <= 1 || !expressionContainsParam(f.Args[len(f.Args)-1]) {
+				continue
+			}
+			if _, _, err := constructApproxPercentileConfig(f, proc); err != nil {
+				return err
+			}
+		case plan2.NamePercentileCont, plan2.NamePercentileDisc:
+			if len(f.Args) != 2 || !expressionContainsParam(f.Args[1]) {
+				continue
+			}
+			if _, _, err := constructOrderedPercentileConfig(f, proc); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func expressionContainsParam(expr *plan.Expr) bool {
+	found := false
+	_ = plan.VisitExprTree(expr, func(current *plan.Expr) error {
+		if current.GetP() != nil {
+			found = true
+		}
+		return nil
+	})
+	return found
+}
+
 func constructAggregateConfig(f *plan.Function, proc *process.Process) ([]*plan.Expr, []byte) {
+	args, config, err := constructAggregateConfigWithError(f, proc)
+	if err != nil {
+		panic(err)
+	}
+	return args, config
+}
+
+// constructAggregateConfigWithError is the error-bearing configuration
+// boundary used by SQL compilation. Invalid user configuration is expected
+// input, so it must leave the compile path as an error instead of entering
+// Compile's panic recovery (which adds internal stack frames and source
+// paths). The legacy wrapper above remains for callers that have no error
+// channel, but the query compiler validates before constructing operators.
+func constructAggregateConfigWithError(
+	f *plan.Function,
+	proc *process.Process,
+) ([]*plan.Expr, []byte, error) {
+	if f == nil || f.Func == nil {
+		return nil, nil, moerr.NewInternalErrorNoCtx(
+			"aggregate function configuration is nil")
+	}
 	args := f.Args
 	switch f.Func.ObjName {
 	case plan2.NameGroupConcat:
 		value, err := resolveVariableOrDefault(proc, "group_concat_max_len", true, false)
 		if err != nil {
-			panic(err)
+			return nil, nil, err
 		}
-		maxLen, ok := value.(int64)
-		if !ok || maxLen < 0 {
-			panic(moerr.NewInternalErrorNoCtxf(
-				"group_concat_max_len has invalid value %v", value))
+		maxLen, ok := groupConcatMaxLenAsUint64(value)
+		if !ok {
+			return nil, nil, moerr.NewInternalErrorNoCtxf(
+				"group_concat_max_len has invalid value %v", value)
 		}
 		if f.AggConfigType == plan.AggregateConfigType_AGG_CONFIG_GROUP_CONCAT_ORDER {
-			return args, aggexec.EncodeGroupConcatOrderedConfig(f.AggConfig, uint64(maxLen))
+			return args, aggexec.EncodeGroupConcatOrderedConfig(f.AggConfig, maxLen), nil
 		}
 		separator := ","
 		if len(args) > 1 {
-			separator = evaluateAggregateConfigString(proc, args[len(args)-1])
+			var err error
+			separator, err = evaluateAggregateConfigString(proc, args[len(args)-1])
+			if err != nil {
+				return nil, nil, err
+			}
 			args = args[:len(args)-1]
 		}
-		return args, aggexec.EncodeGroupConcatConfig(separator, uint64(maxLen))
+		return args, aggexec.EncodeGroupConcatConfig(separator, maxLen), nil
 
 	case plan2.NameClusterCenters:
 		if len(args) > 1 {
-			config := evaluateAggregateConfigString(proc, args[len(args)-1])
-			return args[:len(args)-1], []byte(config)
+			config, err := evaluateAggregateConfigString(proc, args[len(args)-1])
+			if err != nil {
+				return nil, nil, err
+			}
+			return args[:len(args)-1], []byte(config), nil
 		}
 
 	case plan2.NameApproxPercentile:
 		if len(args) > 1 {
-			configExpr := args[len(args)-1]
-			if err := validateApproxPercentileExpr(configExpr); err != nil {
-				panic(err)
-			}
-			vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, configExpr)
+			args, config, err := constructApproxPercentileConfig(f, proc)
 			if err != nil {
-				panic(err)
+				return nil, nil, err
 			}
-			defer free()
-			config, err := getPercentileConfig(vec)
-			if err != nil {
-				panic(err)
-			}
-			return args[:len(args)-1], config
+			return args, config, nil
 		}
 
 	case plan2.NamePercentileCont, plan2.NamePercentileDisc:
-		if len(args) != 2 {
-			panic(moerr.NewInvalidInputNoCtxf(
-				"%s requires a value and percentile argument", f.Func.ObjName))
-		}
-		configExpr := args[1]
-		if err := validateOrderedPercentileExpr(configExpr, f.Func.ObjName); err != nil {
-			panic(err)
-		}
-		vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, configExpr)
+		args, config, err := constructOrderedPercentileConfig(f, proc)
 		if err != nil {
-			panic(err)
+			return nil, nil, err
 		}
-		defer free()
-		percentile, err := getPercentileConfigNamed(vec, f.Func.ObjName)
-		if err != nil {
-			panic(err)
-		}
-		descending := len(f.AggConfig) > 0 && f.AggConfig[0] != 0
-		return args[:1], aggexec.EncodeOrderedPercentileConfig(percentile, descending)
+		return args, config, nil
 	}
-	return args, nil
+	return args, nil, nil
 }
 
-func evaluateAggregateConfigString(proc *process.Process, expr *plan.Expr) string {
-	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, expr)
+// validateAggregateConfigs checks only operator nodes whose aggregate
+// configuration is consumed during physical construction. It intentionally
+// runs before the child scopes are built so an invalid percentile cannot leave
+// partially constructed pipelines behind before returning its user error.
+func validateAggregateConfigs(node *plan.Node, proc *process.Process) error {
+	if node == nil {
+		return nil
+	}
+	validate := func(expr *plan.Expr) error {
+		if expr == nil {
+			return nil
+		}
+		f, ok := expr.Expr.(*plan.Expr_F)
+		if !ok || f.F == nil || f.F.Func == nil {
+			return nil
+		}
+		_, _, err := constructAggregateConfigWithError(f.F, proc)
+		return err
+	}
+	for _, expr := range node.AggList {
+		if err := validate(expr); err != nil {
+			return err
+		}
+	}
+	for _, expr := range node.WinSpecList {
+		w, ok := expr.Expr.(*plan.Expr_W)
+		if !ok || w.W == nil || w.W.WindowFunc == nil {
+			continue
+		}
+		if err := validate(w.W.WindowFunc); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func constructApproxPercentileConfig(
+	f *plan.Function, proc *process.Process,
+) ([]*plan.Expr, []byte, error) {
+	args := f.Args
+	if len(args) != 2 {
+		return nil, nil, moerr.NewInvalidInputNoCtx(
+			"approx_percentile requires a value and percentile argument")
+	}
+	configExpr := args[1]
+	if err := validateApproxPercentileExpr(configExpr); err != nil {
+		return nil, nil, err
+	}
+	configExpr, err := normalizeAggregateConfigExpr(proc, configExpr)
 	if err != nil {
-		panic(err)
+		return nil, nil, err
+	}
+	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, configExpr)
+	if err != nil {
+		return nil, nil, err
 	}
 	defer free()
-	return vec.GetStringAt(0)
+	config, err := getEvaluatedPercentileConfigNamed(vec, f.Func.ObjName)
+	if err != nil {
+		return nil, nil, err
+	}
+	// Preserve the v76 executor's explicit direction, including SQL NaN ordering,
+	// while evaluating a prepared percentile exactly once for this execution.
+	descending := len(f.AggConfig) > 0 && f.AggConfig[0] != 0
+	return args[:1], aggexec.EncodeApproxPercentileConfig(config, descending), nil
+}
+
+func constructOrderedPercentileConfig(
+	f *plan.Function, proc *process.Process,
+) ([]*plan.Expr, []byte, error) {
+	args := f.Args
+	if len(args) != 2 {
+		return nil, nil, moerr.NewInvalidInputNoCtxf(
+			"%s requires a value and percentile argument", f.Func.ObjName)
+	}
+	configExpr := args[1]
+	if err := validateOrderedPercentileExpr(configExpr, f.Func.ObjName); err != nil {
+		return nil, nil, err
+	}
+	configExpr, err := normalizeAggregateConfigExpr(proc, configExpr)
+	if err != nil {
+		return nil, nil, err
+	}
+	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, configExpr)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer free()
+	percentile, err := getEvaluatedPercentileConfigNamed(vec, f.Func.ObjName)
+	if err != nil {
+		return nil, nil, err
+	}
+	descending := len(f.AggConfig) > 0 && f.AggConfig[0] != 0
+	return args[:1], aggexec.EncodeOrderedPercentileConfig(percentile, descending), nil
+}
+
+// normalizeAggregateConfigExpr materializes a semantically constant function
+// expression as a literal before a scalar aggregate configuration consumes it.
+// Some internal plans (notably CTAS's INSERT ... SELECT) bypass the optional
+// optimizer constant-fold pass.  Their expression executor can therefore
+// return a one-row flat vector for a constant cast, although the plan still
+// satisfies rule.IsConstant.  Fold a private copy here so the configuration
+// boundary does not depend on which planner path produced the expression.
+func normalizeAggregateConfigExpr(proc *process.Process, expr *plan.Expr) (*plan.Expr, error) {
+	if expr == nil || expr.GetF() == nil {
+		return expr, nil
+	}
+	folded, err := plan2.ConstantFold(
+		batch.EmptyForConstFoldBatch,
+		plan2.DeepCopyExpr(expr),
+		proc,
+		false,
+		true,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return folded, nil
+}
+
+func evaluateAggregateConfigString(proc *process.Process, expr *plan.Expr) (string, error) {
+	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, expr)
+	if err != nil {
+		return "", err
+	}
+	defer free()
+	return vec.GetStringAt(0), nil
 }
 
 func constructDispatchLocal(all bool, isSink, rec bool, recCTE bool, regs []*process.WaitRegister) *dispatch.Dispatch {
@@ -2015,6 +2312,7 @@ func constructShuffleOperatorForJoin(bucketNum int32, node *plan.Node, left bool
 	arg.ShuffleColMin = node.Stats.HashmapStats.ShuffleColMin
 	arg.ShuffleColMax = node.Stats.HashmapStats.ShuffleColMax
 	arg.BucketNum = bucketNum
+	arg.StringHashKey = isStringShuffleKeyType(typ)
 	switch types.T(typ) {
 	case types.T_int64, types.T_int32, types.T_int16:
 		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
@@ -2040,6 +2338,7 @@ func constructShuffleArgForGroup(bucketNum int32, node *plan.Node) *shuffle.Shuf
 	arg.ShuffleColMin = node.Stats.HashmapStats.ShuffleColMin
 	arg.ShuffleColMax = node.Stats.HashmapStats.ShuffleColMax
 	arg.BucketNum = bucketNum
+	arg.StringHashKey = isStringShuffleKeyType(typ)
 	switch types.T(typ) {
 	case types.T_int64, types.T_int32, types.T_int16:
 		arg.ShuffleRangeInt64 = plan2.ShuffleRangeReEvalSigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
@@ -2047,6 +2346,15 @@ func constructShuffleArgForGroup(bucketNum int32, node *plan.Node) *shuffle.Shuf
 		arg.ShuffleRangeUint64 = plan2.ShuffleRangeReEvalUnsigned(node.Stats.HashmapStats.Ranges, int(arg.BucketNum), node.Stats.HashmapStats.Nullcnt, int64(node.Stats.TableCnt))
 	}
 	return arg
+}
+
+func isStringShuffleKeyType(typ int32) bool {
+	switch types.T(typ) {
+	case types.T_char, types.T_varchar, types.T_text:
+		return true
+	default:
+		return false
+	}
 }
 
 // cross-cn dispath  will send same batch to all register
@@ -2073,13 +2381,52 @@ func constructDispatch(idx int, target []*Scope, source *Scope, node *plan.Node,
 	return arg
 }
 
-func constructMergeGroup(node *plan.Node, aggs []aggexec.AggFuncExecExpression) *group.MergeGroup {
+func constructMergeGroup(
+	node *plan.Node,
+	childNode *plan.Node,
+	aggs []aggexec.AggFuncExecExpression,
+	groupingAware bool,
+) *group.MergeGroup {
 	arg := group.NewArgumentMergeGroup()
 	// here the node is a Group node, merge group is "generated" by the
 	// group node and then merge them
 	arg.SpillMem = node.SpillMem
 	arg.Aggs = aggs
 	arg.GroupByHashKey = node.GroupByHashKey
+	arg.GroupingAware = groupingAware
+	if groupingSetCount, ok := plan2.DecodeGroupingSetExpandOption(childNode.ExtraOptions); ok {
+		groupCount := len(childNode.GroupingFlag) / groupingSetCount
+		if groupCount > 0 && len(childNode.GroupingFlag) == groupingSetCount*groupCount &&
+			len(node.GroupBy) == groupCount+1 {
+			for set := 0; set < groupingSetCount; set++ {
+				active := false
+				for key := 0; key < groupCount; key++ {
+					if childNode.GroupingFlag[set*groupCount+key] {
+						active = true
+						break
+					}
+				}
+				if !active {
+					arg.EmptyGroupingSetIDs = append(arg.EmptyGroupingSetIDs, int64(set))
+				}
+			}
+		}
+	} else if len(node.GroupingFlag) == len(node.GroupBy) && len(node.GroupBy) > 0 {
+		arg.EmptyGroupingSet = true
+		for _, active := range node.GroupingFlag {
+			if active {
+				arg.EmptyGroupingSet = false
+				break
+			}
+		}
+	}
+	if arg.EmptyGroupingSet || len(arg.EmptyGroupingSetIDs) > 0 {
+		arg.GroupByTypes = make([]types.Type, len(node.GroupBy))
+		for i, expr := range node.GroupBy {
+			arg.GroupByTypes[i] = types.NewWithCharset(
+				types.T(expr.Typ.Id), expr.Typ.Width, expr.Typ.Scale, uint8(expr.Typ.Charset))
+		}
+	}
 	return arg
 }
 
@@ -2102,6 +2449,9 @@ func constructPartition(node *plan.Node) *partition.Partition {
 	arg.OrderBySpecs = node.OrderBy
 	arg.Limit = node.Limit
 	arg.PartitionByCount = node.PartitionByCount
+	arg.WithTies = node.PartitionTopNWithTies
+	arg.Algorithm = node.PartitionAlgorithm
+	arg.SpillMem = node.SpillMem
 	return arg
 }
 
@@ -2162,7 +2512,12 @@ func constructLoopJoin(node *plan.Node, leftTypes, rightTypes []types.Type, proc
 	return arg
 }
 
-func constructJoinBuildOperator(c *Compile, op vm.Operator, mcpu int32) vm.Operator {
+func constructJoinBuildOperator(
+	c *Compile,
+	op vm.Operator,
+	mcpu int32,
+	runtimeFilterBuildList []*plan.RuntimeFilterSpec,
+) vm.Operator {
 	switch op.OpType() {
 	case vm.IndexJoin:
 		indexJoin := op.(*indexjoin.IndexJoin)
@@ -2175,6 +2530,9 @@ func constructJoinBuildOperator(c *Compile, op vm.Operator, mcpu int32) vm.Opera
 		return ret
 	default:
 		res := constructBroadcastHashBuild(op, c.proc, mcpu)
+		if res.RuntimeFilterSpec == nil && len(runtimeFilterBuildList) > 0 {
+			res.RuntimeFilterSpec = runtimeFilterBuildList[0]
+		}
 		res.SetIdx(op.GetOperatorBase().GetIdx())
 		res.SetIsFirst(true)
 		return res
@@ -2587,7 +2945,13 @@ func constructTableClone(
 			dstCreateTable = createTable
 			dstTblDef = createTable.TableDef
 			sameColumnIDSpace = false
-			metaCopy.Ctx.RequestedAutoIncrOffset = createTable.TableDef.AutoIncrOffset
+			// The source carries an explicit schema lower bound (for example,
+			// ALTER TABLE ... AUTO_INCREMENT), while the destination can carry
+			// a session-requested lower bound. A fresh clone must honor both.
+			metaCopy.Ctx.RequestedAutoIncrOffset = max(
+				clonePlan.SrcTableDef.AutoIncrOffset,
+				createTable.TableDef.AutoIncrOffset,
+			)
 		}
 	}
 	dstAutoIncrNames := mapCloneAutoIncrColumns(clonePlan.SrcTableDef, dstTblDef, sameColumnIDSpace)
@@ -2660,7 +3024,12 @@ func constructTableClone(
 				colIdxes := vector.MustFixedColWithTypeCheck[int32](cols[0])
 				offsets := vector.MustFixedColWithTypeCheck[uint64](cols[1])
 				for i := 0; i < rows; i++ {
-					if dstName, ok := dstAutoIncrNames[colIdxes[i]]; ok {
+					colIdx := colIdxes[i]
+					// A fresh clone has a new allocator. Its visible columns are
+					// reconstructed from copied rows and schema lower bounds instead
+					// of inheriting the source allocator's reserved batch upper bound.
+					if dstName, ok := dstAutoIncrNames[colIdx]; ok &&
+						(sameColumnIDSpace || clonePlan.SrcTableDef.Cols[colIdx].Hidden) {
 						autoIncrOffsets[dstName] = offsets[i]
 					}
 				}
@@ -2748,19 +3117,23 @@ func constructTableClone(
 }
 
 func validateApproxPercentileExpr(expr *plan.Expr) error {
-	if expr == nil || !rule.IsConstant(expr, false) {
+	if !isPercentileConfigExpr(expr) {
 		return moerr.NewInvalidInputNoCtx(
-			"percentile argument of approx_percentile must be a constant")
+			"percentile argument of approx_percentile must be a constant or parameter")
 	}
 	return nil
 }
 
 func validateOrderedPercentileExpr(expr *plan.Expr, name string) error {
-	if expr == nil || !rule.IsConstant(expr, false) {
+	if !isPercentileConfigExpr(expr) {
 		return moerr.NewInvalidInputNoCtxf(
-			"percentile argument of %s must be a constant", name)
+			"percentile argument of %s must be a constant or parameter", name)
 	}
 	return nil
+}
+
+func isPercentileConfigExpr(expr *plan.Expr) bool {
+	return plan2.IsPercentileConfigExpr(expr)
 }
 
 // getPercentileConfig extracts the percentile value from a vector for
@@ -2770,12 +3143,20 @@ func getPercentileConfig(vec *vector.Vector) ([]byte, error) {
 	return getPercentileConfigNamed(vec, "approx_percentile")
 }
 
+func getEvaluatedPercentileConfigNamed(vec *vector.Vector, functionName string) ([]byte, error) {
+	return getPercentileConfigValue(vec, functionName, true)
+}
+
 func getPercentileConfigNamed(vec *vector.Vector, functionName string) ([]byte, error) {
-	if vec == nil || !vec.IsConst() {
+	return getPercentileConfigValue(vec, functionName, false)
+}
+
+func getPercentileConfigValue(vec *vector.Vector, functionName string, allowSingleton bool) ([]byte, error) {
+	if vec == nil || (!vec.IsConst() && !(allowSingleton && vec.Length() == 1)) {
 		return nil, moerr.NewInvalidInputNoCtxf(
 			"percentile argument of %s must be a constant", functionName)
 	}
-	if vec.Length() == 0 || vec.IsConstNull() {
+	if vec.Length() == 0 || vec.IsConstNull() || vec.IsNull(0) {
 		return nil, moerr.NewInvalidInputNoCtxf(
 			"percentile argument of %s cannot be NULL", functionName)
 	}

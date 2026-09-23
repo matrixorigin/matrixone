@@ -15,9 +15,11 @@
 package colexec
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/require"
@@ -151,6 +153,55 @@ func TestPutProcIntoUuidMapRejectsIncompleteRegistration(t *testing.T) {
 	require.False(t, exists)
 }
 
+func TestRemoteReceiverFinishedResultSurvivesCleanup(t *testing.T) {
+	for _, failed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("failed=%t", failed), func(t *testing.T) {
+			srv := NewServer("")
+			uid := uuid.MustParse("00000000-0000-0000-0000-000000028313")
+			_, _, _, waiter, _ := srv.AttachProcByUuidOrWait(uid)
+			t.Cleanup(waiter.Close)
+			ch := make(process.RemotePipelineInformationChannel)
+			terminal := NewRemoteReceiverTerminal(nil)
+			require.NoError(t, srv.PutProcIntoUuidMapWithTerminal(uid, &process.Process{}, ch, terminal))
+			var cause error
+			if failed {
+				cause = moerr.NewInternalErrorNoCtx("source failed")
+			}
+			terminal.Finish(cause)
+			terminal.Finish(nil) // repeated cleanup cannot erase the first outcome
+			srv.CloseRemoteReceivers([]uuid.UUID{uid}, ch)
+			srv.RemoveUuidsOwned([]uuid.UUID{uid}, ch)
+			proc, notify, state, _, got := srv.AttachProcByUuidOrWait(uid)
+			require.Equal(t, RemoteReceiverFinished, state)
+			require.Nil(t, proc)
+			require.Nil(t, notify)
+			<-got.Done()
+			require.Equal(t, cause, got.Err())
+			_, _, duplicate, _, _ := srv.AttachProcByUuidOrWait(uid)
+			require.Equal(t, RemoteReceiverAlreadyClosed, duplicate)
+			waiter.Close()
+			require.Empty(t, srv.uuidCsChanMap.mp)
+			require.Empty(t, srv.uuidCsChanMap.waiters)
+			// Delayed old-owner Reset and terminal completion cannot affect reuse.
+			nextCh := make(process.RemotePipelineInformationChannel)
+			next := NewRemoteReceiverTerminal(nil)
+			require.NoError(t, srv.PutProcIntoUuidMapWithTerminal(uid, &process.Process{}, nextCh, next))
+			srv.CloseRemoteReceivers([]uuid.UUID{uid}, ch)
+			srv.RemoveUuidsOwned([]uuid.UUID{uid}, ch)
+			_, _, state, _, got = srv.AttachProcByUuidOrWait(uid)
+			require.Equal(t, RemoteReceiverAttachedNow, state)
+			require.Same(t, next, got)
+			select {
+			case <-got.Done():
+				t.Fatal("old generation terminated replacement")
+			default:
+			}
+			srv.RemoveUuidsOwned([]uuid.UUID{uid}, nextCh)
+			require.Empty(t, srv.uuidCsChanMap.mp)
+		})
+	}
+}
+
 func TestAttachProcByUuidOrWaitPreservesTerminalOwner(t *testing.T) {
 	srv := NewServer("")
 
@@ -163,13 +214,13 @@ func TestAttachProcByUuidOrWaitPreservesTerminalOwner(t *testing.T) {
 			srv.RemoveUuidsOwned([]uuid.UUID{uid}, ownerCh)
 		})
 
-		gotProc, gotCh, state, waiter := srv.AttachProcByUuidOrWait(uid)
+		gotProc, gotCh, state, waiter, _ := srv.AttachProcByUuidOrWait(uid)
 		require.Equal(t, RemoteReceiverAttachedNow, state)
 		require.Same(t, ownerProc, gotProc)
 		require.Equal(t, ownerCh, gotCh)
 		require.Nil(t, waiter)
 
-		gotProc, gotCh, state, waiter = srv.AttachProcByUuidOrWait(uid)
+		gotProc, gotCh, state, waiter, _ = srv.AttachProcByUuidOrWait(uid)
 		require.Equal(t, RemoteReceiverAlreadyAttached, state)
 		require.Nil(t, gotProc)
 		require.Nil(t, gotCh)
@@ -192,7 +243,7 @@ func TestAttachProcByUuidOrWaitPreservesTerminalOwner(t *testing.T) {
 		})
 		srv.DeleteUuids([]uuid.UUID{uid})
 
-		gotProc, gotCh, state, waiter := srv.AttachProcByUuidOrWait(uid)
+		gotProc, gotCh, state, waiter, _ := srv.AttachProcByUuidOrWait(uid)
 		require.Equal(t, RemoteReceiverAlreadyClosed, state)
 		require.Nil(t, gotProc)
 		require.Nil(t, gotCh)
@@ -207,7 +258,7 @@ func TestAttachProcByUuidOrWaitPreservesTerminalOwner(t *testing.T) {
 		uid := uuid.Must(uuid.NewV7())
 		ownerCh := make(process.RemotePipelineInformationChannel)
 
-		gotProc, gotCh, state, waiter := srv.AttachProcByUuidOrWait(uid)
+		gotProc, gotCh, state, waiter, _ := srv.AttachProcByUuidOrWait(uid)
 		require.Equal(t, RemoteReceiverMissing, state)
 		require.Nil(t, gotProc)
 		require.Nil(t, gotCh)
@@ -231,8 +282,8 @@ func TestAttachProcByUuidOrWaitPreservesTerminalOwner(t *testing.T) {
 		uid2 := uuid.Must(uuid.NewV7())
 		ownerCh := make(process.RemotePipelineInformationChannel)
 
-		_, _, state1, waiter1 := srv.AttachProcByUuidOrWait(uid1)
-		_, _, state2, waiter2 := srv.AttachProcByUuidOrWait(uid2)
+		_, _, state1, waiter1, _ := srv.AttachProcByUuidOrWait(uid1)
+		_, _, state2, waiter2, _ := srv.AttachProcByUuidOrWait(uid2)
 		require.Equal(t, RemoteReceiverMissing, state1)
 		require.Equal(t, RemoteReceiverMissing, state2)
 		require.NotNil(t, waiter1)
@@ -266,8 +317,8 @@ func TestAttachProcByUuidOrWaitPreservesTerminalOwner(t *testing.T) {
 		uid := uuid.Must(uuid.NewV7())
 		ownerCh := make(process.RemotePipelineInformationChannel)
 
-		_, _, state1, waiter1 := srv.AttachProcByUuidOrWait(uid)
-		_, _, state2, waiter2 := srv.AttachProcByUuidOrWait(uid)
+		_, _, state1, waiter1, _ := srv.AttachProcByUuidOrWait(uid)
+		_, _, state2, waiter2, _ := srv.AttachProcByUuidOrWait(uid)
 		require.Equal(t, RemoteReceiverMissing, state1)
 		require.Equal(t, RemoteReceiverMissing, state2)
 		require.Same(t, waiter1.state, waiter2.state)
@@ -295,12 +346,12 @@ func TestAttachProcByUuidOrWaitPreservesTerminalOwner(t *testing.T) {
 		uid := uuid.Must(uuid.NewV7())
 		ownerCh := make(process.RemotePipelineInformationChannel)
 
-		_, _, state1, waiter1 := srv.AttachProcByUuidOrWait(uid)
+		_, _, state1, waiter1, _ := srv.AttachProcByUuidOrWait(uid)
 		require.Equal(t, RemoteReceiverMissing, state1)
 		oldDone := waiter1.Done()
 		waiter1.Close()
 
-		_, _, state2, waiter2 := srv.AttachProcByUuidOrWait(uid)
+		_, _, state2, waiter2, _ := srv.AttachProcByUuidOrWait(uid)
 		require.Equal(t, RemoteReceiverMissing, state2)
 		require.NotEqual(t, oldDone, waiter2.Done())
 		waiter1.Close()
@@ -326,7 +377,7 @@ func TestAttachProcByUuidOrWaitPreservesTerminalOwner(t *testing.T) {
 		uid := uuid.Must(uuid.NewV7())
 		ownerCh := make(process.RemotePipelineInformationChannel)
 
-		_, _, state, waiter := srv.AttachProcByUuidOrWait(uid)
+		_, _, state, waiter, _ := srv.AttachProcByUuidOrWait(uid)
 		require.Equal(t, RemoteReceiverMissing, state)
 		require.NotNil(t, waiter)
 
@@ -338,7 +389,7 @@ func TestAttachProcByUuidOrWaitPreservesTerminalOwner(t *testing.T) {
 			t.Fatal("receiver publication did not wake before owner cleanup")
 		}
 
-		gotProc, gotCh, attachState, nextWaiter := srv.AttachProcByUuidOrWait(uid)
+		gotProc, gotCh, attachState, nextWaiter, _ := srv.AttachProcByUuidOrWait(uid)
 		require.Equal(t, RemoteReceiverAlreadyClosed, attachState)
 		require.Nil(t, gotProc)
 		require.Nil(t, gotCh)

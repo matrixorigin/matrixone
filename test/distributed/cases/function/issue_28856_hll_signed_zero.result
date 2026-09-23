@@ -1,0 +1,98 @@
+drop table if exists issue_28856_hll_signed_zero;
+create table issue_28856_hll_signed_zero(v double);
+insert into issue_28856_hll_signed_zero values
+(cast('0.0' as double)), (cast('-0.0' as double));
+select approx_count_distinct(v) as approx_count,
+hll_cardinality(hll_add_agg(v)) as hll_count
+from issue_28856_hll_signed_zero;
+➤ approx_count[-5,64,0]  ¦  hll_count[-5,64,0]  𝄀
+1  ¦  1
+drop table issue_28856_hll_signed_zero;
+drop table if exists issue_28856_hll_signed_zero_source;
+create table issue_28856_hll_signed_zero_source(
+part int,
+legacy_value int,
+float_value float,
+double_value double
+);
+insert into issue_28856_hll_signed_zero_source values
+(1, null, cast('0.0' as float), cast('0.0' as double)),
+(2, null, cast('-0.0' as float), cast('-0.0' as double)),
+(3, null, null, null),
+(4, 1, 1.0, 1.0);
+drop table if exists issue_28856_hll_signed_zero_persisted;
+create table issue_28856_hll_signed_zero_persisted(
+part int,
+value_type varchar(8),
+sketch blob
+);
+insert into issue_28856_hll_signed_zero_persisted
+select part, 'float32', hll_add_agg(float_value)
+from issue_28856_hll_signed_zero_source
+group by part;
+insert into issue_28856_hll_signed_zero_persisted
+select part, 'float64', hll_add_agg(double_value)
+from issue_28856_hll_signed_zero_source
+group by part;
+select value_type, part, hll_cardinality(hll_merge_agg(sketch)) as merged_count
+from issue_28856_hll_signed_zero_persisted
+group by value_type, part
+order by value_type, part;
+➤ value_type[12,8,0]  ¦  part[4,32,0]  ¦  merged_count[-5,64,0]  𝄀
+float32  ¦  1  ¦  1  𝄀
+float32  ¦  2  ¦  1  𝄀
+float32  ¦  3  ¦  0  𝄀
+float32  ¦  4  ¦  1  𝄀
+float64  ¦  1  ¦  1  𝄀
+float64  ¦  2  ¦  1  𝄀
+float64  ¦  3  ¦  0  𝄀
+float64  ¦  4  ¦  1
+select value_type, hll_cardinality(hll_merge_agg(sketch)) as merged_count
+from issue_28856_hll_signed_zero_persisted
+where part in (1, 2)
+group by value_type
+order by value_type;
+➤ value_type[12,8,0]  ¦  merged_count[-5,64,0]  𝄀
+float32  ¦  1  𝄀
+float64  ¦  1
+select hll_cardinality(hll_add_agg(float_value)) as float_empty_count,
+hll_cardinality(hll_add_agg(double_value)) as double_empty_count
+from issue_28856_hll_signed_zero_source
+where part = 3;
+➤ float_empty_count[-5,64,0]  ¦  double_empty_count[-5,64,0]  𝄀
+0  ¦  0
+select value_type, hll_cardinality(hll_merge_agg(sketch)) as merged_empty_count
+from issue_28856_hll_signed_zero_persisted
+where part = 3
+group by value_type
+order by value_type;
+➤ value_type[12,8,0]  ¦  merged_empty_count[-5,64,0]  𝄀
+float32  ¦  0  𝄀
+float64  ¦  0
+drop table if exists issue_28856_hll_mixed_versions;
+create table issue_28856_hll_mixed_versions(part int, sketch blob);
+insert into issue_28856_hll_mixed_versions
+select 1, hll_add_agg(legacy_value)
+from issue_28856_hll_signed_zero_source
+where part = 4;
+insert into issue_28856_hll_mixed_versions
+select 2, hll_add_agg(double_value)
+from issue_28856_hll_signed_zero_source
+where part = 4;
+select hll_cardinality(hll_merge_agg(sketch)) as legacy_count
+from issue_28856_hll_mixed_versions
+where part = 1;
+➤ legacy_count[-5,64,0]  𝄀
+1
+select hll_cardinality(hll_merge_agg(sketch)) as current_count
+from issue_28856_hll_mixed_versions
+where part = 2;
+➤ current_count[-5,64,0]  𝄀
+1
+select hll_cardinality(hll_merge_agg(sketch)) as mixed_count
+from issue_28856_hll_mixed_versions;
+-- @regex("incompatible HLL hash versions", true)
+invalid input: incompatible HLL hash versions: destination 2, input 4
+drop table issue_28856_hll_mixed_versions;
+drop table issue_28856_hll_signed_zero_persisted;
+drop table issue_28856_hll_signed_zero_source;

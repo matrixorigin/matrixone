@@ -410,13 +410,15 @@ func doComQueryInBack(
 		IsRestore:     backSes.GetRestore(),
 	}
 	proc.SetAffectedRows(backSes.lastAffectedRows)
-	bindBackExecSession(proc, backSes)
+	bindBackExecSession(proc, backSes, execCtx.reqCtx)
 	proc.SetStmtProfile(&backSes.stmtProfile)
 	proc.SetResolveVariableFunc(backSes.txnCompileCtx.ResolveVariable)
 	if process.HasSystemCTELimits(execCtx.reqCtx) {
 		proc.SetResolveVariableFunc(process.SystemCTEResolver(backSes.txnCompileCtx.ResolveVariable))
 	}
+	proc.SetResolveVariableTypeFunc(backSes.txnCompileCtx.ResolveVariableType)
 	proc.SetResolveVariableIsBinFunc(backSes.txnCompileCtx.ResolveVariableIsBin)
+	proc.SetResolveVariableStringDomainFunc(backSes.txnCompileCtx.ResolveVariableStringDomain)
 	proc.SetResolveVariablePrepareParamKindFunc(backSes.txnCompileCtx.ResolveVariablePrepareParamKind)
 	// backExec.Exec and ExecRestore reject multi-statement SQL before reaching
 	// this path, so one snapshot here covers the complete background statement.
@@ -611,7 +613,8 @@ func affectedRowsForStatement(execCtx *ExecCtx) int64 {
 // a frontend background executor. The back session forwards temporary-table
 // aliases to its upstream session, while the upstream ID keeps physical table
 // names visible to the temporary-table GC as belonging to the active client.
-func bindBackExecSession(proc *process.Process, backSes *backSession) {
+func bindBackExecSession(proc *process.Process, backSes *backSession, ctx context.Context) {
+	proc.WarningSink = process.WarningSinkFromContext(ctx)
 	if backSes.upstream == nil {
 		return
 	}
@@ -672,6 +675,9 @@ func executeStmtInBack(backSes *backSession,
 
 	defer func() {
 		if c, ok := ret.(*compile.Compile); ok {
+			if txnCw, ok := execCtx.cw.(*TxnComputationWrapper); ok {
+				txnCw.completeCompileExecution(c, err)
+			}
 			// Preserve the historical BackgroundExec projection for engine-backed
 			// execution. This is return-only data; the authoritative statement
 			// resource root is sealed independently and must not ingest it again.
@@ -884,6 +890,8 @@ func executeStmtInSameSession(
 	execCtx *ExecCtx,
 	stmt tree.Statement,
 	preparedExpression bool,
+	preparedParamVals []any,
+	preparedBinaryExecute bool,
 ) error {
 	ses.EnterFPrint(FPExecStmtInSameSession)
 	defer ses.ExitFPrint(FPExecStmtInSameSession)
@@ -937,10 +945,12 @@ func executeStmtInSameSession(
 		logutil.ConnectionIdField(ses.GetConnectionID()))
 	//3. execute the statement
 	return doComQuery(ses, execCtx, &UserInput{
-		stmt:                 stmt,
-		isInternalInput:      true,
-		isSetExpression:      true,
-		isPreparedExpression: preparedExpression,
+		stmt:                  stmt,
+		isInternalInput:       true,
+		isSetExpression:       true,
+		isPreparedExpression:  preparedExpression,
+		preparedParamVals:     preparedParamVals,
+		preparedBinaryExecute: preparedBinaryExecute,
 	})
 }
 
@@ -1029,10 +1039,13 @@ func getResultSet(ctx context.Context, bh BackgroundExec) ([]ExecResult, error) 
 
 type backSession struct {
 	feSessionImpl
-	parentBackSession               *backSession
-	effectiveMatrixOneNativeMode    bool
-	hasEffectiveMatrixOneNativeMode bool
-	forcePessimisticRC              bool
+	parentBackSession                 *backSession
+	effectiveMatrixOneNativeMode      bool
+	hasEffectiveMatrixOneNativeMode   bool
+	forcePessimisticRC                bool
+	cloneSnapshotUsesBackgroundTxn    bool
+	cancelTxnCreateWithRequest        bool
+	lineageOwnerLifecycleWritePending bool
 	// lastAffectedRows carries the previous statement's ROW_COUNT() value into
 	// the next process created by this background executor.
 	lastAffectedRows int64
@@ -1127,6 +1140,7 @@ func (backSes *backSession) Close() {
 	if backSes == nil {
 		return
 	}
+	backSes.lineageOwnerLifecycleWritePending = false
 	txnHandler := backSes.GetTxnHandler()
 	if txnHandler != nil {
 		tempExecCtx := ExecCtx{
@@ -1558,6 +1572,16 @@ func (backSes *backSession) AddTempTable(dbName, alias, realName string) {
 	}
 }
 
+func (backSes *backSession) AddTempIndexTable(dbName, alias, realName string) {
+	if backSes == nil {
+		return
+	}
+	if owner := upstreamUserSession(backSes); owner != nil {
+		txnKey, stmtKey := tempTableMutationKeys(backSes)
+		owner.addTempIndexTable(dbName, alias, realName, txnKey, stmtKey)
+	}
+}
+
 func (backSes *backSession) RemoveTempTableByRealName(realName string) {
 	if backSes == nil {
 		return
@@ -1578,6 +1602,16 @@ func (backSes *backSession) RemoveTempTable(dbName, alias string) {
 	}
 }
 
+func (backSes *backSession) RemoveTempTablesByDatabase(dbName string) {
+	if backSes == nil {
+		return
+	}
+	if owner := upstreamUserSession(backSes); owner != nil {
+		txnKey, stmtKey := tempTableMutationKeys(backSes)
+		owner.removeTempTablesByDatabase(dbName, txnKey, stmtKey)
+	}
+}
+
 func (backSes *backSession) GetSqlModeNoAutoValueOnZero() (bool, bool) {
 	if backSes == nil || backSes.upstream == nil {
 		return false, false
@@ -1592,6 +1626,13 @@ func (backSes *backSession) AppendWarningDiagnostic(code uint16, msg string) {
 		return
 	}
 	backSes.upstream.AppendWarningDiagnostic(code, msg)
+}
+
+func (backSes *backSession) AppendWarningCount(total uint64) {
+	if backSes == nil || backSes.upstream == nil {
+		return
+	}
+	backSes.upstream.AppendWarningCount(total)
 }
 
 func (backSes *backSession) AppendWarningBatch(total uint64, codes []uint16, messages []string) {

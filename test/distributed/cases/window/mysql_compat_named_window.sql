@@ -1,0 +1,44 @@
+-- @suite
+
+-- @case
+-- @desc: MySQL named WINDOW declarations reuse, inherit, retain prepared parameters, and enforce the per-query-block limit
+-- @label:bvt
+
+drop database if exists mysql_compat_named_window;
+create database mysql_compat_named_window;
+use mysql_compat_named_window;
+
+create table named_window_events (id int primary key, grp int, ord int, v int);
+insert into named_window_events values (1, 1, 1, 10), (2, 1, 2, 20), (3, 2, 1, 7), (4, 2, 2, 8);
+
+-- Two functions reuse the derived declaration. base_win supplies the
+-- partition and ordered_win supplies ordering through legal inheritance.
+select id, row_number() over ordered_win as rn, rank() over ordered_win as rnk
+from named_window_events
+window base_win as (partition by grp), ordered_win as (base_win order by ord)
+order by id;
+
+-- A syntactically present but unused declaration still contributes one prepared
+-- parameter; EXECUTE must require and bind that parameter.
+prepare unused_named_window from 'select count(*) from named_window_events window unused_win as (order by ord rows ? preceding)';
+set @preceding = 1;
+execute unused_named_window using @preceding;
+deallocate prepare unused_named_window;
+
+-- Public error path for a missing reference.
+select row_number() over missing_win from named_window_events;
+
+-- Public error path for incompatible inherited ordering. The diagnostic names
+-- the child first and the base second, matching the MySQL error contract.
+select row_number() over child_win from named_window_events
+window base_win as (order by ord), child_win as (base_win order by id);
+
+-- The per-query-block boundary counts declarations, even when they are unused.
+select count(*) from named_window_events window w0 as (), w1 as (), w2 as (), w3 as (), w4 as (), w5 as (), w6 as (), w7 as (), w8 as (), w9 as (), w10 as (), w11 as (), w12 as (), w13 as (), w14 as (), w15 as (), w16 as (), w17 as (), w18 as (), w19 as (), w20 as (), w21 as (), w22 as (), w23 as (), w24 as (), w25 as (), w26 as (), w27 as (), w28 as (), w29 as (), w30 as (), w31 as (), w32 as (), w33 as (), w34 as (), w35 as (), w36 as (), w37 as (), w38 as (), w39 as (), w40 as (), w41 as (), w42 as (), w43 as (), w44 as (), w45 as (), w46 as (), w47 as (), w48 as (), w49 as (), w50 as (), w51 as (), w52 as (), w53 as (), w54 as (), w55 as (), w56 as (), w57 as (), w58 as (), w59 as (), w60 as (), w61 as (), w62 as (), w63 as (), w64 as (), w65 as (), w66 as (), w67 as (), w68 as (), w69 as (), w70 as (), w71 as (), w72 as (), w73 as (), w74 as (), w75 as (), w76 as (), w77 as (), w78 as (), w79 as (), w80 as (), w81 as (), w82 as (), w83 as (), w84 as (), w85 as (), w86 as (), w87 as (), w88 as (), w89 as (), w90 as (), w91 as (), w92 as (), w93 as (), w94 as (), w95 as (), w96 as (), w97 as (), w98 as (), w99 as (), w100 as (), w101 as (), w102 as (), w103 as (), w104 as (), w105 as (), w106 as (), w107 as (), w108 as (), w109 as (), w110 as (), w111 as (), w112 as (), w113 as (), w114 as (), w115 as (), w116 as (), w117 as (), w118 as (), w119 as (), w120 as (), w121 as (), w122 as (), w123 as (), w124 as (), w125 as (), w126 as ();
+select count(*) from named_window_events window w0 as (), w1 as (), w2 as (), w3 as (), w4 as (), w5 as (), w6 as (), w7 as (), w8 as (), w9 as (), w10 as (), w11 as (), w12 as (), w13 as (), w14 as (), w15 as (), w16 as (), w17 as (), w18 as (), w19 as (), w20 as (), w21 as (), w22 as (), w23 as (), w24 as (), w25 as (), w26 as (), w27 as (), w28 as (), w29 as (), w30 as (), w31 as (), w32 as (), w33 as (), w34 as (), w35 as (), w36 as (), w37 as (), w38 as (), w39 as (), w40 as (), w41 as (), w42 as (), w43 as (), w44 as (), w45 as (), w46 as (), w47 as (), w48 as (), w49 as (), w50 as (), w51 as (), w52 as (), w53 as (), w54 as (), w55 as (), w56 as (), w57 as (), w58 as (), w59 as (), w60 as (), w61 as (), w62 as (), w63 as (), w64 as (), w65 as (), w66 as (), w67 as (), w68 as (), w69 as (), w70 as (), w71 as (), w72 as (), w73 as (), w74 as (), w75 as (), w76 as (), w77 as (), w78 as (), w79 as (), w80 as (), w81 as (), w82 as (), w83 as (), w84 as (), w85 as (), w86 as (), w87 as (), w88 as (), w89 as (), w90 as (), w91 as (), w92 as (), w93 as (), w94 as (), w95 as (), w96 as (), w97 as (), w98 as (), w99 as (), w100 as (), w101 as (), w102 as (), w103 as (), w104 as (), w105 as (), w106 as (), w107 as (), w108 as (), w109 as (), w110 as (), w111 as (), w112 as (), w113 as (), w114 as (), w115 as (), w116 as (), w117 as (), w118 as (), w119 as (), w120 as (), w121 as (), w122 as (), w123 as (), w124 as (), w125 as (), w126 as (), w127 as ();
+
+drop database mysql_compat_named_window;
+
+-- Teardown postcondition used by the same-instance repeat: no catalog residue
+-- may remain after this case completes.
+show databases like 'mysql_compat_named_window';

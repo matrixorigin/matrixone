@@ -35,7 +35,7 @@ func TestInsertSimpleTable(t *testing.T) {
 	hasSecondaryKey := false
 
 	proc, case1 := buildInsertTestCase(t, hasUniqueKey, hasSecondaryKey)
-	runTestCases(t, proc, []*testCase{case1})
+	runTestCase(t, proc, case1)
 }
 
 func TestInsertSpecialTable(t *testing.T) {
@@ -53,7 +53,7 @@ func TestInsertSpecialTable(t *testing.T) {
 	oldBat.Vecs[0].Free(proc.GetMPool())
 	oldBat.ReplaceVector(oldBat.Vecs[0], columnA, 0)
 	case1.expectErr = true
-	runTestCases(t, proc, []*testCase{case1})
+	runTestCase(t, proc, case1)
 
 	//case 2: unique key has null, that will be ok
 	hasUniqueKey = true
@@ -66,7 +66,7 @@ func TestInsertSpecialTable(t *testing.T) {
 	uniquePk := testutil.MakeVarcharVector(pkArr, []uint64{0, 1, 2}, proc.GetMPool())
 	oldBat.Vecs[4].Free(proc.GetMPool())
 	oldBat.ReplaceVector(oldBat.Vecs[4], uniquePk, 0)
-	runTestCases(t, proc, []*testCase{case1})
+	runTestCase(t, proc, case1)
 }
 
 func TestInsertTableWithUniqueKeyAndSecondaryKey(t *testing.T) {
@@ -74,7 +74,7 @@ func TestInsertTableWithUniqueKeyAndSecondaryKey(t *testing.T) {
 	hasSecondaryKey := true
 
 	proc, case1 := buildInsertTestCase(t, hasUniqueKey, hasSecondaryKey)
-	runTestCases(t, proc, []*testCase{case1})
+	runTestCaseAfterReset(t, proc, case1)
 }
 
 // insert s3
@@ -83,7 +83,7 @@ func TestInsertS3SimpleTable(t *testing.T) {
 	hasSecondaryKey := false
 
 	proc, case1 := buildInsertS3TestCase(t, hasUniqueKey, hasSecondaryKey)
-	runTestCases(t, proc, []*testCase{case1})
+	runTestCase(t, proc, case1)
 }
 
 func TestInsertS3TableWithUniqueKeyAndSecondaryKey(t *testing.T) {
@@ -91,7 +91,7 @@ func TestInsertS3TableWithUniqueKeyAndSecondaryKey(t *testing.T) {
 	hasSecondaryKey := true
 
 	proc, case1 := buildInsertS3TestCase(t, hasUniqueKey, hasSecondaryKey)
-	runTestCases(t, proc, []*testCase{case1})
+	runTestCaseAfterReset(t, proc, case1)
 }
 
 func TestInsertRejectsZeroTemporalInStrictMode(t *testing.T) {
@@ -115,7 +115,7 @@ func TestInsertRejectsZeroTemporalInStrictMode(t *testing.T) {
 				bat.Vecs[3] = zeroDates
 			}
 			c.expectErr = true
-			runTestCases(t, proc, []*testCase{c})
+			runTestCase(t, proc, c)
 		})
 	}
 }
@@ -170,7 +170,7 @@ func TestInsertRejectsTimestampBelowMinimum(t *testing.T) {
 				bat.Vecs[3] = timestamps
 			}
 			c.expectErr = true
-			runTestCases(t, proc, []*testCase{c})
+			runTestCase(t, proc, c)
 		})
 	}
 }
@@ -206,7 +206,9 @@ func buildInsertTestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool) 
 	_, ctrl, proc := prepareTestCtx(t, false)
 	eng := prepareTestEng(ctrl, false)
 
-	batchs, affectRows := prepareTestInsertBatchs(proc.GetMPool(), 2, hasUniqueKey, hasSecondaryKey)
+	batchs, affectRows := prepareTestInsertBatchs(
+		proc.GetMPool(), 2, colexec.DefaultBatchSize, hasUniqueKey, hasSecondaryKey,
+	)
 	multiUpdateCtxs := prepareTestInsertMultiUpdateCtx(hasUniqueKey, hasSecondaryKey)
 	action := UpdateWriteTable
 	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, affectRows, action, false)
@@ -217,18 +219,26 @@ func buildInsertS3TestCase(t *testing.T, hasUniqueKey bool, hasSecondaryKey bool
 	_, ctrl, proc := prepareTestCtx(t, true)
 	eng := prepareTestEng(ctrl, false)
 
-	batchs, _ := prepareTestInsertBatchs(proc.GetMPool(), 10, hasUniqueKey, hasSecondaryKey)
+	batchs, _ := prepareTestInsertBatchs(
+		proc.GetMPool(), testS3BatchCount, testS3BatchRows, hasUniqueKey, hasSecondaryKey,
+	)
 	multiUpdateCtxs := prepareTestInsertMultiUpdateCtx(hasUniqueKey, hasSecondaryKey)
 	action := UpdateWriteS3
 	retCase := buildTestCase(multiUpdateCtxs, eng, batchs, 0, action, false)
 	return proc, retCase
 }
 
-func prepareTestInsertBatchs(mp *mpool.MPool, size int, hasUniqueKey bool, hasSecondaryKey bool) ([]*batch.Batch, uint64) {
+func prepareTestInsertBatchs(
+	mp *mpool.MPool,
+	size int,
+	rowsPerBatch int,
+	hasUniqueKey bool,
+	hasSecondaryKey bool,
+) ([]*batch.Batch, uint64) {
 	var bats = make([]*batch.Batch, size)
 	affectRows := 0
 	for i := 0; i < size; i++ {
-		rowCount := colexec.DefaultBatchSize
+		rowCount := rowsPerBatch
 		if i == size-1 {
 			rowCount = rowCount / 2
 		}

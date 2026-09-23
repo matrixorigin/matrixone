@@ -54,6 +54,192 @@ func (r *ranges) next() uint64 {
 	return 0
 }
 
+// nextFor returns the first value in the owned ranges which belongs to the
+// statement series options.Offset + N*options.Increment.  The ranges are
+// still owned in r.step-sized units; this method only advances the cursor and
+// never changes r.step.  In production r.step is one, but solving the
+// congruence also keeps old/non-unit metadata from silently producing values
+// outside the requested series.
+func (r *ranges) nextFor(options AutoIncrementOptions) uint64 {
+	options = NormalizeAutoIncrementOptions(options.Increment, options.Offset)
+	if options.isDefault() {
+		return r.next()
+	}
+	if r.step == 0 || options.Increment == 0 {
+		return 0
+	}
+
+	for i := 0; i < r.rangeCount(); {
+		from, to := r.values[2*i], r.values[2*i+1]
+		if from >= to {
+			r.removeAt(i)
+			continue
+		}
+
+		value, period, ok := nextValueInRange(
+			from, to, r.step, options.Increment, options.Offset)
+		if !ok {
+			r.removeAt(i)
+			continue
+		}
+
+		// There is no representable successor when the LCM or the addition
+		// overflows.  The current value is still valid and can be returned.
+		nextFrom, overflow := addUint64(value, period)
+		if period == 0 || overflow || nextFrom >= to {
+			r.removeAt(i)
+		} else {
+			r.values[2*i] = nextFrom
+		}
+		return value
+	}
+	return 0
+}
+
+func nextValueInRange(from, to, step, increment, offset uint64) (uint64, uint64, bool) {
+	if step == 1 {
+		// Production ranges are unit-step spans. Align directly to the session
+		// residue; solving a modular inverse for every row is unnecessary. Keep
+		// the congruence solver below for existing non-unit table metadata.
+		residue, target := from%increment, offset%increment
+		var delta uint64
+		if target >= residue {
+			delta = target - residue
+		} else {
+			delta = increment - (residue - target)
+		}
+		value, overflow := addUint64(from, delta)
+		if overflow || value >= to {
+			return 0, 0, false
+		}
+		return value, increment, true
+	}
+	// Solve step*k = offset-from (mod increment).  A solution exists only
+	// when the gcd divides the right-hand side.  The first solution is enough
+	// because all later solutions are separated by increment/gcd steps.
+	g := gcdUint64(step, increment)
+	fromResidue := from % increment
+	offsetResidue := offset % increment
+	var rhs uint64
+	if offsetResidue >= fromResidue {
+		rhs = offsetResidue - fromResidue
+	} else {
+		rhs = increment - (fromResidue - offsetResidue)
+	}
+	if rhs%g != 0 {
+		return 0, 0, false
+	}
+
+	modulus := increment / g
+	k := uint64(0)
+	if modulus > 1 {
+		inverse, ok := modularInverse((step/g)%modulus, modulus)
+		if !ok {
+			return 0, 0, false
+		}
+		product, overflow := multiplyUint64((rhs/g)%modulus, inverse)
+		if overflow {
+			// The frontend range is small, but remote process payloads are not
+			// trusted to retain that bound.  Use overflow-safe modular
+			// multiplication so malformed metadata cannot produce a wrong key.
+			product = modularMultiply((rhs/g)%modulus, inverse, modulus)
+		}
+		k = product % modulus
+	}
+
+	delta, overflow := multiplyUint64(k, step)
+	if overflow {
+		return 0, 0, false
+	}
+	value, overflow := addUint64(from, delta)
+	if overflow || value >= to {
+		return 0, 0, false
+	}
+	period, overflow := multiplyUint64(step, modulus)
+	if overflow {
+		period = 0
+	}
+	return value, period, true
+}
+
+func gcdUint64(a, b uint64) uint64 {
+	for b != 0 {
+		a, b = b, a%b
+	}
+	return a
+}
+
+func modularInverse(a, modulus uint64) (uint64, bool) {
+	// The frontend limits increment to 65535.  Keep the arithmetic bounded
+	// here as well so malformed remote state cannot overflow signed
+	// intermediate values in the extended Euclidean algorithm.
+	if modulus == 0 || modulus > uint64(^uint64(0)>>1) {
+		return 0, false
+	}
+	oldR, r := int64(a), int64(modulus)
+	oldS, s := int64(1), int64(0)
+	for r != 0 {
+		quotient := oldR / r
+		oldR, r = r, oldR-quotient*r
+		oldS, s = s, oldS-quotient*s
+	}
+	if oldR != 1 {
+		return 0, false
+	}
+	if oldS < 0 {
+		oldS += int64(modulus)
+	}
+	return uint64(oldS), true
+}
+
+func addUint64(a, b uint64) (uint64, bool) {
+	value := a + b
+	return value, value < a
+}
+
+func multiplyUint64(a, b uint64) (uint64, bool) {
+	if a != 0 && b > ^uint64(0)/a {
+		return 0, true
+	}
+	return a * b, false
+}
+
+func modularMultiply(a, b, modulus uint64) uint64 {
+	if modulus == 1 {
+		return 0
+	}
+	result := uint64(0)
+	a %= modulus
+	for b > 0 {
+		if b&1 != 0 {
+			if result >= modulus-a {
+				result -= modulus - a
+			} else {
+				result += a
+			}
+		}
+		b >>= 1
+		if b == 0 {
+			break
+		}
+		if a >= modulus-a {
+			a -= modulus - a
+		} else {
+			a += a
+		}
+	}
+	return result
+}
+
+func (r *ranges) removeAt(i int) {
+	copy(r.values[2*i:], r.values[2*i+2:])
+	r.values = r.values[:len(r.values)-2]
+	if i < len(r.allocatedAt) {
+		copy(r.allocatedAt[i:], r.allocatedAt[i+1:])
+		r.allocatedAt = r.allocatedAt[:len(r.allocatedAt)-1]
+	}
+}
+
 func (r *ranges) current() uint64 {
 	n := r.rangeCount()
 	for i := 0; i < n; i++ {

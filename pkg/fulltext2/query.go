@@ -269,6 +269,19 @@ func JSONValueTokenize(text []byte) []WordPos {
 // which produced zero tokens for a T_json column and mis-parsed multi-column json — so
 // CDC-inserted json rows were unsearchable.)
 func CdcTokenizer(parser string) (func(string) []WordPos, error) {
+	return CdcTokenizerWithJSONOptions(parser, JSONTermOptions{})
+}
+
+// CdcTokenizerWithJSONOptions is CdcTokenizer for a config that knows its json
+// term shape. When the index uses tuple terms the writer has already produced
+// the finished terms (Fulltext2SqlWriter.rowText) into the length-prefixed
+// carrier, so there is nothing to tokenize here — the terms are decoded back
+// verbatim. Tokenizing that carrier as text would corrupt it: the terms are raw
+// packed bytes.
+func CdcTokenizerWithJSONOptions(parser string, opt JSONTermOptions) (func(string) []WordPos, error) {
+	if IsJSONParser(parser) && !IsJSONValueParser(parser) && opt.IncludeKeys {
+		return DecodeJSONTermCarrier, nil
+	}
 	if IsJSONValueParser(parser) {
 		// json_value: the CDC writer (rowText) already flattened each json column to its
 		// '\n'-joined whole values, so here we just recover them as atomic tokens — NOT

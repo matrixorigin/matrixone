@@ -22,5 +22,29 @@ select hll_cardinality(null);
 NULL
 select hll_cardinality(cast('bad' as varbinary));
 invalid input: invalid HLL sketch: too short binary
+create table hll_add_ctas as select hll_add_agg(user_id) as sketch from hll_01;
+show create table hll_add_ctas;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+hll_add_ctas  ¦  CREATE TABLE `hll_add_ctas` (
+  `sketch` varbinary(65535) NOT NULL
+)
+insert into hll_add_ctas values ();
+invalid input: invalid default value for column 'sketch'
+select hll_cardinality(sketch) from hll_add_ctas;
+➤ hll_cardinality(sketch)[-5,64,0]  𝄀
+3
+create table hll_merge_ctas as select hll_merge_agg(sketch) as sketch from hll_add_ctas;
+show create table hll_merge_ctas;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+hll_merge_ctas  ¦  CREATE TABLE `hll_merge_ctas` (
+  `sketch` varbinary(65535) NOT NULL
+)
+insert into hll_merge_ctas values ();
+invalid input: invalid default value for column 'sketch'
+select hll_cardinality(sketch) from hll_merge_ctas;
+➤ hll_cardinality(sketch)[-5,64,0]  𝄀
+3
+drop table hll_merge_ctas;
+drop table hll_add_ctas;
 drop table hll_daily;
 drop table hll_01;

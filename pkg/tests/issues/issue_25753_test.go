@@ -31,13 +31,16 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 )
 
 type issue25753TraceConn struct {
 	net.Conn
-	mu    sync.Mutex
-	reads []byte
+	mu                     sync.Mutex
+	reads                  []byte
+	rewriteNextDecimalType bool
+	rewroteDecimalType     bool
 }
 
 func (c *issue25753TraceConn) Read(data []byte) (int, error) {
@@ -48,6 +51,65 @@ func (c *issue25753TraceConn) Read(data []byte) (int, error) {
 		c.mu.Unlock()
 	}
 	return n, err
+}
+
+func (c *issue25753TraceConn) Write(data []byte) (int, error) {
+	c.mu.Lock()
+	if c.rewriteNextDecimalType {
+		modified := append([]byte(nil), data...)
+		if issue25753RewriteFirstParamAsDecimal(modified) {
+			data = modified
+			c.rewriteNextDecimalType = false
+			c.rewroteDecimalType = true
+		}
+	}
+	c.mu.Unlock()
+	return c.Conn.Write(data)
+}
+
+func (c *issue25753TraceConn) rewriteNextParamAsDecimal() {
+	c.mu.Lock()
+	c.rewriteNextDecimalType = true
+	c.rewroteDecimalType = false
+	c.mu.Unlock()
+}
+
+func (c *issue25753TraceConn) didRewriteParamAsDecimal() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.rewroteDecimalType
+}
+
+// issue25753RewriteFirstParamAsDecimal keeps the driver's length-encoded value
+// and changes only the COM_STMT_EXECUTE type descriptor. This exercises the
+// wire shape used by clients that bind a direct DECIMAL parameter.
+func issue25753RewriteFirstParamAsDecimal(data []byte) bool {
+	const (
+		packetHeaderSize = 4
+		stmtExecute      = 0x17
+		paramCount       = 1
+	)
+	for pos := 0; pos+packetHeaderSize <= len(data); {
+		payloadLen := int(data[pos]) | int(data[pos+1])<<8 | int(data[pos+2])<<16
+		end := pos + packetHeaderSize + payloadLen
+		if end > len(data) {
+			return false
+		}
+		payload := data[pos+packetHeaderSize : end]
+		const nullBitmapLen = (paramCount + 7) / 8
+		const executeHeaderLen = 1 + 4 + 1 + 4
+		newTypesFlagPos := executeHeaderLen + nullBitmapLen
+		typePos := newTypesFlagPos + 1
+		if len(payload) > typePos+1 && payload[0] == stmtExecute &&
+			payload[newTypesFlagPos] == 1 &&
+			(payload[typePos] == byte(defines.MYSQL_TYPE_VAR_STRING) ||
+				payload[typePos] == byte(defines.MYSQL_TYPE_STRING)) {
+			payload[typePos] = byte(defines.MYSQL_TYPE_NEWDECIMAL)
+			return true
+		}
+		pos = end
+	}
+	return false
 }
 
 func (c *issue25753TraceConn) prepareStatementID(t *testing.T) uint32 {
@@ -146,6 +208,126 @@ func TestIssue25753PreparedNumericProtocolLifecycle(t *testing.T) {
 				}
 			}()
 
+			directStmt, err := conn.PrepareContext(ctx, "select ? as result")
+			require.NoError(t, err)
+			defer directStmt.Close()
+
+			// String arguments can still be numeric inputs for overloaded functions.
+			textAbsStmt, err := conn.PrepareContext(ctx, "select abs(?)")
+			require.NoError(t, err)
+			defer textAbsStmt.Close()
+			var absResult string
+			require.NoError(t, textAbsStmt.QueryRowContext(ctx, "-1.5").Scan(&absResult))
+			require.Equal(t, "1.5", absResult)
+
+			nestedAbsStmt, err := conn.PrepareContext(ctx, "select abs(? + 0)")
+			require.NoError(t, err)
+			defer nestedAbsStmt.Close()
+			var nestedAbsResult float64
+			require.NoError(t, nestedAbsStmt.QueryRowContext(ctx, float64(-1.5)).Scan(&nestedAbsResult))
+			require.Equal(t, 1.5, nestedAbsResult)
+
+			textSleepStmt, err := conn.PrepareContext(ctx, "select sleep(?)")
+			require.NoError(t, err)
+			defer textSleepStmt.Close()
+			var sleepResult int64
+			sleepStart := time.Now()
+			require.NoError(t, textSleepStmt.QueryRowContext(ctx, "0.05").Scan(&sleepResult))
+			require.GreaterOrEqual(t, time.Since(sleepStart), 40*time.Millisecond,
+				"VAR_STRING sleep argument was not rebound to a fractional numeric value")
+			require.Equal(t, int64(0), sleepResult)
+
+			distinctStmt, err := conn.PrepareContext(ctx,
+				"select distinct ? as result from (select 1 union all select 2) as source")
+			require.NoError(t, err)
+			defer distinctStmt.Close()
+			assertPreparedDirect := func(
+				prepared *sql.Stmt,
+				value any,
+				databaseType string,
+				wantPrecision, wantScale int64,
+				scanTarget any,
+			) {
+				t.Helper()
+				rows, queryErr := prepared.QueryContext(ctx, value)
+				require.NoError(t, queryErr)
+				defer rows.Close()
+
+				columnTypes, typeErr := rows.ColumnTypes()
+				require.NoError(t, typeErr)
+				require.Len(t, columnTypes, 1)
+				require.Equal(t, databaseType, columnTypes[0].DatabaseTypeName())
+				if wantPrecision >= 0 {
+					precision, scale, ok := columnTypes[0].DecimalSize()
+					require.True(t, ok)
+					require.Equal(t, wantPrecision, precision)
+					require.Equal(t, wantScale, scale)
+				}
+				require.True(t, rows.Next())
+				require.NoError(t, rows.Scan(scanTarget))
+				require.False(t, rows.Next())
+				require.NoError(t, rows.Err())
+			}
+			assertDirect := func(
+				value any,
+				databaseType string,
+				wantPrecision, wantScale int64,
+				scanTarget any,
+			) {
+				t.Helper()
+				assertPreparedDirect(
+					directStmt, value, databaseType, wantPrecision, wantScale, scanTarget)
+			}
+
+			var directInteger int64
+			assertDirect(int64(-42), "BIGINT", -1, -1, &directInteger)
+			require.Equal(t, int64(-42), directInteger)
+
+			assertWireDecimal := func(value string, wantPrecision, wantScale int64, expected string) {
+				t.Helper()
+				traceConn.rewriteNextParamAsDecimal()
+				var actual string
+				assertDirect(value, "DECIMAL", wantPrecision, wantScale, &actual)
+				require.True(t, traceConn.didRewriteParamAsDecimal())
+				require.Equal(t, expected, actual)
+			}
+			assertWireDecimal(
+				"-12345678901234567890.123456789", 29, 9,
+				"-12345678901234567890.123456789")
+			assertWireDecimal("0.00", 2, 2, "0.00")
+			assertWireDecimal("0e-30", 30, 30, "0."+strings.Repeat("0", 30))
+			assertWireDecimal("0e+77", 1, 0, "0")
+			assertWireDecimal("000.000e+80", 1, 0, "0")
+			assertWireDecimal(strings.Repeat("0", 100)+"1.0", 2, 1, "1.0")
+			assertWireDecimal(strings.Repeat("0", 200)+"2.0", 2, 1, "2.0")
+			leadingZeroWide := strings.Repeat("0", 100) + strings.Repeat("9", 65)
+			assertWireDecimal(leadingZeroWide, 65, 0, strings.Repeat("9", 65))
+
+			traceConn.rewriteNextParamAsDecimal()
+			err = directStmt.QueryRowContext(ctx, "0e-77").Scan(new(string))
+			require.Error(t, err)
+			require.True(t, traceConn.didRewriteParamAsDecimal())
+			var decimalErr *mysqlDriver.MySQLError
+			require.True(t, errors.As(err, &decimalErr), "expected MySQL protocol error, got %T: %v", err, err)
+			require.Equal(t, moerr.ErrInvalidInput, decimalErr.Number)
+			require.NotContains(t, decimalErr.Message, "0e-77")
+
+			traceConn.rewriteNextParamAsDecimal()
+			var distinctDecimal string
+			assertPreparedDirect(distinctStmt, "123.4500", "DECIMAL", 7, 4, &distinctDecimal)
+			require.True(t, traceConn.didRewriteParamAsDecimal())
+			require.Equal(t, "123.4500", distinctDecimal)
+
+			wideDecimal := strings.Repeat("9", 65)
+			assertWireDecimal(wideDecimal, 65, 0, wideDecimal)
+
+			var directNullResult sql.NullString
+			assertDirect(nil, "TEXT", -1, -1, &directNullResult)
+			require.False(t, directNullResult.Valid)
+			assertWireDecimal(
+				"-12345678901234567890.123456789", 29, 9,
+				"-12345678901234567890.123456789")
+
 			assertValue := func(left, right any, expected string) {
 				t.Helper()
 				rows, queryErr := stmt.QueryContext(ctx, left, right)
@@ -178,6 +360,36 @@ func TestIssue25753PreparedNumericProtocolLifecycle(t *testing.T) {
 			assertValue(int64(-9007199254740993), int64(0), "-9007199254740992")
 			assertValue("9007199254740993", int64(17), "9007199254741011")
 			assertValue(uint64(9007199254740993), "29", "9007199254741023")
+
+			// CTAS is a binary prepared DDL path: the table definition is cloned
+			// for execution, then its CreateAsSelectSql is compiled as a follow-up
+			// INSERT. The runtime parameter must reach that INSERT, not merely
+			// create an empty table.
+			const ctasDB = "issue25753_prepared_ctas_db"
+			const ctasTable = ctasDB + ".issue25753_prepared_ctas"
+			_, err = conn.ExecContext(ctx, "drop database if exists "+ctasDB)
+			require.NoError(t, err)
+			_, err = conn.ExecContext(ctx, "create database "+ctasDB)
+			require.NoError(t, err)
+			defer func() {
+				_, _ = conn.ExecContext(context.Background(), "drop database if exists "+ctasDB)
+			}()
+			_, err = conn.ExecContext(ctx, "drop table if exists "+ctasTable)
+			require.NoError(t, err)
+			func() {
+				ctasStmt, prepareErr := conn.PrepareContext(ctx,
+					"create table "+ctasTable+" as select ? as value")
+				require.NoError(t, prepareErr)
+				defer ctasStmt.Close()
+				_, execErr := ctasStmt.ExecContext(ctx, int64(42))
+				require.NoError(t, execErr)
+			}()
+			var ctasValue int64
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select value from "+ctasTable).Scan(&ctasValue))
+			require.Equal(t, int64(42), ctasValue)
+			_, err = conn.ExecContext(ctx, "drop table if exists "+ctasTable)
+			require.NoError(t, err)
 
 			rows, err := stmt.QueryContext(ctx, nil, int64(0))
 			require.NoError(t, err)

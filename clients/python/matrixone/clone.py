@@ -49,6 +49,19 @@ class BaseCloneManager:
         """Get the executor for SQL execution (session or client)"""
         return self.executor if self.executor else self.client
 
+    def _build_clone_sql(
+        self,
+        object_type: str,
+        target_name: str,
+        source_name: str,
+        snapshot_name: Optional[str] = None,
+        if_not_exists: bool = False,
+    ) -> str:
+        """Build a CREATE ... CLONE SQL statement."""
+        if_not_exists_clause = "IF NOT EXISTS " if if_not_exists else ""
+        snapshot_clause = f' {{snapshot = "{snapshot_name}"}}' if snapshot_name else ""
+        return f"CREATE {object_type} {if_not_exists_clause}{target_name} CLONE {source_name}{snapshot_clause}"
+
     def _build_clone_database_sql(
         self,
         target_db: str,
@@ -57,14 +70,7 @@ class BaseCloneManager:
         if_not_exists: bool = False,
     ) -> str:
         """Build CLONE DATABASE SQL statement"""
-        if_not_exists_clause = "IF NOT EXISTS " if if_not_exists else ""
-
-        if snapshot_name:
-            return (
-                f"CREATE DATABASE {if_not_exists_clause}{target_db} " f"CLONE {source_db} {{snapshot = \"{snapshot_name}\"}}"
-            )
-        else:
-            return f"CREATE DATABASE {if_not_exists_clause}{target_db} CLONE {source_db}"
+        return self._build_clone_sql("DATABASE", target_db, source_db, snapshot_name, if_not_exists)
 
     def _build_clone_table_sql(
         self,
@@ -74,15 +80,7 @@ class BaseCloneManager:
         if_not_exists: bool = False,
     ) -> str:
         """Build CLONE TABLE SQL statement"""
-        if_not_exists_clause = "IF NOT EXISTS " if if_not_exists else ""
-
-        if snapshot_name:
-            return (
-                f"CREATE TABLE {if_not_exists_clause}{target_table} "
-                f"CLONE {source_table} {{snapshot = \"{snapshot_name}\"}}"
-            )
-        else:
-            return f"CREATE TABLE {if_not_exists_clause}{target_table} CLONE {source_table}"
+        return self._build_clone_sql("TABLE", target_table, source_table, snapshot_name, if_not_exists)
 
 
 class CloneManager(BaseCloneManager):

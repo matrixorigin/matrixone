@@ -57,6 +57,103 @@ select (select t1.a from t2 where t2.d > t1.a limit 2) as x from t1 where t1.a =
 11
 select (select t1.a from t2 where t2.d > t1.a limit 2) as x from t1 where t1.a = 1;
 Subquery returns more than 1 row
+delete from t2;
+insert into t2 values (50);
+insert into t1 values (11, 23, 34);
+select a, b, (select a + 1 from t2 where d > a limit 1) as arithmetic_wrap from t1 order by a, b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  arithmetic_wrap[-5,64,0]  𝄀
+1  ¦  2  ¦  2  𝄀
+11  ¦  22  ¦  12  𝄀
+11  ¦  23  ¦  12
+select a, b, (select cast(a as signed) from t2 where d > a limit 1) as cast_wrap from t1 order by a, b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  cast_wrap[-5,64,0]  𝄀
+1  ¦  2  ¦  1  𝄀
+11  ¦  22  ¦  11  𝄀
+11  ¦  23  ¦  11
+select a, b, (select coalesce(a, 0) from t2 where d > a limit 1) as coalesce_wrap from t1 order by a, b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  coalesce_wrap[-5,64,0]  𝄀
+1  ¦  2  ¦  1  𝄀
+11  ¦  22  ¦  11  𝄀
+11  ¦  23  ¦  11
+select a, b, (select if(a > 0, a, 0) from t2 where d > a limit 1) as if_wrap from t1 order by a, b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  if_wrap[-5,64,0]  𝄀
+1  ¦  2  ¦  1  𝄀
+11  ¦  22  ¦  11  𝄀
+11  ¦  23  ¦  11
+select a, b, (select case when a > 0 then a else 0 end from t2 where d > a limit 1) as case_wrap from t1 order by a, b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  case_wrap[-5,64,0]  𝄀
+1  ¦  2  ¦  1  𝄀
+11  ¦  22  ¦  11  𝄀
+11  ¦  23  ¦  11
+select a, b, (select case when d > 0 then a else 0 end from t2 where d > a limit 1) as mixed_case_wrap from t1 order by a, b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  mixed_case_wrap[-5,64,0]  𝄀
+1  ¦  2  ¦  1  𝄀
+11  ¦  22  ¦  11  𝄀
+11  ¦  23  ¦  11
+delete from t2;
+select a, b, (select case when d > 0 then a else 0 end from t2 where d > a limit 1) as empty_mixed from t1 order by a, b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  empty_mixed[-5,64,0]  𝄀
+1  ¦  2  ¦  null  𝄀
+11  ¦  22  ¦  null  𝄀
+11  ¦  23  ¦  null
+insert into t2 values (50), (60), (70);
+select a, b, (select case when d > 0 then a else 0 end from t2 where d > a limit 1) as multi_mixed from t1 order by a, b;
+➤ a[4,32,0]  ¦  b[4,32,0]  ¦  multi_mixed[-5,64,0]  𝄀
+1  ¦  2  ¦  1  𝄀
+11  ¦  22  ¦  11  𝄀
+11  ¦  23  ¦  11
+select a, (select case when x.d > 0 then a else 0 end from (select max(d) as d from t2) x where x.d > a limit 1) as derived_agg_mixed from t1;
+-- @regex("wrapped correlated scalar projection cannot be safely decorrelated", true)
+wrapped correlated scalar projection cannot be safely decorrelated is not yet implemented
+select a, (select case when x.d > 0 then a else 0 end from (select d from t2 group by d) x where x.d > a limit 1) as grouped_agg_mixed from t1;
+-- @regex("wrapped correlated scalar projection cannot be safely decorrelated", true)
+wrapped correlated scalar projection cannot be safely decorrelated is not yet implemented
+delete from t1 where (select case when d > 0 then a else 0 end from t2 where d > a limit 1) >= 0;
+-- @regex("wrapped correlated scalar projection cannot be safely decorrelated", true)
+wrapped correlated scalar projection cannot be safely decorrelated is not yet implemented
+update t1 set b = (select case when d > 0 then a else 0 end from t2 where d > a limit 1);
+-- @regex("wrapped correlated scalar projection cannot be safely decorrelated", true)
+wrapped correlated scalar projection cannot be safely decorrelated is not yet implemented
+select a, (select case when d > 0 then a else 0 end from t2 where d = a order by d limit 1) as ordered_eq_mixed from t1;
+-- @regex("wrapped correlated scalar projection cannot be safely decorrelated", true)
+wrapped correlated scalar projection cannot be safely decorrelated is not yet implemented
+select a, (select case when x.d > 0 then a else 0 end from (select max(d) as d from t2) x where x.d = a limit 1) as derived_agg_eq_mixed from t1;
+-- @regex("wrapped correlated scalar projection cannot be safely decorrelated", true)
+wrapped correlated scalar projection cannot be safely decorrelated is not yet implemented
+select a, (select case when d > 0 then a else 0 end from t2 where d = a group by d limit 1) as grouped_eq_mixed from t1;
+-- @regex("wrapped correlated scalar projection cannot be safely decorrelated", true)
+wrapped correlated scalar projection cannot be safely decorrelated is not yet implemented
+select a, (select (select case when t1.a > 0 then t1.a else 0 end from t2 limit 1) from t2 as outer_t2 limit 1) as deep_mixed from t1;
+-- @regex("wrapped correlated scalar projection cannot be safely decorrelated", true)
+wrapped correlated scalar projection cannot be safely decorrelated is not yet implemented
+select a, (select case when count(*) > 0 then t1.a else 0 end from t2) as aggregate_projection_only from t1;
+-- @regex("wrapped correlated aggregate projection cannot be safely decorrelated", true)
+wrapped correlated aggregate projection cannot be safely decorrelated is not yet implemented
+select a, (select case when count(*) > 0 then t1.a else 0 end from t2 limit 1) as aggregate_limit from t1;
+-- @regex("wrapped correlated aggregate projection cannot be safely decorrelated", true)
+wrapped correlated aggregate projection cannot be safely decorrelated is not yet implemented
+select a, (select case when count(*) > 0 then t1.a else 0 end from t2 limit 1 offset 1) as aggregate_offset from t1;
+-- @regex("wrapped correlated aggregate projection cannot be safely decorrelated", true)
+wrapped correlated aggregate projection cannot be safely decorrelated is not yet implemented
+select a, (select distinct case when count(*) > 0 then t1.a else 0 end from t2) as aggregate_distinct from t1;
+-- @regex("wrapped correlated aggregate projection cannot be safely decorrelated", true)
+wrapped correlated aggregate projection cannot be safely decorrelated is not yet implemented
+select a, (select case when count(*) > 0 then t1.a else 0 end from t2 having count(*) > 0) as aggregate_having from t1;
+-- @regex("wrapped correlated aggregate projection cannot be safely decorrelated", true)
+wrapped correlated aggregate projection cannot be safely decorrelated is not yet implemented
+delete from t1 where (select case when d > 0 then a else 0 end from t2 where d = a limit 1) >= 0;
+-- @regex("wrapped correlated scalar projection cannot be safely decorrelated", true)
+wrapped correlated scalar projection cannot be safely decorrelated is not yet implemented
+update t1 set b = (select case when d > 0 then a else 0 end from t2 where d = a limit 1);
+-- @regex("wrapped correlated scalar projection cannot be safely decorrelated", true)
+wrapped correlated scalar projection cannot be safely decorrelated is not yet implemented
+select a, (select case when d > 0 then a else 0 end from t2 where d > a limit 1) as grouped_mixed from t1 group by a;
+-- @regex("outer input without a stable row identity", true)
+wrapped correlated LIMIT on an outer input without a stable row identity is not yet implemented
+select a from t1 group by a having (select case when d > 0 then a else 0 end from t2 where d > a limit 1) >= 0;
+-- @regex("outer input without a stable row identity", true)
+wrapped correlated LIMIT on an outer input without a stable row identity is not yet implemented
+delete from t1 where b = 23;
 select p.id, (select coalesce(sum(c.v), 0) from child_agg c where c.corr_key = p.corr_key) as sum_value from parent_agg p order by p.id;
 ➤ id[4,32,0]  ¦  sum_value[-5,64,0]  𝄀
 1  ¦  12  𝄀

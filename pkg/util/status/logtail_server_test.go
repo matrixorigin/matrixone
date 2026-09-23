@@ -61,6 +61,11 @@ func (m *logtailer) RangeLogtail(
 func (m *logtailer) RegisterCallback(cb func(from, to timestamp.Timestamp, closeCB func(), tails ...logtail.TableLogtail) error) {
 }
 
+func (m *logtailer) ReadBarrier(context.Context) (timestamp.Timestamp, error) {
+	frontier, _ := m.Now()
+	return frontier, nil
+}
+
 func (m *logtailer) TableLogtail(
 	ctx context.Context, table api.TableID, from, to timestamp.Timestamp,
 ) (logtail.TableLogtail, func(), error) {

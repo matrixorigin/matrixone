@@ -51,6 +51,7 @@ type container struct {
 	remoteReceivers []*process.WrapCs
 	remoteInfo      process.RemotePipelineInformationChannel
 	remoteProc      *process.Process
+	remoteTerminal  *colexec.RemoteReceiverTerminal
 
 	// sendFunc is the rule you want to send batch
 	sendFunc func(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bool, error)
@@ -273,7 +274,16 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 	}
 	if dispatch.ctr != nil {
 		if dispatch.ctr.isRemote {
+			if dispatch.ctr.remoteTerminal != nil {
+				dispatch.ctr.remoteTerminal.Finish(terminalErr)
+			}
 			for _, r := range dispatch.ctr.remoteReceivers {
+				if r != nil && r.TerminalBacked {
+					// The generation terminal above is the only terminal owner.
+					// A legacy Err write here would race the immutable result and
+					// can fill the compatibility channel during cleanup.
+					continue
+				}
 				if r == nil || r.Err == nil {
 					process.WarnPipelineCleanupf(
 						proc,
@@ -302,7 +312,7 @@ func (dispatch *Dispatch) Reset(proc *process.Process, pipelineFailed bool, err 
 				uuids = append(uuids, dispatch.RemoteRegs[i].Uuid)
 			}
 			if dispatch.ctr.server != nil {
-				dispatch.ctr.server.DeleteUuids(uuids)
+				dispatch.ctr.server.CloseRemoteReceivers(uuids, dispatch.ctr.remoteInfo)
 			}
 		}
 	}

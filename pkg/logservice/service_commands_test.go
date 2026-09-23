@@ -37,6 +37,23 @@ import (
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
+func TestRequestHeartbeatCoalescesBeforeWorker(t *testing.T) {
+	service := &Service{heartbeatC: make(chan struct{}, 1)}
+	service.requestHeartbeat()
+	service.requestHeartbeat()
+
+	select {
+	case <-service.heartbeatC:
+	default:
+		t.Fatal("heartbeat request was not retained")
+	}
+	select {
+	case <-service.heartbeatC:
+		t.Fatal("heartbeat requests were not coalesced")
+	default:
+	}
+}
+
 func TestBackgroundTickAndHeartbeat(t *testing.T) {
 	runtime.RunTest(
 		"",

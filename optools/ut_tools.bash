@@ -16,6 +16,37 @@
 
 GO_UT_ANALYSIS_VERSION="v0.0.0-20250711025253-f31acb12d3b1"
 
+# make ut already owns native preparation. Its invocation-local indication is
+# accepted only with the existing source/platform/artifact provenance proof.
+# Direct script calls, archives, and stale artifacts keep the build fallback.
+function prepare_ut_native() {
+    local accelerator optimization simsimd extra platform
+    local goos goarch hostos hostarch library
+    local expected_accelerator=cpu expected_simsimd=0
+    [[ "${MO_CL_CUDA:-0}" == 1 ]] && expected_accelerator=gpu
+    [[ "${MO_CL_SIMSIMD:-0}" == 1 ]] && expected_simsimd=1
+    IFS=: read -r accelerator optimization simsimd extra <<< "${UT_NATIVE_PREPARED:-}"
+    if [[ -z "${extra}" && "${accelerator}" == "${expected_accelerator}" &&
+          ( "${optimization}" == release || "${optimization}" == debug ) &&
+          "${simsimd}" == "${expected_simsimd}" ]]; then
+        if platform=$(go env GOOS GOARCH GOHOSTOS GOHOSTARCH); then
+            read -r goos goarch hostos hostarch <<< "$(printf '%s' "${platform}" | tr '\n' ' ')"
+            library=""
+            case "${goos}" in
+                darwin) library=libmo.dylib ;;
+                linux) library=libmo.so ;;
+            esac
+            if [[ -n "${library}" && "${goos}" == "${hostos}" && "${goarch}" == "${hostarch}" ]] &&
+                ./cgo/mo-native-provenance verify "$PWD" "$PWD/cgo/${library}" \
+                    "${goos}" "${goarch}" "${accelerator}" "${optimization}" "${simsimd}"; then
+                printf '%s\n' '[ut_native] verified Makefile-prepared artifacts; reuse native preparation'
+                return 0
+            fi
+        fi
+    fi
+    make cgo
+}
+
 function retry_command() {
     if (( $# < 3 )); then
         echo "Usage: retry_command MAX_ATTEMPTS DELAY_SECONDS COMMAND [ARG...]" >&2
@@ -56,6 +87,22 @@ function install_go_ut_analysis() {
     local max_attempts=${1:-3}
     local delay_seconds=${2:-5}
 
+    # Persistent runners may already have this exact tool. Inspect build
+    # metadata without executing an unknown/stale binary; replacements are not
+    # the pinned release. Missing or unreadable metadata falls back to install.
+    local installed_tool
+    local build_info
+    if installed_tool=$(command -v go-ut-analysis) &&
+       [[ -f "${installed_tool}" && -x "${installed_tool}" ]] &&
+       build_info=$(go version -m "${installed_tool}" 2>/dev/null) &&
+       printf '%s\n' "${build_info}" | awk -v version="${GO_UT_ANALYSIS_VERSION}" '
+           $1 == "mod" && $2 == "github.com/matrixorigin/go-ut-analysis" && $3 == version { pinned = 1 }
+           $1 == "=>" { replaced = 1 }
+           END { exit !(pinned && !replaced) }
+       '; then
+        return 0
+    fi
+
     retry_command "${max_attempts}" "${delay_seconds}" \
         go install "github.com/matrixorigin/go-ut-analysis@${GO_UT_ANALYSIS_VERSION}"
 }
@@ -90,4 +137,117 @@ function list_embedded_cluster_test_packages() {
         "${tags_args[@]}" -f "${template}" "$@") || return $?
 
     printf '%s\n' "${discovered_packages}" | sed '/^$/d' | LC_ALL=C sort -u
+}
+
+# list_ut_shard_stages is the single source of truth for the race-UT shard
+# contract. Keep the all-suite path explicit so a newly introduced stage cannot
+# run only in UT_SHARD=all while being silently absent from every CI shard.
+function list_ut_shard_stages() {
+    if (( $# != 1 )); then
+        echo "Usage: list_ut_shard_stages SHARD" >&2
+        return 2
+    fi
+
+    case "$1" in
+        all)
+            printf '%s\n' light hnsw serial embedded heavy plan
+            ;;
+        light)
+            printf '%s\n' light hnsw
+            ;;
+        issues)
+            printf '%s\n' serial
+            ;;
+        embedded)
+            printf '%s\n' embedded
+            ;;
+        heavy-plan)
+            printf '%s\n' heavy plan
+            ;;
+        *)
+            echo "Unknown UT shard '$1'" >&2
+            return 2
+            ;;
+    esac
+}
+
+function should_run_ut_stage() {
+    if (( $# != 1 )); then
+        echo "Usage: should_run_ut_stage STAGE" >&2
+        UT_SHARD_ROUTING_ERROR=1
+        return 2
+    fi
+
+    if ! list_ut_shard_stages all | grep -Fxq "$1"; then
+        echo "Unknown UT stage '$1'" >&2
+        UT_SHARD_ROUTING_ERROR=1
+        return 2
+    fi
+
+    local selected_stages
+    if ! selected_stages=$(list_ut_shard_stages "${UT_SHARD:-all}"); then
+        UT_SHARD_ROUTING_ERROR=1
+        return 2
+    fi
+    printf '%s\n' "${selected_stages}" | grep -Fxq "$1"
+}
+
+# validate_complete_partition proves that the supplied groups are a disjoint,
+# complete partition of the authoritative item scope. It is cheap enough to run
+# before every shard and makes routing or discovery drift fail closed instead of
+# producing a green run with missing or duplicated coverage.
+function validate_complete_partition() {
+    if (( $# < 3 )); then
+        echo "Usage: validate_complete_partition LABEL EXPECTED GROUP [GROUP...]" >&2
+        return 2
+    fi
+
+    local label=$1
+    local expected=$2
+    shift 2
+    local group
+    local package
+
+    {
+        while IFS= read -r package; do
+            if [[ -n "${package}" ]]; then
+                printf 'expected\t%s\n' "${package}"
+            fi
+        done <<< "${expected}"
+
+        for group in "$@"; do
+            while IFS= read -r package; do
+                if [[ -n "${package}" ]]; then
+                    printf 'actual\t%s\n' "${package}"
+                fi
+            done <<< "${group}"
+        done
+    } | awk -F '\t' -v label="${label}" '
+        $1 == "expected" { expected[$2]++; next }
+        $1 == "actual" { actual[$2]++; next }
+        END {
+            failed = 0
+            for (package in expected) {
+                if (expected[package] != 1) {
+                    print label " occurs " expected[package] " times in expected scope: " package > "/dev/stderr"
+                    failed = 1
+                }
+                if (!(package in actual)) {
+                    print "Missing " label " from partition: " package > "/dev/stderr"
+                    failed = 1
+                }
+            }
+            for (package in actual) {
+                if (!(package in expected)) {
+                    print "Unexpected " label " in partition: " package > "/dev/stderr"
+                    failed = 1
+                }
+                if (actual[package] != 1) {
+                    print label " occurs " actual[package] " times in partition: " package > "/dev/stderr"
+                    failed = 1
+                }
+            }
+            exit failed
+        }
+    '
 }

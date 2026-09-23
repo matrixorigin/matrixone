@@ -98,6 +98,15 @@ func WithPipelineFlush() SinkerOption {
 	}
 }
 
+// WithChunkedColumnPolicy configures a live, service-specific rollout policy
+// for object writers created by this Sinker. A nil or unsupported FileSinker
+// keeps the legacy persisted-column format.
+func WithChunkedColumnPolicy(policy objectio.ChunkedColumnPolicy) SinkerOption {
+	return func(sinker *Sinker) {
+		sinker.config.chunkedColumnPolicy = policy
+	}
+}
+
 type FileSinker interface {
 	Sink(context.Context, *batch.Batch) error
 	Sync(context.Context) (*objectio.ObjectStats, error)
@@ -121,12 +130,17 @@ type FSinkerImpl struct {
 	mp     *mpool.MPool
 	fs     fileservice.FileService
 
-	sortKeyPos      int
-	isPrimaryKey    bool
-	isTombstone     bool
-	seqnums         []uint16
-	schemaVersion   uint32
-	hiddenSelection objectio.HiddenColumnSelection
+	sortKeyPos          int
+	isPrimaryKey        bool
+	isTombstone         bool
+	seqnums             []uint16
+	schemaVersion       uint32
+	hiddenSelection     objectio.HiddenColumnSelection
+	chunkedColumnPolicy objectio.ChunkedColumnPolicy
+}
+
+func (s *FSinkerImpl) SetChunkedColumnPolicy(policy objectio.ChunkedColumnPolicy) {
+	s.chunkedColumnPolicy = policy
 }
 
 func (s *FSinkerImpl) Sink(ctx context.Context, b *batch.Batch) error {
@@ -152,6 +166,7 @@ func (s *FSinkerImpl) Sink(ctx context.Context, b *batch.Batch) error {
 				s.arena,
 			)
 		}
+		s.writer.SetChunkedColumnPolicy(s.chunkedColumnPolicy)
 	}
 
 	_, err := s.writer.WriteBatch(b)
@@ -329,6 +344,18 @@ func NewSinker(
 	for _, opt := range opts {
 		opt(sinker)
 	}
+	if policy := sinker.config.chunkedColumnPolicy; policy != nil {
+		factory := sinker.fSinker.factory
+		sinker.fSinker.factory = func(mp *mpool.MPool, fs fileservice.FileService) FileSinker {
+			fileSinker := factory(mp, fs)
+			if setter, ok := fileSinker.(interface {
+				SetChunkedColumnPolicy(objectio.ChunkedColumnPolicy)
+			}); ok {
+				setter.SetChunkedColumnPolicy(policy)
+			}
+			return fileSinker
+		}
+	}
 
 	sinker.fillDefaults()
 	return sinker
@@ -377,10 +404,11 @@ type Sinker struct {
 		sortKeyIdx int
 	}
 	config struct {
-		allMergeSorted bool
-		dedupAll       bool
-		tailSizeCap    int
-		offHeap        bool
+		allMergeSorted      bool
+		dedupAll            bool
+		tailSizeCap         int
+		offHeap             bool
+		chunkedColumnPolicy objectio.ChunkedColumnPolicy
 	}
 	fSinker struct {
 		executor FileSinker
@@ -1028,6 +1056,19 @@ func (sinker *Sinker) WriteOwned(
 	ctx context.Context,
 	data *batch.Batch,
 ) (owned bool, err error) {
+	if data == nil {
+		return false, moerr.NewInvalidInput(ctx, "Sinker.WriteOwned requires a batch")
+	}
+	for index, vec := range data.Vecs {
+		if vec == nil {
+			return false, moerr.NewInvalidInputf(ctx,
+				"Sinker.WriteOwned batch has a nil vector at column %d", index)
+		}
+		if vec.HasBorrowedBacking() || vec.NeedDup() {
+			return false, moerr.NewInvalidInputf(ctx,
+				"Sinker.WriteOwned requires unique-owned vector backing at column %d", index)
+		}
+	}
 	if data.RowCount() != objectio.BlockMaxRows {
 		return false, sinker.Write(ctx, data)
 	}

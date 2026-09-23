@@ -84,7 +84,7 @@ CREATE table t8 as select a as alias_a, 1 from t1;
 desc t8;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 alias_a  ¦  INT(32)  ¦  YES  ¦    ¦  123  ¦    ¦    𝄀
-1  ¦  BIGINT(0)  ¦  NO  ¦    ¦  null  ¦    ¦  
+1  ¦  BIGINT  ¦  NO  ¦    ¦  null  ¦    ¦  
 select * from t8;
 ➤ alias_a[4,32,0]  ¦  1[-5,64,0]  𝄀
 1  ¦  1  𝄀
@@ -156,7 +156,7 @@ insert into table03 values (1, 'a', 'database', 'cover all data types', 12, 3727
 insert into table03 values (2, 'b', 'table', 'database management system', 1, 324214, 0.0001, 32932.000, -321342.0);
 insert into table03 values (null, null, null, null, null, null, null, null, null);
 select * from table03;
-➤ col1[4,32,0]  ¦  col2[1,1,0]  ¦  col3[12,-1,0]  ¦  col4[12,0,0]  ¦  col5[-6,8,0]  ¦  col6[-5,64,0]  ¦  col7[3,38,0]  ¦  col8[7,24,0]  ¦  col9[8,54,0]  𝄀
+➤ col1[4,32,0]  ¦  col2[1,1,0]  ¦  col3[12,-1,0]  ¦  col4[12,0,0]  ¦  col5[-6,8,0]  ¦  col6[-5,64,0]  ¦  col7[3,10,0]  ¦  col8[7,24,0]  ¦  col9[8,54,0]  𝄀
 1  ¦  a  ¦  database  ¦  cover all data types  ¦  12  ¦  372743927942  ¦  3232  ¦  -1489.123  ¦  7.2392342E7  𝄀
 2  ¦  b  ¦  table  ¦  database management system  ¦  1  ¦  324214  ¦  0  ¦  32932.0  ¦  -321342.0  𝄀
 null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
@@ -165,7 +165,7 @@ create table table04 as select * from table03;
 show create table table04;
 [unknown result because it is related to issue#24436]
 select * from table04;
-➤ col1[4,32,0]  ¦  col2[1,1,0]  ¦  col3[12,-1,0]  ¦  col4[12,0,0]  ¦  col5[-6,8,0]  ¦  col6[-5,64,0]  ¦  col7[3,38,0]  ¦  col8[7,24,0]  ¦  col9[8,54,0]  𝄀
+➤ col1[4,32,0]  ¦  col2[1,1,0]  ¦  col3[12,-1,0]  ¦  col4[12,0,0]  ¦  col5[-6,8,0]  ¦  col6[-5,64,0]  ¦  col7[3,10,0]  ¦  col8[7,24,0]  ¦  col9[8,54,0]  𝄀
 1  ¦  a  ¦  database  ¦  cover all data types  ¦  12  ¦  372743927942  ¦  3232  ¦  -1489.123  ¦  7.2392342E7  𝄀
 2  ¦  b  ¦  table  ¦  database management system  ¦  1  ¦  324214  ¦  0  ¦  32932.0  ¦  -321342.0  𝄀
 null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null  ¦  null
@@ -177,10 +177,10 @@ table05  ¦  CREATE TABLE `table05` (
   `col1` int DEFAULT NULL,
   `col3` varchar(10) DEFAULT NULL,
   `col5` tinyint unsigned DEFAULT NULL,
-  `col7` decimal(38,0) DEFAULT NULL
+  `col7` decimal(10,0) DEFAULT NULL
 )
 select * from table05;
-➤ col1[4,32,0]  ¦  col3[12,-1,0]  ¦  col5[-6,8,0]  ¦  col7[3,38,0]  𝄀
+➤ col1[4,32,0]  ¦  col3[12,-1,0]  ¦  col5[-6,8,0]  ¦  col7[3,10,0]  𝄀
 1  ¦  database  ¦  12  ¦  3232  𝄀
 2  ¦  table  ¦  1  ¦  0  𝄀
 null  ¦  null  ¦  null  ¦  null
@@ -192,7 +192,7 @@ desc table06;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 col10  ¦  BINARY(1)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col2  ¦  CHAR(1)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-col4  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col4  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col6  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col8  ¦  FLOAT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col9  ¦  DOUBLE(0)  ¦  YES  ¦    ¦  null  ¦    ¦  
@@ -418,10 +418,10 @@ show create table time03;
 time03  ¦  CREATE TABLE `time03` (
   `col2` decimal(38,0) DEFAULT NULL,
   `col3` timestamp NULL DEFAULT NULL,
-  `col4` decimal(38,0) DEFAULT NULL
+  `col4` decimal(10,0) DEFAULT NULL
 )
 select * from time03;
-➤ col2[3,38,0]  ¦  col3[93,64,0]  ¦  col4[3,38,0]  𝄀
+➤ col2[3,38,0]  ¦  col3[93,64,0]  ¦  col4[3,10,0]  𝄀
 20201212000001  ¦  1997-01-01 10:10:10  ¦  121212  𝄀
 19891209000101  ¦  2000-05-06 01:01:01  ¦  101  𝄀
 null  ¦  null  ¦  null
@@ -432,7 +432,7 @@ insert into table01 values (1, 'a', 3728.424);
 insert into table01 values (3131, 'b', -32832.43);
 insert into table01 values (-1, '' , 0);
 select * from table01;
-➤ col1[4,32,0]  ¦  col2[1,1,0]  ¦  col3[3,38,0]  𝄀
+➤ col1[4,32,0]  ¦  col2[1,1,0]  ¦  col3[3,10,0]  𝄀
 1  ¦  a  ¦  3728  𝄀
 3131  ¦  b  ¦  -32832  𝄀
 -1  ¦    ¦  0
@@ -443,15 +443,15 @@ show create table table02;
 table02  ¦  CREATE TABLE `table02` (
   `col1` int NOT NULL,
   `col2` char(1) DEFAULT 'c',
-  `col3` decimal(38,0) NOT NULL
+  `col3` decimal(10,0) NOT NULL
 )
 desc table02;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 col1  ¦  INT(32)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 col2  ¦  CHAR(1)  ¦  YES  ¦    ¦  c  ¦    ¦    𝄀
-col3  ¦  DECIMAL(38,0)  ¦  NO  ¦    ¦  null  ¦    ¦  
+col3  ¦  DECIMAL(10,0)  ¦  NO  ¦    ¦  null  ¦    ¦  
 select * from table02;
-➤ col1[4,32,0]  ¦  col2[1,1,0]  ¦  col3[3,38,0]  𝄀
+➤ col1[4,32,0]  ¦  col2[1,1,0]  ¦  col3[3,10,0]  𝄀
 1  ¦  a  ¦  3728  𝄀
 3131  ¦  b  ¦  -32832  𝄀
 -1  ¦    ¦  0
@@ -517,9 +517,19 @@ b  ¦  11
 drop table if exists bit02;
 create table bit02 as select bit_and(col2), bit_or(col2), bit_xor(col2), stddev_pop(col2) from bit01;
 desc bit02;
-[unknown result because it is related to issue#24436]
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+bit_and(col2)  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
+bit_or(col2)  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
+bit_xor(col2)  ¦  BIGINT UNSIGNED(64)  ¦  NO  ¦    ¦  0  ¦    ¦    𝄀
+stddev_pop(col2)  ¦  DOUBLE(0)  ¦  YES  ¦    ¦  null  ¦    ¦
 show create table bit02;
-[unknown result because it is related to issue#24436]
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+bit02  ¦  CREATE TABLE `bit02` (
+  `bit_and(col2)` bigint unsigned NOT NULL DEFAULT 0,
+  `bit_or(col2)` bigint unsigned NOT NULL DEFAULT 0,
+  `bit_xor(col2)` bigint unsigned NOT NULL DEFAULT 0,
+  `stddev_pop(col2)` double DEFAULT NULL
+)
 select count(*) from bit02;
 ➤ count(*)[-5,64,0]  𝄀
 1
@@ -616,7 +626,7 @@ create table string04 as select oct(col2), empty(col3), length(col1) from string
 show create table string04;
 [unknown result because it is related to issue#24436]
 select * from string04;
-➤ oct(col2)[3,38,0]  ¦  empty(col3)[-7,1,0]  ¦  length(col1)[-5,64,0]  𝄀
+➤ oct(col2)[12,65,0]  ¦  empty(col3)[-7,1,0]  ¦  length(col1)[-5,64,0]  𝄀
 2  ¦  0  ¦  17  𝄀
 1  ¦  0  ¦  17  𝄀
 0  ¦  null  ¦  27
@@ -626,9 +636,9 @@ create table string05 as select trim(col1), ltrim(col1), rtrim(col1) from string
 show create table string05;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 string05  ¦  CREATE TABLE `string05` (
-  `trim(col1)` varchar(65535) DEFAULT NULL,
-  `ltrim(col1)` varchar(65535) DEFAULT NULL,
-  `rtrim(col1)` varchar(65535) DEFAULT NULL
+  `trim(col1)` varchar(40) DEFAULT NULL,
+  `ltrim(col1)` varchar(40) DEFAULT NULL,
+  `rtrim(col1)` varchar(40) DEFAULT NULL
 )
 select * from string05;
 ➤ trim(col1)[12,-1,0]  ¦  ltrim(col1)[12,-1,0]  ¦  rtrim(col1)[12,-1,0]  𝄀
@@ -665,7 +675,7 @@ create table string08 as select hex(col2) from string01;
 show create table string08;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 string08  ¦  CREATE TABLE `string08` (
-  `hex(col2)` varchar(65535) DEFAULT NULL
+  `hex(col2)` varchar(8) DEFAULT NULL
 )
 select * from string08;
 ➤ hex(col2)[12,-1,0]  𝄀
@@ -676,10 +686,10 @@ drop table string08;
 drop table if exists string09;
 create table string09 as select substring(col1, 3, 4), reverse(col2) from string01;
 show create table string09;
-➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+➤ Table[12,8,0]  ¦  Create Table[12,120,0]  𝄀
 string09  ¦  CREATE TABLE `string09` (
-  `substring(col1, 3, 4)` varchar(65535) DEFAULT NULL,
-  `reverse(col2)` varchar(65535) DEFAULT NULL
+  `substring(col1, 3, 4)` varchar(4) DEFAULT NULL,
+  `reverse(col2)` varchar(1) DEFAULT NULL
 )
 select * from string09;
 ➤ substring(col1, 3, 4)[12,-1,0]  ¦  reverse(col2)[12,-1,0]  𝄀
@@ -695,7 +705,7 @@ create table string11 as select bin(col1) from string10;
 show create table string11;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 string11  ¦  CREATE TABLE `string11` (
-  `bin(col1)` varchar(65535) DEFAULT NULL
+  `bin(col1)` varchar(65) DEFAULT NULL
 )
 select * from string11;
 ➤ bin(col1)[12,-1,0]  𝄀
@@ -739,15 +749,34 @@ null  ¦  null  ¦  null  ¦  null
 drop table if exists time02;
 create table time02 as select date_format(col2, '%W %M %Y') from time01;
 show create table time02;
-[unknown result because it is related to issue#24436]
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+time02  ¦  CREATE TABLE `time02` (
+  `date_format(col2, '%W %M %Y')` varchar(134) DEFAULT NULL
+)
 desc time02;
-[unknown result because it is related to issue#24436]
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+date_format(col2, '%W %M %Y')  ¦  VARCHAR(134)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from time02;
-➤ date_format(col2, %w %m %y)[12,-1,0]  𝄀
+➤ date_format(col2, '%w %m %y')[12,-1,0]  𝄀
 Saturday November 2023  𝄀
 Wednesday October 1990  𝄀
 null
 drop table time02;
+set @old_ctas_date_format_sql_mode = @@sql_mode;
+set sql_mode = '';
+drop table if exists time_format_bounds;
+create table time_format_bounds as select date_format(cast('0000-00-00' as date), '%U|%u|%V') as zero_weeks, time_format(cast('-2562047787:59:59' as time), '%H') as full_hour, time_format(cast('-2562047787:59:59' as time), '%T') as full_time, time_format(cast('-00:59:00' as time), '%i') as signed_minute;
+desc time_format_bounds;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+zero_weeks  ¦  VARCHAR(29)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+full_hour  ¦  VARCHAR(11)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+full_time  ¦  VARCHAR(17)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+signed_minute  ¦  VARCHAR(3)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from time_format_bounds;
+➤ zero_weeks[12,29,0]  ¦  full_hour[12,11,0]  ¦  full_time[12,17,0]  ¦  signed_minute[12,3,0]  𝄀
+613566757|613566757|613566757  ¦  -2562047787  ¦  -2562047787:59:59  ¦  -59
+drop table time_format_bounds;
+set sql_mode = @old_ctas_date_format_sql_mode;
 drop table if exists time03;
 create table time03 as select date(col1), date(col2), year(col1), day(col1), weekday(col1), dayofyear(col1) as dya from time01;
 desc time03;
@@ -888,7 +917,7 @@ insert into orders values (1, 101, '2023-01-01', 100.00),
 (7, 104, '2023-01-07', 200.00),
 (8, 105, '2023-01-08', 100.00);
 select * from orders;
-➤ order_id[4,32,0]  ¦  customer_id[4,32,0]  ¦  order_date[91,64,0]  ¦  total_amount[3,38,0]  𝄀
+➤ order_id[4,32,0]  ¦  customer_id[4,32,0]  ¦  order_date[91,64,0]  ¦  total_amount[3,10,0]  𝄀
 1  ¦  101  ¦  2023-01-01  ¦  100  𝄀
 2  ¦  101  ¦  2023-01-05  ¦  150  𝄀
 3  ¦  102  ¦  2023-01-02  ¦  200  𝄀
@@ -918,7 +947,7 @@ show create table max_customer;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 max_customer  ¦  CREATE TABLE `max_customer` (
   `customer_id` int DEFAULT NULL,
-  `total_amount` decimal(38,0) DEFAULT NULL
+  `total_amount` decimal(32,0) DEFAULT NULL
 )
 select * from max_customer;
 ➤ customer_id[4,32,0]  ¦  total_amount[3,38,0]  𝄀
@@ -1038,9 +1067,9 @@ col3  ¦  DECIMAL(10,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 newcolumn  ¦  BIGINT(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col5  ¦  BOOL(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col6  ¦  ENUM('apple','banana','orange')  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-col7  ¦  TEXT(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col7  ¦  TEXT  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col8  ¦  TIMESTAMP(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-col9  ¦  BLOB(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+col9  ¦  BLOB  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 col10  ¦  CHAR(1)  ¦  YES  ¦    ¦  null  ¦    ¦  
 select * from table02;
 ➤ id[4,32,0]  ¦  col1[12,-1,0]  ¦  col2[4,32,0]  ¦  col3[3,10,2]  ¦  newcolumn[-5,64,0]  ¦  col5[-7,1,0]  ¦  col6[12,-1,0]  ¦  col7[12,0,0]  ¦  col8[93,64,0]  ¦  col9[12,0,0]  ¦  col10[1,1,0]  𝄀
@@ -1276,12 +1305,12 @@ create table test03 (col2 decimal unique key) as select col2 from test01;
 show create table test03;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 test03  ¦  CREATE TABLE `test03` (
-  `col2` decimal(38,0) DEFAULT NULL,
+  `col2` decimal(10,0) DEFAULT NULL,
   UNIQUE KEY `col2` (`col2`)
 )
 desc test03;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
-col2  ¦  DECIMAL(38,0)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦  
+col2  ¦  DECIMAL(10,0)  ¦  YES  ¦  UNI  ¦  null  ¦    ¦  
 insert into test03 values (372.324);
 Duplicate entry '372' for key '(.*)'
 drop table if exists test04;
@@ -1305,11 +1334,11 @@ show create table test05;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 test05  ¦  CREATE TABLE `test05` (
   `col1` int NOT NULL,
-  `col2` decimal(38,0) NOT NULL,
+  `col2` decimal(10,0) NOT NULL,
   PRIMARY KEY (`col1`,`col2`)
 )
 select * from test05;
-➤ col1[4,32,0]  ¦  col2[3,38,0]  𝄀
+➤ col1[4,32,0]  ¦  col2[3,10,0]  𝄀
 1  ¦  3242434  𝄀
 2  ¦  39304  𝄀
 3  ¦  372
@@ -1320,7 +1349,7 @@ show create table test01;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 test01  ¦  CREATE TABLE `test01` (
   `newCol` int DEFAULT NULL,
-  `col2` decimal(38,0) DEFAULT NULL,
+  `col2` decimal(10,0) DEFAULT NULL,
   `col3` varchar(50) DEFAULT NULL
 )
 drop table if exists test06;
@@ -1397,7 +1426,7 @@ insert into orders values (1, 101, '2023-01-01', 100.00),
 (7, 104, '2023-01-07', 200.00),
 (8, 105, '2023-01-08', 100.00);
 select * from orders;
-➤ order_id[4,32,0]  ¦  customer_id[4,32,0]  ¦  order_date[91,64,0]  ¦  total_amount[3,38,0]  𝄀
+➤ order_id[4,32,0]  ¦  customer_id[4,32,0]  ¦  order_date[91,64,0]  ¦  total_amount[3,10,0]  𝄀
 1  ¦  101  ¦  2023-01-01  ¦  100  𝄀
 2  ¦  101  ¦  2023-01-05  ¦  150  𝄀
 3  ¦  102  ¦  2023-01-02  ¦  200  𝄀
@@ -1427,7 +1456,7 @@ show create table max_customer;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 max_customer  ¦  CREATE TEMPORARY TABLE `max_customer` (
   `customer_id` int DEFAULT NULL,
-  `total_amount` decimal(38,0) DEFAULT NULL
+  `total_amount` decimal(32,0) DEFAULT NULL
 )
 select * from max_customer;
 ➤ customer_id[4,32,0]  ¦  total_amount[3,38,0]  𝄀
@@ -1687,7 +1716,7 @@ create table sys_tbl_1(a int primary key, b decimal, c char, d varchar(20) );
 insert into sys_tbl_1 values(1,2,'a','database'),(2,3,'b','test publication'),(3, 4, 'c','324243243');
 create publication sys_pub_1 database test account all;
 select * from sys_tbl_1;
-➤ a[4,32,0]  ¦  b[3,38,0]  ¦  c[1,1,0]  ¦  d[12,-1,0]  𝄀
+➤ a[4,32,0]  ¦  b[3,10,0]  ¦  c[1,1,0]  ¦  d[12,-1,0]  𝄀
 1  ¦  2  ¦  a  ¦  database  𝄀
 2  ¦  3  ¦  b  ¦  test publication  𝄀
 3  ¦  4  ¦  c  ¦  324243243
@@ -1725,10 +1754,10 @@ show create table alias02;
 alias02  ¦  CREATE TABLE `alias02` (
   `NewCol` int DEFAULT NULL,
   `col1` int DEFAULT NULL,
-  `col2` decimal(38,0) DEFAULT NULL
+  `col2` decimal(10,0) DEFAULT NULL
 )
 select * from alias02;
-➤ newcol[4,32,0]  ¦  col1[4,32,0]  ¦  col2[3,38,0]  𝄀
+➤ newcol[4,32,0]  ¦  col1[4,32,0]  ¦  col2[3,10,0]  𝄀
 null  ¦  1  ¦  2  𝄀
 null  ¦  2  ¦  3
 drop table if exists ctas_non_ascii_alias;
@@ -2055,15 +2084,15 @@ create table agg01 as select avg(col1) as avgCol, sum(col2) as sumcol, count(col
 show create table agg01;
 ➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
 agg01  ¦  CREATE TABLE `agg01` (
-  `avgcol` double DEFAULT NULL,
-  `sumcol` decimal(38,0) DEFAULT NULL,
-  `countcol` bigint NOT NULL,
+  `avgcol` decimal(14,4) DEFAULT NULL,
+  `sumcol` decimal(32,0) DEFAULT NULL,
+  `countcol` bigint NOT NULL DEFAULT 0,
   `maxcol` double DEFAULT NULL,
   `mincol` double DEFAULT NULL
 )
 select * from agg01;
-➤ avgcol[8,54,0]  ¦  sumcol[3,38,0]  ¦  countcol[-5,64,0]  ¦  maxcol[8,54,0]  ¦  mincol[8,54,0]  𝄀
-7571.333333333333  ¦  10424  ¦  3  ¦  10.0  ¦  -9392032.0
+➤ avgcol[3,14,4]  ¦  sumcol[3,38,0]  ¦  countcol[-5,64,0]  ¦  maxcol[8,54,0]  ¦  mincol[8,54,0]  𝄀
+7571.3333  ¦  10424  ¦  3  ¦  10.0  ¦  -9392032.0
 drop table agg01;
 drop table math01;
 drop database db8;
@@ -2194,3 +2223,42 @@ select id, payload from target_explicit where payload = 'explicit-default';
 ➤ id[4,32,0]  ¦  payload[12,20,0]  𝄀
 42  ¦  explicit-default
 drop database ctas_auto_increment_24436;
+drop database if exists ctas_default_decimal_24436;
+create database ctas_default_decimal_24436;
+use ctas_default_decimal_24436;
+create table src01 (col7 decimal);
+insert into src01 values (3232.000), (0.0001), (null);
+create table dst01 as select * from src01;
+show create table src01;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+src01  ¦  CREATE TABLE `src01` (
+  `col7` decimal(10,0) DEFAULT NULL
+)
+show create table dst01;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+dst01  ¦  CREATE TABLE `dst01` (
+  `col7` decimal(10,0) DEFAULT NULL
+)
+select table_name, column_name, column_type, is_nullable
+from information_schema.columns
+where table_schema = database() and table_name in ('src01', 'dst01')
+and column_name <> '__mo_fake_pk_col'
+order by table_name, ordinal_position;
+➤ table_name[12,-1,0]  ¦  column_name[12,-1,0]  ¦  column_type[12,-1,0]  ¦  is_nullable[12,-1,0]  𝄀
+dst01  ¦  col7  ¦  DECIMAL(10,0)  ¦  YES  𝄀
+src01  ¦  col7  ¦  DECIMAL(10,0)  ¦  YES
+drop database ctas_default_decimal_24436;
+drop database if exists ctas_union_decimal_24436;
+create database ctas_union_decimal_24436;
+use ctas_union_decimal_24436;
+create table literal_union as select 1 as x union all select 2.5 as x;
+show create table literal_union;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+literal_union  ¦  CREATE TABLE `literal_union` (
+  `x` decimal(2,1) NOT NULL
+)
+select * from literal_union order by x;
+➤ x[3,2,1]  𝄀
+1.0  𝄀
+2.5
+drop database ctas_union_decimal_24436;

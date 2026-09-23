@@ -68,4 +68,21 @@ select st_area(g) as area from g32p where id = 3;
 select st_distance(a.g, b.g) as dist from g32p a, g32p b where a.id = 1 and b.id = 1;
 drop table g32p;
 
+-- Derived empty geometries must be real WKB and survive storage/reuse.
+create table empty32(id int, g geometry32);
+insert into empty32 values
+  (1, st_boundary(cast('LINESTRING(0 0,1 1,0 0)' as geometry32))),
+  (2, st_geometryn(st_collect(cast('POINT EMPTY' as geometry32), cast('POINT(1 2)' as geometry32)), 1)),
+  (3, st_geometryn(st_collect(cast('LINESTRING EMPTY' as geometry32), cast('LINESTRING(0 0,1 1)' as geometry32)), 1)),
+  (4, st_geometryn(st_collect(cast('POLYGON EMPTY' as geometry32), cast('POLYGON((0 0,1 0,0 1,0 0))' as geometry32)), 1));
+select id, st_astext(g) as wkt, st_isempty(g) as is_empty from empty32 order by id;
+select st_astext(st_boundary(cast('LINESTRING(0 0,1 1)' as geometry32))) as open_boundary;
+insert into empty32 values (5, null);
+select st_boundary(g) is null as null_boundary from empty32 where id = 5;
+-- Empty sentinels remain valid; real coordinate overflow must still abort
+-- the entire statement, including the preceding valid row.
+insert into empty32 values (6, cast('POINT(1 2)' as geometry32)), (7, cast('POINT(3.5e38 0)' as geometry32));
+select count(*) as retained_rows, max(id) as last_id from empty32;
+drop table empty32;
+
 drop database geo32;

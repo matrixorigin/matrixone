@@ -39,11 +39,9 @@
 # make proto-vendor
 #
 # To compile mo-service with GPU support,
-# 1. install CUDA toolkit (version 12.0, 13.0, or above)
+# 1. install CUDA toolkit (version 13.3 or above)
 # 2. install cuVS Go bindings with conda
-#  % git clone git@github.com:rapidsai/cuvs.git
-#  % cd cuvs
-#  % conda env create --name go -f conda/environments/go_cuda-130_arch-$(uname -m).yaml
+#  % conda env create --name go -f optools/images/gpu/go_cuda-133_arch-$(uname -m).yaml
 #  % conda activate go
 # 3. compile matrixone
 #  % cd matrixone
@@ -227,11 +225,24 @@ pb: generate-pb
 VERSION_INFO :=-X '$(GO_MODULE)/pkg/version.GoVersion=$(GO_VERSION)' -X '$(GO_MODULE)/pkg/version.BranchName=$(BRANCH_NAME)' -X '$(GO_MODULE)/pkg/version.CommitID=$(LAST_COMMIT_ID)' -X '$(GO_MODULE)/pkg/version.BuildTime=$(BUILD_TIME)' -X '$(GO_MODULE)/pkg/version.Version=$(MO_VERSION)'
 THIRDPARTIES_INSTALL_DIR=$(ROOT_DIR)/thirdparties/install
 CGO_DIR=$(ROOT_DIR)/cgo
+# mo-service links libmo dynamically (-L$(CGO_DIR) -lmo picks the shared
+# library over libmo.a), so libmo is a runtime dependency resolved through
+# the binary's rpath -- $ORIGIN/lib on Linux, @executable_path/lib on macOS.
+# cgo/ is not on that rpath, so libmo must be published into lib/ beside the
+# thirdparty libraries or the built binary cannot start.
+LIBMO_NAME := $(if $(filter darwin,$(UNAME_S)),libmo.dylib,libmo.so)
 JIEBA_DICT_SRC_DIR=$(ROOT_DIR)/pkg/monlp/tokenizer/dict
 RACE_OPT :=
 DEBUG_OPT :=
 CGO_DEBUG_OPT :=
 TAGS :=
+
+# Native artifacts are reusable only when every semantic build input matches.
+# Keep these dimensions independent so adding one feature cannot silently alias
+# an existing artifact generation.
+NATIVE_PROVENANCE_ACCELERATOR = $(if $(filter 1,$(MO_CL_CUDA)),gpu,cpu)
+NATIVE_PROVENANCE_OPTIMIZATION = $(if $(filter debug,$(CGO_DEBUG_OPT)),debug,release)
+NATIVE_PROVENANCE_SIMSIMD = $(if $(filter 1,$(MO_CL_SIMSIMD)),1,0)
 
 # Env-var prefix for the build command. On x86_64 the arch-specific SIMD kernels in
 # pkg/vectorindex/metric are compiled by default (ARCHSIMD=1): GOAMD64 defaults to v3
@@ -290,14 +301,88 @@ ifeq ($(GOBUILD_OPT),)
 	GOBUILD_OPT :=
 endif
 
-.PHONY: cgo
-cgo: thirdparties
-	@(cd cgo; ${MAKE} ${CGO_DEBUG_OPT})
+define BUILD_THIRDPARTIES
+@$(MAKE) -C thirdparties $(if $(NATIVE_BUILD_JOBS),-j$(NATIVE_BUILD_JOBS))
+@"$(ROOT_DIR)/cgo/mo-stage-native-libs" "$(THIRDPARTIES_INSTALL_DIR)/lib" "$(ROOT_DIR)/lib"
+endef
+
+.PHONY: cgo cgo-native-prepare-internal cgo-native-thirdparties-internal
+cgo: cgo-native-thirdparties-internal
+	@(cd cgo; ${MAKE} $(if $(NATIVE_BUILD_JOBS),-j$(NATIVE_BUILD_JOBS)) ${CGO_DEBUG_OPT})
+	@"$(ROOT_DIR)/cgo/mo-stage-native-libs" --file \
+		"$(CGO_DIR)/$(LIBMO_NAME)" "$(ROOT_DIR)/lib/$(LIBMO_NAME)"
+ifeq ($(MO_CL_CUDA),1)
+	@"$(ROOT_DIR)/cgo/mo-stage-native-libs" --file \
+		"$(ROOT_DIR)/cgo/cuda/mocl_kernel64.fatbin" \
+		"$(ROOT_DIR)/mocl_kernel64.fatbin"
+endif
+	@GO="$(GO)" ./cgo/mo-native-provenance record "$(ROOT_DIR)" \
+		"$(NATIVE_PROVENANCE_ACCELERATOR)" "$(NATIVE_PROVENANCE_OPTIMIZATION)" \
+		"$(NATIVE_PROVENANCE_SIMSIMD)"
+
+cgo-native-thirdparties-internal: cgo-native-prepare-internal
+	$(BUILD_THIRDPARTIES)
+
+cgo-native-prepare-internal:
+	@set -eu; \
+		case "$(firstword $(MAKEFLAGS))" in \
+			-*) ;; \
+			*n*|*t*|*q*) exit 0 ;; \
+			esac; \
+		case " $(MAKEFLAGS) " in \
+			*" -n "*|*" -t "*|*" -q "*|*" --just-print "*|*" --dry-run "*|*" --recon "*|*" --touch "*|*" --question "*) exit 0 ;; \
+		esac; \
+		action=$$(GO="$(GO)" ./cgo/mo-native-provenance prepare \
+			"$(ROOT_DIR)" "$(NATIVE_PROVENANCE_ACCELERATOR)" \
+			"$(NATIVE_PROVENANCE_OPTIMIZATION)" "$(NATIVE_PROVENANCE_SIMSIMD)"); \
+		case "$$action" in \
+			local|reuse) ;; \
+			rebuild-cgo) \
+				echo "native provenance: cleaning CGo outputs before rebuilding $(NATIVE_PROVENANCE_ACCELERATOR)/$(NATIVE_PROVENANCE_OPTIMIZATION)"; \
+				$(MAKE) -C cgo clean; \
+				rm -f "$(ROOT_DIR)/mocl_kernel64.fatbin" ;; \
+			rebuild-all) \
+				echo "native provenance: cleaning thirdparty and CGo outputs before rebuilding $(NATIVE_PROVENANCE_ACCELERATOR)/$(NATIVE_PROVENANCE_OPTIMIZATION), simsimd=$(NATIVE_PROVENANCE_SIMSIMD)"; \
+				$(MAKE) -C cgo clean; \
+				rm -f "$(ROOT_DIR)/mocl_kernel64.fatbin"; \
+				$(MAKE) -C thirdparties clean ;; \
+			*) echo "invalid native rebuild action: $$action" >&2; exit 1 ;; \
+		esac; \
+		GO="$(GO)" ./cgo/mo-native-provenance begin \
+			"$(ROOT_DIR)" "$(NATIVE_PROVENANCE_ACCELERATOR)" \
+			"$(NATIVE_PROVENANCE_OPTIMIZATION)" "$(NATIVE_PROVENANCE_SIMSIMD)"
 
 .PHONY: thirdparties
+
+# GNU/BSD make deduplicate a shared target, but not two different targets that
+# expand the same recipe. When users explicitly request `thirdparties` beside a
+# native consumer, make the public goal wait for that consumer instead of
+# becoming a second thirdparty owner.
+NATIVE_RELEASE_OWNER_GOALS := all cgo build build-typecheck mo-tool ut \
+	dev-create-dashboard dev-list-dashboard dev-delete-dashboard launch-minio
+NATIVE_DEBUG_OWNER_GOALS := debug launch-minio-debug
+NATIVE_REQUESTED_RELEASE_OWNER := $(firstword $(filter $(NATIVE_RELEASE_OWNER_GOALS),$(MAKECMDGOALS)))
+NATIVE_REQUESTED_DEBUG_OWNER := $(firstword $(filter $(NATIVE_DEBUG_OWNER_GOALS),$(MAKECMDGOALS)))
+
+ifneq ($(NATIVE_REQUESTED_RELEASE_OWNER),)
+ifneq ($(NATIVE_REQUESTED_DEBUG_OWNER),)
+$(error release and debug native build goals cannot share one invocation)
+endif
+endif
+
+ifneq ($(filter thirdparties,$(MAKECMDGOALS)),)
+ifneq ($(NATIVE_REQUESTED_DEBUG_OWNER),)
+thirdparties: $(NATIVE_REQUESTED_DEBUG_OWNER)
+else ifneq ($(NATIVE_REQUESTED_RELEASE_OWNER),)
+thirdparties: $(NATIVE_REQUESTED_RELEASE_OWNER)
+else
 thirdparties:
-	@(cd thirdparties; ${MAKE})
-	cp -r $(THIRDPARTIES_INSTALL_DIR)/lib $(ROOT_DIR)/
+	$(BUILD_THIRDPARTIES)
+endif
+else
+thirdparties:
+	$(BUILD_THIRDPARTIES)
+endif
 
 # Stage the jieba dictionary next to the binary, the same way thirdparties/lib
 # is staged. jiebaDictPaths() in pkg/monlp/tokenizer/jieba_dict.go searches
@@ -312,7 +397,7 @@ jieba-dict:
 
 # build mo-service binary
 .PHONY: build
-build: config cgo thirdparties jieba-dict
+build: config cgo jieba-dict
 	$(info [Build binary])
 	$(MO_SERVICE_BUILD)
 
@@ -358,7 +443,7 @@ musl:
 
 # build mo-tool
 .PHONY: mo-tool
-mo-tool: config cgo thirdparties
+mo-tool: config cgo
 	$(info [Build mo-tool tool])
 	$(GOEXPERIMENT_OPT) $(CGO_OPTS) $(GO) build $(GO_MODULE_MODE) $(GOLDFLAGS) -o mo-tool ./cmd/mo-tool
 
@@ -369,11 +454,26 @@ mo-tool: config cgo thirdparties
 # the build.  Override with MVN=/path/to/mvn to use a preinstalled Maven.  The
 # jar targets Java 8 bytecode so it runs on the BVT tester image's JDK 8.
 MVN ?= ./mvnw
+JSTFU_MVN_FLAGS ?= -B --no-transfer-progress -Dmaven.wagon.http.retryHandler.count=3
 .PHONY: jstfu
 jstfu:
 	$(info [Build jstfu datastream server])
-	@cd xtool/jstfu && $(MVN) -q -B -DskipTests package
+	@cd xtool/jstfu && $(MVN) $(JSTFU_MVN_FLAGS) -DskipTests package
 	@echo "built xtool/jstfu/target/jstfu.jar"
+
+.PHONY: jstfu-test
+jstfu-test:
+	$(info [Test and build jstfu datastream server])
+	@cd xtool/jstfu && $(MVN) $(JSTFU_MVN_FLAGS) verify
+	@test -s xtool/jstfu/target/jstfu.jar
+	@echo "tested and built xtool/jstfu/target/jstfu.jar"
+
+# The S0 Connector/J pool regression deliberately builds its Java fixture and
+# fails when MatrixOne is unavailable; it must never report green by skipping
+# either prerequisite.
+.PHONY: test-connectorj-pool-reset-e2e-local
+test-connectorj-pool-reset-e2e-local:
+	@bash ./optools/connectorj_pool_reset_ci.bash
 
 # build mo-service binary for debugging with go's race detector enabled
 # produced executable is 10x slower and consumes much more memory
@@ -396,21 +496,68 @@ build-typecheck: build
 # Excluding frontend test cases temporarily
 # Argument SKIP_TEST to skip a specific go test
 .PHONY: ut
-ut: config cgo thirdparties
+UT_PREREQUISITES := cgo
+# CI times config separately to monitor module-proxy health. Let that caller
+# attest that the exact checkout already passed config instead of verifying the
+# same package graph twice; direct developer invocations retain the prerequisite.
+ifneq ($(UT_CONFIGURED),1)
+UT_PREREQUISITES += config
+endif
+ut: $(UT_PREREQUISITES)
 	$(info [Unit testing])
 ifeq ($(UNAME_S),darwin)
-	@cd optools && ./run_ut.sh UT $(SKIP_TEST)
+	@cd optools && UT_NATIVE_PREPARED="$(NATIVE_PROVENANCE_ACCELERATOR):$(NATIVE_PROVENANCE_OPTIMIZATION):$(NATIVE_PROVENANCE_SIMSIMD)" ./run_ut.sh UT $(SKIP_TEST)
 else
-	# The race suite is split into light, exclusive, heavy, and plan shards.
-	# Keep the outer budget above the per-package timeout so an expanded main
-	# branch cannot be killed while later shards are still making progress.
-	@cd optools && timeout 90m ./run_ut.sh UT $(SKIP_TEST)
+	# The race suite is internally partitioned into light/HNSW, exclusive issues,
+	# embedded-cluster, heavy/engine, and plan stages. Keep the outer budget above
+	# the per-package timeout so an expanded main branch cannot be killed while a
+	# selected stage is still making progress. GNU timeout sends TERM first so
+	# run_ut.sh can preserve its checkpoint and active-case diagnostics.
+	@cd optools && UT_NATIVE_PREPARED="$(NATIVE_PROVENANCE_ACCELERATOR):$(NATIVE_PROVENANCE_OPTIMIZATION):$(NATIVE_PROVENANCE_SIMSIMD)" timeout --signal=TERM --kill-after=120s $(UT_HARD_TIMEOUT) ./run_ut.sh UT $(SKIP_TEST)
 endif
 
 ###############################################################################
 # bvt and unit test
 ###############################################################################
 UT_PARALLEL ?= 1
+# Compile/test task and heavy-link budgets are independent. The runner falls
+# back to three tasks if kernel link admission is unavailable.
+UT_LIGHT_PARALLEL ?= 6
+UT_LINK_PARALLEL ?= 3
+UT_SHARD ?= all
+# The outer lifecycle budget covers every sequential UT stage, not one package.
+# A cold race run can spend over an hour in light/issues/embedded before the
+# heavy/engine/plan stages start. Keep per-package UT_TIMEOUT unchanged and
+# leave enough time after TERM for checkpoint flushing and artifact upload.
+UT_HARD_TIMEOUT ?= 120m
+# Emit one bounded progress heartbeat per interval while UT is running.
+UT_HEARTBEAT_INTERVAL ?= 60
+# Build embedded race binaries with one compiler while the exclusive issues
+# fixture runs, then execute those exact binaries serially. Build or admission
+# failures fall back before any prebuilt binary executes.
+UT_PREBUILD_EMBEDDED ?= 1
+UT_PREBUILD_MIN_FREE_KB ?= 6291456
+UT_EMBEDDED_HARD_TIMEOUT_SECONDS ?= 0
+# Reuse released engine slots for plan while resource-heavy work finishes.
+# The heavy process budget is unchanged; set 0 for a sequential A/B baseline.
+UT_OVERLAP_PLAN ?= 1
+# Keep light/issues overlap opt-in: the measured treatment was slower than the
+# serial baseline and left insufficient cgroup memory headroom. Re-enable only
+# when a new schedule has same-runner timing and memory evidence.
+UT_OVERLAP_LIGHT ?= 0
+UT_OVERLAP_LIGHT_PARALLEL ?= 2
+# Parent cancellation waits long enough for helper-owned child process groups
+# to receive TERM and bounded KILL cleanup in sequence.
+UT_HELPER_TERM_GRACE_TICKS ?= 60
+export UT_SHARD UT_HARD_TIMEOUT UT_HEARTBEAT_INTERVAL UT_PREBUILD_EMBEDDED UT_PREBUILD_MIN_FREE_KB UT_EMBEDDED_HARD_TIMEOUT_SECONDS UT_OVERLAP_PLAN UT_OVERLAP_LIGHT UT_OVERLAP_LIGHT_PARALLEL UT_LIGHT_PARALLEL UT_LINK_PARALLEL UT_HELPER_TERM_GRACE_TICKS
+# Native compilation runs before Go tests, so it can use an explicit UT CPU
+# budget without increasing peak race-test memory. With the default UT value,
+# omit -j and preserve recursive make's jobserver contract: a plain make stays
+# serial while a developer's `make -jN` remains parallel.
+NATIVE_BUILD_JOBS ?= $(if $(filter-out 1,$(UT_PARALLEL)),$(UT_PARALLEL))
+ifeq ($(strip $(NATIVE_BUILD_JOBS)),0)
+$(error NATIVE_BUILD_JOBS and UT_PARALLEL must be positive)
+endif
 ENABLE_UT ?= "false"
 # These are public mirrors, not policy gatekeepers. Fall through on transient
 # errors as well as 404/410 responses so one unhealthy mirror cannot block CI.
@@ -1285,6 +1432,7 @@ clean:
 	$(MAKE) -C cgo clean
 	$(MAKE) -C thirdparties clean
 	rm -rf $(ROOT_DIR)/lib
+	rm -f $(ROOT_DIR)/mocl_kernel64.fatbin
 	rm -rf $(ROOT_DIR)/dict
 
 ###############################################################################
@@ -1301,12 +1449,29 @@ install-static-check-tools:
 	@go install github.com/matrixorigin/linter/cmd/molint@v0.0.0-20260602145143-222a0b8adf07
 	@go install github.com/apache/skywalking-eyes/cmd/license-eye@v0.4.0
 
-.PHONY: static-check
+.PHONY: static-check static-check-analysis static-check-golangci
+GOLANGCI_LINT_CONCURRENCY ?=
+GOLANGCI_LINT_CONCURRENCY_FLAG := $(if $(strip $(GOLANGCI_LINT_CONCURRENCY)),--concurrency $(strip $(GOLANGCI_LINT_CONCURRENCY)))
+STATIC_CHECK_MOLINT = $(CGO_OPTS) go vet $(GO_MODULE_MODE) -vettool=`which molint` ./...
+STATIC_CHECK_GOLANGCI = $(CGO_OPTS) golangci-lint run -v $(GOLANGCI_LINT_CONCURRENCY_FLAG) -c .golangci.yml ./...
 static-check: config err-check
-	$(CGO_OPTS) go vet $(GO_MODULE_MODE) -vettool=`which molint` ./...
+	$(STATIC_CHECK_MOLINT)
 	$(CGO_OPTS) license-eye -c .licenserc.yml header check
 	$(CGO_OPTS) license-eye -c .licenserc.yml dep check
-	$(CGO_OPTS) golangci-lint run -v -c .golangci.yml ./...
+	$(STATIC_CHECK_GOLANGCI)
+
+# Keep the complete local/release entry point above. PR CI owns license scope
+# selection, but still analyzes the full package graph through content-addressed
+# Go and golangci-lint caches.
+static-check-analysis: config err-check
+	$(STATIC_CHECK_MOLINT)
+	$(STATIC_CHECK_GOLANGCI)
+
+# Trusted cache producers only need to populate golangci-lint's analysis
+# cache. This is not a reduced validation gate; PR and local SCA continue to
+# use static-check-analysis or static-check above.
+static-check-golangci:
+	$(STATIC_CHECK_GOLANGCI)
 
 fmtErrs := $(shell grep -onr 'fmt.Errorf' pkg/ --exclude-dir=.git --exclude-dir=vendor \
 				--exclude=*.pb.go --exclude=*_test.go --exclude=system_vars.go --exclude=Makefile)

@@ -11,9 +11,8 @@
 -- CDC consumer could never apply the delta.
 --
 -- Each index is built and maintained entirely by the CDC consumer (first iteration runs
--- the InitSQL build, later inserts/updates ride the delta path). Each index is waited
--- independently through its first deterministic search in every phase; readiness of one
--- index says nothing about the other three consumers.
+-- the InitSQL build, later inserts/updates ride the delta path). Shared barriers assert
+-- every independent consumer together; readiness of one cannot hide another.
 --
 -- Two well-separated clusters [1..5]/[50..54] and cluster-center query points keep every
 -- top-k distance distinct (no ties) so the result is deterministic for every narrow type;
@@ -100,14 +99,11 @@ update nbf set v = '[55,55,55,55]' where a = 1;
 update nhf set v = '[55,55,55,55]' where a = 1;
 update ni8 set v = '[55,55,55,55]' where a = 1;
 update nu8 set v = '[55,55,55,55]' where a = 1;
+-- One retry observes all four independent consumers while retaining each
+-- type's ordered top-3 oracle.
+-- @metacmp(false)
 -- @wait_expect(2, 30)
-select a from nbf order by l2_distance(v,'[1,1,1,1]') limit 3;
--- @wait_expect(2, 30)
-select a from nhf order by l2_distance(v,'[1,1,1,1]') limit 3;
--- @wait_expect(2, 30)
-select a from ni8 order by l2_distance(v,'[1,1,1,1]') limit 3;
--- @wait_expect(2, 30)
-select a from nu8 order by l2_distance(v,'[1,1,1,1]') limit 3;
+select case_name, a from (select 'bf16' as case_name, a, d from (select a, l2_distance(v,'[1,1,1,1]') as d from nbf order by l2_distance(v,'[1,1,1,1]') limit 3) q union all select 'f16', a, d from (select a, l2_distance(v,'[1,1,1,1]') as d from nhf order by l2_distance(v,'[1,1,1,1]') limit 3) q union all select 'int8', a, d from (select a, l2_distance(v,'[1,1,1,1]') as d from ni8 order by l2_distance(v,'[1,1,1,1]') limit 3) q union all select 'uint8', a, d from (select a, l2_distance(v,'[1,1,1,1]') as d from nu8 order by l2_distance(v,'[1,1,1,1]') limit 3) q) readiness order by case_name, d;
 
 deallocate prepare wait_narrow_entries;
 drop table nbf;

@@ -377,6 +377,8 @@ type Workspace interface {
 type TxnOverview struct {
 	// CreateAt create at
 	CreateAt time.Time
+	// AccountID is the account that created the transaction.
+	AccountID uint32
 	// Meta txn metadata
 	Meta txn.TxnMeta
 	// UserTxn true if is a user transaction

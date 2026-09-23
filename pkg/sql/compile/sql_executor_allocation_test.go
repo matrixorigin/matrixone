@@ -125,7 +125,7 @@ func TestInternalExecutorStreamCancellationCleansUnpublishedResult(t *testing.T)
 		results,
 		result,
 	)
-	require.Error(t, err)
+	require.ErrorIs(t, err, context.Canceled)
 	require.Len(t, results, 1)
 
 	source.Clean(mp)

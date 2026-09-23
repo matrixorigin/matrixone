@@ -111,11 +111,17 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 		); err != nil {
 			return
 		}
-		if _, err = cdc.OpenDbConn(
+		sourceConn, sourceConnErr := cdc.OpenDbConn(
+			ctx,
 			opts.SrcUriInfo.User, opts.SrcUriInfo.Password, opts.SrcUriInfo.Ip, opts.SrcUriInfo.Port, cdc.CDCDefaultSendSqlTimeout,
-		); err != nil {
+		)
+		if sourceConnErr != nil {
 			err = moerr.NewInternalErrorf(ctx, ""+
-				"failed to connect to source, please check the connection, err: %v", err)
+				"failed to connect to source, please check the connection, err: %v", sourceConnErr)
+			return
+		}
+		if closeErr := sourceConn.Close(); closeErr != nil {
+			err = moerr.NewInternalErrorf(ctx, "failed to close source connection check: %v", closeErr)
 			return
 		}
 	}
@@ -140,10 +146,16 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 		); err != nil {
 			return
 		}
-		if _, err = cdc.OpenDbConn(
+		sinkConn, sinkConnErr := cdc.OpenDbConn(
+			ctx,
 			opts.SinkUriInfo.User, opts.SinkUriInfo.Password, opts.SinkUriInfo.Ip, opts.SinkUriInfo.Port, cdc.CDCDefaultSendSqlTimeout,
-		); err != nil {
-			err = moerr.NewInternalErrorf(ctx, "failed to connect to sink, please check the connection, err: %v", err)
+		)
+		if sinkConnErr != nil {
+			err = moerr.NewInternalErrorf(ctx, "failed to connect to sink, please check the connection, err: %v", sinkConnErr)
+			return
+		}
+		if closeErr := sinkConn.Close(); closeErr != nil {
+			err = moerr.NewInternalErrorf(ctx, "failed to close sink connection check: %v", closeErr)
 			return
 		}
 	}
@@ -237,6 +249,17 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 	if _, ok := extraOpts[cdc.CDCTaskExtraOptions_MaxSqlLength]; !ok {
 		extraOpts[cdc.CDCTaskExtraOptions_MaxSqlLength] = cdc.CDCDefaultTaskExtra_MaxSQLLen
 	}
+	// Only full snapshots need the stable-epoch capability fence. NoFull tasks
+	// remain eligible for legacy executors because they cannot partially commit
+	// an initial snapshot.
+	if !opts.NoFull {
+		cdc.FinalizeInitialSnapshotOptions(extraOpts)
+		_, stable := extraOpts[cdc.CDCTaskExtraOptions_InitialSnapshotProtocol]
+		if err = validateStableInitialSnapshotProtocol(
+			ctx, stable, currentProtocolVersion(ses.proc)); err != nil {
+			return
+		}
+	}
 
 	var extraOptsBytes []byte
 	if extraOptsBytes, err = json.Marshal(extraOpts); err != nil {
@@ -248,10 +271,22 @@ func (opts *CDCCreateTaskOptions) ValidateAndFill(
 	return
 }
 
+func validateStableInitialSnapshotProtocol(
+	ctx context.Context,
+	stable bool,
+	protocolVersion int64,
+) error {
+	return cdc.ValidateStableInitialSnapshotProtocol(ctx, stable, protocolVersion)
+}
+
 func (opts *CDCCreateTaskOptions) BuildTaskMetadata() task.TaskMetadata {
+	executor := task.TaskCode_InitCdc
+	if !opts.NoFull && cdc.UsesStableEpochInitialSnapshot(opts.ExtraOpts) {
+		executor = task.TaskCode_InitCdcStableEpoch
+	}
 	return task.TaskMetadata{
 		ID:       opts.TaskId,
-		Executor: task.TaskCode_InitCdc,
+		Executor: executor,
 		Options: task.TaskOptions{
 			MaxRetryTimes: defaultCDCTaskMaxRetryTimes,
 			RetryInterval: defaultCDCTaskRetryInterval,

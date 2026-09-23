@@ -535,7 +535,7 @@ func updateRelationAutoIncrement(
 			return err
 		}
 		if err := proc.GetIncrService().SetOffset(
-			ctx,
+			incrservice.WithAutoIDCachePolicy(ctx, def.TblId, def.AutoIdCache),
 			tableID,
 			col.ColIndex,
 			col.ColName,

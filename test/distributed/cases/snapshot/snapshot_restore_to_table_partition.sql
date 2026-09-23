@@ -114,7 +114,7 @@ drop database if exists acc_test03;
 create database acc_test03;
 use acc_test03;
 drop table if exists table01;
-create table table01(col1 int primary key , col2 decimal, col3 char, col4 varchar(20), col5 text, col6 double);
+create table table01(col1 int primary key , col2 decimal(38,0), col3 char, col4 varchar(20), col5 text, col6 double);
 insert into table01 values (1, 2, 'a', '23eiojf', 'r23v324r23rer', 3923.324);
 insert into table01 values (2, 3, 'b', '32r32r', 'database', 1111111);
 create table table02 (col1 int unique key, col2 varchar(20));

@@ -377,10 +377,71 @@ insert into json_bool_compare_test values
     (1, '{"enabled":true}'),
     (2, '{"enabled":false}'),
     (3, '{}'),
-    (4, '{"enabled":null}');
+    (4, '{"enabled":null}'),
+    (5, '{"enabled":"true"}'),
+    (6, '{"enabled":"false"}');
 select count(*) from json_bool_compare_test where json_extract(doc, '$.enabled') = true;
 select count(*) from json_bool_compare_test where json_extract(doc, '$.enabled') = false;
+prepare json_bool_compare_stmt from 'select id from json_bool_compare_test where json_extract(doc, ''$.enabled'') = ? order by id';
+set @json_bool_compare_param = true;
+execute json_bool_compare_stmt using @json_bool_compare_param;
+set @json_bool_compare_param = false;
+execute json_bool_compare_stmt using @json_bool_compare_param;
+deallocate prepare json_bool_compare_stmt;
+select json_extract('16777217', '$') = cast(16777216 as float) as direct_rounded_equal;
+prepare json_float_compare_stmt from 'select json_extract(''16777217'', ''$'') = ? as rounded_equal';
+set @json_float_compare_param = cast(16777216 as float);
+execute json_float_compare_stmt using @json_float_compare_param;
+deallocate prepare json_float_compare_stmt;
+-- @regex("invalid argument operator cast, bad value \[JSON -> BIGINT\]",true)
+select json_extract('18446744073709551615', '$') = cast(9223372036854775807 as signed);
+prepare json_signed_compare_stmt from 'select json_extract(''18446744073709551615'', ''$'') = ?';
+set @json_signed_compare_param = cast(9223372036854775807 as signed);
+-- @regex("invalid argument operator cast, bad value \[JSON -> BIGINT\]",true)
+execute json_signed_compare_stmt using @json_signed_compare_param;
+deallocate prepare json_signed_compare_stmt;
+-- @regex("invalid argument operator cast, bad value \[JSON -> TINYINT\]",true)
+select json_extract('128', '$') = cast(1 as tinyint);
+prepare json_tinyint_compare_stmt from 'select json_extract(''128'', ''$'') = ? as narrow_equal';
+set @json_narrow_compare_param = cast(1 as tinyint);
+-- @regex("invalid argument operator cast, bad value \[JSON -> TINYINT\]",true)
+execute json_tinyint_compare_stmt using @json_narrow_compare_param;
+set @json_narrow_compare_param = cast(1 as signed);
+execute json_tinyint_compare_stmt using @json_narrow_compare_param;
+set @json_narrow_compare_param = cast(1 as tinyint);
+-- @regex("invalid argument operator cast, bad value \[JSON -> TINYINT\]",true)
+execute json_tinyint_compare_stmt using @json_narrow_compare_param;
+deallocate prepare json_tinyint_compare_stmt;
+-- @regex("invalid argument operator cast, bad value \[JSON -> TINYINT UNSIGNED\]",true)
+select json_extract('256', '$') = cast(1 as tinyint unsigned);
+prepare json_utinyint_compare_stmt from 'select json_extract(''256'', ''$'') = ? as unsigned_narrow_equal';
+set @json_unsigned_compare_param = cast(1 as tinyint unsigned);
+-- @regex("invalid argument operator cast, bad value \[JSON -> TINYINT UNSIGNED\]",true)
+execute json_utinyint_compare_stmt using @json_unsigned_compare_param;
+deallocate prepare json_utinyint_compare_stmt;
 select json_extract(json_array(cast(0.00 as decimal(10,2))), '$[0]') = true, json_extract(json_array(cast(1.20 as decimal(10,2))), '$[0]') = true;
 select json_extract(json_object('enabled', true), '$.enabled') = true as json_eq_bool, true = json_extract(json_object('enabled', true), '$.enabled') as bool_eq_json, json_extract(json_object('enabled', true), '$.enabled') != false as json_ne_bool, false != json_extract(json_object('enabled', true), '$.enabled') as bool_ne_json;
+select json_extract(json_object('enabled', 'true'), '$.enabled') = true as string_eq_bool,
+       true = json_extract(json_object('enabled', 'true'), '$.enabled') as bool_eq_string,
+       json_extract(json_object('enabled', 'true'), '$.enabled') != true as string_ne_bool,
+       json_extract(json_object('enabled', 'true'), '$.enabled') <=> true as string_null_safe_bool,
+       json_extract(json_object('enabled', 'true'), '$.enabled') in (true) as string_in_bool,
+       json_extract(json_object('enabled', 'true'), '$.enabled') not in (true) as string_not_in_bool,
+       cast(json_extract(json_object('enabled', 'true'), '$.enabled') as boolean) as explicit_cast_true,
+       cast(json_extract(json_object('enabled', 'false'), '$.enabled') as boolean) as explicit_cast_false;
+prepare json_bool_category_stmt from 'select
+       json_extract(json_object(''enabled'', ''true''), ''$.enabled'') = ? as prepared_eq,
+       json_extract(json_object(''enabled'', ''true''), ''$.enabled'') != ? as prepared_ne,
+       json_extract(json_object(''enabled'', ''true''), ''$.enabled'') <=> ? as prepared_null_safe,
+       json_extract(json_object(''enabled'', ''true''), ''$.enabled'') in (?) as prepared_in,
+       json_extract(json_object(''enabled'', ''true''), ''$.enabled'') not in (?) as prepared_not_in';
+set @json_bool_category_param = true;
+execute json_bool_category_stmt using @json_bool_category_param, @json_bool_category_param, @json_bool_category_param, @json_bool_category_param, @json_bool_category_param;
+deallocate prepare json_bool_category_stmt;
+select cast(json_extract(json_array(cast(9007199254740993.9 as decimal(20,1))), '$[0]') as signed) as exact_decimal_cast;
+prepare json_decimal_compare_stmt from 'select json_extract(json_array(cast(9007199254740992.1 as decimal(20,1))), ''$[0]'') = ? as exact_decimal_equal';
+set @json_decimal_compare_param = cast(9007199254740993.1 as decimal(20,1));
+execute json_decimal_compare_stmt using @json_decimal_compare_param;
+deallocate prepare json_decimal_compare_stmt;
 select json_extract('1e100', '$') = true as large_exponent, json_extract('1e-300', '$') = true as small_exponent, json_extract('0e-2147483647', '$') = true as exponent_zero;
 drop database test;

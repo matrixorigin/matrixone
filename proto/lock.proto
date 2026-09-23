@@ -62,6 +62,12 @@ message LockOptions {
   timestamp.Timestamp SnapShotTs        = 9 [(gogoproto.nullable) = false];
   int64               LockWaitTimeout   = 10;
   int64               LockWaitDeadline  = 11;
+  // Snapshot against which the SQL execution plan was compiled. This is
+  // separate from SnapShotTs, which is the transaction creation timestamp and
+  // is also used by rolling-restart admission. It is sent only when the plan
+  // predates transaction creation. Otherwise, and for older senders, the lock
+  // service falls back to SnapShotTs.
+  timestamp.Timestamp PlanSnapshotTs    = 12;
 }
 
 // LockTable describes which CN manages a Table's Locks.
@@ -129,6 +135,9 @@ enum Method {
   // that physically owns the transaction's locks. Unlike GetWaitingList, the
   // handler is owner-local and never recursively calls another lock service.
   GetTxnWaitingListOnLockTable = 20;
+  // BatchUnlock releases several physical tables owned by the same lock
+  // service in one transaction-closure admission.
+  BatchUnlock = 21;
 }
 
 enum Status {
@@ -164,6 +173,7 @@ message Request {
   GetLockHolderRequest       GetLockHolder       = 19 [(gogoproto.nullable) = false];
   AbortRemoteDeadlockTxnRequest    AbortRemoteDeadlockTxn      = 20 [(gogoproto.nullable) = false];
   CheckActiveTxnRequest      CheckActiveTxn      = 21 [(gogoproto.nullable) = false];
+  BatchUnlockRequest         BatchUnlock         = 22 [(gogoproto.nullable) = false];
 }
 
 
@@ -195,6 +205,7 @@ message Response {
     AbortRemoteDeadlockTxnResponse    AbortRemoteDeadlockTxn      = 20 [(gogoproto.nullable) = false];
     GetLockHolderResponse      GetLockHolder       = 21 [(gogoproto.nullable) = false];
     CheckActiveTxnResponse     CheckActiveTxn      = 22 [(gogoproto.nullable) = false];
+    BatchUnlockResponse        BatchUnlock         = 23 [(gogoproto.nullable) = false];
 }
 
 // LockRequest lock request
@@ -213,6 +224,10 @@ message LockResponse {
   // An origin may compact its remote bookkeeping only after the physical owner
   // returned true for this successful Lock response.
   bool TxnWaitingListOnLockTableSupported = 2;
+  // BatchUnlockSupported is an explicit capability handshake. The origin uses
+  // BatchUnlock only for tables whose successful physical-owner Lock response
+  // advertised this bit.
+  bool BatchUnlockSupported = 3;
 }
 
 // GetTxnLockRequest get a waiting txn list on a special lock 
@@ -267,6 +282,18 @@ message UnlockRequest {
 
 // UnlockResponse unlock lock on remote lock service response. CN -> CN
 message UnlockResponse {
+
+}
+
+// BatchUnlockRequest releases a bounded set of tables that belong to one
+// physical owner. Mutating proxy handoffs continue to use table-scoped Unlock.
+message BatchUnlockRequest {
+  bytes                  TxnID      = 1;
+  timestamp.Timestamp    CommitTS   = 2 [(gogoproto.nullable) = false];
+  repeated LockTable     LockTables = 3 [(gogoproto.nullable) = false];
+}
+
+message BatchUnlockResponse {
 
 }
 

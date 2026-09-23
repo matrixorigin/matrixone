@@ -35,6 +35,13 @@ message UnsubscribeRequest {
     api.TableID table = 1;
 }
 
+// ReadBarrierRequest asks the TN logtail publisher for a linearizable
+// publication frontier. barrier_id is scoped to one stream and correlates the
+// asynchronous response with its caller.
+message ReadBarrierRequest {
+    uint64 barrier_id = 1;
+}
+
 // TableLogtail describes total or additional logtail for a table.
 message TableLogtail {
     string ckp_location         = 1;
@@ -80,12 +87,21 @@ message UnSubscribeResponse {
     api.TableID table = 1;
 }
 
+// ReadBarrierResponse is sent only after every logtail event ordered before
+// the corresponding request has been admitted to this stream's response
+// sequence. The CN must still wait until it has applied this timestamp.
+message ReadBarrierResponse {
+    uint64 barrier_id              = 1;
+    timestamp.Timestamp timestamp  = 2;
+}
+
 // logtail stream request
 message LogtailRequest {
     uint64 request_id = 1;
     oneof request {
         SubscribeRequest subscribe_table     = 2;
         UnsubscribeRequest unsubscribe_table = 3;
+        ReadBarrierRequest read_barrier       = 4;
     }
 };
 
@@ -97,6 +113,7 @@ message LogtailResponse {
         UnSubscribeResponse unsubscribe_response = 3;
         UpdateResponse update_response           = 4;
         ErrorResponse error                      = 5;
+        ReadBarrierResponse read_barrier_response = 6;
     }
 };
 

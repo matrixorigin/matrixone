@@ -1,0 +1,587 @@
+# Information Schema Subscription Metadata Routing
+
+- Status: Proposed — implementation includes fail-closed admission; awaiting independent design approval
+- Owning issue: [#27759](https://github.com/matrixorigin/matrixone/issues/27759)
+- Implementation PR: [#27778](https://github.com/matrixorigin/matrixone/pull/27778)
+- Related local-visibility design: [Information Schema Metadata Visibility and Active-Role Closure](CLAUDE_INFORMATION_SCHEMA_METADATA_VISIBILITY.md)
+- Version: 6
+- Last updated: 2026-09-04
+
+## 1. Problem and evidence
+
+A subscription database is a subscriber-side schema alias for objects owned by a
+publisher account. Normal table resolution already routes a subscribed table to
+the publisher catalog. Index discovery did not: `SHOW INDEX` and
+`information_schema.STATISTICS` continued to read the subscriber's local
+`mo_indexes`, `mo_tables`, and `mo_columns`. The table was queryable, but its
+index rows were absent. MySQL Connector/J consequently returned incomplete
+`DatabaseMetaData.getIndexInfo()` and `getPrimaryKeys()` results.
+
+Fixing only the literal `SHOW INDEX FROM subscription.table` syntax is
+insufficient. Connector/J queries `STATISTICS` through prepared statements, and
+applications may place schema predicates in `WHERE`, `JOIN ON`, derived tables,
+correlated subqueries, or omit them for account-wide discovery. Subscription
+membership may also change between planning and execution or be read through a
+historical account snapshot.
+
+The change therefore defines an account-wide metadata contract and a narrow
+cross-account authorization exception. It requires design review even though
+the originating user-visible symptom is a bug.
+
+## 2. Scope and non-goals
+
+This design covers:
+
+- `SHOW INDEX` for a table resolved through a subscription database;
+- every occurrence of the built-in `information_schema.STATISTICS` view;
+- Connector/J index and primary-key discovery shapes built on `STATISTICS`;
+- current and account-snapshot subscription enumeration;
+- ordinary plan-cache and prepared-statement lifecycle behavior;
+- persisted `STATISTICS` view definitions during upgrade and downgrade;
+- subscriber active-role visibility plus publisher-account,
+  publication-database, and publication-table isolation.
+
+This design does not:
+
+- expose arbitrary publisher `information_schema` or `mo_catalog` rows;
+- make subscriber role IDs meaningful in the publisher account;
+- grant data or metadata access beyond the intersection of subscriber RBAC and
+  the existing publication contract;
+- copy publisher index rows into the subscriber catalog;
+- change publication creation, subscription creation, or withdrawal semantics;
+- add SQL syntax, a catalog schema migration, or a protocol capability bit;
+- promise subscription-aware routing for metadata views other than
+  `STATISTICS`.
+
+## 3. Terms and normative result contract
+
+Let:
+
+- `S` be the subscriber account;
+- `P` be a publisher account;
+- `N` be a subscription database name visible in `S`;
+- `D` be the publisher database named by the publication;
+- `T` be the publication's table set, including the existing all-tables form;
+- `V` be the set of tables visible to the subscriber session's active-role
+  closure through the subscription schema;
+- `X` be the current statement snapshot or an explicitly requested historical
+  account snapshot.
+
+A publisher index row is visible through `N` at `X` if and only if all of the
+following hold at `X`:
+
+1. `S` has a normal, active subscription record for `N`;
+2. that record identifies publisher `P` and publication database `D`;
+3. the indexed table is a member of publication table set `T`;
+4. the indexed table is visible in subscriber RBAC set `V`;
+5. the `mo_indexes`, `mo_tables`, and `mo_columns` rows belong to `P` and join
+   to that published table;
+6. the persisted built-in view has a statement shape the planner can rewrite
+   without weakening these predicates.
+
+The returned `TABLE_SCHEMA` and `INDEX_SCHEMA` are `N`, not `D`. The table,
+column, and index names and attributes remain publisher metadata. Rows for a
+withdrawn/deleted subscription, another publisher database, or an unpublished
+table are absent.
+
+The subscriber-local branch retains the local metadata-visibility contract
+defined by `CLAUDE_INFORMATION_SCHEMA_METADATA_VISIBILITY.md`. This document
+adds only the subscription branch exception described below; it does not widen
+the local branch.
+
+## 4. Authorization and tenant-isolation boundary
+
+### 4.1 Two independent authorization boundaries
+
+The publication database/table set is the existing publisher-controlled grant
+that makes a subscribed table definition and its read-only data available to a
+subscriber. Index and primary-key metadata are structural metadata required to
+describe and correctly use that same table. Requiring a second publisher role
+grant would make a valid subscription unreadable to standard clients and would
+create an authorization rule that publication owners cannot express through
+the publication contract.
+
+Publication membership is the sole **publisher-side** authorization boundary;
+it is not a replacement for subscriber RBAC. Before entering a publisher
+catalog, the compiler evaluates the subscription database against the current
+subscriber session's active-role closure. Database ownership, database-wide or
+global table grants, and database metadata grants admit all publication-member
+tables. Subscription tables are virtual and do not exist as grantable objects
+in the subscriber catalog, so exact table/view grants cannot be resolved for
+this account-wide metadata path. A connect-only user therefore gets no
+subscription metadata branch.
+
+After that subscriber-local decision, the publisher branch must not evaluate
+subscriber role IDs against publisher `mo_role_privs`: role IDs are
+account-local identities and collisions across accounts have no authorization
+meaning. It also must not use an implicit publisher session role because no
+publisher login participates in the subscriber statement. Instead the planner
+intersects the subscriber-visible table IDs with the publisher account,
+database, and publication table set.
+
+This exception is narrow. It authorizes only the catalog rows needed to
+describe tables already admitted by the publication. It does not expose
+publisher users, roles, databases, unpublished tables, other metadata views, or
+arbitrary catalog queries.
+
+### 4.2 Enforced predicates
+
+Each publisher branch carries the full subscription identity on its catalog
+object references. Planning enforces all four scopes independently:
+
+1. subscriber active-role visibility, computed only from subscriber-local
+   `mo_database`, `mo_role_privs`, and `mo_current_roles()`;
+2. publisher-account scope on `mo_indexes`, `mo_tables`, and `mo_columns`;
+3. publication-database scope on the publisher `mo_tables` scan;
+4. publication-table scope on that same `mo_tables` scan.
+
+The publisher `mo_tables` scan always requires membership in publication set
+`T`. If subscriber RBAC does not establish broad database/global visibility,
+the subscription branch is omitted entirely. Incomplete publication metadata
+(for example an empty publisher database or an empty table set) is also omitted
+and, at the final filter boundary, converted to a contradictory row predicate so
+that malformed state can never degrade into an unfiltered cross-account scan.
+
+The joins in the canonical `STATISTICS` view then restrict index and column
+rows to the admitted table IDs. Output schema expressions are rewritten from
+publisher database `D` to subscription name `N` only after source scoping is
+attached.
+
+The canonical view's `__mo_visible_tables` CTE normally evaluates the current
+tenant's role closure. The account-wide provider evaluates that same role
+closure locally first. In a publisher branch the planner then replaces the
+CTE's subscriber-role predicate with the publisher-account predicate and adds
+the captured subscriber authorization decision. Publication database/table
+filters remain on `mo_tables`; replacing the CTE is
+not a standalone authorization grant.
+
+An unsupported `__mo_visible_tables` shape fails planning. The planner never
+falls back to an unscoped publisher scan. Compiler-context subscription state
+is restored after every branch on success or error so a later local resolution
+cannot inherit publisher identity.
+
+## 5. Account-wide planning semantics
+
+Every logical occurrence of `information_schema.STATISTICS` is bound as one
+relational source:
+
+```text
+subscriber-local STATISTICS
+UNION ALL publisher branch for active, subscriber-visible subscription N1
+UNION ALL publisher branch for active, subscriber-visible subscription N2
+...
+```
+
+Outer predicates are applied to this source by normal relational planning.
+They do not decide which catalogs are present. Consequently these shapes are
+semantically equivalent with respect to subscription discovery:
+
+- `WHERE table_schema = ?`;
+- a schema predicate in `JOIN ON`;
+- an outer predicate over a derived `STATISTICS` query;
+- a correlated or nested occurrence;
+- an account-wide query without a schema predicate;
+- a prepared Connector/J query with schema and table parameters.
+
+Each sibling or nested occurrence receives its own complete branch set. The
+subscriber-local source is never dropped when subscriptions exist.
+
+Subscription names are sorted for deterministic plans and deduplicated using
+the server's database-identifier comparison rules. Under
+`lower_case_table_names=0`, differently cased names are distinct. Modes 1 and
+2 compare them case-insensitively while preserving the selected subscription's
+display spelling. Empty, nil, withdrawn, deleted, and subscriber-invisible
+entries are omitted.
+
+`SHOW INDEX` already identifies one database and follows that subscription's
+publisher identity directly. It shares the same publisher-account and
+publication-table restrictions but does not require account-wide enumeration.
+
+## 6. Snapshot consistency
+
+For a current query, subscription enumeration and publisher catalog binding use
+the session transaction. For a named historical account snapshot older than
+the session transaction:
+
+1. the compiler clones the transaction operator at snapshot timestamp `X`;
+2. it applies the snapshot tenant identity to the background context;
+3. it enumerates `mo_subs` and subscriber-local RBAC visibility through a
+   short-lived background executor bound to that cloned transaction;
+4. when a legacy `mo_subs` row lacks `pub_account_id`, it resolves the stored
+   publisher account name through `mo_account` using that same executor and
+   transaction snapshot before constructing planner metadata;
+5. all local and publisher catalog branches retain the same plan snapshot;
+6. the background result and executor are closed on every return path.
+
+This prevents a plan from combining today's subscription set with historical
+publisher catalogs, or the inverse. A subscription present at `X` and removed
+now remains visible only to the historical query. A subscription created after
+`X` remains absent from that query.
+
+Snapshot scope validation remains owned by the existing snapshot subsystem.
+This design does not permit a subscriber to use a snapshot for an account it
+could not otherwise address.
+
+## 7. Cache and prepared-statement lifecycle
+
+The complete visible subscription set is captured in the plan's UNION shape,
+but create/drop/withdraw/reauthorize transitions do not necessarily change a
+table schema version. Schema-version invalidation alone is therefore
+insufficient.
+
+### 7.1 Ordinary statements
+
+Every plan originating from built-in `STATISTICS` retains an origin-view
+dependency marker. The ordinary `COM_QUERY` plan cache rejects that dependency
+even when the account currently has zero subscriptions and no publisher node
+exists. Repeating the same SQL after creation of the first subscription must
+build a new branch set.
+
+### 7.2 Prepared statements
+
+A prepared `STATISTICS` plan is rebuilt on every `EXECUTE`. The rebuild decision
+is computed before validating captured table references. Because a guaranteed
+rebuild will resolve the current branch set, stale publisher references from a
+withdrawn subscription are not resolved first; doing so would surface an
+obsolete authorization error instead of returning the current result.
+
+This contract covers zero-to-one creation, additional subscriptions,
+withdrawal, reauthorization, drop, and case-mode resolution. Parameter values
+remain execution-time values and do not alter the branch enumeration rule.
+
+Prepared compile artifacts may be reused only when their plan is reused. A
+subscription-metadata dependency forces a new plan and therefore does not
+retain a compile pipeline for the previous branch set.
+
+## 8. Persisted-view and rolling-version compatibility
+
+No persisted table or publication format changes. The built-in `STATISTICS`
+definition remains stored as an ordinary view and is parsed into a query-owned
+AST. Publisher rewrites modify only that branch's AST; they do not mutate the
+catalog definition or a parser object shared with another query.
+
+Compatibility rules are:
+
+- the legacy `mo_subs` shape, which predates both `sub_account_name` and
+  `pub_account_id`, is admitted by the same bounded candidate query and then
+  resolves distinct non-system publisher names to account IDs from
+  `mo_account` in fixed batches of 64 through the same snapshot executor;
+- publisher-name resolution is complete-or-error: a missing, duplicate,
+  unexpected, zero/non-system, or out-of-range account identity fails the
+  statement before any publisher branch can be built; the real `sys` account
+  remains the only publisher allowed to use account ID 0;
+- legacy definitions without `__mo_visible_tables` receive the publisher
+  account rewrite in the top-level predicate and retain publication filters on
+  catalog scans;
+- the canonical visibility-aware definition receives both the top-level
+  account rewrite and the narrow `__mo_visible_tables` replacement described
+  in Section 4;
+- a present but structurally unsupported named visibility CTE fails closed;
+- local branches continue to use the persisted definition unchanged.
+
+This change needs no new MORPC capability because it introduces no persisted
+wire or catalog format. The subscriber visibility query does, however, honor
+the existing v41 `mo_current_roles()` capability: at v41 or later it uses the
+complete cycle-safe active-role closure; below v41 it uses the same
+compatibility expression as persisted information-schema views (the current
+role plus directly inherited roles). During a rolling binary upgrade, an older
+CN may still show the original empty subscription metadata, while an upgraded
+CN returns the corrected rows. This is a temporary availability/compatibility
+difference, not an authorization widening: the old behavior exposes fewer
+rows. Operators requiring consistent JDBC metadata must wait until all
+query-serving CNs are upgraded before relying on the new contract.
+
+Downgrading restores the old incomplete behavior but requires no catalog
+rollback. Backup and restore carry the existing publication, subscription, and
+view rows unchanged. The local metadata-visibility design's independent
+protocol/view-installation gates remain authoritative for selecting canonical
+versus compatibility view definitions.
+
+## 9. Cardinality, complexity, and explicit planning budget
+
+Let `A` be the number of active, subscriber-visible subscription schemas and
+`R` the number of logical `STATISTICS` occurrences. Each source view contains
+a fixed planner shape `V`. Plan construction and the number of catalog branches are
+`O((A + 1) * R * V)`. Execution work is also proportional to those branches,
+but every publisher `mo_tables` scan is constrained by publisher account,
+publication database, and table set before index rows are returned.
+
+Enumeration adds at most one bounded catalog query and one batched
+subscriber-local visibility query per requested snapshot in a statement. The
+query builder caches that complete visible set for sibling and nested
+`STATISTICS` occurrences at the same snapshot; it does not issue one RBAC
+query per subscription or repeat account-wide enumeration per occurrence.
+
+The subscription feature currently has no catalog-enforced per-account hard
+maximum. This design therefore does not truncate subscriptions or silently
+return partial metadata. Instead it defines this explicit supported planning
+budget for the current UNION implementation:
+
+- expected operating range: 0–16 active subscriptions and 1–2
+  `STATISTICS` occurrences per statement;
+- validated envelope: at most 64 active subscriptions and at most 4
+  `STATISTICS` occurrences, or 256 publisher view expansions;
+- reference compile budget at the validated envelope: 500 ms and 256 MiB of
+  cumulative Go allocations per plan build on an Apple M1 with 8 planner
+  threads;
+- the planner admits at most 256 publisher view expansions across the complete
+  statement. It reserves an occurrence's full visible subscription set before
+  binding its local view or any publisher view. A request that would exceed the
+  limit fails planning explicitly; it is never truncated and no partial
+  metadata plan can execute;
+- the remaining statement branch budget is passed into the account-wide
+  provider before catalog enumeration. The `mo_subs` query filters to normal,
+  non-empty subscription names and includes `LIMIT remaining+1`. The extra row
+  is an overflow sentinel: if present, planning fails before metadata
+  conversion, sorting, visibility-name encoding, or visibility SQL execution.
+  This deliberately fail-closed candidate cap can reject an account whose
+  active catalog candidates exceed the remaining budget even if subscriber
+  RBAC would later hide enough candidates; it never selects an arbitrary
+  visible prefix;
+- explicit publication table lists have a second statement-wide admission
+  budget: at most 4,096 distinct table literals and at most 1 MiB of encoded
+  table-name payload across all publisher branches. The budget is charged for
+  every logical `STATISTICS` occurrence, before its local or publisher view is
+  bound. This bounds both the `IN (...)` AST nodes and their string payload;
+  a request above either limit fails planning rather than emitting a partial
+  metadata source;
+- CREATE/ALTER publication canonicalizes an explicit table list by sorting and
+  removing duplicate table names. The planner repeats this normalization for
+  old persisted rows, so historical duplicate lists cannot amplify a plan;
+- only after that candidate-count admission succeeds, legacy rows missing
+  publisher IDs perform `mo_account` identity resolution. Distinct publisher
+  names are sorted and queried in batches of at most 64, each with an
+  additional result sentinel. This bounds SQL text and result materialization,
+  avoids one query per subscription, and preserves the requested snapshot;
+- a successful provider result is complete for that effective snapshot and is
+  cached only inside the current query builder. Repeated occurrences reuse the
+  bounded set, while a different requested historical snapshot receives a separate
+  provider call with only the statement budget then remaining;
+- cancellation is checked while decoding subscription rows, converting and
+  sorting metadata, constructing and consuming the subscriber-local visibility
+  query, normalizing publication table lists, filtering the enumerated set,
+  and before every publisher view bind. A canceled statement therefore does
+  not continue doing unbounded metadata work or consuming the remaining branch
+  budget;
+- raising the 256-branch limit requires a follow-up runtime metadata operator
+  or equivalent shared representation plus new capacity evidence.
+
+The checked-in benchmark is reproducible with:
+
+```text
+go test ./pkg/sql/plan -run '^$' \
+  -bench '^BenchmarkSubscriptionStatisticsPlanning$' \
+  -benchmem -benchtime=3x -count=1
+```
+
+Reference evidence on 2026-09-02 (`darwin/arm64`, Apple M1) is:
+
+| Active subscriptions | Occurrences | Planning time | Cumulative allocations |
+|---:|---:|---:|---:|
+| 0 | 1 | 1.4 ms | 1.0 MiB |
+| 0 | 4 | 4.7 ms | 4.2 MiB |
+| 16 | 1 | 13.5 ms | 12.3 MiB |
+| 16 | 4 | 60.7 ms | 50.0 MiB |
+| 64 | 1 | 54.6 ms | 47.4 MiB |
+| 64 | 4 | 249.7 ms | 194.8 MiB |
+
+Wall-clock values are reference evidence, not a timing assertion in unit tests.
+The deterministic boundary test compiles 64 subscriptions across four
+occurrences, verifies all 256 publisher branches, and verifies that catalog and
+visibility enumeration happen once rather than four times. Separate
+counterexamples verify that the catalog SQL returns at most 257 rows, the 257th
+candidate fails without exposing a 256-row prefix or executing visibility SQL,
+and the 257th publisher branch fails before publisher binding. Snapshot-scoped
+counterexamples prove that equivalent sibling snapshots reuse enumeration but
+different snapshots do not share results or reset the remaining statement
+budget. Pre-canceled and mid-expansion tests preserve the cancellation cause.
+Further counterexamples verify that rejected/duplicate metadata does not
+consume the budget, identifier case modes are applied at the exact boundary,
+and the budget does not leak across independent or prepared plan builds. Table
+scope counterexamples verify duplicate elimination, entry and byte limits, and
+multi-occurrence charging before publisher binding. CI
+executes the functional publication/subscription matrix against real catalogs;
+timing remains observed through existing statement and subscription duration
+metrics.
+
+## 10. Failure handling and ownership
+
+Subscription enumeration errors, legacy publisher-identity lookup errors,
+snapshot executor errors, view parse errors, and unsupported visibility-CTE
+shapes fail the statement. They do not degrade to local-only, account 0, or
+unscoped publisher results. Legacy identity resolution mutates no candidate
+until every requested account name is resolved and validated. A publication
+filter construction error likewise aborts the affected plan.
+
+All temporary subscription slices are query-owned. Enumeration copies and
+sorts the bounded provider result before deduplication. The complete visible
+set is cached by serialized requested snapshot only inside one query builder;
+invalid/current snapshots share the current-transaction key, while distinct
+valid historical snapshots do not alias. Historical background executors are
+closed with `defer`; compiler-context subscription identity is restored after
+each publisher branch. There is no global subscription metadata cache,
+background goroutine, retry loop, or cross-statement mutable branch list.
+
+Cancellation uses the existing statement context and is polled at each
+subscription-expansion boundary. Branch admission is query-builder-local,
+monotonic for one statement, and discarded with a failed build. The explicit
+planning budget in Section 9 is a hard runtime admission limit for the current
+representation, not only a benchmark envelope.
+
+## 11. Alternatives
+
+### A. Rewrite only literal `SHOW INDEX` and JDBC predicates
+
+Rejected. It is syntax-dependent and fails account-wide, JOIN, derived,
+nested, and future connector query shapes.
+
+### B. Evaluate subscriber role IDs inside the publisher account
+
+Rejected. Numeric role identities are tenant-local. Reusing them can both hide
+legitimate published tables and, on an ID collision, express an authorization
+meaning the publisher never granted.
+
+Subscriber RBAC is still mandatory, but it is evaluated against the
+subscriber-local subscription database and privilege rows before publisher
+routing. Only the resulting database/global visibility decision crosses that
+boundary; subscriber role IDs never do.
+
+### C. Execute under a publisher user or role
+
+Rejected. A subscription does not create a publisher login session, and no
+stable publisher role is part of the publication contract.
+
+### D. Copy index metadata into subscriber catalogs
+
+Rejected. It introduces asynchronous refresh, withdrawal cleanup, snapshot
+versioning, and stale-security-state problems for data already owned by the
+publisher catalog.
+
+### E. Add one planner branch only after extracting a schema predicate
+
+Rejected. Predicate extraction is not complete across JOIN, derived, nested,
+OR, prepared, and account-wide queries. Authorization and semantics must not
+depend on optimizer predicate placement.
+
+### F. Runtime subscription-aware metadata operator
+
+Deferred. It can share one compact runtime representation and is the preferred
+direction if the supported envelope must exceed Section 9. It is substantially
+more invasive because it needs runtime catalog routing, predicate pushdown,
+snapshot ownership, distributed execution, and observability contracts.
+
+### G. Cache the account's subscription branch set across statements
+
+Rejected. Correct invalidation must cover creation, drop, publication
+withdrawal/reauthorization, snapshots, transaction visibility, case mode,
+restart, and tenant isolation. Version 4 uses only a statement-owned,
+snapshot-keyed cache: it removes repeated enumeration within one plan build
+without introducing cross-statement freshness or invalidation state.
+
+## 12. Validation map and acceptance criteria
+
+| Contract | Evidence |
+|---|---|
+| `SHOW INDEX` routes index/column scans to publisher | planner unit test and public BVT |
+| Account-wide source retains local plus every active subscription | planner unit tests and public BVT |
+| WHERE, JOIN ON, derived, nested, sibling, OR, and prepared shapes agree | planner unit tests and public BVT |
+| Publisher account/database/table isolation; unpublished table absent | plan-shape tests and public BVT |
+| Connect-only subscriber cannot discover published table/index names | restricted-user public BVT and omitted-branch planner test |
+| Inherited database-wide subscriber grants intersect publication scope | public BVT plus active-role visibility-provider tests |
+| Invalid/empty publication scope cannot produce an unfiltered publisher scan | omitted-branch and contradictory-filter unit tests |
+| Rolling upgrade does not call a v41-only role function on older CNs | protocol-specific visibility SQL test |
+| Subscriber role IDs do not authorize publisher catalogs | canonical CTE rewrite and publisher-RBAC negative tests |
+| Canonical and legacy persisted-view shapes remain safe | real canonical-DDL rewrite test and fail-closed shape tests |
+| Current and historical membership use one snapshot | compiler-context ownership review and public snapshot BVT |
+| Legacy `mo_subs` publisher names resolve to the real account at the same snapshot | bounded lookup tests plus a generated nonzero `PubInfo.TenantId`/publisher-account-filter plan test |
+| Missing, duplicate, unexpected, zero/non-system, and canceled legacy identity lookup fail closed | frontend negative counterexamples |
+| Legacy publisher lookup remains bounded rather than N+1 or unbounded | 65-name fixed-batch counterexample plus overflow-before-lookup test |
+| Ordinary zero-to-one transition cannot reuse stale cache | cache-admission test and repeated COM_QUERY BVT |
+| Prepared create/withdraw/reauthorize/drop transitions rebuild | frontend lifecycle tests and public prepared BVT |
+| Guaranteed rebuild skips obsolete captured-reference validation | injected resolver test |
+| Identifier modes 0/1/2 and malformed bytes deduplicate correctly | planner unit tests and case-sensitive BVT |
+| 64 subscriptions × 4 occurrences preserve all 256 branches | deterministic planner boundary test |
+| Catalog candidates, generated visibility SQL, and repeated occurrences remain bounded | 256/257 frontend sentinel test plus one-call planner cache test |
+| Same-snapshot occurrences reuse enumeration; different snapshots remain isolated | snapshot-keyed planner cache counterexample |
+| The 257th publisher branch fails before publisher binding | over-budget planner counterexample |
+| Rejected and duplicate metadata does not consume the branch budget | exact-boundary planner counterexample |
+| Duplicate publication table names are persisted and expanded once | frontend normalization and planner scope tests |
+| Explicit publication table entries and literal bytes are statement-bounded | entry-count, byte-count, and multi-occurrence planner counterexamples |
+| Identifier modes apply consistently at the exact branch boundary | mode 0/1/2 planner counterexamples |
+| Independent builds receive independent statement-wide budgets | repeated-build planner counterexample |
+| Cancellation stops row decoding, visibility enumeration, and publisher binding | deterministic frontend and planner counterexamples |
+| Planning cost remains measurable across 0/16/64 and 1/4 | checked-in benchmark and Section 9 reference results |
+| Connector/J index and primary-key result shapes | public BVT plus Connector/J integration run |
+
+Acceptance requires focused planner and frontend tests, affected public BVT,
+race tests for planner and prepared/cache lifecycle paths, `go vet` on owning
+packages, `git diff --check`, and exact-head CI. Timing numbers are reviewed
+against the explicit budget but are not used as flaky wall-clock unit-test
+assertions.
+
+## 13. Risks, rollout, and observability
+
+Primary risks are cross-tenant metadata leakage, unpublished-table leakage,
+stale membership, historical/current state mixing, identifier-case omission,
+legacy publisher identity loss, and planner amplification. Sections 4–10
+assign a separate invariant and test to each risk.
+
+The rollout is binary-only. No backfill or destructive rollback exists. The
+feature may be disabled operationally only by routing metadata clients to old
+behavior or rolling back the binary; publication data remains unchanged.
+
+Existing statement duration, memory, error, and publication/subscription
+duration telemetry cover operational regressions. A dedicated branch-count
+metric is not introduced in this bug fix. If production accounts approach or
+exceed the validated envelope, a follow-up runtime representation must add
+branch/cardinality observability before raising the budget.
+
+## 14. Decision log and open decisions
+
+- Subscriber active-role visibility and publication membership are both
+  required. Publication scope, not publisher RBAC, authorizes the narrow
+  cross-account catalog scan after subscriber RBAC succeeds.
+- `STATISTICS` is account-wide and syntax-independent.
+- Local and publisher rows are combined with `UNION ALL`; existing catalog
+  uniqueness prevents semantic duplicate index rows within one branch.
+- Historical enumeration and catalog binding use one snapshot.
+- Legacy subscription rows resolve publisher names to IDs through the same
+  snapshot executor in fixed batches after candidate-count admission; failures
+  never default a non-system publisher to account 0.
+- Ordinary plans are not cached; prepared plans rebuild every execution.
+- Publisher rewrites are query-owned and support legacy plus canonical
+  persisted definitions without a catalog migration.
+- Identifier deduplication follows `lower_case_table_names`.
+- The current representation has a hard statement-wide admission limit of 256
+  publisher view expansions. Sixty-four active subscriptions across four
+  `STATISTICS` occurrences is the validated boundary; the 257th branch fails
+  closed without returning partial metadata.
+- Explicit publication table lists have independent statement-wide limits of
+  4,096 distinct table literals and 1 MiB of encoded literal payload. The
+  limits are charged per logical `STATISTICS` occurrence before view binding;
+  duplicate persisted table names are normalized and charged once per branch.
+- Provider enumeration is admitted before materialization with an active
+  catalog-candidate `LIMIT remaining+1`. Overflow fails closed before RBAC SQL;
+  successful results are cached only for the same snapshot in the same plan
+  build.
+- No blocking design question is intentionally left unresolved. Raising the
+  performance envelope is a separate design change.
+
+Independent design approval is still required. This document must remain
+`Proposed` until an authorized reviewer records a decision against an exact
+commit. Code review approval of an earlier implementation revision is not
+implicitly design approval.
+
+## 15. Design review record
+
+To be completed by an authorized reviewer:
+
+```text
+Change scope: cross-account subscription index metadata routing
+Trigger: authorization/tenant boundary; account-wide semantics; snapshot and cache lifecycle; planner amplification
+Design: docs/design/CLAUDE_INFORMATION_SCHEMA_SUBSCRIPTION_METADATA_ROUTING.md, version 6, <reviewed commit>
+Blocking findings: <none or findings>
+Decision log: <accepted tradeoffs and resolved questions>
+Decision: PASS | REQUEST_CHANGES
+Implementation deviations: <none or affected sections>
+```

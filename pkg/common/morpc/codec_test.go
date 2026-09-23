@@ -338,6 +338,24 @@ type failingContextHeaderCodec struct {
 	ctx context.Context
 }
 
+func TestHeaderEncodeFailureRestoresBufferAndPayload(t *testing.T) {
+	codec := newTestCodec().(*messageCodec)
+	codec.AddHeaderCodec(&failingContextHeaderCodec{})
+	out := buf.NewByteBuf(64)
+	defer out.Close()
+	_, err := out.Write([]byte("prior frame"))
+	require.NoError(t, err)
+	offset := out.GetWriteOffset()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	msg := newTestMessage(1)
+	msg.SetPayloadField([]byte("payload"))
+	err = codec.Encode(RPCMessage{Ctx: ctx, Message: msg}, out, io.Discard)
+	require.Error(t, err)
+	require.Equal(t, offset, out.GetWriteOffset())
+	require.Equal(t, []byte("payload"), msg.GetPayloadField())
+}
+
 func (c *failingContextHeaderCodec) Encode(*RPCMessage, *buf.ByteBuf) (int, error) {
 	return 0, errors.New("injected header encode failure")
 }

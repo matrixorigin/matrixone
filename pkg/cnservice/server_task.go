@@ -29,8 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	"github.com/matrixorigin/matrixone/pkg/iscp"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	"github.com/matrixorigin/matrixone/pkg/objectio"
-	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
 	"github.com/matrixorigin/matrixone/pkg/proxy"
@@ -38,7 +36,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util"
-	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/export"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
@@ -198,7 +195,44 @@ func (s *service) createProxyUser(command *logservicepb.CreateTaskService) {
 func (s *service) startTaskRunner() {
 	s.task.Lock()
 	defer s.task.Unlock()
+	s.startTaskRunnerLocked()
+}
 
+func (s *service) publishTaskRunner() error {
+	s.task.Lock()
+	defer s.task.Unlock()
+	if s.task.generationRevoked || s.viewMetadataGenerationRevoked.Load() {
+		s.task.runnerReady.Store(false)
+		return moerr.NewInvalidStateNoCtx("CN view metadata admission generation revoked")
+	}
+	s.task.runnerReady.Store(true)
+	s.startTaskRunnerLocked()
+	return nil
+}
+
+func (s *service) detachRevokedTaskRunner() taskservice.TaskRunner {
+	s.task.Lock()
+	defer s.task.Unlock()
+	s.task.generationRevoked = true
+	s.task.runnerReady.Store(false)
+	runner := s.task.runner
+	s.task.runner = nil
+	return runner
+}
+
+func (s *service) stopRevokedTaskRunner(runner taskservice.TaskRunner) {
+	if runner != nil {
+		if err := runner.Stop(); err != nil {
+			s.logger.Error("stop revoked generation task runner failed", zap.Error(err))
+		}
+	}
+}
+
+func (s *service) startTaskRunnerLocked() {
+	if s.task.generationRevoked || s.viewMetadataGenerationRevoked.Load() {
+		s.task.runnerReady.Store(false)
+		return
+	}
 	if !s.task.runnerReady.Load() {
 		return
 	}
@@ -311,42 +345,18 @@ func (s *service) registerExecutorsLocked() {
 	s.task.runner.RegisterExecutor(
 		task.TaskCode_MetricStorageUsage,
 		mometric.GetMetricStorageUsageExecutor(s.cfg.UUID, ieFactory))
-	s.task.runner.RegisterExecutor(task.TaskCode_MergeObject,
-		func(ctx context.Context, task task.Task) error {
-			metadata := task.GetMetadata()
-			var mergeTask api.MergeTaskEntry
-			err := mergeTask.Unmarshal(metadata.Context)
-			if err != nil {
-				return err
-			}
-
-			objs := make([]string, len(mergeTask.ToMergeObjs))
-			for i, b := range mergeTask.ToMergeObjs {
-				stats := objectio.ObjectStats(b)
-				objs[i] = stats.ObjectName().String()
-			}
-			sql := fmt.Sprintf("select mo_ctl('CN', 'MERGEOBJECTS', 'o:%d.%d:%s')",
-				mergeTask.TblId, mergeTask.AccountId, strings.Join(objs, ","))
-			ctx, cancel := context.WithTimeoutCause(ctx, 10*time.Minute, moerr.CauseMergeObject)
-			defer cancel()
-			opts := executor.Options{}.WithWaitCommittedLogApplied()
-			_, err = s.sqlExecutor.Exec(ctx, sql, opts)
-			return moerr.AttachCause(ctx, err)
-		},
+	cdcExecutor := frontend.CDCTaskExecutorFactory(
+		s.logger,
+		ieFactory,
+		s.task.runner.Attach,
+		s.cfg.UUID,
+		ts,
+		s.fileService,
+		s._txnClient,
+		s.storeEngine,
 	)
-
-	s.task.runner.RegisterExecutor(task.TaskCode_InitCdc,
-		frontend.CDCTaskExecutorFactory(
-			s.logger,
-			ieFactory,
-			s.task.runner.Attach,
-			s.cfg.UUID,
-			ts,
-			s.fileService,
-			s._txnClient,
-			s.storeEngine,
-		),
-	)
+	s.task.runner.RegisterExecutor(task.TaskCode_InitCdc, cdcExecutor)
+	s.task.runner.RegisterExecutor(task.TaskCode_InitCdcStableEpoch, cdcExecutor)
 
 	s.task.runner.RegisterExecutor(task.TaskCode_ISCPExecutor,
 		iscp.ISCPTaskExecutorFactory(

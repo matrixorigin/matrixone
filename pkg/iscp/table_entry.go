@@ -60,7 +60,7 @@ func (t *TableEntry) AddOrUpdateSinker(
 	watermark types.TS,
 	state int8,
 	dropAt types.Timestamp,
-) (newCreate bool) {
+) (newCreate bool, err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	key := JobKey{
@@ -77,7 +77,7 @@ func (t *TableEntry) AddOrUpdateSinker(
 	if jobEntry.jobID > jobID {
 		return
 	}
-	jobEntry.update(ctx, jobSpec, jobStatus, watermark, state, dropAt)
+	err = jobEntry.update(ctx, jobSpec, jobStatus, watermark, state, dropAt)
 	return
 }
 
@@ -157,6 +157,7 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 		candidates = append(candidates, sinker)
 	}
 	iterations := make([]*IterationContext, 0, len(candidates))
+	shareableIterations := make([]*IterationContext, 0, len(candidates))
 	minFromTS = types.MaxTs()
 	for _, sinker := range candidates {
 		if sinker.watermark.IsEmpty() && sinker.state == ISCPJobState_Completed {
@@ -166,6 +167,7 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 				jobNames:  []string{sinker.jobName},
 				jobIDs:    []uint64{sinker.jobID},
 				lsn:       []uint64{sinker.currentLSN + 1},
+				stages:    []int8{sinker.stage},
 				fromTS:    types.TS{},
 				toTS:      types.TS{},
 			})
@@ -175,28 +177,39 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 		if !ok {
 			continue
 		}
+		// InitSQL is executed for exactly one job at a time. Keep its iteration
+		// out of the shared pool until the durable stage advances to Running.
+		if sinker.stage == JobStage_Init {
+			share = false
+		}
 		foundIteration := false
 		if share {
-			for _, iter := range iterations {
+			for _, iter := range shareableIterations {
 				if iter.fromTS.EQ(&from) && iter.toTS.EQ(&to) {
 					iter.jobNames = append(iter.jobNames, sinker.jobName)
 					iter.jobIDs = append(iter.jobIDs, sinker.jobID)
 					iter.lsn = append(iter.lsn, sinker.currentLSN+1)
+					iter.stages = append(iter.stages, sinker.stage)
 					foundIteration = true
 					break
 				}
 			}
 		}
 		if !foundIteration {
-			iterations = append(iterations, &IterationContext{
+			iter := &IterationContext{
 				tableID:   t.tableID,
 				accountID: t.accountID,
 				jobNames:  []string{sinker.jobName},
 				jobIDs:    []uint64{sinker.jobID},
 				lsn:       []uint64{sinker.currentLSN + 1},
+				stages:    []int8{sinker.stage},
 				fromTS:    from,
 				toTS:      to,
-			})
+			}
+			iterations = append(iterations, iter)
+			if sinker.stage != JobStage_Init {
+				shareableIterations = append(shareableIterations, iter)
+			}
 			if from.LT(&minFromTS) {
 				minFromTS = from
 			}
@@ -209,7 +222,10 @@ func (t *TableEntry) getCandidate() (iter []*IterationContext, minFromTS types.T
 // iteration. Validate the complete shared iteration before changing any job so
 // the in-memory transition is all-or-nothing.
 func (t *TableEntry) markIterationPending(iter *IterationContext) error {
-	if iter == nil || len(iter.jobNames) != len(iter.jobIDs) || len(iter.jobNames) != len(iter.lsn) {
+	if iter == nil ||
+		len(iter.jobNames) != len(iter.jobIDs) ||
+		len(iter.jobNames) != len(iter.lsn) ||
+		len(iter.jobNames) != len(iter.stages) {
 		return moerr.NewInternalErrorNoCtx("invalid ISCP iteration")
 	}
 
@@ -240,35 +256,92 @@ func (t *TableEntry) markIterationPending(iter *IterationContext) error {
 	return nil
 }
 
-func (t *TableEntry) UpdateWatermark(iter *IterationContext) {
+func (t *TableEntry) UpdateWatermark(iter *IterationContext) error {
 	if iter.fromTS.GE(&iter.toTS) {
-		return
+		return nil
+	}
+	if len(iter.jobNames) != len(iter.jobIDs) {
+		return moerr.NewInternalErrorNoCtx("invalid ISCP watermark iteration")
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	// Validate the complete shared iteration before advancing any member. Init
+	// owns a lifecycle transition and may only be completed by the worker after
+	// InitSQL succeeds; a clean-table maintenance pass cannot prove that.
 	for i, jobName := range iter.jobNames {
 		jobEntry := t.jobs[JobKey{
 			JobName: jobName,
 			JobID:   iter.jobIDs[i],
 		}]
-		jobEntry.UpdateWatermark(iter.fromTS, iter.toTS, t.exec.option.FlushWatermarkInterval)
+		if jobEntry == nil {
+			return moerr.NewInternalErrorNoCtxf(
+				"ISCP job %s/%d no longer exists", jobName, iter.jobIDs[i])
+		}
+		if jobEntry.stage == JobStage_Init {
+			return moerr.NewInternalErrorNoCtxf(
+				"ISCP job %s/%d cannot advance watermark before initialization",
+				jobName, iter.jobIDs[i])
+		}
+		expectedFrom := jobEntry.watermark.Next()
+		if !expectedFrom.EQ(&iter.fromTS) {
+			// No member has been advanced yet, so fencing a discontinuity cannot
+			// leave a shared iteration partially applied in memory.
+			return jobEntry.UpdateWatermark(
+				iter.fromTS, iter.toTS, t.exec.option.FlushWatermarkInterval)
+		}
 	}
+	for i, jobName := range iter.jobNames {
+		t.jobs[JobKey{JobName: jobName, JobID: iter.jobIDs[i]}].watermark = iter.toTS
+	}
+	return nil
+}
+
+type watermarkFlushReservation struct {
+	jobKey            JobKey
+	currentLSN        uint64
+	previousPersisted types.TS
+	flushedWatermark  types.TS
 }
 
 func (t *TableEntry) tryFlushWatermark(
 	ctx context.Context,
 	txn client.TxnOperator,
 	threshold time.Duration,
-) (flushCount int) {
+) (reservations []watermarkFlushReservation, err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	for _, jobEntry := range t.jobs {
-		needFlush, err := jobEntry.tryFlushWatermark(ctx, txn, threshold)
-		if needFlush && err == nil {
-			flushCount++
+	for jobKey, jobEntry := range t.jobs {
+		previousPersisted := jobEntry.persistedWatermark
+		needFlush, flushErr := jobEntry.tryFlushWatermark(ctx, txn, threshold)
+		if flushErr != nil {
+			return reservations, flushErr
+		}
+		if needFlush {
+			reservations = append(reservations, watermarkFlushReservation{
+				jobKey:            jobKey,
+				currentLSN:        jobEntry.currentLSN,
+				previousPersisted: previousPersisted,
+				flushedWatermark:  jobEntry.watermark,
+			})
 		}
 	}
-	return flushCount
+	return reservations, nil
+}
+
+func (t *TableEntry) rollbackWatermarkFlushes(reservations []watermarkFlushReservation) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, reservation := range reservations {
+		jobEntry := t.jobs[reservation.jobKey]
+		if jobEntry == nil ||
+			jobEntry.currentLSN != reservation.currentLSN ||
+			jobEntry.state != ISCPJobState_Pending ||
+			!jobEntry.persistedWatermark.EQ(&reservation.flushedWatermark) {
+			continue
+		}
+		jobEntry.state = ISCPJobState_Completed
+		jobEntry.persistedWatermark = reservation.previousPersisted
+	}
 }
 
 func (t *TableEntry) String() string {

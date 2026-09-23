@@ -237,6 +237,7 @@ const (
 	NOT_ILIKE
 	REG_MATCH     // REG_MATCH
 	NOT_REG_MATCH // NOT REG_MATCH
+	MEMBER_OF     // MEMBER [OF]
 	IS_DISTINCT_FROM
 	IS_NOT_DISTINCT_FROM
 	NULL_SAFE_EQUAL // <=>
@@ -290,6 +291,8 @@ func (op ComparisonOp) ToString() string {
 		return "ilike"
 	case NOT_ILIKE:
 		return "not ilike"
+	case MEMBER_OF:
+		return "member of"
 	default:
 		return "Unknown ComparisonExprOperator"
 	}
@@ -312,6 +315,12 @@ func (node *ComparisonExpr) Format(ctx *FmtCtx) {
 		ctx.WriteByte(' ')
 	}
 	ctx.WriteString(node.Op.ToString())
+	if node.Op == MEMBER_OF {
+		ctx.WriteString(" (")
+		ctx.PrintExpr(node, node.Right, false)
+		ctx.WriteByte(')')
+		return
+	}
 	ctx.WriteByte(' ')
 
 	if node.SubOp != ComparisonOp(0) {
@@ -951,8 +960,13 @@ type FuncExpr struct {
 	exprImpl
 	Func     ResolvableFunctionReference
 	FuncName *CStr
-	Type     FuncType
-	Exprs    Exprs
+	// IsGeneric is true when the parser recognized a whitespace-sensitive
+	// MySQL function through the generic identifier-function rule rather than
+	// its native built-in rule. That distinction matters when IGNORE_SPACE is
+	// disabled.
+	IsGeneric bool
+	Type      FuncType
+	Exprs     Exprs
 
 	//specify the type of aggregation.
 	AggType AggType
@@ -970,6 +984,9 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 	funcName := ""
 	if node.FuncName != nil {
 		funcName = node.FuncName.Origin()
+	}
+	if ctx.detectDateTimeFormat && isDateTimeFormatFunction(funcName) {
+		ctx.sawDateTimeFormat = true
 	}
 
 	if strings.ToLower(funcName) == "interval" && len(node.Exprs) == 2 {
@@ -990,14 +1007,41 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 		node.Func.Format(ctx)
 	}
 
-	ctx.WriteString("(")
+	if node.IsGeneric {
+		// MySQL's whitespace-sensitive function names are parsed as generic
+		// calls when IGNORE_SPACE is disabled. Preserve that separator so a
+		// format/reparse cycle cannot silently turn the call into a native
+		// built-in.
+		ctx.WriteString(" (")
+	} else {
+		ctx.WriteByte('(')
+	}
 	if node.Type != FUNC_TYPE_DEFAULT && node.Type != FUNC_TYPE_TABLE {
 		ctx.WriteString(node.Type.ToString())
 		ctx.WriteByte(' ')
 	}
-	isGroupConcat := strings.EqualFold(funcName, "group_concat") ||
-		strings.EqualFold(node.Func.FunctionReference.(*UnresolvedName).ColName(), "group_concat")
-	if isGroupConcat && len(node.Exprs) > 0 {
+	isConvertUsing := !node.IsGeneric && strings.EqualFold(funcName, "convert") && len(node.Exprs) == 2
+	isExtract := !node.IsGeneric && strings.EqualFold(funcName, "extract") && len(node.Exprs) == 2
+	isListAgg := !node.IsGeneric && strings.EqualFold(funcName, "listagg")
+	isGroupConcat := !node.IsGeneric && (strings.EqualFold(funcName, "group_concat") ||
+		strings.EqualFold(node.Func.FunctionReference.(*UnresolvedName).ColName(), "group_concat"))
+	if isConvertUsing {
+		node.Exprs[0].Format(ctx)
+		ctx.WriteString(" using ")
+		if charset, ok := node.Exprs[1].(*NumVal); ok {
+			ctx.WriteString(charset.String())
+		} else {
+			node.Exprs[1].Format(ctx)
+		}
+	} else if isExtract {
+		node.Exprs[0].Format(ctx)
+		ctx.WriteString(" from ")
+		node.Exprs[1].Format(ctx)
+	} else if isListAgg && len(node.Exprs) == 2 {
+		node.Exprs[0].Format(ctx)
+		ctx.WriteString(", ")
+		node.Exprs[1].Format(ctx)
+	} else if isGroupConcat && len(node.Exprs) > 0 {
 		// The parser stores GROUP_CONCAT's separator as the final expression so
 		// binders can consume it uniformly. It is not a concatenated argument.
 		node.Exprs[:len(node.Exprs)-1].Format(ctx)
@@ -1007,7 +1051,7 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 		}
 		ctx.WriteString(" separator ")
 		node.Exprs[len(node.Exprs)-1].Format(ctx)
-	} else if node.Func.FunctionReference.(*UnresolvedName).ColName() == "trim" {
+	} else if !node.IsGeneric && node.Func.FunctionReference.(*UnresolvedName).ColName() == "trim" {
 		trimExprsFormat(ctx, node.Exprs)
 	} else {
 		formatFuncExprs(ctx, node)
@@ -1030,6 +1074,10 @@ func (node *FuncExpr) Format(ctx *FmtCtx) {
 	}
 }
 
+func isDateTimeFormatFunction(name string) bool {
+	return strings.EqualFold(name, "date_format") || strings.EqualFold(name, "time_format")
+}
+
 func formatFuncExprs(ctx *FmtCtx, node *FuncExpr) {
 	if ctx.ModeIndependentStringLiterals() &&
 		node.FuncName != nil &&
@@ -1046,7 +1094,7 @@ func formatFuncExprs(ctx *FmtCtx, node *FuncExpr) {
 	}
 
 	switch strings.ToLower(node.FuncName.Origin()) {
-	case "timestampdiff", "extract":
+	case "timestampdiff":
 		formatExprWithSingleQuoteDisabled(ctx, node.Exprs[0])
 		if len(node.Exprs) > 1 {
 			ctx.WriteString(", ")
@@ -1144,6 +1192,40 @@ func (node *FuncExpr) Accept(v Visitor) (Expr, bool) {
 		}
 		order.Expr = tmpNode
 	}
+	if node.WindowSpec != nil {
+		for i, expr := range node.WindowSpec.PartitionBy {
+			if expr == nil {
+				continue
+			}
+			tmpNode, ok := expr.Accept(v)
+			if !ok {
+				return node, false
+			}
+			node.WindowSpec.PartitionBy[i] = tmpNode
+		}
+		for _, order := range node.WindowSpec.OrderBy {
+			if order == nil || order.Expr == nil {
+				continue
+			}
+			tmpNode, ok := order.Expr.Accept(v)
+			if !ok {
+				return node, false
+			}
+			order.Expr = tmpNode
+		}
+		if node.WindowSpec.Frame != nil {
+			for _, bound := range []*FrameBound{node.WindowSpec.Frame.Start, node.WindowSpec.Frame.End} {
+				if bound == nil || bound.Expr == nil {
+					continue
+				}
+				tmpNode, ok := bound.Expr.Accept(v)
+				if !ok {
+					return node, false
+				}
+				bound.Expr = tmpNode
+			}
+		}
+	}
 	return v.Exit(node)
 }
 
@@ -1172,16 +1254,38 @@ func trimExprsFormat(ctx *FmtCtx, exprs Exprs) {
 }
 
 type WindowSpec struct {
-	PartitionBy Exprs
-	OrderBy     OrderBy
-	HasFrame    bool
-	Frame       *FrameClause
+	// RefName identifies a named window used as this specification's base.
+	// ReferencedOnly distinguishes OVER name from the parenthesized OVER (name)
+	// form, which matters for MySQL's inheritance rules.
+	RefName        *CStr
+	ReferencedOnly bool
+	PartitionBy    Exprs
+	OrderBy        OrderBy
+	HasFrame       bool
+	Frame          *FrameClause
 }
 
 func (node *WindowSpec) Format(ctx *FmtCtx) {
-	ctx.WriteString("over (")
+	ctx.WriteString("over ")
+	if node.ReferencedOnly && node.RefName != nil {
+		ctx.WriteIdentifier(Identifier(node.RefName.Origin()))
+		return
+	}
+	ctx.WriteByte('(')
+	node.formatBody(ctx)
+	ctx.WriteByte(')')
+}
+
+func (node *WindowSpec) formatBody(ctx *FmtCtx) {
 	flag := false
+	if node.RefName != nil {
+		ctx.WriteIdentifier(Identifier(node.RefName.Origin()))
+		flag = true
+	}
 	if len(node.PartitionBy) > 0 {
+		if flag {
+			ctx.WriteByte(' ')
+		}
 		ctx.WriteString("partition by ")
 		node.PartitionBy.Format(ctx)
 		flag = true
@@ -1201,8 +1305,31 @@ func (node *WindowSpec) Format(ctx *FmtCtx) {
 		}
 		node.Frame.Format(ctx)
 	}
+}
 
+type WindowDefinition struct {
+	Name *CStr
+	Spec *WindowSpec
+}
+
+func (node *WindowDefinition) Format(ctx *FmtCtx) {
+	ctx.WriteIdentifier(Identifier(node.Name.Origin()))
+	ctx.WriteString(" as (")
+	if node.Spec != nil {
+		node.Spec.formatBody(ctx)
+	}
 	ctx.WriteByte(')')
+}
+
+type WindowDefinitions []*WindowDefinition
+
+func (node *WindowDefinitions) Format(ctx *FmtCtx) {
+	for i, definition := range *node {
+		if i > 0 {
+			ctx.WriteString(", ")
+		}
+		definition.Format(ctx)
+	}
 }
 
 type FrameType int

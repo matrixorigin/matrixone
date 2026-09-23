@@ -417,8 +417,9 @@ func (fuzzyFilter *FuzzyFilter) handleRuntimeFilter(proc *process.Process) error
 		return nil
 	}
 
-	// InplaceSort reorders data but NOT the null bitmap.
-	// Reset bitmap before sort to avoid corruption.
+	// Reset the irrelevant NULL bitmap before sorting. InplaceSort preserves
+	// exact duplicate representations and marks supported payload types sorted
+	// for pruning.
 	ctr.pass2RuntimeFilter.GetNulls().Reset()
 	ctr.pass2RuntimeFilter.InplaceSort()
 	data, release, err := runtimefilter.MarshalExactFilterVector(

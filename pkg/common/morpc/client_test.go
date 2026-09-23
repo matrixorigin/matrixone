@@ -1702,7 +1702,10 @@ func TestGetBackendWithCreateBackend(t *testing.T) {
 	}
 	assert.NoError(t, err)
 	assert.NotNil(t, b)
-	assert.Equal(t, 1, len(c.mu.backends["b1"]))
+	c.mu.Lock()
+	backendCount := len(c.mu.backends["b1"])
+	c.mu.Unlock()
+	assert.Equal(t, 1, backendCount)
 }
 
 func TestCloseIdleBackends(t *testing.T) {

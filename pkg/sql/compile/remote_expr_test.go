@@ -17,7 +17,10 @@ package compile
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -36,6 +39,8 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -112,6 +117,113 @@ func TestRemoteNumericCastWarningAppearsAtExecution(t *testing.T) {
 	require.Len(t, session.warnings, 2)
 	require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, session.warnings[0].code)
 	require.Contains(t, session.warnings[0].msg, "12abc")
+}
+
+func TestMixedTemporalConditionalPreservesFractionalValues(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.TimeZone = time.UTC
+	condition := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_bool)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+	}
+	timestamp, err := types.ParseTimestamp(time.UTC, "2024-01-02 12:34:56.123456", 6)
+	require.NoError(t, err)
+	datetime, err := types.ParseDatetime("2024-01-02 12:34:56.654", 3)
+	require.NoError(t, err)
+	value := func(oid types.T, value int64, scale int32) *plan.Expr {
+		result := &plan.Expr{
+			Typ:  plan.Type{Id: int32(oid), Width: scale, Scale: scale},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{}},
+		}
+		switch oid {
+		case types.T_timestamp:
+			result.GetLit().Value = &plan.Literal_Timestampval{Timestampval: value}
+		case types.T_datetime:
+			result.GetLit().Value = &plan.Literal_Datetimeval{Datetimeval: value}
+		}
+		return result
+	}
+	expr, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "if", []*plan.Expr{
+		condition,
+		value(types.T_timestamp, int64(timestamp), 6),
+		value(types.T_datetime, int64(datetime), 3),
+	})
+	require.NoError(t, err)
+	require.Equal(t, types.T_datetime, types.T(expr.Typ.Id))
+	require.Equal(t, int32(6), expr.Typ.Scale)
+
+	executor, err := colexec.NewExpressionExecutor(proc, expr)
+	require.NoError(t, err)
+	defer executor.Free()
+	input := batch.NewWithSize(1)
+	conditions := vector.NewVec(types.T_bool.ToType())
+	require.NoError(t, vector.AppendFixed(conditions, true, false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(conditions, false, false, proc.Mp()))
+	input.Vecs[0] = conditions
+	input.SetRowCount(2)
+	defer conditions.Free(proc.Mp())
+
+	result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.Equal(t, types.T_datetime, result.GetType().Oid)
+	require.Equal(t, int32(6), result.GetType().Scale)
+	require.Equal(t, "2024-01-02 12:34:56.123456",
+		types.Datetime(vector.GetFixedAtNoTypeCheck[types.Datetime](result, 0)).String2(6))
+	require.Equal(t, "2024-01-02 12:34:56.654000",
+		types.Datetime(vector.GetFixedAtNoTypeCheck[types.Datetime](result, 1)).String2(6))
+}
+
+func TestRemoteSecToTimeConversionWarningsRemainBounded(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	collector := &remoteWarningCollector{maxRetained: 3}
+	proc.Session = collector
+	sourceType := types.T_varchar.ToType()
+	source := &plan.Expr{
+		Typ:  plan2.MakePlan2Type(&sourceType),
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
+	}
+	expr, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "sec_to_time", []*plan.Expr{source})
+	require.NoError(t, err)
+	executor, err := colexec.NewExpressionExecutor(proc, expr)
+	require.NoError(t, err)
+	defer executor.Free()
+
+	input := batch.NewWithSize(1)
+	const longWarningRows = 64
+	longInvalid := []byte(strings.Repeat("x", 65535))
+	inputValues := make([][]byte, 0, longWarningRows+2)
+	inputValues = append(inputValues, longInvalid, []byte("foo"), []byte("3020400x"))
+	for range longWarningRows - 1 {
+		inputValues = append(inputValues, longInvalid)
+	}
+	values := testutil.MakeVarlenaVector(inputValues, nil, sourceType, proc.Mp())
+	defer values.Free(proc.Mp())
+	input.Vecs[0] = values
+	input.SetRowCount(len(inputValues))
+	result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.Equal(t, len(inputValues), result.Length())
+
+	total, retained := collector.SnapshotWarnings()
+	// The collector observes every bad row while retaining only its fixed-size
+	// SHOW WARNINGS payload. The first retained record is the long value, so the
+	// message-size assertion below also covers source-side rendering.
+	require.Equal(t, uint64(longWarningRows+3), total)
+	require.Len(t, retained, 3)
+	for _, warning := range retained {
+		require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, warning.Code)
+		require.LessOrEqual(t, len(warning.Message), len("Truncated incorrect DECIMAL value: ''")+128)
+	}
+	require.Len(t, retained[0].Message, len("Truncated incorrect DECIMAL value: ''")+128)
+
+	// The terminal envelope preserves the complete count and the bounded SHOW
+	// WARNINGS payload for the initiating session.
+	data, err := json.Marshal(remoteTerminalEnvelope{WarningCount: total, WarningDiagnostics: retained})
+	require.NoError(t, err)
+	initiatingSession := &remoteWarningSession{}
+	require.NoError(t, (&messageSenderOnClient{warningSink: initiatingSession}).dealRemoteTerminal(data))
+	require.Equal(t, uint64(longWarningRows+3), initiatingSession.totalWarnings)
+	require.Len(t, initiatingSession.warnings, 3)
 }
 
 func TestRemoteNumericCastWarningCountIsIndependentOfBatching(t *testing.T) {
@@ -274,6 +386,42 @@ func TestRemoteTerminalWarningsAreForwardedToInitiatingSession(t *testing.T) {
 	require.Equal(t, "second", session.warnings[1].msg)
 }
 
+func TestRemoteTerminalWarningsStayWithCapturedAttemptSink(t *testing.T) {
+	proc := &process.Process{Base: &process.BaseProcess{}}
+	oldSink := &remoteWarningCollector{}
+	newSink := &remoteWarningCollector{}
+	proc.Session = &remoteWarningSession{}
+	proc.WarningSink = oldSink
+	sender := &messageSenderOnClient{proc: proc, warningSink: oldSink}
+	data, err := json.Marshal(remoteTerminalEnvelope{
+		WarningCount: 1,
+		WarningDiagnostics: []remoteWarningDiagnostic{
+			{Code: 1062, Message: "duplicate"},
+		},
+	})
+	require.NoError(t, err)
+
+	// A retry replaces the process's current sink, but the old remote sender
+	// must continue to target the sink captured for its original attempt.
+	proc.WarningSink = newSink
+	require.NoError(t, sender.dealRemoteTerminal(data))
+	total, records := oldSink.SnapshotWarnings()
+	require.Equal(t, uint64(1), total)
+	require.Len(t, records, 1)
+	newTotal, newRecords := newSink.SnapshotWarnings()
+	require.Zero(t, newTotal)
+	require.Empty(t, newRecords)
+
+	// Once the failed attempt is sealed, a late terminal is rejected by the
+	// captured collector rather than falling through to Session.
+	oldSink.closeWarnings(false)
+	late := &messageSenderOnClient{warningSink: oldSink}
+	require.NoError(t, late.dealRemoteTerminal(data))
+	total, records = oldSink.SnapshotWarnings()
+	require.Equal(t, uint64(0), total)
+	require.Empty(t, records)
+}
+
 func TestRemoteWarningCollectorBoundsRetention(t *testing.T) {
 	collector := &remoteWarningCollector{maxRetained: 3}
 	for i := 0; i < 1000; i++ {
@@ -302,6 +450,40 @@ func TestRemoteWarningCollectorMergesDescendantCountsAndRecords(t *testing.T) {
 	require.Len(t, retained, 2)
 	require.Equal(t, uint16(1), retained[0].Code)
 	require.Equal(t, uint16(2), retained[1].Code)
+}
+
+func TestRemoteWarningCollectorSaturatesCount(t *testing.T) {
+	collector := &remoteWarningCollector{}
+	collector.AppendWarningBatch(^uint64(0)-1, nil, nil)
+	collector.AppendWarningBatch(2, nil, nil)
+	total, retained := collector.SnapshotWarnings()
+	require.Equal(t, ^uint64(0), total)
+	require.Empty(t, retained)
+}
+
+func TestRemoteWarningCollectorBoundsMessageBytes(t *testing.T) {
+	collector := &remoteWarningCollector{}
+	collector.AppendWarningDiagnostic(1292, strings.Repeat("界", process.WarningDiagnosticMaxMessageBytes*2))
+	_, retained := collector.SnapshotWarnings()
+	require.Len(t, retained, 1)
+	require.LessOrEqual(t, len(retained[0].Message), process.WarningDiagnosticMaxMessageBytes)
+	require.Contains(t, retained[0].Message, "truncated")
+}
+
+func TestRemoteWarningCollectorDoesNotRetainMoreRecordsThanTotal(t *testing.T) {
+	collector := &remoteWarningCollector{}
+	collector.AppendWarningBatch(1, []uint16{1292, 1292}, []string{"first", "second"})
+	total, retained := collector.SnapshotWarnings()
+	require.Equal(t, uint64(1), total)
+	require.Len(t, retained, 1)
+	collector.AppendWarningDiagnostic(1292, "next")
+	total, retained = collector.SnapshotWarnings()
+	require.Equal(t, uint64(2), total)
+	require.Len(t, retained, 2)
+	collector.AppendWarningBatch(0, []uint16{1292}, []string{"ignored"})
+	total, retained = collector.SnapshotWarnings()
+	require.Equal(t, uint64(2), total)
+	require.Len(t, retained, 2)
 }
 
 func TestScopeContainsVarExpr(t *testing.T) {
@@ -398,6 +580,26 @@ func TestOrderedAggregateRemoteProtocolValidation(t *testing.T) {
 	}))
 }
 
+func TestVarianceRemoteProtocolValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	variance := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfVarPop,
+		false,
+		[]*plan.Expr{makeTestVarExpr("value")},
+		nil,
+	)}
+
+	require.ErrorContains(t, validateRemoteAggregateProtocol(nil, variance),
+		"requires MORPC protocol version 35")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion34)
+	require.ErrorContains(t, validateRemoteAggregateProtocol(proc, variance),
+		"requires MORPC protocol version 35")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion35)
+	require.NoError(t, validateRemoteAggregateProtocol(proc, variance))
+}
+
 func TestOrderedSetPercentileRemoteProtocolValidation(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	rt := runtime.ServiceRuntime(proc.GetService())
@@ -419,6 +621,169 @@ func TestOrderedSetPercentileRemoteProtocolValidation(t *testing.T) {
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion17)
 	require.NoError(t, validateRemoteAggregateProtocol(proc, percentile))
+
+	extended := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfPercentileDisc,
+		false,
+		[]*plan.Expr{makeTestVarExprWithType("value", types.T_varchar.ToType())},
+		aggexec.EncodeOrderedPercentileConfig([]byte("0.5"), false),
+		plan.AggregateConfigType_AGG_CONFIG_NONE,
+	)}
+	// Main's v76-v83 features do not implement extended discrete-percentile inputs.
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion81)
+	require.ErrorContains(
+		t,
+		validateRemoteAggregateProtocol(proc, extended),
+		"extended discrete percentile input types require MORPC protocol version 84",
+	)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion83)
+	require.Error(t, validateRemoteAggregateProtocol(proc, extended),
+		"v83 is reserved for bounded conditional string domains")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion84)
+	require.NoError(t, validateRemoteAggregateProtocol(proc, extended))
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion81)
+	require.Error(t, validateRemoteAggregateProtocol(proc, extended),
+		"rollback must disable extended discrete-percentile state before exchange")
+}
+
+func TestApproxPercentileRemoteProtocolValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	percentile := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfApproxPercentile,
+		false,
+		[]*plan.Expr{makeTestVarExpr("value")},
+		aggexec.EncodeApproxPercentileConfig([]byte("0.5"), true),
+	)}
+
+	require.ErrorContains(t, validateRemoteAggregateProtocol(nil, percentile),
+		"requires MORPC protocol version 76")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion70)
+	require.ErrorContains(t, validateRemoteAggregateProtocol(proc, percentile),
+		"requires MORPC protocol version 76")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion73)
+	require.ErrorContains(t, validateRemoteAggregateProtocol(proc, percentile),
+		"requires MORPC protocol version 76")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion74)
+	require.ErrorContains(t, validateRemoteAggregateProtocol(proc, percentile),
+		"requires MORPC protocol version 76")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion75)
+	require.ErrorContains(t, validateRemoteAggregateProtocol(proc, percentile),
+		"requires MORPC protocol version 76")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion76)
+	require.NoError(t, validateRemoteAggregateProtocol(proc, percentile))
+
+	// Rollback must reject both the new DESC config and ordinary ASC state: the
+	// NaN ordering changed for both forms, so an old receiver cannot merge it.
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion70)
+	percentile[0].SetExtraConfig([]byte("0.5"))
+	require.ErrorContains(t, validateRemoteAggregateProtocol(proc, percentile),
+		"requires MORPC protocol version 76")
+}
+
+func TestHLLRemoteProtocolValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	for _, aggID := range []int64{
+		aggexec.AggIdOfApproxCount,
+		aggexec.AggIdOfApproxCountDistinct,
+		aggexec.AggIdOfHllAdd,
+		aggexec.AggIdOfHllMerge,
+	} {
+		agg := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+			aggID,
+			false,
+			[]*plan.Expr{makeTestVarExpr("value")},
+			nil,
+		)}
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion70)
+		require.ErrorContains(t, validateRemoteAggregateProtocol(proc, agg),
+			"HLL remote execution requires MORPC protocol version 77")
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion73)
+		require.ErrorContains(t, validateRemoteAggregateProtocol(proc, agg),
+			"HLL remote execution requires MORPC protocol version 77")
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion74)
+		require.ErrorContains(t, validateRemoteAggregateProtocol(proc, agg),
+			"HLL remote execution requires MORPC protocol version 77")
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion75)
+		require.ErrorContains(t, validateRemoteAggregateProtocol(proc, agg),
+			"HLL remote execution requires MORPC protocol version 77")
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion76)
+		require.ErrorContains(t, validateRemoteAggregateProtocol(proc, agg),
+			"HLL remote execution requires MORPC protocol version 77")
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion77)
+		require.NoError(t, validateRemoteAggregateProtocol(proc, agg))
+	}
+	vectorArg := &plan.Expr{Typ: plan.Type{Id: int32(types.T_array_float32)}}
+	vectorAgg := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+		aggexec.AggIdOfHllAdd, false, []*plan.Expr{vectorArg}, nil,
+	)}
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion87)
+	require.ErrorContains(t, validateRemoteAggregateProtocol(proc, vectorAgg),
+		"canonical vector HLL_ADD_AGG remote execution requires MORPC protocol version 88")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion88)
+	require.NoError(t, validateRemoteAggregateProtocol(proc, vectorAgg))
+}
+
+func TestCanonicalHLLAddRemoteProtocolValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	for _, tc := range []struct {
+		name      string
+		typ       types.Type
+		canonical bool
+	}{
+		{name: "char", typ: types.New(types.T_char, 4, 0), canonical: true},
+		{name: "json", typ: types.T_json.ToType(), canonical: true},
+		{name: "varchar-control", typ: types.New(types.T_varchar, 4, 0)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			aggs := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+				aggexec.AggIdOfHllAdd,
+				false,
+				[]*plan.Expr{makeTestVarExprWithType("value", tc.typ)},
+				nil,
+			)}
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion87)
+			if tc.canonical {
+				require.ErrorContains(t, validateRemoteAggregateProtocol(proc, aggs),
+					"canonical JSON/CHAR HLL_ADD_AGG remote execution requires MORPC protocol version 91")
+			} else {
+				require.NoError(t, validateRemoteAggregateProtocol(proc, aggs))
+			}
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion90)
+			if tc.canonical {
+				require.ErrorContains(t, validateRemoteAggregateProtocol(proc, aggs),
+					"canonical JSON/CHAR HLL_ADD_AGG remote execution requires MORPC protocol version 91")
+			} else {
+				require.NoError(t, validateRemoteAggregateProtocol(proc, aggs))
+			}
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion91)
+			require.NoError(t, validateRemoteAggregateProtocol(proc, aggs))
+		})
+	}
+}
+
+func TestCanonicalFloatHLLAddRemoteProtocolValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	for _, typ := range []types.Type{types.T_float32.ToType(), types.T_float64.ToType()} {
+		aggs := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
+			aggexec.AggIdOfHllAdd,
+			false,
+			[]*plan.Expr{makeTestVarExprWithType("value", typ)},
+			nil,
+		)}
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion91)
+		require.ErrorContains(t, validateRemoteAggregateProtocol(proc, aggs),
+			"canonical FLOAT HLL_ADD_AGG remote execution requires MORPC protocol version 92")
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion92)
+		require.NoError(t, validateRemoteAggregateProtocol(proc, aggs))
+	}
 }
 
 func TestTextMinMaxRemoteProtocolValidation(t *testing.T) {
@@ -483,7 +848,7 @@ func TestOrderedSetPercentileMergeGroupRemoteProtocolValidation(t *testing.T) {
 	merge.Aggs = []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(
 		aggexec.AggIdOfPercentileDisc,
 		false,
-		[]*plan.Expr{makeTestVarExpr("value")},
+		[]*plan.Expr{makeTestVarExprWithType("value", types.T_int64.ToType())},
 		aggexec.EncodeOrderedPercentileConfig([]byte("0.5"), false),
 		plan.AggregateConfigType_AGG_CONFIG_NONE,
 	)}
@@ -495,6 +860,289 @@ func TestOrderedSetPercentileMergeGroupRemoteProtocolValidation(t *testing.T) {
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion17)
 	_, _, err = convertToPipelineInstruction(merge, proc, &scopeContext{}, 1)
 	require.NoError(t, err)
+}
+
+func TestPadSpaceRemoteProtocolValidation(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	makeCastExpr := func(overloadID int32) *plan.Expr {
+		return &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_varchar)},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{Obj: function.EncodeOverloadID(function.CAST, overloadID), ObjName: "cast"},
+				Args: []*plan.Expr{plan2.MakePlan2StringConstExprWithType("MO", false)},
+			}},
+		}
+	}
+
+	tests := []struct {
+		name     string
+		pipeline *pipeline.Pipeline
+	}{
+		{
+			name: "comparison cast in projection",
+			pipeline: &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
+				Op:          int32(vm.Projection),
+				ProjectList: []*plan.Expr{makeCastExpr(2)},
+			}}},
+		},
+		{
+			name: "set operation physical key",
+			pipeline: &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
+				Op:    int32(vm.Intersect),
+				SetOp: &pipeline.SetOp{KeyExprs: []*plan.Expr{makeCastExpr(3)}},
+			}}},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for unsupportedVersion := defines.MORPCVersion20; unsupportedVersion < defines.MORPCVersion40; unsupportedVersion++ {
+				rt.SetGlobalVariables(runtime.MOProtocolVersion, unsupportedVersion)
+				require.ErrorContains(t, validateRemotePadSpacePipelineProtocol(proc, test.pipeline),
+					"requires MORPC protocol version 40")
+			}
+
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion40)
+			require.NoError(t, validateRemotePadSpacePipelineProtocol(proc, test.pipeline))
+		})
+	}
+
+	ordinary := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
+		Op:          int32(vm.Projection),
+		ProjectList: []*plan.Expr{makeCastExpr(0)},
+	}}}
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion20)
+	require.NoError(t, validateRemotePadSpacePipelineProtocol(proc, ordinary))
+}
+
+func TestBinaryStringRemoteProtocolValidationAtSenderAndReceiver(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+
+	affectedFunctionIDs := []int32{
+		function.ORD, function.LEFT, function.RIGHT,
+		function.SUBSTRING, function.REVERSE, function.LOWER, function.UPPER,
+		function.LTRIM, function.RTRIM, function.TRIM, function.LOCATE,
+		function.POSITION, function.INSTR, function.INSERT, function.REPLACE,
+		function.LPAD, function.RPAD, function.SUBSTRING_INDEX, function.SPLIT_PART,
+		function.REPEAT, function.LIKE, function.CONCAT, function.CONCAT_WS,
+		function.CHARSET, function.COLLATION, function.INTERNAL_CHAR_SIZE,
+		function.INTERNAL_COLUMN_CHARACTER_SET,
+	}
+	semanticPipeline := func(functionID int32, resultType ...types.T) *pipeline.Pipeline {
+		typ := types.T_int64
+		if len(resultType) > 0 {
+			typ = resultType[0]
+		}
+		return &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
+			Op: int32(vm.Projection), ProjectList: []*plan.Expr{{
+				Typ: plan.Type{Id: int32(typ)},
+				Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{
+					Obj: function.EncodeOverloadID(functionID, 0),
+				}}},
+			}},
+		}}}
+	}
+	ordinaryPipeline := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
+		Op: int32(vm.Projection), ProjectList: []*plan.Expr{{
+			Typ: plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_I64Val{I64Val: 1},
+			}},
+		}},
+	}}}
+
+	for _, functionID := range affectedFunctionIDs {
+		t.Run(fmt.Sprintf("function-%d", functionID), func(t *testing.T) {
+			project := projection.NewArgument()
+			project.ProjectList = semanticPipeline(functionID).InstructionList[0].ProjectList
+			scope := &Scope{Proc: proc, RootOp: project}
+
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion58)
+			data, err := encodeRemoteScope(scope, proc)
+			require.NoError(t, err)
+
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion57)
+			_, err = encodeRemoteScope(scope, proc)
+			require.ErrorContains(t, err, "require MORPC protocol version 58",
+				"sender must reject every changed function ID")
+			_, err = decodeScope(data, proc, true, nil)
+			require.ErrorContains(t, err, "require MORPC protocol version 58",
+				"receiver must reject every changed function ID")
+
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion58)
+			decoded, err := decodeScope(data, proc, true, nil)
+			require.NoError(t, err)
+			require.NotNil(t, decoded)
+		})
+	}
+
+	t.Run("legacy-length-utf8-uint64-v58", func(t *testing.T) {
+		// A pre-v80 serialized LENGTH_UTF8 result is UINT64.  It keeps the
+		// v58 binary-string fence, but must not be mistaken for the corrected
+		// INT64 result contract introduced at v80.
+		p := semanticPipeline(function.LENGTH_UTF8, types.T_uint64)
+		project := projection.NewArgument()
+		defer project.Release()
+		project.ProjectList = p.InstructionList[0].ProjectList
+		scope := &Scope{Proc: proc, RootOp: project}
+
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion57)
+		require.NoError(t, validateRemoteExpressionPipelineProtocol(proc, p))
+		_, err := encodeRemoteScope(scope, proc)
+		require.ErrorContains(t, err, "require MORPC protocol version 58")
+
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion58)
+		data, err := encodeRemoteScope(scope, proc)
+		require.NoError(t, err)
+
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion57)
+		_, err = decodeScope(data, proc, true, nil)
+		require.ErrorContains(t, err, "require MORPC protocol version 58")
+
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion58)
+		decoded, err := decodeScope(data, proc, true, nil)
+		require.NoError(t, err)
+		require.NotNil(t, decoded)
+	})
+
+	// LENGTH_UTF8 keeps the historical UINT64 wrapper at MORPC v58. The
+	// corrected result wrappers are a separate v80 contract and must not be
+	// folded into the legacy binary-string semantic gate above.
+	for _, test := range []struct {
+		name string
+		id   int32
+		typ  types.T
+	}{
+		{name: "find_in_set", id: function.FINDINSET, typ: types.T_int32},
+		{name: "strcmp", id: function.STRCMP, typ: types.T_int32},
+		{name: "length_utf8", id: function.LENGTH_UTF8, typ: types.T_int64},
+		{name: "uncompressed_length", id: function.UNCOMPRESSED_LENGTH, typ: types.T_int64},
+		{name: "crc32", id: function.CRC32, typ: types.T_uint64},
+	} {
+		t.Run("corrected-"+test.name, func(t *testing.T) {
+			p := semanticPipeline(test.id, test.typ)
+			rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion72)
+			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(proc, p),
+				"corrected string numeric result contracts require MORPC protocol version 80")
+
+			c, client := expressionProtocolTestCompile(t)
+			cRT := runtime.ServiceRuntime(c.proc.GetService())
+			op := projection.NewArgument()
+			defer op.Release()
+			op.ProjectList = p.InstructionList[0].ProjectList
+			scope := &Scope{
+				Magic:    Remote,
+				Proc:     c.proc,
+				NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"},
+				RootOp:   op,
+			}
+			client.version = defines.MORPCVersion72
+			cRT.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion80)
+			_, err := encodeRemoteScope(scope, c.proc)
+			require.ErrorContains(t, err,
+				"remote destination does not support corrected string numeric result contracts (MORPC version 80)")
+
+			client.version = defines.MORPCVersion80
+			data, err := encodeRemoteScope(scope, c.proc)
+			require.NoError(t, err)
+
+			wire := new(pipeline.Pipeline)
+			require.NoError(t, wire.Unmarshal(data))
+			cRT.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion72)
+			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wire),
+				"corrected string numeric result contracts require MORPC protocol version 80")
+			_, err = decodeScope(data, c.proc, true, nil)
+			require.ErrorContains(t, err,
+				"corrected string numeric result contracts require MORPC protocol version 80")
+
+			cRT.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion80)
+			_, err = decodeScope(data, c.proc, true, nil)
+			require.NoError(t, err)
+		})
+	}
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion49)
+	require.NoError(t, validateRemoteBinaryStringPipelineProtocol(proc, ordinaryPipeline))
+}
+
+func TestBinaryStringRemoteProtocolV58FastPathDoesNotScanPipeline(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion58)
+
+	wide := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
+		Op: int32(vm.Projection), ProjectList: make([]*plan.Expr, 1_000),
+	}}}
+	for i := range wide.InstructionList[0].ProjectList {
+		wide.InstructionList[0].ProjectList[i] = &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_I64Val{I64Val: int64(i)},
+			}},
+		}
+	}
+	var validationErr error
+	allocations := testing.AllocsPerRun(100, func() {
+		validationErr = validateRemoteBinaryStringPipelineProtocol(proc, wide)
+	})
+	require.NoError(t, validationErr)
+	require.Zero(t, allocations)
+}
+
+func BenchmarkBinaryStringRemoteProtocolV58FastPath(b *testing.B) {
+	proc := testutil.NewProcess(b)
+	runtime.ServiceRuntime(proc.GetService()).SetGlobalVariables(
+		runtime.MOProtocolVersion, defines.MORPCVersion58)
+	wide := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{
+		Op: int32(vm.Projection), ProjectList: make([]*plan.Expr, 1_000),
+	}}}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if err := validateRemoteBinaryStringPipelineProtocol(proc, wide); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func TestPadCharModeRemoteProtocolValidation(t *testing.T) {
+	proc := newResolveVariableProcess(t, "PAD_CHAR_TO_FULL_LENGTH")
+	rt := runtime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	p := &pipeline.Pipeline{}
+
+	for unsupportedVersion := defines.MORPCVersion20; unsupportedVersion < defines.MORPCVersion40; unsupportedVersion++ {
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, unsupportedVersion)
+		require.ErrorContains(t, validateRemotePadSpacePipelineProtocol(proc, p),
+			"requires MORPC protocol version 40")
+	}
+
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion40)
+	require.NoError(t, validateRemotePadSpacePipelineProtocol(proc, p))
+}
+
+func TestPadSpaceRemoteProtocolValidationV40FastPathIsAllocationFree(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	rt := runtime.ServiceRuntime(proc.GetService())
+	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion40)
+
+	// A large ordinary pipeline makes an accidental reflective traversal visible.
+	ordinary := &pipeline.Pipeline{InstructionList: make([]*pipeline.Instruction, 1_000)}
+	for i := range ordinary.InstructionList {
+		ordinary.InstructionList[i] = &pipeline.Instruction{Op: int32(vm.Projection)}
+	}
+	require.NoError(t, validateRemotePadSpacePipelineProtocol(proc, ordinary))
+	allocs := testing.AllocsPerRun(100, func() {
+		if err := validateRemotePadSpacePipelineProtocol(proc, ordinary); err != nil {
+			panic(err)
+		}
+	})
+	require.Equal(t, float64(0), allocs)
 }
 
 func TestScopeContainsVarExprInAggArguments(t *testing.T) {
@@ -597,6 +1245,50 @@ func TestFoldVarExprsInRemoteRunScopeDoesNotMutateReusableScope(t *testing.T) {
 	require.True(t, scopeContainsVarExpr(scope))
 }
 
+func TestRemoteUserVariableFoldPreservesStringSource(t *testing.T) {
+	makeProc := func(value any) *process.Process {
+		proc := testutil.NewProcess(t)
+		proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+			if name == "remote_value" && !system {
+				return value, nil
+			}
+			return nil, moerr.NewInternalErrorNoCtx("variable not found")
+		})
+		return proc
+	}
+	makeVariable := func() *plan.Expr {
+		expr := makeTestVarExpr("remote_value")
+		expr.GetV().System = false
+		return expr
+	}
+	foldRoundTrip := func(proc *process.Process) *plan.Literal {
+		expr := makeVariable()
+		folded, err := foldVarExprsInExprInPlace(expr, proc)
+		require.NoError(t, err)
+		require.True(t, folded)
+
+		payload, err := expr.Marshal()
+		require.NoError(t, err)
+		decoded := new(plan.Expr)
+		require.NoError(t, decoded.Unmarshal(payload))
+		return decoded.GetLit()
+	}
+
+	first := foldRoundTrip(makeProc("first"))
+	require.Equal(t, "first", first.GetSval())
+	require.Equal(t, uint32(types.StringSourceUserVariable)+1, first.GetStringSource())
+
+	// A NULL value retains its source across the same scalar and wire boundary.
+	null := foldRoundTrip(makeProc(nil))
+	require.True(t, null.GetIsnull())
+	require.Equal(t, uint32(types.StringSourceUserVariable)+1, null.GetStringSource())
+
+	// Reusing the expression shape with a fresh process is equivalent to a fresh scope.
+	second := foldRoundTrip(makeProc("second"))
+	require.Equal(t, "second", second.GetSval())
+	require.Equal(t, first.GetStringSource(), second.GetStringSource())
+}
+
 func TestFoldVarExprsInHiddenExpressionsUsePrivateCopies(t *testing.T) {
 	proc := newResolveVariableProcess(t, "ANSI")
 	sharedAggExpr := makeTestVarExpr("sql_mode")
@@ -657,6 +1349,10 @@ func TestScopeContainsVarExprReturnsFalseWithoutVar(t *testing.T) {
 
 func makeTestVarExpr(name string) *plan.Expr {
 	typ := types.T_text.ToType()
+	return makeTestVarExprWithType(name, typ)
+}
+
+func makeTestVarExprWithType(name string, typ types.Type) *plan.Expr {
 	return &plan.Expr{
 		Typ: plan2.MakePlan2Type(&typ),
 		Expr: &plan.Expr_V{

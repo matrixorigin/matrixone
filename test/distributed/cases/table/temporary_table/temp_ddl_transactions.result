@@ -1,0 +1,136 @@
+drop database if exists temp_ddl_transactions;
+create database temp_ddl_transactions;
+use temp_ddl_transactions;
+create table base (id int primary key);
+start transaction;
+insert into base values (1);
+create temporary table tc (id int primary key);
+insert into tc values (1);
+rollback;
+select count(*) as n from base;
+➤ n[-5,64,0]  𝄀
+0
+select count(*) as n from tc;
+➤ n[-5,64,0]  𝄀
+0
+insert into tc values (2);
+select id from tc order by id;
+➤ id[4,32,0]  𝄀
+2
+create temporary table td (id int primary key);
+insert into td values (1);
+start transaction;
+insert into base values (3);
+insert into td values (2);
+drop temporary table td;
+rollback;
+select count(*) as n from base;
+➤ n[-5,64,0]  𝄀
+0
+create temporary table td (id int primary key);
+insert into td values (3);
+select id from td order by id;
+➤ id[4,32,0]  𝄀
+3
+start transaction;
+insert into base values (4);
+update td set id = 5;
+drop table td;
+commit;
+select id from base order by id;
+➤ id[4,32,0]  𝄀
+4
+create temporary table td (id int primary key);
+select count(*) as n from td;
+➤ n[-5,64,0]  𝄀
+0
+start transaction;
+create temporary table tg (id int primary key);
+insert into tg values (10);
+drop temporary table tg;
+create temporary table tg (id int primary key);
+insert into tg values (20);
+rollback;
+select count(*) as n from tg;
+➤ n[-5,64,0]  𝄀
+0
+insert into tg values (30);
+start transaction;
+insert into tg values (40);
+rollback;
+select id from tg order by id;
+➤ id[4,32,0]  𝄀
+30
+start transaction;
+insert into base values (5);
+create temporary table ta as select id from base;
+select id from ta order by id;
+➤ id[4,32,0]  𝄀
+4  𝄀
+5
+rollback;
+select id from base order by id;
+➤ id[4,32,0]  𝄀
+4
+select count(*) as n from ta;
+➤ n[-5,64,0]  𝄀
+0
+start transaction;
+create temporary table tf (id int primary key) as select 1 as id union all select 1 as id;
+-- @regex("Duplicate entry", true)
+Duplicate entry '1' for key 'id'
+create temporary table tf (id int primary key);
+rollback;
+select count(*) as n from tf;
+➤ n[-5,64,0]  𝄀
+0
+prepare create_temp from 'create temporary table tp (id int primary key)';
+start transaction;
+execute create_temp;
+insert into tp values (1);
+rollback;
+select count(*) as n from tp;
+➤ n[-5,64,0]  𝄀
+0
+deallocate prepare create_temp;
+start transaction;
+create temporary table ti (id int primary key, v int, unique key uk(v));
+insert into ti values (1, 10);
+rollback;
+select count(*) as n from ti;
+➤ n[-5,64,0]  𝄀
+0
+insert into ti values (2, 20);
+select id, v from ti order by id;
+➤ id[4,32,0]  ¦  v[4,32,0]  𝄀
+2  ¦  20
+start transaction;
+update tc set id = 3;
+delete from tc;
+insert into tc values (4);
+rollback;
+select id from tc order by id;
+➤ id[4,32,0]  𝄀
+2
+set session transaction isolation level repeatable read;
+start transaction;
+select id from base order by id;
+➤ id[4,32,0]  𝄀
+4
+insert into temp_ddl_transactions.base values (6);
+create temporary table ts (id int primary key);
+insert into ts values (1);
+select id from base order by id;
+➤ id[4,32,0]  𝄀
+4
+commit;
+select id from ts order by id;
+➤ id[4,32,0]  𝄀
+1
+select id from base order by id;
+➤ id[4,32,0]  𝄀
+4  𝄀
+6
+set session transaction isolation level read committed;
+drop temporary table tc, td, tg, ta, tp, ti, ts, tf;
+drop database temp_ddl_transactions;

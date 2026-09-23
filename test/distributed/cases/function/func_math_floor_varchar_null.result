@@ -1,0 +1,42 @@
+drop database if exists floor_varchar_null_28486;
+create database floor_varchar_null_28486;
+use floor_varchar_null_28486;
+select floor(cast(null as char)) as typed_null;
+➤ typed_null[8,53,31]  𝄀
+null
+create table src(id int primary key, s varchar(20));
+insert into src values (1,null),(2,'1.9'),(3,null),(4,'-1.1'),(5,null);
+select id, floor(s) as floor_s from src order by id;
+➤ id[4,32,0]  ¦  floor_s[8,53,31]  𝄀
+1  ¦  null  𝄀
+2  ¦  1.0  𝄀
+3  ¦  null  𝄀
+4  ¦  -2.0  𝄀
+5  ¦  null
+select id, case when id in (1,3,5) then floor(s) else 99 end as selected_floor from src order by id;
+➤ id[4,32,0]  ¦  selected_floor[8,53,31]  𝄀
+1  ¦  null  𝄀
+2  ¦  99.0  𝄀
+3  ¦  null  𝄀
+4  ¦  99.0  𝄀
+5  ¦  null
+select id, floor(s) as all_null from src where s is null order by id;
+➤ id[4,32,0]  ¦  all_null[8,53,31]  𝄀
+1  ¦  null  𝄀
+3  ¦  null  𝄀
+5  ¦  null
+prepare floor_varchar_null_stmt from 'select floor(cast(? as char)) as prepared_null';
+set @floor_varchar_null_arg = null;
+execute floor_varchar_null_stmt using @floor_varchar_null_arg;
+➤ prepared_null[8,53,31]  𝄀
+null
+deallocate prepare floor_varchar_null_stmt;
+create table floor_varchar_null_copy as select id, floor(s) as v from src;
+select id, v from floor_varchar_null_copy order by id;
+➤ id[4,32,0]  ¦  v[8,53,31]  𝄀
+1  ¦  null  𝄀
+2  ¦  1.0  𝄀
+3  ¦  null  𝄀
+4  ¦  -2.0  𝄀
+5  ¦  null
+drop database floor_varchar_null_28486;

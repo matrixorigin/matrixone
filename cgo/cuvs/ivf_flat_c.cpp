@@ -326,6 +326,7 @@ void gpu_ivf_flat_set_batch_window(gpu_ivf_flat_c index_c, int64_t window_us, vo
     }
 }
 
+
 void gpu_ivf_flat_set_dynb_conservative_dispatch(gpu_ivf_flat_c index_c, bool enable, void* errmsg) {
     if (errmsg) *(static_cast<char**>(errmsg)) = nullptr;
     try {

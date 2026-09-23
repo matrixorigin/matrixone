@@ -45,7 +45,10 @@ Comments and implementation assumptions are not evidence. A nil check proves def
 4. Add the narrowest white-box test when it proves a distinct internal transformation, totality, or state-boundary claim.
 5. Vary independent dimensions around the witness, including both controls and counterexamples.
 6. Use differential or metamorphic relationships where a direct expected value would duplicate implementation logic.
-7. Run the tests against the unfixed revision and record the intended failure reason.
+7. Establish or reuse evidence valid under
+   [validation-evidence.md](validation-evidence.md) that the same tests fail on
+   the unfixed revision for the intended semantic reason; do not make every
+   reviewer rerun an identical historical baseline.
 8. Apply the production fix, then rerun the same tests.
 9. Remove redundant cases and retain one reason for every remaining row.
 10. Place tests at their natural ownership layer: focused unit coverage near the invariant and public-path regression coverage near the user-visible contract.
@@ -187,7 +190,7 @@ Before accepting a regression change, verify:
 ```text
 □ The invariant and its negation are explicit.
 □ For an externally visible claim, the public-path witness proves the internal state is reachable; an internal-only contract is explicitly documented as such.
-□ The unfixed revision fails for the claimed reason.
+□ Valid, reviewable evidence shows the unfixed revision fails for the claimed reason.
 □ The fixed revision passes with the same assertions.
 □ A black-box semantic oracle exists when behavior is externally visible.
 □ White-box assertions inspect stable typed structure, not incidental layout.

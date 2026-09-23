@@ -14,6 +14,8 @@
 
 package types
 
+import "math"
+
 func BoolAscCompare(x, y bool) int {
 	if x == y {
 		return 0
@@ -128,6 +130,46 @@ func Float64OrderDescCompare(x, y float64) int {
 		return 1
 	}
 	return -1
+}
+
+// Float32TupleAscCompare orders FLOAT values exactly as Packer encodes them.
+// Unlike SQL ordering, the physical tuple-key order distinguishes signed zero
+// and every NaN sign/payload. Consumers that construct byte ranges must use
+// this total order so the endpoints cover every encoded key between them.
+func Float32TupleAscCompare(x, y float32) int {
+	return compareOrderedBits(orderedFloat32Bits(x), orderedFloat32Bits(y))
+}
+
+// Float64TupleAscCompare is the float64 counterpart of
+// Float32TupleAscCompare.
+func Float64TupleAscCompare(x, y float64) int {
+	return compareOrderedBits(orderedFloat64Bits(x), orderedFloat64Bits(y))
+}
+
+func orderedFloat32Bits(v float32) uint32 {
+	bits := math.Float32bits(v)
+	if bits&(uint32(1)<<31) != 0 {
+		return ^bits
+	}
+	return bits ^ (uint32(1) << 31)
+}
+
+func orderedFloat64Bits(v float64) uint64 {
+	bits := math.Float64bits(v)
+	if bits&(uint64(1)<<63) != 0 {
+		return ^bits
+	}
+	return bits ^ (uint64(1) << 63)
+}
+
+func compareOrderedBits[T ~uint32 | ~uint64](x, y T) int {
+	if x < y {
+		return -1
+	}
+	if x > y {
+		return 1
+	}
+	return 0
 }
 
 func BoolDescCompare(x, y bool) int {

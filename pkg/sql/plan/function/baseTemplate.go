@@ -1075,6 +1075,89 @@ func opBinaryStrFixedToFixedWithErrorCheck[
 	return nil
 }
 
+// opTernaryStrFixedStrToFixed is used by internal overloads whose third
+// argument carries immutable string metadata for a fixed-width value.  It
+// keeps the ordinary vector null/select-list contract while allowing the
+// caller to cache work derived from the metadata argument.
+func opTernaryStrFixedStrToFixed[
+	T2 types.FixedSizeTExceptStrType,
+	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	resultFn func(v1 string, v2 T2, v3 string) Tr, selectList *FunctionSelectList) error {
+	result.UseOptFunctionParamFrame(3)
+	rs := vector.MustFunctionResult[Tr](result)
+	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
+	p2 := vector.OptGetParamFromWrapper[T2](rs, 1, parameters[1])
+	p3 := vector.OptGetBytesParamFromWrapper(rs, 2, parameters[2])
+	rsVec := rs.GetResultVector()
+	rss := vector.MustFixedColNoTypeCheck[Tr](rsVec)
+	rsNull := rsVec.GetNulls()
+
+	if selectList != nil {
+		if selectList.IgnoreAllRow() {
+			nulls.AddRange(rsNull, 0, uint64(length))
+			return nil
+		}
+		if !selectList.ShouldEvalAllRow() {
+			for i := range selectList.SelectList {
+				if selectList.Contains(uint64(i)) {
+					rsNull.Add(uint64(i))
+				}
+			}
+		}
+	}
+
+	// A constant NULL represents NULL for every output row; a non-constant
+	// vector's null bitmap is already row-indexed.  Treat all three operands as
+	// strict, including the metadata argument, even though the planner emits a
+	// non-NULL constant for the internal overload.
+	if parameters[0].IsConst() {
+		_, isNull := p1.GetStrValue(0)
+		if isNull {
+			nulls.AddRange(rsNull, 0, uint64(length))
+		}
+	} else if p1.WithAnyNullValue() {
+		nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
+	}
+	if parameters[1].IsConst() {
+		_, isNull := p2.GetValue(0)
+		if isNull {
+			nulls.AddRange(rsNull, 0, uint64(length))
+		}
+	} else if p2.WithAnyNullValue() {
+		nulls.Or(rsNull, parameters[1].GetNulls(), rsNull)
+	}
+	if parameters[2].IsConst() {
+		_, isNull := p3.GetStrValue(0)
+		if isNull {
+			nulls.AddRange(rsNull, 0, uint64(length))
+		}
+	} else if p3.WithAnyNullValue() {
+		nulls.Or(rsNull, parameters[2].GetNulls(), rsNull)
+	}
+
+	for i := 0; i < length; i++ {
+		row := uint64(i)
+		if rsNull.Contains(row) {
+			continue
+		}
+		idx1, idx2, idx3 := row, row, row
+		if parameters[0].IsConst() {
+			idx1 = 0
+		}
+		if parameters[1].IsConst() {
+			idx2 = 0
+		}
+		if parameters[2].IsConst() {
+			idx3 = 0
+		}
+		v1, _ := p1.GetStrValue(idx1)
+		v2, _ := p2.GetValue(idx2)
+		v3, _ := p3.GetStrValue(idx3)
+		rss[i] = resultFn(functionUtil.QuickBytesToStr(v1), v2, functionUtil.QuickBytesToStr(v3))
+	}
+	return nil
+}
+
 func opBinaryStrFixedToStrWithErrorCheck[
 	T2 types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v1 string, v2 T2) (string, error), selectList *FunctionSelectList) error {
@@ -1575,8 +1658,6 @@ func specialTemplateForModFunction[
 // - In SELECT: always return NULL (never raise error)
 // - In INSERT/UPDATE: raise error if strict mode + ERROR_FOR_DIVISION_BY_ZERO are enabled
 // - In INSERT IGNORE: always return NULL (never raise error, even in strict mode)
-// checkDivisionByZeroBehavior checks if division by zero should raise an error.
-// Returns true if should raise error, false if should return NULL.
 func checkDivisionByZeroBehavior(proc *process.Process, selectList *FunctionSelectList) (shouldError bool) {
 	if proc == nil {
 		return false
@@ -1621,19 +1702,9 @@ func checkDivisionByZeroBehavior(proc *process.Process, selectList *FunctionSele
 		return false
 	}
 
-	modeStr, ok := mode.(string)
-	if !ok {
-		atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
-		return false
-	}
-
-	modeStr = strings.ToUpper(modeStr)
-	hasStrictMode := strings.Contains(modeStr, "STRICT_TRANS_TABLES") || strings.Contains(modeStr, "STRICT_ALL_TABLES")
-	hasErrorForDivByZero := strings.Contains(modeStr, "ERROR_FOR_DIVISION_BY_ZERO")
-
 	// Error only if both strict mode AND ERROR_FOR_DIVISION_BY_ZERO are enabled.
 	// INSERT IGNORE is handled through the statement ignore flag.
-	if hasStrictMode && hasErrorForDivByZero {
+	if process.IsStrictDivisionByZeroMode(mode) {
 		if ignore {
 			atomic.StoreInt32(&proc.Base.DivByZeroErrorMode, 0)
 			return false
@@ -3236,6 +3307,15 @@ func opUnaryFixedToStrWithErrorCheck[
 func opUnaryStrToBytesWithErrorCheck(
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v string) ([]byte, error), selectList *FunctionSelectList) error {
+	return opUnaryStrToBytesWithRowErrorCheck(parameters, result, length,
+		func(v string, _ int) ([]byte, error) {
+			return resultFn(v)
+		}, selectList)
+}
+
+func opUnaryStrToBytesWithRowErrorCheck(
+	parameters []*vector.Vector, result vector.FunctionResultWrapper, length int,
+	resultFn func(v string, row int) ([]byte, error), selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(1)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
@@ -3264,7 +3344,7 @@ func opUnaryStrToBytesWithErrorCheck(
 		if null1 {
 			rs.SetNullResult(uint64(length))
 		} else {
-			r, err := resultFn(functionUtil.QuickBytesToStr(v1))
+			r, err := resultFn(functionUtil.QuickBytesToStr(v1), 0)
 			if err != nil {
 				return err
 			}
@@ -3288,7 +3368,7 @@ func opUnaryStrToBytesWithErrorCheck(
 				continue
 			}
 			v1, _ := p1.GetStrValue(i)
-			r, err := resultFn(functionUtil.QuickBytesToStr(v1))
+			r, err := resultFn(functionUtil.QuickBytesToStr(v1), int(i))
 			if err != nil {
 				return err
 			}
@@ -3302,7 +3382,7 @@ func opUnaryStrToBytesWithErrorCheck(
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetStrValue(i)
-		r, err := resultFn(functionUtil.QuickBytesToStr(v1))
+		r, err := resultFn(functionUtil.QuickBytesToStr(v1), int(i))
 		if err != nil {
 			return err
 		}
@@ -3387,6 +3467,98 @@ func opUnaryBytesToBytesWithErrorCheck(
 			return err
 		}
 		if err = rs.AppendMustBytesValue(r); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// opUnaryBytesToBytesWithResultNull evaluates a geometry-returning unary
+// function whose valid result can be SQL NULL independently of input NULL.
+// resultFn returns (value, true, nil) for that row-local NULL, and returns a
+// non-nil error only for malformed input or an otherwise fatal evaluation
+// failure. Keeping this separate from opUnaryBytesToBytesWithNullOnError is
+// important: the latter intentionally masks every error, while derived
+// geometry functions must still reject malformed payloads.
+func opUnaryBytesToBytesWithResultNull(
+	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
+	resultFn func(v []byte) ([]byte, bool, error), selectList *FunctionSelectList) error {
+	if length == 0 {
+		return nil
+	}
+
+	result.UseOptFunctionParamFrame(1)
+	rs := vector.MustFunctionResult[types.Varlena](result)
+	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
+	rsVec := rs.GetResultVector()
+
+	c1 := parameters[0].IsConst()
+	rsNull := rsVec.GetNulls()
+	rsAnyNull := false
+
+	if selectList != nil {
+		if selectList.IgnoreAllRow() {
+			rs.SetNullResult(uint64(length))
+			return nil
+		}
+		if !selectList.ShouldEvalAllRow() {
+			rsAnyNull = true
+			for i := range selectList.SelectList {
+				if selectList.Contains(uint64(i)) {
+					rsNull.Add(uint64(i))
+				}
+			}
+		}
+	}
+
+	appendResult := func(v []byte) error {
+		r, isNull, err := resultFn(v)
+		if err != nil {
+			return err
+		}
+		if isNull {
+			return rs.AppendMustNullForBytesResult()
+		}
+		return rs.AppendMustBytesValue(r)
+	}
+
+	if c1 {
+		v1, null1 := p1.GetStrValue(0)
+		if null1 {
+			rs.SetNullResult(uint64(length))
+			return nil
+		}
+		r, isNull, err := resultFn(v1)
+		if err != nil {
+			return err
+		}
+		if isNull {
+			rs.SetNullResult(uint64(length))
+			return nil
+		}
+		return appendRepeatedBytesResult(rs, r, length)
+	}
+
+	if p1.WithAnyNullValue() || rsAnyNull {
+		nulls.Or(rsNull, parameters[0].GetNulls(), rsNull)
+		for i := uint64(0); i < uint64(length); i++ {
+			if rsNull.Contains(i) {
+				if err := rs.AppendMustNullForBytesResult(); err != nil {
+					return err
+				}
+				continue
+			}
+			v1, _ := p1.GetStrValue(i)
+			if err := appendResult(v1); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	for i := uint64(0); i < uint64(length); i++ {
+		v1, _ := p1.GetStrValue(i)
+		if err := appendResult(v1); err != nil {
 			return err
 		}
 	}
@@ -3482,6 +3654,15 @@ func opUnaryBytesToBytesWithNullOnError(
 func opUnaryBytesToStrWithErrorCheck(
 	parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v []byte) (string, error), selectList *FunctionSelectList) error {
+	return opUnaryBytesToStrWithRowErrorCheck(parameters, result, length,
+		func(v []byte, _ int) (string, error) {
+			return resultFn(v)
+		}, selectList)
+}
+
+func opUnaryBytesToStrWithRowErrorCheck(
+	parameters []*vector.Vector, result vector.FunctionResultWrapper, length int,
+	resultFn func(v []byte, row int) (string, error), selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(1)
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, parameters[0])
@@ -3510,7 +3691,7 @@ func opUnaryBytesToStrWithErrorCheck(
 		if null1 {
 			rs.SetNullResult(uint64(length))
 		} else {
-			rb, err := resultFn(v1)
+			rb, err := resultFn(v1, 0)
 			if err != nil {
 				return err
 			}
@@ -3534,7 +3715,7 @@ func opUnaryBytesToStrWithErrorCheck(
 				continue
 			}
 			v1, _ := p1.GetStrValue(i)
-			rb, err := resultFn(v1)
+			rb, err := resultFn(v1, int(i))
 			if err != nil {
 				return err
 			}
@@ -3549,7 +3730,7 @@ func opUnaryBytesToStrWithErrorCheck(
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetStrValue(i)
-		rb, err := resultFn(v1)
+		rb, err := resultFn(v1, int(i))
 		if err != nil {
 			return err
 		}
@@ -3639,6 +3820,20 @@ func opUnaryFixedToFixedWithNullOnError[
 	T types.FixedSizeTExceptStrType,
 	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int,
 	resultFn func(v T) (Tr, error), selectList *FunctionSelectList) error {
+	return opUnaryFixedToFixedWithNullCheck(parameters, result, length, func(v T) (Tr, bool) {
+		r, err := resultFn(v)
+		return r, err != nil
+	}, selectList)
+}
+
+// opUnaryFixedToFixedWithNullCheck evaluates a unary function and marks a row
+// NULL when resultFn reports an invalid result. Unlike
+// opUnaryFixedToFixedWithNullOnError, it lets hot paths reject expected
+// row-local values without allocating an error that will only be discarded.
+func opUnaryFixedToFixedWithNullCheck[
+	T types.FixedSizeTExceptStrType,
+	Tr types.FixedSizeTExceptStrType](parameters []*vector.Vector, result vector.FunctionResultWrapper, length int,
+	resultFn func(v T) (Tr, bool), selectList *FunctionSelectList) error {
 	result.UseOptFunctionParamFrame(1)
 	rs := vector.MustFunctionResult[Tr](result)
 	p1 := vector.OptGetParamFromWrapper[T](rs, 0, parameters[0])
@@ -3668,8 +3863,8 @@ func opUnaryFixedToFixedWithNullOnError[
 		if null1 {
 			nulls.AddRange(rsNull, 0, uint64(length))
 		} else {
-			r, err := resultFn(v1)
-			if err != nil {
+			r, invalid := resultFn(v1)
+			if invalid {
 				nulls.AddRange(rsNull, 0, uint64(length))
 			} else {
 				rowCount := uint64(length)
@@ -3689,8 +3884,8 @@ func opUnaryFixedToFixedWithNullOnError[
 				continue
 			}
 			v1, _ := p1.GetValue(i)
-			r, err := resultFn(v1)
-			if err != nil {
+			r, invalid := resultFn(v1)
+			if invalid {
 				rsNull.Add(i)
 				continue
 			}
@@ -3702,8 +3897,8 @@ func opUnaryFixedToFixedWithNullOnError[
 	rowCount := uint64(length)
 	for i := uint64(0); i < rowCount; i++ {
 		v1, _ := p1.GetValue(i)
-		r, err := resultFn(v1)
-		if err != nil {
+		r, invalid := resultFn(v1)
+		if invalid {
 			rsNull.Add(i)
 			continue
 		}

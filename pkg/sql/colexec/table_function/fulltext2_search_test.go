@@ -27,9 +27,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -70,6 +75,196 @@ func TestFulltext2SearchPrepareLimit(t *testing.T) {
 	// prepared `LIMIT ?` parameter (a non-literal expr resolved at EXECUTE via evalLimitExpression)
 	// is covered end-to-end by the fulltext2_prepare BVT.
 	require.Equal(t, uint64(12), mk(&plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 12}}}}).limit)
+}
+
+func TestFulltext2SearchRuntimeFilterStatus(t *testing.T) {
+	require.False(t, hasFulltextMembershipFilterSpec(nil))
+	require.False(t, hasFulltextMembershipFilterSpec([]*plan.RuntimeFilterSpec{{}}))
+	require.True(t, hasFulltextMembershipFilterSpec([]*plan.RuntimeFilterSpec{{
+		UseMembershipFilter: true,
+	}}))
+
+	st := &fulltext2SearchState{limit: 3, plannedLimit: 3}
+
+	st.applyMembershipFilterResult(&fulltextMembershipFilterResult{
+		status: fulltextMembershipFilterPass,
+	})
+	require.Zero(t, st.limit)
+	// PASS is a per-query downgrade. Reset must restore the planned candidate
+	// bound for the next query that receives an exact membership payload.
+	st.reset(nil, nil)
+	require.Equal(t, uint64(3), st.limit)
+
+	st.applyMembershipFilterResult(&fulltextMembershipFilterResult{
+		membershipFilterBytes: []byte{1, 2, 3},
+		status:                fulltextMembershipFilterReady,
+	})
+	require.Equal(t, []byte{1, 2, 3}, st.filterBytes)
+	require.Equal(t, uint64(3), st.limit)
+
+	st.reset(nil, nil)
+	st.applyMembershipFilterResult(&fulltextMembershipFilterResult{
+		status: fulltextMembershipFilterDrop,
+	})
+	require.True(t, st.dropFilter)
+
+	// A missing terminal payload on a configured membership-filter path is the
+	// same fail-open state as PASS. It must not retain the filter-dependent cap.
+	st.reset(nil, nil)
+	st.applyMembershipFilterResult(nil)
+	require.Zero(t, st.limit)
+	require.False(t, st.dropFilter)
+
+	// A fresh state with no configured membership-filter path never calls the
+	// downgrade helper, so the ordinary no-residual candidate bound is retained.
+	noPrefilter := &fulltext2SearchState{limit: 3, plannedLimit: 3}
+	require.Equal(t, uint64(3), noPrefilter.limit)
+}
+
+func TestFulltext2SearchPassPreventsCandidateUnderfill(t *testing.T) {
+	type candidate struct {
+		id      int64
+		allowed bool
+	}
+	// Relevance order: the two highest-scoring rows fail the residual WHERE,
+	// while the next two rows are the correct LIMIT 2 result.
+	candidates := []candidate{
+		{id: 1},
+		{id: 2},
+		{id: 3, allowed: true},
+		{id: 4, allowed: true},
+	}
+	filterAfterSearch := func(limit uint64) []int64 {
+		end := len(candidates)
+		if limit > 0 && int(limit) < end {
+			end = int(limit)
+		}
+		result := make([]int64, 0, 2)
+		for _, item := range candidates[:end] {
+			if item.allowed {
+				result = append(result, item.id)
+			}
+		}
+		return result
+	}
+
+	st := &fulltext2SearchState{limit: 2, plannedLimit: 2}
+	require.Empty(t, filterAfterSearch(st.limit),
+		"retaining the bound after a filter fallback would under-fill")
+
+	proc := testutil.NewProc(t)
+	mb := message.NewMessageBoard()
+	proc.SetMessageBoard(mb)
+	tag := int32(902)
+	message.SendMessage(message.RuntimeFilterMessage{
+		Tag: tag, Typ: message.RuntimeFilter_PASS,
+	}, mb)
+	res, err := waitFulltext2MembershipFilter(proc, []*plan.RuntimeFilterSpec{{
+		Tag: tag, UseMembershipFilter: true,
+	}})
+	require.NoError(t, err)
+	require.Equal(t, fulltextMembershipFilterPass, res.status)
+	st.applyMembershipFilterResult(res)
+	require.Equal(t, []int64{3, 4}, filterAfterSearch(st.limit))
+}
+
+func TestWaitFulltext2MembershipFilterPreservesTerminalState(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		typ    int32
+		status fulltextMembershipFilterStatus
+	}{
+		{name: "pass", typ: message.RuntimeFilter_PASS, status: fulltextMembershipFilterPass},
+		{name: "drop", typ: message.RuntimeFilter_DROP, status: fulltextMembershipFilterDrop},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			mb := message.NewMessageBoard()
+			proc.SetMessageBoard(mb)
+			tag := int32(901)
+			message.SendMessage(message.RuntimeFilterMessage{Tag: tag, Typ: tc.typ}, mb)
+
+			res, err := waitFulltext2MembershipFilter(proc, []*plan.RuntimeFilterSpec{{
+				Tag: tag, UseMembershipFilter: true,
+			}})
+			require.NoError(t, err)
+			require.NotNil(t, res)
+			require.Equal(t, tc.status, res.status)
+			require.Empty(t, res.membershipFilterBytes)
+		})
+	}
+}
+
+func TestFulltextMembershipFilterPaths(t *testing.T) {
+	spec := func(tag int32, enabled bool) []*plan.RuntimeFilterSpec {
+		return []*plan.RuntimeFilterSpec{{Tag: tag, UseMembershipFilter: enabled}}
+	}
+
+	// Both waiters must keep the existing no-filter behavior for an absent or
+	// disabled runtime-filter specification.
+	proc := testutil.NewProc(t)
+	res, err := waitFulltextMembershipFilter(proc, nil)
+	require.NoError(t, err)
+	require.Nil(t, res)
+	res, err = waitFulltext2MembershipFilter(proc, spec(910, false))
+	require.NoError(t, err)
+	require.Nil(t, res)
+
+	// Build one production-shaped serialized key vector and feed it through the
+	// message board. This exercises the UNIQUEJOINKEYS -> docfilter path for
+	// both the legacy FULLTEXT waiter and FULLTEXT2's status-preserving waiter.
+	makePayload := func(t *testing.T) (*process.Process, []*plan.RuntimeFilterSpec, []byte) {
+		proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+		mb := message.NewMessageBoard()
+		proc.SetMessageBoard(mb)
+		vec := vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(vec, int64(11), false, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(vec, int64(22), false, proc.Mp()))
+		data, err := vec.MarshalBinary()
+		require.NoError(t, err)
+		message.SendMessage(message.RuntimeFilterMessage{
+			Tag:  910,
+			Typ:  message.RuntimeFilter_UNIQUEJOINKEYS,
+			Data: data,
+		}, mb)
+		return proc, spec(910, true), data
+	}
+
+	proc, specs, _ := makePayload(t)
+	res, err = waitFulltextMembershipFilter(proc, specs)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	require.Equal(t, fulltextMembershipFilterReady, res.status)
+	require.NotEmpty(t, res.membershipFilterBytes)
+
+	proc, specs, _ = makePayload(t)
+	res, err = waitFulltext2MembershipFilter(proc, specs)
+	require.NoError(t, err)
+	require.NotNil(t, res)
+	require.Equal(t, fulltextMembershipFilterReady, res.status)
+	require.NotEmpty(t, res.membershipFilterBytes)
+
+	// An available terminal with no payload is a safe fail-open result. A
+	// malformed payload remains an error rather than silently becoming a filter.
+	proc = testutil.NewProc(t)
+	mb := message.NewMessageBoard()
+	proc.SetMessageBoard(mb)
+	message.SendMessage(message.RuntimeFilterMessage{Tag: 911, Typ: message.RuntimeFilter_UNIQUEJOINKEYS}, mb)
+	res, err = waitFulltext2MembershipFilter(proc, spec(911, true))
+	require.NoError(t, err)
+	require.Equal(t, fulltextMembershipFilterPass, res.status)
+
+	proc = testutil.NewProc(t)
+	mb = message.NewMessageBoard()
+	proc.SetMessageBoard(mb)
+	message.SendMessage(message.RuntimeFilterMessage{Tag: 912, Typ: message.RuntimeFilter_UNIQUEJOINKEYS, Data: []byte{1, 2, 3}}, mb)
+	_, err = waitFulltext2MembershipFilter(proc, spec(912, true))
+	require.Error(t, err)
+
+	_, err = buildFulltextMembershipFilter(proc, nil)
+	require.NoError(t, err)
+	_, err = buildFulltextMembershipFilter(proc, []byte{1, 2, 3})
+	require.Error(t, err)
 }
 
 func TestFulltext2ScoreAlgo(t *testing.T) {
@@ -399,6 +594,236 @@ func TestFulltext2SearchCallStreamingCovered(t *testing.T) {
 	require.True(t, res.Batch.Vecs[2].IsNull(1)) // NULL include value surfaces as SQL NULL
 
 	st.free(tf, proc, false, nil)
+}
+
+// probeTailState builds a self-completing json-probe state with a [doc_id int64, score float32]
+// output batch. Defaults are the BEHIND case: searched(100) < bar(2000) <= snap(3000), so with a
+// single-schema-version window the operator runs the table_changes tail.
+func probeTailState() *fulltext2SearchState {
+	st := &fulltext2SearchState{probeTail: true}
+	st.batch = batch.NewWithSize(2)
+	st.batch.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	st.batch.Vecs[1] = vector.NewVec(types.T_float32.ToType())
+	st.pkVecIdx, st.scoreVecIdx = 0, 1
+	st.tblcfg = fulltext2.TableConfig{
+		DbName: "db", SrcTable: "t", PKey: "id",
+		ProbeTailWhere: "json_extract_string(`j`, '$.foo') = 'needle'",
+		ProbeTailBar:   2000,
+	}
+	st.tailSearchedBuildTS = 100
+	st.tailSnap = timestamp.Timestamp{PhysicalTime: 3000}
+	return st
+}
+
+// stubTailSpansSchema forces the schema-span check to a fixed answer for a test, restoring on cleanup.
+func stubTailSpansSchema(t *testing.T, spans bool) {
+	orig := ft2TailSpansSchema
+	t.Cleanup(func() { ft2TailSpansSchema = orig })
+	ft2TailSpansSchema = func(*fulltext2SearchState, *process.Process, int64) bool { return spans }
+}
+
+// TestFulltext2SearchProbeTailStreams drives the BEHIND, single-schema-version tail: startProbeTail
+// builds the aliased table_changes(searched, S] SQL (with the pushed json predicate) and streams it;
+// emitProbeTail pages one streamed result into u.batch as (doc_id=pk, score=0), then ends on close.
+func TestFulltext2SearchProbeTailStreams(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	stubTailSpansSchema(t, false) // single schema version in (searched, S] -> tail, not fallback
+
+	orig := ft2RunStreamingSql
+	defer func() { ft2RunStreamingSql = orig }()
+	var capturedSQL string
+	ft2RunStreamingSql = func(_ context.Context, _ *sqlexec.SqlProcess, sql string, _ string, streamCh chan executor.Result, _ chan error) (executor.Result, error) {
+		capturedSQL = sql
+		bat := batch.NewWithSize(1)
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed[int64](bat.Vecs[0], 42, false, mp))
+		require.NoError(t, vector.AppendFixed[int64](bat.Vecs[0], 43, false, mp))
+		bat.SetRowCount(2)
+		streamCh <- executor.Result{Batches: []*batch.Batch{bat}, Mp: mp}
+		return executor.Result{}, nil
+	}
+
+	st := probeTailState()
+	st.tailSp = sqlexec.NewSqlProcess(proc)
+	tf := &TableFunction{}
+
+	res, err := st.emitProbeTail(proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecNext, res.Status)
+	require.Equal(t, 2, res.Batch.RowCount())
+	require.Equal(t, int64(42), vector.GetFixedAtWithTypeCheck[int64](res.Batch.Vecs[0], 0))
+	require.Equal(t, int64(43), vector.GetFixedAtWithTypeCheck[int64](res.Batch.Vecs[0], 1))
+	require.Equal(t, float32(0), vector.GetFixedAtWithTypeCheck[float32](res.Batch.Vecs[1], 0)) // tail score is 0
+
+	// The streamed SQL: aliased table_changes so change_type binds, insert-only, json predicate pushed
+	// with the internal twin. The lower bound is the generation actually searched (100).
+	require.Contains(t, capturedSQL, "table_changes('db', 't'")
+	require.Contains(t, capturedSQL, "'100-0'")
+	require.Contains(t, capturedSQL, "AS mo_tc")
+	require.Contains(t, capturedSQL, "mo_tc.change_type = 'insert'")
+	require.Contains(t, capturedSQL, "AND (json_extract_string(`j`, '$.foo') = 'needle')")
+
+	st.batch.CleanOnlyData()
+	res, err = st.emitProbeTail(proc) // stream closed → end
+	require.NoError(t, err)
+	require.Equal(t, vm.CancelResult, res)
+
+	st.free(tf, proc, false, nil)
+}
+
+// TestFulltext2SearchProbeTailCaughtUp: searched >= bar (and <= S) means the bulk already reflects
+// every row the read sees -- start no stream, emit nothing, run no tail query.
+func TestFulltext2SearchProbeTailCaughtUp(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+
+	orig := ft2RunStreamingSql
+	defer func() { ft2RunStreamingSql = orig }()
+	called := false
+	ft2RunStreamingSql = func(_ context.Context, _ *sqlexec.SqlProcess, _ string, _ string, _ chan executor.Result, _ chan error) (executor.Result, error) {
+		called = true
+		return executor.Result{}, nil
+	}
+
+	st := probeTailState()
+	st.tailSearchedBuildTS = 2500 // >= bar(2000), <= snap(3000): caught up
+	st.tailSp = sqlexec.NewSqlProcess(proc)
+
+	res, err := st.emitProbeTail(proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.CancelResult, res)
+	require.False(t, called, "a caught-up generation must not run the tail query")
+}
+
+// TestFulltext2SearchProbeTailLogicalBoundary guards the caught-up test's FULL-timestamp precision.
+// build_ts is physical-only; a bar of (P, L>0) is NOT covered by a generation at physical P (it may
+// miss the (P, L) commit). searched==bar.physical with bar.logical>0 must therefore run the tail, not
+// skip it -- a physical-only `searched >= bar` compare would drop the (P, L) row at the mandatory join.
+func TestFulltext2SearchProbeTailLogicalBoundary(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	stubTailSpansSchema(t, false) // single schema version -> the behind branch runs the tail
+
+	orig := ft2RunStreamingSql
+	defer func() { ft2RunStreamingSql = orig }()
+	var capturedSQL string
+	ft2RunStreamingSql = func(_ context.Context, _ *sqlexec.SqlProcess, sql string, _ string, _ chan executor.Result, _ chan error) (executor.Result, error) {
+		capturedSQL = sql
+		return executor.Result{}, nil
+	}
+
+	st := probeTailState()
+	st.tblcfg.ProbeTailBar = 2000
+	st.tblcfg.ProbeTailBarLogical = 1 // bar = (2000, 1)
+	st.tailSearchedBuildTS = 2000     // generation at physical 2000, logical 0 -> BEHIND (2000,0) < (2000,1)
+	st.tailSp = sqlexec.NewSqlProcess(proc)
+
+	_, err := st.emitProbeTail(proc)
+	require.NoError(t, err)
+	require.Contains(t, capturedSQL, "table_changes", "bar (P, L>0) is not covered by a physical-P generation -> tail must run")
+	require.Contains(t, capturedSQL, "'2000-0'")
+}
+
+// TestFulltext2SearchProbeTailNewerFallback: the searched generation is NEWER than the read (it may
+// have removed a posting a long-running txn must still see). A forward tail cannot recover a deletion,
+// so the operator falls back to a full pk scan of the source (SELECT <pk> FROM <db>.<src>, no WHERE).
+func TestFulltext2SearchProbeTailNewerFallback(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+
+	orig := ft2RunStreamingSql
+	defer func() { ft2RunStreamingSql = orig }()
+	var capturedSQL string
+	ft2RunStreamingSql = func(_ context.Context, _ *sqlexec.SqlProcess, sql string, _ string, streamCh chan executor.Result, _ chan error) (executor.Result, error) {
+		capturedSQL = sql
+		return executor.Result{}, nil
+	}
+
+	st := probeTailState()
+	st.tailSearchedBuildTS = 3500 // > snap(3000): newer than the read
+	st.tailSp = sqlexec.NewSqlProcess(proc)
+
+	_, err := st.emitProbeTail(proc)
+	require.NoError(t, err)
+	// Selective full scan of the base table, filtered by the json_extract_*_internal predicate (so the
+	// base scan does not re-trigger the probe rewrite) -- NOT an all-pks scan, NOT a table_changes tail.
+	require.Equal(t, "SELECT `id` FROM `db`.`t` WHERE json_extract_string(`j`, '$.foo') = 'needle'", capturedSQL)
+	require.NotContains(t, capturedSQL, "table_changes")
+}
+
+// TestFulltext2SearchProbeTailPhysicalTieFallback guards the same-physical/later-logical hazard:
+// build_ts is physical-only, so a generation built at (P, L>0) records build_ts P. A read at
+// (P, L'<L) shares the physical time but is OLDER than the generation, which may have removed a
+// posting the read must still see. At equal physical time the compare cannot prove the generation
+// is not newer, so the operator must FALL BACK to a full pk scan -- not tail (a forward tail cannot
+// recover the deletion) and not treat it as caught up. stubTailSpansSchema(false) makes this
+// discriminating: without the tie fallback the single-schema window would run the tail.
+func TestFulltext2SearchProbeTailPhysicalTieFallback(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	stubTailSpansSchema(t, false)
+
+	orig := ft2RunStreamingSql
+	defer func() { ft2RunStreamingSql = orig }()
+	var capturedSQL string
+	ft2RunStreamingSql = func(_ context.Context, _ *sqlexec.SqlProcess, sql string, _ string, _ chan executor.Result, _ chan error) (executor.Result, error) {
+		capturedSQL = sql
+		return executor.Result{}, nil
+	}
+
+	st := probeTailState()
+	st.tailSearchedBuildTS = 3000                                         // generation build_ts physical == read physical
+	st.tailSnap = timestamp.Timestamp{PhysicalTime: 3000, LogicalTime: 1} // read (3000,1); generation may be (3000, L>1)
+	st.tailSp = sqlexec.NewSqlProcess(proc)
+
+	_, err := st.emitProbeTail(proc)
+	require.NoError(t, err)
+	require.Equal(t, "SELECT `id` FROM `db`.`t` WHERE json_extract_string(`j`, '$.foo') = 'needle'", capturedSQL)
+	require.NotContains(t, capturedSQL, "table_changes", "a physical-time tie must fall back, not tail")
+}
+
+// TestFulltext2SearchProbeTailSchemaSpanFallback: BEHIND, but a DDL sits in (searched, S] so
+// table_changes cannot span the window -- fall back to a full pk scan.
+func TestFulltext2SearchProbeTailSchemaSpanFallback(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	stubTailSpansSchema(t, true) // a schema-version change sits in the gap
+
+	orig := ft2RunStreamingSql
+	defer func() { ft2RunStreamingSql = orig }()
+	var capturedSQL string
+	ft2RunStreamingSql = func(_ context.Context, _ *sqlexec.SqlProcess, sql string, _ string, streamCh chan executor.Result, _ chan error) (executor.Result, error) {
+		capturedSQL = sql
+		return executor.Result{}, nil
+	}
+
+	st := probeTailState() // behind: searched(100) < bar(2000)
+	st.tailSp = sqlexec.NewSqlProcess(proc)
+
+	_, err := st.emitProbeTail(proc)
+	require.NoError(t, err)
+	require.Equal(t, "SELECT `id` FROM `db`.`t` WHERE json_extract_string(`j`, '$.foo') = 'needle'", capturedSQL)
+	require.NotContains(t, capturedSQL, "table_changes")
+}
+
+// TestFulltext2SearchProbeTailCloseDrains: closeProbeTail cancels the producer and drains its
+// channel to the close, leaving no goroutine/result leak, and is idempotent.
+func TestFulltext2SearchProbeTailCloseDrains(t *testing.T) {
+	mp := mpool.MustNewZero()
+	st := &fulltext2SearchState{}
+	_, cancel := context.WithCancel(context.Background())
+	st.tailCancel = cancel
+	st.tailStreamCh = make(chan executor.Result, 4)
+	st.tailStreamCh <- executor.Result{Mp: mp}
+	close(st.tailStreamCh)
+
+	st.closeProbeTail()
+	require.Nil(t, st.tailCancel)
+	require.Nil(t, st.tailStreamCh)
+	require.False(t, st.tailStarted)
+
+	st.closeProbeTail() // idempotent
 }
 
 // TestFulltext2SearchStopStreamDrains verifies stopStream cancels the producer context

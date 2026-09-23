@@ -107,6 +107,18 @@ const (
 	IcebergWrite
 	TableClone
 	MongoScan
+	// ShuffleStable is a wire-only capability marker. New decoders rebuild the
+	// ordinary Shuffle operator from it; older decoders reject the unknown
+	// opcode before execution instead of silently using legacy key ownership.
+	// Keep its numeric value stable and append future opcodes after it.
+	ShuffleStable
+	// PreInsertAutoIDCache is a wire-only marker for the opt-in table policy.
+	// Old decoders reject it rather than silently discarding AutoIdCache.
+	PreInsertAutoIDCache
+	// AdaptiveTop 只在协调节点执行，不允许作为远端指令编码。
+	AdaptiveTop
+	// MinusAll is appended to preserve all existing remote operator wire values.
+	MinusAll
 	// OpTypeEnd is the exclusive upper bound for executable operator types.
 	// New operator types must be added before it.
 	OpTypeEnd
@@ -181,6 +193,10 @@ func init() {
 		IcebergWrite:            "IcebergWrite",
 		TableClone:              "TableClone",
 		MongoScan:               "MongoScan",
+		ShuffleStable:           "ShuffleStable",
+		PreInsertAutoIDCache:    "PreInsertAutoIDCache",
+		AdaptiveTop:             "AdaptiveTop",
+		MinusAll:                "MinusAll",
 	}
 
 	// Initialize StrToOperatorMap

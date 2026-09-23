@@ -618,10 +618,22 @@ func (s *TableDetector) cleanupOrphanWatermarks(ctx context.Context) {
 		return
 	}
 
-	sql := CDCSQLBuilder.DeleteOrphanWatermarkSQL()
-	cleanupCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
+	for _, sql := range []string{
+		CDCSQLBuilder.DeleteOrphanWatermarkSQL(),
+		CDCSQLBuilder.DeleteOrphanSnapshotEpochSQL(),
+	} {
+		// Give each independent catalog cleanup its own budget. A slow watermark
+		// cleanup must not deterministically starve snapshot-epoch cleanup on
+		// every pass.
+		// Preserve the historical ten-second worst-case scan-loop delay across
+		// the two maintenance statements.
+		cleanupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		s.cleanupOrphanMetadata(cleanupCtx, sql)
+		cancel()
+	}
+}
 
+func (s *TableDetector) cleanupOrphanMetadata(cleanupCtx context.Context, sql string) {
 	logutil.Debug(
 		"cdc.table_detector.cleanup_watermark_execute",
 		zap.String("sql", sql),

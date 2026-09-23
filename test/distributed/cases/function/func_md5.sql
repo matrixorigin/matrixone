@@ -17,3 +17,15 @@ select md5(4336);
 select md5(2008-09-09);
 select md5('2008-09-09');
 select md5(fsfsf);
+
+drop table if exists md5_large_blob;
+create table md5_large_blob(payload longblob);
+insert into md5_large_blob values (concat(repeat('a', 32768), repeat('a', 32768)));
+select length(payload), md5(payload), md5(concat(repeat('a', 32768), repeat('a', 32768))) as expected from md5_large_blob;
+drop table md5_large_blob;
+
+drop table if exists md5_large_text;
+create table md5_large_text(payload longtext);
+insert into md5_large_text values (concat(repeat('a', 32768), repeat('a', 32768)));
+select length(payload), md5(payload), md5(concat(repeat('a', 32768), repeat('a', 32768))) as expected from md5_large_text;
+drop table md5_large_text;

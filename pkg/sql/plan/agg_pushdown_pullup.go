@@ -177,25 +177,25 @@ func (builder *QueryBuilder) aggPushDown(nodeID int32) int32 {
 }
 
 func getJoinCondCol(cond *Expr, leftTag int32, rightTag int32) (*plan.Expr_Col, *plan.Expr_Col) {
-	fun, ok := cond.Expr.(*plan.Expr_F)
-	if !ok || fun.F.Func.ObjName != "=" {
+	if cond == nil {
 		return nil, nil
 	}
-	leftCol, ok := fun.F.Args[0].Expr.(*plan.Expr_Col)
-	if !ok {
+	fun := cond.GetF()
+	if fun == nil || fun.Func == nil || !IsEqualFunc(fun.Func.Obj) || len(fun.Args) != 2 {
 		return nil, nil
 	}
-	rightCol, ok := fun.F.Args[1].Expr.(*plan.Expr_Col)
-	if !ok {
+	leftRef := fun.Args[0].GetCol()
+	rightRef := fun.Args[1].GetCol()
+	if leftRef == nil || rightRef == nil {
 		return nil, nil
 	}
-	if leftCol.Col.RelPos != leftTag {
-		leftCol, rightCol = rightCol, leftCol
+	if leftRef.RelPos != leftTag {
+		leftRef, rightRef = rightRef, leftRef
 	}
-	if leftCol.Col.RelPos != leftTag || rightCol.Col.RelPos != rightTag {
+	if leftRef.RelPos != leftTag || rightRef.RelPos != rightTag {
 		return nil, nil
 	}
-	return leftCol, rightCol
+	return &plan.Expr_Col{Col: leftRef}, &plan.Expr_Col{Col: rightRef}
 }
 
 func replaceAllColRefInExprList(exprlist []*plan.Expr, from []*plan.Expr_Col, to []*plan.Expr_Col) {
@@ -314,32 +314,64 @@ func addAnyValueForNonPKInPlan(nodeID int32, exceptID int32, cols []*plan.Expr_C
 func applyAggPullup(rootID int32, join, agg, leftScan, rightScan *plan.Node, builder *QueryBuilder) bool {
 	//rightcol must be primary key of right table
 	// or we  add rowid in group by, implement this in the future
-	pkNames := rightScan.TableDef.Pkey.Names
+	pkPositions, ok := sqlEqualityCompatiblePrimaryKeyColumnPositions(rightScan.TableDef)
+	if !ok || len(agg.BindingTags) == 0 || len(leftScan.BindingTags) != 1 ||
+		len(rightScan.BindingTags) != 1 || leftScan.TableDef == nil ||
+		agg.Stats == nil || leftScan.Stats == nil || join.Stats == nil {
+		return false
+	}
 
-	if len(join.OnList) != len(pkNames) || len(join.OnList) != len(agg.GroupBy) || !builder.IsEquiJoin(join) {
+	if len(join.OnList) != len(pkPositions) || len(join.OnList) != len(agg.GroupBy) || !builder.IsEquiJoin(join) {
 		return false
 	}
 
 	leftCols := make([]*plan.Expr_Col, len(join.OnList))
-	leftColPos := make([]int32, len(join.OnList))
+	rightColPos := make([]int32, len(join.OnList))
 	rightCols := make([]*plan.Expr_Col, len(join.OnList))
-	groupColsInAgg := make([]*plan.Expr_Col, len(join.OnList))
+	groupColsInAgg := make([]*plan.ColRef, len(agg.GroupBy))
+	seenGroupOutput := make(map[int32]struct{}, len(join.OnList))
+
+	for i, groupExpr := range agg.GroupBy {
+		groupCol := groupExpr.GetCol()
+		if groupCol == nil || groupCol.RelPos != leftScan.BindingTags[0] ||
+			groupCol.ColPos < 0 || int(groupCol.ColPos) >= len(leftScan.TableDef.Cols) ||
+			leftScan.TableDef.Cols[groupCol.ColPos] == nil ||
+			!sqlEqualityJoinUsesOneIdentityDomain(
+				groupExpr.Typ, leftScan.TableDef.Cols[groupCol.ColPos].Typ) {
+			return false
+		}
+		groupColsInAgg[i] = groupCol
+	}
 
 	for i := range join.OnList {
 		leftCol, rightCol := getJoinCondCol(join.OnList[i], agg.BindingTags[0], rightScan.BindingTags[0])
-		if leftCol == nil {
+		joinFn := join.OnList[i].GetF()
+		if leftCol == nil || rightCol == nil || joinFn == nil || !sqlEqualityJoinUsesOneIdentityDomain(
+			joinFn.Args[0].Typ, joinFn.Args[1].Typ) {
 			return false
 		}
-		groupColInAgg, ok := agg.GroupBy[i].Expr.(*plan.Expr_Col)
-		if !ok {
+		groupOutput := leftCol.Col.ColPos
+		if groupOutput < 0 || int(groupOutput) >= len(agg.GroupBy) {
 			return false
 		}
+		if _, duplicate := seenGroupOutput[groupOutput]; duplicate {
+			return false
+		}
+		rightPos := rightCol.Col.ColPos
+		if rightPos < 0 || int(rightPos) >= len(rightScan.TableDef.Cols) ||
+			rightScan.TableDef.Cols[rightPos] == nil ||
+			!sqlEqualityJoinUsesOneIdentityDomain(
+				joinFn.Args[0].Typ, agg.GroupBy[groupOutput].Typ) ||
+			!sqlEqualityJoinUsesOneIdentityDomain(
+				joinFn.Args[1].Typ, rightScan.TableDef.Cols[rightPos].Typ) {
+			return false
+		}
+		seenGroupOutput[groupOutput] = struct{}{}
 		leftCols[i] = leftCol
 		rightCols[i] = rightCol
-		leftColPos[i] = leftCol.Col.ColPos
-		groupColsInAgg[i] = groupColInAgg
+		rightColPos[i] = rightPos
 	}
-	if !containsAllPKs(leftColPos, rightScan.TableDef) {
+	if !containsAllSQLEqualityCompatiblePKs(rightColPos, rightScan.TableDef) {
 		return false
 	}
 
@@ -356,8 +388,8 @@ func applyAggPullup(rootID int32, join, agg, leftScan, rightScan *plan.Node, bui
 
 	for i := range leftCols {
 		j := leftCols[i].Col.ColPos
-		leftCols[i].Col.RelPos = groupColsInAgg[j].Col.RelPos
-		leftCols[i].Col.ColPos = groupColsInAgg[j].Col.ColPos
+		leftCols[i].Col.RelPos = groupColsInAgg[j].RelPos
+		leftCols[i].Col.ColPos = groupColsInAgg[j].ColPos
 	}
 	return true
 

@@ -1,0 +1,76 @@
+name: Warm jstfu Maven cache
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - xtool/jstfu/pom.xml
+      - xtool/jstfu/mvnw
+      - xtool/jstfu/.mvn/wrapper/maven-wrapper.properties
+      - .github/workflows/jstfu-maven-cache.yaml
+  schedule:
+    # GitHub evicts caches that have not been accessed for seven days. A daily
+    # trusted refresh also validates the Java tests independently of PR events.
+    - cron: "30 18 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: jstfu-maven-cache-main
+  cancel-in-progress: false
+
+jobs:
+  warm-jstfu-maven-cache:
+    if: ${{ github.ref == 'refs/heads/main' }}
+    name: Warm jstfu Maven cache
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-22.04' }}
+    timeout-minutes: 10
+    steps:
+      - name: Checkout trusted MatrixOne main
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      # Keep this key and path aligned with matrixorigin/CI build-mo.yaml. The
+      # relative root makes archives portable across runner home directories
+      # and contains both Maven dependencies and the wrapper distribution.
+      - name: Restore jstfu Maven cache
+        id: jstfu-maven-cache
+        uses: actions/cache/restore@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: .jstfu-maven-cache
+          key: matrixone-jstfu-maven-v1-${{ runner.os }}-${{ runner.arch }}-jdk17-${{ hashFiles('xtool/jstfu/pom.xml', 'xtool/jstfu/.mvn/wrapper/maven-wrapper.properties', 'xtool/jstfu/mvnw') }}
+          restore-keys: |
+            matrixone-jstfu-maven-v1-${{ runner.os }}-${{ runner.arch }}-jdk17-
+
+      - name: Test and build jstfu
+        env:
+          MAVEN_USER_HOME: ${{ github.workspace }}/.jstfu-maven-cache
+          JSTFU_MVN_FLAGS: >-
+            -B --no-transfer-progress
+            -Dmaven.wagon.http.retryHandler.count=3
+            -Dmaven.repo.local=${{ github.workspace }}/.jstfu-maven-cache/repository
+        run: |
+          set -euo pipefail
+          if [ '${{ steps.jstfu-maven-cache.outputs.cache-hit }}' = 'true' ]; then
+            JSTFU_MVN_FLAGS="${JSTFU_MVN_FLAGS} --offline" make jstfu-test
+          else
+            # Resolve a new graph online, then prove that both dependencies and
+            # the Maven wrapper are complete before publishing the cache.
+            make jstfu-test
+            JSTFU_MVN_FLAGS="${JSTFU_MVN_FLAGS} --offline" make jstfu-test
+          fi
+
+      - name: Save jstfu Maven cache
+        if: ${{ steps.jstfu-maven-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0400d5f644dc74513175e3cd8d07132dd4860809 # v4.2.4
+        with:
+          path: .jstfu-maven-cache
+          key: ${{ steps.jstfu-maven-cache.outputs.cache-primary-key }}

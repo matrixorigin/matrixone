@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	logservicepb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
@@ -40,7 +41,18 @@ func (s *service) startCNStoreHeartbeat() error {
 			return err
 		}
 	}
+	s.heartbeatWakeup = make(chan struct{}, 1)
 	return s.stopper.RunNamedTask("cnservice-control-plane", s.controlTask)
+}
+
+func (s *service) notifyHeartbeat() {
+	if s.heartbeatWakeup == nil {
+		return
+	}
+	select {
+	case s.heartbeatWakeup <- struct{}{}:
+	default:
+	}
 }
 
 func (s *service) heartbeatTask(ctx context.Context) {
@@ -60,13 +72,14 @@ func (s *service) heartbeatTask(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			s.heartbeat(ctx)
-			// see pkg/logservice/service_commands.go#130
-			select {
-			case <-ctx.Done():
-				return
-			default:
-			}
+		case <-s.heartbeatWakeup:
+		}
+		s.heartbeat(ctx)
+		// see pkg/logservice/service_commands.go#130
+		select {
+		case <-ctx.Done():
+			return
+		default:
 		}
 	}
 }
@@ -173,15 +186,7 @@ func (s *service) notifyCommandPoll() {
 	}
 }
 
-func (s *service) heartbeat(ctx context.Context) {
-	start := time.Now()
-	defer func() {
-		v2.CNHeartbeatHistogram.Observe(time.Since(start).Seconds())
-	}()
-
-	ctx2, cancel := context.WithTimeoutCause(ctx, s.cfg.HAKeeper.HeatbeatTimeout.Duration, moerr.CauseHeartbeat)
-	defer cancel()
-
+func (s *service) newCNStoreHeartbeat() logservicepb.CNStoreHeartbeat {
 	hb := logservicepb.CNStoreHeartbeat{
 		UUID:                s.cfg.UUID,
 		ServiceAddress:      s.pipelineServiceServiceAddr(),
@@ -199,14 +204,77 @@ func (s *service) heartbeat(ctx context.Context) {
 			MemTotal:     system.MemoryTotal(),
 			MemAvailable: system.MemoryAvailable(),
 		},
-		CommitID:                    version.CommitID,
-		AckedCommandBatchID:         s.ackedCommandBatchID.Load(),
-		CommandDeliveryAckSupported: true,
+		CommitID:                           version.CommitID,
+		AckedCommandBatchID:                s.ackedCommandBatchID.Load(),
+		CommandDeliveryAckSupported:        true,
+		ViewMetadataAdmissionSupported:     s.viewMetadataAdmissionGeneration != 0,
+		ViewMetadataAdmissionGeneration:    s.viewMetadataAdmissionGeneration,
+		ViewMetadataCatalogFencedEpoch:     s.viewMetadataCatalogFencedEpoch.Load(),
+		ViewMetadataIngressReady:           s.viewMetadataIngressReady.Load(),
+		PersistedExpressionProtocolVersion: uint64(defines.MORPCLatestVersion),
+		CatalogMetadataCapabilities: &logservicepb.CatalogMetadataCapabilities{
+			PersistedExpressionProtocol: uint64(defines.MORPCLatestVersion),
+			BarrierParticipantProtocol:  1,
+		},
+		CatalogMetadataAck: s.catalogMetadataParticipant.Ack(s.viewMetadataAdmissionGeneration),
+	}
+	if s.viewMetadataEpochFence != nil {
+		hb.ViewMetadataObservedEpoch = s.viewMetadataEpochFence.Epoch()
 	}
 	if s.gossipNode != nil {
 		hb.GossipAddress = s.gossipServiceAddr()
 		hb.GossipJoined = s.gossipNode.Joined()
 	}
+	return hb
+}
+
+// withdrawViewMetadataAdmission publishes a final non-routable heartbeat after
+// the periodic heartbeat task and every ingress path have stopped. This is the
+// clean ownership-handoff point: a replacement can take the same UUID without
+// waiting for store timeout, while abrupt or partitioned processes still have
+// no acknowledgement and remain protected by the timeout fence.
+func (s *service) withdrawViewMetadataAdmission() error {
+	if s.viewMetadataAdmissionGeneration == 0 || s._hakeeperClient == nil {
+		return nil
+	}
+	s.viewMetadataIngressReady.Store(false)
+	timeout := s.cfg.HAKeeper.HeatbeatTimeout.Duration
+	if timeout <= 0 {
+		timeout = 3 * time.Second
+	}
+	ctx, cancel := context.WithTimeoutCause(
+		context.Background(), timeout, moerr.CauseHeartbeat)
+	defer cancel()
+	hb := s.newCNStoreHeartbeat()
+	_, err := s._hakeeperClient.SendCNHeartbeat(ctx, hb)
+	if err != nil {
+		err = moerr.AttachCause(ctx, err)
+		s.logger.Error("failed to publish final view metadata withdrawal",
+			zap.Bool("clean_handoff", false), zap.Error(err))
+		return err
+	}
+	if ctx.Err() != nil {
+		err = moerr.AttachCause(ctx, ctx.Err())
+		s.logger.Error("final view metadata withdrawal timed out",
+			zap.Bool("clean_handoff", false), zap.Error(err))
+		return err
+	}
+	s.logger.Info("published final view metadata withdrawal",
+		zap.Bool("clean_handoff", true),
+		zap.Uint64("generation", s.viewMetadataAdmissionGeneration))
+	return nil
+}
+
+func (s *service) heartbeat(ctx context.Context) {
+	start := time.Now()
+	defer func() {
+		v2.CNHeartbeatHistogram.Observe(time.Since(start).Seconds())
+	}()
+
+	ctx2, cancel := context.WithTimeoutCause(ctx, s.cfg.HAKeeper.HeatbeatTimeout.Duration, moerr.CauseHeartbeat)
+	defer cancel()
+
+	hb := s.newCNStoreHeartbeat()
 
 	s.heartbeatInFlight.Store(true)
 	s.notifyCommandPoll()
@@ -225,6 +293,8 @@ func (s *service) heartbeat(ctx context.Context) {
 		s.notifyCommandPoll()
 		return
 	}
+	s.catalogMetadataParticipant.Observe(s.viewMetadataAdmissionGeneration, cb.CatalogMetadataBarrier)
+	admissionErr := s.applyViewMetadataAdmission(ctx, cb.ViewMetadataAdmission)
 	s.commandPollNeeded.Store(false)
 	s.notifyCommandPoll()
 
@@ -236,6 +306,9 @@ func (s *service) heartbeat(ctx context.Context) {
 	}
 	s.config.DecrCount()
 	s.handleHeartbeatResponse(hb.AckedCommandBatchID, cb)
+	if admissionErr != nil && ctx.Err() == nil {
+		s.logger.Error("failed to apply view metadata admission heartbeat response", zap.Error(admissionErr))
+	}
 }
 
 func (s *service) handleCommandBatch(batch logservicepb.CommandBatch) {

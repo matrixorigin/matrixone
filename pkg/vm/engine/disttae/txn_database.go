@@ -698,6 +698,14 @@ func (db *txnDatabase) getTableItem(
 	var err error
 	c := engine.GetLatestCatalogCache()
 	if ok := c.GetTable(&item); !ok {
+		// A session-owned definition may have committed after this data snapshot.
+		// Only the schema is made visible; txn row/object timestamps stay unchanged.
+		if defines.IsTempTableName(name) {
+			latest := cache.TableItem{Name: name, DatabaseId: db.databaseId, AccountId: accountID, Ts: types.MaxTs().ToTimestamp()}
+			if c.GetTable(&latest) && latest.Kind == catalog.SystemTemporaryTable {
+				return &latest, nil
+			}
+		}
 		var tableitem *cache.TableItem
 		if !c.CanServe(types.TimestampToTS(db.op.SnapshotTS())) {
 			logutil.Info("FIND_TABLE loadTableFromStorage", zap.String("table", name), zap.Uint32("accountID", accountID), zap.String("txn", db.op.Txn().DebugString()), zap.String("cacheTS", c.GetStartTS().ToString()))

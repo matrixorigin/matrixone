@@ -1,0 +1,111 @@
+#!/bin/sh
+
+# Copyright 2021 - 2026 Matrix Origin
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Publish the flat thirdparty library set, or one explicitly named native
+# sidecar, beside mo-service. Each changed file is first completed in the
+# destination directory and then renamed, so a copy, link, rename, or signal
+# failure cannot replace the last usable destination.
+
+set -eu
+
+mode=directory
+if [ "$#" -eq 2 ]; then
+    source_dir=$1
+    destination_dir=$2
+elif [ "$#" -eq 3 ] && [ "$1" = --file ]; then
+    mode=file
+    source_file=$2
+    destination_file=$3
+else
+    echo "usage: $0 <source-dir> <destination-dir>" >&2
+    echo "       $0 --file <source-file> <destination-file>" >&2
+    exit 2
+fi
+temporary=
+
+cleanup() {
+    if [ -n "$temporary" ]; then
+        rm -f "$temporary"
+    fi
+}
+
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
+stage_one() {
+    source=$1
+    destination=$2
+    [ -e "$source" ] || [ -L "$source" ] || {
+        echo "native staging source does not exist: $source" >&2
+        exit 1
+    }
+    mkdir -p "${destination%/*}"
+
+    # A prior interrupted implementation may have left one of these files.
+    # They are never published artifacts, so the next owner recycles them.
+    for stale in "$destination.tmp."*; do
+        [ -e "$stale" ] || [ -L "$stale" ] || continue
+        rm -f "$stale"
+    done
+
+    if [ -d "$source" ] && [ ! -L "$source" ]; then
+        echo "native library staging only supports files and symlinks: $source" >&2
+        exit 1
+    fi
+    if [ -d "$destination" ] && [ ! -L "$destination" ]; then
+        echo "native library destination is unexpectedly a directory: $destination" >&2
+        exit 1
+    fi
+
+    if [ -L "$source" ]; then
+        link_target=$(readlink "$source")
+        if [ -L "$destination" ] &&
+           [ "$(readlink "$destination")" = "$link_target" ]; then
+            return 0
+        fi
+        temporary="$destination.tmp.$$"
+        rm -f "$temporary"
+        ln -s "$link_target" "$temporary"
+    elif [ -f "$destination" ] && [ ! -L "$destination" ] &&
+         cmp -s "$source" "$destination"; then
+        return 0
+    else
+        temporary="$destination.tmp.$$"
+        rm -f "$temporary"
+        cp "$source" "$temporary"
+    fi
+
+    mv -f "$temporary" "$destination"
+    temporary=
+}
+
+if [ "$mode" = file ]; then
+    stage_one "$source_file" "$destination_file"
+else
+    [ -d "$source_dir" ] || {
+        echo "native staging source directory does not exist: $source_dir" >&2
+        exit 1
+    }
+    mkdir -p "$destination_dir"
+    for source_entry in "$source_dir"/*; do
+        [ -e "$source_entry" ] || [ -L "$source_entry" ] || continue
+        stage_one "$source_entry" "$destination_dir/${source_entry##*/}"
+    done
+fi
+
+trap - EXIT HUP INT TERM

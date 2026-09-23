@@ -67,6 +67,10 @@ var (
 
 // Config defines the Configurations supported by the Log Service.
 type Config struct {
+	// CatalogMetadataMaintenance requires the controlled stop of all legacy
+	// HAKeeper executors before enabling; its durable latch cannot be unset.
+	CatalogMetadataMaintenance bool `toml:"catalog-metadata-maintenance"`
+
 	// FS is the underlying virtual FS used by the log service. Leave it as empty
 	// in production.
 	FS vfs.FS
@@ -292,8 +296,9 @@ func (c *Config) GetHAKeeperClientConfig() HAKeeperClientConfig {
 	saddr := make([]string, 0)
 	saddr = append(saddr, c.HAKeeperClientConfig.ServiceAddresses...)
 	return HAKeeperClientConfig{
-		DiscoveryAddress: c.HAKeeperClientConfig.DiscoveryAddress,
-		ServiceAddresses: saddr,
+		DiscoveryAddress:   c.HAKeeperClientConfig.DiscoveryAddress,
+		ServiceAddresses:   saddr,
+		BackendReadTimeout: c.HAKeeperClientConfig.BackendReadTimeout,
 	}
 }
 
@@ -371,6 +376,15 @@ func (c *Config) Validate() error {
 	}
 	if c.HAKeeperConfig.TNStoreTimeout.Duration == 0 {
 		return moerr.NewBadConfigNoCtx("DNStoreTimeout not set")
+	}
+	if c.HAKeeperTickInterval.Duration <= 0 {
+		return moerr.NewBadConfigNoCtx("HAKeeperTickInterval must be positive")
+	}
+	if c.HAKeeperCheckInterval.Duration <= 0 {
+		return moerr.NewBadConfigNoCtx("HAKeeperCheckInterval must be positive")
+	}
+	if c.HAKeeperCheckInterval.Duration > time.Duration(1<<63-1)/checkBootstrapCycles {
+		return moerr.NewBadConfigNoCtx("HAKeeperCheckInterval is too large")
 	}
 	if c.GossipProbeInterval.Duration == 0 {
 		return moerr.NewBadConfigNoCtx("GossipProbeInterval not set")
@@ -607,6 +621,17 @@ type HAKeeperClientConfig struct {
 	AllocateIDBatch uint64 `toml:"allocate-id-batch"`
 	// EnableCompress enable compress
 	EnableCompress bool `toml:"enable-compress"`
+	// BackendReadTimeout bounds how long the shared HAKeeper transport waits
+	// without a response before replacing the connection. Caller contexts
+	// independently bound individual requests.
+	BackendReadTimeout toml.Duration `toml:"backend-read-timeout"`
+}
+
+func (c HAKeeperClientConfig) backendReadTimeout() time.Duration {
+	if c.BackendReadTimeout.Duration == 0 {
+		return defaultBackendReadTimeout
+	}
+	return c.BackendReadTimeout.Duration
 }
 
 // Validate validates the HAKeeperClientConfig.
@@ -616,6 +641,11 @@ func (c *HAKeeperClientConfig) Validate() error {
 	}
 	if c.AllocateIDBatch == 0 {
 		c.AllocateIDBatch = 100
+	}
+	if c.BackendReadTimeout.Duration == 0 {
+		c.BackendReadTimeout.Duration = c.backendReadTimeout()
+	} else if c.BackendReadTimeout.Duration < 0 {
+		return moerr.NewBadConfigNoCtx("backend-read-timeout must be positive")
 	}
 	return nil
 }

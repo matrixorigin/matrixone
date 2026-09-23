@@ -15,12 +15,17 @@
 package frontend
 
 import (
+	"context"
+	"io"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util"
 
 	"go.uber.org/zap"
 	"golang.org/x/sync/errgroup"
@@ -31,9 +36,26 @@ func isPerformStatement(stmt tree.Statement) bool {
 	return ok && selectStmt.IsPerform
 }
 
+func databaseWasCreated(runResult *util.RunResult) bool {
+	return runResult != nil && runResult.AffectRows != 0
+}
+
+func grantDatabaseOwnershipAfterCreate(
+	ctx context.Context,
+	ses *Session,
+	stmt tree.Statement,
+	runResult *util.RunResult,
+) error {
+	if !databaseWasCreated(runResult) {
+		return nil
+	}
+	return doGrantPrivilegeImplicitly(ctx, ses, stmt)
+}
+
 // executeStatusStmt run the statement that responses status t
 func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 	var loadLocalErrGroup *errgroup.Group
+	var loadLocalWaited bool
 	var columns []interface{}
 	execCtx.persistentDropTableTargets = nil
 
@@ -54,6 +76,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			ses.rs = &plan.ResultColDef{
 				ResultCols: plan2.GetResultColumnsFromPlan(execCtx.cw.Plan()),
 			}
+			freezeResultMetadata(execCtx.runner)
 			runBegin := time.Now()
 			if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
 				return
@@ -103,6 +126,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 				mysqlc := c.(Column)
 				mrs.AddColumn(mysqlc)
 			}
+			freezeResultMetadata(execCtx.runner)
 
 			// open new file
 			ep.DefaultBufSize = getPu(ses.GetService()).SV.ExportDataDefaultFlushSize
@@ -168,17 +192,22 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		//change privilege
 		switch st := execCtx.stmt.(type) {
 		case *tree.DropTable:
-			execCtx.persistentDropTableTargets = capturePersistentDropTableTargets(ses, st)
+			execCtx.persistentDropTableTargets = capturePersistentDropTableTargets(
+				ses, st, execCtx.effectiveTxnDefaultDatabase,
+			)
 			ses.InvalidatePrivilegeCache()
 			// must execute before run to get database id or table id
-			if err = doRevokePrivilegeImplicitly(execCtx.reqCtx, ses, st, execCtx.persistentDropTableTargets); err != nil {
+			if err = doRevokePrivilegeImplicitly(
+				execCtx.reqCtx, ses, st, execCtx.persistentDropTableTargets,
+				execCtx.effectiveTxnDefaultDatabase,
+			); err != nil {
 				return
 			}
 
 		case *tree.DropDatabase:
 			ses.InvalidatePrivilegeCache()
 			// must execute before run to get database id or table id
-			if err = doRevokePrivilegeImplicitly(execCtx.reqCtx, ses, st, nil); err != nil {
+			if err = doRevokePrivilegeImplicitly(execCtx.reqCtx, ses, st, nil, ""); err != nil {
 				return
 			}
 
@@ -192,33 +221,54 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		runBegin := time.Now()
 		if st, ok := execCtx.stmt.(*tree.Load); ok {
 			if st.Local {
+				// The LOCAL stream belongs to this accepted ingress execution.
+				// Create it only after compile/placement succeeds so a fail-closed
+				// scheduling decision cannot leave an unattached pipe behind.
+				reader, writer := io.Pipe()
+				uploadCtx, stopUpload := context.WithCancel(execCtx.reqCtx)
+				execCtx.proc.Base.LoadLocalReader = reader
+				execCtx.loadLocalWriter = writer
+				defer func() {
+					// Abort network I/O as well as pipe I/O before joining on
+					// runner error/panic. A client need not ever send upload EOF.
+					stopUpload()
+					if closeErr := reader.Close(); closeErr != nil {
+						ses.Error(execCtx.reqCtx,
+							"processLoadLocal goroutine failed",
+							zap.Error(closeErr))
+					}
+					// The statement executor is recovered above this function. Join
+					// the upload owner here as well so a runner panic cannot leave it
+					// using session or ExecCtx state after statement cleanup begins.
+					if !loadLocalWaited {
+						if waitErr := loadLocalErrGroup.Wait(); waitErr != nil {
+							ses.Error(execCtx.reqCtx,
+								"processLoadLocal goroutine failed",
+								zap.Error(waitErr))
+						}
+					}
+					if execCtx.proc.Base.LoadLocalReader == reader {
+						execCtx.proc.Base.LoadLocalReader = nil
+					}
+					if execCtx.loadLocalWriter == writer {
+						execCtx.loadLocalWriter = nil
+					}
+				}()
 				loadLocalErrGroup = new(errgroup.Group)
 				loadLocalErrGroup.Go(func() error {
-					return processLoadLocal(ses, execCtx, st.Param, execCtx.loadLocalWriter, execCtx.proc.GetLoadLocalReader())
+					return processLoadLocal(uploadCtx, ses, execCtx, st.Param, writer, reader)
 				})
 			}
 		}
 
 		if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
-			if loadLocalErrGroup != nil { // release resources
-				err2 := execCtx.proc.Base.LoadLocalReader.Close()
-				if err2 != nil {
-					ses.Error(execCtx.reqCtx,
-						"processLoadLocal goroutine failed",
-						zap.Error(err2))
-				}
-				err2 = loadLocalErrGroup.Wait() // executor failed, but processLoadLocal is still running, wait for it
-				if err2 != nil {
-					ses.Error(execCtx.reqCtx,
-						"processLoadLocal goroutine failed",
-						zap.Error(err2))
-				}
-			}
 			return
 		}
 
 		if loadLocalErrGroup != nil {
-			if err = loadLocalErrGroup.Wait(); err != nil { //executor success, but processLoadLocal goroutine failed
+			err = loadLocalErrGroup.Wait()
+			loadLocalWaited = true
+			if err != nil { // executor success, but processLoadLocal goroutine failed
 				return
 			}
 		}
@@ -230,7 +280,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		switch execCtx.stmt.(type) {
 		case *tree.CreateDatabase:
 			// must execute after run to get database id
-			err = doGrantPrivilegeImplicitly(execCtx.reqCtx, ses, st)
+			err = grantDatabaseOwnershipAfterCreate(execCtx.reqCtx, ses, st, execCtx.runResult)
 			if err != nil {
 				return
 			}
@@ -244,9 +294,16 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 // the session's temporary aliases still exist. Both the pre-execution
 // ownership revoke and the post-execution dynamic-table cleanup must consume
 // this same snapshot: dropTableSingle removes temporary aliases as it runs.
-func capturePersistentDropTableTargets(ses *Session, st *tree.DropTable) tree.TableNames {
+func capturePersistentDropTableTargets(
+	ses FeSession,
+	st *tree.DropTable,
+	defaultDatabase string,
+) tree.TableNames {
 	if st == nil || st.Temporary {
 		return nil
+	}
+	if ses == nil {
+		return st.Names
 	}
 
 	targets := make(tree.TableNames, 0, len(st.Names))
@@ -256,7 +313,10 @@ func capturePersistentDropTableTargets(ses *Session, st *tree.DropTable) tree.Ta
 		}
 		dbName := string(name.SchemaName)
 		if dbName == "" {
-			dbName = ses.GetDatabaseName()
+			dbName = defaultDatabase
+			if dbName == "" {
+				dbName = ses.GetDatabaseName()
+			}
 		}
 		if _, isTemporary := ses.GetTempTable(dbName, string(name.ObjectName)); isTemporary {
 			continue
@@ -353,8 +413,49 @@ func (resper *MysqlResp) respStatus(ses *Session,
 			if res.lastInsertId != 0 {
 				ses.SetLastInsertID(res.lastInsertId)
 			}
+		case *tree.Replace:
+			// REPLACE uses the same PRE_INSERT auto-increment pipeline as INSERT,
+			// but it has its own AST node and therefore must publish the generated
+			// value explicitly.  In particular, a delete-then-insert replacement
+			// must make the inserted row's id visible to LAST_INSERT_ID().
+			res.lastInsertId = execCtx.proc.GetStatementLastInsertID()
+			if res.lastInsertId != 0 {
+				ses.SetLastInsertID(res.lastInsertId)
+			}
+		case *tree.MultiInsert:
+			// A multi-table INSERT has one PRE_INSERT per target, each publishing
+			// its generated key through the same statement-wide coordinator, which
+			// keeps the numerically smallest non-zero value. That rule is correct
+			// for the parallel scopes of ONE table, where the smallest really is
+			// the first generated; across targets the counters are unrelated, so
+			// the smallest identifies neither the first target nor the first
+			// generated row and would change meaning with the targets' counters
+			// rather than with the statement. Report an insert id only when a
+			// single target can generate one; otherwise the statement is
+			// ambiguous and reports none.
+			if multiInsertHasUniqueAutoIncrTarget(execCtx) {
+				res.lastInsertId = execCtx.proc.GetStatementLastInsertID()
+				if res.lastInsertId != 0 {
+					ses.SetLastInsertID(res.lastInsertId)
+				}
+			} else {
+				// Declining to report the ambiguous value is not enough. The
+				// targets' PRE_INSERTs published through
+				// SetStatementLastInsertIDIfEarlier, which writes the
+				// session-visible LastInsertID as well as the statement one,
+				// and doComQuery reuses this process for the next statement of
+				// the same COM_QUERY while resetting only the statement value.
+				// Left alone, the suppressed cross-table minimum would answer
+				// that statement's LAST_INSERT_ID(). Put the session's value
+				// back, which is what this statement left visible.
+				execCtx.proc.SetLastInsertID(ses.GetLastInsertID())
+			}
 		case *tree.CreateDatabase:
-			_ = insertRecordToMoMysqlCompatibilityMode(execCtx.reqCtx, ses, execCtx.stmt)
+			// CREATE DATABASE publishes one affected row only after the engine
+			// creates the database; IF NOT EXISTS no-ops stay at zero.
+			if databaseWasCreated(execCtx.runResult) {
+				_ = insertRecordToMoMysqlCompatibilityMode(execCtx.reqCtx, ses, execCtx.stmt)
+			}
 		case *tree.DropDatabase:
 			_ = deleteRecordToMoMysqlCompatbilityMode(execCtx.reqCtx, ses, execCtx.stmt)
 			err = doDropFunctionWithDB(execCtx.reqCtx, ses, execCtx.stmt, func(path string) error {
@@ -388,4 +489,41 @@ func (resper *MysqlResp) respStatus(ses *Session,
 		}
 	}
 	return
+}
+
+// multiInsertHasUniqueAutoIncrTarget reports whether exactly one target of a
+// multi-table INSERT can generate AUTO_INCREMENT values. Only then does
+// LAST_INSERT_ID() have the single-insert meaning: the first value generated by
+// that target.
+func multiInsertHasUniqueAutoIncrTarget(execCtx *ExecCtx) bool {
+	if execCtx == nil || execCtx.cw == nil {
+		return false
+	}
+	p := execCtx.cw.Plan()
+	if p == nil || p.GetQuery() == nil {
+		return false
+	}
+	targets := 0
+	for _, node := range p.GetQuery().Nodes {
+		if node.GetNodeType() != plan.Node_PRE_INSERT || node.PreInsertCtx == nil {
+			continue
+		}
+		def := node.PreInsertCtx.TableDef
+		if def == nil {
+			continue
+		}
+		for _, col := range def.Cols {
+			// The fake primary key a PK-less table carries is itself
+			// auto-increment, but it is hidden and never surfaces through
+			// LAST_INSERT_ID(); counting it would make every PK-less target look
+			// like an auto-increment one.
+			if col == nil || !col.Typ.AutoIncr || col.Hidden ||
+				col.Name == catalog.FakePrimaryKeyColName {
+				continue
+			}
+			targets++
+			break
+		}
+	}
+	return targets == 1
 }

@@ -50,7 +50,14 @@ type Request struct {
 	// HasMembershipFilter distinguishes an exact empty key set from the
 	// absence of a runtime membership predicate (for example RF PASS).
 	HasMembershipFilter bool
-	Identity            ScanIdentity
+	// MembershipFilterRequired means candidate limiting is only semantically
+	// valid after this exact membership predicate has been applied.
+	MembershipFilterRequired bool
+	// CollectExplainDiagnostics is enabled only for standalone scalar scans.
+	// Correlated APPLY executes one reader per provider row and must not retain
+	// per-round diagnostics with unbounded outer-row cardinality.
+	CollectExplainDiagnostics bool
+	Identity                  ScanIdentity
 }
 
 // Hooks builds the reader for one vector-index scan execution generation.
@@ -58,4 +65,11 @@ type Request struct {
 // from Close on success, error, cancellation, and prepared-plan reuse.
 type Hooks interface {
 	NewReader(proc *process.Process, spec *plan.VectorIndexScan, req Request) (engine.Reader, error)
+}
+
+// ParallelHooks optionally partitions one coordinator-local search into disjoint
+// readers. The returned slice must match parallelism, including empty shards.
+// Consumers without local parallelism, including APPLY, can keep Hooks.NewReader.
+type ParallelHooks interface {
+	NewReaders(proc *process.Process, spec *plan.VectorIndexScan, req Request, parallelism int) ([]engine.Reader, error)
 }

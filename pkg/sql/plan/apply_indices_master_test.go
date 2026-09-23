@@ -15,11 +15,13 @@
 package plan
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
@@ -91,4 +93,80 @@ func TestMasterIndexPaginationIsAppliedOnce(t *testing.T) {
 	require.True(t, prefixValues.GetIsSerialized())
 	require.Nil(t, builder.qry.Nodes[scanID].Limit)
 	require.Nil(t, builder.qry.Nodes[scanID].Offset)
+}
+
+// The prefix_in payload is binary-searched by zone-map pruning (ZM.PrefixIn, via
+// colexec.zoneMapInVector), and an IN list arrives in whatever order it was
+// written. Published unsorted, the consumer refuses to prune and every block is
+// scanned -- correct, but the index buys nothing.
+func TestMasterIndexPublishesSortedPrefixPayload(t *testing.T) {
+	compCtx := NewEmptyCompilerContext()
+	compCtx.isDml = true
+	compCtx.objects["__mo_master_idx"] = &planpb.ObjectRef{SchemaName: "test", ObjName: "__mo_master_idx"}
+	compCtx.tables["__mo_master_idx"] = &planpb.TableDef{
+		Name: "__mo_master_idx",
+		Cols: []*planpb.ColDef{
+			{Name: catalog.IndexTableIndexColName, Typ: planpb.Type{Id: int32(types.T_varchar)}, Seqnum: 0},
+			{Name: catalog.IndexTablePrimaryColName, Typ: planpb.Type{Id: int32(types.T_int64)}, Seqnum: 1},
+		},
+		Name2ColIndex: map[string]int32{
+			catalog.IndexTableIndexColName:   0,
+			catalog.IndexTablePrimaryColName: 1,
+		},
+	}
+
+	builder := NewQueryBuilder(planpb.Query_SELECT, compCtx, false, true)
+	ctx := NewBindContext(builder, nil)
+	baseTag := builder.genNewBindTag()
+	baseDef := &planpb.TableDef{
+		Name: "t",
+		Cols: []*planpb.ColDef{
+			{Name: "id", Typ: planpb.Type{Id: int32(types.T_int64)}, Seqnum: 0},
+			{Name: "a", Typ: planpb.Type{Id: int32(types.T_varchar)}, Seqnum: 1},
+		},
+		Name2ColIndex: map[string]int32{"id": 0, "a": 1},
+		Pkey:          &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+	}
+	mp := mpool.MustNew(t.Name())
+	// Descending on purpose: the encoded order follows the values here, since every
+	// needle carries the same column-sequence prefix.
+	filter, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "in", []*planpb.Expr{
+		GetColExpr(baseDef.Cols[1].Typ, baseTag, 1),
+		MakePlan2StringVecExprWithType(mp, "z", "m", "a"),
+	})
+	require.NoError(t, err)
+
+	scanID := builder.appendNode(&planpb.Node{
+		NodeType:    planpb.Node_TABLE_SCAN,
+		ObjRef:      &planpb.ObjectRef{SchemaName: "test", ObjName: "t"},
+		TableDef:    baseDef,
+		BindingTags: []int32{baseTag},
+		FilterList:  []*planpb.Expr{filter},
+	}, ctx)
+
+	outerID := builder.applyIndicesForFiltersUsingMasterIndex(scanID, builder.qry.Nodes[scanID], &planpb.IndexDef{
+		IndexName:      "idx_master",
+		IndexAlgo:      catalog.MOIndexMasterAlgo.ToString(),
+		IndexTableName: "__mo_master_idx",
+		Parts:          []string{"a"},
+		TableExist:     true,
+	})
+
+	inner := builder.qry.Nodes[builder.qry.Nodes[outerID].Children[1]]
+	require.Equal(t, "prefix_in", inner.FilterList[0].GetF().Func.ObjName)
+	payload := inner.FilterList[0].GetF().Args[1].GetVec()
+
+	got := vector.NewVec(types.T_any.ToType())
+	defer got.Free(mp)
+	require.NoError(t, got.UnmarshalBinary(payload.Data))
+
+	require.True(t, got.GetSorted(), "payload must be flagged so pruning is allowed to use it")
+	require.Equal(t, int32(got.Length()), payload.GetLen(), "Len must match the compacted payload")
+
+	col, area := vector.MustVarlenaRawData(got)
+	for i := 1; i < len(col); i++ {
+		require.LessOrEqual(t,
+			bytes.Compare(col[i-1].GetByteSlice(area), col[i].GetByteSlice(area)), 0,
+			"needles must ascend in the byte order PrefixIn searches")
+	}
 }

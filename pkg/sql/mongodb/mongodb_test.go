@@ -31,9 +31,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/v2/bson"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
@@ -132,6 +135,18 @@ func TestMappingSnapshotMatchesPlan(t *testing.T) {
 	}
 	require.True(t, MappingDefinitionMatchesPlan(mapping, scan))
 	require.True(t, MappingSnapshotMatchesPlan(mapping, scan))
+	queryOnly := *scan
+	queryOnly.Columns = nil
+	queryOnly.IncludeQueryColumn = true
+	require.True(t, MappingSnapshotMatchesPlan(mapping, &queryOnly), "explicit __mo_query projection needs no mapped vectors")
+	queryOnly.IncludeQueryColumn = false
+	queryOnly.UserQueryKind = int32(UserQueryFilter)
+	require.True(t, MappingSnapshotMatchesPlan(mapping, &queryOnly), "COUNT(*) over an explicit query needs only a row carrier")
+	queryOnly.UserQueryKind = int32(UserQueryInvalid)
+	queryOnly.EmptyResult = true
+	require.True(t, MappingSnapshotMatchesPlan(mapping, &queryOnly), "a pruned explicit query opens no row source")
+	queryOnly.EmptyResult = false
+	require.False(t, MappingSnapshotMatchesPlan(mapping, &queryOnly), "ordinary scans require a mapped row carrier")
 	mapping.Columns = append(mapping.Columns, ColumnMapping{Name: "quality", Path: "quality", TypeID: int32(types.T_varchar), Conversion: ConversionStrict})
 	require.False(t, MappingDefinitionMatchesPlan(mapping, scan), "compile compares the full rel_createsql definition")
 	require.True(t, MappingSnapshotMatchesPlan(mapping, scan), "execution accepts a verified projected subset")
@@ -194,6 +209,7 @@ func TestPredicateTranslationAndProjection(t *testing.T) {
 
 	projection := ProjectionDocument([]ColumnMapping{{Path: "a"}, {Path: "a"}, {Path: "nested.b"}})
 	require.Equal(t, bson.D{{Key: "a", Value: 1}, {Key: "nested.b", Value: 1}, {Key: "_id", Value: 0}}, projection)
+	require.Equal(t, bson.D{{Key: "_id", Value: 1}}, ProjectionDocument(nil))
 	require.Error(t, (&Predicate{Op: PredicateEqual, Path: "$where", Value: 1}).Validate(ctx))
 }
 
@@ -242,6 +258,37 @@ func TestPredicateOperatorsValidationAndProjectionParents(t *testing.T) {
 	require.Equal(t, bson.D{{Key: "payload", Value: 1}, {Key: "_id.hex", Value: 1}}, projection)
 }
 
+func TestPredicatePlanRejectsNilAndChild(t *testing.T) {
+	input := &planpb.MongoPredicate{
+		Op:       planpb.MongoPredicateOp_MONGO_PREDICATE_AND,
+		Children: []*planpb.MongoPredicate{nil},
+	}
+	_, err := PredicateFromPlan(t.Context(), input)
+	require.ErrorContains(t, err, "non-nil children")
+
+	_, err = PredicateToPlan(t.Context(), &Predicate{
+		Op:       PredicateAnd,
+		Children: []*Predicate{nil},
+	})
+	require.ErrorContains(t, err, "non-nil children")
+}
+
+func TestPredicatePlanRejectsMissingComparisonValue(t *testing.T) {
+	for name, op := range map[string]planpb.MongoPredicateOp{
+		"equal":         planpb.MongoPredicateOp_MONGO_PREDICATE_EQUAL,
+		"not equal":     planpb.MongoPredicateOp_MONGO_PREDICATE_NOT_EQUAL,
+		"less":          planpb.MongoPredicateOp_MONGO_PREDICATE_LESS,
+		"less equal":    planpb.MongoPredicateOp_MONGO_PREDICATE_LESS_EQUAL,
+		"greater":       planpb.MongoPredicateOp_MONGO_PREDICATE_GREATER,
+		"greater equal": planpb.MongoPredicateOp_MONGO_PREDICATE_GREATER_EQUAL,
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := PredicateFromPlan(t.Context(), &planpb.MongoPredicate{Op: op, Path: "value"})
+			require.ErrorContains(t, err, "requires a value")
+		})
+	}
+}
+
 func TestParseTableMappingSpecRejectsInvalidOptionsAndColumnContracts(t *testing.T) {
 	ctx := t.Context()
 	validOptions := func(extra ...*tree.MongoDBOption) *tree.MongoDBTableParam {
@@ -255,6 +302,14 @@ func TestParseTableMappingSpecRejectsInvalidOptionsAndColumnContracts(t *testing
 	}
 	validDefs := func(attributes ...tree.ColumnAttribute) tree.TableDefs {
 		return tree.TableDefs{&tree.ColumnTableDef{Name: tree.NewUnresolvedColName("value"), Attributes: attributes}}
+	}
+	setDefs := func(values ...string) tree.TableDefs {
+		return tree.TableDefs{&tree.ColumnTableDef{
+			Name: tree.NewUnresolvedColName("value"),
+			Type: &tree.T{InternalType: tree.InternalType{
+				Family: tree.SetFamily, Oid: uint32(defines.MYSQL_TYPE_SET), EnumValues: values,
+			}},
+		}}
 	}
 	validTable := func() *planpb.TableDef {
 		return &planpb.TableDef{Cols: []*planpb.ColDef{{Name: "value", Typ: planpb.Type{Id: int32(types.T_int64)}}}}
@@ -292,6 +347,8 @@ func TestParseTableMappingSpecRejectsInvalidOptionsAndColumnContracts(t *testing
 		{name: "invalid column path", param: validOptions(), defs: validDefs(tree.NewAttributeMongoDBPath("$where")), table: validTable()},
 		{name: "non-null default", param: validOptions(), defs: validDefs(tree.NewAttributeDefault(tree.NewNumVal("fallback", "fallback", false, tree.P_char))), table: validTable()},
 		{name: "unsupported type", param: validOptions(), defs: validDefs(), table: &planpb.TableDef{Cols: []*planpb.ColDef{{Name: "value", Typ: planpb.Type{Id: int32(types.T_array_float32)}}}}},
+		{name: "unsupported set type", param: validOptions(), defs: setDefs("a", "b"), table: &planpb.TableDef{Cols: []*planpb.ColDef{{Name: "value", Typ: planpb.Type{Id: int32(types.T_uint64), Enumvalues: "a,b"}}}}},
+		{name: "unsupported single empty set member", param: validOptions(), defs: setDefs(""), table: &planpb.TableDef{Cols: []*planpb.ColDef{{Name: "value", Typ: planpb.Type{Id: int32(types.T_uint64)}}}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := ParseTableMappingSpec(ctx, tc.param, tc.defs, tc.table)
@@ -942,6 +999,42 @@ func TestConverterNestedPathDistinguishesMissingAndInvalidTraversal(t *testing.T
 	require.Equal(t, int64(1), tryNull.ConversionErrors())
 	bat.Clean(mp)
 	require.Zero(t, mp.CurrNB())
+}
+
+func TestConverterConversionErrorMetricCountsStrictAndTryNull(t *testing.T) {
+	mp := mpool.MustNewZero()
+	t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+
+	raw, err := bson.Marshal(bson.D{{Key: "value", Value: "not-an-int"}})
+	require.NoError(t, err)
+	validRaw, err := bson.Marshal(bson.D{{Key: "value", Value: int64(7)}})
+	require.NoError(t, err)
+
+	strict, err := NewConverter(t.Context(), []ColumnMapping{{
+		Name: "value", Path: "value", TypeID: int32(types.T_int64),
+	}}, 1024)
+	require.NoError(t, err)
+	strictBatch := strict.NewBatch()
+	t.Cleanup(func() { strictBatch.Clean(mp) })
+
+	strictBefore := testutil.ToFloat64(metric.MongoDBConversionErrorCounter)
+	require.NoError(t, strict.AppendDocument(t.Context(), strictBatch, validRaw, mp))
+	require.Equal(t, strictBefore, testutil.ToFloat64(metric.MongoDBConversionErrorCounter))
+	require.ErrorContains(t, strict.AppendDocument(t.Context(), strictBatch, raw, mp), "cannot be converted")
+	require.Equal(t, strictBefore+1, testutil.ToFloat64(metric.MongoDBConversionErrorCounter))
+	require.Equal(t, 1, strictBatch.RowCount())
+
+	tryNull, err := NewConverter(t.Context(), []ColumnMapping{{
+		Name: "value", Path: "value", TypeID: int32(types.T_int64), Conversion: ConversionTryNull,
+	}}, 1024)
+	require.NoError(t, err)
+	tryNullBatch := tryNull.NewBatch()
+	t.Cleanup(func() { tryNullBatch.Clean(mp) })
+
+	tryNullBefore := testutil.ToFloat64(metric.MongoDBConversionErrorCounter)
+	require.NoError(t, tryNull.AppendDocument(t.Context(), tryNullBatch, raw, mp))
+	require.Equal(t, tryNullBefore+1, testutil.ToFloat64(metric.MongoDBConversionErrorCounter))
+	require.Equal(t, int64(1), tryNull.ConversionErrors())
 }
 
 func TestConverterMpoolFailureLeavesNoPartialRow(t *testing.T) {

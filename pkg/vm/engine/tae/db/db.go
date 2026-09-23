@@ -437,12 +437,12 @@ func (db *DB) Close() error {
 		db.LogtailMgr.Stop()
 		db.Catalog.Close()
 		db.DiskCleaner.Stop()
-		db.Wal.Close()
+		err = errors.Join(err, db.Wal.Close())
 		db.Runtime.TransferTable.Close()
 		db.usageMemo.Clear()
 		db.Runtime.TmpFS.Close(context.Background())
 		if db.DBLocker != nil {
-			err = db.DBLocker.Close()
+			err = errors.Join(err, db.DBLocker.Close())
 		}
 		return err
 	})

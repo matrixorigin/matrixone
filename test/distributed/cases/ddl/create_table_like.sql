@@ -4,7 +4,7 @@ use test;
 
 -- single column primary key
 drop table if exists pri01;
-create table pri01(col1 int primary key , col2 decimal, col3 char, col4 varchar(20), col5 text, col6 double);
+create table pri01(col1 int primary key , col2 decimal(38,0), col3 char, col4 varchar(20), col5 text, col6 double);
 insert into pri01 values (1, 2, 'a', '23eiojf', 'r23v324r23rer', 3923.324);
 insert into pri01 values (2, 3, 'b', '32r32r', 'database', 1111111);
 insert into pri01 values (3, null, null, null, null, null);
@@ -83,7 +83,7 @@ drop table test08;
 
 
 drop table if exists test07;
-create temporary table test07(col1 int unique key , col2 decimal, col3 char, col4 varchar(20), col5 text, col6 double, unique index(col1, col2));
+create temporary table test07(col1 int unique key , col2 decimal(38,0), col3 char, col4 varchar(20), col5 text, col6 double, unique index(col1, col2));
 insert into test07 values (1, 2, 'a', '23eiojf', 'r23v324r23rer', 3923.324);
 insert into test07 values (2, 3, 'b', '32r32r', 'database', 1111111);
 -- A nullable component makes the compound UNIQUE key non-comparable; the row

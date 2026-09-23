@@ -143,7 +143,7 @@ dispatch(effSRID):
 
 **SRID of geometry-producing results.** When a function *returns* a geometry (e.g. `ST_GeomFromText`, `ST_Centroid`, `ST_Envelope`), the result carries its SRID in the **result vector's type `Width`**, set by the overload's `retType`:
 - For accessors/derivations (`ST_Centroid(g)`, `ST_GeometryN(g, n)`): `retType` copies `Width` from the input geometry type.
-- For constructors with a SRID argument (`ST_GeomFromText(wkt, srid)`): the SRID must be a **constant** so the binder/constant-folder can stamp it into `retType.Width`. A non-constant SRID argument to a geometry-*producing* function is rejected (we cannot record a runtime SRID in the bare-WKB cell). This is the one functional constraint introduced by not storing SRID per cell; for measurement/predicate functions (which return scalars, not geometries) a non-constant `+SRID` argument is fine.
+- For geometry-producing functions with a SRID argument, the binder/constant-folder stamps a constant SRID into `retType.Width`. The WKB constructor and `ST_SRID(g, srid)` setter also accept a direct prepared marker: the isolated execute-time plan validates the marker and stamps the current `Width`; row-varying expressions remain rejected. Other non-constant SRID arguments are rejected because SRID cannot be recorded in the bare-WKB cell. For measurement/predicate functions (which return scalars, not geometries) a non-constant `+SRID` argument is fine.
 
 **(b) The `+SRID` overload.** Each `ST_*` function ID carries an extra overload whose `args` append one integer SRID parameter:
 
@@ -202,7 +202,7 @@ All of Phase A is implemented and tested in `pkg/geo/` (33 tests passing, `go ve
 
 ### Task A4 — float32 WKB variant (for GEOMETRY32)
 - **Goal:** a float32-coordinate WKB reader/writer; **no SRID/format wrapper** — the cell is bare WKB (§1.3).
-- **Do:** `pkg/geo/wkb_f32.go`: `ReadWKBFloat32([]byte) (Geometry, error)`, `WriteWKBFloat32(g) []byte` (identical structure to A3, coords stored as float32). Add the float32→float64 up-convert helper used by `ST_AsWKB` on `GEOMETRY32` values. The caller (SQL layer) picks float32 vs float64 from the column OID; the engine just offers both encoders.
+- **Do:** `pkg/geo/wkb_f32.go`: `ReadWKBFloat32([]byte) (Geometry, error)`, `WriteWKBFloat32(g) ([]byte, error)` (identical structure to A3, coords stored as float32). Add the float32→float64 up-convert helper used by `ST_AsWKB` on `GEOMETRY32` values. The caller (SQL layer) picks float32 vs float64 from the column OID; the engine just offers both encoders.
 - **Test:** `WKB32→geom→WKB32` round-trip (assert float32 precision loss is the *only* difference vs float64); up-convert produces byte-standard float64 WKB.
 - **Acceptance:** float32 WKB round-trips; up-convert yields standard WKB. (No SRID anywhere in the bytes.)
 
@@ -260,7 +260,7 @@ All of Phase A is implemented and tested in `pkg/geo/` (33 tests passing, `go ve
 - **Goal:** the core I/O group works on bare WKB: `ST_GeomFromText`(+SRID), `ST_GeomFromWKB`/`ST_GeomFromBinary`, `ST_AsText`/`ST_AsWKT`, `ST_AsWKB`/`ST_AsBinary`, `ST_SRID` (get + set form), `ST_GeometryType`.
 - **Do:** implement in `func_unary.go`/`func_binary.go` delegating to `pkg/geo`. Add missing function IDs (`ST_ASWKB`, `ST_GEOMFROMWKB`, …) to `function_id.go` and `list_builtIn.go` overloads. SRID handling (cell is bare WKB):
   - `ST_SRID(g)` reads `ivecs[0].GetType().Width` — **not** the bytes.
-  - `ST_GeomFromText(wkt, srid)` / `ST_SRID(g, srid)` (setter) produce a geometry whose SRID is recorded in the **result vector type `Width`** via `retType`; the constant-SRID rule from §1.5 applies (literal SRID required for geometry-producing forms).
+  - `ST_GeomFromText(wkt, srid)` / `ST_SRID(g, srid)` (setter) produce a geometry whose SRID is recorded in the **result vector type `Width`** via `retType`; constants are stamped at bind time, while a direct prepared marker is specialized at execute time for the WKB constructor and setter.
   - `ST_AsWKB` returns the payload verbatim for `T_geometry`, up-converted for `T_geometry32`.
 - **Test:** BVT — `func_geometry_io.test` covering WKT↔WKB↔geometry round-trips, `ST_SRID` reflecting the column SRID, set-SRID, type name.
 - **Acceptance:** all I/O functions correct for all 7 subtypes incl. `EMPTY`; SRID always sourced from/written to the type.

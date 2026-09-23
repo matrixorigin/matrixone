@@ -43,8 +43,9 @@ type RemoteCache struct {
 	keyRouter client.KeyRouter[query.CacheKey]
 	// We only init the key router for the first time.
 	init sync.Once
-	// allocator gives validated remote data independent ownership and applies
-	// the destination FileService's existing cache-capacity guard.
+	// allocator gives validated remote data independent ownership. When the
+	// destination FileService has a MemCache, this is that cache's allocator and
+	// owns the capacity reservation through cache admission.
 	allocator CacheDataAllocator
 }
 
@@ -58,13 +59,10 @@ func NewRemoteCache(client client.QueryClient, factory KeyRouterFactory[query.Ca
 	}
 }
 
-func (r *RemoteCache) setAllocator(allocator CacheDataAllocator) {
-	if allocator != nil {
-		r.allocator = allocator
-	}
-}
-
 func (r *RemoteCache) Read(ctx context.Context, vector *IOVector) error {
+	if vector.Policy.Any(SkipRemoteCacheReads) {
+		return nil
+	}
 	if r.keyRouterFactory == nil {
 		return nil
 	}

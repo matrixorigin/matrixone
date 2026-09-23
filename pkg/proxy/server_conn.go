@@ -799,6 +799,9 @@ type CNServer struct {
 	hash LabelHash
 	// uuid of the CN server.
 	uuid string
+	// admissionGeneration distinguishes same-UUID process replacements. A
+	// cached backend from generation N cannot be reused for generation N+1.
+	admissionGeneration uint64
 	// addr is the net address of CN server.
 	addr string
 	// internalConn indicates the connection is from internal network. Default is false,

@@ -26,7 +26,6 @@ INSERT INTO group_concat_01 VALUES (3,9,'D','c');
 
 -- Test of MO simple request
 SELECT grp,group_concat(c) FROM group_concat_01 GROUP BY grp;
-SELECT grp,group_concat(c) FROM group_concat_01 GROUP BY grp;
 SELECT grp,group_concat(a,c) FROM group_concat_01 GROUP BY grp;
 SELECT grp,group_concat("(",a,":",c,")") FROM group_concat_01 GROUP BY grp;
 SELECT grp,group_concat(NULL) FROM group_concat_01 GROUP BY grp;
@@ -159,15 +158,16 @@ CREATE TABLE group_concat_12 (a int, c int);
 INSERT INTO group_concat_12 values (1, 5);
 INSERT INTO group_concat_12 values (2, 4);
 INSERT INTO group_concat_12 values (3, 3);
-INSERT INTO group_concat_12 values (3, 3);
 
 -- subqueris
 SELECT group_concat(c) FROM group_concat_11;
 SELECT group_concat_12.a,group_concat_12.c FROM group_concat_12,group_concat_11 where group_concat_12.a=group_concat_11.a;
-SELECT group_concat(c order by (SELECT mid(group_concat(c order by a),1,5) FROM group_concat_12 where group_concat_12.a=group_concat_11.a) desc) as grp FROM group_concat_11;
+SELECT group_concat(c order by (SELECT mid(group_concat(c order by a),1,5) FROM group_concat_12 where group_concat_12.a=group_concat_11.a) desc, c) as grp FROM group_concat_11;
 SELECT group_concat((SELECT c FROM group_concat_12 where group_concat_12.a=group_concat_11.a) order by 1) as grp FROM group_concat_11;
 SELECT group_concat(coalesce((SELECT c FROM group_concat_12 where group_concat_12.a=group_concat_11.a), '') order by 1) as grp FROM group_concat_11;
-SELECT group_concat(group_concat_11.c order by coalesce((SELECT c FROM group_concat_12 where group_concat_12.a=group_concat_11.a), '')) as grp FROM group_concat_11;
+SELECT group_concat(group_concat_11.c order by coalesce((SELECT c FROM group_concat_12 where group_concat_12.a=group_concat_11.a), ''), group_concat_11.c) as grp FROM group_concat_11;
+INSERT INTO group_concat_12 values (3, 6);
+SELECT group_concat(group_concat_11.c order by (SELECT c FROM group_concat_12 where group_concat_12.a=group_concat_11.a)) as grp FROM group_concat_11;
 
 
 -- @suite
@@ -311,5 +311,152 @@ execute group_concat_max_len_stmt;
 deallocate prepare group_concat_max_len_stmt;
 set session group_concat_max_len = 5;
 select group_concat(s order by s separator '') from group_concat_max_len_01;
+set session group_concat_max_len = 5;
+prepare group_concat_max_len_low_stmt from 'select group_concat(s order by s separator "") from group_concat_max_len_01';
+execute group_concat_max_len_low_stmt;
 set session group_concat_max_len = 1024;
+execute group_concat_max_len_low_stmt;
+set session group_concat_max_len = 5;
+execute group_concat_max_len_low_stmt;
+show warnings;
+deallocate prepare group_concat_max_len_low_stmt;
+set session group_concat_max_len = 5;
+prepare group_concat_max_len_reset_stmt from 'select group_concat(s order by s separator "") from group_concat_max_len_01';
+execute group_concat_max_len_reset_stmt;
+show warnings;
+deallocate prepare group_concat_max_len_reset_stmt;
 drop table group_concat_max_len_01;
+
+-- A truncating GROUP_CONCAT must expose one MySQL-compatible warning per
+-- logical aggregate instance, including a diagnostic row number. The second
+-- call is nested in HEX but remains a separate logical invocation; identical
+-- aggregate values must not be common-subexpression-eliminated because the
+-- warning is observable.
+drop table if exists group_concat_warning_01;
+create table group_concat_warning_01 (id int primary key, s varchar(16));
+insert into group_concat_warning_01 values (1, 'éé'), (2, '中中'), (3, 'abcd');
+set session group_concat_max_len = 8;
+select group_concat(s order by id separator '|'),
+       hex(group_concat(s order by id separator '|'))
+from group_concat_warning_01;
+show warnings;
+select group_concat(s order by id separator '|'),
+       group_concat(s order by id separator '')
+from group_concat_warning_01;
+show warnings;
+set session group_concat_max_len = 1024;
+drop table group_concat_warning_01;
+
+-- regression for issue #27589: supported wide and binary types must serialize
+-- consistently instead of failing in the group_concat payload writer
+drop table if exists group_concat_extended_types;
+create table group_concat_extended_types (
+    id int primary key,
+    control_text varchar(16),
+    control_decimal decimal(38,4),
+    d256 decimal(40,4),
+    y year,
+    u uuid,
+    g geometry,
+    g32 geometry32
+);
+insert into group_concat_extended_types values
+    (1, 'a', 1.2500, 123456789012345678901234567890123456.5678, 2024,
+     '00000000-0000-0000-0000-000000000001', st_geomfromtext('POINT(1 2)'),
+     cast(st_geomfromtext('POINT(3 4)') as geometry32)),
+    (2, 'b', 2.5000, 223456789012345678901234567890123456.5678, 2025,
+     '00000000-0000-0000-0000-000000000002', st_geomfromtext('POINT(5 6)'),
+     cast(st_geomfromtext('POINT(7 8)') as geometry32));
+select group_concat(control_text order by id separator '|') from group_concat_extended_types;
+select group_concat(control_decimal order by id separator '|') from group_concat_extended_types;
+select group_concat(d256 order by id separator '|') from group_concat_extended_types;
+select group_concat(y order by id separator '|') from group_concat_extended_types;
+select group_concat(u order by id separator '|') from group_concat_extended_types;
+select hex(group_concat(g order by id separator '|')) from group_concat_extended_types;
+select hex(group_concat(g32 order by id separator '|')) from group_concat_extended_types;
+set session group_concat_max_len = 20;
+select hex(group_concat(g order by id separator '')) from group_concat_extended_types;
+set session group_concat_max_len = 1024;
+drop table group_concat_extended_types;
+
+-- regression for issue #28669: scalar subqueries are valid hidden order keys
+-- for GROUP_CONCAT and are flattened before the aggregate is executed
+drop table if exists group_concat_subquery_src;
+drop table if exists group_concat_subquery_weights;
+create table group_concat_subquery_src (
+    id int primary key,
+    grp int,
+    a varchar(10)
+);
+create table group_concat_subquery_weights (
+    id int primary key,
+    w int
+);
+insert into group_concat_subquery_src values
+    (1, 1, 'a'),
+    (2, 1, 'b'),
+    (3, 1, 'c'),
+    (4, 2, 'd');
+insert into group_concat_subquery_weights values
+    (1, 30),
+    (2, 10),
+    (3, 20),
+    (4, null);
+
+select group_concat(
+           a order by
+           (select w from group_concat_subquery_weights weights
+             where weights.id = src.id)
+           separator '|') as result
+from group_concat_subquery_src src
+where grp = 1;
+
+select group_concat(
+           a order by
+           (select w from group_concat_subquery_weights weights
+             where weights.id = src.id) desc
+           separator '|') as result
+from group_concat_subquery_src src;
+
+select grp,
+       group_concat(
+           a order by
+           (select w from group_concat_subquery_weights weights
+             where weights.id = src.id)
+           separator '|') as result
+from group_concat_subquery_src src
+group by grp
+order by grp;
+
+select group_concat(
+           a order by coalesce(
+               (select w from group_concat_subquery_weights weights
+                 where weights.id = src.id), 0)
+           separator '|') as result
+from group_concat_subquery_src src;
+
+select group_concat(
+           a order by (select max(w) from group_concat_subquery_weights)
+           separator '|') as result
+from group_concat_subquery_src
+where id = 1;
+
+prepare group_concat_subquery_stmt from
+    'select group_concat(a order by
+        (select w + ? from group_concat_subquery_weights weights
+          where weights.id = src.id)
+        separator "|") as result
+     from group_concat_subquery_src src where grp = ?';
+set @group_concat_subquery_offset = 5;
+set @group_concat_subquery_grp = 1;
+execute group_concat_subquery_stmt using
+    @group_concat_subquery_offset, @group_concat_subquery_grp;
+deallocate prepare group_concat_subquery_stmt;
+
+select group_concat(
+           a order by (select w from group_concat_subquery_weights)
+           separator '|')
+from group_concat_subquery_src;
+
+drop table group_concat_subquery_src;
+drop table group_concat_subquery_weights;

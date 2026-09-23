@@ -65,6 +65,8 @@ const (
 	// For stmt prepare and execute cmd from JDBC.
 	cmdStmtPrepare MySQLCmd = 0x16
 	cmdStmtClose   MySQLCmd = 0x19
+	// cmdPing is used as a same-backend causal fence for no-response commands.
+	cmdPing MySQLCmd = 0x0e
 )
 
 // MySQLConn contains a buffer to save data which may be only part

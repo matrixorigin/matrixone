@@ -269,7 +269,7 @@ CREATE VIEW mysql_ddl_test_v32 AS select convert(`mysql_ddl_test_t39`.`name` usi
 SHOW CREATE VIEW mysql_ddl_test_v32;
 select * from mysql_ddl_test_v32;
 
-CREATE TABLE mysql_ddl_test_t40 (id int, score_1 decimal(15,2), score_2 numeric(15,2), score_3 numeric);
+CREATE TABLE mysql_ddl_test_t40 (id int, score_1 decimal(15,2), score_2 numeric(15,2), score_3 numeric(38,0));
 Insert into mysql_ddl_test_t40 values(1, '66.34', '80.32', '80.2222');
 Insert into mysql_ddl_test_t40 values(1, '55.34', '11.32', '1.22');
 Insert into mysql_ddl_test_t40 values(1, '33.34', '22.32', 'abc');

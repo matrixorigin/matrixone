@@ -15,12 +15,15 @@
 package plan
 
 import (
+	"context"
 	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
@@ -971,6 +974,56 @@ func TestNestedCorrelatedScalarAggregatePullsUpGroupingKey(t *testing.T) {
 	}
 }
 
+func TestNestedCorrelatedAffineSumAggregatePullsUpGroupingKey(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `
+		SELECT n1.N_NATIONKEY,
+		       (SELECT MAX(n2.N_REGIONKEY)
+		          FROM NATION n2
+		         WHERE (n2.N_REGIONKEY > 0) = (
+		               SELECT SUM(n3.N_REGIONKEY + 3) =
+		                      COALESCE(SUM(n3.N_REGIONKEY + 1), SUM(n3.N_REGIONKEY + 2), 0)
+		                 FROM NATION n3
+		                WHERE n3.N_NATIONKEY = n1.N_NATIONKEY
+		         ))
+		  FROM NATION n1`)
+	require.NoError(t, err)
+	require.Equal(t, 2, countPlanFunctionCalls(logicPlan, "sum"),
+		"the correlated consumer must retain the two-anchor affine plan")
+	assertReachablePlanHasNoCorrelatedExpr(t, logicPlan.GetQuery())
+}
+
+func TestNullPropagatesFromAggregateThroughAffineArithmetic(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	aggregateType := plan.Type{Id: int32(types.T_decimal128), Width: 38}
+	anchor0 := GetColExpr(aggregateType, 11, 0)
+	anchor1 := GetColExpr(aggregateType, 11, 1)
+
+	difference, err := BindFuncExprImplByPlanExpr(
+		builder.GetContext(), "-", []*plan.Expr{DeepCopyExpr(anchor1), DeepCopyExpr(anchor0)})
+	require.NoError(t, err)
+	scaled, err := BindFuncExprImplByPlanExpr(
+		builder.GetContext(), "*", []*plan.Expr{difference, makePlan2Int64ConstExprWithType(3)})
+	require.NoError(t, err)
+	derived, err := BindFuncExprImplByPlanExpr(
+		builder.GetContext(), "+", []*plan.Expr{DeepCopyExpr(anchor0), scaled})
+	require.NoError(t, err)
+	require.True(t, nullPropagatesFromAggregate(derived, 11))
+
+	coalesce, err := BindFuncExprImplByPlanExpr(
+		builder.GetContext(), "coalesce", []*plan.Expr{DeepCopyExpr(anchor0), DeepCopyExpr(anchor1)})
+	require.NoError(t, err)
+	require.False(t, nullPropagatesFromAggregate(coalesce, 11),
+		"a NULL-observing consumer must remain a decorrelation barrier")
+
+	division, err := BindFuncExprImplByPlanExpr(
+		builder.GetContext(), "/", []*plan.Expr{DeepCopyExpr(anchor0), makePlan2Int64ConstExprWithType(1)})
+	require.NoError(t, err)
+	require.False(t, nullPropagatesFromAggregate(division, 11),
+		"the proof must not expand to unaudited strict arithmetic")
+	require.False(t, nullPropagatesFromAggregate(
+		GetColExpr(aggregateType, 12, 0), 11))
+}
+
 func TestTransparentCorrelatedDerivedTableChain(t *testing.T) {
 	for _, tt := range []struct {
 		name     string
@@ -1539,6 +1592,146 @@ func TestInSubqueryJoinShapePreservesThreeValuedSemantics(t *testing.T) {
 	}
 }
 
+func TestFilteringOrOfExistsUsesOneUnionSemiJoin(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "different inner relations",
+			sql: `select n.n_name from tpch.nation n where
+				exists (select 1 from tpch.region r where r.r_regionkey = n.n_regionkey) or
+				exists (select 1 from tpch.nation n2 where n2.n_regionkey = n.n_regionkey)`,
+		},
+		{
+			name: "composite correlation key",
+			sql: `select n.n_name from tpch.nation n where
+				exists (select 1 from tpch.nation n2 where
+					n2.n_regionkey = n.n_regionkey and n2.n_name = n.n_name) or
+				exists (select 1 from tpch.nation n3 where
+					n3.n_regionkey = n.n_regionkey and n3.n_name = n.n_name)`,
+		},
+		{
+			name: "three branches",
+			sql: `select n.n_name from tpch.nation n where
+				exists (select 1 from tpch.region r where r.r_regionkey = n.n_regionkey) or
+				exists (select 1 from tpch.nation n2 where n2.n_regionkey = n.n_regionkey) or
+				exists (select 1 from tpch.nation n3 where n3.n_regionkey = n.n_regionkey)`,
+		},
+		{
+			name: "independent disjunctions",
+			sql: `select n.n_name from tpch.nation n where (
+				exists (select 1 from tpch.region r1 where r1.r_regionkey = n.n_regionkey) or
+				exists (select 1 from tpch.nation n2 where n2.n_regionkey = n.n_regionkey)
+			) and (
+				exists (select 1 from tpch.nation n3 where n3.n_nationkey = n.n_nationkey) or
+				exists (select 1 from tpch.nation n4 where n4.n_nationkey = n.n_nationkey)
+			)`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tt.sql)
+			require.NoError(t, err)
+
+			query := logicPlan.GetQuery()
+			require.NotNil(t, query)
+			require.True(t, reachablePlanHasNodeType(query, plan.Node_UNION_ALL))
+			require.True(t, reachablePlanHasJoinType(query, plan.Node_SEMI))
+			require.False(t, reachablePlanHasJoinType(query, plan.Node_MARK),
+				"a filtering disjunction of positive EXISTS must not retain large marker builds")
+		})
+	}
+}
+
+func TestFilteringOrOfExistsRewriteControls(t *testing.T) {
+	tests := []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "different outer keys",
+			sql: `select n.n_name from tpch.nation n where
+				exists (select 1 from tpch.region r1 where r1.r_regionkey = n.n_regionkey) or
+				exists (select 1 from tpch.region r2 where r2.r_regionkey = n.n_nationkey)`,
+		},
+		{
+			name: "negative existential",
+			sql: `select n.n_name from tpch.nation n where
+				exists (select 1 from tpch.region r1 where r1.r_regionkey = n.n_regionkey) or
+				not exists (select 1 from tpch.region r2 where r2.r_regionkey = n.n_regionkey)`,
+		},
+		{
+			name: "non equality correlation",
+			sql: `select n.n_name from tpch.nation n where
+				exists (select 1 from tpch.region r1 where r1.r_regionkey = n.n_regionkey) or
+				exists (select 1 from tpch.region r2 where r2.r_regionkey > n.n_regionkey)`,
+		},
+		{
+			name: "projected boolean",
+			sql: `select
+				exists (select 1 from tpch.region r1 where r1.r_regionkey = n.n_regionkey) or
+				exists (select 1 from tpch.region r2 where r2.r_regionkey = n.n_regionkey)
+			from tpch.nation n`,
+		},
+		{
+			name: "three valued in",
+			sql: `select n.n_name from tpch.nation n where
+				n.n_regionkey in (select r1.r_regionkey from tpch.region r1) or
+				n.n_regionkey in (select r2.r_regionkey from tpch.region r2)`,
+		},
+		{
+			name: "volatile branch predicate",
+			sql: `select n.n_name from tpch.nation n where
+				exists (select 1 from tpch.region r1 where
+					r1.r_regionkey = n.n_regionkey and rand() > 0.5) or
+				exists (select 1 from tpch.region r2 where r2.r_regionkey = n.n_regionkey)`,
+		},
+		{
+			name: "fallible projected key",
+			sql: `select n.n_name from tpch.nation n where
+				exists (select 1 from tpch.region r1 where
+					hll_cardinality(cast(r1.r_comment as varbinary)) = n.n_regionkey) or
+				exists (select 1 from tpch.region r2 where
+					hll_cardinality(cast(r2.r_comment as varbinary)) = n.n_regionkey)`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t, tt.sql)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			require.True(t, reachablePlanHasJoinType(query, plan.Node_MARK))
+			require.False(t, reachablePlanHasNodeType(query, plan.Node_UNION_ALL))
+		})
+	}
+}
+
+func TestFallibleExistsPredicateKeepsIsTrueBarrier(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `select exists (
+		select 1 from tpch.region r
+		where hll_cardinality(cast(r.r_comment as varbinary)) = n.n_regionkey
+	) from tpch.nation n`)
+	require.NoError(t, err)
+
+	var mark *plan.Node
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_MARK {
+			mark = node
+			break
+		}
+	}
+	require.NotNil(t, mark)
+	require.Len(t, mark.OnList, 1)
+	condition := mark.OnList[0].GetF()
+	require.NotNil(t, condition)
+	funcID, _ := function.DecodeOverloadID(condition.Func.GetObj())
+	require.Equal(t, int32(function.ISTRUE), funcID,
+		"a fallible existential predicate must not become a raw hash key")
+}
+
 func TestNullableNotExistsJoinPredicateNormalization(t *testing.T) {
 	const correlatedNotExists = `not exists (
 		select 1 from tpch.region r where r.r_comment = n.n_comment
@@ -1564,7 +1757,7 @@ func TestNullableNotExistsJoinPredicateNormalization(t *testing.T) {
 			"ANTI join must expose its equality as a hash key")
 	})
 
-	t.Run("projected mark join preserves is true", func(t *testing.T) {
+	t.Run("projected mark join exposes equality and totalizes marker", func(t *testing.T) {
 		logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
 			"select "+correlatedNotExists+" from tpch.nation n")
 		require.NoError(t, err)
@@ -1578,12 +1771,35 @@ func TestNullableNotExistsJoinPredicateNormalization(t *testing.T) {
 		}
 		require.NotNil(t, mark)
 		require.Len(t, mark.OnList, 1)
-		isTrue := mark.OnList[0].GetF()
-		require.NotNil(t, isTrue)
-		funcID, _ := function.DecodeOverloadID(isTrue.Func.GetObj())
-		require.Equal(t, int32(function.ISTRUE), funcID)
-		require.Len(t, isTrue.Args, 1)
-		require.True(t, IsEqualFunc(isTrue.Args[0].GetF().Func.GetObj()))
+		equality := mark.OnList[0].GetF()
+		require.NotNil(t, equality)
+		require.True(t, IsEqualFunc(equality.Func.GetObj()),
+			"existential equality must remain visible to hash MARK lowering")
+
+		var containsIsTrue func(*plan.Expr) bool
+		containsIsTrue = func(expr *plan.Expr) bool {
+			fn := expr.GetF()
+			if fn == nil || fn.Func == nil {
+				return false
+			}
+			funcID, _ := function.DecodeOverloadID(fn.Func.GetObj())
+			if funcID == function.ISTRUE {
+				return true
+			}
+			for _, arg := range fn.Args {
+				if containsIsTrue(arg) {
+					return true
+				}
+			}
+			return false
+		}
+		totalized := false
+		for _, node := range logicPlan.GetQuery().Nodes {
+			for _, expr := range append(append([]*plan.Expr{}, node.ProjectList...), node.FilterList...) {
+				totalized = totalized || containsIsTrue(expr)
+			}
+		}
+		require.True(t, totalized, "projected NOT EXISTS must convert a NULL marker to FALSE before negation")
 	})
 }
 
@@ -1715,6 +1931,27 @@ func TestCorrelatedScalarAggregateProjectionRunsAfterJoin(t *testing.T) {
 	require.NotNil(t, rightAggregate)
 	require.Equal(t, "sum", rightAggregate.AggList[0].GetF().Func.GetObjName())
 	assertReachablePlanHasNoCorrelatedExpr(t, query)
+}
+
+func TestCorrelatedDistinctAggregateProjectionRunsAfterJoin(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		aggregate string
+	}{
+		{name: "count", aggregate: "count(distinct r.r_name)"},
+		{name: "sum", aggregate: "sum(distinct r.r_regionkey)"},
+		{name: "avg", aggregate: "avg(distinct r.r_regionkey)"},
+		{name: "group concat", aggregate: "group_concat(distinct r.r_name order by r.r_name)"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true), t,
+				"select n.n_nationkey, (select "+test.aggregate+
+					" from tpch.region r where r.r_regionkey = n.n_regionkey) from tpch.nation n")
+			require.NoError(t, err)
+			require.True(t, hasCorrelatedAggregatePostJoinProjection(logicPlan.GetQuery()))
+			assertReachablePlanHasNoCorrelatedExpr(t, logicPlan.GetQuery())
+		})
+	}
 }
 
 func assertReachablePlanHasNoCorrelatedExpr(t *testing.T, query *plan.Query) {
@@ -1968,6 +2205,36 @@ func TestMakeAggregateEmptyResultExpr(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestRestoreAggregateEmptyResultIgnoresDistinctFlag(t *testing.T) {
+	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
+	for _, test := range []struct {
+		name     string
+		typ      plan.Type
+		wantCase bool
+	}{
+		{name: "count", typ: plan.Type{Id: int32(types.T_int64)}, wantCase: true},
+		{name: "sum", typ: plan.Type{Id: int32(types.T_int64)}},
+		{name: "avg", typ: plan.Type{Id: int32(types.T_float64)}},
+		{name: "group_concat", typ: plan.Type{Id: int32(types.T_text)}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			aggregate := newFlattenSubqueryTestAggregate(test.name, test.typ)
+			aggregate.GetF().Func.Obj = int64(uint64(aggregate.GetF().Func.Obj) | function.Distinct)
+			projected := GetColExpr(test.typ, 10, 0)
+			projected.Typ.NotNullable = false
+
+			restored, err := builder.restoreAggregateEmptyResult(projected, aggregate, test.name)
+			require.NoError(t, err)
+			if test.wantCase {
+				require.Equal(t, "case", restored.GetF().Func.ObjName)
+				require.Equal(t, int64(0), restored.GetF().Args[1].GetLit().GetI64Val())
+			} else {
+				require.Same(t, projected, restored)
+			}
+		})
+	}
+}
+
 func TestPrepareCorrelatedScalarAggregatePostJoinProjectionRejectsUnsupportedShapes(t *testing.T) {
 	const (
 		aggregateTag int32 = 21
@@ -2104,6 +2371,7 @@ func newFlattenSubqueryTestAggregate(name string, typ plan.Type) *plan.Expr {
 	ids := map[string]int64{
 		"sum":           aggexec.AggIdOfSum,
 		"avg":           aggexec.AggIdOfAvg,
+		"group_concat":  aggexec.AggIdOfGroupConcat,
 		"min":           aggexec.AggIdOfMin,
 		"max":           aggexec.AggIdOfMax,
 		"json_arrayagg": aggexec.AggIdOfJsonArrayAgg,
@@ -2120,6 +2388,266 @@ func newFlattenSubqueryTestAggregate(name string, typ plan.Type) *plan.Expr {
 	}
 }
 
+func TestWrappedCorrelatedScalarProjectionIsEvaluatedAfterJoin(t *testing.T) {
+	for _, projection := range []string{
+		"n.n_regionkey + 1",
+		"cast(n.n_regionkey as signed)",
+		"coalesce(n.n_regionkey, 0)",
+		"if(n.n_regionkey > 0, n.n_regionkey, 0)",
+		"case when n.n_regionkey > 0 then n.n_regionkey else 0 end",
+	} {
+		logicPlan, err := runOneStmt(NewMockOptimizer(true), t, `
+			SELECT n.n_nationkey,
+			       (SELECT `+projection+`
+			          FROM region r
+			         WHERE r.r_regionkey > n.n_regionkey
+			         LIMIT 1)
+			  FROM nation n`)
+		require.NoError(t, err, projection)
+		assertReachablePlanHasNoCorrelatedExpr(t, logicPlan.GetQuery())
+	}
+
+	_, err := runOneStmt(NewMockOptimizer(true), t, `
+		SELECT n.n_nationkey,
+		       (SELECT rand() + n.n_regionkey
+		          FROM region r
+		         WHERE r.r_regionkey > n.n_regionkey
+		         LIMIT 1)
+		  FROM nation n`)
+	require.ErrorContains(t, err, "wrapped correlated scalar projection cannot be safely decorrelated")
+}
+
+func TestMixedCorrelatedScalarProjectionUsesPerOuterLimit(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(false), t, `
+		SELECT n.n_nationkey,
+		       (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		          FROM region r
+		         WHERE r.r_regionkey > n.n_regionkey
+		         LIMIT 1)
+		  FROM nation n`)
+	require.NoError(t, err)
+
+	query := logicPlan.GetQuery()
+	assertReachablePlanHasNoCorrelatedExpr(t, query)
+	var leftJoin, boundedPartition, perOuterWindow bool
+	for _, node := range reachableFlattenSubqueryNodes(query) {
+		if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_LEFT {
+			leftJoin = true
+		}
+		if node.NodeType == plan.Node_PARTITION {
+			limit, literal := getLiteralUint64(node.Limit)
+			if literal && limit == 1 && node.PartitionByCount == 1 && len(node.OrderBy) == 2 {
+				boundedPartition = true
+			}
+		}
+		if node.NodeType == plan.Node_WINDOW && len(node.WinSpecList) == 1 {
+			window := node.WinSpecList[0].GetW()
+			if window != nil && window.Name == "row_number" && len(window.PartitionBy) == 1 &&
+				len(window.OrderBy) == 1 {
+				perOuterWindow = true
+			}
+		}
+	}
+	require.True(t, leftJoin)
+	require.True(t, boundedPartition)
+	require.True(t, perOuterWindow)
+
+	preparedStmt, parseErr := parsers.ParseOne(context.Background(), dialect.MYSQL, `
+		SELECT n.n_nationkey,
+		       (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		          FROM region r
+		         WHERE r.r_regionkey > n.n_regionkey
+		         LIMIT 1)
+		  FROM nation n`, 1)
+	require.NoError(t, parseErr)
+	_, err = BuildPlan(NewMockCompilerContext(true), preparedStmt, true)
+	require.ErrorContains(t, err, "wrapped correlated scalar projection cannot be safely decorrelated")
+
+	_, err = runOneStmt(NewMockOptimizer(true), t, `
+		SELECT n.n_nationkey,
+		       (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		          FROM region r
+		         WHERE r.r_regionkey > n.n_regionkey
+		         LIMIT 1)
+		  FROM (SELECT n_nationkey, n_regionkey FROM nation) n`)
+	require.ErrorContains(t, err, "outer input without a stable row identity")
+
+	for _, sql := range []string{
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN r.d > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM (SELECT max(r_regionkey) AS d FROM region) r
+		          WHERE r.d > n.n_regionkey
+		          LIMIT 1)
+		   FROM nation n`,
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN r.d > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM (SELECT r_name, max(r_regionkey) AS d FROM region GROUP BY r_name) r
+		          WHERE r.d > n.n_regionkey
+		          LIMIT 1)
+		   FROM nation n`,
+	} {
+		_, err = runOneStmt(NewMockOptimizer(true), t, sql)
+		require.ErrorContains(t, err, "wrapped correlated scalar projection cannot be safely decorrelated")
+		require.NotContains(t, err.Error(), "Column remapping failed")
+	}
+
+	for _, sql := range []string{
+		`SELECT n.n_regionkey,
+		        (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          WHERE r.r_regionkey > n.n_regionkey
+		          LIMIT 1)
+		   FROM nation n
+		  GROUP BY n.n_regionkey`,
+		`SELECT n.n_regionkey
+		   FROM nation n
+		  GROUP BY n.n_regionkey
+		 HAVING (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          WHERE r.r_regionkey > n.n_regionkey
+		          LIMIT 1) >= 0`,
+	} {
+		_, err = runOneStmt(NewMockOptimizer(true), t, sql)
+		require.ErrorContains(t, err, "outer input without a stable row identity")
+	}
+
+	for _, sql := range []string{
+		`DELETE FROM nation n
+		  WHERE (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          WHERE r.r_regionkey > n.n_regionkey
+		          LIMIT 1) >= 0`,
+		`UPDATE nation n
+		    SET n_regionkey = (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		                           FROM region r
+		                          WHERE r.r_regionkey > n.n_regionkey
+		                          LIMIT 1)`,
+	} {
+		_, err = runOneStmt(NewMockOptimizer(true), t, sql)
+		require.ErrorContains(t, err, "wrapped correlated scalar projection cannot be safely decorrelated")
+	}
+}
+
+func TestUnsafeWrappedCorrelatedScalarProjectionEqualityFailsClosed(t *testing.T) {
+	for _, sql := range []string{
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          WHERE r.r_regionkey = n.n_regionkey
+		          ORDER BY r.r_name
+		          LIMIT 1)
+		   FROM nation n`,
+		`SELECT n.n_nationkey,
+		        (SELECT DISTINCT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          WHERE r.r_regionkey = n.n_regionkey
+		          LIMIT 1)
+		   FROM nation n`,
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          WHERE r.r_regionkey = n.n_regionkey
+		          LIMIT 1 OFFSET 1)
+		   FROM nation n`,
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN rand() > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          WHERE r.r_regionkey = n.n_regionkey
+		          LIMIT 1)
+		   FROM nation n`,
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN r.d > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM (SELECT max(r_regionkey) AS d FROM region) r
+		          WHERE r.d = n.n_regionkey
+		          LIMIT 1)
+		   FROM nation n`,
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          WHERE r.r_regionkey = n.n_regionkey
+		          GROUP BY r.r_regionkey
+		          LIMIT 1)
+		   FROM nation n`,
+		`SELECT n.n_nationkey,
+		        (SELECT (SELECT CASE WHEN n.n_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		                          FROM region r
+		                          LIMIT 1)
+		           FROM region r2
+		          LIMIT 1)
+		   FROM nation n`,
+		`DELETE FROM nation n
+		  WHERE (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          WHERE r.r_regionkey = n.n_regionkey
+		          LIMIT 1) >= 0`,
+		`UPDATE nation n
+		    SET n_regionkey = (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		                           FROM region r
+		                          WHERE r.r_regionkey = n.n_regionkey
+		                          LIMIT 1)`,
+	} {
+		_, err := runOneStmt(NewMockOptimizer(true), t, sql)
+		require.ErrorContains(t, err, "wrapped correlated scalar projection cannot be safely decorrelated")
+	}
+
+	for _, sql := range []string{
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN count(*) > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r)
+		   FROM nation n`,
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN count(*) > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          LIMIT 1)
+		   FROM nation n`,
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN count(*) > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          LIMIT 1 OFFSET 1)
+		   FROM nation n`,
+		`SELECT n.n_nationkey,
+		        (SELECT DISTINCT CASE WHEN count(*) > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r)
+		   FROM nation n`,
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN count(*) > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		         HAVING count(*) > 0)
+		   FROM nation n`,
+	} {
+		_, err := runOneStmt(NewMockOptimizer(true), t, sql)
+		require.ErrorContains(t, err, "wrapped correlated aggregate projection cannot be safely decorrelated")
+	}
+
+	preparedStmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, `
+		SELECT n.n_nationkey,
+		       (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		          FROM region r
+		         WHERE r.r_regionkey = n.n_regionkey
+		         LIMIT 1)
+		  FROM nation n`, 1)
+	require.NoError(t, err)
+	_, err = BuildPlan(NewMockCompilerContext(true), preparedStmt, true)
+	require.ErrorContains(t, err, "wrapped correlated scalar projection cannot be safely decorrelated")
+
+	for _, sql := range []string{
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN r.r_regionkey > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          WHERE r.r_regionkey = n.n_regionkey)
+		   FROM nation n`,
+		`SELECT n.n_nationkey,
+		        (SELECT CASE WHEN count(*) > 0 THEN n.n_regionkey ELSE 0 END
+		           FROM region r
+		          WHERE r.r_regionkey = n.n_regionkey)
+		   FROM nation n`,
+	} {
+		logicPlan, planErr := runOneStmt(NewMockOptimizer(true), t, sql)
+		require.NoError(t, planErr)
+		assertReachablePlanHasNoCorrelatedExpr(t, logicPlan.GetQuery())
+	}
+}
+
 func TestDirectCorrelatedScalarProjectionCasePreservesType(t *testing.T) {
 	builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(true), false, true)
 
@@ -2131,7 +2659,7 @@ func TestDirectCorrelatedScalarProjectionCasePreservesType(t *testing.T) {
 		{name: "integer", typ: plan.Type{Id: int32(types.T_int32), Width: 32, Scale: -1}, want: true},
 		{name: "enum coerces to ordinal", typ: plan.Type{Id: int32(types.T_enum), Enumvalues: "small,large"}},
 		{name: "rowid unsupported", typ: plan.Type{Id: int32(types.T_Rowid)}},
-		{name: "vector unsupported", typ: plan.Type{Id: int32(types.T_array_float32), Width: 3}},
+		{name: "vector", typ: plan.Type{Id: int32(types.T_array_float32), Width: 3}, want: true},
 		{name: "bit width changes", typ: plan.Type{Id: int32(types.T_bit), Width: 8}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2140,7 +2668,7 @@ func TestDirectCorrelatedScalarProjectionCasePreservesType(t *testing.T) {
 	}
 }
 
-func TestNormalizeDirectCorrelatedScalarProjectionFallsBack(t *testing.T) {
+func TestNormalizeCorrelatedScalarProjectionFallsBack(t *testing.T) {
 	const (
 		projectTag int32 = 10
 		outerTag   int32 = 20
@@ -2267,12 +2795,14 @@ func TestNormalizeDirectCorrelatedScalarProjectionFallsBack(t *testing.T) {
 				projects:   tt.projects,
 			}
 
-			nodeID, match, outerResult, existential :=
-				builder.normalizeDirectCorrelatedScalarProjection(tt.subID, ctx)
+			nodeID, match, outerResult, existential, perOuterOrderKey, status :=
+				builder.normalizeCorrelatedScalarProjection(tt.subID, ctx)
 			require.Equal(t, tt.subID, nodeID)
 			require.Nil(t, match)
 			require.Nil(t, outerResult)
 			require.False(t, existential)
+			require.Nil(t, perOuterOrderKey)
+			require.NotEqual(t, scalarProjectionNormalized, status)
 		})
 	}
 }
@@ -2344,6 +2874,45 @@ func newRowComparisonTestColumn(relPos, colPos int32) *plan.Expr {
 func hasJoinType(query *plan.Query, joinType plan.Node_JoinType) bool {
 	for _, node := range query.Nodes {
 		if node.NodeType == plan.Node_JOIN && node.JoinType == joinType {
+			return true
+		}
+	}
+	return false
+}
+
+func reachablePlanHasNodeType(query *plan.Query, nodeType plan.Node_NodeType) bool {
+	return reachablePlanHasNode(query, func(node *plan.Node) bool {
+		return node.NodeType == nodeType
+	})
+}
+
+func reachablePlanHasJoinType(query *plan.Query, joinType plan.Node_JoinType) bool {
+	return reachablePlanHasNode(query, func(node *plan.Node) bool {
+		return node.NodeType == plan.Node_JOIN && node.JoinType == joinType
+	})
+}
+
+func reachablePlanHasNode(query *plan.Query, match func(*plan.Node) bool) bool {
+	visited := make(map[int32]bool)
+	var visit func(int32) bool
+	visit = func(nodeID int32) bool {
+		if nodeID < 0 || int(nodeID) >= len(query.Nodes) || visited[nodeID] {
+			return false
+		}
+		visited[nodeID] = true
+		node := query.Nodes[nodeID]
+		if match(node) {
+			return true
+		}
+		for _, childID := range node.Children {
+			if visit(childID) {
+				return true
+			}
+		}
+		return false
+	}
+	for _, rootID := range query.Steps {
+		if visit(rootID) {
 			return true
 		}
 	}

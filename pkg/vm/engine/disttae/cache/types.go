@@ -61,8 +61,11 @@ type CatalogCache struct {
 		start types.TS
 		end   types.TS
 	}
-	gcMu        sync.Mutex
-	tableChange struct {
+	gcMu sync.Mutex
+	// gcDeleteObserverForTesting is nil in production. Tests use it to inspect
+	// the reader-visible state between separately locked B-tree deletions.
+	gcDeleteObserverForTesting func(catalogGCDeleteKind)
+	tableChange                struct {
 		sync.RWMutex
 		// Account IDs hash into a fixed number of monotonic high-watermark
 		// buckets. Collisions can only cause conservative replanning; they
@@ -74,8 +77,10 @@ type CatalogCache struct {
 		ts timestamp.Timestamp
 	}
 	//tables and database is safe to be read concurrently.
-	tables    *tableCache
-	databases *databaseCache
+	tables                 *tableCache
+	databases              *databaseCache
+	tableQueryProbePool    sync.Pool
+	databaseQueryProbePool sync.Pool
 }
 
 // database cache:

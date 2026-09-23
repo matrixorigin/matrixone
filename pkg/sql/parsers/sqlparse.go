@@ -744,6 +744,17 @@ func AddRewriteHintsWithSQLModeAndLowerCaseTableNames(
 					ps.Select.RewriteOption = rewriteOption
 				}
 			}
+		case *tree.MultiInsert:
+			// Multi-table INSERT ALL/FIRST ... SELECT: the source query is the
+			// only read side, so it must carry the rewrite exactly like the
+			// INSERT...SELECT case above. Without this the statement would read
+			// the raw base table and bypass the rewrite policy.
+			if s.Source != nil {
+				s.Source.RewriteOption = rewriteOption
+				if ps, ok := s.Source.Select.(*tree.ParenSelect); ok && ps.Select != nil {
+					ps.Select.RewriteOption = rewriteOption
+				}
+			}
 		default:
 			// Every policy value must be valid even when this statement kind does
 			// not consume table rewrites. Release validation-only ASTs immediately.

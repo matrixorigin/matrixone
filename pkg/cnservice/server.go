@@ -18,9 +18,11 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -55,6 +57,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
@@ -84,6 +87,7 @@ const (
 	rssCacheAdmissionPressureTTL = 2 * time.Minute
 	rssCachePressureTargetOwner  = "cn-rss"
 	bootstrapRetryInterval       = 100 * time.Millisecond
+	txnTraceDirectoryKeyPrefix   = "cn-"
 )
 
 var (
@@ -116,7 +120,7 @@ func NewService(
 	fileService fileservice.FileService,
 	gossipNode *gossip.Node,
 	options ...Option,
-) (Service, error) {
+) (result Service, err error) {
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -203,6 +207,14 @@ func NewService(
 	if _, err = srv.getHAKeeperClient(); err != nil {
 		return nil, err
 	}
+	if err = srv.initViewMetadataAdmission(ctx); err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err != nil {
+			srv.closeViewMetadataAdmission()
+		}
+	}()
 	if err = srv.initQueryService(); err != nil {
 		return nil, err
 	}
@@ -392,6 +404,31 @@ func (s *service) registerDefaultIcebergMaintenanceExecutor(ctx context.Context)
 	return nil
 }
 
+func (s *service) checkViewMetadataGenerationRevoked() error {
+	if !s.viewMetadataGenerationRevoked.Load() {
+		return nil
+	}
+	s.viewMetadataIngressReady.Store(false)
+	s.task.runnerReady.Store(false)
+	return moerr.NewInvalidStateNoCtx("CN view metadata admission generation revoked")
+}
+
+func (s *service) startUnlessViewMetadataGenerationRevoked(start func() error) error {
+	if err := s.checkViewMetadataGenerationRevoked(); err != nil {
+		return err
+	}
+	if err := start(); err != nil {
+		return err
+	}
+	return s.checkViewMetadataGenerationRevoked()
+}
+
+func (s *service) startFrontendUnlessViewMetadataGenerationRevoked() error {
+	s.frontendLifecycleMu.Lock()
+	defer s.frontendLifecycleMu.Unlock()
+	return s.startUnlessViewMetadataGenerationRevoked(s.runMoServer)
+}
+
 func (s *service) Start() (err error) {
 	s.lifecycleMu.Lock()
 	defer s.lifecycleMu.Unlock()
@@ -415,28 +452,53 @@ func (s *service) Start() (err error) {
 	if err = s.bootstrap(); err != nil {
 		return err
 	}
-	if err = s.startSiriusRuntime(context.Background()); err != nil {
+	s.viewMetadataCatalogFenceReady.Store(true)
+	// QueryService is an internal control-plane endpoint used by bootstrap
+	// protocol checks. It must be reachable while public admission is still
+	// closed, otherwise an active upgrade can wait for admission while the
+	// upgrade itself waits for protocol responses from the CNs.
+	if err = s.startUnlessViewMetadataGenerationRevoked(s.queryService.Start); err != nil {
+		return err
+	}
+	if err = s.waitForViewMetadataAdmission(); err != nil {
+		return err
+	}
+	if err = s.startUnlessViewMetadataGenerationRevoked(func() error {
+		return s.startSiriusRuntime(context.Background())
+	}); err != nil {
 		return err
 	}
 
 	s.initSqlWriterFactory()
 
-	if err = s.queryService.Start(); err != nil {
+	if err = s.startFrontendUnlessViewMetadataGenerationRevoked(); err != nil {
+		return err
+	}
+	if err = s.startUnlessViewMetadataGenerationRevoked(s.server.Start); err != nil {
 		return err
 	}
 
-	err = s.runMoServer()
-	if err != nil {
+	// Admission authorizes local initialization; it does not make this CN
+	// routable. Revalidate after every remote entry point is listening, then
+	// linearize authoritative snapshot validation and ingress publication with
+	// heartbeat snapshot storage. Keep the automatic upgrade owner alive until
+	// this final handoff closes.
+	if err = s.waitForViewMetadataIngressAdmission(); err != nil {
 		return err
 	}
-
-	if err := s.server.Start(); err != nil {
+	s.completeBootstrapUpgradeStartupWait()
+	if err = s.checkViewMetadataGenerationRevoked(); err != nil {
 		return err
 	}
+	s.notifyHeartbeat()
 
-	s.task.runnerReady.Store(true)
-	s.startTaskRunner()
-	return nil
+	if err = s.checkViewMetadataGenerationRevoked(); err != nil {
+		return err
+	}
+	if err = s.publishTaskRunner(); err != nil {
+		return err
+	}
+	return s.checkViewMetadataGenerationRevoked()
 }
 
 func (s *service) Close() error {
@@ -454,22 +516,23 @@ func (s *service) closeService() error {
 	s.closeOnce.Do(func() {
 		defer logutil.LogClose(s.logger, "cnservice")()
 
+		s.closeViewMetadataAdmission()
+		// Stop waits for any in-flight periodic heartbeat before teardown. Keep
+		// ingress published until all local entry points and work have drained;
+		// withdrawal below is the ownership handoff linearization point.
 		s.stopper.Stop()
 
-		s.closeErr = closeCNServiceSteps(
+		// A failed producer drain must not tear down its dependencies. Unknown
+		// local errors remain fail-stop; only remote withdrawal is diagnostic.
+		s.closeErr = drainCNServiceSteps(
 			// Query commands can reach frontend, task, engine, lock, shard,
 			// auto-increment, and transaction state. Stop and drain this remote
 			// ingress before clearing any of those dependencies.
 			s.closeQueryService,
-			s.stopFrontend,
-			s.closeSiriusRuntime,
+			s.stopFrontendSerialized,
 			s.closeBootstrapService,
-			// Frontend shutdown stops accepting interactive work, while stopTask
-			// drains scheduled ingestion statements. Only after both producers have
-			// stopped may the MongoDB pool disconnect clients still leased by a
-			// MongoScan operator.
+			// Stop scheduled statements as well as interactive frontend work.
 			s.stopTask,
-			s.closeMongoDBRuntime,
 			s.closePipelineAdmission,
 			s.server.Close,
 			// Pipeline handlers and the auto-increment cleanup worker can issue
@@ -477,6 +540,16 @@ func (s *service) closeService() error {
 			// dependencies, while keeping the trace consumer alive for final events.
 			s.waitPipelineHandlers,
 			s.closeIncrService,
+			// Cancel and join pipeline users before retiring execution runtimes;
+			// otherwise retirement can wait for the work we have not stopped yet.
+			s.closeSiriusRuntime,
+			s.closeMongoDBRuntime,
+		)
+		if s.closeErr != nil {
+			return
+		}
+		withdrawErr := s.withdrawViewMetadataAdmission()
+		localErr := closeCNServiceSteps(
 			s.stopRPCs,
 			s.closeTxnTraceService,
 			func() error {
@@ -504,8 +577,27 @@ func (s *service) closeService() error {
 				return nil
 			},
 		)
+		s.closeComplete = localErr == nil
+		s.closeErr = errors.Join(withdrawErr, localErr)
 	})
 	return s.closeErr
+}
+
+// CloseComplete certifies local teardown, not a successful remote generation
+// handoff. A withdrawal error remains observable through every Close call.
+func (s *service) CloseComplete() bool {
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	return s.closeComplete
+}
+
+func drainCNServiceSteps(steps ...func() error) error {
+	for _, step := range steps {
+		if err := step(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *service) closePipelineAdmission() error {
@@ -615,17 +707,18 @@ func (s *service) SessionMgr() *queryservice.SessionManager {
 	return s.sessionMgr
 }
 
-func (s *service) CheckTenantUpgrade(_ context.Context, tenantID int64) error {
+func (s *service) CheckTenantUpgrade(ctx context.Context, tenantID int64) error {
 	s.bootstrapMu.RLock()
 	defer s.bootstrapMu.RUnlock()
 	if s.bootstrapService == nil {
 		return moerr.NewInvalidStateNoCtx("bootstrap service is closed")
 	}
-	finalVersion := s.bootstrapService.GetFinalVersion()
 	tenantFetchFunc := func() (int32, string, error) {
-		return int32(tenantID), finalVersion, nil
+		// Bootstrap reads the account's persisted version. The CN's final
+		// version does not describe accounts created by another, older CN.
+		return int32(tenantID), "", nil
 	}
-	ctx, cancel := context.WithTimeoutCause(context.Background(), time.Second*30, moerr.CauseCheckTenantUpgrade)
+	ctx, cancel := context.WithTimeoutCause(ctx, time.Second*30, moerr.CauseCheckTenantUpgrade)
 	defer cancel()
 	if _, err := s.bootstrapService.MaybeUpgradeTenant(ctx, tenantFetchFunc, nil); err != nil {
 		return moerr.AttachCause(ctx, err)
@@ -665,6 +758,12 @@ func (s *service) stopFrontend() error {
 		s.cancelMoServerFunc()
 	}
 	return err
+}
+
+func (s *service) stopFrontendSerialized() error {
+	s.frontendLifecycleMu.Lock()
+	defer s.frontendLifecycleMu.Unlock()
+	return s.stopFrontend()
 }
 
 func (s *service) stopRPCs() error {
@@ -1037,8 +1136,6 @@ func (s *service) initShardService() {
 			shardservice.ReadBuildReader:              disttae.HandleShardingReadBuildReader,
 			shardservice.ReadPrimaryKeysMayBeModified: disttae.HandleShardingReadPrimaryKeysMayBeModified,
 			shardservice.ReadPrimaryKeysMayBeUpserted: disttae.HandleShardingReadPrimaryKeysMayBeUpserted,
-			shardservice.ReadMergeObjects:             disttae.HandleShardingReadMergeObjects,
-			shardservice.ReadVisibleObjectStats:       disttae.HandleShardingReadVisibleObjectStats,
 			shardservice.ReadClose:                    disttae.HandleShardingReadClose,
 			shardservice.ReadNext:                     disttae.HandleShardingReadNext,
 			shardservice.ReadCollectTombstones:        disttae.HandleShardingReadCollectTombstones,
@@ -1229,6 +1326,9 @@ func (s *service) initIncrService() {
 	store, err := incrservice.NewSQLStore(
 		s.sqlExecutor,
 		s.lockService,
+		func(ctx context.Context) (timestamp.Timestamp, error) {
+			return acquireIncrLogtailReadBarrier(ctx, s.storeEngine)
+		},
 	)
 	if err != nil {
 		panic(err)
@@ -1241,6 +1341,14 @@ func (s *service) initIncrService() {
 		runtime.AutoIncrementService,
 		s.incrservice)
 	incrservice.SetAutoIncrementServiceByID(s.cfg.UUID, s.incrservice)
+}
+
+func acquireIncrLogtailReadBarrier(ctx context.Context, eng any) (timestamp.Timestamp, error) {
+	barrier, ok := eng.(engine.LogtailReadBarrier)
+	if !ok {
+		return timestamp.Timestamp{}, moerr.NewInternalError(ctx, "AUTO_INCREMENT observation requires an engine logtail read barrier")
+	}
+	return barrier.AcquireLogtailReadBarrier(ctx)
 }
 
 func (s *service) bootstrap() error {
@@ -1275,24 +1383,60 @@ func (s *service) bootstrap() error {
 	trace.GetService(s.cfg.UUID).EnableFlush()
 
 	if s.cfg.AutomaticUpgrade {
-		return s.stopper.RunTask(func(ctx context.Context) {
+		s.bootstrapUpgradeResult = make(chan error, 1)
+		s.bootstrapUpgradeStartupReady = make(chan struct{})
+		started := make(chan struct{})
+		if err := s.stopper.RunTask(func(taskCtx context.Context) {
+			ctx, cancel := context.WithTimeoutCause(taskCtx, time.Minute*120, moerr.CauseBootstrap2)
+			s.bootstrapUpgradeContext = ctx
+			close(started)
+			defer cancel()
+
 			s.bootstrapMu.RLock()
 			defer s.bootstrapMu.RUnlock()
+			var err error
 			if s.bootstrapService == nil {
-				return
+				err = moerr.NewInternalErrorNoCtx("bootstrap service closed during automatic upgrade")
+			} else {
+				err = s.bootstrapService.BootstrapUpgrade(ctx)
 			}
-			ctx, cancel := context.WithTimeoutCause(ctx, time.Minute*120, moerr.CauseBootstrap2)
-			defer cancel()
-			if err := s.bootstrapService.BootstrapUpgrade(ctx); err != nil {
-				if err != context.Canceled {
-					err = moerr.AttachCause(ctx, err)
-					runtime.DefaultRuntime().Logger().Error("bootstrap system automatic upgrade failed by: ", zap.Error(err))
-					//panic(err)
+			if err == nil {
+				select {
+				case <-s.bootstrapUpgradeStartupReady:
+				case <-ctx.Done():
+					err = ctx.Err()
 				}
 			}
-		})
+			if err != nil {
+				err = moerr.AttachCause(ctx, err)
+				if !errors.Is(err, context.Canceled) {
+					runtime.DefaultRuntime().Logger().Error(
+						"bootstrap system automatic upgrade failed by: ", zap.Error(err))
+				}
+			}
+			// Serialize terminal-result publication with admission acceptance so
+			// startup cannot commit a success after an already-completed failure.
+			s.lockViewMetadataAdmission()
+			s.bootstrapUpgradeResult <- err
+			s.viewMetadataAdmissionMu.Unlock()
+		}); err != nil {
+			return err
+		}
+		// Publish the owner context before admission starts using it. The task
+		// signals before taking bootstrapMu because bootstrap currently owns the
+		// write lock until this method returns.
+		<-started
 	}
 	return nil
+}
+
+func (s *service) completeBootstrapUpgradeStartupWait() {
+	if s.bootstrapUpgradeStartupReady == nil {
+		return
+	}
+	s.bootstrapUpgradeReadyOnce.Do(func() {
+		close(s.bootstrapUpgradeStartupReady)
+	})
 }
 
 // handleBootstrapErr preserves the bootstrap context cause and returns the
@@ -1302,10 +1446,31 @@ func handleBootstrapErr(ctx context.Context, err error) error {
 	return moerr.AttachCause(ctx, err)
 }
 
+func resolveTxnTraceDataPath(rootDir, serviceID string) (string, error) {
+	if err := validateCNServiceUUID(serviceID); err != nil {
+		return "", err
+	}
+	if rootDir == "" {
+		return "", nil
+	}
+	return filepath.Join(rootDir, txnTraceDirectoryKey(serviceID)), nil
+}
+
+func txnTraceDirectoryKey(serviceID string) string {
+	// A fixed-length lowercase hash keeps the directory component below common
+	// filesystem limits while remaining stable for the same CN service ID.
+	digest := sha256.Sum256([]byte(serviceID))
+	return txnTraceDirectoryKeyPrefix + hex.EncodeToString(digest[:])
+}
+
 func (s *service) initTxnTraceService() {
+	traceDataPath, err := resolveTxnTraceDataPath(s.options.traceDataPath, s.cfg.UUID)
+	if err != nil {
+		panic(err)
+	}
 	rt := runtime.ServiceRuntime(s.cfg.UUID)
 	ts, err := trace.NewService(
-		s.options.traceDataPath,
+		traceDataPath,
 		s.cfg.UUID,
 		s._txnClient,
 		rt.Clock(),

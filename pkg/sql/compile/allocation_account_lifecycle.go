@@ -304,7 +304,7 @@ func (c *Compile) ensureAllocationAccountLifecycle(
 		return err
 	}
 	c.allocationAccountOwners = owners
-	if !hasAllocationAccountActivator(owners) {
+	if !hasAllocationAccountActivator(owners) && len(c.materializedSources) == 0 {
 		c.allocationAccountOwners = nil
 		if c.allocationControllerProvider != nil {
 			c.allocationAccountRegistry = nil

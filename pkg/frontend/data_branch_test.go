@@ -17,6 +17,7 @@ package frontend
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"net/url"
@@ -24,6 +25,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/golang/mock/gomock"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -35,7 +38,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -43,6 +48,37 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDataBranchDeletePrivateOwnerForcesPessimisticRC(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	t.Cleanup(ses.Close)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().TxnOptions().Return(txn.TxnOptions{}).Times(4)
+	ses.proc.Base.TxnOperator = txnOp
+
+	beginErr := errors.New("begin failed")
+	backExec := &failingBeginBackgroundExec{err: beginErr}
+	oldNewBackgroundExec := NewBackgroundExec
+	t.Cleanup(func() { NewBackgroundExec = oldNewBackgroundExec })
+	var forced []bool
+	NewBackgroundExec = func(_ context.Context, _ FeSession, opts ...*BackgroundExecOption) BackgroundExec {
+		isForced := false
+		for _, opt := range opts {
+			isForced = isForced || opt != nil && opt.forcePessimisticRC
+		}
+		forced = append(forced, isForced)
+		return backExec
+	}
+	execCtx := &ExecCtx{reqCtx: context.Background()}
+
+	err := dataBranchDeleteTable(execCtx, ses, &tree.DataBranchDeleteTable{})
+	require.ErrorIs(t, err, beginErr)
+	err = dataBranchDeleteDatabase(execCtx, ses, &tree.DataBranchDeleteDatabase{})
+	require.ErrorIs(t, err, beginErr)
+	require.Equal(t, []bool{true, true}, forced)
+	require.Equal(t, 2, backExec.closeCalls)
+}
 
 func TestDataBranchColumnClassification(t *testing.T) {
 	require.True(t, isDataBranchUserVisibleColumn(&plan.ColDef{Name: "tenant"}))
@@ -137,6 +173,28 @@ func TestValidateDataBranchCreateTxn(t *testing.T) {
 	err := validateDataBranchCreateTxn(false)
 	require.ErrorContains(t, err,
 		"CREATE DATA BRANCH is not supported with optimistic transactions")
+}
+
+func TestInstallDataBranchCloneContextRestoresRequestContext(t *testing.T) {
+	type requestKey struct{}
+	baseCtx := context.WithValue(context.Background(), requestKey{}, "request")
+	execCtx := &ExecCtx{reqCtx: baseCtx}
+
+	restore := installDataBranchCloneContext(
+		execCtx, tree.NormalCloneLevelDatabase, catalog.SystemDBTypeDataBranch,
+	)
+	require.Equal(t, tree.NormalCloneLevelDatabase,
+		execCtx.reqCtx.Value(tree.CloneLevelCtxKey{}))
+	require.Equal(t, true, execCtx.reqCtx.Value(dataBranchCloneLockCtxKey{}))
+	require.Equal(t, catalog.SystemDBTypeDataBranch,
+		execCtx.reqCtx.Value(defines.DatTypKey{}))
+	require.Equal(t, "request", execCtx.reqCtx.Value(requestKey{}))
+
+	restore()
+	require.Equal(t, baseCtx, execCtx.reqCtx)
+	require.Nil(t, execCtx.reqCtx.Value(tree.CloneLevelCtxKey{}))
+	require.Nil(t, execCtx.reqCtx.Value(dataBranchCloneLockCtxKey{}))
+	require.Nil(t, execCtx.reqCtx.Value(defines.DatTypKey{}))
 }
 
 func TestBranchQuotaUsageSQLUsesTargetOwnerAndExcludesRootAlterLineage(t *testing.T) {

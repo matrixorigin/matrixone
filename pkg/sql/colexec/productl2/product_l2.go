@@ -16,7 +16,6 @@ package productl2
 
 import (
 	"bytes"
-	"runtime"
 	"strings"
 	"sync"
 
@@ -365,7 +364,9 @@ func probeRun[T types.RealNumbers](ctr *container, ap *Productl2, proc *process.
 	centroidVec := ctr.bat.Vecs[centroidColPos]
 	dim := int(centroidVec.GetType().Width)
 
-	ncpu := runtime.NumCPU()
+	// Keep centroid assignment within the CN's effective scheduler
+	// parallelism. NumCPU reports the host count and ignores container quotas.
+	ncpu := int(vectorindex.GetConcurrency(0))
 	if probeCount < ncpu {
 		ncpu = probeCount
 	}

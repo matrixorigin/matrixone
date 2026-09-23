@@ -39,6 +39,7 @@ func (*childProcessSession) GetSqlModeNoAutoValueOnZero() (bool, bool)  { return
 func TestChildProcessesInheritSession(t *testing.T) {
 	parent := NewTopProcess(context.Background(), mpool.MustNewZero(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	parent.Session = &childProcessSession{}
+	parent.WarningSink = &struct{ generation int }{1}
 
 	child := parent.NewNoContextChildProc(0)
 	channelChild := parent.NewNoContextChildProcWithChannel(1, []int32{1}, []int32{0})
@@ -47,6 +48,37 @@ func TestChildProcessesInheritSession(t *testing.T) {
 	require.Same(t, parent.Session, child.Session)
 	require.Same(t, parent.Session, channelChild.Session)
 	require.Same(t, parent.Session, contextChild.Session)
+	require.Same(t, parent.WarningSink, child.GetWarningSink())
+	require.Same(t, parent.WarningSink, channelChild.GetWarningSink())
+	require.Same(t, parent.WarningSink, contextChild.GetWarningSink())
+}
+
+func TestGroupConcatSourceRowProvenanceInheritedByChildren(t *testing.T) {
+	parent := NewTopProcess(context.Background(), mpool.MustNewZero(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	defer parent.Free()
+
+	parent.SetGroupConcatSourceRowProvenanceTrusted(false)
+	child := parent.NewNoContextChildProc(0)
+	require.False(t, parent.GroupConcatSourceRowProvenanceTrusted())
+	require.False(t, child.GroupConcatSourceRowProvenanceTrusted())
+
+	parent.SetGroupConcatSourceRowProvenanceTrusted(true)
+	require.True(t, child.GroupConcatSourceRowProvenanceTrusted())
+}
+
+func TestGroupConcatSourceRowProvenanceIndependentProcessesAreUntrusted(t *testing.T) {
+	producerA := NewTopProcess(context.Background(), mpool.MustNewZero(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	producerB := NewTopProcess(context.Background(), mpool.MustNewZero(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	defer producerA.Free()
+	defer producerB.Free()
+
+	producerA.SetGroupConcatSourceRowProvenanceTrusted(false)
+	producerB.SetGroupConcatSourceRowProvenanceTrusted(false)
+	require.False(t, producerA.GroupConcatSourceRowProvenanceTrusted())
+	require.False(t, producerB.GroupConcatSourceRowProvenanceTrusted())
+	require.Equal(t, uint64(0), producerA.NextGroupConcatInputRowBase(7, 1))
+	require.Equal(t, uint64(0), producerB.NextGroupConcatInputRowBase(7, 1),
+		"independent CN processes start their local row namespaces at the same ordinal")
 }
 
 func TestBuildPipelineContext(t *testing.T) {
@@ -181,6 +213,39 @@ func TestStatementLastInsertIDSemantics(t *testing.T) {
 	require.Equal(t, uint64(8), legacyProc.GetLastInsertID())
 }
 
+func TestFoundRows(t *testing.T) {
+	var nilProc *Process
+	nilProc.BeginFoundRowsStatement(true)
+	nilProc.AddResultRows(1)
+	nilProc.SetFoundRows(1)
+	assert.Zero(t, nilProc.GetFoundRows())
+	assert.Zero(t, nilProc.GetResultRows())
+	assert.False(t, nilProc.FoundRowsRecorded())
+	assert.False(t, nilProc.IsSqlCalcFoundRows())
+
+	proc := &Process{Base: &BaseProcess{}}
+	proc.SetFoundRows(7)
+	proc.BeginFoundRowsStatement(true)
+	assert.Equal(t, uint64(7), proc.GetFoundRows())
+	assert.True(t, proc.IsSqlCalcFoundRows())
+	assert.False(t, proc.FoundRowsRecorded())
+	proc.AddResultRows(1)
+	proc.AddResultRows(2)
+	assert.Equal(t, uint64(3), proc.GetResultRows())
+
+	proc.SetFoundRows(3)
+	assert.Equal(t, uint64(3), proc.GetFoundRows())
+	assert.True(t, proc.FoundRowsRecorded())
+
+	// Statement setup preserves the previous value while clearing only the
+	// statement-local publication flags.
+	proc.BeginFoundRowsStatement(false)
+	assert.Equal(t, uint64(3), proc.GetFoundRows())
+	assert.Zero(t, proc.GetResultRows())
+	assert.False(t, proc.IsSqlCalcFoundRows())
+	assert.False(t, proc.FoundRowsRecorded())
+}
+
 func TestGetSpillFileService(t *testing.T) {
 	canceledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -281,6 +346,27 @@ func TestOwnedPrepareParamsLifecycle(t *testing.T) {
 	require.False(t, proc.Base.prepareParamsOwned)
 	require.Equal(t, 1, borrowed.Length(), "Process must not release borrowed params")
 	borrowed.Free(proc.Mp())
+}
+
+func TestSetPrepareParamsWithReusableMetaReusesPackedStorage(t *testing.T) {
+	proc := &Process{Base: &BaseProcess{mp: mpool.MustNewZero()}}
+	params := vector.NewVec(types.T_text.ToType())
+	require.NoError(t, vector.AppendBytes(params, []byte("42"), false, proc.Mp()))
+	defer params.Free(proc.Mp())
+
+	metadata := proc.SetPrepareParamsWithReusableTypedMeta(
+		params, nil, []vector.PrepareParamKind{vector.PrepareParamInteger},
+		[]types.T{types.T_int64}, nil, []bool{true})
+	require.Equal(t, vector.PrepareParamInteger, proc.GetPrepareParamKind(0))
+	require.Equal(t, types.T_int64, proc.GetPrepareParamType(0))
+	require.True(t, proc.GetPrepareParamIsBinaryString(0))
+	first := &metadata[0]
+	metadata = proc.SetPrepareParamsWithReusableMeta(
+		params, nil, []vector.PrepareParamKind{vector.PrepareParamDecimal}, metadata)
+	require.Same(t, first, &metadata[0])
+	require.Equal(t, vector.PrepareParamDecimal, proc.GetPrepareParamKind(0))
+	require.Equal(t, types.T_any, proc.GetPrepareParamType(0))
+	require.False(t, proc.GetPrepareParamIsBinaryString(0))
 }
 
 func TestDetachAndRestorePrepareParams(t *testing.T) {

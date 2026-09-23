@@ -10,6 +10,8 @@ REPORT_DIR="${MO_MONGODB_REPORT_DIR:-${ROOT_DIR}/test/mongodb/reports/ci_$(date 
 TMP_DIR=""
 MO_PID=""
 PORT_LEASE_PID=""
+MONGODB_KEYFILE_DIR=""
+MONGODB_KEYFILE=""
 
 readonly PORT_BLOCK_WIDTH=80
 # AddressManager permits its base port plus 20 fallback slots when an address
@@ -23,6 +25,16 @@ readonly STATUS_PORT_OFFSET=73
 log() { printf '[mongodb-ci] %s\n' "$*"; }
 die() { printf '[mongodb-ci] ERROR: %s\n' "$*" >&2; exit 1; }
 require() { command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"; }
+
+e2e_tmp_root() {
+  if [[ -n "${MO_MONGODB_TMPDIR:-}" ]]; then
+    printf '%s\n' "$MO_MONGODB_TMPDIR"
+  elif [[ "$(uname -s)" == Darwin ]]; then
+    printf '%s\n' /private/tmp
+  else
+    printf '%s\n' /tmp
+  fi
+}
 
 sanitize() {
   local source="$1" target="$2"
@@ -40,7 +52,7 @@ collect() {
   sanitize "$TMP_DIR/mo-service.log" "$REPORT_DIR/mo-service.log"
   if command -v docker >/dev/null 2>&1; then
     MONGODB_PORT="${MONGODB_PORT:-27017}" MONGODB_ROOT_USER="${MONGODB_ROOT_USER:-x}" \
-      MONGODB_ROOT_PASSWORD="${MONGODB_ROOT_PASSWORD:-x}" MONGODB_KEYFILE="${MONGODB_KEYFILE:-/dev/null}" \
+      MONGODB_ROOT_PASSWORD="${MONGODB_ROOT_PASSWORD:-x}" MONGODB_KEYFILE_DIR="${MONGODB_KEYFILE_DIR:-/tmp}" \
       docker compose -p "${COMPOSE_PROJECT_NAME:-mo-mongodb-unused}" -f "$ROOT_DIR/etc/launch-mongodb-local/compose.yaml" logs --no-color \
       >"$TMP_DIR/mongodb.log" 2>&1 || true
     sanitize "$TMP_DIR/mongodb.log" "$REPORT_DIR/mongodb.log"
@@ -68,8 +80,17 @@ cleanup() {
   collect
   if [[ -n "$TMP_DIR" ]]; then
     MONGODB_PORT="${MONGODB_PORT:-27017}" MONGODB_ROOT_USER="${MONGODB_ROOT_USER:-x}" \
-      MONGODB_ROOT_PASSWORD="${MONGODB_ROOT_PASSWORD:-x}" MONGODB_KEYFILE="${MONGODB_KEYFILE:-/dev/null}" \
+      MONGODB_ROOT_PASSWORD="${MONGODB_ROOT_PASSWORD:-x}" MONGODB_KEYFILE_DIR="${MONGODB_KEYFILE_DIR:-/tmp}" \
       docker compose -p "${COMPOSE_PROJECT_NAME:-mo-mongodb-unused}" -f "$ROOT_DIR/etc/launch-mongodb-local/compose.yaml" down --volumes --remove-orphans >/dev/null 2>&1 || true
+    # Docker must receive this bind-mounted file through a shared directory.
+    # It is created by the exact mktemp template below and contains only the
+    # generated keyfile.
+    if [[ -n "$MONGODB_KEYFILE" && -f "$MONGODB_KEYFILE" ]]; then
+      unlink "$MONGODB_KEYFILE" || true
+    fi
+    if [[ -n "$MONGODB_KEYFILE_DIR" && -d "$MONGODB_KEYFILE_DIR" && "$(basename "$MONGODB_KEYFILE_DIR")" == .mo-mongodb-key-source.* ]]; then
+      rmdir "$MONGODB_KEYFILE_DIR" || log "refusing to remove non-empty MongoDB keyfile directory: $MONGODB_KEYFILE_DIR"
+    fi
     # TMP_DIR is created by the exact mktemp template below. Refuse a broad
     # deletion if that invariant is ever changed or corrupted.
     if [[ -d "$TMP_DIR" && "$(basename "$TMP_DIR")" == mo-mongodb-e2e.* ]]; then
@@ -333,6 +354,32 @@ run_port_plan() {
   fi
 }
 
+# Exercise lease ownership without depending on the host's current port usage.
+# This internal test profile deliberately requires an isolated/explicit lease
+# directory and blocks on stdin until released; production E2E allocation still
+# goes through run_port_plan/run_e2e and retains its socket availability checks.
+run_port_lease_test() {
+  require python3
+  local base="${MO_MONGODB_LOG_PORT_BASE:-}"
+  local lease_dir="${MO_MONGODB_PORT_LEASE_DIR:-}"
+  local ready_file="${MO_MONGODB_PORT_PLAN_READY_FILE:-}"
+  local release_token
+
+  [[ -n "$base" ]] || die "port-lease-test requires MO_MONGODB_LOG_PORT_BASE"
+  [[ -n "$lease_dir" ]] || die "port-lease-test requires MO_MONGODB_PORT_LEASE_DIR"
+  [[ -n "$ready_file" ]] || die "port-lease-test requires MO_MONGODB_PORT_PLAN_READY_FILE"
+  validate_port_block_base "MO_MONGODB_LOG_PORT_BASE" "$base"
+
+  trap release_port_block_lease EXIT
+  acquire_port_block_lease "$base" || \
+    die "MO_MONGODB_LOG_PORT_BASE is already leased by another MongoDB E2E run"
+  printf 'ready\n' >"$ready_file"
+
+  if IFS= read -r release_token; then
+    [[ "$release_token" == "release" ]] || die "port-lease-test received an invalid release token"
+  fi
+}
+
 print_port_plan() {
   printf 'LOG_PORT_BASE=%s\n' "$LOG_PORT_BASE"
   printf 'LOG_RAFT_PORT=%s\n' "$LOG_RAFT_PORT"
@@ -401,7 +448,11 @@ generate_mo_config() {
 run_e2e() {
   require docker; require go; require python3; require openssl
   mkdir -p "$REPORT_DIR"
-  TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/mo-mongodb-e2e.XXXXXX")"
+  # Keep test-owned build and service artifacts out of the worktree.
+  local tmp_root
+  tmp_root="$(e2e_tmp_root)"
+  [[ -d "$tmp_root" && -w "$tmp_root" ]] || die "MongoDB E2E temporary root is not writable: $tmp_root"
+  TMP_DIR="$(mktemp -d "${tmp_root%/}/mo-mongodb-e2e.XXXXXX")"
   trap cleanup EXIT
   export COMPOSE_PROJECT_NAME="mo-mongodb-$(basename "$TMP_DIR" | tr '[:upper:].' '[:lower:]-')"
   # Docker owns its published listener. MatrixOne treats a frontend port of 0
@@ -413,11 +464,20 @@ run_e2e() {
   export MONGODB_ROOT_PASSWORD="$(openssl rand -hex 24)"
   export MONGODB_READER_PASSWORD="$(openssl rand -hex 24)"
   export MONGODB_READER_NEXT_PASSWORD="$(openssl rand -hex 24)"
-  export MONGODB_KEYFILE="$TMP_DIR/mongodb-keyfile"
+  # Docker Desktop can expose host-only temporary roots as empty bind mounts.
+  # Use the workspace parent, which is shared with Docker, for this one
+  # container-only keyfile. Host-only binaries and diagnostics stay in
+  # /private/tmp and never enter the worktree.
+  export MONGODB_KEYFILE_DIR="$(mktemp -d "$ROOT_DIR/../.mo-mongodb-key-source.XXXXXX")"
+  export MONGODB_KEYFILE="$MONGODB_KEYFILE_DIR/mongodb-keyfile"
   openssl rand -base64 756 >"$MONGODB_KEYFILE"
   chmod 600 "$MONGODB_KEYFILE"
 
-  (cd "$ROOT_DIR" && make build)
+  # Keep the test binary in this invocation's disposable directory. A root
+  # worktree binary is both easy to mistake for source state and can leak into
+  # the next repair lane.
+  MO_SERVICE_BIN="$TMP_DIR/mo-service"
+  (cd "$ROOT_DIR" && make BIN_NAME="$MO_SERVICE_BIN" build-with-prebuilt-native)
   generate_mo_config
   docker compose -p "$COMPOSE_PROJECT_NAME" -f "$ROOT_DIR/etc/launch-mongodb-local/compose.yaml" up -d
   MONGODB_PORT="$(docker compose -p "$COMPOSE_PROJECT_NAME" -f "$ROOT_DIR/etc/launch-mongodb-local/compose.yaml" port mongo 27017 | sed -nE 's/.*:([0-9]+)$/\1/p' | tail -1)"
@@ -440,14 +500,15 @@ run_e2e() {
 	else
 		export LD_LIBRARY_PATH="$ROOT_DIR/cgo:$ROOT_DIR/thirdparties/install/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 	fi
-  "$ROOT_DIR/mo-service" -launch "$TMP_DIR/mo-config/launch.toml" >"$TMP_DIR/mo-service.log" 2>&1 &
+  "$MO_SERVICE_BIN" -launch "$TMP_DIR/mo-config/launch.toml" >"$TMP_DIR/mo-service.log" 2>&1 &
   MO_PID=$!
   PUBLISHED_MO_PORT="$(wait_mo_port)"
   [[ "$PUBLISHED_MO_PORT" == "$MO_PORT" ]] || die "MatrixOne published frontend port $PUBLISHED_MO_PORT, expected $MO_PORT"
   export MO_PORT
   (cd "$ROOT_DIR" && go run ./test/mongodb/mongodb_e2e_local.go \
     --dsn "root:111@tcp(127.0.0.1:$MO_PORT)/?timeout=5s&readTimeout=30s&writeTimeout=30s" \
-    --mongo-host "127.0.0.1:$MONGODB_PORT" --report-dir "$REPORT_DIR")
+    --mongo-host "127.0.0.1:$MONGODB_PORT" --report-dir "$REPORT_DIR" \
+    --mongo-root-user "$MONGODB_ROOT_USER" --mongo-root-password "$MONGODB_ROOT_PASSWORD")
 }
 
 run_unit() {
@@ -462,6 +523,7 @@ case "$PROFILE" in
   unit) run_unit ;;
   e2e-local) run_e2e ;;
   port-plan) run_port_plan ;;
+  port-lease-test) run_port_lease_test ;;
   nightly)
 	run_unit
 	run_e2e

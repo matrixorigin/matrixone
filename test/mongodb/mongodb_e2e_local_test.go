@@ -15,23 +15,31 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"crypto/md5"
 	"database/sql"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"go/parser"
 	"go/token"
+	"io"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/stretchr/testify/require"
+	"github.com/xdg-go/scram"
+	"go.mongodb.org/mongo-driver/v2/bson"
 )
 
 func TestMongoDBLocalE2ERunnerDoesNotImportKernelPackages(t *testing.T) {
@@ -49,6 +57,20 @@ func TestMongoDBLocalE2ERunnerDoesNotImportKernelPackages(t *testing.T) {
 		require.Falsef(t, strings.HasPrefix(path, "github.com/matrixorigin/matrixone/"),
 			"standalone E2E runner must not import kernel package %s", path)
 	}
+}
+
+func TestMongoDBLocalE2EKeyfileMountUsesDirectory(t *testing.T) {
+	repoRoot := mongoDBTestRepoRoot(t)
+	script, err := os.ReadFile(filepath.Join(repoRoot, "optools", "mongodb_ci.bash"))
+	require.NoError(t, err)
+	require.Contains(t, string(script), "MONGODB_KEYFILE_DIR=\"$(mktemp -d \"$ROOT_DIR/../.mo-mongodb-key-source.XXXXXX\")\"")
+	require.Contains(t, string(script), "MONGODB_KEYFILE=\"$MONGODB_KEYFILE_DIR/mongodb-keyfile\"")
+	require.Contains(t, string(script), "$(basename \"$MONGODB_KEYFILE_DIR\")\" == .mo-mongodb-key-source.*")
+
+	compose, err := os.ReadFile(filepath.Join(repoRoot, "etc", "launch-mongodb-local", "compose.yaml"))
+	require.NoError(t, err)
+	require.Contains(t, string(compose), "cp /run/key-source/mongodb-keyfile /tmp/mongodb-keyfile")
+	require.Contains(t, string(compose), "${MONGODB_KEYFILE_DIR}:/run/key-source:ro")
 }
 
 func TestMongoDBLocalE2EPortPlanUsesOneReservedBlock(t *testing.T) {
@@ -151,141 +173,315 @@ func TestMongoDBLocalE2EPortPlanValidatesOverrides(t *testing.T) {
 }
 
 func TestMongoDBLocalE2EPortPlanLeasesPortBlockAcrossProcesses(t *testing.T) {
-	ports, output, err := runMongoDBPortPlan(t, nil)
-	require.NoError(t, err, output)
-	base := strconv.Itoa(ports["LOG_PORT_BASE"])
 	temporaryDirectory := t.TempDir()
 	firstTempDirectory := filepath.Join(temporaryDirectory, "first-tmp")
 	secondTempDirectory := filepath.Join(temporaryDirectory, "second-tmp")
 	require.NoError(t, os.MkdirAll(firstTempDirectory, 0o700))
 	require.NoError(t, os.MkdirAll(secondTempDirectory, 0o700))
-	readyFile := filepath.Join(firstTempDirectory, "port-plan-ready")
-
-	repoRoot := mongoDBTestRepoRoot(t)
-	command := exec.Command("bash", filepath.Join(repoRoot, "optools", "mongodb_ci.bash"), "port-plan")
-	command.Dir = repoRoot
-	command.Env = mongoDBPortPlanEnv(map[string]string{
-		"MO_MONGODB_LOG_PORT_BASE":          base,
-		"MO_MONGODB_PORT_PLAN_HOLD_SECONDS": "2",
-		"MO_MONGODB_PORT_PLAN_READY_FILE":   readyFile,
-		"TMPDIR":                            firstTempDirectory,
-	})
-	outputFile, err := os.CreateTemp(t.TempDir(), "port-plan-output")
-	require.NoError(t, err)
-	command.Stdout = outputFile
-	command.Stderr = outputFile
-	t.Cleanup(func() { _ = outputFile.Close() })
-	require.NoError(t, command.Start())
-	finished := false
-	t.Cleanup(func() {
-		if !finished && command.Process != nil {
-			_ = command.Process.Kill()
-			_ = command.Wait()
+	// Production defaults to this host-user-wide directory, independently of
+	// TMPDIR. The lease-only owner has to pass it explicitly so it never probes
+	// host ports; the contender exercises port-plan's implicit production path.
+	leaseDirectory := filepath.Join("/tmp", fmt.Sprintf("mo-mongodb-port-leases-%d", os.Geteuid()))
+	const firstBase = 57000
+	const lastBase = 65456
+	const baseStep = 80
+	baseCount := (lastBase-firstBase)/baseStep + 1
+	startOffset := os.Getpid() % baseCount
+	var owner *mongoDBPortLeaseTestProcess
+	for attempt := range baseCount {
+		base := firstBase + ((startOffset+attempt)%baseCount)*baseStep
+		readyFile := filepath.Join(firstTempDirectory, fmt.Sprintf("port-lease-ready-%d", base))
+		candidate := startMongoDBPortLeaseTestProcess(
+			t,
+			strconv.Itoa(base),
+			leaseDirectory,
+			firstTempDirectory,
+			readyFile,
+		)
+		if candidate.waitForReady(t) {
+			owner = candidate
+			break
 		}
-	})
+		output := candidate.output(t)
+		require.Error(t, candidate.waitErr, "lease owner exited without acquiring or reporting a conflict: %s", output)
+		require.Containsf(t, output, "MO_MONGODB_LOG_PORT_BASE is already leased by another MongoDB E2E run",
+			"unexpected failure reserving candidate base %d", base)
+		candidate.mayHaveDescendants = false
+	}
+	require.NotNil(t, owner, "could not reserve a free test lease base in %d attempts", baseCount)
 
-	waitForMongoDBPortPlanReady(t, readyFile)
-
-	_, output, err = runMongoDBPortPlan(t, map[string]string{
-		"MO_MONGODB_LOG_PORT_BASE": base,
+	_, output, err := runMongoDBPortPlan(t, map[string]string{
+		"MO_MONGODB_LOG_PORT_BASE": owner.base,
 		"TMPDIR":                   secondTempDirectory,
 	})
 	require.Error(t, err)
-	require.Contains(t, output, "MO_MONGODB_LOG_PORT_BASE is already leased")
-
-	waitErr := command.Wait()
-	finished = true
-	require.NoError(t, outputFile.Close())
-	commandOutput, err := os.ReadFile(outputFile.Name())
-	require.NoError(t, err)
-	require.NoError(t, waitErr, string(commandOutput))
+	require.Contains(t, output, "MO_MONGODB_LOG_PORT_BASE is already leased by another MongoDB E2E run")
+	owner.releaseAndWait(t)
 }
 
 func TestMongoDBLocalE2EPortPlanReleasesLeaseAfterParentDeath(t *testing.T) {
-	ports, output, err := runMongoDBPortPlan(t, nil)
-	require.NoError(t, err, output)
-	base := strconv.Itoa(ports["LOG_PORT_BASE"])
+	const base = "62000"
 	temporaryDirectory := t.TempDir()
+	tempDirectory := filepath.Join(temporaryDirectory, "tmp")
+	require.NoError(t, os.MkdirAll(tempDirectory, 0o700))
 	readyFile := filepath.Join(temporaryDirectory, "port-plan-ready")
 	leaseDirectory := filepath.Join(temporaryDirectory, "leases")
-	outputFile := filepath.Join(temporaryDirectory, "port-plan-output")
+	leaseFile := filepath.Join(leaseDirectory, base+".lock")
+	owner := startMongoDBPortLeaseTestProcess(t, base, leaseDirectory, tempDirectory, readyFile)
+	require.True(t, owner.waitForReady(t), "lease owner did not become ready: %s", owner.output(t))
+	observer := startMongoDBLeaseLockObserver(t, leaseFile)
+	observer.readPhase(t, "blocked")
 
-	repoRoot := mongoDBTestRepoRoot(t)
-	command := exec.Command("bash", filepath.Join(repoRoot, "optools", "mongodb_ci.bash"), "port-plan")
-	command.Dir = repoRoot
-	command.Env = mongoDBPortPlanEnv(map[string]string{
-		"MO_MONGODB_LOG_PORT_BASE":          base,
-		"MO_MONGODB_PORT_LEASE_DIR":         leaseDirectory,
-		"MO_MONGODB_PORT_PLAN_HOLD_SECONDS": "60",
-		"MO_MONGODB_PORT_PLAN_READY_FILE":   readyFile,
-	})
-	commandOutput, err := os.Create(outputFile)
-	require.NoError(t, err)
-	command.Stdout = commandOutput
-	command.Stderr = commandOutput
-	finished := false
-	t.Cleanup(func() {
-		if !finished && command.Process != nil {
-			_ = command.Process.Kill()
-			_ = command.Wait()
-		}
-		_ = commandOutput.Close()
-		killMongoDBLeaseHolders(t, filepath.Join(leaseDirectory, base+".lock"))
-	})
-	require.NoError(t, command.Start())
+	owner.killParent(t)
 
-	waitForMongoDBPortPlanReady(t, readyFile)
-	require.NoError(t, command.Process.Kill())
-	require.Error(t, command.Wait())
-	finished = true
-
-	deadline := time.Now().Add(3 * time.Second)
-	lastOutput := ""
-	for time.Now().Before(deadline) {
-		_, output, err = runMongoDBPortPlan(t, map[string]string{
-			"MO_MONGODB_LOG_PORT_BASE":  base,
-			"MO_MONGODB_PORT_LEASE_DIR": leaseDirectory,
-		})
-		if err == nil {
-			return
-		}
-		lastOutput = output
-		time.Sleep(20 * time.Millisecond)
-	}
-	t.Fatalf("port lease remained after parent death: %s", lastOutput)
+	observer.readPhase(t, "acquired")
+	require.NoError(t, observer.wait(), "lease observer failed: %s", observer.stderr())
+	owner.mayHaveDescendants = false
 }
 
-func waitForMongoDBPortPlanReady(t *testing.T, readyFile string) {
+const mongoDBPortLeaseLockObserver = `import errno
+import fcntl
+import sys
+
+lease_path = sys.argv[1]
+with open(lease_path, "r+") as lease:
+    try:
+        fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as err:
+        if err.errno not in (errno.EACCES, errno.EAGAIN):
+            raise
+        print("blocked", flush=True)
+    else:
+        print("unexpectedly-acquired", flush=True)
+        raise SystemExit(1)
+
+    fcntl.flock(lease, fcntl.LOCK_EX)
+    print("acquired", flush=True)
+`
+
+type mongoDBLeaseLockObserver struct {
+	command    *exec.Cmd
+	stdout     *bufio.Reader
+	stderrPath string
+	cancel     context.CancelFunc
+	waited     bool
+	waitErr    error
+}
+
+type mongoDBPortLeaseTestProcess struct {
+	command            *exec.Cmd
+	input              io.WriteCloser
+	readyFile          string
+	outputPath         string
+	waitDone           chan error
+	waited             bool
+	waitErr            error
+	inputClosed        bool
+	ownsLease          bool
+	mayHaveDescendants bool
+	base               string
+}
+
+func startMongoDBPortLeaseTestProcess(
+	t *testing.T,
+	base, leaseDirectory, tempDirectory, readyFile string,
+) *mongoDBPortLeaseTestProcess {
+	t.Helper()
+	repoRoot := mongoDBTestRepoRoot(t)
+	command := exec.Command("bash", filepath.Join(repoRoot, "optools", "mongodb_ci.bash"), "port-lease-test")
+	command.Dir = repoRoot
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	command.Env = mongoDBPortPlanEnv(map[string]string{
+		"MO_MONGODB_LOG_PORT_BASE":        base,
+		"MO_MONGODB_PORT_LEASE_DIR":       leaseDirectory,
+		"MO_MONGODB_PORT_PLAN_READY_FILE": readyFile,
+		"TMPDIR":                          tempDirectory,
+	})
+	outputFile, err := os.CreateTemp(t.TempDir(), "port-lease-test-output")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = outputFile.Close() })
+	input, err := command.StdinPipe()
+	require.NoError(t, err)
+	command.Stdout = outputFile
+	command.Stderr = outputFile
+	if err := command.Start(); err != nil {
+		_ = input.Close()
+		_ = outputFile.Close()
+		require.NoError(t, err)
+	}
+	process := &mongoDBPortLeaseTestProcess{
+		command:            command,
+		input:              input,
+		readyFile:          readyFile,
+		outputPath:         outputFile.Name(),
+		waitDone:           make(chan error, 1),
+		mayHaveDescendants: true,
+		base:               base,
+	}
+	go func() { process.waitDone <- command.Wait() }()
+	t.Cleanup(process.cleanup)
+	require.NoError(t, outputFile.Close())
+	return process
+}
+
+func (p *mongoDBPortLeaseTestProcess) waitForReady(t *testing.T) bool {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
-		contents, err := os.ReadFile(readyFile)
-		if err == nil && string(contents) == "ready\n" {
-			return
+		contents, err := os.ReadFile(p.readyFile)
+		if err == nil {
+			if string(contents) == "ready\n" {
+				p.ownsLease = true
+				return true
+			}
+			require.Emptyf(t, contents, "lease owner wrote unexpected readiness contents: %q", contents)
+		} else {
+			require.True(t, os.IsNotExist(err), "could not read lease readiness file: %v", err)
+		}
+		if p.observeExit() {
+			p.closeInput()
+			return false
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	contents, err := os.ReadFile(readyFile)
-	require.NoError(t, err, "port-plan did not become ready")
-	require.Equal(t, "ready\n", string(contents))
+	t.Fatalf("lease owner did not become ready before deadline: %s", p.output(t))
+	return false
 }
 
-func killMongoDBLeaseHolders(t *testing.T, leaseFile string) {
+func (p *mongoDBPortLeaseTestProcess) observeExit() bool {
+	if p.waited {
+		return true
+	}
+	select {
+	case p.waitErr = <-p.waitDone:
+		p.waited = true
+		return true
+	default:
+		return false
+	}
+}
+
+func (p *mongoDBPortLeaseTestProcess) waitForExit(timeout time.Duration) bool {
+	if p.observeExit() {
+		return true
+	}
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case p.waitErr = <-p.waitDone:
+		p.waited = true
+		return true
+	case <-timer.C:
+		return false
+	}
+}
+
+func (p *mongoDBPortLeaseTestProcess) output(t *testing.T) string {
 	t.Helper()
-	output, err := exec.Command("pgrep", "-f", leaseFile).Output()
+	contents, err := os.ReadFile(p.outputPath)
+	require.NoError(t, err)
+	return string(contents)
+}
+
+func (p *mongoDBPortLeaseTestProcess) closeInput() {
+	if !p.inputClosed {
+		_ = p.input.Close()
+		p.inputClosed = true
+	}
+}
+
+func (p *mongoDBPortLeaseTestProcess) releaseAndWait(t *testing.T) {
+	t.Helper()
+	require.True(t, p.ownsLease, "cannot release a lease not owned by this test process")
+	_, err := io.WriteString(p.input, "release\n")
+	require.NoError(t, err)
+	p.closeInput()
+	require.True(t, p.waitForExit(3*time.Second), "lease owner did not exit after release: %s", p.output(t))
+	require.NoError(t, p.waitErr, p.output(t))
+	p.ownsLease = false
+	p.mayHaveDescendants = false
+}
+
+func (p *mongoDBPortLeaseTestProcess) killParent(t *testing.T) {
+	t.Helper()
+	p.ownsLease = false
+	require.NoError(t, p.command.Process.Kill())
+	require.True(t, p.waitForExit(3*time.Second), "lease owner parent did not die")
+	require.Error(t, p.waitErr, "lease owner parent unexpectedly exited successfully")
+	p.closeInput()
+}
+
+func (p *mongoDBPortLeaseTestProcess) cleanup() {
+	if p.ownsLease && !p.waited {
+		_, _ = io.WriteString(p.input, "release\n")
+		p.closeInput()
+	}
+	if p.mayHaveDescendants {
+		_ = syscall.Kill(-p.command.Process.Pid, syscall.SIGKILL)
+	}
+	if !p.waited {
+		p.closeInput()
+		_ = p.waitForExit(3 * time.Second)
+	}
+}
+
+func startMongoDBLeaseLockObserver(t *testing.T, leaseFile string) *mongoDBLeaseLockObserver {
+	t.Helper()
+	stderrFile, err := os.CreateTemp(t.TempDir(), "lease-observer-stderr")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = stderrFile.Close() })
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	t.Cleanup(cancel)
+	command := exec.CommandContext(ctx, "python3", "-c", mongoDBPortLeaseLockObserver, leaseFile)
+	stdout, err := command.StdoutPipe()
+	require.NoError(t, err)
+	command.Stderr = stderrFile
+	require.NoError(t, command.Start())
+
+	observer := &mongoDBLeaseLockObserver{
+		command:    command,
+		stdout:     bufio.NewReader(stdout),
+		stderrPath: stderrFile.Name(),
+		cancel:     cancel,
+	}
+	t.Cleanup(func() {
+		if !observer.waited {
+			observer.cancel()
+			if observer.command.Process != nil {
+				_ = observer.command.Process.Kill()
+			}
+			_ = observer.wait()
+		}
+	})
+	return observer
+}
+
+func (o *mongoDBLeaseLockObserver) readPhase(t *testing.T, want string) {
+	t.Helper()
+	line, err := o.stdout.ReadString('\n')
 	if err != nil {
-		return
+		waitErr := o.wait()
+		t.Fatalf("lease observer did not report %q phase: read error %v, wait error %v, stderr: %s",
+			want, err, waitErr, o.stderr())
 	}
-	for _, line := range strings.Fields(string(output)) {
-		pid, err := strconv.Atoi(line)
-		if err != nil {
-			continue
-		}
-		process, err := os.FindProcess(pid)
-		if err == nil {
-			_ = process.Kill()
-		}
+	require.Equal(t, want+"\n", line)
+}
+
+func (o *mongoDBLeaseLockObserver) wait() error {
+	if !o.waited {
+		o.waitErr = o.command.Wait()
+		o.waited = true
+		o.cancel()
 	}
+	return o.waitErr
+}
+
+func (o *mongoDBLeaseLockObserver) stderr() string {
+	data, err := os.ReadFile(o.stderrPath)
+	if err != nil {
+		return fmt.Sprintf("could not read observer stderr: %v", err)
+	}
+	return string(data)
 }
 
 func runMongoDBPortPlan(t *testing.T, overrides map[string]string) (map[string]int, string, error) {
@@ -341,6 +537,17 @@ func mongoDBPortPlanEnv(overrides map[string]string) []string {
 	return environment
 }
 
+type testTransferMonitor struct {
+	reset             func(context.Context) error
+	documentsReturned func(context.Context) (int64, error)
+}
+
+func (m testTransferMonitor) Reset(ctx context.Context) error { return m.reset(ctx) }
+
+func (m testTransferMonitor) DocumentsReturned(ctx context.Context) (int64, error) {
+	return m.documentsReturned(ctx)
+}
+
 func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	repoRoot := mongoDBTestRepoRoot(t)
 	previous, err := os.Getwd()
@@ -352,7 +559,7 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	require.NoError(t, err)
 	db, mock := newMongoDBE2ESQLMock(t)
 
-	for range 9 {
+	for range 10 {
 		mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(0, 1))
 	}
 	mock.ExpectQuery("show mongodb connections").WillReturnRows(sqlmock.NewRows([]string{
@@ -363,11 +570,15 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 		AddRow("mongodb_ci", "seeds", "SCRAM-SHA-256", "disabled", "primary", "majority", 3, 0))
 	mock.ExpectQuery("show create table").WillReturnRows(sqlmock.NewRows([]string{"table", "ddl"}).AddRow(
 		"events", "CREATE EXTERNAL TABLE events (id CHAR(24) MONGODB_PATH '_id') ENGINE = MONGODB WITH ('connection'='mongodb_ci')"))
+	expectMongoDBE2EScalar(mock, "STRING")
 	expectMongoDBE2EScalar(mock, "text")
 	expectMongoDBE2EScalar(mock, "2")
 	expectMongoDBE2EScalar(mock, "1")
 	expectMongoDBE2EScalar(mock, "4")
 	expectMongoDBE2EScalar(mock, "0")
+	expectMongoDBE2EScalar(mock, "5")
+	mock.ExpectQuery("truncate table mongodb_ci.events").WillReturnError(
+		errors.New("invalid input: cannot insert/update/delete from external table"))
 	expectMongoDBE2EScalar(mock, "5")
 	fixtureRows := sqlmock.NewRows([]string{"id", "device_id", "site_id", "ts", "measurement", "source_batch"})
 	for _, row := range manifest.Rows {
@@ -377,6 +588,44 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	mock.ExpectQuery("select mongo_id").WillReturnRows(fixtureRows)
 	expectMongoDBE2EScalar(mock, "3")
 	expectMongoDBE2EScalar(mock, "3")
+	prepared := mock.ExpectPrepare("select count")
+	prepared.ExpectQuery().WithArgs(int64(13)).WillReturnRows(
+		sqlmock.NewRows([]string{"count(*)"}).AddRow("3"))
+	prepared.ExpectQuery().WithArgs(int64(19)).WillReturnRows(
+		sqlmock.NewRows([]string{"count(*)"}).AddRow("2"))
+	prepared.ExpectQuery().WithArgs(int64(29)).WillReturnRows(
+		sqlmock.NewRows([]string{"count(*)"}).AddRow("1"))
+	mock.ExpectExec("prepare mongo_pruned_no_params").WillReturnResult(sqlmock.NewResult(0, 0))
+	expectMongoDBE2EScalar(mock, "4")
+	expectMongoDBE2EScalar(mock, "4")
+	mock.ExpectExec("deallocate prepare mongo_pruned_no_params").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("prepare mongo_pruned_text").WillReturnResult(sqlmock.NewResult(0, 0))
+	mock.ExpectExec("set @mongo_measurement = 13").WillReturnResult(sqlmock.NewResult(0, 0))
+	expectMongoDBE2EScalar(mock, "3")
+	mock.ExpectExec("set @mongo_measurement = 19").WillReturnResult(sqlmock.NewResult(0, 0))
+	expectMongoDBE2EScalar(mock, "2")
+	mock.ExpectExec("deallocate prepare mongo_pruned_text").WillReturnResult(sqlmock.NewResult(0, 0))
+	expectMongoDBE2EScalar(mock, "1")
+	expectMongoDBE2EScalar(mock, "1")
+	expectMongoDBE2EScalar(mock, `{"filter":{"site_id":"site-west"}}`)
+	expectMongoDBE2EScalar(mock, "device-001|4|18.5")
+	expectMongoDBE2EScalar(mock, "device-001|4|18.5")
+	expectMongoDBE2EScalar(mock, "1")
+	expectMongoDBE2EScalar(mock, "64b000000000000000000005")
+	expectMongoDBE2EScalar(mock, "5")
+	expectMongoDBE2EScalar(mock, "10")
+	expectMongoDBE2EScalar(mock, "5")
+	mock.ExpectQuery("explain select").WillReturnRows(sqlmock.NewRows([]string{"QUERY PLAN"}).
+		AddRow("MongoDB Scan: operation=aggregate query_digest=0123456789ab").
+		AddRow("Filter Cond: event_count >= 1"))
+	for range 4 {
+		mock.ExpectQuery("select count").WillReturnError(errors.New("MongoDB pipeline stage is not allowed"))
+	}
+	mock.ExpectQuery("select count").WillReturnError(errors.New("MongoDB $sort requires 1 to 32 fields"))
+	mock.ExpectQuery("select count").WillReturnError(errors.New("MongoDB $unwind requires a valid field path"))
+	mock.ExpectQuery("select count").WillReturnError(errors.New("MongoDB __mo_query must contain only a filter or pipeline field"))
+	mock.ExpectQuery("select count").WillReturnError(errors.New("MongoDB __mo_query must be strict Extended JSON"))
+	expectMongoDBE2EScalar(mock, "5")
 	mock.ExpectExec("create table mongodb_ci.events_insert_target").WillReturnResult(sqlmock.NewResult(0, 0))
 	mock.ExpectExec("insert into mongodb_ci.events_insert_target").WillReturnResult(sqlmock.NewResult(0, 1))
 	expectMongoDBE2EScalar(mock, "1")
@@ -425,15 +674,37 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 	mock.ExpectExec("alter mongodb connection mongodb_ci enable").WillReturnResult(sqlmock.NewResult(0, 1))
 	expectMongoDBE2EScalar(mock, "5")
 
+	transferSteps := 0
+	monitor := testTransferMonitor{
+		reset: func(context.Context) error {
+			transferSteps++
+			return nil
+		},
+		documentsReturned: func(context.Context) (int64, error) {
+			transferSteps++
+			if transferSteps == 2 {
+				return 5, nil
+			}
+			return 1, nil
+		},
+	}
 	result := report{}
-	require.NoError(t, run(t.Context(), db, "127.0.0.1:27017", &result))
+	require.NoError(t, runWithDSNAndTransferMonitor(t.Context(), db, "", "127.0.0.1:27017", &result, monitor))
 	require.Equal(t, []string{
 		"secret-backed-ddl",
 		"show-connections-admin-metadata-redaction",
 		"show-create-redaction-roundtrip",
 		"json-relaxed-extended-conversion",
 		"fixed-binary-padding",
+		"truncate-read-only-source-preserved",
 		"scan-projection-pushdown-null-conversion",
+		"prepared-scan-binary-and-text-reuse-recovery-metadata",
+		"explicit-filter-residual",
+		"explicit-filter-and-query-column",
+		"explicit-reducing-aggregation-pipeline",
+		"explicit-sort-and-unwind-pipeline",
+		"explicit-query-explain-redaction",
+		"explicit-query-fail-closed",
 		"insert-select-primary-key-targets",
 		"date-format-order-by",
 		"low-precision-temporal-residual",
@@ -446,6 +717,7 @@ func TestMongoDBLocalE2ERunContract(t *testing.T) {
 		"credential-generation-rotation",
 		"connection-disable-enable",
 	}, result.Cases)
+	require.Equal(t, &transferEvidence{RawScanDocuments: 5, PipelineDocuments: 1}, result.Transfer)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
@@ -465,7 +737,7 @@ func TestMongoDBLocalE2ERunPropagatesRelaxedJSONQueryFailures(t *testing.T) {
 			t.Cleanup(func() { require.NoError(t, os.Chdir(previous)) })
 
 			db, mock := newMongoDBE2ESQLMock(t)
-			for range 9 {
+			for range 10 {
 				mock.ExpectExec(".*").WillReturnResult(sqlmock.NewResult(0, 1))
 			}
 			mock.ExpectQuery("show mongodb connections").WillReturnRows(sqlmock.NewRows([]string{
@@ -474,6 +746,7 @@ func TestMongoDBLocalE2ERunPropagatesRelaxedJSONQueryFailures(t *testing.T) {
 			}).AddRow("mongodb_ci", "seeds", "SCRAM-SHA-256", "disabled", "primary", "majority", 3, 0))
 			mock.ExpectQuery("show create table").WillReturnRows(sqlmock.NewRows([]string{"table", "ddl"}).AddRow(
 				"events", "CREATE EXTERNAL TABLE events (id CHAR(24) MONGODB_PATH '_id') ENGINE = MONGODB WITH ('connection'='mongodb_ci')"))
+			expectMongoDBE2EScalar(mock, "STRING")
 			expectMongoDBE2EScalar(mock, "text")
 			if tc.failedQuery == "json_contains" {
 				expectMongoDBE2EScalar(mock, "2")
@@ -703,6 +976,10 @@ func TestMongoDBLocalE2EHelpers(t *testing.T) {
 		require.ErrorContains(t, expectScalar(t.Context(), db, "scalar-error", "1"), "query failed")
 		mock.ExpectQuery("scalar-mismatch").WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow("2"))
 		require.ErrorContains(t, expectScalar(t.Context(), db, "scalar-mismatch", "1"), "expected")
+		mock.ExpectQuery("select __mo_query").WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow("secret-actual"))
+		err := expectScalar(t.Context(), db, "select __mo_query /* secret-query */", "secret-expected")
+		require.ErrorContains(t, err, "result mismatch")
+		require.NotContains(t, err.Error(), "secret-")
 		mock.ExpectQuery("unexpected-success").WillReturnRows(sqlmock.NewRows([]string{"value"}).AddRow("1"))
 		require.ErrorContains(t, expectQueryFailure(t.Context(), db, "unexpected-success", ""), "unexpectedly succeeded")
 		mock.ExpectQuery("wrong-error").WillReturnError(errors.New("different"))
@@ -720,8 +997,87 @@ func TestMongoDBLocalE2EHelpers(t *testing.T) {
 		require.NoError(t, mock.ExpectationsWereMet())
 	})
 
+	t.Run("prepared MongoDB scan failures", func(t *testing.T) {
+		t.Run("prepare", func(t *testing.T) {
+			db, mock := newMongoDBE2ESQLMock(t)
+			mock.ExpectPrepare("select count").WillReturnError(errors.New("prepare failed"))
+			require.ErrorContains(t, verifyPreparedMongoDBScan(t.Context(), db), "prepare MongoDB scan")
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+
+		for _, tc := range []struct {
+			name  string
+			setup func(*sqlmock.ExpectedPrepare)
+			want  string
+		}{
+			{
+				name: "execute",
+				setup: func(prepared *sqlmock.ExpectedPrepare) {
+					prepared.ExpectQuery().WithArgs(int64(13)).WillReturnError(errors.New("execute failed"))
+				},
+				want: "execute prepared MongoDB scan",
+			},
+			{
+				name: "metadata",
+				setup: func(prepared *sqlmock.ExpectedPrepare) {
+					prepared.ExpectQuery().WithArgs(int64(13)).WillReturnRows(
+						sqlmock.NewRows([]string{"value"}).AddRow("3"))
+				},
+				want: "result metadata mismatch",
+			},
+			{
+				name: "empty result",
+				setup: func(prepared *sqlmock.ExpectedPrepare) {
+					prepared.ExpectQuery().WithArgs(int64(13)).WillReturnRows(
+						sqlmock.NewRows([]string{"count(*)"}))
+				},
+				want: "returned no rows",
+			},
+			{
+				name: "row error",
+				setup: func(prepared *sqlmock.ExpectedPrepare) {
+					prepared.ExpectQuery().WithArgs(int64(13)).WillReturnRows(
+						sqlmock.NewRows([]string{"count(*)"}).AddRow("3").RowError(0, errors.New("read failed")))
+				},
+				want: "read prepared MongoDB result",
+			},
+			{
+				name: "scan",
+				setup: func(prepared *sqlmock.ExpectedPrepare) {
+					prepared.ExpectQuery().WithArgs(int64(13)).WillReturnRows(
+						sqlmock.NewRows([]string{"count(*)"}).AddRow(nil))
+				},
+				want: "scan prepared MongoDB result",
+			},
+			{
+				name: "value mismatch",
+				setup: func(prepared *sqlmock.ExpectedPrepare) {
+					prepared.ExpectQuery().WithArgs(int64(13)).WillReturnRows(
+						sqlmock.NewRows([]string{"count(*)"}).AddRow("2"))
+				},
+				want: "expected \"3\", got \"2\"",
+			},
+			{
+				name: "multiple aggregate rows",
+				setup: func(prepared *sqlmock.ExpectedPrepare) {
+					prepared.ExpectQuery().WithArgs(int64(13)).WillReturnRows(
+						sqlmock.NewRows([]string{"count(*)"}).AddRow("3").AddRow("3"))
+				},
+				want: "aggregate returned more than one row",
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				db, mock := newMongoDBE2ESQLMock(t)
+				tc.setup(mock.ExpectPrepare("select count"))
+				require.ErrorContains(t, verifyPreparedMongoDBScan(t.Context(), db), tc.want)
+				require.NoError(t, mock.ExpectationsWereMet())
+			})
+		}
+	})
+
 	t.Run("redaction and report", func(t *testing.T) {
 		require.Equal(t, "<redacted MongoDB DDL>", redact("CREDENTIAL_SECRET_REF='secret'"))
+		require.Equal(t, "<redacted MongoDB __mo_query statement>", redact("select __mo_query from t"))
 		require.Equal(t, "select 1", redact("select 1"))
 		dir := t.TempDir()
 		require.NoError(t, writeReport(dir, report{Status: "passed", Cases: []string{"scan"}}))
@@ -735,6 +1091,154 @@ func TestMongoDBLocalE2EHelpers(t *testing.T) {
 		require.NoError(t, os.WriteFile(fileParent, []byte("x"), 0o600))
 		require.Error(t, writeReport(filepath.Join(fileParent, "child"), report{}))
 	})
+}
+
+func TestMongoDBTransferProfilerProtocol(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	host, commands := newMongoDBTransferTestServer(t)
+	_, err := newMongoTransferMonitor(ctx, host, "", "secret")
+	require.ErrorContains(t, err, "requires both root credentials")
+
+	profiler, err := newMongoTransferMonitor(ctx, host, "root", "secret")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, profiler.Close(context.Background())) })
+	require.NoError(t, profiler.Reset(ctx))
+	returned, err := profiler.DocumentsReturned(ctx)
+	require.NoError(t, err)
+	require.EqualValues(t, 6, returned)
+
+	var received []string
+	for len(commands) > 0 {
+		received = append(received, <-commands)
+	}
+	joined := strings.Join(received, "\n")
+	require.Contains(t, joined, "profile")
+	require.Contains(t, joined, "drop")
+	require.Contains(t, joined, "find")
+	require.NoError(t, (*mongoProfiler)(nil).Close(ctx))
+	require.NoError(t, (*mongoProfiler)(nil).Reset(ctx))
+	returned, err = (*mongoProfiler)(nil).DocumentsReturned(ctx)
+	require.NoError(t, err)
+	require.Zero(t, returned)
+}
+
+func newMongoDBTransferTestServer(t *testing.T) (string, chan string) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	commands := make(chan string, 16)
+	digest := fmt.Sprintf("%x", md5.Sum([]byte("root:mongo:secret")))
+	client, err := scram.SHA1.NewClientUnprepped("root", digest, "")
+	require.NoError(t, err)
+	credentials := client.GetStoredCredentials(scram.KeyFactors{Salt: "test-salt", Iters: 4096})
+	server, err := scram.SHA1.NewServer(func(username string) (scram.StoredCredentials, error) {
+		if username != "root" {
+			return scram.StoredCredentials{}, fmt.Errorf("unknown test user %q", username)
+		}
+		return credentials, nil
+	})
+	require.NoError(t, err)
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			go serveMongoDBTransferTestConnection(conn, commands, server)
+		}
+	}()
+	t.Cleanup(func() { _ = listener.Close() })
+	return listener.Addr().String(), commands
+}
+
+func serveMongoDBTransferTestConnection(conn net.Conn, commands chan<- string, server *scram.Server) {
+	defer conn.Close()
+	var conversation *scram.ServerConversation
+	for {
+		header := make([]byte, 16)
+		if _, err := io.ReadFull(conn, header); err != nil {
+			return
+		}
+		length := int(binary.LittleEndian.Uint32(header[:4]))
+		if length < len(header) {
+			return
+		}
+		body := make([]byte, length-len(header))
+		if _, err := io.ReadFull(conn, body); err != nil {
+			return
+		}
+		command := string(body)
+		commands <- command
+		response := bson.D{{Key: "ok", Value: 1}, {Key: "isWritablePrimary", Value: true}, {Key: "minWireVersion", Value: 0}, {Key: "maxWireVersion", Value: 13}}
+		request, err := mongoDBTransferCommand(header, body)
+		if err != nil {
+			return
+		}
+		if payload, ok := request["payload"].(bson.Binary); ok {
+			if _, started := request["saslStart"]; started {
+				conversation = server.NewConversation()
+			}
+			if conversation != nil {
+				reply, err := conversation.Step(string(payload.Data))
+				if err != nil {
+					return
+				}
+				response = bson.D{{Key: "ok", Value: 1}, {Key: "conversationId", Value: 1}, {Key: "done", Value: conversation.Done()}, {Key: "payload", Value: bson.Binary{Subtype: 0, Data: []byte(reply)}}}
+			}
+		}
+		if strings.Contains(command, "find") {
+			response = bson.D{{Key: "ok", Value: 1}, {Key: "cursor", Value: bson.D{{Key: "id", Value: int64(0)}, {Key: "ns", Value: "mongodb_source.system.profile"}, {Key: "firstBatch", Value: bson.A{bson.D{{Key: "nreturned", Value: 5}}, bson.D{{Key: "nreturned", Value: 1}}}}}}}
+		}
+		encoded, err := bson.Marshal(response)
+		if err != nil {
+			return
+		}
+		if _, err := conn.Write(mongoDBTransferWireResponse(header, encoded)); err != nil {
+			return
+		}
+	}
+}
+
+func mongoDBTransferCommand(header, body []byte) (bson.M, error) {
+	var document []byte
+	if binary.LittleEndian.Uint32(header[12:16]) == 2004 { // OP_QUERY
+		if len(body) < 4 {
+			return nil, errors.New("short OP_QUERY test command")
+		}
+		remainder := body[4:]
+		if end := strings.IndexByte(string(remainder), 0); end >= 0 && len(remainder) >= end+9 {
+			document = remainder[end+9:]
+		}
+	} else if len(body) >= 5 { // OP_MSG flags followed by a document section
+		document = body[5:]
+	}
+	var command bson.M
+	if err := bson.Unmarshal(document, &command); err != nil {
+		return nil, err
+	}
+	return command, nil
+}
+
+func mongoDBTransferWireResponse(requestHeader, document []byte) []byte {
+	requestID := binary.LittleEndian.Uint32(requestHeader[4:8])
+	if binary.LittleEndian.Uint32(requestHeader[12:16]) == 2004 { // OP_QUERY
+		message := make([]byte, 16+4+8+4+4+len(document))
+		binary.LittleEndian.PutUint32(message[:4], uint32(len(message)))
+		binary.LittleEndian.PutUint32(message[8:12], requestID)
+		binary.LittleEndian.PutUint32(message[12:16], 1) // OP_REPLY
+		binary.LittleEndian.PutUint32(message[32:36], 1)
+		copy(message[36:], document)
+		return message
+	}
+	message := make([]byte, 16+4+1+len(document))
+	binary.LittleEndian.PutUint32(message[:4], uint32(len(message)))
+	binary.LittleEndian.PutUint32(message[8:12], requestID)
+	binary.LittleEndian.PutUint32(message[12:16], 2013) // OP_MSG
+	message[20] = 0                                     // BSON document section
+	copy(message[21:], document)
+	return message
 }
 
 func mongoDBTestRepoRoot(t *testing.T) string {

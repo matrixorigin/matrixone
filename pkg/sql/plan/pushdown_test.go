@@ -125,6 +125,276 @@ func TestJoinDoesNotPushDownVolatileFilter(t *testing.T) {
 	})
 }
 
+func TestPushdownLimitToTableScanComposesExistingPagination(t *testing.T) {
+	dynamic := func(pos int32) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: pos}}}
+	}
+	tests := []struct {
+		name                        string
+		innerLimit, innerOffset     *plan.Expr
+		outerLimit, outerOffset     *plan.Expr
+		wantLimit, wantOffset       uint64
+		wantLimitSet, wantOffsetSet bool
+		wantPushed                  bool
+	}{
+		{
+			name:          "outer wider than inner",
+			innerLimit:    makePlan2Uint64ConstExprWithType(1),
+			innerOffset:   makePlan2Uint64ConstExprWithType(2),
+			outerLimit:    makePlan2Uint64ConstExprWithType(10),
+			wantLimit:     1,
+			wantOffset:    2,
+			wantLimitSet:  true,
+			wantOffsetSet: true,
+			wantPushed:    true,
+		},
+		{
+			name:          "outer narrower than inner",
+			innerLimit:    makePlan2Uint64ConstExprWithType(10),
+			innerOffset:   makePlan2Uint64ConstExprWithType(2),
+			outerLimit:    makePlan2Uint64ConstExprWithType(3),
+			wantLimit:     3,
+			wantOffset:    2,
+			wantLimitSet:  true,
+			wantOffsetSet: true,
+			wantPushed:    true,
+		},
+		{
+			name:          "both offsets",
+			innerLimit:    makePlan2Uint64ConstExprWithType(10),
+			innerOffset:   makePlan2Uint64ConstExprWithType(2),
+			outerLimit:    makePlan2Uint64ConstExprWithType(3),
+			outerOffset:   makePlan2Uint64ConstExprWithType(4),
+			wantLimit:     3,
+			wantOffset:    6,
+			wantLimitSet:  true,
+			wantOffsetSet: true,
+			wantPushed:    true,
+		},
+		{
+			name:        "outer offset exhausts inner window stays layered",
+			innerLimit:  makePlan2Uint64ConstExprWithType(3),
+			innerOffset: makePlan2Uint64ConstExprWithType(2),
+			outerLimit:  makePlan2Uint64ConstExprWithType(10),
+			outerOffset: makePlan2Uint64ConstExprWithType(4),
+			wantPushed:  false,
+		},
+		{
+			name:          "outer offset without limit",
+			innerLimit:    makePlan2Uint64ConstExprWithType(10),
+			innerOffset:   makePlan2Uint64ConstExprWithType(2),
+			outerOffset:   makePlan2Uint64ConstExprWithType(4),
+			wantLimit:     6,
+			wantOffset:    6,
+			wantLimitSet:  true,
+			wantOffsetSet: true,
+			wantPushed:    true,
+		},
+		{
+			name:          "offsets over unbounded inner window",
+			innerOffset:   makePlan2Uint64ConstExprWithType(2),
+			outerLimit:    makePlan2Uint64ConstExprWithType(3),
+			outerOffset:   makePlan2Uint64ConstExprWithType(4),
+			wantLimit:     3,
+			wantOffset:    6,
+			wantLimitSet:  true,
+			wantOffsetSet: true,
+			wantPushed:    true,
+		},
+		{
+			name:        "dynamic existing pagination stays layered",
+			innerLimit:  dynamic(0),
+			innerOffset: makePlan2Uint64ConstExprWithType(2),
+			outerLimit:  makePlan2Uint64ConstExprWithType(3),
+			wantPushed:  false,
+		},
+		{
+			name:          "dynamic outer limit follows literal inner offset",
+			innerOffset:   makePlan2Uint64ConstExprWithType(2),
+			outerLimit:    dynamic(0),
+			wantOffset:    2,
+			wantOffsetSet: true,
+			wantPushed:    true,
+		},
+		{
+			name:        "dynamic outer limit follows dynamic inner offset",
+			innerOffset: dynamic(0),
+			outerLimit:  dynamic(1),
+			wantPushed:  true,
+		},
+		{
+			name:        "literal offset overflow stays layered",
+			innerOffset: makePlan2Uint64ConstExprWithType(math.MaxUint64),
+			outerLimit:  makePlan2Uint64ConstExprWithType(3),
+			outerOffset: makePlan2Uint64ConstExprWithType(1),
+			wantPushed:  false,
+		},
+		{
+			name:        "dynamic pagination moves into empty scan window",
+			outerLimit:  dynamic(0),
+			outerOffset: dynamic(1),
+			wantPushed:  true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			builder := NewQueryBuilder(plan.Query_SELECT, NewMockCompilerContext(false), false, true)
+			scan := &plan.Node{
+				NodeType: plan.Node_TABLE_SCAN,
+				Limit:    test.innerLimit,
+				Offset:   test.innerOffset,
+			}
+			project := &plan.Node{
+				NodeType: plan.Node_PROJECT,
+				Children: []int32{0},
+				Limit:    test.outerLimit,
+				Offset:   test.outerOffset,
+			}
+			builder.qry.Nodes = []*plan.Node{scan, project}
+
+			builder.pushdownLimitToTableScan(1)
+			if !test.wantPushed {
+				require.Same(t, test.innerLimit, scan.Limit)
+				require.Same(t, test.innerOffset, scan.Offset)
+				require.Same(t, test.outerLimit, project.Limit)
+				require.Same(t, test.outerOffset, project.Offset)
+				builder.pushdownLimitToTableScan(1)
+				require.Same(t, test.innerLimit, scan.Limit)
+				require.Same(t, test.innerOffset, scan.Offset)
+				require.Same(t, test.outerLimit, project.Limit)
+				require.Same(t, test.outerOffset, project.Offset)
+				return
+			}
+
+			require.Nil(t, project.Limit)
+			require.Nil(t, project.Offset)
+			if test.wantLimitSet {
+				require.Equal(t, test.wantLimit, scan.Limit.GetLit().GetU64Val())
+			} else {
+				require.NotNil(t, scan.Limit)
+			}
+			if test.wantOffsetSet {
+				require.Equal(t, test.wantOffset, scan.Offset.GetLit().GetU64Val())
+			} else {
+				require.NotNil(t, scan.Offset)
+			}
+
+			// The optimizer intentionally invokes this pass twice. A second pass
+			// must be a semantic no-op after pagination ownership was transferred.
+			limit, offset := scan.Limit, scan.Offset
+			builder.pushdownLimitToTableScan(1)
+			require.Same(t, limit, scan.Limit)
+			require.Same(t, offset, scan.Offset)
+		})
+	}
+}
+
+func TestNestedLimitPushdownPreservesInnerWindow(t *testing.T) {
+	tests := []struct {
+		name                            string
+		sql                             string
+		wantLimit, wantOffset           uint64
+		wantOuterLimit, wantOuterOffset uint64
+		wantLayered                     bool
+	}{
+		{
+			name:       "outer wider",
+			sql:        "select * from (select empno from constraint_test.emp limit 1 offset 2) d limit 10",
+			wantLimit:  1,
+			wantOffset: 2,
+		},
+		{
+			name:       "both offsets",
+			sql:        "select * from (select empno from constraint_test.emp limit 10 offset 2) d limit 3 offset 4",
+			wantLimit:  3,
+			wantOffset: 6,
+		},
+		{
+			name:            "exhausted inner window stays layered",
+			sql:             "select * from (select empno from constraint_test.emp limit 3 offset 2) d limit 10 offset 4",
+			wantLimit:       3,
+			wantOffset:      2,
+			wantOuterLimit:  10,
+			wantOuterOffset: 4,
+			wantLayered:     true,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			logical, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+			scan := firstReachableNode(logical.GetQuery(), plan.Node_TABLE_SCAN)
+			require.NotNil(t, scan)
+			require.Equal(t, test.wantLimit, scan.Limit.GetLit().GetU64Val())
+			require.Equal(t, test.wantOffset, scan.Offset.GetLit().GetU64Val())
+			if test.wantLayered {
+				project := firstReachableNode(logical.GetQuery(), plan.Node_PROJECT)
+				require.NotNil(t, project)
+				require.NotNil(t, project.Limit)
+				require.NotNil(t, project.Offset)
+				require.Equal(t, test.wantOuterLimit, project.Limit.GetLit().GetU64Val())
+				require.Equal(t, test.wantOuterOffset, project.Offset.GetLit().GetU64Val())
+			}
+		})
+	}
+}
+
+func TestSetPhysicalEqualityFilterBoundary(t *testing.T) {
+	for _, kind := range []plan.Node_NodeType{
+		plan.Node_UNION, plan.Node_UNION_ALL, plan.Node_MINUS,
+		plan.Node_MINUS_ALL, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL,
+	} {
+		for _, keyed := range []bool{false, true} {
+			name := kind.String() + "/exact"
+			if keyed {
+				name = kind.String() + "/normalized"
+			}
+			t.Run(name, func(t *testing.T) {
+				ctx := NewMockCompilerContext(true)
+				builder := NewQueryBuilder(plan.Query_SELECT, ctx, false, false)
+				typ := Type{Id: int32(types.T_varchar), Width: 8}
+				left, right, output := GetColExpr(typ, 1, 0), GetColExpr(typ, 2, 0), GetColExpr(typ, 3, 0)
+				predicate := func(col *plan.Expr) *plan.Expr {
+					hex, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "hex", []*plan.Expr{DeepCopyExpr(col)})
+					require.NoError(t, err)
+					expr, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*plan.Expr{hex, makePlan2StringConstExprWithType("6120")})
+					require.NoError(t, err)
+					return expr
+				}
+				local := predicate(left)
+				set := &plan.Node{NodeType: kind, Children: []int32{2, 1}, ProjectList: []*plan.Expr{output}, BindingTags: []int32{3}}
+				if keyed {
+					set.PhysicalEqualityKeyList = []*plan.Expr{DeepCopyExpr(output)}
+				}
+				builder.qry.Nodes = []*plan.Node{
+					{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{1}, ProjectList: []*plan.Expr{left}, Stats: &plan.Stats{Outcnt: 1}},
+					{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{2}, ProjectList: []*plan.Expr{right}, Stats: &plan.Stats{Outcnt: 1}},
+					{NodeType: plan.Node_FILTER, Children: []int32{0}, ProjectList: []*plan.Expr{left}, FilterList: []*plan.Expr{local}},
+					set,
+				}
+				filter := predicate(output)
+				original := DeepCopyExpr(filter)
+				_, residual := builder.pushdownFilters(3, []*plan.Expr{filter}, false)
+				if keyed && kind != plan.Node_UNION_ALL {
+					require.Equal(t, []*plan.Expr{original}, residual)
+					require.Same(t, filter, residual[0])
+					require.Len(t, builder.qry.Nodes[0].FilterList, 1, "branch-local filter must still optimize")
+					require.Empty(t, builder.qry.Nodes[1].FilterList)
+					set.Limit = makePlan2Uint64ConstExprWithType(100)
+					_, residual = builder.pushdownFilters(3, []*plan.Expr{filter}, false)
+					require.Equal(t, []*plan.Expr{original}, residual, "LIMIT residual must not be lost or duplicated")
+				} else {
+					require.Empty(t, residual)
+					require.NotEmpty(t, builder.qry.Nodes[0].FilterList)
+					require.Len(t, builder.qry.Nodes[1].FilterList, 1, "exact-key and UNION ALL pushdown must remain enabled")
+				}
+			})
+		}
+	}
+}
+
 func TestVolatileFilterStopsAtPlanBoundary(t *testing.T) {
 	for _, test := range []struct {
 		name       string

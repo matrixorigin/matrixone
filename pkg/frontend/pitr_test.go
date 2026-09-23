@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,6 +28,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -1536,8 +1538,8 @@ func Test_doRestorePitr_Account(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{{"0"}})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
-		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;"}})
+		sql = fmt.Sprintf("select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;", ""}})
 		bh.sql2result[sql] = mrs
 
 		sql = "select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs where 1=1 and database_name = 'db1'"
@@ -1662,8 +1664,8 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{{"0"}})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
-		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;"}})
+		sql = fmt.Sprintf("select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;", ""}})
 		bh.sql2result[sql] = mrs
 
 		sql = "select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs where 1=1 and database_name = 'db1'"
@@ -1785,8 +1787,8 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{{"0"}})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
-		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;"}})
+		sql = fmt.Sprintf("select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;", ""}})
 		bh.sql2result[sql] = mrs
 
 		sql = "select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs where 1=1 and database_name = 'db1'"
@@ -1902,8 +1904,8 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{{"0"}})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
-		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;"}})
+		sql = fmt.Sprintf("select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;", ""}})
 		bh.sql2result[sql] = mrs
 
 		sql = "select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs where 1=1 and database_name = 'db1'"
@@ -2026,8 +2028,8 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_Using_cluster(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{{"0"}})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
-		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;"}})
+		sql = fmt.Sprintf("select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;", ""}})
 		bh.sql2result[sql] = mrs
 
 		sql = "select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs where 1=1 and database_name = 'db1'"
@@ -2144,8 +2146,8 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_Using_cluster(t *testing.T) {
 		mrs = newMrsForPitrRecord([][]interface{}{{"0"}})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
-		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;"}})
+		sql = fmt.Sprintf("select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;", ""}})
 		bh.sql2result[sql] = mrs
 
 		sql = "select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs where 1=1 and database_name = 'db1'"
@@ -2272,8 +2274,8 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 		mrs = newMrsForPitrRecord([][]interface{}{{"0"}})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
-		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;"}})
+		sql = fmt.Sprintf("select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;", ""}})
 		bh.sql2result[sql] = mrs
 
 		sql = "select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs where 1=1 and database_name = 'db1'"
@@ -2394,8 +2396,8 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 		mrs = newMrsForPitrRecord([][]interface{}{{"0"}})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
-		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;"}})
+		sql = fmt.Sprintf("select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;", ""}})
 		bh.sql2result[sql] = mrs
 
 		sql = "select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs where 1=1 and database_name = 'db1'"
@@ -2516,8 +2518,8 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 		mrs = newMrsForPitrRecord([][]interface{}{{"0"}})
 		bh.sql2result[sql] = mrs
 
-		sql = fmt.Sprintf("select datname, dat_createsql from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
-		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;"}})
+		sql = fmt.Sprintf("select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = 'db1' and account_id = 0", resovleTs)
+		mrs = newMrsForPitrRecord([][]interface{}{{"db1", "create database db1;", ""}})
 		bh.sql2result[sql] = mrs
 
 		sql = "select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs where 1=1 and database_name = 'db1'"
@@ -2672,13 +2674,16 @@ func Test_doCreatePitr(t *testing.T) {
 				"",
 				uint64(1),
 				uint8(1),
-				"d",
+				"mo",
 			},
 		})
 		bh.sql2result[sql] = mrs
 
+		stmt.PitrValue = 30
 		err = doCreatePitr(ctx, ses, stmt)
 		assert.NoError(t, err)
+		assert.Contains(t, bh.executedSQLs,
+			"update mo_catalog.mo_pitr set pitr_length = 31, pitr_unit = 'd' where pitr_name = 'sys_mo_catalog_pitr';")
 
 		commitErr := errors.New("pitr commit conflict")
 		bh.sql2err["commit;"] = commitErr
@@ -3700,6 +3705,172 @@ func newPitrLifecycleTestSession(
 	return ses, bh, ctx
 }
 
+func registerPitrRecordResult(
+	bh *backgroundExecTest,
+	pitrName string,
+	accountID uint64,
+	pitrValue uint8,
+	pitrUnit string,
+) {
+	registerPitrRecordResultWithStatus(bh, pitrName, accountID, pitrValue, pitrUnit, nil)
+}
+
+func registerPitrRecordResultWithStatus(
+	bh *backgroundExecTest,
+	pitrName string,
+	accountID uint64,
+	pitrValue uint8,
+	pitrUnit string,
+	pitrStatus *uint8,
+) {
+	sql := fmt.Sprintf(
+		"%s where pitr_name = '%s' and create_account = %d",
+		getPitrFormat,
+		pitrName,
+		accountID,
+	)
+	row := []interface{}{
+		"pitr-id",
+		pitrName,
+		accountID,
+		time.Now().Add(-24 * time.Hour).UnixNano(),
+		time.Now().Add(-24 * time.Hour).UnixNano(),
+		"ACCOUNT",
+		accountID,
+		sysAccountName,
+		"",
+		"",
+		accountID,
+		pitrValue,
+		pitrUnit,
+	}
+	mrs := newMrsForPitrRecord(nil)
+	if pitrStatus != nil {
+		statusColumn := &MysqlColumn{}
+		statusColumn.SetName("pitr_status")
+		statusColumn.SetColumnType(defines.MYSQL_TYPE_TINY)
+		mrs.AddColumn(statusColumn)
+		row = append(row, *pitrStatus)
+	}
+	mrs.AddRow(row)
+	bh.sql2result[sql] = mrs
+}
+
+func TestRestorePitrPreflightsBeforeAccountCreation(t *testing.T) {
+	setProtocolVersionForTest(t, "", defines.MORPCVersion74)
+	ses, bh, ctx := newPitrLifecycleTestSession(t)
+	const (
+		pitrName  = "issue26068_account_pitr"
+		dbName    = "marked_branch"
+		account   = "tenant1"
+		accountID = uint64(1)
+	)
+	timeText := nanoTimeFormat(time.Now().Add(-2 * time.Hour).UnixNano())
+	ts, err := doResolveTimeStamp(timeText)
+	require.NoError(t, err)
+	bh.sql2result[catalog.FeatureRegistryCatalogGateSQL] = newMrsForSqlForShowDatabases(
+		[][]interface{}{{1}},
+	)
+
+	checkSQL, err := getSqlForCheckPitr(ctx, pitrName, sysAccountID)
+	require.NoError(t, err)
+	bh.sql2result[checkSQL] = newMrsForPitrRecord([][]interface{}{{"pitr-id"}})
+	pitrSQL := fmt.Sprintf(
+		"%s where pitr_name = '%s' and create_account = %d",
+		getPitrFormat, pitrName, sysAccountID,
+	)
+	bh.sql2result[pitrSQL] = newMrsForPitrRecord([][]interface{}{{
+		"pitr-id", pitrName, uint64(sysAccountID),
+		time.Now().Add(-24 * time.Hour).UnixNano(), time.Now().Add(-24 * time.Hour).UnixNano(),
+		tree.PITRLEVELACCOUNT.String(), accountID, account, "", "", accountID, uint8(1), "d",
+	}})
+
+	accountSQL := fmt.Sprintf(
+		"select account_id, account_name, admin_name, comments from mo_catalog.mo_account {MO_TS = %d } where account_name = '%s';",
+		ts, account,
+	)
+	showDatabasesSQL := fmt.Sprintf("show databases {MO_TS = %d}", ts)
+	createDatabaseSQL := fmt.Sprintf(
+		"select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = '%s' and account_id = %d",
+		ts, dbName, accountID,
+	)
+	bh.sql2result[accountSQL] = newMrsForRestoreStringRows(
+		[]string{"account_id", "account_name", "admin_name", "comments"},
+		[][]interface{}{{accountID, account, rootName, ""}},
+	)
+	bh.sql2result[showDatabasesSQL] = newMrsForSqlForShowDatabases([][]interface{}{{dbName}})
+	bh.sql2result[createDatabaseSQL] = newMrsForRestoreStringRows(
+		[]string{"datname", "dat_createsql", "dat_type"},
+		[][]interface{}{{dbName, "create database " + dbName, catalog.SystemDBTypeDataBranch}},
+	)
+
+	_, err = doRestorePitr(ctx, ses, &tree.RestorePitr{
+		Level:       tree.RESTORELEVELACCOUNT,
+		Name:        tree.Identifier(pitrName),
+		AccountName: tree.Identifier(account),
+		TimeStamp:   timeText,
+	})
+	require.ErrorContains(t, err, "requires MORPC protocol version 75", bh.executedSQLs)
+	require.Contains(t, bh.executedSQLs, createDatabaseSQL)
+	require.Contains(t, bh.executedSQLs, "rollback;")
+	require.NotContains(t, bh.executedSQLs, "commit;")
+	for _, sql := range bh.executedSQLs {
+		require.NotContains(t, strings.ToLower(sql), "create account")
+		require.NotContains(t, strings.ToLower(sql), "drop table")
+		require.NotContains(t, strings.ToLower(sql), "drop database")
+	}
+}
+
+func TestRestorePitrPreflightsBeforeExistingAccountSideEffects(t *testing.T) {
+	setProtocolVersionForTest(t, "", defines.MORPCVersion74)
+	ses, bh, ctx := newPitrLifecycleTestSession(t)
+	const (
+		pitrName = "issue26068_existing_account_pitr"
+		dbName   = "marked_branch"
+	)
+	timeText := nanoTimeFormat(time.Now().Add(-2 * time.Hour).UnixNano())
+	ts, err := doResolveTimeStamp(timeText)
+	require.NoError(t, err)
+	bh.sql2result[catalog.FeatureRegistryCatalogGateSQL] = newMrsForSqlForShowDatabases(
+		[][]interface{}{{1}},
+	)
+
+	checkSQL, err := getSqlForCheckPitr(ctx, pitrName, sysAccountID)
+	require.NoError(t, err)
+	bh.sql2result[checkSQL] = newMrsForPitrRecord([][]interface{}{{"pitr-id"}})
+	registerPitrRecordResult(bh, pitrName, sysAccountID, 1, "d")
+	accountExistsSQL, err := getSqlForCheckAccountWithPitr(ctx, ts, sysAccountName)
+	require.NoError(t, err)
+	bh.sql2result[accountExistsSQL] = newMrsForPitrRecord([][]interface{}{{uint64(sysAccountID)}})
+	showDatabasesSQL := fmt.Sprintf("show databases {MO_TS = %d}", ts)
+	createDatabaseSQL := fmt.Sprintf(
+		"select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = '%s' and account_id = 0",
+		ts, dbName,
+	)
+	bh.sql2result[showDatabasesSQL] = newMrsForSqlForShowDatabases([][]interface{}{{dbName}})
+	bh.sql2result[createDatabaseSQL] = newMrsForRestoreStringRows(
+		[]string{"datname", "dat_createsql", "dat_type"},
+		[][]interface{}{{dbName, "create database " + dbName, catalog.SystemDBTypeDataBranch}},
+	)
+
+	_, err = doRestorePitr(ctx, ses, &tree.RestorePitr{
+		Level:     tree.RESTORELEVELACCOUNT,
+		Name:      tree.Identifier(pitrName),
+		TimeStamp: timeText,
+	})
+	require.ErrorContains(t, err, "requires MORPC protocol version 75", bh.executedSQLs)
+	require.Contains(t, bh.executedSQLs, createDatabaseSQL)
+	require.Contains(t, bh.executedSQLs, "rollback;")
+	require.NotContains(t, bh.executedSQLs, "commit;")
+	for _, sql := range bh.executedSQLs {
+		lowerSQL := strings.ToLower(sql)
+		require.NotContains(t, lowerSQL, "replace into mo_catalog.mo_view_refresh")
+		require.NotContains(t, lowerSQL, "mo_foreign_keys")
+		require.NotContains(t, lowerSQL, "drop table")
+		require.NotContains(t, lowerSQL, "drop database")
+	}
+}
+
 func TestDoDropPitrCompactsHistoricalAlterLineage(t *testing.T) {
 	ses, bh, ctx := newPitrLifecycleTestSession(t)
 	stmt := &tree.DropPitr{Name: "pitr01"}
@@ -3723,9 +3894,60 @@ func TestDoAlterPitrCompactsHistoricalAlterLineage(t *testing.T) {
 	checkSQL, err := getSqlForCheckPitr(ctx, "pitr01", sysAccountID)
 	require.NoError(t, err)
 	bh.sql2result[checkSQL] = newMrsForPitrRecord([][]interface{}{{"pitr-id"}})
+	registerPitrRecordResult(bh, "pitr01", sysAccountID, 2, "h")
 
 	require.NoError(t, doAlterPitr(ctx, ses, stmt))
 	require.Contains(t, bh.executedSQLs, historicalAlterLineageMetadataSQL())
+}
+
+func TestDoAlterPitrRejectsRecoveryRangeExpansion(t *testing.T) {
+	ses, bh, ctx := newPitrLifecycleTestSession(t)
+	stmt := &tree.AlterPitr{Name: "pitr01", PitrValue: 2, PitrUnit: "h"}
+
+	checkSQL, err := getSqlForCheckPitr(ctx, "pitr01", sysAccountID)
+	require.NoError(t, err)
+	bh.sql2result[checkSQL] = newMrsForPitrRecord([][]interface{}{{"pitr-id"}})
+	registerPitrRecordResult(bh, "pitr01", sysAccountID, 1, "h")
+
+	err = doAlterPitr(ctx, ses, stmt)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "cannot expand PITR pitr01 recovery range")
+	require.Contains(t, bh.executedSQLs, "rollback;")
+	require.NotContains(t, bh.executedSQLs, "commit;")
+	require.NotContains(t, bh.executedSQLs, historicalAlterLineageMetadataSQL())
+	for _, sql := range bh.executedSQLs {
+		require.NotContains(t, sql, "update mo_catalog.mo_pitr set modified_time")
+	}
+}
+
+func TestDoAlterPitrRejectsInactivePitr(t *testing.T) {
+	ses, bh, ctx := newPitrLifecycleTestSession(t)
+	stmt := &tree.AlterPitr{Name: "pitr01", PitrValue: 2, PitrUnit: "mo"}
+
+	checkSQL, err := getSqlForCheckPitr(ctx, "pitr01", sysAccountID)
+	require.NoError(t, err)
+	bh.sql2result[checkSQL] = newMrsForPitrRecord([][]interface{}{{"pitr-id"}})
+	inactive := uint8(0)
+	registerPitrRecordResultWithStatus(bh, "pitr01", sysAccountID, 1, "y", &inactive)
+
+	err = doAlterPitr(ctx, ses, stmt)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "cannot alter inactive pitr pitr01")
+	require.Contains(t, bh.executedSQLs, "rollback;")
+	require.NotContains(t, bh.executedSQLs, "commit;")
+	for _, sql := range bh.executedSQLs {
+		require.NotContains(t, sql, "update mo_catalog.mo_pitr set modified_time")
+	}
+}
+
+func TestDoAlterPitrRejectsZeroRangeBeforeTransaction(t *testing.T) {
+	ses, bh, ctx := newPitrLifecycleTestSession(t)
+	stmt := &tree.AlterPitr{Name: "pitr01", PitrValue: 0, PitrUnit: "h"}
+
+	err := doAlterPitr(ctx, ses, stmt)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "invalid pitr value 0")
+	require.NotContains(t, bh.executedSQLs, "begin;")
 }
 
 // Test_unservableViewErrorIsIdentifiable pins the contract the restore paths rely on.

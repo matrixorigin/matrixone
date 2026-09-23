@@ -3,6 +3,9 @@ id int primary key,
 name varchar(100),
 value float
 );
+select mo_ctl('dn', 'inspect', 'merge switch off -t mo_ctl_manifest.t1');
+mo_ctl(dn, inspect, merge switch off -t mo_ctl_manifest.t1)
+ignored
 select mo_ctl('dn', 'inspect', 'manifest -t mo_ctl_manifest.t1');
 mo_ctl(dn, inspect, manifest -t mo_ctl_manifest.t1)
 ignored
@@ -10,9 +13,9 @@ insert into t1 values (1, 'alice', 10.5), (2, 'bob', 20.5), (3, 'carol', 30.5);
 select mo_ctl('dn', 'flush', 'mo_ctl_manifest.t1');
 mo_ctl(dn, flush, mo_ctl_manifest.t1)
 ignored
-select sleep(1);
-sleep(1)
-0
+select count(*) as object_count, sum(rows_cnt) as row_count from metadata_scan('mo_ctl_manifest.t1', 'id') g;
+object_count    row_count
+1    3
 select mo_ctl('dn', 'inspect', 'manifest -t mo_ctl_manifest.t1');
 mo_ctl(dn, inspect, manifest -t mo_ctl_manifest.t1)
 ignored
@@ -20,9 +23,9 @@ insert into t1 values (4, 'dave', 40.5), (5, 'eve', 50.5);
 select mo_ctl('dn', 'flush', 'mo_ctl_manifest.t1');
 mo_ctl(dn, flush, mo_ctl_manifest.t1)
 ignored
-select sleep(1);
-sleep(1)
-0
+select count(*) as object_count, sum(rows_cnt) as row_count from metadata_scan('mo_ctl_manifest.t1', 'id') g;
+object_count    row_count
+2    5
 select mo_ctl('dn', 'inspect', 'manifest -t mo_ctl_manifest.t1');
 mo_ctl(dn, inspect, manifest -t mo_ctl_manifest.t1)
 ignored
@@ -31,5 +34,8 @@ mo_ctl(dn, inspect, manifest)
 ignored
 select mo_ctl('dn', 'inspect', 'manifest -t nonexistent_db.nonexistent_table');
 mo_ctl(dn, inspect, manifest -t nonexistent_db.nonexistent_table)
+ignored
+select mo_ctl('dn', 'inspect', 'merge switch on -t mo_ctl_manifest.t1');
+mo_ctl(dn, inspect, merge switch on -t mo_ctl_manifest.t1)
 ignored
 drop table t1;

@@ -24,25 +24,25 @@ c1_br	UPDATE	1	alice_v2	1500.50	2024-01-01 10:00:00	1990-03-15
 c1_br	DELETE	2	bob	2000.75	2024-01-02 11:00:00	1985-07-20
 c1_br	INSERT	4	dave	4000.00	2024-02-01 09:00:00	1988-12-25
 data branch diff c1_br against c1{snapshot="c1_sp0"} columns (name);
-diff c1_br against c1	flag	name
-c1_br	UPDATE	alice_v2
-c1_br	DELETE	bob
-c1_br	INSERT	dave
+diff c1_br against c1	flag	id	name
+c1_br	UPDATE	1	alice_v2
+c1_br	DELETE	2	bob
+c1_br	INSERT	4	dave
 data branch diff c1_br against c1{snapshot="c1_sp0"} columns (name, balance);
-diff c1_br against c1	flag	name	balance
-c1_br	UPDATE	alice_v2	1500.50
-c1_br	DELETE	bob	2000.75
-c1_br	INSERT	dave	4000.00
+diff c1_br against c1	flag	id	name	balance
+c1_br	UPDATE	1	alice_v2	1500.50
+c1_br	DELETE	2	bob	2000.75
+c1_br	INSERT	4	dave	4000.00
 data branch diff c1_br against c1{snapshot="c1_sp0"} columns (id, balance);
 diff c1_br against c1	flag	id	balance
 c1_br	UPDATE	1	1500.50
 c1_br	DELETE	2	2000.75
 c1_br	INSERT	4	4000.00
 data branch diff c1_br against c1{snapshot="c1_sp0"} columns (created_at, birthday);
-diff c1_br against c1	flag	created_at	birthday
-c1_br	UPDATE	2024-01-01 10:00:00	1990-03-15
-c1_br	DELETE	2024-01-02 11:00:00	1985-07-20
-c1_br	INSERT	2024-02-01 09:00:00	1988-12-25
+diff c1_br against c1	flag	id	created_at	birthday
+c1_br	UPDATE	1	2024-01-01 10:00:00	1990-03-15
+c1_br	DELETE	2	2024-01-02 11:00:00	1985-07-20
+c1_br	INSERT	4	2024-02-01 09:00:00	1988-12-25
 data branch diff c1_br against c1{snapshot="c1_sp0"} columns (id, name, balance, created_at, birthday);
 diff c1_br against c1	flag	id	name	balance	created_at	birthday
 c1_br	UPDATE	1	alice_v2	1500.50	2024-01-01 10:00:00	1990-03-15
@@ -77,20 +77,20 @@ c2_br	UPDATE	5001	FX001	spot	130000.0	0.5000	0.12
 c2_br	DELETE	5003	CB200	spot	62000.0	0.0050	0.01
 c2_br	INSERT	5004	IR300	swap	45000.0	0.2500	0.03
 data branch diff c2_br against c2{snapshot="c2_sp0"} columns (exposure, delta, margin);
-diff c2_br against c2	flag	exposure	delta	margin
-c2_br	UPDATE	130000.0	0.5000	0.12
-c2_br	DELETE	62000.0	0.0050	0.01
-c2_br	INSERT	45000.0	0.2500	0.03
+diff c2_br against c2	flag	account_id	instrument	bucket	exposure	delta	margin
+c2_br	UPDATE	5001	FX001	spot	130000.0	0.5000	0.12
+c2_br	DELETE	5003	CB200	spot	62000.0	0.0050	0.01
+c2_br	INSERT	5004	IR300	swap	45000.0	0.2500	0.03
 data branch diff c2_br against c2{snapshot="c2_sp0"} columns (account_id, instrument, exposure);
-diff c2_br against c2	flag	account_id	instrument	exposure
-c2_br	UPDATE	5001	FX001	130000.0
-c2_br	DELETE	5003	CB200	62000.0
-c2_br	INSERT	5004	IR300	45000.0
+diff c2_br against c2	flag	account_id	instrument	bucket	exposure
+c2_br	UPDATE	5001	FX001	spot	130000.0
+c2_br	DELETE	5003	CB200	spot	62000.0
+c2_br	INSERT	5004	IR300	swap	45000.0
 data branch diff c2_br against c2{snapshot="c2_sp0"} columns (delta);
-diff c2_br against c2	flag	delta
-c2_br	UPDATE	0.5000
-c2_br	DELETE	0.0050
-c2_br	INSERT	0.2500
+diff c2_br against c2	flag	account_id	instrument	bucket	delta
+c2_br	UPDATE	5001	FX001	spot	0.5000
+c2_br	DELETE	5003	CB200	spot	0.0050
+c2_br	INSERT	5004	IR300	swap	0.2500
 drop snapshot c2_sp0;
 drop table c2;
 drop table c2_br;
@@ -158,17 +158,17 @@ c4_br	UPDATE	2	bob	95	improved	null
 c4_br	DELETE	3	null	80	ok	2024-01-03 00:00:00
 c4_br	INSERT	5	null	null	null	null
 data branch diff c4_br against c4{snapshot="c4_sp0"} columns (name, score);
-diff c4_br against c4	flag	name	score
-c4_br	UPDATE	null	null
-c4_br	UPDATE	bob	95
-c4_br	DELETE	null	80
-c4_br	INSERT	null	null
+diff c4_br against c4	flag	id	name	score
+c4_br	UPDATE	1	null	null
+c4_br	UPDATE	2	bob	95
+c4_br	DELETE	3	null	80
+c4_br	INSERT	5	null	null
 data branch diff c4_br against c4{snapshot="c4_sp0"} columns (memo, ts);
-diff c4_br against c4	flag	memo	ts
-c4_br	UPDATE	good	2024-01-01 00:00:00
-c4_br	UPDATE	improved	null
-c4_br	DELETE	ok	2024-01-03 00:00:00
-c4_br	INSERT	null	null
+diff c4_br against c4	flag	id	memo	ts
+c4_br	UPDATE	1	good	2024-01-01 00:00:00
+c4_br	UPDATE	2	improved	null
+c4_br	DELETE	3	ok	2024-01-03 00:00:00
+c4_br	INSERT	5	null	null
 data branch diff c4_br against c4{snapshot="c4_sp0"} columns (id, memo);
 diff c4_br against c4	flag	id	memo
 c4_br	UPDATE	1	good
@@ -234,23 +234,23 @@ c6_br	INSERT	south	3	301	7000.00	2024-01-01	new hire
 c6_br	UPDATE	west	2	201	6000.00	2022-01-01	null
 c6_br	DELETE	west	2	202	3500.00	2023-03-10	junior
 data branch diff c6_br against c6{snapshot="c6_sp0"} columns (salary, notes);
-diff c6_br against c6	flag	salary	notes
-c6_br	UPDATE	5500.00	promoted
-c6_br	INSERT	7000.00	new hire
-c6_br	UPDATE	6000.00	null
-c6_br	DELETE	3500.00	junior
+diff c6_br against c6	flag	region	dept	emp_id	salary	notes
+c6_br	UPDATE	east	1	101	5500.00	promoted
+c6_br	INSERT	south	3	301	7000.00	new hire
+c6_br	UPDATE	west	2	201	6000.00	null
+c6_br	DELETE	west	2	202	3500.00	junior
 data branch diff c6_br against c6{snapshot="c6_sp0"} columns (region, emp_id, salary);
-diff c6_br against c6	flag	region	emp_id	salary
-c6_br	UPDATE	east	101	5500.00
-c6_br	INSERT	south	301	7000.00
-c6_br	UPDATE	west	201	6000.00
-c6_br	DELETE	west	202	3500.00
+diff c6_br against c6	flag	region	dept	emp_id	salary
+c6_br	UPDATE	east	1	101	5500.00
+c6_br	INSERT	south	3	301	7000.00
+c6_br	UPDATE	west	2	201	6000.00
+c6_br	DELETE	west	2	202	3500.00
 data branch diff c6_br against c6{snapshot="c6_sp0"} columns (hire_date);
-diff c6_br against c6	flag	hire_date
-c6_br	UPDATE	2020-01-15
-c6_br	INSERT	2024-01-01
-c6_br	UPDATE	2022-01-01
-c6_br	DELETE	2023-03-10
+diff c6_br against c6	flag	region	dept	emp_id	hire_date
+c6_br	UPDATE	east	1	101	2020-01-15
+c6_br	INSERT	south	3	301	2024-01-01
+c6_br	UPDATE	west	2	201	2022-01-01
+c6_br	DELETE	west	2	202	2023-03-10
 drop snapshot c6_sp0;
 drop table c6;
 drop table c6_br;
@@ -295,8 +295,8 @@ create snapshot c8_sp0 for table test_diff_columns c8;
 data branch create table c8_br from c8{snapshot="c8_sp0"};
 update c8_br set a = 15 where id = 1;
 data branch diff c8_br against c8{snapshot="c8_sp0"} columns (a, a, b);
-diff c8_br against c8	flag	a	b
-c8_br	UPDATE	15	100
+diff c8_br against c8	flag	id	a	b
+c8_br	UPDATE	1	15	100
 drop snapshot c8_sp0;
 drop table c8;
 drop table c8_br;
@@ -307,8 +307,8 @@ create snapshot c9_sp0 for table test_diff_columns c9;
 data branch create table c9_br from c9{snapshot="c9_sp0"};
 update c9_br set Score = 100 where Id = 1;
 data branch diff c9_br against c9{snapshot="c9_sp0"} columns (NAME, score);
-diff c9_br against c9	flag	name	score
-c9_br	UPDATE	test	100
+diff c9_br against c9	flag	id	name	score
+c9_br	UPDATE	1	test	100
 drop snapshot c9_sp0;
 drop table c9;
 drop table c9_br;
@@ -321,17 +321,17 @@ insert into c10 values (3, 30, 'v3');
 drop snapshot if exists c10_sp1;
 create snapshot c10_sp1 for table test_diff_columns c10;
 data branch diff c10{snapshot="c10_sp1"} against c10{snapshot="c10_sp0"} columns (b);
-diff c10 against c10	flag	b
-c10	UPDATE	15
-c10	INSERT	30
+diff c10 against c10	flag	a	b
+c10	UPDATE	1	15
+c10	INSERT	3	30
 data branch diff c10{snapshot="c10_sp1"} against c10{snapshot="c10_sp0"} columns (c);
-diff c10 against c10	flag	c
-c10	UPDATE	v1_mod
-c10	INSERT	v3
+diff c10 against c10	flag	a	c
+c10	UPDATE	1	v1_mod
+c10	INSERT	3	v3
 data branch diff c10{snapshot="c10_sp1"} against c10{snapshot="c10_sp0"} columns (b, c);
-diff c10 against c10	flag	b	c
-c10	UPDATE	15	v1_mod
-c10	INSERT	30	v3
+diff c10 against c10	flag	a	b	c
+c10	UPDATE	1	15	v1_mod
+c10	INSERT	3	30	v3
 drop snapshot c10_sp0;
 drop snapshot c10_sp1;
 drop table c10;

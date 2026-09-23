@@ -24,6 +24,25 @@ docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn 
 docker-compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn up -d
 ```
 
+The default launch builds `xtool/jstfu` from source and publishes the jar
+through a Compose volume. CI can reuse an exact-head jar produced by its shared
+build by setting all three variables below:
+
+```bash
+JSTFU_USE_PREBUILT=1 \
+JSTFU_EXPECTED_SHA256=<sha256-of-xtool/jstfu/target/jstfu.jar> \
+JSTFU_BUILDER_IMAGE=matrixorigin/matrixone:latest \
+docker compose -f etc/launch-tae-compose/compose.yaml --profile launch-multi-cn up -d
+```
+
+Prebuilt mode is fail-closed: a missing jar, malformed checksum, or checksum
+mismatch prevents the dependent jstfu sidecars and the BVT workload from
+starting.
+
+MatrixOne's trusted main-branch cache warmer keeps the Maven repository and
+wrapper distribution available to PR CI. Pull-request jobs restore that cache
+read-only; they never publish dependencies resolved from an untrusted head.
+
 ## Check log
 
 ```shell

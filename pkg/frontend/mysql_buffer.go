@@ -202,6 +202,7 @@ func (block *MemBlock) Adjust() {
 type Conn struct {
 	id                    uint64
 	conn                  net.Conn
+	livenessProbe         *socketLivenessProbe
 	localAddr, remoteAddr string
 	sequenceId            uint8
 	header                [4]byte
@@ -311,6 +312,7 @@ func NewIOSessionWithOptions(
 
 	c := &Conn{
 		conn:                  conn,
+		livenessProbe:         newSocketLivenessProbe(conn),
 		localAddr:             conn.LocalAddr().String(),
 		remoteAddr:            conn.RemoteAddr().String(),
 		fixBuf:                MemBlock{},
@@ -358,6 +360,7 @@ func (c *Conn) GetSequenceID() uint8 {
 
 func (c *Conn) UseConn(conn net.Conn) {
 	c.conn = conn
+	c.livenessProbe = newSocketLivenessProbe(conn)
 }
 
 func (c *Conn) freeDynamicBuffUnsafe() {

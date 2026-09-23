@@ -21,7 +21,10 @@ import (
 	"math"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -35,6 +38,87 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func TestReadDirHiddenPaths(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	contents := map[string]string{
+		".data/part-1.csv":     "1\n",
+		".data/part-2.csv":     "22\n",
+		".data/.part-3.csv":    "333\n",
+		"visible/part-1.csv":   "4\n",
+		"visible/.inner/a.csv": "55\n",
+		".top.csv":             "6\n",
+	}
+	for name, data := range contents {
+		file := filepath.Join(root, name)
+		require.NoError(t, os.MkdirAll(filepath.Dir(file), 0700))
+		require.NoError(t, os.WriteFile(file, []byte(data), 0600))
+	}
+	require.NoError(t, os.Symlink(filepath.Join(root, ".data"), filepath.Join(root, ".link")))
+	fs, err := fileservice.NewLocalETLFS("etl", root)
+	require.NoError(t, err)
+	t.Cleanup(func() { fs.Close(ctx) })
+	for _, pathType := range []struct{ name, prefix string }{{"absolute", root}, {"named ETL", "etl:"}} {
+		t.Run(pathType.name, func(t *testing.T) {
+			prefix := pathType.prefix
+			for _, tc := range []struct {
+				name, pattern string
+				want          []string
+			}{
+				{"literal hidden directory", ".data/part-1.csv", []string{".data/part-1.csv"}},
+				{"glob below hidden directory", ".data/part-*.csv", []string{".data/part-1.csv", ".data/part-2.csv"}},
+				{"explicit hidden glob", ".data/.part-*.csv", []string{".data/.part-3.csv"}},
+				{"literal hidden file", ".top.csv", []string{".top.csv"}},
+				{"ordinary glob omits hidden directories", "*/part-*.csv", []string{"visible/part-1.csv"}},
+				{"ordinary glob omits hidden files", ".data/*.csv", []string{".data/part-1.csv", ".data/part-2.csv"}},
+				{"hidden directory after glob", "*/.inner/*.csv", []string{"visible/.inner/a.csv"}},
+				{"dot glob traverses hidden directories", ".d*/part-1.csv", []string{".data/part-1.csv"}},
+				{"missing literal directory", ".missing/part-*.csv", nil},
+				{"missing literal file", ".data/.missing.csv", nil},
+				{"directory is not a file", ".data", nil},
+				{"file is not a directory", ".top.csv/*", nil},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					param := &tree.ExternParam{ExParamConst: tree.ExParamConst{
+						Filepath: filepath.Join(prefix, tc.pattern),
+					}, ExParam: tree.ExParam{Ctx: ctx, FileService: fs}}
+					files, sizes, err := ReadDir(param)
+					require.NoError(t, err)
+					require.Len(t, files, len(tc.want))
+					require.Len(t, sizes, len(files))
+					got := make(map[string]int64)
+					for i, file := range files {
+						got[file] = sizes[i]
+					}
+					want := make(map[string]int64)
+					for _, file := range tc.want {
+						want[filepath.Join(prefix, file)] = int64(len(contents[file]))
+					}
+					require.Equal(t, want, got)
+				})
+			}
+			param := &tree.ExternParam{ExParamConst: tree.ExParamConst{
+				Filepath: filepath.Join(prefix, ".link", "part-1.csv"),
+			}, ExParam: tree.ExParam{Ctx: ctx, FileService: fs}}
+			files, sizes, err := ReadDir(param)
+			require.NoError(t, err)
+			require.Equal(t, []string{param.Filepath}, files)
+			require.Equal(t, []int64{2}, sizes)
+			param.Filepath = filepath.Join(prefix, ".data", "[")
+			_, _, err = ReadDir(param)
+			require.ErrorIs(t, err, path.ErrBadPattern)
+			cancelled, cancel := context.WithCancel(ctx)
+			cancel()
+			param.Ctx = cancelled
+			param.Filepath = filepath.Join(prefix, ".data", "part-*.csv")
+			_, _, err = ReadDir(param)
+			require.ErrorIs(t, err, context.Canceled)
+		})
+	}
+	_, err = os.Stat(filepath.Join(root, ".missing"))
+	require.True(t, os.IsNotExist(err), "read-only discovery must not create a missing directory")
+}
 
 func TestSplitPlanConjunctionKeepsSharedVolatileMemoRoot(t *testing.T) {
 	memo := func(id int32) *plan.Expr {
@@ -75,6 +159,55 @@ func TestExprIsZonemappableRejectsVolatileRuntimeConstant(t *testing.T) {
 
 	require.False(t, ExprIsZonemappable(context.Background(), volatile))
 	require.True(t, ExprIsZonemappable(context.Background(), MakePlan2Int64ConstExprWithType(1)))
+}
+
+func TestPreparedJSONComparisonParamPositionsIncludesMemberOfLeftParam(t *testing.T) {
+	param := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_text)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 3}},
+	}
+	right := &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_text)},
+		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 7}},
+	}
+	memberOf := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_int64)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{ObjName: function.JsonMemberOfFunctionName},
+			Args: []*plan.Expr{param, right},
+		}},
+	}
+	preparePlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		Nodes: []*plan.Node{{ProjectList: []*plan.Expr{memberOf}}},
+	}}}
+	require.Equal(t, []int32{3, 7}, PreparedJSONComparisonParamPositions(preparePlan))
+	require.Equal(t, []int32{3, 7}, PreparedJSONMemberOfParamPositions(preparePlan))
+}
+
+func TestPreparedJSONConstructorValueParamPositions(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		want []int32
+	}{
+		{"json_array", []int32{0, 1, 2, 3, 4}},
+		{"json_object", []int32{1, 3}},
+		{"json_set", []int32{2, 4}},
+		{"json_insert", []int32{2, 4}},
+		{"json_replace", []int32{2, 4}},
+		{"json_array_append", []int32{2, 4}},
+		{"concat", []int32{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := make([]*plan.Expr, 5)
+			for i := range args {
+				args[i] = &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: int32(i)}}}
+			}
+			expr := &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{ObjName: tc.name}, Args: args}}}
+			p := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{ProjectList: []*plan.Expr{expr}}}}}}
+			require.Equal(t, tc.want, PreparedJSONComparisonParamPositions(p))
+			require.Empty(t, PreparedJSONMemberOfParamPositions(p))
+		})
+	}
 }
 
 func TestHasTrailingZeros(t *testing.T) {
@@ -264,6 +397,30 @@ func TestNormalizePrepareParamRefsIsIdempotentAcrossVisitedAliases(t *testing.T)
 	})
 }
 
+func TestNormalizePrepareParamRefsVisitsSubqueryRoots(t *testing.T) {
+	param := &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 1}}}
+	queryPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		Steps: []int32{0},
+		Nodes: []*plan.Node{
+			{
+				NodeId:   0,
+				NodeType: plan.Node_PROJECT,
+				ProjectList: []*plan.Expr{{Expr: &plan.Expr_Sub{Sub: &plan.SubqueryRef{
+					NodeId: 1,
+				}}}},
+			},
+			{
+				NodeId:      1,
+				NodeType:    plan.Node_PROJECT,
+				ProjectList: []*plan.Expr{param},
+			},
+		},
+	}}}
+
+	require.NoError(t, NormalizePrepareParamRefs(context.Background(), queryPlan))
+	require.Equal(t, int32(0), param.GetP().Pos)
+}
+
 func TestFillValuesOfParamsInPlanDoesNotMutatePreparedPlan(t *testing.T) {
 	source := &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 1}}}
 	binaryLiteral := &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
@@ -309,7 +466,7 @@ func TestFillValuesOfParamsInPlanDoesNotMutatePreparedPlan(t *testing.T) {
 	}
 }
 
-func TestPreparedNthValueParamPosition(t *testing.T) {
+func TestPreparedWindowArgumentParamPosition(t *testing.T) {
 	param := func(pos int32) *plan.Expr {
 		return &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: pos}}}
 	}
@@ -338,7 +495,7 @@ func TestPreparedNthValueParamPosition(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			pos, ok := preparedNthValueParamPosition(test.expr)
+			pos, ok := preparedWindowArgumentParamPosition(test.expr)
 			require.Equal(t, test.wantOK, ok)
 			require.Equal(t, test.wantPos, pos)
 		})
@@ -428,6 +585,794 @@ func TestIsPositivePreparedInteger(t *testing.T) {
 	}
 }
 
+func TestPreparedRuntimeTypeFromString(t *testing.T) {
+	largeInteger := strings.Repeat("9", 80)
+	decimal256Integer := strings.Repeat("9", 65)
+	decimal256Fraction := "." + strings.Repeat("1", 65)
+	tests := []struct {
+		name  string
+		value string
+		want  types.T
+		ok    bool
+	}{
+		{name: "empty", value: ""},
+		{name: "sign only", value: "+"},
+		{name: "negative sign only", value: "-"},
+		{name: "positive int", value: "+42", want: types.T_int64, ok: true},
+		{name: "negative int", value: "-42", want: types.T_int64, ok: true},
+		{name: "minimum int", value: "-9223372036854775808", want: types.T_int64, ok: true},
+		{name: "negative overflow", value: "-9223372036854775809"},
+		{name: "maximum int", value: "9223372036854775807", want: types.T_int64, ok: true},
+		{name: "unsigned int", value: "9223372036854775808", want: types.T_uint64, ok: true},
+		{name: "unsigned maximum", value: "18446744073709551615", want: types.T_uint64, ok: true},
+		{name: "unsigned overflow", value: largeInteger},
+		{name: "decimal64", value: "12.340", want: types.T_decimal64, ok: true},
+		{name: "decimal with leading dot", value: ".125", want: types.T_decimal64, ok: true},
+		{name: "decimal with trailing dot", value: "12.", want: types.T_decimal64, ok: true},
+		{name: "decimal64 exponent", value: "1e3", want: types.T_decimal64, ok: true},
+		{name: "signed exponent", value: "1.2E-3", want: types.T_decimal64, ok: true},
+		{name: "decimal256 integer", value: decimal256Integer, want: types.T_decimal256, ok: true},
+		{name: "decimal256 fraction", value: decimal256Fraction, want: types.T_decimal256, ok: true},
+		{name: "invalid exponent", value: "1e+"},
+		{name: "invalid mantissa", value: "1.2.3"},
+		{name: "decimal overflow integer", value: largeInteger},
+		{name: "decimal overflow fraction", value: "." + largeInteger},
+		{name: "invalid text", value: "not-a-number"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := PreparedRuntimeTypeFromString(test.value)
+			require.Equal(t, test.ok, ok)
+			if test.ok {
+				require.Equal(t, test.want, got.Oid)
+			}
+		})
+	}
+}
+
+func TestPreparedParamValueNumericReprepareType(t *testing.T) {
+	decimalType := types.New(types.T_decimal128, 5, 1)
+	wideDecimalType := types.New(types.T_decimal256, 65, 30)
+	for _, test := range []struct {
+		name  string
+		value any
+		want  types.Type
+		ok    bool
+	}{
+		{name: "runtime integer widens", value: ParamValue{Value: "64", RuntimeType: types.T_int32.ToType(), HasRuntimeType: true}, want: types.T_int64.ToType(), ok: true},
+		{name: "unsigned integer preserves sign domain", value: ParamValue{Value: "64", RuntimeType: types.T_uint8.ToType(), HasRuntimeType: true}, want: types.T_uint64.ToType(), ok: true},
+		{name: "source decimal gets parameter envelope", value: ParamValue{Value: "64.5", SourceType: decimalType, HasSourceType: true}, want: wideDecimalType, ok: true},
+		{name: "integer kind fallback", value: ParamValue{Value: "64", PrepareParamKind: vector.PrepareParamInteger}, want: types.T_int64.ToType(), ok: true},
+		{name: "malformed integer keeps protocol domain", value: ParamValue{Value: "bad", PrepareParamKind: vector.PrepareParamInteger}, want: types.T_int64.ToType(), ok: true},
+		{name: "float kind fallback", value: ParamValue{Value: "1.5", PrepareParamKind: vector.PrepareParamFloat}, want: types.T_float64.ToType(), ok: true},
+		{name: "float32 widens", value: ParamValue{Value: "1.5", RuntimeType: types.T_float32.ToType(), HasRuntimeType: true}, want: types.T_float64.ToType(), ok: true},
+		{name: "decimal kind gets parameter envelope", value: ParamValue{Value: "1.5", PrepareParamKind: vector.PrepareParamDecimal}, want: wideDecimalType, ok: true},
+		{name: "malformed decimal keeps protocol domain", value: ParamValue{Value: "bad", PrepareParamKind: vector.PrepareParamDecimal}, want: wideDecimalType, ok: true},
+		{name: "boolean becomes integer parameter", value: ParamValue{Value: "true", PrepareParamKind: vector.PrepareParamBoolean}, want: types.T_int64.ToType(), ok: true},
+		{name: "null has no type", value: ParamValue{RuntimeType: types.T_int64.ToType(), HasRuntimeType: true}},
+		{name: "untyped text stays text", value: ParamValue{Value: "64"}},
+		{name: "primitive unsigned widens", value: uint16(64), want: types.T_uint64.ToType(), ok: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := PreparedParamValueNumericReprepareType(test.value)
+			require.Equal(t, test.ok, ok)
+			if test.ok {
+				require.Equal(t, test.want, got)
+			}
+		})
+	}
+}
+
+func TestPreparedSQLExecuteNumericParamExprPreservesSourceDomain(t *testing.T) {
+	ctx := context.Background()
+	for _, test := range []struct {
+		name       string
+		value      any
+		sourceType types.Type
+		wantType   types.T
+		wantNil    bool
+	}{
+		{name: "string uses approximate numeric conversion", value: "2tail",
+			sourceType: types.New(types.T_varchar, 5, 0), wantType: types.T_float64},
+		{name: "string without numeric prefix keeps existing error path", value: "not-a-number",
+			sourceType: types.New(types.T_varchar, 12, 0), wantNil: true},
+		{name: "boolean uses integer arithmetic", value: true,
+			sourceType: types.T_bool.ToType(), wantType: types.T_int64},
+		{name: "bit uses unsigned arithmetic", value: "5",
+			sourceType: types.T_bit.ToType(), wantType: types.T_uint64},
+		{name: "integer retains exact type", value: int64(5),
+			sourceType: types.T_int64.ToType(), wantType: types.T_int64},
+		{name: "year retains numeric type", value: int32(2026),
+			sourceType: types.T_year.ToType(), wantType: types.T_year},
+		{name: "date is not a shared numeric source", value: "2026-08-28",
+			sourceType: types.T_date.ToType(), wantNil: true},
+		{name: "time is not a shared numeric source", value: "12:34:56.123456",
+			sourceType: types.New(types.T_time, 6, 6), wantNil: true},
+		{name: "datetime is not a shared numeric source", value: "2026-08-28 12:34:56.123456",
+			sourceType: types.New(types.T_datetime, 6, 6), wantNil: true},
+		{name: "timestamp is not a shared numeric source", value: "2026-08-28 12:34:56.123456",
+			sourceType: types.New(types.T_timestamp, 6, 6), wantNil: true},
+		{name: "json is not a shared numeric source", value: "1.6",
+			sourceType: types.T_json.ToType(), wantNil: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			expr, err := preparedSQLExecuteNumericParamExpr(
+				ctx, test.value, false, test.sourceType)
+			require.NoError(t, err)
+			if test.wantNil {
+				require.Nil(t, expr)
+				return
+			}
+			require.NotNil(t, expr)
+			require.Equal(t, int32(test.wantType), expr.Typ.Id)
+		})
+	}
+}
+
+func TestPreparedRuntimeDecimalTypeBoundaries(t *testing.T) {
+	for _, digits := range []int{65, 66, 67, 76} {
+		value := strings.Repeat("9", digits)
+		for _, signed := range []string{value, "-" + value} {
+			typ, ok := PreparedRuntimeTypeFromString(signed)
+			require.True(t, ok, "digits=%d value=%s", digits, signed)
+			require.Equal(t, types.T_decimal256, typ.Oid)
+			require.Equal(t, int32(digits), typ.Width)
+			require.Zero(t, typ.Scale)
+		}
+	}
+	_, ok := PreparedRuntimeTypeFromString(strings.Repeat("9", 77))
+	require.False(t, ok)
+
+	typ, ok := PreparedRuntimeTypeFromString("." + strings.Repeat("0", 75) + "1")
+	require.True(t, ok)
+	require.Equal(t, types.T_decimal256, typ.Oid)
+	require.Equal(t, int32(76), typ.Width)
+	require.Equal(t, int32(76), typ.Scale)
+
+	typ, ok = PreparedRuntimeTypeFromString("0.000000000000000000000000000000000001e100")
+	require.True(t, ok)
+	require.Equal(t, types.T_decimal256, typ.Oid)
+	require.Equal(t, int32(65), typ.Width)
+	require.Zero(t, typ.Scale)
+}
+
+func TestPreparedNumericPrefixTypeFromString(t *testing.T) {
+	tests := []struct {
+		name      string
+		value     string
+		wantOID   types.T
+		wantWidth int32
+		wantScale int32
+	}{
+		{name: "non numeric is zero", value: "abc", wantOID: types.T_decimal64, wantWidth: 1},
+		{name: "empty is zero", value: "  ", wantOID: types.T_decimal64, wantWidth: 1},
+		{name: "suffix", value: "12.340tail", wantOID: types.T_decimal64, wantWidth: 4, wantScale: 2},
+		{name: "equivalent exponent", value: "1234e-2tail", wantOID: types.T_decimal64, wantWidth: 4, wantScale: 2},
+		{
+			name:      "decimal128",
+			value:     "9007199254740992.0001suffix",
+			wantOID:   types.T_decimal128,
+			wantWidth: 20,
+			wantScale: 4,
+		},
+		{
+			name:      "decimal256",
+			value:     strings.Repeat("9", 39) + "." + strings.Repeat("1", 20) + "tail",
+			wantOID:   types.T_decimal256,
+			wantWidth: 59,
+			wantScale: 20,
+		},
+		{
+			name:      "large exponent compensated by fractional digits",
+			value:     "0.000000000000000000000000000000000001e100",
+			wantOID:   types.T_decimal256,
+			wantWidth: 65,
+		},
+		{name: "positive overflow", value: "1e76", wantOID: types.T_float64},
+		{name: "negative overflow", value: "1e-77", wantOID: types.T_float64},
+		{name: "huge exponent", value: "1e999999999999suffix", wantOID: types.T_float64},
+		{name: "huge negative exponent", value: "1e-999999999999suffix", wantOID: types.T_float64},
+		{name: "zero huge exponent", value: "0e999999999999suffix", wantOID: types.T_decimal64, wantWidth: 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := PreparedNumericPrefixTypeFromString(test.value)
+			require.Equal(t, test.wantOID, got.Oid)
+			require.Equal(t, test.wantWidth, got.Width)
+			require.Equal(t, test.wantScale, got.Scale)
+		})
+	}
+}
+
+func TestPreparedNumericStringIsComplete(t *testing.T) {
+	for _, test := range []struct {
+		value string
+		want  bool
+	}{
+		{value: "65.5", want: true},
+		{value: " 65.5e0 ", want: true},
+		{value: "+1", want: true},
+		{value: "65.5xyz", want: false},
+		{value: "abc", want: false},
+		{value: "1e+", want: false},
+	} {
+		t.Run(test.value, func(t *testing.T) {
+			require.Equal(t, test.want, PreparedNumericStringIsComplete(test.value))
+		})
+	}
+}
+
+func TestPreparedCharSourceTypeFromString(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		value     string
+		want      types.T
+		wantExact bool
+	}{
+		{name: "signed minimum", value: "-9223372036854775808", want: types.T_int64, wantExact: true},
+		{name: "unsigned above signed maximum", value: "9223372036854775809", want: types.T_uint64, wantExact: true},
+		{name: "decimal", value: "65.5e0", want: types.T_decimal64, wantExact: true},
+		{name: "numeric suffix", value: "65.5xyz", want: types.T_varchar},
+		{name: "non-numeric", value: "abc", want: types.T_varchar},
+		{name: "decimal overflow falls back to string", value: strings.Repeat("9", 77), want: types.T_varchar},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, exact := PreparedCharSourceTypeFromString(test.value)
+			require.Equal(t, test.want, got.Oid)
+			require.Equal(t, test.wantExact, exact)
+		})
+	}
+}
+
+func TestPreparedDecimalRuntimeTypePreservesWireDomain(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		value     string
+		wantOID   types.T
+		wantWidth int32
+		wantScale int32
+		wantOK    bool
+	}{
+		{name: "integer", value: "123", wantOID: types.T_decimal64, wantWidth: 3, wantOK: true},
+		{name: "leading zeros", value: "001.20", wantOID: types.T_decimal64, wantWidth: 3, wantScale: 2, wantOK: true},
+		{name: "fixed scale zero", value: "0.00", wantOID: types.T_decimal64, wantWidth: 2, wantScale: 2, wantOK: true},
+		{name: "exponent zero", value: "0e-30", wantOID: types.T_decimal128, wantWidth: 30, wantScale: 30, wantOK: true},
+		{name: "zero positive exponent boundary", value: "0e+77", wantOID: types.T_decimal64, wantWidth: 1, wantOK: true},
+		{name: "zero huge positive exponent", value: "000.000e+999999999999999999999", wantOID: types.T_decimal64, wantWidth: 1, wantOK: true},
+		{name: "zero negative scale overflow", value: "0e-77"},
+		{name: "small exponent", value: "1e-30", wantOID: types.T_decimal128, wantWidth: 30, wantScale: 30, wantOK: true},
+		{name: "positive exponent", value: "1.2500e+2", wantOID: types.T_decimal64, wantWidth: 5, wantScale: 2, wantOK: true},
+		{name: "decimal256", value: strings.Repeat("9", 75) + ".1", wantOID: types.T_decimal256, wantWidth: 76, wantScale: 1, wantOK: true},
+		{name: "width overflow", value: strings.Repeat("9", 77)},
+		{name: "scale overflow", value: "1e-77"},
+		{name: "invalid", value: "1.2.3"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := PreparedDecimalRuntimeType(test.value)
+			require.Equal(t, test.wantOK, ok)
+			if !ok {
+				return
+			}
+			require.Equal(t, test.wantOID, got.Oid)
+			require.Equal(t, test.wantWidth, got.Width)
+			require.Equal(t, test.wantScale, got.Scale)
+		})
+	}
+}
+
+func TestPreparedDecimalRuntimeDomainsCanonicalMaterialization(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		value      string
+		normalized types.Type
+		canonical  string
+		visible    types.Type
+		exact      bool
+	}{
+		{
+			name: "decimal64 leading zeroes", value: strings.Repeat("0", 100) + "1.0",
+			normalized: types.New(types.T_decimal64, 1, 0),
+			canonical:  "1", visible: types.New(types.T_decimal64, 2, 1),
+		},
+		{
+			name: "signed exponent", value: "-00012.3400e+2",
+			normalized: types.New(types.T_decimal64, 4, 0),
+			canonical:  "-1234", visible: types.New(types.T_decimal64, 6, 2), exact: true,
+		},
+		{
+			name: "trailing zeroes fit normalized domain", value: "1.200000000000000000000000000000",
+			normalized: types.New(types.T_decimal64, 2, 1),
+			canonical:  "12e-1", visible: types.New(types.T_decimal128, 31, 30), exact: true,
+		},
+		{
+			name: "decimal256 leading zeroes", value: strings.Repeat("0", 100) + strings.Repeat("9", 65),
+			normalized: types.New(types.T_decimal256, 65, 0),
+			canonical:  strings.Repeat("9", 65), visible: types.New(types.T_decimal256, 65, 0),
+		},
+		{
+			name: "huge exponent zero", value: "-000.000e+999999999999999999999",
+			normalized: types.New(types.T_decimal64, 1, 0),
+			canonical:  "0", visible: types.New(types.T_decimal64, 1, 0),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			normalized, visible, canonical, ok := PreparedDecimalRuntimeDomains(test.value)
+			require.True(t, ok)
+			require.Equal(t, test.normalized, normalized)
+			require.Equal(t, test.visible, visible)
+			require.Equal(t, test.canonical, canonical)
+			parse := func(value string, typ types.Type) (any, error) {
+				switch typ.Oid {
+				case types.T_decimal64:
+					parsed, err := types.ParseDecimal64(value, typ.Width, typ.Scale)
+					return parsed, err
+				case types.T_decimal128:
+					parsed, err := types.ParseDecimal128(value, typ.Width, typ.Scale)
+					return parsed, err
+				case types.T_decimal256:
+					parsed, err := types.ParseDecimal256(value, typ.Width, typ.Scale)
+					return parsed, err
+				default:
+					t.Fatalf("unexpected DECIMAL domain %s", typ.Oid)
+					return nil, nil
+				}
+			}
+			_, err := parse(canonical, normalized)
+			require.NoError(t, err, "canonical must parse in normalized domain")
+			canonicalVisible, err := parse(canonical, visible)
+			require.NoError(t, err, "canonical must parse in visible domain")
+			if test.exact {
+				originalVisible, err := parse(test.value, visible)
+				require.NoError(t, err)
+				require.Equal(t, originalVisible, canonicalVisible,
+					"canonical must preserve the visible-domain value and scale")
+			}
+		})
+	}
+
+	redundantTrailingZeros := "90071992547409920001000000000000000000000000000000000000000000000000000000000e-57"
+	normalized, visible, canonical, ok := PreparedDecimalRuntimeDomains(redundantTrailingZeros)
+	require.True(t, ok)
+	require.Equal(t, types.New(types.T_decimal128, 20, 0), normalized)
+	require.Equal(t, normalized, visible)
+	require.Equal(t, "90071992547409920001", canonical)
+	_, err := types.ParseDecimal128(canonical, normalized.Width, normalized.Scale)
+	require.NoError(t, err)
+
+	raw := strings.Repeat("0", 100) + "1.0"
+	_, visible, canonical, ok = PreparedDecimalRuntimeDomains(raw)
+	require.True(t, ok)
+	planUnderTest := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*plan.Node{{
+			NodeType: plan.Node_VALUE_SCAN,
+			ProjectList: []*plan.Expr{{
+				Typ:  plan.Type{Id: int32(types.T_text)},
+				Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+			}},
+		}},
+	}}}
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(), planUnderTest, []any{ParamValue{
+			Value: raw, MaterializedValue: canonical,
+			RuntimeType: visible, HasRuntimeType: true,
+			IsBinaryProtocol: true, RetainParamRef: true,
+		}})
+	require.NoError(t, err)
+	require.True(t, specialized)
+	expr := filled.GetQuery().Nodes[0].ProjectList[0]
+	require.Equal(t, int32(types.T_decimal64), expr.Typ.Id)
+	require.Equal(t, int32(2), expr.Typ.Width)
+	require.Equal(t, int32(1), expr.Typ.Scale)
+	require.Equal(t, int64(10), expr.GetLit().GetDecimal64Val().A)
+	require.Equal(t, int32(0), expr.GetLit().GetSrc().GetP().Pos)
+}
+
+func TestPreparedDecimalRuntimeDomainsTrailingZerosHaveBoundedMaterialization(t *testing.T) {
+	const trailingZeroCount = 1 << 20
+	value := "1" + strings.Repeat("0", trailingZeroCount) + "e-" + strconv.Itoa(trailingZeroCount)
+	assertDomains := func() {
+		normalized, visible, canonical, ok := PreparedDecimalRuntimeDomains(value)
+		require.True(t, ok)
+		require.Equal(t, types.New(types.T_decimal64, 1, 0), normalized)
+		require.Equal(t, normalized, visible)
+		require.Equal(t, "1", canonical)
+	}
+	assertDomains()
+	require.LessOrEqual(t, testing.AllocsPerRun(10, func() {
+		_, _, canonical, ok := PreparedDecimalRuntimeDomains(value)
+		if !ok || canonical != "1" {
+			panic("large exact DECIMAL lexeme rejected")
+		}
+	}), float64(1))
+}
+
+func TestPreparedDecimalRuntimeTypesLargeLexemeHasBoundedAllocations(t *testing.T) {
+	value := strings.Repeat("0", 1<<20) + "1.0"
+	assertDomains := func() {
+		normalized, visible, ok := PreparedDecimalRuntimeTypes(value)
+		require.True(t, ok)
+		require.Equal(t, types.New(types.T_decimal64, 1, 0), normalized)
+		require.Equal(t, types.New(types.T_decimal64, 2, 1), visible)
+	}
+	assertDomains()
+	require.Zero(t, testing.AllocsPerRun(10, func() {
+		_, _, ok := PreparedDecimalRuntimeTypes(value)
+		if !ok {
+			panic("large valid DECIMAL lexeme rejected")
+		}
+	}))
+}
+
+func BenchmarkPreparedDecimalRuntimeTypesLargeLexeme(b *testing.B) {
+	value := strings.Repeat("0", 1<<20) + "1.0"
+	b.ReportAllocs()
+	b.SetBytes(int64(len(value)))
+	for b.Loop() {
+		_, _, ok := PreparedDecimalRuntimeTypes(value)
+		if !ok {
+			b.Fatal("large valid DECIMAL lexeme rejected")
+		}
+	}
+}
+
+func BenchmarkPreparedDecimalDomainsAndMaterializationLargeLexeme(b *testing.B) {
+	value := strings.Repeat("0", 1<<20) + "1.0"
+	ctx := context.Background()
+	template := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*plan.Node{{
+			NodeType: plan.Node_VALUE_SCAN,
+			ProjectList: []*plan.Expr{{
+				Typ:  plan.Type{Id: int32(types.T_text)},
+				Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+			}},
+		}},
+	}}}
+	b.ReportAllocs()
+	b.SetBytes(int64(len(value)))
+	for b.Loop() {
+		_, visible, canonical, ok := PreparedDecimalRuntimeDomains(value)
+		if !ok {
+			b.Fatal("large valid DECIMAL lexeme rejected")
+		}
+		candidate := DeepCopyPlan(template)
+		if _, err := replaceParamVals(ctx, candidate, []any{ParamValue{
+			Value: value, MaterializedValue: canonical,
+			RuntimeType: visible, HasRuntimeType: true,
+			IsBinaryProtocol: true, RetainParamRef: true,
+		}}); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func TestPreparedPlanDirectResultParamPositions(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		sql  string
+		want []int32
+	}{
+		{name: "direct", sql: "prepare direct_result from 'select ? as result'", want: []int32{0}},
+		{name: "order by", sql: "prepare direct_order from 'select ? as result order by result'", want: []int32{0}},
+		{name: "distinct", sql: "prepare direct_distinct from 'select distinct ? as result'", want: []int32{0}},
+		{name: "distinct row source", sql: "prepare direct_distinct_rows from 'select distinct ? as result from nation'", want: []int32{0}},
+		{name: "union common type control", sql: "prepare direct_union from 'select ? as result union all select 1'"},
+		{name: "nested control", sql: "prepare nested_only from 'select abs(?)'"},
+		{name: "explicit cast control", sql: "prepare explicit_cast from 'select cast(? as decimal(20, 4))'"},
+		{name: "union explicit cast control", sql: "prepare union_explicit_cast from 'select cast(? as decimal(20, 4)) union all select cast(1 as decimal(20, 4))'"},
+		{name: "mixed control", sql: "prepare direct_mixed from 'select ? as direct_value, abs(?) as nested_value'", want: []int32{0}},
+		{name: "predicate control", sql: "prepare predicate_only from 'select 1 where ? = 1'"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+			planUnderTest := prepared.GetDcl().GetPrepare().GetPlan()
+			got := PreparedPlanDirectResultParamPositions(planUnderTest)
+			require.Equal(t, test.want, got)
+		})
+	}
+
+	require.Nil(t, PreparedPlanDirectResultParamPositions(nil))
+	require.Nil(t, PreparedPlanDirectResultParamPositions(&plan.Plan{
+		Plan: &plan.Plan_Query{Query: &plan.Query{StmtType: plan.Query_SELECT}},
+	}))
+}
+
+func TestPreparedPlanConversionParamPositions(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		sql  string
+		want []int32
+	}{
+		{name: "bin value", sql: "prepare bin_value from 'select bin(?)'", want: []int32{0}},
+		{name: "conv value", sql: "prepare conv_value from 'select conv(?, 10, 16)'", want: []int32{0}},
+		{name: "multiple values", sql: "prepare multiple_values from 'select bin(?), conv(?, 10, 16)'", want: []int32{0, 1}},
+		{name: "no conversion", sql: "prepare no_conversion from 'select abs(?)'", want: nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+			planUnderTest := prepared.GetDcl().GetPrepare().GetPlan()
+			require.Equal(t, test.want, PreparedPlanConversionParamPositions(planUnderTest))
+		})
+	}
+
+	require.Nil(t, PreparedPlanConversionParamPositions(nil))
+	require.Nil(t, PreparedPlanConversionParamPositions(&plan.Plan{
+		Plan: &plan.Plan_Query{Query: &plan.Query{StmtType: plan.Query_SELECT}},
+	}))
+}
+
+func TestPreparedPlanInetNtoaParamPositions(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		sql  string
+		want []int32
+	}{
+		{name: "direct", sql: "prepare inet_direct from 'select inet_ntoa(?)'", want: []int32{0}},
+		{name: "multiple", sql: "prepare inet_multiple from 'select inet_ntoa(?), inet_ntoa(?)'", want: []int32{0, 1}},
+		{name: "nested expression owns its text domain", sql: "prepare inet_nested from 'select inet_ntoa(concat(?))'", want: nil},
+		{name: "other function", sql: "prepare inet_other from 'select inet_aton(?)'", want: nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+			planUnderTest := prepared.GetDcl().GetPrepare().GetPlan()
+			require.Equal(t, test.want, PreparedPlanInetNtoaParamPositions(planUnderTest))
+		})
+	}
+
+	require.Nil(t, PreparedPlanInetNtoaParamPositions(nil))
+}
+
+func TestPreparedDirectResultSpecializationUpdatesVisibleType(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		sql  string
+	}{
+		{name: "direct", sql: "prepare runtime_direct from 'select ? as result'"},
+		{name: "order by", sql: "prepare runtime_order from 'select ? as result order by result'"},
+		{name: "distinct", sql: "prepare runtime_distinct from 'select distinct ? as result'"},
+		{name: "distinct row source", sql: "prepare runtime_distinct_rows from 'select distinct ? as result from nation'"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+			filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+				context.Background(), prepared.GetDcl().GetPrepare().GetPlan(), []any{ParamValue{
+					Value: "42", RuntimeType: types.T_int64.ToType(), HasRuntimeType: true,
+					IsBinaryProtocol: true, RetainParamRef: true,
+				}})
+			require.NoError(t, err)
+			require.True(t, specialized)
+			require.NoError(t, RestorePreparedRuntimeParamRefs(context.Background(), filled))
+			columns := GetResultColumnsFromPlan(filled)
+			require.NotEmpty(t, columns)
+			require.Equal(t, int32(types.T_int64), columns[0].Typ.Id, columns[0].String())
+		})
+	}
+}
+
+func TestPreparedDirectDecimal256RestoresRuntimeParamRef(t *testing.T) {
+	original := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{0},
+		Nodes: []*plan.Node{{
+			NodeType: plan.Node_VALUE_SCAN,
+			ProjectList: []*plan.Expr{{
+				Typ:  plan.Type{Id: int32(types.T_text)},
+				Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}},
+			}},
+		}},
+	}}}
+	runtimeType := types.New(types.T_decimal256, 76, 1)
+	filled, specialized, err := FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(), original, []any{ParamValue{
+			Value: strings.Repeat("9", 75) + ".1", RuntimeType: runtimeType,
+			HasRuntimeType: true, RetainParamRef: true,
+		}})
+	require.NoError(t, err)
+	require.True(t, specialized)
+	project := filled.GetQuery().Nodes[0].ProjectList[0]
+	require.NotNil(t, project.GetF(), "Decimal256 must materialize through an explicit cast")
+	require.NotNil(t, project.GetF().Args[0].GetLit().GetSrc())
+
+	require.NoError(t, RestorePreparedRuntimeParamRefs(context.Background(), filled))
+	project = filled.GetQuery().Nodes[0].ProjectList[0]
+	require.Equal(t, int32(types.T_decimal256), project.Typ.Id)
+	require.NotNil(t, project.GetF())
+	var restoredParam *plan.ParamRef
+	require.NoError(t, plan.VisitExprTree(project, func(candidate *plan.Expr) error {
+		if restoredParam == nil {
+			restoredParam = candidate.GetP()
+		}
+		return nil
+	}))
+	require.NotNil(t, restoredParam)
+	require.Equal(t, int32(0), restoredParam.Pos)
+
+	prepared, err := runOneStmt(
+		NewMockOptimizer(false), t,
+		"prepare decimal256_order from 'select ? as result order by result'")
+	require.NoError(t, err)
+	filled, specialized, err = FillValuesOfParamsInPlanWithSpecialization(
+		context.Background(), prepared.GetDcl().GetPrepare().GetPlan(), []any{ParamValue{
+			Value: strings.Repeat("9", 75) + ".1", RuntimeType: runtimeType,
+			HasRuntimeType: true, RetainParamRef: true,
+		}})
+	require.NoError(t, err)
+	require.True(t, specialized)
+	require.NoError(t, RestorePreparedRuntimeParamRefs(context.Background(), filled))
+	columns := GetResultColumnsFromPlan(filled)
+	require.NotEmpty(t, columns)
+	require.Equal(t, int32(types.T_decimal256), columns[0].Typ.Id)
+	require.Equal(t, int32(76), columns[0].Typ.Width)
+	require.Equal(t, int32(1), columns[0].Typ.Scale)
+}
+
+func TestCheckNoNeedCastAcceptsSameTypeConstantCastOnly(t *testing.T) {
+	ctx := context.Background()
+	target := types.T_int64.ToType()
+	literalCast, err := appendCastBeforeExpr(ctx, makePlan2Int32ConstExprWithType(7), makePlan2Type(&target))
+	require.NoError(t, err)
+	require.True(t, checkNoNeedCast(target, target, literalCast))
+
+	columnCast, err := appendCastBeforeExpr(ctx, &plan.Expr{
+		Typ:  plan.Type{Id: int32(types.T_int32)},
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}},
+	}, makePlan2Type(&target))
+	require.NoError(t, err)
+	require.False(t, checkNoNeedCast(target, target, columnCast))
+
+	uuidType := types.T_uuid.ToType()
+	uuidCast, err := appendExplicitCastBeforeExpr(
+		ctx,
+		makePlan2StringConstExprWithType("00000000-0000-0000-0000-000000000001", false),
+		makePlan2Type(&uuidType),
+	)
+	require.NoError(t, err)
+	require.True(t, checkNoNeedCast(uuidType, uuidType, uuidCast), uuidCast.String())
+	secondUUIDCast, err := appendExplicitCastBeforeExpr(
+		ctx,
+		makePlan2StringConstExprWithType("00000000-0000-0000-0000-000000000002", false),
+		makePlan2Type(&uuidType),
+	)
+	require.NoError(t, err)
+	uuidColumn := &plan.Expr{
+		Typ:  makePlan2Type(&uuidType),
+		Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1}},
+	}
+	_, err = BindFuncExprImplByPlanExpr(ctx, "in", []*plan.Expr{uuidColumn, {
+		Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{uuidCast, secondUUIDCast}}},
+	}})
+	require.NoError(t, err, "same-type UUID constants must not receive a redundant UUID-to-UUID cast")
+}
+
+func TestPreparedDecimalSyntaxHelpers(t *testing.T) {
+	for _, test := range []struct {
+		value string
+		want  bool
+	}{
+		{value: "", want: false},
+		{value: ".", want: false},
+		{value: ".1", want: true},
+		{value: "1.", want: true},
+		{value: "1.2", want: true},
+		{value: "1..2", want: false},
+		{value: "1a", want: false},
+	} {
+		require.Equal(t, test.want, isDecimalMantissa(test.value), test.value)
+	}
+	for _, test := range []struct {
+		value string
+		want  bool
+	}{
+		{value: "", want: false},
+		{value: "+", want: false},
+		{value: "-", want: false},
+		{value: "12", want: true},
+		{value: "+12", want: true},
+		{value: "-12", want: true},
+		{value: "1a", want: false},
+	} {
+		require.Equal(t, test.want, isDecimalExponent(test.value), test.value)
+	}
+	for _, test := range []struct {
+		value string
+		want  bool
+	}{
+		{value: "", want: false},
+		{value: ".", want: false},
+		{value: "1.", want: true},
+		{value: "1e+2", want: true},
+		{value: ".1e-2", want: true},
+		// This finite value is valid FLOAT64 syntax, but its exponent is
+		// outside the Decimal256 domain.  preparedDecimalType must therefore
+		// reject it; preparedExponentType below covers the approximate domain.
+		{value: "1.7976931348623157e308", want: false},
+		{value: "1e309", want: false},
+		{value: "1e", want: false},
+		{value: "1e+", want: false},
+		{value: "1.2.3", want: false},
+	} {
+		_, ok := preparedDecimalType(test.value)
+		require.Equal(t, test.want, ok, test.value)
+	}
+	for _, test := range []struct {
+		value string
+		want  bool
+	}{
+		{value: "1e+2", want: true},
+		{value: ".1e-2", want: true},
+		{value: "1.7976931348623157e308", want: true},
+		{value: "1e309", want: false},
+		{value: "1e", want: false},
+		{value: "e1", want: false},
+		{value: "1ee2", want: false},
+		{value: "1eE2", want: false},
+	} {
+		_, ok := preparedExponentType(test.value)
+		require.Equal(t, test.want, ok, test.value)
+	}
+	require.Equal(t, types.T_float64, preparedNumericComparisonTextType().Oid)
+}
+
+func TestPreparedRuntimeParamExprMaterializesRuntimeTypes(t *testing.T) {
+	ctx := context.Background()
+	tests := []struct {
+		name     string
+		value    string
+		runtime  types.Type
+		wantLit  bool
+		wantFunc bool
+	}{
+		{name: "bool", value: "true", runtime: types.T_bool.ToType(), wantLit: true},
+		{name: "bool fallback", value: "not-bool", runtime: types.T_bool.ToType(), wantFunc: true},
+		{name: "int8", value: "-8", runtime: types.T_int8.ToType(), wantLit: true},
+		{name: "int8 fallback", value: "bad", runtime: types.T_int8.ToType(), wantFunc: true},
+		{name: "int16", value: "16", runtime: types.T_int16.ToType(), wantLit: true},
+		{name: "int16 fallback", value: "bad", runtime: types.T_int16.ToType(), wantFunc: true},
+		{name: "int32", value: "32", runtime: types.T_int32.ToType(), wantLit: true},
+		{name: "int32 fallback", value: "bad", runtime: types.T_int32.ToType(), wantFunc: true},
+		{name: "int64", value: "64", runtime: types.T_int64.ToType(), wantLit: true},
+		{name: "int64 fallback", value: "bad", runtime: types.T_int64.ToType(), wantFunc: true},
+		{name: "uint8", value: "8", runtime: types.T_uint8.ToType(), wantLit: true},
+		{name: "uint8 fallback", value: "bad", runtime: types.T_uint8.ToType(), wantFunc: true},
+		{name: "uint16", value: "16", runtime: types.T_uint16.ToType(), wantLit: true},
+		{name: "uint16 fallback", value: "bad", runtime: types.T_uint16.ToType(), wantFunc: true},
+		{name: "uint32", value: "32", runtime: types.T_uint32.ToType(), wantLit: true},
+		{name: "uint32 fallback", value: "bad", runtime: types.T_uint32.ToType(), wantFunc: true},
+		{name: "uint64", value: "64", runtime: types.T_uint64.ToType(), wantLit: true},
+		{name: "uint64 fallback", value: "bad", runtime: types.T_uint64.ToType(), wantFunc: true},
+		{name: "bit", value: "7", runtime: types.T_bit.ToType(), wantLit: true},
+		{name: "bit fallback", value: "bad", runtime: types.T_bit.ToType(), wantFunc: true},
+		{name: "year", value: "2026", runtime: types.T_year.ToType(), wantLit: true},
+		{name: "year fallback", value: "bad", runtime: types.T_year.ToType(), wantFunc: true},
+		{name: "float32", value: "1.25", runtime: types.T_float32.ToType(), wantLit: true},
+		{name: "float32 fallback", value: "bad", runtime: types.T_float32.ToType(), wantFunc: true},
+		{name: "float64", value: "1.25", runtime: types.T_float64.ToType(), wantLit: true},
+		{name: "float64 fallback", value: "bad", runtime: types.T_float64.ToType(), wantFunc: true},
+		{name: "decimal64", value: "12.34", runtime: types.New(types.T_decimal64, 4, 2), wantLit: true},
+		{name: "decimal64 fallback", value: "bad", runtime: types.New(types.T_decimal64, 4, 2), wantFunc: true},
+		{name: "decimal128", value: "12.34", runtime: types.New(types.T_decimal128, 20, 2), wantLit: true},
+		{name: "decimal128 fallback", value: "bad", runtime: types.New(types.T_decimal128, 20, 2), wantFunc: true},
+		{name: "decimal256", value: "12.34", runtime: types.New(types.T_decimal256, 30, 2), wantFunc: true},
+		{name: "text", value: "plain text", runtime: types.T_text.ToType(), wantLit: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := preparedRuntimeParamExpr(ctx, test.value, true, test.runtime)
+			require.NoError(t, err)
+			require.Equal(t, int32(test.runtime.Oid), got.Typ.Id)
+			require.Equal(t, test.wantLit, got.GetLit() != nil)
+			require.Equal(t, test.wantFunc, got.GetF() != nil)
+		})
+	}
+}
+
 func TestFillValuesOfParamsInPlanRejectsControlStatements(t *testing.T) {
 	_, err := FillValuesOfParamsInPlan(context.Background(), &plan.Plan{
 		Plan: &plan.Plan_Tcl{Tcl: &plan.TransationControl{}},
@@ -459,6 +1404,25 @@ func TestValidatePreparedPaginationParams(t *testing.T) {
 	}
 
 	limitPlan := buildPreparedPlan(t, "select n_nationkey from nation limit ?")
+	t.Run("SQL source type does not replace limit domain", func(t *testing.T) {
+		value := ParamValue{
+			Value: int64(2), PrepareParamKind: vector.PrepareParamInteger,
+			SourceType: types.New(types.T_decimal128, 1, 0), HasSourceType: true,
+		}
+		require.NoError(t, ValidatePreparedPaginationParams(context.Background(), limitPlan, []any{value}))
+		filled := DeepCopyPlan(limitPlan)
+		_, err := replaceParamVals(context.Background(), filled, []any{value})
+		require.NoError(t, err)
+		var limit *plan.Expr
+		for _, node := range filled.GetQuery().Nodes {
+			if node.Limit != nil {
+				limit = node.Limit
+				break
+			}
+		}
+		require.NotNil(t, limit)
+		require.Equal(t, int32(types.T_uint64), limit.Typ.Id, limit.String())
+	})
 	for _, test := range []struct {
 		name       string
 		value      any
@@ -477,11 +1441,16 @@ func TestValidatePreparedPaginationParams(t *testing.T) {
 		{name: "binary uint64", value: ParamValue{Value: "18446744073709551615", PrepareParamKind: vector.PrepareParamInteger}},
 		{name: "runtime boolean", value: ParamValue{Value: true, PrepareParamKind: vector.PrepareParamBoolean}},
 		{name: "binary boolean", value: ParamValue{Value: "1", PrepareParamKind: vector.PrepareParamBoolean}},
-		{name: "binary string", value: ParamValue{Value: "2"}, wrongArgs: true},
+		{name: "wrapped text integer", value: ParamValue{Value: "2"}, wrongArgs: true},
+		{name: "binary protocol integer text", value: ParamValue{Value: "2", IsBinaryProtocol: true}},
+		{name: "binary protocol uint64 text", value: ParamValue{Value: "18446744073709551615", IsBinaryProtocol: true}},
+		{name: "binary protocol malformed text", value: ParamValue{Value: "two", IsBinaryProtocol: true}, wrongArgs: true},
+		{name: "binary protocol decimal text", value: ParamValue{Value: "2.0", IsBinaryProtocol: true}, wrongArgs: true},
 		{name: "binary float", value: ParamValue{Value: "2", PrepareParamKind: vector.PrepareParamFloat}, wrongArgs: true},
 		{name: "binary decimal", value: ParamValue{Value: "2", PrepareParamKind: vector.PrepareParamDecimal}, wrongArgs: true},
 		{name: "negative signed", value: int64(-1), outOfRange: true},
 		{name: "negative binary", value: ParamValue{Value: "-1", PrepareParamKind: vector.PrepareParamInteger}, outOfRange: true},
+		{name: "negative binary protocol text", value: ParamValue{Value: "-1", IsBinaryProtocol: true}, outOfRange: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			err := ValidatePreparedPaginationParams(context.Background(), limitPlan, []any{test.value})
@@ -532,6 +1501,212 @@ func TestValidatePreparedPaginationParams(t *testing.T) {
 		require.NoError(t, ValidatePreparedPaginationParams(
 			context.Background(), ordinaryPlan, []any{"3"}))
 	})
+}
+
+func TestPreparedDirectResultParamUsesRuntimeNumericType(t *testing.T) {
+	prepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare stmt1 from 'select ? as result'")
+	require.NoError(t, err)
+	queryPlan := prepared.GetDcl().GetPrepare().GetPlan()
+	require.True(t, PreparedPlanHasDirectResultParams(queryPlan))
+	require.Equal(t, []int32{0}, PreparedPlanDirectResultParamPositions(queryPlan))
+
+	functionPrepared, err := runOneStmt(NewMockOptimizer(false), t, "prepare stmt2 from 'select abs(?)'")
+	require.NoError(t, err)
+	require.False(t, PreparedPlanHasDirectResultParams(functionPrepared.GetDcl().GetPrepare().GetPlan()))
+	require.Empty(t, PreparedPlanDirectResultParamPositions(functionPrepared.GetDcl().GetPrepare().GetPlan()))
+
+	filled, err := FillValuesOfParamsInPlan(context.Background(), queryPlan, []any{
+		ParamValue{
+			Value:          "-42",
+			RuntimeType:    types.T_int64.ToType(),
+			HasRuntimeType: true,
+		},
+	})
+	require.NoError(t, err)
+	root := filled.GetQuery().Nodes[filled.GetQuery().Steps[len(filled.GetQuery().Steps)-1]]
+	require.Len(t, root.ProjectList, 1)
+	require.Equal(t, int32(types.T_int64), root.ProjectList[0].Typ.Id)
+	require.Equal(t, int64(-42), root.ProjectList[0].GetLit().GetI64Val())
+}
+
+func TestPreparedDirectResultSpecializationIsPositionScoped(t *testing.T) {
+	prepared, err := runOneStmt(NewMockOptimizer(false), t,
+		"prepare stmt_direct_scope from 'select ? as direct_text, ? as direct_number, abs(?) as nested_number'")
+	require.NoError(t, err)
+	original := prepared.GetDcl().GetPrepare().GetPlan()
+	require.Equal(t, []int32{0, 1}, PreparedPlanDirectResultParamPositions(original))
+	originalRoot := original.GetQuery().Nodes[original.GetQuery().Steps[len(original.GetQuery().Steps)-1]]
+	require.Len(t, originalRoot.ProjectList, 3)
+	originalDirectText := originalRoot.ProjectList[0].String()
+	originalNested := originalRoot.ProjectList[2].String()
+
+	runtimePlan, specialized, err := FillValuesOfParamsInPlanWithSpecializationAtPositions(
+		context.Background(), original, []any{
+			ParamValue{Value: "text", IsBinaryProtocol: true},
+			ParamValue{Value: "7", RuntimeType: types.T_int64.ToType(), HasRuntimeType: true, IsBinaryProtocol: true},
+			ParamValue{Value: "1.25", RuntimeType: types.T_float64.ToType(), HasRuntimeType: true, IsBinaryProtocol: true},
+		}, []int32{1})
+	require.NoError(t, err)
+	require.True(t, specialized)
+	runtimeRoot := runtimePlan.GetQuery().Nodes[runtimePlan.GetQuery().Steps[len(runtimePlan.GetQuery().Steps)-1]]
+	require.Equal(t, originalDirectText, runtimeRoot.ProjectList[0].String(),
+		"a nonnumeric direct result must retain its prepared binding")
+	require.Equal(t, int32(types.T_int64), runtimeRoot.ProjectList[1].Typ.Id)
+	require.Equal(t, originalNested, runtimeRoot.ProjectList[2].String(),
+		"a numeric packet outside the direct result must retain its prepared binding")
+}
+
+func TestPreparedDecimalRuntimeType(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		value     string
+		wantType  types.T
+		wantWidth int32
+		wantScale int32
+	}{
+		{name: "integral wire decimal", value: "123", wantType: types.T_decimal64, wantWidth: 3},
+		{name: "wide wire decimal", value: "123456789012345678901234567890", wantType: types.T_decimal128, wantWidth: 30},
+		{name: "small exponent wire decimal", value: "1e-30", wantType: types.T_decimal128, wantWidth: 30, wantScale: 30},
+		{name: "fixed scale zero wire decimal", value: "0.00", wantType: types.T_decimal64, wantWidth: 2, wantScale: 2},
+		{name: "exponent zero wire decimal", value: "0e-30", wantType: types.T_decimal128, wantWidth: 30, wantScale: 30},
+		{name: "large exponent wire decimal", value: "1e+37", wantType: types.T_decimal128, wantWidth: 38},
+		{name: "decimal256 boundary", value: "123456789012345678901234567890123456789012345678901234567890123456789012345.1", wantType: types.T_decimal256, wantWidth: 76, wantScale: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, ok := PreparedDecimalRuntimeType(test.value)
+			require.True(t, ok)
+			require.Equal(t, test.wantType, got.Oid)
+			require.Equal(t, test.wantWidth, got.Width)
+			require.Equal(t, test.wantScale, got.Scale)
+		})
+	}
+}
+
+func TestPreparedRuntimeParamExprMaterializesProtocolTypes(t *testing.T) {
+	tests := []struct {
+		name       string
+		value      string
+		runtimeTyp types.Type
+		wantLit    func(*plan.Literal) bool
+		wantCast   bool
+	}{
+		{name: "bool", value: "true", runtimeTyp: types.T_bool.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_Bval); return l != nil && ok }},
+		{name: "bool cast fallback", value: "not-bool", runtimeTyp: types.T_bool.ToType(), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "int8", value: "-8", runtimeTyp: types.T_int8.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_I8Val); return l != nil && ok }},
+		{name: "int8 cast fallback", value: "128", runtimeTyp: types.T_int8.ToType(), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "int16", value: "-16", runtimeTyp: types.T_int16.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_I16Val); return l != nil && ok }},
+		{name: "int16 cast fallback", value: "32768", runtimeTyp: types.T_int16.ToType(), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "int32", value: "-32", runtimeTyp: types.T_int32.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_I32Val); return l != nil && ok }},
+		{name: "int32 cast fallback", value: "2147483648", runtimeTyp: types.T_int32.ToType(), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "int64", value: "-64", runtimeTyp: types.T_int64.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_I64Val); return l != nil && ok }},
+		{name: "int64 cast fallback", value: "bad", runtimeTyp: types.T_int64.ToType(), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "uint8", value: "8", runtimeTyp: types.T_uint8.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_U8Val); return l != nil && ok }},
+		{name: "uint8 cast fallback", value: "256", runtimeTyp: types.T_uint8.ToType(), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "uint16", value: "16", runtimeTyp: types.T_uint16.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_U16Val); return l != nil && ok }},
+		{name: "uint16 cast fallback", value: "bad", runtimeTyp: types.T_uint16.ToType(), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "uint32", value: "32", runtimeTyp: types.T_uint32.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_U32Val); return l != nil && ok }},
+		{name: "uint32 cast fallback", value: "bad", runtimeTyp: types.T_uint32.ToType(), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "uint64", value: "64", runtimeTyp: types.T_uint64.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_U64Val); return l != nil && ok }},
+		{name: "bit", value: "7", runtimeTyp: types.T_bit.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_U64Val); return l != nil && ok }},
+		{name: "uint64 cast fallback", value: "bad", runtimeTyp: types.T_uint64.ToType(), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "year", value: "2026", runtimeTyp: types.T_year.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_I32Val); return l != nil && ok }},
+		{name: "year cast fallback", value: "bad", runtimeTyp: types.T_year.ToType(), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "float32", value: "1.25", runtimeTyp: types.T_float32.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_Fval); return l != nil && ok }},
+		{name: "float32 cast fallback", value: "bad", runtimeTyp: types.T_float32.ToType(), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "float64", value: "1.25", runtimeTyp: types.T_float64.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_Dval); return l != nil && ok }},
+		{name: "float64 cast fallback", value: "bad", runtimeTyp: types.T_float64.ToType(), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "decimal64", value: "12.34", runtimeTyp: types.New(types.T_decimal64, 6, 2), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_Decimal64Val); return l != nil && ok }},
+		{name: "decimal64 integral wire value", value: "123", runtimeTyp: types.New(types.T_decimal64, 3, 0), wantLit: func(l *plan.Literal) bool {
+			v, ok := l.Value.(*plan.Literal_Decimal64Val)
+			return l != nil && ok && v.Decimal64Val.A == 123
+		}},
+		{name: "decimal64 fixed scale zero", value: "0.00", runtimeTyp: types.New(types.T_decimal64, 2, 2), wantLit: func(l *plan.Literal) bool {
+			v, ok := l.Value.(*plan.Literal_Decimal64Val)
+			return l != nil && ok && v.Decimal64Val.A == 0
+		}},
+		{name: "decimal64 inferred", value: "12.34", runtimeTyp: types.New(types.T_decimal64, 0, -1), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_Decimal64Val); return l != nil && ok }},
+		{name: "decimal64 cast fallback", value: "bad", runtimeTyp: types.New(types.T_decimal64, 6, 2), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "decimal128", value: "12.34", runtimeTyp: types.New(types.T_decimal128, 10, 2), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_Decimal128Val); return l != nil && ok }},
+		{name: "decimal128 negative exponent", value: "1e-30", runtimeTyp: types.New(types.T_decimal128, 30, 30), wantLit: func(l *plan.Literal) bool {
+			v, ok := l.Value.(*plan.Literal_Decimal128Val)
+			return l != nil && ok && v.Decimal128Val.A == 1 && v.Decimal128Val.B == 0
+		}},
+		{name: "decimal128 exponent zero", value: "0e-30", runtimeTyp: types.New(types.T_decimal128, 30, 30), wantLit: func(l *plan.Literal) bool {
+			v, ok := l.Value.(*plan.Literal_Decimal128Val)
+			return l != nil && ok && v.Decimal128Val.A == 0 && v.Decimal128Val.B == 0
+		}},
+		{name: "decimal128 inferred", value: "123456789012345678901234567890123456.12", runtimeTyp: types.New(types.T_decimal128, 0, -1), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_Decimal128Val); return l != nil && ok }},
+		{name: "decimal128 cast fallback", value: "bad", runtimeTyp: types.New(types.T_decimal128, 10, 2), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "decimal256 cast", value: "12.34", runtimeTyp: types.New(types.T_decimal256, 20, 2), wantCast: true, wantLit: func(l *plan.Literal) bool { return l == nil }},
+		{name: "text", value: "text", runtimeTyp: types.T_text.ToType(), wantLit: func(l *plan.Literal) bool { _, ok := l.Value.(*plan.Literal_Sval); return l != nil && ok }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			expr, err := preparedRuntimeParamExpr(context.Background(), test.value, true, test.runtimeTyp)
+			require.NoError(t, err)
+			require.NotNil(t, expr)
+			require.Equal(t, int32(test.runtimeTyp.Oid), expr.Typ.Id)
+			lit := expr.GetLit()
+			if test.wantCast {
+				require.Nil(t, lit, "expected cast expression")
+			} else {
+				require.NotNil(t, lit)
+				require.True(t, test.wantLit(lit), "unexpected literal form: %T", lit.Value)
+			}
+		})
+	}
+}
+
+func TestPreparedPlanHasDirectResultParamsBoundaries(t *testing.T) {
+	param := &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+	literal := &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{}}}
+	makePlan := func(query *plan.Query) *Plan {
+		return &Plan{Plan: &plan.Plan_Query{Query: query}}
+	}
+	tests := []struct {
+		name string
+		plan *Plan
+		want bool
+	}{
+		{name: "nil", want: false},
+		{name: "non-select", plan: makePlan(&plan.Query{StmtType: plan.Query_INSERT}), want: false},
+		{name: "no steps", plan: makePlan(&plan.Query{StmtType: plan.Query_SELECT}), want: false},
+		{name: "invalid returning step", plan: makePlan(&plan.Query{StmtType: plan.Query_SELECT, Steps: []int32{0}, HasReturning: true, ReturningStep: 2}), want: false},
+		{name: "negative node", plan: makePlan(&plan.Query{StmtType: plan.Query_SELECT, Steps: []int32{-1}}), want: false},
+		{name: "out of range node", plan: makePlan(&plan.Query{StmtType: plan.Query_SELECT, Steps: []int32{1}, Nodes: []*plan.Node{{}}}), want: false},
+		{name: "nil node", plan: makePlan(&plan.Query{StmtType: plan.Query_SELECT, Steps: []int32{0}, Nodes: []*plan.Node{nil}}), want: false},
+		{name: "no direct marker", plan: makePlan(&plan.Query{StmtType: plan.Query_SELECT, Steps: []int32{0}, Nodes: []*plan.Node{{ProjectList: []*plan.Expr{nil, literal}}}}), want: false},
+		{name: "direct marker", plan: makePlan(&plan.Query{StmtType: plan.Query_SELECT, Steps: []int32{0}, Nodes: []*plan.Node{{ProjectList: []*plan.Expr{literal, param}}}}), want: true},
+		{name: "returning marker", plan: makePlan(&plan.Query{StmtType: plan.Query_SELECT, Steps: []int32{0, 1}, HasReturning: true, ReturningStep: 1, Nodes: []*plan.Node{{}, {ProjectList: []*plan.Expr{param}}}}), want: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, PreparedPlanHasDirectResultParams(test.plan))
+		})
+	}
+
+	for _, test := range []struct {
+		name string
+		sql  string
+		want []int32
+	}{
+		{name: "order by pass through", sql: "prepare direct_order from 'select ? as result order by result'", want: []int32{0}},
+		{name: "distinct pass through", sql: "prepare direct_distinct from 'select distinct ? as result'", want: []int32{0}},
+		{name: "union common type owns result", sql: "prepare direct_union from 'select ? as result union all select 1'", want: nil},
+		{name: "explicit decimal cast fixes result type", sql: "prepare direct_explicit_decimal from 'select cast(? as decimal(38,9))'", want: nil},
+		{name: "explicit integer cast fixes result type", sql: "prepare direct_explicit_integer from 'select cast(? as int)'", want: nil},
+		{name: "explicit floating cast fixes result type", sql: "prepare direct_explicit_float from 'select cast(? as double)'", want: nil},
+		{name: "explicit cast in union branch fixes result type", sql: "prepare direct_explicit_union from 'select cast(? as int) union all select 1'", want: nil},
+		{name: "nested parameter is not direct", sql: "prepare direct_nested from 'select ? as direct_value, abs(?) as nested_value'", want: []int32{0}},
+		{name: "numeric function only", sql: "prepare direct_abs from 'select abs(?)'", want: nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			prepared, err := runOneStmt(NewMockOptimizer(false), t, test.sql)
+			require.NoError(t, err)
+			got := PreparedPlanDirectResultParamPositions(prepared.GetDcl().GetPrepare().GetPlan())
+			require.Equal(t, test.want, got)
+		})
+	}
 }
 
 func TestCheckNoNeedCastWithTrailingZeros(t *testing.T) {
@@ -843,6 +2018,122 @@ func TestDecimal128HasTrailingZeros(t *testing.T) {
 	}
 }
 
+func TestDecimal256StringHasTrailingZerosWithoutNarrowing(t *testing.T) {
+	for _, tc := range []struct {
+		name            string
+		value           string
+		width           int32
+		constScale      int32
+		columnScale     int32
+		wantTrailing    bool
+		wantAlwaysFalse bool
+	}{
+		{
+			name:            "18 digit suffix",
+			value:           "12345678901234567890.000000000000000000",
+			width:           38,
+			constScale:      18,
+			columnScale:     0,
+			wantTrailing:    true,
+			wantAlwaysFalse: false,
+		},
+		{
+			name:            "19 digit suffix",
+			value:           "12345678901234567890.0000000000000000000",
+			width:           39,
+			constScale:      19,
+			columnScale:     0,
+			wantTrailing:    true,
+			wantAlwaysFalse: false,
+		},
+		{
+			name:            "wide suffix",
+			value:           "1234567890123456789012345678901234567890.000000000000000000000000000000",
+			width:           70,
+			constScale:      30,
+			columnScale:     0,
+			wantTrailing:    true,
+			wantAlwaysFalse: false,
+		},
+		{
+			name:            "wide nonzero suffix",
+			value:           "12345678901234567890.0000000000000000001",
+			width:           39,
+			constScale:      19,
+			columnScale:     0,
+			wantTrailing:    false,
+			wantAlwaysFalse: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			constType := types.New(types.T_decimal256, tc.width, tc.constScale)
+			constExpr := &plan.Expr{
+				Typ: plan.Type{Id: int32(types.T_decimal256), Width: tc.width, Scale: tc.constScale},
+				Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+					Isnull: false,
+					Value:  &plan.Literal_Sval{Sval: tc.value},
+				}},
+			}
+
+			require.Equal(t, tc.wantTrailing,
+				hasTrailingZeros(constExpr, constType, tc.columnScale))
+			require.Equal(t, tc.wantAlwaysFalse,
+				isDecimalComparisonAlwaysFalseCore(constExpr, constType, tc.columnScale))
+		})
+	}
+}
+
+func TestDecimalTrailingZerosIsSignIndependent(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name         string
+		value        string
+		wantTrailing bool
+		wantProven   bool
+	}{
+		{
+			name:         "positive zero suffix",
+			value:        "50.500000",
+			wantTrailing: true,
+			wantProven:   true,
+		},
+		{
+			name:         "negative zero suffix",
+			value:        "-50.500000",
+			wantTrailing: true,
+			wantProven:   true,
+		},
+		{
+			name:         "positive nonzero suffix",
+			value:        "50.500001",
+			wantTrailing: false,
+			wantProven:   true,
+		},
+		{
+			name:         "negative nonzero suffix",
+			value:        "-50.500001",
+			wantTrailing: false,
+			wantProven:   true,
+		},
+		{
+			name:         "negative wide coefficient",
+			value:        "-12345678901234567890.0000000000000000000",
+			wantTrailing: true,
+			wantProven:   true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expr, err := makePlan2DecimalExprWithType(ctx, tc.value)
+			require.NoError(t, err)
+			constType := makeTypeByPlan2Expr(expr)
+
+			gotTrailing, gotProven := decimalTrailingZerosStatus(expr, constType, 2)
+			require.Equal(t, tc.wantTrailing, gotTrailing)
+			require.Equal(t, tc.wantProven, gotProven)
+		})
+	}
+}
+
 // TestParseHiveOptionKV verifies hive key parsing via Init*Param helper.
 // Covers legacy-JSON fallback where Option[] still carries hive_partitioning /
 // hive_partition_columns (stripHiveOptionKeys did not run). The key behavior:
@@ -973,6 +2264,19 @@ func TestInitInfileParam_Plain(t *testing.T) {
 	require.NoError(t, InitInfileParam(param))
 	assert.Equal(t, "csv", param.Format)
 	assert.Equal(t, "REM", GetCSVComment(param))
+
+	param = &tree.ExternParam{ExParamConst: tree.ExParamConst{Option: []string{
+		"filepath", "/data.arrow", "format", "ArRoW", "arrow_container", "FiLe",
+	}}}
+	require.NoError(t, InitInfileParam(param))
+	assert.Equal(t, tree.ARROW, param.Format)
+	assert.Equal(t, tree.ARROW_CONTAINER_FILE, param.ArrowContainer)
+
+	param = &tree.ExternParam{ExParamConst: tree.ExParamConst{Option: []string{
+		"filepath", "/data.arrow", "format", "arrow",
+	}}}
+	require.NoError(t, InitInfileParam(param))
+	assert.Equal(t, tree.ARROW_CONTAINER_AUTO, param.ArrowContainer)
 }
 
 // TestGetCSVComment covers the COMMENT option accessor.
@@ -1092,6 +2396,12 @@ func TestInitS3Param_Plain(t *testing.T) {
 	param.Option = []string{"bucket", "b", "jsondata", "array"}
 	require.NoError(t, InitS3Param(param))
 	assert.Equal(t, "jsonline", param.Format)
+
+	param = &tree.ExternParam{ExParamConst: tree.ExParamConst{Option: []string{
+		"bucket", "b", "filepath", "data.arrow", "format", "arrow", "arrow_container", "stream",
+	}}}
+	require.NoError(t, InitS3Param(param))
+	assert.Equal(t, tree.ARROW_CONTAINER_STREAM, param.ArrowContainer)
 }
 
 func TestInitS3Param_HiveLegacyOption(t *testing.T) {

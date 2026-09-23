@@ -181,6 +181,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -199,6 +200,17 @@ import (
 
 type engineNodesClusterClient struct {
 	details logpb.ClusterDetails
+}
+
+func TestDatabaseTreatsTransactionLocalDropAsNotFound(t *testing.T) {
+	ctx := defines.AttachAccountId(context.Background(), uint32(7))
+	txn := &Transaction{databaseOps: newDbOps()}
+	txn.databaseOps.addDeleteDatabase(genDatabaseKey(7, "restore_db"), 1, 42)
+	op := newTxnOperatorForTestWithWorkspace(t, txn)
+
+	db, err := (&Engine{}).Database(ctx, "restore_db", op)
+	require.Nil(t, db)
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedEOB), "unexpected error: %v", err)
 }
 
 func (c *engineNodesClusterClient) GetClusterDetails(context.Context) (logpb.ClusterDetails, error) {
@@ -347,6 +359,27 @@ func TestEngineQueryCandidateProvidersSeparateInventoryAndPool(t *testing.T) {
 		[]string{"app-working:6001", "app-draining:6001"},
 		nodeAddresses(pool.Nodes))
 	require.Equal(t, map[string]string{"account": "app"}, labels)
+}
+
+func TestEngineQueryCandidateDiscoveryExcludesAdmissionPendingCN(t *testing.T) {
+	ready := newEngineNodesCNStore(
+		"ready", "ready:6001", nil, metadata.WorkState_Working, version.CommitID)
+	ready.ViewMetadataAdmissionGeneration = 7
+	ready.ViewMetadataAdmissionReady = true
+	pending := newEngineNodesCNStore(
+		"pending", "pending:6001", nil, metadata.WorkState_Working, version.CommitID)
+	pending.ViewMetadataAdmissionGeneration = 8
+
+	e := newEngineWithClusterDetails(t, logpb.ClusterDetails{
+		ViewMetadataAdmission: &logpb.ViewMetadataAdmission{Enabled: true, Epoch: 4},
+		CNStores:              []logpb.CNStore{ready, pending},
+	})
+	candidates, err := e.DiscoverQueryCandidates(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, []string{"ready"}, queryCandidateServiceIDs(candidates))
+	nodes, err := e.Nodes(false, "sys", "root", nil)
+	require.NoError(t, err)
+	require.Equal(t, []string{"ready:6001"}, nodeAddresses(nodes))
 }
 
 func TestEngineCandidateDiscoveryExcludesIncompatibleCNBeforePoolFallback(t *testing.T) {

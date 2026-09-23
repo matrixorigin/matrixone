@@ -309,6 +309,6 @@ func TestBindOrderedSetPercentileRejectsNilOrderExpression(t *testing.T) {
 		OrderBy:     tree.OrderBy{nil},
 	}
 
-	_, err := binder.bindOrderedSetPercentileAgg(NamePercentileCont, ast, 0, true)
+	_, err := binder.BindAggFunc(NamePercentileCont, ast, 0, true)
 	require.ErrorContains(t, err, "percentile_cont requires an ORDER BY expression")
 }

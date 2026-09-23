@@ -794,9 +794,10 @@ func TestGetExprValue(t *testing.T) {
 			{"set @@x=(select 3.4028234663852886e+38)", false, float32(3.4028234663852886e+38)},
 			{"set @@x=(select  2.2250738585072014e-308)", false, float64(2.2250738585072014e-308)},
 			{"set @@x=(select  1.7976931348623157e+308)", false, float64(1.7976931348623157e+308)},
-			{"set @@x=(select cast(9223372036854775807 as decimal))", false, "9223372036854775807"},
-			{"set @@x=(select cast(99999999999999999999999999999999999999 as decimal))", false, "99999999999999999999999999999999999999"},
-			{"set @@x=(select cast(-99999999999999999999999999999999999999 as decimal))", false, "-99999999999999999999999999999999999999"},
+			{"set @@x=(select cast(9223372036854775807 as decimal))", false, "9999999999"},
+			{"set @@x=(select cast(9223372036854775807 as decimal(38,0)))", false, "9223372036854775807"},
+			{"set @@x=(select cast(99999999999999999999999999999999999999 as decimal(38,0)))", false, "99999999999999999999999999999999999999"},
+			{"set @@x=(select cast(-99999999999999999999999999999999999999 as decimal(38,0)))", false, "-99999999999999999999999999999999999999"},
 			{"set @@x=(select cast('{\"a\":1,\"b\":2}' as json))", false, "{\"a\": 1, \"b\": 2}"},
 			{"set @@x=(select cast('00000000-0000-0000-0000-000000000000' as uuid))", false, "00000000-0000-0000-0000-000000000000"},
 			{"set @@x=(select cast('00:00:00' as time))", false, "00:00:00"},
@@ -1097,13 +1098,24 @@ func TestRewriteError(t *testing.T) {
 			want2: "internal error: xxxx",
 		},
 		{
+			name: "canonical catalog rejection",
+			args: args{
+				err:      markAuthenticationRejected(moerr.NewInternalErrorNoCtx("there is no user dump")),
+				username: "tenant:dump",
+			},
+			want:  moerr.ER_ACCESS_DENIED_ERROR,
+			want1: "28000",
+			want2: "Access denied for user tenant:dump. internal error: there is no user dump",
+		},
+		{
 			name: "t8",
 			args: args{
 				err:      moerr.NewBadDBNoCtx("yyy"),
 				username: "abc",
 			},
-			want:  moerr.ER_BAD_DB_ERROR,
-			want1: "HY000",
+			want: moerr.ER_BAD_DB_ERROR,
+			// MySQL pairs ER_BAD_DB_ERROR with SQLSTATE 42000
+			want1: "42000",
 			want2: "Unknown database yyy",
 		},
 	}
@@ -1588,6 +1600,40 @@ func Test_convertRowsIntoBatch(t *testing.T) {
 			assert.Equal(t, mrs.Data[i][j], row[j])
 		}
 
+	}
+}
+
+func TestGetValueFromVectorPreservesTemporalScale(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
+	clock, err := types.ParseTime("00:00:02.654321", 6)
+	require.NoError(t, err)
+	datetime, err := types.ParseDatetime("2024-01-02 03:04:05.654321", 6)
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name  string
+		typ   types.Type
+		value any
+		want  string
+	}{
+		{name: "time", typ: types.T_time.ToTypeWithScale(6), value: clock, want: clock.String2(6)},
+		{name: "datetime", typ: types.New(types.T_datetime, 0, 6), value: datetime, want: datetime.String2(6)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vec := vector.NewVec(tc.typ)
+			t.Cleanup(func() { vec.Free(mp) })
+			switch value := tc.value.(type) {
+			case types.Time:
+				require.NoError(t, vector.AppendFixed[types.Time](vec, value, false, mp))
+			case types.Datetime:
+				require.NoError(t, vector.AppendFixed[types.Datetime](vec, value, false, mp))
+			}
+			got, err := getValueFromVector(context.Background(), vec, nil, nil)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
 	}
 }
 
@@ -2124,19 +2170,23 @@ func TestResultColumnMetadataDistinguishesBlobFromText(t *testing.T) {
 
 func TestMysqlBlobMetadataPreservesKnownAndUnknownBounds(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		width  int32
-		length uint32
+		name      string
+		width     int32
+		length    uint32
+		mysqlType defines.MysqlType
 	}{
-		{name: "unknown expression bound", width: 0, length: math.MaxUint32},
-		{name: "N", width: math.MaxUint16, length: math.MaxUint16},
-		{name: "N plus one", width: math.MaxUint16 + 1, length: math.MaxUint16 + 1},
+		{name: "unknown expression bound", width: 0, length: math.MaxUint32, mysqlType: defines.MYSQL_TYPE_BLOB},
+		{name: "tiny", width: types.MaxTinyTextLen, length: types.MaxTinyTextLen, mysqlType: defines.MYSQL_TYPE_TINY_BLOB},
+		{name: "blob", width: types.MaxStringSize, length: types.MaxStringSize, mysqlType: defines.MYSQL_TYPE_BLOB},
+		{name: "medium", width: types.MaxMediumTextLen, length: types.MaxMediumTextLen, mysqlType: defines.MYSQL_TYPE_MEDIUM_BLOB},
+		{name: "long", width: types.MaxLongTextLen, length: types.MaxLongTextLen, mysqlType: defines.MYSQL_TYPE_LONG_BLOB},
+		{name: "N plus one", width: math.MaxUint16 + 1, length: math.MaxUint16 + 1, mysqlType: defines.MYSQL_TYPE_MEDIUM_BLOB},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			col := new(MysqlColumn)
 			require.NoError(t, setMysqlColumnTypeInfo(
 				context.Background(), types.New(types.T_blob, tc.width, 0), col))
-			require.Equal(t, defines.MYSQL_TYPE_BLOB, col.ColumnType())
+			require.Equal(t, tc.mysqlType, col.ColumnType())
 			require.Equal(t, uint16(charsetBinary), col.Charset())
 			require.Equal(t, tc.length, col.Length())
 			require.Equal(t, uint16(defines.BLOB_FLAG|defines.BINARY_FLAG), col.Flag())

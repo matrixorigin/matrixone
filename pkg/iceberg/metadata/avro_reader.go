@@ -689,8 +689,10 @@ func intBytesMap(raw any) (map[int][]byte, error) {
 			return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg Avro bound entry is invalid", nil)
 		}
 		key, keyOK := optionalInt(record, "key")
-		val := bytesFromAny(unwrapUnion(record["value"]))
-		if !keyOK || key <= 0 || val == nil {
+		// Empty byte strings are valid bounds for empty STRING/BINARY values,
+		// so validity must come from the decoded type rather than val == nil.
+		val, valOK := bytesFromAnyOK(unwrapUnion(record["value"]))
+		if !keyOK || key <= 0 || !valOK {
 			return nil, api.NewError(api.ErrMetadataInvalid, "Iceberg Avro bound entry has an invalid key or value", nil)
 		}
 		if _, exists := out[key]; exists {
@@ -884,12 +886,17 @@ func int64FromAny(value any) (int64, bool) {
 }
 
 func bytesFromAny(value any) []byte {
+	data, _ := bytesFromAnyOK(value)
+	return data
+}
+
+func bytesFromAnyOK(value any) ([]byte, bool) {
 	switch v := value.(type) {
 	case []byte:
-		return append([]byte(nil), v...)
+		return append([]byte(nil), v...), true
 	case string:
-		return []byte(v)
+		return []byte(v), true
 	default:
-		return nil
+		return nil, false
 	}
 }

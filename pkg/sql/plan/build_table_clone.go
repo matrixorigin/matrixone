@@ -72,6 +72,12 @@ func buildCloneTable(
 	if stmt.SrcTable.AtTsExpr != nil {
 		bindCtx.snapshot, err = builder.ResolveTsHint(stmt.SrcTable.AtTsExpr)
 		if err != nil {
+			if IsSnapshotNotFound(err) {
+				return nil, NewSnapshotNotFoundError(
+					builder.GetContext(),
+					stmt.SrcTable.AtTsExpr.SnapshotName,
+				)
+			}
 			return nil, err
 		}
 

@@ -156,6 +156,16 @@ func (s *CNState) Update(hb CNStoreHeartbeat, tick uint64) {
 	storeInfo.Resource = hb.Resource
 	storeInfo.CommitID = hb.CommitID
 	storeInfo.CommandDeliveryAckSupported = hb.CommandDeliveryAckSupported
+	storeInfo.ViewMetadataAdmissionSupported = hb.ViewMetadataAdmissionSupported
+	storeInfo.ViewMetadataAdmissionGeneration = hb.ViewMetadataAdmissionGeneration
+	storeInfo.ViewMetadataObservedEpoch = hb.ViewMetadataObservedEpoch
+	storeInfo.ViewMetadataCatalogFencedEpoch = hb.ViewMetadataCatalogFencedEpoch
+	storeInfo.ViewMetadataRefreshSupported = hb.ViewMetadataRefreshSupported
+	storeInfo.ViewMetadataRevalidatedEpoch = hb.ViewMetadataRevalidatedEpoch
+	storeInfo.ViewMetadataIngressReady = hb.ViewMetadataIngressReady
+	storeInfo.PersistedExpressionProtocolVersion = hb.PersistedExpressionProtocolVersion
+	storeInfo.CatalogMetadataCapabilities = hb.CatalogMetadataCapabilities
+	storeInfo.CatalogMetadataAck = hb.CatalogMetadataAck
 	s.Stores[hb.UUID] = storeInfo
 }
 
@@ -266,7 +276,34 @@ func (s *LogState) updateStores(hb LogStoreHeartbeat, tick uint64) {
 	}
 	storeInfo.Locality = hb.Locality
 	storeInfo.CommandDeliverySupported = hb.CommandDeliverySupported
+	storeInfo.ViewMetadataAdmissionSupported = hb.ViewMetadataAdmissionSupported
+	storeInfo.ViewMetadataAdmissionProtocolV3Supported = hb.ViewMetadataAdmissionProtocolV3Supported
+	storeInfo.CatalogMetadataCapabilities = hb.CatalogMetadataCapabilities
+	// Preserve a known incarnation when receiving a heartbeat from an older
+	// binary during a rolling upgrade. Incarnation fencing is enabled only once
+	// the store has reported a non-empty value.
+	if hb.StoreIncarnation != "" {
+		storeInfo.StoreIncarnation = hb.StoreIncarnation
+	}
 	s.Stores[hb.UUID] = storeInfo
+}
+
+func retainReplicaStoreIncarnations(
+	recorded LogShardInfo,
+	incoming LogReplicaInfo,
+) map[uint64]string {
+	retained := make(map[uint64]string)
+	for replicaID := range incoming.Replicas {
+		if incarnation := recorded.ReplicaStoreIncarnations[replicaID]; incarnation != "" {
+			retained[replicaID] = incarnation
+		}
+	}
+	for replicaID := range incoming.NonVotingReplicas {
+		if incarnation := recorded.ReplicaStoreIncarnations[replicaID]; incarnation != "" {
+			retained[replicaID] = incarnation
+		}
+	}
+	return retained
 }
 
 func (s *LogState) updateShards(hb LogStoreHeartbeat) {
@@ -274,13 +311,15 @@ func (s *LogState) updateShards(hb LogStoreHeartbeat) {
 		recorded, ok := s.Shards[incoming.ShardID]
 		if !ok {
 			recorded = LogShardInfo{
-				ShardID:           incoming.ShardID,
-				Replicas:          make(map[uint64]string),
-				NonVotingReplicas: make(map[uint64]string),
+				ShardID:                  incoming.ShardID,
+				Replicas:                 make(map[uint64]string),
+				NonVotingReplicas:        make(map[uint64]string),
+				ReplicaStoreIncarnations: make(map[uint64]string),
 			}
 		}
 
 		if incoming.Epoch > recorded.Epoch {
+			recorded.ReplicaStoreIncarnations = retainReplicaStoreIncarnations(recorded, incoming)
 			recorded.Epoch = incoming.Epoch
 			recorded.Replicas = incoming.Replicas
 			recorded.NonVotingReplicas = incoming.NonVotingReplicas
@@ -289,6 +328,16 @@ func (s *LogState) updateShards(hb LogStoreHeartbeat) {
 				!reflect.DeepEqual(recorded.NonVotingReplicas, incoming.NonVotingReplicas) {
 				panic(fmt.Sprintf("inconsistent replicas, recorded: %+v, incoming: %+v",
 					recorded, incoming))
+			}
+		}
+		if recorded.ReplicaStoreIncarnations == nil {
+			recorded.ReplicaStoreIncarnations = make(map[uint64]string)
+		}
+		if hb.StoreIncarnation != "" {
+			if uuid, voting := recorded.Replicas[incoming.ReplicaID]; voting && uuid == hb.UUID {
+				recorded.ReplicaStoreIncarnations[incoming.ReplicaID] = hb.StoreIncarnation
+			} else if uuid, nonVoting := recorded.NonVotingReplicas[incoming.ReplicaID]; nonVoting && uuid == hb.UUID {
+				recorded.ReplicaStoreIncarnations[incoming.ReplicaID] = hb.StoreIncarnation
 			}
 		}
 
@@ -380,6 +429,11 @@ func (s *ProxyState) Update(hb ProxyHeartbeat, tick uint64) {
 	storeInfo.UUID = hb.UUID
 	storeInfo.Tick = tick
 	storeInfo.ListenAddress = hb.ListenAddress
+	storeInfo.CatalogMetadataCapabilities = hb.CatalogMetadataCapabilities
+	storeInfo.CatalogMetadataAck = hb.CatalogMetadataAck
+	storeInfo.ViewMetadataAdmissionSupported = hb.ViewMetadataAdmissionSupported
+	storeInfo.ViewMetadataAdmissionGeneration = hb.ViewMetadataAdmissionGeneration
+	storeInfo.ViewMetadataObservedEpoch = hb.ViewMetadataObservedEpoch
 	if hb.ConfigData != nil {
 		storeInfo.ConfigData = hb.ConfigData
 	}

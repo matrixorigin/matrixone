@@ -29,4 +29,7 @@ func TestResidencyPolicyDDLKeysCatalogURI(t *testing.T) {
 			t.Fatalf("residency policy DDL must include %q in storage identity:\n%s", want, normalized)
 		}
 	}
+	if strings.Contains(normalized, "key catalog_scope_account") {
+		t.Fatalf("residency policy DDL must not add an unversioned secondary index:\n%s", normalized)
+	}
 }

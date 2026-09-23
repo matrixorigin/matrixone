@@ -84,8 +84,8 @@ type MOCluster interface {
 	GetTNService(selector Selector, apply func(metadata.TNService) bool)
 	// GetAllTNServices get all tn services
 	GetAllTNServices() []metadata.TNService
-	// GetCNServiceWithoutWorkingState get services by selector, and the applyFunc used to save the
-	// cn service that matches the selector's conditions.
+	// GetCNServiceWithoutWorkingState gets admission-ready services by selector
+	// without applying the WorkState policy.
 	//
 	// Since the query result may be a Slice, to avoid memory allocation overhead,
 	// we use apply to notify the caller of a Service that satisfies the condition.
@@ -109,12 +109,27 @@ type MOCluster interface {
 	UpdateCN(metadata.CNService)
 }
 
+// CNWorkStateUpdaterWithContext is an optional capability for callers that
+// need a CN work-state transition to share their own bounded operation
+// deadline. The supplied context must have a deadline. The legacy
+// MOCluster.DebugUpdateCNWorkState method retains its existing timeout for
+// callers that do not need to control that budget.
+type CNWorkStateUpdaterWithContext interface {
+	DebugUpdateCNWorkStateWithContext(ctx context.Context, uuid string, state int) error
+}
+
 // AuthoritativeRefresher is an optional capability for callers that must know
 // whether a synchronous cluster snapshot refresh actually succeeded. The
 // legacy ForceRefresh API intentionally has no result and is unsuitable for
 // correctness decisions based on freshness.
 type AuthoritativeRefresher interface {
 	Refresh(context.Context) error
+}
+
+// ViewMetadataAdmissionReader returns the admission snapshot that was swapped
+// atomically with the current CN inventory.
+type ViewMetadataAdmissionReader interface {
+	GetViewMetadataAdmission() logpb.ViewMetadataAdmission
 }
 
 type ClusterClient interface {

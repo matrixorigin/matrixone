@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -29,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -82,6 +84,42 @@ func TestStoredProcedureVariablesUseDeclaredDecimalType(t *testing.T) {
 	}
 }
 
+func TestIgnoreSpaceGenericFunctionsDoNotUseBuiltins(t *testing.T) {
+	tests := []struct {
+		name    string
+		query   string
+		mode    string
+		wantErr bool
+	}{
+		{name: "spaced now uses stored function path", query: "select now ()", mode: "STRICT_TRANS_TABLES", wantErr: true},
+		{name: "spaced substring uses stored function path", query: "select substring ('abcdef', 2, 3)", mode: "STRICT_TRANS_TABLES", wantErr: true},
+		{name: "spaced date add uses stored function path", query: "select date_add ('2024-01-01', interval 1 day)", mode: "STRICT_TRANS_TABLES", wantErr: true},
+		{name: "spaced trim string uses stored function path", query: "select trim (' x ') as trimmed", mode: "STRICT_TRANS_TABLES", wantErr: true},
+		{name: "spaced trim numeric uses stored function path", query: "select trim (0) as trimmed", mode: "STRICT_TRANS_TABLES", wantErr: true},
+		{name: "spaced group concat uses stored function path", query: "select group_concat (1) as grouped", mode: "STRICT_TRANS_TABLES", wantErr: true},
+		{name: "native now remains builtin", query: "select now()", mode: "STRICT_TRANS_TABLES"},
+		{name: "ignore space makes spaced now builtin", query: "select now ()", mode: "STRICT_TRANS_TABLES,IGNORE_SPACE"},
+		{name: "ignore space makes spaced trim string builtin", query: "select trim (' x ') as trimmed", mode: "STRICT_TRANS_TABLES,IGNORE_SPACE"},
+		{name: "ignore space makes spaced trim numeric builtin", query: "select trim (0) as trimmed", mode: "STRICT_TRANS_TABLES,IGNORE_SPACE"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOneWithSQLMode(context.Background(), dialect.MYSQL, test.query, 1, test.mode)
+			require.NoError(t, err)
+			defer stmt.Free()
+
+			_, err = BuildPlan(NewMockCompilerContext(true), stmt, false)
+			if test.wantErr {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "function '")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 // TestBindFuncExprImplByPlanExpr_PowAlias tests that "pow" is correctly
 // remapped to "power" (line ~1781 in base_binder.go:
 // case "pow": name = "power").
@@ -112,6 +150,88 @@ func TestBindFuncExprImplByPlanExpr_PowAlias(t *testing.T) {
 		require.NotNil(t, f)
 		require.Equal(t, "power", f.Func.GetObjName())
 	})
+}
+
+func TestBindFuncExprImplByPlanExpr_OctKeepsNumericConsumersNumeric(t *testing.T) {
+	ctx := context.Background()
+	makeOct := func(value int64) *plan.Expr {
+		oct, err := BindFuncExprImplByPlanExpr(ctx, "oct", []*plan.Expr{
+			makePlan2Int64ConstExprWithType(value),
+		})
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_varchar), oct.Typ.Id)
+		return oct
+	}
+
+	result, err := BindFuncExprImplByPlanExpr(ctx, "+", []*plan.Expr{
+		makeOct(8),
+		makeOct(1),
+	})
+	require.NoError(t, err)
+	require.Equal(t, "+", result.GetF().GetFunc().GetObjName())
+	require.Equal(t, int32(types.T_float64), result.Typ.Id)
+	for _, arg := range result.GetF().Args {
+		require.Equal(t, "cast", arg.GetF().GetFunc().GetObjName())
+		require.Equal(t, int32(types.T_float64), arg.Typ.Id)
+	}
+
+	ordinaryText, err := BindFuncExprImplByPlanExpr(ctx, "+", []*plan.Expr{
+		makePlan2StringConstExprWithType("1"),
+		makePlan2StringConstExprWithType("2"),
+	})
+	require.NoError(t, err)
+	require.Equal(t, "concat", ordinaryText.GetF().GetFunc().GetObjName())
+}
+
+func TestOctExactDecimal(t *testing.T) {
+	ctx := context.Background()
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	for _, tc := range []struct{ input, want string }{
+		{"cast('9007199254740991' as decimal(18,0))", "377777777777777777"},
+		{"cast('9007199254740993' as decimal(18,0))", "400000000000000001"},
+		{"cast('9223372036854775807' as decimal(38,0))", "777777777777777777777"},
+		{"cast('9223372036854775808' as decimal(38,0))", "1000000000000000000000"},
+		{"cast('18446744073709551615' as decimal(38,0))", "1777777777777777777777"},
+		{"cast('18446744073709551616' as decimal(38,0))", "1777777777777777777777"},
+		{"cast('-18446744073709551615' as decimal(38,0))", "1"},
+		{"cast('-18446744073709551616' as decimal(38,0))", "0"},
+		{"cast('9007199254740993.9' as decimal(38,1))", "400000000000000001"},
+		{"cast('-1.9' as decimal(18,1))", "1777777777777777777777"},
+		{"cast('0.9' as decimal(18,1))", "0"},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "select oct("+tc.input+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			ast := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+			bound, err := NewDefaultBinder(ctx, nil, nil, plan.Type{}, nil).BindExpr(ast, 0, false)
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_varchar), bound.GetF().Args[0].Typ.Id)
+			folded, err := ConstantFold(batch.EmptyForConstFoldBatch, bound, proc, false, true)
+			require.NoError(t, err)
+			require.NotNil(t, folded.GetLit())
+			require.Equal(t, tc.want, folded.GetLit().GetSval())
+		})
+	}
+}
+
+func TestOctDecimalColumnBinding(t *testing.T) {
+	for _, oid := range []types.T{types.T_decimal64, types.T_decimal128, types.T_decimal256} {
+		for _, notNullable := range []bool{false, true} {
+			input := &plan.Expr{
+				Typ:  plan.Type{Id: int32(oid), Scale: 1, NotNullable: notNullable},
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{}},
+			}
+			bound, err := BindFuncExprImplByPlanExpr(context.Background(), "oct", []*plan.Expr{input})
+			require.NoError(t, err)
+			cast := bound.GetF().Args[0]
+			require.Equal(t, int32(types.T_varchar), cast.Typ.Id)
+			require.GreaterOrEqual(t, cast.Typ.Width, int32(78))
+			require.Equal(t, notNullable, cast.Typ.NotNullable)
+			require.Equal(t, input.Typ, cast.GetF().Args[0].Typ)
+		}
+	}
 }
 
 func TestIsPositiveIntegerLiteral(t *testing.T) {
@@ -1191,6 +1311,22 @@ func TestBindFuncExprImplByPlanExpr_JsonValid(t *testing.T) {
 	})
 }
 
+func TestBindMemberOfOperator(t *testing.T) {
+	stmt, err := parsers.ParseOne(
+		context.Background(), dialect.MYSQL, "select 1 member of ('[1]')", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	selectStmt := stmt.(*tree.Select)
+	selectClause := selectStmt.Select.(*tree.SelectClause)
+	binder := NewDefaultBinder(context.Background(), nil, nil, plan.Type{}, nil)
+	bound, err := binder.BindExpr(selectClause.Exprs[0].Expr, 0, false)
+	require.NoError(t, err)
+	require.NotNil(t, bound.GetF())
+	require.Equal(t, "member of", bound.GetF().Func.GetObjName())
+	require.Equal(t, int32(types.T_int64), bound.Typ.Id)
+}
+
 func TestBindFuncExprImplByPlanExpr_DatetimeTimestampComparisonRemainsCrossTyped(t *testing.T) {
 	datetimeColumn := &plan.Expr{
 		Typ: plan.Type{Id: int32(types.T_datetime), Scale: 6},
@@ -1281,7 +1417,7 @@ func TestBuildPlan_DatetimeTimestampComparisonIsZonemappable(t *testing.T) {
 	require.True(t, ExprIsZonemappable(compilerCtx.GetContext(), scan.FilterList[0]))
 }
 
-func TestBindFuncExprImplByPlanExpr_JsonOrderingWithDynamicParam(t *testing.T) {
+func TestBindFuncExprImplByPlanExpr_JsonComparisonWithDynamicParam(t *testing.T) {
 	ctx := context.Background()
 
 	makeJsonExpr := func() *plan.Expr {
@@ -1300,12 +1436,12 @@ func TestBindFuncExprImplByPlanExpr_JsonOrderingWithDynamicParam(t *testing.T) {
 			},
 		}
 	}
-	requireExactJSONParam := func(t *testing.T, expr *plan.Expr) *plan.Expr {
+	requireExactJSONParam := func(t *testing.T, expr *plan.Expr, functionName string) *plan.Expr {
 		t.Helper()
 		require.Equal(t, int32(types.T_json), expr.Typ.Id)
 		normalize := expr.GetF()
 		require.NotNil(t, normalize)
-		require.Equal(t, function.JsonOrderingParamFunctionName, normalize.GetFunc().GetObjName())
+		require.Equal(t, functionName, normalize.GetFunc().GetObjName())
 		require.Len(t, normalize.GetArgs(), 1)
 		return normalize.GetArgs()[0]
 	}
@@ -1320,7 +1456,7 @@ func TestBindFuncExprImplByPlanExpr_JsonOrderingWithDynamicParam(t *testing.T) {
 		require.Len(t, args, 2)
 		require.Equal(t, int32(types.T_json), args[0].Typ.Id)
 		require.NotNil(t, args[0].GetCol())
-		paramArg := requireExactJSONParam(t, args[1])
+		paramArg := requireExactJSONParam(t, args[1], function.JsonOrderingParamFunctionName)
 		require.Equal(t, int32(types.T_text), paramArg.Typ.Id)
 		require.NotNil(t, paramArg.GetP())
 	})
@@ -1333,7 +1469,7 @@ func TestBindFuncExprImplByPlanExpr_JsonOrderingWithDynamicParam(t *testing.T) {
 
 		args := result.GetF().Args
 		require.Len(t, args, 2)
-		paramArg := requireExactJSONParam(t, args[0])
+		paramArg := requireExactJSONParam(t, args[0], function.JsonOrderingParamFunctionName)
 		require.Equal(t, int32(types.T_text), paramArg.Typ.Id)
 		require.NotNil(t, paramArg.GetP())
 		require.Equal(t, int32(types.T_json), args[1].Typ.Id)
@@ -1346,14 +1482,65 @@ func TestBindFuncExprImplByPlanExpr_JsonOrderingWithDynamicParam(t *testing.T) {
 	})
 
 	t.Run("non-binary ordering comparison is ignored", func(t *testing.T) {
-		err := adjustJsonOrderingDynamicParamType(ctx, ">", []*plan.Expr{makeJsonExpr()})
+		err := adjustJsonDynamicParamType(ctx, ">", []*plan.Expr{makeJsonExpr()})
 		require.NoError(t, err)
 	})
 
-	t.Run("non-ordering comparison is ignored", func(t *testing.T) {
-		err := adjustJsonOrderingDynamicParamType(ctx, "=", []*plan.Expr{makeJsonExpr(), makeParamExpr(0)})
+	t.Run("equality preserves dynamic parameter type", func(t *testing.T) {
+		args := []*plan.Expr{makeJsonExpr(), makeParamExpr(0)}
+		err := adjustJsonDynamicParamType(ctx, "=", args)
 		require.NoError(t, err)
+		paramArg := requireExactJSONParam(t, args[1], function.JsonComparisonParamFunctionName)
+		require.Equal(t, int32(types.T_text), paramArg.Typ.Id)
+		require.NotNil(t, paramArg.GetP())
 	})
+
+	t.Run("member of preserves the direct prepared parameter type", func(t *testing.T) {
+		result, err := BindFuncExprImplByPlanExpr(ctx, "member of", []*plan.Expr{
+			makeParamExpr(0), makePlan2StringConstExprWithType("[1]"),
+		})
+		require.NoError(t, err)
+		require.Equal(t, int32(types.T_int64), result.Typ.Id)
+		require.Len(t, result.GetF().Args, 2)
+		// MEMBER OF owns its scalar conversion. A generic JSON adapter here
+		// would eagerly convert/reject an operand before NULL/domain checks.
+		paramArg := result.GetF().Args[0]
+		require.Equal(t, int32(types.T_text), paramArg.Typ.Id)
+		require.NotNil(t, paramArg.GetP())
+	})
+
+	for _, operator := range []string{"<=>", "!="} {
+		t.Run(operator+" preserves dynamic parameter type", func(t *testing.T) {
+			args := []*plan.Expr{makeJsonExpr(), makeParamExpr(0)}
+			err := adjustJsonDynamicParamType(ctx, operator, args)
+			require.NoError(t, err)
+			paramArg := requireExactJSONParam(t, args[1], function.JsonComparisonParamFunctionName)
+			require.Equal(t, int32(types.T_text), paramArg.Typ.Id)
+			require.NotNil(t, paramArg.GetP())
+		})
+	}
+
+	t.Run("NOT IN expansion preserves JSON parameter type", func(t *testing.T) {
+		result, err := bindMixedInListComparison(ctx, "!=", makeJsonExpr(), makeParamExpr(0), true)
+		require.NoError(t, err)
+		require.Len(t, result.GetF().Args, 2)
+		paramArg := requireExactJSONParam(t, result.GetF().Args[1], function.JsonComparisonParamFunctionName)
+		require.NotNil(t, paramArg.GetP())
+	})
+
+	for _, operator := range []string{"=", "!="} {
+		t.Run("mixed JSON boolean "+operator+" expansion retains protocol-visible types", func(t *testing.T) {
+			result, err := bindMixedInListComparison(
+				ctx, operator, makeJsonExpr(), makePlan2BoolConstExprWithType(true), true)
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_json), result.GetF().Args[0].Typ.Id)
+			require.Equal(t, int32(types.T_bool), result.GetF().Args[1].Typ.Id)
+
+			required, err := plan.RequiresMORPCVersion36MixedJSONBooleanEquality(result)
+			require.NoError(t, err)
+			require.True(t, required)
+		})
+	}
 }
 
 func TestBindNameConstConstArgs(t *testing.T) {
@@ -1546,4 +1733,17 @@ func TestBindFuncExprImplByAstExpr_IntervalDisambiguation(t *testing.T) {
 		require.Len(t, list.List, 2)
 		require.Equal(t, "day", list.List[1].GetLit().GetSval())
 	})
+}
+
+func TestNormalizeDecimalParamInArgsUsesFloatForMixedApproximateList(t *testing.T) {
+	args := []*plan.Expr{
+		{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}},
+		{Typ: plan.Type{Id: int32(types.T_tuple)}, Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{
+			{Typ: plan.Type{Id: int32(types.T_decimal128), Width: 20, Scale: 0}},
+			{Typ: plan.Type{Id: int32(types.T_float64)}},
+		}}}},
+	}
+	require.NoError(t, normalizeDecimalParamInArgs(context.Background(), "in", args))
+	require.Equal(t, int32(types.T_float64), args[0].Typ.Id)
+	require.Equal(t, "cast", args[0].GetF().GetFunc().GetObjName())
 }

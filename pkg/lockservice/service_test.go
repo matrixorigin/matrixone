@@ -53,6 +53,32 @@ var (
 	}
 )
 
+// newTestTxnIterFunc preserves Config.TxnIterFunc's early-stop contract: once
+// the visitor returns false, later transaction IDs must not be observed.
+func newTestTxnIterFunc(txnIDs ...[]byte) func(func([]byte) bool) {
+	return func(fn func([]byte) bool) {
+		for _, txnID := range txnIDs {
+			if !fn(txnID) {
+				return
+			}
+		}
+	}
+}
+
+func TestNewTestTxnIterFuncStopsWhenVisitorReturnsFalse(t *testing.T) {
+	txn1 := newTestTxnID(1)
+	txn2 := newTestTxnID(2)
+	txn3 := newTestTxnID(3)
+	var visited [][]byte
+
+	newTestTxnIterFunc(txn1, txn2, txn3)(func(txnID []byte) bool {
+		visited = append(visited, txnID)
+		return string(txnID) != string(txn2)
+	})
+
+	require.Equal(t, [][]byte{txn1, txn2}, visited)
+}
+
 func getRunner(remote bool) func(t *testing.T, table uint64, fn func(context.Context, *service, *localLockTable)) {
 	return func(
 		t *testing.T,
@@ -166,10 +192,7 @@ func TestRowLockWithSharedAndExclusive(t *testing.T) {
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
 
-					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
-						f(txn1)
-						f(txn2)
-					}
+					s.cfg.TxnIterFunc = newTestTxnIterFunc(txn1, txn2)
 
 					// txn1 hold the lock
 					_, err := s.Lock(ctx, table, rows, txn1, option)
@@ -316,10 +339,7 @@ func TestRangeLockWithSharedAndExclusive(t *testing.T) {
 					txn2 := newTestTxnID(2)
 
 					// keep txn1 cannot close by orphan txn
-					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
-						f(txn1)
-						f(txn2)
-					}
+					s.cfg.TxnIterFunc = newTestTxnIterFunc(txn1, txn2)
 
 					// txn1 hold the lock
 					_, err := s.Lock(ctx, table, rows, txn1, option)
@@ -408,10 +428,7 @@ func TestRowLockWithConflict(t *testing.T) {
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
 
-					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
-						f(txn1)
-						f(txn2)
-					}
+					s.cfg.TxnIterFunc = newTestTxnIterFunc(txn1, txn2)
 
 					// txn1 hold the lock
 					_, err := s.Lock(ctx, table, rows, txn1, option)
@@ -459,10 +476,7 @@ func TestRangeLockWithConflict(t *testing.T) {
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
 
-					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
-						f(txn1)
-						f(txn2)
-					}
+					s.cfg.TxnIterFunc = newTestTxnIterFunc(txn1, txn2)
 
 					// txn1 hold the lock
 					_, err = s.Lock(ctx, table, rows, txn1, option)
@@ -513,11 +527,7 @@ func TestRowLockWithWaitQueue(t *testing.T) {
 					txn2 := newTestTxnID(2)
 					txn3 := newTestTxnID(3)
 
-					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
-						f(txn1)
-						f(txn2)
-						f(txn3)
-					}
+					s.cfg.TxnIterFunc = newTestTxnIterFunc(txn1, txn2, txn3)
 
 					_, err := s.Lock(ctx, table, rows, txn1, option)
 					require.NoError(t, err)
@@ -586,11 +596,7 @@ func TestRangeLockWithWaitQueue(t *testing.T) {
 					txn2 := newTestTxnID(2)
 					txn3 := newTestTxnID(3)
 
-					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
-						f(txn1)
-						f(txn2)
-						f(txn3)
-					}
+					s.cfg.TxnIterFunc = newTestTxnIterFunc(txn1, txn2, txn3)
 
 					_, err := s.Lock(ctx, table, rows, txn1, option)
 					require.NoError(t, err)
@@ -646,10 +652,7 @@ func TestRowLockWithSameTxnWithConflict(t *testing.T) {
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
 
-					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
-						f(txn1)
-						f(txn2)
-					}
+					s.cfg.TxnIterFunc = newTestTxnIterFunc(txn1, txn2)
 
 					_, err := s.Lock(ctx, table, rows, txn1, option)
 					require.NoError(t, err)
@@ -705,10 +708,7 @@ func TestRangeLockWithSameTxnWithConflict(t *testing.T) {
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
 
-					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
-						f(txn1)
-						f(txn2)
-					}
+					s.cfg.TxnIterFunc = newTestTxnIterFunc(txn1, txn2)
 
 					_, err := s.Lock(ctx, table, rows, txn1, option)
 					require.NoError(t, err)
@@ -831,10 +831,7 @@ func TestManyRowLockWithConflict(t *testing.T) {
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
 
-					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
-						f(txn1)
-						f(txn2)
-					}
+					s.cfg.TxnIterFunc = newTestTxnIterFunc(txn1, txn2)
 
 					// txn1 hold the lock
 					_, err := s.Lock(ctx, table, rows, txn1, option)
@@ -883,10 +880,7 @@ func TestManyRangeLockWithConflict(t *testing.T) {
 					txn1 := newTestTxnID(1)
 					txn2 := newTestTxnID(2)
 
-					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
-						f(txn1)
-						f(txn2)
-					}
+					s.cfg.TxnIterFunc = newTestTxnIterFunc(txn1, txn2)
 
 					// txn1 hold the lock
 					_, err := s.Lock(ctx, table, rows, txn1, option)
@@ -1010,11 +1004,7 @@ func TestCtxCancelWhileWaiting(t *testing.T) {
 					txn2 := newTestTxnID(2)
 					txn3 := newTestTxnID(3)
 
-					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
-						f(txn1)
-						f(txn2)
-						f(txn3)
-					}
+					s.cfg.TxnIterFunc = newTestTxnIterFunc(txn1, txn2, txn3)
 
 					// txn1 hold the lock
 					_, err := s.Lock(ctx, table, rows, txn1, option)
@@ -1276,12 +1266,7 @@ func TestDeadLockWithIndirectDependsOn(t *testing.T) {
 					txn3 := newTestTxnID(3)
 					txn4 := newTestTxnID(4)
 
-					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
-						f(txn1)
-						f(txn2)
-						f(txn3)
-						f(txn4)
-					}
+					s.cfg.TxnIterFunc = newTestTxnIterFunc(txn1, txn2, txn3, txn4)
 
 					mustAddTestLock(t, ctx, s, table, txn1, row1, pb.Granularity_Row)
 					mustAddTestLock(t, ctx, s, table, txn4, row4, pb.Granularity_Row)
@@ -1394,11 +1379,7 @@ func TestWaiterAwakeOnDeadLock(t *testing.T) {
 					txn2 := newTestTxnID(2)
 					txn3 := newTestTxnID(3)
 
-					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
-						f(txn1)
-						f(txn2)
-						f(txn3)
-					}
+					s.cfg.TxnIterFunc = newTestTxnIterFunc(txn1, txn2, txn3)
 
 					mustAddTestLock(t, ctx, s, table, txn1, row1, pb.Granularity_Row)
 
@@ -2624,9 +2605,7 @@ func TestIssue5176_2(t *testing.T) {
 		time.Second*1,
 		func(alloc *lockTableAllocator, s []*service) {
 			l := s[0]
-			l.cfg.TxnIterFunc = func(f func([]byte) bool) {
-				f([]byte("txn1"))
-			}
+			l.cfg.TxnIterFunc = newTestTxnIterFunc([]byte("txn1"))
 
 			ctx, cancel := context.WithTimeout(
 				context.Background(),
@@ -4901,10 +4880,7 @@ func TestRowLockWithConflictAndUnlock(t *testing.T) {
 			txn1 := newTestTxnID(1)
 			txn2 := newTestTxnID(2)
 
-			s.cfg.TxnIterFunc = func(f func([]byte) bool) {
-				f(txn1)
-				f(txn2)
-			}
+			s.cfg.TxnIterFunc = newTestTxnIterFunc(txn1, txn2)
 
 			// txn1 hold the lock
 			_, err := s.Lock(ctx, table, rows, txn1, option)
@@ -4948,11 +4924,7 @@ func TestUnlockRangeLockCanNotifyAllWaiters(t *testing.T) {
 			txn2 := newTestTxnID(2)
 			txn3 := newTestTxnID(3)
 
-			s.cfg.TxnIterFunc = func(f func([]byte) bool) {
-				f(txn1)
-				f(txn2)
-				f(txn3)
-			}
+			s.cfg.TxnIterFunc = newTestTxnIterFunc(txn1, txn2, txn3)
 
 			// txn1 hold the lock
 			_, err := s.Lock(ctx, table, rows, txn1, rangeOption)
@@ -5007,11 +4979,7 @@ func TestHasAnyHolderCannotNotifyWaiters(t *testing.T) {
 					txn2 := newTestTxnID(2)
 					txn3 := newTestTxnID(3)
 
-					s.cfg.TxnIterFunc = func(f func([]byte) bool) {
-						f(txn1)
-						f(txn2)
-						f(txn3)
-					}
+					s.cfg.TxnIterFunc = newTestTxnIterFunc(txn1, txn2, txn3)
 
 					// txn1 get lock
 					_, err := s.Lock(ctx, table, rows, txn1, option)
@@ -5597,29 +5565,104 @@ func TestHandleBindChangedConcurrently(t *testing.T) {
 			holder := &bindChangeCountingTxnHolder{activeTxnHolder: s.activeTxnHolder}
 			s.activeTxnHolder = holder
 
+			ctx, cancel := context.WithCancel(ctx)
+			release := make(chan struct{})
+			startCallbacks := make(chan struct{})
+			var releaseOnce, startOnce sync.Once
+			releaseTransactions := func() { releaseOnce.Do(func() { close(release) }) }
+			runCallbacks := func() { startOnce.Do(func() { close(startCallbacks) }) }
 			var wg sync.WaitGroup
-			for i := 0; i < 20; i++ {
+			// Join before the enclosing fixture closes, including on FailNow.
+			defer func() {
+				cancel()
+				releaseTransactions()
+				runCallbacks()
+				wg.Wait()
+			}()
+
+			type workerResult struct {
+				txn       []byte
+				lockErr   error
+				unlockErr error
+			}
+			held := make(chan error, 2)
+			results := make(chan workerResult, 2)
+			for i := byte(1); i <= 2; i++ {
+				txn := newTestTxnID(i)
 				wg.Add(1)
-				go func(i int) {
+				go func() {
 					defer wg.Done()
-					option := newTestRowSharedOptions()
-					rows := newTestRows(1)
-					txn := newTestTxnID(byte(i))
-					for i := 0; i < 1000; i++ {
-						_, err := s.Lock(ctx, table, rows, txn, option)
-						require.NoError(t, err)
-						require.NoError(t, s.Unlock(ctx, txn, timestamp.Timestamp{}))
+					result := workerResult{txn: txn}
+					// Even a failed Lock can leave transaction state to release.
+					defer func() {
+						result.unlockErr = s.Unlock(ctx, txn, timestamp.Timestamp{})
+						results <- result
+					}()
+					_, result.lockErr = s.Lock(ctx, table, newTestRows(1), txn, newTestRowSharedOptions())
+					held <- result.lockErr
+					if result.lockErr != nil {
+						return
 					}
-				}(i)
+					select {
+					case <-release:
+					case <-ctx.Done():
+						result.lockErr = ctx.Err()
+						return
+					}
+					// Duplicate callbacks must leave the existing transaction usable.
+					_, result.lockErr = s.Lock(ctx, table, newTestRows(2), txn, newTestRowSharedOptions())
+				}()
 			}
-			for i := 0; i < 1000; i++ {
-				s.handleBindChanged(bind)
+			for i := 0; i < 2; i++ {
+				select {
+				case err := <-held:
+					require.NoError(t, err)
+				case <-ctx.Done():
+					t.Fatal("transactions did not acquire their initial shared locks", ctx.Err())
+				}
 			}
+
+			// Competing duplicate callbacks run while both transactions own locks.
+			callbacksDone := make(chan struct{}, 2)
+			for i := 0; i < 2; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					defer func() { callbacksDone <- struct{}{} }()
+					select {
+					case <-startCallbacks:
+					case <-ctx.Done():
+						return
+					}
+					s.handleBindChanged(bind)
+					s.handleBindChanged(bind)
+				}()
+			}
+			runCallbacks()
+			for i := 0; i < 2; i++ {
+				select {
+				case <-callbacksDone:
+				case <-ctx.Done():
+					t.Fatal("duplicate bind callbacks did not complete", ctx.Err())
+				}
+			}
+			checkUnchanged := func() {
+				t.Helper()
+				assert.Same(t, lt, s.tableGroups.get(bind.Group, bind.Table))
+				assert.Zero(t, logs.FilterMessage("bind created").Len())
+				assert.Zero(t, logs.FilterMessage("bind closed").Len())
+				assert.Zero(t, holder.fenceCalls.Load())
+			}
+			checkUnchanged()
+			releaseTransactions()
 			wg.Wait()
-			require.Same(t, lt, s.tableGroups.get(bind.Group, bind.Table))
-			assert.Zero(t, logs.FilterMessage("bind created").Len())
-			assert.Zero(t, logs.FilterMessage("bind closed").Len())
-			assert.Zero(t, holder.fenceCalls.Load())
+			for i := 0; i < 2; i++ {
+				result := <-results
+				assert.NoError(t, result.lockErr, "transaction %x", result.txn)
+				assert.NoError(t, result.unlockErr, "transaction %x cleanup", result.txn)
+				assert.Nil(t, s.activeTxnHolder.getActiveTxn(result.txn, false, ""))
+			}
+			checkUnchanged()
 		},
 	)
 }

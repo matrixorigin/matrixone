@@ -206,6 +206,11 @@ func TestPrepareIvfIndexContext_InvalidIndexAlgoParams(t *testing.T) {
 	result, err := builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
 	assert.NoError(t, err)
 	assert.Nil(t, result)
+
+	multiTableIndex.IndexDefs[catalog.SystemSI_IVFFLAT_TblType_Metadata].IndexAlgoParams = `{"op_type":123}`
+	result, err = builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
+	assert.NoError(t, err)
+	assert.Nil(t, result)
 }
 
 // TestPrepareIvfIndexContext_OpTypeMismatch tests the case where op_type doesn't match the distance function
@@ -706,8 +711,9 @@ func TestCalculateAdaptiveNprobe(t *testing.T) {
 	}
 }
 
-// TestPrepareIvfIndexContext_AdaptiveNprobe tests the adaptive nprobe logic in prepareIvfIndexContext
-func TestPrepareIvfIndexContext_AdaptiveNprobe(t *testing.T) {
+// TestPrepareIvfIndexContext_AdaptiveNprobeAndFinalPostCandidate verifies that
+// the resolved AUTO parameters and INCLUDE coverage reach the final POST scan.
+func TestPrepareIvfIndexContext_AdaptiveNprobeAndFinalPostCandidate(t *testing.T) {
 	baseMockCtx := NewMockCompilerContext(true)
 	mockCtx := &customMockCompilerContext{
 		MockCompilerContext: baseMockCtx,
@@ -754,6 +760,10 @@ func TestPrepareIvfIndexContext_AdaptiveNprobe(t *testing.T) {
 			Selectivity: 0.25, // Compensation factor = sqrt(1/0.25) = 2
 		},
 	}
+	scanNode.TableDef.Name2ColIndex["a"] = 2
+	scanNode.TableDef.Cols = append(scanNode.TableDef.Cols, &plan.ColDef{
+		Name: "a", Typ: plan.Type{Id: int32(types.T_varchar)},
+	})
 
 	vecCtx := &vectorSortContext{
 		distFnExpr: &plan.Function{
@@ -780,14 +790,21 @@ func TestPrepareIvfIndexContext_AdaptiveNprobe(t *testing.T) {
 		scanNode:   scanNode,
 		rankOption: &plan.RankOption{Mode: "auto"}, // Enable auto mode
 	}
+	vecCtx.distFnExpr.Args[1].Expr = &plan.Expr_Lit{Lit: &plan.Literal{
+		Value: &plan.Literal_VecVal{VecVal: string(types.ArrayToBytes([]float32{1, 1, 1}))},
+	}}
 
 	// 1. Adaptive nprobe enabled (auto mode, selectivity 0.25, totalLists 100)
-	idxAlgoParams := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `", "lists": 100}`
+	idxAlgoParams := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `", "lists": 100, "included_columns":"a"}`
 	multiTableIndex := makeConsistentIvfMultiTableIndexForTest(
 		"idx_ivf_auto_adaptive",
 		idxAlgoParams,
 		[]string{"vec_col"},
 	)
+	for _, def := range multiTableIndex.IndexDefs {
+		def.IncludedColumns = []string{"a"}
+		scanNode.TableDef.Indexes = append(scanNode.TableDef.Indexes, def)
+	}
 
 	// Case 1: Adaptive mode enabled, compensation applied
 	result, err := builder.prepareIvfIndexContext(vecCtx, multiTableIndex)
@@ -795,6 +812,87 @@ func TestPrepareIvfIndexContext_AdaptiveNprobe(t *testing.T) {
 	require.NotNil(t, result)
 	// baseNprobe is 10 (from probe_limit), compensation is 2, expected nProbe = 20
 	assert.Equal(t, int64(20), result.nProbe)
+
+	// Verify the resolved AUTO context reaches the final POST candidate. Merely
+	// testing prepare is insufficient: rebuilding POST as an explicit mode used
+	// to reset InitialProbeCount to the session probe_limit (10).
+	bindCtx := NewBindContext(builder, nil)
+	scanTag := builder.genNewBindTag()
+	scanNode.NodeType = plan.Node_TABLE_SCAN
+	scanNode.ObjRef = &plan.ObjectRef{SchemaName: "db", ObjName: "test_table"}
+	scanNode.BindingTags = []int32{scanTag}
+	scanNode.NodeId = builder.appendNode(scanNode, bindCtx)
+	vecCtx.distFnExpr.Args[0].GetCol().RelPos = scanTag
+	sortID := builder.appendNode(&plan.Node{
+		NodeType:   plan.Node_SORT,
+		Children:   []int32{scanNode.NodeId},
+		OrderBy:    []*plan.OrderBySpec{{Expr: &plan.Expr{Typ: plan.Type{Id: int32(types.T_float64)}, Expr: &plan.Expr_F{F: vecCtx.distFnExpr}}}},
+		Limit:      makePlan2Uint64ConstExprWithType(10),
+		RankOption: &plan.RankOption{Mode: "auto"},
+	}, bindCtx)
+	projectID := builder.appendNode(&plan.Node{
+		NodeType: plan.Node_PROJECT,
+		Children: []int32{sortID},
+		ProjectList: []*plan.Expr{{
+			Typ:  plan.Type{Id: int32(types.T_varchar)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: scanTag, ColPos: 2, Name: "a"}},
+		}},
+	}, bindCtx)
+	vecCtx.projNode = builder.qry.Nodes[projectID]
+	vecCtx.sortNode = builder.qry.Nodes[sortID]
+	vecCtx.providerNodeID = -1
+	vecCtx.membershipNodeID = -1
+	vecCtx.orderExpr = builder.qry.Nodes[sortID].OrderBy[0].Expr
+	vecCtx.limit = builder.qry.Nodes[sortID].Limit
+	vecCtx.resultLimit = vecCtx.limit
+	inc, incErr := getVectorIndexIncludedColumns(multiTableIndex)
+	require.NoError(t, incErr)
+	require.Equal(t, []string{"a"}, inc)
+	boundaryProj, boundaryChild := ivfIndexOnlyBoundary(vecCtx.projNode, vecCtx.childNode)
+	require.NotNil(t, boundaryProj)
+	required := collectRequiredColumns(boundaryProj, boundaryChild, scanNode, vecCtx.orderExpr, result.partPos, result.origFuncName, result.vecLitArg)
+	projected := collectProjectedColumns(boundaryProj, boundaryChild, scanNode, result.partPos, result.origFuncName, result.vecLitArg)
+	require.True(t, canDoIndexOnlyScan(required, scanNode.TableDef, inc), "required=%v", required)
+	require.Contains(t, projected, "a")
+	root, err := builder.buildAdaptiveIvfTop(projectID, vecCtx, multiTableIndex, nil, nil, result)
+	require.NoError(t, err)
+	adaptive := builder.qry.Nodes[root]
+	require.Equal(t, plan.Node_ADAPTIVE_TOP, adaptive.NodeType)
+	var postScan *plan.Node
+	postHasBaseScan := false
+	var findPostScan func(int32)
+	findPostScan = func(id int32) {
+		n := builder.qry.Nodes[id]
+		if n.NodeType == plan.Node_VECTOR_INDEX_SCAN && postScan == nil {
+			postScan = n
+		}
+		if n.NodeType == plan.Node_TABLE_SCAN {
+			postHasBaseScan = true
+		}
+		for _, child := range n.Children {
+			findPostScan(child)
+		}
+	}
+	findPostScan(adaptive.Children[0])
+	require.NotNil(t, postScan)
+	require.NotNil(t, postScan.VectorIndexScan)
+	require.Equal(t, uint32(20), postScan.VectorIndexScan.InitialProbeCount)
+	require.Equal(t, []string{"a"}, postScan.VectorIndexScan.IncludedColumns)
+	require.False(t, postHasBaseScan, "AUTO POST must remain index-only when INCLUDE covers the projection")
+
+	// The persisted representation is quoted, while older metadata can contain
+	// a JSON number. Both forms must produce the same adaptive nprobe.
+	quotedLists := makeConsistentIvfMultiTableIndexForTest(
+		"idx_ivf_auto_adaptive_quoted",
+		`{"op_type":"`+metric.DistFuncOpTypes["l2_distance"]+`","lists":"100"}`,
+		[]string{"vec_col"},
+	)
+	vecCtx.rankOption = &plan.RankOption{Mode: "auto"}
+	vecCtx.scanNode.Stats = &plan.Stats{Selectivity: 0.25}
+	quotedResult, err := builder.prepareIvfIndexContext(vecCtx, quotedLists)
+	require.NoError(t, err)
+	require.NotNil(t, quotedResult)
+	assert.Equal(t, result.nProbe, quotedResult.nProbe)
 
 	// Case 2: Adaptive mode disabled because totalLists is missing
 	idxAlgoParamsNoLists := `{"op_type": "` + metric.DistFuncOpTypes["l2_distance"] + `"}`
@@ -2061,4 +2159,545 @@ func TestColRefsWithin_NestedFunction(t *testing.T) {
 	}
 	result := colRefsWithin(expr, 10)
 	assert.True(t, result)
+}
+
+func TestGetResultColumnsFromPlanMapsVectorIndexSourceSlots(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Name:         "source_alias",
+		OriginalName: "source_table",
+		DbName:       "source_db",
+		Pkey:         &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		Cols: []*plan.ColDef{
+			{Name: "embedding", Typ: plan.Type{Id: int32(types.T_array_float32)}},
+			{Name: "payload", Typ: plan.Type{Id: int32(types.T_varchar), Width: 64}},
+			{
+				Name:    "id",
+				Primary: true,
+				Typ: plan.Type{
+					Id:          int32(types.T_int64),
+					NotNullable: true,
+					AutoIncr:    true,
+				},
+			},
+			{Name: "category", NotNull: true, Typ: plan.Type{Id: int32(types.T_varchar), Width: 32}},
+			{Name: "unused", Typ: plan.Type{Id: int32(types.T_int32)}},
+		},
+		Name2ColIndex: map[string]int32{
+			"embedding": 0,
+			"payload":   1,
+			"id":        2,
+			"category":  3,
+			"unused":    4,
+		},
+		Indexes: []*plan.IndexDef{{Parts: []string{"category"}, Unique: true}},
+	}
+	vectorScan := &plan.VectorIndexScan{
+		SourceTable:    &plan.ObjectRef{SchemaName: "source_db", ObjName: "source_table"},
+		SourceTableDef: tableDef,
+		Index:          &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()},
+		IncludedColumns: []string{
+			"category",
+			"payload",
+		},
+	}
+	scoreType := plan.Type{Id: int32(types.T_float64), Width: 8}
+	vectorNodeProjectList := []*plan.Expr{
+		// The scan projection is deliberately reordered. ColPos remains the
+		// synthetic vector output slot, so lineage must follow the reference
+		// instead of the projection-list index.
+		{Typ: scoreType, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 10, ColPos: 1, Name: "score"}}},
+		{Typ: tableDef.Cols[3].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 10, ColPos: 2, Name: "category"}}},
+		{Typ: tableDef.Cols[2].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 10, ColPos: 0, Name: "pkid"}}},
+		{Typ: tableDef.Cols[1].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 10, ColPos: 3, Name: "payload"}}},
+	}
+	projectList := []*plan.Expr{
+		{Typ: tableDef.Cols[2].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 10, ColPos: 0, Name: "pkid"}}},
+		{Typ: tableDef.Cols[3].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 10, ColPos: 2, Name: "category"}}},
+		{Typ: scoreType, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 10, ColPos: 1, Name: "score"}}},
+		{Typ: tableDef.Cols[1].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 10, ColPos: 3, Name: "payload"}}},
+	}
+
+	got := GetResultColumnsFromPlan(&plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{1},
+		Nodes: []*plan.Node{
+			{
+				NodeId:      0,
+				NodeType:    plan.Node_VECTOR_INDEX_SCAN,
+				BindingTags: []int32{10},
+				TableDef: &plan.TableDef{Cols: []*plan.ColDef{
+					{Name: "pkid", Typ: tableDef.Cols[2].Typ},
+					{Name: "score", Typ: scoreType},
+					{Name: "__mo_index_include_category", Typ: tableDef.Cols[3].Typ},
+					{Name: "__mo_index_include_payload", Typ: tableDef.Cols[1].Typ},
+				}},
+				ProjectList:     vectorNodeProjectList,
+				VectorIndexScan: vectorScan,
+			},
+			{NodeId: 1, NodeType: plan.Node_PROJECT, Children: []int32{0}, ProjectList: projectList},
+		},
+		Headings: []string{"id", "category", "score", "payload"},
+	}}})
+
+	require.Len(t, got, 4)
+	require.Equal(t, "source_db", got[0].DbName)
+	require.Equal(t, "source_table", got[0].TblName)
+	require.Equal(t, "source_table", got[0].OriginTblName)
+	require.Equal(t, "id", got[0].OriginName)
+	require.True(t, got[0].Primary)
+	require.True(t, got[0].NotNull)
+	require.True(t, got[0].Typ.NotNullable)
+	require.True(t, got[0].Typ.AutoIncr)
+
+	// The distance score is synthetic and must not inherit source metadata.
+	require.Empty(t, got[2].DbName)
+	require.Empty(t, got[2].TblName)
+	require.Empty(t, got[2].OriginTblName)
+	require.Empty(t, got[2].OriginName)
+	require.False(t, got[2].Primary)
+	require.False(t, got[2].Unique)
+
+	require.Equal(t, "category", got[1].OriginName)
+	require.Equal(t, "source_table", got[1].OriginTblName)
+	require.True(t, got[1].Unique)
+	require.True(t, got[1].NotNull)
+	require.False(t, got[3].Unique)
+	require.False(t, got[3].NotNull)
+	require.Equal(t, "payload", got[3].OriginName)
+}
+
+func TestGetResultColumnsFromPlanMapsPrunedVectorIndexSlotsByName(t *testing.T) {
+	sourceTable := &plan.TableDef{
+		Name:   "source_table",
+		DbName: "source_db",
+		Pkey:   &plan.PrimaryKeyDef{PkeyColName: "id"},
+		Cols: []*plan.ColDef{
+			{Name: "embedding", Typ: plan.Type{Id: int32(types.T_array_float32)}},
+			{Name: "payload", Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{Name: "id", Primary: true, Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}},
+			{Name: "category", NotNull: true, Typ: plan.Type{Id: int32(types.T_varchar)}},
+		},
+		Name2ColIndex: map[string]int32{"embedding": 0, "payload": 1, "id": 2, "category": 3},
+		Indexes:       []*plan.IndexDef{{Parts: []string{"category"}, Unique: true}},
+	}
+	vectorSpec := &plan.VectorIndexScan{
+		SourceTable:    &plan.ObjectRef{SchemaName: "source_db", ObjName: "source_table"},
+		SourceTableDef: sourceTable,
+		Index:          &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()},
+		IncludedColumns: []string{
+			"category",
+			"payload",
+		},
+	}
+	makePlan := func(vectorCols, resultCols []*plan.ColDef, headings []string) *plan.Plan {
+		projectList := make([]*plan.Expr, len(vectorCols))
+		for i, col := range vectorCols {
+			projectList[i] = &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: int32(i),
+					Name:   col.Name,
+				}},
+			}
+		}
+		resultProjectList := make([]*plan.Expr, len(resultCols))
+		for i, col := range resultCols {
+			resultProjectList[i] = &plan.Expr{
+				Typ: col.Typ,
+				Expr: &plan.Expr_Col{Col: &plan.ColRef{
+					RelPos: 0,
+					ColPos: int32(i),
+					Name:   col.Name,
+				}},
+			}
+		}
+		return &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+			StmtType: plan.Query_SELECT,
+			Steps:    []int32{1},
+			Nodes: []*plan.Node{
+				{
+					NodeId:      0,
+					NodeType:    plan.Node_VECTOR_INDEX_SCAN,
+					TableDef:    &plan.TableDef{Cols: vectorCols},
+					ProjectList: projectList,
+					VectorIndexScan: &plan.VectorIndexScan{
+						SourceTable:     vectorSpec.SourceTable,
+						SourceTableDef:  vectorSpec.SourceTableDef,
+						Index:           vectorSpec.Index,
+						IncludedColumns: vectorSpec.IncludedColumns,
+					},
+				},
+				{NodeId: 1, NodeType: plan.Node_PROJECT, Children: []int32{0}, ProjectList: resultProjectList},
+			},
+			Headings: headings,
+		}}}
+	}
+
+	// Column pruning can leave score and an included column at local positions
+	// zero and one even though pkid was slot zero in the original schema.
+	prunedScoreAndInclude := makePlan(
+		[]*plan.ColDef{
+			{Name: "score", Typ: plan.Type{Id: int32(types.T_float64)}},
+			{Name: "__mo_index_include_category", Typ: sourceTable.Cols[3].Typ},
+		},
+		[]*plan.ColDef{
+			{Name: "score", Typ: plan.Type{Id: int32(types.T_float64)}},
+			{Name: "category", Typ: sourceTable.Cols[3].Typ},
+		},
+		[]string{"score", "category"},
+	)
+	got := GetResultColumnsFromPlan(prunedScoreAndInclude)
+	require.Len(t, got, 2)
+	require.Empty(t, got[0].OriginName)
+	require.Equal(t, "category", got[1].OriginName)
+	require.True(t, got[1].Unique)
+	require.True(t, got[1].NotNull)
+
+	// A different pruning pass can keep pkid and an included column while
+	// removing score; pkid must still resolve to the nonzero source position.
+	prunedPkAndInclude := makePlan(
+		[]*plan.ColDef{
+			{Name: "pkid", Typ: sourceTable.Cols[2].Typ},
+			{Name: "__mo_index_include_category", Typ: sourceTable.Cols[3].Typ},
+		},
+		[]*plan.ColDef{
+			{Name: "pkid", Typ: sourceTable.Cols[2].Typ},
+			{Name: "category", Typ: sourceTable.Cols[3].Typ},
+		},
+		[]string{"id", "category"},
+	)
+	got = GetResultColumnsFromPlan(prunedPkAndInclude)
+	require.Len(t, got, 2)
+	require.Equal(t, "id", got[0].OriginName)
+	require.True(t, got[0].Primary)
+	require.True(t, got[0].NotNull)
+	require.Equal(t, "category", got[1].OriginName)
+
+	// Sort nodes can expose a compact local output list while retaining the
+	// child scan's original source positions. The lineage walker must bridge
+	// that local position before resolving the vector slot by name. Keeping two
+	// included columns catches collisions where a local slot equals another
+	// child's source position.
+	sortPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{2},
+		Nodes: []*plan.Node{
+			{
+				NodeId: 0, NodeType: plan.Node_VECTOR_INDEX_SCAN,
+				TableDef: &plan.TableDef{Cols: []*plan.ColDef{
+					{Name: "pkid", Typ: sourceTable.Cols[2].Typ},
+					{Name: "score", Typ: plan.Type{Id: int32(types.T_float64)}},
+					{Name: "__mo_index_include_category", Typ: sourceTable.Cols[3].Typ},
+					{Name: "__mo_index_include_payload", Typ: sourceTable.Cols[1].Typ},
+				}},
+				ProjectList: []*plan.Expr{
+					{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0, Name: "pkid"}}},
+					{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1, Name: "score"}}},
+					{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 2, Name: "__mo_index_include_category"}}},
+					{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 3, Name: "__mo_index_include_payload"}}},
+				},
+				VectorIndexScan: vectorSpec,
+			},
+			{NodeId: 1, NodeType: plan.Node_SORT, Children: []int32{0}, ProjectList: []*plan.Expr{
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}},
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 2}}},
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 3}}},
+			}},
+			{NodeId: 2, NodeType: plan.Node_PROJECT, Children: []int32{1}, ProjectList: []*plan.Expr{
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}},
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1}}},
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 2}}},
+			}},
+		},
+		Headings: []string{"id", "category", "payload"},
+	}}}
+	got = GetResultColumnsFromPlan(sortPlan)
+	require.Len(t, got, 3)
+	require.Equal(t, "id", got[0].OriginName)
+	require.Equal(t, "category", got[1].OriginName)
+	require.Equal(t, "payload", got[2].OriginName)
+
+	// JOIN resolves its selected child slot before descending. That reference
+	// is already a source position, so a compact SORT child must not interpret
+	// it as a second local slot (SORT outputs [0, 2, 3] here).
+	joinTable := &plan.TableDef{
+		Name:   "join_table",
+		DbName: "source_db",
+		Pkey:   &plan.PrimaryKeyDef{PkeyColName: "id"},
+		Cols: []*plan.ColDef{
+			{Name: "id", Primary: true, Typ: plan.Type{Id: int32(types.T_int64), NotNullable: true}},
+			{Name: "payload", Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{Name: "category", NotNull: true, Typ: plan.Type{Id: int32(types.T_varchar)}},
+			{Name: "extra", Typ: plan.Type{Id: int32(types.T_int32)}},
+		},
+		Name2ColIndex: map[string]int32{"id": 0, "payload": 1, "category": 2, "extra": 3},
+		Indexes:       []*plan.IndexDef{{Parts: []string{"category"}, Unique: true}},
+	}
+	leftScanProjects := make([]*plan.Expr, len(joinTable.Cols))
+	for i, col := range joinTable.Cols {
+		leftScanProjects[i] = &plan.Expr{Typ: col.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+			RelPos: 7, ColPos: int32(i), Name: col.Name,
+		}}}
+	}
+	rightScanProjects := []*plan.Expr{{Typ: joinTable.Cols[0].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{
+		RelPos: 8, ColPos: 0, Name: "id",
+	}}}}
+	joinPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{4},
+		Nodes: []*plan.Node{
+			{NodeId: 0, NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{7}, TableDef: joinTable, ProjectList: leftScanProjects},
+			{NodeId: 1, NodeType: plan.Node_SORT, Children: []int32{0}, ProjectList: []*plan.Expr{
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 7, ColPos: 0}}},
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 7, ColPos: 2}}},
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 7, ColPos: 3}}},
+			}},
+			{NodeId: 2, NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{8}, TableDef: joinTable, ProjectList: rightScanProjects},
+			{NodeId: 3, NodeType: plan.Node_JOIN, Children: []int32{1, 2}, ProjectList: []*plan.Expr{
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1}}},
+			}},
+			{NodeId: 4, NodeType: plan.Node_PROJECT, Children: []int32{3}, ProjectList: []*plan.Expr{
+				{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1}}},
+			}},
+		},
+		Headings: []string{"category"},
+	}}}
+	got = GetResultColumnsFromPlan(joinPlan)
+	require.Len(t, got, 1)
+	require.Equal(t, "category", got[0].OriginName)
+
+	// When a transparent node is itself the result step, its expressions are
+	// already source references. The entry point must not reinterpret ColPos as
+	// a local output index.
+	sortResultPlan := *sortPlan
+	sortResultQuery := *sortPlan.GetQuery()
+	sortResultQuery.Steps = []int32{1}
+	sortResultQuery.Headings = []string{"id", "category", "payload"}
+	sortResultPlan.Plan = &plan.Plan_Query{Query: &sortResultQuery}
+	got = GetResultColumnsFromPlan(&sortResultPlan)
+	require.Len(t, got, 3)
+	require.Equal(t, "id", got[0].OriginName)
+	require.Equal(t, "category", got[1].OriginName)
+	require.Equal(t, "payload", got[2].OriginName)
+}
+
+func TestGetResultColumnsFromPlanFailsClosedForInvalidVectorIndexSource(t *testing.T) {
+	tableDef := &plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
+		Cols: []*plan.ColDef{{Name: "id", Primary: true}, {Name: "category"}},
+	}
+	vectorScan := &plan.VectorIndexScan{
+		SourceTableDef:  tableDef,
+		Index:           &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()},
+		IncludedColumns: []string{"missing"},
+	}
+	// The vector scan node's synthetic result schema (as the ivfflat emitter always sets it):
+	// pkid, score, and an include column naming a source column that does not exist.
+	vectorTableDef := &plan.TableDef{Cols: []*plan.ColDef{
+		{Name: "pkid"},
+		{Name: "score"},
+		{Name: catalog.SystemSI_IVFFLAT_IncludeColPrefix + "missing"},
+	}}
+	projectList := []*plan.Expr{
+		{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}},
+		{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 1}}},
+		{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 2}}},
+		{Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 4}}},
+	}
+
+	got := GetResultColumnsFromPlan(&plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{1},
+		Nodes: []*plan.Node{
+			{NodeId: 0, NodeType: plan.Node_VECTOR_INDEX_SCAN, TableDef: vectorTableDef, VectorIndexScan: vectorScan},
+			{NodeId: 1, NodeType: plan.Node_PROJECT, Children: []int32{0}, ProjectList: projectList},
+		},
+		Headings: []string{"id", "score", "missing", "invalid"},
+	}}})
+
+	require.Len(t, got, 4)
+	require.Equal(t, "id", got[0].OriginName) // pkid -> source primary key
+	require.Empty(t, got[1].OriginName)       // score -> no source column
+	require.Empty(t, got[2].OriginName)       // include names a column absent from the source
+	require.Empty(t, got[3].OriginName)       // ColPos out of the synthetic schema
+
+	// A vector spec without its source primary-key definition cannot safely
+	// claim key metadata from the synthetic pkid slot.
+	vectorScan.SourceTableDef.Pkey = nil
+	got = GetResultColumnsFromPlan(&plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+		StmtType: plan.Query_SELECT,
+		Steps:    []int32{1},
+		Nodes: []*plan.Node{
+			{NodeId: 0, NodeType: plan.Node_VECTOR_INDEX_SCAN, TableDef: vectorTableDef, VectorIndexScan: vectorScan},
+			{NodeId: 1, NodeType: plan.Node_PROJECT, Children: []int32{0}, ProjectList: projectList},
+		},
+		Headings: []string{"id", "score", "missing", "invalid"},
+	}}})
+	require.Len(t, got, 4)
+	require.Empty(t, got[0].OriginName)
+}
+
+// TestResultColumnSourceFromVectorIndexScanFailsClosedForNonIvfflat pins #29212: the IVFFlat
+// synthetic-schema resolver (pkid/score/__mo_index_include_*) must only be applied to an IVFFlat
+// VECTOR_INDEX_SCAN. The same node resolves under the IVFFlat algo but yields no source metadata
+// for any other algo (or a missing Index), so a future non-IVFFlat VECTOR_INDEX_SCAN cannot inherit
+// IVFFlat's schema by accident. Guards the resolver relocated from build.go (PR #28833).
+func TestResultColumnSourceFromVectorIndexScanFailsClosedForNonIvfflat(t *testing.T) {
+	sourceTable := &plan.TableDef{
+		Name:          "source_table",
+		DbName:        "source_db",
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		Cols:          []*plan.ColDef{{Name: "id", Primary: true}, {Name: "payload"}},
+		Name2ColIndex: map[string]int32{"id": 0, "payload": 1},
+	}
+	vectorTableDef := &plan.TableDef{Cols: []*plan.ColDef{{Name: "pkid"}, {Name: "score"}}}
+	sourceRef := &plan.ObjectRef{SchemaName: "source_db", ObjName: "source_table"}
+
+	// IVFFlat resolves the pkid slot to the source primary key.
+	ivf := &plan.VectorIndexScan{
+		SourceTable:    sourceRef,
+		SourceTableDef: sourceTable,
+		Index:          &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()},
+	}
+	got := resultColumnSourceFromVectorIndexScan(ivf, vectorTableDef, 0)
+	require.NotNil(t, got)
+	require.Equal(t, "id", got.columnName)
+	require.True(t, got.primary)
+
+	// A non-IVFFlat algorithm fails closed -- no source metadata.
+	nonIvf := &plan.VectorIndexScan{
+		SourceTable:    sourceRef,
+		SourceTableDef: sourceTable,
+		Index:          &plan.IndexDef{IndexAlgo: "hnsw"},
+	}
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(nonIvf, vectorTableDef, 0))
+
+	// A missing Index also fails closed (GetIndexAlgo is nil-safe).
+	missingIndex := &plan.VectorIndexScan{SourceTable: sourceRef, SourceTableDef: sourceTable}
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(missingIndex, vectorTableDef, 0))
+}
+
+// TestResultColumnSourceFromVectorIndexScanFailClosedBranches exercises every fail-closed
+// branch of the IVFFlat synthetic-schema resolver so a malformed/pruned VECTOR_INDEX_SCAN
+// can never mis-resolve a source column (#29212).
+func TestResultColumnSourceFromVectorIndexScanFailClosedBranches(t *testing.T) {
+	sourceTable := &plan.TableDef{
+		Name:          "source_table",
+		DbName:        "source_db",
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		Cols:          []*plan.ColDef{{Name: "id", Primary: true}, {Name: "payload"}},
+		Name2ColIndex: map[string]int32{"id": 0, "payload": 1},
+	}
+	ivfIndex := &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()}
+	newScan := func() *plan.VectorIndexScan {
+		return &plan.VectorIndexScan{SourceTableDef: sourceTable, Index: ivfIndex}
+	}
+	includeCol := catalog.SystemSI_IVFFLAT_IncludeColPrefix + "payload"
+	vecCols := func(names ...string) *plan.TableDef {
+		cols := make([]*plan.ColDef, len(names))
+		for i, n := range names {
+			cols[i] = &plan.ColDef{Name: n}
+		}
+		return &plan.TableDef{Cols: cols}
+	}
+
+	// nil-guard branch (scan/SourceTableDef/vectorTableDef nil, negative colPos).
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(nil, vecCols("pkid"), 0))
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(&plan.VectorIndexScan{Index: ivfIndex}, vecCols("pkid"), 0))
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(newScan(), nil, 0))
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(newScan(), vecCols("pkid"), -1))
+
+	// colPos past the synthetic schema.
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(newScan(), vecCols("pkid"), 5))
+
+	// nil column slot.
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(newScan(), &plan.TableDef{Cols: []*plan.ColDef{nil}}, 0))
+
+	// score slot never maps to a source column.
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(newScan(), vecCols("score"), 0))
+
+	// include prefix with an empty include name.
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(newScan(), vecCols(catalog.SystemSI_IVFFLAT_IncludeColPrefix), 0))
+
+	// include name not listed in IncludedColumns.
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(newScan(), vecCols(includeCol), 0))
+
+	// include name listed but absent from the source table.
+	missingScan := newScan()
+	missingScan.IncludedColumns = []string{"payload"}
+	missingScan.SourceTableDef = &plan.TableDef{
+		Name:          "source_table",
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		Cols:          []*plan.ColDef{{Name: "id", Primary: true}},
+		Name2ColIndex: map[string]int32{"id": 0},
+	}
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(missingScan, vecCols(includeCol), 0))
+
+	// unknown synthetic column name (default branch).
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(newScan(), vecCols("mystery"), 0))
+
+	// pkid slot but the source primary key is unresolvable (position not found).
+	noPkScan := newScan()
+	noPkScan.SourceTableDef = &plan.TableDef{
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		Cols:          []*plan.ColDef{{Name: "payload"}},
+		Name2ColIndex: map[string]int32{"payload": 0},
+	}
+	require.Nil(t, resultColumnSourceFromVectorIndexScan(noPkScan, vecCols("pkid"), 0))
+}
+
+// TestResultColumnSourceFromVectorIndexScanCompletesNamesFromObjectRef covers the ObjectRef
+// name-completion branch: when SourceTableDef leaves db/table names empty, the resolved source
+// is completed from the scan's authoritative ObjectRef (DbName, then SchemaName, then ObjName).
+func TestResultColumnSourceFromVectorIndexScanCompletesNamesFromObjectRef(t *testing.T) {
+	// SourceTableDef with no db/table names so the resolved source starts blank.
+	sourceTable := &plan.TableDef{
+		Pkey:          &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+		Cols:          []*plan.ColDef{{Name: "id", Primary: true}},
+		Name2ColIndex: map[string]int32{"id": 0},
+	}
+	vectorTableDef := &plan.TableDef{Cols: []*plan.ColDef{{Name: "pkid"}}}
+
+	// DbName present on the ObjectRef fills the db name; ObjName fills the table name.
+	byDbName := &plan.VectorIndexScan{
+		SourceTable:    &plan.ObjectRef{DbName: "db1", ObjName: "tbl1"},
+		SourceTableDef: sourceTable,
+		Index:          &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()},
+	}
+	got := resultColumnSourceFromVectorIndexScan(byDbName, vectorTableDef, 0)
+	require.NotNil(t, got)
+	require.Equal(t, "db1", got.dbName)
+	require.Equal(t, "tbl1", got.tableName)
+
+	// With an empty DbName the SchemaName is used as the fallback.
+	bySchema := &plan.VectorIndexScan{
+		SourceTable:    &plan.ObjectRef{SchemaName: "schema1", ObjName: "tbl2"},
+		SourceTableDef: sourceTable,
+		Index:          &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()},
+	}
+	got = resultColumnSourceFromVectorIndexScan(bySchema, vectorTableDef, 0)
+	require.NotNil(t, got)
+	require.Equal(t, "schema1", got.dbName)
+	require.Equal(t, "tbl2", got.tableName)
+}
+
+// TestResultColumnPositionByNameGuards covers the nil/empty guards of the by-name lookup helper.
+func TestResultColumnPositionByNameGuards(t *testing.T) {
+	pos, ok := resultColumnPositionByName(nil, "id")
+	require.False(t, ok)
+	require.Equal(t, int32(-1), pos)
+
+	pos, ok = resultColumnPositionByName(&plan.TableDef{}, "")
+	require.False(t, ok)
+	require.Equal(t, int32(-1), pos)
+}
+
+// TestResultColumnPrimaryKeyPositionUnresolvable covers the branch where the declared primary
+// key column name is not present among the table columns.
+func TestResultColumnPrimaryKeyPositionUnresolvable(t *testing.T) {
+	require.Equal(t, int32(-1), resultColumnPrimaryKeyPosition(&plan.TableDef{
+		Pkey: &plan.PrimaryKeyDef{PkeyColName: "id"},
+		Cols: []*plan.ColDef{{Name: "payload"}},
+	}))
 }

@@ -198,5 +198,45 @@ select o_w_id, o_d_id, o_id, o_c_id, o_carrier_id, o_ol_cnt, o_all_local from bm
 commit;
 select o_w_id, o_d_id, o_id, o_c_id, o_carrier_id, o_ol_cnt, o_all_local from bmsql_oorder order by o_w_id, o_d_id, o_id;
 
+-- A receiver-evaluated prepared NULL is represented by a scalar Fold with a
+-- nil payload. Partition pruning must fail open; the residual predicate still
+-- produces the SQL result.
+prepare __mo_stmt_partition_null from 'select count(*) from bmsql_oorder where o_w_id = ?';
+SET @o_w_id_null = NULL;
+EXECUTE __mo_stmt_partition_null USING @o_w_id_null;
+deallocate prepare __mo_stmt_partition_null;
+
+-- A prepared IN list is evaluated into one folded vector on the receiver.
+-- NULL-bearing vectors must disable optional pruning without changing the
+-- residual SELECT or DML semantics, regardless of parameter order.
+drop table if exists partition_prepare_nullable_in;
+create table partition_prepare_nullable_in (k int, v int)
+partition by list(k) (
+  partition p0 values in (0),
+  partition p1 values in (1),
+  partition p2 values in (2)
+);
+insert into partition_prepare_nullable_in values (0, 10), (1, 11), (2, 12);
+prepare __mo_stmt_partition_nullable_select from
+  'select k, v from partition_prepare_nullable_in where k in (?, ?) order by k';
+SET @partition_keep = 1;
+SET @partition_null = NULL;
+EXECUTE __mo_stmt_partition_nullable_select USING @partition_keep, @partition_null;
+EXECUTE __mo_stmt_partition_nullable_select USING @partition_null, @partition_keep;
+deallocate prepare __mo_stmt_partition_nullable_select;
+
+prepare __mo_stmt_partition_nullable_update from
+  'update partition_prepare_nullable_in set v = v + 100 where k in (?, ?)';
+EXECUTE __mo_stmt_partition_nullable_update USING @partition_keep, @partition_null;
+deallocate prepare __mo_stmt_partition_nullable_update;
+select k, v from partition_prepare_nullable_in order by k;
+
+prepare __mo_stmt_partition_nullable_delete from
+  'delete from partition_prepare_nullable_in where k in (?, ?)';
+EXECUTE __mo_stmt_partition_nullable_delete USING @partition_null, @partition_keep;
+deallocate prepare __mo_stmt_partition_nullable_delete;
+select k, v from partition_prepare_nullable_in order by k;
+drop table partition_prepare_nullable_in;
+
 drop table bmsql_oorder;
 drop database if exists tpcc;

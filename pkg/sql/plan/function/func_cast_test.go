@@ -16,6 +16,7 @@ package function
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"math"
 	"strings"
@@ -214,6 +215,22 @@ func TestPreparedTypedTextToBit(t *testing.T) {
 	})
 	succeed, info := mixed.Run()
 	require.True(t, succeed, info)
+
+	for _, width := range []int32{1, 8, 64} {
+		t.Run(fmt.Sprintf("null bit%d", width), func(t *testing.T) {
+			bitType := types.New(types.T_bit, width, 0)
+			tcc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{"", "1"}, []bool{true, false}),
+					NewFunctionTestInput(bitType, []uint64{}, nil),
+				},
+				NewFunctionTestResult(bitType, false, []uint64{0, 1}, []bool{true, false}), NewCast)
+			tcc.parameters[0].SetPrepareParamKind(vector.PrepareParamInteger)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+
 	run("negative string rejected", vector.PrepareParamNone,
 		[]string{"-6109877384019645241"}, bit64, nil, true)
 	run("narrow integer rejected", vector.PrepareParamInteger, []string{"-1"}, bit63, nil, true)
@@ -302,6 +319,312 @@ func TestInsertIgnoreCastsSpecialValues(t *testing.T) {
 	runYearCast("decimal64 invalid year becomes zero", NewFunctionTestInput(types.New(types.T_decimal64, 10, 0), []types.Decimal64{2156}, nil))
 	runYearCast("decimal128 invalid year becomes zero", NewFunctionTestInput(types.New(types.T_decimal128, 20, 0), []types.Decimal128{{B0_63: 2156}}, nil))
 	runYearCast("decimal256 invalid year becomes zero", NewFunctionTestInput(types.New(types.T_decimal256, 40, 0), []types.Decimal256{{B0_63: 2156}}, nil))
+}
+
+func TestYearAssignmentCastHonorsSQLMode(t *testing.T) {
+	newInput := func(kind string, value int64) FunctionTestInput {
+		switch kind {
+		case "string":
+			return NewFunctionTestInput(types.T_varchar.ToType(), []string{fmt.Sprint(value)}, nil)
+		case "uint64":
+			return NewFunctionTestInput(types.T_uint64.ToType(), []uint64{uint64(value)}, nil)
+		case "decimal64":
+			return NewFunctionTestInput(types.New(types.T_decimal64, 10, 0), []types.Decimal64{types.Decimal64(value)}, nil)
+		case "decimal128":
+			return NewFunctionTestInput(types.New(types.T_decimal128, 20, 0), []types.Decimal128{{B0_63: uint64(value)}}, nil)
+		case "decimal256":
+			return NewFunctionTestInput(types.New(types.T_decimal256, 40, 0), []types.Decimal256{{B0_63: uint64(value)}}, nil)
+		default:
+			return NewFunctionTestInput(types.T_int64.ToType(), []int64{value}, nil)
+		}
+	}
+	runInput := func(t *testing.T, input FunctionTestInput, sqlMode string, cast fEvalFn) (types.MoYear, bool, error) {
+		t.Helper()
+		proc := testutil.NewProcess(t)
+		proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+			require.Equal(t, "sql_mode", name)
+			return sqlMode, nil
+		})
+		yearType := types.T_year.ToType()
+		tcc := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				input,
+				NewFunctionTestInput(yearType, []types.MoYear{}, nil),
+			},
+			NewFunctionTestResult(yearType, false, []types.MoYear{0}, nil),
+			cast,
+		)
+		require.NoError(t, tcc.result.PreExtendAndReset(1))
+		result, err := tcc.DebugRun()
+		if err != nil {
+			return 0, false, err
+		}
+		got, isNull := vector.GenerateFunctionFixedTypeParameter[types.MoYear](result).GetValue(0)
+		return got, isNull, nil
+	}
+	run := func(t *testing.T, kind string, value int64, sqlMode string, cast fEvalFn) (types.MoYear, bool, error) {
+		t.Helper()
+		return runInput(t, newInput(kind, value), sqlMode, cast)
+	}
+
+	emptyString := NewFunctionTestInput(types.T_varchar.ToType(), []string{""}, nil)
+	for _, tc := range []struct {
+		name    string
+		sqlMode string
+		cast    fEvalFn
+		isNull  bool
+	}{
+		{name: "strict_assignment_remains_null", sqlMode: "STRICT_TRANS_TABLES", cast: NewAssignCast, isNull: true},
+		{name: "nonstrict_assignment_remains_null", cast: NewAssignCast, isNull: true},
+		{name: "ignore_adjusts_to_zero", sqlMode: "STRICT_TRANS_TABLES", cast: NewAssignIgnoreCast},
+		{name: "explicit_cast_remains_null", sqlMode: "STRICT_TRANS_TABLES", cast: NewExplicitCast, isNull: true},
+	} {
+		t.Run("empty_string/"+tc.name, func(t *testing.T) {
+			got, isNull, err := runInput(t, emptyString, tc.sqlMode, tc.cast)
+			require.NoError(t, err)
+			require.Equal(t, tc.isNull, isNull)
+			require.Zero(t, got)
+		})
+	}
+
+	for _, kind := range []string{"integer", "uint64", "string", "decimal64", "decimal128", "decimal256"} {
+		for _, invalid := range []int64{1900, 2156} {
+			name := fmt.Sprintf("%s_%d", kind, invalid)
+			t.Run(name+"/strict_assignment_rejects", func(t *testing.T) {
+				_, _, err := run(t, kind, invalid, "STRICT_TRANS_TABLES", NewAssignCast)
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "year")
+			})
+			t.Run(name+"/legacy_strict_assignment_rejects", func(t *testing.T) {
+				_, _, err := run(t, kind, invalid, "", NewStrictCast)
+				require.Error(t, err)
+				require.Contains(t, err.Error(), "year")
+			})
+			t.Run(name+"/nonstrict_assignment_adjusts_to_zero", func(t *testing.T) {
+				got, isNull, err := run(t, kind, invalid, "", NewAssignCast)
+				require.NoError(t, err)
+				require.False(t, isNull)
+				require.Zero(t, got)
+			})
+			t.Run(name+"/ignore_adjusts_to_zero", func(t *testing.T) {
+				got, isNull, err := run(t, kind, invalid, "STRICT_TRANS_TABLES", NewAssignIgnoreCast)
+				require.NoError(t, err)
+				require.False(t, isNull)
+				require.Zero(t, got)
+			})
+			if kind == "integer" || kind == "uint64" || kind == "string" {
+				t.Run(name+"/explicit_cast_remains_null", func(t *testing.T) {
+					_, isNull, err := run(t, kind, invalid, "STRICT_TRANS_TABLES", NewExplicitCast)
+					require.NoError(t, err)
+					require.True(t, isNull)
+				})
+			}
+		}
+
+		for _, valid := range []int64{1901, 2155} {
+			t.Run(fmt.Sprintf("%s_%d/strict_assignment_accepts", kind, valid), func(t *testing.T) {
+				got, isNull, err := run(t, kind, valid, "STRICT_TRANS_TABLES", NewAssignCast)
+				require.NoError(t, err)
+				require.False(t, isNull)
+				require.Equal(t, types.MoYear(valid), got)
+			})
+		}
+	}
+}
+
+func TestTimeAssignmentCastHonorsMySQLRange(t *testing.T) {
+	timeType := types.T_time.ToTypeWithScale(6)
+	max := types.MySQLTimeMax
+
+	run := func(t *testing.T, input FunctionTestInput, sqlMode string, cast fEvalFn, sessions ...*numericWarningSession) (*vector.Vector, error) {
+		t.Helper()
+		proc := testutil.NewProcess(t)
+		if len(sessions) > 0 {
+			proc.Session = sessions[0]
+		}
+		proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+			require.Equal(t, "sql_mode", name)
+			return sqlMode, nil
+		})
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{input, NewFunctionTestInput(timeType, []types.Time{}, nil)},
+			NewFunctionTestResult(timeType, false, nil, nil), cast)
+		require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
+		return tc.DebugRun()
+	}
+
+	stringInput := NewFunctionTestInput(types.T_varchar.ToType(),
+		[]string{"838:59:59.000001", "839:00:00", "-838:59:59.000001", "-839:00:00"}, nil)
+
+	t.Run("strict string assignment accepts whole-second endpoints", func(t *testing.T) {
+		input := NewFunctionTestInput(types.T_varchar.ToType(),
+			[]string{"838:59:59.000000", "-838:59:59.000000"}, nil)
+		result, err := run(t, input, "STRICT_TRANS_TABLES", NewAssignCast)
+		require.NoError(t, err)
+		values := vector.MustFixedColWithTypeCheck[types.Time](result)
+		require.Equal(t, []types.Time{max, -max}, values)
+	})
+
+	t.Run("strict string assignment rejects fractional endpoint excess", func(t *testing.T) {
+		for _, input := range []string{"838:59:59.000001", "-838:59:59.000001"} {
+			_, err := run(t, NewFunctionTestInput(types.T_varchar.ToType(), []string{input}, nil), "STRICT_TRANS_TABLES", NewAssignCast)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
+		}
+	})
+
+	t.Run("nonstrict string assignment clamps", func(t *testing.T) {
+		session := &numericWarningSession{}
+		result, err := run(t, stringInput, "", NewAssignCast, session)
+		require.NoError(t, err)
+		values := vector.MustFixedColWithTypeCheck[types.Time](result)
+		require.Equal(t, []types.Time{max, max, -max, -max}, values)
+		require.Len(t, session.warnings, 4)
+		for i, warning := range session.warnings {
+			require.Equal(t, moerr.ER_WARN_DATA_OUT_OF_RANGE, warning.code)
+			require.Contains(t, warning.msg, fmt.Sprintf("row %d", i+1))
+		}
+	})
+
+	t.Run("nonstrict and ignore clamp colon-delimited internal-range overflow", func(t *testing.T) {
+		for _, tc := range []struct {
+			name  string
+			mode  string
+			cast  fEvalFn
+			want  []types.Time
+			input []string
+		}{
+			{"nonstrict", "", NewAssignCast, []types.Time{max, -max}, []string{"2562047788:00:00", "-2562047788:00:00"}},
+			{"ignore", "STRICT_TRANS_TABLES", NewAssignIgnoreCast, []types.Time{max, -max}, []string{"2562047788:00:00", "-2562047788:00:00"}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				session := &numericWarningSession{}
+				result, err := run(t, NewFunctionTestInput(types.T_varchar.ToType(), tc.input, nil), tc.mode, tc.cast, session)
+				require.NoError(t, err)
+				require.Equal(t, tc.want, vector.MustFixedColWithTypeCheck[types.Time](result))
+				require.Len(t, session.warnings, 2)
+				for i, warning := range session.warnings {
+					require.Equal(t, moerr.ER_WARN_DATA_OUT_OF_RANGE, warning.code)
+					require.Contains(t, warning.msg, fmt.Sprintf("row %d", i+1))
+				}
+			})
+		}
+	})
+
+	t.Run("quoted compact internal overflow truncates instead of range-clamping", func(t *testing.T) {
+		compact := NewFunctionTestInput(types.T_varchar.ToType(), []string{"25620477880000", "-25620477880000"}, nil)
+		for _, tc := range []struct {
+			name string
+			mode string
+			cast fEvalFn
+		}{
+			{"nonstrict", "", NewAssignCast},
+			{"ignore", "STRICT_TRANS_TABLES", NewAssignIgnoreCast},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				session := &numericWarningSession{}
+				result, err := run(t, compact, tc.mode, tc.cast, session)
+				require.NoError(t, err)
+				require.Equal(t, []types.Time{0, 0}, vector.MustFixedColWithTypeCheck[types.Time](result))
+				require.Len(t, session.warnings, 2)
+				for i, warning := range session.warnings {
+					require.Equal(t, moerr.WARN_DATA_TRUNCATED, warning.code)
+					require.Contains(t, warning.msg, fmt.Sprintf("row %d", i+1))
+				}
+			})
+		}
+		_, err := run(t, compact, "STRICT_TRANS_TABLES", NewAssignCast)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrTruncatedWrongValue), err)
+		require.Equal(t, moerr.ER_TRUNCATED_WRONG_VALUE, moerr.DowncastError(err).MySQLCode())
+	})
+
+	t.Run("strict string assignment rejects internal-range overflow", func(t *testing.T) {
+		for _, input := range []string{"2562047788:00:00", "-2562047788:00:00"} {
+			_, err := run(t, NewFunctionTestInput(types.T_varchar.ToType(), []string{input}, nil), "STRICT_TRANS_TABLES", NewAssignCast)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
+		}
+	})
+
+	t.Run("insert ignore string assignment clamps", func(t *testing.T) {
+		session := &numericWarningSession{}
+		result, err := run(t, stringInput, "STRICT_TRANS_TABLES", NewAssignIgnoreCast, session)
+		require.NoError(t, err)
+		values := vector.MustFixedColWithTypeCheck[types.Time](result)
+		require.Equal(t, []types.Time{max, max, -max, -max}, values)
+		require.Len(t, session.warnings, 4)
+		for i, warning := range session.warnings {
+			require.Equal(t, moerr.ER_WARN_DATA_OUT_OF_RANGE, warning.code)
+			require.Contains(t, warning.msg, fmt.Sprintf("row %d", i+1))
+		}
+	})
+
+	for _, input := range []FunctionTestInput{
+		NewFunctionTestInput(types.T_int64.ToType(), []int64{math.MaxInt64}, nil),
+		NewFunctionTestInput(types.T_uint64.ToType(), []uint64{math.MaxUint64}, nil),
+	} {
+		t.Run(input.typ.String()+"/strict assignment rejects out of range integer", func(t *testing.T) {
+			_, err := run(t, input, "STRICT_TRANS_TABLES", NewAssignCast)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
+		})
+
+		t.Run(input.typ.String()+"/nonstrict assignment clamps and warns", func(t *testing.T) {
+			session := &numericWarningSession{}
+			result, err := run(t, input, "", NewAssignCast, session)
+			require.NoError(t, err)
+			require.Equal(t, []types.Time{max}, vector.MustFixedColWithTypeCheck[types.Time](result))
+			require.Equal(t, []numericWarning{{code: moerr.ER_WARN_DATA_OUT_OF_RANGE, msg: "Out of range value for column 'time' at row 1"}}, session.warnings)
+		})
+
+		t.Run(input.typ.String()+"/insert ignore clamps and warns", func(t *testing.T) {
+			session := &numericWarningSession{}
+			result, err := run(t, input, "STRICT_TRANS_TABLES", NewAssignIgnoreCast, session)
+			require.NoError(t, err)
+			require.Equal(t, []types.Time{max}, vector.MustFixedColWithTypeCheck[types.Time](result))
+			require.Equal(t, []numericWarning{{code: moerr.ER_WARN_DATA_OUT_OF_RANGE, msg: "Out of range value for column 'time' at row 1"}}, session.warnings)
+		})
+	}
+
+	timeInput := NewFunctionTestInput(timeType,
+		[]types.Time{types.TimeFromClock(false, 838, 59, 59, 1)}, nil)
+	t.Run("strict time expression assignment rejects extended time", func(t *testing.T) {
+		_, err := run(t, timeInput, "STRICT_TRANS_TABLES", NewAssignCast)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
+	})
+
+	t.Run("ordinary expression cast preserves MatrixOne extended time", func(t *testing.T) {
+		result, err := run(t, stringInput, "STRICT_TRANS_TABLES", NewCast)
+		require.NoError(t, err)
+		values := vector.MustFixedColWithTypeCheck[types.Time](result)
+		require.Equal(t, []types.Time{
+			types.TimeFromClock(false, 838, 59, 59, 1),
+			types.TimeFromClock(false, 839, 0, 0, 0),
+			types.TimeFromClock(true, 838, 59, 59, 1),
+			types.TimeFromClock(true, 839, 0, 0, 0),
+		}, values)
+	})
+
+	t.Run("scale zero rejects values that round over the endpoint", func(t *testing.T) {
+		target := types.T_time.ToType()
+		proc := testutil.NewProcess(t)
+		proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+			require.Equal(t, "sql_mode", name)
+			return "STRICT_TRANS_TABLES", nil
+		})
+		input := NewFunctionTestInput(types.T_varchar.ToType(),
+			[]string{"838:59:59.500000"}, nil)
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{input, NewFunctionTestInput(target, []types.Time{}, nil)},
+			NewFunctionTestResult(target, false, nil, nil), NewAssignCast)
+		require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
+		_, err := tc.DebugRun()
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
+	})
 }
 
 func TestStringToFixedFloat32PreservesSourcePrecision(t *testing.T) {
@@ -713,7 +1036,8 @@ func TestStAsWKBAndGeomFromWKB(t *testing.T) {
 func TestGeometry32EncodeDecode(t *testing.T) {
 	// Float32 WKB is shorter than float64 (4 vs 8 bytes per ordinate) and both
 	// decode back to the same WKT.
-	f32 := encodeGeometryPayloadFloat32("POINT(1 2)")
+	f32, err := encodeGeometryPayloadFloat32("POINT(1 2)")
+	require.NoError(t, err)
 	f64 := encodeGeometryPayload("POINT(1 2)", 0, false)
 	require.Len(t, f32, 13)
 	require.Len(t, f64, 21)
@@ -727,11 +1051,45 @@ func TestGeometry32EncodeDecode(t *testing.T) {
 	require.Equal(t, "POINT(1 2)", got64)
 }
 
+func TestGeometry32OverflowAdmission(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	const overflowPoint = "POINT(3.5e38 0)"
+
+	out, err := encodeGeometryPayloadFloat32(overflowPoint)
+	require.Nil(t, out)
+	require.ErrorContains(t, err, "not finite in GEOMETRY32")
+
+	out, err = NormalizeGeometryForStorage(proc, []byte(overflowPoint), "POINT", true)
+	require.Nil(t, out)
+	require.ErrorContains(t, err, "not finite in GEOMETRY32")
+
+	cast := NewFunctionTestCase(proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{overflowPoint}, nil),
+			NewFunctionTestInput(types.T_geometry32.ToType(), []string{}, nil),
+		},
+		NewFunctionTestResult(types.T_geometry32.ToType(), true, nil, nil), NewCast)
+	require.NoError(t, cast.result.PreExtendAndReset(1))
+	err = NewCast(cast.parameters, cast.result, proc, 1, nil)
+	require.ErrorContains(t, err, "not finite in GEOMETRY32")
+
+	boundary := fmt.Sprintf("POINT(%g %g)", float64(math.MaxFloat32), -float64(math.MaxFloat32))
+	out, err = NormalizeGeometryForStorage(proc, []byte(boundary), "POINT", true)
+	require.NoError(t, err)
+	require.Len(t, out, 13)
+	for _, off := range []int{5, 9} {
+		bits := binary.LittleEndian.Uint32(out[off : off+4])
+		require.NotEqual(t, uint32(0x7f800000), bits&0x7f800000)
+	}
+}
+
 func Test_CastGeometry32(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
 	// A geometry32 (float32 WKB) source value.
-	pointF32 := string(encodeGeometryPayloadFloat32("POINT(5 6)"))
+	pointF32Bytes, err := encodeGeometryPayloadFloat32("POINT(5 6)")
+	require.NoError(t, err)
+	pointF32 := string(pointF32Bytes)
 
 	testCases := []tcTemp{
 		{
@@ -775,7 +1133,9 @@ func Test_CastGeometry32(t *testing.T) {
 func Test_CastGeometryPrecisionBothWays(t *testing.T) {
 	proc := testutil.NewProcess(t)
 
-	pointF32 := string(encodeGeometryPayloadFloat32("POINT(5 6)"))    // float32 WKB
+	pointF32Bytes, err := encodeGeometryPayloadFloat32("POINT(5 6)")
+	require.NoError(t, err)
+	pointF32 := string(pointF32Bytes)                                 // float32 WKB
 	pointF64 := string(encodeGeometryPayload("POINT(5 6)", 0, false)) // float64 WKB
 
 	castLen := func(srcType types.Type, src string, dstType types.Type) int {
@@ -3050,7 +3410,7 @@ func Test_strToStr_TextToCharVarchar(t *testing.T) {
 			err := to.PreExtendAndReset(len(tt.inputs))
 			require.NoError(t, err)
 
-			err = strToStr(ctx, nil, from, to, len(tt.inputs), tt.toType, false, false, false)
+			err = strToStr(ctx, nil, from, to, len(tt.inputs), tt.toType, false, false, false, castModeNormal)
 
 			if tt.wantErr {
 				require.Error(t, err)
@@ -3131,7 +3491,7 @@ func Test_strToStr_StrictStringWidth(t *testing.T) {
 			defer to.Free()
 			require.NoError(t, to.PreExtendAndReset(1))
 
-			err := strToStr(ctx, nil, from, to, 1, tt.toType, tt.strict, false, false)
+			err := strToStr(ctx, nil, from, to, 1, tt.toType, tt.strict, false, false, castModeNormal)
 			if tt.wantErr {
 				require.Error(t, err)
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInternal))
@@ -3141,6 +3501,81 @@ func Test_strToStr_StrictStringWidth(t *testing.T) {
 			get, null := vector.GenerateFunctionStrParameter(to.GetResultVector()).GetStrValue(0)
 			require.False(t, null)
 			require.Equal(t, tt.want, string(get))
+		})
+	}
+}
+
+func TestStrToStrNormalizesOnlyPhysicalEqualityCasts(t *testing.T) {
+	mp := mpool.MustNewZero()
+
+	for _, test := range []struct {
+		name     string
+		fromType types.Type
+		toType   types.Type
+		mode     castMode
+		want     string
+	}{
+		{name: "ordinary varchar cast preserves padding", fromType: types.New(types.T_char, 8, 0), toType: types.New(types.T_varchar, 8, 0), mode: castModeNormal, want: "MO      "},
+		{name: "comparison varchar cast drops padding", fromType: types.New(types.T_char, 8, 0), toType: types.New(types.T_varchar, 8, 0), mode: castModeComparison, want: "MO"},
+		{name: "comparison promoted varchar key drops padding", fromType: types.New(types.T_varchar, 8, 0), toType: types.New(types.T_varchar, 8, 0), mode: castModeComparison, want: "MO"},
+		{name: "set-operation varchar key drops padding", fromType: types.New(types.T_char, 8, 0), toType: types.New(types.T_varchar, 8, 0), mode: castModeSetOperation, want: "MO"},
+		{name: "comparison char cast preserves padding", fromType: types.New(types.T_char, 8, 0), toType: types.New(types.T_char, 8, 0), mode: castModeComparison, want: "MO      "},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input := testutil.MakeVarcharVector([]string{"MO      "}, nil, mp)
+			input.SetType(test.fromType)
+			defer input.Free(mp)
+			from := vector.GenerateFunctionStrParameter(input)
+			result := vector.NewFunctionResultWrapper(test.toType, mp).(*vector.FunctionResult[types.Varlena])
+			defer result.Free()
+			require.NoError(t, result.PreExtendAndReset(1))
+			require.NoError(t, strToStr(context.Background(), nil, from, result, 1, test.toType, false, false, false, test.mode))
+
+			got, null := vector.GenerateFunctionStrParameter(result.GetResultVector()).GetStrValue(0)
+			require.False(t, null)
+			require.Equal(t, test.want, string(got))
+		})
+	}
+}
+
+func TestSetOperationCharCastPadsToCommonWidthOnlyWhenEnabled(t *testing.T) {
+	char4 := types.New(types.T_char, 4, 0)
+	char8 := types.New(types.T_char, 8, 0)
+
+	for _, tc := range []struct {
+		name    string
+		sqlMode string
+		want    []string
+	}{
+		{
+			name:    "pad char to full length",
+			sqlMode: "PAD_CHAR_TO_FULL_LENGTH",
+			want:    []string{"MO      ", "你好      "},
+		},
+		{
+			name:    "default mode preserves physical width",
+			sqlMode: "",
+			want:    []string{"MO  ", "你好  "},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+				require.Equal(t, "sql_mode", name)
+				return tc.sqlMode, nil
+			})
+
+			testCase := NewFunctionTestCase(
+				proc,
+				[]FunctionTestInput{
+					NewFunctionTestInput(char4, []string{"MO  ", "你好  "}, nil),
+					NewFunctionTestInput(char8, []string{}, nil),
+				},
+				NewFunctionTestResult(char8, false, tc.want, nil),
+				NewSetOperationCast,
+			)
+			succeed, info := testCase.Run()
+			require.True(t, succeed, info)
 		})
 	}
 }
@@ -3230,7 +3665,7 @@ func Test_CastVarcharToGeometryRejectTooManyPoints(t *testing.T) {
 	err := to.PreExtendAndReset(1)
 	require.NoError(t, err)
 
-	err = strToStr(context.Background(), proc, from, to, 1, types.T_geometry.ToType(), false, false, false)
+	err = strToStr(context.Background(), proc, from, to, 1, types.T_geometry.ToType(), false, false, false, castModeNormal)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "max_points_in_geometry=3")
 }
@@ -3650,6 +4085,15 @@ func TestCastJsonToNumeric(t *testing.T) {
 			[]int64{1, 2, -3}, []bool{false, false, false}, false)
 	})
 
+	t.Run("json_integer_cast_preserves_values_above_float_precision", func(t *testing.T) {
+		run(t, "int64_precision", []string{"9007199254740993", "9223372036854775807"}, nil,
+			types.T_int64.ToType(),
+			[]int64{9007199254740993, math.MaxInt64}, []bool{false, false}, false)
+		run(t, "uint64_precision", []string{"9007199254740993", "18446744073709551615"}, nil,
+			types.T_uint64.ToType(),
+			[]uint64{9007199254740993, math.MaxUint64}, []bool{false, false}, false)
+	})
+
 	t.Run("json_number_to_int8", func(t *testing.T) {
 		run(t, "int8", []string{"10", "20"}, nil,
 			types.T_int8.ToType(),
@@ -3660,6 +4104,40 @@ func TestCastJsonToNumeric(t *testing.T) {
 		run(t, "string_to_int64", []string{`"42"`, `"100"`}, nil,
 			types.T_int64.ToType(),
 			[]int64{42, 100}, []bool{false, false}, false)
+	})
+
+	t.Run("json_string_integer_cast_preserves_boundaries", func(t *testing.T) {
+		run(t, "string_int64_precision", []string{`"9007199254740993"`, `"9223372036854775807"`}, nil,
+			types.T_int64.ToType(),
+			[]int64{9007199254740993, math.MaxInt64}, []bool{false, false}, false)
+		run(t, "string_uint64_precision", []string{`"9007199254740993"`, `"18446744073709551615"`}, nil,
+			types.T_uint64.ToType(),
+			[]uint64{9007199254740993, math.MaxUint64}, []bool{false, false}, false)
+	})
+
+	t.Run("json_string_fractional_integer_cast_is_exact", func(t *testing.T) {
+		run(t, "string_int64_fraction", []string{`"9007199254740993.9"`, `"-9223372036854775808.9"`}, nil,
+			types.T_int64.ToType(),
+			[]int64{9007199254740993, math.MinInt64}, []bool{false, false}, false)
+		run(t, "string_uint64_fraction", []string{`"18446744073709551615.9"`}, nil,
+			types.T_uint64.ToType(),
+			[]uint64{math.MaxUint64}, []bool{false}, false)
+	})
+
+	t.Run("json_decimal_integer_cast_is_exact", func(t *testing.T) {
+		encoded := []string{
+			encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeDecimal, "9007199254740993.9")),
+			encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeDecimal, "9223372036854775807.99")),
+		}
+		inputs := []FunctionTestInput{
+			NewFunctionTestInput(types.T_json.ToType(), encoded, nil),
+			NewFunctionTestInput(types.T_int64.ToType(), []int64{}, nil),
+		}
+		expect := NewFunctionTestResult(types.T_int64.ToType(), false,
+			[]int64{9007199254740993, math.MaxInt64}, nil)
+		fcTC := NewFunctionTestCase(proc, inputs, expect, NewCast)
+		succeed, info := fcTC.Run()
+		require.True(t, succeed, info)
 	})
 
 	t.Run("json_null_to_int64", func(t *testing.T) {
@@ -3865,12 +4343,14 @@ func TestCastJsonToBool(t *testing.T) {
 		[]bool{true, false, false, true, true}, []bool{false, false, false, false, false}, false)
 	run(t, "string_values", []string{`"true"`, `"false"`, `"0"`, `"2"`}, nil,
 		[]bool{true, false, false, true}, []bool{false, false, false, false}, false)
-	run(t, "quoted_string_error", []string{`"\"true\""`}, nil, nil, nil, true)
+	run(t, "quoted_string_error", []string{`"\"true\""`}, nil,
+		nil, nil, true)
 	run(t, "json_null", []string{"null", "true"}, []bool{false, true},
 		[]bool{false, false}, []bool{true, true}, false)
 	run(t, "object_error", []string{"{}"}, nil, nil, nil, true)
 	run(t, "array_error", []string{"[true]"}, nil, nil, nil, true)
-	run(t, "string_error", []string{`"not-a-bool"`}, nil, nil, nil, true)
+	run(t, "other_string_error", []string{`"not-a-bool"`}, nil,
+		nil, nil, true)
 
 	decimalEncoded := []string{
 		encodeJSONCastValue(t, newTypedByteJson(bytejson.TpCodeDecimal, "0.00")),
@@ -3898,14 +4378,10 @@ func TestCastJsonToBool(t *testing.T) {
 		{name: "malformed_decimal", value: newTypedByteJson(bytejson.TpCodeDecimal, "not-a-decimal")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			inputs := []FunctionTestInput{
-				NewFunctionTestInput(types.T_json.ToType(), []string{encodeJSONCastValue(t, tc.value)}, nil),
-				NewFunctionTestInput(types.T_bool.ToType(), []bool{}, nil),
-			}
-			expect := NewFunctionTestResult(types.T_bool.ToType(), true, nil, nil)
-			fcTC := NewFunctionTestCase(proc, inputs, expect, NewCast)
-			succeed, info := fcTC.Run()
-			require.True(t, succeed, "%s: %s", tc.name, info)
+			// Arbitrary malformed ByteJSON is rejected by vector admission. Keep
+			// the scalar cast's defensive error contract as a direct internal probe.
+			_, _, err := jsonScalarToBool(proc.Ctx, tc.value)
+			require.Error(t, err)
 		})
 	}
 }
@@ -3930,6 +4406,13 @@ func TestCastJsonToJsonOverloadResolution(t *testing.T) {
 	require.True(t, IfTypeCastSupported(types.T_json, types.T_json))
 
 	_, err := GetFunctionByName(context.Background(), "cast", []types.Type{types.T_json.ToType(), types.T_json.ToType()})
+	require.NoError(t, err)
+}
+
+func TestCastJsonToBlobOverloadResolution(t *testing.T) {
+	require.True(t, IfTypeCastSupported(types.T_json, types.T_blob))
+
+	_, err := GetFunctionByName(context.Background(), "cast", []types.Type{types.T_json.ToType(), types.T_blob.ToType()})
 	require.NoError(t, err)
 }
 
@@ -4899,5 +5382,59 @@ func TestParseStringToFloatWithBitSize(t *testing.T) {
 			require.Error(t, err)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
 		}
+	})
+}
+
+// #28917: arrayToArray must reject a value whose actual element count does not match the DECLARED
+// target dimension (to.Width) -- otherwise a wrong-dimension vector is copied verbatim under the
+// target label, forming a mixed-dimension column. An UNSIZED target (Width == MaxArrayDimension,
+// which an arithmetic result carries) declares no dimension and is left alone.
+func TestCastArrayDimensionMismatch(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	vecf32 := func(w int32) types.Type { return types.New(types.T_array_float32, w, 0) }
+	vecf64 := func(w int32) types.Type { return types.New(types.T_array_float64, w, 0) }
+
+	t.Run("vecf32(3)->vecf32(4) rejected", func(t *testing.T) {
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(vecf32(3), [][]float32{{1, 2, 3}}, []bool{false}),
+				NewFunctionTestInput(vecf32(4), [][]float32{}, []bool{}),
+			},
+			NewFunctionTestResult(vecf32(4), true, nil, nil), NewCast)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	})
+
+	t.Run("vecf32(3)->vecf64(4) rejected (element + dimension change)", func(t *testing.T) {
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(vecf32(3), [][]float32{{1, 2, 3}}, []bool{false}),
+				NewFunctionTestInput(vecf64(4), [][]float64{}, []bool{}),
+			},
+			NewFunctionTestResult(vecf64(4), true, nil, nil), NewCast)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	})
+
+	t.Run("vecf32(3)->vecf32(3) allowed (same declared dimension)", func(t *testing.T) {
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(vecf32(3), [][]float32{{1, 2, 3}}, []bool{false}),
+				NewFunctionTestInput(vecf32(3), [][]float32{}, []bool{}),
+			},
+			NewFunctionTestResult(vecf32(3), false, [][]float32{{1, 2, 3}}, []bool{false}), NewCast)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
+	})
+
+	t.Run("unsized target skips the dimension check", func(t *testing.T) {
+		tc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(vecf32(3), [][]float32{{1, 2, 3}}, []bool{false}),
+				NewFunctionTestInput(types.T_array_float32.ToType(), [][]float32{}, []bool{}),
+			},
+			NewFunctionTestResult(types.T_array_float32.ToType(), false, [][]float32{{1, 2, 3}}, []bool{false}), NewCast)
+		ok, info := tc.Run()
+		require.True(t, ok, info)
 	})
 }

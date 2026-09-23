@@ -511,7 +511,10 @@ func doTransferRowids(
 	}()
 
 	pkColumName := table.GetTableDef(ctx).Pkey.PkeyColName
-	expr := readutil.ConstructInExpr(ctx, pkColumName, searchPKColumn)
+	expr, err := readutil.ConstructInExpr(ctx, pkColumName, searchPKColumn)
+	if err != nil {
+		return err
+	}
 	rangesParam := engine.RangesParam{
 		BlockFilters:   []*plan.Expr{expr},
 		PreAllocBlocks: 2,

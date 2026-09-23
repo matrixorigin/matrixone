@@ -17,12 +17,21 @@ package window
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"math"
+	"os"
+	"runtime"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -50,6 +59,117 @@ type cancelAfterDoneChecksContext struct {
 	context.Context
 	done      chan struct{}
 	remaining atomic.Int32
+}
+
+// cancelOnErrContext remains live for the operator's polling checks and
+// cancels when a context-aware finalizer asks for the cancellation cause. It
+// distinguishes window's FlushWithContext path from the legacy Flush path,
+// which silently replaced the query context with context.Background().
+type cancelOnErrContext struct {
+	context.Context
+	done chan struct{}
+	once sync.Once
+}
+
+// cancelInFunctionContext deterministically injects cancellation only after
+// execution has entered target. It avoids timing-based tests while proving
+// that a long-running inner loop observes the query context itself.
+type cancelInFunctionContext struct {
+	context.Context
+	target    string
+	remaining atomic.Int32
+	done      chan struct{}
+	once      sync.Once
+}
+
+func newCancelInFunctionContext(target string, checks int32) *cancelInFunctionContext {
+	ctx := &cancelInFunctionContext{
+		Context: context.Background(),
+		target:  target,
+		done:    make(chan struct{}),
+	}
+	ctx.remaining.Store(checks)
+	return ctx
+}
+
+func (c *cancelInFunctionContext) Done() <-chan struct{} {
+	return c.done
+}
+
+func (c *cancelInFunctionContext) Err() error {
+	pcs := make([]uintptr, 32)
+	n := runtime.Callers(2, pcs)
+	frames := runtime.CallersFrames(pcs[:n])
+	for {
+		frame, more := frames.Next()
+		if strings.Contains(frame.Function, c.target) && c.remaining.Add(-1) == 0 {
+			c.once.Do(func() { close(c.done) })
+			return context.Canceled
+		}
+		if !more {
+			break
+		}
+	}
+	select {
+	case <-c.done:
+		return context.Canceled
+	default:
+		return nil
+	}
+}
+
+type trackingMutableFileService struct {
+	fileservice.MutableFileService
+	mu    sync.Mutex
+	files []*os.File
+}
+
+func (s *trackingMutableFileService) CreateAndRemoveFile(
+	ctx context.Context, filePath string,
+) (*os.File, error) {
+	file, err := s.MutableFileService.CreateAndRemoveFile(ctx, filePath)
+	if err == nil {
+		s.mu.Lock()
+		s.files = append(s.files, file)
+		s.mu.Unlock()
+	}
+	return file, err
+}
+
+func (s *trackingMutableFileService) openedFiles() []*os.File {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]*os.File(nil), s.files...)
+}
+
+func installTrackingSpillFileService(t *testing.T, proc *process.Process) *trackingMutableFileService {
+	t.Helper()
+	local, err := fileservice.Get[fileservice.MutableFileService](
+		proc.Base.FileService, defines.LocalFileServiceName)
+	require.NoError(t, err)
+	shared, err := fileservice.Get[fileservice.FileService](
+		proc.Base.FileService, defines.SharedFileServiceName)
+	require.NoError(t, err)
+	etl, err := fileservice.Get[fileservice.FileService](
+		proc.Base.FileService, defines.ETLFileServiceName)
+	require.NoError(t, err)
+	tracking := &trackingMutableFileService{MutableFileService: local}
+	proc.Base.FileService, err = fileservice.NewFileServices("", tracking, shared, etl)
+	require.NoError(t, err)
+	return tracking
+}
+
+func newCancelOnErrContext(parent context.Context) *cancelOnErrContext {
+	return &cancelOnErrContext{Context: parent, done: make(chan struct{})}
+}
+
+func (c *cancelOnErrContext) Done() <-chan struct{} {
+	return c.done
+}
+
+func (c *cancelOnErrContext) Err() error {
+	c.once.Do(func() { close(c.done) })
+	return context.Canceled
 }
 
 func newCancelAfterDoneChecksContext(parent context.Context, checks int32) *cancelAfterDoneChecksContext {
@@ -247,6 +367,43 @@ func TestBoundedSlidingWindowCancellationReleasesState(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestBoundedSlidingRangeWindowCancellationReleasesState(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	const rows = 128
+	values := make([]int32, rows)
+	for i := range values {
+		values[i] = 1
+	}
+	bat := makeInt32Batch(proc.Mp(), values)
+	spec := makeWindowSpec()
+	spec.GetW().Frame = makeBoundedRangeFrame(2, 2)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs: []aggexec.AggFuncExecExpression{
+			newTypedAvgAggExpr(t, 0, types.T_int32.ToType()),
+		},
+	}
+	arg.ctr.bat = bat
+	arg.ctr.os = []int64{0}
+	arg.ctr.orderVecs = []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}}
+	arg.ctr.aggVecs = []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}}
+
+	// One peer fills the complete frame while evaluating its first row. Cancel
+	// on the first inner-loop poll to prove a large peer remains interruptible.
+	proc.Ctx = newCancelAfterDoneChecksContext(proc.Ctx, 2)
+	result, err := arg.ctr.processAggregateFuncRange(0, arg, proc, 0, rows)
+	if result != nil {
+		result.Free(proc.Mp())
+	}
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, arg.ctr.batAggs)
+	require.Nil(t, arg.ctr.runningAgg)
+
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestWindowCallHonorsPreCancellation(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	ctx, cancel := context.WithCancel(proc.Ctx)
@@ -315,19 +472,56 @@ func makeFiniteCumulativeFrame(preceding uint64) *plan.FrameClause {
 	}
 }
 
+func makeBoundedRangeFrame(preceding, following int32) *plan.FrameClause {
+	return &plan.FrameClause{
+		Type: plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_I32Val{I32Val: preceding},
+			}}},
+		},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_FOLLOWING,
+			Val: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Value: &plan.Literal_I32Val{I32Val: following},
+			}}},
+		},
+	}
+}
+
 func makePreparedRowsBoundExpr(t *testing.T, pos int32) *plan.Expr {
+	return makePreparedWindowBoundExpr(t, pos, types.T_uint64.ToType())
+}
+
+func makePreparedWindowBoundExpr(t *testing.T, pos int32, target types.Type) *plan.Expr {
 	t.Helper()
 	param := &plan.Expr{
 		Typ:  plan.Type{Id: int32(types.T_text)},
 		Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: pos}},
 	}
-	targetType := plan.Type{Id: int32(types.T_uint64), NotNullable: true}
+	targetType := plan.Type{Id: int32(target.Oid), Width: target.Width, Scale: target.Scale, NotNullable: true}
 	expr, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "cast", []*plan.Expr{
 		param,
 		{Typ: targetType, Expr: &plan.Expr_T{T: &plan.TargetType{}}},
 	})
 	require.NoError(t, err)
 	return expr
+}
+
+func makePreparedRangeFrame(t *testing.T, startPos, endPos int32, target types.Type) *plan.FrameClause {
+	t.Helper()
+	return &plan.FrameClause{
+		Type: plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val:  makePreparedWindowBoundExpr(t, startPos, target),
+		},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_FOLLOWING,
+			Val:  makePreparedWindowBoundExpr(t, endPos, target),
+		},
+	}
 }
 
 func makePreparedRowsFrame(t *testing.T, startPos, endPos int32) *plan.FrameClause {
@@ -415,6 +609,40 @@ func TestWindowPrepareMaterializesRowsFrameBounds(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestWindowPrepareMaterializesRangeFrameBounds(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	planned := makePreparedRangeFrame(t, 0, 1, types.T_int32.ToType())
+	arg := makeWindowWithFrame(planned)
+	firstParams := setWindowPrepareParams(t, proc, stringPtr("1"), stringPtr("2"))
+
+	require.NoError(t, arg.Prepare(proc))
+	require.Len(t, arg.ctr.runtimeFrames, 1)
+	require.NotSame(t, planned, arg.ctr.runtimeFrames[0])
+	require.Equal(t, int32(1), arg.ctr.runtimeFrames[0].Start.Val.GetLit().GetI32Val())
+	require.Equal(t, int32(2), arg.ctr.runtimeFrames[0].End.Val.GetLit().GetI32Val())
+	requirePreparedRowsBoundUnchanged(t, planned.Start.Val, 0)
+	requirePreparedRowsBoundUnchanged(t, planned.End.Val, 1)
+
+	arg.Reset(proc, false, nil)
+	require.Nil(t, arg.ctr.runtimeFrames)
+
+	proc.SetPrepareParams(nil)
+	firstParams.Free(proc.Mp())
+	secondParams := setWindowPrepareParams(t, proc, stringPtr("3"), stringPtr("4"))
+	require.NoError(t, arg.Prepare(proc))
+	require.Equal(t, int32(3), arg.ctr.runtimeFrames[0].Start.Val.GetLit().GetI32Val())
+	require.Equal(t, int32(4), arg.ctr.runtimeFrames[0].End.Val.GetLit().GetI32Val())
+	requirePreparedRowsBoundUnchanged(t, planned.Start.Val, 0)
+	requirePreparedRowsBoundUnchanged(t, planned.End.Val, 1)
+
+	arg.Free(proc, false, nil)
+	require.Nil(t, arg.ctr.runtimeFrames)
+	proc.SetPrepareParams(nil)
+	secondParams.Free(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestWindowPrepareValidatesRowsFrameBounds(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -469,6 +697,136 @@ func TestWindowPrepareValidatesRowsFrameBounds(t *testing.T) {
 			}
 			proc.Free()
 			require.Zero(t, proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestWindowPrepareValidatesRangeFrameBounds(t *testing.T) {
+	tests := []struct {
+		name       string
+		value      *string
+		missing    bool
+		emptyParam bool
+		want       int32
+		wantErr    bool
+	}{
+		{name: "zero", value: stringPtr("0"), want: 0},
+		{name: "maximum", value: stringPtr("2147483647"), want: math.MaxInt32},
+		{name: "negative", value: stringPtr("-1"), wantErr: true},
+		{name: "fractional", value: stringPtr("1.5"), wantErr: true},
+		{name: "null", value: nil, wantErr: true},
+		{name: "overflow", value: stringPtr("2147483648"), wantErr: true},
+		{name: "conversion failure", value: stringPtr("not-a-number"), wantErr: true},
+		{name: "missing vector", missing: true, wantErr: true},
+		{name: "missing element", emptyParam: true, wantErr: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			planned := makePreparedRangeFrame(t, 0, 0, types.T_int32.ToType())
+			arg := makeWindowWithFrame(planned)
+			var params *vector.Vector
+			switch {
+			case test.missing:
+				proc.SetPrepareParams(nil)
+			case test.emptyParam:
+				params = setWindowPrepareParams(t, proc)
+			default:
+				params = setWindowPrepareParams(t, proc, test.value)
+			}
+
+			err := arg.Prepare(proc)
+			if test.wantErr {
+				require.Error(t, err)
+				require.Nil(t, arg.ctr.runtimeFrames)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, test.want, arg.ctr.runtimeFrames[0].Start.Val.GetLit().GetI32Val())
+				require.Equal(t, test.want, arg.ctr.runtimeFrames[0].End.Val.GetLit().GetI32Val())
+			}
+			requirePreparedRowsBoundUnchanged(t, planned.Start.Val, 0)
+			requirePreparedRowsBoundUnchanged(t, planned.End.Val, 0)
+
+			arg.Free(proc, false, nil)
+			proc.SetPrepareParams(nil)
+			if params != nil {
+				params.Free(proc.Mp())
+			}
+			proc.Free()
+			require.Zero(t, proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestValidateRangeFrameBound(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() {
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	newVec := func(typ types.Type, value any) *vector.Vector {
+		var vec *vector.Vector
+		var err error
+		switch value := value.(type) {
+		case uint8:
+			vec, err = vector.NewConstFixed(typ, value, 1, mp)
+		case int8:
+			vec, err = vector.NewConstFixed(typ, value, 1, mp)
+		case int16:
+			vec, err = vector.NewConstFixed(typ, value, 1, mp)
+		case int32:
+			vec, err = vector.NewConstFixed(typ, value, 1, mp)
+		case int64:
+			vec, err = vector.NewConstFixed(typ, value, 1, mp)
+		case float32:
+			vec, err = vector.NewConstFixed(typ, value, 1, mp)
+		case float64:
+			vec, err = vector.NewConstFixed(typ, value, 1, mp)
+		case types.Decimal64:
+			vec, err = vector.NewConstFixed(typ, value, 1, mp)
+		case types.Decimal128:
+			vec, err = vector.NewConstFixed(typ, value, 1, mp)
+		case bool:
+			vec, err = vector.NewConstFixed(typ, value, 1, mp)
+		default:
+			t.Fatalf("unsupported test value type %T", value)
+		}
+		require.NoError(t, err)
+		return vec
+	}
+
+	tests := []struct {
+		name    string
+		typ     types.Type
+		value   any
+		wantErr bool
+	}{
+		{name: "unsigned", typ: types.T_uint8.ToType(), value: uint8(1)},
+		{name: "int8", typ: types.T_int8.ToType(), value: int8(1)},
+		{name: "int16", typ: types.T_int16.ToType(), value: int16(1)},
+		{name: "int32", typ: types.T_int32.ToType(), value: int32(-1), wantErr: true},
+		{name: "int64", typ: types.T_int64.ToType(), value: int64(1)},
+		{name: "float32", typ: types.T_float32.ToType(), value: float32(1.5)},
+		{name: "float32 infinity", typ: types.T_float32.ToType(), value: float32(math.Inf(1)), wantErr: true},
+		{name: "float64", typ: types.T_float64.ToType(), value: float64(1.5)},
+		{name: "float64 nan", typ: types.T_float64.ToType(), value: math.NaN(), wantErr: true},
+		{name: "decimal64", typ: types.T_decimal64.ToType(), value: types.Decimal64(1)},
+		{name: "decimal64 negative", typ: types.T_decimal64.ToType(), value: types.Decimal64Min, wantErr: true},
+		{name: "decimal128", typ: types.T_decimal128.ToType(), value: types.Decimal128FromInt64(1)},
+		{name: "decimal128 negative", typ: types.T_decimal128.ToType(), value: types.Decimal128FromInt64(-1), wantErr: true},
+		{name: "non-numeric", typ: types.T_bool.ToType(), value: true, wantErr: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			vec := newVec(test.typ, test.value)
+			defer vec.Free(mp)
+			if test.wantErr {
+				require.Error(t, validateRangeFrameBound(context.Background(), vec))
+			} else {
+				require.NoError(t, validateRangeFrameBound(context.Background(), vec))
+			}
 		})
 	}
 }
@@ -530,6 +888,35 @@ func TestWindowPrepareHandlesNilAndLiteralFrameBounds(t *testing.T) {
 	require.Zero(t, proc.Mp().CurrNB())
 }
 
+func TestWindowPreparePreservesRangeIntervalBounds(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	interval := &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_interval)},
+		Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{
+			plan2.MakePlan2Int64ConstExprWithType(1),
+			plan2.MakePlan2Int64ConstExprWithType(int64(types.Day)),
+		}}},
+	}
+	planned := &plan.FrameClause{
+		Type: plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val:  interval,
+		},
+		End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	arg := makeWindowWithFrame(planned)
+
+	require.NoError(t, arg.Prepare(proc))
+	require.Len(t, arg.ctr.runtimeFrames, 1)
+	require.NotSame(t, planned, arg.ctr.runtimeFrames[0])
+	require.Same(t, interval, arg.ctr.runtimeFrames[0].Start.Val)
+
+	arg.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
 func TestWindowPrepareFrameBoundsStayUnpublishedAfterLaterError(t *testing.T) {
 	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
 	planned := makePreparedRowsFrame(t, 0, 0)
@@ -564,6 +951,48 @@ func TestWindowPrepareFrameBoundsFeedAggregateConsumer(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, []int64{30, 60, 90, 70},
 		vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[1]))
+	requirePreparedRowsBoundUnchanged(t, planned.Start.Val, 0)
+	requirePreparedRowsBoundUnchanged(t, planned.End.Val, 1)
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.SetPrepareParams(nil)
+	params.Free(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestWindowPrepareRangeFrameBoundsFeedAggregateConsumer(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	planned := makePreparedRangeFrame(t, 0, 1, types.T_int32.ToType())
+	spec := &plan.Expr{
+		Expr: &plan.Expr_W{W: &plan.WindowSpec{
+			Name:       "sum",
+			WindowFunc: newFunExpr("sum"),
+			OrderBy: []*plan.OrderBySpec{{
+				Expr: newColExprWithType(1, types.T_int32.ToType()),
+				Flag: plan.OrderBySpec_ASC,
+			}},
+			Frame: planned,
+		}},
+	}
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExprAt(0)},
+	}
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{10, 20, 30}, nil, proc.Mp())
+	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 3, 4}, nil, proc.Mp())
+	bat.SetRowCount(3)
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+	params := setWindowPrepareParams(t, proc, stringPtr("1"), stringPtr("1"))
+
+	require.NoError(t, arg.Prepare(proc))
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.Equal(t, []int64{10, 50, 50},
+		vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[2]))
 	requirePreparedRowsBoundUnchanged(t, planned.Start.Val, 0)
 	requirePreparedRowsBoundUnchanged(t, planned.End.Val, 1)
 
@@ -797,6 +1226,44 @@ func TestBoundedSlidingRowsFrameEligibility(t *testing.T) {
 	}
 }
 
+func TestBoundedSlidingRangeFrameEligibility(t *testing.T) {
+	intOrder := vector.NewVec(types.T_int32.ToType())
+	floatOrder := vector.NewVec(types.T_float64.ToType())
+	timestampOrder := vector.NewVec(types.T_timestamp.ToType())
+	validFrame := makeBoundedRangeFrame(2, 2)
+
+	tests := []struct {
+		name      string
+		frame     *plan.FrameClause
+		orderVecs []colexec.ExprEvalVector
+		want      bool
+	}{
+		{name: "bounded integer", frame: validFrame,
+			orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{intOrder}}}, want: true},
+		{name: "float", frame: validFrame,
+			orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{floatOrder}}}},
+		{name: "timestamp", frame: validFrame,
+			orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{timestampOrder}}}},
+		{name: "multiple order keys", frame: validFrame, orderVecs: []colexec.ExprEvalVector{
+			{Vec: []*vector.Vector{intOrder}}, {Vec: []*vector.Vector{intOrder}},
+		}},
+		{name: "no materialized order vector", frame: validFrame},
+		{name: "unbounded start", frame: &plan.FrameClause{
+			Type:  plan.FrameClause_RANGE,
+			Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, UnBounded: true},
+			End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		}, orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{intOrder}}}},
+		{name: "rows", frame: makeFiniteCumulativeFrame(2),
+			orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{intOrder}}}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want, boundedSlidingRangeFrame(test.frame, test.orderVecs))
+		})
+	}
+}
+
 func makeWindowSpec() *plan.Expr {
 	return &plan.Expr{
 		Typ: plan.Type{},
@@ -857,6 +1324,39 @@ func newTypedSumAggExpr(t *testing.T, pos int32, typ types.Type) aggexec.AggFunc
 	require.NoError(t, err)
 	return aggexec.MakeAggFunctionExpression(
 		e.GetEncodedOverloadID(), false, []*plan.Expr{newColExprWithType(pos, typ)}, nil)
+}
+
+func newTypedAvgAggExpr(t testing.TB, pos int32, typ types.Type) aggexec.AggFuncExecExpression {
+	e, err := function.GetFunctionByName(context.Background(), "avg", []types.Type{typ})
+	require.NoError(t, err)
+	return aggexec.MakeAggFunctionExpression(
+		e.GetEncodedOverloadID(), false, []*plan.Expr{newColExprWithType(pos, typ)}, nil)
+}
+
+func newTypedMaxAggExpr(t testing.TB, pos int32, typ types.Type) aggexec.AggFuncExecExpression {
+	e, err := function.GetFunctionByName(context.Background(), "max", []types.Type{typ})
+	require.NoError(t, err)
+	return aggexec.MakeAggFunctionExpression(
+		e.GetEncodedOverloadID(), false, []*plan.Expr{newColExprWithType(pos, typ)}, nil)
+}
+
+func newOrderedPercentileWindowAggExpr(
+	t *testing.T,
+	name string,
+	percentile string,
+	descending bool,
+) aggexec.AggFuncExecExpression {
+	valueType := types.T_int32.ToType()
+	percentileType := types.T_float64.ToType()
+	e, err := function.GetFunctionByName(
+		context.Background(), name, []types.Type{valueType, percentileType})
+	require.NoError(t, err)
+	return aggexec.MakeAggFunctionExpression(
+		e.GetEncodedOverloadID(),
+		false,
+		[]*plan.Expr{newColExprWithType(0, valueType)},
+		aggexec.EncodeOrderedPercentileConfig([]byte(percentile), descending),
+	)
 }
 
 func newRowNumberAggExpr(t *testing.T) aggexec.AggFuncExecExpression {
@@ -937,6 +1437,365 @@ func TestWindowJsonObjectAggOutput(t *testing.T) {
 	arg.Free(proc, false, nil)
 	op.Free(proc, false, nil)
 	proc.Free()
+}
+
+func TestWindowOrderedPercentileOutput(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		function   string
+		descending bool
+		wantFloat  []float64
+		wantInt    []int32
+	}{
+		{
+			name:      "continuous ascending",
+			function:  "percentile_cont",
+			wantFloat: []float64{4, 4, 4, 4},
+		},
+		{
+			name:       "discrete descending",
+			function:   "percentile_disc",
+			descending: true,
+			wantInt:    []int32{5, 5, 5, 5},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 3, 5, 7}, nil, proc.Mp())
+			bat.SetRowCount(4)
+
+			arg := &Window{
+				WinSpecList: []*plan.Expr{makeAggWindowSpec(tc.function)},
+				Aggs: []aggexec.AggFuncExecExpression{
+					newOrderedPercentileWindowAggExpr(t, tc.function, "0.5", tc.descending),
+				},
+				OperatorBase: vm.OperatorBase{
+					OperatorInfo: vm.OperatorInfo{Idx: 0},
+				},
+			}
+			op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+			arg.AppendChild(op)
+
+			require.NoError(t, arg.Prepare(proc))
+			result, err := vm.Exec(arg, proc)
+			require.NoError(t, err)
+			require.NotNil(t, result.Batch)
+			resultVec := result.Batch.Vecs[1]
+			if tc.wantFloat != nil {
+				require.Equal(t, tc.wantFloat, vector.MustFixedColWithTypeCheck[float64](resultVec))
+			} else {
+				require.Equal(t, tc.wantInt, vector.MustFixedColWithTypeCheck[int32](resultVec))
+			}
+
+			arg.Free(proc, false, nil)
+			op.Free(proc, false, nil)
+			proc.Free()
+			require.Equal(t, int64(0), proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestWindowOrderedPercentileFullPartitionBroadcasts(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	makePartition := func(values []int32, key int32) *batch.Batch {
+		bat := batch.NewWithSize(2)
+		bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+		keys := make([]int32, len(values))
+		for i := range keys {
+			keys[i] = key
+		}
+		bat.Vecs[1] = testutil.MakeInt32Vector(keys, nil, proc.Mp())
+		bat.SetRowCount(len(values))
+		return bat
+	}
+	first := makePartition([]int32{1, 3}, 1)
+	second := makePartition([]int32{10, 20}, 2)
+
+	spec := makeAggWindowSpec("percentile_cont")
+	spec.GetW().PartitionBy = []*plan.Expr{newColExprWithType(1, types.T_int32.ToType())}
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs: []aggexec.AggFuncExecExpression{
+			newOrderedPercentileWindowAggExpr(t, "percentile_cont", "0.5", false),
+		},
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{first, second})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	var got []float64
+	for {
+		result, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		if result.Batch == nil {
+			break
+		}
+		got = append(got, vector.MustFixedColWithTypeCheck[float64](result.Batch.Vecs[2])...)
+	}
+	require.Equal(t, []float64{2, 2, 15, 15}, got)
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestWindowOrderedPercentileSpills(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	const rows = 20_000
+	values := make([]int32, rows)
+	for i := range values {
+		values[i] = int32(i)
+	}
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = testutil.MakeInt32Vector(values, nil, proc.Mp())
+	bat.SetRowCount(rows)
+
+	arg := &Window{
+		WinSpecList: []*plan.Expr{makeAggWindowSpec("percentile_cont")},
+		Aggs: []aggexec.AggFuncExecExpression{
+			newOrderedPercentileWindowAggExpr(t, "percentile_cont", "0.5", false),
+		},
+		SpillThreshold: 1,
+		OperatorBase: vm.OperatorBase{
+			OperatorInfo: vm.OperatorInfo{Idx: 0},
+		},
+	}
+	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(op)
+
+	require.NoError(t, arg.Prepare(proc))
+	var outputRows, outputChunks int
+	for {
+		result, err := vm.Exec(arg, proc)
+		require.NoError(t, err)
+		if result.Batch == nil {
+			break
+		}
+		outputChunks++
+		got := vector.MustFixedColWithTypeCheck[float64](result.Batch.Vecs[1])
+		require.NotEmpty(t, got)
+		for _, value := range got {
+			require.Equal(t, 9999.5, value)
+		}
+		outputRows += len(got)
+		if outputRows < rows {
+			require.NotNil(t, arg.ctr.orderedSetPartitionResults,
+				"partition result must survive until the final output chunk")
+		}
+	}
+	require.Equal(t, rows, outputRows)
+	require.Equal(t, 3, outputChunks)
+	require.Nil(t, arg.ctr.orderedSetPartitionResults)
+	// With a one-byte spill threshold every source row is reported once. A
+	// per-output-chunk recomputation would report 60,000 rows for this input.
+	require.Equal(t, int64(rows), arg.OpAnalyzer.GetOpStats().SpillRows)
+	require.Positive(t, arg.OpAnalyzer.GetOpStats().SpillRows)
+	require.Positive(t, arg.OpAnalyzer.GetOpStats().SpillSize)
+
+	arg.Free(proc, false, nil)
+	op.Free(proc, false, nil)
+	proc.Free()
+	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestWindowOrderedPercentileFinalizationHonorsCancellation(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	bat := makeInt32Batch(proc.Mp(), []int32{1, 3, 5, 7})
+	arg := &Window{
+		WinSpecList: []*plan.Expr{makeAggWindowSpec("percentile_cont")},
+		Aggs: []aggexec.AggFuncExecExpression{
+			newOrderedPercentileWindowAggExpr(t, "percentile_cont", "0.5", false),
+		},
+	}
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(child)
+
+	require.NoError(t, arg.Prepare(proc))
+	proc.Ctx = newCancelOnErrContext(proc.Ctx)
+	result, err := vm.Exec(arg, proc)
+	require.Nil(t, result.Batch)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Nil(t, arg.ctr.orderedSetPartitionResults)
+	require.Nil(t, arg.ctr.batAggs)
+
+	arg.Free(proc, true, err)
+	child.Free(proc, true, err)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestWindowOrderedPercentileSpilledMergeCancellationClosesAndReuses(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	trackingFS := installTrackingSpillFileService(t, proc)
+	const rows = 20_000
+	values := make([]int32, rows)
+	for i := range values {
+		values[i] = int32(i)
+	}
+	bat := makeInt32Batch(proc.Mp(), values)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{makeAggWindowSpec("percentile_cont")},
+		Aggs: []aggexec.AggFuncExecExpression{
+			newOrderedPercentileWindowAggExpr(t, "percentile_cont", "0.5", false),
+		},
+		SpillThreshold: 1,
+	}
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+
+	// Wait until the second rank-selection poll before cancelling. The first
+	// poll proves that finalization entered the real spilled-run merge and made
+	// progress; this is not cancellation at finalizer entry.
+	originalCtx := proc.Ctx
+	proc.Ctx = newCancelInFunctionContext("selectSpilledValues", 2)
+	result, err := vm.Exec(arg, proc)
+	require.Nil(t, result.Batch)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Positive(t, arg.OpAnalyzer.GetOpStats().SpillRows)
+	require.Nil(t, arg.ctr.orderedSetPartitionResults)
+	require.Nil(t, arg.ctr.batAggs)
+	spilledFiles := trackingFS.openedFiles()
+	require.NotEmpty(t, spilledFiles)
+	for _, file := range spilledFiles {
+		_, statErr := file.Stat()
+		require.Error(t, statErr, "failed window finalization must close its spill file")
+	}
+
+	// Reset after the failed execution and prove that neither the canceled
+	// context nor aggregate/spill state contaminates a subsequent execution.
+	proc.Ctx = originalCtx
+	arg.Reset(proc, true, err)
+	child.Free(proc, true, err)
+	secondBatch := makeInt32Batch(proc.Mp(), []int32{10, 20, 30})
+	secondChild := colexec.NewMockOperator().WithBatchs([]*batch.Batch{secondBatch})
+	arg.Children = nil
+	arg.AppendChild(secondChild)
+	require.NoError(t, arg.Prepare(proc))
+	result, err = vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, []float64{20, 20, 20},
+		vector.MustFixedColWithTypeCheck[float64](result.Batch.Vecs[1]))
+	require.Nil(t, arg.ctr.orderedSetPartitionResults)
+
+	arg.Free(proc, false, nil)
+	secondChild.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestWindowOrderedPercentilePartitionCrossesOutputChunk(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	const (
+		firstPartitionRows = colexec.DefaultBatchSize + 8
+		rows               = firstPartitionRows + 1800
+	)
+	values := make([]int32, rows)
+	for i := range values {
+		if i < firstPartitionRows {
+			values[i] = 10
+		} else {
+			values[i] = 20
+		}
+	}
+	bat := makeInt32Batch(proc.Mp(), values)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{makeAggWindowSpec("percentile_disc")},
+		Aggs: []aggexec.AggFuncExecExpression{
+			newOrderedPercentileWindowAggExpr(t, "percentile_disc", "0.5", false),
+		},
+	}
+	arg.OpAnalyzer = process.NewAnalyzer(0, false, false, "window")
+	ctr := &container{
+		bat:     bat,
+		ps:      []int64{0, firstPartitionRows},
+		aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+	}
+
+	first, err := ctr.processAggregateFuncRange(
+		0, arg, proc, 0, colexec.DefaultBatchSize)
+	require.NoError(t, err)
+	wantFirst := make([]int32, colexec.DefaultBatchSize)
+	for i := range wantFirst {
+		wantFirst[i] = 10
+	}
+	require.Equal(t, wantFirst,
+		vector.MustFixedColWithTypeCheck[int32](first))
+	require.NotNil(t, ctr.orderedSetPartitionResults)
+	first.Free(proc.Mp())
+
+	second, err := ctr.processAggregateFuncRange(
+		0, arg, proc, colexec.DefaultBatchSize, rows)
+	require.NoError(t, err)
+	want := make([]int32, rows-colexec.DefaultBatchSize)
+	for i := range want {
+		if i < 8 {
+			want[i] = 10
+		} else {
+			want[i] = 20
+		}
+	}
+	require.Equal(t, want, vector.MustFixedColWithTypeCheck[int32](second))
+	require.Nil(t, ctr.orderedSetPartitionResults)
+	second.Free(proc.Mp())
+
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestWindowOrderedPercentileCacheReleasesOnReset(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	values := make([]int32, colexec.DefaultBatchSize+1)
+	for i := range values {
+		values[i] = int32(i)
+	}
+	bat := makeInt32Batch(proc.Mp(), values)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{makeAggWindowSpec("percentile_cont")},
+		Aggs: []aggexec.AggFuncExecExpression{
+			newOrderedPercentileWindowAggExpr(t, "percentile_cont", "0.5", false),
+		},
+	}
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
+	arg.AppendChild(child)
+
+	require.NoError(t, arg.Prepare(proc))
+	result, err := vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.NotNil(t, arg.ctr.orderedSetPartitionResults)
+
+	// Model a LIMIT consumer that stops before the cached partition's final
+	// chunk, then reuse the operator generation.
+	arg.Reset(proc, false, nil)
+	require.Nil(t, arg.ctr.orderedSetPartitionResults)
+	require.Zero(t, arg.ctr.orderedSetNextRow)
+	require.Zero(t, arg.ctr.orderedSetPartition)
+	child.Free(proc, false, nil)
+
+	secondBatch := makeInt32Batch(proc.Mp(), []int32{10, 20, 30})
+	secondChild := colexec.NewMockOperator().WithBatchs([]*batch.Batch{secondBatch})
+	arg.Children = nil
+	arg.AppendChild(secondChild)
+	require.NoError(t, arg.Prepare(proc))
+	result, err = vm.Exec(arg, proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, []float64{20, 20, 20},
+		vector.MustFixedColWithTypeCheck[float64](result.Batch.Vecs[1]))
+	require.Nil(t, arg.ctr.orderedSetPartitionResults)
+
+	arg.Free(proc, false, nil)
+	secondChild.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
 }
 
 // TestWindowJsonObjectAggNullKeyNoLeak reproduces the NULL-key error exit
@@ -1211,10 +2070,10 @@ func TestWindowDecimalAggResultAcrossChunks(t *testing.T) {
 	arg.AppendChild(op)
 
 	require.NoError(t, arg.Prepare(proc))
-	resultValues := collectFixedWindowColumn[types.Decimal128](t, arg, proc, 1)
+	resultValues := collectFixedWindowColumn[types.Decimal256](t, arg, proc, 1)
 	require.Len(t, resultValues, rows)
 	for _, idx := range []int{0, aggexec.AggBatchSize - 1, aggexec.AggBatchSize, rows - 1} {
-		require.Equal(t, values[idx], resultValues[idx], "row %d", idx)
+		require.Equal(t, types.Decimal256FromDecimal128(values[idx]), resultValues[idx], "row %d", idx)
 	}
 
 	arg.Free(proc, false, nil)
@@ -1248,10 +2107,10 @@ func TestWindowOrderResultAcrossChunks(t *testing.T) {
 	arg.AppendChild(op)
 
 	require.NoError(t, arg.Prepare(proc))
-	resultValues := collectFixedWindowColumn[int64](t, arg, proc, 1)
+	resultValues := collectFixedWindowColumn[uint64](t, arg, proc, 1)
 	require.Len(t, resultValues, rows)
 	for _, idx := range []int{0, aggexec.AggBatchSize - 1, aggexec.AggBatchSize, rows - 1} {
-		require.Equal(t, int64(idx+1), resultValues[idx], "row %d", idx)
+		require.Equal(t, uint64(idx+1), resultValues[idx], "row %d", idx)
 	}
 
 	arg.Free(proc, false, nil)
@@ -1287,10 +2146,10 @@ func TestWindowRankPeerAcrossChunks(t *testing.T) {
 	arg.AppendChild(op)
 
 	require.NoError(t, arg.Prepare(proc))
-	resultValues := collectFixedWindowColumn[int64](t, arg, proc, 1)
+	resultValues := collectFixedWindowColumn[uint64](t, arg, proc, 1)
 	require.Len(t, resultValues, rows)
 	for _, row := range []int{0, 1, colexec.DefaultBatchSize - 2, colexec.DefaultBatchSize - 1, colexec.DefaultBatchSize, rows - 1} {
-		want := int64(row/3*3 + 1)
+		want := uint64(row/3*3 + 1)
 		require.Equal(t, want, resultValues[row], "row %d", row)
 	}
 
@@ -1328,7 +2187,7 @@ func TestWindowRankTreatsFloatNaNsAsLastPeerGroup(t *testing.T) {
 	arg.AppendChild(op)
 
 	require.NoError(t, arg.Prepare(proc))
-	require.Equal(t, []int64{1, 2, 3, 3}, collectFixedWindowColumn[int64](t, arg, proc, 1))
+	require.Equal(t, []uint64{1, 2, 3, 3}, collectFixedWindowColumn[uint64](t, arg, proc, 1))
 
 	arg.Free(proc, false, nil)
 	op.Free(proc, false, nil)
@@ -1367,7 +2226,7 @@ func TestWindowPartitionedRankTreatsFloatNaNsAsPeers(t *testing.T) {
 	arg.AppendChild(op)
 
 	require.NoError(t, arg.Prepare(proc))
-	require.Equal(t, []int64{1, 2, 3, 3}, collectFixedWindowColumn[int64](t, arg, proc, 2))
+	require.Equal(t, []uint64{1, 2, 3, 3}, collectFixedWindowColumn[uint64](t, arg, proc, 2))
 
 	arg.Free(proc, false, nil)
 	op.Free(proc, false, nil)
@@ -1414,8 +2273,8 @@ func TestWindowPartitionedFloatNaNPeersUseLaterOrderKey(t *testing.T) {
 	require.NotNil(t, result.Batch)
 	require.Equal(t, []int32{0, 1, 2},
 		vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[2]))
-	require.Equal(t, []int64{1, 2, 3},
-		vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[3]))
+	require.Equal(t, []uint64{1, 2, 3},
+		vector.MustFixedColWithTypeCheck[uint64](result.Batch.Vecs[3]))
 
 	arg.Free(proc, false, nil)
 	op.Free(proc, false, nil)
@@ -1482,12 +2341,13 @@ func TestWindowOrderFunctionsUsePeerBoundaries(t *testing.T) {
 	tests := []struct {
 		name        string
 		wantInt     []int64
+		wantUint    []uint64
 		wantFloat   []float64
 		bucketCount int64
 	}{
-		{name: "row_number", wantInt: []int64{2, 3, 4}},
-		{name: "rank", wantInt: []int64{1, 3, 4}},
-		{name: "dense_rank", wantInt: []int64{1, 2, 3}},
+		{name: "row_number", wantUint: []uint64{2, 3, 4}},
+		{name: "rank", wantUint: []uint64{1, 3, 4}},
+		{name: "dense_rank", wantUint: []uint64{1, 2, 3}},
 		{name: "percent_rank", wantFloat: []float64{0, 2.0 / 3.0, 1}},
 		{name: "cume_dist", wantFloat: []float64{0.5, 0.75, 1}},
 		{name: "ntile", wantInt: []int64{1, 2, 3}, bucketCount: 3},
@@ -1516,8 +2376,13 @@ func TestWindowOrderFunctionsUsePeerBoundaries(t *testing.T) {
 			require.NoError(t, err)
 			defer result.Free(proc.Mp())
 			if test.wantFloat != nil {
+				require.Equal(t, types.T_float64, result.GetType().Oid)
 				require.Equal(t, test.wantFloat, vector.MustFixedColWithTypeCheck[float64](result))
+			} else if test.wantUint != nil {
+				require.Equal(t, types.T_uint64, result.GetType().Oid)
+				require.Equal(t, test.wantUint, vector.MustFixedColWithTypeCheck[uint64](result))
 			} else {
+				require.Equal(t, types.T_int64, result.GetType().Oid)
 				require.Equal(t, test.wantInt, vector.MustFixedColWithTypeCheck[int64](result))
 			}
 		})
@@ -1606,6 +2471,70 @@ func TestCumulativeAggregateResetsAtPartitionBoundary(t *testing.T) {
 	bat.Clean(proc.Mp())
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestCumulativeMaxUsesRunningAggregateAcrossChunks(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	values := make([]int32, 512)
+	want := make([]int32, len(values))
+	for i := range values {
+		values[i] = int32(256 - i%256)
+		want[i] = 256
+	}
+	bat := makeInt32Batch(proc.Mp(), values)
+	spec := makeWindowSpec()
+	spec.GetW().Frame = makeCumulativeFrame()
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newTypedMaxAggExpr(t, 0, types.T_int32.ToType())},
+	}
+	ctr := &container{
+		bat:     bat,
+		ps:      []int64{0, 256},
+		aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+	}
+
+	first, err := ctr.processAggregateFuncRange(0, arg, proc, 0, 200)
+	require.NoError(t, err)
+	require.Equal(t, want[:200], vector.MustFixedColWithTypeCheck[int32](first))
+	require.NotNil(t, ctr.runningAgg, "cumulative MIN/MAX must retain one running state")
+	first.Free(proc.Mp())
+
+	second, err := ctr.processAggregateFuncRange(0, arg, proc, 200, 300)
+	require.NoError(t, err)
+	require.Equal(t, want[200:300], vector.MustFixedColWithTypeCheck[int32](second))
+	require.NotNil(t, ctr.runningAgg)
+	second.Free(proc.Mp())
+
+	third, err := ctr.processAggregateFuncRange(0, arg, proc, 300, len(values))
+	require.NoError(t, err)
+	require.Equal(t, want[300:], vector.MustFixedColWithTypeCheck[int32](third))
+	require.Nil(t, ctr.runningAgg)
+	third.Free(proc.Mp())
+
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestCumulativePartitionUsesRunning(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		start, end int
+		want       bool
+	}{
+		{name: "empty", start: 4, end: 4},
+		{name: "singleton", start: 3, end: 4},
+		{name: "below state chunk cost", end: 128},
+		{name: "above state chunk cost", end: 129, want: true},
+		{name: "large", end: 256, want: true},
+		{name: "large nonzero start", start: 17, end: 273, want: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			require.Equal(t, test.want,
+				cumulativePartitionUsesRunning(test.start, test.end))
+		})
+	}
 }
 
 func TestBoundedSlidingSumAcrossOutputChunks(t *testing.T) {
@@ -1784,13 +2713,13 @@ func TestBoundedSlidingSumSupportsDecimal64Arguments(t *testing.T) {
 
 	result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
 	require.NoError(t, err)
-	require.Equal(t, []types.Decimal128{
-		types.Decimal128FromInt64(100),
-		types.Decimal128FromInt64(100),
+	require.Equal(t, []types.Decimal256{
+		types.Decimal256FromInt64(100),
+		types.Decimal256FromInt64(100),
 		{},
-		types.Decimal128FromInt64(-300),
-		types.Decimal128FromInt64(100),
-	}, vector.MustFixedColWithTypeCheck[types.Decimal128](result))
+		types.Decimal256FromInt64(-300),
+		types.Decimal256FromInt64(100),
+	}, vector.MustFixedColWithTypeCheck[types.Decimal256](result))
 	require.False(t, result.IsNull(0))
 	require.False(t, result.IsNull(1))
 	require.True(t, result.IsNull(2))
@@ -1801,6 +2730,178 @@ func TestBoundedSlidingSumSupportsDecimal64Arguments(t *testing.T) {
 	bat.Clean(proc.Mp())
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestBoundedSlidingRangeAvgAcrossPeersAndOutputChunks(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	values := []int32{1, 1, 2, 4, 4, 7}
+	bat := makeInt32Batch(proc.Mp(), values)
+	spec := makeWindowSpec()
+	spec.GetW().Frame = makeBoundedRangeFrame(2, 2)
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs: []aggexec.AggFuncExecExpression{
+			newTypedAvgAggExpr(t, 0, types.T_int32.ToType()),
+		},
+	}
+	ctr := &container{
+		bat:       bat,
+		os:        []int64{0, 2, 3, 5},
+		orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+		aggVecs:   []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+	}
+
+	var got []float64
+	for _, output := range [][2]int{{0, 1}, {1, 4}, {4, len(values)}} {
+		result, err := ctr.processAggregateFuncRange(0, arg, proc, output[0], output[1])
+		require.NoError(t, err)
+		require.Equal(t, types.T_decimal128, result.GetType().Oid)
+		for _, value := range vector.MustFixedColWithTypeCheck[types.Decimal128](result) {
+			got = append(got, types.Decimal128ToFloat64(value, result.GetType().Scale))
+		}
+		result.Free(proc.Mp())
+		if output[1] < len(values) {
+			require.NotNil(t, ctr.runningAgg)
+		}
+	}
+
+	require.InDeltaSlice(t, []float64{4.0 / 3, 4.0 / 3, 2.4, 10.0 / 3, 10.0 / 3, 7}, got, 1e-4)
+	require.Nil(t, ctr.runningAgg)
+	require.Zero(t, ctr.runningPeerEnd)
+
+	bat.Clean(proc.Mp())
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestBoundedSlidingRangeAvgOrderShapes(t *testing.T) {
+	tests := []struct {
+		name       string
+		aggValues  []int32
+		orderValue []int32
+		orderNulls []uint64
+		partitions []int64
+		peers      []int64
+		desc       bool
+		want       []float64
+	}{
+		{
+			name:       "descending peers",
+			aggValues:  []int32{7, 4, 4, 2, 1, 1},
+			orderValue: []int32{7, 4, 4, 2, 1, 1},
+			peers:      []int64{0, 1, 3, 4},
+			desc:       true,
+			want:       []float64{7, 10.0 / 3, 10.0 / 3, 2.4, 4.0 / 3, 4.0 / 3},
+		},
+		{
+			name:       "partition reset",
+			aggValues:  []int32{1, 2, 2, 4, 1, 1, 3, 5},
+			orderValue: []int32{1, 2, 2, 4, 1, 1, 3, 5},
+			partitions: []int64{0, 4},
+			peers:      []int64{0, 1, 3, 4, 6, 7},
+			want:       []float64{5.0 / 3, 2.25, 2.25, 8.0 / 3, 5.0 / 3, 5.0 / 3, 2.5, 4},
+		},
+		{
+			name:       "null order peers",
+			aggValues:  []int32{10, 20, 1, 2},
+			orderValue: []int32{0, 0, 1, 2},
+			orderNulls: []uint64{0, 1},
+			peers:      []int64{0, 2, 3},
+			want:       []float64{15, 15, 1.5, 1.5},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			bat := batch.NewWithSize(2)
+			bat.Vecs[0] = testutil.MakeInt32Vector(test.aggValues, nil, proc.Mp())
+			bat.Vecs[1] = testutil.MakeInt32Vector(test.orderValue, test.orderNulls, proc.Mp())
+			bat.SetRowCount(len(test.aggValues))
+			spec := makeWindowSpec()
+			spec.GetW().Frame = makeBoundedRangeFrame(2, 2)
+			arg := &Window{
+				WinSpecList: []*plan.Expr{spec},
+				Aggs: []aggexec.AggFuncExecExpression{
+					newTypedAvgAggExpr(t, 0, types.T_int32.ToType()),
+				},
+			}
+			ctr := &container{
+				bat:       bat,
+				ps:        test.partitions,
+				os:        test.peers,
+				desc:      []bool{test.desc},
+				orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[1]}}},
+				aggVecs:   []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+			}
+
+			result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
+			require.NoError(t, err)
+			require.Equal(t, types.T_decimal128, result.GetType().Oid)
+			got := make([]float64, 0, result.Length())
+			for _, value := range vector.MustFixedColWithTypeCheck[types.Decimal128](result) {
+				got = append(got, types.Decimal128ToFloat64(value, result.GetType().Scale))
+			}
+			require.InDeltaSlice(t, test.want, got, 1e-4)
+			require.Nil(t, ctr.runningAgg)
+
+			result.Free(proc.Mp())
+			bat.Clean(proc.Mp())
+			proc.Free()
+			require.Zero(t, proc.Mp().CurrNB())
+		})
+	}
+}
+
+func TestBoundedSlidingRangeSumUint8MaximumBoundary(t *testing.T) {
+	frame := &plan.FrameClause{
+		Type: plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, Val: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_U8Val{U8Val: 2},
+		}}}},
+		End: &plan.FrameBound{Type: plan.FrameBound_FOLLOWING, Val: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			Value: &plan.Literal_U8Val{U8Val: 2},
+		}}}},
+	}
+	for _, test := range []struct {
+		name   string
+		values []uint8
+		desc   bool
+		want   []uint64
+	}{
+		{name: "ascending", values: []uint8{252, 253, 254, 255}, want: []uint64{759, 1014, 1014, 762}},
+		{name: "descending", values: []uint8{255, 254, 253, 252}, desc: true, want: []uint64{762, 1014, 1014, 759}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = testutil.MakeUint8Vector(test.values, nil, proc.Mp())
+			bat.SetRowCount(len(test.values))
+			arg := &Window{
+				WinSpecList: []*plan.Expr{{Expr: &plan.Expr_W{W: &plan.WindowSpec{Frame: frame}}}},
+				Aggs: []aggexec.AggFuncExecExpression{
+					newTypedSumAggExpr(t, 0, types.T_uint8.ToType()),
+				},
+			}
+			ctr := &container{
+				bat:       bat,
+				os:        []int64{0, 1, 2, 3},
+				desc:      []bool{test.desc},
+				orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+				aggVecs:   []colexec.ExprEvalVector{{Vec: []*vector.Vector{bat.Vecs[0]}}},
+			}
+
+			result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
+			require.NoError(t, err)
+			require.Equal(t, test.want, vector.MustFixedColWithTypeCheck[uint64](result))
+			require.Nil(t, ctr.runningAgg)
+
+			result.Free(proc.Mp())
+			bat.Clean(proc.Mp())
+			proc.Free()
+			require.Zero(t, proc.Mp().CurrNB())
+		})
+	}
 }
 
 func TestCumulativeAggregatePreservesNullSemantics(t *testing.T) {
@@ -1871,7 +2972,7 @@ func TestWindowOrdersPartitionedInput(t *testing.T) {
 		vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0]))
 	require.Equal(t, []int32{20, 10, 20, 10},
 		vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[1]))
-	require.Len(t, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[2]), 4)
+	require.Len(t, vector.MustFixedColWithTypeCheck[uint64](result.Batch.Vecs[2]), 4)
 
 	arg.Free(proc, false, nil)
 	op.Free(proc, false, nil)
@@ -1918,7 +3019,47 @@ func TestWindowPartitionTopNCoalescesAndResetsRowNumber(t *testing.T) {
 	require.Len(t, arg.ctr.orderVecs, 2)
 	require.Equal(t, []int64{0, 2}, arg.ctr.ps)
 	require.Equal(t, []int32{1, 1, 2, 2}, vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0]))
-	require.Equal(t, []int64{1, 2, 1, 2}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[2]))
+	require.Equal(t, []uint64{1, 2, 1, 2}, vector.MustFixedColWithTypeCheck[uint64](result.Batch.Vecs[2]))
+
+	arg.Free(proc, false, nil)
+	child.Free(proc, false, nil)
+	proc.Free()
+	require.Zero(t, proc.Mp().CurrNB())
+}
+
+func TestWindowPartitionTopNSeparatesGroupingNullFromEmptyString(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	input := batch.NewWithSize(2)
+	input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendStringList(input.Vecs[0], []string{"", "", ""}, nil, proc.Mp()))
+	input.Vecs[0].GetGrouping().Add(0)
+	input.Vecs[1] = testutil.MakeInt32Vector([]int32{100, 30, 20}, nil, proc.Mp())
+	input.SetRowCount(3)
+
+	arg := &Window{
+		WinSpecList: []*plan.Expr{{
+			Expr: &plan.Expr_W{W: &plan.WindowSpec{
+				Name:        "rank",
+				WindowFunc:  newFunExpr("rank"),
+				PartitionBy: []*plan.Expr{newColExprWithType(0, types.T_varchar.ToType())},
+				OrderBy: []*plan.OrderBySpec{{
+					Expr: newColExprWithType(1, types.T_int32.ToType()),
+					Flag: plan.OrderBySpec_DESC,
+				}},
+			}},
+		}},
+		Aggs:           []aggexec.AggFuncExecExpression{newOrderWindowAggExpr(t, "rank")},
+		PartitionTopN:  true,
+		SpillThreshold: 1,
+	}
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{input})
+	arg.AppendChild(child)
+	require.NoError(t, arg.Prepare(proc))
+	result, err := arg.Call(proc)
+	require.NoError(t, err)
+	require.NotNil(t, result.Batch)
+	require.Equal(t, []int64{0, 1}, arg.ctr.ps)
+	require.Equal(t, []uint64{1, 1, 2}, vector.MustFixedColWithTypeCheck[uint64](result.Batch.Vecs[2]))
 
 	arg.Free(proc, false, nil)
 	child.Free(proc, false, nil)
@@ -1968,8 +3109,8 @@ func TestWindowPartitionTopNUsesSQLOrderForFloatNaNPeers(t *testing.T) {
 		vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[0]))
 	require.Equal(t, []int32{0, 1, 2, 0, 1, 2},
 		vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[2]))
-	require.Equal(t, []int64{1, 2, 3, 1, 2, 3},
-		vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[3]))
+	require.Equal(t, []uint64{1, 2, 3, 1, 2, 3},
+		vector.MustFixedColWithTypeCheck[uint64](result.Batch.Vecs[3]))
 
 	arg.Free(proc, false, nil)
 	child.Free(proc, false, nil)
@@ -2042,7 +3183,7 @@ func TestWindowPartitionTopNReducerUsesSQLOrderForFloatNaNs(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, result.Batch)
 			require.Equal(t, tc.want, vector.MustFixedColWithTypeCheck[int32](result.Batch.Vecs[2]))
-			require.Equal(t, []int64{1, 2}, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[3]))
+			require.Equal(t, []uint64{1, 2}, vector.MustFixedColWithTypeCheck[uint64](result.Batch.Vecs[3]))
 
 			windowArg.Free(proc, false, nil)
 			partitionArg.Free(proc, false, nil)
@@ -2704,6 +3845,342 @@ func TestSearchLeftRightAllUintTypes(t *testing.T) {
 	})
 }
 
+func uint64RangeOffset(value uint64) *plan.Expr {
+	return &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+		Value: &plan.Literal_U64Val{U64Val: value},
+	}}}
+}
+
+func unsignedRangeOffset(oid types.T, value uint64) *plan.Expr {
+	lit := &plan.Literal{}
+	switch oid {
+	case types.T_uint8:
+		lit.Value = &plan.Literal_U8Val{U8Val: uint32(value)}
+	case types.T_uint16:
+		lit.Value = &plan.Literal_U16Val{U16Val: uint32(value)}
+	case types.T_uint32:
+		lit.Value = &plan.Literal_U32Val{U32Val: uint32(value)}
+	case types.T_uint64:
+		lit.Value = &plan.Literal_U64Val{U64Val: value}
+	default:
+		panic("unsupported unsigned RANGE type")
+	}
+	return &plan.Expr{Expr: &plan.Expr_Lit{Lit: lit}}
+}
+
+func TestUint64RangeBound(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		value       uint64
+		offset      uint64
+		subtract    bool
+		wantBound   uint64
+		wantAbove   bool
+		wantInRange bool
+	}{
+		{name: "add", value: 1, offset: 10, wantBound: 11, wantInRange: true},
+		{name: "subtract", value: 10, offset: 10, subtract: true, wantBound: 0, wantInRange: true},
+		{name: "subtract underflow", value: 9, offset: 10, subtract: true},
+		{name: "add maximum", value: math.MaxUint64, wantBound: math.MaxUint64, wantInRange: true},
+		{name: "add overflow", value: math.MaxUint64, offset: 1, wantAbove: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bound, above, ok := uint64RangeBound(tc.value, tc.offset, tc.subtract)
+			require.Equal(t, tc.wantBound, bound)
+			require.Equal(t, tc.wantAbove, above)
+			require.Equal(t, tc.wantInRange, ok)
+		})
+	}
+
+	require.Equal(t, 0, outOfDomainRangeBoundary(0, 21, false, false))
+	require.Equal(t, 21, outOfDomainRangeBoundary(0, 21, true, false))
+	require.Equal(t, 21, outOfDomainRangeBoundary(0, 21, false, true))
+	require.Equal(t, 0, outOfDomainRangeBoundary(0, 21, true, true))
+}
+
+func TestBuildRangeIntervalUint64Boundaries(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	currentToFollowing := func(offset uint64) *plan.FrameClause {
+		return &plan.FrameClause{
+			Type:  plan.FrameClause_RANGE,
+			Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+			End: &plan.FrameBound{
+				Type: plan.FrameBound_FOLLOWING,
+				Val:  uint64RangeOffset(offset),
+			},
+		}
+	}
+	precedingOnly := func(offset uint64) *plan.FrameClause {
+		return &plan.FrameClause{
+			Type: plan.FrameClause_RANGE,
+			Start: &plan.FrameBound{
+				Type: plan.FrameBound_PRECEDING,
+				Val:  uint64RangeOffset(offset),
+			},
+			End: &plan.FrameBound{
+				Type: plan.FrameBound_PRECEDING,
+				Val:  uint64RangeOffset(offset),
+			},
+		}
+	}
+	check := func(t *testing.T, oid types.T, values []uint64, desc bool, row int, frame *plan.FrameClause, wantStart, wantEnd int) {
+		t.Helper()
+		vec := makeFixedVec(t, mp, oid, values)
+		defer vec.Free(mp)
+		ctr := &container{
+			orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{vec}}},
+			desc:      []bool{desc},
+		}
+		start, end, err := ctr.buildRangeInterval(row, 0, len(values), frame)
+		require.NoError(t, err)
+		require.Equal(t, wantStart, start)
+		require.Equal(t, wantEnd, end)
+	}
+
+	asc := make([]uint64, 21)
+	desc := make([]uint64, 21)
+	for i := range asc {
+		asc[i] = uint64(i)
+		desc[i] = uint64(20 - i)
+	}
+
+	for _, oid := range []types.T{types.T_uint64, types.T_bit} {
+		t.Run(oid.String(), func(t *testing.T) {
+			check(t, oid, asc, false, 0, currentToFollowing(10), 0, 11)
+			check(t, oid, asc, false, 0, currentToFollowing(0), 0, 1)
+			check(t, oid, asc, false, 10, currentToFollowing(10), 10, 21)
+			check(t, oid, desc, true, 11, currentToFollowing(10), 11, 21)
+			check(t, oid, asc, false, 10, precedingOnly(10), 0, 1)
+			check(t, oid, asc, false, 5, precedingOnly(10), 0, 0)
+			check(t, oid, []uint64{math.MaxUint64 - 2, math.MaxUint64 - 1, math.MaxUint64}, false, 0, currentToFollowing(10), 0, 3)
+		})
+	}
+
+	t.Run("null peers", func(t *testing.T) {
+		vec := vector.NewVec(types.T_uint64.ToType())
+		for i, value := range []uint64{0, 0, 0, 1} {
+			require.NoError(t, vector.AppendFixed(vec, value, i < 2, mp))
+		}
+		defer vec.Free(mp)
+		ctr := &container{
+			orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{vec}}},
+			desc:      []bool{false},
+		}
+		start, end, err := ctr.buildRangeInterval(0, 0, vec.Length(), currentToFollowing(10))
+		require.NoError(t, err)
+		require.Equal(t, 0, start)
+		require.Equal(t, 2, end)
+		start, end, err = ctr.buildRangeInterval(2, 0, vec.Length(), currentToFollowing(10))
+		require.NoError(t, err)
+		require.Equal(t, 2, start)
+		require.Equal(t, 4, end)
+	})
+}
+
+func testBuildRangeIntervalUnsignedBoundaries[T unsignedRangeInteger](
+	t *testing.T,
+	mp *mpool.MPool,
+	oid types.T,
+	maxValue T,
+) {
+	t.Helper()
+	currentToFollowing := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_FOLLOWING,
+			Val:  unsignedRangeOffset(oid, 1),
+		},
+	}
+	precedingToCurrent := &plan.FrameClause{
+		Type: plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val:  unsignedRangeOffset(oid, 1),
+		},
+		End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	zeroPreceding := &plan.FrameClause{
+		Type: plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val:  unsignedRangeOffset(oid, 0),
+		},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val:  unsignedRangeOffset(oid, 0),
+		},
+	}
+	check := func(t *testing.T, values []T, desc bool, row int, frame *plan.FrameClause, wantStart, wantEnd int) {
+		t.Helper()
+		vec := makeFixedVec(t, mp, oid, values)
+		defer vec.Free(mp)
+		ctr := &container{
+			orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{vec}}},
+			desc:      []bool{desc},
+		}
+		start, end, err := ctr.buildRangeInterval(row, 0, len(values), frame)
+		require.NoError(t, err)
+		require.Equal(t, wantStart, start)
+		require.Equal(t, wantEnd, end)
+	}
+
+	var zeroValue T
+	asc := []T{zeroValue, maxValue}
+	desc := []T{maxValue, zeroValue}
+
+	// ASC addition overflow, subtraction underflow, and exact-zero PRECEDING
+	// retain the correct rows without wrapping or turning zero into underflow.
+	check(t, asc, false, 1, currentToFollowing, 1, 2)
+	check(t, asc, false, 0, precedingToCurrent, 0, 1)
+	check(t, asc, false, 0, zeroPreceding, 0, 1)
+
+	// DESC swaps the arithmetic direction but keeps the same frame invariant.
+	check(t, desc, true, 1, currentToFollowing, 1, 2)
+	check(t, desc, true, 0, precedingToCurrent, 0, 1)
+	check(t, desc, true, 1, zeroPreceding, 1, 2)
+}
+
+func TestBuildRangeIntervalUnsignedBoundaries(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	t.Run("uint8", func(t *testing.T) {
+		testBuildRangeIntervalUnsignedBoundaries(t, mp, types.T_uint8, uint8(math.MaxUint8))
+	})
+	t.Run("uint16", func(t *testing.T) {
+		testBuildRangeIntervalUnsignedBoundaries(t, mp, types.T_uint16, uint16(math.MaxUint16))
+	})
+	t.Run("uint32", func(t *testing.T) {
+		testBuildRangeIntervalUnsignedBoundaries(t, mp, types.T_uint32, uint32(math.MaxUint32))
+	})
+	t.Run("uint64", func(t *testing.T) {
+		testBuildRangeIntervalUnsignedBoundaries(t, mp, types.T_uint64, uint64(math.MaxUint64))
+	})
+}
+
+func signedRangeOffset(oid types.T, value int64) *plan.Expr {
+	lit := &plan.Literal{}
+	switch oid {
+	case types.T_int8:
+		lit.Value = &plan.Literal_I8Val{I8Val: int32(value)}
+	case types.T_int16:
+		lit.Value = &plan.Literal_I16Val{I16Val: int32(value)}
+	case types.T_int32:
+		lit.Value = &plan.Literal_I32Val{I32Val: int32(value)}
+	case types.T_int64:
+		lit.Value = &plan.Literal_I64Val{I64Val: value}
+	default:
+		panic("unsupported signed RANGE type")
+	}
+	return &plan.Expr{Expr: &plan.Expr_Lit{Lit: lit}}
+}
+
+func TestSignedRangeBound(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		value       int8
+		offset      int8
+		subtract    bool
+		wantBound   int8
+		wantAbove   bool
+		wantInRange bool
+	}{
+		{name: "add", value: 1, offset: 1, wantBound: 2, wantInRange: true},
+		{name: "subtract", value: 1, offset: 1, subtract: true, wantBound: 0, wantInRange: true},
+		{name: "add maximum zero", value: math.MaxInt8, wantBound: math.MaxInt8, wantInRange: true},
+		{name: "subtract minimum zero", value: math.MinInt8, subtract: true, wantBound: math.MinInt8, wantInRange: true},
+		{name: "add overflow", value: math.MaxInt8, offset: 1, wantAbove: true},
+		{name: "subtract underflow", value: math.MinInt8, offset: 1, subtract: true},
+		{name: "add negative underflow", value: math.MinInt8, offset: -1},
+		{name: "subtract negative overflow", value: math.MaxInt8, offset: -1, subtract: true, wantAbove: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bound, above, ok := signedRangeBound(tc.value, tc.offset, tc.subtract)
+			require.Equal(t, tc.wantBound, bound)
+			require.Equal(t, tc.wantAbove, above)
+			require.Equal(t, tc.wantInRange, ok)
+		})
+	}
+
+	require.Equal(t, 0, outOfDomainRangeBoundary(0, 3, false, false))
+	require.Equal(t, 3, outOfDomainRangeBoundary(0, 3, true, false))
+	require.Equal(t, 3, outOfDomainRangeBoundary(0, 3, false, true))
+	require.Equal(t, 0, outOfDomainRangeBoundary(0, 3, true, true))
+}
+
+func testBuildRangeIntervalSignedBoundaries[T types.OrderedT](
+	t *testing.T,
+	mp *mpool.MPool,
+	oid types.T,
+	minValue T,
+	maxValue T,
+) {
+	t.Helper()
+
+	currentToFollowing := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_FOLLOWING,
+			Val:  signedRangeOffset(oid, 1),
+		},
+	}
+	precedingToCurrent := &plan.FrameClause{
+		Type: plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val:  signedRangeOffset(oid, 1),
+		},
+		End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	check := func(t *testing.T, values []T, desc bool, row int, frame *plan.FrameClause, wantStart, wantEnd int) {
+		t.Helper()
+		vec := makeFixedVec(t, mp, oid, values)
+		defer vec.Free(mp)
+		ctr := &container{
+			orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{vec}}},
+			desc:      []bool{desc},
+		}
+		start, end, err := ctr.buildRangeInterval(row, 0, len(values), frame)
+		require.NoError(t, err)
+		require.Equal(t, wantStart, start)
+		require.Equal(t, wantEnd, end)
+	}
+
+	var zeroValue T
+	asc := []T{minValue, zeroValue, maxValue}
+	desc := []T{maxValue, zeroValue, minValue}
+
+	// ASC addition overflow and subtraction underflow both retain the current row.
+	check(t, asc, false, 2, currentToFollowing, 2, 3)
+	check(t, asc, false, 0, precedingToCurrent, 0, 1)
+
+	// DESC reverses the arithmetic direction while preserving the same frame invariant.
+	check(t, desc, true, 2, currentToFollowing, 2, 3)
+	check(t, desc, true, 0, precedingToCurrent, 0, 1)
+}
+
+func TestBuildRangeIntervalSignedBoundaries(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	t.Run("int8", func(t *testing.T) {
+		testBuildRangeIntervalSignedBoundaries(t, mp, types.T_int8, int8(math.MinInt8), int8(math.MaxInt8))
+	})
+	t.Run("int16", func(t *testing.T) {
+		testBuildRangeIntervalSignedBoundaries(t, mp, types.T_int16, int16(math.MinInt16), int16(math.MaxInt16))
+	})
+	t.Run("int32", func(t *testing.T) {
+		testBuildRangeIntervalSignedBoundaries(t, mp, types.T_int32, int32(math.MinInt32), int32(math.MaxInt32))
+	})
+	t.Run("int64", func(t *testing.T) {
+		testBuildRangeIntervalSignedBoundaries(t, mp, types.T_int64, int64(math.MinInt64), int64(math.MaxInt64))
+	})
+}
+
 // TestSearchLeftRightAllFloatTypes covers float32/64.
 func TestSearchLeftRightAllFloatTypes(t *testing.T) {
 	mp := mpool.MustNewZero()
@@ -3071,4 +4548,1525 @@ func TestSearchLeftRightDateTimeIntervals(t *testing.T) {
 		defer vec.Free(mp)
 		assertIntervalSearches(t, vec, intervalExpr(1, types.Day), 0, 3, 1, 3)
 	})
+}
+
+func TestWindowTimestampRangeUsesSessionTimeZone(t *testing.T) {
+	newYork, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+
+	precedingFrame := &plan.FrameClause{
+		Type: plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val:  intervalExpr(1, types.Hour),
+		},
+		End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	followingFrame := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_FOLLOWING,
+			Val:  intervalExpr(1, types.Hour),
+		},
+	}
+	for _, test := range []struct {
+		name             string
+		utcValues        []string
+		rowIdx           int
+		newYorkPreceding [2]int
+		utcPreceding     [2]int
+		newYorkFollowing [2]int
+		utcFollowing     [2]int
+	}{
+		{
+			name: "spring forward",
+			utcValues: []string{
+				"2024-03-10 06:59:59.999999",
+				"2024-03-10 07:00:00.000000",
+				"2024-03-10 07:30:00.000000",
+			},
+			rowIdx:           2,
+			newYorkPreceding: [2]int{1, 3},
+			utcPreceding:     [2]int{0, 3},
+			newYorkFollowing: [2]int{0, 2},
+			utcFollowing:     [2]int{0, 3},
+		},
+		{
+			name: "fall back",
+			utcValues: []string{
+				"2024-11-03 05:30:00.000000",
+				"2024-11-03 06:30:00.000000",
+				"2024-11-03 07:00:00.000000",
+			},
+			rowIdx:           2,
+			newYorkPreceding: [2]int{0, 3},
+			utcPreceding:     [2]int{1, 3},
+			newYorkFollowing: [2]int{0, 3},
+			utcFollowing:     [2]int{0, 2},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithMPool(t, "", mp)
+			defer func() {
+				proc.Free()
+				require.Equal(t, int64(0), mp.CurrNB())
+			}()
+
+			values := make([]types.Timestamp, len(test.utcValues))
+			for i, value := range test.utcValues {
+				values[i], err = types.ParseTimestamp(time.UTC, value, 6)
+				require.NoError(t, err)
+			}
+			vec := vector.NewVec(types.T_timestamp.ToType())
+			require.NoError(t, vector.AppendFixedList(vec, values, nil, mp))
+			defer vec.Free(mp)
+
+			ctr := &container{
+				orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{vec}}},
+			}
+
+			proc.GetSessionInfo().TimeZone = newYork
+			start, end, err := ctr.buildInterval(proc, test.rowIdx, 0, vec.Length(), precedingFrame)
+			require.NoError(t, err)
+			require.Equal(t, test.newYorkPreceding, [2]int{start, end})
+
+			// Reuse the same process/container generation after a session zone change.
+			proc.GetSessionInfo().TimeZone = time.UTC
+			start, end, err = ctr.buildInterval(proc, test.rowIdx, 0, vec.Length(), precedingFrame)
+			require.NoError(t, err)
+			require.Equal(t, test.utcPreceding, [2]int{start, end})
+
+			proc.GetSessionInfo().TimeZone = newYork
+			start, end, err = ctr.buildInterval(proc, 0, 0, vec.Length(), followingFrame)
+			require.NoError(t, err)
+			require.Equal(t, test.newYorkFollowing, [2]int{start, end})
+
+			proc.GetSessionInfo().TimeZone = time.UTC
+			start, end, err = ctr.buildInterval(proc, 0, 0, vec.Length(), followingFrame)
+			require.NoError(t, err)
+			require.Equal(t, test.utcFollowing, [2]int{start, end})
+		})
+	}
+}
+
+func TestWindowTimestampRangeFoldMembership(t *testing.T) {
+	newYork, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+
+	precedingFrame := &plan.FrameClause{
+		Type: plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val:  intervalExpr(30, types.Minute),
+		},
+		End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	followingFrame := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_FOLLOWING,
+			Val:  intervalExpr(30, types.Minute),
+		},
+	}
+	unboundedPrecedingFrame := &plan.FrameClause{
+		Type: plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{
+			Type:      plan.FrameBound_PRECEDING,
+			UnBounded: true,
+		},
+		End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	unboundedFollowingFrame := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		End: &plan.FrameBound{
+			Type:      plan.FrameBound_FOLLOWING,
+			UnBounded: true,
+		},
+	}
+
+	utcValues := []string{
+		"2024-11-03 05:00:00.000000", // 01:00 EDT
+		"2024-11-03 05:30:00.000000", // 01:30 EDT
+		"2024-11-03 05:59:00.000000", // 01:59 EDT
+		"2024-11-03 06:00:00.000000", // 01:00 EST
+		"2024-11-03 06:30:00.000000", // 01:30 EST
+		"2024-11-03 06:59:00.000000", // 01:59 EST
+		"2024-11-03 07:00:00.000000", // 02:00 EST
+		"2024-11-03 07:30:00.000000", // 02:30 EST
+	}
+	values := make([]types.Timestamp, len(utcValues))
+	for i, value := range utcValues {
+		values[i], err = types.ParseTimestamp(time.UTC, value, 6)
+		require.NoError(t, err)
+	}
+
+	selectionRows := func(left, right int, selection *timestampRangeSelection) []int {
+		if selection == nil {
+			rows := make([]int, 0, right-left)
+			for row := left; row < right; row++ {
+				rows = append(rows, row)
+			}
+			return rows
+		}
+		var rows []int
+		for _, span := range selection.spans {
+			for row := span.start; row < span.end; row++ {
+				rows = append(rows, row)
+			}
+		}
+		return rows
+	}
+
+	for _, test := range []struct {
+		name     string
+		desc     bool
+		frame    *plan.FrameClause
+		rowIdx   int
+		wantRows []int
+	}{
+		{
+			name:     "asc preceding excludes intervening repeated lower wall time",
+			frame:    precedingFrame,
+			rowIdx:   4,
+			wantRows: []int{0, 1, 3, 4},
+		},
+		{
+			name:     "asc following includes both repeated upper wall times",
+			frame:    followingFrame,
+			rowIdx:   1,
+			wantRows: []int{1, 2, 4, 5, 6},
+		},
+		{
+			name:     "asc unbounded preceding excludes later civil rows before the fold",
+			frame:    unboundedPrecedingFrame,
+			rowIdx:   4,
+			wantRows: []int{0, 1, 3, 4},
+		},
+		{
+			name:     "asc unbounded following excludes earlier civil rows after the fold",
+			frame:    unboundedFollowingFrame,
+			rowIdx:   1,
+			wantRows: []int{1, 2, 4, 5, 6, 7},
+		},
+		{
+			name:     "desc preceding includes both repeated upper wall times",
+			desc:     true,
+			frame:    precedingFrame,
+			rowIdx:   3,
+			wantRows: []int{1, 2, 3, 5, 6},
+		},
+		{
+			name:     "desc following excludes intervening repeated higher wall time",
+			desc:     true,
+			frame:    followingFrame,
+			rowIdx:   6,
+			wantRows: []int{3, 4, 6, 7},
+		},
+		{
+			name:     "desc unbounded preceding excludes later civil rows before the fold",
+			desc:     true,
+			frame:    unboundedPrecedingFrame,
+			rowIdx:   3,
+			wantRows: []int{0, 1, 2, 3, 5, 6},
+		},
+		{
+			name:     "desc unbounded following excludes earlier civil rows after the fold",
+			desc:     true,
+			frame:    unboundedFollowingFrame,
+			rowIdx:   6,
+			wantRows: []int{3, 4, 6, 7},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithMPool(t, "", mp)
+			defer func() {
+				proc.Free()
+				require.Equal(t, int64(0), mp.CurrNB())
+			}()
+			proc.GetSessionInfo().TimeZone = newYork
+
+			orderedValues := append([]types.Timestamp(nil), values...)
+			if test.desc {
+				for i := range orderedValues[:len(orderedValues)/2] {
+					j := len(orderedValues) - 1 - i
+					orderedValues[i], orderedValues[j] = orderedValues[j], orderedValues[i]
+				}
+			}
+			vec := vector.NewVec(types.T_timestamp.ToType())
+			require.NoError(t, vector.AppendFixedList(vec, orderedValues, nil, mp))
+			defer vec.Free(mp)
+
+			ctr := &container{
+				desc:      []bool{test.desc},
+				orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{vec}}},
+			}
+			left, right, selection, err := ctr.buildIntervalRows(proc, test.rowIdx, 0, vec.Length(), test.frame)
+			require.NoError(t, err)
+			require.Equal(t, test.wantRows, selectionRows(left, right, selection))
+		})
+	}
+}
+
+func TestWindowTimestampRangeFoldMembershipDetectsSparseTransitions(t *testing.T) {
+	newYork, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+
+	currentRowFrame := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	followingFrame := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_FOLLOWING,
+			Val:  intervalExpr(30, types.Minute),
+		},
+	}
+
+	for _, test := range []struct {
+		name     string
+		desc     bool
+		utc      []string
+		frame    *plan.FrameClause
+		wantRows []int
+	}{
+		{
+			name: "sparse increasing civil values cross fall-back transition",
+			utc: []string{
+				"2024-11-03 05:00:00.000000", // 01:00 EDT
+				"2024-11-03 06:30:00.000000", // 01:30 EST
+			},
+			frame:    followingFrame,
+			wantRows: []int{0, 1},
+		},
+		{
+			name: "descending sparse civil values cross fall-back transition",
+			desc: true,
+			utc: []string{
+				"2024-11-03 06:30:00.000000", // 01:30 EST
+				"2024-11-03 05:00:00.000000", // 01:00 EDT
+			},
+			frame:    followingFrame,
+			wantRows: []int{0, 1},
+		},
+		{
+			name: "equal civil values cross fall-back transition",
+			utc: []string{
+				"2024-11-03 05:30:00.000000", // 01:30 EDT
+				"2024-11-03 06:30:00.000000", // 01:30 EST
+			},
+			frame:    currentRowFrame,
+			wantRows: []int{0, 1},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithMPool(t, "", mp)
+			defer func() {
+				proc.Free()
+				require.Zero(t, mp.CurrNB())
+			}()
+			proc.GetSessionInfo().TimeZone = newYork
+
+			values := make([]types.Timestamp, len(test.utc))
+			for i, value := range test.utc {
+				values[i], err = types.ParseTimestamp(time.UTC, value, 6)
+				require.NoError(t, err)
+			}
+			vec := vector.NewVec(types.T_timestamp.ToType())
+			require.NoError(t, vector.AppendFixedList(vec, values, nil, mp))
+			defer vec.Free(mp)
+
+			ctr := &container{
+				desc:      []bool{test.desc},
+				orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{vec}}},
+			}
+			_, _, selection, err := ctr.buildIntervalRows(proc, 0, 0, vec.Length(), test.frame)
+			require.NoError(t, err)
+			require.NotNil(t, selection)
+			var gotRows []int
+			for _, span := range selection.spans {
+				for row := span.start; row < span.end; row++ {
+					gotRows = append(gotRows, row)
+				}
+			}
+			require.Equal(t, test.wantRows, gotRows)
+		})
+	}
+}
+
+func TestWindowTimestampRangeFoldMembershipRefreshesMaterializedOrderVector(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	defer func() {
+		proc.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
+	newYork, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = newYork
+
+	source := vector.NewVec(types.T_timestamp.ToType())
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = source
+	defer input.Clean(mp)
+
+	order, err := colexec.MakeEvalVector(proc, []*plan.Expr{newColExprWithType(0, types.T_timestamp.ToType())})
+	require.NoError(t, err)
+	ctr := &container{orderVecs: []colexec.ExprEvalVector{order}}
+	defer ctr.freeExes()
+	defer ctr.freeVector(mp)
+
+	frame := &plan.FrameClause{
+		Type: plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val:  intervalExpr(30, types.Minute),
+		},
+		End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	appendBatch := func(values []string) {
+		source.CleanOnlyData()
+		for _, value := range values {
+			ts, parseErr := types.ParseTimestamp(time.UTC, value, 6)
+			require.NoError(t, parseErr)
+			require.NoError(t, vector.AppendFixed(source, ts, false, mp))
+		}
+		input.SetRowCount(source.Length())
+		require.NoError(t, ctr.evalOrderVector(input, proc))
+	}
+
+	// The first materialization has no fold and caches that fact against the
+	// reusable order-vector pointer.
+	appendBatch([]string{
+		"2024-11-03 08:00:00.000000", "2024-11-03 08:30:00.000000",
+		"2024-11-03 09:00:00.000000", "2024-11-03 09:30:00.000000",
+		"2024-11-03 10:00:00.000000", "2024-11-03 10:30:00.000000",
+		"2024-11-03 11:00:00.000000", "2024-11-03 11:30:00.000000",
+	})
+	materialized := ctr.orderVecs[0].Vec[0]
+	_, _, selection, err := ctr.buildIntervalRows(proc, 4, 0, materialized.Length(), frame)
+	require.NoError(t, err)
+	require.Nil(t, selection)
+
+	// evalOrderVector keeps the same materialized vector but replaces its data.
+	// The second batch crosses the New York fall-back fold, so the cache must be
+	// rebuilt and return its non-contiguous civil-time membership.
+	appendBatch([]string{
+		"2024-11-03 05:00:00.000000", "2024-11-03 05:30:00.000000",
+		"2024-11-03 05:59:00.000000", "2024-11-03 06:00:00.000000",
+		"2024-11-03 06:30:00.000000", "2024-11-03 06:59:00.000000",
+		"2024-11-03 07:00:00.000000", "2024-11-03 07:30:00.000000",
+	})
+	require.Same(t, materialized, ctr.orderVecs[0].Vec[0])
+	_, _, selection, err = ctr.buildIntervalRows(proc, 4, 0, materialized.Length(), frame)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	var rows []int
+	for _, span := range selection.spans {
+		for row := span.start; row < span.end; row++ {
+			rows = append(rows, row)
+		}
+	}
+	require.Equal(t, []int{0, 1, 3, 4}, rows)
+}
+
+func TestWindowTimestampRangeFoldIndexHonorsCancellation(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	defer func() {
+		proc.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
+	newYork, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = newYork
+
+	const rows = cancellationCheckInterval * 2
+	start, err := types.ParseTimestamp(time.UTC, "2024-11-03 04:00:00.000000", 6)
+	require.NoError(t, err)
+	values := make([]types.Timestamp, rows)
+	for i := range values {
+		values[i] = start + types.Timestamp(int64(i)*60*types.MicroSecsPerSec)
+	}
+	vec := vector.NewVec(types.T_timestamp.ToType())
+	require.NoError(t, vector.AppendFixedList(vec, values, nil, mp))
+	defer vec.Free(mp)
+
+	ctr := &container{orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{vec}}}}
+	frame := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, UnBounded: true},
+		End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	// The index checks at row 0 and then every cancellationCheckInterval rows.
+	// Cancel on the second check to prove that a long initial span build can be
+	// interrupted rather than only rejecting an already-canceled invocation.
+	proc.Ctx = newCancelAfterDoneChecksContext(proc.Ctx, 2)
+	_, _, _, err = ctr.buildIntervalRows(proc, rows-1, 0, rows, frame)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestWindowTimestampRangeFoldAggregateMembership(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	defer func() {
+		proc.Free()
+		require.Equal(t, int64(0), mp.CurrNB())
+	}()
+	newYork, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	proc.GetSessionInfo().TimeZone = newYork
+
+	orderValues := []string{
+		"2024-11-03 05:00:00.000000",
+		"2024-11-03 05:30:00.000000",
+		"2024-11-03 05:59:00.000000",
+		"2024-11-03 06:00:00.000000",
+		"2024-11-03 06:30:00.000000",
+		"2024-11-03 06:59:00.000000",
+		"2024-11-03 07:00:00.000000",
+		"2024-11-03 07:30:00.000000",
+	}
+	timestamps := make([]types.Timestamp, len(orderValues))
+	for i, value := range orderValues {
+		timestamps[i], err = types.ParseTimestamp(time.UTC, value, 6)
+		require.NoError(t, err)
+	}
+	orderVec := vector.NewVec(types.T_timestamp.ToType())
+	require.NoError(t, vector.AppendFixedList(orderVec, timestamps, nil, mp))
+	defer orderVec.Free(mp)
+
+	values := testutil.MakeInt32Vector([]int32{1, 2, 3, 4, 5, 6, 7, 8}, nil, mp)
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = values
+	bat.SetRowCount(values.Length())
+	defer bat.Clean(mp)
+
+	frame := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_FOLLOWING,
+			Val:  intervalExpr(30, types.Minute),
+		},
+	}
+	spec := makeWindowSpec()
+	spec.GetW().Frame = frame
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+	}
+	ctr := &container{
+		bat:       bat,
+		aggVecs:   []colexec.ExprEvalVector{{Vec: []*vector.Vector{values}}},
+		orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{orderVec}}},
+	}
+	result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
+	require.NoError(t, err)
+	require.Equal(t, []int64{12, 23, 16, 12, 23, 16, 15, 8},
+		vector.MustFixedColWithTypeCheck[int64](result))
+	result.Free(mp)
+}
+
+func TestWindowTimestampRangeFoldAggregateMembershipHandlesConstOrderVector(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	defer func() {
+		proc.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	timestamp, err := types.ParseTimestamp(time.UTC, "2024-11-03 05:30:00.000000", 6)
+	require.NoError(t, err)
+	orderVec, err := vector.NewConstFixed(types.T_timestamp.ToType(), timestamp, 4, mp)
+	require.NoError(t, err)
+	defer orderVec.Free(mp)
+
+	values := testutil.MakeInt32Vector([]int32{1, 2, 4, 8}, nil, mp)
+	bat := batch.NewWithSize(1)
+	bat.Vecs[0] = values
+	bat.SetRowCount(values.Length())
+	defer bat.Clean(mp)
+
+	spec := makeWindowSpec()
+	spec.GetW().Frame = &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+	}
+	ctr := &container{
+		bat:       bat,
+		aggVecs:   []colexec.ExprEvalVector{{Vec: []*vector.Vector{values}}},
+		orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{orderVec}}},
+	}
+	result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
+	require.NoError(t, err)
+	require.Equal(t, []int64{15, 15, 15, 15}, vector.MustFixedColWithTypeCheck[int64](result))
+	result.Free(mp)
+
+	// Const storage must still obey finite RANGE bounds instead of treating
+	// every frame as its peer group.
+	futureFrame := &plan.FrameClause{
+		Type: plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_FOLLOWING,
+			Val:  intervalExpr(1, types.Minute),
+		},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_FOLLOWING,
+			Val:  intervalExpr(2, types.Minute),
+		},
+	}
+	left, right, buildErr := ctr.buildInterval(proc, 0, 0, bat.RowCount(), futureFrame)
+	require.NoError(t, buildErr)
+	require.Equal(t, [2]int{bat.RowCount(), bat.RowCount()}, [2]int{left, right})
+}
+
+func TestWindowTimestampRangeFoldAggregateMembershipPreservesUnboundedNullPeers(t *testing.T) {
+	newYork, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+
+	unboundedPreceding := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, UnBounded: true},
+		End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	unboundedFollowing := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		End:   &plan.FrameBound{Type: plan.FrameBound_FOLLOWING, UnBounded: true},
+	}
+
+	for _, test := range []struct {
+		name      string
+		desc      bool
+		nullsLast bool
+		utc       []string
+		nulls     []bool
+		values    []int32
+		frame     *plan.FrameClause
+		want      []int64
+	}{
+		{
+			name:      "asc nulls first unbounded preceding",
+			nullsLast: false,
+			utc: []string{
+				"2024-11-03 00:00:00.000000", // NULL
+				"2024-11-03 05:00:00.000000", // 01:00 EDT
+				"2024-11-03 05:30:00.000000", // 01:30 EDT
+				"2024-11-03 06:00:00.000000", // 01:00 EST
+				"2024-11-03 06:30:00.000000", // 01:30 EST
+			},
+			nulls:  []bool{true, false, false, false, false},
+			values: []int32{100, 1, 2, 4, 8},
+			frame:  unboundedPreceding,
+			want:   []int64{100, 105, 115, 105, 115},
+		},
+		{
+			name:      "asc nulls last unbounded following",
+			nullsLast: true,
+			utc: []string{
+				"2024-11-03 05:00:00.000000", // 01:00 EDT
+				"2024-11-03 05:30:00.000000", // 01:30 EDT
+				"2024-11-03 06:00:00.000000", // 01:00 EST
+				"2024-11-03 06:30:00.000000", // 01:30 EST
+				"2024-11-03 00:00:00.000000", // NULL
+			},
+			nulls:  []bool{false, false, false, false, true},
+			values: []int32{1, 2, 4, 8, 100},
+			frame:  unboundedFollowing,
+			want:   []int64{115, 110, 115, 110, 100},
+		},
+		{
+			name:      "desc nulls first unbounded preceding",
+			desc:      true,
+			nullsLast: false,
+			utc: []string{
+				"2024-11-03 00:00:00.000000", // NULL
+				"2024-11-03 06:30:00.000000", // 01:30 EST
+				"2024-11-03 06:00:00.000000", // 01:00 EST
+				"2024-11-03 05:30:00.000000", // 01:30 EDT
+				"2024-11-03 05:00:00.000000", // 01:00 EDT
+			},
+			nulls:  []bool{true, false, false, false, false},
+			values: []int32{100, 8, 4, 2, 1},
+			frame:  unboundedPreceding,
+			want:   []int64{100, 110, 115, 110, 115},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithMPool(t, "", mp)
+			defer func() {
+				proc.Free()
+				require.Zero(t, mp.CurrNB())
+			}()
+			proc.GetSessionInfo().TimeZone = newYork
+
+			timestamps := make([]types.Timestamp, len(test.utc))
+			for i, value := range test.utc {
+				timestamps[i], err = types.ParseTimestamp(time.UTC, value, 6)
+				require.NoError(t, err)
+			}
+			orderVec := vector.NewVec(types.T_timestamp.ToType())
+			require.NoError(t, vector.AppendFixedList(orderVec, timestamps, test.nulls, mp))
+			defer orderVec.Free(mp)
+
+			values := testutil.MakeInt32Vector(test.values, nil, mp)
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = values
+			bat.SetRowCount(values.Length())
+			defer bat.Clean(mp)
+
+			spec := makeWindowSpec()
+			spec.GetW().Frame = test.frame
+			arg := &Window{
+				WinSpecList: []*plan.Expr{spec},
+				Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+			}
+			ctr := &container{
+				desc:      []bool{test.desc},
+				nullsLast: []bool{test.nullsLast},
+				bat:       bat,
+				aggVecs:   []colexec.ExprEvalVector{{Vec: []*vector.Vector{values}}},
+				orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{orderVec}}},
+			}
+			result, runErr := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
+			require.NoError(t, runErr)
+			require.Equal(t, test.want, vector.MustFixedColWithTypeCheck[int64](result))
+			result.Free(mp)
+		})
+	}
+}
+
+func TestWindowTimestampRangeFoldAggregateMembershipSmallPartitions(t *testing.T) {
+	newYork, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+
+	currentRowFrame := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	precedingFrame := &plan.FrameClause{
+		Type: plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{
+			Type: plan.FrameBound_PRECEDING,
+			Val:  intervalExpr(1, types.Hour),
+		},
+		End: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	followingFrame := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_FOLLOWING,
+			Val:  intervalExpr(30, types.Minute),
+		},
+	}
+
+	for _, test := range []struct {
+		name  string
+		utc   []string
+		vals  []int32
+		frame *plan.FrameClause
+		want  []int64
+	}{
+		{
+			name:  "repeated civil peer remains in preceding frame",
+			utc:   []string{"2024-11-03 05:30:00.000000", "2024-11-03 06:30:00.000000", "2024-11-03 07:00:00.000000"},
+			vals:  []int32{10, 20, 30},
+			frame: precedingFrame,
+			want:  []int64{30, 30, 60},
+		},
+		{
+			name:  "sparse transition includes later civil boundary",
+			utc:   []string{"2024-11-03 05:00:00.000000", "2024-11-03 06:30:00.000000"},
+			vals:  []int32{1, 10},
+			frame: followingFrame,
+			want:  []int64{11, 10},
+		},
+		{
+			name:  "equal civil timestamps are peers",
+			utc:   []string{"2024-11-03 05:30:00.000000", "2024-11-03 06:30:00.000000"},
+			vals:  []int32{1, 10},
+			frame: currentRowFrame,
+			want:  []int64{11, 11},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithMPool(t, "", mp)
+			defer func() {
+				proc.Free()
+				require.Zero(t, mp.CurrNB())
+			}()
+			proc.GetSessionInfo().TimeZone = newYork
+
+			timestamps := make([]types.Timestamp, len(test.utc))
+			for i, value := range test.utc {
+				timestamps[i], err = types.ParseTimestamp(time.UTC, value, 6)
+				require.NoError(t, err)
+			}
+			orderVec := vector.NewVec(types.T_timestamp.ToType())
+			require.NoError(t, vector.AppendFixedList(orderVec, timestamps, nil, mp))
+			defer orderVec.Free(mp)
+
+			values := testutil.MakeInt32Vector(test.vals, nil, mp)
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = values
+			bat.SetRowCount(values.Length())
+			defer bat.Clean(mp)
+
+			spec := makeWindowSpec()
+			spec.GetW().Frame = test.frame
+			arg := &Window{
+				WinSpecList: []*plan.Expr{spec},
+				Aggs:        []aggexec.AggFuncExecExpression{newAggExpr()},
+			}
+			ctr := &container{
+				bat:       bat,
+				aggVecs:   []colexec.ExprEvalVector{{Vec: []*vector.Vector{values}}},
+				orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{orderVec}}},
+			}
+			result, err := ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
+			require.NoError(t, err)
+			require.Equal(t, test.want, vector.MustFixedColWithTypeCheck[int64](result))
+			result.Free(mp)
+		})
+	}
+}
+
+func TestWindowTimestampRangeFoldAggregateMembershipAfterOrderMaterialization(t *testing.T) {
+	newYork, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+
+	frame := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_FOLLOWING,
+			Val:  intervalExpr(30, types.Minute),
+		},
+	}
+
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	defer func() {
+		proc.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
+	proc.GetSessionInfo().TimeZone = newYork
+
+	timestamps := make([]types.Timestamp, 2)
+	for i, value := range []string{
+		"2024-11-03 05:00:00.000000", // 01:00 EDT
+		"2024-11-03 06:30:00.000000", // 01:30 EST
+	} {
+		timestamps[i], err = types.ParseTimestamp(time.UTC, value, 6)
+		require.NoError(t, err)
+	}
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_timestamp.ToType())
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[0], timestamps, nil, mp))
+	bat.Vecs[1] = testutil.MakeInt32Vector([]int32{1, 10}, nil, mp)
+	bat.SetRowCount(2)
+	defer bat.Clean(mp)
+
+	orderExpr := newColExprWithType(0, types.T_timestamp.ToType())
+	spec := makeWindowSpec()
+	spec.GetW().OrderBy = []*plan.OrderBySpec{{Expr: orderExpr}}
+	spec.GetW().Frame = frame
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExprAt(1)},
+	}
+	require.NoError(t, arg.Prepare(proc))
+	defer arg.Free(proc, false, nil)
+
+	arg.ctr.bat = bat
+	require.NoError(t, arg.ctr.evalAggVector(bat, proc))
+	arg.Fs = makeOrderBy(spec)
+	arg.ctr.orderVecs = make([]colexec.ExprEvalVector, len(arg.Fs))
+	for i := range arg.Fs {
+		arg.ctr.orderVecs[i], err = colexec.MakeEvalVector(proc, []*plan.Expr{arg.Fs[i].Expr})
+		require.NoError(t, err)
+	}
+	_, err = arg.ctr.processOrder(0, arg, bat, proc)
+	require.NoError(t, err)
+
+	result, err := arg.ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
+	require.NoError(t, err)
+	require.Equal(t, []int64{11, 10}, vector.MustFixedColWithTypeCheck[int64](result))
+	result.Free(mp)
+}
+
+func TestWindowTimestampRangeFoldAggregateMembershipPreservesMultiKeyOrder(t *testing.T) {
+	mp := mpool.MustNewZero()
+	proc := testutil.NewProcessWithMPool(t, "", mp)
+	defer func() {
+		proc.Free()
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	// Multi-key RANGE frames use ctr.os to preserve the complete ORDER BY tuple
+	// peer boundary. The last TIMESTAMP key repeats from B to A at the next k
+	// group, which is a normal lexicographic reset rather than a timezone fold.
+	// Keep this in UTC so the expected tuple semantics do not depend on DST.
+	timestampA, err := types.ParseTimestamp(time.UTC, "2024-01-01 00:00:00.000000", 6)
+	require.NoError(t, err)
+	timestampB, err := types.ParseTimestamp(time.UTC, "2024-01-01 01:00:00.000000", 6)
+	require.NoError(t, err)
+	bat := batch.NewWithSize(3)
+	bat.Vecs[0] = testutil.MakeInt32Vector([]int32{1, 1, 2, 2}, nil, mp)
+	bat.Vecs[1] = vector.NewVec(types.T_timestamp.ToType())
+	require.NoError(t, vector.AppendFixedList(bat.Vecs[1], []types.Timestamp{
+		timestampA, timestampB, timestampA, timestampB,
+	}, nil, mp))
+	bat.Vecs[2] = testutil.MakeInt32Vector([]int32{1, 2, 4, 8}, nil, mp)
+	bat.SetRowCount(4)
+	defer bat.Clean(mp)
+
+	spec := makeWindowSpec()
+	spec.GetW().OrderBy = []*plan.OrderBySpec{
+		{Expr: newColExprWithType(0, types.T_int32.ToType())},
+		{Expr: newColExprWithType(1, types.T_timestamp.ToType())},
+	}
+	spec.GetW().Frame = &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, UnBounded: true},
+		End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+	arg := &Window{
+		WinSpecList: []*plan.Expr{spec},
+		Aggs:        []aggexec.AggFuncExecExpression{newAggExprAt(2)},
+	}
+	require.NoError(t, arg.Prepare(proc))
+	defer arg.Free(proc, false, nil)
+
+	arg.ctr.bat = bat
+	require.NoError(t, arg.ctr.evalAggVector(bat, proc))
+	arg.Fs = makeOrderBy(spec)
+	arg.ctr.orderVecs = make([]colexec.ExprEvalVector, len(arg.Fs))
+	for i := range arg.Fs {
+		arg.ctr.orderVecs[i], err = colexec.MakeEvalVector(proc, []*plan.Expr{arg.Fs[i].Expr})
+		require.NoError(t, err)
+	}
+	_, err = arg.ctr.processOrder(0, arg, bat, proc)
+	require.NoError(t, err)
+
+	result, err := arg.ctr.processAggregateFuncRange(0, arg, proc, 0, bat.RowCount())
+	require.NoError(t, err)
+	require.Equal(t, []int64{1, 3, 7, 15}, vector.MustFixedColWithTypeCheck[int64](result))
+	result.Free(mp)
+}
+
+func TestWindowTimestampRangeFoldValueMembership(t *testing.T) {
+	newYork, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+
+	orderValues := []string{
+		"2024-11-03 05:00:00.000000", // 01:00 EDT
+		"2024-11-03 05:30:00.000000", // 01:30 EDT
+		"2024-11-03 05:59:00.000000", // 01:59 EDT
+		"2024-11-03 06:00:00.000000", // 01:00 EST
+		"2024-11-03 06:30:00.000000", // 01:30 EST
+		"2024-11-03 06:59:00.000000", // 01:59 EST
+		"2024-11-03 07:00:00.000000", // 02:00 EST
+		"2024-11-03 07:30:00.000000", // 02:30 EST
+	}
+
+	frame := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+		End: &plan.FrameBound{
+			Type: plan.FrameBound_FOLLOWING,
+			Val:  intervalExpr(30, types.Minute),
+		},
+	}
+
+	for _, test := range []struct {
+		name      string
+		want      []int32
+		lastIsNil bool
+	}{
+		{name: "first_value", want: []int32{1, 2, 3, 1, 2, 3, 7, 8}},
+		{name: "last_value", want: []int32{5, 7, 7, 5, 7, 7, 8, 8}},
+		{name: "nth_value", want: []int32{2, 3, 6, 2, 3, 6, 8, 0}, lastIsNil: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithMPool(t, "", mp)
+			defer func() {
+				proc.Free()
+				require.Zero(t, mp.CurrNB())
+			}()
+			proc.GetSessionInfo().TimeZone = newYork
+
+			timestamps := make([]types.Timestamp, len(orderValues))
+			for i, value := range orderValues {
+				timestamps[i], err = types.ParseTimestamp(time.UTC, value, 6)
+				require.NoError(t, err)
+			}
+			orderVec := vector.NewVec(types.T_timestamp.ToType())
+			require.NoError(t, vector.AppendFixedList(orderVec, timestamps, nil, mp))
+			defer orderVec.Free(mp)
+
+			values := testutil.MakeInt32Vector([]int32{1, 2, 3, 4, 5, 6, 7, 8}, nil, mp)
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = values
+			bat.SetRowCount(values.Length())
+			defer bat.Clean(mp)
+
+			spec := makeValueWindowSpecWithName(test.name, int32(types.T_int32))
+			spec.GetW().Frame = frame
+			arg := &Window{WinSpecList: []*plan.Expr{spec}}
+			valueVecs := []*vector.Vector{values}
+			var nthVec *vector.Vector
+			if test.name == "nth_value" {
+				nthVec = testutil.MakeInt32Vector([]int32{2, 2, 2, 2, 2, 2, 2, 2}, nil, mp)
+				valueVecs = append(valueVecs, nthVec)
+				defer nthVec.Free(mp)
+			}
+			ctr := &container{
+				bat:       bat,
+				aggVecs:   []colexec.ExprEvalVector{{Vec: valueVecs}},
+				orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{orderVec}}},
+			}
+
+			result, err := ctr.processValueFuncRange(0, arg, proc, 0, bat.RowCount())
+			require.NoError(t, err)
+			require.Equal(t, test.want, vector.MustFixedColWithTypeCheck[int32](result))
+			if test.lastIsNil {
+				require.True(t, result.IsNull(uint64(result.Length()-1)))
+			}
+			result.Free(mp)
+		})
+	}
+}
+
+// BenchmarkWindowTimestampRangeFoldUnboundedValue guards the value-function
+// path that used to rescan a folded partition for every output row. Each size
+// crosses the New York fall-back transition; the production first_value path
+// must reuse its civil-time spans and only binary-search them per frame.
+func BenchmarkWindowTimestampRangeFoldUnboundedValue(b *testing.B) {
+	newYork, err := time.LoadLocation("America/New_York")
+	require.NoError(b, err)
+	start, err := types.ParseTimestamp(time.UTC, "2024-11-03 04:00:00.000000", 6)
+	require.NoError(b, err)
+	frame := &plan.FrameClause{
+		Type:  plan.FrameClause_RANGE,
+		Start: &plan.FrameBound{Type: plan.FrameBound_PRECEDING, UnBounded: true},
+		End:   &plan.FrameBound{Type: plan.FrameBound_CURRENT_ROW},
+	}
+
+	for _, size := range []int{1000, 2000, 4000} {
+		b.Run(fmt.Sprintf("rows=%d", size), func(b *testing.B) {
+			mp := mpool.MustNewZero()
+			proc := testutil.NewProcessWithMPool(b, "", mp)
+			defer func() {
+				proc.Free()
+				require.Zero(b, mp.CurrNB())
+			}()
+			proc.GetSessionInfo().TimeZone = newYork
+
+			timestamps := make([]types.Timestamp, size)
+			for i := range timestamps {
+				timestamps[i] = start + types.Timestamp(int64(i)*60*types.MicroSecsPerSec)
+			}
+			orderVec := vector.NewVec(types.T_timestamp.ToType())
+			require.NoError(b, vector.AppendFixedList(orderVec, timestamps, nil, mp))
+			defer orderVec.Free(mp)
+
+			values := make([]int32, size)
+			for i := range values {
+				values[i] = int32(i)
+			}
+			valueVec := testutil.MakeInt32Vector(values, nil, mp)
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = valueVec
+			bat.SetRowCount(size)
+			defer bat.Clean(mp)
+
+			spec := makeValueWindowSpecWithName("first_value", int32(types.T_int32))
+			spec.GetW().Frame = frame
+			arg := &Window{WinSpecList: []*plan.Expr{spec}}
+			ctr := &container{
+				bat:       bat,
+				aggVecs:   []colexec.ExprEvalVector{{Vec: []*vector.Vector{valueVec}}},
+				orderVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{orderVec}}},
+			}
+
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				result, runErr := ctr.processValueFuncRange(0, arg, proc, 0, size)
+				require.NoError(b, runErr)
+				result.Free(mp)
+			}
+		})
+	}
+}
+
+func TestSearchLeftRightTemporalRangeOverflow(t *testing.T) {
+	t.Run("microsecond encoded lower domain", func(t *testing.T) {
+		minimum := types.DatetimeFromClock(types.MinDatetimeYear, 1, 1, 0, 0, 0, 0)
+		_, err := doDatetimeSub(minimum, 2, int64(types.MicroSecond))
+		require.Error(t, err)
+		got, err := doDatetimeSub(minimum+2, 2, int64(types.MicroSecond))
+		require.NoError(t, err)
+		require.Equal(t, minimum, got)
+	})
+
+	mp := mpool.MustNewZero()
+	defer func() { require.Equal(t, int64(0), mp.CurrNB()) }()
+
+	tests := []struct {
+		name                string
+		ascending           []string
+		descending          []string
+		minimumAsc          []string
+		minimumDesc         []string
+		aboveDomainBy       int64
+		aboveDomainUnit     types.IntervalType
+		belowDomainBy       int64
+		belowDomainUnit     types.IntervalType
+		invalidIntervalUnit types.IntervalType
+		newVector           func([]string) *vector.Vector
+	}{
+		{
+			name:                "date",
+			ascending:           []string{"9999-12-30", "9999-12-31"},
+			descending:          []string{"9999-12-31", "9999-12-30"},
+			minimumAsc:          []string{"0001-01-01", "0001-01-02"},
+			minimumDesc:         []string{"0001-01-02", "0001-01-01"},
+			aboveDomainBy:       1,
+			aboveDomainUnit:     types.Year,
+			belowDomainBy:       2,
+			belowDomainUnit:     types.Year,
+			invalidIntervalUnit: types.Year,
+			newVector: func(values []string) *vector.Vector {
+				return testutil.NewDateVector(0, types.T_date.ToType(), mp, false, nil, values)
+			},
+		},
+		{
+			name:                "datetime",
+			ascending:           []string{"9999-12-30 23:59:59.999999", "9999-12-31 23:59:59.999999"},
+			descending:          []string{"9999-12-31 23:59:59.999999", "9999-12-30 23:59:59.999999"},
+			minimumAsc:          []string{"0001-01-01 00:00:00.000000", "0001-01-02 00:00:00.000000"},
+			minimumDesc:         []string{"0001-01-02 00:00:00.000000", "0001-01-01 00:00:00.000000"},
+			aboveDomainBy:       1,
+			aboveDomainUnit:     types.Year,
+			belowDomainBy:       1,
+			belowDomainUnit:     types.Year,
+			invalidIntervalUnit: types.Year,
+			newVector: func(values []string) *vector.Vector {
+				return testutil.NewDatetimeVector(0, types.T_datetime.ToType(), mp, false, nil, values)
+			},
+		},
+		{
+			name:                "time",
+			ascending:           []string{"2562047787:59:59.999998", "2562047787:59:59.999999"},
+			descending:          []string{"2562047787:59:59.999999", "2562047787:59:59.999998"},
+			minimumAsc:          []string{"-2562047787:59:59.999999", "-2562047787:59:59.999998"},
+			minimumDesc:         []string{"-2562047787:59:59.999998", "-2562047787:59:59.999999"},
+			aboveDomainBy:       1,
+			aboveDomainUnit:     types.MicroSecond,
+			belowDomainBy:       1,
+			belowDomainUnit:     types.MicroSecond,
+			invalidIntervalUnit: types.Hour,
+			newVector: func(values []string) *vector.Vector {
+				return testutil.NewTimeVector(0, types.T_time.ToType(), mp, false, nil, values)
+			},
+		},
+		{
+			name:                "timestamp",
+			ascending:           []string{"9999-12-30 23:59:59.999999", "9999-12-31 23:59:59.999999"},
+			descending:          []string{"9999-12-31 23:59:59.999999", "9999-12-30 23:59:59.999999"},
+			minimumAsc:          []string{"0001-01-01 00:00:00.000000", "0001-01-02 00:00:00.000000"},
+			minimumDesc:         []string{"0001-01-02 00:00:00.000000", "0001-01-01 00:00:00.000000"},
+			aboveDomainBy:       1,
+			aboveDomainUnit:     types.Day,
+			belowDomainBy:       1,
+			belowDomainUnit:     types.Day,
+			invalidIntervalUnit: types.Year,
+			newVector: func(values []string) *vector.Vector {
+				return testutil.NewTimestampVector(0, types.T_timestamp.ToType(), mp, false, nil, values)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name+"_asc", func(t *testing.T) {
+			vec := tt.newVector(tt.ascending)
+			require.NotNil(t, vec)
+			defer vec.Free(mp)
+
+			expr := intervalExpr(tt.aboveDomainBy, tt.aboveDomainUnit)
+			left, err := searchLeft(0, vec.Length(), 1, vec, expr, true, false)
+			require.NoError(t, err)
+			require.Equal(t, vec.Length(), left)
+			right, err := searchRight(0, vec.Length(), 1, vec, expr, false, false)
+			require.NoError(t, err)
+			require.Equal(t, vec.Length(), right)
+		})
+
+		t.Run(tt.name+"_desc", func(t *testing.T) {
+			vec := tt.newVector(tt.descending)
+			require.NotNil(t, vec)
+			defer vec.Free(mp)
+
+			expr := intervalExpr(tt.aboveDomainBy, tt.aboveDomainUnit)
+			left, err := searchLeft(0, vec.Length(), 0, vec, expr, false, true)
+			require.NoError(t, err)
+			require.Equal(t, 0, left)
+			right, err := searchRight(0, vec.Length(), 0, vec, expr, true, true)
+			require.NoError(t, err)
+			require.Equal(t, 0, right)
+		})
+
+		t.Run(tt.name+"_below_domain_asc", func(t *testing.T) {
+			vec := tt.newVector(tt.minimumAsc)
+			require.NotNil(t, vec)
+			defer vec.Free(mp)
+
+			expr := intervalExpr(tt.belowDomainBy, tt.belowDomainUnit)
+			left, err := searchLeft(0, vec.Length(), 0, vec, expr, false, false)
+			require.NoError(t, err)
+			require.Equal(t, 0, left)
+			right, err := searchRight(0, vec.Length(), 0, vec, expr, true, false)
+			require.NoError(t, err)
+			require.Equal(t, 0, right)
+		})
+
+		t.Run(tt.name+"_below_domain_desc", func(t *testing.T) {
+			vec := tt.newVector(tt.minimumDesc)
+			require.NotNil(t, vec)
+			defer vec.Free(mp)
+
+			expr := intervalExpr(tt.belowDomainBy, tt.belowDomainUnit)
+			left, err := searchLeft(0, vec.Length(), 1, vec, expr, true, true)
+			require.NoError(t, err)
+			require.Equal(t, vec.Length(), left)
+			right, err := searchRight(0, vec.Length(), 1, vec, expr, false, true)
+			require.NoError(t, err)
+			require.Equal(t, vec.Length(), right)
+		})
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name+"_negative_add_below_domain_asc", func(t *testing.T) {
+			vec := tt.newVector(tt.minimumAsc)
+			require.NotNil(t, vec)
+			defer vec.Free(mp)
+
+			expr := intervalExpr(-tt.belowDomainBy, tt.belowDomainUnit)
+			left, err := searchLeft(0, vec.Length(), 0, vec, expr, true, false)
+			require.NoError(t, err)
+			require.Equal(t, 0, left)
+			right, err := searchRight(0, vec.Length(), 0, vec, expr, false, false)
+			require.NoError(t, err)
+			require.Equal(t, 0, right)
+		})
+
+		t.Run(tt.name+"_negative_sub_above_domain_asc", func(t *testing.T) {
+			vec := tt.newVector(tt.ascending)
+			require.NotNil(t, vec)
+			defer vec.Free(mp)
+
+			expr := intervalExpr(-tt.aboveDomainBy, tt.aboveDomainUnit)
+			left, err := searchLeft(0, vec.Length(), 1, vec, expr, false, false)
+			require.NoError(t, err)
+			require.Equal(t, vec.Length(), left)
+			right, err := searchRight(0, vec.Length(), 1, vec, expr, true, false)
+			require.NoError(t, err)
+			require.Equal(t, vec.Length(), right)
+		})
+
+		t.Run(tt.name+"_negative_add_below_domain_desc", func(t *testing.T) {
+			vec := tt.newVector(tt.minimumDesc)
+			require.NotNil(t, vec)
+			defer vec.Free(mp)
+
+			expr := intervalExpr(-tt.belowDomainBy, tt.belowDomainUnit)
+			left, err := searchLeft(0, vec.Length(), 1, vec, expr, false, true)
+			require.NoError(t, err)
+			require.Equal(t, vec.Length(), left)
+			right, err := searchRight(0, vec.Length(), 1, vec, expr, true, true)
+			require.NoError(t, err)
+			require.Equal(t, vec.Length(), right)
+		})
+
+		t.Run(tt.name+"_negative_sub_above_domain_desc", func(t *testing.T) {
+			vec := tt.newVector(tt.descending)
+			require.NotNil(t, vec)
+			defer vec.Free(mp)
+
+			expr := intervalExpr(-tt.aboveDomainBy, tt.aboveDomainUnit)
+			left, err := searchLeft(0, vec.Length(), 0, vec, expr, true, true)
+			require.NoError(t, err)
+			require.Equal(t, 0, left)
+			right, err := searchRight(0, vec.Length(), 0, vec, expr, false, true)
+			require.NoError(t, err)
+			require.Equal(t, 0, right)
+		})
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name+"_invalid_interval_magnitude", func(t *testing.T) {
+			vec := tt.newVector(tt.ascending)
+			require.NotNil(t, vec)
+			defer vec.Free(mp)
+
+			_, err := searchRight(0, vec.Length(), 1, vec, intervalExpr(math.MaxInt64, tt.invalidIntervalUnit), false, false)
+			require.Error(t, err, "an invalid interval magnitude must not be treated as a domain boundary")
+			_, err = searchRight(0, vec.Length(), 1, vec, intervalExpr(math.MinInt64, tt.invalidIntervalUnit), false, false)
+			require.Error(t, err, "an invalid negative interval magnitude must not be treated as a domain boundary")
+		})
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name+"_max_microsecond_above_domain", func(t *testing.T) {
+			vec := tt.newVector(tt.ascending)
+			require.NotNil(t, vec)
+			defer vec.Free(mp)
+
+			expr := intervalExpr(math.MaxInt64, types.MicroSecond)
+			left, err := searchLeft(0, vec.Length(), 1, vec, expr, true, false)
+			require.NoError(t, err)
+			require.Equal(t, vec.Length(), left)
+			right, err := searchRight(0, vec.Length(), 1, vec, expr, false, false)
+			require.NoError(t, err)
+			require.Equal(t, vec.Length(), right)
+		})
+
+		t.Run(tt.name+"_max_microsecond_below_domain", func(t *testing.T) {
+			vec := tt.newVector(tt.minimumAsc)
+			require.NotNil(t, vec)
+			defer vec.Free(mp)
+
+			expr := intervalExpr(math.MaxInt64, types.MicroSecond)
+			left, err := searchLeft(0, vec.Length(), 0, vec, expr, false, false)
+			require.NoError(t, err)
+			require.Equal(t, 0, left)
+			right, err := searchRight(0, vec.Length(), 0, vec, expr, true, false)
+			require.NoError(t, err)
+			require.Equal(t, 0, right)
+		})
+	}
+}
+
+func TestTimestampRangeMicrosecondDSTGapBoundary(t *testing.T) {
+	loc, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	beforeGap, err := types.ParseTimestamp(loc, "2024-03-10 01:59:59.999999", 6)
+	require.NoError(t, err)
+	gapEnd, err := types.ParseTimestamp(loc, "2024-03-10 03:00:00.000000", 6)
+	require.NoError(t, err)
+
+	add, err := doTimestampAdd(loc, beforeGap, 1, int64(types.MicroSecond))
+	require.NoError(t, err)
+	require.Equal(t, gapEnd, add)
+	sub, err := doTimestampSub(loc, gapEnd, 1, int64(types.MicroSecond))
+	require.NoError(t, err)
+	require.Equal(t, gapEnd, sub)
+
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+	for _, tc := range []struct {
+		name      string
+		values    []types.Timestamp
+		addRow    int
+		subRow    int
+		desc      bool
+		wantLeft  int
+		wantRight int
+	}{
+		{"asc", []types.Timestamp{beforeGap, gapEnd}, 0, 1, false, 1, 2},
+		{"desc", []types.Timestamp{gapEnd, beforeGap}, 1, 0, true, 0, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			vec := vector.NewVec(types.T_timestamp.ToType())
+			require.NoError(t, vector.AppendFixedList(vec, tc.values, nil, mp))
+			defer vec.Free(mp)
+
+			expr := intervalExpr(1, types.MicroSecond)
+			leftAdd, rightAdd := true, false
+			leftSub, rightSub := false, true
+			if tc.desc {
+				leftAdd, rightAdd = false, true
+				leftSub, rightSub = true, false
+			}
+			left, err := searchLeftWithLocation(loc, 0, vec.Length(), tc.addRow, vec, expr, leftAdd, tc.desc)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantLeft, left)
+			right, err := searchRightWithLocation(loc, 0, vec.Length(), tc.addRow, vec, expr, rightAdd, tc.desc)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantRight, right)
+
+			left, err = searchLeftWithLocation(loc, 0, vec.Length(), tc.subRow, vec, expr, leftSub, tc.desc)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantLeft, left)
+			right, err = searchRightWithLocation(loc, 0, vec.Length(), tc.subRow, vec, expr, rightSub, tc.desc)
+			require.NoError(t, err)
+			require.Equal(t, tc.wantRight, right)
+		})
+	}
+}
+
+func TestTemporalRangeFixedUnitConversionOverflow(t *testing.T) {
+	const magnitude = int64(307445734562)
+	date := types.DateFromCalendar(2024, 1, 1)
+	datetime := types.DatetimeFromClock(2024, 1, 1, 0, 0, 0, 0)
+	timestamp := datetime.ToTimestamp(time.UTC)
+	timeValue, err := types.ParseTime("12:00:00", 6)
+	require.NoError(t, err)
+
+	for _, unit := range []types.IntervalType{types.Minute, types.Hour, types.Day, types.Week} {
+		for _, diff := range []int64{magnitude, -magnitude} {
+			t.Run(fmt.Sprintf("%s_%d", unit, diff), func(t *testing.T) {
+				for _, call := range []func() error{
+					func() error { _, err := doDateAdd(date, diff, int64(unit)); return err },
+					func() error { _, err := doDateSub(date, diff, int64(unit)); return err },
+					func() error { _, err := doTimeAdd(timeValue, diff, int64(unit)); return err },
+					func() error { _, err := doTimeSub(timeValue, diff, int64(unit)); return err },
+					func() error { _, err := doDatetimeAdd(datetime, diff, int64(unit)); return err },
+					func() error { _, err := doDatetimeSub(datetime, diff, int64(unit)); return err },
+					func() error { _, err := doTimestampAdd(time.UTC, timestamp, diff, int64(unit)); return err },
+					func() error { _, err := doTimestampSub(time.UTC, timestamp, diff, int64(unit)); return err },
+				} {
+					err := call()
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), "fixed-unit conversion overflow must become a temporal domain boundary")
+				}
+			})
+		}
+	}
+}
+
+func TestTemporalRangeCalendarIntervalOverflow(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()) }()
+
+	tests := []struct {
+		name       string
+		ascending  []string
+		descending []string
+		newVector  func([]string) *vector.Vector
+		add        func(int64, int64) error
+		sub        func(int64, int64) error
+	}{
+		{
+			name:       "date",
+			ascending:  []string{"2024-01-01", "2024-01-02"},
+			descending: []string{"2024-01-02", "2024-01-01"},
+			newVector: func(values []string) *vector.Vector {
+				return testutil.NewDateVector(0, types.T_date.ToType(), mp, false, nil, values)
+			},
+			add: func(diff, unit int64) error {
+				_, err := doDateAdd(types.DateFromCalendar(2024, 1, 1), diff, unit)
+				return err
+			},
+			sub: func(diff, unit int64) error {
+				_, err := doDateSub(types.DateFromCalendar(2024, 1, 1), diff, unit)
+				return err
+			},
+		},
+		{
+			name:       "datetime",
+			ascending:  []string{"2024-01-01 00:00:00", "2024-01-02 00:00:00"},
+			descending: []string{"2024-01-02 00:00:00", "2024-01-01 00:00:00"},
+			newVector: func(values []string) *vector.Vector {
+				return testutil.NewDatetimeVector(0, types.T_datetime.ToType(), mp, false, nil, values)
+			},
+			add: func(diff, unit int64) error {
+				_, err := doDatetimeAdd(types.DatetimeFromClock(2024, 1, 1, 0, 0, 0, 0), diff, unit)
+				return err
+			},
+			sub: func(diff, unit int64) error {
+				_, err := doDatetimeSub(types.DatetimeFromClock(2024, 1, 1, 0, 0, 0, 0), diff, unit)
+				return err
+			},
+		},
+		{
+			name:       "timestamp",
+			ascending:  []string{"2024-01-01 00:00:00", "2024-01-02 00:00:00"},
+			descending: []string{"2024-01-02 00:00:00", "2024-01-01 00:00:00"},
+			newVector: func(values []string) *vector.Vector {
+				return testutil.NewTimestampVector(0, types.T_timestamp.ToType(), mp, false, nil, values)
+			},
+			add: func(diff, unit int64) error {
+				start := types.DatetimeFromClock(2024, 1, 1, 0, 0, 0, 0).ToTimestamp(time.UTC)
+				_, err := doTimestampAdd(time.UTC, start, diff, unit)
+				return err
+			},
+			sub: func(diff, unit int64) error {
+				start := types.DatetimeFromClock(2024, 1, 1, 0, 0, 0, 0).ToTimestamp(time.UTC)
+				_, err := doTimestampSub(time.UTC, start, diff, unit)
+				return err
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		for _, interval := range []struct {
+			unit types.IntervalType
+			diff int64
+		}{
+			{types.Month, 12 * (1 << 32)},
+			{types.Quarter, 4 * (1 << 32)},
+			{types.Year, 1 << 32},
+		} {
+			t.Run(fmt.Sprintf("%s_%s", tc.name, interval.unit), func(t *testing.T) {
+				require.True(t, moerr.IsMoErrCode(tc.add(interval.diff, int64(interval.unit)), moerr.ErrOutOfRange))
+				require.True(t, moerr.IsMoErrCode(tc.sub(interval.diff, int64(interval.unit)), moerr.ErrOutOfRange))
+
+				expr := intervalExpr(interval.diff, interval.unit)
+				for _, order := range []struct {
+					name   string
+					values []string
+					desc   bool
+				}{
+					{name: "asc", values: tc.ascending},
+					{name: "desc", values: tc.descending, desc: true},
+				} {
+					t.Run(order.name, func(t *testing.T) {
+						vec := tc.newVector(order.values)
+						defer vec.Free(mp)
+
+						for _, operation := range []struct {
+							name         string
+							add          bool
+							wantBoundary int
+						}{
+							{name: "add", add: true, wantBoundary: temporalRangeOverflowBoundary(0, vec.Length(), true, order.desc)},
+							{name: "sub", wantBoundary: temporalRangeOverflowBoundary(0, vec.Length(), false, order.desc)},
+						} {
+							t.Run(operation.name, func(t *testing.T) {
+								// RANGE bounds are expressed in sort order, while the
+								// search helpers flip their arithmetic flag for DESC.
+								left, err := searchLeft(0, vec.Length(), 0, vec, expr, operation.add != order.desc, order.desc)
+								require.NoError(t, err)
+								require.Equal(t, operation.wantBoundary, left)
+
+								right, err := searchRight(0, vec.Length(), 0, vec, expr, !operation.add != order.desc, order.desc)
+								require.NoError(t, err)
+								require.Equal(t, operation.wantBoundary, right)
+							})
+						}
+					})
+				}
+			})
+		}
+	}
 }

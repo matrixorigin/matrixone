@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/export/etl"
+	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
 	"github.com/matrixorigin/matrixone/pkg/util/export/table"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 
@@ -188,6 +189,48 @@ func getdummyMpool() *mpool.MPool {
 		panic(err)
 	}
 	return mp
+}
+
+func TestDiscardIncompatibleFile(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewFS(t)
+	filePath := "etl:sys/logs/legacy-statement-info.csv"
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+		FilePath: filePath,
+		Entries:  []fileservice.IOEntry{{Size: int64(len("legacy")), Data: []byte("legacy")}},
+	}))
+
+	merge, err := NewMerge(ctx, "", WithFileService(fs), WithTable(dummyTable))
+	require.NoError(t, err)
+	require.NoError(t, merge.discardIncompatibleFile(ctx, &FileMeta{FilePath: filePath}, db_holder.ErrIncompatibleStatementInfoRecord))
+
+	_, err = fs.StatFile(ctx, filePath)
+	require.Error(t, err)
+
+	canceledCtx, cancel := context.WithCancel(ctx)
+	cancel()
+	require.Error(t, merge.discardIncompatibleFile(canceledCtx, &FileMeta{FilePath: filePath}, db_holder.ErrIncompatibleStatementInfoRecord))
+}
+
+func TestMergeDiscardsIncompatibleStatementInfoFile(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewFS(t)
+	filePath := "etl:sys/logs/legacy-statement-info.csv"
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+		FilePath: filePath,
+		Entries:  []fileservice.IOEntry{{Size: int64(len("statement\n")), Data: []byte("statement\n")}},
+	}))
+
+	statementInfoTable := &table.Table{Table: "statement_info"}
+	merge, err := NewMerge(ctx, "", WithFileService(fs), WithTable(statementInfoTable))
+	require.NoError(t, err)
+	merge.isRecordExisted = func(context.Context, []string, *table.Table, db_holder.DBConnProvider) (bool, error) {
+		return false, db_holder.ErrIncompatibleStatementInfoRecord
+	}
+
+	require.NoError(t, merge.doMergeFiles(ctx, []*FileMeta{{FilePath: filePath}}))
+	_, err = fs.StatFile(ctx, filePath)
+	require.Error(t, err)
 }
 
 func initSingleLogsFile(ctx context.Context, fs fileservice.FileService, tbl *table.Table, ts time.Time, ext string) (string, error) {
@@ -348,6 +391,61 @@ func TestMergeTaskExecutorFactory(t *testing.T) {
 	}
 }
 
+func TestMergeMainSkipsNonETLEntries(t *testing.T) {
+	ctx := trace.Generate(context.Background())
+	fs := testutil.NewETLFS()
+	ts, err := time.Parse("2006-01-02 15:04:05", "2026-08-27 00:00:00")
+	require.NoError(t, err)
+
+	rootPath := dummyTable.PathBuilder.Build(
+		dummyTable.Account,
+		table.MergeLogTypeLogs,
+		ts,
+		dummyTable.Database,
+		dummyTable.GetName(),
+	)
+	markerPath := rootPath + "/"
+	nestedPath := path.Join(rootPath, "nested", "file")
+	for _, filePath := range []string{markerPath, nestedPath} {
+		require.NoError(t, fs.Write(ctx, fileservice.IOVector{FilePath: filePath}))
+	}
+	entries, err := fileservice.SortedList(fs.List(ctx, rootPath))
+	require.NoError(t, err)
+	require.Equal(t, []fileservice.DirEntry{
+		{Name: "", IsDir: false, Size: 0},
+		{Name: "nested", IsDir: true, Size: 0},
+	}, entries)
+
+	merge, err := NewMerge(ctx, "", WithFileService(fs), WithTable(dummyTable))
+	require.NoError(t, err)
+	require.NoError(t, merge.Main(ctx))
+
+	for _, filePath := range []string{markerPath, nestedPath} {
+		_, err = fs.StatFile(ctx, filePath)
+		require.NoError(t, err)
+	}
+}
+
+func TestIsETLFile(t *testing.T) {
+	tests := []struct {
+		name     string
+		filePath string
+		want     bool
+	}{
+		{name: "csv", filePath: "rawlog.csv", want: true},
+		{name: "tae", filePath: "rawlog.tae", want: true},
+		{name: "folder marker", filePath: "rawlog/", want: false},
+		{name: "folder marker name", filePath: "rawlog", want: false},
+		{name: "empty marker name", filePath: "", want: false},
+		{name: "extension is not suffix", filePath: "rawlog.csv.tmp", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, isETLFile(tt.filePath))
+		})
+	}
+}
+
 func TestCreateCronTask(t *testing.T) {
 	store := taskservice.NewMemTaskStorage()
 	s := taskservice.NewTaskService(runtime.DefaultRuntime(), store)
@@ -474,6 +572,15 @@ func Test_newETLReader(t *testing.T) {
 			defer got.Close()
 		})
 	}
+
+	t.Run("unsupported", func(t *testing.T) {
+		filePath := "sys/logs/2026/08/27/rawlog/"
+		got, err := newETLReader(ctx, "", dummyTable, fs, filePath, 0, mp)
+		require.Nil(t, got)
+		require.Error(t, err)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+		require.ErrorContains(t, err, filePath)
+	})
 }
 
 func TestInitMerge(t *testing.T) {

@@ -108,7 +108,7 @@ func (rs *RemoteDataSource) batchPrefetch(seqNums []uint16) {
 
 	tombstoner := rs.data.GetTombstones()
 	if tombstoner != nil {
-		rs.data.GetTombstones().PrefetchTombstones(rs.proc.GetService(), rs.fs, bids)
+		rs.data.GetTombstones().PrefetchTombstones(rs.ctx, rs.proc.GetService(), rs.fs, bids)
 	}
 
 	rs.batchPrefetchCursor = end

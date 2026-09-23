@@ -72,6 +72,25 @@ func TestAcquireRejectsInvalidContexts(t *testing.T) {
 	require.True(t, errors.Is(err, context.Canceled))
 }
 
+func TestAdmissionLeaseReportsTiming(t *testing.T) {
+	manager := newManager(filepath.Join(t.TempDir(), "cluster.lock"), time.Millisecond)
+	lease, err := manager.acquire(context.Background(), Exclusive)
+	require.NoError(t, err)
+
+	beforeRelease := lease.Timing()
+	require.False(t, beforeRelease.RequestedAt.IsZero())
+	require.False(t, beforeRelease.AcquiredAt.IsZero())
+	require.GreaterOrEqual(t, beforeRelease.WaitDuration, time.Duration(0))
+	require.GreaterOrEqual(t, beforeRelease.HoldDuration, time.Duration(0))
+	require.True(t, beforeRelease.ReleasedAt.IsZero())
+
+	require.NoError(t, lease.Release())
+	afterRelease := lease.Timing()
+	require.False(t, afterRelease.ReleasedAt.IsZero())
+	require.GreaterOrEqual(t, afterRelease.WaitDuration, time.Duration(0))
+	require.GreaterOrEqual(t, afterRelease.HoldDuration, beforeRelease.HoldDuration)
+}
+
 func TestAdmissionIsExclusiveAcrossProcesses(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "cluster.lock")
 	owner := newManager(path, time.Millisecond)

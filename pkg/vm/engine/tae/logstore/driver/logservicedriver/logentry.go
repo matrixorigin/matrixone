@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"fmt"
 	"sort"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -33,6 +34,19 @@ const (
 	Cmd_Invalid CmdType = iota
 	Cmd_Normal
 	Cmd_SkipDSN
+)
+
+type SkipCmdVersion uint16
+
+const (
+	// SkipCmdVersionLegacy identifies V2 skip commands written before the
+	// DSN/PSN pair sorter was fixed. Their DSNs are valid, but their PSNs may
+	// have been permuted independently. The individual pairs are unreliable,
+	// while the DSN and PSN sets remain valid.
+	SkipCmdVersionLegacy SkipCmdVersion = iota
+	// SkipCmdVersionDSNPSN identifies skip commands whose sorted DSN and PSN
+	// arrays preserve the original pairs.
+	SkipCmdVersionDSNPSN
 )
 
 var emptyLogEntry = make([]byte, EmptyLogEntrySize)
@@ -68,9 +82,11 @@ func init() {
 	e.SetHeader(IOET_WALRecord, IOET_WALRecord_CurrVer, uint16(Cmd_Normal))
 	e = LogEntry(skipCmdBuffer)
 	e.SetHeader(IOET_WALRecord, IOET_WALRecord_CurrVer, uint16(Cmd_SkipDSN))
+	e.SetSkipCmdVersion(SkipCmdVersionDSNPSN)
 }
 
 type LogEntryWriter struct {
+	mu         sync.Mutex
 	Entry      LogEntry
 	Footer     LogEntryFooter
 	buf        bytes.Buffer
@@ -88,6 +104,12 @@ func NewLogEntryWriter() *LogEntryWriter {
 }
 
 func (w *LogEntryWriter) Reset() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.resetLocked()
+}
+
+func (w *LogEntryWriter) resetLocked() {
 	if w.Entry.Capacity() >= int(mpool.MB)*2 {
 		w.Entry = NewLogEntry()
 	} else {
@@ -105,10 +127,16 @@ func (w *LogEntryWriter) Reset() {
 		w.buf.Reset()
 	}
 	w.approxSize = 0
-	w.NotifyDone(nil)
+	w.notifyDoneLocked(nil)
 }
 
 func (w *LogEntryWriter) NotifyDone(err error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.notifyDoneLocked(err)
+}
+
+func (w *LogEntryWriter) notifyDoneLocked(err error) {
 	for i := 0; i < len(w.entries); i++ {
 		w.entries[i].DoneWithErr(err)
 		w.entries[i] = nil
@@ -117,10 +145,12 @@ func (w *LogEntryWriter) NotifyDone(err error) {
 }
 
 func (w *LogEntryWriter) Close() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	w.Entry = nil
 	w.Footer = nil
 	w.buf.Reset()
-	w.NotifyDone(nil)
+	w.notifyDoneLocked(nil)
 	w.entries = nil
 }
 
@@ -137,6 +167,12 @@ func (w *LogEntryWriter) Capacity() int {
 }
 
 func (w *LogEntryWriter) Append(buf []byte) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.appendLocked(buf)
+}
+
+func (w *LogEntryWriter) appendLocked(buf []byte) {
 	offset, length := w.Entry.AppendEntry(buf)
 	w.Footer.AppendEntry(offset, length)
 }
@@ -146,6 +182,12 @@ func (w *LogEntryWriter) SetSafeDSN(dsn uint64) {
 }
 
 func (w *LogEntryWriter) AppendEntry(entry *entry.Entry) (err error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.appendEntryLocked(entry)
+}
+
+func (w *LogEntryWriter) appendEntryLocked(entry *entry.Entry) (err error) {
 	if len(w.entries) == 0 {
 		w.Entry.SetStartDSN(entry.DSN)
 	}
@@ -160,6 +202,8 @@ func (w *LogEntryWriter) SetStartDSN(dsn uint64) {
 }
 
 func (w *LogEntryWriter) Finish() (LogEntry, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	for _, e := range w.entries {
 		if err := e.Entry.ExecuteGroupWalPreCallbacks(); err != nil {
 			return nil, err
@@ -167,11 +211,11 @@ func (w *LogEntryWriter) Finish() (LogEntry, error) {
 
 		w.buf.Reset()
 		if _, err := e.WriteTo(&w.buf); err != nil {
-			panic(err)
+			return nil, err
 		}
 
 		eBuf := w.buf.Bytes()
-		w.Append(eBuf)
+		w.appendLocked(eBuf)
 	}
 
 	w.Entry.SetFooter(w.Footer)
@@ -264,6 +308,10 @@ func (e LogEntry) GetCmdType() uint16 {
 	return types.DecodeUint16(e[CmdTypeOffset:])
 }
 
+func (e LogEntry) GetSkipCmdVersion() SkipCmdVersion {
+	return SkipCmdVersion(types.DecodeUint16(e[ReservedOffset:]))
+}
+
 func (e LogEntry) GetFooter() LogEntryFooter {
 	footerOffset := e.GetFooterOffset()
 	if footerOffset == 0 {
@@ -309,6 +357,11 @@ func (e LogEntry) SetHeader(
 	copy(e[TypeOffset:], types.EncodeUint16(&typ))
 	copy(e[VersionOffset:], types.EncodeUint16(&version))
 	copy(e[CmdTypeOffset:], types.EncodeUint16(&cmdType))
+}
+
+func (e LogEntry) SetSkipCmdVersion(version SkipCmdVersion) {
+	value := uint16(version)
+	copy(e[ReservedOffset:], types.EncodeUint16(&value))
 }
 
 func (e LogEntry) SetEntryCount(count uint32) {
@@ -382,6 +435,24 @@ func (e LogEntry) ForEachEntry(
 
 type SkipCmd []byte
 
+type skipCmdSorter struct {
+	dsns []uint64
+	psns []uint64
+}
+
+func (s skipCmdSorter) Len() int {
+	return len(s.dsns)
+}
+
+func (s skipCmdSorter) Less(i, j int) bool {
+	return s.dsns[i] < s.dsns[j]
+}
+
+func (s skipCmdSorter) Swap(i, j int) {
+	s.dsns[i], s.dsns[j] = s.dsns[j], s.dsns[i]
+	s.psns[i], s.psns[j] = s.psns[j], s.psns[i]
+}
+
 func NewSkipCmd(cnt int) SkipCmd {
 	return make([]byte, 16*cnt)
 }
@@ -425,14 +496,9 @@ func (s *SkipCmd) Reset(n int) {
 }
 
 func (s SkipCmd) Sort() {
-	dsns := s.GetDSNSlice()
-	psns := s.GetPSNSlice()
-	sort.Slice(dsns, func(i, j int) bool {
-		less := dsns[i] < dsns[j]
-		if less {
-			psns[i], psns[j] = psns[j], psns[i]
-		}
-		return less
+	sort.Sort(skipCmdSorter{
+		dsns: s.GetDSNSlice(),
+		psns: s.GetPSNSlice(),
 	})
 }
 
@@ -446,6 +512,7 @@ func SkipMapToLogEntry(skipMap map[uint64]uint64) LogEntry {
 	skipCmd.Sort()
 	e := NewLogEntry()
 	e.SetHeader(IOET_WALRecord, IOET_WALRecord_CurrVer, uint16(Cmd_SkipDSN))
+	e.SetSkipCmdVersion(SkipCmdVersionDSNPSN)
 	var footer LogEntryFooter
 	offset, length := e.AppendEntry(skipCmd)
 	footer.AppendEntry(offset, length)

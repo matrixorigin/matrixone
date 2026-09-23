@@ -20,8 +20,10 @@ import (
 	"errors"
 	"time"
 
+	"github.com/google/uuid"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	commonutil "github.com/matrixorigin/matrixone/pkg/common/util"
@@ -31,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	qclient "github.com/matrixorigin/matrixone/pkg/queryservice/client"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -62,6 +65,23 @@ type sqlExecutor struct {
 	taskservice taskservice.TaskService
 }
 
+func markMoColumnsUpdatePlan(pn *planpb.Plan) {
+	query := pn.GetQuery()
+	if query == nil {
+		return
+	}
+	for _, node := range query.Nodes {
+		if node == nil {
+			continue
+		}
+		for _, updateCtx := range node.UpdateCtxList {
+			if updateCtx.TableDef != nil && updateCtx.TableDef.TblId == catalog.MO_COLUMNS_ID {
+				updateCtx.TableDef.Name = catalog.MO_COLUMNS_UPDATE
+			}
+		}
+	}
+}
+
 func ensureExecutorContext(ctx context.Context) context.Context {
 	if ctx == nil {
 		return context.Background()
@@ -73,6 +93,13 @@ func newInternalStatementContext(parent context.Context) context.Context {
 	return statistic.ContextWithStatsInfo(
 		ensureExecutorContext(parent),
 		statistic.NewStatsInfo())
+}
+
+func markInternalJSONMergeWarningContext(ctx context.Context) context.Context {
+	return plan.WithJSONMergeWarningOrigin(
+		ctx,
+		plan.JSONMergeWarningInternalReprepare,
+	)
 }
 
 // NewSQLExecutor returns a internal used sql service. It can execute sql in current CN.
@@ -271,6 +298,32 @@ type txnExecutor struct {
 	database string
 }
 
+func (exec *txnExecutor) newCompile(
+	proc *process.Process,
+	stmt tree.Statement,
+	sql string,
+	receiveAt time.Time,
+) *Compile {
+	c := NewCompile(
+		exec.s.addr,
+		exec.getDatabase(),
+		sql,
+		"",
+		"",
+		exec.s.eng,
+		proc,
+		stmt,
+		false,
+		nil,
+		receiveAt,
+	)
+	// Every statement compiled here belongs to the txnExecutor's transaction.
+	// Borrowing the frontend session must not turn constituent temporary DDL
+	// (for example ALTER COPY CREATE/DROP) into an independent session txn.
+	c.temporaryDDLInExecutorTxn = true
+	return c
+}
+
 func newTxnExecutor(
 	ctx context.Context,
 	s *sqlExecutor,
@@ -299,7 +352,8 @@ func (exec *txnExecutor) Exec(
 	statementOption executor.StatementOption,
 ) (executor.Result, error) {
 	parentCtx := exec.ctx
-	exec.ctx = newInternalStatementContext(parentCtx)
+	exec.ctx = markInternalJSONMergeWarningContext(
+		newInternalStatementContext(parentCtx))
 	defer func() {
 		// The fresh StatsInfo is statement-owned. Do not retain it in a
 		// long-lived transaction executor or build an unbounded context chain.
@@ -337,10 +391,21 @@ func (exec *txnExecutor) Exec(
 			defines.AlterCopyOpt{}, v)
 	}
 
+	if h := statementOption.OptimizerHints(); h != "" {
+		exec.ctx = context.WithValue(exec.ctx,
+			defines.OptimizerHints{}, h)
+	}
+
 	if logicalId := statementOption.KeepLogicalId(); logicalId != 0 {
 		exec.ctx = context.WithValue(exec.ctx,
 			defines.LogicalIdKey{},
 			logicalId)
+	}
+
+	if kind, ok := statementOption.KeepRelKind(); ok {
+		exec.ctx = context.WithValue(exec.ctx,
+			defines.RelKindKey{},
+			kind)
 	}
 
 	// Keep historical behavior for internal SQL: bypass frontend privilege checks.
@@ -393,9 +458,18 @@ func (exec *txnExecutor) Exec(
 		nil,
 		exec.s.taskservice,
 	)
+	// Internal DML (including CTAS population) needs the same expression error
+	// policy as frontend DML, before planning can fold any constants.
+	initInternalStatementProfile(proc, stmts[0])
 	// Attach original frontend session to support session-scoped metadata
 	// (e.g. temporary-table alias mapping) in internal SQL compilation.
 	proc.Session = getInternalExecutorSession(exec.ctx)
+	proc.WarningSink = process.WarningSinkFromContext(exec.ctx)
+	if session, ok := proc.Session.(interface{ GetSessId() uuid.UUID }); ok {
+		// Internal temporary CREATEs belong to the original connection, including
+		// the physical-name prefix used by orphan-table cleanup.
+		proc.Base.SessionInfo.SessionId = session.GetSessId()
+	}
 	// A DisableIncrStatement execution runs on the caller's transaction
 	// without opening a statement, so its compile must not advance the
 	// workspace snapshot write offset (the statement boundary).
@@ -469,6 +543,9 @@ func (exec *txnExecutor) Exec(
 	if err != nil {
 		return executor.Result{}, err
 	}
+	if statementOption.AllowMoColumnsUpdate() {
+		markMoColumnsUpdatePlan(pn)
+	}
 
 	if prepared {
 		_, _, err := plan.ResetPreparePlan(compileContext, pn)
@@ -477,22 +554,11 @@ func (exec *txnExecutor) Exec(
 		}
 	}
 
-	c := NewCompile(
-		exec.s.addr,
-		exec.getDatabase(),
-		sql,
-		"",
-		"",
-		exec.s.eng,
-		proc,
-		stmts[0],
-		false,
-		nil,
-		receiveAt,
-	)
+	c := exec.newCompile(proc, stmts[0], sql, receiveAt)
 	c.SetOriginSQL(sql)
 	c.adjustTableExtraFunc = exec.opts.AdjustTableExtraFunc()
 	c.disableDropAutoIncrement = statementOption.DisableDropIncrStatement()
+	c.skipDataBranchReclaim = statementOption.SkipDataBranchReclaim()
 	c.keepAutoIncrement = statementOption.KeepAutoIncrement()
 	c.disableRetry = exec.opts.DisableIncrStatement()
 	c.ignorePublish = statementOption.IgnorePublish()
@@ -637,7 +703,7 @@ func publishInternalExecutorStreamResult(
 		return nil
 	case <-procCtx.Done():
 		result.Close()
-		return moerr.NewInternalError(procCtx, "context cancelled")
+		return context.Cause(procCtx)
 	case <-execCtx.Done():
 		result.Close()
 		return execCtx.Err()
@@ -724,4 +790,10 @@ func (exec *txnExecutor) getDatabase() string {
 		return exec.database
 	}
 	return exec.opts.Database()
+}
+
+func initInternalStatementProfile(proc *process.Process, stmt tree.Statement) {
+	profile := &process.StmtProfile{}
+	proc.SetStmtProfile(profile)
+	profile.SetStatementRuntimeProfile(stmt.GetStatementType(), stmt.GetQueryType(), tree.IsIgnoreStatement(stmt))
 }

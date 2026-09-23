@@ -199,7 +199,7 @@ drop table test14;
 
 -- datetime with n.m
 drop table if exists datetime01;
-create table datetime01(col1 datetime(3), col2 decimal);
+create table datetime01(col1 datetime(3), col2 decimal(38,0));
 insert into datetime01 values('2000-12-12 12:58:58.123',123.454648);
 insert into datetime01 values('1996-04-06 01:01:01.4',-78645312.7894);
 select * from datetime01;
@@ -241,7 +241,7 @@ drop table time01;
 
 -- time with n.m:+ - * / %
 drop table if exists time01;
-create table time01(col1 decimal,col2 time);
+create table time01(col1 decimal(38,0),col2 time);
 insert into time01 values(1787945645414794854456412,'12:20:59');
 insert into time01 values(-789466511231027845,'23:59:59');
 select * from time01;

@@ -95,8 +95,9 @@ select * from orders where __mo_query = 'select id, name from src';
 -- error: writes are rejected.
 insert into orders values (9,'x',1.0,'2026-01-01 00:00:00');
 
--- error: unknown option at CREATE time.
-create external table badopt (id int) engine = sql with ('recheck'='true');
+-- error: unknown option at CREATE time ('pushdown' is a real SQL option now:
+-- see foreign_exttab_pushdown.sql).
+create external table badopt (id int) engine = sql with ('compress'='true');
 
 -- error: bad driver in an inline config is rejected at CREATE time.
 create external table badcfg (id int) engine = sql with ('config'='{"driver":"nope","dsn":"x"}');

@@ -42,7 +42,7 @@ func bindAndOptimizeSelectQueryWithValidator(
 	validate func(*Query) error,
 ) (*Plan, error) {
 	return bindAndOptimizeSelectQueryWithValidatorAndCapture(
-		stmtType, ctx, stmt, isPrepareStmt, skipStats, validate, nil, false,
+		stmtType, ctx, stmt, isPrepareStmt, skipStats, validate, nil, false, "",
 	)
 }
 
@@ -55,6 +55,7 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 	validate func(*Query) error,
 	capture func(*BindContext),
 	restoreViewMySQLSpecialTypes bool,
+	persistedViewTarget string,
 ) (*Plan, error) {
 	start := time.Now()
 	defer func() {
@@ -62,6 +63,11 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 	}()
 
 	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt, true)
+	builder.sqlCalcFoundRows = selectHasSQLCalcFoundRows(stmt)
+	builder.persistedViewTarget = persistedViewTarget
+	builder.sessionSelectLimitMayStopEarly = sessionSelectLimitMayStopEarly(
+		ctx, stmt, isPrepareStmt,
+	)
 	bindCtx := NewBindContext(builder, nil)
 	bindCtx.restoreViewMySQLSpecialTypes = restoreViewMySQLSpecialTypes
 	if capture != nil {
@@ -77,7 +83,13 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 		return nil, err
 	}
 	builder.skipStats = skipStats
-	rootId = builder.reuseMultiReferenceCTEs(rootId)
+	// Shared-computation rewrites happen before createQuery, so parse the
+	// service-level rollback hint before entering either rewrite.
+	builder.parseOptimizeHints()
+	if !builder.sharedComputationDisabled() {
+		rootId = builder.reuseMultiReferenceCTEs(rootId)
+		rootId = builder.sharePendingGroupingSetInputs(rootId)
+	}
 	ctx.SetViews(bindCtx.views)
 	if capture != nil {
 		capture(bindCtx)
@@ -98,6 +110,32 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 			Query: query,
 		},
 	}, err
+}
+
+func sessionSelectLimitMayStopEarly(
+	ctx CompilerContext,
+	stmt *tree.Select,
+	isPrepareStmt bool,
+) bool {
+	if ctx == nil || stmt == nil || stmt.IsPerform || selectHasExplicitTopLevelLimit(stmt) {
+		return false
+	}
+	proc := ctx.GetProcess()
+	if proc == nil || proc.Base == nil || !proc.Base.SessionInfo.ApplySQLSelectLimit ||
+		proc.GetResolveVariableFunc() == nil {
+		return false
+	}
+	// A prepared plan resolves this dynamic session variable at every EXECUTE;
+	// even an unlimited value during PREPARE is not a proof for later runs.
+	if isPrepareStmt {
+		return true
+	}
+	value, err := ctx.ResolveVariable(SQLSelectLimitVariable, true, false)
+	if err != nil {
+		return true
+	}
+	limit, ok := value.(uint64)
+	return !ok || limit != ^uint64(0)
 }
 
 func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepareStmt bool, skipStats bool) (*Plan, error) {
@@ -126,12 +164,12 @@ func bindAndOptimizeInsertQuery(ctx CompilerContext, stmt *tree.Insert, isPrepar
 		}
 		// ON DUPLICATE KEY UPDATE is fully handled by the modern path; it must
 		// never fall back to the legacy ODKU operator. Two exceptions still fall
-		// back: plain INSERT (e.g. inserting into a system index table); and the
-		// degenerate ODKU on a table with no primary/unique key (no dedup key to
+		// back: ordinary plain INSERT (e.g. inserting into a system index table),
+		// and the degenerate ODKU on a table with no primary/unique key (no dedup key to
 		// represent the upsert; legacy treats it as a plain INSERT and preserves
 		// the prepared-statement parameters).
 		if !stmt.HasReturning() && moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML) &&
-			(len(stmt.OnDuplicateUpdate) == 0 ||
+			((len(stmt.GetOnDuplicateUpdate()) == 0 && !stmt.IsIgnore()) ||
 				err.Error() == noPkOnDupUpdateMsg) {
 			return buildInsert(stmt, ctx, false, isPrepareStmt)
 		}
@@ -611,13 +649,22 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (*P
 		applySQLSelectLimit(stmt.Select, queryPlan)
 		return queryPlan, nil
 	case *tree.ExplainStmt:
-		return buildExplainPlan(ctx, stmt.Statement, isPrepareStmt)
+		queryPlan, err := buildExplainPlan(ctx, stmt.Statement, isPrepareStmt)
+		if err != nil {
+			return nil, err
+		}
+		if err = ValidateUnresolvedIndexHints(ctx.GetContext(), queryPlan.GetQuery()); err != nil {
+			return nil, err
+		}
+		return queryPlan, nil
 	case *tree.ExplainAnalyze:
 		return buildExplainAnalyze(ctx, stmt, isPrepareStmt)
 	case *tree.ExplainPhyPlan:
 		return buildExplainPhyPlan(ctx, stmt, isPrepareStmt)
 	case *tree.Insert:
 		return bindAndOptimizeInsertQuery(ctx, stmt, isPrepareStmt, false)
+	case *tree.MultiInsert:
+		return bindAndOptimizeMultiInsertQuery(ctx, stmt, isPrepareStmt)
 	case *tree.Replace:
 		if stmt.HasReturning() {
 			return nil, moerr.NewNotSupported(ctx.GetContext(), "DML RETURNING does not support REPLACE")
@@ -778,6 +825,33 @@ func applySQLSelectLimit(stmt *tree.Select, queryPlan *Plan) {
 	}
 }
 
+func selectHasSQLCalcFoundRows(stmt *tree.Select) bool {
+	for stmt != nil {
+		switch body := stmt.Select.(type) {
+		case *tree.SelectClause:
+			return body.Option&tree.QuerySpecOptionSqlCalcFoundRows != 0
+		case *tree.ParenSelect:
+			stmt = body.Select
+		case *tree.UnionClause:
+			return selectStatementHasSQLCalcFoundRows(body.Left)
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+func selectStatementHasSQLCalcFoundRows(stmt tree.SelectStatement) bool {
+	switch stmt := stmt.(type) {
+	case *tree.Select:
+		return selectHasSQLCalcFoundRows(stmt)
+	case *tree.ParenSelect:
+		return selectHasSQLCalcFoundRows(stmt.Select)
+	default:
+		return false
+	}
+}
+
 // Parenthesized SELECTs are flattened by bindSelect. A LIMIT on any wrapper in
 // that chain is the top-level explicit LIMIT and takes precedence over the
 // session sql_select_limit value. Limits inside UNION arms and subqueries are
@@ -907,7 +981,11 @@ func findResultColumnSource(query *plan.Query, nodeID int32, expr *plan.Expr) *r
 	if query == nil || expr == nil || expr.GetCol() == nil {
 		return nil
 	}
-	return findResultColumnSourceAtNode(query, nodeID, expr.GetCol(), make(map[int32]bool))
+	// The result expression belongs to the node's own projection list, so its
+	// ColPos already carries that list's source identity. Local-slot semantics
+	// are introduced only when a PROJECT passes an output reference into a
+	// transparent child node.
+	return findResultColumnSourceAtNode(query, nodeID, expr.GetCol(), make(map[int32]bool), false)
 }
 
 func findResultColumnSourceAtNode(
@@ -915,6 +993,7 @@ func findResultColumnSourceAtNode(
 	nodeID int32,
 	ref *plan.ColRef,
 	visited map[int32]bool,
+	preferLocal bool,
 ) *resultColumnSource {
 	if query == nil || ref == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) || visited[nodeID] {
 		return nil
@@ -925,9 +1004,28 @@ func findResultColumnSourceAtNode(
 		return nil
 	}
 
+	if node.NodeType == plan.Node_VECTOR_INDEX_SCAN {
+		// VECTOR_INDEX_SCAN's TableDef describes the synthetic result schema
+		// (pkid, score, and optional included columns), not the source table.
+		// Resolve its output slots through the typed vector-index specification
+		// so a pkid or included column carries the same metadata as a regular
+		// table scan.  A score has no source column by design.
+		vectorRef := ref
+		if len(node.ProjectList) > 0 {
+			// The vector scan projection can be deliberately reordered. Its
+			// ColPos values are synthetic slots, so resolve by source identity
+			// rather than treating the projection-list index as a local slot.
+			sourceExpr := resultColumnProjectionByIdentity(node, ref)
+			if sourceExpr != nil && sourceExpr.GetCol() != nil {
+				vectorRef = sourceExpr.GetCol()
+			}
+		}
+		return resultColumnSourceFromVectorIndexScan(node.VectorIndexScan, node.TableDef, vectorRef.ColPos)
+	}
+
 	if node.TableDef != nil && isResultColumnSourceNode(node.NodeType) {
 		if len(node.ProjectList) > 0 {
-			if sourceExpr := resultColumnProjectionAtNode(node, ref); sourceExpr != nil {
+			if sourceExpr := resultColumnProjectionByIdentity(node, ref); sourceExpr != nil {
 				if sourceRef := sourceExpr.GetCol(); sourceRef != nil {
 					return resultColumnSourceFromTableDef(node.TableDef, sourceRef.ColPos)
 				}
@@ -947,7 +1045,7 @@ func findResultColumnSourceAtNode(
 		return nil
 	}
 
-	projected := resultColumnProjectionAtNode(node, ref)
+	projected := resultColumnProjectionAtNode(node, ref, preferLocal)
 	if projected == nil {
 		return nil
 	}
@@ -958,7 +1056,12 @@ func findResultColumnSourceAtNode(
 
 	var found *resultColumnSource
 	for _, childID := range node.Children {
-		candidate := findResultColumnSourceAtNode(query, childID, projectedRef, cloneVisitedResultColumnNodes(visited))
+		childPreferLocal := false
+		if node.NodeType == plan.Node_PROJECT && childID >= 0 && int(childID) < len(query.Nodes) {
+			child := query.Nodes[childID]
+			childPreferLocal = child != nil && isResultColumnTransparentNode(child.NodeType) && child.NodeType != plan.Node_PROJECT
+		}
+		candidate := findResultColumnSourceAtNode(query, childID, projectedRef, cloneVisitedResultColumnNodes(visited), childPreferLocal)
 		if candidate == nil {
 			continue
 		}
@@ -984,7 +1087,7 @@ func findResultColumnSourceAtJoin(
 
 	projectedRef := ref
 	childIdx := -1
-	if projected := resultColumnProjectionAtNode(node, ref); projected != nil {
+	if projected := resultColumnProjectionByIdentity(node, ref); projected != nil {
 		if col := projected.GetCol(); col != nil {
 			projectedRef = col
 			// JOIN ProjectList entries use RelPos 0/1 to identify the
@@ -1008,6 +1111,7 @@ func findResultColumnSourceAtJoin(
 			node.Children[childIdx],
 			projectedRef,
 			cloneVisitedResultColumnNodes(visited),
+			false,
 		)
 		return resultColumnSourceAfterJoin(candidate, node, childIdx)
 	}
@@ -1023,6 +1127,7 @@ func findResultColumnSourceAtJoin(
 			childID,
 			projectedRef,
 			cloneVisitedResultColumnNodes(visited),
+			false,
 		)
 		if candidate == nil {
 			continue
@@ -1113,7 +1218,27 @@ func cloneVisitedResultColumnNodes(visited map[int32]bool) map[int32]bool {
 	return clone
 }
 
-func resultColumnProjectionAtNode(node *plan.Node, ref *plan.ColRef) *plan.Expr {
+func resultColumnProjectionAtNode(node *plan.Node, ref *plan.ColRef, preferLocal bool) *plan.Expr {
+	if node == nil || ref == nil {
+		return nil
+	}
+	if preferLocal &&
+		node.NodeType != plan.Node_PROJECT &&
+		isResultColumnTransparentNode(node.NodeType) &&
+		ref.ColPos >= 0 && int(ref.ColPos) < len(node.ProjectList) {
+		// Transparent nodes expose a local output list to their parent. The
+		// expressions in that list retain child source positions, which can
+		// collide with another local output position after pruning. Resolve the
+		// local slot first for these nodes; PROJECT nodes are handled below by
+		// source identity because their expressions define the result order.
+		if expr := node.ProjectList[ref.ColPos]; expr != nil && expr.GetCol() != nil {
+			return expr
+		}
+	}
+	return resultColumnProjectionByIdentity(node, ref)
+}
+
+func resultColumnProjectionByIdentity(node *plan.Node, ref *plan.ColRef) *plan.Expr {
 	if node == nil || ref == nil {
 		return nil
 	}
@@ -1186,7 +1311,7 @@ func resultColumnRefsMatchByName(left, right *plan.ColRef) bool {
 
 func isResultColumnSourceNode(nodeType plan.Node_NodeType) bool {
 	switch nodeType {
-	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_FUNCTION_SCAN, plan.Node_VECTOR_INDEX_SCAN:
+	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_FUNCTION_SCAN:
 		return true
 	default:
 		return false

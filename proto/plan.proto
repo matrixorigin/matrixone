@@ -24,6 +24,11 @@ import "timestamp.proto";
 option go_package = "github.com/matrixorigin/matrixone/pkg/pb/plan";
 option (gogoproto.protosizer_all) = true;
 option (gogoproto.sizer_all) = false;
+// Keep the generated message layout compatible with the checked-in bindings
+// and preserve unknown fields when plans cross mixed-version nodes.
+option (gogoproto.goproto_unrecognized_all) = true;
+option (gogoproto.goproto_sizecache_all) = true;
+option (gogoproto.goproto_unkeyed_all) = true;
 
 message Type {
   int32 id = 1;
@@ -34,6 +39,9 @@ message Type {
   string table = 6;
   string enumvalues = 7;
   uint32 charset = 8;
+  // Internal semantic marker for VARCHAR/TEXT values that can carry
+  // representation-only CHAR padding through a transparent query boundary.
+  bool pad_space = 9;
 }
 
 message msgHeader {
@@ -87,6 +95,14 @@ message Literal {
   // literal_form records binder-visible syntax independently from isBin and
   // the resolved SQL string domain. Zero keeps old serialized plans valid.
   StringLiteralForm literal_form = 28;
+  // Executable value ownership encoded as container/types.StringSource + 1.
+  // Zero means an ordinary source literal for compatibility with old plans.
+  uint32 string_source = 29;
+  // The planner normalized a plain decimal literal spelling before selecting
+  // its exact DECIMAL carrier. Older CNs would reparse the original SQL and
+  // could round or reject the value differently, so persisted owners carrying
+  // this bit require the Decimal256 literal protocol fence.
+  bool decimal_literal_requires_v82 = 30;
 }
 
 // Bounded param for prepared statement.  User fill on execution.
@@ -233,6 +249,36 @@ message Function {
   repeated Expr args = 2;
   bytes agg_config = 3;
   AggregateConfigType agg_config_type = 4;
+  // Planner provenance only. Explicit CAST syntax can share the legacy CAST
+  // overload while optimizers still distinguish it from an implicit cast.
+  // Older CNs safely ignore this unknown field and execute the legacy overload.
+  bool syntax_explicit_cast = 5;
+}
+
+// PreparedNumericMetadata is sparse planner provenance for a numeric overload
+// or runtime string domain that cannot be represented by Expr.Type alone.
+// It is kept behind one optional pointer on Expr because the metadata is rare;
+// ordinary expressions must not carry five always-resident scalar fields.
+message PreparedNumericMetadata {
+  bool fallback = 1;
+  int32 param_pos = 2;
+  bool fallback_source = 3;
+  int32 fallback_source_node_id = 4;
+  int32 fallback_source_col_pos = 5;
+  // Marks a result-arm cast introduced only because a prepared marker is TEXT
+  // before SQL EXECUTE supplies its source domain. User-authored CAST never
+  // carries this bit and remains an authoritative boundary.
+  bool provisional_result_cast = 6;
+  // Marks a result peer coerced into the marker's prepare-time TEXT envelope.
+  bool provisional_result_peer = 7;
+  int32 provisional_result_peer_type_id = 8;
+  int32 provisional_result_peer_width = 9;
+  int32 provisional_result_peer_scale = 10;
+  // This field shares the already sparse expression-provenance allocation but
+  // is semantically independent of numeric fallback. It preserves the source
+  // expression needed to recompute a runtime string domain after derived-column
+  // or scalar-subquery flattening without adding another pointer to every Expr.
+  Expr string_domain_source = 11;
 }
 
 message Expr {
@@ -257,6 +303,13 @@ message Expr {
   int32 aux_id = 16;
   double ndv = 17;
   double selectivity = 18;
+  // prepared_numeric is explicit planner metadata, not an executor memo
+  // identity (AuxId), and therefore survives plan copies and RPC
+  // serialization. A negative param_pos means there is no single source
+  // marker. The source identity lets a flattened scalar-subquery consumer
+  // refresh its ColRef type after the inner projection is rebound.
+  PreparedNumericMetadata prepared_numeric = 19;
+  reserved 20 to 23;
 }
 
 message FoldVal {
@@ -271,6 +324,13 @@ message LiteralVec {
   // True when at least one element is a tuple-encoded serial value. This is
   // diagnostic provenance only; execution semantics remain in data.
   bool is_serialized = 3;
+  // Uniform runtime value owner. Values follow container/types.StringSource;
+  // zero is Expression so legacy and runtime-produced payloads stay ordinary.
+  uint32 string_source = 4;
+  // True when at least one element came from a plain decimal literal whose
+  // exact normalized binding requires the decimal protocol fence. This bit preserves
+  // the compatibility fence without disabling the compact vector encoding.
+  bool decimal_literal_requires_v82 = 5;
 }
 
 enum CompressType {
@@ -525,6 +585,8 @@ message TableDef {
   // Default collation class inherited by textual columns without an explicit
   // column-level collation. Uses the container/types Charset constants.
   uint32 default_charset = 39;
+  // Zero inherits the service policy; one disables speculative ID reservation.
+  uint64 auto_id_cache = 40;
 }
 
 message TableFunction {
@@ -683,6 +745,16 @@ message DedupJoinCtx {
   // dedup_build_keep_last is set only by REPLACE INTO. It allows duplicate
   // keys on the DEDUP JOIN build side and keeps the last source row.
   bool dedup_build_keep_last = 5;
+  ColRef affected_rows_col = 6;
+  ColRef physical_changed_rows_col = 7;
+  repeated int32 update_check_col_idx_list = 8;
+  bool count_found_rows = 9;
+  // emit_action_rows keeps every ordered ODKU action visible until immediate
+  // CHECK/FK validation has completed.  action_final_col marks the one row per
+  // conflict group that may continue to unique-index and physical-write paths.
+  bool emit_action_rows = 10;
+  ColRef action_final_col = 11;
+  repeated ODKUForeignKeyCheck foreign_key_checks = 12 [(gogoproto.nullable) = false];
 }
 
 message UpdateCtx {
@@ -700,6 +772,8 @@ message UpdateCtx {
   int32 target_update_ctx_idx = 15;
   repeated ColRef affected_rows_cols = 16 [(gogoproto.nullable) = false];
   ColRef changed_rows_col = 17;
+  ColRef affected_rows_weight_col = 18;
+  ColRef physical_changed_rows_col = 19;
 }
 
 message InsertCtx {
@@ -841,6 +915,8 @@ message VectorIndexScan {
   // The execution binder expands candidate_limit after prepared parameters are
   // available; readers receive both k and the bound candidate budget.
   bool post_filter_over_fetch = 17;
+  // Advisory local scan work. Absent when local DOP is not opted in.
+  VectorIndexScanWork scan_work = 18;
 }
 
 message Node {
@@ -908,6 +984,8 @@ message Node {
     MULTI_UPDATE = 54;
     POSTDML = 55;
     TABLE_CLONE = 56;
+    // Coordinator-local selector for bounded POST -> PRE -> FORCE Top-K candidates.
+    ADAPTIVE_TOP = 57;
   }
 
   enum JoinType {
@@ -963,6 +1041,14 @@ message Node {
     FUZZY_BUILD_SIDE_UNSPECIFIED = 0;
     FUZZY_BUILD_SIDE_TABLE = 1;
     FUZZY_BUILD_SIDE_SINK = 2;
+  }
+
+  // Physical implementation for ordinary window PARTITION nodes. SORT is the
+  // zero value so plans produced before this field existed retain the legacy
+  // execution path.
+  enum PartitionAlgorithm {
+    PARTITION_ALGORITHM_SORT = 0;
+    PARTITION_ALGORITHM_HASH = 1;
   }
 
   NodeType node_type = 1;
@@ -1142,9 +1228,27 @@ message Node {
   // VECTOR_INDEX_SCAN only: typed vector-index access-path description.
   VectorIndexScan vector_index_scan = 85;
 
+  // Physical equality expressions used by set operations and DISTINCT to
+  // compare rows without changing the user-visible projected representation.
+  // Empty preserves the legacy behavior of hashing every projected column.
+  repeated Expr physical_equality_key_list = 87;
+
   // ASOF/ASOF_LEFT only: right input column used to choose the latest
   // qualifying predecessor after equality-key lookup.
   int32 asof_right_col = 86;
+
+  // PARTITION only: optimizer-selected implementation for ordinary window
+  // partitioning. Partition Top-N ignores this field.
+  PartitionAlgorithm partition_algorithm = 90;
+
+  // PARTITION Top-N only: retain every peer of the Nth row so the reduced
+  // candidate stream is exact for RANK rather than only ROW_NUMBER.
+  bool partition_top_n_with_ties = 91;
+
+  // ADAPTIVE_TOP only: select the first candidate with any rows and use the
+  // final candidate only when the initial candidate is empty. This is used by
+  // explicit IVF POST fallback and preserves its partial-result behavior.
+  bool adaptive_top_fallback_on_empty = 92;
 }
 
 message SnapshotExtraInfo {
@@ -1226,6 +1330,11 @@ message ForeignScan {
   string config = 2;
   // default_query is the 'query' table option ("" when not set).
   string default_query = 3;
+  // pushdown is true when the table opted into predicate pushdown with
+  // 'pushdown' = 'true' (SQL only).  The safe zero value is "no pushdown":
+  // MO then sends the query text verbatim, which is correct against any
+  // remote.
+  bool pushdown = 4;
 }
 
 // KafkaScan describes a scan of a Kafka external table (CREATE EXTERNAL
@@ -1295,6 +1404,24 @@ message MongoScan {
   // during compilation. It remains distinct from the catalog mapping_id so a
   // cached logical plan can be compiled more than once without identity drift.
   uint64 table_id = 15;
+  // user_query_* is the validated, credential-free BSON representation selected
+  // by an explicit __mo_query predicate. kind is 1 for filter and 2 for pipeline;
+  // zero keeps the ordinary Find path unchanged.
+  int32 user_query_kind = 16;
+  bytes user_filter_bson = 17;
+  repeated bytes user_pipeline_stage_bson = 18;
+  // Only the digest and validated BSON cross the plan/pipeline boundary. The
+  // original query text can contain sensitive literals and must not appear in
+  // protobuf diagnostics. Execution reconstructs canonical Extended JSON from
+  // BSON only when __mo_query is explicitly projected.
+  string user_query_digest = 19;
+  // include_query_column asks MongoScan to append the synthetic __mo_query
+  // value to its converted batch. It is set only when a residual or projection
+  // still consumes that hidden column.
+  bool include_query_column = 20;
+  // empty_result records that query-level pruning rejected the only derived
+  // user query. Execution validates catalog identity but opens no source cursor.
+  bool empty_result = 21;
 }
 
 message MongoColumnMapping {
@@ -1376,6 +1503,30 @@ message PreInsertUkCtx {
   repeated int32 key_columns = 6;
   repeated int32 conflict_columns = 7;
   int32 output_columns = 8;
+  // ODKU target arbitration resolves every input row against both the
+  // pre-statement table snapshot and rows inserted earlier by this statement.
+  // key_columns and target_columns are parallel arrays in constraint priority
+  // order. A non-NULL target column names a pre-existing conflicting row;
+  // otherwise the operator consults its statement-local accepted-key state.
+  // Only a row that remains an INSERT publishes all of its keys.
+  bool odku_target_arbitration = 9;
+  repeated int32 target_columns = 10;
+  // INSERT IGNORE may reject a row after the allocator has already produced
+  // its auto-increment candidate.  When enabled, the arbiter reuses those
+  // candidates in accepted-row order.  The two positions are physical child
+  // positions after plan remapping; the key index identifies the primary-key
+  // entry in key_columns/conflict_columns.
+  bool auto_increment_reorder = 11;
+  int32 auto_increment_column = 12;
+  int32 auto_increment_generated_column = 13;
+  int32 auto_increment_key_index = 14;
+  int32 auto_increment_output_column = 15;
+  // User-facing metadata for diagnostics emitted by ordered INSERT IGNORE
+  // arbitration. key_names and key_type_counts are parallel to key_columns;
+  // key_types is the concatenation of the logical types for each key.
+  repeated string key_names = 16;
+  repeated Type key_types = 17;
+  repeated int32 key_type_counts = 18;
 }
 
 message PreInsertCtx {
@@ -1391,6 +1542,10 @@ message PreInsertCtx {
   int32 target_row_number_col = 10;
   int32 target_active_col = 11;
   int32 target_row_id_col = 12;
+  // PRE_INSERT emits a transient bool provenance vector when an ordered
+  // INSERT IGNORE arbiter must distinguish generated from explicit values.
+  bool track_auto_increment_generated = 13;
+  int32 auto_increment_generated_column = 14;
 }
 
 // RuntimeFilterKeyEncoding records the versioned producer-side closure
@@ -1435,6 +1590,15 @@ message RuntimeFilterSpec {
   // leave legacy expr unset. Probe specs continue to use expr for scan-side
   // evaluation.
   Expr build_expr = 10;
+  // The producer is the materialized result of an uncorrelated scalar
+  // subquery. The executor may publish an exact filter only after observing
+  // exactly one row; multiple rows must fail open so the SINGLE operator can
+  // enforce cardinality at its original logical scope.
+  bool scalar_predicate = 11;
+  // A required runtime filter is part of query semantics, not an optional
+  // probe-side acceleration. Consumers must reject PASS instead of executing
+  // a bounded operation without this input.
+  bool must_apply = 12;
 }
 
 message IdList {
@@ -1539,6 +1703,12 @@ message Query {
   // false when the SELECT has an explicit top-level LIMIT, which takes
   // precedence according to MySQL semantics.
   bool apply_sql_select_limit = 15;
+
+  // Index hints that could not be resolved from the table definition used to
+  // build this plan. The compiler validates their table metadata before
+  // execution so a committed concurrent CREATE INDEX can rebuild the plan;
+  // without a definition change, it returns the original key-not-found error.
+  repeated UnresolvedIndexHint unresolved_index_hints = 16;
 }
 
 message TransationControl {
@@ -1889,6 +2059,7 @@ message AlterCopyOpt {
   bool skip_pk_dedup = 2;
   string target_table_name = 3;
   map<string, bool> skip_indexes_copy = 4;
+  map<string, bool> new_plugin_indexes = 5;
 }
 
 message AlterTable {
@@ -2185,4 +2356,26 @@ message RankOption {
 
 message AlterTableAutoIncrement {
   uint64 new_offset = 1;
+}
+
+message ODKUForeignKeyCheck {
+  // Target-table column positions forming one child FK tuple.
+  repeated int32 col_idx_list = 1;
+  // Boolean output column set by DEDUP JOIN for each logical action. It is
+  // true for a new INSERT action or when this action changed the FK tuple.
+  ColRef eligibility_col = 2;
+}
+
+// Physical input work is separate from the scan's narrow output cardinality.
+// These estimates affect scheduling only, never filtering or authorization.
+message VectorIndexScanWork {
+  double rows = 1;
+  int32 blocks = 2;
+  double vector_bytes_per_row = 3;
+  int32 objects = 4;
+}
+
+message UnresolvedIndexHint {
+  ObjectRef table = 1;
+  string index_name = 2;
 }

@@ -18,6 +18,18 @@ package frontend
 
 import "net"
 
-func connectionPeerClosed(net.Conn) (bool, error) {
+type socketLivenessProbe struct{}
+
+func newSocketLivenessProbe(net.Conn) *socketLivenessProbe {
+	return &socketLivenessProbe{}
+}
+
+func (*socketLivenessProbe) connectionPeerClosed() (bool, error) {
 	return false, nil
 }
+
+func rawConnectionPeerClosed(net.Conn) (bool, error) {
+	return false, nil
+}
+
+func connectionPeerClosed(*Conn) (bool, error) { return false, nil }

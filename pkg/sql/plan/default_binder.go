@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -32,6 +33,27 @@ func NewDefaultBinder(sysCtx context.Context, builder *QueryBuilder, ctx *BindCo
 	return b
 }
 
+// NewDefaultBinderWithColumns binds an expression default against the
+// complete row schema. A default expression is evaluated with the value of
+// each referenced column in the same row, so resolving it against an outer
+// query would either report an ambiguous column or bind the wrong relation.
+// The referenced column types are retained because they need not match the
+// destination column's type.
+func NewDefaultBinderWithColumns(sysCtx context.Context, typ Type, cols []*ColDef) *DefaultBinder {
+	names := make([]string, len(cols))
+	colTypes := make([]Type, len(cols))
+	for i, col := range cols {
+		if col == nil {
+			continue
+		}
+		names[i] = col.Name
+		colTypes[i] = col.Typ
+	}
+	b := NewDefaultBinder(sysCtx, nil, nil, typ, names)
+	b.colTypes = colTypes
+	return b
+}
+
 func (b *DefaultBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*plan.Expr, error) {
 	return b.baseBindExpr(astExpr, depth, isRoot)
 }
@@ -44,10 +66,17 @@ func (b *DefaultBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, is
 }
 
 func (b *DefaultBinder) bindColRef(astExpr *tree.UnresolvedName, _ int32, _ bool) (expr *plan.Expr, err error) {
+	if astExpr.NumParts > 1 {
+		return nil, moerr.NewInvalidInputf(
+			b.GetContext(),
+			"default expression cannot use qualified column name '%s'",
+			astExpr.ColNameOrigin(),
+		)
+	}
 	col := astExpr.ColName()
 	idx := -1
 	for i, c := range b.cols {
-		if c == col {
+		if strings.EqualFold(c, col) {
 			idx = i
 			break
 		}
@@ -56,13 +85,16 @@ func (b *DefaultBinder) bindColRef(astExpr *tree.UnresolvedName, _ int32, _ bool
 		err = moerr.NewInvalidInputf(b.GetContext(), "column '%s' does not exist", astExpr.ColNameOrigin())
 		return
 	}
-	expr = &plan.Expr{
-		Typ: b.typ,
+	typ := b.typ
+	if idx < len(b.colTypes) {
+		typ = b.colTypes[idx]
 	}
+	expr = &plan.Expr{Typ: typ}
 	expr.Expr = &plan.Expr_Col{
 		Col: &plan.ColRef{
 			RelPos: 0,
 			ColPos: int32(idx),
+			Name:   col,
 		},
 	}
 	return
@@ -77,7 +109,10 @@ func (b *DefaultBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, dep
 }
 
 func (b *DefaultBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
-	return nil, moerr.NewNYI(b.GetContext(), "subquery in JOIN condition")
+	if !b.allowSubquery {
+		return nil, moerr.NewNYI(b.GetContext(), "subquery in JOIN condition")
+	}
+	return b.baseBindSubquery(astExpr, isRoot)
 }
 
 func (b *DefaultBinder) BindTimeWindowFunc(funcName string, astExpr *tree.FuncExpr, depth int32, isRoot bool) (*plan.Expr, error) {

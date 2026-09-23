@@ -293,6 +293,87 @@ func TestAccountedDistinctGroupConcatDeduplicatesAndMerges(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestAccountedGroupConcatUnmarshalPreservesOrderAcrossArenaGrowth(t *testing.T) {
+	const rows = 4096
+
+	mp := mpool.MustNewZero()
+	registry, account, allocation := newTestAggregateAllocation(t)
+	makeExec := func() *groupConcatExec {
+		exec := newGroupConcatExec(mp, multiAggInfo{
+			aggID:     AggIdOfGroupConcat,
+			argTypes:  []types.Type{types.T_varchar.ToType()},
+			retType:   types.T_text.ToType(),
+			emptyNull: true,
+		}, "|").(*groupConcatExec)
+		require.NoError(t, exec.SetAllocationAccount(allocation))
+		return exec
+	}
+
+	source, target := makeExec(), makeExec()
+	defer func() {
+		for _, exec := range []*groupConcatExec{source, target} {
+			exec.Free()
+			require.NoError(t, exec.ClearAllocationAccount(allocation))
+		}
+		finishTestAggregateAllocation(t, registry, account)
+		require.Zero(t, mp.CurrNB())
+	}()
+	require.NoError(t, source.GroupGrow(2))
+
+	input := vector.NewVec(types.T_varchar.ToType())
+	defer input.Free(mp)
+	groups := make([]uint64, hashmap.UnitLimit)
+	for row := range groups {
+		groups[row] = uint64(row%2 + 1)
+	}
+	payload := strings.Repeat("x", 512)
+	var expected [2]strings.Builder
+	for row := range rows {
+		value := fmt.Sprintf("%04d-%s", row, payload)
+		require.NoError(t, vector.AppendBytes(input, []byte(value), false, mp))
+		group := row % 2
+		if expected[group].Len() > 0 {
+			expected[group].WriteByte('|')
+		}
+		expected[group].WriteString(value)
+	}
+	for offset := 0; offset < rows; offset += hashmap.UnitLimit {
+		workGroups := groups[:min(hashmap.UnitLimit, rows-offset)]
+		require.NoError(t, source.PreflightBatchFill(
+			offset, workGroups, []*vector.Vector{input}))
+		require.NoError(t, source.BatchFill(
+			offset, workGroups, []*vector.Vector{input}))
+	}
+
+	var encoded bytes.Buffer
+	require.NoError(t, source.SaveIntermediateResult(
+		2, [][]uint8{{1, 1}}, &encoded))
+	require.NoError(t, target.UnmarshalFromReader(
+		bytes.NewReader(encoded.Bytes()), mp))
+	targetBase := target.aggregateBase()
+	require.Greater(t, len(targetBase.state[0].argbuf), 4*kAggArgArenaSize,
+		"the ordered saved arguments must cross several arena relocations")
+
+	followup := buildVarlenVec(t, mp, types.T_varchar.ToType(),
+		[]string{"tail-even", "tail-odd"})
+	defer followup.Free(mp)
+	require.NoError(t, target.PreflightBatchFill(
+		0, []uint64{1, 2}, []*vector.Vector{followup}))
+	require.NoError(t, target.BatchFill(
+		0, []uint64{1, 2}, []*vector.Vector{followup}))
+	expected[0].WriteString("|tail-even")
+	expected[1].WriteString("|tail-odd")
+
+	results, err := target.Flush()
+	require.NoError(t, err)
+	require.Len(t, results, 1)
+	defer results[0].Free(mp)
+	for group := range 2 {
+		require.Equal(t, expected[group].String(),
+			string(results[0].GetBytesAt(group)))
+	}
+}
+
 func TestAccountedOrderedGroupConcatSortsDeduplicatesAndMerges(t *testing.T) {
 	for _, distinct := range []bool{false, true} {
 		t.Run(fmt.Sprintf("distinct=%t", distinct), func(t *testing.T) {
@@ -571,6 +652,178 @@ func TestAccountedHLLPreflightRollbackAndSpillRoundTrip(t *testing.T) {
 	require.NoError(t, restoredOwner.ClearAllocationAccount(allocation))
 	finishTestAggregateAllocation(t, registry, account)
 	require.Zero(t, mp.CurrNB())
+}
+
+func TestAccountedOpaqueSpillStateReplacementReleasesPreviousState(t *testing.T) {
+	tests := []struct {
+		name   string
+		id     int64
+		param  types.Type
+		extra  []byte
+		values func(t *testing.T, mp *mpool.MPool, rows int, base int64) *vector.Vector
+	}{
+		{
+			name:  "hll",
+			id:    AggIdOfApproxCount,
+			param: types.T_int64.ToType(),
+			values: func(t *testing.T, mp *mpool.MPool, rows int, base int64) *vector.Vector {
+				values := make([]int64, rows)
+				for i := range values {
+					values[i] = base + int64(i)
+				}
+				return buildFixedVec(t, mp, types.T_int64.ToType(), values)
+			},
+		},
+		{
+			name:  "approx-percentile",
+			id:    AggIdOfApproxPercentile,
+			param: types.T_int64.ToType(),
+			extra: []byte("0.5"),
+			values: func(t *testing.T, mp *mpool.MPool, rows int, base int64) *vector.Vector {
+				values := make([]int64, rows)
+				for i := range values {
+					values[i] = base + int64(i)
+				}
+				return buildFixedVec(t, mp, types.T_int64.ToType(), values)
+			},
+		},
+		{
+			name:  "bitmap",
+			id:    AggIdOfBitmapConstruct,
+			param: types.T_uint64.ToType(),
+			values: func(t *testing.T, mp *mpool.MPool, rows int, base int64) *vector.Vector {
+				values := make([]uint64, rows)
+				for i := range values {
+					values[i] = uint64(base + int64(i))
+				}
+				return buildFixedVec(t, mp, types.T_uint64.ToType(), values)
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			registry, account, allocation := newTestAggregateAllocation(t)
+
+			makeRecord := func(rows int, populated bool, base int64) []byte {
+				exec, err := MakeGroupAgg(
+					mp, tc.id, false, allocation, nil, tc.param)
+				require.NoError(t, err)
+				if tc.extra != nil {
+					require.NoError(t, exec.SetExtraInformation(tc.extra, 0))
+				}
+				require.NoError(t, exec.GroupGrow(rows))
+				if populated {
+					input := tc.values(t, mp, rows, base)
+					groups := make([]uint64, rows)
+					for i := range groups {
+						groups[i] = uint64(i + 1)
+					}
+					require.NoError(t, exec.PreflightBatchFill(
+						0, groups, []*vector.Vector{input}))
+					require.NoError(t, exec.BatchFill(
+						0, groups, []*vector.Vector{input}))
+					input.Free(mp)
+				}
+
+				var encoded bytes.Buffer
+				require.NoError(t, exec.SaveSpillIntermediateRows(
+					0, func() []int32 {
+						rows := make([]int32, rows)
+						for i := range rows {
+							rows[i] = int32(i)
+						}
+						return rows
+					}(), &encoded))
+				exec.Free()
+				require.NoError(t, exec.ClearAllocationAccount(allocation))
+				return append([]byte(nil), encoded.Bytes()...)
+			}
+
+			// Keep the same state shape so a second spill record takes the reuse
+			// branch. The old implementation leaked one opaque object per decode.
+			first := makeRecord(2, true, 1)
+			second := makeRecord(2, true, 10001)
+			smaller := makeRecord(1, true, 20001)
+			nilState := makeRecord(1, false, 0)
+			baseline := account.Snapshot().Used
+
+			target, err := MakeGroupAgg(
+				mp, tc.id, false, allocation, nil, tc.param)
+			require.NoError(t, err)
+			if tc.extra != nil {
+				require.NoError(t, target.SetExtraInformation(tc.extra, 0))
+			}
+			codec := target.(SpillStateCodec)
+			require.NoError(t, codec.UnmarshalSpillFromReader(
+				bytes.NewReader(first), mp))
+			firstUsed := account.Snapshot().Used
+			require.Equal(t, 2, target.GetNumGroups())
+			var firstState bytes.Buffer
+			require.NoError(t, codec.SaveSpillIntermediateRows(
+				0, []int32{0, 1}, &firstState))
+			require.NoError(t, codec.UnmarshalSpillFromReader(
+				bytes.NewReader(second), mp))
+			require.Equal(t, firstUsed, account.Snapshot().Used)
+			require.Equal(t, 2, target.GetNumGroups())
+			var secondState bytes.Buffer
+			require.NoError(t, codec.SaveSpillIntermediateRows(
+				0, []int32{0, 1}, &secondState))
+			require.NotEqual(t, firstState.Bytes(), secondState.Bytes(),
+				"replacement must publish the new opaque state, not only release the old one")
+
+			// A smaller populated record must release the tail state as well as
+			// replace the first row. This covers the multiple-to-fewer transition
+			// that otherwise leaves an unreachable opaque object in ag.mobs.
+			require.NoError(t, codec.UnmarshalSpillFromReader(
+				bytes.NewReader(smaller), mp))
+			oneUsed := account.Snapshot().Used
+			require.Less(t, oneUsed, firstUsed)
+			require.Equal(t, 1, target.GetNumGroups())
+			require.NoError(t, codec.UnmarshalSpillFromReader(
+				bytes.NewReader(smaller), mp))
+			require.Equal(t, oneUsed, account.Snapshot().Used)
+			require.Equal(t, 1, target.GetNumGroups())
+
+			// A malformed replacement must release the partially decoded opaque
+			// objects too; UnmarshalSpillFromReader owns this failure cleanup.
+			require.Error(t, codec.UnmarshalSpillFromReader(
+				bytes.NewReader(first[:len(first)-1]), mp))
+			require.Equal(t, baseline, account.Snapshot().Used)
+			require.Zero(t, target.GetNumGroups())
+			require.NoError(t, codec.UnmarshalSpillFromReader(
+				bytes.NewReader(first), mp))
+			require.Equal(t, 2, target.GetNumGroups())
+
+			// A nil opaque row must clear the previous pointer instead of keeping
+			// the old sketch alive and returning a stale result.
+			require.NoError(t, codec.UnmarshalSpillFromReader(
+				bytes.NewReader(nilState), mp))
+			require.Equal(t, baseline, account.Snapshot().Used)
+			require.Equal(t, 1, target.GetNumGroups())
+
+			// A zero-row spill record takes the full state-reset path. It must
+			// release an already populated opaque state as well. Repopulate first so
+			// this assertion is independent of the nil-state case above.
+			require.NoError(t, codec.UnmarshalSpillFromReader(
+				bytes.NewReader(first), mp))
+			require.NoError(t, codec.UnmarshalSpillFromReader(func() *bytes.Reader {
+				var empty bytes.Buffer
+				require.NoError(t, types.WriteUint64(&empty, spillMagicNumber))
+				require.NoError(t, types.WriteInt32(&empty, 0))
+				require.NoError(t, types.WriteUint64(&empty, spillMagicNumber))
+				return bytes.NewReader(empty.Bytes())
+			}(), mp))
+			require.Equal(t, baseline, account.Snapshot().Used)
+			require.Zero(t, target.GetNumGroups())
+
+			target.Free()
+			require.NoError(t, target.ClearAllocationAccount(allocation))
+			finishTestAggregateAllocation(t, registry, account)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
 }
 
 func TestAccountedApproxPercentilePreflightAndSpillRoundTrip(t *testing.T) {
@@ -1043,7 +1296,10 @@ func TestDistinctFillPreflightUsesPublishedNodeFootprints(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, exact, exactAgain)
 	require.Equal(t, uint32(rows), count)
-	_, count, err = run(exact-1, false)
+	// If the optional fixed index cannot be admitted, preflight may retry with
+	// the legacy skiplist representation. Leave exactly its initial arena
+	// budget available so this assertion exercises that fallback's own bound.
+	_, count, err = run(exact-(40<<10), false)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 	require.Zero(t, count, "failed admission must not publish distinct keys")
 }

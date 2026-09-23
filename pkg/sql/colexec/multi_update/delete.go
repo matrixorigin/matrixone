@@ -82,6 +82,7 @@ func (update *MultiUpdate) delete_table(
 
 		crs := analyzer.GetOpCounterSet()
 		newCtx := perfcounter.AttachS3RequestKey(proc.Ctx, crs)
+		newCtx = update.writeContext(newCtx, targetTableID(updateCtx))
 		err = process.MeasureFilesystemWaitErr(analyzer, func() error {
 			return source.Delete(newCtx, deleteBatch, catalog.Row_ID)
 		})

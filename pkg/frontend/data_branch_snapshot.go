@@ -42,11 +42,15 @@ func branchSnapshotName(childTableID uint64) string {
 // databranchutils.BranchSnapshotKind.
 const branchSnapshotKind = databranchutils.BranchSnapshotKind
 
-func historicalAlterLineageMetadataSQL() string {
+func branchMetadataReclaimSQL() string {
 	return fmt.Sprintf(
 		"select table_id, p_table_id, clone_ts, creator, level, table_deleted from %s.%s for update",
 		catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
 	)
+}
+
+func historicalAlterLineageMetadataSQL() string {
+	return branchMetadataReclaimSQL()
 }
 
 func historicalAlterLineageEdgeSQL() string {
@@ -319,10 +323,7 @@ func loadBranchDAGWithBH(
 	// their sibling's `table_deleted=true` flip, and each decline to
 	// reclaim `__mo_branch_<A>` — leaking the snapshot forever (review
 	// PR#24313 blocking issue #1).
-	sql := fmt.Sprintf(
-		"select table_id, p_table_id, clone_ts, level, table_deleted from %s.%s for update",
-		catalog.MO_CATALOG, catalog.MO_BRANCH_METADATA,
-	)
+	sql := branchMetadataReclaimSQL()
 	if err := bh.Exec(sysCtx, sql); err != nil {
 		return databranchutils.BranchReclaimDag{}, err
 	}
@@ -352,11 +353,15 @@ func loadBranchDAGWithBH(
 			if gerr != nil {
 				return databranchutils.BranchReclaimDag{}, gerr
 			}
-			level, gerr := er.GetString(sysCtx, row, 3)
+			creator, gerr := er.GetUint64(sysCtx, row, 3)
 			if gerr != nil {
 				return databranchutils.BranchReclaimDag{}, gerr
 			}
-			deletedInt, gerr := er.GetInt64(sysCtx, row, 4)
+			level, gerr := er.GetString(sysCtx, row, 4)
+			if gerr != nil {
+				return databranchutils.BranchReclaimDag{}, gerr
+			}
+			deletedInt, gerr := er.GetInt64(sysCtx, row, 5)
 			if gerr != nil {
 				return databranchutils.BranchReclaimDag{}, gerr
 			}
@@ -364,12 +369,44 @@ func loadBranchDAGWithBH(
 				TableID:      tableID,
 				CloneTS:      cloneTS,
 				PTableID:     parentID,
+				Creator:      creator,
 				Level:        level,
 				TableDeleted: deletedInt != 0,
 			})
 		}
 	}
 	return databranchutils.NewBranchReclaimDag(rows), nil
+}
+
+// reclaimAccountOwnedBranchMetadataWithBH reclaims only normal branch edges
+// whose complete descendant subtree is deleted. The account owner is used to
+// choose roots, while ancestor edges are included in the returned plan so a
+// child-account drop can finish reclaiming a chain retained by an earlier
+// source-account drop.
+func reclaimAccountOwnedBranchMetadataWithBH(
+	ctx context.Context,
+	bh BackgroundExec,
+	accountID uint64,
+) error {
+	dag, err := loadBranchDAGWithBH(ctx, bh)
+	if err != nil {
+		return err
+	}
+	plan := databranchutils.ComputeAccountBranchReclaimPlan(dag, accountID)
+	sysCtx := defines.AttachAccountId(ctx, sysAccountID)
+	for _, sql := range []string{
+		databranchutils.BuildBranchSnapshotDeleteSQL(plan.SnapshotNames),
+		databranchutils.BuildBranchMetadataDeleteSQL(plan.MetadataTableIDs),
+	} {
+		if sql == "" {
+			continue
+		}
+		bh.ClearExecResultSet()
+		if err = bh.Exec(sysCtx, sql); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // reclaimBranchSnapshotsWithBH is the BackgroundExec-backed entry point used

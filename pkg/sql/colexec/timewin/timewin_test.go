@@ -1481,3 +1481,31 @@ func TestAvgTwResult(t *testing.T) {
 		require.Equal(t, int64(0), mg.CurrNB())
 	}
 }
+
+type timeWindowWarningSink struct{ total uint64 }
+
+func (s *timeWindowWarningSink) AppendWarningBatch(total uint64, _ []uint16, _ []string) {
+	s.total += total
+}
+
+func TestTimeWinGroupConcatTruncationDiagnostic(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	sink := &timeWindowWarningSink{}
+	proc.WarningSink = sink
+	input := testutil.MakeVarlenaVector([][]byte{[]byte("abc"), []byte("def")}, nil, types.T_varchar.ToType(), proc.Mp())
+	defer input.Free(proc.Mp())
+	agg, err := aggexec.MakeAgg(proc.Mp(), aggexec.AggIdOfGroupConcat, false, types.T_varchar.ToType())
+	require.NoError(t, err)
+	require.NoError(t, agg.SetExtraInformation(aggexec.EncodeGroupConcatConfig("", 5), 0))
+	require.NoError(t, agg.GroupGrow(1))
+	require.NoError(t, agg.BatchFill(0, []uint64{1, 1}, []*vector.Vector{input}))
+	arg := &TimeWin{}
+	arg.ctr.colCnt = 1
+	arg.ctr.aggs = []aggexec.AggFuncExec{agg}
+	require.NoError(t, arg.ctr.calRes(arg, proc))
+	require.Equal(t, "abcde", string(arg.ctr.bat.Vecs[0].GetBytesAt(0)))
+	require.Equal(t, uint64(1), sink.total)
+	aggexec.ReportGroupConcatWarnings(agg, sink)
+	require.Equal(t, uint64(1), sink.total)
+	arg.Free(proc, false, nil)
+}

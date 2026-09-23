@@ -35,6 +35,7 @@ import (
 	"golang.org/x/exp/slices"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	util2 "github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -62,6 +63,7 @@ var DefaultCapability = CLIENT_LONG_PASSWORD |
 	CLIENT_SECURE_CONNECTION |
 	CLIENT_MULTI_STATEMENTS |
 	CLIENT_MULTI_RESULTS |
+	CLIENT_PS_MULTI_RESULTS |
 	CLIENT_PLUGIN_AUTH |
 	CLIENT_PLUGIN_AUTH_LENENC_CLIENT_DATA |
 	CLIENT_DEPRECATE_EOF |
@@ -532,6 +534,14 @@ func (mp *MysqlProtocolImpl) GetCapability() uint32 {
 	return mp.capability
 }
 
+// GetCollationID returns the negotiated client collation. The value is part
+// of the immutable protocol shape of a cached backend connection.
+func (mp *MysqlProtocolImpl) GetCollationID() int {
+	mp.m.Lock()
+	defer mp.m.Unlock()
+	return mp.collationID
+}
+
 func (mp *MysqlProtocolImpl) SetCapability(cap uint32) {
 	mp.m.Lock()
 	defer mp.m.Unlock()
@@ -660,6 +670,177 @@ type response320 struct {
 	isAskForTlsHeader bool
 }
 
+// changeUserRequest is the command-phase authentication payload described by
+// COM_CHANGE_USER. It is intentionally parsed from the negotiated capability
+// mask rather than accepting a handshake-response packet: the two layouts are
+// similar, but not interchangeable.
+type changeUserRequest struct {
+	username         string
+	authResponse     []byte
+	database         string
+	collationID      int
+	hasCollation     bool
+	clientPluginName string
+	connectAttrs     map[string]string
+}
+
+type mysqlProtocolSessionState struct {
+	session       *Session
+	username      string
+	database      string
+	authResponse  []byte
+	authString    []byte
+	collationID   int
+	collationName string
+	charset       string
+	connectAttrs  map[string]string
+}
+
+func cloneProtocolStringMap(src map[string]string) map[string]string {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]string, len(src))
+	for key, value := range src {
+		dst[key] = value
+	}
+	return dst
+}
+
+func (mp *MysqlProtocolImpl) snapshotSessionState() mysqlProtocolSessionState {
+	mp.m.Lock()
+	defer mp.m.Unlock()
+	return mysqlProtocolSessionState{
+		session:       mp.ses,
+		username:      mp.GetUserName(),
+		database:      mp.GetDatabaseName(),
+		authResponse:  append([]byte(nil), mp.authResponse...),
+		authString:    append([]byte(nil), mp.authString...),
+		collationID:   mp.collationID,
+		collationName: mp.collationName,
+		charset:       mp.charset,
+		connectAttrs:  cloneProtocolStringMap(mp.connectAttrs),
+	}
+}
+
+func (mp *MysqlProtocolImpl) setSessionState(state mysqlProtocolSessionState) {
+	mp.m.Lock()
+	defer mp.m.Unlock()
+	mp.ses = state.session
+	if mp.tcpConn != nil {
+		mp.tcpConn.SetSession(state.session)
+	}
+	mp.username.Store(state.username)
+	mp.database.Store(state.database)
+	mp.authResponse = append(mp.authResponse[:0], state.authResponse...)
+	mp.authString = append(mp.authString[:0], state.authString...)
+	mp.collationID = state.collationID
+	mp.collationName = state.collationName
+	mp.charset = state.charset
+	mp.connectAttrs = cloneProtocolStringMap(state.connectAttrs)
+}
+
+func (mp *MysqlProtocolImpl) setChangeUserState(ses *Session, req changeUserRequest) {
+	state := mysqlProtocolSessionState{
+		session:      ses,
+		username:     req.username,
+		database:     req.database,
+		authResponse: req.authResponse,
+		connectAttrs: req.connectAttrs,
+	}
+	if req.hasCollation {
+		collation := collationID2CharsetAndName[req.collationID]
+		state.collationID = req.collationID
+		state.collationName = collation.collationName
+		state.charset = collation.charset
+	} else {
+		current := mp.snapshotSessionState()
+		state.collationID = current.collationID
+		state.collationName = current.collationName
+		state.charset = current.charset
+	}
+	mp.setSessionState(state)
+}
+
+func (mp *MysqlProtocolImpl) parseChangeUserRequest(ctx context.Context, data []byte) (changeUserRequest, error) {
+	var req changeUserRequest
+	pos := 0
+	var ok bool
+	req.username, pos, ok = mp.readStringNUL(data, pos)
+	if !ok {
+		return req, moerr.NewInvalidInput(ctx, "malformed COM_CHANGE_USER username")
+	}
+
+	capability := mp.GetCapability()
+	if capability&CLIENT_SECURE_CONNECTION != 0 {
+		var authLength uint8
+		authLength, pos, ok = mp.io.ReadUint8(data, pos)
+		if !ok {
+			return req, moerr.NewInvalidInput(ctx, "malformed COM_CHANGE_USER auth-response length")
+		}
+		req.authResponse, pos, ok = mp.readCountOfBytes(data, pos, int(authLength))
+		if !ok {
+			return req, moerr.NewInvalidInput(ctx, "malformed COM_CHANGE_USER auth-response")
+		}
+	} else {
+		var auth string
+		auth, pos, ok = mp.readStringNUL(data, pos)
+		if !ok {
+			return req, moerr.NewInvalidInput(ctx, "malformed COM_CHANGE_USER auth-response")
+		}
+		req.authResponse = []byte(auth)
+	}
+
+	req.database, pos, ok = mp.readStringNUL(data, pos)
+	if !ok {
+		return req, moerr.NewInvalidInput(ctx, "malformed COM_CHANGE_USER database")
+	}
+	if pos < len(data) && capability&CLIENT_PROTOCOL_41 != 0 {
+		var collationID uint16
+		collationID, pos, ok = mp.io.ReadUint16(data, pos)
+		if !ok {
+			return req, moerr.NewInvalidInput(ctx, "malformed COM_CHANGE_USER character set")
+		}
+		req.collationID = int(collationID)
+		if _, exists := collationID2CharsetAndName[req.collationID]; !exists {
+			return req, moerr.NewInvalidInputf(ctx, "unsupported COM_CHANGE_USER character set %d", collationID)
+		}
+		req.hasCollation = true
+	}
+	if pos < len(data) && capability&CLIENT_PLUGIN_AUTH != 0 {
+		req.clientPluginName, pos, ok = mp.readStringNUL(data, pos)
+		if !ok {
+			return req, moerr.NewInvalidInput(ctx, "malformed COM_CHANGE_USER authentication plugin")
+		}
+	}
+	if pos < len(data) && capability&CLIENT_CONNECT_ATTRS != 0 {
+		var attrsLength uint64
+		attrsLength, pos, ok = mp.readIntLenEnc(data, pos)
+		if !ok || attrsLength > uint64(len(data)-pos) {
+			return req, moerr.NewInvalidInput(ctx, "malformed COM_CHANGE_USER connection attributes length")
+		}
+		end := pos + int(attrsLength)
+		req.connectAttrs = make(map[string]string)
+		for pos < end {
+			var key, value string
+			key, pos, ok = mp.readStringLenEnc(data[:end], pos)
+			if !ok {
+				return req, moerr.NewInvalidInput(ctx, "malformed COM_CHANGE_USER connection attribute key")
+			}
+			value, pos, ok = mp.readStringLenEnc(data[:end], pos)
+			if !ok {
+				return req, moerr.NewInvalidInput(ctx, "malformed COM_CHANGE_USER connection attribute value")
+			}
+			req.connectAttrs[key] = value
+		}
+	}
+	if pos != len(data) {
+		return req, moerr.NewInvalidInput(ctx, "malformed COM_CHANGE_USER trailing data")
+	}
+	req.authResponse = append([]byte(nil), req.authResponse...)
+	return req, nil
+}
+
 func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *PrepareStmt) error {
 	dcPrepare, ok := stmt.PreparePlan.GetDcl().Control.(*planPb.DataControl_Prepare)
 	if !ok {
@@ -672,6 +853,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 	paramTypes := dcPrepare.Prepare.ParamTypes
 	numParams := len(paramTypes)
 	columns := getPreparedResultColumns(stmt, sessionTxnHaveDDL(mp.GetSession()))
+	directIntegerLengths := directIntegerResultLengths(stmt.PrepareStmt, columns)
 	numColumns := len(columns)
 
 	var data []byte
@@ -719,6 +901,7 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 			if err != nil {
 				return err
 			}
+			applyDirectIntegerResultMetadata(column, directIntegerLengths, i)
 			colDefPacket, err := mp.SendColumnDefinitionPacket(ctx, column, cmd)
 			if err != nil {
 				return err
@@ -744,7 +927,6 @@ func (mp *MysqlProtocolImpl) SendPrepareResponse(ctx context.Context, stmt *Prep
 }
 
 func (mp *MysqlProtocolImpl) ParseSendLongData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
-	var err error
 	stmt.proc = proc
 	dcPrepare, ok := stmt.PreparePlan.GetDcl().Control.(*planPb.DataControl_Prepare)
 	if !ok {
@@ -761,37 +943,34 @@ func (mp *MysqlProtocolImpl) ParseSendLongData(ctx context.Context, proc *proces
 		return moerr.NewInternalErrorf(ctx, "get param index out of range. get %d, param length is %d", paramIdx, numParams)
 	}
 
-	if stmt.params == nil {
-		stmt.params = vector.NewVec(types.T_text.ToType())
-		for i := 0; i < numParams; i++ {
-			err = vector.AppendBytes(stmt.params, []byte{}, false, proc.GetMPool())
-			if err != nil {
-				return err
-			}
-		}
-	}
-
 	length := len(data) - pos
 	val, _, ok := mp.readCountOfBytes(data, pos, length)
 	if !ok {
 		return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 	}
-	if stmt.getFromSendLongData == nil {
-		stmt.getFromSendLongData = make(map[int]struct{})
-	}
-	if _, ok := stmt.getFromSendLongData[int(paramIdx)]; ok {
-		val = append(append([]byte(nil), stmt.params.GetBytesAt(int(paramIdx))...), val...)
-	}
-	if err = util.SetAnyToStringVector(proc, val, stmt.params, int(paramIdx)); err != nil {
+	allowed, err := mp.GetSession().GetSessionSysVar("max_allowed_packet")
+	if err != nil {
 		return err
 	}
-	stmt.getFromSendLongData[int(paramIdx)] = struct{}{}
-	return nil
+	limit, ok := allowed.(int64)
+	if !ok {
+		return moerr.NewInternalErrorf(ctx, "invalid max_allowed_packet value %T", allowed)
+	}
+	return stmt.appendLongData(ctx, proc, int(paramIdx), val, limit)
 }
 
 func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process.Process, stmt *PrepareStmt, data []byte, pos int) error {
 	var err error
+	// The fixed part after the statement id contains the cursor flag and the
+	// four-byte iteration count. Check it before changing statement state; a
+	// zero-parameter EXECUTE has no later reads to catch a truncated count.
+	if pos < 0 || pos > len(data) || len(data)-pos < 5 {
+		return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
+	}
 	stmt.proc = proc
+	if stmt.longDataErr != nil {
+		return stmt.longDataErr
+	}
 	dcPrepare, ok := stmt.PreparePlan.GetDcl().Control.(*planPb.DataControl_Prepare)
 	if !ok {
 		return moerr.NewInternalError(ctx, "can not get Prepare plan in prepareStmt")
@@ -828,6 +1007,8 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 	pos += 4
 
 	if numParams > 0 {
+		paramTypes := stmt.ParamTypes
+		newParamTypes := false
 		var nullBitmaps []byte
 		nullBitmapLen := (numParams + 7) >> 3
 		nullBitmaps, pos, ok = mp.readCountOfBytes(data, pos, nullBitmapLen)
@@ -841,22 +1022,33 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 		if !ok {
 			return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 		}
-		if newParamBoundFlag == 1 {
-
-			// Just the first StmtExecute packet contain parameters type,
-			// we need save it for further use.
-			stmt.ParamTypes, pos, ok = mp.readCountOfBytes(data, pos, numParams<<1)
-
+		if newParamBoundFlag != 0 {
+			// MySQL treats every nonzero flag as a new type vector. Decode into
+			// local state first so a malformed packet cannot discard the types
+			// saved by the previous successful EXECUTE.
+			paramTypes, pos, ok = mp.readCountOfBytes(data, pos, numParams<<1)
 			if !ok {
 				return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 			}
+			newParamTypes = true
 		}
 
 		// get paramters and set value to session variables
 		for i := 0; i < numParams; i++ {
-			// if params had received via COM_STMT_SEND_LONG_DATA, use them directly(we set the params when deal with COM_STMT_SEND_LONG_DATA).
+			// Materialize each streamed parameter only once. Long data takes
+			// precedence over the execute NULL bitmap, including an empty chunk.
 			// ref https://dev.mysql.com/doc/internals/en/com-stmt-send-long-data.html
 			if _, ok := stmt.getFromSendLongData[i]; ok {
+				value := stmt.longDataBuffers[i]
+				if len(value) > types.VarlenaInlineSize &&
+					int64(len(stmt.params.GetArea()))+int64(len(value)) > mpool.MaxAllocationSize() {
+					return moerr.NewInvalidInput(ctx, "prepared parameter vector area exceeds allocation limit")
+				}
+				if err = vector.SetBytesAt(stmt.params, i, value, proc.Mp()); err != nil {
+					return err
+				}
+				stmt.params.GetNulls().Unset(uint64(i))
+				stmt.releaseLongDataBuffer(i)
 				continue
 			}
 
@@ -868,12 +1060,12 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 				continue
 			}
 
-			if (i<<1)+1 >= len(stmt.ParamTypes) {
+			if (i<<1)+1 >= len(paramTypes) {
 				return moerr.NewInvalidInput(ctx, "mysql protocol error, malformed packet")
 
 			}
-			tp := stmt.ParamTypes[i<<1]
-			isUnsigned := (stmt.ParamTypes[(i<<1)+1] & 0x80) > 0
+			tp := paramTypes[i<<1]
+			isUnsigned := (paramTypes[(i<<1)+1] & 0x80) > 0
 
 			switch defines.MysqlType(tp) {
 			case defines.MYSQL_TYPE_NULL:
@@ -996,7 +1188,7 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 				var val string
 				switch length {
 				case 0:
-					val = "0d 00:00:00"
+					val = "00:00:00"
 				case 8, 12:
 					pos, val, ok = mp.readTime(data, pos, length)
 					if !ok {
@@ -1057,6 +1249,9 @@ func (mp *MysqlProtocolImpl) ParseExecuteData(ctx context.Context, proc *process
 				return err
 			}
 		}
+		if newParamTypes {
+			stmt.ParamTypes = bytes.Clone(paramTypes)
+		}
 	}
 
 	return nil
@@ -1086,13 +1281,10 @@ func (mp *MysqlProtocolImpl) readTime(data []byte, pos int, length uint8) (int, 
 		return 0, "", false
 	}
 	pos = tmpPos
-	if day > 0 {
-		retStr += fmt.Sprintf("%dd ", day)
-	}
 	if pos+3 > len(data) { //nolint:typecheck
 		return 0, "", false
 	}
-	hour := data[pos]
+	hour := uint64(day)*24 + uint64(data[pos])
 	pos++
 	minute := data[pos]
 	pos++
@@ -1500,6 +1692,15 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 		//TO Check password
 		if CheckPassword(psw, mp.GetSalt(), authResponse) {
 			ses.Debugf(ctx, "check password succeeded")
+			// AuthenticateUser has finished its catalog transaction. Repair
+			// accounts missed by a rolling upgrade's finite account snapshot
+			// before allowing queries on this CN. Bootstrap special users have
+			// no catalog create_version and must not enter the upgrade path.
+			if createVersion := ses.GetCreateVersion(); createVersion != "" {
+				if err = ses.MaybeUpgradeTenant(ctx, createVersion, int64(ses.GetTenantInfo().GetTenantID())); err != nil {
+					return err
+				}
+			}
 			bh := ses.GetBackgroundExec(ctx)
 			defer bh.Close()
 			if err = ses.InitSystemVariables(ctx, bh); err != nil {
@@ -2251,7 +2452,7 @@ func (mp *MysqlProtocolImpl) makeColumnDefinition41Payload(column *MysqlColumn, 
 	return data[:pos]
 }
 
-func (mp *MysqlProtocolImpl) MakeColumnDefData(ctx context.Context, columns []*planPb.ColDef) ([][]byte, error) {
+func (mp *MysqlProtocolImpl) MakeColumnDefData(ctx context.Context, columns []*planPb.ColDef, directIntegerLengths ...uint32) ([][]byte, error) {
 	numColumns := len(columns)
 	colDefData := make([][]byte, 0, numColumns)
 	for i := 0; i < numColumns; i++ {
@@ -2259,6 +2460,7 @@ func (mp *MysqlProtocolImpl) MakeColumnDefData(ctx context.Context, columns []*p
 		if err != nil {
 			return nil, err
 		}
+		applyDirectIntegerResultMetadata(column, directIntegerLengths, i)
 		colDefPacket := mp.makeColumnDefinition41Payload(column, int(COM_STMT_PREPARE))
 		colDefData = append(colDefData, colDefPacket)
 	}

@@ -28,6 +28,7 @@ const (
 	canonicalDecimalMarker   byte = 0x83
 
 	canonicalMinInt64Float    = -9223372036854775808.0
+	canonicalInt64LimitFloat  = 9223372036854775808.0
 	canonicalUint64LimitFloat = 18446744073709551616.0
 )
 
@@ -46,6 +47,156 @@ type numericKey struct {
 	digits   string
 	exponent big.Int
 	adjusted big.Int
+}
+
+// NumericTextToInt64 converts an exact numeric spelling to int64 using SQL
+// integer-cast semantics: discard the fractional part toward zero, then check
+// the target range. The conversion never passes through float64.
+func NumericTextToInt64(text string) (int64, bool) {
+	key, ok := numericKeyFromText(text)
+	if !ok {
+		return 0, false
+	}
+	return numericKeyToInt64(&key)
+}
+
+// NumericTextToUint64 converts an exact numeric spelling to uint64 using SQL
+// integer-cast semantics. Negative non-zero values are rejected even when
+// truncation would otherwise produce zero.
+func NumericTextToUint64(text string) (uint64, bool) {
+	key, ok := numericKeyFromText(text)
+	if !ok {
+		return 0, false
+	}
+	return numericKeyToUint64(&key)
+}
+
+// IsNumericText reports whether text is a complete exact numeric spelling.
+// It is separate from the range-limited conversion helpers so callers can
+// distinguish an out-of-range numeric value from a character value that merely
+// starts with a numeric prefix.
+func IsNumericText(text string) bool {
+	_, ok := numericKeyFromText(text)
+	return ok
+}
+
+// NumericToInt64 converts a JSON numeric value to int64 without rounding exact
+// INT64, UINT64, or DECIMAL values through float64. FLOAT64 values retain their
+// native floating-point cast semantics.
+func NumericToInt64(value ByteJson) (int64, bool) {
+	if !isValidNumericEncoding(value) {
+		return 0, false
+	}
+	switch value.Type {
+	case TpCodeInt64:
+		return value.GetInt64(), true
+	case TpCodeUint64:
+		unsigned := value.GetUint64()
+		if unsigned > math.MaxInt64 {
+			return 0, false
+		}
+		return int64(unsigned), true
+	case TpCodeFloat64:
+		floating := value.GetFloat64()
+		// float64(math.MaxInt64) rounds to 2^63, so the upper bound is
+		// deliberately exclusive. -2^63 is exactly representable.
+		if math.IsNaN(floating) || floating < math.MinInt64 || floating >= canonicalInt64LimitFloat {
+			return 0, false
+		}
+		return int64(floating), true
+	case TpCodeDecimal:
+		return NumericTextToInt64(string(value.GetString()))
+	default:
+		return 0, false
+	}
+}
+
+// NumericToUint64 is the unsigned counterpart of NumericToInt64.
+func NumericToUint64(value ByteJson) (uint64, bool) {
+	if !isValidNumericEncoding(value) {
+		return 0, false
+	}
+	switch value.Type {
+	case TpCodeInt64:
+		signed := value.GetInt64()
+		if signed < 0 {
+			return 0, false
+		}
+		return uint64(signed), true
+	case TpCodeUint64:
+		return value.GetUint64(), true
+	case TpCodeFloat64:
+		floating := value.GetFloat64()
+		if math.IsNaN(floating) || floating < 0 || floating >= canonicalUint64LimitFloat {
+			return 0, false
+		}
+		return uint64(floating), true
+	case TpCodeDecimal:
+		return NumericTextToUint64(string(value.GetString()))
+	default:
+		return 0, false
+	}
+}
+
+func numericKeyToInt64(key *numericKey) (int64, bool) {
+	magnitude, ok := truncatedNumericKeyMagnitude(key)
+	if !ok {
+		return 0, false
+	}
+	if key.sign >= 0 {
+		if magnitude > math.MaxInt64 {
+			return 0, false
+		}
+		return int64(magnitude), true
+	}
+	const minInt64Magnitude = uint64(1) << 63
+	if magnitude > minInt64Magnitude {
+		return 0, false
+	}
+	if magnitude == minInt64Magnitude {
+		return math.MinInt64, true
+	}
+	return -int64(magnitude), true
+}
+
+func numericKeyToUint64(key *numericKey) (uint64, bool) {
+	if key.sign < 0 {
+		return 0, false
+	}
+	return truncatedNumericKeyMagnitude(key)
+}
+
+// truncatedNumericKeyMagnitude returns abs(key) with its fractional digits
+// discarded. At most 20 integer digits can fit in uint64, so even an exponent
+// with millions of digits is rejected without materializing powers of ten.
+func truncatedNumericKeyMagnitude(key *numericKey) (uint64, bool) {
+	if key.sign == 0 || key.adjusted.Sign() < 0 {
+		return 0, true
+	}
+	if !key.adjusted.IsInt64() {
+		return 0, false
+	}
+	integerDigits := key.adjusted.Int64() + 1
+	if integerDigits > 20 {
+		return 0, false
+	}
+
+	value := uint64(0)
+	digitsToRead := min(int64(len(key.digits)), integerDigits)
+	for index := int64(0); index < digitsToRead; index++ {
+		digit := uint64(key.digits[index] - '0')
+		if value > (math.MaxUint64-digit)/10 {
+			return 0, false
+		}
+		value = value*10 + digit
+	}
+	for index := digitsToRead; index < integerDigits; index++ {
+		if value > math.MaxUint64/10 {
+			return 0, false
+		}
+		value *= 10
+	}
+	return value, true
 }
 
 // CanonicalNumberSize returns the exact key size for a JSON numeric value.
@@ -100,12 +251,28 @@ func AppendCanonicalNumber(dst []byte, value ByteJson) ([]byte, bool) {
 func canonicalNumberFromByteJSON(value ByteJson) (canonicalNumber, bool) {
 	switch value.Type {
 	case TpCodeInt64:
+		if len(value.Data) != numberSize {
+			return canonicalNumber{}, false
+		}
 		return canonicalInteger(value.GetInt64()), true
 	case TpCodeUint64:
+		if len(value.Data) != numberSize {
+			return canonicalNumber{}, false
+		}
 		return canonicalNumber{marker: canonicalPositiveInteger, payload: value.GetUint64()}, true
 	case TpCodeFloat64:
-		return canonicalFloat64(value.GetFloat64()), true
+		if len(value.Data) != numberSize {
+			return canonicalNumber{}, false
+		}
+		floating := value.GetFloat64()
+		if math.IsNaN(floating) || math.IsInf(floating, 0) {
+			return canonicalNumber{}, false
+		}
+		return canonicalFloat64(floating), true
 	case TpCodeDecimal:
+		if !isValidByteJsonStringEncoding(value.Data) {
+			return canonicalNumber{}, false
+		}
 		return canonicalDecimal(value.GetString())
 	default:
 		return canonicalNumber{}, false
@@ -313,33 +480,4 @@ func compareNumericKeys(left, right *numericKey) int {
 		return -result
 	}
 	return result
-}
-
-func compareNonFiniteNumeric(left, right ByteJson) (int, bool) {
-	leftFloat, leftNonFinite := nonFiniteFloat64(left)
-	rightFloat, rightNonFinite := nonFiniteFloat64(right)
-	if !leftNonFinite && !rightNonFinite {
-		return 0, false
-	}
-	if leftNonFinite && rightNonFinite {
-		return compareFloat64(leftFloat, rightFloat), true
-	}
-	if leftNonFinite {
-		if math.IsInf(leftFloat, -1) {
-			return -1, true
-		}
-		return 1, true
-	}
-	if math.IsInf(rightFloat, -1) {
-		return 1, true
-	}
-	return -1, true
-}
-
-func nonFiniteFloat64(value ByteJson) (float64, bool) {
-	if value.Type != TpCodeFloat64 {
-		return 0, false
-	}
-	floating := value.GetFloat64()
-	return floating, math.IsNaN(floating) || math.IsInf(floating, 0)
 }

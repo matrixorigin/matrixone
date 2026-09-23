@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
-	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
@@ -44,7 +43,9 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 	}
 
 	// Parser-aware tokenize (ngram/gojieba/json) so build and query tokens match.
-	tokenize, err := fulltext2.CdcTokenizer(w.cfg.Parser)
+	// The json term shape travels with the config so this path and the CREATE
+	// build agree on the terms they emit.
+	tokenize, err := fulltext2.CdcTokenizerWithJSONOptions(w.cfg.Parser, w.cfg.JSONTermOptions())
 	if err != nil {
 		errch <- err
 		return
@@ -97,7 +98,12 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 						// statement ACROSS frames — so a burst of tiny frames costs ~totalChunks/maxInsertTuples
 						// RunSql round-trips in this one txn, not one INSERT per frame. chunk_ids stay
 						// contiguous in frame order, so recency is unchanged.
-						sqls, chunkID := fulltext2.TailFramesInsertSqls(w.cfg, startChunk, segs)
+						// The frames' rows record the version this flush applied, written in
+						// THIS transaction alongside the bytes they describe -- so an index's
+						// recorded coverage can never disagree with what it actually stores,
+						// which a watermark read from elsewhere cannot promise.
+						sqls, chunkID := fulltext2.TailFramesInsertSqlsAt(
+							sqlproc, w.cfg, startChunk, segs, r.GetToTS().Physical())
 						for _, s := range sqls {
 							res, e := sqlexec.RunSql(sqlproc, s)
 							if e != nil {
@@ -120,16 +126,13 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 					errch <- err
 					return
 				}
-				// Evict the cached search index so the next query reloads tag=0 + the
-				// freshly-appended tag=1 frames, instead of serving the warm (stale)
-				// cache until its idle TTL. Only when frames were actually written.
-				// NOTE: this eviction is LOCAL to this CN — cross-CN cache coherence is
-				// a known cache-layer gap deferred to a follow-up PR (see the Decision
-				// block on veccache.VectorIndexCache.Remove).
+				// The tail this flush committed is now durable but the querying CN may
+				// still serve a warm cache loaded before it (an index created empty has
+				// no tag=0 base, so that warm copy is doc-less). Drop it IF idle so the
+				// next query reloads the tail; a busy entry stays warm and refreshes
+				// later. No-op when nothing was written.
 				if len(segs) > 0 {
-					fulltext2.NewFulltext2Search(w.cfg).OnCacheInvalidated(string(fulltext2.LoadMissCDCFlush))
-					veccache.Cache.Remove(w.cfg.IndexTable)
-					logutil.Debugf("[ftv2-sink] evicted search cache for index=%s", w.cfg.IndexTable) // per-flush: Debug, not Info
+					fulltext2.EvictIdleCache(w.cfg.IndexTable)
 				}
 				return
 			}

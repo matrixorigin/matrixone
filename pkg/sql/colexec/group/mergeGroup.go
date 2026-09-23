@@ -32,6 +32,8 @@ func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 	if mergeGroup.ctr.mp != nil {
 		mergeGroup.ctr.free()
 	}
+	mergeGroup.ctr.groupConcatSourceRowsUntrusted = proc != nil &&
+		!proc.GroupConcatSourceRowProvenanceTrusted()
 	mergeGroup.ctr.prepareParamKind.Reset(mergeGroup.Aggs)
 	mergeGroup.ctr.aggExprs = mergeGroup.Aggs
 	mergeGroup.ctr.prepareParamKindWireV1 = prepareParamKindWireV1Enabled(proc) &&
@@ -53,12 +55,50 @@ func (mergeGroup *MergeGroup) Prepare(proc *process.Process) error {
 		}
 	}
 	mergeGroup.ctr.legacyTextMinMax = useLegacyTextMinMaxForRemote(proc)
+	mergeGroup.ctr.legacyVarianceState = useLegacyVarianceStateForRemote(proc)
+	mergeGroup.ctr.legacyDecimalSumState = useLegacyDecimalSumState(proc)
+	// MergeGroup belongs to the upgraded coordinator and must publish the
+	// widened type selected by its plan, even when it consumes legacy state.
+	mergeGroup.ctr.legacyDecimalSumResult = false
+	mergeGroup.ctr.legacyApproxPercentileState = useLegacyApproxPercentileStateForRemote(proc)
+	mergeGroup.ctr.legacyHLLState = useLegacyHLLStateForRemote(proc)
+	mergeGroup.ctr.floatZeroHLLState = useFloatZeroHLLStateForRemote(proc)
+	mergeGroup.ctr.legacyVectorHLLState = useLegacyVectorHLLStateForRemote(proc)
+	mergeGroup.ctr.legacyTextHLLAddState = useLegacyTextHLLAddStateForRemote(proc)
+	mergeGroup.ctr.legacyFloatHLLAddState = useLegacyFloatHLLAddStateForRemote(proc)
+	// MergeGroup is a receiver. It canonicalizes legacy producer payloads into
+	// the current in-memory DISTINCT domain, so its destination uses the modern
+	// key policy even when the incoming peer is below v79.
+	mergeGroup.ctr.legacyDistinctFloatKeys = false
+	mergeGroup.ctr.timeZone = proc.Base.SessionInfo.TimeZone
 	mergeGroup.ctr.groupByTypes = nil
 	mergeGroup.ctr.keyNullable = false
-	mergeGroup.ctr.groupingAware = false
+	mergeGroup.ctr.legacyH8CharSemantics = false
+	mergeGroup.ctr.groupingAware = mergeGroup.GroupingAware
 	mergeGroup.ctr.keyWidth = 0
 	mergeGroup.ctr.mtyp = 0
 	mergeGroup.ctr.setGroupByHashKey(mergeGroup.GroupByHashKey)
+	if mergeGroup.EmptyGroupingSet || len(mergeGroup.EmptyGroupingSetIDs) > 0 {
+		if !mergeGroup.GroupingAware || len(mergeGroup.GroupByTypes) == 0 ||
+			(mergeGroup.EmptyGroupingSet && len(mergeGroup.EmptyGroupingSetIDs) > 0) {
+			return moerr.NewInternalErrorNoCtx(
+				"invalid empty grouping-set merge metadata")
+		}
+		if len(mergeGroup.EmptyGroupingSetIDs) > 0 &&
+			(len(mergeGroup.GroupByTypes) < 2 ||
+				mergeGroup.GroupByTypes[len(mergeGroup.GroupByTypes)-1].Oid != types.T_int64) {
+			return moerr.NewInternalErrorNoCtx(
+				"invalid empty grouping-set merge metadata")
+		}
+		previous := int64(-1)
+		for _, setID := range mergeGroup.EmptyGroupingSetIDs {
+			if setID <= previous {
+				return moerr.NewInternalErrorNoCtx(
+					"empty grouping-set ids must be strictly increasing")
+			}
+			previous = setID
+		}
+	}
 
 	if mergeGroup.OpAnalyzer != nil {
 		mergeGroup.OpAnalyzer.Reset()
@@ -125,6 +165,9 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 			if err, isCancel := vm.CancelCheck(proc); isCancel {
 				return vm.CancelResult, err
 			}
+			if err := mergeGroup.ensureRuntimeEmptyGroupingSets(); err != nil {
+				return vm.CancelResult, err
+			}
 		}
 
 		// has partial results, merge them.
@@ -139,13 +182,30 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 		}
 
 		if mergeGroup.ctr.isSpilling() {
+			if mergeGroup.ctr.distinctSpill != nil {
+				if _, err := mergeGroup.ctr.drainExactCountDistinct(
+					proc, mergeGroup.OpAnalyzer); err != nil {
+					return vm.CancelResult, err
+				}
+			}
 			if bytes, rows, err := mergeGroup.ctr.spillDataToDisk(proc, mergeGroup.OpAnalyzer, nil); err != nil {
 				return vm.CancelResult, err
 			} else {
 				mergeGroup.OpAnalyzer.Spill(bytes)
 				mergeGroup.OpAnalyzer.SpillRows(rows)
 			}
+			if mergeGroup.ctr.distinctSpill != nil && mergeGroup.ctr.mtyp != H0 {
+				if err := mergeGroup.ctr.prepareGroupedDistinctContributions(proc); err != nil {
+					return vm.CancelResult, err
+				}
+			}
 			if _, err := mergeGroup.ctr.loadSpilledData(proc, mergeGroup.OpAnalyzer, mergeGroup.Aggs); err != nil {
+				return vm.CancelResult, err
+			}
+		}
+		if mergeGroup.ctr.inputDone {
+			if err := mergeGroup.ctr.finalizeExactCountDistinct(
+				proc, mergeGroup.OpAnalyzer); err != nil {
 				return vm.CancelResult, err
 			}
 		}
@@ -159,6 +219,51 @@ func (mergeGroup *MergeGroup) Call(proc *process.Process) (vm.CallResult, error)
 		return vm.CancelResult, nil
 	}
 	return vm.CancelResult, moerr.NewInternalError(proc.Ctx, "bug: unknown merge group state")
+}
+
+// ensureRuntimeEmptyGroupingSets makes the final merge boundary the owner of
+// SQL's empty-input grouping-set semantics. Local Group or projection
+// operators normally emit a key-only partial for an all-rolled grouping set,
+// but a distributed scan can produce no partial pipeline at all. In that
+// topology the final merge must still publish one empty aggregate state for
+// every declared empty set.
+func (mergeGroup *MergeGroup) ensureRuntimeEmptyGroupingSets() error {
+	ctr := &mergeGroup.ctr
+	if (!mergeGroup.EmptyGroupingSet && len(mergeGroup.EmptyGroupingSetIDs) == 0) ||
+		ctr.mergePartialMetadataSet || len(ctr.groupByBatches) > 0 || ctr.isSpilling() {
+		return nil
+	}
+
+	ctr.groupByTypes = append(ctr.groupByTypes[:0], mergeGroup.GroupByTypes...)
+	setIDs := mergeGroup.EmptyGroupingSetIDs
+	rows := len(setIDs)
+	if mergeGroup.EmptyGroupingSet {
+		setIDs = nil
+		rows = 1
+	}
+	output, err := ctr.newRuntimeEmptyGroupingSetBatch(
+		mergeGroup.GroupByTypes, setIDs)
+	if err != nil {
+		return err
+	}
+
+	ctr.mtyp = HStr
+	ctr.groupingAware = true
+	aggs, err := ctr.makeAggList(mergeGroup.Aggs)
+	if err != nil {
+		output.Clean(ctr.mp)
+		return err
+	}
+	for _, agg := range aggs {
+		if err = agg.GroupGrow(rows); err != nil {
+			freeAggList(aggs)
+			output.Clean(ctr.mp)
+			return err
+		}
+	}
+	ctr.aggList = aggs
+	ctr.groupByBatches = append(ctr.groupByBatches, output)
+	return nil
 }
 
 func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool, error) {
@@ -215,6 +320,7 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 				return false, err
 			}
 		}
+		mergeGroup.ctr.refreshGroupConcatSourceRowTrust()
 	} else {
 		rowCount := bat.RowCount()
 		hashKeyVecs := mergeGroup.ctr.hashKeyVectors(bat.Vecs)
@@ -269,22 +375,28 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 					vals, more, insertErr := mergeGroup.ctr.commitGroupByChunk(
 						bat.Vecs, i, n, preview)
 					if insertErr != nil {
-						return false, insertErr
-					}
-					if more > 0 {
-						for _, agg := range mergeGroup.ctr.aggList {
-							if growErr := agg.GroupGrow(more); growErr != nil {
-								return false, growErr
+						if !isGroupPrePublicationError(insertErr) {
+							return false, insertErr
+						}
+						mergeGroup.ctr.cancelGroupByPreflights()
+						err = insertErr
+					} else {
+						if more > 0 {
+							for _, agg := range mergeGroup.ctr.aggList {
+								if growErr := agg.GroupGrow(more); growErr != nil {
+									return false, growErr
+								}
 							}
 						}
-					}
-					for j, agg := range mergeGroup.ctr.aggList {
-						if err = agg.BatchMerge(
-							mergeGroup.ctr.spillAggList[j], i, vals[:n]); err != nil {
-							return false, err
+						for j, agg := range mergeGroup.ctr.aggList {
+							if err = agg.BatchMerge(
+								mergeGroup.ctr.spillAggList[j], i, vals[:n]); err != nil {
+								return false, err
+							}
 						}
+						mergeGroup.ctr.refreshGroupConcatSourceRowTrust()
+						break
 					}
-					break
 				}
 
 				// The decoded partial borrows recovery capacity. Release it before
@@ -304,7 +416,31 @@ func (mergeGroup *MergeGroup) buildOneBatch(proc *process.Process, bat *batch.Ba
 		}
 	}
 
-	return mergeGroup.ctr.needSpill(mergeGroup.OpAnalyzer), nil
+	shouldDrain, err := mergeGroup.ctr.shouldDrainExactCountDistinct()
+	if err != nil {
+		return false, err
+	}
+	if shouldDrain {
+		if _, err := mergeGroup.ctr.drainExactCountDistinct(
+			proc, mergeGroup.OpAnalyzer); err != nil {
+			return false, err
+		}
+	}
+	needSpill := mergeGroup.ctr.needSpill(mergeGroup.OpAnalyzer)
+	if needSpill && mergeGroup.ctr.distinctSpill == nil {
+		hasDistinct, err := mergeGroup.ctr.hasExactCountDistinctArguments()
+		if err != nil {
+			return false, err
+		}
+		if hasDistinct {
+			if _, err := mergeGroup.ctr.drainExactCountDistinct(
+				proc, mergeGroup.OpAnalyzer); err != nil {
+				return false, err
+			}
+			needSpill = mergeGroup.ctr.needSpill(mergeGroup.OpAnalyzer)
+		}
+	}
+	return needSpill, nil
 }
 
 // prepareBuildBatch decodes one immutable partial. The caller subsequently
@@ -319,113 +455,147 @@ func (mergeGroup *MergeGroup) prepareBuildBatch(
 		return moerr.NewInvalidInputNoCtx("merge-group partial metadata is missing")
 	}
 	ctr.freeSpillAggList()
-	var err error
-	ctr.spillAggList, err = ctr.makeSpillAggList(mergeGroup.Aggs)
+	reader := bytes.NewReader(bat.ExtraBuf)
+	incomingType, err := types.ReadInt32(reader)
 	if err != nil {
 		return err
 	}
+	incomingNullable, err := types.ReadBool(reader)
+	if err != nil {
+		return err
+	}
+	if incomingType < H0 || incomingType > HStr {
+		return moerr.NewInvalidInputNoCtxf(
+			"invalid merge-group hash type %d", incomingType)
+	}
+	if incomingType == H0 && len(bat.Vecs) != 0 ||
+		incomingType != H0 && len(bat.Vecs) == 0 {
+		return moerr.NewInvalidInputNoCtx(
+			"merge-group hash type does not match group columns")
+	}
+	if incomingType == H0 && bat.RowCount() != 1 {
+		return moerr.NewInvalidInputNoCtx(
+			"merge-group H0 partial must contain exactly one row")
+	}
+	incomingHashVectors := ctr.hashKeyVectors(bat.Vecs)
+	if incomingType == H8 && mergeGroupHashKeyNeedsV78(incomingHashVectors, incomingNullable) &&
+		groupHashStringWireEnabled(proc) {
+		// Older producers could advertise H8 for a short CHAR/VARCHAR
+		// composite key. The old eight-byte concatenation is ambiguous, so
+		// normalize that partial into the length-delimited HStr domain before
+		// the first hash table is built. This also keeps rolling upgrades
+		// compatible with already-produced partials.
+		incomingType = HStr
+	}
+	if incomingType == HStr && mergeGroupHashKeyNeedsV78(incomingHashVectors, incomingNullable) &&
+		!groupHashStringWireEnabled(proc) {
+		return moerr.NewInvalidStateNoCtx(
+			"variable-length merge-group hash keys require MORPCVersion78")
+	}
+	ctr.legacyH8CharSemantics = incomingType == H8 &&
+		mergeGroupHashKeyNeedsV78(incomingHashVectors, incomingNullable) &&
+		!groupHashStringWireEnabled(proc)
+	incomingGroupingAware := incomingType == HStr &&
+		mergeGroupHashKeyHasGrouping(incomingHashVectors)
+	if ctr.mergePartialMetadataSet &&
+		(ctr.mtyp != incomingType || ctr.keyNullable != incomingNullable ||
+			(!ctr.groupingAware && incomingGroupingAware)) {
+		return moerr.NewInvalidInputNoCtx(
+			"inconsistent merge-group partial metadata")
+	}
+	if err := validateMergeGroupHashMetadata(
+		incomingType,
+		incomingNullable,
+		incomingHashVectors,
+	); err != nil {
+		return err
+	}
 
-	{
-		reader := bytes.NewReader(bat.ExtraBuf)
-		incomingType, err := types.ReadInt32(reader)
+	// The wire header is authoritative for the aggregate state grammar. Build
+	// the temporary list from that mode before publishing ctr.mtyp; a fresh
+	// MergeGroup starts at H0 even when its first partial is grouped (H8/HStr).
+	nAggs, err := types.ReadInt32(reader)
+	if err != nil {
+		return err
+	}
+	if nAggs < 0 {
+		return moerr.NewInvalidInputNoCtx("negative merge-group aggregate count")
+	}
+	ctr.spillAggList, err = ctr.makeSpillAggListForMode(
+		mergeGroup.Aggs, incomingType == H0)
+	if err != nil {
+		return err
+	}
+	if len(ctr.aggList) != len(mergeGroup.Aggs) {
+		ctr.aggList, err = ctr.makeAggListForMode(
+			mergeGroup.Aggs, ctr.aggregateAllocation, incomingType == H0)
 		if err != nil {
 			return err
 		}
-		incomingNullable, err := types.ReadBool(reader)
-		if err != nil {
-			return err
-		}
-		if incomingType < H0 || incomingType > HStr {
-			return moerr.NewInvalidInputNoCtxf(
-				"invalid merge-group hash type %d", incomingType)
-		}
-		if incomingType == H0 && len(bat.Vecs) != 0 ||
-			incomingType != H0 && len(bat.Vecs) == 0 {
-			return moerr.NewInvalidInputNoCtx(
-				"merge-group hash type does not match group columns")
-		}
-		if incomingType == H0 && bat.RowCount() != 1 {
-			return moerr.NewInvalidInputNoCtx(
-				"merge-group H0 partial must contain exactly one row")
-		}
-		incomingHashVectors := ctr.hashKeyVectors(bat.Vecs)
-		incomingGroupingAware := incomingType == HStr &&
-			mergeGroupHashKeyHasGrouping(incomingHashVectors)
-		if ctr.mergePartialMetadataSet &&
-			(ctr.mtyp != incomingType || ctr.keyNullable != incomingNullable ||
-				ctr.groupingAware != incomingGroupingAware) {
-			return moerr.NewInvalidInputNoCtx(
-				"inconsistent merge-group partial metadata")
-		}
-		if err := validateMergeGroupHashMetadata(
-			incomingType,
-			incomingNullable,
-			incomingHashVectors,
-		); err != nil {
-			return err
-		}
-		ctr.mtyp = incomingType
-		ctr.keyNullable = incomingNullable
-		// Grouping metadata travels with each partial vector. A grouping-set
-		// branch has a fixed GroupingFlag, so every non-empty partial from that
-		// branch selects the same key domain without changing the partial wire or
-		// penalizing ordinary HStr aggregation.
-		ctr.groupingAware = incomingGroupingAware
-		ctr.mergePartialMetadataSet = true
-
-		if ctr.mtyp == H0 && len(ctr.groupByBatches) == 0 {
-			gb, err := ctr.createNewGroupByBatch(bat.Vecs, 1)
-			if err != nil {
-				return err
-			}
-			gb.SetRowCount(1)
-			ctr.groupByBatches = append(ctr.groupByBatches, gb)
-		}
-
-		nAggs, err := types.ReadInt32(reader)
-		if err != nil {
-			return err
-		}
-		if len(ctr.aggList) != len(mergeGroup.Aggs) {
-			ctr.aggList, err = ctr.makeAggList(mergeGroup.Aggs)
-			if err != nil {
-				return err
-			}
+		// Grouped destinations can still enter generic hash spill, whose wire
+		// grammar does not include local ordered runs. Configure those only
+		// at the terminal reload pass, or here for an incoming H0 partial.
+		if incomingType == H0 {
 			ctr.configureOrderedAggSpill(proc, mergeGroup.OpAnalyzer, ctr.aggList)
 		}
-		if int(nAggs) != len(ctr.spillAggList) {
-			return moerr.NewInternalError(
-				proc.Ctx, "nAggs != len(mergeGroup.ctr.spillAggList)")
+	}
+	if int(nAggs) != len(ctr.spillAggList) {
+		return moerr.NewInternalError(
+			proc.Ctx, "nAggs != len(mergeGroup.ctr.spillAggList)")
+	}
+	for i := int32(0); i < nAggs; i++ {
+		if err := ctr.spillAggList[i].UnmarshalFromReader(reader, ctr.mp); err != nil {
+			return err
 		}
-		for i := int32(0); i < nAggs; i++ {
-			if err := ctr.spillAggList[i].UnmarshalFromReader(reader, ctr.mp); err != nil {
-				return err
-			}
-			if vec := ctr.spillAggList[i].PrepareParamKindVectorForChunk(0); vec != nil &&
-				vec.HasBinaryStringMetadata() && !binaryStringWireEnabled(proc) {
-				return moerr.NewInvalidStateNoCtx(
-					"aggregate binary-string metadata requires MORPCVersion18")
-			}
-			if vec := ctr.spillAggList[i].PrepareParamKindVectorForChunk(0); vec != nil &&
-				vec.HasExplicitTextStringMetadata() && !explicitTextWireEnabled(proc) {
-				return moerr.NewInvalidStateNoCtx(
-					"aggregate explicit-text metadata requires MORPCVersion23")
-			}
-			if err := validateDecodedAggregateGroupCount(
-				ctr.spillAggList[i], bat.RowCount()); err != nil {
-				return err
-			}
-		}
-		if !ctr.prepareParamKindWireV1 && reader.Len() > 0 {
+		if vec := ctr.spillAggList[i].PrepareParamKindVectorForChunk(0); vec != nil &&
+			vec.HasBinaryStringMetadata() && !binaryStringWireEnabled(proc) {
 			return moerr.NewInvalidStateNoCtx(
-				"prepared parameter aggregate trailer requires MORPCVersion12")
+				"aggregate binary-string metadata requires MORPCVersion18")
 		}
-		if ctr.prepareParamKindWireV1 && reader.Len() > 0 {
-			if err := mergeGroup.restorePartialPrepareParamKinds(
-				proc, reader, nAggs); err != nil {
-				return err
-			}
+		if vec := ctr.spillAggList[i].PrepareParamKindVectorForChunk(0); vec != nil &&
+			vec.HasExplicitTextStringMetadata() && !explicitTextWireEnabled(proc) {
+			return moerr.NewInvalidStateNoCtx(
+				"aggregate explicit-text metadata requires MORPCVersion23")
 		}
+		if vec := ctr.spillAggList[i].PrepareParamKindVectorForChunk(0); vec != nil &&
+			vec.HasStringSourceMetadata() && !stringSourceWireEnabled(proc) {
+			return moerr.NewInvalidStateNoCtx(
+				"aggregate string source metadata requires MORPCVersion37")
+		}
+		if err := validateDecodedAggregateGroupCount(
+			ctr.spillAggList[i], bat.RowCount()); err != nil {
+			return err
+		}
+	}
+	if !ctr.prepareParamKindWireV1 && reader.Len() > 0 {
+		return moerr.NewInvalidStateNoCtx(
+			"prepared parameter aggregate trailer requires MORPCVersion12")
+	}
+	if ctr.prepareParamKindWireV1 && reader.Len() > 0 {
+		if err := mergeGroup.restorePartialPrepareParamKinds(
+			proc, reader, nAggs); err != nil {
+			return err
+		}
+	}
+
+	// Publish the validated header only after its aggregate payload has been
+	// decoded. A rejected partial must not poison the mode used by a retry.
+	ctr.mtyp = incomingType
+	ctr.keyNullable = incomingNullable
+	// The plan-level declaration stays true even when this particular partial
+	// contains only the fully active grouping set and no sentinel bits. For
+	// compatibility with an undeclared single grouping partial, the first
+	// partial may still promote the hash grammar before the table is built.
+	ctr.groupingAware = ctr.groupingAware || incomingGroupingAware
+	ctr.mergePartialMetadataSet = true
+
+	if ctr.mtyp == H0 && len(ctr.groupByBatches) == 0 {
+		gb, err := ctr.createNewGroupByBatch(bat.Vecs, 1)
+		if err != nil {
+			return err
+		}
+		gb.SetRowCount(1)
+		ctr.groupByBatches = append(ctr.groupByBatches, gb)
 	}
 
 	if ctr.mtyp == H0 || len(bat.Vecs) == 0 {
@@ -498,6 +668,29 @@ func mergeGroupHashKeyHasGrouping(vectors []*vector.Vector) bool {
 		}
 	}
 	return false
+}
+
+func mergeGroupHashKeyHasVariableLength(vectors []*vector.Vector) bool {
+	for _, vec := range vectors {
+		if vec != nil && vec.GetType().Oid.FixedLength() < 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func mergeGroupHashKeyNeedsV78(vectors []*vector.Vector, nullable bool) bool {
+	if !mergeGroupHashKeyHasVariableLength(vectors) {
+		return false
+	}
+	width := 0
+	for _, vec := range vectors {
+		if vec == nil {
+			return false
+		}
+		width += GetKeyWidth(vec.GetType().Oid, vec.GetType().Width, nullable)
+	}
+	return width <= 8
 }
 
 func validateMergeGroupColumnTypes(
@@ -576,8 +769,16 @@ func (mergeGroup *MergeGroup) retryBuildBatchAfterCapacity(
 	cause error,
 ) (bool, error) {
 	if mergeGroup == nil || mergeGroup.ctr.allocationAccount == nil ||
-		!mpool.IsRetryableAllocationCapacity(cause) ||
-		mergeGroup.ctr.mtyp == H0 || mergeGroup.ctr.hr.IsEmpty() ||
+		!mpool.IsRetryableAllocationCapacity(cause) {
+		return false, cause
+	}
+	if drained, err := mergeGroup.ctr.drainExactCountDistinct(
+		proc, mergeGroup.OpAnalyzer); err != nil {
+		return false, err
+	} else if drained {
+		return true, nil
+	}
+	if mergeGroup.ctr.mtyp == H0 || mergeGroup.ctr.hr.IsEmpty() ||
 		mergeGroup.ctr.hr.Hash.GroupCount() == 0 {
 		return false, cause
 	}

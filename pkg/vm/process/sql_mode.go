@@ -16,10 +16,10 @@ package process
 
 import "strings"
 
-func parseStrictSQLMode(mode any) (strict, noZeroDate bool) {
+func parseStrictSQLMode(mode any) (strict, noZeroDate, errorForDivisionByZero bool) {
 	modeStr, ok := mode.(string)
 	if !ok {
-		return false, false
+		return false, false, false
 	}
 
 	for token := range strings.SplitSeq(modeStr, ",") {
@@ -27,23 +27,65 @@ func parseStrictSQLMode(mode any) (strict, noZeroDate bool) {
 		case "TRADITIONAL":
 			strict = true
 			noZeroDate = true
+			errorForDivisionByZero = true
 		case "STRICT_TRANS_TABLES", "STRICT_ALL_TABLES":
 			strict = true
+		case "ERROR_FOR_DIVISION_BY_ZERO":
+			errorForDivisionByZero = true
 		case "NO_ZERO_DATE":
 			noZeroDate = true
 		}
 	}
-	return strict, noZeroDate
+	return strict, noZeroDate, errorForDivisionByZero
 }
 
 func IsStrictMode(mode any) bool {
-	strict, _ := parseStrictSQLMode(mode)
+	strict, _, _ := parseStrictSQLMode(mode)
 	return strict
 }
 
 func IsStrictNoZeroDateMode(mode any) bool {
-	strict, noZeroDate := parseStrictSQLMode(mode)
+	strict, noZeroDate, _ := parseStrictSQLMode(mode)
 	return strict && noZeroDate
+}
+
+// IsStrictDivisionByZeroMode reports whether sql_mode requires division by zero
+// to error in data-changing statements without IGNORE. TRADITIONAL enables both
+// strict mode and ERROR_FOR_DIVISION_BY_ZERO.
+func IsStrictDivisionByZeroMode(mode any) bool {
+	strict, _, errorForDivisionByZero := parseStrictSQLMode(mode)
+	return strict && errorForDivisionByZero
+}
+
+func IsPadCharToFullLengthMode(mode any) bool {
+	modeStr, ok := mode.(string)
+	if !ok {
+		return false
+	}
+
+	for token := range strings.SplitSeq(modeStr, ",") {
+		if strings.EqualFold(strings.TrimSpace(token), "PAD_CHAR_TO_FULL_LENGTH") {
+			return true
+		}
+	}
+	return false
+}
+
+// ResolvePadCharToFullLength reports the current PAD_CHAR_TO_FULL_LENGTH mode.
+// A local process resolves the live session variable, while a remote process
+// uses the sql_mode snapshot carried in SessionInfo by the pipeline codec.
+func ResolvePadCharToFullLength(proc *Process) (bool, error) {
+	if proc == nil {
+		return false, nil
+	}
+	if resolveFunc := proc.GetResolveVariableFunc(); resolveFunc != nil {
+		mode, err := resolveFunc("sql_mode", true, false)
+		if err != nil {
+			return false, err
+		}
+		return IsPadCharToFullLengthMode(mode), nil
+	}
+	return IsPadCharToFullLengthMode(proc.GetSessionInfo().SqlMode), nil
 }
 
 func ResolveExplicitZeroTemporalCastReturnsNull(proc *Process) (bool, error) {

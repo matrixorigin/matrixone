@@ -78,7 +78,7 @@ func TestPersistedAppendableDedupSkipsAbortedRow(t *testing.T) {
 		aborted  bool
 	}{
 		{
-			name:     "v10-abort-column",
+			name:     "v11-abort-column",
 			commitTS: types.BuildTS(5, 0),
 			aborted:  true,
 		},

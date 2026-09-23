@@ -487,8 +487,10 @@ func inRHSValues(expr *plan.Expr, expectedType plan.Type) (values []*plan.Expr, 
 		}
 		// LiteralVec provenance is container-level. Conservatively restore it
 		// on every materialized value so subsequent composite-key rewrites
-		// cannot expose an encoded member after vector-to-literal conversion.
+		// cannot expose an encoded member or lose a protocol requirement after
+		// vector-to-literal conversion.
 		lit.IsSerialized = expr.GetVec().IsSerialized
+		lit.DecimalLiteralRequiresV82 = expr.GetVec().DecimalLiteralRequiresV82
 		literalTyp := typ
 		literalTyp.NotNullable = !lit.Isnull
 		values[i] = &plan.Expr{
@@ -517,6 +519,16 @@ func decodeLiteralVec(literalVec *plan.LiteralVec) (vec vector.Vector, physicalL
 		return vector.Vector{}, 0, false
 	}
 	if err := vec.UnmarshalBinary(literalVec.Data); err != nil || int64(vec.Length()) != int64(literalVec.Len) {
+		return vector.Vector{}, 0, false
+	}
+	// LiteralVec.Data is the stable Vector payload and deliberately omits
+	// runtime ownership. Restore the validated container-level source before
+	// any caller materializes scalar literals from the decoded rows.
+	if literalVec.StringSource > uint32(types.StringSourceCOMStmt) {
+		return vector.Vector{}, 0, false
+	}
+	source := types.StringSource(literalVec.StringSource)
+	if vec.SetStringSource(source) != nil {
 		return vector.Vector{}, 0, false
 	}
 
@@ -558,10 +570,15 @@ func blockFilterLiteralKey(lit *plan.Literal, typ plan.Type) (string, bool) {
 	if lit == nil {
 		return "", false
 	}
-	// IsSerialized only controls diagnostic rendering. It must not make
-	// otherwise identical list/vector block-filter sets compare different,
-	// including plans produced by older peers that do not carry provenance.
+	// IsSerialized and StringSource do not change the value set tested by a
+	// block filter. Normalize both only at this specialized value-comparison
+	// boundary; general expression identity must continue to preserve source.
 	lit = literalForExecutableIdentity(typ, lit)
+	if lit.StringSource != 0 {
+		literalCopy := *lit
+		literalCopy.StringSource = 0
+		lit = &literalCopy
+	}
 	typ = literalSemanticKeyType(typ)
 	litBytes, err := lit.Marshal()
 	if err != nil {
@@ -1274,6 +1291,12 @@ func (builder *QueryBuilder) mergeEqualsInOr(expr *plan.Expr) (*plan.Expr, bool)
 		if err != nil {
 			continue
 		}
+		// Values that still need coercion can make the binder expand the IN back
+		// into an OR-of-equalities. That is not a merge and must not be reported
+		// as progress to normalizeColumnDomain's fixpoint loop.
+		if mergedFn := merged.GetF(); mergedFn != nil && mergedFn.Func.ObjName == "or" {
+			continue
+		}
 		for _, pos := range group.positions {
 			skip[pos] = struct{}{}
 		}
@@ -1614,6 +1637,13 @@ func constLiteralKey(expr *plan.Expr) (string, bool) {
 		return "", false
 	}
 	lit = literalForExecutableIdentity(typ, lit)
+	if lit.StringSource != 0 {
+		// Source ownership affects executable-expression identity, not SQL value
+		// equality used to intersect filter domains.
+		literalCopy := *lit
+		literalCopy.StringSource = 0
+		lit = &literalCopy
+	}
 	typ = literalSemanticKeyType(typ)
 	// Serialize the literal with proto binary Marshal rather than String(),
 	// which goes through the reflection-driven TextMarshaler and can dominate

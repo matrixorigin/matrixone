@@ -1149,8 +1149,8 @@ func (txn *Transaction) dumpInsertBatchLocked(
 		tbl := tables[tbKey.tableKey]
 
 		tableDef := tbl.GetTableDef(txn.proc.Ctx)
-		s3Writer = colexec.NewCNS3DataWriter(
-			txn.proc.GetMPool(), fs, tableDef, -1, false,
+		s3Writer = colexec.NewCNS3DataWriterForService(
+			txn.proc.GetService(), txn.proc.GetMPool(), fs, tableDef, -1, false,
 		)
 
 		for _, bat = range mp[tbKey] {
@@ -1292,8 +1292,8 @@ func (txn *Transaction) dumpDeleteBatchLocked(
 		tbl := tables[tbKey.tableKey]
 
 		pkCol = plan2.PkColByTableDef(tbl.GetTableDef(txn.proc.Ctx))
-		s3Writer = colexec.NewCNS3TombstoneWriter(
-			txn.proc.GetMPool(), fs, plan2.ExprType2Type(&pkCol.Typ), -1,
+		s3Writer = colexec.NewCNS3TombstoneWriterForService(
+			txn.proc.GetService(), txn.proc.GetMPool(), fs, plan2.ExprType2Type(&pkCol.Typ), -1,
 		)
 
 		for i := 0; i < len(mp[tbKey]); i++ {
@@ -1945,6 +1945,18 @@ func (txn *Transaction) deleteTableWrites(
 ) {
 	txn.Lock()
 	defer txn.Unlock()
+
+	// Raw INSERT row IDs are allocated in TxnWorkspaceSegment. Persisted
+	// block IDs cannot match those writes; metadata entries are excluded below.
+	// Only inspect a single block, avoiding an extra scan for multi-block deletes
+	// or a workspace whose original scan is already constant-sized.
+	if len(deleteBlkId) == 1 && len(txn.writes) > 1 {
+		for blockID := range deleteBlkId {
+			if !blockID.Segment().EQ(&colexec.TxnWorkspaceSegment) {
+				return
+			}
+		}
+	}
 
 	// txn worksapce will have four batch type:
 	// 1.RawBatch 2.DN Block RowId(mixed rowid from different block)
@@ -2680,6 +2692,11 @@ func (txn *Transaction) Commit(ctx context.Context) (reqs []txn.TxnRequest, err 
 	})
 
 	if txn.readOnly.Load() {
+		if txn.haveDDL.Load() {
+			if pending := txn.pendingCreatedDatabaseWrites(); len(pending) != 0 {
+				return nil, missingCreatedDatabaseWriteError(ctx, pending)
+			}
+		}
 		return nil, nil
 	}
 
@@ -2751,6 +2768,99 @@ func (txn *Transaction) Commit(ctx context.Context) (reqs []txn.TxnRequest, err 
 	}
 
 	return reqs, nil
+}
+
+// pendingCreatedDatabaseWrites returns the physical catalog inserts required
+// by the transaction-local database view. It allocates only for transactions
+// that have an active CREATE DATABASE operation.
+func (txn *Transaction) pendingCreatedDatabaseWrites() map[databaseKey]uint64 {
+	if txn.databaseOps == nil {
+		return nil
+	}
+
+	txn.databaseOps.RLock()
+	defer txn.databaseOps.RUnlock()
+
+	var pending map[databaseKey]uint64
+	for key, ops := range txn.databaseOps.names {
+		if len(ops) == 0 || ops[len(ops)-1].kind != INSERT {
+			continue
+		}
+		if pending == nil {
+			pending = make(map[databaseKey]uint64)
+		}
+		pending[key] = ops[len(ops)-1].databaseId
+	}
+	return pending
+}
+
+// consumeCreatedDatabaseWrites reconciles active transaction-local CREATE
+// DATABASE operations with the authoritative catalog tuples that will be sent
+// to TN.  It intentionally derives identity from tuple data instead of Entry.note:
+// notes are diagnostic metadata and must not be able to certify a wrong tenant,
+// name, or allocated database ID.
+func consumeCreatedDatabaseWrites(pending map[databaseKey]uint64, bat *batch.Batch) {
+	if len(pending) == 0 || bat == nil || bat.RowCount() == 0 {
+		return
+	}
+
+	findAttr := func(name string) int {
+		for i := range bat.Attrs {
+			if bat.Attrs[i] == name {
+				return i
+			}
+		}
+		return -1
+	}
+	idIdx := findAttr(catalog.SystemDBAttr_ID)
+	nameIdx := findAttr(catalog.SystemDBAttr_Name)
+	accountIdx := findAttr(catalog.SystemDBAttr_AccID)
+	if idIdx < 0 || nameIdx < 0 || accountIdx < 0 ||
+		idIdx >= len(bat.Vecs) || nameIdx >= len(bat.Vecs) || accountIdx >= len(bat.Vecs) ||
+		bat.Vecs[idIdx] == nil || bat.Vecs[nameIdx] == nil || bat.Vecs[accountIdx] == nil {
+		return
+	}
+
+	idVec, nameVec, accountVec := bat.Vecs[idIdx], bat.Vecs[nameIdx], bat.Vecs[accountIdx]
+	rows := bat.RowCount()
+	if idVec.Length() < rows || nameVec.Length() < rows || accountVec.Length() < rows {
+		return
+	}
+	for row := range rows {
+		if idVec.IsNull(uint64(row)) || nameVec.IsNull(uint64(row)) || accountVec.IsNull(uint64(row)) {
+			continue
+		}
+		key := genDatabaseKey(
+			vector.GetFixedAtNoTypeCheck[uint32](accountVec, row),
+			string(nameVec.GetBytesAt(row)),
+		)
+		if expectedID, ok := pending[key]; ok &&
+			expectedID == vector.GetFixedAtNoTypeCheck[uint64](idVec, row) {
+			delete(pending, key)
+		}
+	}
+}
+
+func missingCreatedDatabaseWriteError(ctx context.Context, pending map[databaseKey]uint64) error {
+	var key databaseKey
+	var id uint64
+	found := false
+	for candidate, candidateID := range pending {
+		if !found || candidate.accountId < key.accountId ||
+			(candidate.accountId == key.accountId && candidate.name < key.name) {
+			key, id, found = candidate, candidateID, true
+		}
+	}
+	if !found {
+		return nil
+	}
+	return moerr.NewInternalErrorf(
+		ctx,
+		"cannot commit CREATE DATABASE %q (account %d, id %d): catalog insert is missing or inconsistent",
+		key.name,
+		key.accountId,
+		id,
+	)
 }
 
 func (txn *Transaction) FinalizeCommit(context.Context) {

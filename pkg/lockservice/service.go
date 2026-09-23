@@ -58,6 +58,7 @@ type service struct {
 	deadlockDetector      *detector
 	events                *waiterEvents
 	unknownCommitResolver *unknownCommitResolver
+	externalTxns          externalTxnLiveness
 	clock                 clock.Clock
 	stopper               *stopper.Stopper
 	stopOnce              sync.Once
@@ -101,7 +102,14 @@ type service struct {
 		drainSnapshotReady bool
 		groupTables        [][]pb.LockTable
 		lockTableRef       map[uint32]map[uint64]uint64
-		allocating         map[uint32]map[uint64]chan struct{}
+		// remoteBindRefs is a source-local index of exact remote binds that a
+		// transaction may still depend on. A bind enters before its first remote
+		// Lock RPC and leaves only after transaction cleanup succeeds. Route-cache
+		// membership alone must not keep an owner-side lock lease alive. Once a
+		// bind is invalidated, its ref-counted tombstone remains for cleanup but no
+		// longer participates in owner-side heartbeats.
+		remoteBindRefs map[remoteBindKey]remoteBindRef
+		allocating     map[uint32]map[uint64]chan struct{}
 	}
 
 	option struct {
@@ -334,6 +342,37 @@ func (s *service) acquireTxnClosureAdmission(
 	return guard, nil
 }
 
+// remoteBindKey identifies one exact allocator generation of a remote bind.
+// Keep every routing field here: a transaction using an old generation must
+// continue refreshing that generation until it is fenced and cleaned up.
+type remoteBindKey struct {
+	group       uint32
+	table       uint64
+	originTable uint64
+	sharding    pb.Sharding
+	serviceID   string
+	version     uint64
+	allocatorID string
+}
+
+type remoteBindRef struct {
+	bind        pb.LockTable
+	refs        uint64
+	invalidated bool
+}
+
+func makeRemoteBindKey(bind pb.LockTable) remoteBindKey {
+	return remoteBindKey{
+		group:       bind.Group,
+		table:       bind.Table,
+		originTable: bind.OriginTable,
+		sharding:    bind.Sharding,
+		serviceID:   bind.ServiceID,
+		version:     bind.Version,
+		allocatorID: bind.AllocatorID,
+	}
+}
+
 const maxSupersededAllocatorIDs = 64
 
 var _ CommitSequenceProvider = (*service)(nil)
@@ -377,6 +416,7 @@ func NewLockService(
 	s.tableGroups = &lockTableHolders{service: s.serviceID, logger: s.logger, holders: map[uint32]*lockTableHolder{}}
 	s.mu.allocating = make(map[uint32]map[uint64]chan struct{})
 	s.mu.lockTableRef = make(map[uint32]map[uint64]uint64)
+	s.mu.remoteBindRefs = make(map[remoteBindKey]remoteBindRef)
 	s.deadlockDetector = newDeadlockDetector(
 		s.logger,
 		s.fetchTxnWaitingList,
@@ -522,10 +562,11 @@ func (s *service) Lock(
 		s.bindChangeMu.RUnlock()
 		return pb.Result{}, ErrLockTableBindChanged
 	}
-	if txn.lockTableBindTouched(bind) &&
-		bind.ServiceID == s.serviceID &&
-		!admission.consume(bind) {
-		s.incRef(bind.Group, bind.Table)
+	if err := s.acquireTxnBindRef(txn, bind, &admission); err != nil {
+		txn.Unlock()
+		s.bindChangeMu.RUnlock()
+		s.detachRejectedRemoteBind(bind)
+		return pb.Result{}, err
 	}
 	s.bindChangeMu.RUnlock()
 	defer txn.Unlock()
@@ -733,6 +774,9 @@ func (s *service) Unlock(
 
 	defer logUnlockTxn(s.logger, txn)()
 	binds := txn.lockTableBindsLocked()
+	if len(mutations) == 0 {
+		s.batchRemoteUnlockTables(unlockCtx, txn, commitTS)
+	}
 	lockTableFunc := func(bind pb.LockTable) (lockTable, error) {
 		return s.getLockTableForTxnUnlock(bind), nil
 	}
@@ -753,7 +797,7 @@ func (s *service) Unlock(
 		return moerr.NewInternalErrorNoCtx(
 			"transaction changed while finalizing ordinary closure")
 	}
-	s.reduceCanMoveGroupTables(binds)
+	s.releaseTxnBindRefs(binds)
 	s.tryCompleteDrain()
 	s.deadlockDetector.txnClosed(txnID)
 	// activeTxn pooling uses the still-held transaction mutex as its generation
@@ -864,6 +908,158 @@ func (s *service) unlockRemoteLockTable(
 			txn.removeClosedLockTable(bind.Group, bind.Table, locks)
 		}
 	}
+	return s.finalizeRemoteTxnIfClosedLocked(txnID, txn)
+}
+
+// unlockRemoteLockTables closes a bounded set of ordinary tables with one
+// owner-side admission and one transaction-generation lock. Proxy handoff
+// mutations deliberately remain on unlockRemoteLockTable because each table
+// has its own conditional ownership transition.
+func (s *service) unlockRemoteLockTables(
+	ctx context.Context,
+	binds []pb.LockTable,
+	txnID []byte,
+	commitTS timestamp.Timestamp,
+) error {
+	if len(binds) < 2 || len(binds) > maxRemoteUnlockBatchSize {
+		return moerr.NewInternalErrorNoCtx("invalid remote unlock batch size")
+	}
+
+	type tableKey struct {
+		group uint32
+		table uint64
+	}
+	seen := make(map[tableKey]struct{}, len(binds))
+	for _, bind := range binds {
+		if bind.ServiceID != s.serviceID {
+			return moerr.NewInternalErrorNoCtx(
+				"remote unlock batch contains a table owned by another service")
+		}
+		key := tableKey{group: bind.Group, table: bind.Table}
+		if _, ok := seen[key]; ok {
+			return moerr.NewInternalErrorNoCtx(
+				"remote unlock batch contains a duplicate table")
+		}
+		seen[key] = struct{}{}
+	}
+
+	serviceCtx, admitted := s.beginTxnClosure()
+	if !admitted {
+		return nil
+	}
+	defer s.endTxnClosure()
+
+	// Once the owner admits cleanup it is durable independently of the RPC
+	// caller. Service shutdown is the only cancellation owner, matching the
+	// table-scoped remote Unlock contract.
+	unlockCtx := serviceCtx
+	if unlockCtx == nil {
+		unlockCtx = context.Background()
+	}
+	if err := s.wait(unlockCtx); err != nil {
+		return err
+	}
+	releaseClosure, err := s.acquireTxnClosureAdmission(unlockCtx, txnID, nil)
+	if err != nil {
+		return err
+	}
+	defer releaseClosure.release()
+
+	txn, txnGeneration, _ := s.lockActiveTxnGeneration(txnID)
+	if txn == nil {
+		return nil
+	}
+	defer txn.Unlock()
+
+	validate := func() error {
+		for _, bind := range binds {
+			holder := txn.lockHolders[bind.Group]
+			if holder == nil {
+				continue
+			}
+			recorded, touched := holder.tableBinds[bind.Table]
+			if !touched {
+				recorded, touched = holder.tableBindIntents[bind.Table]
+			}
+			if touched && !recorded.Equal(bind) {
+				return moerr.NewInternalErrorNoCtx(
+					"remote batch unlock does not match transaction lock-table generation")
+			}
+		}
+		return nil
+	}
+	// Reject a stale batch before sealing an otherwise live transaction.
+	if err := validate(); err != nil {
+		return err
+	}
+	txn.beginClosingLocked(s.logger)
+	if !txn.waitAsyncLockOpsLocked(txnID, txnGeneration) {
+		return nil
+	}
+	// In-flight Lock callbacks can publish ledgers while the drain yields the
+	// transaction mutex, so the whole batch must be revalidated before its first
+	// irreversible table release.
+	if err := validate(); err != nil {
+		return err
+	}
+
+	type releasePlan struct {
+		bind  pb.LockTable
+		locks *cowSlice
+		local *localLockTable
+	}
+	plans := make([]releasePlan, 0, len(binds))
+	for _, bind := range binds {
+		holder := txn.lockHolders[bind.Group]
+		if holder == nil {
+			continue
+		}
+		locks := holder.tableKeys[bind.Table]
+		if locks == nil {
+			continue
+		}
+		recorded, ok := holder.tableBinds[bind.Table]
+		if !ok || !recorded.Equal(bind) {
+			return moerr.NewInternalErrorNoCtx(
+				"remote batch unlock does not match transaction lock-table generation")
+		}
+		current := s.tableGroups.get(bind.Group, bind.Table)
+		if current != nil && recorded.Equal(current.getBind()) {
+			local, ok := current.(*localLockTable)
+			if !ok {
+				return moerr.NewInternalErrorNoCtx(
+					"remote transaction generation resolves to a non-local lock table")
+			}
+			plans = append(plans, releasePlan{bind: bind, locks: locks, local: local})
+			continue
+		}
+		plans = append(plans, releasePlan{bind: bind, locks: locks})
+	}
+
+	// Resolve the complete batch before its first irreversible release. This
+	// keeps a corrupt or stale later table from partially unlocking an otherwise
+	// valid prefix.
+	for _, plan := range plans {
+		if plan.local != nil {
+			if err := plan.local.unlockWithContext(
+				unlockCtx,
+				txn,
+				plan.locks,
+				commitTS,
+			); err != nil {
+				return err
+			}
+		}
+		// A missing/rebound table already closed the old physical generation.
+		txn.removeClosedLockTable(plan.bind.Group, plan.bind.Table, plan.locks)
+	}
+	return s.finalizeRemoteTxnIfClosedLocked(txnID, txn)
+}
+
+func (s *service) finalizeRemoteTxnIfClosedLocked(
+	txnID []byte,
+	txn *activeTxn,
+) error {
 	if txn.hasHeldLockTablesLocked() {
 		return nil
 	}
@@ -876,11 +1072,91 @@ func (s *service) unlockRemoteLockTable(
 		return moerr.NewInternalErrorNoCtx(
 			"remote transaction changed while its final lock table was closing")
 	}
-	s.reduceCanMoveGroupTables(binds)
+	s.releaseTxnBindRefs(binds)
 	s.tryCompleteDrain()
 	s.deadlockDetector.txnClosed(txnID)
 	s.activeTxnHolder.freeActiveTxn(txn)
 	return nil
+}
+
+type remoteUnlockBatchEntry struct {
+	group  uint32
+	table  uint64
+	bind   pb.LockTable
+	locks  *cowSlice
+	remote *remoteLockTable
+}
+
+// batchRemoteUnlockTables opportunistically removes negotiated ordinary
+// remote tables from the origin ledger. Any protocol, transport or owner error
+// leaves the affected entries attached so the existing table-scoped path can
+// retry them without changing correctness semantics.
+func (s *service) batchRemoteUnlockTables(
+	ctx context.Context,
+	txn *activeTxn,
+	commitTS timestamp.Timestamp,
+) {
+	byOwner := make(map[string][]remoteUnlockBatchEntry)
+	for group, holder := range txn.lockHolders {
+		for table, locks := range holder.tableKeys {
+			if !txn.isBatchUnlockSupportedLocked(group, table) {
+				continue
+			}
+			bind, ok := holder.tableBinds[table]
+			if !ok || bind.ServiceID == s.serviceID {
+				continue
+			}
+			lockTable := s.getLockTableForTxnUnlock(bind)
+			remote, ok := lockTable.(*remoteLockTable)
+			if !ok {
+				// Proxy tables may create per-table conditional mutations and must
+				// retain their existing table-scoped transition.
+				continue
+			}
+			byOwner[bind.ServiceID] = append(byOwner[bind.ServiceID], remoteUnlockBatchEntry{
+				group:  group,
+				table:  table,
+				bind:   bind,
+				locks:  locks,
+				remote: remote,
+			})
+		}
+	}
+
+	owners := make([]string, 0, len(byOwner))
+	for owner := range byOwner {
+		owners = append(owners, owner)
+	}
+	sort.Strings(owners)
+	for _, owner := range owners {
+		entries := byOwner[owner]
+		sort.Slice(entries, func(i, j int) bool {
+			if entries[i].group != entries[j].group {
+				return entries[i].group < entries[j].group
+			}
+			return entries[i].table < entries[j].table
+		})
+		for len(entries) >= 2 {
+			n := min(len(entries), maxRemoteUnlockBatchSize)
+			binds := make([]pb.LockTable, n)
+			for idx := range n {
+				binds[idx] = entries[idx].bind
+			}
+			if err := entries[0].remote.doBatchUnlock(
+				ctx,
+				txn,
+				binds,
+				commitTS,
+			); err != nil {
+				break
+			}
+			for idx := range n {
+				entry := entries[idx]
+				txn.removeClosedLockTable(entry.group, entry.table, entry.locks)
+			}
+			entries = entries[n:]
+		}
+	}
 }
 
 // adoptRemoteHandoffLockTableRefs transfers service-drain ownership after a
@@ -1010,6 +1286,9 @@ func (s *service) unlockUnknownCommit(
 
 	defer logUnlockTxn(s.logger, txn)()
 	binds := txn.lockTableBindsLocked()
+	if len(mutations) == 0 {
+		s.batchRemoteUnlockTables(ctx, txn, commitTS)
+	}
 	if err := txn.closeWithoutFreeWithContext(
 		ctx,
 		txnID,
@@ -1027,7 +1306,7 @@ func (s *service) unlockUnknownCommit(
 		return moerr.NewInternalErrorNoCtx(
 			"unknown-commit transaction changed while finalizing closure")
 	}
-	s.reduceCanMoveGroupTables(binds)
+	s.releaseTxnBindRefs(binds)
 	s.tryCompleteDrain()
 	s.deadlockDetector.txnClosed(txnID)
 	s.activeTxnHolder.freeActiveTxn(txn)
@@ -1089,6 +1368,9 @@ func (s *service) unlockWithContext(
 
 	defer logUnlockTxn(s.logger, txn)()
 	binds := txn.lockTableBindsLocked()
+	if len(mutations) == 0 {
+		s.batchRemoteUnlockTables(ctx, txn, commitTS)
+	}
 	err := txn.closeWithoutFreeWithContext(ctx, txnID, commitTS, func(bind pb.LockTable) (lockTable, error) {
 		return s.getLockTableForTxnUnlock(bind), nil
 	}, s.logger, mutations...)
@@ -1099,7 +1381,7 @@ func (s *service) unlockWithContext(
 		return moerr.NewInternalErrorNoCtx(
 			"retryable transaction changed while finalizing closure")
 	}
-	s.reduceCanMoveGroupTables(binds)
+	s.releaseTxnBindRefs(binds)
 	// The deadlock detector will hold the deadlocked transaction that is aborted
 	// to avoid the situation where the deadlock detection is interfered with by
 	// the abort transaction. When a transaction is unlocked, the deadlock detector
@@ -1148,19 +1430,186 @@ func (s *service) Resume() error {
 	return err
 }
 
-func (s *service) reduceCanMoveGroupTables(binds []pb.LockTable) {
+func (s *service) releaseTxnBindRefs(binds []pb.LockTable) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if len(s.mu.lockTableRef) == 0 {
-		return
-	}
 
 	for _, bind := range binds {
 		if bind.ServiceID != s.serviceID {
+			s.releaseRemoteBindRefLocked(bind)
 			continue
 		}
 		s.releaseBindRefLocked(bind.Group, bind.Table, bind, s.mu.drainSnapshotReady)
 	}
+}
+
+// acquireTxnBindRef records the first exact bind generation touched by a
+// transaction. The caller holds txn's mutex. Local binds participate in CN
+// drain accounting; remote binds participate in owner-side lease heartbeats.
+func (s *service) acquireTxnBindRef(
+	txn *activeTxn,
+	bind pb.LockTable,
+	admission *lockAdmission,
+) error {
+	if bind.ServiceID != s.serviceID {
+		if !s.acquireRemoteTxnBindRef(txn, bind) {
+			return ErrLockTableBindChanged
+		}
+		return nil
+	}
+	if !txn.lockTableBindTouched(bind) {
+		return nil
+	}
+	if !admission.consume(bind) {
+		s.incRef(bind.Group, bind.Table)
+	}
+	return nil
+}
+
+// detachRejectedRemoteBind lets the next request refresh a route republished
+// from an allocator reply before owner convergence. Invalidated refs cannot
+// send locks or heartbeats, so neither path would otherwise refresh this cache.
+// Keep the ref tombstone: old transactions still own its release and fences.
+// The caller must release txn and bindChangeMu before entering this transition.
+func (s *service) detachRejectedRemoteBind(bind pb.LockTable) {
+	if bind.ServiceID == s.serviceID {
+		return
+	}
+	s.bindChangeMu.Lock()
+	s.mu.RLock()
+	ref, exists := s.mu.remoteBindRefs[makeRemoteBindKey(bind)]
+	var removed lockTable
+	if exists && ref.invalidated {
+		// Pin the ref through detachment: last-release/reacquisition can create
+		// a valid ref for the same key while a rejected request is unwinding.
+		removed = s.tableGroups.detachExactBind(bind)
+	}
+	s.mu.RUnlock()
+	s.bindChangeMu.Unlock()
+	if removed != nil {
+		removed.close(closeReasonBindChanged)
+	}
+}
+
+// acquireRemoteTxnBindRef atomically couples transaction admission to the
+// heartbeat eligibility of an exact remote bind. The caller holds txn's mutex
+// and bindChangeMu for reading, so an invalidation cannot fence existing users
+// between this check and publication of the new intent/ref pair.
+func (s *service) acquireRemoteTxnBindRef(txn *activeTxn, bind pb.LockTable) bool {
+	key := makeRemoteBindKey(bind)
+	if holder := txn.lockHolders[bind.Group]; holder != nil {
+		if recorded, ok := holder.tableBindIntents[bind.Table]; ok {
+			if makeRemoteBindKey(recorded) != key {
+				return false
+			}
+			s.mu.RLock()
+			ref, exists := s.mu.remoteBindRefs[key]
+			s.mu.RUnlock()
+			return exists && !ref.invalidated
+		}
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if ref, ok := s.mu.remoteBindRefs[key]; ok && ref.invalidated {
+		return false
+	}
+	if !txn.lockTableBindTouched(bind) {
+		return false
+	}
+	if s.mu.remoteBindRefs == nil {
+		s.mu.remoteBindRefs = make(map[remoteBindKey]remoteBindRef)
+	}
+	return s.acquireRemoteBindRefLocked(key, bind)
+}
+
+func (s *service) acquireRemoteBindRef(bind pb.LockTable) bool {
+	if bind.ServiceID == s.serviceID {
+		return true
+	}
+	key := makeRemoteBindKey(bind)
+	s.mu.Lock()
+	if s.mu.remoteBindRefs == nil {
+		s.mu.remoteBindRefs = make(map[remoteBindKey]remoteBindRef)
+	}
+	acquired := s.acquireRemoteBindRefLocked(key, bind)
+	s.mu.Unlock()
+	return acquired
+}
+
+func (s *service) acquireRemoteBindRefLocked(key remoteBindKey, bind pb.LockTable) bool {
+	ref := s.mu.remoteBindRefs[key]
+	if ref.invalidated {
+		return false
+	}
+	if ref.refs == 0 {
+		ref.bind = bind
+	}
+	ref.refs++
+	s.mu.remoteBindRefs[key] = ref
+	return true
+}
+
+func (s *service) releaseRemoteBindRefLocked(bind pb.LockTable) {
+	key := makeRemoteBindKey(bind)
+	ref, ok := s.mu.remoteBindRefs[key]
+	if !ok {
+		return
+	}
+	if ref.refs > 1 {
+		ref.refs--
+		s.mu.remoteBindRefs[key] = ref
+		return
+	}
+	delete(s.mu.remoteBindRefs, key)
+}
+
+// invalidateRemoteBindRef stops owner-side lease heartbeats for an exact bind
+// which is known to be unusable or superseded. Keep the ref-counted tombstone
+// until transaction cleanup releases every consumer: deleting it here would
+// let a late release decrement a newly acquired ref for the same exact key.
+func (s *service) invalidateRemoteBindRef(bind pb.LockTable) {
+	key := makeRemoteBindKey(bind)
+	s.mu.Lock()
+	ref, ok := s.mu.remoteBindRefs[key]
+	if ok && !ref.invalidated {
+		ref.invalidated = true
+		s.mu.remoteBindRefs[key] = ref
+	}
+	s.mu.Unlock()
+}
+
+func (s *service) invalidateRemoteBindRefsChangedBy(bind pb.LockTable) {
+	s.mu.Lock()
+	for key, ref := range s.mu.remoteBindRefs {
+		if ref.bind.Group != bind.Group ||
+			ref.bind.Table != bind.Table ||
+			!ref.bind.Changed(bind) ||
+			ref.invalidated {
+			continue
+		}
+		ref.invalidated = true
+		s.mu.remoteBindRefs[key] = ref
+	}
+	s.mu.Unlock()
+}
+
+func (s *service) collectRemoteLockBinds(scratch []pb.LockTable) []pb.LockTable {
+	oldLen := len(scratch)
+	binds := scratch[:0]
+	s.mu.RLock()
+	for _, ref := range s.mu.remoteBindRefs {
+		if ref.invalidated {
+			continue
+		}
+		binds = append(binds, ref.bind)
+	}
+	s.mu.RUnlock()
+	if len(binds) < oldLen {
+		clear(scratch[len(binds):oldLen])
+	}
+	return binds
 }
 
 func (s *service) releaseBindRefLocked(
@@ -1449,6 +1898,26 @@ func (s *service) GetServiceID() string {
 	return s.serviceID
 }
 
+func (s *service) RegisterExternalTxn(txnID []byte) error {
+	if len(txnID) == 0 {
+		return moerr.NewInternalErrorNoCtx("cannot register an empty external transaction ID")
+	}
+	s.lifecycle.RLock()
+	defer s.lifecycle.RUnlock()
+	if s.lifecycle.closing {
+		return moerr.NewBackendClosedNoCtx()
+	}
+	s.externalTxns.register(txnID)
+	return nil
+}
+
+func (s *service) UnregisterExternalTxn(txnID []byte) {
+	if len(txnID) == 0 {
+		return
+	}
+	s.externalTxns.unregister(txnID)
+}
+
 func (s *service) GetConfig() Config {
 	return s.cfg
 }
@@ -1488,6 +1957,7 @@ func (s *service) Close() error {
 		s.deadlockDetector.close()
 		s.events.close()
 		s.activeTxnHolder.close()
+		s.externalTxns.clear()
 		if s.unknownCommitResolver != nil {
 			// The resolver task is joined and callback admission is sealed. Drain
 			// every remaining reservation by transferring invocation out of service
@@ -1889,10 +2359,19 @@ func (s *service) beginLockTablePublication() bool {
 }
 
 func (s *service) fenceByBindChanged(bind pb.LockTable) {
+	s.invalidateRemoteBindRefsChangedBy(bind)
 	if s.activeTxnHolder == nil {
 		return
 	}
 	s.activeTxnHolder.fenceByBindChanged(bind)
+}
+
+func (s *service) fenceByExactBind(bind pb.LockTable) {
+	s.invalidateRemoteBindRef(bind)
+	if s.activeTxnHolder == nil {
+		return
+	}
+	s.activeTxnHolder.fenceByExactBind(bind)
 }
 
 func (s *service) checkBindChangedBeforeLockSuccess(
@@ -2301,6 +2780,7 @@ type activeTxnHolder interface {
 	deleteActiveTxn(txnID []byte) *activeTxn
 	restoreActiveTxn(txn *activeTxn) bool
 	fenceByBindChanged(bind pb.LockTable) int
+	fenceByExactBind(bind pb.LockTable) int
 	keepRemoteActiveTxn(remoteService string)
 	keepRemoteLockBindActive(remoteService string, bind pb.LockTable)
 	hasRemoteLockBind(remoteService string, bind pb.LockTable, maxKeepInterval time.Duration) bool
@@ -2553,6 +3033,14 @@ func (h *mapBasedTxnHolder) restoreActiveTxn(txn *activeTxn) bool {
 }
 
 func (h *mapBasedTxnHolder) fenceByBindChanged(bind pb.LockTable) int {
+	return h.fenceByBind(bind, false)
+}
+
+func (h *mapBasedTxnHolder) fenceByExactBind(bind pb.LockTable) int {
+	return h.fenceByBind(bind, true)
+}
+
+func (h *mapBasedTxnHolder) fenceByBind(bind pb.LockTable, exact bool) int {
 	n := 0
 	for i := range h.activeTxns {
 		shard := &h.activeTxns[i]
@@ -2594,7 +3082,13 @@ func (h *mapBasedTxnHolder) fenceByBindChanged(bind pb.LockTable) int {
 					time.Sleep(time.Millisecond)
 					continue
 				}
-				if entry.txn.fenceByBindChangedLocked(bind, h.logger) {
+				var fenced bool
+				if exact {
+					fenced = entry.txn.fenceByExactBindLocked(bind, h.logger)
+				} else {
+					fenced = entry.txn.fenceByBindChangedLocked(bind, h.logger)
+				}
+				if fenced {
 					n++
 				}
 				entry.txn.Unlock()
@@ -2934,6 +3428,26 @@ func (m *lockTableHolders) removeWithFilter(
 	removed := m.detachWithFilter(filter)
 	closeLockTables(removed, reason)
 	return len(removed)
+}
+
+// detachExactBind removes only the rejected routing generation in constant
+// time. A delayed rejection must not evict a newer or metadata-distinct route.
+func (m *lockTableHolders) detachExactBind(bind pb.LockTable) lockTable {
+	m.RLock()
+	h := m.holders[bind.Group]
+	m.RUnlock()
+	if h == nil {
+		return nil
+	}
+	h.Lock()
+	defer h.Unlock()
+	table := h.tables[bind.Table]
+	if table == nil || makeRemoteBindKey(table.getBind()) != makeRemoteBindKey(bind) {
+		return nil
+	}
+	delete(h.tables, bind.Table)
+	m.version.Add(1)
+	return table
 }
 
 // detachWithFilter removes matching tables from lookup without closing them.

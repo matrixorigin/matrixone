@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"encoding/binary"
 	"testing"
 
@@ -22,6 +23,68 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
+
+func TestTransparentMySQLSpecialValueProof(t *testing.T) {
+	storage := planpb.Type{Id: int32(types.T_uint64), Enumvalues: ",a"}
+	display, err := makeEnumOrSetDisplayValue(context.Background(), GetColExpr(storage, 10, 0))
+	require.NoError(t, err)
+	newBuilder := func() *QueryBuilder {
+		return &QueryBuilder{
+			qry: &planpb.Query{Nodes: []*planpb.Node{
+				{NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{10}},
+				{NodeType: planpb.Node_PROJECT, BindingTags: []int32{11}, Children: []int32{0}, ProjectList: []*planpb.Expr{DeepCopyExpr(display)}},
+				{NodeType: planpb.Node_PROJECT, BindingTags: []int32{12}, Children: []int32{1}, ProjectList: []*planpb.Expr{GetColExpr(display.Typ, 11, 0)}},
+			}},
+			tag2NodeID:             map[int32]int32{10: 0, 11: 1, 12: 2},
+			ctxByNode:              []*BindContext{nil, {}, {}},
+			setBitmapByDisplayNode: make(map[[2]int32]int32),
+		}
+	}
+	expr := GetColExpr(display.Typ, 12, 0)
+	b := newBuilder()
+	raw, ok := b.materializeTransparentMySQLSpecialValue(expr)
+	require.True(t, ok)
+	require.Equal(t, int32(1), raw.GetCol().ColPos)
+	require.Empty(t, raw.Typ.Enumvalues)
+	require.False(t, raw.Typ.NotNullable)
+	for _, id := range []int{1, 2} {
+		require.Len(t, b.qry.Nodes[id].ProjectList, 2)
+	}
+	reused, ok := b.materializeTransparentMySQLSpecialValue(expr)
+	require.True(t, ok)
+	require.Equal(t, raw, reused)
+	require.Len(t, b.setBitmapByDisplayNode, 2)
+	require.Len(t, b.qry.Nodes[1].ProjectList, 2)
+	require.Len(t, b.qry.Nodes[2].ProjectList, 2)
+	for name, block := range map[string]func(*QueryBuilder){
+		"distinct owner": func(b *QueryBuilder) { b.ctxByNode[1].isDistinct = true },
+		"group owner":    func(b *QueryBuilder) { b.ctxByNode[1].groups = []*planpb.Expr{display} },
+		"project limit":  func(b *QueryBuilder) { b.qry.Nodes[1].Limit = makePlan2Int64ConstExprWithType(2) },
+		"project offset": func(b *QueryBuilder) { b.qry.Nodes[1].Offset = makePlan2Int64ConstExprWithType(1) },
+		"sort limit below result projection": func(b *QueryBuilder) {
+			b.qry.Nodes = append(b.qry.Nodes, &planpb.Node{NodeType: planpb.Node_SORT, Children: []int32{1}, Limit: makePlan2Int64ConstExprWithType(2)})
+			b.qry.Nodes[2].Children = []int32{3}
+		},
+		"distinct below result projection": func(b *QueryBuilder) {
+			b.qry.Nodes = append(b.qry.Nodes, &planpb.Node{NodeType: planpb.Node_DISTINCT, Children: []int32{1}})
+			b.qry.Nodes[2].Children = []int32{3}
+		},
+		"set operation": func(b *QueryBuilder) { b.qry.Nodes[1].NodeType = planpb.Node_UNION_ALL },
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := newBuilder()
+			block(b)
+			before, err := b.qry.Marshal()
+			require.NoError(t, err)
+			_, ok := b.materializeTransparentMySQLSpecialValue(expr)
+			require.False(t, ok)
+			after, err := b.qry.Marshal()
+			require.NoError(t, err)
+			require.Equal(t, before, after, "failed proof must not mutate any projection")
+			require.Empty(t, b.setBitmapByDisplayNode)
+		})
+	}
+}
 
 func newMySQLSpecialOrderMock() *MockOptimizer {
 	mock := NewMockOptimizer(false)
@@ -264,16 +327,111 @@ func TestMySQLSpecialOrderProvenanceRejectsNonReversibleEnum(t *testing.T) {
 	}
 }
 
-func TestMySQLSpecialOrderProvenanceRejectsSetWithEmptyMember(t *testing.T) {
+func TestMySQLSpecialOrderProvenanceSetWithEmptyMember(t *testing.T) {
 	logicPlan, err := runOneStmt(newMySQLSpecialOrderMock(), t,
 		"select id, s from set_empty_member_t order by s")
 	require.NoError(t, err)
 	requireSingleSortKeyType(t, logicPlan, types.T_uint64)
 
-	_, err = runOneStmt(newMySQLSpecialOrderMock(), t,
-		"select id, s from (select id, s from set_empty_member_t) d order by s, id")
-	require.Error(t, err)
-	require.Contains(t, err.Error(), "ambiguous SET display values")
+	for _, sql := range []string{
+		"select id, s from (select id, s from set_empty_member_t) d order by s",
+		"with c as (select id, s from set_empty_member_t) select id, s from c order by s",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			p, err := runOneStmt(newMySQLSpecialOrderMock(), t, sql)
+			require.NoError(t, err)
+			requireSingleSortKeyType(t, p, types.T_uint64)
+			require.Nil(t, findPlanFunctionExpr(p, moSetCastValueToIndexFun), "transparent projection must retain raw bitmap")
+		})
+	}
+	for _, sql := range []string{
+		"select s, count(*) from set_empty_member_t group by s order by s",
+		"select distinct s from set_empty_member_t order by s",
+		"select s from (select s from set_empty_member_t limit 2) d order by s",
+		"select s from (select distinct s from set_empty_member_t) d order by s",
+		"select s from (select s from set_empty_member_t group by s) d order by s",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			p, err := runOneStmt(newMySQLSpecialOrderMock(), t, sql)
+			require.NoError(t, err)
+			requireSingleSortKeyType(t, p, types.T_uint64)
+			conversion := findPlanFunctionExpr(p, moSetCastValueToIndexFun)
+			require.NotNil(t, conversion)
+			require.False(t, conversion.Typ.NotNullable)
+			for _, node := range p.GetQuery().Nodes {
+				if node.NodeType == planpb.Node_AGG {
+					require.Len(t, node.GroupBy, 1, "raw payload must not split display equality")
+					require.Equal(t, int32(types.T_varchar), node.GroupBy[0].Typ.Id)
+				}
+			}
+		})
+	}
+}
+
+func TestMySQLSpecialNumericAggregateIdentity(t *testing.T) {
+	for _, name := range []string{"sum", "avg"} {
+		for _, operand := range []string{"e", "s", "distinct e", "distinct s"} {
+			for _, source := range []string{"enum_order_t", "(select e, s from enum_order_t) d"} {
+				sql := "select " + name + "(" + operand + ") from " + source
+				t.Run(sql, func(t *testing.T) {
+					p, err := runOneStmt(newMySQLSpecialOrderMock(), t, sql)
+					require.NoError(t, err)
+					fn := findPlanFunctionExpr(p, name)
+					require.NotNil(t, fn)
+					require.Len(t, fn.GetF().Args, 1)
+					typ := fn.GetF().Args[0].Typ
+					require.Contains(t, []int32{int32(types.T_uint16), int32(types.T_uint64)}, typ.Id)
+					require.Empty(t, typ.Enumvalues)
+					require.Nil(t, findPlanFunctionExpr(p, moSetCastValueToIndexFun))
+					require.Nil(t, findPlanFunctionExpr(p, moEnumCastValueToIndexFun))
+				})
+			}
+		}
+	}
+	for _, sql := range []string{
+		"select sum(s), avg(distinct s) from set_empty_member_t",
+		"select sum(s) from (select s from set_empty_member_t) d",
+		"select sum(s) from (select s from set_empty_member_t limit 2) d",
+		"select sum(s) from (select distinct s from set_empty_member_t) d",
+		"select s, sum(s), avg(s) from set_empty_member_t group by s",
+	} {
+		_, err := runOneStmt(newMySQLSpecialOrderMock(), t, sql)
+		require.NoError(t, err, sql)
+	}
+	_, err := runOneStmt(newMySQLSpecialOrderMock(), t, "select s + 0 from set_empty_member_t group by s")
+	require.ErrorContains(t, err, "without retained storage identity")
+	_, err = runOneStmt(newMySQLSpecialOrderMock(), t, "select sum(v) from enum_order_t")
+	require.Error(t, err, "ordinary VARCHAR aggregate rejection remains unchanged")
+}
+
+func TestCanonicalSetCastThroughResultProjection(t *testing.T) {
+	for _, target := range []string{"unsigned", "decimal(10,2)", "double"} {
+		for _, source := range []string{
+			"select distinct s from set_empty_member_t",
+			"select distinct s from set_empty_member_t order by s",
+			"select s from set_empty_member_t order by id limit 2",
+			"select s from set_empty_member_t group by s order by s limit 2",
+		} {
+			t.Run(source, func(t *testing.T) {
+				p, err := runOneStmt(newMySQLSpecialOrderMock(), t, "select cast(s as "+target+") from ("+source+") d")
+				require.NoError(t, err)
+				conversion := findPlanFunctionExpr(p, moSetCastValueToIndexFun)
+				require.NotNil(t, conversion, "cast must use surviving canonical display, not raw bitmap")
+				require.Empty(t, conversion.Typ.Enumvalues)
+				for _, node := range p.GetQuery().Nodes {
+					if node.NodeType == planpb.Node_AGG {
+						require.Len(t, node.GroupBy, 1)
+						require.Equal(t, int32(types.T_varchar), node.GroupBy[0].Typ.Id)
+					}
+				}
+			})
+		}
+		p, err := runOneStmt(newMySQLSpecialOrderMock(), t, "select cast(s as "+target+") from (select s from set_empty_member_t) d")
+		require.NoError(t, err)
+		require.False(t, planHasVarcharToIntegerCast(p))
+		require.True(t, planHasPlainUint64ColRef(p), "transparent casts must carry raw numeric identity")
+		require.Nil(t, findPlanFunctionExpr(p, moSetCastValueToIndexFun))
+	}
 }
 
 func TestMySQLSpecialOrderProvenanceInGroupConcat(t *testing.T) {

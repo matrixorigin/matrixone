@@ -12,9 +12,25 @@ insert into src_upd values
 (10, 'silver fox hunts', 'active',   100),
 (11, 'golden fox naps',  'active',   200),
 (12, 'bronze fox digs',  'archived', 300);
-select sleep(30);
-➤ sleep(30)[-6,8,0]  𝄀
-0
+create table src_phantom (id bigint primary key, body varchar(200), status varchar(20), prio int,
+FULLTEXT2 ftidx (body) INCLUDE (status, prio));
+insert into src_phantom values
+(20, 'silver fox alpha', 'active', 500),
+(21, 'golden fox beta',  'active', 600);
+set @src_ins_ft2 = (select index_table_name from mo_catalog.mo_indexes where name = 'ftidx' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'src_ins') limit 1);
+set @src_upd_ft2 = (select index_table_name from mo_catalog.mo_indexes where name = 'ftidx' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'src_upd') limit 1);
+set @src_phantom_ft2 = (select index_table_name from mo_catalog.mo_indexes where name = 'ftidx' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'src_phantom') limit 1);
+set @wait_include_initial_sql = concat(
+'select ',
+'(select coalesce(max(chunk_id), -1) >= 0 from `', database(), '`.`', @src_ins_ft2, '` where index_id = ''cdc_tail'' and tag = 1) as src_ins_ready, ',
+'(select coalesce(max(chunk_id), -1) >= 0 from `', database(), '`.`', @src_upd_ft2, '` where index_id = ''cdc_tail'' and tag = 1) as src_upd_ready, ',
+'(select coalesce(max(chunk_id), -1) >= 0 from `', database(), '`.`', @src_phantom_ft2, '` where index_id = ''cdc_tail'' and tag = 1) as src_phantom_ready'
+);
+prepare wait_include_initial from @wait_include_initial_sql;
+execute wait_include_initial;
+➤ src_ins_ready[-7,1,0]  ¦  src_upd_ready[-7,1,0]  ¦  src_phantom_ready[-7,1,0]  𝄀
+1  ¦  1  ¦  1
+deallocate prepare wait_include_initial;
 select id, status, prio from src_ins where match(body) against('fox') order by id;
 ➤ id[-5,64,0]  ¦  status[12,20,0]  ¦  prio[4,32,0]  𝄀
 1  ¦  active  ¦  10  𝄀
@@ -28,11 +44,42 @@ select id, prio from src_ins where match(body) against('fox') and prio > 15 orde
 ➤ id[-5,64,0]  ¦  prio[4,32,0]  𝄀
 2  ¦  20  𝄀
 3  ¦  30
+set @capture_src_upd_tail_sql = concat(
+'select coalesce(max(chunk_id), -1) into @src_upd_tail_before_mutation from `', database(), '`.`', @src_upd_ft2,
+'` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare capture_src_upd_tail from @capture_src_upd_tail_sql;
+execute capture_src_upd_tail;
+deallocate prepare capture_src_upd_tail;
 update src_upd set status = 'archived', prio = 999 where id = 10;
+set @wait_src_upd_mutation_sql = concat(
+'select coalesce(max(chunk_id), -1) > ', @src_upd_tail_before_mutation,
+' as src_upd_update_ready from `', database(), '`.`', @src_upd_ft2,
+'` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare wait_src_upd_mutation from @wait_src_upd_mutation_sql;
+execute wait_src_upd_mutation;
+➤ src_upd_update_ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_src_upd_mutation;
+set @capture_src_upd_tail_sql = concat(
+'select coalesce(max(chunk_id), -1) into @src_upd_tail_before_mutation from `', database(), '`.`', @src_upd_ft2,
+'` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare capture_src_upd_tail from @capture_src_upd_tail_sql;
+execute capture_src_upd_tail;
+deallocate prepare capture_src_upd_tail;
 delete from src_upd where id = 11;
-select sleep(30);
-➤ sleep(30)[-6,8,0]  𝄀
-0
+set @wait_src_upd_mutation_sql = concat(
+'select coalesce(max(chunk_id), -1) > ', @src_upd_tail_before_mutation,
+' as src_upd_delete_ready from `', database(), '`.`', @src_upd_ft2,
+'` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare wait_src_upd_mutation from @wait_src_upd_mutation_sql;
+execute wait_src_upd_mutation;
+➤ src_upd_delete_ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_src_upd_mutation;
 select id, status, prio from src_upd where match(body) against('fox') order by id;
 ➤ id[-5,64,0]  ¦  status[12,20,0]  ¦  prio[4,32,0]  𝄀
 10  ¦  archived  ¦  999  𝄀
@@ -46,18 +93,27 @@ select id from src_upd where match(body) against('fox') and status = 'archived' 
 select id, prio from src_upd where match(body) against('fox') and prio > 500 order by id;
 ➤ id[-5,64,0]  ¦  prio[4,32,0]  𝄀
 10  ¦  999
-create table src_phantom (id bigint primary key, body varchar(200), status varchar(20), prio int,
-FULLTEXT2 ftidx (body) INCLUDE (status, prio));
-insert into src_phantom values
-(20, 'silver fox alpha', 'active', 500),
-(21, 'golden fox beta',  'active', 600);
+set @capture_phantom_tail_sql = concat(
+'select coalesce(max(chunk_id), -1) into @phantom_tail_before_mutation from `', database(), '`.`', @src_phantom_ft2,
+'` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare capture_phantom_tail from @capture_phantom_tail_sql;
+execute capture_phantom_tail;
+deallocate prepare capture_phantom_tail;
 begin;
 update src_phantom set body = 'silver fox gamma', status = 'updated', prio = 999 where id = 20;
 delete from src_phantom where id = 20;
 commit;
-select sleep(30);
-➤ sleep(30)[-6,8,0]  𝄀
-0
+set @wait_phantom_mutation_sql = concat(
+'select coalesce(max(chunk_id), -1) > ', @phantom_tail_before_mutation,
+' as src_phantom_mutation_ready from `', database(), '`.`', @src_phantom_ft2,
+'` where index_id = ''cdc_tail'' and tag = 1'
+);
+prepare wait_phantom_mutation from @wait_phantom_mutation_sql;
+execute wait_phantom_mutation;
+➤ src_phantom_mutation_ready[-7,1,0]  𝄀
+1
+deallocate prepare wait_phantom_mutation;
 explain select id, status, prio from src_phantom where match(body) against('fox');
 ➤ TP QUERY PLAN[12,0,0]  𝄀
 Project  𝄀

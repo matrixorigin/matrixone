@@ -393,11 +393,11 @@ drop table text01;
 
 -- continuously modify column
 drop table if exists alter03;
-create table alter03 (col1 int, col2 binary, col3 decimal);
+create table alter03 (col1 int, col2 binary, col3 decimal(38,0));
 insert into alter03 values (1, 'e', 324214.2134123);
 insert into alter03 values (2, '4', -242134.3231432);
 select * from alter03;
-alter table alter03 modify col1 decimal after col3, modify col2 varbinary(20);
+alter table alter03 modify col1 decimal(38,0) after col3, modify col2 varbinary(20);
 show create table alter03;
 insert into alter03 values ('32143124', 42432321.000, 132432.214234);
 select * from alter03;
@@ -513,7 +513,7 @@ drop table primary06;
 
 -- abnormal test :joint primary key, modify one of the primary column null
 drop table if exists primary07;
-create table primary07(col1 int ,col2 float, col3 decimal, primary key (col1, col2));
+create table primary07(col1 int ,col2 float, col3 decimal(38,0), primary key (col1, col2));
 insert into primary07 values (1, 213412.32143, 3214312.34243214242);
 insert into primary07 values (2, -324.2342432423, -1243.42334234242);
 alter table primary07 modify col1 double default null;
@@ -525,7 +525,7 @@ drop table primary07;
 
 -- joint primary key
 drop table if exists primary07;
-create table primary07(col1 int ,col2 float, col3 decimal, primary key (col1, col2));
+create table primary07(col1 int ,col2 float, col3 decimal(38,0), primary key (col1, col2));
 insert into primary07 values (1, 213412.32143, 3214312.34243214242);
 insert into primary07 values (2, -324.2342432423, -1243.42334234242);
 alter table primary07 modify col1 double not null;
@@ -594,7 +594,7 @@ insert into foreign02 values(1,1,1);
 insert into foreign02 values(2,2,2);
 select * from foreign01;
 select * from foreign02;
-alter table foreign01 modify col1 decimal;
+alter table foreign01 modify col1 decimal(38,0);
 alter table foreign02 modify col1 float after col3;
 show create table foreign01;
 show create table foreign02;
@@ -610,7 +610,7 @@ drop table foreign01;
 
 -- decimal：Conversion between high precision and low precision
 drop table if exists decimal01;
-create table decimal01 (col1 decimal,col2 decimal(38,10));
+create table decimal01 (col1 decimal(38,0),col2 decimal(38,10));
 insert into decimal01 values (23746723468723.242334243, 38208439024234.43242342423423423422342);
 insert into decimal01 values (32487329847923424, -4324324324.3297932749028949373324242423424);
 alter table decimal01 modify column col1 decimal(38,6);
@@ -707,7 +707,7 @@ drop table cast02;
 
 -- numeric type cast to char
 drop table if exists cast03;
-create table cast03 (col1 smallint unsigned, col2 float, col3 double, col4 decimal);
+create table cast03 (col1 smallint unsigned, col2 float, col3 double, col4 decimal(38,0));
 insert into cast03 values (1, 323242.34242, 23432.3242, 8329498352.32534242323432);
 insert into cast03 values (200, -213443.321412, 32424.342424242, 0.382943424324234);
 insert into cast03 (col1, col2, col3, col4) values (null, null, null, null);
@@ -766,7 +766,7 @@ drop table abnormal02;
 
 -- abnormal test：The data in the modified column exceeds the normal range of the column
 drop table if exists abnormal01;
-create table abnormal01 (col1 int, col2 bigint, col3 decimal);
+create table abnormal01 (col1 int, col2 bigint, col3 decimal(38,0));
 insert into abnormal01 values (2147483647, 9223372036854775807, 3291843920.32783);
 insert into abnormal01 values (-21843243, 832942343241999999, -2787343243.2343);
 insert into abnormal01 values (null, null, null);
@@ -855,7 +855,7 @@ drop view v0;
 
 -- cluster by
 drop table if exists cluster01;
-create table cluster01(col1 int, col2 decimal) cluster by col1;
+create table cluster01(col1 int, col2 decimal(38,0)) cluster by col1;
 insert into cluster01 values (1, 389234924);
 insert into cluster01 values (2, -2893428);
 alter table cluster01 modify column col2 float;
@@ -900,7 +900,7 @@ insert into time02 values ('2000-10-10 12:12:12', '2020-01-01 12:23:59.323000', 
 insert into time02 values ( null, '2020-01-01 23:23:59.125000', '23:23:59');
 insert into time02 (col2, col3, col4) values ('2031-09-09 01:01:01', '2013-12-12 10:10:10.125000', '10:12:12');
 select * from time02;
-alter table time02 modify col2 decimal(20,10) first, modify col3 decimal after col2, modify col4 decimal(38,0);
+alter table time02 modify col2 decimal(20,10) first, modify col3 decimal(38,0) after col2, modify col4 decimal(38,0);
 show create table time02;
 select table_name,COLUMN_NAME, data_type,is_nullable from information_schema.columns where table_name like 'time02' and COLUMN_NAME not like '__mo%';
 drop table time02;
@@ -910,7 +910,7 @@ drop table time02;
 drop table if exists prepare01;
 create table prepare01(col1 int, col2 char);
 insert into prepare01 values (1,'a'),(2,'b'),(3,'c');
-prepare s1 from 'alter table prepare01 modify col1 decimal primary key';
+prepare s1 from 'alter table prepare01 modify col1 decimal(38,0) primary key';
 execute s1;
 show create table prepare01;
 prepare s2 from 'alter table prepare01 modify col2 varchar(100) not null';
@@ -953,7 +953,7 @@ drop user role_u1;
 
 --mixed situation :add/drop column and modify column
 drop table if exists mix01;
-create table mix01 (col1 int not null , col2 decimal, col3 date, col4 varchar(100));
+create table mix01 (col1 int not null , col2 decimal(38,0), col3 date, col4 varchar(100));
 insert into mix01 values (1, 23849234.324, '2100-01-01', 'qy83uhfbh234y78y&*%^&%$$$E%^&Y*UIJNHBGVFTY^&Y*UJHBGVTF^&*U(OK');
 insert into mix01 values (2, 773892.32748000000000, '1997-01-13', '38782yhbf3uhy4iendb32gefdc7y834uh2neujdr2h4f3v43');
 insert into mix01 values (3, -82913942.3434, null, null);
@@ -973,7 +973,7 @@ drop table mix01;
 -- begin, alter table modify column, commit, then select
 drop table if exists table01;
 begin;
-create table table01(col1 int, col2 decimal);
+create table table01(col1 int, col2 decimal(38,0));
 insert into table01 values(100,200);
 alter table table01 modify column col1 float;
 commit;

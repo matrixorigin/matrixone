@@ -39,12 +39,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
-// exactPkFilterThreshold controls when WaitUniqueJoinKeys converts the received
-// unique join keys into an exact "pk IN (...)" filter instead of building a
-// bloom filter. For very small PK sets, bloom filter false positives interact
-// poorly with centroid pruning in IVF pre mode. Keeping this threshold small
-// avoids overly large IN lists while preserving the bloom filter performance
-// path for larger sets. Adjust this number if future workloads show a better cutoff.
+// exactPkFilterThreshold controls when a small runtime membership set keeps
+// the exact all-centroid PRE path. Generated-SQL search represents that path as
+// "pk IN (...)"; relation search filters the same set before local Top-K.
+// Larger sets use the bounded docfilter path to avoid all-centroid scans.
 const exactPkFilterThreshold = 100
 
 var runSql = sqlexec.RunSql
@@ -66,6 +64,12 @@ type IvfflatSearch[T types.RealNumbers] struct {
 	Tblcfg        vectorindex.IndexTableConfig
 	Index         *IvfflatSearchIndex[T]
 	ThreadsSearch int64
+
+	// preloadHostBytes/preloadDeviceBytes publish the configured centroid
+	// footprint before Load materializes the brute-force index. The cache reads
+	// these through GetIndexSize between Preload and Load.
+	preloadHostBytes   int64
+	preloadDeviceBytes int64
 }
 
 func (idx *IvfflatSearchIndex[T]) LoadCentroids(proc *sqlexec.SqlProcess, idxcfg vectorindex.IndexConfig, tblcfg vectorindex.IndexTableConfig, nthread int64) error {
@@ -327,6 +331,9 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(sqlproc *sqlexec.SqlProcess) (e
 	if sqlproc == nil || sqlproc.Proc == nil {
 		return
 	}
+	if sqlproc.IvfMembershipFilterObject != nil {
+		return nil
+	}
 
 	if len(sqlproc.IvfRuntimeFilterData) == 0 {
 		if len(sqlproc.RuntimeFilterSpecs) == 0 {
@@ -395,6 +402,27 @@ func (idx *IvfflatSearchIndex[T]) getBloomFilter(sqlproc *sqlexec.SqlProcess) (e
 	}
 	sqlproc.IvfMembershipFilter = payload
 	return nil
+}
+
+// exactRelationMembershipScan preserves the legacy PRE policy for small key
+// sets, where scanning every centroid and filtering before Top-K is bounded and
+// avoids under-filling selective queries. Larger sets use the approximate,
+// nprobe-bounded storage Top-K path.
+func exactRelationMembershipScan(sqlproc *sqlexec.SqlProcess) (exact, empty bool, err error) {
+	if sqlproc == nil || sqlproc.RelationScanner == nil || !sqlproc.IvfHasMembershipFilter {
+		return false, false, nil
+	}
+	if len(sqlproc.IvfRuntimeFilterData) == 0 {
+		return false, true, nil
+	}
+	keyvec := new(vector.Vector)
+	if err = keyvec.UnmarshalBinary(sqlproc.IvfRuntimeFilterData); err != nil {
+		return false, false, err
+	}
+	if keyvec.Length() == 0 {
+		return false, true, nil
+	}
+	return exactPkFilterThreshold > 0 && keyvec.Length() <= exactPkFilterThreshold, false, nil
 }
 
 func filterRequestedIncludeColumns(requested []string, configured []string) []string {
@@ -732,13 +760,16 @@ func (idx *IvfflatSearchIndex[T]) Search(
 		if cursor == nil {
 			cursor = &vectorindex.IvfSearchCursor{}
 		}
-		if len(cursor.RankedCentroidIDs) == 0 {
+		if len(cursor.RankedCentroidIDs) == 0 && !rt.IvfRoutePrepared {
 			cursor.RankedCentroidIDs, err = idx.rankCentroids(sqlproc, query, idxcfg)
 			if err != nil {
 				return nil, nil, err
 			}
 		}
 
+		if rt.IvfPrepareRouteOnly {
+			return []any{}, []float64{}, nil
+		}
 		activeCentroidIDs := buildActiveCentroidIDs(cursor, rt.Probe)
 		if len(activeCentroidIDs) == 0 {
 			return []any{}, []float64{}, nil
@@ -764,14 +795,16 @@ func (idx *IvfflatSearchIndex[T]) Search(
 			}
 		}
 
-		directExactMembership := sqlproc != nil && sqlproc.RelationScanner != nil &&
-			sqlproc.IvfHasMembershipFilter
-		if directExactMembership && len(sqlproc.IvfRuntimeFilterData) == 0 {
+		directExactMembership, emptyMembership, membershipErr := exactRelationMembershipScan(sqlproc)
+		if membershipErr != nil {
+			return nil, nil, membershipErr
+		}
+		if emptyMembership {
 			// The build side produced an exact empty set. Never interpret that as
 			// an absent filter and scan the index unrestricted.
 			return []any{}, []float64{}, nil
 		}
-		if !directExactMembership {
+		if !directExactMembership && (sqlproc == nil || !sqlproc.IvfMembershipFilterRequired) {
 			if err = idx.getBloomFilter(sqlproc); err != nil {
 				return nil, nil, err
 			}
@@ -782,14 +815,10 @@ func (idx *IvfflatSearchIndex[T]) Search(
 		if sqlproc != nil && sqlproc.RelationScanner != nil {
 			scanCentroidIDs := activeCentroidIDs
 			if directExactMembership {
-				// PRE mode defines candidates by the filtered source PK set, not by
-				// whichever centroid happens to be nearest to the query. Scan the
-				// current entries version across all centroids and let the exact
-				// membership filter perform the restriction before Top-K.
 				scanCentroidIDs = nil
 				cursor.Exhausted = true
 			}
-			res, err = idx.scanEntries(
+			res, err = idx.scanEntriesInDomain(
 				sqlproc,
 				idxcfg,
 				tblcfg,
@@ -799,6 +828,7 @@ func (idx *IvfflatSearchIndex[T]) Search(
 				includeCols,
 				rt.PushdownFilters,
 				roundLimit,
+				directExactMembership,
 			)
 		} else if sqlproc != nil && sqlproc.ExactPkFilter != "" {
 			sql, err = idx.buildExactSearchSQL(
@@ -1114,9 +1144,61 @@ func (s *IvfflatSearch[T]) Destroy() {
 		s.Index.Destroy()
 	}
 	s.Index = nil
+	s.preloadHostBytes, s.preloadDeviceBytes = 0, 0
 }
 
-// load index from database (implement VectorIndexSearch.LoadFromDatabase)
+// Preload publishes the configured centroid footprint without materializing
+// any vectors. IVF-FLAT's resident part is a fixed lists*dimensions matrix,
+// so the cache can reserve room before Load allocates it. The estimate is
+// conservative for incomplete metadata: it reserves the configured shape;
+// Load still validates the rows and may use less.
+func (s *IvfflatSearch[T]) Preload(sqlproc *sqlexec.SqlProcess) error {
+	s.preloadHostBytes, s.preloadDeviceBytes = 0, 0
+	lists, dimensions := s.Idxcfg.Ivfflat.Lists, s.Idxcfg.Ivfflat.Dimensions
+	if lists == 0 || dimensions == 0 {
+		return nil
+	}
+
+	// Ask the dispatch itself which arena the centroids will land in. Deciding it here from
+	// the session mode alone was wrong on a non-gpu build, where NewBruteForceIndex ignores
+	// gpu_mode entirely and always builds a CPU index: a session with gpu_mode=1 would have
+	// reserved DEVICE bytes for a load that allocates HOST ones, leaving both arenas wrong.
+	var resolver func(string, bool, bool) (interface{}, error)
+	if sqlproc != nil && (sqlproc.Proc != nil || sqlproc.SqlCtx != nil) {
+		resolver = sqlproc.GetResolveVariableFunc()
+	}
+	useGPU := brute_force.DispatchesToDevice[T](gpumode.EffectiveGpuMode(resolver))
+
+	elementSize := uint64(util.UnsafeSizeOf[T]())
+	maxUint64 := ^uint64(0)
+	if uint64(lists) != 0 && uint64(dimensions) > maxUint64/uint64(lists) {
+		return moerr.NewInternalErrorNoCtx("IVFFLAT centroid size overflows platform capacity")
+	}
+	elements := uint64(lists) * uint64(dimensions)
+	if elements != 0 && elements > maxUint64/elementSize {
+		return moerr.NewInternalErrorNoCtx("IVFFLAT centroid size overflows platform capacity")
+	}
+	bytes := elements * elementSize
+	maxInt64 := uint64(^uint64(0) >> 1)
+	if bytes > maxInt64 {
+		return moerr.NewInternalErrorNoCtx("IVFFLAT centroid size exceeds int64 capacity")
+	}
+
+	if useGPU {
+		s.preloadDeviceBytes = int64(bytes)
+		return nil
+	}
+
+	// GoBruteForceIndex retains one slice header per centroid row in addition
+	// to the vector payload. This matches its GetIndexSize implementation.
+	rowHeaders := uint64(lists) * uint64(util.UnsafeSizeOf[[]T]())
+	if rowHeaders > maxInt64-bytes {
+		return moerr.NewInternalErrorNoCtx("IVFFLAT centroid size exceeds int64 capacity")
+	}
+	s.preloadHostBytes = int64(bytes + rowHeaders)
+	return nil
+}
+
 func (s *IvfflatSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 
 	idx := &IvfflatSearchIndex[T]{}
@@ -1127,6 +1209,56 @@ func (s *IvfflatSearch[T]) Load(sqlproc *sqlexec.SqlProcess) error {
 	}
 	s.Index = idx
 	return nil
+}
+
+// EmptyGeneration reports a loaded generation with no real centroids: the centroids table for
+// this version holds only the single NULL-vector placeholder row (a freshly created index, or the
+// transient async-build window before the real centroids are committed). LoadCentroids skips the
+// NULL row and leaves Index.Centroids nil, so findCentroids routes every query to bucket 1. The
+// cache declines to retain such a generation, so the next query reloads and picks up the real
+// centroids once the build writes them under the same version -- instead of pinning a
+// bucket-1-only routing model until the housekeeping sweep. A generation with real centroids is
+// cached normally.
+//
+// The entries table deliberately does NOT enter this predicate. The centroids are the only part
+// of an IVF-FLAT index the cache holds resident (GetIndexSize reports them alone; entries are read
+// from the table per query), so a generation with Centroids nil retains nothing either way: not
+// caching it costs one re-read of the single placeholder row, while caching it pins bucket-1
+// routing on a CN that has no IsStale to recover. Counting bucket-1 entries as "populated" would
+// also re-open #29011 whenever entries land under the version before the build commits the real
+// centroids.
+func (s *IvfflatSearch[T]) EmptyGeneration() bool {
+	return s.Index != nil && s.Index.Centroids == nil
+}
+
+// GetIndexSize reports the centroids, the only part of an IVFFLAT index the cache holds
+// resident: the entries stay in the index table and are read per query. Centroids is itself a
+// VectorIndexSearchIf (a brute-force index over the centroid vectors), so both arenas come
+// straight from it -- in GPU mode those centroids are device resident.
+// DeviceResidency delegates to the centroid index, which is what actually occupies a GPU when
+// NewBruteForceIndex dispatched there. Without this the ivfflat entry -- the one the cache holds
+// -- publishes no placement, and its device bytes are charged to every card.
+func (s *IvfflatSearch[T]) DeviceResidency() map[int]int64 {
+	if s.Index == nil || s.Index.Centroids == nil {
+		return nil
+	}
+	if placed, ok := s.Index.Centroids.(interface{ DeviceResidency() map[int]int64 }); ok {
+		return placed.DeviceResidency()
+	}
+	return nil
+}
+
+// BuildTS is the fulltext2 async-freshness hook; ivfflat freshness is handled elsewhere.
+func (s *IvfflatSearch[T]) BuildTS() int64 { return 0 }
+
+func (s *IvfflatSearch[T]) GetIndexSize() (hostBytes, deviceBytes int64) {
+	if s.Index == nil {
+		return s.preloadHostBytes, s.preloadDeviceBytes
+	}
+	if s.Index.Centroids == nil {
+		return 0, 0
+	}
+	return s.Index.Centroids.GetIndexSize()
 }
 
 // check config and update some parameters such as ef_search

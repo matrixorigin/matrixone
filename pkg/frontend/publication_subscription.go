@@ -69,7 +69,8 @@ const (
 	getSubsSql                              = "select sub_account_id, sub_account_name, sub_name, sub_time, pub_account_id, pub_account_name, pub_name, pub_database, pub_tables, pub_time, pub_comment, status from mo_catalog.mo_subs where 1=1"
 	deleteMoSubsRecordsBySubAccountIdFormat = "delete from mo_catalog.mo_subs where sub_account_id = %d"
 	// database
-	getDbIdAndTypFormat = `select dat_id,dat_type from mo_catalog.mo_database where datname = '%s' and account_id = %d;`
+	getDbIdAndTypFormat            = `select dat_id,dat_type from mo_catalog.mo_database where datname = '%s' and account_id = %d;`
+	getDbAccountIdAndTypByIdFormat = `select account_id,dat_type from mo_catalog.mo_database where dat_id = %d and datname = '%s';`
 )
 
 var (
@@ -314,36 +315,18 @@ func createPublication(ctx context.Context, bh BackgroundExec, cp *tree.CreatePu
 			return
 		}
 
-		// Try to find database in current account first
-		dbId, dbType, err = getDbIdAndType(ctx, bh, dbName)
-		if err != nil {
-			// If not found in current account and ACCOUNT clause is specified, try to find in target accounts
-			if !cp.AccountsSet.All && len(cp.AccountsSet.SetAccounts) > 0 {
-				for _, accName := range cp.AccountsSet.SetAccounts {
-					if accInfo, ok := accNameInfoMap[string(accName)]; ok {
-						var foundDbId uint64
-						var foundDbType string
-						foundDbId, foundDbType, err = getDbIdAndTypeForAccount(ctx, bh, dbName, uint32(accInfo.Id))
-						if err == nil {
-							// Found database in target account, use it
-							dbId = foundDbId
-							dbType = foundDbType
-							// Update context to the account where database exists for subsequent operations
-							ctx = defines.AttachAccountId(ctx, uint32(accInfo.Id))
-							break
-						}
-					}
+		targetAccountIDs := make([]uint32, 0, len(cp.AccountsSet.SetAccounts))
+		if !cp.AccountsSet.All {
+			for _, accName := range cp.AccountsSet.SetAccounts {
+				if accInfo, ok := accNameInfoMap[string(accName)]; ok {
+					targetAccountIDs = append(targetAccountIDs, uint32(accInfo.Id))
 				}
-				// If still not found after checking all target accounts, return error
-				if err != nil {
-					return
-				}
-			} else {
-				// No target accounts specified or ACCOUNT ALL, return the original error
-				return
 			}
 		}
-		if dbType != "" { //TODO: check the dat_type
+		if ctx, dbId, dbType, err = resolvePublicationDatabaseByName(ctx, bh, dbName, targetAccountIDs); err != nil {
+			return
+		}
+		if !isUserDatabaseType(dbType, currentProtocolVersionForService(bh.Service())) {
 			return moerr.NewInternalErrorf(ctx, "database '%s' is not a user database", cp.Database)
 		}
 	} else {
@@ -544,25 +527,47 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 
 	// alter db
 	dbName := pub.DbName
-	dbId := pub.DbId
 	if ap.DbName != "" {
 		dbName = ap.DbName
+	}
+	databaseCtx := ctx
+	var dbId uint64
+	if dbName != pubsub.TableAll {
 		if _, ok := sysDatabases[dbName]; ok {
 			return moerr.NewInternalErrorf(ctx, "Unknown database name '%s', not support publishing system database", dbName)
 		}
 
-		if dbId, dbType, err = getDbIdAndType(ctx, bh, dbName); err != nil {
-			return err
+		if ap.DbName == "" {
+			var databaseAccountID uint32
+			if databaseAccountID, dbType, err = getDbAccountIdAndTypeById(ctx, bh, dbName, pub.DbId); err != nil {
+				return err
+			}
+			dbId = pub.DbId
+			databaseCtx = defines.AttachAccountId(ctx, databaseAccountID)
+		} else {
+			targetAccountIDs := make([]uint32, 0, len(newSubAccounts))
+			if accountNamesStr != pubsub.AccountAll {
+				for accountID := range newSubAccounts {
+					targetAccountIDs = append(targetAccountIDs, uint32(accountID))
+				}
+				slices.Sort(targetAccountIDs)
+			}
+			if databaseCtx, dbId, dbType, err = resolvePublicationDatabaseByName(ctx, bh, dbName, targetAccountIDs); err != nil {
+				return err
+			}
 		}
-		if dbType != "" { //TODO: check the dat_type
+		if !isUserDatabaseType(dbType, currentProtocolVersionForService(bh.Service())) {
 			return moerr.NewInternalErrorf(ctx, "database '%s' is not a user database", dbName)
 		}
+	} else {
+		// Account-level publications have no database catalog row.
+		dbId = 0
 	}
 
 	// alter tables
 	tablesStr := pub.TablesStr
 	if len(ap.Table) > 0 {
-		if tablesStr, err = genPubTablesStr(ctx, bh, dbName, ap.Table); err != nil {
+		if tablesStr, err = genPubTablesStr(databaseCtx, bh, dbName, ap.Table); err != nil {
 			return
 		}
 	}
@@ -648,6 +653,10 @@ func doAlterPublication(ctx context.Context, ses *Session, ap *tree.AlterPublica
 	return
 }
 
+func isUserDatabaseType(databaseType string, protocolVersion int64) bool {
+	return databaseType == "" || dataBranchDatabaseIdentityActive(databaseType, protocolVersion)
+}
+
 func doDropPublication(ctx context.Context, ses *Session, dp *tree.DropPublication) (err error) {
 	start := time.Now()
 	defer func() {
@@ -692,7 +701,7 @@ func invalidatePublicationViewMetadata(
 		return err
 	}
 	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
-	if err := bh.Exec(systemCtx, catalog.ViewMetadataLifecycleGateSQL); err != nil {
+	if err := lockViewMetadataLifecycle(systemCtx, bh); err != nil {
 		return err
 	}
 	return bh.Exec(process.WithSystemCTELimits(systemCtx), compile.PublicationViewMetadataInvalidationSQL(
@@ -1385,6 +1394,9 @@ func extractSubInfosFromExecResultOld(ctx context.Context, erArray []ExecResult)
 	)
 	for _, result := range erArray {
 		for i := uint64(0); i < result.GetRowCount(); i++ {
+			if err = context.Cause(ctx); err != nil {
+				return
+			}
 			if subAccountId, err = result.GetInt64(ctx, i, 0); err != nil {
 				return
 			}
@@ -1463,6 +1475,9 @@ func extractSubInfosFromExecResult(ctx context.Context, erArray []ExecResult) (s
 	)
 	for _, result := range erArray {
 		for i := uint64(0); i < result.GetRowCount(); i++ {
+			if err = context.Cause(ctx); err != nil {
+				return
+			}
 			if subAccountId, err = result.GetInt64(ctx, i, 0); err != nil {
 				return
 			}
@@ -1569,6 +1584,175 @@ func getSubInfosFromPub(ctx context.Context, bh BackgroundExec, pubAccountName, 
 
 // getSubInfosFromSub return subInfo map for given subName
 func getSubInfosFromSub(ctx context.Context, bh BackgroundExec, subName string) (subInfo []*pubsub.SubInfo, err error) {
+	subInfo, _, err = getSubInfosFromSubWithOptions(ctx, bh, subName, false, 0)
+	return
+}
+
+// getActiveSubInfosFromSubBounded admits catalog candidates before the caller
+// allocates metadata or builds the subscriber-visibility query. The SQL reads
+// at most maxCandidates+1 rows so overflow can fail closed without returning a
+// partial subscription set.
+func getActiveSubInfosFromSubBounded(
+	ctx context.Context,
+	bh BackgroundExec,
+	maxCandidates int,
+) ([]*pubsub.SubInfo, error) {
+	if maxCandidates < 0 {
+		return nil, moerr.NewInvalidInput(ctx, "negative subscription metadata candidate budget")
+	}
+	subInfos, legacyCatalog, err := getSubInfosFromSubWithOptions(
+		ctx, bh, "", true, maxCandidates+1,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if len(subInfos) > maxCandidates {
+		return nil, moerr.NewInvalidInputf(
+			ctx,
+			"information_schema.statistics subscription candidate enumeration exceeds planning budget of %d branches; reduce active subscriptions or STATISTICS occurrences",
+			maxCandidates,
+		)
+	}
+	// Old mo_subs rows have pub_account_name but no pub_account_id. Resolve the
+	// missing identity only after the candidate-count admission above, through
+	// this same BackgroundExec, so current and historical requests use the same
+	// transaction snapshot. The fixed-size batches keep the compatibility path
+	// bounded even if this helper is reused with a larger caller budget.
+	if legacyCatalog {
+		if err := resolveMissingSubscriptionPublisherAccountIDs(ctx, bh, subInfos); err != nil {
+			return nil, err
+		}
+	}
+	return subInfos, nil
+}
+
+const subscriptionPublisherAccountLookupBatchSize = 64
+
+func subscriptionPublisherAccountLookupSQL(accountNames []string) string {
+	literals := make([]string, 0, len(accountNames))
+	for _, accountName := range accountNames {
+		literals = append(literals, escapeSQLString(accountName))
+	}
+	return fmt.Sprintf(
+		"select account_id, account_name from mo_catalog.mo_account where account_name in (%s) order by account_name limit %d",
+		strings.Join(literals, ","), len(accountNames)+1,
+	)
+}
+
+func resolveMissingSubscriptionPublisherAccountIDs(
+	ctx context.Context,
+	bh BackgroundExec,
+	subInfos []*pubsub.SubInfo,
+) error {
+	missing := make(map[string]struct{})
+	for _, subInfo := range subInfos {
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
+		if subInfo == nil || subInfo.PubAccountId != int32(sysAccountID) {
+			continue
+		}
+		if strings.EqualFold(subInfo.PubAccountName, sysAccountName) {
+			continue
+		}
+		if subInfo.PubAccountName == "" {
+			return moerr.NewInternalErrorf(
+				ctx, "cannot resolve empty publication account for subscription %s", subInfo.SubName,
+			)
+		}
+		missing[subInfo.PubAccountName] = struct{}{}
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+
+	accountNames := make([]string, 0, len(missing))
+	for accountName := range missing {
+		accountNames = append(accountNames, accountName)
+	}
+	slices.Sort(accountNames)
+
+	resolved := make(map[string]int32, len(accountNames))
+	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+	for start := 0; start < len(accountNames); start += subscriptionPublisherAccountLookupBatchSize {
+		if err := context.Cause(ctx); err != nil {
+			return err
+		}
+		end := min(start+subscriptionPublisherAccountLookupBatchSize, len(accountNames))
+		batchNames := accountNames[start:end]
+		batchRequested := make(map[string]struct{}, len(batchNames))
+		for _, accountName := range batchNames {
+			batchRequested[accountName] = struct{}{}
+		}
+
+		sql := subscriptionPublisherAccountLookupSQL(batchNames)
+		bh.ClearExecResultSet()
+		if err := bh.Exec(systemCtx, sql); err != nil {
+			return err
+		}
+		results, err := getResultSet(ctx, bh)
+		if err != nil {
+			return err
+		}
+		for _, result := range results {
+			for row := uint64(0); row < result.GetRowCount(); row++ {
+				if err := context.Cause(ctx); err != nil {
+					return err
+				}
+				accountID, getErr := result.GetInt64(ctx, row, 0)
+				if getErr != nil {
+					return getErr
+				}
+				accountName, getErr := result.GetString(ctx, row, 1)
+				if getErr != nil {
+					return getErr
+				}
+				if _, ok := batchRequested[accountName]; !ok {
+					return moerr.NewInternalErrorf(
+						ctx, "unexpected publication account %s while resolving subscription metadata", accountName,
+					)
+				}
+				if accountID <= int64(sysAccountID) || accountID > int64(1<<31-1) {
+					return moerr.NewInternalErrorf(
+						ctx, "invalid publication account id %d for account %s", accountID, accountName,
+					)
+				}
+				if _, duplicate := resolved[accountName]; duplicate {
+					return moerr.NewInternalErrorf(
+						ctx, "ambiguous publication account %s while resolving subscription metadata", accountName,
+					)
+				}
+				resolved[accountName] = int32(accountID)
+			}
+		}
+	}
+
+	for _, accountName := range accountNames {
+		if _, ok := resolved[accountName]; !ok {
+			return moerr.NewInternalErrorf(
+				ctx, "cannot resolve publication account %s for subscription metadata", accountName,
+			)
+		}
+	}
+	// Do not mutate any candidate until every requested identity has been
+	// resolved and validated, so an error cannot leave a usable partial set.
+	for _, subInfo := range subInfos {
+		if subInfo == nil || subInfo.PubAccountId != int32(sysAccountID) ||
+			strings.EqualFold(subInfo.PubAccountName, sysAccountName) {
+			continue
+		}
+		subInfo.PubAccountId = resolved[subInfo.PubAccountName]
+	}
+	return nil
+}
+
+func getSubInfosFromSubWithOptions(
+	ctx context.Context,
+	bh BackgroundExec,
+	subName string,
+	activeOnly bool,
+	limit int,
+) (subInfo []*pubsub.SubInfo, legacyCatalog bool, err error) {
 	subAccountId, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return
@@ -1587,7 +1771,16 @@ func getSubInfosFromSub(ctx context.Context, bh BackgroundExec, subName string) 
 	}
 	sql += fmt.Sprintf(" and sub_account_id = %d", subAccountId)
 	if len(subName) > 0 {
-		sql += fmt.Sprintf(" and sub_name = '%s'", subName)
+		sql += fmt.Sprintf(" and sub_name = '%s'", sanitizeSQLInput(subName))
+	}
+	if activeOnly {
+		sql += fmt.Sprintf(
+			" and status = %d and sub_name is not null and sub_name <> ''",
+			pubsub.SubStatusNormal,
+		)
+	}
+	if limit > 0 {
+		sql += fmt.Sprintf(" limit %d", limit)
 	}
 
 	ctx = defines.AttachAccountId(ctx, catalog.System_Account)
@@ -1602,9 +1795,12 @@ func getSubInfosFromSub(ctx context.Context, bh BackgroundExec, subName string) 
 	}
 
 	if subAccountNameColExists {
-		return extractSubInfosFromExecResult(ctx, erArray)
+		subInfo, err = extractSubInfosFromExecResult(ctx, erArray)
+		return
 	}
-	return extractSubInfosFromExecResultOld(ctx, erArray)
+	legacyCatalog = true
+	subInfo, err = extractSubInfosFromExecResultOld(ctx, erArray)
+	return
 }
 
 func doShowPublications(ctx context.Context, ses *Session, sp *tree.ShowPublications) (err error) {
@@ -2154,6 +2350,69 @@ func getDbIdAndType(ctx context.Context, bh BackgroundExec, dbName string) (dbId
 	return
 }
 
+func resolvePublicationDatabaseByName(
+	ctx context.Context,
+	bh BackgroundExec,
+	dbName string,
+	targetAccountIDs []uint32,
+) (databaseCtx context.Context, dbId uint64, dbType string, err error) {
+	databaseCtx = ctx
+	dbId, dbType, err = getDbIdAndType(ctx, bh, dbName)
+	if err == nil {
+		return
+	}
+
+	for _, accountID := range targetAccountIDs {
+		dbId, dbType, err = getDbIdAndTypeForAccount(ctx, bh, dbName, accountID)
+		if err == nil {
+			databaseCtx = defines.AttachAccountId(ctx, accountID)
+			return
+		}
+	}
+	return
+}
+
+// getDbAccountIdAndTypeById resolves the exact database row already owned by a
+// publication. Database IDs are allocated globally, while the stored name
+// prevents a stale publication from binding to a renamed or replaced row.
+func getDbAccountIdAndTypeById(
+	ctx context.Context,
+	bh BackgroundExec,
+	dbName string,
+	dbId uint64,
+) (accountId uint32, dbType string, err error) {
+	if err = inputNameIsInvalid(ctx, dbName); err != nil {
+		return
+	}
+
+	sql := fmt.Sprintf(getDbAccountIdAndTypByIdFormat, dbId, sanitizeSQLInput(dbName))
+	systemCtx := defines.AttachAccountId(ctx, catalog.System_Account)
+	bh.ClearExecResultSet()
+	if err = bh.Exec(systemCtx, sql); err != nil {
+		return
+	}
+
+	erArray, err := getResultSet(systemCtx, bh)
+	if err != nil {
+		return 0, "", err
+	}
+	if !execResultArrayHasData(erArray) {
+		return 0, "", moerr.NewInternalErrorf(ctx, "database '%s' does not exist", dbName)
+	}
+
+	accountIdValue, err := erArray[0].GetUint64(systemCtx, 0, 0)
+	if err != nil {
+		return 0, "", err
+	}
+	if accountIdValue > uint64(^uint32(0)) {
+		return 0, "", moerr.NewInternalErrorf(ctx, "invalid account id %d for database '%s'", accountIdValue, dbName)
+	}
+	if dbType, err = erArray[0].GetString(systemCtx, 0, 1); err != nil {
+		return 0, "", err
+	}
+	return uint32(accountIdValue), dbType, nil
+}
+
 // getDbIdAndTypeForAccount tries to find database in the specified account
 func getDbIdAndTypeForAccount(ctx context.Context, bh BackgroundExec, dbName string, accountId uint32) (dbId uint64, dbType string, err error) {
 	sql, err := getSqlForGetDbIdAndType(ctx, dbName, true, uint64(accountId))
@@ -2227,12 +2486,17 @@ func genPubTablesStr(ctx context.Context, bh BackgroundExec, dbName string, tabl
 	}
 
 	tablesNames := make([]string, 0, len(table))
+	seenTables := make(map[string]struct{}, len(table))
 	for _, tableName := range table {
 		tblName := string(tableName.ObjectName)
 		if !tablesInDb[tblName] {
 			err = moerr.NewInternalErrorf(ctx, "table '%s' not exists", tblName)
 			return
 		}
+		if _, duplicate := seenTables[tblName]; duplicate {
+			continue
+		}
+		seenTables[tblName] = struct{}{}
 		tablesNames = append(tablesNames, tblName)
 	}
 	slices.Sort(tablesNames)

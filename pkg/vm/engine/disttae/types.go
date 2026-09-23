@@ -684,6 +684,20 @@ func (b *deletedBlocks) getDeletedRowIDs(appendTo func(row types.Rowid)) {
 	}
 }
 
+func (b *deletedBlocks) getDeletedRowIDsForBlocks(
+	blocks []types.Blockid,
+	appendTo func(row types.Rowid),
+) {
+	b.RLock()
+	defer b.RUnlock()
+	for i := range blocks {
+		for _, offset := range b.offsets[blocks[i]] {
+			rowID := types.NewRowid(&blocks[i], uint32(offset))
+			appendTo(rowID)
+		}
+	}
+}
+
 func (b *deletedBlocks) clean() {
 	b.Lock()
 	defer b.Unlock()

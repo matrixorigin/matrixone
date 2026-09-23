@@ -483,7 +483,7 @@ id    name    age
 2    Bob    25
 show CREATE TABLE `t17`;
 Table    Create Table
-t17    CREATE TABLE `t17` (\n  `id` int NOT NULL,\n  `name` varchar(255) DEFAULT NULL,\n  `age` int DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `idx` (`name`)\n)
+t17    CREATE TABLE `t17` (\n  `id` int NOT NULL,\n  `name` varchar(255) DEFAULT NULL,\n  `age` int DEFAULT NULL,\n  PRIMARY KEY (`id`),\n  UNIQUE KEY `Idx` (`name`)\n)
 DROP TABLE `t17`;
 DROP SEQUENCE IF EXISTS `SEQ`;
 CREATE SEQUENCE `SEQ` increment 100 start 30;

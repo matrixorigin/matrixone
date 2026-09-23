@@ -47,9 +47,11 @@ SELECT CONV(NULL, 10, 16) AS null_input;
 ➤ null_input[12,-1,0]  𝄀
 null
 SELECT CONV('G', 16, 10) AS invalid_hex;
-invalid input: invalid conv input "G" for base 16
+➤ invalid_hex[12,-1,0]  𝄀
+0
 SELECT CONV('2', 2, 10) AS invalid_bin;
-invalid input: invalid conv input "2" for base 2
+➤ invalid_bin[12,-1,0]  𝄀
+0
 CREATE TABLE t1(num_str VARCHAR(10), num_val INT);
 INSERT INTO t1 VALUES ('A', 10), ('FF', 255), ('1010', 10);
 SELECT CONV(num_str, 16, 10) AS hex_val, CONV(num_val, 10, 16) AS hex_str FROM t1;

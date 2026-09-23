@@ -26,8 +26,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -40,13 +42,28 @@ const (
 	// we use this size as pre-allocated size for hash table.
 	aggHtPreAllocSize = 1024
 
-	// spill parameters.
-	spillNumBuckets = 32
-	spillMaskBits   = 5 // log2(spillNumBuckets)
-	spillMaxPass    = 3
-	spillIOBufSize  = 1024 * 1024 // 1 MiB read-ahead buffer for spill file reads
-	spillWrBufSize  = 64 * 1024   // 64 KiB bounded buffer per open spill bucket
+	// Aggregate spill keeps the historical fanout: aggregate state makes each
+	// record relatively expensive, while partial aggregation usually keeps a
+	// first-level bucket below the resident capacity. DISTINCT has no aggregate
+	// state and can retain almost every input row, so use a wider first pass to
+	// avoid rewriting every bucket at the next level. Its optional per-bucket
+	// writer buffers remain bounded to at most 4 MiB in total.
+	spillNumBuckets         = 32
+	spillMaskBits           = 5 // log2(spillNumBuckets)
+	spillDistinctNumBuckets = 64
+	spillDistinctMaskBits   = 6 // log2(spillDistinctNumBuckets)
+	spillMaxNumBuckets      = spillDistinctNumBuckets
+	spillMaxPass            = 3
+	spillIOBufSize          = 1024 * 1024 // 1 MiB read-ahead buffer for spill file reads
+	spillWrBufSize          = 64 * 1024   // 64 KiB bounded buffer per open spill bucket
 )
+
+func (ctr *container) spillPartitionCount() int {
+	if len(ctr.aggList) == 0 {
+		return spillDistinctNumBuckets
+	}
+	return spillNumBuckets
+}
 
 func hasInactiveGroupingColumn(flags []bool) bool {
 	for _, flag := range flags {
@@ -57,12 +74,24 @@ func hasInactiveGroupingColumn(flags []bool) bool {
 	return false
 }
 
+// UsesGroupingAwareHash reports whether partial group keys use the extended
+// hash grammar that distinguishes a rolled-up grouping sentinel from SQL NULL.
+// MergeGroup must know this from the plan: an individual partial can contain
+// only the fully active grouping set and therefore carry no sentinel bits even
+// though later partials in the same stream do.
+func (group *Group) UsesGroupingAwareHash() bool {
+	return group != nil &&
+		(group.DynamicGrouping || hasInactiveGroupingColumn(group.GroupingFlag))
+}
+
 func (group *Group) Prepare(proc *process.Process) (err error) {
 	group.diagnosticsLogged = false
 	group.ctr.state = vm.Build
 	if group.ctr.mp != nil {
 		group.ctr.free()
 	}
+	group.ctr.groupConcatSourceRowsUntrusted = proc != nil &&
+		!proc.GroupConcatSourceRowProvenanceTrusted()
 	group.ctr.prepareParamKind.Reset(group.Aggs)
 	group.ctr.aggExprs = group.Aggs
 	group.ctr.prepareParamKindWireV1 = prepareParamKindWireV1Enabled(proc) &&
@@ -83,6 +112,20 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 		}
 	}
 	group.ctr.legacyTextMinMax = useLegacyTextMinMaxForRemote(proc)
+	group.ctr.legacyVarianceState = useLegacyVarianceStateForRemote(proc)
+	group.ctr.legacyDecimalSumState = useLegacyDecimalSumState(proc)
+	group.ctr.legacyDecimalSumResult = useLegacyDecimalSumResultForRemote(proc, group.NeedEval)
+	group.ctr.legacyApproxPercentileState = useLegacyApproxPercentileStateForRemote(proc)
+	group.ctr.legacyHLLState = useLegacyHLLStateForRemote(proc)
+	group.ctr.floatZeroHLLState = useFloatZeroHLLStateForRemote(proc)
+	group.ctr.legacyVectorHLLState = useLegacyVectorHLLStateForRemote(proc)
+	group.ctr.legacyTextHLLAddState = useLegacyTextHLLAddStateForRemote(proc)
+	group.ctr.legacyFloatHLLAddState = useLegacyFloatHLLAddStateForRemote(proc)
+	// Freeze the FLOAT DISTINCT key policy before makeAggList creates any
+	// states. A pre-v79 remote producer keeps every legacy float key (including
+	// distinct NaN payloads); local and v79+ execution uses canonical keys.
+	group.ctr.legacyDistinctFloatKeys = !canonicalDistinctKeyWireEnabled(proc)
+	group.ctr.timeZone = proc.Base.SessionInfo.TimeZone
 
 	// debug,
 	// group.ctr.mp.EnableDetailRecording()
@@ -97,7 +140,8 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 	// same as a reused prepared operator.
 	group.ctr.setSpillMem(group.SpillMem)
 	group.ctr.setGroupByHashKey(group.GroupByHashKey)
-	if len(group.GroupByHashKey) > 0 && hasInactiveGroupingColumn(group.GroupingFlag) {
+	if len(group.GroupByHashKey) > 0 &&
+		(group.DynamicGrouping || hasInactiveGroupingColumn(group.GroupingFlag)) {
 		return moerr.NewInternalErrorNoCtx("group-by hash key cannot be used with grouping sets")
 	}
 	if err = group.ctr.validateGroupByHashKey(len(group.GroupBy)); err != nil {
@@ -117,6 +161,7 @@ func (group *Group) Prepare(proc *process.Process) (err error) {
 }
 
 func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
+	group.ctr.legacyH8CharSemantics = false
 	if len(group.ctr.groupByEvaluate.Executor) == len(group.GroupBy) {
 		group.ctr.groupByEvaluate.ResetForNextQuery()
 	} else {
@@ -126,6 +171,8 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 		if len(group.GroupByHashKey) > 0 {
 			hashKeyCount = len(group.GroupByHashKey)
 		}
+		compactHashKey := true
+		variableLengthKey := false
 		for i := 0; i < hashKeyCount; i++ {
 			exprIdx := i
 			if len(group.GroupByHashKey) > 0 {
@@ -143,19 +190,39 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 			if expr.Typ.Id == int32(types.T_tuple) {
 				return moerr.NewInternalErrorNoCtx("tuple is not supported as group by column")
 			}
+			if types.T(expr.Typ.Id).FixedLength() < 0 {
+				// IntHashMap has one eight-byte slot per key and cannot encode
+				// field boundaries for variable-length composite keys. Keep all
+				// variable-length keys on the length-delimited HStr codec, even
+				// when their declared width happens to fit in eight bytes.
+				compactHashKey = false
+				variableLengthKey = true
+			}
 			width := GetKeyWidth(types.T(expr.Typ.Id), expr.Typ.Width, group.ctr.keyNullable)
 			group.ctr.keyWidth += int32(width)
 		}
 
+		legacyShortVariableKey := variableLengthKey && group.ctr.keyWidth <= 8 &&
+			!groupHashStringWireEnabled(proc)
+		group.ctr.legacyH8CharSemantics = legacyShortVariableKey
 		if group.ctr.keyWidth == 0 {
 			group.ctr.mtyp = H0
-		} else if group.ctr.keyWidth <= 8 {
+		} else if (compactHashKey || legacyShortVariableKey) && group.ctr.keyWidth <= 8 {
 			group.ctr.mtyp = H8
 		} else {
 			group.ctr.mtyp = HStr
 		}
+		// HStr is the v78 length-delimited partial grammar. During a rolling
+		// upgrade, an old coordinator can still send this new worker a plan that
+		// expects the historical H8 producer behavior. Keep that legacy wire until
+		// the shared rollout gate reaches v78; the planner prevents new plans from
+		// creating a new short-varlen remote boundary before then.
 
 		group.ctr.groupingAware = false
+		if group.DynamicGrouping {
+			group.ctr.mtyp = HStr
+			group.ctr.groupingAware = true
+		}
 		for _, flag := range group.GroupingFlag {
 			if !flag {
 				group.ctr.mtyp = HStr
@@ -243,9 +310,25 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 			}
 		}
 	}
+	for _, agg := range group.ctr.aggList {
+		aggexec.ConfigureGroupConcatTimeZone(agg, group.ctr.timeZone)
+	}
 	group.configureH0OrderedAggSpill(proc)
 
 	return nil
+}
+
+// HasVariableLengthKey reports whether a hash key contains a type whose
+// physical representation is not fixed-width. Such keys require HStr's
+// length-delimited encoding when more than one column participates in the
+// key; an eight-byte IntHashMap slot cannot preserve their boundaries.
+func HasVariableLengthKey(exprs []*plan.Expr) bool {
+	for _, expr := range exprs {
+		if expr != nil && types.T(expr.Typ.Id).FixedLength() < 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func GetKeyWidth(id types.T, width0 int32, nullable bool) (width int) {
@@ -277,7 +360,12 @@ func GetKeyWidth(id types.T, width0 int32, nullable bool) (width int) {
 }
 
 // main entry of the group operator.
-func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
+func (group *Group) Call(
+	proc *process.Process,
+) (callResult vm.CallResult, callErr error) {
+	defer func() {
+		callErr = hashbuild.TerminalBudgetErrorForOperator(proc.Ctx, "group", callErr)
+	}()
 	var err error
 
 	var isCancel bool
@@ -359,17 +447,37 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 			if err, isCancel = vm.CancelCheck(proc); isCancel {
 				return vm.CancelResult, err
 			}
+			if err = group.ensureRuntimeEmptyGroupingSet(); err != nil {
+				return vm.CancelResult, err
+			}
 		}
 
 		// spilling -- spill whatever left in memory, and load first spilled bucket.
 		if group.ctr.isSpilling() {
+			if group.ctr.distinctSpill != nil {
+				if _, err = group.ctr.drainExactCountDistinct(
+					proc, group.OpAnalyzer); err != nil {
+					return vm.CancelResult, err
+				}
+			}
 			if bytes, rows, err := group.ctr.spillDataToDisk(proc, group.OpAnalyzer, nil); err != nil {
 				return vm.CancelResult, err
 			} else {
 				group.OpAnalyzer.Spill(bytes)
 				group.OpAnalyzer.SpillRows(rows)
 			}
+			if group.ctr.distinctSpill != nil && group.ctr.mtyp != H0 {
+				if err = group.ctr.prepareGroupedDistinctContributions(proc); err != nil {
+					return vm.CancelResult, err
+				}
+			}
 			if _, err = group.ctr.loadSpilledData(proc, group.OpAnalyzer, group.Aggs); err != nil {
+				return vm.CancelResult, err
+			}
+		}
+		if group.NeedEval && group.ctr.inputDone {
+			if err = group.ctr.finalizeExactCountDistinct(
+				proc, group.OpAnalyzer); err != nil {
 				return vm.CancelResult, err
 			}
 		}
@@ -387,8 +495,56 @@ func (group *Group) Call(proc *process.Process) (vm.CallResult, error) {
 	return vm.CancelResult, err
 }
 
+// ensureRuntimeEmptyGroupingSet preserves the one-row identity of a legacy
+// all-rolled grouping-set branch. It applies to both final and partial Group:
+// partial empty states merge idempotently, while a single-stage Group emits
+// the SQL result directly.
+func (group *Group) ensureRuntimeEmptyGroupingSet() error {
+	if group.DynamicGrouping || len(group.GroupBy) == 0 ||
+		len(group.GroupingFlag) != len(group.GroupBy) ||
+		len(group.ctr.groupByBatches) > 0 || group.ctr.isSpilling() {
+		return nil
+	}
+	for _, active := range group.GroupingFlag {
+		if active {
+			return nil
+		}
+	}
+
+	groupTypes := group.ctr.groupByEvaluate.Typ
+	if len(groupTypes) != len(group.GroupBy) {
+		return moerr.NewInternalErrorNoCtx(
+			"invalid empty grouping-set group metadata")
+	}
+	output, err := group.ctr.newRuntimeEmptyGroupingSetBatch(groupTypes, nil)
+	if err != nil {
+		return err
+	}
+	if len(group.ctr.aggList) != len(group.Aggs) {
+		group.ctr.aggList, err = group.ctr.makeAggList(group.Aggs)
+		if err != nil {
+			output.Clean(group.ctr.mp)
+			return err
+		}
+	}
+	for _, agg := range group.ctr.aggList {
+		if err = agg.GroupGrow(1); err != nil {
+			output.Clean(group.ctr.mp)
+			return err
+		}
+	}
+	group.ctr.groupByTypes = append(group.ctr.groupByTypes[:0], groupTypes...)
+	group.ctr.groupByBatches = append(group.ctr.groupByBatches, output)
+	return nil
+}
+
 func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool, error) {
 	var err error
+	inputRowBase := group.ctr.inputRowCount
+	if group.hasGroupConcat() && bat != nil && bat.RowCount() > 0 {
+		inputRowBase = proc.NextGroupConcatInputRowBase(
+			group.Idx, uint64(bat.RowCount()))
+	}
 
 	// without group by, there is only one group.
 	if group.ctr.mtyp == H0 {
@@ -408,6 +564,7 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 			); err != nil {
 				return false, err
 			}
+			group.ctr.inputRowCount += uint64(bat.RowCount())
 			group.OpAnalyzer.SetMemUsed(group.ctr.memUsed())
 			return false, nil
 		}
@@ -419,19 +576,43 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 		for offset := 0; offset < bat.RowCount(); offset += hashmap.UnitLimit {
 			n := min(hashmap.UnitLimit, bat.RowCount()-offset)
 			groups := oneGroup[:n]
-			for i, agg := range group.ctr.aggList {
-				if err = agg.PreflightBatchFill(
-					offset, groups, group.ctr.aggArgEvaluate[i].Vec); err != nil {
-					return false, err
+			for {
+				for i, agg := range group.ctr.aggList {
+					if err = agg.PreflightBatchFill(
+						offset, groups, group.ctr.aggArgEvaluate[i].Vec); err != nil {
+						break
+					}
 				}
+				if err != nil {
+					if retried, retryErr := group.retryBuildBatchAfterCapacity(
+						proc, err); retried {
+						err = nil
+						continue
+					} else {
+						return false, retryErr
+					}
+				}
+				for i, agg := range group.ctr.aggList {
+					aggexec.SetGroupConcatInputRowBase(agg, inputRowBase)
+					if err = agg.BatchFill(
+						offset, groups, group.ctr.aggArgEvaluate[i].Vec); err != nil {
+						return false, err
+					}
+				}
+				break
 			}
-			for i, agg := range group.ctr.aggList {
-				if err = agg.BatchFill(
-					offset, groups, group.ctr.aggArgEvaluate[i].Vec); err != nil {
+			shouldDrain, err := group.ctr.shouldDrainExactCountDistinct()
+			if err != nil {
+				return false, err
+			}
+			if shouldDrain {
+				if _, err := group.ctr.drainExactCountDistinct(
+					proc, group.OpAnalyzer); err != nil {
 					return false, err
 				}
 			}
 		}
+		group.ctr.inputRowCount += uint64(bat.RowCount())
 		group.OpAnalyzer.SetMemUsed(group.ctr.memUsed())
 		return false, nil
 	} else {
@@ -446,6 +627,7 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 		for i := 0; i < count; i += hashmap.UnitLimit {
 			n := min(count-i, hashmap.UnitLimit)
 			var preview groupInsertPreview
+			var aggregateGroupScratch [hashmap.UnitLimit]uint64
 			for {
 				err = nil
 				if !evaluated {
@@ -497,11 +679,18 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 							preview.inserted, preview.newGroups)
 					}
 					if err == nil {
-						for j, agg := range group.ctr.aggList {
-							if err = agg.PreflightBatchFill(
-								i, preview.values,
-								group.ctr.aggArgEvaluate[j].Vec); err != nil {
-								break
+						aggregateGroups := preview.values[:n]
+						if group.DynamicGrouping {
+							aggregateGroups, err = dynamicGroupingAggregateGroups(
+								bat, i, aggregateGroups, aggregateGroupScratch[:n])
+						}
+						if err == nil {
+							for j, agg := range group.ctr.aggList {
+								if err = agg.PreflightBatchFill(
+									i, aggregateGroups,
+									group.ctr.aggArgEvaluate[j].Vec); err != nil {
+									break
+								}
 							}
 						}
 					}
@@ -513,22 +702,36 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 					vals, more, insertErr := group.ctr.commitGroupByChunk(
 						group.ctr.groupByEvaluate.Vec, i, n, preview)
 					if insertErr != nil {
-						return false, insertErr
-					}
-					if more > 0 {
-						for _, agg := range group.ctr.aggList {
-							if growErr := agg.GroupGrow(more); growErr != nil {
-								return false, growErr
+						if !isGroupPrePublicationError(insertErr) {
+							return false, insertErr
+						}
+						group.ctr.cancelGroupByPreflights()
+						err = insertErr
+					} else {
+						if more > 0 {
+							for _, agg := range group.ctr.aggList {
+								if growErr := agg.GroupGrow(more); growErr != nil {
+									return false, growErr
+								}
 							}
 						}
-					}
-					for j, agg := range group.ctr.aggList {
-						if err = agg.BatchFill(
-							i, vals[:n], group.ctr.aggArgEvaluate[j].Vec); err != nil {
-							return false, err
+						aggregateGroups := vals[:n]
+						if group.DynamicGrouping {
+							aggregateGroups, err = dynamicGroupingAggregateGroups(
+								bat, i, aggregateGroups, aggregateGroupScratch[:n])
+							if err != nil {
+								return false, err
+							}
 						}
+						for j, agg := range group.ctr.aggList {
+							aggexec.SetGroupConcatInputRowBase(agg, inputRowBase)
+							if err = agg.BatchFill(
+								i, aggregateGroups, group.ctr.aggArgEvaluate[j].Vec); err != nil {
+								return false, err
+							}
+						}
+						break
 					}
-					break
 				}
 				if retried, retryErr := group.retryBuildBatchAfterCapacity(proc, err); retried {
 					evaluated = false
@@ -540,9 +743,84 @@ func (group *Group) buildOneBatch(proc *process.Process, bat *batch.Batch) (bool
 		} // end of mini batch for loop
 
 		observeHashGrowth(group.OpAnalyzer.GetOpStats(), "GroupHashBuild", hashBytesBefore, group.ctr.hr.Hash.Size())
-		// check size
-		return group.ctr.needSpill(group.OpAnalyzer), nil
+		// Prefer subdividing eligible exact DISTINCT keys before generic Group
+		// spill. A hot group's key set can make progress only on this axis.
+		shouldDrain, err := group.ctr.shouldDrainExactCountDistinct()
+		if err != nil {
+			return false, err
+		}
+		if shouldDrain {
+			if _, err := group.ctr.drainExactCountDistinct(
+				proc, group.OpAnalyzer); err != nil {
+				return false, err
+			}
+		}
+		// Compact group state may still require existing group-hash spill. Before
+		// its first record is written, move every eligible exact key to the
+		// independent spool so no pre-activation hot-group record can survive.
+		needSpill := group.ctr.needSpill(group.OpAnalyzer)
+		if needSpill && group.ctr.distinctSpill == nil {
+			hasDistinct, err := group.ctr.hasExactCountDistinctArguments()
+			if err != nil {
+				return false, err
+			}
+			if hasDistinct {
+				if _, err := group.ctr.drainExactCountDistinct(
+					proc, group.OpAnalyzer); err != nil {
+					return false, err
+				}
+				needSpill = group.ctr.needSpill(group.OpAnalyzer)
+			}
+		}
+		group.ctr.inputRowCount += uint64(bat.RowCount())
+		return needSpill, nil
 	}
+}
+
+func (group *Group) hasGroupConcat() bool {
+	for _, agg := range group.Aggs {
+		if agg.GetAggID() == aggexec.AggIdOfGroupConcat {
+			return true
+		}
+	}
+	return false
+}
+
+func dynamicGroupingAggregateGroups(
+	bat *batch.Batch,
+	offset int,
+	groups []uint64,
+	scratch []uint64,
+) ([]uint64, error) {
+	markerPos := len(bat.Vecs) - 2
+	if markerPos < 0 || len(scratch) < len(groups) {
+		return nil, moerr.NewInvalidInputNoCtx("dynamic grouping input is missing its aggregate marker")
+	}
+	marker := bat.Vecs[markerPos]
+	if marker == nil || marker.GetType().Oid != types.T_bool || offset < 0 || offset+len(groups) > marker.Length() {
+		return nil, moerr.NewInvalidInputNoCtx("invalid dynamic grouping aggregate marker")
+	}
+
+	hasSynthetic := false
+	for i := range groups {
+		row := offset + i
+		if marker.IsNull(uint64(row)) {
+			return nil, moerr.NewInvalidInputNoCtx("dynamic grouping aggregate marker cannot be NULL")
+		}
+		if vector.GetFixedAtNoTypeCheck[bool](marker, row) {
+			hasSynthetic = true
+		}
+	}
+	if !hasSynthetic {
+		return groups, nil
+	}
+	copy(scratch, groups)
+	for i := range groups {
+		if vector.GetFixedAtNoTypeCheck[bool](marker, offset+i) {
+			scratch[i] = aggexec.GroupNotMatched
+		}
+	}
+	return scratch[:len(groups)], nil
 }
 
 func (group *Group) evaluateBuildInput(
@@ -570,8 +848,16 @@ func (group *Group) retryBuildBatchAfterCapacity(
 	cause error,
 ) (bool, error) {
 	if group == nil || group.ctr.allocationAccount == nil ||
-		!mpool.IsRetryableAllocationCapacity(cause) ||
-		group.ctr.mtyp == H0 || group.ctr.hr.IsEmpty() ||
+		!mpool.IsRetryableAllocationCapacity(cause) {
+		return false, cause
+	}
+	if drained, err := group.ctr.drainExactCountDistinct(
+		proc, group.OpAnalyzer); err != nil {
+		return false, err
+	} else if drained {
+		return true, nil
+	}
+	if group.ctr.mtyp == H0 || group.ctr.hr.IsEmpty() ||
 		group.ctr.hr.Hash.GroupCount() == 0 {
 		return false, cause
 	}
@@ -618,6 +904,16 @@ func (ctr *container) buildHashTable(ctx context.Context, preAllocated uint64) e
 		ctr.hashIterator,
 	); err != nil {
 		return err
+	}
+	if ctr.mtyp == H8 && ctr.legacyH8CharSemantics {
+		legacy, ok := ctr.hr.Hash.(*hashmap.IntHashMap)
+		if !ok {
+			return moerr.NewInternalErrorNoCtx(
+				"legacy H8 CHAR semantics require IntHashMap")
+		}
+		if err := legacy.SetLegacyCharPadding(true); err != nil {
+			return err
+		}
 	}
 
 	// pre-allocate groups for each agg.
@@ -862,7 +1158,18 @@ func (ctr *container) createNewGroupByBatchWithAllocation(
 func (ctr *container) appendGroupByBatch(
 	vs []*vector.Vector,
 	offset int,
-	insertList []uint8) (int, error) {
+	insertList []uint8,
+) (int, error) {
+	return ctr.appendGroupByBatchWithStringSources(vs, offset, insertList, nil, 0)
+}
+
+func (ctr *container) appendGroupByBatchWithStringSources(
+	vs []*vector.Vector,
+	offset int,
+	insertList []uint8,
+	stringSources [][]types.StringSource,
+	stringSourceOffset int,
+) (int, error) {
 	toIncrease, _ := countNonZeroAndFindKth(insertList, len(insertList)+1)
 	if toIncrease == 0 {
 		// A duplicate-only chunk must not create a fresh retained batch after
@@ -898,9 +1205,19 @@ func (ctr *container) appendGroupByBatch(
 
 	// there is enough space in the current batch to insert thisTime.
 	for i, vec := range currBatch.Vecs {
-		if err := vec.UnionBatchPreflighted(
-			vs[i], int64(offset), len(thisTime), thisTime, ctr.mp,
-		); err != nil {
+		var err error
+		if stringSources == nil {
+			err = vec.UnionBatchPreflighted(
+				vs[i], int64(offset), len(thisTime), thisTime, ctr.mp)
+		} else if i >= len(stringSources) || stringSourceOffset < 0 ||
+			stringSourceOffset+len(thisTime) > len(stringSources[i]) {
+			return 0, mpool.ErrAllocationAccountInvariant
+		} else {
+			err = vec.UnionBatchPreflightedWithStringSourcesDeferredNormalization(
+				vs[i], int64(offset), len(thisTime), thisTime,
+				stringSources[i][stringSourceOffset:stringSourceOffset+len(thisTime)], ctr.mp)
+		}
+		if err != nil {
 			return 0, err
 		}
 	}
@@ -909,7 +1226,9 @@ func (ctr *container) appendGroupByBatch(
 	if toIncrease > spaceLeft {
 		// there is not enough space in the current batch to insert thisTime.
 		// so we need to append the rest of the insertList to the next batch.
-		_, err := ctr.appendGroupByBatch(vs, offset+kth+1, insertList[kth+1:])
+		_, err := ctr.appendGroupByBatchWithStringSources(
+			vs, offset+kth+1, insertList[kth+1:], stringSources,
+			stringSourceOffset+kth+1)
 		if err != nil {
 			return 0, err
 		}
@@ -929,6 +1248,20 @@ func (group *Group) outputOneBatch(proc *process.Process) (vm.CallResult, error)
 	if group.NeedEval {
 		return group.ctr.outputOneBatchFinal(proc, group.OpAnalyzer, group.Aggs)
 	} else {
+		// The previous partial batch has returned to the caller. Only now may we
+		// release its state and materialize the next exact-key leaf.
+		if group.ctr.inputDone &&
+			group.ctr.currBatchIdx >= len(group.ctr.groupByBatches) &&
+			group.ctr.distinctSpill != nil {
+			loaded, err := group.ctr.loadNextDistinctPartialLeaf(proc)
+			if err != nil {
+				return vm.CancelResult, err
+			}
+			if !loaded {
+				group.ctr.state = vm.End
+				return vm.CancelResult, nil
+			}
+		}
 		// no need to eval, we are in streaming mode.  spill never happen
 		// here.
 		res, hasMore, err := group.getNextIntermediateResult(proc)
@@ -937,7 +1270,13 @@ func (group *Group) outputOneBatch(proc *process.Process) (vm.CallResult, error)
 		}
 		if !hasMore {
 			if group.ctr.inputDone {
-				group.ctr.state = vm.End
+				if group.ctr.distinctSpill != nil {
+					// Keep Eval so the next Call can safely retire this returned
+					// batch before loading another exact-key leaf.
+					group.ctr.state = vm.Eval
+				} else {
+					group.ctr.state = vm.End
+				}
 			} else {
 				// switch back to build to receive more data.
 				// reset will set state to vm.Build, which will let us
@@ -1001,6 +1340,28 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 			[]prepareParamKindRowsSource, len(group.ctr.aggList))
 	}
 	for i, ag := range group.ctr.aggList {
+		aggexec.SetGroupConcatSourceRowWire(ag, groupConcatSourceRowWireEnabled(proc))
+		aggexec.SetGroupConcatSourceRowProvenanceWire(
+			ag, groupConcatSourceRowProvenanceWireEnabled(proc))
+		// The FLOAT DISTINCT membership policy is frozen when the aggregate
+		// state is admitted. If the capability gate advances while a prepared
+		// Group is draining, keep legacy-policy state on the legacy framing;
+		// the v79 marker would make a receiver treat legacy float bytes as
+		// already canonical and preserve distinct NaN payloads incorrectly.
+		canonicalDistinctWire := canonicalDistinctKeyWireEnabled(proc) &&
+			!group.ctr.legacyDistinctFloatKeys
+		if aggexec.RequiresModernDistinctFloatKeyWire(ag) &&
+			!canonicalDistinctWire {
+			return vm.CancelResult, false, moerr.NewInvalidStateNoCtx(
+				"modern FLOAT DISTINCT key state requires MORPCVersion79")
+		}
+		aggexec.SetCanonicalDistinctKeyWire(
+			ag, canonicalDistinctWire)
+		if aggexec.RequiresCanonicalDistinctKeyWire(ag) &&
+			!canonicalDistinctKeyWireEnabled(proc) {
+			return vm.CancelResult, false, moerr.NewInvalidStateNoCtx(
+				"canonical DISTINCT argument keys require MORPCVersion79")
+		}
 		if vec := ag.PrepareParamKindVectorForChunk(curr); vec != nil &&
 			vec.HasBinaryStringMetadata() && !binaryStringWireEnabled(proc) {
 			return vm.CancelResult, false, moerr.NewInvalidStateNoCtx(
@@ -1011,7 +1372,8 @@ func (group *Group) getNextIntermediateResult(proc *process.Process) (vm.CallRes
 			return vm.CancelResult, false, moerr.NewInvalidStateNoCtx(
 				"aggregate explicit-text metadata requires MORPCVersion23")
 		}
-		if err := ag.SaveIntermediateResultOfChunk(curr, writer); err != nil {
+		if err := saveAggregateChunkForProtocol(
+			ag, curr, writer, stringSourceWireEnabled(proc)); err != nil {
 			return vm.CancelResult, false, err
 		}
 		if !group.ctr.prepareParamKindWireV1 ||

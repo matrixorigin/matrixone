@@ -1,0 +1,364 @@
+#!/bin/sh
+
+# Copyright 2021 - 2026 Matrix Origin
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Verifies that mo-cgo-test can safely reuse untracked native artifacts from a
+# primary checkout when invoked in a linked worktree. Both supported platforms
+# are simulated; no compiler, libmo build, CUDA toolkit, or third-party library
+# is required.
+
+set -eu
+
+script_dir=$(CDPATH= cd -P "$(dirname "$0")" && pwd)
+wrapper="$script_dir/mo-cgo-test"
+provenance_writer="$script_dir/../../../../cgo/mo-native-provenance"
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+work=$(CDPATH= cd -P "$work" && pwd)
+
+primary="$work/primary"
+linked="$work/linked"
+mkdir -p "$primary/.agents/skills/mo-dev/scripts" "$primary/cgo" \
+    "$primary/thirdparties" "$work/bin"
+git -C "$primary" init --quiet
+cp "$wrapper" "$primary/.agents/skills/mo-dev/scripts/mo-cgo-test"
+chmod +x "$primary/.agents/skills/mo-dev/scripts/mo-cgo-test"
+cp "$provenance_writer" "$primary/cgo/mo-native-provenance"
+chmod +x "$primary/cgo/mo-native-provenance"
+
+cat > "$primary/.gitignore" <<'EOF'
+cgo/libmo.so
+cgo/libmo.dylib
+cgo/cuda/*.fatbin
+cgo/.mo-native-provenance
+cgo/.mo-native-provenance.pending
+cgo/.mo-native-provenance.building
+cgo/.mo-native-provenance.tmp
+thirdparties/install/
+mocl_kernel64.fatbin
+EOF
+cat > "$primary/Makefile" <<'EOF'
+cgo:
+	@true
+EOF
+printf 'native source\n' > "$primary/cgo/native.c"
+printf 'third-party source\n' > "$primary/thirdparties/source.txt"
+git -C "$primary" add .
+git -C "$primary" -c user.name=test -c user.email=test@example.com \
+    commit --quiet -m fixture
+
+mkdir -p "$primary/thirdparties/install/include" \
+    "$primary/thirdparties/install/lib"
+: > "$primary/cgo/libmo.so"
+: > "$primary/cgo/libmo.dylib"
+git -C "$primary" worktree add --quiet -b linked-test "$linked"
+
+cat > "$work/bin/go" <<'EOF'
+#!/bin/sh
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -C) shift 2 ;;
+        env)
+            case "$2" in
+                GOOS|GOHOSTOS) echo "$FAKE_GOOS" ;;
+                GOARCH|GOHOSTARCH) echo amd64 ;;
+                CGO_ENABLED) echo 1 ;;
+                *) echo "" ;;
+            esac
+            exit 0 ;;
+        list) echo "-lusearch_c -lroaring"; exit 0 ;;
+        test)
+            shift
+            echo "GO_TEST_ARGS: $*"
+            echo "DYLD_LIBRARY_PATH=${DYLD_LIBRARY_PATH:-}"
+            echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}"
+            echo "MO_CUDA_FATBIN_PATH=${MO_CUDA_FATBIN_PATH:-}"
+            exit 0 ;;
+        *) shift ;;
+    esac
+done
+EOF
+chmod +x "$work/bin/go"
+cat > "$work/bin/readelf" <<'EOF'
+#!/bin/sh
+exit 1
+EOF
+chmod +x "$work/bin/readelf"
+
+real_git=$(command -v git)
+cat > "$work/bin/git" <<'EOF'
+#!/bin/sh
+command_name=
+command_root=
+previous=
+for argument in "$@"; do
+    if [ "$previous" = -C ]; then
+        command_root=$argument
+    fi
+    if [ "$argument" = status ]; then
+        command_name=status
+    fi
+    previous=$argument
+done
+if [ "$command_name" = status ] &&
+   [ -n "${FAIL_STATUS_ROOT:-}" ] &&
+   [ "$command_root" = "$FAIL_STATUS_ROOT" ]; then
+    echo "injected worktree status failure" >&2
+    exit 85
+fi
+exec "$REAL_GIT" "$@"
+EOF
+chmod +x "$work/bin/git"
+export REAL_GIT="$real_git"
+
+linked_wrapper="$linked/.agents/skills/mo-dev/scripts/mo-cgo-test"
+failures=0
+
+record_provenance() {
+    platform=$1
+    action=$(env FAKE_GOOS="$platform" PATH="$work/bin:$PATH" \
+        "$primary/cgo/mo-native-provenance" prepare "$primary" cpu release 0)
+    case "$action" in
+        rebuild-all)
+            rm -rf "$primary/thirdparties/install"
+            rm -f "$primary/cgo/libmo.so" "$primary/cgo/libmo.dylib" \
+                "$primary/cgo/cuda/mocl_kernel64.fatbin" \
+                "$primary/mocl_kernel64.fatbin"
+            ;;
+        rebuild-cgo)
+            rm -f "$primary/cgo/libmo.so" "$primary/cgo/libmo.dylib" \
+                "$primary/cgo/cuda/mocl_kernel64.fatbin" \
+                "$primary/mocl_kernel64.fatbin"
+            ;;
+        reuse) ;;
+        *) printf 'unexpected build action: %s\n' "$action" >&2; exit 1 ;;
+    esac
+    env FAKE_GOOS="$platform" PATH="$work/bin:$PATH" \
+        "$primary/cgo/mo-native-provenance" begin "$primary" cpu release 0
+    mkdir -p "$primary/thirdparties/install/include" \
+        "$primary/thirdparties/install/lib"
+    printf 'header\n' > "$primary/thirdparties/install/include/native.h"
+    printf 'library\n' > "$primary/thirdparties/install/lib/libnative.a"
+    printf '%s library\n' "$platform" > "$primary/cgo/libmo.so"
+    printf '%s library\n' "$platform" > "$primary/cgo/libmo.dylib"
+    env FAKE_GOOS="$platform" PATH="$work/bin:$PATH" \
+        "$primary/cgo/mo-native-provenance" record "$primary" cpu release 0
+}
+
+record_gpu_provenance() {
+    action=$(env FAKE_GOOS=linux CONDA_PREFIX="$work" PATH="$work/bin:$PATH" \
+        "$primary/cgo/mo-native-provenance" prepare "$primary" gpu release 0)
+    case "$action" in
+        rebuild-all)
+            rm -rf "$primary/thirdparties/install"
+            rm -f "$primary/cgo/libmo.so" "$primary/cgo/libmo.dylib" \
+                "$primary/cgo/cuda/mocl_kernel64.fatbin" \
+                "$primary/mocl_kernel64.fatbin"
+            ;;
+        rebuild-cgo)
+            rm -f "$primary/cgo/libmo.so" "$primary/cgo/libmo.dylib" \
+                "$primary/cgo/cuda/mocl_kernel64.fatbin" \
+                "$primary/mocl_kernel64.fatbin"
+            ;;
+        reuse) ;;
+        *) printf 'unexpected GPU build action: %s\n' "$action" >&2; exit 1 ;;
+    esac
+    env FAKE_GOOS=linux CONDA_PREFIX="$work" PATH="$work/bin:$PATH" \
+        "$primary/cgo/mo-native-provenance" begin "$primary" gpu release 0
+    mkdir -p "$primary/thirdparties/install/include" \
+        "$primary/thirdparties/install/lib" "$primary/cgo/cuda"
+    printf 'header\n' > "$primary/thirdparties/install/include/native.h"
+    printf 'library\n' > "$primary/thirdparties/install/lib/libnative.a"
+    printf 'linux gpu library\n' > "$primary/cgo/libmo.so"
+    printf 'gpu kernel\n' > "$primary/cgo/cuda/mocl_kernel64.fatbin"
+    cp "$primary/cgo/cuda/mocl_kernel64.fatbin" \
+        "$primary/mocl_kernel64.fatbin"
+    env FAKE_GOOS=linux CONDA_PREFIX="$work" PATH="$work/bin:$PATH" \
+        "$primary/cgo/mo-native-provenance" record "$primary" gpu release 0
+}
+
+set +e
+missing_output=$(env FAKE_GOOS=darwin PATH="$work/bin:$PATH" \
+    sh "$linked_wrapper" ./pkg/x/ 2>&1)
+missing_status=$?
+set -e
+if [ "$missing_status" -eq 0 ]; then
+    echo "FAIL an un-stamped primary artifact was reused"
+    failures=$((failures + 1))
+else
+    case "$missing_output" in
+        *"primary-worktree reuse rejected: native artifact provenance stamp is missing"*)
+            echo "ok   un-stamped primary artifacts require one rebuild" ;;
+        *)
+            printf 'FAIL missing provenance had the wrong error: %s\n' "$missing_output"
+            failures=$((failures + 1)) ;;
+    esac
+fi
+
+check_platform() {
+    platform=$1
+    artifact_name=$2
+    record_provenance "$platform"
+    set +e
+    output=$(env FAKE_GOOS="$platform" PATH="$work/bin:$PATH" \
+        sh "$linked_wrapper" -count=1 ./pkg/x/ 2>&1)
+    status=$?
+    set -e
+    if [ "$status" -ne 0 ]; then
+        printf 'FAIL %-7s wrapper exited %d: %s\n' "$platform" "$status" "$output"
+        failures=$((failures + 1))
+        return
+    fi
+    case "$output" in
+        *"using platform-matched CGo artifacts ($artifact_name) from primary worktree: $primary"*) ;;
+        *)
+            printf 'FAIL %-7s did not report primary-worktree reuse\n' "$platform"
+            failures=$((failures + 1))
+            return ;;
+    esac
+    case "$output" in
+        *"-Wl,-rpath,$primary/cgo"*)
+            printf 'ok   %-7s uses %s and the primary artifact rpath\n' "$platform" "$artifact_name" ;;
+        *)
+            printf 'FAIL %-7s wrong artifact rpath: %s\n' "$platform" "$output"
+            failures=$((failures + 1)) ;;
+    esac
+}
+
+check_platform darwin libmo.dylib
+check_platform linux libmo.so
+
+set +e
+variant_output=$(env FAKE_GOOS=linux MO_CL_CUDA=1 CONDA_PREFIX="$work" \
+    PATH="$work/bin:$PATH" sh "$linked_wrapper" ./pkg/x/ 2>&1)
+variant_status=$?
+set -e
+if [ "$variant_status" -eq 0 ]; then
+    echo "FAIL a CPU primary artifact was reused for a GPU test"
+    failures=$((failures + 1))
+else
+    case "$variant_output" in
+        *"primary-worktree reuse rejected: native artifact provenance does not match source, platform, or build key"*)
+            echo "ok   CPU/GPU artifact variant mismatch is rejected" ;;
+        *)
+            printf 'FAIL build-variant mismatch had the wrong error: %s\n' "$variant_output"
+            failures=$((failures + 1)) ;;
+    esac
+fi
+
+set +e
+simsimd_output=$(env FAKE_GOOS=linux MO_CL_SIMSIMD=1 PATH="$work/bin:$PATH" \
+    sh "$linked_wrapper" ./pkg/x/ 2>&1)
+simsimd_status=$?
+set -e
+if [ "$simsimd_status" -eq 0 ]; then
+    echo "FAIL a non-SIMSIMD primary artifact was reused for a SIMSIMD test"
+    failures=$((failures + 1))
+else
+    case "$simsimd_output" in
+        *"primary-worktree reuse rejected: native artifact provenance does not match source, platform, or build key"*)
+            echo "ok   SIMSIMD artifact-key mismatch is rejected" ;;
+        *)
+            printf 'FAIL SIMSIMD mismatch had the wrong error: %s\n' "$simsimd_output"
+            failures=$((failures + 1)) ;;
+    esac
+fi
+
+record_gpu_provenance
+set +e
+gpu_output=$(env FAKE_GOOS=linux MO_CL_CUDA=1 CONDA_PREFIX="$work" \
+    PATH="$work/bin:$PATH" sh "$linked_wrapper" ./pkg/x/ 2>&1)
+gpu_status=$?
+set -e
+if [ "$gpu_status" -eq 0 ] &&
+   printf '%s\n' "$gpu_output" | grep -q -- '-tags gpu' &&
+   printf '%s\n' "$gpu_output" | grep -q -- \
+       "MO_CUDA_FATBIN_PATH=$primary/mocl_kernel64.fatbin"; then
+    echo "ok   GPU worktree reuse passes the verified fatbin to the test process"
+else
+    printf 'FAIL GPU worktree reuse did not close the runtime sidecar: %s\n' \
+        "$gpu_output"
+    failures=$((failures + 1))
+fi
+
+# Restore a CPU generation for the remaining platform/source cases, then prove
+# that either worktree's status failure rejects primary artifact selection.
+record_provenance linux
+for failed_root in "$linked" "$primary"; do
+    set +e
+    status_output=$(env FAKE_GOOS=linux FAIL_STATUS_ROOT="$failed_root" \
+        PATH="$work/bin:$PATH" sh "$linked_wrapper" ./pkg/x/ 2>&1)
+    status_result=$?
+    set -e
+    if [ "$status_result" -ne 0 ]; then
+        printf 'ok   status failure for %s rejects worktree reuse\n' "$failed_root"
+    else
+        printf 'FAIL status failure for %s reused primary artifacts: %s\n' \
+            "$failed_root" "$status_output"
+        failures=$((failures + 1))
+    fi
+done
+
+printf 'branch-specific native change\n' >> "$linked/cgo/native.c"
+set +e
+drift_output=$(env FAKE_GOOS=darwin PATH="$work/bin:$PATH" \
+    sh "$linked_wrapper" ./pkg/x/ 2>&1)
+drift_status=$?
+set -e
+if [ "$drift_status" -eq 0 ]; then
+    echo "FAIL native-input drift reused a primary artifact"
+    failures=$((failures + 1))
+else
+    case "$drift_output" in
+        *"primary-worktree reuse rejected: native inputs differ from or are dirty"*)
+            echo "ok   native-input drift rejects primary artifacts" ;;
+        *)
+            printf 'FAIL native-input drift had the wrong error: %s\n' "$drift_output"
+            failures=$((failures + 1)) ;;
+    esac
+fi
+
+# A clean primary checkout is not enough: ignored artifacts may have survived a
+# checkout/rebase that changed native source. A fresh linked worktree at that
+# same revision must reject the old stamp instead of testing stale native code.
+printf 'new committed native source\n' >> "$primary/cgo/native.c"
+git -C "$primary" add cgo/native.c
+git -C "$primary" -c user.name=test -c user.email=test@example.com \
+    commit --quiet -m 'change native source without rebuilding'
+stale_linked="$work/stale-linked"
+git -C "$primary" worktree add --quiet -b stale-test "$stale_linked"
+set +e
+stale_output=$(env FAKE_GOOS=linux PATH="$work/bin:$PATH" \
+    sh "$stale_linked/.agents/skills/mo-dev/scripts/mo-cgo-test" ./pkg/x/ 2>&1)
+stale_status=$?
+set -e
+if [ "$stale_status" -eq 0 ]; then
+    echo "FAIL clean source drift reused an artifact built from the previous revision"
+    failures=$((failures + 1))
+else
+    case "$stale_output" in
+        *"primary-worktree reuse rejected: native artifact provenance does not match source"*)
+            echo "ok   clean source drift rejects stale primary artifacts" ;;
+        *)
+            printf 'FAIL clean source drift had the wrong error: %s\n' "$stale_output"
+            failures=$((failures + 1)) ;;
+    esac
+fi
+
+if [ "$failures" -ne 0 ]; then
+    printf '\n%d check(s) failed\n' "$failures"
+    exit 1
+fi
+printf '\nall checks passed\n'

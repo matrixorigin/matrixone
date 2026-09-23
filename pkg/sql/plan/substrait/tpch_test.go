@@ -31,6 +31,16 @@ import (
 
 func TestExportCanonicalTPCHPlans(t *testing.T) {
 	mock := planbuilder.NewMockOptimizer(false)
+	// Exact DECIMAL arithmetic and SUM widening make these plans contain
+	// Decimal256 expressions. Substrait decimal is capped at precision 38, so
+	// declining Sirius offload preserves MatrixOne's wider arithmetic semantics.
+	decimal256Plans := map[int]EligibilityReason{
+		1: EligibilityExpression, 3: EligibilityExpression, 5: EligibilityExpression,
+		6: EligibilityType, 7: EligibilityExpression, 8: EligibilityExpression,
+		9: EligibilityExpression, 10: EligibilityExpression, 11: EligibilityType,
+		14: EligibilityExpression, 15: EligibilityExpression, 17: EligibilityExpression,
+		19: EligibilityExpression, 20: EligibilityExpression,
+	}
 	for queryNumber := 1; queryNumber <= 22; queryNumber++ {
 		t.Run(fmt.Sprintf("q%d", queryNumber), func(t *testing.T) {
 			path := filepath.Join("..", "tpch", fmt.Sprintf("q%d.sql", queryNumber))
@@ -54,6 +64,17 @@ func TestExportCanonicalTPCHPlans(t *testing.T) {
 			}
 
 			candidate, err := Export(query)
+			if expectedReason, expectedIneligible := decimal256Plans[queryNumber]; expectedIneligible {
+				require.Error(t, err)
+				require.True(t, IsNotEligible(err))
+				reason, ok := NotEligibleReason(err)
+				require.True(t, ok)
+				require.Equal(t, expectedReason, reason)
+				if expectedReason == EligibilityType {
+					require.ErrorContains(t, err, "unsupported type DECIMAL256")
+				}
+				return
+			}
 			require.NoError(t, err)
 			readValues := make(map[int32][]byte, len(candidate.Reads()))
 			for _, read := range candidate.Reads() {

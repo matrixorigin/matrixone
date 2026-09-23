@@ -5,7 +5,7 @@
 
 -- normal table adds primary key
 drop table if exists pri01;
-create table pri01 (col1 int, col2 decimal);
+create table pri01 (col1 int, col2 decimal(38,0));
 insert into pri01 (col1, col2) values (1,2378.328839842);
 insert into pri01 values (234, -3923.2342342);
 select * from pri01;
@@ -87,7 +87,7 @@ drop table pri06;
 
 --  modify the value of the column after add primary key
 drop table if exists pri07;
-create table pri07 (col1 decimal, col2 double);
+create table pri07 (col1 decimal(38,0), col2 double);
 insert into pri07 (col1, col2) values (12.213231000021312, -32734928490.3284032);
 insert into pri07 values (32784234.4234243243243242, 3289323423);
 select * from pri07;
@@ -151,7 +151,7 @@ drop table pri10;
 
 -- abnormal test: change a single primary key column to multiple primary key columns
 drop table if exists pri11;
-create table pri11 (col1 int primary key , col2 decimal, col3 char);
+create table pri11 (col1 int primary key , col2 decimal(38,0), col3 char);
 insert into pri11 (col1, col2, col3) values (1, 3289034.3232, 'q');
 insert into pri11 values (2, 3829.3232, 'a');
 alter table pri11 add constraint primary key (col1, col2);
@@ -186,7 +186,7 @@ select * from ex_table_2_1;
 
 -- primary key deletion
 drop table if exists droppri01;
-create table droppri01 (col1 int primary key , col2 decimal);
+create table droppri01 (col1 int primary key , col2 decimal(38,0));
 insert into droppri01 (col1, col2) values (1, 234324234.234242);
 insert into droppri01 values (32894324,4234294023.4324324234);
 alter table droppri01 drop primary key;
@@ -206,7 +206,7 @@ drop table droppri01;
 
 -- Run the show create table error command to add or delete a primary key in one column and add a primary key in the other column
 drop table if exists pri01;
-create table pri01(col1 int, col2 decimal);
+create table pri01(col1 int, col2 decimal(38,0));
 alter table pri01 add constraint primary key(col1);
 show create table pri01;
 alter table pri01 drop primary key;
@@ -220,7 +220,7 @@ drop table pri01;
 
 -- multi-column primary key deletion
 drop table if exists droppri02;
-create table droppri02 (col1 int auto_increment, col2 decimal, col3 char, col4 varchar not null, col5 float, primary key (col1, col2, col3));
+create table droppri02 (col1 int auto_increment, col2 decimal(38,0), col3 char, col4 varchar not null, col5 float, primary key (col1, col2, col3));
 show create table droppri02;
 show columns from droppri02;
 alter table droppri02 drop primary key;
@@ -286,7 +286,7 @@ drop user role_u1;
 -- mixed situation
 -- modify change rename column, add/drop primary key
 drop table if exists mix01;
-create table mix01 (col1 int, col2 decimal, col3 char, col4 varchar(100));
+create table mix01 (col1 int, col2 decimal(38,0), col3 char, col4 varchar(100));
 insert into mix01 (col1, col2, col3, col4) values (1, 2, 'a', 'w3uir34jn2k48ujf4');
 insert into mix01 (col1, col2, col3, col4) values (2, 3, 'd', '3289u3ji2dff43');
 alter table mix01 modify col1 float after col3, change column col2 col2New double, rename column col3 to newCol3, add constraint primary key(col1);
@@ -305,7 +305,7 @@ drop table mix01;
 -- begin, alter table add/drop primary key column, commit, then select
 drop table if exists table01;
 begin;
-create table table01(col1 int, col2 decimal);
+create table table01(col1 int, col2 decimal(38,0));
 insert into table01 values(100,200);
 insert into table01 values(200,300);
 alter table table01 add constraint primary key (col2);
@@ -316,7 +316,7 @@ drop table table01;
 
 drop table if exists table01;
 begin;
-create table table01(col1 int primary key, col2 decimal);
+create table table01(col1 int primary key, col2 decimal(38,0));
 insert into table01 values(100,200);
 insert into table01 values(200,300);
 alter table table01 drop primary key;

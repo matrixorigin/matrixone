@@ -20,7 +20,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -50,6 +53,216 @@ func TestInsertAffectedRowsUsesChangedRowsMarker(t *testing.T) {
 	markerCol := 0
 	require.EqualValues(t, 2, insertAffectedRows(&MultiUpdateCtx{ChangedRowsCol: &markerCol}, input))
 	require.EqualValues(t, 4, insertAffectedRows(&MultiUpdateCtx{}, input))
+}
+
+func TestFilterODKUPhysicalRowsSeparatesLogicalCount(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	weights := vector.NewVec(types.T_uint64.ToType())
+	physical := vector.NewVec(types.T_bool.ToType())
+	defer weights.Free(proc.Mp())
+	defer physical.Free(proc.Mp())
+	for _, value := range []uint64{6, 4, 0} {
+		require.NoError(t, vector.AppendFixed(weights, value, false, proc.Mp()))
+	}
+	for _, value := range []bool{true, false, false} {
+		require.NoError(t, vector.AppendFixed(physical, value, false, proc.Mp()))
+	}
+	input := batch.NewWithSize(2)
+	input.Vecs[0], input.Vecs[1] = weights, physical
+	input.SetRowCount(3)
+	weightCol, physicalCol := 0, 1
+
+	filtered, owned, affected, err := filterODKUPhysicalRows(proc, &MultiUpdateCtx{
+		AffectedRowsWeightCol:  &weightCol,
+		PhysicalChangedRowsCol: &physicalCol,
+	}, input)
+	require.NoError(t, err)
+	require.True(t, owned)
+	defer filtered.Clean(proc.Mp())
+	require.EqualValues(t, 10, affected)
+	require.Equal(t, 1, filtered.RowCount(), "restored/no-op rows must count logically but not be written")
+}
+
+func TestFilterODKUPhysicalRowsFastPathAndMalformedMetadata(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	weights := vector.NewVec(types.T_uint64.ToType())
+	physical := vector.NewVec(types.T_bool.ToType())
+	defer weights.Free(proc.Mp())
+	defer physical.Free(proc.Mp())
+	for _, value := range []uint64{1, 2} {
+		require.NoError(t, vector.AppendFixed(weights, value, false, proc.Mp()))
+	}
+	for range 2 {
+		require.NoError(t, vector.AppendFixed(physical, true, false, proc.Mp()))
+	}
+	input := batch.NewWithSize(2)
+	input.Vecs[0], input.Vecs[1] = weights, physical
+	input.SetRowCount(2)
+	weightCol, physicalCol := 0, 1
+	ctx := &MultiUpdateCtx{
+		AffectedRowsWeightCol:  &weightCol,
+		PhysicalChangedRowsCol: &physicalCol,
+	}
+
+	filtered, owned, affected, err := filterODKUPhysicalRows(proc, ctx, input)
+	require.NoError(t, err)
+	require.False(t, owned)
+	require.Same(t, input, filtered, "all changed rows must not pay for a clone/selection")
+	require.EqualValues(t, 3, affected)
+
+	badWeightCol := 1
+	_, _, _, err = filterODKUPhysicalRows(proc, &MultiUpdateCtx{
+		AffectedRowsWeightCol: &badWeightCol,
+	}, input)
+	require.ErrorContains(t, err, "invalid ODKU affected-row weight column")
+}
+
+func TestS3ODKUAffectedRowsTransferredToFlush(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(proc.Free)
+	analyzer := process.NewAnalyzer(0, false, false, "s3-affected-rows-test")
+
+	pending := uint64(9)
+	writer := &s3WriterDelegate{
+		takeAffectedRows: func() uint64 {
+			rows := pending
+			pending = 0
+			return rows
+		},
+	}
+	require.NoError(t, writer.flushTailAndWriteToOutput(proc, analyzer))
+	require.Zero(t, pending)
+	// A merge may append control records from independent remote writer
+	// operators. Their counts must be additive at the single flush owner.
+	require.NoError(t, writer.addAffectedRowsToOutput(proc.Mp(), 4))
+	require.Equal(t, 2, writer.outputBat.RowCount(),
+		"a logical count must survive even when a no-op produces no storage batch")
+	require.Equal(t, []uint8{uint8(actionAffectedRows), uint8(actionAffectedRows)},
+		vector.MustFixedColWithTypeCheck[uint8](writer.outputBat.Vecs[0]))
+	require.Equal(t, []uint64{9, 4},
+		vector.MustFixedColWithTypeCheck[uint64](writer.outputBat.Vecs[2]))
+
+	// The control record is consumed without resolving a table or unmarshalling
+	// a storage batch. This models the coordinator after any local/remote merge.
+	child := colexec.NewMockOperator().WithBatchs([]*batch.Batch{writer.outputBat})
+	t.Cleanup(func() { child.Free(proc, false, nil) })
+	writer.outputBat = nil // transfer ownership to the mock pipeline source
+	flush := &MultiUpdate{}
+	flush.addAffectedRowsFunc = flush.doAddAffectedRows
+	flush.AppendChild(child)
+	_, err := flush.updateFlushS3Info(proc, analyzer)
+	require.NoError(t, err)
+	require.EqualValues(t, 13, flush.GetAffectedRows())
+}
+
+func TestS3ODKUAffectedRowsDrainedExactlyOnceAcrossWriters(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	analyzer := process.NewAnalyzer(0, false, false, "s3-affected-rows-test")
+
+	pending := uint64(7)
+	take := func() uint64 {
+		rows := pending
+		pending = 0
+		return rows
+	}
+	writers := []*s3WriterDelegate{{takeAffectedRows: take}, {takeAffectedRows: take}}
+	for _, writer := range writers {
+		require.NoError(t, writer.flushTailAndWriteToOutput(proc, analyzer))
+		defer writer.outputBat.Clean(proc.Mp())
+	}
+	require.Equal(t, 1, writers[0].outputBat.RowCount())
+	require.Zero(t, writers[1].outputBat.RowCount(),
+		"only one parallel writer may transfer the shared logical count")
+}
+
+func TestPrepareSelectsTopologyStableS3AffectedRowsOwner(t *testing.T) {
+	_, _, proc := prepareTestCtx(t, true)
+	defer proc.Free()
+	objRef, tableDef := getTestMainTable()
+	weightCol := 0
+
+	newODKUWriter := func() *MultiUpdate {
+		return &MultiUpdate{
+			Action: UpdateWriteS3,
+			MultiUpdateCtx: []*MultiUpdateCtx{{
+				ObjRef:                objRef,
+				TableDef:              tableDef,
+				TargetUpdateCtxIdx:    0,
+				AffectedRowsWeightCol: &weightCol,
+			}},
+		}
+	}
+
+	t.Run("ordinary writer keeps legacy physical owner", func(t *testing.T) {
+		op := &MultiUpdate{
+			Action: UpdateWriteS3,
+			MultiUpdateCtx: []*MultiUpdateCtx{{
+				ObjRef:             objRef,
+				TableDef:           tableDef,
+				TargetUpdateCtxIdx: 0,
+			}},
+		}
+		require.NoError(t, op.Prepare(proc))
+		op.addAffectedRowsFunc(3)
+		require.EqualValues(t, 3, op.GetAffectedRows())
+		require.Nil(t, op.takeS3AffectedRowsFunc)
+		op.Free(proc, false, nil)
+	})
+
+	t.Run("direct ODKU writer transfers instead of publishing", func(t *testing.T) {
+		op := newODKUWriter()
+		require.NoError(t, op.Prepare(proc))
+		op.addAffectedRowsFunc(5)
+		require.Zero(t, op.GetAffectedRows())
+		require.EqualValues(t, 5, op.takeS3AffectedRowsFunc())
+		require.Zero(t, op.takeS3AffectedRowsFunc())
+		op.Free(proc, false, nil)
+	})
+
+	t.Run("failed attempt cannot leak its count into operator reuse", func(t *testing.T) {
+		op := newODKUWriter()
+		require.NoError(t, op.Prepare(proc))
+		op.addAffectedRowsFunc(11)
+		op.Reset(proc, true, assert.AnError)
+		require.Zero(t, op.ctr.s3AffectedRows)
+		require.Zero(t, op.takeS3AffectedRowsFunc())
+		op.Free(proc, true, assert.AnError)
+	})
+
+	t.Run("partition ODKU writer transfers once at wrapper boundary", func(t *testing.T) {
+		raw := newODKUWriter()
+		op := NewPartitionMultiUpdate(raw).(*PartitionMultiUpdate)
+		require.NoError(t, op.Prepare(proc))
+		op.raw.addAffectedRowsFunc(7)
+		require.Zero(t, op.GetAffectedRows())
+		controlWriter := op.getFlushableS3Writer()
+		require.Same(t, op.raw.ctr.s3Writer, controlWriter,
+			"an all-no-op partition statement must still have a control output owner")
+		require.NoError(t, controlWriter.flushTailAndWriteToOutput(
+			proc, process.NewAnalyzer(0, false, false, "partition-s3-affected-rows-test")))
+		require.Equal(t, 1, controlWriter.outputBat.RowCount())
+		require.Equal(t, uint8(actionAffectedRows),
+			vector.MustFixedColWithTypeCheck[uint8](controlWriter.outputBat.Vecs[0])[0])
+		require.EqualValues(t, 7,
+			vector.MustFixedColWithTypeCheck[uint64](controlWriter.outputBat.Vecs[2])[0])
+		require.Nil(t, op.getFlushableS3Writer())
+		op.Free(proc, false, nil)
+	})
+
+	t.Run("failed partition attempt discards pending control state", func(t *testing.T) {
+		raw := newODKUWriter()
+		op := NewPartitionMultiUpdate(raw).(*PartitionMultiUpdate)
+		require.NoError(t, op.Prepare(proc))
+		op.raw.addAffectedRowsFunc(13)
+		op.Reset(proc, true, assert.AnError)
+		require.Zero(t, op.s3AffectedRows)
+		require.Nil(t, op.getFlushableS3Writer())
+		op.Free(proc, true, assert.AnError)
+	})
 }
 
 // TestUpsertAffectRowsAccounting pins the MySQL-compatible affected-rows

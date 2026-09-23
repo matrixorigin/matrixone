@@ -252,8 +252,12 @@ func getPartitionSetFunction(
 			return err
 		}
 		// A reused output vector may carry metadata from an earlier flush;
-		// NULL is not an observed conversion category.
-		return v.SetPrepareParamKindsWithMP(nil, mp)
+		// NULL is not an observed conversion category, but it retains the
+		// independently selected value owner.
+		if err := v.SetPrepareParamKindsWithMP(nil, mp); err != nil {
+			return err
+		}
+		return v.SetStringSource(w.GetStringSourceAt(int(sel)))
 	}
 }
 
@@ -560,6 +564,7 @@ func makeAggExecutors(timeWin *TimeWin, proc *process.Process, growFirstGroup bo
 		if err != nil {
 			return nil, err
 		}
+		aggexec.ConfigureGroupConcatTimeZone(aggs[i], proc.Base.SessionInfo.TimeZone)
 		if config := expression.GetExtraInformation(); config != nil {
 			if err = aggs[i].SetExtraInformation(config, 0); err != nil {
 				return nil, err
@@ -1313,6 +1318,9 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 		// grow these slices for the lifetime of the query.
 		ctr.wStart = nil
 		ctr.wEnd = nil
+		for _, ag := range ctr.aggs {
+			aggexec.ReportGroupConcatWarnings(ag, proc.GetWarningSink())
+		}
 		return nil
 	}
 	bat := batch.NewOffHeapWithSize(1)
@@ -1385,6 +1393,9 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 	batch.SetLength(ctr.bat, ctr.bat.Vecs[0].Length())
 	ctr.wStart = nil
 	ctr.wEnd = nil
+	for _, ag := range ctr.aggs {
+		aggexec.ReportGroupConcatWarnings(ag, proc.GetWarningSink())
+	}
 	return nil
 }
 

@@ -378,11 +378,11 @@ type Segment struct {
 	// term dict, LOADED-side representation — set by Deserialize, nil on a
 	// build-side segment. `dict` is the vellum FST mapping term → the BYTE OFFSET of
 	// that term's self-contained directory entry in `ranking`. A loaded segment does
-	// NOT expand any term at load: query lookup (LookupLoaded) decodes just the touched
-	// term's directory entry from `ranking` on demand and points its blocks/positions at
-	// `blocks`/`positions` — so the resident directory heap is O(the current query), not
-	// O(vocabulary). `ranking`/`blocks`/`positions` are views into the mmap/blob (kept
-	// alive by mmapData or GC). The build-side `terms` map is left nil.
+	// not traverse posting directories at load: LookupLoaded decodes the touched
+	// term's directory on demand, while clean-segment DF reads only its header.
+	// Block/position data remains in `blocks`/`positions`, so resident directory heap
+	// is O(the current query), not O(vocabulary). These slices are views into the
+	// mmap/blob (kept alive by mmapData or GC). The build-side `terms` map is left nil.
 	dict                       *termDict
 	ranking, blocks, positions []byte
 
@@ -413,6 +413,29 @@ func (s *Segment) pk(ord int64) any {
 	l := int(binary.LittleEndian.Uint32(s.pkRaw[off:]))
 	v, _ := decodePk(s.PkType, s.pkRaw[off+4:off+4+l])
 	return v
+}
+
+// pkContent returns the canonical PK content bytes for a loaded segment without
+// decoding them into a boxed Go value. The returned slice is a view into the
+// immutable docmap/mmap and remains valid for the segment lifetime. Build-side
+// segments do not have this encoded view and return an error.
+func (s *Segment) pkContent(ord int64) (content []byte, err error) {
+	if s.pks != nil {
+		return nil, moerr.NewInternalErrorNoCtx("fulltext2: pk content requires a loaded segment")
+	}
+	if ord < 0 || ord >= s.N || ord >= int64(len(s.pkOffsets)) {
+		return nil, moerr.NewInternalErrorNoCtxf("fulltext2: pk content ordinal out of range (ord=%d)", ord)
+	}
+	off := int(s.pkOffsets[ord])
+	if off < 0 || len(s.pkRaw) < 4 || off > len(s.pkRaw)-4 {
+		return nil, moerr.NewInternalErrorNoCtxf("fulltext2: pk content header out of range (ord=%d)", ord)
+	}
+	start := off + 4
+	l := int(binary.LittleEndian.Uint32(s.pkRaw[off:start]))
+	if l < 0 || l > len(s.pkRaw)-start {
+		return nil, moerr.NewInternalErrorNoCtxf("fulltext2: pk content value out of range (ord=%d)", ord)
+	}
+	return s.pkRaw[start : start+l], nil
 }
 
 // includeLayout is the derived per-column addressing for the docmap include section: a dense
@@ -743,6 +766,30 @@ func (s *Segment) PrefixRange(prefix string) []string {
 		hi++
 	}
 	return s.sortedTerms[lo:hi]
+}
+
+// TermRange returns this segment's terms in [lo, hi], both ends INCLUSIVE, in
+// ascending order. The tuple term encoding is byte-order preserving, so a
+// lexicographic term range IS a value range — which is what turns
+// `json_extract_float64(j,'$.a.b') > 3.14` into a scan of this slice.
+//
+// Both ends inclusive matches the probe contract: a strict > or < simply
+// includes the boundary term, and the caller's retained predicate removes those
+// rows. Nothing here needs to know which comparison produced the bounds.
+func (s *Segment) TermRange(lo, hi string) []string {
+	if lo > hi {
+		return nil
+	}
+	i := sort.SearchStrings(s.sortedTerms, lo)
+	// first index whose term > hi
+	j := sort.SearchStrings(s.sortedTerms, hi)
+	for j < len(s.sortedTerms) && s.sortedTerms[j] == hi {
+		j++
+	}
+	if i >= j {
+		return nil
+	}
+	return s.sortedTerms[i:j]
 }
 
 // hasPrefix reports whether s begins with prefix. (Local rather than

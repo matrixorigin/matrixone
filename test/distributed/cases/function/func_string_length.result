@@ -22,15 +22,15 @@ CREATE TABLE t3 (t3_fld1 int, b varchar(255));
 INSERT INTO t1 select LENGTH(space(300)), "abcdefg";
 INSERT INTO t1 select LENGTH(space(300)), "123124141";
 INSERT INTO t2 select LENGTH(space(65680)), "abcdefg";
-invalid input: the space count is greater than max allowed value 8000
+invalid input: the space count is greater than max allowed value 65535
 INSERT INTO t2 select LENGTH(space(65680)), "1238193";
-invalid input: the space count is greater than max allowed value 8000
+invalid input: the space count is greater than max allowed value 65535
 INSERT INTO t3 select LENGTH(space(65680)), "1238193";
-invalid input: the space count is greater than max allowed value 8000
+invalid input: the space count is greater than max allowed value 65535
 INSERT INTO t3 select LENGTH(space(16777300)),"123124141";
-invalid input: the space count is greater than max allowed value 8000
+invalid input: the space count is greater than max allowed value 65535
 INSERT INTO t3 select LENGTH(space(16777300)),"123asdq";
-invalid input: the space count is greater than max allowed value 8000
+invalid input: the space count is greater than max allowed value 65535
 SELECT DISTINCT * from t1;
 t1_fld1    b
 300    abcdefg
@@ -70,11 +70,11 @@ select length(space(1)) as a;
 a
 1
 select length(space(1024*1024*1024)) as a;
-invalid input: the space count is greater than max allowed value 8000
+invalid input: the space count is greater than max allowed value 65535
 select length(space(1024*1024)) as a;
-invalid input: the space count is greater than max allowed value 8000
+invalid input: the space count is greater than max allowed value 65535
 select length(space(1024*1024*1024)) as a;
-invalid input: the space count is greater than max allowed value 8000
+invalid input: the space count is greater than max allowed value 65535
 drop table if exists t1;
 create table t1(a INT,  b date);
 insert into t1 values(1, "2012-10-12"),(2, "2004-04-24"),(3, "2008-12-04"),(4, "2012-03-23");

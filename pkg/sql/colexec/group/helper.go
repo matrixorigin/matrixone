@@ -106,6 +106,50 @@ func (w *spillRecordWriter) Write(value []byte) (int, error) {
 	return n, err
 }
 
+func (w *spillRecordWriter) WriteSelectedFixedRows(
+	data []byte,
+	width int,
+	rows []int32,
+) (int, error) {
+	if w == nil || w.target == nil {
+		return 0, io.ErrClosedPipe
+	}
+	fastWriter, ok := w.target.(interface {
+		WriteSelectedFixedRows([]byte, int, []int32) (int, error)
+	})
+	if !ok {
+		if width < 0 || (width != 0 && len(data)%width != 0) {
+			return 0, moerr.NewInvalidInputNoCtx(
+				"invalid fixed-width group spill selection")
+		}
+		if width == 0 {
+			return 0, nil
+		}
+		written := 0
+		rowCount := len(data) / width
+		for _, selected := range rows {
+			row := int(selected)
+			if row < 0 || row >= rowCount {
+				return written, moerr.NewInvalidInputNoCtx(
+					"invalid fixed-width group spill row")
+			}
+			n, err := w.Write(data[row*width : (row+1)*width])
+			written += n
+			if err != nil {
+				return written, err
+			}
+		}
+		return written, nil
+	}
+	n, err := fastWriter.WriteSelectedFixedRows(data, width, rows)
+	w.written += int64(n)
+	if err == nil && width >= 0 && width <= math.MaxInt/max(1, len(rows)) &&
+		n != width*len(rows) {
+		err = io.ErrShortWrite
+	}
+	return n, err
+}
+
 func newGroupSpillBuffer(
 	ctr *container,
 	site mpool.AllocationSite,
@@ -166,24 +210,216 @@ type groupInsertPreview struct {
 	newGroups int
 }
 
+type groupKeySourcePublication struct {
+	overrides    [][]types.StringSource
+	destinations []*vector.Vector
+}
+
+func (publication *groupKeySourcePublication) addDestination(destination *vector.Vector) {
+	for _, existing := range publication.destinations {
+		if existing == destination {
+			return
+		}
+	}
+	publication.destinations = append(publication.destinations, destination)
+}
+
+func (publication *groupKeySourcePublication) finalize() {
+	for _, destination := range publication.destinations {
+		destination.FinalizeStringSourcePreflight()
+	}
+}
+
+type groupPrePublicationError struct {
+	cause error
+}
+
+func (err *groupPrePublicationError) Error() string { return err.cause.Error() }
+func (err *groupPrePublicationError) Unwrap() error { return err.cause }
+
+func isGroupPrePublicationError(err error) bool {
+	_, ok := err.(*groupPrePublicationError)
+	return ok
+}
+
 func (ctr *container) commitGroupByChunk(
 	vectors []*vector.Vector,
 	offset, rows int,
 	preview groupInsertPreview,
 ) ([]uint64, int, error) {
+	hasStringSourceMetadata := ctr.groupKeyStringSourceMetadata
+	if !hasStringSourceMetadata {
+		for _, vec := range vectors {
+			if vec.HasStringSourceMetadata() {
+				hasStringSourceMetadata = true
+				break
+			}
+		}
+	}
+	var sourcePublication groupKeySourcePublication
+	if hasStringSourceMetadata {
+		defer sourcePublication.finalize()
+		if err := ctr.preflightPreviewGroupKeyStringSources(
+			vectors, offset, preview.values, preview.inserted,
+			&sourcePublication); err != nil {
+			return nil, 0, &groupPrePublicationError{cause: err}
+		}
+	}
 	values, _, err := ctr.hr.TxnItr.CommitPreview(&ctr.hr.insertPlan)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, &groupPrePublicationError{cause: err}
 	}
 
-	more, err := ctr.appendGroupByBatch(vectors, offset, preview.inserted)
+	more, err := ctr.appendGroupByBatchWithStringSources(
+		vectors, offset, preview.inserted, sourcePublication.overrides, 0)
 	if err != nil {
 		return nil, 0, err
 	}
 	if more != preview.newGroups {
 		return nil, 0, mpool.ErrAllocationAccountInvariant
 	}
+	if hasStringSourceMetadata {
+		if err := ctr.applyPreviewGroupKeyStringSources(vectors, offset, values); err != nil {
+			return nil, 0, err
+		}
+		ctr.groupKeyStringSourceMetadata = true
+	}
 	return values, more, nil
+}
+
+func (ctr *container) previewGroupDestination(groupIndex int) (*batch.Batch, int, error) {
+	batchIndex := groupIndex / aggBatchSize
+	batchRow := groupIndex % aggBatchSize
+	if batchIndex < len(ctr.groupByBatches) {
+		return ctr.groupByBatches[batchIndex], batchRow, nil
+	}
+	if batchIndex == len(ctr.groupByBatches) && ctr.groupByStandby != nil {
+		return ctr.groupByStandby, batchRow, nil
+	}
+	return nil, 0, mpool.ErrAllocationAccountInvariant
+}
+
+func (ctr *container) forEachPreviewGroupKeyStringSource(
+	vectors []*vector.Vector,
+	offset int,
+	groups []uint64,
+	fn func(destination *vector.Vector, row int, source types.StringSource) error,
+) error {
+	for row, group := range groups {
+		if group == 0 {
+			continue
+		}
+		seen := false
+		for previous := 0; previous < row; previous++ {
+			if groups[previous] == group {
+				seen = true
+				break
+			}
+		}
+		if seen {
+			continue
+		}
+		groupIndex := int(group - 1)
+		destinationBatch, destinationRow, err := ctr.previewGroupDestination(groupIndex)
+		if err != nil {
+			return err
+		}
+		for column, sourceVector := range vectors {
+			destination := destinationBatch.Vecs[column]
+			merged := sourceVector.GetStringSourceAt(offset + row)
+			if destinationRow < destination.Length() {
+				merged, err = types.MergeStringSources(
+					destination.GetStringSourceAt(destinationRow), merged)
+				if err != nil {
+					return err
+				}
+			}
+			for candidate := row + 1; candidate < len(groups); candidate++ {
+				if groups[candidate] != group {
+					continue
+				}
+				merged, err = types.MergeStringSources(
+					merged, sourceVector.GetStringSourceAt(offset+candidate))
+				if err != nil {
+					return err
+				}
+			}
+			if err := fn(destination, destinationRow, merged); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (ctr *container) preflightPreviewGroupKeyStringSources(
+	vectors []*vector.Vector,
+	offset int,
+	groups []uint64,
+	inserted []uint8,
+	publication *groupKeySourcePublication,
+) error {
+	if len(groups) > hashmap.UnitLimit || len(inserted) != len(groups) || publication == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if err := ctr.forEachPreviewGroupKeyStringSource(
+		vectors, offset, groups,
+		func(destination *vector.Vector, row int, source types.StringSource) error {
+			publication.addDestination(destination)
+			if err := destination.PreflightSetStringSourceAtLength(
+				row, max(destination.Length(), row+1), source, ctr.mp); err != nil {
+				return err
+			}
+			// Existing-row preflight has finalLength == Length and therefore does
+			// not infer a deferred publication. Keep both current and standby
+			// reservations alive until groupKeySourcePublication.finalize.
+			destination.RetainStringSourcePreflight()
+			return nil
+		},
+	); err != nil {
+		return err
+	}
+	// Keep preview results in operator-owned, UnitLimit-bounded scratch. The
+	// selected append consumes these overrides without modifying borrowed input.
+	publication.overrides = make([][]types.StringSource, len(vectors))
+	for column := range publication.overrides {
+		publication.overrides[column] = make([]types.StringSource, len(groups))
+	}
+	for row, flag := range inserted {
+		if flag == 0 {
+			continue
+		}
+		group := groups[row]
+		for column, sourceVector := range vectors {
+			merged := sourceVector.GetStringSourceAt(offset + row)
+			for candidate := row + 1; candidate < len(groups); candidate++ {
+				if groups[candidate] != group {
+					continue
+				}
+				var err error
+				merged, err = types.MergeStringSources(
+					merged, sourceVector.GetStringSourceAt(offset+candidate))
+				if err != nil {
+					return err
+				}
+			}
+			publication.overrides[column][row] = merged
+		}
+	}
+	return nil
+}
+
+func (ctr *container) applyPreviewGroupKeyStringSources(
+	vectors []*vector.Vector,
+	offset int,
+	groups []uint64,
+) error {
+	return ctr.forEachPreviewGroupKeyStringSource(
+		vectors, offset, groups,
+		func(destination *vector.Vector, row int, source types.StringSource) error {
+			return destination.SetStringSourceAtWithMP(row, source, ctr.mp)
+		},
+	)
 }
 
 func (group *Group) configureH0OrderedAggSpill(proc *process.Process) {
@@ -462,9 +698,21 @@ func (ctr *container) computeBucketIndex(hashCodes []uint64, myLv uint64) {
 	// 32-bit hash values). Different levels use different multipliers so groups
 	// landing in the same bucket at level N get split at level N+1.
 	mult := uint64(0x9e3779b97f4a7c15) + myLv*2
-	for i := range hashCodes {
-		hashCodes[i] = (hashCodes[i] * mult) >> (64 - spillMaskBits)
+	bucketCount := len(ctr.currentSpillBkt)
+	if bucketCount == 0 {
+		bucketCount = ctr.spillPartitionCount()
 	}
+	maskBits := uint(spillMaskBits)
+	if bucketCount == spillDistinctNumBuckets {
+		maskBits = spillDistinctMaskBits
+	}
+	for i := range hashCodes {
+		hashCodes[i] = (hashCodes[i] * mult) >> (64 - maskBits)
+	}
+}
+
+func canRepartitionGroupSpill(parent *spillBucket) bool {
+	return parent == nil || parent.lv < spillMaxPass
 }
 
 func (ctr *container) openSpillBucket(
@@ -597,6 +845,9 @@ func (ctr *container) writeSpillRecord(
 	clear(prepareParamKindSources)
 	hasPrepareParamKinds := false
 	for i, ag := range ctr.aggList {
+		// Generic spill is local state, so retain GROUP_CONCAT source rows even
+		// when this operator is currently connected to a legacy partial peer.
+		aggexec.SetGroupConcatSourceRowWire(ag, true)
 		if fullFlags != nil {
 			// The stable intermediate format predates the bounded spill codec and
 			// accepts one flag slice per aggregate chunk. Legacy callers do not
@@ -647,6 +898,14 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 	if err, canceled := vm.CancelCheck(proc); canceled {
 		return 0, 0, err
 	}
+	// Once exact-key spill owns any COUNT(DISTINCT) state, no generic group
+	// record may reintroduce a complete hot-group argument set. Drain the current
+	// resident work set before every root or recursive group-spill write.
+	if ctr.distinctSpill != nil && !ctr.distinctContributionsPrepared {
+		if _, err := ctr.drainExactCountDistinct(proc, opAnalyzer); err != nil {
+			return 0, 0, err
+		}
+	}
 	if ctr.recoveryCapacity != nil && opAnalyzer != nil {
 		reserved, _ := ctr.recoveryCapacity.Snapshot()
 		opAnalyzer.GetOpStats().SetMaxExtraStat(
@@ -664,15 +923,10 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 
 	// if current spill bucket is not created, create a new one.
 	if ctr.currentSpillBkt == nil {
-		// A max-depth partition that is still over pressure cannot make progress.
-		// Returning a controlled error is safer than silently retaining it beyond
-		// the statement's hard allocation account.
-		if parentLv >= spillMaxPass {
-			if ctr.allocationAccount != nil {
-				return 0, 0, moerr.NewInternalErrorNoCtx(
-					"group spill cannot make progress at maximum partition depth",
-				)
-			}
+		// The local spill threshold is only a policy hint. At maximum depth,
+		// callers may finish a terminal leaf as long as every physical allocation
+		// continues to pass the independent statement account.
+		if !canRepartitionGroupSpill(parentBkt) {
 			return 0, 0, nil
 		}
 
@@ -686,12 +940,23 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 
 		logutil.Infof("spilling data to disk, level %d, parent file %s", myLv, parentName)
 		// Create bucket objects; files are created lazily on first write.
-		ctr.currentSpillBkt = make([]*spillBucket, spillNumBuckets)
+		ctr.currentSpillBkt = make([]*spillBucket, ctr.spillPartitionCount())
 		for i := range ctr.currentSpillBkt {
-			ctr.currentSpillBkt[i] = &spillBucket{
+			child := &spillBucket{
 				lv:   myLv,
 				name: fmt.Sprintf("%s_%d", parentName, i),
 			}
+			if parentBkt != nil {
+				child.path = parentBkt.path
+				child.pathLen = parentBkt.pathLen
+			}
+			if child.pathLen >= len(child.path) {
+				return 0, 0, moerr.NewInternalErrorNoCtx(
+					"group spill path exceeds maximum depth")
+			}
+			child.path[child.pathLen] = uint8(i)
+			child.pathLen++
+			ctr.currentSpillBkt[i] = child
 		}
 	}
 
@@ -778,6 +1043,7 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 	}
 
 	hcOffset := 0
+	bucketCount := len(ctr.currentSpillBkt)
 	for nthBatch, gb := range ctr.groupByBatches {
 		if err, canceled := vm.CancelCheck(proc); canceled {
 			return 0, 0, err
@@ -798,18 +1064,18 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 
 		// Partition the batch in two linear passes. Only the counts/cursors are
 		// fixed-size; row ids occupy exactly O(rc) accounted recovery scratch.
-		var bucketCounts [spillNumBuckets]int
-		var bucketOffsets [spillNumBuckets + 1]int
-		var bucketCursors [spillNumBuckets]int
+		var bucketCounts [spillMaxNumBuckets]int
+		var bucketOffsets [spillMaxNumBuckets + 1]int
+		var bucketCursors [spillMaxNumBuckets]int
 		for _, hash := range batchHC {
-			bucketCounts[int(hash&(spillNumBuckets-1))]++
+			bucketCounts[int(hash&uint64(bucketCount-1))]++
 		}
-		for bucket, count := range bucketCounts {
+		for bucket, count := range bucketCounts[:bucketCount] {
 			bucketOffsets[bucket+1] = bucketOffsets[bucket] + count
 			bucketCursors[bucket] = bucketOffsets[bucket]
 		}
 		for row, hash := range batchHC {
-			bucket := int(hash & (spillNumBuckets - 1))
+			bucket := int(hash & uint64(bucketCount-1))
 			ctr.spillBucketRows[bucketCursors[bucket]] = int32(row)
 			bucketCursors[bucket]++
 		}
@@ -832,7 +1098,7 @@ func (ctr *container) spillDataToDisk(proc *process.Process, opAnalyzer process.
 			}
 			return nil
 		}
-		for bucket, selected := range bucketCounts {
+		for bucket, selected := range bucketCounts[:bucketCount] {
 			if selected > 0 {
 				end := bucketOffsets[bucket+1]
 				for start := bucketOffsets[bucket]; start < end; start += hashmap.UnitLimit {
@@ -1087,6 +1353,12 @@ func (ctr *container) retrySpillReloadRecord(
 	if ctr.hr.IsEmpty() || ctr.hr.Hash.GroupCount() == 0 {
 		return false, cause
 	}
+	// A capacity rejection, unlike the local spill threshold, proves that the
+	// current terminal work set cannot grow safely. Preserve the original
+	// requested/used/limit error once no further partition can release it.
+	if !canRepartitionGroupSpill(bkt) {
+		return false, cause
+	}
 
 	// prepareSpillReloadRecord has not mutated the hash table. Drop only its
 	// incoming staging, externalize the resident prefix, and replay the record
@@ -1277,7 +1549,16 @@ reloadLoop:
 		vals, more, err := ctr.commitGroupByChunk(
 			gbBatch.Vecs, 0, rowCount, preview)
 		if err != nil {
-			return false, err
+			if !isGroupPrePublicationError(err) {
+				return false, err
+			}
+			ctr.cancelGroupByPreflights()
+			retried, retryErr := ctr.retrySpillReloadRecord(
+				proc, opAnalyzer, opStats, bkt, bufferedFile, recordStart, err)
+			if !retried {
+				return false, retryErr
+			}
+			continue reloadLoop
 		}
 
 		if len(ctr.aggList) > 0 {
@@ -1301,7 +1582,7 @@ reloadLoop:
 		observeHashGrowth(opStats, "GroupHashReload", hashBytesBefore, ctr.hr.Hash.Size())
 		hashMergeNanos += time.Since(mergeStart).Nanoseconds()
 
-		if ctr.needSpill(opAnalyzer) {
+		if ctr.needSpill(opAnalyzer) && canRepartitionGroupSpill(bkt) {
 			ctr.freeSpillReloadStaging()
 			if bytes, rows, err := ctr.spillDataToDisk(proc, opAnalyzer, bkt); err != nil {
 				return false, err
@@ -1331,6 +1612,11 @@ reloadLoop:
 			opAnalyzer.SpillRows(rows)
 		}
 		return ctr.loadSpilledData(proc, opAnalyzer, aggExprs)
+	}
+	if ctr.distinctContributionsPrepared {
+		if err := ctr.applyDistinctContributions(proc, bkt); err != nil {
+			return false, err
+		}
 	}
 
 	return true, nil
@@ -1375,6 +1661,13 @@ func (ctr *container) getNextFinalResult(
 					ctr.groupByBatches[j].Vecs, vecs[j])
 			}
 		}
+		// Collect diagnostics only after every final vector has materialized; a
+		// later vector/allocation error must not expose warnings for a failed
+		// statement. Publication is deferred until every resident/spilled bucket
+		// has completed so warning order and bounded retention are global.
+		for _, ag := range ctr.aggList {
+			ctr.groupConcatWarnings.Add(ag)
+		}
 
 		ctr.freeAggList()
 	}
@@ -1408,10 +1701,57 @@ func (ctr *container) outputOneBatchFinal(proc *process.Process, opAnalyzer proc
 	if loaded {
 		return ctr.outputOneBatchFinal(proc, opAnalyzer, aggExprs)
 	}
+	ctr.finishDistinctContributions()
 	if err := ctr.releaseFinalRecoveryCapacity(); err != nil {
 		return vm.CancelResult, err
 	}
+	ctr.groupConcatWarnings.Report(proc.GetWarningSink())
 	return res, nil
+}
+
+// newRuntimeEmptyGroupingSetBatch builds the key rows required by SQL when an
+// all-rolled grouping set receives no input. A nil setIDs slice describes one
+// legacy/static grouping set whose every key is rolled up. A non-nil slice
+// describes dynamic grouping sets, whose final key column carries the set id.
+func (ctr *container) newRuntimeEmptyGroupingSetBatch(
+	groupTypes []types.Type,
+	setIDs []int64,
+) (*batch.Batch, error) {
+	rows := 1
+	rollupColumns := len(groupTypes)
+	if setIDs != nil {
+		rows = len(setIDs)
+		rollupColumns--
+	}
+	output := batch.NewOffHeapWithSize(len(groupTypes))
+	if err := output.SetAllocationAccount(ctr.groupByAllocation); err != nil {
+		output.Clean(ctr.mp)
+		return nil, err
+	}
+	for i := 0; i < rollupColumns; i++ {
+		vec, err := vector.NewRollupConstWithAllocation(
+			groupTypes[i], rows, ctr.mp, ctr.groupByAllocation)
+		if err != nil {
+			output.Clean(ctr.mp)
+			return nil, err
+		}
+		output.Vecs[i] = vec
+	}
+	if setIDs != nil {
+		setIDVector, err := vector.NewOffHeapVecWithTypeAndAllocation(
+			groupTypes[len(groupTypes)-1], ctr.groupByAllocation)
+		if err != nil {
+			output.Clean(ctr.mp)
+			return nil, err
+		}
+		output.Vecs[len(output.Vecs)-1] = setIDVector
+		if err = vector.AppendFixedList(setIDVector, setIDs, nil, ctr.mp); err != nil {
+			output.Clean(ctr.mp)
+			return nil, err
+		}
+	}
+	output.SetRowCount(rows)
+	return output, nil
 }
 
 func (ctr *container) memUsed() int64 {
@@ -1444,13 +1784,28 @@ func (ctr *container) needSpill(opAnalyzer process.Analyzer) bool {
 }
 
 func (ctr *container) makeAggList(aggExprs []aggexec.AggFuncExecExpression) ([]aggexec.GroupAggFuncExec, error) {
-	return ctr.makeAggListWithAllocation(aggExprs, ctr.aggregateAllocation)
+	return ctr.makeAggListForMode(aggExprs, ctr.aggregateAllocation, ctr.mtyp == H0)
 }
 
 func (ctr *container) makeSpillAggList(
 	aggExprs []aggexec.AggFuncExecExpression,
 ) ([]aggexec.GroupAggFuncExec, error) {
-	return ctr.makeAggListWithAllocation(aggExprs, ctr.spillAggregateAllocation)
+	return ctr.makeAggListForMode(aggExprs, ctr.spillAggregateAllocation, ctr.mtyp == H0)
+}
+
+func (ctr *container) makeSpillAggListForMode(
+	aggExprs []aggexec.AggFuncExecExpression,
+	singleGroup bool,
+) ([]aggexec.GroupAggFuncExec, error) {
+	return ctr.makeAggListForMode(aggExprs, ctr.spillAggregateAllocation, singleGroup)
+}
+
+func (ctr *container) makeAggListForMode(
+	aggExprs []aggexec.AggFuncExecExpression,
+	allocation *aggexec.AllocationAccount,
+	singleGroup bool,
+) ([]aggexec.GroupAggFuncExec, error) {
+	return ctr.makeAggListWithAllocation(aggExprs, allocation, singleGroup)
 }
 
 func (ctr *container) buildSpillReloadHashTable(
@@ -1480,6 +1835,7 @@ func (ctr *container) buildSpillReloadHashTable(
 func (ctr *container) makeAggListWithAllocation(
 	aggExprs []aggexec.AggFuncExecExpression,
 	allocation *aggexec.AllocationAccount,
+	singleGroup bool,
 ) ([]aggexec.GroupAggFuncExec, error) {
 	var err error
 	aggList := make([]aggexec.GroupAggFuncExec, len(aggExprs))
@@ -1490,15 +1846,19 @@ func (ctr *container) makeAggListWithAllocation(
 				types.T(arg.Typ.Id), arg.Typ.Width, arg.Typ.Scale, uint8(arg.Typ.Charset),
 			)
 		}
-		singleGroup := ctr.mtyp == H0
-		if ctr.legacyTextMinMax && singleGroup {
-			aggList[i], err = aggexec.MakeSingleGroupAggWithLegacyTextMinMax(
-				ctr.mp, agExpr.GetAggID(), agExpr.IsDistinct(), allocation,
-				agExpr.GetExtraInformation(), typs...)
-		} else if ctr.legacyTextMinMax {
-			aggList[i], err = aggexec.MakeGroupAggWithLegacyTextMinMax(
-				ctr.mp, agExpr.GetAggID(), agExpr.IsDistinct(), allocation,
-				agExpr.GetExtraInformation(), typs...)
+		if ctr.legacyTextMinMax || ctr.legacyVarianceState ||
+			ctr.legacyDecimalSumState || ctr.legacyDecimalSumResult {
+			if singleGroup {
+				aggList[i], err = aggexec.MakeSingleGroupAggWithLegacyRemoteState(
+					ctr.mp, agExpr.GetAggID(), agExpr.IsDistinct(), ctr.legacyTextMinMax,
+					ctr.legacyVarianceState, ctr.legacyDecimalSumState, ctr.legacyDecimalSumResult,
+					allocation, agExpr.GetExtraInformation(), typs...)
+			} else {
+				aggList[i], err = aggexec.MakeGroupAggWithLegacyRemoteState(
+					ctr.mp, agExpr.GetAggID(), agExpr.IsDistinct(), ctr.legacyTextMinMax,
+					ctr.legacyVarianceState, ctr.legacyDecimalSumState, ctr.legacyDecimalSumResult,
+					allocation, agExpr.GetExtraInformation(), typs...)
+			}
 		} else if singleGroup {
 			aggList[i], err = aggexec.MakeSingleGroupAgg(
 				ctr.mp, agExpr.GetAggID(), agExpr.IsDistinct(), allocation,
@@ -1512,9 +1872,39 @@ func (ctr *container) makeAggListWithAllocation(
 			freeAggListPartial(aggList, i)
 			return nil, err
 		}
+		if ctr.legacyApproxPercentileState {
+			aggexec.ConfigureApproxPercentileLegacyState(aggList[i])
+		}
+		if ctr.legacyHLLState {
+			if ctr.floatZeroHLLState && hllFloatZeroStateSupported(agExpr.GetAggID()) {
+				aggexec.ConfigureHLLFloatZeroState(aggList[i])
+			} else {
+				aggexec.ConfigureHLLLegacyState(aggList[i])
+			}
+		} else if (ctr.legacyVectorHLLState && hllVectorStateSupported(agExpr)) ||
+			(ctr.legacyTextHLLAddState && hllTextAddStateSupported(agExpr)) ||
+			(ctr.legacyFloatHLLAddState && hllFloatAddStateSupported(agExpr)) {
+			// Keep each producer on v2 until its type family's protocol contract
+			// is understood by every peer (vectors at v88, CHAR/JSON at v91,
+			// FLOAT/DOUBLE at v92).
+			aggexec.ConfigureHLLLegacyState(aggList[i])
+		}
+		if ctr.legacyDistinctFloatKeys {
+			if err := aggexec.ConfigureLegacyDistinctFloatKeys(aggList[i], true); err != nil {
+				freeAggListPartial(aggList, i+1)
+				return nil, err
+			}
+		}
+		aggexec.ConfigureGroupConcatTimeZone(aggList[i], ctr.timeZone)
+		// Preserve the mode used to construct this list. A merge partial's wire
+		// header may be the first authoritative mode before ctr.mtyp is published;
+		// deriving this from ctr.mtyp would configure a grouped median as H0.
+		aggexec.SetGroupConcatMultiGroupContext(aggList[i], !singleGroup)
+		aggexec.SetGroupConcatSourceRowsTrusted(
+			aggList[i], !ctr.groupConcatSourceRowsUntrusted)
 	}
 
-	if ctr.mtyp != H0 {
+	if !singleGroup {
 		aggexec.SyncAggregatorsToChunkSize(aggList, aggBatchSize)
 	} else {
 		aggexec.SyncAggregatorsToChunkSize(aggList, 1)
@@ -1526,6 +1916,58 @@ func (ctr *container) makeAggListWithAllocation(
 		}
 	}
 	return aggList, nil
+}
+
+// hllFloatZeroStateSupported is deliberately limited to APPROX_COUNT
+// families. Protocol v76 introduced signed-zero canonicalization for those
+// newly versioned states; persisted HLL_ADD_AGG/HLL_MERGE_AGG states retain
+// their v2 raw-value wire contract until a future explicit migration.
+func hllFloatZeroStateSupported(aggID int64) bool {
+	return aggID == aggexec.AggIdOfApproxCount ||
+		aggID == aggexec.AggIdOfApproxCountDistinct
+}
+
+func hllVectorStateSupported(
+	agg aggexec.AggFuncExecExpression,
+) bool {
+	if agg.GetAggID() != aggexec.AggIdOfHllAdd {
+		return false
+	}
+	args := agg.GetArgExpressions()
+	if len(args) == 0 || args[0] == nil {
+		return false
+	}
+	switch types.T(args[0].Typ.Id) {
+	case types.T_array_float32, types.T_array_float64,
+		types.T_array_bf16, types.T_array_float16:
+		return true
+	default:
+		return false
+	}
+}
+
+func hllTextAddStateSupported(agg aggexec.AggFuncExecExpression) bool {
+	if agg.GetAggID() != aggexec.AggIdOfHllAdd {
+		return false
+	}
+	args := agg.GetArgExpressions()
+	if len(args) == 0 || args[0] == nil {
+		return false
+	}
+	return types.T(args[0].Typ.Id) == types.T_char ||
+		types.T(args[0].Typ.Id) == types.T_json
+}
+
+func hllFloatAddStateSupported(agg aggexec.AggFuncExecExpression) bool {
+	if agg.GetAggID() != aggexec.AggIdOfHllAdd {
+		return false
+	}
+	args := agg.GetArgExpressions()
+	if len(args) == 0 || args[0] == nil {
+		return false
+	}
+	return types.T(args[0].Typ.Id) == types.T_float32 ||
+		types.T(args[0].Typ.Id) == types.T_float64
 }
 
 func useLegacyTextMinMaxForRemote(proc *process.Process) bool {
@@ -1540,6 +1982,162 @@ func useLegacyTextMinMaxForRemote(proc *process.Process) bool {
 		GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
 	return !ok || !valid || version < defines.MORPCVersion14
+}
+
+func useLegacyVarianceStateForRemote(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return false
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return false
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return !ok || !valid || version < defines.MORPCVersion35
+}
+
+// Decimal SUM must use the pre-v73 state on every side of a distributed
+// aggregation while the cluster protocol is still mixed. Unlike the older
+// remote-only gates, this includes the coordinator's local MergeGroup: it may
+// consume a partial produced by an older CN.
+func useLegacyDecimalSumState(proc *process.Process) bool {
+	if proc == nil {
+		return true
+	}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	if rt == nil {
+		return true
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return !ok || !valid || version < defines.MORPCVersion73
+}
+
+func useLegacyApproxPercentileStateForRemote(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return false
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return false
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return !ok || !valid || version < defines.MORPCVersion76
+}
+
+// An old coordinator can send a final Group to an upgraded worker without
+// running the upgraded shuffle-plan gate. Below v73 that Group must preserve
+// the old Decimal128 result contract. Partial Groups still use the legacy wire
+// state, while local final Groups and coordinator MergeGroups publish the
+// widened result selected by the upgraded plan.
+func useLegacyDecimalSumResultForRemote(proc *process.Process, needEval bool) bool {
+	if !needEval || !useLegacyDecimalSumState(proc) || proc == nil || proc.Ctx == nil {
+		return false
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	return remote
+}
+
+func useLegacyHLLStateForRemote(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return false
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return false
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return !ok || !valid || version < defines.MORPCVersion77
+}
+
+func useLegacyVectorHLLStateForRemote(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return false
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return false
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return !ok || !valid || version < defines.MORPCVersion88
+}
+
+func useLegacyTextHLLAddStateForRemote(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return false
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return false
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return !ok || !valid || version < defines.MORPCVersion91
+}
+
+func useLegacyFloatHLLAddStateForRemote(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return false
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return false
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return !ok || !valid || version < defines.MORPCVersion92
+}
+
+func useFloatZeroHLLStateForRemote(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return false
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return false
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return ok && valid && version == defines.MORPCVersion76
+}
+
+func groupHashStringWireEnabled(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return true
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return true
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return ok && valid && version >= defines.MORPCVersion78
+}
+
+func canonicalDistinctKeyWireEnabled(proc *process.Process) bool {
+	if proc == nil || proc.Ctx == nil {
+		return true
+	}
+	remote, _ := proc.Ctx.Value(defines.RemoteRunContext{}).(bool)
+	if !remote {
+		return true
+	}
+	value, ok := moruntime.ServiceRuntime(proc.GetService()).
+		GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return ok && valid && version >= defines.MORPCVersion79
 }
 
 // freeAggListPartial frees the first n aggregators in the list.

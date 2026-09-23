@@ -1,0 +1,800 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package issues
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"strings"
+	"testing"
+	"time"
+
+	_ "github.com/go-sql-driver/mysql"
+	"github.com/stretchr/testify/require"
+
+	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
+)
+
+func TestIssue27088PreparedDecimalCommonType(t *testing.T) {
+	embed.RunBaseClusterTests(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		defer cancel()
+
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		db, err := sql.Open("mysql", fmt.Sprintf(
+			"dump:111@tcp(127.0.0.1:%d)/?interpolateParams=false", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+
+		t.Run("issue 28484 prepared Boolean math", func(t *testing.T) {
+			const query = "SELECT CAST(? AS DOUBLE), SIN(?), ACOS(?)"
+			mustExec(t, ctx, conn, "PREPARE bool_math FROM '"+query+"'")
+			defer mustExec(t, ctx, conn, "DEALLOCATE PREPARE bool_math")
+			for _, value := range []string{"TRUE", "FALSE", "NULL", "TRUE", "'true'", "TRUE"} {
+				mustExec(t, ctx, conn, "SET @bool_math = "+value)
+				var got, expected [3]sql.NullFloat64
+				require.NoError(t, conn.QueryRowContext(ctx, "EXECUTE bool_math USING @bool_math, @bool_math, @bool_math").Scan(&got[0], &got[1], &got[2]))
+				reference := strings.ReplaceAll(query, "?", value)
+				require.NoError(t, conn.QueryRowContext(ctx, reference).Scan(&expected[0], &expected[1], &expected[2]))
+				require.Equal(t, expected, got, value)
+			}
+			const integerQuery = "SELECT ABS(?), ROUND(?), SIGN(?), POWER(?,?), SQRT(?)"
+			mustExec(t, ctx, conn, "PREPARE bool_numeric FROM '"+integerQuery+"'")
+			defer mustExec(t, ctx, conn, "DEALLOCATE PREPARE bool_numeric")
+			for _, value := range []string{"TRUE", "FALSE", "NULL", "TRUE"} {
+				mustExec(t, ctx, conn, "SET @bool_math = "+value)
+				var got, expected [5]sql.NullFloat64
+				require.NoError(t, conn.QueryRowContext(ctx, "EXECUTE bool_numeric USING @bool_math, @bool_math, @bool_math, @bool_math, @bool_math, @bool_math").Scan(&got[0], &got[1], &got[2], &got[3], &got[4]))
+				require.NoError(t, conn.QueryRowContext(ctx, strings.ReplaceAll(integerQuery, "?", value)).Scan(&expected[0], &expected[1], &expected[2], &expected[3], &expected[4]))
+				require.Equal(t, expected, got, value)
+			}
+			for index, query := range []string{
+				"SELECT ROUND(1.25, ?), TRUNCATE(1.25, ?)",
+				"SELECT ROUND(?, 2), TRUNCATE(?, 2)",
+			} {
+				name := fmt.Sprintf("bool_precision_%d", index)
+				mustExec(t, ctx, conn, "PREPARE "+name+" FROM '"+query+"'")
+				for _, value := range []string{"TRUE", "FALSE", "NULL", "1", "0"} {
+					mustExec(t, ctx, conn, "SET @bool_precision = "+value)
+					var got, expected [2]sql.NullFloat64
+					require.NoError(t, conn.QueryRowContext(ctx,
+						"EXECUTE "+name+" USING @bool_precision, @bool_precision").Scan(&got[0], &got[1]))
+					require.NoError(t, conn.QueryRowContext(ctx,
+						strings.ReplaceAll(query, "?", value)).Scan(&expected[0], &expected[1]))
+					require.Equal(t, expected, got, name+" "+value)
+				}
+				mustExec(t, ctx, conn, "DEALLOCATE PREPARE "+name)
+			}
+			mustExec(t, ctx, conn, `PREPARE bool_json FROM 'SELECT ?, JSON_TYPE(JSON_EXTRACT(JSON_ARRAY(?), "$[0]"))'`)
+			defer mustExec(t, ctx, conn, "DEALLOCATE PREPARE bool_json")
+			var direct, jsonKind string
+			require.NoError(t, conn.QueryRowContext(ctx, "EXECUTE bool_json USING @bool_math, @bool_math").Scan(&direct, &jsonKind))
+			require.Equal(t, "true", direct)
+			require.Equal(t, "BOOLEAN", jsonKind)
+			const mixedQuery = "SELECT ?, ROUND(?)"
+			mustExec(t, ctx, conn, "PREPARE bool_mixed FROM '"+mixedQuery+"'")
+			defer mustExec(t, ctx, conn, "DEALLOCATE PREPARE bool_mixed")
+			for _, test := range []struct {
+				value       string
+				wantDirect  string
+				wantDirectN bool
+				wantRound   float64
+				wantRoundN  bool
+			}{
+				{value: "TRUE", wantDirect: "true", wantRound: 1},
+				{value: "FALSE", wantDirect: "false"},
+				{value: "NULL", wantDirectN: true, wantRoundN: true},
+				{value: "TRUE", wantDirect: "true", wantRound: 1},
+			} {
+				mustExec(t, ctx, conn, "SET @bool_mixed = "+test.value)
+				func() {
+					rows, err := conn.QueryContext(ctx,
+						"EXECUTE bool_mixed USING @bool_mixed, @bool_mixed")
+					require.NoError(t, err)
+					defer rows.Close()
+					columns, err := rows.ColumnTypes()
+					require.NoError(t, err)
+					require.Len(t, columns, 2)
+					require.Equal(t, "TEXT", columns[0].DatabaseTypeName(),
+						"a direct SQL EXECUTE parameter keeps its text result contract")
+					require.True(t, rows.Next())
+					var gotDirect sql.NullString
+					var gotRound sql.NullFloat64
+					require.NoError(t, rows.Scan(&gotDirect, &gotRound))
+					require.False(t, rows.Next())
+					require.NoError(t, rows.Err())
+					require.Equal(t, test.wantDirectN, !gotDirect.Valid, test.value)
+					if !test.wantDirectN {
+						require.Equal(t, test.wantDirect, gotDirect.String, test.value)
+					}
+					require.Equal(t, test.wantRoundN, !gotRound.Valid, test.value)
+					if !test.wantRoundN {
+						require.Equal(t, test.wantRound, gotRound.Float64, test.value)
+					}
+				}()
+			}
+			const mixedAroundQuery = "SELECT ? AS before_value, ROUND(?) AS numeric_value, ? AS after_value"
+			mustExec(t, ctx, conn, "PREPARE bool_mixed_around FROM '"+mixedAroundQuery+"'")
+			defer mustExec(t, ctx, conn, "DEALLOCATE PREPARE bool_mixed_around")
+			for _, value := range []string{"TRUE", "FALSE", "NULL", "TRUE"} {
+				mustExec(t, ctx, conn, "SET @bool_mixed = "+value)
+				func() {
+					rows, err := conn.QueryContext(ctx,
+						"EXECUTE bool_mixed_around USING @bool_mixed, @bool_mixed, @bool_mixed")
+					require.NoError(t, err)
+					defer rows.Close()
+					columns, err := rows.ColumnTypes()
+					require.NoError(t, err)
+					require.Len(t, columns, 3)
+					require.Equal(t, "TEXT", columns[0].DatabaseTypeName(), "direct parameter before numeric sibling")
+					require.Equal(t, "TEXT", columns[2].DatabaseTypeName(), "direct parameter after numeric sibling")
+					require.True(t, rows.Next())
+					var before, after sql.NullString
+					var numeric sql.NullFloat64
+					require.NoError(t, rows.Scan(&before, &numeric, &after))
+					require.False(t, rows.Next())
+					require.NoError(t, rows.Err())
+					require.Equal(t, value == "NULL", !before.Valid, value)
+					require.Equal(t, value == "NULL", !after.Valid, value)
+					if value != "NULL" {
+						require.Equal(t, strings.ToLower(value), before.String, value)
+						require.Equal(t, strings.ToLower(value), after.String, value)
+					}
+					require.Equal(t, value == "NULL", !numeric.Valid, value)
+					if value != "NULL" {
+						want := float64(0)
+						if value == "TRUE" {
+							want = 1
+						}
+						require.Equal(t, want, numeric.Float64, value)
+					}
+				}()
+			}
+			stmt, err := conn.PrepareContext(ctx, query)
+			require.NoError(t, err)
+			defer stmt.Close()
+			for _, value := range []any{true, false, nil, true} {
+				var got [3]sql.NullFloat64
+				require.NoError(t, stmt.QueryRowContext(ctx, value, value, value).Scan(&got[0], &got[1], &got[2]))
+				if value == nil {
+					require.Equal(t, [3]sql.NullFloat64{}, got)
+				} else if value == true {
+					for _, result := range got {
+						require.True(t, result.Valid)
+					}
+					require.Equal(t, float64(1), got[0].Float64)
+					require.InDelta(t, 0.8414709848078965, got[1].Float64, 1e-15)
+					require.Equal(t, float64(0), got[2].Float64)
+				} else {
+					for _, result := range got {
+						require.True(t, result.Valid)
+					}
+					require.Equal(t, float64(0), got[0].Float64)
+					require.Equal(t, float64(0), got[1].Float64)
+					require.InDelta(t, 1.5707963267948966, got[2].Float64, 1e-15)
+				}
+			}
+		})
+
+		dbName := testutils.GetDatabaseName(t)
+		mustExec(t, ctx, conn, fmt.Sprintf("create database `%s`", dbName))
+		mustExec(t, ctx, conn, fmt.Sprintf("use `%s`", dbName))
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cleanupCancel()
+			_, _ = db.ExecContext(cleanupCtx, fmt.Sprintf("drop database if exists `%s`", dbName))
+		}()
+
+		mustExec(t, ctx, conn, `create table common_type (
+			id int primary key,
+			d decimal(38,10),
+			low_bound decimal(38,10),
+			high_bound decimal(38,10)
+		)`)
+		mustExec(t, ctx, conn, `insert into common_type values
+			(1, 9007199254740992.0000000000, 9007199254740992.0000000000, 9007199254740992.0000000000),
+			(2, 9007199254740992.0000000002, 9007199254740992.0000000000, 9007199254740992.0000000002),
+			(3, 9007199254740992.0000000003, 9007199254740992.0000000003, 9007199254740992.0000000004),
+			(4, null, null, null)`)
+
+		assertIDs := func(t *testing.T, rows *sql.Rows, queryErr error, want ...int) {
+			t.Helper()
+			require.NoError(t, queryErr)
+			defer rows.Close()
+			var got []int
+			for rows.Next() {
+				var id int
+				require.NoError(t, rows.Scan(&id))
+				got = append(got, id)
+			}
+			require.NoError(t, rows.Err())
+			require.Equal(t, want, got)
+		}
+
+		mustExec(t, ctx, conn, `create table prepared_exact_integer_cmp (
+			id int primary key,
+			u bigint unsigned,
+			b bit(64)
+		)`)
+		mustExec(t, ctx, conn, `insert into prepared_exact_integer_cmp values
+			(1, 9007199254740992, 9007199254740992),
+			(2, 9007199254740993, 9007199254740993),
+			(3, 9007199254740994, 9007199254740994)`)
+
+		t.Run("issue 27492 COM_STMT exact integer comparison", func(t *testing.T) {
+			for _, column := range []string{"u", "b"} {
+				t.Run(column, func(t *testing.T) {
+					stmt, prepareErr := conn.PrepareContext(ctx, fmt.Sprintf(
+						"select id from prepared_exact_integer_cmp where %s = ? order by id", column))
+					require.NoError(t, prepareErr)
+					defer stmt.Close()
+
+					queryAndAssert := func(value any, want ...int) {
+						rows, queryErr := stmt.QueryContext(ctx, value)
+						require.NoError(t, queryErr)
+						defer rows.Close()
+						assertIDs(t, rows, nil, want...)
+						require.NoError(t, rows.Err())
+					}
+					queryAndAssert("9007199254740993", 2)
+					queryAndAssert(uint64(9007199254740993), 2)
+					queryAndAssert(nil)
+					queryAndAssert("9007199254740993", 2)
+				})
+			}
+		})
+
+		t.Run("issue 27492 SQL PREPARE exact integer comparison", func(t *testing.T) {
+			for _, column := range []string{"u", "b"} {
+				statementName := "issue27492_sql_" + column
+				mustExec(t, ctx, conn, fmt.Sprintf(
+					"prepare %s from 'select id from prepared_exact_integer_cmp where %s = ? order by id'",
+					statementName, column))
+				defer func() {
+					_, _ = conn.ExecContext(context.Background(), "deallocate prepare "+statementName)
+				}()
+				querySQLAndAssert := func(want ...int) {
+					rows, queryErr := conn.QueryContext(ctx,
+						"execute "+statementName+" using @issue27492_value")
+					require.NoError(t, queryErr)
+					defer rows.Close()
+					assertIDs(t, rows, nil, want...)
+					require.NoError(t, rows.Err())
+				}
+
+				mustExec(t, ctx, conn, "set @issue27492_value = '9007199254740993'")
+				querySQLAndAssert(2)
+				mustExec(t, ctx, conn, "set @issue27492_value = null")
+				querySQLAndAssert()
+				mustExec(t, ctx, conn, "set @issue27492_value = '9007199254740993'")
+				querySQLAndAssert(2)
+			}
+		})
+
+		t.Run("COM_STMT exact comparison and list", func(t *testing.T) {
+			equality, prepareErr := conn.PrepareContext(ctx,
+				"select id from common_type where d = ? order by id")
+			require.NoError(t, prepareErr)
+			defer equality.Close()
+			rows, queryErr := equality.QueryContext(ctx, "9007199254740992.0000000002tail")
+			defer rows.Close()
+			assertIDs(t, rows, queryErr, 2)
+			require.NoError(t, rows.Err())
+
+			inList, prepareErr := conn.PrepareContext(ctx,
+				"select id from common_type where d in (?, ?) order by id")
+			require.NoError(t, prepareErr)
+			defer inList.Close()
+			rows, queryErr = inList.QueryContext(ctx,
+				"9007199254740992.0000000000first", "9007199254740992.0000000003second")
+			defer rows.Close()
+			assertIDs(t, rows, queryErr, 1, 3)
+			require.NoError(t, rows.Err())
+		})
+
+		t.Run("COM_STMT compensated exponent remains exact", func(t *testing.T) {
+			mustExec(t, ctx, conn, "create table exponent_exact(id int primary key, d decimal(65,0))")
+			mustExec(t, ctx, conn, `insert into exponent_exact values
+				(1, 10000000000000000000000000000000000000000000000000000000000000000),
+				(2, 10000000000000000000000000000000000000000000000000000000000000001)`)
+			stmt, prepareErr := conn.PrepareContext(ctx,
+				"select id from exponent_exact where d = ? order by id")
+			require.NoError(t, prepareErr)
+			defer stmt.Close()
+			rows, queryErr := stmt.QueryContext(ctx, "0.000000000000000000000000000000000001e100")
+			defer rows.Close()
+			assertIDs(t, rows, queryErr, 1)
+			require.NoError(t, rows.Err())
+		})
+
+		t.Run("COM_STMT row dependent between", func(t *testing.T) {
+			stmt, prepareErr := conn.PrepareContext(ctx,
+				"select id from common_type where ? between low_bound and high_bound order by id")
+			require.NoError(t, prepareErr)
+			defer stmt.Close()
+			rows, queryErr := stmt.QueryContext(ctx, "9007199254740992.0000000001tail")
+			defer rows.Close()
+			assertIDs(t, rows, queryErr, 2)
+			require.NoError(t, rows.Err())
+		})
+
+		t.Run("common value functions preserve context", func(t *testing.T) {
+			common, prepareErr := conn.PrepareContext(ctx,
+				"select coalesce(?, d) from common_type where id = 1")
+			require.NoError(t, prepareErr)
+			defer common.Close()
+			var decimalValue string
+			require.NoError(t, common.QueryRowContext(ctx, "12.5tail").Scan(&decimalValue))
+			require.Equal(t, "12.5000000000", decimalValue)
+
+			nested, prepareErr := conn.PrepareContext(ctx, `select id from common_type
+				where coalesce(?, d) = cast('9007199254740992.0000000002' as decimal(38,10))
+				order by id`)
+			require.NoError(t, prepareErr)
+			defer nested.Close()
+			rows, queryErr := nested.QueryContext(ctx, "9007199254740992.0000000001tail")
+			defer rows.Close()
+			assertIDs(t, rows, queryErr)
+			require.NoError(t, rows.Err())
+			rows, queryErr = nested.QueryContext(ctx, nil)
+			defer rows.Close()
+			assertIDs(t, rows, queryErr, 2)
+			require.NoError(t, rows.Err())
+
+			stringsOnly, prepareErr := conn.PrepareContext(ctx, "select greatest(?, ?)")
+			require.NoError(t, prepareErr)
+			defer stringsOnly.Close()
+			var stringValue string
+			require.NoError(t, stringsOnly.QueryRowContext(ctx, "10", "2").Scan(&stringValue))
+			require.Equal(t, "2", stringValue)
+		})
+
+		t.Run("COM_STMT prepared-left mixed decimal float IN uses float domain", func(t *testing.T) {
+			stmt, prepareErr := conn.PrepareContext(ctx,
+				"select ? in (cast('9007199254740992' as decimal(20,0)), cast(0 as double))")
+			require.NoError(t, prepareErr)
+			defer stmt.Close()
+			for range 2 {
+				var matched bool
+				require.NoError(t, stmt.QueryRowContext(ctx, "9007199254740993").Scan(&matched))
+				require.True(t, matched)
+			}
+		})
+
+		t.Run("SQL PREPARE uses the same prefix domain", func(t *testing.T) {
+			mustExec(t, ctx, conn,
+				"prepare issue27088_sql from 'select id from common_type where d = ? order by id'")
+			defer func() { _, _ = conn.ExecContext(context.Background(), "deallocate prepare issue27088_sql") }()
+			mustExec(t, ctx, conn, "set @issue27088_value = '9007199254740992.0000000002tail'")
+			rows, queryErr := conn.QueryContext(ctx, "execute issue27088_sql using @issue27088_value")
+			defer rows.Close()
+			assertIDs(t, rows, queryErr, 2)
+			require.NoError(t, rows.Err())
+
+			mustExec(t, ctx, conn, `prepare issue27088_nested_sql from 'select id from common_type
+				where coalesce(?, d) = cast(''9007199254740992.0000000002'' as decimal(38,10))
+				order by id'`)
+			defer func() {
+				_, _ = conn.ExecContext(context.Background(), "deallocate prepare issue27088_nested_sql")
+			}()
+			mustExec(t, ctx, conn,
+				"set @issue27088_nested = cast('9007199254740992.0000000001' as decimal(38,10))")
+			rows, queryErr = conn.QueryContext(ctx, "execute issue27088_nested_sql using @issue27088_nested")
+			defer rows.Close()
+			assertIDs(t, rows, queryErr)
+			require.NoError(t, rows.Err())
+			mustExec(t, ctx, conn, "set @issue27088_nested = null")
+			rows, queryErr = conn.QueryContext(ctx, "execute issue27088_nested_sql using @issue27088_nested")
+			defer rows.Close()
+			assertIDs(t, rows, queryErr, 2)
+			require.NoError(t, rows.Err())
+		})
+
+		t.Run("SQL EXECUTE specializes CTAS query", func(t *testing.T) {
+			mustExec(t, ctx, conn, `prepare issue27088_ctas from
+				'create table ctas_result as select id from common_type where d = ?'`)
+			defer func() { _, _ = conn.ExecContext(context.Background(), "deallocate prepare issue27088_ctas") }()
+			mustExec(t, ctx, conn, "set @issue27088_ctas = '9007199254740992.0000000002tail'")
+			mustExec(t, ctx, conn, "execute issue27088_ctas using @issue27088_ctas")
+			rows, queryErr := conn.QueryContext(ctx, "select id from ctas_result order by id")
+			defer rows.Close()
+			assertIDs(t, rows, queryErr, 2)
+			require.NoError(t, rows.Err())
+		})
+
+		t.Run("SQL EXECUTE specializes CTAS window expression", func(t *testing.T) {
+			mustExec(t, ctx, conn, `prepare issue27088_ctas_window from
+				'create table ctas_window_result as
+				 select id, count(*) over (partition by d = ?) as grp
+				 from common_type where id <= 3'`)
+			defer func() {
+				_, _ = conn.ExecContext(context.Background(), "deallocate prepare issue27088_ctas_window")
+			}()
+			mustExec(t, ctx, conn, "set @issue27088_ctas_window = '9007199254740992.0000000002tail'")
+			mustExec(t, ctx, conn, "execute issue27088_ctas_window using @issue27088_ctas_window")
+			rows, queryErr := conn.QueryContext(ctx, "select id, grp from ctas_window_result order by id")
+			require.NoError(t, queryErr)
+			defer rows.Close()
+			var got [][2]int
+			for rows.Next() {
+				var id, groupSize int
+				require.NoError(t, rows.Scan(&id, &groupSize))
+				got = append(got, [2]int{id, groupSize})
+			}
+			require.NoError(t, rows.Err())
+			require.Equal(t, [][2]int{{1, 2}, {2, 1}, {3, 2}}, got)
+		})
+
+		t.Run("SQL EXECUTE specializes SET expression", func(t *testing.T) {
+			mustExec(t, ctx, conn, `prepare issue27088_set from
+				'set @issue27088_out = coalesce(?, cast(1 as decimal(38,10)))'`)
+			defer func() { _, _ = conn.ExecContext(context.Background(), "deallocate prepare issue27088_set") }()
+			mustExec(t, ctx, conn, "set @issue27088_set_value = '12.5tail'")
+			mustExec(t, ctx, conn, "execute issue27088_set using @issue27088_set_value")
+			var value string
+			require.NoError(t, conn.QueryRowContext(ctx, "select @issue27088_out").Scan(&value))
+			require.Equal(t, "12.5000000000", value)
+		})
+
+		t.Run("COM_STMT SET scalar subquery preserves runtime type", func(t *testing.T) {
+			directJSON, prepareErr := conn.PrepareContext(ctx, "set @issue27088_direct_json = json_object('v', ?)")
+			require.NoError(t, prepareErr)
+			defer directJSON.Close()
+			subqueryJSON, prepareErr := conn.PrepareContext(ctx, "set @issue27088_subquery_json = (select json_object('v', ?))")
+			require.NoError(t, prepareErr)
+			defer subqueryJSON.Close()
+			_, execErr := directJSON.ExecContext(ctx, int64(42))
+			require.NoError(t, execErr)
+			_, execErr = subqueryJSON.ExecContext(ctx, int64(42))
+			require.NoError(t, execErr)
+			var direct, subquery string
+			require.NoError(t, conn.QueryRowContext(
+				ctx, "select @issue27088_direct_json, @issue27088_subquery_json").Scan(&direct, &subquery))
+			require.JSONEq(t, `{"v": 42}`, direct)
+			require.JSONEq(t, direct, subquery)
+			for _, name := range []string{"@issue27088_direct_json", "@issue27088_subquery_json"} {
+				func() {
+					rows, queryErr := conn.QueryContext(ctx, "select "+name)
+					require.NoError(t, queryErr)
+					defer rows.Close()
+					columnTypes, typeErr := rows.ColumnTypes()
+					require.NoError(t, typeErr)
+					require.Len(t, columnTypes, 1)
+					require.Equal(t, "JSON", columnTypes[0].DatabaseTypeName())
+					require.NoError(t, rows.Err())
+				}()
+			}
+
+			directNested, prepareErr := conn.PrepareContext(
+				ctx, "set @issue27088_direct_nested = json_object('outer', json_object('v', ?))")
+			require.NoError(t, prepareErr)
+			defer directNested.Close()
+			subqueryNested, prepareErr := conn.PrepareContext(
+				ctx, "set @issue27088_subquery_nested = json_object('outer', (select json_object('v', ?)))")
+			require.NoError(t, prepareErr)
+			defer subqueryNested.Close()
+			_, execErr = directNested.ExecContext(ctx, int64(42))
+			require.NoError(t, execErr)
+			_, execErr = subqueryNested.ExecContext(ctx, int64(42))
+			require.NoError(t, execErr)
+			require.NoError(t, conn.QueryRowContext(
+				ctx, "select @issue27088_direct_nested, @issue27088_subquery_nested").Scan(&direct, &subquery))
+			require.JSONEq(t, `{"outer": {"v": 42}}`, direct)
+			require.JSONEq(t, direct, subquery)
+
+			directValue, prepareErr := conn.PrepareContext(ctx, "set @issue27088_direct_value = ?")
+			require.NoError(t, prepareErr)
+			defer directValue.Close()
+			subqueryValue, prepareErr := conn.PrepareContext(ctx, "set @issue27088_subquery_value = (select ?)")
+			require.NoError(t, prepareErr)
+			defer subqueryValue.Close()
+			_, execErr = directValue.ExecContext(ctx, int64(42))
+			require.NoError(t, execErr)
+			_, execErr = subqueryValue.ExecContext(ctx, int64(42))
+			require.NoError(t, execErr)
+			readIntegerVariable := func(name string, expectedType string) int64 {
+				rows, queryErr := conn.QueryContext(ctx, "select "+name)
+				require.NoError(t, queryErr)
+				defer rows.Close()
+				columnTypes, typeErr := rows.ColumnTypes()
+				require.NoError(t, typeErr)
+				require.Len(t, columnTypes, 1)
+				require.Equal(t, expectedType, columnTypes[0].DatabaseTypeName())
+				require.True(t, rows.Next())
+				var value int64
+				require.NoError(t, rows.Scan(&value))
+				require.NoError(t, rows.Err())
+				return value
+			}
+			directInteger := readIntegerVariable("@issue27088_direct_value", "BIGINT")
+			subqueryInteger := readIntegerVariable("@issue27088_subquery_value", "BIGINT")
+			require.Equal(t, int64(42), directInteger)
+			require.Equal(t, directInteger, subqueryInteger)
+		})
+
+		t.Run("prepared SET scalar subquery preserves DATE consumer", func(t *testing.T) {
+			directDate, prepareErr := conn.PrepareContext(ctx,
+				"set @issue27088_direct_date = date_add(cast('2024-01-02' as date), interval 1 day)")
+			require.NoError(t, prepareErr)
+			defer directDate.Close()
+			subqueryDate, prepareErr := conn.PrepareContext(ctx,
+				"set @issue27088_subquery_date = date_add((select cast('2024-01-02' as date)), interval 1 day)")
+			require.NoError(t, prepareErr)
+			defer subqueryDate.Close()
+			_, execErr := directDate.ExecContext(ctx)
+			require.NoError(t, execErr)
+			_, execErr = subqueryDate.ExecContext(ctx)
+			require.NoError(t, execErr)
+			var direct, subquery string
+			require.NoError(t, conn.QueryRowContext(
+				ctx, "select @issue27088_direct_date, @issue27088_subquery_date").Scan(&direct, &subquery))
+			require.Equal(t, "2024-01-03", direct)
+			require.Equal(t, direct, subquery)
+		})
+
+		t.Run("SQL EXECUTE preserves numeric result consumer domains across reuse", func(t *testing.T) {
+			readResult := func(query string) (string, string) {
+				rows, queryErr := conn.QueryContext(ctx, query)
+				require.NoError(t, queryErr)
+				defer rows.Close()
+				columnTypes, typeErr := rows.ColumnTypes()
+				require.NoError(t, typeErr)
+				require.Len(t, columnTypes, 1)
+				require.True(t, rows.Next())
+				var value string
+				require.NoError(t, rows.Scan(&value))
+				require.NoError(t, rows.Err())
+				return value, columnTypes[0].DatabaseTypeName()
+			}
+			for i, test := range []struct {
+				expression   string
+				expectedType string
+			}{
+				{expression: "case when 1 = 1 then ? else 1 end", expectedType: "DECIMAL"},
+				{expression: "if(1 = 1, ?, 1)", expectedType: "DECIMAL"},
+				{expression: "iff(1 = 1, ?, 1)", expectedType: "DECIMAL"},
+				{expression: "coalesce(?, 1)", expectedType: "DECIMAL"},
+				{expression: "ifnull(?, 1)", expectedType: "DECIMAL"},
+				{expression: "nullif(?, 1)", expectedType: "DECIMAL"},
+				{expression: "sum(?)", expectedType: "DECIMAL"},
+				{expression: "avg(?)", expectedType: "DECIMAL"},
+				{expression: "greatest(?, 1)", expectedType: "DECIMAL"},
+				{expression: "least(?, 1)", expectedType: "DECIMAL"},
+				{expression: "min(?)", expectedType: "DECIMAL"},
+				{expression: "max(?)", expectedType: "DECIMAL"},
+				{expression: "any_value(?)", expectedType: "DECIMAL"},
+				{expression: "first_value(?) over ()", expectedType: "DECIMAL"},
+				{expression: "last_value(?) over ()", expectedType: "DECIMAL"},
+				{expression: "lag(?, 0) over ()", expectedType: "DECIMAL"},
+				{expression: "lead(?, 0) over ()", expectedType: "DECIMAL"},
+				{expression: "nth_value(?, 1) over ()", expectedType: "DECIMAL"},
+				{expression: "case when 1 = 1 then ? else cast(1 as decimal(38,10)) end", expectedType: "DECIMAL"},
+				{expression: "if(1 = 1, ?, cast(1 as decimal(38,10)))", expectedType: "DECIMAL"},
+				{expression: "coalesce(?, cast(1 as decimal(38,10)))", expectedType: "DECIMAL"},
+				{expression: "ifnull(?, cast(1 as decimal(38,10)))", expectedType: "DECIMAL"},
+				{expression: "case when 1 = 1 then cast(? as double) else 1 end", expectedType: "DOUBLE"},
+				{expression: "if(1 = 1, cast(? as double), 1)", expectedType: "DOUBLE"},
+				{expression: "ifnull(cast(? as double), 1)", expectedType: "DOUBLE"},
+				{expression: "nullif(cast(? as double), 1)", expectedType: "DOUBLE"},
+			} {
+				statement := fmt.Sprintf("issue27088_numeric_result_%d", i)
+				directExpression := strings.Replace(test.expression, "?", "@issue27088_numeric_result", 1)
+				mustExec(t, ctx, conn, fmt.Sprintf("prepare %s from 'select %s'", statement, test.expression))
+				for _, value := range []string{"9007199254740993.5", "9007199254740994.5"} {
+					mustExec(t, ctx, conn, fmt.Sprintf(
+						"set @issue27088_numeric_result = cast(%s as decimal(17,1))", value))
+					directValue, directType := readResult("select " + directExpression)
+					preparedValue, preparedType := readResult("execute " + statement + " using @issue27088_numeric_result")
+					require.Equal(t, directValue, preparedValue, test.expression)
+					require.Equal(t, directType, preparedType, test.expression)
+					require.Equal(t, test.expectedType, preparedType, test.expression)
+				}
+				mustExec(t, ctx, conn, "deallocate prepare "+statement)
+			}
+
+			mustExec(t, ctx, conn, `prepare issue27088_nullif_string_result from
+				'select nullif(?, cast(1 as decimal(38,10)))'`)
+			mustExec(t, ctx, conn, "set @issue27088_numeric_result = '12.5tail'")
+			directValue, directType := readResult(
+				"select nullif(@issue27088_numeric_result, cast(1 as decimal(38,10)))")
+			preparedValue, preparedType := readResult(
+				"execute issue27088_nullif_string_result using @issue27088_numeric_result")
+			require.Equal(t, "12.5tail", directValue)
+			require.Equal(t, directValue, preparedValue)
+			require.Equal(t, "VARCHAR", directType)
+			require.Equal(t, directType, preparedType)
+			mustExec(t, ctx, conn, "deallocate prepare issue27088_nullif_string_result")
+
+			mustExec(t, ctx, conn, `prepare issue27088_nullif_binary_result from
+				'select nullif(?, cast(1 as decimal(38,10)))'`)
+			mustExec(t, ctx, conn, "set @issue27088_numeric_result = x'31322e357461696c'")
+			directValue, directType = readResult(
+				"select nullif(@issue27088_numeric_result, cast(1 as decimal(38,10)))")
+			preparedValue, preparedType = readResult(
+				"execute issue27088_nullif_binary_result using @issue27088_numeric_result")
+			require.Equal(t, "12.5tail", directValue)
+			require.Equal(t, directValue, preparedValue)
+			require.Equal(t, "VARBINARY", directType)
+			require.Equal(t, directType, preparedType)
+			mustExec(t, ctx, conn, "deallocate prepare issue27088_nullif_binary_result")
+		})
+
+		t.Run("SQL EXECUTE SET specializes consumer inside subquery", func(t *testing.T) {
+			mustExec(t, ctx, conn, `prepare issue27088_set_inner from
+				'set @issue27088_inner_out = (select id from common_type where d = ?)'`)
+			defer func() { _, _ = conn.ExecContext(context.Background(), "deallocate prepare issue27088_set_inner") }()
+			mustExec(t, ctx, conn, "set @issue27088_inner_value = '9007199254740992.0000000002tail'")
+			mustExec(t, ctx, conn, "execute issue27088_set_inner using @issue27088_inner_value")
+			var value int
+			require.NoError(t, conn.QueryRowContext(ctx, "select @issue27088_inner_out").Scan(&value))
+			require.Equal(t, 2, value)
+		})
+
+		t.Run("SQL EXECUTE SET specializes consumer outside subquery", func(t *testing.T) {
+			mustExec(t, ctx, conn, `prepare issue27088_set_outer from
+				'set @issue27088_outer_out = coalesce(?, (select cast(1 as decimal(38,10))))'`)
+			defer func() { _, _ = conn.ExecContext(context.Background(), "deallocate prepare issue27088_set_outer") }()
+			mustExec(t, ctx, conn, "set @issue27088_outer_value = '12.5tail'")
+			mustExec(t, ctx, conn, "execute issue27088_set_outer using @issue27088_outer_value")
+			var value string
+			require.NoError(t, conn.QueryRowContext(ctx, "select @issue27088_outer_out").Scan(&value))
+			require.Equal(t, "12.5000000000", value)
+
+			mustExec(t, ctx, conn, "set @issue27088_outer_value = 'tail'")
+			mustExec(t, ctx, conn, "execute issue27088_set_outer using @issue27088_outer_value")
+			require.NoError(t, conn.QueryRowContext(ctx, "select @issue27088_outer_out").Scan(&value))
+			require.Equal(t, "0.0000000000", value)
+
+			mustExec(t, ctx, conn, "set @issue27088_outer_value = null")
+			mustExec(t, ctx, conn, "execute issue27088_set_outer using @issue27088_outer_value")
+			require.NoError(t, conn.QueryRowContext(ctx, "select @issue27088_outer_out").Scan(&value))
+			require.Equal(t, "1.0000000000", value)
+		})
+
+		t.Run("SQL EXECUTE SET preserves multiple scalar subquery order and typed NULL", func(t *testing.T) {
+			mustExec(t, ctx, conn, `prepare issue27088_set_multi_sub from
+				'set @issue27088_multi_sub_out = coalesce((select ?), (select cast(2 as decimal(38,10))))'`)
+			defer func() {
+				_, _ = conn.ExecContext(context.Background(), "deallocate prepare issue27088_set_multi_sub")
+			}()
+			mustExec(t, ctx, conn, "set @issue27088_multi_sub_value = null")
+			mustExec(t, ctx, conn, "execute issue27088_set_multi_sub using @issue27088_multi_sub_value")
+			var value string
+			require.NoError(t, conn.QueryRowContext(ctx, "select @issue27088_multi_sub_out").Scan(&value))
+			require.Equal(t, "2.0000000000", value)
+		})
+
+		t.Run("SQL EXECUTE SET preserves scalar subquery execution", func(t *testing.T) {
+			mustExec(t, ctx, conn, "prepare issue27088_set_subquery from 'set @issue27088_subquery_out = (select ?)' ")
+			defer func() {
+				_, _ = conn.ExecContext(context.Background(), "deallocate prepare issue27088_set_subquery")
+			}()
+			mustExec(t, ctx, conn, "set @issue27088_subquery_value = 42")
+			mustExec(t, ctx, conn, "execute issue27088_set_subquery using @issue27088_subquery_value")
+			var value int
+			require.NoError(t, conn.QueryRowContext(ctx, "select @issue27088_subquery_out").Scan(&value))
+			require.Equal(t, 42, value)
+		})
+
+		t.Run("SQL EXECUTE specializes integer comparison for decimal variable", func(t *testing.T) {
+			mustExec(t, ctx, conn, "create table execute_integer(id int primary key, vi int, vh int, key idx_i(vi))")
+			mustExec(t, ctx, conn, "insert into execute_integer values (1, 9, 9), (2, 10, 10), (3, null, null)")
+			mustExec(t, ctx, conn,
+				"prepare issue27088_integer from 'select id from execute_integer where vi = ? order by id'")
+			defer func() { _, _ = conn.ExecContext(context.Background(), "deallocate prepare issue27088_integer") }()
+			mustExec(t, ctx, conn, "set @issue27088_integer = 9.0")
+			rows, queryErr := conn.QueryContext(ctx, "execute issue27088_integer using @issue27088_integer")
+			defer rows.Close()
+			assertIDs(t, rows, queryErr, 1)
+			require.NoError(t, rows.Err())
+
+			for _, column := range []string{"vh", "vi"} {
+				func() {
+					binaryStmt, prepareErr := conn.PrepareContext(ctx,
+						"select id from execute_integer where "+column+" = ? order by id")
+					require.NoError(t, prepareErr)
+					defer binaryStmt.Close()
+					for range 2 {
+						func() {
+							binaryRows, binaryErr := binaryStmt.QueryContext(ctx, "9.0")
+							require.NoError(t, binaryErr)
+							defer binaryRows.Close()
+							assertIDs(t, binaryRows, nil, 1)
+							require.NoError(t, binaryRows.Err())
+						}()
+					}
+				}()
+			}
+		})
+
+		t.Run("SQL EXECUTE preserves legacy float and null domains", func(t *testing.T) {
+			mustExec(t, ctx, conn, "create table execute_control(id int primary key, f float)")
+			mustExec(t, ctx, conn, "insert into execute_control values (1, 1.2345678)")
+
+			mustExec(t, ctx, conn,
+				"prepare issue27088_float from 'select id from execute_control where f = ? order by id'")
+			defer func() { _, _ = conn.ExecContext(context.Background(), "deallocate prepare issue27088_float") }()
+			mustExec(t, ctx, conn, "set @issue27088_float = 1.2345678")
+			rows, queryErr := conn.QueryContext(ctx, "execute issue27088_float using @issue27088_float")
+			defer rows.Close()
+			assertIDs(t, rows, queryErr, 1)
+			require.NoError(t, rows.Err())
+
+			mustExec(t, ctx, conn,
+				"prepare issue27088_count from 'select count(?) from execute_control'")
+			defer func() { _, _ = conn.ExecContext(context.Background(), "deallocate prepare issue27088_count") }()
+			mustExec(t, ctx, conn, "set @issue27088_count = 'x'")
+			var count int
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"execute issue27088_count using @issue27088_count").Scan(&count))
+			require.Equal(t, 1, count)
+			mustExec(t, ctx, conn, "set @issue27088_count = null")
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"execute issue27088_count using @issue27088_count").Scan(&count))
+			require.Equal(t, 0, count)
+		})
+
+		t.Run("same type UUID constant casts remain bindable", func(t *testing.T) {
+			mustExec(t, ctx, conn, "create table uuid_control(u uuid primary key)")
+			mustExec(t, ctx, conn, `insert into uuid_control values
+				('00000000-0000-0000-0000-000000000001'),
+				('00000000-0000-0000-0000-000000000002'),
+				('00000000-0000-0000-0000-000000000003'),
+				('00000000-0000-0000-0000-000000000004')`)
+
+			assertUUIDs := func(rows *sql.Rows, queryErr error, want ...string) {
+				t.Helper()
+				require.NoError(t, queryErr)
+				var got []string
+				for rows.Next() {
+					var value string
+					require.NoError(t, rows.Scan(&value))
+					got = append(got, value)
+				}
+				require.NoError(t, rows.Err())
+				require.Equal(t, want, got)
+			}
+
+			rows, queryErr := conn.QueryContext(ctx, `select u from uuid_control
+				where u = cast('00000000-0000-0000-0000-000000000001' as uuid)
+				   or u in (cast('00000000-0000-0000-0000-000000000002' as uuid),
+				            cast('00000000-0000-0000-0000-000000000003' as uuid)) order by u`)
+			defer rows.Close()
+			assertUUIDs(rows, queryErr,
+				"00000000-0000-0000-0000-000000000001",
+				"00000000-0000-0000-0000-000000000002",
+				"00000000-0000-0000-0000-000000000003")
+			require.NoError(t, rows.Err())
+
+			rows, queryErr = conn.QueryContext(ctx, `select u from uuid_control
+				where u between cast('00000000-0000-0000-0000-000000000002' as uuid)
+				            and cast('00000000-0000-0000-0000-000000000003' as uuid)
+				   or u >= cast('00000000-0000-0000-0000-000000000004' as uuid) order by u`)
+			defer rows.Close()
+			assertUUIDs(rows, queryErr,
+				"00000000-0000-0000-0000-000000000002",
+				"00000000-0000-0000-0000-000000000003",
+				"00000000-0000-0000-0000-000000000004")
+			require.NoError(t, rows.Err())
+		})
+	})
+}

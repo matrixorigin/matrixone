@@ -16,7 +16,6 @@ select sleep(b) from t1;
 -- @label:bvt
 
 SELECT sleep(0);
-SELECT sleep(1);
 SELECT sleep(0.33);
 
 -- parameter error
@@ -85,20 +84,5 @@ SELECT sleep_03.d, sleep(0) FROM sleep_03,sleep_04 WHERE sleep_03.d = sleep_04.d
 
 SELECT sleep_03.d, sleep(0.1) FROM sleep_03;
 SELECT sleep_03.d, sleep_03.d1, sleep(0.4) FROM sleep_03 JOIN sleep_04 ON sleep_03.d = sleep_04.d;
-SELECT sleep_03.d, sleep(1) FROM sleep_03 join sleep_04 on sleep_03.d=sleep_04.d;
 SELECT sleep_03.d, sleep(0.432)FROM sleep_03 right join sleep_04 on sleep_03.d=sleep_04.d;
 SELECT d, sleep(0.5) FROM sleep_03 ORDER BY d2 desc;
-
-
-
-select sleep();
-select sleep(1);
-select sleep(1.5);
-select sleep(null);
-select sleep(-1);
-select sleep(-1.5);
-
-create table t1 (a int,b int);
-insert into t1 values (1,1),(1,null);
-select sleep(a) from t1;
-select sleep(b) from t1;

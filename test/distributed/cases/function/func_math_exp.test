@@ -62,4 +62,3 @@ create table t1(a float,  b float);
 insert into t1 values(14.413, 43.413), (8.123, 0.409);
 select b from t1 group by b having exp(b)>0;
 drop table t1;
-

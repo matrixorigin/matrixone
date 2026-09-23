@@ -1,0 +1,155 @@
+drop database if exists affine_sum_family;
+create database affine_sum_family;
+use affine_sum_family;
+create table t(
+g int,
+s smallint,
+u8 tinyint unsigned,
+u16 smallint unsigned,
+u32 int unsigned
+);
+insert into t values
+(1, -32768, 0, 0, 0),
+(1, -1, 1, 1, 1),
+(1, 0, 254, 65534, 4294967294),
+(1, 32767, 255, 65535, 4294967295),
+(1, null, null, null, null),
+(2, null, null, null, null);
+select sum(u16 + 1) s1, sum(u16 + 2) s2,
+sum(u16 + 3) s3, sum(u16 + 89) s89
+from t;
+➤ s1[3,38,0]  ¦  s2[3,38,0]  ¦  s3[3,38,0]  ¦  s89[3,38,0]  𝄀
+131074  ¦  131078  ¦  131082  ¦  131426
+select g, sum(u16 + 1) s1, sum(u16 + 2) s2,
+sum(u16 + 3) s3, sum(u16 + 89) s89
+from t group by g order by g;
+➤ g[4,32,0]  ¦  s1[3,38,0]  ¦  s2[3,38,0]  ¦  s3[3,38,0]  ¦  s89[3,38,0]  𝄀
+1  ¦  131074  ¦  131078  ¦  131082  ¦  131426  𝄀
+2  ¦  null  ¦  null  ¦  null  ¦  null
+select g, sum(u16 + 1) s1, sum(u16 + 2) s2, sum(u16 + 3) s3
+from t group by g with rollup order by grouping(g), g;
+➤ g[4,32,0]  ¦  s1[3,38,0]  ¦  s2[3,38,0]  ¦  s3[3,38,0]  𝄀
+1  ¦  131074  ¦  131078  ¦  131082  𝄀
+2  ¦  null  ¦  null  ¦  null  𝄀
+null  ¦  131074  ¦  131078  ¦  131082
+select g,
+sum(sum(u16 + 1)) over (order by g rows unbounded preceding) w1,
+sum(sum(u16 + 2)) over (order by g rows unbounded preceding) w2,
+sum(sum(u16 + 3)) over (order by g rows unbounded preceding) w3
+from t group by g order by g;
+➤ g[4,32,0]  ¦  w1[3,38,0]  ¦  w2[3,38,0]  ¦  w3[3,38,0]  𝄀
+1  ¦  131074  ¦  131078  ¦  131082  𝄀
+2  ¦  131074  ¦  131078  ¦  131082
+select sum(u16 + 1) s1, sum(u16 + 2) s2, sum(u16 + 3) s3
+from t where false;
+➤ s1[3,38,0]  ¦  s2[3,38,0]  ¦  s3[3,38,0]  𝄀
+null  ¦  null  ¦  null
+select sum(u16 + 1) s1, sum(u16 + 2) s2, sum(u16 + 3) s3
+from t where g = 2;
+➤ s1[3,38,0]  ¦  s2[3,38,0]  ¦  s3[3,38,0]  𝄀
+null  ¦  null  ¦  null
+select sum(1 + u16) s1, sum(2 + u16) s2,
+sum(3 + u16) s3, sum(89 + u16) s89
+from t;
+➤ s1[3,38,0]  ¦  s2[3,38,0]  ¦  s3[3,38,0]  ¦  s89[3,38,0]  𝄀
+131074  ¦  131078  ¦  131082  ¦  131426
+select sum(cast(s as signed) - 1) sm1,
+sum(cast(s as signed)) s0,
+sum(cast(s as signed) + 1) sp1
+from t;
+➤ sm1[3,38,0]  ¦  s0[3,38,0]  ¦  sp1[3,38,0]  𝄀
+-6  ¦  -2  ¦  2
+select sum(u16 * 2 + 1) s1,
+sum(u16 * 2 + 2) s2,
+sum(u16 * 2 + 3) s3
+from t;
+➤ s1[3,38,0]  ¦  s2[3,38,0]  ¦  s3[3,38,0]  𝄀
+262144  ¦  262148  ¦  262152
+select sum(u16 + 1) s1,
+sum(u16 + 3) s3,
+sum(u16 + 4) s4
+from t;
+➤ s1[3,38,0]  ¦  s3[3,38,0]  ¦  s4[3,38,0]  𝄀
+131074  ¦  131082  ¦  131086
+select sum(cast(u16 as signed) + 1) s1,
+sum(cast(u16 as signed) + 2) s2,
+sum(cast(u16 as signed) + 3) s3
+from t;
+➤ s1[3,38,0]  ¦  s2[3,38,0]  ¦  s3[3,38,0]  𝄀
+131074  ¦  131078  ¦  131082
+select sum(u8 + 1) u8s1, sum(u16 + 1) u16s1,
+sum(u8 + 2) u8s2, sum(u16 + 2) u16s2,
+sum(u8 + 3) u8s3, sum(u16 + 3) u16s3
+from t;
+➤ u8s1[3,38,0]  ¦  u16s1[3,38,0]  ¦  u8s2[3,38,0]  ¦  u16s2[3,38,0]  ¦  u8s3[3,38,0]  ¦  u16s3[3,38,0]  𝄀
+514  ¦  131074  ¦  518  ¦  131078  ¦  522  ¦  131082
+select sum(u32 + 5421010858132554873) s0,
+sum(u32 + 5421010858132554874) s1,
+sum(u32 + 5421010858132554875) s2
+from t;
+➤ s0[3,38,0]  ¦  s1[3,38,0]  ¦  s2[3,38,0]  𝄀
+21684043441120154082  ¦  21684043441120154086  ¦  21684043441120154090
+select g, sum(u16 + 1) s1, sum(u16 + 2) s2, sum(u16 + 3) s3
+from t
+group by g
+having sum(u16 + 3) > 0
+order by sum(u16 + 3);
+➤ g[4,32,0]  ¦  s1[3,38,0]  ¦  s2[3,38,0]  ¦  s3[3,38,0]  𝄀
+1  ¦  131074  ¦  131078  ¦  131082
+select distinct outer_t.g,
+(select max(middle_t.s)
+from t middle_t
+where (middle_t.s > 0) = (
+select sum(inner_t.u16 + 3) =
+coalesce(sum(inner_t.u16 + 1), sum(inner_t.u16 + 2), 0)
+from t inner_t
+where inner_t.g = outer_t.g
+)) affine_result
+from t outer_t
+order by outer_t.g;
+➤ g[4,32,0]  ¦  affine_result[5,16,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  null
+set @a = 1;
+set @b = 2;
+set @c = 3;
+prepare affine_sum_stmt from
+'select sum(u16 + ?) s1, sum(u16 + ?) s2, sum(u16 + ?) s3 from affine_sum_family.t';
+execute affine_sum_stmt using @a, @b, @c;
+➤ s1[3,38,0]  ¦  s2[3,38,0]  ¦  s3[3,38,0]  𝄀
+131074  ¦  131078  ¦  131082
+set @a = 10;
+set @b = -2;
+set @c = 100;
+execute affine_sum_stmt using @a, @b, @c;
+➤ s1[3,38,0]  ¦  s2[3,38,0]  ¦  s3[3,38,0]  𝄀
+131110  ¦  131062  ¦  131470
+deallocate prepare affine_sum_stmt;
+select sum(s + 1) s1, sum(s + 2) s2, sum(s + 3) s3 from t;
+➤ s1[3,38,0]  ¦  s2[3,38,0]  ¦  s3[3,38,0]  𝄀
+2  ¦  6  ¦  10
+select sum(u16 + 1) s1, sum(u16 + 3) s3, sum(u16 + 5) s5 from t;
+➤ s1[3,38,0]  ¦  s3[3,38,0]  ¦  s5[3,38,0]  𝄀
+131074  ¦  131082  ¦  131090
+select sum(distinct u16 + 1) s1,
+sum(distinct u16 + 2) s2,
+sum(distinct u16 + 3) s3
+from t;
+➤ s1[3,38,0]  ¦  s2[3,38,0]  ¦  s3[3,38,0]  𝄀
+131074  ¦  131078  ¦  131082
+create table tw(ts datetime, v smallint);
+insert into tw values
+('2026-01-01 00:00:00', 1),
+('2026-01-01 00:00:20', 2),
+('2026-01-01 00:01:00', null),
+('2026-01-01 00:02:00', 1),
+('2026-01-01 00:02:20', 2);
+select _wstart, sum(v + 1) s1, sum(v + 2) s2, sum(v + 3) s3
+from tw
+interval(ts, 1, minute) fill(linear)
+order by _wstart;
+➤ _wstart[93,19,0]  ¦  s1[3,38,0]  ¦  s2[3,38,0]  ¦  s3[3,38,0]  𝄀
+2026-01-01 00:00:00  ¦  5  ¦  7  ¦  9  𝄀
+2026-01-01 00:01:00  ¦  5  ¦  7  ¦  9  𝄀
+2026-01-01 00:02:00  ¦  5  ¦  7  ¦  9
+drop database affine_sum_family;

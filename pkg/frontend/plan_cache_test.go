@@ -22,6 +22,8 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	mysqlparser "github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/stretchr/testify/require"
@@ -127,6 +129,61 @@ func Test_DuplicateKeyRefreshesLRU(t *testing.T) {
 	pc.clean()
 	require.Equal(t, 1, secondA.freed)
 	require.Equal(t, 1, c.freed)
+}
+
+func TestPlanCacheUpdatesPlanAndSnapshotAsOneGeneration(t *testing.T) {
+	pc := newPlanCache(1)
+	firstStmt := &trackedStatement{}
+	secondStmt := &trackedStatement{}
+	firstPlan := &plan.Plan{}
+	oldPlan := &plan.Plan{}
+	newPlan := &plan.Plan{}
+	firstTS := timestamp.Timestamp{PhysicalTime: 10}
+	oldTS := timestamp.Timestamp{PhysicalTime: 20}
+	newTS := timestamp.Timestamp{PhysicalTime: 30}
+	firstStats := optimizerStatsTableKey{accountID: 1, tableID: 10}
+	secondStats := optimizerStatsTableKey{accountID: 2, tableID: 20}
+	rebuiltStats := optimizerStatsTableKey{accountID: 2, tableID: 21}
+	pc.cacheWithPlanSnapshotsAndStatsVersions(
+		"sql",
+		[]tree.Statement{firstStmt, secondStmt},
+		[]*plan.Plan{firstPlan, oldPlan},
+		[]timestamp.Timestamp{firstTS, oldTS},
+		[]map[optimizerStatsTableKey]uint64{
+			{firstStats: 1},
+			{secondStats: 2},
+		},
+	)
+
+	require.False(t, pc.updatePlanGeneration("sql", 1, firstPlan, newPlan, newTS, nil))
+	require.False(t, pc.updatePlanGeneration(
+		"sql", 1, oldPlan, newPlan, newTS,
+		map[optimizerStatsTableKey]uint64{firstStats: 3}),
+		"a replacement cannot combine two versions of one dependency")
+	require.True(t, pc.updatePlanGeneration(
+		"sql", 1, oldPlan, newPlan, newTS,
+		map[optimizerStatsTableKey]uint64{rebuiltStats: 3}))
+	cached := pc.get("sql")
+	require.Same(t, firstPlan, cached.plans[0])
+	require.Equal(t, firstTS, cached.planSnapshotTS[0])
+	require.Same(t, newPlan, cached.plans[1])
+	require.Equal(t, newTS, cached.planSnapshotTS[1])
+	require.Equal(t, map[optimizerStatsTableKey]uint64{
+		firstStats:   1,
+		rebuiltStats: 3,
+	}, cached.statsVersions)
+	require.Equal(t, map[optimizerStatsTableKey]uint64{firstStats: 1}, cached.planStatsVersions[0])
+	require.Equal(t, map[optimizerStatsTableKey]uint64{rebuiltStats: 3}, cached.planStatsVersions[1])
+
+	pc.invalidatePlanGeneration("sql", 1, oldPlan)
+	require.True(t, pc.isCached("sql"), "an obsolete generation cannot invalidate its replacement")
+	pc.invalidatePlanGeneration("sql", 1, newPlan)
+	require.False(t, pc.isCached("sql"))
+	require.Zero(t, firstStmt.freed)
+	require.Zero(t, secondStmt.freed)
+	require.Nil(t, pc.get("sql"))
+	require.Equal(t, 1, firstStmt.freed)
+	require.Equal(t, 1, secondStmt.freed)
 }
 
 func Test_CleanCache(t *testing.T) {
@@ -242,6 +299,19 @@ func TestSelectIntoPlanIsNeverReusedFromPlanCache(t *testing.T) {
 	require.False(t, ses.isCached(input.getHash()))
 }
 
+func TestJSONMergePlanIsNeverReusedFromPlanCache(t *testing.T) {
+	pc := newPlanCache(2)
+	stmt := &trackedStatement{}
+	input := &UserInput{sql: "select json_merge('[1]', '[2]')"}
+	input.genHash()
+	pc.cache(input.getHash(), []tree.Statement{stmt}, []*plan.Plan{{}})
+
+	ses := &Session{planCache: pc}
+	require.Nil(t, cachedPlanForInput(ses, input))
+	require.False(t, ses.isCached(input.getHash()))
+	require.Equal(t, 1, stmt.freed)
+}
+
 func TestFreeStmtsSkipsNil(t *testing.T) {
 	good := &trackedStatement{}
 	stmts := []tree.Statement{nil, good, nil}
@@ -276,6 +346,77 @@ func Test_SessionAccessorsWithNilPlanCache(t *testing.T) {
 	require.False(t, ses.isCached("x"))
 	require.NotPanics(t, func() { ses.cleanCache() })
 	require.NotPanics(t, func() { ses.releasePlanCache() })
+}
+
+func TestMergeOptimizerStatsVersionsRejectsMixedGenerations(t *testing.T) {
+	first := optimizerStatsTableKey{accountID: 7, tableID: 1}
+	second := optimizerStatsTableKey{accountID: 8, tableID: 1}
+	versions := map[optimizerStatsTableKey]uint64{first: 10}
+	require.True(t, mergeOptimizerStatsVersions(versions,
+		map[optimizerStatsTableKey]uint64{first: 10, second: 20}))
+	require.Equal(t, map[optimizerStatsTableKey]uint64{first: 10, second: 20}, versions)
+	require.False(t, mergeOptimizerStatsVersions(versions,
+		map[optimizerStatsTableKey]uint64{first: 11}))
+	require.Equal(t, uint64(10), versions[first])
+}
+
+func TestSessionReportsStaleStatsWithoutFreeingBorrowedCachedAST(t *testing.T) {
+	const service = "stale-stats-borrowed-ast"
+	InitServerLevelVars(service)
+	t.Cleanup(func() { serverVarsMap.Delete(service) })
+
+	key := optimizerStatsTableKey{accountID: 7, tableID: 11}
+	stmt := &trackedStatement{}
+	ses := &Session{
+		feSessionImpl: feSessionImpl{service: service},
+		planCache:     newPlanCache(1),
+	}
+	ses.cachePlanWithStatsVersions(
+		"cached", []tree.Statement{stmt}, []*plan.Plan{{}},
+		map[optimizerStatsTableKey]uint64{key: 0})
+	require.True(t, ses.isCached("cached"))
+
+	advanceOptimizerStatsVersion(service, key)
+	require.False(t, ses.isCached("cached"))
+	require.Zero(t, stmt.freed, "an executing wrapper may still borrow this AST")
+
+	require.Nil(t, ses.getCachedPlan("cached"))
+	require.Equal(t, 1, stmt.freed)
+}
+
+var optimizerStatsVersionsCurrentSink bool
+
+func BenchmarkOptimizerStatsVersionsCurrent(b *testing.B) {
+	const (
+		service   = "optimizer-stats-version-benchmark"
+		accountID = uint32(7)
+	)
+	InitServerLevelVars(service)
+	b.Cleanup(func() { serverVarsMap.Delete(service) })
+
+	for _, tc := range []struct {
+		name       string
+		dependency int
+	}{
+		{name: "no-dependency", dependency: 0},
+		{name: "one-table", dependency: 1},
+		{name: "four-tables", dependency: 4},
+		{name: "sixteen-tables", dependency: 16},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			versions := make(map[optimizerStatsTableKey]uint64, tc.dependency)
+			for tableID := 1; tableID <= tc.dependency; tableID++ {
+				versions[optimizerStatsTableKey{
+					accountID: accountID,
+					tableID:   uint64(tableID),
+				}] = 0
+			}
+			b.ReportAllocs()
+			for b.Loop() {
+				optimizerStatsVersionsCurrentSink = optimizerStatsVersionsCurrent(service, versions)
+			}
+		})
+	}
 }
 
 func TestSessionRemoveCachedPlanOnlyEvictsTarget(t *testing.T) {
@@ -317,6 +458,68 @@ func TestSessionSQLModePresenceChangeClearsPlanCache(t *testing.T) {
 	require.NoError(t, ses.SetSessionSysVar(ctx, "SQL_MODE", "STRICT_TRANS_TABLES,MATRIXONE_NATIVE"))
 	require.False(t, ses.isCached("cached-sql"))
 	require.Equal(t, 1, stmt.freed)
+
+	// ENABLE_BOOL_SUMAVG shapes the plan of sum/avg over BOOL at bind time, so
+	// enabling and disabling it must evict exactly like the two tokens above.
+	stmt = &trackedStatement{}
+	ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES,MATRIXONE_NATIVE,ENABLE_BOOL_SUMAVG"))
+	require.False(t, ses.isCached("cached-sql"))
+	require.Equal(t, 1, stmt.freed)
+
+	stmt = &trackedStatement{}
+	ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "MATRIXONE_NATIVE,ENABLE_BOOL_SUMAVG,STRICT_TRANS_TABLES"))
+	require.True(t, ses.isCached("cached-sql"), "reordering the same tokens keeps the cache")
+	require.Zero(t, stmt.freed)
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES,MATRIXONE_NATIVE"))
+	require.False(t, ses.isCached("cached-sql"))
+	require.Equal(t, 1, stmt.freed)
+
+	stmt = &trackedStatement{}
+	ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "HIGH_NOT_PRECEDENCE"))
+	require.False(t, ses.isCached("cached-sql"))
+	require.Equal(t, 1, stmt.freed)
+
+	for _, mode := range []string{
+		"ANSI_QUOTES",
+		"PIPES_AS_CONCAT",
+		"NO_BACKSLASH_ESCAPES",
+		"REAL_AS_FLOAT",
+		"NO_UNSIGNED_SUBTRACTION",
+	} {
+		require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES"))
+		stmt = &trackedStatement{}
+		ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+		require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES,"+mode))
+		require.False(t, ses.isCached("cached-sql"), mode)
+		require.Equal(t, 1, stmt.freed, mode)
+	}
+
+	stmt = &trackedStatement{}
+	ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES,MATRIXONE_NATIVE,IGNORE_SPACE"))
+	require.False(t, ses.isCached("cached-sql"))
+	require.Equal(t, 1, stmt.freed)
+
+	stmt = &trackedStatement{}
+	ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES,MATRIXONE_NATIVE"))
+	require.False(t, ses.isCached("cached-sql"))
+	require.Equal(t, 1, stmt.freed)
+
+	stmt = &trackedStatement{}
+	ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "ANSI"))
+	require.False(t, ses.isCached("cached-sql"))
+	require.Equal(t, 1, stmt.freed)
+
+	stmt = &trackedStatement{}
+	ses.cachePlan("cached-sql", []tree.Statement{stmt}, []*plan.Plan{{}})
+	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "STRICT_TRANS_TABLES"))
+	require.False(t, ses.isCached("cached-sql"))
+	require.Equal(t, 1, stmt.freed)
 }
 
 func TestSessionProtocolVersionChangeInvalidatesPlanCache(t *testing.T) {
@@ -334,6 +537,8 @@ func TestSessionProtocolVersionChangeInvalidatesPlanCache(t *testing.T) {
 		{name: "existing rollback", from: defines.MORPCVersion5, to: defines.MORPCVersion4},
 		{name: "upgrade", from: defines.MORPCVersion7, to: defines.MORPCVersion8},
 		{name: "rollback", from: defines.MORPCVersion8, to: defines.MORPCVersion7},
+		{name: "numeric prefix upgrade", from: defines.MORPCVersion25, to: defines.MORPCVersion30},
+		{name: "numeric prefix rollback", from: defines.MORPCVersion30, to: defines.MORPCVersion25},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.from)
@@ -366,4 +571,39 @@ func TestSessionSQLModePresenceMatcherUsesExactToken(t *testing.T) {
 	has, ok = sqlModeHasOnlyFullGroupByValue("STRICT_TRANS_TABLES, ONLY_FULL_GROUP_BY_EXTRA")
 	require.True(t, ok)
 	require.False(t, has)
+
+	has, ok = sqlModeHasEnableBoolSumAvgValue("STRICT_TRANS_TABLES, ENABLE_BOOL_SUMAVG")
+	require.True(t, ok)
+	require.True(t, has)
+
+	has, ok = sqlModeHasEnableBoolSumAvgValue("STRICT_TRANS_TABLES, ENABLE_BOOL_SUMAVG_EXTRA")
+	require.True(t, ok)
+	require.False(t, has)
+
+	_, ok = sqlModeHasEnableBoolSumAvgValue(int64(0))
+	require.False(t, ok)
+}
+
+func TestSessionSQLModeHighNotPrecedenceHelpers(t *testing.T) {
+	has, ok := sqlModeHasHighNotPrecedenceValue("STRICT_TRANS_TABLES,HIGH_NOT_PRECEDENCE")
+	require.True(t, ok)
+	require.True(t, has)
+
+	has, ok = sqlModeHasHighNotPrecedenceValue("STRICT_TRANS_TABLES,HIGH_NOT_PRECEDENCE_EXTRA")
+	require.True(t, ok)
+	require.False(t, has)
+
+	_, ok = sqlModeHasHighNotPrecedenceValue(int64(0))
+	require.False(t, ok)
+
+	flags, ok := sqlModeParserFlagsValue("ANSI_QUOTES,HIGH_NOT_PRECEDENCE")
+	require.True(t, ok)
+	require.Equal(t, mysqlparser.SQLModeFlags(mysqlparser.SQLModeANSIQuotes|mysqlparser.SQLModeHighNotPrecedence), flags)
+
+	_, ok = sqlModeParserFlagsValue(int64(0))
+	require.False(t, ok)
+
+	var nilSession *Session
+	require.False(t, nilSession.sqlModeHasHighNotPrecedence())
+	require.Zero(t, nilSession.sqlModeParserFlags())
 }

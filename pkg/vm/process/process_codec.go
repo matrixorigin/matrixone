@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -71,6 +72,14 @@ func (proc *Process) BuildProcessInfo(
 		if planSnapshotTS, ok := proc.GetPlanSnapshotTS(); ok {
 			procInfo.PlanSnapshotTs = &planSnapshotTS
 		}
+		procInfo.PlanGenerationReused = proc.PlanGenerationReused()
+		stringShuffleHashAlgorithm, err := DecodeStringShuffleHashAlgorithm(
+			uint32(proc.StringShuffleHashAlgorithm()),
+		)
+		if err != nil {
+			return procInfo, err
+		}
+		procInfo.StringShuffleHashAlgorithm = uint32(stringShuffleHashAlgorithm)
 		snapshot, err := proc.GetTxnOperator().Snapshot()
 		if err != nil {
 			return procInfo, err
@@ -79,6 +88,30 @@ func (proc *Process) BuildProcessInfo(
 
 		vec := proc.GetPrepareParams()
 		if vec != nil {
+			var runtimeStringDomains []uint32
+			if vec.HasBinaryStringMetadata() {
+				runtimeStringDomains = make([]uint32, vec.Length())
+				for i := range runtimeStringDomains {
+					runtimeStringDomains[i] = uint32(vec.GetRuntimeStringDomainAt(i))
+				}
+			}
+			runtimeStringDomains, err = RuntimeStringDomainPrepareParamMetadataForRemote(
+				proc.GetService(), vec.Length(), runtimeStringDomains)
+			if err != nil {
+				return procInfo, err
+			}
+			var stringSources []uint32
+			if vec.HasStringSourceMetadata() {
+				stringSources = make([]uint32, vec.Length())
+				for i := range stringSources {
+					stringSources[i] = uint32(vec.GetStringSourceAt(i))
+				}
+			}
+			stringSources, err = StringSourcePrepareParamMetadataForRemote(
+				proc.GetService(), vec.Length(), stringSources)
+			if err != nil {
+				return procInfo, err
+			}
 			binaryStringMetadata, err := BinaryStringPrepareParamMetadataForRemote(
 				proc.GetService(), vec.Length(), proc.Base.prepareParamsBinaryString)
 			if err != nil {
@@ -105,6 +138,8 @@ func (proc *Process) BuildProcessInfo(
 			if binaryStringMetadata != nil {
 				procInfo.PrepareParams.IsBinaryString = binaryStringMetadata
 			}
+			procInfo.PrepareParams.StringSources = stringSources
+			procInfo.PrepareParams.RuntimeStringDomains = runtimeStringDomains
 		}
 	}
 	{ // session info
@@ -118,18 +153,21 @@ func (proc *Process) BuildProcessInfo(
 		}
 
 		procInfo.SessionInfo = pipeline.SessionInfo{
-			User:                proc.Base.SessionInfo.GetUser(),
-			Host:                proc.Base.SessionInfo.GetHost(),
-			Role:                proc.Base.SessionInfo.GetRole(),
-			ConnectionId:        proc.Base.SessionInfo.GetConnectionID(),
-			Database:            proc.Base.SessionInfo.GetDatabase(),
-			Version:             proc.Base.SessionInfo.GetVersion(),
-			TimeZone:            timeBytes,
-			QueryId:             proc.Base.SessionInfo.QueryId,
-			LockWaitTimeout:     resolveLockWaitTimeoutSeconds(proc),
-			LockWaitTimeoutSet:  proc.Base.SessionInfo.LockWaitTimeoutSet,
-			MatrixoneNativeMode: proc.Base.SessionInfo.MatrixOneNativeMode,
-			SqlMode:             resolveSqlMode(proc),
+			User:                   proc.Base.SessionInfo.GetUser(),
+			Host:                   proc.Base.SessionInfo.GetHost(),
+			Role:                   proc.Base.SessionInfo.GetRole(),
+			ConnectionId:           proc.Base.SessionInfo.GetConnectionID(),
+			Database:               proc.Base.SessionInfo.GetDatabase(),
+			Version:                proc.Base.SessionInfo.GetVersion(),
+			TimeZone:               timeBytes,
+			TimeZoneName:           TimeZoneLocationName(loc),
+			QueryId:                proc.Base.SessionInfo.QueryId,
+			LockWaitTimeout:        resolveLockWaitTimeoutSeconds(proc),
+			LockWaitTimeoutSet:     proc.Base.SessionInfo.LockWaitTimeoutSet,
+			MatrixoneNativeMode:    proc.Base.SessionInfo.MatrixOneNativeMode,
+			SqlMode:                resolveSqlMode(proc),
+			AutoIncrementIncrement: proc.Base.SessionInfo.AutoIncrementIncrement,
+			AutoIncrementOffset:    proc.Base.SessionInfo.AutoIncrementOffset,
 		}
 		nullifyZeroTemporal, err := ResolveExplicitZeroTemporalCastReturnsNull(proc)
 		if err != nil {
@@ -224,6 +262,12 @@ func (c *codecService) Decode(
 	ctx context.Context,
 	value pipeline.ProcessInfo,
 ) (*Process, error) {
+	stringShuffleHashAlgorithm, err := DecodeStringShuffleHashAlgorithm(
+		value.StringShuffleHashAlgorithm,
+	)
+	if err != nil {
+		return nil, err
+	}
 	service := ""
 	if c.lockService != nil {
 		service = c.lockService.GetConfig().ServiceID
@@ -240,6 +284,22 @@ func (c *codecService) Decode(
 		service,
 		int(value.PrepareParams.Length),
 		value.PrepareParams.IsBinaryString,
+	)
+	if err != nil {
+		return nil, err
+	}
+	stringSources, err := StringSourcePrepareParamMetadataForRemote(
+		service,
+		int(value.PrepareParams.Length),
+		value.PrepareParams.StringSources,
+	)
+	if err != nil {
+		return nil, err
+	}
+	runtimeStringDomains, err := RuntimeStringDomainPrepareParamMetadataForRemote(
+		service,
+		int(value.PrepareParams.Length),
+		value.PrepareParams.RuntimeStringDomains,
 	)
 	if err != nil {
 		return nil, err
@@ -274,8 +334,10 @@ func (c *codecService) Decode(
 	proc.Base.Lim = ConvertToProcessLimitation(value.Lim)
 	proc.Base.SessionInfo = sessionInfo
 	proc.Base.SessionInfo.StorageEngine = c.engine
+	proc.SetStringShuffleHashAlgorithm(stringShuffleHashAlgorithm)
 	if value.PlanSnapshotTs != nil {
 		proc.SetPlanSnapshotTS(*value.PlanSnapshotTs)
+		proc.SetPlanGenerationReused(value.PlanGenerationReused)
 	}
 	proc.SetAffectedRows(value.AffectedRows)
 	stmtProfile := NewStmtProfile(uuid.Nil, uuid.Nil)
@@ -298,11 +360,33 @@ func (c *codecService) Decode(
 				prepareParams.GetNulls().Add(uint64(i))
 			}
 		}
+		if len(stringSources) > 0 {
+			sources := make([]types.StringSource, len(stringSources))
+			for i, source := range stringSources {
+				sources[i] = types.StringSource(source)
+			}
+			if err = prepareParams.SetStringSourcesWithMP(sources, proc.Mp()); err != nil {
+				prepareParams.Free(proc.Mp())
+				proc.Free()
+				return nil, err
+			}
+		}
 		proc.SetOwnedPrepareParamsWithMetadata(
 			prepareParams,
 			prepareParamMetadata,
 			binaryStringMetadata,
 		)
+		if len(runtimeStringDomains) > 0 {
+			domains := make([]types.RuntimeStringDomain, len(runtimeStringDomains))
+			for i, domain := range runtimeStringDomains {
+				domains[i] = types.RuntimeStringDomain(domain)
+			}
+			if err = prepareParams.SetRuntimeStringDomainsWithMP(domains, proc.Mp()); err != nil {
+				prepareParams.Free(proc.Mp())
+				proc.Free()
+				return nil, err
+			}
+		}
 	}
 	return proc, nil
 }
@@ -384,6 +468,19 @@ func ConvertToProcessSessionInfo(
 		MatrixOneNativeMode:                 sei.MatrixoneNativeMode,
 		ExplicitZeroTemporalCastReturnsNull: sei.ExplicitZeroTemporalCastReturnsNull,
 		SqlMode:                             sei.SqlMode,
+		AutoIncrementIncrement:              sei.AutoIncrementIncrement,
+		AutoIncrementOffset:                 sei.AutoIncrementOffset,
+	}
+	if sei.TimeZoneName != "" {
+		if sei.TimeZoneName == "Local" {
+			return sessionInfo, moerr.NewInvalidInputNoCtx("remote time zone must not refer to worker Local")
+		}
+		location, err := time.LoadLocation(sei.TimeZoneName)
+		if err != nil {
+			return sessionInfo, moerr.NewInvalidInputNoCtxf("cannot load remote time zone %q: %v", sei.TimeZoneName, err)
+		}
+		sessionInfo.TimeZone = location
+		return sessionInfo, nil
 	}
 	t := time.Time{}
 	err := t.UnmarshalBinary(sei.TimeZone)

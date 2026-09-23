@@ -51,7 +51,7 @@ func precedenceFor(in Expr) Precedence {
 		return P12
 	case *ComparisonExpr:
 		switch node.Op {
-		case EQUAL, NOT_EQUAL, GREAT_THAN, GREAT_THAN_EQUAL, LESS_THAN, LESS_THAN_EQUAL, LIKE, IN, REG_MATCH:
+		case EQUAL, NOT_EQUAL, GREAT_THAN, GREAT_THAN_EQUAL, LESS_THAN, LESS_THAN_EQUAL, LIKE, IN, REG_MATCH, MEMBER_OF:
 			return P11
 		}
 	case *IsNullExpr, *IsNotNullExpr:

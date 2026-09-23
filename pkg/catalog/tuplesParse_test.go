@@ -161,6 +161,21 @@ func TestShowReqs(t *testing.T) {
 	t.Log(ShowReqs(reqs))
 }
 
+func TestParseMoColumnsUpdateEntry(t *testing.T) {
+	e := &api.Entry{
+		EntryType:  api.Entry_Insert,
+		DatabaseId: MO_CATALOG_ID,
+		TableId:    MO_COLUMNS_ID,
+		TableName:  MO_COLUMNS_UPDATE,
+		Bat:        &api.Batch{},
+	}
+
+	req, remaining, err := ParseEntryList([]*api.Entry{e})
+	require.NoError(t, err)
+	require.Same(t, e, req)
+	require.Empty(t, remaining)
+}
+
 func TestGenRowsGeometry(t *testing.T) {
 	mp := mpool.MustNewZero()
 

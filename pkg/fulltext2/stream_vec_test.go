@@ -30,6 +30,10 @@ import (
 // of that type (consumer, AppendColumnBuffer), across the fixed-width and varlena paths.
 func TestColumnBufferRoundTrip(t *testing.T) {
 	mp := mpool.MustNewZero()
+	jsonValue, jsonErr := types.ParseStringToByteJson(`{"k":1}`)
+	require.NoError(t, jsonErr)
+	jsonBytes, jsonErr := types.EncodeJson(jsonValue)
+	require.NoError(t, jsonErr)
 
 	build := func(pkType types.T, vals []any) *vectorindex.ColumnBuffer {
 		w, fixed := fixedPkByteWidth(int32(pkType))
@@ -94,7 +98,7 @@ func TestColumnBufferRoundTrip(t *testing.T) {
 		{types.T_char, []any{[]byte("c")}},
 		{types.T_text, []any{[]byte("longer text pk value")}},
 		{types.T_blob, []any{[]byte{0, 1, 2, 255}}},
-		{types.T_json, []any{[]byte(`{"k":1}`)}},
+		{types.T_json, []any{jsonBytes}},
 	}
 	for _, c := range more {
 		require.Equalf(t, len(c.vals), toVec(c.typ, c.vals).Length(), "type %v", c.typ)

@@ -41,8 +41,17 @@ func Test_Upgrade(t *testing.T) {
 		func(rt runtime.Runtime) {
 			txnOperator := mock_frontend.NewMockTxnOperator(gomock.NewController(t))
 			txnOperator.EXPECT().TxnOptions().Return(txn.TxnOptions{CN: sid}).AnyTimes()
+			mp := mpool.MustNewZeroNoFixed()
+			defer mpool.DeleteMPool(mp)
 
 			executor := executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) {
+				if sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')" {
+					result := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, mp)
+					result.NewBatchWithRowCount(1)
+					assert.NoError(t, executor.AppendStringRows(result, 0,
+						[]string{`{"method":"GETPROTOCOLVERSION","result":"cn-a:46"}`}))
+					return result.GetResult(), nil
+				}
 				return executor.Result{}, nil
 			}, txnOperator)
 

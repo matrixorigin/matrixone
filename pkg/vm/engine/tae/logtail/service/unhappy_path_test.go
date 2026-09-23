@@ -1181,6 +1181,20 @@ func TestNotifierDrainIsIdempotent(t *testing.T) {
 		"an event accepted after the final drain would leak its callback")
 }
 
+func TestNotifierDrainReleasesReadBarrierAdmission(t *testing.T) {
+	notifier := NewNotifier(context.Background(), 1)
+	var released atomic.Int32
+	require.NoError(t, notifier.NotifyReadBarrier(
+		t.Context(),
+		readBarrierEvent{release: func() { released.Add(1) }},
+	))
+
+	notifier.Drain()
+	notifier.Drain()
+	require.Equal(t, int32(1), released.Load(),
+		"a queued barrier must release end-to-end admission exactly once")
+}
+
 func TestSubscriptionWaitsForOrderedBootstrapEvent(t *testing.T) {
 	phaseOneCalled := make(chan struct{})
 	var phaseOneOnce sync.Once

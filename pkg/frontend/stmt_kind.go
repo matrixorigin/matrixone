@@ -90,6 +90,17 @@ func changesSessionCatalog(stmt tree.Statement, queryPlan *plan.Plan) bool {
 	return false
 }
 
+func isDataBranchStatement(stmt tree.Statement) bool {
+	switch stmt.(type) {
+	case *tree.DataBranchCreateTable, *tree.DataBranchCreateDatabase,
+		*tree.DataBranchDiff, *tree.DataBranchMerge, *tree.DataBranchPick,
+		*tree.DataBranchDeleteTable, *tree.DataBranchDeleteDatabase:
+		return true
+	default:
+		return false
+	}
+}
+
 func planChangesCatalog(queryPlan *plan.Plan) bool {
 	ddl := queryPlan.GetDdl()
 	if ddl == nil {
@@ -158,6 +169,17 @@ func NeedToBeCommittedInActiveTransaction(stmt tree.Statement) bool {
 	return IsCreateDropSequence(stmt) || IsAdministrativeStatement(stmt) || isLockTableStatement(stmt)
 }
 
+// isImplicitCommitStatement identifies statements whose MySQL-compatible
+// transaction boundary is handled by the statement executor.  TRUNCATE is
+// deliberately kept separate from IsDDL: MatrixOne supports transactional
+// execution for several other DDL statements, while TRUNCATE must commit the
+// preceding transaction before it is attempted and commit its own transaction
+// after it succeeds.
+func isImplicitCommitStatement(stmt tree.Statement) bool {
+	_, ok := stmt.(*tree.TruncateTable)
+	return ok
+}
+
 func isLockTableStatement(stmt tree.Statement) bool {
 	switch stmt.(type) {
 	case *tree.LockTableStmt:
@@ -210,7 +232,7 @@ func statementCanBeExecutedInUncommittedTransaction(
 	case *tree.CreateSequence: //Case1, Case3 above
 		return ses.IsBackgroundSession() || !ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), nil
 		//dml statement
-	case *tree.Insert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load, *tree.MoDump, *tree.DumpTable, *tree.LoadTable, *tree.ValuesStatement, *tree.Replace:
+	case *tree.Insert, *tree.MultiInsert, *tree.Update, *tree.Delete, *tree.Select, *tree.Load, *tree.MoDump, *tree.DumpTable, *tree.LoadTable, *tree.ValuesStatement, *tree.Replace:
 		return true, nil
 		//transaction
 	case *tree.BeginTransaction, *tree.CommitTransaction, *tree.RollbackTransaction, *tree.SavePoint, *tree.ReleaseSavePoint, *tree.RollbackToSavePoint:
@@ -259,6 +281,12 @@ func statementCanBeExecutedInUncommittedTransaction(
 	case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainFor, *tree.ExplainPhyPlan, *InternalCmdFieldList, *InternalCmdGetSnapshotTs, *InternalCmdGetDatabases, *InternalCmdGetMoIndexes, *InternalCmdGetDdl, *InternalCmdGetObject, *InternalCmdObjectList, *InternalCmdCheckSnapshotFlushed:
 		return true, nil
 	case *tree.PrepareStmt:
+		if isDataBranchStatement(st.Stmt) {
+			// PREPARE only records the frontend statement; it does not perform
+			// the data-branch operation or enter its transaction policy. EXECUTE
+			// rechecks the stored statement below.
+			return true, nil
+		}
 		return statementCanBeExecutedInUncommittedTransaction(ctx, ses, st.Stmt)
 	case *tree.PrepareString:
 		return preparedSQLCanBeExecutedInUncommittedTransaction(ctx, ses, st.Sql)
@@ -349,5 +377,8 @@ func preparedSQLCanBeExecutedInUncommittedTransaction(
 		return false, err
 	}
 	defer preStmt.Free()
+	if isDataBranchStatement(preStmt) {
+		return true, nil
+	}
 	return statementCanBeExecutedInUncommittedTransaction(ctx, ses, preStmt)
 }

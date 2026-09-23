@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -199,6 +200,14 @@ type Scope struct {
 	// branch receiver is exhausted, so an outer LIMIT can leave later branches
 	// completely unstarted.
 	LazyPreScopes bool
+	// lazyRemote* pins one activated lazy branch to its own remote allocation
+	// generation. Deferred branches must not register or inflate this topology.
+	lazyRemoteFragmentCounts map[string]uint32
+	lazyRemoteExecutionID    uuid.UUID
+	// ConcurrentPreScopes forces producer/consumer concurrency for runtime
+	// scope trees whose bounded receiver channels would deadlock under the TP
+	// query's sequential fast path.
+	ConcurrentPreScopes bool
 	// parallelGenerations are execution-created scope trees retained only so
 	// post-run physical-plan analysis can observe their real DOP and stats.
 	// Compile.Reset releases the previous execution's trees before the template
@@ -307,12 +316,34 @@ type Compile struct {
 
 	// proc stores the execution context.
 	proc *process.Process
-	// reusePlanSnapshot is set only when a retry recompiles pipelines from the
-	// same logical plan. Such a retry must retain the plan's original binding
-	// snapshot even if RC lock handling advanced the transaction snapshot.
-	reusePlanSnapshot bool
+	// planSnapshotTS is owned by the compiled plan generation, not by proc.
+	// A prepared Compile may be reset onto a newer transaction process while
+	// retaining the physical plan built at this timestamp.
+	planSnapshotTS    timestamp.Timestamp
+	hasPlanSnapshotTS bool
+	// planGenerationReused is true only when this execution admitted an
+	// existing session/prepared generation. A definition rebuild clears it;
+	// data-only retries retain it with the same logical generation.
+	planGenerationReused bool
+	// stringShuffleHashAlgorithm is selected once per execution. Retries keep
+	// it, while a prepared pipeline's next Reset selects again from the rollout
+	// gate. This prevents equal keys from changing owners mid-query.
+	stringShuffleHashAlgorithm       process.StringShuffleHashAlgorithm
+	stringShuffleHashAlgorithmFrozen bool
+	// resultMetadataFrozen is set once a streaming consumer has materialized or
+	// sent the current result schema. A definition retry may continue only when
+	// the rebuilt logical plan exposes identical result metadata.
+	resultMetadataFrozen bool
+	// planGenerationRebuilt is sticky for this Compile. Once a retry rebuilds
+	// its logical plan, any frontend-owned prepared plan or physical topology
+	// from the previous generation must not be reused.
+	planGenerationRebuilt bool
 	// runSqlToken tracks the current statement in txn operator coordination.
 	runSqlToken uint64
+	// sequenceState is the frontend-visible sequence state captured at the
+	// beginning of this statement. It is restored before a retry generation so
+	// a failed attempt cannot publish stale CURRVAL/LASTVAL values.
+	sequenceState sequenceStatementState
 	// TxnOffset read starting offset position within the transaction during the execute current statement
 	TxnOffset int
 
@@ -325,6 +356,14 @@ type Compile struct {
 	schedulingAttempt     schedule.TraceAttemptID
 	// ast
 	stmt tree.Statement
+	// foundRowsOwnerNode is the final result node allowed to publish the
+	// SQL_CALC_FOUND_ROWS count. Nested LIMIT/OFFSET nodes are not owners.
+	foundRowsOwnerNode *plan.Node
+	// materializedSQLSelectLimitOwner is the exact final-result node on which
+	// materializeSQLSelectLimit temporarily installed the session row cap.
+	// Keeping its identity avoids inferring top-level ownership from arbitrary
+	// LIMIT/OFFSET nodes introduced by nested queries or optimizer rewrites.
+	materializedSQLSelectLimitOwner *plan.Node
 
 	counterSet *perfcounter.CounterSet
 
@@ -345,19 +384,33 @@ type Compile struct {
 
 	lockMeta   *LockMeta
 	lockTables map[uint64]*plan.LockTarget
+	// loadUniqueIndexPromotion is coordinator-local execution state shared only
+	// with physical retry compiles. It is never serialized into a remote scope or
+	// written back into the canonical logical plan.
+	loadUniqueIndexPromotion      *loadUniqueIndexPromotionState
+	loadUniqueIndexPromotionOwner bool
 
+	// Lazy scopes may register folds while another scope evaluates block filters.
+	// Protect both the registry and its mutable executors for the whole operation.
+	filterExprMu   sync.Mutex
 	filterExprExes []colexec.ExpressionExecutor
 
-	// compiledRightSingleNodes records semantic right-SINGLE nodes actually
-	// visited by compilePlanScope. It is statement-local and remains empty for
-	// queries without right-SINGLE joins.
-	compiledRightSingleNodes []int32
+	// compiledLocalRuntimeFilterNodes records SINGLE nodes with current-CN
+	// runtime-filter producers which were actually visited by compilePlanScope.
+	// It is statement-local and excludes physically pruned subtrees.
+	compiledLocalRuntimeFilterNodes []int32
 
 	needLockMeta bool
 	needBlock    bool
 	isPrepare    bool
-	disableRetry bool
-	isInternal   bool
+	// Immutable PREPARE-time floor, inherited by every physical generation.
+	groupConcatMaxLenFloor uint64
+	disableRetry           bool
+	isInternal             bool
+	// temporaryDDLInExecutorTxn keeps temporary CREATE/DROP in the transaction
+	// owned by the SQL executor. It is intentionally separate from isInternal,
+	// which also controls routing and other execution policy.
+	temporaryDDLInExecutorTxn bool
 	// resourceAttemptOwnerEligible is set only for the top-level statement
 	// Compile. The statement root still arbitrates the single actual owner.
 	resourceAttemptOwnerEligible bool
@@ -376,6 +429,7 @@ type Compile struct {
 
 	adjustTableExtraFunc     func(*api.SchemaExtra) error
 	disableDropAutoIncrement bool
+	skipDataBranchReclaim    bool
 	keepAutoIncrement        uint64
 	ignorePublish            bool
 	ignoreCheckExperimental  bool

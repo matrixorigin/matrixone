@@ -58,12 +58,12 @@ a    b
 deallocate prepare stmt1;
 drop table t1;
 create table t1(a timestamp(6));
-prepare stmt1 from "insert into t1 values (current_timestamp())";
+prepare stmt1 from "insert into t1 values (current_timestamp(6)), (current_timestamp(6))";
 execute stmt1;
-execute stmt1;
-select count(*) from (select distinct a from t1) t;
-count(*)
-1
+select count(*), count(distinct a) from t1;
+count(*)    count(distinct a)
+2    1
+deallocate prepare stmt1;
 drop table t1;
 prepare stmt2 from 'select @var_t1';
 set @var_t1 = 0;

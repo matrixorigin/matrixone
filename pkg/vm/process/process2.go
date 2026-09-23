@@ -109,10 +109,12 @@ func NewTopProcess(
 // This is used for the compile-process, which doesn't need to pass the context.
 func (proc *Process) NewNoContextChildProc(dataEntryCount int) *Process {
 	child := &Process{
-		Base:    proc.Base,
-		Session: proc.Session,
+		Base:        proc.Base,
+		Session:     proc.Session,
+		WarningSink: proc.WarningSink,
 	}
 	child.CopyPlanSnapshotFrom(proc)
+	child.CopyStringShuffleHashAlgorithmFrom(proc)
 
 	if dataEntryCount > 0 {
 		child.Reg.MergeReceivers = make([]*WaitRegister, dataEntryCount)
@@ -127,10 +129,12 @@ func (proc *Process) NewNoContextChildProc(dataEntryCount int) *Process {
 // channelBufferSize and nilbatchCnt is the extra information for Reg.
 func (proc *Process) NewNoContextChildProcWithChannel(dataEntryCount int, channelBufferSize []int32, nilbatchCnt []int32) *Process {
 	child := &Process{
-		Base:    proc.Base,
-		Session: proc.Session,
+		Base:        proc.Base,
+		Session:     proc.Session,
+		WarningSink: proc.WarningSink,
 	}
 	child.CopyPlanSnapshotFrom(proc)
+	child.CopyStringShuffleHashAlgorithmFrom(proc)
 
 	if dataEntryCount > 0 {
 		child.Reg.MergeReceivers = make([]*WaitRegister, dataEntryCount)
@@ -224,6 +228,7 @@ func (proc *Process) ResetQueryContext() {
 		proc.Base.sqlContext.queryCancel()
 		proc.Base.sqlContext.queryCancel = nil
 	}
+	proc.ResetGroupConcatInputRowCounters()
 	proc.doPrepareForRunningWithoutPipeline()
 }
 

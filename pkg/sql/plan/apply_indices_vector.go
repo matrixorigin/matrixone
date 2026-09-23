@@ -15,11 +15,62 @@
 package plan
 
 import (
+	"encoding/json"
+	"strconv"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
+
+func decodeVectorIndexAlgoParams(value string) (map[string]json.RawMessage, error) {
+	var params map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(value), &params); err != nil {
+		return nil, err
+	}
+	return params, nil
+}
+
+func vectorIndexStringParam(params map[string]json.RawMessage, key string) (string, bool) {
+	raw, ok := params[key]
+	if !ok {
+		return "", false
+	}
+	var value *string
+	if err := json.Unmarshal(raw, &value); err != nil || value == nil {
+		return "", false
+	}
+	return *value, true
+}
+
+// vectorIndexInt64Param accepts the canonical quoted representation and the
+// legacy JSON-number representation used by older IVF metadata.
+func vectorIndexInt64Param(params map[string]json.RawMessage, key string) (int64, bool) {
+	raw, ok := params[key]
+	if !ok {
+		return 0, false
+	}
+
+	var text string
+	if err := json.Unmarshal(raw, &text); err == nil {
+		value, err := strconv.ParseInt(text, 10, 64)
+		if err != nil {
+			return 0, false
+		}
+		return value, true
+	}
+
+	var number json.Number
+	if err := json.Unmarshal(raw, &number); err != nil || number == "" {
+		return 0, false
+	}
+	value, err := strconv.ParseInt(number.String(), 10, 64)
+	if err != nil {
+		return 0, false
+	}
+	return value, true
+}
 
 type vectorSortContext struct {
 	projNode      *plan.Node
@@ -34,8 +85,10 @@ type vectorSortContext struct {
 	resultOffset  *plan.Expr
 	rankOption    *plan.RankOption
 
-	providerNodeID int32
-	vecArgExpr     *plan.Expr
+	providerNodeID   int32
+	vecArgExpr       *plan.Expr
+	membershipNodeID int32 // existing SEMI JOIN that filters the indexed table before Top-K
+	hasMembership    bool
 }
 
 func (builder *QueryBuilder) resolveScanNodeWithIndex(node *plan.Node, depth int32) *plan.Node {
@@ -157,17 +210,19 @@ func (builder *QueryBuilder) buildVectorSortContextFrom(projNode, sortNode *plan
 	}
 
 	return &vectorSortContext{
-		projNode:      projNode,
-		sortNode:      sortNode,
-		scanNode:      scanNode,
-		childNode:     childNode,
-		orderExpr:     orderExpr,
-		distFnExpr:    distFnExpr,
-		sortDirection: sortNode.OrderBy[0].Flag,
-		limit:         candidateLimit,
-		resultLimit:   DeepCopyExpr(limit),
-		resultOffset:  DeepCopyExpr(offset),
-		rankOption:    rankOption,
+		projNode:         projNode,
+		sortNode:         sortNode,
+		scanNode:         scanNode,
+		childNode:        childNode,
+		orderExpr:        orderExpr,
+		distFnExpr:       distFnExpr,
+		sortDirection:    sortNode.OrderBy[0].Flag,
+		limit:            candidateLimit,
+		resultLimit:      DeepCopyExpr(limit),
+		resultOffset:     DeepCopyExpr(offset),
+		rankOption:       rankOption,
+		providerNodeID:   -1,
+		membershipNodeID: -1,
 	}
 }
 
@@ -177,11 +232,17 @@ func (builder *QueryBuilder) buildVectorSortContextThroughJoin(projNode *plan.No
 		return nil
 	}
 	joinNode, childNode := builder.resolveJoinNodeForVectorSort(sortNode)
-	if joinNode == nil || len(joinNode.Children) != 2 || !isVectorProviderJoin(joinNode) {
+	if joinNode == nil || len(joinNode.Children) != 2 {
 		return nil
 	}
 
 	orderExpr := sortNode.OrderBy[0].Expr
+	if joinNode.JoinType == plan.Node_SEMI {
+		return builder.buildVectorSortContextThroughMembershipJoin(projNode, joinNode, childNode, sortNode, orderExpr)
+	}
+	if !isVectorProviderJoin(joinNode) {
+		return nil
+	}
 	distFnExpr := orderExpr.GetF()
 	if distFnExpr == nil && childNode != nil {
 		orderCol := orderExpr.GetCol()
@@ -225,20 +286,83 @@ func (builder *QueryBuilder) buildVectorSortContextThroughJoin(projNode *plan.No
 	}
 
 	return &vectorSortContext{
-		projNode:       projNode,
-		sortNode:       sortNode,
-		scanNode:       scanNode,
-		childNode:      childNode,
-		orderExpr:      orderExpr,
-		distFnExpr:     distFnExpr,
-		sortDirection:  sortNode.OrderBy[0].Flag,
-		limit:          candidateLimit,
-		resultLimit:    DeepCopyExpr(limit),
-		resultOffset:   DeepCopyExpr(offset),
-		rankOption:     rankOption,
-		providerNodeID: providerNodeID,
-		vecArgExpr:     vecArgExpr,
+		projNode:         projNode,
+		sortNode:         sortNode,
+		scanNode:         scanNode,
+		childNode:        childNode,
+		orderExpr:        orderExpr,
+		distFnExpr:       distFnExpr,
+		sortDirection:    sortNode.OrderBy[0].Flag,
+		limit:            candidateLimit,
+		resultLimit:      DeepCopyExpr(limit),
+		resultOffset:     DeepCopyExpr(offset),
+		rankOption:       rankOption,
+		providerNodeID:   providerNodeID,
+		vecArgExpr:       vecArgExpr,
+		membershipNodeID: -1,
 	}
+}
+
+// buildVectorSortContextThroughMembershipJoin recognizes an indexed table on
+// the left side of a SEMI JOIN. The rewrite uses a copy of that join to produce
+// an exact runtime membership filter before the vector candidate limit.
+func (builder *QueryBuilder) buildVectorSortContextThroughMembershipJoin(
+	projNode, joinNode, childNode, sortNode *plan.Node, orderExpr *plan.Expr,
+) *vectorSortContext {
+	var scanNode *plan.Node
+	for _, childID := range joinNode.Children {
+		candidate := builder.directScanWithVectorIndex(builder.qry.Nodes[childID])
+		if candidate != nil {
+			scanNode = candidate
+			break
+		}
+	}
+	if scanNode == nil || scanNode.TableDef == nil || orderExpr == nil || joinNode.Children[0] != scanNode.NodeId || len(joinNode.OnList) == 0 {
+		return nil
+	}
+	if !hasIvfFlatIndex(scanNode.TableDef) {
+		return nil
+	}
+	distFnExpr := orderExpr.GetF()
+	if distFnExpr == nil && childNode != nil {
+		col := orderExpr.GetCol()
+		if col == nil || col.ColPos < 0 || int(col.ColPos) >= len(childNode.ProjectList) {
+			return nil
+		}
+		distFnExpr = childNode.ProjectList[col.ColPos].GetF()
+	}
+	if distFnExpr == nil || len(distFnExpr.Args) != 2 || !exprListRefsOnlyTag(distFnExpr.Args, scanNode.BindingTags[0]) {
+		return nil
+	}
+	limit, offset, rankOption := pickVectorPagination(sortNode, scanNode, projNode)
+	if limit == nil {
+		return nil
+	}
+	candidateLimit, ok := buildCandidateLimit(limit, offset)
+	if !ok {
+		return nil
+	}
+	return &vectorSortContext{
+		projNode: projNode, sortNode: sortNode, scanNode: scanNode, childNode: childNode,
+		orderExpr: orderExpr, distFnExpr: distFnExpr, sortDirection: sortNode.OrderBy[0].Flag,
+		limit: candidateLimit, resultLimit: DeepCopyExpr(limit), resultOffset: DeepCopyExpr(offset),
+		rankOption: rankOption, providerNodeID: -1, membershipNodeID: joinNode.NodeId, hasMembership: true,
+	}
+}
+
+func exprListRefsOnlyTag(exprs []*plan.Expr, tag int32) bool {
+	for _, expr := range exprs {
+		if expr == nil {
+			continue
+		}
+		if col := expr.GetCol(); col != nil && col.RelPos != tag {
+			return false
+		}
+		if fn := expr.GetF(); fn != nil && !exprListRefsOnlyTag(fn.Args, tag) {
+			return false
+		}
+	}
+	return true
 }
 
 func (builder *QueryBuilder) resolveJoinNodeForVectorSort(sortNode *plan.Node) (*plan.Node, *plan.Node) {
@@ -311,6 +435,18 @@ func (builder *QueryBuilder) tryJoinThroughVectorSide(
 		return nil, nil
 	}
 	return scanNode, vecArgExpr
+}
+
+func hasIvfFlatIndex(tableDef *plan.TableDef) bool {
+	if tableDef == nil {
+		return false
+	}
+	for _, idx := range tableDef.Indexes {
+		if idx != nil && idx.IndexAlgo == catalog.MoIndexIvfFlatAlgo.ToString() {
+			return true
+		}
+	}
+	return false
 }
 
 func (builder *QueryBuilder) directScanWithVectorIndex(node *plan.Node) *plan.Node {
@@ -947,6 +1083,23 @@ func (builder *QueryBuilder) getDistRangeFromFilters(
 // false for a non-literal bound (including the first one) so the caller keeps
 // the predicate as a residual filter.
 func mergeUpperBound(dr *plan.DistRange, bound *plan.Expr, boundType plan.BoundType) bool {
+	if _, isLit := plan.GetLiteralFloat64(bound); !isLit {
+		// A bound that is not a literal is pushable only when it is constant for the
+		// whole execution -- a prepared '?' -- and only into an empty slot, where there
+		// is no tightness to compare. vectorscan constant-folds it before the scan and
+		// fails loudly if it does not reduce to a number.
+		//
+		// A per-ROW expression (a column reference) must never be peeled: it has no
+		// single value to fold, so it stays a residual filter. That is the #25639
+		// "first bound accepted without validation" case, and the reason this tests the
+		// expression kind rather than just "not a literal".
+		if dr.UpperBoundType != plan.BoundType_UNBOUNDED || !isExecutionConstantExpr(bound) {
+			return false
+		}
+		dr.UpperBoundType = boundType
+		dr.UpperBound = bound
+		return true
+	}
 	newVal, ok := plan.GetLiteralFloat64(bound)
 	if !ok {
 		return false
@@ -970,6 +1123,23 @@ func mergeUpperBound(dr *plan.DistRange, bound *plan.Expr, boundType plan.BoundT
 // mergeLowerBound folds a new lower bound into dr, keeping the tighter (larger,
 // or exclusive on an equal value) bound. See mergeUpperBound.
 func mergeLowerBound(dr *plan.DistRange, bound *plan.Expr, boundType plan.BoundType) bool {
+	if _, isLit := plan.GetLiteralFloat64(bound); !isLit {
+		// A bound that is not a literal is pushable only when it is constant for the
+		// whole execution -- a prepared '?' -- and only into an empty slot, where there
+		// is no tightness to compare. vectorscan constant-folds it before the scan and
+		// fails loudly if it does not reduce to a number.
+		//
+		// A per-ROW expression (a column reference) must never be peeled: it has no
+		// single value to fold, so it stays a residual filter. That is the #25639
+		// "first bound accepted without validation" case, and the reason this tests the
+		// expression kind rather than just "not a literal".
+		if dr.LowerBoundType != plan.BoundType_UNBOUNDED || !isExecutionConstantExpr(bound) {
+			return false
+		}
+		dr.LowerBoundType = boundType
+		dr.LowerBound = bound
+		return true
+	}
 	newVal, ok := plan.GetLiteralFloat64(bound)
 	if !ok {
 		return false
@@ -1288,6 +1458,25 @@ func exprCallsFunc(expr *plan.Expr, fnName string) bool {
 				return true
 			}
 		}
+	case *plan.Expr_W:
+		// A MATCH inside a window spec (function arg, PARTITION BY, ORDER BY) must be detected
+		// too, mirroring replaceScoreFnInExprBy's Expr_W traversal (#28974). Guard e.W like that
+		// sibling does, so a partially-built Expr_W with a nil spec does not panic here.
+		if e.W != nil {
+			if exprCallsFunc(e.W.WindowFunc, fnName) {
+				return true
+			}
+			for _, p := range e.W.PartitionBy {
+				if exprCallsFunc(p, fnName) {
+					return true
+				}
+			}
+			for _, o := range e.W.OrderBy {
+				if o != nil && exprCallsFunc(o.Expr, fnName) {
+					return true
+				}
+			}
+		}
 	}
 	return false
 }
@@ -1314,6 +1503,22 @@ func replaceScoreFnInExprBy(expr *plan.Expr, rewrite func(*plan.Function) *plan.
 	case *plan.Expr_List:
 		for i, sub := range e.List.List {
 			e.List.List[i] = replaceScoreFnInExprBy(sub, rewrite)
+		}
+	case *plan.Expr_W:
+		// A window spec carries its function and OVER partition/order-by as nested exprs. Recurse so a
+		// served MATCH inside a window function argument or its OVER order-by is rewritten to the score
+		// column too -- reached only from the WINDOW fulltext anchor; aggregate/projection exprs never
+		// hold an Expr_W, so existing callers are unaffected.
+		if e.W != nil {
+			e.W.WindowFunc = replaceScoreFnInExprBy(e.W.WindowFunc, rewrite)
+			for i, p := range e.W.PartitionBy {
+				e.W.PartitionBy[i] = replaceScoreFnInExprBy(p, rewrite)
+			}
+			for i, o := range e.W.OrderBy {
+				if o != nil {
+					e.W.OrderBy[i].Expr = replaceScoreFnInExprBy(o.Expr, rewrite)
+				}
+			}
 		}
 	}
 	return expr

@@ -24,8 +24,8 @@ import (
 
 const maxPartitionTopN = uint64(1024)
 
-// PartitionTopN annotates the dedicated PARTITION child of a ROW_NUMBER
-// window when the post-window predicate proves a small, literal upper bound.
+// PartitionTopN annotates the dedicated PARTITION child of a ROW_NUMBER or
+// RANK window when the post-window predicate proves a small, literal upper bound.
 // Prepared plans deliberately skip this rule: their parameter values are not
 // part of the reusable logical contract.
 type PartitionTopN struct {
@@ -53,7 +53,7 @@ func (r *PartitionTopN) Apply(node *plan.Node, qry *plan.Query, _ *process.Proce
 		return
 	}
 	windowFunctionID, _ := function.DecodeOverloadID(window.WindowFunc.GetF().Func.Obj)
-	if windowFunctionID != function.ROW_NUMBER {
+	if windowFunctionID != function.ROW_NUMBER && windowFunctionID != function.RANK {
 		return
 	}
 	for _, expr := range window.PartitionBy {
@@ -92,6 +92,7 @@ func (r *PartitionTopN) Apply(node *plan.Node, qry *plan.Query, _ *process.Proce
 		spec.Expr = proto.Clone(spec.Expr).(*plan.Expr)
 	}
 	child.PartitionByCount = int32(len(window.PartitionBy))
+	child.PartitionTopNWithTies = windowFunctionID == function.RANK
 	for _, spec := range window.OrderBy {
 		child.OrderBy = append(child.OrderBy, proto.Clone(spec).(*plan.OrderBySpec))
 	}
@@ -139,6 +140,7 @@ func rankLowerBoundResidual(expr *plan.Expr, tag, idx int32) bool {
 }
 
 func integerLiteral(expr *plan.Expr) bool {
+	expr = implicitCastSource(expr)
 	lit := expr.GetLit()
 	if lit == nil || lit.Isnull {
 		return false
@@ -147,6 +149,10 @@ func integerLiteral(expr *plan.Expr) bool {
 	case *plan.Literal_I8Val, *plan.Literal_I16Val, *plan.Literal_I32Val, *plan.Literal_I64Val,
 		*plan.Literal_U8Val, *plan.Literal_U16Val, *plan.Literal_U32Val, *plan.Literal_U64Val:
 		return true
+	case *plan.Literal_Decimal128Val:
+		// An implicit common-type cast can materialize an integer literal as
+		// DECIMAL(38, 0). It remains a safe residual lower bound.
+		return expr.Typ.Scale == 0
 	default:
 		return false
 	}
@@ -198,6 +204,7 @@ func rankUpperBound(expr *plan.Expr, tag, idx int32) (uint64, bool, bool) {
 }
 
 func nonNegativeInteger(expr *plan.Expr) (uint64, bool) {
+	expr = implicitCastSource(expr)
 	lit := expr.GetLit()
 	if lit == nil || lit.Isnull {
 		return 0, false
@@ -225,8 +232,23 @@ func nonNegativeInteger(expr *plan.Expr) (uint64, bool) {
 }
 
 func isRankRef(expr *plan.Expr, tag, idx int32) bool {
+	expr = implicitCastSource(expr)
 	col := expr.GetCol()
 	return col != nil && col.RelPos == tag && col.ColPos == idx
+}
+
+func implicitCastSource(expr *plan.Expr) *plan.Expr {
+	// The binder may insert an implicit cast when ROW_NUMBER's unsigned
+	// return type is compared with a signed literal.  That cast does not alter
+	// the rank reference or literal value used by the bounded-partition proof.
+	// Explicit casts remain a semantic boundary and must not be folded.
+	if fn := expr.GetF(); fn != nil && fn.Func != nil && len(fn.Args) == 2 {
+		fid, overload := function.DecodeOverloadID(fn.Func.Obj)
+		if fid == function.CAST && overload == 0 {
+			return fn.Args[0]
+		}
+	}
+	return expr
 }
 
 func referencesRank(expr *plan.Expr, tag, idx int32) bool {

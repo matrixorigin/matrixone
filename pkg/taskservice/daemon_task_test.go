@@ -94,7 +94,26 @@ func (r *mockErrActiveRoutine) Restart() error { return r.restartErr }
 
 type mockFuncActiveRoutine struct {
 	resume  func() error
+	cancel  func() error
 	restart func() error
+}
+
+type claimTrackingActiveRoutine struct {
+	mockFuncActiveRoutine
+	mu     sync.Mutex
+	claims []task.DaemonTask
+}
+
+func (r *claimTrackingActiveRoutine) UpdateDaemonTaskClaim(claim task.DaemonTask) {
+	r.mu.Lock()
+	r.claims = append(r.claims, claim)
+	r.mu.Unlock()
+}
+
+func (r *claimTrackingActiveRoutine) latestClaim() task.DaemonTask {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.claims[len(r.claims)-1]
 }
 
 func (r *mockFuncActiveRoutine) Pause() error { return nil }
@@ -104,7 +123,12 @@ func (r *mockFuncActiveRoutine) Resume() error {
 	}
 	return r.resume()
 }
-func (r *mockFuncActiveRoutine) Cancel() error { return nil }
+func (r *mockFuncActiveRoutine) Cancel() error {
+	if r.cancel == nil {
+		return nil
+	}
+	return r.cancel()
+}
 func (r *mockFuncActiveRoutine) Restart() error {
 	if r.restart == nil {
 		return nil
@@ -117,9 +141,21 @@ type serviceWithDaemonHook struct {
 	mu             sync.RWMutex
 	queryErr       error
 	updateErr      error
+	heartbeatErr   error
 	updateFn       func(context.Context, []task.DaemonTask, ...Condition) (int, error)
+	updateErrorFn  func(context.Context, task.DaemonTask, bool) (int, error)
 	updateStatusFn func(context.Context, uint64, task.TaskStatus, time.Time, time.Time, ...Condition) (int, error)
 	queryCalls     atomic.Int64
+}
+
+func (s *serviceWithDaemonHook) HeartbeatDaemonTask(ctx context.Context, tk task.DaemonTask) error {
+	s.mu.RLock()
+	err := s.heartbeatErr
+	s.mu.RUnlock()
+	if err != nil {
+		return err
+	}
+	return s.TaskService.HeartbeatDaemonTask(ctx, tk)
 }
 
 func (s *serviceWithDaemonHook) QueryDaemonTask(ctx context.Context, conds ...Condition) ([]task.DaemonTask, error) {
@@ -148,6 +184,25 @@ func (s *serviceWithDaemonHook) UpdateDaemonTask(ctx context.Context, tasks []ta
 		return 0, updateErr
 	}
 	return s.TaskService.UpdateDaemonTask(ctx, tasks, conds...)
+}
+
+func (s *serviceWithDaemonHook) UpdateDaemonTaskError(ctx context.Context, claim task.DaemonTask, release bool) (int, error) {
+	s.mu.RLock()
+	fn, err := s.updateErrorFn, s.updateErr
+	s.mu.RUnlock()
+	if fn != nil {
+		return fn(ctx, claim, release)
+	}
+	if err != nil {
+		return 0, err
+	}
+	return s.TaskService.UpdateDaemonTaskError(ctx, claim, release)
+}
+
+func (s *serviceWithDaemonHook) setUpdateErrorFn(fn func(context.Context, task.DaemonTask, bool) (int, error)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.updateErrorFn = fn
 }
 
 func (s *serviceWithDaemonHook) UpdateDaemonTaskStatus(
@@ -201,6 +256,12 @@ func (s *serviceWithDaemonHook) setUpdateStatusFn(
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.updateStatusFn = fn
+}
+
+func (s *serviceWithDaemonHook) setHeartbeatErr(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.heartbeatErr = err
 }
 
 func TestDaemonTaskPollResumesAfterTaskFrameworkReenabled(t *testing.T) {
@@ -340,9 +401,9 @@ func TestStartTaskHandleBranches(t *testing.T) {
 
 	// run executor and hit setDaemonTaskError branch
 	errorPersisted := make(chan struct{})
-	hook.setUpdateFn(func(ctx context.Context, tasks []task.DaemonTask, conds ...Condition) (int, error) {
-		updated, err := hook.TaskService.UpdateDaemonTask(ctx, tasks, conds...)
-		if err == nil && len(tasks) == 1 && tasks[0].Details.Error == "executor failed" {
+	hook.setUpdateErrorFn(func(ctx context.Context, claim task.DaemonTask, release bool) (int, error) {
+		updated, err := hook.TaskService.UpdateDaemonTaskError(ctx, claim, release)
+		if err == nil && claim.Details.Error == "executor failed" {
 			close(errorPersisted)
 		}
 		return updated, err
@@ -358,7 +419,7 @@ func TestStartTaskHandleBranches(t *testing.T) {
 	})
 	require.NoError(t, start3.Handle(context.Background()))
 	<-errorPersisted
-	hook.setUpdateFn(nil)
+	hook.setUpdateErrorFn(nil)
 	stored = mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt3.ID))
 	require.Equal(t, task.TaskStatus_Running, stored[0].TaskStatus)
 	require.Equal(t, "executor failed", stored[0].Details.Error)
@@ -545,6 +606,272 @@ func TestResumeTaskKeepsRequestUntilExecutorRecoverySucceeds(t *testing.T) {
 	require.Equal(t, task.TaskStatus_Canceled, tasks[0].TaskStatus)
 }
 
+func TestLifecyclePublishesClaimBeforeReplacementAndHeartbeat(t *testing.T) {
+	tests := []struct {
+		name   string
+		status task.TaskStatus
+		run    func(*claimTrackingActiveRoutine, *taskRunner, *daemonTask) error
+	}{
+		{
+			name:   "resume",
+			status: task.TaskStatus_ResumeRequested,
+			run: func(_ *claimTrackingActiveRoutine, r *taskRunner, dt *daemonTask) error {
+				return newResumeTask(r, dt).Handle(context.Background())
+			},
+		},
+		{
+			name:   "restart",
+			status: task.TaskStatus_RestartRequested,
+			run: func(_ *claimTrackingActiveRoutine, r *taskRunner, dt *daemonTask) error {
+				return newRestartTask(r, dt).Handle(context.Background())
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			r, store := newDaemonHandleTestRunner(t)
+			initial := newDaemonTaskForTest(1, test.status, r.runnerID)
+			initial.Metadata.Executor = task.TaskCode_InitCdcStableEpoch
+			initial.LastRun = time.Now().Add(-time.Minute)
+			initial.LastHeartbeat = initial.LastRun
+			mustAddTestDaemonTask(t, store, 1, initial)
+
+			tracker := &claimTrackingActiveRoutine{}
+			verifyPublished := func() error {
+				claim := tracker.latestClaim()
+				require.True(t, claim.LastRun.After(initial.LastRun))
+				return r.service.HeartbeatDaemonTask(context.Background(), claim)
+			}
+			tracker.resume = verifyPublished
+			tracker.restart = verifyPublished
+			routine := ActiveRoutine(tracker)
+			local := &daemonTask{task: initial}
+			local.activeRoutine.Store(&routine)
+			r.addDaemonTask(local)
+
+			// Force a heartbeat after the durable CAS but before publishClaim.
+			// The old local snapshot must not cancel admission in this gap.
+			hook := &serviceWithDaemonHook{TaskService: r.service}
+			r.service = hook
+			hook.setUpdateFn(func(ctx context.Context, tasks []task.DaemonTask, conds ...Condition) (int, error) {
+				n, err := hook.TaskService.UpdateDaemonTask(ctx, tasks, conds...)
+				if n == 1 && err == nil {
+					queries := hook.queryCalls.Load()
+					require.NoError(t, test.run(tracker, r, local))
+					require.Equal(t, queries, hook.queryCalls.Load(), "duplicate admission must not wait or republish a claim")
+					r.doSendHeartbeat(ctx)
+					require.True(t, r.exists(initial.ID))
+					require.False(t, local.claimLost.Load())
+				}
+				return n, err
+			})
+			require.NoError(t, test.run(tracker, r, local))
+			require.False(t, r.relinquishDaemonClaim(local, initial), "late heartbeat must not cancel the replacement on the same pointer")
+			stored := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, initial.ID))[0]
+			require.Equal(t, task.TaskStatus_Running, stored.TaskStatus)
+			require.Equal(t, stored.LastRun, tracker.latestClaim().LastRun)
+			require.Equal(t, stored.LastRun, local.taskSnapshot().LastRun)
+
+			r.doSendHeartbeat(context.Background())
+			stored = mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, initial.ID))[0]
+			require.True(t, r.exists(initial.ID))
+			require.True(t, r.relinquishDaemonClaim(local, stored))
+			require.NoError(t, test.run(tracker, r, local))
+			require.True(t, local.claimLost.Load(), "a lost claim cannot readmit its cancelled routine")
+		})
+	}
+}
+
+func TestStableCDCHeartbeatFailureRecoveryAndSupersession(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	hook := &serviceWithDaemonHook{TaskService: r.service}
+	r.service = hook
+
+	claim := newDaemonTaskForTest(1, task.TaskStatus_Running, r.runnerID)
+	claim.Metadata.Executor = task.TaskCode_InitCdcStableEpoch
+	claim.LastRun = time.Now().Add(-time.Minute)
+	claim.LastHeartbeat = claim.LastRun
+	mustAddTestDaemonTask(t, store, 1, claim)
+
+	routine := newMockActiveRoutine()
+	active := ActiveRoutine(routine)
+	local := &daemonTask{task: claim}
+	local.activeRoutine.Store(&active)
+	r.addDaemonTask(local)
+
+	// A transient storage/network error is not ownership loss. The local
+	// generation stays registered and a recovered heartbeat renews its lease.
+	hook.setHeartbeatErr(errors.New("temporary taskservice failure"))
+	r.doSendHeartbeat(context.Background())
+	select {
+	case <-routine.cancelC:
+		t.Fatal("transient heartbeat failure cancelled the current generation")
+	default:
+	}
+	require.True(t, r.exists(claim.ID))
+
+	// The durable heartbeat is now stale while the original local executor is
+	// still healthy. If polling wins the race with the recovered heartbeat, the
+	// runner must not advance its own durable generation and strand both the old
+	// and replacement daemonTask objects.
+	candidates := r.startTasks(context.Background())
+	require.Len(t, candidates, 1)
+	selfTakeover := &daemonTask{task: candidates[0]}
+	started, err := r.startDaemonTask(context.Background(), selfTakeover, false)
+	require.NoError(t, err)
+	require.False(t, started)
+	stored := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, claim.ID))[0]
+	require.Equal(t, claim.LastRun, stored.LastRun)
+	published, ok := r.getDaemonTask(claim.ID)
+	require.True(t, ok)
+	require.Same(t, local, published)
+
+	hook.setHeartbeatErr(nil)
+	r.doSendHeartbeat(context.Background())
+	stored = mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, claim.ID))[0]
+	require.True(t, stored.LastHeartbeat.After(claim.LastHeartbeat))
+	require.True(t, r.exists(claim.ID))
+
+	// A different durable generation makes the old heartbeat return
+	// ErrInvalidTask. The old entry is removed before cancellation so it cannot
+	// keep the replacement lease alive or prevent a later local takeover.
+	superseding := stored
+	superseding.TaskRunner = "r2"
+	superseding.LastRun = nextDaemonClaimTime(stored.LastRun, time.Now())
+	superseding.LastHeartbeat = time.Now()
+	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{superseding})
+	r.doSendHeartbeat(context.Background())
+	select {
+	case <-routine.cancelC:
+	case <-time.After(time.Second):
+		t.Fatal("superseded stable CDC generation was not cancelled")
+	}
+	require.False(t, r.exists(claim.ID))
+
+	// Once the replacement lease becomes stale, normal startup can claim it and
+	// publish a new local heartbeat owner for the same task ID.
+	superseding.LastHeartbeat = time.Now().Add(-r.options.heartbeatTimeout - time.Second)
+	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{superseding})
+	replacement := &daemonTask{task: superseding}
+	started, err = r.startDaemonTask(context.Background(), replacement, false)
+	require.NoError(t, err)
+	require.True(t, started)
+	published, ok = r.getDaemonTask(claim.ID)
+	require.True(t, ok)
+	require.Same(t, replacement, published)
+}
+
+func TestStartDaemonTaskSerializesLocalAdmission(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	hook := &serviceWithDaemonHook{TaskService: r.service}
+	r.service = hook
+
+	dt := newDaemonTaskForTest(1, task.TaskStatus_Created, "")
+	dt.LastHeartbeat = time.Time{}
+	mustAddTestDaemonTask(t, store, 1, dt)
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	var updateCalls atomic.Int32
+	hook.setUpdateFn(func(ctx context.Context, tasks []task.DaemonTask, conds ...Condition) (int, error) {
+		if updateCalls.Add(1) == 1 {
+			close(entered)
+		}
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		}
+		return hook.TaskService.UpdateDaemonTask(ctx, tasks, conds...)
+	})
+
+	type startResult struct {
+		started bool
+		err     error
+	}
+	firstResult := make(chan startResult, 1)
+	first := &daemonTask{task: dt}
+	go func() {
+		started, err := r.startDaemonTask(context.Background(), first, false)
+		firstResult <- startResult{started: started, err: err}
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("first daemon admission did not reach durable CAS")
+	}
+
+	secondResult := make(chan startResult, 1)
+	go func() {
+		started, err := r.startDaemonTask(context.Background(), &daemonTask{task: dt}, false)
+		secondResult <- startResult{started: started, err: err}
+	}()
+	select {
+	case result := <-secondResult:
+		require.NoError(t, result.err)
+		require.False(t, result.started)
+	case <-time.After(time.Second):
+		t.Fatal("duplicate local admission waited behind durable storage")
+	}
+	require.Equal(t, int32(1), updateCalls.Load())
+
+	close(release)
+	result := <-firstResult
+	require.NoError(t, result.err)
+	require.True(t, result.started)
+	published, ok := r.getDaemonTask(dt.ID)
+	require.True(t, ok)
+	require.Same(t, first, published)
+}
+
+func TestStartDaemonTaskReleasesAdmissionAfterStorageError(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	hook := &serviceWithDaemonHook{TaskService: r.service}
+	r.service = hook
+
+	dt := newDaemonTaskForTest(1, task.TaskStatus_Created, "")
+	dt.LastHeartbeat = time.Time{}
+	mustAddTestDaemonTask(t, store, 1, dt)
+
+	hook.setUpdateErr(errors.New("task storage unavailable"))
+	started, err := r.startDaemonTask(context.Background(), &daemonTask{task: dt}, false)
+	require.Error(t, err)
+	require.False(t, started)
+
+	hook.setUpdateErr(nil)
+	replacement := &daemonTask{task: dt}
+	started, err = r.startDaemonTask(context.Background(), replacement, false)
+	require.NoError(t, err)
+	require.True(t, started)
+	published, ok := r.getDaemonTask(dt.ID)
+	require.True(t, ok)
+	require.Same(t, replacement, published)
+}
+
+func TestLegacyCDCHeartbeatFailureDoesNotCancel(t *testing.T) {
+	r, _ := newDaemonHandleTestRunner(t)
+	hook := &serviceWithDaemonHook{
+		TaskService:  r.service,
+		heartbeatErr: errors.New("taskservice partition"),
+	}
+	r.service = hook
+	dt := newDaemonTaskForTest(1, task.TaskStatus_Running, r.runnerID)
+	dt.Metadata.Executor = task.TaskCode_InitCdc
+	routine := newMockActiveRoutine()
+	active := ActiveRoutine(routine)
+	local := &daemonTask{task: dt}
+	local.activeRoutine.Store(&active)
+	r.addDaemonTask(local)
+
+	r.doSendHeartbeat(context.Background())
+	select {
+	case <-routine.cancelC:
+		t.Fatal("legacy CDC was cancelled by the stable ownership policy")
+	default:
+	}
+}
+
 func TestRestartTaskHandleBranchesDirect(t *testing.T) {
 	r, store := newDaemonHandleTestRunner(t)
 	hook := &serviceWithDaemonHook{TaskService: r.service}
@@ -684,7 +1011,7 @@ func TestRestartStartFailureDoesNotReleaseSupersedingControlRequest(t *testing.T
 	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{superseding})
 
 	r.releaseRestartClaim(
-		&daemonTask{task: claimed},
+		claimed,
 		errors.New("catalog transition unavailable"),
 	)
 	got := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, claimed.ID))
@@ -1057,7 +1384,7 @@ func TestSetDaemonTaskError(t *testing.T) {
 		dt := newDaemonTaskForTest(1, task.TaskStatus_Running, r.runnerID)
 		mustAddTestDaemonTask(t, store, 1, dt)
 
-		r.setDaemonTaskError(context.Background(), &daemonTask{task: dt}, errors.New("mock daemon error"))
+		r.setDaemonTaskError(context.Background(), dt, errors.New("mock daemon error"))
 		tasks := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, 1))
 		require.Len(t, tasks, 1)
 		require.Equal(t, "mock daemon error", tasks[0].Details.Error)
@@ -1084,7 +1411,7 @@ func TestSetDaemonTaskErrorDoesNotOverwriteSupersedingStateOrOwner(t *testing.T)
 			superseding.TaskStatus = test.status
 			superseding.TaskRunner = test.runner
 			mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{superseding})
-			r.setDaemonTaskError(context.Background(), &daemonTask{task: claimed}, errors.New("late start error"))
+			r.setDaemonTaskError(context.Background(), claimed, errors.New("late start error"))
 
 			got := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, claimed.ID))
 			require.Equal(t, test.status, got[0].TaskStatus)
@@ -1178,6 +1505,96 @@ func TestDispatchTaskHandleCoverBranches(t *testing.T) {
 		r.dispatchTaskHandle(context.Background())
 	}, WithRunnerParallelism(1),
 		WithRunnerFetchInterval(time.Millisecond))
+}
+
+func TestStableEpochCDCTaskRejectsLegacyRunnerBeforeClaim(t *testing.T) {
+	legacyRunner, store := newDaemonHandleTestRunner(t)
+
+	// Model a bounded snapshot at S after its first durable group, followed by
+	// a DELETE and a primary-key change before the owning new CN disappears.
+	target := map[int]string{1: "deleted-after-S"}
+	snapshotAtS := map[int]string{
+		1: "deleted-after-S",
+		2: "pk-before-change",
+		3: "unchanged",
+	}
+	sourceNow := map[int]string{
+		3:  "unchanged",
+		20: "pk-after-change",
+	}
+	watermark := ""
+	legacyExecuted := false
+	legacyRunner.RegisterExecutor(task.TaskCode_InitCdc, func(context.Context, task.Task) error {
+		legacyExecuted = true
+		// This is the unsafe old behavior: REPLACE the current snapshot without
+		// deleting keys retained by the partial snapshot at S.
+		for key, value := range sourceNow {
+			target[key] = value
+		}
+		watermark = "S2"
+		return nil
+	})
+
+	dt := newDaemonTaskForTest(1, task.TaskStatus_Running, "new-cn-at-S")
+	dt.Metadata.ID = "stable-epoch-handoff"
+	dt.Metadata.Executor = task.TaskCode_InitCdcStableEpoch
+	dt.LastHeartbeat = time.Now().Add(-legacyRunner.options.heartbeatTimeout - time.Second)
+	mustAddTestDaemonTask(t, store, 1, dt)
+
+	// An old binary has only TaskCode_InitCdc registered. Dispatch observes the
+	// stale task but cannot construct a handler, so no storage claim is made.
+	legacyCandidates := legacyRunner.startTasks(context.Background())
+	require.Len(t, legacyCandidates, 1)
+	_, err := legacyRunner.newDaemonTask(legacyCandidates[0])
+	require.ErrorContains(t, err, "executor with code 14 not exists")
+
+	legacyRunner.dispatchTaskHandle(context.Background())
+	require.Zero(t, len(legacyRunner.pendingTaskHandle))
+	require.False(t, legacyExecuted)
+	require.Equal(t, map[int]string{1: "deleted-after-S"}, target)
+	require.Empty(t, watermark)
+	stored := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+	require.Equal(t, "new-cn-at-S", stored[0].TaskRunner)
+
+	// A protocol-capable CN can claim the same stale task, replay S, and then
+	// apply the tail. This closes the handoff with exact target equality.
+	newRunner := NewTaskRunner(
+		"new-cn-retry",
+		legacyRunner.service,
+		func(string) bool { return true },
+		WithRunnerLogger(logutil.GetPanicLoggerWithLevel(zap.DebugLevel)),
+	).(*taskRunner)
+	t.Cleanup(newRunner.stopper.Stop)
+	done := make(chan struct{})
+	schedulerInjected := false
+	newRunner.RegisterExecutor(task.TaskCode_InitCdcStableEpoch, func(ctx context.Context, _ task.Task) error {
+		schedulerInjected = TaskExecutorTaskSchedulerFromContext(ctx) != nil
+		for key, value := range snapshotAtS {
+			target[key] = value
+		}
+		delete(target, 1)
+		delete(target, 2)
+		target[20] = "pk-after-change"
+		watermark = "S2"
+		close(done)
+		return nil
+	})
+
+	candidates := newRunner.startTasks(context.Background())
+	require.Len(t, candidates, 1)
+	taskRef, err := newRunner.newDaemonTask(candidates[0])
+	require.NoError(t, err)
+	require.NoError(t, newStartTask(newRunner, taskRef).Handle(context.Background()))
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("protocol-capable executor did not start")
+	}
+	require.True(t, schedulerInjected)
+	require.Equal(t, sourceNow, target)
+	require.Equal(t, "S2", watermark)
+	stored = mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+	require.Equal(t, "new-cn-retry", stored[0].TaskRunner)
 }
 
 func TestCancelDaemonTask(t *testing.T) {
@@ -1351,6 +1768,46 @@ func TestCancelTaskDefersFreshForeignOwnerUntilStale(t *testing.T) {
 	require.NoError(t, newCancelTask(r, dt.ID).Handle(context.Background()))
 	got = mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
 	require.Equal(t, task.TaskStatus_Canceled, got[0].TaskStatus)
+}
+
+func TestCancelTaskRestoresRetryableStateAfterLocalCancelFailure(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	dt := newDaemonTaskForTest(1, task.TaskStatus_CancelRequested, r.runnerID)
+	mustAddTestDaemonTask(t, store, 1, dt)
+
+	routine := ActiveRoutine(&mockErrActiveRoutine{cancelErr: errors.New("transient cancel failure")})
+	taskRef := &daemonTask{task: dt}
+	taskRef.activeRoutine.Store(&routine)
+	r.addDaemonTask(taskRef)
+
+	require.ErrorContains(t, newCancelTask(r, dt.ID).Handle(context.Background()), "transient cancel failure")
+	got := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+	require.Equal(t, task.TaskStatus_CancelRequested, got[0].TaskStatus)
+	require.Equal(t, r.runnerID, got[0].TaskRunner)
+}
+
+func TestCancelTaskFailureDoesNotOverwriteSupersedingOwner(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	dt := newDaemonTaskForTest(1, task.TaskStatus_CancelRequested, r.runnerID)
+	mustAddTestDaemonTask(t, store, 1, dt)
+
+	routine := ActiveRoutine(&mockFuncActiveRoutine{cancel: func() error {
+		current := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+		current[0].TaskRunner = "new-owner"
+		current[0].TaskStatus = task.TaskStatus_RestartRequested
+		mustUpdateTestDaemonTask(t, store, 1, current)
+		return errors.New("old owner cancel failed")
+	}})
+	taskRef := &daemonTask{task: dt}
+	taskRef.activeRoutine.Store(&routine)
+	r.addDaemonTask(taskRef)
+
+	err := newCancelTask(r, dt.ID).Handle(context.Background())
+	require.ErrorContains(t, err, "old owner cancel failed")
+	require.ErrorContains(t, err, "restore CancelRequested")
+	got := mustGetTestDaemonTask(t, store, 1, WithTaskIDCond(EQ, dt.ID))
+	require.Equal(t, task.TaskStatus_RestartRequested, got[0].TaskStatus)
+	require.Equal(t, "new-owner", got[0].TaskRunner)
 }
 
 func TestCancelTaskDoesNotTerminateRenewedForeignLease(t *testing.T) {
