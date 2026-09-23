@@ -169,20 +169,31 @@ func (l *lockTableAllocator) Get(
 	if binds == nil {
 		binds = l.registerService(serviceID)
 	}
+	if binds == nil {
+		return pb.LockTable{}
+	}
 	l.markServicePresent(serviceID)
 	return l.registerBind(binds, group, tableID, originTableID, sharding)
 }
 
 func (l *lockTableAllocator) KeepLockTableBind(serviceID string) bool {
-	b := l.getServiceBinds(serviceID)
+	_, active := l.keepLockTableBind(serviceID)
+	return active
+}
+
+func (l *lockTableAllocator) keepLockTableBind(serviceID string) (*serviceBinds, bool) {
+	l.mu.RLock()
+	b := l.mu.services[serviceID]
 	if b == nil {
-		return false
+		l.mu.RUnlock()
+		return nil, false
 	}
 	active := b.active()
+	l.mu.RUnlock()
 	if active {
 		l.markServicePresent(serviceID)
 	}
-	return active
+	return b, active
 }
 
 func (l *lockTableAllocator) AddCannotCommit(values []pb.OrphanTxn) [][]byte {
@@ -438,8 +449,8 @@ func (l *lockTableAllocator) beginDrain(req pb.BeginDrainRequest) pb.BeginDrainR
 	if !isExactDrainServiceID(req.ServiceID) || req.AttemptID == "" {
 		return resp
 	}
-	l.mu.RLock()
-	defer l.mu.RUnlock()
+	l.mu.Lock()
+	defer l.mu.Unlock()
 	b := l.mu.services[req.ServiceID]
 	if b == nil {
 		// The first BeginDrain response may have been lost. A completed,
@@ -447,6 +458,18 @@ func (l *lockTableAllocator) beginDrain(req pb.BeginDrainRequest) pb.BeginDrainR
 		// an unsafe or unknown retirement is never a new admission.
 		resp.OK = l.retiredServices[req.ServiceID] &&
 			l.retiredDrainAttempts[req.ServiceID] == req.AttemptID
+		if _, retired := l.retiredServices[req.ServiceID]; retired {
+			return resp
+		}
+		// A CN that has never requested GetBind has no allocator bind yet.
+		// Create a pending, non-admitting bind, but do not accept the drain
+		// until this exact instance sends a fresh normal-state heartbeat.
+		b = newServiceBinds(req.ServiceID,
+			l.logger.With(zap.String("lockservice", req.ServiceID)), l.logger)
+		b.drainAttemptID = req.AttemptID
+		b.drainAwaitingHeartbeat = true
+		b.status = pb.Status_ServiceLockWaiting
+		l.mu.services[req.ServiceID] = b
 		return resp
 	}
 	b.Lock()
@@ -454,7 +477,7 @@ func (l *lockTableAllocator) beginDrain(req pb.BeginDrainRequest) pb.BeginDrainR
 	if b.drainAttemptID != "" {
 		// The normal drain disables new binds before publishing completion.
 		// It must not revoke the already accepted attempt on an RPC retry.
-		resp.OK = b.drainAttemptID == req.AttemptID
+		resp.OK = !b.drainAwaitingHeartbeat && b.drainAttemptID == req.AttemptID
 		return resp
 	}
 	if b.disabled {
@@ -488,7 +511,7 @@ func (l *lockTableAllocator) queryDrain(req pb.QueryDrainRequest) pb.QueryDrainR
 		// A normal ServiceUnLockSucc heartbeat disables the bind before it
 		// advances to CanRestart. The terminal phase and accepted attempt,
 		// not the disabled flag, are the safety proof for this live bind.
-		resp.Safe = b.drainAttemptID == req.AttemptID &&
+		resp.Safe = !b.drainAwaitingHeartbeat && b.drainAttemptID == req.AttemptID &&
 			b.status == pb.Status_ServiceCanRestart
 		b.RUnlock()
 		return resp
@@ -776,6 +799,12 @@ func (l *lockTableAllocator) registerService(
 ) *serviceBinds {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	// A completed drain is an irreversible promise to the caller. A late
+	// GetBind for that same incarnation must not resurrect it after QueryDrain
+	// has returned safe. Unsafe timeout retirement can still recover normally.
+	if l.retiredServices[serviceID] {
+		return nil
+	}
 
 	b, ok := l.mu.services[serviceID]
 	if ok {
@@ -804,6 +833,13 @@ func (l *lockTableAllocator) registerBind(
 	sharding pb.Sharding) pb.LockTable {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	// GetBind's admission check and Get are separate calls. A drain or
+	// retirement may have won between them; never return even an existing
+	// binding through that stale request.
+	if l.mu.services[binds.serviceID] != binds ||
+		!binds.isStatus(pb.Status_ServiceLockEnable) {
+		return pb.LockTable{}
+	}
 
 	if old, ok := l.getLockTablesLocked(group)[tableID]; ok {
 		return l.tryRebindLocked(binds, group, old, tableID)
@@ -1282,11 +1318,12 @@ type serviceBinds struct {
 	lastKeepaliveTime time.Time
 	// keepaliveGeneration orders positive liveness evidence against an
 	// asynchronous validation that may later try to disable this service.
-	keepaliveGeneration uint64
-	disabled            bool
-	status              pb.Status
-	drainAttemptID      string
-	txnIDs              [][]byte
+	keepaliveGeneration    uint64
+	disabled               bool
+	status                 pb.Status
+	drainAttemptID         string
+	drainAwaitingHeartbeat bool
+	txnIDs                 [][]byte
 }
 
 func newServiceBinds(
@@ -1364,12 +1401,27 @@ func (b *serviceBinds) active() bool {
 	return true
 }
 
+func (b *serviceBinds) confirmPendingDrainHeartbeat(status pb.Status) bool {
+	b.Lock()
+	defer b.Unlock()
+	if !b.drainAwaitingHeartbeat {
+		return true
+	}
+	// A stale drain phase from before an allocator restart is not proof
+	// that this new attempt reached the current CN incarnation.
+	if status != pb.Status_ServiceLockEnable {
+		return false
+	}
+	b.drainAwaitingHeartbeat = false
+	return true
+}
+
 func (b *serviceBinds) bind(
 	group uint32,
 	tableID uint64) bool {
 	b.Lock()
 	defer b.Unlock()
-	if b.disabled {
+	if b.disabled || b.status != pb.Status_ServiceLockEnable {
 		return false
 	}
 	b.getTablesLocked(group)[tableID] = struct{}{}
@@ -1500,15 +1552,15 @@ func (l *lockTableAllocator) handleKeepLockTableBind(
 	cs morpc.ClientSession) {
 	resp.KeepLockTableBind.AllocatorID = l.allocatorID
 	resp.KeepLockTableBind.AllocatorVersion = l.version
-	resp.KeepLockTableBind.OK = l.KeepLockTableBind(req.KeepLockTableBind.ServiceID)
+	b, active := l.keepLockTableBind(req.KeepLockTableBind.ServiceID)
+	resp.KeepLockTableBind.OK = active
 	if !resp.KeepLockTableBind.OK {
 		// resp.KeepLockTableBind.Status = pb.Status_ServiceCanRestart
 		writeResponse(l.logger, cancel, resp, nil, cs)
 		return
 	}
-	b := l.getServiceBinds(req.KeepLockTableBind.ServiceID)
-	if b == nil {
-		// Timeout cleanup can remove the instance after the keepalive lookup.
+	if b == nil || !b.confirmPendingDrainHeartbeat(req.KeepLockTableBind.Status) {
+		// A pending drain may only accept a fresh normal-state heartbeat.
 		resp.KeepLockTableBind.OK = false
 		writeResponse(l.logger, cancel, resp, nil, cs)
 		return
@@ -2095,6 +2147,9 @@ func (l *lockTableAllocator) cleanCtlLocked(
 func (l *lockTableAllocator) canGetBind(serviceID string) bool {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
+	if l.retiredServices[serviceID] {
+		return false
+	}
 
 	b := l.mu.services[serviceID]
 	if b != nil &&
