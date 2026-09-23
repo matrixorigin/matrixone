@@ -4089,9 +4089,14 @@ func (c *Compile) compileExternScanWholeFileFanout(node *plan.Node, param *tree.
 // for a shard that may run on another CN.  The remote codec carries only
 // CreateSql, which for an external table is the stored DDL: it lacks the
 // ExternType taken from the plan (so the reader would apply LOAD's exact
-// column-count rule) and any stage-resolved S3 settings.  Fields that are
-// process-local or unused by the reader are dropped; the receiver installs its
-// own FileService.
+// column-count rule) and any stage-resolved S3 settings.
+//
+// The receiver rebuilds S3Param from Option with InitS3Param, and CNs of every
+// version do so, so the resolved settings are written back into Option in the
+// keys InitS3Param reads.  That keeps the payload readable by a CN from before
+// this change during a rolling upgrade: no new field is needed.  Fields that
+// are process-local or unused by the reader are dropped; the receiver installs
+// its own FileService.
 func resolvedExternParamJSON(param *tree.ExternParam) (string, error) {
 	resolved := *param
 	resolved.FileService = nil
@@ -4102,12 +4107,46 @@ func resolvedExternParamJSON(param *tree.ExternParam) (string, error) {
 		tail.Assignments = nil
 		resolved.Tail = &tail
 	}
-	resolved.Resolved = true
+	if resolved.ScanType == tree.S3 && resolved.S3Param != nil {
+		resolved.Option = s3ParamOptions(resolved.Option, resolved.S3Param)
+	}
 	b, err := json.Marshal(&resolved)
 	if err != nil {
 		return "", err
 	}
 	return string(b), nil
+}
+
+// s3ParamOptions returns option with its S3 location and credential keys
+// replaced by the values in s3, the inverse of the corresponding InitS3Param
+// cases.  Other keys (hive partitioning, format, compression, ...) are kept.
+// "filepath" is dropped too: the serialized Filepath is already resolved, and a
+// stage-backed source's option would not name it.
+func s3ParamOptions(option []string, s3 *tree.S3Parameter) []string {
+	out := make([]string, 0, len(option)+16)
+	for i := 0; i+1 < len(option); i += 2 {
+		switch strings.ToLower(option[i]) {
+		case "endpoint", "region", "access_key_id", "secret_access_key",
+			"bucket", "provider", "role_arn", "external_id", "filepath":
+			continue
+		}
+		out = append(out, option[i], option[i+1])
+	}
+	for _, kv := range [...][2]string{
+		{"endpoint", s3.Endpoint},
+		{"region", s3.Region},
+		{"access_key_id", s3.APIKey},
+		{"secret_access_key", s3.APISecret},
+		{"bucket", s3.Bucket},
+		{"provider", s3.Provider},
+		{"role_arn", s3.RoleArn},
+		{"external_id", s3.ExternalId},
+	} {
+		if kv[1] != "" {
+			out = append(out, kv[0], kv[1])
+		}
+	}
+	return out
 }
 
 func (c *Compile) compileExternScanIcebergFileFanout(
@@ -4417,16 +4456,28 @@ func (c *Compile) parquetLoadFileFanoutDOP(param *tree.ExternParam) int {
 			if mcpu <= 0 {
 				mcpu = 1
 			}
-			dop += min(mcpu, external.S3ParallelMaxnum)
+			dop += c.capFanoutByMaxDop(min(mcpu, external.S3ParallelMaxnum))
 		}
 		if dop > 0 {
 			return dop
 		}
 	}
 	if c.ncpu > 0 {
-		return c.ncpu
+		return c.capFanoutByMaxDop(c.ncpu)
 	}
 	return 1
+}
+
+// capFanoutByMaxDop applies the query's max_dop to the number of readers a
+// file fanout places on one CN.  It is the same per-CN cap compileQuery hands
+// CalcQueryDOP; the fanouts size their scopes from c.ncpu and worker Mcpu
+// directly, so without it a multi-file scan would open more concurrent readers
+// than the session allows.
+func (c *Compile) capFanoutByMaxDop(mcpu int) int {
+	if maxDop := c.pn.GetQuery().GetMaxDop(); maxDop > 0 && int64(mcpu) > maxDop {
+		return int(maxDop)
+	}
+	return mcpu
 }
 
 func (c *Compile) getHiveFileFanoutNodes(param *tree.ExternParam, fileCount int) []engine.Node {
@@ -4444,6 +4495,7 @@ func (c *Compile) getHiveFileFanoutNodes(param *tree.ExternParam, fileCount int)
 			if mcpu > external.S3ParallelMaxnum {
 				mcpu = external.S3ParallelMaxnum
 			}
+			mcpu = c.capFanoutByMaxDop(mcpu)
 			for i := 0; i < mcpu && len(nodes) < fileCount; i++ {
 				n := node
 				n.Mcpu = 1
@@ -4462,6 +4514,7 @@ func (c *Compile) getHiveFileFanoutNodes(param *tree.ExternParam, fileCount int)
 	if mcpu <= 0 {
 		mcpu = 1
 	}
+	mcpu = c.capFanoutByMaxDop(mcpu)
 	if mcpu > fileCount {
 		mcpu = fileCount
 	}

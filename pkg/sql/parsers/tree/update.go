@@ -297,11 +297,6 @@ type ExParam struct {
 	ParallelLoadRequested bool
 	ParallelLoadMinSize   int64
 	Strict                bool
-	// Resolved marks a param serialized after compile-time normalization
-	// (ExternType from the plan, stage/S3 settings already resolved), as sent
-	// to a remote external-scan shard.  The receiver must use it as is rather
-	// than re-deriving S3Param from Option, which a stage-backed source lacks.
-	Resolved bool
 }
 
 type S3Parameter struct {

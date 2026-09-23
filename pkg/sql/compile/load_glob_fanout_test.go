@@ -409,6 +409,9 @@ func TestCompileExternScanMultiFileFanoutRemoteKeepsNormalizedParam(t *testing.T
 			ScanType: tree.S3,
 			Filepath: "prefix/part-*.csv",
 			Format:   tree.CSV,
+			// A stale credential and filepath must be replaced by the resolved
+			// values; unrelated keys survive.
+			Option: []string{"bucket", "stale", "filepath", "stale/*.csv", "format", "csv"},
 			Tail: &tree.TailParameter{
 				Assignments: tree.UpdateExprs{&tree.UpdateExpr{}},
 			},
@@ -447,6 +450,18 @@ func TestCompileExternScanMultiFileFanoutRemoteKeepsNormalizedParam(t *testing.T
 		require.True(t, ok)
 		require.NotEqual(t, string(ddl), ext.Es.CreateSql)
 
+		// A CN from before this change runs exactly this on the payload:
+		// unmarshal into the ExternParam it knows, then InitS3Param from
+		// Option.  Unknown JSON fields would be dropped silently, so the
+		// resolved settings must reach it through fields and options it reads.
+		legacy := &tree.ExternParam{}
+		require.NoError(t, json.Unmarshal([]byte(ext.Es.CreateSql), legacy))
+		require.NoError(t, plan2.InitS3Param(legacy))
+		require.Equal(t, int32(plan.ExternType_EXTERNAL_TB), legacy.ExternType)
+		require.Equal(t, tree.S3, legacy.ScanType)
+		require.Equal(t, "prefix/part-*.csv", legacy.Filepath)
+		require.Equal(t, *param.S3Param, *legacy.S3Param)
+
 		_, in, err := convertToPipelineInstruction(ext, testCompile.proc, &scopeContext{}, 1)
 		require.NoError(t, err)
 		op, err := convertToVmOperator(in, &scopeContext{}, nil)
@@ -464,4 +479,76 @@ func TestCompileExternScanMultiFileFanoutRemoteKeepsNormalizedParam(t *testing.T
 		require.NotNil(t, got.FileService)
 		decoded.Free(testCompile.proc, false, nil)
 	}
+}
+
+func TestS3ParamOptionsRoundTripsThroughInitS3Param(t *testing.T) {
+	s3 := &tree.S3Parameter{
+		Endpoint: "e", Region: "r", APIKey: "k", APISecret: "s", Bucket: "b",
+		Provider: "minio", RoleArn: "arn", ExternalId: "x",
+	}
+	option := s3ParamOptions([]string{"Bucket", "old", "compression", "lz4"}, s3)
+	param := &tree.ExternParam{ExParamConst: tree.ExParamConst{Option: option, Filepath: "p"}}
+	require.NoError(t, plan2.InitS3Param(param))
+	require.Equal(t, *s3, *param.S3Param)
+	require.Equal(t, "lz4", param.CompressType)
+	require.Equal(t, "p", param.Filepath)
+}
+
+// max_dop caps how many readers a file fanout places on one CN, the same
+// per-CN cap CalcQueryDOP receives.  With max_dop=1 a multi-file scan has one
+// reader per CN, which on a single CN is the serial path.
+func TestFileFanoutHonorsMaxDop(t *testing.T) {
+	newCompile := func(maxDop int64) *Compile {
+		c := NewMockCompile(t)
+		c.addr = "cn1:6001"
+		c.ncpu = 8
+		c.execType = plan2.ExecTypeAP_ONECN
+		c.anal = &AnalyzeModule{qry: &plan.Query{}}
+		c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{MaxDop: maxDop}}}
+		return c
+	}
+	extTable := &tree.ExternParam{
+		ExParamConst: tree.ExParamConst{
+			ScanType: tree.INFILE,
+			Filepath: "/ext/part-*.csv",
+			Format:   tree.CSV,
+			Tail:     &tree.TailParameter{},
+		},
+		ExParam: tree.ExParam{ExternType: int32(plan.ExternType_EXTERNAL_TB)},
+	}
+
+	require.Len(t, newCompile(0).getHiveFileFanoutNodes(extTable, 6), 6)
+	require.Len(t, newCompile(3).getHiveFileFanoutNodes(extTable, 6), 3)
+	require.Len(t, newCompile(1).getHiveFileFanoutNodes(extTable, 6), 1)
+	require.Equal(t, 1, newCompile(1).parquetLoadFileFanoutDOP(extTable))
+
+	n := &plan.Node{
+		TableDef: &plan.TableDef{},
+		ExternScan: &plan.ExternScan{
+			Type:           int32(plan.ExternType_EXTERNAL_TB),
+			TbColToDataCol: map[string]int32{},
+		},
+	}
+	fileList := []string{"/ext/part-0.csv", "/ext/part-1.csv", "/ext/part-2.csv", "/ext/part-3.csv"}
+	fileSize := []int64{10, 10, 10, 10}
+	ss, err := newCompile(1).compileExternScanMultiFileFanout(n, extTable, fileList, fileSize, true)
+	require.NoError(t, err)
+	require.Len(t, ss, 1, "max_dop=1 must not open concurrent readers")
+	ext, ok := ss[0].RootOp.(*external.External)
+	require.True(t, ok)
+	require.Equal(t, fileList, ext.Es.FileList)
+
+	// S3 workers: each CN is capped as well.
+	s3 := *extTable
+	s3.ScanType = tree.S3
+	c := newCompile(2)
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.cnList = engine.Nodes{{Addr: "cn1:6001", Mcpu: 8}, {Addr: "cn2:6001", Mcpu: 8}}
+	nodes := c.getHiveFileFanoutNodes(&s3, 16)
+	perCN := make(map[string]int)
+	for _, node := range nodes {
+		perCN[node.Addr]++
+	}
+	require.Equal(t, map[string]int{"cn1:6001": 2, "cn2:6001": 2}, perCN)
+	require.Equal(t, len(nodes), c.parquetLoadFileFanoutDOP(&s3))
 }
