@@ -23,15 +23,19 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -42,6 +46,31 @@ type relationHandleFactory struct {
 	engine.Relation
 	handle         engine.Relation
 	newHandleCalls int
+}
+
+type insertS3CleanupWorkspace struct {
+	client.Workspace
+	cleanups []func(context.Context) error
+}
+
+func (w *insertS3CleanupWorkspace) RetainUnpublishedS3Cleanup(
+	cleanup func(context.Context) error,
+) {
+	w.cleanups = append(w.cleanups, cleanup)
+}
+
+type failOnceInsertDeleteFileService struct {
+	fileservice.FileService
+	failErr error
+}
+
+func (fs *failOnceInsertDeleteFileService) Delete(ctx context.Context, paths ...string) error {
+	if fs.failErr != nil {
+		err := fs.failErr
+		fs.failErr = nil
+		return err
+	}
+	return fs.FileService.Delete(ctx, paths...)
 }
 
 func (f *relationHandleFactory) NewRelationHandle() engine.Relation {
@@ -446,6 +475,97 @@ func TestInsertFlushS3WriterOnMemoryPressureAppendsBlockInfo(t *testing.T) {
 	require.Equal(t, []string{"force-refresh", "release"}, throttler.ops)
 	require.NotNil(t, insert.ctr.buf)
 	require.Greater(t, insert.ctr.buf.RowCount(), 0)
+}
+
+func TestInsertResetUsesPipelineOutcomeForSpilledObjectOwnership(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		pipelineFail bool
+	}{
+		{name: "failed pipeline deletes unaccepted object", pipelineFail: true},
+		{name: "successful pipeline preserves transferred object", pipelineFail: false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			defer proc.Free()
+
+			fs, err := colexec.GetSharedFSFromProc(proc)
+			require.NoError(t, err)
+			writer := colexec.NewCNS3DataWriter(proc.Mp(), fs, testInsertS3TableDef(), 1, false)
+			bat := &batch.Batch{
+				Attrs: []string{"a", "b"},
+				Vecs: []*vector.Vector{
+					testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp()),
+					testutil.MakeVarcharVector([]string{"x"}, nil, proc.Mp()),
+				},
+			}
+			bat.SetRowCount(1)
+			defer bat.Clean(proc.Mp())
+			require.NoError(t, writer.Write(proc.Ctx, bat))
+			blockInfo, err := writer.SyncAndFillBlockInfoBat(proc.Ctx)
+			require.NoError(t, err)
+			require.Equal(t, 1, blockInfo.Vecs[1].Length())
+			data, area := vector.MustVarlenaRawData(blockInfo.Vecs[1])
+			stats := objectio.ObjectStats(data[0].GetByteSlice(area))
+			objectName := stats.ObjectName().String()
+
+			insert := &Insert{ctr: container{s3Writer: writer}}
+			insert.Reset(proc, tc.pipelineFail, errors.New("test pipeline outcome"))
+			require.Nil(t, insert.ctr.s3Writer)
+			_, err = fs.StatFile(proc.Ctx, objectName)
+			if tc.pipelineFail {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "failed pipeline should delete object, got %v", err)
+			} else {
+				require.NoError(t, err, "successful pipeline must preserve transferred object")
+			}
+			insert.Free(proc, false, nil)
+		})
+	}
+}
+
+func TestInsertFreeTransfersFailedCleanupToTransaction(t *testing.T) {
+	proc := testutil.NewProc(t)
+	defer proc.Free()
+	baseFS, err := colexec.GetSharedFSFromProc(proc)
+	require.NoError(t, err)
+	deleteErr := errors.New("injected insert cleanup failure")
+	fs := &failOnceInsertDeleteFileService{FileService: baseFS, failErr: deleteErr}
+	writer := colexec.NewCNS3DataWriter(proc.Mp(), fs, testInsertS3TableDef(), 1, false)
+	bat := &batch.Batch{
+		Attrs: []string{"a", "b"},
+		Vecs: []*vector.Vector{
+			testutil.MakeInt64Vector([]int64{1}, nil, proc.Mp()),
+			testutil.MakeVarcharVector([]string{"x"}, nil, proc.Mp()),
+		},
+	}
+	bat.SetRowCount(1)
+	defer bat.Clean(proc.Mp())
+	require.NoError(t, writer.Write(proc.Ctx, bat))
+	blockInfo, err := writer.SyncAndFillBlockInfoBat(proc.Ctx)
+	require.NoError(t, err)
+	data, area := vector.MustVarlenaRawData(blockInfo.Vecs[1])
+	stats := objectio.ObjectStats(data[0].GetByteSlice(area))
+	objectName := stats.ObjectName().String()
+	blockInfo.Clean(proc.Mp())
+
+	ctrl := gomock.NewController(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	workspace := &insertS3CleanupWorkspace{}
+	txnOp.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
+	proc.Base.TxnOperator = txnOp
+
+	insert := NewArgument()
+	insert.ctr.s3Writer = writer
+	insert.Free(proc, true, deleteErr)
+	require.Nil(t, insert.ctr.s3Writer)
+	require.Len(t, workspace.cleanups, 1, "transaction must take ownership before operator release")
+	insert.Release()
+
+	_, err = baseFS.StatFile(proc.Ctx, objectName)
+	require.NoError(t, err, "failed immediate deletion should keep the object for retry")
+	require.NoError(t, workspace.cleanups[0](proc.Ctx))
+	_, err = baseFS.StatFile(proc.Ctx, objectName)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "transaction retry should delete the object, got %v", err)
 }
 
 func TestInsertFlushS3WriterOnMemoryPressureRefreshesBeforeReleaseOnAppendError(t *testing.T) {

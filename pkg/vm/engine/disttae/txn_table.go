@@ -2257,7 +2257,7 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 	ctx context.Context,
 	obj objectio.ObjectStats,
 	blockDeletes map[objectio.Blockid][]int64,
-) (*batch.Batch, string, error) {
+) (*batch.Batch, string, *colexec.CNS3Writer, error) {
 
 	proc := tbl.proc.Load()
 
@@ -2267,14 +2267,12 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 	)
 
 	if fs, err = colexec.GetSharedFSFromProc(proc); err != nil {
-		return nil, "", err
+		return nil, "", nil, err
 	}
 
 	s3Writer := colexec.NewCNS3DataWriterForService(
 		proc.GetService(), proc.Mp(), fs, tbl.tableDef, -1, false,
 	)
-
-	defer func() { s3Writer.Close() }()
 
 	var (
 		bat      *batch.Batch
@@ -2326,15 +2324,15 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 	)
 
 	if err != nil {
-		return nil, fileName, err
+		return nil, fileName, s3Writer, err
 	}
 
 	if stats, err = s3Writer.Sync(ctx); err != nil {
-		return nil, fileName, err
+		return nil, fileName, s3Writer, err
 	}
 
 	if bat, err = s3Writer.FillBlockInfoBat(); err != nil {
-		return nil, fileName, err
+		return nil, fileName, s3Writer, err
 	}
 
 	if len(stats) != 0 {
@@ -2342,8 +2340,7 @@ func (tbl *txnTable) rewriteObjectByDeletion(
 	}
 
 	ret, err := bat.Dup(proc.Mp())
-
-	return ret, fileName, err
+	return ret, fileName, s3Writer, err
 }
 
 func (tbl *txnTable) Delete(

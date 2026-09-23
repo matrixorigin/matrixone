@@ -17,6 +17,7 @@ package table_clone
 import (
 	"bytes"
 	"context"
+	"errors"
 	"math"
 	"testing"
 
@@ -46,6 +47,53 @@ func TestTableCloneOperatorMetadata(t *testing.T) {
 	require.Equal(t, "TableClone", buf.String())
 	require.NotEqual(t, vm.Top, tc.OpType())
 	require.Equal(t, "TableClone", tc.OpType().String())
+}
+
+type tableCloneS3CleanupWorkspace struct {
+	client.Workspace
+	cleanups []func(context.Context) error
+}
+
+func (w *tableCloneS3CleanupWorkspace) RetainUnpublishedS3Cleanup(
+	cleanup func(context.Context) error,
+) {
+	w.cleanups = append(w.cleanups, cleanup)
+}
+
+type tableCloneCloseErrorReader struct {
+	engine.Reader
+	calls int
+	err   error
+}
+
+func (r *tableCloneCloseErrorReader) Close() error {
+	r.calls++
+	if r.calls == 1 {
+		return r.err
+	}
+	return nil
+}
+
+func TestTableCloneFreeTransfersReaderCleanupToTransaction(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	ctrl := gomock.NewController(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	workspace := &tableCloneS3CleanupWorkspace{}
+	txnOp.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
+	proc.Base.TxnOperator = txnOp
+
+	closeErr := errors.New("injected clone reader cleanup failure")
+	reader := &tableCloneCloseErrorReader{err: closeErr}
+	clone := NewTableClone()
+	clone.srcReader = map[string]engine.Reader{"source": reader}
+	clone.Free(proc, true, closeErr)
+	require.Empty(t, clone.srcReader, "cleanup ownership should move before scope release")
+	require.Len(t, workspace.cleanups, 1)
+	clone.Release()
+
+	require.NoError(t, workspace.cleanups[0](proc.Ctx))
+	require.Equal(t, 2, reader.calls)
 }
 
 type autoIncrementTestRelation struct {

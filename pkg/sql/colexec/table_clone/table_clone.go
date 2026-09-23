@@ -55,6 +55,29 @@ func init() {
 	)
 }
 
+func closeReaders(
+	proc *process.Process,
+	readers map[string]engine.Reader,
+	retainFailedCleanup bool,
+) map[string]engine.Reader {
+	var pending map[string]engine.Reader
+	for name, reader := range readers {
+		if err := reader.Close(); err != nil {
+			logutil.Warn("failed to close table clone reader", zap.String("reader", name), zap.Error(err))
+			if retainFailedCleanup && colexec.RetainUnpublishedS3Cleanup(proc, func(context.Context) error {
+				return reader.Close()
+			}) {
+				continue
+			}
+			if pending == nil {
+				pending = make(map[string]engine.Reader)
+			}
+			pending[name] = reader
+		}
+	}
+	return pending
+}
+
 func (tc *TableClone) Free(proc *process.Process, pipelineFailed bool, err error) {
 	if tc.dataObjBat != nil {
 		tc.dataObjBat.Clean(proc.Mp())
@@ -64,17 +87,10 @@ func (tc *TableClone) Free(proc *process.Process, pipelineFailed bool, err error
 		tc.tombstoneObjBat.Clean(proc.Mp())
 	}
 
-	for _, r := range tc.srcReader {
-		r.Close()
-	}
-
-	for _, r := range tc.srcIdxReader {
-		r.Close()
-	}
+	tc.srcReader = closeReaders(proc, tc.srcReader, true)
+	tc.srcIdxReader = closeReaders(proc, tc.srcIdxReader, true)
 
 	tc.srcRel = nil
-	tc.srcReader = nil
-	tc.srcIdxReader = nil
 	tc.dstRel = nil
 	tc.dstIdxRel = nil
 }
@@ -88,17 +104,10 @@ func (tc *TableClone) Reset(proc *process.Process, pipelineFailed bool, err erro
 		tc.tombstoneObjBat.Clean(proc.Mp())
 	}
 
-	for _, r := range tc.srcReader {
-		r.Close()
-	}
-
-	for _, r := range tc.srcIdxReader {
-		r.Close()
-	}
+	tc.srcReader = closeReaders(proc, tc.srcReader, false)
+	tc.srcIdxReader = closeReaders(proc, tc.srcIdxReader, false)
 
 	tc.srcRel = nil
-	tc.srcReader = nil
-	tc.srcIdxReader = nil
 	tc.dstRel = nil
 	tc.dstIdxRel = nil
 
@@ -223,6 +232,12 @@ func initRelAndReader(
 }
 
 func (tc *TableClone) Prepare(proc *process.Process) error {
+	tc.srcReader = closeReaders(proc, tc.srcReader, false)
+	tc.srcIdxReader = closeReaders(proc, tc.srcIdxReader, false)
+	if len(tc.srcReader) != 0 || len(tc.srcIdxReader) != 0 {
+		return moerr.NewInternalError(proc.Ctx, "unpublished table clone objects still require cleanup")
+	}
+
 	if tc.OpAnalyzer == nil {
 		tc.OpAnalyzer = process.NewAnalyzer(
 			tc.GetIdx(),
@@ -354,7 +369,8 @@ func clone(
 ) error {
 
 	var (
-		err error
+		err         error
+		innerReader = reader.(*disttae.TableMetaReader)
 	)
 
 	checkObjStatsFmt := func(bat *batch.Batch, isTombstone bool) error {
@@ -382,7 +398,6 @@ func clone(
 		}
 
 		dstDef := dstRel.GetTableDef(dstCtx)
-		innerReader := reader.(*disttae.TableMetaReader)
 		srcDef := innerReader.GetTableDef()
 
 		logutil.Info("TABLE-CLONE",
@@ -412,6 +427,9 @@ func clone(
 				return err
 			}
 		}
+		if err = innerReader.AcceptDataObjects(); err != nil {
+			return err
+		}
 	}
 
 	// copy tombstone
@@ -428,6 +446,9 @@ func clone(
 			if err = dstRel.Delete(dstCtx, tombstoneObjBat, ""); err != nil {
 				return err
 			}
+		}
+		if err = innerReader.AcceptTombstoneObjects(); err != nil {
+			return err
 		}
 	}
 
@@ -590,6 +611,9 @@ func updateRelationAutoIncrement(
 
 func (tc *TableClone) Release() {
 	if tc != nil {
+		if len(tc.srcReader) != 0 || len(tc.srcIdxReader) != 0 {
+			return
+		}
 		reuse.Free[TableClone](tc, nil)
 	}
 }

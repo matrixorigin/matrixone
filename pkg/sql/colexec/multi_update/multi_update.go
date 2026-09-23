@@ -47,6 +47,13 @@ func (update *MultiUpdate) OpType() vm.OpType {
 }
 
 func (update *MultiUpdate) Prepare(proc *process.Process) error {
+	if writer := update.ctr.s3Writer; writer != nil && writer.cleanupErr != nil {
+		if err := writer.reset(proc, true); err != nil {
+			return err
+		}
+		writer.cleanupErr = nil
+	}
+
 	if update.OpAnalyzer == nil {
 		update.OpAnalyzer = process.NewAnalyzer(update.GetIdx(), update.IsFirst, update.IsLast, opName)
 	} else {
@@ -154,7 +161,7 @@ func (update *MultiUpdate) Prepare(proc *process.Process) error {
 		writer.segmentMap = colexec.MustGetServer(proc.GetService()).GetCnSegmentMap()
 		update.MultiUpdateCtx = writer.updateCtxs
 
-		err = writer.free(proc)
+		err = writer.free(proc, false)
 		if err != nil {
 			return err
 		}
