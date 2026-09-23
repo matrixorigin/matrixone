@@ -1632,6 +1632,8 @@ func TestLegacyDiscoveryCursorFailurePaths(t *testing.T) {
 		require.Contains(t, exec.sqls[1], "where t.relkind='v'")
 		require.Contains(t, exec.sqls[1],
 			"t.reldatabase not in ('information_schema','mo_catalog','mo_debug','mo_task','mysql','system','system_metrics')")
+		require.Contains(t, exec.sqls[1], "lower(coalesce(t.viewdef,'')) not like '%create materialized view %'")
+		require.Contains(t, exec.sqls[1], "t.relname not like '__mo_mv_state_%'")
 	})
 
 	t.Run("revalidation page enqueues current view", func(t *testing.T) {
