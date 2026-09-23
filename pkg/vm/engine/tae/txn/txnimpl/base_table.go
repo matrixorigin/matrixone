@@ -43,6 +43,98 @@ type baseTable struct {
 	tableSpace *tableSpace
 }
 
+// duplicatedRowIDs keeps candidates from appendable and non-appendable
+// objects separate. A merge output can be found before the replacement row in
+// an appendable object, but its row may be removed by a transferred tombstone.
+// Keeping both candidates until tombstone filtering is complete lets the
+// caller fall back to the live replacement row instead of treating the key as
+// absent.
+type duplicatedRowIDs struct {
+	appendable    containers.Vector
+	nonAppendable containers.Vector
+}
+
+func newDuplicatedRowIDs(
+	pool *containers.VectorPool,
+	length int,
+) (*duplicatedRowIDs, error) {
+	rowIDs := &duplicatedRowIDs{
+		appendable:    pool.GetVector(&objectio.RowidType),
+		nonAppendable: pool.GetVector(&objectio.RowidType),
+	}
+	initVector := func(vec containers.Vector) error {
+		return vector.AppendMultiFixed[types.Rowid](
+			vec.GetDownstreamVector(),
+			types.EmptyRowid,
+			true,
+			length,
+			common.WorkspaceAllocator,
+		)
+	}
+	if err := initVector(rowIDs.appendable); err != nil {
+		rowIDs.Close()
+		return nil, err
+	}
+	if err := initVector(rowIDs.nonAppendable); err != nil {
+		rowIDs.Close()
+		return nil, err
+	}
+	return rowIDs, nil
+}
+
+func (r *duplicatedRowIDs) Close() {
+	if r == nil {
+		return
+	}
+	if r.appendable != nil {
+		r.appendable.Close()
+		r.appendable = nil
+	}
+	if r.nonAppendable != nil {
+		r.nonAppendable.Close()
+		r.nonAppendable = nil
+	}
+}
+
+func (r *duplicatedRowIDs) ForObject(appendable bool) containers.Vector {
+	if appendable {
+		return r.appendable
+	}
+	return r.nonAppendable
+}
+
+func (r *duplicatedRowIDs) HasCandidate() bool {
+	for i := 0; i < r.appendable.Length(); i++ {
+		if !r.appendable.IsNull(i) || !r.nonAppendable.IsNull(i) {
+			return true
+		}
+	}
+	return false
+}
+
+// Merge chooses an effective row only after all object candidates have been
+// checked against tombstones. Appendable rows are preferred because they are
+// the replacement rows created after a merge source was written.
+func (r *duplicatedRowIDs) Merge(pool *containers.VectorPool) containers.Vector {
+	length := r.appendable.Length()
+	if r.nonAppendable.Length() > length {
+		length = r.nonAppendable.Length()
+	}
+	rowIDs := pool.GetVector(&objectio.RowidType)
+	for i := 0; i < length; i++ {
+		if !r.appendable.IsNull(i) {
+			rowIDs.Append(vector.GetFixedAtNoTypeCheck[types.Rowid](r.appendable.GetDownstreamVector(), i), false)
+			continue
+		}
+		if !r.nonAppendable.IsNull(i) {
+			rowIDs.Append(vector.GetFixedAtNoTypeCheck[types.Rowid](r.nonAppendable.GetDownstreamVector(), i), false)
+			continue
+		}
+		rowIDs.Append(nil, true)
+	}
+	return rowIDs
+}
+
 func newBaseTable(schema *catalog.Schema, isTombstone bool, txnTable *txnTable) *baseTable {
 	return &baseTable{
 		schema:      schema,
@@ -151,7 +243,7 @@ func (tbl *baseTable) addObjsWithMetaLoc(ctx context.Context, stats objectio.Obj
 	}
 	return tbl.tableSpace.AddDataFiles(pkVecs, stats)
 }
-func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector) (rowIDs containers.Vector, err error) {
+func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector) (rowIDs *duplicatedRowIDs, err error) {
 	var it *catalog.VisibleCommittedObjectIt
 	if tbl.isTombstone {
 		it = tbl.txnTable.entry.MakeTombstoneVisibleObjectIt(tbl.txnTable.store.txn)
@@ -159,19 +251,24 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector) (r
 		it = tbl.txnTable.entry.MakeDataVisibleObjectIt(tbl.txnTable.store.txn)
 	}
 	defer it.Release()
-	rowIDs = tbl.txnTable.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
+	rowIDs, err = newDuplicatedRowIDs(
+		tbl.txnTable.store.rt.VectorPool.Small,
+		pks.Length(),
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		// GetByFilter intentionally continues with the candidates returned before
+		// a WW conflict so it can still resolve the visible row after waiting.
+		if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+			rowIDs.Close()
+			rowIDs = nil
+		}
+	}()
 	pkType := pks.GetType()
 	keysZM := index.NewZM(pkType.Oid, pkType.Scale)
 	if err = index.BatchUpdateZM(keysZM, pks.GetDownstreamVector()); err != nil {
-		return
-	}
-	if err = vector.AppendMultiFixed[types.Rowid](
-		rowIDs.GetDownstreamVector(),
-		types.EmptyRowid,
-		true,
-		pks.Length(),
-		common.WorkspaceAllocator,
-	); err != nil {
 		return
 	}
 	for it.Next() {
@@ -197,7 +294,7 @@ func (tbl *baseTable) getRowsByPK(ctx context.Context, pks containers.Vector) (r
 			pks,
 			nil,
 			types.TS{}, types.MaxTs(),
-			rowIDs,
+			rowIDs.ForObject(obj.IsAppendable()),
 			common.WorkspaceAllocator,
 		)
 		if err != nil {
@@ -293,7 +390,6 @@ func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers
 		pks.Length(),
 		common.WorkspaceAllocator,
 	)
-
 	err = foreachIncrementalObject(&objIt, from, to, func(obj *catalog.ObjectEntry) error {
 		if isEmptyDroppedAppendableObject(obj) {
 			return nil

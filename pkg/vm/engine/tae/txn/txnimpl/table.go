@@ -1243,19 +1243,19 @@ func (tbl *txnTable) GetByFilter(
 	pks := tbl.store.rt.VectorPool.Small.GetVector(pkType)
 	defer pks.Close()
 	pks.Append(filter.Val, false)
-	rowIDs, err := tbl.dataTable.getRowsByPK(ctx, pks)
+	candidates, err := tbl.dataTable.getRowsByPK(ctx, pks)
 	if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
 		return
 	}
+	defer candidates.Close()
+	if candidates.HasCandidate() {
+		err = tbl.findDeletesForCandidates(tbl.store.ctx, candidates, types.TS{}, types.MaxTs())
+		if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+			return
+		}
+	}
+	rowIDs := candidates.Merge(tbl.store.rt.VectorPool.Small)
 	defer rowIDs.Close()
-	if rowIDs.IsNull(0) {
-		err = moerr.NewNotFoundNoCtx()
-		return
-	}
-	err = tbl.findDeletes(tbl.store.ctx, rowIDs, types.TS{}, types.MaxTs())
-	if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
-		return
-	}
 	if rowIDs.IsNull(0) {
 		err = moerr.NewNotFoundNoCtx()
 		return
@@ -1428,21 +1428,22 @@ func (tbl *txnTable) DedupSnapByPK(
 ) (err error) {
 	r := trace.StartRegion(ctx, "DedupSnapByPK")
 	defer r.End()
-	var rowIDs containers.Vector
-	rowIDs, err = tbl.getBaseTable(isTombstone).getRowsByPK(ctx, keys)
+	candidates, err := tbl.getBaseTable(isTombstone).getRowsByPK(ctx, keys)
 	if err != nil {
 		logutil.Errorf("getRowsByPK failed, %v", err)
 		return
 	}
-	defer rowIDs.Close()
+	defer candidates.Close()
 	from, to := types.TS{}, tbl.store.txn.GetStartTS()
-	if !isTombstone {
-		err = tbl.findDeletes(ctx, rowIDs, from, to)
+	if !isTombstone && candidates.HasCandidate() {
+		err = tbl.findDeletesForCandidates(ctx, candidates, from, to)
 		if err != nil {
 			logutil.Errorf("getRowsByPK failed 2, %v", err)
 			return
 		}
 	}
+	rowIDs := candidates.Merge(tbl.store.rt.VectorPool.Small)
+	defer rowIDs.Close()
 	for i := 0; i < rowIDs.Length(); i++ {
 		colName := tbl.getBaseTable(isTombstone).schema.GetPrimaryKey().Name
 		if !rowIDs.IsNull(i) {
@@ -1463,6 +1464,47 @@ func (tbl *txnTable) DedupSnapByPK(
 		}
 	}
 	return
+}
+
+func (tbl *txnTable) findDeletesForCandidates(
+	ctx context.Context,
+	candidates *duplicatedRowIDs,
+	from, to types.TS,
+) error {
+	length := candidates.appendable.Length()
+	combined := tbl.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
+	defer combined.Close()
+	for i := 0; i < length; i++ {
+		if candidates.appendable.IsNull(i) {
+			combined.Append(nil, true)
+		} else {
+			combined.Append(vector.GetFixedAtNoTypeCheck[types.Rowid](candidates.appendable.GetDownstreamVector(), i), false)
+		}
+	}
+	for i := 0; i < length; i++ {
+		if candidates.nonAppendable.IsNull(i) {
+			combined.Append(nil, true)
+		} else {
+			combined.Append(vector.GetFixedAtNoTypeCheck[types.Rowid](candidates.nonAppendable.GetDownstreamVector(), i), false)
+		}
+	}
+	if err := tbl.findDeletes(ctx, combined, from, to); err != nil {
+		return err
+	}
+	for i := 0; i < length; i++ {
+		if combined.IsNull(i) {
+			containers.UpdateValue(candidates.appendable.GetDownstreamVector(), uint32(i), nil, true, common.WorkspaceAllocator)
+		} else {
+			containers.UpdateValue(candidates.appendable.GetDownstreamVector(), uint32(i), vector.GetFixedAtNoTypeCheck[types.Rowid](combined.GetDownstreamVector(), i), false, common.WorkspaceAllocator)
+		}
+		idx := i + length
+		if combined.IsNull(idx) {
+			containers.UpdateValue(candidates.nonAppendable.GetDownstreamVector(), uint32(i), nil, true, common.WorkspaceAllocator)
+		} else {
+			containers.UpdateValue(candidates.nonAppendable.GetDownstreamVector(), uint32(i), vector.GetFixedAtNoTypeCheck[types.Rowid](combined.GetDownstreamVector(), idx), false, common.WorkspaceAllocator)
+		}
+	}
+	return nil
 }
 
 /*
