@@ -131,25 +131,25 @@ func decimal256DivisionOperandType(source, effective types.Type) types.Type {
 	return types.New(types.T_decimal256, precision, scale)
 }
 
-func (r *FuncGetResult) applyDivPrecisionIncrement(ctx context.Context, original []types.Type) {
-	if r.fid != DIV || r.overloadId != 0 || len(original) != 2 {
+func (fr *FuncGetResult) applyDivPrecisionIncrement(ctx context.Context, original []types.Type) {
+	if fr.fid != DIV || fr.overloadId != 0 || len(original) != 2 {
 		return
 	}
 
 	effective := original
-	if r.needCast {
-		effective = r.targetTypes
+	if fr.needCast {
+		effective = fr.targetTypes
 	}
 	result, ok := decimalDivisionReturnType(original, effective, getDivPrecisionIncrement(ctx))
 	if !ok {
 		return
 	}
-	r.retType = result
+	fr.retType = result
 
 	if result.Oid == types.T_decimal256 &&
 		(effective[0].Oid != types.T_decimal256 || effective[1].Oid != types.T_decimal256) {
-		r.needCast = true
-		r.targetTypes = []types.Type{
+		fr.needCast = true
+		fr.targetTypes = []types.Type{
 			decimal256DivisionOperandType(original[0], effective[0]),
 			decimal256DivisionOperandType(original[1], effective[1]),
 		}
