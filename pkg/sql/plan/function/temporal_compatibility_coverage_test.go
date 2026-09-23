@@ -400,3 +400,64 @@ func TestTemporalCompatibilityAdditionalExecutionBranches(t *testing.T) {
 		require.True(t, ok, info)
 	})
 }
+
+func TestTemporalCompatibilityAdditionalHelperBranches(t *testing.T) {
+	dt, err := types.ParseDatetime("2024-02-29 12:34:56.123456", 6)
+	require.NoError(t, err)
+	tm := types.TimeFromClock(false, 13, 14, 15, 160000)
+
+	// Cover the string extractor's time-first, date-first, zero-date, empty,
+	// and invalid fallbacks directly as well as through the vector wrappers.
+	for _, tc := range []struct {
+		unit  string
+		value string
+		want  int64
+		err   bool
+	}{
+		{unit: "microsecond", value: "12:34:56.123456", want: 123456},
+		{unit: "year", value: "2024-02-29", want: 2024},
+		{unit: "week", value: "0000-00-00 00:00:00", want: 0},
+		{unit: "hour", value: "", want: 0},
+		{unit: "hour", value: "not-a-temporal", err: true},
+	} {
+		got, gotErr := extractNumericFromVarchar(tc.unit, tc.value, 6)
+		if tc.err {
+			require.Error(t, gotErr)
+		} else {
+			require.NoError(t, gotErr)
+			require.Equal(t, tc.want, got)
+		}
+	}
+
+	// Exercise every TIME_FORMAT branch, including calendar-only specifiers
+	// which must return NULL for a TIME value.
+	for _, format := range []string{"%f", "%H", "%k", "%h", "%I", "%i", "%l", "%p", "%r", "%S", "%s", "%T", "%Y", "%W", "literal"} {
+		var buf bytes.Buffer
+		isNull, err := timeFormat(context.Background(), tm, format, &buf)
+		require.NoError(t, err)
+		if format == "%W" {
+			require.True(t, isNull)
+		} else {
+			require.False(t, isNull)
+			require.NotEmpty(t, buf.String())
+		}
+	}
+
+	appendTimeRangeWarning(nil, tm, 6)
+	require.True(t, validDatetimeResult(dt))
+	require.False(t, validDatetimeResult(types.DatetimeEpoch-1))
+	require.False(t, validDatetimeResult(types.DatetimeFromClock(types.MaxDatetimeYear, 12, 31, 23, 59, 59, 999999)+1))
+	require.Equal(t, 7, normalizeWeekMode(-1))
+	require.Equal(t, 1, normalizeWeekMode(9))
+	defaultMode, err := getDefaultWeekFormatMode(nil)
+	require.NoError(t, err)
+	require.Zero(t, defaultMode)
+
+	// Trigger both the normal and overflow paths in TIMEDIFF's generic helper.
+	got, err := timeDiff(tm, types.TimeFromClock(false, 12, 0, 0, 0))
+	require.NoError(t, err)
+	require.Equal(t, types.TimeFromClock(false, 1, 14, 15, 160000), got)
+	got, err = timeDiff(types.Time(math.MaxInt64), types.Time(-math.MaxInt64))
+	require.NoError(t, err)
+	require.Equal(t, types.MySQLTimeMaxForScale(6), got)
+}
