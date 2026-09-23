@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/connector"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
@@ -46,6 +47,24 @@ import (
 )
 
 var _ cnclient.PipelineClient = new(testPipelineClient)
+
+func TestScopeWritesMultiUpdateS3(t *testing.T) {
+	update := multi_update.NewArgument()
+	update.Action = multi_update.UpdateWriteS3
+	update.IsRemote = true
+	connectorOp := connector.NewArgument()
+	connectorOp.AppendChild(update)
+
+	require.True(t, scopeWritesMultiUpdateS3(&Scope{RootOp: connectorOp}))
+	update.IsRemote = false
+	require.False(t, scopeWritesMultiUpdateS3(&Scope{RootOp: connectorOp}))
+	update.IsRemote = true
+	update.Action = multi_update.UpdateFlushS3Info
+	require.False(t, scopeWritesMultiUpdateS3(&Scope{RootOp: connectorOp}))
+
+	connectorOp.Release()
+	update.Release()
+}
 
 type testPipelineClient struct {
 	genStream func(context.Context, string) (morpc.Stream, error)

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"slices"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -638,8 +639,12 @@ func TestNewS3WriterAllowsIndexOnlyContext(t *testing.T) {
 }
 
 func TestSortAndSyncOneTableUsesDataWriter(t *testing.T) {
-	_, _, proc := prepareTestCtx(t, true)
+	_, ctrl, proc := prepareTestCtx(t, true)
 	defer proc.Free()
+	workspace := &multiUpdateS3CleanupWorkspace{}
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
+	proc.Base.TxnOperator = txnOp
 	_, tableDef := getTestMainTable()
 	updateCtx := &MultiUpdateCtx{
 		TableDef:   tableDef,
@@ -668,12 +673,14 @@ func TestSortAndSyncOneTableUsesDataWriter(t *testing.T) {
 	}
 	require.Empty(t, writer.failedWriters, "successful one-shot writers must not be retained")
 	require.NotNil(t, writer.insertBlockInfo[0])
-	require.Equal(t, objectNamesFromInsertInfo(t, writer.insertBlockInfo[0]), writer.syncedObjectNames)
+	objectNames := objectNamesFromInsertInfo(t, writer.insertBlockInfo[0])
+	wantNames := append([]string(nil), objectNames...)
+	slices.Sort(wantNames)
+	require.Equal(t, wantNames, unpublishedObjectOwnerNames(writer.syncedObjectOwners))
 	info := writer.insertBlockInfo[0]
 	statsData, statsArea := vector.MustVarlenaRawData(info.Vecs[1])
 	stats := objectio.ObjectStats(statsData[0].GetByteSlice(statsArea))
 	objectName := stats.ObjectName().String()
-	objectNames := append([]string(nil), writer.syncedObjectNames...)
 	fs, err := colexec.GetSharedFSFromProc(proc)
 	require.NoError(t, err)
 	for _, name := range objectNames {
@@ -681,24 +688,67 @@ func TestSortAndSyncOneTableUsesDataWriter(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	deleteErr := errors.New("injected one-shot object cleanup failure")
-	writer.syncedObjectFS = &failOnceMultiUpdateDeleteFS{FileService: fs, failErr: deleteErr}
-	require.ErrorIs(t, writer.reset(proc, true), deleteErr)
-	require.True(t, writer.syncedObjectCleanupPending)
-	require.Equal(t, objectNames, writer.syncedObjectNames)
-	_, err = fs.StatFile(proc.Ctx, objectName)
-	require.NoError(t, err, "failed cleanup must retain the exact object name for retry")
-
-	// A later success-shaped reset retries the abort cleanup; it cannot
-	// reinterpret an object whose deletion failed as accepted by the workspace.
 	require.NoError(t, writer.reset(proc, false))
+	require.Empty(t, writer.syncedObjectOwners, "the workspace retains the lease after producer reset")
+	workspace.AcceptUnpublishedS3ObjectNames(objectNames...)
+	require.NoError(t, workspace.CleanupUnpublishedS3Objects(proc.Ctx))
 	_, err = fs.StatFile(proc.Ctx, objectName)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "retry should delete the unaccepted object, got %v", err)
+	require.NoError(t, err, "registered metadata must keep its S3 object")
+}
+
+func TestSortAndSyncOneTableRetainsOwnerWhenWorkspaceCannotAcceptIt(t *testing.T) {
+	_, ctrl, proc := prepareTestCtx(t, true)
+	defer proc.Free()
+	_, tableDef := getTestMainTable()
+	update := &MultiUpdate{MultiUpdateCtx: []*MultiUpdateCtx{{
+		TableDef:   tableDef,
+		InsertCols: []int{0, 1, 2, 3},
+	}}}
+	update.resetMultiUpdateCtxs()
+	writer, err := newS3Writer(proc.GetService(), update)
+	require.NoError(t, err)
+
+	workspace := &struct{ client.Workspace }{}
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
+	proc.Base.TxnOperator = txnOp
+	batches, _ := prepareTestInsertBatchs(proc.Mp(), 2, colexec.DefaultBatchSize, false, false)
+	err = writer.sortAndSyncOneTable(
+		proc,
+		tableDef,
+		process.NewAnalyzer(0, false, false, "multi-update-workspace-owner-failure"),
+		0,
+		false,
+		batches,
+		true,
+	)
+	require.ErrorContains(t, err, "cannot retain unpublished S3 object ownership")
+	require.Len(t, writer.syncedObjectOwners, 1,
+		"the delegate must keep cleanup ownership when workspace handoff is rejected")
+	objectNames := writer.syncedObjectOwners[0].Names()
+	require.NotEmpty(t, objectNames)
+
+	fs, err := colexec.GetSharedFSFromProc(proc)
+	require.NoError(t, err)
+	for _, name := range objectNames {
+		_, statErr := fs.StatFile(proc.Ctx, name)
+		require.NoError(t, statErr, "the sync succeeded before workspace retention failed")
+	}
+	require.NoError(t, writer.reset(proc, true))
+	for _, name := range objectNames {
+		_, statErr := fs.StatFile(proc.Ctx, name)
+		require.True(t, moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound),
+			"abort must clean an object whose owner could not be handed to the workspace: %s (%v)", name, statErr)
+	}
 }
 
 func TestSortAndSyncOneTableReleasesWriterMemoryAcrossSpills(t *testing.T) {
-	_, _, proc := prepareTestCtx(t, true)
+	_, ctrl, proc := prepareTestCtx(t, true)
 	defer proc.Free()
+	workspace := &multiUpdateS3CleanupWorkspace{}
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
+	proc.Base.TxnOperator = txnOp
 	_, tableDef := getTestMainTable()
 	updateCtx := &MultiUpdateCtx{
 		TableDef:   tableDef,
@@ -717,7 +767,7 @@ func TestSortAndSyncOneTableReleasesWriterMemoryAcrossSpills(t *testing.T) {
 
 	spill := func() []string {
 		bats, _ := prepareTestInsertBatchs(proc.Mp(), 2, colexec.DefaultBatchSize, false, false)
-		before := len(writer.syncedObjectNames)
+		before := len(writer.syncedObjectOwners)
 		require.NoError(t, writer.sortAndSyncOneTable(
 			proc,
 			tableDef,
@@ -728,10 +778,12 @@ func TestSortAndSyncOneTableReleasesWriterMemoryAcrossSpills(t *testing.T) {
 			true,
 		))
 		require.Empty(t, writer.failedWriters, "successful one-shot writers must be closed immediately")
-		require.Greater(t, len(writer.syncedObjectNames), before, "each successful spill must transfer its cleanup names")
+		require.Greater(t, len(writer.syncedObjectOwners), before, "each successful spill must transfer its cleanup names")
 		require.NotNil(t, writer.insertBlockInfo[0])
 		spillObjectNames := objectNamesFromInsertInfo(t, writer.insertBlockInfo[0])
-		require.Equal(t, spillObjectNames, writer.syncedObjectNames[before:])
+		ownerNames := append([]string(nil), spillObjectNames...)
+		slices.Sort(ownerNames)
+		require.Equal(t, ownerNames, unpublishedObjectOwnerNames(writer.syncedObjectOwners[before:]))
 		for _, name := range spillObjectNames {
 			_, statErr := fs.StatFile(proc.Ctx, name)
 			require.NoError(t, statErr)
@@ -750,7 +802,9 @@ func TestSortAndSyncOneTableReleasesWriterMemoryAcrossSpills(t *testing.T) {
 		acceptedObjectNames = append(acceptedObjectNames, spill()...)
 	}
 	require.NoError(t, writer.reset(proc, false))
-	require.Empty(t, writer.syncedObjectNames)
+	require.Empty(t, writer.syncedObjectOwners, "the workspace keeps the lease after producer reset")
+	workspace.AcceptUnpublishedS3ObjectNames(acceptedObjectNames...)
+	require.NoError(t, workspace.CleanupUnpublishedS3Objects(proc.Ctx))
 	for _, name := range acceptedObjectNames {
 		_, statErr := fs.StatFile(proc.Ctx, name)
 		require.NoError(t, statErr, "a successful handoff must preserve accepted objects")
@@ -758,6 +812,7 @@ func TestSortAndSyncOneTableReleasesWriterMemoryAcrossSpills(t *testing.T) {
 
 	unacceptedObjectNames := spill()
 	require.NoError(t, writer.reset(proc, true))
+	require.NoError(t, workspace.CleanupUnpublishedS3Objects(proc.Ctx))
 	for _, name := range unacceptedObjectNames {
 		_, err = fs.StatFile(proc.Ctx, name)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "abort must delete the current execution's object %s, got %v", name, err)
@@ -765,6 +820,78 @@ func TestSortAndSyncOneTableReleasesWriterMemoryAcrossSpills(t *testing.T) {
 	for _, name := range acceptedObjectNames {
 		_, err = fs.StatFile(proc.Ctx, name)
 		require.NoError(t, err, "a later abort must not delete an earlier accepted object")
+	}
+}
+
+func unpublishedObjectOwnerNames(owners []*colexec.UnpublishedS3ObjectOwner) []string {
+	var names []string
+	for _, owner := range owners {
+		names = append(names, owner.Names()...)
+	}
+	slices.Sort(names)
+	return names
+}
+
+func TestRemoteMultiUpdateOutputTransfersCleanupBeforeRegistration(t *testing.T) {
+	_, ctrl, proc := prepareTestCtx(t, true)
+	defer proc.Free()
+	workerWorkspace := &multiUpdateS3CleanupWorkspace{}
+	coordinatorWorkspace := &multiUpdateS3CleanupWorkspace{}
+	workerTxn := mock_frontend.NewMockTxnOperator(ctrl)
+	workerTxn.EXPECT().GetWorkspace().Return(workerWorkspace).AnyTimes()
+	proc.Base.TxnOperator = workerTxn
+
+	_, tableDef := getTestMainTable()
+	fs, err := colexec.GetSharedFSFromProc(proc)
+	require.NoError(t, err)
+	updateCtx := &MultiUpdateCtx{TableDef: tableDef, InsertCols: []int{0, 1, 2, 3}}
+	arg := &MultiUpdate{MultiUpdateCtx: []*MultiUpdateCtx{updateCtx}}
+	arg.resetMultiUpdateCtxs()
+	delegate, err := newS3Writer(proc.GetService(), arg)
+	require.NoError(t, err)
+	batches, _ := prepareTestInsertBatchs(proc.Mp(), 2, colexec.DefaultBatchSize, false, false)
+	require.NoError(t, delegate.sortAndSyncOneTable(
+		proc,
+		tableDef,
+		process.NewAnalyzer(0, false, false, "remote-multi-update-owner-handoff"),
+		0,
+		false,
+		batches,
+		true,
+	))
+	wantNames := objectNamesFromInsertInfo(t, delegate.insertBlockInfo[0])
+	slices.Sort(wantNames)
+	output := makeS3OutputBatch()
+	outputWriter := &s3WriterDelegate{
+		updateCtxs: []*MultiUpdateCtx{updateCtx},
+		outputBat:  output,
+	}
+	require.NoError(t, outputWriter.addBatchToOutput(
+		proc.Mp(), actionInsert, 0, uint64(delegate.insertBlockInfo[0].RowCount()), "", delegate.insertBlockInfo[0],
+	))
+	require.NoError(t, delegate.reset(proc, false))
+	require.True(t, workerWorkspace.HasUnpublishedS3ObjectOwners(),
+		"producer reset must leave names owned until the remote batch is transferred")
+
+	coordinatorTxn := mock_frontend.NewMockTxnOperator(ctrl)
+	coordinatorTxn.EXPECT().GetWorkspace().Return(coordinatorWorkspace).AnyTimes()
+	proc.Base.TxnOperator = coordinatorTxn
+	require.NoError(t, RetainOutputS3ObjectOwnership(proc, output))
+	require.Equal(t, wantNames, coordinatorWorkspace.pendingObjectNames())
+
+	// A successful batch ACK transfers ownership to the coordinator workspace;
+	// if registration then fails, its statement cleanup still has the names.
+	workerWorkspace.AcceptAllUnpublishedS3ObjectOwners()
+	output.Clean(proc.Mp())
+	for _, name := range wantNames {
+		_, statErr := fs.StatFile(proc.Ctx, name)
+		require.NoError(t, statErr)
+	}
+	require.NoError(t, coordinatorWorkspace.CleanupUnpublishedS3Objects(proc.Ctx))
+	for _, name := range wantNames {
+		_, statErr := fs.StatFile(proc.Ctx, name)
+		require.True(t, moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound),
+			"coordinator must clean an object when registration never happens: %s (%v)", name, statErr)
 	}
 }
 
@@ -856,12 +983,68 @@ func TestMultiUpdateResetKeepsFailedCleanupOutOfReusableState(t *testing.T) {
 type multiUpdateS3CleanupWorkspace struct {
 	client.Workspace
 	cleanups []func(context.Context) error
+	owners   []*colexec.UnpublishedS3ObjectOwner
 }
 
 func (w *multiUpdateS3CleanupWorkspace) RetainUnpublishedS3Cleanup(
 	cleanup func(context.Context) error,
 ) {
 	w.cleanups = append(w.cleanups, cleanup)
+}
+
+func (w *multiUpdateS3CleanupWorkspace) RetainUnpublishedS3ObjectOwner(
+	owner *colexec.UnpublishedS3ObjectOwner,
+) {
+	w.owners = append(w.owners, owner)
+}
+
+func (w *multiUpdateS3CleanupWorkspace) AcceptUnpublishedS3ObjectNames(names ...string) {
+	for _, owner := range w.owners {
+		owner.Accept(names...)
+	}
+	w.dropAcceptedOwners()
+}
+
+func (w *multiUpdateS3CleanupWorkspace) HasUnpublishedS3ObjectOwners() bool {
+	return len(w.owners) != 0
+}
+
+func (w *multiUpdateS3CleanupWorkspace) AcceptAllUnpublishedS3ObjectOwners() {
+	for _, owner := range w.owners {
+		owner.AcceptAll()
+	}
+	w.owners = nil
+}
+
+func (w *multiUpdateS3CleanupWorkspace) CleanupUnpublishedS3Objects(ctx context.Context) error {
+	var errs []error
+	for _, cleanup := range w.cleanups {
+		if err := cleanup(ctx); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	w.cleanups = nil
+	for _, owner := range w.owners {
+		if err := owner.Cleanup(ctx); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	w.dropAcceptedOwners()
+	return errors.Join(errs...)
+}
+
+func (w *multiUpdateS3CleanupWorkspace) pendingObjectNames() []string {
+	return unpublishedObjectOwnerNames(w.owners)
+}
+
+func (w *multiUpdateS3CleanupWorkspace) dropAcceptedOwners() {
+	owners := w.owners[:0]
+	for _, owner := range w.owners {
+		if owner.Pending() {
+			owners = append(owners, owner)
+		}
+	}
+	w.owners = owners
 }
 
 func TestMultiUpdateFreeTransfersFailedCleanupWithBorrowedBuffer(t *testing.T) {
@@ -916,53 +1099,68 @@ func TestMultiUpdateFreeTransfersFailedCleanupWithBorrowedBuffer(t *testing.T) {
 func TestMultiUpdateFreeTransfersSyncedObjectCleanup(t *testing.T) {
 	_, ctrl, proc := prepareTestCtx(t, true)
 	defer proc.Free()
-	_, tableDef := getTestMainTable()
-	updateCtx := &MultiUpdateCtx{
-		TableDef:   tableDef,
-		InsertCols: []int{0, 1, 2, 3},
-	}
-	arg := &MultiUpdate{MultiUpdateCtx: []*MultiUpdateCtx{updateCtx}}
-	arg.resetMultiUpdateCtxs()
-	delegate, err := newS3Writer(proc.GetService(), arg)
-	require.NoError(t, err)
-	batches, _ := prepareTestInsertBatchs(proc.Mp(), 2, colexec.DefaultBatchSize, false, false)
-	require.NoError(t, delegate.sortAndSyncOneTable(
-		proc,
-		tableDef,
-		process.NewAnalyzer(0, false, false, "multi-update-free-synced-object"),
-		0,
-		false,
-		batches,
-		true,
-	))
-	objectNames := objectNamesFromInsertInfo(t, delegate.insertBlockInfo[0])
 	baseFS, err := colexec.GetSharedFSFromProc(proc)
 	require.NoError(t, err)
+	objectName := "multi-update-free-synced-object"
+	require.NoError(t, baseFS.Write(proc.Ctx, fileservice.IOVector{
+		FilePath: objectName,
+		Entries:  []fileservice.IOEntry{{Size: 1, Data: []byte("x")}},
+		Policy:   fileservice.SkipAllCache,
+	}))
 	deleteErr := errors.New("injected synced-object cleanup failure during Free")
-	delegate.syncedObjectFS = &failOnceMultiUpdateDeleteFS{FileService: baseFS, failErr: deleteErr}
-
+	owner, err := colexec.NewUnpublishedS3ObjectOwner(
+		&failOnceMultiUpdateDeleteFS{FileService: baseFS, failErr: deleteErr},
+		objectName,
+	)
+	require.NoError(t, err)
 	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 	workspace := &multiUpdateS3CleanupWorkspace{}
 	txnOp.EXPECT().GetWorkspace().Return(workspace).AnyTimes()
 	proc.Base.TxnOperator = txnOp
+	workspace.RetainUnpublishedS3ObjectOwner(owner)
+	delegate := &s3WriterDelegate{syncedObjectOwners: []*colexec.UnpublishedS3ObjectOwner{owner}}
 	update := &MultiUpdate{}
 	update.ctr.s3Writer = delegate
 	update.Free(proc, true, deleteErr)
-	require.Nil(t, update.ctr.s3Writer, "the transaction owns the lightweight cleanup ledger after operator release")
+	require.Nil(t, update.ctr.s3Writer, "the transaction owns the object-name cleanup record after operator release")
 	require.Len(t, workspace.cleanups, 1)
-	require.True(t, delegate.syncedObjectCleanupPending)
-	for _, name := range objectNames {
-		_, err = baseFS.StatFile(proc.Ctx, name)
-		require.NoError(t, err, "failed deletion must preserve object %s for the transaction retry", name)
-	}
+	require.True(t, owner.Pending())
+	_, err = baseFS.StatFile(proc.Ctx, objectName)
+	require.NoError(t, err, "failed deletion must preserve the object for the transaction retry")
 
 	require.NoError(t, workspace.cleanups[0](proc.Ctx))
-	require.Empty(t, delegate.syncedObjectNames)
+	require.Empty(t, delegate.syncedObjectOwners)
+	require.False(t, owner.Pending())
 	require.Nil(t, delegate.insertFreeLists)
-	for _, name := range objectNames {
-		_, err = baseFS.StatFile(proc.Ctx, name)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "transaction retry should delete object %s, got %v", name, err)
-	}
+	_, err = baseFS.StatFile(proc.Ctx, objectName)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "transaction retry should delete the object, got %v", err)
+}
+
+func TestMultiUpdateResetRetriesFailedSyncedObjectCleanup(t *testing.T) {
+	_, _, proc := prepareTestCtx(t, true)
+	defer proc.Free()
+	fs, err := colexec.GetSharedFSFromProc(proc)
+	require.NoError(t, err)
+	objectName := "multi-update-reset-retry-object"
+	require.NoError(t, fs.Write(proc.Ctx, fileservice.IOVector{
+		FilePath: objectName,
+		Entries:  []fileservice.IOEntry{{Size: 1, Data: []byte("x")}},
+		Policy:   fileservice.SkipAllCache,
+	}))
+	deleteErr := errors.New("injected reset cleanup failure")
+	owner, err := colexec.NewUnpublishedS3ObjectOwner(
+		&failOnceMultiUpdateDeleteFS{FileService: fs, failErr: deleteErr},
+		objectName,
+	)
+	require.NoError(t, err)
+	delegate := &s3WriterDelegate{syncedObjectOwners: []*colexec.UnpublishedS3ObjectOwner{owner}}
+
+	require.ErrorIs(t, delegate.reset(proc, true), deleteErr)
+	require.True(t, owner.Pending(), "a failed delete must retain the exact cleanup owner")
+	require.NoError(t, delegate.reset(proc, false), "a later reset must retry, not accept, the failed cleanup")
+	require.False(t, owner.Pending())
+	_, err = fs.StatFile(proc.Ctx, objectName)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "retry should delete the unaccepted object, got %v", err)
 }
 
 func TestPartitionMultiUpdateFreeTransfersFailedCleanup(t *testing.T) {
