@@ -24,20 +24,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/features"
 )
 
-type scanUniqueKeySource uint8
-
-const (
-	scanUniqueKeyPrimary scanUniqueKeySource = iota
-	scanUniqueKeySecondary
-)
-
 // scanUniqueKeyProof is a planner-local proof that one direct scan cannot
 // produce two visible rows with the same SQL-equality key. It deliberately
 // carries column ordinals rather than names so consumers must also match the
 // exact scan binding that owns the TableDef.
 type scanUniqueKeyProof struct {
 	columnPositions []int32
-	source          scanUniqueKeySource
 }
 
 func primaryKeyColumnPositions(tableDef *pbplan.TableDef) ([]int32, bool) {
@@ -182,7 +174,6 @@ func sqlEqualityCompatibleScanUniqueKeys(tableDef *pbplan.TableDef) []scanUnique
 	if positions, ok := sqlEqualityCompatiblePrimaryKeyColumnPositions(tableDef); ok {
 		proofs = append(proofs, scanUniqueKeyProof{
 			columnPositions: positions,
-			source:          scanUniqueKeyPrimary,
 		})
 	}
 
@@ -206,7 +197,6 @@ func sqlEqualityCompatibleScanUniqueKeys(tableDef *pbplan.TableDef) []scanUnique
 		if notNull {
 			proofs = append(proofs, scanUniqueKeyProof{
 				columnPositions: positions,
-				source:          scanUniqueKeySecondary,
 			})
 		}
 	}
