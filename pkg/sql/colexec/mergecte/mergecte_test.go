@@ -489,6 +489,250 @@ func TestMergeCTECopyAndReconcileFailuresAreAtomic(t *testing.T) {
 	})
 }
 
+func TestMergeCTERecursionDepthCountsOnlyProductiveLevels(t *testing.T) {
+	testCases := []struct {
+		name          string
+		maxDepth      int64
+		recursiveBats []mergeCTEDepthBatchSpec
+		wantRows      []int64
+		wantErr       bool
+	}{
+		{
+			name:          "zero depth allows anchor and empty probe",
+			maxDepth:      0,
+			recursiveBats: []mergeCTEDepthBatchSpec{{last: true}},
+			wantRows:      []int64{1},
+		},
+		{
+			name:     "zero depth rejects first recursive level",
+			maxDepth: 0,
+			recursiveBats: []mergeCTEDepthBatchSpec{
+				{values: []int64{2}},
+				{last: true},
+			},
+			wantRows: []int64{1},
+			wantErr:  true,
+		},
+		{
+			name:     "one recursive level is allowed",
+			maxDepth: 1,
+			recursiveBats: []mergeCTEDepthBatchSpec{
+				{values: []int64{2}},
+				{last: true},
+				{last: true},
+			},
+			wantRows: []int64{1, 2},
+		},
+		{
+			name:     "exact depth excludes empty convergence probe",
+			maxDepth: 2,
+			recursiveBats: []mergeCTEDepthBatchSpec{
+				{values: []int64{2}},
+				{last: true},
+				{values: []int64{3}},
+				{last: true},
+				{last: true},
+			},
+			wantRows: []int64{1, 2, 3},
+		},
+		{
+			name:     "depth plus one is rejected before publishing that level",
+			maxDepth: 1,
+			recursiveBats: []mergeCTEDepthBatchSpec{
+				{values: []int64{2}},
+				{last: true},
+				{values: []int64{3}},
+				{last: true},
+			},
+			wantRows: []int64{1, 2},
+			wantErr:  true,
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			setMergeCTEDepth(proc, tc.maxDepth)
+			arg := &MergeCTE{NodeCnt: 1}
+			t.Cleanup(func() {
+				freeMergeCTEChildren(arg, proc, true)
+				arg.Free(proc, true, nil)
+				proc.Free()
+				require.Zero(t, proc.Mp().CurrNB())
+			})
+			arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{
+				makeMergeCTEDepthBatch(t, proc, []int64{1}, false),
+			}))
+			arg.AppendChild(colexec.NewMockOperator().WithBatchs(makeMergeCTEDepthBatches(t, proc, tc.recursiveBats)))
+
+			require.NoError(t, arg.Prepare(proc))
+			gotRows, err := runMergeCTEDepth(t, arg, proc)
+			require.Equal(t, tc.wantRows, gotRows)
+			if tc.wantErr {
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrCheckRecursiveLevel))
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestMergeCTERecursionDepthAggregatesAllSenders(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	setMergeCTEDepth(proc, 2)
+	arg := &MergeCTE{NodeCnt: 2}
+	t.Cleanup(func() {
+		freeMergeCTEChildren(arg, proc, true)
+		arg.Free(proc, true, nil)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+	arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{
+		makeMergeCTEDepthBatch(t, proc, []int64{1}, false),
+	}))
+	arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{
+		// Round 1 has rows from sender 1; sender 2's marker closes the round.
+		makeMergeCTEDepthBatch(t, proc, []int64{2}, false),
+		makeMergeCTEDepthBatch(t, proc, []int64{999}, true),
+		makeMergeCTEDepthBatch(t, proc, []int64{999}, true),
+		// Round 2 starts with an empty sender, then gets rows from sender 2.
+		makeMergeCTEDepthBatch(t, proc, []int64{999}, true),
+		makeMergeCTEDepthBatch(t, proc, []int64{3}, false),
+		makeMergeCTEDepthBatch(t, proc, []int64{999}, true),
+		// Both senders close an empty convergence probe.
+		makeMergeCTEDepthBatch(t, proc, []int64{999}, true),
+		makeMergeCTEDepthBatch(t, proc, []int64{999}, true),
+	}))
+
+	require.NoError(t, arg.Prepare(proc))
+	gotRows, err := runMergeCTEDepth(t, arg, proc)
+	require.NoError(t, err)
+	require.Equal(t, []int64{1, 2, 3}, gotRows)
+}
+
+func TestMergeCTERecursionDepthDoesNotCountDuplicateOnlyDistinctRound(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	setMergeCTEDepth(proc, 0)
+	arg := &MergeCTE{NodeCnt: 1, Distinct: true}
+	t.Cleanup(func() {
+		freeMergeCTEChildren(arg, proc, true)
+		arg.Free(proc, true, nil)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+	arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{
+		makeMergeCTEDepthBatch(t, proc, []int64{1}, false),
+	}))
+	arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{
+		makeMergeCTEDepthBatch(t, proc, []int64{1}, false),
+		makeMergeCTEDepthBatch(t, proc, []int64{999}, true),
+	}))
+
+	require.NoError(t, arg.Prepare(proc))
+	gotRows, err := runMergeCTEDepth(t, arg, proc)
+	require.NoError(t, err)
+	require.Equal(t, []int64{1}, gotRows)
+}
+
+func TestMergeCTEResetClearsRecursiveDepthProgress(t *testing.T) {
+	proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+	setMergeCTEDepth(proc, 0)
+	arg := &MergeCTE{NodeCnt: 1}
+	t.Cleanup(func() {
+		freeMergeCTEChildren(arg, proc, true)
+		arg.Free(proc, true, nil)
+		proc.Free()
+		require.Zero(t, proc.Mp().CurrNB())
+	})
+	arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{
+		makeMergeCTEDepthBatch(t, proc, []int64{1}, false),
+	}))
+	arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{
+		makeMergeCTEDepthBatch(t, proc, []int64{2}, false),
+		makeMergeCTEDepthBatch(t, proc, []int64{999}, true),
+	}))
+	require.NoError(t, arg.Prepare(proc))
+	_, err := runMergeCTEDepth(t, arg, proc)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrCheckRecursiveLevel))
+
+	arg.Reset(proc, true, err)
+	freeMergeCTEChildren(arg, proc, true)
+	arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{
+		makeMergeCTEDepthBatch(t, proc, []int64{1}, false),
+	}))
+	arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{
+		makeMergeCTEDepthBatch(t, proc, []int64{999}, true),
+	}))
+	require.NoError(t, arg.Prepare(proc))
+	gotRows, err := runMergeCTEDepth(t, arg, proc)
+	require.NoError(t, err)
+	require.Equal(t, []int64{1}, gotRows)
+}
+
+type mergeCTEDepthBatchSpec struct {
+	values []int64
+	last   bool
+}
+
+func makeMergeCTEDepthBatches(t *testing.T, proc *process.Process, specs []mergeCTEDepthBatchSpec) []*batch.Batch {
+	batches := make([]*batch.Batch, len(specs))
+	for i, spec := range specs {
+		batches[i] = makeMergeCTEDepthBatch(t, proc, spec.values, spec.last)
+	}
+	return batches
+}
+
+func makeMergeCTEDepthBatch(t *testing.T, proc *process.Process, values []int64, last bool) *batch.Batch {
+	t.Helper()
+	bat := batch.New([]string{"n"})
+	bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	for _, value := range values {
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, false, proc.Mp()))
+	}
+	bat.SetRowCount(len(values))
+	if last {
+		bat.SetLast()
+	}
+	return bat
+}
+
+func setMergeCTEDepth(proc *process.Process, maxDepth int64) {
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		switch name {
+		case "cte_max_recursion_depth":
+			return maxDepth, nil
+		case process.CTEMemoryQuotaVariable:
+			return int64(process.DefaultCTEMemoryQuotaBytes), nil
+		default:
+			return nil, nil
+		}
+	})
+}
+
+func runMergeCTEDepth(t *testing.T, arg *MergeCTE, proc *process.Process) ([]int64, error) {
+	t.Helper()
+	var rows []int64
+	for step := 0; step < 100; step++ {
+		result, err := vm.Exec(arg, proc)
+		if err != nil {
+			return rows, err
+		}
+		if result.Batch == nil {
+			if result.Status == vm.ExecStop {
+				return rows, nil
+			}
+			continue
+		}
+		if result.Batch.Last() || result.Batch.IsEmpty() {
+			continue
+		}
+		rows = append(rows, vector.MustFixedColWithTypeCheck[int64](result.Batch.Vecs[0])...)
+	}
+	return rows, errors.New("recursive CTE test operator did not stop")
+}
+
 func freeMergeCTEChildren(arg *MergeCTE, proc *process.Process, pipelineFailed bool) {
 	for _, child := range arg.Children {
 		child.Free(proc, pipelineFailed, nil)
