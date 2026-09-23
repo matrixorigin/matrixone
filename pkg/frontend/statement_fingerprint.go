@@ -50,8 +50,8 @@ func formatStatementFingerprint(ctx context.Context, stmt tree.Statement) (finge
 		tree.WithCanonicalUserVariableNames(),
 		tree.WithMaxOutputBytes(maxStatementFingerprintFormattedBytes),
 	)
-	stmt.Format(fmtCtx)
-	if fmtCtx.OutputLimitExceeded() || fmtCtx.Len() == 0 || context.Cause(ctx) != nil {
+	complete := fmtCtx.FormatNode(stmt)
+	if !complete || fmtCtx.OutputLimitExceeded() || fmtCtx.Len() == 0 || context.Cause(ctx) != nil {
 		return "", true
 	}
 	sum := sha256.Sum256([]byte(fmtCtx.String()))

@@ -204,7 +204,11 @@ func (node *NumVal) Format(ctx *FmtCtx) {
 		}
 	}
 	if strings.Contains(node.origString, "\\") && !ctx.NoBackslashEscape() {
-		ctx.WriteValue(node.ValType, FormatString(node.origString))
+		if ctx.maxOutputBytes > 0 && !ctx.quoteString {
+			ctx.writeFormattedStringValue(node.ValType, node.origString)
+		} else {
+			ctx.WriteValue(node.ValType, FormatString(node.origString))
+		}
 		return
 	}
 

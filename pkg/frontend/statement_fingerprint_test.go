@@ -114,7 +114,7 @@ func TestFormatStatementFingerprintDoesNotMutateAST(t *testing.T) {
 			tree.WithCanonicalUserVariableNames(),
 			tree.WithMaxOutputBytes(maxStatementFingerprintFormattedBytes),
 		)
-		stmt.Format(ctx)
+		require.True(t, ctx.FormatNode(stmt))
 		require.False(t, ctx.OutputLimitExceeded())
 		return ctx.String()
 	}
