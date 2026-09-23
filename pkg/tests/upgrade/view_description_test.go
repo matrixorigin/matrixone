@@ -100,10 +100,10 @@ func TestViewDescriptionPublicSQL(t *testing.T) {
 		require.NoError(t, prepared.QueryRowContext(ctx).Scan(&width))
 		require.Equal(t, 60, width)
 		exec("drop table view_description_test.src")
-		invalid, err := db.QueryContext(ctx, "desc view_description_test.v")
-		if invalid != nil {
-			require.NoError(t, invalid.Close())
-		}
+		var invalidFields [7]sql.NullString
+		err = db.QueryRowContext(ctx, "desc view_description_test.v").Scan(
+			&invalidFields[0], &invalidFields[1], &invalidFields[2], &invalidFields[3],
+			&invalidFields[4], &invalidFields[5], &invalidFields[6])
 		require.Error(t, err)
 		exec("create table view_description_test.src (x varchar(90), qty bigint not null default 11)")
 		repaired := describe("desc view_description_test.v")
@@ -147,10 +147,8 @@ func TestViewDescriptionPrivileges(t *testing.T) {
 		exec("grant show tables on database view_description_priv to view_description_role")
 		require.NoError(t, reader.QueryRowContext(ctx, "select character_maximum_length from information_schema.columns where table_schema='view_description_priv' and table_name='v'").Scan(&width))
 		require.Equal(t, 60, width)
-		rows, err := reader.QueryContext(ctx, "select * from view_description_priv.src")
-		if rows != nil {
-			require.NoError(t, rows.Close())
-		}
+		var sourceValue string
+		err = reader.QueryRowContext(ctx, "select x from view_description_priv.src").Scan(&sourceValue)
 		require.Error(t, err, "metadata visibility must not grant source-table SELECT")
 	})
 }

@@ -71,9 +71,6 @@ func (s *viewColumnsState) start(tf *TableFunction, proc *process.Process, nthRo
 	}
 	compiler, ok := compilerValue.(plan.CompilerContext)
 	if !ok || compiler == nil {
-		compiler = plan.ViewDescriptionCompilerContext(proc.Ctx)
-	}
-	if compiler == nil {
 		return moerr.NewNotSupported(proc.Ctx, "View column description requires a compiler context")
 	}
 	_, def, err := compiler.ResolveById(id, nil)
