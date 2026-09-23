@@ -607,6 +607,30 @@ func setOperationOutputType(
 	return leftType
 }
 
+// setOperationPureCharCommonType keeps a set operation made exclusively from
+// CHAR expressions in the fixed-width CHAR domain. The conditional-expression
+// resolver may promote CHAR with VARCHAR/TEXT to a variable string, but that
+// rule is not valid for set-operation row materialization.
+func setOperationPureCharCommonType(source []types.Type) (types.Type, bool) {
+	if len(source) == 0 {
+		return types.Type{}, false
+	}
+	result := source[0]
+	if result.Oid != types.T_char {
+		return types.Type{}, false
+	}
+	for _, typ := range source[1:] {
+		if typ.Oid != types.T_char {
+			return types.Type{}, false
+		}
+		if result.Width < typ.Width {
+			result.Width = typ.Width
+		}
+	}
+	result.Charset = types.MergeStringCharset(source, result.Charset)
+	return result, true
+}
+
 type ColRefRemapping struct {
 	globalToLocal map[[2]int32][2]int32
 	localToGlobal [][2]int32
