@@ -368,7 +368,7 @@ func TestTemporalCompatibilitySelectListAndNullBranches(t *testing.T) {
 					[]bool{false, true, true, true})
 			}
 			caseDef := NewFunctionTestCase(proc, []FunctionTestInput{input, interval, unit}, result, tc.fn).
-				WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, false, false}})
+				WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, false}})
 			ok, info := caseDef.Run()
 			require.True(t, ok, info)
 		})
@@ -380,15 +380,15 @@ func TestTemporalCompatibilitySelectListAndNullBranches(t *testing.T) {
 		in   FunctionTestInput
 		fn   fEvalFn
 	}{
-		{"unix-int", NewFunctionTestInput(types.T_int64.ToType(), []int64{0, -1}, []bool{false, false}), FromUnixTimeInt64Format},
-		{"unix-uint", NewFunctionTestInput(types.T_uint64.ToType(), []uint64{0, maxUnixTimestampInt + 1}, nil), FromUnixTimeUint64Format},
-		{"unix-float", NewFunctionTestInput(types.T_float64.ToType(), []float64{0, math.NaN()}, nil), FromUnixTimeFloat64Format},
+		{"unix-int", NewFunctionTestInput(types.T_int64.ToType(), []int64{0, -1, maxUnixTimestampInt + 1}, []bool{false, false, false}), FromUnixTimeInt64Format},
+		{"unix-uint", NewFunctionTestInput(types.T_uint64.ToType(), []uint64{0, maxUnixTimestampInt + 1, maxUnixTimestampInt + 1}, nil), FromUnixTimeUint64Format},
+		{"unix-float", NewFunctionTestInput(types.T_float64.ToType(), []float64{0, math.NaN(), math.NaN()}, nil), FromUnixTimeFloat64Format},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			result := NewFunctionTestResult(types.T_varchar.ToType(), false,
-				[]string{"1970", ""}, []bool{false, true})
+				[]string{"1970", "", ""}, []bool{false, true, true})
 			caseDef := NewFunctionTestCase(proc, []FunctionTestInput{tc.in, format}, result, tc.fn).
-				WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false}})
+				WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}})
 			ok, info := caseDef.Run()
 			require.True(t, ok, info)
 		})
