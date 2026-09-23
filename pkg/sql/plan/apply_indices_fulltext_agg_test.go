@@ -232,10 +232,23 @@ func TestUnwrapMonotoneScalar(t *testing.T) {
 	wrap := func(name string, arg *planpb.Expr) *planpb.Expr {
 		return &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: name}, Args: []*planpb.Expr{arg}}}}
 	}
-	for _, n := range []string{"cast", "round", "floor", "ceil"} {
+	castTo := func(id types.T, arg *planpb.Expr) *planpb.Expr {
+		e := wrap("cast", arg)
+		e.Typ = planpb.Type{Id: int32(id)}
+		return e
+	}
+	for _, n := range []string{"round", "floor", "ceil"} {
 		require.Same(t, col, unwrapMonotoneScalar(wrap(n, col)), n)
 	}
-	require.Same(t, col, unwrapMonotoneScalar(wrap("cast", wrap("round", col))), "nested wrappers are peeled")
+	require.Same(t, col, unwrapMonotoneScalar(castTo(types.T_float64, col)), "cast to a numeric type is peeled")
+	require.Same(t, col, unwrapMonotoneScalar(castTo(types.T_float64, wrap("round", col))), "nested wrappers are peeled")
+
+	// A cast whose target type does not preserve zero is NOT order-preserving through zero, so the
+	// peel must stop at it rather than expose the inner expression (#29065).
+	yearCast := castTo(types.T_year, col)
+	require.Same(t, yearCast, unwrapMonotoneScalar(yearCast), "CAST(... AS YEAR) stops the peel")
+	require.Same(t, col, unwrapMonotoneScalar(col), "and its inner column is still reachable directly")
+
 	plus := wrap("+", col)
 	require.Same(t, plus, unwrapMonotoneScalar(plus), "a non-order-preserving function stops the peel")
 	emptyCast := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: "cast"}}}}
@@ -573,6 +586,11 @@ func TestWrappedMatchDropSafe(t *testing.T) {
 	wrap := func(name string, args ...*planpb.Expr) *planpb.Expr {
 		return &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: name}, Args: args}}}
 	}
+	castTo := func(id types.T, arg *planpb.Expr) *planpb.Expr {
+		e := wrap("cast", arg)
+		e.Typ = planpb.Type{Id: int32(id)}
+		return e
+	}
 	ok := func(e *planpb.Expr) bool { m, s := wrappedMatchDropSafe(e); return m != nil && s }
 
 	// Bare match and single-value monotone wrappers are drop-safe (each maps 0 -> non-null 0).
@@ -581,12 +599,21 @@ func TestWrappedMatchDropSafe(t *testing.T) {
 	require.True(t, ok(wrap("ceil", match)))
 	require.True(t, ok(wrap("round", match)), "round with no digits")
 	require.True(t, ok(wrap("round", match, constDigits)), "round with constant non-null digits")
-	require.True(t, ok(wrap("cast", match, constDigits)), "cast's extra arg is a compile-time type")
-	require.True(t, ok(wrap("cast", wrap("round", match, constDigits))), "nested safe wrappers")
+
+	// A cast is drop-safe only when its target type preserves zero (a plain numeric type).
+	require.True(t, ok(castTo(types.T_decimal64, match)), "cast to a numeric type preserves zero")
+	require.True(t, ok(castTo(types.T_float64, wrap("round", match, constDigits))), "nested safe wrappers")
 
 	// round with a nullable or per-row (column) digits is NOT drop-safe (#29065).
 	require.False(t, ok(wrap("round", match, nullLit)), "NULL digits maps kept rows to NULL")
 	require.False(t, ok(wrap("round", match, col)), "column digits varies per row")
+
+	// A cast whose target type does not preserve zero is NOT drop-safe (#29065): CAST(0 AS YEAR)=2000
+	// and CAST(CAST(0 AS CHAR) AS YEAR)=2000 map a dropped non-matching row to a non-zero value.
+	require.False(t, ok(castTo(types.T_year, match)), "CAST(0 AS YEAR)=2000")
+	require.False(t, ok(castTo(types.T_year, castTo(types.T_varchar, match))), "CAST(CAST(0 AS CHAR) AS YEAR)=2000")
+	require.False(t, ok(castTo(types.T_varchar, match)), "cast to string is not a numeric zero")
+	require.False(t, ok(wrap("cast", match)), "cast with an unknown target type is not provably zero-preserving")
 
 	// no match, non-monotone wrapper, or an empty wrapper.
 	require.False(t, ok(col))
@@ -1076,4 +1103,26 @@ func planHasReachableNodeType(query *planpb.Query, from int32, nt planpb.Node_No
 		return false
 	}
 	return visit(from)
+}
+
+// TestMonotoneWrappedFullTextMatchCastGuard pins the WHERE-membership cast guard (#29065): a
+// `wrapped(match) > const` predicate may drive the index only when every cast in the wrapper
+// preserves zero. CAST(0 AS YEAR)=2000 makes the predicate TRUE for a document the index never
+// returns, so the MATCH must not be discovered through such a cast.
+func TestMonotoneWrappedFullTextMatchCastGuard(t *testing.T) {
+	match := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: "fulltext_match"}}}}
+	wrap := func(name string, arg *planpb.Expr) *planpb.Expr {
+		return &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{ObjName: name}, Args: []*planpb.Expr{arg}}}}
+	}
+	castTo := func(id types.T, arg *planpb.Expr) *planpb.Expr {
+		e := wrap("cast", arg)
+		e.Typ = planpb.Type{Id: int32(id)}
+		return e
+	}
+	require.NotNil(t, monotoneWrappedFullTextMatch(match))
+	require.NotNil(t, monotoneWrappedFullTextMatch(wrap("floor", match)))
+	require.NotNil(t, monotoneWrappedFullTextMatch(castTo(types.T_float64, match)), "cast to numeric is order-preserving through zero")
+	require.Nil(t, monotoneWrappedFullTextMatch(castTo(types.T_year, match)), "CAST(0 AS YEAR)=2000")
+	require.Nil(t, monotoneWrappedFullTextMatch(castTo(types.T_year, castTo(types.T_varchar, match))), "CAST(CAST(0 AS CHAR) AS YEAR)=2000")
+	require.Nil(t, monotoneWrappedFullTextMatch(wrap("cast", match)), "cast with an unknown target type is not provably zero-preserving")
 }

@@ -2025,6 +2025,25 @@ func collectNestedFullTextMatches(expr *plan.Expr, out []*plan.Expr) []*plan.Exp
 // unwrapMonotoneScalar strips order-preserving scalar wrappers (round, cast, floor, ceil) and
 // returns the inner expression. Used to see through the cast a comparison inserts around an
 // aggregate result before matching the aggregate itself.
+// castPreservesZero reports whether cast(x AS t) maps a zero relevance to a deterministic numeric
+// zero and preserves ordering. It holds ONLY for casts to a plain numeric type. A cast to YEAR maps
+// 0 to 2000 (the two-digit-year rule), and a cast to CHAR/VARCHAR yields the string "0" that a
+// later cast can turn non-zero -- CAST(CAST(0 AS CHAR) AS YEAR) = 2000; temporal, bool and bit
+// casts are likewise not zero-preserving. The drop-safety and HAVING-membership analyses below must
+// NOT see through such a cast: a dropped non-matching row (relevance 0) whose wrapped value is not
+// zero would change a SUM/MAX or wrongly satisfy a `> 0` membership predicate.
+func castPreservesZero(t plan.Type) bool {
+	switch types.T(t.Id) {
+	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
+		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
+		types.T_float32, types.T_float64,
+		types.T_decimal64, types.T_decimal128:
+		return true
+	default:
+		return false
+	}
+}
+
 func unwrapMonotoneScalar(expr *plan.Expr) *plan.Expr {
 	for expr != nil {
 		fn := expr.GetF()
@@ -2034,6 +2053,12 @@ func unwrapMonotoneScalar(expr *plan.Expr) *plan.Expr {
 		switch fn.Func.ObjName {
 		case "round", "cast", "floor", "ceil":
 			if len(fn.Args) == 0 {
+				return expr
+			}
+			// A cast to a type that does not preserve zero (YEAR, CHAR, ...) is not
+			// order-preserving through zero; stop here so the caller cannot mistake the
+			// wrapped aggregate for a bare one and infer membership it does not have.
+			if fn.Func.ObjName == "cast" && !castPreservesZero(expr.Typ) {
 				return expr
 			}
 			expr = fn.Args[0]
@@ -2059,6 +2084,12 @@ func monotoneWrappedFullTextMatch(expr *plan.Expr) *plan.Expr {
 		if len(fn.Args) == 0 {
 			return nil
 		}
+		// A cast to a non-zero-preserving type (YEAR, CHAR, ...) is not order-preserving
+		// through zero, so a `wrapped(match) > const` predicate can be TRUE for a document the
+		// index never returns; do not discover the MATCH through it.
+		if fn.Func.ObjName == "cast" && !castPreservesZero(expr.Typ) {
+			return nil
+		}
 		return monotoneWrappedFullTextMatch(fn.Args[0])
 	}
 	return nil
@@ -2075,9 +2106,11 @@ func monotoneWrappedFullTextMatch(expr *plan.Expr) *plan.Expr {
 // column or nullable, a dropped non-matching row can map to a non-NULL 0 while the kept rows map to
 // NULL -- e.g. a group with (body='alpha', digits=NULL) kept and (body='beta', digits=0) dropped
 // turns SUM([NULL,0])=0 into SUM([NULL])=NULL, silently losing the group. So every argument other
-// than the wrapped value must be a constant, non-NULL literal. floor/ceil take only the value, and
-// cast's extra argument is a compile-time type; each maps 0 -> non-NULL 0 (a non-numeric cast under
-// SUM/MAX is rejected at bind time). Returns (match, true) only when the whole chain is drop-safe.
+// than the wrapped value must be a constant, non-NULL literal. floor/ceil take only the value and
+// map 0 -> non-NULL 0. A cast is drop-safe ONLY when its target type preserves zero (a plain
+// numeric type): CAST(0 AS YEAR)=2000 and CAST(CAST(0 AS CHAR) AS YEAR)=2000 map a dropped
+// non-matching row to a non-zero value, changing the aggregate, so castPreservesZero gates it.
+// Returns (match, true) only when the whole chain is drop-safe.
 func wrappedMatchDropSafe(expr *plan.Expr) (*plan.Expr, bool) {
 	for expr != nil {
 		fn := expr.GetF()
@@ -2089,6 +2122,9 @@ func wrappedMatchDropSafe(expr *plan.Expr) (*plan.Expr, bool) {
 			return expr, true
 		case "floor", "ceil", "cast":
 			if len(fn.Args) == 0 {
+				return nil, false
+			}
+			if fn.Func.ObjName == "cast" && !castPreservesZero(expr.Typ) {
 				return nil, false
 			}
 			expr = fn.Args[0]
