@@ -75,6 +75,36 @@ func TestDatetime(t *testing.T) {
 	fmt.Println(dt.Clock())
 }
 
+func TestDatetimeTemporalHelpers(t *testing.T) {
+	dt := DatetimeFromClock(2024, 1, 2, 3, 4, 5, 987654)
+	require.Equal(t, DatetimeFromClock(2024, 1, 2, 3, 4, 5, 987000), dt.TruncateToScaleWithoutRounding(3))
+	require.Equal(t, dt, dt.TruncateToScaleWithoutRounding(6))
+	require.Equal(t, dt, dt.TruncateToScaleWithoutRounding(-1))
+	require.Equal(t, time.Date(2024, 1, 2, 3, 4, 5, 987654000, time.UTC), dt.ConvertToGoTime(nil))
+
+	zone, err := time.LoadLocation("America/New_York")
+	require.NoError(t, err)
+	gap := DatetimeFromClock(2024, 3, 10, 2, 30, 0, 123456)
+	require.True(t, gap.IsNonexistentLocalTime(zone))
+	require.False(t, dt.IsNonexistentLocalTime(zone))
+	require.False(t, ZeroDatetime.IsNonexistentLocalTime(zone))
+	got := gap.ConvertToGoTime(zone)
+	require.Equal(t, 3, got.Hour())
+	require.Equal(t, 123456000, got.Nanosecond())
+}
+
+func TestTimeAndTimestampTruncateWithoutRounding(t *testing.T) {
+	tm := Time(1234567)
+	require.Equal(t, Time(1234000), tm.TruncateToScaleWithoutRounding(3))
+	require.Equal(t, Time(-1234000), Time(-1234567).TruncateToScaleWithoutRounding(3))
+	require.Equal(t, tm, tm.TruncateToScaleWithoutRounding(6))
+
+	ts := Timestamp(1234567)
+	require.Equal(t, Timestamp(1234000), ts.TruncateToScaleWithoutRounding(3))
+	require.Equal(t, ts, ts.TruncateToScaleWithoutRounding(6))
+	require.Equal(t, ZeroTimestamp, ZeroTimestamp.TruncateToScaleWithoutRounding(3))
+}
+
 func TestAddDatetime(t *testing.T) {
 	addDateTimeTbl := []struct {
 		Input              string

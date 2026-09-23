@@ -201,6 +201,44 @@ func TestTimestampWindowBoundaryGuardsAndArithmetic(t *testing.T) {
 	})
 }
 
+func TestTemporalConversionHelpers(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		want  *time.Location
+	}{
+		{input: "+14:00", want: time.FixedZone("+14:00", 14*60*60)},
+		{input: "-13:59", want: time.FixedZone("-13:59", -(13*60+59)*60)},
+		{input: "+05:30", want: time.FixedZone("+05:30", (5*60+30)*60)},
+	} {
+		got := convertTimezone(tc.input)
+		require.NotNil(t, got)
+		_, gotOffset := time.Now().In(got).Zone()
+		_, wantOffset := time.Now().In(tc.want).Zone()
+		require.Equal(t, wantOffset, gotOffset)
+	}
+	for _, input := range []string{"+14:01", "-14:00", "+05:60", "bad", "+1:00"} {
+		require.Nil(t, convertTimezone(input), input)
+	}
+
+	for _, tc := range []struct {
+		input string
+		want  int64
+		ok    bool
+	}{
+		{input: "1.5", want: 2, ok: true},
+		{input: "-1.5", want: -2, ok: true},
+		{input: "2.49", want: 2, ok: true},
+		{input: " 7 ", want: 7, ok: true},
+		{input: "not-a-number", ok: false},
+	} {
+		got, ok := makeDateRoundedInteger(tc.input)
+		require.Equal(t, tc.ok, ok, tc.input)
+		if ok {
+			require.Equal(t, tc.want, got, tc.input)
+		}
+	}
+}
+
 func TestTimestampWindowBoundaryLordHoweFold(t *testing.T) {
 	zone, err := time.LoadLocation("Australia/Lord_Howe")
 	require.NoError(t, err)

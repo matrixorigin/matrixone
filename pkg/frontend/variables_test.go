@@ -333,6 +333,24 @@ func TestSystemVariable(t *testing.T) {
 	})
 }
 
+func TestSystemVariableLocaleType(t *testing.T) {
+	typ := SystemVariableLocaleType{}
+	assert.Equal(t, "STRING", typ.String())
+	assert.Equal(t, types.T_varchar, typ.Type())
+	assert.Equal(t, "en_US", typ.Zero())
+
+	got, err := typ.Convert(nil)
+	assert.NoError(t, err)
+	assert.Equal(t, "en_US", got)
+	got, err = typ.ConvertFromString(" fr_fr ")
+	assert.NoError(t, err)
+	assert.Equal(t, "fr_FR", got)
+	_, err = typ.Convert(1)
+	assert.Error(t, err)
+	_, err = typ.ConvertFromString("xx_XX")
+	assert.Error(t, err)
+}
+
 func Test_valueIsBoolTrue(t *testing.T) {
 	type args struct {
 		value interface{}

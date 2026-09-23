@@ -64,6 +64,35 @@ func TestStringToFloatDefaultCompatibilityUsesNumericPrefix(t *testing.T) {
 	}
 }
 
+func TestTemporalCastsHonorTimeTruncateFractional(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		require.Equal(t, "sql_mode", name)
+		return "TIME_TRUNCATE_FRACTIONAL", nil
+	})
+	dt := types.DatetimeFromClock(2024, 1, 2, 3, 4, 5, 987654)
+	ts, err := types.ParseTimestamp(time.UTC, "2024-01-02 03:04:05.987654", 6)
+	require.NoError(t, err)
+
+	for _, tc := range []struct {
+		name   string
+		input  FunctionTestInput
+		output types.Type
+		value  interface{}
+	}{
+		{name: "datetime to time", input: NewFunctionTestInput(types.T_datetime.ToTypeWithScale(6), []types.Datetime{dt}, nil), output: types.T_time.ToTypeWithScale(3), value: []types.Time{types.TimeFromClock(false, 3, 4, 5, 987000)}},
+		{name: "timestamp to time", input: NewFunctionTestInput(types.T_timestamp.ToTypeWithScale(6), []types.Timestamp{ts}, nil), output: types.T_time.ToTypeWithScale(3), value: []types.Time{types.TimeFromClock(false, 3, 4, 5, 987000)}},
+		{name: "timestamp to timestamp", input: NewFunctionTestInput(types.T_timestamp.ToTypeWithScale(6), []types.Timestamp{ts}, nil), output: types.T_timestamp.ToTypeWithScale(3), value: []types.Timestamp{ts.TruncateToScaleWithoutRounding(3)}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tc := NewFunctionTestCase(proc, []FunctionTestInput{tc.input, NewFunctionTestInput(tc.output, nil, nil)}, NewFunctionTestResult(tc.output, false, tc.value, nil), NewCast)
+			succeed, info := tc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+}
+
 func TestStringToFloatMatrixOneNativeRejectsIncompleteTokens(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	proc.GetSessionInfo().MatrixOneNativeMode = true
