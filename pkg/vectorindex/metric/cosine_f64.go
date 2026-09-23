@@ -20,22 +20,36 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-// cosineDenOK reports whether a cosine kernel's own denominator ||p||*||q|| can be used as it
-// stands, i.e. whether the T-domain accumulation kept the cosine.
+// smallestNormalFloat64 is the smallest positive normal (non-subnormal) float64.
+const smallestNormalFloat64 = 2.2250738585072014e-308
+
+// cosineNormsOK reports whether a cosine kernel's own squared norms can be used as they stand.
 //
-// Testing the denominator rather than the two norms tests a value the kernel computes anyway, and
-// loses nothing: both norms are sums of squares, so den is 0 exactly when a norm is 0 (sqrt of a
-// positive float64 cannot underflow to 0, and the product of two such roots cannot either), +Inf
-// when a norm overflowed, and NaN when a norm is NaN -- and NaN fails both comparisons. The
-// product itself cannot overflow: sqrt(MaxFloat64)^2 is MaxFloat64. The dot product needs no test
-// of its own -- |dot| <= (normP+normQ)/2, so it is finite whenever the norms are.
+// A squared norm must be a NORMAL number of the accumulation type, not merely positive and finite.
+// Subnormals are the case a zero/Inf/NaN test misses: float32 [3e-23,3e-23] squares each element
+// to 9e-46, which is subnormal, so the sum keeps only a couple of bits. The denominator is still
+// positive and finite, so the kernel used it and answered 0.433316 where the cosine distance is
+// 0.292893 -- enough to flip a `< 0.35` predicate.
 //
-// A zero-magnitude vector also fails this test; the float64 recompute confirms the norm really is
-// zero and the caller then applies its own zero-magnitude convention.
+// Zero is deliberately NOT accepted here: it sends a vector whose squares underflowed to the
+// float64 recompute, which is what lets float32 [1e-30,0] still answer 0 against itself. A
+// genuinely zero vector recomputes to zero too, and the caller's zero-magnitude convention takes
+// it from there.
 //
-// Two comparisons, taken once per vector pair, keep the check off the kernel's inner loop.
-func cosineDenOK(den float64) bool {
-	return den > 0 && den <= math.MaxFloat64
+// smallestNormal is the caller's own accumulation bound, passed in so no type dispatch runs on the
+// hot path.
+func cosineNormsOK(normP, normQ, smallestNormal float64) bool {
+	return normP >= smallestNormal && normP <= math.MaxFloat64 &&
+		normQ >= smallestNormal && normQ <= math.MaxFloat64
+}
+
+// smallestNormalOf returns T's own smallest normal value, for the guard above. Only the scalar
+// build needs it; the SIMD kernels know their accumulator type statically and pass the constant.
+func smallestNormalOf[T types.RealNumbers]() float64 {
+	if _, ok := any(*new(T)).(float32); ok {
+		return smallestNormalFloat32
+	}
+	return smallestNormalFloat64
 }
 
 // cosineRecomputeF64 re-accumulates the three cosine components in float64. ok is false when even
@@ -49,7 +63,15 @@ func cosineRecomputeF64[T types.RealNumbers](p, q []T) (dot, normP, normQ float6
 		normP += a * a
 		normQ += b * b
 	}
-	return dot, normP, normQ, isFiniteF64(dot) && isFiniteF64(normP) && isFiniteF64(normQ)
+	return dot, normP, normQ, isFiniteF64(dot) && recomputedNormOK(normP) && recomputedNormOK(normQ)
+}
+
+// recomputedNormOK accepts a float64 squared norm the recompute can stand behind: zero, which the
+// caller's zero-magnitude convention handles, or a normal number. A subnormal one cannot be
+// improved by recomputing -- float64 is already the widest accumulation here -- so it is rejected
+// rather than returned with most of its bits gone.
+func recomputedNormOK(norm float64) bool {
+	return norm == 0 || (norm >= smallestNormalFloat64 && norm <= math.MaxFloat64)
 }
 
 func isFiniteF64(v float64) bool {

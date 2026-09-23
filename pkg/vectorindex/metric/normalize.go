@@ -24,10 +24,10 @@ import (
 // NormalizeL2 writes the L2-normalized v1 into normalized. An all-zero vector is copied unchanged.
 // The norm is accumulated in float64 regardless of T.
 //
-// A vector whose squared norm leaves the float64 domain has no computable norm here: squaring a
-// float64 element above ~1.3e154 overflows to +Inf (every component would normalize to 0), and
-// squaring one below ~1.5e-162 underflows to 0 (the vector would be returned unnormalized). Both
-// are rejected rather than returned silently wrong.
+// A vector whose squared norm leaves the normal float64 range has no computable norm here:
+// squaring a float64 element above ~1.3e154 overflows to +Inf (every component would normalize to
+// 0), and squaring one below ~1.5e-154 lands in the subnormals, where the square keeps too few
+// bits for the norm to be right. Both are rejected rather than returned silently wrong.
 func NormalizeL2[T types.RealNumbers](v1 []T, normalized []T) error {
 	if len(v1) == 0 {
 		return moerr.NewInternalErrorNoCtx("cannot normalize empty vector")
@@ -38,6 +38,12 @@ func NormalizeL2[T types.RealNumbers](v1 []T, normalized []T) error {
 	}
 	if math.IsInf(sumSquares, 0) || math.IsNaN(sumSquares) {
 		return moerr.NewInternalErrorNoCtx("cannot normalize vector: its squared norm overflows the float64 domain")
+	}
+	if sumSquares != 0 && sumSquares < smallestNormalFloat64 {
+		// A subnormal square carries fewer than 53 significant bits, so the norm derived from it is
+		// wrong well before the square reaches zero: float64 [2e-162] squares to the smallest
+		// subnormal and normalized to 0.899783 instead of 1.
+		return moerr.NewInternalErrorNoCtx("cannot normalize vector: its squared norm underflows the float64 domain")
 	}
 	norm := math.Sqrt(sumSquares)
 	if norm == 0 {

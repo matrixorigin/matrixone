@@ -167,3 +167,53 @@ func TestCosineUnderflowVsZeroVector(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "one of the vector is zero")
 }
+
+// A squared norm that lands in the subnormals is rejected too. The square is still positive and
+// finite there, so the zero/Inf/NaN tests above miss it, but it carries far fewer than 53
+// significant bits and the norm derived from it is already wrong: float64 [2e-162] squares to the
+// smallest subnormal and normalized to 0.899783 instead of 1.
+func TestNormalizeL2RejectsSubnormalSquaredNorm(t *testing.T) {
+	out := make([]float64, 1)
+
+	err := NormalizeL2([]float64{2e-162}, out)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "underflows")
+
+	// the first element magnitude whose square is a normal float64 is accepted and normalizes to 1
+	require.NoError(t, NormalizeL2([]float64{1.5e-154}, out))
+	require.InDelta(t, 1.0, out[0], 1e-12)
+
+	// a float32 base squares into float64, so an extreme float32 element stays in the normal range
+	out32 := make([]float32, 2)
+	require.NoError(t, NormalizeL2([]float32{1e-30, 0}, out32))
+	require.EqualValues(t, 1, out32[0])
+}
+
+// The cosine kernels test their own squared norms before using them. A norm must be a NORMAL
+// number of the accumulation type, not merely positive and finite: float32 [3e-23,3e-23] squares
+// each element into the subnormals, so the accumulated norm keeps only a couple of bits. The
+// denominator built from it is still positive and finite, so a zero/Inf/NaN test accepts it and
+// the kernel answered 0.433316 where the cosine distance is 0.292893.
+func TestCosineRejectsSubnormalNorms(t *testing.T) {
+	d32, err := CosineDistance[float32]([]float32{3e-23, 3e-23}, []float32{3e-23, 0})
+	require.NoError(t, err)
+	require.InDelta(t, 0.2928932, float64(d32), 1e-6)
+
+	// the float64 recompute still answers 0 for a vector against itself, whatever its magnitude
+	d32, err = CosineDistance[float32]([]float32{1e-30, 0}, []float32{1e-30, 0})
+	require.NoError(t, err)
+	require.EqualValues(t, 0, d32)
+
+	// ordinary vectors are untouched by the guard
+	d32, err = CosineDistance[float32]([]float32{3, 4}, []float32{4, 3})
+	require.NoError(t, err)
+	require.InDelta(t, 0.04, float64(d32), 1e-6)
+	d64, err := CosineDistance[float64]([]float64{3, 4}, []float64{4, 3})
+	require.NoError(t, err)
+	require.InDelta(t, 0.04, d64, 1e-12)
+
+	// float64 has no wider accumulator to fall back on, so a subnormal float64 norm is rejected
+	_, err = CosineDistance[float64]([]float64{1e-200, 0}, []float64{1e-200, 0})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "underflows the element domain")
+}

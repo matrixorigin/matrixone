@@ -39,6 +39,14 @@ select cosine_distance(v, '[1e200,1e200]') from t64 order by id;
 select cosine_similarity(v, '[1e200,1e200]') from t64 order by id;
 select id, cosine_distance(v, '[3,4]') from t64 where id = 2;
 
+-- A cosine kernel must reject its own squared norm when it lands in the subnormals, not only when
+-- it reaches zero or Inf. Each element of [3e-23,3e-23] squares into the float32 subnormals, so
+-- the accumulated norm keeps a couple of bits; the denominator built from it is positive and
+-- finite, and the kernel answered 0.433316 where the cosine distance is 0.292893.
+create table tsub(id int primary key, v vecf32(2));
+insert into tsub values (1, '[3e-23,3e-23]'), (2, '[3,4]');
+select id, cosine_distance(v, '[3e-23,0]') from tsub order by id;
+
 -- normalize_l2 rejects a vector whose squared norm overflows or underflows the float64 domain,
 -- and keeps copying an all-zero vector unchanged.
 select normalize_l2(v) from t64 order by id;
@@ -46,6 +54,12 @@ create table tsmall(id int primary key, v vecf64(2));
 insert into tsmall values (1, '[1e-300,1e-300]'), (2, '[0,0]'), (3, '[3,4]');
 select normalize_l2(v) from tsmall where id = 1;
 select id, normalize_l2(v) from tsmall where id in (2,3) order by id;
+-- A squared norm that lands in the subnormals is rejected too: it is still positive and finite, so
+-- a zero/Inf/NaN test accepts it, but it keeps far too few bits and [2e-162] normalized to
+-- 0.899783 instead of 1. The smallest magnitude whose square stays normal is still accepted.
+insert into tsmall values (4, '[2e-162,0]'), (5, '[1.5e-154,0]');
+select normalize_l2(v) from tsmall where id = 4;
+select id, normalize_l2(v) from tsmall where id = 5;
 
 -- inner_product rejects a dot product that leaves the element domain: each term is finite, the
 -- sum is not. Constant and column operands report the same error.
@@ -73,5 +87,15 @@ select l2_distance_sq_xc(cast('[2e19,2e19]' as vecf32(2)), cast('[0,0]' as vecf3
 select l2_distance(cast('[3,4]' as vecf32(2)), cast('[0,0]' as vecf32(2))) as go_path,
        l2_distance_xc(cast('[3,4]' as vecf32(2)), cast('[0,0]' as vecf32(2))) as c_path,
        l2_distance_sq_xc(cast('[3,4]' as vecf32(2)), cast('[0,0]' as vecf32(2))) as c_sq;
+-- The vecf64 overload accumulates in double, so its result can be a finite float64 that is outside
+-- the float32 domain l2_distance delivers for every base type. Both must reject it. l2_distance_sq
+-- on vecf64 is the exception: it returns the raw float64 square by design, as IVF's squared
+-- intermediate, so 1e80 is in domain there.
+select l2_distance(cast('[1e40,0]' as vecf64(2)), cast('[0,0]' as vecf64(2)));
+select l2_distance_xc(cast('[1e40,0]' as vecf64(2)), cast('[0,0]' as vecf64(2)));
+select l2_distance_sq(cast('[1e40,0]' as vecf64(2)), cast('[0,0]' as vecf64(2)));
+select l2_distance_sq_xc(cast('[1e40,0]' as vecf64(2)), cast('[0,0]' as vecf64(2)));
+select l2_distance(cast('[3,4]' as vecf64(2)), cast('[0,0]' as vecf64(2))) as go_path,
+       l2_distance_xc(cast('[3,4]' as vecf64(2)), cast('[0,0]' as vecf64(2))) as c_path;
 
 drop database vec_extreme;

@@ -260,7 +260,7 @@ func CosineDistance[T types.RealNumbers](p, q []T) (T, error) {
 	// intermediate overflow of normP*normQ.
 	dot := float64(dotProduct)
 	denominator := math.Sqrt(float64(normV1Sq)) * math.Sqrt(float64(normV2Sq))
-	if !cosineDenOK(denominator) {
+	if !cosineNormsOK(float64(normV1Sq), float64(normV2Sq), smallestNormalOf[T]()) {
 		var normP, normQ float64
 		var ok bool
 		if dot, normP, normQ, ok = cosineRecomputeF64(p, q); !ok {
@@ -353,7 +353,7 @@ func CosineSimilarity[T types.RealNumbers](p, q []T) (T, error) {
 	// Each norm is square-rooted before multiplying -- see CosineDistance.
 	dot := float64(dotProduct)
 	denominator := math.Sqrt(float64(normV1Sq)) * math.Sqrt(float64(normV2Sq))
-	if !cosineDenOK(denominator) {
+	if !cosineNormsOK(float64(normV1Sq), float64(normV2Sq), smallestNormalOf[T]()) {
 		var normP, normQ float64
 		var ok bool
 		if dot, normP, normQ, ok = cosineRecomputeF64(p, q); !ok {

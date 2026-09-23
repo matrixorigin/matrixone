@@ -387,7 +387,7 @@ func CosineDistanceF32(a, b []float32) (float32, error) {
 	}
 	d := float64(dot)
 	den := math.Sqrt(float64(normA)) * math.Sqrt(float64(normB))
-	if !cosineDenOK(den) {
+	if !cosineNormsOK(float64(normA), float64(normB), smallestNormalFloat32) {
 		var nP, nQ float64
 		var ok bool
 		if d, nP, nQ, ok = cosineRecomputeF64(a, b); !ok {
@@ -438,7 +438,7 @@ func CosineDistanceF64(a, b []float64) (float64, error) {
 	}
 	d := float64(dot)
 	den := math.Sqrt(float64(normA)) * math.Sqrt(float64(normB))
-	if !cosineDenOK(den) {
+	if !cosineNormsOK(float64(normA), float64(normB), smallestNormalFloat64) {
 		var nP, nQ float64
 		var ok bool
 		if d, nP, nQ, ok = cosineRecomputeF64(a, b); !ok {
@@ -504,7 +504,7 @@ func CosineSimilarityF32(a, b []float32) (float32, error) {
 	}
 	d := float64(dot)
 	den := math.Sqrt(float64(normA)) * math.Sqrt(float64(normB))
-	if !cosineDenOK(den) {
+	if !cosineNormsOK(float64(normA), float64(normB), smallestNormalFloat32) {
 		var nP, nQ float64
 		var ok bool
 		if d, nP, nQ, ok = cosineRecomputeF64(a, b); !ok {
@@ -566,7 +566,7 @@ func CosineSimilarityF64(a, b []float64) (float64, error) {
 	}
 	d := float64(dot)
 	den := math.Sqrt(float64(normA)) * math.Sqrt(float64(normB))
-	if !cosineDenOK(den) {
+	if !cosineNormsOK(float64(normA), float64(normB), smallestNormalFloat64) {
 		var nP, nQ float64
 		var ok bool
 		if d, nP, nQ, ok = cosineRecomputeF64(a, b); !ok {

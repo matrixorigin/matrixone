@@ -39,6 +39,12 @@ internal error: cosine similarity: vector magnitude overflows the float64 domain
 select id, cosine_distance(v, '[3,4]') from t64 where id = 2;
 ➤ id[4,32,0]  ¦  cosine_distance(v, [3,4])[8,53,31]  𝄀
 2  ¦  0.0
+create table tsub(id int primary key, v vecf32(2));
+insert into tsub values (1, '[3e-23,3e-23]'), (2, '[3,4]');
+select id, cosine_distance(v, '[3e-23,0]') from tsub order by id;
+➤ id[4,32,0]  ¦  cosine_distance(v, [3e-23,0])[8,53,31]  𝄀
+1  ¦  0.2928932309150696  𝄀
+2  ¦  0.4000000059604645
 select normalize_l2(v) from t64 order by id;
 internal error: cannot normalize vector: its squared norm overflows the float64 domain
 create table tsmall(id int primary key, v vecf64(2));
@@ -49,6 +55,12 @@ select id, normalize_l2(v) from tsmall where id in (2,3) order by id;
 ➤ id[4,32,0]  ¦  normalize_l2(v)[12,2,0]  𝄀
 2  ¦  [0, 0]  𝄀
 3  ¦  [0.6, 0.8]
+insert into tsmall values (4, '[2e-162,0]'), (5, '[1.5e-154,0]');
+select normalize_l2(v) from tsmall where id = 4;
+internal error: cannot normalize vector: its squared norm underflows the float64 domain
+select id, normalize_l2(v) from tsmall where id = 5;
+➤ id[4,32,0]  ¦  normalize_l2(v)[12,2,0]  𝄀
+5  ¦  [1, 0]
 create table tip(id int primary key, v vecf32(2));
 insert into tip values (1, '[1e20,1e20]'), (2, '[1,2]');
 select id, inner_product(v, '[1e20,-1e20]') from tip order by id;
@@ -76,4 +88,18 @@ l2_distance_xc(cast('[3,4]' as vecf32(2)), cast('[0,0]' as vecf32(2))) as c_path
 l2_distance_sq_xc(cast('[3,4]' as vecf32(2)), cast('[0,0]' as vecf32(2))) as c_sq;
 ➤ go_path[8,53,31]  ¦  c_path[8,53,31]  ¦  c_sq[8,53,31]  𝄀
 5.0  ¦  5.0  ¦  25.0
+select l2_distance(cast('[1e40,0]' as vecf64(2)), cast('[0,0]' as vecf64(2)));
+internal error: l2 distance: vector magnitude is too large, the result overflows the element domain
+select l2_distance_xc(cast('[1e40,0]' as vecf64(2)), cast('[0,0]' as vecf64(2)));
+internal error: l2 distance: vector magnitude is too large, the result overflows the element domain
+select l2_distance_sq(cast('[1e40,0]' as vecf64(2)), cast('[0,0]' as vecf64(2)));
+➤ l2_distance_sq(cast([1e40,0] as vecf64(2)), cast([0,0] as vecf64(2)))[8,53,31]  𝄀
+1.0E80
+select l2_distance_sq_xc(cast('[1e40,0]' as vecf64(2)), cast('[0,0]' as vecf64(2)));
+➤ l2_distance_sq_xc(cast([1e40,0] as vecf64(2)), cast([0,0] as vecf64(2)))[8,53,31]  𝄀
+1.0E80
+select l2_distance(cast('[3,4]' as vecf64(2)), cast('[0,0]' as vecf64(2))) as go_path,
+l2_distance_xc(cast('[3,4]' as vecf64(2)), cast('[0,0]' as vecf64(2))) as c_path;
+➤ go_path[8,53,31]  ¦  c_path[8,53,31]  𝄀
+5.0  ¦  5.0
 drop database vec_extreme;
