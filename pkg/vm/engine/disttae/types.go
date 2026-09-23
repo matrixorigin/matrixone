@@ -365,6 +365,11 @@ type Transaction struct {
 
 	// writes cache stores any writes done by txn
 	writes []Entry
+	// CN-created S3 owners whose cleanup failed and outlived their
+	// execution-local lifecycle. Retry them during statement/transaction
+	// teardown rather than dropping ownership.
+	unpublishedS3OwnersMu sync.Mutex
+	unpublishedS3Cleanup  []func(context.Context) error
 	// txn workspace size, includes in memory entries and persisted entries.
 	workspaceSize uint64
 	// the approximation of total size for insert entries
@@ -1163,6 +1168,7 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) (err error) {
 			)
 		})
 	}()
+	unpublishedCleanupErr := txn.CleanupUnpublishedS3Objects(ctx)
 	deletedLoadFiles, loadCleanupErr := txn.deleteLoadFiles(ctx, &txn.statementID)
 
 	txn.Lock()
@@ -1222,7 +1228,7 @@ func (txn *Transaction) RollbackLastStatement(ctx context.Context) (err error) {
 	// current statement has been rolled back, make can call IncrStatementID again.
 	txn.incrStatementCalled = false
 	txn.removeLoadFileProtectionsLocked(deletedLoadFiles)
-	return loadCleanupErr
+	return errors.Join(unpublishedCleanupErr, loadCleanupErr)
 }
 
 func (txn *Transaction) IncrSQLCount() {

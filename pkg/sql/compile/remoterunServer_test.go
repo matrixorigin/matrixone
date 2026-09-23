@@ -51,6 +51,17 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+type remoteS3CleanupWorkspace struct {
+	client.Workspace
+	cleanupErr error
+	calls      int
+}
+
+func (w *remoteS3CleanupWorkspace) CleanupUnpublishedS3Objects(context.Context) error {
+	w.calls++
+	return w.cleanupErr
+}
+
 func TestResolveRemoteCompileMPoolCap(t *testing.T) {
 	const gib = uint64(1 << 30)
 
@@ -69,6 +80,20 @@ func TestResolveRemoteCompileMPoolCap(t *testing.T) {
 	cap, err = resolveRemoteCompileMPoolCapFrom(process.Limitation{}, 0, 10*gib, 0, 2*gib)
 	require.NoError(t, err)
 	require.Equal(t, int64(8*gib), cap)
+}
+
+func TestRetryUnpublishedS3CleanupDrainsRemoteWorkspace(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	cleanupErr := errors.New("injected remote cleanup failure")
+	workspace := &remoteS3CleanupWorkspace{cleanupErr: cleanupErr}
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().GetWorkspace().Return(workspace).Times(1)
+	proc.Base.TxnOperator = txnOp
+
+	require.ErrorIs(t, retryUnpublishedS3Cleanup(proc), cleanupErr)
+	require.Equal(t, 1, workspace.calls)
 }
 
 // TestWorkspaceCreationInRemoteRun tests that workspace is created early in remote run scenario.

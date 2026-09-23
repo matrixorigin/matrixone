@@ -230,6 +230,19 @@ func handlePipelineProtocolCheck(
 	return cs.Write(ctx, response)
 }
 
+func retryUnpublishedS3Cleanup(proc *process.Process) error {
+	if proc == nil || proc.GetTxnOperator() == nil {
+		return nil
+	}
+	cleaner, ok := proc.GetTxnOperator().GetWorkspace().(interface {
+		CleanupUnpublishedS3Objects(context.Context) error
+	})
+	if !ok {
+		return nil
+	}
+	return cleaner.CleanupUnpublishedS3Objects(proc.Ctx)
+}
+
 // waitUntilPipelineBatchFlowDrained preserves the ownership boundary between
 // an internal receiver-driven StopSending and cancellation of the query or its
 // connection.  StopSending aborts outstanding batch credits so this wait can
@@ -487,6 +500,9 @@ func handlePipelineMessage(receiver *messageReceiverOnServer) (err error) {
 					receiver.groupConcatReportingIncomplete = receiver.warningSession.incompleteGroupConcatReporting()
 				}
 				receiver.statementLastInsertID = runCompile.proc.GetStatementLastInsertID()
+				if len(runCompile.scopes) != 0 {
+					err = joinAllocationLifecycleErrors(err, retryUnpublishedS3Cleanup(runCompile.proc))
+				}
 				runCompile.clear()
 				return nil
 			}))

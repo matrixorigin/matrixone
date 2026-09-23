@@ -16,6 +16,7 @@ package disttae
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -91,7 +92,7 @@ func transferTombstoneObjects(
 
 	return txn.forEachTableHasDeletesLocked(
 		tables, 1,
-		func(tbl *txnTable, writeName string) error {
+		func(tbl *txnTable, writeName string) (retErr error) {
 			if fs == nil {
 				if fs, err = colexec.GetSharedFSFromProc(txn.proc); err != nil {
 					return err
@@ -106,7 +107,10 @@ func transferTombstoneObjects(
 				return nil
 			}
 
-			defer flow.Close()
+			registered := false
+			defer func() {
+				retErr = errors.Join(retErr, txn.closeTransferFlow(ctx, flow, !registered))
+			}()
 
 			if err = flow.Process(ctx); err != nil {
 				return err
@@ -152,6 +156,7 @@ func transferTombstoneObjects(
 					return err
 				}
 			}
+			registered = true
 
 			logs = append(logs,
 				zap.String("txn-id", txn.op.Txn().DebugString()),

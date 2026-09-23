@@ -19,6 +19,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -48,9 +49,35 @@ const (
 
 type CNS3Writer struct {
 	sinker              *ioutil.Sinker
+	fs                  fileservice.FileService
+	ownedPersistedNames []string
+	cleanupPending      bool
 	isTombstone         bool
 	blockInfoBat        *batch.Batch
 	memorySizeThreshold int
+}
+
+// UnpublishedS3CleanupRetainer is implemented by workspaces that can own a
+// failed cleanup after the operator that created the object is released.
+type UnpublishedS3CleanupRetainer interface {
+	RetainUnpublishedS3Cleanup(func(context.Context) error)
+}
+
+// RetainUnpublishedS3Cleanup transfers cleanup ownership to the transaction
+// workspace when a writer's final operator callback cannot delete its objects.
+func RetainUnpublishedS3Cleanup(
+	proc *process.Process,
+	cleanup func(context.Context) error,
+) bool {
+	if proc == nil || cleanup == nil || proc.GetTxnOperator() == nil {
+		return false
+	}
+	retainer, ok := proc.GetTxnOperator().GetWorkspace().(UnpublishedS3CleanupRetainer)
+	if !ok {
+		return false
+	}
+	retainer.RetainUnpublishedS3Cleanup(cleanup)
+	return true
 }
 
 func (w *CNS3Writer) String() string {
@@ -111,6 +138,7 @@ func newCNS3TombstoneWriter(
 ) *CNS3Writer {
 
 	writer := &CNS3Writer{
+		fs:          fs,
 		isTombstone: true,
 	}
 
@@ -234,6 +262,7 @@ func newCNS3DataWriter(
 ) *CNS3Writer {
 
 	writer := new(CNS3Writer)
+	writer.fs = fs
 
 	sequms, attrTypes, attrs, sortKeyIdx, isPrimaryKey := GetSequmsAttrsSortKeyIdxFromTableDef(tableDef)
 
@@ -315,6 +344,12 @@ func (w *CNS3Writer) SyncAndFillBlockInfoBat(ctx context.Context) (*batch.Batch,
 	if err != nil {
 		return nil, err
 	}
+	// SyncAndTakeResults transfers the returned stats out of the sinker. Keep
+	// their cleanup ownership here until the enclosing transaction accepts the
+	// metadata or the failed operation deletes the objects.
+	for i := range stats {
+		w.ownedPersistedNames = append(w.ownedPersistedNames, stats[i].ObjectName().String())
+	}
 
 	w.ResetBlockInfoBat()
 	if len(stats) == 0 {
@@ -334,21 +369,87 @@ func (w *CNS3Writer) SyncAndFillBlockInfoBat(ctx context.Context) (*batch.Batch,
 	return w.blockInfoBat, nil
 }
 
+// DeletePersisted removes objects still owned by this writer, including
+// results detached by SyncAndFillBlockInfoBat. On deletion failure the sinker
+// and writer retain their exact names so the caller can retry before closing.
+func (w *CNS3Writer) DeletePersisted(ctx context.Context) error {
+	if w == nil {
+		return nil
+	}
+	w.cleanupPending = true
+	cleanupCtx, cancel := context.WithTimeoutCause(
+		context.WithoutCancel(ctx), 10*time.Minute, moerr.CauseCleanUpUselessFiles,
+	)
+	defer cancel()
+
+	if w.sinker != nil {
+		if _, err := w.sinker.DeletePersisted(cleanupCtx); err != nil {
+			return err
+		}
+	}
+	if len(w.ownedPersistedNames) == 0 {
+		w.cleanupPending = false
+		return nil
+	}
+	if _, err := ioutil.DeleteUnpublishedObjects(cleanupCtx, w.fs, w.ownedPersistedNames...); err != nil {
+		return err
+	}
+	w.ownedPersistedNames = nil
+	w.cleanupPending = false
+	return nil
+}
+
+// CloseWithCleanup removes still-owned objects after a failed operation, then
+// closes the writer. A failed delete leaves the writer open so its caller can
+// retry cleanup during the next lifecycle callback.
+func (w *CNS3Writer) CloseWithCleanup(ctx context.Context, failed bool) error {
+	cleanupRequired := failed || w.cleanupPending
+	if cleanupRequired {
+		if err := w.DeletePersisted(ctx); err != nil {
+			return err
+		}
+		// Close may return the already-reported pipeline drain error, but it
+		// has still released all sinker resources. The unaccepted objects are
+		// deleted, so that execution error must not keep this owner alive.
+		_ = w.Close()
+		return nil
+	}
+	return w.Close()
+}
+
 func (w *CNS3Writer) Close() (err error) {
+	if w.cleanupPending {
+		return moerr.NewInternalErrorNoCtx("cannot close S3 writer with pending object cleanup")
+	}
 	var mp *mpool.MPool
 	if w.sinker != nil {
 		mp = w.sinker.GetMPool()
-		if err = w.sinker.Close(); err != nil {
-			return
-		}
+		// Sinker.Close always tears down its buffers and references before
+		// returning a pipeline-drain error. Do not retain a closed sinker and
+		// make a completed abort cleanup impossible to finish on retry.
+		err = w.sinker.Close()
 		w.sinker = nil
 	}
+	w.ownedPersistedNames = nil
 
 	if w.blockInfoBat != nil {
 		w.blockInfoBat.Clean(mp)
 		w.blockInfoBat = nil
 	}
 
+	return err
+}
+
+// ResetWithCleanup discards this execution's data after failure and resets the
+// sinker only after its persisted objects have been deleted. A successful
+// execution treats the results as handed off before resetting reusable state.
+func (w *CNS3Writer) ResetWithCleanup(ctx context.Context, failed bool) error {
+	if failed || w.cleanupPending {
+		if err := w.DeletePersisted(ctx); err != nil {
+			return err
+		}
+	}
+	w.Reset()
 	return nil
 }
 
@@ -358,9 +459,13 @@ func (w *CNS3Writer) Close() (err error) {
 // carried into the next execution. The sinker's buffer pool and arena
 // are kept alive for efficient reuse.
 func (w *CNS3Writer) Reset() {
+	if w.cleanupPending {
+		return
+	}
 	if w.sinker != nil {
 		w.sinker.Reset()
 	}
+	w.ownedPersistedNames = nil
 	if w.blockInfoBat != nil {
 		w.blockInfoBat.CleanOnlyData()
 	}
