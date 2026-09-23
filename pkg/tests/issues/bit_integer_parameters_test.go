@@ -105,6 +105,22 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 			})
 		}
 	})
+	t.Run("SQL execute HEX numeric selector", func(t *testing.T) {
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		_, err = conn.ExecContext(ctx, `prepare hex_numeric_selector from 'select hex(if(true,?,2.5e0))'`)
+		require.NoError(t, err)
+		defer func() {
+			_, err := conn.ExecContext(ctx, "deallocate prepare hex_numeric_selector")
+			require.NoError(t, err)
+		}()
+		_, err = conn.ExecContext(ctx, "set @hex_selector_value=1.5e0")
+		require.NoError(t, err)
+		var got string
+		require.NoError(t, conn.QueryRowContext(ctx, "execute hex_numeric_selector using @hex_selector_value").Scan(&got))
+		require.Equal(t, "2", got)
+	})
 	t.Run("binary decimal descriptor", func(t *testing.T) {
 		var mu sync.Mutex
 		var wire *issue28989TemporalTypeConn

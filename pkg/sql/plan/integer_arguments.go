@@ -501,7 +501,7 @@ func (rule *ResetParamRefRule) rebindSourceDependentIntegerArguments(expr *Expr)
 	for i, arg := range fn.Args {
 		var err error
 		if function.IntegerArgumentSourceDependent(fn.Func.ObjName, i) {
-			args[i], err = rule.sourceDependentIntegerRuntimeSource(arg, function.IntegerArgumentUsesBitSources(fn.Func.ObjName, i))
+			args[i], err = rule.sourceDependentIntegerRuntimeSource(arg, fn.Func.ObjName, i)
 		} else {
 			args[i], err = rule.ApplyExpr(arg)
 		}
@@ -521,21 +521,45 @@ func (rule *ResetParamRefRule) rebindSourceDependentIntegerArguments(expr *Expr)
 // adapters. Explicit casts and nested value-producing functions remain owners
 // of their result domains. Selector branches are rebound independently before
 // signed/unsigned reconciliation so no unchecked REAL/DECIMAL reaches CAST1.
-func (rule *ResetParamRefRule) sourceDependentIntegerRuntimeSource(source *Expr, bitSources bool) (*Expr, error) {
+func (rule *ResetParamRefRule) sourceDependentIntegerRuntimeSource(source *Expr, name string, position int) (*Expr, error) {
+	bitSources := function.IntegerArgumentUsesBitSources(name, position)
+	// PREPARE may reconcile a selector containing an untyped marker to VARCHAR.
+	// That envelope is provisional for a source-dependent consumer: expose the
+	// selector before deciding its runtime domain. User-written CAST remains a
+	// value boundary because stripIntegerSelectionReconciliation preserves it.
+	source = stripIntegerSelectionReconciliation(source)
 	if fn := source.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" && !fn.SyntaxExplicitCast && len(fn.Args) == 2 {
 		_, id := function.DecodeOverloadID(fn.Func.Obj)
 		if function.IsIntegerArgumentCastOverload(id) || (id == 1 && types.T(fn.Args[0].Typ.Id) == types.T_int64 && types.T(source.Typ.Id) == types.T_uint64) {
-			return rule.sourceDependentIntegerRuntimeSource(fn.Args[0], bitSources)
+			return rule.sourceDependentIntegerRuntimeSource(fn.Args[0], name, position)
 		}
 	}
-	if fn := source.GetF(); bitSources && fn != nil && fn.Func != nil && (fn.Func.ObjName == "case" || fn.Func.ObjName == "if" || fn.Func.ObjName == "iff") {
-		// Preserve branch domains until the consuming role binds them. Calling
-		// the ordinary selector binder here could reconcile exact values to REAL.
+	if fn := source.GetF(); fn != nil && fn.Func != nil && (fn.Func.ObjName == "case" || fn.Func.ObjName == "if" || fn.Func.ObjName == "iff") {
+		// Preserve branch domains until the consuming role binds them. This is
+		// required for both bit-pattern roles and numeric-only roles such as HEX:
+		// the PREPARE-time selector result may otherwise retain a provisional
+		// VARCHAR envelope after its marker has acquired a numeric runtime type.
 		bound := DeepCopyExpr(source)
 		for i, arg := range fn.Args {
 			var err error
 			if i%2 == 1 || i == len(fn.Args)-1 {
-				bound.GetF().Args[i], err = rule.sourceDependentIntegerRuntimeSource(stripIntegerSelectionReconciliation(arg), bitSources)
+				arg = stripIntegerSelectionReconciliation(arg)
+				restoredPeer := arg.GetPreparedNumeric().GetProvisionalResultPeer()
+				if restoredPeer {
+					arg, err = restorePreparedResultPeer(rule.ctx, arg)
+					if err != nil {
+						return nil, err
+					}
+				}
+				if !restoredPeer {
+					arg, err = rule.sourceDependentIntegerRuntimeSource(arg, name, position)
+				}
+				if err == nil {
+					// Convert each restored source under the consumer's role before
+					// reconciling the selector. This keeps a restored numeric CAST from
+					// being confused with the obsolete PREPARE-time VARCHAR envelope.
+					bound.GetF().Args[i], err = appendSourceDependentIntegerArgument(rule.ctx, arg, name, position)
+				}
 			} else {
 				bound.GetF().Args[i], err = rule.ApplyExpr(arg)
 			}
@@ -543,7 +567,7 @@ func (rule *ResetParamRefRule) sourceDependentIntegerRuntimeSource(source *Expr,
 				return nil, err
 			}
 		}
-		return bound, nil
+		return bindIntegerSelector(rule.ctx, bound.GetF().Args, bitSources)
 	}
 	return rule.integerArgumentRuntimeSource(source)
 }

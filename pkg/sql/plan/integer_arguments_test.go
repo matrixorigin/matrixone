@@ -279,6 +279,27 @@ func TestIntegerArgumentPreparedSelectors(t *testing.T) {
 		want   string
 	}{
 		{
+			`select hex(if(true,?,2.5e0))`,
+			[]any{ParamValue{
+				Value: float64(1.5), IsBinaryProtocol: true, HasRuntimeType: true, RuntimeType: types.T_float64.ToType(),
+			}},
+			"2",
+		},
+		{
+			`select hex(if(true,?,"peer"))`,
+			[]any{ParamValue{
+				Value: "1.5", IsBinaryProtocol: true, HasRuntimeType: true, RuntimeType: types.T_varchar.ToType(),
+			}},
+			"312E35",
+		},
+		{
+			`select hex(if(true,?,cast(2.5 as decimal(2,1))))`,
+			[]any{ParamValue{
+				Value: "1.5", SourceType: types.New(types.T_decimal64, 2, 1), HasSourceType: true,
+			}},
+			"2",
+		},
+		{
 			`select substring_index("a.b.c.d",".",if(true,?,?))`,
 			[]any{
 				ParamValue{Value: float64(1.5), IsBinaryProtocol: true, HasRuntimeType: true, RuntimeType: types.T_float64.ToType()},
