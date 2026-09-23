@@ -3835,6 +3835,12 @@ func TestGetComputationWrapperCapturesFingerprintAfterRemap(t *testing.T) {
 	require.True(t, carrier.statementFingerprintWasAttempted())
 	require.Equal(t, want, carrier.getStatementFingerprint())
 	require.Contains(t, tree.String(cws[0].GetAst(), dialect.MYSQL), "dest.t")
+
+	_, err = RecordStatement(ctx, ses, proc, cws[0], time.Now(), execCtx.input.getSql(), constant.ExternSql, true)
+	require.NoError(t, err)
+	require.NotNil(t, ses.GetStmtInfo())
+	require.Equal(t, want, ses.GetStmtInfo().StatementFingerprint,
+		"the admitted, remapped AST fingerprint must reach the existing telemetry record")
 }
 
 func TestInstallStatementRemapClearsPreviousPolicy(t *testing.T) {
