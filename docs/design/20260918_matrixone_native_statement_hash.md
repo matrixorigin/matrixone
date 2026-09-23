@@ -3,7 +3,7 @@
 - Implementation: [matrixorigin/matrixone#27988](https://github.com/matrixorigin/matrixone/pull/27988)
 - Related request: [matrixorigin/matrixone#23024](https://github.com/matrixorigin/matrixone/issues/23024) asks for MySQL-compatible `STATEMENT_DIGEST`; this design does not implement that contract.
 - Owner: SQL frontend and statement-telemetry maintainers.
-- Revision: `matrixone-native-statement-ast-fingerprint-2026-09-23-r7`
+- Revision: `matrixone-native-statement-ast-fingerprint-2026-09-23-r8`
 
 ## Purpose and boundary
 
@@ -72,6 +72,16 @@ new template capture. The template is captured at PREPARE even if tracing is
 currently disabled: tracing may be enabled before a later EXECUTE, by which
 time planning may already have mutated the retained AST. This incurs at most
 one bounded formatting pass per prepared template.
+
+## Telemetry aggregation
+
+The fingerprint is attached to the individual statement record. Existing
+statement aggregation behavior is unchanged: when records are merged into an
+aggregate, the aggregator clears per-execution `statement_fingerprint` (as it
+already does for `statement_tag`). This change does not add the fingerprint to
+aggregation keys or increase aggregate cardinality. Consumers that need a
+fingerprint for each execution must use non-aggregated statement records; an
+aggregate row intentionally has no single statement fingerprint.
 
 ## Non-goals and compatibility
 
