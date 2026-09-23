@@ -88,6 +88,9 @@ type lockTableAllocator struct {
 	// A safe tombstone is usable by the instance-bound protocol only for the
 	// exact drain attempt that was accepted before the bind was removed.
 	retiredDrainAttempts map[string]string
+	// Retirements are needed only across a short lost-response retry window.
+	// Expiry discards proof; it never turns an unknown instance into a safe one.
+	retiredAt map[string]time.Time
 
 	// for test
 	options struct {
@@ -137,6 +140,7 @@ func NewLockTableAllocator(
 	la.mu.services = make(map[string]*serviceBinds)
 	la.retiredServices = make(map[string]bool)
 	la.retiredDrainAttempts = make(map[string]string)
+	la.retiredAt = make(map[string]time.Time)
 
 	for _, opt := range opts {
 		opt(la)
@@ -438,23 +442,32 @@ func (l *lockTableAllocator) beginDrain(req pb.BeginDrainRequest) pb.BeginDrainR
 	defer l.mu.RUnlock()
 	b := l.mu.services[req.ServiceID]
 	if b == nil {
+		// The first BeginDrain response may have been lost. A completed,
+		// exact retirement remains idempotent for its accepted attempt;
+		// an unsafe or unknown retirement is never a new admission.
+		resp.OK = l.retiredServices[req.ServiceID] &&
+			l.retiredDrainAttempts[req.ServiceID] == req.AttemptID
 		return resp
 	}
 	b.Lock()
 	defer b.Unlock()
-	if b.disabled || (b.drainAttemptID != "" && b.drainAttemptID != req.AttemptID) {
+	if b.drainAttemptID != "" {
+		// The normal drain disables new binds before publishing completion.
+		// It must not revoke the already accepted attempt on an RPC retry.
+		resp.OK = b.drainAttemptID == req.AttemptID
 		return resp
 	}
-	if b.drainAttemptID == "" {
-		// A legacy drain already in progress has no attempt proof. It cannot
-		// be adopted by the v2 protocol after the fact.
-		if b.status != pb.Status_ServiceLockEnable {
-			return resp
-		}
-		b.drainAttemptID = req.AttemptID
-		logStatusChange(b.skipLogger, b.status, pb.Status_ServiceLockWaiting)
-		b.status = pb.Status_ServiceLockWaiting
+	if b.disabled {
+		return resp
 	}
+	// A legacy drain already in progress has no attempt proof. It cannot
+	// be adopted by the v2 protocol after the fact.
+	if b.status != pb.Status_ServiceLockEnable {
+		return resp
+	}
+	b.drainAttemptID = req.AttemptID
+	logStatusChange(b.skipLogger, b.status, pb.Status_ServiceLockWaiting)
+	b.status = pb.Status_ServiceLockWaiting
 	resp.OK = true
 	return resp
 }
@@ -589,6 +602,9 @@ func (l *lockTableAllocator) disableTableBindsLocked(
 	if l.retiredDrainAttempts == nil {
 		l.retiredDrainAttempts = make(map[string]string)
 	}
+	if l.retiredAt == nil {
+		l.retiredAt = make(map[string]time.Time)
+	}
 	// An unsafe retirement must dominate an older positive tombstone.  A
 	// missing bind after a failed/ambiguous validation is never proof of safe
 	// restart, even if a previous incarnation drained successfully.
@@ -600,6 +616,7 @@ func (l *lockTableAllocator) disableTableBindsLocked(
 	} else {
 		delete(l.retiredDrainAttempts, serviceID)
 	}
+	l.retiredAt[serviceID] = time.Now()
 	// we can't just delete the LockTable's effectiveness binding directly, we
 	// need to keep the binding version.
 	for g, tables := range b.groupTables {
@@ -764,10 +781,12 @@ func (l *lockTableAllocator) registerService(
 	if ok {
 		delete(l.retiredServices, serviceID)
 		delete(l.retiredDrainAttempts, serviceID)
+		delete(l.retiredAt, serviceID)
 		return b
 	}
 	delete(l.retiredServices, serviceID)
 	delete(l.retiredDrainAttempts, serviceID)
+	delete(l.retiredAt, serviceID)
 	b = newServiceBinds(
 		serviceID,
 		l.logger.With(zap.String("lockservice", serviceID)),
@@ -1013,6 +1032,7 @@ func (l *lockTableAllocator) cleanCommitStateOnce(
 	if ctx.Err() != nil {
 		return
 	}
+	l.cleanRetiredServices(time.Now(), removeDisconnectDuration)
 	snapshots := make(map[string]commitCleanupSnapshot)
 	activeTxnMap := make(map[string]map[string]struct{})
 
@@ -1144,6 +1164,22 @@ func (l *lockTableAllocator) cleanCommitStateOnce(
 		l.applyCommitCleanup(sid, snapshot, activeTxns, known, removeDisconnectDuration)
 	}
 	l.ctlMu.Unlock()
+}
+
+func (l *lockTableAllocator) cleanRetiredServices(now time.Time, retention time.Duration) {
+	if retention <= 0 {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for serviceID, retiredAt := range l.retiredAt {
+		if now.Sub(retiredAt) < retention {
+			continue
+		}
+		delete(l.retiredAt, serviceID)
+		delete(l.retiredServices, serviceID)
+		delete(l.retiredDrainAttempts, serviceID)
+	}
 }
 
 type commitCleanupSnapshot struct {
