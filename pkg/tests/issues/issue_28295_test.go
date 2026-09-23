@@ -124,20 +124,24 @@ func TestIssue28295RowConstructorScalarSubquery(t *testing.T) {
 			from scalar_outer o where o.k=2`, sql.NullBool{Bool: true, Valid: true})
 		ifNullValues := func() []int {
 			rows, queryErr := conn.QueryContext(ctx, `select ifnull(
-				(select min(i.v) from scalar_inner i where i.k=o.k), 0)
+				(select min(i.v) from scalar_inner i where i.k=o.k), 0),
+				ifnull(cast((select min(i.v) from scalar_inner i where i.k=o.k) as bigint), 0)
 				from scalar_outer o order by o.k`)
 			require.NoError(t, queryErr)
 			defer func() { require.NoError(t, rows.Close()) }()
 			columnTypes, queryErr := rows.ColumnTypes()
 			require.NoError(t, queryErr)
-			require.Len(t, columnTypes, 1)
-			nullable, ok := columnTypes[0].Nullable()
-			require.True(t, ok)
-			require.False(t, nullable)
+			require.Len(t, columnTypes, 2)
+			for _, columnType := range columnTypes {
+				nullable, ok := columnType.Nullable()
+				require.True(t, ok)
+				require.False(t, nullable)
+			}
 			var values []int
 			for rows.Next() {
-				var value int
-				require.NoError(t, rows.Scan(&value))
+				var value, castValue int
+				require.NoError(t, rows.Scan(&value, &castValue))
+				require.Equal(t, value, castValue)
 				values = append(values, value)
 			}
 			require.NoError(t, rows.Err())

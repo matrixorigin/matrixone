@@ -76,14 +76,21 @@ func TestScalarAggregateSubqueryRefreshPreservesIfNullContract(t *testing.T) {
 			where r.R_REGIONKEY = n.N_REGIONKEY), 0),
 			ifnull((
 				select min(r.R_REGIONKEY) from REGION r
-				where r.R_REGIONKEY = n.N_REGIONKEY), 0) + 1
+				where r.R_REGIONKEY = n.N_REGIONKEY), 0) + 1,
+			ifnull(cast((
+				select min(r.R_REGIONKEY) from REGION r
+				where r.R_REGIONKEY = n.N_REGIONKEY) as bigint), 0),
+			ifnull(cast(cast((
+				select min(r.R_REGIONKEY) from REGION r
+				where r.R_REGIONKEY = n.N_REGIONKEY) as bigint) as decimal(20,0)), 0)
 		from NATION n`)
 	require.NoError(t, err)
 
 	columns := GetResultColumnsFromPlan(logicPlan)
-	require.Len(t, columns, 2)
-	require.True(t, columns[0].Typ.NotNullable)
-	require.True(t, columns[1].Typ.NotNullable)
+	require.Len(t, columns, 4)
+	for _, column := range columns {
+		require.True(t, column.Typ.NotNullable)
+	}
 
 	leftJoins := 0
 	for _, node := range logicPlan.GetQuery().Nodes {
@@ -91,7 +98,7 @@ func TestScalarAggregateSubqueryRefreshPreservesIfNullContract(t *testing.T) {
 			leftJoins++
 		}
 	}
-	require.Equal(t, 2, leftJoins, "each IFNULL source must be flattened once")
+	require.Equal(t, 4, leftJoins, "each IFNULL source must be flattened once")
 }
 
 func TestRowConstructorScalarSubqueryComparisonBuilds(t *testing.T) {

@@ -442,7 +442,12 @@ func ifNullCaseSources(fn *plan.Function) (source, elseSource *plan.Expr, ok boo
 func ifNullCaseElseSource(elseExpr *plan.Expr) *plan.Expr {
 	for {
 		fn := elseExpr.GetF()
-		if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) == 0 {
+		if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) == 0 ||
+			fn.GetSyntaxExplicitCast() {
+			return elseExpr
+		}
+		_, overload := function.DecodeOverloadID(fn.Func.Obj)
+		if overload != 0 {
 			return elseExpr
 		}
 		elseExpr = fn.Args[0]
