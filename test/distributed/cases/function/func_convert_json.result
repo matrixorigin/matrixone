@@ -341,7 +341,7 @@ order by id;
 select e_json from convert_json_enum
 minus all
 select e_json from convert_json_enum;
-EXCEPT/MINUS ALL clause is not yet implemented
+➤ e_json[12,65535,0]
 select json_type(convert(e, json)), json_unquote(convert(e, json))
 from (
 select e_json as e from convert_json_enum where id = 1

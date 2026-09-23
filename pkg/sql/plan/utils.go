@@ -1595,7 +1595,7 @@ func getUnionSelects(ctx context.Context, stmt *tree.UnionClause, selects *[]tre
 		}
 	case tree.EXCEPT, tree.UT_MINUS:
 		if stmt.All {
-			return moerr.NewNYI(ctx, "EXCEPT/MINUS ALL clause")
+			*unionTypes = append(*unionTypes, plan.Node_MINUS_ALL)
 		} else {
 			*unionTypes = append(*unionTypes, plan.Node_MINUS)
 		}
@@ -8201,7 +8201,7 @@ func refreshPreparedSetOperationPhysicalKeys(
 	childProjectLists [][]*plan.Expr,
 ) error {
 	switch node.NodeType {
-	case plan.Node_UNION, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL, plan.Node_MINUS:
+	case plan.Node_UNION, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL, plan.Node_MINUS, plan.Node_MINUS_ALL:
 	default:
 		return nil
 	}
