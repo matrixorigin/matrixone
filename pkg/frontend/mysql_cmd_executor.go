@@ -3110,9 +3110,10 @@ func createPrepareStmtInSession(
 	}
 	prepareStmt.refreshGenerateSeriesParamMetadata(prepareControl.Plan)
 	if execCtx.input != nil && execCtx.input.rewritePolicy != nil &&
-		execCtx.input.rewritePolicy.captured && execCtx.input.rewritePolicy.enabled {
+		execCtx.input.rewritePolicy.captured {
 		prepareStmt.rewritePolicyGeneration = execCtx.input.rewritePolicy.generation
 		prepareStmt.rewritePolicyCaptured = true
+		prepareStmt.rewritePolicyEnabled = execCtx.input.rewritePolicy.enabled
 	}
 
 	_, ok := preparePlan.GetDcl().Control.(*plan.DataControl_Prepare)

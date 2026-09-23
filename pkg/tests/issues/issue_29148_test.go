@@ -93,12 +93,35 @@ func TestIssue29148PreparedRowRuleProtocolLifecycle(t *testing.T) {
 			_, execErr := userConn.ExecContext(ctx, statement)
 			require.NoError(t, execErr, statement)
 		}
+		var id, amount int
+		execOnUser("set enable_remap_hint = 0")
+		execOnUser("set role " + roleName + "; prepare issue29148_disabled from 'select id, amount from " + dbName + "." + tableName + " order by id'")
+		rows, err := userConn.QueryContext(ctx, "execute issue29148_disabled")
+		require.NoError(t, err)
+		var disabledRows [][2]int
+		for rows.Next() {
+			var row [2]int
+			require.NoError(t, rows.Scan(&row[0], &row[1]))
+			disabledRows = append(disabledRows, row)
+		}
+		require.NoError(t, rows.Err())
+		require.NoError(t, rows.Close())
+		require.Equal(t, [][2]int{{1, 100}, {2, 200}}, disabledRows)
+		execOnUser("deallocate prepare issue29148_disabled")
+
+		// The request snapshot is disabled, but an earlier statement enables
+		// rewriting before PREPARE publishes its handle. Publication must reject
+		// the stale policy even though the later PREPARE was successfully planned.
+		execOnUser("set enable_remap_hint = 1; set role " + roleName + "; prepare issue29148_disabled_snapshot from 'select id, amount from " + dbName + "." + tableName + " order by id'")
+		_, err = userConn.ExecContext(ctx, "execute issue29148_disabled_snapshot")
+		requireNeedReprepare(t, err)
+		execOnUser("deallocate prepare issue29148_disabled_snapshot")
+
 		execOnUser("set enable_remap_hint = 1")
 
 		// Load the original role policy into this session before the administrator
 		// changes it. The following SET ROLE and PREPARE are deliberately sent as
 		// one COM_QUERY; EXECUTE happens in a later request.
-		var id, amount int
 		require.NoError(t, userConn.QueryRowContext(ctx,
 			"select id, amount from "+dbName+"."+tableName+" order by id").Scan(&id, &amount))
 		require.Equal(t, 1, id)
