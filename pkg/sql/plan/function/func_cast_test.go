@@ -5374,12 +5374,6 @@ func TestCompatibilityModeFromProcess(t *testing.T) {
 }
 
 func TestPreparedStringToFloatRequiresExplicitCompatibilityMode(t *testing.T) {
-	for _, matrixOneNative := range []bool{false, true} {
-		_, err := ParsePreparedStringToFloat64("1.5tail", matrixOneNative)
-		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
-	}
-
 	_, err := ParsePreparedStringToFloat64WithMode("1.5tail", SQLCompatibilityMatrixOne)
 	require.Error(t, err)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))

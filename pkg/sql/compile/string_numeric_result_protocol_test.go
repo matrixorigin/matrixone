@@ -186,155 +186,115 @@ func TestStrictStringNumericCompatibilityMixedVersionFence(t *testing.T) {
 	}
 }
 
-func TestNumericBinaryLiteralProvenanceAdmissionEveryModeAndConsumer(t *testing.T) {
-	type mode struct {
-		name   string
-		mysql  bool
-		native bool
-	}
-	modes := []mode{
-		{name: "default"},
-		{name: "mysql", mysql: true},
-		{name: "native", native: true},
-	}
-
-	for _, producer := range []string{"case", "if", "coalesce"} {
-		for _, consumer := range []string{"integer_cast", "string_condition"} {
-			for _, mode := range modes {
-				t.Run(producer+"/"+consumer+"/"+mode.name, func(t *testing.T) {
-					c, client := expressionProtocolTestCompile(t)
-					qry, scope := strictStringNumericCompatibilityPipeline(t, types.T_varchar, 0)
-					scope.Proc = c.proc
-					t.Cleanup(scope.RootOp.Release)
-
-					boolCondition := &planpb.Expr{
-						Typ:  planpb.Type{Id: int32(types.T_bool)},
-						Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}},
-					}
-					hex := &planpb.Expr{
-						Typ: planpb.Type{Id: int32(types.T_varchar)},
-						Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
-							Value: &planpb.Literal_Sval{Sval: "1"},
-							IsBin: true, LiteralForm: planpb.StringLiteralForm_STRING_LITERAL_HEX,
-						}},
-					}
-					text := &planpb.Expr{
-						Typ:  planpb.Type{Id: int32(types.T_varchar)},
-						Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: "1"}}},
-					}
-					var mixed *planpb.Expr
-					switch producer {
-					case "case":
-						mixed = &planpb.Expr{
-							Typ: planpb.Type{Id: int32(types.T_varchar)},
-							Expr: &planpb.Expr_F{F: &planpb.Function{
-								Func: &planpb.ObjectRef{Obj: int64(71) << 32, ObjName: "case"},
-								Args: []*planpb.Expr{boolCondition, hex, text},
-							}},
-						}
-					case "if":
-						mixed = &planpb.Expr{
-							Typ: planpb.Type{Id: int32(types.T_varchar)},
-							Expr: &planpb.Expr_F{F: &planpb.Function{
-								Func: &planpb.ObjectRef{Obj: int64(113) << 32, ObjName: "if"},
-								Args: []*planpb.Expr{boolCondition, hex, text},
-							}},
-						}
-					case "coalesce":
-						nullableTextColumn := &planpb.Expr{
-							Typ:  planpb.Type{Id: int32(types.T_varchar)},
-							Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 2}},
-						}
-						mixed = &planpb.Expr{
-							Typ: planpb.Type{Id: int32(types.T_varchar)},
-							Expr: &planpb.Expr_F{F: &planpb.Function{
-								Func: &planpb.ObjectRef{Obj: int64(74) << 32, ObjName: "coalesce"},
-								Args: []*planpb.Expr{nullableTextColumn, hex},
-							}},
-						}
-					}
-					var expr *planpb.Expr
-					switch consumer {
-					case "integer_cast":
-						expr = &planpb.Expr{
-							Typ: planpb.Type{Id: int32(types.T_int64)},
-							Expr: &planpb.Expr_F{F: &planpb.Function{
-								Func: &planpb.ObjectRef{Obj: int64(21) << 32, ObjName: "cast"},
-								Args: []*planpb.Expr{mixed},
-							}},
-						}
-					case "string_condition":
-						expr = &planpb.Expr{
-							Typ: planpb.Type{Id: int32(types.T_int64)},
-							Expr: &planpb.Expr_F{F: &planpb.Function{
-								Func: &planpb.ObjectRef{Obj: int64(113) << 32, ObjName: "if"},
-								Args: []*planpb.Expr{
-									mixed,
-									{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: 1}}}},
-									{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: 2}}}},
-								},
-							}},
-						}
-					}
-					qry.Nodes[0].ProjectList = []*planpb.Expr{expr}
-					scope.RootOp.(*projection.Projection).ProjectList = []*planpb.Expr{expr}
-					wirePipeline := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
-					features, err := planpb.RequiredRemoteExpressionFeatures(qry)
-					require.NoError(t, err)
-					require.True(t, features.NumericBinaryLiteralProvenance,
-						"the branch marker must be fenced independently of FLOAT casts and SQL mode")
-
-					info := c.proc.GetSessionInfo()
-					info.MySQLNumericCompatibilityMode = mode.mysql
-					info.MatrixOneNativeMode = mode.native
-					info.LegacyNumericCompatibilityMode = false
-					rt := runtime.ServiceRuntime(c.proc.GetService())
-					oldVersion, _ := rt.GetGlobalVariables(runtime.MOProtocolVersion)
-					t.Cleanup(func() { rt.SetGlobalVariables(runtime.MOProtocolVersion, oldVersion) })
-					for _, version := range []int64{defines.MORPCVersion93, defines.MORPCVersion94} {
-						client.version = version
-						rt.SetGlobalVariables(runtime.MOProtocolVersion, version)
-						c.execType = plan.ExecTypeAP_MULTICN
-						c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-						require.NoError(t, c.constrainStrictStringNumericCompatibilityWorkers(qry))
-						if version < defines.MORPCVersion94 {
-							require.Equal(t, plan.ExecTypeAP_ONECN, c.execType,
-								"v93 placement must fall back locally in %s mode", mode.name)
-						} else {
-							require.Equal(t, plan.ExecTypeAP_MULTICN, c.execType,
-								"v94 placement should retain distributed execution in %s mode", mode.name)
-						}
-
-						protocolErr := validateRemoteExpressionPipelineProtocol(c.proc, wirePipeline)
-						if version < defines.MORPCVersion94 {
-							require.ErrorContains(t, protocolErr, "version 94",
-								"v93 receiver must reject the changed row-marker contract in %s mode", mode.name)
-							_, err = encodeRemoteScope(scope, c.proc)
-							require.ErrorContains(t, err, "version 94",
-								"send-time destination downgrade must fail in %s mode", mode.name)
-						} else {
-							require.NoError(t, protocolErr)
-							data, err := encodeRemoteScope(scope, c.proc)
-							require.NoError(t, err)
-							require.NotEmpty(t, data)
-						}
-					}
-
-					client.version = defines.MORPCVersion94
-					rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion94)
-					info.LegacyNumericCompatibilityMode = true
-					c.execType = plan.ExecTypeAP_MULTICN
-					c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-					require.ErrorContains(t, c.constrainStrictStringNumericCompatibilityWorkers(qry), "legacy session contract")
-					require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wirePipeline), "legacy session contract")
-				})
-			}
-		}
+func makeStringLiteralExpr(value string, form planpb.StringLiteralForm) *planpb.Expr {
+	return &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_varchar)},
+		Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
+			Value:       &planpb.Literal_Sval{Sval: value},
+			IsBin:       form == planpb.StringLiteralForm_STRING_LITERAL_HEX || form == planpb.StringLiteralForm_STRING_LITERAL_BIT,
+			LiteralForm: form,
+		}},
 	}
 }
 
-func TestUniformNumericBinaryLiteralFlowRequiresV94EveryMode(t *testing.T) {
-	for _, mode := range []struct {
+func makeStringNumericFlowExpr(name string, functionID int64, args ...*planpb.Expr) *planpb.Expr {
+	return &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_varchar)},
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{Obj: functionID << 32, ObjName: name}, Args: args,
+		}},
+	}
+}
+
+func makeStringNumericCastExpr(value *planpb.Expr, typ types.T) *planpb.Expr {
+	return &planpb.Expr{
+		Typ: planpb.Type{Id: int32(typ)},
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{Obj: int64(21) << 32, ObjName: "cast"}, Args: []*planpb.Expr{value},
+		}},
+	}
+}
+
+func makeMixedNumericBinaryLiteralExpr(producer string) *planpb.Expr {
+	condition := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_bool)},
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}},
+	}
+	hex := makeStringLiteralExpr("1", planpb.StringLiteralForm_STRING_LITERAL_HEX)
+	bit := makeStringLiteralExpr("00110001", planpb.StringLiteralForm_STRING_LITERAL_BIT)
+	text := makeStringLiteralExpr("1", planpb.StringLiteralForm_STRING_LITERAL_TEXT)
+	intLiteral := func(value int64) *planpb.Expr {
+		return &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_int64)},
+			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_I64Val{I64Val: value}}},
+		}
+	}
+	switch producer {
+	case "case":
+		return makeStringNumericCastExpr(
+			makeStringNumericFlowExpr("case", 71, condition, hex, text), types.T_int64)
+	case "if":
+		ifValue := makeStringNumericFlowExpr("if", 113, condition, bit, text)
+		return &planpb.Expr{
+			Typ: planpb.Type{Id: int32(types.T_int64)},
+			Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{Obj: int64(113) << 32, ObjName: "if"},
+				Args: []*planpb.Expr{ifValue, intLiteral(1), intLiteral(2)},
+			}},
+		}
+	case "coalesce":
+		value := makeStringNumericFlowExpr("coalesce", 74,
+			&planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 2}}},
+			hex,
+		)
+		return makeStringNumericCastExpr(value, types.T_int64)
+	default:
+		panic("unknown numeric binary literal flow producer: " + producer)
+	}
+}
+
+func numericBinaryLiteralProtocolVersion(
+	t *testing.T,
+	c *Compile,
+	client *expressionVersionClient,
+	qry *planpb.Query,
+	scope *Scope,
+	wirePipeline *pipeline.Pipeline,
+	version int64,
+) {
+	t.Helper()
+	rt := runtime.ServiceRuntime(c.proc.GetService())
+	oldVersion, _ := rt.GetGlobalVariables(runtime.MOProtocolVersion)
+	t.Cleanup(func() { rt.SetGlobalVariables(runtime.MOProtocolVersion, oldVersion) })
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, version)
+	client.version = version
+	c.execType = plan.ExecTypeAP_MULTICN
+	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+	require.NoError(t, c.constrainStrictStringNumericCompatibilityWorkers(qry))
+
+	if version < defines.MORPCVersion94 {
+		require.Equal(t, plan.ExecTypeAP_ONECN, c.execType,
+			"pre-v94 placement must fall back locally")
+		require.Equal(t, c.addr, c.cnList[0].Addr)
+		_, err := encodeRemoteScope(scope, c.proc)
+		require.ErrorContains(t, err, "version 94",
+			"a destination downgrade after placement must be rejected before send")
+		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wirePipeline), "version 94",
+			"pre-v94 receivers must fail closed")
+		return
+	}
+
+	require.Equal(t, plan.ExecTypeAP_MULTICN, c.execType,
+		"v94 placement must retain distributed execution")
+	data, err := encodeRemoteScope(scope, c.proc)
+	require.NoError(t, err)
+	require.NotEmpty(t, data)
+	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, wirePipeline))
+}
+
+func TestNumericBinaryLiteralProvenanceAdmissionEveryMode(t *testing.T) {
+	producers := []string{"case", "if", "coalesce"}
+	modes := []struct {
 		name   string
 		mysql  bool
 		native bool
@@ -342,97 +302,96 @@ func TestUniformNumericBinaryLiteralFlowRequiresV94EveryMode(t *testing.T) {
 		{name: "default"},
 		{name: "mysql", mysql: true},
 		{name: "native", native: true},
+	}
+	for _, producer := range producers {
+		for _, mode := range modes {
+			t.Run(producer+"/"+mode.name, func(t *testing.T) {
+				c, client := expressionProtocolTestCompile(t)
+				qry, scope := strictStringNumericCompatibilityPipeline(t, types.T_varchar, 0)
+				scope.Proc = c.proc
+				t.Cleanup(scope.RootOp.Release)
+				projects := []*planpb.Expr{makeMixedNumericBinaryLiteralExpr(producer)}
+				qry.Nodes[0].ProjectList = projects
+				scope.RootOp.(*projection.Projection).ProjectList = projects
+				wirePipeline := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: projects}}}
+				features, err := planpb.RequiredRemoteExpressionFeatures(qry)
+				require.NoError(t, err)
+				require.True(t, features.NumericBinaryLiteralProvenance,
+					producer+" mixed value flow must be v94-fenced independently of SQL mode")
+
+				info := c.proc.GetSessionInfo()
+				info.MySQLNumericCompatibilityMode = mode.mysql
+				info.MatrixOneNativeMode = mode.native
+				info.LegacyNumericCompatibilityMode = false
+				for _, version := range []int64{defines.MORPCVersion93, defines.MORPCVersion94} {
+					numericBinaryLiteralProtocolVersion(t, c, client, qry, scope, wirePipeline, version)
+				}
+
+				info.LegacyNumericCompatibilityMode = true
+				c.execType = plan.ExecTypeAP_MULTICN
+				c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+				client.version = defines.MORPCVersion94
+				rt := runtime.ServiceRuntime(c.proc.GetService())
+				rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion94)
+				require.ErrorContains(t, c.constrainStrictStringNumericCompatibilityWorkers(qry), "legacy session contract")
+				_, err = encodeRemoteScope(scope, c.proc)
+				require.ErrorContains(t, err, "legacy session contract")
+				require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wirePipeline), "legacy session contract")
+			})
+		}
+	}
+}
+
+func TestUniformAndMarkedNullNumericBinaryLiteralAdmission(t *testing.T) {
+	condition := &planpb.Expr{
+		Typ:  planpb.Type{Id: int32(types.T_bool)},
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}},
+	}
+	modes := []struct {
+		name   string
+		mysql  bool
+		native bool
+	}{
+		{name: "default"},
+		{name: "mysql", mysql: true},
+		{name: "native", native: true},
+	}
+	for _, shape := range []struct {
+		name      string
+		otherwise *planpb.Expr
+	}{
+		{name: "uniform-marked", otherwise: makeStringLiteralExpr("001", planpb.StringLiteralForm_STRING_LITERAL_BIT)},
+		{name: "marked-plus-null", otherwise: &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_varchar)},
+			Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}},
+		}},
 	} {
-		t.Run(mode.name, func(t *testing.T) {
-			for _, branchShape := range []struct {
-				name      string
-				otherwise *planpb.Expr
-			}{
-				{name: "all-marked", otherwise: &planpb.Expr{
-					Typ: planpb.Type{Id: int32(types.T_varchar)},
-					Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
-						Value: &planpb.Literal_Sval{Sval: "001"},
-						IsBin: true, LiteralForm: planpb.StringLiteralForm_STRING_LITERAL_BIT,
-					}},
-				}},
-				{name: "marked-or-null", otherwise: &planpb.Expr{
-					Typ:  planpb.Type{Id: int32(types.T_varchar)},
-					Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}},
-				}},
-			} {
-				t.Run(branchShape.name, func(t *testing.T) {
-					c, client := expressionProtocolTestCompile(t)
-					qry, scope := strictStringNumericCompatibilityPipeline(t, types.T_varchar, 0)
-					scope.Proc = c.proc
-					t.Cleanup(scope.RootOp.Release)
-
-					condition := &planpb.Expr{
-						Typ:  planpb.Type{Id: int32(types.T_bool)},
-						Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}},
-					}
-					hex := &planpb.Expr{
-						Typ: planpb.Type{Id: int32(types.T_varchar)},
-						Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{
-							Value: &planpb.Literal_Sval{Sval: "1"},
-							IsBin: true, LiteralForm: planpb.StringLiteralForm_STRING_LITERAL_HEX,
-						}},
-					}
-					flow := &planpb.Expr{
-						Typ: planpb.Type{Id: int32(types.T_varchar)},
-						Expr: &planpb.Expr_F{F: &planpb.Function{
-							Func: &planpb.ObjectRef{Obj: int64(71) << 32, ObjName: "case"},
-							Args: []*planpb.Expr{condition, hex, branchShape.otherwise},
-						}},
-					}
-					// This is the concrete wrong-result path: v94 interprets the
-					// selected HEX row as 49, while pre-fence flow control dropped
-					// its marker and let the integer cast produce 1.
-					cast := &planpb.Expr{
-						Typ: planpb.Type{Id: int32(types.T_int64)},
-						Expr: &planpb.Expr_F{F: &planpb.Function{
-							Func: &planpb.ObjectRef{Obj: int64(21) << 32, ObjName: "cast"},
-							Args: []*planpb.Expr{flow},
-						}},
-					}
-					qry.Nodes[0].ProjectList = []*planpb.Expr{cast}
-					scope.RootOp.(*projection.Projection).ProjectList = []*planpb.Expr{cast}
-					features, err := planpb.RequiredRemoteExpressionFeatures(qry)
-					require.NoError(t, err)
-					require.True(t, features.NumericBinaryLiteralProvenance,
-						"uniform and NULL-skewed selected markers both change old-worker results")
-
-					info := c.proc.GetSessionInfo()
-					info.MySQLNumericCompatibilityMode = mode.mysql
-					info.MatrixOneNativeMode = mode.native
-					info.LegacyNumericCompatibilityMode = false
-					wirePipeline := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{cast}}}}
-					rt := runtime.ServiceRuntime(c.proc.GetService())
-					oldVersion, _ := rt.GetGlobalVariables(runtime.MOProtocolVersion)
-					t.Cleanup(func() { rt.SetGlobalVariables(runtime.MOProtocolVersion, oldVersion) })
-					for _, version := range []int64{defines.MORPCVersion93, defines.MORPCVersion94} {
-						client.version = version
-						rt.SetGlobalVariables(runtime.MOProtocolVersion, version)
-						c.execType = plan.ExecTypeAP_MULTICN
-						c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
-						require.NoError(t, c.constrainStrictStringNumericCompatibilityWorkers(qry))
-						if version < defines.MORPCVersion94 {
-							require.Equal(t, plan.ExecTypeAP_ONECN, c.execType,
-								"v93 placement must fall back locally in %s mode", mode.name)
-							require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wirePipeline), "version 94")
-							_, err = encodeRemoteScope(scope, c.proc)
-							require.ErrorContains(t, err, "version 94")
-						} else {
-							require.Equal(t, plan.ExecTypeAP_MULTICN, c.execType,
-								"v94 placement should retain distributed execution in %s mode", mode.name)
-							require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, wirePipeline))
-							data, err := encodeRemoteScope(scope, c.proc)
-							require.NoError(t, err)
-							require.NotEmpty(t, data)
-						}
-					}
-				})
-			}
-		})
+		for _, mode := range modes {
+			t.Run(shape.name+"/"+mode.name, func(t *testing.T) {
+				c, client := expressionProtocolTestCompile(t)
+				qry, scope := strictStringNumericCompatibilityPipeline(t, types.T_varchar, 0)
+				scope.Proc = c.proc
+				t.Cleanup(scope.RootOp.Release)
+				flow := makeStringNumericFlowExpr("case", 71, condition,
+					makeStringLiteralExpr("1", planpb.StringLiteralForm_STRING_LITERAL_HEX), shape.otherwise)
+				cast := makeStringNumericCastExpr(flow, types.T_int64)
+				projects := []*planpb.Expr{cast}
+				qry.Nodes[0].ProjectList = projects
+				scope.RootOp.(*projection.Projection).ProjectList = projects
+				wirePipeline := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: projects}}}
+				features, err := planpb.RequiredRemoteExpressionFeatures(qry)
+				require.NoError(t, err)
+				require.True(t, features.NumericBinaryLiteralProvenance,
+					"uniform and marked-plus-NULL CASE results still carry numeric provenance")
+				info := c.proc.GetSessionInfo()
+				info.MySQLNumericCompatibilityMode = mode.mysql
+				info.MatrixOneNativeMode = mode.native
+				info.LegacyNumericCompatibilityMode = false
+				for _, version := range []int64{defines.MORPCVersion93, defines.MORPCVersion94} {
+					numericBinaryLiteralProtocolVersion(t, c, client, qry, scope, wirePipeline, version)
+				}
+			})
+		}
 	}
 }
 

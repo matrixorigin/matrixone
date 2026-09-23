@@ -129,7 +129,7 @@ const (
 	MORPCVersion91     int64 = 91 // canonical CHAR and JSON HLL_ADD_AGG hash keys
 	MORPCVersion92     int64 = 92 // canonical scalar FLOAT HLL_ADD_AGG hash keys
 	MORPCVersion93     int64 = 93 // session LAST_INSERT_ID connection migration state
-	MORPCVersion94     int64 = 94 // strict-by-default string-numeric compatibility contract
+	MORPCVersion94     int64 = 94 // string-numeric semantics and row-level binary-literal provenance
 	MORPCLatestVersion       = MORPCVersion94
 )
 

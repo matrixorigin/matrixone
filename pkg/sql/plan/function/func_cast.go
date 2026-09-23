@@ -6731,9 +6731,9 @@ type castNumericToken struct {
 type SQLCompatibilityMode uint8
 
 const (
-	// Zero is strict for a current process with the v88 contract marker. A
-	// legacy wire payload is tracked separately by LegacyNumericCompatibilityMode
-	// so mode-sensitive remote execution can fail closed during a rolling upgrade.
+	// Zero is strict. A legacy wire payload is tracked separately by
+	// LegacyNumericCompatibilityMode so mode-sensitive remote execution can fail
+	// closed during a rolling upgrade.
 	SQLCompatibilityMatrixOne SQLCompatibilityMode = iota
 	SQLCompatibilityMySQL
 )
@@ -6825,15 +6825,6 @@ func parseMathStringToFloat(s string, isBinary bool, proc *process.Process) (flo
 		appendNumericCoercionWarning(proc, s)
 	}
 	return value, nil
-}
-
-// ParsePreparedStringToFloat64 is retained for source compatibility. Ordinary
-// and MATRIXONE_NATIVE modes are both strict now; use
-// ParsePreparedStringToFloat64WithMode to opt in to MySQL numeric-prefix
-// conversion. The bool no longer selects an implicit permissive default.
-func ParsePreparedStringToFloat64(s string, matrixOneNative bool) (float64, error) {
-	_ = matrixOneNative
-	return ParsePreparedStringToFloat64WithMode(s, SQLCompatibilityMatrixOne)
 }
 
 // ParsePreparedStringToFloat64WithMode applies the selected conversion mode

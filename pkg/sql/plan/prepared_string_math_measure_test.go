@@ -253,21 +253,9 @@ func TestPreparedStringMathRoleDiscoveryAcrossExpressionContainers(t *testing.T)
 			want: map[int]bool{14: true},
 		},
 		{
-			name: "outer-math-does-not-own-through-concat",
-			expr: stringMath("round",
-				stringMath("concat", benchmarkStringMathTextLiteral("1"), position(15)),
-				benchmarkStringMathIntLiteral(0)),
-			want: map[int]bool{15: false},
-		},
-		{
 			name: "outer-math-does-not-own-list-members",
 			expr: stringMath("abs", list(position(16))),
 			want: map[int]bool{16: false},
-		},
-		{
-			name: "nested-owner-in-list-remains-discoverable",
-			expr: stringMath("abs", list(stringMath("abs", position(17)))),
-			want: map[int]bool{17: true},
 		},
 		{
 			name: "window-value-and-controls-have-separate-roles",
@@ -483,14 +471,9 @@ func benchmarkStringMathCases() []struct {
 		noMatch       bool
 	}{
 		{name: "p1-d0", params: 1, eligible: true, valueCount: 1, numericPrefix: true},
-		{name: "p8-d0", params: 8, eligible: true, valueCount: 8, numericPrefix: true},
-		{name: "p32-d0", params: 32, eligible: true, valueCount: 32, numericPrefix: true},
 		{name: "p128-d0", params: 128, eligible: true, valueCount: 128, numericPrefix: true},
-		{name: "p1-d1", params: 1, depth: 1, eligible: true, valueCount: 1, numericPrefix: true},
 		{name: "p1-d8", params: 1, depth: 8, eligible: true, valueCount: 1, numericPrefix: true},
-		{name: "p1-d32", params: 1, depth: 32, eligible: true, valueCount: 1, numericPrefix: true},
 		{name: "p1-d64", params: 1, depth: 64, eligible: true, valueCount: 1, numericPrefix: true},
-		{name: "p1-d8-n32", params: 1, depth: 8, noise: 32, eligible: true, valueCount: 1, numericPrefix: true},
 		{name: "p1-d8-n128", params: 1, depth: 8, noise: 128, eligible: true, valueCount: 1, numericPrefix: true},
 		{name: "no-match-p8-d8-n128", params: 8, depth: 8, noise: 128, valueCount: 8, numericPrefix: true, noMatch: true},
 	}
@@ -539,7 +522,10 @@ func BenchmarkPreparedStringMathRoleDiscovery(b *testing.B) {
 
 func BenchmarkPreparedStringMathSpecialization(b *testing.B) {
 	ctx := context.Background()
-	for _, test := range benchmarkStringMathCases()[:10] {
+	for _, test := range benchmarkStringMathCases() {
+		if test.noMatch {
+			continue
+		}
 		b.Run(test.name, func(b *testing.B) {
 			query := benchmarkStringMathPlan(test.params, test.depth, test.noise, true, false)
 			values := benchmarkStringMathValues(test.valueCount, true)

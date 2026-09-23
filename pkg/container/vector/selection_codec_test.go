@@ -239,7 +239,7 @@ func TestSelectedRowsCodecPreservesStringSource(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
-func TestSelectedRowsCodecPreservesRuntimeDomainAndNumericLiteralRows(t *testing.T) {
+func TestSelectedRowsCodecPreservesRuntimeAndNumericLiteralProvenance(t *testing.T) {
 	mp := mpool.MustNewZero()
 	source := NewVec(types.T_varchar.ToType())
 	destination := NewOffHeapVecWithType(types.T_varchar.ToType())
@@ -248,39 +248,60 @@ func TestSelectedRowsCodecPreservesRuntimeDomainAndNumericLiteralRows(t *testing
 		source.Free(mp)
 		require.Zero(t, mp.CurrNB())
 	})
-	require.NoError(t, AppendStringList(source, []string{"binary", "text", "literal"}, nil, mp))
+	require.NoError(t, AppendStringList(source, []string{"ordinary-binary", "", "explicit-text-literal", "literal-b"}, nil, mp))
+	source.SetNull(1)
 	require.NoError(t, source.SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, mp))
-	require.NoError(t, source.SetRuntimeStringDomainAtWithMP(1, types.RuntimeStringText, mp))
-	require.NoError(t, source.SetIsBinRowsWithMP([]bool{false, true, false}, mp))
+	require.NoError(t, source.SetRuntimeStringDomainAtWithMP(2, types.RuntimeStringText, mp))
+	require.NoError(t, source.SetIsBinRowsWithMP([]bool{false, false, true, true}, mp))
 	require.NoError(t, source.SetPrepareParamKindsWithMP([]PrepareParamKind{
 		PrepareParamInteger, PrepareParamNone, PrepareParamDecimal,
+		PrepareParamBoolean,
 	}, mp))
 
+	sourceValues := []string{"ordinary-binary", "", "explicit-text-literal", "literal-b"}
+	sourceDomains := []types.RuntimeStringDomain{
+		types.RuntimeStringBinary, types.RuntimeStringInherit,
+		types.RuntimeStringText, types.RuntimeStringInherit,
+	}
+	sourceIsBin := []bool{false, false, true, true}
+	sourceKinds := []PrepareParamKind{
+		PrepareParamInteger, PrepareParamNone, PrepareParamDecimal, PrepareParamBoolean,
+	}
 	for _, encode := range []struct {
-		name string
-		wire func(*bytes.Buffer) error
+		name   string
+		rows   []int32
+		encode func(*bytes.Buffer) error
 	}{
-		{name: "rows", wire: func(buf *bytes.Buffer) error {
-			return source.MarshalSelectedRowsTo(buf, []int32{0, 1, 2})
+		{name: "rows", rows: []int32{3, 1, 2, 0}, encode: func(buf *bytes.Buffer) error {
+			return source.MarshalSelectedRowsTo(buf, []int32{3, 1, 2, 0})
 		}},
-		{name: "flags", wire: func(buf *bytes.Buffer) error {
-			_, err := source.MarshalSelectedFlagsTo(buf, []uint8{1, 1, 1})
+		{name: "flags", rows: []int32{0, 1, 2, 3}, encode: func(buf *bytes.Buffer) error {
+			_, err := source.MarshalSelectedFlagsTo(buf, []uint8{1, 1, 1, 1})
 			return err
 		}},
 	} {
 		t.Run(encode.name, func(t *testing.T) {
 			var wire bytes.Buffer
-			require.NoError(t, encode.wire(&wire))
-			require.NoError(t, destination.UnmarshalSelectedRowsFrom(&wire, 3, mp))
-			require.Equal(t, types.RuntimeStringBinary, destination.GetRuntimeStringDomainAt(0))
-			require.Equal(t, types.RuntimeStringText, destination.GetRuntimeStringDomainAt(1))
-			require.Equal(t, types.RuntimeStringInherit, destination.GetRuntimeStringDomainAt(2))
-			require.False(t, destination.GetIsBinAt(0))
-			require.True(t, destination.GetIsBinAt(1))
-			require.False(t, destination.GetIsBinAt(2))
-			require.Equal(t, PrepareParamInteger, destination.GetPrepareParamKindAt(0))
-			require.Equal(t, PrepareParamNone, destination.GetPrepareParamKindAt(1))
-			require.Equal(t, PrepareParamDecimal, destination.GetPrepareParamKindAt(2))
+			require.NoError(t, encode.encode(&wire))
+			require.NoError(t, destination.UnmarshalSelectedRowsFrom(&wire, len(encode.rows), mp))
+			var wantValues []string
+			var wantDomains []types.RuntimeStringDomain
+			var wantIsBin []bool
+			var wantKinds []PrepareParamKind
+			for _, row := range encode.rows {
+				wantValues = append(wantValues, sourceValues[row])
+				wantDomains = append(wantDomains, sourceDomains[row])
+				wantIsBin = append(wantIsBin, sourceIsBin[row])
+				wantKinds = append(wantKinds, sourceKinds[row])
+			}
+			require.Equal(t, wantValues, InefficientMustStrCol(destination))
+			for row := range wantDomains {
+				require.Equal(t, wantDomains[row], destination.GetRuntimeStringDomainAt(row))
+				require.Equal(t, wantIsBin[row], destination.GetIsBinAt(row))
+			}
+			require.Equal(t, wantKinds, destination.GetPrepareParamKinds())
+			require.True(t, destination.IsNull(1), "NULL rows preserve their selection position")
+			require.False(t, destination.GetIsBin(), "the scalar summary remains conservative for mixed rows")
 		})
 	}
 }
@@ -465,34 +486,6 @@ func TestSelectedRowsCodecPreservesUniformExplicitText(t *testing.T) {
 		require.Equal(t, types.RuntimeStringText, destination.GetRuntimeStringDomainAt(row))
 		require.False(t, destination.GetIsBinaryStringAt(row))
 	}
-}
-
-func TestSelectedRowsCodecPreservesNumericBinaryLiteralRows(t *testing.T) {
-	mp := mpool.MustNewZero()
-	source := NewVec(types.T_text.ToType())
-	destination := NewOffHeapVecWithType(types.T_text.ToType())
-	t.Cleanup(func() {
-		destination.Free(mp)
-		source.Free(mp)
-		require.Zero(t, mp.CurrNB())
-	})
-	require.NoError(t, AppendBytesList(source, [][]byte{
-		[]byte("hex-a"), []byte("null"), []byte("text"), []byte("bit-b"),
-	}, nil, mp))
-	source.SetNull(1)
-	require.NoError(t, source.SetIsBinRowsWithMP([]bool{true, false, false, true}, mp))
-	require.False(t, source.GetIsBin(), "mixed per-row provenance must not leak through the scalar summary")
-
-	rows := []int32{3, 1, 2, 0}
-	var encoded bytes.Buffer
-	require.NoError(t, source.MarshalSelectedRowsTo(&encoded, rows))
-	require.NoError(t, destination.UnmarshalSelectedRowsFrom(&encoded, len(rows), mp))
-	require.Equal(t, []string{"bit-b", "", "text", "hex-a"}, InefficientMustStrCol(destination))
-	require.True(t, destination.GetIsBinAt(0))
-	require.False(t, destination.GetIsBinAt(1), "NULL rows do not retain numeric provenance")
-	require.False(t, destination.GetIsBinAt(2))
-	require.True(t, destination.GetIsBinAt(3))
-	require.False(t, destination.GetIsBin(), "the decoder keeps the scalar summary conservative")
 }
 
 func TestSelectedRowsCodecRejectsInvalidOrTruncatedRecords(t *testing.T) {

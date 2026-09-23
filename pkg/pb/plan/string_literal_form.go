@@ -162,22 +162,6 @@ func RequiresMORPCVersion94StrictStringNumericCompatibility(owner any) (bool, er
 	return features.StrictStringNumericCompatibility, err
 }
 
-// RequiresMORPCVersion92StrictStringNumericCompatibility is retained as a
-// source-level alias for callers from the pre-v94 development branch. MORPC
-// v92 is already assigned to the canonical scalar FLOAT HLL contract on main;
-// the strict string numeric contract is admitted at v94.
-// Deprecated: use RequiresMORPCVersion94StrictStringNumericCompatibility.
-func RequiresMORPCVersion92StrictStringNumericCompatibility(owner any) (bool, error) {
-	return RequiresMORPCVersion94StrictStringNumericCompatibility(owner)
-}
-
-// RequiresMORPCVersion88StrictStringNumericCompatibility is retained as a
-// source-level alias for callers from the older development branch.
-// Deprecated: use RequiresMORPCVersion94StrictStringNumericCompatibility.
-func RequiresMORPCVersion88StrictStringNumericCompatibility(owner any) (bool, error) {
-	return RequiresMORPCVersion94StrictStringNumericCompatibility(owner)
-}
-
 // RequiresMORPCVersion36JSONComparisonParam reports whether an owner contains
 // the internal prepared-JSON comparison function.  The function is deliberately
 // identified by its numeric ID: unlike ordinary SQL functions, its name is an
