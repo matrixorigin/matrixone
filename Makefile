@@ -38,16 +38,8 @@
 #
 # make proto-vendor
 #
-# To compile mo-service with GPU support,
-# 1. install CUDA toolkit (version 13.3)
-# 2. install cuVS Go bindings with conda
-#  % conda env create --name go -f optools/images/gpu/go_cuda-133_arch-$(uname -m).yaml
-#  % conda activate go
-# 3. compile matrixone
-#  % cd matrixone
-#  % MO_CL_CUDA=1 make
-# Alternatively use the optional Pixi profile in optools/gpu/README.md and set
-# GPU_TOOLCHAIN_MANIFEST to its exported absolute toolchain.json path.
+# To compile mo-service with GPU support, use the frozen Pixi profile described
+# in optools/gpu/README.md. CPU-only builds do not require Pixi.
 
 # Go toolchain (override with `make GO=/path/to/go ...`); defaults to `go`.
 # Requires Go 1.26+ for the arch-specific SIMD kernels (built by default on x86_64).

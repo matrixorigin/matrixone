@@ -100,15 +100,16 @@ native_common_environment_hash() {
 
 native_accelerator_environment_hash() {
     environment_accelerator=$1
-    gpu_toolchain_fingerprint=
-    if [ "$environment_accelerator" = gpu ] && [ -n "${GPU_TOOLCHAIN_MANIFEST:-}" ]; then
-        gpu_toolchain_fingerprint=$(python3 "$root/cgo/mo_gpu_toolchain.py" resolve --format fingerprint) || return 1
+    pixi_lock_hash=
+    if [ "$environment_accelerator" = gpu ]; then
+        pixi_lock_hash=$(git hash-object --no-filters "$PIXI_PROJECT_ROOT/pixi.lock") || return 1
     fi
     {
         printf 'accelerator=%s\n' "$environment_accelerator"
         if [ "$environment_accelerator" = gpu ]; then
-            printf 'GPU_TOOLCHAIN_MANIFEST=%s\n' "${GPU_TOOLCHAIN_MANIFEST-}"
-            printf 'GPU_TOOLCHAIN_FINGERPRINT=%s\n' "$gpu_toolchain_fingerprint"
+            printf 'PIXI_PROJECT_ROOT=%s\n' "$PIXI_PROJECT_ROOT"
+            printf 'PIXI_ENVIRONMENT_NAME=%s\n' "$PIXI_ENVIRONMENT_NAME"
+            printf 'PIXI_LOCK_HASH=%s\n' "$pixi_lock_hash"
             # Keep both GPU sub-build variable families explicit. cuda uses
             # NVCCFLAGS while cuVS uses NVCC_FLAGS; treating them as aliases
             # lets a real compiler-profile change reuse the previous objects.
@@ -158,6 +159,9 @@ emit_provenance() {
     cgo_hash=$(git -C "$root" rev-parse "$head:cgo") || return 1
     thirdparties_hash=$(git -C "$root" rev-parse "$head:thirdparties") || return 1
 
+    if [ "$accelerator" = gpu ]; then
+        . "$root/cgo/mo-gpu-env" || return 1
+    fi
     common_environment_hash=$(native_common_environment_hash) || return 1
     accelerator_environment_hash=$(native_accelerator_environment_hash \
         "$accelerator") || return 1

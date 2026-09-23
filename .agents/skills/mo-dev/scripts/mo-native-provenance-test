@@ -22,11 +22,13 @@ set -eu
 
 script_dir=$(CDPATH= cd -P "$(dirname "$0")" && pwd)
 provenance_source="$script_dir/../../../../cgo/mo-native-provenance"
+gpu_env_source="$script_dir/../../../../cgo/mo-gpu-env"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 repo="$work/repo"
 mkdir -p "$repo/cgo/cuda" "$repo/cgo/cuvs" "$repo/thirdparties" "$work/bin"
 cp "$provenance_source" "$repo/cgo/mo-native-provenance"
+cp "$gpu_env_source" "$repo/cgo/mo-gpu-env"
 chmod +x "$repo/cgo/mo-native-provenance"
 
 cat >"$work/bin/go" <<'EOF'
@@ -417,28 +419,48 @@ clean_all
 finish_build cpu debug 1
 echo "ok   returning to the default toolchain rebuilds one complete generation"
 
+export PIXI_PROJECT_ROOT="$work"
+export PIXI_ENVIRONMENT_NAME=mo
+mkdir -p "$work/.pixi/envs"
+printf 'test lock\n' >"$work/pixi.lock"
+for gpu_environment in gpu-a gpu-b; do
+    gpu_prefix="$work/$gpu_environment"
+    mkdir -p "$gpu_prefix/conda-meta"
+    for gpu_input in bin/x86_64-conda-linux-gnu-cc \
+        bin/x86_64-conda-linux-gnu-c++ bin/nvcc \
+        targets/x86_64-linux/include/cuda.h \
+        targets/x86_64-linux/lib/libcudart.so \
+        targets/x86_64-linux/lib/stubs/libcuda.so \
+        include/cuvs/core/c_api.h lib/libcuvs.so lib/libcuvs_c.so lib/librmm.so; do
+        mkdir -p "$gpu_prefix/$(dirname "$gpu_input")"
+        : >"$gpu_prefix/$gpu_input"
+    done
+done
+ln -s ../../gpu-a "$work/.pixi/envs/mo"
 gpu_action=$(CONDA_PREFIX="$work/gpu-a" native prepare "$repo" gpu debug 1)
-if [ "$gpu_action" = rebuild-cgo ]; then
-    echo "ok   CPU/GPU switching preserves compatible thirdparties"
+if [ "$gpu_action" = rebuild-all ]; then
+    echo "ok   CPU/GPU switching rebuilds thirdparties with the Pixi compiler"
 else
-    printf 'FAIL CPU/GPU switch expected rebuild-cgo, got %s\n' "$gpu_action"
+    printf 'FAIL CPU/GPU switch expected rebuild-all, got %s\n' "$gpu_action"
     failures=$((failures + 1))
 fi
-clean_cgo
+clean_all
 (CONDA_PREFIX="$work/gpu-a" native begin "$repo" gpu debug 1)
 produce_outputs gpu
 (CONDA_PREFIX="$work/gpu-a" native record "$repo" gpu debug 1)
 
+rm "$work/.pixi/envs/mo"
+ln -s ../../gpu-b "$work/.pixi/envs/mo"
 gpu_environment_action=$(CONDA_PREFIX="$work/gpu-b" \
     native prepare "$repo" gpu debug 1)
-if [ "$gpu_environment_action" = rebuild-cgo ]; then
-    echo "ok   GPU environment switching rebuilds CGo but not thirdparties"
+if [ "$gpu_environment_action" = rebuild-all ]; then
+    echo "ok   GPU environment switching rebuilds Pixi-compiled thirdparties"
 else
-    printf 'FAIL GPU environment switch expected rebuild-cgo, got %s\n' \
+    printf 'FAIL GPU environment switch expected rebuild-all, got %s\n' \
         "$gpu_environment_action"
     failures=$((failures + 1))
 fi
-clean_cgo
+clean_all
 (CONDA_PREFIX="$work/gpu-b" native begin "$repo" gpu debug 1)
 produce_outputs gpu
 (CONDA_PREFIX="$work/gpu-b" native record "$repo" gpu debug 1)

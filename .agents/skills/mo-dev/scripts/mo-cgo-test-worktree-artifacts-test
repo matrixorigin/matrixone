@@ -36,7 +36,7 @@ git -C "$primary" init --quiet
 cp "$wrapper" "$primary/.agents/skills/mo-dev/scripts/mo-cgo-test"
 chmod +x "$primary/.agents/skills/mo-dev/scripts/mo-cgo-test"
 cp "$provenance_writer" "$primary/cgo/mo-native-provenance"
-cp "$script_dir/../../../../cgo/mo_gpu_toolchain.py" "$primary/cgo/mo_gpu_toolchain.py"
+cp "$script_dir/../../../../cgo/mo-gpu-env" "$primary/cgo/mo-gpu-env"
 chmod +x "$primary/cgo/mo-native-provenance"
 
 cat > "$primary/.gitignore" <<'EOF'
@@ -124,6 +124,25 @@ EOF
 chmod +x "$work/bin/git"
 export REAL_GIT="$real_git"
 
+export PIXI_PROJECT_ROOT="$work/pixi-project"
+export PIXI_ENVIRONMENT_NAME=mo
+export CONDA_PREFIX="$PIXI_PROJECT_ROOT/.pixi/envs/mo"
+mkdir -p "$CONDA_PREFIX/conda-meta"
+for gpu_input in pixi.lock \
+    .pixi/envs/mo/bin/x86_64-conda-linux-gnu-cc \
+    .pixi/envs/mo/bin/x86_64-conda-linux-gnu-c++ \
+    .pixi/envs/mo/bin/nvcc \
+    .pixi/envs/mo/targets/x86_64-linux/include/cuda.h \
+    .pixi/envs/mo/targets/x86_64-linux/lib/libcudart.so \
+    .pixi/envs/mo/targets/x86_64-linux/lib/stubs/libcuda.so \
+    .pixi/envs/mo/include/cuvs/core/c_api.h \
+    .pixi/envs/mo/lib/libcuvs.so \
+    .pixi/envs/mo/lib/libcuvs_c.so \
+    .pixi/envs/mo/lib/librmm.so; do
+    mkdir -p "$PIXI_PROJECT_ROOT/$(dirname "$gpu_input")"
+    : >"$PIXI_PROJECT_ROOT/$gpu_input"
+done
+
 linked_wrapper="$linked/.agents/skills/mo-dev/scripts/mo-cgo-test"
 failures=0
 
@@ -159,7 +178,7 @@ record_provenance() {
 }
 
 record_gpu_provenance() {
-    action=$(env FAKE_GOOS=linux CONDA_PREFIX="$work" PATH="$work/bin:$PATH" \
+    action=$(env FAKE_GOOS=linux PATH="$work/bin:$PATH" \
         "$primary/cgo/mo-native-provenance" prepare "$primary" gpu release 0)
     case "$action" in
         rebuild-all)
@@ -176,7 +195,7 @@ record_gpu_provenance() {
         reuse) ;;
         *) printf 'unexpected GPU build action: %s\n' "$action" >&2; exit 1 ;;
     esac
-    env FAKE_GOOS=linux CONDA_PREFIX="$work" PATH="$work/bin:$PATH" \
+    env FAKE_GOOS=linux PATH="$work/bin:$PATH" \
         "$primary/cgo/mo-native-provenance" begin "$primary" gpu release 0
     mkdir -p "$primary/thirdparties/install/include" \
         "$primary/thirdparties/install/lib" "$primary/cgo/cuda"
@@ -186,7 +205,7 @@ record_gpu_provenance() {
     printf 'gpu kernel\n' > "$primary/cgo/cuda/mocl_kernel64.fatbin"
     cp "$primary/cgo/cuda/mocl_kernel64.fatbin" \
         "$primary/mocl_kernel64.fatbin"
-    env FAKE_GOOS=linux CONDA_PREFIX="$work" PATH="$work/bin:$PATH" \
+    env FAKE_GOOS=linux PATH="$work/bin:$PATH" \
         "$primary/cgo/mo-native-provenance" record "$primary" gpu release 0
 }
 
@@ -242,7 +261,7 @@ check_platform darwin libmo.dylib
 check_platform linux libmo.so
 
 set +e
-variant_output=$(env FAKE_GOOS=linux MO_CL_CUDA=1 CONDA_PREFIX="$work" \
+variant_output=$(env FAKE_GOOS=linux MO_CL_CUDA=1 \
     PATH="$work/bin:$PATH" sh "$linked_wrapper" ./pkg/x/ 2>&1)
 variant_status=$?
 set -e
@@ -279,7 +298,7 @@ fi
 
 record_gpu_provenance
 set +e
-gpu_output=$(env FAKE_GOOS=linux MO_CL_CUDA=1 CONDA_PREFIX="$work" \
+gpu_output=$(env FAKE_GOOS=linux MO_CL_CUDA=1 \
     PATH="$work/bin:$PATH" sh "$linked_wrapper" ./pkg/x/ 2>&1)
 gpu_status=$?
 set -e
