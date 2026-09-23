@@ -186,6 +186,30 @@ func TestPlanCacheUpdatesPlanAndSnapshotAsOneGeneration(t *testing.T) {
 	require.Equal(t, 1, secondStmt.freed)
 }
 
+func TestPlanCacheCarriesStatementFingerprintsByValue(t *testing.T) {
+	pc := newPlanCache(1)
+	stmt := &trackedStatement{}
+	fingerprints := []string{"admission-fingerprint"}
+	attempted := []bool{true}
+	pc.cacheWithPlanSnapshotsAndStatsVersionsAndFingerprints(
+		"sql",
+		[]tree.Statement{stmt},
+		[]*plan.Plan{{}},
+		[]timestamp.Timestamp{{PhysicalTime: 10}},
+		[]map[optimizerStatsTableKey]uint64{nil},
+		fingerprints,
+		attempted,
+	)
+	fingerprints[0] = "mutated caller slice"
+	attempted[0] = false
+
+	cached := pc.get("sql")
+	require.NotNil(t, cached)
+	require.Equal(t, []string{"admission-fingerprint"}, cached.statementFingerprints)
+	require.Equal(t, []bool{true}, cached.statementFingerprintAttempted)
+	require.Zero(t, stmt.freed)
+}
+
 func Test_CleanCache(t *testing.T) {
 	pc := newPlanCache(3)
 

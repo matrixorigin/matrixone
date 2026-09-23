@@ -165,11 +165,6 @@ func encodeRemoteScopeWithFeaturesAndVectorProtocol(
 	if err = validateRemoteExpressionFeaturesProtocol(proc, features); err != nil {
 		return nil, features, err
 	}
-	if features.StatementHashFunction {
-		if err = validateStatementHashDestination(proc, p); err != nil {
-			return nil, features, err
-		}
-	}
 	if features.IntegerArithmeticDomains {
 		if err = validateIntegerDomainDestination(proc, p); err != nil {
 			return nil, features, err
@@ -352,19 +347,6 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		if featureErr != nil {
 			return nil, featureErr
 		}
-		if features.StatementHashFunction {
-			// The build identity is a scope admission gate. Validate it before
-			// operators are constructed so a zero-row or fully masked scope
-			// cannot bypass the mixed-build fence.
-			if proc == nil {
-				return nil, moerr.NewNotSupportedNoCtx(
-					"MO_STATEMENT_HASH remote execution requires a process build identity",
-				)
-			}
-			if err = proc.ValidateStatementHashBuildCommitID(); err != nil {
-				return nil, err
-			}
-		}
 		if err = validateRemoteMongoUserQueryPipelineProtocol(proc, p); err != nil {
 			return nil, err
 		}
@@ -440,15 +422,8 @@ func encodeProcessInfo(
 	sql string,
 	remoteFragmentCounts map[string]uint32,
 	remoteExecutionID uuid.UUID,
-	containsStatementHash bool,
 ) ([]byte, error) {
-	var v pipeline.ProcessInfo
-	var err error
-	if containsStatementHash {
-		v, err = proc.BuildProcessInfoWithStatementHash(sql)
-	} else {
-		v, err = proc.BuildProcessInfo(sql)
-	}
+	v, err := proc.BuildProcessInfo(sql)
 	if err != nil {
 		return nil, err
 	}
@@ -2388,12 +2363,6 @@ func validateRemoteExpressionFeaturesProtocol(
 		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion36) {
 		return moerr.NewNotSupportedNoCtx(
 			"mixed JSON/BOOL equality requires MORPC protocol version 36",
-		)
-	}
-	if features.StatementHashFunction &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion100) {
-		return moerr.NewNotSupportedNoCtx(
-			"MO_STATEMENT_HASH remote execution requires MORPC protocol version 100",
 		)
 	}
 	if features.FormatNumericArguments &&

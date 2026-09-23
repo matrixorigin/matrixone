@@ -14,20 +14,6 @@
 
 package version
 
-// IsFullBuildCommitID reports whether id is a full lowercase hexadecimal
-// SHA-1 revision suitable for fencing build-scoped remote behavior.
-func IsFullBuildCommitID(id string) bool {
-	if len(id) != 40 {
-		return false
-	}
-	for _, ch := range id {
-		if !((ch >= '0' && ch <= '9') || (ch >= 'a' && ch <= 'f')) {
-			return false
-		}
-	}
-	return true
-}
-
 var (
 	// GoVersion go version, setup by makefile
 	GoVersion = ""
@@ -35,10 +21,6 @@ var (
 	BranchName = ""
 	// CommitID git commit id, setup by makefile
 	CommitID = ""
-	// BuildCommitID is the full source revision for builds from a clean tree.
-	// It is empty for modified/untracked source trees and is used only for
-	// feature contracts that require identical code on remote workers.
-	BuildCommitID = ""
 	// BuildTime build time, setup by makefile
 	BuildTime = ""
 	// Version version, setup by makefile

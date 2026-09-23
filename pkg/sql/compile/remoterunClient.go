@@ -303,7 +303,6 @@ func prepareRemoteRunSendingDataWithVectorProtocol(
 		sqlStr,
 		remoteFragmentCounts,
 		remoteExecutionID,
-		features.StatementHashFunction,
 	); err != nil {
 		return nil, false, nil, false, err
 	}
