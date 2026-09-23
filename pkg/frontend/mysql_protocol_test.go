@@ -151,6 +151,23 @@ func createInnerServer() *MOServer {
 	mo.running = true
 	return mo
 }
+
+func stubEmptyRewriteRuleCache(t *testing.T) {
+	t.Helper()
+	previous := NewBackgroundExec
+	NewBackgroundExec = func(context.Context, FeSession, ...*BackgroundExecOption) BackgroundExec {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.beforeExec = func(sql string) {
+			if strings.HasPrefix(sql, "select role_id, rule_name, `rule` from") {
+				bh.sql2result[sql] = newMrsForRewriteRules(nil)
+			}
+		}
+		return bh
+	}
+	t.Cleanup(func() { NewBackgroundExec = previous })
+}
+
 func startInnerServer(conn net.Conn) {
 
 	mo := createInnerServer()
@@ -395,6 +412,7 @@ func TestKill(t *testing.T) {
 
 	conn2 = waitForConn(dbConnPool2)
 	logutil.Infof("open conn2 done")
+	stubEmptyRewriteRuleCache(t)
 
 	logutil.Infof("get the connection id of conn1")
 	//get the connection id of conn1
@@ -1903,6 +1921,7 @@ func TestMysqlResultSet(t *testing.T) {
 		return openErr == nil
 	}, time.Second, 10*time.Millisecond)
 	require.NotNil(t, db)
+	stubEmptyRewriteRuleCache(t)
 
 	for _, ks := range kases {
 		do_query_resp_resultset(t, db, false, false, ks.sql, ks.mrs)
@@ -4623,7 +4642,7 @@ func (fp *testMysqlWriter) Flush() error {
 	return nil
 }
 
-func (fp *testMysqlWriter) MakeColumnDefData(ctx context.Context, columns []*planPb.ColDef) ([][]byte, error) {
+func (fp *testMysqlWriter) MakeColumnDefData(ctx context.Context, columns []*planPb.ColDef, directIntegerLengths ...uint32) ([][]byte, error) {
 	if fp.makeColumnDefDataFunc != nil {
 		return fp.makeColumnDefDataFunc(ctx, columns)
 	}
