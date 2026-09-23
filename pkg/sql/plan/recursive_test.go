@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
@@ -367,6 +368,31 @@ func TestRecursiveCteStringAnchorUsesAssignmentCast(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRecursiveCteDecimalAnchorKeepsCheckedCast(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(false), t, `
+		with recursive r(n) as (
+			select cast(999.99 as decimal(5, 2))
+			union all
+			select n + 0.01 from r where n < 1000
+		)
+		select n from r`)
+	require.NoError(t, err)
+
+	var found bool
+	for _, node := range logicPlan.GetQuery().Nodes {
+		for _, expr := range node.ProjectList {
+			fn := expr.GetF()
+			if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" {
+				continue
+			}
+			if expr.Typ.Id == int32(types.T_decimal64) && expr.Typ.Width == 5 && expr.Typ.Scale == 2 {
+				found = true
+			}
+		}
+	}
+	require.True(t, found, "recursive member must retain the checked cast to its decimal anchor type")
 }
 
 func recursivePlanFunctionNames(logicPlan *planpb.Plan) map[string]struct{} {

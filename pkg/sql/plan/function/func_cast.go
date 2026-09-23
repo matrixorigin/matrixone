@@ -1247,12 +1247,11 @@ func castToDecimal256(proc *process.Process, from *vector.Vector, toType types.T
 		return decimal128ToDecimal256(s, rs, length, selectList)
 	case types.T_decimal256:
 		s := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](from)
-		if s.GetType().Scale == toType.Scale && s.GetType().Width >= toType.Width {
+		if s.GetType().Scale == toType.Scale && s.GetType().Width <= toType.Width {
 			if err := rs.DupFromParameter(s, length); err != nil {
 				return err
 			}
-			v := rs.GetResultVector()
-			v.SetType(toType)
+			rs.GetResultVector().SetType(toType)
 			return nil
 		}
 		return decimal256ToDecimal256(s, rs, length, selectList)
@@ -2360,12 +2359,14 @@ func decimal64ToOthers(proc *process.Process,
 		return decimal64ToUnsigned(ctx, source, rs, 64, length, selectList)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
-		if source.GetType().Scale == toType.Scale && source.GetType().Width >= toType.Width {
+		// Reusing the physical values is safe only when the target preserves
+		// the source domain. A narrower precision must validate every value;
+		// merely relabeling it can manufacture an out-of-range DECIMAL.
+		if source.GetType().Scale == toType.Scale && source.GetType().Width <= toType.Width {
 			if err := rs.DupFromParameter(source, length); err != nil {
 				return err
 			}
-			v := rs.GetResultVector()
-			v.SetType(toType)
+			rs.GetResultVector().SetType(toType)
 			return nil
 		}
 		return decimal64ToDecimal64(source, rs, length, selectList)
@@ -2437,12 +2438,14 @@ func decimal128ToOthers(proc *process.Process,
 		return decimal128ToDecimal64(ctx, source, rs, length, selectList)
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
-		if source.GetType().Scale == toType.Scale && source.GetType().Width >= toType.Width {
+		// Widening precision with an unchanged scale preserves the value
+		// domain. Narrowing must use the checked conversion below. Keep the
+		// source vector metadata immutable because it may have other consumers.
+		if source.GetType().Scale == toType.Scale && source.GetType().Width <= toType.Width {
 			if err := rs.DupFromParameter(source, length); err != nil {
 				return err
 			}
-			v := source.GetSourceVector()
-			v.SetType(toType)
+			rs.GetResultVector().SetType(toType)
 			return nil
 		}
 		return decimal128ToDecimal128(source, rs, length, selectList)
@@ -2532,12 +2535,11 @@ func decimal256ToOthersWithContext(
 		return decimal256ToDecimal128(source, rs, length, selectList)
 	case types.T_decimal256:
 		rs := vector.MustFunctionResult[types.Decimal256](result)
-		if source.GetType().Scale == toType.Scale && source.GetType().Width >= toType.Width {
+		if source.GetType().Scale == toType.Scale && source.GetType().Width <= toType.Width {
 			if err := rs.DupFromParameter(source, length); err != nil {
 				return err
 			}
-			v := rs.GetResultVector()
-			v.SetType(toType)
+			rs.GetResultVector().SetType(toType)
 			return nil
 		}
 		return decimal256ToDecimal256(source, rs, length, selectList)
