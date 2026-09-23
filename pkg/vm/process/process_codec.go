@@ -163,6 +163,10 @@ func (proc *Process) BuildProcessInfo(
 			return procInfo, err
 		}
 
+		maxDigestLength, err := resolveMaxDigestLengthForProcessInfo(proc)
+		if err != nil {
+			return procInfo, err
+		}
 		procInfo.SessionInfo = pipeline.SessionInfo{
 			User:                   proc.Base.SessionInfo.GetUser(),
 			Host:                   proc.Base.SessionInfo.GetHost(),
@@ -176,11 +180,13 @@ func (proc *Process) BuildProcessInfo(
 			LockWaitTimeout:        resolveLockWaitTimeoutSeconds(proc),
 			LockWaitTimeoutSet:     proc.Base.SessionInfo.LockWaitTimeoutSet,
 			MatrixoneNativeMode:    proc.Base.SessionInfo.MatrixOneNativeMode,
-			SqlMode:                resolveSqlMode(proc),
+			SqlMode:                ResolveSqlMode(proc),
 			AutoIncrementIncrement: proc.Base.SessionInfo.AutoIncrementIncrement,
 			AutoIncrementOffset:    proc.Base.SessionInfo.AutoIncrementOffset,
 			MaxErrorCount:          uint32(maxErrorCount),
 			MaxErrorCountSet:       maxErrorCountSet,
+			MaxDigestLength:        int64(maxDigestLength),
+			MaxDigestLengthSet:     true,
 		}
 		weekMode, weekModeSet, err := ResolveDefaultWeekFormatMode(proc)
 		if err != nil {
@@ -497,6 +503,8 @@ func ConvertToProcessSessionInfo(
 		AutoIncrementOffset:                 sei.AutoIncrementOffset,
 		MaxErrorCount:                       int(sei.MaxErrorCount),
 		MaxErrorCountSet:                    sei.MaxErrorCountSet,
+		MaxDigestLength:                     sei.MaxDigestLength,
+		MaxDigestLengthSet:                  sei.MaxDigestLengthSet,
 	}
 	if sei.TimeZoneName != "" {
 		if sei.TimeZoneName == "Local" {
@@ -518,7 +526,10 @@ func ConvertToProcessSessionInfo(
 	return sessionInfo, nil
 }
 
-func resolveSqlMode(proc *Process) string {
+// ResolveSqlMode returns the effective sql_mode for execution and forwarding.
+// A non-frontend process must retain its captured session snapshot when an
+// inherited resolver only exposes the compiled empty default.
+func ResolveSqlMode(proc *Process) string {
 	if proc == nil {
 		return ""
 	}
