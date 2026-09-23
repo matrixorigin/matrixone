@@ -362,7 +362,7 @@ func TestTemporalCompatibilitySelectListAndNullBranches(t *testing.T) {
 			result := NewFunctionTestResult(types.T_time.ToType(), false,
 				[]types.Time{types.TimeFromClock(false, 1, 2, 4, 0), 0, 0, 0},
 				[]bool{false, true, true, true})
-			if tc.fn == TimeSub {
+			if tc.name == "time-sub" {
 				result = NewFunctionTestResult(types.T_time.ToType(), false,
 					[]types.Time{types.TimeFromClock(false, 1, 2, 2, 0), 0, 0, 0},
 					[]bool{false, true, true, true})
