@@ -105,14 +105,14 @@ func TestStatementDigestTextUsesCurrentSettings(t *testing.T) {
 
 	result, err := runStatementDigestText(t, proc, input)
 	require.NoError(t, err)
-	require.Equal(t, "SELECT ? FROM `t` WHERE `id` IN (?)", result.GetStringAt(0))
+	require.Equal(t, "SELECT ? FROM `t` WHERE `id` IN (...)", result.GetStringAt(0))
 	result.Free(proc.Mp())
 
 	mode = "ANSI_QUOTES"
 	proc.ResetMaxDigestLengthSnapshot()
 	result, err = runStatementDigestText(t, proc, input)
 	require.NoError(t, err)
-	require.Equal(t, "SELECT `column` FROM `t` WHERE `id` IN (?)", result.GetStringAt(0))
+	require.Equal(t, "SELECT `column` FROM `t` WHERE `id` IN (...)", result.GetStringAt(0))
 	result.Free(proc.Mp())
 
 	length = 0
