@@ -1105,7 +1105,11 @@ func d128DivOneToD256(x, y types.Decimal128, dst *types.Decimal256, scaleAdj int
 	signY := d128Abs(&y)
 	x256 := types.Decimal256{B0_63: x.B0_63, B64_127: x.B64_127}
 	y256 := types.Decimal256{B0_63: y.B0_63, B64_127: y.B64_127}
+	unscaledX256 := x256
 	if !d256MulPow10(&x256, scaleAdj) {
+		if err := d256DivBig(unscaledX256, y256, scaleAdj, signX != signY, dst); err == nil {
+			return nil
+		}
 		return moerr.NewInvalidInputNoCtxf("Decimal256 Div overflow: %s/%s", x.Format(scale1), y.Format(scale2))
 	}
 	result, err := x256.Div256(y256)

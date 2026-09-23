@@ -43,6 +43,8 @@ set session div_precision_increment = 30;
 select a / b as q from wide_operands;
 select cast(99999999999999999999999999999999999999999999999999999999999999999 as decimal(65,0)) /
        cast(99999999999999999999999999999999999999999999999999999999999999999 as decimal(65,0)) as q;
+select cast(100000000000000000000 as decimal(38,0)) /
+       cast(1 as decimal(38,30)) as q;
 
 set session div_precision_increment = 10;
 prepare div_precision_stmt from 'select a / b as q from operands';
