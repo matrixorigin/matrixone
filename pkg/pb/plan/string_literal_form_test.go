@@ -182,7 +182,12 @@ func TestRequiresMORPCVersion30NumericPrefix(t *testing.T) {
 	require.False(t, required)
 }
 
-func TestRequiresMORPCVersion94StrictStringNumericCompatibility(t *testing.T) {
+func TestStrictStringNumericCompatibilityFeature(t *testing.T) {
+	strictCompatibilityRequired := func(owner any) bool {
+		features, err := RequiredRemoteExpressionFeatures(owner)
+		require.NoError(t, err)
+		return features.StrictStringNumericCompatibility
+	}
 	stringValue := &Expr{
 		Typ:  Type{Id: planVarcharTypeID},
 		Expr: &Expr_Col{Col: &ColRef{ColPos: 0}},
@@ -194,10 +199,8 @@ func TestRequiresMORPCVersion94StrictStringNumericCompatibility(t *testing.T) {
 			Args: []*Expr{stringValue},
 		}},
 	}
-	required, err := RequiresMORPCVersion94StrictStringNumericCompatibility(
-		&struct{ Expr *Expr }{Expr: strictCast})
-	require.NoError(t, err)
-	require.True(t, required, "string-to-numeric casts depend on the strict default")
+	require.True(t, strictCompatibilityRequired(&struct{ Expr *Expr }{Expr: strictCast}),
+		"string-to-numeric casts depend on the strict default")
 
 	numericValue := &Expr{Typ: Type{Id: 23}, Expr: &Expr_Col{Col: &ColRef{ColPos: 1}}}
 	numericCast := &Expr{
@@ -207,10 +210,8 @@ func TestRequiresMORPCVersion94StrictStringNumericCompatibility(t *testing.T) {
 			Args: []*Expr{numericValue},
 		}},
 	}
-	required, err = RequiresMORPCVersion94StrictStringNumericCompatibility(
-		&struct{ Expr *Expr }{Expr: numericCast})
-	require.NoError(t, err)
-	require.False(t, required, "numeric-to-numeric casts do not consult string compatibility")
+	require.False(t, strictCompatibilityRequired(&struct{ Expr *Expr }{Expr: numericCast}),
+		"numeric-to-numeric casts do not consult string compatibility")
 	for _, overload := range []int32{0, 1, 2} {
 		cast := &Expr{
 			Typ: Type{Id: 31},
@@ -219,10 +220,8 @@ func TestRequiresMORPCVersion94StrictStringNumericCompatibility(t *testing.T) {
 				Args: []*Expr{stringValue},
 			}},
 		}
-		required, err = RequiresMORPCVersion94StrictStringNumericCompatibility(
-			&struct{ Expr *Expr }{Expr: cast})
-		require.NoError(t, err)
-		require.True(t, required, "string-to-float CAST overload %d uses the process compatibility mode", overload)
+		require.True(t, strictCompatibilityRequired(&struct{ Expr *Expr }{Expr: cast}),
+			"string-to-float CAST overload %d uses the process compatibility mode", overload)
 	}
 	for _, sourceType := range []int32{planCharTypeID, planVarcharTypeID, planTextTypeID,
 		planBinaryTypeID, planVarbinaryTypeID, planBlobTypeID} {
@@ -233,10 +232,8 @@ func TestRequiresMORPCVersion94StrictStringNumericCompatibility(t *testing.T) {
 				Args: []*Expr{{Typ: Type{Id: sourceType}, Expr: &Expr_Col{Col: &ColRef{ColPos: 2}}}},
 			}},
 		}
-		required, err = RequiresMORPCVersion94StrictStringNumericCompatibility(
-			&struct{ Expr *Expr }{Expr: cast})
-		require.NoError(t, err)
-		require.True(t, required, "declared string source type %d can use mode-aware text provenance", sourceType)
+		require.True(t, strictCompatibilityRequired(&struct{ Expr *Expr }{Expr: cast}),
+			"declared string source type %d can use mode-aware text provenance", sourceType)
 	}
 
 	prefixCast := &Expr{
@@ -254,17 +251,6 @@ func TestRequiresMORPCVersion94StrictStringNumericCompatibility(t *testing.T) {
 	require.False(t, features.NumericBinaryLiteralProvenance,
 		"a plain string-to-FLOAT CAST has no mixed literal provenance")
 
-	legacyCeil := &Expr{
-		Typ: Type{Id: 30},
-		Expr: &Expr_F{F: &Function{
-			Func: &ObjectRef{Obj: (int64(ceilFunctionID) << 32) | 12, ObjName: "ceil"},
-			Args: []*Expr{stringValue},
-		}},
-	}
-	features, err = RequiredRemoteExpressionFeatures(&struct{ Expr *Expr }{Expr: legacyCeil})
-	require.NoError(t, err)
-	require.True(t, features.StrictStringNumericCompatibility,
-		"historical CEIL VARCHAR overloads also depend on the compatibility mode")
 }
 
 func TestNumericBinaryLiteralProvenanceFeatureTracksFlowControlOutputs(t *testing.T) {
@@ -1166,6 +1152,12 @@ func TestStrictStringNumericCompatibilityConditionsAndHistoricalOwners(t *testin
 			decoded := &GeneratedCol{}
 			require.NoError(t, decoded.UnmarshalBinary(wire))
 			require.Equal(t, int64(math.id)<<32|12, decoded.Expr.GetF().Func.Obj)
+			features, err := RequiredRemoteExpressionFeatures(decoded)
+			require.NoError(t, err)
+			require.True(t, features.StrictStringNumericCompatibility,
+				"historical %s VARCHAR overloads depend on the compatibility mode", math.name)
+			require.True(t, features.HistoricalStringMathCompatibility,
+				"decoded historical %s overloads require their own admission feature", math.name)
 			cast := &Expr{Typ: Type{Id: 31}, Expr: &Expr_F{F: &Function{
 				Func: &ObjectRef{ObjName: "cast"},
 				Args: []*Expr{source},
@@ -1174,7 +1166,7 @@ func TestStrictStringNumericCompatibilityConditionsAndHistoricalOwners(t *testin
 				Expressions []*Expr
 				Generated   *GeneratedCol
 			}{Expressions: []*Expr{cast}, Generated: decoded}
-			features, err := RequiredRemoteExpressionFeatures(owner)
+			features, err = RequiredRemoteExpressionFeatures(owner)
 			require.NoError(t, err)
 			require.True(t, features.StrictStringNumericCompatibility)
 			require.True(t, features.HistoricalStringMathCompatibility,

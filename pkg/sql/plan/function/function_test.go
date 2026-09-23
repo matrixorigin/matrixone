@@ -34,35 +34,38 @@ import (
 func TestGetFunctionByIdRejectsUnknownOverload(t *testing.T) {
 	// An older CN may receive an overload selected by a newer CN. It must
 	// reject the unknown index instead of panicking while indexing Overloads.
-	unknown := encodeOverloadID(STR_TO_DATE, 99)
-	_, err := GetFunctionById(context.Background(), unknown)
-	require.Error(t, err)
-	_, exists := GetFunctionByIdWithoutError(unknown)
-	require.False(t, exists)
-	require.False(t, GetFunctionIsWinOrderFunById(unknown))
-}
-
-func TestFunctionLookupRejectsUnknownOverloadIndex(t *testing.T) {
 	ctx := context.Background()
-	invalidIDs := []int64{
-		encodeOverloadID(ABS, -1),
-		encodeOverloadID(ABS, int32(len(allSupportedFunctions[ABS].Overloads))),
-		encodeOverloadID(-1, 0),
+	invalidIDs := []struct {
+		name                    string
+		id                      int64
+		wantInvalidInputErrCode bool
+	}{
+		{name: "future STR_TO_DATE overload", id: encodeOverloadID(STR_TO_DATE, 99)},
+		{name: "negative ABS overload", id: encodeOverloadID(ABS, -1)},
+		{name: "past-end ABS overload", id: encodeOverloadID(ABS, int32(len(allSupportedFunctions[ABS].Overloads)))},
+		{name: "negative function id", id: encodeOverloadID(-1, 0)},
+		{name: "future BIN overload", id: EncodeOverloadID(BIN, 99), wantInvalidInputErrCode: true},
 	}
 
-	for _, id := range invalidIDs {
-		t.Run(fmt.Sprintf("%d", id), func(t *testing.T) {
-			_, err := GetFunctionById(ctx, id)
+	for _, test := range invalidIDs {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := GetFunctionById(ctx, test.id)
 			require.Error(t, err)
-			_, ok := GetFunctionByIdWithoutError(id)
+			if test.wantInvalidInputErrCode {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+			}
+			_, ok := GetFunctionByIdWithoutError(test.id)
 			require.False(t, ok)
-			_, err = GetLayoutById(ctx, id)
+			_, err = GetLayoutById(ctx, test.id)
 			require.Error(t, err)
-			_, err = GetFunctionIsZonemappableById(ctx, id)
+			zonemappable, err := GetFunctionIsZonemappableById(ctx, test.id)
 			require.Error(t, err)
-			require.False(t, GetFunctionIsWinOrderFunById(id))
+			require.False(t, zonemappable)
+			require.False(t, GetFunctionIsWinOrderFunById(test.id))
 		})
 	}
+	require.False(t, ProducesNoNull(-1))
+	require.False(t, HasExecutableCTASTypeDefault(-1))
 }
 
 func TestMathStringResolutionUsesExistingNonZonemappableOverloads(t *testing.T) {
@@ -1324,22 +1327,6 @@ func TestProducesNoNullUsesFunctionContract(t *testing.T) {
 	}
 	require.False(t, ProducesNoNull(-1))
 	require.False(t, HasExecutableCTASTypeDefault(-1))
-}
-
-func TestFunctionLookupRejectsInvalidOverload(t *testing.T) {
-	invalid := EncodeOverloadID(BIN, 99)
-
-	_, err := GetFunctionById(context.Background(), invalid)
-	require.Error(t, err)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
-
-	_, exists := GetFunctionByIdWithoutError(invalid)
-	require.False(t, exists)
-
-	zonemappable, err := GetFunctionIsZonemappableById(context.Background(), invalid)
-	require.Error(t, err)
-	require.False(t, zonemappable)
-	require.False(t, GetFunctionIsWinOrderFunById(invalid))
 }
 
 func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {

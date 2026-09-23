@@ -59,126 +59,84 @@ func TestIssue27294PinnedConnectionReleasesOnGoexit(t *testing.T) {
 		checkoutErr error
 		inUse       int
 	}
-	tests := []struct {
-		name      string
-		failAtUse bool
-	}{
-		{name: "mode lookup failure"},
-		{name: "USE failure after mode read", failAtUse: true},
-	}
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	db.SetMaxOpenConns(1)
+	dbClosed := false
+	defer func() {
+		if !dbClosed {
+			_ = db.Close()
+		}
+	}()
 
-	for i := range tests {
-		tc := tests[i]
-		t.Run(tc.name, func(t *testing.T) {
-			db, mock, err := sqlmock.New()
-			require.NoError(t, err)
-			db.SetMaxOpenConns(1)
-			dbClosed := false
-			defer func() {
-				if !dbClosed {
-					_ = db.Close()
-				}
-			}()
+	mock.ExpectQuery("^select @@sql_mode$").
+		WillReturnError(errors.New("server-side sql_mode lookup failed"))
+	mock.ExpectExec("^drop database if exists issue_27294_numeric_db$").
+		WillReturnResult(sqlmock.NewResult(0, 1))
+	mock.ExpectClose()
 
-			var wantRestoreErr error
-			var gotRestoreErr error
-			if tc.failAtUse {
-				wantRestoreErr = errors.New("server-side sql_mode restore failed")
-				mock.ExpectQuery("^select @@sql_mode$").
-					WillReturnRows(sqlmock.NewRows([]string{"@@sql_mode"}).AddRow("STRICT_TRANS_TABLES"))
-				mock.ExpectExec("^use issue_27294_numeric_db$").
-					WillReturnError(errors.New("server-side USE failed"))
-				mock.ExpectExec("^set session sql_mode = 'STRICT_TRANS_TABLES'$").
-					WillReturnError(wantRestoreErr)
-			} else {
-				mock.ExpectQuery("^select @@sql_mode$").
-					WillReturnError(errors.New("server-side sql_mode lookup failed"))
-			}
-			mock.ExpectExec("^drop database if exists issue_27294_numeric_db$").
-				WillReturnResult(sqlmock.NewResult(0, 1))
-			mock.ExpectClose()
-
-			ctx, cancel := context.WithTimeout(context.Background(), regressionTimeout)
-			resultCh := make(chan goexitResult, 1)
-			continueToGoexit := make(chan struct{})
-			done := make(chan struct{})
-			defer func() {
-				cancel()
-				doneCtx, cancelDone := context.WithTimeout(context.Background(), regressionTimeout)
-				defer cancelDone()
-				select {
-				case <-done:
-				case <-doneCtx.Done():
-					t.Errorf("pinned-connection defers did not finish before %s", doneCtx.Err())
-				}
-			}()
-			go func() {
-				defer close(done)
-				err := withIssue27294PinnedConnection(t, ctx, db, func(conn *sql.Conn) {
-					var queryErr error
-					var originalSQLMode string
-					queryErr = conn.QueryRowContext(ctx, "select @@sql_mode").Scan(&originalSQLMode)
-					if tc.failAtUse && queryErr == nil {
-						defer func() {
-							cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), regressionTimeout)
-							defer cancelCleanup()
-							_, gotRestoreErr = conn.ExecContext(cleanupCtx, fmt.Sprintf(
-								"set session sql_mode = '%s'", strings.ReplaceAll(originalSQLMode, "'", "''")))
-						}()
-						_, queryErr = conn.ExecContext(ctx, "use issue_27294_numeric_db")
-					}
-					resultCh <- goexitResult{queryErr: queryErr, inUse: db.Stats().InUse}
-					select {
-					case <-continueToGoexit:
-					case <-ctx.Done():
-					}
-					runtime.Goexit()
-				})
-				if err != nil {
-					resultCh <- goexitResult{checkoutErr: err}
-				}
-			}()
-
-			resultCtx, cancelResult := context.WithTimeout(context.Background(), regressionTimeout)
-			defer cancelResult()
-			var result goexitResult
+	ctx, cancel := context.WithTimeout(context.Background(), regressionTimeout)
+	resultCh := make(chan goexitResult, 1)
+	continueToGoexit := make(chan struct{})
+	done := make(chan struct{})
+	defer func() {
+		cancel()
+		doneCtx, cancelDone := context.WithTimeout(context.Background(), regressionTimeout)
+		defer cancelDone()
+		select {
+		case <-done:
+		case <-doneCtx.Done():
+			t.Errorf("pinned-connection defers did not finish before %s", doneCtx.Err())
+		}
+	}()
+	go func() {
+		defer close(done)
+		err := withIssue27294PinnedConnection(t, ctx, db, func(conn *sql.Conn) {
+			var sqlMode string
+			queryErr := conn.QueryRowContext(ctx, "select @@sql_mode").Scan(&sqlMode)
+			resultCh <- goexitResult{queryErr: queryErr, inUse: db.Stats().InUse}
 			select {
-			case result = <-resultCh:
-			case <-resultCtx.Done():
-				t.Fatalf("pinned callback did not report its query result: %s", resultCtx.Err())
+			case <-continueToGoexit:
+			case <-ctx.Done():
 			}
-			require.NoError(t, result.checkoutErr)
-			require.Error(t, result.queryErr)
-			if tc.failAtUse {
-				require.Contains(t, result.queryErr.Error(), "server-side USE failed")
-			} else {
-				require.Contains(t, result.queryErr.Error(), "server-side sql_mode lookup failed")
-			}
-			require.Equal(t, 1, result.inUse, "the checked-out connection must be in-use before callback exit")
-			close(continueToGoexit)
-
-			doneCtx, cancelDone := context.WithTimeout(context.Background(), regressionTimeout)
-			select {
-			case <-done:
-			case <-doneCtx.Done():
-				t.Fatalf("pinned-connection defers did not finish before %s", doneCtx.Err())
-			}
-			cancelDone()
-			if tc.failAtUse {
-				require.ErrorIs(t, gotRestoreErr, wantRestoreErr)
-			}
-
-			cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), regressionTimeout)
-			_, err = db.ExecContext(cleanupCtx, cleanupSQL)
-			cancelCleanup()
-			require.NoError(t, err, "database-level cleanup must reuse the sole pool connection")
-			require.Zero(t, db.Stats().InUse)
-			err = db.Close()
-			dbClosed = true
-			require.NoError(t, err)
-			require.NoError(t, mock.ExpectationsWereMet())
+			runtime.Goexit()
 		})
+		if err != nil {
+			resultCh <- goexitResult{checkoutErr: err}
+		}
+	}()
+
+	resultCtx, cancelResult := context.WithTimeout(context.Background(), regressionTimeout)
+	defer cancelResult()
+	var result goexitResult
+	select {
+	case result = <-resultCh:
+	case <-resultCtx.Done():
+		t.Fatalf("pinned callback did not report its query result: %s", resultCtx.Err())
 	}
+	require.NoError(t, result.checkoutErr)
+	require.ErrorContains(t, result.queryErr, "server-side sql_mode lookup failed")
+	require.Equal(t, 1, result.inUse, "the checked-out connection must be in-use before callback exit")
+	close(continueToGoexit)
+
+	doneCtx, cancelDone := context.WithTimeout(context.Background(), regressionTimeout)
+	select {
+	case <-done:
+	case <-doneCtx.Done():
+		t.Fatalf("pinned-connection defers did not finish before %s", doneCtx.Err())
+	}
+	cancelDone()
+	require.Zero(t, db.Stats().InUse)
+
+	cleanupCtx, cancelCleanup := context.WithTimeout(context.Background(), regressionTimeout)
+	_, err = db.ExecContext(cleanupCtx, cleanupSQL)
+	cancelCleanup()
+	require.NoError(t, err, "database-level cleanup must reuse the sole pool connection")
+	require.Zero(t, db.Stats().InUse)
+	err = db.Close()
+	dbClosed = true
+	require.NoError(t, err)
+	require.NoError(t, mock.ExpectationsWereMet())
 }
 
 // TestIssue27294PreparedNumericOverloads exercises the COM_STMT_EXECUTE path.

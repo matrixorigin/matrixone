@@ -154,14 +154,6 @@ func RequiresMORPCVersion30NumericPrefix(owner any) (bool, error) {
 	return features.NumericPrefix, err
 }
 
-// RequiresMORPCVersion94StrictStringNumericCompatibility reports whether an
-// owner contains a numeric string conversion whose result depends on the
-// sender's strict-by-default compatibility contract.
-func RequiresMORPCVersion94StrictStringNumericCompatibility(owner any) (bool, error) {
-	features, err := RequiredRemoteExpressionFeatures(owner)
-	return features.StrictStringNumericCompatibility, err
-}
-
 // RequiresMORPCVersion36JSONComparisonParam reports whether an owner contains
 // the internal prepared-JSON comparison function.  The function is deliberately
 // identified by its numeric ID: unlike ordinary SQL functions, its name is an

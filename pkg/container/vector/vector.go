@@ -804,8 +804,9 @@ func (v *Vector) resetNumericBinaryLiteral() {
 	}
 }
 
-// SetIsBinAt installs the provenance for one non-NULL row. It uses a compact
-// scalar while all rows agree and allocates a bitmap only for mixed results.
+// SetIsBinAt installs the provenance for one non-NULL row. Homogeneous rows
+// stay in the compact scalar flags; a bitmap is used only for mixed results.
+// Normalizing an already-active row bitmap after one update is O(1).
 func (v *Vector) SetIsBinAt(row int, isBin bool, pools ...*mpool.MPool) error {
 	if v == nil || row < 0 || row >= v.length || v.IsNull(uint64(row)) {
 		return nil
@@ -815,9 +816,6 @@ func (v *Vector) SetIsBinAt(row int, isBin bool, pools ...*mpool.MPool) error {
 		return nil
 	}
 	if !v.numericBinaryLiteralRowsActive {
-		if v.numericBinaryLiteral == isBin && v.isBin == isBin {
-			return nil
-		}
 		if v.numericBinaryLiteral == isBin {
 			return nil
 		}
@@ -4317,8 +4315,9 @@ func (v *Vector) copyNumericBinaryLiteralWindowTo(dst *Vector, start, end int, m
 type numericBinaryLiteralAppendIterator func(visit func(outputRow, sourceRow int))
 
 // propagateNumericBinaryLiteralAppend publishes one appended marker generation
-// in bulk. SetIsBinAt normalizes row bitmaps after each scalar update, which is
-// appropriate for isolated copies but quadratic for large vector appends.
+// in bulk. Existing row bitmaps support O(1) single-row normalization, while
+// this path counts the old and appended markers once and initializes a mixed
+// bitmap directly instead of issuing scalar updates for every appended row.
 // Union paths preflight capacity before extending values, so this method can
 // count once and either keep the scalar representation or fill a mixed bitmap
 // directly, publishing only after every bit is set.
@@ -4393,22 +4392,16 @@ func (v *Vector) propagateNumericBinaryLiteralAppend(
 	if err := v.ensureNumericBinaryLiteralCapacity(physicalRows, mp); err != nil {
 		return err
 	}
-	if v.numericBinaryLiteralRowsActive {
-		// setLengthAfterExtend has already cleared this future range. Preserve
-		// prior mixed rows instead of reinitializing the destination bitmap.
-		v.numericBinaryLiteralRows.RemoveRange(uint64(oldLength), uint64(physicalRows))
-	} else {
-		wasScalarMarked := v.numericBinaryLiteral || v.isBin
-		v.numericBinaryLiteralRows.InitWithSize(int64(physicalRows))
-		if wasScalarMarked {
-			v.numericBinaryLiteralRows.AddRange(0, uint64(oldLength))
-			v.nsp.Foreach(func(nullRow uint64) bool {
-				if nullRow < uint64(oldLength) {
-					v.numericBinaryLiteralRows.Remove(nullRow)
-				}
-				return true
-			})
-		}
+	wasScalarMarked := v.numericBinaryLiteral || v.isBin
+	v.numericBinaryLiteralRows.InitWithSize(int64(physicalRows))
+	if wasScalarMarked {
+		v.numericBinaryLiteralRows.AddRange(0, uint64(oldLength))
+		v.nsp.Foreach(func(nullRow uint64) bool {
+			if nullRow < uint64(oldLength) {
+				v.numericBinaryLiteralRows.Remove(nullRow)
+			}
+			return true
+		})
 	}
 	iterate(func(outputRow, sourceRow int) {
 		if !w.IsNull(uint64(sourceRow)) && w.GetIsBinAt(sourceRow) {

@@ -25,44 +25,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// String arguments are converted to DOUBLE by the planner and then use the
-// ordinary numeric overload.  Keep this test at the resolver boundary so it
-// cannot accidentally start exercising a private, unregistered string
-// executor instead of the live SQL path.
-func TestMathStringResolutionUsesNumericOverloads(t *testing.T) {
-	ctx := context.Background()
-	for _, tc := range []struct {
-		name        string
-		args        []types.Type
-		fid         int32
-		overload    int32
-		returnType  types.T
-		targetTypes []types.T
-	}{
-		{name: "abs", args: []types.Type{types.T_varchar.ToType()}, fid: ABS, overload: 2, returnType: types.T_float64, targetTypes: []types.T{types.T_float64}},
-		{name: "sign", args: []types.Type{types.T_varchar.ToType()}, fid: SIGN, overload: 2, returnType: types.T_int64, targetTypes: []types.T{types.T_float64}},
-		{name: "ceil", args: []types.Type{types.T_varchar.ToType()}, fid: CEIL, overload: 4, returnType: types.T_float64, targetTypes: []types.T{types.T_float64}},
-		{name: "floor", args: []types.Type{types.T_varchar.ToType()}, fid: FLOOR, overload: 4, returnType: types.T_float64, targetTypes: []types.T{types.T_float64}},
-		{name: "round", args: []types.Type{types.T_varchar.ToType()}, fid: ROUND, overload: 4, returnType: types.T_float64, targetTypes: []types.T{types.T_float64}},
-		{name: "truncate", args: []types.Type{types.T_varchar.ToType(), types.T_int64.ToType()}, fid: TRUNCATE, overload: 5, returnType: types.T_float64, targetTypes: []types.T{types.T_float64, types.T_int64}},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			resolved, err := GetFunctionByName(ctx, tc.name, tc.args)
-			require.NoError(t, err)
-			fid, overload := DecodeOverloadID(resolved.GetEncodedOverloadID())
-			require.Equal(t, tc.fid, fid)
-			require.Equal(t, tc.overload, overload)
-			require.Equal(t, tc.returnType, resolved.GetReturnType().Oid)
-			targets, needsCast := resolved.ShouldDoImplicitTypeCast()
-			require.True(t, needsCast)
-			require.Len(t, targets, len(tc.targetTypes))
-			for i := range targets {
-				require.Equal(t, tc.targetTypes[i], targets[i].Oid)
-			}
-		})
-	}
-}
-
 // T_any is used for both a bare NULL and an unbound prepare marker.  It must
 // stay in the arithmetic/metadata domain until execution rebinding proves that
 // a concrete character value is present; otherwise MOD(NULL, bigint) widens
@@ -191,6 +153,14 @@ func TestHistoricalCeilFloorVarcharOverloadCompatibility(t *testing.T) {
 
 func TestExactMathStringNumericPrefixTypeMatching(t *testing.T) {
 	ctx := context.Background()
+	expectedOverloads := map[string]int64{
+		"abs string":      EncodeOverloadID(ABS, 2),
+		"sign string":     EncodeOverloadID(SIGN, 2),
+		"ceil string":     EncodeOverloadID(CEIL, 4),
+		"floor string":    EncodeOverloadID(FLOOR, 4),
+		"round string":    EncodeOverloadID(ROUND, 4),
+		"truncate string": EncodeOverloadID(TRUNCATE, 5),
+	}
 	for _, test := range []struct {
 		name        string
 		args        []types.Type
@@ -218,6 +188,9 @@ func TestExactMathStringNumericPrefixTypeMatching(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			got, err := GetFunctionByName(ctx, test.name[:indexOfSpace(test.name)], test.args)
 			require.NoError(t, err)
+			if want, ok := expectedOverloads[test.name]; ok {
+				require.Equal(t, want, got.GetEncodedOverloadID())
+			}
 			require.Equal(t, test.returnType, got.GetReturnType().Oid)
 			targets, shouldCast := got.ShouldDoImplicitTypeCast()
 			require.Equal(t, test.shouldCast, shouldCast)

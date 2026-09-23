@@ -19,7 +19,6 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
@@ -60,39 +59,6 @@ func benchmarkStringMathBind(name string, args []*planpb.Expr) *planpb.Expr {
 	return expr
 }
 
-func benchmarkStringMathPlan(params, depth, noise int, eligible, noMatch bool) *planpb.Plan {
-	projects := make([]*planpb.Expr, 0, noise+params)
-	for i := 0; i < noise; i++ {
-		projects = append(projects, benchmarkStringMathIntLiteral(int64(i)))
-	}
-	for i := 0; i < params; i++ {
-		expr := benchmarkStringMathParam(int32(i))
-		if eligible {
-			if depth == 0 {
-				expr = benchmarkStringMathBind("=", []*planpb.Expr{benchmarkStringMathDecimalColumn(), expr})
-			} else {
-				for j := 0; j < depth; j++ {
-					expr = benchmarkStringMathBind("coalesce", []*planpb.Expr{expr, benchmarkStringMathDecimalColumn()})
-				}
-			}
-		} else if noMatch {
-			// CONCAT deliberately keeps the runtime parameter in a text-only
-			// context. It still creates a deep expression tree, so the benchmark
-			// measures the complete no-match traversal rather than the cheap
-			// no-enabled-parameter fast path.
-			for j := 0; j < depth; j++ {
-				expr = benchmarkStringMathBind("concat", []*planpb.Expr{expr, benchmarkStringMathTextLiteral("x")})
-			}
-		}
-		projects = append(projects, expr)
-	}
-	return &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
-		StmtType: planpb.Query_SELECT,
-		Steps:    []int32{0},
-		Nodes:    []*planpb.Node{{NodeType: planpb.Node_VALUE_SCAN, ProjectList: projects}},
-	}}}
-}
-
 func benchmarkStringMathOwnerPlan(projects ...*planpb.Expr) *planpb.Plan {
 	return &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
 		StmtType: planpb.Query_SELECT,
@@ -118,6 +84,26 @@ func benchmarkStringMathMixedRolePlan() *planpb.Plan {
 		})}),
 		benchmarkStringMathBind("concat", []*planpb.Expr{benchmarkStringMathParam(4), benchmarkStringMathTextLiteral("x")}),
 	)
+	return benchmarkStringMathOwnerPlan(projects...)
+}
+
+func benchmarkStringMathNoMatchRolePlan() *planpb.Plan {
+	const (
+		params = 8
+		depth  = 8
+		noise  = 128
+	)
+	projects := make([]*planpb.Expr, 0, noise+params)
+	for i := 0; i < noise; i++ {
+		projects = append(projects, benchmarkStringMathIntLiteral(int64(i)))
+	}
+	for i := 0; i < params; i++ {
+		expr := benchmarkStringMathParam(int32(i))
+		for j := 0; j < depth; j++ {
+			expr = benchmarkStringMathBind("concat", []*planpb.Expr{expr, benchmarkStringMathTextLiteral("x")})
+		}
+		projects = append(projects, expr)
+	}
 	return benchmarkStringMathOwnerPlan(projects...)
 }
 
@@ -189,7 +175,7 @@ func benchmarkStringMathRoleCases() []struct {
 		},
 		{
 			name: "no-match-deep-p8-d8-n128",
-			plan: benchmarkStringMathPlan(8, 8, 128, false, true),
+			plan: benchmarkStringMathNoMatchRolePlan(),
 			want: []bool{false, false, false, false, false, false, false, false},
 		},
 		{
@@ -437,68 +423,6 @@ func TestPreparedNumericRebindingStopsAtNonNumericFunctionArguments(t *testing.T
 	})
 }
 
-func benchmarkStringMathValues(params int, enabled bool) []any {
-	values := make([]any, params)
-	for i := range values {
-		values[i] = ParamValue{
-			Value:               "9007199254740992.0001tail",
-			PrepareParamKind:    vector.PrepareParamDecimal,
-			EnableNumericPrefix: enabled,
-			IsBinaryProtocol:    true,
-		}
-	}
-	return values
-}
-
-func benchmarkStringMathCases() []struct {
-	name          string
-	params        int
-	depth         int
-	noise         int
-	eligible      bool
-	valueCount    int
-	numericPrefix bool
-	noMatch       bool
-} {
-	return []struct {
-		name          string
-		params        int
-		depth         int
-		noise         int
-		eligible      bool
-		valueCount    int
-		numericPrefix bool
-		noMatch       bool
-	}{
-		{name: "p1-d0", params: 1, eligible: true, valueCount: 1, numericPrefix: true},
-		{name: "p128-d0", params: 128, eligible: true, valueCount: 128, numericPrefix: true},
-		{name: "p1-d8", params: 1, depth: 8, eligible: true, valueCount: 1, numericPrefix: true},
-		{name: "p1-d64", params: 1, depth: 64, eligible: true, valueCount: 1, numericPrefix: true},
-		{name: "p1-d8-n128", params: 1, depth: 8, noise: 128, eligible: true, valueCount: 1, numericPrefix: true},
-		{name: "no-match-p8-d8-n128", params: 8, depth: 8, noise: 128, valueCount: 8, numericPrefix: true, noMatch: true},
-	}
-}
-
-func BenchmarkPreparedStringMathEligibility(b *testing.B) {
-	for _, test := range benchmarkStringMathCases() {
-		b.Run(test.name, func(b *testing.B) {
-			query := benchmarkStringMathPlan(test.params, test.depth, test.noise, test.eligible, test.noMatch)
-			values := benchmarkStringMathValues(test.valueCount, test.numericPrefix)
-			want := test.eligible
-			if got := PreparedPlanNeedsNumericPrefixSpecialization(query, values); got != want {
-				b.Fatalf("eligible=%v, got=%v", want, got)
-			}
-			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				if got := PreparedPlanNeedsNumericPrefixSpecialization(query, values); got != want {
-					b.Fatalf("eligible=%v, got=%v", want, got)
-				}
-			}
-		})
-	}
-}
-
 func BenchmarkPreparedStringMathRoleDiscovery(b *testing.B) {
 	for _, test := range benchmarkStringMathRoleCases() {
 		b.Run(test.name, func(b *testing.B) {
@@ -514,26 +438,6 @@ func BenchmarkPreparedStringMathRoleDiscovery(b *testing.B) {
 					if got := preparedParamUsesStringMathFunction(test.plan, position); got != want {
 						b.Fatalf("position=%d, want=%v, got=%v", position, want, got)
 					}
-				}
-			}
-		})
-	}
-}
-
-func BenchmarkPreparedStringMathSpecialization(b *testing.B) {
-	ctx := context.Background()
-	for _, test := range benchmarkStringMathCases() {
-		if test.noMatch {
-			continue
-		}
-		b.Run(test.name, func(b *testing.B) {
-			query := benchmarkStringMathPlan(test.params, test.depth, test.noise, true, false)
-			values := benchmarkStringMathValues(test.valueCount, true)
-			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				if _, _, err := FillValuesOfParamsInPlanWithSpecialization(ctx, DeepCopyPlan(query), values); err != nil {
-					b.Fatal(err)
 				}
 			}
 		})
