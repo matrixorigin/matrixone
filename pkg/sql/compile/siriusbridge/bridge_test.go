@@ -493,28 +493,6 @@ func TestNilNativeQueryIsPreparationFailure(t *testing.T) {
 	}
 }
 
-func TestPrepareDoesNotRetainTAEDescriptors(t *testing.T) {
-	r, _ := testRuntime()
-	t.Cleanup(func() { _ = r.Close(context.Background()) })
-	req := testRequest()
-	req.Reads = []Read{{
-		BindingID:   1,
-		Database:    "db",
-		Table:       "t",
-		Schema:      "schema",
-		Columns:     []ReadColumn{{Column: Column{Name: "c"}, PhysicalID: 42, Sequence: 7}},
-		TAEManifest: []byte("manifest that must not survive native preparation"),
-		DataRoot:    "/data",
-	}}
-	q, err := r.Prepare(context.Background(), req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(q.reads) != 0 {
-		t.Fatalf("query retained TAE descriptors: %+v", q.reads)
-	}
-}
-
 func TestEffectiveQueryDeadline(t *testing.T) {
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	parent, cancel := context.WithDeadline(context.Background(), now.Add(time.Minute))

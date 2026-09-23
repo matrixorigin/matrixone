@@ -59,14 +59,14 @@ func validateRequest(req Request) error {
 	}
 	ids := make(map[uint64]struct{}, len(req.Reads))
 	for _, read := range req.Reads {
-		if read.BindingID == 0 || read.BindingID > uint64(^uint64(0)>>1) || len(read.Columns) == 0 || len(read.Columns) > maxColumns || len(read.TAEManifest) > 64<<20 {
+		if read.BindingID == 0 || read.BindingID > uint64(^uint64(0)>>1) || len(read.Columns) == 0 || len(read.Columns) > maxColumns {
 			return invalid()
 		}
 		if _, exists := ids[read.BindingID]; exists {
 			return invalid()
 		}
 		ids[read.BindingID] = struct{}{}
-		if (read.Producer == nil) == (len(read.TAEManifest) == 0) || (read.Producer != nil && read.DataRoot != "") || (len(read.TAEManifest) > 0 && read.DataRoot == "") {
+		if read.Producer == nil {
 			return invalid()
 		}
 		canonical := uint64(256 + 128*len(read.Columns))
@@ -77,7 +77,7 @@ func validateRequest(req Request) error {
 			canonical += uint64(len(text))
 			return true
 		}
-		for _, identity := range []string{read.Database, read.Table, read.Schema, read.DataRoot} {
+		for _, identity := range []string{read.Database, read.Table, read.Schema} {
 			if !addText(identity, false) {
 				return invalid()
 			}
@@ -87,7 +87,7 @@ func validateRequest(req Request) error {
 				return invalid()
 			}
 		}
-		if canonical > maxMetadataTextBytes || !add(canonical) || !add(uint64(len(read.TAEManifest))) {
+		if canonical > maxMetadataTextBytes || !add(canonical) {
 			return invalid()
 		}
 	}

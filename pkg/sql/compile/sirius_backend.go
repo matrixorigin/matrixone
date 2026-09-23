@@ -64,8 +64,6 @@ type SiriusReadDescriptor struct {
 	Database, Table, Schema string
 	Columns                 []SiriusReadColumn
 	Producer                func(context.Context, SiriusInput) error
-	TAEManifest             []byte
-	DataRoot                string
 }
 
 // SiriusExecution owns one prepared execution. Run is single-use and must not

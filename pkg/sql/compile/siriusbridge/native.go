@@ -218,23 +218,14 @@ func (d *engine) prepare(ctx context.Context, req Request) (result queryDriver, 
 			unsafe.Slice(inputCols, len(read.Columns))[i] = C.sirius_input_column{oid: logical.oid, width: logical.width, scale: logical.scale, nullable: logical.nullable}
 		}
 		binding := C.sirius_read_binding{struct_size: C.sizeof_sirius_read_binding, abi_version: 1, binding_id: C.uint64_t(read.BindingID), source_kind: C.SIRIUS_READ_MO, database_name: memory.string(read.Database), database_name_bytes: C.uint32_t(len(read.Database)), table_name: memory.string(read.Table), table_name_bytes: C.uint32_t(len(read.Table)), schema_name: memory.string(read.Schema), schema_name_bytes: C.uint32_t(len(read.Schema)), columns: cols, column_count: C.uint32_t(len(read.Columns))}
-		if len(read.TAEManifest) > 0 {
-			binding.source_kind = C.SIRIUS_READ_TAE
-			binding.tae_manifest = memory.bytes(read.TAEManifest)
-			binding.tae_manifest_bytes = C.uint64_t(len(read.TAEManifest))
-			binding.data_root = memory.string(read.DataRoot)
-			binding.data_root_bytes = C.uint32_t(len(read.DataRoot))
-		}
 		if err := status(C.sirius_read_register(q.handle, &binding, &e), &e); err != nil {
 			return q, err
 		}
-		if read.Producer != nil {
-			input := &nativeInput{query: q, columns: len(read.Columns)}
-			if err := status(C.sirius_input_register(q.handle, C.uint64_t(read.BindingID), inputCols, C.uint32_t(len(read.Columns)), &input.handle, &e), &e); err != nil {
-				return q, err
-			}
-			q.inputs[read.BindingID] = input
+		input := &nativeInput{query: q, columns: len(read.Columns)}
+		if err := status(C.sirius_input_register(q.handle, C.uint64_t(read.BindingID), inputCols, C.uint32_t(len(read.Columns)), &input.handle, &e), &e); err != nil {
+			return q, err
 		}
+		q.inputs[read.BindingID] = input
 	}
 	// All descriptor APIs above copy synchronously. Waiting for native admission
 	// must not retain a second C arena for every queued query.

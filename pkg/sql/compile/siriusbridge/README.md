@@ -53,14 +53,13 @@ SIRIUS_BUILD_MODE=development MO_SIRIUS_TEST_CONFIG=/absolute/integration.yaml \
 ```
 
 CN configuration selects `backend="embedded"`, an explicit
-`native-config-path`, and either `input-mode="mo"` (the default) or protected
-`input-mode="tae"`. Native configuration owns GPU selection and finite
-host/GPU/spill capacity. Streams default to 2 (maximum 128), waiting queries to
-16 (maximum 16). MO input needs no Flight certificates, resolver, or leases.
-Direct TAE instead requires the replayed durable lease manager, data root, and
-bounded lease lifetime; stale embedded leases are released and unreconciled
-Flight work blocks startup before native/GPU allocation. Flight remains the
-default backend.
+`native-config-path`, and `input-mode="mo"` (the default and only embedded
+source in this milestone). Native configuration owns GPU selection and finite
+host/GPU/spill capacity. Streams default to 2 (maximum 128), waiting queries
+to 16 (maximum 16). MO input uses the existing MO statement snapshot and
+needs no Flight certificates, resolver, direct-TAE leases, or new TAE storage
+hooks. `input-mode="tae"` is rejected before native preparation. Flight
+remains the default backend during coexistence.
 
 Preparation validates typed read/output descriptors before starting any lazy
 producer. For each MO range, a size-only pass precedes native input acquisition;
@@ -73,8 +72,8 @@ bounded Go buffer; CN copies vectors into the normal MO memory pool before
 calling the existing output function. This is bounded transport, not zero-copy.
 
 Before any C allocation, the bridge caps transient query descriptors (including
-plan bytes, every repeated string/manifest copy, and conservative descriptor
-array charges) at 64 MiB. This is separate from native metadata admission,
+plan bytes, every repeated string copy, and conservative descriptor array
+charges) at 64 MiB. This is separate from native metadata admission,
 which defaults to 256 MiB and charges its own expansion/copy factors. Schemas
 are limited to 1024 columns, output names to 1 MiB in total, and each read's
 identity/schema metadata to a conservative 1 MiB envelope. The existing 16 MiB
@@ -91,5 +90,5 @@ joins producers, in-flight calls and cancellation subscriptions; only then
 does it destroy handles and release admitted resources. Failed cleanup keeps
 ownership for a retry and seals new admission.
 
-Embedded SQL remains explicit and fail-closed: neither rejected MO reads nor
-direct-TAE admission can fall back to native MO execution after selection.
+Embedded SQL remains explicit and fail-closed: rejected MO reads cannot fall
+back to native MO execution after selection.

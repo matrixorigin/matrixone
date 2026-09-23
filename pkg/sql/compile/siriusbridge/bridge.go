@@ -69,11 +69,9 @@ type Read struct {
 	BindingID               uint64
 	Database, Table, Schema string
 	Columns                 []ReadColumn
-	// Exactly one source must be supplied. Producer is invoked only after
-	// native preparation and start succeed; it must stop on ctx cancellation.
-	Producer    func(context.Context, *Input) error
-	TAEManifest []byte
-	DataRoot    string
+	// Producer is required for every read. It starts only after native
+	// preparation and must stop on ctx cancellation.
+	Producer func(context.Context, *Input) error
 }
 
 type Request struct {

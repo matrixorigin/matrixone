@@ -78,7 +78,7 @@ func (b *embeddedBackend) Prepare(ctx context.Context, req compile.SiriusPrepare
 		}
 	}
 	for _, read := range req.Reads {
-		r := siriusbridge.Read{BindingID: read.BindingID, Database: read.Database, Table: read.Table, Schema: read.Schema, TAEManifest: read.TAEManifest, DataRoot: read.DataRoot}
+		r := siriusbridge.Read{BindingID: read.BindingID, Database: read.Database, Table: read.Table, Schema: read.Schema}
 		for _, c := range read.Columns {
 			r.Columns = append(r.Columns, siriusbridge.ReadColumn{Column: siriusbridge.Column{OID: uint32(c.Type.Id), Width: c.Type.Width, Scale: c.Type.Scale, Nullable: !c.Type.NotNullable, Name: c.Name}, PhysicalID: c.PhysicalID, Sequence: c.Sequence})
 		}

@@ -21,12 +21,9 @@ import (
 	"testing"
 )
 
-func TestDescriptorBoundsPrecedeNativeAllocation(t *testing.T) {
+func TestDescriptorPreflightPrecedesNativeAllocation(t *testing.T) {
 	oversized := strings.Repeat("x", maxMetadataTextBytes+1)
 	half := oversized[:maxMetadataTextBytes/2+1]
-	// Reuse one manifest backing array: the preflight counts each future C
-	// copy, without allocating 64 MiB just to exercise the aggregate bound.
-	manifest := make([]byte, 4<<20)
 	for _, test := range []struct {
 		name   string
 		change func(*Request)
@@ -37,11 +34,7 @@ func TestDescriptorBoundsPrecedeNativeAllocation(t *testing.T) {
 		{"database", func(r *Request) { r.Reads[0].Database = oversized }},
 		{"table", func(r *Request) { r.Reads[0].Table = oversized }},
 		{"schema", func(r *Request) { r.Reads[0].Schema = oversized }},
-		{"data root", func(r *Request) {
-			r.Reads[0].Producer = nil
-			r.Reads[0].TAEManifest = []byte{1}
-			r.Reads[0].DataRoot = oversized
-		}},
+		{"missing MO producer", func(r *Request) { r.Reads[0].Producer = nil }},
 		{"NUL identity", func(r *Request) { r.Reads[0].Database = "db\x00other" }},
 		{"output arrays", func(r *Request) { r.Columns = make([]Column, maxColumns+1) }},
 		{"read arrays", func(r *Request) { r.Reads[0].Columns = make([]ReadColumn, maxColumns+1) }},
@@ -49,17 +42,6 @@ func TestDescriptorBoundsPrecedeNativeAllocation(t *testing.T) {
 			r.Reads[0].Columns = make([]ReadColumn, maxColumns)
 			for i := range r.Reads[0].Columns {
 				r.Reads[0].Columns[i].Name = oversized[:900]
-			}
-		}},
-		{"aggregate transient C copies", func(r *Request) {
-			read := r.Reads[0]
-			read.Producer = nil
-			read.DataRoot = "/data"
-			read.TAEManifest = manifest
-			r.Reads = make([]Read, 16)
-			for i := range r.Reads {
-				r.Reads[i] = read
-				r.Reads[i].BindingID = uint64(i + 1)
 			}
 		}},
 	} {
@@ -72,7 +54,7 @@ func TestDescriptorBoundsPrecedeNativeAllocation(t *testing.T) {
 			req.Release = func(context.Context) error { released.Add(1); return nil }
 			test.change(&req)
 			if _, err := r.Prepare(context.Background(), req); err == nil {
-				t.Fatal("oversized descriptor accepted")
+				t.Fatal("invalid descriptor accepted")
 			}
 			if d.prepares.Load() != 0 {
 				t.Fatal("rejected descriptor reached native preparation")
