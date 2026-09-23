@@ -24,10 +24,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const (
-	maxViewDescriptionsPerScan = 65536
-	maxColumnsPerView          = 4096
-)
+const maxViewDescriptionsPerScan = 65536
 
 type viewColumnsState struct {
 	simpleOneBatchState
@@ -88,7 +85,7 @@ func (s *viewColumnsState) start(tf *TableFunction, proc *process.Process, nthRo
 	if err != nil {
 		return err
 	}
-	if len(columns) > maxColumnsPerView {
+	if len(columns) > plan.MaxViewMetadataColumns {
 		return moerr.NewInternalError(proc.Ctx, "View metadata exceeds its column budget")
 	}
 	for i, col := range columns {

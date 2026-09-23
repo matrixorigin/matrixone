@@ -24,6 +24,8 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
+const MaxViewMetadataColumns = 4096
+
 // viewDescriptionRelation returns the column row source used by SHOW's existing
 // formatting and filtering expressions. No rows are read from the persisted
 // View column snapshot, and no generated definition is written back.
@@ -33,6 +35,9 @@ func viewDescriptionRelation(
 	cols, err := DescribeViewColumns(ctx, def.ViewSql.View)
 	if err != nil {
 		return "", err
+	}
+	if len(cols) > MaxViewMetadataColumns {
+		return "", moerr.NewInternalError(ctx.GetContext(), "View metadata exceeds its column budget")
 	}
 	if len(cols) == 0 {
 		return "", moerr.NewInternalError(ctx.GetContext(), "View has no output columns")

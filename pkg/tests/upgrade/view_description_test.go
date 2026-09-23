@@ -153,6 +153,36 @@ func TestViewDescriptionPrivileges(t *testing.T) {
 	})
 }
 
+func TestViewDescriptionTwoCN(t *testing.T) {
+	cluster, err := embed.NewCluster(embed.WithCNCount(2), embed.WithTesting(), embed.WithConcurrentTestClusters())
+	require.NoError(t, err)
+	defer func() { require.NoError(t, cluster.Close()) }()
+	require.NoError(t, cluster.Start())
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	cn0, err := cluster.GetCNService(0)
+	require.NoError(t, err)
+	cn1, err := cluster.GetCNService(1)
+	require.NoError(t, err)
+	first := openViewDescriptionDB(t, cn0.GetServiceConfig().CN.Frontend.Port, "dump:111")
+	second := openViewDescriptionDB(t, cn1.GetServiceConfig().CN.Frontend.Port, "dump:111")
+	_, err = first.ExecContext(ctx, "create database view_description_two_cn")
+	require.NoError(t, err)
+	defer func() {
+		_, err := first.ExecContext(ctx, "drop database view_description_two_cn")
+		require.NoError(t, err)
+	}()
+	_, err = first.ExecContext(ctx, "create table view_description_two_cn.src (x varchar(5))")
+	require.NoError(t, err)
+	_, err = first.ExecContext(ctx, "create view view_description_two_cn.v as select x from view_description_two_cn.src")
+	require.NoError(t, err)
+	_, err = first.ExecContext(ctx, "alter table view_description_two_cn.src modify column x varchar(60)")
+	require.NoError(t, err)
+	var width int
+	require.NoError(t, second.QueryRowContext(ctx, "select character_maximum_length from information_schema.columns where table_schema='view_description_two_cn' and table_name='v'").Scan(&width))
+	require.Equal(t, 60, width)
+}
+
 func TestViewDescriptionSubscription(t *testing.T) {
 	embed.RunSingleCNBaseClusterTests(t, func(cluster embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)

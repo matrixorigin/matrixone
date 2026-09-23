@@ -101,6 +101,9 @@ func (c *viewRegenerationContext) ResolveViewDependencyAccount(
 // DescribeViewColumns binds the persisted semantic definition in the caller's
 // catalog context. It never writes the regenerated definition or dependencies.
 func DescribeViewColumns(ctx CompilerContext, persistedViewData string) ([]*planpb.ColDef, error) {
+	if len(persistedViewData) > 16<<20 {
+		return nil, moerr.NewInternalError(ctx.GetContext(), "View definition exceeds metadata binding budget")
+	}
 	if err := ctx.GetContext().Err(); err != nil {
 		return nil, err
 	}

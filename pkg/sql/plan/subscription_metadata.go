@@ -790,10 +790,14 @@ func subscriptionMetadataOwnerAllowed(ownerKey string, functionName string) bool
 	if !strings.EqualFold(database, "information_schema") {
 		return false
 	}
-	if functionName == subscriptionTablesFunctionName {
+	switch functionName {
+	case subscriptionTablesFunctionName:
 		return strings.EqualFold(view, "tables")
+	case subscriptionColumnsFunctionName, ViewColumnsFunctionName:
+		return strings.EqualFold(view, "columns")
+	default:
+		return false
 	}
-	return strings.EqualFold(view, "columns")
 }
 
 func (builder *QueryBuilder) buildSubscriptionMetadata(
