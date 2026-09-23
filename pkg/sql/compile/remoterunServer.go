@@ -228,11 +228,11 @@ func (receiver *messageReceiverOnServer) finalizeUnpublishedS3Objects(
 	cleanupCtx, cancel := context.WithTimeoutCause(
 		context.WithoutCancel(receiver.messageCtx), 10*time.Minute, moerr.CauseCleanUpUselessFiles,
 	)
-	handlerErr = errors.Join(
-		handlerErr,
-		receiver.unpublishedS3CleanupWorkspace.CleanupUnpublishedS3Objects(cleanupCtx),
-	)
+	cleanupErr := receiver.unpublishedS3CleanupWorkspace.CleanupUnpublishedS3Objects(cleanupCtx)
 	cancel()
+	if cleanupErr != nil {
+		return errors.Join(handlerErr, cleanupErr)
+	}
 	return handlerErr
 }
 
