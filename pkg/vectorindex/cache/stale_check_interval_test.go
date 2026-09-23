@@ -134,6 +134,41 @@ func TestStaleSweepEvictsStaleEntryAndKeepsFresh(t *testing.T) {
 	require.True(t, freshStillCached, "the current entry must survive the sweep")
 }
 
+// TestNonConsumerCNStaleEntryClearedOnlyBySweep pins the #28985 cross-CN invariant the COPY ALTER
+// BVT cannot prove deterministically (consumer/query placement is non-deterministic in a multi-CN
+// cluster, and a single-process launch collapses every CN onto one shared cache). Two independent
+// VectorIndexCache instances model two CNs: RemoveIdle is pure-local to the CDC-consumer CN, so a
+// stale warm entry on a NON-consumer CN survives the consumer's flush and is removed ONLY by that
+// CN's periodic IsStale sweep -- which is what drives the cluster-summed cached count to zero.
+func TestNonConsumerCNStaleEntryClearedOnlyBySweep(t *testing.T) {
+	const key = "idx"
+	warmStale := func(c *VectorIndexCache) {
+		e := newVectorIndexSearch(&countingSearch{stale: true})
+		e.Status.Store(STATUS_LOADED)
+		c.IndexMap.Store(key, e)
+	}
+
+	// Two CNs, each holding its own warm generation that a CDC append has since made stale.
+	consumer := NewVectorIndexCache()
+	nonConsumer := NewVectorIndexCache()
+	warmStale(consumer)
+	warmStale(nonConsumer)
+
+	// The CDC flush runs RemoveIdle on the CONSUMER CN only. It is pure-local: it drops the
+	// consumer's entry and cannot reach the non-consumer's independent cache.
+	require.True(t, consumer.RemoveIdle(key, "cdc"), "RemoveIdle claims and drops the consumer's idle entry")
+	require.Equal(t, int64(0), consumer.CountKey(key), "consumer CN cleared by its local RemoveIdle")
+	require.Equal(t, int64(1), nonConsumer.CountKey(key),
+		"the non-consumer CN's stale entry is untouched by the consumer's RemoveIdle")
+
+	// So the cluster-summed cached count (what the COPY ALTER cached->0 poll observes) is still
+	// non-zero after the flush; only the non-consumer CN's periodic sweep drives it to zero.
+	nonConsumer.checkStale()
+	nonConsumer.HouseKeeping()
+	require.Equal(t, int64(0), nonConsumer.CountKey(key),
+		"the non-consumer CN's stale entry is removed only by its periodic IsStale sweep")
+}
+
 // CountKey reports per-key cache occupancy (0 when absent/evicted), the signal the
 // GetVectorIndexCacheInfo mo_ctl sums across CNs to observe eviction deterministically.
 func TestCountKey(t *testing.T) {
