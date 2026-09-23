@@ -389,10 +389,12 @@ func textStringResultType(bound stringResultBound, charset uint8) types.Type {
 }
 
 // soundexReturnType keeps the result column large enough for Soundex's
-// variable-length output. Soundex emits ASCII, so its maximum output length
-// is bounded by the input character count (or the byte capacity of TEXT).
-// Unbounded inputs use LONGTEXT because a plain TEXT result could be too
-// narrow when the input itself comes from a widening expression.
+// variable-length output. Text Soundex preserves its first qualifying Unicode
+// character, so declared width is measured in characters while the encoded
+// result may need up to seven bytes for a four-character code. The vector
+// result grows by encoded bytes at execution time. Unbounded inputs use
+// LONGTEXT because a plain TEXT result could be too narrow when the input
+// itself comes from a widening expression.
 func soundexReturnType(parameters []types.Type) types.Type {
 	if len(parameters) != 1 {
 		return types.NewWithCharset(types.T_text, types.MaxLongTextLen, 0, types.CharsetUTF8)
