@@ -773,7 +773,8 @@ func TestElkanClusterer_recalculateCentroids(t *testing.T) {
 				}
 				membersCount := make([]int64, ekm.clusterCnt)
 
-				got := ekm.recalculateCentroids(ctx, rnd, newCentroids, membersCount)
+				got, err := ekm.recalculateCentroids(ctx, rnd, newCentroids, membersCount)
+				require.NoError(t, err)
 				if !assertx.InEpsilonF64Slices(tt.want.centroids, got) {
 					t.Errorf("centroids got = %v, want %v", got, tt.want.centroids)
 				}

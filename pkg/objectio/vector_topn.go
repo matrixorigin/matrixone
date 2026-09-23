@@ -184,6 +184,16 @@ func (a *vectorTopAccumulator) consume(ctx context.Context, vec *vector.Vector, 
 		if err != nil {
 			return err
 		}
+		// The public scalar distances (l1_distance, inner_product, cosine_distance) are the float32
+		// domain, but this kernel computes raw float64 and -- for these metrics -- is the FINAL gate
+		// (no bound widening, no exact post-filter downstream). Comparing a raw distance against the
+		// bound drops a row whose public distance satisfies the predicate (e.g. l1 1.00000001 rounds
+		// to 1, so `<= 1` holds) (#29040). Gate/order in the public float32 domain to match. L2 is
+		// excluded: it runs in the squared domain with a conservatively widened bound and an exact
+		// source-domain post-filter, and rounding a squared value would double-round the sqrt.
+		if order.MetricType != metric.Metric_L2Distance && order.MetricType != metric.Metric_L2sqDistance {
+			dist = metric.RoundDistanceToElemDomain(dist)
+		}
 		if a.rangeActive && math.IsNaN(dist) {
 			continue
 		}
