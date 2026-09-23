@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -117,6 +118,8 @@ const (
 	PreInsertAutoIDCache
 	// AdaptiveTop 只在协调节点执行，不允许作为远端指令编码。
 	AdaptiveTop
+	// MinusAll is appended to preserve all existing remote operator wire values.
+	MinusAll
 	// OpTypeEnd is the exclusive upper bound for executable operator types.
 	// New operator types must be added before it.
 	OpTypeEnd
@@ -194,6 +197,7 @@ func init() {
 		ShuffleStable:           "ShuffleStable",
 		PreInsertAutoIDCache:    "PreInsertAutoIDCache",
 		AdaptiveTop:             "AdaptiveTop",
+		MinusAll:                "MinusAll",
 	}
 
 	// Initialize StrToOperatorMap
@@ -298,6 +302,27 @@ func (o *OperatorBase) SetChildren(children []Operator) {
 
 func (o *OperatorBase) GetChildren(idx int) Operator {
 	return o.Children[idx]
+}
+
+// GetChild returns a child only when the operator tree contains the requested
+// edge. Remote pipeline recovery can reject an incomplete operator tree with a
+// normal execution error instead of letting a direct slice access panic.
+func GetChild(op Operator, idx int) (Operator, error) {
+	if op == nil {
+		return nil, moerr.NewInternalErrorNoCtx("cannot get a child from a nil operator")
+	}
+	base := op.GetOperatorBase()
+	if idx < 0 || idx >= base.NumChildren() {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"operator %v is missing child %d (has %d children)",
+			op.OpType(), idx, base.NumChildren())
+	}
+	child := base.GetChildren(idx)
+	if child == nil {
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"operator %v has a nil child at index %d", op.OpType(), idx)
+	}
+	return child, nil
 }
 
 func (o *OperatorBase) GetCnAddr() string {

@@ -76,6 +76,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergedelete"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergerecursive"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minus"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/minusall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mongoscan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
@@ -2093,7 +2094,7 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		ss = c.ensureCoordinatorOnlyFunctions(node, ss)
 		ss = c.compileSort(node, ss)
 		return ss, nil
-	case plan.Node_MINUS, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
+	case plan.Node_MINUS, plan.Node_MINUS_ALL, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL:
 		left, err = c.compilePlanScope(step, node.Children[0], nodes)
 		if err != nil {
 			return nil, err
@@ -6077,6 +6078,12 @@ func (c *Compile) compileTpMinusAndIntersect(node *plan.Node, left []*Scope, rig
 		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		rs[0].setRootOperator(arg)
 		arg.AppendChild(merge1)
+	case plan.Node_MINUS_ALL:
+		arg := minusall.NewArgument()
+		arg.KeyExprs = node.PhysicalEqualityKeyList
+		arg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
+		rs[0].setRootOperator(arg)
+		arg.AppendChild(merge1)
 	case plan.Node_INTERSECT:
 		arg := intersect.NewArgument()
 		arg.KeyExprs = node.PhysicalEqualityKeyList
@@ -6095,6 +6102,17 @@ func (c *Compile) compileTpMinusAndIntersect(node *plan.Node, left []*Scope, rig
 }
 
 func (c *Compile) compileMinusAndIntersect(node *plan.Node, left []*Scope, right []*Scope, nodeType plan.Node_NodeType) []*Scope {
+	if nodeType == plan.Node_MINUS_ALL {
+		// Multiplicity subtraction needs one owner of every occurrence from both
+		// inputs. The existing parallel set-op path broadcasts rows to workers;
+		// using it here would multiply the result cardinality.
+		return c.compileTpMinusAndIntersect(
+			node,
+			[]*Scope{c.newMergeScope(left)},
+			[]*Scope{c.newMergeScope(right)},
+			nodeType,
+		)
+	}
 	if c.IsSingleScope(left) && c.IsSingleScope(right) {
 		return c.compileTpMinusAndIntersect(node, left, right, nodeType)
 	}
