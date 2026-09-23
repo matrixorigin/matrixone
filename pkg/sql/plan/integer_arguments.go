@@ -475,11 +475,28 @@ func integerArgumentSources(expr *Expr) []*Expr {
 	}
 	var sources []*Expr
 	for i, arg := range fn.Args {
-		if function.IntegerArgumentSourceDependent(fn.Func.ObjName, i) {
+		if sourceDependentIntegerArgumentNeedsRebind(fn.Func.ObjName, i, arg) {
 			sources = append(sources, arg)
 		}
 	}
 	return sources
+}
+
+func sourceDependentIntegerArgumentNeedsRebind(name string, position int, arg *Expr) bool {
+	if !function.IntegerArgumentSourceDependent(name, position) {
+		return false
+	}
+	if function.IntegerArgumentUsesBitSources(name, position) {
+		return true
+	}
+	if _, direct := preparedParamPosition(arg); direct {
+		return true
+	}
+	if isIntegerSelector(stripIntegerSelectionReconciliation(arg)) {
+		return true
+	}
+	_, numeric := function.IntegerArgumentTargetForSource(name, position, types.T(arg.Typ.Id), false)
+	return numeric
 }
 
 func hasSourceDependentIntegerArguments(expr *Expr) bool {
@@ -487,8 +504,8 @@ func hasSourceDependentIntegerArguments(expr *Expr) bool {
 	if fn == nil || fn.Func == nil {
 		return false
 	}
-	for i := range fn.Args {
-		if function.IntegerArgumentSourceDependent(fn.Func.ObjName, i) {
+	for i, arg := range fn.Args {
+		if sourceDependentIntegerArgumentNeedsRebind(fn.Func.ObjName, i, arg) {
 			return true
 		}
 	}
@@ -517,12 +534,59 @@ func (rule *ResetParamRefRule) rebindSourceDependentIntegerArguments(expr *Expr)
 	return bound, err
 }
 
+func isIntegerSelector(expr *Expr) bool {
+	fn := expr.GetF()
+	return fn != nil && fn.Func != nil && (fn.Func.ObjName == "case" || fn.Func.ObjName == "if" || fn.Func.ObjName == "iff")
+}
+
+// restoreIntegerSelectorSources returns two independent trees. exact keeps
+// every branch's source domain for integer conversion; ordinary is allowed to
+// reconcile branches and is used only to classify the selector's final domain.
+// In particular, ordinary may become DOUBLE without contaminating DECIMAL or
+// UINT64 values in exact, and nested selectors remain unconverted until the
+// outermost selector domain is known.
+func (rule *ResetParamRefRule) restoreIntegerSelectorSources(
+	source *Expr, name string, position int,
+) (exact *Expr, ordinary *Expr, err error) {
+	fn := source.GetF()
+	exactArgs := make([]*Expr, len(fn.Args))
+	probeArgs := make([]*Expr, len(fn.Args))
+	for i, arg := range fn.Args {
+		if i%2 != 1 && i != len(fn.Args)-1 {
+			exactArgs[i], err = rule.ApplyExpr(arg)
+			probeArgs[i] = exactArgs[i]
+		} else {
+			arg = stripIntegerSelectionReconciliation(arg)
+			if arg.GetPreparedNumeric().GetProvisionalResultPeer() {
+				arg, err = restorePreparedResultPeer(rule.ctx, arg)
+			} else if isIntegerSelector(arg) {
+				exactArgs[i], probeArgs[i], err = rule.restoreIntegerSelectorSources(arg, name, position)
+				if err == nil {
+					continue
+				}
+			} else {
+				arg, err = rule.sourceDependentIntegerRuntimeSource(arg, name, position)
+			}
+			exactArgs[i] = arg
+			probeArgs[i] = arg
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	exact = DeepCopyExpr(source)
+	exact.GetF().Args = exactArgs
+	ordinary, err = BindFuncExprImplByPlanExpr(rule.ctx, "case", probeArgs)
+	return exact, ordinary, err
+}
+
 // Discard only this role's provisional private conversion and integer bit
 // adapters. Explicit casts and nested value-producing functions remain owners
 // of their result domains. Selector branches are rebound independently before
 // signed/unsigned reconciliation so no unchecked REAL/DECIMAL reaches CAST1.
 func (rule *ResetParamRefRule) sourceDependentIntegerRuntimeSource(source *Expr, name string, position int) (*Expr, error) {
 	bitSources := function.IntegerArgumentUsesBitSources(name, position)
+	original := source
 	// PREPARE may reconcile a selector containing an untyped marker to VARCHAR.
 	// That envelope is provisional for a source-dependent consumer: expose the
 	// selector before deciding its runtime domain. User-written CAST remains a
@@ -534,51 +598,49 @@ func (rule *ResetParamRefRule) sourceDependentIntegerRuntimeSource(source *Expr,
 			return rule.sourceDependentIntegerRuntimeSource(fn.Args[0], name, position)
 		}
 	}
-	if fn := source.GetF(); fn != nil && fn.Func != nil && (fn.Func.ObjName == "case" || fn.Func.ObjName == "if" || fn.Func.ObjName == "iff") {
-		// First restore every branch's runtime source domain. A numeric-only
-		// consumer must let the selector choose its ordinary common domain before
-		// applying integer conversion: IF(FLOAT, VARCHAR) is a VARCHAR value for
-		// HEX, while IF(FLOAT, FLOAT) remains a numeric integer argument.
-		runtimeArgs := make([]*Expr, len(fn.Args))
-		for i, arg := range fn.Args {
-			var err error
-			if i%2 == 1 || i == len(fn.Args)-1 {
-				arg = stripIntegerSelectionReconciliation(arg)
-				restoredPeer := arg.GetPreparedNumeric().GetProvisionalResultPeer()
-				if restoredPeer {
-					arg, err = restorePreparedResultPeer(rule.ctx, arg)
-				} else {
-					arg, err = rule.sourceDependentIntegerRuntimeSource(arg, name, position)
-				}
-				runtimeArgs[i] = arg
-			} else {
-				runtimeArgs[i], err = rule.ApplyExpr(arg)
-			}
-			if err != nil {
-				return nil, err
-			}
+	if isIntegerSelector(source) {
+		exact, ordinary, err := rule.restoreIntegerSelectorSources(source, name, position)
+		if err != nil {
+			return nil, err
 		}
 		if !bitSources {
-			ordinary, err := BindFuncExprImplByPlanExpr(rule.ctx, "case", runtimeArgs)
-			if err != nil {
-				return nil, err
-			}
 			if _, numeric := function.IntegerArgumentTargetForSource(name, position, types.T(ordinary.Typ.Id), false); !numeric {
 				return ordinary, nil
 			}
 		}
-		integerArgs := append([]*Expr(nil), runtimeArgs...)
-		for i, arg := range integerArgs {
-			if i%2 != 1 && i != len(integerArgs)-1 {
-				continue
-			}
-			var err error
-			integerArgs[i], err = appendSourceDependentIntegerArgument(rule.ctx, arg, name, position)
-			if err != nil {
-				return nil, err
-			}
+		return bindRestoredIntegerSelector(rule.ctx, exact, name, position, bitSources)
+	}
+	if !bitSources {
+		runtimeType, _, _, err := rule.preparedExecutionExprType(source)
+		if err != nil {
+			return nil, err
 		}
-		return bindIntegerSelector(rule.ctx, integerArgs, bitSources)
+		if _, numeric := function.IntegerArgumentTargetForSource(name, position, runtimeType.Oid, false); !numeric {
+			return rule.ApplyExpr(original)
+		}
 	}
 	return rule.integerArgumentRuntimeSource(source)
+}
+
+func bindRestoredIntegerSelector(
+	ctx context.Context, source *Expr, name string, position int, bitSources bool,
+) (*Expr, error) {
+	fn := source.GetF()
+	args := make([]*Expr, len(fn.Args))
+	for i, arg := range fn.Args {
+		if i%2 != 1 && i != len(fn.Args)-1 {
+			args[i] = arg
+			continue
+		}
+		var err error
+		if isIntegerSelector(arg) {
+			args[i], err = bindRestoredIntegerSelector(ctx, arg, name, position, bitSources)
+		} else {
+			args[i], err = appendSourceDependentIntegerArgument(ctx, arg, name, position)
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return bindIntegerSelector(ctx, args, bitSources)
 }

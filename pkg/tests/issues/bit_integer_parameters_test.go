@@ -120,7 +120,9 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 		}{
 			{"1.5e0", "2"},
 			{"-1.5e0", "FFFFFFFFFFFFFFFE"},
-			{"cast(2.5 as decimal(2,1))", "2"},
+			{"cast(2.5 as decimal(2,1))", "3"},
+			{"cast(9007199254740993 as decimal(20,0))", "20000000000001"},
+			{"cast(18446744073709551615 as unsigned)", "FFFFFFFFFFFFFFFF"},
 		} {
 			_, err = conn.ExecContext(ctx, "set @hex_selector_value="+tc.source)
 			require.NoError(t, err)
@@ -145,6 +147,31 @@ func testBitIntegerPreparedParameters(t *testing.T, ctx context.Context, db *sql
 			require.NoError(t, conn.QueryRowContext(ctx, "execute hex_numeric_selector using @hex_selector_value").Scan(&got))
 			require.Equal(t, tc.want, got)
 		}
+		_, err = conn.ExecContext(ctx, "deallocate prepare hex_numeric_selector")
+		require.NoError(t, err)
+		_, err = conn.ExecContext(ctx, `prepare hex_numeric_selector from 'select hex(if(true,if(true,?,2.5e0),"peer"))'`)
+		require.NoError(t, err)
+		_, err = conn.ExecContext(ctx, "set @hex_selector_value=1.5e0")
+		require.NoError(t, err)
+		var got string
+		require.NoError(t, conn.QueryRowContext(ctx, "execute hex_numeric_selector using @hex_selector_value").Scan(&got))
+		require.Equal(t, "312E35", got)
+	})
+	t.Run("SQL execute binary coalesce", func(t *testing.T) {
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		_, err = conn.ExecContext(ctx, `prepare hex_binary_coalesce from 'select hex(coalesce(?, binary \'fallback\'))'`)
+		require.NoError(t, err)
+		defer func() {
+			_, err := conn.ExecContext(ctx, "deallocate prepare hex_binary_coalesce")
+			require.NoError(t, err)
+		}()
+		_, err = conn.ExecContext(ctx, `set @hex_binary_value=binary 'A\0B'`)
+		require.NoError(t, err)
+		var got string
+		require.NoError(t, conn.QueryRowContext(ctx, "execute hex_binary_coalesce using @hex_binary_value").Scan(&got))
+		require.Equal(t, "410042", got)
 	})
 	t.Run("binary decimal descriptor", func(t *testing.T) {
 		var mu sync.Mutex
