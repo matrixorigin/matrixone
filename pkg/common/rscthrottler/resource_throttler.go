@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/KimMachineGun/automemlimit/memlimit"
+	"github.com/elastic/gosigar/cgroup"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -49,7 +50,15 @@ const (
 	MemoryThrottlerLogHeader = "MemoryThrottler"
 )
 
-var freeOSMemory = debug.FreeOSMemory
+var (
+	freeOSMemory = debug.FreeOSMemory
+
+	// getCgroupMemoryUsage is a variable so the cgroup-aware admission and
+	// pressure paths can be tested without depending on the host's cgroup.
+	getCgroupMemoryUsage = func(pid int) (int64, error) {
+		return cgroup.GetMemUsage(pid)
+	}
+)
 
 type rssPressureState int64
 
@@ -81,6 +90,11 @@ type RSCThrottler interface {
 type memThrottler struct {
 	limit atomic.Int64
 	rss   atomic.Int64
+	// cgroupUsage includes memory charged to the whole cgroup, including
+	// filesystem cache and kernel/socket memory. RSS alone is insufficient for
+	// a container limit: in the TPCC OOM case the process RSS fell while the
+	// cgroup continued climbing to its limit.
+	cgroupUsage atomic.Int64
 	// rssReservedBase records the reserved bytes that were already reflected in
 	// the latest rss sample. S3 admission can then add only the delta above this
 	// base, avoiding the rss+reserved double-count that caused #24881 while
@@ -132,12 +146,13 @@ type memThrottler struct {
 
 func (m *memThrottler) String() string {
 	return fmt.Sprintf(
-		"{%s: limit=%s, total=%s, available=%s, cgroup=%s, rss=%s, pinned=%s, pinnedRate=%f, limitRate=%f, isConstLimit=%v}",
+		"{%s: limit=%s, total=%s, available=%s, cgroup=%s, cgroup-usage=%s, rss=%s, pinned=%s, pinnedRate=%f, limitRate=%f, isConstLimit=%v}",
 		m.name,
 		common.HumanReadableBytes(int(m.limit.Load())),
 		common.HumanReadableBytes(int(m.total.Load())),
 		common.HumanReadableBytes(int(m.Available())),
 		common.HumanReadableBytes(int(m.cgroup.Load())),
+		common.HumanReadableBytes(int(m.cgroupUsage.Load())),
 		common.HumanReadableBytes(int(m.rss.Load())),
 		common.HumanReadableBytes(int(m.reserved.Load())),
 		m.pinnedRate(),
@@ -206,6 +221,9 @@ func (m *memThrottler) refresh(force bool) {
 	if m.options.constLimit < 0 {
 		m.limit.Store(int64(float64(m.actualTotalMemory.Load()) * m.limitRate))
 	}
+	m.cgroup.Store(cgroup)
+	m.total.Store(total)
+	m.refreshCgroupUsage()
 
 	if m.proc == nil {
 		m.proc, _ = process.NewProcess(int32(os.Getpid()))
@@ -243,9 +261,33 @@ func (m *memThrottler) refresh(force bool) {
 		m.rssMpoolLiveBase.Store(liveBase)
 		m.tryScavengeRSS(now, rss)
 	}
+}
 
-	m.cgroup.Store(cgroup)
-	m.total.Store(total)
+func (m *memThrottler) refreshCgroupUsage() {
+	cgroupLimit := m.cgroup.Load()
+	total := m.total.Load()
+	// A cgroup usage value is meaningful for this throttler only when the
+	// cgroup imposes a finite limit below the host total. Otherwise the value
+	// may describe an unlimited host hierarchy and must not replace RSS.
+	if cgroupLimit == 0 || total == 0 || cgroupLimit >= total {
+		m.cgroupUsage.Store(0)
+		return
+	}
+	usage, err := getCgroupMemoryUsage(os.Getpid())
+	if err != nil || usage < 0 {
+		m.cgroupUsage.Store(0)
+		return
+	}
+	m.cgroupUsage.Store(usage)
+}
+
+func (m *memThrottler) currentMemoryUsage() int64 {
+	rss := m.rss.Load()
+	cgroupUsage := m.cgroupUsage.Load()
+	if cgroupUsage > rss {
+		return cgroupUsage
+	}
+	return rss
 }
 
 func (m *memThrottler) tryScavengeRSS(now int64, rss int64) {
@@ -260,7 +302,8 @@ func (m *memThrottler) tryScavengeRSS(now int64, rss int64) {
 	if visible < 0 {
 		visible = 0
 	}
-	rssRate := float64(rss) / float64(actualMaxMemory)
+	memoryUsage := max(rss, m.currentMemoryUsage())
+	rssRate := float64(memoryUsage) / float64(actualMaxMemory)
 
 	var (
 		prevState              rssPressureState
@@ -324,7 +367,7 @@ func (m *memThrottler) tryScavengeRSS(now int64, rss int64) {
 	m.rssScavengeMu.Unlock()
 
 	needFreeOSMemory := nextState != rssPressureNone &&
-		float64(visible) < float64(rss)*rssScavengeVisibleRate
+		float64(visible) < float64(memoryUsage)*rssScavengeVisibleRate
 	if needFreeOSMemory {
 		last := m.lastRSSScavenge.Load()
 		if time.Duration(now-last) > rssScavengeInterval &&
@@ -339,6 +382,7 @@ func (m *memThrottler) tryScavengeRSS(now int64, rss int64) {
 	logutil.Info(
 		fmt.Sprintf("%s-RSSScavenge", MemoryThrottlerLogHeader),
 		zap.String("rss", common.HumanReadableBytes(int(rss))),
+		zap.String("memory-used", common.HumanReadableBytes(int(memoryUsage))),
 		zap.String("visible", common.HumanReadableBytes(int(visible))),
 		zap.String("actual-total-memory", common.HumanReadableBytes(int(actualMaxMemory))),
 		zap.Bool("free-os-memory", shouldFreeOSMemory),
@@ -426,7 +470,7 @@ func (m *memThrottler) Available() int64 {
 	var (
 		avail    int64
 		limit    = m.limit.Load()
-		rss      = m.rss.Load()
+		rss      = m.currentMemoryUsage()
 		reserved = m.reserved.Load()
 
 		actualMaxMemory = int64(m.actualTotalMemory.Load())
@@ -441,9 +485,10 @@ func (m *memThrottler) Available() int64 {
 			}
 
 			if info, err := m.proc.MemoryInfo(); err == nil {
-				rss = int64(info.RSS)
-				m.rss.Store(rss)
+				m.rss.Store(int64(info.RSS))
 			}
+			m.refreshCgroupUsage()
+			rss = m.currentMemoryUsage()
 		}
 
 		return max(0, limit-rss-reserved)
@@ -695,7 +740,7 @@ func cnFlushS3PhysicalAvailable(throttler *memThrottler, reserved int64) int64 {
 	liveBase := throttler.rssMpoolLiveBase.Load()
 	currentLive := mpool.GlobalStats().NumCurrBytes.Load()
 	covered := currentCNFlushS3RSSCovered(base, liveBase, reserved, currentLive)
-	used := throttler.rss.Load()
+	used := throttler.currentMemoryUsage()
 	if delta := reserved - covered; delta > 0 {
 		used += delta
 	}
@@ -708,7 +753,7 @@ func cnFlushS3ProjectedPhysicalUsed(throttler *memThrottler, reserved int64) int
 	liveBase := throttler.rssMpoolLiveBase.Load()
 	currentLive := mpool.GlobalStats().NumCurrBytes.Load()
 	covered := currentCNFlushS3RSSCovered(base, liveBase, reserved, currentLive)
-	used := throttler.rss.Load()
+	used := throttler.currentMemoryUsage()
 	if delta := reserved - covered; delta > 0 {
 		used += delta
 	}
@@ -801,7 +846,7 @@ func AcquirePolicyForDataBranch(
 
 	total := int64(throttler.actualTotalMemory.Load())
 	if total > 0 && throttler.limitRate > 0 {
-		used := throttler.rss.Load() + ask
+		used := throttler.currentMemoryUsage() + ask
 		if float64(used) > float64(total)*throttler.limitRate {
 			return 0, false
 		}

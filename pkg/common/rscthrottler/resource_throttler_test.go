@@ -26,6 +26,44 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestMemThrottlerUsesCgroupUsageForAdmission(t *testing.T) {
+	throttler := &memThrottler{}
+	throttler.actualTotalMemory.Store(100)
+	throttler.total.Store(200)
+	throttler.cgroup.Store(100)
+	throttler.rss.Store(60)
+	throttler.cgroupUsage.Store(95)
+	throttler.limit.Store(90)
+
+	// The process RSS leaves 40 units, but the cgroup has only 5 units left.
+	require.Equal(t, int64(5), throttler.Available())
+
+	throttler.options.specializedForMerge = true
+	require.Equal(t, int64(0), throttler.Available())
+}
+
+func TestMemThrottlerPressureUsesCgroupUsage(t *testing.T) {
+	oldFreeOSMemory := freeOSMemory
+	defer func() { freeOSMemory = oldFreeOSMemory }()
+	freeOSMemory = func() {}
+
+	var target int64
+	now := time.Now().UnixNano()
+	throttler := &memThrottler{limitRate: 0.90}
+	throttler.options.enableRSSScavenging = true
+	throttler.options.rssCacheTargetSetter = func(value int64) { target = value }
+	throttler.options.rssCacheEvictor = func(context.Context, int64) {}
+	throttler.actualTotalMemory.Store(100 * mpool.GB)
+	throttler.limit.Store(90 * mpool.GB)
+	throttler.rss.Store(70 * mpool.GB)
+	throttler.cgroupUsage.Store(95 * mpool.GB)
+
+	// RSS is below the hard threshold, but cgroup usage is above it.
+	throttler.tryScavengeRSS(now, 70*mpool.GB)
+	require.Equal(t, rssPressureHard, rssPressureState(throttler.rssPressureState.Load()))
+	require.Equal(t, rssCacheHardTarget, target)
+}
+
 func TestBasic(t *testing.T) {
 	t.Run("A", func(t *testing.T) {
 		throttler := NewMemThrottler("TestBasic", 1)
