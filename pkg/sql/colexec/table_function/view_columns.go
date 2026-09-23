@@ -16,8 +16,10 @@ package table_function
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -52,11 +54,11 @@ func (s *viewColumnsState) start(tf *TableFunction, proc *process.Process, nthRo
 	if err := proc.Ctx.Err(); err != nil {
 		return err
 	}
-	if len(tf.ctr.argVecs) != 1 {
-		return moerr.NewInvalidInput(proc.Ctx, "mo_view_columns requires one relation identity")
+	if len(tf.ctr.argVecs) != 1 && len(tf.ctr.argVecs) != 2 {
+		return moerr.NewInvalidInput(proc.Ctx, "invalid View column metadata arguments")
 	}
-	args := vector.GenerateFunctionFixedTypeParameter[uint64](tf.ctr.argVecs[0])
-	id, isNull := args.GetValue(uint64(nthRow))
+	idArgs := vector.GenerateFunctionFixedTypeParameter[uint64](tf.ctr.argVecs[len(tf.ctr.argVecs)-1])
+	id, isNull := idArgs.GetValue(uint64(nthRow))
 	if isNull {
 		return nil
 	}
@@ -64,11 +66,33 @@ func (s *viewColumnsState) start(tf *TableFunction, proc *process.Process, nthRo
 	if helper := proc.GetSessionInfo().SqlHelper; compilerValue == nil && helper != nil {
 		compilerValue = helper.GetCompilerContext()
 	}
-	compiler, ok := compilerValue.(plan.CompilerContext)
-	if !ok || compiler == nil {
-		return moerr.NewNotSupported(proc.Ctx, "View column description requires a compiler context")
+	provider, ok := compilerValue.(plan.ViewDescriptionContextProvider)
+	if !ok || provider == nil {
+		return moerr.NewNotSupported(proc.Ctx, "View column description requires an isolated compiler context")
 	}
-	_, def, err := compiler.ResolveById(id, nil)
+	compiler, closeCompiler, err := provider.NewViewDescriptionCompilerContext(proc.Ctx)
+	if err != nil {
+		return err
+	}
+	defer closeCompiler()
+	var def *planpb.TableDef
+	if len(tf.ctr.argVecs) == 2 {
+		publisherArgs := vector.GenerateFunctionFixedTypeParameter[uint32](tf.ctr.argVecs[0])
+		publisherID, publisherNull := publisherArgs.GetValue(uint64(nthRow))
+		if publisherNull {
+			return nil
+		}
+		compiler.SetContext(defines.AttachAccountId(compiler.GetContext(), publisherID))
+		sub := &planpb.SubscriptionMeta{AccountId: int32(publisherID), Tables: pubsub.TableAll}
+		var obj *planpb.ObjectRef
+		obj, def, err = compiler.ResolveSubscriptionTableById(id, sub)
+		if err == nil && obj != nil {
+			sub.DbName = obj.SchemaName
+			compiler.SetQueryingSubscription(sub)
+		}
+	} else {
+		_, def, err = compiler.ResolveById(id, nil)
+	}
 	if err != nil {
 		return err
 	}

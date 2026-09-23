@@ -55,6 +55,18 @@ type compilerContext struct {
 	lower int64
 }
 
+func (c *compilerContext) NewViewDescriptionCompilerContext(
+	ctx context.Context,
+) (plan.CompilerContext, func(), error) {
+	child := &compilerContext{
+		ctx: ctx, defaultDB: c.defaultDB, engine: c.engine, proc: c.proc,
+		statsCache: c.statsCache, lower: c.lower,
+		buildAlterView: c.buildAlterView, dbOfView: c.dbOfView, nameOfView: c.nameOfView,
+		sql: c.sql,
+	}
+	return child, func() {}, nil
+}
+
 func (c *compilerContext) GetLowerCaseTableNames() int64 {
 	return c.lower
 }

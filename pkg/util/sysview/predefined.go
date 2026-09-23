@@ -306,6 +306,15 @@ func informationSchemaColumnsV58DDL() string {
 	).Replace(InformationSchemaColumnsV46DDL)
 }
 
+func informationSchemaSubscriptionViewAuthorizationPredicate() string {
+	return strings.NewReplacer(
+		"mc.att_database", "mt.reldatabase",
+		"mc.table_owner", "mt.owner",
+		"mc.att_database_id", "mt.reldatabase_id",
+		"mc.rel_logical_id", "mt.rel_logical_id",
+	).Replace(informationSchemaSubscriptionColumnAuthorizationPredicate())
+}
+
 func informationSchemaSubscriptionColumnsDDL() string {
 	prefix := "CREATE VIEW information_schema.COLUMNS AS " + informationSchemaMetadataVisibilityCTE()
 	localSelect := strings.TrimPrefix(InformationSchemaColumnsV41DDL, prefix)
@@ -336,8 +345,20 @@ func informationSchemaSubscriptionColumnsDDL() string {
 		"mt.rel_createsql", "mc.rel_createsql",
 		"mt.extra_info", "mc.extra_info",
 	).Replace(subscriptionSelect)
+	subscriptionViewSelect := strings.NewReplacer(
+		informationSchemaColumnsLocalFromSQL(),
+		"from mo_subscription_tables() mt "+
+			"cross apply mo_subscription_view_columns(mt.publisher_account_id, mt.rel_id) mc ",
+		"mc.att_database", "mt.reldatabase",
+		"mc.att_relname", "mt.relname",
+		"mc.account_id", "mt.account_id",
+		"mk.key_priority", "0",
+	).Replace(localSelect)
+	subscriptionViewSelect += " AND mt.relkind = 'v' AND (" +
+		informationSchemaSubscriptionViewAuthorizationPredicate() + ")"
 	return "CREATE VIEW information_schema.COLUMNS AS " +
-		informationSchemaMetadataVisibilityCTE() + localSelect + " UNION ALL " + subscriptionSelect
+		informationSchemaMetadataVisibilityCTE() + localSelect + " UNION ALL " + subscriptionSelect +
+		" UNION ALL " + subscriptionViewSelect
 }
 
 // `information_schema` database

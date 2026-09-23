@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	plan "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -108,6 +107,7 @@ var subscriptionTablesConfig = subscriptionMetadataConfig{
 		"extra_info",
 		"rel_logical_id",
 		"owner",
+		"publisher_account_id",
 	},
 	columnTypes: []types.Type{
 		catalog.MoTablesTypes[catalog.MO_TABLES_ACCOUNT_ID_IDX],
@@ -123,6 +123,7 @@ var subscriptionTablesConfig = subscriptionMetadataConfig{
 		catalog.MoTablesTypes[catalog.MO_TABLES_EXTRA_INFO_IDX],
 		catalog.MoTablesTypes[catalog.MO_TABLES_LOGICAL_ID_IDX],
 		catalog.MoTablesTypes[catalog.MO_TABLES_OWNER_IDX],
+		types.New(types.T_uint32, 0, 0),
 	},
 	buildQuery: buildSubscriptionTablesQuery,
 }
@@ -276,9 +277,6 @@ func (s *subscriptionMetadataState) start(
 		return err
 	}
 	ctx, cancel := context.WithCancel(proc.Ctx)
-	if tf.FuncName == subscriptionColumnsFunctionName {
-		ctx = plan.WithInternalViewColumns(ctx)
-	}
 	s.streamCancel = cancel
 	s.streamCh = make(chan executor.Result, subscriptionResultBufferSize)
 	s.errCh = make(chan error, 1)
@@ -771,7 +769,9 @@ func buildSubscriptionTablesQuery(candidate subscriptionCandidate, tableNames []
 		" AS BIGINT UNSIGNED) AS reldatabase_id, " +
 		"tbl.relkind, tbl.rel_createsql, tbl.created_time, tbl.partitioned, tbl.rel_comment, tbl.extra_info, " +
 		"tbl.rel_logical_id, CAST(" + strconv.FormatUint(uint64(candidate.localOwner), 10) +
-		" AS INT UNSIGNED) AS owner " +
+		" AS INT UNSIGNED) AS owner, " +
+		"CAST(" + strconv.FormatUint(uint64(candidate.publisherID), 10) +
+		" AS INT UNSIGNED) AS publisher_account_id " +
 		"FROM mo_catalog.mo_tables tbl " +
 		"WHERE tbl.account_id = current_account_id() AND tbl.reldatabase = " +
 		sqlquote.String(candidate.sourceDatabase) +
@@ -815,21 +815,7 @@ func buildSubscriptionColumnsQuery(candidate subscriptionCandidate, tableNames [
 		sqlquote.String(candidate.sourceDatabase) +
 		subscriptionTablePredicate("mc.att_relname", tableNames) +
 		" AND NOT (mt.relkind = 'v' AND mt.reldatabase NOT IN ('mo_catalog','information_schema','mysql','system','system_metrics','mo_task','mo_debug'))"
-	views := "SELECT " +
-		"CAST(" + strconv.FormatUint(uint64(candidate.subscriberID), 10) + " AS INT UNSIGNED) AS account_id, " +
-		"CAST(" + strconv.FormatUint(candidate.localDatabaseID, 10) + " AS BIGINT UNSIGNED) AS att_database_id, " +
-		"CAST(" + sqlquote.String(candidate.localDatabaseName) + " AS VARCHAR(256)) AS att_database, " +
-		"mt.rel_id, mt.relname, mc.attname, mc.atttyp, mc.attnum, mc.attnotnull, mc.att_default, " +
-		"CAST(mc.att_constraint_type AS CHAR(1)), mc.att_is_auto_increment, mc.att_comment, mc.att_is_hidden, mc.attr_enum, " +
-		"mc.attr_has_generated, mc.attr_generated, CAST(0 AS BIGINT) AS key_priority, mt.rel_id, mt.relkind, " +
-		"mt.rel_createsql, mt.partitioned, mt.extra_info, mt.rel_logical_id, " +
-		"CAST(" + strconv.FormatUint(uint64(candidate.localOwner), 10) + " AS INT UNSIGNED) AS table_owner " +
-		"FROM mo_catalog.mo_tables mt CROSS APPLY mo_view_columns(mt.rel_id) mc " +
-		"WHERE mt.account_id = current_account_id() AND mt.reldatabase = " +
-		sqlquote.String(candidate.sourceDatabase) + subscriptionTablePredicate("mt.relname", tableNames) +
-		" AND mt.relkind = 'v' AND mt.reldatabase NOT IN " +
-		"('mo_catalog','information_schema','mysql','system','system_metrics','mo_task','mo_debug')"
-	return ordinary + " UNION ALL " + views
+	return ordinary
 }
 
 func publishSubscriptionMetadataError(ctx context.Context, errCh chan<- error, err error) {

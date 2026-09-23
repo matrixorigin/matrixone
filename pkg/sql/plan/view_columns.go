@@ -15,39 +15,41 @@
 package plan
 
 import (
-	"context"
+	"strings"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-const ViewColumnsFunctionName = "mo_view_columns"
-
-type internalViewColumnsContextKey struct{}
-
-// WithInternalViewColumns authorizes trusted metadata producers that have
-// already established the subscriber-visible publication boundary.
-func WithInternalViewColumns(ctx context.Context) context.Context {
-	return context.WithValue(ctx, internalViewColumnsContextKey{}, true)
-}
-
-func internalViewColumnsAllowed(ctx context.Context) bool {
-	allowed, _ := ctx.Value(internalViewColumnsContextKey{}).(bool)
-	return allowed
-}
+const (
+	ViewColumnsFunctionName             = "mo_view_columns"
+	SubscriptionViewColumnsFunctionName = "mo_subscription_view_columns"
+)
 
 func (builder *QueryBuilder) buildViewColumns(tbl *tree.TableFunction, ctx *BindContext, exprs []*Expr, children []int32) (int32, error) {
-	if !internalViewColumnsAllowed(builder.GetContext()) {
-		if err := requireSubscriptionMetadataView(
-			builder.GetContext(), ctx, builder.persistedViewTarget, ViewColumnsFunctionName); err != nil {
+	functionName := strings.ToLower(tbl.Func.FuncName.Origin())
+	if err := requireSubscriptionMetadataView(
+		builder.GetContext(), ctx, builder.persistedViewTarget, functionName); err != nil {
+		return 0, err
+	}
+	wantArgs := 1
+	if functionName == SubscriptionViewColumnsFunctionName {
+		wantArgs = 2
+	}
+	if len(exprs) != wantArgs {
+		return 0, moerr.NewInvalidInputf(builder.GetContext(), "%s requires %d arguments", functionName, wantArgs)
+	}
+	args := make([]*Expr, wantArgs)
+	var err error
+	if wantArgs == 2 {
+		args[0], err = forceCastExpr(builder.GetContext(), exprs[0], Type{Id: int32(types.T_uint32)})
+		if err != nil {
 			return 0, err
 		}
 	}
-	if len(exprs) != 1 {
-		return 0, moerr.NewInvalidInput(builder.GetContext(), "mo_view_columns requires one relation identity")
-	}
-	expr, err := forceCastExpr(builder.GetContext(), exprs[0], Type{Id: int32(types.T_uint64)})
+	args[wantArgs-1], err = forceCastExpr(builder.GetContext(), exprs[wantArgs-1], Type{Id: int32(types.T_uint64)})
 	if err != nil {
 		return 0, err
 	}
@@ -65,7 +67,7 @@ func (builder *QueryBuilder) buildViewColumns(tbl *tree.TableFunction, ctx *Bind
 		defs[i] = &ColDef{Name: c.name, Typ: Type{Id: int32(c.typ)}}
 	}
 	node := &planpb.Node{NodeType: planpb.Node_FUNCTION_SCAN, Stats: &planpb.Stats{},
-		TableDef:    &TableDef{TableType: "func_table", TblFunc: &planpb.TableFunction{Name: ViewColumnsFunctionName, IsSingle: true}, Cols: defs},
-		BindingTags: []int32{builder.genNewBindTag()}, Children: children, TblFuncExprList: []*Expr{expr}}
+		TableDef:    &TableDef{TableType: "func_table", TblFunc: &planpb.TableFunction{Name: functionName, IsSingle: true}, Cols: defs},
+		BindingTags: []int32{builder.genNewBindTag()}, Children: children, TblFuncExprList: args}
 	return builder.appendNode(node, ctx), nil
 }

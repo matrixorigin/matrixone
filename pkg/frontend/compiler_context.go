@@ -85,6 +85,30 @@ type TxnCompilerContext struct {
 	mu             sync.Mutex
 }
 
+// NewViewDescriptionCompilerContext returns an isolated mutable binder context
+// while borrowing the same session, process and transaction.
+func (tcc *TxnCompilerContext) NewViewDescriptionCompilerContext(
+	ctx context.Context,
+) (plan2.CompilerContext, func(), error) {
+	tcc.mu.Lock()
+	if tcc.execCtx == nil {
+		tcc.mu.Unlock()
+		return nil, nil, moerr.NewInternalError(ctx, "session compiler context is unavailable")
+	}
+	execCopy := *tcc.execCtx
+	execCopy.reqCtx = ctx
+	child := InitTxnCompilerContext(tcc.dbName)
+	child.buildAlterView, child.dbOfView, child.nameOfView = tcc.buildAlterView, tcc.dbOfView, tcc.nameOfView
+	child.snapshot = plan2.DeepCopySnapshot(tcc.snapshot)
+	if tcc.sub != nil {
+		subCopy := *tcc.sub
+		child.sub = &subCopy
+	}
+	tcc.mu.Unlock()
+	child.SetExecCtx(&execCopy)
+	return child, child.Close, nil
+}
+
 func (tcc *TxnCompilerContext) Close() {
 	tcc.mu.Lock()
 	defer tcc.mu.Unlock()
@@ -1384,6 +1408,9 @@ func (tcc *TxnCompilerContext) GetQueryResultMeta(uuid string) ([]*plan.ColDef, 
 }
 
 func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string, snapshot *plan2.Snapshot) (*plan.SubscriptionMeta, error) {
+	if sub := tcc.GetQueryingSubscription(); sub != nil && strings.EqualFold(dbName, sub.DbName) {
+		return sub, nil
+	}
 	start := time.Now()
 	defer func() {
 		v2.GetSubMetaDurationHistogram.Observe(time.Since(start).Seconds())
